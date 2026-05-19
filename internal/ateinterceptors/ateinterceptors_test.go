@@ -11,7 +11,7 @@
 // WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 // See the License for the specific language governing permissions and
 // limitations under the License.
-package controlapi
+package ateinterceptors
 
 import (
 	"context"
@@ -57,7 +57,7 @@ func TestStatusErrorInterceptor(t *testing.T) {
 				return "response", tt.handlerErr
 			}
 
-			resp, err := StatusErrorInterceptor(context.Background(), "request", &grpc.UnaryServerInfo{FullMethod: "/test.Service/Method"}, handler)
+			resp, err := ServerUnaryInterceptor(context.Background(), "request", &grpc.UnaryServerInfo{FullMethod: "/test.Service/Method"}, handler)
 
 			if tt.expectResponse {
 				if err != nil {

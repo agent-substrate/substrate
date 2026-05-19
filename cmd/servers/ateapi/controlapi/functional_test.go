@@ -28,6 +28,7 @@ import (
 
 	atev1alpha1 "github.com/agent-substrate/substrate/api/v1alpha1"
 	"github.com/agent-substrate/substrate/cmd/servers/ateapi/store/ateredis"
+	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/pkg/client/clientset/versioned"
 	"github.com/agent-substrate/substrate/pkg/client/informers/externalversions"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
@@ -263,7 +264,7 @@ func setupTest(t *testing.T, ns string) *testContext {
 	service := NewService(persistence, actorTemplateLister, dialer)
 
 	// 5. Start REAL gRPC Server for ATE API
-	grpcServer := grpc.NewServer(grpc.UnaryInterceptor(StatusErrorInterceptor))
+	grpcServer := grpc.NewServer(grpc.UnaryInterceptor(ateinterceptors.ServerUnaryInterceptor))
 	ateapipb.RegisterControlServer(grpcServer, service)
 
 	lis, err := net.Listen("tcp", "localhost:0")

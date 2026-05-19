@@ -23,14 +23,21 @@ import (
 	"os"
 	"runtime"
 	"sync"
-	"time"
 
 	"cloud.google.com/go/compute/metadata"
+	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/ateompath"
+	"github.com/agent-substrate/substrate/internal/contextlogging"
 	"github.com/agent-substrate/substrate/proto/ateompb"
 	"github.com/hashicorp/go-reap"
 	"github.com/vishvananda/netlink"
 	"github.com/vishvananda/netns"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
+	"go.opentelemetry.io/otel/sdk/resource"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	semconv "go.opentelemetry.io/otel/semconv/v1.21.0"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
 )
@@ -45,7 +52,6 @@ var (
 func main() {
 	flag.Parse()
 	ctx := context.Background()
-	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
 
 	if err := do(ctx); err != nil {
 		slog.ErrorContext(ctx, "Error while executing", slog.Any("err", err))
@@ -57,7 +63,21 @@ func do(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
+	logger := slog.New(contextlogging.NewHandler(slog.NewJSONHandler(os.Stdout, nil)))
+	slog.SetDefault(logger)
+
 	slog.InfoContext(ctx, "ateom booting")
+
+	tp, err := initTracing(ctx)
+	if err != nil {
+		slog.ErrorContext(ctx, "Failed to initialize tracing", slog.Any("err", err))
+		os.Exit(1)
+	}
+	defer func() {
+		if err := tp.Shutdown(context.Background()); err != nil {
+			slog.Error("Failed to shutdown TracerProvider", slog.Any("err", err))
+		}
+	}()
 
 	// Create ateom dir
 	ateomDir := ateompath.AteomPath(*podNamespace, *podName)
@@ -107,10 +127,13 @@ func do(ctx context.Context) error {
 		return fmt.Errorf("while creating ateom-interior netns: %w", err)
 	}
 
-	actorLogger := NewActorLogger(os.Stdout, metadata.OnGCE())
+	actorLogger := NewActorLogger(logger, metadata.OnGCE())
 	ateomService := NewService(interiorNetNS, eth0LinkInfo, actorLogger)
 
-	svr := grpc.NewServer(grpc.UnaryInterceptor(unaryInterceptor))
+	svr := grpc.NewServer(
+		grpc.StatsHandler(otelgrpc.NewServerHandler()),
+		grpc.UnaryInterceptor(ateinterceptors.ServerUnaryInterceptor),
+	)
 	ateompb.RegisterAteomServer(svr, ateomService)
 	reflection.Register(svr)
 
@@ -122,20 +145,28 @@ func do(ctx context.Context) error {
 	return nil
 }
 
-func unaryInterceptor(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
-	startTime := time.Now()
-
-	resp, err := handler(ctx, req)
-
-	slog.InfoContext(ctx, "Handle RPC",
-		slog.String("method", info.FullMethod),
-		slog.Any("req", req),
-		slog.Any("resp", resp),
-		slog.Any("err", err),
-		slog.String("elapsed-time", time.Since(startTime).String()),
+func initTracing(ctx context.Context) (*sdktrace.TracerProvider, error) {
+	res, err := resource.New(ctx,
+		resource.WithAttributes(
+			semconv.ServiceName("ateom-gvisor"),
+		),
 	)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create resource: %w", err)
+	}
 
-	return resp, err
+	// No exporter, since ateom has no network connectivity once eth0 is sent
+	// into the gvisor netns.  Maybe we can eventually figure out export via
+	// UDS.
+	tp := sdktrace.NewTracerProvider(
+		sdktrace.WithResource(res),
+		// Only trace on-demand when signaled by the client (e.g. via --trace flag)
+		sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.NeverSample())),
+	)
+	otel.SetTracerProvider(tp)
+	otel.SetTextMapPropagator(propagation.TraceContext{})
+
+	return tp, nil
 }
 
 // AteomService is a service for shepherding single microvm.

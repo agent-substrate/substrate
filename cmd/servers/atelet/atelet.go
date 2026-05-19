@@ -30,11 +30,12 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
-	"time"
 
 	"cloud.google.com/go/storage"
 	"github.com/agent-substrate/substrate/internal/ategcs"
+	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/ateompath"
+	"github.com/agent-substrate/substrate/internal/contextlogging"
 	"github.com/agent-substrate/substrate/internal/memorypullcache"
 	"github.com/agent-substrate/substrate/proto/ateletpb"
 	"github.com/agent-substrate/substrate/proto/ateompb"
@@ -72,7 +73,7 @@ var (
 func main() {
 	flag.Parse()
 	ctx := context.Background()
-	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
+	slog.SetDefault(slog.New(contextlogging.NewHandler(slog.NewJSONHandler(os.Stdout, nil))))
 
 	tp, err := initTracing(ctx)
 	if err != nil {
@@ -183,7 +184,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	svr := grpc.NewServer(grpc.StatsHandler(otelgrpc.NewServerHandler()), grpc.UnaryInterceptor(unaryInterceptor))
+	svr := grpc.NewServer(grpc.StatsHandler(otelgrpc.NewServerHandler()), grpc.UnaryInterceptor(ateinterceptors.ServerUnaryInterceptor))
 	ateletpb.RegisterAteomHerderServer(svr, wmService)
 	reflection.Register(svr)
 	slog.InfoContext(ctx, "WorkersManagerService listening", slog.Any("address", lis.Addr()))
@@ -191,22 +192,6 @@ func main() {
 		slog.ErrorContext(ctx, "Failed to serve", slog.Any("err", err))
 		os.Exit(1)
 	}
-}
-
-func unaryInterceptor(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
-	startTime := time.Now()
-
-	resp, err := handler(ctx, req)
-
-	slog.InfoContext(ctx, "Handle RPC",
-		slog.String("method", info.FullMethod),
-		slog.Any("req", req),
-		slog.Any("resp", resp),
-		slog.Any("err", err),
-		slog.String("elapsed-time", time.Since(startTime).String()),
-	)
-
-	return resp, err
 }
 
 func initTracing(ctx context.Context) (*sdktrace.TracerProvider, error) {

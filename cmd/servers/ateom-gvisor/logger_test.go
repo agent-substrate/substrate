@@ -17,16 +17,21 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"log/slog"
 	"strings"
 	"testing"
+
+	"github.com/agent-substrate/substrate/internal/contextlogging"
 )
 
 func TestWrapContainerLogs(t *testing.T) {
 	input := "Test application log output\n"
 	rdr := strings.NewReader(input)
-	var buf bytes.Buffer
 
-	al := NewActorLogger(&buf, false)
+	var buf bytes.Buffer
+	logger := slog.New(contextlogging.NewHandler(slog.NewJSONHandler(&buf, nil)))
+
+	al := NewActorLogger(logger, false)
 	al.WrapContainerLogs(rdr, "act-1", "tmpl-1", "default")
 
 	var m map[string]any
@@ -64,9 +69,11 @@ func TestWrapContainerLogs(t *testing.T) {
 func TestWrapContainerLogs_JSONInput(t *testing.T) {
 	input := `{"level":"info","msg":"Started container","custom_attr":"value"}` + "\n"
 	rdr := strings.NewReader(input)
-	var buf bytes.Buffer
 
-	al := NewActorLogger(&buf, false)
+	var buf bytes.Buffer
+	logger := slog.New(contextlogging.NewHandler(slog.NewJSONHandler(&buf, nil)))
+
+	al := NewActorLogger(logger, false)
 	al.WrapContainerLogs(rdr, "act-1", "tmpl-1", "default")
 
 	var m map[string]any

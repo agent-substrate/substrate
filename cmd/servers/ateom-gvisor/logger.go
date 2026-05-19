@@ -26,27 +26,25 @@ import (
 
 // ActorLogger handles structured logging for actor sandboxes and lifecycle events.
 type ActorLogger struct {
-	logger    *slog.Logger
 	labelsKey string
-	writer    io.Writer
+	logger    *slog.Logger
 }
 
 // NewActorLogger creates a new ActorLogger wrapping the provided destination writer.
-func NewActorLogger(w io.Writer, isOnGCE bool) *ActorLogger {
+func NewActorLogger(logger *slog.Logger, isOnGCE bool) *ActorLogger {
 	labelsKey := "labels"
 	if isOnGCE {
 		labelsKey = "logging.googleapis.com/labels"
 	}
 	return &ActorLogger{
-		logger:    slog.New(slog.NewJSONHandler(w, nil)),
 		labelsKey: labelsKey,
-		writer:    w,
+		logger:    logger,
 	}
 }
 
 // EmitLifecycleLog logs a synthetic actor lifecycle event.
 func (al *ActorLogger) EmitLifecycleLog(msg, actorID, actorTemplate, actorNamespace string) {
-	al.logger.LogAttrs(context.Background(), slog.LevelInfo, msg,
+	slog.LogAttrs(context.Background(), slog.LevelInfo, msg,
 		slog.Group(al.labelsKey,
 			slog.String("ate.dev/actor_id", actorID),
 			slog.String("ate.dev/actor_template", actorTemplate),
