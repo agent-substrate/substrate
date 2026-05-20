@@ -68,7 +68,7 @@ type Persistence struct {
 var _ store.Interface = (*Persistence)(nil)
 
 // NewPersistence creates a new Persistence.
-func NewPersistence(redisClient *redis.ClusterClient) *Persistence {
+func NewPersistence(redisClient redisClient) *Persistence {
 	return &Persistence{
 		rdb: redisClient,
 	}
