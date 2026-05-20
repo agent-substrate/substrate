@@ -25,6 +25,7 @@ import (
 	"os"
 	"path"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/k8sjwt"
@@ -46,22 +47,67 @@ type Server struct {
 	clientJWTIssuer   string
 	clientJWTAudience string
 
-	// TODO: Cache the signing keys in memory, so we don't read from a file every time.
-	sessionIDJWTPoolFile string
-	sessionIDCAPoolFile  string
-
 	workerCACerts string
+
+	sessionIDJWTPool mtimeCache[*localjwtauthority.Pool]
+	sessionIDCAPool  mtimeCache[*localca.Pool]
+}
+
+// mtimeCache holds a parsed value alongside the mod-time of the file it was
+// parsed from. It re-parses only when the file mod-time changes on disk, so callers
+// avoid a read+unmarshal on every request while still picking up rotations.
+type mtimeCache[T any] struct {
+	path  string
+	parse func([]byte) (T, error)
+
+	mu    sync.Mutex
+	mtime time.Time
+	value *T
+}
+
+func newMtimeCache[T any](path string, parse func([]byte) (T, error)) mtimeCache[T] {
+	return mtimeCache[T]{
+		path:  path,
+		parse: parse,
+	}
+}
+
+func (c *mtimeCache[T]) get() (T, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	info, err := os.Stat(c.path)
+	if err != nil {
+		var zero T
+		return zero, fmt.Errorf("stat %s: %w", c.path, err)
+	}
+	if c.value != nil && info.ModTime().Equal(c.mtime) {
+		return *c.value, nil
+	}
+	b, err := os.ReadFile(c.path)
+	if err != nil {
+		var zero T
+		return zero, fmt.Errorf("read %s: %w", c.path, err)
+	}
+	v, err := c.parse(b)
+	if err != nil {
+		var zero T
+		return zero, err
+	}
+	c.value = &v
+	c.mtime = info.ModTime()
+	return v, nil
 }
 
 var _ ateapipb.SessionIdentityServer = (*Server)(nil)
 
 func New(clientJWTIssuer, clientJWTAudience, sessionIDJWTPoolFile, sessionIDCAPoolFile, workerCACerts string) *Server {
 	return &Server{
-		clientJWTIssuer:      clientJWTIssuer,
-		clientJWTAudience:    clientJWTAudience,
-		sessionIDJWTPoolFile: sessionIDJWTPoolFile,
-		sessionIDCAPoolFile:  sessionIDCAPoolFile,
-		workerCACerts:        workerCACerts,
+		clientJWTIssuer:   clientJWTIssuer,
+		clientJWTAudience: clientJWTAudience,
+		sessionIDJWTPool:  newMtimeCache(sessionIDJWTPoolFile, localjwtauthority.Unmarshal),
+		sessionIDCAPool:   newMtimeCache(sessionIDCAPoolFile, localca.Unmarshal),
+		workerCACerts:     workerCACerts,
 	}
 }
 
@@ -90,15 +136,9 @@ func (s *Server) MintJWT(ctx context.Context, req *ateapipb.MintJWTRequest) (*at
 
 	// TODO: Cross-check requested session and user claims against the session database.
 
-	// TODO: Cache signing keys in memory, so we don't read from disk every time.
-	signingPoolBytes, err := os.ReadFile(s.sessionIDJWTPoolFile)
+	signingPool, err := s.sessionIDJWTPool.get()
 	if err != nil {
-		return nil, fmt.Errorf("while reading signing pool bytes: %w", err)
-	}
-
-	signingPool, err := localjwtauthority.Unmarshal(signingPoolBytes)
-	if err != nil {
-		return nil, fmt.Errorf("while unmarshaling signing pool: %w", err)
+		return nil, fmt.Errorf("while loading signing pool: %w", err)
 	}
 
 	// We only issue tokens with audience bindings.
@@ -163,12 +203,7 @@ func (s *Server) MintCert(ctx context.Context, req *ateapipb.MintCertRequest) (*
 	}
 
 	// Load the CA pool for signing
-	poolBytes, err := os.ReadFile(s.sessionIDCAPoolFile)
-	if err != nil {
-		slog.ErrorContext(ctx, "Failed to read session CA pool file", slog.Any("err", err))
-		return nil, status.Errorf(codes.Internal, "Failed to load session CA")
-	}
-	caPool, err := localca.Unmarshal(poolBytes)
+	caPool, err := s.sessionIDCAPool.get()
 	if err != nil || len(caPool.CAs) == 0 {
 		slog.ErrorContext(ctx, "Failed to load session CA", slog.Any("err", err))
 		return nil, status.Errorf(codes.Internal, "Failed to load session CA")
