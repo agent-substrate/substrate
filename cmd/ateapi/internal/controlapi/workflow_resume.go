@@ -19,7 +19,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"math/rand"
 	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
@@ -85,38 +84,34 @@ func (s *AssignWorkerStep) IsComplete(ctx context.Context, input *ResumeInput, s
 	return state.Actor.GetStatus() == ateapipb.Actor_STATUS_RUNNING, nil
 }
 func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, state *ResumeState) error {
-	workers, err := s.store.ListWorkers(ctx)
-	if err != nil {
-		return fmt.Errorf("while listing workers: %w", err)
-	}
-
 	var assignedWorker *ateapipb.Worker
 
-	// Check if we already have a worker assigned from a previous failed attempt
-	for _, worker := range workers {
-		if worker.GetActorId() == input.ActorID && worker.GetWorkerPool() == state.ActorTemplate.Spec.WorkerPoolRef.Name && worker.GetWorkerNamespace() == state.ActorTemplate.Spec.WorkerPoolRef.Namespace {
+	// Re-use previously assigned worker if available.
+	if state.Actor.GetAteomPodName() != "" {
+		worker, err := s.store.GetWorker(ctx, state.Actor.GetAteomPodNamespace(), state.ActorTemplate.Spec.WorkerPoolRef.Name, state.Actor.GetAteomPodName())
+		if err == nil && worker.GetActorId() == input.ActorID {
 			assignedWorker = worker
-			break
 		}
 	}
 
-	// If not, find a free one using randomized shuffling
+	// Claim a new idle worker.
 	if assignedWorker == nil {
-		pickedWorker := s.findFreeWorker(workers, state.ActorTemplate.Spec.WorkerPoolRef.Namespace, state.ActorTemplate.Spec.WorkerPoolRef.Name)
-		if pickedWorker == nil {
-			return status.Errorf(codes.FailedPrecondition, "no free workers available")
+		pickedWorker, err := s.store.ClaimIdleWorker(
+			ctx,
+			state.ActorTemplate.Spec.WorkerPoolRef.Namespace,
+			state.ActorTemplate.Spec.WorkerPoolRef.Name,
+			input.ActorID,
+			state.Actor.GetActorTemplateNamespace(),
+			state.Actor.GetActorTemplateName(),
+		)
+		if err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				return status.Errorf(codes.FailedPrecondition, "no free workers available")
+			}
+			return fmt.Errorf("while claiming idle worker: %w", err)
 		}
-
 		assignedWorker = pickedWorker
-		slog.InfoContext(ctx, "Picked worker", slog.Any("worker", pickedWorker.String()))
-	}
-
-	assignedWorker.ActorId = input.ActorID
-	assignedWorker.ActorNamespace = state.Actor.GetActorTemplateNamespace()
-	assignedWorker.ActorTemplate = state.Actor.GetActorTemplateName()
-
-	if err := s.store.UpdateWorker(ctx, assignedWorker, assignedWorker.Version); err != nil {
-		return err
+		slog.InfoContext(ctx, "Claimed idle worker", slog.Any("worker", pickedWorker.String()))
 	}
 
 	state.Actor.Status = ateapipb.Actor_STATUS_RESUMING
@@ -137,23 +132,6 @@ func (s *AssignWorkerStep) RetryBackoff() *wait.Backoff {
 		Factor:   2.0,
 		Jitter:   1.0,
 	}
-}
-
-func (s *AssignWorkerStep) findFreeWorker(workers []*ateapipb.Worker, workerPoolNamespace, workerPoolName string) *ateapipb.Worker {
-	var freeWorkers []*ateapipb.Worker
-	for _, worker := range workers {
-		if worker.GetActorId() == "" && worker.GetWorkerPool() == workerPoolName && worker.GetWorkerNamespace() == workerPoolNamespace {
-			freeWorkers = append(freeWorkers, worker)
-		}
-	}
-
-	if len(freeWorkers) > 0 {
-		rand.Shuffle(len(freeWorkers), func(i, j int) {
-			freeWorkers[i], freeWorkers[j] = freeWorkers[j], freeWorkers[i]
-		})
-		return freeWorkers[0]
-	}
-	return nil
 }
 
 type CallAteletRestoreStep struct {

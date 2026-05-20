@@ -164,6 +164,13 @@ func (s *Persistence) CreateWorker(ctx context.Context, worker *ateapipb.Worker)
 		return store.ErrAlreadyExists
 	}
 
+	// Add to the idle set.
+	setKey := fmt.Sprintf("pool:%s:%s:idle_workers", worker.GetWorkerNamespace(), worker.GetWorkerPool())
+	err = s.rdb.SAdd(ctx, setKey, worker.GetWorkerPod()).Err()
+	if err != nil {
+		return fmt.Errorf("while registering worker in idle set: %w", err)
+	}
+
 	return nil
 }
 
@@ -192,6 +199,7 @@ func (s *Persistence) GetWorker(ctx context.Context, namespace, pool, pod string
 
 func (s *Persistence) UpdateWorker(ctx context.Context, worker *ateapipb.Worker, expectedVersion int64) error {
 	dbKey := workerDBKey(worker.GetWorkerNamespace(), worker.GetWorkerPool(), worker.GetWorkerPod())
+	var shouldAddToIdle bool
 
 	// Clone because we will update the version field, and we don't want to
 	// stomp the caller's copy.
@@ -228,6 +236,10 @@ func (s *Persistence) UpdateWorker(ctx context.Context, worker *ateapipb.Worker,
 			return fmt.Errorf("ip is immutable")
 		}
 
+		if currentWorker.GetActorId() != "" && dbWorker.GetActorId() == "" {
+			shouldAddToIdle = true
+		}
+
 		newVal, err := protojson.Marshal(dbWorker)
 		if err != nil {
 			return fmt.Errorf("in protojson.Marshal: %w", err)
@@ -246,15 +258,32 @@ func (s *Persistence) UpdateWorker(ctx context.Context, worker *ateapipb.Worker,
 		return fmt.Errorf("while executing update worker transaction: %w", err)
 	}
 
+	// Run SAdd sequentially outside the transaction to avoid cluster slot restrictions.
+	if shouldAddToIdle {
+		setKey := fmt.Sprintf("pool:%s:%s:idle_workers", worker.GetWorkerNamespace(), worker.GetWorkerPool())
+		err = s.rdb.SAdd(ctx, setKey, worker.GetWorkerPod()).Err()
+		if err != nil {
+			return fmt.Errorf("while returning worker to idle set: %w", err)
+		}
+	}
+
 	return nil
 }
 
 func (s *Persistence) DeleteWorker(ctx context.Context, namespace, pool, pod string) error {
 	dbKey := workerDBKey(namespace, pool, pod)
+	setKey := fmt.Sprintf("pool:%s:%s:idle_workers", namespace, pool)
+
 	err := s.rdb.Del(ctx, dbKey).Err()
 	if err != nil {
 		return fmt.Errorf("while deleting worker key %q: %w", dbKey, err)
 	}
+
+	err = s.rdb.SRem(ctx, setKey, pod).Err()
+	if err != nil {
+		return fmt.Errorf("while removing worker from idle set: %w", err)
+	}
+
 	return nil
 }
 
@@ -451,4 +480,51 @@ func (s *Persistence) ReleaseLock(ctx context.Context, key string, value string)
 		return fmt.Errorf("while releasing lock for %q with value %q: %w", key, value, err)
 	}
 	return nil
+}
+
+func (s *Persistence) ClaimIdleWorker(ctx context.Context, namespace, pool string, actorID string, actorNamespace string, actorTemplate string) (*ateapipb.Worker, error) {
+	setKey := fmt.Sprintf("pool:%s:%s:idle_workers", namespace, pool)
+
+	for {
+		// Pop a random idle worker name.
+		podName, err := s.rdb.SPop(ctx, setKey).Result()
+		if err != nil {
+			if errors.Is(err, redis.Nil) {
+				return nil, store.ErrNotFound
+			}
+			return nil, fmt.Errorf("while popping idle worker from set: %w", err)
+		}
+
+		worker, err := s.GetWorker(ctx, namespace, pool, podName)
+		if err != nil {
+			// If the worker was deleted, skip and pop the next one.
+			if errors.Is(err, store.ErrNotFound) {
+				continue
+			}
+			_ = s.rdb.SAdd(ctx, setKey, podName).Err()
+			return nil, fmt.Errorf("while loading popped worker metadata: %w", err)
+		}
+
+		if worker.GetActorId() != "" {
+			// Skip busy workers.
+			continue
+		}
+
+		worker.ActorId = actorID
+		worker.ActorNamespace = actorNamespace
+		worker.ActorTemplate = actorTemplate
+
+		err = s.UpdateWorker(ctx, worker, worker.Version)
+		if err != nil {
+			if errors.Is(err, store.ErrPersistenceRetry) {
+				// Return to the idle set and retry on locking conflict.
+				_ = s.rdb.SAdd(ctx, setKey, podName).Err()
+				continue
+			}
+			_ = s.rdb.SAdd(ctx, setKey, podName).Err()
+			return nil, fmt.Errorf("while claiming popped worker: %w", err)
+		}
+
+		return worker, nil
+	}
 }

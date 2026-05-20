@@ -69,6 +69,10 @@ type Interface interface {
 	// Lists all known workers. Returns nil if none found.
 	ListWorkers(ctx context.Context) ([]*ateapipb.Worker, error)
 
+	// ClaimIdleWorker atomically claims a random idle worker from the specified pool
+	// and associates it with the given Actor. Returns ErrNotFound if no idle workers are available.
+	ClaimIdleWorker(ctx context.Context, namespace, pool string, actorID string, actorNamespace string, actorTemplate string) (*ateapipb.Worker, error)
+
 	// AcquireLock attempts to acquire a distributed lock with a TTL.
 	// Returns true if the lock was successfully acquired.
 	// Returns false if the lock is already held by another client (conflict).
