@@ -22,7 +22,7 @@ ROOT=$(git rev-parse --show-toplevel)
 # override reading dev env
 export NO_DEV_ENV=true
 # we will push images to the local registry
-export KO_DOCKER_REPO=localhost:5001
+export KO_DOCKER_REPO=${KO_DOCKER_REPO:-localhost:5001}
 # we want to build for the host architecture
 export KO_DEFAULTPLATFORMS=linux/$(go env GOARCH)
 # install resolved manifests using Kustomize overlay for local Kind cluster
