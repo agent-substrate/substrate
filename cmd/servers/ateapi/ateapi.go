@@ -99,15 +99,6 @@ func main() {
 		}
 	}()
 
-	go func() {
-		mux := http.NewServeMux()
-		mux.Handle("/metrics", promhttp.Handler())
-		slog.InfoContext(ctx, fmt.Sprintf("Starting Prometheus metrics server on %s", *metricsListenAddr))
-		if err := http.ListenAndServe(*metricsListenAddr, mux); err != nil {
-			slog.Error("Failed to start prometheus metrics server", slog.Any("err", err))
-		}
-	}()
-
 	// For development, certain flags that are likely to be different for each
 	// developer can optionally be read from environment variables.  This is
 	// helpful because it lets us keep one set of constant Kubernetes manifests
@@ -304,6 +295,19 @@ func main() {
 	reflection.Register(mux)
 	ateapipb.RegisterControlServer(mux, sm)
 	ateapipb.RegisterSessionIdentityServer(mux, sessionIdentitySrv)
+
+	go func() {
+		mux := http.NewServeMux()
+		mux.Handle("/metrics", promhttp.Handler())
+		mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("ok"))
+		})
+		slog.InfoContext(ctx, fmt.Sprintf("Starting Prometheus metrics server on %s", *metricsListenAddr))
+		if err := http.ListenAndServe(*metricsListenAddr, mux); err != nil {
+			slog.Error("Failed to start prometheus metrics server", slog.Any("err", err))
+		}
+	}()
 
 	if err := mux.Serve(lis); err != nil {
 		slog.ErrorContext(ctx, "Failed to serve", slog.Any("err", err))

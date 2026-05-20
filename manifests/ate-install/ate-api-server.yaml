@@ -113,6 +113,12 @@ spec:
         - containerPort: 443
         - name: prometheus
           containerPort: 9090
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 9090
+          initialDelaySeconds: 5
+          periodSeconds: 2
       volumes:
       - name: "servicedns"
         projected:
