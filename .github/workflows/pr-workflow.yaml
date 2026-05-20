@@ -44,8 +44,6 @@ jobs:
       run: hack/create-kind-cluster.sh
     - name: Install Agent Substrate
       run: hack/install-ate-kind.sh --deploy-ate-system
-    - name: Wait For Ready
-      run: kubectl wait pod --all --for=condition=Ready --namespace=ate-system --timeout=300s
     - name: Deploy Counter Demo
       run: hack/install-ate-kind.sh --deploy-demo-counter
     - name: Run E2E tests
