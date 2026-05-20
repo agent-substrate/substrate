@@ -66,6 +66,10 @@ production use, and the APIs are almost guaranteed to change.  We are not
 making any guarantees about backward compatibility at this stage, and
 everything in this project may be changed.
 
+### Supported Kubernetes Releases
+
+Currently we aim to support the [latest stable release](https://kubernetes.io/releases/) of Kubernetes, and the previous minor release.
+
 ## Community
 
 For announcements, technical discussions, and community support, please join
