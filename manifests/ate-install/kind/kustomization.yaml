@@ -24,3 +24,21 @@ resources:
   - ../valkey.yaml
   - ../pod-certificate-controller.yaml
   - rustfs.yaml
+  - ./otel-collector.yaml
+
+patches:
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: ate-api-server-deployment
+        namespace: ate-system
+      spec:
+        template:
+          spec:
+            containers:
+            - name: ate-api-server
+              env:
+              - name: OTEL_EXPORTER_OTLP_ENDPOINT
+                value: http://opentelemetry-collector.otel-system.svc:4317
+

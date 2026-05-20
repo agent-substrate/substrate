@@ -34,6 +34,8 @@ patches:
               - --gcp-auth-for-image-pulls=false
               - --localhost-registry-replacement=kind-registry:5000
               env:
+              - name: OTEL_EXPORTER_OTLP_ENDPOINT
+                value: http://opentelemetry-collector.otel-system.svc:4317
               - name: ATE_STORAGE_BACKEND
                 value: s3
               - name: AWS_REGION
