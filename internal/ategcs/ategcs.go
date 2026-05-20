@@ -75,11 +75,6 @@ func (s *s3Client) GetObject(ctx context.Context, bucket, object string) (io.Rea
 }
 
 func (s *s3Client) PutObject(ctx context.Context, bucket, object string, reader io.Reader) error {
-	// Try creating the bucket first (ignore if it already exists)
-	_, _ = s.client.CreateBucket(ctx, &s3.CreateBucketInput{
-		Bucket: aws.String(bucket),
-	})
-
 	_, err := s.client.PutObject(ctx, &s3.PutObjectInput{
 		Bucket: aws.String(bucket),
 		Key:    aws.String(object),
