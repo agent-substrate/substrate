@@ -100,4 +100,27 @@ Distributed tracing tracks the end-to-end flow of requests as they pass through 
 
 Currently, Agent Substrate supports on-demand request tracing. When initiated by a client (e.g., via the `--trace` flag), Agent Substrate leverages OpenTelemetry (OTel) for context propagation across the call stack. Each traced request generates a unique trace hash/ID, which you can use to inspect the detailed request lifecycle and span hierarchy inside Google Cloud Trace or Jaeger.
 
+### Local Tracing with Jaeger (Kind Cluster)
+
+For local development inside a `kind` cluster, Agent Substrate automatically provisions a local OpenTelemetry Collector and Jaeger instance.
+
+To visualize traces locally:
+
+1. **Expose the Jaeger query UI** via port forwarding:
+   ```bash
+   kubectl port-forward -n otel-system svc/jaeger 16686:16686
+   ```
+
+2. **Open the Jaeger UI** in your web browser:
+   [http://localhost:16686](http://localhost:16686)
+
+3. **Generate Traces**: Run a CLI command or API call with the `--trace` flag, e.g.:
+   ```bash
+   kubectl ate get actor --trace
+   # or
+   kubectl ate suspend actor <actor-id> --trace
+   ```
+
+4. **Search and Inspect**: Copy the printed Trace ID from the CLI output and paste it into the Jaeger search box (top right), or select `ateapi` or `atelet` under the **Service** dropdown and click **Find Traces** to inspect detailed call stacks, DB transactions, state updates, and worker pod handoffs.
+
 > **Developer Guide:** For detailed instructions on configuring OpenTelemetry tracer providers, middleware, and exporters in your servers or clients, please refer to the [Tracing Best Practices](dev/best-practices/tracing.md) guide.
