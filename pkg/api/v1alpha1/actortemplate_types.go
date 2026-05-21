@@ -37,6 +37,8 @@ type Container struct {
 	Name string `json:"name"`
 
 	// Image to use for the worker replicas.
+	//
+	// +kubebuilder:validation:XValidation:rule="self.contains('@')",message="All images must be pinned (changing the image invalidates snapshots)"
 	Image string `json:"image,omitempty"`
 
 	// Entrypoint array. Not executed within a shell.
@@ -67,11 +69,13 @@ type ActorTemplateSpec struct {
 	//   - [2] registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4
 	//
 	// +required
+	// +kubebuilder:validation:XValidation:rule="self.contains('@')",message="All images must be pinned (changing the image invalidates snapshots)"
 	PauseImage string `json:"pauseImage,omitempty"`
 
 	// Containers is the workload definition.
 	//
 	// +optional
+	// +kubebuilder:validation:MaxItems=10
 	Containers []Container `json:"containers,omitempty"`
 
 	// Snapshots configuration for the actor.

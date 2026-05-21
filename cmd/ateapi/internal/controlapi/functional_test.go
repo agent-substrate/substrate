@@ -343,11 +343,11 @@ func createTemplate(t *testing.T, tc *testContext, ns string) {
 					SHA256Hash: "a397be1abc2420d26bce6c70e6e2ff96c73aaaab929756c56f5e2089ea842b63",
 				},
 			},
-			PauseImage: "pause",
+			PauseImage: "pause@sha256:abc",
 			Containers: []atev1alpha1.Container{
 				{
 					Name:    "main",
-					Image:   "main",
+					Image:   "main@sha256:abc",
 					Command: []string{"/main"},
 				},
 			},
