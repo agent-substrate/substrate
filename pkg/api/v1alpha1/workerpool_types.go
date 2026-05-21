@@ -21,6 +21,7 @@ import (
 type WorkerPoolSpec struct {
 	// Replicas is the number of worker pods to run.
 	// +required
+	// +kubebuilder:validation:Minimum=0
 	Replicas int32 `json:"replicas"`
 
 	// AteomImage is the ateom container image to deploy as workers.
@@ -29,6 +30,9 @@ type WorkerPoolSpec struct {
 }
 
 type WorkerPoolStatus struct {
+	// Replicas is the total number of worker pods.
+	// +optional
+	Replicas int32 `json:"replicas"`
 }
 
 // WorkerPool is the Schema for the workerpools API
@@ -37,6 +41,10 @@ type WorkerPoolStatus struct {
 // +kubebuilder:object:root=true
 // +kubebuilder:resource:scope=Namespaced,shortName=workerpool
 // +kubebuilder:subresource:status
+// +kubebuilder:subresource:scale:specpath=.spec.replicas,statuspath=.status.replicas
+// +kubebuilder:printcolumn:name="Desired",type=integer,JSONPath=`.spec.replicas`
+// +kubebuilder:printcolumn:name="Replicas",type=integer,JSONPath=`.status.replicas`
+// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 type WorkerPool struct {
 	metav1.TypeMeta `json:",inline"`
 
