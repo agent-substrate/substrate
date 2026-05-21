@@ -22,6 +22,7 @@ import (
 	"net"
 	"os"
 	"runtime"
+	"sort"
 	"sync"
 	"time"
 
@@ -539,7 +540,13 @@ func restoreLink(ctx context.Context, link netlink.Link, info *SaveLinkInfo) err
 			return fmt.Errorf("while restoring addr %d onto link: %w", i, err)
 		}
 	}
-	for i, saveRoute := range info.Routes {
+	// Link-scope routes must be installed before gateway routes so the
+	// kernel can resolve each gateway's nexthop (fib_check_nh_v4_gw).
+	routes := append([]SaveRoute(nil), info.Routes...)
+	sort.SliceStable(routes, func(i, j int) bool {
+		return routes[i].Gateway == nil && routes[j].Gateway != nil
+	})
+	for i, saveRoute := range routes {
 		route := &netlink.Route{
 			LinkIndex: link.Attrs().Index,
 			Scope:     netlink.Scope(saveRoute.Scope),
