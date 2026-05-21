@@ -43,7 +43,7 @@ spec:
     arm64:
       url: "gs://gvisor/releases/nightly/2026-05-19/aarch64/runsc"
       sha256Hash: "1ba2366ae2efceba166046f51a4104f9261c9cb72c6db8f5b3fe2dc57dea86b9"
-  pauseImage: "gcr.io/gke-release/pause@sha256:bcbd57ba5653580ec647b16d8163cdd1112df3609129b01f912a8032e48265da"
+  pauseImage: "registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4"
   containers:
   - name: counter
     image: ko://github.com/agent-substrate/substrate/demos/counter
