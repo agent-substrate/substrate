@@ -34,6 +34,7 @@ fi
 if [ "$(docker inspect -f '{{.State.Running}}' "${reg_name}" 2>/dev/null || true)" != "true" ]; then
   docker run \
     -d --restart=always \
+    --label created-by=agent-substrate \
     -p "127.0.0.1:${reg_port}:5000" \
     -p "[::1]:${reg_port}:5000" \
     --network bridge --name "${reg_name}" \
@@ -59,21 +60,21 @@ runtimeConfig:
 EOF
 
 echo "Deleting existing kind cluster '${KIND_CLUSTER_NAME}' if it exists..."
-kind delete cluster --name "${KIND_CLUSTER_NAME}" || true
+"${ROOT}"/hack/kind.sh delete cluster --name "${KIND_CLUSTER_NAME}" || true
 
 echo "Creating kind cluster '${KIND_CLUSTER_NAME}'..."
-kind create cluster --name "${KIND_CLUSTER_NAME}" --config "${ROOT}/bin/kind-config.yaml"
+"${ROOT}"/hack/kind.sh create cluster --name "${KIND_CLUSTER_NAME}" --config "${ROOT}/bin/kind-config.yaml"
 
 # 2.5 Enable Proxy ARP on kind nodes for gVisor loopback pod-to-pod networking
 echo "Enabling Proxy ARP on kind nodes..."
-for node in $(kind get nodes --name "${KIND_CLUSTER_NAME}"); do
+for node in $("${ROOT}"/hack/kind.sh get nodes --name "${KIND_CLUSTER_NAME}"); do
   docker exec "${node}" sysctl net.ipv4.conf.all.proxy_arp=1
 done
 
 # 3. Add the registry config to the nodes
 echo "Adding registry config to kind nodes..."
 REGISTRY_DIR="/etc/containerd/certs.d/localhost:${reg_port}"
-for node in $(kind get nodes --name "${KIND_CLUSTER_NAME}"); do
+for node in $("${ROOT}"/hack/kind.sh get nodes --name "${KIND_CLUSTER_NAME}"); do
   docker exec "${node}" mkdir -p "${REGISTRY_DIR}"
   cat <<EOF | docker exec -i "${node}" cp /dev/stdin "${REGISTRY_DIR}/hosts.toml"
 [host."http://${reg_name}:5000"]

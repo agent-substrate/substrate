@@ -87,7 +87,7 @@ goals in the near term.
 
 To quickly set up the complete environment:
 
-1. Make sure you have [`kind`](https://kind.sigs.k8s.io/), [`kubectl`](https://kubernetes.io/docs/tasks/tools/), and [`docker`](https://www.docker.com/) installed and configured on your dev machine.
+1. Make sure you have [Go](https://go.dev/doc/install), [`kubectl`](https://kubernetes.io/docs/tasks/tools/), and [`docker`](https://www.docker.com/) installed and configured on your dev machine. We will automatically manage other dependencies via Go, including [`kind`](https://kind.sigs.k8s.io/).
 
 2. Run the following steps:
 ```shell
@@ -156,7 +156,7 @@ Similarly, you can deploy or cleanup specific Agent Substrate components using t
 ./hack/install-ate-kind.sh --delete-all
 ```
 
-#### Tearing down resources
+#### Tearing down resources (GCP)
 
 If you need to delete the resources created by the setup script, you can use the provided script `hack/teardown.sh`. This script will delete resources in the reverse order of creation and handles partial failures gracefully.
 
@@ -165,6 +165,14 @@ If you need to delete the resources created by the setup script, you can use the
 ```
 
 Or run individual teardown steps as needed (see `./hack/teardown.sh` for available options).
+
+#### Tearing down local `kind` resources
+
+If you need to delete the local `kind` cluster and its registry (if it was created by `hack/create-kind-cluster.sh`):
+
+```bash
+./hack/delete-kind-cluster.sh
+```
 
 ## Demos
 
