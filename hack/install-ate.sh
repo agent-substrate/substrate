@@ -206,8 +206,73 @@ deploy_crds() {
   run_ko apply -f manifests/ate-install/generated
 }
 
+# When running on kind, pre-populate every node's atelet hostPath cache with
+# the gVisor runsc binary referenced by the demo templates. The atelet `Run`
+# RPC fetches runsc from public GCS the first time it is invoked, which can
+# exceed the per-actor lock TTL (~28s) on networks where a ~79 MiB anonymous
+# GCS pull is slow. Pre-fetching here removes that race for the documented
+# kind quickstart. No effect on the GKE install path.
+ensure_runsc_cached_on_kind() {
+  [[ "${ATE_INSTALL_KIND:-false}" == "true" ]] || return 0
+  log_step "ensure_runsc_cached_on_kind"
+
+  local tmpl="manifests/counter/counter.yaml.tmpl"
+  local arch sha url
+  arch=$(go env GOARCH)  # amd64 or arm64
+  # Extract sha256Hash + url for the host arch from the canonical demo template.
+  # The runsc spec is identical across the in-tree demo templates today.
+  sha=$(awk -v arch="${arch}:" '
+    $1 == "amd64:" || $1 == "arm64:" { in_arch = ($1 == arch) }
+    in_arch && $1 == "sha256Hash:" { gsub(/"|,/, "", $2); print $2; exit }
+  ' "$tmpl")
+  url=$(awk -v arch="${arch}:" '
+    $1 == "amd64:" || $1 == "arm64:" { in_arch = ($1 == arch) }
+    in_arch && $1 == "url:" { gsub(/"|,/, "", $2); print $2; exit }
+  ' "$tmpl")
+  if [[ -z "$sha" || -z "$url" ]]; then
+    echo "ensure_runsc_cached_on_kind: could not parse runsc.${arch}.{sha256Hash,url} from ${tmpl}" >&2
+    return 1
+  fi
+  # gs://bucket/path -> https://storage.googleapis.com/bucket/path
+  local https_url="https://storage.googleapis.com/${url#gs://}"
+
+  local cache_name="runsc-${sha}"
+  local tmp_path="${TMPDIR:-/tmp}/${cache_name}"
+
+  if [[ ! -f "$tmp_path" ]]; then
+    echo "Fetching ${https_url}"
+    curl -fsSL "$https_url" -o "$tmp_path"
+  fi
+
+  local got
+  if command -v shasum >/dev/null 2>&1; then
+    got=$(shasum -a 256 "$tmp_path" | awk '{print $1}')
+  else
+    got=$(sha256sum "$tmp_path" | awk '{print $1}')
+  fi
+  if [[ "$got" != "$sha" ]]; then
+    echo "ensure_runsc_cached_on_kind: sha256 mismatch (got=$got want=$sha)" >&2
+    return 1
+  fi
+
+  local nodes
+  nodes=$(kind get nodes --name "${KIND_CLUSTER_NAME:-kind}")
+  if [[ -z "$nodes" ]]; then
+    echo "ensure_runsc_cached_on_kind: no kind nodes found for cluster '${KIND_CLUSTER_NAME:-kind}'" >&2
+    return 1
+  fi
+  local node
+  for node in $nodes; do
+    docker exec "$node" mkdir -p /run/ateom-gvisor/static-files
+    tar -C "$(dirname "$tmp_path")" -cf - "$cache_name" \
+      | docker exec -i "$node" tar -C /run/ateom-gvisor/static-files -xf -
+    docker exec "$node" chmod 755 "/run/ateom-gvisor/static-files/$cache_name"
+  done
+}
+
 deploy_ate_system() {
   log_step "deploy_ate_system"
+  ensure_runsc_cached_on_kind
   ensure_crds
 
   # Ensure namespace exists
