@@ -20,7 +20,7 @@ export KO_DOCKER_REPO := gcr.io/$(PROJECT_ID)/ate-images
 
 # Go commands
 GO := go
-KO := hack/ko.sh
+KO := hack/run-tool.sh ko
 
 # Binaries
 BINDIR := bin/

@@ -103,7 +103,7 @@ run_kubectl_ate() {
 }
 
 run_ko() {
-  ./hack/ko.sh \
+  ./hack/run-tool.sh ko \
     "$@" \
     -- ${KUBECTL_CONTEXT:+--context=${KUBECTL_CONTEXT}}
 }
