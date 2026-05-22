@@ -59,7 +59,7 @@ spec:
   runsc:
     amd64:
       # Note: These values are from the 2026-05-19 nightly. 
-      # For the latest verified versions, see: manifests/counter/counter.yaml.tmpl
+      # For the latest verified versions, see: demos/counter/counter.yaml.tmpl
       url: "gs://gvisor/releases/nightly/2026-05-19/x86_64/runsc"
       sha256Hash: "a397be1abc2420d26bce6c70e6e2ff96c73aaaab929756c56f5e2089ea842b63"
     arm64:
