@@ -69,7 +69,7 @@ spec:
       serviceAccountName: ate-api-server
       containers:
       - name: ate-api-server
-        image: ko://github.com/agent-substrate/substrate/cmd/servers/ateapi
+        image: ko://github.com/agent-substrate/substrate/cmd/ateapi
         args:
           - "--grpc-listen-addr=0.0.0.0:443"
           - "--grpc-server-cred-bundle=/run/servicedns.podcert.ate.dev/credential-bundle.pem"

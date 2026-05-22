@@ -19,7 +19,7 @@ package v1alpha1
 import (
 	http "net/http"
 
-	apiv1alpha1 "github.com/agent-substrate/substrate/api/v1alpha1"
+	apiv1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	scheme "github.com/agent-substrate/substrate/pkg/client/clientset/versioned/scheme"
 	rest "k8s.io/client-go/rest"
 )

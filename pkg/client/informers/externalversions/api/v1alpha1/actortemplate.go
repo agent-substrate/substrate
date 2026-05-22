@@ -20,7 +20,7 @@ import (
 	context "context"
 	time "time"
 
-	substrateapiv1alpha1 "github.com/agent-substrate/substrate/api/v1alpha1"
+	pkgapiv1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	versioned "github.com/agent-substrate/substrate/pkg/client/clientset/versioned"
 	internalinterfaces "github.com/agent-substrate/substrate/pkg/client/informers/externalversions/internalinterfaces"
 	apiv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
@@ -81,7 +81,7 @@ func NewFilteredActorTemplateInformer(client versioned.Interface, namespace stri
 				return client.ApiV1alpha1().ActorTemplates(namespace).Watch(ctx, options)
 			},
 		}, client),
-		&substrateapiv1alpha1.ActorTemplate{},
+		&pkgapiv1alpha1.ActorTemplate{},
 		resyncPeriod,
 		indexers,
 	)
@@ -92,7 +92,7 @@ func (f *actorTemplateInformer) defaultInformer(client versioned.Interface, resy
 }
 
 func (f *actorTemplateInformer) Informer() cache.SharedIndexInformer {
-	return f.factory.InformerFor(&substrateapiv1alpha1.ActorTemplate{}, f.defaultInformer)
+	return f.factory.InformerFor(&pkgapiv1alpha1.ActorTemplate{}, f.defaultInformer)
 }
 
 func (f *actorTemplateInformer) Lister() apiv1alpha1.ActorTemplateLister {

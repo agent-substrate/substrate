@@ -20,7 +20,7 @@ import (
 	context "context"
 	time "time"
 
-	substrateapiv1alpha1 "github.com/agent-substrate/substrate/api/v1alpha1"
+	pkgapiv1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	versioned "github.com/agent-substrate/substrate/pkg/client/clientset/versioned"
 	internalinterfaces "github.com/agent-substrate/substrate/pkg/client/informers/externalversions/internalinterfaces"
 	apiv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
@@ -81,7 +81,7 @@ func NewFilteredWorkerPoolInformer(client versioned.Interface, namespace string,
 				return client.ApiV1alpha1().WorkerPools(namespace).Watch(ctx, options)
 			},
 		}, client),
-		&substrateapiv1alpha1.WorkerPool{},
+		&pkgapiv1alpha1.WorkerPool{},
 		resyncPeriod,
 		indexers,
 	)
@@ -92,7 +92,7 @@ func (f *workerPoolInformer) defaultInformer(client versioned.Interface, resyncP
 }
 
 func (f *workerPoolInformer) Informer() cache.SharedIndexInformer {
-	return f.factory.InformerFor(&substrateapiv1alpha1.WorkerPool{}, f.defaultInformer)
+	return f.factory.InformerFor(&pkgapiv1alpha1.WorkerPool{}, f.defaultInformer)
 }
 
 func (f *workerPoolInformer) Lister() apiv1alpha1.WorkerPoolLister {

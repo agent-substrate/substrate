@@ -11,7 +11,7 @@ The `WorkerPool` defines the pool of physical "warm" compute capacity. It manage
 | Field | Type | Description |
 | :--- | :--- | :--- |
 | `replicas` | `int32` | **Required.** Number of physical standby pods to maintain in the cluster. |
-| `ateomImage` | `string` | **Required.** The container image for the `ateom` herder process (e.g. `ko://github.com/agent-substrate/substrate/cmd/servers/ateom-gvisor`). |
+| `ateomImage` | `string` | **Required.** The container image for the `ateom` herder process (e.g. `ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor`). |
 
 ### Example
 
@@ -23,7 +23,7 @@ metadata:
   namespace: ate-demo
 spec:
   replicas: 10
-  ateomImage: ko://github.com/agent-substrate/substrate/cmd/servers/ateom-gvisor
+  ateomImage: ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor
 ```
 
 ---

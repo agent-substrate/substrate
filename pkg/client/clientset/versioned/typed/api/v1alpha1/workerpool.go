@@ -19,7 +19,7 @@ package v1alpha1
 import (
 	context "context"
 
-	apiv1alpha1 "github.com/agent-substrate/substrate/api/v1alpha1"
+	apiv1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	scheme "github.com/agent-substrate/substrate/pkg/client/clientset/versioned/scheme"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	types "k8s.io/apimachinery/pkg/types"

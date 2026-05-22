@@ -79,7 +79,7 @@ spec:
       serviceAccountName: ate-controller
       containers:
       - name: ate-controller
-        image: ko://github.com/agent-substrate/substrate/cmd/servers/atecontroller
+        image: ko://github.com/agent-substrate/substrate/cmd/atecontroller
         ports:
         - name: metrics
           containerPort: 8080

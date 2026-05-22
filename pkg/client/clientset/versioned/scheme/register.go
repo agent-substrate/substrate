@@ -17,7 +17,7 @@
 package scheme
 
 import (
-	apiv1alpha1 "github.com/agent-substrate/substrate/api/v1alpha1"
+	apiv1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	runtime "k8s.io/apimachinery/pkg/runtime"
 	schema "k8s.io/apimachinery/pkg/runtime/schema"

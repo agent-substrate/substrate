@@ -119,7 +119,7 @@ spec:
       serviceAccountName: atenet-router
       containers:
       - name: atenet-router
-        image: ko://github.com/agent-substrate/substrate/cmd/servers/atenet
+        image: ko://github.com/agent-substrate/substrate/cmd/atenet
         args:
         - "router"
         - "--standalone"

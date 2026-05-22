@@ -19,8 +19,8 @@ import (
 	"fmt"
 	"time"
 
-	atev1alpha1 "github.com/agent-substrate/substrate/api/v1alpha1"
-	"github.com/agent-substrate/substrate/proto/ateapipb"
+	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/uuid"
 	k8errors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"

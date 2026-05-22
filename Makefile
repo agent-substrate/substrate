@@ -34,10 +34,10 @@ build: build-images build-atectl
 
 .PHONY: build-images
 build-images:
-	$(KO) build ./cmd/servers/ateapi
-	$(KO) build ./cmd/servers/atelet
-	$(KO) build ./cmd/servers/podcertcontroller
-	$(KO) build ./cmd/servers/atenet
+	$(KO) build ./cmd/ateapi
+	$(KO) build ./cmd/atelet
+	$(KO) build ./cmd/podcertcontroller
+	$(KO) build ./cmd/atenet
 
 .PHONY: build-atectl
 build-atectl:
@@ -45,7 +45,7 @@ build-atectl:
 
 .PHONY: build-atenet
 build-atenet:
-	$(GO) build -o $(BINDIR)/atenet ./cmd/servers/atenet
+	$(GO) build -o $(BINDIR)/atenet ./cmd/atenet
 
 .PHONY: build-demos
 build-demos:
