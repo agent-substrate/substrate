@@ -16,13 +16,13 @@ package cmd
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -39,7 +39,6 @@ import (
 )
 
 var followLogs bool
-var rawOutput bool
 
 var logsActorsCmd = &cobra.Command{
 	Use:     "actors <actor-id>",
@@ -51,7 +50,6 @@ var logsActorsCmd = &cobra.Command{
 
 func init() {
 	logsActorsCmd.Flags().BoolVarP(&followLogs, "follow", "f", false, "Specify if the logs should be streamed.")
-	logsActorsCmd.Flags().BoolVar(&rawOutput, "raw", false, "Output raw JSON log lines instead of pretty-printed format")
 	logsCmd.AddCommand(logsActorsCmd)
 }
 
@@ -82,7 +80,6 @@ type LogsActorRunner struct {
 	stdout            io.Writer
 	stderr            io.Writer
 	follow            bool
-	raw               bool
 	pollInterval      time.Duration
 	reconnectInterval time.Duration
 	tickerInterval    time.Duration
@@ -136,7 +133,7 @@ func (r *LogsActorRunner) runOneShot(ctx context.Context, actorID string) error 
 	scanner.Buffer(buf, 1024*1024) // Support up to 1MB lines
 	for scanner.Scan() {
 		line := scanner.Text()
-		filterAndDisplayLogLine(line, actorID, r.stdout, r.raw)
+		filterAndDisplayLogLine(line, actorID, r.stdout)
 	}
 	if err := scanner.Err(); err != nil {
 		return fmt.Errorf("error reading log stream: %w", err)
@@ -214,7 +211,7 @@ func (r *LogsActorRunner) runFollow(ctx context.Context, actorID string) error {
 		scanner.Buffer(buf, 1024*1024) // Support up to 1MB lines
 		for scanner.Scan() {
 			line := scanner.Text()
-			logTime, _ := filterAndDisplayLogLine(line, actorID, r.stdout, r.raw)
+			logTime, _ := filterAndDisplayLogLine(line, actorID, r.stdout)
 			if !logTime.IsZero() {
 				lastSeenTime = logTime
 			}
@@ -298,7 +295,6 @@ func runLogsActor(cmd *cobra.Command, args []string) error {
 		stdout:            os.Stdout,
 		stderr:            os.Stderr,
 		follow:            followLogs,
-		raw:               rawOutput,
 		pollInterval:      2 * time.Second,
 		reconnectInterval: 1 * time.Second,
 		tickerInterval:    2 * time.Second,
@@ -307,9 +303,11 @@ func runLogsActor(cmd *cobra.Command, args []string) error {
 	return runner.Run(ctx, actorID)
 }
 
-func filterAndDisplayLogLine(line, targetActorID string, w io.Writer, raw bool) (time.Time, bool) {
+func filterAndDisplayLogLine(line, targetActorID string, w io.Writer) (time.Time, bool) {
 	var m map[string]any
-	if err := json.Unmarshal([]byte(line), &m); err != nil {
+	dec := json.NewDecoder(strings.NewReader(line))
+	dec.UseNumber()
+	if err := dec.Decode(&m); err != nil {
 		return time.Time{}, false
 	}
 
@@ -322,14 +320,15 @@ func filterAndDisplayLogLine(line, targetActorID string, w io.Writer, raw bool) 
 		}
 	}
 
-	labelsAny, ok := m["logging.googleapis.com/labels"]
-	if !ok {
-		labelsAny = m["labels"]
-	}
 	var actorID string
-	if labelsAny != nil {
-		if labels, ok := labelsAny.(map[string]any); ok {
-			actorID, _ = labels["ate.dev/actor_id"].(string)
+	for _, labelKey := range []string{"logging.googleapis.com/labels", "labels"} {
+		if labelsAny, ok := m[labelKey]; ok {
+			if labels, ok := labelsAny.(map[string]any); ok {
+				if id, ok := labels["ate.dev/actor_id"].(string); ok && id != "" {
+					actorID = id
+					break
+				}
+			}
 		}
 	}
 
@@ -339,60 +338,47 @@ func filterAndDisplayLogLine(line, targetActorID string, w io.Writer, raw bool) 
 		return logTime, false
 	}
 
-	if raw {
-		fmt.Fprintln(w, line)
-		return logTime, true
-	}
-
-	timeStr := ""
-	if !logTime.IsZero() {
-		timeStr = logTime.Format("2006-01-02 15:04:05")
-	} else if tVal, ok := m["time"].(string); ok {
-		timeStr = tVal
-	}
-
-	levelStr := "INFO"
-	if lVal, ok := m["level"].(string); ok {
-		levelStr = strings.ToUpper(lVal)
-	}
-
-	msgStr := ""
-	if mVal, ok := m["msg"].(string); ok {
-		msgStr = mVal
-	} else if mVal, ok := m["message"].(string); ok {
-		msgStr = mVal
-	}
-
-	var extraParts []string
-	var extraKeys []string
-	for k := range m {
-		if k == "time" || k == "level" || k == "msg" || k == "message" || k == "logging.googleapis.com/labels" || k == "labels" {
-			continue
-		}
-		extraKeys = append(extraKeys, k)
-	}
-	sort.Strings(extraKeys)
-	for _, k := range extraKeys {
-		v := m[k]
-		if sVal, ok := v.(string); ok {
-			extraParts = append(extraParts, fmt.Sprintf("%s=%q", k, sVal))
-		} else {
-			if b, err := json.Marshal(v); err == nil {
-				extraParts = append(extraParts, fmt.Sprintf("%s=%s", k, string(b)))
-			} else {
-				extraParts = append(extraParts, fmt.Sprintf("%s=%v", k, v))
+	// remove actor labels from CLI output
+	for _, labelKey := range []string{"logging.googleapis.com/labels", "labels"} {
+		if labelsAny, ok := m[labelKey]; ok {
+			if labels, ok := labelsAny.(map[string]any); ok {
+				for k := range labels {
+					if strings.HasPrefix(k, "ate.dev/") {
+						delete(labels, k)
+					}
+				}
+				if len(labels) == 0 {
+					delete(m, labelKey)
+				}
 			}
 		}
 	}
 
-	extraStr := ""
-	if len(extraParts) > 0 {
-		extraStr = " [" + strings.Join(extraParts, " ") + "]"
+	timeVal, hasTime := m["time"]
+	if hasTime {
+		delete(m, "time")
 	}
 
-	if timeStr != "" {
-		fmt.Fprintf(w, "[%s] ", timeStr)
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(m); err != nil {
+		return logTime, false
 	}
-	fmt.Fprintf(w, "[%s] %s%s\n", levelStr, msgStr, extraStr)
+
+	encodedStr := strings.TrimSpace(buf.String())
+	if hasTime {
+		timeJSON, _ := json.Marshal(timeVal)
+		if encodedStr == "{}" {
+			fmt.Fprintf(w, `{"time":%s}`+"\n", string(timeJSON))
+		} else if strings.HasPrefix(encodedStr, "{") {
+			fmt.Fprintf(w, `{"time":%s,%s`+"\n", string(timeJSON), encodedStr[1:])
+		} else {
+			fmt.Fprintln(w, encodedStr)
+		}
+	} else {
+		fmt.Fprintln(w, encodedStr)
+	}
+
 	return logTime, true
 }

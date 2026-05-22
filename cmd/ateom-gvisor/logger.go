@@ -16,41 +16,59 @@ package main
 
 import (
 	"bufio"
-	"context"
+	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
-	"log/slog"
 	"os"
-	"strings"
+	"sync"
+	"time"
 )
+
+type syncedWriter struct {
+	mu sync.Mutex
+	w  io.Writer
+}
+
+func (sw *syncedWriter) Write(p []byte) (n int, err error) {
+	sw.mu.Lock()
+	defer sw.mu.Unlock()
+	return sw.w.Write(p)
+}
 
 // ActorLogger handles structured logging for actor sandboxes and lifecycle events.
 type ActorLogger struct {
+	writer    io.Writer
 	labelsKey string
-	logger    *slog.Logger
 }
 
 // NewActorLogger creates a new ActorLogger wrapping the provided destination writer.
-func NewActorLogger(logger *slog.Logger, isOnGCE bool) *ActorLogger {
+func NewActorLogger(w io.Writer, isOnGCE bool) *ActorLogger {
 	labelsKey := "labels"
 	if isOnGCE {
 		labelsKey = "logging.googleapis.com/labels"
 	}
 	return &ActorLogger{
+		writer:    w,
 		labelsKey: labelsKey,
-		logger:    logger,
 	}
 }
 
 // EmitLifecycleLog logs a synthetic actor lifecycle event.
 func (al *ActorLogger) EmitLifecycleLog(msg, actorID, actorTemplate, actorNamespace string) {
-	slog.LogAttrs(context.Background(), slog.LevelInfo, msg,
-		slog.Group(al.labelsKey,
-			slog.String("ate.dev/actor_id", actorID),
-			slog.String("ate.dev/actor_template", actorTemplate),
-			slog.String("ate.dev/actor_namespace", actorNamespace),
-		),
-	)
+	envelope := map[string]any{
+		"time":    time.Now().Format(time.RFC3339Nano),
+		"message": msg,
+		al.labelsKey: map[string]string{
+			"ate.dev/actor_id":        actorID,
+			"ate.dev/actor_template":  actorTemplate,
+			"ate.dev/actor_namespace": actorNamespace,
+		},
+	}
+	if envBytes, err := json.Marshal(envelope); err == nil {
+		envBytes = append(envBytes, '\n')
+		_, _ = al.writer.Write(envBytes)
+	}
 }
 
 // StartJSONLogPipe intercepts container raw stdout/stderr streams and pipes them through the logger.
@@ -68,7 +86,6 @@ func (al *ActorLogger) StartJSONLogPipe(actorID, actorTemplate, actorNamespace s
 
 // WrapContainerLogs reads log lines from r, parses them, and logs them in a unified structured format.
 func (al *ActorLogger) WrapContainerLogs(r io.Reader, actorID, actorTemplate, actorNamespace string) {
-	ctx := context.Background()
 	rdr := bufio.NewReader(r)
 	for {
 		lineBytes, err := rdr.ReadBytes('\n')
@@ -80,16 +97,47 @@ func (al *ActorLogger) WrapContainerLogs(r io.Reader, actorID, actorTemplate, ac
 
 		if len(lineBytes) > 0 {
 			var m map[string]any
-			if unmarshalErr := json.Unmarshal(lineBytes, &m); unmarshalErr != nil {
-				al.logger.LogAttrs(ctx, slog.LevelInfo, string(lineBytes),
-					slog.Group(al.labelsKey,
-						slog.String("ate.dev/actor_id", actorID),
-						slog.String("ate.dev/actor_template", actorTemplate),
-						slog.String("ate.dev/actor_namespace", actorNamespace),
-					),
-				)
+			var envelope map[string]any
+
+			dec := json.NewDecoder(bytes.NewReader(lineBytes))
+			dec.UseNumber()
+
+			unmarshalErr := dec.Decode(&m)
+			if unmarshalErr == nil {
+				var trailing any
+				if err := dec.Decode(&trailing); err != io.EOF {
+					unmarshalErr = errors.New("trailing garbage detected after JSON object")
+				}
+			}
+
+			if unmarshalErr != nil {
+				envelope = map[string]any{
+					"time":    time.Now().Format(time.RFC3339Nano),
+					"message": string(lineBytes),
+					al.labelsKey: map[string]string{
+						"ate.dev/actor_id":        actorID,
+						"ate.dev/actor_template":  actorTemplate,
+						"ate.dev/actor_namespace": actorNamespace,
+					},
+				}
 			} else {
-				al.parseAndLogContainerJSONLine(ctx, m, actorID, actorTemplate, actorNamespace)
+				if _, ok := m["time"]; !ok {
+					m["time"] = time.Now().Format(time.RFC3339Nano)
+				}
+				labels, ok := m[al.labelsKey].(map[string]any)
+				if !ok {
+					labels = make(map[string]any)
+					m[al.labelsKey] = labels
+				}
+				labels["ate.dev/actor_id"] = actorID
+				labels["ate.dev/actor_template"] = actorTemplate
+				labels["ate.dev/actor_namespace"] = actorNamespace
+				envelope = m
+			}
+
+			if envBytes, err := json.Marshal(envelope); err == nil {
+				envBytes = append(envBytes, '\n')
+				_, _ = al.writer.Write(envBytes)
 			}
 		}
 
@@ -97,43 +145,4 @@ func (al *ActorLogger) WrapContainerLogs(r io.Reader, actorID, actorTemplate, ac
 			break
 		}
 	}
-}
-
-func (al *ActorLogger) parseAndLogContainerJSONLine(ctx context.Context, m map[string]any, actorID, actorTemplate, actorNamespace string) {
-	msg := ""
-	if mMsg, ok := m["msg"].(string); ok {
-		msg = mMsg
-	} else if mMessage, ok := m["message"].(string); ok {
-		msg = mMessage
-	}
-
-	level := slog.LevelInfo
-	if mLevel, ok := m["level"].(string); ok {
-		switch strings.ToLower(mLevel) {
-		case "debug":
-			level = slog.LevelDebug
-		case "info":
-			level = slog.LevelInfo
-		case "warn", "warning":
-			level = slog.LevelWarn
-		case "error":
-			level = slog.LevelError
-		}
-	}
-
-	var attrs []slog.Attr
-	for k, v := range m {
-		if k == "msg" || k == "message" || k == "level" || k == "time" {
-			continue
-		}
-		attrs = append(attrs, slog.Any(k, v))
-	}
-
-	attrs = append(attrs, slog.Group(al.labelsKey,
-		slog.String("ate.dev/actor_id", actorID),
-		slog.String("ate.dev/actor_template", actorTemplate),
-		slog.String("ate.dev/actor_namespace", actorNamespace),
-	))
-
-	al.logger.LogAttrs(ctx, level, msg, attrs...)
 }

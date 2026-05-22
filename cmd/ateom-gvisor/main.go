@@ -28,6 +28,7 @@ import (
 	"cloud.google.com/go/compute/metadata"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/ateompath"
+	"github.com/agent-substrate/substrate/internal/contextlogging"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/hashicorp/go-reap"
@@ -60,7 +61,9 @@ func do(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	serverboot.InitLogger()
+	syncedWriter := &syncedWriter{w: os.Stdout}
+	logger := slog.New(contextlogging.NewHandler(slog.NewJSONHandler(syncedWriter, nil)))
+	slog.SetDefault(logger)
 
 	slog.InfoContext(ctx, "ateom booting")
 
@@ -123,7 +126,7 @@ func do(ctx context.Context) error {
 		return fmt.Errorf("while creating ateom-interior netns: %w", err)
 	}
 
-	actorLogger := NewActorLogger(slog.Default(), metadata.OnGCE())
+	actorLogger := NewActorLogger(syncedWriter, metadata.OnGCE())
 	ateomService := NewService(interiorNetNS, eth0LinkInfo, actorLogger)
 
 	svr := grpc.NewServer(
