@@ -212,23 +212,3 @@ func (r *runsc) cmdState(ctx context.Context, containerName string) error {
 	}
 	return nil
 }
-
-func (r *runsc) cmdList(ctx context.Context) error {
-	reapLock.RLock()
-	defer reapLock.RUnlock()
-
-	cmd := exec.CommandContext(
-		ctx,
-		r.path,
-		"-log-format", "json",
-		"--alsologtostderr",
-		"-root", ateompath.RunSCStateDir(r.actorTemplateNamespace, r.actorTemplateName, r.actorID),
-		"list",
-	)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("while running `runsc list`: %w", err)
-	}
-	return nil
-}

@@ -207,6 +207,6 @@ func (w *ActorWorkflow) acquireActorLock(ctx context.Context, id string, ttl tim
 	return workflowCtx, func() {
 		cancel()
 		// Use context.Background() to ensure the lock is released even if the workflow context was canceled.
-		w.store.ReleaseLock(context.Background(), lockKey, lockValue)
+		w.store.ReleaseLock(context.Background(), lockKey, lockValue) //nolint:errcheck // best-effort release; the lock TTL is the safety net.
 	}, nil
 }

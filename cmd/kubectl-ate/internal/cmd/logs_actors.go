@@ -324,7 +324,7 @@ func filterAndDisplayLogLine(line, targetActorID string, w io.Writer, raw bool) 
 
 	labelsAny, ok := m["logging.googleapis.com/labels"]
 	if !ok {
-		labelsAny, ok = m["labels"]
+		labelsAny = m["labels"]
 	}
 	var actorID string
 	if labelsAny != nil {

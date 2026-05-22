@@ -69,6 +69,12 @@ fmt:
 verify-fmt:
 	@./hack/verify/gofmt.sh
 
+.PHONY: lint
+
+# Runs golangci-lint and fails on any reported issues.
+lint:
+	@./hack/verify/golangci-lint.sh
+
 .PHONY: verify
 verify: test
 	$(GO) vet ./...

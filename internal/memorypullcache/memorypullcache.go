@@ -24,7 +24,6 @@ import (
 	"runtime"
 	"strings"
 
-	"cloud.google.com/go/storage"
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
@@ -34,8 +33,6 @@ import (
 )
 
 type MemoryPullCache struct {
-	gcsClient *storage.Client
-
 	gcpAuthenticator authn.Authenticator
 
 	localhostRegistryReplacement string

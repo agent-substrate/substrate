@@ -134,8 +134,5 @@ func (s *WorkerPoolSyncer) syncWorkerToStore(ctx context.Context, pod *corev1.Po
 }
 
 func isWorkerEligible(pod *corev1.Pod) bool {
-	if pod.Status.PodIP == "" {
-		return false
-	}
-	return true
+	return pod.Status.PodIP != ""
 }

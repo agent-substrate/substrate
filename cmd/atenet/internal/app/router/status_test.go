@@ -83,7 +83,7 @@ func TestStatuszEndpoint(t *testing.T) {
 	go func() {
 		close(statusReady)
 		if runErr := srv.Run(ctx); runErr != nil && !strings.Contains(runErr.Error(), "context canceled") {
-			// ignore task cancellation shutdowns
+			t.Logf("status server Run returned unexpected error: %v", runErr)
 		}
 	}()
 

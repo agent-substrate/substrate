@@ -493,8 +493,6 @@ func handleGiveTask(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
-	rand.Seed(time.Now().UnixNano())
-
 	port := envOr("PORT", defaultPort)
 
 	// Open the ateapi connection up front so the UI surfaces a clear

@@ -1,0 +1,105 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#      http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+version: "2"
+
+run:
+  timeout: 5m
+  # Lint everything by default. The tools modules under hack/tools/ have their
+  # own go.mod files and are not part of `./...` of the root module, so they
+  # are naturally excluded from this run.
+
+linters:
+  # The "standard" preset enables errcheck, govet, ineffassign, staticcheck,
+  # and unused. This is the conservative set; new linters can be added once
+  # the codebase is clean for the basics.
+  default: standard
+
+  settings:
+    errcheck:
+      # Functions where ignoring the return is idiomatic in this codebase.
+      # Note: errcheck's exclude-functions matches on the static receiver
+      # type, not the resolved interface. Patterns for the common
+      # concrete-type cases (X.Close on *os.File, *grpc.ClientConn, etc.)
+      # are handled below as message-pattern rules in exclusions.rules.
+      exclude-functions:
+        - fmt.Fprintf
+        - fmt.Fprintln
+        - fmt.Fprint
+        # net/http handler writes: surfacing a write error from a handler
+        # has no recovery path; the connection is already failing.
+        - (net/http.ResponseWriter).Write
+        # cobra flag-required bindings: only fail if the flag name itself is
+        # wrong, which is a programming error caught at startup.
+        - (*github.com/spf13/cobra.Command).MarkFlagRequired
+        # k8s informer event-handler / indexer registrations: failures here
+        # mean the controller is fundamentally misconfigured at startup.
+        - (k8s.io/client-go/tools/cache.SharedIndexInformer).AddEventHandler
+        - (k8s.io/client-go/tools/cache.SharedIndexInformer).AddIndexers
+
+  exclusions:
+    # Built-in presets that suppress the most common idiomatic false
+    # positives across the standard linters.
+    presets:
+      - common-false-positives
+      - legacy
+
+    paths:
+      # Tool modules have their own go.mod and dependency trees.
+      - hack/tools
+      # Third-party license bundles vendored under LICENSES/.
+      - LICENSES
+
+    rules:
+      # Generated code: ignore findings entirely.
+      - path: '\.pb\.go$'
+        linters: [errcheck, govet, ineffassign, staticcheck, unused]
+      - path: '\.pb\.gw\.go$'
+        linters: [errcheck, govet, ineffassign, staticcheck, unused]
+      - path: 'zz_generated.*\.go$'
+        linters: [errcheck, govet, ineffassign, staticcheck, unused]
+      # Kubernetes client-gen / informer-gen / lister-gen output.
+      - path: '^pkg/client/'
+        linters: [errcheck, govet, ineffassign, staticcheck, unused]
+      # Tests routinely discard error returns from setup helpers.
+      - path: '_test\.go'
+        linters:
+          - errcheck
+      # Suppress staticcheck QF* (quickfix) recommendations. They are
+      # stylistic rewrites rather than bug detectors and would generate a
+      # large amount of churn if applied indiscriminately.
+      - linters: [staticcheck]
+        text: '^QF[0-9]+'
+      # Deferred Close() returns are idiomatic in this codebase across many
+      # concrete types (*os.File, *grpc.ClientConn, *storage.Client,
+      # *gzip.Writer, *io.PipeReader, etc.). Suppress via message pattern
+      # rather than enumerating every receiver type.
+      - linters: [errcheck]
+        text: 'Error return value of `[^`]+\.Close` is not checked'
+      # os.Remove in defer cleanup paths is similarly idiomatic.
+      - linters: [errcheck]
+        text: 'Error return value of `os\.Remove` is not checked'
+      # json.Encoder.Encode in HTTP-handler write paths is fire-and-forget.
+      - linters: [errcheck]
+        text: 'Error return value of `\(\*encoding/json\.Encoder\)\.Encode` is not checked'
+      # ST1019: duplicate import aliases in extproc_out.go are pending a
+      # separate cleanup that will collide with an in-flight PR; suppress
+      # in this file for now.
+      - path: '^cmd/atenet/internal/app/router/extproc_out\.go$'
+        linters: [staticcheck]
+        text: '^ST1019'
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

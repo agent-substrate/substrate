@@ -286,7 +286,7 @@ func (s *RouterServer) Run(ctx context.Context) error {
 		g.Go(func() error {
 			go func() {
 				if err := httpServer.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
-					// silent shutdown
+					slog.ErrorContext(ctx, "status HTTP server exited unexpectedly", slog.Any("err", err))
 				}
 			}()
 			<-ctx.Done()
