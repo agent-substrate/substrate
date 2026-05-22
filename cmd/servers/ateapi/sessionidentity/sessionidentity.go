@@ -25,7 +25,7 @@ import (
 	"os"
 	"path"
 	"strings"
-	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/k8sjwt"
@@ -49,54 +49,84 @@ type Server struct {
 
 	workerCACerts string
 
-	sessionIDJWTPool mtimeCache[*localjwtauthority.Pool]
-	sessionIDCAPool  mtimeCache[*localca.Pool]
+	sessionIDJWTPool *fileCache[*localjwtauthority.Pool]
+	sessionIDCAPool  *fileCache[*localca.Pool]
 }
 
-// mtimeCache holds a parsed value alongside the mod-time of the file it was
-// parsed from. It re-parses only when the file mod-time changes on disk, so callers
-// avoid a read+unmarshal on every request while still picking up rotations.
-type mtimeCache[T any] struct {
+// fileCache periodically refreshes a parsed file-backed value, so callers avoid
+// a read+unmarshal on every request while still picking up rare key rotations.
+type fileCache[T any] struct {
 	path  string
 	parse func([]byte) (T, error)
 
-	mu    sync.Mutex
-	mtime time.Time
-	value *T
+	state atomic.Pointer[fileCacheState[T]]
 }
 
-func newMtimeCache[T any](path string, parse func([]byte) (T, error)) mtimeCache[T] {
-	return mtimeCache[T]{
+type fileCacheState[T any] struct {
+	value T
+	err   error
+}
+
+func newFileCache[T any](path string, parse func([]byte) (T, error)) *fileCache[T] {
+	return newFileCacheWithTicker(path, time.NewTicker(5*time.Minute).C, parse)
+}
+
+func newFileCacheWithTicker[T any](path string, c <-chan time.Time, parse func([]byte) (T, error)) *fileCache[T] {
+	cache := &fileCache[T]{
 		path:  path,
 		parse: parse,
 	}
+	if err := cache.updateValue(); err != nil {
+		slog.Error("Initial file cache load failed", slog.String("path", path), slog.Any("err", err))
+	}
+	go cache.run(c)
+	return cache
 }
 
-func (c *mtimeCache[T]) get() (T, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+func (c *fileCache[T]) run(tickerChannel <-chan time.Time) {
+	for range tickerChannel {
+		if err := c.updateValue(); err != nil {
+			slog.Error("File cache refresh failed", slog.String("path", c.path), slog.Any("err", err))
+		} else {
+			slog.Info("File cache refreshed successfully", slog.String("path", c.path))
+		}
+	}
+}
 
-	info, err := os.Stat(c.path)
-	if err != nil {
-		var zero T
-		return zero, fmt.Errorf("stat %s: %w", c.path, err)
-	}
-	if c.value != nil && info.ModTime().Equal(c.mtime) {
-		return *c.value, nil
-	}
+func (c *fileCache[T]) updateValue() error {
 	b, err := os.ReadFile(c.path)
 	if err != nil {
-		var zero T
-		return zero, fmt.Errorf("read %s: %w", c.path, err)
+		c.storeErr(fmt.Errorf("read %s: %w", c.path, err))
+		return err
 	}
 	v, err := c.parse(b)
 	if err != nil {
-		var zero T
-		return zero, err
+		c.storeErr(err)
+		return err
 	}
-	c.value = &v
-	c.mtime = info.ModTime()
-	return v, nil
+	c.state.Store(&fileCacheState[T]{value: v})
+	return nil
+}
+
+func (c *fileCache[T]) storeErr(err error) {
+	if state := c.state.Load(); state != nil && state.err == nil {
+		// Don't overwrite a good value with an error.
+		return
+	}
+	c.state.Store(&fileCacheState[T]{err: err})
+}
+
+func (c *fileCache[T]) get() (T, error) {
+	var zero T
+
+	state := c.state.Load()
+	if state == nil {
+		return zero, fmt.Errorf("value not available")
+	}
+	if state.err != nil {
+		return zero, state.err
+	}
+	return state.value, nil
 }
 
 var _ ateapipb.SessionIdentityServer = (*Server)(nil)
@@ -105,8 +135,8 @@ func New(clientJWTIssuer, clientJWTAudience, sessionIDJWTPoolFile, sessionIDCAPo
 	return &Server{
 		clientJWTIssuer:   clientJWTIssuer,
 		clientJWTAudience: clientJWTAudience,
-		sessionIDJWTPool:  newMtimeCache(sessionIDJWTPoolFile, localjwtauthority.Unmarshal),
-		sessionIDCAPool:   newMtimeCache(sessionIDCAPoolFile, localca.Unmarshal),
+		sessionIDJWTPool:  newFileCache(sessionIDJWTPoolFile, localjwtauthority.Unmarshal),
+		sessionIDCAPool:   newFileCache(sessionIDCAPoolFile, localca.Unmarshal),
 		workerCACerts:     workerCACerts,
 	}
 }

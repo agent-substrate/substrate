@@ -22,23 +22,45 @@ import (
 	"time"
 )
 
-func writeFile(t *testing.T, path, contents string, mtime time.Time) {
+func writeFile(t *testing.T, path, contents string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
 		t.Fatalf("write %s: %v", path, err)
 	}
-	if err := os.Chtimes(path, mtime, mtime); err != nil {
-		t.Fatalf("chtimes %s: %v", path, err)
+}
+
+func newTestFileCache[T any](t *testing.T, path string, parse func([]byte) (T, error)) (*fileCache[T], chan time.Time) {
+	t.Helper()
+	ticks := make(chan time.Time)
+	t.Cleanup(func() {
+		close(ticks)
+	})
+	return newFileCacheWithTicker(path, ticks, parse), ticks
+}
+
+func waitForValue(t *testing.T, c *fileCache[string], want string) {
+	t.Helper()
+
+	deadline := time.Now().Add(time.Second)
+	for {
+		got, err := c.get()
+		if err == nil && got == want {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("value = %q, err = %v; want value %q", got, err, want)
+		}
+		time.Sleep(time.Millisecond)
 	}
 }
 
-func TestMtimeCache_LoadsOnFirstCall(t *testing.T) {
+func TestFileCache_LoadsOnCreation(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "f")
-	writeFile(t, p, "hello", time.Now())
+	writeFile(t, p, "hello")
 
 	calls := 0
-	c := newMtimeCache(p, func(b []byte) (string, error) {
+	c, _ := newTestFileCache(t, p, func(b []byte) (string, error) {
 		calls++
 		return string(b), nil
 	})
@@ -55,17 +77,18 @@ func TestMtimeCache_LoadsOnFirstCall(t *testing.T) {
 	}
 }
 
-func TestMtimeCache_CachesWhenMtimeUnchanged(t *testing.T) {
+func TestFileCache_DoesNotReloadOnGet(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "f")
-	mt := time.Now().Add(-time.Hour)
-	writeFile(t, p, "v1", mt)
+	writeFile(t, p, "v1")
 
 	calls := 0
-	c := newMtimeCache(p, func(b []byte) (string, error) {
+	c, _ := newTestFileCache(t, p, func(b []byte) (string, error) {
 		calls++
 		return string(b), nil
 	})
+
+	writeFile(t, p, "v2")
 
 	for range 5 {
 		v, err := c.get()
@@ -77,18 +100,17 @@ func TestMtimeCache_CachesWhenMtimeUnchanged(t *testing.T) {
 		}
 	}
 	if calls != 1 {
-		t.Fatalf("parse calls = %d, want 1 (cache miss on unchanged file)", calls)
+		t.Fatalf("parse calls = %d, want 1", calls)
 	}
 }
 
-func TestMtimeCache_ReloadsWhenMtimeChanges(t *testing.T) {
+func TestFileCache_ReloadsOnTick(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "f")
-	mt := time.Now().Add(-time.Hour)
-	writeFile(t, p, "v1", mt)
+	writeFile(t, p, "v1")
 
 	calls := 0
-	c := newMtimeCache(p, func(b []byte) (string, error) {
+	c, ticks := newTestFileCache(t, p, func(b []byte) (string, error) {
 		calls++
 		return string(b), nil
 	})
@@ -97,70 +119,57 @@ func TestMtimeCache_ReloadsWhenMtimeChanges(t *testing.T) {
 		t.Fatalf("get v1: %v", err)
 	}
 
-	// Simulate a kubelet AtomicWriter rotation: new contents, new mtime.
-	writeFile(t, p, "v2", mt.Add(time.Minute))
+	writeFile(t, p, "v2")
+	ticks <- time.Now()
 
-	got, err := c.get()
-	if err != nil {
-		t.Fatalf("get v2: %v", err)
-	}
-	if got != "v2" {
-		t.Fatalf("value = %q, want v2", got)
-	}
+	waitForValue(t, c, "v2")
 	if calls != 2 {
 		t.Fatalf("parse calls = %d, want 2", calls)
 	}
 }
 
-func TestMtimeCache_ReloadsViaSymlinkSwap(t *testing.T) {
-	// Mimics ConfigMap/Secret mounts: stable file path is a symlink whose
-	// target is replaced atomically on rotation.
+func TestFileCache_KeepsLastValueWhenRefreshFails(t *testing.T) {
 	dir := t.TempDir()
-	v1 := filepath.Join(dir, "v1")
-	v2 := filepath.Join(dir, "v2")
-	link := filepath.Join(dir, "current")
+	p := filepath.Join(dir, "f")
+	writeFile(t, p, "v1")
 
-	writeFile(t, v1, "v1", time.Now().Add(-time.Hour))
-	writeFile(t, v2, "v2", time.Now())
-	if err := os.Symlink(v1, link); err != nil {
-		t.Fatalf("symlink: %v", err)
+	want := errors.New("boom")
+	fail := false
+	refreshAttempted := make(chan struct{}, 1)
+	c, ticks := newTestFileCache(t, p, func(b []byte) (string, error) {
+		if fail {
+			refreshAttempted <- struct{}{}
+			return "", want
+		}
+		return string(b), nil
+	})
+
+	writeFile(t, p, "v2")
+	fail = true
+	ticks <- time.Now()
+
+	select {
+	case <-refreshAttempted:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for refresh attempt")
 	}
-
-	c := newMtimeCache(link, func(b []byte) (string, error) { return string(b), nil })
 
 	got, err := c.get()
 	if err != nil {
-		t.Fatalf("get v1: %v", err)
+		t.Fatalf("get: %v", err)
 	}
 	if got != "v1" {
 		t.Fatalf("value = %q, want v1", got)
 	}
-
-	// Atomic-style swap: write new symlink, rename over the old one.
-	tmp := link + ".new"
-	if err := os.Symlink(v2, tmp); err != nil {
-		t.Fatalf("symlink new: %v", err)
-	}
-	if err := os.Rename(tmp, link); err != nil {
-		t.Fatalf("rename: %v", err)
-	}
-
-	got, err = c.get()
-	if err != nil {
-		t.Fatalf("get v2: %v", err)
-	}
-	if got != "v2" {
-		t.Fatalf("value = %q, want v2 after rotation", got)
-	}
 }
 
-func TestMtimeCache_PropagatesParseError(t *testing.T) {
+func TestFileCache_PropagatesParseError(t *testing.T) {
 	dir := t.TempDir()
 	p := filepath.Join(dir, "f")
-	writeFile(t, p, "bad", time.Now())
+	writeFile(t, p, "bad")
 
 	want := errors.New("boom")
-	c := newMtimeCache(p, func(b []byte) (string, error) { return "", want })
+	c, _ := newTestFileCache(t, p, func(b []byte) (string, error) { return "", want })
 
 	_, err := c.get()
 	if !errors.Is(err, want) {
@@ -168,8 +177,8 @@ func TestMtimeCache_PropagatesParseError(t *testing.T) {
 	}
 }
 
-func TestMtimeCache_MissingFile(t *testing.T) {
-	c := newMtimeCache(filepath.Join(t.TempDir(), "nope"), func(b []byte) (string, error) {
+func TestFileCache_MissingFile(t *testing.T) {
+	c, _ := newTestFileCache(t, filepath.Join(t.TempDir(), "nope"), func(b []byte) (string, error) {
 		return string(b), nil
 	})
 	if _, err := c.get(); err == nil {
