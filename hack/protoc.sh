@@ -14,7 +14,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
-set -e
+set -o errexit -o nounset -o pipefail
 
 # pin protoc version and binary hashes
 PROTOC_VERSION="25.3"

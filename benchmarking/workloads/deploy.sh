@@ -13,8 +13,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-set -eo pipefail
-set -u
+set -o errexit -o nounset -o pipefail
 
 ROOT="$(git rev-parse --show-toplevel)"
 cd "${ROOT}"
