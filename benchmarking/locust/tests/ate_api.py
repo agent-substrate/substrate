@@ -47,7 +47,7 @@ class AteAPIUser(User):
 
     def on_start(self):
         update_user_count(1, self.__class__.__name__)
-        
+
         # Setup gRPC
         # Strip protocol prefix if present
         target = self.host.replace("http://", "").replace("https://", "")
@@ -56,7 +56,7 @@ class AteAPIUser(User):
         options = [('grpc.ssl_target_name_override', 'api.ate-system.svc')]
         self.channel = grpc.secure_channel(target, grpc.ssl_channel_credentials(root_certificates=ca_cert), options=options)
         self.stub = ateapi_pb2_grpc.ControlStub(self.channel)
-        
+
         # Call CreateActor
         self.actor_id = str(uuid.uuid4())
         try:
@@ -69,7 +69,7 @@ class AteAPIUser(User):
             )
         except Exception as e:
             print(f"Failed to create actor: {e}")
-        
+
     def on_stop(self):
         update_user_count(-1, self.__class__.__name__)
         try:

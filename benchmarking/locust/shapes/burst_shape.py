@@ -18,15 +18,15 @@ class BurstShape(LoadTestShape):
     # Overall duration for one burst cycle
     cycle_length = 30
     spawn_duration = 10
-    
+
     # 3 clients peak per burst, spawned at 1/sec
     peak_users = 3
-    spawn_rate = 1 
+    spawn_rate = 1
 
     def tick(self):
         run_time = self.get_run_time()
         t = run_time % self.cycle_length
-        
+
         if t < self.spawn_duration:
             # Active Spawning Phase
             # Target increases steadily towards the peak
