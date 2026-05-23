@@ -23,12 +23,6 @@ import re
 
 current_year = datetime.date.today().year
 
-def match_copyright(line):
-    match = re.search(r"Copyright\s+(\d{4})\s+Google LLC", line)
-    if not match:
-        return False
-    year = int(match.group(1))
-    return 2026 <= year <= current_year
 
 ASLV2_HEADER = [
     "Licensed under the Apache License, Version 2.0 (the \"License\");",
@@ -42,6 +36,13 @@ ASLV2_HEADER = [
     "limitations under the License."
 ]
 
+def match_copyright(line):
+    match = re.search(r"Copyright\s+(\d{4})\s+Google LLC", line)
+    if not match:
+        return False
+    year = int(match.group(1))
+    return 2026 <= year <= current_year
+
 
 def clean_line(line):
     """Removes leading comment markers and whitespace."""
@@ -51,6 +52,7 @@ def clean_line(line):
     elif line.startswith('#'):
         line = line[1:]
     return line.strip()
+
 
 def verify_file(filepath):
     try:
@@ -86,8 +88,6 @@ def verify_file(filepath):
     return True
 
 
-    return True
-
 def main():
     # Get tracked files via git ls-files
     try:
@@ -108,7 +108,7 @@ def main():
             continue
         if filename in ['LICENSE', 'NOTICE', 'CODEOWNERS', '.gitignore', 'go.mod', 'go.sum']:
             continue
-        
+
         # exclude third_party files, which should have their OWN LICENSE
         # TODO: verify LICENSE exists in each third_party directory?
         if "third_party" in filepath:
