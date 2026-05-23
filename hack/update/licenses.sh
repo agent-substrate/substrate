@@ -43,10 +43,10 @@ trap "rm -f ${tmpfile}" EXIT
 
 for target in "${targets[@]}"; do
   IFS="/" read -r target_os target_arch <<< "${target}"
-  
+
   # Create a temporary output folder for each target
   tmp_out="$(mktemp -d -t "update-licenses-out.XXXXXX")"
-  
+
   GOOS="${target_os}" \
     GOARCH="${target_arch}" \
     CGO_ENABLED=1 \
@@ -59,7 +59,7 @@ for target in "${targets[@]}"; do
 
   # Bug in go-licenses?  Our repo gets included in a loop
   rm -rf "${tmp_out}/github.com/agent-substrate/substrate"
-  
+
   # Merge the results into the main OUTDIR
   if [ "$(ls -A "${tmp_out}")" ]; then
     chmod -R u+w "${OUTDIR}" 2>/dev/null || true

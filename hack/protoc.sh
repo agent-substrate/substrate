@@ -52,7 +52,7 @@ if [ ! -f "$PROTOC_BIN" ]; then
   echo "Downloading protoc v${PROTOC_VERSION} for ${PROTOC_PLATFORM}..."
   mkdir -p "$OUT_DIR"
   URL="https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/protoc-${PROTOC_VERSION}-${PROTOC_PLATFORM}.zip"
-  
+
   case "$PROTOC_PLATFORM" in
     "linux-x86_64") EXPECTED_SHA="${linux_x86_64_EXPECTED_SHA}";;
     "linux-aarch_64") EXPECTED_SHA="${linux_aarch_64_EXPECTED_SHA}";;
