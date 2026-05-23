@@ -43,7 +43,7 @@ esac
 TOOL_BIN="$(cd "${TOOL_DIR}" && go tool -n "${TOOL_NAME}")"
 
 if [ "${PRINT_PATH}" = true ]; then
-  echo -n "${TOOL_BIN}"
+  echo "${TOOL_BIN}"
   exit 0
 fi
 
