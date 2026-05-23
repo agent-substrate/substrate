@@ -14,14 +14,12 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-set -o errexit
-set -o nounset
-set -o pipefail
+set -o errexit -o nounset -o pipefail
 
 ROOT="$(git rev-parse --show-toplevel)"
-OUTDIR="LICENSES" # under $ROOT
-
 cd "${ROOT}"
+
+OUTDIR="LICENSES" # under $ROOT
 
 # Ensure the tool is built and up-to-date
 GO_LICENSES_BIN="$(bash "${ROOT}/hack/run-tool.sh" --print-bin-path go-licenses)"

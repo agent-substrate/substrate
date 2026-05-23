@@ -14,11 +14,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-set -o errexit
-set -o nounset
-set -o pipefail
+set -o errexit -o nounset -o pipefail
 
 ROOT="$(git rev-parse --show-toplevel)"
-
 cd "${ROOT}"
+
 hack/util/verify-boilerplate.py
