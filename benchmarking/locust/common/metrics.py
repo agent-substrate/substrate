@@ -31,7 +31,7 @@ def init_metrics():
     if _initialized:
         logger.info("Metrics already initialized, skipping.")
         return
-    
+
     logger.info("Initializing Prometheus metrics...")
     # Start prometheus client metrics server on port 8000
     try:
@@ -42,9 +42,9 @@ def init_metrics():
     _reader = PrometheusMetricReader()
     _provider = MeterProvider(metric_readers=[_reader])
     metrics.set_meter_provider(_provider)
-    
+
     meter = metrics.get_meter("locust_common")
-    
+
     request_counter = meter.create_counter(
         name="locust_requests_total",
         description="Total number of requests"
@@ -59,7 +59,7 @@ def init_metrics():
         name="locust_users",
         description="Number of active locust users"
     )
-    
+
     _initialized = True
     logger.info("Metrics initialized.")
 
@@ -67,15 +67,15 @@ def init_metrics():
 def on_request(request_type, name, response_time, response_length, exception, context=None, **kwargs):
     if not _initialized:
         return
-        
+
     if context is None:
         context = kwargs.get('context', {})
-        
+
     user_class = context.get('user_class', 'unknown')
-    
+
     if 'user_class' in kwargs:
         user_class = kwargs['user_class']
-        
+
     attributes = {
         "method": request_type,
         "name": name,

@@ -48,7 +48,7 @@ def init_tracing(service_name):
     if _initialized:
         logger.info("Tracing already initialized, skipping.")
         return
-        
+
     @events.init_command_line_parser.add_listener
     def _(parser):
         parser.add_argument(
@@ -62,18 +62,18 @@ def init_tracing(service_name):
     def on_locust_init(environment, **kwargs):
         options = environment.parsed_options
         probability = getattr(options, 'trace_probability', 0.0)
-        
+
         _sampler.update_probability(probability)
-        
+
         resource = Resource(attributes={
             SERVICE_NAME: service_name
         })
         provider = TracerProvider(sampler=_sampler, resource=resource)
-        
+
         # Always add the exporter so it's ready if probability is increased later
         processor = BatchSpanProcessor(OTLPSpanExporter())
         provider.add_span_processor(processor)
-            
+
         trace.set_tracer_provider(provider)
         set_global_textmap(TraceContextTextMapPropagator())
         logger.info(f"Tracing initialized for {service_name} with initial probability {probability}")
@@ -84,7 +84,7 @@ def init_tracing(service_name):
         probability = getattr(options, 'trace_probability', 0.0)
         _sampler.update_probability(probability)
         logger.info(f"Test started, updated trace probability to {probability}")
-        
+
     _initialized = True
 
 

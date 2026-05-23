@@ -41,13 +41,13 @@ tracer = get_tracer(__name__)
 
 class CounterUser(HttpUser):
     wait_time = dynamic_wait_time
-    
+
     host = "http://atenet-router.ate-system.svc.cluster.local:80"
     api_host = "api.ate-system.svc.cluster.local:443"
 
     def on_start(self):
         update_user_count(1, self.__class__.__name__)
-        
+
         # Setup gRPC
         target = self.api_host.replace("http://", "").replace("https://", "")
         with open("/run/servicedns-ca/ca.crt", "rb") as f:
@@ -55,7 +55,7 @@ class CounterUser(HttpUser):
         options = [('grpc.ssl_target_name_override', 'api.ate-system.svc')]
         self.channel = grpc.secure_channel(target, grpc.ssl_channel_credentials(root_certificates=ca_cert), options=options)
         self.stub = ateapi_pb2_grpc.ControlStub(self.channel)
-        
+
         # Call CreateActor
         self.actor_id = f"sb-{uuid.uuid4()}"
         try:

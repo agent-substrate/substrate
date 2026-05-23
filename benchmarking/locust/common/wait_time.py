@@ -22,7 +22,7 @@ def init_wait_time():
     global _initialized
     if _initialized:
         return
-        
+
     @events.init_command_line_parser.add_listener
     def on_init_parser(parser):
         parser.add_argument(
@@ -41,7 +41,7 @@ def init_wait_time():
             help="Maximum global wait time in seconds between tasks for all users",
             include_in_web_ui=True
         )
-        
+
     _initialized = True
 
 def dynamic_wait_time(user_instance):
