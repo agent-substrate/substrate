@@ -276,7 +276,7 @@
 
             <div class="card">
                 <div class="card-title">System Component Health Checks</div>
-                
+
                 <div class="metadata-item">
                     <span class="label">Envoy Health</span>
                     {{ if .Health.Envoy.Healthy }}
@@ -426,7 +426,7 @@
             filter = input.value.toUpperCase();
             table = document.getElementById("queries-table");
             tr = table.getElementsByTagName("tr");
-            
+
             for (i = 1; i < tr.length; i++) {
                 tr[i].style.display = "none";
                 td = tr[i].getElementsByTagName("td");
