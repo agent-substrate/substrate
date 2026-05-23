@@ -9,7 +9,7 @@ We want to resolve requests for <actor id>.actors.resources.substrate.ate.dev to
 Cluster resources:
 
 * Deployment `ate-system:dns`. Label: app=dns
-* Service `ate-system:dns`. 
+* Service `ate-system:dns`.
 * ConfigMap `ate-system:dns`.
 
 These are defined in manifests/ate-install/atenet-dns.yaml.

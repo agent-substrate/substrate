@@ -58,7 +58,7 @@ metadata:
 spec:
   runsc:
     amd64:
-      # Note: These values are from the 2026-05-19 nightly. 
+      # Note: These values are from the 2026-05-19 nightly.
       # For the latest verified versions, see: demos/counter/counter.yaml.tmpl
       url: "gs://gvisor/releases/nightly/2026-05-19/x86_64/runsc"
       sha256Hash: "a397be1abc2420d26bce6c70e6e2ff96c73aaaab929756c56f5e2089ea842b63"
@@ -159,7 +159,7 @@ Workloads can exchange their ephemeral Kubernetes credentials for stable **Sessi
 
 ## 7. Framework & Ecosystem Integration
 
-Agent Substrate is designed to be the foundational execution layer for any agentic framework. 
+Agent Substrate is designed to be the foundational execution layer for any agentic framework.
 
 ### Agent Development Kit (ADK)
 Substrate provides native support for ADK-compatible identities. Workloads can use the `SessionIdentity` service to mint JWTs that align with ADK's security model, ensuring seamless integration with ADK-managed tools and memory.

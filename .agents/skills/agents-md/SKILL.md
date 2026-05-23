@@ -17,7 +17,7 @@ The AGENTS.md file at the root of the project may include the following sections
 - Testing instructions
 - Security considerations
 
-AGENTS.md files in subfolders may be even more concise and specific to those subfolders. 
+AGENTS.md files in subfolders may be even more concise and specific to those subfolders.
 
 ## Maximize AGENTS.md Performance
 

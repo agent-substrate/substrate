@@ -109,7 +109,7 @@ kubectl ate get workers
 | `ASSIGNED ACTOR` | If `STATUS=ASSIGNED`, the actor reference `<namespace>/<template>/<actor-id>`. |
 
 ### Actor Lifecycle
-Manage the execution state of your workloads. 
+Manage the execution state of your workloads.
 *(Note: Actors are identified by a user-provided ID, which must be a valid DNS-1123 label)*
 
 ```bash

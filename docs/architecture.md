@@ -293,7 +293,7 @@ The node-level subsystem manages the physical execution of sandboxes and the mov
 
 Handles session-aware routing and automatic re-animation.
 
-  * **Uniform DNS Mesh**: Substrate provides a location-transparent actor discovery scheme via a global DNS suffix (`<id>.actors.resources.substrate.ate.dev`). 
+  * **Uniform DNS Mesh**: Substrate provides a location-transparent actor discovery scheme via a global DNS suffix (`<id>.actors.resources.substrate.ate.dev`).
 
   * **Routing**: The `atenet` router (powered by Envoy and an External Processing server) intercepts traffic destined for the mesh. It extracts the actor ID from the `Host` header, queries the Control Plane to determine the actor's current location, and triggers a `ResumeActor` workflow if the session is currently suspended.
 
@@ -358,14 +358,14 @@ collected. The garbage collection process is not implemented yet.
 Agent Substrate distinguishes between two types of state, which are currently
 captured together in a single versioned snapshot:
 
-  1.  **Memory Snapshot**: The exact RAM state of the process. 
+  1.  **Memory Snapshot**: The exact RAM state of the process.
 
   2.  **Working Volume (Disk)**: The files written to the container's writable
-      layer (the "working memory"). 
+      layer (the "working memory").
 
 In the current implementation, both memory and disk states are tied to the
 specific version of the code (ActorTemplate). This ensures strict consistency
-during resumption. 
+during resumption.
 
 Snapshots are stored durably in **Google Cloud Storage (GCS)**. This model
 allows the physical compute resources in the `WorkerPool` to be fully reclaimed
@@ -385,7 +385,7 @@ Agent Substrate is built on a **Defense-in-Depth** model:
     versions.
 
   * **Request Authorization**: The system currently performs **Identity-Aware
-    Routing** by utilizing a uniform DNS routing scheme 
+    Routing** by utilizing a uniform DNS routing scheme
     (`<actor id>.actors.resources.substrate.ate.dev`)
     at the gateway to extract and validate actor identifiers from incoming traffic. This
     ensures requests are only routed to recognized, registered actors.
