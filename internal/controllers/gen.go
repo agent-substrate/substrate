@@ -14,4 +14,4 @@
 
 package controllers
 
-//go:generate bash ../../hack/run-tool.sh controller-gen rbac:headerFile=../../hack/boilerplate/yaml.txt,roleName=ate-controller paths="./..." output:rbac:artifacts:config=../../manifests/ate-install/generated/
+//go:generate bash ../../hack/run-tool.sh controller-gen rbac:headerFile=../../hack/boilerplate/sh.txt,roleName=ate-controller paths="./..." output:rbac:artifacts:config=../../manifests/ate-install/generated/

@@ -48,7 +48,7 @@ python3 -m grpc_tools.protoc -I"$PROTO_PATH" --python_out=benchmarking/locust/co
 # Prepend ASLv2 header to generated files
 for file in benchmarking/locust/common/ateapi_pb2.py benchmarking/locust/common/ateapi_pb2_grpc.py; do
   if [ -f "$file" ]; then
-    cat hack/boilerplate/python.txt "$file" > "${file}.tmp"
+    cat hack/boilerplate/sh.txt "$file" > "${file}.tmp"
     mv "${file}.tmp" "$file"
   fi
 done
