@@ -178,12 +178,12 @@ spec:
           sources:
           - secret:
               name: "service-dns-ca-pool"
-              items: 
+              items:
               - key: "pool"
                 path: "service-dns-pool.json"
           - secret:
               name: "pod-identity-ca-pool"
-              items: 
+              items:
               - key: "pool"
                 path: "pod-identity-pool.json"
       dnsPolicy: Default

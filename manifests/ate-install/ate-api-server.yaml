@@ -130,9 +130,9 @@ spec:
       - name: "session-id-jwt-pool"
         projected:
           sources:
-          - secret: 
+          - secret:
               name: "session-id-jwt-pool"
-              items: 
+              items:
               - key: "pool"
                 path: "pool.json"
       - name: "valkey-ca-certs"
