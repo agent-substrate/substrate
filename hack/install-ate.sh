@@ -121,7 +121,7 @@ create_valkey_ca_certs_secret() {
   ca_certs=$(echo "${der_base64}" | base64 --decode | openssl x509 -inform der -outform pem)
 
   run_kubectl create secret generic valkey-ca-certs \
-    --from-literal=ca.crt="$(echo "${ca_certs}")" \
+    --from-literal=ca.crt="${ca_certs}" \
     -n ate-system \
     --dry-run=client -o yaml \
     | run_kubectl apply -f -

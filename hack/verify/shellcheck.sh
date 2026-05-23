@@ -14,15 +14,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-set -o errexit
-set -o nounset
-set -o pipefail
+set -o errexit -o nounset -o pipefail
 
 ROOT="$(git rev-parse --show-toplevel)"
 cd "${ROOT}"
 
-# shellcheck disable=2044 # for-loop over find output is intentional
-for F in $(find ./hack/verify -name '*.sh'); do
-  echo "Running ${F}"
-  "${F}" "$@"
-done
+./hack/third_party/kubernetes/verify-shellcheck.sh "$@"

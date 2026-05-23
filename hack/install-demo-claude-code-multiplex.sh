@@ -1,3 +1,5 @@
+#!/usr/bin/env bash
+
 # Copyright 2026 Google LLC
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -33,6 +35,7 @@ demo-claude-code-multiplex_cmdline() {
 # binary), so it uses docker buildx rather than ko.
 demo-claude-code-multiplex_build_workload() {
   local repo="${KO_DOCKER_REPO}/claude-multiplex-demo-workload"
+  # shellcheck disable=SC2155 # safe initialization
   local stage_tag="${repo}:build-$(date +%s)"
   docker buildx build \
     --platform=linux/amd64 \

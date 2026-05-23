@@ -38,7 +38,9 @@ targets=(
   "darwin/arm64"
 )
 
+tmpfile="" # make shellcheck happy
 tmpfile="$(mktemp -t "update-licenses.XXXXXX")"
+# shellcheck disable=SC2064 # evaluate $tmpfile immediately
 trap "rm -f ${tmpfile}" EXIT
 
 for target in "${targets[@]}"; do

@@ -19,8 +19,9 @@ set -o nounset
 set -o pipefail
 
 ROOT="$(git rev-parse --show-toplevel)"
-
 cd "${ROOT}"
+
+# shellcheck disable=2044 # for-loop over find output is intentional
 for F in $(find ./hack/update -name '*.sh'); do
   echo "Running ${F}"
   "${F}" "$@"
