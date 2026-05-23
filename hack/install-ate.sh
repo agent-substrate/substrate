@@ -18,7 +18,7 @@ set -e
 set -u
 set -o pipefail
 
-ROOT=$(git rev-parse --show-toplevel)
+ROOT="$(git rev-parse --show-toplevel)"
 cd "${ROOT}"
 
 # Source the environment variables if configured

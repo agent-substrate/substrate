@@ -18,7 +18,8 @@ set -e
 set -u
 set -o pipefail
 
-ROOT=$(git rev-parse --show-toplevel)
+ROOT="$(git rev-parse --show-toplevel)"
+cd "${ROOT}"
 
 # shellcheck disable=SC2155 # safe initialization
 goarch=$(go env GOARCH)
@@ -36,4 +37,4 @@ export BUCKET_NAME="ate-snapshots"
 # unset other env from ate-dev-env.sh in case the developer already sourced them
 unset GCE_REGION CLUSTER_LOCATION NETWORK SUBNETWORK MEMORYSTORE_INSTANCE PROJECT_ID
 
-"${ROOT}"/hack/install-ate.sh "$@"
+hack/install-ate.sh "$@"
