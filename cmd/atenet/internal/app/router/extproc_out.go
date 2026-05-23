@@ -15,22 +15,23 @@
 package router
 
 import (
-	"errors"
-
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	extproc "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 	envoy_type "github.com/envoyproxy/go-control-plane/envoy/type/v3"
 )
 
+// reqError carries an HTTP-mappable status code and a client-safe message.
+// The underlying cause (if any) is preserved via Unwrap so logs can inspect
+// the full chain without leaking server-side detail into the response body.
 type reqError struct {
-	error
+	msg        string
+	cause      error
 	statusCode int
 }
 
-var (
-	notFoundErr = &reqError{error: errors.New("not found"), statusCode: int(envoy_type.StatusCode_NotFound)}
-)
+func (e *reqError) Error() string { return e.msg }
+func (e *reqError) Unwrap() error { return e.cause }
 
 func addAuthorityMutation(auth string, mut *extprocv3.HeaderMutation) {
 	mut.SetHeaders = append(mut.SetHeaders,

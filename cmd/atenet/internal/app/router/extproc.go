@@ -124,8 +124,7 @@ func (s *ExtProcServer) handleRequestHeaders(
 
 	actorID, err := parseActorID(metadata.host)
 	if err != nil {
-		// Host is invalid, respond with 404.
-		return nil, metadata, "", notFoundErr
+		return nil, metadata, "", invalidHostErr(metadata.host, err)
 	}
 
 	slog.InfoContext(ctx, "ResumeActor", slog.String("actorID", actorID))
@@ -137,12 +136,13 @@ func (s *ExtProcServer) handleRequestHeaders(
 		slog.Any("err", err))
 
 	if err != nil {
-		return nil, metadata, "", fmt.Errorf("error resuming actor %s: %w", actorID, err)
+		return nil, metadata, "", mapResumeError(actorID, err)
 	}
 
 	workerIP := actor.GetAteomPodIp()
 	if ip := net.ParseIP(workerIP); ip == nil {
-		return nil, metadata, "", fmt.Errorf("actor %q did not have a valid IP %q", actorID, workerIP)
+		return nil, metadata, "", newReqError(envoy_type.StatusCode_InternalServerError,
+			"actor %q routing failed", actorID)
 	}
 
 	// TODO(bowei) -- handle more than port 80 on the actor.

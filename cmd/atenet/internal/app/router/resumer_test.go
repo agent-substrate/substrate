@@ -16,7 +16,6 @@ package router
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -111,8 +110,8 @@ func TestActorResumer_ResumeActor(t *testing.T) {
 
 		resumer := NewActorResumer(mock)
 		_, err := resumer.ResumeActor(context.Background(), testActorID)
-		if !errors.Is(err, notFoundErr) {
-			t.Errorf("expected notFoundErr, got %v", err)
+		if got := status.Code(err); got != codes.NotFound {
+			t.Errorf("expected gRPC code NotFound, got %v (err=%v)", got, err)
 		}
 	})
 

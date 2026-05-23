@@ -24,7 +24,10 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
+	envoy_type "github.com/envoyproxy/go-control-plane/envoy/type/v3"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 type mockClient struct {
@@ -45,25 +48,59 @@ func TestExtProcHeadersEvaluation(t *testing.T) {
 		resumeResp     *ateapipb.ResumeActorResponse
 		resumeErr      error
 		expectErr      bool
-		expectedErr    error
 		expectedErrStr string
+		expectedStatus envoy_type.StatusCode
 		expectedTarget string
 	}{
 		{
-			name:        "invalid host",
-			authority:   "invalid-host.com",
-			expectErr:   true,
-			expectedErr: notFoundErr,
-		},
-		{
-			name:           "Error resuming actor",
-			authority:      testUUID + ".actors.resources.substrate.ate.dev",
-			resumeErr:      errors.New("resume failed"),
+			name:           "invalid host returns 404 identifying the host",
+			authority:      "invalid-host.com",
 			expectErr:      true,
-			expectedErrStr: "error resuming actor 123e4567-e89b-12d3-a456-426614174000: resume failed",
+			expectedErrStr: `invalid host "invalid-host.com": invalid actor_id: must end with actors.resources.substrate.ate.dev, got "invalid-host.com"`,
+			expectedStatus: envoy_type.StatusCode_NotFound,
 		},
 		{
-			name:      "Bad Actor IP from resume",
+			name:           "non-gRPC resume error collapses to 500 without leaking detail",
+			authority:      testUUID + ".actors.resources.substrate.ate.dev",
+			resumeErr:      errors.New("resume failed with sensitive detail"),
+			expectErr:      true,
+			expectedErrStr: `error resuming actor "123e4567-e89b-12d3-a456-426614174000"`,
+			expectedStatus: envoy_type.StatusCode_InternalServerError,
+		},
+		{
+			name:           "FailedPrecondition maps to 503 with preserved desc",
+			authority:      testUUID + ".actors.resources.substrate.ate.dev",
+			resumeErr:      status.Error(codes.FailedPrecondition, "no free workers available"),
+			expectErr:      true,
+			expectedErrStr: `actor "123e4567-e89b-12d3-a456-426614174000" unavailable: no free workers available`,
+			expectedStatus: envoy_type.StatusCode_ServiceUnavailable,
+		},
+		{
+			name:           "NotFound maps to 404",
+			authority:      testUUID + ".actors.resources.substrate.ate.dev",
+			resumeErr:      status.Error(codes.NotFound, "actor missing"),
+			expectErr:      true,
+			expectedErrStr: `actor "123e4567-e89b-12d3-a456-426614174000" not found`,
+			expectedStatus: envoy_type.StatusCode_NotFound,
+		},
+		{
+			name:           "Unavailable maps to 503",
+			authority:      testUUID + ".actors.resources.substrate.ate.dev",
+			resumeErr:      status.Error(codes.Unavailable, "control-plane down"),
+			expectErr:      true,
+			expectedErrStr: `actor "123e4567-e89b-12d3-a456-426614174000" unavailable`,
+			expectedStatus: envoy_type.StatusCode_ServiceUnavailable,
+		},
+		{
+			name:           "DeadlineExceeded maps to 504",
+			authority:      testUUID + ".actors.resources.substrate.ate.dev",
+			resumeErr:      status.Error(codes.DeadlineExceeded, "deadline"),
+			expectErr:      true,
+			expectedErrStr: `actor "123e4567-e89b-12d3-a456-426614174000" request timed out`,
+			expectedStatus: envoy_type.StatusCode_GatewayTimeout,
+		},
+		{
+			name:      "Bad Actor IP from resume returns 500 without leaking IP",
 			authority: testUUID + ".actors.resources.substrate.ate.dev",
 			resumeResp: &ateapipb.ResumeActorResponse{
 				Actor: &ateapipb.Actor{
@@ -71,7 +108,8 @@ func TestExtProcHeadersEvaluation(t *testing.T) {
 				},
 			},
 			expectErr:      true,
-			expectedErrStr: "actor \"123e4567-e89b-12d3-a456-426614174000\" did not have a valid IP \"invalid-ip\"",
+			expectedErrStr: `actor "123e4567-e89b-12d3-a456-426614174000" routing failed`,
+			expectedStatus: envoy_type.StatusCode_InternalServerError,
 		},
 		{
 			name:      "Successful resume",
@@ -117,11 +155,18 @@ func TestExtProcHeadersEvaluation(t *testing.T) {
 				if err == nil {
 					t.Fatalf("expected error but got nil")
 				}
-				if tc.expectedErr != nil && !errors.Is(err, tc.expectedErr) {
-					t.Errorf("expected error %v, got %v", tc.expectedErr, err)
-				}
 				if tc.expectedErrStr != "" && err.Error() != tc.expectedErrStr {
-					t.Errorf("expected error string %q, got %q", tc.expectedErrStr, err.Error())
+					t.Errorf("client body mismatch:\n  got:  %q\n  want: %q", err.Error(), tc.expectedErrStr)
+				}
+				var reqErr *reqError
+				if !errors.As(err, &reqErr) {
+					t.Fatalf("expected *reqError, got %T (%v)", err, err)
+				}
+				if got, want := reqErr.statusCode, int(tc.expectedStatus); got != want {
+					t.Errorf("HTTP status code = %d, want %d", got, want)
+				}
+				if tc.resumeErr != nil && !errors.Is(err, tc.resumeErr) {
+					t.Errorf("original resume error must be preserved in chain for logs; errors.Is(err, resumeErr) = false")
 				}
 				return
 			}

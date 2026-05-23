@@ -68,9 +68,9 @@ func (r *ActorResumer) ResumeActor(ctx context.Context, actorID string) (*ateapi
 			if status.Code(err) == codes.Aborted {
 				return false, nil // Concurrent resume call, retry.
 			}
-			if status.Code(err) == codes.NotFound {
-				return false, notFoundErr
-			}
+			// Other gRPC errors (NotFound, FailedPrecondition, Unavailable,
+			// DeadlineExceeded, ...) are returned to the caller unchanged so
+			// the HTTP boundary can map them with full fidelity.
 			return false, err
 		})
 
