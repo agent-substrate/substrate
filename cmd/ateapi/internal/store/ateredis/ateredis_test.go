@@ -721,3 +721,50 @@ func TestAcquireLock_NonReentry(t *testing.T) {
 		t.Errorf("expected second lock acquisition to fail (non-reentrant)")
 	}
 }
+
+func TestEnsureWorkerIdle(t *testing.T) {
+	mr, s, ctx := setupTest(t)
+	defer mr.Close()
+
+	worker := &ateapipb.Worker{
+		WorkerNamespace: "default",
+		WorkerPool:      "pool-1",
+		WorkerPod:       "pod-1",
+	}
+
+	err := s.CreateWorker(ctx, worker)
+	if err != nil {
+		t.Fatalf("CreateWorker failed: %v", err)
+	}
+
+	// Manually remove from idle set to simulate leak/crash before SAdd.
+	setKey := "pool:default:pool-1:idle_workers"
+	_, err = s.rdb.SRem(ctx, setKey, "pod-1").Result()
+	if err != nil {
+		t.Fatalf("SRem failed: %v", err)
+	}
+
+	// Verify it's gone from set
+	isMember, err := s.rdb.SIsMember(ctx, setKey, "pod-1").Result()
+	if err != nil {
+		t.Fatalf("SIsMember failed: %v", err)
+	}
+	if isMember {
+		t.Errorf("expected worker to be removed from idle set")
+	}
+
+	// Run EnsureWorkerIdle
+	err = s.EnsureWorkerIdle(ctx, "default", "pool-1", "pod-1")
+	if err != nil {
+		t.Fatalf("EnsureWorkerIdle failed: %v", err)
+	}
+
+	// Verify it's back in the set
+	isMember, err = s.rdb.SIsMember(ctx, setKey, "pod-1").Result()
+	if err != nil {
+		t.Fatalf("SIsMember failed: %v", err)
+	}
+	if !isMember {
+		t.Errorf("expected worker to be restored to idle set")
+	}
+}

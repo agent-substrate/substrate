@@ -528,3 +528,22 @@ func (s *Persistence) ClaimIdleWorker(ctx context.Context, namespace, pool strin
 		return worker, nil
 	}
 }
+
+func (s *Persistence) EnsureWorkerIdle(ctx context.Context, namespace, pool, pod string) error {
+	worker, err := s.GetWorker(ctx, namespace, pool, pod)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil
+		}
+		return fmt.Errorf("while getting worker for idle check: %w", err)
+	}
+
+	if worker.GetActorId() == "" {
+		setKey := fmt.Sprintf("pool:%s:%s:idle_workers", namespace, pool)
+		err = s.rdb.SAdd(ctx, setKey, pod).Err()
+		if err != nil {
+			return fmt.Errorf("while ensuring worker in idle set: %w", err)
+		}
+	}
+	return nil
+}

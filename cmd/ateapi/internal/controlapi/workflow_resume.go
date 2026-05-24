@@ -86,7 +86,7 @@ func (s *AssignWorkerStep) IsComplete(ctx context.Context, input *ResumeInput, s
 func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, state *ResumeState) error {
 	var assignedWorker *ateapipb.Worker
 
-	// Re-use previously assigned worker if available.
+	// Re-use previously assigned worker if available (e.g., on retry of a failed resume).
 	if state.Actor.GetAteomPodName() != "" {
 		worker, err := s.store.GetWorker(ctx, state.Actor.GetAteomPodNamespace(), state.ActorTemplate.Spec.WorkerPoolRef.Name, state.Actor.GetAteomPodName())
 		if err == nil && worker.GetActorId() == input.ActorID {

@@ -18,10 +18,12 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/tools/cache"
 )
 
@@ -88,6 +90,22 @@ func (s *WorkerPoolSyncer) Start(ctx context.Context) {
 			s.syncWorkerToStore(ctx, pod)
 		}
 	}()
+
+	// Start background periodic sweep to reconcile/heal the idle workers set.
+	go wait.UntilWithContext(ctx, func(ctx context.Context) {
+		workers, err := s.persistence.ListWorkers(ctx)
+		if err != nil {
+			slog.ErrorContext(ctx, "Syncer: failed to list workers for idle reconciliation", slog.Any("err", err))
+			return
+		}
+		for _, w := range workers {
+			if w.GetActorId() == "" {
+				if err := s.persistence.EnsureWorkerIdle(ctx, w.GetWorkerNamespace(), w.GetWorkerPool(), w.GetWorkerPod()); err != nil {
+					slog.ErrorContext(ctx, "Syncer: failed to ensure worker is idle during reconciliation", slog.String("worker", w.GetWorkerPod()), slog.Any("err", err))
+				}
+			}
+		}
+	}, 1*time.Minute)
 }
 
 func (s *WorkerPoolSyncer) syncWorkerToStore(ctx context.Context, pod *corev1.Pod) {
@@ -121,6 +139,12 @@ func (s *WorkerPoolSyncer) syncWorkerToStore(ctx context.Context, pod *corev1.Po
 		}
 		slog.ErrorContext(ctx, "Failed to get worker from store", slog.Any("err", err))
 		return
+	}
+
+	if w.GetActorId() == "" {
+		if err := s.persistence.EnsureWorkerIdle(ctx, w.GetWorkerNamespace(), w.GetWorkerPool(), w.GetWorkerPod()); err != nil {
+			slog.ErrorContext(ctx, "Syncer: failed to ensure worker is idle", slog.String("worker", w.GetWorkerPod()), slog.Any("err", err))
+		}
 	}
 
 	if w.Ip != pod.Status.PodIP {
