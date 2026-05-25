@@ -13,3 +13,34 @@ __pycache__/
 
 # Local environment variables
 .ate-dev-env.sh
+
+# OS artifacts
+.DS_Store
+Thumbs.db
+
+# Editors and IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# AI IDEs and CLIs
+.aider*
+.claude/
+.cline/
+.codex/
+.continue/
+.copilot/
+.cursor/
+.gemini/
+.goose/
+.kiro/
+.opencode/
+.qwen/
+.roo/
+.trae/
+.windsurf/
+
+# Local worktrees
+/.worktrees/
