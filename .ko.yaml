@@ -12,7 +12,11 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
-defaultBaseImage: gcr.io/distroless/static-debian11
+defaultBaseImage: gcr.io/distroless/static-debian13
+
+defaultPlatforms:
+  - linux/amd64
+  - linux/arm64
 
 baseImageOverrides:
   github.com/agent-substrate/substrate/demos/sandbox: alpine
