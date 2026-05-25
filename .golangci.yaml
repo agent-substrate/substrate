@@ -26,6 +26,10 @@ linters:
   # the codebase is clean for the basics.
   default: standard
 
+  enable:
+    # Spelling errors in comments, strings, and identifiers.
+    - misspell
+
   settings:
     errcheck:
       # Functions where ignoring the return is idiomatic in this codebase.
@@ -47,6 +51,9 @@ linters:
         # mean the controller is fundamentally misconfigured at startup.
         - (k8s.io/client-go/tools/cache.SharedIndexInformer).AddEventHandler
         - (k8s.io/client-go/tools/cache.SharedIndexInformer).AddIndexers
+
+    misspell:
+      mode: default
 
   exclusions:
     # Built-in presets that suppress the most common idiomatic false
