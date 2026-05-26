@@ -26,6 +26,16 @@ KO := hack/run-tool.sh ko
 BINDIR := bin/
 ATECTL := $(BINDIR)/kubectl-ate
 
+# Version stamping. Override on the make command line to pin
+# (e.g. `make VERSION=v0.5.0 build`).
+VERSION    ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+COMMIT     ?= $(shell git rev-parse HEAD 2>/dev/null || echo unknown)
+BUILD_DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
+VERSION_PKG := github.com/agent-substrate/substrate/internal/version
+LDFLAGS := -X $(VERSION_PKG).Version=$(VERSION) \
+           -X $(VERSION_PKG).Commit=$(COMMIT) \
+           -X $(VERSION_PKG).BuildDate=$(BUILD_DATE)
+
 .PHONY: all
 all: build
 
@@ -34,22 +44,22 @@ build: build-images build-atectl
 
 .PHONY: build-images
 build-images:
-	$(KO) build ./cmd/ateapi
-	$(KO) build ./cmd/atelet
-	$(KO) build ./cmd/podcertcontroller
-	$(KO) build ./cmd/atenet
+	$(KO) build --ldflags "$(LDFLAGS)" ./cmd/ateapi
+	$(KO) build --ldflags "$(LDFLAGS)" ./cmd/atelet
+	$(KO) build --ldflags "$(LDFLAGS)" ./cmd/podcertcontroller
+	$(KO) build --ldflags "$(LDFLAGS)" ./cmd/atenet
 
 .PHONY: build-atectl
 build-atectl:
-	$(GO) build -o $(ATECTL) ./cmd/kubectl-ate
+	$(GO) build -ldflags "$(LDFLAGS)" -o $(ATECTL) ./cmd/kubectl-ate
 
 .PHONY: build-atenet
 build-atenet:
-	$(GO) build -o $(BINDIR)/atenet ./cmd/atenet
+	$(GO) build -ldflags "$(LDFLAGS)" -o $(BINDIR)/atenet ./cmd/atenet
 
 .PHONY: build-demos
 build-demos:
-	$(KO) build ./demos/counter
+	$(KO) build --ldflags "$(LDFLAGS)" ./demos/counter
 
 .PHONY: test
 test:

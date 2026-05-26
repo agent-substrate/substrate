@@ -34,6 +34,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/contextlogging"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/serverboot"
+	"github.com/agent-substrate/substrate/internal/version"
 	"github.com/hashicorp/go-reap"
 	"github.com/vishvananda/netlink"
 	"github.com/vishvananda/netns"
@@ -47,11 +48,17 @@ var (
 	podNamespace = flag.String("pod-namespace", "", "The namespace of the current pod")
 	podName      = flag.String("pod-name", "", "The name of the current pod")
 
+	showVersion = flag.Bool("version", false, "Print version and exit.")
+
 	reapLock sync.RWMutex
 )
 
 func main() {
 	flag.Parse()
+	if *showVersion {
+		fmt.Println(version.String())
+		return
+	}
 	ctx := context.Background()
 
 	if err := do(ctx); err != nil {

@@ -24,6 +24,7 @@ package main
 import (
 	"context"
 	"flag"
+	"fmt"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -35,6 +36,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/rendezvous"
 	"github.com/agent-substrate/substrate/internal/servicednssigner"
 	"github.com/agent-substrate/substrate/internal/signercontroller"
+	"github.com/agent-substrate/substrate/internal/version"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -71,12 +73,18 @@ var (
 		"",
 		"File that contains the CA pool state for "+podidentitysigner.Name,
 	)
+
+	showVersion = flag.Bool("version", false, "Print version and exit.")
 )
 
 func main() {
 	ctx := context.Background()
 
 	flag.Parse()
+	if *showVersion {
+		fmt.Println(version.String())
+		return
+	}
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
 
 	var kconfig *rest.Config

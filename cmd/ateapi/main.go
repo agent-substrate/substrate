@@ -31,6 +31,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/credbundle"
 	"github.com/agent-substrate/substrate/internal/serverboot"
+	"github.com/agent-substrate/substrate/internal/version"
 	"github.com/agent-substrate/substrate/pkg/client/clientset/versioned"
 	"github.com/agent-substrate/substrate/pkg/client/informers/externalversions"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -62,10 +63,16 @@ var (
 
 	sessionIDCAPoolFile = flag.String("session-id-ca-pool", "", "The file that contains the CA pool for signing session JWTs")
 	workerpoolCACerts   = flag.String("workerpool-ca-certs", "", "The file that contains the CA for verifying workerpool client certificates.")
+
+	showVersion = flag.Bool("version", false, "Print version and exit.")
 )
 
 func main() {
 	flag.Parse()
+	if *showVersion {
+		fmt.Println(version.String())
+		return
+	}
 	ctx := context.Background()
 	serverboot.InitLogger()
 

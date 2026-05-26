@@ -20,13 +20,15 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/atenet/internal/app/dns"
 	"github.com/agent-substrate/substrate/cmd/atenet/internal/app/router"
+	"github.com/agent-substrate/substrate/internal/version"
 	"github.com/spf13/cobra"
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "atenet",
-	Short: "atenet is a combined daemon for all networking functionality.",
-	Long:  `atenet is a combined daemon for all networking functionality.`,
+	Use:     "atenet",
+	Short:   "atenet is a combined daemon for all networking functionality.",
+	Long:    `atenet is a combined daemon for all networking functionality.`,
+	Version: version.String(),
 }
 
 func Execute() {
