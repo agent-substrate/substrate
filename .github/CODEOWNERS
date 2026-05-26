@@ -1,8 +1,0 @@
-# CODEOWNERS — see GOVERNANCE.md.
-#
-# Initial owners derived from current commit and PR activity. This list is
-# intentionally coarse for now; per-area owners can be added as the project
-# grows and contributors take on sustained responsibility for specific
-# subsystems.
-
-*  @BenTheElder @rakyll @thockin
