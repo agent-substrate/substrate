@@ -17,7 +17,6 @@ package servicednssigner
 import (
 	"bytes"
 	"context"
-	"crypto"
 	"crypto/rand"
 	"crypto/x509"
 	"encoding/pem"
@@ -25,6 +24,7 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/localca"
+	"github.com/agent-substrate/substrate/internal/podcertificate"
 	"github.com/agent-substrate/substrate/internal/signercontroller"
 	certsv1beta1 "k8s.io/api/certificates/v1beta1"
 	corev1 "k8s.io/api/core/v1"
@@ -137,12 +137,9 @@ func (h *Impl) MakeCert(ctx context.Context, pcr *certsv1beta1.PodCertificateReq
 
 	// TODO: Encode the OIDC issuer of the cluster into the certificate.
 
-	// In Kubernetes 1.35, Kubelet sets PKIXPublicKey.  In 1.36, Kubelet sets
-	// UnverifiedPKCS10Request.
-	var subjectPublicKey crypto.PublicKey
-	subjectPublicKey, err = x509.ParsePKIXPublicKey(pcr.Spec.PKIXPublicKey)
+	subjectPublicKey, err := podcertificate.PublicKey(pcr)
 	if err != nil {
-		return fmt.Errorf("while parsing PKIX public key: %w", err)
+		return err
 	}
 
 	// If our signer had an opinion on which key types were allowable, it would

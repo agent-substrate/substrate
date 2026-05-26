@@ -112,7 +112,7 @@ func TestExtProcHeadersEvaluation(t *testing.T) {
 				},
 			}
 
-			res, metadata, err := s.handleRequestHeaders(context.Background(), reqHeaders)
+			res, metadata, target, err := s.handleRequestHeaders(context.Background(), reqHeaders)
 			if tc.expectErr {
 				if err == nil {
 					t.Fatalf("expected error but got nil")
@@ -128,6 +128,9 @@ func TestExtProcHeadersEvaluation(t *testing.T) {
 
 			if err != nil {
 				t.Fatalf("ext_proc processing error: %v", err)
+			}
+			if target != tc.expectedTarget {
+				t.Errorf("expected target %q, got %q", tc.expectedTarget, target)
 			}
 
 			mutation := res.Response.GetHeaderMutation()

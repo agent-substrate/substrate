@@ -15,10 +15,12 @@
 package printer
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"text/tabwriter"
 
 	"github.com/agent-substrate/substrate/proto/ateapipb"
@@ -32,8 +34,21 @@ func PrintActors(actors []*ateapipb.Actor, format string) error {
 	return PrintActorsTo(os.Stdout, actors, format)
 }
 
+func sortActors(actors []*ateapipb.Actor) {
+	slices.SortFunc(actors, func(a, b *ateapipb.Actor) int {
+		if c := cmp.Compare(a.GetActorTemplateNamespace(), b.GetActorTemplateNamespace()); c != 0 {
+			return c
+		}
+		if c := cmp.Compare(a.GetActorTemplateName(), b.GetActorTemplateName()); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.GetActorId(), b.GetActorId())
+	})
+}
+
 // PrintActorsTo prints a slice of actors to the provided writer.
 func PrintActorsTo(out io.Writer, actors []*ateapipb.Actor, format string) error {
+	sortActors(actors)
 	switch format {
 	case "json", "yaml":
 		return printProto(out, &ateapipb.ListActorsResponse{Actors: actors}, format)
@@ -65,8 +80,21 @@ func PrintWorkers(workers []*ateapipb.Worker, format string) error {
 	return PrintWorkersTo(os.Stdout, workers, format)
 }
 
+func sortWorkers(workers []*ateapipb.Worker) {
+	slices.SortFunc(workers, func(a, b *ateapipb.Worker) int {
+		if c := cmp.Compare(a.GetWorkerNamespace(), b.GetWorkerNamespace()); c != 0 {
+			return c
+		}
+		if c := cmp.Compare(a.GetWorkerPool(), b.GetWorkerPool()); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.GetWorkerPod(), b.GetWorkerPod())
+	})
+}
+
 // PrintWorkersTo prints a slice of workers to the provided writer.
 func PrintWorkersTo(out io.Writer, workers []*ateapipb.Worker, format string) error {
+	sortWorkers(workers)
 	switch format {
 	case "json", "yaml":
 		return printProto(out, &ateapipb.ListWorkersResponse{Workers: workers}, format)

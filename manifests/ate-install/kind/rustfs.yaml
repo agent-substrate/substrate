@@ -89,3 +89,45 @@ spec:
       - name: data
         persistentVolumeClaim:
           claimName: rustfs-data
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: rustfs-bucket-init
+  namespace: ate-system
+spec:
+  backoffLimit: 10
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: create-bucket
+        image: amazon/aws-cli:2.17.0@sha256:643507c10ada7964ca6157b3d799f030b90577643da9955d319a77399ed80d73
+        env:
+        - name: AWS_ACCESS_KEY_ID
+          value: rustfsadmin
+        - name: AWS_SECRET_ACCESS_KEY
+          value: rustfsadmin
+        - name: AWS_REGION
+          value: us-east-1
+        - name: AWS_ENDPOINT_URL
+          value: http://rustfs.ate-system.svc:9000
+        command:
+        - /bin/sh
+        - -c
+        - |
+          set -e
+          for i in $(seq 1 60); do
+            if aws s3api head-bucket --bucket ate-snapshots 2>/dev/null; then
+              echo "bucket ate-snapshots already exists"
+              exit 0
+            fi
+            if aws s3api create-bucket --bucket ate-snapshots 2>/dev/null; then
+              echo "bucket ate-snapshots created"
+              exit 0
+            fi
+            echo "waiting for rustfs to become available... ($i/60)"
+            sleep 2
+          done
+          echo "timed out waiting for rustfs"
+          exit 1

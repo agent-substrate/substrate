@@ -29,6 +29,8 @@ import (
 	"github.com/agent-substrate/substrate/cmd/servers/ateapi/controlapi"
 	"github.com/agent-substrate/substrate/cmd/servers/ateapi/sessionidentity"
 	"github.com/agent-substrate/substrate/cmd/servers/ateapi/store/ateredis"
+	"github.com/agent-substrate/substrate/internal/ateinterceptors"
+	"github.com/agent-substrate/substrate/internal/contextlogging"
 	"github.com/agent-substrate/substrate/internal/credbundle"
 	"github.com/agent-substrate/substrate/pkg/client/clientset/versioned"
 	"github.com/agent-substrate/substrate/pkg/client/informers/externalversions"
@@ -75,7 +77,7 @@ var (
 func main() {
 	flag.Parse()
 	ctx := context.Background()
-	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
+	slog.SetDefault(slog.New(contextlogging.NewHandler(slog.NewJSONHandler(os.Stdout, nil))))
 
 	tp, err := initTracing(ctx)
 	if err != nil {
@@ -96,15 +98,6 @@ func main() {
 	defer func() {
 		if err := mp.Shutdown(context.Background()); err != nil {
 			slog.Error("Failed to shutdown MeterProvider", slog.Any("err", err))
-		}
-	}()
-
-	go func() {
-		mux := http.NewServeMux()
-		mux.Handle("/metrics", promhttp.Handler())
-		slog.InfoContext(ctx, fmt.Sprintf("Starting Prometheus metrics server on %s", *metricsListenAddr))
-		if err := http.ListenAndServe(*metricsListenAddr, mux); err != nil {
-			slog.Error("Failed to start prometheus metrics server", slog.Any("err", err))
 		}
 	}()
 
@@ -299,11 +292,24 @@ func main() {
 	mux := grpc.NewServer(
 		grpc.Creds(serverCreds),
 		grpc.StatsHandler(otelgrpc.NewServerHandler()),
-		grpc.UnaryInterceptor(controlapi.StatusErrorInterceptor),
+		grpc.UnaryInterceptor(ateinterceptors.ServerUnaryInterceptor),
 	)
 	reflection.Register(mux)
 	ateapipb.RegisterControlServer(mux, sm)
 	ateapipb.RegisterSessionIdentityServer(mux, sessionIdentitySrv)
+
+	go func() {
+		mux := http.NewServeMux()
+		mux.Handle("/metrics", promhttp.Handler())
+		mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("ok"))
+		})
+		slog.InfoContext(ctx, fmt.Sprintf("Starting Prometheus metrics server on %s", *metricsListenAddr))
+		if err := http.ListenAndServe(*metricsListenAddr, mux); err != nil {
+			slog.Error("Failed to start prometheus metrics server", slog.Any("err", err))
+		}
+	}()
 
 	if err := mux.Serve(lis); err != nil {
 		slog.ErrorContext(ctx, "Failed to serve", slog.Any("err", err))

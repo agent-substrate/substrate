@@ -45,6 +45,17 @@ gcloud beta container clusters update CLUSTER_NAME \
     --location=LOCATION
 ```
 
+**Local (kind):**
+
+The kind overlay installed by `hack/install-ate-kind.sh --deploy-ate-system` already provisions an in-cluster OpenTelemetry Collector and a Jaeger all-in-one in the `otel-system` namespace. No additional setup is required.
+
+Port-forward the Jaeger UI and invoke any command with `--trace`:
+```bash
+kubectl port-forward -n otel-system svc/jaeger 16686:16686 &
+kubectl ate get actor my-counter-1 --trace
+# open http://localhost:16686 and search for the most recent trace
+```
+
 ## Global Flags
 These flags can be appended to any command:
 
@@ -73,6 +84,30 @@ kubectl ate get actor <actor-id> -o yaml
 kubectl ate get workers
 ```
 
+> **Note:** Actors and workers are not Kubernetes CRDs — they live in the Substrate control plane (valkey/redis), not `etcd`. `kubectl get actor` and `kubectl get worker` will not return anything; only `kubectl ate get …` queries the control plane. `kubectl get actortemplate` and `kubectl get workerpool` *do* work, because those are CRDs.
+
+#### `kubectl ate get actor` output columns
+
+| Column | Meaning |
+|---|---|
+| `NAMESPACE` | The namespace of the `ActorTemplate` the actor was created from. |
+| `TEMPLATE` | The `ActorTemplate` name. |
+| `ID` | Actor ID. User-provided for application actors; UUID for the golden actor that each template materialises during `ResumeGoldenActor`. |
+| `STATUS` | One of `STATUS_RESUMING`, `STATUS_RUNNING`, `STATUS_SUSPENDING`, `STATUS_SUSPENDED`. |
+| `ATEOM POD` | The worker pod (namespace/name) currently hosting the actor. Empty while suspended. |
+| `ATEOM IP` | The pod IP of that worker. Empty while suspended. |
+| `VERSION` | Monotonic integer that increments on every state transition (resume / suspend / checkpoint). Useful for distinguishing snapshots. |
+
+#### `kubectl ate get worker` output columns
+
+| Column | Meaning |
+|---|---|
+| `NAMESPACE` | The `WorkerPool` namespace. |
+| `POOL` | The `WorkerPool` name. |
+| `POD` | The worker pod name. |
+| `STATUS` | `FREE` (idle, ready to receive an actor) or `ASSIGNED` (currently hosting an actor). |
+| `ASSIGNED ACTOR` | If `STATUS=ASSIGNED`, the actor reference `<namespace>/<template>/<actor-id>`. |
+
 ### Actor Lifecycle
 Manage the execution state of your workloads. 
 *(Note: Actors are identified by a user-provided ID, which must be a valid DNS-1123 label)*
@@ -90,6 +125,18 @@ kubectl ate suspend actor my-actor
 # Delete an actor.
 kubectl ate delete actor my-actor
 ```
+
+### Logs
+
+`kubectl ate logs` requires a resource-type subcommand; running `kubectl ate logs <id>` on its own prints help. The only supported resource type is `actors`:
+
+```bash
+# Stream logs for an actor (follows by default; aggregated across worker
+# reassignments so the same actor is queryable as it teleports between pods).
+kubectl ate logs actors my-actor
+```
+
+Logs are streamable only while the actor is bound to a worker (i.e., `STATUS_RUNNING`). For history across worker migrations, route through a centralized log backend (Cloud Logging, Loki, etc.); see `docs/observability.md`.
 
 ### Administration & Setup
 Commands for bootstrapping the Substrate control plane and debugging local environments.

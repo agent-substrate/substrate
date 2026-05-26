@@ -15,17 +15,10 @@
 package controlapi
 
 import (
-	"context"
-	"errors"
-	"log/slog"
-
 	"github.com/agent-substrate/substrate/cmd/servers/ateapi/store"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 
 	"github.com/agent-substrate/substrate/proto/ateapipb"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 // Service implements ateapipb.Control
@@ -49,26 +42,4 @@ func NewService(persistence store.Interface, actorTemplateLister listersv1alpha1
 	}
 
 	return s
-}
-
-// StatusErrorInterceptor searches the error chain for a gRPC status error.
-// If found, it extracts the code and message to send to the client, ignoring
-// any outer wrapping, while logging the full error chain internally.
-func StatusErrorInterceptor(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
-	resp, err := handler(ctx, req)
-	if err != nil {
-		var statusErr interface {
-			GRPCStatus() *status.Status
-		}
-
-		if errors.As(err, &statusErr) {
-			st := statusErr.GRPCStatus()
-			slog.ErrorContext(ctx, "gRPC Error", slog.String("method", info.FullMethod), slog.Any("err", err))
-			return nil, status.Error(st.Code(), st.Message())
-		}
-
-		slog.ErrorContext(ctx, "Unexpected error", slog.String("method", info.FullMethod), slog.Any("err", err))
-		return nil, status.Error(codes.Internal, "internal server error")
-	}
-	return resp, nil
 }

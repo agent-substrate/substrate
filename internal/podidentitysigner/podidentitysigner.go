@@ -17,7 +17,6 @@ package podidentitysigner
 import (
 	"bytes"
 	"context"
-	"crypto"
 	"crypto/rand"
 	"crypto/x509"
 	"encoding/pem"
@@ -27,6 +26,7 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/localca"
+	"github.com/agent-substrate/substrate/internal/podcertificate"
 	"github.com/agent-substrate/substrate/internal/signercontroller"
 	certsv1beta1 "k8s.io/api/certificates/v1beta1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -100,10 +100,9 @@ func (h *Impl) MakeCert(ctx context.Context, pcr *certsv1beta1.PodCertificateReq
 		return fmt.Errorf("pod UID mismatch: expected %s, got %s", pcr.Spec.PodUID, pod.ObjectMeta.UID)
 	}
 
-	var subjectPublicKey crypto.PublicKey
-	subjectPublicKey, err = x509.ParsePKIXPublicKey(pcr.Spec.PKIXPublicKey)
+	subjectPublicKey, err := podcertificate.PublicKey(pcr)
 	if err != nil {
-		return fmt.Errorf("while parsing PKIX public key: %w", err)
+		return err
 	}
 
 	lifetime := 24 * time.Hour

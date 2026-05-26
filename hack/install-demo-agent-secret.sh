@@ -30,12 +30,12 @@ demo-agent-secret_cmdline() {
 demo-agent-secret_deploy() {
   log_step "demo-agent-secret_deploy"
   ensure_crds
-  sed "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" manifests/agent-secret/agent-secret.yaml.tmpl \
+  sed "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" demos/agent-secret/agent-secret.yaml.tmpl \
     | run_ko apply -f -
 }
 
 demo-agent-secret_delete() {
   log_step "demo-agent-secret_delete"
-  sed "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" manifests/agent-secret/agent-secret.yaml.tmpl \
+  sed "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" demos/agent-secret/agent-secret.yaml.tmpl \
     | run_kubectl delete --ignore-not-found -f -
 }

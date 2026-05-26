@@ -103,7 +103,7 @@ run_kubectl_ate() {
 }
 
 run_ko() {
-  ./hack/ko.sh \
+  ./hack/run-tool.sh ko \
     "$@" \
     -- ${KUBECTL_CONTEXT:+--context=${KUBECTL_CONTEXT}}
 }
@@ -238,6 +238,13 @@ deploy_ate_system() {
     manifests=$(run_ko resolve -f manifests/ate-install)
   fi
   echo "${manifests}" | run_kubectl apply -f -
+
+  log_step "Waiting for ATE system components to be ready..."
+  run_kubectl rollout status deployment/ate-api-server-deployment -n ate-system --timeout=120s
+  run_kubectl rollout status deployment/ate-controller -n ate-system --timeout=120s
+  run_kubectl rollout status deployment/atenet-router -n ate-system --timeout=120s
+  run_kubectl rollout status statefulset/valkey-cluster -n ate-system --timeout=120s
+  run_kubectl rollout status daemonset/atelet -n ate-system --timeout=120s
 }
 
 # Ensure secrets and configmaps required by ate-apiserver
@@ -267,6 +274,7 @@ deploy_ate_apiserver() {
   ensure_apiserver_prerequisites
 
   run_ko apply -f manifests/ate-install/ate-api-server.yaml
+  run_kubectl rollout status deployment/ate-api-server-deployment -n ate-system --timeout=120s
 }
 
 deploy_atelet() {
@@ -286,6 +294,7 @@ deploy_atelet() {
     manifest=$(run_ko resolve -f manifests/ate-install/atelet.yaml)
   fi
   echo "${manifest}" | run_kubectl apply -f -
+  run_kubectl rollout status daemonset/atelet -n ate-system --timeout=120s
 }
 
 deploy_atenet() {
@@ -298,14 +307,18 @@ deploy_atenet() {
 
   run_ko apply -f manifests/ate-install/atenet-router.yaml
   run_ko apply -f manifests/ate-install/atenet-dns.yaml
+  run_kubectl rollout status deployment/atenet-router -n ate-system --timeout=120s
+  run_kubectl rollout status deployment/atenet-dns -n ate-system --timeout=120s
 }
 
 delete_ate_system() {
   log_step "delete_ate_system"
-  if [[ "${ATE_INSTALL_RUSTFS:-false}" == "true" ]]; then
-    run_kubectl delete --ignore-not-found -f manifests/ate-install/kind/rustfs.yaml
+  if [[ "${ATE_INSTALL_KIND:-false}" == "true" ]]; then
+    kubectl kustomize manifests/ate-install/kind --load-restrictor LoadRestrictionsNone \
+      | run_kubectl delete --ignore-not-found -f -
+  else
+    run_kubectl delete --ignore-not-found -f manifests/ate-install
   fi
-  run_kubectl delete --ignore-not-found -f manifests/ate-install
   run_kubectl delete --ignore-not-found -f manifests/ate-install/generated
 }
 

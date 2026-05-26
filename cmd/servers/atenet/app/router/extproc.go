@@ -83,7 +83,7 @@ func (s *ExtProcServer) Process(stream extprocv3.ExternalProcessor_ProcessServer
 		switch reqType := req.Request.(type) {
 		case *extprocv3.ProcessingRequest_RequestHeaders:
 			start := time.Now()
-			hResponse, rqm, err := s.handleRequestHeaders(stream.Context(), reqType.RequestHeaders)
+			hResponse, rqm, target, err := s.handleRequestHeaders(stream.Context(), reqType.RequestHeaders)
 			if err != nil {
 				slog.ErrorContext(stream.Context(), "Error during ext_proc RequestHeaders processing", slog.String("err", err.Error()))
 				var reqErr *reqError
@@ -95,7 +95,7 @@ func (s *ExtProcServer) Process(stream extprocv3.ExternalProcessor_ProcessServer
 				s.recorder.AddRouterRequest(start, time.Since(start), "Error", "-", rqm)
 			} else {
 				resp.Response = &extprocv3.ProcessingResponse_RequestHeaders{RequestHeaders: hResponse}
-				s.recorder.AddRouterRequest(start, time.Since(start), "Route ok", "-", rqm)
+				s.recorder.AddRouterRequest(start, time.Since(start), "Route ok", target, rqm)
 			}
 
 		default:
@@ -118,14 +118,14 @@ func (s *ExtProcServer) Process(stream extprocv3.ExternalProcessor_ProcessServer
 func (s *ExtProcServer) handleRequestHeaders(
 	ctx context.Context,
 	reqHeaders *extprocv3.HttpHeaders,
-) (*extprocv3.HeadersResponse, *requestMetadata, error) {
+) (*extprocv3.HeadersResponse, *requestMetadata, string, error) {
 	metadata := newRequestMetadata(reqHeaders.Headers.GetHeaders())
 	slog.InfoContext(ctx, "Request", slog.String("metadata", metadata.String()))
 
 	actorID, err := parseActorID(metadata.host)
 	if err != nil {
 		// Host is invalid, respond with 404.
-		return nil, metadata, notFoundErr
+		return nil, metadata, "", notFoundErr
 	}
 
 	slog.InfoContext(ctx, "ResumeActor", slog.String("actorID", actorID))
@@ -137,12 +137,12 @@ func (s *ExtProcServer) handleRequestHeaders(
 		slog.Any("err", err))
 
 	if err != nil {
-		return nil, metadata, fmt.Errorf("error resuming actor %s: %w", actorID, err)
+		return nil, metadata, "", fmt.Errorf("error resuming actor %s: %w", actorID, err)
 	}
 
 	workerIP := actor.GetAteomPodIp()
 	if ip := net.ParseIP(workerIP); ip == nil {
-		return nil, metadata, fmt.Errorf("actor %q did not have a valid IP %q", actorID, workerIP)
+		return nil, metadata, "", fmt.Errorf("actor %q did not have a valid IP %q", actorID, workerIP)
 	}
 
 	// TODO(bowei) -- handle more than port 80 on the actor.
@@ -158,5 +158,5 @@ func (s *ExtProcServer) handleRequestHeaders(
 		Response: &extprocv3.CommonResponse{
 			HeaderMutation: mutation,
 		},
-	}, metadata, nil
+	}, metadata, targetAddr, nil
 }

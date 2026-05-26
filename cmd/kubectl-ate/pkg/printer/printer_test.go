@@ -101,6 +101,43 @@ func TestPrintActorsTo_YAML(t *testing.T) {
 	}
 }
 
+func TestPrintActorsTo_Table_Sorted(t *testing.T) {
+	var buf bytes.Buffer
+	actors := []*ateapipb.Actor{
+		{
+			ActorId:                "zebra",
+			ActorTemplateNamespace: "default",
+			ActorTemplateName:      "template-1",
+			Status:                 ateapipb.Actor_STATUS_SUSPENDED,
+		},
+		{
+			ActorId:                "alpha",
+			ActorTemplateNamespace: "default",
+			ActorTemplateName:      "template-1",
+			Status:                 ateapipb.Actor_STATUS_RUNNING,
+		},
+		{
+			ActorId:                "beta",
+			ActorTemplateNamespace: "other",
+			ActorTemplateName:      "template-2",
+			Status:                 ateapipb.Actor_STATUS_SUSPENDED,
+		},
+	}
+
+	if err := PrintActorsTo(&buf, actors, "table"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	expected := `NAMESPACE   TEMPLATE     ID      STATUS             ATEOM POD   ATEOM IP   VERSION
+default     template-1   alpha   STATUS_RUNNING     <none>                 0
+default     template-1   zebra   STATUS_SUSPENDED   <none>                 0
+other       template-2   beta    STATUS_SUSPENDED   <none>                 0
+`
+	if diff := cmp.Diff(expected, buf.String()); diff != "" {
+		t.Errorf("output mismatch (-want +got):\n%s", diff)
+	}
+}
+
 func TestPrintActorsTo_Invalid(t *testing.T) {
 	var buf bytes.Buffer
 	err := PrintActorsTo(&buf, nil, "xml")
@@ -154,6 +191,40 @@ func TestPrintWorkersTo_Table_Free(t *testing.T) {
 default     pool-1   pod-1   FREE     <none>
 `
 	if diff := cmp.Diff(expected, output); diff != "" {
+		t.Errorf("output mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestPrintWorkersTo_Table_Sorted(t *testing.T) {
+	var buf bytes.Buffer
+	workers := []*ateapipb.Worker{
+		{
+			WorkerNamespace: "default",
+			WorkerPool:      "pool-1",
+			WorkerPod:       "pod-z",
+		},
+		{
+			WorkerNamespace: "default",
+			WorkerPool:      "pool-1",
+			WorkerPod:       "pod-a",
+		},
+		{
+			WorkerNamespace: "other",
+			WorkerPool:      "pool-2",
+			WorkerPod:       "pod-1",
+		},
+	}
+
+	if err := PrintWorkersTo(&buf, workers, "table"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	expected := `NAMESPACE   POOL     POD     STATUS   ASSIGNED ACTOR
+default     pool-1   pod-a   FREE     <none>
+default     pool-1   pod-z   FREE     <none>
+other       pool-2   pod-1   FREE     <none>
+`
+	if diff := cmp.Diff(expected, buf.String()); diff != "" {
 		t.Errorf("output mismatch (-want +got):\n%s", diff)
 	}
 }

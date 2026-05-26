@@ -49,7 +49,7 @@ usage() {
 deploy() {
   echo "Deploying workloads..."
   sed "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" "${MANIFEST_TEMPLATE}" \
-    | hack/ko.sh apply -f -
+    | hack/run-tool.sh ko apply -f -
 }
 
 delete() {

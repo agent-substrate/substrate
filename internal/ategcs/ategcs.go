@@ -16,6 +16,7 @@ package ategcs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -50,9 +51,15 @@ func (g *gcsClient) GetObject(ctx context.Context, bucket, object string) (io.Re
 
 func (g *gcsClient) PutObject(ctx context.Context, bucket, object string, reader io.Reader) error {
 	wc := g.client.Bucket(bucket).Object(object).NewWriter(ctx)
-	defer wc.Close()
-	_, err := io.Copy(wc, reader)
-	return err
+	// io.Copy reports local read errors; wc.Close() reports the actual
+	// GCS upload (auth, permissions, transient). Join both so the caller
+	// doesn't lose either.
+	_, copyErr := io.Copy(wc, reader)
+	closeErr := wc.Close()
+	if err := errors.Join(copyErr, closeErr); err != nil {
+		return fmt.Errorf("while putting GCS object: %w", err)
+	}
+	return nil
 }
 
 type s3Client struct {
@@ -75,11 +82,6 @@ func (s *s3Client) GetObject(ctx context.Context, bucket, object string) (io.Rea
 }
 
 func (s *s3Client) PutObject(ctx context.Context, bucket, object string, reader io.Reader) error {
-	// Try creating the bucket first (ignore if it already exists)
-	_, _ = s.client.CreateBucket(ctx, &s3.CreateBucketInput{
-		Bucket: aws.String(bucket),
-	})
-
 	_, err := s.client.PutObject(ctx, &s3.PutObjectInput{
 		Bucket: aws.String(bucket),
 		Key:    aws.String(object),

@@ -15,7 +15,7 @@ It deploys a simple Go HTTP server (`counter.go`) that increments a counter on e
 ### 1. Build and Deploy
 
 > [!NOTE]
-> Do not manually edit `manifests/counter/counter.yaml.tmpl`. The installation script automatically injects your `${BUCKET_NAME}` environment variable during deployment.
+> Do not manually edit `demos/counter/counter.yaml.tmpl`. The installation script automatically injects your `${BUCKET_NAME}` environment variable during deployment.
 
 Use the core installation script to build the image and apply the resolved manifests to your cluster:
 

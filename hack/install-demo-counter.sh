@@ -30,12 +30,12 @@ demo-counter_cmdline() {
 demo-counter_deploy() {
   log_step "demo-counter_deploy"
   ensure_crds
-  sed "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" manifests/counter/counter.yaml.tmpl \
+  sed "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" demos/counter/counter.yaml.tmpl \
     | run_ko apply -f -
 }
 
 demo-counter_delete() {
   log_step "demo-counter_delete"
-  sed "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" manifests/counter/counter.yaml.tmpl \
+  sed "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" demos/counter/counter.yaml.tmpl \
     | run_kubectl delete --ignore-not-found -f -
 }

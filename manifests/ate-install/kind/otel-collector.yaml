@@ -38,6 +38,8 @@ data:
         endpoint: jaeger.otel-system.svc.cluster.local:4317
         tls:
           insecure: true
+      prometheus:
+        endpoint: 0.0.0.0:8889
       debug:
         verbosity: detailed
     service:
@@ -46,6 +48,10 @@ data:
           receivers: [otlp]
           processors: [batch]
           exporters: [otlp/jaeger, debug]
+        metrics:
+          receivers: [otlp]
+          processors: [batch]
+          exporters: [prometheus, debug]
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -77,6 +83,8 @@ spec:
           containerPort: 4317
         - name: otlp-http
           containerPort: 4318
+        - name: prom
+          containerPort: 8889
       volumes:
       - name: config
         configMap:
@@ -101,6 +109,9 @@ spec:
   - name: otlp-http
     port: 4318
     targetPort: 4318
+  - name: prom
+    port: 8889
+    targetPort: 8889
 ---
 apiVersion: apps/v1
 kind: Deployment

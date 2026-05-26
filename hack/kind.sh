@@ -17,4 +17,4 @@
 set -o errexit -o nounset -o pipefail
 
 ROOT=$(git rev-parse --show-toplevel)
-"${ROOT}"/hack/run-tool.sh ko "$@"
+"${ROOT}"/hack/run-tool.sh kind "$@"
