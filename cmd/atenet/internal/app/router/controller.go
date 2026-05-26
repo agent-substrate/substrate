@@ -31,9 +31,10 @@ type Controller struct {
 	cfg        RouterConfig
 	xdsSrv     *XdsServer
 	extprocSrv *ExtProcServer
+	provider   proxyProvider
 
 	atStore     atStore
-	envoyRunner *envoyrunner
+	proxyRunner *proxyrunner
 }
 
 func NewController(
@@ -42,8 +43,11 @@ func NewController(
 	cfg RouterConfig,
 	xdsSrv *XdsServer,
 	extprocSrv *ExtProcServer,
+	provider proxyProvider,
 ) *Controller {
-	xdsSrv.SetConfig(cfg.HttpPort, cfg.ExtprocPort, cfg.ExtprocAddr)
+	if xdsSrv != nil {
+		xdsSrv.SetConfig(cfg.HttpPort, cfg.ExtprocPort, cfg.ExtprocAddr)
+	}
 
 	var store atStore
 	if cfg.TemplatesFile != "" {
@@ -58,9 +62,10 @@ func NewController(
 		cfg:        cfg,
 		xdsSrv:     xdsSrv,
 		extprocSrv: extprocSrv,
+		provider:   provider,
 
 		atStore:     store,
-		envoyRunner: newEnvoyRunner(k8sClient, cfg),
+		proxyRunner: newProxyRunner(k8sClient, cfg, provider),
 	}
 }
 
@@ -92,16 +97,18 @@ func (c *Controller) reconcile(ctx context.Context) error {
 		return err
 	}
 
-	if err := c.xdsSrv.UpdateSnapshot(); err != nil {
-		slog.ErrorContext(ctx, "xDS Configuration generation problem", slog.String("err", err.Error()))
-		return err
+	if c.provider.RequiresXDS() {
+		if err := c.xdsSrv.UpdateSnapshot(); err != nil {
+			slog.ErrorContext(ctx, "xDS Configuration generation problem", slog.String("err", err.Error()))
+			return err
+		}
 	}
 
 	if !c.cfg.Standalone && c.cfg.TemplatesFile == "" {
-		// Reconcile Envoy router Deployment and Kubernetes cluster entities
-		err := c.envoyRunner.reconcile(ctx)
+		// Reconcile router proxy Deployment and Kubernetes cluster entities.
+		err := c.proxyRunner.reconcile(ctx)
 		if err != nil {
-			slog.ErrorContext(ctx, "Error during Envoy router reconciliation", slog.String("err", err.Error()))
+			slog.ErrorContext(ctx, "Error during router proxy reconciliation", slog.String("err", err.Error()))
 			return err
 		}
 	}

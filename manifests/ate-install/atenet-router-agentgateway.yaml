@@ -50,54 +50,56 @@ roleRef:
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: atenet-router-envoy-config
+  name: atenet-router-agentgateway-config
   namespace: ate-system
 data:
-  envoy.yaml: |
-    admin:
-      address:
-        socket_address:
-          address: 0.0.0.0
-          port_value: 9901
-
-    node:
-      id: substrate-envoy-node
-      cluster: substrate-router-cluster
-
-    dynamic_resources:
-      lds_config:
-        resource_api_version: V3
-        ads: {}
-      cds_config:
-        resource_api_version: V3
-        ads: {}
-      ads_config:
-        api_type: GRPC
-        transport_api_version: V3
-        grpc_services:
-        - envoy_grpc:
-            cluster_name: xds_cluster
-
-    static_resources:
-      clusters:
-      - name: xds_cluster
-        connect_timeout: 0.25s
-        type: STRICT_DNS
-        lb_policy: ROUND_ROBIN
-        typed_extension_protocol_options:
-          envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
-            "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
-            explicit_http_config:
-              http2_protocol_options: {}
-        load_assignment:
-          cluster_name: xds_cluster
-          endpoints:
-          - lb_endpoints:
-            - endpoint:
-                address:
-                  socket_address:
-                    address: 127.0.0.1
-                    port_value: 18000
+  config.yaml: |
+    binds:
+    - port: 8080
+      listeners:
+      - name: http
+        protocol: HTTP
+        routes:
+        - name: substrate-http
+          matches:
+          - path:
+              pathPrefix: /
+          policies:
+            extProc:
+              host: "127.0.0.1:50051"
+              processingOptions:
+                requestBodyMode: none
+                responseBodyMode: none
+                requestHeaderMode: send
+                responseHeaderMode: skip
+                requestTrailerMode: skip
+                responseTrailerMode: skip
+          backends:
+          - dynamic: {}
+    - port: 8443
+      listeners:
+      - name: https
+        protocol: HTTPS
+        tls:
+          cert: "/run/servicedns.podcert.ate.dev/cert.pem"
+          key: "/run/servicedns.podcert.ate.dev/key.pem"
+        routes:
+        - name: substrate-https
+          matches:
+          - path:
+              pathPrefix: /
+          policies:
+            extProc:
+              host: "127.0.0.1:50051"
+              processingOptions:
+                requestBodyMode: none
+                responseBodyMode: none
+                requestHeaderMode: send
+                responseHeaderMode: skip
+                requestTrailerMode: skip
+                responseTrailerMode: skip
+          backends:
+          - dynamic: {}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -122,56 +124,58 @@ spec:
         image: ko://github.com/agent-substrate/substrate/cmd/atenet
         args:
         - "router"
-        - "--networking-mode=envoy"
+        - "--networking-mode=agentgateway"
         - "--standalone"
         - "--namespace=ate-system"
         - "--port-http=8080"
-        - "--port-xds=18000"
         - "--port-extproc=50051"
         - "--extproc-address=127.0.0.1"
         - "--ateapi-address=api.ate-system.svc:443"
         - "--status-port=4040"
         - "--port-https=8443"
-        - "--tls-cert-path=/run/servicedns.podcert.ate.dev/credential-bundle.pem"
-        - "--tls-key-path=/run/servicedns.podcert.ate.dev/credential-bundle.pem"
+        - "--tls-cert-path=/run/servicedns.podcert.ate.dev/cert.pem"
+        - "--tls-key-path=/run/servicedns.podcert.ate.dev/key.pem"
         ports:
-        - name: xds
-          containerPort: 18000
         - name: extproc
           containerPort: 50051
         - name: status
           containerPort: 4040
-      - name: envoy
-        image: envoyproxy/envoy:v1.30-latest
-        command:
-        - "/usr/local/bin/envoy"
-        - "-c"
-        - "/etc/envoy/envoy.yaml"
-        - "--component-log-level"
-        - "upstream:debug,router:debug,ext_proc:debug"
+      - name: agentgateway
+        image: cr.agentgateway.dev/agentgateway:v1.3.0-alpha.1
+        args:
+        - "-f"
+        - "/etc/agentgateway/config.yaml"
         ports:
         - name: http
           containerPort: 8080
         - name: https
           containerPort: 8443
-        - name: admin
-          containerPort: 9901
+        - name: readiness
+          containerPort: 15021
+        - name: metrics
+          containerPort: 15020
+        readinessProbe:
+          httpGet:
+            path: /healthz/ready
+            port: 15021
+          periodSeconds: 10
         volumeMounts:
-        - name: envoy-config
-          mountPath: /etc/envoy
+        - name: agentgateway-config
+          mountPath: /etc/agentgateway
         - name: "servicedns"
           mountPath: "/run/servicedns.podcert.ate.dev"
       volumes:
-      - name: envoy-config
+      - name: agentgateway-config
         configMap:
-          name: atenet-router-envoy-config
+          name: atenet-router-agentgateway-config
       - name: "servicedns"
         projected:
           sources:
           - podCertificate:
               signerName: servicedns.podcert.ate.dev/identity
               keyType: ECDSAP256
-              credentialBundlePath: credential-bundle.pem
+              certificateChainPath: cert.pem
+              keyPath: key.pem
 ---
 apiVersion: v1
 kind: Service

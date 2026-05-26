@@ -17,10 +17,7 @@ package router
 import (
 	"context"
 	"fmt"
-	"io"
 	"log/slog"
-	"net/http"
-	"strings"
 	"sync"
 	"time"
 
@@ -38,9 +35,10 @@ type ComponentHealth struct {
 }
 
 type RouterHealthReport struct {
-	Envoy  ComponentHealth `json:"envoy"`
-	K8sAPI ComponentHealth `json:"k8s_api"`
-	AteAPI ComponentHealth `json:"ate_api"`
+	Proxy    ComponentHealth `json:"proxy"`
+	Provider string          `json:"provider"`
+	K8sAPI   ComponentHealth `json:"k8s_api"`
+	AteAPI   ComponentHealth `json:"ate_api"`
 }
 
 // routerHealth periodically checks the dependent services of router to track health
@@ -54,9 +52,10 @@ type routerHealth struct {
 	clientset kubernetes.Interface
 	apiClient ateapipb.ControlClient
 	cfg       RouterConfig
+	provider  proxyProvider
 }
 
-func newRouterHealth(interval time.Duration, clientset kubernetes.Interface, apiClient ateapipb.ControlClient, cfg RouterConfig) *routerHealth {
+func newRouterHealth(interval time.Duration, clientset kubernetes.Interface, apiClient ateapipb.ControlClient, cfg RouterConfig, provider proxyProvider) *routerHealth {
 	if interval <= 0 {
 		interval = time.Second
 	}
@@ -65,6 +64,7 @@ func newRouterHealth(interval time.Duration, clientset kubernetes.Interface, api
 		clientset: clientset,
 		apiClient: apiClient,
 		cfg:       cfg,
+		provider:  provider,
 	}
 }
 
@@ -91,20 +91,25 @@ func (rh *routerHealth) check(ctx context.Context) {
 
 	slog.InfoContext(ctx, "Checking health")
 
-	// 1. Check Envoy
+	// 1. Check configured proxy
 	{
-		healthy, msg := rh.checkEnvoy(ctx)
+		providerName := ""
+		if rh.provider != nil {
+			providerName = rh.provider.Name()
+			rh.report.Provider = providerName
+		}
+		healthy, msg := rh.checkProxy(ctx)
 		if healthy {
-			rh.report.Envoy.Healthy = true
-			rh.report.Envoy.Message = msg
-			rh.report.Envoy.LastSuccess = time.Now()
-			rh.report.Envoy.SuccessCount++
+			rh.report.Proxy.Healthy = true
+			rh.report.Proxy.Message = msg
+			rh.report.Proxy.LastSuccess = time.Now()
+			rh.report.Proxy.SuccessCount++
 		} else {
-			rh.report.Envoy.Healthy = false
-			rh.report.Envoy.Message = msg
-			rh.report.Envoy.LastFailure = time.Now()
-			rh.report.Envoy.FailureCount++
-			slog.ErrorContext(ctx, "Envoy health check failed", slog.String("msg", msg))
+			rh.report.Proxy.Healthy = false
+			rh.report.Proxy.Message = msg
+			rh.report.Proxy.LastFailure = time.Now()
+			rh.report.Proxy.FailureCount++
+			slog.ErrorContext(ctx, "Proxy health check failed", slog.String("provider", providerName), slog.String("msg", msg))
 		}
 	}
 
@@ -143,36 +148,11 @@ func (rh *routerHealth) check(ctx context.Context) {
 	}
 }
 
-func (rh *routerHealth) checkEnvoy(ctx context.Context) (bool, string) {
-	timeoutCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(timeoutCtx, "GET", "http://127.0.0.1:9901/ready", nil)
-	if err != nil {
-		return false, err.Error()
+func (rh *routerHealth) checkProxy(ctx context.Context) (bool, string) {
+	if rh.provider == nil {
+		return false, "No proxy provider"
 	}
-
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return false, err.Error()
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return false, fmt.Sprintf("unexpected status code %d", resp.StatusCode)
-	}
-
-	bodyBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return false, err.Error()
-	}
-
-	bodyStr := strings.TrimSpace(string(bodyBytes))
-	if bodyStr != "LIVE" {
-		return false, fmt.Sprintf("expected LIVE but got %q", bodyStr)
-	}
-
-	return true, "LIVE"
+	return rh.provider.CheckReady(ctx)
 }
 
 func (rh *routerHealth) checkK8s() (bool, string) {
