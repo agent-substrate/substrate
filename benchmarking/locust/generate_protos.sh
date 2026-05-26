@@ -25,7 +25,7 @@ if [[ -f .ate-dev-env.sh ]]; then
   source .ate-dev-env.sh
 fi
 
-PROTO_PATH="proto/ateapipb"
+PROTO_PATH="pkg/proto/ateapipb"
 PROTO_FILE="$PROTO_PATH/ateapi.proto"
 
 # Create and activate virtual environment if it doesn't exist

@@ -7,7 +7,7 @@ It takes the Kubernetes control-plane out of the critical path to achieve lower 
 Agent Substrate relies on the fact that agent-like applications tend to be idle most of the time to achieve heavy multiplexing.
 
 For development, it's recommended to read the `README.md` and `CONTRIBUTING.md` in the root folder.
-See `hack/install-ate.sh` and `cmd/setup` for provisioning and deploying clusters and GCP resources.
+See `hack/install-ate.sh` and `tools/setup-gcp` for provisioning and deploying clusters and GCP resources.
 
 ## Build and Test Commands
 
@@ -35,7 +35,7 @@ Agent Substrate uses a `Makefile` for its build and test tasks.
 1. Write tests for all new code. We will not merge code that lacks tests.
 2. Ensure changes do not break existing tests.
 3. Run `make verify` locally before requesting a code review to catch common issues like missed copyright headers or formatting drift.
-4. For end-to-end tests involving the actual infrastructure, ensure you have a running cluster (setup via `hack/ate-dev-env.sh.example` and `go run ./cmd/setup --all`).
+4. For end-to-end tests involving the actual infrastructure, ensure you have a running cluster (setup via `hack/ate-dev-env.sh.example` and `go run ./tools/setup-gcp --all`).
 
 ## Security Considerations
 

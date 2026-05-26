@@ -66,7 +66,7 @@ spec:
       serviceAccountName: atelet
       containers:
       - name: atelet
-        image: ko://github.com/agent-substrate/substrate/cmd/servers/atelet
+        image: ko://github.com/agent-substrate/substrate/cmd/atelet
         args:
         - --gcp-auth-for-image-pulls=true
         securityContext:

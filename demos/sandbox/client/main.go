@@ -29,7 +29,7 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/agent-substrate/substrate/proto/ateapipb"
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 )

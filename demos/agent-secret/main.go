@@ -25,7 +25,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/agent-substrate/substrate/proto/ateapipb"
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 )
@@ -121,7 +121,7 @@ func suspendSelf(id string) {
 	}
 
 	creds := credentials.NewTLS(&tls.Config{InsecureSkipVerify: true})
-	conn, err := grpc.Dial(apiAddr, grpc.WithTransportCredentials(creds))
+	conn, err := grpc.Dial(apiAddr, grpc.WithTransportCredentials(creds)) //nolint:staticcheck // SA1019: TODO migrate to grpc.NewClient.
 	if err != nil {
 		log.Printf("Failed to connect to ATE API: %v", err)
 		return

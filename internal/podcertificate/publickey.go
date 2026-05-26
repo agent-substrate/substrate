@@ -32,8 +32,8 @@ func PublicKey(pcr *certsv1beta1.PodCertificateRequest) (crypto.PublicKey, error
 		return csr.PublicKey, nil
 	}
 
-	if len(pcr.Spec.PKIXPublicKey) > 0 {
-		subjectPublicKey, err := x509.ParsePKIXPublicKey(pcr.Spec.PKIXPublicKey)
+	if len(pcr.Spec.PKIXPublicKey) > 0 { //nolint:staticcheck // SA1019: PKIXPublicKey kept for transition alongside StubPKCS10Request.
+		subjectPublicKey, err := x509.ParsePKIXPublicKey(pcr.Spec.PKIXPublicKey) //nolint:staticcheck // SA1019: same as above.
 		if err != nil {
 			return nil, fmt.Errorf("while parsing PKIX public key: %w", err)
 		}

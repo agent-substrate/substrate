@@ -49,7 +49,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/agent-substrate/substrate/proto/ateapipb"
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	corev1 "k8s.io/api/core/v1"
@@ -493,8 +493,6 @@ func handleGiveTask(w http.ResponseWriter, r *http.Request) {
 }
 
 func main() {
-	rand.Seed(time.Now().UnixNano())
-
 	port := envOr("PORT", defaultPort)
 
 	// Open the ateapi connection up front so the UI surfaces a clear

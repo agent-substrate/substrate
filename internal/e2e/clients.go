@@ -19,7 +19,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/agent-substrate/substrate/cmd/kubectl-ate/pkg/client"
+	"github.com/agent-substrate/substrate/internal/ateclient"
 	"github.com/agent-substrate/substrate/pkg/client/clientset/versioned"
 	apiextensionsclientset "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
 	"k8s.io/client-go/kubernetes"
@@ -29,7 +29,7 @@ type Clients struct {
 	K8s          *kubernetes.Clientset
 	CRD          *apiextensionsclientset.Clientset
 	SubstrateK8s *versioned.Clientset
-	SubstrateAPI *client.Client
+	SubstrateAPI *ateclient.Client
 }
 
 var sharedClients *Clients
@@ -45,7 +45,7 @@ func GetClients() *Clients {
 
 func NewClients(ctx context.Context) (*Clients, error) {
 	// Kube API
-	config, err := client.LoadConfig(KubeConfig, KubeContext)
+	config, err := ateclient.LoadConfig(KubeConfig, KubeContext)
 	if err != nil {
 		return nil, fmt.Errorf("LoadConfig error %q %s: %w", KubeConfig, KubeContext, err)
 	}
@@ -69,7 +69,7 @@ func NewClients(ctx context.Context) (*Clients, error) {
 	connectCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 
-	apiClient, err := client.NewClient(connectCtx, KubeConfig, KubeContext, "", false)
+	apiClient, err := ateclient.NewClient(connectCtx, KubeConfig, KubeContext, "", false)
 	if err != nil {
 		return nil, fmt.Errorf("NewClient: %w", err)
 	}
