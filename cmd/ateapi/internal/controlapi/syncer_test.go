@@ -23,6 +23,7 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -152,5 +153,64 @@ func TestSyncer_Lifecycle(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("Worker still found in Redis after deletion: %v", err)
+	}
+}
+
+func TestSyncer_DeleteBoundWorker_ClearsActor(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	persistence, fakeK8s, cleanup := setupSyncerTest(t, ctx)
+	defer cleanup()
+
+	ns, pool, pod, ip := "ns-orphan", "pool1", "worker-orphan", "10.0.0.1"
+	if _, err := fakeK8s.CoreV1().Pods(ns).Create(ctx, &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: pod, Namespace: ns,
+			Labels: map[string]string{workerPodLabel: pool}},
+		Status: corev1.PodStatus{Phase: corev1.PodRunning, PodIP: ip,
+			PodIPs: []corev1.PodIP{{IP: ip}}},
+	}, metav1.CreateOptions{}); err != nil {
+		t.Fatalf("create pod: %v", err)
+	}
+	if err := wait.PollUntilContextTimeout(ctx, 50*time.Millisecond, 2*time.Second, true, func(c context.Context) (bool, error) {
+		_, gerr := persistence.GetWorker(c, ns, pool, pod)
+		return gerr == nil, nil
+	}); err != nil {
+		t.Fatalf("worker row not materialised: %v", err)
+	}
+	actorID := "actor-orphan"
+	if err := persistence.CreateActor(ctx, &ateapipb.Actor{
+		ActorId: actorID, ActorTemplateNamespace: ns, ActorTemplateName: "tmpl",
+		Status:            ateapipb.Actor_STATUS_RUNNING,
+		AteomPodNamespace: ns, AteomPodName: pod, AteomPodIp: ip,
+		LastSnapshot: "gs://snapshots/last", InProgressSnapshot: "gs://snapshots/partial",
+	}); err != nil {
+		t.Fatalf("create actor: %v", err)
+	}
+	w, _ := persistence.GetWorker(ctx, ns, pool, pod)
+	w.ActorId, w.ActorNamespace, w.ActorTemplate = actorID, ns, "tmpl"
+	if err := persistence.UpdateWorker(ctx, w, w.Version); err != nil {
+		t.Fatalf("update worker: %v", err)
+	}
+
+	if err := fakeK8s.CoreV1().Pods(ns).Delete(ctx, pod, metav1.DeleteOptions{}); err != nil {
+		t.Fatalf("delete pod: %v", err)
+	}
+	var got *ateapipb.Actor
+	if err := wait.PollUntilContextTimeout(ctx, 50*time.Millisecond, 2*time.Second, true, func(c context.Context) (bool, error) {
+		a, gerr := persistence.GetActor(c, actorID)
+		if gerr != nil {
+			return false, gerr
+		}
+		got = a
+		return a.GetStatus() == ateapipb.Actor_STATUS_SUSPENDED, nil
+	}); err != nil {
+		t.Fatalf("actor not reset to SUSPENDED: %v", err)
+	}
+	if got.AteomPodName != "" || got.AteomPodNamespace != "" || got.AteomPodIp != "" || got.InProgressSnapshot != "" {
+		t.Errorf("bind fields not cleared: %+v", got)
+	}
+	if got.LastSnapshot == "" {
+		t.Errorf("LastSnapshot must be preserved")
 	}
 }

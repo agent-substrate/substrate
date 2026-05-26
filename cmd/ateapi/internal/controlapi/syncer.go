@@ -68,6 +68,9 @@ func (s *WorkerPoolSyncer) Start(ctx context.Context) {
 				return
 			}
 			slog.InfoContext(ctx, "Syncer: removing worker from store", slog.String("worker", pod.Namespace+"/"+pod.Name))
+			if err := s.releaseActorOnDeadWorker(ctx, pod.Namespace, pod.Labels[workerPodLabel], pod.Name); err != nil {
+				slog.ErrorContext(ctx, "Failed to release actor bound to deleted worker", slog.Any("err", err))
+			}
 			err := s.persistence.DeleteWorker(ctx, pod.Namespace, pod.Labels[workerPodLabel], pod.Name)
 			if err != nil {
 				slog.ErrorContext(ctx, "Failed to delete worker from store during delete event", slog.Any("err", err))
@@ -97,6 +100,9 @@ func (s *WorkerPoolSyncer) syncWorkerToStore(ctx context.Context, pod *corev1.Po
 
 	if pod.DeletionTimestamp != nil {
 		slog.InfoContext(ctx, "Syncer: removing worker from store (pod deleting)", slog.String("worker", pod.Namespace+"/"+pod.Name))
+		if err := s.releaseActorOnDeadWorker(ctx, pod.Namespace, pod.Labels[workerPodLabel], pod.Name); err != nil {
+			slog.ErrorContext(ctx, "Failed to release actor bound to soft-deleting worker", slog.Any("err", err))
+		}
 		err := s.persistence.DeleteWorker(ctx, pod.Namespace, pod.Labels[workerPodLabel], pod.Name)
 		if err != nil {
 			slog.ErrorContext(ctx, "Failed to delete worker from store during update event (deleting)", slog.Any("err", err))
@@ -135,4 +141,51 @@ func (s *WorkerPoolSyncer) syncWorkerToStore(ctx context.Context, pod *corev1.Po
 
 func isWorkerEligible(pod *corev1.Pod) bool {
 	return pod.Status.PodIP != ""
+}
+
+// releaseActorOnDeadWorker resets the actor bound to a vanishing worker
+// pod back to STATUS_SUSPENDED so the next request reassigns it.
+//
+// UpdateActor uses optimistic version checking. A concurrent SuspendActor
+// or ResumeActor wins; we drop this attempt silently.
+//
+// Best-effort only. The caller always proceeds to DeleteWorker after this
+// returns, so any non-contention failure leaves the actor stranded
+// (STATUS_RUNNING, pointer at a pod that no longer exists). Recovery
+// then needs a manual SuspendActor.
+//
+// The long-term fix is a finalizer-based controller that holds the pod
+// in Terminating state until the actor is gracefully suspended. Tracked
+// in https://github.com/agent-substrate/substrate/issues/23.
+func (s *WorkerPoolSyncer) releaseActorOnDeadWorker(ctx context.Context, namespace, pool, podName string) error {
+	worker, err := s.persistence.GetWorker(ctx, namespace, pool, podName)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil
+		}
+		return err
+	}
+	if worker.GetActorId() == "" {
+		return nil
+	}
+	actor, err := s.persistence.GetActor(ctx, worker.GetActorId())
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil
+		}
+		return err
+	}
+	// Skip if a concurrent SuspendActor already cleared the pointer.
+	if actor.GetAteomPodNamespace() != namespace || actor.GetAteomPodName() != podName {
+		return nil
+	}
+	actor.Status = ateapipb.Actor_STATUS_SUSPENDED
+	actor.AteomPodNamespace = ""
+	actor.AteomPodName = ""
+	actor.AteomPodIp = ""
+	actor.InProgressSnapshot = ""
+	if err := s.persistence.UpdateActor(ctx, actor, actor.GetVersion()); err != nil && !errors.Is(err, store.ErrPersistenceRetry) {
+		return err
+	}
+	return nil
 }
