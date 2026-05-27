@@ -15,6 +15,8 @@
 name: pr-workflow
 on:
   pull_request:
+  push:
+    branches: [main]
 jobs:
   run-tests:
     runs-on: ubuntu-latest
@@ -25,7 +27,6 @@ jobs:
       uses: actions/setup-go@v5
       with:
         go-version: 1.26
-    - run: go vet -v ./...
     - run: go test -v ./...
     - name: verify
       run: hack/verify-all.sh

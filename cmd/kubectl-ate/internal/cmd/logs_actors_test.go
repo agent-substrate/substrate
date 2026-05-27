@@ -36,61 +36,46 @@ func TestFilterAndDisplayLogLine(t *testing.T) {
 		name          string
 		line          string
 		targetActorID string
-		raw           bool
 		wantMatched   bool
 		wantTime      string
 		wantOutput    string
 	}{
 		{
-			name:          "matching actor, pretty printed with RFC3339Nano",
+			name:          "matching actor, JSON log with RFC3339Nano",
 			line:          `{"time":"2026-05-16T01:03:38.602878302Z","level":"info","msg":"Count","logging.googleapis.com/labels":{"ate.dev/actor_id":"act-1"}}`,
 			targetActorID: "act-1",
-			raw:           false,
 			wantMatched:   true,
 			wantTime:      "2026-05-16T01:03:38.602878302Z",
-			wantOutput:    `[2026-05-16 01:03:38] [INFO] Count`,
+			wantOutput:    `{"time":"2026-05-16T01:03:38.602878302Z","level":"info","msg":"Count"}`,
 		},
 		{
-			name:          "matching actor, pretty printed with message key",
-			line:          `{"time":"2026-05-16T01:03:38Z","level":"warn","message":"Hello","logging.googleapis.com/labels":{"ate.dev/actor_id":"act-1"}}`,
+			name:          "matching actor, plain text log",
+			line:          `{"time":"2026-05-16T01:03:38Z","message":"Hello","logging.googleapis.com/labels":{"ate.dev/actor_id":"act-1"}}`,
 			targetActorID: "act-1",
-			raw:           false,
 			wantMatched:   true,
 			wantTime:      "2026-05-16T01:03:38Z",
-			wantOutput:    `[2026-05-16 01:03:38] [WARN] Hello`,
+			wantOutput:    `{"time":"2026-05-16T01:03:38Z","message":"Hello"}`,
 		},
 		{
-			name:          "matching actor, pretty printed with no timestamp fallback",
+			name:          "matching actor, JSON log with no timestamp fallback",
 			line:          `{"level":"error","msg":"Failed","logging.googleapis.com/labels":{"ate.dev/actor_id":"act-1"}}`,
 			targetActorID: "act-1",
-			raw:           false,
 			wantMatched:   true,
 			wantTime:      "",
-			wantOutput:    `[ERROR] Failed`,
-		},
-		{
-			name:          "matching actor, raw output requested",
-			line:          `{"time":"2026-05-16T01:03:38.602878302Z","level":"info","msg":"Count","logging.googleapis.com/labels":{"ate.dev/actor_id":"act-1"}}`,
-			targetActorID: "act-1",
-			raw:           true,
-			wantMatched:   true,
-			wantTime:      "2026-05-16T01:03:38.602878302Z",
-			wantOutput:    `{"time":"2026-05-16T01:03:38.602878302Z","level":"info","msg":"Count","logging.googleapis.com/labels":{"ate.dev/actor_id":"act-1"}}`,
+			wantOutput:    `{"level":"error","msg":"Failed"}`,
 		},
 		{
 			name:          "matching actor, fallback to standard labels key",
 			line:          `{"time":"2026-05-16T01:03:38.602878302Z","level":"info","msg":"Count","labels":{"ate.dev/actor_id":"act-1"}}`,
 			targetActorID: "act-1",
-			raw:           false,
 			wantMatched:   true,
 			wantTime:      "2026-05-16T01:03:38.602878302Z",
-			wantOutput:    `[2026-05-16 01:03:38] [INFO] Count`,
+			wantOutput:    `{"time":"2026-05-16T01:03:38.602878302Z","level":"info","msg":"Count"}`,
 		},
 		{
 			name:          "non-matching actor",
 			line:          `{"time":"2026-05-16T01:03:38Z","message":"Hello world","logging.googleapis.com/labels":{"ate.dev/actor_id":"act-2"}}`,
 			targetActorID: "act-1",
-			raw:           false,
 			wantMatched:   false,
 			wantTime:      "2026-05-16T01:03:38Z",
 			wantOutput:    "",
@@ -99,26 +84,48 @@ func TestFilterAndDisplayLogLine(t *testing.T) {
 			name:          "invalid json line",
 			line:          "not a json line",
 			targetActorID: "act-1",
-			raw:           false,
 			wantMatched:   false,
 			wantTime:      "",
 			wantOutput:    "",
 		},
 		{
-			name:          "matching actor, pretty printed with non-standard JSON fields sorted and appended",
+			name:          "matching actor, flat JSON log",
 			line:          `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"Hello","traceID":"abc-123","err":"timeout","logging.googleapis.com/labels":{"ate.dev/actor_id":"act-1"}}`,
 			targetActorID: "act-1",
-			raw:           false,
 			wantMatched:   true,
 			wantTime:      "2026-05-16T01:03:38Z",
-			wantOutput:    `[2026-05-16 01:03:38] [INFO] Hello [err="timeout" traceID="abc-123"]`,
+			wantOutput:    `{"time":"2026-05-16T01:03:38Z","err":"timeout","level":"info","msg":"Hello","traceID":"abc-123"}`,
+		},
+		{
+			name:          "matching actor, severity and message keys",
+			line:          `{"time":"2026-05-16T01:03:38Z","severity":"error","message":"Disk full","custom_tag":"alert","logging.googleapis.com/labels":{"ate.dev/actor_id":"act-1"}}`,
+			targetActorID: "act-1",
+			wantMatched:   true,
+			wantTime:      "2026-05-16T01:03:38Z",
+			wantOutput:    `{"time":"2026-05-16T01:03:38Z","custom_tag":"alert","message":"Disk full","severity":"error"}`,
+		},
+		{
+			name:          "matching actor, 2-field structured log without time",
+			line:          `{"message":"login failed","code":401,"logging.googleapis.com/labels":{"ate.dev/actor_id":"act-1"}}`,
+			targetActorID: "act-1",
+			wantMatched:   true,
+			wantTime:      "",
+			wantOutput:    `{"code":401,"message":"login failed"}`,
+		},
+		{
+			name:          "matching actor, JSON log with custom application labels",
+			line:          `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"Hello","logging.googleapis.com/labels":{"ate.dev/actor_id":"act-1","app":"my-app"}}`,
+			targetActorID: "act-1",
+			wantMatched:   true,
+			wantTime:      "2026-05-16T01:03:38Z",
+			wantOutput:    `{"time":"2026-05-16T01:03:38Z","level":"info","logging.googleapis.com/labels":{"app":"my-app"},"msg":"Hello"}`,
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			var buf bytes.Buffer
-			logTime, matched := filterAndDisplayLogLine(tc.line, tc.targetActorID, &buf, tc.raw)
+			logTime, matched := filterAndDisplayLogLine(tc.line, tc.targetActorID, &buf)
 
 			if matched != tc.wantMatched {
 				t.Errorf("got matched = %v, want %v", matched, tc.wantMatched)
@@ -214,7 +221,6 @@ func TestLogsActorRunner_Run_OneShotSuccess(t *testing.T) {
 		stdout:    &stdout,
 		stderr:    &stderr,
 		follow:    false,
-		raw:       false,
 	}
 
 	err := runner.Run(context.Background(), actorID)
@@ -227,7 +233,7 @@ func TestLogsActorRunner_Run_OneShotSuccess(t *testing.T) {
 	}
 
 	gotOutput := strings.TrimSpace(stdout.String())
-	wantOutput := `[2026-05-16 01:03:38] [INFO] Hello world`
+	wantOutput := `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"Hello world"}`
 	if gotOutput != wantOutput {
 		t.Errorf("got stdout %q, want %q", gotOutput, wantOutput)
 	}
@@ -348,7 +354,6 @@ func TestLogsActorRunner_Run_Follow_SuspendedToRunning(t *testing.T) {
 		stdout:            &stdout,
 		stderr:            &stderr,
 		follow:            true,
-		raw:               false,
 		pollInterval:      1 * time.Millisecond,
 		reconnectInterval: 1 * time.Millisecond,
 		tickerInterval:    1 * time.Millisecond,
@@ -370,7 +375,7 @@ func TestLogsActorRunner_Run_Follow_SuspendedToRunning(t *testing.T) {
 	}
 
 	gotStdout := strings.TrimSpace(stdout.String())
-	wantStdout := `[2026-05-16 01:03:38] [INFO] Follow hello`
+	wantStdout := `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"Follow hello"}`
 	if gotStdout != wantStdout {
 		t.Errorf("got stdout %q, want %q", gotStdout, wantStdout)
 	}

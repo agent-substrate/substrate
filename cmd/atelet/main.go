@@ -24,7 +24,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
-	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -35,25 +34,16 @@ import (
 	"github.com/agent-substrate/substrate/internal/ategcs"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/ateompath"
-	"github.com/agent-substrate/substrate/internal/contextlogging"
 	"github.com/agent-substrate/substrate/internal/memorypullcache"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/google/go-containerregistry/pkg/authn"
 	googlecontainerauth "github.com/google/go-containerregistry/pkg/v1/google"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
-	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
-	"go.opentelemetry.io/otel/exporters/prometheus"
-	"go.opentelemetry.io/otel/propagation"
-	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
-	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	semconv "go.opentelemetry.io/otel/semconv/v1.21.0"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/api/option"
 	"google.golang.org/grpc"
@@ -73,38 +63,24 @@ var (
 func main() {
 	flag.Parse()
 	ctx := context.Background()
-	slog.SetDefault(slog.New(contextlogging.NewHandler(slog.NewJSONHandler(os.Stdout, nil))))
+	serverboot.InitLogger()
 
-	tp, err := initTracing(ctx)
+	tp, err := serverboot.InitTracing(ctx, serverboot.TracingOptions{
+		ServiceName: "atelet",
+		Sampler:     sdktrace.ParentBased(sdktrace.NeverSample()),
+	})
 	if err != nil {
-		slog.ErrorContext(ctx, "Failed to initialize tracing", slog.Any("err", err))
-		os.Exit(1)
+		serverboot.Fatal(ctx, "Failed to initialize tracing", err)
 	}
-	defer func() {
-		if err := tp.Shutdown(context.Background()); err != nil {
-			slog.Error("Failed to shutdown TracerProvider", slog.Any("err", err))
-		}
-	}()
+	defer serverboot.ShutdownProvider("TracerProvider", tp.Shutdown)
 
-	mp, err := initMetrics(ctx)
+	mp, err := serverboot.InitMetrics(ctx, "atelet")
 	if err != nil {
-		slog.ErrorContext(ctx, "Failed to initialize metrics", slog.Any("err", err))
-		os.Exit(1)
+		serverboot.Fatal(ctx, "Failed to initialize metrics", err)
 	}
-	defer func() {
-		if err := mp.Shutdown(context.Background()); err != nil {
-			slog.Error("Failed to shutdown MeterProvider", slog.Any("err", err))
-		}
-	}()
+	defer serverboot.ShutdownProvider("MeterProvider", mp.Shutdown)
 
-	go func() {
-		mux := http.NewServeMux()
-		mux.Handle("/metrics", promhttp.Handler())
-		slog.InfoContext(ctx, fmt.Sprintf("Starting Prometheus metrics server on %s", *metricsListenAddr))
-		if err := http.ListenAndServe(*metricsListenAddr, mux); err != nil {
-			slog.Error("Failed to start prometheus metrics server", slog.Any("err", err))
-		}
-	}()
+	go serverboot.StartMetricsServer(ctx, serverboot.MetricsServerOptions{Addr: *metricsListenAddr})
 
 	ateomDialer := &AteomDialer{
 		conns: lru.New(256),
@@ -114,21 +90,18 @@ func main() {
 	if *gcpAuthForImagePulls {
 		gcpRegistryAuthn, err = googlecontainerauth.NewEnvAuthenticator(ctx)
 		if err != nil {
-			slog.ErrorContext(ctx, "Failed to create GCP registry authenticator", slog.Any("err", err))
-			os.Exit(1)
+			serverboot.Fatal(ctx, "Failed to create GCP registry authenticator", err)
 		}
 	}
 
 	pullCache, err := memorypullcache.NewMemoryPullCache(ctx, gcpRegistryAuthn, *localhostRegistryReplacement)
 	if err != nil {
-		slog.ErrorContext(ctx, "Failed to create pull cache", slog.Any("err", err))
-		os.Exit(1)
+		serverboot.Fatal(ctx, "Failed to create pull cache", err)
 	}
 
 	anonGCSClient, err := storage.NewClient(ctx, option.WithoutAuthentication())
 	if err != nil {
-		slog.ErrorContext(ctx, "Failed to create anonymous GCS client", slog.Any("err", err))
-		os.Exit(1)
+		serverboot.Fatal(ctx, "Failed to create anonymous GCS client", err)
 	}
 
 	var gcsClient *storage.Client
@@ -141,8 +114,7 @@ func main() {
 		// these will need to be set on the atelet pods
 		cfg, err := config.LoadDefaultConfig(ctx)
 		if err != nil {
-			slog.ErrorContext(ctx, "Failed to load S3 config", slog.Any("err", err))
-			os.Exit(1)
+			serverboot.Fatal(ctx, "Failed to load S3 config", err)
 		}
 		s3Client = s3.NewFromConfig(cfg, func(o *s3.Options) {
 			if usePathStyle := os.Getenv("AWS_S3_USE_PATH_STYLE"); usePathStyle == "true" {
@@ -153,8 +125,7 @@ func main() {
 	default:
 		gcsClient, err = storage.NewClient(ctx)
 		if err != nil {
-			slog.ErrorContext(ctx, "Failed to create GCS client", slog.Any("err", err))
-			os.Exit(1)
+			serverboot.Fatal(ctx, "Failed to create GCS client", err)
 		}
 	}
 
@@ -180,8 +151,7 @@ func main() {
 
 	lis, err := net.Listen("tcp", ":"+strconv.Itoa(*port))
 	if err != nil {
-		slog.ErrorContext(ctx, "Failed to listen", slog.Any("err", err))
-		os.Exit(1)
+		serverboot.Fatal(ctx, "Failed to listen", err)
 	}
 
 	svr := grpc.NewServer(grpc.StatsHandler(otelgrpc.NewServerHandler()), grpc.UnaryInterceptor(ateinterceptors.ServerUnaryInterceptor))
@@ -189,74 +159,8 @@ func main() {
 	reflection.Register(svr)
 	slog.InfoContext(ctx, "WorkersManagerService listening", slog.Any("address", lis.Addr()))
 	if err := svr.Serve(lis); err != nil {
-		slog.ErrorContext(ctx, "Failed to serve", slog.Any("err", err))
-		os.Exit(1)
+		serverboot.Fatal(ctx, "Failed to serve", err)
 	}
-}
-
-func initTracing(ctx context.Context) (*sdktrace.TracerProvider, error) {
-	exporter, err := otlptracegrpc.New(ctx,
-		// GKE managed traces doesn't support validating the TLS certs of the collector
-		otlptracegrpc.WithInsecure(),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create OTLP exporter: %w", err)
-	}
-
-	res, err := resource.New(ctx,
-		resource.WithAttributes(
-			semconv.ServiceName("atelet"),
-		),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create resource: %w", err)
-	}
-
-	tp := sdktrace.NewTracerProvider(
-		sdktrace.WithBatcher(exporter),
-		sdktrace.WithResource(res),
-		// Only trace on-demand when signaled by the client (e.g. via --trace flag)
-		sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.NeverSample())),
-	)
-	otel.SetTracerProvider(tp)
-	otel.SetTextMapPropagator(propagation.TraceContext{})
-
-	return tp, nil
-}
-
-func initMetrics(ctx context.Context) (*sdkmetric.MeterProvider, error) {
-	// Prometheus Exporter
-	promExporter, err := prometheus.New()
-	if err != nil {
-		return nil, fmt.Errorf("failed to create Prometheus metric exporter: %w", err)
-	}
-
-	// OTLP Exporter
-	otlpExporter, err := otlpmetricgrpc.New(ctx,
-		otlpmetricgrpc.WithInsecure(),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create OTLP metric exporter: %w", err)
-	}
-
-	res, err := resource.New(ctx,
-		resource.WithAttributes(
-			semconv.ServiceName("atelet"),
-		),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create resource: %w", err)
-	}
-
-	mp := sdkmetric.NewMeterProvider(
-		// Register both readers
-		sdkmetric.WithReader(promExporter),
-		sdkmetric.WithReader(sdkmetric.NewPeriodicReader(otlpExporter)),
-		sdkmetric.WithResource(res),
-	)
-	otel.SetMeterProvider(mp)
-
-	return mp, nil
 }
 
 // AteomHerder is a service that allows controlling workloads on individual
@@ -358,109 +262,36 @@ func (s *AteomHerder) fetchRunsc(ctx context.Context, cfg *ateletpb.RunscConfig)
 }
 
 func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (*ateletpb.RunResponse, error) {
-	// Create static files dir if it doesn't exist.
-	if err := os.MkdirAll(ateompath.StaticFilesDir, 0o700); err != nil {
-		return nil, fmt.Errorf("while creating static files dir: %w", err)
-	}
-
-	// Download correct runsc version if not already downloaded.
-	runscPath, err := s.fetchRunsc(ctx, req.GetRunsc())
+	runscPath, err := s.fetchRunscAndPrep(ctx, req.GetRunsc())
 	if err != nil {
-		return nil, fmt.Errorf("in fetchRunsc: %w", err)
+		return nil, err
 	}
 
-	// Clear actor state
 	if err := resetActorDirs(req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId()); err != nil {
 		return nil, fmt.Errorf("while resetting actor dirs: %w", err)
 	}
 
-	netnsPath := ateompath.AteomNetNSPath(req.GetTargetAteomNamespace(), req.GetTargetAteomName())
-
-	g, gCtx := errgroup.WithContext(ctx)
-
-	// Pull pause container and assemble OCI bundle
-	g.Go(func() error {
-		if err := prepareOCIDirectory(
-			gCtx,
-			s.pullCache,
-			req.GetActorTemplateNamespace(),
-			req.GetActorTemplateName(),
-			req.GetActorId(),
-			"pause",
-			req.GetSpec().GetPauseImage(),
-			[]string{"/pause"},
-			nil,
-			map[string]string{
-				"io.kubernetes.cri.container-type": "sandbox",
-				"io.kubernetes.cri.container-name": "pause",
-			},
-			netnsPath,
-		); err != nil {
-			return fmt.Errorf("while creating pause OCI bundle: %w", err)
-		}
-		return nil
-	})
-
-	// Pull each application container and assemble OCI bundle
-	for _, ctr := range req.GetSpec().GetContainers() {
-		ctr := ctr
-		var envs []string
-		for _, env := range ctr.GetEnv() {
-			envs = append(envs, fmt.Sprintf("%s=%s", env.GetName(), env.GetValue()))
-		}
-
-		g.Go(func() error {
-			if err := prepareOCIDirectory(
-				gCtx,
-				s.pullCache,
-				req.GetActorTemplateNamespace(),
-				req.GetActorTemplateName(),
-				req.GetActorId(),
-				ctr.GetName(),
-				ctr.GetImage(),
-				ctr.GetCommand(),
-				envs,
-				map[string]string{
-					"io.kubernetes.cri.container-type": "container",
-					"io.kubernetes.cri.sandbox-id":     "pause",
-					"io.kubernetes.cri.container-name": ctr.GetName(),
-				},
-				netnsPath,
-			); err != nil {
-				return fmt.Errorf("while creating %q OCI bundle: %w", ctr.GetName(), err)
-			}
-			return nil
-		})
-	}
-
-	if err := g.Wait(); err != nil {
+	if err := s.prepareOCIBundles(ctx,
+		req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId(),
+		req.GetSpec(), req.GetTargetAteomNamespace(), req.GetTargetAteomName(),
+	); err != nil {
 		return nil, err
 	}
 
-	// Dial correct ateom over UDS.
-	ateomConn, err := s.ateomDialer.DialAteomPod(ctx, req.GetTargetAteomNamespace(), req.GetTargetAteomName())
+	client, err := s.dialAteom(ctx, req.GetTargetAteomNamespace(), req.GetTargetAteomName())
 	if err != nil {
-		return nil, fmt.Errorf("while getting ateom conn for %s/%s: %w", req.GetTargetAteomNamespace(), req.GetTargetAteomName(), err)
+		return nil, err
 	}
-	client := ateompb.NewAteomClient(ateomConn)
 
 	// Tell ateom to do runsc create + runsc start for pause container and
 	// all application containers.
-	ateomReq := &ateompb.RunWorkloadRequest{
+	if _, err := client.RunWorkload(ctx, &ateompb.RunWorkloadRequest{
 		ActorTemplateNamespace: req.GetActorTemplateNamespace(),
 		ActorTemplateName:      req.GetActorTemplateName(),
 		ActorId:                req.GetActorId(),
 		RunscPath:              runscPath,
-		Spec:                   &ateompb.WorkloadSpec{},
-	}
-	for _, ctr := range req.GetSpec().GetContainers() {
-		ateomCtr := &ateompb.Container{
-			Name: ctr.GetName(),
-		}
-		ateomReq.GetSpec().Containers = append(ateomReq.GetSpec().Containers, ateomCtr)
-	}
-	_, err = client.RunWorkload(ctx, ateomReq)
-	if err != nil {
+		Spec:                   buildAteomWorkloadSpec(req.GetSpec()),
+	}); err != nil {
 		return nil, fmt.Errorf("while calling ateom.RunWorkload: %w", err)
 	}
 
@@ -468,25 +299,17 @@ func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (*atele
 }
 
 func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest) (*ateletpb.CheckpointResponse, error) {
-	// Create static files dir if it doesn't exist.
-	if err := os.MkdirAll(ateompath.StaticFilesDir, 0o700); err != nil {
-		return nil, fmt.Errorf("while creating static files dir: %w", err)
-	}
-
-	// Download correct runsc version if not already downloaded.
-	runscPath, err := s.fetchRunsc(ctx, req.GetRunsc())
+	runscPath, err := s.fetchRunscAndPrep(ctx, req.GetRunsc())
 	if err != nil {
-		return nil, fmt.Errorf("in fetchRunsc: %w", err)
+		return nil, err
 	}
 
 	checkpointDir := ateompath.CheckpointDir(req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId())
 
-	// Dial correct ateom over UDS.
-	ateomConn, err := s.ateomDialer.DialAteomPod(ctx, req.GetTargetAteomNamespace(), req.GetTargetAteomName())
+	client, err := s.dialAteom(ctx, req.GetTargetAteomNamespace(), req.GetTargetAteomName())
 	if err != nil {
-		return nil, fmt.Errorf("while getting ateom conn for %s/%s: %w", req.GetTargetAteomNamespace(), req.GetTargetAteomName(), err)
+		return nil, err
 	}
-	client := ateompb.NewAteomClient(ateomConn)
 
 	// TODO(ateom): Once we enable background restore, we need `runsc wait
 	// --restore pause` here, so that we know that gVisor is done with the
@@ -501,63 +324,41 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 	}
 
 	// Tell ateom to take checkpoint and delete containers.
-	ateomReq := &ateompb.CheckpointWorkloadRequest{
+	if _, err := client.CheckpointWorkload(ctx, &ateompb.CheckpointWorkloadRequest{
 		ActorTemplateNamespace: req.GetActorTemplateNamespace(),
 		ActorTemplateName:      req.GetActorTemplateName(),
 		ActorId:                req.GetActorId(),
 		RunscPath:              runscPath,
-		Spec:                   &ateompb.WorkloadSpec{},
-	}
-	for _, ctr := range req.GetSpec().GetContainers() {
-		ateomCtr := &ateompb.Container{
-			Name: ctr.GetName(),
-		}
-		ateomReq.GetSpec().Containers = append(ateomReq.GetSpec().Containers, ateomCtr)
-	}
-	_, err = client.CheckpointWorkload(ctx, ateomReq)
-	if err != nil {
+		Spec:                   buildAteomWorkloadSpec(req.GetSpec()),
+	}); err != nil {
 		return nil, fmt.Errorf("while calling ateom.CheckpointWorkload: %w", err)
 	}
 
+	prefix := strings.TrimSuffix(req.GetSnapshotUriPrefix(), "/")
+	ns, tmpl, actorID := req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId()
+
 	// Upload checkpoint from local dir.
-	err = ategcs.SendLocalFileToGCSWithZstd(
-		ctx,
-		s.gcsClient,
-		strings.TrimSuffix(req.GetSnapshotUriPrefix(), "/")+"/checkpoint.img.zstd",
-		ateompath.CheckpointImgPath(req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId()),
-	)
-	if err != nil {
+	if err := ategcs.SendLocalFileToGCSWithZstd(ctx, s.gcsClient,
+		prefix+"/checkpoint.img.zstd",
+		ateompath.CheckpointImgPath(ns, tmpl, actorID),
+	); err != nil {
 		return nil, fmt.Errorf("while uploading checkpoint.img to GCS: %w", err)
 	}
 
-	pagesImgPath := ateompath.PagesImgPath(req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId())
-	if _, err := os.Stat(pagesImgPath); err == nil { // EQUALS nil
-		err = ategcs.SendLocalFileToGCSWithZstd(
-			ctx,
-			s.gcsClient,
-			strings.TrimSuffix(req.GetSnapshotUriPrefix(), "/")+"/pages.img.zstd",
-			pagesImgPath,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("while uploading pages.img to GCS: %w", err)
-		}
+	if err := uploadIfExists(ctx, s.gcsClient,
+		prefix+"/pages.img.zstd",
+		ateompath.PagesImgPath(ns, tmpl, actorID),
+	); err != nil {
+		return nil, err
+	}
+	if err := uploadIfExists(ctx, s.gcsClient,
+		prefix+"/pages_meta.img.zstd",
+		ateompath.PagesMetaImgPath(ns, tmpl, actorID),
+	); err != nil {
+		return nil, err
 	}
 
-	pagesMetaImgPath := ateompath.PagesMetaImgPath(req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId())
-	if _, err := os.Stat(pagesMetaImgPath); err == nil { // EQUALS nil
-		err = ategcs.SendLocalFileToGCSWithZstd(
-			ctx,
-			s.gcsClient,
-			strings.TrimSuffix(req.GetSnapshotUriPrefix(), "/")+"/pages_meta.img.zstd",
-			pagesMetaImgPath,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("while uploading pages_meta.img to GCS: %w", err)
-		}
-	}
-
-	// Clear actor state
-	if err := resetActorDirs(req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId()); err != nil {
+	if err := resetActorDirs(ns, tmpl, actorID); err != nil {
 		return nil, fmt.Errorf("while resetting actor dirs: %w", err)
 	}
 
@@ -565,78 +366,96 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 }
 
 func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (*ateletpb.RestoreResponse, error) {
-	// Create static files dir if it doesn't exist.
-	if err := os.MkdirAll(ateompath.StaticFilesDir, 0o700); err != nil {
-		return nil, fmt.Errorf("while creating static files dir: %w", err)
-	}
-
-	// Download correct runsc version if not already downloaded.
-	runscPath, err := s.fetchRunsc(ctx, req.GetRunsc())
+	runscPath, err := s.fetchRunscAndPrep(ctx, req.GetRunsc())
 	if err != nil {
-		return nil, fmt.Errorf("in fetchRunsc: %w", err)
+		return nil, err
 	}
 
-	// Clear actor state
-	if err := resetActorDirs(req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId()); err != nil {
+	ns, tmpl, actorID := req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId()
+
+	if err := resetActorDirs(ns, tmpl, actorID); err != nil {
 		return nil, fmt.Errorf("while resetting actor dirs: %w", err)
 	}
 
+	prefix := strings.TrimSuffix(req.GetSnapshotUriPrefix(), "/")
 	g, gCtx := errgroup.WithContext(ctx)
-
-	g.Go(func() error {
-		if err := ategcs.FetchLocalFileFromGCSWithZstd(
-			gCtx,
-			s.gcsClient,
-			strings.TrimSuffix(req.GetSnapshotUriPrefix(), "/")+"/checkpoint.img.zstd",
-			ateompath.CheckpointImgPath(req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId()),
-		); err != nil {
-			return fmt.Errorf("while downloading checkpoint.img from GCS: %w", err)
-		}
-		return nil
-	})
-
-	g.Go(func() error {
-		if err := ategcs.FetchLocalFileFromGCSWithZstd(
-			gCtx,
-			s.gcsClient,
-			strings.TrimSuffix(req.GetSnapshotUriPrefix(), "/")+"/pages.img.zstd",
-			ateompath.PagesImgPath(req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId()),
-		); err != nil {
-			return fmt.Errorf("while downloading pages.img from GCS: %w", err)
-		}
-		return nil
-	})
-
-	g.Go(func() error {
-		if err := ategcs.FetchLocalFileFromGCSWithZstd(
-			gCtx,
-			s.gcsClient,
-			strings.TrimSuffix(req.GetSnapshotUriPrefix(), "/")+"/pages_meta.img.zstd",
-			ateompath.PagesMetaImgPath(req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId()),
-		); err != nil {
-			return fmt.Errorf("while downloading pages_meta.img from GCS: %w", err)
-		}
-		return nil
-	})
-
+	for _, dl := range []struct{ remote, local string }{
+		{prefix + "/checkpoint.img.zstd", ateompath.CheckpointImgPath(ns, tmpl, actorID)},
+		{prefix + "/pages.img.zstd", ateompath.PagesImgPath(ns, tmpl, actorID)},
+		{prefix + "/pages_meta.img.zstd", ateompath.PagesMetaImgPath(ns, tmpl, actorID)},
+	} {
+		dl := dl
+		g.Go(func() error {
+			if err := ategcs.FetchLocalFileFromGCSWithZstd(gCtx, s.gcsClient, dl.remote, dl.local); err != nil {
+				return fmt.Errorf("while downloading %s from GCS: %w", filepath.Base(dl.remote), err)
+			}
+			return nil
+		})
+	}
 	if err := g.Wait(); err != nil {
 		return nil, err
 	}
 
-	netnsPath := ateompath.AteomNetNSPath(req.GetTargetAteomNamespace(), req.GetTargetAteomName())
+	if err := s.prepareOCIBundles(ctx, ns, tmpl, actorID,
+		req.GetSpec(), req.GetTargetAteomNamespace(), req.GetTargetAteomName(),
+	); err != nil {
+		return nil, err
+	}
 
-	g, gCtx = errgroup.WithContext(ctx)
+	client, err := s.dialAteom(ctx, req.GetTargetAteomNamespace(), req.GetTargetAteomName())
+	if err != nil {
+		return nil, err
+	}
 
-	// Pull pause container and assemble OCI bundle
+	// Tell ateom to do runsc create + runsc restore for pause container and
+	// all application containers.
+	if _, err := client.RestoreWorkload(ctx, &ateompb.RestoreWorkloadRequest{
+		ActorTemplateNamespace: ns,
+		ActorTemplateName:      tmpl,
+		ActorId:                actorID,
+		RunscPath:              runscPath,
+		Spec:                   buildAteomWorkloadSpec(req.GetSpec()),
+	}); err != nil {
+		return nil, fmt.Errorf("while calling ateom.RestoreWorkload: %w", err)
+	}
+
+	return &ateletpb.RestoreResponse{}, nil
+}
+
+// fetchRunscAndPrep ensures the static files dir exists and downloads the
+// runsc binary at the version pinned by the request. Returns the local
+// runsc path.
+func (s *AteomHerder) fetchRunscAndPrep(ctx context.Context, runscCfg *ateletpb.RunscConfig) (string, error) {
+	if err := os.MkdirAll(ateompath.StaticFilesDir, 0o700); err != nil {
+		return "", fmt.Errorf("while creating static files dir: %w", err)
+	}
+	runscPath, err := s.fetchRunsc(ctx, runscCfg)
+	if err != nil {
+		return "", fmt.Errorf("in fetchRunsc: %w", err)
+	}
+	return runscPath, nil
+}
+
+// prepareOCIBundles pulls images and assembles OCI bundles for the pause
+// container and every application container in spec, in parallel.
+func (s *AteomHerder) prepareOCIBundles(
+	ctx context.Context,
+	actorTemplateNamespace, actorTemplateName, actorID string,
+	spec *ateletpb.WorkloadSpec,
+	targetAteomNamespace, targetAteomName string,
+) error {
+	netnsPath := ateompath.AteomNetNSPath(targetAteomNamespace, targetAteomName)
+
+	g, gCtx := errgroup.WithContext(ctx)
+
+	// Pause container.
 	g.Go(func() error {
 		if err := prepareOCIDirectory(
 			gCtx,
 			s.pullCache,
-			req.GetActorTemplateNamespace(),
-			req.GetActorTemplateName(),
-			req.GetActorId(),
+			actorTemplateNamespace, actorTemplateName, actorID,
 			"pause",
-			req.GetSpec().GetPauseImage(),
+			spec.GetPauseImage(),
 			[]string{"/pause"},
 			nil,
 			map[string]string{
@@ -650,21 +469,18 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		return nil
 	})
 
-	// Pull each application container and assemble OCI bundle
-	for _, ctr := range req.GetSpec().GetContainers() {
+	// Application containers.
+	for _, ctr := range spec.GetContainers() {
 		ctr := ctr
 		var envs []string
 		for _, env := range ctr.GetEnv() {
 			envs = append(envs, fmt.Sprintf("%s=%s", env.GetName(), env.GetValue()))
 		}
-
 		g.Go(func() error {
 			if err := prepareOCIDirectory(
 				gCtx,
 				s.pullCache,
-				req.GetActorTemplateNamespace(),
-				req.GetActorTemplateName(),
-				req.GetActorId(),
+				actorTemplateNamespace, actorTemplateName, actorID,
 				ctr.GetName(),
 				ctr.GetImage(),
 				ctr.GetCommand(),
@@ -682,38 +498,40 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		})
 	}
 
-	if err := g.Wait(); err != nil {
-		return nil, err
-	}
+	return g.Wait()
+}
 
-	// Dial correct ateom over UDS.
-	ateomConn, err := s.ateomDialer.DialAteomPod(ctx, req.GetTargetAteomNamespace(), req.GetTargetAteomName())
+// dialAteom opens (or reuses) the gRPC connection to the target ateom
+// pod and returns an ateom client.
+func (s *AteomHerder) dialAteom(ctx context.Context, namespace, name string) (ateompb.AteomClient, error) {
+	conn, err := s.ateomDialer.DialAteomPod(ctx, namespace, name)
 	if err != nil {
-		return nil, fmt.Errorf("while getting ateom conn for %s/%s: %w", req.GetTargetAteomNamespace(), req.GetTargetAteomName(), err)
+		return nil, fmt.Errorf("while getting ateom conn for %s/%s: %w", namespace, name, err)
 	}
-	client := ateompb.NewAteomClient(ateomConn)
+	return ateompb.NewAteomClient(conn), nil
+}
 
-	// Tell ateom to do runsc create + runsc restore for pause container and
-	// all application containers.
-	ateomReq := &ateompb.RestoreWorkloadRequest{
-		ActorTemplateNamespace: req.GetActorTemplateNamespace(),
-		ActorTemplateName:      req.GetActorTemplateName(),
-		ActorId:                req.GetActorId(),
-		RunscPath:              runscPath,
-		Spec:                   &ateompb.WorkloadSpec{},
+// buildAteomWorkloadSpec projects the atelet-facing workload spec onto
+// the ateom-facing one — currently just the container names.
+func buildAteomWorkloadSpec(spec *ateletpb.WorkloadSpec) *ateompb.WorkloadSpec {
+	out := &ateompb.WorkloadSpec{}
+	for _, ctr := range spec.GetContainers() {
+		out.Containers = append(out.Containers, &ateompb.Container{Name: ctr.GetName()})
 	}
-	for _, ctr := range req.GetSpec().GetContainers() {
-		ateomCtr := &ateompb.Container{
-			Name: ctr.GetName(),
-		}
-		ateomReq.GetSpec().Containers = append(ateomReq.GetSpec().Containers, ateomCtr)
-	}
-	_, err = client.RestoreWorkload(ctx, ateomReq)
-	if err != nil {
-		return nil, fmt.Errorf("while calling ateom.RestoreWorkload: %w", err)
-	}
+	return out
+}
 
-	return &ateletpb.RestoreResponse{}, nil
+// uploadIfExists uploads a local file to GCS (zstd-compressed) only if
+// the file is present. Missing files are silently skipped — used for
+// optional checkpoint side-files (pages.img, pages_meta.img).
+func uploadIfExists(ctx context.Context, gcs ategcs.ObjectStorage, remoteURI, localPath string) error {
+	if _, err := os.Stat(localPath); err != nil {
+		return nil
+	}
+	if err := ategcs.SendLocalFileToGCSWithZstd(ctx, gcs, remoteURI, localPath); err != nil {
+		return fmt.Errorf("while uploading %s to GCS: %w", filepath.Base(localPath), err)
+	}
+	return nil
 }
 
 type AteomDialer struct {

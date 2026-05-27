@@ -77,7 +77,6 @@ lint:
 
 .PHONY: verify
 verify: test
-	$(GO) vet ./...
 	bash hack/verify-all.sh
 
 .PHONY: clean

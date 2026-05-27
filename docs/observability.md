@@ -36,36 +36,27 @@ $ kubectl ate logs test
 Error: actor test is not currently running on any worker pod
 ```
 
-#### Example 2: Default Pretty-Printed Output
-When an active actor is assigned to a worker pod, the CLI formats the log stream for easy reading:
+#### Example 2: Default Clean JSON Lines Output
+When an active actor is assigned to a worker pod, the CLI outputs clean, uniform JSON lines stripped of Substrate metadata, perfectly matching standard `kubectl logs` behavior:
 
 ```bash
 $ kubectl ate logs test
-[INFO] Actor started
-[2026-05-19 18:39:24] [INFO] Starting server on port 80
-[2026-05-19 18:39:24] [INFO] Count
-[2026-05-19 18:39:34] [INFO] Count
-[2026-05-19 18:39:44] [INFO] Count
+{"time":"2026-05-22T21:49:15.23700774Z","message":"Actor started"}
+{"time":"2026-05-22T21:49:15.23700774Z","level":"INFO","msg":"Starting server on port 80"}
+{"time":"2026-05-22T21:49:15.255765354Z","count":0,"fshash":"mCY7G4S318ztOUojPTF2NA/W+ZSmWyr+T5K3udFuP50","level":"INFO","msg":"Count"}
+{"time":"2026-05-22T21:49:25.263744806Z","count":1,"fshash":"mCY7G4S318ztOUojPTF2NA/W+ZSmWyr+T5K3udFuP50","level":"INFO","msg":"Count"}
 ```
 
-#### Example 3: Raw JSON Output (`--raw`)
-To inspect the underlying structured JSON log entries, use the `--raw` flag. Note that during logging pipeline ingestion, the `ate.dev/` prefix is typically stripped from the label keys for cleaner indexing:
-
-```bash
-$ kubectl ate logs test --raw
-{"count":9,"fshash":"JiOzRUA5Ab+aro4YnhADSSMq8gUXhh/DMNSFzl75Q7c","level":"INFO","logging.googleapis.com/labels":{"actor_id":"test","actor_namespace":"ate-demo-counter","actor_template":"counter"},"msg":"Count","time":"2026-05-19T18:40:54.957798659Z"}
-```
-
-#### Example 4: Streaming/Live Logs (`--follow` or `-f`)
+#### Example 3: Streaming/Live Logs (`--follow` or `-f`)
 To stream actor logs in real-time, append the `--follow` (or `-f`) flag. The CLI is fully actor-aware, automatically resuming the stream if the actor is suspended or migrates to a different worker pod:
 
 ```bash
 $ kubectl ate logs test -f
 Actor is currently running on pod ate-demo-counter/counter-deployment-d8f99-m7d96
-[2026-05-19 18:39:24] [INFO] Count
-[2026-05-19 18:39:34] [INFO] Count
+{"time":"2026-05-22T21:49:15.255765354Z","count":0,"fshash":"mCY7...","level":"INFO","msg":"Count"}
+{"time":"2026-05-22T21:49:25.263744806Z","count":1,"fshash":"mCY7...","level":"INFO","msg":"Count"}
 Actor is currently running on pod ate-demo-counter/counter-deployment-ab123-x4y5z
-[2026-05-19 18:40:02] [INFO] Count
+{"time":"2026-05-22T21:50:02.123456789Z","count":2,"fshash":"mCY7...","level":"INFO","msg":"Count"}
 ```
 
 

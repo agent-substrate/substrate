@@ -22,6 +22,7 @@ ROOT="$(git rev-parse --show-toplevel)"
 cd "${ROOT}"
 
 # Find all top-level directories containing Go files, and run gofmt on them.
+# shellcheck disable=SC2207 # read array
 dirs=(
     $(git ls-files -cmo --exclude-standard ':(glob)**/*.go' \
         `# Omit LICENSES/, which can contain bundled source code. ` \
@@ -30,6 +31,6 @@ dirs=(
         | uniq)
 )
 
-for dir in ${dirs[@]}; do
-    gofmt -s -w ${dir}
+for dir in "${dirs[@]}"; do
+    gofmt -s -w "${dir}"
 done

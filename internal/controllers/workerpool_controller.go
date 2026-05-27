@@ -19,17 +19,22 @@ import (
 	"fmt"
 
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	k8errors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	appsv1ac "k8s.io/client-go/applyconfigurations/apps/v1"
+	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
+	metav1ac "k8s.io/client-go/applyconfigurations/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
-	"github.com/google/go-cmp/cmp"
 )
+
+const workerPoolFieldOwner = "workerpool-controller"
 
 type WorkerPoolReconciler struct {
 	client.Client
@@ -62,7 +67,7 @@ func (r *WorkerPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	}
 
 	if err := r.reconcileWorkerPool(ctx, wp); err != nil {
-		log.Error(err, "Failed to reconcile worker pool, err: %v", err)
+		log.Error(err, "Failed to reconcile worker pool")
 		return ctrl.Result{}, err
 	}
 
@@ -73,50 +78,109 @@ func (r *WorkerPoolReconciler) reconcileWorkerPool(ctx context.Context, wp *atev
 	log := log.FromContext(ctx)
 	log.Info("Reconciling worker pool")
 
-	depName := wp.Name + "-deployment"
-
-	existingDeployment := &appsv1.Deployment{}
-	err := r.Get(ctx, types.NamespacedName{Name: depName, Namespace: wp.Namespace}, existingDeployment)
-	if err != nil {
-		if k8errors.IsNotFound(err) {
-			log.Info("Deployment for workerpool not found, creating a new one", "WorkPool.Name", wp.Name)
-			// 1. Create a new deployment when a new workerpool is created.
-			dep := &appsv1.Deployment{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      depName,
-					Namespace: wp.Namespace,
-				},
-				Spec: *createActorDeploymentSpec(wp.Name, wp.Spec.Replicas, wp.Name, wp.Spec.AteomImage),
-			}
-
-			// 2. Setting the OwnerReference ensures Kubernetes garbage collects the deployment
-			// when the worker pool is deleted (Delete deployment when worker pool is deleted).
-			if err := ctrl.SetControllerReference(wp, dep, r.Scheme); err != nil {
-				return fmt.Errorf("failed to set controller reference: %w", err)
-			}
-
-			log.Info("Creating a new Deployment", "Deployment.Namespace", dep.Namespace, "Deployment.Name", dep.Name)
-			if err := r.Create(ctx, dep); err != nil {
-				return fmt.Errorf("failed to create new Deployment: %w", err)
-			}
-			return nil
-		}
-		return fmt.Errorf("failed to get deployment %q: %w", depName, err)
+	if err := r.applyDeployment(ctx, wp); err != nil {
+		return err
 	}
 
-	// TODO: Quick and dirty, stop using cmp.Diff
-	wantSpec := *createActorDeploymentSpec(wp.Name, wp.Spec.Replicas, wp.Name, wp.Spec.AteomImage)
-	if diff := cmp.Diff(existingDeployment.Spec, wantSpec); diff != "" {
-		existingDeployment.Spec = wantSpec
-		if err := r.Update(ctx, existingDeployment); err != nil {
-			return fmt.Errorf("failed to update Deployment replicas: %w", err)
+	dep := &appsv1.Deployment{}
+	if err := r.Get(ctx, types.NamespacedName{Name: deploymentName(wp.Name), Namespace: wp.Namespace}, dep); err != nil {
+		if k8errors.IsNotFound(err) {
+			return nil
 		}
+		return fmt.Errorf("failed to get deployment: %w", err)
+	}
+
+	return r.syncStatus(ctx, wp, dep)
+}
+
+func (r *WorkerPoolReconciler) applyDeployment(ctx context.Context, wp *atev1alpha1.WorkerPool) error {
+	depAC := buildDeploymentApplyConfig(wp)
+	if err := r.Apply(ctx, depAC, client.FieldOwner(workerPoolFieldOwner), client.ForceOwnership); err != nil {
+		return fmt.Errorf("failed to apply Deployment: %w", err)
+	}
+	return nil
+}
+
+func (r *WorkerPoolReconciler) syncStatus(ctx context.Context, wp *atev1alpha1.WorkerPool, dep *appsv1.Deployment) error {
+	want := atev1alpha1.WorkerPoolStatus{Replicas: dep.Status.Replicas}
+	if equality.Semantic.DeepEqual(wp.Status, want) {
+		return nil
+	}
+
+	wp.Status = want
+	if err := r.Status().Update(ctx, wp); err != nil {
+		return fmt.Errorf("failed to update WorkerPool status: %w", err)
 	}
 
 	return nil
 }
 
+// buildDeploymentApplyConfig constructs the SSA apply configuration for the
+// Deployment managed by a WorkerPool. Only fields owned by this controller
+// are declared here.
+func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool) *appsv1ac.DeploymentApplyConfiguration {
+	return appsv1ac.Deployment(deploymentName(wp.Name), wp.Namespace).
+		WithOwnerReferences(metav1ac.OwnerReference().
+			WithAPIVersion(atev1alpha1.GroupVersion.String()).
+			WithKind("WorkerPool").
+			WithName(wp.Name).
+			WithUID(wp.UID).
+			WithController(true).
+			WithBlockOwnerDeletion(true)).
+		WithSpec(appsv1ac.DeploymentSpec().
+			WithReplicas(wp.Spec.Replicas).
+			WithSelector(metav1ac.LabelSelector().
+				WithMatchLabels(map[string]string{"app": wp.Name})).
+			WithTemplate(corev1ac.PodTemplateSpec().
+				WithLabels(map[string]string{
+					"app":                 wp.Name,
+					"ate.dev/worker-pool": wp.Name,
+				}).
+				WithSpec(corev1ac.PodSpec().
+					WithContainers(corev1ac.Container().
+						WithName("ateom").
+						WithImage(wp.Spec.AteomImage).
+						WithArgs(
+							"-pod-namespace=$(POD_NAMESPACE)",
+							"-pod-name=$(POD_NAME)",
+						).
+						WithSecurityContext(corev1ac.SecurityContext().
+							WithPrivileged(true).
+							WithRunAsUser(0).
+							WithRunAsGroup(0)).
+						WithEnv(
+							corev1ac.EnvVar().
+								WithName("POD_NAMESPACE").
+								WithValueFrom(corev1ac.EnvVarSource().
+									WithFieldRef(corev1ac.ObjectFieldSelector().
+										WithFieldPath("metadata.namespace"))),
+							corev1ac.EnvVar().
+								WithName("POD_NAME").
+								WithValueFrom(corev1ac.EnvVarSource().
+									WithFieldRef(corev1ac.ObjectFieldSelector().
+										WithFieldPath("metadata.name"))),
+						).
+						WithVolumeMounts(corev1ac.VolumeMount().
+							WithName("run-ateom").
+							WithMountPath("/run/ateom-gvisor"))).
+					WithSecurityContext(corev1ac.PodSecurityContext().
+						WithRunAsUser(0).
+						WithRunAsGroup(0)).
+					WithVolumes(corev1ac.Volume().
+						WithName("run-ateom").
+						WithHostPath(corev1ac.HostPathVolumeSource().
+							WithPath("/run/ateom-gvisor").
+							WithType(corev1.HostPathDirectoryOrCreate))))))
+}
+
 // SetupWithManager sets up the controller with the Manager.
 func (r *WorkerPoolReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).For(&atev1alpha1.WorkerPool{}).Complete(r)
+	return ctrl.NewControllerManagedBy(mgr).
+		For(&atev1alpha1.WorkerPool{}).
+		Owns(&appsv1.Deployment{}).
+		Complete(r)
+}
+
+func deploymentName(wpName string) string {
+	return wpName + "-deployment"
 }

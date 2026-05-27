@@ -30,7 +30,17 @@ spec:
     singular: workerpool
   scope: Namespaced
   versions:
-  - name: v1alpha1
+  - additionalPrinterColumns:
+    - jsonPath: .spec.replicas
+      name: Desired
+      type: integer
+    - jsonPath: .status.replicas
+      name: Replicas
+      type: integer
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
     schema:
       openAPIV3Schema:
         description: WorkerPool is the Schema for the workerpools API
@@ -62,6 +72,7 @@ spec:
               replicas:
                 description: Replicas is the number of worker pods to run.
                 format: int32
+                minimum: 0
                 type: integer
             required:
             - ateomImage
@@ -69,6 +80,11 @@ spec:
             type: object
           status:
             description: status is the observed state of WorkerPool
+            properties:
+              replicas:
+                description: Replicas is the total number of worker pods.
+                format: int32
+                type: integer
             type: object
         required:
         - spec
@@ -76,4 +92,7 @@ spec:
     served: true
     storage: true
     subresources:
+      scale:
+        specReplicasPath: .spec.replicas
+        statusReplicasPath: .status.replicas
       status: {}

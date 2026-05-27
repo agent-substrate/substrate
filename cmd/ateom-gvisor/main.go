@@ -1,3 +1,5 @@
+//go:build linux
+
 //  Copyright 2026 Google LLC
 //
 //  Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,19 +28,17 @@ import (
 	"sync"
 
 	"cloud.google.com/go/compute/metadata"
+	"github.com/agent-substrate/substrate/cmd/ateom-gvisor/internal/ateom"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/contextlogging"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/hashicorp/go-reap"
 	"github.com/vishvananda/netlink"
 	"github.com/vishvananda/netns"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/propagation"
-	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	semconv "go.opentelemetry.io/otel/semconv/v1.21.0"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
 )
@@ -64,21 +64,22 @@ func do(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	logger := slog.New(contextlogging.NewHandler(slog.NewJSONHandler(os.Stdout, nil)))
+	syncedWriter := ateom.NewSyncedWriter(os.Stdout)
+	logger := slog.New(contextlogging.NewHandler(slog.NewJSONHandler(syncedWriter, nil)))
 	slog.SetDefault(logger)
 
 	slog.InfoContext(ctx, "ateom booting")
 
-	tp, err := initTracing(ctx)
+	tp, err := serverboot.InitTracing(ctx, serverboot.TracingOptions{
+		ServiceName: "ateom-gvisor",
+		Sampler:     sdktrace.ParentBased(sdktrace.NeverSample()),
+		// ateom has no network connectivity once eth0 moves into the gvisor netns.
+		NoExporter: true,
+	})
 	if err != nil {
-		slog.ErrorContext(ctx, "Failed to initialize tracing", slog.Any("err", err))
-		os.Exit(1)
+		serverboot.Fatal(ctx, "Failed to initialize tracing", err)
 	}
-	defer func() {
-		if err := tp.Shutdown(context.Background()); err != nil {
-			slog.Error("Failed to shutdown TracerProvider", slog.Any("err", err))
-		}
-	}()
+	defer serverboot.ShutdownProvider("TracerProvider", tp.Shutdown)
 
 	// Create ateom dir
 	ateomDir := ateompath.AteomPath(*podNamespace, *podName)
@@ -128,7 +129,7 @@ func do(ctx context.Context) error {
 		return fmt.Errorf("while creating ateom-interior netns: %w", err)
 	}
 
-	actorLogger := NewActorLogger(logger, metadata.OnGCE())
+	actorLogger := ateom.NewActorLogger(syncedWriter, metadata.OnGCE())
 	ateomService := NewService(interiorNetNS, eth0LinkInfo, actorLogger)
 
 	svr := grpc.NewServer(
@@ -146,30 +147,6 @@ func do(ctx context.Context) error {
 	return nil
 }
 
-func initTracing(ctx context.Context) (*sdktrace.TracerProvider, error) {
-	res, err := resource.New(ctx,
-		resource.WithAttributes(
-			semconv.ServiceName("ateom-gvisor"),
-		),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create resource: %w", err)
-	}
-
-	// No exporter, since ateom has no network connectivity once eth0 is sent
-	// into the gvisor netns.  Maybe we can eventually figure out export via
-	// UDS.
-	tp := sdktrace.NewTracerProvider(
-		sdktrace.WithResource(res),
-		// Only trace on-demand when signaled by the client (e.g. via --trace flag)
-		sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.NeverSample())),
-	)
-	otel.SetTracerProvider(tp)
-	otel.SetTextMapPropagator(propagation.TraceContext{})
-
-	return tp, nil
-}
-
 // AteomService is a service for shepherding single microvm.
 type AteomService struct {
 	ateompb.UnimplementedAteomServer
@@ -180,13 +157,13 @@ type AteomService struct {
 
 	interiorNetNS netns.NsHandle
 	eth0LinkInfo  *SaveLinkInfo
-	actorLogger   *ActorLogger
+	actorLogger   *ateom.ActorLogger
 }
 
 var _ ateompb.AteomServer = (*AteomService)(nil)
 
 // NewService creates a new AteomService.
-func NewService(interiorNetNS netns.NsHandle, eth0LinkInfo *SaveLinkInfo, actorLogger *ActorLogger) *AteomService {
+func NewService(interiorNetNS netns.NsHandle, eth0LinkInfo *SaveLinkInfo, actorLogger *ateom.ActorLogger) *AteomService {
 	svc := &AteomService{
 		interiorNetNS: interiorNetNS,
 		eth0LinkInfo:  eth0LinkInfo,
@@ -195,7 +172,36 @@ func NewService(interiorNetNS netns.NsHandle, eth0LinkInfo *SaveLinkInfo, actorL
 	return svc
 }
 
-func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkloadRequest) (*ateompb.RunWorkloadResponse, error) {
+// ensureEth0InPodNetns moves eth0 back to the pod netns if a prior
+// Run/Restore left it stuck in the interior netns. Idempotent: returns
+// nil if eth0 is already in the pod netns or absent from both.
+func ensureEth0InPodNetns(ctx context.Context, s *AteomService) error {
+	if _, err := netlink.LinkByName("eth0"); err == nil {
+		return nil
+	}
+	podNetNS, err := netns.Get()
+	if err != nil {
+		return fmt.Errorf("while getting pod netns: %w", err)
+	}
+	var moved bool
+	err = netNSDo(ctx, s.interiorNetNS, func(_ context.Context) error {
+		link, lookupErr := netlink.LinkByName("eth0")
+		if lookupErr != nil {
+			return nil
+		}
+		if mvErr := netlink.LinkSetNsFd(link, int(podNetNS)); mvErr != nil {
+			return fmt.Errorf("while moving eth0 to pod netns: %w", mvErr)
+		}
+		moved = true
+		return nil
+	})
+	if moved {
+		slog.WarnContext(ctx, "Recovered eth0 from interior netns to pod netns")
+	}
+	return err
+}
+
+func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkloadRequest) (resp *ateompb.RunWorkloadResponse, retErr error) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 
@@ -206,6 +212,10 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	//   * Correct runsc version is downloaded and placed on disk.
 	//   * All OCI bundles are set up, including for "pause" container.
 
+	if err := ensureEth0InPodNetns(ctx, s); err != nil {
+		return nil, fmt.Errorf("while recovering eth0 from prior failure: %w", err)
+	}
+
 	// Move pod eth0 into interior netns
 	eth0Link, err := netlink.LinkByName("eth0")
 	if err != nil {
@@ -214,6 +224,15 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	if err := netlink.LinkSetNsFd(eth0Link, int(s.interiorNetNS)); err != nil {
 		return nil, fmt.Errorf("while moving eth0 into interior network namespace: %w", err)
 	}
+	// Roll eth0 back to the pod netns if any subsequent step errors,
+	// otherwise the worker pod is bricked for the next actor.
+	defer func() {
+		if retErr != nil {
+			if cleanupErr := ensureEth0InPodNetns(ctx, s); cleanupErr != nil {
+				slog.WarnContext(ctx, "Failed to roll back eth0 after Run failure", "err", cleanupErr)
+			}
+		}
+	}()
 
 	slog.InfoContext(ctx, "Restoring eth0 routes/addresses in interior netns")
 	err = netNSDo(ctx, s.interiorNetNS, func(ctx context.Context) error {
@@ -356,7 +375,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	return nil, nil
 }
 
-func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.RestoreWorkloadRequest) (*ateompb.RestoreWorkloadResponse, error) {
+func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.RestoreWorkloadRequest) (resp *ateompb.RestoreWorkloadResponse, retErr error) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 
@@ -368,6 +387,10 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	//   * All OCI bundles are set up, including for "pause" container.
 	//   * Checkpoint downloaded and placed on disk
 
+	if err := ensureEth0InPodNetns(ctx, s); err != nil {
+		return nil, fmt.Errorf("while recovering eth0 from prior failure: %w", err)
+	}
+
 	// Move pod eth0 into interior netns
 	eth0Link, err := netlink.LinkByName("eth0")
 	if err != nil {
@@ -376,6 +399,15 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	if err := netlink.LinkSetNsFd(eth0Link, int(s.interiorNetNS)); err != nil {
 		return nil, fmt.Errorf("while moving eth0 into interior network namespace: %w", err)
 	}
+	// Roll eth0 back to the pod netns if any subsequent step errors,
+	// otherwise the worker pod is bricked for the next actor.
+	defer func() {
+		if retErr != nil {
+			if cleanupErr := ensureEth0InPodNetns(ctx, s); cleanupErr != nil {
+				slog.WarnContext(ctx, "Failed to roll back eth0 after Restore failure", "err", cleanupErr)
+			}
+		}
+	}()
 
 	// Restore route and IP information from save onto eth0.
 	slog.InfoContext(ctx, "Restoring eth0 routes/addresses in interior netns")

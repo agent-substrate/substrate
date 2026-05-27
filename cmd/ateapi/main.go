@@ -22,7 +22,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
-	"net/http"
 	"os"
 	"time"
 
@@ -30,23 +29,14 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/sessionidentity"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/ateredis"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
-	"github.com/agent-substrate/substrate/internal/contextlogging"
 	"github.com/agent-substrate/substrate/internal/credbundle"
+	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/agent-substrate/substrate/pkg/client/clientset/versioned"
 	"github.com/agent-substrate/substrate/pkg/client/informers/externalversions"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/redis/go-redis/v9"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
-	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
-	"go.opentelemetry.io/otel/exporters/prometheus"
-	"go.opentelemetry.io/otel/propagation"
-	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
-	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	semconv "go.opentelemetry.io/otel/semconv/v1.21.0"
 	"golang.org/x/oauth2/google"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -77,185 +67,41 @@ var (
 func main() {
 	flag.Parse()
 	ctx := context.Background()
-	slog.SetDefault(slog.New(contextlogging.NewHandler(slog.NewJSONHandler(os.Stdout, nil))))
+	serverboot.InitLogger()
 
-	tp, err := initTracing(ctx)
-	if err != nil {
-		slog.ErrorContext(ctx, "Failed to initialize tracing", slog.Any("err", err))
-		os.Exit(1)
-	}
-	defer func() {
-		if err := tp.Shutdown(context.Background()); err != nil {
-			slog.Error("Failed to shutdown TracerProvider", slog.Any("err", err))
-		}
-	}()
-
-	mp, err := initMetrics(ctx)
-	if err != nil {
-		slog.ErrorContext(ctx, "Failed to initialize metrics", slog.Any("err", err))
-		os.Exit(1)
-	}
-	defer func() {
-		if err := mp.Shutdown(context.Background()); err != nil {
-			slog.Error("Failed to shutdown MeterProvider", slog.Any("err", err))
-		}
-	}()
-
-	// For development, certain flags that are likely to be different for each
-	// developer can optionally be read from environment variables.  This is
-	// helpful because it lets us keep one set of constant Kubernetes manifests
-	// that source the environment variables from a ConfigMap.  Each developer
-	// can then adapt the deployment to their own GCP project and setup, without
-	// having to edit the manifests each time they start a new branch.
-	if *redisClusterAddress == "@env" {
-		*redisClusterAddress = os.Getenv("ATE_API_REDIS_ADDRESS")
-	}
-	if *clientJWTIssuer == "@env" {
-		*clientJWTIssuer = os.Getenv("ATE_API_K8SJWT_ISSUER")
-	}
-	if *redisUseIAMAuth == "@env" {
-		*redisUseIAMAuth = os.Getenv("ATE_API_REDIS_USE_IAM_AUTH")
-	}
-	if *redisTLSServerName == "@env" {
-		*redisTLSServerName = os.Getenv("ATE_API_REDIS_TLS_SERVER_NAME")
-	}
-	if *redisClientCert == "@env" {
-		*redisClientCert = os.Getenv("ATE_API_REDIS_CLIENT_CERT")
-	}
-
-	slog.InfoContext(ctx, "Final flag values",
-		slog.String("grpc-listen-addr", *listenAddr),
-		slog.String("grpc-server-cred-bundle", *grpcServerCredBundle),
-		slog.String("redis-cluster-address", *redisClusterAddress),
-		slog.String("redis-ca-certs", *redisCACerts),
-		slog.String("redis-use-iam-auth", *redisUseIAMAuth),
-		slog.String("redis-tls-server-name", *redisTLSServerName),
-		slog.String("redis-client-cert", *redisClientCert),
-		slog.String("client-jwt-issuer", *clientJWTIssuer),
-		slog.String("client-jwt-audience", *clientJWTAudience),
-		slog.String("session-id-jwt-pool", *sessionIDJWTPoolFile),
-		slog.String("session-id-ca-pool", *sessionIDCAPoolFile),
-		slog.String("workerpool-ca-certs", *workerpoolCACerts),
-	)
-
-	tlsConfig := &tls.Config{
-		MinVersion: tls.VersionTLS12,
-	}
-	if *redisCACerts != "" {
-		ca, err := os.ReadFile(*redisCACerts)
-		if err != nil {
-			slog.ErrorContext(ctx, "Failed to read Redis CA cert", slog.Any("err", err))
-			os.Exit(1)
-		}
-		caPool := x509.NewCertPool()
-		if !caPool.AppendCertsFromPEM(ca) {
-			slog.ErrorContext(ctx, "Failed to parse Redis CA cert")
-			os.Exit(1)
-		}
-		slog.InfoContext(ctx, "Using custom CA cert for Redis", slog.String("path", *redisCACerts))
-		tlsConfig.RootCAs = caPool
-	}
-
-	if *redisTLSServerName != "" {
-		tlsConfig.ServerName = *redisTLSServerName
-		slog.InfoContext(ctx, "Using custom ServerName for Redis TLS verification", slog.String("name", *redisTLSServerName))
-	}
-
-	if *redisClientCert != "" {
-		cert, err := credbundle.Parse(*redisClientCert)
-		if err != nil {
-			slog.ErrorContext(ctx, "Failed to parse Redis client credential bundle", slog.Any("err", err))
-			os.Exit(1)
-		}
-		tlsConfig.Certificates = []tls.Certificate{*cert}
-		slog.InfoContext(ctx, "Using client TLS certificate for Redis/Valkey", slog.String("path", *redisClientCert))
-	}
-
-	clusterOpts := &redis.ClusterOptions{
-		Addrs:     []string{*redisClusterAddress},
-		TLSConfig: tlsConfig,
-	}
-
-	if *redisUseIAMAuth != "false" {
-		creds, err := google.FindDefaultCredentials(ctx, "https://www.googleapis.com/auth/cloud-platform")
-		if err != nil {
-			slog.ErrorContext(ctx, "Failed to find default credentials for Redis IAM auth", slog.Any("err", err))
-			os.Exit(1)
-		}
-		tokenSource := creds.TokenSource
-		clusterOpts.CredentialsProvider = func() (string, string) {
-			tok, err := tokenSource.Token()
-			if err != nil {
-				slog.ErrorContext(ctx, "Failed to fetch Redis IAM token", slog.Any("err", err))
-				return "default", ""
-			}
-			return "default", tok.AccessToken
-		}
-		slog.InfoContext(ctx, "Using Google IAM authentication for Redis connection")
-	} else {
-		slog.InfoContext(ctx, "Skipping Google IAM authentication for Redis connection")
-	}
-
-	redisClient := redis.NewClusterClient(clusterOpts)
-	// Verify connection with retries on startup
-	var pingErr error
-	for i := 0; i < 30; i++ {
-		pingErr = redisClient.Ping(ctx).Err()
-		if pingErr == nil {
-			break
-		}
-		slog.WarnContext(ctx, "Failed to connect to Redis/Valkey, retrying...", slog.Int("attempt", i+1), slog.Any("err", pingErr))
-		select {
-		case <-ctx.Done():
-			pingErr = ctx.Err()
-			break
-		case <-time.After(2 * time.Second):
-		}
-	}
-	if pingErr != nil {
-		slog.ErrorContext(ctx, "Failed to connect to Redis/Valkey after retries", slog.Any("err", pingErr))
-		os.Exit(1)
-	}
-
-	config, err := rest.InClusterConfig()
-	if err != nil {
-		slog.ErrorContext(ctx, "Failed to get cluster config", slog.Any("err", err))
-		os.Exit(1)
-	}
-
-	clientset, err := kubernetes.NewForConfig(config)
-	if err != nil {
-		slog.ErrorContext(ctx, "Failed to create clientset", slog.Any("err", err))
-		os.Exit(1)
-	}
-
-	ateClient, err := versioned.NewForConfig(config)
-	if err != nil {
-		slog.ErrorContext(ctx, "Failed to create ate clientset", slog.Any("err", err))
-		os.Exit(1)
-	}
-
-	var clientCACertPool *x509.CertPool
-	if *workerpoolCACerts != "" {
-		// TODO: Periodically reload these to handle rotations. Consult with Tina to see how she did it for client-go.
-		ca, err := os.ReadFile(*workerpoolCACerts)
-		if err != nil {
-			slog.ErrorContext(ctx, "Failed to read workerpool CA", slog.Any("err", err))
-			os.Exit(1)
-		}
-		clientCACertPool = x509.NewCertPool()
-		if !clientCACertPool.AppendCertsFromPEM(ca) {
-			slog.ErrorContext(ctx, "Failed to parse workerpool CA")
-			os.Exit(1)
-		}
-		slog.InfoContext(ctx, "Using custom CA for workerpool clients", slog.String("path", *workerpoolCACerts))
-	}
-
-	serverCreds := credentials.NewTLS(&tls.Config{
-		GetCertificate: credbundle.Loader(*grpcServerCredBundle),
-		ClientAuth:     tls.VerifyClientCertIfGiven,
-		ClientCAs:      clientCACertPool,
+	tp, err := serverboot.InitTracing(ctx, serverboot.TracingOptions{
+		ServiceName: "ateapi",
+		Sampler:     sdktrace.ParentBased(sdktrace.AlwaysSample()),
 	})
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to initialize tracing", err)
+	}
+	defer serverboot.ShutdownProvider("TracerProvider", tp.Shutdown)
+
+	mp, err := serverboot.InitMetrics(ctx, "ateapi")
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to initialize metrics", err)
+	}
+	defer serverboot.ShutdownProvider("MeterProvider", mp.Shutdown)
+
+	loadFlagsFromEnv()
+	logFlagValues(ctx)
+
+	redisClient, err := connectRedis(ctx)
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to set up Redis/Valkey", err)
+	}
+
+	clientset, ateClient, err := newKubeClients()
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to create Kubernetes clients", err)
+	}
+
+	serverCreds, err := buildServerCreds(ctx)
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to build server credentials", err)
+	}
+
 	redisPersistence := ateredis.NewPersistence(redisClient)
 
 	ateFactory := externalversions.NewSharedInformerFactory(ateClient, 0)
@@ -285,8 +131,7 @@ func main() {
 	lisCfg := &net.ListenConfig{}
 	lis, err := lisCfg.Listen(ctx, "tcp", *listenAddr)
 	if err != nil {
-		slog.ErrorContext(ctx, "Failed to start listener", slog.Any("err", err))
-		os.Exit(1)
+		serverboot.Fatal(ctx, "Failed to start listener", err)
 	}
 
 	mux := grpc.NewServer(
@@ -298,86 +143,178 @@ func main() {
 	ateapipb.RegisterControlServer(mux, sm)
 	ateapipb.RegisterSessionIdentityServer(mux, sessionIdentitySrv)
 
-	go func() {
-		mux := http.NewServeMux()
-		mux.Handle("/metrics", promhttp.Handler())
-		mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusOK)
-			w.Write([]byte("ok"))
-		})
-		slog.InfoContext(ctx, fmt.Sprintf("Starting Prometheus metrics server on %s", *metricsListenAddr))
-		if err := http.ListenAndServe(*metricsListenAddr, mux); err != nil {
-			slog.Error("Failed to start prometheus metrics server", slog.Any("err", err))
-		}
-	}()
+	go serverboot.StartMetricsServer(ctx, serverboot.MetricsServerOptions{
+		Addr:         *metricsListenAddr,
+		EnableReadyz: true,
+	})
 
 	if err := mux.Serve(lis); err != nil {
-		slog.ErrorContext(ctx, "Failed to serve", slog.Any("err", err))
-		os.Exit(1)
+		serverboot.Fatal(ctx, "Failed to serve", err)
 	}
 }
 
-func initTracing(ctx context.Context) (*sdktrace.TracerProvider, error) {
-	exporter, err := otlptracegrpc.New(ctx,
-		// GKE managed traces doesn't support validating the TLS certs of the collector
-		otlptracegrpc.WithInsecure(),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create OTLP exporter: %w", err)
+// loadFlagsFromEnv resolves any flag whose value is the sentinel `@env`
+// against a known environment variable. Lets one set of Kubernetes
+// manifests source per-developer config from a ConfigMap without
+// editing the manifests for each branch.
+func loadFlagsFromEnv() {
+	overrides := []struct {
+		flag *string
+		env  string
+	}{
+		{redisClusterAddress, "ATE_API_REDIS_ADDRESS"},
+		{clientJWTIssuer, "ATE_API_K8SJWT_ISSUER"},
+		{redisUseIAMAuth, "ATE_API_REDIS_USE_IAM_AUTH"},
+		{redisTLSServerName, "ATE_API_REDIS_TLS_SERVER_NAME"},
+		{redisClientCert, "ATE_API_REDIS_CLIENT_CERT"},
 	}
-
-	res, err := resource.New(ctx,
-		resource.WithAttributes(
-			semconv.ServiceName("ateapi"),
-		),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create resource: %w", err)
+	for _, o := range overrides {
+		if *o.flag == "@env" {
+			*o.flag = os.Getenv(o.env)
+		}
 	}
-
-	tp := sdktrace.NewTracerProvider(
-		sdktrace.WithBatcher(exporter),
-		sdktrace.WithResource(res),
-		// Only trace on-demand when signaled by the client (e.g. via --trace flag)
-		sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.AlwaysSample())),
-	)
-	otel.SetTracerProvider(tp)
-	otel.SetTextMapPropagator(propagation.TraceContext{})
-
-	return tp, nil
 }
 
-func initMetrics(ctx context.Context) (*sdkmetric.MeterProvider, error) {
-	// Prometheus Exporter
-	promExporter, err := prometheus.New()
+func logFlagValues(ctx context.Context) {
+	slog.InfoContext(ctx, "Final flag values",
+		slog.String("grpc-listen-addr", *listenAddr),
+		slog.String("grpc-server-cred-bundle", *grpcServerCredBundle),
+		slog.String("redis-cluster-address", *redisClusterAddress),
+		slog.String("redis-ca-certs", *redisCACerts),
+		slog.String("redis-use-iam-auth", *redisUseIAMAuth),
+		slog.String("redis-tls-server-name", *redisTLSServerName),
+		slog.String("redis-client-cert", *redisClientCert),
+		slog.String("client-jwt-issuer", *clientJWTIssuer),
+		slog.String("client-jwt-audience", *clientJWTAudience),
+		slog.String("session-id-jwt-pool", *sessionIDJWTPoolFile),
+		slog.String("session-id-ca-pool", *sessionIDCAPoolFile),
+		slog.String("workerpool-ca-certs", *workerpoolCACerts),
+	)
+}
+
+// connectRedis builds the Redis/Valkey TLS config, plumbs IAM auth if
+// requested, opens the cluster client, and pings with retries.
+func connectRedis(ctx context.Context) (*redis.ClusterClient, error) {
+	tlsConfig, err := buildRedisTLSConfig(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create Prometheus metric exporter: %w", err)
+		return nil, err
 	}
 
-	// OTLP Exporter
-	otlpExporter, err := otlpmetricgrpc.New(ctx,
-		otlpmetricgrpc.WithInsecure(),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create OTLP metric exporter: %w", err)
+	clusterOpts := &redis.ClusterOptions{
+		Addrs:     []string{*redisClusterAddress},
+		TLSConfig: tlsConfig,
 	}
 
-	res, err := resource.New(ctx,
-		resource.WithAttributes(
-			semconv.ServiceName("ateapi"),
-		),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create resource: %w", err)
+	if *redisUseIAMAuth != "false" {
+		creds, err := google.FindDefaultCredentials(ctx, "https://www.googleapis.com/auth/cloud-platform")
+		if err != nil {
+			return nil, fmt.Errorf("find default credentials for Redis IAM auth: %w", err)
+		}
+		tokenSource := creds.TokenSource
+		clusterOpts.CredentialsProvider = func() (string, string) {
+			tok, err := tokenSource.Token()
+			if err != nil {
+				slog.Error("Failed to fetch Redis IAM token", slog.Any("err", err))
+				return "default", ""
+			}
+			return "default", tok.AccessToken
+		}
+		slog.InfoContext(ctx, "Using Google IAM authentication for Redis connection")
+	} else {
+		slog.InfoContext(ctx, "Skipping Google IAM authentication for Redis connection")
 	}
 
-	mp := sdkmetric.NewMeterProvider(
-		// Register both readers
-		sdkmetric.WithReader(promExporter),
-		sdkmetric.WithReader(sdkmetric.NewPeriodicReader(otlpExporter)),
-		sdkmetric.WithResource(res),
-	)
-	otel.SetMeterProvider(mp)
+	client := redis.NewClusterClient(clusterOpts)
+	if err := pingRedisWithRetries(ctx, client); err != nil {
+		return nil, err
+	}
+	return client, nil
+}
 
-	return mp, nil
+func buildRedisTLSConfig(ctx context.Context) (*tls.Config, error) {
+	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12}
+	if *redisCACerts != "" {
+		ca, err := os.ReadFile(*redisCACerts)
+		if err != nil {
+			return nil, fmt.Errorf("read Redis CA cert: %w", err)
+		}
+		caPool := x509.NewCertPool()
+		if !caPool.AppendCertsFromPEM(ca) {
+			return nil, fmt.Errorf("parse Redis CA cert from %s", *redisCACerts)
+		}
+		tlsConfig.RootCAs = caPool
+		slog.InfoContext(ctx, "Using custom CA cert for Redis", slog.String("path", *redisCACerts))
+	}
+	if *redisTLSServerName != "" {
+		tlsConfig.ServerName = *redisTLSServerName
+		slog.InfoContext(ctx, "Using custom ServerName for Redis TLS verification", slog.String("name", *redisTLSServerName))
+	}
+	if *redisClientCert != "" {
+		cert, err := credbundle.Parse(*redisClientCert)
+		if err != nil {
+			return nil, fmt.Errorf("parse Redis client credential bundle: %w", err)
+		}
+		tlsConfig.Certificates = []tls.Certificate{*cert}
+		slog.InfoContext(ctx, "Using client TLS certificate for Redis/Valkey", slog.String("path", *redisClientCert))
+	}
+	return tlsConfig, nil
+}
+
+func pingRedisWithRetries(ctx context.Context, client *redis.ClusterClient) error {
+	var pingErr error
+	for i := 0; i < 30; i++ {
+		pingErr = client.Ping(ctx).Err()
+		if pingErr == nil {
+			return nil
+		}
+		slog.WarnContext(ctx, "Failed to connect to Redis/Valkey, retrying...", slog.Int("attempt", i+1), slog.Any("err", pingErr))
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
+	}
+	return fmt.Errorf("ping Redis/Valkey after 30 retries: %w", pingErr)
+}
+
+// newKubeClients builds the standard Kubernetes clientset and the ate
+// (substrate CRD) clientset from in-cluster config.
+func newKubeClients() (*kubernetes.Clientset, versioned.Interface, error) {
+	config, err := rest.InClusterConfig()
+	if err != nil {
+		return nil, nil, fmt.Errorf("get cluster config: %w", err)
+	}
+	clientset, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		return nil, nil, fmt.Errorf("create clientset: %w", err)
+	}
+	ateClient, err := versioned.NewForConfig(config)
+	if err != nil {
+		return nil, nil, fmt.Errorf("create ate clientset: %w", err)
+	}
+	return clientset, ateClient, nil
+}
+
+// buildServerCreds loads the workerpool CA pool (if configured) and
+// composes gRPC TransportCredentials over the server bundle + optional
+// client-cert verification.
+func buildServerCreds(ctx context.Context) (credentials.TransportCredentials, error) {
+	var clientCAs *x509.CertPool
+	if *workerpoolCACerts != "" {
+		// TODO: Periodically reload these to handle rotations. Consult with Tina to see how she did it for client-go.
+		ca, err := os.ReadFile(*workerpoolCACerts)
+		if err != nil {
+			return nil, fmt.Errorf("read workerpool CA: %w", err)
+		}
+		clientCAs = x509.NewCertPool()
+		if !clientCAs.AppendCertsFromPEM(ca) {
+			return nil, fmt.Errorf("parse workerpool CA from %s", *workerpoolCACerts)
+		}
+		slog.InfoContext(ctx, "Using custom CA for workerpool clients", slog.String("path", *workerpoolCACerts))
+	}
+	return credentials.NewTLS(&tls.Config{
+		GetCertificate: credbundle.Loader(*grpcServerCredBundle),
+		ClientAuth:     tls.VerifyClientCertIfGiven,
+		ClientCAs:      clientCAs,
+	}), nil
 }
