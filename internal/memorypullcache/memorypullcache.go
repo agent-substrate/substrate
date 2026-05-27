@@ -135,12 +135,14 @@ func (c *MemoryPullCache) Fetch(ctx context.Context, ref string) (io.ReadCloser,
 
 	img, err := remote.Image(parsedRef, remoteOptions...)
 	if err != nil {
-		return nil, fmt.Errorf("in remote.Image: %w", err)
+		slog.WarnContext(ctx, "Image pull failed", slog.String("ref", ref), slog.Any("error", err))
+		return nil, fmt.Errorf("while pulling image %q: %w", ref, err)
 	}
 
 	size, err := img.Size()
 	if err != nil {
-		return nil, fmt.Errorf("in img.Size(): %w", err)
+		slog.WarnContext(ctx, "Image size lookup failed", slog.String("ref", ref), slog.Any("error", err))
+		return nil, fmt.Errorf("while reading size of image %q: %w", ref, err)
 	}
 	if size > 100*1024*1024 {
 		slog.InfoContext(ctx,
@@ -156,7 +158,8 @@ func (c *MemoryPullCache) Fetch(ctx context.Context, ref string) (io.ReadCloser,
 
 	memData, err := io.ReadAll(tarData)
 	if err != nil {
-		return nil, fmt.Errorf("while reading image: %w", err)
+		slog.WarnContext(ctx, "Image read failed", slog.String("ref", ref), slog.Any("error", err))
+		return nil, fmt.Errorf("while reading image %q: %w", ref, err)
 	}
 
 	if digestWasIncluded {

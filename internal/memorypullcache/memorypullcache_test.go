@@ -15,6 +15,8 @@
 package memorypullcache
 
 import (
+	"context"
+	"strings"
 	"testing"
 )
 
@@ -80,5 +82,24 @@ func TestRewriteLocalRegistry(t *testing.T) {
 				t.Errorf("rewriteLocalRegistry(%q) = %q; want %q", tt.ref, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestFetchErrorIncludesRef checks that pull failures wrap the error with the
+// requested image ref, so operators can identify which image failed from the
+// error chain alone (without having to correlate trace IDs across systems).
+func TestFetchErrorIncludesRef(t *testing.T) {
+	// A registry that refuses connection so remote.Image returns an error.
+	const ref = "127.0.0.1:1/missing/image:nope"
+	c, err := NewMemoryPullCache(context.Background(), nil, "")
+	if err != nil {
+		t.Fatalf("NewMemoryPullCache: %v", err)
+	}
+	_, err = c.Fetch(context.Background(), ref)
+	if err == nil {
+		t.Fatal("Fetch on an unreachable registry returned nil error")
+	}
+	if !strings.Contains(err.Error(), ref) {
+		t.Errorf("Fetch error %q does not contain ref %q", err, ref)
 	}
 }
