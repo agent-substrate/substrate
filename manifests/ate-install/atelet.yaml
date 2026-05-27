@@ -94,5 +94,7 @@ spec:
       volumes:
       - name: run-ateom
         hostPath:
-          path: /run/ateom-gvisor
+          # Use a disk-backed path on the host; /run is tmpfs on COS/GKE
+          # nodes and caps actor working sets at ~700 MB (#30).
+          path: /var/lib/agent-substrate/ateom-gvisor
           type: DirectoryOrCreate

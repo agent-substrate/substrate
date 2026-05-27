@@ -169,7 +169,10 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool) *appsv1ac.Deployment
 					WithVolumes(corev1ac.Volume().
 						WithName("run-ateom").
 						WithHostPath(corev1ac.HostPathVolumeSource().
-							WithPath("/run/ateom-gvisor").
+							// Disk-backed path; /run is tmpfs on COS/GKE and caps
+							// actor working sets at ~700 MB (#30). Must match the
+							// atelet DaemonSet's hostPath.
+							WithPath("/var/lib/agent-substrate/ateom-gvisor").
 							WithType(corev1.HostPathDirectoryOrCreate))))))
 }
 
