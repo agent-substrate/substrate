@@ -16,8 +16,14 @@
 package ateompath
 
 import (
+	"fmt"
 	"path/filepath"
 )
+
+// MaxUnixSocketPathLen is the practical Linux limit for unix-domain socket
+// paths. The kernel's sockaddr_un.sun_path is 108 bytes including the trailing
+// NUL, leaving 107 usable bytes. Bind fails with EINVAL above this.
+const MaxUnixSocketPathLen = 107
 
 const (
 	// The base path.  This is both the path of the root shared folder on the
@@ -47,6 +53,22 @@ func AteomSocketPath(ateomNamespace, ateomName string) string {
 		AteomPath(ateomNamespace, ateomName),
 		"ateom.sock",
 	)
+}
+
+// ValidateAteomSocketPath returns a descriptive error when the socket path
+// derived from ateomNamespace and ateomName would exceed Linux's unix-socket
+// limit. Calling net.Listen("unix", ...) with an over-limit path otherwise
+// fails with the cryptic "bind: invalid argument".
+func ValidateAteomSocketPath(ateomNamespace, ateomName string) error {
+	p := AteomSocketPath(ateomNamespace, ateomName)
+	if len(p) > MaxUnixSocketPathLen {
+		return fmt.Errorf(
+			"ateom socket path %q is %d bytes, exceeds Linux unix-socket limit of %d: shorten the namespace or pod name (%d + %d = %d chars used for namespace + name)",
+			p, len(p), MaxUnixSocketPathLen,
+			len(ateomNamespace), len(ateomName), len(ateomNamespace)+len(ateomName),
+		)
+	}
+	return nil
 }
 
 func AteomNetNSName(ateomNamespace, ateomName string) string {

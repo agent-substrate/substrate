@@ -93,6 +93,12 @@ func do(ctx context.Context) error {
 	go reap.ReapChildren(nil, nil, nil, &reapLock)
 	slog.InfoContext(ctx, "Child process reaper launched")
 
+	// Validate before opening the socket so the operator sees a clear
+	// message rather than the kernel's cryptic "bind: invalid argument".
+	if err := ateompath.ValidateAteomSocketPath(*podNamespace, *podName); err != nil {
+		return err
+	}
+
 	// Clean up any old socket.
 	sockPath := ateompath.AteomSocketPath(*podNamespace, *podName)
 	if err := os.RemoveAll(sockPath); err != nil {
