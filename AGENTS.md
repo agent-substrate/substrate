@@ -9,6 +9,34 @@ Agent Substrate relies on the fact that agent-like applications tend to be idle 
 For development, it's recommended to read the `README.md` and `CONTRIBUTING.md` in the root folder.
 See `hack/install-ate.sh` and `tools/setup-gcp` for provisioning and deploying clusters and GCP resources.
 
+## Repository Layout
+
+```
+cmd/          # One subdirectory per binary (ateapi, atelet, atenet, …)
+internal/     # Shared packages, internal to this module only
+pkg/          # Shared packages intended for external import
+docs/         # Design docs and developer guides
+hack/         # Dev/CI scripts and code generators
+manifests/    # Kubernetes YAML for deploying Agent Substrate
+demos/        # Self-contained example applications
+benchmarking/ # Load-testing tools and workloads
+tools/        # Standalone Go tools (go run ./tools/<name>) for Dev/CI
+```
+
+**Where to put new Go code — quick rules:**
+
+| Situation | Location |
+|---|---|
+| Only used by one binary | `cmd/<binary>/internal/<pkg>` |
+| Shared across binaries, not for external import | `internal/<pkg>` |
+| Public API for external consumers | `pkg/<pkg>` |
+| Public proto (control-plane gRPC API) | `pkg/proto/<name>` |
+| Internal proto (atelet / ateom) | `internal/proto/<name>` |
+| Dev/CI scripts | `hack/` |
+| Standalone Go dev/CI tools | `tools/<name>` with its own `go.mod` |
+
+See `docs/dev/code-layout.md` for the full rationale and per-directory details.
+
 ## Build and Test Commands
 
 Agent Substrate uses a `Makefile` for its build and test tasks.
