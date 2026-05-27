@@ -1,3 +1,5 @@
+//go:build linux
+
 //  Copyright 2026 Google LLC
 //
 //  Licensed under the Apache License, Version 2.0 (the "License");
@@ -26,6 +28,7 @@ import (
 	"sync"
 
 	"cloud.google.com/go/compute/metadata"
+	"github.com/agent-substrate/substrate/cmd/ateom-gvisor/internal/ateom"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/contextlogging"
@@ -126,7 +129,7 @@ func do(ctx context.Context) error {
 		return fmt.Errorf("while creating ateom-interior netns: %w", err)
 	}
 
-	actorLogger := NewActorLogger(syncedWriter, metadata.OnGCE())
+	actorLogger := ateom.NewActorLogger(syncedWriter, metadata.OnGCE())
 	ateomService := NewService(interiorNetNS, eth0LinkInfo, actorLogger)
 
 	svr := grpc.NewServer(
@@ -154,13 +157,13 @@ type AteomService struct {
 
 	interiorNetNS netns.NsHandle
 	eth0LinkInfo  *SaveLinkInfo
-	actorLogger   *ActorLogger
+	actorLogger   *ateom.ActorLogger
 }
 
 var _ ateompb.AteomServer = (*AteomService)(nil)
 
 // NewService creates a new AteomService.
-func NewService(interiorNetNS netns.NsHandle, eth0LinkInfo *SaveLinkInfo, actorLogger *ActorLogger) *AteomService {
+func NewService(interiorNetNS netns.NsHandle, eth0LinkInfo *SaveLinkInfo, actorLogger *ateom.ActorLogger) *AteomService {
 	svc := &AteomService{
 		interiorNetNS: interiorNetNS,
 		eth0LinkInfo:  eth0LinkInfo,
