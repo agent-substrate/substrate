@@ -21,15 +21,46 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
+	"strings"
 
 	"github.com/agent-substrate/substrate/internal/ateompath"
+	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 )
+
+const cudaCheckpointWrapperPath = "/usr/local/bin/cuda-checkpoint-wrapper.sh"
+const saveRestoreExecTimeout = "30s" // runsc wants a Go duration string, not ms.
 
 type runsc struct {
 	path                   string
 	actorTemplateNamespace string
 	actorTemplateName      string
 	actorID                string
+	gpu                    *ateompb.GpuSpec
+}
+
+func (r *runsc) gpuGlobalFlags() []string {
+	if r.gpu == nil {
+		return nil
+	}
+	flags := []string{"--nvproxy"}
+	if v := r.gpu.GetDriverVersion(); v != "" {
+		flags = append(flags, "--nvproxy-driver-version="+v)
+	}
+	if caps := r.gpu.GetDriverCapabilities(); len(caps) > 0 {
+		flags = append(flags, "--nvproxy-allowed-driver-capabilities="+strings.Join(caps, ","))
+	}
+	return flags
+}
+
+// gpuSaveRestoreFlags returns the --save-restore-exec-argv flags that
+// tell runsc to invoke cuda-checkpoint inside the sandbox before
+// checkpoint and after restore. release-20260520.0 of gVisor's nvproxy
+// auto-registers cuda-checkpoint internally when --nvproxy is set on
+// create; passing --save-restore-exec-argv at checkpoint then fails
+// with "save/restore binary is already set". Leave the drain to
+// nvproxy and don't pass the flag explicitly.
+func (r *runsc) gpuSaveRestoreFlags() []string {
+	return nil
 }
 
 func (r *runsc) cmdCreate(ctx context.Context, out io.Writer, containerName string) error {
@@ -38,9 +69,7 @@ func (r *runsc) cmdCreate(ctx context.Context, out io.Writer, containerName stri
 
 	slog.InfoContext(ctx, "About to run runsc create", slog.String("container", containerName))
 
-	cmd := exec.CommandContext(
-		ctx,
-		r.path,
+	args := []string{
 		"-log-format", "json",
 		"--alsologtostderr",
 		// "-debug",
@@ -49,11 +78,15 @@ func (r *runsc) cmdCreate(ctx context.Context, out io.Writer, containerName stri
 		// "-log-packets",
 		// "-strace",
 		"-root", ateompath.RunSCStateDir(r.actorTemplateNamespace, r.actorTemplateName, r.actorID),
+	}
+	args = append(args, r.gpuGlobalFlags()...)
+	args = append(args,
 		"create",
 		"-bundle", ateompath.OCIBundlePath(r.actorTemplateNamespace, r.actorTemplateName, r.actorID, containerName),
 		"-pid-file", ateompath.PIDFilePath(r.actorTemplateNamespace, r.actorTemplateName, r.actorID, containerName),
 		containerName, // Name of the container
 	)
+	cmd := exec.CommandContext(ctx, r.path, args...)
 	cmd.Stdout = out
 	cmd.Stderr = out
 
@@ -103,9 +136,7 @@ func (r *runsc) cmdCheckpoint(ctx context.Context, containerName, checkpointPath
 
 	slog.InfoContext(ctx, "About to run runsc checkpoint", slog.String("container", containerName))
 
-	cmd := exec.CommandContext(
-		ctx,
-		r.path,
+	args := []string{
 		"-log-format", "json",
 		"--alsologtostderr",
 		// "-debug",
@@ -114,10 +145,12 @@ func (r *runsc) cmdCheckpoint(ctx context.Context, containerName, checkpointPath
 		// "-log-packets",
 		// "-strace",
 		"-root", ateompath.RunSCStateDir(r.actorTemplateNamespace, r.actorTemplateName, r.actorID),
-		"checkpoint",
-		"-image-path", checkpointPath,
-		containerName, // Name of the container
-	)
+	}
+	args = append(args, r.gpuGlobalFlags()...)
+	args = append(args, "checkpoint", "-image-path", checkpointPath)
+	args = append(args, r.gpuSaveRestoreFlags()...)
+	args = append(args, containerName)
+	cmd := exec.CommandContext(ctx, r.path, args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	err := cmd.Run()
@@ -135,9 +168,7 @@ func (r *runsc) cmdRestore(ctx context.Context, out io.Writer, containerName, ch
 
 	slog.InfoContext(ctx, "About to run runsc restore", slog.String("container", containerName))
 
-	cmd := exec.CommandContext(
-		ctx,
-		r.path,
+	args := []string{
 		"-log-format", "json",
 		"--alsologtostderr",
 		// "-debug",
@@ -146,15 +177,28 @@ func (r *runsc) cmdRestore(ctx context.Context, out io.Writer, containerName, ch
 		// "-log-packets",
 		// "-strace",
 		"-root", ateompath.RunSCStateDir(r.actorTemplateNamespace, r.actorTemplateName, r.actorID),
+	}
+	args = append(args, r.gpuGlobalFlags()...)
+	args = append(args,
 		"restore",
 		"-bundle", ateompath.OCIBundlePath(r.actorTemplateNamespace, r.actorTemplateName, r.actorID, containerName),
 		"-image-path", checkpointPath,
 		"-pid-file", ateompath.PIDFilePath(r.actorTemplateNamespace, r.actorTemplateName, r.actorID, containerName),
+	)
+	if containerName == "pause" {
+		// --save-restore-exec-argv runs the wrapper once per sandbox, on
+		// the root container's restore. Sub-container restores must not
+		// re-invoke it -- the sandbox is already up and CUDA state has
+		// already been re-toggled.
+		args = append(args, r.gpuSaveRestoreFlags()...)
+	}
+	args = append(args,
 		//"-background",
 		//"-direct", // TODO(ateom): Reenable direct
 		"-detach",
 		containerName,
 	)
+	cmd := exec.CommandContext(ctx, r.path, args...)
 	cmd.Stdout = out
 	cmd.Stderr = out
 	if err := cmd.Run(); err != nil {

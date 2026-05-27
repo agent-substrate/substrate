@@ -170,6 +170,15 @@ func initTracing(ctx context.Context) (*sdktrace.TracerProvider, error) {
 	return tp, nil
 }
 
+func firstGPUSpec(containers []*ateompb.Container) *ateompb.GpuSpec {
+	for _, c := range containers {
+		if g := c.GetGpu(); g != nil {
+			return g
+		}
+	}
+	return nil
+}
+
 // AteomService is a service for shepherding single microvm.
 type AteomService struct {
 	ateompb.UnimplementedAteomServer
@@ -291,6 +300,7 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 		actorTemplateNamespace: req.GetActorTemplateNamespace(),
 		actorTemplateName:      req.GetActorTemplateName(),
 		actorID:                req.GetActorId(),
+		gpu:                    firstGPUSpec(req.GetSpec().GetContainers()),
 	}
 
 	// Create and start pause container
@@ -338,6 +348,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 		actorTemplateNamespace: req.GetActorTemplateNamespace(),
 		actorTemplateName:      req.GetActorTemplateName(),
 		actorID:                req.GetActorId(),
+		gpu:                    firstGPUSpec(req.GetSpec().GetContainers()),
 	}
 
 	checkpointPath := ateompath.CheckpointDir(req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId())
@@ -469,6 +480,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 		actorTemplateNamespace: req.GetActorTemplateNamespace(),
 		actorTemplateName:      req.GetActorTemplateName(),
 		actorID:                req.GetActorId(),
+		gpu:                    firstGPUSpec(req.GetSpec().GetContainers()),
 	}
 
 	checkpointDir := ateompath.CheckpointDir(req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId())

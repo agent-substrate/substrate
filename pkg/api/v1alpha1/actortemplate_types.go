@@ -49,6 +49,38 @@ type Container struct {
 
 	// Environment variables to set in the worker replicas.
 	Env []corev1.EnvVar `json:"env,omitempty"`
+
+	// +optional
+	Resources *ContainerResources `json:"resources,omitempty"`
+}
+
+// ContainerResources is a per-container resource request block.
+type ContainerResources struct {
+	// +optional
+	GPU *GPUResource `json:"gpu,omitempty"`
+}
+
+// GPUResource is the NVIDIA GPU passthrough request.
+type GPUResource struct {
+	// +optional
+	// +kubebuilder:default=1
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=1
+	Count int32 `json:"count,omitempty"`
+
+	// Device is a CDI device id (e.g. "nvidia.com/gpu=0") or "all".
+	// +optional
+	Device string `json:"device,omitempty"`
+
+	// DriverCapabilities for runsc --nvproxy-allowed-driver-capabilities.
+	// Defaults to ["compute","utility"].
+	// +optional
+	// +listType=atomic
+	DriverCapabilities []string `json:"driverCapabilities,omitempty"`
+
+	// DriverVersion pins runsc's nvproxy driver ABI. Empty uses host's.
+	// +optional
+	DriverVersion string `json:"driverVersion,omitempty"`
 }
 
 type SnapshotsConfig struct {

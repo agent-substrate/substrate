@@ -269,6 +269,37 @@ spec:
                         - containerPort
                         type: object
                       type: array
+                    resources:
+                      description: ContainerResources is a per-container resource
+                        request block.
+                      properties:
+                        gpu:
+                          description: GPUResource is the NVIDIA GPU passthrough request.
+                          properties:
+                            count:
+                              default: 1
+                              format: int32
+                              maximum: 1
+                              minimum: 1
+                              type: integer
+                            device:
+                              description: Device is a CDI device id (e.g. "nvidia.com/gpu=0")
+                                or "all".
+                              type: string
+                            driverCapabilities:
+                              description: |-
+                                DriverCapabilities for runsc --nvproxy-allowed-driver-capabilities.
+                                Defaults to ["compute","utility"].
+                              items:
+                                type: string
+                              type: array
+                              x-kubernetes-list-type: atomic
+                            driverVersion:
+                              description: DriverVersion pins runsc's nvproxy driver
+                                ABI. Empty uses host's.
+                              type: string
+                          type: object
+                      type: object
                   required:
                   - name
                   type: object

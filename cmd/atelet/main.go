@@ -395,6 +395,7 @@ func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (*atele
 				"io.kubernetes.cri.container-name": "pause",
 			},
 			netnsPath,
+			nil,
 		); err != nil {
 			return fmt.Errorf("while creating pause OCI bundle: %w", err)
 		}
@@ -426,6 +427,7 @@ func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (*atele
 					"io.kubernetes.cri.container-name": ctr.GetName(),
 				},
 				netnsPath,
+				ctr.GetGpu(),
 			); err != nil {
 				return fmt.Errorf("while creating %q OCI bundle: %w", ctr.GetName(), err)
 			}
@@ -456,6 +458,7 @@ func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (*atele
 	for _, ctr := range req.GetSpec().GetContainers() {
 		ateomCtr := &ateompb.Container{
 			Name: ctr.GetName(),
+			Gpu:  toAteomGpuSpec(ctr.GetGpu()),
 		}
 		ateomReq.GetSpec().Containers = append(ateomReq.GetSpec().Containers, ateomCtr)
 	}
@@ -511,6 +514,7 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 	for _, ctr := range req.GetSpec().GetContainers() {
 		ateomCtr := &ateompb.Container{
 			Name: ctr.GetName(),
+			Gpu:  toAteomGpuSpec(ctr.GetGpu()),
 		}
 		ateomReq.GetSpec().Containers = append(ateomReq.GetSpec().Containers, ateomCtr)
 	}
@@ -644,6 +648,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 				"io.kubernetes.cri.container-name": "pause",
 			},
 			netnsPath,
+			nil,
 		); err != nil {
 			return fmt.Errorf("while creating pause OCI bundle: %w", err)
 		}
@@ -675,6 +680,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 					"io.kubernetes.cri.container-name": ctr.GetName(),
 				},
 				netnsPath,
+				ctr.GetGpu(),
 			); err != nil {
 				return fmt.Errorf("while creating %q OCI bundle: %w", ctr.GetName(), err)
 			}
@@ -705,6 +711,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	for _, ctr := range req.GetSpec().GetContainers() {
 		ateomCtr := &ateompb.Container{
 			Name: ctr.GetName(),
+			Gpu:  toAteomGpuSpec(ctr.GetGpu()),
 		}
 		ateomReq.GetSpec().Containers = append(ateomReq.GetSpec().Containers, ateomCtr)
 	}
@@ -714,6 +721,18 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	}
 
 	return &ateletpb.RestoreResponse{}, nil
+}
+
+func toAteomGpuSpec(g *ateletpb.GpuSpec) *ateompb.GpuSpec {
+	if g == nil {
+		return nil
+	}
+	return &ateompb.GpuSpec{
+		Count:              g.GetCount(),
+		Device:             g.GetDevice(),
+		DriverCapabilities: g.GetDriverCapabilities(),
+		DriverVersion:      g.GetDriverVersion(),
+	}
 }
 
 type AteomDialer struct {

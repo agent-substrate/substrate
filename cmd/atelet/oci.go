@@ -28,12 +28,14 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/memorypullcache"
+	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	"golang.org/x/sys/unix"
 )
 
-func prepareOCIDirectory(ctx context.Context, pullCache *memorypullcache.MemoryPullCache, actorTemplateNamespace, actorTemplateName, actorID, containerName, ref string, args []string, env []string, annotations map[string]string, netns string) error {
+func prepareOCIDirectory(ctx context.Context, pullCache *memorypullcache.MemoryPullCache, actorTemplateNamespace, actorTemplateName, actorID, containerName, ref string, args []string, env []string, annotations map[string]string, netns string, gpu *ateletpb.GpuSpec) error {
 	tracer := otel.Tracer("prepareOCIDirectory")
 
 	ctx, span := tracer.Start(ctx, "prepareOCIDirectory")
@@ -162,6 +164,12 @@ func prepareOCIDirectory(ctx context.Context, pullCache *memorypullcache.MemoryP
 		},
 		Annotations: annotations,
 	}
+
+	if gpu != nil {
+		if err := addGPUToOCISpec(ociSpec); err != nil {
+			return fmt.Errorf("while adding GPU passthrough to OCI spec: %w", err)
+		}
+	}
 	ociSpecBytes, err := json.MarshalIndent(ociSpec, "", "  ")
 	if err != nil {
 		return fmt.Errorf("while marshaling OCI spec: %w", err)
@@ -277,5 +285,57 @@ func untar(ctx context.Context, tarData io.Reader, rootPath string) error {
 
 	}
 
+	return nil
+}
+
+var gpuDevicePaths = []string{
+	"/dev/nvidiactl",
+	"/dev/nvidia-uvm",
+	"/dev/nvidia-uvm-tools",
+	"/dev/nvidia-modeset",
+}
+
+func addGPUToOCISpec(spec *specs.Spec) error {
+	paths := append([]string{}, gpuDevicePaths...)
+	entries, err := os.ReadDir("/dev")
+	if err != nil {
+		return fmt.Errorf("reading /dev: %w", err)
+	}
+	for _, e := range entries {
+		n := e.Name()
+		if len(n) > 6 && n[:6] == "nvidia" && n[6] >= '0' && n[6] <= '9' {
+			paths = append(paths, "/dev/"+n)
+		}
+	}
+	for _, p := range paths {
+		var st unix.Stat_t
+		if err := unix.Stat(p, &st); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			return fmt.Errorf("stat %s: %w", p, err)
+		}
+		major := int64(unix.Major(uint64(st.Rdev))) //nolint:gosec
+		minor := int64(unix.Minor(uint64(st.Rdev))) //nolint:gosec
+		mode := os.FileMode(st.Mode & 0o777)        //nolint:gosec
+		uid := st.Uid
+		gid := st.Gid
+		spec.Linux.Devices = append(spec.Linux.Devices, specs.LinuxDevice{
+			Path: p, Type: "c", Major: major, Minor: minor,
+			FileMode: &mode, UID: &uid, GID: &gid,
+		})
+	}
+	for _, src := range []string{
+		"/usr/local/bin/cuda-checkpoint",
+		"/usr/local/bin/cuda-checkpoint-wrapper.sh",
+	} {
+		if _, err := os.Stat(src); err != nil {
+			continue
+		}
+		spec.Mounts = append(spec.Mounts, specs.Mount{
+			Destination: src, Type: "bind", Source: src,
+			Options: []string{"ro", "bind"},
+		})
+	}
 	return nil
 }

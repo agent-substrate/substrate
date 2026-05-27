@@ -152,6 +152,7 @@ func (s *CallAteletSuspendStep) Execute(ctx context.Context, input *SuspendInput
 			Name:    ctr.Name,
 			Image:   ctr.Image,
 			Command: ctr.Command,
+			Gpu:     toAteletGpuSpec(ctr.Resources),
 		}
 		for _, env := range ctr.Env {
 			ateletEnv := &ateletpb.EnvEntry{

@@ -81,6 +81,15 @@ message Container {
   string            image   = 2;
   repeated string   command = 3;
   repeated EnvEntry env     = 4;
+  GpuSpec           gpu     = 5;
+}
+
+// GpuSpec mirrors v1alpha1.GPUResource on the ActorTemplate CRD.
+message GpuSpec {
+  int32           count               = 1;
+  string          device              = 2;
+  repeated string driver_capabilities = 3;
+  string          driver_version      = 4;
 }
 
 message EnvEntry {
