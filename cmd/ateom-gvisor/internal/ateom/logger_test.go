@@ -116,7 +116,7 @@ func TestWrapContainerLogs_JSONInput(t *testing.T) {
 
 func TestSyncedWriter_Concurrency(t *testing.T) {
 	var buf bytes.Buffer
-	sw := &syncedWriter{w: &buf}
+	sw := NewSyncedWriter(&buf)
 
 	const numWorkers = 10
 	const writesPerWorker = 100

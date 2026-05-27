@@ -25,15 +25,22 @@ import (
 	"time"
 )
 
-type syncedWriter struct {
+// SyncedWriter wraps an io.Writer and synchronizes writes across goroutines.
+type SyncedWriter struct {
 	mu sync.Mutex
 	w  io.Writer
 }
 
-func (sw *syncedWriter) Write(p []byte) (n int, err error) {
+// Write writes the byte slice to the underlying writer, synchronized by a mutex.
+func (sw *SyncedWriter) Write(p []byte) (n int, err error) {
 	sw.mu.Lock()
 	defer sw.mu.Unlock()
 	return sw.w.Write(p)
+}
+
+// NewSyncedWriter returns a new SyncedWriter wrapping the given io.Writer.
+func NewSyncedWriter(w io.Writer) *SyncedWriter {
+	return &SyncedWriter{w: w}
 }
 
 // ActorLogger handles structured logging for actor sandboxes and lifecycle events.

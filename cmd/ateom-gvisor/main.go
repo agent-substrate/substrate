@@ -64,7 +64,7 @@ func do(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	syncedWriter := &syncedWriter{w: os.Stdout}
+	syncedWriter := ateom.NewSyncedWriter(os.Stdout)
 	logger := slog.New(contextlogging.NewHandler(slog.NewJSONHandler(syncedWriter, nil)))
 	slog.SetDefault(logger)
 
