@@ -104,9 +104,17 @@ run_kubectl_ate() {
 }
 
 run_ko() {
-  ./hack/run-tool.sh ko \
-    "$@" \
-    -- ${KUBECTL_CONTEXT:+--context=${KUBECTL_CONTEXT}}
+  # Only ko subcommands that delegate to kubectl (apply, create, delete, run)
+  # accept args after `--`. ko build, resolve, deps, login etc. reject
+  # `--context=...` as an unknown subcommand and abort the install.
+  case "${1:-}" in
+    apply|create|delete|run)
+      ./hack/run-tool.sh ko "$@" ${KUBECTL_CONTEXT:+-- --context="${KUBECTL_CONTEXT}"}
+      ;;
+    *)
+      ./hack/run-tool.sh ko "$@"
+      ;;
+  esac
 }
 
 create_valkey_ca_certs_secret() {
