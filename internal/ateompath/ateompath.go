@@ -16,14 +16,8 @@
 package ateompath
 
 import (
-	"fmt"
 	"path/filepath"
 )
-
-// MaxUnixSocketPathLen is the practical Linux limit for unix-domain socket
-// paths. The kernel's sockaddr_un.sun_path is 108 bytes including the trailing
-// NUL, leaving 107 usable bytes. Bind fails with EINVAL above this.
-const MaxUnixSocketPathLen = 107
 
 const (
 	// The base path.  This is both the path of the root shared folder on the
@@ -40,45 +34,29 @@ func RunSCBinaryPath(sha256 string) string {
 	return filepath.Join(StaticFilesDir, "runsc-"+sha256)
 }
 
-func AteomPath(ateomNamespace, ateomName string) string {
+func AteomPath(podUID string) string {
 	return filepath.Join(
 		BasePath,
 		"ateoms",
-		ateomNamespace+":"+ateomName,
+		podUID,
 	)
 }
 
-func AteomSocketPath(ateomNamespace, ateomName string) string {
+func AteomSocketPath(podUID string) string {
 	return filepath.Join(
-		AteomPath(ateomNamespace, ateomName),
+		AteomPath(podUID),
 		"ateom.sock",
 	)
 }
 
-// ValidateAteomSocketPath returns a descriptive error when the socket path
-// derived from ateomNamespace and ateomName would exceed Linux's unix-socket
-// limit. Calling net.Listen("unix", ...) with an over-limit path otherwise
-// fails with the cryptic "bind: invalid argument".
-func ValidateAteomSocketPath(ateomNamespace, ateomName string) error {
-	p := AteomSocketPath(ateomNamespace, ateomName)
-	if len(p) > MaxUnixSocketPathLen {
-		return fmt.Errorf(
-			"ateom socket path %q is %d bytes, exceeds Linux unix-socket limit of %d: shorten the namespace or pod name (%d + %d = %d chars used for namespace + name)",
-			p, len(p), MaxUnixSocketPathLen,
-			len(ateomNamespace), len(ateomName), len(ateomNamespace)+len(ateomName),
-		)
-	}
-	return nil
+func AteomNetNSName(podUID string) string {
+	return "ateom:" + podUID
 }
 
-func AteomNetNSName(ateomNamespace, ateomName string) string {
-	return "ateom:" + ateomNamespace + ":" + ateomName
-}
-
-func AteomNetNSPath(ateomNamespace, ateomName string) string {
+func AteomNetNSPath(podUID string) string {
 	return filepath.Join(
 		"/run/netns",
-		AteomNetNSName(ateomNamespace, ateomName),
+		AteomNetNSName(podUID),
 	)
 }
 

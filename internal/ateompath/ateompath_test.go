@@ -19,53 +19,42 @@ import (
 	"testing"
 )
 
-func TestValidateAteomSocketPath(t *testing.T) {
-	tests := []struct {
-		name      string
-		namespace string
-		podName   string
-		wantErr   bool
-	}{
-		{
-			name:      "short names well under the limit",
-			namespace: "ate-demo-counter",
-			podName:   "counter-deployment-abcd1234-xyzw1",
-			wantErr:   false,
-		},
-		{
-			name:      "exactly at the limit",
-			namespace: strings.Repeat("a", 25),
-			podName:   strings.Repeat("b", 45),
-			wantErr:   false,
-		},
-		{
-			name:      "one byte over the limit",
-			namespace: strings.Repeat("a", 25),
-			podName:   strings.Repeat("b", 46),
-			wantErr:   true,
-		},
-		{
-			name:      "the reproducer from the original bug report",
-			namespace: "ate-demo-lovable-sandbox",
-			podName:   "lovable-sandbox-pool-deployment-5797879cd7-2n7wb",
-			wantErr:   true,
-		},
+func TestAteomPath(t *testing.T) {
+	podUID := "123e4567-e89b-12d3-a456-426614174000"
+
+	path := AteomPath(podUID)
+	expectedSuffix := "/ateoms/" + podUID
+	if !strings.HasSuffix(path, expectedSuffix) {
+		t.Errorf("expected path to end with %s, got %s", expectedSuffix, path)
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := ValidateAteomSocketPath(tt.namespace, tt.podName)
-			if (err != nil) != tt.wantErr {
-				t.Errorf("ValidateAteomSocketPath(%q, %q) err=%v, wantErr=%v",
-					tt.namespace, tt.podName, err, tt.wantErr)
-			}
-			if tt.wantErr && err != nil {
-				// Error message should mention the limit so an operator can
-				// figure out by how much to shorten.
-				msg := err.Error()
-				if !strings.Contains(msg, "107") {
-					t.Errorf("error message %q does not reference the limit (107)", msg)
-				}
-			}
-		})
+}
+
+func TestAteomSocketPathLimits(t *testing.T) {
+	podUID := "123e4567-e89b-12d3-a456-426614174000"
+
+	sockPath := AteomSocketPath(podUID)
+
+	// Unix domain socket path limit is 107 bytes (108 with NUL terminator)
+	const maxUnixSocketLen = 107
+	if len(sockPath) > maxUnixSocketLen {
+		t.Errorf("socket path length %d exceeds max allowed length %d: %q", len(sockPath), maxUnixSocketLen, sockPath)
+	}
+
+	// Verify it is deterministic
+	sockPath2 := AteomSocketPath(podUID)
+	if sockPath != sockPath2 {
+		t.Errorf("expected deterministic socket paths, got %q and %q", sockPath, sockPath2)
+	}
+}
+
+func TestAteomPathUniqueness(t *testing.T) {
+	uid1 := "123e4567-e89b-12d3-a456-426614174000"
+	uid2 := "987f6543-e21b-32d1-b654-246614174111"
+
+	path1 := AteomPath(uid1)
+	path2 := AteomPath(uid2)
+
+	if path1 == path2 {
+		t.Errorf("expected different paths for different pod UIDs, got %q", path1)
 	}
 }

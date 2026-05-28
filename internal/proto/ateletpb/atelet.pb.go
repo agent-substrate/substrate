@@ -37,8 +37,7 @@ const (
 
 type RunRequest struct {
 	state                  protoimpl.MessageState `protogen:"open.v1"`
-	TargetAteomNamespace   string                 `protobuf:"bytes,1,opt,name=target_ateom_namespace,json=targetAteomNamespace,proto3" json:"target_ateom_namespace,omitempty"`
-	TargetAteomName        string                 `protobuf:"bytes,2,opt,name=target_ateom_name,json=targetAteomName,proto3" json:"target_ateom_name,omitempty"`
+	TargetAteomUid         string                 `protobuf:"bytes,1,opt,name=target_ateom_uid,json=targetAteomUid,proto3" json:"target_ateom_uid,omitempty"`
 	ActorTemplateNamespace string                 `protobuf:"bytes,3,opt,name=actor_template_namespace,json=actorTemplateNamespace,proto3" json:"actor_template_namespace,omitempty"`
 	ActorTemplateName      string                 `protobuf:"bytes,4,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
 	ActorId                string                 `protobuf:"bytes,5,opt,name=actor_id,json=actorId,proto3" json:"actor_id,omitempty"`
@@ -78,16 +77,9 @@ func (*RunRequest) Descriptor() ([]byte, []int) {
 	return file_atelet_proto_rawDescGZIP(), []int{0}
 }
 
-func (x *RunRequest) GetTargetAteomNamespace() string {
+func (x *RunRequest) GetTargetAteomUid() string {
 	if x != nil {
-		return x.TargetAteomNamespace
-	}
-	return ""
-}
-
-func (x *RunRequest) GetTargetAteomName() string {
-	if x != nil {
-		return x.TargetAteomName
+		return x.TargetAteomUid
 	}
 	return ""
 }
@@ -542,8 +534,7 @@ func (*RunResponse) Descriptor() ([]byte, []int) {
 
 type CheckpointRequest struct {
 	state                  protoimpl.MessageState `protogen:"open.v1"`
-	TargetAteomNamespace   string                 `protobuf:"bytes,1,opt,name=target_ateom_namespace,json=targetAteomNamespace,proto3" json:"target_ateom_namespace,omitempty"`
-	TargetAteomName        string                 `protobuf:"bytes,2,opt,name=target_ateom_name,json=targetAteomName,proto3" json:"target_ateom_name,omitempty"`
+	TargetAteomUid         string                 `protobuf:"bytes,1,opt,name=target_ateom_uid,json=targetAteomUid,proto3" json:"target_ateom_uid,omitempty"`
 	ActorTemplateNamespace string                 `protobuf:"bytes,3,opt,name=actor_template_namespace,json=actorTemplateNamespace,proto3" json:"actor_template_namespace,omitempty"`
 	ActorTemplateName      string                 `protobuf:"bytes,4,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
 	ActorId                string                 `protobuf:"bytes,5,opt,name=actor_id,json=actorId,proto3" json:"actor_id,omitempty"`
@@ -594,16 +585,9 @@ func (*CheckpointRequest) Descriptor() ([]byte, []int) {
 	return file_atelet_proto_rawDescGZIP(), []int{9}
 }
 
-func (x *CheckpointRequest) GetTargetAteomNamespace() string {
+func (x *CheckpointRequest) GetTargetAteomUid() string {
 	if x != nil {
-		return x.TargetAteomNamespace
-	}
-	return ""
-}
-
-func (x *CheckpointRequest) GetTargetAteomName() string {
-	if x != nil {
-		return x.TargetAteomName
+		return x.TargetAteomUid
 	}
 	return ""
 }
@@ -688,8 +672,7 @@ func (*CheckpointResponse) Descriptor() ([]byte, []int) {
 
 type RestoreRequest struct {
 	state                  protoimpl.MessageState `protogen:"open.v1"`
-	TargetAteomNamespace   string                 `protobuf:"bytes,1,opt,name=target_ateom_namespace,json=targetAteomNamespace,proto3" json:"target_ateom_namespace,omitempty"`
-	TargetAteomName        string                 `protobuf:"bytes,2,opt,name=target_ateom_name,json=targetAteomName,proto3" json:"target_ateom_name,omitempty"`
+	TargetAteomUid         string                 `protobuf:"bytes,1,opt,name=target_ateom_uid,json=targetAteomUid,proto3" json:"target_ateom_uid,omitempty"`
 	ActorTemplateNamespace string                 `protobuf:"bytes,3,opt,name=actor_template_namespace,json=actorTemplateNamespace,proto3" json:"actor_template_namespace,omitempty"`
 	ActorTemplateName      string                 `protobuf:"bytes,4,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
 	ActorId                string                 `protobuf:"bytes,5,opt,name=actor_id,json=actorId,proto3" json:"actor_id,omitempty"`
@@ -731,16 +714,9 @@ func (*RestoreRequest) Descriptor() ([]byte, []int) {
 	return file_atelet_proto_rawDescGZIP(), []int{11}
 }
 
-func (x *RestoreRequest) GetTargetAteomNamespace() string {
+func (x *RestoreRequest) GetTargetAteomUid() string {
 	if x != nil {
-		return x.TargetAteomNamespace
-	}
-	return ""
-}
-
-func (x *RestoreRequest) GetTargetAteomName() string {
-	if x != nil {
-		return x.TargetAteomName
+		return x.TargetAteomUid
 	}
 	return ""
 }
@@ -827,11 +803,10 @@ var File_atelet_proto protoreflect.FileDescriptor
 
 const file_atelet_proto_rawDesc = "" +
 	"\n" +
-	"\fatelet.proto\x12\x06atelet\"\xc8\x02\n" +
+	"\fatelet.proto\x12\x06atelet\"\x90\x02\n" +
 	"\n" +
-	"RunRequest\x124\n" +
-	"\x16target_ateom_namespace\x18\x01 \x01(\tR\x14targetAteomNamespace\x12*\n" +
-	"\x11target_ateom_name\x18\x02 \x01(\tR\x0ftargetAteomName\x128\n" +
+	"RunRequest\x12(\n" +
+	"\x10target_ateom_uid\x18\x01 \x01(\tR\x0etargetAteomUid\x128\n" +
 	"\x18actor_template_namespace\x18\x03 \x01(\tR\x16actorTemplateNamespace\x12.\n" +
 	"\x13actor_template_name\x18\x04 \x01(\tR\x11actorTemplateName\x12\x19\n" +
 	"\bactor_id\x18\x05 \x01(\tR\aactorId\x12)\n" +
@@ -863,20 +838,18 @@ const file_atelet_proto_rawDesc = "" +
 	"\bEnvEntry\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value\"\r\n" +
-	"\vRunResponse\"\xff\x02\n" +
-	"\x11CheckpointRequest\x124\n" +
-	"\x16target_ateom_namespace\x18\x01 \x01(\tR\x14targetAteomNamespace\x12*\n" +
-	"\x11target_ateom_name\x18\x02 \x01(\tR\x0ftargetAteomName\x128\n" +
+	"\vRunResponse\"\xc7\x02\n" +
+	"\x11CheckpointRequest\x12(\n" +
+	"\x10target_ateom_uid\x18\x01 \x01(\tR\x0etargetAteomUid\x128\n" +
 	"\x18actor_template_namespace\x18\x03 \x01(\tR\x16actorTemplateNamespace\x12.\n" +
 	"\x13actor_template_name\x18\x04 \x01(\tR\x11actorTemplateName\x12\x19\n" +
 	"\bactor_id\x18\x05 \x01(\tR\aactorId\x12)\n" +
 	"\x05runsc\x18\x06 \x01(\v2\x13.atelet.RunscConfigR\x05runsc\x12(\n" +
 	"\x04spec\x18\a \x01(\v2\x14.atelet.WorkloadSpecR\x04spec\x12.\n" +
 	"\x13snapshot_uri_prefix\x18\b \x01(\tR\x11snapshotUriPrefix\"\x14\n" +
-	"\x12CheckpointResponse\"\xfc\x02\n" +
-	"\x0eRestoreRequest\x124\n" +
-	"\x16target_ateom_namespace\x18\x01 \x01(\tR\x14targetAteomNamespace\x12*\n" +
-	"\x11target_ateom_name\x18\x02 \x01(\tR\x0ftargetAteomName\x128\n" +
+	"\x12CheckpointResponse\"\xc4\x02\n" +
+	"\x0eRestoreRequest\x12(\n" +
+	"\x10target_ateom_uid\x18\x01 \x01(\tR\x0etargetAteomUid\x128\n" +
 	"\x18actor_template_namespace\x18\x03 \x01(\tR\x16actorTemplateNamespace\x12.\n" +
 	"\x13actor_template_name\x18\x04 \x01(\tR\x11actorTemplateName\x12\x19\n" +
 	"\bactor_id\x18\x05 \x01(\tR\aactorId\x12)\n" +

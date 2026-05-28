@@ -671,7 +671,7 @@ func TestListWorkers(t *testing.T) {
 		},
 	}
 
-	if diff := cmp.Diff(want, filteredWorkers, protocmp.Transform()); diff != "" {
+	if diff := cmp.Diff(want, filteredWorkers, protocmp.Transform(), protocmp.IgnoreFields(&ateapipb.Worker{}, "worker_pod_uid")); diff != "" {
 		t.Errorf("ListWorkers response mismatch (-want +got):\n%s", diff)
 	}
 }
@@ -733,7 +733,7 @@ func TestResumeActor(t *testing.T) {
 			AteomPodIp:             "127.0.0.1",
 		},
 	}
-	if diff := cmp.Diff(want, getResp, protocmp.Transform(), protocmp.IgnoreFields(&ateapipb.Actor{}, "version")); diff != "" {
+	if diff := cmp.Diff(want, getResp, protocmp.Transform(), protocmp.IgnoreFields(&ateapipb.Actor{}, "version"), protocmp.IgnoreFields(&ateapipb.Actor{}, "ateom_pod_uid")); diff != "" {
 		t.Errorf("GetActor response mismatch (-want +got):\n%s", diff)
 	}
 
@@ -763,7 +763,7 @@ func TestResumeActor(t *testing.T) {
 		Ip:              "127.0.0.1",
 	}
 
-	if diff := cmp.Diff(wantWorker, actorWorker, protocmp.Transform(), protocmp.IgnoreFields(&ateapipb.Worker{}, "version")); diff != "" {
+	if diff := cmp.Diff(wantWorker, actorWorker, protocmp.Transform(), protocmp.IgnoreFields(&ateapipb.Worker{}, "version"), protocmp.IgnoreFields(&ateapipb.Worker{}, "worker_pod_uid")); diff != "" {
 		t.Errorf("Worker state mismatch (-want +got):\n%s", diff)
 	}
 }
@@ -943,7 +943,7 @@ func TestSuspendActor(t *testing.T) {
 		},
 	}
 
-	if diff := cmp.Diff(want, getResp, protocmp.Transform(), protocmp.IgnoreFields(&ateapipb.Actor{}, "version"), protocmp.IgnoreFields(&ateapipb.Actor{}, "last_snapshot")); diff != "" {
+	if diff := cmp.Diff(want, getResp, protocmp.Transform(), protocmp.IgnoreFields(&ateapipb.Actor{}, "version"), protocmp.IgnoreFields(&ateapipb.Actor{}, "last_snapshot"), protocmp.IgnoreFields(&ateapipb.Actor{}, "ateom_pod_uid")); diff != "" {
 		t.Errorf("GetActor response mismatch (-want +got):\n%s", diff)
 	}
 

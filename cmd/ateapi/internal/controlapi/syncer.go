@@ -119,6 +119,7 @@ func (s *WorkerPoolSyncer) syncWorkerToStore(ctx context.Context, pod *corev1.Po
 				WorkerPool:      pod.Labels[workerPodLabel],
 				WorkerPod:       pod.Name,
 				Ip:              pod.Status.PodIP,
+				WorkerPodUid:    string(pod.UID),
 			})
 			if err != nil && !errors.Is(err, store.ErrAlreadyExists) {
 				slog.ErrorContext(ctx, "Failed to create worker in store", slog.Any("err", err))

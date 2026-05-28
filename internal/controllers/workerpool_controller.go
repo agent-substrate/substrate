@@ -141,8 +141,7 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool) *appsv1ac.Deployment
 						WithName("ateom").
 						WithImage(wp.Spec.AteomImage).
 						WithArgs(
-							"-pod-namespace=$(POD_NAMESPACE)",
-							"-pod-name=$(POD_NAME)",
+							"-pod-uid=$(POD_UID)",
 						).
 						WithSecurityContext(corev1ac.SecurityContext().
 							WithPrivileged(true).
@@ -150,15 +149,10 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool) *appsv1ac.Deployment
 							WithRunAsGroup(0)).
 						WithEnv(
 							corev1ac.EnvVar().
-								WithName("POD_NAMESPACE").
+								WithName("POD_UID").
 								WithValueFrom(corev1ac.EnvVarSource().
 									WithFieldRef(corev1ac.ObjectFieldSelector().
-										WithFieldPath("metadata.namespace"))),
-							corev1ac.EnvVar().
-								WithName("POD_NAME").
-								WithValueFrom(corev1ac.EnvVarSource().
-									WithFieldRef(corev1ac.ObjectFieldSelector().
-										WithFieldPath("metadata.name"))),
+										WithFieldPath("metadata.uid"))),
 						).
 						WithVolumeMounts(corev1ac.VolumeMount().
 							WithName("run-ateom").

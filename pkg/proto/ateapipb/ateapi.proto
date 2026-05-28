@@ -70,6 +70,7 @@ message Actor {
 
   string last_snapshot        = 9;
   string in_progress_snapshot = 10;
+  string ateom_pod_uid        = 11;
 }
 
 message GetActorRequest {
@@ -143,6 +144,7 @@ message Worker {
   string actor_id        = 6;
   string ip              = 7;
   int64  version         = 8;
+  string worker_pod_uid  = 9;
 }
 
 message DebugClearRequest {}

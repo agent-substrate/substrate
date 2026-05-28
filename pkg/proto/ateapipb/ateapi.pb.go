@@ -104,6 +104,7 @@ type Actor struct {
 	AteomPodIp             string                 `protobuf:"bytes,8,opt,name=ateom_pod_ip,json=ateomPodIp,proto3" json:"ateom_pod_ip,omitempty"`
 	LastSnapshot           string                 `protobuf:"bytes,9,opt,name=last_snapshot,json=lastSnapshot,proto3" json:"last_snapshot,omitempty"`
 	InProgressSnapshot     string                 `protobuf:"bytes,10,opt,name=in_progress_snapshot,json=inProgressSnapshot,proto3" json:"in_progress_snapshot,omitempty"`
+	AteomPodUid            string                 `protobuf:"bytes,11,opt,name=ateom_pod_uid,json=ateomPodUid,proto3" json:"ateom_pod_uid,omitempty"`
 	unknownFields          protoimpl.UnknownFields
 	sizeCache              protoimpl.SizeCache
 }
@@ -204,6 +205,13 @@ func (x *Actor) GetLastSnapshot() string {
 func (x *Actor) GetInProgressSnapshot() string {
 	if x != nil {
 		return x.InProgressSnapshot
+	}
+	return ""
+}
+
+func (x *Actor) GetAteomPodUid() string {
+	if x != nil {
+		return x.AteomPodUid
 	}
 	return ""
 }
@@ -839,6 +847,7 @@ type Worker struct {
 	ActorId         string                 `protobuf:"bytes,6,opt,name=actor_id,json=actorId,proto3" json:"actor_id,omitempty"`
 	Ip              string                 `protobuf:"bytes,7,opt,name=ip,proto3" json:"ip,omitempty"`
 	Version         int64                  `protobuf:"varint,8,opt,name=version,proto3" json:"version,omitempty"`
+	WorkerPodUid    string                 `protobuf:"bytes,9,opt,name=worker_pod_uid,json=workerPodUid,proto3" json:"worker_pod_uid,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -927,6 +936,13 @@ func (x *Worker) GetVersion() int64 {
 		return x.Version
 	}
 	return 0
+}
+
+func (x *Worker) GetWorkerPodUid() string {
+	if x != nil {
+		return x.WorkerPodUid
+	}
+	return ""
 }
 
 type DebugClearRequest struct {
@@ -1255,7 +1271,7 @@ var File_ateapi_proto protoreflect.FileDescriptor
 
 const file_ateapi_proto_rawDesc = "" +
 	"\n" +
-	"\fateapi.proto\x12\x06ateapi\"\x9b\x04\n" +
+	"\fateapi.proto\x12\x06ateapi\"\xbf\x04\n" +
 	"\x05Actor\x12\x19\n" +
 	"\bactor_id\x18\x01 \x01(\tR\aactorId\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\x03R\aversion\x128\n" +
@@ -1268,7 +1284,8 @@ const file_ateapi_proto_rawDesc = "" +
 	"ateomPodIp\x12#\n" +
 	"\rlast_snapshot\x18\t \x01(\tR\flastSnapshot\x120\n" +
 	"\x14in_progress_snapshot\x18\n" +
-	" \x01(\tR\x12inProgressSnapshot\"v\n" +
+	" \x01(\tR\x12inProgressSnapshot\x12\"\n" +
+	"\rateom_pod_uid\x18\v \x01(\tR\vateomPodUid\"v\n" +
 	"\x06Status\x12\x16\n" +
 	"\x12STATUS_UNSPECIFIED\x10\x00\x12\x13\n" +
 	"\x0fSTATUS_RESUMING\x10\x01\x12\x12\n" +
@@ -1302,7 +1319,7 @@ const file_ateapi_proto_rawDesc = "" +
 	"\aworkers\x18\x01 \x03(\v2\x0e.ateapi.WorkerR\aworkers\"\x13\n" +
 	"\x11ListActorsRequest\";\n" +
 	"\x12ListActorsResponse\x12%\n" +
-	"\x06actors\x18\x01 \x03(\v2\r.ateapi.ActorR\x06actors\"\x88\x02\n" +
+	"\x06actors\x18\x01 \x03(\v2\r.ateapi.ActorR\x06actors\"\xae\x02\n" +
 	"\x06Worker\x12)\n" +
 	"\x10worker_namespace\x18\x01 \x01(\tR\x0fworkerNamespace\x12\x1f\n" +
 	"\vworker_pool\x18\x02 \x01(\tR\n" +
@@ -1313,7 +1330,8 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x0eactor_template\x18\x05 \x01(\tR\ractorTemplate\x12\x19\n" +
 	"\bactor_id\x18\x06 \x01(\tR\aactorId\x12\x0e\n" +
 	"\x02ip\x18\a \x01(\tR\x02ip\x12\x18\n" +
-	"\aversion\x18\b \x01(\x03R\aversion\"\x13\n" +
+	"\aversion\x18\b \x01(\x03R\aversion\x12$\n" +
+	"\x0eworker_pod_uid\x18\t \x01(\tR\fworkerPodUid\"\x13\n" +
 	"\x11DebugClearRequest\"\x14\n" +
 	"\x12DebugClearResponse\"{\n" +
 	"\x0eMintJWTRequest\x12\x1a\n" +

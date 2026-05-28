@@ -44,8 +44,7 @@ import (
 )
 
 var (
-	podNamespace = flag.String("pod-namespace", "", "The namespace of the current pod")
-	podName      = flag.String("pod-name", "", "The name of the current pod")
+	podUID = flag.String("pod-uid", "", "The UID of the current pod")
 
 	reapLock sync.RWMutex
 )
@@ -82,7 +81,7 @@ func do(ctx context.Context) error {
 	defer serverboot.ShutdownProvider("TracerProvider", tp.Shutdown)
 
 	// Create ateom dir
-	ateomDir := ateompath.AteomPath(*podNamespace, *podName)
+	ateomDir := ateompath.AteomPath(*podUID)
 	if err := os.MkdirAll(ateomDir, 0o700); err != nil {
 		return fmt.Errorf("in os.MkdirAll(%q): %w", ateomDir, err)
 	}
@@ -94,14 +93,8 @@ func do(ctx context.Context) error {
 	go reap.ReapChildren(nil, nil, nil, &reapLock)
 	slog.InfoContext(ctx, "Child process reaper launched")
 
-	// Validate before opening the socket so the operator sees a clear
-	// message rather than the kernel's cryptic "bind: invalid argument".
-	if err := ateompath.ValidateAteomSocketPath(*podNamespace, *podName); err != nil {
-		return err
-	}
-
 	// Clean up any old socket.
-	sockPath := ateompath.AteomSocketPath(*podNamespace, *podName)
+	sockPath := ateompath.AteomSocketPath(*podUID)
 	if err := os.RemoveAll(sockPath); err != nil {
 		return fmt.Errorf("while removing %q: %w", sockPath, err)
 	}
@@ -130,7 +123,7 @@ func do(ctx context.Context) error {
 	// read the addresses and routes off of every link in the namespace, then
 	// remove all the addresses and handle injecting packets into the interfaces
 	// using AF_PACKET.
-	interiorNetNS, err := createNetNSWithoutSwitching(ctx, ateompath.AteomNetNSName(*podNamespace, *podName))
+	interiorNetNS, err := createNetNSWithoutSwitching(ctx, ateompath.AteomNetNSName(*podUID))
 	if err != nil {
 		return fmt.Errorf("while creating ateom-interior netns: %w", err)
 	}

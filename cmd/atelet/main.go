@@ -273,12 +273,12 @@ func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (*atele
 
 	if err := s.prepareOCIBundles(ctx,
 		req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId(),
-		req.GetSpec(), req.GetTargetAteomNamespace(), req.GetTargetAteomName(),
+		req.GetSpec(), req.GetTargetAteomUid(),
 	); err != nil {
 		return nil, err
 	}
 
-	client, err := s.dialAteom(ctx, req.GetTargetAteomNamespace(), req.GetTargetAteomName())
+	client, err := s.dialAteom(ctx, req.GetTargetAteomUid())
 	if err != nil {
 		return nil, err
 	}
@@ -306,7 +306,7 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 
 	checkpointDir := ateompath.CheckpointDir(req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId())
 
-	client, err := s.dialAteom(ctx, req.GetTargetAteomNamespace(), req.GetTargetAteomName())
+	client, err := s.dialAteom(ctx, req.GetTargetAteomUid())
 	if err != nil {
 		return nil, err
 	}
@@ -397,12 +397,12 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	}
 
 	if err := s.prepareOCIBundles(ctx, ns, tmpl, actorID,
-		req.GetSpec(), req.GetTargetAteomNamespace(), req.GetTargetAteomName(),
+		req.GetSpec(), req.GetTargetAteomUid(),
 	); err != nil {
 		return nil, err
 	}
 
-	client, err := s.dialAteom(ctx, req.GetTargetAteomNamespace(), req.GetTargetAteomName())
+	client, err := s.dialAteom(ctx, req.GetTargetAteomUid())
 	if err != nil {
 		return nil, err
 	}
@@ -442,9 +442,9 @@ func (s *AteomHerder) prepareOCIBundles(
 	ctx context.Context,
 	actorTemplateNamespace, actorTemplateName, actorID string,
 	spec *ateletpb.WorkloadSpec,
-	targetAteomNamespace, targetAteomName string,
+	targetAteomUid string,
 ) error {
-	netnsPath := ateompath.AteomNetNSPath(targetAteomNamespace, targetAteomName)
+	netnsPath := ateompath.AteomNetNSPath(targetAteomUid)
 
 	g, gCtx := errgroup.WithContext(ctx)
 
@@ -503,10 +503,10 @@ func (s *AteomHerder) prepareOCIBundles(
 
 // dialAteom opens (or reuses) the gRPC connection to the target ateom
 // pod and returns an ateom client.
-func (s *AteomHerder) dialAteom(ctx context.Context, namespace, name string) (ateompb.AteomClient, error) {
-	conn, err := s.ateomDialer.DialAteomPod(ctx, namespace, name)
+func (s *AteomHerder) dialAteom(ctx context.Context, targetAteomUid string) (ateompb.AteomClient, error) {
+	conn, err := s.ateomDialer.DialAteomPod(ctx, targetAteomUid)
 	if err != nil {
-		return nil, fmt.Errorf("while getting ateom conn for %s/%s: %w", namespace, name, err)
+		return nil, fmt.Errorf("while getting ateom conn for %s: %w", targetAteomUid, err)
 	}
 	return ateompb.NewAteomClient(conn), nil
 }
@@ -538,8 +538,8 @@ type AteomDialer struct {
 	conns *lru.Cache
 }
 
-func (d *AteomDialer) DialAteomPod(ctx context.Context, namespace, name string) (*grpc.ClientConn, error) {
-	key := namespace + "/" + name
+func (d *AteomDialer) DialAteomPod(ctx context.Context, podUID string) (*grpc.ClientConn, error) {
+	key := podUID
 
 	connAny, ok := d.conns.Get(key)
 	if ok {
@@ -547,7 +547,7 @@ func (d *AteomDialer) DialAteomPod(ctx context.Context, namespace, name string) 
 	}
 
 	conn, err := grpc.NewClient(
-		"unix://"+ateompath.AteomSocketPath(namespace, name),
+		"unix://"+ateompath.AteomSocketPath(podUID),
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
 	)

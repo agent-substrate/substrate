@@ -123,6 +123,7 @@ func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, stat
 	state.Actor.AteomPodNamespace = assignedWorker.GetWorkerNamespace()
 	state.Actor.AteomPodName = assignedWorker.GetWorkerPod()
 	state.Actor.AteomPodIp = assignedWorker.GetIp()
+	state.Actor.AteomPodUid = assignedWorker.GetWorkerPodUid()
 
 	if err := s.store.UpdateActor(ctx, state.Actor, state.Actor.GetVersion()); err != nil {
 		return err
@@ -213,8 +214,7 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 		slog.InfoContext(ctx, "Actor has snapshot; Restoring from snapshot")
 
 		req := &ateletpb.RestoreRequest{
-			TargetAteomNamespace:   state.Actor.GetAteomPodNamespace(),
-			TargetAteomName:        state.Actor.GetAteomPodName(),
+			TargetAteomUid:         state.Actor.GetAteomPodUid(),
 			ActorTemplateNamespace: state.Actor.GetActorTemplateNamespace(),
 			ActorTemplateName:      state.Actor.GetActorTemplateName(),
 			ActorId:                state.Actor.GetActorId(),
@@ -233,8 +233,7 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 		snapshot := state.ActorTemplate.Status.GoldenSnapshot
 
 		req := &ateletpb.RestoreRequest{
-			TargetAteomNamespace:   state.Actor.GetAteomPodNamespace(),
-			TargetAteomName:        state.Actor.GetAteomPodName(),
+			TargetAteomUid:         state.Actor.GetAteomPodUid(),
 			ActorTemplateNamespace: state.Actor.GetActorTemplateNamespace(),
 			ActorTemplateName:      state.Actor.GetActorTemplateName(),
 			ActorId:                state.Actor.GetActorId(),
@@ -250,8 +249,7 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 	} else {
 		slog.InfoContext(ctx, "Actor has no snapshot; ActorTemplate has no golden snapshot; Booting from ActorTemplate spec")
 		req := &ateletpb.RunRequest{
-			TargetAteomNamespace:   state.Actor.GetAteomPodNamespace(),
-			TargetAteomName:        state.Actor.GetAteomPodName(),
+			TargetAteomUid:         state.Actor.GetAteomPodUid(),
 			ActorTemplateNamespace: state.Actor.GetActorTemplateNamespace(),
 			ActorTemplateName:      state.Actor.GetActorTemplateName(),
 			ActorId:                state.Actor.GetActorId(),
