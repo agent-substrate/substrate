@@ -27,7 +27,7 @@ clarification if you do not understand something.
 
 ## Written communication
 
-Prefer written communication (PRs, issues, mailing-list) over verbal
+Prefer written communication (PRs, issues, mailing-list, slack) over verbal
 communication (e.g. video calls).  This allows for people who might not have
 been in the conversation to understand why a decision was made the way it was.
 

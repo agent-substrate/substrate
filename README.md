@@ -75,6 +75,12 @@ Currently we aim to support the [latest stable release](https://kubernetes.io/re
 For announcements, technical discussions, and community support, please join
 the **[ate-dev](https://groups.google.com/g/ate-dev)** Google Group.
 
+We also have channels in the CNCF slack; [request an invite here](https://slack.cncf.io/)
+if you don't have access.
+
+- [#substrate-users](https://cloud-native.slack.com/archives/C0B6RCAJULW) to discuss using substrate.
+- [#substrate-dev](https://cloud-native.slack.com/archives/C0B6M3E2J3D) to discuss developing substrate.
+
 ## Developing
 
 Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on contributing to
