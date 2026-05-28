@@ -25,6 +25,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"strings"
 
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/memorypullcache"
@@ -174,10 +175,36 @@ func prepareOCIDirectory(ctx context.Context, pullCache *memorypullcache.MemoryP
 	return nil
 }
 
+func validateTarName(name string) (cleaned string, skip bool, err error) {
+	if name == "" {
+		return "", true, nil
+	}
+	cleaned = filepath.Clean(name)
+	if cleaned == "." {
+		return "", true, nil
+	}
+	cleaned = strings.TrimPrefix(cleaned, "/")
+	if cleaned == "" || cleaned == "." {
+		return "", true, nil
+	}
+	if !filepath.IsLocal(cleaned) {
+		return "", false, fmt.Errorf("not a local path: %q", name)
+	}
+	return cleaned, false, nil
+}
+
 func untar(ctx context.Context, tarData io.Reader, rootPath string) error {
 	tracer := otel.Tracer("ateom-gvisor")
 	ctx, span := tracer.Start(ctx, "untar")
 	defer span.End()
+
+	// os.Root confines file operations to rootPath: ".." components and
+	// out-of-tree symlinks are refused by the kernel.
+	root, err := os.OpenRoot(rootPath)
+	if err != nil {
+		return fmt.Errorf("while opening rootfs %q as os.Root: %w", rootPath, err)
+	}
+	defer root.Close()
 
 	tarReader := tar.NewReader(tarData)
 	for {
@@ -188,85 +215,86 @@ func untar(ctx context.Context, tarData io.Reader, rootPath string) error {
 			return fmt.Errorf("in tarReader.Next: %w", err)
 		}
 
+		name, skip, err := validateTarName(hdr.Name)
+		if err != nil {
+			return fmt.Errorf("invalid tar entry: %w", err)
+		}
+		if skip {
+			continue
+		}
+
+		mode := hdr.FileInfo().Mode().Perm()
+
 		switch hdr.Typeflag {
 		case tar.TypeReg: // Regular file
-			target := filepath.Join(rootPath, hdr.Name)
-
 			// Stream directly from tarReader to target file to avoid buffering in memory.
-			outFile, err := os.OpenFile(target, os.O_CREATE|os.O_RDWR|os.O_TRUNC, hdr.FileInfo().Mode())
+			outFile, err := root.OpenFile(name, os.O_CREATE|os.O_RDWR|os.O_TRUNC, mode)
 			if err != nil {
-				return fmt.Errorf("while creating file %q: %w", target, err)
+				return fmt.Errorf("while creating file %q: %w", name, err)
 			}
 
-			// TODO: Use a constrained fs so that paths containing `..` cannot
-			// end up outside the root, and symlinks / hardlinks cannot point
-			// outside the root.
 			_, err = io.Copy(outFile, tarReader)
 			closeErr := outFile.Close()
 
 			if err != nil {
-				return fmt.Errorf("while writing contents of %q from tar stream: %w", hdr.Name, err)
+				return fmt.Errorf("while writing contents of %q from tar stream: %w", name, err)
 			}
 			if closeErr != nil {
-				return fmt.Errorf("while closing file %q: %w", target, closeErr)
+				return fmt.Errorf("while closing file %q: %w", name, closeErr)
 			}
 
 		case tar.TypeDir:
-			if hdr.Name == "." {
-				// Huh?  I guess this is for setting mode, etc on the root
-				// folder.  Ignore for now.
-				continue
-			}
-			target := filepath.Join(rootPath, hdr.Name)
-			err := os.Mkdir(target, hdr.FileInfo().Mode())
+			err := root.Mkdir(name, mode)
 			if errors.Is(err, os.ErrExist) {
 				// Ignore --- real images produced by ko seem to have directory entries placed multiple times?
 			} else if err != nil {
-				return fmt.Errorf("while creating directory=%q, mode=%v: %w", target, hdr.FileInfo().Mode(), err)
+				return fmt.Errorf("while creating directory=%q, mode=%v: %w", name, mode, err)
 			}
 
 		case tar.TypeSymlink:
-			// TODO: Make sure no tricky people are trying to create a symlink pointing out of the rootfs.
-			source := filepath.Join(rootPath, hdr.Name)
 			// OCI image layers may re-define the same path across layers (e.g.
 			// an earlier layer creates /var/run as a directory and a later
 			// layer re-declares it as a symlink to /run). Standard tar-extract
 			// semantics are "later entry wins": replace any existing entry.
-			if existing, err := os.Lstat(source); err == nil {
+			if existing, err := root.Lstat(name); err == nil {
 				// If it's already the same symlink, skip the unlink+symlink pair.
 				if existing.Mode()&os.ModeSymlink != 0 {
-					if cur, rerr := os.Readlink(source); rerr == nil && cur == hdr.Linkname {
+					if cur, rerr := root.Readlink(name); rerr == nil && cur == hdr.Linkname {
 						continue
 					}
 				}
-				// os.RemoveAll removes the symlink entry itself; it does NOT
+				// Root.RemoveAll removes the symlink entry itself; it does NOT
 				// traverse and remove the directory the symlink points to.
 				// That's the desired semantic here — replace this path's
 				// entry without touching whatever the prior symlink targeted.
-				if err := os.RemoveAll(source); err != nil {
-					return fmt.Errorf("while replacing existing path at %q before symlink: %w", source, err)
+				if err := root.RemoveAll(name); err != nil {
+					return fmt.Errorf("while replacing existing path at %q before symlink: %w", name, err)
 				}
 			} else if !errors.Is(err, os.ErrNotExist) {
-				return fmt.Errorf("while checking existing path at %q before symlink: %w", source, err)
+				return fmt.Errorf("while checking existing path at %q before symlink: %w", name, err)
 			}
-			if err := os.Symlink(hdr.Linkname, source); err != nil {
-				return fmt.Errorf("while creating symlink src=%q target=%q: %w", source, hdr.Linkname, err)
+			if err := root.Symlink(hdr.Linkname, name); err != nil {
+				return fmt.Errorf("while creating symlink src=%q target=%q: %w", name, hdr.Linkname, err)
 			}
 
 		case tar.TypeLink:
-			// TODO: Make sure no tricky people are trying to create a hardlink pointing out of the rootfs.
-			source := filepath.Join(rootPath, hdr.Linkname)
-			target := filepath.Join(rootPath, hdr.Name)
+			linkname, linkSkip, err := validateTarName(hdr.Linkname)
+			if err != nil {
+				return fmt.Errorf("invalid hardlink target for %q: %w", name, err)
+			}
+			if linkSkip {
+				return fmt.Errorf("invalid hardlink target for %q: empty", name)
+			}
 			// Same "later entry wins" handling as TypeSymlink: replace existing entry.
-			if _, err := os.Lstat(target); err == nil {
-				if err := os.RemoveAll(target); err != nil {
-					return fmt.Errorf("while replacing existing path at %q before hardlink: %w", target, err)
+			if _, err := root.Lstat(name); err == nil {
+				if err := root.RemoveAll(name); err != nil {
+					return fmt.Errorf("while replacing existing path at %q before hardlink: %w", name, err)
 				}
 			} else if !errors.Is(err, os.ErrNotExist) {
-				return fmt.Errorf("while checking existing path at %q before hardlink: %w", target, err)
+				return fmt.Errorf("while checking existing path at %q before hardlink: %w", name, err)
 			}
-			if err := os.Link(source, target); err != nil {
-				return fmt.Errorf("while creating hardlink src=%q target=%q: %w", source, target, err)
+			if err := root.Link(linkname, name); err != nil {
+				return fmt.Errorf("while creating hardlink src=%q target=%q: %w", name, linkname, err)
 			}
 
 		default:
