@@ -39,8 +39,6 @@ jobs:
       uses: actions/setup-go@v5
       with:
         go-version: 1.26
-    - name: Install kind
-      run: go install sigs.k8s.io/kind@v0.31.0
     - name: Create cluster
       run: hack/create-kind-cluster.sh
     - name: Install Agent Substrate
