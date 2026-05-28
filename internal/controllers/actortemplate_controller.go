@@ -22,16 +22,24 @@ import (
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/uuid"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	k8errors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
 const (
 	GoldenSnapshotCreationReason = "GoldenSnapshotCreation"
+
+	// ActorTemplateFinalizer ensures the golden actor is suspended and deleted
+	// from the ateom before the ActorTemplate resource is garbage-collected.
+	ActorTemplateFinalizer = "ate.dev/actortemplate-finalizer"
 )
 
 type ActorTemplateReconciler struct {
@@ -62,8 +70,21 @@ func (r *ActorTemplateReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return ctrl.Result{}, fmt.Errorf("failed to get actor template %q: %w", req.NamespacedName, err)
 	}
 
-	// Handle deletion
+	// Handle deletion before any other work — once a DeletionTimestamp is
+	// set, we must drive cleanup and remove the finalizer; the phase switch
+	// would otherwise keep creating or driving the golden actor.
 	if !at.GetDeletionTimestamp().IsZero() {
+		return r.reconcileDelete(ctx, at)
+	}
+
+	// Ensure the finalizer is present before the phase switch creates a
+	// golden actor. If we crashed between CreateActor and the finalizer add,
+	// a kubectl delete would orphan the actor on the ateom.
+	if !controllerutil.ContainsFinalizer(at, ActorTemplateFinalizer) {
+		controllerutil.AddFinalizer(at, ActorTemplateFinalizer)
+		if err := r.Update(ctx, at); err != nil {
+			return ctrl.Result{}, fmt.Errorf("failed to add finalizer: %w", err)
+		}
 		return ctrl.Result{}, nil
 	}
 
@@ -153,6 +174,51 @@ func (r *ActorTemplateReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	default:
 		return ctrl.Result{}, fmt.Errorf("unrecognized phase %q", at.Status.Phase)
 	}
+}
+
+// reconcileDelete drains the golden actor from the ateom and removes the
+// finalizer. Suspend + Delete are both idempotent (workflow-level guards on
+// IsComplete) and NotFound is treated as success so a retry after partial
+// progress converges.
+func (r *ActorTemplateReconciler) reconcileDelete(ctx context.Context, at *atev1alpha1.ActorTemplate) (ctrl.Result, error) {
+	log := log.FromContext(ctx)
+
+	if !controllerutil.ContainsFinalizer(at, ActorTemplateFinalizer) {
+		return ctrl.Result{}, nil
+	}
+
+	actorID := at.Status.GoldenActorID
+	if actorID != "" {
+		if _, err := r.AteClient.SuspendActor(ctx, &ateapipb.SuspendActorRequest{ActorId: actorID}); err != nil {
+			if !isNotFound(err) {
+				log.Error(err, "failed to suspend golden actor on deletion", "actorID", actorID)
+				return ctrl.Result{}, fmt.Errorf("suspend before delete: %w", err)
+			}
+			log.Info("golden actor already absent on suspend", "actorID", actorID)
+		}
+		if _, err := r.AteClient.DeleteActor(ctx, &ateapipb.DeleteActorRequest{ActorId: actorID}); err != nil {
+			if !isNotFound(err) {
+				log.Error(err, "failed to delete golden actor", "actorID", actorID)
+				return ctrl.Result{}, fmt.Errorf("delete golden actor: %w", err)
+			}
+			log.Info("golden actor already absent on delete", "actorID", actorID)
+		}
+	} else {
+		log.Info("no golden actor ID recorded; removing finalizer without RPC calls")
+	}
+
+	controllerutil.RemoveFinalizer(at, ActorTemplateFinalizer)
+	if err := r.Update(ctx, at); err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to remove finalizer: %w", err)
+	}
+	return ctrl.Result{}, nil
+}
+
+// isNotFound reports whether the gRPC error carries codes.NotFound, so the
+// caller can treat the ateom-side resource as already gone.
+func isNotFound(err error) bool {
+	s, ok := status.FromError(err)
+	return ok && s.Code() == codes.NotFound
 }
 
 // SetupWithManager sets up the controller with the Manager.
