@@ -217,6 +217,27 @@ deploy_crds() {
 
 deploy_ate_system() {
   log_step "deploy_ate_system"
+
+  # Probe for certificates.k8s.io/v1beta1. ate-system's signers depend on the
+  # BETA-stage ClusterTrustBundle, ClusterTrustBundleProjection, and
+  # PodCertificateRequest APIs in this group. Managed Kubernetes surfaces that
+  # enable AllAlpha but not AllBeta (e.g. GKE alpha clusters) do not expose
+  # v1beta1, in which case the ClusterTrustBundle wait below would hang
+  # indefinitely. Detect once and bail with a clear message so the operator
+  # can re-target a cluster with the BETA gates enabled. The regex tolerates
+  # optional whitespace after the JSON colon in case a future kubectl pretty-
+  # prints discovery responses. 2>/dev/null intentionally collapses kubectl/
+  # auth/connectivity errors into the same "skipping" exit — operator-friendly
+  # for an install script (the Go controller's discovery probe keeps the two
+  # failure modes distinct). See agent-substrate/substrate#104.
+  if ! run_kubectl get --raw /apis/certificates.k8s.io 2>/dev/null \
+       | grep -qE '"version":[[:space:]]*"v1beta1"'; then
+    echo "certificates.k8s.io/v1beta1 is not exposed by this cluster — skipping ate-system install." >&2
+    echo "Enable the BETA-stage feature gates ClusterTrustBundle, ClusterTrustBundleProjection," >&2
+    echo "and PodCertificateRequest (e.g. via kube-apiserver --feature-gates) to proceed." >&2
+    return 0
+  fi
+
   ensure_crds
 
   # Ensure namespace exists
