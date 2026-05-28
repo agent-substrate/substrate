@@ -102,6 +102,23 @@ func main() {
 		os.Exit(1)
 	}
 
+	// The signers below depend on certificates.k8s.io/v1beta1 (ClusterTrustBundle,
+	// ClusterTrustBundleProjection, PodCertificateRequest). On managed Kubernetes
+	// surfaces that don't expose the v1beta1 group — e.g. GKE alpha clusters, which
+	// enable AllAlpha but not AllBeta — the signers crashloop with "the server could
+	// not find the requested resource". Probe discovery once at startup and exit 0
+	// if absent, so install scripts can detect the no-op cluster shape instead of
+	// hanging on bundle-ready waits. See agent-substrate/substrate#104.
+	hasV1Beta1, err := hasCertsV1Beta1(kc)
+	if err != nil {
+		slog.ErrorContext(ctx, "Error querying certificates.k8s.io discovery", slog.Any("err", err))
+		os.Exit(1)
+	}
+	if !hasV1Beta1 {
+		slog.InfoContext(ctx, "certificates.k8s.io/v1beta1 is not exposed by this cluster; podcertcontroller has nothing to do. Enable BETA-stage feature gates (ClusterTrustBundle, ClusterTrustBundleProjection, PodCertificateRequest) to run signers.")
+		return
+	}
+
 	hasher := rendezvous.New(
 		kc,
 		*shardingNamespace,
@@ -146,4 +163,27 @@ func main() {
 	signal.Notify(signalCh, syscall.SIGINT, syscall.SIGTERM)
 
 	<-signalCh
+}
+
+// hasCertsV1Beta1 returns true iff the cluster's discovery API exposes the
+// certificates.k8s.io/v1beta1 group-version. This is the group that contains
+// ClusterTrustBundle, ClusterTrustBundleProjection, and PodCertificateRequest
+// in K8s 1.31+ (BETA). Managed clusters that enable AllAlpha but not AllBeta
+// (e.g. GKE alpha clusters) will return false here.
+func hasCertsV1Beta1(kc kubernetes.Interface) (bool, error) {
+	groups, err := kc.Discovery().ServerGroups()
+	if err != nil {
+		return false, err
+	}
+	for _, g := range groups.Groups {
+		if g.Name != "certificates.k8s.io" {
+			continue
+		}
+		for _, v := range g.Versions {
+			if v.Version == "v1beta1" {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
 }
