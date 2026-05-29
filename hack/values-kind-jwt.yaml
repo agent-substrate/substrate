@@ -1,0 +1,36 @@
+# Helm values for installing substrate on a kind cluster in JWT mode.
+# Used by hack/install-ate-kind-jwt.sh — does NOT require the off-by-default
+# certificate feature gates that the mTLS install path needs.
+
+auth:
+  mode: jwt
+  jwt:
+    # Kind's default API server issuer.
+    issuer: https://kubernetes.default.svc.cluster.local
+    audience: api.ate-system.svc
+    serverCertSecret: ateapi-tls
+    caBundleConfigMap: ateapi-ca
+
+createNamespace: true
+
+# In-cluster OTel collector deployed alongside via manifests/ate-install/kind/otel-collector.yaml
+otel:
+  endpoint: http://opentelemetry-collector.otel-system.svc:4317
+
+atelet:
+  gcpAuthForImagePulls: false
+  storageBackend: s3
+  extraArgs:
+    - --localhost-registry-replacement=kind-registry:5000
+  extraEnv:
+    - name: AWS_REGION
+      value: us-east-1
+    - name: AWS_ENDPOINT_URL
+      value: http://rustfs.ate-system.svc:9000
+    - name: AWS_S3_USE_PATH_STYLE
+      value: "true"
+    # TODO: use a secret / identity management for rustfs credentials.
+    - name: AWS_ACCESS_KEY_ID
+      value: rustfsadmin
+    - name: AWS_SECRET_ACCESS_KEY
+      value: rustfsadmin

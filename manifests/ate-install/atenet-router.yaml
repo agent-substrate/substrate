@@ -12,6 +12,9 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
+# DO NOT EDIT — generated from charts/substrate by hack/render-manifests.sh.
+# Run `make helm-template` to regenerate.
+
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -19,33 +22,6 @@ metadata:
   namespace: ate-system
   labels:
     app: atenet-router
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: atenet-router
-rules:
-- apiGroups:
-  - "ate.dev"
-  resources:
-  - actortemplates
-  verbs:
-  - get
-  - watch
-  - list
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: atenet-router
-subjects:
-- kind: ServiceAccount
-  name: atenet-router
-  namespace: ate-system
-roleRef:
-  kind: ClusterRole
-  name: atenet-router
-  apiGroup: rbac.authorization.k8s.io
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -98,6 +74,52 @@ data:
                   socket_address:
                     address: 127.0.0.1
                     port_value: 18000
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: atenet-router
+rules:
+- apiGroups:
+  - "ate.dev"
+  resources:
+  - actortemplates
+  verbs:
+  - get
+  - watch
+  - list
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: atenet-router
+subjects:
+- kind: ServiceAccount
+  name: atenet-router
+  namespace: ate-system
+roleRef:
+  kind: ClusterRole
+  name: atenet-router
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: atenet-router
+  namespace: ate-system
+spec:
+  type: ClusterIP
+  selector:
+    app: atenet-router
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8080
+    protocol: TCP
+  - name: https
+    port: 443
+    targetPort: 8443
+    protocol: TCP
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -170,22 +192,3 @@ spec:
               signerName: servicedns.podcert.ate.dev/identity
               keyType: ECDSAP256
               credentialBundlePath: credential-bundle.pem
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: atenet-router
-  namespace: ate-system
-spec:
-  type: ClusterIP
-  selector:
-    app: atenet-router
-  ports:
-  - name: http
-    port: 80
-    targetPort: 8080
-    protocol: TCP
-  - name: https
-    port: 443
-    targetPort: 8443
-    protocol: TCP

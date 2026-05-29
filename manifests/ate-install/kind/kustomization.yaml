@@ -23,6 +23,7 @@ resources:
   - ../atenet-router.yaml
   - ../valkey.yaml
   - ../pod-certificate-controller.yaml
+  - ../role.yaml
   - rustfs.yaml
   - ./otel-collector.yaml
 

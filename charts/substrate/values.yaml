@@ -1,0 +1,90 @@
+# Default values for the substrate chart.
+#
+# The chart supports two installation modes via `auth.mode`:
+#
+#   - "mtls" (default): Today's behavior. Server certs are issued by the
+#     in-cluster podcertcontroller via PodCertificateRequest + projected
+#     into pods via the ClusterTrustBundle / podCertificate projection
+#     sources. Valkey runs with full TLS + client-cert verification.
+#     REQUIRES the off-by-default Kubernetes feature gates:
+#       ClusterTrustBundle, ClusterTrustBundleProjection, PodCertificateRequest
+#     and the v1beta1 certificates API.
+#
+#   - "jwt": No PodCertificateRequest / ClusterTrustBundle usage. Server
+#     certs come from a user-provided Secret (auth.jwt.serverCertSecret).
+#     Clients verify the server with a user-provided CA bundle
+#     (auth.jwt.caBundleConfigMap) and authenticate to ateapi with a
+#     projected Kubernetes ServiceAccount token. Valkey runs plaintext.
+
+auth:
+  mode: mtls   # mtls | jwt
+
+  jwt:
+    # OIDC issuer URL the cluster uses to mint SA tokens. Required when
+    # mode=jwt. Examples:
+    #   GKE:   https://container.googleapis.com/v1/projects/<proj>/locations/<loc>/clusters/<name>
+    #   kind:  https://kubernetes.default.svc.cluster.local
+    #   EKS:   https://oidc.eks.<region>.amazonaws.com/id/<id>
+    issuer: ""
+
+    # Audience SA tokens are minted for, and that ateapi expects.
+    audience: api.ate-system.svc
+
+    # Name of a kubernetes.io/tls Secret in the release namespace, with keys
+    # tls.crt and tls.key. The chart references this Secret; the user creates
+    # it out-of-band (see chart README for an openssl bootstrap snippet).
+    serverCertSecret: ateapi-tls
+
+    # Name of a ConfigMap in the release namespace with key "ca.crt" holding
+    # the CA(s) that signed serverCertSecret. Clients mount it to verify the
+    # ateapi server certificate.
+    caBundleConfigMap: ateapi-ca
+
+# Set to true to have the chart create the release namespace.
+# Off by default — most helm workflows expect the namespace to already exist
+# (helm install -n <ns> --create-namespace). Enable for the generated
+# manifests/ate-install/ install path (kubectl apply).
+createNamespace: false
+
+valkey:
+  enabled: true
+  replicas: 6
+  storageSize: 1Gi
+
+# atelet daemonset overrides. Defaults match GKE; kind/dev installs override
+# via hack/values-kind-jwt.yaml. extraArgs / extraEnv are appended verbatim
+# for installer-specific knobs (e.g. AWS_* for rustfs/S3 storage).
+atelet:
+  gcpAuthForImagePulls: true
+  storageBackend: gcs
+  extraArgs: []
+  extraEnv: []
+
+redis:
+  # Override the cluster address. Empty -> derived from valkey.enabled
+  # (defaults to "valkey-cluster.ate-system.svc:6379").
+  clusterAddress: ""
+  # Google IAM auth (for managed Memorystore / cloud Valkey).
+  useIAMAuth: false
+  # Override TLS server name for Redis hostname verification (mtls mode).
+  tlsServerName: ""
+
+# Name of a ConfigMap in the release namespace that supplies per-environment
+# overrides for ate-api-server (ATE_API_REDIS_*, ATE_API_K8SJWT_ISSUER, ...).
+# Mounted via envFrom with optional=true so installs work without it. Created
+# out-of-band by hack/install-ate.sh `create_api_server_env_vars` for kind/dev.
+ateApiServerEnvVarsConfigMap: ate-api-server-envvars
+
+otel:
+  endpoint: http://opentelemetry-collector.gke-managed-otel.svc.cluster.local:4317
+
+images:
+  ateapi: ko://github.com/agent-substrate/substrate/cmd/ateapi
+  atecontroller: ko://github.com/agent-substrate/substrate/cmd/atecontroller
+  atelet: ko://github.com/agent-substrate/substrate/cmd/atelet
+  atenet: ko://github.com/agent-substrate/substrate/cmd/atenet
+  podcertcontroller: ko://github.com/agent-substrate/substrate/cmd/podcertcontroller
+  valkey: valkey/valkey:8.0
+  envoy: envoyproxy/envoy:v1.30-latest
+  coredns: coredns/coredns:1.11.1
+  busybox: busybox:1.36

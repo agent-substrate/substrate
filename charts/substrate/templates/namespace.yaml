@@ -1,0 +1,7 @@
+{{- include "substrate.validateAuthMode" . -}}
+{{- if .Values.createNamespace }}
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {{ .Release.Namespace }}
+{{- end }}

@@ -12,12 +12,9 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
-kind: Namespace
-apiVersion: v1
-metadata:
-  name: ate-system
+# DO NOT EDIT — generated from charts/substrate by hack/render-manifests.sh.
+# Run `make helm-template` to regenerate.
 
----
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -25,8 +22,6 @@ metadata:
   namespace: ate-system
   labels:
     apps: ate-controller
-    
-
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
@@ -40,9 +35,7 @@ roleRef:
   kind: ClusterRole
   name: ate-controller
   apiGroup: rbac.authorization.k8s.io
-
 ---
-
 kind: Service
 apiVersion: v1
 metadata:
@@ -58,9 +51,7 @@ spec:
     port: 8080
     targetPort: metrics
     protocol: TCP
-
 ---
-
 kind: Deployment
 apiVersion: apps/v1
 metadata:

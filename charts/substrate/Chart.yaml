@@ -1,0 +1,13 @@
+apiVersion: v2
+name: substrate
+description: Agent Substrate — actor runtime, control plane, and data-plane router.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/agent-substrate/substrate
+sources:
+- https://github.com/agent-substrate/substrate
+keywords:
+- agent
+- actor
+- substrate

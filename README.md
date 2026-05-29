@@ -97,7 +97,7 @@ To quickly set up the complete environment:
 
 2. Run the following steps:
 ```shell
-# create cluster and local registry
+# create cluster and local registry (enables podcert feature gates for mTLS)
 hack/create-kind-cluster.sh
 
 # install ate, valkey, rustfs
@@ -119,6 +119,25 @@ kubectl port-forward -n ate-system svc/atenet-router 8000:80
 3. In a **separate terminal**, send an HTTP request to increment the counter:
 ```shell
 curl -X POST -H "Host: my-counter-1.actors.resources.substrate.ate.dev" -i http://localhost:8000/
+```
+
+#### JWT mode (no feature gates)
+
+For clusters where you can't enable the `ClusterTrustBundle` /
+`PodCertificateRequest` feature gates (most managed Kubernetes), use the
+JWT install path. Authentication is via projected ServiceAccount tokens
+verified against the cluster's OIDC issuer; server certs come from a
+self-signed pair bootstrapped by the install script.
+
+```shell
+# create cluster WITHOUT podcert feature gates
+KIND_ENABLE_PODCERT=false hack/create-kind-cluster.sh
+
+# install ate via Helm in JWT mode (auto-bootstraps Secret/ConfigMap)
+hack/install-ate-kind-jwt.sh
+
+# the demo + kubectl-ate + port-forward steps from the mTLS Quickstart
+# above work identically from here.
 ```
 
 ### GKE Quickstart (Development)

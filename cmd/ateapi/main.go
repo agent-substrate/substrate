@@ -28,6 +28,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/controlapi"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/sessionidentity"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/ateredis"
+	"github.com/agent-substrate/substrate/internal/ateapiauth"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/credbundle"
 	"github.com/agent-substrate/substrate/internal/serverboot"
@@ -55,6 +56,7 @@ var (
 	redisUseIAMAuth     = flag.String("redis-use-iam-auth", "true", "Whether to use Google IAM authentication for Redis/Valkey.")
 	redisTLSServerName  = flag.String("redis-tls-server-name", "", "The ServerName to use for Redis TLS hostname verification.")
 	redisClientCert     = flag.String("redis-client-cert", "", "The file containing client TLS certificate/key credential bundle for Redis/Valkey.")
+	redisNoTLS          = flag.Bool("redis-no-tls", false, "If true, connect to Redis/Valkey in plaintext (no TLS). For development / installs that don't enable Valkey TLS.")
 
 	clientJWTIssuer      = flag.String("client-jwt-issuer", "", "The expected issuer URL for client JWTs.")
 	clientJWTAudience    = flag.String("client-jwt-audience", "", "The expected audience for client JWTs.")
@@ -62,6 +64,8 @@ var (
 
 	sessionIDCAPoolFile = flag.String("session-id-ca-pool", "", "The file that contains the CA pool for signing session JWTs")
 	workerpoolCACerts   = flag.String("workerpool-ca-certs", "", "The file that contains the CA for verifying workerpool client certificates.")
+
+	authMode = flag.String("auth-mode", "mtls", "Auth mode for incoming gRPC: mtls|jwt. 'mtls' (default) relies on transport-level mTLS for client identity. 'jwt' additionally requires a Kubernetes ServiceAccount Bearer token on every RPC.")
 )
 
 func main() {
@@ -86,6 +90,11 @@ func main() {
 
 	loadFlagsFromEnv()
 	logFlagValues(ctx)
+
+	authModeParsed, err := ateapiauth.ParseMode(*authMode)
+	if err != nil {
+		serverboot.Fatal(ctx, "Invalid --auth-mode", err)
+	}
 
 	redisClient, err := connectRedis(ctx)
 	if err != nil {
@@ -134,10 +143,22 @@ func main() {
 		serverboot.Fatal(ctx, "Failed to start listener", err)
 	}
 
+	authCfg := ateapiauth.ServerConfig{
+		Mode:     authModeParsed,
+		Issuer:   *clientJWTIssuer,
+		Audience: *clientJWTAudience,
+	}
+
 	mux := grpc.NewServer(
 		grpc.Creds(serverCreds),
 		grpc.StatsHandler(otelgrpc.NewServerHandler()),
-		grpc.UnaryInterceptor(ateinterceptors.ServerUnaryInterceptor),
+		grpc.ChainUnaryInterceptor(
+			ateapiauth.UnaryServerInterceptor(authCfg),
+			ateinterceptors.ServerUnaryInterceptor,
+		),
+		grpc.ChainStreamInterceptor(
+			ateapiauth.StreamServerInterceptor(authCfg),
+		),
 	)
 	reflection.Register(mux)
 	ateapipb.RegisterControlServer(mux, sm)
@@ -184,25 +205,30 @@ func logFlagValues(ctx context.Context) {
 		slog.String("redis-use-iam-auth", *redisUseIAMAuth),
 		slog.String("redis-tls-server-name", *redisTLSServerName),
 		slog.String("redis-client-cert", *redisClientCert),
+		slog.Bool("redis-no-tls", *redisNoTLS),
 		slog.String("client-jwt-issuer", *clientJWTIssuer),
 		slog.String("client-jwt-audience", *clientJWTAudience),
 		slog.String("session-id-jwt-pool", *sessionIDJWTPoolFile),
 		slog.String("session-id-ca-pool", *sessionIDCAPoolFile),
 		slog.String("workerpool-ca-certs", *workerpoolCACerts),
+		slog.String("auth-mode", *authMode),
 	)
 }
 
 // connectRedis builds the Redis/Valkey TLS config, plumbs IAM auth if
 // requested, opens the cluster client, and pings with retries.
 func connectRedis(ctx context.Context) (*redis.ClusterClient, error) {
-	tlsConfig, err := buildRedisTLSConfig(ctx)
-	if err != nil {
-		return nil, err
-	}
-
 	clusterOpts := &redis.ClusterOptions{
-		Addrs:     []string{*redisClusterAddress},
-		TLSConfig: tlsConfig,
+		Addrs: []string{*redisClusterAddress},
+	}
+	if *redisNoTLS {
+		slog.InfoContext(ctx, "Connecting to Redis/Valkey without TLS (--redis-no-tls=true)")
+	} else {
+		tlsConfig, err := buildRedisTLSConfig(ctx)
+		if err != nil {
+			return nil, err
+		}
+		clusterOpts.TLSConfig = tlsConfig
 	}
 
 	if *redisUseIAMAuth != "false" {

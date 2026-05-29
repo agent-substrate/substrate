@@ -18,7 +18,6 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
-	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
@@ -37,7 +36,6 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/kubernetes"
@@ -46,6 +44,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 
+	"github.com/agent-substrate/substrate/internal/ateapiauth"
 	v1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
@@ -76,6 +75,11 @@ type RouterConfig struct {
 	HttpsPort      int
 	EnvoyCertPath  string
 	LogLevel       string
+
+	AteapiAuthMode   string
+	AteapiCAFile     string
+	AteapiServerName string
+	AteapiTokenFile  string
 }
 
 // RouterServer instantiates and coordinates runtime threads executing system modules.
@@ -147,6 +151,11 @@ func NewCmd() *cobra.Command {
 	cmd.Flags().IntVar(&cfg.HttpsPort, "port-https", 8443, "TCP port for HTTPS workload traffic entering through the Envoy Router")
 	cmd.Flags().StringVar(&cfg.EnvoyCertPath, "envoy-cert-path", "", "Path to the Envoy certificate file (if empty, a self-signed cert will be generated for testing)")
 
+	cmd.Flags().StringVar(&cfg.AteapiAuthMode, "ateapi-auth", "mtls", "Client auth to ateapi: mtls|jwt. 'mtls' (default) dials with insecure TLS and relies on pod-projected mTLS credentials for identity. 'jwt' verifies the server cert and sends a Bearer SA token.")
+	cmd.Flags().StringVar(&cfg.AteapiCAFile, "ateapi-ca-file", "", "PEM file with CAs trusted to verify the ateapi server cert. Required for jwt.")
+	cmd.Flags().StringVar(&cfg.AteapiServerName, "ateapi-server-name", "", "SNI / hostname expected on the ateapi server cert. Optional.")
+	cmd.Flags().StringVar(&cfg.AteapiTokenFile, "ateapi-token-file", "", "Projected SA token file used as Bearer credential. Required for jwt.")
+
 	return cmd
 }
 
@@ -182,11 +191,24 @@ func NewRouterServer(cfg RouterConfig) (*RouterServer, error) {
 		}
 	}
 
-	conn, err := grpc.NewClient(cfg.AteapiAddr, grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{InsecureSkipVerify: true})))
+	authMode, err := ateapiauth.ParseMode(cfg.AteapiAuthMode)
+	if err != nil {
+		return nil, fmt.Errorf("invalid --ateapi-auth: %w", err)
+	}
+	dialOpts, err := ateapiauth.DialOptions(ateapiauth.ClientConfig{
+		Mode:       authMode,
+		CAFile:     cfg.AteapiCAFile,
+		ServerName: cfg.AteapiServerName,
+		TokenFile:  cfg.AteapiTokenFile,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("building ateapi dial options: %w", err)
+	}
+	conn, err := grpc.NewClient(cfg.AteapiAddr, dialOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to establish grpc channel to ateapi client: %w", err)
 	}
-	slog.Info("Connecting to ateapi", slog.String("address", cfg.AteapiAddr))
+	slog.Info("Connecting to ateapi", slog.String("address", cfg.AteapiAddr), slog.String("auth", string(authMode)))
 
 	apiClient := ateapipb.NewControlClient(conn)
 

@@ -1,34 +1,17 @@
-#  Copyright 2026 Google LLC
-#
-#  Licensed under the Apache License, Version 2.0 (the "License");
-#  you may not use this file except in compliance with the License.
-#  You may obtain a copy of the License at
-#
-#      http://www.apache.org/licenses/LICENSE-2.0
-#
-#  Unless required by applicable law or agreed to in writing, software
-#  distributed under the License is distributed on an "AS IS" BASIS,
-#  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-#  See the License for the specific language governing permissions and
-#  limitations under the License.
-
-# DO NOT EDIT — generated from charts/substrate by hack/render-manifests.sh.
-# Run `make helm-template` to regenerate.
-
 # atenet-dns — identical across auth modes (does not dial ateapi).
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: atenet-dns
-  namespace: ate-system
+  name: {{ include "substrate.fullname" (list "atenet-dns" .) }}
+  namespace: {{ .Release.Namespace }}
   labels:
     app: dns
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: atenet-dns
-  namespace: ate-system
+  name: {{ include "substrate.fullname" (list "atenet-dns" .) }}
+  namespace: {{ .Release.Namespace }}
 rules:
 - apiGroups: [""]
   resources: ["services"]
@@ -38,9 +21,23 @@ rules:
   verbs: ["get", "list", "watch", "create", "update", "patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "substrate.fullname" (list "atenet-dns" .) }}
+  namespace: {{ .Release.Namespace }}
+subjects:
+- kind: ServiceAccount
+  name: {{ include "substrate.fullname" (list "atenet-dns" .) }}
+  namespace: {{ .Release.Namespace }}
+roleRef:
+  kind: Role
+  name: {{ include "substrate.fullname" (list "atenet-dns" .) }}
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: atenet-dns
+  name: {{ include "substrate.fullname" (list "atenet-dns" .) }}
   namespace: kube-system
 rules:
 - apiGroups: [""]
@@ -50,55 +47,22 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: atenet-dns
-  namespace: ate-system
-subjects:
-- kind: ServiceAccount
-  name: atenet-dns
-  namespace: ate-system
-roleRef:
-  kind: Role
-  name: atenet-dns
-  apiGroup: rbac.authorization.k8s.io
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: atenet-dns
+  name: {{ include "substrate.fullname" (list "atenet-dns" .) }}
   namespace: kube-system
 subjects:
 - kind: ServiceAccount
-  name: atenet-dns
-  namespace: ate-system
+  name: {{ include "substrate.fullname" (list "atenet-dns" .) }}
+  namespace: {{ .Release.Namespace }}
 roleRef:
   kind: Role
-  name: atenet-dns
+  name: {{ include "substrate.fullname" (list "atenet-dns" .) }}
   apiGroup: rbac.authorization.k8s.io
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: dns
-  namespace: ate-system
-  labels:
-    app: dns
-spec:
-  selector:
-    app: dns
-  type: ClusterIP
-  ports:
-  - name: dns
-    port: 53
-    protocol: UDP
-  - name: dns-tcp
-    port: 53
-    protocol: TCP
 ---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: dns
-  namespace: ate-system
+  name: {{ include "substrate.fullname" (list "dns" .) }}
+  namespace: {{ .Release.Namespace }}
   labels:
     app: dns
 spec:
@@ -111,11 +75,11 @@ spec:
       labels:
         app: dns
     spec:
-      serviceAccountName: atenet-dns
+      serviceAccountName: {{ include "substrate.fullname" (list "atenet-dns" .) }}
       shareProcessNamespace: true
       initContainers:
       - name: init-dns
-        image: busybox:1.36
+        image: {{ .Values.images.busybox }}
         command: ["sh", "-c"]
         args:
         - |
@@ -132,7 +96,7 @@ spec:
           mountPath: /etc/coredns
       containers:
       - name: coredns
-        image: coredns/coredns:1.11.1
+        image: {{ .Values.images.coredns }}
         imagePullPolicy: IfNotPresent
         args: [ "-conf", "/etc/coredns/Corefile" ]
         volumeMounts:
@@ -164,7 +128,7 @@ spec:
           successThreshold: 1
           failureThreshold: 3
       - name: dns-controller
-        image: ko://github.com/agent-substrate/substrate/cmd/atenet
+        image: {{ .Values.images.atenet }}
         args:
         - "dns"
         - "--log-level=debug"
@@ -176,3 +140,22 @@ spec:
       volumes:
         - name: dns-config-volume
           emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "substrate.fullname" (list "dns" .) }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app: dns
+spec:
+  selector:
+    app: dns
+  type: ClusterIP
+  ports:
+  - name: dns
+    port: 53
+    protocol: UDP
+  - name: dns-tcp
+    port: 53
+    protocol: TCP
