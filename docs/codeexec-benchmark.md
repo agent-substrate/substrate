@@ -67,9 +67,9 @@ go install ./cmd/kubectl-ate
 # data-plane access (leave running in the background)
 kubectl port-forward -n ate-system svc/atenet-router 8000:80 &
 
-# run the benchmarks (scripts in Appendix A/B)
-python3 bench.py 5     # create / cold-activation / warm serving
-python3 cycle.py 8     # control-plane resume/suspend cycles
+# run the benchmarks (scripts live in benchmarking/codeexec/)
+python3 benchmarking/codeexec/bench.py 5     # create / cold-activation / warm serving
+python3 benchmarking/codeexec/cycle.py 8     # control-plane resume/suspend cycles
 ```
 
 ---
