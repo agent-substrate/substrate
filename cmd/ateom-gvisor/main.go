@@ -618,28 +618,6 @@ func installActorNftablesRules(podIP net.IP) error {
 		Hooknum:  nftables.ChainHookPrerouting,
 		Priority: nftables.ChainPriorityNATDest,
 	})
-	postrouting := c.AddChain(&nftables.Chain{
-		Name:     "postrouting",
-		Table:    table,
-		Type:     nftables.ChainTypeNAT,
-		Hooknum:  nftables.ChainHookPostrouting,
-		Priority: nftables.ChainPriorityNATSource,
-	})
-	acceptPolicy := nftables.ChainPolicyAccept
-	forward := c.AddChain(&nftables.Chain{
-		Name:     "forward",
-		Table:    table,
-		Type:     nftables.ChainTypeFilter,
-		Hooknum:  nftables.ChainHookForward,
-		Priority: nftables.ChainPriorityFilter,
-		Policy:   &acceptPolicy,
-	})
-
-	c.AddRule(&nftables.Rule{
-		Table: table,
-		Chain: postrouting,
-		Exprs: append(ipSourceEqual(actorVethIP), &expr.Masq{}),
-	})
 	preroutingExprs := append(ipDestinationEqual(podIP.String()), tcpDestinationPortEqual(80)...)
 	preroutingExprs = append(preroutingExprs,
 		&expr.Immediate{
@@ -661,6 +639,29 @@ func installActorNftablesRules(podIP net.IP) error {
 		Table: table,
 		Chain: prerouting,
 		Exprs: preroutingExprs,
+	})
+
+	postrouting := c.AddChain(&nftables.Chain{
+		Name:     "postrouting",
+		Table:    table,
+		Type:     nftables.ChainTypeNAT,
+		Hooknum:  nftables.ChainHookPostrouting,
+		Priority: nftables.ChainPriorityNATSource,
+	})
+	c.AddRule(&nftables.Rule{
+		Table: table,
+		Chain: postrouting,
+		Exprs: append(ipSourceEqual(actorVethIP), &expr.Masq{}),
+	})
+
+	acceptPolicy := nftables.ChainPolicyAccept
+	forward := c.AddChain(&nftables.Chain{
+		Name:     "forward",
+		Table:    table,
+		Type:     nftables.ChainTypeFilter,
+		Hooknum:  nftables.ChainHookForward,
+		Priority: nftables.ChainPriorityFilter,
+		Policy:   &acceptPolicy,
 	})
 	c.AddRule(&nftables.Rule{
 		Table: table,
