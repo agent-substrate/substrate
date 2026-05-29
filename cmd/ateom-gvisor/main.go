@@ -23,7 +23,6 @@ import (
 	"net"
 	"os"
 	"runtime"
-	"sort"
 	"sync"
 
 	"cloud.google.com/go/compute/metadata"
@@ -34,12 +33,16 @@ import (
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/agent-substrate/substrate/internal/version"
+	"github.com/google/nftables"
+	"github.com/google/nftables/binaryutil"
+	"github.com/google/nftables/expr"
 	"github.com/hashicorp/go-reap"
 	"github.com/spf13/pflag"
 	"github.com/vishvananda/netlink"
 	"github.com/vishvananda/netns"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"golang.org/x/sys/unix"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
 )
@@ -50,6 +53,18 @@ var (
 	showVersion = pflag.Bool("version", false, "Print version and exit.")
 
 	reapLock sync.RWMutex
+)
+
+const (
+	hostVethName      = "ateom0"
+	actorVethName     = "eth0"
+	actorVethTempName = "ateom1"
+	hostVethCIDR      = "10.200.0.1/30"
+	actorVethCIDR     = "10.200.0.2/30"
+	actorVethGateway  = "10.200.0.1"
+	actorVethIP       = "10.200.0.2"
+	defaultActorPort  = "80"
+	actorNftTableName = "ateom_actor"
 )
 
 func main() {
@@ -80,8 +95,6 @@ func do(ctx context.Context) error {
 	tp, err := serverboot.InitTracing(ctx, serverboot.TracingOptions{
 		ServiceName: "ateom-gvisor",
 		Sampler:     sdktrace.ParentBased(sdktrace.NeverSample()),
-		// ateom has no network connectivity once eth0 moves into the gvisor netns.
-		NoExporter: true,
 	})
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to initialize tracing", err)
@@ -112,21 +125,6 @@ func do(ctx context.Context) error {
 		return fmt.Errorf("while opening unix socket: %w", err)
 	}
 
-	// On first start, scrape from eth0 interface.
-	//
-	// TODO(ateom): Save to boltdb database or file under ateom folder, so that
-	// if ateom process restarts, we still have it.
-	eth0Link, err := netlink.LinkByName("eth0")
-	if err != nil {
-		return fmt.Errorf("while getting netlink link for eth0: %w", err)
-	}
-
-	eth0LinkInfo, err := scrapeLink(eth0Link)
-	if err != nil {
-		return fmt.Errorf("while scraping info from eth0: %w", err)
-	}
-	slog.InfoContext(ctx, "Eth0 link info", slog.Any("eth0", eth0LinkInfo))
-
 	// Create a new network namespace that we will pass to gVisor.  gVisor will
 	// read the addresses and routes off of every link in the namespace, then
 	// remove all the addresses and handle injecting packets into the interfaces
@@ -137,7 +135,7 @@ func do(ctx context.Context) error {
 	}
 
 	actorLogger := ateom.NewActorLogger(syncedWriter, metadata.OnGCE())
-	ateomService := NewService(interiorNetNS, eth0LinkInfo, actorLogger)
+	ateomService := NewService(interiorNetNS, actorLogger)
 
 	svr := grpc.NewServer(
 		grpc.StatsHandler(otelgrpc.NewServerHandler()),
@@ -163,49 +161,18 @@ type AteomService struct {
 	lock sync.Mutex
 
 	interiorNetNS netns.NsHandle
-	eth0LinkInfo  *SaveLinkInfo
 	actorLogger   *ateom.ActorLogger
 }
 
 var _ ateompb.AteomServer = (*AteomService)(nil)
 
 // NewService creates a new AteomService.
-func NewService(interiorNetNS netns.NsHandle, eth0LinkInfo *SaveLinkInfo, actorLogger *ateom.ActorLogger) *AteomService {
+func NewService(interiorNetNS netns.NsHandle, actorLogger *ateom.ActorLogger) *AteomService {
 	svc := &AteomService{
 		interiorNetNS: interiorNetNS,
-		eth0LinkInfo:  eth0LinkInfo,
 		actorLogger:   actorLogger,
 	}
 	return svc
-}
-
-// ensureEth0InPodNetns moves eth0 back to the pod netns if a prior
-// Run/Restore left it stuck in the interior netns. Idempotent: returns
-// nil if eth0 is already in the pod netns or absent from both.
-func ensureEth0InPodNetns(ctx context.Context, s *AteomService) error {
-	if _, err := netlink.LinkByName("eth0"); err == nil {
-		return nil
-	}
-	podNetNS, err := netns.Get()
-	if err != nil {
-		return fmt.Errorf("while getting pod netns: %w", err)
-	}
-	var moved bool
-	err = netNSDo(ctx, s.interiorNetNS, func(_ context.Context) error {
-		link, lookupErr := netlink.LinkByName("eth0")
-		if lookupErr != nil {
-			return nil
-		}
-		if mvErr := netlink.LinkSetNsFd(link, int(podNetNS)); mvErr != nil {
-			return fmt.Errorf("while moving eth0 to pod netns: %w", mvErr)
-		}
-		moved = true
-		return nil
-	})
-	if moved {
-		slog.WarnContext(ctx, "Recovered eth0 from interior netns to pod netns")
-	}
-	return err
 }
 
 func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkloadRequest) (resp *ateompb.RunWorkloadResponse, retErr error) {
@@ -219,56 +186,16 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	//   * Correct runsc version is downloaded and placed on disk.
 	//   * All OCI bundles are set up, including for "pause" container.
 
-	if err := ensureEth0InPodNetns(ctx, s); err != nil {
-		return nil, fmt.Errorf("while recovering eth0 from prior failure: %w", err)
+	if err := s.setupActorNetwork(ctx); err != nil {
+		return nil, fmt.Errorf("while setting up actor network: %w", err)
 	}
-
-	// Move pod eth0 into interior netns
-	eth0Link, err := netlink.LinkByName("eth0")
-	if err != nil {
-		return nil, fmt.Errorf("while getting netlink link for eth0: %w", err)
-	}
-	if err := netlink.LinkSetNsFd(eth0Link, int(s.interiorNetNS)); err != nil {
-		return nil, fmt.Errorf("while moving eth0 into interior network namespace: %w", err)
-	}
-	// Roll eth0 back to the pod netns if any subsequent step errors,
-	// otherwise the worker pod is bricked for the next actor.
 	defer func() {
 		if retErr != nil {
-			if cleanupErr := ensureEth0InPodNetns(ctx, s); cleanupErr != nil {
-				slog.WarnContext(ctx, "Failed to roll back eth0 after Run failure", "err", cleanupErr)
+			if cleanupErr := s.cleanupActorNetwork(ctx); cleanupErr != nil {
+				slog.WarnContext(ctx, "Failed to clean up actor network after Run failure", "err", cleanupErr)
 			}
 		}
 	}()
-
-	slog.InfoContext(ctx, "Restoring eth0 routes/addresses in interior netns")
-	err = netNSDo(ctx, s.interiorNetNS, func(ctx context.Context) error {
-		loLink, err := netlink.LinkByName("lo")
-		if err != nil {
-			return fmt.Errorf("while acquiring lo in interior netns: %w", err)
-		}
-		if err := netlink.LinkSetUp(loLink); err != nil {
-			return fmt.Errorf("while bringing up lo in interior netns: %w", err)
-		}
-
-		eth0Link, err := netlink.LinkByName("eth0")
-		if err != nil {
-			return fmt.Errorf("while acquiring eth0 in interior netns: %w", err)
-		}
-		if err := netlink.LinkSetUp(eth0Link); err != nil {
-			return fmt.Errorf("while bringing up eth0 in interior netns: %w", err)
-		}
-		if err := restoreLink(ctx, eth0Link, s.eth0LinkInfo); err != nil {
-			return fmt.Errorf("while restoring eth0 routes and addresses in interior netns: %w", err)
-		}
-		if err := dumpNetInfo(ctx, "Interior NetNS "); err != nil {
-			return fmt.Errorf("while dumping links of interior netns: %w", err)
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, fmt.Errorf("while restoring eth0 in interior netns: %w", err)
-	}
 
 	rcmd := &runsc{
 		path:                   req.GetRunscPath(),
@@ -358,23 +285,8 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 		return nil, fmt.Errorf("while deleting pause container: %w", err)
 	}
 
-	// Yoink eth0 back to the pod netns.
-	podNetNS, err := netns.Get()
-	if err != nil {
-		return nil, fmt.Errorf("while getting pod netns: %w", err)
-	}
-	err = netNSDo(ctx, s.interiorNetNS, func(ctx context.Context) error {
-		eth0Link, err := netlink.LinkByName("eth0")
-		if err != nil {
-			return fmt.Errorf("while acquiring eth0 in interior netns: %w", err)
-		}
-		if err := netlink.LinkSetNsFd(eth0Link, int(podNetNS)); err != nil {
-			return fmt.Errorf("while sending eth0 back to pod netns: %w", err)
-		}
-		return nil
-	})
-	if err != nil {
-		return nil, fmt.Errorf("while restoring eth0 in interior netns: %w", err)
+	if err := s.cleanupActorNetwork(ctx); err != nil {
+		return nil, fmt.Errorf("while cleaning up actor network: %w", err)
 	}
 
 	s.actorLogger.EmitLifecycleLog("Actor checkpointed", req.GetActorId(), req.GetActorTemplateName(), req.GetActorTemplateNamespace())
@@ -394,59 +306,16 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	//   * All OCI bundles are set up, including for "pause" container.
 	//   * Checkpoint downloaded and placed on disk
 
-	if err := ensureEth0InPodNetns(ctx, s); err != nil {
-		return nil, fmt.Errorf("while recovering eth0 from prior failure: %w", err)
+	if err := s.setupActorNetwork(ctx); err != nil {
+		return nil, fmt.Errorf("while setting up actor network: %w", err)
 	}
-
-	// Move pod eth0 into interior netns
-	eth0Link, err := netlink.LinkByName("eth0")
-	if err != nil {
-		return nil, fmt.Errorf("while getting netlink link for eth0: %w", err)
-	}
-	if err := netlink.LinkSetNsFd(eth0Link, int(s.interiorNetNS)); err != nil {
-		return nil, fmt.Errorf("while moving eth0 into interior network namespace: %w", err)
-	}
-	// Roll eth0 back to the pod netns if any subsequent step errors,
-	// otherwise the worker pod is bricked for the next actor.
 	defer func() {
 		if retErr != nil {
-			if cleanupErr := ensureEth0InPodNetns(ctx, s); cleanupErr != nil {
-				slog.WarnContext(ctx, "Failed to roll back eth0 after Restore failure", "err", cleanupErr)
+			if cleanupErr := s.cleanupActorNetwork(ctx); cleanupErr != nil {
+				slog.WarnContext(ctx, "Failed to clean up actor network after Restore failure", "err", cleanupErr)
 			}
 		}
 	}()
-
-	// Restore route and IP information from save onto eth0.
-	slog.InfoContext(ctx, "Restoring eth0 routes/addresses in interior netns")
-	err = netNSDo(ctx, s.interiorNetNS, func(ctx context.Context) error {
-		loLink, err := netlink.LinkByName("lo")
-		if err != nil {
-			return fmt.Errorf("while acquiring lo in interior netns: %w", err)
-		}
-		if err := netlink.LinkSetUp(loLink); err != nil {
-			return fmt.Errorf("while bringing up lo in interior netns: %w", err)
-		}
-
-		eth0Link, err := netlink.LinkByName("eth0")
-		if err != nil {
-			return fmt.Errorf("while acquiring eth0 in interior netns: %w", err)
-		}
-		if err := netlink.LinkSetUp(eth0Link); err != nil {
-			return fmt.Errorf("while bringing up eth0 in interior netns: %w", err)
-		}
-		if err := restoreLink(ctx, eth0Link, s.eth0LinkInfo); err != nil {
-			return fmt.Errorf("while restoring eth0 routes and addresses in interior netns: %w", err)
-		}
-
-		if err := dumpNetInfo(ctx, "Interior NetNS "); err != nil {
-			return fmt.Errorf("while dumping links of interior netns: %w", err)
-		}
-
-		return nil
-	})
-	if err != nil {
-		return nil, fmt.Errorf("while restoring eth0 in interior netns: %w", err)
-	}
 
 	rcmd := &runsc{
 		path:                   req.GetRunscPath(),
@@ -484,6 +353,395 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	s.actorLogger.EmitLifecycleLog("Actor restored", req.GetActorId(), req.GetActorTemplateName(), req.GetActorTemplateNamespace())
 
 	return &ateompb.RestoreWorkloadResponse{}, nil
+}
+
+func (s *AteomService) setupActorNetwork(ctx context.Context) (retErr error) {
+	// Build a fresh point-to-point network between the worker pod netns and the
+	// gVisor interior netns. The worker side keeps the pod's real eth0, creates
+	// ateom0 as the gateway, and moves only the veth peer into the actor netns.
+	// The actor side renames that peer to eth0 and installs a default route via
+	// the worker-side veth address. This replaces the old behavior of moving the
+	// Kubernetes-provided eth0 out of the worker pod.
+	//
+	// The nftables rules installed here are a compatibility bridge for the
+	// current router assumptions: actor egress is masqueraded behind the worker
+	// pod IP, and inbound traffic to the worker pod's HTTP port is DNAT'd to the
+	// actor veth IP. Later transparent egress capture will replace the broad
+	// egress NAT with AgentGateway-bound capture rules.
+	//
+	// Clean up stale state from a failed prior activation before creating the
+	// next actor-side network. The worker currently runs one actor at a time.
+	if err := s.cleanupActorNetwork(ctx); err != nil {
+		return fmt.Errorf("while removing stale actor network: %w", err)
+	}
+	defer func() {
+		if retErr != nil {
+			if cleanupErr := s.cleanupActorNetwork(ctx); cleanupErr != nil {
+				slog.WarnContext(ctx, "Failed to clean up partially configured actor network", "err", cleanupErr)
+			}
+		}
+	}()
+
+	podIP, err := podIPv4()
+	if err != nil {
+		return fmt.Errorf("while resolving pod IPv4 address: %w", err)
+	}
+
+	hostAddr, err := parseAddr(hostVethCIDR)
+	if err != nil {
+		return err
+	}
+
+	veth := &netlink.Veth{
+		LinkAttrs: netlink.LinkAttrs{
+			Name: hostVethName,
+		},
+		PeerName: actorVethTempName,
+	}
+	if err := netlink.LinkAdd(veth); err != nil {
+		return fmt.Errorf("while creating actor veth pair: %w", err)
+	}
+
+	hostLink, err := netlink.LinkByName(hostVethName)
+	if err != nil {
+		return fmt.Errorf("while getting host veth: %w", err)
+	}
+	if err := netlink.AddrReplace(hostLink, hostAddr); err != nil {
+		return fmt.Errorf("while assigning host veth address: %w", err)
+	}
+	if err := netlink.LinkSetUp(hostLink); err != nil {
+		return fmt.Errorf("while bringing up host veth: %w", err)
+	}
+
+	actorLink, err := netlink.LinkByName(actorVethTempName)
+	if err != nil {
+		return fmt.Errorf("while getting actor veth peer: %w", err)
+	}
+	if err := netlink.LinkSetNsFd(actorLink, int(s.interiorNetNS)); err != nil {
+		return fmt.Errorf("while moving actor veth peer into interior netns: %w", err)
+	}
+
+	if err := netNSDo(ctx, s.interiorNetNS, configureActorVeth); err != nil {
+		return fmt.Errorf("while configuring actor veth in interior netns: %w", err)
+	}
+
+	if err := enableIPv4Forwarding(); err != nil {
+		return err
+	}
+	if err := installActorNftablesRules(podIP); err != nil {
+		return err
+	}
+
+	if err := dumpNetInfo(ctx, "Pod NetNS "); err != nil {
+		return fmt.Errorf("while dumping pod netns links: %w", err)
+	}
+	if err := netNSDo(ctx, s.interiorNetNS, func(ctx context.Context) error {
+		return dumpNetInfo(ctx, "Interior NetNS ")
+	}); err != nil {
+		return fmt.Errorf("while dumping interior netns links: %w", err)
+	}
+
+	return nil
+}
+
+func configureActorVeth(ctx context.Context) error {
+	// Run inside the gVisor interior netns after setupActorNetwork moves the
+	// veth peer there. gVisor reads link names, addresses, and routes from this
+	// namespace when the workload starts, so the peer is deliberately renamed to
+	// eth0 and configured like a normal container interface:
+	//
+	//   * lo is brought up for localhost behavior.
+	//   * the temporary veth peer is renamed to eth0.
+	//   * eth0 receives the actor-side /30 address.
+	//   * the default route points to the worker-side veth gateway.
+	loLink, err := netlink.LinkByName("lo")
+	if err != nil {
+		return fmt.Errorf("while acquiring lo in interior netns: %w", err)
+	}
+	if err := netlink.LinkSetUp(loLink); err != nil {
+		return fmt.Errorf("while bringing up lo in interior netns: %w", err)
+	}
+
+	actorLink, err := netlink.LinkByName(actorVethTempName)
+	if err != nil {
+		return fmt.Errorf("while acquiring actor veth in interior netns: %w", err)
+	}
+	if err := netlink.LinkSetName(actorLink, actorVethName); err != nil {
+		return fmt.Errorf("while renaming actor veth to %q: %w", actorVethName, err)
+	}
+	actorLink, err = netlink.LinkByName(actorVethName)
+	if err != nil {
+		return fmt.Errorf("while reacquiring actor veth in interior netns: %w", err)
+	}
+
+	actorAddr, err := parseAddr(actorVethCIDR)
+	if err != nil {
+		return err
+	}
+	if err := netlink.AddrReplace(actorLink, actorAddr); err != nil {
+		return fmt.Errorf("while assigning actor veth address: %w", err)
+	}
+	if err := netlink.LinkSetUp(actorLink); err != nil {
+		return fmt.Errorf("while bringing up actor veth: %w", err)
+	}
+
+	gw := net.ParseIP(actorVethGateway).To4()
+	if gw == nil {
+		return fmt.Errorf("invalid actor veth gateway %q", actorVethGateway)
+	}
+	if err := netlink.RouteReplace(&netlink.Route{
+		LinkIndex: actorLink.Attrs().Index,
+		Gw:        gw,
+	}); err != nil {
+		return fmt.Errorf("while installing actor default route: %w", err)
+	}
+
+	return nil
+}
+
+func (s *AteomService) cleanupActorNetwork(ctx context.Context) error {
+	// Remove all per-activation network state owned by ateom. Deleting the
+	// worker-side veth also deletes its peer when the pair is still connected,
+	// but failed setup can leave the peer already moved into the actor netns.
+	// For that reason cleanup also enters the interior netns and deletes either
+	// the final actor interface name or the temporary peer name if present.
+	//
+	// This function is intentionally idempotent so it can run before setup, after
+	// checkpoint, and from setup failure cleanup without requiring the caller to
+	// know how far network initialization progressed.
+	if err := removeActorNftablesRules(); err != nil {
+		return err
+	}
+
+	if link, err := netlink.LinkByName(hostVethName); err == nil {
+		if err := netlink.LinkDel(link); err != nil {
+			return fmt.Errorf("while deleting host veth: %w", err)
+		}
+	} else if _, ok := err.(netlink.LinkNotFoundError); !ok {
+		return fmt.Errorf("while looking up host veth: %w", err)
+	}
+
+	if err := netNSDo(ctx, s.interiorNetNS, func(_ context.Context) error {
+		for _, name := range []string{actorVethName, actorVethTempName} {
+			link, err := netlink.LinkByName(name)
+			if err == nil {
+				if err := netlink.LinkDel(link); err != nil {
+					return fmt.Errorf("while deleting interior veth %q: %w", name, err)
+				}
+				continue
+			}
+			if _, ok := err.(netlink.LinkNotFoundError); !ok {
+				return fmt.Errorf("while looking up interior veth %q: %w", name, err)
+			}
+		}
+		return nil
+	}); err != nil {
+		return fmt.Errorf("while cleaning interior netns links: %w", err)
+	}
+
+	return nil
+}
+
+func podIPv4() (net.IP, error) {
+	// Resolve the worker pod IPv4 address from the pod namespace's real eth0.
+	// Because eth0 now stays in the pod namespace, this IP remains available for
+	// both normal worker connectivity and the temporary inbound DNAT rule.
+	eth0Link, err := netlink.LinkByName("eth0")
+	if err != nil {
+		return nil, fmt.Errorf("while getting pod eth0: %w", err)
+	}
+	addrs, err := netlink.AddrList(eth0Link, netlink.FAMILY_V4)
+	if err != nil {
+		return nil, fmt.Errorf("while listing pod eth0 addresses: %w", err)
+	}
+	for _, addr := range addrs {
+		if addr.IP == nil {
+			continue
+		}
+		if ip := addr.IP.To4(); ip != nil {
+			return ip, nil
+		}
+	}
+	return nil, fmt.Errorf("pod eth0 has no IPv4 address")
+}
+
+func parseAddr(cidr string) (*netlink.Addr, error) {
+	addr, err := netlink.ParseAddr(cidr)
+	if err != nil {
+		return nil, fmt.Errorf("while parsing address %q: %w", cidr, err)
+	}
+	return addr, nil
+}
+
+func enableIPv4Forwarding() error {
+	// Forwarding is required because actor packets now enter the worker pod via
+	// the host-side veth and then leave through the pod's eth0. Without this, the
+	// kernel would not route traffic between those interfaces even though both
+	// live in the worker pod network namespace.
+	if err := os.WriteFile("/proc/sys/net/ipv4/ip_forward", []byte("1\n"), 0o644); err != nil {
+		return fmt.Errorf("while enabling IPv4 forwarding in worker pod netns: %w", err)
+	}
+	return nil
+}
+
+func installActorNftablesRules(podIP net.IP) error {
+	// Install a dedicated nftables table for the active actor. Keeping all
+	// rules in an ateom-owned table makes cleanup simple and avoids mutating
+	// Kubernetes or CNI-managed chains directly.
+	//
+	// The temporary compatibility rules do three things:
+	//
+	//   * postrouting: masquerade actor egress from 10.200.0.2 behind the worker
+	//     pod IP so replies route back to the pod.
+	//   * prerouting: DNAT traffic sent to the worker pod IP on TCP/80 to the
+	//     actor veth IP on TCP/80, preserving existing inbound behavior.
+	//   * forward: accept forwarded packets between the actor veth and pod eth0.
+	//
+	// This is not the final egress policy path. The later AgentGateway phase
+	// should replace the broad masquerade path with transparent TCP capture and
+	// default-deny rules.
+	if err := removeActorNftablesRules(); err != nil {
+		return err
+	}
+
+	c := &nftables.Conn{}
+	table := &nftables.Table{
+		Family: nftables.TableFamilyIPv4,
+		Name:   actorNftTableName,
+	}
+	c.AddTable(table)
+
+	prerouting := c.AddChain(&nftables.Chain{
+		Name:     "prerouting",
+		Table:    table,
+		Type:     nftables.ChainTypeNAT,
+		Hooknum:  nftables.ChainHookPrerouting,
+		Priority: nftables.ChainPriorityNATDest,
+	})
+	postrouting := c.AddChain(&nftables.Chain{
+		Name:     "postrouting",
+		Table:    table,
+		Type:     nftables.ChainTypeNAT,
+		Hooknum:  nftables.ChainHookPostrouting,
+		Priority: nftables.ChainPriorityNATSource,
+	})
+	acceptPolicy := nftables.ChainPolicyAccept
+	forward := c.AddChain(&nftables.Chain{
+		Name:     "forward",
+		Table:    table,
+		Type:     nftables.ChainTypeFilter,
+		Hooknum:  nftables.ChainHookForward,
+		Priority: nftables.ChainPriorityFilter,
+		Policy:   &acceptPolicy,
+	})
+
+	c.AddRule(&nftables.Rule{
+		Table: table,
+		Chain: postrouting,
+		Exprs: append(ipSourceEqual(actorVethIP), &expr.Masq{}),
+	})
+	preroutingExprs := append(ipDestinationEqual(podIP.String()), tcpDestinationPortEqual(80)...)
+	preroutingExprs = append(preroutingExprs,
+		&expr.Immediate{
+			Register: 1,
+			Data:     net.ParseIP(actorVethIP).To4(),
+		},
+		&expr.Immediate{
+			Register: 2,
+			Data:     binaryutil.BigEndian.PutUint16(80),
+		},
+		&expr.NAT{
+			Type:        expr.NATTypeDestNAT,
+			Family:      unix.NFPROTO_IPV4,
+			RegAddrMin:  1,
+			RegProtoMin: 2,
+		},
+	)
+	c.AddRule(&nftables.Rule{
+		Table: table,
+		Chain: prerouting,
+		Exprs: preroutingExprs,
+	})
+	c.AddRule(&nftables.Rule{
+		Table: table,
+		Chain: forward,
+		Exprs: []expr.Any{
+			&expr.Verdict{Kind: expr.VerdictAccept},
+		},
+	})
+
+	if err := c.Flush(); err != nil {
+		return fmt.Errorf("while installing actor nftables rules: %w", err)
+	}
+	return nil
+}
+
+func removeActorNftablesRules() error {
+	// Delete the whole ateom nftables table if it exists. The table is
+	// per-worker and currently per-active-actor because this worker path runs at
+	// most one actor at a time. Missing tables are treated as already clean.
+	c := &nftables.Conn{}
+	tables, err := c.ListTablesOfFamily(nftables.TableFamilyIPv4)
+	if err != nil {
+		return fmt.Errorf("while listing nftables tables: %w", err)
+	}
+	for _, table := range tables {
+		if table.Name != actorNftTableName {
+			continue
+		}
+		c.DelTable(table)
+		if err := c.Flush(); err != nil {
+			return fmt.Errorf("while deleting actor nftables table: %w", err)
+		}
+		return nil
+	}
+	return nil
+}
+
+func ipSourceEqual(ip string) []expr.Any {
+	return ipPayloadEqual(12, ip)
+}
+
+func ipDestinationEqual(ip string) []expr.Any {
+	return ipPayloadEqual(16, ip)
+}
+
+func ipPayloadEqual(offset uint32, ip string) []expr.Any {
+	return []expr.Any{
+		&expr.Payload{
+			DestRegister: 1,
+			Base:         expr.PayloadBaseNetworkHeader,
+			Offset:       offset,
+			Len:          4,
+		},
+		&expr.Cmp{
+			Op:       expr.CmpOpEq,
+			Register: 1,
+			Data:     net.ParseIP(ip).To4(),
+		},
+	}
+}
+
+func tcpDestinationPortEqual(port uint16) []expr.Any {
+	return []expr.Any{
+		&expr.Meta{Key: expr.MetaKeyL4PROTO, Register: 1},
+		&expr.Cmp{
+			Op:       expr.CmpOpEq,
+			Register: 1,
+			Data:     []byte{unix.IPPROTO_TCP},
+		},
+		&expr.Payload{
+			DestRegister: 1,
+			Base:         expr.PayloadBaseTransportHeader,
+			Offset:       2,
+			Len:          2,
+		},
+		&expr.Cmp{
+			Op:       expr.CmpOpEq,
+			Register: 1,
+			Data:     binaryutil.BigEndian.PutUint16(port),
+		},
+	}
 }
 
 func createNetNSWithoutSwitching(ctx context.Context, name string) (netns.NsHandle, error) {
@@ -536,101 +794,6 @@ func netNSDo(ctx context.Context, targetNS netns.NsHandle, do func(context.Conte
 		return fmt.Errorf("while executing function in target netns: %w", err)
 	}
 
-	return nil
-}
-
-type SaveLinkInfo struct {
-	Addresses []SaveAddr
-	Routes    []SaveRoute
-}
-
-type SaveAddr struct {
-	Addr      net.IPNet
-	Scope     int
-	Broadcast net.IP
-}
-
-type SaveRoute struct {
-	Scope    uint8
-	Dst      net.IPNet
-	Src      net.IP
-	Gateway  net.IP
-	Protocol int
-	Type     int
-}
-
-func scrapeLink(link netlink.Link) (*SaveLinkInfo, error) {
-	rawAddrs, err := netlink.AddrList(link, netlink.FAMILY_ALL)
-	if err != nil {
-		return nil, fmt.Errorf("while scraping addresses: %w", err)
-	}
-
-	var addrs []SaveAddr
-	for _, rawAddr := range rawAddrs {
-		addr := SaveAddr{
-			Addr:      *rawAddr.IPNet,
-			Scope:     rawAddr.Scope,
-			Broadcast: rawAddr.Broadcast,
-		}
-		addrs = append(addrs, addr)
-	}
-
-	rawRoutes, err := netlink.RouteList(link, netlink.FAMILY_ALL)
-	if err != nil {
-		return nil, fmt.Errorf("while scraping routes: %w", err)
-	}
-
-	var routes []SaveRoute
-	for _, rawRoute := range rawRoutes {
-		route := SaveRoute{
-			Scope:    uint8(rawRoute.Scope),
-			Dst:      *rawRoute.Dst,
-			Src:      rawRoute.Src,
-			Gateway:  rawRoute.Gw,
-			Protocol: int(rawRoute.Protocol),
-			Type:     rawRoute.Type,
-		}
-		routes = append(routes, route)
-	}
-
-	return &SaveLinkInfo{
-		Addresses: addrs,
-		Routes:    routes,
-	}, nil
-}
-
-func restoreLink(ctx context.Context, link netlink.Link, info *SaveLinkInfo) error {
-	for i, saveAddr := range info.Addresses {
-		addr := &netlink.Addr{
-			IPNet:     &saveAddr.Addr,
-			Scope:     saveAddr.Scope,
-			Broadcast: saveAddr.Broadcast,
-		}
-		if err := netlink.AddrReplace(link, addr); err != nil {
-			return fmt.Errorf("while restoring addr %d onto link: %w", i, err)
-		}
-	}
-	// Link-scope routes must be installed before gateway routes so the
-	// kernel can resolve each gateway's nexthop (fib_check_nh_v4_gw).
-	routes := append([]SaveRoute(nil), info.Routes...)
-	sort.SliceStable(routes, func(i, j int) bool {
-		return routes[i].Gateway == nil && routes[j].Gateway != nil
-	})
-	for i, saveRoute := range routes {
-		route := &netlink.Route{
-			LinkIndex: link.Attrs().Index,
-			Scope:     netlink.Scope(saveRoute.Scope),
-			Dst:       &saveRoute.Dst,
-			Src:       saveRoute.Src,
-			Gw:        saveRoute.Gateway,
-			Protocol:  netlink.RouteProtocol(saveRoute.Protocol),
-			Type:      saveRoute.Type,
-		}
-		slog.InfoContext(ctx, "Restoring route", slog.String("dst", saveRoute.Dst.String()), slog.String("src", saveRoute.Src.String()), slog.String("gateway", saveRoute.Gateway.String()))
-		if err := netlink.RouteReplace(route); err != nil {
-			return fmt.Errorf("while restoring route %d: %w", i, err)
-		}
-	}
 	return nil
 }
 

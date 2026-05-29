@@ -75,10 +75,6 @@ type TracingOptions struct {
 	// Sampler is required. ateapi typically uses ParentBased(AlwaysSample);
 	// atelet/ateom-gvisor use ParentBased(NeverSample).
 	Sampler sdktrace.Sampler
-	// NoExporter skips the OTLP exporter. Used by binaries with no
-	// network egress (ateom-gvisor, after eth0 moves into the gvisor
-	// netns).
-	NoExporter bool
 }
 
 // InitTracing registers a global TracerProvider with the given options
@@ -96,16 +92,14 @@ func InitTracing(ctx context.Context, opts TracingOptions) (*sdktrace.TracerProv
 		sdktrace.WithResource(res),
 		sdktrace.WithSampler(opts.Sampler),
 	}
-	if !opts.NoExporter {
-		exporter, err := otlptracegrpc.New(ctx,
-			// GKE managed traces doesn't support validating the TLS certs of the collector.
-			otlptracegrpc.WithInsecure(),
-		)
-		if err != nil {
-			return nil, fmt.Errorf("create OTLP exporter: %w", err)
-		}
-		tpOpts = append(tpOpts, sdktrace.WithBatcher(exporter))
+	exporter, err := otlptracegrpc.New(ctx,
+		// GKE managed traces doesn't support validating the TLS certs of the collector.
+		otlptracegrpc.WithInsecure(),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create OTLP exporter: %w", err)
 	}
+	tpOpts = append(tpOpts, sdktrace.WithBatcher(exporter))
 
 	tp := sdktrace.NewTracerProvider(tpOpts...)
 	otel.SetTracerProvider(tp)
