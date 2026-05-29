@@ -365,8 +365,7 @@ func (s *AteomService) setupActorNetwork(ctx context.Context) (retErr error) {
 	// The nftables rules installed here are a compatibility bridge for the
 	// current router assumptions: actor egress is masqueraded behind the worker
 	// pod IP, and inbound traffic to the worker pod's HTTP port is DNAT'd to the
-	// actor veth IP. Later transparent egress capture will replace the broad
-	// egress NAT with AgentGateway-bound capture rules.
+	// actor veth IP.
 	//
 	// Clean up stale state from a failed prior activation before creating the
 	// next actor-side network. The worker currently runs one actor at a time.
