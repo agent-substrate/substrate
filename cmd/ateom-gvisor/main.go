@@ -63,7 +63,6 @@ const (
 	actorVethCIDR     = "10.200.0.2/30"
 	actorVethGateway  = "10.200.0.1"
 	actorVethIP       = "10.200.0.2"
-	defaultActorPort  = "80"
 	actorNftTableName = "ateom_actor"
 )
 
@@ -618,6 +617,10 @@ func installActorNftablesRules(podIP net.IP) error {
 		Hooknum:  nftables.ChainHookPrerouting,
 		Priority: nftables.ChainPriorityNATDest,
 	})
+	// TODO: Support inbound UDP DNAT for actors that expose UDP protocols such
+	// as QUIC.
+	// TODO: Replace the hard-coded HTTP port with the actor's configured
+	// inbound ports, either by adding one rule per port or by matching a set.
 	preroutingExprs := append(ipDestinationEqual(podIP.String()), tcpDestinationPortEqual(80)...)
 	preroutingExprs = append(preroutingExprs,
 		&expr.Immediate{
