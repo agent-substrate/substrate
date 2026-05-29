@@ -252,12 +252,16 @@
                     <span class="label">Namespace Context</span>
                     <span class="value">{{ .Namespace }}</span>
                 </div>
+                <div class="metadata-item">
+                    <span class="label">Networking Mode</span>
+                    <span class="value">{{ .NetworkingMode }}</span>
+                </div>
             </div>
 
             <div class="card">
                 <div class="card-title">Component Network Allocation</div>
                 <div class="metadata-item">
-                    <span class="label">Workload Port (Http Envoy)</span>
+                    <span class="label">Workload HTTP Port</span>
                     <span class="value">{{ .HttpPort }}</span>
                 </div>
                 <div class="metadata-item">
@@ -278,8 +282,8 @@
                 <div class="card-title">System Component Health Checks</div>
                 
                 <div class="metadata-item">
-                    <span class="label">Envoy Health</span>
-                    {{ if .Health.Envoy.Healthy }}
+                    <span class="label">Proxy Health ({{ .Health.Provider }})</span>
+                    {{ if .Health.Proxy.Healthy }}
                     <span class="value badge" style="background: rgba(16, 185, 129, 0.1); color: #10b981;">Healthy</span>
                     {{ else }}
                     <span class="value badge" style="background: rgba(239, 68, 68, 0.1); color: #ef4444;">Degraded</span>
@@ -287,11 +291,11 @@
                 </div>
                 <div class="metadata-item" style="margin-top: -0.25rem; margin-bottom: 0.5rem; font-size: 0.8rem;">
                     <span class="label">Message / Err:</span>
-                    <span class="value" style="color: var(--text-secondary);">{{ .Health.Envoy.Message }}</span>
+                    <span class="value" style="color: var(--text-secondary);">{{ .Health.Proxy.Message }}</span>
                 </div>
                 <div class="metadata-item" style="font-size: 0.75rem; color: var(--text-secondary);">
-                    <span>Ok: {{ .Health.Envoy.SuccessCount }} | Err: {{ .Health.Envoy.FailureCount }}</span>
-                    <span>LKG: {{ if not .Health.Envoy.LastSuccess.IsZero }}{{ .Health.Envoy.LastSuccess.Format "15:04:05" }}{{ else }}N/A{{ end }}</span>
+                    <span>Ok: {{ .Health.Proxy.SuccessCount }} | Err: {{ .Health.Proxy.FailureCount }}</span>
+                    <span>LKG: {{ if not .Health.Proxy.LastSuccess.IsZero }}{{ .Health.Proxy.LastSuccess.Format "15:04:05" }}{{ else }}N/A{{ end }}</span>
                 </div>
 
                 <div style="border-bottom: 1px solid var(--card-border); margin: 0.5rem 0;"></div>

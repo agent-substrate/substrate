@@ -40,6 +40,8 @@ fi
 # ATE_DEMOS is an array that registers the prefix name of the demo functions.
 ATE_DEMOS=()
 
+ATE_INSTALL_ATENET_ROUTER="${ATE_INSTALL_ATENET_ROUTER:-envoy}"
+
 # Include demos.
 source "${ROOT}"/hack/install-demo-counter.sh
 source "${ROOT}"/hack/install-demo-sandbox.sh
@@ -62,6 +64,7 @@ function usage() {
   echo "Overall infrastructure (all infrastructure components):"
   echo ""
   echo "  --deploy-ate-system                    Deploy core system (CRDs, atelet, apiserver)"
+  echo "  --router=envoy|agentgateway            Select atenet-router implementation (default: envoy)"
   echo "  --delete-ate-system                    Delete core system"
   echo "  --delete-all                           Delete core system and all registered demos"
   echo ""
@@ -113,6 +116,63 @@ run_ko() {
       ;;
     *)
       ./hack/run-tool.sh ko "$@"
+      ;;
+  esac
+}
+
+set_atenet_router() {
+  case "$1" in
+    envoy|agentgateway)
+      ATE_INSTALL_ATENET_ROUTER="$1"
+      ;;
+    *)
+      echo "unsupported atenet router mode: $1" >&2
+      exit 1
+      ;;
+  esac
+}
+
+atenet_router_manifest() {
+  case "${ATE_INSTALL_ATENET_ROUTER}" in
+    envoy)
+      echo "manifests/ate-install/atenet-router.yaml"
+      ;;
+    agentgateway)
+      echo "manifests/ate-install/atenet-router-agentgateway.yaml"
+      ;;
+    *)
+      echo "unsupported atenet router mode: ${ATE_INSTALL_ATENET_ROUTER}" >&2
+      exit 1
+      ;;
+  esac
+}
+
+ate_install_kustomize_base_dir() {
+  case "${ATE_INSTALL_ATENET_ROUTER}" in
+    envoy)
+      echo "manifests/ate-install/base"
+      ;;
+    agentgateway)
+      echo "manifests/ate-install/base-agentgateway"
+      ;;
+    *)
+      echo "unsupported atenet router mode: ${ATE_INSTALL_ATENET_ROUTER}" >&2
+      exit 1
+      ;;
+  esac
+}
+
+ate_install_kustomize_dir() {
+  case "${ATE_INSTALL_ATENET_ROUTER}" in
+    envoy)
+      echo "manifests/ate-install/kind"
+      ;;
+    agentgateway)
+      echo "manifests/ate-install/kind-agentgateway"
+      ;;
+    *)
+      echo "unsupported atenet router mode: ${ATE_INSTALL_ATENET_ROUTER}" >&2
+      exit 1
       ;;
   esac
 }
@@ -241,10 +301,10 @@ deploy_ate_system() {
   local manifests=""
   if [[ "${ATE_INSTALL_KIND:-false}" == "true" ]]; then
     # Build everything resolved with Kustomize for Kind
-    manifests=$(kubectl kustomize manifests/ate-install/kind --load-restrictor LoadRestrictionsNone | run_ko resolve -f -)
+    manifests=$(kubectl kustomize "$(ate_install_kustomize_dir)" --load-restrictor LoadRestrictionsNone | run_ko resolve -f -)
   else
     # Build everything resolved with base manifests for GKE
-    manifests=$(run_ko resolve -f manifests/ate-install)
+    manifests=$(kubectl kustomize "$(ate_install_kustomize_base_dir)" --load-restrictor LoadRestrictionsNone | run_ko resolve -f -)
   fi
   echo "${manifests}" | run_kubectl apply -f -
 
@@ -314,7 +374,7 @@ deploy_atenet() {
   run_kubectl apply -f manifests/ate-install/ate-system-namespace.yaml \
     && run_kubectl wait --for=jsonpath='{.status.phase}'=Active namespace/ate-system --timeout=60s
 
-  run_ko apply -f manifests/ate-install/atenet-router.yaml
+  run_ko apply -f "$(atenet_router_manifest)"
   run_ko apply -f manifests/ate-install/atenet-dns.yaml
   run_kubectl rollout status deployment/atenet-router -n ate-system --timeout=120s
   run_kubectl rollout status deployment/atenet-dns -n ate-system --timeout=120s
@@ -333,7 +393,7 @@ delete_ate_system() {
 
 delete_atenet() {
   log_step "delete_atenet"
-  run_kubectl delete --ignore-not-found -f manifests/ate-install/atenet-router.yaml
+  run_kubectl delete --ignore-not-found -f "$(atenet_router_manifest)"
 }
 
 delete_all() {
@@ -358,6 +418,9 @@ for arg in "$@"; do
       usage
       exit 0
       ;;
+    --router=*)
+      set_atenet_router "${arg#--router=}"
+      ;;
   esac
 done
 
@@ -376,6 +439,7 @@ while [[ "$#" -gt 0 ]]; do
 
   case $1 in
     --deploy-ate-system) deploy_ate_system ;;
+    --router=*) ;;
     --delete-ate-system) delete_ate_system ;;
     --delete-all) delete_all ;;
 

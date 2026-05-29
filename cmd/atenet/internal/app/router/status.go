@@ -131,6 +131,7 @@ type DashboardContext struct {
 	BuildTag        string             `json:"build_tag"`
 	RouterClusterIP string             `json:"router_cluster_ip"`
 	Namespace       string             `json:"namespace"`
+	NetworkingMode  string             `json:"networking_mode"`
 	HttpPort        int                `json:"port_http"`
 	XdsPort         int                `json:"port_xds"`
 	ExtprocPort     int                `json:"port_extproc"`
@@ -238,6 +239,7 @@ func (s *RouterServer) handleStatusz(w http.ResponseWriter, req *http.Request) {
 		BuildTag:        buildInfo,
 		RouterClusterIP: routerIP,
 		Namespace:       s.cfg.Namespace,
+		NetworkingMode:  s.cfg.NetworkingMode,
 		HttpPort:        s.cfg.HttpPort,
 		XdsPort:         s.cfg.XdsPort,
 		ExtprocPort:     s.cfg.ExtprocPort,
