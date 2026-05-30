@@ -25,6 +25,8 @@ import (
 
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 	envoy_type "github.com/envoyproxy/go-control-plane/envoy/type/v3"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 	"google.golang.org/grpc"
 
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -33,18 +35,20 @@ import (
 // ExtProcServer implements the Envoy external processing gRPC server
 // to dynamically manage actor activations based on request traffic.
 type ExtProcServer struct {
-	port      int
-	apiClient ateapipb.ControlClient
-	recorder  *QueryRecorder
-	resumer   *ActorResumer
+	port          int
+	apiClient     ateapipb.ControlClient
+	recorder      *QueryRecorder
+	resumer       *ActorResumer
+	routeDuration metric.Float64Histogram
 }
 
-func NewExtProcServer(port int, apiClient ateapipb.ControlClient) *ExtProcServer {
+func NewExtProcServer(port int, apiClient ateapipb.ControlClient, routeDuration metric.Float64Histogram) *ExtProcServer {
 	return &ExtProcServer{
-		port:      port,
-		apiClient: apiClient,
-		recorder:  NewQueryRecorder(100),
-		resumer:   NewActorResumer(apiClient),
+		port:          port,
+		apiClient:     apiClient,
+		recorder:      NewQueryRecorder(100),
+		resumer:       NewActorResumer(apiClient),
+		routeDuration: routeDuration,
 	}
 }
 
@@ -83,7 +87,8 @@ func (s *ExtProcServer) Process(stream extprocv3.ExternalProcessor_ProcessServer
 		switch reqType := req.Request.(type) {
 		case *extprocv3.ProcessingRequest_RequestHeaders:
 			start := time.Now()
-			hResponse, rqm, target, err := s.handleRequestHeaders(stream.Context(), reqType.RequestHeaders)
+			hResponse, rqm, target, tmplNs, tmplName, err := s.handleRequestHeaders(stream.Context(), reqType.RequestHeaders)
+			elapsed := time.Since(start)
 			if err != nil {
 				slog.ErrorContext(stream.Context(), "Error during ext_proc RequestHeaders processing", slog.String("err", err.Error()))
 				var reqErr *reqError
@@ -92,10 +97,12 @@ func (s *ExtProcServer) Process(stream extprocv3.ExternalProcessor_ProcessServer
 				} else {
 					resp = immediateResponse(envoy_type.StatusCode_InternalServerError, err.Error())
 				}
-				s.recorder.AddRouterRequest(start, time.Since(start), "Error", "-", rqm)
+				s.recordRouteDuration(stream.Context(), elapsed, tmplNs, tmplName, classifyOutcome(err))
+				s.recorder.AddRouterRequest(start, elapsed, "Error", "-", rqm)
 			} else {
 				resp.Response = &extprocv3.ProcessingResponse_RequestHeaders{RequestHeaders: hResponse}
-				s.recorder.AddRouterRequest(start, time.Since(start), "Route ok", target, rqm)
+				s.recordRouteDuration(stream.Context(), elapsed, tmplNs, tmplName, "ok")
+				s.recorder.AddRouterRequest(start, elapsed, "Route ok", target, rqm)
 			}
 
 		default:
@@ -118,13 +125,14 @@ func (s *ExtProcServer) Process(stream extprocv3.ExternalProcessor_ProcessServer
 func (s *ExtProcServer) handleRequestHeaders(
 	ctx context.Context,
 	reqHeaders *extprocv3.HttpHeaders,
-) (*extprocv3.HeadersResponse, *requestMetadata, string, error) {
+) (*extprocv3.HeadersResponse, *requestMetadata, string, string, string, error) {
 	metadata := newRequestMetadata(reqHeaders.Headers.GetHeaders())
 	slog.InfoContext(ctx, "Request", slog.String("metadata", metadata.String()))
 
 	actorID, err := parseActorID(metadata.host)
 	if err != nil {
-		return nil, metadata, "", invalidHostErr(metadata.host, err)
+		// Host is invalid, respond with 404.
+		return nil, metadata, "", "", "", invalidHostErr(metadata.host, err)
 	}
 
 	slog.InfoContext(ctx, "ResumeActor", slog.String("actorID", actorID))
@@ -136,12 +144,17 @@ func (s *ExtProcServer) handleRequestHeaders(
 		slog.Any("err", err))
 
 	if err != nil {
-		return nil, metadata, "", mapResumeError(actorID, err)
+		return nil, metadata, "", "", "", mapResumeError(actorID, err)
 	}
+
+	// Actor template identity, used as low-cardinality route-latency metric
+	// attributes (see recordRouteDuration).
+	tmplNs := actor.GetActorTemplateNamespace()
+	tmplName := actor.GetActorTemplateName()
 
 	workerIP := actor.GetAteomPodIp()
 	if ip := net.ParseIP(workerIP); ip == nil {
-		return nil, metadata, "", newReqError(envoy_type.StatusCode_InternalServerError,
+		return nil, metadata, "", tmplNs, tmplName, newReqError(envoy_type.StatusCode_InternalServerError,
 			"actor %q routing failed", actorID)
 	}
 
@@ -158,5 +171,29 @@ func (s *ExtProcServer) handleRequestHeaders(
 		Response: &extprocv3.CommonResponse{
 			HeaderMutation: mutation,
 		},
-	}, metadata, targetAddr, nil
+	}, metadata, targetAddr, tmplNs, tmplName, nil
+}
+
+func (s *ExtProcServer) recordRouteDuration(ctx context.Context, d time.Duration, tmplNs, tmplName, outcome string) {
+	if s.routeDuration == nil {
+		return
+	}
+	s.routeDuration.Record(ctx, d.Seconds(), metric.WithAttributes(
+		attribute.String("actor_template_namespace", tmplNs),
+		attribute.String("actor_template_name", tmplName),
+		attribute.String("outcome", outcome),
+	))
+}
+
+func classifyOutcome(err error) string {
+	switch {
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		return "cancelled"
+	default:
+		var re *reqError
+		if errors.As(err, &re) && re.statusCode == int(envoy_type.StatusCode_NotFound) {
+			return "not_found"
+		}
+		return "error"
+	}
 }

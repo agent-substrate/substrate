@@ -1,5 +1,5 @@
 {
-  "displayName": "ATE gRPC Server — latency / QPS / errors",
+  "displayName": "Substrate gRPC Server — latency / QPS / errors",
   "mosaicLayout": {
     "columns": 12,
     "tiles": [

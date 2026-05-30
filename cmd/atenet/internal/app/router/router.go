@@ -46,6 +46,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 
+	"github.com/agent-substrate/substrate/internal/serverboot"
 	v1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
@@ -76,6 +77,7 @@ type RouterConfig struct {
 	HttpsPort      int
 	EnvoyCertPath  string
 	LogLevel       string
+	MetricsAddr    string
 }
 
 // RouterServer instantiates and coordinates runtime threads executing system modules.
@@ -114,6 +116,14 @@ func NewCmd() *cobra.Command {
 			}
 			slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level})))
 
+			mp, err := serverboot.InitMetrics(ctx, routerServiceName)
+			if err != nil {
+				return fmt.Errorf("failed to initialize metrics: %w", err)
+			}
+			defer serverboot.ShutdownProvider("MeterProvider", mp.Shutdown)
+
+			go serverboot.StartMetricsServer(ctx, serverboot.MetricsServerOptions{Addr: cfg.MetricsAddr})
+
 			sigChan := make(chan os.Signal, 1)
 			signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 			go func() {
@@ -132,6 +142,7 @@ func NewCmd() *cobra.Command {
 	}
 
 	cmd.Flags().StringVar(&cfg.LogLevel, "log-level", "info", "Log level: debug, info, warn, error")
+	cmd.Flags().StringVar(&cfg.MetricsAddr, "metrics-listen-addr", ":9090", "Address and port the prometheus metrics server should listen on.")
 	cmd.Flags().BoolVar(&cfg.Standalone, "standalone", false, "Run in standalone mode, bypassing creation of managed deployment and services in Kubernetes cluster")
 	cmd.Flags().StringVar(&cfg.Namespace, "namespace", "default", "Target operations namespace")
 	cmd.Flags().StringVar(&cfg.Kubeconfig, "kubeconfig", "", "Absolute path to the kubeconfig configuration file")
@@ -226,7 +237,11 @@ func (s *RouterServer) Run(ctx context.Context) error {
 
 	xdsSrv.SetTlsConfig(s.cfg.HttpsPort, s.cfg.EnvoyCertPath, certContent, keyContent)
 	if s.extprocSrv == nil {
-		s.extprocSrv = NewExtProcServer(s.cfg.ExtprocPort, s.apiClient)
+		routeDuration, err := newRouteDurationHistogram()
+		if err != nil {
+			return fmt.Errorf("failed to create route-duration histogram: %w", err)
+		}
+		s.extprocSrv = NewExtProcServer(s.cfg.ExtprocPort, s.apiClient, routeDuration)
 	}
 	ctrl := NewController(s.k8sClient, s.clientset, s.cfg, xdsSrv, s.extprocSrv)
 

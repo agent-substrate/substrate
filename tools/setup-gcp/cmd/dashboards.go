@@ -31,6 +31,7 @@ import (
 // the repo root, so run setup from the repo root) that setup creates or updates.
 var dashboardsToApply = []string{
 	"monitoring/dashboards/ate-grpc-dashboard.json",
+	"monitoring/dashboards/ate-e2e-latency-dashboard.json",
 }
 
 // createMonitoringDashboards creates or updates each dashboard in

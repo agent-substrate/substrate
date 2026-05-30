@@ -115,6 +115,9 @@ spec:
     metadata:
       labels:
         app: atenet-router
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
     spec:
       serviceAccountName: atenet-router
       containers:
@@ -132,6 +135,23 @@ spec:
         - "--status-port=4040"
         - "--port-https=8443"
         - "--envoy-cert-path=/run/servicedns.podcert.ate.dev/credential-bundle.pem"
+        env:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: POD_UID
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.uid
+        - name: OTEL_RESOURCE_ATTRIBUTES
+          value: k8s.namespace.name=$(POD_NAMESPACE),k8s.pod.name=$(POD_NAME),k8s.pod.uid=$(POD_UID),service.instance.id=$(POD_UID)
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: http://opentelemetry-collector.gke-managed-otel.svc.cluster.local:4317
         ports:
         - name: xds
           containerPort: 18000
@@ -139,6 +159,8 @@ spec:
           containerPort: 50051
         - name: status
           containerPort: 4040
+        - name: metrics
+          containerPort: 9090
       - name: envoy
         image: envoyproxy/envoy:v1.30-latest
         command:

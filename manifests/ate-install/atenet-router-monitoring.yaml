@@ -1,0 +1,35 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Scrape the Envoy sidecar's admin /stats/prometheus endpoint so its end-to-end
+# request-latency histogram (envoy_http_downstream_rq_time, milliseconds) reaches
+# Google Managed Prometheus. This is E2E *context* for the per-stage latency
+# dashboard, not an SLI we own (the SLI is the OTLP atenet.router.route.duration
+# histogram). Envoy only speaks Prometheus, so it needs an explicit scrape; the
+# admin port (9901) is already exposed by the envoy container above.
+apiVersion: monitoring.googleapis.com/v1
+kind: PodMonitoring
+metadata:
+  name: atenet-router-envoy
+  namespace: ate-system
+  labels:
+    app: atenet-router
+spec:
+  selector:
+    matchLabels:
+      app: atenet-router
+  endpoints:
+  - port: admin
+    path: /stats/prometheus
+    interval: 30s
