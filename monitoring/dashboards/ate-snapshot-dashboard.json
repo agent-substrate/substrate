@@ -1,0 +1,102 @@
+{
+  "displayName": "Substrate Snapshot Size & Checkpoint Rate",
+  "mosaicLayout": {
+    "columns": 12,
+    "tiles": [
+      {
+        "xPos": 0,
+        "yPos": 0,
+        "width": 6,
+        "height": 4,
+        "widget": {
+          "title": "Substrate — snapshot image size P99 by kind",
+          "xyChart": {
+            "dataSets": [
+              {
+                "timeSeriesQuery": {
+                  "prometheusQuery": "histogram_quantile(0.99, sum by (le, kind) (rate({\"atelet.snapshot.size_bucket\", top_level_controller_name=\"atelet\"}[1h])))",
+                  "unitOverride": "By"
+                },
+                "plotType": "LINE",
+                "targetAxis": "Y1"
+              }
+            ],
+            "yAxis": {
+              "label": "bytes",
+              "scale": "LINEAR"
+            }
+          }
+        }
+      },
+      {
+        "xPos": 6,
+        "yPos": 0,
+        "width": 6,
+        "height": 4,
+        "widget": {
+          "title": "Substrate — snapshot image size P50/P95/P99 (all kinds)",
+          "xyChart": {
+            "dataSets": [
+              {
+                "timeSeriesQuery": {
+                  "prometheusQuery": "histogram_quantile(0.50, sum by (le) (rate({\"atelet.snapshot.size_bucket\", top_level_controller_name=\"atelet\"}[1h])))",
+                  "unitOverride": "By"
+                },
+                "plotType": "LINE",
+                "targetAxis": "Y1",
+                "legendTemplate": "P50"
+              },
+              {
+                "timeSeriesQuery": {
+                  "prometheusQuery": "histogram_quantile(0.95, sum by (le) (rate({\"atelet.snapshot.size_bucket\", top_level_controller_name=\"atelet\"}[1h])))",
+                  "unitOverride": "By"
+                },
+                "plotType": "LINE",
+                "targetAxis": "Y1",
+                "legendTemplate": "P95"
+              },
+              {
+                "timeSeriesQuery": {
+                  "prometheusQuery": "histogram_quantile(0.99, sum by (le) (rate({\"atelet.snapshot.size_bucket\", top_level_controller_name=\"atelet\"}[1h])))",
+                  "unitOverride": "By"
+                },
+                "plotType": "LINE",
+                "targetAxis": "Y1",
+                "legendTemplate": "P99"
+              }
+            ],
+            "yAxis": {
+              "label": "bytes",
+              "scale": "LINEAR"
+            }
+          }
+        }
+      },
+      {
+        "xPos": 0,
+        "yPos": 4,
+        "width": 12,
+        "height": 4,
+        "widget": {
+          "title": "Substrate — checkpoint rate by kind (per s)",
+          "xyChart": {
+            "dataSets": [
+              {
+                "timeSeriesQuery": {
+                  "prometheusQuery": "sum by (kind) (rate({\"atelet.snapshot.size_count\", top_level_controller_name=\"atelet\"}[1h]))",
+                  "unitOverride": "1/s"
+                },
+                "plotType": "LINE",
+                "targetAxis": "Y1"
+              }
+            ],
+            "yAxis": {
+              "label": "checkpoints/s",
+              "scale": "LINEAR"
+            }
+          }
+        }
+      }
+    ]
+  }
+}
