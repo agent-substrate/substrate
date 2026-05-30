@@ -1,0 +1,158 @@
+{
+  "displayName": "ATE gRPC Server — latency / QPS / errors",
+  "mosaicLayout": {
+    "columns": 12,
+    "tiles": [
+      {
+        "xPos": 0,
+        "yPos": 0,
+        "width": 6,
+        "height": 4,
+        "widget": {
+          "title": "ateapi — gRPC p99 latency by method",
+          "xyChart": {
+            "dataSets": [
+              {
+                "timeSeriesQuery": {
+                  "prometheusQuery": "histogram_quantile(0.99, sum by (le, \"rpc.method\") (rate({\"rpc.server.call.duration_bucket\", top_level_controller_name=\"ate-api-server-deployment\"}[5m])))",
+                  "unitOverride": "s"
+                },
+                "plotType": "LINE",
+                "targetAxis": "Y1"
+              }
+            ],
+            "yAxis": {
+              "label": "seconds",
+              "scale": "LINEAR"
+            }
+          }
+        }
+      },
+      {
+        "xPos": 0,
+        "yPos": 4,
+        "width": 6,
+        "height": 4,
+        "widget": {
+          "title": "ateapi — gRPC request rate by method (req/s)",
+          "xyChart": {
+            "dataSets": [
+              {
+                "timeSeriesQuery": {
+                  "prometheusQuery": "sum by (\"rpc.method\") (rate({\"rpc.server.call.duration_count\", top_level_controller_name=\"ate-api-server-deployment\"}[5m]))",
+                  "unitOverride": "1/s"
+                },
+                "plotType": "LINE",
+                "targetAxis": "Y1"
+              }
+            ],
+            "yAxis": {
+              "label": "requests/s",
+              "scale": "LINEAR"
+            }
+          }
+        }
+      },
+      {
+        "xPos": 0,
+        "yPos": 8,
+        "width": 6,
+        "height": 4,
+        "widget": {
+          "title": "ateapi — gRPC errors by status code (req/s, non-OK)",
+          "xyChart": {
+            "dataSets": [
+              {
+                "timeSeriesQuery": {
+                  "prometheusQuery": "sum by (\"rpc.response.status_code\") (rate({\"rpc.server.call.duration_count\", top_level_controller_name=\"ate-api-server-deployment\", \"rpc.response.status_code\"!=\"OK\"}[5m]))",
+                  "unitOverride": "1/s"
+                },
+                "plotType": "LINE",
+                "targetAxis": "Y1"
+              }
+            ],
+            "yAxis": {
+              "label": "errors/s",
+              "scale": "LINEAR"
+            }
+          }
+        }
+      },
+      {
+        "xPos": 6,
+        "yPos": 0,
+        "width": 6,
+        "height": 4,
+        "widget": {
+          "title": "atelet — gRPC p99 latency by method",
+          "xyChart": {
+            "dataSets": [
+              {
+                "timeSeriesQuery": {
+                  "prometheusQuery": "histogram_quantile(0.99, sum by (le, \"rpc.method\") (rate({\"rpc.server.call.duration_bucket\", top_level_controller_name=\"atelet\"}[5m])))",
+                  "unitOverride": "s"
+                },
+                "plotType": "LINE",
+                "targetAxis": "Y1"
+              }
+            ],
+            "yAxis": {
+              "label": "seconds",
+              "scale": "LINEAR"
+            }
+          }
+        }
+      },
+      {
+        "xPos": 6,
+        "yPos": 4,
+        "width": 6,
+        "height": 4,
+        "widget": {
+          "title": "atelet — gRPC request rate by method (req/s)",
+          "xyChart": {
+            "dataSets": [
+              {
+                "timeSeriesQuery": {
+                  "prometheusQuery": "sum by (\"rpc.method\") (rate({\"rpc.server.call.duration_count\", top_level_controller_name=\"atelet\"}[5m]))",
+                  "unitOverride": "1/s"
+                },
+                "plotType": "LINE",
+                "targetAxis": "Y1"
+              }
+            ],
+            "yAxis": {
+              "label": "requests/s",
+              "scale": "LINEAR"
+            }
+          }
+        }
+      },
+      {
+        "xPos": 6,
+        "yPos": 8,
+        "width": 6,
+        "height": 4,
+        "widget": {
+          "title": "atelet — gRPC errors by status code (req/s, non-OK)",
+          "xyChart": {
+            "dataSets": [
+              {
+                "timeSeriesQuery": {
+                  "prometheusQuery": "sum by (\"rpc.response.status_code\") (rate({\"rpc.server.call.duration_count\", top_level_controller_name=\"atelet\", \"rpc.response.status_code\"!=\"OK\"}[5m]))",
+                  "unitOverride": "1/s"
+                },
+                "plotType": "LINE",
+                "targetAxis": "Y1"
+              }
+            ],
+            "yAxis": {
+              "label": "errors/s",
+              "scale": "LINEAR"
+            }
+          }
+        }
+      }
+    ]
+  }
+}

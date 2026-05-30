@@ -30,6 +30,7 @@ var (
 	grantGkeNodePermissionsFlag bool
 	grantAteletPermissionsFlag  bool
 	enableApisFlag              bool
+	createDashboardsFlag        bool
 	allFlag                     bool
 )
 
@@ -54,6 +55,7 @@ var rootCmd = &cobra.Command{
 			{"create iam policy bindings", &createIamPolicyBindingsFlag, createIamPolicyBindings},
 			{"grant gke node permissions", &grantGkeNodePermissionsFlag, grantGkeNodePermissions},
 			{"grant atelet permissions", &grantAteletPermissionsFlag, grantAteletPermissions},
+			{"create monitoring dashboards", &createDashboardsFlag, createMonitoringDashboards},
 		}
 
 		if cmd.Flags().NFlag() == 0 {
@@ -97,5 +99,6 @@ func init() {
 	rootCmd.Flags().BoolVar(&grantGkeNodePermissionsFlag, "grant-gke-node-permissions", false, "Grant GKE nodes permission to pull images")
 	rootCmd.Flags().BoolVar(&grantAteletPermissionsFlag, "grant-atelet-permissions", false, "Grant atelet permission to read/write snapshots and pull images")
 	rootCmd.Flags().BoolVar(&enableApisFlag, "enable-apis", false, "Enable required Google Cloud APIs")
+	rootCmd.Flags().BoolVar(&createDashboardsFlag, "create-monitoring-dashboards", false, "Create/update Cloud Monitoring dashboards from monitoring/dashboards/")
 	rootCmd.Flags().BoolVar(&allFlag, "all", false, "Run all setup steps")
 }
