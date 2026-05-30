@@ -1,0 +1,136 @@
+{
+  "displayName": "Substrate Snapshot Size & QPS",
+  "mosaicLayout": {
+    "columns": 12,
+    "tiles": [
+      {
+        "xPos": 0,
+        "yPos": 0,
+        "width": 6,
+        "height": 4,
+        "widget": {
+          "title": "Substrate — snapshot image size P99 by ActorTemplate",
+          "xyChart": {
+            "dataSets": [
+              {
+                "timeSeriesQuery": {
+                  "prometheusQuery": "histogram_quantile(0.99, sum by (le, actor_template_name) (rate({\"atelet.snapshot.size_bucket\", top_level_controller_name=\"atelet\", kind=\"pages\"}[1h])))",
+                  "unitOverride": "By"
+                },
+                "plotType": "LINE",
+                "targetAxis": "Y1"
+              }
+            ],
+            "yAxis": {
+              "label": "bytes",
+              "scale": "LINEAR"
+            }
+          }
+        }
+      },
+      {
+        "xPos": 6,
+        "yPos": 0,
+        "width": 6,
+        "height": 4,
+        "widget": {
+          "title": "Substrate — snapshot image size P50/P95/P99",
+          "xyChart": {
+            "dataSets": [
+              {
+                "timeSeriesQuery": {
+                  "prometheusQuery": "histogram_quantile(0.50, sum by (le) (rate({\"atelet.snapshot.size_bucket\", top_level_controller_name=\"atelet\"}[1h])))",
+                  "unitOverride": "By"
+                },
+                "plotType": "LINE",
+                "targetAxis": "Y1",
+                "legendTemplate": "P50"
+              },
+              {
+                "timeSeriesQuery": {
+                  "prometheusQuery": "histogram_quantile(0.95, sum by (le) (rate({\"atelet.snapshot.size_bucket\", top_level_controller_name=\"atelet\"}[1h])))",
+                  "unitOverride": "By"
+                },
+                "plotType": "LINE",
+                "targetAxis": "Y1",
+                "legendTemplate": "P95"
+              },
+              {
+                "timeSeriesQuery": {
+                  "prometheusQuery": "histogram_quantile(0.99, sum by (le) (rate({\"atelet.snapshot.size_bucket\", top_level_controller_name=\"atelet\"}[1h])))",
+                  "unitOverride": "By"
+                },
+                "plotType": "LINE",
+                "targetAxis": "Y1",
+                "legendTemplate": "P99"
+              }
+            ],
+            "yAxis": {
+              "label": "bytes",
+              "scale": "LINEAR"
+            }
+          }
+        }
+      },
+      {
+        "xPos": 0,
+        "yPos": 4,
+        "width": 12,
+        "height": 4,
+        "widget": {
+          "title": "Substrate — Snapshot QPS",
+          "xyChart": {
+            "dataSets": [
+              {
+                "timeSeriesQuery": {
+                  "prometheusQuery": "sum by (actor_template_name) (rate({\"atelet.snapshot.size_count\", top_level_controller_name=\"atelet\", kind=\"pages\"}[1h]))",
+                  "unitOverride": "1/s"
+                },
+                "plotType": "LINE",
+                "targetAxis": "Y1"
+              }
+            ],
+            "yAxis": {
+              "label": "snapshots/s",
+              "scale": "LINEAR"
+            }
+          }
+        }
+      },
+      {
+        "xPos": 0,
+        "yPos": 8,
+        "width": 12,
+        "height": 4,
+        "widget": {
+          "title": "Substrate — snapshot (pages) size distribution (heatmap)",
+          "xyChart": {
+            "dataSets": [
+              {
+                "timeSeriesQuery": {
+                  "timeSeriesFilter": {
+                    "filter": "metric.type=\"prometheus.googleapis.com/atelet.snapshot.size/histogram\" resource.type=\"prometheus_target\" metric.labels.kind=\"pages\"",
+                    "aggregation": {
+                      "alignmentPeriod": "60s",
+                      "perSeriesAligner": "ALIGN_DELTA",
+                      "crossSeriesReducer": "REDUCE_SUM"
+                    }
+                  }
+                },
+                "plotType": "HEATMAP",
+                "targetAxis": "Y1"
+              }
+            ],
+            "yAxis": {
+              "label": "bytes",
+              "scale": "LINEAR"
+            },
+            "chartOptions": {
+              "mode": "COLOR"
+            }
+          }
+        }
+      }
+    ]
+  }
+}

@@ -32,6 +32,7 @@ import (
 var dashboardsToApply = []string{
 	"monitoring/dashboards/ate-grpc-dashboard.json",
 	"monitoring/dashboards/ate-e2e-latency-dashboard.json",
+	"monitoring/dashboards/ate-snapshot-dashboard.json",
 }
 
 // createMonitoringDashboards creates or updates each dashboard in

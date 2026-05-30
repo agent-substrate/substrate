@@ -44,6 +44,9 @@ import (
 	"github.com/google/go-containerregistry/pkg/authn"
 	googlecontainerauth "github.com/google/go-containerregistry/pkg/v1/google"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/api/option"
@@ -86,6 +89,10 @@ func main() {
 		serverboot.Fatal(ctx, "Failed to initialize metrics", err)
 	}
 	defer serverboot.ShutdownProvider("MeterProvider", mp.Shutdown)
+
+	if err := initSnapshotSizeMetric(); err != nil {
+		serverboot.Fatal(ctx, "Failed to create snapshot size metric", err)
+	}
 
 	go serverboot.StartMetricsServer(ctx, serverboot.MetricsServerOptions{Addr: *metricsListenAddr})
 
@@ -305,6 +312,42 @@ func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (*atele
 	return &ateletpb.RunResponse{}, nil
 }
 
+var snapshotSizeBytes metric.Int64Histogram
+
+func initSnapshotSizeMetric() error {
+	var err error
+	snapshotSizeBytes, err = otel.Meter("atelet").Int64Histogram(
+		"atelet.snapshot.size",
+		metric.WithUnit("By"),
+		metric.WithDescription("Uncompressed size in bytes of each gVisor snapshot image written during checkpoint."),
+
+		metric.WithExplicitBucketBoundaries(
+			1e6, 5e6, 1e7, 2.5e7, 5e7, 1e8, 2.5e8, 5e8, 1e9, 2e9, 5e9, 1e10,
+		),
+	)
+	return err
+}
+
+func recordSnapshotSize(ctx context.Context, kind, path, atNamespace, atName string) {
+	if snapshotSizeBytes == nil {
+		return
+	}
+	fi, err := os.Stat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return
+	}
+	if err != nil {
+		slog.WarnContext(ctx, "Failed to stat snapshot image for size metric",
+			slog.String("kind", kind), slog.String("path", path), slog.Any("err", err))
+		return
+	}
+	snapshotSizeBytes.Record(ctx, fi.Size(), metric.WithAttributes(
+		attribute.String("kind", kind),
+		attribute.String("actor_template_namespace", atNamespace),
+		attribute.String("actor_template_name", atName),
+	))
+}
+
 func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest) (*ateletpb.CheckpointResponse, error) {
 	runscPath, err := s.fetchRunscAndPrep(ctx, req.GetRunsc())
 	if err != nil {
@@ -336,6 +379,8 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 	pagesImgPath := filepath.Join(checkpointDir, "pages.img")
 	pagesMetaImgPath := filepath.Join(checkpointDir, "pages_meta.img")
 
+	recordSnapshotSize(ctx, "checkpoint", checkpointImgPath, ns, tmpl)
+
 	// Upload checkpoint from local dir.
 	if err := ategcs.SendLocalFileToGCSWithZstd(ctx, s.gcsClient,
 		prefix+"/checkpoint.img.zstd",
@@ -344,12 +389,14 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 		return nil, fmt.Errorf("while uploading checkpoint.img to GCS: %w", err)
 	}
 
+	recordSnapshotSize(ctx, "pages", pagesImgPath, ns, tmpl)
 	if err := uploadIfExists(ctx, s.gcsClient,
 		prefix+"/pages.img.zstd",
 		pagesImgPath,
 	); err != nil {
 		return nil, err
 	}
+	recordSnapshotSize(ctx, "pages_meta", pagesMetaImgPath, ns, tmpl)
 	if err := uploadIfExists(ctx, s.gcsClient,
 		prefix+"/pages_meta.img.zstd",
 		pagesMetaImgPath,
