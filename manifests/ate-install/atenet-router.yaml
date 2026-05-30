@@ -132,6 +132,9 @@ spec:
         - "--status-port=4040"
         - "--port-https=8443"
         - "--envoy-cert-path=/run/servicedns.podcert.ate.dev/credential-bundle.pem"
+        env:
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: http://opentelemetry-collector.gke-managed-otel.svc.cluster.local:4317
         ports:
         - name: xds
           containerPort: 18000
@@ -189,3 +192,25 @@ spec:
     port: 443
     targetPort: 8443
     protocol: TCP
+---
+# Scrape the Envoy sidecar's admin /stats/prometheus endpoint so its end-to-end
+# request-latency histogram (envoy_http_downstream_rq_time, milliseconds) reaches
+# Google Managed Prometheus. This is E2E *context* for the per-stage latency
+# dashboard, not an SLI we own (the SLI is the OTLP atenet.router.route.duration
+# histogram). Envoy only speaks Prometheus, so it needs an explicit scrape; the
+# admin port (9901) is already exposed by the envoy container above.
+apiVersion: monitoring.googleapis.com/v1
+kind: PodMonitoring
+metadata:
+  name: atenet-router-envoy
+  namespace: ate-system
+  labels:
+    app: atenet-router
+spec:
+  selector:
+    matchLabels:
+      app: atenet-router
+  endpoints:
+  - port: admin
+    path: /stats/prometheus
+    interval: 30s

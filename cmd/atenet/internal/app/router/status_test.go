@@ -62,7 +62,7 @@ func TestStatuszEndpoint(t *testing.T) {
 		t.Fatalf("Failed generating router server: %v", err)
 	}
 
-	srv.extprocSrv = NewExtProcServer(cfg.ExtprocPort, &mockClient{})
+	srv.extprocSrv = NewExtProcServer(cfg.ExtprocPort, &mockClient{}, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

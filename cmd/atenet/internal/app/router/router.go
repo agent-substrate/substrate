@@ -46,6 +46,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 
+	"github.com/agent-substrate/substrate/internal/serverboot"
 	v1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
@@ -113,6 +114,12 @@ func NewCmd() *cobra.Command {
 				level = slog.LevelInfo
 			}
 			slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level})))
+
+			mp, err := serverboot.InitMetrics(ctx, routerServiceName)
+			if err != nil {
+				return fmt.Errorf("failed to initialize metrics: %w", err)
+			}
+			defer serverboot.ShutdownProvider("MeterProvider", mp.Shutdown)
 
 			sigChan := make(chan os.Signal, 1)
 			signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
@@ -226,7 +233,11 @@ func (s *RouterServer) Run(ctx context.Context) error {
 
 	xdsSrv.SetTlsConfig(s.cfg.HttpsPort, s.cfg.EnvoyCertPath, certContent, keyContent)
 	if s.extprocSrv == nil {
-		s.extprocSrv = NewExtProcServer(s.cfg.ExtprocPort, s.apiClient)
+		routeDuration, err := newRouteDurationHistogram()
+		if err != nil {
+			return fmt.Errorf("failed to create route-duration histogram: %w", err)
+		}
+		s.extprocSrv = NewExtProcServer(s.cfg.ExtprocPort, s.apiClient, routeDuration)
 	}
 	ctrl := NewController(s.k8sClient, s.clientset, s.cfg, xdsSrv, s.extprocSrv)
 

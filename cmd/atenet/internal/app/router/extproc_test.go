@@ -138,7 +138,7 @@ func TestExtProcHeadersEvaluation(t *testing.T) {
 				},
 			}
 
-			s := NewExtProcServer(50051, clientMock)
+			s := NewExtProcServer(50051, clientMock, nil)
 
 			reqHeaders := &extprocv3.HttpHeaders{
 				Headers: &corev3.HeaderMap{
@@ -150,7 +150,7 @@ func TestExtProcHeadersEvaluation(t *testing.T) {
 				},
 			}
 
-			res, metadata, target, err := s.handleRequestHeaders(context.Background(), reqHeaders)
+			res, metadata, target, _, _, err := s.handleRequestHeaders(context.Background(), reqHeaders)
 			if tc.expectErr {
 				if err == nil {
 					t.Fatalf("expected error but got nil")
