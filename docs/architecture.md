@@ -399,17 +399,3 @@ Agent Substrate is built on a **Defense-in-Depth** model:
 
   * **mTLS Everywhere**: All internal system communication (e.g., Control Plane
     to Atelet) is secured via mutual TLS with short-lived certificates.
-
-## Atelet Node Placement
-
-The atelet DaemonSet runs only on nodes that currently host at least one ateom pod. Substrate's `AteletNodeReconciler` is a Pod-keyed reconciler that watches ateom pods (identified by the `ate.dev/worker-pool` label) and maintains a substrate-owned `ate.dev/atelet=true` label on each Node currently hosting an ateom workload. The atelet DaemonSet uses `nodeSelector: ate.dev/atelet=true`, so its footprint follows ateom placement.
-
-Per-pool refcounting is via annotations: each Node carries one `ate.dev/claim.<workerpool-uid>` annotation per WorkerPool whose ateom pods occupy it. The label is present iff at least one claim annotation exists. When the last ateom from a pool leaves a node, that pool's claim is removed; when the last claim across all pools is removed, the label is removed and atelet drains.
-
-Every ateom pod starts with a `wait-for-atelet` init container that probes the local atelet's gRPC port (`$HOST_IP:8085`) until it responds. This absorbs the gap between pod scheduling and atelet readiness, and makes ateom robust to atelet upgrades or restarts mid-life.
-
-WorkerPool deletion is protected by a finalizer (`ate.dev/release-node-claims`) so claims are reliably released before the WorkerPool is removed.
-
-On a fresh cluster, no nodes carry the label yet, so the atelet DaemonSet runs zero pods until the first WorkerPool's ateoms are scheduled — at which point their nodes are labeled and atelet starts there. This is expected: a freshly installed cluster with no WorkerPools shows an atelet DaemonSet with zero desired pods (a `kubectl rollout status` on it reports success immediately), not a broken install.
-
-See `docs/superpowers/specs/2026-05-28-atelet-node-placement-design.md` for the full design.
