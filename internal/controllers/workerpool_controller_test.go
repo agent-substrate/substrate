@@ -36,6 +36,7 @@ import (
 	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
@@ -423,12 +424,7 @@ func TestWorkerPoolHasFinalizer(t *testing.T) {
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: wp.Name, Namespace: wp.Namespace}, current); err != nil {
 			return false, nil
 		}
-		for _, f := range current.Finalizers {
-			if f == ReleaseClaimsFinalizer {
-				return true, nil
-			}
-		}
-		return false, nil
+		return controllerutil.ContainsFinalizer(current, ReleaseClaimsFinalizer), nil
 	})
 }
 
@@ -440,7 +436,7 @@ func TestWorkerPoolDeletionReleasesClaims(t *testing.T) {
 	const nodeName = "test-node-deletion"
 
 	// Pre-create a node so the test isn't dependent on Pod scheduling.
-	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: nodeName}}
+	node := makeNode(nodeName)
 	if err := k8sClient.Create(testCtx, node); err != nil {
 		t.Fatalf("create node: %v", err)
 	}
@@ -461,12 +457,7 @@ func TestWorkerPoolDeletionReleasesClaims(t *testing.T) {
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: wp.Name, Namespace: wp.Namespace}, current); err != nil {
 			return false, nil
 		}
-		for _, f := range current.Finalizers {
-			if f == ReleaseClaimsFinalizer {
-				return true, nil
-			}
-		}
-		return false, nil
+		return controllerutil.ContainsFinalizer(current, ReleaseClaimsFinalizer), nil
 	})
 
 	// Simulate a pod from this WorkerPool landing on the node.

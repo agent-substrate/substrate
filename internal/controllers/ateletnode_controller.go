@@ -52,6 +52,14 @@ const (
 	PodNodeNameIndex = "spec.nodeName"
 )
 
+// claimAnnotationKey returns the Node annotation key that records a claim by
+// the WorkerPool with the given UID. It is the single source of truth for the
+// claim-annotation format, shared by AteletNodeReconciler (which writes claims)
+// and the WorkerPool finalizer (which waits on them).
+func claimAnnotationKey(workerPoolUID string) string {
+	return AteletNodeClaimAnnoPrefix + workerPoolUID
+}
+
 // AteletNodeReconciler reconciles ateom Pod events into Node labels and
 // claim annotations so the atelet DaemonSet schedules only on Nodes
 // currently hosting ateom workloads.
@@ -74,8 +82,10 @@ func (r *AteletNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 func (r *AteletNodeReconciler) reconcileNode(ctx context.Context, nodeName string) (ctrl.Result, error) {
 	logger := log.FromContext(ctx).WithValues("node", nodeName)
 
-	node := &corev1.Node{}
-	if err := r.Get(ctx, types.NamespacedName{Name: nodeName}, node); err != nil {
+	// Existence check only (the value is unused): if the node is gone, do
+	// nothing. The SSA Apply below would otherwise resurrect a deleted Node,
+	// since server-side apply upserts.
+	if err := r.Get(ctx, types.NamespacedName{Name: nodeName}, &corev1.Node{}); err != nil {
 		if k8errors.IsNotFound(err) {
 			return ctrl.Result{}, nil
 		}
@@ -128,7 +138,7 @@ func (r *AteletNodeReconciler) applyNodeClaims(ctx context.Context, nodeName str
 
 	annotations := map[string]string{}
 	for uid := range poolUIDs {
-		annotations[AteletNodeClaimAnnoPrefix+uid] = ""
+		annotations[claimAnnotationKey(uid)] = ""
 	}
 	nodeAC.Annotations = annotations
 
@@ -152,15 +162,18 @@ func (r *AteletNodeReconciler) podToNode(_ context.Context, obj client.Object) [
 }
 
 // ateomPodPredicate returns true for pods that look like ateom workloads
-// (those carrying the WorkerPoolLabelKey). Atelet's own DS pods and other
-// system pods are filtered out.
+// (those carrying the WorkerPoolUIDLabelKey). Atelet's own DS pods and other
+// system pods are filtered out. Gating on the UID label — the key
+// reconcileNode actually consumes for claim refcounting — keeps the watch
+// filter aligned with the work the reconciler does, so a pod that can't be
+// refcounted never triggers a no-op reconcile.
 func ateomPodPredicate() predicate.Predicate {
 	return predicate.NewPredicateFuncs(func(obj client.Object) bool {
 		labels := obj.GetLabels()
 		if labels == nil {
 			return false
 		}
-		_, ok := labels[WorkerPoolLabelKey]
+		_, ok := labels[WorkerPoolUIDLabelKey]
 		return ok
 	})
 }

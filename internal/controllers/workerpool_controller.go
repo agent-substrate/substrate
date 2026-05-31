@@ -111,7 +111,7 @@ func (r *WorkerPoolReconciler) handleDeletion(ctx context.Context, wp *atev1alph
 		return ctrl.Result{}, nil
 	}
 
-	claimKey := AteletNodeClaimAnnoPrefix + string(wp.UID)
+	claimKey := claimAnnotationKey(string(wp.UID))
 	nodes := &corev1.NodeList{}
 	// Claim state lives in Node annotations, which are not server-side
 	// selectable, so we list all Nodes and scan. This runs only while a
