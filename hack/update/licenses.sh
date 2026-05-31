@@ -51,7 +51,12 @@ for target in "${targets[@]}"; do
   GOARCH="${target_arch}" \
   GOROOT=$(go env GOROOT) \
   CGO_ENABLED=1 \
-  "${GO_LICENSES_BIN}" save ./... --include_tests --force --save_path="${tmp_out}" > "${tmpfile}" 2>&1 || {
+  "${GO_LICENSES_BIN}" save ./... \
+      --include_tests \
+      --force \
+      --ignore=./vendor \
+      --save_path="${tmp_out}" > "${tmpfile}" 2>&1 || \
+  {
     echo "Failed for ${target_os}/${target_arch}:" >&2
     cat "${tmpfile}"
     rm -rf "${tmp_out}"
