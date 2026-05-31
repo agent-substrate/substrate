@@ -181,3 +181,148 @@ func bindPodToNode(t *testing.T, pod *corev1.Pod, nodeName string) {
 		t.Fatalf("bind pod to node: %v", err)
 	}
 }
+
+// TestTwoPoolsOnSameNode verifies that two ateom pods from different
+// WorkerPools, both scheduled to the same node, result in two claim
+// annotations and a single label.
+func TestTwoPoolsOnSameNode(t *testing.T) {
+	const nodeName = "test-node-two-pools"
+	const poolA = "uid-pool-a"
+	const poolB = "uid-pool-b"
+
+	node := makeNode(nodeName)
+	if err := k8sClient.Create(testCtx, node); err != nil {
+		t.Fatalf("create node: %v", err)
+	}
+	t.Cleanup(func() { k8sClient.Delete(testCtx, node) }) //nolint:errcheck
+
+	podA := makeAteomPod("pod-two-pools-a", "default", "pool-a", poolA)
+	podB := makeAteomPod("pod-two-pools-b", "default", "pool-b", poolB)
+	for _, p := range []*corev1.Pod{podA, podB} {
+		if err := k8sClient.Create(testCtx, p); err != nil {
+			t.Fatalf("create pod %s: %v", p.Name, err)
+		}
+		t.Cleanup(func(pod *corev1.Pod) func() {
+			return func() { k8sClient.Delete(testCtx, pod, client.GracePeriodSeconds(0)) } //nolint:errcheck
+		}(p))
+		bindPodToNode(t, p, nodeName)
+	}
+
+	eventually(t, func(ctx context.Context) (bool, error) {
+		n := &corev1.Node{}
+		if err := k8sClient.Get(ctx, types.NamespacedName{Name: nodeName}, n); err != nil {
+			return false, nil
+		}
+		if n.Labels[AteletNodeLabel] != AteletNodeLabelValue {
+			return false, nil
+		}
+		_, okA := n.Annotations[AteletNodeClaimAnnoPrefix+poolA]
+		_, okB := n.Annotations[AteletNodeClaimAnnoPrefix+poolB]
+		return okA && okB, nil
+	})
+}
+
+// TestPodDeletionRemovesOneClaim verifies that deleting one pod when
+// another pool's pod still shares the node removes only that pool's
+// claim and keeps the label.
+func TestPodDeletionRemovesOneClaim(t *testing.T) {
+	const nodeName = "test-node-pod-delete"
+	const poolA = "uid-delete-a"
+	const poolB = "uid-delete-b"
+
+	node := makeNode(nodeName)
+	if err := k8sClient.Create(testCtx, node); err != nil {
+		t.Fatalf("create node: %v", err)
+	}
+	t.Cleanup(func() { k8sClient.Delete(testCtx, node) }) //nolint:errcheck
+
+	podA := makeAteomPod("pod-delete-a", "default", "pool-a", poolA)
+	podB := makeAteomPod("pod-delete-b", "default", "pool-b", poolB)
+	for _, p := range []*corev1.Pod{podA, podB} {
+		if err := k8sClient.Create(testCtx, p); err != nil {
+			t.Fatalf("create pod %s: %v", p.Name, err)
+		}
+		bindPodToNode(t, p, nodeName)
+	}
+	t.Cleanup(func() { k8sClient.Delete(testCtx, podA, client.GracePeriodSeconds(0)) }) //nolint:errcheck
+	t.Cleanup(func() { k8sClient.Delete(testCtx, podB, client.GracePeriodSeconds(0)) }) //nolint:errcheck
+
+	// Wait until both claims appear.
+	eventually(t, func(ctx context.Context) (bool, error) {
+		n := &corev1.Node{}
+		if err := k8sClient.Get(ctx, types.NamespacedName{Name: nodeName}, n); err != nil {
+			return false, nil
+		}
+		_, okA := n.Annotations[AteletNodeClaimAnnoPrefix+poolA]
+		_, okB := n.Annotations[AteletNodeClaimAnnoPrefix+poolB]
+		return okA && okB, nil
+	})
+
+	// Delete pod A; pod B remains. Use GracePeriodSeconds(0) so the pod
+	// object is removed immediately in envtest (no kubelet to honour
+	// graceful-termination, so the object would otherwise linger with a
+	// DeletionTimestamp and the reconciler would keep the claim alive).
+	if err := k8sClient.Delete(testCtx, podA, client.GracePeriodSeconds(0)); err != nil {
+		t.Fatalf("delete pod A: %v", err)
+	}
+
+	eventually(t, func(ctx context.Context) (bool, error) {
+		n := &corev1.Node{}
+		if err := k8sClient.Get(ctx, types.NamespacedName{Name: nodeName}, n); err != nil {
+			return false, nil
+		}
+		_, hasA := n.Annotations[AteletNodeClaimAnnoPrefix+poolA]
+		_, hasB := n.Annotations[AteletNodeClaimAnnoPrefix+poolB]
+		hasLabel := n.Labels[AteletNodeLabel] == AteletNodeLabelValue
+		return !hasA && hasB && hasLabel, nil
+	})
+}
+
+// TestLastPodDeletionRemovesLabel verifies that when the last ateom
+// pod on a node is deleted, both its claim annotation AND the label
+// are removed.
+func TestLastPodDeletionRemovesLabel(t *testing.T) {
+	const nodeName = "test-node-last-delete"
+	const poolUID = "uid-last"
+
+	node := makeNode(nodeName)
+	if err := k8sClient.Create(testCtx, node); err != nil {
+		t.Fatalf("create node: %v", err)
+	}
+	t.Cleanup(func() { k8sClient.Delete(testCtx, node) }) //nolint:errcheck
+
+	pod := makeAteomPod("pod-last", "default", "pool-last", poolUID)
+	if err := k8sClient.Create(testCtx, pod); err != nil {
+		t.Fatalf("create pod: %v", err)
+	}
+	t.Cleanup(func() { k8sClient.Delete(testCtx, pod, client.GracePeriodSeconds(0)) }) //nolint:errcheck
+	bindPodToNode(t, pod, nodeName)
+
+	// Wait for label + claim to appear.
+	eventually(t, func(ctx context.Context) (bool, error) {
+		n := &corev1.Node{}
+		if err := k8sClient.Get(ctx, types.NamespacedName{Name: nodeName}, n); err != nil {
+			return false, nil
+		}
+		_, hasClaim := n.Annotations[AteletNodeClaimAnnoPrefix+poolUID]
+		return n.Labels[AteletNodeLabel] == AteletNodeLabelValue && hasClaim, nil
+	})
+
+	// Delete the pod. Use GracePeriodSeconds(0) so the pod object is
+	// removed immediately in envtest (no kubelet to honour graceful
+	// termination, so the object would otherwise linger with a
+	// DeletionTimestamp and the reconciler would keep the claim alive).
+	if err := k8sClient.Delete(testCtx, pod, client.GracePeriodSeconds(0)); err != nil {
+		t.Fatalf("delete pod: %v", err)
+	}
+
+	eventually(t, func(ctx context.Context) (bool, error) {
+		n := &corev1.Node{}
+		if err := k8sClient.Get(ctx, types.NamespacedName{Name: nodeName}, n); err != nil {
+			return false, nil
+		}
+		_, hasClaim := n.Annotations[AteletNodeClaimAnnoPrefix+poolUID]
+		_, hasLabel := n.Labels[AteletNodeLabel]
+		return !hasClaim && !hasLabel, nil
+	})
+}
