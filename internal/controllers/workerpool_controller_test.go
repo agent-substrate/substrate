@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -353,6 +354,50 @@ func TestReplicasValidationRejectsNegative(t *testing.T) {
 	if !k8errors.IsInvalid(err) {
 		t.Fatalf("expected Invalid error, got: %v", err)
 	}
+}
+
+// TestAteomDeploymentHasInitContainer verifies that the controller adds an
+// init container that waits for the local atelet's gRPC port before the main
+// ateom container starts.
+func TestAteomDeploymentHasInitContainer(t *testing.T) {
+	wp := makeWorkerPool("test-init-container", "default", 1, "ateom:v1")
+	if err := k8sClient.Create(testCtx, wp); err != nil {
+		t.Fatalf("create WorkerPool: %v", err)
+	}
+	t.Cleanup(func() { k8sClient.Delete(testCtx, wp) }) //nolint:errcheck
+
+	eventually(t, func(ctx context.Context) (bool, error) {
+		dep, err := getDeployment(ctx, wp)
+		if err != nil {
+			return false, nil
+		}
+		inits := dep.Spec.Template.Spec.InitContainers
+		if len(inits) != 1 {
+			return false, nil
+		}
+		ic := inits[0]
+		if ic.Name != "wait-for-atelet" {
+			return false, nil
+		}
+		if ic.Image != "busybox:1.36" {
+			return false, nil
+		}
+		wantCmd := []string{"sh", "-c", `until nc -z "$HOST_IP" 8085; do sleep 1; done`}
+		if !reflect.DeepEqual(ic.Command, wantCmd) {
+			return false, nil
+		}
+		// Must reference HOST_IP via downward API.
+		hasHostIP := false
+		for _, e := range ic.Env {
+			if e.Name == "HOST_IP" && e.ValueFrom != nil &&
+				e.ValueFrom.FieldRef != nil &&
+				e.ValueFrom.FieldRef.FieldPath == "status.hostIP" {
+				hasHostIP = true
+				break
+			}
+		}
+		return hasHostIP, nil
+	})
 }
 
 // --- helpers ---
