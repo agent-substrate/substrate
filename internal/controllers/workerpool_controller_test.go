@@ -25,6 +25,7 @@ import (
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	k8errors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -429,6 +430,91 @@ func TestWorkerPoolHasFinalizer(t *testing.T) {
 		}
 		return false, nil
 	})
+}
+
+// TestWorkerPoolDeletionReleasesClaims is an end-to-end check that
+// deleting a WorkerPool eventually clears its claim annotation off
+// every Node that hosted its pods, and removes the finalizer so the
+// WorkerPool itself is fully deleted.
+func TestWorkerPoolDeletionReleasesClaims(t *testing.T) {
+	const nodeName = "test-node-deletion"
+
+	// Pre-create a node so the test isn't dependent on Pod scheduling.
+	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: nodeName}}
+	if err := k8sClient.Create(testCtx, node); err != nil {
+		t.Fatalf("create node: %v", err)
+	}
+	t.Cleanup(func() { k8sClient.Delete(testCtx, node) }) //nolint:errcheck
+
+	wp := makeWorkerPool("test-deletion", "default", 1, "ateom:v1")
+	if err := k8sClient.Create(testCtx, wp); err != nil {
+		t.Fatalf("create WorkerPool: %v", err)
+	}
+	// Re-fetch to get the UID assigned by the API server.
+	if err := k8sClient.Get(testCtx, types.NamespacedName{Name: wp.Name, Namespace: wp.Namespace}, wp); err != nil {
+		t.Fatalf("re-fetch WorkerPool: %v", err)
+	}
+
+	// Wait until the controller has added the finalizer.
+	eventually(t, func(ctx context.Context) (bool, error) {
+		current := &atev1alpha1.WorkerPool{}
+		if err := k8sClient.Get(ctx, types.NamespacedName{Name: wp.Name, Namespace: wp.Namespace}, current); err != nil {
+			return false, nil
+		}
+		for _, f := range current.Finalizers {
+			if f == ReleaseClaimsFinalizer {
+				return true, nil
+			}
+		}
+		return false, nil
+	})
+
+	// Simulate a pod from this WorkerPool landing on the node.
+	pod := makeAteomPod("pod-deletion", "default", wp.Name, string(wp.UID))
+	if err := k8sClient.Create(testCtx, pod); err != nil {
+		t.Fatalf("create pod: %v", err)
+	}
+	bindPodToNode(t, pod, nodeName)
+
+	// Wait for the claim to appear on the node.
+	eventually(t, func(ctx context.Context) (bool, error) {
+		n := &corev1.Node{}
+		if err := k8sClient.Get(ctx, types.NamespacedName{Name: nodeName}, n); err != nil {
+			return false, nil
+		}
+		_, ok := n.Annotations[AteletNodeClaimAnnoPrefix+string(wp.UID)]
+		return ok, nil
+	})
+
+	// Delete the pod first to simulate the Deployment cascade. (envtest does
+	// not run kube-controller-manager, so the cascade does not happen
+	// automatically.) GracePeriodSeconds(0) forces immediate object removal
+	// (no kubelet to finalize graceful termination in envtest).
+	if err := k8sClient.Delete(testCtx, pod, client.GracePeriodSeconds(0)); err != nil {
+		t.Fatalf("delete pod: %v", err)
+	}
+
+	// Delete the WorkerPool. The finalizer should hold deletion until the
+	// claim is gone, then release.
+	if err := k8sClient.Delete(testCtx, wp); err != nil {
+		t.Fatalf("delete WorkerPool: %v", err)
+	}
+
+	eventually(t, func(ctx context.Context) (bool, error) {
+		current := &atev1alpha1.WorkerPool{}
+		err := k8sClient.Get(ctx, types.NamespacedName{Name: wp.Name, Namespace: wp.Namespace}, current)
+		// Success: 404 (gone)
+		return k8errors.IsNotFound(err), nil
+	})
+
+	// And confirm the claim is gone.
+	n := &corev1.Node{}
+	if err := k8sClient.Get(testCtx, types.NamespacedName{Name: nodeName}, n); err != nil {
+		t.Fatalf("get node: %v", err)
+	}
+	if _, ok := n.Annotations[AteletNodeClaimAnnoPrefix+string(wp.UID)]; ok {
+		t.Fatalf("claim annotation still present after WorkerPool deletion: %v", n.Annotations)
+	}
 }
 
 // --- helpers ---
