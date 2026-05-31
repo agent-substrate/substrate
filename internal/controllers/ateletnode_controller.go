@@ -33,28 +33,22 @@ import (
 )
 
 const (
-	// AteletNodeLabel is the substrate-owned label that gates atelet DS
-	// scheduling. Present on a Node iff at least one ateom pod is
-	// currently scheduled to that Node.
 	AteletNodeLabel      = "ate.dev/atelet"
 	AteletNodeLabelValue = "true"
 
-	// AteletNodeClaimAnnoPrefix is the prefix for per-pool claim
-	// annotations on Nodes. Full key: ate.dev/claim.<workerpool-uid>.
+	// Per-pool claim annotation. Full key: ate.dev/claim.<workerpool-uid>.
 	AteletNodeClaimAnnoPrefix = "ate.dev/claim."
 
-	// AteletNodeFieldOwner is the SSA field owner for substrate-managed
-	// Node fields (the label and claim annotations).
 	AteletNodeFieldOwner = "atelet-node-controller"
-
-	// PodNodeNameIndex is the field-indexer key for Pod.Spec.NodeName.
-	// Required for List(client.MatchingFields{PodNodeNameIndex: ...}).
-	PodNodeNameIndex = "spec.nodeName"
+	PodNodeNameIndex     = "spec.nodeName"
 )
 
-// AteletNodeReconciler reconciles ateom Pod events into Node labels and
-// claim annotations so the atelet DaemonSet schedules only on Nodes
-// currently hosting ateom workloads.
+// claimAnnotationKey is the shared claim-annotation format: written by this
+// reconciler, read by the WorkerPool finalizer.
+func claimAnnotationKey(workerPoolUID string) string {
+	return AteletNodeClaimAnnoPrefix + workerPoolUID
+}
+
 type AteletNodeReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
@@ -63,10 +57,6 @@ type AteletNodeReconciler struct {
 //+kubebuilder:rbac:groups="",resources=nodes,verbs=get;list;watch;patch
 //+kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
 
-// Reconcile is keyed by Node name (we map Pod events to Node names in
-// SetupWithManager). It converges the Node's substrate-owned label and
-// claim annotations to match the set of WorkerPool UIDs currently
-// scheduled to it.
 func (r *AteletNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	return r.reconcileNode(ctx, req.Name)
 }
@@ -74,18 +64,16 @@ func (r *AteletNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 func (r *AteletNodeReconciler) reconcileNode(ctx context.Context, nodeName string) (ctrl.Result, error) {
 	logger := log.FromContext(ctx).WithValues("node", nodeName)
 
-	node := &corev1.Node{}
-	if err := r.Get(ctx, types.NamespacedName{Name: nodeName}, node); err != nil {
+	// Existence check only — don't let the SSA apply below recreate a deleted Node.
+	if err := r.Get(ctx, types.NamespacedName{Name: nodeName}, &corev1.Node{}); err != nil {
 		if k8errors.IsNotFound(err) {
 			return ctrl.Result{}, nil
 		}
 		return ctrl.Result{}, fmt.Errorf("get node %q: %w", nodeName, err)
 	}
 
-	// A pod that is Terminating still has spec.nodeName set and appears
-	// here until its object is actually deleted. That is intentional: the
-	// claim (and thus atelet) must outlive a draining ateom pod, so the
-	// claim is released only once the pod object is gone.
+	// Terminating pods still appear here; intentional, so atelet outlives a
+	// draining ateom (the claim drops only once the pod object is gone).
 	podList := &corev1.PodList{}
 	if err := r.List(ctx, podList, client.MatchingFields{PodNodeNameIndex: nodeName}); err != nil {
 		return ctrl.Result{}, fmt.Errorf("list pods on node %q: %w", nodeName, err)
@@ -94,14 +82,10 @@ func (r *AteletNodeReconciler) reconcileNode(ctx context.Context, nodeName strin
 	poolUIDs := map[string]struct{}{}
 	for i := range podList.Items {
 		pod := &podList.Items[i]
-		// Defensive: the spec.nodeName field index already filters to this
-		// node, so this should always be true.
 		if pod.Spec.NodeName != nodeName {
 			continue
 		}
-		// Skip pods without a worker-pool UID label (e.g. atelet's own DS
-		// pods). The field index is not label-filtered, so non-ateom pods
-		// on this node can appear here.
+		// Skip non-ateom pods; the field index is not label-filtered.
 		uid, ok := pod.Labels[WorkerPoolUIDLabelKey]
 		if !ok || uid == "" {
 			continue
@@ -113,10 +97,8 @@ func (r *AteletNodeReconciler) reconcileNode(ctx context.Context, nodeName strin
 	return ctrl.Result{}, r.applyNodeClaims(ctx, nodeName, poolUIDs)
 }
 
-// applyNodeClaims SSA-patches the Node so substrate-owned fields (the
-// ate.dev/atelet label and ate.dev/claim.<uid> annotations) match the
-// given set of WorkerPool UIDs. Previously-owned fields not in the set
-// are removed via SSA field-ownership semantics.
+// applyNodeClaims SSA-applies the label + per-pool claims; keys absent from
+// the apply are pruned by field-ownership (last claim gone -> label removed).
 func (r *AteletNodeReconciler) applyNodeClaims(ctx context.Context, nodeName string, poolUIDs map[string]struct{}) error {
 	nodeAC := corev1ac.Node(nodeName)
 
@@ -128,7 +110,7 @@ func (r *AteletNodeReconciler) applyNodeClaims(ctx context.Context, nodeName str
 
 	annotations := map[string]string{}
 	for uid := range poolUIDs {
-		annotations[AteletNodeClaimAnnoPrefix+uid] = ""
+		annotations[claimAnnotationKey(uid)] = ""
 	}
 	nodeAC.Annotations = annotations
 
@@ -138,8 +120,7 @@ func (r *AteletNodeReconciler) applyNodeClaims(ctx context.Context, nodeName str
 	return nil
 }
 
-// podToNode maps a Pod event to a reconcile request for the Pod's
-// assigned Node. Returns no requests for unscheduled Pods.
+// podToNode maps a Pod event to its assigned Node (none if unscheduled).
 func (r *AteletNodeReconciler) podToNode(_ context.Context, obj client.Object) []reconcile.Request {
 	pod, ok := obj.(*corev1.Pod)
 	if !ok {
@@ -151,23 +132,20 @@ func (r *AteletNodeReconciler) podToNode(_ context.Context, obj client.Object) [
 	return []reconcile.Request{{NamespacedName: types.NamespacedName{Name: pod.Spec.NodeName}}}
 }
 
-// ateomPodPredicate returns true for pods that look like ateom workloads
-// (those carrying the WorkerPoolLabelKey). Atelet's own DS pods and other
-// system pods are filtered out.
+// ateomPodPredicate admits ateom pods by the UID label — the key reconcileNode
+// consumes — so the watch only fires for pods we can actually refcount.
 func ateomPodPredicate() predicate.Predicate {
 	return predicate.NewPredicateFuncs(func(obj client.Object) bool {
 		labels := obj.GetLabels()
 		if labels == nil {
 			return false
 		}
-		_, ok := labels[WorkerPoolLabelKey]
+		_, ok := labels[WorkerPoolUIDLabelKey]
 		return ok
 	})
 }
 
-// SetupWithManager registers the reconciler with the manager and adds
-// a field indexer on Pod.Spec.NodeName so reconcileNode can List pods
-// efficiently.
+// SetupWithManager indexes Pod.Spec.NodeName so reconcileNode can list by node.
 func (r *AteletNodeReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	if err := mgr.GetFieldIndexer().IndexField(context.Background(), &corev1.Pod{}, PodNodeNameIndex, func(o client.Object) []string {
 		p := o.(*corev1.Pod)

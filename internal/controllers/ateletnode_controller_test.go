@@ -107,9 +107,6 @@ func TestPodToNode(t *testing.T) {
 	}
 }
 
-// TestSinglePodAddsClaimAndLabel verifies that scheduling a single
-// ateom pod to a node causes the reconciler to label the node and
-// add a single claim annotation.
 func TestSinglePodAddsClaimAndLabel(t *testing.T) {
 	const nodeName = "test-node-single"
 	const poolUID = "uid-single"
@@ -126,7 +123,6 @@ func TestSinglePodAddsClaimAndLabel(t *testing.T) {
 	}
 	t.Cleanup(func() { k8sClient.Delete(testCtx, pod) }) //nolint:errcheck
 
-	// Bind the pod to the node (envtest doesn't schedule; we set nodeName via Binding).
 	bindPodToNode(t, pod, nodeName)
 
 	eventually(t, func(ctx context.Context) (bool, error) {
@@ -169,8 +165,7 @@ func makeAteomPod(name, namespace, poolName, poolUID string) *corev1.Pod {
 	}
 }
 
-// bindPodToNode sets Pod.Spec.NodeName via the Binding subresource,
-// which is the canonical "schedule a pod" operation in envtest.
+// bindPodToNode schedules a pod via the Binding subresource (envtest has no scheduler).
 func bindPodToNode(t *testing.T, pod *corev1.Pod, nodeName string) {
 	t.Helper()
 	binding := &corev1.Binding{
@@ -182,9 +177,6 @@ func bindPodToNode(t *testing.T, pod *corev1.Pod, nodeName string) {
 	}
 }
 
-// TestTwoPoolsOnSameNode verifies that two ateom pods from different
-// WorkerPools, both scheduled to the same node, result in two claim
-// annotations and a single label.
 func TestTwoPoolsOnSameNode(t *testing.T) {
 	const nodeName = "test-node-two-pools"
 	const poolA = "uid-pool-a"
@@ -222,9 +214,6 @@ func TestTwoPoolsOnSameNode(t *testing.T) {
 	})
 }
 
-// TestPodDeletionRemovesOneClaim verifies that deleting one pod when
-// another pool's pod still shares the node removes only that pool's
-// claim and keeps the label.
 func TestPodDeletionRemovesOneClaim(t *testing.T) {
 	const nodeName = "test-node-pod-delete"
 	const poolA = "uid-delete-a"
@@ -244,10 +233,11 @@ func TestPodDeletionRemovesOneClaim(t *testing.T) {
 		}
 		bindPodToNode(t, p, nodeName)
 	}
+	// GracePeriodSeconds(0): envtest has no kubelet, so a normal delete would
+	// leave the pod lingering with a DeletionTimestamp and keep the claim alive.
 	t.Cleanup(func() { k8sClient.Delete(testCtx, podA, client.GracePeriodSeconds(0)) }) //nolint:errcheck
 	t.Cleanup(func() { k8sClient.Delete(testCtx, podB, client.GracePeriodSeconds(0)) }) //nolint:errcheck
 
-	// Wait until both claims appear.
 	eventually(t, func(ctx context.Context) (bool, error) {
 		n := &corev1.Node{}
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: nodeName}, n); err != nil {
@@ -258,10 +248,6 @@ func TestPodDeletionRemovesOneClaim(t *testing.T) {
 		return okA && okB, nil
 	})
 
-	// Delete pod A; pod B remains. Use GracePeriodSeconds(0) so the pod
-	// object is removed immediately in envtest (no kubelet to honour
-	// graceful-termination, so the object would otherwise linger with a
-	// DeletionTimestamp and the reconciler would keep the claim alive).
 	if err := k8sClient.Delete(testCtx, podA, client.GracePeriodSeconds(0)); err != nil {
 		t.Fatalf("delete pod A: %v", err)
 	}
@@ -278,9 +264,6 @@ func TestPodDeletionRemovesOneClaim(t *testing.T) {
 	})
 }
 
-// TestLastPodDeletionRemovesLabel verifies that when the last ateom
-// pod on a node is deleted, both its claim annotation AND the label
-// are removed.
 func TestLastPodDeletionRemovesLabel(t *testing.T) {
 	const nodeName = "test-node-last-delete"
 	const poolUID = "uid-last"
@@ -295,10 +278,10 @@ func TestLastPodDeletionRemovesLabel(t *testing.T) {
 	if err := k8sClient.Create(testCtx, pod); err != nil {
 		t.Fatalf("create pod: %v", err)
 	}
+	// GracePeriodSeconds(0): envtest has no kubelet (see TestPodDeletionRemovesOneClaim).
 	t.Cleanup(func() { k8sClient.Delete(testCtx, pod, client.GracePeriodSeconds(0)) }) //nolint:errcheck
 	bindPodToNode(t, pod, nodeName)
 
-	// Wait for label + claim to appear.
 	eventually(t, func(ctx context.Context) (bool, error) {
 		n := &corev1.Node{}
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: nodeName}, n); err != nil {
@@ -308,10 +291,6 @@ func TestLastPodDeletionRemovesLabel(t *testing.T) {
 		return n.Labels[AteletNodeLabel] == AteletNodeLabelValue && hasClaim, nil
 	})
 
-	// Delete the pod. Use GracePeriodSeconds(0) so the pod object is
-	// removed immediately in envtest (no kubelet to honour graceful
-	// termination, so the object would otherwise linger with a
-	// DeletionTimestamp and the reconciler would keep the claim alive).
 	if err := k8sClient.Delete(testCtx, pod, client.GracePeriodSeconds(0)); err != nil {
 		t.Fatalf("delete pod: %v", err)
 	}

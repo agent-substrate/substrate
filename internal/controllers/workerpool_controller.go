@@ -39,16 +39,10 @@ import (
 const (
 	workerPoolFieldOwner = "workerpool-controller"
 
-	// WorkerPoolLabelKey identifies an ateom pod's owning WorkerPool by name.
 	WorkerPoolLabelKey = "ate.dev/worker-pool"
-	// WorkerPoolUIDLabelKey identifies an ateom pod's owning WorkerPool by UID.
-	// Used by the AteletNodeReconciler for per-pool refcounting; survives
-	// WorkerPool rename / namespace move.
+	// UID is stable across WorkerPool rename / namespace move; used for claim refcounting.
 	WorkerPoolUIDLabelKey = "ate.dev/worker-pool-uid"
 
-	// ReleaseClaimsFinalizer ensures atelet node claims tracked under
-	// ate.dev/claim.<workerpool-uid> are released when the WorkerPool
-	// is deleted.
 	ReleaseClaimsFinalizer = "ate.dev/release-node-claims"
 )
 
@@ -86,7 +80,6 @@ func (r *WorkerPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		if err := r.Update(ctx, wp); err != nil {
 			return ctrl.Result{}, fmt.Errorf("add finalizer: %w", err)
 		}
-		// Subsequent reconcile continues with the normal flow.
 		return ctrl.Result{}, nil
 	}
 
@@ -98,35 +91,24 @@ func (r *WorkerPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	return ctrl.Result{}, nil
 }
 
-// handleDeletion is invoked when DeletionTimestamp is set. It waits until
-// all of this WorkerPool's claim annotations have been released from Nodes
-// (which happens as the Deployment cascade deletes ateom pods and the
-// AteletNodeReconciler observes the deletions), then removes the finalizer.
-// Note: this gate is best-effort against claims that have already been
-// applied. A WorkerPool created and deleted before AteletNodeReconciler
-// applies any claim may have its finalizer removed first; the Deployment
-// cascade still drives claim cleanup via pod deletion, so no claim leaks.
+// handleDeletion blocks deletion until this pool's node claims are released,
+// then drops the finalizer. Best-effort: a pool deleted before any claim is
+// applied may finalize early, but the Deployment cascade still cleans up pods.
 func (r *WorkerPoolReconciler) handleDeletion(ctx context.Context, wp *atev1alpha1.WorkerPool) (ctrl.Result, error) {
 	if !controllerutil.ContainsFinalizer(wp, ReleaseClaimsFinalizer) {
 		return ctrl.Result{}, nil
 	}
 
-	claimKey := AteletNodeClaimAnnoPrefix + string(wp.UID)
+	claimKey := claimAnnotationKey(string(wp.UID))
 	nodes := &corev1.NodeList{}
-	// Claim state lives in Node annotations, which are not server-side
-	// selectable, so we list all Nodes and scan. This runs only while a
-	// WorkerPool is deleting and is bounded by the requeue interval below.
+	// Annotations aren't server-side selectable, so scan all nodes (deletion-only).
 	if err := r.List(ctx, nodes); err != nil {
 		return ctrl.Result{}, fmt.Errorf("list nodes: %w", err)
 	}
 
 	for i := range nodes.Items {
 		if _, ok := nodes.Items[i].Annotations[claimKey]; ok {
-			// At least one claim remains; the Deployment cascade is still
-			// deleting ateom pods. This controller does not watch Nodes, so
-			// we poll via RequeueAfter rather than waking on Node events
-			// cluster-wide. Log so a wedged deletion (claim never clears) is
-			// diagnosable.
+			// Claim still present; poll (we don't watch Nodes). Log so a wedged deletion is visible.
 			log.FromContext(ctx).Info("waiting for atelet node claims to be released before deleting WorkerPool",
 				"node", nodes.Items[i].Name, "claimKey", claimKey)
 			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
