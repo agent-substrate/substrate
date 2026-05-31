@@ -114,6 +114,10 @@ def main():
         if "third_party" in filepath:
             continue
 
+        # exclude vendor directories
+        if "vendor" in filepath:
+            continue
+
         # exclude top-level LICENSES directory
         if filepath.startswith("LICENSES/"):
             continue
