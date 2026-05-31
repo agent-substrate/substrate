@@ -34,7 +34,16 @@ import (
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 )
 
-const workerPoolFieldOwner = "workerpool-controller"
+const (
+	workerPoolFieldOwner = "workerpool-controller"
+
+	// WorkerPoolLabelKey identifies an ateom pod's owning WorkerPool by name.
+	WorkerPoolLabelKey = "ate.dev/worker-pool"
+	// WorkerPoolUIDLabelKey identifies an ateom pod's owning WorkerPool by UID.
+	// Used by the AteletNodeReconciler for per-pool refcounting; survives
+	// WorkerPool rename / namespace move.
+	WorkerPoolUIDLabelKey = "ate.dev/worker-pool-uid"
+)
 
 type WorkerPoolReconciler struct {
 	client.Client
@@ -134,7 +143,8 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool) *appsv1ac.Deployment
 			WithTemplate(corev1ac.PodTemplateSpec().
 				WithLabels(map[string]string{
 					"app":                 wp.Name,
-					"ate.dev/worker-pool": wp.Name,
+					WorkerPoolLabelKey:    wp.Name,
+					WorkerPoolUIDLabelKey: string(wp.UID),
 				}).
 				WithSpec(corev1ac.PodSpec().
 					WithContainers(corev1ac.Container().
