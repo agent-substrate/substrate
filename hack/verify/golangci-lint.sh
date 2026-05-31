@@ -27,4 +27,4 @@ cd "${ROOT}"
 # macOS and golangci-lint's typecheck fail-stop suppresses all other
 # findings in the affected files.
 BIN="$("${ROOT}"/hack/run-tool.sh --print-bin-path golangci-lint)"
-exec env GOOS=linux "${BIN}" run ./...
+exec env GOOS=linux "${BIN}" run ./... | { grep -v '^0 issues.$' || true; }
