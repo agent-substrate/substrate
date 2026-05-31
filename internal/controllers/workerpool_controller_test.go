@@ -408,6 +408,29 @@ func TestAteomDeploymentHasInitContainer(t *testing.T) {
 	})
 }
 
+// TestWorkerPoolHasFinalizer verifies that the controller adds the
+// node-claims finalizer to every WorkerPool on first reconcile.
+func TestWorkerPoolHasFinalizer(t *testing.T) {
+	wp := makeWorkerPool("test-finalizer", "default", 1, "ateom:v1")
+	if err := k8sClient.Create(testCtx, wp); err != nil {
+		t.Fatalf("create WorkerPool: %v", err)
+	}
+	t.Cleanup(func() { k8sClient.Delete(testCtx, wp) }) //nolint:errcheck
+
+	eventually(t, func(ctx context.Context) (bool, error) {
+		current := &atev1alpha1.WorkerPool{}
+		if err := k8sClient.Get(ctx, types.NamespacedName{Name: wp.Name, Namespace: wp.Namespace}, current); err != nil {
+			return false, nil
+		}
+		for _, f := range current.Finalizers {
+			if f == ReleaseClaimsFinalizer {
+				return true, nil
+			}
+		}
+		return false, nil
+	})
+}
+
 // --- helpers ---
 
 func makeWorkerPool(name, ns string, replicas int32, image string) *atev1alpha1.WorkerPool {
