@@ -16,14 +16,18 @@ package controllers
 
 import (
 	"context"
+	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
+	k8errors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
@@ -67,9 +71,71 @@ func (r *AteletNodeReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	return r.reconcileNode(ctx, req.Name)
 }
 
-func (r *AteletNodeReconciler) reconcileNode(_ context.Context, _ string) (ctrl.Result, error) {
-	// Implementation deferred to Task 5.
-	return ctrl.Result{}, nil
+func (r *AteletNodeReconciler) reconcileNode(ctx context.Context, nodeName string) (ctrl.Result, error) {
+	logger := log.FromContext(ctx).WithValues("node", nodeName)
+
+	node := &corev1.Node{}
+	if err := r.Get(ctx, types.NamespacedName{Name: nodeName}, node); err != nil {
+		if k8errors.IsNotFound(err) {
+			return ctrl.Result{}, nil
+		}
+		return ctrl.Result{}, fmt.Errorf("get node %q: %w", nodeName, err)
+	}
+
+	// A pod that is Terminating still has spec.nodeName set and appears
+	// here until its object is actually deleted. That is intentional: the
+	// claim (and thus atelet) must outlive a draining ateom pod, so the
+	// claim is released only once the pod object is gone.
+	podList := &corev1.PodList{}
+	if err := r.List(ctx, podList, client.MatchingFields{PodNodeNameIndex: nodeName}); err != nil {
+		return ctrl.Result{}, fmt.Errorf("list pods on node %q: %w", nodeName, err)
+	}
+
+	poolUIDs := map[string]struct{}{}
+	for i := range podList.Items {
+		pod := &podList.Items[i]
+		// Defensive: the spec.nodeName field index already filters to this
+		// node, so this should always be true.
+		if pod.Spec.NodeName != nodeName {
+			continue
+		}
+		// Skip pods without a worker-pool UID label (e.g. atelet's own DS
+		// pods). The field index is not label-filtered, so non-ateom pods
+		// on this node can appear here.
+		uid, ok := pod.Labels[WorkerPoolUIDLabelKey]
+		if !ok || uid == "" {
+			continue
+		}
+		poolUIDs[uid] = struct{}{}
+	}
+
+	logger.V(1).Info("reconciling node claims", "pool_count", len(poolUIDs))
+	return ctrl.Result{}, r.applyNodeClaims(ctx, nodeName, poolUIDs)
+}
+
+// applyNodeClaims SSA-patches the Node so substrate-owned fields (the
+// ate.dev/atelet label and ate.dev/claim.<uid> annotations) match the
+// given set of WorkerPool UIDs. Previously-owned fields not in the set
+// are removed via SSA field-ownership semantics.
+func (r *AteletNodeReconciler) applyNodeClaims(ctx context.Context, nodeName string, poolUIDs map[string]struct{}) error {
+	nodeAC := corev1ac.Node(nodeName)
+
+	labels := map[string]string{}
+	if len(poolUIDs) > 0 {
+		labels[AteletNodeLabel] = AteletNodeLabelValue
+	}
+	nodeAC.Labels = labels
+
+	annotations := map[string]string{}
+	for uid := range poolUIDs {
+		annotations[AteletNodeClaimAnnoPrefix+uid] = ""
+	}
+	nodeAC.Annotations = annotations
+
+	if err := r.Apply(ctx, nodeAC, client.FieldOwner(AteletNodeFieldOwner), client.ForceOwnership); err != nil {
+		return fmt.Errorf("apply node %q: %w", nodeName, err)
+	}
+	return nil
 }
 
 // podToNode maps a Pod event to a reconcile request for the Pod's
