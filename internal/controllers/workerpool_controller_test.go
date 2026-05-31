@@ -97,6 +97,14 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 
+	if err := (&AteletNodeReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		fmt.Fprintf(os.Stderr, "atelet-node controller setup failed: %v\n", err)
+		os.Exit(1)
+	}
+
 	testCtx, testCancel = context.WithCancel(context.Background())
 	go func() {
 		_ = mgr.Start(testCtx)

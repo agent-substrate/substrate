@@ -15,10 +15,12 @@
 package controllers
 
 import (
+	"context"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 )
@@ -102,5 +104,80 @@ func TestPodToNode(t *testing.T) {
 				t.Errorf("got request for %q, want %q", got[0].Name, tc.nodeName)
 			}
 		})
+	}
+}
+
+// TestSinglePodAddsClaimAndLabel verifies that scheduling a single
+// ateom pod to a node causes the reconciler to label the node and
+// add a single claim annotation.
+func TestSinglePodAddsClaimAndLabel(t *testing.T) {
+	const nodeName = "test-node-single"
+	const poolUID = "uid-single"
+
+	node := makeNode(nodeName)
+	if err := k8sClient.Create(testCtx, node); err != nil {
+		t.Fatalf("create node: %v", err)
+	}
+	t.Cleanup(func() { k8sClient.Delete(testCtx, node) }) //nolint:errcheck
+
+	pod := makeAteomPod("pod-single", "default", "pool-single", poolUID)
+	if err := k8sClient.Create(testCtx, pod); err != nil {
+		t.Fatalf("create pod: %v", err)
+	}
+	t.Cleanup(func() { k8sClient.Delete(testCtx, pod) }) //nolint:errcheck
+
+	// Bind the pod to the node (envtest doesn't schedule; we set nodeName via Binding).
+	bindPodToNode(t, pod, nodeName)
+
+	eventually(t, func(ctx context.Context) (bool, error) {
+		n := &corev1.Node{}
+		if err := k8sClient.Get(ctx, types.NamespacedName{Name: nodeName}, n); err != nil {
+			return false, nil
+		}
+		if n.Labels[AteletNodeLabel] != AteletNodeLabelValue {
+			return false, nil
+		}
+		_, ok := n.Annotations[AteletNodeClaimAnnoPrefix+poolUID]
+		return ok, nil
+	})
+}
+
+// --- helpers ---
+
+func makeNode(name string) *corev1.Node {
+	return &corev1.Node{
+		ObjectMeta: metav1.ObjectMeta{Name: name},
+	}
+}
+
+func makeAteomPod(name, namespace, poolName, poolUID string) *corev1.Pod {
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+			Labels: map[string]string{
+				WorkerPoolLabelKey:    poolName,
+				WorkerPoolUIDLabelKey: poolUID,
+			},
+		},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{{
+				Name:  "ateom",
+				Image: "ateom:test",
+			}},
+		},
+	}
+}
+
+// bindPodToNode sets Pod.Spec.NodeName via the Binding subresource,
+// which is the canonical "schedule a pod" operation in envtest.
+func bindPodToNode(t *testing.T, pod *corev1.Pod, nodeName string) {
+	t.Helper()
+	binding := &corev1.Binding{
+		ObjectMeta: metav1.ObjectMeta{Name: pod.Name, Namespace: pod.Namespace},
+		Target:     corev1.ObjectReference{Kind: "Node", Name: nodeName},
+	}
+	if err := k8sClient.SubResource("binding").Create(testCtx, pod, binding); err != nil {
+		t.Fatalf("bind pod to node: %v", err)
 	}
 }
