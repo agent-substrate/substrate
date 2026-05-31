@@ -64,6 +64,8 @@ spec:
         prometheus.io/port: "9090"
     spec:
       serviceAccountName: atelet
+      nodeSelector:
+        ate.dev/atelet: "true"
       containers:
       - name: atelet
         image: ko://github.com/agent-substrate/substrate/cmd/atelet
