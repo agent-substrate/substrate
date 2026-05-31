@@ -147,6 +147,18 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool) *appsv1ac.Deployment
 					WorkerPoolUIDLabelKey: string(wp.UID),
 				}).
 				WithSpec(corev1ac.PodSpec().
+					WithInitContainers(corev1ac.Container().
+						WithName("wait-for-atelet").
+						WithImage("busybox:1.36").
+						// Intentionally loops until atelet is reachable: the pod stays in
+						// Init until then, rather than crashlooping. Kubernetes does not
+						// restart an init container that is still running.
+						WithCommand("sh", "-c", `until nc -z "$HOST_IP" 8085; do sleep 1; done`).
+						WithEnv(corev1ac.EnvVar().
+							WithName("HOST_IP").
+							WithValueFrom(corev1ac.EnvVarSource().
+								WithFieldRef(corev1ac.ObjectFieldSelector().
+									WithFieldPath("status.hostIP"))))).
 					WithContainers(corev1ac.Container().
 						WithName("ateom").
 						WithImage(wp.Spec.AteomImage).
