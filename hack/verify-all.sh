@@ -19,8 +19,10 @@ set -o errexit -o nounset -o pipefail
 ROOT="$(git rev-parse --show-toplevel)"
 cd "${ROOT}"
 
+export LC_ALL=C # for sorting to be consistent across locales
+
 # shellcheck disable=2044 # for-loop over find output is intentional
-for F in $(find ./hack/verify -name '*.sh'); do
+for F in $(find ./hack/verify -name '*.sh' | sort); do
   echo "Running ${F}"
   "${F}" "$@"
 done
