@@ -62,7 +62,8 @@ if [[ "$#" == 0 ]]; then
     -not \( \
       -path './_*'     -o \
       -path './.git*'   -o \
-      \( -path '*/third_party/*' \) \
+      -path '*/vendor/*' -o \
+      -path '*/third_party/*' \
     \))
 fi
 
