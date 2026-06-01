@@ -30,6 +30,12 @@ const (
 	PhaseFailed            PhaseType = "Failed"
 )
 
+type EnvVar struct {
+	Name string `json:"name" protobuf:"bytes,1,opt,name=name"`
+	// +optional
+	Value string `json:"value,omitempty" protobuf:"bytes,2,opt,name=value"`
+}
+
 // A single application container that you want to run within a WorkerPool.
 type Container struct {
 	// Name of the container.
@@ -50,7 +56,7 @@ type Container struct {
 	Ports []corev1.ContainerPort `json:"ports,omitempty"`
 
 	// Environment variables to set in the worker replicas.
-	Env []corev1.EnvVar `json:"env,omitempty"`
+	Env []EnvVar `json:"env,omitempty"`
 }
 
 type SnapshotsConfig struct {
