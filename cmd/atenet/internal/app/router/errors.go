@@ -24,7 +24,7 @@ import (
 
 // newReqError builds a reqError whose body is the formatted message and no
 // wrapped cause. Set the cause field directly when one is available.
-func newReqError(code envoy_type.StatusCode, format string, args ...any) *reqError {
+func newReqError(code envoy_type.StatusCode, format string, args ...any) error {
 	return &reqError{
 		msg:        fmt.Sprintf(format, args...),
 		statusCode: int(code),
@@ -32,13 +32,13 @@ func newReqError(code envoy_type.StatusCode, format string, args ...any) *reqErr
 }
 
 // actorNotFoundErr returns a 404 reqError identifying the missing actor.
-func actorNotFoundErr(actorID string) *reqError {
+func actorNotFoundErr(actorID string) error {
 	return newReqError(envoy_type.StatusCode_NotFound, "actor %q not found", actorID)
 }
 
 // invalidHostErr returns a 404 reqError explaining why the request host was
 // rejected. The cause is preserved for log inspection via Unwrap.
-func invalidHostErr(host string, cause error) *reqError {
+func invalidHostErr(host string, cause error) error {
 	return &reqError{
 		msg:        fmt.Sprintf("invalid host %q: %v", host, cause),
 		cause:      cause,
@@ -53,34 +53,40 @@ func invalidHostErr(host string, cause error) *reqError {
 //
 // Unrecognised errors collapse to 500 with a generic body to avoid leaking
 // server-side detail (stack traces, internal IDs) to clients.
-func mapResumeError(actorID string, err error) *reqError {
+func mapResumeError(actorID string, err error) error {
 	if err == nil {
 		return nil
 	}
 
-	var re *reqError
+	re := &reqError{cause: err}
 	switch status.Code(err) {
 	case codes.NotFound:
-		re = actorNotFoundErr(actorID)
+		re.statusCode = int(envoy_type.StatusCode_NotFound)
+		re.msg = fmt.Sprintf("actor %q not found", actorID)
 	case codes.FailedPrecondition:
 		// Preserve the gRPC description for FailedPrecondition only: it carries
 		// actionable client-facing context (e.g. "no free workers available")
 		// and is not security-sensitive.
-		re = newReqError(envoy_type.StatusCode_ServiceUnavailable,
-			"actor %q unavailable: %s", actorID, status.Convert(err).Message())
+		re.statusCode = int(envoy_type.StatusCode_ServiceUnavailable)
+		re.msg = fmt.Sprintf("actor %q unavailable: %s", actorID, status.Convert(err).Message())
 	case codes.Unavailable:
-		re = newReqError(envoy_type.StatusCode_ServiceUnavailable, "actor %q unavailable", actorID)
+		re.statusCode = int(envoy_type.StatusCode_ServiceUnavailable)
+		re.msg = fmt.Sprintf("actor %q unavailable", actorID)
 	case codes.DeadlineExceeded:
-		re = newReqError(envoy_type.StatusCode_GatewayTimeout, "actor %q request timed out", actorID)
+		re.statusCode = int(envoy_type.StatusCode_GatewayTimeout)
+		re.msg = fmt.Sprintf("actor %q request timed out", actorID)
 	case codes.PermissionDenied:
-		re = newReqError(envoy_type.StatusCode_Forbidden, "actor %q access denied", actorID)
+		re.statusCode = int(envoy_type.StatusCode_Forbidden)
+		re.msg = fmt.Sprintf("actor %q access denied", actorID)
 	case codes.Unauthenticated:
-		re = newReqError(envoy_type.StatusCode_Unauthorized, "actor %q authentication required", actorID)
+		re.statusCode = int(envoy_type.StatusCode_Unauthorized)
+		re.msg = fmt.Sprintf("actor %q authentication required", actorID)
 	case codes.ResourceExhausted:
-		re = newReqError(envoy_type.StatusCode_TooManyRequests, "actor %q rate limited", actorID)
+		re.statusCode = int(envoy_type.StatusCode_TooManyRequests)
+		re.msg = fmt.Sprintf("actor %q rate limited", actorID)
 	default:
-		re = newReqError(envoy_type.StatusCode_InternalServerError, "error resuming actor %q", actorID)
+		re.statusCode = int(envoy_type.StatusCode_InternalServerError)
+		re.msg = fmt.Sprintf("error resuming actor %q", actorID)
 	}
-	re.cause = err
 	return re
 }

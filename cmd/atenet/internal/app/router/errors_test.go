@@ -30,8 +30,12 @@ func TestNewReqError(t *testing.T) {
 	if err == nil {
 		t.Fatal("newReqError returned nil")
 	}
-	if err.statusCode != int(envoy_type.StatusCode_BadRequest) {
-		t.Errorf("statusCode = %d, want %d", err.statusCode, envoy_type.StatusCode_BadRequest)
+	var reqErr *reqError
+	if !errors.As(err, &reqErr) {
+		t.Fatalf("errors.As(*reqError) = false, want true; err type = %T", err)
+	}
+	if reqErr.statusCode != int(envoy_type.StatusCode_BadRequest) {
+		t.Errorf("statusCode = %d, want %d", reqErr.statusCode, envoy_type.StatusCode_BadRequest)
 	}
 	if got, want := err.Error(), `actor "abc" is bad`; got != want {
 		t.Errorf("Error() = %q, want %q", got, want)
@@ -42,8 +46,12 @@ func TestActorNotFoundErr(t *testing.T) {
 	t.Parallel()
 
 	err := actorNotFoundErr("ctr6")
-	if err.statusCode != int(envoy_type.StatusCode_NotFound) {
-		t.Errorf("statusCode = %d, want %d", err.statusCode, envoy_type.StatusCode_NotFound)
+	var reqErr *reqError
+	if !errors.As(err, &reqErr) {
+		t.Fatalf("errors.As(*reqError) = false, want true; err type = %T", err)
+	}
+	if reqErr.statusCode != int(envoy_type.StatusCode_NotFound) {
+		t.Errorf("statusCode = %d, want %d", reqErr.statusCode, envoy_type.StatusCode_NotFound)
 	}
 	if got, want := err.Error(), `actor "ctr6" not found`; got != want {
 		t.Errorf("Error() = %q, want %q", got, want)
@@ -56,8 +64,12 @@ func TestInvalidHostErr(t *testing.T) {
 	cause := errors.New("missing suffix")
 	err := invalidHostErr("foo.example.com", cause)
 
-	if err.statusCode != int(envoy_type.StatusCode_NotFound) {
-		t.Errorf("statusCode = %d, want %d", err.statusCode, envoy_type.StatusCode_NotFound)
+	var reqErr *reqError
+	if !errors.As(err, &reqErr) {
+		t.Fatalf("errors.As(*reqError) = false, want true; err type = %T", err)
+	}
+	if reqErr.statusCode != int(envoy_type.StatusCode_NotFound) {
+		t.Errorf("statusCode = %d, want %d", reqErr.statusCode, envoy_type.StatusCode_NotFound)
 	}
 	if got, want := err.Error(), `invalid host "foo.example.com": missing suffix`; got != want {
 		t.Errorf("Error() = %q, want %q", got, want)
@@ -142,8 +154,12 @@ func TestMapResumeError(t *testing.T) {
 			if got == nil {
 				t.Fatal("mapResumeError returned nil")
 			}
-			if got.statusCode != int(tc.wantCode) {
-				t.Errorf("statusCode = %d, want %d", got.statusCode, tc.wantCode)
+			var reqErr *reqError
+			if !errors.As(got, &reqErr) {
+				t.Fatalf("errors.As(*reqError) = false, want true; err type = %T", got)
+			}
+			if reqErr.statusCode != int(tc.wantCode) {
+				t.Errorf("statusCode = %d, want %d", reqErr.statusCode, tc.wantCode)
 			}
 			if got.Error() != tc.wantBody {
 				t.Errorf("Error() = %q, want %q", got.Error(), tc.wantBody)
