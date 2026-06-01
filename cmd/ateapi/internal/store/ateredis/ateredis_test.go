@@ -745,32 +745,50 @@ func TestListWorkers_Filtering(t *testing.T) {
 		t.Fatalf("failed to create worker2: %v", err)
 	}
 
-	// Test 1: Filter by pool1
-	opts := store.ListOptions{
-		FieldSelector: map[string]string{"worker_pool": "pool1"},
-	}
-	workers, err := s.ListWorkers(ctx, opts)
-	if err != nil {
-		t.Fatalf("ListWorkers failed: %v", err)
-	}
-	if len(workers) != 1 {
-		t.Errorf("expected 1 worker matching filter, got %d", len(workers))
-	} else if workers[0].GetWorkerPod() != "pod1" {
-		t.Errorf("expected pod1, got %s", workers[0].GetWorkerPod())
+	tests := []struct {
+		name           string
+		selector       map[string]string
+		expectedPodIDs []string
+	}{
+		{
+			name:           "match pool1",
+			selector:       map[string]string{"worker_pool": "pool1"},
+			expectedPodIDs: []string{"pod1"},
+		},
+		{
+			name:           "match empty actor_id (idle worker)",
+			selector:       map[string]string{"actor_id": ""},
+			expectedPodIDs: []string{"pod2"},
+		},
+		{
+			name:           "match worker namespace and pool",
+			selector:       map[string]string{"worker_namespace": "ns2", "worker_pool": "pool2"},
+			expectedPodIDs: []string{"pod2"},
+		},
+		{
+			name:           "no match",
+			selector:       map[string]string{"worker_pool": "non-existent"},
+			expectedPodIDs: []string{},
+		},
 	}
 
-	// Test 2: Filter by actor_id == "" (empty selector)
-	opts2 := store.ListOptions{
-		FieldSelector: map[string]string{"actor_id": ""},
-	}
-	workers2, err := s.ListWorkers(ctx, opts2)
-	if err != nil {
-		t.Fatalf("ListWorkers failed: %v", err)
-	}
-	if len(workers2) != 1 {
-		t.Errorf("expected 1 worker, got %d", len(workers2))
-	} else if workers2[0].GetWorkerPod() != "pod2" {
-		t.Errorf("expected pod2, got %s", workers2[0].GetWorkerPod())
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			opts := store.ListOptions{FieldSelector: tc.selector}
+			workers, err := s.ListWorkers(ctx, opts)
+			if err != nil {
+				t.Fatalf("ListWorkers failed: %v", err)
+			}
+
+			if len(workers) != len(tc.expectedPodIDs) {
+				t.Fatalf("expected %d workers, got %d", len(tc.expectedPodIDs), len(workers))
+			}
+			for i, w := range workers {
+				if w.GetWorkerPod() != tc.expectedPodIDs[i] {
+					t.Errorf("expected worker %s, got %s", tc.expectedPodIDs[i], w.GetWorkerPod())
+				}
+			}
+		})
 	}
 }
 
@@ -798,17 +816,49 @@ func TestListActors_Filtering(t *testing.T) {
 		t.Fatalf("failed to create actor2: %v", err)
 	}
 
-	// Test 1: Filter by running status
-	opts := store.ListOptions{
-		FieldSelector: map[string]string{"status": "STATUS_RUNNING"},
+	tests := []struct {
+		name             string
+		selector         map[string]string
+		expectedActorIDs []string
+	}{
+		{
+			name:             "match status running",
+			selector:         map[string]string{"status": "STATUS_RUNNING"},
+			expectedActorIDs: []string{"id1"},
+		},
+		{
+			name:             "match status suspended",
+			selector:         map[string]string{"status": "STATUS_SUSPENDED"},
+			expectedActorIDs: []string{"id2"},
+		},
+		{
+			name:             "match template name",
+			selector:         map[string]string{"actor_template_name": "tmpl1"},
+			expectedActorIDs: []string{"id1"},
+		},
+		{
+			name:             "no match",
+			selector:         map[string]string{"status": "STATUS_UNSPECIFIED"},
+			expectedActorIDs: []string{},
+		},
 	}
-	actors, err := s.ListActors(ctx, opts)
-	if err != nil {
-		t.Fatalf("ListActors failed: %v", err)
-	}
-	if len(actors) != 1 {
-		t.Errorf("expected 1 actor, got %d", len(actors))
-	} else if actors[0].GetActorId() != "id1" {
-		t.Errorf("expected id1, got %s", actors[0].GetActorId())
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			opts := store.ListOptions{FieldSelector: tc.selector}
+			actors, err := s.ListActors(ctx, opts)
+			if err != nil {
+				t.Fatalf("ListActors failed: %v", err)
+			}
+
+			if len(actors) != len(tc.expectedActorIDs) {
+				t.Fatalf("expected %d actors, got %d", len(tc.expectedActorIDs), len(actors))
+			}
+			for i, a := range actors {
+				if a.GetActorId() != tc.expectedActorIDs[i] {
+					t.Errorf("expected actor %s, got %s", tc.expectedActorIDs[i], a.GetActorId())
+				}
+			}
+		})
 	}
 }
