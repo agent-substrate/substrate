@@ -227,6 +227,19 @@ func untar(ctx context.Context, tarData io.Reader, rootPath string) error {
 
 		switch hdr.Typeflag {
 		case tar.TypeReg: // Regular file
+			// Same "later entry wins" handling: if any entry exists at the target path,
+			// remove it first. This ensures that:
+			// 1. If it's a symlink, we don't write through it (security vulnerability / incorrectness).
+			// 2. If it's a hardlink, we unlink it instead of truncating the shared inode.
+			// 3. If it's a directory, we recursively remove it so we can write the file.
+			if _, err := root.Lstat(name); err == nil {
+				if err := root.RemoveAll(name); err != nil {
+					return fmt.Errorf("while replacing existing path at %q before regular file: %w", name, err)
+				}
+			} else if !errors.Is(err, os.ErrNotExist) {
+				return fmt.Errorf("while checking existing path at %q before regular file: %w", name, err)
+			}
+
 			// Stream directly from tarReader to target file to avoid buffering in memory.
 			outFile, err := root.OpenFile(name, os.O_CREATE|os.O_RDWR|os.O_TRUNC, mode)
 			if err != nil {
