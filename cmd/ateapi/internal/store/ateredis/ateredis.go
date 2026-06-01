@@ -353,7 +353,7 @@ func (s *Persistence) UpdateActor(ctx context.Context, actor *ateapipb.Actor, ex
 	return nil
 }
 
-func (s *Persistence) ListWorkers(ctx context.Context) ([]*ateapipb.Worker, error) {
+func (s *Persistence) ListWorkers(ctx context.Context, opts store.ListOptions) ([]*ateapipb.Worker, error) {
 	var result []*ateapipb.Worker
 	var mu sync.Mutex
 
@@ -377,6 +377,10 @@ func (s *Persistence) ListWorkers(ctx context.Context) ([]*ateapipb.Worker, erro
 				return fmt.Errorf("in protojson.Unmarshal: %w", err)
 			}
 
+			if !matchesWorker(worker, opts) {
+				continue
+			}
+
 			mu.Lock()
 			result = append(result, worker)
 			mu.Unlock()
@@ -393,7 +397,7 @@ func (s *Persistence) ListWorkers(ctx context.Context) ([]*ateapipb.Worker, erro
 	return result, nil
 }
 
-func (s *Persistence) ListActors(ctx context.Context) ([]*ateapipb.Actor, error) {
+func (s *Persistence) ListActors(ctx context.Context, opts store.ListOptions) ([]*ateapipb.Actor, error) {
 	var result []*ateapipb.Actor
 	var mu sync.Mutex
 
@@ -416,6 +420,10 @@ func (s *Persistence) ListActors(ctx context.Context) ([]*ateapipb.Actor, error)
 				return fmt.Errorf("in protojson.Unmarshal: %w", err)
 			}
 
+			if !matchesActor(actor, opts) {
+				continue
+			}
+
 			mu.Lock()
 			result = append(result, actor)
 			mu.Unlock()
@@ -427,6 +435,88 @@ func (s *Persistence) ListActors(ctx context.Context) ([]*ateapipb.Actor, error)
 		return nil, fmt.Errorf("while iterating all redis master: %w", err)
 	}
 	return result, nil
+}
+
+func matchesWorker(w *ateapipb.Worker, opts store.ListOptions) bool {
+	if len(opts.FieldSelector) == 0 {
+		return true
+	}
+	for k, v := range opts.FieldSelector {
+		switch k {
+		case "worker_namespace":
+			if w.GetWorkerNamespace() != v {
+				return false
+			}
+		case "worker_pool":
+			if w.GetWorkerPool() != v {
+				return false
+			}
+		case "worker_pod":
+			if w.GetWorkerPod() != v {
+				return false
+			}
+		case "actor_namespace":
+			if w.GetActorNamespace() != v {
+				return false
+			}
+		case "actor_template":
+			if w.GetActorTemplate() != v {
+				return false
+			}
+		case "actor_id":
+			if w.GetActorId() != v {
+				return false
+			}
+		case "ip":
+			if w.GetIp() != v {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func matchesActor(a *ateapipb.Actor, opts store.ListOptions) bool {
+	if len(opts.FieldSelector) == 0 {
+		return true
+	}
+	for k, v := range opts.FieldSelector {
+		switch k {
+		case "actor_id":
+			if a.GetActorId() != v {
+				return false
+			}
+		case "actor_template_namespace":
+			if a.GetActorTemplateNamespace() != v {
+				return false
+			}
+		case "actor_template_name":
+			if a.GetActorTemplateName() != v {
+				return false
+			}
+		case "status":
+			if a.GetStatus().String() != v {
+				return false
+			}
+		case "ateom_pod_namespace":
+			if a.GetAteomPodNamespace() != v {
+				return false
+			}
+		case "ateom_pod_name":
+			if a.GetAteomPodName() != v {
+				return false
+			}
+		case "ateom_pod_ip":
+			if a.GetAteomPodIp() != v {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 func (s *Persistence) AcquireLock(ctx context.Context, key string, value string, ttl time.Duration) (bool, error) {

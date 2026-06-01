@@ -373,7 +373,7 @@ func TestListWorkers(t *testing.T) {
 		t.Fatalf("failed to create worker2: %v", err)
 	}
 
-	workers, err := s.ListWorkers(ctx)
+	workers, err := s.ListWorkers(ctx, store.ListOptions{})
 	if err != nil {
 		t.Fatalf("ListWorkers failed: %v", err)
 	}
@@ -424,7 +424,7 @@ func TestListActors(t *testing.T) {
 		t.Fatalf("failed to create actor2: %v", err)
 	}
 
-	actors, err := s.ListActors(ctx)
+	actors, err := s.ListActors(ctx, store.ListOptions{})
 	if err != nil {
 		t.Fatalf("ListActors failed: %v", err)
 	}
@@ -515,7 +515,7 @@ func TestListWorkers_Empty(t *testing.T) {
 	mr, s, ctx := setupTest(t)
 	defer mr.Close()
 
-	workers, err := s.ListWorkers(ctx)
+	workers, err := s.ListWorkers(ctx, store.ListOptions{})
 	if err != nil {
 		t.Fatalf("ListWorkers failed: %v", err)
 	}
@@ -529,7 +529,7 @@ func TestListActors_Empty(t *testing.T) {
 	mr, s, ctx := setupTest(t)
 	defer mr.Close()
 
-	actors, err := s.ListActors(ctx)
+	actors, err := s.ListActors(ctx, store.ListOptions{})
 	if err != nil {
 		t.Fatalf("ListActors failed: %v", err)
 	}
@@ -719,5 +719,96 @@ func TestAcquireLock_NonReentry(t *testing.T) {
 	}
 	if acquired {
 		t.Errorf("expected second lock acquisition to fail (non-reentrant)")
+	}
+}
+
+func TestListWorkers_Filtering(t *testing.T) {
+	mr, s, ctx := setupTest(t)
+	defer mr.Close()
+
+	worker1 := &ateapipb.Worker{
+		WorkerNamespace: "ns1",
+		WorkerPool:      "pool1",
+		WorkerPod:       "pod1",
+		ActorId:         "actor1",
+	}
+	worker2 := &ateapipb.Worker{
+		WorkerNamespace: "ns2",
+		WorkerPool:      "pool2",
+		WorkerPod:       "pod2",
+		ActorId:         "",
+	}
+	if err := s.CreateWorker(ctx, worker1); err != nil {
+		t.Fatalf("failed to create worker1: %v", err)
+	}
+	if err := s.CreateWorker(ctx, worker2); err != nil {
+		t.Fatalf("failed to create worker2: %v", err)
+	}
+
+	// Test 1: Filter by pool1
+	opts := store.ListOptions{
+		FieldSelector: map[string]string{"worker_pool": "pool1"},
+	}
+	workers, err := s.ListWorkers(ctx, opts)
+	if err != nil {
+		t.Fatalf("ListWorkers failed: %v", err)
+	}
+	if len(workers) != 1 {
+		t.Errorf("expected 1 worker matching filter, got %d", len(workers))
+	} else if workers[0].GetWorkerPod() != "pod1" {
+		t.Errorf("expected pod1, got %s", workers[0].GetWorkerPod())
+	}
+
+	// Test 2: Filter by actor_id == "" (empty selector)
+	opts2 := store.ListOptions{
+		FieldSelector: map[string]string{"actor_id": ""},
+	}
+	workers2, err := s.ListWorkers(ctx, opts2)
+	if err != nil {
+		t.Fatalf("ListWorkers failed: %v", err)
+	}
+	if len(workers2) != 1 {
+		t.Errorf("expected 1 worker, got %d", len(workers2))
+	} else if workers2[0].GetWorkerPod() != "pod2" {
+		t.Errorf("expected pod2, got %s", workers2[0].GetWorkerPod())
+	}
+}
+
+func TestListActors_Filtering(t *testing.T) {
+	mr, s, ctx := setupTest(t)
+	defer mr.Close()
+
+	actor1 := &ateapipb.Actor{
+		ActorId:                "id1",
+		ActorTemplateNamespace: "ns1",
+		ActorTemplateName:      "tmpl1",
+		Status:                 ateapipb.Actor_STATUS_RUNNING,
+	}
+	actor2 := &ateapipb.Actor{
+		ActorId:                "id2",
+		ActorTemplateNamespace: "ns2",
+		ActorTemplateName:      "tmpl2",
+		Status:                 ateapipb.Actor_STATUS_SUSPENDED,
+	}
+
+	if err := s.CreateActor(ctx, actor1); err != nil {
+		t.Fatalf("failed to create actor1: %v", err)
+	}
+	if err := s.CreateActor(ctx, actor2); err != nil {
+		t.Fatalf("failed to create actor2: %v", err)
+	}
+
+	// Test 1: Filter by running status
+	opts := store.ListOptions{
+		FieldSelector: map[string]string{"status": "STATUS_RUNNING"},
+	}
+	actors, err := s.ListActors(ctx, opts)
+	if err != nil {
+		t.Fatalf("ListActors failed: %v", err)
+	}
+	if len(actors) != 1 {
+		t.Errorf("expected 1 actor, got %d", len(actors))
+	} else if actors[0].GetActorId() != "id1" {
+		t.Errorf("expected id1, got %s", actors[0].GetActorId())
 	}
 }
