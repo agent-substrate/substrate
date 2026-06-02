@@ -48,9 +48,10 @@ for target in "${targets[@]}"; do
   tmp_out="$(mktemp -d -t "update-licenses-out.XXXXXX")"
 
   GOOS="${target_os}" \
-    GOARCH="${target_arch}" \
-    CGO_ENABLED=1 \
-    "${GO_LICENSES_BIN}" save ./... --force --save_path="${tmp_out}" > "${tmpfile}" 2>&1 || {
+  GOARCH="${target_arch}" \
+  GOROOT=$(go env GOROOT) \
+  CGO_ENABLED=1 \
+  "${GO_LICENSES_BIN}" save ./... --force --save_path="${tmp_out}" > "${tmpfile}" 2>&1 || {
     echo "Failed for ${target_os}/${target_arch}:" >&2
     cat "${tmpfile}"
     rm -rf "${tmp_out}"
