@@ -1,13 +1,13 @@
 ### GKE Quickstart (Production)
 
 This is the Terraform equivalent of the `go run ./tools/setup-gcp --all`
-provisioner described in the [GKE Quickstart (Development)](../../README.md)
+provisioner described in the [GKE Quickstart (Development)](../../../README.md)
 section. It provisions the same GCP resources — a GKE cluster, snapshot bucket,
 Artifact Registry repository, and IAM bindings — but does so declaratively and
 starting from a **vanilla Google Cloud project**: no APIs enabled, no VPC, and
 no subnets are assumed to exist beforehand.
 
-The configuration lives in [`hack/iac/`](.) and uses resources from the
+The configuration lives in [`hack/gcp/iac/`](.) and uses resources from the
 [Terraform Google Cloud provider](https://registry.terraform.io/providers/hashicorp/google/latest/docs)
 directly (no modules), so every resource is visible and easy to adapt.
 
@@ -30,7 +30,7 @@ What gets created:
    to keep in sync. Source it now, before any of the steps below — everything
    that follows relies on the variables it exports:
    ```bash
-   cp hack/ate-dev-env.sh.gcp .ate-dev-env.sh
+   cp hack/gcp/ate-dev-env.sh.gcp .ate-dev-env.sh
 
    # Edit .ate-dev-env.sh to match your project and preferences, then source it:
    source .ate-dev-env.sh
@@ -63,7 +63,7 @@ What gets created:
    prerequisites, so make sure `.ate-dev-env.sh` is sourced in your current
    shell:
    ```bash
-   cd hack/iac
+   cd hack/gcp/iac
    terraform init
    terraform plan
    ```
@@ -109,7 +109,7 @@ What gets created:
 
 To delete everything Terraform created:
 ```bash
-cd hack/iac
+cd hack/gcp/iac
 terraform destroy
 ```
 
