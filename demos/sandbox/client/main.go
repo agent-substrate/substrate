@@ -19,7 +19,6 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
-	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -30,6 +29,7 @@ import (
 	"syscall"
 
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"github.com/spf13/pflag"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 )
@@ -59,10 +59,10 @@ func dialAteAPI(endpoint string) (ateapipb.ControlClient, *grpc.ClientConn, erro
 }
 
 func main() {
-	actorID := flag.String("id", "", "ID of the sandbox actor (required)")
-	ateapiAddr := flag.String("ateapi", "localhost:8080", "Address of the ateapi gRPC server")
-	atenetAddr := flag.String("atenet", "localhost:8000", "Address of the atenet HTTP router")
-	flag.Parse()
+	actorID := pflag.String("id", "", "ID of the sandbox actor (required)")
+	ateapiAddr := pflag.String("ateapi", "localhost:8080", "Address of the ateapi gRPC server")
+	atenetAddr := pflag.String("atenet", "localhost:8000", "Address of the atenet HTTP router")
+	pflag.Parse()
 
 	if *actorID == "" {
 		log.Fatal("--id is required")

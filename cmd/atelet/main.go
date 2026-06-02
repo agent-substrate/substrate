@@ -20,7 +20,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"flag"
 	"fmt"
 	"log/slog"
 	"net"
@@ -43,6 +42,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/google/go-containerregistry/pkg/authn"
 	googlecontainerauth "github.com/google/go-containerregistry/pkg/v1/google"
+	"github.com/spf13/pflag"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -57,17 +57,17 @@ import (
 )
 
 var (
-	port              = flag.Int("port", 8085, "The port to listen on")
-	metricsListenAddr = flag.String("metrics-listen-addr", ":9090", "Address and port the prometheus metrics server should listen on.")
+	port              = pflag.Int("port", 8085, "The port to listen on")
+	metricsListenAddr = pflag.String("metrics-listen-addr", ":9090", "Address and port the prometheus metrics server should listen on.")
 
-	gcpAuthForImagePulls         = flag.Bool("gcp-auth-for-image-pulls", true, "Use GCP application default credentials mechanism.")
-	localhostRegistryReplacement = flag.String("localhost-registry-replacement", "", "The replacement registry endpoint for localhost and/or loopback IP addresses, useful for local development. for example kind-registry:5000")
+	gcpAuthForImagePulls         = pflag.Bool("gcp-auth-for-image-pulls", true, "Use GCP application default credentials mechanism.")
+	localhostRegistryReplacement = pflag.String("localhost-registry-replacement", "", "The replacement registry endpoint for localhost and/or loopback IP addresses, useful for local development. for example kind-registry:5000")
 
-	showVersion = flag.Bool("version", false, "Print version and exit.")
+	showVersion = pflag.Bool("version", false, "Print version and exit.")
 )
 
 func main() {
-	flag.Parse()
+	pflag.Parse()
 	if *showVersion {
 		fmt.Println(version.String())
 		return

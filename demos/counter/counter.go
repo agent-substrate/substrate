@@ -21,7 +21,6 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
-	"flag"
 	"fmt"
 	"io"
 	"log/slog"
@@ -30,12 +29,14 @@ import (
 	"os"
 	"sync/atomic"
 	"time"
+
+	"github.com/spf13/pflag"
 )
 
 var requestCount uint64
 
 func main() {
-	flag.Parse()
+	pflag.Parse()
 	ctx := context.Background()
 
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))

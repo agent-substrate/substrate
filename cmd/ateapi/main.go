@@ -18,7 +18,6 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
-	"flag"
 	"fmt"
 	"log/slog"
 	"net"
@@ -36,6 +35,7 @@ import (
 	"github.com/agent-substrate/substrate/pkg/client/informers/externalversions"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/redis/go-redis/v9"
+	"github.com/spf13/pflag"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"golang.org/x/oauth2/google"
@@ -47,28 +47,28 @@ import (
 )
 
 var (
-	listenAddr           = flag.String("grpc-listen-addr", ":443", "Address and port the gRPC server should listen on.")
-	metricsListenAddr    = flag.String("metrics-listen-addr", ":9090", "Address and port the prometheus metrics server should listen on.")
-	grpcServerCredBundle = flag.String("grpc-server-cred-bundle", "", "File with the server TLS credential bundle.")
+	listenAddr           = pflag.String("grpc-listen-addr", ":443", "Address and port the gRPC server should listen on.")
+	metricsListenAddr    = pflag.String("metrics-listen-addr", ":9090", "Address and port the prometheus metrics server should listen on.")
+	grpcServerCredBundle = pflag.String("grpc-server-cred-bundle", "", "File with the server TLS credential bundle.")
 
-	redisClusterAddress = flag.String("redis-cluster-address", "", "The address of the redis cluster.")
-	redisCACerts        = flag.String("redis-ca-certs", "", "The file that contains the CA certificate for Redis cluster.")
-	redisUseIAMAuth     = flag.String("redis-use-iam-auth", "true", "Whether to use Google IAM authentication for Redis/Valkey.")
-	redisTLSServerName  = flag.String("redis-tls-server-name", "", "The ServerName to use for Redis TLS hostname verification.")
-	redisClientCert     = flag.String("redis-client-cert", "", "The file containing client TLS certificate/key credential bundle for Redis/Valkey.")
+	redisClusterAddress = pflag.String("redis-cluster-address", "", "The address of the redis cluster.")
+	redisCACerts        = pflag.String("redis-ca-certs", "", "The file that contains the CA certificate for Redis cluster.")
+	redisUseIAMAuth     = pflag.String("redis-use-iam-auth", "true", "Whether to use Google IAM authentication for Redis/Valkey.")
+	redisTLSServerName  = pflag.String("redis-tls-server-name", "", "The ServerName to use for Redis TLS hostname verification.")
+	redisClientCert     = pflag.String("redis-client-cert", "", "The file containing client TLS certificate/key credential bundle for Redis/Valkey.")
 
-	clientJWTIssuer      = flag.String("client-jwt-issuer", "", "The expected issuer URL for client JWTs.")
-	clientJWTAudience    = flag.String("client-jwt-audience", "", "The expected audience for client JWTs.")
-	sessionIDJWTPoolFile = flag.String("session-id-jwt-pool", "", "The file that contains the serialized JWT authority pool for signing session JWTs")
+	clientJWTIssuer      = pflag.String("client-jwt-issuer", "", "The expected issuer URL for client JWTs.")
+	clientJWTAudience    = pflag.String("client-jwt-audience", "", "The expected audience for client JWTs.")
+	sessionIDJWTPoolFile = pflag.String("session-id-jwt-pool", "", "The file that contains the serialized JWT authority pool for signing session JWTs")
 
-	sessionIDCAPoolFile = flag.String("session-id-ca-pool", "", "The file that contains the CA pool for signing session JWTs")
-	workerpoolCACerts   = flag.String("workerpool-ca-certs", "", "The file that contains the CA for verifying workerpool client certificates.")
+	sessionIDCAPoolFile = pflag.String("session-id-ca-pool", "", "The file that contains the CA pool for signing session JWTs")
+	workerpoolCACerts   = pflag.String("workerpool-ca-certs", "", "The file that contains the CA for verifying workerpool client certificates.")
 
-	showVersion = flag.Bool("version", false, "Print version and exit.")
+	showVersion = pflag.Bool("version", false, "Print version and exit.")
 )
 
 func main() {
-	flag.Parse()
+	pflag.Parse()
 	if *showVersion {
 		fmt.Println(version.String())
 		return

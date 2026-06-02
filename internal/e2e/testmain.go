@@ -16,9 +16,11 @@ package e2e
 
 import (
 	"context"
-	"flag"
+	goflag "flag"
 	"fmt"
 	"testing"
+
+	"github.com/spf13/pflag"
 )
 
 var (
@@ -28,21 +30,22 @@ var (
 )
 
 func bindFlags() {
-	flag.BoolVar(&RunE2E, "e2e", false, "run e2e tests")
-	flag.BoolVar(&NoColor, "no-color", false, "disable colors in output")
-	flag.StringVar(&KubeConfig, "kube-config", "", "Location of the kubeconfig")
-	flag.StringVar(&KubeContext, "kube-context", "", "Kubernetes context to use")
+	pflag.BoolVar(&RunE2E, "e2e", false, "run e2e tests")
+	pflag.BoolVar(&NoColor, "no-color", false, "disable colors in output")
+	pflag.StringVar(&KubeConfig, "kube-config", "", "Location of the kubeconfig")
+	pflag.StringVar(&KubeContext, "kube-context", "", "Kubernetes context to use")
 }
 
 // RunTestMain should be used to run your e2e test suite.
 func RunTestMain(m *testing.M) int {
 	bindFlags()
-	flag.Parse()
+	pflag.CommandLine.AddGoFlagSet(goflag.CommandLine)
+	pflag.Parse()
 
 	if !RunE2E {
 		fmt.Println(Colorf(`
         <yellow>This is an e2e test suite and does not run by default.
-        Run with "go test ./internal/e2e/... -args -e2e"</yellow>`))
+        Run with "go test ./internal/e2e/... -args --e2e"</yellow>`))
 		fmt.Println()
 		return 0
 	}

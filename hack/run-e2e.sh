@@ -37,19 +37,19 @@ Arguments after "-args" are passed to the test binary.
 
 Example:
   $0 -run TestExample                 # Run only TestExample suite
-  $0 -args -kube-context my-context   # Pass kube-context to E2E framework
-  $0 -run TestExample -args -no-color # Combine both
+  $0 -args --kube-context my-context   # Pass kube-context to E2E framework
+  $0 -run TestExample -args --no-color # Combine both
 
 Common E2E Flags (passed after -args):
-  -e2e            Enable E2E tests (implied by this script)
-  -no-color       Disable colored output
-  -kube-config    Path to kubeconfig file
-  -kube-context   Kubernetes context to use
+  --e2e            Enable E2E tests (implied by this script)
+  --no-color       Disable colored output
+  --kube-config    Path to kubeconfig file
+  --kube-context   Kubernetes context to use
 
 Common Go Test Flags (passed before -args):
-  -run <regexp>   Run only tests matching regexp
-  -v              Verbose output
-  -count n        Run tests n times
+  -run <regexp>    Run only tests matching regexp
+  -v               Verbose output
+  -count n         Run tests n times
 
 See "go help testflag" for more Go test flags.
 EOF
@@ -100,8 +100,8 @@ done
 
 extra_e2e_args=()
 if [[ -n "${KUBECTL_CONTEXT:-}" ]]; then
-    extra_e2e_args+=("-kube-context" "${KUBECTL_CONTEXT}")
+    extra_e2e_args+=("--kube-context" "${KUBECTL_CONTEXT}")
 fi
 
-exec go test -v "$target_path" "${go_test_args[@]}" -args -e2e "${extra_e2e_args[@]}" "${e2e_args[@]}"
+exec go test -v "$target_path" "${go_test_args[@]}" -args --e2e "${extra_e2e_args[@]}" "${e2e_args[@]}"
 

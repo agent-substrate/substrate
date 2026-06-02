@@ -18,7 +18,6 @@ package main
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"log/slog"
 	"net"
@@ -36,6 +35,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/agent-substrate/substrate/internal/version"
 	"github.com/hashicorp/go-reap"
+	"github.com/spf13/pflag"
 	"github.com/vishvananda/netlink"
 	"github.com/vishvananda/netns"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
@@ -45,19 +45,20 @@ import (
 )
 
 var (
-	podUID = flag.String("pod-uid", "", "The UID of the current pod")
+	podUID = pflag.String("pod-uid", "", "The UID of the current pod")
 
-	showVersion = flag.Bool("version", false, "Print version and exit.")
+	showVersion = pflag.Bool("version", false, "Print version and exit.")
 
 	reapLock sync.RWMutex
 )
 
 func main() {
-	flag.Parse()
+	pflag.Parse()
 	if *showVersion {
 		fmt.Println(version.String())
 		return
 	}
+
 	ctx := context.Background()
 
 	if err := do(ctx); err != nil {

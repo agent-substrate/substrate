@@ -15,12 +15,12 @@ package main
 
 import (
 	"crypto/tls"
-	"flag"
 	"os"
 
 	"github.com/agent-substrate/substrate/internal/controllers"
 	clientv1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"github.com/spf13/pflag"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -38,7 +38,7 @@ var (
 	scheme   = runtime.NewScheme()
 	setupLog = ctrl.Log.WithName("setup")
 
-	ateAPIConnSpec = flag.String("ateapi-conn-spec", "dns:///api.ate-system.svc:443", "")
+	ateAPIConnSpec = pflag.String("ateapi-conn-spec", "dns:///api.ate-system.svc:443", "")
 )
 
 func init() {
