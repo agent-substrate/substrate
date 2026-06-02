@@ -62,6 +62,9 @@ metadata:
   namespace: otel-system
 data:
   prometheus.yml: |
+    # The kubernetes-pods scrape job below is adapted from the
+    # prometheus-community Helm chart's job of the same name:
+    # https://github.com/prometheus-community/helm-charts/blob/main/charts/prometheus/values.yaml
     global:
       scrape_interval: 15s
     scrape_configs:
