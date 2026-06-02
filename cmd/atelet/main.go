@@ -304,23 +304,11 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 		return nil, err
 	}
 
-	checkpointDir := ateompath.CheckpointDir(req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId())
+	checkpointDir := ateompath.CheckpointStateDir(req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId())
 
 	client, err := s.dialAteom(ctx, req.GetTargetAteomNamespace(), req.GetTargetAteomName())
 	if err != nil {
 		return nil, err
-	}
-
-	// TODO(ateom): Once we enable background restore, we need `runsc wait
-	// --restore pause` here, so that we know that gVisor is done with the
-	// restore checkpoint file.
-
-	// Delete any existing checkpoint file left over from restore.
-	if err := os.RemoveAll(checkpointDir); err != nil {
-		return nil, fmt.Errorf("while deleting checkpoint: %w", err)
-	}
-	if err := os.MkdirAll(checkpointDir, 0o700); err != nil {
-		return nil, fmt.Errorf("while creating checkpoint dir: %w", err)
 	}
 
 	// Tell ateom to take checkpoint and delete containers.
@@ -337,23 +325,27 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 	prefix := strings.TrimSuffix(req.GetSnapshotUriPrefix(), "/")
 	ns, tmpl, actorID := req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId()
 
+	checkpointImgPath := filepath.Join(checkpointDir, "checkpoint.img")
+	pagesImgPath := filepath.Join(checkpointDir, "pages.img")
+	pagesMetaImgPath := filepath.Join(checkpointDir, "pages_meta.img")
+
 	// Upload checkpoint from local dir.
 	if err := ategcs.SendLocalFileToGCSWithZstd(ctx, s.gcsClient,
 		prefix+"/checkpoint.img.zstd",
-		ateompath.CheckpointImgPath(ns, tmpl, actorID),
+		checkpointImgPath,
 	); err != nil {
 		return nil, fmt.Errorf("while uploading checkpoint.img to GCS: %w", err)
 	}
 
 	if err := uploadIfExists(ctx, s.gcsClient,
 		prefix+"/pages.img.zstd",
-		ateompath.PagesImgPath(ns, tmpl, actorID),
+		pagesImgPath,
 	); err != nil {
 		return nil, err
 	}
 	if err := uploadIfExists(ctx, s.gcsClient,
 		prefix+"/pages_meta.img.zstd",
-		ateompath.PagesMetaImgPath(ns, tmpl, actorID),
+		pagesMetaImgPath,
 	); err != nil {
 		return nil, err
 	}
@@ -377,12 +369,17 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		return nil, fmt.Errorf("while resetting actor dirs: %w", err)
 	}
 
+	checkpointDir := ateompath.RestoreStateDir(req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId())
+	checkpointImgPath := filepath.Join(checkpointDir, "checkpoint.img")
+	pagesImgPath := filepath.Join(checkpointDir, "pages.img")
+	pagesMetaImgPath := filepath.Join(checkpointDir, "pages_meta.img")
+
 	prefix := strings.TrimSuffix(req.GetSnapshotUriPrefix(), "/")
 	g, gCtx := errgroup.WithContext(ctx)
 	for _, dl := range []struct{ remote, local string }{
-		{prefix + "/checkpoint.img.zstd", ateompath.CheckpointImgPath(ns, tmpl, actorID)},
-		{prefix + "/pages.img.zstd", ateompath.PagesImgPath(ns, tmpl, actorID)},
-		{prefix + "/pages_meta.img.zstd", ateompath.PagesMetaImgPath(ns, tmpl, actorID)},
+		{prefix + "/checkpoint.img.zstd", checkpointImgPath},
+		{prefix + "/pages.img.zstd", pagesImgPath},
+		{prefix + "/pages_meta.img.zstd", pagesMetaImgPath},
 	} {
 		dl := dl
 		g.Go(func() error {
@@ -587,12 +584,20 @@ func resetActorDirs(actorTemplateNamespace, actorTemplateName, actorID string) e
 		return fmt.Errorf("while creating PID file dir: %w", err)
 	}
 
-	checkpointDir := ateompath.CheckpointDir(actorTemplateNamespace, actorTemplateName, actorID)
+	checkpointDir := ateompath.CheckpointStateDir(actorTemplateNamespace, actorTemplateName, actorID)
 	if err := os.RemoveAll(checkpointDir); err != nil {
-		return fmt.Errorf("while deleting checkpoint dir: %w", err)
+		return fmt.Errorf("while deleting checkpoint-state dir: %w", err)
 	}
 	if err := os.MkdirAll(checkpointDir, 0o700); err != nil {
-		return fmt.Errorf("while creating checkpoint dir: %w", err)
+		return fmt.Errorf("while creating checkpoint-state dir: %w", err)
+	}
+
+	restoreStateDir := ateompath.RestoreStateDir(actorTemplateNamespace, actorTemplateName, actorID)
+	if err := os.RemoveAll(restoreStateDir); err != nil {
+		return fmt.Errorf("while deleting restore-state dir: %w", err)
+	}
+	if err := os.MkdirAll(restoreStateDir, 0o700); err != nil {
+		return fmt.Errorf("while creating restore-state dir: %w", err)
 	}
 
 	return nil

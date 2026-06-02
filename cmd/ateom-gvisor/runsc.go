@@ -152,8 +152,8 @@ func (r *runsc) cmdRestore(ctx context.Context, out io.Writer, containerName, ch
 		"-bundle", ateompath.OCIBundlePath(r.actorTemplateNamespace, r.actorTemplateName, r.actorID, containerName),
 		"-image-path", checkpointPath,
 		"-pid-file", ateompath.PIDFilePath(r.actorTemplateNamespace, r.actorTemplateName, r.actorID, containerName),
-		//"-background",
-		//"-direct", // TODO(ateom): Reenable direct
+		"-background",
+		"-direct",
 		"-detach",
 		containerName,
 	)

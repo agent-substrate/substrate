@@ -119,31 +119,28 @@ func RunscDebugLogDir(actorTemplateNamespace, actorTemplateName, actorID, contai
 	)
 }
 
-func CheckpointDir(actorTemplateNamespace, actorTemplateName, actorID string) string {
+func CheckpointStateDir(actorTemplateNamespace, actorTemplateName, actorID string) string {
 	return filepath.Join(
 		ActorPath(actorTemplateNamespace, actorTemplateName, actorID),
-		"checkpoint",
+		"checkpoint-state",
 	)
 }
 
-func CheckpointImgPath(actorTemplateNamespace, actorTemplateName, actorID string) string {
+// RestoreStateDir is the local directory to use to restore an actor from a
+// checkpoint downloaded from GCS.
+//
+// We need to use a different path from CheckpointStateDir, because using `runsc
+// restore -direct -background` means that runsc starts executing first, then
+// demand-pages in parts of the checkpoint file as they are needed.  To know
+// when the background reading is finished, we would need to run `runsc wait
+// -checkpoint`, which will block until the read is done.  Alternatively, we can
+// make sure we write the suspension checkpoint to a different location.  This
+// will work properly, with `runsc checkpoint` paging in any data that hasn't
+// yet been loaded.
+func RestoreStateDir(actorTemplateNamespace, actorTemplateName, actorID string) string {
 	return filepath.Join(
-		CheckpointDir(actorTemplateNamespace, actorTemplateName, actorID),
-		"checkpoint.img", // gvisor implementation detail, technically.
-	)
-}
-
-func PagesImgPath(actorTemplateNamespace, actorTemplateName, actorID string) string {
-	return filepath.Join(
-		CheckpointDir(actorTemplateNamespace, actorTemplateName, actorID),
-		"pages.img", // gvisor implementation detail, technically.
-	)
-}
-
-func PagesMetaImgPath(actorTemplateNamespace, actorTemplateName, actorID string) string {
-	return filepath.Join(
-		CheckpointDir(actorTemplateNamespace, actorTemplateName, actorID),
-		"pages_meta.img", // gvisor implementation detail, technically.
+		ActorPath(actorTemplateNamespace, actorTemplateName, actorID),
+		"restore-state",
 	)
 }
 

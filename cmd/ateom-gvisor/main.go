@@ -323,7 +323,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 		actorID:                req.GetActorId(),
 	}
 
-	checkpointPath := ateompath.CheckpointDir(req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId())
+	checkpointPath := ateompath.CheckpointStateDir(req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId())
 	if err := os.MkdirAll(checkpointPath, 0o700); err != nil {
 		return nil, fmt.Errorf("while creating checkpoint directory: %w", err)
 	}
@@ -454,7 +454,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 		actorID:                req.GetActorId(),
 	}
 
-	checkpointDir := ateompath.CheckpointDir(req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId())
+	checkpointDir := ateompath.RestoreStateDir(req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId())
 
 	// Create and restore pause container
 	if err := rcmd.cmdCreate(ctx, os.Stdout, "pause"); err != nil {
