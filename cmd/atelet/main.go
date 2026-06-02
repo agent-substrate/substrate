@@ -31,7 +31,7 @@ import (
 	"strings"
 
 	"cloud.google.com/go/storage"
-	"github.com/agent-substrate/substrate/internal/ategcs"
+	"github.com/agent-substrate/substrate/cmd/atelet/internal/ategcs"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/memorypullcache"
