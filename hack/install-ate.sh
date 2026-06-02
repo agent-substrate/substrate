@@ -62,6 +62,8 @@ function usage() {
   echo "  --deploy-ate-system                    Deploy core system (CRDs, atelet, apiserver)"
   echo "  --delete-ate-system                    Delete core system"
   echo "  --delete-all                           Delete core system and all registered demos"
+  echo "  --refresh-local-certs                  Regenerate local cert/JWT prerequisites and restart cert consumers"
+  echo "  --reset-local-valkey                   Delete local kind Valkey state so the cluster can be reinitialized"
   echo ""
   echo "Infrastructure components:"
   echo ""
@@ -197,6 +199,83 @@ create_api_server_env_vars() {
     --from-literal=ATE_API_K8SJWT_ISSUER="${jwt_issuer}" \
     --dry-run=client -o yaml \
     | run_kubectl apply -f -
+}
+
+rollout_restart_if_exists() {
+  local kind="$1"
+  local namespace="$2"
+  local name="$3"
+
+  if run_kubectl get "${kind}" -n "${namespace}" "${name}" >/dev/null 2>&1; then
+    run_kubectl rollout restart "${kind}/${name}" -n "${namespace}"
+  fi
+}
+
+refresh_local_certs() {
+  log_step "refresh_local_certs"
+
+  run_kubectl create namespace ate-system --dry-run=client -o yaml \
+    | run_kubectl apply -f -
+  run_kubectl create namespace podcertificate-controller-system --dry-run=client -o yaml \
+    | run_kubectl apply -f -
+
+  # Drop issued pod certificates and trust bundles so kubelet and the local
+  # signer have to request and publish certs from the regenerated pools.
+  run_kubectl delete podcertificaterequests --all -A --ignore-not-found || true
+  run_kubectl delete clustertrustbundles \
+    podidentity.podcert.ate.dev:identity:primary-bundle \
+    servicedns.podcert.ate.dev:identity:primary-bundle \
+    --ignore-not-found || true
+
+  # Force regenerated local cert, JWT, and API server config material.
+  run_kubectl delete secret -n ate-system \
+    session-id-jwt-pool \
+    session-id-ca-pool \
+    valkey-ca-certs \
+    --ignore-not-found
+  run_kubectl delete secret -n podcertificate-controller-system \
+    service-dns-ca-pool \
+    pod-identity-ca-pool \
+    --ignore-not-found
+  run_kubectl delete configmap -n ate-system ate-api-server-envvars --ignore-not-found
+
+  create_jwt_authority_pool_secret
+  create_session_id_ca_pool_secret
+  create_podcertificate_controller_cas
+  create_valkey_ca_certs_secret
+  create_api_server_env_vars
+
+  # Restart components that mount or cache generated cert material. The Valkey
+  # init job is recreated on the next system deploy if needed.
+  run_kubectl delete job -n ate-system valkey-cluster-init --ignore-not-found
+  rollout_restart_if_exists deployment podcertificate-controller-system podcertificate-controller
+  rollout_restart_if_exists statefulset ate-system valkey-cluster
+  rollout_restart_if_exists deployment ate-system ate-api-server-deployment
+  rollout_restart_if_exists deployment ate-system ate-controller
+  rollout_restart_if_exists deployment ate-system atenet-router
+  rollout_restart_if_exists deployment ate-system dns
+  rollout_restart_if_exists daemonset ate-system atelet
+}
+
+reset_local_valkey() {
+  log_step "reset_local_valkey"
+
+  if [[ "${ATE_INSTALL_KIND:-false}" != "true" ]]; then
+    echo "--reset-local-valkey is only supported for the kind installer. Use hack/install-ate-kind.sh." >&2
+    exit 1
+  fi
+
+  # This intentionally destroys the local control-plane database. It is meant
+  # for kind/dev recovery when Valkey Cluster persisted stale pod IPs in
+  # nodes.conf after pod recreation.
+  run_kubectl delete job -n ate-system valkey-cluster-init --ignore-not-found
+
+  if run_kubectl get statefulset -n ate-system valkey-cluster >/dev/null 2>&1; then
+    run_kubectl scale statefulset/valkey-cluster -n ate-system --replicas=0
+    run_kubectl wait --for=delete pod -n ate-system -l app=valkey-cluster --timeout=2m || true
+  fi
+
+  run_kubectl delete pvc -n ate-system -l app=valkey-cluster --ignore-not-found
 }
 
 ensure_crds() {
@@ -376,6 +455,8 @@ while [[ "$#" -gt 0 ]]; do
     --deploy-ate-system) deploy_ate_system ;;
     --delete-ate-system) delete_ate_system ;;
     --delete-all) delete_all ;;
+    --refresh-local-certs) refresh_local_certs ;;
+    --reset-local-valkey) reset_local_valkey ;;
 
     --deploy-atelet) deploy_atelet ;;
     --deploy-ate-apiserver) deploy_ate_apiserver ;;

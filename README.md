@@ -168,6 +168,22 @@ Similarly, you can deploy or cleanup specific Agent Substrate components using t
 ./hack/install-ate-kind.sh --delete-all
 ```
 
+For local `kind` clusters that have been running for several days, generated
+certificate material or Valkey's persisted cluster metadata can become stale.
+Use the local recovery flags before redeploying the system:
+
+```bash
+# Regenerate local cert/JWT prerequisites and restart cert consumers.
+./hack/install-ate-kind.sh --refresh-local-certs --deploy-ate-system
+
+# Delete local Valkey state and reinitialize the cluster. This removes local
+# actor and worker control-plane state.
+./hack/install-ate-kind.sh --reset-local-valkey --deploy-ate-system
+
+# If both expired certs and stale Valkey pod IPs are present:
+./hack/install-ate-kind.sh --refresh-local-certs --reset-local-valkey --deploy-ate-system
+```
+
 #### Tearing down resources (GCP)
 
 If you need to delete the resources created by the setup script, you can use the provided script `hack/teardown.sh`. This script will delete resources in the reverse order of creation and handles partial failures gracefully.
