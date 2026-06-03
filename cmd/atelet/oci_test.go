@@ -450,3 +450,21 @@ func TestUntar_TruncatedArchive(t *testing.T) {
 		t.Errorf("error = %v, want it to surface the underlying tar/copy error", err)
 	}
 }
+
+func TestBuildSpec(t *testing.T) {
+	spec := buildSpec(
+		[]string{"/bin/sh"},
+		[]string{"PATH=/usr/bin"},
+		map[string]string{"k": "v"},
+		"/var/run/netns/foo",
+		"actorTemplateNamespace",
+		"actorTemplateName",
+		"actorID",
+		"123",
+	)
+
+	wantCgroups := "actors/actorTemplateNamespace/actorTemplateName/actorID/123"
+	if got := spec.Linux.CgroupsPath; got != wantCgroups {
+		t.Errorf("Linux.CgroupsPath = %q, want %q", got, wantCgroups)
+	}
+}
