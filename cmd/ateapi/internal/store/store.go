@@ -51,8 +51,8 @@ type Interface interface {
 	// Removes an actor. Returns ErrNotFound if missing, or ErrFailedPrecondition if not suspended.
 	DeleteActor(ctx context.Context, id string) error
 
-	// Lists all known actors. Returns nil if none found.
-	ListActors(ctx context.Context) ([]*ateapipb.Actor, error)
+	// Lists all known actors. Returns a page of actors and a next page token.
+	ListActors(ctx context.Context, pageSize int32, pageToken string) ([]*ateapipb.Actor, string, error)
 
 	// Fetches worker state by namespace, pool, and pod name. Returns ErrNotFound if missing.
 	GetWorker(ctx context.Context, namespace, pool, pod string) (*ateapipb.Worker, error)

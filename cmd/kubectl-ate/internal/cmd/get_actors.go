@@ -47,11 +47,26 @@ var getActorsCmd = &cobra.Command{
 		}
 
 		// 3. Handle List All Actors
-		resp, err := apiClient.ListActors(ctx, &ateapipb.ListActorsRequest{})
-		if err != nil {
-			return fmt.Errorf("failed to list actors: %w", err)
+		var allActors []*ateapipb.Actor
+		pageToken := ""
+
+		for {
+			resp, err := apiClient.ListActors(ctx, &ateapipb.ListActorsRequest{
+				PageSize:  1000,
+				PageToken: pageToken,
+			})
+			if err != nil {
+				return fmt.Errorf("failed to list actors: %w", err)
+			}
+			allActors = append(allActors, resp.GetActors()...)
+
+			pageToken = resp.GetNextPageToken()
+			if pageToken == "" {
+				break
+			}
 		}
-		return printer.PrintActors(resp.GetActors(), outputFmt)
+
+		return printer.PrintActors(allActors, outputFmt)
 	},
 }
 

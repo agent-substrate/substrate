@@ -20,7 +20,6 @@ import (
 	"net"
 	"os"
 	"os/exec"
-	"sort"
 	"strings"
 	"sync"
 	"testing"
@@ -36,6 +35,7 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/alicebob/miniredis/v2"
 	"github.com/google/go-cmp/cmp"
+	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/redis/go-redis/v9"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -619,20 +619,76 @@ func TestListActors(t *testing.T) {
 		t.Fatalf("expected 2 actors, got %d", len(listResp.Actors))
 	}
 
-	sort.Slice(listResp.Actors, func(i, j int) bool {
-		return listResp.Actors[i].ActorId < listResp.Actors[j].ActorId
-	})
-
 	want := []*ateapipb.Actor{
 		resp1.GetActor(),
 		resp2.GetActor(),
 	}
-	sort.Slice(want, func(i, j int) bool {
-		return want[i].ActorId < want[j].ActorId
-	})
 
-	if diff := cmp.Diff(want, listResp.Actors, protocmp.Transform()); diff != "" {
+	opts := []cmp.Option{
+		protocmp.Transform(),
+		cmpopts.SortSlices(func(a, b *ateapipb.Actor) bool {
+			return a.ActorId < b.ActorId
+		}),
+	}
+
+	if diff := cmp.Diff(want, listResp.Actors, opts...); diff != "" {
 		t.Errorf("ListActors response mismatch (-want +got):\n%s", diff)
+	}
+}
+
+// TestListActors_Pagination tests that ListActors correctly paginates results.
+func TestListActors_Pagination(t *testing.T) {
+	ns := namespaceForTest("ns-list-actors-pagination")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	createTemplate(t, tc, ns)
+
+	var want []*ateapipb.Actor
+	for i := 0; i < 5; i++ {
+		resp, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{
+			ActorTemplateNamespace: ns,
+			ActorTemplateName:      "tmpl1",
+			ActorId:                fmt.Sprintf("id%d", i),
+		})
+		if err != nil {
+			t.Fatalf("CreateActor %d failed: %v", i, err)
+		}
+		want = append(want, resp.GetActor())
+	}
+
+	var allActors []*ateapipb.Actor
+	pageToken := ""
+
+	for {
+		listResp, err := tc.client.ListActors(context.Background(), &ateapipb.ListActorsRequest{
+			PageSize:  2,
+			PageToken: pageToken,
+		})
+		if err != nil {
+			t.Fatalf("ListActors failed: %v", err)
+		}
+
+		allActors = append(allActors, listResp.Actors...)
+		pageToken = listResp.GetNextPageToken()
+		if pageToken == "" {
+			break
+		}
+	}
+
+	if len(allActors) != 5 {
+		t.Fatalf("expected 5 actors total, got %d", len(allActors))
+	}
+
+	opts := []cmp.Option{
+		protocmp.Transform(),
+		cmpopts.SortSlices(func(a, b *ateapipb.Actor) bool {
+			return a.ActorId < b.ActorId
+		}),
+	}
+
+	if diff := cmp.Diff(want, allActors, opts...); diff != "" {
+		t.Errorf("ListActors pagination response mismatch (-want +got):\n%s", diff)
 	}
 }
 
@@ -1203,7 +1259,7 @@ func TestSuspendActor_DanglingWorker(t *testing.T) {
 	deleteWorkerPod(t, tc, ns, "worker-1")
 
 	// 3. Call SuspendActor -> Should succeed (our fix skips missing pod execution)
-	actors, _ := tc.persistence.ListActors(context.Background())
+	actors, _, _ := tc.persistence.ListActors(context.Background(), 1000, "")
 	t.Logf("Actors in Redis before Suspend: %d", len(actors))
 	for _, a := range actors {
 		t.Logf("  Actor: %s/%s/%s", a.GetActorTemplateNamespace(), a.GetActorTemplateName(), a.GetActorId())

@@ -757,8 +757,17 @@ func (x *ListWorkersResponse) GetWorkers() []*Worker {
 	return nil
 }
 
+// Request to list actors with pagination.
+// This operation provides "soft" guarantees: actors may be missed or duplicated
+// if the system state changes during pagination.
 type ListActorsRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The maximum number of actors to return. The server may enforce a hard limit
+	// (e.g., 1000) regardless of the requested size.
+	PageSize int32 `protobuf:"varint,1,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`
+	// An opaque pagination token obtained from a previous ListActorsResponse.
+	// Empty for the first request.
+	PageToken     string `protobuf:"bytes,2,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -793,9 +802,28 @@ func (*ListActorsRequest) Descriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{13}
 }
 
+func (x *ListActorsRequest) GetPageSize() int32 {
+	if x != nil {
+		return x.PageSize
+	}
+	return 0
+}
+
+func (x *ListActorsRequest) GetPageToken() string {
+	if x != nil {
+		return x.PageToken
+	}
+	return ""
+}
+
+// Response for a ListActors operation.
 type ListActorsResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Actors        []*Actor               `protobuf:"bytes,1,rep,name=actors,proto3" json:"actors,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The page of actors. This list may be empty even if there are more results.
+	Actors []*Actor `protobuf:"bytes,1,rep,name=actors,proto3" json:"actors,omitempty"`
+	// An opaque token to retrieve the next page of results.
+	// If empty, there are no more results. Clients must loop until this is empty.
+	NextPageToken string `protobuf:"bytes,2,opt,name=next_page_token,json=nextPageToken,proto3" json:"next_page_token,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -835,6 +863,13 @@ func (x *ListActorsResponse) GetActors() []*Actor {
 		return x.Actors
 	}
 	return nil
+}
+
+func (x *ListActorsResponse) GetNextPageToken() string {
+	if x != nil {
+		return x.NextPageToken
+	}
+	return ""
 }
 
 type Worker struct {
@@ -1316,10 +1351,14 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x13DeleteActorResponse\"\x14\n" +
 	"\x12ListWorkersRequest\"?\n" +
 	"\x13ListWorkersResponse\x12(\n" +
-	"\aworkers\x18\x01 \x03(\v2\x0e.ateapi.WorkerR\aworkers\"\x13\n" +
-	"\x11ListActorsRequest\";\n" +
+	"\aworkers\x18\x01 \x03(\v2\x0e.ateapi.WorkerR\aworkers\"O\n" +
+	"\x11ListActorsRequest\x12\x1b\n" +
+	"\tpage_size\x18\x01 \x01(\x05R\bpageSize\x12\x1d\n" +
+	"\n" +
+	"page_token\x18\x02 \x01(\tR\tpageToken\"c\n" +
 	"\x12ListActorsResponse\x12%\n" +
-	"\x06actors\x18\x01 \x03(\v2\r.ateapi.ActorR\x06actors\"\xae\x02\n" +
+	"\x06actors\x18\x01 \x03(\v2\r.ateapi.ActorR\x06actors\x12&\n" +
+	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"\xae\x02\n" +
 	"\x06Worker\x12)\n" +
 	"\x10worker_namespace\x18\x01 \x01(\tR\x0fworkerNamespace\x12\x1f\n" +
 	"\vworker_pool\x18\x02 \x01(\tR\n" +

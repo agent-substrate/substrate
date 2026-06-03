@@ -25,12 +25,18 @@ func (s *Service) ListActors(ctx context.Context, req *ateapipb.ListActorsReques
 	if err := validateListActorsRequest(req); err != nil {
 		return nil, err
 	}
-	actors, err := s.persistence.ListActors(ctx)
+	pageSize := req.GetPageSize()
+	if pageSize <= 0 || pageSize > 1000 {
+		pageSize = 1000
+	}
+
+	actors, nextToken, err := s.persistence.ListActors(ctx, pageSize, req.GetPageToken())
 	if err != nil {
 		return nil, fmt.Errorf("while listing actors in db: %w", err)
 	}
 	return &ateapipb.ListActorsResponse{
-		Actors: actors,
+		Actors:        actors,
+		NextPageToken: nextToken,
 	}, nil
 }
 

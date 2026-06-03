@@ -41,8 +41,11 @@ package ateredis
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -393,40 +396,132 @@ func (s *Persistence) ListWorkers(ctx context.Context) ([]*ateapipb.Worker, erro
 	return result, nil
 }
 
-func (s *Persistence) ListActors(ctx context.Context) ([]*ateapipb.Actor, error) {
-	var result []*ateapipb.Actor
-	var mu sync.Mutex
+type listActorsPageToken struct {
+	ShardAddr string `json:"shard"`
+	Cursor    uint64 `json:"cursor"`
+}
 
-	err := s.rdb.ForEachMaster(ctx, func(ctx context.Context, master *redis.Client) error {
-		iter := master.Scan(ctx, 0, "actor:*", 0).Iterator()
-		for iter.Next(ctx) {
-			actorKey := iter.Val()
-			parts := strings.Split(actorKey, ":")
-			if len(parts) != 2 {
-				return fmt.Errorf("bad key format %q", actorKey)
-			}
+func encodePageToken(token listActorsPageToken) string {
+	b, _ := json.Marshal(token)
+	return base64.StdEncoding.EncodeToString(b)
+}
 
-			getCmd := master.Get(ctx, actorKey)
-			if getCmd.Err() != nil {
-				return fmt.Errorf("while getting actor %q: %w", actorKey, getCmd.Err())
-			}
+func decodePageToken(tokenStr string) (listActorsPageToken, error) {
+	var token listActorsPageToken
+	if tokenStr == "" {
+		return token, nil
+	}
+	b, err := base64.StdEncoding.DecodeString(tokenStr)
+	if err != nil {
+		return token, err
+	}
+	err = json.Unmarshal(b, &token)
+	return token, err
+}
 
-			actor := &ateapipb.Actor{}
-			if err := protojson.Unmarshal([]byte(getCmd.Val()), actor); err != nil {
-				return fmt.Errorf("in protojson.Unmarshal: %w", err)
-			}
+func (s *Persistence) ListActors(ctx context.Context, pageSize int32, pageTokenStr string) ([]*ateapipb.Actor, string, error) {
+	token, err := decodePageToken(pageTokenStr)
+	if err != nil {
+		return nil, "", fmt.Errorf("invalid page token: %w", err)
+	}
 
-			mu.Lock()
-			result = append(result, actor)
-			mu.Unlock()
-		}
-		return iter.Err()
+	var masters []*redis.Client
+	err = s.rdb.ForEachMaster(ctx, func(ctx context.Context, master *redis.Client) error {
+		masters = append(masters, master)
+		return nil
+	})
+	if err != nil {
+		return nil, "", fmt.Errorf("while listing redis masters: %w", err)
+	}
+
+	sort.Slice(masters, func(i, j int) bool {
+		return masters[i].Options().Addr < masters[j].Options().Addr
 	})
 
-	if err != nil {
-		return nil, fmt.Errorf("while iterating all redis master: %w", err)
+	startIndex := 0
+	if token.ShardAddr != "" {
+		found := false
+		for i, m := range masters {
+			if m.Options().Addr == token.ShardAddr {
+				startIndex = i
+				found = true
+				break
+			}
+		}
+		if !found {
+			return nil, "", fmt.Errorf("topology changed: shard %s not found (aborted)", token.ShardAddr)
+		}
 	}
-	return result, nil
+
+	var result []*ateapipb.Actor
+	var nextToken string
+
+	for i := startIndex; i < len(masters); i++ {
+		master := masters[i]
+		shardAddr := master.Options().Addr
+		cursor := uint64(0)
+		if i == startIndex && token.ShardAddr != "" {
+			cursor = token.Cursor
+		}
+
+		var keys []string
+		keys, cursor, err = master.Scan(ctx, cursor, "actor:*", int64(pageSize)).Result()
+		if err != nil {
+			return nil, "", fmt.Errorf("while scanning shard %s: %w", shardAddr, err)
+		}
+
+		if len(keys) > 0 {
+			cmds, err := master.Pipelined(ctx, func(pipe redis.Pipeliner) error {
+				for _, key := range keys {
+					pipe.Get(ctx, key)
+				}
+				return nil
+			})
+			if err != nil && !errors.Is(err, redis.Nil) {
+				return nil, "", fmt.Errorf("while fetching keys in shard %s: %w", shardAddr, err)
+			}
+
+			for _, cmd := range cmds {
+				getCmd, ok := cmd.(*redis.StringCmd)
+				if !ok {
+					continue
+				}
+				if getCmd.Err() != nil {
+					if errors.Is(getCmd.Err(), redis.Nil) {
+						continue
+					}
+					return nil, "", fmt.Errorf("while getting actor: %w", getCmd.Err())
+				}
+
+				actor := &ateapipb.Actor{}
+				if err := protojson.Unmarshal([]byte(getCmd.Val()), actor); err != nil {
+					return nil, "", fmt.Errorf("in protojson.Unmarshal: %w", err)
+				}
+				result = append(result, actor)
+			}
+		}
+
+		if cursor != 0 {
+			nextToken = encodePageToken(listActorsPageToken{
+				ShardAddr: shardAddr,
+				Cursor:    cursor,
+			})
+			break
+		} else {
+			if i+1 < len(masters) {
+				nextToken = encodePageToken(listActorsPageToken{
+					ShardAddr: masters[i+1].Options().Addr,
+					Cursor:    0,
+				})
+				break
+			} else {
+				nextToken = ""
+				break
+			}
+		}
+	}
+
+	return result, nextToken, nil
 }
 
 func (s *Persistence) AcquireLock(ctx context.Context, key string, value string, ttl time.Duration) (bool, error) {

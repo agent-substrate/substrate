@@ -17,6 +17,7 @@ package ateredis
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -424,7 +425,7 @@ func TestListActors(t *testing.T) {
 		t.Fatalf("failed to create actor2: %v", err)
 	}
 
-	actors, err := s.ListActors(ctx)
+	actors, _, err := s.ListActors(ctx, 1000, "")
 	if err != nil {
 		t.Fatalf("ListActors failed: %v", err)
 	}
@@ -529,13 +530,58 @@ func TestListActors_Empty(t *testing.T) {
 	mr, s, ctx := setupTest(t)
 	defer mr.Close()
 
-	actors, err := s.ListActors(ctx)
+	actors, _, err := s.ListActors(ctx, 1000, "")
 	if err != nil {
 		t.Fatalf("ListActors failed: %v", err)
 	}
 
 	if len(actors) != 0 {
 		t.Errorf("expected 0 actors, got %d", len(actors))
+	}
+}
+
+func TestListActors_Pagination(t *testing.T) {
+	mr, s, ctx := setupTest(t)
+	defer mr.Close()
+
+	for i := 0; i < 5; i++ {
+		actor := &ateapipb.Actor{
+			ActorId:                fmt.Sprintf("id%d", i),
+			ActorTemplateNamespace: "ns1",
+			ActorTemplateName:      "tmpl1",
+			Status:                 ateapipb.Actor_STATUS_SUSPENDED,
+		}
+		if err := s.CreateActor(ctx, actor); err != nil {
+			t.Fatalf("failed to create actor %d: %v", i, err)
+		}
+	}
+
+	var allActors []*ateapipb.Actor
+	pageToken := ""
+
+	for {
+		actors, nextToken, err := s.ListActors(ctx, 2, pageToken)
+		if err != nil {
+			t.Fatalf("ListActors failed: %v", err)
+		}
+
+		allActors = append(allActors, actors...)
+		pageToken = nextToken
+		if pageToken == "" {
+			break
+		}
+	}
+
+	if len(allActors) != 5 {
+		t.Fatalf("expected 5 actors total, got %d", len(allActors))
+	}
+
+	seen := make(map[string]bool)
+	for _, a := range allActors {
+		if seen[a.ActorId] {
+			t.Errorf("duplicate actor found in paginated results: %s", a.ActorId)
+		}
+		seen[a.ActorId] = true
 	}
 }
 

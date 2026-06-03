@@ -128,10 +128,27 @@ message ListWorkersResponse {
   repeated Worker workers = 1;
 }
 
-message ListActorsRequest {}
+// Request to list actors with pagination.
+// This operation provides "soft" guarantees: actors may be missed or duplicated
+// if the system state changes during pagination.
+message ListActorsRequest {
+  // The maximum number of actors to return. The server may enforce a hard limit
+  // (e.g., 1000) regardless of the requested size.
+  int32 page_size = 1;
 
+  // An opaque pagination token obtained from a previous ListActorsResponse.
+  // Empty for the first request.
+  string page_token = 2;
+}
+
+// Response for a ListActors operation.
 message ListActorsResponse {
+  // The page of actors. This list may be empty even if there are more results.
   repeated Actor actors = 1;
+
+  // An opaque token to retrieve the next page of results.
+  // If empty, there are no more results. Clients must loop until this is empty.
+  string next_page_token = 2;
 }
 
 message Worker {
