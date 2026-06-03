@@ -692,6 +692,28 @@ func TestListActors_Pagination(t *testing.T) {
 	}
 }
 
+func TestListActors_PageSizeValidation(t *testing.T) {
+	ns := namespaceForTest("ns-list-actors-validation")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	// 1. Negative page size
+	_, err := tc.client.ListActors(context.Background(), &ateapipb.ListActorsRequest{
+		PageSize: -1,
+	})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Errorf("expected InvalidArgument error for negative page_size, got: %v", err)
+	}
+
+	// 2. Page size exceeding maxPageSize (1000)
+	_, err = tc.client.ListActors(context.Background(), &ateapipb.ListActorsRequest{
+		PageSize: 1001,
+	})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Errorf("expected InvalidArgument error for page_size > 1000, got: %v", err)
+	}
+}
+
 // TestListWorkers tests that workers mirrored to Redis are listed.
 // Workflow:
 // 1. Creates a mock worker Pod in Kubernetes.

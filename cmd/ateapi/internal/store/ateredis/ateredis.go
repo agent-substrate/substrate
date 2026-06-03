@@ -41,7 +41,9 @@ package ateredis
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -397,7 +399,7 @@ func (s *Persistence) ListWorkers(ctx context.Context) ([]*ateapipb.Worker, erro
 }
 
 type listActorsPageToken struct {
-	ShardAddr string `json:"shard"`
+	ShardHash string `json:"shard_hash"`
 	Cursor    uint64 `json:"cursor"`
 }
 
@@ -430,7 +432,7 @@ func (s *Persistence) ListActors(ctx context.Context, pageSize int32, pageTokenS
 		return nil, "", err
 	}
 
-	startIndex, err := findStartingShard(masters, token.ShardAddr)
+	startIndex, err := findStartingShard(masters, token.ShardHash)
 	if err != nil {
 		return nil, "", err
 	}
@@ -443,7 +445,7 @@ func (s *Persistence) ListActors(ctx context.Context, pageSize int32, pageTokenS
 		master := masters[i]
 		shardAddr := master.Options().Addr
 		cursor := uint64(0)
-		if i == startIndex && token.ShardAddr != "" {
+		if i == startIndex && token.ShardHash != "" {
 			cursor = token.Cursor
 		}
 
@@ -451,13 +453,16 @@ func (s *Persistence) ListActors(ctx context.Context, pageSize int32, pageTokenS
 			remaining := int(pageSize) - len(result)
 			if remaining <= 0 {
 				if cursor != 0 {
+					h := sha256.Sum256([]byte(shardAddr))
 					nextToken = encodePageToken(listActorsPageToken{
-						ShardAddr: shardAddr,
+						ShardHash: hex.EncodeToString(h[:]),
 						Cursor:    cursor,
 					})
 				} else if i+1 < len(masters) {
+					nextShardAddr := masters[i+1].Options().Addr
+					h := sha256.Sum256([]byte(nextShardAddr))
 					nextToken = encodePageToken(listActorsPageToken{
-						ShardAddr: masters[i+1].Options().Addr,
+						ShardHash: hex.EncodeToString(h[:]),
 						Cursor:    0,
 					})
 				} else {
@@ -483,8 +488,10 @@ func (s *Persistence) ListActors(ctx context.Context, pageSize int32, pageTokenS
 
 			if cursor == 0 {
 				if i+1 < len(masters) {
+					nextShardAddr := masters[i+1].Options().Addr
+					h := sha256.Sum256([]byte(nextShardAddr))
 					nextToken = encodePageToken(listActorsPageToken{
-						ShardAddr: masters[i+1].Options().Addr,
+						ShardHash: hex.EncodeToString(h[:]),
 						Cursor:    0,
 					})
 				} else {
@@ -514,16 +521,18 @@ func (s *Persistence) getSortedMasters(ctx context.Context) ([]*redis.Client, er
 	return masters, nil
 }
 
-func findStartingShard(masters []*redis.Client, shardAddr string) (int, error) {
-	if shardAddr == "" {
+func findStartingShard(masters []*redis.Client, shardHash string) (int, error) {
+	if shardHash == "" {
 		return 0, nil
 	}
 	for i, m := range masters {
-		if m.Options().Addr == shardAddr {
+		h := sha256.Sum256([]byte(m.Options().Addr))
+		hashStr := hex.EncodeToString(h[:])
+		if hashStr == shardHash {
 			return i, nil
 		}
 	}
-	return 0, fmt.Errorf("topology changed: shard %s not found (aborted)", shardAddr)
+	return 0, fmt.Errorf("topology changed: shard with hash %s not found (aborted)", shardHash)
 }
 
 func (s *Persistence) fetchActors(ctx context.Context, master *redis.Client, keys []string) ([]*ateapipb.Actor, error) {
