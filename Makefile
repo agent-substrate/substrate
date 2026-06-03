@@ -26,8 +26,9 @@ KO := hack/run-tool.sh ko
 BINDIR := bin/
 ATECTL := $(BINDIR)/kubectl-ate
 
-# Version stamping. Override on the make command line to pin
-# (e.g. `make VERSION=v0.5.0 build`).
+# Version stamping for the go-built binaries (kubectl-ate, atenet). ko images
+# are stamped via .ko.yaml instead (`ko build` has no --ldflags flag).
+# Override VERSION on the make line to pin (e.g. `make VERSION=v0.5.0 build`).
 VERSION    ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 COMMIT     ?= $(shell git rev-parse HEAD 2>/dev/null || echo unknown)
 BUILD_DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -44,10 +45,10 @@ build: build-images build-atectl
 
 .PHONY: build-images
 build-images:
-	$(KO) build --ldflags "$(LDFLAGS)" ./cmd/ateapi
-	$(KO) build --ldflags "$(LDFLAGS)" ./cmd/atelet
-	$(KO) build --ldflags "$(LDFLAGS)" ./cmd/podcertcontroller
-	$(KO) build --ldflags "$(LDFLAGS)" ./cmd/atenet
+	$(KO) build ./cmd/ateapi
+	$(KO) build ./cmd/atelet
+	$(KO) build ./cmd/podcertcontroller
+	$(KO) build ./cmd/atenet
 
 .PHONY: build-atectl
 build-atectl:
@@ -59,7 +60,7 @@ build-atenet:
 
 .PHONY: build-demos
 build-demos:
-	$(KO) build --ldflags "$(LDFLAGS)" ./demos/counter
+	$(KO) build ./demos/counter
 
 .PHONY: test
 test:

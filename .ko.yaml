@@ -18,6 +18,13 @@ defaultPlatforms:
   - linux/amd64
   - linux/arm64
 
+# ldflags for ko-built images ({{.Git.*}}/{{.Date}} templating). Version uses
+# ShortCommit, not {{.Git.Tag}}: no release tag is reachable from HEAD yet.
+defaultLdflags:
+  - -X github.com/agent-substrate/substrate/internal/version.Version={{.Git.ShortCommit}}
+  - -X github.com/agent-substrate/substrate/internal/version.Commit={{.Git.FullCommit}}
+  - -X github.com/agent-substrate/substrate/internal/version.BuildDate={{.Date}}
+
 baseImageOverrides:
   github.com/agent-substrate/substrate/demos/sandbox: alpine
   github.com/agent-substrate/substrate/demos/agent-secret: alpine
