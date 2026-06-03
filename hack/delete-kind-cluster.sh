@@ -33,9 +33,16 @@ fi
 echo "Deleting kind cluster '${KIND_CLUSTER_NAME}'..."
 "${ROOT}"/hack/kind.sh delete cluster --name "${KIND_CLUSTER_NAME}"
 
-if [ "$(docker inspect --format '{{index .Config.Labels "created-by"}}' "${reg_name}" 2>/dev/null)" = "agent-substrate" ]; then
-  echo "Deleting registry container '${reg_name}' (created by us)..."
-  docker rm -f "${reg_name}" || true
-else
-  echo "Registry container '${reg_name}' was not created by us, leaving it running."
+reg_exists=false
+if docker inspect "${reg_name}" >/dev/null 2>&1; then
+  reg_exists=true
+fi
+if [ "${reg_exists}" == true ]; then
+  reg_created_by="$(docker inspect --format '{{index .Config.Labels "created-by"}}' "${reg_name}" 2>/dev/null)"
+  if [ "${reg_created_by}" == "agent-substrate" ]; then
+    echo "Deleting registry container '${reg_name}' (created by us)..."
+    docker rm -f "${reg_name}" || true
+  else
+    echo "Registry container '${reg_name}' was not created by us (${reg_created_by}), leaving it running."
+  fi
 fi
