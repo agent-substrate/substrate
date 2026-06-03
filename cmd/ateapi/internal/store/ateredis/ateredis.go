@@ -455,8 +455,9 @@ func (s *Persistence) ListActors(ctx context.Context, pageSize int32, pageTokenS
 
 	var result []*ateapipb.Actor
 	var nextToken string
+	stop := false
 
-	for i := startIndex; i < len(masters); i++ {
+	for i := startIndex; i < len(masters) && !stop; i++ {
 		master := masters[i]
 		shardAddr := master.Options().Addr
 		cursor := uint64(0)
@@ -464,58 +465,72 @@ func (s *Persistence) ListActors(ctx context.Context, pageSize int32, pageTokenS
 			cursor = token.Cursor
 		}
 
-		var keys []string
-		keys, cursor, err = master.Scan(ctx, cursor, "actor:*", int64(pageSize)).Result()
-		if err != nil {
-			return nil, "", fmt.Errorf("while scanning shard %s: %w", shardAddr, err)
-		}
-
-		if len(keys) > 0 {
-			cmds, err := master.Pipelined(ctx, func(pipe redis.Pipeliner) error {
-				for _, key := range keys {
-					pipe.Get(ctx, key)
+		for {
+			remaining := int(pageSize) - len(result)
+			if remaining <= 0 {
+				if cursor != 0 {
+					nextToken = encodePageToken(listActorsPageToken{
+						ShardAddr: shardAddr,
+						Cursor:    cursor,
+					})
+				} else if i+1 < len(masters) {
+					nextToken = encodePageToken(listActorsPageToken{
+						ShardAddr: masters[i+1].Options().Addr,
+						Cursor:    0,
+					})
+				} else {
+					nextToken = ""
 				}
-				return nil
-			})
-			if err != nil && !errors.Is(err, redis.Nil) {
-				return nil, "", fmt.Errorf("while fetching keys in shard %s: %w", shardAddr, err)
+				stop = true
+				break
 			}
 
-			for _, cmd := range cmds {
-				getCmd, ok := cmd.(*redis.StringCmd)
-				if !ok {
-					continue
+			var keys []string
+			keys, cursor, err = master.Scan(ctx, cursor, "actor:*", int64(remaining)).Result()
+			if err != nil {
+				return nil, "", fmt.Errorf("while scanning shard %s: %w", shardAddr, err)
+			}
+
+			if len(keys) > 0 {
+				cmds, err := master.Pipelined(ctx, func(pipe redis.Pipeliner) error {
+					for _, key := range keys {
+						pipe.Get(ctx, key)
+					}
+					return nil
+				})
+				if err != nil && !errors.Is(err, redis.Nil) {
+					return nil, "", fmt.Errorf("while fetching keys in shard %s: %w", shardAddr, err)
 				}
-				if getCmd.Err() != nil {
-					if errors.Is(getCmd.Err(), redis.Nil) {
+
+				for _, cmd := range cmds {
+					getCmd, ok := cmd.(*redis.StringCmd)
+					if !ok {
 						continue
 					}
-					return nil, "", fmt.Errorf("while getting actor: %w", getCmd.Err())
-				}
+					if getCmd.Err() != nil {
+						if errors.Is(getCmd.Err(), redis.Nil) {
+							continue
+						}
+						return nil, "", fmt.Errorf("while getting actor: %w", getCmd.Err())
+					}
 
-				actor := &ateapipb.Actor{}
-				if err := protojson.Unmarshal([]byte(getCmd.Val()), actor); err != nil {
-					return nil, "", fmt.Errorf("in protojson.Unmarshal: %w", err)
+					actor := &ateapipb.Actor{}
+					if err := protojson.Unmarshal([]byte(getCmd.Val()), actor); err != nil {
+						return nil, "", fmt.Errorf("in protojson.Unmarshal: %w", err)
+					}
+					result = append(result, actor)
 				}
-				result = append(result, actor)
 			}
-		}
 
-		if cursor != 0 {
-			nextToken = encodePageToken(listActorsPageToken{
-				ShardAddr: shardAddr,
-				Cursor:    cursor,
-			})
-			break
-		} else {
-			if i+1 < len(masters) {
-				nextToken = encodePageToken(listActorsPageToken{
-					ShardAddr: masters[i+1].Options().Addr,
-					Cursor:    0,
-				})
-				break
-			} else {
-				nextToken = ""
+			if cursor == 0 {
+				if i+1 < len(masters) {
+					nextToken = encodePageToken(listActorsPageToken{
+						ShardAddr: masters[i+1].Options().Addr,
+						Cursor:    0,
+					})
+				} else {
+					nextToken = ""
+				}
 				break
 			}
 		}
