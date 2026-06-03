@@ -20,12 +20,14 @@ package serverboot
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 
 	"github.com/agent-substrate/substrate/internal/contextlogging"
+	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
@@ -42,6 +44,28 @@ import (
 // contextlogging.NewHandler. Call once at process start.
 func InitLogger() {
 	slog.SetDefault(slog.New(contextlogging.NewHandler(slog.NewJSONHandler(os.Stdout, nil))))
+}
+
+// serviceInstanceID is generated once so the tracer and meter resources share it.
+var serviceInstanceID = uuid.NewString()
+
+// newResource builds the resource shared by the tracer and meter providers.
+// WithFromEnv is last so OTEL_* env vars override the defaults.
+func newResource(ctx context.Context, serviceName string) (*resource.Resource, error) {
+	res, err := resource.New(ctx,
+		resource.WithTelemetrySDK(),
+		resource.WithAttributes(
+			semconv.ServiceName(serviceName),
+			semconv.ServiceInstanceID(serviceInstanceID),
+		),
+		resource.WithFromEnv(),
+	)
+	if errors.Is(err, resource.ErrPartialResource) || errors.Is(err, resource.ErrSchemaURLConflict) {
+		slog.WarnContext(ctx, "partial telemetry resource", slog.Any("err", err))
+	} else if err != nil {
+		return nil, err
+	}
+	return res, nil
 }
 
 // TracingOptions configures InitTracing.
@@ -63,9 +87,7 @@ func InitTracing(ctx context.Context, opts TracingOptions) (*sdktrace.TracerProv
 	if opts.ServiceName == "" {
 		return nil, fmt.Errorf("TracingOptions.ServiceName is required")
 	}
-	res, err := resource.New(ctx,
-		resource.WithAttributes(semconv.ServiceName(opts.ServiceName)),
-	)
+	res, err := newResource(ctx, opts.ServiceName)
 	if err != nil {
 		return nil, fmt.Errorf("create tracer resource: %w", err)
 	}
@@ -106,9 +128,7 @@ func InitMetrics(ctx context.Context, serviceName string) (*sdkmetric.MeterProvi
 	if err != nil {
 		return nil, fmt.Errorf("create OTLP metric exporter: %w", err)
 	}
-	res, err := resource.New(ctx,
-		resource.WithAttributes(semconv.ServiceName(serviceName)),
-	)
+	res, err := newResource(ctx, serviceName)
 	if err != nil {
 		return nil, fmt.Errorf("create metric resource: %w", err)
 	}
