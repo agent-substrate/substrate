@@ -60,7 +60,7 @@ func TestSyncer_Lifecycle(t *testing.T) {
 	poolName := "pool1"
 
 	// 1. Verify no workers in Redis initially
-	workers, err := persistence.ListWorkers(context.Background())
+	workers, err := persistence.ListWorkers(context.Background(), store.ListOptions{})
 	if err != nil {
 		t.Fatalf("failed to list workers: %v", err)
 	}

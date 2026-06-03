@@ -37,6 +37,12 @@ var (
 	ErrFailedPrecondition = errors.New("persistence: failed precondition")
 )
 
+// ListOptions holds parameters for filtering List results.
+type ListOptions struct {
+	// FieldSelector filters results by matching specific fields exactly (e.g., "worker_pool=cpu-pool").
+	FieldSelector map[string]string
+}
+
 // Interface defines the contract for the persistence layer storing actor state.
 type Interface interface {
 	// Fetches an actor by id. Returns ErrNotFound if missing.
@@ -51,8 +57,8 @@ type Interface interface {
 	// Removes an actor. Returns ErrNotFound if missing, or ErrFailedPrecondition if not suspended.
 	DeleteActor(ctx context.Context, id string) error
 
-	// Lists all known actors. Returns nil if none found.
-	ListActors(ctx context.Context) ([]*ateapipb.Actor, error)
+	// Lists all known actors matching ListOptions. Returns nil if none found.
+	ListActors(ctx context.Context, opts ListOptions) ([]*ateapipb.Actor, error)
 
 	// Fetches worker state by namespace, pool, and pod name. Returns ErrNotFound if missing.
 	GetWorker(ctx context.Context, namespace, pool, pod string) (*ateapipb.Worker, error)
@@ -66,8 +72,8 @@ type Interface interface {
 	// Removes a worker. Idempotent: does nothing if worker is not found.
 	DeleteWorker(ctx context.Context, namespace, pool, pod string) error
 
-	// Lists all known workers. Returns nil if none found.
-	ListWorkers(ctx context.Context) ([]*ateapipb.Worker, error)
+	// Lists all known workers matching ListOptions. Returns nil if none found.
+	ListWorkers(ctx context.Context, opts ListOptions) ([]*ateapipb.Worker, error)
 
 	// AcquireLock attempts to acquire a distributed lock with a TTL.
 	// Returns true if the lock was successfully acquired.

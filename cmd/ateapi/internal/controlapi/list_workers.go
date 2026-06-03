@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
@@ -25,7 +26,7 @@ func (s *Service) ListWorkers(ctx context.Context, req *ateapipb.ListWorkersRequ
 	if err := validateListWorkersRequest(req); err != nil {
 		return nil, err
 	}
-	workers, err := s.persistence.ListWorkers(ctx)
+	workers, err := s.persistence.ListWorkers(ctx, store.ListOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("while listing workers in db: %w", err)
 	}

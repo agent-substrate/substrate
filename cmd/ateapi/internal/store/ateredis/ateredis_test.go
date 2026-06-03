@@ -373,7 +373,7 @@ func TestListWorkers(t *testing.T) {
 		t.Fatalf("failed to create worker2: %v", err)
 	}
 
-	workers, err := s.ListWorkers(ctx)
+	workers, err := s.ListWorkers(ctx, store.ListOptions{})
 	if err != nil {
 		t.Fatalf("ListWorkers failed: %v", err)
 	}
@@ -424,7 +424,7 @@ func TestListActors(t *testing.T) {
 		t.Fatalf("failed to create actor2: %v", err)
 	}
 
-	actors, err := s.ListActors(ctx)
+	actors, err := s.ListActors(ctx, store.ListOptions{})
 	if err != nil {
 		t.Fatalf("ListActors failed: %v", err)
 	}
@@ -515,7 +515,7 @@ func TestListWorkers_Empty(t *testing.T) {
 	mr, s, ctx := setupTest(t)
 	defer mr.Close()
 
-	workers, err := s.ListWorkers(ctx)
+	workers, err := s.ListWorkers(ctx, store.ListOptions{})
 	if err != nil {
 		t.Fatalf("ListWorkers failed: %v", err)
 	}
@@ -529,7 +529,7 @@ func TestListActors_Empty(t *testing.T) {
 	mr, s, ctx := setupTest(t)
 	defer mr.Close()
 
-	actors, err := s.ListActors(ctx)
+	actors, err := s.ListActors(ctx, store.ListOptions{})
 	if err != nil {
 		t.Fatalf("ListActors failed: %v", err)
 	}
@@ -719,5 +719,146 @@ func TestAcquireLock_NonReentry(t *testing.T) {
 	}
 	if acquired {
 		t.Errorf("expected second lock acquisition to fail (non-reentrant)")
+	}
+}
+
+func TestListWorkers_Filtering(t *testing.T) {
+	mr, s, ctx := setupTest(t)
+	defer mr.Close()
+
+	worker1 := &ateapipb.Worker{
+		WorkerNamespace: "ns1",
+		WorkerPool:      "pool1",
+		WorkerPod:       "pod1",
+		ActorId:         "actor1",
+	}
+	worker2 := &ateapipb.Worker{
+		WorkerNamespace: "ns2",
+		WorkerPool:      "pool2",
+		WorkerPod:       "pod2",
+		ActorId:         "",
+	}
+	if err := s.CreateWorker(ctx, worker1); err != nil {
+		t.Fatalf("failed to create worker1: %v", err)
+	}
+	if err := s.CreateWorker(ctx, worker2); err != nil {
+		t.Fatalf("failed to create worker2: %v", err)
+	}
+
+	tests := []struct {
+		name           string
+		selector       map[string]string
+		expectedPodIDs []string
+	}{
+		{
+			name:           "match pool1",
+			selector:       map[string]string{"worker_pool": "pool1"},
+			expectedPodIDs: []string{"pod1"},
+		},
+		{
+			name:           "match empty actor_id (idle worker)",
+			selector:       map[string]string{"actor_id": ""},
+			expectedPodIDs: []string{"pod2"},
+		},
+		{
+			name:           "match worker namespace and pool",
+			selector:       map[string]string{"worker_namespace": "ns2", "worker_pool": "pool2"},
+			expectedPodIDs: []string{"pod2"},
+		},
+		{
+			name:           "no match",
+			selector:       map[string]string{"worker_pool": "non-existent"},
+			expectedPodIDs: []string{},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			opts := store.ListOptions{FieldSelector: tc.selector}
+			workers, err := s.ListWorkers(ctx, opts)
+			if err != nil {
+				t.Fatalf("ListWorkers failed: %v", err)
+			}
+
+			if len(workers) != len(tc.expectedPodIDs) {
+				t.Fatalf("expected %d workers, got %d", len(tc.expectedPodIDs), len(workers))
+			}
+			for i, w := range workers {
+				if w.GetWorkerPod() != tc.expectedPodIDs[i] {
+					t.Errorf("expected worker %s, got %s", tc.expectedPodIDs[i], w.GetWorkerPod())
+				}
+			}
+		})
+	}
+}
+
+func TestListActors_Filtering(t *testing.T) {
+	mr, s, ctx := setupTest(t)
+	defer mr.Close()
+
+	actor1 := &ateapipb.Actor{
+		ActorId:                "id1",
+		ActorTemplateNamespace: "ns1",
+		ActorTemplateName:      "tmpl1",
+		Status:                 ateapipb.Actor_STATUS_RUNNING,
+	}
+	actor2 := &ateapipb.Actor{
+		ActorId:                "id2",
+		ActorTemplateNamespace: "ns2",
+		ActorTemplateName:      "tmpl2",
+		Status:                 ateapipb.Actor_STATUS_SUSPENDED,
+	}
+
+	if err := s.CreateActor(ctx, actor1); err != nil {
+		t.Fatalf("failed to create actor1: %v", err)
+	}
+	if err := s.CreateActor(ctx, actor2); err != nil {
+		t.Fatalf("failed to create actor2: %v", err)
+	}
+
+	tests := []struct {
+		name             string
+		selector         map[string]string
+		expectedActorIDs []string
+	}{
+		{
+			name:             "match status running",
+			selector:         map[string]string{"status": "STATUS_RUNNING"},
+			expectedActorIDs: []string{"id1"},
+		},
+		{
+			name:             "match status suspended",
+			selector:         map[string]string{"status": "STATUS_SUSPENDED"},
+			expectedActorIDs: []string{"id2"},
+		},
+		{
+			name:             "match template name",
+			selector:         map[string]string{"actor_template_name": "tmpl1"},
+			expectedActorIDs: []string{"id1"},
+		},
+		{
+			name:             "no match",
+			selector:         map[string]string{"status": "STATUS_UNSPECIFIED"},
+			expectedActorIDs: []string{},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			opts := store.ListOptions{FieldSelector: tc.selector}
+			actors, err := s.ListActors(ctx, opts)
+			if err != nil {
+				t.Fatalf("ListActors failed: %v", err)
+			}
+
+			if len(actors) != len(tc.expectedActorIDs) {
+				t.Fatalf("expected %d actors, got %d", len(tc.expectedActorIDs), len(actors))
+			}
+			for i, a := range actors {
+				if a.GetActorId() != tc.expectedActorIDs[i] {
+					t.Errorf("expected actor %s, got %s", tc.expectedActorIDs[i], a.GetActorId())
+				}
+			}
+		})
 	}
 }

@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
@@ -25,7 +26,7 @@ func (s *Service) ListActors(ctx context.Context, req *ateapipb.ListActorsReques
 	if err := validateListActorsRequest(req); err != nil {
 		return nil, err
 	}
-	actors, err := s.persistence.ListActors(ctx)
+	actors, err := s.persistence.ListActors(ctx, store.ListOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("while listing actors in db: %w", err)
 	}

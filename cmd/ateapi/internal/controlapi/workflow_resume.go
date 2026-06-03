@@ -85,7 +85,7 @@ func (s *AssignWorkerStep) IsComplete(ctx context.Context, input *ResumeInput, s
 	return state.Actor.GetStatus() == ateapipb.Actor_STATUS_RUNNING, nil
 }
 func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, state *ResumeState) error {
-	workers, err := s.store.ListWorkers(ctx)
+	workers, err := s.store.ListWorkers(ctx, store.ListOptions{})
 	if err != nil {
 		return fmt.Errorf("while listing workers: %w", err)
 	}

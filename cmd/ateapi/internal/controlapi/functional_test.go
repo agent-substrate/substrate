@@ -26,6 +26,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/ateredis"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
@@ -1203,7 +1204,7 @@ func TestSuspendActor_DanglingWorker(t *testing.T) {
 	deleteWorkerPod(t, tc, ns, "worker-1")
 
 	// 3. Call SuspendActor -> Should succeed (our fix skips missing pod execution)
-	actors, _ := tc.persistence.ListActors(context.Background())
+	actors, _ := tc.persistence.ListActors(context.Background(), store.ListOptions{})
 	t.Logf("Actors in Redis before Suspend: %d", len(actors))
 	for _, a := range actors {
 		t.Logf("  Actor: %s/%s/%s", a.GetActorTemplateNamespace(), a.GetActorTemplateName(), a.GetActorId())
