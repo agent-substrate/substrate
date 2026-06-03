@@ -1259,7 +1259,7 @@ func TestSuspendActor_DanglingWorker(t *testing.T) {
 	deleteWorkerPod(t, tc, ns, "worker-1")
 
 	// 3. Call SuspendActor -> Should succeed (our fix skips missing pod execution)
-	actors, _, _ := tc.persistence.ListActors(context.Background(), 1000, "")
+	actors, _, _ := tc.persistence.ListActors(context.Background(), maxPageSize, "")
 	t.Logf("Actors in Redis before Suspend: %d", len(actors))
 	for _, a := range actors {
 		t.Logf("  Actor: %s/%s/%s", a.GetActorTemplateNamespace(), a.GetActorTemplateName(), a.GetActorId())

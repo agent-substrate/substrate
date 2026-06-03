@@ -21,13 +21,15 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
+const maxPageSize = 1000
+
 func (s *Service) ListActors(ctx context.Context, req *ateapipb.ListActorsRequest) (*ateapipb.ListActorsResponse, error) {
 	if err := validateListActorsRequest(req); err != nil {
 		return nil, err
 	}
 	pageSize := req.GetPageSize()
-	if pageSize <= 0 || pageSize > 1000 {
-		pageSize = 1000
+	if pageSize <= 0 || pageSize > maxPageSize {
+		pageSize = maxPageSize
 	}
 
 	actors, nextToken, err := s.persistence.ListActors(ctx, pageSize, req.GetPageToken())
