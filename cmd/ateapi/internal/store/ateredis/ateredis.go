@@ -425,32 +425,14 @@ func (s *Persistence) ListActors(ctx context.Context, pageSize int32, pageTokenS
 		return nil, "", fmt.Errorf("invalid page token: %w", err)
 	}
 
-	var masters []*redis.Client
-	err = s.rdb.ForEachMaster(ctx, func(ctx context.Context, master *redis.Client) error {
-		masters = append(masters, master)
-		return nil
-	})
+	masters, err := s.getSortedMasters(ctx)
 	if err != nil {
-		return nil, "", fmt.Errorf("while listing redis masters: %w", err)
+		return nil, "", err
 	}
 
-	sort.Slice(masters, func(i, j int) bool {
-		return masters[i].Options().Addr < masters[j].Options().Addr
-	})
-
-	startIndex := 0
-	if token.ShardAddr != "" {
-		found := false
-		for i, m := range masters {
-			if m.Options().Addr == token.ShardAddr {
-				startIndex = i
-				found = true
-				break
-			}
-		}
-		if !found {
-			return nil, "", fmt.Errorf("topology changed: shard %s not found (aborted)", token.ShardAddr)
-		}
+	startIndex, err := findStartingShard(masters, token.ShardAddr)
+	if err != nil {
+		return nil, "", err
 	}
 
 	var result []*ateapipb.Actor
@@ -492,34 +474,11 @@ func (s *Persistence) ListActors(ctx context.Context, pageSize int32, pageTokenS
 			}
 
 			if len(keys) > 0 {
-				cmds, err := master.Pipelined(ctx, func(pipe redis.Pipeliner) error {
-					for _, key := range keys {
-						pipe.Get(ctx, key)
-					}
-					return nil
-				})
-				if err != nil && !errors.Is(err, redis.Nil) {
-					return nil, "", fmt.Errorf("while fetching keys in shard %s: %w", shardAddr, err)
+				actors, err := s.fetchActors(ctx, master, keys)
+				if err != nil {
+					return nil, "", err
 				}
-
-				for _, cmd := range cmds {
-					getCmd, ok := cmd.(*redis.StringCmd)
-					if !ok {
-						continue
-					}
-					if getCmd.Err() != nil {
-						if errors.Is(getCmd.Err(), redis.Nil) {
-							continue
-						}
-						return nil, "", fmt.Errorf("while getting actor: %w", getCmd.Err())
-					}
-
-					actor := &ateapipb.Actor{}
-					if err := protojson.Unmarshal([]byte(getCmd.Val()), actor); err != nil {
-						return nil, "", fmt.Errorf("in protojson.Unmarshal: %w", err)
-					}
-					result = append(result, actor)
-				}
+				result = append(result, actors...)
 			}
 
 			if cursor == 0 {
@@ -537,6 +496,67 @@ func (s *Persistence) ListActors(ctx context.Context, pageSize int32, pageTokenS
 	}
 
 	return result, nextToken, nil
+}
+
+func (s *Persistence) getSortedMasters(ctx context.Context) ([]*redis.Client, error) {
+	var masters []*redis.Client
+	err := s.rdb.ForEachMaster(ctx, func(ctx context.Context, master *redis.Client) error {
+		masters = append(masters, master)
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("while listing redis masters: %w", err)
+	}
+
+	sort.Slice(masters, func(i, j int) bool {
+		return masters[i].Options().Addr < masters[j].Options().Addr
+	})
+	return masters, nil
+}
+
+func findStartingShard(masters []*redis.Client, shardAddr string) (int, error) {
+	if shardAddr == "" {
+		return 0, nil
+	}
+	for i, m := range masters {
+		if m.Options().Addr == shardAddr {
+			return i, nil
+		}
+	}
+	return 0, fmt.Errorf("topology changed: shard %s not found (aborted)", shardAddr)
+}
+
+func (s *Persistence) fetchActors(ctx context.Context, master *redis.Client, keys []string) ([]*ateapipb.Actor, error) {
+	cmds, err := master.Pipelined(ctx, func(pipe redis.Pipeliner) error {
+		for _, key := range keys {
+			pipe.Get(ctx, key)
+		}
+		return nil
+	})
+	if err != nil && !errors.Is(err, redis.Nil) {
+		return nil, fmt.Errorf("while fetching keys in shard %s: %w", master.Options().Addr, err)
+	}
+
+	var actors []*ateapipb.Actor
+	for _, cmd := range cmds {
+		getCmd, ok := cmd.(*redis.StringCmd)
+		if !ok {
+			continue
+		}
+		if getCmd.Err() != nil {
+			if errors.Is(getCmd.Err(), redis.Nil) {
+				continue
+			}
+			return nil, fmt.Errorf("while getting actor: %w", getCmd.Err())
+		}
+
+		actor := &ateapipb.Actor{}
+		if err := protojson.Unmarshal([]byte(getCmd.Val()), actor); err != nil {
+			return nil, fmt.Errorf("in protojson.Unmarshal: %w", err)
+		}
+		actors = append(actors, actor)
+	}
+	return actors, nil
 }
 
 func (s *Persistence) AcquireLock(ctx context.Context, key string, value string, ttl time.Duration) (bool, error) {
