@@ -92,7 +92,15 @@ resource.labels.pod_name="counter-deployment-c995fdf4c-m7d96"
 
 ## 2. Metrics
 
-Agent Substrate currently emits foundational OpenTelemetry system and server metrics (such as `rpc.server.call.duration` and `http.server.request.duration`) to monitor the overall health and performance of the `ateapi` and `atelet` control plane services.
+Agent Substrate emits foundational OpenTelemetry system and server metrics to monitor the overall health and performance of the control plane services. Every metric below is emitted by a service binary over OTLP and is **independent of the deployment** — a Kind dev cluster gets the same instruments as production; only the backend differs (see [Where Telemetry Goes](#4-where-telemetry-goes)).
+
+| Metric | Emitted by | Type | Measures |
+|--------|------------|------|----------|
+| `rpc.server.call.duration` | ateapi & atelet (gRPC servers, via `otelgrpc`) | histogram | per-method gRPC latency, request rate, and errors (labels `rpc.method`, `rpc.response.status_code`) |
+| `atenet.router.route.duration` | atenet-router | histogram | Substrate E2E — Envoy receiving a request to Envoy forwarding it to the resolved worker, excluding actor compute and the response |
+| `atelet.snapshot.size` | atelet | histogram | uncompressed size in bytes of each gVisor snapshot image written during checkpoint (labels `kind`, `actor_template_name`) |
+
+The table lists the OpenTelemetry instrument names. How a name appears in a query depends on the backend (Cloud Monitoring (GMP) / Kind collector).
 
 ### Local Metrics with Prometheus (Kind Cluster)
 
@@ -146,3 +154,30 @@ To visualize traces locally:
 4. **Search and Inspect**: Copy the printed Trace ID from the CLI output and paste it into the Jaeger search box (top right), or select `ateapi` or `atelet` under the **Service** dropdown and click **Find Traces** to inspect detailed call stacks, DB transactions, state updates, and worker pod handoffs.
 
 > **Developer Guide:** For detailed instructions on configuring OpenTelemetry tracer providers, middleware, and exporters in your servers or clients, please refer to the [Tracing Best Practices](dev/best-practices/tracing.md) guide.
+
+---
+
+## 4. Where Telemetry Goes
+
+Telemetry is emitted the same way everywhere; only the backend differs between a local Kind cluster and a Google Cloud (GKE) deployment. The cloud-side backends below are all **GCP services**.
+
+| | Kind | GKE (Google Cloud) |
+|---|---|---|
+| Path | service → in-cluster `opentelemetry-collector` | service → Google Managed Prometheus (GMP) |
+| Metrics | collector Prometheus exporter on `:8889` | Google Cloud Monitoring |
+| Traces | Jaeger UI | Google Cloud Trace |
+| Dashboards | Not supported | Google Cloud Monitoring (see [Dashboards](#5-dashboards)) |
+
+> In Kind only `ateapi` and `atelet` are pointed at the in-cluster collector; `atenet-router` still targets the GKE collector endpoint, so `atenet.router.route.duration` is emitted but not collected locally.
+
+---
+
+## 5. Dashboards
+
+> **GCP-specific.** These are **Google Cloud Monitoring** dashboards; they apply only to a GKE / Google Cloud deployment. There is no dashboard support on Kind — use the Prometheus UI in [Metrics](#2-metrics) for local development.
+
+Dashboard definitions live in [`monitoring/dashboards/`](../monitoring/dashboards/) (see its README for the per-dashboard breakdown). They are created and updated **as part of GCP setup**: `tools/setup-gcp` applies each dashboard idempotently (matched and updated by display name), so re-running is safe.
+
+```sh
+go run ./tools/setup-gcp --create-monitoring-dashboards   # also part of: --all
+```
