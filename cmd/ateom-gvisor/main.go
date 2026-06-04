@@ -260,28 +260,16 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 		return nil, fmt.Errorf("while checkpointing pause: %w", err)
 	}
 
-	// Check state of all containers to mimic containerd.
-	//
-	// Without this, `runsc delete` occasionally throws an error.
-	if err := rcmd.cmdState(ctx, "pause"); err != nil {
-		return nil, fmt.Errorf("while checking state of pause container: %w", err)
-	}
-	for _, ctr := range req.GetSpec().GetContainers() {
-		if err := rcmd.cmdState(ctx, ctr.GetName()); err != nil {
-			return nil, fmt.Errorf("while deleting %q application container: %w", ctr.GetName(), err)
-		}
-	}
-
-	// Delete all application containers
-	for _, ctr := range req.GetSpec().GetContainers() {
-		if err := rcmd.cmdDelete(ctx, ctr.GetName()); err != nil {
-			return nil, fmt.Errorf("while deleting %q application container: %w", ctr.GetName(), err)
-		}
-	}
-
-	// Delete pause container
-	if err := rcmd.cmdDelete(ctx, "pause"); err != nil {
-		return nil, fmt.Errorf("while deleting pause container: %w", err)
+	// After checkpointing the sandbox root, runsc may no longer have a usable
+	// control server for state/delete calls. Keep this as best-effort cleanup:
+	// atelet resets the actor runsc, bundle, pidfile, and checkpoint
+	// directories after uploading the snapshot.
+	if err := rcmd.cleanupContainersAfterCheckpoint(ctx, req.GetSpec().GetContainers()); err != nil {
+		slog.WarnContext(ctx, "Failed to clean up runsc containers after checkpoint",
+			"actorID", req.GetActorId(),
+			"actorTemplateName", req.GetActorTemplateName(),
+			"actorTemplateNamespace", req.GetActorTemplateNamespace(),
+			"err", err)
 	}
 
 	if err := s.cleanupActorNetwork(ctx); err != nil {
@@ -291,6 +279,32 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	s.actorLogger.EmitLifecycleLog("Actor checkpointed", req.GetActorId(), req.GetActorTemplateName(), req.GetActorTemplateNamespace())
 
 	return nil, nil
+}
+
+func (r *runsc) cleanupContainersAfterCheckpoint(ctx context.Context, containers []*ateompb.Container) error {
+	// Check state of all containers to mimic containerd.
+	//
+	// Without this, `runsc delete` occasionally throws an error.
+	if err := r.cmdState(ctx, "pause"); err != nil {
+		return fmt.Errorf("while checking state of pause container: %w", err)
+	}
+	for _, ctr := range containers {
+		if err := r.cmdState(ctx, ctr.GetName()); err != nil {
+			return fmt.Errorf("while checking state of %q application container: %w", ctr.GetName(), err)
+		}
+	}
+
+	for _, ctr := range containers {
+		if err := r.cmdDelete(ctx, ctr.GetName()); err != nil {
+			return fmt.Errorf("while deleting %q application container: %w", ctr.GetName(), err)
+		}
+	}
+
+	if err := r.cmdDelete(ctx, "pause"); err != nil {
+		return fmt.Errorf("while deleting pause container: %w", err)
+	}
+
+	return nil
 }
 
 func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.RestoreWorkloadRequest) (resp *ateompb.RestoreWorkloadResponse, retErr error) {
