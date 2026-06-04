@@ -90,9 +90,9 @@ spec:
           protocol: TCP
         volumeMounts:
         - name: run-ateom
-          mountPath: /run/ateom-gvisor
+          mountPath: /var/lib/ateom-gvisor
       volumes:
       - name: run-ateom
         hostPath:
-          path: /run/ateom-gvisor
+          path: /var/lib/ateom-gvisor
           type: DirectoryOrCreate

@@ -22,7 +22,7 @@ import (
 const (
 	// The base path.  This is both the path of the root shared folder on the
 	// host filesystem, and when it is mounted into ateom and atelet containers.
-	BasePath = "/run/ateom-gvisor"
+	BasePath = "/var/lib/ateom-gvisor"
 )
 
 var (

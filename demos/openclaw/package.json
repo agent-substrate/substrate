@@ -1,0 +1,20 @@
+{
+  "name": "openclaw-substrate-poc",
+  "version": "1.0.0",
+  "description": "Google Claw on Agent Substrate PoC",
+  "private": true,
+  "scripts": {
+    "build": "esbuild src/agent.ts --bundle --platform=node --target=node22 --outfile=dist/agent.js --external:node:* && esbuild src/demo-ui.ts --bundle --platform=node --target=node22 --outfile=dist/demo-ui.js --external:node:*",
+    "start:ui": "node dist/demo-ui.js",
+    "start:agent": "node dist/agent.js"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.11.1",
+    "hono": "^4.4.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "esbuild": "^0.21.5",
+    "typescript": "^5.5.2"
+  }
+}

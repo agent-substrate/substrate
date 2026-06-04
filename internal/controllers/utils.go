@@ -71,7 +71,7 @@ func createActorDeploymentSpec(name string, replicas int32, wpName string, ateom
 						VolumeMounts: []corev1.VolumeMount{
 							{
 								Name:      "run-ateom",
-								MountPath: "/run/ateom-gvisor",
+								MountPath: "/var/lib/ateom-gvisor",
 							},
 						},
 					},
@@ -85,7 +85,7 @@ func createActorDeploymentSpec(name string, replicas int32, wpName string, ateom
 						Name: "run-ateom",
 						VolumeSource: corev1.VolumeSource{
 							HostPath: &corev1.HostPathVolumeSource{
-								Path: "/run/ateom-gvisor",
+								Path: "/var/lib/ateom-gvisor",
 								Type: ptr.To(corev1.HostPathDirectoryOrCreate),
 							},
 						},

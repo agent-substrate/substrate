@@ -42,7 +42,7 @@ This demo highlights the core developer experience and "Agentic Infrastructure" 
 2.  **State Persistence:** Persistent working memory (volatile RAM) and filesystem state preserved perfectly across hibernation cycles via full-state snapshots.
 3.  **Agent Swarm Multiplexing:** Demonstrates 30x+ oversubscription by "juggling" a large registry of stateful actors onto a small pool of shared physical pods.
 
-To reproduce this demo in your own cluster, please refer to the detailed walkthroughs in the **[Counter Demo](demos/counter/README.md)** and **[Secret Agent Demo](demos/agent-secret/README.md)**.
+To reproduce this demo in your own cluster, please refer to the detailed walkthroughs in the **[Counter Demo](demos/counter/README.md)** and **[Secret Agent Demo](demos/agent-secret/README.md)**, and **[OpenClaw Multiplexing](demos/openclaw/README.md)**.
 
 For more videos and walkthroughs, visit our YouTube channel: **[agent-substrate](https://www.youtube.com/channel/UCN9PPqlTtVxlcpbQ-NWpfZQ)**.
 
@@ -53,6 +53,7 @@ Agent Substrate is designed to be **framework and agent harness agnostic**. Beca
 *   **Agent Development Kit (ADK):** Native support for ADK-compatible session identity and persistent working memory.
 *   **LangChain:** Ideal execution environment for long-running, stateful LangChain agents and sandboxed tool-calling.
 *   **Claude Code & CodeX:** Support for high-density, stateful coding environments that preserve terminal and filesystem state across sessions.
+*   **OpenClaw (Google Claw):** Optimized for multiplexing stateful TypeScript agents with persistent in-memory reasoning and conversation history.
 *   **Model Context Protocol (MCP):** Deploy secure, sandboxed MCP servers as Substrate Actors to provide durable tools for any LLM.
 
 ## Ecosystem & Examples
@@ -188,6 +189,7 @@ We provide several sample applications demonstrating Agent Substrate's capabilit
 2. **[Sandbox Demo (Antigravity)](demos/sandbox/README.md)**: A secure, sandboxed execution environment (running Alpine Linux) that allows arbitrary shell execution while preserving filesystem state across sessions.
 3. **[Claude Code Multiplex](demos/claude-code-multiplex/README.md)**: Demonstrates oversubscribing physical hardware by multiplexing multiple Claude Code agents onto a limited pool of workers.
 4. **[Secret Agent](demos/agent-secret/README.md)**: Highlights Substrate's "Zero-Idle" self-suspension and re-animation of volatile process memory.
+5. **[OpenClaw Multiplexing](demos/openclaw/README.md)**: Showcases 1.5x hardware oversubscription using Google Claw agents, demonstrating stateful rehydration and rapid agent rotation across physical pods.
 
 ### Documentation & Guides
 * [API Configuration Guide](docs/api-guide.md): Detailed reference for configuring WorkerPools, ActorTemplates, Secrets, and Volumes.
