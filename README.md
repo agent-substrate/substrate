@@ -75,6 +75,11 @@ Currently we aim to support the [latest stable release](https://kubernetes.io/re
 For announcements, technical discussions, and community support, please join
 the **[ate-dev](https://groups.google.com/g/ate-dev)** Google Group.
 
+We host a weekly community meeting every Thursday from 10:00am - 11:00am PST.
+- Video call link: https://meet.google.com/uhq-cxvn-dhy
+- Or dial: (US) +1 253-289-6971 PIN: 787 664 574 59#
+- More phone numbers: https://tel.meet/uhq-cxvn-dhy?pin=9044088223662
+
 We also have channels in the CNCF slack; [request an invite here](https://slack.cncf.io/)
 if you don't have access.
 
