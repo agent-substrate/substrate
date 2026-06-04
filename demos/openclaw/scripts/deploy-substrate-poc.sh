@@ -149,8 +149,8 @@ cd "${OPENCLAW_REPO}"
 echo "🐳 Building OpenClaw Actor Image..."
 # Ensure the Substrate CLI is in the build context
 if [ -d "substrate" ]; then
-  cp "${SUBSTRATE_REPO}/bin/kubectl-ate" substrate/kubectl-ate
-  $DOCKER build -t "${IMAGE_TAG}" -f substrate/Dockerfile substrate/
+  cp "${SUBSTRATE_REPO}/bin/kubectl-ate" demos/openclaw/kubectl-ate
+  $DOCKER build -t "${IMAGE_TAG}" -f demos/openclaw/Dockerfile demos/openclaw/
 else
   cp "${SUBSTRATE_REPO}/bin/kubectl-ate" ./kubectl-ate
   $DOCKER build -t "${IMAGE_TAG}" -f Dockerfile .
@@ -161,8 +161,8 @@ $DOCKER push "${IMAGE_TAG}"
 # 9. Deploy OpenClaw Actor Template
 echo "🎭 Deploying OpenClaw ActorTemplate..."
 export KUBECONFIG="${HOME}/.kube/config"
-if [ -d "substrate/manifests" ]; then
-  "${SUBSTRATE_REPO}/bin/kubectl-ate" apply -f substrate/manifests/actor-template.yaml
+if [ -d "demos/openclaw/manifests" ]; then
+  "${SUBSTRATE_REPO}/bin/kubectl-ate" apply -f demos/openclaw/manifests/actor-template.yaml
 else
   "${SUBSTRATE_REPO}/bin/kubectl-ate" apply -f manifests/actor-template.yaml
 fi
@@ -172,8 +172,8 @@ echo "You can now create actors using:"
 echo "  ${SUBSTRATE_REPO}/bin/kubectl-ate create actor my-agent --template openclaw/openclaw-agent"
 echo ""
 echo "To run the density test:"
-if [ -f "substrate/scripts/substrate-density-test.ts" ]; then
-  echo "  ACTOR_COUNT=100 pnpm tsgo substrate/scripts/substrate-density-test.ts"
+if [ -f "demos/openclaw/scripts/substrate-density-test.ts" ]; then
+  echo "  ACTOR_COUNT=100 pnpm tsgo demos/openclaw/scripts/substrate-density-test.ts"
 else
   echo "  ACTOR_COUNT=100 pnpm tsgo scripts/substrate-density-test.ts"
 fi

@@ -15,7 +15,7 @@ spec:
   containers:
   - name: agent
     image: gcr.io/<YOUR_GCP_PROJECT_ID>/substrate-actor:latest
-    command: ["/usr/bin/tini", "--", "/usr/local/bin/node", "/app/dist/actor-wrapper.js"]
+    command: ["/usr/bin/tini", "--", "/usr/local/bin/node", "/app/dist/agent.js"]
 
     ports:
     - containerPort: 8080

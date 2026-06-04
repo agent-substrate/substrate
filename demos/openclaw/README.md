@@ -2,7 +2,7 @@
 
 A high-density demonstration of three stateful **OpenClaw** agents (`Claw-Luna`, `Claw-Mars`, `Claw-Nova`) sharing two physical **Agent Substrate** worker pods. This PoC showcases **Liquid Hardware**: Substrate automatically suspends idle agents and rehydrates them on-demand, allowing a cluster to host significantly more logical agents than physical compute slots.
 
-**Live Demo URL:** [http://<YOUR_DASHBOARD_IP>](http://<YOUR_DASHBOARD_IP>) (Internal/GCP)
+**Live Demo URL:** [http://136.119.224.22](http://136.119.224.22) (Internal/GCP)
 
 > [!NOTE]
 > This demo intentionally provisions **two pods for three agents** to force hardware contention. Substrate manages the state teleportation (checkpointing to GCS), ensuring that process memory (task counters) survives migration between physical pods.
@@ -29,20 +29,20 @@ This guide is intended for engineers exploring Agent Substrate for hosting large
 
 - **Agent Substrate Cluster**: A Kubernetes cluster with Substrate installed.
 - **Docker**: For building and pushing the unified actor/UI image.
-- **GCS Bucket**: Configured for Substrate state snapshots (e.g., `gs://<YOUR_GCS_BUCKET_NAME>/`).
+- **GCS Bucket**: Configured for Substrate state snapshots (e.g., `gs://snapshot-substrate-gke-ai-eco-dev/`).
 - **kubectl & kubectl-ate**: The Substrate CLI tool for managing logical actors.
 
 ## Components
 
 | Path | Purpose |
 |---|---|
-| `substrate/src/actor-wrapper.ts` | The workload: A Hono server with persistent memory state. |
+| `substrate/src/agent.ts` | The workload: A Hono server with persistent memory state. |
 | `substrate/src/demo-ui.ts` | The dashboard: A Node.js backend providing live logs, task queueing, and visual tracking. |
 | `substrate/manifests/worker-pool.yaml` | The physical pool configuration (2 replicas). |
 | `substrate/manifests/actor-template.yaml` | The logical identity definition (snapshots, container spec). |
 | `substrate/manifests/valkey-init.yaml` | Utility Job for re-initializing the Valkey metadata store. |
 | `substrate/Dockerfile` | Unified OCI image containing both the actor workload and the dashboard UI. |
-| `substrate/demo/OpenClaw/DEMO_SCRIPT.md` | The narrative script for the demonstration recording. |
+| `substrate/DEMO_SCRIPT.md` | The narrative script for the demonstration recording. |
 
 ## How to Run
 
@@ -84,7 +84,7 @@ npm install openai
 ```
 
 ### 2. Update the Actor Logic
-Modify `substrate/src/actor-wrapper.ts` to initialize the client and maintain a local chat history:
+Modify `substrate/src/agent.ts` to initialize the client and maintain a local chat history:
 ```typescript
 import OpenAI from "openai";
 
@@ -152,3 +152,62 @@ substrate/
 ├── tsconfig.json       # Independent TypeScript configuration
 └── README.md           # Integrated documentation & System Info
 ```
+## The Claw Agent Pattern
+
+The core of this demo is the `ClawAgent` class found in `workload/agent.ts`. This class demonstrates the "stateful actor" pattern:
+
+1.  **Native State**: The agent logic and state (like `taskCounter`) live in standard TypeScript variables.
+2.  **Infrastructure Rehydration**: Substrate transparently snapshots the entire process memory to GCS. When an agent is resumed on a different physical pod, this memory is rehydrated exactly as it was.
+3.  **No External DB Required**: Reasoning history, LLM context, and local state survive without the need for an external database or state-management code.
+
+## Code Navigation
+
+The OpenClaw demo is organized into specialized subdirectories to separate the agent logic from the demonstration infrastructure:
+
+- **`workload/`**: Contains the core agent logic.
+  - `agent.ts`: The stateful Node.js (Hono) server that runs inside the logical actors. This is where you implement reasoning logic and in-memory state management.
+- **`ui/`**: Contains the demonstration dashboard.
+  - `demo-ui.ts`: The backend logic for the real-time dashboard, including the "Proactive Preemption" scheduler and state synchronization.
+- **`manifests/`**: Kubernetes and Agent Substrate resource definitions.
+  - `actor-template.yaml`: Defines the logical agent identity, including container images and state storage locations.
+  - `worker-pool.yaml`: Configures the physical compute pool (Pods) that host the actors.
+- **`scripts/`**: Automation for deployment and testing.
+  - `deploy-substrate-poc.sh`: A unified script for provisioning the environment.
+
+## Setup & Reproduction Guide
+
+To reproduce this demo in your own cluster, follow these steps:
+
+### 1. Build the Unified Image
+The Dockerfile is self-contained and builds both the actor workload and the dashboard UI.
+\`\`\`bash
+cd demos/openclaw
+docker build -t <YOUR_IMAGE_TAG> .
+docker push <YOUR_IMAGE_TAG>
+\`\`\`
+
+### 2. Configure Manifests
+Update the image field in \`manifests/actor-template.yaml\` and \`manifests/demo-ui.yaml\` to point to your built image. Also, ensure the \`location\` field in \`actor-template.yaml\` points to a valid GCS/S3 bucket for state storage.
+
+### 3. Deploy the Environment
+\`\`\`bash
+# 1. Provision the worker pool (2 pods)
+kubectl apply -f manifests/worker-pool.yaml
+
+# 2. Define the agent template
+kubectl-ate apply -f manifests/actor-template.yaml
+
+# 3. Create 3 logical agents
+kubectl-ate create actor agent-luna --template openclaw/openclaw-agent
+kubectl-ate create actor agent-mars --template openclaw/openclaw-agent
+kubectl-ate create actor agent-nova --template openclaw/openclaw-agent
+
+# 4. Launch the dashboard
+kubectl apply -f manifests/demo-ui.yaml
+\`\`\`
+
+### 4. Verify Multiplexing
+- Access the dashboard via the LoadBalancer IP.
+- Click **Pulse (10 Tasks)**.
+- Observe the **Worker Pods** section; you will see 3 agents rotating through 2 available slots.
+- Check the **Live Logs**; logs from different Agent IDs will appear in the same pod log stream, proving stateful rehydration.

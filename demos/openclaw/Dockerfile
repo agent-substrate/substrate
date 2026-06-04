@@ -21,11 +21,11 @@ RUN npm install
 COPY src/ ./src/
 
 # Build zero-dependency bundles
-RUN ./node_modules/.bin/esbuild src/actor-wrapper.ts \
+RUN ./node_modules/.bin/esbuild src/agent.ts \
     --bundle \
     --platform=node \
     --target=node22 \
-    --outfile=dist/actor-wrapper.js \
+    --outfile=dist/agent.js \
     --external:node:*
 
 RUN ./node_modules/.bin/esbuild src/demo-ui.ts \
@@ -65,9 +65,9 @@ RUN if [ -f "./kubectl-ate" ]; then \
 
 # Create a /pause hook for Substrate rehydration
 RUN echo '#!/bin/sh' > /pause && \
-    echo 'echo "[pause] Starting Google Claw actor wrapper..."' >> /pause && \
-    echo 'exec /usr/bin/tini -- /usr/local/bin/node /app/dist/actor-wrapper.js' >> /pause && \
+    echo 'echo "[pause] Starting Google Claw agent..."' >> /pause && \
+    echo 'exec /usr/bin/tini -- /usr/local/bin/node /app/dist/agent.js' >> /pause && \
     chmod +x /pause
 
 # Default entrypoint (can be overridden by deployment to run demo-ui)
-ENTRYPOINT ["/usr/bin/tini", "--", "node", "dist/actor-wrapper.js"]
+ENTRYPOINT ["/usr/bin/tini", "--", "node", "dist/agent.js"]

@@ -7,8 +7,8 @@ const env = {
 
 export default defineConfig({
   entry: {
-    "substrate/actor-wrapper": "substrate/src/actor-wrapper.ts",
-    "substrate/demo-ui": "substrate/src/demo-ui.ts",
+    "substrate/actor-wrapper": "substrate/workload/actor-wrapper.ts",
+    "substrate/demo-ui": "substrate/ui/demo-ui.ts",
   },
   env,
   fixedExtension: false,

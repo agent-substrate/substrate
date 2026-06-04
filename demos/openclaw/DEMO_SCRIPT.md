@@ -35,7 +35,7 @@ This document provides a structured narrative for recording the OpenClaw-on-Subs
 *   **Visual Cue**: Point out the **`SUSPENDING` (Orange)** and **`RESUMING` (Yellow)** badges flashing as the rotation happens.
 
 ## **Phase 4: Latency & Cost Efficiency**
-*   **Action**: Scroll to the **Latency Efficiency** and **Approximate Cost** cards.
+*   **Action**: Scroll to the **Approximate Cost** card.
 *   **Narrative**:
     > "This fluidity is made possible by our snapshot performance. We're currently seeing a **1.2-second suspend latency**. While resume is currently 5 seconds from a cold GCS fetch, moving this to a local SSD cache would bring us to sub-second rehydration.
     > 
