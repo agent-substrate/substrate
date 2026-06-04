@@ -31,6 +31,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
+	"github.com/agent-substrate/substrate/internal/ateompath"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 )
 
@@ -155,14 +156,14 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool) *appsv1ac.Deployment
 						).
 						WithVolumeMounts(corev1ac.VolumeMount().
 							WithName("run-ateom").
-							WithMountPath("/run/ateom-gvisor"))).
+							WithMountPath(ateompath.BasePath))).
 					WithSecurityContext(corev1ac.PodSecurityContext().
 						WithRunAsUser(0).
 						WithRunAsGroup(0)).
 					WithVolumes(corev1ac.Volume().
 						WithName("run-ateom").
 						WithHostPath(corev1ac.HostPathVolumeSource().
-							WithPath("/run/ateom-gvisor").
+							WithPath(ateompath.BasePath).
 							WithType(corev1.HostPathDirectoryOrCreate))))))
 }
 
