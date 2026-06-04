@@ -1,0 +1,9 @@
+apiVersion: ate.dev/v1alpha1
+kind: WorkerPool
+metadata:
+  name: agent-pool
+  namespace: openclaw
+spec:
+  replicas: 2
+  ateomImage: gcr.io/<YOUR_GCP_PROJECT_ID>/ate-images/ateom-gvisor-715889664656de67e44382a8d6ab981d@sha256:a877e335fdb6e5576714ab53ad6bf88ee676dfe642516c07673a3d9df56053b3
+
