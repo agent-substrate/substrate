@@ -25,6 +25,7 @@ resources:
   - ../pod-certificate-controller.yaml
   - rustfs.yaml
   - ./otel-collector.yaml
+  - ./prometheus.yaml
 
 patches:
   - patch: |-

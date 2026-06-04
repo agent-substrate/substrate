@@ -94,6 +94,24 @@ resource.labels.pod_name="counter-deployment-c995fdf4c-m7d96"
 
 Agent Substrate currently emits foundational OpenTelemetry system and server metrics (such as `rpc.server.call.duration` and `http.server.request.duration`) to monitor the overall health and performance of the `ateapi` and `atelet` control plane services.
 
+### Local Metrics with Prometheus (Kind Cluster)
+
+For local development inside a `kind` cluster, Agent Substrate automatically provisions a Prometheus server in the `otel-system` namespace.
+
+To explore metrics locally:
+
+1. **Expose the Prometheus UI** via port forwarding:
+   ```bash
+   kubectl port-forward -n otel-system svc/prometheus 9090:9090
+   ```
+
+2. **Open the Prometheus UI** in your web browser:
+   [http://localhost:9090](http://localhost:9090)
+
+3. **Query metrics**: Run `up` to confirm each component is scraped (one series per target, value `1`), then explore the `rpc_*` series via the expression browser's autocomplete. **Status > Targets** lists the discovered pods.
+
+> **Note:** Storage is ephemeral (`emptyDir`), so metrics are lost when the Prometheus pod restarts.
+
 > **Roadmap Note (Actor-Level Metrics):** A comprehensive metrics roadmap is under active development to support both system operators and workload analysis. Planned OpenTelemetry instrumentation focuses on control plane latency, state snapshot performance, fleet utilization density, and enriching metrics with standardized actor labels for seamless aggregation across pod transitions.
 
 ---
