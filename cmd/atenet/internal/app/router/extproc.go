@@ -39,12 +39,12 @@ type ExtProcServer struct {
 	resumer   *ActorResumer
 }
 
-func NewExtProcServer(port int, apiClient ateapipb.ControlClient) *ExtProcServer {
+func NewExtProcServer(port int, apiClient ateapipb.ControlClient, actorResumeTimeout time.Duration) *ExtProcServer {
 	return &ExtProcServer{
 		port:      port,
 		apiClient: apiClient,
 		recorder:  NewQueryRecorder(100),
-		resumer:   NewActorResumer(apiClient),
+		resumer:   NewActorResumer(apiClient, actorResumeTimeout),
 	}
 }
 

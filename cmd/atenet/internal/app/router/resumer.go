@@ -27,13 +27,15 @@ import (
 
 // ActorResumer coordinates safe, deduplicated resumption of actors.
 type ActorResumer struct {
-	apiClient ateapipb.ControlClient
-	flight    singleflight.Group
+	apiClient     ateapipb.ControlClient
+	resumeTimeout time.Duration
+	flight        singleflight.Group
 }
 
-func NewActorResumer(apiClient ateapipb.ControlClient) *ActorResumer {
+func NewActorResumer(apiClient ateapipb.ControlClient, resumeTimeout time.Duration) *ActorResumer {
 	return &ActorResumer{
-		apiClient: apiClient,
+		apiClient:     apiClient,
+		resumeTimeout: resumeTimeout,
 	}
 }
 
@@ -41,10 +43,10 @@ func NewActorResumer(apiClient ateapipb.ControlClient) *ActorResumer {
 // requests within the process and retries when needed.
 func (r *ActorResumer) ResumeActor(ctx context.Context, actorID string) (*ateapipb.Actor, error) {
 	ch := r.flight.DoChan(actorID, func() (interface{}, error) {
-		// We detach the context from the first caller using a fixed background timeout.
+		// We detach the context from the first caller using a background timeout.
 		// This guarantees that if Caller 1 disconnects or times out, the underlying
 		// resume operation continues running for Caller 2 and Caller 3 without failing.
-		bgCtx, bgCancel := context.WithTimeout(context.Background(), 15*time.Second)
+		bgCtx, bgCancel := context.WithTimeout(context.Background(), r.resumeTimeout)
 		defer bgCancel()
 
 		backoff := wait.Backoff{

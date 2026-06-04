@@ -54,6 +54,12 @@ var (
 	scheme = runtime.NewScheme()
 )
 
+const (
+	routerDefaultExtprocTimeout     = 5 * time.Second
+	routerDefaultActorResumeTimeout = 15 * time.Second
+	routerDefaultRouteTimeout       = 10 * time.Second
+)
+
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(v1alpha1.AddToScheme(scheme))
@@ -61,21 +67,24 @@ func init() {
 
 // RouterConfig holds deployment setup and endpoint options for the router node instance.
 type RouterConfig struct {
-	Standalone     bool
-	Namespace      string
-	Kubeconfig     string
-	AteapiAddr     string
-	HttpPort       int
-	XdsPort        int
-	ExtprocPort    int
-	ExtprocAddr    string
-	EnvoyImage     string
-	TemplatesFile  string
-	StatusPort     int
-	HealthInterval time.Duration
-	HttpsPort      int
-	EnvoyCertPath  string
-	LogLevel       string
+	Standalone         bool
+	Namespace          string
+	Kubeconfig         string
+	AteapiAddr         string
+	HttpPort           int
+	XdsPort            int
+	ExtprocPort        int
+	ExtprocAddr        string
+	ExtprocTimeout     time.Duration
+	EnvoyImage         string
+	TemplatesFile      string
+	StatusPort         int
+	HealthInterval     time.Duration
+	ActorResumeTimeout time.Duration
+	RouteTimeout       time.Duration
+	HttpsPort          int
+	EnvoyCertPath      string
+	LogLevel           string
 }
 
 // RouterServer instantiates and coordinates runtime threads executing system modules.
@@ -140,10 +149,13 @@ func NewCmd() *cobra.Command {
 	cmd.Flags().IntVar(&cfg.XdsPort, "port-xds", 18000, "TCP port listening for the xDS dynamic Envoy connections")
 	cmd.Flags().IntVar(&cfg.ExtprocPort, "port-extproc", 50051, "Listen port for the Envoy dynamic External Processing (ext_proc) server")
 	cmd.Flags().StringVar(&cfg.ExtprocAddr, "extproc-address", "127.0.0.1", "Host IP or address of the Envoy External Processing (ext_proc) server")
+	cmd.Flags().DurationVar(&cfg.ExtprocTimeout, "extproc-timeout", routerDefaultExtprocTimeout, "Timeout for Envoy External Processing (ext_proc) service and message processing")
 	cmd.Flags().StringVar(&cfg.EnvoyImage, "envoy-image", "envoyproxy/envoy:v1.30-latest", "Image URI used for dynamically launched router instances")
 	cmd.Flags().StringVar(&cfg.TemplatesFile, "actor-templates-file", "", "Path to offline YAML configuration file listing ActorTemplates")
 	cmd.Flags().IntVar(&cfg.StatusPort, "status-port", 4040, "Port to serve /statusz on (set <= 0 to disable serving status)")
 	cmd.Flags().DurationVar(&cfg.HealthInterval, "health-interval", 1*time.Second, "Interval for checking health of dependent services")
+	cmd.Flags().DurationVar(&cfg.ActorResumeTimeout, "actor-resume-timeout", routerDefaultActorResumeTimeout, "Timeout for actor resume calls triggered by request routing")
+	cmd.Flags().DurationVar(&cfg.RouteTimeout, "route-timeout", routerDefaultRouteTimeout, "Timeout for Envoy route actions (0 disables route timeout)")
 	cmd.Flags().IntVar(&cfg.HttpsPort, "port-https", 8443, "TCP port for HTTPS workload traffic entering through the Envoy Router")
 	cmd.Flags().StringVar(&cfg.EnvoyCertPath, "envoy-cert-path", "", "Path to the Envoy certificate file (if empty, a self-signed cert will be generated for testing)")
 
@@ -211,7 +223,7 @@ func (s *RouterServer) Run(ctx context.Context) error {
 
 	g, ctx := errgroup.WithContext(ctx)
 
-	xdsSrv := NewXdsServer(s.cfg.XdsPort)
+	xdsSrv := NewXdsServer(s.cfg.XdsPort, s.cfg.ExtprocTimeout, s.cfg.RouteTimeout)
 	xdsSrv.SetConfig(s.cfg.HttpPort, s.cfg.ExtprocPort, s.cfg.ExtprocAddr)
 
 	var certContent, keyContent string
@@ -226,7 +238,7 @@ func (s *RouterServer) Run(ctx context.Context) error {
 
 	xdsSrv.SetTlsConfig(s.cfg.HttpsPort, s.cfg.EnvoyCertPath, certContent, keyContent)
 	if s.extprocSrv == nil {
-		s.extprocSrv = NewExtProcServer(s.cfg.ExtprocPort, s.apiClient)
+		s.extprocSrv = NewExtProcServer(s.cfg.ExtprocPort, s.apiClient, s.cfg.ActorResumeTimeout)
 	}
 	ctrl := NewController(s.k8sClient, s.clientset, s.cfg, xdsSrv, s.extprocSrv)
 
