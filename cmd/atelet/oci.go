@@ -62,10 +62,7 @@ func prepareOCIDirectory(ctx context.Context, pullCache *memorypullcache.MemoryP
 		return fmt.Errorf("in untar: %w", err)
 	}
 
-	envVars := []string{
-		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-	}
-	envVars = append(envVars, env...)
+	envVars := buildActorEnv(actorID, env)
 
 	ociSpec := &specs.Spec{
 		Process: &specs.Process{
@@ -173,6 +170,35 @@ func prepareOCIDirectory(ctx context.Context, pullCache *memorypullcache.MemoryP
 	}
 
 	return nil
+}
+
+// buildActorEnv builds the environment for an actor container's process:
+// a default PATH, the template-supplied env, and finally substrate-managed
+// identity variables. Any template-supplied entry that collides with a
+// substrate-managed name is dropped, so substrate's identity values are
+// authoritative and cannot be overridden by the ActorTemplate.
+//
+// Dropping the collision (rather than appending after it) is a security
+// requirement, not a cosmetic one: getenv(3) returns the first match, so a
+// surviving template-supplied ATE_ACTOR_ID would win at runtime and let a
+// template spoof its actor ID and impersonate another actor.
+func buildActorEnv(actorID string, env []string) []string {
+	reserved := map[string]struct{}{
+		"ATE_ACTOR_ID": {},
+	}
+
+	envVars := []string{
+		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+	}
+	for _, e := range env {
+		name, _, _ := strings.Cut(e, "=")
+		if _, ok := reserved[name]; ok {
+			continue
+		}
+		envVars = append(envVars, e)
+	}
+	envVars = append(envVars, "ATE_ACTOR_ID="+actorID)
+	return envVars
 }
 
 func validateTarName(name string) (cleaned string, skip bool, err error) {

@@ -47,6 +47,11 @@ Substrate has standardized on a **Uniform DNS Mesh**. You no longer need to defi
 
 **Format:** `<actor-id>.actors.resources.substrate.ate.dev`
 
+### Actor Identity (`ATE_ACTOR_ID`)
+Every actor process is started with a `ATE_ACTOR_ID` environment variable set to its own actor ID. Read this when your workload needs to know which actor it is (for logging, keying external state, etc.) instead of parsing the `Host` header off incoming requests.
+
+This value is set by Substrate and is authoritative: if your `ActorTemplate` defines an env var named `ATE_ACTOR_ID`, it is ignored in favor of the real ID.
+
 ### Example
 
 ```yaml

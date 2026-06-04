@@ -20,6 +20,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -78,6 +79,38 @@ func runUntar(t *testing.T, entries []tarEntry) (string, error) {
 	t.Helper()
 	dir := t.TempDir()
 	return dir, untar(context.Background(), bytes.NewReader(buildTar(t, entries)), dir)
+}
+
+func TestBuildActorEnv(t *testing.T) {
+	got := buildActorEnv("counter-1", []string{"FOO=bar", "ATE_ACTOR_ID=spoofed"})
+
+	if got[0] != "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" {
+		t.Errorf("PATH should be first, got %q", got[0])
+	}
+	// The template-supplied env is preserved.
+	if !slices.Contains(got, "FOO=bar") {
+		t.Errorf("template env FOO=bar missing from %v", got)
+	}
+	// Security: the template's attempt to set the reserved identity var must
+	// be dropped entirely, not merely shadowed. getenv(3) returns the first
+	// match, so a surviving duplicate would let an ActorTemplate spoof its
+	// actor ID and impersonate another actor at runtime.
+	if slices.Contains(got, "ATE_ACTOR_ID=spoofed") {
+		t.Errorf("spoofed ATE_ACTOR_ID should be dropped, got %v", got)
+	}
+	var count int
+	for _, e := range got {
+		if name, _, _ := strings.Cut(e, "="); name == "ATE_ACTOR_ID" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Errorf("expected exactly one ATE_ACTOR_ID entry, got %d in %v", count, got)
+	}
+	// substrate's identity value is authoritative.
+	if !slices.Contains(got, "ATE_ACTOR_ID=counter-1") {
+		t.Errorf("ATE_ACTOR_ID=counter-1 should be present and authoritative, got %v", got)
+	}
 }
 
 func TestValidateTarName(t *testing.T) {
