@@ -132,6 +132,12 @@ spec:
                   type: object
                 maxItems: 10
                 type: array
+              goldenSnapshotWait:
+                description: |-
+                  GoldenSnapshotWait is how long to wait after the golden actor resumes
+                  before taking the snapshot. Slow-booting workloads
+                  may need longer than the 20-second default.
+                type: string
               pauseImage:
                 description: |-
                   PauseImage is the container to use as the root sandbox container.

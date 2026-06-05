@@ -32,6 +32,8 @@ import (
 
 const (
 	GoldenSnapshotCreationReason = "GoldenSnapshotCreation"
+
+	defaultGoldenSnapshotWait = 20 * time.Second
 )
 
 type ActorTemplateReconciler struct {
@@ -108,8 +110,12 @@ func (r *ActorTemplateReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 			return ctrl.Result{}, fmt.Errorf("while resuming golden actor: %w", err)
 		}
 
+		wait := defaultGoldenSnapshotWait
+		if at.Spec.GoldenSnapshotWait != nil {
+			wait = at.Spec.GoldenSnapshotWait.Duration
+		}
 		at.Status.Phase = atev1alpha1.PhaseWaitGoldenActor
-		at.Status.TakeGoldenSnapshotAt = metav1.NewTime(time.Now().Add(20 * time.Second))
+		at.Status.TakeGoldenSnapshotAt = metav1.NewTime(time.Now().Add(wait))
 		if err := r.Status().Update(ctx, at); err != nil {
 			return ctrl.Result{}, err
 		}
