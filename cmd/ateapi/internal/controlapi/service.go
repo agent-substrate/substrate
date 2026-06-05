@@ -17,8 +17,8 @@ package controlapi
 import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
-
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"k8s.io/client-go/kubernetes"
 )
 
 // Service implements ateapipb.Control
@@ -33,12 +33,12 @@ type Service struct {
 var _ ateapipb.ControlServer = (*Service)(nil)
 
 // NewService creates a service.
-func NewService(persistence store.Interface, actorTemplateLister listersv1alpha1.ActorTemplateLister, dialer *AteletDialer) *Service {
+func NewService(persistence store.Interface, actorTemplateLister listersv1alpha1.ActorTemplateLister, dialer *AteletDialer, kubeClient kubernetes.Interface) *Service {
 	s := &Service{
 		persistence:         persistence,
 		actorTemplateLister: actorTemplateLister,
 		dialer:              dialer,
-		actorWorkflow:       NewActorWorkflow(persistence, dialer, actorTemplateLister),
+		actorWorkflow:       NewActorWorkflow(persistence, dialer, actorTemplateLister, kubeClient),
 	}
 
 	return s

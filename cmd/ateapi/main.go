@@ -131,7 +131,7 @@ func main() {
 	ateFactory.WaitForCacheSync(stopCh)
 
 	dialer := controlapi.NewAteletDialer(workerPodInformer.GetIndexer(), ateletPodInformer.GetIndexer())
-	sm := controlapi.NewService(redisPersistence, actorTemplateLister, dialer)
+	sm := controlapi.NewService(redisPersistence, actorTemplateLister, dialer, clientset)
 
 	sessionIdentitySrv := sessionidentity.New(*clientJWTIssuer, *clientJWTAudience, *sessionIDJWTPoolFile, *sessionIDCAPoolFile, *workerpoolCACerts)
 

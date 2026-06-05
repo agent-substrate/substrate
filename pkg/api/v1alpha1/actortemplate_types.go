@@ -30,12 +30,6 @@ const (
 	PhaseFailed            PhaseType = "Failed"
 )
 
-type EnvVar struct {
-	Name string `json:"name" protobuf:"bytes,1,opt,name=name"`
-	// +optional
-	Value string `json:"value,omitempty" protobuf:"bytes,2,opt,name=value"`
-}
-
 // A single application container that you want to run within a WorkerPool.
 type Container struct {
 	// Name of the container.
@@ -57,6 +51,55 @@ type Container struct {
 
 	// Environment variables to set in the worker replicas.
 	Env []EnvVar `json:"env,omitempty"`
+}
+
+// EnvVar represents an environment variable supplied to a container in an
+// ActorTemplate. It mirrors the shape of corev1.EnvVar but only models the
+// subset of sources that the substrate control plane resolves: literal values,
+// and Secret keys.
+//
+// +kubebuilder:validation:XValidation:rule="!(has(self.value) && has(self.valueFrom))",message="value and valueFrom are mutually exclusive"
+type EnvVar struct {
+	// Name of the environment variable. Must be a C_IDENTIFIER.
+	// +required
+	Name string `json:"name"`
+
+	// Variable value. Defaults to "". Mutually exclusive with ValueFrom.
+	// +optional
+	Value string `json:"value,omitempty"`
+
+	// Source for the environment variable's value. Mutually exclusive with
+	// Value.
+	// +optional
+	ValueFrom *EnvVarSource `json:"valueFrom,omitempty"`
+}
+
+// EnvVarSource represents a source for the value of an EnvVar. Exactly one of
+// its fields must be set.
+//
+// +kubebuilder:validation:MinProperties=1
+// +kubebuilder:validation:MaxProperties=1
+type EnvVarSource struct {
+	// Selects a key of a Secret in the ActorTemplate's namespace.
+	// +optional
+	SecretKeyRef *SecretKeySelector `json:"secretKeyRef,omitempty"`
+}
+
+// SecretKeySelector selects a key from a Secret.
+type SecretKeySelector struct {
+	// Name of the referent Secret.
+	// +required
+	// +kubebuilder:validation:MinLength=1
+	Name string `json:"name"`
+
+	// Key to select within the Secret.
+	// +required
+	// +kubebuilder:validation:MinLength=1
+	Key string `json:"key"`
+
+	// Specify whether the Secret or its key must be defined.
+	// +optional
+	Optional *bool `json:"optional,omitempty"`
 }
 
 type SnapshotsConfig struct {

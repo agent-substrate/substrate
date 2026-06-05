@@ -69,14 +69,54 @@ spec:
                     env:
                       description: Environment variables to set in the worker replicas.
                       items:
+                        description: |-
+                          EnvVar represents an environment variable supplied to a container in an
+                          ActorTemplate. It mirrors the shape of corev1.EnvVar but only models the
+                          subset of sources that the substrate control plane resolves: literal values,
+                          and Secret keys.
                         properties:
                           name:
+                            description: Name of the environment variable. Must be
+                              a C_IDENTIFIER.
                             type: string
                           value:
+                            description: Variable value. Defaults to "". Mutually
+                              exclusive with ValueFrom.
                             type: string
+                          valueFrom:
+                            description: |-
+                              Source for the environment variable's value. Mutually exclusive with
+                              Value.
+                            maxProperties: 1
+                            minProperties: 1
+                            properties:
+                              secretKeyRef:
+                                description: Selects a key of a Secret in the ActorTemplate's
+                                  namespace.
+                                properties:
+                                  key:
+                                    description: Key to select within the Secret.
+                                    minLength: 1
+                                    type: string
+                                  name:
+                                    description: Name of the referent Secret.
+                                    minLength: 1
+                                    type: string
+                                  optional:
+                                    description: Specify whether the Secret or its
+                                      key must be defined.
+                                    type: boolean
+                                required:
+                                - key
+                                - name
+                                type: object
+                            type: object
                         required:
                         - name
                         type: object
+                        x-kubernetes-validations:
+                        - message: value and valueFrom are mutually exclusive
+                          rule: '!(has(self.value) && has(self.valueFrom))'
                       type: array
                     image:
                       description: Image to use for the worker replicas.
