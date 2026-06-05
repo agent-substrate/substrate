@@ -66,13 +66,15 @@ const (
 
 // XdsServer implements an aggregated discovery service server for dynamic Envoy router nodes.
 type XdsServer struct {
-	xdsPort      int
-	extprocPort  int
-	extprocAddr  string
-	ingressPort  int
-	snapshot     cachev3.SnapshotCache
-	srv          serverv3.Server
-	versionCount int64
+	xdsPort        int
+	extprocPort    int
+	extprocAddr    string
+	extprocTimeout time.Duration
+	ingressPort    int
+	routeTimeout   time.Duration
+	snapshot       cachev3.SnapshotCache
+	srv            serverv3.Server
+	versionCount   int64
 
 	mu sync.Mutex
 
@@ -82,17 +84,19 @@ type XdsServer struct {
 	keyContent  string
 }
 
-func NewXdsServer(xdsPort int) *XdsServer {
+func NewXdsServer(xdsPort int, extprocTimeout, routeTimeout time.Duration) *XdsServer {
 	cache := cachev3.NewSnapshotCache(true, cachev3.IDHash{}, nil)
 	srv := serverv3.NewServer(context.Background(), cache, nil)
 
 	return &XdsServer{
-		xdsPort:     xdsPort,
-		snapshot:    cache,
-		srv:         srv,
-		extprocPort: 50051, // matches default extproc port
-		extprocAddr: "127.0.0.1",
-		ingressPort: 8080,
+		xdsPort:        xdsPort,
+		snapshot:       cache,
+		srv:            srv,
+		extprocPort:    50051, // matches default extproc port
+		extprocAddr:    "127.0.0.1",
+		extprocTimeout: extprocTimeout,
+		ingressPort:    8080,
+		routeTimeout:   routeTimeout,
 	}
 }
 
@@ -286,7 +290,7 @@ func (x *XdsServer) buildRoutes() *routev3.RouteConfiguration {
 								ClusterSpecifier: &routev3.RouteAction_Cluster{
 									Cluster: "dynamic_forward_proxy_cluster",
 								},
-								Timeout: durationpb.New(10 * time.Second),
+								Timeout: durationpb.New(x.routeTimeout),
 							},
 						},
 					},
@@ -304,13 +308,13 @@ func (x *XdsServer) buildHcm(statPrefix string) *anypb.Any {
 					ClusterName: ClusterName,
 				},
 			},
-			Timeout: durationpb.New(5 * time.Second),
+			Timeout: durationpb.New(x.extprocTimeout),
 		},
 		MutationRules: &mutationrulesv3.HeaderMutationRules{
 			AllowAllRouting: &wrapperspb.BoolValue{Value: true},
 		},
 		// Explicitly configure the message timeout to avoid the 200ms default
-		MessageTimeout: durationpb.New(5 * time.Second),
+		MessageTimeout: durationpb.New(x.extprocTimeout),
 		ProcessingMode: &extprocv3filter.ProcessingMode{
 			RequestHeaderMode:   extprocv3filter.ProcessingMode_SEND,
 			ResponseHeaderMode:  extprocv3filter.ProcessingMode_SKIP,

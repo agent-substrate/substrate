@@ -24,12 +24,14 @@ import (
 	clusterv3 "github.com/envoyproxy/go-control-plane/envoy/config/cluster/v3"
 	listenerv3 "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
 	routev3 "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
+	extprocv3filter "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/ext_proc/v3"
+	hcmv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
 	cachev3 "github.com/envoyproxy/go-control-plane/pkg/cache/v3"
 	resourcev3 "github.com/envoyproxy/go-control-plane/pkg/resource/v3"
 )
 
 func TestXdsServer_UpdateSnapshot(t *testing.T) {
-	server := NewXdsServer(18000)
+	server := NewXdsServer(18000, routerDefaultExtprocTimeout, routerDefaultRouteTimeout)
 	server.SetConfig(8081, 50052, "10.0.0.1")
 
 	err := server.UpdateSnapshot()
@@ -51,6 +53,7 @@ func TestXdsServer_UpdateSnapshot(t *testing.T) {
 	if err := snap.Consistent(); err != nil {
 		t.Fatalf("Integrity check failed on snapshot: %v", err)
 	}
+	assertSnapshotTimeouts(t, snap, routerDefaultExtprocTimeout, routerDefaultRouteTimeout)
 
 	// Verify clusters generated
 	clustersMap := snap.GetResources(resourcev3.ClusterType)
@@ -138,8 +141,29 @@ func TestXdsServer_UpdateSnapshot(t *testing.T) {
 	}
 }
 
+func TestXdsServer_UpdateSnapshot_WithTimeoutOverrides(t *testing.T) {
+	const (
+		extprocTimeout = 7 * time.Second
+		routeTimeout   = 23 * time.Second
+	)
+
+	server := NewXdsServer(18000, extprocTimeout, routeTimeout)
+	server.SetConfig(8081, 50052, "10.0.0.1")
+
+	snap := updatedSnapshot(t, server)
+	assertSnapshotTimeouts(t, snap, extprocTimeout, routeTimeout)
+}
+
+func TestXdsServer_UpdateSnapshot_WithRouteTimeoutDisabled(t *testing.T) {
+	server := NewXdsServer(18000, routerDefaultExtprocTimeout, 0)
+	server.SetConfig(8081, 50052, "10.0.0.1")
+
+	snap := updatedSnapshot(t, server)
+	assertSnapshotTimeouts(t, snap, routerDefaultExtprocTimeout, 0)
+}
+
 func TestXdsServer_UpdateSnapshot_WithHttps(t *testing.T) {
-	server := NewXdsServer(18000)
+	server := NewXdsServer(18000, routerDefaultExtprocTimeout, routerDefaultRouteTimeout)
 	server.SetConfig(8085, 50053, "127.0.0.1")
 	server.SetTlsConfig(8443, "", "dummy-cert", "dummy-key")
 
@@ -182,7 +206,7 @@ func TestXdsServer_UpdateSnapshot_WithHttps(t *testing.T) {
 }
 
 func TestXdsServer_Serve_Shutdown(t *testing.T) {
-	server := NewXdsServer(18000)
+	server := NewXdsServer(18000, routerDefaultExtprocTimeout, routerDefaultRouteTimeout)
 	server.SetConfig(8085, 50053, "127.0.0.1")
 
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
@@ -208,5 +232,100 @@ func TestXdsServer_Serve_Shutdown(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Error("Timeout exceeded waiting for Serve to finish graceful closure")
+	}
+}
+
+func updatedSnapshot(t *testing.T, server *XdsServer) *cachev3.Snapshot {
+	t.Helper()
+
+	if err := server.UpdateSnapshot(); err != nil {
+		t.Fatalf("UpdateSnapshot failed: %v", err)
+	}
+
+	res, err := server.snapshot.GetSnapshot(NodeID)
+	if err != nil {
+		t.Fatalf("Failed to get generated snapshot: %v", err)
+	}
+
+	snap, ok := res.(*cachev3.Snapshot)
+	if !ok {
+		t.Fatalf("Snapshot doesn't conform to type *cachev3.Snapshot, got %T", res)
+	}
+
+	if err := snap.Consistent(); err != nil {
+		t.Fatalf("Integrity check failed on snapshot: %v", err)
+	}
+
+	return snap
+}
+
+func assertSnapshotTimeouts(t *testing.T, snap *cachev3.Snapshot, wantExtprocTimeout, wantRouteTimeout time.Duration) {
+	t.Helper()
+
+	routesMap := snap.GetResources(resourcev3.RouteType)
+	rawRoute, exists := routesMap[RouteName]
+	if !exists {
+		t.Fatalf("Route name %q is missing from snapshot routes configuration", RouteName)
+	}
+
+	routeConfig := rawRoute.(*routev3.RouteConfiguration)
+	if len(routeConfig.GetVirtualHosts()) != 1 {
+		t.Fatalf("Expected 1 VirtualHost definition, got %d", len(routeConfig.GetVirtualHosts()))
+	}
+	if len(routeConfig.GetVirtualHosts()[0].GetRoutes()) != 1 {
+		t.Fatalf("Expected 1 route, got %d", len(routeConfig.GetVirtualHosts()[0].GetRoutes()))
+	}
+
+	routeTimeout := routeConfig.GetVirtualHosts()[0].GetRoutes()[0].GetRoute().GetTimeout()
+	if routeTimeout == nil {
+		t.Fatalf("Route timeout is missing")
+	}
+	if got := routeTimeout.AsDuration(); got != wantRouteTimeout {
+		t.Errorf("Expected route timeout %s, got %s", wantRouteTimeout, got)
+	}
+
+	listenersMap := snap.GetResources(resourcev3.ListenerType)
+	rawListener, exists := listenersMap[IngressHTTPListener]
+	if !exists {
+		t.Fatalf("Listener name %q is missing from snapshot listeners", IngressHTTPListener)
+	}
+
+	listener := rawListener.(*listenerv3.Listener)
+	filter := listener.GetFilterChains()[0].GetFilters()[0]
+	var hcm hcmv3.HttpConnectionManager
+	if err := filter.GetTypedConfig().UnmarshalTo(&hcm); err != nil {
+		t.Fatalf("Failed to unmarshal HTTP connection manager: %v", err)
+	}
+
+	var extproc extprocv3filter.ExternalProcessor
+	found := false
+	for _, httpFilter := range hcm.GetHttpFilters() {
+		if httpFilter.GetName() != "envoy.filters.http.ext_proc" {
+			continue
+		}
+		if err := httpFilter.GetTypedConfig().UnmarshalTo(&extproc); err != nil {
+			t.Fatalf("Failed to unmarshal external processor filter: %v", err)
+		}
+		found = true
+		break
+	}
+	if !found {
+		t.Fatalf("External processor filter is missing")
+	}
+
+	grpcTimeout := extproc.GetGrpcService().GetTimeout()
+	if grpcTimeout == nil {
+		t.Fatalf("External processor gRPC timeout is missing")
+	}
+	if got := grpcTimeout.AsDuration(); got != wantExtprocTimeout {
+		t.Errorf("Expected external processor gRPC timeout %s, got %s", wantExtprocTimeout, got)
+	}
+
+	messageTimeout := extproc.GetMessageTimeout()
+	if messageTimeout == nil {
+		t.Fatalf("External processor message timeout is missing")
+	}
+	if got := messageTimeout.AsDuration(); got != wantExtprocTimeout {
+		t.Errorf("Expected external processor message timeout %s, got %s", wantExtprocTimeout, got)
 	}
 }

@@ -57,7 +57,7 @@ func TestActorResumer_ResumeActor(t *testing.T) {
 			},
 		}
 
-		resumer := NewActorResumer(mock)
+		resumer := NewActorResumer(mock, routerDefaultActorResumeTimeout)
 		actor, err := resumer.ResumeActor(context.Background(), testActorID)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -88,7 +88,7 @@ func TestActorResumer_ResumeActor(t *testing.T) {
 			},
 		}
 
-		resumer := NewActorResumer(mock)
+		resumer := NewActorResumer(mock, routerDefaultActorResumeTimeout)
 		actor, err := resumer.ResumeActor(context.Background(), testActorID)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -108,10 +108,46 @@ func TestActorResumer_ResumeActor(t *testing.T) {
 			},
 		}
 
-		resumer := NewActorResumer(mock)
+		resumer := NewActorResumer(mock, routerDefaultActorResumeTimeout)
 		_, err := resumer.ResumeActor(context.Background(), testActorID)
 		if got := status.Code(err); got != codes.NotFound {
 			t.Errorf("expected gRPC code NotFound, got %v (err=%v)", got, err)
+		}
+	})
+
+	t.Run("ConfiguredDeadline", func(t *testing.T) {
+		const configuredTimeout = 2 * time.Second
+		var gotDeadline time.Time
+		start := time.Now()
+
+		mock := &resumerMockClient{
+			resumeFn: func(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
+				deadline, ok := ctx.Deadline()
+				if !ok {
+					t.Errorf("expected ResumeActor context deadline")
+				} else {
+					gotDeadline = deadline
+				}
+				return &ateapipb.ResumeActorResponse{
+					Actor: &ateapipb.Actor{
+						ActorId:    testActorID,
+						Status:     ateapipb.Actor_STATUS_RUNNING,
+						AteomPodIp: expectedIP,
+					},
+				}, nil
+			},
+		}
+
+		resumer := NewActorResumer(mock, configuredTimeout)
+		_, err := resumer.ResumeActor(context.Background(), testActorID)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if gotDeadline.IsZero() {
+			t.Fatalf("ResumeActor context deadline was not captured")
+		}
+		if got := gotDeadline.Sub(start); got < configuredTimeout || got > configuredTimeout+time.Second {
+			t.Errorf("expected ResumeActor deadline near %s, got %s", configuredTimeout, got)
 		}
 	})
 
@@ -135,7 +171,7 @@ func TestActorResumer_ResumeActor(t *testing.T) {
 			},
 		}
 
-		resumer := NewActorResumer(mock)
+		resumer := NewActorResumer(mock, routerDefaultActorResumeTimeout)
 
 		var wg sync.WaitGroup
 		const concurrentRequests = 10

@@ -138,7 +138,7 @@ func TestExtProcHeadersEvaluation(t *testing.T) {
 				},
 			}
 
-			s := NewExtProcServer(50051, clientMock)
+			s := NewExtProcServer(50051, clientMock, routerDefaultActorResumeTimeout)
 
 			reqHeaders := &extprocv3.HttpHeaders{
 				Headers: &corev3.HeaderMap{
