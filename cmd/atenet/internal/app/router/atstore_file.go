@@ -24,9 +24,10 @@ import (
 	"os"
 	"strings"
 
-	v1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"k8s.io/apimachinery/pkg/util/yaml"
 	sigsyaml "sigs.k8s.io/yaml"
+
+	v1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 )
 
 // fileATStore implements the atStore interface by reading and decoding YAML or JSON

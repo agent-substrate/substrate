@@ -18,9 +18,10 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
 const maxPageSize = 1000

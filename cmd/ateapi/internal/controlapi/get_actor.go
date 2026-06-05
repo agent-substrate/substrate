@@ -19,10 +19,11 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
 func (s *Service) GetActor(ctx context.Context, req *ateapipb.GetActorRequest) (*ateapipb.GetActorResponse, error) {

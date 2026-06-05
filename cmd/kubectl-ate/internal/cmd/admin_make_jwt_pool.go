@@ -17,12 +17,13 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/agent-substrate/substrate/internal/ateclient"
-	"github.com/agent-substrate/substrate/internal/localjwtauthority"
 	"github.com/spf13/cobra"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
+
+	"github.com/agent-substrate/substrate/internal/ateclient"
+	"github.com/agent-substrate/substrate/internal/localjwtauthority"
 )
 
 var keyID string

@@ -19,10 +19,11 @@ import (
 	"errors"
 	"log/slog"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/tools/cache"
+
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
 // WorkerPoolSyncer reconciles the state of worker pods from Kubernetes Informer

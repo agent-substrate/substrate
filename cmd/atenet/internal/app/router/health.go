@@ -24,8 +24,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"k8s.io/client-go/kubernetes"
+
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
 type ComponentHealth struct {

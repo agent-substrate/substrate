@@ -18,10 +18,11 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/spf13/cobra"
+
 	"github.com/agent-substrate/substrate/cmd/atenet/internal/app/dns"
 	"github.com/agent-substrate/substrate/cmd/atenet/internal/app/router"
 	"github.com/agent-substrate/substrate/internal/version"
-	"github.com/spf13/cobra"
 )
 
 var rootCmd = &cobra.Command{

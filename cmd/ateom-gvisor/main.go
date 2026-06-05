@@ -28,13 +28,6 @@ import (
 	"sync"
 
 	"cloud.google.com/go/compute/metadata"
-	"github.com/agent-substrate/substrate/cmd/ateom-gvisor/internal/ateom"
-	"github.com/agent-substrate/substrate/internal/ateinterceptors"
-	"github.com/agent-substrate/substrate/internal/ateompath"
-	"github.com/agent-substrate/substrate/internal/contextlogging"
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
-	"github.com/agent-substrate/substrate/internal/serverboot"
-	"github.com/agent-substrate/substrate/internal/version"
 	"github.com/hashicorp/go-reap"
 	"github.com/vishvananda/netlink"
 	"github.com/vishvananda/netns"
@@ -42,6 +35,14 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
+
+	"github.com/agent-substrate/substrate/cmd/ateom-gvisor/internal/ateom"
+	"github.com/agent-substrate/substrate/internal/ateinterceptors"
+	"github.com/agent-substrate/substrate/internal/ateompath"
+	"github.com/agent-substrate/substrate/internal/contextlogging"
+	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/serverboot"
+	"github.com/agent-substrate/substrate/internal/version"
 )
 
 var (

@@ -27,16 +27,17 @@ import (
 	"strings"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/k8sjwt"
-	"github.com/agent-substrate/substrate/internal/localca"
-	"github.com/agent-substrate/substrate/internal/localjwtauthority"
-	"github.com/agent-substrate/substrate/internal/sessionidjwt"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
+
+	"github.com/agent-substrate/substrate/internal/k8sjwt"
+	"github.com/agent-substrate/substrate/internal/localca"
+	"github.com/agent-substrate/substrate/internal/localjwtauthority"
+	"github.com/agent-substrate/substrate/internal/sessionidjwt"
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
 // Server implements ateapipb.SessionIdentityServer
