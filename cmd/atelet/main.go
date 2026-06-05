@@ -31,10 +31,10 @@ import (
 	"strings"
 
 	"cloud.google.com/go/storage"
-	"github.com/agent-substrate/substrate/cmd/atelet/internal/ategcs"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/memorypullcache"
+	"github.com/agent-substrate/substrate/internal/objectstorage"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/serverboot"
@@ -117,13 +117,18 @@ func main() {
 	switch storageBackend {
 	case "s3":
 		slog.InfoContext(ctx, "Using S3 storage backend")
-		// depend on standard AWS environment variables to configure the client
-		// these will need to be set on the atelet pods
+		// The AWS SDK for Go v2 automatically reads AWS_ENDPOINT_URL (global)
+		// and AWS_ENDPOINT_URL_S3 (service-specific) environment variables via
+		// config.LoadDefaultConfig and the S3 service's resolveBaseEndpoint.
+		// No manual endpoint override is needed here.
 		cfg, err := config.LoadDefaultConfig(ctx)
 		if err != nil {
 			serverboot.Fatal(ctx, "Failed to load S3 config", err)
 		}
 		s3Client = s3.NewFromConfig(cfg, func(o *s3.Options) {
+			// AWS_S3_USE_PATH_STYLE is not auto-read by the SDK;
+			// set UsePathStyle for S3-compatible backends (MinIO, OSS, R2, etc.)
+			// that don't support virtual-hosted-style addressing.
 			if usePathStyle := os.Getenv("AWS_S3_USE_PATH_STYLE"); usePathStyle == "true" {
 				o.UsePathStyle = true
 			}
@@ -136,16 +141,16 @@ func main() {
 		}
 	}
 
-	var wrappedAnonGCS ategcs.ObjectStorage
+	var wrappedAnonGCS objectstorage.ObjectStorage
 	if anonGCSClient != nil {
-		wrappedAnonGCS = ategcs.NewGCSClient(anonGCSClient)
+		wrappedAnonGCS = objectstorage.NewGCSClient(anonGCSClient)
 	}
 
-	var wrappedGCS ategcs.ObjectStorage
+	var wrappedGCS objectstorage.ObjectStorage
 	if s3Client != nil {
-		wrappedGCS = ategcs.NewS3Client(s3Client)
+		wrappedGCS = objectstorage.NewS3Client(s3Client)
 	} else if gcsClient != nil {
-		wrappedGCS = ategcs.NewGCSClient(gcsClient)
+		wrappedGCS = objectstorage.NewGCSClient(gcsClient)
 	}
 
 	wmService := NewService(
@@ -177,8 +182,8 @@ type AteomHerder struct {
 
 	ateomDialer   *AteomDialer
 	pullCache     *memorypullcache.MemoryPullCache
-	anonGCSClient ategcs.ObjectStorage
-	gcsClient     ategcs.ObjectStorage
+	anonGCSClient objectstorage.ObjectStorage
+	gcsClient     objectstorage.ObjectStorage
 }
 
 var _ ateletpb.AteomHerderServer = (*AteomHerder)(nil)
@@ -187,8 +192,8 @@ var _ ateletpb.AteomHerderServer = (*AteomHerder)(nil)
 func NewService(
 	ctx context.Context,
 	ateomDialer *AteomDialer,
-	anonGCSClient ategcs.ObjectStorage,
-	gcsClient ategcs.ObjectStorage,
+	anonGCSClient objectstorage.ObjectStorage,
+	gcsClient objectstorage.ObjectStorage,
 	pullCache *memorypullcache.MemoryPullCache,
 ) *AteomHerder {
 	wms := &AteomHerder{
@@ -224,7 +229,7 @@ func (s *AteomHerder) fetchRunsc(ctx context.Context, cfg *ateletpb.RunscConfig)
 		client = s.gcsClient
 	}
 
-	content, err := ategcs.FetchFromGCS(ctx, client, platCfg.GetUrl())
+	content, err := objectstorage.FetchFromGCS(ctx, client, platCfg.GetUrl())
 	if err != nil {
 		return "", fmt.Errorf("while fetching %v: %w", platCfg.GetUrl(), err)
 	}
@@ -337,7 +342,7 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 	pagesMetaImgPath := filepath.Join(checkpointDir, "pages_meta.img")
 
 	// Upload checkpoint from local dir.
-	if err := ategcs.SendLocalFileToGCSWithZstd(ctx, s.gcsClient,
+	if err := objectstorage.SendLocalFileToGCSWithZstd(ctx, s.gcsClient,
 		prefix+"/checkpoint.img.zstd",
 		checkpointImgPath,
 	); err != nil {
@@ -390,7 +395,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	} {
 		dl := dl
 		g.Go(func() error {
-			if err := ategcs.FetchLocalFileFromGCSWithZstd(gCtx, s.gcsClient, dl.remote, dl.local); err != nil {
+			if err := objectstorage.FetchLocalFileFromGCSWithZstd(gCtx, s.gcsClient, dl.remote, dl.local); err != nil {
 				return fmt.Errorf("while downloading %s from GCS: %w", filepath.Base(dl.remote), err)
 			}
 			return nil
@@ -528,11 +533,11 @@ func buildAteomWorkloadSpec(spec *ateletpb.WorkloadSpec) *ateompb.WorkloadSpec {
 // uploadIfExists uploads a local file to GCS (zstd-compressed) only if
 // the file is present. Missing files are silently skipped — used for
 // optional checkpoint side-files (pages.img, pages_meta.img).
-func uploadIfExists(ctx context.Context, gcs ategcs.ObjectStorage, remoteURI, localPath string) error {
+func uploadIfExists(ctx context.Context, gcs objectstorage.ObjectStorage, remoteURI, localPath string) error {
 	if _, err := os.Stat(localPath); err != nil {
 		return nil
 	}
-	if err := ategcs.SendLocalFileToGCSWithZstd(ctx, gcs, remoteURI, localPath); err != nil {
+	if err := objectstorage.SendLocalFileToGCSWithZstd(ctx, gcs, remoteURI, localPath); err != nil {
 		return fmt.Errorf("while uploading %s to GCS: %w", filepath.Base(localPath), err)
 	}
 	return nil

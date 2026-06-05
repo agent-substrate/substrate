@@ -80,6 +80,27 @@ spec:
           value: http://opentelemetry-collector.gke-managed-otel.svc.cluster.local:4317
         - name: ATE_STORAGE_BACKEND
           value: "gcs"
+        # For S3-compatible storage (e.g. MinIO, Alibaba Cloud OSS, Cloudflare R2):
+        # The AWS SDK for Go v2 automatically reads AWS_ENDPOINT_URL (global)
+        # and AWS_ENDPOINT_URL_S3 (service-specific) from the environment.
+        # - name: ATE_STORAGE_BACKEND
+        #   value: "s3"
+        # - name: AWS_ENDPOINT_URL
+        #   value: "https://s3.example.com"
+        # - name: AWS_ACCESS_KEY_ID
+        #   valueFrom:
+        #     secretKeyRef:
+        #       name: s3-credentials
+        #       key: access-key-id
+        # - name: AWS_SECRET_ACCESS_KEY
+        #   valueFrom:
+        #     secretKeyRef:
+        #       name: s3-credentials
+        #       key: access-key-secret
+        # - name: AWS_REGION
+        #   value: "<region>"
+        # - name: AWS_S3_USE_PATH_STYLE
+        #   value: "true"
         ports:
         - name: grpc
           containerPort: 8085
