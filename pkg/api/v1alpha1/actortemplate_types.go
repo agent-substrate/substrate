@@ -52,9 +52,6 @@ type Container struct {
 	// +listType=atomic
 	Command []string `json:"command,omitempty"`
 
-	// List of ports to expose from the container.
-	Ports []corev1.ContainerPort `json:"ports,omitempty"`
-
 	// Environment variables to set in the worker replicas.
 	Env []EnvVar `json:"env,omitempty"`
 }

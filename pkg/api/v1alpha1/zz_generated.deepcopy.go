@@ -19,8 +19,7 @@
 package v1alpha1
 
 import (
-	"k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1"
 	runtime "k8s.io/apimachinery/pkg/runtime"
 )
 
@@ -114,7 +113,7 @@ func (in *ActorTemplateStatus) DeepCopyInto(out *ActorTemplateStatus) {
 	in.TakeGoldenSnapshotAt.DeepCopyInto(&out.TakeGoldenSnapshotAt)
 	if in.Conditions != nil {
 		in, out := &in.Conditions, &out.Conditions
-		*out = make([]metav1.Condition, len(*in))
+		*out = make([]v1.Condition, len(*in))
 		for i := range *in {
 			(*in)[i].DeepCopyInto(&(*out)[i])
 		}
@@ -157,11 +156,6 @@ func (in *Container) DeepCopyInto(out *Container) {
 	if in.Command != nil {
 		in, out := &in.Command, &out.Command
 		*out = make([]string, len(*in))
-		copy(*out, *in)
-	}
-	if in.Ports != nil {
-		in, out := &in.Ports, &out.Ports
-		*out = make([]v1.ContainerPort, len(*in))
 		copy(*out, *in)
 	}
 	if in.Env != nil {
