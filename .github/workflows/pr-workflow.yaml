@@ -46,4 +46,4 @@ jobs:
     - name: Deploy Counter Demo
       run: hack/install-ate-kind.sh --deploy-demo-counter
     - name: Run E2E tests
-      run: KO_DOCKER_REPO=localhost:5001 BUCKET_NAME=ate-snapshots KUBECTL_CONTEXT=kind-kind hack/run-e2e.sh -v -args -no-color
+      run: hack/run-e2e-kind.sh -v -args -no-color
