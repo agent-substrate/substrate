@@ -34,6 +34,16 @@ demo-counter_deploy() {
   ensure_crds
   sed "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" demos/counter/counter.yaml.tmpl \
     | run_ko apply -f -
+
+  # Wait for the demo to be fully ready before returning. On a cold cluster the
+  # first ActorTemplate golden snapshot pays one-time costs (downloading the
+  # gVisor runsc binary, first gVisor pod start, image pulls). Blocking here
+  # means callers -- notably the e2e suite, which creates its own ActorTemplate
+  # with a tight readiness deadline -- run against an already-warm node instead
+  # of racing that cold-start work.
+  log_step "Waiting for counter demo to be ready..."
+  run_kubectl rollout status deployment/counter-deployment -n ate-demo-counter --timeout=300s
+  run_kubectl wait --for=condition=Ready actortemplate/counter -n ate-demo-counter --timeout=300s
 }
 
 demo-counter_delete() {
