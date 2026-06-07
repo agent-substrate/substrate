@@ -1,0 +1,424 @@
+<!--
+Copyright 2026 Google LLC
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+-->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Gemini CLI multiplex demo</title>
+<style>
+  :root {
+    --bg: #0e1116; --panel: #161b22; --panel-2: #0d1117;
+    --line: #30363d; --text: #e6edf3; --muted: #8b949e; --dim: #6e7681;
+    --accent: #79c0ff; --green: #aff5b4; --green-bg: #1f3d1c;
+    --yellow: #d9e58c; --yellow-bg: #2d3a13; --red: #ff8b8b; --red-bg: #3d1c1c;
+    --cost-accent: #ffd57e;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    margin: 0; padding: 1.25em;
+    background: var(--bg); color: var(--text);
+    line-height: 1.4;
+  }
+  header { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: .5em; flex-wrap: wrap; }
+  h1 { font-size: 1.2em; margin: 0; color: var(--accent); }
+  #status { color: var(--dim); font-size: .85em; }
+  .intro {
+    color: var(--muted); font-size: .85em; line-height: 1.55;
+    max-width: 78em; margin: 0 0 1em 0;
+  }
+  .intro strong { color: var(--text); }
+  .cost-card {
+    background: var(--panel); border: 1px solid var(--line);
+    border-left: 3px solid var(--cost-accent);
+    padding: .7em .9em; border-radius: 6px;
+    margin-bottom: 1.1em;
+    display: flex; flex-wrap: wrap; gap: .35em 1.6em; align-items: baseline;
+    font-size: .82em;
+  }
+  .cost-card .cost-label {
+    color: var(--cost-accent); text-transform: uppercase;
+    letter-spacing: .12em; font-size: .78em; font-weight: 600;
+  }
+  .cost-card .cost-item { color: var(--text); }
+  .cost-card .cost-item b { color: var(--cost-accent); font-weight: 600; }
+  .cost-card .cost-note { color: var(--dim); font-style: italic; flex-basis: 100%; font-size: .85em; }
+  .grid {
+    display: grid; gap: 1em; grid-template-columns: 1fr 1fr;
+    margin-bottom: 1em;
+  }
+  @media (max-width: 720px) { .grid { grid-template-columns: 1fr; } }
+  .card {
+    background: var(--panel); border: 1px solid var(--line);
+    padding: .9em; border-radius: 6px;
+  }
+  .card h2 {
+    font-size: .8em; margin: 0 0 .35em 0;
+    color: var(--muted); text-transform: uppercase; letter-spacing: .12em;
+  }
+  .card .help {
+    color: var(--dim); font-size: .8em; line-height: 1.5;
+    margin: 0 0 .8em 0;
+  }
+  .row { padding: .35em 0; border-bottom: 1px solid var(--line); }
+  .row:last-child { border-bottom: 0; }
+  .row .top { display: flex; align-items: center; gap: .5em; }
+  .row .name { color: var(--text); }
+  .row .meta { color: var(--dim); font-size: .8em; padding-left: 0; margin-top: .1em; }
+  .badge {
+    display: inline-block; padding: .1em .55em;
+    border-radius: 999px; font-size: .75em;
+    background: var(--panel-2); color: var(--muted);
+    border: 1px solid var(--line);
+  }
+  .badge.running { background: var(--green-bg); color: var(--green); border-color: transparent; }
+  .badge.pending { background: var(--yellow-bg); color: var(--yellow); border-color: transparent; }
+  .badge.failed  { background: var(--red-bg);    color: var(--red);    border-color: transparent; }
+  .section-heading {
+    font-size: .8em; color: var(--muted); text-transform: uppercase;
+    letter-spacing: .12em; margin: 1em 0 .25em 0;
+  }
+  .section-help {
+    color: var(--dim); font-size: .8em; line-height: 1.5;
+    max-width: 78em; margin: 0 0 .6em 0;
+  }
+  .pod-card {
+    background: var(--panel); border: 1px solid var(--line);
+    padding: .9em; border-radius: 6px; margin-bottom: 1em;
+  }
+  .pod-card h3 { font-size: .9em; margin: 0; color: var(--accent); }
+  .pod-card .pod-meta { color: var(--dim); font-size: .8em; margin: .25em 0 .5em 0; }
+  pre.logs {
+    background: var(--panel-2); padding: .6em; border-radius: 4px;
+    max-height: 14em; overflow: auto; font-size: .78em;
+    margin: 0; white-space: pre-wrap; color: var(--text);
+  }
+  pre.logs:empty::before { content: "(no logs yet)"; color: var(--dim); }
+  .empty { color: var(--dim); font-style: italic; }
+  .err { color: var(--red); font-size: .85em; }
+  .task-card {
+    background: var(--panel); border: 1px solid var(--line);
+    border-left: 3px solid var(--accent);
+    padding: .8em .9em; border-radius: 6px;
+    margin-bottom: 1.1em;
+  }
+  .task-card .row-top { display: flex; align-items: center; gap: 1em; flex-wrap: wrap; margin-bottom: .6em; }
+  .task-card h2 {
+    font-size: .8em; margin: 0;
+    color: var(--muted); text-transform: uppercase; letter-spacing: .12em;
+  }
+  .give-task-btn {
+    font-family: inherit; font-size: .92em; cursor: pointer;
+    background: var(--accent); color: var(--bg);
+    border: 0; border-radius: 4px; padding: .45em 1em; font-weight: 600;
+    transition: filter .1s ease;
+  }
+  .give-task-btn:hover { filter: brightness(1.08); }
+  .give-task-btn:active { filter: brightness(.92); }
+  .give-task-btn:disabled { opacity: .55; cursor: not-allowed; }
+  .task-list { display: flex; flex-direction: column; gap: .35em; }
+  .task-row {
+    display: flex; align-items: baseline; gap: .55em;
+    padding: .3em 0; border-bottom: 1px dashed var(--line); font-size: .88em;
+  }
+  .task-row:last-child { border-bottom: 0; }
+  .task-state {
+    flex-shrink: 0; min-width: 5.5em;
+    display: inline-block; padding: .1em .55em;
+    border-radius: 999px; font-size: .72em; text-align: center;
+    background: var(--panel-2); color: var(--muted);
+    border: 1px solid var(--line); text-transform: uppercase; letter-spacing: .08em;
+  }
+  .task-state.queued    { background: var(--yellow-bg); color: var(--yellow); border-color: transparent; }
+  .task-state.running   { background: var(--green-bg);  color: var(--green);  border-color: transparent; }
+  .task-state.completed { background: var(--panel-2);   color: var(--dim);    border-color: var(--line); }
+  .task-agent { color: var(--accent); font-weight: 600; flex-shrink: 0; }
+  .task-text { color: var(--text); flex: 1; }
+  .task-meta { color: var(--dim); font-size: .78em; flex-shrink: 0; }
+  .task-empty { color: var(--dim); font-style: italic; font-size: .88em; padding: .3em 0; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Gemini CLI multiplex demo</h1>
+  <div id="status">connecting…</div>
+</header>
+
+<p class="intro">
+  This demo runs <strong>3 Gemini CLI agents</strong> on
+  <strong>2 substrate worker pods</strong>. Each agent has its own short prompt
+  and works in a loop: ask Gemini, print the answer, idle for 45&nbsp;seconds,
+  repeat. While an agent is idle, <strong>substrate</strong> can suspend it
+  (snapshot its process state, free its pod) and let a different agent borrow
+  that pod &mdash; that&rsquo;s the <strong>multiplex</strong>. The dashboard
+  refreshes every 2.5&nbsp;seconds; pods, actors, and logs are all live so you
+  can watch the rotation happen.
+</p>
+
+<div class="cost-card">
+  <span class="cost-label">Approximate cost while running</span>
+  <span class="cost-item">GCP infrastructure: <b>~$0.40/hr</b></span>
+  <span class="cost-item">Gemini API (3 agents): <b>&lt;$0.50/hr</b> when active</span>
+  <span class="cost-item">Total: <b>~$0.90/hr</b> typical</span>
+  <span class="cost-note">
+    GCP figure is one n2-standard-8 VM in us-central1 (ephemeral IP free). Gemini figure
+    assumes gemini-2.5-flash at published rates, each agent firing one short prompt every 45&nbsp;s,
+    multiplexed across 2 pods (so about 2 of the 3 agents are actively running at any moment).
+    During the current substrate boundary the agents aren&rsquo;t invoking Gemini, so the real
+    spend is just the VM &mdash; that flips up once the substrate chain resolves.
+  </span>
+</div>
+
+<div class="task-card">
+  <div class="row-top">
+    <h2>Tasks</h2>
+    <button id="give-task-btn" class="give-task-btn" type="button">Give a task</button>
+    <span id="task-feedback" style="color: var(--dim); font-size: .82em;"></span>
+  </div>
+  <p class="help" style="color: var(--dim); font-size: .8em; margin: 0 0 .65em 0;">
+    Click <strong>Give a task</strong> to assign a randomly chosen short task to a
+    randomly chosen agent. Each task moves through three states &mdash;
+    <span class="task-state queued" style="vertical-align: baseline;">queued</span>
+    while the agent is suspended,
+    <span class="task-state running" style="vertical-align: baseline;">running</span>
+    while it owns a worker pod, and
+    <span class="task-state completed" style="vertical-align: baseline;">completed</span>
+    once substrate suspends it again.
+  </p>
+  <div id="task-list" class="task-list">
+    <div class="task-empty">no tasks yet &mdash; click <em>Give a task</em> to start</div>
+  </div>
+</div>
+
+<div class="grid">
+  <div class="card">
+    <h2>Worker pods</h2>
+    <p class="help">
+      The pool of substrate-managed pods that actually host running agents. The
+      WorkerPool is configured with <strong>2 replicas</strong> for
+      <strong>3 agents</strong>, so substrate is forced to share &mdash; at any
+      moment at most 2 agents own pods, and the third is suspended waiting its
+      turn. Substrate rotates ownership as agents transition between active and
+      idle phases.
+    </p>
+    <div id="pods" class="empty">loading…</div>
+  </div>
+  <div class="card">
+    <h2>Actors &amp; templates</h2>
+    <p class="help">
+      <strong>ActorTemplates</strong> define each agent (container image,
+      prompt, idle interval). <strong>Actors</strong> are the live instances
+      bound &mdash; or not &mdash; to a worker pod. Watch the
+      <code>phase</code>: <code>Running</code> means the actor is on a pod
+      executing right now; <code>Suspended</code> means its state is stored and
+      it&rsquo;s waiting for a free pod; <code>Resuming</code> /
+      <code>ResumeGoldenActor</code> are the substrate transitions in between.
+    </p>
+    <div id="actors" class="empty">loading…</div>
+  </div>
+</div>
+
+<h2 class="section-heading">Live logs (per pod, last 25 lines, all containers)</h2>
+<p class="section-help">
+  Each card below tails the logs of one worker pod. Because substrate moves
+  agents between pods, the log stream you see in a single card switches
+  ownership over time &mdash; you&rsquo;ll see one agent&rsquo;s
+  <code>[demo-actor: agent-luna]</code> tick output, then a transition, then
+  <code>[demo-actor: agent-mars]</code> picking up on the same pod. That
+  ownership transition is the multiplex in action.
+</p>
+<div id="pod-logs"></div>
+
+<script>
+const REFRESH_MS = 2500;
+
+function badgeFor(state) {
+  const lc = (state || "").toLowerCase();
+  if (lc.includes("running") || lc === "ready") return "running";
+  if (lc.includes("fail") || lc.includes("error")) return "failed";
+  return "pending";
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/[&<>"']/g, c => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;"
+  }[c]));
+}
+
+async function fetchJSON(url) {
+  const r = await fetch(url, { cache: "no-store" });
+  if (!r.ok) throw new Error(`${url} → ${r.status}`);
+  return r.json();
+}
+
+async function refresh() {
+  let pods = [], actors = [], assignments = [], errors = [];
+  try {
+    const pr = await fetchJSON("/api/pods");
+    if (pr.error) errors.push("pods: " + pr.error);
+    pods = pr.pods || [];
+  } catch (e) { errors.push("pods: " + e.message); }
+  try {
+    const ar = await fetchJSON("/api/actors");
+    if (ar.error) errors.push("actors: " + ar.error);
+    actors = ar.actors || [];
+  } catch (e) { errors.push("actors: " + e.message); }
+  try {
+    const ts = await fetchJSON("/api/task-status");
+    assignments = ts.assignments || [];
+  } catch (e) { errors.push("tasks: " + e.message); }
+  renderTaskList(assignments);
+
+  const podsEl = document.getElementById("pods");
+  if (pods.length === 0) {
+    podsEl.className = "empty";
+    podsEl.textContent = "no pods in namespace";
+  } else {
+    podsEl.className = "";
+    podsEl.innerHTML = pods.map(p => `
+      <div class="row">
+        <div class="top">
+          <span class="badge ${badgeFor(p.phase)}">${escapeHtml(p.phase)}</span>
+          <span class="name">${escapeHtml(p.name)}</span>
+        </div>
+        <div class="meta">node=${escapeHtml(p.node)} ready=${p.ready ? "yes" : "no"} since=${escapeHtml(p.started_at)}</div>
+      </div>
+    `).join("");
+  }
+
+  const actorsEl = document.getElementById("actors");
+  if (actors.length === 0) {
+    actorsEl.className = "empty";
+    actorsEl.textContent = "no actors / templates in namespace";
+  } else {
+    actorsEl.className = "";
+    actorsEl.innerHTML = actors.map(a => `
+      <div class="row">
+        <div class="top">
+          <span class="badge ${badgeFor(a.phase)}">${escapeHtml(a.phase)}</span>
+          <span class="name">${escapeHtml(a.kind)}/${escapeHtml(a.name)}</span>
+        </div>
+        ${a.message ? `<div class="meta">${escapeHtml(a.message)}</div>` : ""}
+      </div>
+    `).join("");
+  }
+
+  const logsContainer = document.getElementById("pod-logs");
+  // Reconcile per-pod log cards (add new, remove gone).
+  const wantedIds = new Set(pods.map(p => "log-" + p.name));
+  for (const child of [...logsContainer.children]) {
+    if (!wantedIds.has(child.id)) child.remove();
+  }
+  for (const p of pods) {
+    const id = "log-" + p.name;
+    let card = document.getElementById(id);
+    if (!card) {
+      card = document.createElement("div");
+      card.className = "pod-card";
+      card.id = id;
+      card.innerHTML = `
+        <h3>${escapeHtml(p.name)}</h3>
+        <div class="pod-meta">node=${escapeHtml(p.node)}</div>
+        <pre class="logs"></pre>
+      `;
+      logsContainer.appendChild(card);
+    }
+    try {
+      const lr = await fetchJSON(`/api/logs/${encodeURIComponent(p.name)}`);
+      card.querySelector("pre.logs").textContent = lr.logs || "";
+    } catch (e) {
+      card.querySelector("pre.logs").textContent = `(error fetching logs: ${e.message})`;
+    }
+  }
+
+  const status = document.getElementById("status");
+  const ts = new Date().toISOString().slice(11, 19) + "Z";
+  status.innerHTML = errors.length
+    ? `<span class="err">${escapeHtml(errors.join(" · "))}</span> · ${ts}`
+    : `${pods.length} pods · ${actors.length} actors/templates · ${ts}`;
+}
+
+function renderTaskList(assignments) {
+  const el = document.getElementById("task-list");
+  if (!assignments || assignments.length === 0) {
+    el.innerHTML = '<div class="task-empty">no tasks yet &mdash; click <em>Give a task</em> to start</div>';
+    return;
+  }
+  // Show newest 8 (server returns newest-first; cap UI for readability)
+  const show = assignments.slice(0, 8);
+  el.innerHTML = show.map(a => {
+    const state = (a.state || "queued").toLowerCase();
+    let metaTxt = "";
+    if (state === "queued" && a.created_at) {
+      metaTxt = "assigned " + relTime(a.created_at);
+    } else if (state === "running" && a.started_at) {
+      metaTxt = "running for " + relTime(a.started_at);
+    } else if (state === "completed" && a.completed_at) {
+      metaTxt = "completed " + relTime(a.completed_at);
+    }
+    return `
+      <div class="task-row">
+        <span class="task-state ${escapeHtml(state)}">${escapeHtml(state)}</span>
+        <span class="task-agent">${escapeHtml(a.agent || "?")}</span>
+        <span class="task-text">${escapeHtml(a.task || "")}</span>
+        <span class="task-meta">${escapeHtml(metaTxt)}</span>
+      </div>
+    `;
+  }).join("");
+}
+
+function relTime(epochSec) {
+  if (!epochSec) return "";
+  const delta = Math.max(0, Math.floor(Date.now() / 1000 - epochSec));
+  if (delta < 5) return "just now";
+  if (delta < 60) return delta + "s ago";
+  const m = Math.floor(delta / 60);
+  return m + "m " + (delta % 60) + "s ago";
+}
+
+async function giveTask() {
+  const btn = document.getElementById("give-task-btn");
+  const feedback = document.getElementById("task-feedback");
+  btn.disabled = true;
+  feedback.textContent = "assigning…";
+  try {
+    const r = await fetch("/api/give-task", {
+      method: "POST",
+      cache: "no-store",
+      headers: { "Content-Type": "application/json" },
+    });
+    const body = await r.json();
+    if (!r.ok || body.error) {
+      feedback.innerHTML = `<span class="err">${escapeHtml(body.error || ("HTTP " + r.status))}</span>`;
+    } else {
+      feedback.innerHTML = `assigned <span style="color:var(--accent);">${escapeHtml(body.agent)}</span> &rarr; ${escapeHtml(body.task)}`;
+      refresh();   // re-poll immediately so the new row appears without 2.5s lag
+    }
+  } catch (e) {
+    feedback.innerHTML = `<span class="err">${escapeHtml(e.message)}</span>`;
+  } finally {
+    setTimeout(() => { btn.disabled = false; }, 400);
+  }
+}
+
+document.getElementById("give-task-btn").addEventListener("click", giveTask);
+
+refresh();
+setInterval(refresh, REFRESH_MS);
+</script>
+</body>
+</html>

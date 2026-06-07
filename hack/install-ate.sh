@@ -42,6 +42,7 @@ ATE_DEMOS=()
 source "${ROOT}"/hack/install-demo-counter.sh
 source "${ROOT}"/hack/install-demo-sandbox.sh
 source "${ROOT}"/hack/install-demo-claude-code-multiplex.sh
+source "${ROOT}"/hack/install-demo-gemini-cli-multiplex.sh
 source "${ROOT}"/hack/install-demo-agent-secret.sh
 source "${ROOT}"/hack/install-demo-multi-template.sh
 
