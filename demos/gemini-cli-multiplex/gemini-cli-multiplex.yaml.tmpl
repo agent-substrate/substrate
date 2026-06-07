@@ -64,6 +64,7 @@ spec:
   containers:
   - name: gemini
     image: ${WORKLOAD_IMAGE}
+    command: ["/run.sh"]
     env:
     - name: ACTOR_NAME
       value: "luna"
@@ -100,6 +101,7 @@ spec:
   containers:
   - name: gemini
     image: ${WORKLOAD_IMAGE}
+    command: ["/run.sh"]
     env:
     - name: ACTOR_NAME
       value: "mars"
@@ -136,6 +138,7 @@ spec:
   containers:
   - name: gemini
     image: ${WORKLOAD_IMAGE}
+    command: ["/run.sh"]
     env:
     - name: ACTOR_NAME
       value: "orion"
