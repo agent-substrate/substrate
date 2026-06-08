@@ -31,18 +31,19 @@ import (
 	"path/filepath"
 	"syscall"
 
-	"github.com/agent-substrate/substrate/internal/localca"
-	"github.com/agent-substrate/substrate/internal/podidentitysigner"
-	"github.com/agent-substrate/substrate/internal/rendezvous"
-	"github.com/agent-substrate/substrate/internal/servicednssigner"
-	"github.com/agent-substrate/substrate/internal/signercontroller"
-	"github.com/agent-substrate/substrate/internal/version"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/util/homedir"
 	"k8s.io/utils/clock"
+
+	"github.com/agent-substrate/substrate/internal/localca"
+	"github.com/agent-substrate/substrate/internal/podidentitysigner"
+	"github.com/agent-substrate/substrate/internal/rendezvous"
+	"github.com/agent-substrate/substrate/internal/servicednssigner"
+	"github.com/agent-substrate/substrate/internal/signercontroller"
+	"github.com/agent-substrate/substrate/internal/version"
 )
 
 var kubeConfigDefault string

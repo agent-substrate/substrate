@@ -17,7 +17,6 @@ package controlapi
 import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
-
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 

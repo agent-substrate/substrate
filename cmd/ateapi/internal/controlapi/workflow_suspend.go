@@ -23,12 +23,13 @@ import (
 	"strings"
 	"time"
 
+	"k8s.io/apimachinery/pkg/util/wait"
+
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	"k8s.io/apimachinery/pkg/util/wait"
 )
 
 // SuspendInput holds the immutable parameters requested by the client.

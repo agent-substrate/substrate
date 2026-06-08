@@ -18,8 +18,9 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/go-cmp/cmp"
+
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
 func TestPrintActorsTo_Table(t *testing.T) {

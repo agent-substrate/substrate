@@ -24,11 +24,12 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/dns"
 	"github.com/spf13/cobra"
 	"k8s.io/client-go/tools/clientcmd"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
+
+	"github.com/agent-substrate/substrate/internal/dns"
 )
 
 type DnsConfig struct {

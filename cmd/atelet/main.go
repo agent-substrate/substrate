@@ -31,14 +31,6 @@ import (
 	"strings"
 
 	"cloud.google.com/go/storage"
-	"github.com/agent-substrate/substrate/cmd/atelet/internal/ategcs"
-	"github.com/agent-substrate/substrate/internal/ateinterceptors"
-	"github.com/agent-substrate/substrate/internal/ateompath"
-	"github.com/agent-substrate/substrate/internal/memorypullcache"
-	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
-	"github.com/agent-substrate/substrate/internal/serverboot"
-	"github.com/agent-substrate/substrate/internal/version"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/google/go-containerregistry/pkg/authn"
@@ -54,6 +46,15 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/reflection"
 	"k8s.io/utils/lru"
+
+	"github.com/agent-substrate/substrate/cmd/atelet/internal/ategcs"
+	"github.com/agent-substrate/substrate/internal/ateinterceptors"
+	"github.com/agent-substrate/substrate/internal/ateompath"
+	"github.com/agent-substrate/substrate/internal/memorypullcache"
+	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
+	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/serverboot"
+	"github.com/agent-substrate/substrate/internal/version"
 )
 
 var (

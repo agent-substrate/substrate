@@ -18,11 +18,12 @@ import (
 	"context"
 	"time"
 
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"golang.org/x/sync/singleflight"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"k8s.io/apimachinery/pkg/util/wait"
+
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
 // ActorResumer coordinates safe, deduplicated resumption of actors.

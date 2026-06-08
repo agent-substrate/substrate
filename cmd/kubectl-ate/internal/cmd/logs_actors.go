@@ -27,8 +27,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/ateclient"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/spf13/cobra"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -36,6 +34,9 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
+
+	"github.com/agent-substrate/substrate/internal/ateclient"
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
 var followLogs bool

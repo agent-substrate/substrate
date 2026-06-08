@@ -21,7 +21,6 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/rendezvous"
 	certsv1beta1 "k8s.io/api/certificates/v1beta1"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
@@ -33,6 +32,8 @@ import (
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/client-go/util/workqueue"
 	"k8s.io/utils/clock"
+
+	"github.com/agent-substrate/substrate/internal/rendezvous"
 )
 
 type SignerImpl interface {

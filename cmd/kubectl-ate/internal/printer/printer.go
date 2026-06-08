@@ -23,10 +23,11 @@ import (
 	"slices"
 	"text/tabwriter"
 
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"sigs.k8s.io/yaml"
+
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
 // PrintActors prints a slice of actors to stdout in the requested format.

@@ -23,15 +23,16 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/localca"
-	"github.com/agent-substrate/substrate/internal/podcertificate"
-	"github.com/agent-substrate/substrate/internal/signercontroller"
 	certsv1beta1 "k8s.io/api/certificates/v1beta1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/utils/clock"
 	"k8s.io/utils/ptr"
+
+	"github.com/agent-substrate/substrate/internal/localca"
+	"github.com/agent-substrate/substrate/internal/podcertificate"
+	"github.com/agent-substrate/substrate/internal/signercontroller"
 )
 
 const Name = "servicedns.podcert.ate.dev/identity"

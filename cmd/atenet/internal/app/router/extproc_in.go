@@ -19,8 +19,9 @@ import (
 	"net"
 	"strings"
 
-	"github.com/agent-substrate/substrate/internal/resources"
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
+
+	"github.com/agent-substrate/substrate/internal/resources"
 )
 
 type requestMetadata struct {

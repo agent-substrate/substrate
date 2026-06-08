@@ -26,7 +26,6 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/agent-substrate/substrate/internal/contextlogging"
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.opentelemetry.io/otel"
@@ -38,6 +37,8 @@ import (
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.21.0"
+
+	"github.com/agent-substrate/substrate/internal/contextlogging"
 )
 
 // InitLogger sets the global slog logger to a JSON handler wrapped in

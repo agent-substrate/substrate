@@ -107,6 +107,13 @@ linters:
         linters: [staticcheck]
         text: '^ST1019'
 
+formatters:
+  enable:
+    - goimports
+  settings:
+    goimports:
+      local-prefixes: github.com/agent-substrate/substrate
+
 issues:
   max-issues-per-linter: 0
   max-same-issues: 0

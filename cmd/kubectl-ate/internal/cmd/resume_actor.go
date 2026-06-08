@@ -17,10 +17,11 @@ package cmd
 import (
 	"fmt"
 
+	"github.com/spf13/cobra"
+
 	"github.com/agent-substrate/substrate/cmd/kubectl-ate/internal/printer"
 	"github.com/agent-substrate/substrate/internal/ateclient"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	"github.com/spf13/cobra"
 )
 
 var bootFlag bool

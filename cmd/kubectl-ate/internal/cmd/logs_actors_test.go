@@ -24,11 +24,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	corev1 "k8s.io/api/core/v1"
+
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
 func TestFilterAndDisplayLogLine(t *testing.T) {
