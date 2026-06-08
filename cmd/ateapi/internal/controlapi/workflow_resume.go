@@ -159,8 +159,9 @@ func (s *AssignWorkerStep) findFreeWorker(workers []*ateapipb.Worker, workerPool
 }
 
 type CallAteletRestoreStep struct {
-	dialer     *AteletDialer
-	kubeClient kubernetes.Interface
+	dialer      *AteletDialer
+	kubeClient  kubernetes.Interface
+	secretCache *envSecretCache
 }
 
 func (s *CallAteletRestoreStep) Name() string { return "CallAteletRestore" }
@@ -174,7 +175,7 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 	}
 	client := ateletpb.NewAteomHerderClient(ateletConn)
 
-	workloadSpec, err := workloadSpecFromActorTemplate(ctx, s.kubeClient, state.ActorTemplate)
+	workloadSpec, err := workloadSpecFromActorTemplate(ctx, s.kubeClient, s.secretCache, state.ActorTemplate)
 	if err != nil {
 		return err
 	}

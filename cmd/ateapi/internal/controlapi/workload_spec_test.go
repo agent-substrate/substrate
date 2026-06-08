@@ -43,7 +43,7 @@ func TestWorkloadSpecFromActorTemplateResolvesValueFromEnv(t *testing.T) {
 		},
 	)
 
-	got, err := workloadSpecFromActorTemplate(ctx, kubeClient, &atev1alpha1.ActorTemplate{
+	got, err := workloadSpecFromActorTemplate(ctx, kubeClient, nil, &atev1alpha1.ActorTemplate{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "tmpl1",
 			Namespace: "agent-ns",
@@ -99,7 +99,7 @@ func TestWorkloadSpecFromActorTemplateResolvesValueFromEnv(t *testing.T) {
 
 func TestWorkloadSpecFromActorTemplateOptionalSecretKeyRefSkipsMissingSecret(t *testing.T) {
 	optional := true
-	got, err := workloadSpecFromActorTemplate(context.Background(), fake.NewSimpleClientset(), &atev1alpha1.ActorTemplate{
+	got, err := workloadSpecFromActorTemplate(context.Background(), fake.NewSimpleClientset(), nil, &atev1alpha1.ActorTemplate{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "tmpl1",
 			Namespace: "agent-ns",
@@ -137,7 +137,7 @@ func TestWorkloadSpecFromActorTemplateOptionalSecretKeyRefSkipsMissingSecret(t *
 }
 
 func TestWorkloadSpecFromActorTemplateSecretKeyRefMissingSecretFails(t *testing.T) {
-	_, err := workloadSpecFromActorTemplate(context.Background(), fake.NewSimpleClientset(), &atev1alpha1.ActorTemplate{
+	_, err := workloadSpecFromActorTemplate(context.Background(), fake.NewSimpleClientset(), nil, &atev1alpha1.ActorTemplate{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "tmpl1",
 			Namespace: "agent-ns",
@@ -168,7 +168,7 @@ func TestWorkloadSpecFromActorTemplateSecretKeyRefMissingSecretFails(t *testing.
 }
 
 func TestWorkloadSpecFromActorTemplateEmptyValueFromFails(t *testing.T) {
-	_, err := workloadSpecFromActorTemplate(context.Background(), fake.NewSimpleClientset(), &atev1alpha1.ActorTemplate{
+	_, err := workloadSpecFromActorTemplate(context.Background(), fake.NewSimpleClientset(), nil, &atev1alpha1.ActorTemplate{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "tmpl1",
 			Namespace: "agent-ns",
@@ -191,4 +191,83 @@ func TestWorkloadSpecFromActorTemplateEmptyValueFromFails(t *testing.T) {
 	if status.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("expected FailedPrecondition, got %v: %v", status.Code(err), err)
 	}
+}
+
+func TestWorkloadSpecFromActorTemplateCachesSecretsAcrossCalls(t *testing.T) {
+	ctx := context.Background()
+	secretCache := newEnvSecretCache(envSecretCacheTTL)
+	kubeClient := fake.NewSimpleClientset(
+		&corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "some-secret",
+				Namespace: "agent-ns",
+			},
+			Data: map[string][]byte{
+				"some-key": []byte("some-value"),
+			},
+		},
+	)
+	actorTemplate := &atev1alpha1.ActorTemplate{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "tmpl1",
+			Namespace: "agent-ns",
+		},
+		Spec: atev1alpha1.ActorTemplateSpec{
+			Containers: []atev1alpha1.Container{
+				{
+					Name:  "main",
+					Image: "main",
+					Env: []atev1alpha1.EnvVar{
+						{
+							Name: "SOME_KEY",
+							ValueFrom: &atev1alpha1.EnvVarSource{
+								SecretKeyRef: &atev1alpha1.SecretKeySelector{
+									Name: "some-secret",
+									Key:  "some-key",
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	if _, err := workloadSpecFromActorTemplate(ctx, kubeClient, secretCache, actorTemplate); err != nil {
+		t.Fatalf("first workloadSpecFromActorTemplate failed: %v", err)
+	}
+	if _, err := workloadSpecFromActorTemplate(ctx, kubeClient, secretCache, actorTemplate); err != nil {
+		t.Fatalf("second workloadSpecFromActorTemplate failed: %v", err)
+	}
+	if got := secretGetCount(kubeClient); got != 1 {
+		t.Fatalf("secret gets before TTL expiry = %d, want 1", got)
+	}
+
+	expireSecretCache(secretCache)
+	if _, err := workloadSpecFromActorTemplate(ctx, kubeClient, secretCache, actorTemplate); err != nil {
+		t.Fatalf("third workloadSpecFromActorTemplate failed: %v", err)
+	}
+	if got := secretGetCount(kubeClient); got != 2 {
+		t.Fatalf("secret gets after TTL expiry = %d, want 2", got)
+	}
+}
+
+func expireSecretCache(secretCache *envSecretCache) {
+	secretCache.mu.Lock()
+	defer secretCache.mu.Unlock()
+
+	for key, entry := range secretCache.entries {
+		entry.expiresAt = entry.expiresAt.Add(-envSecretCacheTTL)
+		secretCache.entries[key] = entry
+	}
+}
+
+func secretGetCount(kubeClient *fake.Clientset) int {
+	count := 0
+	for _, action := range kubeClient.Actions() {
+		if action.GetVerb() == "get" && action.GetResource().Resource == "secrets" {
+			count++
+		}
+	}
+	return count
 }
