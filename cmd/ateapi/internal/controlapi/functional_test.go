@@ -376,6 +376,9 @@ func createTemplateWithContainers(t *testing.T, tc *testContext, ns string, cont
 				},
 			},
 			PauseImage: "pause@sha256:abc",
+			SnapshotsConfig: atev1alpha1.SnapshotsConfig{
+				Location: "gs://fake-fake-fake",
+			},
 			Containers: containers,
 			WorkerPoolRef: corev1.ObjectReference{
 				Namespace: ns,

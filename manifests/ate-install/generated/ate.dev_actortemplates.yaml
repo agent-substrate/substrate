@@ -64,6 +64,7 @@ spec:
                       description: Entrypoint array. Not executed within a shell.
                       items:
                         type: string
+                      maxItems: 64
                       type: array
                       x-kubernetes-list-type: atomic
                     env:
@@ -76,11 +77,19 @@ spec:
                           envFrom is not supported, and valueFrom currently supports only secretKeyRef.
                         properties:
                           name:
-                            description: Name of the environment variable. Must be
-                              a C_IDENTIFIER.
+                            description: |-
+                              Name is the name of the environment variable. May be any printable ASCII
+                              character except '='.
+                            minLength: 1
+                            pattern: ^[ -<>-~]+$
                             type: string
                           value:
-                            description: Variable value. Mutually exclusive with ValueFrom.
+                            description: |-
+                              Variable value. Mutually exclusive with ValueFrom.
+                              Value is the literal value of the environment variable. Unlike in
+                              Kubernetes pods, this value is not interpolated, and $(VAR)
+                              references are not expanded.
+                            minLength: 0
                             type: string
                           valueFrom:
                             description: |-
@@ -96,11 +105,15 @@ spec:
                                   key:
                                     description: Key to select within the Secret.
                                     minLength: 1
+                                    pattern: ^[-._a-zA-Z0-9]+$
                                     type: string
                                   name:
                                     description: Name of the referent Secret.
-                                    minLength: 1
+                                    maxLength: 253
                                     type: string
+                                    x-kubernetes-validations:
+                                    - message: Name must be a valid DNS subdomain
+                                      rule: '!format.dns1123Subdomain().validate(self).hasValue()'
                                   optional:
                                     description: Specify whether the Secret or its
                                       key must be defined.
@@ -114,8 +127,11 @@ spec:
                         - name
                         type: object
                         x-kubernetes-validations:
-                        - message: value and valueFrom are mutually exclusive
-                          rule: '!(has(self.value) && has(self.valueFrom))'
+                        - message: exactly one of the fields in [value valueFrom]
+                            must be set
+                          rule: '[has(self.value),has(self.valueFrom)].filter(x,x==true).size()
+                            == 1'
+                      maxItems: 32
                       type: array
                     image:
                       description: Image to use for the worker replicas.
@@ -126,8 +142,13 @@ spec:
                         rule: self.contains('@')
                     name:
                       description: Name of the container.
+                      maxLength: 63
                       type: string
+                      x-kubernetes-validations:
+                      - message: Name must be a valid DNS label
+                        rule: '!format.dns1123Label().validate(self).hasValue()'
                   required:
+                  - image
                   - name
                   type: object
                 maxItems: 10
@@ -156,11 +177,13 @@ spec:
                           The SHA256 hash of the binary to download.  Used both to name the
                           downloaded file (for preventing conflicts), and to check the integrity of
                           the downloaded file.
+                        pattern: ^[a-z0-9]+$
                         type: string
                       url:
-                        description: |-
+                        description: |
                           A gs:// URL pointing to a runsc binary that can be downloaded (possibly
                           with atelet's credentials).
+                        minLength: 1
                         type: string
                     required:
                     - sha256Hash
@@ -174,11 +197,13 @@ spec:
                           The SHA256 hash of the binary to download.  Used both to name the
                           downloaded file (for preventing conflicts), and to check the integrity of
                           the downloaded file.
+                        pattern: ^[a-z0-9]+$
                         type: string
                       url:
-                        description: |-
+                        description: |
                           A gs:// URL pointing to a runsc binary that can be downloaded (possibly
                           with atelet's credentials).
+                        minLength: 1
                         type: string
                     required:
                     - sha256Hash
@@ -198,12 +223,14 @@ spec:
                 properties:
                   location:
                     description: Location to store snapshots in.
+                    minLength: 1
                     type: string
                 required:
                 - location
                 type: object
               workerPoolRef:
-                description: Name of the worker pool to use for the actor.
+                description: |
+                  Name of the worker pool to use for the actor.
                 properties:
                   apiVersion:
                     description: API version of the referent.
