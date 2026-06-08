@@ -1,0 +1,207 @@
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//	http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package controllers
+
+import (
+	"context"
+	"fmt"
+	"sync"
+	"time"
+
+	k8errors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/types"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
+
+	"github.com/agent-substrate/substrate/internal/autoscaler"
+	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+)
+
+// defaultAutoscaleInterval is how often each autoscaled pool is re-evaluated
+// when nothing else triggers a reconcile. Occupancy lives in ateapi rather than
+// in Kubernetes, so the loop polls on this cadence instead of waking on events.
+const defaultAutoscaleInterval = 10 * time.Second
+
+// WorkerPoolAutoscaler is the single writer of spec.replicas for autoscaled
+// WorkerPools. Each tick it reads a pool's declarative bounds, measures live
+// occupancy from ateapi, runs the decision policy (internal/autoscaler), and
+// patches the replica count. It deliberately does not touch the Deployment —
+// WorkerPoolReconciler still materializes spec.replicas — so the two
+// controllers own disjoint fields and never fight.
+type WorkerPoolAutoscaler struct {
+	client.Client
+
+	// AteClient is the control-plane API used to read per-pool worker occupancy.
+	AteClient ateapipb.ControlClient
+	// Config tunes the decision policy (stabilization window, max up-step).
+	Config autoscaler.Config
+	// Interval is the re-evaluation cadence. Defaults to defaultAutoscaleInterval.
+	Interval time.Duration
+
+	// now is the clock, overridable in tests.
+	now func() time.Time
+	// downSince remembers, per pool, when a scale-down first became eligible, so
+	// the stabilization window survives across reconciles. Lost on restart, which
+	// is safe: it merely restarts the (conservative) down timer.
+	mu        sync.Mutex
+	downSince map[types.NamespacedName]time.Time
+}
+
+//+kubebuilder:rbac:groups=ate.dev,resources=workerpools,verbs=get;list;watch;update;patch
+
+// Reconcile evaluates one WorkerPool and, if autoscaling is configured, moves
+// spec.replicas toward the policy's target.
+func (r *WorkerPoolAutoscaler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	log := log.FromContext(ctx)
+
+	wp := &atev1alpha1.WorkerPool{}
+	if err := r.Get(ctx, req.NamespacedName, wp); err != nil {
+		if k8errors.IsNotFound(err) {
+			r.forget(req.NamespacedName)
+			return ctrl.Result{}, nil
+		}
+		return ctrl.Result{}, fmt.Errorf("failed to get worker pool %q: %w", req.NamespacedName, err)
+	}
+
+	if !wp.GetDeletionTimestamp().IsZero() {
+		r.forget(req.NamespacedName)
+		return ctrl.Result{}, nil
+	}
+
+	bounds := autoscaler.Bounds{
+		MinReady:     wp.Spec.MinReady,
+		TargetBuffer: wp.Spec.TargetBuffer,
+		MaxReplicas:  wp.Spec.MaxReplicas,
+	}
+	if !bounds.Enabled() {
+		// Pool is not autoscaled: leave spec.replicas to whoever owns it and stop
+		// requeuing it.
+		r.forget(req.NamespacedName)
+		return ctrl.Result{}, nil
+	}
+
+	obs, err := r.observe(ctx, wp)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("while observing pool occupancy: %w", err)
+	}
+
+	decision, downSince := autoscaler.Step(bounds, obs, r.Config, r.nowFn(), r.loadDownSince(req.NamespacedName))
+	r.storeDownSince(req.NamespacedName, downSince)
+
+	if decision.Changed {
+		if err := r.scaleTo(ctx, wp, decision.Target); err != nil {
+			return ctrl.Result{}, fmt.Errorf("while scaling worker pool: %w", err)
+		}
+		log.Info("autoscaled WorkerPool",
+			"from", obs.Current, "to", decision.Target,
+			"free", obs.Free, "inFlight", obs.InFlight, "reason", decision.Reason)
+	}
+
+	return ctrl.Result{RequeueAfter: r.interval()}, nil
+}
+
+// observe measures the pool's live occupancy from ateapi. Free is the number of
+// registered workers with no actor; InFlight is pods requested but not yet
+// registered (current desired count minus everything that has registered).
+func (r *WorkerPoolAutoscaler) observe(ctx context.Context, wp *atev1alpha1.WorkerPool) (autoscaler.Observation, error) {
+	resp, err := r.AteClient.ListWorkers(ctx, &ateapipb.ListWorkersRequest{})
+	if err != nil {
+		return autoscaler.Observation{}, fmt.Errorf("listing workers: %w", err)
+	}
+
+	var registered, free int32
+	for _, w := range resp.GetWorkers() {
+		if w.GetWorkerNamespace() != wp.Namespace || w.GetWorkerPool() != wp.Name {
+			continue
+		}
+		registered++
+		if w.GetActorId() == "" {
+			free++
+		}
+	}
+
+	inFlight := wp.Spec.Replicas - registered
+	if inFlight < 0 {
+		inFlight = 0
+	}
+	return autoscaler.Observation{Current: wp.Spec.Replicas, Free: free, InFlight: inFlight}, nil
+}
+
+// scaleTo patches only spec.replicas — the field the scale subresource maps to —
+// leaving every other field to its owner.
+func (r *WorkerPoolAutoscaler) scaleTo(ctx context.Context, wp *atev1alpha1.WorkerPool, target int32) error {
+	patch := client.MergeFrom(wp.DeepCopy())
+	wp.Spec.Replicas = target
+	return r.Patch(ctx, wp, patch)
+}
+
+func (r *WorkerPoolAutoscaler) nowFn() time.Time {
+	if r.now != nil {
+		return r.now()
+	}
+	return time.Now()
+}
+
+func (r *WorkerPoolAutoscaler) interval() time.Duration {
+	if r.Interval > 0 {
+		return r.Interval
+	}
+	return defaultAutoscaleInterval
+}
+
+func (r *WorkerPoolAutoscaler) loadDownSince(key types.NamespacedName) time.Time {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.downSince[key]
+}
+
+func (r *WorkerPoolAutoscaler) storeDownSince(key types.NamespacedName, t time.Time) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.downSince == nil {
+		r.downSince = map[types.NamespacedName]time.Time{}
+	}
+	if t.IsZero() {
+		delete(r.downSince, key)
+		return
+	}
+	r.downSince[key] = t
+}
+
+func (r *WorkerPoolAutoscaler) forget(key types.NamespacedName) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.downSince, key)
+}
+
+// SetupWithManager registers the autoscaler. It uses a distinct controller name
+// (WorkerPoolReconciler also watches WorkerPool) and a generation predicate so
+// status-only writes don't wake it — periodic requeue drives the polling.
+func (r *WorkerPoolAutoscaler) SetupWithManager(mgr ctrl.Manager) error {
+	r.mu.Lock()
+	if r.downSince == nil {
+		r.downSince = map[types.NamespacedName]time.Time{}
+	}
+	r.mu.Unlock()
+
+	return ctrl.NewControllerManagedBy(mgr).
+		For(&atev1alpha1.WorkerPool{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
+		Named("workerpool-autoscaler").
+		Complete(r)
+}

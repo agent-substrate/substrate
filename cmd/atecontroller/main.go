@@ -16,7 +16,9 @@ package main
 import (
 	"crypto/tls"
 	"os"
+	"time"
 
+	"github.com/agent-substrate/substrate/internal/autoscaler"
 	"github.com/agent-substrate/substrate/internal/controllers"
 	clientv1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -85,6 +87,20 @@ func main() {
 		AteClient: ateapiClient,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ActorTemplate")
+		os.Exit(1)
+	}
+
+	if err = (&controllers.WorkerPoolAutoscaler{
+		Client:    mgr.GetClient(),
+		AteClient: ateapiClient,
+		Config: autoscaler.Config{
+			// TODO: surface these as flags once we tune them in a cluster.
+			ScaleDownStabilization: 60 * time.Second,
+			MaxScaleUpStep:         0, // unlimited
+		},
+		Interval: 10 * time.Second,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "WorkerPoolAutoscaler")
 		os.Exit(1)
 	}
 
