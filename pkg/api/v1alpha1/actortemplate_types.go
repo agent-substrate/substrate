@@ -54,9 +54,9 @@ type Container struct {
 }
 
 // EnvVar represents an environment variable supplied to a container in an
-// ActorTemplate. It mirrors the shape of corev1.EnvVar but only models the
-// subset of sources that the substrate control plane resolves: literal values,
-// and Secret keys.
+// ActorTemplate. It models only a subset of Kubernetes Pod env behavior:
+// literal values are not expanded with Kubernetes-style $(VAR) references,
+// envFrom is not supported, and valueFrom currently supports only secretKeyRef.
 //
 // +kubebuilder:validation:XValidation:rule="!(has(self.value) && has(self.valueFrom))",message="value and valueFrom are mutually exclusive"
 type EnvVar struct {
