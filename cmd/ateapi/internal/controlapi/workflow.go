@@ -119,16 +119,18 @@ type ActorWorkflow struct {
 	actorTemplateLister listersv1alpha1.ActorTemplateLister
 	kubeClient          kubernetes.Interface
 	secretCache         *envSecretCache
+	pressure            *CapacityPressureHub
 }
 
 // NewActorWorkflow creates a new ActorWorkflow.
-func NewActorWorkflow(store store.Interface, dialer *AteletDialer, actorTemplateLister listersv1alpha1.ActorTemplateLister, kubeClient kubernetes.Interface) *ActorWorkflow {
+func NewActorWorkflow(store store.Interface, dialer *AteletDialer, actorTemplateLister listersv1alpha1.ActorTemplateLister, kubeClient kubernetes.Interface, pressure *CapacityPressureHub) *ActorWorkflow {
 	return &ActorWorkflow{
 		store:               store,
 		dialer:              dialer,
 		actorTemplateLister: actorTemplateLister,
 		kubeClient:          kubeClient,
 		secretCache:         newEnvSecretCache(envSecretCacheTTL),
+		pressure:            pressure,
 	}
 }
 
@@ -150,7 +152,7 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, id string, boot bool) (
 
 	steps := []WorkflowStep[*ResumeInput, *ResumeState]{
 		&LoadActorForResumeStep{store: w.store, actorTemplateLister: w.actorTemplateLister},
-		&AssignWorkerStep{store: w.store},
+		&AssignWorkerStep{store: w.store, pressure: w.pressure},
 		&CallAteletRestoreStep{dialer: w.dialer, kubeClient: w.kubeClient, secretCache: w.secretCache},
 		&FinalizeRunningStep{store: w.store},
 	}

@@ -77,7 +77,8 @@ func (s *LoadActorForResumeStep) Execute(ctx context.Context, input *ResumeInput
 func (s *LoadActorForResumeStep) RetryBackoff() *wait.Backoff { return nil }
 
 type AssignWorkerStep struct {
-	store store.Interface
+	store    store.Interface
+	pressure *CapacityPressureHub
 }
 
 func (s *AssignWorkerStep) Name() string { return "AssignWorker" }
@@ -105,6 +106,11 @@ func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, stat
 	if assignedWorker == nil {
 		pickedWorker := s.findFreeWorker(workers, state.ActorTemplate.Spec.WorkerPoolRef.Namespace, state.ActorTemplate.Spec.WorkerPoolRef.Name)
 		if pickedWorker == nil {
+			// Signal capacity pressure for this pool so the autoscaler can react
+			// at the request edge instead of waiting for its next poll.
+			if s.pressure != nil {
+				s.pressure.Publish(state.ActorTemplate.Spec.WorkerPoolRef.Namespace, state.ActorTemplate.Spec.WorkerPoolRef.Name)
+			}
 			return status.Errorf(codes.FailedPrecondition, "no free workers available")
 		}
 
