@@ -70,8 +70,37 @@ spec:
                   workers.
                 minLength: 1
                 type: string
+              maxReplicas:
+                description: |-
+                  MaxReplicas is the upper bound the autoscaler may grow the pool to. When
+                  unset the autoscaler applies no ceiling of its own.
+                format: int32
+                minimum: 0
+                type: integer
+              minReady:
+                description: |-
+                  MinReady is the minimum number of worker pods the autoscaler keeps the
+                  pool at — the reservation floor it must never scale below. When unset the
+                  pool may be scaled to zero. The floor is enforced by the autoscaler; the
+                  WorkerPool controller never clamps Replicas itself, so that the scale
+                  subresource keeps a single writer.
+                format: int32
+                minimum: 0
+                type: integer
               replicas:
-                description: Replicas is the number of worker pods to run.
+                description: |-
+                  Replicas is the number of worker pods to run. When autoscaling is enabled
+                  it is owned by the autoscaler (written via the scale subresource); the
+                  fields below are the declarative inputs that drive it.
+                format: int32
+                minimum: 0
+                type: integer
+              targetBuffer:
+                description: |-
+                  TargetBuffer is the desired number of idle (warm) workers the autoscaler
+                  keeps available to absorb resume bursts. When the idle count falls below
+                  this target the autoscaler provisions more workers, net of pods already
+                  starting. When unset, buffer-based scale-up is disabled.
                 format: int32
                 minimum: 0
                 type: integer
@@ -79,6 +108,10 @@ spec:
             - ateomImage
             - replicas
             type: object
+            x-kubernetes-validations:
+            - message: minReady must not exceed maxReplicas
+              rule: '!has(self.minReady) || !has(self.maxReplicas) || self.minReady
+                <= self.maxReplicas'
           status:
             description: status is the observed state of WorkerPool
             properties:
