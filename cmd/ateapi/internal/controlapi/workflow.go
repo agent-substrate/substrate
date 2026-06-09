@@ -191,6 +191,35 @@ func (w *ActorWorkflow) SuspendActor(ctx context.Context, id string) (*ateapipb.
 	return state.Actor, nil
 }
 
+// PauseActor executes the workflow to pause a running actor. Idempotent.
+func (w *ActorWorkflow) PauseActor(ctx context.Context, id string) (*ateapipb.Actor, error) {
+	input := &PauseInput{
+		ActorID: id,
+	}
+	state := &PauseState{}
+
+	// Acquire lock and get the timeout context for the workflow
+	// Lock TTL is 7 seconds, with 2 seconds padding for workflow timeout
+	ctx, releaseLock, err := w.acquireActorLock(ctx, id, 30*time.Second, 2*time.Second)
+	if err != nil {
+		return nil, err
+	}
+	defer releaseLock()
+
+	steps := []WorkflowStep[*PauseInput, *PauseState]{
+		&LoadActorForPauseStep{store: w.store, actorTemplateLister: w.actorTemplateLister},
+		&MarkPausingStep{store: w.store},
+		&CallAteletPauseStep{dialer: w.dialer},
+		&FinalizePausedStep{store: w.store},
+	}
+
+	if err := RunWorkflow(ctx, input, state, steps); err != nil {
+		return nil, err
+	}
+
+	return state.Actor, nil
+}
+
 func (w *ActorWorkflow) acquireActorLock(ctx context.Context, id string, ttl time.Duration, padding time.Duration) (context.Context, func(), error) {
 	lockKey := "lock:actor:" + id
 	lockValue := uuid.New().String()

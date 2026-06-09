@@ -91,6 +91,9 @@ message RunResponse {
 }
 
 message LocalCheckpointConfiguration {
+  // A sub-directory on the local filesystem below which the checkpoint data will be
+  // stored.  The structure of the checkpoint should generally be treated as opaque.
+  string snapshot_prefix = 1;
 }
 
 message ExternalCheckpointConfiguration {

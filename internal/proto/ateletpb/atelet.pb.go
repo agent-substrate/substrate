@@ -585,9 +585,12 @@ func (*RunResponse) Descriptor() ([]byte, []int) {
 }
 
 type LocalCheckpointConfiguration struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// A sub-directory on the local filesystem below which the checkpoint data will be
+	// stored.  The structure of the checkpoint should generally be treated as opaque.
+	SnapshotPrefix string `protobuf:"bytes,1,opt,name=snapshot_prefix,json=snapshotPrefix,proto3" json:"snapshot_prefix,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *LocalCheckpointConfiguration) Reset() {
@@ -618,6 +621,13 @@ func (x *LocalCheckpointConfiguration) ProtoReflect() protoreflect.Message {
 // Deprecated: Use LocalCheckpointConfiguration.ProtoReflect.Descriptor instead.
 func (*LocalCheckpointConfiguration) Descriptor() ([]byte, []int) {
 	return file_atelet_proto_rawDescGZIP(), []int{9}
+}
+
+func (x *LocalCheckpointConfiguration) GetSnapshotPrefix() string {
+	if x != nil {
+		return x.SnapshotPrefix
+	}
+	return ""
 }
 
 type ExternalCheckpointConfiguration struct {
@@ -1018,8 +1028,9 @@ const file_atelet_proto_rawDesc = "" +
 	"\bEnvEntry\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value\"\r\n" +
-	"\vRunResponse\"\x1e\n" +
-	"\x1cLocalCheckpointConfiguration\"Q\n" +
+	"\vRunResponse\"G\n" +
+	"\x1cLocalCheckpointConfiguration\x12'\n" +
+	"\x0fsnapshot_prefix\x18\x01 \x01(\tR\x0esnapshotPrefix\"Q\n" +
 	"\x1fExternalCheckpointConfiguration\x12.\n" +
 	"\x13snapshot_uri_prefix\x18\x01 \x01(\tR\x11snapshotUriPrefix\"\xf2\x03\n" +
 	"\x11CheckpointRequest\x12(\n" +

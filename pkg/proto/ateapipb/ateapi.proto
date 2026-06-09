@@ -32,6 +32,9 @@ service Control {
   // Suspend a given actor to a new snapshot.
   rpc SuspendActor(SuspendActorRequest) returns (SuspendActorResponse) {}
 
+  // Pause a given actor and keep its snapshots on node VM.
+  rpc PauseActor(PauseActorRequest) returns (PauseActorResponse) {}
+
   // Resume an actor from its latest snapshot.
   rpc ResumeActor(ResumeActorRequest) returns (ResumeActorResponse) {}
 
@@ -48,6 +51,30 @@ service Control {
   rpc DebugClear(DebugClearRequest) returns (DebugClearResponse) {}
 }
 
+enum SnapshotType {
+  SNAPSHOT_TYPE_UNSPECIFIED = 0;
+  SNAPSHOT_TYPE_LOCAL       = 1;
+  SNAPSHOT_TYPE_EXTERNAL      = 2;
+}
+
+message ExternalSnapshotInfo {
+  string snapshot_uri_prefix = 1;
+}
+
+message LocalSnapshotInfo {
+  string snapshot_prefix = 1;
+  // Node VMs that have local snapshots for this actor, while it's PAUSED.
+  repeated string node_vms_with_local_snapshots = 2;
+}
+
+message SnapshotInfo {
+  SnapshotType type = 1;
+  oneof data {
+    ExternalSnapshotInfo external = 2;
+    LocalSnapshotInfo    local    = 3;
+  }
+}
+
 message Actor {
   string actor_id = 1;
   int64  version  = 2;
@@ -61,6 +88,8 @@ message Actor {
     STATUS_RUNNING     = 2;
     STATUS_SUSPENDING  = 3;
     STATUS_SUSPENDED   = 4;
+    STATUS_PAUSING     = 5;
+    STATUS_PAUSED      = 6;
   }
   Status status = 5;
 
@@ -68,9 +97,11 @@ message Actor {
   string ateom_pod_name      = 7;
   string ateom_pod_ip        = 8;
 
-  string last_snapshot        = 9;
+  // last_snapshot
+  reserved 9;
   string in_progress_snapshot = 10;
   string ateom_pod_uid        = 11;
+  SnapshotInfo latest_snapshot_info = 12;
 }
 
 message GetActorRequest {
@@ -102,6 +133,14 @@ message SuspendActorRequest {
 }
 
 message SuspendActorResponse {
+  Actor actor = 1;
+}
+
+message PauseActorRequest {
+  string actor_id = 1;
+}
+
+message PauseActorResponse {
   Actor actor = 1;
 }
 

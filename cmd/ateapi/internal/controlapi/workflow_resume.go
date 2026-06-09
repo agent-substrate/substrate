@@ -199,7 +199,14 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 		runscCfg.Authentication = authnCfg
 	}
 
-	if state.Actor.LastSnapshot != "" {
+	var snapshotUriPrefix string
+	switch state.Actor.GetLatestSnapshotInfo().GetType() {
+	case ateapipb.SnapshotType_SNAPSHOT_TYPE_LOCAL:
+		snapshotUriPrefix = state.Actor.GetLatestSnapshotInfo().GetLocal().GetSnapshotPrefix()
+	case ateapipb.SnapshotType_SNAPSHOT_TYPE_EXTERNAL:
+		snapshotUriPrefix = state.Actor.GetLatestSnapshotInfo().GetExternal().GetSnapshotUriPrefix()
+	}
+	if snapshotUriPrefix != "" {
 		slog.InfoContext(ctx, "Actor has snapshot; Restoring from snapshot")
 
 		req := &ateletpb.RestoreRequest{
@@ -209,7 +216,8 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 			ActorId:                state.Actor.GetActorId(),
 			Runsc:                  runscCfg,
 			Spec:                   workloadSpec,
-			SnapshotUriPrefix:      state.Actor.GetLastSnapshot(),
+			// TODO(dberkov) - fix it
+			SnapshotUriPrefix:      snapshotUriPrefix,
 		}
 		_, err = client.Restore(ctx, req)
 		if err != nil {

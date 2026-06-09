@@ -38,6 +38,7 @@ const (
 	Control_GetActor_FullMethodName     = "/ateapi.Control/GetActor"
 	Control_CreateActor_FullMethodName  = "/ateapi.Control/CreateActor"
 	Control_SuspendActor_FullMethodName = "/ateapi.Control/SuspendActor"
+	Control_PauseActor_FullMethodName   = "/ateapi.Control/PauseActor"
 	Control_ResumeActor_FullMethodName  = "/ateapi.Control/ResumeActor"
 	Control_DeleteActor_FullMethodName  = "/ateapi.Control/DeleteActor"
 	Control_ListWorkers_FullMethodName  = "/ateapi.Control/ListWorkers"
@@ -57,6 +58,8 @@ type ControlClient interface {
 	CreateActor(ctx context.Context, in *CreateActorRequest, opts ...grpc.CallOption) (*CreateActorResponse, error)
 	// Suspend a given actor to a new snapshot.
 	SuspendActor(ctx context.Context, in *SuspendActorRequest, opts ...grpc.CallOption) (*SuspendActorResponse, error)
+	// Pause a given actor and keep its snapshots on node VM.
+	PauseActor(ctx context.Context, in *PauseActorRequest, opts ...grpc.CallOption) (*PauseActorResponse, error)
 	// Resume an actor from its latest snapshot.
 	ResumeActor(ctx context.Context, in *ResumeActorRequest, opts ...grpc.CallOption) (*ResumeActorResponse, error)
 	// Delete an actor. Only suspended actors can be deleted.
@@ -101,6 +104,16 @@ func (c *controlClient) SuspendActor(ctx context.Context, in *SuspendActorReques
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(SuspendActorResponse)
 	err := c.cc.Invoke(ctx, Control_SuspendActor_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) PauseActor(ctx context.Context, in *PauseActorRequest, opts ...grpc.CallOption) (*PauseActorResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PauseActorResponse)
+	err := c.cc.Invoke(ctx, Control_PauseActor_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -169,6 +182,8 @@ type ControlServer interface {
 	CreateActor(context.Context, *CreateActorRequest) (*CreateActorResponse, error)
 	// Suspend a given actor to a new snapshot.
 	SuspendActor(context.Context, *SuspendActorRequest) (*SuspendActorResponse, error)
+	// Pause a given actor and keep its snapshots on node VM.
+	PauseActor(context.Context, *PauseActorRequest) (*PauseActorResponse, error)
 	// Resume an actor from its latest snapshot.
 	ResumeActor(context.Context, *ResumeActorRequest) (*ResumeActorResponse, error)
 	// Delete an actor. Only suspended actors can be deleted.
@@ -197,6 +212,9 @@ func (UnimplementedControlServer) CreateActor(context.Context, *CreateActorReque
 }
 func (UnimplementedControlServer) SuspendActor(context.Context, *SuspendActorRequest) (*SuspendActorResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SuspendActor not implemented")
+}
+func (UnimplementedControlServer) PauseActor(context.Context, *PauseActorRequest) (*PauseActorResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method PauseActor not implemented")
 }
 func (UnimplementedControlServer) ResumeActor(context.Context, *ResumeActorRequest) (*ResumeActorResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ResumeActor not implemented")
@@ -284,6 +302,24 @@ func _Control_SuspendActor_Handler(srv interface{}, ctx context.Context, dec fun
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(ControlServer).SuspendActor(ctx, req.(*SuspendActorRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_PauseActor_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PauseActorRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).PauseActor(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_PauseActor_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).PauseActor(ctx, req.(*PauseActorRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -396,6 +432,10 @@ var Control_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "SuspendActor",
 			Handler:    _Control_SuspendActor_Handler,
+		},
+		{
+			MethodName: "PauseActor",
+			Handler:    _Control_PauseActor_Handler,
 		},
 		{
 			MethodName: "ResumeActor",

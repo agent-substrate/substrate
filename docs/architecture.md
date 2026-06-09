@@ -326,7 +326,7 @@ Triggered by an inbound request at the Gateway or an explicit API call.
   2. **Assignment**: The Control Plane claims a warm worker from the
      `WorkerPool`.
 
-  3. **Hydration**: The `atelet` supervisor coordinates with the `ateom` process inside the worker pod to restore the `GoldenSnapshot` (for first-run) or the `LastSnapshot` (for recurring runs) into the sandbox.
+  3. **Hydration**: The `atelet` supervisor coordinates with the `ateom` process inside the worker pod to restore the `GoldenSnapshot` (for first-run) or the `LatestSnapshotInfo` (for recurring runs) into the sandbox.
 
   4. **Status**: Status transitions to `STATUS_RUNNING`. The actor now has an
      active Worker IP.
@@ -345,7 +345,7 @@ Triggered by an explicit `SuspendActor` call.
   3. **Reclaim**: The physical worker is wiped and returned to the `WorkerPool`.
 
   4. **Status**: Status transitions back to `STATUS_SUSPENDED`, now pointing to
-     the `LastSnapshot` for future resumptions.
+     the `LatestSnapshotInfo` for future resumptions.
 
 ### Phase 4: Deletion
 

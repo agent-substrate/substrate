@@ -392,9 +392,13 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 
 	ns, tmpl, actorID := req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId()
 
-	switch req.GetType(){
-	case ateletpb.CheckpointRequest_CHECKPOINT_TYPE_EXTERNAL:
+	switch req.GetType() {
+	case ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL:
 		if err := s.uploadExternalCheckpoint(ctx, req, checkpointDir); err != nil {
+			return nil, err
+		}
+	case ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL:
+		if err := s.moveLocalCheckpoint(ctx, req, checkpointDir); err != nil {
 			return nil, err
 		}
 	default:
@@ -406,6 +410,27 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 	}
 
 	return &ateletpb.CheckpointResponse{}, nil
+}
+
+func (s *AteomHerder) moveLocalCheckpoint(ctx context.Context, req *ateletpb.CheckpointRequest, checkpointDir string) error {
+	localCheckpointPath := filepath.Join(ateompath.LocalCheckpointsDir(req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId()), req.GetLocalConfig().GetSnapshotPrefix())
+	if err := os.MkdirAll(localCheckpointPath, 0o700); err != nil {
+		return fmt.Errorf("while creating local checkpoint directory: %w", err)
+	}
+
+	ns, tmpl := req.GetActorTemplateNamespace(), req.GetActorTemplateName()
+
+	for _, fileName := range []string{"checkpoint.img","pages.img", "pages_meta.img"} {
+		src := filepath.Join(checkpointDir, fileName)
+		dst := filepath.Join(localCheckpointPath, fileName)
+		recordSnapshotSize(ctx, strings.TrimSuffix(fileName, ".img"), src, ns, tmpl)
+
+		if err := os.Rename(src, dst); err != nil {
+			return fmt.Errorf("failed to move %s to %s: %w", src, dst, err)
+		}
+	}
+
+	return nil
 }
 
 func (s *AteomHerder) uploadExternalCheckpoint(ctx context.Context, req *ateletpb.CheckpointRequest, checkpointDir string) error {

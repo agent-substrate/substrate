@@ -20,7 +20,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
 	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
@@ -31,28 +30,28 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 )
 
-// SuspendInput holds the immutable parameters requested by the client.
-type SuspendInput struct {
+// PauseInput holds the immutable parameters requested by the client.
+type PauseInput struct {
 	ActorID string
 }
 
-// SuspendState holds the mutable state loaded and modified during execution.
-type SuspendState struct {
+// PauseState holds the mutable state loaded and modified during execution.
+type PauseState struct {
 	Actor         *ateapipb.Actor
 	ActorTemplate *atev1alpha1.ActorTemplate
 }
 
-type LoadActorForSuspendStep struct {
+type LoadActorForPauseStep struct {
 	store               store.Interface
 	actorTemplateLister listersv1alpha1.ActorTemplateLister
 }
 
-func (s *LoadActorForSuspendStep) Name() string { return "LoadActorForSuspend" }
-func (s *LoadActorForSuspendStep) IsComplete(ctx context.Context, input *SuspendInput, state *SuspendState) (bool, error) {
+func (s *LoadActorForPauseStep) Name() string { return "LoadActorForPause" }
+func (s *LoadActorForPauseStep) IsComplete(ctx context.Context, input *PauseInput, state *PauseState) (bool, error) {
 	// Always run to get the freshest state
 	return false, nil
 }
-func (s *LoadActorForSuspendStep) Execute(ctx context.Context, input *SuspendInput, state *SuspendState) error {
+func (s *LoadActorForPauseStep) Execute(ctx context.Context, input *PauseInput, state *PauseState) error {
 	actor, err := s.store.GetActor(ctx, input.ActorID)
 	if err != nil {
 		return err
@@ -68,48 +67,47 @@ func (s *LoadActorForSuspendStep) Execute(ctx context.Context, input *SuspendInp
 	return nil
 }
 
-func (s *LoadActorForSuspendStep) RetryBackoff() *wait.Backoff { return nil }
+func (s *LoadActorForPauseStep) RetryBackoff() *wait.Backoff { return nil }
 
-type MarkSuspendingStep struct {
+type MarkPausingStep struct {
 	store store.Interface
 }
 
-func (s *MarkSuspendingStep) Name() string { return "MarkSuspending" }
-func (s *MarkSuspendingStep) IsComplete(ctx context.Context, input *SuspendInput, state *SuspendState) (bool, error) {
+func (s *MarkPausingStep) Name() string { return "MarkPausing" }
+func (s *MarkPausingStep) IsComplete(ctx context.Context, input *PauseInput, state *PauseState) (bool, error) {
 	// Fast forward if we've already marked our intent or if we are further along.
-	return state.Actor.GetStatus() == ateapipb.Actor_STATUS_SUSPENDING || state.Actor.GetStatus() == ateapipb.Actor_STATUS_SUSPENDED, nil
+	return state.Actor.GetStatus() == ateapipb.Actor_STATUS_PAUSING || state.Actor.GetStatus() == ateapipb.Actor_STATUS_PAUSED, nil
 }
-func (s *MarkSuspendingStep) Execute(ctx context.Context, input *SuspendInput, state *SuspendState) error {
+func (s *MarkPausingStep) Execute(ctx context.Context, input *PauseInput, state *PauseState) error {
 	if state.Actor.GetStatus() != ateapipb.Actor_STATUS_RUNNING {
 		return nil
 	}
 
-	state.Actor.Status = ateapipb.Actor_STATUS_SUSPENDING
-	snapshotID := time.Now().Format(time.RFC3339) + "-" + rand.Text()
-	state.Actor.InProgressSnapshot = strings.TrimSuffix(state.ActorTemplate.Spec.SnapshotsConfig.Location, "/") + "/" + input.ActorID + "/" + snapshotID
+	state.Actor.Status = ateapipb.Actor_STATUS_PAUSING
+	state.Actor.InProgressSnapshot = fmt.Sprintf("%s-%s-%s", state.Actor.GetActorId(), time.Now().Format(time.RFC3339), rand.Text())
 	return s.store.UpdateActor(ctx, state.Actor, state.Actor.GetVersion())
 }
 
-func (s *MarkSuspendingStep) RetryBackoff() *wait.Backoff { return nil }
+func (s *MarkPausingStep) RetryBackoff() *wait.Backoff { return nil }
 
-type CallAteletSuspendStep struct {
+type CallAteletPauseStep struct {
 	dialer *AteletDialer
 }
 
-func (s *CallAteletSuspendStep) Name() string { return "CallAteletSuspend" }
-func (s *CallAteletSuspendStep) IsComplete(ctx context.Context, input *SuspendInput, state *SuspendState) (bool, error) {
-	// If we are already SUSPENDED, we've already called Atelet
-	return state.Actor.GetStatus() == ateapipb.Actor_STATUS_SUSPENDED, nil
+func (s *CallAteletPauseStep) Name() string { return "CallAteletPause" }
+func (s *CallAteletPauseStep) IsComplete(ctx context.Context, input *PauseInput, state *PauseState) (bool, error) {
+	// If we are already PAUSED, we've already called Atelet
+	return state.Actor.GetStatus() == ateapipb.Actor_STATUS_PAUSED, nil
 }
-func (s *CallAteletSuspendStep) Execute(ctx context.Context, input *SuspendInput, state *SuspendState) error {
+func (s *CallAteletPauseStep) Execute(ctx context.Context, input *PauseInput, state *PauseState) error {
 	if state.Actor.GetAteomPodNamespace() == "" {
-		return fmt.Errorf("actor is in SUSPENDING state but has no active worker")
+		return fmt.Errorf("actor is in PAUSING state but has no active worker")
 	}
 
 	ateletConn, err := s.dialer.DialForWorker(state.Actor.GetAteomPodNamespace(), state.Actor.GetAteomPodName())
 	if err != nil {
 		if errors.Is(err, ErrWorkerPodNotFound) {
-			slog.Warn("Skipping suspend for dangling worker pod", "namespace", state.Actor.GetAteomPodNamespace(), "pod", state.Actor.GetAteomPodName())
+			slog.Warn("Skipping pause for dangling worker pod", "namespace", state.Actor.GetAteomPodNamespace(), "pod", state.Actor.GetAteomPodName())
 			return nil
 		}
 		return fmt.Errorf("while getting atelet conn for worker pod: %w", err)
@@ -144,10 +142,10 @@ func (s *CallAteletSuspendStep) Execute(ctx context.Context, input *SuspendInput
 		Spec: &ateletpb.WorkloadSpec{
 			PauseImage: state.ActorTemplate.Spec.PauseImage,
 		},
-		Type: ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
-		Config: &ateletpb.CheckpointRequest_ExternalConfig{
-			ExternalConfig: &ateletpb.ExternalCheckpointConfiguration{
-				SnapshotUriPrefix: state.Actor.GetInProgressSnapshot(),
+		Type: ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
+		Config: &ateletpb.CheckpointRequest_LocalConfig{
+			LocalConfig: &ateletpb.LocalCheckpointConfiguration{
+				SnapshotPrefix: state.Actor.InProgressSnapshot,
 			},
 		},
 	}
@@ -178,18 +176,18 @@ func (s *CallAteletSuspendStep) Execute(ctx context.Context, input *SuspendInput
 	return nil
 }
 
-func (s *CallAteletSuspendStep) RetryBackoff() *wait.Backoff { return nil }
+func (s *CallAteletPauseStep) RetryBackoff() *wait.Backoff { return nil }
 
-type FinalizeSuspendedStep struct {
+type FinalizePausedStep struct {
 	store store.Interface
 }
 
-func (s *FinalizeSuspendedStep) Name() string { return "FinalizeSuspended" }
-func (s *FinalizeSuspendedStep) IsComplete(ctx context.Context, input *SuspendInput, state *SuspendState) (bool, error) {
-	// The workflow is completely done ONLY if the status is SUSPENDED *and* we've successfully freed the worker.
-	return state.Actor.GetStatus() == ateapipb.Actor_STATUS_SUSPENDED && state.Actor.GetAteomPodNamespace() == "", nil
+func (s *FinalizePausedStep) Name() string { return "FinalizePaused" }
+func (s *FinalizePausedStep) IsComplete(ctx context.Context, input *PauseInput, state *PauseState) (bool, error) {
+	// The workflow is completely done ONLY if the status is PAUSED *and* we've successfully freed the worker.
+	return state.Actor.GetStatus() == ateapipb.Actor_STATUS_PAUSED && state.Actor.GetAteomPodNamespace() == "", nil
 }
-func (s *FinalizeSuspendedStep) Execute(ctx context.Context, input *SuspendInput, state *SuspendState) error {
+func (s *FinalizePausedStep) Execute(ctx context.Context, input *PauseInput, state *PauseState) error {
 	latestActor, err := s.store.GetActor(ctx, input.ActorID)
 	if err != nil {
 		return err
@@ -203,12 +201,15 @@ func (s *FinalizeSuspendedStep) Execute(ctx context.Context, input *SuspendInput
 		workerPool := state.ActorTemplate.Spec.WorkerPoolRef.Name
 
 		worker, err := s.store.GetWorker(ctx, workerNs, workerPool, workerPod)
+		nodeName := ""
 		if err != nil {
 			if !errors.Is(err, store.ErrNotFound) {
 				return fmt.Errorf("while getting worker for release: %w", err)
 			}
-			slog.Warn("Worker already gone during finalize suspend, skipping release", "worker", workerPod)
+			slog.Warn("Worker already gone during finalize pause, skipping release", "worker", workerPod)
 		} else {
+			// TODO(dberkov) - what if worker does not belong to this actor?
+			nodeName = worker.GetNodeName()
 			// Only free it if it still belongs to us
 			if worker.GetActorId() == input.ActorID {
 				worker.ActorNamespace = ""
@@ -227,13 +228,19 @@ func (s *FinalizeSuspendedStep) Execute(ctx context.Context, input *SuspendInput
 		if err != nil {
 			return err
 		}
-		latestActor.Status = ateapipb.Actor_STATUS_SUSPENDED
+		latestActor.Status = ateapipb.Actor_STATUS_PAUSED
+		// TODO(dberkov) - what if we still don't know the node name? Maybe move to CRASHED status?
+		if nodeName == "" {
+			slog.Warn("Node name not found during finalize pause", "actor", input.ActorID)
+		}
+		// TODO(dberkov) - what if InProgressSnapshot is empty? That shouldn't be possible.
 		if latestActor.InProgressSnapshot != "" {
 			latestActor.LatestSnapshotInfo = &ateapipb.SnapshotInfo{
-				Type: ateapipb.SnapshotType_SNAPSHOT_TYPE_EXTERNAL,
-				Data: &ateapipb.SnapshotInfo_External{
-					External: &ateapipb.ExternalSnapshotInfo{
-						SnapshotUriPrefix: latestActor.InProgressSnapshot,
+				Type: ateapipb.SnapshotType_SNAPSHOT_TYPE_LOCAL,
+				Data: &ateapipb.SnapshotInfo_Local{
+					Local: &ateapipb.LocalSnapshotInfo{
+						SnapshotPrefix: latestActor.InProgressSnapshot,
+						NodeVmsWithLocalSnapshots: []string{nodeName},
 					},
 				},
 			}
@@ -252,4 +259,4 @@ func (s *FinalizeSuspendedStep) Execute(ctx context.Context, input *SuspendInput
 	return nil
 }
 
-func (s *FinalizeSuspendedStep) RetryBackoff() *wait.Backoff { return nil }
+func (s *FinalizePausedStep) RetryBackoff() *wait.Backoff { return nil }

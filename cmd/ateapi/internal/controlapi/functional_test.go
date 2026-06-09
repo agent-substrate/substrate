@@ -1124,14 +1124,112 @@ func TestSuspendActor(t *testing.T) {
 			ActorTemplateNamespace: ns,
 			ActorTemplateName:      "tmpl1",
 			Status:                 ateapipb.Actor_STATUS_SUSPENDED,
-			LastSnapshot:           fmt.Sprintf("gs://my-bucket/%s/tmpl1/%s/", ns, id),
+			LatestSnapshotInfo: &ateapipb.SnapshotInfo{
+				Type: ateapipb.SnapshotType_SNAPSHOT_TYPE_EXTERNAL,
+				Data: &ateapipb.SnapshotInfo_External{
+					External: &ateapipb.ExternalSnapshotInfo{
+						SnapshotUriPrefix: fmt.Sprintf("gs://fake-fake-fake/%s/", id),
+					},
+				},
+			},
 		},
 	}
 
-	if diff := cmp.Diff(want, getResp, protocmp.Transform(), protocmp.IgnoreFields(&ateapipb.Actor{}, "version", "last_snapshot", "ateom_pod_uid")); diff != "" {
+	if diff := cmp.Diff(want, getResp,
+		protocmp.Transform(),
+		protocmp.IgnoreFields(&ateapipb.Actor{}, "version"),
+		protocmp.IgnoreFields(&ateapipb.Actor{}, "ateom_pod_uid"),
+		protocmp.FilterField(&ateapipb.ExternalSnapshotInfo{}, "snapshot_uri_prefix", cmp.Comparer(func(x, y string) bool {
+			return strings.HasPrefix(y, x)
+		})),
+	); diff != "" {
 		t.Errorf("GetActor response mismatch (-want +got):\n%s", diff)
 	}
+}
 
+// TestPauseActor tests the full workflow of pausing a running actor.
+// Workflow:
+// 1. Creates a mock ActorTemplate.
+// 2. Creates a mock Atelet Pod on 'node1'.
+// 3. Creates a mock worker Pod on 'node1'.
+// 4. Waits for the WorkerPoolSyncer to mirror the worker to Redis.
+// 5. Creates an actor.
+// 6. Calls ResumeActor to transition it to RUNNING.
+// 7. Calls PauseActor RPC.
+// 8. Verifies that the fake Atelet received the Pause call.
+func TestPauseActor(t *testing.T) {
+	ns := namespaceForTest("ns-suspend")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	createTemplate(t, tc, ns)
+
+	createWorkerPod(t, tc, ns, "worker-1", "node1")
+
+	_, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{
+		ActorTemplateNamespace: ns,
+		ActorTemplateName:      "tmpl1",
+		ActorId:                "id1",
+	})
+	if err != nil {
+		t.Fatalf("CreateActor failed: %v", err)
+	}
+	id := "id1"
+
+	// Resume first to make it running
+	_, err = tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
+		ActorId: id,
+	})
+	if err != nil {
+		t.Fatalf("ResumeActor failed: %v", err)
+	}
+
+	// Suspend
+	_, err = tc.client.PauseActor(context.Background(), &ateapipb.PauseActorRequest{
+		ActorId: id,
+	})
+	if err != nil {
+		t.Fatalf("PauseActor failed: %v", err)
+	}
+
+	if !tc.fakeAtelet.CheckpointCalled {
+		t.Errorf("expected atelet Checkpoint to be called")
+	}
+
+	getResp, err := tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{
+		ActorId: id,
+	})
+	if err != nil {
+		t.Fatalf("GetActor failed: %v", err)
+	}
+	want := &ateapipb.GetActorResponse{
+		Actor: &ateapipb.Actor{
+			ActorId:                id,
+			ActorTemplateNamespace: ns,
+			ActorTemplateName:      "tmpl1",
+			Status:                 ateapipb.Actor_STATUS_PAUSED,
+			LatestSnapshotInfo: &ateapipb.SnapshotInfo{
+				Type: ateapipb.SnapshotType_SNAPSHOT_TYPE_LOCAL,
+				Data: &ateapipb.SnapshotInfo_Local{
+					Local: &ateapipb.LocalSnapshotInfo{
+						SnapshotPrefix:            "id1",
+						NodeVmsWithLocalSnapshots: []string{"node1"},
+					},
+				},
+			},
+		},
+	}
+
+	if diff := cmp.Diff(want, getResp,
+		protocmp.Transform(),
+		protocmp.IgnoreFields(&ateapipb.Actor{}, "version"),
+		protocmp.IgnoreFields(&ateapipb.Actor{}, "ateom_pod_uid"),
+		protocmp.FilterField(&ateapipb.LocalSnapshotInfo{}, "snapshot_prefix", cmp.Comparer(func(x, y string) bool {
+			return strings.HasPrefix(y, x)
+		})),
+	); diff != "" {
+		t.Errorf("GetActor response mismatch (-want +got):\n%s", diff)
+	}
 }
 
 // TestValidation tests the negative validation cases for all gRPC methods.
