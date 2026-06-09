@@ -30,9 +30,9 @@ import (
 // dashboardsToApply lists the Cloud Monitoring dashboard JSON files (relative to
 // the repo root, so run setup from the repo root) that setup creates or updates.
 var dashboardsToApply = []string{
-	"monitoring/dashboards/ate-grpc-dashboard.json",
-	"monitoring/dashboards/ate-e2e-latency-dashboard.json",
-	"monitoring/dashboards/ate-snapshot-dashboard.json",
+	"tools/setup-gcp/dashboards/ate-grpc-dashboard.json",
+	"tools/setup-gcp/dashboards/ate-e2e-latency-dashboard.json",
+	"tools/setup-gcp/dashboards/ate-snapshot-dashboard.json",
 }
 
 // createMonitoringDashboards creates or updates each dashboard in

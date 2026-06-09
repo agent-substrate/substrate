@@ -21,5 +21,5 @@ go run ./tools/setup-gcp --create-monitoring-dashboards   # also part of: --all
 Or apply any single file by hand:
 
 ```sh
-gcloud monitoring dashboards create --config-from-file=monitoring/dashboards/<file>.json
+gcloud monitoring dashboards create --config-from-file=tools/setup-gcp/dashboards/<file>.json
 ```
