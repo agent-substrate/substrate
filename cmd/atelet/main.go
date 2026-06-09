@@ -53,6 +53,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/reflection"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/utils/lru"
 )
 
@@ -216,7 +217,12 @@ func (s *AteomHerder) fetchRunsc(ctx context.Context, cfg *ateletpb.RunscConfig)
 		platCfg = cfg.GetArm64()
 	}
 
-	localPath := ateompath.RunSCBinaryPath(platCfg.GetSha256Hash())
+	sha256Hash := platCfg.GetSha256Hash()
+	if err := validateRunscHash(sha256Hash); err != nil {
+		return "", err
+	}
+
+	localPath := ateompath.RunSCBinaryPath(sha256Hash)
 	_, err := os.Stat(localPath)
 	if err == nil { // EQUALS nil
 		return localPath, nil
@@ -276,6 +282,10 @@ func (s *AteomHerder) fetchRunsc(ctx context.Context, cfg *ateletpb.RunscConfig)
 }
 
 func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (*ateletpb.RunResponse, error) {
+	if err := validateActorRequest(req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId(), req.GetTargetAteomUid(), req.GetSpec()); err != nil {
+		return nil, err
+	}
+
 	runscPath, err := s.fetchRunscAndPrep(ctx, req.GetRunsc())
 	if err != nil {
 		return nil, err
@@ -349,6 +359,10 @@ func recordSnapshotSize(ctx context.Context, kind, path, atNamespace, atName str
 }
 
 func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest) (*ateletpb.CheckpointResponse, error) {
+	if err := validateActorRequest(req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId(), req.GetTargetAteomUid(), req.GetSpec()); err != nil {
+		return nil, err
+	}
+
 	runscPath, err := s.fetchRunscAndPrep(ctx, req.GetRunsc())
 	if err != nil {
 		return nil, err
@@ -412,6 +426,10 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 }
 
 func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (*ateletpb.RestoreResponse, error) {
+	if err := validateActorRequest(req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId(), req.GetTargetAteomUid(), req.GetSpec()); err != nil {
+		return nil, err
+	}
+
 	runscPath, err := s.fetchRunscAndPrep(ctx, req.GetRunsc())
 	if err != nil {
 		return nil, err
@@ -609,6 +627,96 @@ func (d *AteomDialer) DialAteomPod(ctx context.Context, podUID string) (*grpc.Cl
 	d.conns.Add(key, conn)
 
 	return conn, nil
+}
+
+// validateActorRequest validates the request fields that atelet turns into host
+// filesystem paths. atelet listens on an insecure hostPort, so any reachable
+// caller could otherwise smuggle a path separator or ".." through them and make
+// atelet read/RemoveAll/write outside the intended directory tree, or collide
+// bundles. Validate at the RPC boundary, before any path is built.
+func validateActorRequest(namespace, template, actorID, targetAteomUID string, spec *ateletpb.WorkloadSpec) error {
+	if err := validateActorRef(namespace, template, actorID); err != nil {
+		return err
+	}
+	if err := validateAteomUID(targetAteomUID); err != nil {
+		return err
+	}
+	return validateContainers(spec)
+}
+
+// validateActorRef ensures every component of the per-actor directory tree is a
+// valid DNS-1123 name. namespace+template+actorID are concatenated by
+// ateompath.ActorPath into a host path on which atelet runs os.RemoveAll and
+// os.MkdirAll, so all three must be validated. Checking only one would still
+// leave a traversal window via the others. Template names are DNS-1123
+// subdomains (dots allowed); namespaces and actor IDs are labels.
+func validateActorRef(namespace, template, actorID string) error {
+	for _, f := range []struct {
+		kind, value string
+		errs        []string
+	}{
+		{"namespace", namespace, validation.IsDNS1123Label(namespace)},
+		{"template", template, validation.IsDNS1123Subdomain(template)},
+		{"actor ID", actorID, validation.IsDNS1123Label(actorID)},
+	} {
+		if len(f.errs) > 0 {
+			return fmt.Errorf("invalid %s %q: %s", f.kind, f.value, strings.Join(f.errs, "; "))
+		}
+	}
+	return nil
+}
+
+// validateAteomUID rejects a target ateom pod UID that could escape the host
+// paths built from it: the netns path (/run/netns/ateom:<uid>) and the ateom
+// control socket (.../ateoms/<uid>/ateom.sock). Kubernetes pod UIDs are UUIDs,
+// which are valid DNS-1123 labels, so a label check accepts every legitimate
+// value while rejecting separators and "..".
+func validateAteomUID(targetAteomUID string) error {
+	if errs := validation.IsDNS1123Label(targetAteomUID); len(errs) > 0 {
+		return fmt.Errorf("invalid target ateom UID %q: %s", targetAteomUID, strings.Join(errs, "; "))
+	}
+	return nil
+}
+
+// validateContainers ensures every application container name is safe to use as
+// an OCI bundle path component. Each must be a DNS-1123 label (no separator or
+// ".."), must not be the reserved "pause" name (which would collide with the
+// sandbox-infra bundle and race its concurrent writer), and must be unique
+// (duplicates map to the same bundle path and corrupt each other).
+func validateContainers(spec *ateletpb.WorkloadSpec) error {
+	seen := make(map[string]struct{})
+	for _, ctr := range spec.GetContainers() {
+		name := ctr.GetName()
+		if errs := validation.IsDNS1123Label(name); len(errs) > 0 {
+			return fmt.Errorf("invalid container name %q: %s", name, strings.Join(errs, "; "))
+		}
+		if name == "pause" {
+			return fmt.Errorf("invalid container name %q: reserved for sandbox infrastructure", name)
+		}
+		if _, dup := seen[name]; dup {
+			return fmt.Errorf("duplicate container name %q", name)
+		}
+		seen[name] = struct{}{}
+	}
+	return nil
+}
+
+// validateRunscHash ensures the runsc SHA-256 hash is exactly 64 hex characters
+// before it is used to build the on-disk binary path (static-files/runsc-<hash>)
+// and, on a cache hit, returned for ateom to execute. Without this, a hash
+// containing path separators or ".." could point the cache-hit early return
+// (and the download target) at an arbitrary binary outside the static-files dir.
+func validateRunscHash(sha256Hash string) error {
+	if len(sha256Hash) != 64 {
+		return fmt.Errorf("invalid runsc sha256 hash: want 64 hex chars, got %d", len(sha256Hash))
+	}
+	for _, r := range sha256Hash {
+		isHex := (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')
+		if !isHex {
+			return fmt.Errorf("invalid runsc sha256 hash %q: must be hex", sha256Hash)
+		}
+	}
+	return nil
 }
 
 func resetActorDirs(actorTemplateNamespace, actorTemplateName, actorID string) error {
