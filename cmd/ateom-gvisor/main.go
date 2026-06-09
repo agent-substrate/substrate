@@ -191,9 +191,7 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	}
 	defer func() {
 		if retErr != nil {
-			if cleanupErr := s.cleanupActorNetwork(ctx); cleanupErr != nil {
-				slog.WarnContext(ctx, "Failed to clean up actor network after Run failure", "err", cleanupErr)
-			}
+			s.cleanupActorNetworkOrExit(ctx, "Failed to clean up actor network after Run failure")
 		}
 	}()
 
@@ -273,9 +271,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 			"err", err)
 	}
 
-	if err := s.cleanupActorNetwork(ctx); err != nil {
-		return nil, fmt.Errorf("while cleaning up actor network: %w", err)
-	}
+	s.cleanupActorNetworkOrExit(ctx, "Failed to clean up actor network after checkpoint")
 
 	s.actorLogger.EmitLifecycleLog("Actor checkpointed", req.GetActorId(), req.GetActorTemplateName(), req.GetActorTemplateNamespace())
 
@@ -325,9 +321,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	}
 	defer func() {
 		if retErr != nil {
-			if cleanupErr := s.cleanupActorNetwork(ctx); cleanupErr != nil {
-				slog.WarnContext(ctx, "Failed to clean up actor network after Restore failure", "err", cleanupErr)
-			}
+			s.cleanupActorNetworkOrExit(ctx, "Failed to clean up actor network after Restore failure")
 		}
 	}()
 
@@ -384,14 +378,10 @@ func (s *AteomService) setupActorNetwork(ctx context.Context) (retErr error) {
 	//
 	// Clean up stale state from a failed prior activation before creating the
 	// next actor-side network. The worker currently runs one actor at a time.
-	if err := s.cleanupActorNetwork(ctx); err != nil {
-		return fmt.Errorf("while removing stale actor network: %w", err)
-	}
+	s.cleanupActorNetworkOrExit(ctx, "Failed to clean up stale actor network before setup")
 	defer func() {
 		if retErr != nil {
-			if cleanupErr := s.cleanupActorNetwork(ctx); cleanupErr != nil {
-				slog.WarnContext(ctx, "Failed to clean up partially configured actor network", "err", cleanupErr)
-			}
+			s.cleanupActorNetworkOrExit(ctx, "Failed to clean up partially configured actor network")
 		}
 	}()
 
@@ -556,6 +546,12 @@ func (s *AteomService) cleanupActorNetwork(ctx context.Context) error {
 	}
 
 	return cleanupErr
+}
+
+func (s *AteomService) cleanupActorNetworkOrExit(ctx context.Context, msg string) {
+	if err := s.cleanupActorNetwork(ctx); err != nil {
+		serverboot.Fatal(ctx, msg, err)
+	}
 }
 
 func podIPv4() (net.IP, error) {
