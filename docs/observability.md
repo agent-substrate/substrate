@@ -42,7 +42,7 @@ When an active actor is assigned to a worker pod, the CLI outputs clean, uniform
 ```bash
 $ kubectl ate logs test
 {"time":"2026-05-22T21:49:15.23700774Z","message":"Actor started"}
-{"time":"2026-05-22T21:49:15.23700774Z","level":"INFO","msg":"Starting server on port 80"}
+{"time":"2026-05-22T21:49:15.23700774Z","level":"INFO","msg":"Starting counter server on port 80"}
 {"time":"2026-05-22T21:49:15.255765354Z","count":0,"fshash":"mCY7G4S318ztOUojPTF2NA/W+ZSmWyr+T5K3udFuP50","level":"INFO","msg":"Count"}
 {"time":"2026-05-22T21:49:25.263744806Z","count":1,"fshash":"mCY7G4S318ztOUojPTF2NA/W+ZSmWyr+T5K3udFuP50","level":"INFO","msg":"Count"}
 ```

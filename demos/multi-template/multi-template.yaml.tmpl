@@ -1,0 +1,93 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# This demo shows that two ActorTemplates running two different binaries can
+# share a single WorkerPool, even when all three live in different namespaces.
+# A WorkerPool is image-agnostic capacity (its pods only run the ateom
+# supervisor); each ActorTemplate carries its own workload image and binds to
+# the pool via workerPoolRef, whose namespace points at wherever the pool lives.
+# Below, the "counter" and "fspersist" templates each sit in their own namespace
+# and bind cross-namespace to the one "shared-pool" in a third namespace.
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ate-demo-multi-template-pool
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ate-demo-multi-template-counter
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ate-demo-multi-template-fspersist
+---
+apiVersion: ate.dev/v1alpha1
+kind: WorkerPool
+metadata:
+  name: shared-pool
+  namespace: ate-demo-multi-template-pool
+spec:
+  replicas: 3
+  ateomImage: ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor
+---
+apiVersion: ate.dev/v1alpha1
+kind: ActorTemplate
+metadata:
+  name: counter
+  namespace: ate-demo-multi-template-counter
+spec:
+  runsc:
+    amd64:
+      url: "gs://gvisor/releases/nightly/2026-05-19/x86_64/runsc"
+      sha256Hash: "a397be1abc2420d26bce6c70e6e2ff96c73aaaab929756c56f5e2089ea842b63"
+    arm64:
+      url: "gs://gvisor/releases/nightly/2026-05-19/aarch64/runsc"
+      sha256Hash: "1ba2366ae2efceba166046f51a4104f9261c9cb72c6db8f5b3fe2dc57dea86b9"
+  pauseImage: "registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4"
+  containers:
+  - name: counter
+    image: ko://github.com/agent-substrate/substrate/demos/counter
+    command: ["/ko-app/counter"]
+  workerPoolRef:
+    namespace: ate-demo-multi-template-pool
+    name: shared-pool
+  snapshotsConfig:
+    location: gs://${BUCKET_NAME}/ate-demo-multi-template-counter/
+---
+apiVersion: ate.dev/v1alpha1
+kind: ActorTemplate
+metadata:
+  name: fspersist
+  namespace: ate-demo-multi-template-fspersist
+spec:
+  runsc:
+    amd64:
+      url: "gs://gvisor/releases/nightly/2026-05-19/x86_64/runsc"
+      sha256Hash: "a397be1abc2420d26bce6c70e6e2ff96c73aaaab929756c56f5e2089ea842b63"
+    arm64:
+      url: "gs://gvisor/releases/nightly/2026-05-19/aarch64/runsc"
+      sha256Hash: "1ba2366ae2efceba166046f51a4104f9261c9cb72c6db8f5b3fe2dc57dea86b9"
+  pauseImage: "registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4"
+  containers:
+  - name: fspersist
+    image: ko://github.com/agent-substrate/substrate/demos/multi-template/fspersist
+    command: ["/ko-app/fspersist"]
+  workerPoolRef:
+    namespace: ate-demo-multi-template-pool
+    name: shared-pool
+  snapshotsConfig:
+    location: gs://${BUCKET_NAME}/ate-demo-multi-template-fspersist/
