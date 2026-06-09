@@ -71,29 +71,30 @@ type envResolver struct {
 
 func (r *envResolver) resolve(ctx context.Context, containerName string, env atev1alpha1.EnvVar) (*ateletpb.EnvEntry, error) {
 	envID := fmt.Sprintf("container %q env %q", containerName, env.Name)
-	if env.Value != "" && env.ValueFrom != nil {
+	if env.Value != nil && env.ValueFrom != nil {
 		return nil, status.Errorf(codes.FailedPrecondition, "%s sets both value and valueFrom", envID)
 	}
 
-	if env.ValueFrom == nil {
+	switch {
+	case env.Value != nil:
 		return &ateletpb.EnvEntry{
 			Name:  env.Name,
-			Value: env.Value,
+			Value: *env.Value,
+		}, nil
+	case env.ValueFrom != nil:
+		value, include, err := r.resolveValueFrom(ctx, envID, env.ValueFrom)
+		if err != nil {
+			return nil, err
+		}
+		if !include {
+			return nil, nil
+		}
+		return &ateletpb.EnvEntry{
+			Name:  env.Name,
+			Value: value,
 		}, nil
 	}
-
-	value, include, err := r.resolveValueFrom(ctx, envID, env.ValueFrom)
-	if err != nil {
-		return nil, err
-	}
-	if !include {
-		return nil, nil
-	}
-
-	return &ateletpb.EnvEntry{
-		Name:  env.Name,
-		Value: value,
-	}, nil
+	return nil, status.Errorf(codes.FailedPrecondition, "%s has unknown value source", envID)
 }
 
 func (r *envResolver) resolveValueFrom(ctx context.Context, envID string, valueFrom *atev1alpha1.EnvVarSource) (string, bool, error) {

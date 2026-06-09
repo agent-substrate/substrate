@@ -61,9 +61,9 @@ type EnvVar struct {
 	// +required
 	Name string `json:"name"`
 
-	// Variable value. Defaults to "". Mutually exclusive with ValueFrom.
+	// Variable value. Mutually exclusive with ValueFrom.
 	// +optional
-	Value string `json:"value,omitempty"`
+	Value *string `json:"value,omitempty"`
 
 	// Source for the environment variable's value. Mutually exclusive with
 	// Value.

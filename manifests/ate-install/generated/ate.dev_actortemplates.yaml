@@ -80,8 +80,7 @@ spec:
                               a C_IDENTIFIER.
                             type: string
                           value:
-                            description: Variable value. Defaults to "". Mutually
-                              exclusive with ValueFrom.
+                            description: Variable value. Mutually exclusive with ValueFrom.
                             type: string
                           valueFrom:
                             description: |-

@@ -27,6 +27,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
+	"k8s.io/utils/ptr"
 )
 
 func TestWorkloadSpecFromActorTemplateResolvesValueFromEnv(t *testing.T) {
@@ -58,7 +59,7 @@ func TestWorkloadSpecFromActorTemplateResolvesValueFromEnv(t *testing.T) {
 					Env: []atev1alpha1.EnvVar{
 						{
 							Name:  "LITERAL",
-							Value: "plain",
+							Value: ptr.To("plain"),
 						},
 						{
 							Name: "SOME_KEY",
