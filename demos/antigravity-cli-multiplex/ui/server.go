@@ -12,7 +12,7 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 
-// Demo UI server — substrate multiplex visualization (Gemini CLI flavor).
+// Demo UI server — substrate multiplex visualization (Antigravity flavor).
 //
 // Tiny stdlib HTTP server. Reads worker + actor state from the substrate
 // ateapi gRPC service, reads pod logs from the k8s API via client-go,
@@ -28,7 +28,7 @@
 // Prereq when running outside the cluster:
 //
 //	kubectl port-forward svc/ateapi 8080:8080 -n ate-system &
-//	PORT=8090 ATEAPI_ADDR=localhost:8080 DEMO_NAMESPACE=gemini-cli-multiplex-demo go run ./server.go
+//	PORT=8090 ATEAPI_ADDR=localhost:8080 DEMO_NAMESPACE=antigravity-cli-multiplex-demo go run ./server.go
 //
 // (Pick a UI PORT that doesn't collide with the port-forward.)
 package main
@@ -60,7 +60,7 @@ import (
 
 const (
 	defaultPort       = "8080"
-	defaultNamespace  = "gemini-cli-multiplex-demo"
+	defaultNamespace  = "antigravity-cli-multiplex-demo"
 	defaultAteapiAddr = "localhost:8080"
 	maxAssignments    = 50
 	rpcTimeout        = 10 * time.Second

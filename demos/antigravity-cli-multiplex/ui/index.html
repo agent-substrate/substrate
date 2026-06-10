@@ -18,7 +18,7 @@ limitations under the License.
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Gemini CLI multiplex demo</title>
+<title>Antigravity CLI multiplex demo</title>
 <style>
   :root {
     --bg: #0e1116; --panel: #161b22; --panel-2: #0d1117;
@@ -154,14 +154,14 @@ limitations under the License.
 </head>
 <body>
 <header>
-  <h1>Gemini CLI multiplex demo</h1>
+  <h1>Antigravity CLI multiplex demo</h1>
   <div id="status">connecting…</div>
 </header>
 
 <p class="intro">
-  This demo runs <strong>3 Gemini CLI agents</strong> on
+  This demo runs <strong>3 Antigravity agents</strong> on
   <strong>2 substrate worker pods</strong>. Each agent has its own short prompt
-  and works in a loop: ask Gemini, print the answer, idle for 45&nbsp;seconds,
+  and works in a loop: run the configured Antigravity command, print the output, idle for 45&nbsp;seconds,
   repeat. While an agent is idle, <strong>substrate</strong> can suspend it
   (snapshot its process state, free its pod) and let a different agent borrow
   that pod &mdash; that&rsquo;s the <strong>multiplex</strong>. The dashboard
@@ -172,13 +172,13 @@ limitations under the License.
 <div class="cost-card">
   <span class="cost-label">Approximate cost while running</span>
   <span class="cost-item">GCP infrastructure: <b>~$0.40/hr</b></span>
-  <span class="cost-item">Gemini API (3 agents): <b>&lt;$0.50/hr</b> when active</span>
+  <span class="cost-item">Antigravity usage (3 agents): <b>depends on your plan</b></span>
   <span class="cost-item">Total: <b>~$0.90/hr</b> typical</span>
   <span class="cost-note">
-    GCP figure is one n2-standard-8 VM in us-central1 (ephemeral IP free). Gemini figure
-    assumes gemini-2.5-flash at published rates, each agent firing one short prompt every 45&nbsp;s,
+    GCP figure is one n2-standard-8 VM in us-central1 (ephemeral IP free). Antigravity usage
+    depends on the account and model configuration, each agent firing one short command every 45&nbsp;s,
     multiplexed across 2 pods (so about 2 of the 3 agents are actively running at any moment).
-    During the current substrate boundary the agents aren&rsquo;t invoking Gemini, so the real
+    During the current substrate boundary the agents aren&rsquo;t invoking Antigravity, so the real
     spend is just the VM &mdash; that flips up once the substrate chain resolves.
   </span>
 </div>

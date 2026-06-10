@@ -14,27 +14,28 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
-# Demo workload entrypoint: periodically invokes Gemini CLI with a task and
+# Demo workload entrypoint: periodically invokes Antigravity with a task and
 # idles between intervals. The idle window is what substrate uses to suspend
 # this actor and multiplex its worker onto another actor.
 #
 # Env vars:
-#   TASK              — the prompt to pass to gemini each tick
+#   TASK                — the prompt available to ANTIGRAVITY_COMMAND each tick
 #   INTERVAL_SECONDS  — sleep length between ticks (longer = more multiplex headroom)
-#   GEMINI_MODEL      — model id (default gemini-2.5-flash)
-#   GEMINI_API_KEY    — required; AI Studio key, supplied as env var
+#   ANTIGRAVITY_COMMAND — command to run once per tick; TASK is exported
 
 set -u
 
-if [ -z "${GEMINI_API_KEY:-}" ]; then
-  echo "[demo-actor] ERROR: GEMINI_API_KEY not set; refusing to start" >&2
+if [ -z "${ANTIGRAVITY_COMMAND:-}" ]; then
+  echo "[demo-actor] ERROR: ANTIGRAVITY_COMMAND not set; refusing to start" >&2
   exit 1
 fi
 
 ACTOR_NAME="${ACTOR_NAME:-$(hostname)}"
 TICK=0
 
-echo "[demo-actor:${ACTOR_NAME}] starting; task=\"${TASK}\" interval=${INTERVAL_SECONDS}s model=${GEMINI_MODEL}"
+export TASK
+
+echo "[demo-actor:${ACTOR_NAME}] starting; task=\"${TASK}\" interval=${INTERVAL_SECONDS}s command=\"${ANTIGRAVITY_COMMAND}\""
 
 while true; do
   TICK=$((TICK + 1))
@@ -42,9 +43,10 @@ while true; do
   echo "[demo-actor:${ACTOR_NAME}] === tick ${TICK} at $(date -u +%H:%M:%SZ) ==="
   echo "[demo-actor:${ACTOR_NAME}] running: ${TASK}"
   echo "---"
-  # -p runs one prompt non-interactively and exits; output streams to stdout
-  # so kubectl logs picks it up live.
-  gemini -m "${GEMINI_MODEL}" -p "${TASK}" 2>&1 || echo "[demo-actor:${ACTOR_NAME}] gemini exited non-zero"
+  # Output streams to stdout so kubectl logs picks it up live. Keep the
+  # Antigravity invocation configurable until its official headless prompt
+  # flags are documented.
+  sh -c "${ANTIGRAVITY_COMMAND}" 2>&1 || echo "[demo-actor:${ACTOR_NAME}] antigravity command exited non-zero"
   echo "---"
   echo "[demo-actor:${ACTOR_NAME}] tick ${TICK} done; sleeping ${INTERVAL_SECONDS}s"
   sleep "${INTERVAL_SECONDS}"

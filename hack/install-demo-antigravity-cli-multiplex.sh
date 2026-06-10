@@ -16,12 +16,12 @@
 #
 # This is sourced as part of install-ate.sh. Do not run directly.
 
-ATE_DEMOS+=(demo-gemini-cli-multiplex) # register demo-gemini-cli-multiplex
+ATE_DEMOS+=(demo-antigravity-cli-multiplex) # register demo-antigravity-cli-multiplex
 
-demo-gemini-cli-multiplex_cmdline() {
+demo-antigravity-cli-multiplex_cmdline() {
   case "${1}" in
-    --deploy-demo-gemini-cli-multiplex) demo-gemini-cli-multiplex_deploy ;;
-    --delete-demo-gemini-cli-multiplex) demo-gemini-cli-multiplex_delete ;;
+    --deploy-demo-antigravity-cli-multiplex) demo-antigravity-cli-multiplex_deploy ;;
+    --delete-demo-antigravity-cli-multiplex) demo-antigravity-cli-multiplex_delete ;;
     *)
       return 1
       ;;
@@ -30,18 +30,18 @@ demo-gemini-cli-multiplex_cmdline() {
 }
 
 # Build the workload image, push to ${KO_DOCKER_REPO}, and echo the resolved
-# digest-pinned reference (e.g. gcr.io/.../gemini-cli-multiplex-demo-workload@sha256:...).
-# The workload is a Dockerfile-based Node + @google/gemini-cli wrapper (not a Go
-# binary), so it uses docker buildx rather than ko.
-demo-gemini-cli-multiplex_build_workload() {
-  local repo="${KO_DOCKER_REPO}/gemini-cli-multiplex-demo-workload"
+# digest-pinned reference (e.g. gcr.io/.../antigravity-cli-multiplex-demo-workload@sha256:...).
+# The workload is a Dockerfile-based Antigravity wrapper (not a Go binary), so
+# it uses docker buildx rather than ko.
+demo-antigravity-cli-multiplex_build_workload() {
+  local repo="${KO_DOCKER_REPO}/antigravity-cli-multiplex-demo-workload"
   # shellcheck disable=SC2155 # safe initialization
   local stage_tag="${repo}:build-$(date +%s)"
   docker buildx build \
     --platform=linux/amd64 \
     --push \
     -t "${stage_tag}" \
-    demos/gemini-cli-multiplex/workload >&2
+    demos/antigravity-cli-multiplex/workload >&2
   local digest
   digest=$(docker buildx imagetools inspect "${stage_tag}" --format '{{json .}}' \
              | jq -r '.manifest.digest')
@@ -52,12 +52,8 @@ demo-gemini-cli-multiplex_build_workload() {
   echo "${repo}@${digest}"
 }
 
-demo-gemini-cli-multiplex_deploy() {
-  log_step "demo-gemini-cli-multiplex_deploy"
-  if [[ -z "${GEMINI_API_KEY:-}" ]]; then
-    echo "GEMINI_API_KEY must be set" >&2
-    return 1
-  fi
+demo-antigravity-cli-multiplex_deploy() {
+  log_step "demo-antigravity-cli-multiplex_deploy"
   if [[ -z "${BUCKET_NAME:-}" ]]; then
     echo "BUCKET_NAME must be set" >&2
     return 1
@@ -68,33 +64,31 @@ demo-gemini-cli-multiplex_deploy() {
   fi
 
   local workload_image
-  workload_image=$(demo-gemini-cli-multiplex_build_workload)
+  workload_image=$(demo-antigravity-cli-multiplex_build_workload)
   if [[ -z "${workload_image}" ]]; then
     return 1
   fi
   log_step "  workload image: ${workload_image}"
 
   sed -e "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" \
-      -e "s|\${GEMINI_API_KEY}|${GEMINI_API_KEY}|g" \
       -e "s|\${WORKLOAD_IMAGE}|${workload_image}|g" \
-      demos/gemini-cli-multiplex/gemini-cli-multiplex.yaml.tmpl \
+      demos/antigravity-cli-multiplex/antigravity-cli-multiplex.yaml.tmpl \
     | run_ko apply -f -
 }
 
-demo-gemini-cli-multiplex_delete() {
-  log_step "demo-gemini-cli-multiplex_delete"
+demo-antigravity-cli-multiplex_delete() {
+  log_step "demo-antigravity-cli-multiplex_delete"
   # Delete-time substitution doesn't need a real image — k8s identifies
   # resources by metadata, not container spec. Use placeholders so sed
   # produces valid YAML even when the env vars aren't set.
   sed -e "s|\${BUCKET_NAME}|${BUCKET_NAME:-placeholder}|g" \
-      -e "s|\${GEMINI_API_KEY}|${GEMINI_API_KEY:-placeholder}|g" \
       -e "s|\${WORKLOAD_IMAGE}|placeholder|g" \
-      demos/gemini-cli-multiplex/gemini-cli-multiplex.yaml.tmpl \
+      demos/antigravity-cli-multiplex/antigravity-cli-multiplex.yaml.tmpl \
     | run_kubectl delete --ignore-not-found -f -
 }
 
-demo-gemini-cli-multiplex_usage() {
+demo-antigravity-cli-multiplex_usage() {
   echo ""
-  echo "  Required env: GEMINI_API_KEY, BUCKET_NAME, KO_DOCKER_REPO"
-  echo "  See demos/gemini-cli-multiplex/README.md for the walkthrough."
+  echo "  Required env: BUCKET_NAME, KO_DOCKER_REPO"
+  echo "  See demos/antigravity-cli-multiplex/README.md for the walkthrough."
 }

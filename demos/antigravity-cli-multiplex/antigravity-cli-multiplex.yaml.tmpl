@@ -13,19 +13,19 @@
 #  limitations under the License.
 
 # Three ActorTemplates share a 2-pod WorkerPool, so substrate must suspend
-# at least one actor at any moment. GEMINI_API_KEY is passed as a plain
-# env var per dberkov's PR #203 review — substrate does not currently
+# at least one actor at any moment. If your Antigravity command needs a
+# secret, pass it as a plain env var for now — substrate does not currently
 # support `valueFrom.secretKeyRef` on ActorTemplate container env.
 #
 # WORKLOAD_IMAGE is the resolved sha256-digest reference for the
-# gemini-cli-multiplex-demo-workload image — built and pushed to
-# ${KO_DOCKER_REPO} by `./hack/install-ate.sh --deploy-demo-gemini-cli-multiplex`,
+# antigravity-cli-multiplex-demo-workload image — built and pushed to
+# ${KO_DOCKER_REPO} by `./hack/install-ate.sh --deploy-demo-antigravity-cli-multiplex`,
 # substituted into this template at apply time.
 
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: gemini-cli-multiplex-demo
+  name: antigravity-cli-multiplex-demo
 
 ---
 
@@ -34,8 +34,8 @@ metadata:
 apiVersion: ate.dev/v1alpha1
 kind: WorkerPool
 metadata:
-  name: gemini-workerpool
-  namespace: gemini-cli-multiplex-demo
+  name: antigravity-workerpool
+  namespace: antigravity-cli-multiplex-demo
 spec:
   replicas: 2
   ateomImage: ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor
@@ -51,7 +51,7 @@ apiVersion: ate.dev/v1alpha1
 kind: ActorTemplate
 metadata:
   name: agent-luna
-  namespace: gemini-cli-multiplex-demo
+  namespace: antigravity-cli-multiplex-demo
 spec:
   runsc:
     amd64:
@@ -62,7 +62,7 @@ spec:
       sha256Hash: "1ba2366ae2efceba166046f51a4104f9261c9cb72c6db8f5b3fe2dc57dea86b9"
   pauseImage: "registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4"
   containers:
-  - name: gemini
+  - name: antigravity
     image: ${WORKLOAD_IMAGE}
     command: ["/run.sh"]
     env:
@@ -72,15 +72,13 @@ spec:
       value: "Tell me one short, surprising fact about the Moon. One sentence."
     - name: INTERVAL_SECONDS
       value: "45"
-    - name: GEMINI_MODEL
-      value: "gemini-2.5-flash"
-    - name: GEMINI_API_KEY
-      value: "${GEMINI_API_KEY}"
+    - name: ANTIGRAVITY_COMMAND
+      value: "antigravity --help"
   workerPoolRef:
-    namespace: gemini-cli-multiplex-demo
-    name: gemini-workerpool
+    namespace: antigravity-cli-multiplex-demo
+    name: antigravity-workerpool
   snapshotsConfig:
-    location: gs://${BUCKET_NAME}/gemini-cli-multiplex-demo/
+    location: gs://${BUCKET_NAME}/antigravity-cli-multiplex-demo/
 
 ---
 
@@ -88,7 +86,7 @@ apiVersion: ate.dev/v1alpha1
 kind: ActorTemplate
 metadata:
   name: agent-mars
-  namespace: gemini-cli-multiplex-demo
+  namespace: antigravity-cli-multiplex-demo
 spec:
   runsc:
     amd64:
@@ -99,7 +97,7 @@ spec:
       sha256Hash: "1ba2366ae2efceba166046f51a4104f9261c9cb72c6db8f5b3fe2dc57dea86b9"
   pauseImage: "registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4"
   containers:
-  - name: gemini
+  - name: antigravity
     image: ${WORKLOAD_IMAGE}
     command: ["/run.sh"]
     env:
@@ -109,15 +107,13 @@ spec:
       value: "Give me one concise tip for learning a new programming language. One sentence."
     - name: INTERVAL_SECONDS
       value: "45"
-    - name: GEMINI_MODEL
-      value: "gemini-2.5-flash"
-    - name: GEMINI_API_KEY
-      value: "${GEMINI_API_KEY}"
+    - name: ANTIGRAVITY_COMMAND
+      value: "antigravity --help"
   workerPoolRef:
-    namespace: gemini-cli-multiplex-demo
-    name: gemini-workerpool
+    namespace: antigravity-cli-multiplex-demo
+    name: antigravity-workerpool
   snapshotsConfig:
-    location: gs://${BUCKET_NAME}/gemini-cli-multiplex-demo/
+    location: gs://${BUCKET_NAME}/antigravity-cli-multiplex-demo/
 
 ---
 
@@ -125,7 +121,7 @@ apiVersion: ate.dev/v1alpha1
 kind: ActorTemplate
 metadata:
   name: agent-orion
-  namespace: gemini-cli-multiplex-demo
+  namespace: antigravity-cli-multiplex-demo
 spec:
   runsc:
     amd64:
@@ -136,7 +132,7 @@ spec:
       sha256Hash: "1ba2366ae2efceba166046f51a4104f9261c9cb72c6db8f5b3fe2dc57dea86b9"
   pauseImage: "registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4"
   containers:
-  - name: gemini
+  - name: antigravity
     image: ${WORKLOAD_IMAGE}
     command: ["/run.sh"]
     env:
@@ -146,12 +142,10 @@ spec:
       value: "Suggest one healthy meal that takes under 15 minutes to prepare. One sentence."
     - name: INTERVAL_SECONDS
       value: "45"
-    - name: GEMINI_MODEL
-      value: "gemini-2.5-flash"
-    - name: GEMINI_API_KEY
-      value: "${GEMINI_API_KEY}"
+    - name: ANTIGRAVITY_COMMAND
+      value: "antigravity --help"
   workerPoolRef:
-    namespace: gemini-cli-multiplex-demo
-    name: gemini-workerpool
+    namespace: antigravity-cli-multiplex-demo
+    name: antigravity-workerpool
   snapshotsConfig:
-    location: gs://${BUCKET_NAME}/gemini-cli-multiplex-demo/
+    location: gs://${BUCKET_NAME}/antigravity-cli-multiplex-demo/
