@@ -24,6 +24,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -282,7 +283,7 @@ func (s *AteomHerder) fetchRunsc(ctx context.Context, cfg *ateletpb.RunscConfig)
 }
 
 func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (*ateletpb.RunResponse, error) {
-	if err := validateActorRequest(req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId(), req.GetTargetAteomUid(), req.GetSpec()); err != nil {
+	if err := validateRunRequest(req); err != nil {
 		return nil, err
 	}
 
@@ -359,7 +360,7 @@ func recordSnapshotSize(ctx context.Context, kind, path, atNamespace, atName str
 }
 
 func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest) (*ateletpb.CheckpointResponse, error) {
-	if err := validateActorRequest(req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId(), req.GetTargetAteomUid(), req.GetSpec()); err != nil {
+	if err := validateCheckpointRequest(req); err != nil {
 		return nil, err
 	}
 
@@ -426,7 +427,7 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 }
 
 func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (*ateletpb.RestoreResponse, error) {
-	if err := validateActorRequest(req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId(), req.GetTargetAteomUid(), req.GetSpec()); err != nil {
+	if err := validateRestoreRequest(req); err != nil {
 		return nil, err
 	}
 
@@ -629,11 +630,33 @@ func (d *AteomDialer) DialAteomPod(ctx context.Context, podUID string) (*grpc.Cl
 	return conn, nil
 }
 
-// validateActorRequest validates the request fields that atelet turns into host
-// filesystem paths. atelet listens on an insecure hostPort, so any reachable
-// caller could otherwise smuggle a path separator or ".." through them and make
-// atelet read/RemoveAll/write outside the intended directory tree, or collide
-// bundles. Validate at the RPC boundary, before any path is built.
+// validateRunRequest, validateCheckpointRequest, and validateRestoreRequest
+// validate everything in their request that atelet turns into host filesystem
+// paths, plus the request-specific fields. atelet listens on an insecure
+// hostPort, so any reachable caller could otherwise smuggle a path separator
+// or ".." through these fields and make atelet read/RemoveAll/write outside
+// the intended directory tree, or collide bundles. Each RPC validates at its
+// boundary, before any path is built.
+func validateRunRequest(req *ateletpb.RunRequest) error {
+	return validateActorRequest(req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId(), req.GetTargetAteomUid(), req.GetSpec())
+}
+
+func validateCheckpointRequest(req *ateletpb.CheckpointRequest) error {
+	if err := validateActorRequest(req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId(), req.GetTargetAteomUid(), req.GetSpec()); err != nil {
+		return err
+	}
+	return validateSnapshotURIPrefix(req.GetSnapshotUriPrefix())
+}
+
+func validateRestoreRequest(req *ateletpb.RestoreRequest) error {
+	if err := validateActorRequest(req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId(), req.GetTargetAteomUid(), req.GetSpec()); err != nil {
+		return err
+	}
+	return validateSnapshotURIPrefix(req.GetSnapshotUriPrefix())
+}
+
+// validateActorRequest is the shared core for the fields common to all three
+// RPCs.
 func validateActorRequest(namespace, template, actorID, targetAteomUID string, spec *ateletpb.WorkloadSpec) error {
 	if err := validateActorRef(namespace, template, actorID); err != nil {
 		return err
@@ -642,6 +665,26 @@ func validateActorRequest(namespace, template, actorID, targetAteomUID string, s
 		return err
 	}
 	return validateContainers(spec)
+}
+
+// validateSnapshotURIPrefix ensures the checkpoint/restore snapshot location
+// is a well-formed URI with a bucket, so a bad prefix fails fast at the RPC
+// boundary instead of deep inside an object-storage call. It deliberately
+// does not restrict the scheme: the storage layer (ategcs.parseGCSURL) only
+// uses the host (bucket) and path, and which schemes are acceptable is a
+// storage-backend policy, not a per-RPC one. The local paths used for
+// snapshot upload/download are derived from the separately validated actor
+// ref, not from this URI, so this is a sanity check rather than a
+// path-traversal guard.
+func validateSnapshotURIPrefix(prefix string) error {
+	u, err := url.Parse(prefix)
+	if err != nil {
+		return fmt.Errorf("invalid snapshot URI prefix %q: %v", prefix, err)
+	}
+	if u.Host == "" {
+		return fmt.Errorf("invalid snapshot URI prefix %q: missing bucket", prefix)
+	}
+	return nil
 }
 
 // validateActorRef ensures every component of the per-actor directory tree is a

@@ -169,6 +169,75 @@ func TestValidateActorRequest(t *testing.T) {
 	}
 }
 
+func TestValidateSnapshotURIPrefix(t *testing.T) {
+	tests := []struct {
+		name    string
+		prefix  string
+		wantErr bool
+	}{
+		{"valid with trailing slash", "gs://bucket/actors/1234/snapshots/5678/", false},
+		{"valid without path", "gs://bucket", false},
+		// Scheme is storage-backend policy, not validated here.
+		{"valid alternate scheme", "s3://bucket/path", false},
+		{"empty", "", true},
+		{"missing bucket", "gs://", true},
+		{"no scheme or bucket", "bucket/path", true},
+		{"unparseable", "://bucket", true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := validateSnapshotURIPrefix(tc.prefix); (err != nil) != tc.wantErr {
+				t.Errorf("validateSnapshotURIPrefix(%q) err = %v, wantErr %v", tc.prefix, err, tc.wantErr)
+			}
+		})
+	}
+}
+
+// TestPerRequestValidators pins the request-specific rules: Checkpoint and
+// Restore must reject a bad snapshot URI prefix even when every common field
+// is valid, and Run (which has no URI field) must accept the same common
+// fields.
+func TestPerRequestValidators(t *testing.T) {
+	const okNS, okTmpl, okID, okUID = "ate-demo", "counter", "counter-1", "422938ba-8860-4983-a25d-d6bcb0a69d4e"
+	okSpec := &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{Name: "worker"}}}
+
+	if err := validateRunRequest(&ateletpb.RunRequest{
+		ActorTemplateNamespace: okNS, ActorTemplateName: okTmpl, ActorId: okID,
+		TargetAteomUid: okUID, Spec: okSpec,
+	}); err != nil {
+		t.Errorf("validateRunRequest with valid fields: %v", err)
+	}
+
+	if err := validateCheckpointRequest(&ateletpb.CheckpointRequest{
+		ActorTemplateNamespace: okNS, ActorTemplateName: okTmpl, ActorId: okID,
+		TargetAteomUid: okUID, Spec: okSpec,
+		SnapshotUriPrefix: "gs://bucket/actors/1/snapshots/2/",
+	}); err != nil {
+		t.Errorf("validateCheckpointRequest with valid fields: %v", err)
+	}
+	if err := validateCheckpointRequest(&ateletpb.CheckpointRequest{
+		ActorTemplateNamespace: okNS, ActorTemplateName: okTmpl, ActorId: okID,
+		TargetAteomUid: okUID, Spec: okSpec,
+		SnapshotUriPrefix: "relative/path",
+	}); err == nil {
+		t.Error("validateCheckpointRequest accepted a bucketless snapshot URI prefix")
+	}
+
+	if err := validateRestoreRequest(&ateletpb.RestoreRequest{
+		ActorTemplateNamespace: okNS, ActorTemplateName: okTmpl, ActorId: okID,
+		TargetAteomUid: okUID, Spec: okSpec,
+		SnapshotUriPrefix: "gs://bucket/actors/1/snapshots/2/",
+	}); err != nil {
+		t.Errorf("validateRestoreRequest with valid fields: %v", err)
+	}
+	if err := validateRestoreRequest(&ateletpb.RestoreRequest{
+		ActorTemplateNamespace: okNS, ActorTemplateName: okTmpl, ActorId: okID,
+		TargetAteomUid: okUID, Spec: okSpec,
+	}); err == nil {
+		t.Error("validateRestoreRequest accepted an empty snapshot URI prefix")
+	}
+}
+
 // TestFetchRunscRejectsBadHash confirms fetchRunsc validates the runsc hash
 // before the cache-hit os.Stat/early-return, not merely "at some point". To
 // prove the ordering, it plants a real file at the exact path an invalid hash
