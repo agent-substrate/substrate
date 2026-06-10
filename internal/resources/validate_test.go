@@ -47,6 +47,11 @@ func TestValidateActorRef(t *testing.T) {
 		{"namespace empty", "", okTmpl, okID, true},
 		{"template separator", okNS, "a/b", okID, true},
 		{"template traversal", okNS, "..", okID, true},
+
+		// The names join into one <ns>:<tmpl>:<id> path component, capped at
+		// 255 bytes even when each name is individually valid.
+		{"combined fits filename limit", strings.Repeat("a", 63), strings.Repeat("b", 120), strings.Repeat("c", 63), false},
+		{"combined exceeds filename limit", strings.Repeat("a", 63), strings.Repeat("b", 253), strings.Repeat("c", 63), true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -145,6 +150,13 @@ func TestValidateSnapshotURIPrefix(t *testing.T) {
 		{"missing bucket", "gs://", true},
 		{"no scheme or bucket", "bucket/path", true},
 		{"unparseable", "://bucket", true},
+		// Appended object names must not be swallowed by URL components.
+		{"query", "gs://bucket/path?x=1", true},
+		{"fragment", "gs://bucket/path#frag", true},
+		{"userinfo", "gs://user@bucket/path", true},
+		// Opaque form (no //) parses with an empty host, so it is rejected
+		// on either the bucket or the opaque check.
+		{"opaque", "gs:bucket/path", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

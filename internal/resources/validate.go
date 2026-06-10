@@ -49,6 +49,13 @@ func ValidateActorRef(namespace, template, actorID string) error {
 	if errs := validation.IsDNS1123Label(actorID); len(errs) > 0 {
 		return fmt.Errorf("invalid actor ID %q: %s", actorID, strings.Join(errs, "; "))
 	}
+	// The three names are joined into a single path component
+	// (<namespace>:<template>:<actorID>, see ateompath.ActorPath), which must
+	// fit the 255-byte filename limit of common filesystems. Individually
+	// valid DNS names can exceed it: 63 + 253 + 63 plus separators is 381.
+	if n := len(namespace) + 1 + len(template) + 1 + len(actorID); n > 255 {
+		return fmt.Errorf("actor ref %s:%s:%s is %d bytes; the combined path component must be at most 255", namespace, template, actorID, n)
+	}
 	return nil
 }
 
@@ -119,6 +126,13 @@ func ValidateSnapshotURIPrefix(prefix string) error {
 	}
 	if u.Host == "" {
 		return fmt.Errorf("invalid snapshot URI prefix %q: missing bucket", prefix)
+	}
+	// Object names are appended to the prefix by string concatenation. A
+	// query, fragment, or userinfo component would swallow the appended name
+	// when the result is re-parsed (the storage layer uses only host and
+	// path), silently redirecting the upload/download to a different object.
+	if u.Opaque != "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return fmt.Errorf("invalid snapshot URI prefix %q: must contain only a scheme, bucket, and path", prefix)
 	}
 	return nil
 }

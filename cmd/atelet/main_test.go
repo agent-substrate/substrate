@@ -21,6 +21,8 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func TestValidateActorRequest(t *testing.T) {
@@ -181,8 +183,9 @@ func TestFetchRunscRejectsBadHash(t *testing.T) {
 
 // TestRPCBoundariesReject confirms each of the three RPCs validates path inputs
 // before touching its (here nil) dependencies. A traversal value must be
-// rejected with an error rather than panicking. Guards against a future
-// removal or reordering of the validation call at any boundary.
+// rejected as InvalidArgument rather than panicking or surfacing as
+// Internal. Guards against a future removal or reordering of the validation
+// call at any boundary.
 func TestRPCBoundariesReject(t *testing.T) {
 	s := &AteomHerder{}
 	ctx := context.Background()
@@ -190,28 +193,36 @@ func TestRPCBoundariesReject(t *testing.T) {
 	const okNS, okTmpl, okID = "ate-demo", "counter", "counter-1"
 	okSpec := &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{Name: "worker"}}}
 
+	wantInvalidArgument := func(t *testing.T, rpc string, err error) {
+		t.Helper()
+		if err == nil {
+			t.Errorf("%s accepted an invalid target ateom UID", rpc)
+			return
+		}
+		if code := status.Code(err); code != codes.InvalidArgument {
+			t.Errorf("%s returned code %v, want InvalidArgument", rpc, code)
+		}
+	}
+
 	t.Run("Run", func(t *testing.T) {
-		if _, err := s.Run(ctx, &ateletpb.RunRequest{
+		_, err := s.Run(ctx, &ateletpb.RunRequest{
 			ActorTemplateNamespace: okNS, ActorTemplateName: okTmpl, ActorId: okID,
 			TargetAteomUid: badUID, Spec: okSpec,
-		}); err == nil {
-			t.Error("Run accepted an invalid target ateom UID")
-		}
+		})
+		wantInvalidArgument(t, "Run", err)
 	})
 	t.Run("Checkpoint", func(t *testing.T) {
-		if _, err := s.Checkpoint(ctx, &ateletpb.CheckpointRequest{
+		_, err := s.Checkpoint(ctx, &ateletpb.CheckpointRequest{
 			ActorTemplateNamespace: okNS, ActorTemplateName: okTmpl, ActorId: okID,
 			TargetAteomUid: badUID, Spec: okSpec,
-		}); err == nil {
-			t.Error("Checkpoint accepted an invalid target ateom UID")
-		}
+		})
+		wantInvalidArgument(t, "Checkpoint", err)
 	})
 	t.Run("Restore", func(t *testing.T) {
-		if _, err := s.Restore(ctx, &ateletpb.RestoreRequest{
+		_, err := s.Restore(ctx, &ateletpb.RestoreRequest{
 			ActorTemplateNamespace: okNS, ActorTemplateName: okTmpl, ActorId: okID,
 			TargetAteomUid: badUID, Spec: okSpec,
-		}); err == nil {
-			t.Error("Restore accepted an invalid target ateom UID")
-		}
+		})
+		wantInvalidArgument(t, "Restore", err)
 	})
 }

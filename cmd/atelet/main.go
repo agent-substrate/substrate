@@ -52,8 +52,10 @@ import (
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/api/option"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/reflection"
+	"google.golang.org/grpc/status"
 	"k8s.io/utils/lru"
 )
 
@@ -219,7 +221,7 @@ func (s *AteomHerder) fetchRunsc(ctx context.Context, cfg *ateletpb.RunscConfig)
 
 	sha256Hash := platCfg.GetSha256Hash()
 	if err := resources.ValidateRunscHash(sha256Hash); err != nil {
-		return "", err
+		return "", status.Error(codes.InvalidArgument, err.Error())
 	}
 
 	localPath := ateompath.RunSCBinaryPath(sha256Hash)
@@ -283,7 +285,9 @@ func (s *AteomHerder) fetchRunsc(ctx context.Context, cfg *ateletpb.RunscConfig)
 
 func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (*ateletpb.RunResponse, error) {
 	if err := validateRunRequest(req); err != nil {
-		return nil, err
+		// status.Error so the interceptor surfaces InvalidArgument and the
+		// message instead of masking both as Internal.
+		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
 	runscPath, err := s.fetchRunscAndPrep(ctx, req.GetRunsc())
@@ -360,7 +364,7 @@ func recordSnapshotSize(ctx context.Context, kind, path, atNamespace, atName str
 
 func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest) (*ateletpb.CheckpointResponse, error) {
 	if err := validateCheckpointRequest(req); err != nil {
-		return nil, err
+		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
 	runscPath, err := s.fetchRunscAndPrep(ctx, req.GetRunsc())
@@ -427,7 +431,7 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 
 func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (*ateletpb.RestoreResponse, error) {
 	if err := validateRestoreRequest(req); err != nil {
-		return nil, err
+		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
 	runscPath, err := s.fetchRunscAndPrep(ctx, req.GetRunsc())
