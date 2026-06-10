@@ -645,14 +645,20 @@ func validateCheckpointRequest(req *ateletpb.CheckpointRequest) error {
 	if err := validateActorRequest(req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId(), req.GetTargetAteomUid(), req.GetSpec()); err != nil {
 		return err
 	}
-	return validateSnapshotURIPrefix(req.GetSnapshotUriPrefix())
+	if err := validateSnapshotURIPrefix(req.GetSnapshotUriPrefix()); err != nil {
+		return err
+	}
+	return nil
 }
 
 func validateRestoreRequest(req *ateletpb.RestoreRequest) error {
 	if err := validateActorRequest(req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId(), req.GetTargetAteomUid(), req.GetSpec()); err != nil {
 		return err
 	}
-	return validateSnapshotURIPrefix(req.GetSnapshotUriPrefix())
+	if err := validateSnapshotURIPrefix(req.GetSnapshotUriPrefix()); err != nil {
+		return err
+	}
+	return nil
 }
 
 // validateActorRequest is the shared core for the fields common to all three

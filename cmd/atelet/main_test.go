@@ -193,48 +193,105 @@ func TestValidateSnapshotURIPrefix(t *testing.T) {
 	}
 }
 
-// TestPerRequestValidators pins the request-specific rules: Checkpoint and
-// Restore must reject a bad snapshot URI prefix even when every common field
-// is valid, and Run (which has no URI field) must accept the same common
-// fields.
-func TestPerRequestValidators(t *testing.T) {
-	const okNS, okTmpl, okID, okUID = "ate-demo", "counter", "counter-1", "422938ba-8860-4983-a25d-d6bcb0a69d4e"
-	okSpec := &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{Name: "worker"}}}
+// validRunRequest, validCheckpointRequest, and validRestoreRequest build
+// requests whose every field passes validation; the per-request tests below
+// break one field per case.
+func validRunRequest() *ateletpb.RunRequest {
+	return &ateletpb.RunRequest{
+		ActorTemplateNamespace: "ate-demo",
+		ActorTemplateName:      "counter",
+		ActorId:                "counter-1",
+		TargetAteomUid:         "422938ba-8860-4983-a25d-d6bcb0a69d4e",
+		Spec:                   &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{Name: "worker"}}},
+	}
+}
 
-	if err := validateRunRequest(&ateletpb.RunRequest{
-		ActorTemplateNamespace: okNS, ActorTemplateName: okTmpl, ActorId: okID,
-		TargetAteomUid: okUID, Spec: okSpec,
-	}); err != nil {
-		t.Errorf("validateRunRequest with valid fields: %v", err)
+func validCheckpointRequest() *ateletpb.CheckpointRequest {
+	return &ateletpb.CheckpointRequest{
+		ActorTemplateNamespace: "ate-demo",
+		ActorTemplateName:      "counter",
+		ActorId:                "counter-1",
+		TargetAteomUid:         "422938ba-8860-4983-a25d-d6bcb0a69d4e",
+		Spec:                   &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{Name: "worker"}}},
+		SnapshotUriPrefix:      "gs://bucket/actors/1/snapshots/2/",
 	}
+}
 
-	if err := validateCheckpointRequest(&ateletpb.CheckpointRequest{
-		ActorTemplateNamespace: okNS, ActorTemplateName: okTmpl, ActorId: okID,
-		TargetAteomUid: okUID, Spec: okSpec,
-		SnapshotUriPrefix: "gs://bucket/actors/1/snapshots/2/",
-	}); err != nil {
-		t.Errorf("validateCheckpointRequest with valid fields: %v", err)
+func validRestoreRequest() *ateletpb.RestoreRequest {
+	return &ateletpb.RestoreRequest{
+		ActorTemplateNamespace: "ate-demo",
+		ActorTemplateName:      "counter",
+		ActorId:                "counter-1",
+		TargetAteomUid:         "422938ba-8860-4983-a25d-d6bcb0a69d4e",
+		Spec:                   &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{Name: "worker"}}},
+		SnapshotUriPrefix:      "gs://bucket/actors/1/snapshots/2/",
 	}
-	if err := validateCheckpointRequest(&ateletpb.CheckpointRequest{
-		ActorTemplateNamespace: okNS, ActorTemplateName: okTmpl, ActorId: okID,
-		TargetAteomUid: okUID, Spec: okSpec,
-		SnapshotUriPrefix: "relative/path",
-	}); err == nil {
-		t.Error("validateCheckpointRequest accepted a bucketless snapshot URI prefix")
-	}
+}
 
-	if err := validateRestoreRequest(&ateletpb.RestoreRequest{
-		ActorTemplateNamespace: okNS, ActorTemplateName: okTmpl, ActorId: okID,
-		TargetAteomUid: okUID, Spec: okSpec,
-		SnapshotUriPrefix: "gs://bucket/actors/1/snapshots/2/",
-	}); err != nil {
-		t.Errorf("validateRestoreRequest with valid fields: %v", err)
+func TestValidateRunRequest(t *testing.T) {
+	tests := []struct {
+		name    string
+		mutate  func(*ateletpb.RunRequest)
+		wantErr bool
+	}{
+		{"valid", func(*ateletpb.RunRequest) {}, false},
+		{"invalid ateom uid", func(r *ateletpb.RunRequest) { r.TargetAteomUid = "../escape" }, true},
+		{"invalid actor id", func(r *ateletpb.RunRequest) { r.ActorId = "../escape" }, true},
 	}
-	if err := validateRestoreRequest(&ateletpb.RestoreRequest{
-		ActorTemplateNamespace: okNS, ActorTemplateName: okTmpl, ActorId: okID,
-		TargetAteomUid: okUID, Spec: okSpec,
-	}); err == nil {
-		t.Error("validateRestoreRequest accepted an empty snapshot URI prefix")
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := validRunRequest()
+			tc.mutate(req)
+			if err := validateRunRequest(req); (err != nil) != tc.wantErr {
+				t.Errorf("validateRunRequest err = %v, wantErr %v", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+// Checkpoint and Restore must reject a bad snapshot URI prefix even when
+// every common field is valid.
+func TestValidateCheckpointRequest(t *testing.T) {
+	tests := []struct {
+		name    string
+		mutate  func(*ateletpb.CheckpointRequest)
+		wantErr bool
+	}{
+		{"valid", func(*ateletpb.CheckpointRequest) {}, false},
+		{"empty snapshot uri", func(r *ateletpb.CheckpointRequest) { r.SnapshotUriPrefix = "" }, true},
+		{"bucketless snapshot uri", func(r *ateletpb.CheckpointRequest) { r.SnapshotUriPrefix = "relative/path" }, true},
+		{"invalid ateom uid", func(r *ateletpb.CheckpointRequest) { r.TargetAteomUid = "../escape" }, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := validCheckpointRequest()
+			tc.mutate(req)
+			if err := validateCheckpointRequest(req); (err != nil) != tc.wantErr {
+				t.Errorf("validateCheckpointRequest err = %v, wantErr %v", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidateRestoreRequest(t *testing.T) {
+	tests := []struct {
+		name    string
+		mutate  func(*ateletpb.RestoreRequest)
+		wantErr bool
+	}{
+		{"valid", func(*ateletpb.RestoreRequest) {}, false},
+		{"empty snapshot uri", func(r *ateletpb.RestoreRequest) { r.SnapshotUriPrefix = "" }, true},
+		{"bucketless snapshot uri", func(r *ateletpb.RestoreRequest) { r.SnapshotUriPrefix = "relative/path" }, true},
+		{"invalid ateom uid", func(r *ateletpb.RestoreRequest) { r.TargetAteomUid = "../escape" }, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := validRestoreRequest()
+			tc.mutate(req)
+			if err := validateRestoreRequest(req); (err != nil) != tc.wantErr {
+				t.Errorf("validateRestoreRequest err = %v, wantErr %v", err, tc.wantErr)
+			}
+		})
 	}
 }
 
