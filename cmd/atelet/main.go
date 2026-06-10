@@ -651,17 +651,14 @@ func validateActorRequest(namespace, template, actorID, targetAteomUID string, s
 // leave a traversal window via the others. Template names are DNS-1123
 // subdomains (dots allowed); namespaces and actor IDs are labels.
 func validateActorRef(namespace, template, actorID string) error {
-	for _, f := range []struct {
-		kind, value string
-		errs        []string
-	}{
-		{"namespace", namespace, validation.IsDNS1123Label(namespace)},
-		{"template", template, validation.IsDNS1123Subdomain(template)},
-		{"actor ID", actorID, validation.IsDNS1123Label(actorID)},
-	} {
-		if len(f.errs) > 0 {
-			return fmt.Errorf("invalid %s %q: %s", f.kind, f.value, strings.Join(f.errs, "; "))
-		}
+	if errs := validation.IsDNS1123Label(namespace); len(errs) > 0 {
+		return fmt.Errorf("invalid namespace %q: %s", namespace, strings.Join(errs, "; "))
+	}
+	if errs := validation.IsDNS1123Subdomain(template); len(errs) > 0 {
+		return fmt.Errorf("invalid template %q: %s", template, strings.Join(errs, "; "))
+	}
+	if errs := validation.IsDNS1123Label(actorID); len(errs) > 0 {
+		return fmt.Errorf("invalid actor ID %q: %s", actorID, strings.Join(errs, "; "))
 	}
 	return nil
 }
@@ -710,11 +707,9 @@ func validateRunscHash(sha256Hash string) error {
 	if len(sha256Hash) != 64 {
 		return fmt.Errorf("invalid runsc sha256 hash: want 64 hex chars, got %d", len(sha256Hash))
 	}
-	for _, r := range sha256Hash {
-		isHex := (r >= '0' && r <= '9') || (r >= 'a' && r <= 'f') || (r >= 'A' && r <= 'F')
-		if !isHex {
-			return fmt.Errorf("invalid runsc sha256 hash %q: must be hex", sha256Hash)
-		}
+	// Same decoder the digest comparison in fetchRunsc uses.
+	if _, err := hex.DecodeString(sha256Hash); err != nil {
+		return fmt.Errorf("invalid runsc sha256 hash %q: must be hex", sha256Hash)
 	}
 	return nil
 }
