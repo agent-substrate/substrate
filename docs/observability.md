@@ -8,8 +8,8 @@ This guide explains how Agent Substrate achieves observability across these susp
 
 To make underlying infrastructure transitions transparent, Agent Substrate establishes a standardized metadata model to identify actors across worker pods:
 * `ate.dev/actor_id`: The unique identifier of the actor (e.g., `my-counter-1` or `test`).
-* `ate.dev/actor_template`: The template used to create the actor (e.g., `counter`).
-* `ate.dev/actor_namespace`: The Kubernetes namespace of the actor (e.g., `ate-demo-counter`).
+* `ate.dev/actor_template_name`: The name of the actor's ActorTemplate (e.g., `counter`).
+* `ate.dev/actor_template_namespace`: The Kubernetes namespace of the actor's ActorTemplate (e.g., `ate-demo-counter`).
 
 Currently, Agent Substrate automatically wraps container output and injects these metadata labels into **container logs**. For metrics and distributed tracing, Agent Substrate provides foundational system telemetry and on-demand request tracing, with roadmap plans to fully integrate actor-level correlation.
 
@@ -176,7 +176,7 @@ Telemetry is emitted the same way everywhere; only the backend differs between a
 
 > **GCP-specific.** These are **Google Cloud Monitoring** dashboards; they apply only to a GKE / Google Cloud deployment. There is no dashboard support on Kind — use the Prometheus UI in [Metrics](#2-metrics) for local development.
 
-Dashboard definitions live in [`monitoring/dashboards/`](../monitoring/dashboards/) (see its README for the per-dashboard breakdown). They are created and updated **as part of GCP setup**: `tools/setup-gcp` applies each dashboard idempotently (matched and updated by display name), so re-running is safe.
+Dashboard definitions live in [`tools/setup-gcp/dashboards/`](../tools/setup-gcp/dashboards/) (see its README for the per-dashboard breakdown). They are created and updated **as part of GCP setup**: `tools/setup-gcp` applies each dashboard idempotently (matched and updated by display name), so re-running is safe.
 
 ```sh
 go run ./tools/setup-gcp --create-monitoring-dashboards   # also part of: --all

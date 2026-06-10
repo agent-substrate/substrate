@@ -2,7 +2,7 @@
 
 ```shell
 $ source .ate-dev-env.sh
-$ go test -v ./internal/e2e/suites/... -args -e2e
+$ go test -v ./internal/e2e/suites/... -args --e2e
 ```
 
 ## Principles
@@ -10,15 +10,17 @@ $ go test -v ./internal/e2e/suites/... -args -e2e
 * Keep it simple -- use go test for the harness.
 * e2e tests live under `internal/e2e/suites/<suite>`
 * Each suite should implement TestMain using e2e.RunTestMain()
-  * e2e tests will be skipped for ordinary unit tests unless the `-e2e` flag
-    is set e.g. `go test ./internal/e2e/suites/... -args -e2e`
+  * e2e tests will be skipped for ordinary unit tests unless the `--e2e` flag
+    is set e.g. `go test ./internal/e2e/suites/... -args --e2e`
 * Helper libraries live under `internal/e2e`
 * Setup and Teardown are on a per-component basis and the component's
   author's responsibility.
 
 ## Preconditions
 
-The e2e tests assume you have a cluster setup with `hack/install.sh`.
+The e2e tests assume you have a cluster set up with Agent Substrate installed,
+for example via `hack/install-ate.sh --deploy-ate-system` or
+`hack/install-ate-kind.sh --deploy-ate-system`.
 
 ## Creating a new test suite
 

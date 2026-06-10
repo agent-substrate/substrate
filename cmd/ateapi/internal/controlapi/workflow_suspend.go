@@ -153,9 +153,13 @@ func (s *CallAteletSuspendStep) Execute(ctx context.Context, input *SuspendInput
 			Command: ctr.Command,
 		}
 		for _, env := range ctr.Env {
+			var val string
+			if env.Value != nil {
+				val = *env.Value
+			}
 			ateletEnv := &ateletpb.EnvEntry{
 				Name:  env.Name,
-				Value: env.Value,
+				Value: val,
 			}
 			ateletCtr.Env = append(ateletCtr.Env, ateletEnv)
 		}

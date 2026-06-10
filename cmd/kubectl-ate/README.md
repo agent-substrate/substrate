@@ -114,7 +114,7 @@ Manage the execution state of your workloads.
 
 ```bash
 # Create a new actor deriving from a specific ActorTemplate
-kubectl ate create actor my-actor --template=ate-demo-counter/counter-template
+kubectl ate create actor my-actor --template=ate-demo-counter/counter
 
 # Resume an actor (assigns it to a free worker and restores its state)
 kubectl ate resume actor my-actor

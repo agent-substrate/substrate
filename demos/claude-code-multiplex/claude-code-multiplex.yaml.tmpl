@@ -13,9 +13,8 @@
 # limitations under the License.
 
 # Three ActorTemplates share a 2-pod WorkerPool, so substrate must suspend
-# at least one actor at any moment. ANTHROPIC_API_KEY is passed as a plain
-# env var per dberkov's PR #203 review — substrate does not currently
-# support `valueFrom.secretKeyRef` on ActorTemplate container env.
+# at least one actor at any moment. ANTHROPIC_API_KEY is stored in a Secret
+# and referenced from ActorTemplate container env with valueFrom.secretKeyRef.
 #
 # WORKLOAD_IMAGE is the resolved sha256-digest reference for the
 # claude-multiplex-demo-workload image — built and pushed to
@@ -26,6 +25,17 @@ apiVersion: v1
 kind: Namespace
 metadata:
   name: claude-multiplex-demo
+
+---
+
+apiVersion: v1
+kind: Secret
+metadata:
+  name: anthropic-api-key
+  namespace: claude-multiplex-demo
+type: Opaque
+stringData:
+  api-key: "${ANTHROPIC_API_KEY}"
 
 ---
 
@@ -72,7 +82,10 @@ spec:
     - name: INTERVAL_SECONDS
       value: "45"
     - name: ANTHROPIC_API_KEY
-      value: "${ANTHROPIC_API_KEY}"
+      valueFrom:
+        secretKeyRef:
+          name: anthropic-api-key
+          key: api-key
   workerPoolRef:
     namespace: claude-multiplex-demo
     name: claude-workerpool
@@ -106,7 +119,10 @@ spec:
     - name: INTERVAL_SECONDS
       value: "45"
     - name: ANTHROPIC_API_KEY
-      value: "${ANTHROPIC_API_KEY}"
+      valueFrom:
+        secretKeyRef:
+          name: anthropic-api-key
+          key: api-key
   workerPoolRef:
     namespace: claude-multiplex-demo
     name: claude-workerpool
@@ -140,7 +156,10 @@ spec:
     - name: INTERVAL_SECONDS
       value: "45"
     - name: ANTHROPIC_API_KEY
-      value: "${ANTHROPIC_API_KEY}"
+      valueFrom:
+        secretKeyRef:
+          name: anthropic-api-key
+          key: api-key
   workerPoolRef:
     namespace: claude-multiplex-demo
     name: claude-workerpool

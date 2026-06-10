@@ -14,11 +14,15 @@
 package ateinterceptors
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
+	"strings"
 	"testing"
 
+	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -86,5 +90,42 @@ func TestStatusErrorInterceptor(t *testing.T) {
 				t.Errorf("expected message %q, got %q", tt.wantMsg, st.Message())
 			}
 		})
+	}
+}
+
+func TestServerUnaryInterceptorRedactsEnvFromProtoRequestLogs(t *testing.T) {
+	var log bytes.Buffer
+	origLogger := slog.Default()
+	t.Cleanup(func() {
+		slog.SetDefault(origLogger)
+	})
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&log, nil)))
+
+	req := &ateletpb.RunRequest{
+		Spec: &ateletpb.WorkloadSpec{
+			Containers: []*ateletpb.Container{
+				{
+					Name: "main",
+					Env: []*ateletpb.EnvEntry{
+						{Name: "API_KEY", Value: "sk-secret"},
+					},
+				},
+			},
+		},
+	}
+
+	_, err := ServerUnaryInterceptor(context.Background(), req, &grpc.UnaryServerInfo{FullMethod: "/atelet.AteomHerder/Run"}, func(ctx context.Context, req interface{}) (interface{}, error) {
+		return &ateletpb.RunResponse{}, nil
+	})
+	if err != nil {
+		t.Fatalf("ServerUnaryInterceptor failed: %v", err)
+	}
+
+	gotLog := log.String()
+	if strings.Contains(gotLog, "sk-secret") || strings.Contains(gotLog, "API_KEY") {
+		t.Fatalf("log contains env data: %s", gotLog)
+	}
+	if len(req.GetSpec().GetContainers()[0].GetEnv()) != 1 {
+		t.Fatalf("interceptor mutated original request")
 	}
 }

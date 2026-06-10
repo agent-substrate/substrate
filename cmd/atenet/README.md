@@ -38,5 +38,5 @@ RBAC permissions:
 
 ## testing
 
-hack/run-test.sh will execute a local smoke test with a fake ATE API server.
-This does not require any cluster and uses the fake ATE api server.
+Run the package tests with `go test ./cmd/atenet/...`. Cluster e2e
+tests use the shared `hack/run-e2e.sh` runner.

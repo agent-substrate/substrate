@@ -57,11 +57,11 @@ func TestWrapContainerLogs(t *testing.T) {
 	if labels["ate.dev/actor_id"] != "act-1" {
 		t.Errorf("got actor_id = %v, want 'act-1'", labels["ate.dev/actor_id"])
 	}
-	if labels["ate.dev/actor_template"] != "tmpl-1" {
-		t.Errorf("got actor_template = %v, want 'tmpl-1'", labels["ate.dev/actor_template"])
+	if labels["ate.dev/actor_template_name"] != "tmpl-1" {
+		t.Errorf("got actor_template_name = %v, want 'tmpl-1'", labels["ate.dev/actor_template_name"])
 	}
-	if labels["ate.dev/actor_namespace"] != "default" {
-		t.Errorf("got actor_namespace = %v, want 'default'", labels["ate.dev/actor_namespace"])
+	if labels["ate.dev/actor_template_namespace"] != "default" {
+		t.Errorf("got actor_template_namespace = %v, want 'default'", labels["ate.dev/actor_template_namespace"])
 	}
 }
 

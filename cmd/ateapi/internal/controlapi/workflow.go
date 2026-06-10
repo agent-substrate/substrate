@@ -29,6 +29,7 @@ import (
 	grpcCodes "google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/kubernetes"
 )
 
 // WorkflowStep represents a single, idempotent operation in a workflow graph.
@@ -116,14 +117,18 @@ type ActorWorkflow struct {
 	store               store.Interface
 	dialer              *AteletDialer
 	actorTemplateLister listersv1alpha1.ActorTemplateLister
+	kubeClient          kubernetes.Interface
+	secretCache         *envSecretCache
 }
 
 // NewActorWorkflow creates a new ActorWorkflow.
-func NewActorWorkflow(store store.Interface, dialer *AteletDialer, actorTemplateLister listersv1alpha1.ActorTemplateLister) *ActorWorkflow {
+func NewActorWorkflow(store store.Interface, dialer *AteletDialer, actorTemplateLister listersv1alpha1.ActorTemplateLister, kubeClient kubernetes.Interface) *ActorWorkflow {
 	return &ActorWorkflow{
 		store:               store,
 		dialer:              dialer,
 		actorTemplateLister: actorTemplateLister,
+		kubeClient:          kubeClient,
+		secretCache:         newEnvSecretCache(envSecretCacheTTL),
 	}
 }
 
@@ -146,7 +151,7 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, id string, boot bool) (
 	steps := []WorkflowStep[*ResumeInput, *ResumeState]{
 		&LoadActorForResumeStep{store: w.store, actorTemplateLister: w.actorTemplateLister},
 		&AssignWorkerStep{store: w.store},
-		&CallAteletRestoreStep{dialer: w.dialer},
+		&CallAteletRestoreStep{dialer: w.dialer, kubeClient: w.kubeClient, secretCache: w.secretCache},
 		&FinalizeRunningStep{store: w.store},
 	}
 

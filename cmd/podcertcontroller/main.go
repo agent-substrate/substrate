@@ -23,7 +23,6 @@ package main
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"log/slog"
 	"os"
@@ -37,6 +36,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/servicednssigner"
 	"github.com/agent-substrate/substrate/internal/signercontroller"
 	"github.com/agent-substrate/substrate/internal/version"
+	"github.com/spf13/pflag"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -54,33 +54,33 @@ func init() {
 }
 
 var (
-	kubeconfig = flag.String("kubeconfig", kubeConfigDefault, "absolute path to the kubeconfig file")
-	inCluster  = flag.Bool("in-cluster", false, "Is the controller running in the cluster it should connect to?")
+	kubeconfig = pflag.String("kubeconfig", kubeConfigDefault, "absolute path to the kubeconfig file")
+	inCluster  = pflag.Bool("in-cluster", false, "Is the controller running in the cluster it should connect to?")
 
-	shardingNamespace       = flag.String("sharding-pod-namespace", "", "(Work Sharding) The namespace the controller is running in")
-	shardingPodName         = flag.String("sharding-pod-name", "", "(Work Sharding) The pod name of the controller")
-	shardingPodUID          = flag.String("sharding-pod-uid", "", "(Work Sharding) The pod UID of the controller")
-	shardingApplicationName = flag.String("sharding-application-name", "", "(Work Sharding) The application name to disambiguate Leases")
+	shardingNamespace       = pflag.String("sharding-pod-namespace", "", "(Work Sharding) The namespace the controller is running in")
+	shardingPodName         = pflag.String("sharding-pod-name", "", "(Work Sharding) The pod name of the controller")
+	shardingPodUID          = pflag.String("sharding-pod-uid", "", "(Work Sharding) The pod UID of the controller")
+	shardingApplicationName = pflag.String("sharding-application-name", "", "(Work Sharding) The application name to disambiguate Leases")
 
-	serviceDNSCAPoolFile = flag.String(
+	serviceDNSCAPoolFile = pflag.String(
 		"service-dns-ca-pool",
 		"",
 		"File that contains the CA pool state for "+servicednssigner.Name,
 	)
 
-	podCAPoolFile = flag.String(
+	podCAPoolFile = pflag.String(
 		"pod-identity-ca-pool",
 		"",
 		"File that contains the CA pool state for "+podidentitysigner.Name,
 	)
 
-	showVersion = flag.Bool("version", false, "Print version and exit.")
+	showVersion = pflag.Bool("version", false, "Print version and exit.")
 )
 
 func main() {
 	ctx := context.Background()
 
-	flag.Parse()
+	pflag.Parse()
 	if *showVersion {
 		fmt.Println(version.String())
 		return

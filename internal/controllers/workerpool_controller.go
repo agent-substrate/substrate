@@ -141,7 +141,7 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool) *appsv1ac.Deployment
 						WithName("ateom").
 						WithImage(wp.Spec.AteomImage).
 						WithArgs(
-							"-pod-uid=$(POD_UID)",
+							"--pod-uid=$(POD_UID)",
 						).
 						WithSecurityContext(corev1ac.SecurityContext().
 							WithPrivileged(true).

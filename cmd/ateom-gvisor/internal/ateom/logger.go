@@ -62,14 +62,14 @@ func NewActorLogger(w io.Writer, isOnGCE bool) *ActorLogger {
 }
 
 // EmitLifecycleLog logs a synthetic actor lifecycle event.
-func (al *ActorLogger) EmitLifecycleLog(msg, actorID, actorTemplate, actorNamespace string) {
+func (al *ActorLogger) EmitLifecycleLog(msg, actorID, actorTemplateName, actorTemplateNamespace string) {
 	envelope := map[string]any{
 		"time":    time.Now().Format(time.RFC3339Nano),
 		"message": msg,
 		al.labelsKey: map[string]string{
-			"ate.dev/actor_id":        actorID,
-			"ate.dev/actor_template":  actorTemplate,
-			"ate.dev/actor_namespace": actorNamespace,
+			"ate.dev/actor_id":                 actorID,
+			"ate.dev/actor_template_name":      actorTemplateName,
+			"ate.dev/actor_template_namespace": actorTemplateNamespace,
 		},
 	}
 	if envBytes, err := json.Marshal(envelope); err == nil {
@@ -79,20 +79,20 @@ func (al *ActorLogger) EmitLifecycleLog(msg, actorID, actorTemplate, actorNamesp
 }
 
 // StartJSONLogPipe intercepts container raw stdout/stderr streams and pipes them through the logger.
-func (al *ActorLogger) StartJSONLogPipe(actorID, actorTemplate, actorNamespace string) (io.WriteCloser, error) {
+func (al *ActorLogger) StartJSONLogPipe(actorID, actorTemplateName, actorTemplateNamespace string) (io.WriteCloser, error) {
 	pr, pw, err := os.Pipe()
 	if err != nil {
 		return nil, err
 	}
 	go func() {
-		al.WrapContainerLogs(pr, actorID, actorTemplate, actorNamespace)
+		al.WrapContainerLogs(pr, actorID, actorTemplateName, actorTemplateNamespace)
 		pr.Close()
 	}()
 	return pw, nil
 }
 
 // WrapContainerLogs reads log lines from r, parses them, and logs them in a unified structured format.
-func (al *ActorLogger) WrapContainerLogs(r io.Reader, actorID, actorTemplate, actorNamespace string) {
+func (al *ActorLogger) WrapContainerLogs(r io.Reader, actorID, actorTemplateName, actorTemplateNamespace string) {
 	rdr := bufio.NewReader(r)
 	for {
 		lineBytes, err := rdr.ReadBytes('\n')
@@ -122,9 +122,9 @@ func (al *ActorLogger) WrapContainerLogs(r io.Reader, actorID, actorTemplate, ac
 					"time":    time.Now().Format(time.RFC3339Nano),
 					"message": string(lineBytes),
 					al.labelsKey: map[string]string{
-						"ate.dev/actor_id":        actorID,
-						"ate.dev/actor_template":  actorTemplate,
-						"ate.dev/actor_namespace": actorNamespace,
+						"ate.dev/actor_id":                 actorID,
+						"ate.dev/actor_template_name":      actorTemplateName,
+						"ate.dev/actor_template_namespace": actorTemplateNamespace,
 					},
 				}
 			} else {
@@ -137,8 +137,8 @@ func (al *ActorLogger) WrapContainerLogs(r io.Reader, actorID, actorTemplate, ac
 					m[al.labelsKey] = labels
 				}
 				labels["ate.dev/actor_id"] = actorID
-				labels["ate.dev/actor_template"] = actorTemplate
-				labels["ate.dev/actor_namespace"] = actorNamespace
+				labels["ate.dev/actor_template_name"] = actorTemplateName
+				labels["ate.dev/actor_template_namespace"] = actorTemplateNamespace
 				envelope = m
 			}
 

@@ -25,12 +25,14 @@ type WorkerPoolSpec struct {
 	Replicas int32 `json:"replicas"`
 
 	// AteomImage is the ateom container image to deploy as workers.
+	// +kubebuilder:validation:MinLength=1
 	// +required
 	AteomImage string `json:"ateomImage"`
 }
 
 type WorkerPoolStatus struct {
 	// Replicas is the total number of worker pods.
+	// +kubebuilder:validation:Minimum=0
 	// +optional
 	Replicas int32 `json:"replicas"`
 }

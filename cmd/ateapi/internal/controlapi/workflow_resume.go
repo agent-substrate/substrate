@@ -30,6 +30,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/kubernetes"
 )
 
 // ResumeInput holds the immutable parameters requested by the client.
@@ -158,7 +159,9 @@ func (s *AssignWorkerStep) findFreeWorker(workers []*ateapipb.Worker, workerPool
 }
 
 type CallAteletRestoreStep struct {
-	dialer *AteletDialer
+	dialer      *AteletDialer
+	kubeClient  kubernetes.Interface
+	secretCache *envSecretCache
 }
 
 func (s *CallAteletRestoreStep) Name() string { return "CallAteletRestore" }
@@ -172,23 +175,9 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 	}
 	client := ateletpb.NewAteomHerderClient(ateletConn)
 
-	workloadSpec := &ateletpb.WorkloadSpec{
-		PauseImage: state.ActorTemplate.Spec.PauseImage,
-	}
-	for _, ctr := range state.ActorTemplate.Spec.Containers {
-		ateletCtr := &ateletpb.Container{
-			Name:    ctr.Name,
-			Image:   ctr.Image,
-			Command: ctr.Command,
-		}
-		for _, env := range ctr.Env {
-			ateletEnv := &ateletpb.EnvEntry{
-				Name:  env.Name,
-				Value: env.Value,
-			}
-			ateletCtr.Env = append(ateletCtr.Env, ateletEnv)
-		}
-		workloadSpec.Containers = append(workloadSpec.Containers, ateletCtr)
+	workloadSpec, err := workloadSpecFromActorTemplate(ctx, s.kubeClient, s.secretCache, state.ActorTemplate)
+	if err != nil {
+		return err
 	}
 
 	runscCfg := &ateletpb.RunscConfig{}

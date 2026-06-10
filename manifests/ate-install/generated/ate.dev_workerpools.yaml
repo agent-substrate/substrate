@@ -68,6 +68,7 @@ spec:
               ateomImage:
                 description: AteomImage is the ateom container image to deploy as
                   workers.
+                minLength: 1
                 type: string
               replicas:
                 description: Replicas is the number of worker pods to run.
@@ -84,6 +85,7 @@ spec:
               replicas:
                 description: Replicas is the total number of worker pods.
                 format: int32
+                minimum: 0
                 type: integer
             type: object
         required:

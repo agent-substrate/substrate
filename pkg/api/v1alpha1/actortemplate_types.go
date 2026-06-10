@@ -30,38 +30,107 @@ const (
 	PhaseFailed            PhaseType = "Failed"
 )
 
-type EnvVar struct {
-	Name string `json:"name" protobuf:"bytes,1,opt,name=name"`
-	// +optional
-	Value string `json:"value,omitempty" protobuf:"bytes,2,opt,name=value"`
-}
-
 // A single application container that you want to run within a WorkerPool.
 type Container struct {
 	// Name of the container.
+	//
 	// +required
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:XValidation:rule="!format.dns1123Label().validate(self).hasValue()",message="Name must be a valid DNS label"
 	Name string `json:"name"`
 
 	// Image to use for the worker replicas.
 	//
+	// +required
 	// +kubebuilder:validation:XValidation:rule="self.contains('@')",message="All images must be pinned (changing the image invalidates snapshots)"
 	Image string `json:"image,omitempty"`
 
 	// Entrypoint array. Not executed within a shell.
+	//
 	// +optional
+	// +kubebuilder:validation:MaxItems=64
 	// +listType=atomic
 	Command []string `json:"command,omitempty"`
 
-	// List of ports to expose from the container.
-	Ports []corev1.ContainerPort `json:"ports,omitempty"`
-
 	// Environment variables to set in the worker replicas.
+	//
+	// +optional
+	// +kubebuilder:validation:MaxItems=32
 	Env []EnvVar `json:"env,omitempty"`
+}
+
+// EnvVar represents an environment variable supplied to a container in an
+// ActorTemplate. It models only a subset of Kubernetes Pod env behavior:
+// literal values are not expanded with Kubernetes-style $(VAR) references,
+// envFrom is not supported, and valueFrom currently supports only secretKeyRef.
+//
+// +kubebuilder:validation:ExactlyOneOf={value, valueFrom}
+type EnvVar struct {
+	// Name is the name of the environment variable. May be any printable ASCII
+	// character except '='.
+	//
+	// +required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:Pattern=`^[ -<>-~]+$`
+	Name string `json:"name"`
+
+	// Exactly one of the following must be specified.
+
+	// Variable value. Mutually exclusive with ValueFrom.
+	// Value is the literal value of the environment variable. Unlike in
+	// Kubernetes pods, this value is not interpolated, and $(VAR)
+	// references are not expanded.
+	//
+	// +optional
+	// +kubebuilder:validation:MinLength=0
+	Value *string `json:"value,omitempty"`
+
+	// Source for the environment variable's value. Mutually exclusive with
+	// Value.
+	//
+	// +optional
+	ValueFrom *EnvVarSource `json:"valueFrom,omitempty"`
+}
+
+// EnvVarSource represents a source for the value of an EnvVar. Exactly one of
+// its fields must be set.
+//
+// +kubebuilder:validation:MinProperties=1
+// +kubebuilder:validation:MaxProperties=1
+type EnvVarSource struct {
+	// Selects a key of a Secret in the ActorTemplate's namespace.
+	//
+	// +optional
+	SecretKeyRef *SecretKeySelector `json:"secretKeyRef,omitempty"`
+}
+
+// SecretKeySelector selects a key from a Secret.
+type SecretKeySelector struct {
+	// Name of the referent Secret.
+	//
+	// +required
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:XValidation:rule="!format.dns1123Subdomain().validate(self).hasValue()",message="Name must be a valid DNS subdomain"
+	Name string `json:"name"`
+
+	// Key to select within the Secret.
+	//
+	// +required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:Pattern=`^[-._a-zA-Z0-9]+$`
+	Key string `json:"key"`
+
+	// Specify whether the Secret or its key must be defined.
+	//
+	// +optional
+	Optional *bool `json:"optional,omitempty"`
 }
 
 type SnapshotsConfig struct {
 	// Location to store snapshots in.
+	//
 	// +required
+	// +kubebuilder:validation:MinLength=1
 	Location string `json:"location"`
 }
 
@@ -85,11 +154,14 @@ type ActorTemplateSpec struct {
 	Containers []Container `json:"containers,omitempty"`
 
 	// Snapshots configuration for the actor.
+	//
 	// +required
 	SnapshotsConfig SnapshotsConfig `json:"snapshotsConfig"`
 
 	// Name of the worker pool to use for the actor.
+	//
 	// +required
+	// TODO: clone this type locally and add validation
 	WorkerPoolRef corev1.ObjectReference `json:"workerPoolRef"`
 
 	// Parameters for fetching the runsc binary to use.
@@ -106,6 +178,8 @@ type GCPAuthenticationConfig struct {
 // If no members are set, then atelet will use anonymous authentication.
 type AuthenticationConfig struct {
 	// Use GCP application-default credentials.
+	//
+	// +optional
 	GCP *GCPAuthenticationConfig `json:"gcp,omitempty"`
 }
 
@@ -115,12 +189,15 @@ type RunscPlatformConfig struct {
 	// the downloaded file.
 	//
 	// +required
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]+$`
 	SHA256Hash string `json:"sha256Hash,omitempty"`
 
 	// A gs:// URL pointing to a runsc binary that can be downloaded (possibly
 	// with atelet's credentials).
 	//
 	// +required
+	// TODO: add real format checking
+	// +kubebuilder:validation:MinLength=1
 	URL string `json:"url,omitempty"`
 }
 
@@ -139,6 +216,7 @@ type RunscConfig struct {
 	Authentication AuthenticationConfig `json:"authentication,omitempty"`
 }
 
+// TODO: add validation
 type ActorTemplateStatus struct {
 	// Phase of the actor template.
 	// +optional
