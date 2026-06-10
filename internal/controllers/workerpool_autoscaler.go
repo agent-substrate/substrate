@@ -21,17 +21,26 @@ import (
 	"time"
 
 	k8errors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	"github.com/agent-substrate/substrate/internal/autoscaler"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
+
+// pressureReconnectDelay is how long the capacity-pressure watcher waits before
+// re-opening the stream after it ends or errors.
+const pressureReconnectDelay = 2 * time.Second
 
 // defaultAutoscaleInterval is how often each autoscaled pool is re-evaluated
 // when nothing else triggers a reconcile. Occupancy lives in ateapi rather than
@@ -61,6 +70,10 @@ type WorkerPoolAutoscaler struct {
 	// is safe: it merely restarts the (conservative) down timer.
 	mu        sync.Mutex
 	downSince map[types.NamespacedName]time.Time
+
+	// pressureEvents carries capacity-pressure notifications from ateapi into the
+	// controller's workqueue as immediate reconciles (the reactive up-path).
+	pressureEvents chan event.GenericEvent
 }
 
 //+kubebuilder:rbac:groups=ate.dev,resources=workerpools,verbs=get;list;watch;update;patch
@@ -192,7 +205,8 @@ func (r *WorkerPoolAutoscaler) forget(key types.NamespacedName) {
 
 // SetupWithManager registers the autoscaler. It uses a distinct controller name
 // (WorkerPoolReconciler also watches WorkerPool) and a generation predicate so
-// status-only writes don't wake it — periodic requeue drives the polling.
+// status-only writes don't wake the periodic path. A second event source —
+// fed by the capacity-pressure watcher — supplies the reactive up-path.
 func (r *WorkerPoolAutoscaler) SetupWithManager(mgr ctrl.Manager) error {
 	r.mu.Lock()
 	if r.downSince == nil {
@@ -200,8 +214,72 @@ func (r *WorkerPoolAutoscaler) SetupWithManager(mgr ctrl.Manager) error {
 	}
 	r.mu.Unlock()
 
+	// Reactive up-path: ateapi streams a capacity-pressure event the instant a
+	// pool has no free worker; the watcher turns each into an immediate reconcile
+	// of that pool. The For() generation predicate does not apply to this source,
+	// so pressure always enqueues. The periodic requeue remains the slow path.
+	r.pressureEvents = make(chan event.GenericEvent, 128)
+	if err := mgr.Add(manager.RunnableFunc(r.watchCapacityPressure)); err != nil {
+		return err
+	}
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&atev1alpha1.WorkerPool{}, builder.WithPredicates(predicate.GenerationChangedPredicate{})).
+		WatchesRawSource(source.Channel(r.pressureEvents, &handler.EnqueueRequestForObject{})).
 		Named("workerpool-autoscaler").
 		Complete(r)
+}
+
+// watchCapacityPressure subscribes to ateapi's capacity-pressure stream and
+// enqueues an immediate reconcile for each pool that misses. It runs for the
+// life of the manager, reconnecting (with a short delay) whenever the stream
+// ends or errors. It only returns when the manager context is cancelled, so a
+// failing stream never takes the manager down.
+func (r *WorkerPoolAutoscaler) watchCapacityPressure(ctx context.Context) error {
+	log := log.FromContext(ctx).WithName("capacity-pressure-watch")
+	for {
+		if ctx.Err() != nil {
+			return nil
+		}
+		stream, err := r.AteClient.WatchCapacityPressure(ctx, &ateapipb.WatchCapacityPressureRequest{})
+		if err != nil {
+			log.V(1).Info("capacity-pressure stream open failed; will retry", "err", err)
+			if !sleep(ctx, pressureReconnectDelay) {
+				return nil
+			}
+			continue
+		}
+
+		for {
+			ev, err := stream.Recv()
+			if err != nil {
+				log.V(1).Info("capacity-pressure stream ended; will reconnect", "err", err)
+				break
+			}
+			select {
+			case r.pressureEvents <- event.GenericEvent{Object: &atev1alpha1.WorkerPool{
+				ObjectMeta: metav1.ObjectMeta{Namespace: ev.GetWorkerNamespace(), Name: ev.GetWorkerPool()},
+			}}:
+			case <-ctx.Done():
+				return nil
+			}
+		}
+
+		if !sleep(ctx, pressureReconnectDelay) {
+			return nil
+		}
+	}
+}
+
+// sleep waits for d or until ctx is cancelled. It reports whether the full
+// delay elapsed (true) versus being cut short by cancellation (false).
+func sleep(ctx context.Context, d time.Duration) bool {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-t.C:
+		return true
+	}
 }

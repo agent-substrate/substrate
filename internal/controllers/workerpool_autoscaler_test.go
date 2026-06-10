@@ -16,12 +16,14 @@ package controllers
 
 import (
 	"context"
+	"io"
 	"testing"
 	"time"
 
 	"google.golang.org/grpc"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 
 	"github.com/agent-substrate/substrate/internal/autoscaler"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
@@ -35,11 +37,61 @@ func ptrInt32(v int32) *int32 { return &v }
 // nil embedded interface, which keeps the stub honest about what it relies on.
 type stubControl struct {
 	ateapipb.ControlClient
-	workers []*ateapipb.Worker
+	workers  []*ateapipb.Worker
+	pressure <-chan *ateapipb.CapacityPressureEvent
 }
 
 func (s *stubControl) ListWorkers(context.Context, *ateapipb.ListWorkersRequest, ...grpc.CallOption) (*ateapipb.ListWorkersResponse, error) {
 	return &ateapipb.ListWorkersResponse{Workers: s.workers}, nil
+}
+
+func (s *stubControl) WatchCapacityPressure(ctx context.Context, _ *ateapipb.WatchCapacityPressureRequest, _ ...grpc.CallOption) (grpc.ServerStreamingClient[ateapipb.CapacityPressureEvent], error) {
+	return &stubPressureStream{ctx: ctx, events: s.pressure}, nil
+}
+
+// stubPressureStream is a minimal server-streaming client backed by a channel.
+type stubPressureStream struct {
+	grpc.ClientStream
+	ctx    context.Context
+	events <-chan *ateapipb.CapacityPressureEvent
+}
+
+func (s *stubPressureStream) Recv() (*ateapipb.CapacityPressureEvent, error) {
+	select {
+	case e, ok := <-s.events:
+		if !ok {
+			return nil, io.EOF
+		}
+		return e, nil
+	case <-s.ctx.Done():
+		return nil, s.ctx.Err()
+	}
+}
+
+// TestAutoscalerCapacityPressureTriggersReconcile checks that a streamed
+// capacity-pressure event is turned into an immediate reconcile request for the
+// named pool (the reactive up-path).
+func TestAutoscalerCapacityPressureTriggersReconcile(t *testing.T) {
+	events := make(chan *ateapipb.CapacityPressureEvent, 1)
+	r := &WorkerPoolAutoscaler{
+		AteClient:      &stubControl{pressure: events},
+		pressureEvents: make(chan event.GenericEvent, 1),
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = r.watchCapacityPressure(ctx) }()
+
+	events <- &ateapipb.CapacityPressureEvent{WorkerNamespace: "ns", WorkerPool: "pool"}
+
+	select {
+	case ev := <-r.pressureEvents:
+		if ev.Object.GetNamespace() != "ns" || ev.Object.GetName() != "pool" {
+			t.Fatalf("reconcile event for %s/%s, want ns/pool", ev.Object.GetNamespace(), ev.Object.GetName())
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("capacity-pressure event did not produce a reconcile request")
+	}
 }
 
 // poolWorkers builds `total` workers for a pool, the first `occupied` of which
