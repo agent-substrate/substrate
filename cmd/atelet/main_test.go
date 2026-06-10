@@ -17,132 +17,11 @@ package main
 import (
 	"context"
 	"os"
-	"strings"
 	"testing"
 
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 )
-
-func TestValidateActorRef(t *testing.T) {
-	const okNS, okTmpl, okID = "ate-demo", "counter", "counter-1"
-
-	tests := []struct {
-		name         string
-		ns, tmpl, id string
-		wantErr      bool
-	}{
-		{"all valid", okNS, okTmpl, okID, false},
-		{"uuid id valid", okNS, okTmpl, "422938ba-8860-4983-a25d-d6bcb0a69d4e", false},
-
-		// Label vs subdomain distinction: template names are DNS-1123
-		// subdomains (dots allowed); namespaces and actor IDs are labels.
-		{"dotted template valid (subdomain)", okNS, "probe.v1", okID, false},
-		{"dotted namespace invalid (label)", "ate.demo", okTmpl, okID, true},
-		{"dotted id invalid (label)", okNS, okTmpl, "probe.alpha", true},
-
-		{"id traversal", okNS, okTmpl, "..", true},
-		{"id separator", okNS, okTmpl, "a/b", true},
-		{"id empty", okNS, okTmpl, "", true},
-		{"id uppercase", okNS, okTmpl, "Counter", true},
-		{"id too long", okNS, okTmpl, strings.Repeat("a", 64), true},
-
-		{"namespace separator", "a/b", okTmpl, okID, true},
-		{"namespace traversal", "..", okTmpl, okID, true},
-		{"namespace empty", "", okTmpl, okID, true},
-		{"template separator", okNS, "a/b", okID, true},
-		{"template traversal", okNS, "..", okID, true},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			err := validateActorRef(tc.ns, tc.tmpl, tc.id)
-			if (err != nil) != tc.wantErr {
-				t.Errorf("validateActorRef(%q, %q, %q) err = %v, wantErr %v", tc.ns, tc.tmpl, tc.id, err, tc.wantErr)
-			}
-		})
-	}
-}
-
-func TestValidateAteomUID(t *testing.T) {
-	tests := []struct {
-		name    string
-		uid     string
-		wantErr bool
-	}{
-		{"uuid valid", "422938ba-8860-4983-a25d-d6bcb0a69d4e", false},
-		{"separator", "a/b", true},
-		{"traversal", "..", true},
-		{"empty", "", true},
-		{"uppercase", "Pod-UID", true},
-		{"too long", strings.Repeat("a", 64), true},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			if err := validateAteomUID(tc.uid); (err != nil) != tc.wantErr {
-				t.Errorf("validateAteomUID(%q) err = %v, wantErr %v", tc.uid, err, tc.wantErr)
-			}
-		})
-	}
-}
-
-func TestValidateContainers(t *testing.T) {
-	spec := func(names ...string) *ateletpb.WorkloadSpec {
-		s := &ateletpb.WorkloadSpec{}
-		for _, n := range names {
-			s.Containers = append(s.Containers, &ateletpb.Container{Name: n})
-		}
-		return s
-	}
-
-	tests := []struct {
-		name    string
-		spec    *ateletpb.WorkloadSpec
-		wantErr bool
-	}{
-		{"no containers", spec(), false},
-		{"single valid", spec("worker"), false},
-		{"multiple valid", spec("worker", "sidecar"), false},
-		{"separator", spec("a/b"), true},
-		{"traversal", spec(".."), true},
-		{"empty name", spec(""), true},
-		{"uppercase", spec("Worker"), true},
-		{"reserved pause", spec("pause"), true},
-		{"reserved pause among valid", spec("worker", "pause"), true},
-		{"duplicate", spec("worker", "worker"), true},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			if err := validateContainers(tc.spec); (err != nil) != tc.wantErr {
-				t.Errorf("validateContainers(%v) err = %v, wantErr %v", tc.spec, err, tc.wantErr)
-			}
-		})
-	}
-}
-
-func TestValidateRunscHash(t *testing.T) {
-	const valid = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
-
-	tests := []struct {
-		name    string
-		hash    string
-		wantErr bool
-	}{
-		{"valid lowercase", valid, false},
-		{"valid uppercase", strings.ToUpper(valid), false},
-		{"empty", "", true},
-		{"too short", "abc123", true},
-		{"too long", valid + "00", true},
-		{"separator", strings.Repeat("a", 60) + "/../", true},
-		{"non-hex", strings.Repeat("g", 64), true},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			if err := validateRunscHash(tc.hash); (err != nil) != tc.wantErr {
-				t.Errorf("validateRunscHash(%q) err = %v, wantErr %v", tc.hash, err, tc.wantErr)
-			}
-		})
-	}
-}
 
 func TestValidateActorRequest(t *testing.T) {
 	const okNS, okTmpl, okID, okUID = "ate-demo", "counter", "counter-1", "422938ba-8860-4983-a25d-d6bcb0a69d4e"
@@ -164,30 +43,6 @@ func TestValidateActorRequest(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if err := validateActorRequest(tc.ns, tc.tmpl, tc.id, tc.uid, tc.spec); (err != nil) != tc.wantErr {
 				t.Errorf("validateActorRequest err = %v, wantErr %v", err, tc.wantErr)
-			}
-		})
-	}
-}
-
-func TestValidateSnapshotURIPrefix(t *testing.T) {
-	tests := []struct {
-		name    string
-		prefix  string
-		wantErr bool
-	}{
-		{"valid with trailing slash", "gs://bucket/actors/1234/snapshots/5678/", false},
-		{"valid without path", "gs://bucket", false},
-		// Scheme is storage-backend policy, not validated here.
-		{"valid alternate scheme", "s3://bucket/path", false},
-		{"empty", "", true},
-		{"missing bucket", "gs://", true},
-		{"no scheme or bucket", "bucket/path", true},
-		{"unparseable", "://bucket", true},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			if err := validateSnapshotURIPrefix(tc.prefix); (err != nil) != tc.wantErr {
-				t.Errorf("validateSnapshotURIPrefix(%q) err = %v, wantErr %v", tc.prefix, err, tc.wantErr)
 			}
 		})
 	}

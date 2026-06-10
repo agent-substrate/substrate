@@ -24,7 +24,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
-	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -38,6 +37,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/memorypullcache"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/agent-substrate/substrate/internal/version"
 	"github.com/aws/aws-sdk-go-v2/config"
@@ -54,7 +54,6 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/reflection"
-	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/utils/lru"
 )
 
@@ -219,7 +218,7 @@ func (s *AteomHerder) fetchRunsc(ctx context.Context, cfg *ateletpb.RunscConfig)
 	}
 
 	sha256Hash := platCfg.GetSha256Hash()
-	if err := validateRunscHash(sha256Hash); err != nil {
+	if err := resources.ValidateRunscHash(sha256Hash); err != nil {
 		return "", err
 	}
 
@@ -636,7 +635,8 @@ func (d *AteomDialer) DialAteomPod(ctx context.Context, podUID string) (*grpc.Cl
 // hostPort, so any reachable caller could otherwise smuggle a path separator
 // or ".." through these fields and make atelet read/RemoveAll/write outside
 // the intended directory tree, or collide bundles. Each RPC validates at its
-// boundary, before any path is built.
+// boundary, before any path is built. The field rules live in
+// internal/resources so other components can apply them at their boundaries.
 func validateRunRequest(req *ateletpb.RunRequest) error {
 	return validateActorRequest(req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId(), req.GetTargetAteomUid(), req.GetSpec())
 }
@@ -645,7 +645,7 @@ func validateCheckpointRequest(req *ateletpb.CheckpointRequest) error {
 	if err := validateActorRequest(req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId(), req.GetTargetAteomUid(), req.GetSpec()); err != nil {
 		return err
 	}
-	if err := validateSnapshotURIPrefix(req.GetSnapshotUriPrefix()); err != nil {
+	if err := resources.ValidateSnapshotURIPrefix(req.GetSnapshotUriPrefix()); err != nil {
 		return err
 	}
 	return nil
@@ -655,7 +655,7 @@ func validateRestoreRequest(req *ateletpb.RestoreRequest) error {
 	if err := validateActorRequest(req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId(), req.GetTargetAteomUid(), req.GetSpec()); err != nil {
 		return err
 	}
-	if err := validateSnapshotURIPrefix(req.GetSnapshotUriPrefix()); err != nil {
+	if err := resources.ValidateSnapshotURIPrefix(req.GetSnapshotUriPrefix()); err != nil {
 		return err
 	}
 	return nil
@@ -664,103 +664,17 @@ func validateRestoreRequest(req *ateletpb.RestoreRequest) error {
 // validateActorRequest is the shared core for the fields common to all three
 // RPCs.
 func validateActorRequest(namespace, template, actorID, targetAteomUID string, spec *ateletpb.WorkloadSpec) error {
-	if err := validateActorRef(namespace, template, actorID); err != nil {
+	if err := resources.ValidateActorRef(namespace, template, actorID); err != nil {
 		return err
 	}
-	if err := validateAteomUID(targetAteomUID); err != nil {
+	if err := resources.ValidateAteomUID(targetAteomUID); err != nil {
 		return err
 	}
-	return validateContainers(spec)
-}
-
-// validateSnapshotURIPrefix ensures the checkpoint/restore snapshot location
-// is a well-formed URI with a bucket, so a bad prefix fails fast at the RPC
-// boundary instead of deep inside an object-storage call. It deliberately
-// does not restrict the scheme: the storage layer (ategcs.parseGCSURL) only
-// uses the host (bucket) and path, and which schemes are acceptable is a
-// storage-backend policy, not a per-RPC one. The local paths used for
-// snapshot upload/download are derived from the separately validated actor
-// ref, not from this URI, so this is a sanity check rather than a
-// path-traversal guard.
-func validateSnapshotURIPrefix(prefix string) error {
-	u, err := url.Parse(prefix)
-	if err != nil {
-		return fmt.Errorf("invalid snapshot URI prefix %q: %v", prefix, err)
-	}
-	if u.Host == "" {
-		return fmt.Errorf("invalid snapshot URI prefix %q: missing bucket", prefix)
-	}
-	return nil
-}
-
-// validateActorRef ensures every component of the per-actor directory tree is a
-// valid DNS-1123 name. namespace+template+actorID are concatenated by
-// ateompath.ActorPath into a host path on which atelet runs os.RemoveAll and
-// os.MkdirAll, so all three must be validated. Checking only one would still
-// leave a traversal window via the others. Template names are DNS-1123
-// subdomains (dots allowed); namespaces and actor IDs are labels.
-func validateActorRef(namespace, template, actorID string) error {
-	if errs := validation.IsDNS1123Label(namespace); len(errs) > 0 {
-		return fmt.Errorf("invalid namespace %q: %s", namespace, strings.Join(errs, "; "))
-	}
-	if errs := validation.IsDNS1123Subdomain(template); len(errs) > 0 {
-		return fmt.Errorf("invalid template %q: %s", template, strings.Join(errs, "; "))
-	}
-	if errs := validation.IsDNS1123Label(actorID); len(errs) > 0 {
-		return fmt.Errorf("invalid actor ID %q: %s", actorID, strings.Join(errs, "; "))
-	}
-	return nil
-}
-
-// validateAteomUID rejects a target ateom pod UID that could escape the host
-// paths built from it: the netns path (/run/netns/ateom:<uid>) and the ateom
-// control socket (.../ateoms/<uid>/ateom.sock). Kubernetes pod UIDs are UUIDs,
-// which are valid DNS-1123 labels, so a label check accepts every legitimate
-// value while rejecting separators and "..".
-func validateAteomUID(targetAteomUID string) error {
-	if errs := validation.IsDNS1123Label(targetAteomUID); len(errs) > 0 {
-		return fmt.Errorf("invalid target ateom UID %q: %s", targetAteomUID, strings.Join(errs, "; "))
-	}
-	return nil
-}
-
-// validateContainers ensures every application container name is safe to use as
-// an OCI bundle path component. Each must be a DNS-1123 label (no separator or
-// ".."), must not be the reserved "pause" name (which would collide with the
-// sandbox-infra bundle and race its concurrent writer), and must be unique
-// (duplicates map to the same bundle path and corrupt each other).
-func validateContainers(spec *ateletpb.WorkloadSpec) error {
-	seen := make(map[string]struct{})
+	names := make([]string, 0, len(spec.GetContainers()))
 	for _, ctr := range spec.GetContainers() {
-		name := ctr.GetName()
-		if errs := validation.IsDNS1123Label(name); len(errs) > 0 {
-			return fmt.Errorf("invalid container name %q: %s", name, strings.Join(errs, "; "))
-		}
-		if name == "pause" {
-			return fmt.Errorf("invalid container name %q: reserved for sandbox infrastructure", name)
-		}
-		if _, dup := seen[name]; dup {
-			return fmt.Errorf("duplicate container name %q", name)
-		}
-		seen[name] = struct{}{}
+		names = append(names, ctr.GetName())
 	}
-	return nil
-}
-
-// validateRunscHash ensures the runsc SHA-256 hash is exactly 64 hex characters
-// before it is used to build the on-disk binary path (static-files/runsc-<hash>)
-// and, on a cache hit, returned for ateom to execute. Without this, a hash
-// containing path separators or ".." could point the cache-hit early return
-// (and the download target) at an arbitrary binary outside the static-files dir.
-func validateRunscHash(sha256Hash string) error {
-	if len(sha256Hash) != 64 {
-		return fmt.Errorf("invalid runsc sha256 hash: want 64 hex chars, got %d", len(sha256Hash))
-	}
-	// Same decoder the digest comparison in fetchRunsc uses.
-	if _, err := hex.DecodeString(sha256Hash); err != nil {
-		return fmt.Errorf("invalid runsc sha256 hash %q: must be hex", sha256Hash)
-	}
-	return nil
+	return resources.ValidateContainerNames(names)
 }
 
 func resetActorDirs(actorTemplateNamespace, actorTemplateName, actorID string) error {
