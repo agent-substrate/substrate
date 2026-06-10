@@ -60,10 +60,10 @@ const (
 	hostVethName      = "ateom0"
 	actorVethName     = "eth0"
 	actorVethTempName = "ateom1"
-	hostVethCIDR      = "10.200.0.1/30"
-	actorVethCIDR     = "10.200.0.2/30"
-	actorVethGateway  = "10.200.0.1"
-	actorVethIP       = "10.200.0.2"
+	hostVethCIDR      = "169.254.17.1/30"
+	actorVethCIDR     = "169.254.17.2/30"
+	actorVethGateway  = "169.254.17.1"
+	actorVethIP       = "169.254.17.2"
 	actorNftTableName = "ateom_actor"
 )
 
@@ -607,7 +607,7 @@ func installActorNftablesRules(podIP net.IP) error {
 	//
 	// The temporary compatibility rules do three things:
 	//
-	//   * postrouting: masquerade actor egress from 10.200.0.2 behind the worker
+	//   * postrouting: masquerade actor egress from 169.254.17.2 behind the worker
 	//     pod IP so replies route back to the pod.
 	//   * prerouting: DNAT traffic sent to the worker pod IP on TCP/80 to the
 	//     actor veth IP on TCP/80, preserving existing inbound behavior.
