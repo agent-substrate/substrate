@@ -43,15 +43,17 @@ type ExtProcServer struct {
 	recorder      *QueryRecorder
 	resumer       *ActorResumer
 	routeDuration metric.Float64Histogram
+	parking       *parkingLot
 }
 
-func NewExtProcServer(port int, apiClient ateapipb.ControlClient, routeDuration metric.Float64Histogram) *ExtProcServer {
+func NewExtProcServer(port int, apiClient ateapipb.ControlClient, routeDuration metric.Float64Histogram, parkCfg parkingConfig, parkMetrics *parkingMetrics) *ExtProcServer {
 	return &ExtProcServer{
 		port:          port,
 		apiClient:     apiClient,
 		recorder:      NewQueryRecorder(100),
-		resumer:       NewActorResumer(apiClient),
+		resumer:       NewActorResumer(apiClient, withParking(parkCfg.enabled, parkCfg.maxWait)),
 		routeDuration: routeDuration,
+		parking:       newParkingLot(parkCfg, parkMetrics),
 	}
 }
 
@@ -148,8 +150,21 @@ func (s *ExtProcServer) handleRequestHeaders(
 		return nil, metadata, "", "", "", invalidHostErr(metadata.host, err)
 	}
 
+	// Admit the request to the parking lot before resuming. While resume is
+	// in-flight the request occupies a slot; if the actor's worker pool is
+	// momentarily saturated the resumer parks (retries) here rather than failing
+	// fast. A full lot sheds the request immediately so the router applies
+	// backpressure instead of queueing without bound.
+	release, ok := s.parking.enter(ctx)
+	if !ok {
+		return nil, metadata, "", "", "", parkingFullErr(actorRef.String())
+	}
+
 	slog.InfoContext(ctx, "ResumeActor", slog.Any("actor", actorRef))
 	actor, err := s.resumer.ResumeActor(ctx, actorRef)
+	release(parkOutcome(err))
+
+
 	if err != nil {
 		return nil, metadata, "", "", "", mapResumeError(actorRef, err)
 	}

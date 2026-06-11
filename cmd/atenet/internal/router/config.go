@@ -55,4 +55,11 @@ type routerConfig struct {
 	OtlpCollectorAddress string
 
 	Auth authConfig
+
+	// Request parking: hold and retry requests whose actor cannot be served
+	// immediately due to transient worker-pool saturation, instead of failing
+	// fast. See parkingConfig.
+	ParkingEnabled   bool
+	ParkingMaxWait   time.Duration
+	ParkingMaxParked int
 }

@@ -55,7 +55,7 @@ func TestHandleRequestHeadersDoesNotLogSensitiveData(t *testing.T) {
 		resumeFn: func(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
 			return &ateapipb.ResumeActorResponse{Actor: &ateapipb.Actor{AteomPodIp: "10.0.0.52"}}, nil
 		},
-	}, nil)
+	}, nil, parkingConfig{}, nil)
 
 	reqHeaders := &extprocv3.HttpHeaders{
 		Headers: &corev3.HeaderMap{
@@ -189,7 +189,10 @@ func TestExtProcHeadersEvaluation(t *testing.T) {
 				},
 			}
 
-			s := NewExtProcServer(50051, clientMock, nil)
+			// Parking disabled: these cases assert fail-fast mapping of resume
+			// errors (e.g. FailedPrecondition -> immediate 503). Parking behavior
+			// is covered separately in TestExtProc_ParkingLotFull and resumer_test.go.
+			s := NewExtProcServer(50051, clientMock, nil, parkingConfig{}, nil)
 
 			reqHeaders := &extprocv3.HttpHeaders{
 				Headers: &corev3.HeaderMap{
@@ -250,5 +253,49 @@ func TestExtProcHeadersEvaluation(t *testing.T) {
 				t.Errorf("expected query trace entries, got: %v", queries)
 			}
 		})
+	}
+}
+
+// TestExtProc_ParkingLotFull verifies that when the parking lot is at capacity
+// the request is shed with a 503 before any resume is attempted.
+func TestExtProc_ParkingLotFull(t *testing.T) {
+	const testUUID = "123e4567-e89b-12d3-a456-426614174000"
+
+	var resumeCalled bool
+	clientMock := &mockClient{
+		resumeFn: func(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
+			resumeCalled = true
+			return &ateapipb.ResumeActorResponse{Actor: &ateapipb.Actor{AteomPodIp: "10.0.0.1"}}, nil
+		},
+	}
+
+	// maxParked == 0 with parking enabled rejects every admission, deterministically
+	// simulating a full lot without needing concurrent in-flight requests.
+	s := NewExtProcServer(50051, clientMock, nil, parkingConfig{enabled: true, maxWait: time.Second, maxParked: 0}, nil)
+
+	reqHeaders := &extprocv3.HttpHeaders{
+		Headers: &corev3.HeaderMap{
+			Headers: []*corev3.HeaderValue{
+				{Key: ":authority", Value: testUUID + ".team-a.actors.resources.substrate.ate.dev"},
+			},
+		},
+	}
+
+	_, _, _, _, _, err := s.handleRequestHeaders(context.Background(), reqHeaders)
+	if err == nil {
+		t.Fatal("expected error when parking lot is full")
+	}
+	var reqErr *reqError
+	if !errors.As(err, &reqErr) {
+		t.Fatalf("expected *reqError, got %T (%v)", err, err)
+	}
+	if reqErr.statusCode != int(envoy_type.StatusCode_ServiceUnavailable) {
+		t.Errorf("status code = %d, want %d (503)", reqErr.statusCode, envoy_type.StatusCode_ServiceUnavailable)
+	}
+	if !strings.Contains(reqErr.Error(), "router at capacity") {
+		t.Errorf("error body = %q, want it to mention capacity", reqErr.Error())
+	}
+	if resumeCalled {
+		t.Error("resume must not be attempted for a shed request")
 	}
 }
