@@ -46,6 +46,13 @@ func invalidHostErr(host string, cause error) error {
 	}
 }
 
+// parkingFullErr returns a 503 reqError signaling that the router's parking lot
+// is at capacity, so the request was shed without waiting. Clients should retry.
+func parkingFullErr(actorID string) error {
+	return newReqError(envoy_type.StatusCode_ServiceUnavailable,
+		"actor %q unavailable: router at capacity", actorID)
+}
+
 // mapResumeError translates an ActorResumer error into a client-facing
 // reqError. It maps gRPC status codes to appropriate HTTP status codes and
 // short, human-readable bodies. The original error is preserved via Unwrap

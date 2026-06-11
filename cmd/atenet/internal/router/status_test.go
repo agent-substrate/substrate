@@ -62,7 +62,7 @@ func TestStatuszEndpoint(t *testing.T) {
 		t.Fatalf("Failed generating router server: %v", err)
 	}
 
-	srv.extprocSrv = NewExtProcServer(cfg.ExtprocPort, &mockClient{}, nil)
+	srv.extprocSrv = NewExtProcServer(cfg.ExtprocPort, &mockClient{}, nil, defaultParkingConfig(), nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -119,6 +119,10 @@ func TestStatuszEndpoint(t *testing.T) {
 		t.Errorf("Recorded processed activities trace text is missing from HTML response output")
 	}
 
+	if !strings.Contains(content, "Request Parking") {
+		t.Errorf("Status content missing Request Parking section")
+	}
+
 	// Verify format=json serialization integration checks
 	jsonUrl := fmt.Sprintf("%s?format=json", statuszUrl)
 	jsonResp, err := http.Get(jsonUrl)
@@ -138,5 +142,12 @@ func TestStatuszEndpoint(t *testing.T) {
 
 	if dashboard.Queries[0].Target != "10.0.0.5" {
 		t.Errorf("Target parameters unassigned inside context payload context properties: found %s", dashboard.Queries[0].Target)
+	}
+
+	if !dashboard.Parking.Enabled {
+		t.Errorf("expected parking reported as enabled in status JSON")
+	}
+	if dashboard.Parking.MaxParked != defaultParkingMaxParked {
+		t.Errorf("expected parking max_parked %d, got %d", defaultParkingMaxParked, dashboard.Parking.MaxParked)
 	}
 }
