@@ -15,8 +15,8 @@
 package router
 
 import (
-	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
@@ -121,17 +121,17 @@ func TestExtractMetadata(t *testing.T) {
 }
 
 func TestRequestMetadata_String(t *testing.T) {
-	headers := []*corev3.HeaderValue{
+	m := newRequestMetadata([]*corev3.HeaderValue{
 		{Key: ":path", Value: "/api/v1/test"},
 		{Key: ":authority", Value: "example.com"},
+		{Key: "authorization", Value: "Bearer do-not-log-me"},
+	})
+	got := m.String()
+	if want := "host=example.com path=/api/v1/test"; got != want {
+		t.Errorf("String() = %q, want %q", got, want)
 	}
-	m := newRequestMetadata(headers)
-	str := m.String()
-	if str == "" {
-		t.Errorf("expected non-empty string from String()")
-	}
-	if !reflect.DeepEqual(str, fmt.Sprintf("%+v", *m)) {
-		t.Errorf("String() = %q, want %q", str, fmt.Sprintf("%+v", *m))
+	if strings.Contains(got, "do-not-log-me") {
+		t.Errorf("String() leaked header value: %q", got)
 	}
 }
 

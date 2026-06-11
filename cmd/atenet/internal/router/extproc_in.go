@@ -30,7 +30,7 @@ type requestMetadata struct {
 }
 
 func (m *requestMetadata) String() string {
-	return fmt.Sprintf("%+v", *m)
+	return fmt.Sprintf("host=%s path=%s", m.host, m.path)
 }
 
 func newRequestMetadata(headers []*corev3.HeaderValue) *requestMetadata {
@@ -47,7 +47,7 @@ func newRequestMetadata(headers []*corev3.HeaderValue) *requestMetadata {
 
 		headersMap[k] = val
 		if k == ":path" {
-			path = val
+			path, _, _ = strings.Cut(val, "?")
 		}
 		if k == ":authority" || k == "host" {
 			host = val
