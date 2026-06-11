@@ -68,6 +68,18 @@ func ActorPath(actorTemplateNamespace, actorTemplateName, actorID string) string
 	)
 }
 
+// ActorIdentityDirPath is the host directory atelet populates with the
+// actor's identity data (currently the single file "actor-id") and
+// bind-mounts read-only into the actor. It is per-actor and regenerated on
+// every resume, so (unlike the checkpointed process environment) it reflects
+// the correct ID after a restore from the golden snapshot.
+func ActorIdentityDirPath(actorTemplateNamespace, actorTemplateName, actorID string) string {
+	return filepath.Join(
+		ActorPath(actorTemplateNamespace, actorTemplateName, actorID),
+		"identity",
+	)
+}
+
 func RunSCStateDir(actorTemplateNamespace, actorTemplateName, actorID string) string {
 	return filepath.Join(
 		ActorPath(actorTemplateNamespace, actorTemplateName, actorID),

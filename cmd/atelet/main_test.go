@@ -17,6 +17,7 @@ package main
 import (
 	"context"
 	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/agent-substrate/substrate/internal/ateompath"
@@ -24,6 +25,55 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
+
+func TestWriteFileAtomic(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "actor-id")
+
+	// One shared write over an existing value, as happens on every resume;
+	// each subtest checks one postcondition.
+	if err := os.WriteFile(target, []byte("golden-id"), 0o600); err != nil {
+		t.Fatalf("seeding target: %v", err)
+	}
+	if err := writeFileAtomic(target, []byte("counter-1"), 0o644); err != nil {
+		t.Fatalf("writeFileAtomic: %v", err)
+	}
+
+	t.Run("replaces content", func(t *testing.T) {
+		got, err := os.ReadFile(target)
+		if err != nil {
+			t.Fatalf("reading target: %v", err)
+		}
+		if string(got) != "counter-1" {
+			t.Errorf("content = %q, want %q", got, "counter-1")
+		}
+	})
+
+	t.Run("sets permissions", func(t *testing.T) {
+		info, err := os.Stat(target)
+		if err != nil {
+			t.Fatalf("stat target: %v", err)
+		}
+		if perm := info.Mode().Perm(); perm != 0o644 {
+			t.Errorf("perm = %o, want 644", perm)
+		}
+	})
+
+	t.Run("leaves no temp files", func(t *testing.T) {
+		// The directory is visible inside the actor.
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatalf("reading dir: %v", err)
+		}
+		if len(entries) != 1 {
+			names := make([]string, 0, len(entries))
+			for _, e := range entries {
+				names = append(names, e.Name())
+			}
+			t.Errorf("leftover files in identity dir: %v", names)
+		}
+	})
+}
 
 func TestValidateActorRequest(t *testing.T) {
 	const okNS, okTmpl, okID, okUID = "ate-demo", "counter", "counter-1", "422938ba-8860-4983-a25d-d6bcb0a69d4e"

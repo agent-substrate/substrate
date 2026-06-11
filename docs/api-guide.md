@@ -49,6 +49,11 @@ Substrate has standardized on a **Uniform DNS Mesh**. You no longer need to defi
 
 **Format:** `<actor-id>.actors.resources.substrate.ate.dev`
 
+### Actor Identity
+Substrate bind-mounts a read-only, per-actor identity directory at **`/run/ate`** into each of the actor's containers. An actor can learn its own ID without parsing the `Host` header by reading the file **`/run/ate/actor-id`** inside it, which contains the raw actor ID with no trailing newline. Further identity and configuration data may appear in this directory over time.
+
+Read it fresh rather than caching it at process start. It is delivered as a per-actor bind mount, not an environment variable, precisely so it carries the correct ID after a resume from the golden snapshot — an env var (or a file baked into the image) would be frozen at the *golden* actor's ID, since it lives in the checkpointed process memory, and would therefore be identical for every actor of the template.
+
 ### Example
 
 ```yaml

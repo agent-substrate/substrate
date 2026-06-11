@@ -519,6 +519,17 @@ func (s *AteomHerder) prepareOCIBundles(
 ) error {
 	netnsPath := ateompath.AteomNetNSPath(targetAteomUid)
 
+	// Populate the per-actor identity directory that gets bind-mounted into
+	// the application containers. Regenerated on every resume, so it carries
+	// the correct per-actor ID even when restoring from the golden snapshot.
+	identityDir := ateompath.ActorIdentityDirPath(actorTemplateNamespace, actorTemplateName, actorID)
+	if err := os.MkdirAll(identityDir, 0o755); err != nil {
+		return fmt.Errorf("while creating actor identity dir: %w", err)
+	}
+	if err := writeFileAtomic(filepath.Join(identityDir, ActorIDFileName), []byte(actorID), 0o644); err != nil {
+		return fmt.Errorf("while writing actor identity file: %w", err)
+	}
+
 	g, gCtx := errgroup.WithContext(ctx)
 
 	// Pause container.
@@ -536,6 +547,7 @@ func (s *AteomHerder) prepareOCIBundles(
 				"io.kubernetes.cri.container-name": "pause",
 			},
 			netnsPath,
+			"", // pause is sandbox infra; it gets no actor identity mount.
 		); err != nil {
 			return fmt.Errorf("while creating pause OCI bundle: %w", err)
 		}
@@ -564,6 +576,7 @@ func (s *AteomHerder) prepareOCIBundles(
 					"io.kubernetes.cri.container-name": ctr.GetName(),
 				},
 				netnsPath,
+				identityDir,
 			); err != nil {
 				return fmt.Errorf("while creating %q OCI bundle: %w", ctr.GetName(), err)
 			}
@@ -681,6 +694,45 @@ func validateActorRequest(namespace, template, actorID, targetAteomUID string, s
 	return resources.ValidateContainerNames(names)
 }
 
+// writeFileAtomic writes data to path by writing a temp file in the same
+// directory, syncing, and renaming it over the target, then syncing the
+// parent directory so the rename is durable. The identity directory is
+// bind-mounted into actors, so the file must change atomically: a reader
+// must never observe a truncated or partially written value.
+func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
+	f, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(f.Name()) // no-op once the rename succeeds
+
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Chmod(perm); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(f.Name(), path); err != nil {
+		return err
+	}
+
+	dir, err := os.Open(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	defer dir.Close()
+	return dir.Sync()
+}
+
 func resetActorDirs(actorTemplateNamespace, actorTemplateName, actorID string) error {
 	// Explicitly leave runsc logs dir untouched.
 
@@ -722,6 +774,16 @@ func resetActorDirs(actorTemplateNamespace, actorTemplateName, actorID string) e
 	}
 	if err := os.MkdirAll(restoreStateDir, 0o700); err != nil {
 		return fmt.Errorf("while creating restore-state dir: %w", err)
+	}
+
+	// World-readable (0o755): bind-mounted into the actor, whose workload
+	// reads it through the gofer.
+	identityDir := ateompath.ActorIdentityDirPath(actorTemplateNamespace, actorTemplateName, actorID)
+	if err := os.RemoveAll(identityDir); err != nil {
+		return fmt.Errorf("while deleting actor identity dir: %w", err)
+	}
+	if err := os.MkdirAll(identityDir, 0o755); err != nil {
+		return fmt.Errorf("while creating actor identity dir: %w", err)
 	}
 
 	return nil
