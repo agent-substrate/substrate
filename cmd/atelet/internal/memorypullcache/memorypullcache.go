@@ -42,6 +42,11 @@ type MemoryPullCache struct {
 	cache *lru.Cache
 }
 
+type PullResult struct {
+	RootFSTar   io.ReadCloser
+	ResolvedRef string
+}
+
 func NewMemoryPullCache(ctx context.Context, gcpAuthenticator authn.Authenticator, localhostRegistryReplacement string) (*MemoryPullCache, error) {
 	c := &MemoryPullCache{
 		// TODO: Need a smarter cache with bounds on total consumed size, not
@@ -65,10 +70,11 @@ func NewMemoryPullCache(ctx context.Context, gcpAuthenticator authn.Authenticato
 	return c, nil
 }
 
-func (c *MemoryPullCache) Fetch(ctx context.Context, ref string) (io.ReadCloser, error) {
+func (c *MemoryPullCache) Fetch(ctx context.Context, ref string) (*PullResult, error) {
 	// when running in kind we need to rewrite the registry endpoint similar to the
 	// containerd mirror config used in https://kind.sigs.k8s.io/docs/user/local-registry/
 	// for now we have simple opt-in support to rewrite local registries
+	originalRef := ref
 	rewritten := false
 	if c.localhostRegistryReplacement != "" {
 		newRef := c.rewriteLocalRegistry(ref)
@@ -82,6 +88,11 @@ func (c *MemoryPullCache) Fetch(ctx context.Context, ref string) (io.ReadCloser,
 	// this avoids needing to distribute TLS certs all around for local development
 	if rewritten || isLocalRegistry(ref) {
 		nameOpts = append(nameOpts, name.Insecure)
+	}
+
+	originalParsedRef, err := name.ParseReference(originalRef, nameOpts...)
+	if err != nil {
+		return nil, fmt.Errorf("while parsing original reference: %w", err)
 	}
 
 	parsedRef, err := name.ParseReference(ref, nameOpts...)
@@ -106,7 +117,10 @@ func (c *MemoryPullCache) Fetch(ctx context.Context, ref string) (io.ReadCloser,
 				slog.String("ref", ref),
 				slog.String("digest", requestedDigest.DigestStr()),
 			)
-			return io.NopCloser(bytes.NewReader(vAny.([]byte))), nil
+			return &PullResult{
+				RootFSTar:   io.NopCloser(bytes.NewReader(vAny.([]byte))),
+				ResolvedRef: originalParsedRef.String(),
+			}, nil
 		}
 	}
 
@@ -144,6 +158,10 @@ func (c *MemoryPullCache) Fetch(ctx context.Context, ref string) (io.ReadCloser,
 	if err != nil {
 		return nil, fmt.Errorf("in remote.Image: %w", err)
 	}
+	resolvedRef, resolvedDigest, err := resolvedImageRef(originalParsedRef, img, digestWasIncluded)
+	if err != nil {
+		return nil, err
+	}
 
 	size, err := img.Size()
 	if err != nil {
@@ -155,7 +173,7 @@ func (c *MemoryPullCache) Fetch(ctx context.Context, ref string) (io.ReadCloser,
 			slog.String("ref", ref),
 			slog.Int64("size", size),
 		)
-		return mutate.Extract(img), err
+		return &PullResult{RootFSTar: mutate.Extract(img), ResolvedRef: resolvedRef}, err
 	}
 
 	tarData := mutate.Extract(img)
@@ -178,9 +196,31 @@ func (c *MemoryPullCache) Fetch(ctx context.Context, ref string) (io.ReadCloser,
 			slog.String("ref", ref),
 			slog.String("digest", requestedDigest.DigestStr()),
 		)
+	} else if resolvedDigest != "" {
+		c.cache.Add(resolvedDigest, memData)
+		slog.InfoContext(
+			ctx,
+			"Populated image cache",
+			slog.String("ref", ref),
+			slog.String("digest", resolvedDigest),
+		)
 	}
 
-	return io.NopCloser(bytes.NewReader(memData)), nil
+	return &PullResult{
+		RootFSTar:   io.NopCloser(bytes.NewReader(memData)),
+		ResolvedRef: resolvedRef,
+	}, nil
+}
+
+func resolvedImageRef(parsedRef name.Reference, img v1.Image, digestWasIncluded bool) (string, string, error) {
+	if digestWasIncluded {
+		return parsedRef.String(), "", nil
+	}
+	digest, err := img.Digest()
+	if err != nil {
+		return "", "", fmt.Errorf("in img.Digest(): %w", err)
+	}
+	return parsedRef.Context().Digest(digest.String()).String(), digest.String(), nil
 }
 
 func registryHost(ref string) string {

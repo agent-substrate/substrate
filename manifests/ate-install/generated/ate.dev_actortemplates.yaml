@@ -137,10 +137,6 @@ spec:
                     image:
                       description: Image to use for the worker replicas.
                       type: string
-                      x-kubernetes-validations:
-                      - message: All images must be pinned (changing the image invalidates
-                          snapshots)
-                        rule: self.contains('@')
                     name:
                       description: Name of the container.
                       maxLength: 63
@@ -148,6 +144,8 @@ spec:
                       x-kubernetes-validations:
                       - message: Name must be a valid DNS label
                         rule: '!format.dns1123Label().validate(self).hasValue()'
+                      - message: Name 'pause' is reserved for sandbox infrastructure
+                        rule: self != 'pause'
                   required:
                   - image
                   - name
@@ -163,10 +161,6 @@ spec:
                     - [1] gcr.io/gke-release/pause@sha256:bcbd57ba5653580ec647b16d8163cdd1112df3609129b01f912a8032e48265da
                     - [2] registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4
                 type: string
-                x-kubernetes-validations:
-                - message: All images must be pinned (changing the image invalidates
-                    snapshots)
-                  rule: self.contains('@')
               runsc:
                 description: Parameters for fetching the runsc binary to use.
                 properties:

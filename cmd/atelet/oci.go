@@ -51,7 +51,7 @@ const (
 	ActorIDFileName = "actor-id"
 )
 
-func prepareOCIDirectory(ctx context.Context, pullCache *memorypullcache.MemoryPullCache, actorTemplateNamespace, actorTemplateName, actorID, containerName, ref string, args []string, env []string, annotations map[string]string, netns string, identityDir string) error {
+func prepareOCIDirectory(ctx context.Context, pullCache *memorypullcache.MemoryPullCache, actorTemplateNamespace, actorTemplateName, actorID, containerName, ref string, args []string, env []string, annotations map[string]string, netns string, identityDir string) (string, error) {
 	tracer := otel.Tracer("prepareOCIDirectory")
 
 	ctx, span := tracer.Start(ctx, "prepareOCIDirectory")
@@ -62,21 +62,22 @@ func prepareOCIDirectory(ctx context.Context, pullCache *memorypullcache.MemoryP
 	rootPath := path.Join(bundlePath, "rootfs")
 
 	if err := os.RemoveAll(rootPath); err != nil {
-		return fmt.Errorf("while clearing rootfs %q: %w", rootPath, err)
+		return "", fmt.Errorf("while clearing rootfs %q: %w", rootPath, err)
 	}
 
 	if err := os.MkdirAll(rootPath, 0o700); err != nil {
-		return fmt.Errorf("in os.MkdirAll for container bundle dir: %w", err)
+		return "", fmt.Errorf("in os.MkdirAll for container bundle dir: %w", err)
 	}
 
-	tarData, err := pullCache.Fetch(ctx, ref)
+	pullResult, err := pullCache.Fetch(ctx, ref)
 	if err != nil {
-		return fmt.Errorf("in pullCache.Fetch: %w", err)
+		return "", fmt.Errorf("in pullCache.Fetch: %w", err)
 	}
+	tarData := pullResult.RootFSTar
 	defer tarData.Close()
 
 	if err := untar(ctx, tarData, rootPath); err != nil {
-		return fmt.Errorf("in untar: %w", err)
+		return "", fmt.Errorf("in untar: %w", err)
 	}
 
 	// Bind-mount the per-actor identity directory so the workload can read its
@@ -84,21 +85,21 @@ func prepareOCIDirectory(ctx context.Context, pullCache *memorypullcache.MemoryP
 	// in the rootfs for the mount to attach.
 	if identityDir != "" {
 		if err := createMountPoint(rootPath, IdentityMountPath); err != nil {
-			return fmt.Errorf("while creating identity mount point: %w", err)
+			return "", fmt.Errorf("while creating identity mount point: %w", err)
 		}
 	}
 
 	ociSpec := buildActorOCISpec(args, env, annotations, netns, identityDir)
 	ociSpecBytes, err := json.MarshalIndent(ociSpec, "", "  ")
 	if err != nil {
-		return fmt.Errorf("while marshaling OCI spec: %w", err)
+		return "", fmt.Errorf("while marshaling OCI spec: %w", err)
 	}
 	specPath := path.Join(bundlePath, "config.json")
 	if err := os.WriteFile(specPath, ociSpecBytes, 0o600); err != nil {
-		return fmt.Errorf("while writing OCI spec: %w", err)
+		return "", fmt.Errorf("while writing OCI spec: %w", err)
 	}
 
-	return nil
+	return pullResult.ResolvedRef, nil
 }
 
 // buildActorOCISpec assembles the OCI runtime spec for an actor container.

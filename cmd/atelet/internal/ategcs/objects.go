@@ -15,6 +15,7 @@
 package ategcs
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -55,6 +56,17 @@ func FetchFromGCS(ctx context.Context, client ObjectStorage, gsURL string) ([]by
 	}
 
 	return content, nil
+}
+
+func SendBytesToGCS(ctx context.Context, client ObjectStorage, gsURL string, content []byte) error {
+	bucket, object, err := parseGCSURL(gsURL)
+	if err != nil {
+		return fmt.Errorf("while parsing URL: %w", err)
+	}
+	if err := client.PutObject(ctx, bucket, object, bytes.NewReader(content)); err != nil {
+		return fmt.Errorf("while putting object: %w", err)
+	}
+	return nil
 }
 
 func SendLocalFileToGCSWithZstd(ctx context.Context, client ObjectStorage, gsURL string, localFilePath string) (err error) {

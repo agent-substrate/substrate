@@ -16,6 +16,9 @@ package memorypullcache
 
 import (
 	"testing"
+
+	"github.com/google/go-containerregistry/pkg/name"
+	"github.com/google/go-containerregistry/pkg/v1/empty"
 )
 
 func TestIsLocalRegistry(t *testing.T) {
@@ -46,6 +49,62 @@ func TestIsLocalRegistry(t *testing.T) {
 				t.Errorf("isLocalRegistry(%q) = %v; want %v", tt.ref, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestResolvedImageRef(t *testing.T) {
+	tagRef, err := name.ParseReference("example.com/repo/app:latest")
+	if err != nil {
+		t.Fatalf("ParseReference(tag): %v", err)
+	}
+	gotRef, gotDigest, err := resolvedImageRef(tagRef, empty.Image, false)
+	if err != nil {
+		t.Fatalf("resolvedImageRef(tag): %v", err)
+	}
+	wantDigest, err := empty.Image.Digest()
+	if err != nil {
+		t.Fatalf("empty.Image.Digest: %v", err)
+	}
+	if gotDigest != wantDigest.String() {
+		t.Errorf("digest = %q, want %q", gotDigest, wantDigest.String())
+	}
+	if gotRef != "example.com/repo/app@"+wantDigest.String() {
+		t.Errorf("resolved ref = %q, want %q", gotRef, "example.com/repo/app@"+wantDigest.String())
+	}
+
+	digestRef, err := name.ParseReference("example.com/repo/app@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef")
+	if err != nil {
+		t.Fatalf("ParseReference(digest): %v", err)
+	}
+	gotRef, gotDigest, err = resolvedImageRef(digestRef, empty.Image, true)
+	if err != nil {
+		t.Fatalf("resolvedImageRef(digest): %v", err)
+	}
+	if gotRef != digestRef.String() {
+		t.Errorf("resolved pinned ref = %q, want %q", gotRef, digestRef.String())
+	}
+	if gotDigest != "" {
+		t.Errorf("resolved pinned digest cache key = %q, want empty", gotDigest)
+	}
+}
+
+func TestResolvedImageRefUsesOriginalRepositoryAfterLocalRewrite(t *testing.T) {
+	originalRef, err := name.ParseReference("localhost:5001/repo/app:latest", name.Insecure)
+	if err != nil {
+		t.Fatalf("ParseReference(original): %v", err)
+	}
+
+	gotRef, _, err := resolvedImageRef(originalRef, empty.Image, false)
+	if err != nil {
+		t.Fatalf("resolvedImageRef: %v", err)
+	}
+	wantDigest, err := empty.Image.Digest()
+	if err != nil {
+		t.Fatalf("empty.Image.Digest: %v", err)
+	}
+	wantRef := "localhost:5001/repo/app@" + wantDigest.String()
+	if gotRef != wantRef {
+		t.Errorf("resolved ref = %q, want %q", gotRef, wantRef)
 	}
 }
 

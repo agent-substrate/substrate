@@ -124,12 +124,11 @@ func TestActorTemplateValidation(t *testing.T) {
 		wantErr: true,
 		errMsg:  "Required value",
 	}, {
-		name: "unpinned PauseImage",
+		name: "tagged PauseImage",
 		mutate: func(at *ActorTemplate) {
-			at.Spec.PauseImage = "pause"
+			at.Spec.PauseImage = "pause:latest"
 		},
-		wantErr: true,
-		errMsg:  "All images must be pinned",
+		wantErr: false,
 	}, {
 		name: "missing SnapshotsConfig.Location",
 		mutate: func(at *ActorTemplate) {
@@ -183,6 +182,13 @@ func TestActorTemplateValidation(t *testing.T) {
 		wantErr: true,
 		errMsg:  "must be a valid DNS label",
 	}, {
+		name: "reserved container name pause",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Containers[0].Name = "pause"
+		},
+		wantErr: true,
+		errMsg:  "reserved for sandbox infrastructure",
+	}, {
 		name: "empty container Image",
 		mutate: func(at *ActorTemplate) {
 			at.Spec.Containers[0].Image = ""
@@ -190,12 +196,11 @@ func TestActorTemplateValidation(t *testing.T) {
 		wantErr: true,
 		errMsg:  "Required value",
 	}, {
-		name: "unpinned container Image",
+		name: "tagged container Image",
 		mutate: func(at *ActorTemplate) {
-			at.Spec.Containers[0].Image = "busybox"
+			at.Spec.Containers[0].Image = "busybox:latest"
 		},
-		wantErr: true,
-		errMsg:  "All images must be pinned",
+		wantErr: false,
 	}, {
 		name: "valid container Command",
 		mutate: func(at *ActorTemplate) {

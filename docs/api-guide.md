@@ -80,6 +80,10 @@ The `ActorTemplate` defines the code, environment, and state-management policies
 | `pauseImage` | `string` | **Required.** The image used for the sandbox root (e.g. `gcr.io/gke-release/pause`). |
 | `runsc` | `RunscConfig` | **Required.** Multi-platform configuration for fetching the gVisor binary. |
 
+ActorTemplate images may be tag-based or digest-pinned. When atelet pulls an
+image to create or restore a workload, it records the resolved digest reference
+with the snapshot and uses that resolved reference for later restores.
+
 Container environment variables support literal `value` entries and `valueFrom.secretKeyRef`. Secret references are resolved by `ate-api-server` from the `ActorTemplate` namespace when a workload spec is materialized. For the golden actor, the resolved values are captured in the golden snapshot and future actors inherit those values until the golden snapshot is recreated. For an actor that bypasses the golden snapshot and boots from the current template spec, the resolved values are sent to atelet but are not serialized into the public Actor API. Other Kubernetes `valueFrom` sources are not supported yet. Secret changes do not automatically restart actors or invalidate snapshots; rotating a Secret requires an explicit actor or template lifecycle action.
 
 ### Workload Connectivity (Uniform DNS)
