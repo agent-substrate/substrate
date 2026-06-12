@@ -121,10 +121,17 @@ func (c *MemoryPullCache) Fetch(ctx context.Context, ref string) (io.ReadCloser,
 	// trips to the registry.
 
 	var remoteOptions []remote.Option
-	remoteOptions = append(remoteOptions, remote.WithPlatform(v1.Platform{
-		Architecture: runtime.GOARCH,
-		OS:           "linux",
-	}))
+	remoteOptions = append(remoteOptions,
+		// Propagate caller ctx into go-containerregistry so cancellation tears
+		// down in-flight layer-blob HTTP requests instead of letting them run
+		// to completion in background goroutines (which retain partial-blob
+		// buffers and amplify atelet RSS during ResumeActor death loops).
+		remote.WithContext(ctx),
+		remote.WithPlatform(v1.Platform{
+			Architecture: runtime.GOARCH,
+			OS:           "linux",
+		}),
+	)
 
 	registry := parsedRef.Context().Registry.RegistryStr()
 	if registry == "gcr.io" || strings.HasSuffix(registry, ".gcr.io") || registry == "pkg.dev" || strings.HasSuffix(registry, ".pkg.dev") {
