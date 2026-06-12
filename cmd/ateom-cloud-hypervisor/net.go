@@ -16,121 +16,432 @@
 
 package main
 
-// Networking mirrors cmd/ateom-gvisor: the pod's eth0 is moved into a named
-// "interior" network namespace (its addresses/routes restored after the move),
-// and the sandbox is pointed at that netns. gVisor reads the link via AF_PACKET;
-// kata instead finds eth0 in the netns and builds a tap + TC mirror for the VM's
-// virtio-net. (Copied with light adaptation; expected to be de-duplicated into a
-// shared package on a later rebase.)
+// Actor networking mirrors cmd/ateom-gvisor's veth model: a fresh
+// point-to-point veth pair per activation, with the worker side (ateom0,
+// 169.254.17.1/30) staying in the pod netns next to the pod's real eth0, and
+// the peer moved into the interior netns, renamed eth0, and given the stable
+// actor address 169.254.17.2/30. nftables rules in the pod netns masquerade
+// actor egress behind the pod IP and DNAT inbound pod-IP:80 to the actor.
+//
+// kata consumes the interior netns exactly like a CNI-provisioned container
+// netns: its tcfilter network model builds a tap cross-connected to eth0 (the
+// veth peer) and gives the guest eth0's address. Because that address is a
+// CONSTANT, a restored guest's frozen network config stays valid on any pod —
+// no in-guest reconfiguration needed.
+//
+// (Copied with light adaptation from cmd/ateom-gvisor; expected to be
+// de-duplicated into a shared package later.)
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
 	"os"
 	"runtime"
-	"sort"
 
+	"github.com/google/nftables"
+	"github.com/google/nftables/binaryutil"
+	"github.com/google/nftables/expr"
 	"github.com/vishvananda/netlink"
 	"github.com/vishvananda/netns"
 	"golang.org/x/sys/unix"
+
+	"github.com/agent-substrate/substrate/internal/serverboot"
 )
 
-// SaveLinkInfo captures a link's addresses and routes so they can be restored
-// after the link is moved into another network namespace (which drops them).
-type SaveLinkInfo struct {
-	Addresses []SaveAddr
-	Routes    []SaveRoute
-	MTU       int
-}
+const (
+	hostVethName      = "ateom0"
+	actorVethName     = "eth0"
+	actorVethTempName = "ateom1"
+	hostVethCIDR      = "169.254.17.1/30"
+	actorVethCIDR     = "169.254.17.2/30"
+	actorVethGateway  = "169.254.17.1"
+	actorVethIP       = "169.254.17.2"
+	actorNftTableName = "ateom_actor"
 
-type SaveAddr struct {
-	Addr      net.IPNet
-	Scope     int
-	Broadcast net.IP
-}
+	// hostVethMAC is deliberately FIXED (locally administered), unlike
+	// ateom-gvisor where the kernel's random veth MAC is fine. A CH snapshot
+	// freezes the guest kernel's ARP cache, including the entry for the
+	// gateway 169.254.17.1; restoring against a new veth pair with a random
+	// MAC would blackhole guest egress until that entry expires. A constant
+	// gateway MAC keeps the frozen entry valid on every pod.
+	hostVethMAC = "02:a8:1e:00:00:01"
+)
 
-type SaveRoute struct {
-	Scope    uint8
-	Dst      net.IPNet
-	Src      net.IP
-	Gateway  net.IP
-	Protocol int
-	Type     int
-}
+// setupActorNetwork builds a fresh point-to-point network between the worker
+// pod netns and the kata interior netns (see the package comment). Idempotent
+// via cleanup-before-setup; also sweeps stale kata taps out of the interior
+// netns so the sandbox always builds on a clean slate.
+func (s *AteomService) setupActorNetwork(ctx context.Context) (retErr error) {
+	s.cleanupActorNetworkOrExit(ctx, "Failed to clean up stale actor network before setup")
+	defer func() {
+		if retErr != nil {
+			s.cleanupActorNetworkOrExit(ctx, "Failed to clean up partially configured actor network")
+		}
+	}()
 
-func scrapeLink(link netlink.Link) (*SaveLinkInfo, error) {
-	rawAddrs, err := netlink.AddrList(link, netlink.FAMILY_ALL)
+	podIP, err := podIPv4()
 	if err != nil {
-		return nil, fmt.Errorf("while scraping addresses: %w", err)
-	}
-	var addrs []SaveAddr
-	for _, rawAddr := range rawAddrs {
-		addrs = append(addrs, SaveAddr{
-			Addr:      *rawAddr.IPNet,
-			Scope:     rawAddr.Scope,
-			Broadcast: rawAddr.Broadcast,
-		})
+		return fmt.Errorf("while resolving pod IPv4 address: %w", err)
 	}
 
-	rawRoutes, err := netlink.RouteList(link, netlink.FAMILY_ALL)
-	if err != nil {
-		return nil, fmt.Errorf("while scraping routes: %w", err)
-	}
-	var routes []SaveRoute
-	for _, rawRoute := range rawRoutes {
-		dst := net.IPNet{}
-		if rawRoute.Dst != nil {
-			dst = *rawRoute.Dst
+	// Sweep leftover links (kata taps from torn-down runs, restore taps) from
+	// the persistent interior netns before the new veth peer arrives.
+	if err := netNSDo(ctx, s.interiorNetNS, func(ctx context.Context) error {
+		links, err := netlink.LinkList()
+		if err != nil {
+			return fmt.Errorf("while listing interior netns links: %w", err)
 		}
-		routes = append(routes, SaveRoute{
-			Scope:    uint8(rawRoute.Scope),
-			Dst:      dst,
-			Src:      rawRoute.Src,
-			Gateway:  rawRoute.Gw,
-			Protocol: int(rawRoute.Protocol),
-			Type:     rawRoute.Type,
-		})
+		for _, l := range links {
+			if l.Attrs().Name == "lo" {
+				continue
+			}
+			if err := netlink.LinkDel(l); err != nil {
+				slog.WarnContext(ctx, "Failed to delete leftover interior link", slog.String("link", l.Attrs().Name), slog.Any("err", err))
+			}
+		}
+		return nil
+	}); err != nil {
+		return err
 	}
 
-	return &SaveLinkInfo{Addresses: addrs, Routes: routes, MTU: link.Attrs().MTU}, nil
+	hostAddr, err := parseAddr(hostVethCIDR)
+	if err != nil {
+		return err
+	}
+	hostMAC, err := net.ParseMAC(hostVethMAC)
+	if err != nil {
+		return fmt.Errorf("while parsing host veth MAC: %w", err)
+	}
+
+	veth := &netlink.Veth{
+		LinkAttrs: netlink.LinkAttrs{
+			Name:         hostVethName,
+			HardwareAddr: hostMAC,
+		},
+		PeerName: actorVethTempName,
+	}
+	if err := netlink.LinkAdd(veth); err != nil {
+		return fmt.Errorf("while creating actor veth pair: %w", err)
+	}
+
+	hostLink, err := netlink.LinkByName(hostVethName)
+	if err != nil {
+		return fmt.Errorf("while getting host veth: %w", err)
+	}
+	if err := netlink.AddrReplace(hostLink, hostAddr); err != nil {
+		return fmt.Errorf("while assigning host veth address: %w", err)
+	}
+	if err := netlink.LinkSetUp(hostLink); err != nil {
+		return fmt.Errorf("while bringing up host veth: %w", err)
+	}
+
+	actorLink, err := netlink.LinkByName(actorVethTempName)
+	if err != nil {
+		return fmt.Errorf("while getting actor veth peer: %w", err)
+	}
+	if err := netlink.LinkSetNsFd(actorLink, int(s.interiorNetNS)); err != nil {
+		return fmt.Errorf("while moving actor veth peer into interior netns: %w", err)
+	}
+
+	if err := netNSDo(ctx, s.interiorNetNS, configureActorVeth); err != nil {
+		return fmt.Errorf("while configuring actor veth in interior netns: %w", err)
+	}
+
+	if err := enableIPv4Forwarding(); err != nil {
+		return err
+	}
+	if err := installActorNftablesRules(podIP); err != nil {
+		return err
+	}
+
+	return nil
 }
 
-func restoreLink(ctx context.Context, link netlink.Link, info *SaveLinkInfo) error {
-	for i, saveAddr := range info.Addresses {
-		addr := &netlink.Addr{
-			IPNet:     &saveAddr.Addr,
-			Scope:     saveAddr.Scope,
-			Broadcast: saveAddr.Broadcast,
+func configureActorVeth(ctx context.Context) error {
+	// Run inside the interior netns after setupActorNetwork moves the veth peer
+	// there. kata reads link names, addresses, and routes from this namespace
+	// when the sandbox starts, so the peer is renamed to eth0 and configured
+	// like a normal container interface; the guest is configured identically by
+	// the kata agent.
+	loLink, err := netlink.LinkByName("lo")
+	if err != nil {
+		return fmt.Errorf("while acquiring lo in interior netns: %w", err)
+	}
+	if err := netlink.LinkSetUp(loLink); err != nil {
+		return fmt.Errorf("while bringing up lo in interior netns: %w", err)
+	}
+
+	actorLink, err := netlink.LinkByName(actorVethTempName)
+	if err != nil {
+		return fmt.Errorf("while acquiring actor veth in interior netns: %w", err)
+	}
+	if err := netlink.LinkSetName(actorLink, actorVethName); err != nil {
+		return fmt.Errorf("while renaming actor veth to %q: %w", actorVethName, err)
+	}
+	actorLink, err = netlink.LinkByName(actorVethName)
+	if err != nil {
+		return fmt.Errorf("while reacquiring actor veth in interior netns: %w", err)
+	}
+
+	actorAddr, err := parseAddr(actorVethCIDR)
+	if err != nil {
+		return err
+	}
+	if err := netlink.AddrReplace(actorLink, actorAddr); err != nil {
+		return fmt.Errorf("while assigning actor veth address: %w", err)
+	}
+	if err := netlink.LinkSetUp(actorLink); err != nil {
+		return fmt.Errorf("while bringing up actor veth: %w", err)
+	}
+
+	gw := net.ParseIP(actorVethGateway).To4()
+	if gw == nil {
+		return fmt.Errorf("invalid actor veth gateway %q", actorVethGateway)
+	}
+	if err := netlink.RouteReplace(&netlink.Route{
+		LinkIndex: actorLink.Attrs().Index,
+		Gw:        gw,
+	}); err != nil {
+		return fmt.Errorf("while installing actor default route: %w", err)
+	}
+
+	return nil
+}
+
+// cleanupActorNetwork removes all per-activation network state owned by ateom.
+// Intentionally idempotent: runs before setup, after checkpoint, and from
+// setup-failure cleanup.
+func (s *AteomService) cleanupActorNetwork(ctx context.Context) error {
+	if err := removeActorNftablesRules(); err != nil {
+		return err
+	}
+
+	var cleanupErr error
+	if link, err := netlink.LinkByName(hostVethName); err == nil {
+		if err := netlink.LinkDel(link); err != nil {
+			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("while deleting host veth: %w", err))
+			slog.WarnContext(ctx, "Failed to delete host veth; continuing actor netns cleanup", slog.Any("err", err))
 		}
-		if err := netlink.AddrReplace(link, addr); err != nil {
-			return fmt.Errorf("while restoring addr %d onto link: %w", i, err)
+	} else if _, ok := err.(netlink.LinkNotFoundError); !ok {
+		cleanupErr = errors.Join(cleanupErr, fmt.Errorf("while looking up host veth: %w", err))
+		slog.WarnContext(ctx, "Failed to look up host veth; continuing actor netns cleanup", slog.Any("err", err))
+	}
+
+	if err := netNSDo(ctx, s.interiorNetNS, func(_ context.Context) error {
+		for _, name := range []string{actorVethName, actorVethTempName} {
+			link, err := netlink.LinkByName(name)
+			if err == nil {
+				if err := netlink.LinkDel(link); err != nil {
+					return fmt.Errorf("while deleting interior veth %q: %w", name, err)
+				}
+				continue
+			}
+			if _, ok := err.(netlink.LinkNotFoundError); !ok {
+				return fmt.Errorf("while looking up interior veth %q: %w", name, err)
+			}
+		}
+		return nil
+	}); err != nil {
+		cleanupErr = errors.Join(cleanupErr, fmt.Errorf("while cleaning interior netns links: %w", err))
+	}
+
+	return cleanupErr
+}
+
+func (s *AteomService) cleanupActorNetworkOrExit(ctx context.Context, msg string) {
+	if err := s.cleanupActorNetwork(ctx); err != nil {
+		serverboot.Fatal(ctx, msg, err)
+	}
+}
+
+// podIPv4 resolves the worker pod IPv4 address from the pod namespace's real
+// eth0 (which stays in the pod namespace in the veth model).
+func podIPv4() (net.IP, error) {
+	eth0Link, err := netlink.LinkByName("eth0")
+	if err != nil {
+		return nil, fmt.Errorf("while getting pod eth0: %w", err)
+	}
+	addrs, err := netlink.AddrList(eth0Link, netlink.FAMILY_V4)
+	if err != nil {
+		return nil, fmt.Errorf("while listing pod eth0 addresses: %w", err)
+	}
+	for _, addr := range addrs {
+		if addr.IP == nil {
+			continue
+		}
+		if ip := addr.IP.To4(); ip != nil {
+			return ip, nil
 		}
 	}
-	// Link-scope routes must be installed before gateway routes so the kernel
-	// can resolve each gateway's nexthop (fib_check_nh_v4_gw).
-	routes := append([]SaveRoute(nil), info.Routes...)
-	sort.SliceStable(routes, func(i, j int) bool {
-		return routes[i].Gateway == nil && routes[j].Gateway != nil
-	})
-	for i, saveRoute := range routes {
-		dst := saveRoute.Dst
-		route := &netlink.Route{
-			LinkIndex: link.Attrs().Index,
-			Scope:     netlink.Scope(saveRoute.Scope),
-			Dst:       &dst,
-			Src:       saveRoute.Src,
-			Gw:        saveRoute.Gateway,
-			Protocol:  netlink.RouteProtocol(saveRoute.Protocol),
-			Type:      saveRoute.Type,
-		}
-		slog.InfoContext(ctx, "Restoring route", slog.String("dst", dst.String()), slog.Any("gateway", saveRoute.Gateway))
-		if err := netlink.RouteReplace(route); err != nil {
-			return fmt.Errorf("while restoring route %d: %w", i, err)
-		}
+	return nil, fmt.Errorf("pod eth0 has no IPv4 address")
+}
+
+func parseAddr(cidr string) (*netlink.Addr, error) {
+	addr, err := netlink.ParseAddr(cidr)
+	if err != nil {
+		return nil, fmt.Errorf("while parsing address %q: %w", cidr, err)
+	}
+	return addr, nil
+}
+
+func enableIPv4Forwarding() error {
+	// Actor packets enter the worker pod via the host-side veth and leave
+	// through the pod's eth0; the kernel will not route between them otherwise.
+	if err := os.WriteFile("/proc/sys/net/ipv4/ip_forward", []byte("1\n"), 0o644); err != nil {
+		return fmt.Errorf("while enabling IPv4 forwarding in worker pod netns: %w", err)
 	}
 	return nil
+}
+
+func installActorNftablesRules(podIP net.IP) error {
+	// Dedicated ateom-owned IPv4 table (cheap cleanup, no CNI chain mutation):
+	//   * postrouting: masquerade actor egress (169.254.17.2) behind the pod IP.
+	//   * prerouting: DNAT pod-IP:80/tcp to the actor veth IP.
+	//   * forward: accept forwarded packets between the actor veth and pod eth0.
+	// Mirrors cmd/ateom-gvisor (same compatibility-bridge caveats and TODOs).
+	if err := removeActorNftablesRules(); err != nil {
+		return err
+	}
+
+	c := &nftables.Conn{}
+	table := &nftables.Table{
+		Family: nftables.TableFamilyIPv4,
+		Name:   actorNftTableName,
+	}
+	c.AddTable(table)
+
+	prerouting := c.AddChain(&nftables.Chain{
+		Name:     "prerouting",
+		Table:    table,
+		Type:     nftables.ChainTypeNAT,
+		Hooknum:  nftables.ChainHookPrerouting,
+		Priority: nftables.ChainPriorityNATDest,
+	})
+	preroutingExprs := append(ipDestinationEqual(podIP.String()), tcpDestinationPortEqual(80)...)
+	preroutingExprs = append(preroutingExprs,
+		&expr.Immediate{
+			Register: 1,
+			Data:     net.ParseIP(actorVethIP).To4(),
+		},
+		&expr.Immediate{
+			Register: 2,
+			Data:     binaryutil.BigEndian.PutUint16(80),
+		},
+		&expr.NAT{
+			Type:        expr.NATTypeDestNAT,
+			Family:      unix.NFPROTO_IPV4,
+			RegAddrMin:  1,
+			RegProtoMin: 2,
+		},
+	)
+	c.AddRule(&nftables.Rule{
+		Table: table,
+		Chain: prerouting,
+		Exprs: preroutingExprs,
+	})
+
+	postrouting := c.AddChain(&nftables.Chain{
+		Name:     "postrouting",
+		Table:    table,
+		Type:     nftables.ChainTypeNAT,
+		Hooknum:  nftables.ChainHookPostrouting,
+		Priority: nftables.ChainPriorityNATSource,
+	})
+	c.AddRule(&nftables.Rule{
+		Table: table,
+		Chain: postrouting,
+		Exprs: append(ipSourceEqual(actorVethIP), &expr.Masq{}),
+	})
+
+	acceptPolicy := nftables.ChainPolicyAccept
+	forward := c.AddChain(&nftables.Chain{
+		Name:     "forward",
+		Table:    table,
+		Type:     nftables.ChainTypeFilter,
+		Hooknum:  nftables.ChainHookForward,
+		Priority: nftables.ChainPriorityFilter,
+		Policy:   &acceptPolicy,
+	})
+	c.AddRule(&nftables.Rule{
+		Table: table,
+		Chain: forward,
+		Exprs: []expr.Any{
+			&expr.Verdict{Kind: expr.VerdictAccept},
+		},
+	})
+
+	if err := c.Flush(); err != nil {
+		return fmt.Errorf("while installing actor nftables rules: %w", err)
+	}
+	return nil
+}
+
+func removeActorNftablesRules() error {
+	c := &nftables.Conn{}
+	tables, err := c.ListTablesOfFamily(nftables.TableFamilyIPv4)
+	if err != nil {
+		return fmt.Errorf("while listing nftables tables: %w", err)
+	}
+	for _, table := range tables {
+		if table.Name != actorNftTableName {
+			continue
+		}
+		c.DelTable(table)
+		if err := c.Flush(); err != nil {
+			return fmt.Errorf("while deleting actor nftables table: %w", err)
+		}
+		return nil
+	}
+	return nil
+}
+
+func ipSourceEqual(ip string) []expr.Any {
+	return ipPayloadEqual(12, ip)
+}
+
+func ipDestinationEqual(ip string) []expr.Any {
+	return ipPayloadEqual(16, ip)
+}
+
+func ipPayloadEqual(offset uint32, ip string) []expr.Any {
+	return []expr.Any{
+		&expr.Payload{
+			DestRegister: 1,
+			Base:         expr.PayloadBaseNetworkHeader,
+			Offset:       offset,
+			Len:          4,
+		},
+		&expr.Cmp{
+			Op:       expr.CmpOpEq,
+			Register: 1,
+			Data:     net.ParseIP(ip).To4(),
+		},
+	}
+}
+
+func tcpDestinationPortEqual(port uint16) []expr.Any {
+	return []expr.Any{
+		&expr.Meta{Key: expr.MetaKeyL4PROTO, Register: 1},
+		&expr.Cmp{
+			Op:       expr.CmpOpEq,
+			Register: 1,
+			Data:     []byte{unix.IPPROTO_TCP},
+		},
+		&expr.Payload{
+			DestRegister: 1,
+			Base:         expr.PayloadBaseTransportHeader,
+			Offset:       2,
+			Len:          2,
+		},
+		&expr.Cmp{
+			Op:       expr.CmpOpEq,
+			Register: 1,
+			Data:     binaryutil.BigEndian.PutUint16(port),
+		},
+	}
 }
 
 // createNetNSWithoutSwitching creates a named netns and returns its handle,
@@ -180,85 +491,19 @@ func netNSDo(ctx context.Context, targetNS netns.NsHandle, do func(context.Conte
 	return nil
 }
 
-// moveEth0IntoInteriorNetns moves the pod's eth0 into the interior netns and
-// restores its addresses/routes there. After this, the interior netns holds a
-// fully configured eth0 the sandbox runtime can consume.
-func (s *AteomService) moveEth0IntoInteriorNetns(ctx context.Context) error {
-	eth0Link, err := netlink.LinkByName("eth0")
-	if err != nil {
-		return fmt.Errorf("while getting netlink link for eth0: %w", err)
-	}
-	if err := netlink.LinkSetNsFd(eth0Link, int(s.interiorNetNS)); err != nil {
-		return fmt.Errorf("while moving eth0 into interior network namespace: %w", err)
-	}
-	return netNSDo(ctx, s.interiorNetNS, func(ctx context.Context) error {
-		// The interior netns is persistent (created once at boot). kata's tcfilter
-		// model creates a tap (and may leave it behind when a failed run is torn
-		// down by driving the shim directly). A leftover tap with the same name/
-		// index makes the next run's qdisc add fail "Failed to add qdisc ... file
-		// exists". Delete every link that isn't lo or the eth0 we're about to move
-		// in, so kata always builds its network on a clean slate.
-		if links, lerr := netlink.LinkList(); lerr == nil {
-			for _, l := range links {
-				name := l.Attrs().Name
-				if name == "lo" || name == "eth0" {
-					continue
-				}
-				if delErr := netlink.LinkDel(l); delErr != nil {
-					slog.WarnContext(ctx, "Failed to delete leftover link in interior netns", slog.String("link", name), slog.Any("err", delErr))
-				} else {
-					slog.InfoContext(ctx, "Deleted leftover link in interior netns", slog.String("link", name))
-				}
-			}
-		}
-		loLink, err := netlink.LinkByName("lo")
-		if err != nil {
-			return fmt.Errorf("while acquiring lo in interior netns: %w", err)
-		}
-		if err := netlink.LinkSetUp(loLink); err != nil {
-			return fmt.Errorf("while bringing up lo in interior netns: %w", err)
-		}
-		link, err := netlink.LinkByName("eth0")
-		if err != nil {
-			return fmt.Errorf("while acquiring eth0 in interior netns: %w", err)
-		}
-		if err := netlink.LinkSetUp(link); err != nil {
-			return fmt.Errorf("while bringing up eth0 in interior netns: %w", err)
-		}
-		if err := restoreLink(ctx, link, s.eth0LinkInfo); err != nil {
-			return fmt.Errorf("while restoring eth0 routes/addresses in interior netns: %w", err)
-		}
-		// kata's tcfilter network model adds a clsact qdisc to eth0; a stale one
-		// (left by a prior failed attempt, carried across the netns move) makes
-		// kata's add fail "Failed to add qdisc ... file exists". Remove any
-		// clsact/ingress qdisc so kata can add its own.
-		if qdiscs, qerr := netlink.QdiscList(link); qerr == nil {
-			for _, q := range qdiscs {
-				if t := q.Type(); t == "clsact" || t == "ingress" {
-					if delErr := netlink.QdiscDel(q); delErr != nil {
-						slog.WarnContext(ctx, "Failed to delete stale qdisc on eth0", slog.String("type", t), slog.Any("err", delErr))
-					} else {
-						slog.InfoContext(ctx, "Removed stale qdisc on eth0", slog.String("type", t))
-					}
-				}
-			}
-		}
-		return nil
-	})
-}
-
 // setupRestoreTap recreates, in the interior netns, the tap + TC-mirror wiring
 // kata's tcfilter network model builds at boot: a tap device cross-connected to
-// eth0 with mirred-redirect ingress filters in both directions. Returns the
-// open tap FDs (one per queue pair) for cloud-hypervisor to adopt via
-// vm.restore net_fds (the snapshot's virtio-net device is fd-backed, so CH
-// requires fresh FDs on restore). Call after moveEth0IntoInteriorNetns.
+// eth0 (the actor veth peer) with mirred-redirect ingress filters in both
+// directions. Returns the open tap FDs (one per queue pair) for
+// cloud-hypervisor to adopt via vm.restore net_fds (the snapshot's virtio-net
+// device is fd-backed, so CH requires fresh FDs on restore). Call after
+// setupActorNetwork.
 func (s *AteomService) setupRestoreTap(ctx context.Context, name string, queuePairs int) ([]*os.File, error) {
 	var fds []*os.File
 	err := netNSDo(ctx, s.interiorNetNS, func(ctx context.Context) error {
-		eth0, err := netlink.LinkByName("eth0")
+		eth0, err := netlink.LinkByName(actorVethName)
 		if err != nil {
-			return fmt.Errorf("acquiring eth0 in interior netns: %w", err)
+			return fmt.Errorf("acquiring actor veth in interior netns: %w", err)
 		}
 		if old, lerr := netlink.LinkByName(name); lerr == nil {
 			_ = netlink.LinkDel(old)
@@ -280,9 +525,9 @@ func (s *AteomService) setupRestoreTap(ctx context.Context, name string, queuePa
 		if err := netlink.LinkSetUp(tap); err != nil {
 			return fmt.Errorf("bringing up tap %q: %w", name, err)
 		}
-		// Cross-connect: everything arriving on eth0 redirects out the tap and
-		// vice versa (kata's TCFilterModel: ingress qdisc + match-all u32 with a
-		// mirred egress-redirect action, here via U32.RedirIndex).
+		// Cross-connect: everything arriving on the veth peer redirects out the
+		// tap and vice versa (kata's TCFilterModel: ingress qdisc + match-all u32
+		// with a mirred egress-redirect action, here via U32.RedirIndex).
 		for _, pair := range [][2]netlink.Link{{eth0, tap}, {tap, eth0}} {
 			qdisc := &netlink.Ingress{QdiscAttrs: netlink.QdiscAttrs{
 				LinkIndex: pair[0].Attrs().Index,
@@ -315,51 +560,4 @@ func (s *AteomService) setupRestoreTap(ctx context.Context, name string, queuePa
 		return nil, err
 	}
 	return fds, nil
-}
-
-// ensureEth0InPodNetns moves eth0 back to the pod netns if a prior Run/Restore
-// left it in the interior netns. Idempotent.
-func (s *AteomService) ensureEth0InPodNetns(ctx context.Context) error {
-	if _, err := netlink.LinkByName("eth0"); err == nil {
-		return nil
-	}
-	podNetNS, err := netns.Get()
-	if err != nil {
-		return fmt.Errorf("while getting pod netns: %w", err)
-	}
-	var moved bool
-	err = netNSDo(ctx, s.interiorNetNS, func(_ context.Context) error {
-		link, lookupErr := netlink.LinkByName("eth0")
-		if lookupErr != nil {
-			return nil
-		}
-		if mvErr := netlink.LinkSetNsFd(link, int(podNetNS)); mvErr != nil {
-			return fmt.Errorf("while moving eth0 to pod netns: %w", mvErr)
-		}
-		moved = true
-		return nil
-	})
-	if moved {
-		slog.WarnContext(ctx, "Recovered eth0 from interior netns to pod netns")
-	}
-	return err
-}
-
-// returnEth0ToPodNetns moves eth0 back from the interior netns to the pod netns
-// (called after a workload is torn down).
-func (s *AteomService) returnEth0ToPodNetns(ctx context.Context) error {
-	podNetNS, err := netns.Get()
-	if err != nil {
-		return fmt.Errorf("while getting pod netns: %w", err)
-	}
-	return netNSDo(ctx, s.interiorNetNS, func(_ context.Context) error {
-		link, lookupErr := netlink.LinkByName("eth0")
-		if lookupErr != nil {
-			return nil // already gone
-		}
-		if err := netlink.LinkSetNsFd(link, int(podNetNS)); err != nil {
-			return fmt.Errorf("while sending eth0 back to pod netns: %w", err)
-		}
-		return nil
-	})
 }

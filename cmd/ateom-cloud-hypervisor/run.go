@@ -21,7 +21,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -30,12 +29,10 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateom-cloud-hypervisor/internal/ch"
 	"github.com/agent-substrate/substrate/cmd/ateom-cloud-hypervisor/internal/kata"
-	"github.com/agent-substrate/substrate/cmd/ateom-cloud-hypervisor/internal/kata/agentpb"
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	ctrtypes "github.com/containerd/containerd/api/types"
 	"github.com/opencontainers/runtime-spec/specs-go"
-	"github.com/vishvananda/netlink"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -166,19 +163,16 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	}
 	containerName := containers[0].GetName()
 
-	// Networking (mirrors ateom-gvisor): move the pod's eth0 into the interior
-	// netns (addrs/routes restored) and point kata at it. Roll back on failure so
-	// the pod isn't left without eth0 for the next actor.
-	if err := s.ensureEth0InPodNetns(ctx); err != nil {
-		return nil, fmt.Errorf("while recovering eth0 from prior failure: %w", err)
-	}
-	if err := s.moveEth0IntoInteriorNetns(ctx); err != nil {
-		return nil, fmt.Errorf("while moving eth0 into interior netns: %w", err)
+	// Networking (mirrors ateom-gvisor's veth model): build the per-activation
+	// veth into the interior netns and point kata at it; kata wires the guest
+	// to the stable actor address via its tap + TC mirror.
+	if err := s.setupActorNetwork(ctx); err != nil {
+		return nil, fmt.Errorf("while setting up actor network: %w", err)
 	}
 	defer func() {
 		if retErr != nil {
-			if cleanupErr := s.ensureEth0InPodNetns(ctx); cleanupErr != nil {
-				slog.WarnContext(ctx, "Failed to roll back eth0 after Run failure", slog.Any("err", cleanupErr))
+			if cleanupErr := s.cleanupActorNetwork(ctx); cleanupErr != nil {
+				slog.WarnContext(ctx, "Failed to clean up actor network after Run failure", slog.Any("err", cleanupErr))
 			}
 		}
 	}()
@@ -462,9 +456,9 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	dTeardown := time.Since(tTeardown)
 	delete(s.running, id)
 
-	// Return eth0 to the pod netns so the next actor can claim it (mirrors gVisor).
-	if err := s.returnEth0ToPodNetns(ctx); err != nil {
-		slog.WarnContext(ctx, "Failed to return eth0 to pod netns after checkpoint", slog.Any("err", err))
+	// Tear down the per-activation actor network (mirrors gVisor).
+	if err := s.cleanupActorNetwork(ctx); err != nil {
+		slog.WarnContext(ctx, "Failed to clean up actor network after checkpoint", slog.Any("err", err))
 	}
 
 	slog.InfoContext(ctx, "Actor checkpointed", slog.String("id", id), slog.Any("snapshot_files", snapshotFiles),
@@ -589,19 +583,18 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 		return nil, fmt.Errorf("while creating VM dir: %w", err)
 	}
 
-	// 2. Networking: move the pod's eth0 into the interior netns and rebuild
-	// kata's tap + TC mirror there. The snapshot's virtio-net device is
-	// fd-backed, so CH requires fresh tap FDs on restore (net_fds).
-	if err := s.ensureEth0InPodNetns(ctx); err != nil {
-		return nil, fmt.Errorf("while recovering eth0 from prior failure: %w", err)
-	}
-	if err := s.moveEth0IntoInteriorNetns(ctx); err != nil {
-		return nil, fmt.Errorf("while moving eth0 into interior netns: %w", err)
+	// 2. Networking: rebuild the per-activation actor veth, then recreate
+	// kata's tap + TC mirror against it. The snapshot's virtio-net device is
+	// fd-backed, so CH requires fresh tap FDs on restore (net_fds). The guest's
+	// frozen network config (stable actor address, gateway with a fixed MAC)
+	// remains valid as-is — no in-guest reconfiguration.
+	if err := s.setupActorNetwork(ctx); err != nil {
+		return nil, fmt.Errorf("while setting up actor network: %w", err)
 	}
 	defer func() {
 		if retErr != nil {
-			if cleanupErr := s.ensureEth0InPodNetns(ctx); cleanupErr != nil {
-				slog.WarnContext(ctx, "Failed to roll back eth0 after Restore failure", slog.Any("err", cleanupErr))
+			if cleanupErr := s.cleanupActorNetwork(ctx); cleanupErr != nil {
+				slog.WarnContext(ctx, "Failed to clean up actor network after Restore failure", slog.Any("err", cleanupErr))
 			}
 		}
 	}()
@@ -672,31 +665,6 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 		return nil, fmt.Errorf("while resuming restored guest: %w", err)
 	}
 
-	// 6. The guest's frozen network config carries the SOURCE pod's IP; rewrite
-	// it to this pod's eth0 address so ingress (router -> pod IP) reaches the
-	// guest. POC: drive the kata-agent debug console over vsock; the proper fix
-	// is the agent's UpdateInterface/UpdateRoutes RPCs.
-	// Retry: right after vm.resume the guest's vsock can refuse connections for
-	// a moment until the virtio-vsock device settles.
-	guestMAC := ""
-	if len(netDevs) > 0 {
-		guestMAC = netDevs[0].MAC
-	}
-	var netErr error
-	for attempt := 0; attempt < 10; attempt++ {
-		if netErr = s.reconfigureGuestNetwork(ctx, kata.VsockSocketPath(id), guestMAC); netErr == nil {
-			break
-		}
-		select {
-		case <-ctx.Done():
-			attempt = 10
-		case <-time.After(time.Second):
-		}
-	}
-	if netErr != nil {
-		slog.WarnContext(ctx, "Failed to update restored guest IP (ingress may not work)", slog.Any("err", netErr))
-	}
-
 	s.running[id] = &runningActor{chCmd: chCmd, vfsdCmd: vfsdCmd, apiSocket: apiSocket}
 	slog.InfoContext(ctx, "Actor restored", slog.String("id", id))
 	return &ateompb.RestoreWorkloadResponse{}, nil
@@ -731,74 +699,6 @@ func rewriteSnapshotSocketPaths(snapshotDir, id string) error {
 		return err
 	}
 	return os.WriteFile(cfgPath, out, 0o600)
-}
-
-// reconfigureGuestNetwork sets the restored guest's eth0 to THIS pod's IP
-// config via the kata-agent's UpdateInterface/UpdateRoutes ttrpc RPCs over
-// hybrid vsock (the same channel the kata shim uses, so it works on a restored
-// VM with no shim). The snapshot froze the source pod's IP; on a flat pod
-// subnet the routes stay valid, only the address must change. guestMAC
-// identifies the device the way kata does (and avoids clearing the MAC).
-func (s *AteomService) reconfigureGuestNetwork(ctx context.Context, vsockPath, guestMAC string) error {
-	var addr *SaveAddr
-	for i := range s.eth0LinkInfo.Addresses {
-		if v4 := s.eth0LinkInfo.Addresses[i].Addr.IP.To4(); v4 != nil {
-			addr = &s.eth0LinkInfo.Addresses[i]
-			break
-		}
-	}
-	if addr == nil {
-		return fmt.Errorf("no IPv4 address recorded for pod eth0")
-	}
-	var gw net.IP
-	for _, r := range s.eth0LinkInfo.Routes {
-		if r.Gateway != nil && r.Dst.IP.Equal(net.IPv4zero) {
-			gw = r.Gateway
-			break
-		}
-	}
-
-	cctx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-	agent, err := kata.DialAgent(cctx, vsockPath)
-	if err != nil {
-		return err
-	}
-	defer agent.Close()
-
-	// The address is installed as /32 deliberately: a connected subnet route
-	// would make the guest ARP directly for same-subnet pod IPs, which only
-	// works on CNIs that proxy-ARP on the host veth (kind's ptp does, GKE does
-	// not — observed SYN-ACKs dying on unanswered ARP). With /32 everything
-	// routes via the gateway, which the node always answers for.
-	iface := &agentpb.Interface{
-		Device: "eth0",
-		Name:   "eth0",
-		Mtu:    uint64(s.eth0LinkInfo.MTU),
-		HwAddr: guestMAC,
-		IPAddresses: []*agentpb.IPAddress{{
-			Family:  agentpb.IPFamily_v4,
-			Address: addr.Addr.IP.String(),
-			Mask:    "32",
-		}},
-	}
-	if _, err := agent.UpdateInterface(cctx, iface); err != nil {
-		return err
-	}
-	if gw != nil {
-		// Replace the guest routing table: gateway host route + default via it
-		// (the connected subnet route reappears with the address add).
-		routes := []*agentpb.Route{
-			{Dest: gw.String() + "/32", Device: "eth0", Scope: uint32(netlink.SCOPE_LINK), Family: agentpb.IPFamily_v4},
-			{Gateway: gw.String(), Device: "eth0", Family: agentpb.IPFamily_v4},
-		}
-		if _, err := agent.UpdateRoutes(cctx, routes); err != nil {
-			return err
-		}
-	}
-	slog.InfoContext(ctx, "Restored guest network reconfigured",
-		slog.String("ip", addr.Addr.IP.String()+"/32"), slog.Any("gw", gw))
-	return nil
 }
 
 // slogWriter adapts an io.Writer to slog at info level, for the kata shim's

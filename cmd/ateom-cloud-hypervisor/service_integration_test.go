@@ -72,7 +72,7 @@ func TestServiceE2E(t *testing.T) {
 	writeMinimalGvisorStyleSpec(t, bundle) // no linux.resources -> exercises ensureKataCompatibleSpec
 	drainBundleLog(t, bundle)              // visibility into shim logs if anything fails
 
-	svc := NewService("testpod", shim, chBin, vfsdBin, "", "default", true, -1, &SaveLinkInfo{})
+	svc := NewService("testpod", shim, chBin, vfsdBin, "", "default", true, -1)
 	ctx, cancel := context.WithTimeout(context.Background(), 180*time.Second)
 	defer cancel()
 
