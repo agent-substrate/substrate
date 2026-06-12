@@ -141,6 +141,7 @@ func (s *CallAteletSuspendStep) Execute(ctx context.Context, input *SuspendInput
 		ActorTemplateName:      state.Actor.GetActorTemplateName(),
 		ActorId:                state.Actor.GetActorId(),
 		Runsc:                  runscCfg,
+		RuntimeAssets:          buildRuntimeAssetsConfig(state.ActorTemplate.Spec.Runtime),
 		Spec: &ateletpb.WorkloadSpec{
 			PauseImage: state.ActorTemplate.Spec.PauseImage,
 		},

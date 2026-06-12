@@ -33,6 +33,26 @@ import (
 	"k8s.io/client-go/kubernetes"
 )
 
+// buildRuntimeAssetsConfig maps an ActorTemplate RuntimeConfig to the ateletpb
+// RuntimeAssetsConfig atelet uses to fetch a non-gVisor runtime's assets.
+// Returns nil for gVisor (empty type / no assets), so the runsc path is used.
+func buildRuntimeAssetsConfig(rt atev1alpha1.RuntimeConfig) *ateletpb.RuntimeAssetsConfig {
+	if rt.Type == "" || rt.Type == string(atev1alpha1.RuntimeGvisor) || len(rt.Assets) == 0 {
+		return nil
+	}
+	cfg := &ateletpb.RuntimeAssetsConfig{
+		Runtime: rt.Type,
+		Assets:  make(map[string]*ateletpb.RuntimeAsset, len(rt.Assets)),
+	}
+	for name, a := range rt.Assets {
+		cfg.Assets[name] = &ateletpb.RuntimeAsset{Sha256Hash: a.SHA256Hash, Url: a.URL}
+	}
+	if rt.Authentication.GCP != nil {
+		cfg.Authentication = &ateletpb.AuthenticationConfig{Gcp: &ateletpb.GCPAuthenticationConfig{Use: true}}
+	}
+	return cfg
+}
+
 // ResumeInput holds the immutable parameters requested by the client.
 type ResumeInput struct {
 	ActorID string
@@ -199,6 +219,8 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 		runscCfg.Authentication = authnCfg
 	}
 
+	runtimeCfg := buildRuntimeAssetsConfig(state.ActorTemplate.Spec.Runtime)
+
 	if state.Actor.LastSnapshot != "" {
 		slog.InfoContext(ctx, "Actor has snapshot; Restoring from snapshot")
 
@@ -208,6 +230,7 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 			ActorTemplateName:      state.Actor.GetActorTemplateName(),
 			ActorId:                state.Actor.GetActorId(),
 			Runsc:                  runscCfg,
+			RuntimeAssets:          runtimeCfg,
 			Spec:                   workloadSpec,
 			SnapshotUriPrefix:      state.Actor.GetLastSnapshot(),
 		}
@@ -227,6 +250,7 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 			ActorTemplateName:      state.Actor.GetActorTemplateName(),
 			ActorId:                state.Actor.GetActorId(),
 			Runsc:                  runscCfg,
+			RuntimeAssets:          runtimeCfg,
 			Spec:                   workloadSpec,
 			SnapshotUriPrefix:      snapshot,
 		}
@@ -243,6 +267,7 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 			ActorTemplateName:      state.Actor.GetActorTemplateName(),
 			ActorId:                state.Actor.GetActorId(),
 			Runsc:                  runscCfg,
+			RuntimeAssets:          runtimeCfg,
 			Spec:                   workloadSpec,
 		}
 		_, err = client.Run(ctx, req)
