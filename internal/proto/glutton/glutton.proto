@@ -1,0 +1,97 @@
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+
+package glutton;
+
+option go_package = "github.com/agent-substrate/substrate/internal/proto/glutton";
+
+// A glutton is a single small piece of a larger benchmarking suite. It is designed to be instantiated
+// multiple times, with each piece configured to do different units of work.
+service Glutton {
+    rpc WriteRAM(WriteRAMRequest) returns (WriteRAMResponse) {}
+
+    rpc WriteDisk(WriteDiskRequest) returns (WriteDiskResponse) {}
+    
+    rpc OpenFD(OpenFDRequest) returns (OpenFDResponse) {}
+
+    rpc Ping(PingRequest) returns (PingResponse) {}
+
+    rpc Gossip(GossipRequest) returns (GossipResponse) {}
+}
+
+enum WriteMode {
+    // Overwrite the destination entirely
+    WRITE_MODE_TRUNCATE = 0;
+
+    // Write on top of the existing data
+    WRITE_MODE_OVERWRITE = 1;
+}
+
+message WriteRAMRequest {
+    // name of the array to be written to
+    string key = 1;
+    
+    // size of bytes to be written
+    int32 size = 2;
+
+    WriteMode write_mode = 3;
+}
+
+message WriteRAMResponse {
+}
+
+message WriteDiskRequest {
+    // name of the file to be written to
+    string key = 1;
+    
+    // size of bytes to be written
+    int32 size = 2;
+
+    WriteMode write_mode = 3;
+}
+
+message WriteDiskResponse {   
+}
+
+message OpenFDRequest {
+    // The total number of FDs for the glutton to open
+    int32 count = 1;
+}
+
+message OpenFDResponse {
+
+}
+
+message PingRequest {
+    // The message to be echoed back from the ping
+    string message = 1;
+}
+
+message PingResponse {
+    // The message echoed back
+    string message = 1;
+}
+
+message GossipRequest {
+    repeated Peer peers = 1;
+}
+
+message GossipResponse {}
+
+message Peer {
+    string host = 1;
+    int32 delay_ms = 2;
+}

@@ -41,7 +41,7 @@ usage() {
   echo ""
   echo "Options:"
   echo "  --deploy    Substitute BUCKET_NAME and deploy workloads to the cluster using ko apply"
-  echo "  --delete    Substitute BUCKET_NAME and delete workloads from the cluster using kubectl delete"
+  echo "  --delete    Substitute BUCKET_NAME and delete workloads from the cluster"
   echo "  -h, --help  Show this help message"
 }
 
@@ -53,8 +53,10 @@ deploy() {
 
 delete() {
   echo "Deleting workloads..."
+  # The template contains ko:// image references; route through `ko delete`
+  # so they get resolved before kubectl sees them.
   sed "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" "${MANIFEST_TEMPLATE}" \
-    | kubectl delete --ignore-not-found -f -
+    | hack/run-tool.sh ko delete --ignore-not-found -f -
 }
 
 if [[ "$#" -eq 0 ]]; then

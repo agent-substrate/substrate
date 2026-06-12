@@ -13,6 +13,7 @@
 # limitations under the License.
 
 from locust import User, task, events
+from locust.exception import StopUser
 import time
 import uuid
 import grpc
@@ -60,7 +61,9 @@ class SleepUser(User):
                 )
             )
         except Exception as e:
-            print(f"Failed to create actor {self.actor_id}: {e}")
+            logger.error(f"Failed to create actor {self.actor_id}: {e}")
+            self.channel.close()
+            raise StopUser()
 
     def on_stop(self):
         update_user_count(-1, self.__class__.__name__)
@@ -70,7 +73,7 @@ class SleepUser(User):
                 ateapi_pb2.SuspendActorRequest(actor_id=self.actor_id)
             )
         except Exception as e:
-            print(f"Failed to suspend actor {self.actor_id} during teardown: {e}")
+            logger.warning(f"Failed to suspend actor {self.actor_id} during teardown: {e}")
 
         # Delete actor
         try:
@@ -78,7 +81,7 @@ class SleepUser(User):
                 ateapi_pb2.DeleteActorRequest(actor_id=self.actor_id)
             )
         except Exception as e:
-            print(f"Failed to delete actor {self.actor_id}: {e}")
+            logger.warning(f"Failed to delete actor {self.actor_id}: {e}")
 
         self.channel.close()
 
