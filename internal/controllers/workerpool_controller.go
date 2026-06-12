@@ -120,6 +120,68 @@ func (r *WorkerPoolReconciler) syncStatus(ctx context.Context, wp *atev1alpha1.W
 // Deployment managed by a WorkerPool. Only fields owned by this controller
 // are declared here.
 func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool) *appsv1ac.DeploymentApplyConfiguration {
+	container := corev1ac.Container().
+		WithName("ateom").
+		WithImage(wp.Spec.AteomImage).
+		WithArgs(
+			"--pod-uid=$(POD_UID)",
+		).
+		WithSecurityContext(corev1ac.SecurityContext().
+			WithPrivileged(true).
+			WithRunAsUser(0).
+			WithRunAsGroup(0)).
+		WithEnv(
+			corev1ac.EnvVar().
+				WithName("POD_UID").
+				WithValueFrom(corev1ac.EnvVarSource().
+					WithFieldRef(corev1ac.ObjectFieldSelector().
+						WithFieldPath("metadata.uid"))),
+		).
+		WithVolumeMounts(corev1ac.VolumeMount().
+			WithName("run-ateom").
+			WithMountPath(ateompath.BasePath))
+
+	microVM := wp.Spec.Runtime == atev1alpha1.RuntimeMicroVM
+
+	// The micro-VM runtime (kata + cloud-hypervisor) needs /dev/kvm. The
+	// container is already privileged (so it can also reach vhost devices), but
+	// we mount /dev/kvm explicitly. Mutate the container before it is added to
+	// the pod spec (WithContainers copies it by value).
+	if microVM {
+		container.WithVolumeMounts(corev1ac.VolumeMount().
+			WithName("dev-kvm").
+			WithMountPath("/dev/kvm"))
+	}
+
+	podSpec := corev1ac.PodSpec().
+		WithContainers(container).
+		WithSecurityContext(corev1ac.PodSecurityContext().
+			WithRunAsUser(0).
+			WithRunAsGroup(0)).
+		WithVolumes(corev1ac.Volume().
+			WithName("run-ateom").
+			WithHostPath(corev1ac.HostPathVolumeSource().
+				WithPath(ateompath.BasePath).
+				WithType(corev1.HostPathDirectoryOrCreate)))
+
+	// Micro-VM pods must land on KVM-capable, nested-virt nodes: add the
+	// /dev/kvm host device and pin placement via nodeSelector + toleration on
+	// ate.dev/runtime=microvm.
+	if microVM {
+		podSpec.
+			WithVolumes(corev1ac.Volume().
+				WithName("dev-kvm").
+				WithHostPath(corev1ac.HostPathVolumeSource().
+					WithPath("/dev/kvm").
+					WithType(corev1.HostPathCharDev))).
+			WithNodeSelector(map[string]string{"ate.dev/runtime": string(atev1alpha1.RuntimeMicroVM)}).
+			WithTolerations(corev1ac.Toleration().
+				WithKey("ate.dev/runtime").
+				WithOperator(corev1.TolerationOpEqual).
+				WithValue(string(atev1alpha1.RuntimeMicroVM)).
+				WithEffect(corev1.TaintEffectNoSchedule))
+	}
+
 	return appsv1ac.Deployment(deploymentName(wp.Name), wp.Namespace).
 		WithOwnerReferences(metav1ac.OwnerReference().
 			WithAPIVersion(atev1alpha1.GroupVersion.String()).
@@ -136,35 +198,7 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool) *appsv1ac.Deployment
 				WithLabels(map[string]string{
 					"ate.dev/worker-pool": wp.Name,
 				}).
-				WithSpec(corev1ac.PodSpec().
-					WithContainers(corev1ac.Container().
-						WithName("ateom").
-						WithImage(wp.Spec.AteomImage).
-						WithArgs(
-							"--pod-uid=$(POD_UID)",
-						).
-						WithSecurityContext(corev1ac.SecurityContext().
-							WithPrivileged(true).
-							WithRunAsUser(0).
-							WithRunAsGroup(0)).
-						WithEnv(
-							corev1ac.EnvVar().
-								WithName("POD_UID").
-								WithValueFrom(corev1ac.EnvVarSource().
-									WithFieldRef(corev1ac.ObjectFieldSelector().
-										WithFieldPath("metadata.uid"))),
-						).
-						WithVolumeMounts(corev1ac.VolumeMount().
-							WithName("run-ateom").
-							WithMountPath(ateompath.BasePath))).
-					WithSecurityContext(corev1ac.PodSecurityContext().
-						WithRunAsUser(0).
-						WithRunAsGroup(0)).
-					WithVolumes(corev1ac.Volume().
-						WithName("run-ateom").
-						WithHostPath(corev1ac.HostPathVolumeSource().
-							WithPath(ateompath.BasePath).
-							WithType(corev1.HostPathDirectoryOrCreate))))))
+				WithSpec(podSpec)))
 }
 
 // SetupWithManager sets up the controller with the Manager.
