@@ -84,81 +84,13 @@ type RouterConfig struct {
 type RouterServer struct {
 	cfg RouterConfig
 
-	cmd        *cobra.Command
+	Cmd        *cobra.Command
 	k8sClient  client.Client
 	clientset  kubernetes.Interface
 	apiClient  ateapipb.ControlClient
 	extprocSrv *ExtProcServer
 	health     *routerHealth
 	atStore    atStore
-}
-
-func NewCmd() *cobra.Command {
-	var cfg RouterConfig
-
-	cmd := &cobra.Command{
-		Use:   "router",
-		Short: "Router components including xDS server and Envoy ExtProc gateway processing server",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			ctx, cancel := context.WithCancel(cmd.Context())
-			defer cancel()
-
-			var level slog.Level
-			switch strings.ToLower(cfg.LogLevel) {
-			case "debug":
-				level = slog.LevelDebug
-			case "warn":
-				level = slog.LevelWarn
-			case "error":
-				level = slog.LevelError
-			default:
-				level = slog.LevelInfo
-			}
-			slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level})))
-
-			mp, err := serverboot.InitMetrics(ctx, routerServiceName)
-			if err != nil {
-				return fmt.Errorf("failed to initialize metrics: %w", err)
-			}
-			defer serverboot.ShutdownProvider("MeterProvider", mp.Shutdown)
-
-			go serverboot.StartMetricsServer(ctx, serverboot.MetricsServerOptions{Addr: cfg.MetricsAddr})
-
-			sigChan := make(chan os.Signal, 1)
-			signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-			go func() {
-				<-sigChan
-				cancel()
-			}()
-
-			srv, err := NewRouterServer(cfg)
-			if err != nil {
-				return fmt.Errorf("failed to create router server: %w", err)
-			}
-			srv.cmd = cmd
-
-			return srv.Run(ctx)
-		},
-	}
-
-	cmd.Flags().StringVar(&cfg.LogLevel, "log-level", "info", "Log level: debug, info, warn, error")
-	cmd.Flags().StringVar(&cfg.MetricsAddr, "metrics-listen-addr", ":9090", "Address and port the prometheus metrics server should listen on.")
-	cmd.Flags().BoolVar(&cfg.Standalone, "standalone", false, "Run in standalone mode, bypassing creation of managed deployment and services in Kubernetes cluster")
-	cmd.Flags().StringVar(&cfg.Namespace, "namespace", "default", "Target operations namespace")
-	cmd.Flags().StringVar(&cfg.Kubeconfig, "kubeconfig", "", "Absolute path to the kubeconfig configuration file")
-	cmd.Flags().StringVar(&cfg.AteapiAddr, "ateapi-address", "api.ate-system.svc:443", "gRPC host address of the cluster ateapi Control instance")
-	cmd.Flags().IntVar(&cfg.HttpPort, "port-http", 8080, "TCP port for workload traffic entering through the Envoy Router")
-	cmd.Flags().IntVar(&cfg.XdsPort, "port-xds", 18000, "TCP port listening for the xDS dynamic Envoy connections")
-	cmd.Flags().IntVar(&cfg.ExtprocPort, "port-extproc", 50051, "Listen port for the Envoy dynamic External Processing (ext_proc) server")
-	cmd.Flags().StringVar(&cfg.ExtprocAddr, "extproc-address", "127.0.0.1", "Host IP or address of the Envoy External Processing (ext_proc) server")
-	cmd.Flags().StringVar(&cfg.EnvoyImage, "envoy-image", "envoyproxy/envoy:v1.30-latest", "Image URI used for dynamically launched router instances")
-	cmd.Flags().StringVar(&cfg.TemplatesFile, "actor-templates-file", "", "Path to offline YAML configuration file listing ActorTemplates")
-	cmd.Flags().IntVar(&cfg.StatusPort, "status-port", 4040, "Port to serve /statusz on (set <= 0 to disable serving status)")
-	cmd.Flags().DurationVar(&cfg.HealthInterval, "health-interval", 1*time.Second, "Interval for checking health of dependent services")
-	cmd.Flags().IntVar(&cfg.HttpsPort, "port-https", 8443, "TCP port for HTTPS workload traffic entering through the Envoy Router")
-	cmd.Flags().StringVar(&cfg.EnvoyCertPath, "envoy-cert-path", "", "Path to the Envoy certificate file (if empty, a self-signed cert will be generated for testing)")
-
-	return cmd
 }
 
 func NewRouterServer(cfg RouterConfig) (*RouterServer, error) {
@@ -218,6 +150,37 @@ func NewRouterServer(cfg RouterConfig) (*RouterServer, error) {
 }
 
 func (s *RouterServer) Run(ctx context.Context) error {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		<-sigChan
+		cancel()
+	}()
+
+	var level slog.Level
+	switch strings.ToLower(s.cfg.LogLevel) {
+	case "debug":
+		level = slog.LevelDebug
+	case "warn":
+		level = slog.LevelWarn
+	case "error":
+		level = slog.LevelError
+	default:
+		level = slog.LevelInfo
+	}
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level})))
+
+	mp, err := serverboot.InitMetrics(ctx, routerServiceName)
+	if err != nil {
+		return fmt.Errorf("failed to initialize metrics: %w", err)
+	}
+	defer serverboot.ShutdownProvider("MeterProvider", mp.Shutdown)
+
+	go serverboot.StartMetricsServer(ctx, serverboot.MetricsServerOptions{Addr: s.cfg.MetricsAddr})
+
 	slog.InfoContext(ctx, "Starting substrate router subsystem", slog.Bool("standalone", s.cfg.Standalone))
 
 	g, ctx := errgroup.WithContext(ctx)

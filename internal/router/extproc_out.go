@@ -17,7 +17,6 @@ package router
 import (
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	extproc "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
-	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 	envoy_type "github.com/envoyproxy/go-control-plane/envoy/type/v3"
 )
 
@@ -33,7 +32,7 @@ type reqError struct {
 func (e *reqError) Error() string { return e.msg }
 func (e *reqError) Unwrap() error { return e.cause }
 
-func addAuthorityMutation(auth string, mut *extprocv3.HeaderMutation) {
+func addAuthorityMutation(auth string, mut *extproc.HeaderMutation) {
 	mut.SetHeaders = append(mut.SetHeaders,
 		&corev3.HeaderValueOption{
 			Header: &corev3.HeaderValue{

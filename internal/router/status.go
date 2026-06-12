@@ -188,8 +188,8 @@ func (s *RouterServer) handleStatusz(w http.ResponseWriter, req *http.Request) {
 	argsStr := strings.Join(os.Args, " ")
 
 	flagsMap := make(map[string]string)
-	if s.cmd != nil {
-		s.cmd.Flags().VisitAll(func(f *pflag.Flag) {
+	if s.Cmd != nil {
+		s.Cmd.Flags().VisitAll(func(f *pflag.Flag) {
 			flagsMap[f.Name] = f.Value.String()
 		})
 	}
