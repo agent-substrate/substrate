@@ -15,6 +15,8 @@
 package controlapi
 
 import (
+	"time"
+
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -32,13 +34,14 @@ type Service struct {
 
 var _ ateapipb.ControlServer = (*Service)(nil)
 
-// NewService creates a service.
-func NewService(persistence store.Interface, actorTemplateLister listersv1alpha1.ActorTemplateLister, dialer *AteletDialer, kubeClient kubernetes.Interface) *Service {
+// NewService creates a service. actorWorkflowDeadline bounds how long a single
+// Resume/Suspend workflow can run end-to-end.
+func NewService(persistence store.Interface, actorTemplateLister listersv1alpha1.ActorTemplateLister, dialer *AteletDialer, kubeClient kubernetes.Interface, actorWorkflowDeadline time.Duration) *Service {
 	s := &Service{
 		persistence:         persistence,
 		actorTemplateLister: actorTemplateLister,
 		dialer:              dialer,
-		actorWorkflow:       NewActorWorkflow(persistence, dialer, actorTemplateLister, kubeClient),
+		actorWorkflow:       NewActorWorkflow(persistence, dialer, actorTemplateLister, kubeClient, actorWorkflowDeadline),
 	}
 
 	return s

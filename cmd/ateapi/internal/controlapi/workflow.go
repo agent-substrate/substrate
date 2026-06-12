@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
@@ -31,6 +32,18 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
 )
+
+// actorLockTTL is the Redis TTL on the per-actor workflow lock. It bounds how
+// long a peer must wait to retry an actor after this process crashes mid-workflow.
+const actorLockTTL = 30 * time.Second
+
+// actorLockHeartbeatInterval is how often the heartbeat refreshes the lock.
+// Chosen so we get ~3 attempts before the TTL would otherwise lapse.
+const actorLockHeartbeatInterval = actorLockTTL / 3
+
+// errLostActorLock is the context cause set when the heartbeat can no longer
+// keep the actor lock alive (peer stole it, or Redis returned an error).
+var errLostActorLock = errors.New("lost actor lock during workflow")
 
 // WorkflowStep represents a single, idempotent operation in a workflow graph.
 // Params is the immutable parameters used to start the workflow.
@@ -119,16 +132,22 @@ type ActorWorkflow struct {
 	actorTemplateLister listersv1alpha1.ActorTemplateLister
 	kubeClient          kubernetes.Interface
 	secretCache         *envSecretCache
+	// workflowDeadline is the maximum duration of a single Resume/Suspend
+	// workflow. The lock is kept alive across this duration by a heartbeat,
+	// independent of actorLockTTL.
+	workflowDeadline time.Duration
 }
 
-// NewActorWorkflow creates a new ActorWorkflow.
-func NewActorWorkflow(store store.Interface, dialer *AteletDialer, actorTemplateLister listersv1alpha1.ActorTemplateLister, kubeClient kubernetes.Interface) *ActorWorkflow {
+// NewActorWorkflow creates a new ActorWorkflow. workflowDeadline bounds how
+// long a single Resume/Suspend can run end-to-end.
+func NewActorWorkflow(store store.Interface, dialer *AteletDialer, actorTemplateLister listersv1alpha1.ActorTemplateLister, kubeClient kubernetes.Interface, workflowDeadline time.Duration) *ActorWorkflow {
 	return &ActorWorkflow{
 		store:               store,
 		dialer:              dialer,
 		actorTemplateLister: actorTemplateLister,
 		kubeClient:          kubeClient,
 		secretCache:         newEnvSecretCache(envSecretCacheTTL),
+		workflowDeadline:    workflowDeadline,
 	}
 }
 
@@ -140,9 +159,7 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, id string, boot bool) (
 	}
 	state := &ResumeState{}
 
-	// Acquire lock and get the timeout context for the workflow
-	// Lock TTL is 7 seconds, with 2 seconds padding for workflow timeout
-	ctx, releaseLock, err := w.acquireActorLock(ctx, id, 30*time.Second, 2*time.Second)
+	ctx, releaseLock, err := w.acquireActorLock(ctx, id, actorLockTTL, actorLockHeartbeatInterval)
 	if err != nil {
 		return nil, err
 	}
@@ -169,9 +186,7 @@ func (w *ActorWorkflow) SuspendActor(ctx context.Context, id string) (*ateapipb.
 	}
 	state := &SuspendState{}
 
-	// Acquire lock and get the timeout context for the workflow
-	// Lock TTL is 7 seconds, with 2 seconds padding for workflow timeout
-	ctx, releaseLock, err := w.acquireActorLock(ctx, id, 30*time.Second, 2*time.Second)
+	ctx, releaseLock, err := w.acquireActorLock(ctx, id, actorLockTTL, actorLockHeartbeatInterval)
 	if err != nil {
 		return nil, err
 	}
@@ -191,27 +206,71 @@ func (w *ActorWorkflow) SuspendActor(ctx context.Context, id string) (*ateapipb.
 	return state.Actor, nil
 }
 
-func (w *ActorWorkflow) acquireActorLock(ctx context.Context, id string, ttl time.Duration, padding time.Duration) (context.Context, func(), error) {
+// acquireActorLock takes the per-actor workflow lock and returns a workflow
+// context bounded by w.workflowDeadline. A background heartbeat keeps the lock
+// alive — independent of lockTTL — for as long as the workflow runs. If the
+// heartbeat fails (Redis error or another peer stole the lock) the returned
+// context is cancelled with errLostActorLock as the cause, and in-flight steps
+// will see ctx.Err() and unwind. The returned release function stops the
+// heartbeat, waits for it to exit, then best-effort releases the lock.
+func (w *ActorWorkflow) acquireActorLock(ctx context.Context, id string, lockTTL, heartbeatInterval time.Duration) (context.Context, func(), error) {
 	lockKey := "lock:actor:" + id
 	lockValue := uuid.New().String()
 
-	// Create a child context for the workflow that expires BEFORE the lock
-	workflowTimeout := ttl - padding
-	workflowCtx, cancel := context.WithTimeout(ctx, workflowTimeout)
-
-	acquired, err := w.store.AcquireLock(workflowCtx, lockKey, lockValue, ttl)
+	acquired, err := w.store.AcquireLock(ctx, lockKey, lockValue, lockTTL)
 	if err != nil {
-		cancel()
 		return nil, nil, fmt.Errorf("while acquiring lock: %w", err)
 	}
 	if !acquired {
-		cancel()
 		return nil, nil, status.Error(grpcCodes.Aborted, "another operation is in progress for this actor")
 	}
 
-	return workflowCtx, func() {
-		cancel()
+	cancellableCtx, cancelCause := context.WithCancelCause(ctx)
+	workflowCtx, cancelDeadline := context.WithTimeout(cancellableCtx, w.workflowDeadline)
+
+	heartbeatDone := make(chan struct{})
+	go w.runLockHeartbeat(workflowCtx, lockKey, lockValue, id, lockTTL, heartbeatInterval, cancelCause, heartbeatDone)
+
+	release := func() {
+		cancelDeadline()
+		cancelCause(context.Canceled)
+		<-heartbeatDone
 		// Use context.Background() to ensure the lock is released even if the workflow context was canceled.
 		w.store.ReleaseLock(context.Background(), lockKey, lockValue) //nolint:errcheck // best-effort release; the lock TTL is the safety net.
-	}, nil
+	}
+	return workflowCtx, release, nil
+}
+
+// runLockHeartbeat refreshes the actor lock on a ticker until ctx is done. If
+// a refresh fails or returns false (we no longer own the lock), it cancels the
+// workflow context with errLostActorLock so workflow steps tear down promptly.
+func (w *ActorWorkflow) runLockHeartbeat(ctx context.Context, lockKey, lockValue, actorID string, lockTTL, heartbeatInterval time.Duration, cancelCause context.CancelCauseFunc, done chan<- struct{}) {
+	defer close(done)
+	ticker := time.NewTicker(heartbeatInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			ok, err := w.store.RefreshLock(ctx, lockKey, lockValue, lockTTL)
+			if err != nil {
+				// If ctx was cancelled out from under us we're already tearing
+				// down — no need to set a misleading cause.
+				if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+					slog.WarnContext(ctx, "Lock heartbeat failed; cancelling workflow",
+						slog.String("actor_id", actorID),
+						slog.String("err", err.Error()))
+					cancelCause(fmt.Errorf("%w: %w", errLostActorLock, err))
+				}
+				return
+			}
+			if !ok {
+				slog.WarnContext(ctx, "Actor lock no longer owned; cancelling workflow",
+					slog.String("actor_id", actorID))
+				cancelCause(errLostActorLock)
+				return
+			}
+		}
+	}
 }
