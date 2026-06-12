@@ -34,6 +34,12 @@ func RunSCBinaryPath(sha256 string) string {
 	return filepath.Join(StaticFilesDir, "runsc-"+sha256)
 }
 
+// RuntimeAssetPath is the content-addressed local path for a fetched non-gVisor
+// runtime asset (named so multiple asset kinds don't collide).
+func RuntimeAssetPath(name, sha256 string) string {
+	return filepath.Join(StaticFilesDir, "asset-"+name+"-"+sha256)
+}
+
 func AteomPath(podUID string) string {
 	return filepath.Join(
 		BasePath,

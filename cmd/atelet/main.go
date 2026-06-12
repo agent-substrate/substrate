@@ -19,6 +19,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -283,6 +284,81 @@ func (s *AteomHerder) fetchRunsc(ctx context.Context, cfg *ateletpb.RunscConfig)
 	return localPath, nil
 }
 
+// fetchRuntimeForRequest resolves the runtime assets for a request. For a
+// non-gVisor runtime (RuntimeAssets set) it fetches the asset set and returns
+// (name->localPath) with an empty runscPath; otherwise it fetches runsc and
+// returns its path. Exactly one of the two is populated.
+func (s *AteomHerder) fetchRuntimeForRequest(ctx context.Context, runsc *ateletpb.RunscConfig, rt *ateletpb.RuntimeAssetsConfig) (runscPath string, assetPaths map[string]string, err error) {
+	if rt != nil && rt.GetRuntime() != "" && rt.GetRuntime() != "gvisor" {
+		paths, err := s.fetchRuntimeAssets(ctx, rt)
+		return "", paths, err
+	}
+	p, err := s.fetchRunscAndPrep(ctx, runsc)
+	return p, nil, err
+}
+
+// fetchRuntimeAssets fetches every asset in cfg content-addressed (like runsc),
+// caching by sha256 under the static-files dir, and returns name->local path for
+// atelet to pass to ateom.
+func (s *AteomHerder) fetchRuntimeAssets(ctx context.Context, cfg *ateletpb.RuntimeAssetsConfig) (map[string]string, error) {
+	if err := os.MkdirAll(ateompath.StaticFilesDir, 0o700); err != nil {
+		return nil, fmt.Errorf("while creating static files dir: %w", err)
+	}
+	client := s.anonGCSClient
+	if cfg.GetAuthentication().GetGcp().GetUse() {
+		client = s.gcsClient
+	}
+	paths := make(map[string]string, len(cfg.GetAssets()))
+	for name, asset := range cfg.GetAssets() {
+		localPath := ateompath.RuntimeAssetPath(name, asset.GetSha256Hash())
+		if _, err := os.Stat(localPath); err == nil {
+			paths[name] = localPath
+			continue
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("while stat-ing %q: %w", localPath, err)
+		}
+		content, err := ategcs.FetchFromGCS(ctx, client, asset.GetUrl())
+		if err != nil {
+			return nil, fmt.Errorf("while fetching asset %q from %v: %w", name, asset.GetUrl(), err)
+		}
+		sum := sha256.Sum256(content)
+		wantSum, err := hex.DecodeString(asset.GetSha256Hash())
+		if err != nil {
+			return nil, fmt.Errorf("while parsing sha256 for %q: %w", name, err)
+		}
+		if !bytes.Equal(sum[:], wantSum) {
+			return nil, fmt.Errorf("sha256 mismatch for asset %q; got=%s want=%s", name, hex.EncodeToString(sum[:]), asset.GetSha256Hash())
+		}
+		if err := atomicWriteFile(localPath, content, 0o755); err != nil {
+			return nil, fmt.Errorf("while writing asset %q: %w", name, err)
+		}
+		paths[name] = localPath
+	}
+	return paths, nil
+}
+
+// atomicWriteFile writes content to a temp file in the same dir then renames it
+// into place with the given mode.
+func atomicWriteFile(path string, content []byte, mode os.FileMode) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+"-download-")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.Write(content); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Chmod(mode); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
+}
+
 func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (*ateletpb.RunResponse, error) {
 	if err := validateRunRequest(req); err != nil {
 		// status.Error so the interceptor surfaces InvalidArgument and the
@@ -290,7 +366,7 @@ func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (*atele
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
-	runscPath, err := s.fetchRunscAndPrep(ctx, req.GetRunsc())
+	runscPath, runtimeAssetPaths, err := s.fetchRuntimeForRequest(ctx, req.GetRunsc(), req.GetRuntimeAssets())
 	if err != nil {
 		return nil, err
 	}
@@ -318,6 +394,7 @@ func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (*atele
 		ActorTemplateName:      req.GetActorTemplateName(),
 		ActorId:                req.GetActorId(),
 		RunscPath:              runscPath,
+		RuntimeAssetPaths:      runtimeAssetPaths,
 		Spec:                   buildAteomWorkloadSpec(req.GetSpec()),
 	}); err != nil {
 		return nil, fmt.Errorf("while calling ateom.RunWorkload: %w", err)
@@ -367,7 +444,7 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
-	runscPath, err := s.fetchRunscAndPrep(ctx, req.GetRunsc())
+	runscPath, runtimeAssetPaths, err := s.fetchRuntimeForRequest(ctx, req.GetRunsc(), req.GetRuntimeAssets())
 	if err != nil {
 		return nil, err
 	}
@@ -380,46 +457,55 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 	}
 
 	// Tell ateom to take checkpoint and delete containers.
-	if _, err := client.CheckpointWorkload(ctx, &ateompb.CheckpointWorkloadRequest{
+	resp, err := client.CheckpointWorkload(ctx, &ateompb.CheckpointWorkloadRequest{
 		ActorTemplateNamespace: req.GetActorTemplateNamespace(),
 		ActorTemplateName:      req.GetActorTemplateName(),
 		ActorId:                req.GetActorId(),
 		RunscPath:              runscPath,
+		RuntimeAssetPaths:      runtimeAssetPaths,
 		Spec:                   buildAteomWorkloadSpec(req.GetSpec()),
-	}); err != nil {
+	})
+	if err != nil {
 		return nil, fmt.Errorf("while calling ateom.CheckpointWorkload: %w", err)
 	}
 
 	prefix := strings.TrimSuffix(req.GetSnapshotUriPrefix(), "/")
 	ns, tmpl, actorID := req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId()
 
-	checkpointImgPath := filepath.Join(checkpointDir, "checkpoint.img")
-	pagesImgPath := filepath.Join(checkpointDir, "pages.img")
-	pagesMetaImgPath := filepath.Join(checkpointDir, "pages_meta.img")
+	if files := resp.GetSnapshotFiles(); len(files) > 0 {
+		// Runtime reported its own snapshot file set (e.g. cloud-hypervisor):
+		// ship exactly those files + a manifest.
+		recordSnapshotSize(ctx, "memory-ranges", filepath.Join(checkpointDir, "memory-ranges"), ns, tmpl)
+		if err := uploadSnapshotFiles(ctx, s.gcsClient, prefix, checkpointDir, files); err != nil {
+			return nil, err
+		}
+	} else {
+		// Legacy fixed file set (gVisor).
+		checkpointImgPath := filepath.Join(checkpointDir, "checkpoint.img")
+		pagesImgPath := filepath.Join(checkpointDir, "pages.img")
+		pagesMetaImgPath := filepath.Join(checkpointDir, "pages_meta.img")
 
-	recordSnapshotSize(ctx, "checkpoint", checkpointImgPath, ns, tmpl)
-
-	// Upload checkpoint from local dir.
-	if err := ategcs.SendLocalFileToGCSWithZstd(ctx, s.gcsClient,
-		prefix+"/checkpoint.img.zstd",
-		checkpointImgPath,
-	); err != nil {
-		return nil, fmt.Errorf("while uploading checkpoint.img to GCS: %w", err)
-	}
-
-	recordSnapshotSize(ctx, "pages", pagesImgPath, ns, tmpl)
-	if err := uploadIfExists(ctx, s.gcsClient,
-		prefix+"/pages.img.zstd",
-		pagesImgPath,
-	); err != nil {
-		return nil, err
-	}
-	recordSnapshotSize(ctx, "pages_meta", pagesMetaImgPath, ns, tmpl)
-	if err := uploadIfExists(ctx, s.gcsClient,
-		prefix+"/pages_meta.img.zstd",
-		pagesMetaImgPath,
-	); err != nil {
-		return nil, err
+		recordSnapshotSize(ctx, "checkpoint", checkpointImgPath, ns, tmpl)
+		if err := ategcs.SendLocalFileToGCSWithZstd(ctx, s.gcsClient,
+			prefix+"/checkpoint.img.zstd",
+			checkpointImgPath,
+		); err != nil {
+			return nil, fmt.Errorf("while uploading checkpoint.img to GCS: %w", err)
+		}
+		recordSnapshotSize(ctx, "pages", pagesImgPath, ns, tmpl)
+		if err := uploadIfExists(ctx, s.gcsClient,
+			prefix+"/pages.img.zstd",
+			pagesImgPath,
+		); err != nil {
+			return nil, err
+		}
+		recordSnapshotSize(ctx, "pages_meta", pagesMetaImgPath, ns, tmpl)
+		if err := uploadIfExists(ctx, s.gcsClient,
+			prefix+"/pages_meta.img.zstd",
+			pagesMetaImgPath,
+		); err != nil {
+			return nil, err
+		}
 	}
 
 	if err := resetActorDirs(ns, tmpl, actorID); err != nil {
@@ -434,7 +520,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
-	runscPath, err := s.fetchRunscAndPrep(ctx, req.GetRunsc())
+	runscPath, runtimeAssetPaths, err := s.fetchRuntimeForRequest(ctx, req.GetRunsc(), req.GetRuntimeAssets())
 	if err != nil {
 		return nil, err
 	}
@@ -446,27 +532,34 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	}
 
 	checkpointDir := ateompath.RestoreStateDir(req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId())
-	checkpointImgPath := filepath.Join(checkpointDir, "checkpoint.img")
-	pagesImgPath := filepath.Join(checkpointDir, "pages.img")
-	pagesMetaImgPath := filepath.Join(checkpointDir, "pages_meta.img")
-
 	prefix := strings.TrimSuffix(req.GetSnapshotUriPrefix(), "/")
-	g, gCtx := errgroup.WithContext(ctx)
-	for _, dl := range []struct{ remote, local string }{
-		{prefix + "/checkpoint.img.zstd", checkpointImgPath},
-		{prefix + "/pages.img.zstd", pagesImgPath},
-		{prefix + "/pages_meta.img.zstd", pagesMetaImgPath},
-	} {
-		dl := dl
-		g.Go(func() error {
-			if err := ategcs.FetchLocalFileFromGCSWithZstd(gCtx, s.gcsClient, dl.remote, dl.local); err != nil {
-				return fmt.Errorf("while downloading %s from GCS: %w", filepath.Base(dl.remote), err)
-			}
-			return nil
-		})
-	}
-	if err := g.Wait(); err != nil {
+
+	// Prefer a manifest-based snapshot (e.g. cloud-hypervisor); fall back to the
+	// legacy fixed file set (gVisor) when there is no manifest.
+	if ok, err := downloadSnapshotManifest(ctx, s.gcsClient, prefix, checkpointDir); err != nil {
 		return nil, err
+	} else if !ok {
+		checkpointImgPath := filepath.Join(checkpointDir, "checkpoint.img")
+		pagesImgPath := filepath.Join(checkpointDir, "pages.img")
+		pagesMetaImgPath := filepath.Join(checkpointDir, "pages_meta.img")
+
+		g, gCtx := errgroup.WithContext(ctx)
+		for _, dl := range []struct{ remote, local string }{
+			{prefix + "/checkpoint.img.zstd", checkpointImgPath},
+			{prefix + "/pages.img.zstd", pagesImgPath},
+			{prefix + "/pages_meta.img.zstd", pagesMetaImgPath},
+		} {
+			dl := dl
+			g.Go(func() error {
+				if err := ategcs.FetchLocalFileFromGCSWithZstd(gCtx, s.gcsClient, dl.remote, dl.local); err != nil {
+					return fmt.Errorf("while downloading %s from GCS: %w", filepath.Base(dl.remote), err)
+				}
+				return nil
+			})
+		}
+		if err := g.Wait(); err != nil {
+			return nil, err
+		}
 	}
 
 	if err := s.prepareOCIBundles(ctx, ns, tmpl, actorID,
@@ -487,6 +580,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		ActorTemplateName:      tmpl,
 		ActorId:                actorID,
 		RunscPath:              runscPath,
+		RuntimeAssetPaths:      runtimeAssetPaths,
 		Spec:                   buildAteomWorkloadSpec(req.GetSpec()),
 	}); err != nil {
 		return nil, fmt.Errorf("while calling ateom.RestoreWorkload: %w", err)
@@ -605,6 +699,80 @@ func uploadIfExists(ctx context.Context, gcs ategcs.ObjectStorage, remoteURI, lo
 		return fmt.Errorf("while uploading %s to GCS: %w", filepath.Base(localPath), err)
 	}
 	return nil
+}
+
+// snapshotManifestName is the object (under the snapshot prefix) that lists the
+// files comprising a runtime-reported snapshot. Its presence distinguishes a
+// manifest-based snapshot (e.g. cloud-hypervisor) from the legacy gVisor fixed
+// file set.
+const snapshotManifestName = "manifest.json"
+
+type snapshotManifest struct {
+	Files []string `json:"files"`
+}
+
+// uploadSnapshotFiles ships a runtime-reported snapshot file set (each
+// zstd-compressed) plus a manifest written last so its presence signals a
+// complete upload. Used for runtimes that populate
+// CheckpointWorkloadResponse.snapshot_files (e.g. cloud-hypervisor).
+func uploadSnapshotFiles(ctx context.Context, gcs ategcs.ObjectStorage, prefix, dir string, files []string) error {
+	g, gCtx := errgroup.WithContext(ctx)
+	for _, f := range files {
+		f := f
+		g.Go(func() error {
+			if err := ategcs.SendLocalFileToGCSWithZstd(gCtx, gcs, prefix+"/"+f+".zstd", filepath.Join(dir, f)); err != nil {
+				return fmt.Errorf("while uploading %s: %w", f, err)
+			}
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return err
+	}
+	manifestPath := filepath.Join(dir, snapshotManifestName)
+	b, err := json.Marshal(snapshotManifest{Files: files})
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(manifestPath, b, 0o600); err != nil {
+		return err
+	}
+	if err := ategcs.SendLocalFileToGCSWithZstd(ctx, gcs, prefix+"/"+snapshotManifestName+".zstd", manifestPath); err != nil {
+		return fmt.Errorf("while uploading snapshot manifest: %w", err)
+	}
+	return nil
+}
+
+// downloadSnapshotManifest fetches the manifest (if any) and every listed file
+// into dir. Returns ok=false when no manifest exists, so the caller falls back
+// to the legacy fixed file set (gVisor).
+func downloadSnapshotManifest(ctx context.Context, gcs ategcs.ObjectStorage, prefix, dir string) (bool, error) {
+	manifestPath := filepath.Join(dir, snapshotManifestName)
+	if err := ategcs.FetchLocalFileFromGCSWithZstd(ctx, gcs, prefix+"/"+snapshotManifestName+".zstd", manifestPath); err != nil {
+		return false, nil // no manifest -> legacy snapshot
+	}
+	b, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return false, err
+	}
+	var m snapshotManifest
+	if err := json.Unmarshal(b, &m); err != nil {
+		return false, fmt.Errorf("parsing snapshot manifest: %w", err)
+	}
+	g, gCtx := errgroup.WithContext(ctx)
+	for _, f := range m.Files {
+		f := f
+		g.Go(func() error {
+			if err := ategcs.FetchLocalFileFromGCSWithZstd(gCtx, gcs, prefix+"/"+f+".zstd", filepath.Join(dir, f)); err != nil {
+				return fmt.Errorf("while downloading %s: %w", f, err)
+			}
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 type AteomDialer struct {
