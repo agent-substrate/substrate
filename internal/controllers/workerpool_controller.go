@@ -167,6 +167,16 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool) *appsv1ac.Deployment
 	// Micro-VM pods must land on KVM-capable, nested-virt nodes: add the
 	// /dev/kvm host device and pin placement via nodeSelector + toleration on
 	// ate.dev/runtime=microvm.
+	//
+	// TODO: make node selection (and tolerations) configurable on the
+	// WorkerPool spec instead of hardcoding this convention. GKE attaches NO
+	// label or taint to nested-virt node pools (verified empirically — unlike
+	// GKE Sandbox's automatic sandbox.gke.io/runtime=gvisor label + taint), so
+	// there is no upstream label to select on: ate.dev/runtime=microvm is our
+	// own convention, applied by hack/create-kind-cluster.sh on kind and via
+	// --node-labels at GKE node pool creation. The toleration is likewise our
+	// convention so operators MAY taint dedicated KVM pools to reserve them
+	// for micro-VM workers; untainted pools schedule fine too.
 	if microVM {
 		podSpec.
 			WithVolumes(corev1ac.Volume().
