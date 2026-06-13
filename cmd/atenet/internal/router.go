@@ -20,7 +20,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/agent-substrate/substrate/internal/router"
+	"github.com/agent-substrate/substrate/cmd/atenet/internal/router"
 )
 
 func NewRouterCmd() *cobra.Command {
