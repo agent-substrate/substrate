@@ -25,6 +25,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
@@ -187,6 +188,11 @@ func (s *RouterServer) Run(ctx context.Context) error {
 	xdsSrv.SetConfig(s.cfg.HttpPort, s.cfg.ExtprocPort, s.cfg.ExtprocAddr)
 	if err := xdsSrv.SetOtlpCollector(s.cfg.OtlpCollectorAddress); err != nil {
 		return fmt.Errorf("configure OTLP collector: %w", err)
+	}
+	if s.cfg.ParkingEnabled && s.cfg.ParkingMaxWait > 0 {
+		// Envoy must keep a parked request open at least as long as the router
+		// will hold it; add a margin so the router surfaces its own 503 first.
+		xdsSrv.SetExtProcMessageTimeout(s.cfg.ParkingMaxWait + 5*time.Second)
 	}
 
 	xdsSrv.SetTlsConfig(s.cfg.HttpsPort, s.cfg.EnvoyCertPath)
