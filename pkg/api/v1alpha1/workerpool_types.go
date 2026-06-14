@@ -18,8 +18,11 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// +kubebuilder:validation:XValidation:rule="!has(self.minReady) || !has(self.maxReplicas) || self.minReady <= self.maxReplicas",message="minReady must not exceed maxReplicas"
 type WorkerPoolSpec struct {
-	// Replicas is the number of worker pods to run.
+	// Replicas is the number of worker pods to run. When autoscaling is enabled
+	// it is owned by the autoscaler (written via the scale subresource); the
+	// fields below are the declarative inputs that drive it.
 	// +required
 	// +kubebuilder:validation:Minimum=0
 	Replicas int32 `json:"replicas"`
@@ -28,6 +31,29 @@ type WorkerPoolSpec struct {
 	// +kubebuilder:validation:MinLength=1
 	// +required
 	AteomImage string `json:"ateomImage"`
+
+	// MinReady is the minimum number of worker pods the autoscaler keeps the
+	// pool at — the reservation floor it must never scale below. When unset the
+	// pool may be scaled to zero. The floor is enforced by the autoscaler; the
+	// WorkerPool controller never clamps Replicas itself, so that the scale
+	// subresource keeps a single writer.
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	MinReady *int32 `json:"minReady,omitempty"`
+
+	// TargetBuffer is the desired number of idle (warm) workers the autoscaler
+	// keeps available to absorb resume bursts. When the idle count falls below
+	// this target the autoscaler provisions more workers, net of pods already
+	// starting. When unset, buffer-based scale-up is disabled.
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	TargetBuffer *int32 `json:"targetBuffer,omitempty"`
+
+	// MaxReplicas is the upper bound the autoscaler may grow the pool to. When
+	// unset the autoscaler applies no ceiling of its own.
+	// +optional
+	// +kubebuilder:validation:Minimum=0
+	MaxReplicas *int32 `json:"maxReplicas,omitempty"`
 }
 
 type WorkerPoolStatus struct {
