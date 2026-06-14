@@ -1,0 +1,62 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# This demo exercises request parking in the atenet router. The WorkerPool is
+# deliberately small (2 workers) so that creating and requesting more than two
+# actors at once oversubscribes the pool. When AssignWorker can't find a free
+# worker it returns FailedPrecondition ("no free workers available"); with
+# parking enabled (the default) the router holds such requests and retries the
+# resume until a worker frees up (e.g. another actor suspends), instead of
+# failing fast with 503. The workload is the same counter binary used by the
+# counter demo -- its reply includes the worker pod IP, so you can see which
+# worker served a (possibly parked) request.
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ate-demo-parking
+
+---
+
+apiVersion: ate.dev/v1alpha1
+kind: WorkerPool
+metadata:
+  name: parking
+  namespace: ate-demo-parking
+  labels:
+    workload: parking
+spec:
+  # Intentionally small: 2 workers, so 3+ concurrently-active actors saturate
+  # the pool and exercise the parking path.
+  replicas: 2
+  ateomImage: ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor
+
+---
+
+apiVersion: ate.dev/v1alpha1
+kind: ActorTemplate
+metadata:
+  name: parking
+  namespace: ate-demo-parking
+spec:
+  pauseImage: "registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4"
+  containers:
+  - name: counter
+    image: ko://github.com/agent-substrate/substrate/demos/counter
+    command: ["/ko-app/counter"]
+  workerSelector:
+    matchLabels:
+      workload: parking
+  snapshotsConfig:
+    location: gs://${BUCKET_NAME}/ate-demo-parking/

@@ -7,10 +7,6 @@ whose target actor cannot be served *yet* because of transient worker-pool
 saturation, retrying the resume until the actor becomes routable or a bounded
 wait elapses — instead of immediately returning `503` to the client.
 
-This realizes the behavior described in the architecture doc ("the Gateway
-pauses the request and asks the Control Plane for the actor's location") and is
-the router-side complement to control-plane worker preemption.
-
 ## Motivation
 
 When a request arrives for a suspended actor, the router resumes it before
@@ -98,17 +94,3 @@ within the historical `15s` budget.
 **Status page** (`/statusz`): a "Request Parking" card shows whether parking is
 enabled, the current vs. maximum parked count, and the max wait.
 
-## Implementation
-
-All in `cmd/atenet/internal/app/router`:
-
-- `parking.go` — `parkingConfig` and `parkingLot`, a bounded, non-blocking,
-  nil-safe admission gate (`enter`/`release`, atomic slot accounting).
-- `resumer.go` — `ActorResumer` gains a `retryable` predicate and a configurable
-  retry budget; on budget exhaustion it returns the underlying capacity error
-  rather than a generic timeout so the HTTP boundary maps it faithfully.
-- `extproc.go` — `handleRequestHeaders` admits each request to the lot around the
-  resume call.
-- `metrics.go` — the three parking instruments (nil-safe bundle).
-- `errors.go` — `parkingFullErr` (503).
-- `router.go` — flags and wiring.
