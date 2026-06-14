@@ -262,6 +262,48 @@ and Performance:
       and Templates) allows platform teams to apply familiar RBAC, auditing,
       and policy enforcement to the underlying infrastructure.
 
+### Resource Model
+
+The CRDs and control-plane records described above, with their relationships and
+multiplicities (UML class diagram):
+
+```mermaid
+classDiagram
+    namespace KubernetesObjects {
+        class ActorTemplate {
+            <<CRD>>
+        }
+        class WorkerPool {
+            <<CRD>>
+        }
+        class Deployment
+        class WorkerPod {
+            ateom
+            runsc
+        }
+    }
+
+    namespace ControlPlaneRecords {
+        class Actor {
+            <<record>>
+            status
+            snapshotRefs
+        }
+        class Worker {
+            <<record>>
+            actorId
+            podIP
+        }
+    }
+
+    ActorTemplate "1" --> "1" WorkerPool : workerPoolRef
+    WorkerPool ..> Deployment : reconciled by atecontroller
+    Deployment "1" *-- "*" WorkerPod : manages
+    Actor ..> ActorTemplate : derived from
+    Actor "0..1" --> "0..1" Worker : runs on
+    Worker "1" --> "1" WorkerPod : maps to
+```
+
 ## System Components
 
 ### Control Plane (`ate-api-server`)
@@ -301,7 +343,48 @@ Handles session-aware routing and automatic re-animation.
 
 ## Actor Lifecycle
 
-The lifecycle of an actor follows a state-driven sequence.
+The lifecycle of an actor follows a state-driven sequence. A request reaches an
+actor through the networking stack, which resumes it onto a worker if it is
+suspended (UML sequence diagram):
+
+```mermaid
+sequenceDiagram
+    actor Client
+    participant DNS as atenet DNS
+    participant Router as atenet router
+    participant API as ate-api-server
+    participant Atelet as atelet
+    participant Ateom as ateom
+    participant Store as snapshot storage
+
+    Client->>DNS: resolve actor DNS name
+    DNS-->>Client: router address
+    Client->>Router: HTTP request (Host = actor)
+    Router->>API: ResumeActor(actorID)
+    API->>Atelet: Restore
+    Store-->>Atelet: download snapshot
+    Atelet->>Ateom: RestoreWorkload
+    Note over Ateom: runsc restore
+    Ateom-->>Atelet: ready
+    Atelet-->>API: worker pod IP
+    API-->>Router: worker pod IP
+    Router->>Ateom: proxy request to worker pod
+    Ateom-->>Router: response
+    Router-->>Client: response
+    Note over API,Store: later: an explicit SuspendActor checkpoints back to storage and frees the worker
+```
+
+An Actor's `status` moves through these states (UML state machine diagram):
+
+```mermaid
+stateDiagram-v2
+    [*] --> SUSPENDED : CreateActor
+    SUSPENDED --> RESUMING : ResumeActor
+    RESUMING --> RUNNING : restore / boot complete
+    RUNNING --> SUSPENDING : SuspendActor
+    SUSPENDING --> SUSPENDED : checkpoint complete
+    SUSPENDED --> [*] : DeleteActor
+```
 
 ### Phase 1: Creation (`CreateActor`)
 
