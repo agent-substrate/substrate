@@ -64,6 +64,11 @@ const (
 	ClusterName          = "ate-cluster"
 )
 
+// defaultExtProcMessageTimeout is Envoy's per-message ext_proc response timeout
+// when request parking is off. With parking on it must cover the park budget,
+// otherwise Envoy abandons a parked request (500) long before the router does.
+const defaultExtProcMessageTimeout = 5 * time.Second
+
 // XdsServer implements an aggregated discovery service server for dynamic Envoy router nodes.
 type XdsServer struct {
 	xdsPort      int
@@ -80,6 +85,10 @@ type XdsServer struct {
 	certPath    string
 	certContent string
 	keyContent  string
+
+	// extProcMessageTimeout bounds how long Envoy waits for the router's ext_proc
+	// response. Must be >= the parking budget so parked requests aren't cut short.
+	extProcMessageTimeout time.Duration
 }
 
 func NewXdsServer(xdsPort int) *XdsServer {
@@ -87,12 +96,13 @@ func NewXdsServer(xdsPort int) *XdsServer {
 	srv := serverv3.NewServer(context.Background(), cache, nil)
 
 	return &XdsServer{
-		xdsPort:     xdsPort,
-		snapshot:    cache,
-		srv:         srv,
-		extprocPort: 50051, // matches default extproc port
-		extprocAddr: "127.0.0.1",
-		ingressPort: 8080,
+		xdsPort:               xdsPort,
+		snapshot:              cache,
+		srv:                   srv,
+		extprocPort:           50051, // matches default extproc port
+		extprocAddr:           "127.0.0.1",
+		ingressPort:           8080,
+		extProcMessageTimeout: defaultExtProcMessageTimeout,
 	}
 }
 
@@ -102,6 +112,18 @@ func (x *XdsServer) SetConfig(ingressPort int, extprocPort int, extprocAddr stri
 	x.ingressPort = ingressPort
 	x.extprocPort = extprocPort
 	x.extprocAddr = extprocAddr
+}
+
+// SetExtProcMessageTimeout sets how long Envoy waits for the router's ext_proc
+// response. Call with (parking budget + margin) when parking is enabled so
+// Envoy keeps a parked request open until the router itself decides. A
+// non-positive value leaves the default unchanged.
+func (x *XdsServer) SetExtProcMessageTimeout(d time.Duration) {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	if d > 0 {
+		x.extProcMessageTimeout = d
+	}
 }
 
 func (x *XdsServer) SetTlsConfig(httpsPort int, certPath string, certContent string, keyContent string) {
@@ -304,13 +326,15 @@ func (x *XdsServer) buildHcm(statPrefix string) *anypb.Any {
 					ClusterName: ClusterName,
 				},
 			},
-			Timeout: durationpb.New(5 * time.Second),
+			Timeout: durationpb.New(x.extProcMessageTimeout),
 		},
 		MutationRules: &mutationrulesv3.HeaderMutationRules{
 			AllowAllRouting: &wrapperspb.BoolValue{Value: true},
 		},
-		// Explicitly configure the message timeout to avoid the 200ms default
-		MessageTimeout: durationpb.New(5 * time.Second),
+		// Bound how long Envoy waits for the router's ext_proc response. Must
+		// cover the parking budget (see SetExtProcMessageTimeout): a parked
+		// request is held open here until the router itself resolves or sheds it.
+		MessageTimeout: durationpb.New(x.extProcMessageTimeout),
 		ProcessingMode: &extprocv3filter.ProcessingMode{
 			RequestHeaderMode:   extprocv3filter.ProcessingMode_SEND,
 			ResponseHeaderMode:  extprocv3filter.ProcessingMode_SKIP,
