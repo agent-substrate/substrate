@@ -30,12 +30,16 @@ const (
 	defaultParkingMaxParked = 2048
 )
 
-// Parking-wait outcome labels, recorded on the parking.wait.duration histogram.
+// parkOutcome is the terminal disposition of a parked request. It is recorded
+// as the `outcome` label on the parking.wait.duration histogram.
+type parkOutcome string
+
+// Park-wait outcomes, recorded on the parking.wait.duration histogram.
 const (
-	parkOutcomeServed   = "served"   // resume succeeded and the request was routed
-	parkOutcomeTimeout  = "timeout"  // the request's deadline elapsed while parked
-	parkOutcomeCanceled = "canceled" // the client disconnected while parked
-	parkOutcomeError    = "error"    // resume failed (including park-budget exhaustion)
+	parkOutcomeServed   parkOutcome = "served"   // resume succeeded and the request was routed
+	parkOutcomeTimeout  parkOutcome = "timeout"  // the request's deadline elapsed while parked
+	parkOutcomeCanceled parkOutcome = "canceled" // the client disconnected while parked
+	parkOutcomeError    parkOutcome = "error"    // resume failed (including park-budget exhaustion)
 )
 
 // parkingConfig controls how the router parks resume-gated requests.
@@ -87,9 +91,9 @@ func newParkingLot(cfg parkingConfig, m *parkingMetrics) *parkingLot {
 // ok=false means the lot is full and the request should be shed without
 // waiting. When parking is disabled every request is admitted and no slot
 // accounting or metrics are recorded.
-func (l *parkingLot) enter(ctx context.Context) (release func(outcome string), ok bool) {
+func (l *parkingLot) enter(ctx context.Context) (release func(outcome parkOutcome), ok bool) {
 	if l == nil || !l.cfg.enabled {
-		return func(string) {}, true
+		return func(parkOutcome) {}, true
 	}
 
 	for {
@@ -108,7 +112,7 @@ func (l *parkingLot) enter(ctx context.Context) (release func(outcome string), o
 	l.metrics.addActive(ctx, 1)
 
 	var once sync.Once
-	return func(outcome string) {
+	return func(outcome parkOutcome) {
 		once.Do(func() {
 			atomic.AddInt64(&l.active, -1)
 			l.metrics.addActive(ctx, -1)
@@ -138,10 +142,10 @@ func (l *parkingLot) status() ParkingStatus {
 	}
 }
 
-// parkOutcome classifies a completed resume attempt for the wait-duration
+// parkOutcomeFor classifies a completed resume attempt for the wait-duration
 // metric. A budget-exhausted park surfaces the underlying capacity error and is
 // reported as parkOutcomeError.
-func parkOutcome(err error) string {
+func parkOutcomeFor(err error) parkOutcome {
 	switch {
 	case err == nil:
 		return parkOutcomeServed

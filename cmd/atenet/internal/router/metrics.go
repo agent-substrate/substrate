@@ -115,11 +115,11 @@ func (m *parkingMetrics) addActive(ctx context.Context, delta int64) {
 	m.active.Add(ctx, delta)
 }
 
-func (m *parkingMetrics) recordWait(ctx context.Context, d time.Duration, outcome string) {
+func (m *parkingMetrics) recordWait(ctx context.Context, d time.Duration, outcome parkOutcome) {
 	if m == nil || m.wait == nil {
 		return
 	}
-	m.wait.Record(ctx, d.Seconds(), metric.WithAttributes(attribute.String("outcome", outcome)))
+	m.wait.Record(ctx, d.Seconds(), metric.WithAttributes(attribute.String("outcome", string(outcome))))
 }
 
 func (m *parkingMetrics) recordRejected(ctx context.Context) {
