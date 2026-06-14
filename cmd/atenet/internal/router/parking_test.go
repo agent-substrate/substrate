@@ -111,7 +111,7 @@ func TestParkingLot_ConcurrentEntryRespectsCapacity(t *testing.T) {
 
 	var admitted int64
 	var mu sync.Mutex
-	releases := make([]func(string), 0, capacity)
+	releases := make([]func(parkOutcome), 0, capacity)
 
 	var wg sync.WaitGroup
 	wg.Add(goroutines)
@@ -142,11 +142,11 @@ func TestParkingLot_ConcurrentEntryRespectsCapacity(t *testing.T) {
 	}
 }
 
-func TestParkOutcome(t *testing.T) {
+func TestParkOutcomeFor(t *testing.T) {
 	tests := []struct {
 		name string
 		err  error
-		want string
+		want parkOutcome
 	}{
 		{"nil is served", nil, parkOutcomeServed},
 		{"canceled", context.Canceled, parkOutcomeCanceled},
@@ -155,8 +155,8 @@ func TestParkOutcome(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := parkOutcome(tc.err); got != tc.want {
-				t.Errorf("parkOutcome(%v) = %q, want %q", tc.err, got, tc.want)
+			if got := parkOutcomeFor(tc.err); got != tc.want {
+				t.Errorf("parkOutcomeFor(%v) = %q, want %q", tc.err, got, tc.want)
 			}
 		})
 	}

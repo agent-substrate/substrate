@@ -149,7 +149,7 @@ func (s *ExtProcServer) handleRequestHeaders(
 
 	slog.InfoContext(ctx, "ResumeActor", slog.String("actorID", actorID))
 	actor, err := s.resumer.ResumeActor(ctx, actorID)
-	release(parkOutcome(err))
+	release(parkOutcomeFor(err))
 
 	slog.InfoContext(ctx, "ResumeActor result",
 		slog.String("actor", fmt.Sprintf("%+v", actor)),
