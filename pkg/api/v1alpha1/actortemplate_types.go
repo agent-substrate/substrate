@@ -168,6 +168,13 @@ type ActorTemplateSpec struct {
 	//
 	// +required
 	Runsc RunscConfig `json:"runsc,omitempty"`
+
+	// GoldenSnapshotWait is how long to wait after the golden actor resumes
+	// before taking the snapshot. Slow-booting workloads
+	// may need longer than the 20-second default.
+	//
+	// +optional
+	GoldenSnapshotWait *metav1.Duration `json:"goldenSnapshotWait,omitempty"`
 }
 
 type GCPAuthenticationConfig struct {
