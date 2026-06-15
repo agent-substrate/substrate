@@ -218,8 +218,9 @@ func TestActorResumer_Parking(t *testing.T) {
 			},
 		}
 
-		// Short budget so the test is fast; the pool never frees up.
-		resumer := NewActorResumer(mock, withParking(true, 250*time.Millisecond))
+		// Budget large enough for a few ~500ms-spaced retries before it elapses;
+		// the pool never frees up.
+		resumer := NewActorResumer(mock, withParking(true, 1500*time.Millisecond))
 		_, err := resumer.ResumeActor(context.Background(), testActorID)
 		// The client must see the meaningful capacity error, not a generic timeout.
 		if got := status.Code(err); got != codes.FailedPrecondition {
@@ -256,4 +257,18 @@ func TestActorResumer_Parking(t *testing.T) {
 			t.Errorf("expected exactly 1 resume attempt when parking disabled, got %d", calls)
 		}
 	})
+}
+
+func TestResumeBackoffHasNoCap(t *testing.T) {
+	// Regression: the resume backoff must NOT set wait.Backoff.Cap. delay() zeroes
+	// Steps the moment the delay reaches Cap, which would end parking retries far
+	// short of the budget (a 2s Cap stops the loop in ~7 steps / ~5s). The budget
+	// context — not the step count or a cap — must bound how long a request parks.
+	b := resumeBackoff()
+	if b.Cap != 0 {
+		t.Errorf("resume backoff must not set Cap (it would stop retries at the cap); got %v", b.Cap)
+	}
+	if b.Steps < 1<<20 {
+		t.Errorf("resume backoff Steps must be high so the budget bounds the wait; got %d", b.Steps)
+	}
 }

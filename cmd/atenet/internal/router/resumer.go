@@ -32,6 +32,30 @@ import (
 // behavior (only concurrent-update conflicts are retried).
 const legacyResumeBudget = 15 * time.Second
 
+// Retry cadence between resume attempts: a gentle exponential backoff.
+const (
+	resumeBackoffBase   = 500 * time.Millisecond
+	resumeBackoffFactor = 1.1
+	resumeBackoffJitter = 0.1
+)
+
+// resumeBackoff is the backoff between resume attempts while a request is parked.
+//
+// It intentionally sets NO Cap. wait.Backoff's delay() zeroes Steps the moment
+// the delay reaches Cap, which would end retries long before the parking budget
+// (a Cap of 2s stops the loop in ~7 steps / ~5s regardless of the budget). A
+// gentle Factor keeps the gap small on its own — from 500ms it only grows to
+// ~3.5s over a 30s budget — while Steps is set high so the budget context passed
+// to ExponentialBackoffWithContext, not the step count, bounds the wait.
+func resumeBackoff() wait.Backoff {
+	return wait.Backoff{
+		Steps:    math.MaxInt32,
+		Duration: resumeBackoffBase,
+		Factor:   resumeBackoffFactor,
+		Jitter:   resumeBackoffJitter,
+	}
+}
+
 // ActorResumer coordinates safe, deduplicated resumption of actors.
 type ActorResumer struct {
 	apiClient ateapipb.ControlClient
@@ -102,15 +126,7 @@ func (r *ActorResumer) ResumeActor(ctx context.Context, actorID string) (*ateapi
 		bgCtx, bgCancel := context.WithTimeout(context.Background(), r.budget)
 		defer bgCancel()
 
-		// Retry with capped exponential backoff until the budget (bgCtx) elapses;
-		// Steps is set high so the budget, not the step count, bounds the wait.
-		backoff := wait.Backoff{
-			Steps:    math.MaxInt32,
-			Duration: 200 * time.Millisecond,
-			Factor:   1.5,
-			Jitter:   0.2,
-			Cap:      2 * time.Second,
-		}
+		backoff := resumeBackoff()
 
 		var resumeResp *ateapipb.ResumeActorResponse
 		var lastRetryErr error
@@ -132,11 +148,10 @@ func (r *ActorResumer) ResumeActor(ctx context.Context, actorID string) (*ateapi
 		})
 
 		if err != nil {
-			// If the budget elapsed (DeadlineExceeded) or steps ran out
-			// (wait.Interrupted) while we were still retrying a transient error,
-			// surface that underlying error rather than the generic wait error so
-			// the HTTP boundary maps it faithfully (e.g. 503 "no free workers
-			// available") instead of a misleading timeout.
+			// If the budget elapsed (DeadlineExceeded) while we were still retrying a
+			// transient error, surface that underlying error rather than the generic
+			// wait error so the HTTP boundary maps it faithfully (e.g. 503 "no free
+			// workers available") instead of a misleading timeout.
 			if lastRetryErr != nil && (errors.Is(err, context.DeadlineExceeded) || wait.Interrupted(err)) {
 				return nil, lastRetryErr
 			}
