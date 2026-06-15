@@ -14,15 +14,14 @@
 package main
 
 import (
-	"crypto/tls"
 	"os"
 
 	"github.com/agent-substrate/substrate/cmd/atecontroller/internal/controllers"
+	"github.com/agent-substrate/substrate/internal/ateapiauth"
 	clientv1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/spf13/pflag"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -39,6 +38,11 @@ var (
 	setupLog = ctrl.Log.WithName("setup")
 
 	ateAPIConnSpec = pflag.String("ateapi-conn-spec", "dns:///api.ate-system.svc:443", "")
+
+	ateapiAuthMode   = pflag.String("ateapi-auth", "mtls", "Client auth to ateapi: mtls|jwt. 'mtls' (default) dials with insecure TLS and relies on pod-projected mTLS credentials for identity. 'jwt' verifies the server cert and sends a Bearer SA token.")
+	ateapiCAFile     = pflag.String("ateapi-ca-file", ateapiauth.DefaultServiceAccountCAFile, "PEM file with CAs trusted to verify the ateapi server cert. Required for jwt.")
+	ateapiServerName = pflag.String("ateapi-server-name", "", "SNI / hostname expected on the ateapi server cert. Optional.")
+	ateapiTokenFile  = pflag.String("ateapi-token-file", ateapiauth.DefaultServiceAccountTokenFile, "Projected SA token file used as Bearer credential. Required for jwt.")
 )
 
 func init() {
@@ -47,15 +51,27 @@ func init() {
 }
 
 func main() {
+	pflag.Parse()
 	ctrl.SetLogger(zap.New(zap.UseDevMode(true)))
 
-	// TODO: Verify server certificate, pass client certificate.
-	clientTLSConfig := &tls.Config{
-		InsecureSkipVerify: true, // Temporarily bypass standard checks
+	mode, err := ateapiauth.ParseMode(*ateapiAuthMode)
+	if err != nil {
+		setupLog.Error(err, "invalid --ateapi-auth")
+		os.Exit(1)
 	}
-	clientCreds := credentials.NewTLS(clientTLSConfig)
 
-	ateapiConn, err := grpc.NewClient(*ateAPIConnSpec, grpc.WithTransportCredentials(clientCreds))
+	dialOpts, err := ateapiauth.DialOptions(ateapiauth.ClientConfig{
+		Mode:       mode,
+		CAFile:     *ateapiCAFile,
+		ServerName: *ateapiServerName,
+		TokenFile:  *ateapiTokenFile,
+	})
+	if err != nil {
+		setupLog.Error(err, "building ateapi dial options")
+		os.Exit(1)
+	}
+
+	ateapiConn, err := grpc.NewClient(*ateAPIConnSpec, dialOpts...)
 	if err != nil {
 		setupLog.Error(err, "Error creating grpc connection to ate api")
 		os.Exit(1)

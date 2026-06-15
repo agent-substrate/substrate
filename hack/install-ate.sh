@@ -63,6 +63,7 @@ function usage() {
   echo "  --deploy-ate-system                    Deploy core system (CRDs, atelet, apiserver)"
   echo "  --delete-ate-system                    Delete core system"
   echo "  --delete-all                           Delete core system and all registered demos"
+  echo "  --auth-mode=mtls|jwt                   Select ateapi auth mode for --deploy-ate-system (default: mtls)"
   echo ""
   echo "Infrastructure components:"
   echo ""
@@ -114,6 +115,40 @@ run_ko() {
       ./hack/run-tool.sh ko "$@"
       ;;
   esac
+}
+
+ate_auth_mode() {
+  case "${ATE_API_AUTH_MODE:-mtls}" in
+    mtls|jwt)
+      echo "${ATE_API_AUTH_MODE:-mtls}"
+      ;;
+    *)
+      echo "Error: ATE_API_AUTH_MODE must be mtls or jwt, got '${ATE_API_AUTH_MODE}'" >&2
+      exit 1
+      ;;
+  esac
+}
+
+render_ate_system_manifests() {
+  local auth_mode=""
+  auth_mode="$(ate_auth_mode)"
+
+  if [[ "${auth_mode}" == "jwt" ]]; then
+    local overlay="manifests/ate-install/jwt"
+    if [[ "${ATE_INSTALL_KIND:-false}" == "true" ]]; then
+      overlay="manifests/ate-install/kind-jwt"
+    fi
+    kubectl kustomize "${overlay}" --load-restrictor LoadRestrictionsNone | run_ko resolve -f -
+    return
+  fi
+
+  if [[ "${ATE_INSTALL_KIND:-false}" == "true" ]]; then
+    # Build everything resolved with Kustomize for Kind
+    kubectl kustomize manifests/ate-install/kind --load-restrictor LoadRestrictionsNone | run_ko resolve -f -
+  else
+    # Build everything resolved with base manifests for GKE
+    run_ko resolve -f manifests/ate-install
+  fi
 }
 
 create_valkey_ca_certs_secret() {
@@ -248,13 +283,7 @@ deploy_ate_system() {
   done
 
   local manifests=""
-  if [[ "${ATE_INSTALL_KIND:-false}" == "true" ]]; then
-    # Build everything resolved with Kustomize for Kind
-    manifests=$(kubectl kustomize manifests/ate-install/kind --load-restrictor LoadRestrictionsNone | run_ko resolve -f -)
-  else
-    # Build everything resolved with base manifests for GKE
-    manifests=$(run_ko resolve -f manifests/ate-install)
-  fi
+  manifests="$(render_ate_system_manifests)"
   echo "${manifests}" | run_kubectl apply -f -
 
   log_step "Waiting for ATE system components to be ready..."
@@ -370,6 +399,20 @@ for arg in "$@"; do
   esac
 done
 
+args=("$@")
+for ((i = 0; i < ${#args[@]}; i++)); do
+  case "${args[$i]}" in
+    --auth-mode=*) ATE_API_AUTH_MODE="${args[$i]#*=}" ;;
+    --auth-mode)
+      if (( i + 1 >= ${#args[@]} )); then
+        echo "Error: --auth-mode requires mtls or jwt" >&2
+        exit 1
+      fi
+      ATE_API_AUTH_MODE="${args[$((i + 1))]}"
+      ;;
+  esac
+done
+
 while [[ "$#" -gt 0 ]]; do
   # Run ${demo}_cmdline if it exists. If it returns 0, then we successfully
   # handled this argument and can continue. Otherwise, fallthrough to check
@@ -384,6 +427,16 @@ while [[ "$#" -gt 0 ]]; do
   done
 
   case $1 in
+    --auth-mode=*) ATE_API_AUTH_MODE="${1#*=}" ;;
+    --auth-mode)
+      shift
+      if [[ "$#" -eq 0 ]]; then
+        echo "Error: --auth-mode requires mtls or jwt" >&2
+        exit 1
+      fi
+      ATE_API_AUTH_MODE="$1"
+      ;;
+
     --deploy-ate-system) deploy_ate_system ;;
     --delete-ate-system) delete_ate_system ;;
     --delete-all) delete_all ;;

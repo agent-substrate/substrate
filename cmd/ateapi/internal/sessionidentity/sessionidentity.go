@@ -21,6 +21,7 @@ import (
 	"crypto/x509/pkix"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"net/url"
 	"os"
 	"path"
@@ -51,17 +52,19 @@ type Server struct {
 	sessionIDCAPoolFile  string
 
 	workerCACerts string
+	httpClient    *http.Client
 }
 
 var _ ateapipb.SessionIdentityServer = (*Server)(nil)
 
-func New(clientJWTIssuer, clientJWTAudience, sessionIDJWTPoolFile, sessionIDCAPoolFile, workerCACerts string) *Server {
+func New(clientJWTIssuer, clientJWTAudience, sessionIDJWTPoolFile, sessionIDCAPoolFile, workerCACerts string, httpClient *http.Client) *Server {
 	return &Server{
 		clientJWTIssuer:      clientJWTIssuer,
 		clientJWTAudience:    clientJWTAudience,
 		sessionIDJWTPoolFile: sessionIDJWTPoolFile,
 		sessionIDCAPoolFile:  sessionIDCAPoolFile,
 		workerCACerts:        workerCACerts,
+		httpClient:           httpClient,
 	}
 }
 
@@ -78,7 +81,7 @@ func (s *Server) MintJWT(ctx context.Context, req *ateapipb.MintJWTRequest) (*at
 
 	clientJWT := strings.TrimPrefix(authorization[0], "Bearer ")
 
-	clientClaims, err := k8sjwt.Verify(ctx, clientJWT, s.clientJWTIssuer, s.clientJWTAudience, time.Now())
+	clientClaims, err := k8sjwt.Verify(ctx, s.httpClient, clientJWT, s.clientJWTIssuer, s.clientJWTAudience, time.Now())
 	if err != nil {
 		slog.ErrorContext(ctx, "Error while verifying client JWT", slog.Any("err", err))
 		return nil, status.Errorf(codes.Unauthenticated, "Unauthenticated")

@@ -18,8 +18,12 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
+	"encoding/pem"
+	"math/big"
 	"strings"
 	"testing"
 	"time"
@@ -195,6 +199,53 @@ func TestMarshalUnmarshalWithIntermediates(t *testing.T) {
 	intermPubFromCert := restoredInterm.PublicKey.(ed25519.PublicKey)
 	if !bytes.Equal(intermPubFromCert, intermPub) {
 		t.Error("intermediate cert public key does not match generated key pair")
+	}
+}
+
+func TestUnmarshalPEMPool(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("GenerateKey(): %v", err)
+	}
+	template := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "session-id-ca"},
+		NotBefore:             time.Now(),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign,
+	}
+	certDER, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("CreateCertificate(): %v", err)
+	}
+	keyPEM := string(pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)}))
+	certPEM := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER}))
+
+	data, err := json.Marshal(&serializedPool{
+		CAs: []*serializedCA{{
+			ID:                 "1",
+			SigningKeyPEM:      keyPEM,
+			RootCertificatePEM: certPEM,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Marshal(): %v", err)
+	}
+
+	pool, err := Unmarshal(data)
+	if err != nil {
+		t.Fatalf("Unmarshal(): %v", err)
+	}
+	if len(pool.CAs) != 1 {
+		t.Fatalf("CAs length = %d, want 1", len(pool.CAs))
+	}
+	if _, ok := pool.CAs[0].SigningKey.(*rsa.PrivateKey); !ok {
+		t.Fatalf("SigningKey type = %T, want *rsa.PrivateKey", pool.CAs[0].SigningKey)
+	}
+	if pool.CAs[0].RootCertificate.Subject.CommonName != "session-id-ca" {
+		t.Fatalf("RootCertificate CN = %q, want session-id-ca", pool.CAs[0].RootCertificate.Subject.CommonName)
 	}
 }
 
