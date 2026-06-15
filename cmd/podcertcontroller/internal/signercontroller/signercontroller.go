@@ -21,7 +21,7 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/rendezvous"
+	"github.com/agent-substrate/substrate/cmd/podcertcontroller/internal/rendezvous"
 	certsv1beta1 "k8s.io/api/certificates/v1beta1"
 	apiequality "k8s.io/apimachinery/pkg/api/equality"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"

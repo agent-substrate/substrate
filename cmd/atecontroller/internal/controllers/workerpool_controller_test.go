@@ -49,7 +49,7 @@ var (
 )
 
 func TestMain(m *testing.M) {
-	cmd := exec.Command("bash", "../../hack/run-tool.sh", "setup-envtest", "use", "--print", "path")
+	cmd := exec.Command("bash", "../../../../hack/run-tool.sh", "setup-envtest", "use", "--print", "path")
 	out, err := cmd.Output()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "setup-envtest failed: %v\n", err)
@@ -58,7 +58,7 @@ func TestMain(m *testing.M) {
 	binaryAssetsDirectory := strings.TrimSpace(string(out))
 
 	testEnv = &envtest.Environment{
-		CRDDirectoryPaths:     []string{"../../manifests/ate-install/generated"},
+		CRDDirectoryPaths:     []string{"../../../../manifests/ate-install/generated"},
 		BinaryAssetsDirectory: binaryAssetsDirectory,
 	}
 

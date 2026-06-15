@@ -17,7 +17,7 @@ import (
 	"crypto/tls"
 	"os"
 
-	"github.com/agent-substrate/substrate/internal/controllers"
+	"github.com/agent-substrate/substrate/cmd/atecontroller/internal/controllers"
 	clientv1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/spf13/pflag"
