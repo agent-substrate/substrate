@@ -132,6 +132,8 @@ spec:
         - "--port-extproc=50051"
         - "--extproc-address=127.0.0.1"
         - "--ateapi-address=api.ate-system.svc:443"
+        - "--ateapi-client-cert=/run/podidentity.podcert.ate.dev/credential-bundle.pem"
+        - "--ateapi-ca-certs=/run/servicedns-ca.podcert.ate.dev/trust-bundle.pem"
         - "--status-port=4040"
         - "--port-https=8443"
         - "--envoy-cert-path=/run/servicedns.podcert.ate.dev/credential-bundle.pem"
@@ -161,6 +163,13 @@ spec:
           containerPort: 4040
         - name: metrics
           containerPort: 9090
+        volumeMounts:
+        # Router's own client identity presented to ateapi.
+        - name: "podidentity"
+          mountPath: "/run/podidentity.podcert.ate.dev"
+        # Trust bundle used to verify ateapi's servicedns serving cert.
+        - name: "servicedns-ca"
+          mountPath: "/run/servicedns-ca.podcert.ate.dev"
       - name: envoy
         image: envoyproxy/envoy:v1.30-latest
         command:
@@ -192,6 +201,22 @@ spec:
               signerName: servicedns.podcert.ate.dev/identity
               keyType: ECDSAP256
               credentialBundlePath: credential-bundle.pem
+      - name: "podidentity"
+        projected:
+          sources:
+          - podCertificate:
+              signerName: podidentity.podcert.ate.dev/identity
+              keyType: ECDSAP256
+              credentialBundlePath: credential-bundle.pem
+      - name: "servicedns-ca"
+        projected:
+          sources:
+          - clusterTrustBundle:
+              signerName: servicedns.podcert.ate.dev/identity
+              labelSelector:
+                matchLabels:
+                  podcert.ate.dev/canarying: live
+              path: trust-bundle.pem
 ---
 apiVersion: v1
 kind: Service

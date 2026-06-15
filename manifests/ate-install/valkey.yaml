@@ -28,6 +28,8 @@ data:
     # Load certificates from projected volume
     tls-cert-file /run/servicedns.podcert.ate.dev/credential-bundle.pem
     tls-key-file /run/servicedns.podcert.ate.dev/credential-bundle.pem
+    tls-client-cert-file /run/podidentity.podcert.ate.dev/credential-bundle.pem
+    tls-client-key-file /run/podidentity.podcert.ate.dev/credential-bundle.pem
     tls-ca-cert-file /etc/valkey-ca/ca.crt
     tls-auth-clients yes
 
@@ -112,6 +114,8 @@ spec:
           mountPath: /etc/valkey
         - name: servicedns
           mountPath: /run/servicedns.podcert.ate.dev
+        - name: podidentity
+          mountPath: /run/podidentity.podcert.ate.dev
         - name: valkey-ca-certs
           mountPath: /etc/valkey-ca
           readOnly: true
@@ -126,6 +130,13 @@ spec:
           sources:
           - podCertificate:
               signerName: servicedns.podcert.ate.dev/identity
+              keyType: ECDSAP256
+              credentialBundlePath: credential-bundle.pem
+      - name: podidentity
+        projected:
+          sources:
+          - podCertificate:
+              signerName: podidentity.podcert.ate.dev/identity
               keyType: ECDSAP256
               credentialBundlePath: credential-bundle.pem
       - name: valkey-ca-certs
@@ -161,8 +172,11 @@ spec:
       - name: init
         image: valkey/valkey:8.0
         volumeMounts:
-        - name: servicedns
-          mountPath: /run/servicedns.podcert.ate.dev
+        # The init job is a client of the cluster, not a Service-backed server,
+        # so it uses a podidentity client cert rather than a servicedns
+        # serving cert (which requires DNS SANs it would not have).
+        - name: podidentity
+          mountPath: /run/podidentity.podcert.ate.dev
         - name: valkey-ca-certs
           mountPath: /etc/valkey-ca
           readOnly: true
@@ -186,19 +200,19 @@ spec:
           done
 
           echo "Checking if Valkey cluster is already initialized..."
-          until valkey-cli --tls --cacert /etc/valkey-ca/ca.crt --cert /run/servicedns.podcert.ate.dev/credential-bundle.pem --key /run/servicedns.podcert.ate.dev/credential-bundle.pem -h valkey-cluster-0.valkey-cluster-service.ate-system.svc ping >/dev/null 2>&1; do
+          until valkey-cli --tls --cacert /etc/valkey-ca/ca.crt --cert /run/podidentity.podcert.ate.dev/credential-bundle.pem --key /run/podidentity.podcert.ate.dev/credential-bundle.pem -h valkey-cluster-0.valkey-cluster-service.ate-system.svc ping >/dev/null 2>&1; do
             echo "Waiting for valkey-cluster-0 to respond to ping..."
             sleep 2
           done
 
-          INIT_STATUS=$(valkey-cli --tls --cacert /etc/valkey-ca/ca.crt --cert /run/servicedns.podcert.ate.dev/credential-bundle.pem --key /run/servicedns.podcert.ate.dev/credential-bundle.pem -h valkey-cluster-0.valkey-cluster-service.ate-system.svc cluster info 2>/dev/null | grep cluster_state || true)
+          INIT_STATUS=$(valkey-cli --tls --cacert /etc/valkey-ca/ca.crt --cert /run/podidentity.podcert.ate.dev/credential-bundle.pem --key /run/podidentity.podcert.ate.dev/credential-bundle.pem -h valkey-cluster-0.valkey-cluster-service.ate-system.svc cluster info 2>/dev/null | grep cluster_state || true)
 
           if [ -z "${INIT_STATUS}" ] || ! echo "${INIT_STATUS}" | grep -q "cluster_state:ok"; then
             echo "Initializing Valkey cluster..."
             valkey-cli --tls \
               --cacert /etc/valkey-ca/ca.crt \
-              --cert /run/servicedns.podcert.ate.dev/credential-bundle.pem \
-              --key /run/servicedns.podcert.ate.dev/credential-bundle.pem \
+              --cert /run/podidentity.podcert.ate.dev/credential-bundle.pem \
+              --key /run/podidentity.podcert.ate.dev/credential-bundle.pem \
               --cluster create ${VALKEY_NODES} \
               --cluster-replicas 1 \
               --cluster-yes
@@ -207,11 +221,11 @@ spec:
             echo "Cluster already initialized."
           fi
       volumes:
-      - name: servicedns
+      - name: podidentity
         projected:
           sources:
           - podCertificate:
-              signerName: servicedns.podcert.ate.dev/identity
+              signerName: podidentity.podcert.ate.dev/identity
               keyType: ECDSAP256
               credentialBundlePath: credential-bundle.pem
       - name: valkey-ca-certs

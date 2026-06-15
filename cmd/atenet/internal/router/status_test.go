@@ -16,12 +16,20 @@ package router
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"io"
+	"math/big"
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -47,14 +55,19 @@ func TestStatuszEndpoint(t *testing.T) {
 	defer os.Remove(tmpFile.Name())
 	tmpFile.Close()
 
+	// NewRouterServer requires ateapi mTLS material; generate it for the test.
+	caPath, clientCertPath := writeTestTLSMaterial(t)
+
 	cfg := RouterConfig{
-		Standalone:    true,
-		Namespace:     "default",
-		StatusPort:    httpPort,
-		HttpPort:      8080,
-		XdsPort:       18000,
-		ExtprocPort:   50051,
-		TemplatesFile: tmpFile.Name(),
+		Standalone:           true,
+		Namespace:            "default",
+		StatusPort:           httpPort,
+		HttpPort:             8080,
+		XdsPort:              18000,
+		ExtprocPort:          50051,
+		TemplatesFile:        tmpFile.Name(),
+		AteapiCACertsPath:    caPath,
+		AteapiClientCertPath: clientCertPath,
 	}
 
 	srv, err := NewRouterServer(cfg)
@@ -139,4 +152,45 @@ func TestStatuszEndpoint(t *testing.T) {
 	if dashboard.Queries[0].Target != "10.0.0.5" {
 		t.Errorf("Target parameters unassigned inside context payload context properties: found %s", dashboard.Queries[0].Target)
 	}
+}
+
+// writeTestTLSMaterial generates a self-signed certificate and writes a CA trust
+// bundle and a client credential bundle to temp files, returning their paths.
+// NewRouterServer requires both to build its ateapi mTLS credentials.
+func writeTestTLSMaterial(t *testing.T) (caPath, clientCertPath string) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generating key: %v", err)
+	}
+	template := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "test-ca"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("creating certificate: %v", err)
+	}
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatalf("marshaling key: %v", err)
+	}
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
+
+	dir := t.TempDir()
+	caPath = filepath.Join(dir, "ca.pem")
+	if err := os.WriteFile(caPath, certPEM, 0o600); err != nil {
+		t.Fatalf("writing CA file: %v", err)
+	}
+	clientCertPath = filepath.Join(dir, "client.pem")
+	if err := os.WriteFile(clientCertPath, append(certPEM, keyPEM...), 0o600); err != nil {
+		t.Fatalf("writing client cert file: %v", err)
+	}
+	return caPath, clientCertPath
 }

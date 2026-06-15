@@ -116,17 +116,27 @@ run_ko() {
   esac
 }
 
-create_valkey_ca_certs_secret() {
-  log_step "create_valkey_ca_certs_secret"
-  local ca_certs=""
-  # Extract from in-cluster service-dns-ca-pool secret (base64 json)
+# Extract a CA pool secret's RootCertificateDER and emit it as a PEM certificate.
+ca_pool_root_pem() {
+  local secret="$1"
   local pool_json=""
-  pool_json=$(run_kubectl get secret -n podcertificate-controller-system service-dns-ca-pool -o jsonpath='{.data.pool}' | base64 --decode)
-  # Extract RootCertificateDER base64 string
+  pool_json=$(run_kubectl get secret -n podcertificate-controller-system "${secret}" -o jsonpath='{.data.pool}' | base64 --decode)
   local der_base64=""
   der_base64=$(echo "${pool_json}" | grep -o '"RootCertificateDER":"[^"]*' | sed 's/"RootCertificateDER":"//')
-  # Convert DER to PEM certificate
-  ca_certs=$(echo "${der_base64}" | base64 --decode | openssl x509 -inform der -outform pem)
+  echo "${der_base64}" | base64 --decode | openssl x509 -inform der -outform pem
+}
+
+create_valkey_ca_certs_secret() {
+  log_step "create_valkey_ca_certs_secret"
+  # valkey requires a single tls-ca-cert-file to verify client and server certs it sees,
+  # so it needs both CAs:
+  #   - servicedns CA: verifies valkey peers' server certs.
+  #   - podidentity CA: verifies the client certs that connect to valkey
+  #     (apiserver, the init job, and peers acting as clients).
+  local ca_certs=""
+  ca_certs=$(printf '%s\n%s\n' \
+    "$(ca_pool_root_pem service-dns-ca-pool)" \
+    "$(ca_pool_root_pem pod-identity-ca-pool)")
 
   run_kubectl create secret generic valkey-ca-certs \
     --from-literal=ca.crt="${ca_certs}" \
@@ -176,7 +186,9 @@ create_api_server_env_vars() {
   redis_address="valkey-cluster.ate-system.svc:6379"
   use_iam_auth="false"
   tls_server_name="valkey-cluster.ate-system.svc"
-  client_cert="/run/servicedns.podcert.ate.dev/credential-bundle.pem"
+  # The apiserver dials valkey as a client, so it presents a podidentity
+  # (SPIFFE) client cert rather than a servicedns serving cert.
+  client_cert="/run/podidentity.podcert.ate.dev/credential-bundle.pem"
 
   echo "REDIS_ADDRESS: ${redis_address}"
 

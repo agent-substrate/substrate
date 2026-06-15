@@ -16,16 +16,11 @@ package router
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
-	"crypto/x509/pkix"
-	"encoding/pem"
 	"errors"
 	"fmt"
 	"log/slog"
-	"math/big"
 	"net"
 	"net/http"
 	"os"
@@ -46,6 +41,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 
+	"github.com/agent-substrate/substrate/internal/credbundle"
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	v1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -62,22 +58,24 @@ func init() {
 
 // RouterConfig holds deployment setup and endpoint options for the router node instance.
 type RouterConfig struct {
-	Standalone     bool
-	Namespace      string
-	Kubeconfig     string
-	AteapiAddr     string
-	HttpPort       int
-	XdsPort        int
-	ExtprocPort    int
-	ExtprocAddr    string
-	EnvoyImage     string
-	TemplatesFile  string
-	StatusPort     int
-	HealthInterval time.Duration
-	HttpsPort      int
-	EnvoyCertPath  string
-	LogLevel       string
-	MetricsAddr    string
+	Standalone           bool
+	Namespace            string
+	Kubeconfig           string
+	AteapiAddr           string
+	AteapiClientCertPath string
+	AteapiCACertsPath    string
+	HttpPort             int
+	XdsPort              int
+	ExtprocPort          int
+	ExtprocAddr          string
+	EnvoyImage           string
+	TemplatesFile        string
+	StatusPort           int
+	HealthInterval       time.Duration
+	HttpsPort            int
+	EnvoyCertPath        string
+	LogLevel             string
+	MetricsAddr          string
 }
 
 // RouterServer instantiates and coordinates runtime threads executing system modules.
@@ -125,7 +123,12 @@ func NewRouterServer(cfg RouterConfig) (*RouterServer, error) {
 		}
 	}
 
-	conn, err := grpc.NewClient(cfg.AteapiAddr, grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{InsecureSkipVerify: true})))
+	creds, err := ateapiTransportCreds(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("failed to build ateapi transport credentials: %w", err)
+	}
+
+	conn, err := grpc.NewClient(cfg.AteapiAddr, grpc.WithTransportCredentials(creds))
 	if err != nil {
 		return nil, fmt.Errorf("failed to establish grpc channel to ateapi client: %w", err)
 	}
@@ -147,6 +150,53 @@ func NewRouterServer(cfg RouterConfig) (*RouterServer, error) {
 		apiClient: apiClient,
 		atStore:   store,
 	}, nil
+}
+
+// ateapiTransportCreds builds the TLS credentials the router uses to dial
+// ateapi. When both the servicedns trust bundle and the podidentity client
+// credential bundle are present (the in-cluster case, mounted via projected
+// pod-certificate volumes), it performs mTLS: it verifies ateapi's serving cert
+// against the servicedns trust bundle and presents its own podidentity SPIFFE
+// client cert. When that material is absent, it returns an error rather than
+// falling back to an insecure connection.
+func ateapiTransportCreds(cfg RouterConfig) (credentials.TransportCredentials, error) {
+	tlsCfg, err := ateapiTLSConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return credentials.NewTLS(tlsCfg), nil
+}
+
+func ateapiTLSConfig(cfg RouterConfig) (*tls.Config, error) {
+	haveCA := fileExists(cfg.AteapiCACertsPath)
+	haveClientCert := fileExists(cfg.AteapiClientCertPath)
+
+	if !haveCA || !haveClientCert {
+		return nil, fmt.Errorf("ateapi mTLS material not found: ca-certs=%q client-cert=%q",
+			cfg.AteapiCACertsPath, cfg.AteapiClientCertPath)
+	}
+
+	caBytes, err := os.ReadFile(cfg.AteapiCACertsPath)
+	if err != nil {
+		return nil, fmt.Errorf("read ateapi CA certs: %w", err)
+	}
+	rootCAs := x509.NewCertPool()
+	if !rootCAs.AppendCertsFromPEM(caBytes) {
+		return nil, fmt.Errorf("parse ateapi CA certs from %s", cfg.AteapiCACertsPath)
+	}
+
+	return &tls.Config{
+		RootCAs:              rootCAs,
+		GetClientCertificate: credbundle.ClientLoader(cfg.AteapiClientCertPath),
+	}, nil
+}
+
+func fileExists(path string) bool {
+	if path == "" {
+		return false
+	}
+	_, err := os.Stat(path)
+	return err == nil
 }
 
 func (s *RouterServer) Run(ctx context.Context) error {
@@ -188,17 +238,7 @@ func (s *RouterServer) Run(ctx context.Context) error {
 	xdsSrv := NewXdsServer(s.cfg.XdsPort)
 	xdsSrv.SetConfig(s.cfg.HttpPort, s.cfg.ExtprocPort, s.cfg.ExtprocAddr)
 
-	var certContent, keyContent string
-	if s.cfg.EnvoyCertPath == "" {
-		slog.InfoContext(ctx, "No Envoy certificate path provided, generating self-signed certificate for testing")
-		var err error
-		certContent, keyContent, err = generateSelfSignedCert()
-		if err != nil {
-			return fmt.Errorf("failed to generate self-signed cert: %w", err)
-		}
-	}
-
-	xdsSrv.SetTlsConfig(s.cfg.HttpsPort, s.cfg.EnvoyCertPath, certContent, keyContent)
+	xdsSrv.SetTlsConfig(s.cfg.HttpsPort, s.cfg.EnvoyCertPath)
 	if s.extprocSrv == nil {
 		routeDuration, err := newRouteDurationHistogram()
 		if err != nil {
@@ -273,40 +313,4 @@ func (s *RouterServer) Run(ctx context.Context) error {
 	}
 
 	return g.Wait()
-}
-
-func generateSelfSignedCert() (string, string, error) {
-	priv, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		return "", "", err
-	}
-
-	template := x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject: pkix.Name{
-			Organization: []string{"Substrate Local Test"},
-		},
-		NotBefore: time.Now(),
-		NotAfter:  time.Now().Add(time.Hour * 24 * 365),
-
-		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		BasicConstraintsValid: true,
-		DNSNames:              []string{"localhost"},
-	}
-
-	derBytes, err := x509.CreateCertificate(rand.Reader, &template, &template, &priv.PublicKey, priv)
-	if err != nil {
-		return "", "", err
-	}
-
-	certPem := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: derBytes})
-
-	privBytes, err := x509.MarshalPKCS8PrivateKey(priv)
-	if err != nil {
-		return "", "", err
-	}
-	keyPem := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: privBytes})
-
-	return string(certPem), string(keyPem), nil
 }

@@ -117,8 +117,12 @@ spec:
             name: ate-api-server-envvars
             optional: true
         volumeMounts:
+        # servicedns: the apiserver's own gRPC serving cert (DNS SAN api.ate-system.svc).
         - name: "servicedns"
           mountPath: "/run/servicedns.podcert.ate.dev"
+        # podidentity: the apiserver's client identity (SPIFFE) when it dials valkey.
+        - name: "podidentity"
+          mountPath: "/run/podidentity.podcert.ate.dev"
         - name: "session-id-jwt-pool"
           mountPath: "/run/session-id-jwt-pool"
         # Note: See README.md for how to generate this secret.
@@ -147,6 +151,13 @@ spec:
           sources:
           - podCertificate:
               signerName: servicedns.podcert.ate.dev/identity
+              keyType: ECDSAP256
+              credentialBundlePath: credential-bundle.pem
+      - name: "podidentity"
+        projected:
+          sources:
+          - podCertificate:
+              signerName: podidentity.podcert.ate.dev/identity
               keyType: ECDSAP256
               credentialBundlePath: credential-bundle.pem
       - name: "session-id-jwt-pool"
