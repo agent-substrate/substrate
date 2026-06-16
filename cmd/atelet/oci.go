@@ -67,7 +67,21 @@ func prepareOCIDirectory(ctx context.Context, pullCache *memorypullcache.MemoryP
 	}
 	envVars = append(envVars, env...)
 
-	ociSpec := &specs.Spec{
+	ociSpec := buildSpec(args, envVars, annotations, netns, actorTemplateNamespace, actorTemplateName, actorID, containerName)
+	ociSpecBytes, err := json.MarshalIndent(ociSpec, "", "  ")
+	if err != nil {
+		return fmt.Errorf("while marshaling OCI spec: %w", err)
+	}
+	specPath := path.Join(bundlePath, "config.json")
+	if err := os.WriteFile(specPath, ociSpecBytes, 0o600); err != nil {
+		return fmt.Errorf("while writing OCI spec: %w", err)
+	}
+
+	return nil
+}
+
+func buildSpec(args, envVars []string, annotations map[string]string, netns, actorTemplateNamespace, actorTemplateName, actorID, containerName string) *specs.Spec {
+	return &specs.Spec{
 		Process: &specs.Process{
 			User: specs.User{
 				UID: 0,
@@ -142,6 +156,7 @@ func prepareOCIDirectory(ctx context.Context, pullCache *memorypullcache.MemoryP
 			},
 		},
 		Linux: &specs.Linux{
+			CgroupsPath: path.Join("actors", actorTemplateNamespace, actorTemplateName, actorID, containerName),
 			Namespaces: []specs.LinuxNamespace{
 				{
 					Type: "pid",
@@ -163,16 +178,6 @@ func prepareOCIDirectory(ctx context.Context, pullCache *memorypullcache.MemoryP
 		},
 		Annotations: annotations,
 	}
-	ociSpecBytes, err := json.MarshalIndent(ociSpec, "", "  ")
-	if err != nil {
-		return fmt.Errorf("while marshaling OCI spec: %w", err)
-	}
-	specPath := path.Join(bundlePath, "config.json")
-	if err := os.WriteFile(specPath, ociSpecBytes, 0o600); err != nil {
-		return fmt.Errorf("while writing OCI spec: %w", err)
-	}
-
-	return nil
 }
 
 func validateTarName(name string) (cleaned string, skip bool, err error) {
