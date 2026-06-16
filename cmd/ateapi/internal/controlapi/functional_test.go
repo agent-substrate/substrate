@@ -17,6 +17,7 @@ package controlapi
 import (
 	"context"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"os/exec"
@@ -60,9 +61,11 @@ var (
 
 func TestMain(m *testing.M) {
 	cmd := exec.Command("bash", "../../../../hack/run-tool.sh", "setup-envtest", "use", "--print", "path")
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil {
-		os.Exit(1)
+		log.Fatalf("setup-envtest: %v (stderr: %s)", err, stderr.String())
 	}
 	binaryAssetsDirectory := strings.TrimSpace(string(out))
 
@@ -73,19 +76,19 @@ func TestMain(m *testing.M) {
 
 	cfg, err = testEnv.Start()
 	if err != nil {
-		os.Exit(1)
+		log.Fatalf("testEnv.Start: %v", err)
 	}
 
 	// Create ate-system namespace
 	k8sClient, err := kubernetes.NewForConfig(cfg)
 	if err != nil {
-		os.Exit(1)
+		log.Fatalf("kubernetes.NewForConfig: %v", err)
 	}
 	_, err = k8sClient.CoreV1().Namespaces().Create(context.Background(), &corev1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{Name: "ate-system"},
 	}, metav1.CreateOptions{})
 	if err != nil && !strings.Contains(err.Error(), "already exists") {
-		os.Exit(1)
+		log.Fatalf("create ate-system namespace: %v", err)
 	}
 
 	// Create shared Atelet Pod
@@ -106,14 +109,14 @@ func TestMain(m *testing.M) {
 	}
 	createdAtelet, err := k8sClient.CoreV1().Pods("ate-system").Create(context.Background(), ateletPod, metav1.CreateOptions{})
 	if err != nil && !strings.Contains(err.Error(), "already exists") {
-		os.Exit(1)
+		log.Fatalf("create atelet pod: %v", err)
 	}
 	if err == nil {
 		createdAtelet.Status.PodIPs = []corev1.PodIP{{IP: "127.0.0.1"}}
 		createdAtelet.Status.Phase = corev1.PodRunning
 		_, err = k8sClient.CoreV1().Pods("ate-system").UpdateStatus(context.Background(), createdAtelet, metav1.UpdateOptions{})
 		if err != nil {
-			os.Exit(1)
+			log.Fatalf("update atelet pod status: %v", err)
 		}
 	}
 
@@ -122,7 +125,7 @@ func TestMain(m *testing.M) {
 	ateletpb.RegisterAteomHerderServer(ateletGrpcServer, fakeAtelet)
 	ateletLis, err := net.Listen("tcp", "127.0.0.1:8085")
 	if err != nil {
-		os.Exit(1)
+		log.Fatalf("listen on 127.0.0.1:8085: %v", err)
 	}
 	go func() {
 		if err := ateletGrpcServer.Serve(ateletLis); err != nil {
@@ -136,7 +139,7 @@ func TestMain(m *testing.M) {
 
 	err = testEnv.Stop()
 	if err != nil {
-		os.Exit(1)
+		log.Fatalf("testEnv.Stop: %v", err)
 	}
 
 	os.Exit(code)
