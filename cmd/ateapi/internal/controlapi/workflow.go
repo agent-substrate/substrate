@@ -170,7 +170,7 @@ func (w *ActorWorkflow) SuspendActor(ctx context.Context, id string) (*ateapipb.
 	state := &SuspendState{}
 
 	// Acquire lock and get the timeout context for the workflow
-	// Lock TTL is 7 seconds, with 2 seconds padding for workflow timeout
+	// Lock TTL is 30 seconds, with 2 seconds padding for workflow timeout
 	ctx, releaseLock, err := w.acquireActorLock(ctx, id, 30*time.Second, 2*time.Second)
 	if err != nil {
 		return nil, err
@@ -199,7 +199,7 @@ func (w *ActorWorkflow) PauseActor(ctx context.Context, id string) (*ateapipb.Ac
 	state := &PauseState{}
 
 	// Acquire lock and get the timeout context for the workflow
-	// Lock TTL is 7 seconds, with 2 seconds padding for workflow timeout
+	// Lock TTL is 30 seconds, with 2 seconds padding for workflow timeout
 	ctx, releaseLock, err := w.acquireActorLock(ctx, id, 30*time.Second, 2*time.Second)
 	if err != nil {
 		return nil, err
