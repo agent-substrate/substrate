@@ -240,8 +240,9 @@ type ActorTemplate struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	// spec defines the desired state of ActorTemplate
+	// spec defines the desired state of ActorTemplate. This field is immutable.
 	// +required
+	// +kubebuilder:validation:XValidation:rule="self == oldSelf",message="Spec is immutable"
 	Spec ActorTemplateSpec `json:"spec"`
 
 	// status is the observed state of ActorTemplate

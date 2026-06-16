@@ -15,12 +15,12 @@
 package v1alpha1
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"strings"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -79,7 +79,7 @@ func TestMain(m *testing.M) {
 }
 
 func TestActorTemplateValidation(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	baseTemplate := &ActorTemplate{
 		ObjectMeta: metav1.ObjectMeta{
@@ -403,10 +403,109 @@ func TestActorTemplateValidation(t *testing.T) {
 			if err != nil && tt.wantErr && tt.errMsg != "" && !strings.Contains(err.Error(), tt.errMsg) {
 				t.Errorf("wrong error:\n  wanted: %q\n     got: %q", tt.errMsg, err.Error())
 			}
-
 			if err == nil {
 				_ = k8sClient.Delete(ctx, at)
 			}
 		})
 	}
+}
+
+func TestActorTemplateSpecImmutability(t *testing.T) {
+	ctx := t.Context()
+
+	baseTemplate := &ActorTemplate{
+		Spec: ActorTemplateSpec{
+			PauseImage: "pause@hash",
+			Containers: []Container{
+				{
+					Name:  "main",
+					Image: "busybox@hash",
+				},
+			},
+			SnapshotsConfig: SnapshotsConfig{
+				Location: "gs://test-bucket/test-folder",
+			},
+			WorkerPoolRef: corev1.ObjectReference{
+				Name: "test-pool",
+			},
+			Runsc: RunscConfig{
+				AMD64: &RunscPlatformConfig{
+					URL:        "gs://bucket/runsc",
+					SHA256Hash: "deadbeef",
+				},
+			},
+		},
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(*ActorTemplate)
+	}{
+		{
+			name: "update-pause-image",
+			mutate: func(at *ActorTemplate) {
+				at.Spec.PauseImage = "pause@new"
+			},
+		},
+		{
+			name: "update-snapshots-config-location",
+			mutate: func(at *ActorTemplate) {
+				at.Spec.SnapshotsConfig.Location = "gs://new-bucket/new-folder"
+			},
+		},
+		{
+			name: "update-worker-pool-ref-name",
+			mutate: func(at *ActorTemplate) {
+				at.Spec.WorkerPoolRef.Name = "new-pool"
+			},
+		},
+		{
+			name: "update-runsc-amd64-url",
+			mutate: func(at *ActorTemplate) {
+				at.Spec.Runsc.AMD64.URL = "gs://new-bucket/runsc"
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ns := namespaceForTest(tt.name)
+			namespaceObj := &corev1.Namespace{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: ns,
+				},
+			}
+			if err := k8sClient.Create(ctx, namespaceObj); err != nil {
+				t.Fatalf("failed to create namespace: %v", err)
+			}
+			defer func() {
+				_ = k8sClient.Delete(ctx, namespaceObj)
+			}()
+
+			at := baseTemplate.DeepCopy()
+			at.Namespace = ns
+			at.Name = "test"
+
+			if err := k8sClient.Create(ctx, at); err != nil {
+				t.Fatalf("failed to create ActorTemplate: %v", err)
+			}
+			defer func() {
+				_ = k8sClient.Delete(ctx, at)
+			}()
+
+			updatedAt := at.DeepCopy()
+			tt.mutate(updatedAt)
+
+			err := k8sClient.Update(ctx, updatedAt)
+			if err == nil {
+				t.Error("expected update to fail due to immutability, but it succeeded")
+			} else if !strings.Contains(err.Error(), "Spec is immutable") {
+				t.Errorf("expected error containing 'Spec is immutable', got: %v", err)
+			}
+		})
+	}
+}
+
+func namespaceForTest(testName string) string {
+	return fmt.Sprintf("%s-%d", testName, time.Now().UnixNano())
 }
