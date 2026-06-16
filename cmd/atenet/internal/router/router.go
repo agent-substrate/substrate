@@ -27,7 +27,6 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
-	"time"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/sync/errgroup"
@@ -56,31 +55,9 @@ func init() {
 	utilruntime.Must(v1alpha1.AddToScheme(scheme))
 }
 
-// RouterConfig holds deployment setup and endpoint options for the router node instance.
-type RouterConfig struct {
-	Standalone           bool
-	Namespace            string
-	Kubeconfig           string
-	AteapiAddr           string
-	AteapiClientCertPath string
-	AteapiCACertsPath    string
-	HttpPort             int
-	XdsPort              int
-	ExtprocPort          int
-	ExtprocAddr          string
-	EnvoyImage           string
-	TemplatesFile        string
-	StatusPort           int
-	HealthInterval       time.Duration
-	HttpsPort            int
-	EnvoyCertPath        string
-	LogLevel             string
-	MetricsAddr          string
-}
-
 // RouterServer instantiates and coordinates runtime threads executing system modules.
 type RouterServer struct {
-	cfg RouterConfig
+	cfg routerConfig
 
 	Cmd        *cobra.Command
 	k8sClient  client.Client
@@ -91,7 +68,7 @@ type RouterServer struct {
 	atStore    atStore
 }
 
-func NewRouterServer(cfg RouterConfig) (*RouterServer, error) {
+func NewRouterServer(cfg routerConfig) (*RouterServer, error) {
 	var k8sClient client.Client
 	var clientset kubernetes.Interface
 	var err error
@@ -123,7 +100,7 @@ func NewRouterServer(cfg RouterConfig) (*RouterServer, error) {
 		}
 	}
 
-	creds, err := ateapiTransportCreds(cfg)
+	creds, err := cfg.apiTransportCredentials()
 	if err != nil {
 		return nil, fmt.Errorf("failed to build ateapi transport credentials: %w", err)
 	}
@@ -159,44 +136,37 @@ func NewRouterServer(cfg RouterConfig) (*RouterServer, error) {
 // against the servicedns trust bundle and presents its own podidentity SPIFFE
 // client cert. When that material is absent, it returns an error rather than
 // falling back to an insecure connection.
-func ateapiTransportCreds(cfg RouterConfig) (credentials.TransportCredentials, error) {
-	tlsCfg, err := ateapiTLSConfig(cfg)
+func (cfg routerConfig) apiTransportCredentials() (credentials.TransportCredentials, error) {
+	tlsCfg, err := apiTLSConfig(cfg)
 	if err != nil {
 		return nil, err
 	}
 	return credentials.NewTLS(tlsCfg), nil
 }
 
-func ateapiTLSConfig(cfg RouterConfig) (*tls.Config, error) {
-	haveCA := fileExists(cfg.AteapiCACertsPath)
-	haveClientCert := fileExists(cfg.AteapiClientCertPath)
-
-	if !haveCA || !haveClientCert {
-		return nil, fmt.Errorf("ateapi mTLS material not found: ca-certs=%q client-cert=%q",
-			cfg.AteapiCACertsPath, cfg.AteapiClientCertPath)
+func apiTLSConfig(cfg routerConfig) (*tls.Config, error) {
+	if _, err := os.Stat(cfg.Auth.AteapiCACertsPath); err != nil {
+		return nil, fmt.Errorf("error reading ate apiserver CA path from %q, error=%w",
+			cfg.Auth.AteapiCACertsPath, err)
+	}
+	if _, err := os.Stat(cfg.Auth.AteapiClientCertPath); err != nil {
+		return nil, fmt.Errorf("error reading ate apiserver client cert path from %q, error=%w",
+			cfg.Auth.AteapiClientCertPath, err)
 	}
 
-	caBytes, err := os.ReadFile(cfg.AteapiCACertsPath)
+	caBytes, err := os.ReadFile(cfg.Auth.AteapiCACertsPath)
 	if err != nil {
 		return nil, fmt.Errorf("read ateapi CA certs: %w", err)
 	}
 	rootCAs := x509.NewCertPool()
 	if !rootCAs.AppendCertsFromPEM(caBytes) {
-		return nil, fmt.Errorf("parse ateapi CA certs from %s", cfg.AteapiCACertsPath)
+		return nil, fmt.Errorf("parse ateapi CA certs from %s", cfg.Auth.AteapiCACertsPath)
 	}
 
 	return &tls.Config{
 		RootCAs:              rootCAs,
-		GetClientCertificate: credbundle.ClientLoader(cfg.AteapiClientCertPath),
+		GetClientCertificate: credbundle.ClientLoader(cfg.Auth.AteapiClientCertPath),
 	}, nil
-}
-
-func fileExists(path string) bool {
-	if path == "" {
-		return false
-	}
-	_, err := os.Stat(path)
-	return err == nil
 }
 
 func (s *RouterServer) Run(ctx context.Context) error {
