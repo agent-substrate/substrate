@@ -73,6 +73,27 @@ message RunscConfig {
 message WorkloadSpec {
   repeated Container containers  = 1;
   string             pause_image = 2;
+  repeated SystemInfoVolume system_info_volumes = 3;
+}
+
+message SystemInfoVolume {
+  string name = 1;
+  ActorIDSource actor_id = 2;
+  JWTSource jwt = 3;
+  CertSource cert = 4;
+}
+
+message ActorIDSource {
+  string path = 1;
+}
+
+message JWTSource {
+  string path = 1;
+  repeated string audiences = 2;
+}
+
+message CertSource {
+  string credential_bundle_path = 1;
 }
 
 message Container {
@@ -80,11 +101,17 @@ message Container {
   string            image   = 2;
   repeated string   command = 3;
   repeated EnvEntry env     = 4;
+  repeated VolumeMount mounts = 5;
 }
 
 message EnvEntry {
   string name  = 1;
   string value = 2;
+}
+
+message VolumeMount {
+  string name = 1;
+  string path = 2;
 }
 
 message RunResponse {

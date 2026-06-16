@@ -299,6 +299,8 @@ func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (*atele
 		return nil, fmt.Errorf("while resetting actor dirs: %w", err)
 	}
 
+	for _, siv := range req.GetSpec().GetSystemInfoVolumes()
+
 	if err := s.prepareOCIBundles(ctx,
 		req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId(),
 		req.GetSpec(), req.GetTargetAteomUid(),

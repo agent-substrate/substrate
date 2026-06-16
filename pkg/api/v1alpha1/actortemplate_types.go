@@ -57,6 +57,13 @@ type Container struct {
 	// +optional
 	// +kubebuilder:validation:MaxItems=32
 	Env []EnvVar `json:"env,omitempty"`
+
+	Mounts []VolumeMount `json:"mounts,omitempty"`
+}
+
+type VolumeMount struct {
+	Name string `json:"name,omitempty"`
+	Path string `json:"path,omitempty"`
 }
 
 // EnvVar represents an environment variable supplied to a container in an
@@ -153,6 +160,8 @@ type ActorTemplateSpec struct {
 	// +kubebuilder:validation:MaxItems=10
 	Containers []Container `json:"containers,omitempty"`
 
+	SystemInfoVolumes []SystemInfoVolume `json:"systemInfoVolumes,omitempty"`
+
 	// Snapshots configuration for the actor.
 	//
 	// +required
@@ -168,6 +177,26 @@ type ActorTemplateSpec struct {
 	//
 	// +required
 	Runsc RunscConfig `json:"runsc,omitempty"`
+}
+
+type SystemInfoVolume struct {
+	Name    string          `json:"name,omitempty"`
+	ActorID []ActorIDSource `json:"actorID,omitempty"`
+	JWT     []JWTSource     `json:"jwt,omitempty"`
+	Cert    []CertSource    `json:"cert,omitempty"`
+}
+
+type ActorIDSource struct {
+	Path string `json:"path,omitempty"`
+}
+
+type JWTSource struct {
+	Path      string   `json:"path,omitempty"`
+	Audiences []string `json:"audiences,omitempty"`
+}
+
+type CertSource struct {
+	CredentialBundlePath string `json:"path,omitempty"`
 }
 
 type GCPAuthenticationConfig struct {

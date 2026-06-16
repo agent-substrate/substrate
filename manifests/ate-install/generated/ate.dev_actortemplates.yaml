@@ -140,6 +140,15 @@ spec:
                       - message: All images must be pinned (changing the image invalidates
                           snapshots)
                         rule: self.contains('@')
+                    mounts:
+                      items:
+                        properties:
+                          name:
+                            type: string
+                          path:
+                            type: string
+                        type: object
+                      type: array
                     name:
                       description: Name of the container.
                       maxLength: 63
@@ -228,6 +237,38 @@ spec:
                 required:
                 - location
                 type: object
+              systemInfoVolumes:
+                items:
+                  properties:
+                    actorID:
+                      items:
+                        properties:
+                          path:
+                            type: string
+                        type: object
+                      type: array
+                    cert:
+                      items:
+                        properties:
+                          path:
+                            type: string
+                        type: object
+                      type: array
+                    jwt:
+                      items:
+                        properties:
+                          audiences:
+                            items:
+                              type: string
+                            type: array
+                          path:
+                            type: string
+                        type: object
+                      type: array
+                    name:
+                      type: string
+                  type: object
+                type: array
               workerPoolRef:
                 description: |
                   Name of the worker pool to use for the actor.
