@@ -12,6 +12,16 @@ The `WorkerPool` defines the pool of physical "warm" compute capacity. It manage
 | :--- | :--- | :--- |
 | `replicas` | `int32` | **Required.** Number of physical standby pods to maintain in the cluster. |
 | `ateomImage` | `string` | **Required.** The container image for the `ateom` herder process (e.g. `ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor`). |
+| `template` | `WorkerPoolPodTemplate` | **Optional.** Pod scheduling and resource settings for worker pods. |
+
+#### `WorkerPoolPodTemplate` (`spec.template`)
+
+| Field | Type | Pod mapping |
+| :--- | :--- | :--- |
+| `nodeSelector` | `map[string]string` | `spec.nodeSelector` |
+| `tolerations` | `[]Toleration` | `spec.tolerations` (max 16) |
+| `priorityClassName` | `string` | `spec.priorityClassName` |
+| `nodeAffinity` | `NodeAffinity` | `spec.affinity.nodeAffinity` |
 
 ### Example
 
@@ -24,6 +34,34 @@ metadata:
 spec:
   replicas: 10
   ateomImage: ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor
+```
+
+### Example with GPU node scheduling
+
+```yaml
+apiVersion: ate.dev/v1alpha1
+kind: WorkerPool
+metadata:
+  name: gpu-pool
+  namespace: ate-demo
+spec:
+  replicas: 5
+  ateomImage: ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor
+  template:
+    nodeSelector:
+      cloud.google.com/gke-accelerator: nvidia-tesla-t4
+    tolerations:
+    - key: nvidia.com/gpu
+      operator: Exists
+      effect: NoSchedule
+    priorityClassName: substrate-workers
+    nodeAffinity:
+      requiredDuringSchedulingIgnoredDuringExecution:
+        nodeSelectorTerms:
+        - matchExpressions:
+          - key: workload
+            operator: In
+            values: [substrate]
 ```
 
 ---

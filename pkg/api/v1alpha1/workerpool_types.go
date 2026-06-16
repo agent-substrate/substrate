@@ -15,8 +15,36 @@
 package v1alpha1
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
+
+// WorkerPoolPodTemplate defines optional scheduling and resource settings for
+// worker pods. NodeAffinity is mapped to spec.affinity.nodeAffinity on the pod.
+type WorkerPoolPodTemplate struct {
+	// NodeSelector is a selector which must be true for the pod to fit on a node.
+	//
+	// +optional
+	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
+
+	// Tolerations for the worker pods.
+	//
+	// +optional
+	// +kubebuilder:validation:MaxItems=16
+	// +listType=atomic
+	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
+
+	// PriorityClassName for the worker pods.
+	//
+	// +optional
+	PriorityClassName string `json:"priorityClassName,omitempty"`
+
+	// NodeAffinity scheduling rules for the worker pods. Mapped to
+	// spec.affinity.nodeAffinity on the pod.
+	//
+	// +optional
+	NodeAffinity *corev1.NodeAffinity `json:"nodeAffinity,omitempty"`
+}
 
 type WorkerPoolSpec struct {
 	// Replicas is the number of worker pods to run.
@@ -28,6 +56,11 @@ type WorkerPoolSpec struct {
 	// +kubebuilder:validation:MinLength=1
 	// +required
 	AteomImage string `json:"ateomImage"`
+
+	// Template holds optional pod scheduling and resource settings for worker pods.
+	//
+	// +optional
+	Template *WorkerPoolPodTemplate `json:"template,omitempty"`
 }
 
 type WorkerPoolStatus struct {

@@ -120,6 +120,40 @@ func (r *WorkerPoolReconciler) syncStatus(ctx context.Context, wp *atev1alpha1.W
 // Deployment managed by a WorkerPool. Only fields owned by this controller
 // are declared here.
 func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool) *appsv1ac.DeploymentApplyConfiguration {
+	containerAC := corev1ac.Container().
+		WithName("ateom").
+		WithImage(wp.Spec.AteomImage).
+		WithArgs(
+			"--pod-uid=$(POD_UID)",
+		).
+		WithSecurityContext(corev1ac.SecurityContext().
+			WithPrivileged(true).
+			WithRunAsUser(0).
+			WithRunAsGroup(0)).
+		WithEnv(
+			corev1ac.EnvVar().
+				WithName("POD_UID").
+				WithValueFrom(corev1ac.EnvVarSource().
+					WithFieldRef(corev1ac.ObjectFieldSelector().
+						WithFieldPath("metadata.uid"))),
+		).
+		WithVolumeMounts(corev1ac.VolumeMount().
+			WithName("run-ateom").
+			WithMountPath(ateompath.BasePath))
+
+	podSpecAC := corev1ac.PodSpec().
+		WithSecurityContext(corev1ac.PodSecurityContext().
+			WithRunAsUser(0).
+			WithRunAsGroup(0)).
+		WithVolumes(corev1ac.Volume().
+			WithName("run-ateom").
+			WithHostPath(corev1ac.HostPathVolumeSource().
+				WithPath(ateompath.BasePath).
+				WithType(corev1.HostPathDirectoryOrCreate)))
+
+	applyWorkerPoolPodTemplate(podSpecAC, containerAC, wp.Spec.Template)
+	podSpecAC.WithContainers(containerAC)
+
 	return appsv1ac.Deployment(deploymentName(wp.Name), wp.Namespace).
 		WithOwnerReferences(metav1ac.OwnerReference().
 			WithAPIVersion(atev1alpha1.GroupVersion.String()).
@@ -136,35 +170,7 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool) *appsv1ac.Deployment
 				WithLabels(map[string]string{
 					"ate.dev/worker-pool": wp.Name,
 				}).
-				WithSpec(corev1ac.PodSpec().
-					WithContainers(corev1ac.Container().
-						WithName("ateom").
-						WithImage(wp.Spec.AteomImage).
-						WithArgs(
-							"--pod-uid=$(POD_UID)",
-						).
-						WithSecurityContext(corev1ac.SecurityContext().
-							WithPrivileged(true).
-							WithRunAsUser(0).
-							WithRunAsGroup(0)).
-						WithEnv(
-							corev1ac.EnvVar().
-								WithName("POD_UID").
-								WithValueFrom(corev1ac.EnvVarSource().
-									WithFieldRef(corev1ac.ObjectFieldSelector().
-										WithFieldPath("metadata.uid"))),
-						).
-						WithVolumeMounts(corev1ac.VolumeMount().
-							WithName("run-ateom").
-							WithMountPath(ateompath.BasePath))).
-					WithSecurityContext(corev1ac.PodSecurityContext().
-						WithRunAsUser(0).
-						WithRunAsGroup(0)).
-					WithVolumes(corev1ac.Volume().
-						WithName("run-ateom").
-						WithHostPath(corev1ac.HostPathVolumeSource().
-							WithPath(ateompath.BasePath).
-							WithType(corev1.HostPathDirectoryOrCreate))))))
+				WithSpec(podSpecAC)))
 }
 
 // SetupWithManager sets up the controller with the Manager.
