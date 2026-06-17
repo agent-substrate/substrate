@@ -75,7 +75,7 @@ metadata:
   namespace: ate-system
 spec:
   serviceName: valkey-cluster-service
-  replicas: 6
+  replicas: 3
   podManagementPolicy: Parallel
   selector:
     matchLabels:
@@ -159,7 +159,7 @@ spec:
         - |
           set -e
           echo "Waiting for all Valkey pods to resolve..."
-          for i in 0 1 2 3 4 5; do
+          for i in 0 1 2; do
             until getent hosts valkey-cluster-${i}.valkey-cluster-service.ate-system.svc >/dev/null 2>&1; do
               echo "Waiting for valkey-cluster-${i} DNS..."
               sleep 2
@@ -168,7 +168,7 @@ spec:
 
           echo "All pods resolved. Getting IPs..."
           POD_IPS=""
-          for i in 0 1 2 3 4 5; do
+          for i in 0 1 2; do
             ip=$(getent hosts valkey-cluster-${i}.valkey-cluster-service.ate-system.svc | awk '{print $1}')
             POD_IPS="${POD_IPS} ${ip}:6379"
           done
@@ -188,7 +188,7 @@ spec:
               --cert /run/servicedns.podcert.ate.dev/credential-bundle.pem \
               --key /run/servicedns.podcert.ate.dev/credential-bundle.pem \
               --cluster create ${POD_IPS} \
-              --cluster-replicas 1 \
+              --cluster-replicas 0 \
               --cluster-yes
             echo "Cluster initialization complete!"
           else
