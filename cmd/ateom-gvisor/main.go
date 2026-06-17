@@ -24,6 +24,7 @@ import (
 	"net"
 	"os"
 	"runtime"
+	"sort"
 	"sync"
 
 	"cloud.google.com/go/compute/metadata"
@@ -273,9 +274,33 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 
 	s.cleanupActorNetworkOrExit(ctx, "Failed to clean up actor network after checkpoint")
 
+	// Report exactly the files runsc wrote so atelet ships precisely this set
+	// (checkpoint.img plus any pages images), rather than a hardcoded list.
+	snapshotFiles, err := listSnapshotFiles(checkpointPath)
+	if err != nil {
+		return nil, fmt.Errorf("while listing checkpoint files: %w", err)
+	}
+
 	s.actorLogger.EmitLifecycleLog("Actor checkpointed", req.GetActorId(), req.GetActorTemplateName(), req.GetActorTemplateNamespace())
 
-	return nil, nil
+	return &ateompb.CheckpointWorkloadResponse{SnapshotFiles: snapshotFiles}, nil
+}
+
+// listSnapshotFiles returns the (relative) names of regular files directly under
+// dir, which atelet ships to object storage as the snapshot.
+func listSnapshotFiles(dir string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	var files []string
+	for _, e := range entries {
+		if e.Type().IsRegular() {
+			files = append(files, e.Name())
+		}
+	}
+	sort.Strings(files)
+	return files, nil
 }
 
 func (r *runsc) cleanupContainersAfterCheckpoint(ctx context.Context, containers []*ateompb.Container) error {

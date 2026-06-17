@@ -54,6 +54,12 @@ type assetEntry struct {
 type sandboxAssetsRecord struct {
 	SandboxClass string                `json:"sandboxClass"`
 	Assets       map[string]assetEntry `json:"assets"`
+	// SnapshotFiles are the (relative) names of the files ateom wrote into the
+	// checkpoint directory, as reported by CheckpointWorkloadResponse. Recorded
+	// in the snapshot manifest so Restore ships/downloads exactly this set
+	// (gVisor's image files, cloud-hypervisor's snapshot set, ...). Empty in the
+	// on-node record written at Run/Restore; populated at Checkpoint.
+	SnapshotFiles []string `json:"snapshotFiles,omitempty"`
 }
 
 // recordFromRequest projects a request's per-architecture SandboxAssets onto the
@@ -77,21 +83,28 @@ func recordFromRequest(sa *ateletpb.SandboxAssets) (*sandboxAssetsRecord, error)
 	return rec, nil
 }
 
-// ensureSandboxBinary fetches the sandbox binary an actor needs and returns its
-// local path. For gVisor this is the single "runsc" asset, passed to ateom as
-// RunscPath. Binaries are content-addressed and cached, so re-fetching at
-// Checkpoint/Restore is a no-op once present.
-func (s *AteomHerder) ensureSandboxBinary(ctx context.Context, rec *sandboxAssetsRecord) (string, error) {
+// ensureSandboxAssets fetches every asset in the record content-addressed and
+// returns a map of asset name to local path. gVisor has a single "runsc" asset;
+// the micro-VM runtime has several (kata-shim, cloud-hypervisor, ...). Assets are
+// cached, so re-fetching at Checkpoint/Restore is a no-op once present.
+func (s *AteomHerder) ensureSandboxAssets(ctx context.Context, rec *sandboxAssetsRecord) (map[string]string, error) {
 	if err := os.MkdirAll(ateompath.StaticFilesDir, 0o700); err != nil {
-		return "", fmt.Errorf("while creating static files dir: %w", err)
+		return nil, fmt.Errorf("while creating static files dir: %w", err)
 	}
-	// gVisor uses a single "runsc" asset.
-	entry, ok := rec.Assets["runsc"]
-	if !ok {
-		return "", status.Errorf(codes.InvalidArgument, "sandbox assets for class %q missing required %q file", rec.SandboxClass, "runsc")
+	paths := make(map[string]string, len(rec.Assets))
+	for name, entry := range rec.Assets {
+		p, err := s.fetchAsset(ctx, entry)
+		if err != nil {
+			return nil, fmt.Errorf("while fetching sandbox asset %q: %w", name, err)
+		}
+		paths[name] = p
 	}
-	return s.fetchAsset(ctx, entry)
+	return paths, nil
 }
+
+// runscPathFor returns the local path of the gVisor "runsc" asset from a fetched
+// asset-path map, or "" if the runtime has none (e.g. micro-VM).
+func runscPathFor(paths map[string]string) string { return paths["runsc"] }
 
 // fetchAsset downloads one content-addressed asset (verifying its sha256) into
 // the shared static-files cache and returns its local path. On a cache hit it
@@ -109,10 +122,14 @@ func (s *AteomHerder) fetchAsset(ctx context.Context, entry assetEntry) (string,
 		return "", fmt.Errorf("while stat-ing local file: %w", err)
 	}
 
-	// gVisor's runsc lives in the public gs://gvisor bucket, so the anonymous
-	// client suffices. TODO: drive authenticated asset fetches from atelet
-	// configuration for assets in private buckets.
-	content, err := ategcs.FetchFromGCS(ctx, s.anonGCSClient, entry.URL)
+	// Assets live in one of two places: public buckets (gVisor's runsc in
+	// gs://gvisor — read anonymously) or the cluster's own object store (micro-VM
+	// kata/CH assets staged into the snapshot bucket — read with the main client,
+	// which is rustfs/S3 in kind and authenticated GCS on GKE). Try the anonymous
+	// client first so the common public-gVisor path stays fast, then fall back to
+	// the main client. TODO: drive this from explicit per-asset auth config once
+	// the SandboxConfig redesign lands.
+	content, err := s.fetchAssetContent(ctx, entry.URL)
 	if err != nil {
 		return "", fmt.Errorf("while fetching %v: %w", entry.URL, err)
 	}
@@ -151,6 +168,24 @@ func (s *AteomHerder) fetchAsset(ctx context.Context, entry assetEntry) (string,
 	}
 
 	return localPath, nil
+}
+
+// fetchAssetContent downloads url, trying the anonymous client first (public
+// buckets like gs://gvisor) then the main object-storage client (the cluster's
+// own bucket, e.g. micro-VM assets in rustfs/S3 or an authenticated GCS bucket).
+func (s *AteomHerder) fetchAssetContent(ctx context.Context, url string) ([]byte, error) {
+	content, anonErr := ategcs.FetchFromGCS(ctx, s.anonGCSClient, url)
+	if anonErr == nil {
+		return content, nil
+	}
+	if s.gcsClient == nil {
+		return nil, anonErr
+	}
+	content, mainErr := ategcs.FetchFromGCS(ctx, s.gcsClient, url)
+	if mainErr != nil {
+		return nil, fmt.Errorf("anonymous fetch failed (%v); main client fetch failed: %w", anonErr, mainErr)
+	}
+	return content, nil
 }
 
 // writeSandboxRecord persists the actor's running sandbox assets on-node so a

@@ -221,7 +221,7 @@ func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (*atele
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
-	runscPath, err := s.ensureSandboxBinary(ctx, sandboxRec)
+	assetPaths, err := s.ensureSandboxAssets(ctx, sandboxRec)
 	if err != nil {
 		return nil, err
 	}
@@ -248,13 +248,14 @@ func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (*atele
 		return nil, err
 	}
 
-	// Tell ateom to do runsc create + runsc start for pause container and
-	// all application containers.
+	// Tell ateom to start the workload. gVisor uses RunscPath; the micro-VM
+	// runtime uses the full RuntimeAssetPaths set.
 	if _, err := client.RunWorkload(ctx, &ateompb.RunWorkloadRequest{
 		ActorTemplateNamespace: ns,
 		ActorTemplateName:      tmpl,
 		ActorId:                actorID,
-		RunscPath:              runscPath,
+		RunscPath:              runscPathFor(assetPaths),
+		RuntimeAssetPaths:      assetPaths,
 		Spec:                   buildAteomWorkloadSpec(req.GetSpec()),
 	}); err != nil {
 		return nil, fmt.Errorf("while calling ateom.RunWorkload: %w", err)
@@ -314,7 +315,7 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 	if err != nil {
 		return nil, fmt.Errorf("while loading recorded sandbox assets: %w", err)
 	}
-	runscPath, err := s.ensureSandboxBinary(ctx, sandboxRec)
+	assetPaths, err := s.ensureSandboxAssets(ctx, sandboxRec)
 	if err != nil {
 		return nil, err
 	}
@@ -326,15 +327,23 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 		return nil, err
 	}
 
-	// Tell ateom to take checkpoint and delete containers.
-	if _, err := client.CheckpointWorkload(ctx, &ateompb.CheckpointWorkloadRequest{
+	// Tell ateom to take the checkpoint and delete containers. ateom reports the
+	// exact files it wrote so we ship precisely that set (gVisor's image files,
+	// cloud-hypervisor's snapshot set, ...) rather than a hardcoded list.
+	resp, err := client.CheckpointWorkload(ctx, &ateompb.CheckpointWorkloadRequest{
 		ActorTemplateNamespace: ns,
 		ActorTemplateName:      tmpl,
 		ActorId:                actorID,
-		RunscPath:              runscPath,
+		RunscPath:              runscPathFor(assetPaths),
+		RuntimeAssetPaths:      assetPaths,
 		Spec:                   buildAteomWorkloadSpec(req.GetSpec()),
-	}); err != nil {
+	})
+	if err != nil {
 		return nil, fmt.Errorf("while calling ateom.CheckpointWorkload: %w", err)
+	}
+	sandboxRec.SnapshotFiles = resp.GetSnapshotFiles()
+	if len(sandboxRec.SnapshotFiles) == 0 {
+		return nil, fmt.Errorf("ateom reported no snapshot files for checkpoint")
 	}
 
 	switch req.GetType() {
@@ -365,7 +374,8 @@ func (s *AteomHerder) moveLocalCheckpoint(ctx context.Context, req *ateletpb.Che
 
 	ns, tmpl := req.GetActorTemplateNamespace(), req.GetActorTemplateName()
 
-	for _, fileName := range []string{"checkpoint.img", "pages.img", "pages_meta.img"} {
+	// Move exactly the files ateom reported.
+	for _, fileName := range rec.SnapshotFiles {
 		src := filepath.Join(checkpointDir, fileName)
 		dst := filepath.Join(localCheckpointPath, fileName)
 		recordSnapshotSize(ctx, strings.TrimSuffix(fileName, ".img"), src, ns, tmpl)
@@ -375,8 +385,8 @@ func (s *AteomHerder) moveLocalCheckpoint(ctx context.Context, req *ateletpb.Che
 		}
 	}
 
-	// Pin the sandbox binaries into a manifest beside the images so a later
-	// Restore is self-describing.
+	// Pin the sandbox binaries + snapshot file list into a manifest beside the
+	// images so a later Restore is self-describing.
 	manifest, err := json.Marshal(rec)
 	if err != nil {
 		return fmt.Errorf("while marshaling snapshot manifest: %w", err)
@@ -392,37 +402,25 @@ func (s *AteomHerder) uploadExternalCheckpoint(ctx context.Context, req *ateletp
 	ns, tmpl := req.GetActorTemplateNamespace(), req.GetActorTemplateName()
 	prefix := strings.TrimSuffix(req.GetExternalConfig().GetSnapshotUriPrefix(), "/")
 
-	checkpointImgPath := filepath.Join(checkpointDir, "checkpoint.img")
-	pagesImgPath := filepath.Join(checkpointDir, "pages.img")
-	pagesMetaImgPath := filepath.Join(checkpointDir, "pages_meta.img")
-
-	recordSnapshotSize(ctx, "checkpoint", checkpointImgPath, ns, tmpl)
-
-	// Upload checkpoint from local dir.
-	if err := ategcs.SendLocalFileToGCSWithZstd(ctx, s.gcsClient,
-		prefix+"/checkpoint.img.zstd",
-		checkpointImgPath,
-	); err != nil {
-		return fmt.Errorf("while uploading checkpoint.img to GCS: %w", err)
+	// Upload exactly the files ateom reported (each zstd-compressed).
+	g, gCtx := errgroup.WithContext(ctx)
+	for _, fileName := range rec.SnapshotFiles {
+		fileName := fileName
+		local := filepath.Join(checkpointDir, fileName)
+		recordSnapshotSize(ctx, strings.TrimSuffix(fileName, ".img"), local, ns, tmpl)
+		g.Go(func() error {
+			if err := ategcs.SendLocalFileToGCSWithZstd(gCtx, s.gcsClient, prefix+"/"+fileName+".zstd", local); err != nil {
+				return fmt.Errorf("while uploading %s to GCS: %w", fileName, err)
+			}
+			return nil
+		})
 	}
-
-	recordSnapshotSize(ctx, "pages", pagesImgPath, ns, tmpl)
-	if err := uploadIfExists(ctx, s.gcsClient,
-		prefix+"/pages.img.zstd",
-		pagesImgPath,
-	); err != nil {
-		return err
-	}
-	recordSnapshotSize(ctx, "pages_meta", pagesMetaImgPath, ns, tmpl)
-	if err := uploadIfExists(ctx, s.gcsClient,
-		prefix+"/pages_meta.img.zstd",
-		pagesMetaImgPath,
-	); err != nil {
+	if err := g.Wait(); err != nil {
 		return err
 	}
 
-	// Pin the sandbox binaries into a manifest beside the images so a Restore on
-	// any node is self-describing.
+	// Pin the sandbox binaries + snapshot file list into a manifest beside the
+	// images, written last, so a Restore on any node is self-describing.
 	manifest, err := json.Marshal(rec)
 	if err != nil {
 		return fmt.Errorf("while marshaling snapshot manifest: %w", err)
@@ -461,7 +459,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		if err != nil {
 			return nil, err
 		}
-		if err := s.downloadExternalCheckpoint(ctx, prefix, checkpointDir); err != nil {
+		if err := s.downloadExternalCheckpoint(ctx, prefix, checkpointDir, sandboxRec.SnapshotFiles); err != nil {
 			return nil, err
 		}
 	case ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL:
@@ -476,14 +474,14 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		if err != nil {
 			return nil, err
 		}
-		if err := s.copyLocalCheckpoint(ctx, snapshotPrefix, localCheckpointDir, checkpointDir); err != nil {
+		if err := s.copyLocalCheckpoint(ctx, snapshotPrefix, localCheckpointDir, checkpointDir, sandboxRec.SnapshotFiles); err != nil {
 			return nil, err
 		}
 	default:
 		return nil, fmt.Errorf("unexpected checkpoint type: %v", req.GetType())
 	}
 
-	runscPath, err := s.ensureSandboxBinary(ctx, sandboxRec)
+	assetPaths, err := s.ensureSandboxAssets(ctx, sandboxRec)
 	if err != nil {
 		return nil, err
 	}
@@ -505,7 +503,8 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		ActorTemplateNamespace: ns,
 		ActorTemplateName:      tmpl,
 		ActorId:                actorID,
-		RunscPath:              runscPath,
+		RunscPath:              runscPathFor(assetPaths),
+		RuntimeAssetPaths:      assetPaths,
 		Spec:                   buildAteomWorkloadSpec(req.GetSpec()),
 	}); err != nil {
 		return nil, fmt.Errorf("while calling ateom.RestoreWorkload: %w", err)
@@ -520,8 +519,8 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	return &ateletpb.RestoreResponse{}, nil
 }
 
-func (s *AteomHerder) copyLocalCheckpoint(ctx context.Context, snapshotPrefix string, srcDir, dstDir string) error {
-	for _, fileName := range []string{"checkpoint.img", "pages.img", "pages_meta.img"} {
+func (s *AteomHerder) copyLocalCheckpoint(ctx context.Context, snapshotPrefix string, srcDir, dstDir string, files []string) error {
+	for _, fileName := range files {
 		if ctx.Err() != nil {
 			return fmt.Errorf("context cancelled: %w", ctx.Err())
 		}
@@ -560,22 +559,15 @@ func copyFile(src, dst string) (int64, error) {
 	return nBytes, err
 }
 
-func (s *AteomHerder) downloadExternalCheckpoint(ctx context.Context, snapshotUriPrefix string, dstDir string) error {
-	checkpointImgPath := filepath.Join(dstDir, "checkpoint.img")
-	pagesImgPath := filepath.Join(dstDir, "pages.img")
-	pagesMetaImgPath := filepath.Join(dstDir, "pages_meta.img")
-
+func (s *AteomHerder) downloadExternalCheckpoint(ctx context.Context, snapshotUriPrefix string, dstDir string, files []string) error {
 	prefix := strings.TrimSuffix(snapshotUriPrefix, "/")
 	g, gCtx := errgroup.WithContext(ctx)
-	for _, dl := range []struct{ remote, local string }{
-		{prefix + "/checkpoint.img.zstd", checkpointImgPath},
-		{prefix + "/pages.img.zstd", pagesImgPath},
-		{prefix + "/pages_meta.img.zstd", pagesMetaImgPath},
-	} {
-		dl := dl
+	for _, fileName := range files {
+		fileName := fileName
+		local := filepath.Join(dstDir, fileName)
 		g.Go(func() error {
-			if err := ategcs.FetchLocalFileFromGCSWithZstd(gCtx, s.gcsClient, dl.remote, dl.local); err != nil {
-				return fmt.Errorf("while downloading %s from GCS: %w", filepath.Base(dl.remote), err)
+			if err := ategcs.FetchLocalFileFromGCSWithZstd(gCtx, s.gcsClient, prefix+"/"+fileName+".zstd", local); err != nil {
+				return fmt.Errorf("while downloading %s from GCS: %w", fileName, err)
 			}
 			return nil
 		})
@@ -683,19 +675,6 @@ func buildAteomWorkloadSpec(spec *ateletpb.WorkloadSpec) *ateompb.WorkloadSpec {
 		out.Containers = append(out.Containers, &ateompb.Container{Name: ctr.GetName()})
 	}
 	return out
-}
-
-// uploadIfExists uploads a local file to GCS (zstd-compressed) only if
-// the file is present. Missing files are silently skipped — used for
-// optional checkpoint side-files (pages.img, pages_meta.img).
-func uploadIfExists(ctx context.Context, gcs ategcs.ObjectStorage, remoteURI, localPath string) error {
-	if _, err := os.Stat(localPath); err != nil {
-		return nil
-	}
-	if err := ategcs.SendLocalFileToGCSWithZstd(ctx, gcs, remoteURI, localPath); err != nil {
-		return fmt.Errorf("while uploading %s to GCS: %w", filepath.Base(localPath), err)
-	}
-	return nil
 }
 
 type AteomDialer struct {
