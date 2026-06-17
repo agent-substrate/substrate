@@ -218,6 +218,10 @@ deploy_ate_system() {
   log_step "deploy_ate_system"
   ensure_crds
 
+  # Enforce per-class SandboxConfig asset requirements (applied before any
+  # SandboxConfig so the defaults below are validated too).
+  run_kubectl apply -f manifests/ate-install/sandboxconfig-validation.yaml
+
   # Install the cluster-wide default sandbox config(s). Sandbox binaries live on
   # cluster-scoped SandboxConfigs resolved via each WorkerPool's SandboxClass
   # (decoupled from ActorTemplate). gVisor pools resolve to this default unless
