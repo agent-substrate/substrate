@@ -231,6 +231,8 @@ type testContext struct {
 	fakeAtelet          *FakeAteletServer
 	cleanup             func()
 	actorTemplateLister listersv1alpha1.ActorTemplateLister
+	workerPoolLister    listersv1alpha1.WorkerPoolLister
+	sandboxConfigLister listersv1alpha1.SandboxConfigLister
 }
 
 // setupTest sets up a fully isolated test environment.
@@ -266,6 +268,8 @@ func setupTest(t *testing.T, ns string) *testContext {
 
 	substrateInformerFactory := externalversions.NewSharedInformerFactory(substrateClient, 0)
 	actorTemplateLister := substrateInformerFactory.Api().V1alpha1().ActorTemplates().Lister()
+	workerPoolLister := substrateInformerFactory.Api().V1alpha1().WorkerPools().Lister()
+	sandboxConfigLister := substrateInformerFactory.Api().V1alpha1().SandboxConfigs().Lister()
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -282,7 +286,7 @@ func setupTest(t *testing.T, ns string) *testContext {
 
 	// 4. Initialize Service
 	dialer := NewAteletDialer(workerInformer.GetIndexer(), ateletInformer.GetIndexer())
-	service := NewService(persistence, actorTemplateLister, dialer, k8sClient)
+	service := NewService(persistence, actorTemplateLister, workerPoolLister, sandboxConfigLister, dialer, k8sClient)
 
 	// 5. Start REAL gRPC Server for ATE API
 	grpcServer := grpc.NewServer(grpc.UnaryInterceptor(ateinterceptors.ServerUnaryInterceptor))
@@ -343,6 +347,8 @@ func setupTest(t *testing.T, ns string) *testContext {
 		fakeAtelet:          fakeAtelet,
 		cleanup:             cleanup,
 		actorTemplateLister: actorTemplateLister,
+		workerPoolLister:    workerPoolLister,
+		sandboxConfigLister: sandboxConfigLister,
 	}
 }
 
@@ -363,18 +369,20 @@ func createTemplate(t *testing.T, tc *testContext, ns string) {
 
 func createTemplateWithContainers(t *testing.T, tc *testContext, ns string, containers []atev1alpha1.Container) {
 	t.Helper()
+
+	// Sandbox binaries now live on a (cluster-scoped) SandboxConfig resolved via
+	// the actor's WorkerPool, not on the ActorTemplate. Create a default gvisor
+	// SandboxConfig and the pool the template references so a boot-from-spec Run
+	// can resolve its assets.
+	ensureDefaultGvisorSandboxConfig(t, tc)
+	ensureWorkerPool(t, tc, ns, "pool1")
+
 	actorTemplate := &atev1alpha1.ActorTemplate{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "tmpl1",
 			Namespace: ns,
 		},
 		Spec: atev1alpha1.ActorTemplateSpec{
-			Runsc: atev1alpha1.RunscConfig{
-				AMD64: &atev1alpha1.RunscPlatformConfig{
-					URL:        "gs://gvisor/releases/nightly/2026-05-19/x86_64/runsc",
-					SHA256Hash: "a397be1abc2420d26bce6c70e6e2ff96c73aaaab929756c56f5e2089ea842b63",
-				},
-			},
 			PauseImage: "pause@sha256:abc",
 			SnapshotsConfig: atev1alpha1.SnapshotsConfig{
 				Location: "gs://fake-fake-fake",
@@ -410,6 +418,62 @@ func createTemplateWithContainers(t *testing.T, tc *testContext, ns string, cont
 	})
 	if err != nil {
 		t.Fatalf("failed to wait for template status update in informer: %v", err)
+	}
+}
+
+// ensureDefaultGvisorSandboxConfig creates the cluster-scoped default gvisor
+// SandboxConfig (idempotently) and waits for it to appear in the lister.
+func ensureDefaultGvisorSandboxConfig(t *testing.T, tc *testContext) {
+	t.Helper()
+	const name = "gvisor-default"
+	sc := &atev1alpha1.SandboxConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: name},
+		Spec: atev1alpha1.SandboxConfigSpec{
+			SandboxClass: atev1alpha1.SandboxClassGvisor,
+			Default:      true,
+			Assets: map[string]map[string]atev1alpha1.AssetFile{
+				"amd64": {"runsc": {
+					URL:    "gs://gvisor/releases/nightly/2026-05-19/x86_64/runsc",
+					SHA256: "a397be1abc2420d26bce6c70e6e2ff96c73aaaab929756c56f5e2089ea842b63",
+				}},
+				"arm64": {"runsc": {
+					URL:    "gs://gvisor/releases/nightly/2026-05-19/aarch64/runsc",
+					SHA256: "1ba2366ae2efceba166046f51a4104f9261c9cb72c6db8f5b3fe2dc57dea86b9",
+				}},
+			},
+		},
+	}
+	if _, err := tc.substrateClient.ApiV1alpha1().SandboxConfigs().Create(context.Background(), sc, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
+		t.Fatalf("failed to create default SandboxConfig: %v", err)
+	}
+	if err := wait.PollUntilContextTimeout(context.Background(), 100*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
+		_, err := tc.sandboxConfigLister.Get(name)
+		return err == nil, nil
+	}); err != nil {
+		t.Fatalf("default SandboxConfig not synced into lister: %v", err)
+	}
+}
+
+// ensureWorkerPool creates the namespaced WorkerPool an ActorTemplate references
+// (idempotently) and waits for it to appear in the lister.
+func ensureWorkerPool(t *testing.T, tc *testContext, ns, name string) {
+	t.Helper()
+	wp := &atev1alpha1.WorkerPool{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+		Spec: atev1alpha1.WorkerPoolSpec{
+			Replicas:     1,
+			AteomImage:   "ateom@sha256:abc",
+			SandboxClass: atev1alpha1.SandboxClassGvisor,
+		},
+	}
+	if _, err := tc.substrateClient.ApiV1alpha1().WorkerPools(ns).Create(context.Background(), wp, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
+		t.Fatalf("failed to create WorkerPool: %v", err)
+	}
+	if err := wait.PollUntilContextTimeout(context.Background(), 100*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
+		_, err := tc.workerPoolLister.WorkerPools(ns).Get(name)
+		return err == nil, nil
+	}); err != nil {
+		t.Fatalf("WorkerPool not synced into lister: %v", err)
 	}
 }
 

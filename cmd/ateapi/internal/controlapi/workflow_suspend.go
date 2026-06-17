@@ -116,31 +116,14 @@ func (s *CallAteletSuspendStep) Execute(ctx context.Context, input *SuspendInput
 	}
 	client := ateletpb.NewAteomHerderClient(ateletConn)
 
-	runscCfg := &ateletpb.RunscConfig{}
-	if state.ActorTemplate.Spec.Runsc.AMD64 != nil {
-		runscCfg.Amd64 = &ateletpb.RunscPlatformConfig{
-			Sha256Hash: state.ActorTemplate.Spec.Runsc.AMD64.SHA256Hash,
-			Url:        state.ActorTemplate.Spec.Runsc.AMD64.URL,
-		}
-	}
-	if state.ActorTemplate.Spec.Runsc.ARM64 != nil {
-		runscCfg.Arm64 = &ateletpb.RunscPlatformConfig{
-			Sha256Hash: state.ActorTemplate.Spec.Runsc.ARM64.SHA256Hash,
-			Url:        state.ActorTemplate.Spec.Runsc.ARM64.URL,
-		}
-	}
-	if state.ActorTemplate.Spec.Runsc.Authentication.GCP != nil {
-		authnCfg := &ateletpb.AuthenticationConfig{}
-		authnCfg.Gcp = &ateletpb.GCPAuthenticationConfig{Use: true}
-		runscCfg.Authentication = authnCfg
-	}
-
+	// Checkpoint does not carry the sandbox config: atelet uses the version the
+	// actor is currently running (recorded on-node at Run/Restore) and pins it
+	// into the snapshot manifest.
 	req := &ateletpb.CheckpointRequest{
 		TargetAteomUid:         state.Actor.GetAteomPodUid(),
 		ActorTemplateNamespace: state.Actor.GetActorTemplateNamespace(),
 		ActorTemplateName:      state.Actor.GetActorTemplateName(),
 		ActorId:                state.Actor.GetActorId(),
-		Runsc:                  runscCfg,
 		Spec: &ateletpb.WorkloadSpec{
 			PauseImage: state.ActorTemplate.Spec.PauseImage,
 		},

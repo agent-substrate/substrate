@@ -113,6 +113,8 @@ func main() {
 
 	ateFactory := externalversions.NewSharedInformerFactory(ateClient, 0)
 	actorTemplateLister := ateFactory.Api().V1alpha1().ActorTemplates().Lister()
+	workerPoolLister := ateFactory.Api().V1alpha1().WorkerPools().Lister()
+	sandboxConfigLister := ateFactory.Api().V1alpha1().SandboxConfigs().Lister()
 
 	workerPodInformerFactory, workerPodInformer := controlapi.WorkerPodInformer(clientset)
 	ateletPodInformerFactory, ateletPodInformer := controlapi.AteletInformer(clientset)
@@ -131,7 +133,7 @@ func main() {
 	ateFactory.WaitForCacheSync(stopCh)
 
 	dialer := controlapi.NewAteletDialer(workerPodInformer.GetIndexer(), ateletPodInformer.GetIndexer())
-	sm := controlapi.NewService(redisPersistence, actorTemplateLister, dialer, clientset)
+	sm := controlapi.NewService(redisPersistence, actorTemplateLister, workerPoolLister, sandboxConfigLister, dialer, clientset)
 
 	sessionIdentitySrv := sessionidentity.New(*clientJWTIssuer, *clientJWTAudience, *sessionIDJWTPoolFile, *sessionIDCAPoolFile, *workerpoolCACerts)
 
