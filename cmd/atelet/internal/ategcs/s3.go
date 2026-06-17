@@ -16,10 +16,14 @@ package ategcs
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
+	"io/fs"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/smithy-go"
 )
 
 type s3Client struct {
@@ -36,6 +40,10 @@ func (s *s3Client) GetObject(ctx context.Context, bucket, object string) (io.Rea
 		Key:    aws.String(object),
 	})
 	if err != nil {
+		var apiErr smithy.APIError
+		if errors.As(err, &apiErr) && apiErr.ErrorCode() == "NoSuchKey" {
+			return nil, fmt.Errorf("%w: %w", fs.ErrNotExist, err)
+		}
 		return nil, err
 	}
 	return output.Body, nil

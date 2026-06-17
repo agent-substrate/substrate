@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 
 	"cloud.google.com/go/storage"
 )
@@ -32,7 +33,14 @@ func NewGCSClient(client *storage.Client) ObjectStorage {
 }
 
 func (g *gcsClient) GetObject(ctx context.Context, bucket, object string) (io.ReadCloser, error) {
-	return g.client.Bucket(bucket).Object(object).NewReader(ctx)
+	rc, err := g.client.Bucket(bucket).Object(object).NewReader(ctx)
+	if err != nil {
+		if errors.Is(err, storage.ErrObjectNotExist) {
+			return nil, fmt.Errorf("%w: %w", fs.ErrNotExist, err)
+		}
+		return nil, err
+	}
+	return rc, nil
 }
 
 func (g *gcsClient) PutObject(ctx context.Context, bucket, object string, reader io.Reader) error {

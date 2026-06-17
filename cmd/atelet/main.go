@@ -29,6 +29,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 
 	"cloud.google.com/go/storage"
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/ategcs"
@@ -300,10 +301,14 @@ func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (*atele
 		return nil, fmt.Errorf("while resetting actor dirs: %w", err)
 	}
 
-	if err := s.prepareOCIBundles(ctx,
+	manifest, err := s.prepareOCIBundles(ctx,
 		req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId(),
 		req.GetSpec(), req.GetTargetAteomUid(),
-	); err != nil {
+	)
+	if err != nil {
+		return nil, err
+	}
+	if err := writeActorSnapshotManifest(req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId(), manifest); err != nil {
 		return nil, err
 	}
 
@@ -373,7 +378,21 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 		return nil, err
 	}
 
-	checkpointDir := ateompath.CheckpointStateDir(req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId())
+	ns, tmpl, actorID := req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId()
+	checkpointDir := ateompath.CheckpointStateDir(ns, tmpl, actorID)
+
+	manifest, err := readActorSnapshotManifest(ns, tmpl, actorID)
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			return nil, err
+		}
+		if !workloadSpecImagesPinned(req.GetSpec()) {
+			return nil, fmt.Errorf("snapshot manifest is missing for %s/%s actor %s, and the checkpoint request contains unpinned image refs", ns, tmpl, actorID)
+		}
+		// Legacy actor fallback: before snapshot manifests existed, pinned
+		// image refs were the only supported restore contract.
+		manifest = manifestFromPinnedWorkloadSpec(req.GetSpec())
+	}
 
 	client, err := s.dialAteom(ctx, req.GetTargetAteomUid())
 	if err != nil {
@@ -391,15 +410,13 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 		return nil, fmt.Errorf("while calling ateom.CheckpointWorkload: %w", err)
 	}
 
-	ns, tmpl, actorID := req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId()
-
 	switch req.GetType() {
 	case ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL:
-		if err := s.uploadExternalCheckpoint(ctx, req, checkpointDir); err != nil {
+		if err := s.uploadExternalCheckpoint(ctx, req, checkpointDir, manifest); err != nil {
 			return nil, err
 		}
 	case ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL:
-		if err := s.moveLocalCheckpoint(ctx, req, checkpointDir); err != nil {
+		if err := s.moveLocalCheckpoint(ctx, req, checkpointDir, manifest); err != nil {
 			return nil, err
 		}
 	default:
@@ -413,7 +430,7 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 	return &ateletpb.CheckpointResponse{}, nil
 }
 
-func (s *AteomHerder) moveLocalCheckpoint(ctx context.Context, req *ateletpb.CheckpointRequest, checkpointDir string) error {
+func (s *AteomHerder) moveLocalCheckpoint(ctx context.Context, req *ateletpb.CheckpointRequest, checkpointDir string, manifest *snapshotManifest) error {
 	localCheckpointPath := filepath.Join(ateompath.LocalCheckpointsDir(req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId()), req.GetLocalConfig().GetSnapshotPrefix())
 	if err := os.MkdirAll(localCheckpointPath, 0o700); err != nil {
 		return fmt.Errorf("while creating local checkpoint directory: %w", err)
@@ -431,10 +448,14 @@ func (s *AteomHerder) moveLocalCheckpoint(ctx context.Context, req *ateletpb.Che
 		}
 	}
 
+	if err := writeSnapshotManifestFile(filepath.Join(localCheckpointPath, snapshotManifestFile), manifest); err != nil {
+		return err
+	}
+
 	return nil
 }
 
-func (s *AteomHerder) uploadExternalCheckpoint(ctx context.Context, req *ateletpb.CheckpointRequest, checkpointDir string) error {
+func (s *AteomHerder) uploadExternalCheckpoint(ctx context.Context, req *ateletpb.CheckpointRequest, checkpointDir string, manifest *snapshotManifest) error {
 	ns, tmpl := req.GetActorTemplateNamespace(), req.GetActorTemplateName()
 	prefix := strings.TrimSuffix(req.GetExternalConfig().GetSnapshotUriPrefix(), "/")
 
@@ -466,6 +487,10 @@ func (s *AteomHerder) uploadExternalCheckpoint(ctx context.Context, req *ateletp
 	); err != nil {
 		return err
 	}
+
+	if err := uploadSnapshotManifest(ctx, s.gcsClient, prefix, manifest); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -486,24 +511,59 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	}
 
 	checkpointDir := ateompath.RestoreStateDir(req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId())
+	var (
+		manifest         *snapshotManifest
+		manifestFound    bool
+		manifestLocation string
+	)
 	switch req.GetType() {
 	case ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL:
-		if err := s.downloadExternalCheckpoint(ctx, req.GetExternalConfig().GetSnapshotUriPrefix(), checkpointDir); err != nil {
+		prefix := strings.TrimSuffix(req.GetExternalConfig().GetSnapshotUriPrefix(), "/")
+		if err := s.downloadExternalCheckpoint(ctx, prefix, checkpointDir); err != nil {
+			return nil, err
+		}
+		manifestLocation = prefix + "/" + snapshotManifestFile
+		manifest, manifestFound, err = fetchSnapshotManifest(ctx, s.gcsClient, prefix)
+		if err != nil {
 			return nil, err
 		}
 	case ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL:
 		// TODO(dberkov): the old pause checkpoint files are not deleted after they are copied to checkpointDir. This needs to be fixed in following PR.
 		localCheckpointDir := ateompath.LocalCheckpointsDir(req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId())
-		if err := s.copyLocalCheckpoint(ctx, req.GetLocalConfig().GetSnapshotPrefix(), localCheckpointDir, checkpointDir); err != nil {
+		snapshotPrefix := req.GetLocalConfig().GetSnapshotPrefix()
+		if err := s.copyLocalCheckpoint(ctx, snapshotPrefix, localCheckpointDir, checkpointDir); err != nil {
 			return nil, err
+		}
+		manifestLocation = filepath.Join(localCheckpointDir, snapshotPrefix, snapshotManifestFile)
+		manifest, err = readSnapshotManifestFile(manifestLocation)
+		if err != nil {
+			if !errors.Is(err, os.ErrNotExist) {
+				return nil, err
+			}
+		} else {
+			manifestFound = true
 		}
 	default:
 		return nil, fmt.Errorf("unexpected checkpoint type: %v", req.GetType())
 	}
 
-	if err := s.prepareOCIBundles(ctx, ns, tmpl, actorID,
-		req.GetSpec(), req.GetTargetAteomUid(),
-	); err != nil {
+	restoreSpec := req.GetSpec()
+	if manifestFound {
+		restoreSpec, err = applySnapshotManifest(req.GetSpec(), manifest)
+		if err != nil {
+			return nil, err
+		}
+	} else if !workloadSpecImagesPinned(req.GetSpec()) {
+		return nil, fmt.Errorf("snapshot manifest is missing at %s, and the restore request contains unpinned image refs", manifestLocation)
+	}
+
+	manifest, err = s.prepareOCIBundles(ctx, ns, tmpl, actorID,
+		restoreSpec, req.GetTargetAteomUid(),
+	)
+	if err != nil {
+		return nil, err
+	}
+	if err := writeActorSnapshotManifest(ns, tmpl, actorID, manifest); err != nil {
 		return nil, err
 	}
 
@@ -519,7 +579,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		ActorTemplateName:      tmpl,
 		ActorId:                actorID,
 		RunscPath:              runscPath,
-		Spec:                   buildAteomWorkloadSpec(req.GetSpec()),
+		Spec:                   buildAteomWorkloadSpec(restoreSpec),
 	}); err != nil {
 		return nil, fmt.Errorf("while calling ateom.RestoreWorkload: %w", err)
 	}
@@ -615,7 +675,7 @@ func (s *AteomHerder) prepareOCIBundles(
 	actorTemplateNamespace, actorTemplateName, actorID string,
 	spec *ateletpb.WorkloadSpec,
 	targetAteomUid string,
-) error {
+) (*snapshotManifest, error) {
 	netnsPath := ateompath.AteomNetNSPath(targetAteomUid)
 
 	// Populate the per-actor identity directory that gets bind-mounted into
@@ -623,17 +683,29 @@ func (s *AteomHerder) prepareOCIBundles(
 	// the correct per-actor ID even when restoring from the golden snapshot.
 	identityDir := ateompath.ActorIdentityDirPath(actorTemplateNamespace, actorTemplateName, actorID)
 	if err := os.MkdirAll(identityDir, 0o755); err != nil {
-		return fmt.Errorf("while creating actor identity dir: %w", err)
+		return nil, fmt.Errorf("while creating actor identity dir: %w", err)
 	}
 	if err := writeFileAtomic(filepath.Join(identityDir, ActorIDFileName), []byte(actorID), 0o644); err != nil {
-		return fmt.Errorf("while writing actor identity file: %w", err)
+		return nil, fmt.Errorf("while writing actor identity file: %w", err)
 	}
 
 	g, gCtx := errgroup.WithContext(ctx)
+	manifest := &snapshotManifest{Version: snapshotManifestVersion}
+	var manifestMu sync.Mutex
+
+	addImage := func(name, originalRef, resolvedRef string) {
+		manifestMu.Lock()
+		defer manifestMu.Unlock()
+		manifest.Images = append(manifest.Images, snapshotManifestImage{
+			Name:        name,
+			OriginalRef: originalRef,
+			ResolvedRef: resolvedRef,
+		})
+	}
 
 	// Pause container.
 	g.Go(func() error {
-		if err := prepareOCIDirectory(
+		resolvedRef, err := prepareOCIDirectory(
 			gCtx,
 			s.pullCache,
 			actorTemplateNamespace, actorTemplateName, actorID,
@@ -647,9 +719,11 @@ func (s *AteomHerder) prepareOCIBundles(
 			},
 			netnsPath,
 			"", // pause is sandbox infra; it gets no actor identity mount.
-		); err != nil {
+		)
+		if err != nil {
 			return fmt.Errorf("while creating pause OCI bundle: %w", err)
 		}
+		addImage("pause", spec.GetPauseImage(), resolvedRef)
 		return nil
 	})
 
@@ -661,7 +735,7 @@ func (s *AteomHerder) prepareOCIBundles(
 			envs = append(envs, fmt.Sprintf("%s=%s", env.GetName(), env.GetValue()))
 		}
 		g.Go(func() error {
-			if err := prepareOCIDirectory(
+			resolvedRef, err := prepareOCIDirectory(
 				gCtx,
 				s.pullCache,
 				actorTemplateNamespace, actorTemplateName, actorID,
@@ -676,14 +750,19 @@ func (s *AteomHerder) prepareOCIBundles(
 				},
 				netnsPath,
 				identityDir,
-			); err != nil {
+			)
+			if err != nil {
 				return fmt.Errorf("while creating %q OCI bundle: %w", ctr.GetName(), err)
 			}
+			addImage(ctr.GetName(), ctr.GetImage(), resolvedRef)
 			return nil
 		})
 	}
 
-	return g.Wait()
+	if err := g.Wait(); err != nil {
+		return nil, err
+	}
+	return manifest, nil
 }
 
 // dialAteom opens (or reuses) the gRPC connection to the target ateom
