@@ -24,6 +24,8 @@ import (
 type Interface interface {
 	// ActorTemplates returns a ActorTemplateInformer.
 	ActorTemplates() ActorTemplateInformer
+	// SandboxConfigs returns a SandboxConfigInformer.
+	SandboxConfigs() SandboxConfigInformer
 	// WorkerPools returns a WorkerPoolInformer.
 	WorkerPools() WorkerPoolInformer
 }
@@ -42,6 +44,11 @@ func New(f internalinterfaces.SharedInformerFactory, namespace string, tweakList
 // ActorTemplates returns a ActorTemplateInformer.
 func (v *version) ActorTemplates() ActorTemplateInformer {
 	return &actorTemplateInformer{factory: v.factory, namespace: v.namespace, tweakListOptions: v.tweakListOptions}
+}
+
+// SandboxConfigs returns a SandboxConfigInformer.
+func (v *version) SandboxConfigs() SandboxConfigInformer {
+	return &sandboxConfigInformer{factory: v.factory, tweakListOptions: v.tweakListOptions}
 }
 
 // WorkerPools returns a WorkerPoolInformer.

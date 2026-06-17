@@ -98,12 +98,6 @@ func TestActorTemplateValidation(t *testing.T) {
 			WorkerPoolRef: corev1.ObjectReference{
 				Name: "test-pool",
 			},
-			Runsc: RunscConfig{
-				AMD64: &RunscPlatformConfig{
-					URL:        "gs://bucket/runsc",
-					SHA256Hash: "deadbeef",
-				},
-			},
 		},
 	}
 
@@ -134,20 +128,6 @@ func TestActorTemplateValidation(t *testing.T) {
 		name: "missing SnapshotsConfig.Location",
 		mutate: func(at *ActorTemplate) {
 			at.Spec.SnapshotsConfig.Location = ""
-		},
-		wantErr: true,
-		errMsg:  "Invalid value",
-	}, {
-		name: "missing Runsc.AMD64.URL",
-		mutate: func(at *ActorTemplate) {
-			at.Spec.Runsc.AMD64.URL = ""
-		},
-		wantErr: true,
-		errMsg:  "Invalid value",
-	}, {
-		name: "missing Runsc.AMD64.SHA256Hash",
-		mutate: func(at *ActorTemplate) {
-			at.Spec.Runsc.AMD64.SHA256Hash = ""
 		},
 		wantErr: true,
 		errMsg:  "Invalid value",
@@ -426,12 +406,6 @@ func TestActorTemplateSpecImmutability(t *testing.T) {
 			WorkerPoolRef: corev1.ObjectReference{
 				Name: "test-pool",
 			},
-			Runsc: RunscConfig{
-				AMD64: &RunscPlatformConfig{
-					URL:        "gs://bucket/runsc",
-					SHA256Hash: "deadbeef",
-				},
-			},
 		},
 	}
 
@@ -455,12 +429,6 @@ func TestActorTemplateSpecImmutability(t *testing.T) {
 			name: "update-worker-pool-ref-name",
 			mutate: func(at *ActorTemplate) {
 				at.Spec.WorkerPoolRef.Name = "new-pool"
-			},
-		},
-		{
-			name: "update-runsc-amd64-url",
-			mutate: func(at *ActorTemplate) {
-				at.Spec.Runsc.AMD64.URL = "gs://new-bucket/runsc"
 			},
 		},
 	}

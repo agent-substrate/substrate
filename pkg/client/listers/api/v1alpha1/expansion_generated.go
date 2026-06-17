@@ -24,6 +24,10 @@ type ActorTemplateListerExpansion interface{}
 // ActorTemplateNamespaceLister.
 type ActorTemplateNamespaceListerExpansion interface{}
 
+// SandboxConfigListerExpansion allows custom methods to be added to
+// SandboxConfigLister.
+type SandboxConfigListerExpansion interface{}
+
 // WorkerPoolListerExpansion allows custom methods to be added to
 // WorkerPoolLister.
 type WorkerPoolListerExpansion interface{}

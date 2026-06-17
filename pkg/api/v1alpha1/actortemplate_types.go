@@ -163,57 +163,6 @@ type ActorTemplateSpec struct {
 	// +required
 	// TODO: clone this type locally and add validation
 	WorkerPoolRef corev1.ObjectReference `json:"workerPoolRef"`
-
-	// Parameters for fetching the runsc binary to use.
-	//
-	// +required
-	Runsc RunscConfig `json:"runsc,omitempty"`
-}
-
-type GCPAuthenticationConfig struct {
-}
-
-// Authentication configuration for atelet to download static files.
-//
-// If no members are set, then atelet will use anonymous authentication.
-type AuthenticationConfig struct {
-	// Use GCP application-default credentials.
-	//
-	// +optional
-	GCP *GCPAuthenticationConfig `json:"gcp,omitempty"`
-}
-
-type RunscPlatformConfig struct {
-	// The SHA256 hash of the binary to download.  Used both to name the
-	// downloaded file (for preventing conflicts), and to check the integrity of
-	// the downloaded file.
-	//
-	// +required
-	// +kubebuilder:validation:Pattern=`^[a-z0-9]+$`
-	SHA256Hash string `json:"sha256Hash,omitempty"`
-
-	// A gs:// URL pointing to a runsc binary that can be downloaded (possibly
-	// with atelet's credentials).
-	//
-	// +required
-	// TODO: add real format checking
-	// +kubebuilder:validation:MinLength=1
-	URL string `json:"url,omitempty"`
-}
-
-type RunscConfig struct {
-	// Configuration for the amd64 binary.
-	//
-	// +optional
-	AMD64 *RunscPlatformConfig `json:"amd64,omitempty"`
-
-	// Configuration for the arm64 binary.
-	//
-	// +optional
-	ARM64 *RunscPlatformConfig `json:"arm64,omitempty"`
-
-	// How should atelet authenticate to download the runsc binary?
-	Authentication AuthenticationConfig `json:"authentication,omitempty"`
 }
 
 // TODO: add validation

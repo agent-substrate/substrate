@@ -12,6 +12,8 @@ The `WorkerPool` defines the pool of physical "warm" compute capacity. It manage
 | :--- | :--- | :--- |
 | `replicas` | `int32` | **Required.** Number of physical standby pods to maintain in the cluster. |
 | `ateomImage` | `string` | **Required.** The container image for the `ateom` herder process (e.g. `ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor`). |
+| `sandboxClass` | `string` | Optional. The sandbox runtime family for the pool: `gvisor` (default) or `microvm`. Drives the worker pod shape (e.g. KVM device mounts, node placement) and which `SandboxConfig`s are eligible. |
+| `sandboxConfigName` | `string` | Optional. Name of a cluster-scoped [`SandboxConfig`](#3-sandboxconfig-sandbox-binaries) providing the sandbox binaries. If empty, the cluster default `SandboxConfig` for the pool's `sandboxClass` is used. |
 | `template` | `WorkerPoolPodTemplate` | **Optional.** Pod scheduling and resource settings for worker pods. |
 
 #### `WorkerPoolPodTemplate` (`spec.template`)
@@ -34,6 +36,8 @@ metadata:
 spec:
   replicas: 10
   ateomImage: ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor
+  # sandboxClass defaults to gvisor; the pool resolves to the cluster's default
+  # gvisor SandboxConfig unless sandboxConfigName is set.
 ```
 
 ### Example with GPU node scheduling
@@ -78,7 +82,8 @@ The `ActorTemplate` defines the code, environment, and state-management policies
 | `workerPoolRef` | `ObjectReference` | **Required.** Pointer to the `WorkerPool` that provides the physical pods for this template. |
 | `snapshotsConfig` | `SnapshotsConfig` | **Required.** GCS bucket and folder where memory snapshots are stored. |
 | `pauseImage` | `string` | **Required.** The image used for the sandbox root (e.g. `gcr.io/gke-release/pause`). |
-| `runsc` | `RunscConfig` | **Required.** Multi-platform configuration for fetching the gVisor binary. |
+
+The sandbox binaries (e.g. the gVisor `runsc` binary) are **no longer configured on the `ActorTemplate`**. They are resolved from the referenced `WorkerPool`'s [`SandboxConfig`](#3-sandboxconfig-sandbox-binaries) — by name (`workerPool.spec.sandboxConfigName`) or, by default, the cluster default `SandboxConfig` for the pool's `sandboxClass`.
 
 Container environment variables support literal `value` entries and `valueFrom.secretKeyRef`. Secret references are resolved by `ate-api-server` from the `ActorTemplate` namespace when a workload spec is materialized. For the golden actor, the resolved values are captured in the golden snapshot and future actors inherit those values until the golden snapshot is recreated. For an actor that bypasses the golden snapshot and boots from the current template spec, the resolved values are sent to atelet but are not serialized into the public Actor API. Other Kubernetes `valueFrom` sources are not supported yet. Secret changes do not automatically restart actors or invalidate snapshots; rotating a Secret requires an explicit actor or template lifecycle action.
 
@@ -101,15 +106,8 @@ metadata:
   name: secret-agent
   namespace: ate-demo
 spec:
-  runsc:
-    amd64:
-      # Note: These values are from the 2026-05-19 nightly.
-      # For the latest verified versions, see: demos/counter/counter.yaml.tmpl
-      url: "gs://gvisor/releases/nightly/2026-05-19/x86_64/runsc"
-      sha256Hash: "a397be1abc2420d26bce6c70e6e2ff96c73aaaab929756c56f5e2089ea842b63"
-    arm64:
-      url: "gs://gvisor/releases/nightly/2026-05-19/aarch64/runsc"
-      sha256Hash: "1ba2366ae2efceba166046f51a4104f9261c9cb72c6db8f5b3fe2dc57dea86b9"
+  # No sandbox/runsc config here — the binaries come from the WorkerPool's
+  # SandboxConfig (see section 3).
   pauseImage: "gcr.io/gke-release/pause@sha256:bcbd57ba5653580ec647b16d8163cdd1112df3609129b01f912a8032e48265da"
   containers:
   - name: agent
@@ -126,7 +124,46 @@ spec:
 
 ---
 
-## 3. Operational Workflow
+## 3. SandboxConfig: Sandbox Binaries
+
+`SandboxConfig` is a **cluster-scoped** resource that decouples the sandbox binaries (the gVisor `runsc` binary, or a micro-VM kernel/firmware/config) from the `ActorTemplate`. A `WorkerPool` resolves its binaries from a `SandboxConfig` — either the one named by `spec.sandboxConfigName`, or the cluster default for the pool's `sandboxClass`.
+
+This means a single, cluster-managed config pins the sandbox runtime version for many templates: snapshots stay restorable because the version is recorded in each snapshot's manifest, and operators upgrade the runtime in one place.
+
+### Specification (`SandboxConfigSpec`)
+
+| Field | Type | Description |
+| :--- | :--- | :--- |
+| `sandboxClass` | `string` | **Required.** Runtime family this config applies to: `gvisor` (default) or `microvm`. A `WorkerPool` only uses `SandboxConfig`s whose `sandboxClass` matches its own. |
+| `default` | `bool` | Optional. Marks this as the cluster default for its `sandboxClass`. A `WorkerPool` with no `sandboxConfigName` resolves to the default for its class. At most one default per class. |
+| `assets` | `map[arch]map[name]AssetFile` | Optional. Content-addressed files atelet fetches, keyed by architecture (`amd64`, `arm64`) then asset name. gVisor expects a `runsc` asset; a micro-VM backend expects several. Each `AssetFile` is a `{ url, sha256 }` pair. |
+
+A default cluster-wide gVisor `SandboxConfig` (`gvisor-default`) is installed with the platform, so gVisor pools work out of the box.
+
+### Example
+
+```yaml
+apiVersion: ate.dev/v1alpha1
+kind: SandboxConfig
+metadata:
+  name: gvisor-default
+spec:
+  sandboxClass: gvisor
+  default: true
+  assets:
+    amd64:
+      runsc:
+        url: "gs://gvisor/releases/nightly/2026-05-19/x86_64/runsc"
+        sha256: "a397be1abc2420d26bce6c70e6e2ff96c73aaaab929756c56f5e2089ea842b63"
+    arm64:
+      runsc:
+        url: "gs://gvisor/releases/nightly/2026-05-19/aarch64/runsc"
+        sha256: "1ba2366ae2efceba166046f51a4104f9261c9cb72c6db8f5b3fe2dc57dea86b9"
+```
+
+---
+
+## 4. Operational Workflow
 
 ### The Golden Snapshot
 When an `ActorTemplate` is created:
@@ -140,14 +177,14 @@ Once a template is `Ready`, creating an actor logically (via `kubectl-ate create
 
 ---
 
-## 4. Best Practices
+## 5. Best Practices
 *   **Startup Logic:** Place expensive initialization (loading large models, establishing baseline connections) in your application's entry point. These will be captured in the Golden Snapshot and won't need to be repeated on every resumption.
 *   **Symmetry:** Ensure your `ActorTemplate` and `WorkerPool` are in the same namespace or have appropriate RBAC permissions to reference each other.
 *   **Version Management:** When updating code, create a new `ActorTemplate` (e.g. `v2`). Substrate treats each template as an immutable state root.
 
 ---
 
-## 5. Control Plane gRPC API
+## 6. Control Plane gRPC API
 
 The Substrate Control Plane (`ate-api-server`) exposes a gRPC interface for managing actors and workers. This is the primary API used by the `kubectl-ate` CLI and higher-level frameworks.
 
@@ -192,7 +229,7 @@ Query the physical resource pool.
 
 ---
 
-## 6. Advanced: Session Identity
+## 7. Advanced: Session Identity
 
 Workloads can exchange their ephemeral Kubernetes credentials for stable **Session Identity** credentials that persist even as the process migrates between different physical workers.
 
@@ -202,7 +239,7 @@ Workloads can exchange their ephemeral Kubernetes credentials for stable **Sessi
 
 ---
 
-## 7. Framework & Ecosystem Integration
+## 8. Framework & Ecosystem Integration
 
 Agent Substrate is designed to be the foundational execution layer for any agentic framework.
 

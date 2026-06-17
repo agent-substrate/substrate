@@ -167,58 +167,6 @@ spec:
                 - message: All images must be pinned (changing the image invalidates
                     snapshots)
                   rule: self.contains('@')
-              runsc:
-                description: Parameters for fetching the runsc binary to use.
-                properties:
-                  amd64:
-                    description: Configuration for the amd64 binary.
-                    properties:
-                      sha256Hash:
-                        description: |-
-                          The SHA256 hash of the binary to download.  Used both to name the
-                          downloaded file (for preventing conflicts), and to check the integrity of
-                          the downloaded file.
-                        pattern: ^[a-z0-9]+$
-                        type: string
-                      url:
-                        description: |
-                          A gs:// URL pointing to a runsc binary that can be downloaded (possibly
-                          with atelet's credentials).
-                        minLength: 1
-                        type: string
-                    required:
-                    - sha256Hash
-                    - url
-                    type: object
-                  arm64:
-                    description: Configuration for the arm64 binary.
-                    properties:
-                      sha256Hash:
-                        description: |-
-                          The SHA256 hash of the binary to download.  Used both to name the
-                          downloaded file (for preventing conflicts), and to check the integrity of
-                          the downloaded file.
-                        pattern: ^[a-z0-9]+$
-                        type: string
-                      url:
-                        description: |
-                          A gs:// URL pointing to a runsc binary that can be downloaded (possibly
-                          with atelet's credentials).
-                        minLength: 1
-                        type: string
-                    required:
-                    - sha256Hash
-                    - url
-                    type: object
-                  authentication:
-                    description: How should atelet authenticate to download the runsc
-                      binary?
-                    properties:
-                      gcp:
-                        description: Use GCP application-default credentials.
-                        type: object
-                    type: object
-                type: object
               snapshotsConfig:
                 description: Snapshots configuration for the actor.
                 properties:
@@ -275,7 +223,6 @@ spec:
                 x-kubernetes-map-type: atomic
             required:
             - pauseImage
-            - runsc
             - snapshotsConfig
             - workerPoolRef
             type: object

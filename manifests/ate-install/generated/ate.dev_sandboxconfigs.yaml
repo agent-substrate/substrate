@@ -1,0 +1,128 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.20.1
+  name: sandboxconfigs.ate.dev
+spec:
+  group: ate.dev
+  names:
+    kind: SandboxConfig
+    listKind: SandboxConfigList
+    plural: sandboxconfigs
+    shortNames:
+    - sandboxconfig
+    singular: sandboxconfig
+  scope: Cluster
+  versions:
+  - additionalPrinterColumns:
+    - jsonPath: .spec.sandboxClass
+      name: Class
+      type: string
+    - jsonPath: .spec.default
+      name: Default
+      type: boolean
+    - jsonPath: .metadata.creationTimestamp
+      name: Age
+      type: date
+    name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: |-
+          SandboxConfig is cluster-scoped configuration describing the sandbox binaries
+          for a sandbox runtime family. It is referenced (or defaulted) by WorkerPools
+          and decouples sandbox binary selection from ActorTemplate.
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: spec defines the desired state of SandboxConfig
+            properties:
+              assets:
+                additionalProperties:
+                  additionalProperties:
+                    description: |-
+                      AssetFile is one content-addressed file that atelet fetches for a sandbox
+                      runtime (e.g. the gVisor runsc binary, or a micro-VM kernel/firmware/config).
+                    properties:
+                      sha256:
+                        description: |-
+                          SHA256 is the lower-case hex SHA256 of the asset. It both names the cached
+                          file (preventing collisions) and verifies the download's integrity.
+                        pattern: ^[a-f0-9]{64}$
+                        type: string
+                      url:
+                        description: |-
+                          URL is where to download the asset from (e.g. a gs:// URL). It may be
+                          fetched anonymously or with credentials depending on atelet's
+                          configuration.
+                        minLength: 1
+                        type: string
+                    required:
+                    - sha256
+                    - url
+                    type: object
+                  type: object
+                description: |-
+                  Assets is the set of files atelet fetches for this runtime, keyed first by
+                  architecture (GOARCH, e.g. "amd64", "arm64") and then by asset name. The
+                  asset names are interpreted by the sandbox backend: gVisor expects a
+                  "runsc" asset; a micro-VM backend expects several (e.g. "cloud-hypervisor",
+                  "kata-kernel", "kata-image"). The schema is intentionally generic;
+                  per-class requirements are enforced by a ValidatingAdmissionPolicy.
+                type: object
+              default:
+                description: |-
+                  Default marks this SandboxConfig as the cluster-wide default for its
+                  SandboxClass. A WorkerPool with no explicit SandboxConfigName resolves to
+                  the default config for its SandboxClass. At most one default is expected
+                  per SandboxClass.
+                type: boolean
+              sandboxClass:
+                default: gvisor
+                description: |-
+                  SandboxClass is the sandbox runtime family this config applies to. A
+                  WorkerPool only uses SandboxConfigs whose SandboxClass matches its own.
+                enum:
+                - gvisor
+                - microvm
+                type: string
+            required:
+            - sandboxClass
+            type: object
+        required:
+        - spec
+        type: object
+    served: true
+    storage: true
+    subresources: {}
