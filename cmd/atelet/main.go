@@ -15,10 +15,8 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -26,7 +24,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 
@@ -211,79 +208,6 @@ func NewService(
 	return wms
 }
 
-func (s *AteomHerder) fetchRunsc(ctx context.Context, cfg *ateletpb.RunscConfig) (string, error) {
-	var platCfg *ateletpb.RunscPlatformConfig
-	switch runtime.GOARCH {
-	case "amd64":
-		platCfg = cfg.GetAmd64()
-	case "arm64":
-		platCfg = cfg.GetArm64()
-	}
-
-	sha256Hash := platCfg.GetSha256Hash()
-	if err := resources.ValidateRunscHash(sha256Hash); err != nil {
-		return "", status.Error(codes.InvalidArgument, err.Error())
-	}
-
-	localPath := ateompath.RunSCBinaryPath(sha256Hash)
-	_, err := os.Stat(localPath)
-	if err == nil { // EQUALS nil
-		return localPath, nil
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return "", fmt.Errorf("while stat-ing local file: %w", err)
-	}
-
-	// Fetch the file.
-
-	client := s.anonGCSClient
-	if cfg.GetAuthentication().GetGcp().GetUse() {
-		client = s.gcsClient
-	}
-
-	content, err := ategcs.FetchFromGCS(ctx, client, platCfg.GetUrl())
-	if err != nil {
-		return "", fmt.Errorf("while fetching %v: %w", platCfg.GetUrl(), err)
-	}
-
-	// Check hash
-	sum := sha256.Sum256(content)
-	wantSum, err := hex.DecodeString(platCfg.GetSha256Hash())
-	if err != nil {
-		return "", fmt.Errorf("while parsing sha256 hash: %w", err)
-	}
-	if !bytes.Equal(sum[:], wantSum) {
-		return "", fmt.Errorf("sha256 mismatch; got=%s want=%s", hex.EncodeToString(sum[:]), platCfg.GetSha256Hash())
-	}
-
-	tmpFileName, err := func() (string, error) {
-		localDir := filepath.Dir(localPath)
-		tmpFile, err := os.CreateTemp(localDir, filepath.Base(localPath)+"-download-")
-		if err != nil {
-			return "", fmt.Errorf("while temp file: %w", err)
-		}
-		defer tmpFile.Close()
-
-		if _, err := tmpFile.Write(content); err != nil {
-			return "", fmt.Errorf("while writing content to temp file: %w", err)
-		}
-
-		if err := tmpFile.Chmod(0o755); err != nil {
-			return "", fmt.Errorf("while setting file mode: %w", err)
-		}
-
-		return tmpFile.Name(), nil
-	}()
-	if err != nil {
-		return "", fmt.Errorf("while populating temp file: %w", err)
-	}
-
-	if err := os.Rename(tmpFileName, localPath); err != nil {
-		return "", fmt.Errorf("while renaming temp file to target: %w", err)
-	}
-
-	return localPath, nil
-}
-
 func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (*ateletpb.RunResponse, error) {
 	if err := validateRunRequest(req); err != nil {
 		// status.Error so the interceptor surfaces InvalidArgument and the
@@ -291,17 +215,29 @@ func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (*atele
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
-	runscPath, err := s.fetchRunscAndPrep(ctx, req.GetRunsc())
+	ns, tmpl, actorID := req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId()
+
+	sandboxRec, err := recordFromRequest(req.GetSandboxAssets())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+	runscPath, err := s.ensureSandboxBinary(ctx, sandboxRec)
 	if err != nil {
 		return nil, err
 	}
 
-	if err := resetActorDirs(req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId()); err != nil {
+	if err := resetActorDirs(ns, tmpl, actorID); err != nil {
 		return nil, fmt.Errorf("while resetting actor dirs: %w", err)
 	}
 
-	if err := s.prepareOCIBundles(ctx,
-		req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId(),
+	// Record the sandbox binaries this actor is running so a later Checkpoint
+	// (whose request no longer carries the sandbox config) can re-fetch the same
+	// version and pin it into the snapshot manifest.
+	if err := writeSandboxRecord(ns, tmpl, actorID, sandboxRec); err != nil {
+		return nil, fmt.Errorf("while recording sandbox assets: %w", err)
+	}
+
+	if err := s.prepareOCIBundles(ctx, ns, tmpl, actorID,
 		req.GetSpec(), req.GetTargetAteomUid(),
 	); err != nil {
 		return nil, err
@@ -315,9 +251,9 @@ func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (*atele
 	// Tell ateom to do runsc create + runsc start for pause container and
 	// all application containers.
 	if _, err := client.RunWorkload(ctx, &ateompb.RunWorkloadRequest{
-		ActorTemplateNamespace: req.GetActorTemplateNamespace(),
-		ActorTemplateName:      req.GetActorTemplateName(),
-		ActorId:                req.GetActorId(),
+		ActorTemplateNamespace: ns,
+		ActorTemplateName:      tmpl,
+		ActorId:                actorID,
 		RunscPath:              runscPath,
 		Spec:                   buildAteomWorkloadSpec(req.GetSpec()),
 	}); err != nil {
@@ -368,12 +304,22 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
-	runscPath, err := s.fetchRunscAndPrep(ctx, req.GetRunsc())
+	ns, tmpl, actorID := req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId()
+
+	// Checkpoint requests no longer carry the sandbox config; recover the
+	// version this actor was started with from the on-node record and re-fetch
+	// it (a cache hit) so ateom can drive runsc, and so we can pin it into the
+	// snapshot manifest below.
+	sandboxRec, err := readSandboxRecord(ns, tmpl, actorID)
+	if err != nil {
+		return nil, fmt.Errorf("while loading recorded sandbox assets: %w", err)
+	}
+	runscPath, err := s.ensureSandboxBinary(ctx, sandboxRec)
 	if err != nil {
 		return nil, err
 	}
 
-	checkpointDir := ateompath.CheckpointStateDir(req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId())
+	checkpointDir := ateompath.CheckpointStateDir(ns, tmpl, actorID)
 
 	client, err := s.dialAteom(ctx, req.GetTargetAteomUid())
 	if err != nil {
@@ -382,24 +328,22 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 
 	// Tell ateom to take checkpoint and delete containers.
 	if _, err := client.CheckpointWorkload(ctx, &ateompb.CheckpointWorkloadRequest{
-		ActorTemplateNamespace: req.GetActorTemplateNamespace(),
-		ActorTemplateName:      req.GetActorTemplateName(),
-		ActorId:                req.GetActorId(),
+		ActorTemplateNamespace: ns,
+		ActorTemplateName:      tmpl,
+		ActorId:                actorID,
 		RunscPath:              runscPath,
 		Spec:                   buildAteomWorkloadSpec(req.GetSpec()),
 	}); err != nil {
 		return nil, fmt.Errorf("while calling ateom.CheckpointWorkload: %w", err)
 	}
 
-	ns, tmpl, actorID := req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId()
-
 	switch req.GetType() {
 	case ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL:
-		if err := s.uploadExternalCheckpoint(ctx, req, checkpointDir); err != nil {
+		if err := s.uploadExternalCheckpoint(ctx, req, checkpointDir, sandboxRec); err != nil {
 			return nil, err
 		}
 	case ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL:
-		if err := s.moveLocalCheckpoint(ctx, req, checkpointDir); err != nil {
+		if err := s.moveLocalCheckpoint(ctx, req, checkpointDir, sandboxRec); err != nil {
 			return nil, err
 		}
 	default:
@@ -413,7 +357,7 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 	return &ateletpb.CheckpointResponse{}, nil
 }
 
-func (s *AteomHerder) moveLocalCheckpoint(ctx context.Context, req *ateletpb.CheckpointRequest, checkpointDir string) error {
+func (s *AteomHerder) moveLocalCheckpoint(ctx context.Context, req *ateletpb.CheckpointRequest, checkpointDir string, rec *sandboxAssetsRecord) error {
 	localCheckpointPath := filepath.Join(ateompath.LocalCheckpointsDir(req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId()), req.GetLocalConfig().GetSnapshotPrefix())
 	if err := os.MkdirAll(localCheckpointPath, 0o700); err != nil {
 		return fmt.Errorf("while creating local checkpoint directory: %w", err)
@@ -431,10 +375,20 @@ func (s *AteomHerder) moveLocalCheckpoint(ctx context.Context, req *ateletpb.Che
 		}
 	}
 
+	// Pin the sandbox binaries into a manifest beside the images so a later
+	// Restore is self-describing.
+	manifest, err := json.Marshal(rec)
+	if err != nil {
+		return fmt.Errorf("while marshaling snapshot manifest: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(localCheckpointPath, sandboxManifestName), manifest, 0o600); err != nil {
+		return fmt.Errorf("while writing snapshot manifest: %w", err)
+	}
+
 	return nil
 }
 
-func (s *AteomHerder) uploadExternalCheckpoint(ctx context.Context, req *ateletpb.CheckpointRequest, checkpointDir string) error {
+func (s *AteomHerder) uploadExternalCheckpoint(ctx context.Context, req *ateletpb.CheckpointRequest, checkpointDir string, rec *sandboxAssetsRecord) error {
 	ns, tmpl := req.GetActorTemplateNamespace(), req.GetActorTemplateName()
 	prefix := strings.TrimSuffix(req.GetExternalConfig().GetSnapshotUriPrefix(), "/")
 
@@ -466,6 +420,16 @@ func (s *AteomHerder) uploadExternalCheckpoint(ctx context.Context, req *ateletp
 	); err != nil {
 		return err
 	}
+
+	// Pin the sandbox binaries into a manifest beside the images so a Restore on
+	// any node is self-describing.
+	manifest, err := json.Marshal(rec)
+	if err != nil {
+		return fmt.Errorf("while marshaling snapshot manifest: %w", err)
+	}
+	if err := ategcs.SendBytesToGCS(ctx, s.gcsClient, prefix+"/"+sandboxManifestName, manifest); err != nil {
+		return fmt.Errorf("while uploading snapshot manifest: %w", err)
+	}
 	return nil
 }
 
@@ -474,31 +438,54 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
-	runscPath, err := s.fetchRunscAndPrep(ctx, req.GetRunsc())
-	if err != nil {
-		return nil, err
-	}
-
 	ns, tmpl, actorID := req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId()
 
 	if err := resetActorDirs(ns, tmpl, actorID); err != nil {
 		return nil, fmt.Errorf("while resetting actor dirs: %w", err)
 	}
 
-	checkpointDir := ateompath.RestoreStateDir(req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId())
+	checkpointDir := ateompath.RestoreStateDir(ns, tmpl, actorID)
+
+	// The snapshot is self-describing: recover the sandbox binaries that created
+	// it from the manifest stored beside the checkpoint images (the Restore
+	// request no longer carries the sandbox config).
+	var sandboxRec *sandboxAssetsRecord
 	switch req.GetType() {
 	case ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL:
-		if err := s.downloadExternalCheckpoint(ctx, req.GetExternalConfig().GetSnapshotUriPrefix(), checkpointDir); err != nil {
+		prefix := req.GetExternalConfig().GetSnapshotUriPrefix()
+		manifest, err := ategcs.FetchFromGCS(ctx, s.gcsClient, strings.TrimSuffix(prefix, "/")+"/"+sandboxManifestName)
+		if err != nil {
+			return nil, fmt.Errorf("while fetching snapshot manifest: %w", err)
+		}
+		sandboxRec, err = unmarshalSandboxRecord(manifest)
+		if err != nil {
+			return nil, err
+		}
+		if err := s.downloadExternalCheckpoint(ctx, prefix, checkpointDir); err != nil {
 			return nil, err
 		}
 	case ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL:
 		// TODO(dberkov): the old pause checkpoint files are not deleted after they are copied to checkpointDir. This needs to be fixed in following PR.
-		localCheckpointDir := ateompath.LocalCheckpointsDir(req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId())
-		if err := s.copyLocalCheckpoint(ctx, req.GetLocalConfig().GetSnapshotPrefix(), localCheckpointDir, checkpointDir); err != nil {
+		localCheckpointDir := ateompath.LocalCheckpointsDir(ns, tmpl, actorID)
+		snapshotPrefix := req.GetLocalConfig().GetSnapshotPrefix()
+		manifest, err := os.ReadFile(filepath.Join(localCheckpointDir, snapshotPrefix, sandboxManifestName))
+		if err != nil {
+			return nil, fmt.Errorf("while reading local snapshot manifest: %w", err)
+		}
+		sandboxRec, err = unmarshalSandboxRecord(manifest)
+		if err != nil {
+			return nil, err
+		}
+		if err := s.copyLocalCheckpoint(ctx, snapshotPrefix, localCheckpointDir, checkpointDir); err != nil {
 			return nil, err
 		}
 	default:
 		return nil, fmt.Errorf("unexpected checkpoint type: %v", req.GetType())
+	}
+
+	runscPath, err := s.ensureSandboxBinary(ctx, sandboxRec)
+	if err != nil {
+		return nil, err
 	}
 
 	if err := s.prepareOCIBundles(ctx, ns, tmpl, actorID,
@@ -522,6 +509,12 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		Spec:                   buildAteomWorkloadSpec(req.GetSpec()),
 	}); err != nil {
 		return nil, fmt.Errorf("while calling ateom.RestoreWorkload: %w", err)
+	}
+
+	// Record the (manifest-pinned) sandbox binaries on-node so a subsequent
+	// Checkpoint of this restored actor can re-pin the same version.
+	if err := writeSandboxRecord(ns, tmpl, actorID, sandboxRec); err != nil {
+		return nil, fmt.Errorf("while recording sandbox assets: %w", err)
 	}
 
 	return &ateletpb.RestoreResponse{}, nil
@@ -592,20 +585,6 @@ func (s *AteomHerder) downloadExternalCheckpoint(ctx context.Context, snapshotUr
 	}
 
 	return nil
-}
-
-// fetchRunscAndPrep ensures the static files dir exists and downloads the
-// runsc binary at the version pinned by the request. Returns the local
-// runsc path.
-func (s *AteomHerder) fetchRunscAndPrep(ctx context.Context, runscCfg *ateletpb.RunscConfig) (string, error) {
-	if err := os.MkdirAll(ateompath.StaticFilesDir, 0o700); err != nil {
-		return "", fmt.Errorf("while creating static files dir: %w", err)
-	}
-	runscPath, err := s.fetchRunsc(ctx, runscCfg)
-	if err != nil {
-		return "", fmt.Errorf("in fetchRunsc: %w", err)
-	}
-	return runscPath, nil
 }
 
 // prepareOCIBundles pulls images and assembles OCI bundles for the pause

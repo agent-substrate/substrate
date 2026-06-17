@@ -234,15 +234,14 @@ func TestValidateRestoreRequest(t *testing.T) {
 	}
 }
 
-// TestFetchRunscRejectsBadHash confirms fetchRunsc validates the runsc hash
+// TestFetchAssetRejectsBadHash confirms fetchAsset validates the asset hash
 // before the cache-hit os.Stat/early-return, not merely "at some point". To
 // prove the ordering, it plants a real file at the exact path an invalid hash
-// resolves to: a correctly-ordered fetchRunsc validates first and returns an
+// resolves to: a correctly-ordered fetchAsset validates first and returns an
 // error, while a regression that stats first would find this file and return it
 // with a nil error, failing the test. StaticFilesDir is redirected to a temp
-// dir so the planted path is writable and isolated. Both arch fields are set so
-// the test is independent of the host GOARCH.
-func TestFetchRunscRejectsBadHash(t *testing.T) {
+// dir so the planted path is writable and isolated.
+func TestFetchAssetRejectsBadHash(t *testing.T) {
 	orig := ateompath.StaticFilesDir
 	ateompath.StaticFilesDir = t.TempDir()
 	t.Cleanup(func() { ateompath.StaticFilesDir = orig })
@@ -255,11 +254,8 @@ func TestFetchRunscRejectsBadHash(t *testing.T) {
 	}
 
 	s := &AteomHerder{}
-	bad := &ateletpb.RunscPlatformConfig{Sha256Hash: badHash}
-	cfg := &ateletpb.RunscConfig{Amd64: bad, Arm64: bad}
-
-	if _, err := s.fetchRunsc(context.Background(), cfg); err == nil {
-		t.Error("fetchRunsc returned a cache hit for an invalid hash; validation must run before the os.Stat early return")
+	if _, err := s.fetchAsset(context.Background(), assetEntry{SHA256: badHash}); err == nil {
+		t.Error("fetchAsset returned a cache hit for an invalid hash; validation must run before the os.Stat early return")
 	}
 }
 

@@ -80,6 +80,19 @@ func ActorIdentityDirPath(actorTemplateNamespace, actorTemplateName, actorID str
 	)
 }
 
+// ActorSandboxAssetsFile is the per-actor file where atelet records the sandbox
+// binaries (class + content-addressed asset set, for this node's architecture)
+// the actor is currently running. It is written at Run/Restore and read at
+// Checkpoint (when the request no longer carries the sandbox config). It lives
+// directly under ActorPath — NOT under a subdir wiped by atelet's
+// resetActorDirs — so it survives between Run and a later Checkpoint.
+func ActorSandboxAssetsFile(actorTemplateNamespace, actorTemplateName, actorID string) string {
+	return filepath.Join(
+		ActorPath(actorTemplateNamespace, actorTemplateName, actorID),
+		"sandbox-assets.json",
+	)
+}
+
 func RunSCStateDir(actorTemplateNamespace, actorTemplateName, actorID string) string {
 	return filepath.Join(
 		ActorPath(actorTemplateNamespace, actorTemplateName, actorID),
