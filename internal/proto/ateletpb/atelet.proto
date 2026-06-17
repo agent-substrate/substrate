@@ -39,34 +39,38 @@ message RunRequest {
   string actor_template_name      = 4;
   string actor_id                 = 5;
 
-  RunscConfig runsc = 8;
+  reserved 8; // was RunscConfig runsc
 
   WorkloadSpec spec = 7;
+
+  // The sandbox binaries to use for booting this actor from scratch. atelet
+  // fetches the relevant assets and records them with the actor's on-node state
+  // so a later Checkpoint can pin the same version into the snapshot manifest.
+  SandboxAssets sandbox_assets = 9;
 }
 
-message GCPAuthenticationConfig {
-  bool use = 1;
+// AssetFile is one content-addressed file atelet fetches for a sandbox runtime
+// (e.g. the gVisor runsc binary).
+message AssetFile {
+  // gs:// URL to download the asset from.
+  string url = 1;
+  // Lower-case hex SHA256; names the cached file and verifies its integrity.
+  string sha256 = 2;
 }
 
-message AuthenticationConfig {
-  GCPAuthenticationConfig gcp = 1;
+// ArchAssets is the set of assets for a single architecture, keyed by asset
+// name (a wrapper message because proto map values cannot themselves be maps).
+message ArchAssets {
+  map<string, AssetFile> files = 1; // asset name -> file
 }
 
-message RunscPlatformConfig {
-  // Check the downloaded binary against this hash.  Also used for naming the
-  // downloaded file to prevent collisions.
-  string sha256_hash = 1;
-
-  // gs:// URL to download the runsc binary.
-  string url = 2;
-}
-
-message RunscConfig {
-  RunscPlatformConfig amd64 = 1;
-  RunscPlatformConfig arm64 = 2;
-
-  // How should atelet authenticate to fetch the runsc binary?
-  AuthenticationConfig authentication = 3;
+// SandboxAssets is the generic, backend-agnostic description of the sandbox
+// binaries for an actor: a sandbox class plus assets keyed first by
+// architecture (GOARCH) and then by asset name. atelet's backend code
+// interprets the asset names (gVisor expects "runsc").
+message SandboxAssets {
+  string sandbox_class = 1;          // e.g. "gvisor"
+  map<string, ArchAssets> assets = 2; // arch -> {name -> file}
 }
 
 // WorkloadSpec parallels Pod, but with far fewer configurable fields.
@@ -126,7 +130,10 @@ message CheckpointRequest {
   string actor_template_name      = 4;
   string actor_id                 = 5;
 
-  RunscConfig runsc = 6;
+  // Sandbox binary config is not sent on checkpoint: atelet uses the version the
+  // actor is currently running (recorded with the actor's on-node state at
+  // Run/Restore) and records it into the snapshot manifest.
+  reserved 6; // was RunscConfig runsc
 
   WorkloadSpec spec = 7;
 
@@ -153,7 +160,10 @@ message RestoreRequest {
   string actor_template_name      = 4;
   string actor_id                 = 5;
 
-  RunscConfig runsc = 6;
+  // Sandbox binary config is not sent on restore: the snapshot is
+  // self-describing. atelet reads the snapshot manifest to recover the pinned
+  // sandbox version that created it.
+  reserved 6; // was RunscConfig runsc
 
   WorkloadSpec spec = 7;
 
