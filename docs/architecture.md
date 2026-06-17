@@ -223,9 +223,10 @@ These resources define the intended state of the system and are managed via
 Kubernetes CRD APIs. They are used for administrative operations and actor
 environment definitions.
 
-  * **WorkerPool**: Defines a pool of "warm" compute capacity. It specifies the
-    hardware shape (CPU, memory, accelerators), manages a fleet of standby
-    worker pods initialized and ready to receive resumed actor states.
+  * **WorkerPool**: Defines a pool of "warm" compute capacity. It manages a
+    fleet of standby worker pods initialized and ready to receive resumed actor
+    states. Optional `spec.template` fields configure worker pod node
+    selection, tolerations, priority class, and node affinity.
 
   * **ActorTemplate**: An immutable definition of an actor-version. It
     encapsulates the container image, configuration, and environment required
