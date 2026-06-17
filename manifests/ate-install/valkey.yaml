@@ -88,7 +88,20 @@ spec:
       containers:
       - name: valkey
         image: valkey/valkey:8.0
-        command: ["valkey-server", "/etc/valkey/valkey.conf"]
+        command:
+        - /bin/sh
+        - -c
+        - |
+          set -e
+          POD_DNS="${HOSTNAME}.valkey-cluster-service.ate-system.svc"
+          cp /etc/valkey/valkey.conf /tmp/valkey.conf
+          {
+            echo "cluster-announce-hostname ${POD_DNS}"
+            echo "cluster-announce-tls-port 6379"
+            echo "cluster-announce-bus-port 16379"
+            echo "cluster-preferred-endpoint-type hostname"
+          } >> /tmp/valkey.conf
+          exec valkey-server /tmp/valkey.conf
         ports:
         - name: valkey
           containerPort: 6379
@@ -166,11 +179,10 @@ spec:
             done
           done
 
-          echo "All pods resolved. Getting IPs..."
-          POD_IPS=""
+          echo "All pods resolved. Building stable node list..."
+          VALKEY_NODES=""
           for i in 0 1 2 3 4 5; do
-            ip=$(getent hosts valkey-cluster-${i}.valkey-cluster-service.ate-system.svc | awk '{print $1}')
-            POD_IPS="${POD_IPS} ${ip}:6379"
+            VALKEY_NODES="${VALKEY_NODES} valkey-cluster-${i}.valkey-cluster-service.ate-system.svc:6379"
           done
 
           echo "Checking if Valkey cluster is already initialized..."
@@ -187,7 +199,7 @@ spec:
               --cacert /etc/valkey-ca/ca.crt \
               --cert /run/servicedns.podcert.ate.dev/credential-bundle.pem \
               --key /run/servicedns.podcert.ate.dev/credential-bundle.pem \
-              --cluster create ${POD_IPS} \
+              --cluster create ${VALKEY_NODES} \
               --cluster-replicas 1 \
               --cluster-yes
             echo "Cluster initialization complete!"
@@ -210,4 +222,3 @@ spec:
               items:
               - key: ca.crt
                 path: ca.crt
-
