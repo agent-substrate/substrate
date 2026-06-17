@@ -31,9 +31,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/proto/glutton"
-	"github.com/agent-substrate/substrate/internal/serverboot"
-	"github.com/agent-substrate/substrate/internal/version"
 	"github.com/google/uuid"
 	"github.com/spf13/pflag"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
@@ -46,6 +43,10 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/reflection"
 	"google.golang.org/grpc/status"
+
+	"github.com/agent-substrate/substrate/internal/proto/glutton"
+	"github.com/agent-substrate/substrate/internal/serverboot"
+	"github.com/agent-substrate/substrate/internal/version"
 )
 
 const meterName = "glutton"
@@ -132,6 +133,8 @@ type gluttonService struct {
 
 	dataDir string
 
+	// TODO: split this into per-resource locks (ram, fds, peers). A single
+	// global mutex serializes unrelated operations across all three.
 	mu    sync.Mutex
 	ram   map[string][]byte
 	fds   []*os.File
@@ -253,31 +256,34 @@ func (s *gluttonService) WriteRAM(ctx context.Context, req *glutton.WriteRAMRequ
 	if req.GetSize() < 0 {
 		return nil, status.Error(codes.InvalidArgument, "size must be non-negative")
 	}
-	buf, err := randomBytes(int(req.GetSize()))
-	if err != nil {
-		return nil, status.Errorf(codes.Internal, "generate random bytes: %v", err)
-	}
+	size := int(req.GetSize())
 
-	s.mu.Lock()
 	switch req.GetWriteMode() {
 	case glutton.WriteMode_WRITE_MODE_TRUNCATE:
-		s.ram[req.GetKey()] = buf
-	case glutton.WriteMode_WRITE_MODE_OVERWRITE:
-		existing := s.ram[req.GetKey()]
-		if len(buf) > len(existing) {
-			merged := make([]byte, len(buf))
-			copy(merged, buf)
-			s.ram[req.GetKey()] = merged
-		} else {
-			copy(existing, buf)
+		buf, err := randomBytes(size)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "generate random bytes: %v", err)
 		}
-	default:
+		s.mu.Lock()
+		s.ram[req.GetKey()] = buf
 		s.mu.Unlock()
+	case glutton.WriteMode_WRITE_MODE_OVERWRITE:
+		s.mu.Lock()
+		existing := s.ram[req.GetKey()]
+		if size > len(existing) {
+			existing = make([]byte, size)
+			s.ram[req.GetKey()] = existing
+		}
+		if _, err := rand.Read(existing[:size]); err != nil {
+			s.mu.Unlock()
+			return nil, status.Errorf(codes.Internal, "generate random bytes: %v", err)
+		}
+		s.mu.Unlock()
+	default:
 		return nil, status.Errorf(codes.InvalidArgument, "unknown write_mode %v", req.GetWriteMode())
 	}
-	s.mu.Unlock()
 
-	s.ramWriteBytes.Add(ctx, int64(len(buf)))
+	s.ramWriteBytes.Add(ctx, int64(size))
 	return &glutton.WriteRAMResponse{}, nil
 }
 
@@ -415,7 +421,7 @@ func (s *gluttonService) runGossip(ctx context.Context, pg *peerGossip) {
 	defer conn.Close()
 	client := glutton.NewGluttonClient(conn)
 
-	attrs := metric.WithAttributes(attribute.String("host", pg.host))
+	hostAttr := attribute.String("host", pg.host)
 	ticker := time.NewTicker(time.Duration(pg.delayMs) * time.Millisecond)
 	defer ticker.Stop()
 
@@ -429,12 +435,21 @@ func (s *gluttonService) runGossip(ctx context.Context, pg *peerGossip) {
 		start := time.Now()
 		resp, err := client.Ping(ctx, &glutton.PingRequest{Message: msg})
 		latency := time.Since(start).Seconds()
+		outcome := "ok"
+		cancelled := err != nil && errors.Is(ctx.Err(), context.Canceled)
+		switch {
+		case cancelled:
+			outcome = "cancelled"
+		case err != nil:
+			outcome = "error"
+		}
+		attrs := metric.WithAttributes(hostAttr, attribute.String("outcome", outcome))
 		s.gossipSent.Add(ctx, 1, attrs)
 		s.gossipLatency.Record(ctx, latency, attrs)
+		if cancelled {
+			return
+		}
 		if err != nil {
-			if errors.Is(ctx.Err(), context.Canceled) {
-				return
-			}
 			slog.WarnContext(ctx, "Gossip ping failed", slog.String("host", pg.host), slog.Any("err", err))
 			continue
 		}
