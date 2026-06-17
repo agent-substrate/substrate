@@ -15,10 +15,15 @@
 package router
 
 import (
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
+	"os"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/credbundle"
 	"github.com/spf13/cobra"
+	"google.golang.org/grpc/credentials"
 )
 
 type authConfig struct {
@@ -45,6 +50,37 @@ type routerConfig struct {
 	LogLevel       string
 	MetricsAddr    string
 	Auth           authConfig
+}
+
+// ateapiTransportCreds builds the TLS credentials the router uses to dial
+// ateapi.
+func (cfg *routerConfig) apiTransportCredentials() (credentials.TransportCredentials, error) {
+	tlsCfg, err := cfg.apiTLSConfig()
+	if err != nil {
+		return nil, err
+	}
+	return credentials.NewTLS(tlsCfg), nil
+}
+
+func (cfg *routerConfig) apiTLSConfig() (*tls.Config, error) {
+	caBytes, err := os.ReadFile(cfg.Auth.AteapiCACertsPath)
+	if err != nil {
+		return nil, fmt.Errorf("error reading ateapi CA certs: %w", err)
+	}
+	rootCAs := x509.NewCertPool()
+	if !rootCAs.AppendCertsFromPEM(caBytes) {
+		return nil, fmt.Errorf("parse ateapi CA certs from %s", cfg.Auth.AteapiCACertsPath)
+	}
+
+	if _, err := os.Stat(cfg.Auth.AteapiClientCertPath); err != nil {
+		return nil, fmt.Errorf("error reading ate apiserver client cert path from %q, error:%w",
+			cfg.Auth.AteapiClientCertPath, err)
+	}
+
+	return &tls.Config{
+		RootCAs:              rootCAs,
+		GetClientCertificate: credbundle.ClientLoader(cfg.Auth.AteapiClientCertPath),
+	}, nil
 }
 
 func NewRouterCmd() *cobra.Command {

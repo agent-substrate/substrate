@@ -16,8 +16,6 @@ package router
 
 import (
 	"context"
-	"crypto/tls"
-	"crypto/x509"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -31,7 +29,6 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/kubernetes"
@@ -40,7 +37,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 
-	"github.com/agent-substrate/substrate/internal/credbundle"
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	v1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -126,46 +122,6 @@ func NewRouterServer(cfg routerConfig) (*RouterServer, error) {
 		clientset: clientset,
 		apiClient: apiClient,
 		atStore:   store,
-	}, nil
-}
-
-// ateapiTransportCreds builds the TLS credentials the router uses to dial
-// ateapi. When both the servicedns trust bundle and the podidentity client
-// credential bundle are present (the in-cluster case, mounted via projected
-// pod-certificate volumes), it performs mTLS: it verifies ateapi's serving cert
-// against the servicedns trust bundle and presents its own podidentity SPIFFE
-// client cert. When that material is absent, it returns an error rather than
-// falling back to an insecure connection.
-func (cfg routerConfig) apiTransportCredentials() (credentials.TransportCredentials, error) {
-	tlsCfg, err := apiTLSConfig(cfg)
-	if err != nil {
-		return nil, err
-	}
-	return credentials.NewTLS(tlsCfg), nil
-}
-
-func apiTLSConfig(cfg routerConfig) (*tls.Config, error) {
-	if _, err := os.Stat(cfg.Auth.AteapiCACertsPath); err != nil {
-		return nil, fmt.Errorf("error reading ate apiserver CA path from %q, error=%w",
-			cfg.Auth.AteapiCACertsPath, err)
-	}
-	if _, err := os.Stat(cfg.Auth.AteapiClientCertPath); err != nil {
-		return nil, fmt.Errorf("error reading ate apiserver client cert path from %q, error=%w",
-			cfg.Auth.AteapiClientCertPath, err)
-	}
-
-	caBytes, err := os.ReadFile(cfg.Auth.AteapiCACertsPath)
-	if err != nil {
-		return nil, fmt.Errorf("read ateapi CA certs: %w", err)
-	}
-	rootCAs := x509.NewCertPool()
-	if !rootCAs.AppendCertsFromPEM(caBytes) {
-		return nil, fmt.Errorf("parse ateapi CA certs from %s", cfg.Auth.AteapiCACertsPath)
-	}
-
-	return &tls.Config{
-		RootCAs:              rootCAs,
-		GetClientCertificate: credbundle.ClientLoader(cfg.Auth.AteapiClientCertPath),
 	}, nil
 }
 
