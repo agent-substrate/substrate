@@ -14,8 +14,8 @@
 
 package main
 
-import "github.com/agent-substrate/substrate/cmd/atenet/internal/app"
+import "github.com/agent-substrate/substrate/cmd/atenet/internal"
 
 func main() {
-	app.Execute()
+	internal.Execute()
 }

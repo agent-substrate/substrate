@@ -15,13 +15,13 @@
 package v1alpha1
 
 import (
-	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/agent-substrate/substrate/internal/envtestbins"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -41,13 +41,11 @@ var (
 )
 
 func TestMain(m *testing.M) {
-	cmd := exec.Command("bash", "../../../hack/run-tool.sh", "setup-envtest", "use", "--print", "path")
-	out, err := cmd.Output()
+	binaryAssetsDirectory, err := envtestbins.BinaryAssetsDir()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "setup-envtest failed: %v\n", err)
+		fmt.Fprintf(os.Stderr, "%v\n", err)
 		os.Exit(1)
 	}
-	binaryAssetsDirectory := strings.TrimSpace(string(out))
 
 	testEnv = &envtest.Environment{
 		CRDDirectoryPaths:     []string{"../../../manifests/ate-install/generated"},
@@ -79,7 +77,7 @@ func TestMain(m *testing.M) {
 }
 
 func TestActorTemplateValidation(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	baseTemplate := &ActorTemplate{
 		ObjectMeta: metav1.ObjectMeta{
@@ -99,12 +97,6 @@ func TestActorTemplateValidation(t *testing.T) {
 			},
 			WorkerPoolRef: corev1.ObjectReference{
 				Name: "test-pool",
-			},
-			Runsc: RunscConfig{
-				AMD64: &RunscPlatformConfig{
-					URL:        "gs://bucket/runsc",
-					SHA256Hash: "deadbeef",
-				},
 			},
 		},
 	}
@@ -136,20 +128,6 @@ func TestActorTemplateValidation(t *testing.T) {
 		name: "missing SnapshotsConfig.Location",
 		mutate: func(at *ActorTemplate) {
 			at.Spec.SnapshotsConfig.Location = ""
-		},
-		wantErr: true,
-		errMsg:  "Invalid value",
-	}, {
-		name: "missing Runsc.AMD64.URL",
-		mutate: func(at *ActorTemplate) {
-			at.Spec.Runsc.AMD64.URL = ""
-		},
-		wantErr: true,
-		errMsg:  "Invalid value",
-	}, {
-		name: "missing Runsc.AMD64.SHA256Hash",
-		mutate: func(at *ActorTemplate) {
-			at.Spec.Runsc.AMD64.SHA256Hash = ""
 		},
 		wantErr: true,
 		errMsg:  "Invalid value",
@@ -403,10 +381,97 @@ func TestActorTemplateValidation(t *testing.T) {
 			if err != nil && tt.wantErr && tt.errMsg != "" && !strings.Contains(err.Error(), tt.errMsg) {
 				t.Errorf("wrong error:\n  wanted: %q\n     got: %q", tt.errMsg, err.Error())
 			}
-
 			if err == nil {
 				_ = k8sClient.Delete(ctx, at)
 			}
 		})
 	}
+}
+
+func TestActorTemplateSpecImmutability(t *testing.T) {
+	ctx := t.Context()
+
+	baseTemplate := &ActorTemplate{
+		Spec: ActorTemplateSpec{
+			PauseImage: "pause@hash",
+			Containers: []Container{
+				{
+					Name:  "main",
+					Image: "busybox@hash",
+				},
+			},
+			SnapshotsConfig: SnapshotsConfig{
+				Location: "gs://test-bucket/test-folder",
+			},
+			WorkerPoolRef: corev1.ObjectReference{
+				Name: "test-pool",
+			},
+		},
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(*ActorTemplate)
+	}{
+		{
+			name: "update-pause-image",
+			mutate: func(at *ActorTemplate) {
+				at.Spec.PauseImage = "pause@new"
+			},
+		},
+		{
+			name: "update-snapshots-config-location",
+			mutate: func(at *ActorTemplate) {
+				at.Spec.SnapshotsConfig.Location = "gs://new-bucket/new-folder"
+			},
+		},
+		{
+			name: "update-worker-pool-ref-name",
+			mutate: func(at *ActorTemplate) {
+				at.Spec.WorkerPoolRef.Name = "new-pool"
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ns := namespaceForTest(tt.name)
+			namespaceObj := &corev1.Namespace{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: ns,
+				},
+			}
+			if err := k8sClient.Create(ctx, namespaceObj); err != nil {
+				t.Fatalf("failed to create namespace: %v", err)
+			}
+			defer func() {
+				_ = k8sClient.Delete(ctx, namespaceObj)
+			}()
+
+			at := baseTemplate.DeepCopy()
+			at.Namespace = ns
+			at.Name = "test"
+
+			if err := k8sClient.Create(ctx, at); err != nil {
+				t.Fatalf("failed to create ActorTemplate: %v", err)
+			}
+			defer func() {
+				_ = k8sClient.Delete(ctx, at)
+			}()
+
+			updatedAt := at.DeepCopy()
+			tt.mutate(updatedAt)
+
+			err := k8sClient.Update(ctx, updatedAt)
+			if err == nil {
+				t.Error("expected update to fail due to immutability, but it succeeded")
+			} else if !strings.Contains(err.Error(), "Spec is immutable") {
+				t.Errorf("expected error containing 'Spec is immutable', got: %v", err)
+			}
+		})
+	}
+}
+
+func namespaceForTest(testName string) string {
+	return fmt.Sprintf("%s-%d", testName, time.Now().UnixNano())
 }

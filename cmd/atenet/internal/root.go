@@ -12,14 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package app
+package internal
 
 import (
 	"fmt"
 	"os"
 
-	"github.com/agent-substrate/substrate/cmd/atenet/internal/app/dns"
-	"github.com/agent-substrate/substrate/cmd/atenet/internal/app/router"
 	"github.com/agent-substrate/substrate/internal/version"
 	"github.com/spf13/cobra"
 )
@@ -39,6 +37,6 @@ func Execute() {
 }
 
 func init() {
-	rootCmd.AddCommand(router.NewCmd())
-	rootCmd.AddCommand(dns.NewCmd())
+	rootCmd.AddCommand(NewRouterCmd())
+	rootCmd.AddCommand(NewDnsCmd())
 }

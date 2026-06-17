@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package podidentitysigner
+package servicednssigner
 
 import (
 	"bytes"
@@ -21,22 +21,22 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
-	"net/url"
-	"path"
 	"time"
 
+	"github.com/agent-substrate/substrate/cmd/podcertcontroller/internal/podcertificate"
+	"github.com/agent-substrate/substrate/cmd/podcertcontroller/internal/signercontroller"
 	"github.com/agent-substrate/substrate/internal/localca"
-	"github.com/agent-substrate/substrate/internal/podcertificate"
-	"github.com/agent-substrate/substrate/internal/signercontroller"
 	certsv1beta1 "k8s.io/api/certificates/v1beta1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/utils/clock"
 	"k8s.io/utils/ptr"
 )
 
-const Name = "podidentity.podcert.ate.dev/identity"
-const CTBPrefix = "podidentity.podcert.ate.dev:identity:"
+const Name = "servicedns.podcert.ate.dev/identity"
+
+const CTBPrefix = "servicedns.podcert.ate.dev:identity:"
 
 type Impl struct {
 	kc     kubernetes.Interface
@@ -90,20 +90,61 @@ func (h *Impl) DesiredClusterTrustBundles() []*certsv1beta1.ClusterTrustBundle {
 }
 
 func (h *Impl) MakeCert(ctx context.Context, pcr *certsv1beta1.PodCertificateRequest) error {
-	// Fetch the pod to get its ServiceAccount
-	pod, err := h.kc.CoreV1().Pods(pcr.ObjectMeta.Namespace).Get(ctx, pcr.Spec.PodName, metav1.GetOptions{})
+	// TODO: Switch from live reads to indexer
+
+	// If our signer had a policy about which pods are allowed to request
+	// certificates, it would be implemented here.
+
+	svcs, err := h.kc.CoreV1().Services(pcr.ObjectMeta.Namespace).List(ctx, metav1.ListOptions{})
 	if err != nil {
-		return fmt.Errorf("while getting pod %s/%s: %w", pcr.ObjectMeta.Namespace, pcr.Spec.PodName, err)
+		return fmt.Errorf("while listing services: %w", err)
 	}
 
-	if pod.ObjectMeta.UID != pcr.Spec.PodUID {
-		return fmt.Errorf("pod UID mismatch: expected %s, got %s", pcr.Spec.PodUID, pod.ObjectMeta.UID)
+	// TODO: Looping over every service isn't great.  Maintain an index of pod
+	// to covering services.
+
+	dnsNames := []string{}
+	for _, svc := range svcs.Items {
+		switch svc.Spec.Type {
+		case corev1.ServiceTypeClusterIP, corev1.ServiceTypeNodePort, corev1.ServiceTypeLoadBalancer:
+			// ok
+		default:
+			// This service type doesn't select pods using a label selector.
+			continue
+		}
+
+		// Find the set of pods that the service selects.
+		matchedPods, err := h.kc.CoreV1().Pods(pcr.ObjectMeta.Namespace).List(ctx, metav1.ListOptions{
+			LabelSelector: metav1.FormatLabelSelector(&metav1.LabelSelector{MatchLabels: svc.Spec.Selector}),
+		})
+		if err != nil {
+			return fmt.Errorf("while selecting pods for service %q: %w", pcr.ObjectMeta.Namespace+"/"+svc.ObjectMeta.Name, err)
+		}
+
+		for _, matchedPod := range matchedPods.Items {
+			if matchedPod.ObjectMeta.Name == pcr.Spec.PodName && matchedPod.ObjectMeta.UID == pcr.Spec.PodUID {
+				// TODO: I'm making some assumptions about the DNS names that
+				// resolve to a given Service.  I know at least one
+				// configuration that I suspect doesn't match these assumptions
+				// --- GKE with VPC-scoped Cloud DNS [1].
+				//
+				// [1] https://cloud.google.com/kubernetes-engine/docs/how-to/cloud-dns#vpc_scope_dns
+				name := fmt.Sprintf("%s.%s.svc", svc.ObjectMeta.Name, svc.ObjectMeta.Namespace)
+				dnsNames = append(dnsNames, name)
+			}
+		}
 	}
+
+	// TODO: Encode the OIDC issuer of the cluster into the certificate.
 
 	subjectPublicKey, err := podcertificate.PublicKey(pcr)
 	if err != nil {
 		return err
 	}
+
+	// If our signer had an opinion on which key types were allowable, it would
+	// check subjectPublicKey, and deny the PCR with a SuggestedKeyType
+	// condition on it.
 
 	lifetime := 24 * time.Hour
 	requestedLifetime := time.Duration(*pcr.Spec.MaxExpirationSeconds) * time.Second
@@ -115,19 +156,13 @@ func (h *Impl) MakeCert(ctx context.Context, pcr *certsv1beta1.PodCertificateReq
 	notAfter := notBefore.Add(lifetime)
 	beginRefreshAt := notAfter.Add(-30 * time.Minute)
 
-	spiffeURI := &url.URL{
-		Scheme: "spiffe",
-		Host:   "cluster.local",
-		Path:   path.Join("ns", pcr.ObjectMeta.Namespace, "sa", pcr.Spec.ServiceAccountName),
-	}
-
 	template := &x509.Certificate{
 		BasicConstraintsValid: true,
 		NotBefore:             notBefore,
 		NotAfter:              notAfter,
-		URIs:                  []*url.URL{spiffeURI},
+		DNSNames:              dnsNames,
 		KeyUsage:              x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
 	}
 
 	subjectCertDER, err := x509.CreateCertificate(rand.Reader, template, h.caPool.CAs[0].RootCertificate, subjectPublicKey, h.caPool.CAs[0].SigningKey)

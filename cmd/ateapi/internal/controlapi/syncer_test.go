@@ -183,7 +183,15 @@ func TestSyncer_DeleteBoundWorker_ClearsActor(t *testing.T) {
 		ActorId: actorID, ActorTemplateNamespace: ns, ActorTemplateName: "tmpl",
 		Status:            ateapipb.Actor_STATUS_RUNNING,
 		AteomPodNamespace: ns, AteomPodName: pod, AteomPodIp: ip,
-		LastSnapshot: "gs://snapshots/last", InProgressSnapshot: "gs://snapshots/partial",
+		InProgressSnapshot: "gs://snapshots/partial",
+		LatestSnapshotInfo: &ateapipb.SnapshotInfo{
+			Type: ateapipb.SnapshotType_SNAPSHOT_TYPE_EXTERNAL,
+			Data: &ateapipb.SnapshotInfo_External{
+				External: &ateapipb.ExternalSnapshotInfo{
+					SnapshotUriPrefix: "gs://snapshots/last",
+				},
+			},
+		},
 	}); err != nil {
 		t.Fatalf("create actor: %v", err)
 	}
@@ -210,7 +218,7 @@ func TestSyncer_DeleteBoundWorker_ClearsActor(t *testing.T) {
 	if got.AteomPodName != "" || got.AteomPodNamespace != "" || got.AteomPodIp != "" || got.InProgressSnapshot != "" {
 		t.Errorf("bind fields not cleared: %+v", got)
 	}
-	if got.LastSnapshot == "" {
-		t.Errorf("LastSnapshot must be preserved")
+	if got.GetLatestSnapshotInfo().GetExternal().SnapshotUriPrefix == "" {
+		t.Errorf("External SnapshotUriPrefix must be preserved")
 	}
 }

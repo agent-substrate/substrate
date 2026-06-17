@@ -15,8 +15,36 @@
 package v1alpha1
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
+
+// WorkerPoolPodTemplate defines optional scheduling and resource settings for
+// worker pods. NodeAffinity is mapped to spec.affinity.nodeAffinity on the pod.
+type WorkerPoolPodTemplate struct {
+	// NodeSelector is a selector which must be true for the pod to fit on a node.
+	//
+	// +optional
+	NodeSelector map[string]string `json:"nodeSelector,omitempty"`
+
+	// Tolerations for the worker pods.
+	//
+	// +optional
+	// +kubebuilder:validation:MaxItems=16
+	// +listType=atomic
+	Tolerations []corev1.Toleration `json:"tolerations,omitempty"`
+
+	// PriorityClassName for the worker pods.
+	//
+	// +optional
+	PriorityClassName string `json:"priorityClassName,omitempty"`
+
+	// NodeAffinity scheduling rules for the worker pods. Mapped to
+	// spec.affinity.nodeAffinity on the pod.
+	//
+	// +optional
+	NodeAffinity *corev1.NodeAffinity `json:"nodeAffinity,omitempty"`
+}
 
 type WorkerPoolSpec struct {
 	// Replicas is the number of worker pods to run.
@@ -28,6 +56,28 @@ type WorkerPoolSpec struct {
 	// +kubebuilder:validation:MinLength=1
 	// +required
 	AteomImage string `json:"ateomImage"`
+
+	// Template holds optional pod scheduling and resource settings for worker pods.
+	//
+	// +optional
+	Template *WorkerPoolPodTemplate `json:"template,omitempty"`
+
+	// SandboxClass selects the sandbox runtime family for this pool, which drives
+	// the worker pod shape (KVM/vhost device mounts and node placement) and which
+	// SandboxConfigs are eligible. The concrete binary is still selected by
+	// AteomImage. Defaults to gvisor.
+	// +optional
+	// +kubebuilder:validation:Enum=gvisor;microvm
+	// +kubebuilder:default=gvisor
+	SandboxClass SandboxClass `json:"sandboxClass,omitempty"`
+
+	// SandboxConfigName names a cluster-scoped SandboxConfig to use for fetching
+	// sandbox binaries. It overrides the cluster-wide default SandboxConfig for
+	// this pool's SandboxClass. The referenced config's SandboxClass must match
+	// this pool's SandboxClass. If empty, the default SandboxConfig for the
+	// SandboxClass is used.
+	// +optional
+	SandboxConfigName string `json:"sandboxConfigName,omitempty"`
 }
 
 type WorkerPoolStatus struct {

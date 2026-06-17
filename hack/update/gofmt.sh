@@ -19,6 +19,14 @@ set -o errexit -o nounset -o pipefail
 ROOT="$(git rev-parse --show-toplevel)"
 cd "${ROOT}"
 
+# GOTOOLCHAIN has no effect on the version of gofmt.
+# We need to find right gofmt, otherwise the one in PATH will be used.
+gofmt="$(go env GOROOT)/bin/gofmt"
+if [[ ! -x "${gofmt}" ]]; then
+  echo "Failed to find $gofmt" >&2
+  exit 1
+fi
+
 # Find all top-level directories containing Go files, and run gofmt on them.
 # shellcheck disable=SC2207 # reading array
 dirs=(
@@ -36,5 +44,5 @@ dirs=(
 )
 
 for dir in "${dirs[@]}"; do
-  gofmt -s -w "${dir}"
+  "${gofmt}" -s -w "${dir}"
 done

@@ -19,6 +19,7 @@ import (
 	"strings"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -59,6 +60,34 @@ func TestWorkerPoolValidation(t *testing.T) {
 		},
 		wantErr: true,
 		errMsg:  "spec.ateomImage: Invalid value: \"\": spec.ateomImage in body should be at least 1 chars long",
+	}, {
+		name: "valid template",
+		mutate: func(wp *WorkerPool) {
+			wp.Spec.Template = &WorkerPoolPodTemplate{
+				NodeSelector: map[string]string{"workload": "substrate"},
+				Tolerations: []corev1.Toleration{{
+					Key:      "gpu",
+					Operator: corev1.TolerationOpExists,
+					Effect:   corev1.TaintEffectNoSchedule,
+				}},
+			}
+		},
+		wantErr: false,
+	}, {
+		name: "too many tolerations",
+		mutate: func(wp *WorkerPool) {
+			tolerations := make([]corev1.Toleration, 17)
+			for i := range tolerations {
+				tolerations[i] = corev1.Toleration{
+					Key:      "key",
+					Operator: corev1.TolerationOpExists,
+					Effect:   corev1.TaintEffectNoSchedule,
+				}
+			}
+			wp.Spec.Template = &WorkerPoolPodTemplate{Tolerations: tolerations}
+		},
+		wantErr: true,
+		errMsg:  "spec.template.tolerations: Too many",
 	}}
 
 	for _, tt := range tests {

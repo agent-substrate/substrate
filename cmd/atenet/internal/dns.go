@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package dns
+package internal
 
 import (
 	"context"
@@ -24,11 +24,12 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/dns"
 	"github.com/spf13/cobra"
 	"k8s.io/client-go/tools/clientcmd"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
+
+	"github.com/agent-substrate/substrate/cmd/atenet/internal/dns"
 )
 
 type DnsConfig struct {
@@ -38,7 +39,7 @@ type DnsConfig struct {
 	CorefilePath      string
 }
 
-func NewCmd() *cobra.Command {
+func NewDnsCmd() *cobra.Command {
 	var cfg DnsConfig
 
 	cmd := &cobra.Command{

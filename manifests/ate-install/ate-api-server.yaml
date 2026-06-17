@@ -23,7 +23,7 @@ rules:
   resources: ["pods"]
   verbs: ["get", "watch", "list"]
 - apiGroups: ["ate.dev"]
-  resources: ["actortemplates"]
+  resources: ["actortemplates", "workerpools", "sandboxconfigs"]
   verbs: ["get", "watch", "list"]
 # Secret reads for env source resolution are intentionally NOT granted
 # cluster-wide here. Each demo / tenant is responsible for granting

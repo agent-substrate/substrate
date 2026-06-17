@@ -27,10 +27,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/k8sjwt"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/k8sjwt"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/sessionidjwt"
 	"github.com/agent-substrate/substrate/internal/localca"
 	"github.com/agent-substrate/substrate/internal/localjwtauthority"
-	"github.com/agent-substrate/substrate/internal/sessionidjwt"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"

@@ -20,6 +20,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -78,6 +79,81 @@ func runUntar(t *testing.T, entries []tarEntry) (string, error) {
 	t.Helper()
 	dir := t.TempDir()
 	return dir, untar(context.Background(), bytes.NewReader(buildTar(t, entries)), dir)
+}
+
+// With an identity dir, a read-only bind mount appears at IdentityMountPath.
+func TestBuildActorOCISpec_IdentityMount(t *testing.T) {
+	spec := buildActorOCISpec(
+		[]string{"/app"},
+		[]string{"FOO=bar"},
+		map[string]string{"k": "v"},
+		"/run/netns/x",
+		"/host/actors/ns:tmpl:id/identity",
+	)
+	found := false
+	for _, m := range spec.Mounts {
+		if m.Destination != IdentityMountPath {
+			continue
+		}
+		found = true
+		if m.Source != "/host/actors/ns:tmpl:id/identity" {
+			t.Errorf("identity mount source = %q, want the per-actor identity dir", m.Source)
+		}
+		if m.Type != "bind" {
+			t.Errorf("identity mount type = %q, want bind", m.Type)
+		}
+		if !slices.Contains(m.Options, "ro") {
+			t.Errorf("identity mount must be read-only, options=%v", m.Options)
+		}
+	}
+	if !found {
+		t.Fatalf("identity mount %q missing; mounts=%v", IdentityMountPath, spec.Mounts)
+	}
+}
+
+// Without an identity dir (the pause container), no identity mount appears.
+func TestBuildActorOCISpec_NoIdentityMountForPause(t *testing.T) {
+	bare := buildActorOCISpec([]string{"/pause"}, nil, nil, "/run/netns/x", "")
+	for _, m := range bare.Mounts {
+		if m.Destination == IdentityMountPath {
+			t.Errorf("identity mount must be absent when identityDir is empty")
+		}
+	}
+}
+
+func TestCreateMountPoint(t *testing.T) {
+	t.Run("creates target inside rootfs", func(t *testing.T) {
+		root := t.TempDir()
+		if err := createMountPoint(root, IdentityMountPath); err != nil {
+			t.Fatalf("createMountPoint: %v", err)
+		}
+		info, err := os.Stat(filepath.Join(root, "run", "ate"))
+		if err != nil {
+			t.Fatalf("mount point not created in rootfs: %v", err)
+		}
+		if !info.IsDir() {
+			t.Errorf("mount point must be a directory to host the identity bind mount")
+		}
+	})
+
+	t.Run("refuses symlink escaping the rootfs", func(t *testing.T) {
+		root := t.TempDir()
+		outside := t.TempDir()
+		// A malicious image could ship /run as a symlink pointing out of the
+		// rootfs; os.Root must refuse to follow it.
+		if err := os.Symlink(outside, filepath.Join(root, "run")); err != nil {
+			t.Fatalf("planting symlink: %v", err)
+		}
+		if err := createMountPoint(root, IdentityMountPath); err == nil {
+			t.Errorf("expected error when /run escapes the rootfs, got nil")
+		}
+		// Nothing may be created through the escaping symlink.
+		if entries, err := os.ReadDir(outside); err != nil {
+			t.Errorf("reading outside dir: %v", err)
+		} else if len(entries) != 0 {
+			t.Errorf("write escaped the rootfs: %s is not empty (%d entries)", outside, len(entries))
+		}
+	})
 }
 
 func TestValidateTarName(t *testing.T) {

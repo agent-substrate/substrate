@@ -68,6 +68,31 @@ func ActorPath(actorTemplateNamespace, actorTemplateName, actorID string) string
 	)
 }
 
+// ActorIdentityDirPath is the host directory atelet populates with the
+// actor's identity data (currently the single file "actor-id") and
+// bind-mounts read-only into the actor. It is per-actor and regenerated on
+// every resume, so (unlike the checkpointed process environment) it reflects
+// the correct ID after a restore from the golden snapshot.
+func ActorIdentityDirPath(actorTemplateNamespace, actorTemplateName, actorID string) string {
+	return filepath.Join(
+		ActorPath(actorTemplateNamespace, actorTemplateName, actorID),
+		"identity",
+	)
+}
+
+// ActorSandboxAssetsFile is the per-actor file where atelet records the sandbox
+// binaries (class + content-addressed asset set, for this node's architecture)
+// the actor is currently running. It is written at Run/Restore and read at
+// Checkpoint (when the request no longer carries the sandbox config). It lives
+// directly under ActorPath — NOT under a subdir wiped by atelet's
+// resetActorDirs — so it survives between Run and a later Checkpoint.
+func ActorSandboxAssetsFile(actorTemplateNamespace, actorTemplateName, actorID string) string {
+	return filepath.Join(
+		ActorPath(actorTemplateNamespace, actorTemplateName, actorID),
+		"sandbox-assets.json",
+	)
+}
+
 func RunSCStateDir(actorTemplateNamespace, actorTemplateName, actorID string) string {
 	return filepath.Join(
 		ActorPath(actorTemplateNamespace, actorTemplateName, actorID),
@@ -101,6 +126,13 @@ func CheckpointStateDir(actorTemplateNamespace, actorTemplateName, actorID strin
 	return filepath.Join(
 		ActorPath(actorTemplateNamespace, actorTemplateName, actorID),
 		"checkpoint-state",
+	)
+}
+
+func LocalCheckpointsDir(actorTemplateNamespace, actorTemplateName, actorID string) string {
+	return filepath.Join(
+		ActorPath(actorTemplateNamespace, actorTemplateName, actorID),
+		"local-checkpoint",
 	)
 }
 

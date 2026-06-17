@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-//	http://www.apache.org/licenses/LICENSE-2.0
+//     http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -12,6 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package controllers
+package identity
 
-//go:generate bash ../../hack/run-tool.sh controller-gen rbac:headerFile=../../hack/boilerplate/sh.txt,roleName=ate-controller paths="./..." output:rbac:artifacts:config=../../manifests/ate-install/generated/
+import (
+	"os"
+	"testing"
+
+	"github.com/agent-substrate/substrate/internal/e2e"
+)
+
+func TestMain(m *testing.M) { os.Exit(e2e.RunTestMain(m)) }

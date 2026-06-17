@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math/rand"
+	"slices"
 	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
@@ -103,7 +104,7 @@ func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, stat
 
 	// If not, find a free one using randomized shuffling
 	if assignedWorker == nil {
-		pickedWorker := s.findFreeWorker(workers, state.ActorTemplate.Spec.WorkerPoolRef.Namespace, state.ActorTemplate.Spec.WorkerPoolRef.Name)
+		pickedWorker := s.findFreeWorker(workers, state.ActorTemplate.Spec.WorkerPoolRef.Namespace, state.ActorTemplate.Spec.WorkerPoolRef.Name, state.Actor.GetLatestSnapshotInfo().GetLocal().GetNodeVmsWithLocalSnapshots())
 		if pickedWorker == nil {
 			return status.Errorf(codes.FailedPrecondition, "no free workers available")
 		}
@@ -141,11 +142,13 @@ func (s *AssignWorkerStep) RetryBackoff() *wait.Backoff {
 	}
 }
 
-func (s *AssignWorkerStep) findFreeWorker(workers []*ateapipb.Worker, workerPoolNamespace, workerPoolName string) *ateapipb.Worker {
+func (s *AssignWorkerStep) findFreeWorker(workers []*ateapipb.Worker, workerPoolNamespace, workerPoolName string, nodesRestrictions []string) *ateapipb.Worker {
 	var freeWorkers []*ateapipb.Worker
 	for _, worker := range workers {
 		if worker.GetActorId() == "" && worker.GetWorkerPool() == workerPoolName && worker.GetWorkerNamespace() == workerPoolNamespace {
-			freeWorkers = append(freeWorkers, worker)
+			if len(nodesRestrictions) == 0 || slices.Contains(nodesRestrictions, worker.GetNodeName()) {
+				freeWorkers = append(freeWorkers, worker)
+			}
 		}
 	}
 
@@ -159,9 +162,11 @@ func (s *AssignWorkerStep) findFreeWorker(workers []*ateapipb.Worker, workerPool
 }
 
 type CallAteletRestoreStep struct {
-	dialer      *AteletDialer
-	kubeClient  kubernetes.Interface
-	secretCache *envSecretCache
+	dialer              *AteletDialer
+	kubeClient          kubernetes.Interface
+	secretCache         *envSecretCache
+	workerPoolLister    listersv1alpha1.WorkerPoolLister
+	sandboxConfigLister listersv1alpha1.SandboxConfigLister
 }
 
 func (s *CallAteletRestoreStep) Name() string { return "CallAteletRestore" }
@@ -180,26 +185,7 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 		return err
 	}
 
-	runscCfg := &ateletpb.RunscConfig{}
-	if state.ActorTemplate.Spec.Runsc.AMD64 != nil {
-		runscCfg.Amd64 = &ateletpb.RunscPlatformConfig{
-			Sha256Hash: state.ActorTemplate.Spec.Runsc.AMD64.SHA256Hash,
-			Url:        state.ActorTemplate.Spec.Runsc.AMD64.URL,
-		}
-	}
-	if state.ActorTemplate.Spec.Runsc.ARM64 != nil {
-		runscCfg.Arm64 = &ateletpb.RunscPlatformConfig{
-			Sha256Hash: state.ActorTemplate.Spec.Runsc.ARM64.SHA256Hash,
-			Url:        state.ActorTemplate.Spec.Runsc.ARM64.URL,
-		}
-	}
-	if state.ActorTemplate.Spec.Runsc.Authentication.GCP != nil {
-		authnCfg := &ateletpb.AuthenticationConfig{}
-		authnCfg.Gcp = &ateletpb.GCPAuthenticationConfig{Use: true}
-		runscCfg.Authentication = authnCfg
-	}
-
-	if state.Actor.LastSnapshot != "" {
+	if state.Actor.GetLatestSnapshotInfo().GetType() != ateapipb.SnapshotType_SNAPSHOT_TYPE_UNSPECIFIED {
 		slog.InfoContext(ctx, "Actor has snapshot; Restoring from snapshot")
 
 		req := &ateletpb.RestoreRequest{
@@ -207,10 +193,27 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 			ActorTemplateNamespace: state.Actor.GetActorTemplateNamespace(),
 			ActorTemplateName:      state.Actor.GetActorTemplateName(),
 			ActorId:                state.Actor.GetActorId(),
-			Runsc:                  runscCfg,
 			Spec:                   workloadSpec,
-			SnapshotUriPrefix:      state.Actor.GetLastSnapshot(),
 		}
+		switch state.Actor.GetLatestSnapshotInfo().GetType() {
+		case ateapipb.SnapshotType_SNAPSHOT_TYPE_LOCAL:
+			req.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL
+			req.Config = &ateletpb.RestoreRequest_LocalConfig{
+				LocalConfig: &ateletpb.LocalCheckpointConfiguration{
+					SnapshotPrefix: state.Actor.GetLatestSnapshotInfo().GetLocal().SnapshotPrefix,
+				},
+			}
+		case ateapipb.SnapshotType_SNAPSHOT_TYPE_EXTERNAL:
+			req.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL
+			req.Config = &ateletpb.RestoreRequest_ExternalConfig{
+				ExternalConfig: &ateletpb.ExternalCheckpointConfiguration{
+					SnapshotUriPrefix: state.Actor.GetLatestSnapshotInfo().GetExternal().SnapshotUriPrefix,
+				},
+			}
+		default:
+			return fmt.Errorf("unsupported snapshot type: %v", state.Actor.GetLatestSnapshotInfo().GetType())
+		}
+
 		_, err = client.Restore(ctx, req)
 		if err != nil {
 			return fmt.Errorf("while restoring workload: %w", err)
@@ -226,9 +229,13 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 			ActorTemplateNamespace: state.Actor.GetActorTemplateNamespace(),
 			ActorTemplateName:      state.Actor.GetActorTemplateName(),
 			ActorId:                state.Actor.GetActorId(),
-			Runsc:                  runscCfg,
 			Spec:                   workloadSpec,
-			SnapshotUriPrefix:      snapshot,
+			Type:                   ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
+			Config: &ateletpb.RestoreRequest_ExternalConfig{
+				ExternalConfig: &ateletpb.ExternalCheckpointConfiguration{
+					SnapshotUriPrefix: snapshot,
+				},
+			},
 		}
 		_, err = client.Restore(ctx, req)
 		if err != nil {
@@ -237,12 +244,21 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 		return nil
 	} else {
 		slog.InfoContext(ctx, "Actor has no snapshot; ActorTemplate has no golden snapshot; Booting from ActorTemplate spec")
+
+		// Booting from scratch: resolve the sandbox binaries from the pool's
+		// SandboxConfig and send them so atelet can fetch and record them.
+		// (Restores above are self-describing via the snapshot manifest.)
+		sandboxAssets, err := resolveSandboxAssets(s.workerPoolLister, s.sandboxConfigLister, state.ActorTemplate)
+		if err != nil {
+			return fmt.Errorf("while resolving sandbox assets: %w", err)
+		}
+
 		req := &ateletpb.RunRequest{
 			TargetAteomUid:         state.Actor.GetAteomPodUid(),
 			ActorTemplateNamespace: state.Actor.GetActorTemplateNamespace(),
 			ActorTemplateName:      state.Actor.GetActorTemplateName(),
 			ActorId:                state.Actor.GetActorId(),
-			Runsc:                  runscCfg,
+			SandboxAssets:          sandboxAssets,
 			Spec:                   workloadSpec,
 		}
 		_, err = client.Run(ctx, req)

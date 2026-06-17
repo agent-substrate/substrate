@@ -100,12 +100,6 @@ linters:
       # json.Encoder.Encode in HTTP-handler write paths is fire-and-forget.
       - linters: [errcheck]
         text: 'Error return value of `\(\*encoding/json\.Encoder\)\.Encode` is not checked'
-      # ST1019: duplicate import aliases in extproc_out.go are pending a
-      # separate cleanup that will collide with an in-flight PR; suppress
-      # in this file for now.
-      - path: '^cmd/atenet/internal/app/router/extproc_out\.go$'
-        linters: [staticcheck]
-        text: '^ST1019'
 
 issues:
   max-issues-per-linter: 0

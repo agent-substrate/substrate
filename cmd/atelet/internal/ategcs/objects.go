@@ -15,6 +15,7 @@
 package ategcs
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -55,6 +56,22 @@ func FetchFromGCS(ctx context.Context, client ObjectStorage, gsURL string) ([]by
 	}
 
 	return content, nil
+}
+
+// SendBytesToGCS uploads the given bytes (uncompressed) to gsURL. Intended for
+// small objects such as the snapshot manifest.
+func SendBytesToGCS(ctx context.Context, client ObjectStorage, gsURL string, content []byte) error {
+	ctx, span := tracer.Start(ctx, "sendBytesToGCS")
+	defer span.End()
+
+	bucket, object, err := parseGCSURL(gsURL)
+	if err != nil {
+		return fmt.Errorf("while parsing URL: %w", err)
+	}
+	if err := client.PutObject(ctx, bucket, object, bytes.NewReader(content)); err != nil {
+		return fmt.Errorf("while putting object bucket=%q object=%q: %w", bucket, object, err)
+	}
+	return nil
 }
 
 func SendLocalFileToGCSWithZstd(ctx context.Context, client ObjectStorage, gsURL string, localFilePath string) (err error) {

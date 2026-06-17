@@ -223,9 +223,10 @@ These resources define the intended state of the system and are managed via
 Kubernetes CRD APIs. They are used for administrative operations and actor
 environment definitions.
 
-  * **WorkerPool**: Defines a pool of "warm" compute capacity. It specifies the
-    hardware shape (CPU, memory, accelerators), manages a fleet of standby
-    worker pods initialized and ready to receive resumed actor states.
+  * **WorkerPool**: Defines a pool of "warm" compute capacity. It manages a
+    fleet of standby worker pods initialized and ready to receive resumed actor
+    states. Optional `spec.template` fields configure worker pod node
+    selection, tolerations, priority class, and node affinity.
 
   * **ActorTemplate**: An immutable definition of an actor-version. It
     encapsulates the container image, configuration, and environment required
@@ -326,7 +327,7 @@ Triggered by an inbound request at the Gateway or an explicit API call.
   2. **Assignment**: The Control Plane claims a warm worker from the
      `WorkerPool`.
 
-  3. **Hydration**: The `atelet` supervisor coordinates with the `ateom` process inside the worker pod to restore the `GoldenSnapshot` (for first-run) or the `LastSnapshot` (for recurring runs) into the sandbox.
+  3. **Hydration**: The `atelet` supervisor coordinates with the `ateom` process inside the worker pod to restore the `GoldenSnapshot` (for first-run) or the `LatestSnapshotInfo` (for recurring runs) into the sandbox.
 
   4. **Status**: Status transitions to `STATUS_RUNNING`. The actor now has an
      active Worker IP.
@@ -345,7 +346,7 @@ Triggered by an explicit `SuspendActor` call.
   3. **Reclaim**: The physical worker is wiped and returned to the `WorkerPool`.
 
   4. **Status**: Status transitions back to `STATUS_SUSPENDED`, now pointing to
-     the `LastSnapshot` for future resumptions.
+     the `LatestSnapshotInfo` for future resumptions.
 
 ### Phase 4: Deletion
 

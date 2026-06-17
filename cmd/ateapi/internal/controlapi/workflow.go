@@ -130,6 +130,8 @@ type ActorWorkflow struct {
 	store               store.Interface
 	dialer              *AteletDialer
 	actorTemplateLister listersv1alpha1.ActorTemplateLister
+	workerPoolLister    listersv1alpha1.WorkerPoolLister
+	sandboxConfigLister listersv1alpha1.SandboxConfigLister
 	kubeClient          kubernetes.Interface
 	secretCache         *envSecretCache
 	// workflowDeadline is the maximum duration of a single Resume/Suspend
@@ -140,11 +142,21 @@ type ActorWorkflow struct {
 
 // NewActorWorkflow creates a new ActorWorkflow. workflowDeadline bounds how
 // long a single Resume/Suspend can run end-to-end.
-func NewActorWorkflow(store store.Interface, dialer *AteletDialer, actorTemplateLister listersv1alpha1.ActorTemplateLister, kubeClient kubernetes.Interface, workflowDeadline time.Duration) *ActorWorkflow {
+func NewActorWorkflow(
+	store store.Interface,
+	dialer *AteletDialer,
+	actorTemplateLister listersv1alpha1.ActorTemplateLister,
+	workerPoolLister listersv1alpha1.WorkerPoolLister,
+	sandboxConfigLister listersv1alpha1.SandboxConfigLister,
+	kubeClient kubernetes.Interface,
+	workflowDeadline time.Duration,
+) *ActorWorkflow {
 	return &ActorWorkflow{
 		store:               store,
 		dialer:              dialer,
 		actorTemplateLister: actorTemplateLister,
+		workerPoolLister:    workerPoolLister,
+		sandboxConfigLister: sandboxConfigLister,
 		kubeClient:          kubeClient,
 		secretCache:         newEnvSecretCache(envSecretCacheTTL),
 		workflowDeadline:    workflowDeadline,
@@ -168,7 +180,7 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, id string, boot bool) (
 	steps := []WorkflowStep[*ResumeInput, *ResumeState]{
 		&LoadActorForResumeStep{store: w.store, actorTemplateLister: w.actorTemplateLister},
 		&AssignWorkerStep{store: w.store},
-		&CallAteletRestoreStep{dialer: w.dialer, kubeClient: w.kubeClient, secretCache: w.secretCache},
+		&CallAteletRestoreStep{dialer: w.dialer, kubeClient: w.kubeClient, secretCache: w.secretCache, workerPoolLister: w.workerPoolLister, sandboxConfigLister: w.sandboxConfigLister},
 		&FinalizeRunningStep{store: w.store},
 	}
 
@@ -197,6 +209,33 @@ func (w *ActorWorkflow) SuspendActor(ctx context.Context, id string) (*ateapipb.
 		&MarkSuspendingStep{store: w.store},
 		&CallAteletSuspendStep{dialer: w.dialer},
 		&FinalizeSuspendedStep{store: w.store},
+	}
+
+	if err := RunWorkflow(ctx, input, state, steps); err != nil {
+		return nil, err
+	}
+
+	return state.Actor, nil
+}
+
+// PauseActor executes the workflow to pause a running actor. Idempotent.
+func (w *ActorWorkflow) PauseActor(ctx context.Context, id string) (*ateapipb.Actor, error) {
+	input := &PauseInput{
+		ActorID: id,
+	}
+	state := &PauseState{}
+
+	ctx, releaseLock, err := w.acquireActorLock(ctx, id, actorLockTTL, actorLockHeartbeatInterval)
+	if err != nil {
+		return nil, err
+	}
+	defer releaseLock()
+
+	steps := []WorkflowStep[*PauseInput, *PauseState]{
+		&LoadActorForPauseStep{store: w.store, actorTemplateLister: w.actorTemplateLister},
+		&MarkPausingStep{store: w.store},
+		&CallAteletPauseStep{dialer: w.dialer},
+		&FinalizePausedStep{store: w.store},
 	}
 
 	if err := RunWorkflow(ctx, input, state, steps); err != nil {

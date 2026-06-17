@@ -36,12 +36,20 @@ var _ ateapipb.ControlServer = (*Service)(nil)
 
 // NewService creates a service. actorWorkflowDeadline bounds how long a single
 // Resume/Suspend workflow can run end-to-end.
-func NewService(persistence store.Interface, actorTemplateLister listersv1alpha1.ActorTemplateLister, dialer *AteletDialer, kubeClient kubernetes.Interface, actorWorkflowDeadline time.Duration) *Service {
+func NewService(
+	persistence store.Interface,
+	actorTemplateLister listersv1alpha1.ActorTemplateLister,
+	workerPoolLister listersv1alpha1.WorkerPoolLister,
+	sandboxConfigLister listersv1alpha1.SandboxConfigLister,
+	dialer *AteletDialer,
+	kubeClient kubernetes.Interface,
+	actorWorkflowDeadline time.Duration,
+) *Service {
 	s := &Service{
 		persistence:         persistence,
 		actorTemplateLister: actorTemplateLister,
 		dialer:              dialer,
-		actorWorkflow:       NewActorWorkflow(persistence, dialer, actorTemplateLister, kubeClient, actorWorkflowDeadline),
+		actorWorkflow:       NewActorWorkflow(persistence, dialer, actorTemplateLister, workerPoolLister, sandboxConfigLister, kubeClient, actorWorkflowDeadline),
 	}
 
 	return s

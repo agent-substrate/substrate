@@ -18,12 +18,11 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
-	"strings"
 	"testing"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	k8errors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -37,6 +36,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
+	"github.com/agent-substrate/substrate/internal/envtestbins"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 )
 
@@ -49,16 +49,14 @@ var (
 )
 
 func TestMain(m *testing.M) {
-	cmd := exec.Command("bash", "../../hack/run-tool.sh", "setup-envtest", "use", "--print", "path")
-	out, err := cmd.Output()
+	binaryAssetsDirectory, err := envtestbins.BinaryAssetsDir()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "setup-envtest failed: %v\n", err)
+		fmt.Fprintf(os.Stderr, "%v\n", err)
 		os.Exit(1)
 	}
-	binaryAssetsDirectory := strings.TrimSpace(string(out))
 
 	testEnv = &envtest.Environment{
-		CRDDirectoryPaths:     []string{"../../manifests/ate-install/generated"},
+		CRDDirectoryPaths:     []string{"../../../../manifests/ate-install/generated"},
 		BinaryAssetsDirectory: binaryAssetsDirectory,
 	}
 
@@ -338,6 +336,214 @@ func TestStatusReplicasPropagation(t *testing.T) {
 			return false, nil
 		}
 		return current.Status.Replicas == 3, nil
+	})
+}
+
+func sampleWorkerPoolPodTemplate() *atev1alpha1.WorkerPoolPodTemplate {
+	return &atev1alpha1.WorkerPoolPodTemplate{
+		NodeSelector: map[string]string{
+			"workload": "substrate",
+		},
+		Tolerations: []corev1.Toleration{{
+			Key:      "nvidia.com/gpu",
+			Operator: corev1.TolerationOpExists,
+			Effect:   corev1.TaintEffectNoSchedule,
+		}},
+		PriorityClassName: "substrate-workers",
+		NodeAffinity: &corev1.NodeAffinity{
+			RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
+				NodeSelectorTerms: []corev1.NodeSelectorTerm{{
+					MatchExpressions: []corev1.NodeSelectorRequirement{{
+						Key:      "workload",
+						Operator: corev1.NodeSelectorOpIn,
+						Values:   []string{"substrate"},
+					}},
+				}},
+			},
+		},
+	}
+}
+
+// TestWorkerPoolPodTemplatePropagation verifies that template fields propagate
+// to the managed Deployment pod template.
+func TestWorkerPoolPodTemplatePropagation(t *testing.T) {
+	wp := makeWorkerPool("test-template-propagate", "default", 1, "ateom:v1")
+	wp.Spec.Template = sampleWorkerPoolPodTemplate()
+	if err := k8sClient.Create(testCtx, wp); err != nil {
+		t.Fatalf("create WorkerPool: %v", err)
+	}
+	t.Cleanup(func() { k8sClient.Delete(testCtx, wp) }) //nolint:errcheck
+
+	eventually(t, func(ctx context.Context) (bool, error) {
+		dep, err := getDeployment(ctx, wp)
+		if err != nil || len(dep.Spec.Template.Spec.Containers) == 0 {
+			return false, nil
+		}
+		podSpec := dep.Spec.Template.Spec
+		container := podSpec.Containers[0]
+
+		if podSpec.NodeSelector["workload"] != "substrate" {
+			return false, nil
+		}
+		if len(podSpec.Tolerations) != 1 || podSpec.Tolerations[0].Key != "nvidia.com/gpu" {
+			return false, nil
+		}
+		if podSpec.PriorityClassName != "substrate-workers" {
+			return false, nil
+		}
+		if podSpec.Affinity == nil || podSpec.Affinity.NodeAffinity == nil {
+			return false, nil
+		}
+		return len(container.Resources.Requests) == 0 && len(container.Resources.Limits) == 0, nil
+	})
+}
+
+// TestWorkerPoolPodTemplateUpdate verifies that changing template fields on a
+// WorkerPool propagates to the managed Deployment.
+func TestWorkerPoolPodTemplateUpdate(t *testing.T) {
+	wp := makeWorkerPool("test-template-update", "default", 1, "ateom:v1")
+	wp.Spec.Template = sampleWorkerPoolPodTemplate()
+	if err := k8sClient.Create(testCtx, wp); err != nil {
+		t.Fatalf("create WorkerPool: %v", err)
+	}
+	t.Cleanup(func() { k8sClient.Delete(testCtx, wp) }) //nolint:errcheck
+
+	eventually(t, func(ctx context.Context) (bool, error) {
+		dep, err := getDeployment(ctx, wp)
+		return err == nil && dep.Spec.Template.Spec.NodeSelector["workload"] == "substrate", nil
+	})
+
+	if err := k8sClient.Get(testCtx, types.NamespacedName{Name: wp.Name, Namespace: wp.Namespace}, wp); err != nil {
+		t.Fatalf("re-fetch WorkerPool: %v", err)
+	}
+	wp.Spec.Template.NodeSelector = map[string]string{"workload": "updated"}
+	if err := k8sClient.Update(testCtx, wp); err != nil {
+		t.Fatalf("update WorkerPool template: %v", err)
+	}
+
+	eventually(t, func(ctx context.Context) (bool, error) {
+		dep, err := getDeployment(ctx, wp)
+		if err != nil || len(dep.Spec.Template.Spec.Containers) == 0 {
+			return false, nil
+		}
+		podSpec := dep.Spec.Template.Spec
+		return podSpec.NodeSelector["workload"] == "updated" &&
+			len(podSpec.Containers[0].Resources.Requests) == 0, nil
+	})
+}
+
+// TestWorkerPoolPodTemplateClear verifies that clearing template.nodeSelector
+// removes it from the managed Deployment.
+func TestWorkerPoolPodTemplateClear(t *testing.T) {
+	wp := makeWorkerPool("test-template-clear", "default", 1, "ateom:v1")
+	wp.Spec.Template = sampleWorkerPoolPodTemplate()
+	if err := k8sClient.Create(testCtx, wp); err != nil {
+		t.Fatalf("create WorkerPool: %v", err)
+	}
+	t.Cleanup(func() { k8sClient.Delete(testCtx, wp) }) //nolint:errcheck
+
+	eventually(t, func(ctx context.Context) (bool, error) {
+		dep, err := getDeployment(ctx, wp)
+		return err == nil && dep.Spec.Template.Spec.NodeSelector["workload"] == "substrate", nil
+	})
+
+	if err := k8sClient.Get(testCtx, types.NamespacedName{Name: wp.Name, Namespace: wp.Namespace}, wp); err != nil {
+		t.Fatalf("re-fetch WorkerPool: %v", err)
+	}
+	wp.Spec.Template.NodeSelector = nil
+	if err := k8sClient.Update(testCtx, wp); err != nil {
+		t.Fatalf("clear WorkerPool nodeSelector: %v", err)
+	}
+
+	eventually(t, func(ctx context.Context) (bool, error) {
+		dep, err := getDeployment(ctx, wp)
+		if err != nil {
+			return false, nil
+		}
+		return len(dep.Spec.Template.Spec.NodeSelector) == 0, nil
+	})
+}
+
+// TestWorkerPoolPodTemplateClearAll verifies that removing spec.template clears
+// all pod template fields owned by the workerpool-controller.
+func TestWorkerPoolPodTemplateClearAll(t *testing.T) {
+	wp := makeWorkerPool("test-template-clear-all", "default", 1, "ateom:v1")
+	wp.Spec.Template = sampleWorkerPoolPodTemplate()
+	if err := k8sClient.Create(testCtx, wp); err != nil {
+		t.Fatalf("create WorkerPool: %v", err)
+	}
+	t.Cleanup(func() { k8sClient.Delete(testCtx, wp) }) //nolint:errcheck
+
+	eventually(t, func(ctx context.Context) (bool, error) {
+		dep, err := getDeployment(ctx, wp)
+		if err != nil || len(dep.Spec.Template.Spec.Containers) == 0 {
+			return false, nil
+		}
+		podSpec := dep.Spec.Template.Spec
+		container := podSpec.Containers[0]
+		return podSpec.NodeSelector["workload"] == "substrate" &&
+			len(podSpec.Tolerations) == 1 &&
+			podSpec.PriorityClassName == "substrate-workers" &&
+			podSpec.Affinity != nil &&
+			podSpec.Affinity.NodeAffinity != nil &&
+			len(container.Resources.Requests) == 0, nil
+	})
+
+	if err := k8sClient.Get(testCtx, types.NamespacedName{Name: wp.Name, Namespace: wp.Namespace}, wp); err != nil {
+		t.Fatalf("re-fetch WorkerPool: %v", err)
+	}
+	wp.Spec.Template = nil
+	if err := k8sClient.Update(testCtx, wp); err != nil {
+		t.Fatalf("clear WorkerPool template: %v", err)
+	}
+
+	eventually(t, func(ctx context.Context) (bool, error) {
+		dep, err := getDeployment(ctx, wp)
+		if err != nil || len(dep.Spec.Template.Spec.Containers) == 0 {
+			return false, nil
+		}
+		podSpec := dep.Spec.Template.Spec
+		container := podSpec.Containers[0]
+		return len(podSpec.NodeSelector) == 0 &&
+			len(podSpec.Tolerations) == 0 &&
+			podSpec.PriorityClassName == "" &&
+			(podSpec.Affinity == nil || podSpec.Affinity.NodeAffinity == nil) &&
+			len(container.Resources.Limits) == 0 &&
+			len(container.Resources.Requests) == 0, nil
+	})
+}
+
+// TestSSARevertsOwnedPodTemplateFields verifies that if an external actor
+// changes pod template fields owned by the workerpool-controller, the
+// controller reverts them on the next reconcile.
+func TestSSARevertsOwnedPodTemplateFields(t *testing.T) {
+	wp := makeWorkerPool("test-ssa-template", "default", 1, "ateom:v1")
+	wp.Spec.Template = sampleWorkerPoolPodTemplate()
+	if err := k8sClient.Create(testCtx, wp); err != nil {
+		t.Fatalf("create WorkerPool: %v", err)
+	}
+	t.Cleanup(func() { k8sClient.Delete(testCtx, wp) }) //nolint:errcheck
+
+	eventually(t, func(ctx context.Context) (bool, error) {
+		dep, err := getDeployment(ctx, wp)
+		return err == nil && dep.Spec.Template.Spec.NodeSelector["workload"] == "substrate", nil
+	})
+
+	dep, err := getDeployment(testCtx, wp)
+	if err != nil {
+		t.Fatalf("get Deployment: %v", err)
+	}
+	dep.Spec.Template.Spec.NodeSelector = map[string]string{"workload": "rogue"}
+	if err := k8sClient.Update(testCtx, dep); err != nil {
+		t.Fatalf("rogue update: %v", err)
+	}
+
+	eventually(t, func(ctx context.Context) (bool, error) {
+		dep, err := getDeployment(ctx, wp)
+		if err != nil {
+			return false, nil
+		}
+		return dep.Spec.Template.Spec.NodeSelector["workload"] == "substrate", nil
 	})
 }
 

@@ -19,19 +19,14 @@ import (
 	"fmt"
 
 	appsv1 "k8s.io/api/apps/v1"
-	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	k8errors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	appsv1ac "k8s.io/client-go/applyconfigurations/apps/v1"
-	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
-	metav1ac "k8s.io/client-go/applyconfigurations/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
-	"github.com/agent-substrate/substrate/internal/ateompath"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 )
 
@@ -114,57 +109,6 @@ func (r *WorkerPoolReconciler) syncStatus(ctx context.Context, wp *atev1alpha1.W
 	}
 
 	return nil
-}
-
-// buildDeploymentApplyConfig constructs the SSA apply configuration for the
-// Deployment managed by a WorkerPool. Only fields owned by this controller
-// are declared here.
-func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool) *appsv1ac.DeploymentApplyConfiguration {
-	return appsv1ac.Deployment(deploymentName(wp.Name), wp.Namespace).
-		WithOwnerReferences(metav1ac.OwnerReference().
-			WithAPIVersion(atev1alpha1.GroupVersion.String()).
-			WithKind("WorkerPool").
-			WithName(wp.Name).
-			WithUID(wp.UID).
-			WithController(true).
-			WithBlockOwnerDeletion(true)).
-		WithSpec(appsv1ac.DeploymentSpec().
-			WithReplicas(wp.Spec.Replicas).
-			WithSelector(metav1ac.LabelSelector().
-				WithMatchLabels(map[string]string{"ate.dev/worker-pool": wp.Name})).
-			WithTemplate(corev1ac.PodTemplateSpec().
-				WithLabels(map[string]string{
-					"ate.dev/worker-pool": wp.Name,
-				}).
-				WithSpec(corev1ac.PodSpec().
-					WithContainers(corev1ac.Container().
-						WithName("ateom").
-						WithImage(wp.Spec.AteomImage).
-						WithArgs(
-							"--pod-uid=$(POD_UID)",
-						).
-						WithSecurityContext(corev1ac.SecurityContext().
-							WithPrivileged(true).
-							WithRunAsUser(0).
-							WithRunAsGroup(0)).
-						WithEnv(
-							corev1ac.EnvVar().
-								WithName("POD_UID").
-								WithValueFrom(corev1ac.EnvVarSource().
-									WithFieldRef(corev1ac.ObjectFieldSelector().
-										WithFieldPath("metadata.uid"))),
-						).
-						WithVolumeMounts(corev1ac.VolumeMount().
-							WithName("run-ateom").
-							WithMountPath(ateompath.BasePath))).
-					WithSecurityContext(corev1ac.PodSecurityContext().
-						WithRunAsUser(0).
-						WithRunAsGroup(0)).
-					WithVolumes(corev1ac.Volume().
-						WithName("run-ateom").
-						WithHostPath(corev1ac.HostPathVolumeSource().
-							WithPath(ateompath.BasePath).
-							WithType(corev1.HostPathDirectoryOrCreate))))))
 }
 
 // SetupWithManager sets up the controller with the Manager.
