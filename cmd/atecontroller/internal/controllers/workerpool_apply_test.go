@@ -17,41 +17,30 @@ package controllers
 import (
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	appsv1ac "k8s.io/client-go/applyconfigurations/apps/v1"
+	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
+	metav1ac "k8s.io/client-go/applyconfigurations/meta/v1"
+
+	"github.com/agent-substrate/substrate/internal/ateompath"
+	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 )
 
-func TestTolerationsToApply(t *testing.T) {
-	tolerations := []corev1.Toleration{{
-		Key:               "gpu",
-		Operator:          corev1.TolerationOpEqual,
-		Value:             "true",
-		Effect:            corev1.TaintEffectNoSchedule,
-		TolerationSeconds: ptrInt64(300),
-	}}
-
-	got := tolerationsToApply(tolerations)
-	if len(got) != 1 {
-		t.Fatalf("expected 1 toleration, got %d", len(got))
-	}
-	if got[0].Key == nil || *got[0].Key != "gpu" {
-		t.Fatalf("unexpected key: %v", got[0].Key)
-	}
-	if got[0].TolerationSeconds == nil || *got[0].TolerationSeconds != 300 {
-		t.Fatalf("unexpected tolerationSeconds: %v", got[0].TolerationSeconds)
-	}
-}
-
-func TestNodeAffinityToApply(t *testing.T) {
-	na := &corev1.NodeAffinity{
+func TestBuildDeploymentApplyConfig(t *testing.T) {
+	requiredNodeAffinity := &corev1.NodeAffinity{
 		RequiredDuringSchedulingIgnoredDuringExecution: &corev1.NodeSelector{
 			NodeSelectorTerms: []corev1.NodeSelectorTerm{{
 				MatchExpressions: []corev1.NodeSelectorRequirement{{
-					Key:      "zone",
+					Key:      "workload",
 					Operator: corev1.NodeSelectorOpIn,
-					Values:   []string{"us-west1-a"},
+					Values:   []string{"substrate"},
 				}},
 			}},
 		},
+	}
+	preferredNodeAffinity := &corev1.NodeAffinity{
 		PreferredDuringSchedulingIgnoredDuringExecution: []corev1.PreferredSchedulingTerm{{
 			Weight: 50,
 			Preference: corev1.NodeSelectorTerm{
@@ -63,19 +52,197 @@ func TestNodeAffinityToApply(t *testing.T) {
 			},
 		}},
 	}
+	tolerationSeconds := int64(300)
+	toleration := corev1.Toleration{
+		Key:               "dedicated",
+		Operator:          corev1.TolerationOpEqual,
+		Value:             "workerpool",
+		Effect:            corev1.TaintEffectNoSchedule,
+		TolerationSeconds: &tolerationSeconds,
+	}
 
-	got := nodeAffinityToApply(na)
-	if got.RequiredDuringSchedulingIgnoredDuringExecution == nil {
-		t.Fatal("expected required node selector")
+	tests := []struct {
+		name string
+		wp   *atev1alpha1.WorkerPool
+		want *appsv1ac.DeploymentApplyConfiguration
+	}{
+		{
+			name: "default workerpool",
+			wp:   testWorkerPoolApplyConfig(nil),
+			want: expectedDeploymentApplyConfig(nil),
+		},
+		{
+			name: "with node selector",
+			wp: testWorkerPoolApplyConfig(&atev1alpha1.WorkerPoolPodTemplate{
+				NodeSelector: map[string]string{
+					"accelerator": "gpu",
+					"topology":    "high-mem",
+				},
+			}),
+			want: expectedDeploymentApplyConfig(func(podSpecAC *corev1ac.PodSpecApplyConfiguration) {
+				podSpecAC.WithNodeSelector(map[string]string{
+					"accelerator": "gpu",
+					"topology":    "high-mem",
+				})
+			}),
+		},
+		{
+			name: "with tolerations",
+			wp: testWorkerPoolApplyConfig(&atev1alpha1.WorkerPoolPodTemplate{
+				Tolerations: []corev1.Toleration{toleration},
+			}),
+			want: expectedDeploymentApplyConfig(func(podSpecAC *corev1ac.PodSpecApplyConfiguration) {
+				podSpecAC.Tolerations = []corev1ac.TolerationApplyConfiguration{
+					*corev1ac.Toleration().
+						WithKey("dedicated").
+						WithOperator(corev1.TolerationOpEqual).
+						WithValue("workerpool").
+						WithEffect(corev1.TaintEffectNoSchedule).
+						WithTolerationSeconds(300),
+				}
+			}),
+		},
+		{
+			name: "with node affinity",
+			wp: testWorkerPoolApplyConfig(&atev1alpha1.WorkerPoolPodTemplate{
+				NodeAffinity: requiredNodeAffinity,
+			}),
+			want: expectedDeploymentApplyConfig(func(podSpecAC *corev1ac.PodSpecApplyConfiguration) {
+				podSpecAC.WithAffinity(corev1ac.Affinity().WithNodeAffinity(
+					corev1ac.NodeAffinity().WithRequiredDuringSchedulingIgnoredDuringExecution(
+						corev1ac.NodeSelector().WithNodeSelectorTerms(
+							corev1ac.NodeSelectorTerm().WithMatchExpressions(
+								corev1ac.NodeSelectorRequirement().
+									WithKey("workload").
+									WithOperator(corev1.NodeSelectorOpIn).
+									WithValues("substrate"),
+							),
+						),
+					),
+				))
+			}),
+		},
+		{
+			name: "with priority class name",
+			wp: testWorkerPoolApplyConfig(&atev1alpha1.WorkerPoolPodTemplate{
+				PriorityClassName: "interactive-workerpool",
+			}),
+			want: expectedDeploymentApplyConfig(func(podSpecAC *corev1ac.PodSpecApplyConfiguration) {
+				podSpecAC.WithPriorityClassName("interactive-workerpool")
+			}),
+		},
+		{
+			name: "with combined scheduling fields",
+			wp: testWorkerPoolApplyConfig(&atev1alpha1.WorkerPoolPodTemplate{
+				NodeSelector: map[string]string{
+					"accelerator": "gpu",
+					"topology":    "high-mem",
+				},
+				Tolerations:       []corev1.Toleration{toleration},
+				PriorityClassName: "interactive-workerpool",
+				NodeAffinity:      preferredNodeAffinity,
+			}),
+			want: expectedDeploymentApplyConfig(func(podSpecAC *corev1ac.PodSpecApplyConfiguration) {
+				podSpecAC.WithNodeSelector(map[string]string{
+					"accelerator": "gpu",
+					"topology":    "high-mem",
+				})
+				podSpecAC.Tolerations = []corev1ac.TolerationApplyConfiguration{
+					*corev1ac.Toleration().
+						WithKey("dedicated").
+						WithOperator(corev1.TolerationOpEqual).
+						WithValue("workerpool").
+						WithEffect(corev1.TaintEffectNoSchedule).
+						WithTolerationSeconds(300),
+				}
+				podSpecAC.WithPriorityClassName("interactive-workerpool")
+				podSpecAC.WithAffinity(corev1ac.Affinity().WithNodeAffinity(
+					corev1ac.NodeAffinity().WithPreferredDuringSchedulingIgnoredDuringExecution(
+						corev1ac.PreferredSchedulingTerm().
+							WithWeight(50).
+							WithPreference(corev1ac.NodeSelectorTerm().WithMatchExpressions(
+								corev1ac.NodeSelectorRequirement().
+									WithKey("disk").
+									WithOperator(corev1.NodeSelectorOpIn).
+									WithValues("ssd"),
+							)),
+					),
+				))
+			}),
+		},
 	}
-	if len(got.PreferredDuringSchedulingIgnoredDuringExecution) != 1 {
-		t.Fatalf("expected 1 preferred term, got %d", len(got.PreferredDuringSchedulingIgnoredDuringExecution))
-	}
-	if got.PreferredDuringSchedulingIgnoredDuringExecution[0].Weight == nil || *got.PreferredDuringSchedulingIgnoredDuringExecution[0].Weight != 50 {
-		t.Fatalf("unexpected weight: %v", got.PreferredDuringSchedulingIgnoredDuringExecution[0].Weight)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := buildDeploymentApplyConfig(tt.wp)
+			if diff := cmp.Diff(tt.want, got); diff != "" {
+				t.Fatalf("buildDeploymentApplyConfig() mismatch (-want +got):\n%s", diff)
+			}
+		})
 	}
 }
 
-func ptrInt64(v int64) *int64 {
-	return &v
+func testWorkerPoolApplyConfig(tmpl *atev1alpha1.WorkerPoolPodTemplate) *atev1alpha1.WorkerPool {
+	return &atev1alpha1.WorkerPool{
+		ObjectMeta: metav1.ObjectMeta{Name: "pool", Namespace: "default", UID: "uid"},
+		Spec: atev1alpha1.WorkerPoolSpec{
+			Replicas:   2,
+			AteomImage: "ateom:v1",
+			Template:   tmpl,
+		},
+	}
+}
+
+func expectedDeploymentApplyConfig(mutatePodSpec func(*corev1ac.PodSpecApplyConfiguration)) *appsv1ac.DeploymentApplyConfiguration {
+	wp := testWorkerPoolApplyConfig(nil)
+
+	podSpecAC := corev1ac.PodSpec().
+		WithSecurityContext(corev1ac.PodSecurityContext().
+			WithRunAsUser(0).
+			WithRunAsGroup(0)).
+		WithVolumes(corev1ac.Volume().
+			WithName("run-ateom").
+			WithHostPath(corev1ac.HostPathVolumeSource().
+				WithPath(ateompath.BasePath).
+				WithType(corev1.HostPathDirectoryOrCreate))).
+		WithContainers(corev1ac.Container().
+			WithName("ateom").
+			WithImage(wp.Spec.AteomImage).
+			WithArgs("--pod-uid=$(POD_UID)").
+			WithSecurityContext(corev1ac.SecurityContext().
+				WithPrivileged(true).
+				WithRunAsUser(0).
+				WithRunAsGroup(0)).
+			WithEnv(corev1ac.EnvVar().
+				WithName("POD_UID").
+				WithValueFrom(corev1ac.EnvVarSource().
+					WithFieldRef(corev1ac.ObjectFieldSelector().
+						WithFieldPath("metadata.uid")))).
+			WithVolumeMounts(corev1ac.VolumeMount().
+				WithName("run-ateom").
+				WithMountPath(ateompath.BasePath)))
+
+	podSpecAC.NodeSelector = map[string]string{}
+	podSpecAC.Tolerations = []corev1ac.TolerationApplyConfiguration{}
+	podSpecAC.WithPriorityClassName("")
+	podSpecAC.WithAffinity(corev1ac.Affinity())
+	if mutatePodSpec != nil {
+		mutatePodSpec(podSpecAC)
+	}
+
+	return appsv1ac.Deployment(deploymentName(wp.Name), wp.Namespace).
+		WithOwnerReferences(metav1ac.OwnerReference().
+			WithAPIVersion(atev1alpha1.GroupVersion.String()).
+			WithKind("WorkerPool").
+			WithName(wp.Name).
+			WithUID(wp.UID).
+			WithController(true).
+			WithBlockOwnerDeletion(true)).
+		WithSpec(appsv1ac.DeploymentSpec().
+			WithReplicas(wp.Spec.Replicas).
+			WithSelector(metav1ac.LabelSelector().
+				WithMatchLabels(map[string]string{"ate.dev/worker-pool": wp.Name})).
+			WithTemplate(corev1ac.PodTemplateSpec().
+				WithLabels(map[string]string{"ate.dev/worker-pool": wp.Name}).
+				WithSpec(podSpecAC)))
 }
