@@ -18,8 +18,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
-	"strings"
 	"testing"
 	"time"
 
@@ -37,6 +35,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
+	"github.com/agent-substrate/substrate/internal/envtestbins"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 )
 
@@ -49,13 +48,11 @@ var (
 )
 
 func TestMain(m *testing.M) {
-	cmd := exec.Command("bash", "../../../../hack/run-tool.sh", "setup-envtest", "use", "--print", "path")
-	out, err := cmd.Output()
+	binaryAssetsDirectory, err := envtestbins.BinaryAssetsDir()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "setup-envtest failed: %v\n", err)
+		fmt.Fprintf(os.Stderr, "%v\n", err)
 		os.Exit(1)
 	}
-	binaryAssetsDirectory := strings.TrimSpace(string(out))
 
 	testEnv = &envtest.Environment{
 		CRDDirectoryPaths:     []string{"../../../../manifests/ate-install/generated"},

@@ -20,7 +20,6 @@ import (
 	"log"
 	"net"
 	"os"
-	"os/exec"
 	"strings"
 	"sync"
 	"testing"
@@ -28,6 +27,7 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/ateredis"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
+	"github.com/agent-substrate/substrate/internal/envtestbins"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/client/clientset/versioned"
@@ -60,14 +60,10 @@ var (
 )
 
 func TestMain(m *testing.M) {
-	cmd := exec.Command("bash", "../../../../hack/run-tool.sh", "setup-envtest", "use", "--print", "path")
-	var stderr strings.Builder
-	cmd.Stderr = &stderr
-	out, err := cmd.Output()
+	binaryAssetsDirectory, err := envtestbins.BinaryAssetsDir()
 	if err != nil {
-		log.Fatalf("setup-envtest: %v (stderr: %s)", err, stderr.String())
+		log.Fatalf("%v", err)
 	}
-	binaryAssetsDirectory := strings.TrimSpace(string(out))
 
 	testEnv = &envtest.Environment{
 		CRDDirectoryPaths:     []string{"../../../../manifests/ate-install/generated"},
