@@ -320,8 +320,10 @@ func createActorTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients
 			Namespace: nsObj.Name,
 		},
 		Spec: v1alpha1.WorkerPoolSpec{
-			Replicas:   5,
-			AteomImage: existingWp.Spec.AteomImage,
+			Replicas:          5,
+			AteomImage:        existingWp.Spec.AteomImage,
+			SandboxClass:      existingWp.Spec.SandboxClass,
+			SandboxConfigName: existingWp.Spec.SandboxConfigName,
 		},
 	}
 	_, err = clients.SubstrateK8s.ApiV1alpha1().WorkerPools(nsObj.Name).Create(ctx, wp, metav1.CreateOptions{})
@@ -340,7 +342,6 @@ func createActorTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients
 				Namespace: nsObj.Name,
 				Name:      "counter",
 			},
-			Runsc:      existingAt.Spec.Runsc,
 			PauseImage: existingAt.Spec.PauseImage,
 			Containers: existingAt.Spec.Containers,
 			SnapshotsConfig: v1alpha1.SnapshotsConfig{
