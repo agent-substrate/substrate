@@ -35,6 +35,9 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -78,6 +81,9 @@ type RouterConfig struct {
 	EnvoyCertPath  string
 	LogLevel       string
 	MetricsAddr    string
+	// OtlpCollectorAddress is the host:port of the OTLP gRPC collector that
+	// Envoy reports tracing spans to. Empty disables Envoy-side tracing.
+	OtlpCollectorAddress string
 }
 
 // RouterServer instantiates and coordinates runtime threads executing system modules.
@@ -96,7 +102,6 @@ type RouterServer struct {
 func NewRouterServer(cfg RouterConfig) (*RouterServer, error) {
 	var k8sClient client.Client
 	var clientset kubernetes.Interface
-	var err error
 
 	if cfg.TemplatesFile == "" {
 		k8sCfg, err := config.GetConfig()
@@ -125,14 +130,6 @@ func NewRouterServer(cfg RouterConfig) (*RouterServer, error) {
 		}
 	}
 
-	conn, err := grpc.NewClient(cfg.AteapiAddr, grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{InsecureSkipVerify: true})))
-	if err != nil {
-		return nil, fmt.Errorf("failed to establish grpc channel to ateapi client: %w", err)
-	}
-	slog.Info("Connecting to ateapi", slog.String("address", cfg.AteapiAddr))
-
-	apiClient := ateapipb.NewControlClient(conn)
-
 	var store atStore
 	if cfg.TemplatesFile != "" {
 		store = newFileATStore(cfg.TemplatesFile)
@@ -144,7 +141,6 @@ func NewRouterServer(cfg RouterConfig) (*RouterServer, error) {
 		cfg:       cfg,
 		k8sClient: k8sClient,
 		clientset: clientset,
-		apiClient: apiClient,
 		atStore:   store,
 	}, nil
 }
@@ -173,6 +169,18 @@ func (s *RouterServer) Run(ctx context.Context) error {
 	}
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level})))
 
+	// Tracing must be initialized before constructing the ateapi gRPC client
+	// below, because otelgrpc.NewClientHandler captures the global
+	// TracerProvider at construction time.
+	tp, err := serverboot.InitTracing(ctx, serverboot.TracingOptions{
+		ServiceName: routerServiceName,
+		Sampler:     sdktrace.ParentBased(sdktrace.NeverSample()),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to initialize tracing: %w", err)
+	}
+	defer serverboot.ShutdownProvider("TracerProvider", tp.Shutdown)
+
 	mp, err := serverboot.InitMetrics(ctx, routerServiceName)
 	if err != nil {
 		return fmt.Errorf("failed to initialize metrics: %w", err)
@@ -181,12 +189,26 @@ func (s *RouterServer) Run(ctx context.Context) error {
 
 	go serverboot.StartMetricsServer(ctx, serverboot.MetricsServerOptions{Addr: s.cfg.MetricsAddr})
 
+	conn, err := grpc.NewClient(
+		s.cfg.AteapiAddr,
+		grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{InsecureSkipVerify: true})),
+		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to establish grpc channel to ateapi client: %w", err)
+	}
+	slog.InfoContext(ctx, "Connecting to ateapi", slog.String("address", s.cfg.AteapiAddr))
+	s.apiClient = ateapipb.NewControlClient(conn)
+
 	slog.InfoContext(ctx, "Starting substrate router subsystem", slog.Bool("standalone", s.cfg.Standalone))
 
 	g, ctx := errgroup.WithContext(ctx)
 
 	xdsSrv := NewXdsServer(s.cfg.XdsPort)
 	xdsSrv.SetConfig(s.cfg.HttpPort, s.cfg.ExtprocPort, s.cfg.ExtprocAddr)
+	if err := xdsSrv.SetOtlpCollector(s.cfg.OtlpCollectorAddress); err != nil {
+		return fmt.Errorf("configure OTLP collector: %w", err)
+	}
 
 	var certContent, keyContent string
 	if s.cfg.EnvoyCertPath == "" {
@@ -258,7 +280,7 @@ func (s *RouterServer) Run(ctx context.Context) error {
 		mux.HandleFunc("/statusz", s.handleStatusz)
 
 		httpServer := &http.Server{
-			Handler: mux,
+			Handler: otelhttp.NewHandler(mux, "/"),
 		}
 
 		g.Go(func() error {
