@@ -483,10 +483,22 @@ func listFiles(dir string) ([]string, error) {
 }
 
 // teardownActor stops the CH VMM and the kata shim for an actor. Best-effort:
-// the VM may be paused (post-snapshot), so shutting the VMM down via the CH API
-// is the reliable stop; the shim teardown then cleans up sandbox state. ra may
-// be nil (e.g. ateom restarted and lost in-memory state).
+// the snapshot is already on disk, so this only needs to release resources. ra
+// may be nil (e.g. ateom restarted and lost in-memory state).
+//
+// Order matters for kata-shim-owned actors: kill the shim process BEFORE
+// destroying the VM. If the CH VM is shut down first, the shim's wait goroutine
+// observes the task vanish and runs kata's container-stop path, which signals the
+// (now-gone) guest agent over vsock and panics on a nil agent connection
+// (kata_agent.go signalProcess). Killing the shim first avoids that path
+// entirely; CleanupSandboxState then sweeps the orphaned VMM/virtiofsd + host
+// state without needing kata's (buggy) graceful teardown.
 func (s *AteomService) teardownActor(ctx context.Context, id string, ra *runningActor, client *ch.Client) {
+	if ra != nil && ra.shim != nil {
+		// SIGKILL the foreground shim server + close ttrpc, before the VM goes.
+		_ = ra.shim.Close()
+	}
+
 	if client != nil {
 		tShutdown := time.Now()
 		shutCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
@@ -496,32 +508,24 @@ func (s *AteomService) teardownActor(ctx context.Context, id string, ra *running
 		cancel()
 		slog.InfoContext(ctx, "CH API shutdown done", slog.Duration("took", time.Since(tShutdown)))
 	}
-	if ra == nil {
-		return
-	}
-	// kata-shim-owned: stop the shim (which owns the CH process) + clean up.
-	if ra.shim != nil {
-		shutCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-		if err := ra.shim.Shutdown(shutCtx, true); err != nil {
-			slog.WarnContext(ctx, "shim shutdown failed (continuing teardown)", slog.Any("err", err))
+
+	if ra != nil {
+		// ateom-owned (post-restore): kill the CH + virtiofsd we launched.
+		if ra.chCmd != nil && ra.chCmd.Process != nil {
+			_ = ra.chCmd.Process.Kill()
+			_, _ = ra.chCmd.Process.Wait()
 		}
-		cancel()
-		_ = ra.shim.Close()
-		clCtx, cancel2 := context.WithTimeout(ctx, 15*time.Second)
-		if err := ra.shim.CleanupAction(clCtx); err != nil {
-			slog.WarnContext(ctx, "shim cleanup failed", slog.Any("err", err))
+		if ra.vfsdCmd != nil && ra.vfsdCmd.Process != nil {
+			_ = ra.vfsdCmd.Process.Kill()
+			_, _ = ra.vfsdCmd.Process.Wait()
 		}
-		cancel2()
 	}
-	// ateom-owned (post-restore): kill the CH + virtiofsd we launched.
-	if ra.chCmd != nil && ra.chCmd.Process != nil {
-		_ = ra.chCmd.Process.Kill()
-		_, _ = ra.chCmd.Process.Wait()
-	}
-	if ra.vfsdCmd != nil && ra.vfsdCmd.Process != nil {
-		_ = ra.vfsdCmd.Process.Kill()
-		_, _ = ra.vfsdCmd.Process.Wait()
-	}
+
+	// Sweep kata's host-side state + any orphaned per-sandbox processes (e.g. a
+	// shim-owned actor's now-parentless virtiofsd). This is ateom's own cleanup
+	// (process kill + unmount + rm); it never calls into the kata agent, so it
+	// can't hit the teardown panic above.
+	kata.CleanupSandboxState(id)
 }
 
 // RestoreWorkload restores the actor on a (possibly different) pod by relaunching
