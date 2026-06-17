@@ -21,3 +21,8 @@ defaultPlatforms:
 baseImageOverrides:
   github.com/agent-substrate/substrate/demos/sandbox: alpine
   github.com/agent-substrate/substrate/demos/agent-secret: alpine
+  # ateom-microvm shells out to nsenter + tar (to capture the kata shim's
+  # virtio-fs shared dir) and execs the fetched cloud-hypervisor/virtiofsd
+  # (Rust, glibc-linked) binaries. debian-slim provides util-linux (nsenter),
+  # tar, and glibc — NOT distroless/static. Kata/CH assets are fetched at runtime.
+  github.com/agent-substrate/substrate/cmd/ateom-microvm: debian:stable-slim
