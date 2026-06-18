@@ -61,6 +61,12 @@ class UpdatableSampler(Sampler):
 _initialized = False
 _sampler = UpdatableSampler(0.0)
 
+
+# All locust test files share one process-global TracerProvider, so the
+# service name is fixed here rather than passed per-call.
+SERVICE_NAME_VALUE = "substrate-locust"
+
+
 def init_tracing(service_name: str) -> None:
     global _initialized, _sampler
     if _initialized:
@@ -84,7 +90,7 @@ def init_tracing(service_name: str) -> None:
         _sampler.update_probability(probability)
 
         resource = Resource(attributes={
-            SERVICE_NAME: service_name
+            SERVICE_NAME: SERVICE_NAME_VALUE
         })
         provider = TracerProvider(sampler=_sampler, resource=resource)
 
@@ -94,7 +100,7 @@ def init_tracing(service_name: str) -> None:
 
         trace.set_tracer_provider(provider)
         set_global_textmap(TraceContextTextMapPropagator())
-        logger.info(f"Tracing initialized for {service_name} with initial probability {probability}")
+        logger.info(f"Tracing initialized for {SERVICE_NAME_VALUE} with initial probability {probability}")
 
     @events.test_start.add_listener
     def on_test_start(environment: Environment, **kwargs) -> None:

@@ -23,3 +23,4 @@ grpcio-tools
 opentelemetry-exporter-otlp
 opentelemetry-instrumentation-grpc
 opentelemetry-instrumentation-requests
+google-cloud-storage

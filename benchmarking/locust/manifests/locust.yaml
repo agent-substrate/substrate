@@ -15,19 +15,19 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: locust-all
-  namespace: monitoring
+  name: locust
+  namespace: benchmarking
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: locust-all
+      app: locust
   strategy:
     type: Recreate
   template:
     metadata:
       labels:
-        app: locust-all
+        app: locust
       annotations:
         prometheus.io/scrape: "true"
         prometheus.io/port: "8000"
@@ -75,11 +75,11 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: locust-all
-  namespace: monitoring
+  name: locust
+  namespace: benchmarking
 spec:
   selector:
-    app: locust-all
+    app: locust
   ports:
   - name: web
     protocol: TCP

@@ -28,7 +28,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-init_tracing("locust-test")
+init_tracing()
 
 # Initialize metrics
 init_metrics()
