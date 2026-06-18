@@ -42,8 +42,6 @@ spec:
   - name: sandbox
     image: ko://github.com/agent-substrate/substrate/demos/sandbox
     command: ["/ko-app/sandbox"]
-    ports:
-    - containerPort: 80
     env:
     - name: PORT
       value: "80"
