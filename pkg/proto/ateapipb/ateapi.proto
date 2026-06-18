@@ -125,10 +125,21 @@ message Actor {
   // suspend/pause since eligibility is no longer a single fixed pool
   // reference on the ActorTemplate.
   string worker_pool_name = 14;
+
+  // The atespace (tenant boundary) this actor belongs to. Part of the actor's
+  // resource identity; folded into the Redis key as actor:<atespace>:<actor_id>.
+  string atespace = 15;
+}
+
+// Atespace is the tenant boundary an Actor is created into. Placeholder for now
+// (name only).
+message Atespace {
+  string name = 1;
 }
 
 message GetActorRequest {
   string actor_id = 1;
+  string atespace = 2;
 }
 
 message GetActorResponse {
@@ -149,6 +160,9 @@ message CreateActorRequest {
   // worker_selector sets the actor's placement constraint at creation time.
   // If empty, the actor matches any pool admitted by the template's selector.
   Selector worker_selector = 4;
+
+  // The atespace to create the actor into.
+  string atespace = 5;
 }
 
 message CreateActorResponse {
@@ -164,6 +178,9 @@ message UpdateActorRequest {
   // worker_selector replaces the actor's current placement constraint.
   // Takes effect on the next ResumeActor call.
   Selector worker_selector = 2;
+
+  // The atespace the actor lives in.
+  string atespace = 3;
 }
 
 message UpdateActorResponse {
@@ -172,6 +189,7 @@ message UpdateActorResponse {
 
 message SuspendActorRequest {
   string actor_id = 1;
+  string atespace = 2;
 }
 
 message SuspendActorResponse {
@@ -180,6 +198,7 @@ message SuspendActorResponse {
 
 message PauseActorRequest {
   string actor_id = 1;
+  string atespace = 2;
 }
 
 message PauseActorResponse {
@@ -191,6 +210,7 @@ message ResumeActorRequest {
 
   // If true, skip golden snapshot and boot the workload from scratch.
   bool boot = 2;
+  string atespace = 3;
 }
 
 message ResumeActorResponse {
@@ -199,6 +219,7 @@ message ResumeActorResponse {
 
 message DeleteActorRequest {
   string actor_id = 1;
+  string atespace = 2;
 }
 
 message DeleteActorResponse {}
@@ -220,6 +241,9 @@ message ListActorsRequest {
   // An opaque pagination token obtained from a previous ListActorsResponse.
   // Empty for the first request.
   string page_token = 2;
+
+  // If set, list only actors in this atespace (scoped SCAN actor:<atespace>:*).
+  string atespace = 3;
 }
 
 // Response for a ListActors operation.
@@ -244,6 +268,10 @@ message Worker {
   int64  version         = 8;
   string worker_pod_uid  = 9;
   string node_name       = 10;
+
+  // The atespace of the actor currently running on this worker. Set when an actor
+  // is assigned, cleared when freed. It is NOT the worker's own atespace.
+  string actor_atespace = 11;
 }
 
 message DebugClearRequest {}
