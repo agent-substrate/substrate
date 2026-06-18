@@ -50,6 +50,7 @@ import (
 	endpointgrpc "github.com/envoyproxy/go-control-plane/envoy/service/endpoint/v3"
 	listenergrpc "github.com/envoyproxy/go-control-plane/envoy/service/listener/v3"
 	routegrpc "github.com/envoyproxy/go-control-plane/envoy/service/route/v3"
+	typev3 "github.com/envoyproxy/go-control-plane/envoy/type/v3"
 	"github.com/envoyproxy/go-control-plane/pkg/cache/types"
 	cachev3 "github.com/envoyproxy/go-control-plane/pkg/cache/v3"
 	resourcev3 "github.com/envoyproxy/go-control-plane/pkg/resource/v3"
@@ -145,7 +146,6 @@ func (x *XdsServer) UpdateSnapshot() error {
 		resourcev3.RouteType:    routes,
 		resourcev3.ListenerType: listeners,
 	})
-
 	if err != nil {
 		return fmt.Errorf("failed to build xDS Snapshot: %w", err)
 	}
@@ -264,6 +264,21 @@ func (x *XdsServer) buildDynamicForwardProxyCluster() *clusterv3.Cluster {
 				TypedConfig: clusterConfigAny,
 			},
 		},
+		CircuitBreakers: &clusterv3.CircuitBreakers{
+			Thresholds: []*clusterv3.CircuitBreakers_Thresholds{
+				{
+					Priority: corev3.RoutingPriority_DEFAULT,
+					RetryBudget: &clusterv3.CircuitBreakers_Thresholds_RetryBudget{
+						// Set to Envoy's default to scale retries with load.
+						BudgetPercent: &typev3.Percent{Value: 20.0},
+						// Floor for low-traffic periods, raised above the default
+						// of 3 so a burst of simultaneous first-request resumes
+						// is not throttled when overall load is low.
+						MinRetryConcurrency: wrapperspb.UInt32(20),
+					},
+				},
+			},
+		},
 	}
 }
 
@@ -287,6 +302,22 @@ func (x *XdsServer) buildRoutes() *routev3.RouteConfiguration {
 									Cluster: "dynamic_forward_proxy_cluster",
 								},
 								Timeout: durationpb.New(10 * time.Second),
+								// A request can arrive at the router in the brief window
+								// after an actor is resumed but before its workload is
+								// accepting connections, or while a pooled upstream
+								// connection to a just-suspended actor is going stale.
+								// Either case surfaces as an upstream reset/connection
+								// failure before response headers. Retry these transient
+								// failures (with backoff) so the request lands once the
+								// listener is ready instead of returning a 503.
+								RetryPolicy: &routev3.RetryPolicy{
+									RetryOn:    "reset,connect-failure",
+									NumRetries: wrapperspb.UInt32(5),
+									RetryBackOff: &routev3.RetryPolicy_RetryBackOff{
+										BaseInterval: durationpb.New(50 * time.Millisecond),
+										MaxInterval:  durationpb.New(1 * time.Second),
+									},
+								},
 							},
 						},
 					},

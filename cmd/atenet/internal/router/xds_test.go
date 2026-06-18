@@ -83,6 +83,17 @@ func TestXdsServer_UpdateSnapshot(t *testing.T) {
 		if c.GetName() != "dynamic_forward_proxy_cluster" {
 			t.Errorf("Expected 'dynamic_forward_proxy_cluster', got %s", c.GetName())
 		}
+
+		// A retry budget must replace Envoy's static default of 3 concurrent
+		// retries so simultaneous first-request resumes are not throttled.
+		thresholds := c.GetCircuitBreakers().GetThresholds()
+		if len(thresholds) != 1 {
+			t.Fatalf("Expected 1 circuit-breaker threshold, got %d", len(thresholds))
+		}
+		budget := thresholds[0].GetRetryBudget()
+		if budget == nil {
+			t.Fatal("Expected a retry budget on the dynamic_forward_proxy cluster, got none")
+		}
 	}
 
 	// Verify Virtual Hosts generated inside Route configuration
@@ -115,6 +126,18 @@ func TestXdsServer_UpdateSnapshot(t *testing.T) {
 		fallbackRoute := vh.GetRoutes()[0]
 		if fallbackRoute.GetMatch().GetPrefix() != "/" {
 			t.Errorf("Expected path mapping prefix '/', got '%s'", fallbackRoute.GetMatch().GetPrefix())
+		}
+
+		// Transient upstream resets/connection failures during actor resume must
+		// be retried rather than surfaced as 503s.
+		retry := fallbackRoute.GetRoute().GetRetryPolicy()
+		if retry == nil {
+			t.Fatal("Expected a retry policy on the actor route, got none")
+		}
+		for _, on := range []string{"reset", "connect-failure"} {
+			if !strings.Contains(retry.GetRetryOn(), on) {
+				t.Errorf("Expected retry_on to include %q, got %q", on, retry.GetRetryOn())
+			}
 		}
 	}
 
