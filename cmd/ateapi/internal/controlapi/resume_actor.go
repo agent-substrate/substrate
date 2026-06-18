@@ -29,7 +29,7 @@ func (s *Service) ResumeActor(ctx context.Context, req *ateapipb.ResumeActorRequ
 		return nil, err
 	}
 
-	actor, err := s.actorWorkflow.ResumeActor(ctx, req.GetActorId(), req.GetBoot())
+	actor, err := s.actorWorkflow.ResumeActor(ctx, req.GetAtespace(), req.GetActorId(), req.GetBoot())
 	if err != nil {
 		if errors.Is(err, store.ErrPersistenceRetry) {
 			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
@@ -46,6 +46,9 @@ func (s *Service) ResumeActor(ctx context.Context, req *ateapipb.ResumeActorRequ
 func validateResumeActorRequest(req *ateapipb.ResumeActorRequest) error {
 	if req.GetActorId() == "" {
 		return status.Error(codes.InvalidArgument, "id is required")
+	}
+	if req.GetAtespace() == "" {
+		return status.Error(codes.InvalidArgument, "atespace is required")
 	}
 	return nil
 }

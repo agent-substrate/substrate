@@ -29,6 +29,9 @@ const (
 
 var actorIDRegex = regexp.MustCompile("^" + ActorIDRegexPattern + "$")
 
+// TODO: unify actor/atespace validation across the control API RPCs — some only
+// reject empty strings (get/pause/resume/suspend), others run the full validator.
+
 // ValidateActorID validates whether the provided actor ID is valid or not.
 // Actor IDs must be valid DNS-1123 labels.
 //
@@ -42,6 +45,18 @@ func ValidateActorID(id string) error {
 	}
 	if !actorIDRegex.MatchString(id) {
 		return fmt.Errorf("invalid actor_id: must start and end with a lower case alphanumeric character, and consist only of lower case alphanumeric characters or '-'")
+	}
+	return nil
+}
+
+// ValidateAtespace validates whether the provided atespace name is valid. An
+// atespace must be a valid DNS-1123 label (same rules as an actor ID above).
+func ValidateAtespace(atespace string) error {
+	if len(atespace) > 63 {
+		return fmt.Errorf("invalid atespace: must be no more than 63 characters")
+	}
+	if !actorIDRegex.MatchString(atespace) {
+		return fmt.Errorf("invalid atespace: must start and end with a lower case alphanumeric character, and consist only of lower case alphanumeric characters or '-'")
 	}
 	return nil
 }

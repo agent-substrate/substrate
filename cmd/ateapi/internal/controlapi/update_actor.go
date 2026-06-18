@@ -20,6 +20,7 @@ import (
 	"fmt"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -30,7 +31,7 @@ func (s *Service) UpdateActor(ctx context.Context, req *ateapipb.UpdateActorRequ
 		return nil, err
 	}
 
-	actor, err := s.persistence.GetActor(ctx, req.GetActorId())
+	actor, err := s.persistence.GetActor(ctx, req.GetAtespace(), req.GetActorId())
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, status.Errorf(codes.NotFound, "Actor %s not found", req.GetActorId())
@@ -52,6 +53,12 @@ func (s *Service) UpdateActor(ctx context.Context, req *ateapipb.UpdateActorRequ
 func validateUpdateActorRequest(req *ateapipb.UpdateActorRequest) error {
 	if req.GetActorId() == "" {
 		return status.Error(codes.InvalidArgument, "actor_id is required")
+	}
+	if req.GetAtespace() == "" {
+		return status.Error(codes.InvalidArgument, "atespace is required")
+	}
+	if err := resources.ValidateAtespace(req.GetAtespace()); err != nil {
+		return status.Error(codes.InvalidArgument, err.Error())
 	}
 	if err := validateSelector(req.GetWorkerSelector()); err != nil {
 		return status.Error(codes.InvalidArgument, err.Error())

@@ -49,7 +49,7 @@ func TestGetActor_NotFound(t *testing.T) {
 	mr, s, ctx := setupTest(t)
 	defer mr.Close()
 
-	_, err := s.GetActor(ctx, "non-existent")
+	_, err := s.GetActor(ctx, "", "non-existent")
 	if !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("expected ErrNotFound, got %v", err)
 	}
@@ -71,7 +71,7 @@ func TestCreateActor_Success(t *testing.T) {
 		t.Fatalf("CreateActor failed: %v", err)
 	}
 
-	got, err := s.GetActor(ctx, actor.ActorId)
+	got, err := s.GetActor(ctx, actor.GetAtespace(), actor.ActorId)
 	if err != nil {
 		t.Fatalf("GetActor failed: %v", err)
 	}
@@ -134,7 +134,7 @@ func TestUpdateActor_Success(t *testing.T) {
 		t.Errorf("expected actor.Version to be updated to 2, got %d", actor.Version)
 	}
 
-	updated, err := s.GetActor(ctx, actor.ActorId)
+	updated, err := s.GetActor(ctx, actor.GetAtespace(), actor.ActorId)
 	if err != nil {
 		t.Fatalf("GetActor failed: %v", err)
 	}
@@ -163,13 +163,13 @@ func TestUpdateActor_Conflict(t *testing.T) {
 	}
 
 	// Fetch instance 1
-	actor1, err := s.GetActor(ctx, actor.ActorId)
+	actor1, err := s.GetActor(ctx, actor.GetAtespace(), actor.ActorId)
 	if err != nil {
 		t.Fatalf("GetActor failed: %v", err)
 	}
 
 	// Fetch instance 2 (stale after actor1 updates)
-	actor2, err := s.GetActor(ctx, actor.ActorId)
+	actor2, err := s.GetActor(ctx, actor.GetAtespace(), actor.ActorId)
 	if err != nil {
 		t.Fatalf("GetActor failed: %v", err)
 	}
@@ -348,12 +348,12 @@ func TestDeleteActor(t *testing.T) {
 		t.Fatalf("CreateActor failed: %v", err)
 	}
 
-	err = s.DeleteActor(ctx, "session-1")
+	err = s.DeleteActor(ctx, "", "session-1")
 	if err != nil {
 		t.Fatalf("DeleteActor failed: %v", err)
 	}
 
-	_, err = s.GetActor(ctx, "session-1")
+	_, err = s.GetActor(ctx, "", "session-1")
 	if !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("expected ErrNotFound after delete, got %v", err)
 	}
@@ -375,7 +375,7 @@ func TestDeleteActor_NotSuspended(t *testing.T) {
 		t.Fatalf("CreateActor failed: %v", err)
 	}
 
-	err = s.DeleteActor(ctx, "session-1")
+	err = s.DeleteActor(ctx, "", "session-1")
 	if !errors.Is(err, store.ErrFailedPrecondition) {
 		t.Errorf("expected ErrFailedPrecondition deleting running actor, got %v", err)
 	}
@@ -385,7 +385,7 @@ func TestDeleteActor_NotFound(t *testing.T) {
 	mr, s, ctx := setupTest(t)
 	defer mr.Close()
 
-	err := s.DeleteActor(ctx, "non-existent")
+	err := s.DeleteActor(ctx, "", "non-existent")
 	if !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("expected ErrNotFound deleting non-existent actor, got %v", err)
 	}
@@ -477,7 +477,7 @@ func TestListActors(t *testing.T) {
 		t.Fatalf("failed to create actor2: %v", err)
 	}
 
-	actors, _, err := s.ListActors(ctx, 1000, "")
+	actors, _, err := s.ListActors(ctx, "", 1000, "")
 	if err != nil {
 		t.Fatalf("ListActors failed: %v", err)
 	}
@@ -582,7 +582,7 @@ func TestListActors_Empty(t *testing.T) {
 	mr, s, ctx := setupTest(t)
 	defer mr.Close()
 
-	actors, _, err := s.ListActors(ctx, 1000, "")
+	actors, _, err := s.ListActors(ctx, "", 1000, "")
 	if err != nil {
 		t.Fatalf("ListActors failed: %v", err)
 	}
@@ -612,7 +612,7 @@ func TestListActors_Pagination(t *testing.T) {
 	pageToken := ""
 
 	for {
-		actors, nextToken, err := s.ListActors(ctx, 2, pageToken)
+		actors, nextToken, err := s.ListActors(ctx, "", 2, pageToken)
 		if err != nil {
 			t.Fatalf("ListActors failed: %v", err)
 		}
@@ -832,4 +832,73 @@ func TestAcquireLock_NonReentry(t *testing.T) {
 	if acquired {
 		t.Errorf("expected second lock acquisition to fail (non-reentrant)")
 	}
+}
+
+func TestListActors_ScopedByAtespace(t *testing.T) {
+	mr, s, ctx := setupTest(t)
+	defer mr.Close()
+
+	mkActor := func(id, atespace string) *ateapipb.Actor {
+		return &ateapipb.Actor{
+			ActorId:                id,
+			Atespace:               atespace,
+			ActorTemplateNamespace: "ns1",
+			ActorTemplateName:      "tmpl1",
+			Status:                 ateapipb.Actor_STATUS_SUSPENDED,
+		}
+	}
+	for _, a := range []*ateapipb.Actor{
+		mkActor("a1", "team-a"),
+		mkActor("a2", "team-a"),
+		mkActor("b1", "team-b"),
+	} {
+		if err := s.CreateActor(ctx, a); err != nil {
+			t.Fatalf("CreateActor(%s/%s) failed: %v", a.GetAtespace(), a.GetActorId(), err)
+		}
+	}
+
+	// List is scoped to one atespace.
+	teamA, _, err := s.ListActors(ctx, "team-a", 1000, "")
+	if err != nil {
+		t.Fatalf("ListActors(team-a) failed: %v", err)
+	}
+	if got := actorIDSet(teamA); !got["a1"] || !got["a2"] || got["b1"] || len(got) != 2 {
+		t.Errorf("ListActors(team-a) = %v, want exactly {a1, a2}", got)
+	}
+
+	teamB, _, err := s.ListActors(ctx, "team-b", 1000, "")
+	if err != nil {
+		t.Fatalf("ListActors(team-b) failed: %v", err)
+	}
+	if got := actorIDSet(teamB); !got["b1"] || got["a1"] || len(got) != 1 {
+		t.Errorf("ListActors(team-b) = %v, want exactly {b1}", got)
+	}
+
+	// The empty (default) atespace sees none of the namespaced actors.
+	empty, _, err := s.ListActors(ctx, "", 1000, "")
+	if err != nil {
+		t.Fatalf("ListActors(empty) failed: %v", err)
+	}
+	if len(empty) != 0 {
+		t.Errorf("ListActors(empty) = %v, want none", actorIDSet(empty))
+	}
+
+	// Get is scoped too: right atespace hits, wrong/empty atespace misses.
+	if _, err := s.GetActor(ctx, "team-a", "a1"); err != nil {
+		t.Errorf("GetActor(team-a, a1) failed: %v", err)
+	}
+	if _, err := s.GetActor(ctx, "team-b", "a1"); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("GetActor(team-b, a1) = %v, want ErrNotFound", err)
+	}
+	if _, err := s.GetActor(ctx, "", "a1"); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("GetActor(empty, a1) = %v, want ErrNotFound", err)
+	}
+}
+
+func actorIDSet(actors []*ateapipb.Actor) map[string]bool {
+	set := make(map[string]bool, len(actors))
+	for _, a := range actors {
+		set[a.GetActorId()] = true
+	}
+	return set
 }

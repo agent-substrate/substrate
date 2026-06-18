@@ -29,7 +29,7 @@ func (s *Service) PauseActor(ctx context.Context, req *ateapipb.PauseActorReques
 		return nil, err
 	}
 
-	actor, err := s.actorWorkflow.PauseActor(ctx, req.GetActorId())
+	actor, err := s.actorWorkflow.PauseActor(ctx, req.GetAtespace(), req.GetActorId())
 	if err != nil {
 		if errors.Is(err, store.ErrPersistenceRetry) {
 			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
@@ -46,6 +46,9 @@ func (s *Service) PauseActor(ctx context.Context, req *ateapipb.PauseActorReques
 func validatePauseActorRequest(req *ateapipb.PauseActorRequest) error {
 	if req.GetActorId() == "" {
 		return status.Error(codes.InvalidArgument, "id is required")
+	}
+	if req.GetAtespace() == "" {
+		return status.Error(codes.InvalidArgument, "atespace is required")
 	}
 	return nil
 }

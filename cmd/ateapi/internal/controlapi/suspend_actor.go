@@ -29,7 +29,7 @@ func (s *Service) SuspendActor(ctx context.Context, req *ateapipb.SuspendActorRe
 		return nil, err
 	}
 
-	actor, err := s.actorWorkflow.SuspendActor(ctx, req.GetActorId())
+	actor, err := s.actorWorkflow.SuspendActor(ctx, req.GetAtespace(), req.GetActorId())
 	if err != nil {
 		if errors.Is(err, store.ErrPersistenceRetry) {
 			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
@@ -46,6 +46,9 @@ func (s *Service) SuspendActor(ctx context.Context, req *ateapipb.SuspendActorRe
 func validateSuspendActorRequest(req *ateapipb.SuspendActorRequest) error {
 	if req.GetActorId() == "" {
 		return status.Error(codes.InvalidArgument, "id is required")
+	}
+	if req.GetAtespace() == "" {
+		return status.Error(codes.InvalidArgument, "atespace is required")
 	}
 	return nil
 }

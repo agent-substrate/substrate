@@ -170,7 +170,7 @@ func (s *WorkerPoolSyncer) releaseActorOnDeadWorker(ctx context.Context, namespa
 	if worker.GetActorId() == "" {
 		return nil
 	}
-	actor, err := s.persistence.GetActor(ctx, worker.GetActorId())
+	actor, err := s.persistence.GetActor(ctx, worker.GetActorAtespace(), worker.GetActorId())
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return nil

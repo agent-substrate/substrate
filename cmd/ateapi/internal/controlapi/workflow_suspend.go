@@ -33,7 +33,8 @@ import (
 
 // SuspendInput holds the immutable parameters requested by the client.
 type SuspendInput struct {
-	ActorID string
+	ActorID  string
+	Atespace string
 }
 
 // SuspendState holds the mutable state loaded and modified during execution.
@@ -53,7 +54,7 @@ func (s *LoadActorForSuspendStep) IsComplete(ctx context.Context, input *Suspend
 	return false, nil
 }
 func (s *LoadActorForSuspendStep) Execute(ctx context.Context, input *SuspendInput, state *SuspendState) error {
-	actor, err := s.store.GetActor(ctx, input.ActorID)
+	actor, err := s.store.GetActor(ctx, input.Atespace, input.ActorID)
 	if err != nil {
 		return err
 	}
@@ -156,7 +157,7 @@ func (s *FinalizeSuspendedStep) IsComplete(ctx context.Context, input *SuspendIn
 	return state.Actor.GetStatus() == ateapipb.Actor_STATUS_SUSPENDED && state.Actor.GetAteomPodNamespace() == "", nil
 }
 func (s *FinalizeSuspendedStep) Execute(ctx context.Context, input *SuspendInput, state *SuspendState) error {
-	latestActor, err := s.store.GetActor(ctx, input.ActorID)
+	latestActor, err := s.store.GetActor(ctx, input.Atespace, input.ActorID)
 	if err != nil {
 		return err
 	}
@@ -180,6 +181,7 @@ func (s *FinalizeSuspendedStep) Execute(ctx context.Context, input *SuspendInput
 				worker.ActorNamespace = ""
 				worker.ActorTemplate = ""
 				worker.ActorId = ""
+				worker.ActorAtespace = ""
 
 				err = s.store.UpdateWorker(ctx, worker, worker.Version)
 				if err != nil {
@@ -189,7 +191,7 @@ func (s *FinalizeSuspendedStep) Execute(ctx context.Context, input *SuspendInput
 		}
 
 		// 2. Safely clear ActiveWorker now that the worker object in DB is freed
-		latestActor, err = s.store.GetActor(ctx, input.ActorID)
+		latestActor, err = s.store.GetActor(ctx, input.Atespace, input.ActorID)
 		if err != nil {
 			return err
 		}

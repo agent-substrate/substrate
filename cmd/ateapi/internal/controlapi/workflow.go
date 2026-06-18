@@ -148,10 +148,11 @@ func NewActorWorkflow(
 }
 
 // ResumeActor executes the workflow to resume a suspended actor. Idempotent.
-func (w *ActorWorkflow) ResumeActor(ctx context.Context, id string, boot bool) (*ateapipb.Actor, error) {
+func (w *ActorWorkflow) ResumeActor(ctx context.Context, atespace, id string, boot bool) (*ateapipb.Actor, error) {
 	input := &ResumeInput{
-		ActorID: id,
-		Boot:    boot,
+		ActorID:  id,
+		Atespace: atespace,
+		Boot:     boot,
 	}
 	state := &ResumeState{}
 
@@ -178,9 +179,10 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, id string, boot bool) (
 }
 
 // SuspendActor executes the workflow to suspend a running actor. Idempotent.
-func (w *ActorWorkflow) SuspendActor(ctx context.Context, id string) (*ateapipb.Actor, error) {
+func (w *ActorWorkflow) SuspendActor(ctx context.Context, atespace, id string) (*ateapipb.Actor, error) {
 	input := &SuspendInput{
-		ActorID: id,
+		ActorID:  id,
+		Atespace: atespace,
 	}
 	state := &SuspendState{}
 
@@ -207,9 +209,10 @@ func (w *ActorWorkflow) SuspendActor(ctx context.Context, id string) (*ateapipb.
 }
 
 // PauseActor executes the workflow to pause a running actor. Idempotent.
-func (w *ActorWorkflow) PauseActor(ctx context.Context, id string) (*ateapipb.Actor, error) {
+func (w *ActorWorkflow) PauseActor(ctx context.Context, atespace, id string) (*ateapipb.Actor, error) {
 	input := &PauseInput{
-		ActorID: id,
+		ActorID:  id,
+		Atespace: atespace,
 	}
 	state := &PauseState{}
 

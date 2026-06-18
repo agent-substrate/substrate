@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -34,7 +35,7 @@ func (s *Service) ListActors(ctx context.Context, req *ateapipb.ListActorsReques
 		pageSize = maxPageSize
 	}
 
-	actors, nextToken, err := s.persistence.ListActors(ctx, pageSize, req.GetPageToken())
+	actors, nextToken, err := s.persistence.ListActors(ctx, req.GetAtespace(), pageSize, req.GetPageToken())
 	if err != nil {
 		return nil, fmt.Errorf("while listing actors in db: %w", err)
 	}
@@ -45,6 +46,12 @@ func (s *Service) ListActors(ctx context.Context, req *ateapipb.ListActorsReques
 }
 
 func validateListActorsRequest(req *ateapipb.ListActorsRequest) error {
+	if req.GetAtespace() == "" {
+		return fmt.Errorf("atespace is required")
+	}
+	if err := resources.ValidateAtespace(req.GetAtespace()); err != nil {
+		return err
+	}
 	pageSize := req.GetPageSize()
 	if pageSize < 0 {
 		return fmt.Errorf("page_size cannot be negative")

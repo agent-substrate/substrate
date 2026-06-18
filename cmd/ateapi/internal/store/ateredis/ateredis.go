@@ -15,7 +15,7 @@
 // Package ateredis is an ate storage backend built on Redis.
 //
 // Actors are stored in keys of the form
-// `actor:<actor-id>`.  They are
+// `actor:<atespace>:<actor-id>`.  They are
 // stored as DBActor JSON-serialized objects, which lets us manipulate them from
 // Redis lua.
 //
@@ -86,8 +86,8 @@ func NewPersistence(redisClient *redis.ClusterClient) *Persistence {
 	}
 }
 
-func actorDBKey(id string) string {
-	return "actor:" + id
+func actorDBKey(atespace, id string) string {
+	return "actor:" + atespace + ":" + id
 }
 
 func workerDBKey(namespace, poolName, podName string) string {
@@ -179,8 +179,8 @@ func (s *Persistence) DebugClearAll(ctx context.Context) error {
 	return err
 }
 
-func (s *Persistence) GetActor(ctx context.Context, id string) (*ateapipb.Actor, error) {
-	dbKey := actorDBKey(id)
+func (s *Persistence) GetActor(ctx context.Context, atespace, id string) (*ateapipb.Actor, error) {
+	dbKey := actorDBKey(atespace, id)
 
 	dbActorBytes, err := s.rdb.Get(ctx, dbKey).Bytes()
 	if err != nil {
@@ -195,15 +195,15 @@ func (s *Persistence) GetActor(ctx context.Context, id string) (*ateapipb.Actor,
 		return nil, fmt.Errorf("while unmarshaling actor: %w", err)
 	}
 
-	if actor.GetActorId() != id {
-		return nil, fmt.Errorf("(impossible) mismatch between stored id and key id")
+	if actor.GetActorId() != id || actor.GetAtespace() != atespace {
+		return nil, fmt.Errorf("(impossible) mismatch between stored id/atespace and key")
 	}
 
 	return actor, nil
 }
 
 func (s *Persistence) CreateActor(ctx context.Context, actor *ateapipb.Actor) error {
-	dbKey := actorDBKey(actor.GetActorId())
+	dbKey := actorDBKey(actor.GetAtespace(), actor.GetActorId())
 
 	// Clone because we will update the version field, and we don't want to
 	// stomp the caller's copy.
@@ -347,8 +347,8 @@ func (s *Persistence) DeleteWorker(ctx context.Context, namespace, pool, pod str
 	return nil
 }
 
-func (s *Persistence) DeleteActor(ctx context.Context, id string) error {
-	dbKey := actorDBKey(id)
+func (s *Persistence) DeleteActor(ctx context.Context, atespace, id string) error {
+	dbKey := actorDBKey(atespace, id)
 	err := s.rdb.Watch(ctx, func(tx *redis.Tx) error {
 		currentVal, err := tx.Get(ctx, dbKey).Bytes()
 		if err != nil {
@@ -385,7 +385,7 @@ func (s *Persistence) DeleteActor(ctx context.Context, id string) error {
 }
 
 func (s *Persistence) UpdateActor(ctx context.Context, actor *ateapipb.Actor, expectedVersion int64) error {
-	dbKey := actorDBKey(actor.GetActorId())
+	dbKey := actorDBKey(actor.GetAtespace(), actor.GetActorId())
 
 	// Clone because we will update the version field, and we don't want to
 	// stomp the caller's copy.
@@ -411,6 +411,9 @@ func (s *Persistence) UpdateActor(ctx context.Context, actor *ateapipb.Actor, ex
 		dbActor.Version = currentActor.GetVersion() + 1
 		if currentActor.GetActorId() != dbActor.GetActorId() {
 			return fmt.Errorf("actor_id is immutable")
+		}
+		if currentActor.GetAtespace() != dbActor.GetAtespace() {
+			return fmt.Errorf("atespace is immutable")
 		}
 		if currentActor.GetActorTemplateNamespace() != dbActor.GetActorTemplateNamespace() {
 			return fmt.Errorf("actor_template_namespace is immutable")
@@ -510,7 +513,7 @@ func hashShardAddr(addr string) string {
 	return hex.EncodeToString(h[:])
 }
 
-func (s *Persistence) ListActors(ctx context.Context, pageSize int32, pageTokenStr string) ([]*ateapipb.Actor, string, error) {
+func (s *Persistence) ListActors(ctx context.Context, atespace string, pageSize int32, pageTokenStr string) ([]*ateapipb.Actor, string, error) {
 	token, err := decodePageToken(pageTokenStr)
 	if err != nil {
 		return nil, "", fmt.Errorf("invalid page token: %w", err)
@@ -559,7 +562,7 @@ func (s *Persistence) ListActors(ctx context.Context, pageSize int32, pageTokenS
 			}
 
 			var keys []string
-			keys, cursor, err = master.Scan(ctx, cursor, "actor:*", int64(remaining)).Result()
+			keys, cursor, err = master.Scan(ctx, cursor, "actor:"+atespace+":*", int64(remaining)).Result()
 			if err != nil {
 				return nil, "", fmt.Errorf("while scanning shard %s: %w", shardAddr, err)
 			}

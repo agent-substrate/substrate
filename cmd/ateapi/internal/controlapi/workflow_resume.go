@@ -41,8 +41,9 @@ import (
 
 // ResumeInput holds the immutable parameters requested by the client.
 type ResumeInput struct {
-	ActorID string
-	Boot    bool
+	ActorID  string
+	Atespace string
+	Boot     bool
 }
 
 // ResumeState holds the mutable state loaded and modified during execution.
@@ -62,7 +63,7 @@ func (s *LoadActorForResumeStep) IsComplete(ctx context.Context, input *ResumeIn
 	return false, nil
 }
 func (s *LoadActorForResumeStep) Execute(ctx context.Context, input *ResumeInput, state *ResumeState) error {
-	actor, err := s.store.GetActor(ctx, input.ActorID)
+	actor, err := s.store.GetActor(ctx, input.Atespace, input.ActorID)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return status.Errorf(codes.NotFound, "Actor %s not found", input.ActorID)
@@ -183,6 +184,7 @@ func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, stat
 	assignedWorker.ActorId = input.ActorID
 	assignedWorker.ActorNamespace = state.Actor.GetActorTemplateNamespace()
 	assignedWorker.ActorTemplate = state.Actor.GetActorTemplateName()
+	assignedWorker.ActorAtespace = state.Actor.GetAtespace()
 
 	if err := s.store.UpdateWorker(ctx, assignedWorker, assignedWorker.Version); err != nil {
 		return err
@@ -357,7 +359,7 @@ func (s *FinalizeRunningStep) IsComplete(ctx context.Context, input *ResumeInput
 	return state.Actor.GetStatus() == ateapipb.Actor_STATUS_RUNNING, nil
 }
 func (s *FinalizeRunningStep) Execute(ctx context.Context, input *ResumeInput, state *ResumeState) error {
-	latestActor, err := s.store.GetActor(ctx, input.ActorID)
+	latestActor, err := s.store.GetActor(ctx, input.Atespace, input.ActorID)
 	if err != nil {
 		return err
 	}

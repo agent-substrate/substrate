@@ -49,6 +49,7 @@ func (s *Service) CreateActor(ctx context.Context, req *ateapipb.CreateActorRequ
 		ActorTemplateNamespace: req.GetActorTemplateNamespace(),
 		ActorTemplateName:      req.GetActorTemplateName(),
 		WorkerSelector:         req.GetWorkerSelector(),
+		Atespace:               req.GetAtespace(),
 	}
 	err = s.persistence.CreateActor(ctx, actor)
 	if err != nil {
@@ -58,7 +59,7 @@ func (s *Service) CreateActor(ctx context.Context, req *ateapipb.CreateActorRequ
 		return nil, fmt.Errorf("while recording actor: %w", err)
 	}
 
-	storedActor, err := s.persistence.GetActor(ctx, id)
+	storedActor, err := s.persistence.GetActor(ctx, req.GetAtespace(), id)
 	if err != nil {
 		return nil, fmt.Errorf("while fetching recorded actor from DB: %w", err)
 	}
@@ -79,6 +80,12 @@ func validateCreateActorRequest(req *ateapipb.CreateActorRequest) error {
 		return status.Error(codes.InvalidArgument, "actor_id is required")
 	}
 	if err := resources.ValidateActorID(req.GetActorId()); err != nil {
+		return status.Error(codes.InvalidArgument, err.Error())
+	}
+	if req.GetAtespace() == "" {
+		return status.Error(codes.InvalidArgument, "atespace is required")
+	}
+	if err := resources.ValidateAtespace(req.GetAtespace()); err != nil {
 		return status.Error(codes.InvalidArgument, err.Error())
 	}
 	if err := validateSelector(req.GetWorkerSelector()); err != nil {

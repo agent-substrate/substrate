@@ -29,7 +29,7 @@ func (s *Service) GetActor(ctx context.Context, req *ateapipb.GetActorRequest) (
 	if err := validateGetActorRequest(req); err != nil {
 		return nil, err
 	}
-	actor, err := s.persistence.GetActor(ctx, req.GetActorId())
+	actor, err := s.persistence.GetActor(ctx, req.GetAtespace(), req.GetActorId())
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, status.Errorf(codes.NotFound, "Actor %s not found", req.GetActorId())
 	} else if err != nil {
@@ -43,6 +43,9 @@ func (s *Service) GetActor(ctx context.Context, req *ateapipb.GetActorRequest) (
 func validateGetActorRequest(req *ateapipb.GetActorRequest) error {
 	if req.GetActorId() == "" {
 		return status.Error(codes.InvalidArgument, "id is required")
+	}
+	if req.GetAtespace() == "" {
+		return status.Error(codes.InvalidArgument, "atespace is required")
 	}
 	return nil
 }
