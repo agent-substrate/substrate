@@ -23,6 +23,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var getActorsAtespaceFlag string
+
 var getActorsCmd = &cobra.Command{
 	Use:     "actors [actor-id]",
 	Aliases: []string{"actor"},
@@ -39,7 +41,7 @@ var getActorsCmd = &cobra.Command{
 
 		// 2. Handle Get Single Actor
 		if len(args) > 0 {
-			resp, err := apiClient.GetActor(ctx, &ateapipb.GetActorRequest{ActorId: args[0]})
+			resp, err := apiClient.GetActor(ctx, &ateapipb.GetActorRequest{ActorId: args[0], Atespace: getActorsAtespaceFlag})
 			if err != nil {
 				return fmt.Errorf("failed to get actor: %w", err)
 			}
@@ -54,6 +56,7 @@ var getActorsCmd = &cobra.Command{
 			resp, err := apiClient.ListActors(ctx, &ateapipb.ListActorsRequest{
 				PageSize:  1000,
 				PageToken: pageToken,
+				Atespace:  getActorsAtespaceFlag,
 			})
 			if err != nil {
 				return fmt.Errorf("failed to list actors: %w", err)
@@ -71,5 +74,7 @@ var getActorsCmd = &cobra.Command{
 }
 
 func init() {
+	getActorsCmd.Flags().StringVar(&getActorsAtespaceFlag, "atespace", "", "Atespace (tenant) to list/get actors in (required)")
+	_ = getActorsCmd.MarkFlagRequired("atespace")
 	getCmd.AddCommand(getActorsCmd)
 }

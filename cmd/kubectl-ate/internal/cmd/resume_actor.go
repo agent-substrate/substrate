@@ -24,6 +24,7 @@ import (
 )
 
 var bootFlag bool
+var resumeAtespaceFlag string
 
 var resumeActorCmd = &cobra.Command{
 	Use:   "actor [actor-id]",
@@ -38,8 +39,9 @@ var resumeActorCmd = &cobra.Command{
 		defer apiClient.Close()
 
 		resp, err := apiClient.ResumeActor(ctx, &ateapipb.ResumeActorRequest{
-			ActorId: args[0],
-			Boot:    bootFlag,
+			ActorId:  args[0],
+			Boot:     bootFlag,
+			Atespace: resumeAtespaceFlag,
 		})
 		if err != nil {
 			return fmt.Errorf("failed to resume actor: %w", err)
@@ -51,5 +53,7 @@ var resumeActorCmd = &cobra.Command{
 
 func init() {
 	resumeActorCmd.Flags().BoolVarP(&bootFlag, "boot", "", false, "Skip golden snapshot and boot from scratch.")
+	resumeActorCmd.Flags().StringVar(&resumeAtespaceFlag, "atespace", "", "Atespace (tenant) the actor lives in")
+	_ = resumeActorCmd.MarkFlagRequired("atespace")
 	resumeCmd.AddCommand(resumeActorCmd)
 }

@@ -23,6 +23,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var suspendAtespaceFlag string
+
 var suspendActorCmd = &cobra.Command{
 	Use:   "actor [actor-id]",
 	Short: "Suspend an actor",
@@ -36,7 +38,8 @@ var suspendActorCmd = &cobra.Command{
 		defer apiClient.Close()
 
 		resp, err := apiClient.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
-			ActorId: args[0],
+			ActorId:  args[0],
+			Atespace: suspendAtespaceFlag,
 		})
 		if err != nil {
 			return fmt.Errorf("failed to suspend actor: %w", err)
@@ -47,5 +50,7 @@ var suspendActorCmd = &cobra.Command{
 }
 
 func init() {
+	suspendActorCmd.Flags().StringVar(&suspendAtespaceFlag, "atespace", "", "Atespace (tenant) the actor lives in")
+	_ = suspendActorCmd.MarkFlagRequired("atespace")
 	suspendCmd.AddCommand(suspendActorCmd)
 }

@@ -22,6 +22,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var deleteAtespaceFlag string
+
 var deleteActorCmd = &cobra.Command{
 	Use:   "actor [actor-id]",
 	Short: "Delete an actor",
@@ -36,7 +38,8 @@ var deleteActorCmd = &cobra.Command{
 
 		id := args[0]
 		_, err = c.ControlClient.DeleteActor(ctx, &ateapipb.DeleteActorRequest{
-			ActorId: id,
+			ActorId:  id,
+			Atespace: deleteAtespaceFlag,
 		})
 		if err != nil {
 			return err
@@ -48,5 +51,7 @@ var deleteActorCmd = &cobra.Command{
 }
 
 func init() {
+	deleteActorCmd.Flags().StringVar(&deleteAtespaceFlag, "atespace", "", "Atespace (tenant) the actor lives in")
+	_ = deleteActorCmd.MarkFlagRequired("atespace")
 	deleteCmd.AddCommand(deleteActorCmd)
 }
