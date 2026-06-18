@@ -14,6 +14,9 @@ __pycache__/
 # Local environment variables
 .ate-dev-env.sh
 
+# Generated scratch directory for benchmark automation
+/benchmarking/automation/scratch/
+
 # Developers can store local stuff in dirs named __something
 __*
 

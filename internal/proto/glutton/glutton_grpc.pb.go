@@ -47,10 +47,22 @@ const (
 // A glutton is a single small piece of a larger benchmarking suite. It is designed to be instantiated
 // multiple times, with each piece configured to do different units of work.
 type GluttonClient interface {
+	// Tells glutton to write to RAM, either overwriting previously-used
+	// RAM or allocating additional RAM per request instructions. Data written
+	// will be random bytes.
 	WriteRAM(ctx context.Context, in *WriteRAMRequest, opts ...grpc.CallOption) (*WriteRAMResponse, error)
+	// Tells glutton to write to disk using the specified mode. Data
+	// written will be random bytes.
 	WriteDisk(ctx context.Context, in *WriteDiskRequest, opts ...grpc.CallOption) (*WriteDiskResponse, error)
+	// Tells glutton to make sure it has the specified number of file
+	// descriptors open. It will open or close file descriptors to
+	// hit the desired count (note this count is in addition to the other
+	// FDs needed to run the process).
 	OpenFD(ctx context.Context, in *OpenFDRequest, opts ...grpc.CallOption) (*OpenFDResponse, error)
+	// Send a request to the glutton, expecting the same response back.
 	Ping(ctx context.Context, in *PingRequest, opts ...grpc.CallOption) (*PingResponse, error)
+	// Tells the glutton to send network traffic to a peer glutton.
+	// messages will be sent on regular intervals separated by delay_ms.
 	Gossip(ctx context.Context, in *GossipRequest, opts ...grpc.CallOption) (*GossipResponse, error)
 }
 
@@ -119,10 +131,22 @@ func (c *gluttonClient) Gossip(ctx context.Context, in *GossipRequest, opts ...g
 // A glutton is a single small piece of a larger benchmarking suite. It is designed to be instantiated
 // multiple times, with each piece configured to do different units of work.
 type GluttonServer interface {
+	// Tells glutton to write to RAM, either overwriting previously-used
+	// RAM or allocating additional RAM per request instructions. Data written
+	// will be random bytes.
 	WriteRAM(context.Context, *WriteRAMRequest) (*WriteRAMResponse, error)
+	// Tells glutton to write to disk using the specified mode. Data
+	// written will be random bytes.
 	WriteDisk(context.Context, *WriteDiskRequest) (*WriteDiskResponse, error)
+	// Tells glutton to make sure it has the specified number of file
+	// descriptors open. It will open or close file descriptors to
+	// hit the desired count (note this count is in addition to the other
+	// FDs needed to run the process).
 	OpenFD(context.Context, *OpenFDRequest) (*OpenFDResponse, error)
+	// Send a request to the glutton, expecting the same response back.
 	Ping(context.Context, *PingRequest) (*PingResponse, error)
+	// Tells the glutton to send network traffic to a peer glutton.
+	// messages will be sent on regular intervals separated by delay_ms.
 	Gossip(context.Context, *GossipRequest) (*GossipResponse, error)
 	mustEmbedUnimplementedGluttonServer()
 }
