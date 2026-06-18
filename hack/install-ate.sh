@@ -79,6 +79,12 @@ function usage() {
   echo "  --create-valkey-ca-certs-secret        Create Valkey CA certs secret"
   echo "  --create-api-server-env-vars           Create ate-api-server env vars"
   echo ""
+  echo "Benchmarks (see benchmarking/README.md for details and customization):"
+  echo ""
+  echo "  --deploy-benchmarks                    Deploy workloads + locust load test stack"
+  echo "  --delete-benchmarks                    Delete the locust stack and workloads"
+  echo "  --benchmark-worker-count N             Number of WorkerPool replicas (default: 1)"
+  echo ""
   for demo_name in "${ATE_DEMOS[@]}"; do
     echo "Demo: ${demo_name}"
     echo ""
@@ -440,6 +446,16 @@ delete_atenet() {
   run_kubectl delete --ignore-not-found -f manifests/ate-install/atenet-router.yaml
 }
 
+deploy_benchmarks() {
+  log_step "deploy_benchmarks (worker_count=${BENCHMARK_WORKER_COUNT})"
+  "${ROOT}/benchmarking/deploy_locust.sh" --deploy --worker-count "${BENCHMARK_WORKER_COUNT}"
+}
+
+delete_benchmarks() {
+  log_step "delete_benchmarks"
+  "${ROOT}/benchmarking/deploy_locust.sh" --delete
+}
+
 delete_all() {
   log_step "delete_all"
   for demo_name in "${ATE_DEMOS[@]}"; do
@@ -461,6 +477,23 @@ for arg in "$@"; do
     -h|--help)
       usage
       exit 0
+      ;;
+  esac
+done
+
+# Pre-scan value-bearing flags so they can appear before or after the action
+# flag they configure (e.g. --benchmark-worker-count before/after
+# --deploy-benchmarks). The dispatch loop below also accepts these flags but
+# treats them as no-ops since the value is already captured here.
+BENCHMARK_WORKER_COUNT=1
+prescan_args=("$@")
+for ((i=0; i<${#prescan_args[@]}; i++)); do
+  case "${prescan_args[i]}" in
+    --benchmark-worker-count)
+      BENCHMARK_WORKER_COUNT="${prescan_args[i+1]:-1}"
+      ;;
+    --benchmark-worker-count=*)
+      BENCHMARK_WORKER_COUNT="${prescan_args[i]#*=}"
       ;;
   esac
 done
@@ -488,6 +521,13 @@ while [[ "$#" -gt 0 ]]; do
 
     --deploy-atenet) deploy_atenet ;;
     --delete-atenet) delete_atenet ;;
+
+    --deploy-benchmarks) deploy_benchmarks ;;
+    --delete-benchmarks) delete_benchmarks ;;
+    # Value captured in the pre-scan above; consume the value arg here so the
+    # dispatch loop's `*)` unknown-option branch doesn't reject it.
+    --benchmark-worker-count) shift ;;
+    --benchmark-worker-count=*) ;;
 
     --create-jwt-authority-pool-secret) create_jwt_authority_pool_secret ;;
     --create-session-id-ca-pool-secret) create_session_id_ca_pool_secret ;;

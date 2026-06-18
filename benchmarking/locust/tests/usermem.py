@@ -27,7 +27,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-init_tracing("locust-workloads")
+init_tracing()
 init_metrics()
 init_wait_time()
 

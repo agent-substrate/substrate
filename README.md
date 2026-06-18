@@ -205,6 +205,7 @@ We provide several sample applications demonstrating Agent Substrate's capabilit
 * [Full CLI Documentation](cmd/kubectl-ate/README.md): Installation and usage for `kubectl-ate`.
 * [Glossary](docs/glossary.md): Core terms (Actor, ActorTemplate, WorkerPool, Worker, ate-api-server, atenet, atelet, ateom) and how they relate.
 * [Observability Guide](docs/observability.md): Guide to actor logging, metrics, and distributed tracing.
+* [Benchmarking Guide](benchmarking/README.md): Locust-based load tests, monitoring stack, and the orchestrated benchmark harness.
 
 ## Tour
 

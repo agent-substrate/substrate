@@ -27,6 +27,7 @@ COPY --from=builder /app/deps /app/deps
 COPY common/ /app/common/
 COPY shapes/ /app/shapes/
 COPY tests/ /app/tests/
+COPY runner.py /app/runner.py
 
 # Set PYTHONPATH to include /app so modules can find each other
 ENV PYTHONPATH=/app:/app/deps
