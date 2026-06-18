@@ -24,6 +24,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/authn"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/controlapi"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/sessionidentity"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/ateredis"
@@ -143,10 +144,15 @@ func main() {
 		serverboot.Fatal(ctx, "Failed to start listener", err)
 	}
 
+	authenticationInterceptor := authn.NewAuthenticationInterceptor(&authn.Config{})
+
 	mux := grpc.NewServer(
 		grpc.Creds(serverCreds),
 		grpc.StatsHandler(otelgrpc.NewServerHandler()),
-		grpc.UnaryInterceptor(ateinterceptors.ServerUnaryInterceptor),
+		grpc.ChainUnaryInterceptor(
+			authenticationInterceptor,
+			ateinterceptors.ServerUnaryInterceptor,
+		),
 	)
 	reflection.Register(mux)
 	ateapipb.RegisterControlServer(mux, sm)

@@ -20,6 +20,7 @@ import (
 	"log/slog"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/principal"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -32,12 +33,15 @@ func ServerUnaryInterceptor(ctx context.Context, req any, info *grpc.UnaryServer
 
 	resp, err := handler(ctx, req)
 
+	pInfo, _ := principal.FromContext(ctx)
+
 	slog.InfoContext(ctx, "Handle RPC",
 		slog.String("method", info.FullMethod),
 		slog.Any("req", sanitizeForLog(req)),
 		slog.Any("resp", sanitizeForLog(resp)),
 		slog.Any("err", err),
 		slog.String("elapsed-time", time.Since(startTime).String()),
+		slog.Any("principal", pInfo),
 	)
 
 	if err != nil {
