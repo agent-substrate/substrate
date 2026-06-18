@@ -25,6 +25,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -34,6 +35,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/spf13/pflag"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
@@ -43,6 +45,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/reflection"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 
 	"github.com/agent-substrate/substrate/internal/proto/glutton"
 	"github.com/agent-substrate/substrate/internal/serverboot"
@@ -52,9 +55,10 @@ import (
 const meterName = "glutton"
 
 var (
-	listenAddr        = pflag.String("grpc-listen-addr", ":8080", "Address and port the gRPC server should listen on.")
+	listenAddr        = pflag.String("grpc-listen-addr", ":8080", "Address and port the server should listen on (name kept for back-compat; serves whatever --mode picks).")
 	metricsListenAddr = pflag.String("metrics-listen-addr", ":9090", "Address and port the Prometheus metrics server should listen on.")
 	dataDir           = pflag.String("data-dir", "", "Directory under which WriteDisk files are stored. Required.")
+	mode              = pflag.String("mode", "grpc", "Wire protocol for the main listener: grpc (default) or http.")
 
 	showVersion = pflag.Bool("version", false, "Print version and exit.")
 )
@@ -103,24 +107,80 @@ func main() {
 		serverboot.Fatal(ctx, "Failed to start listener", fmt.Errorf("%s: %w", *listenAddr, err))
 	}
 
-	srv := grpc.NewServer(
-		grpc.StatsHandler(otelgrpc.NewServerHandler()),
-	)
-	glutton.RegisterGluttonServer(srv, svc)
-	reflection.Register(srv)
-
 	go serverboot.StartMetricsServer(ctx, serverboot.MetricsServerOptions{
 		Addr:         *metricsListenAddr,
 		EnableReadyz: true,
 	})
 
 	slog.InfoContext(ctx, "glutton starting",
-		slog.String("grpc-listen-addr", *listenAddr),
+		slog.String("listen-addr", *listenAddr),
 		slog.String("metrics-listen-addr", *metricsListenAddr),
 		slog.String("data-dir", *dataDir),
+		slog.String("mode", *mode),
 	)
-	if err := srv.Serve(lis); err != nil {
-		serverboot.Fatal(ctx, "Failed to serve", err)
+
+	switch *mode {
+	case "grpc":
+		srv := grpc.NewServer(
+			grpc.StatsHandler(otelgrpc.NewServerHandler()),
+		)
+		glutton.RegisterGluttonServer(srv, svc)
+		reflection.Register(srv)
+		if err := srv.Serve(lis); err != nil {
+			serverboot.Fatal(ctx, "Failed to serve", err)
+		}
+	case "http":
+		// HTTP/1.1 mode: a single /ping route that consumes
+		// proto.Marshal(PingRequest) and returns proto.Marshal(PingResponse).
+		// Only Ping is exposed in HTTP mode; the other RPCs remain gRPC-only
+		// (re-exposable as additional routes if/when needed).
+		mux := http.NewServeMux()
+		mux.HandleFunc("/ping", httpPingHandler(svc))
+		// otelhttp at the mux level + per-handler span follows
+		// docs/dev/best-practices/tracing.md: extract incoming context,
+		// then name the span after the operation in each handler.
+		httpSrv := &http.Server{Handler: otelhttp.NewHandler(mux, "/")}
+		if err := httpSrv.Serve(lis); err != nil {
+			serverboot.Fatal(ctx, "Failed to serve", err)
+		}
+	default:
+		serverboot.Fatal(ctx, "Invalid --mode", fmt.Errorf("must be grpc or http: %q", *mode))
+	}
+}
+
+// httpPingHandler accepts a POST whose body is proto.Marshal(PingRequest) and
+// returns proto.Marshal(PingResponse) (same Ping handler the gRPC server
+// uses, so the per-call stats stay comparable across protocols).
+func httpPingHandler(svc *gluttonService) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		var req glutton.PingRequest
+		if err := proto.Unmarshal(body, &req); err != nil {
+			http.Error(w, "unmarshal: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		ctx, span := otel.Tracer("glutton").Start(r.Context(), "Ping")
+		defer span.End()
+		resp, err := svc.Ping(ctx, &req)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		out, err := proto.Marshal(resp)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/x-protobuf")
+		_, _ = w.Write(out)
 	}
 }
 
