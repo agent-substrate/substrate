@@ -55,6 +55,22 @@ type Interface interface {
 	// empty. Returns a page of actors and a next page token.
 	ListActors(ctx context.Context, atespace string, pageSize int32, pageToken string) ([]*ateapipb.Actor, string, error)
 
+	// Stores a new atespace. Returns ErrAlreadyExists if the name is taken.
+	CreateAtespace(ctx context.Context, atespace *ateapipb.Atespace) error
+
+	// Fetches an atespace by name. Returns ErrNotFound if missing.
+	GetAtespace(ctx context.Context, name string) (*ateapipb.Atespace, error)
+
+	// Lists all atespaces. Returns nil if none found.
+	ListAtespaces(ctx context.Context) ([]*ateapipb.Atespace, error)
+
+	// AtespaceExists reports whether the atespace object exists.
+	AtespaceExists(ctx context.Context, name string) (bool, error)
+
+	// Removes an empty atespace. Returns ErrNotFound if missing, or
+	// ErrFailedPrecondition if any actor:<name>:* key still exists.
+	DeleteAtespace(ctx context.Context, name string) error
+
 	// Fetches worker state by namespace, pool, and pod name. Returns ErrNotFound if missing.
 	GetWorker(ctx context.Context, namespace, pool, pod string) (*ateapipb.Worker, error)
 

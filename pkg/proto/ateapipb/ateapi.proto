@@ -50,6 +50,18 @@ service Control {
   // List all actors currently reflected in redis.
   rpc ListActors(ListActorsRequest) returns (ListActorsResponse) {}
 
+  // Create a new Atespace (tenant boundary). Substrate-native, stored in Redis.
+  rpc CreateAtespace(CreateAtespaceRequest) returns (CreateAtespaceResponse) {}
+
+  // Get an Atespace by name.
+  rpc GetAtespace(GetAtespaceRequest) returns (GetAtespaceResponse) {}
+
+  // List all Atespaces.
+  rpc ListAtespaces(ListAtespacesRequest) returns (ListAtespacesResponse) {}
+
+  // Delete an empty Atespace. Rejects (FailedPrecondition) if any actors remain.
+  rpc DeleteAtespace(DeleteAtespaceRequest) returns (DeleteAtespaceResponse) {}
+
   // Debugging: drop all data from the ate database.
   rpc DebugClear(DebugClearRequest) returns (DebugClearResponse) {}
 }
@@ -131,11 +143,34 @@ message Actor {
   string atespace = 15;
 }
 
-// Atespace is the tenant boundary an Actor is created into. Placeholder for now
-// (name only).
+// Atespace is the tenant boundary an Actor is created into.
 message Atespace {
   string name = 1;
 }
+
+message CreateAtespaceRequest {
+  string name = 1;
+}
+message CreateAtespaceResponse {
+  Atespace atespace = 1;
+}
+
+message GetAtespaceRequest {
+  string name = 1;
+}
+message GetAtespaceResponse {
+  Atespace atespace = 1;
+}
+
+message ListAtespacesRequest {}
+message ListAtespacesResponse {
+  repeated Atespace atespaces = 1;
+}
+
+message DeleteAtespaceRequest {
+  string name = 1;
+}
+message DeleteAtespaceResponse {}
 
 message GetActorRequest {
   string actor_id = 1;

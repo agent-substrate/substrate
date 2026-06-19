@@ -130,6 +130,40 @@ func PrintActor(actor *ateapipb.Actor, format string) error {
 	return PrintActors([]*ateapipb.Actor{actor}, format)
 }
 
+// PrintAtespaces prints a slice of atespaces to stdout in the requested format.
+func PrintAtespaces(atespaces []*ateapipb.Atespace, format string) error {
+	return PrintAtespacesTo(os.Stdout, atespaces, format)
+}
+
+func sortAtespaces(atespaces []*ateapipb.Atespace) {
+	slices.SortFunc(atespaces, func(a, b *ateapipb.Atespace) int {
+		return cmp.Compare(a.GetName(), b.GetName())
+	})
+}
+
+// PrintAtespacesTo prints a slice of atespaces to the provided writer.
+func PrintAtespacesTo(out io.Writer, atespaces []*ateapipb.Atespace, format string) error {
+	sortAtespaces(atespaces)
+	switch format {
+	case "json", "yaml":
+		return printProto(out, &ateapipb.ListAtespacesResponse{Atespaces: atespaces}, format)
+	case "table":
+		w := tabwriter.NewWriter(out, 0, 0, 3, ' ', 0)
+		fmt.Fprintln(w, "NAME")
+		for _, a := range atespaces {
+			fmt.Fprintf(w, "%s\n", a.GetName())
+		}
+		return w.Flush()
+	default:
+		return fmt.Errorf("unsupported format %q", format)
+	}
+}
+
+// PrintAtespace prints a single atespace in the requested format.
+func PrintAtespace(atespace *ateapipb.Atespace, format string) error {
+	return PrintAtespaces([]*ateapipb.Atespace{atespace}, format)
+}
+
 func printProto(out io.Writer, msg proto.Message, format string) error {
 	m := protojson.MarshalOptions{}
 	b, err := m.Marshal(msg)

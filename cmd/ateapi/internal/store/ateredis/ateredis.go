@@ -100,6 +100,116 @@ func actorScanPattern(atespace string) string {
 	return "actor:" + atespace + ":*"
 }
 
+func atespaceDBKey(name string) string {
+	return "atespace:" + name
+}
+
+func (s *Persistence) CreateAtespace(ctx context.Context, atespace *ateapipb.Atespace) error {
+	dbKey := atespaceDBKey(atespace.GetName())
+	dbBytes, err := protojson.Marshal(atespace)
+	if err != nil {
+		return fmt.Errorf("in protojson.Marshal: %w", err)
+	}
+	ok, err := s.rdb.SetNX(ctx, dbKey, dbBytes, 0).Result()
+	if err != nil {
+		return fmt.Errorf("while executing redis set: %w", err)
+	}
+	if !ok {
+		return store.ErrAlreadyExists
+	}
+	return nil
+}
+
+func (s *Persistence) GetAtespace(ctx context.Context, name string) (*ateapipb.Atespace, error) {
+	dbKey := atespaceDBKey(name)
+	dbBytes, err := s.rdb.Get(ctx, dbKey).Bytes()
+	if err != nil {
+		if errors.Is(err, redis.Nil) {
+			return nil, store.ErrNotFound
+		}
+		return nil, fmt.Errorf("while getting atespace key %q: %w", dbKey, err)
+	}
+	atespace := &ateapipb.Atespace{}
+	if err := protojson.Unmarshal(dbBytes, atespace); err != nil {
+		return nil, fmt.Errorf("while unmarshaling atespace: %w", err)
+	}
+	if atespace.GetName() != name {
+		return nil, fmt.Errorf("(impossible) mismatch between stored name and key %q", dbKey)
+	}
+	return atespace, nil
+}
+
+// AtespaceExists reports whether the atespace object exists. This is a plain
+// EXISTS check and is NOT atomic with respect to a concurrent DeleteAtespace.
+func (s *Persistence) AtespaceExists(ctx context.Context, name string) (bool, error) {
+	n, err := s.rdb.Exists(ctx, atespaceDBKey(name)).Result()
+	if err != nil {
+		return false, fmt.Errorf("while checking atespace existence: %w", err)
+	}
+	return n > 0, nil
+}
+
+func (s *Persistence) ListAtespaces(ctx context.Context) ([]*ateapipb.Atespace, error) {
+	var result []*ateapipb.Atespace
+	var mu sync.Mutex
+
+	err := s.rdb.ForEachMaster(ctx, func(ctx context.Context, master *redis.Client) error {
+		iter := master.Scan(ctx, 0, "atespace:*", 0).Iterator()
+		for iter.Next(ctx) {
+			key := iter.Val()
+			getCmd := master.Get(ctx, key)
+			if getCmd.Err() != nil {
+				return fmt.Errorf("while getting atespace %q: %w", key, getCmd.Err())
+			}
+			atespace := &ateapipb.Atespace{}
+			if err := protojson.Unmarshal([]byte(getCmd.Val()), atespace); err != nil {
+				return fmt.Errorf("in protojson.Unmarshal: %w", err)
+			}
+			mu.Lock()
+			result = append(result, atespace)
+			mu.Unlock()
+		}
+		if err := iter.Err(); err != nil {
+			return fmt.Errorf("error from iterator: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("while iterating all redis master: %w", err)
+	}
+	return result, nil
+}
+
+// DeleteAtespace deletes an empty atespace. Returns store.ErrNotFound if the
+// atespace does not exist, or store.ErrFailedPrecondition if any actor still
+// lives in it.
+func (s *Persistence) DeleteAtespace(ctx context.Context, name string) error {
+	dbKey := atespaceDBKey(name)
+
+	// Existence first, so a missing atespace returns NotFound, not a silent no-op.
+	exists, err := s.rdb.Exists(ctx, dbKey).Result()
+	if err != nil {
+		return fmt.Errorf("while checking atespace key %q: %w", dbKey, err)
+	}
+	if exists == 0 {
+		return store.ErrNotFound
+	}
+
+	// Reject a non-empty atespace.
+	actors, _, err := s.ListActors(ctx, name, 1, "")
+	if err != nil {
+		return fmt.Errorf("while checking atespace emptiness: %w", err)
+	}
+	if len(actors) > 0 {
+		return store.ErrFailedPrecondition
+	}
+
+	if err := s.rdb.Del(ctx, dbKey).Err(); err != nil {
+		return fmt.Errorf("while deleting atespace key %q: %w", dbKey, err)
+	}
+	return nil
+}
+
 func workerDBKey(namespace, poolName, podName string) string {
 	return "worker:" + namespace + ":" + poolName + ":" + podName
 }

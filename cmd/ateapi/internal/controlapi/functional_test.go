@@ -345,6 +345,15 @@ func setupTest(t *testing.T, ns string) *testContext {
 		t.Fatalf("failed to create namespace %s: %v", ns, err)
 	}
 
+	// CreateActor now requires the atespace to exist first.
+	if _, err := client.CreateAtespace(context.Background(), &ateapipb.CreateAtespaceRequest{Name: testAtespace}); err != nil {
+		conn.Close()
+		grpcServer.Stop()
+		cancel()
+		mr.Close()
+		t.Fatalf("failed to seed test atespace %q: %v", testAtespace, err)
+	}
+
 	cleanup := func() {
 		conn.Close()
 		grpcServer.Stop()
@@ -388,6 +397,14 @@ func createTemplate(t *testing.T, tc *testContext, ns string) {
 			Command: []string{"/main"},
 		},
 	})
+}
+
+// createAtespace creates an atespace via the API.
+func createAtespace(t *testing.T, tc *testContext, name string) {
+	t.Helper()
+	if _, err := tc.client.CreateAtespace(context.Background(), &ateapipb.CreateAtespaceRequest{Name: name}); err != nil {
+		t.Fatalf("CreateAtespace(%s) failed: %v", name, err)
+	}
 }
 
 const poolLabelKey = "pool"
@@ -810,6 +827,8 @@ func TestListActors_ByAtespace(t *testing.T) {
 	defer tc.cleanup()
 
 	createTemplate(t, tc, ns)
+	createAtespace(t, tc, "team-a")
+	createAtespace(t, tc, "team-b")
 
 	create := func(id, atespace string) *ateapipb.Actor {
 		resp, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{
@@ -866,6 +885,8 @@ func TestListActors_AllAtespaces(t *testing.T) {
 	defer tc.cleanup()
 
 	createTemplate(t, tc, ns)
+	createAtespace(t, tc, "team-a")
+	createAtespace(t, tc, "team-b")
 
 	create := func(id, atespace string) {
 		if _, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{
@@ -2297,5 +2318,227 @@ func assertGrpcError(t *testing.T, err error, wantCode codes.Code, wantMsg strin
 	}
 	if st.Message() != wantMsg {
 		t.Errorf("expected message %q, got %q", wantMsg, st.Message())
+	}
+}
+
+func TestCreateActor_AtespaceNotFound(t *testing.T) {
+	ns := namespaceForTest("ns-create-actor-no-atespace")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+	createTemplate(t, tc, ns)
+
+	// The template exists, but "missing-as" was never created. The template
+	// check fires first, so reaching this error proves the atespace check ran.
+	_, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{
+		ActorTemplateNamespace: ns,
+		ActorTemplateName:      "tmpl1",
+		ActorId:                "id1",
+		Atespace:               "missing-as",
+	})
+	assertGrpcError(t, err, codes.FailedPrecondition, "Atespace missing-as not found")
+}
+
+func TestCreateAtespace_Success(t *testing.T) {
+	ns := namespaceForTest("ns-create-atespace")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+	createTemplate(t, tc, ns)
+
+	resp, err := tc.client.CreateAtespace(context.Background(), &ateapipb.CreateAtespaceRequest{Name: "team-a"})
+	if err != nil {
+		t.Fatalf("CreateAtespace failed: %v", err)
+	}
+	got := resp.GetAtespace()
+	if got.GetName() != "team-a" {
+		t.Errorf("Name = %q, want team-a", got.GetName())
+	}
+
+	// An actor can now be created into the new atespace.
+	if _, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{
+		ActorTemplateNamespace: ns,
+		ActorTemplateName:      "tmpl1",
+		ActorId:                "id1",
+		Atespace:               "team-a",
+	}); err != nil {
+		t.Errorf("CreateActor into freshly created atespace failed: %v", err)
+	}
+}
+
+func TestCreateAtespace_AlreadyExists(t *testing.T) {
+	ns := namespaceForTest("ns-create-atespace-dup")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	if _, err := tc.client.CreateAtespace(context.Background(), &ateapipb.CreateAtespaceRequest{Name: "team-a"}); err != nil {
+		t.Fatalf("first CreateAtespace failed: %v", err)
+	}
+	_, err := tc.client.CreateAtespace(context.Background(), &ateapipb.CreateAtespaceRequest{Name: "team-a"})
+	assertGrpcError(t, err, codes.AlreadyExists, "Atespace team-a already exists")
+}
+
+func TestCreateAtespace_Validation(t *testing.T) {
+	ns := namespaceForTest("ns-create-atespace-validation")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	_, err := tc.client.CreateAtespace(context.Background(), &ateapipb.CreateAtespaceRequest{Name: ""})
+	assertGrpcError(t, err, codes.InvalidArgument, "name is required")
+
+	// Invalid names — uppercase/underscore plus Redis-key/SCAN metacharacters —
+	// are rejected by ValidateAtespace before any key is built (injection guard).
+	for _, bad := range []string{"Team_A", "a*", "a:b", "a/b"} {
+		_, err := tc.client.CreateAtespace(context.Background(), &ateapipb.CreateAtespaceRequest{Name: bad})
+		if status.Code(err) != codes.InvalidArgument {
+			t.Errorf("CreateAtespace(%q): got code %v, want InvalidArgument (err=%v)", bad, status.Code(err), err)
+		}
+	}
+}
+
+func TestGetAtespace_Found(t *testing.T) {
+	ns := namespaceForTest("ns-get-atespace")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	created, err := tc.client.CreateAtespace(context.Background(), &ateapipb.CreateAtespaceRequest{Name: "team-a"})
+	if err != nil {
+		t.Fatalf("CreateAtespace failed: %v", err)
+	}
+	resp, err := tc.client.GetAtespace(context.Background(), &ateapipb.GetAtespaceRequest{Name: "team-a"})
+	if err != nil {
+		t.Fatalf("GetAtespace failed: %v", err)
+	}
+	if diff := cmp.Diff(created.GetAtespace(), resp.GetAtespace(), protocmp.Transform()); diff != "" {
+		t.Errorf("GetAtespace mismatch (-created +got):\n%s", diff)
+	}
+}
+
+func TestGetAtespace_NotFound(t *testing.T) {
+	ns := namespaceForTest("ns-get-atespace-missing")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	_, err := tc.client.GetAtespace(context.Background(), &ateapipb.GetAtespaceRequest{Name: "nope"})
+	assertGrpcError(t, err, codes.NotFound, "Atespace nope not found")
+}
+
+func TestListAtespaces(t *testing.T) {
+	ns := namespaceForTest("ns-list-atespaces")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	for _, n := range []string{"team-a", "team-b"} {
+		if _, err := tc.client.CreateAtespace(context.Background(), &ateapipb.CreateAtespaceRequest{Name: n}); err != nil {
+			t.Fatalf("CreateAtespace(%s) failed: %v", n, err)
+		}
+	}
+	resp, err := tc.client.ListAtespaces(context.Background(), &ateapipb.ListAtespacesRequest{})
+	if err != nil {
+		t.Fatalf("ListAtespaces failed: %v", err)
+	}
+	got := map[string]bool{}
+	for _, a := range resp.GetAtespaces() {
+		got[a.GetName()] = true
+	}
+	// setupTest seeds testAtespace; team-a and team-b were created above.
+	for _, n := range []string{testAtespace, "team-a", "team-b"} {
+		if !got[n] {
+			t.Errorf("ListAtespaces missing %q; got %v", n, got)
+		}
+	}
+}
+
+func TestDeleteAtespace_Empty_Success(t *testing.T) {
+	ns := namespaceForTest("ns-delete-atespace-empty")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	if _, err := tc.client.CreateAtespace(context.Background(), &ateapipb.CreateAtespaceRequest{Name: "team-a"}); err != nil {
+		t.Fatalf("CreateAtespace failed: %v", err)
+	}
+	if _, err := tc.client.DeleteAtespace(context.Background(), &ateapipb.DeleteAtespaceRequest{Name: "team-a"}); err != nil {
+		t.Fatalf("DeleteAtespace failed: %v", err)
+	}
+	_, err := tc.client.GetAtespace(context.Background(), &ateapipb.GetAtespaceRequest{Name: "team-a"})
+	assertGrpcError(t, err, codes.NotFound, "Atespace team-a not found")
+}
+
+func TestDeleteAtespace_NonEmpty_Rejected(t *testing.T) {
+	ns := namespaceForTest("ns-delete-atespace-nonempty")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+	createTemplate(t, tc, ns)
+
+	if _, err := tc.client.CreateAtespace(context.Background(), &ateapipb.CreateAtespaceRequest{Name: "team-a"}); err != nil {
+		t.Fatalf("CreateAtespace failed: %v", err)
+	}
+	if _, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{
+		ActorTemplateNamespace: ns,
+		ActorTemplateName:      "tmpl1",
+		ActorId:                "id1",
+		Atespace:               "team-a",
+	}); err != nil {
+		t.Fatalf("CreateActor failed: %v", err)
+	}
+	_, err := tc.client.DeleteAtespace(context.Background(), &ateapipb.DeleteAtespaceRequest{Name: "team-a"})
+	assertGrpcError(t, err, codes.FailedPrecondition, "Atespace team-a is not empty")
+	// The atespace must survive a rejected delete.
+	if _, err := tc.client.GetAtespace(context.Background(), &ateapipb.GetAtespaceRequest{Name: "team-a"}); err != nil {
+		t.Errorf("atespace should survive a rejected delete, got %v", err)
+	}
+}
+
+// TestDeleteAtespace_ScopedToTargetAtespace pins (at the RPC layer) that the
+// emptiness check is scoped to the target atespace: deleting an empty atespace
+// succeeds even when a different atespace holds actors.
+func TestDeleteAtespace_ScopedToTargetAtespace(t *testing.T) {
+	ns := namespaceForTest("ns-delete-atespace-scoped")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+	createTemplate(t, tc, ns)
+	createAtespace(t, tc, "team-a")
+	createAtespace(t, tc, "team-b")
+
+	// Actor only in team-b.
+	if _, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{
+		ActorTemplateNamespace: ns,
+		ActorTemplateName:      "tmpl1",
+		ActorId:                "id1",
+		Atespace:               "team-b",
+	}); err != nil {
+		t.Fatalf("CreateActor failed: %v", err)
+	}
+
+	// Empty team-a deletes fine despite team-b holding an actor.
+	if _, err := tc.client.DeleteAtespace(context.Background(), &ateapipb.DeleteAtespaceRequest{Name: "team-a"}); err != nil {
+		t.Errorf("DeleteAtespace(team-a, empty) failed: %v", err)
+	}
+	// team-b is still non-empty → rejected.
+	_, err := tc.client.DeleteAtespace(context.Background(), &ateapipb.DeleteAtespaceRequest{Name: "team-b"})
+	assertGrpcError(t, err, codes.FailedPrecondition, "Atespace team-b is not empty")
+}
+
+func TestDeleteAtespace_NotFound(t *testing.T) {
+	ns := namespaceForTest("ns-delete-atespace-missing")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	_, err := tc.client.DeleteAtespace(context.Background(), &ateapipb.DeleteAtespaceRequest{Name: "nope"})
+	assertGrpcError(t, err, codes.NotFound, "Atespace nope not found")
+}
+
+func TestDeleteAtespace_Validation(t *testing.T) {
+	ns := namespaceForTest("ns-delete-atespace-validation")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	_, err := tc.client.DeleteAtespace(context.Background(), &ateapipb.DeleteAtespaceRequest{Name: ""})
+	assertGrpcError(t, err, codes.InvalidArgument, "name is required")
+
+	// Metacharacter names are rejected before the emptiness glob scan ever runs.
+	for _, bad := range []string{"a*", "a:b"} {
+		_, err := tc.client.DeleteAtespace(context.Background(), &ateapipb.DeleteAtespaceRequest{Name: bad})
+		if status.Code(err) != codes.InvalidArgument {
+			t.Errorf("DeleteAtespace(%q): got code %v, want InvalidArgument", bad, status.Code(err))
+		}
 	}
 }

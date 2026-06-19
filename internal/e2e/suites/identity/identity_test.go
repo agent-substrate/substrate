@@ -159,6 +159,8 @@ func waitForGolden(t *testing.T, ctx context.Context, clients *e2e.Clients) stri
 
 func createAndResumeActor(t *testing.T, ctx context.Context, clients *e2e.Clients, id string) {
 	t.Helper()
+	// CreateActor requires the atespace to exist first.
+	_, _ = clients.SubstrateAPI.CreateAtespace(ctx, &ateapipb.CreateAtespaceRequest{Name: probeNamespace})
 	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{
 		Atespace:               probeNamespace,
 		ActorId:                id,

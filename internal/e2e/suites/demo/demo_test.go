@@ -44,6 +44,9 @@ func TestActorLifecycle(t *testing.T) {
 	ctx := context.Background()
 	clients := e2e.GetClients()
 
+	// CreateActor requires the atespace to exist first.
+	_, _ = clients.SubstrateAPI.CreateAtespace(ctx, &ateapipb.CreateAtespaceRequest{Name: demoAtespace})
+
 	// Create actor template.
 	at, err := createActorTemplate(ctx, t, clients, nsObj, v1alpha1.SnapshotScopeFull, v1alpha1.SnapshotScopeFull)
 	if err != nil {

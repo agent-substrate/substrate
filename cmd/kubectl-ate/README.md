@@ -115,22 +115,44 @@ kubectl ate get workers
 | `STATUS` | `FREE` (idle, ready to receive an actor) or `ASSIGNED` (currently hosting an actor). |
 | `ASSIGNED ACTOR` | If `STATUS=ASSIGNED`, the actor reference `<namespace>/<template>/<actor-id>`. |
 
+### Atespaces
+
+An **atespace** is the tenant boundary an actor belongs to. It must exist before you can create actors in it.
+
+```bash
+# Create an atespace
+kubectl ate create atespace <atespace>
+
+# List all atespaces
+kubectl ate get atespaces
+
+# Get an atespace
+kubectl ate get atespace <atespace>
+
+# Delete an atespace (must be empty — fails if any actors remain)
+kubectl ate delete atespace <atespace>
+```
+
+> **Note:** `create actor … -a <atespace>` requires the atespace to already exist, otherwise it fails with `FailedPrecondition`. `delete atespace` only removes an **empty** atespace; delete its actors first (cascade delete is not yet supported).
+
 ### Actor Lifecycle
 Manage the execution state of your workloads.
 *(Note: Actors are identified by a user-provided ID, which must be a valid DNS-1123 label)*
 
 ```bash
-# Create a new actor deriving from a specific ActorTemplate
-kubectl ate create actor my-actor --template=ate-demo-counter/counter
+# Create a new actor deriving from a specific ActorTemplate.
+# -a/--atespace is required and the atespace must already exist
+# (kubectl ate create atespace <atespace>).
+kubectl ate create actor my-actor --template=ate-demo-counter/counter -a <atespace>
 
 # Resume an actor (assigns it to a free worker and restores its state)
-kubectl ate resume actor my-actor
+kubectl ate resume actor my-actor -a <atespace>
 
 # Suspend an actor (snapshots its state to storage and frees the worker)
-kubectl ate suspend actor my-actor
+kubectl ate suspend actor my-actor -a <atespace>
 
 # Delete an actor.
-kubectl ate delete actor my-actor
+kubectl ate delete actor my-actor -a <atespace>
 ```
 
 ### Logs

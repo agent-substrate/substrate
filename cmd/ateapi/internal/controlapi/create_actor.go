@@ -41,6 +41,15 @@ func (s *Service) CreateActor(ctx context.Context, req *ateapipb.CreateActorRequ
 		return nil, fmt.Errorf("while getting ActorTemplate: %w", err)
 	}
 
+	// The atespace must already exist.
+	exists, err := s.persistence.AtespaceExists(ctx, req.GetAtespace())
+	if err != nil {
+		return nil, fmt.Errorf("while checking atespace: %w", err)
+	}
+	if !exists {
+		return nil, status.Errorf(codes.FailedPrecondition, "Atespace %s not found", req.GetAtespace())
+	}
+
 	id := req.GetActorId()
 	actor := &ateapipb.Actor{
 		ActorId:                id,

@@ -241,3 +241,92 @@ func TestPrintWorkersTo_Invalid(t *testing.T) {
 		t.Errorf("expected error for invalid format, got nil")
 	}
 }
+
+func TestPrintAtespacesTo_Table(t *testing.T) {
+	var buf bytes.Buffer
+	atespaces := []*ateapipb.Atespace{
+		{Name: "team-a"},
+	}
+
+	if err := PrintAtespacesTo(&buf, atespaces, "table"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	expected := `NAME
+team-a
+`
+	if diff := cmp.Diff(expected, buf.String()); diff != "" {
+		t.Errorf("output mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestPrintAtespacesTo_JSON(t *testing.T) {
+	var buf bytes.Buffer
+	atespaces := []*ateapipb.Atespace{
+		{Name: "team-a"},
+	}
+
+	if err := PrintAtespacesTo(&buf, atespaces, "json"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	expected := `{
+  "atespaces": [
+    {
+      "name": "team-a"
+    }
+  ]
+}
+`
+	if diff := cmp.Diff(expected, buf.String()); diff != "" {
+		t.Errorf("output mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestPrintAtespacesTo_YAML(t *testing.T) {
+	var buf bytes.Buffer
+	atespaces := []*ateapipb.Atespace{
+		{Name: "team-a"},
+	}
+
+	if err := PrintAtespacesTo(&buf, atespaces, "yaml"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	expected := `atespaces:
+- name: team-a
+`
+	if diff := cmp.Diff(expected, buf.String()); diff != "" {
+		t.Errorf("output mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestPrintAtespacesTo_Table_Sorted(t *testing.T) {
+	var buf bytes.Buffer
+	atespaces := []*ateapipb.Atespace{
+		{Name: "team-c"},
+		{Name: "team-a"},
+		{Name: "team-b"},
+	}
+
+	if err := PrintAtespacesTo(&buf, atespaces, "table"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Sorted by name.
+	expected := `NAME
+team-a
+team-b
+team-c
+`
+	if diff := cmp.Diff(expected, buf.String()); diff != "" {
+		t.Errorf("output mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestPrintAtespacesTo_Invalid(t *testing.T) {
+	var buf bytes.Buffer
+	if err := PrintAtespacesTo(&buf, nil, "xml"); err == nil {
+		t.Errorf("expected error for invalid format, got nil")
+	}
+}

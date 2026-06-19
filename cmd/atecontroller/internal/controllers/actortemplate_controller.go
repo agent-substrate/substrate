@@ -22,6 +22,8 @@ import (
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/uuid"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	k8errors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -79,13 +81,19 @@ func (r *ActorTemplateReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	case atev1alpha1.PhaseInitial:
 		actorID := uuid.NewString()
 
+		// The golden actor lives in the template's namespace as its atespace.
+		_, err := r.AteClient.CreateAtespace(ctx, &ateapipb.CreateAtespaceRequest{Name: at.ObjectMeta.Namespace})
+		if err != nil && status.Code(err) != codes.AlreadyExists {
+			return ctrl.Result{}, fmt.Errorf("while ensuring atespace %q: %w", at.ObjectMeta.Namespace, err)
+		}
+
 		createReq := &ateapipb.CreateActorRequest{
 			ActorId:                actorID,
 			Atespace:               at.ObjectMeta.Namespace,
 			ActorTemplateNamespace: at.ObjectMeta.Namespace,
 			ActorTemplateName:      at.ObjectMeta.Name,
 		}
-		_, err := r.AteClient.CreateActor(ctx, createReq)
+		_, err = r.AteClient.CreateActor(ctx, createReq)
 		if err != nil {
 			return ctrl.Result{}, fmt.Errorf("while creating golden actor: %w", err)
 		}
