@@ -28,6 +28,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/spf13/pflag"
 	"google.golang.org/grpc"
@@ -60,12 +61,16 @@ func dialAteAPI(endpoint string) (ateapipb.ControlClient, *grpc.ClientConn, erro
 
 func main() {
 	actorID := pflag.String("id", "", "ID of the sandbox actor (required)")
+	atespace := pflag.String("atespace", "", "Atespace (tenant) the actor lives in (required)")
 	ateapiAddr := pflag.String("ateapi", "localhost:8080", "Address of the ateapi gRPC server")
 	atenetAddr := pflag.String("atenet", "localhost:8000", "Address of the atenet HTTP router")
 	pflag.Parse()
 
 	if *actorID == "" {
 		log.Fatal("--id is required")
+	}
+	if *atespace == "" {
+		log.Fatal("--atespace is required")
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -89,7 +94,7 @@ func main() {
 	defer conn.Close()
 
 	log.Printf("Resuming actor %s...", *actorID)
-	_, err = cli.ResumeActor(ctx, &ateapipb.ResumeActorRequest{ActorId: *actorID})
+	_, err = cli.ResumeActor(ctx, &ateapipb.ResumeActorRequest{ActorId: *actorID, Atespace: *atespace})
 	if err != nil {
 		log.Fatalf("Failed to resume actor: %v", err)
 	}
@@ -99,7 +104,7 @@ func main() {
 	defer func() {
 		log.Printf("Suspending actor %s...", *actorID)
 		suspendCtx := context.Background()
-		_, err := cli.SuspendActor(suspendCtx, &ateapipb.SuspendActorRequest{ActorId: *actorID})
+		_, err := cli.SuspendActor(suspendCtx, &ateapipb.SuspendActorRequest{ActorId: *actorID, Atespace: *atespace})
 		if err != nil {
 			log.Printf("Failed to suspend actor: %v", err)
 		} else {
@@ -147,7 +152,7 @@ func main() {
 			}
 
 			// Send command to atenet router
-			output, err := runCommand(ctx, *atenetAddr, *actorID, line)
+			output, err := runCommand(ctx, *atenetAddr, *atespace, *actorID, line)
 			if err != nil {
 				fmt.Printf("Error: %v\n", err)
 				continue
@@ -166,7 +171,7 @@ func main() {
 	}
 }
 
-func runCommand(ctx context.Context, atenetAddr, actorID, command string) (*ProcessResponse, error) {
+func runCommand(ctx context.Context, atenetAddr, atespace, actorID, command string) (*ProcessResponse, error) {
 	url := fmt.Sprintf("http://%s/process", atenetAddr)
 
 	reqBody := ProcessRequest{
@@ -179,7 +184,7 @@ func runCommand(ctx context.Context, atenetAddr, actorID, command string) (*Proc
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Host = fmt.Sprintf("%s.actors.resources.substrate.ate.dev", actorID)
+	req.Host = resources.ActorDNSName(atespace, actorID)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

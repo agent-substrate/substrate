@@ -26,6 +26,7 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/ateclient"
 	"github.com/agent-substrate/substrate/internal/e2e"
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -327,7 +328,7 @@ func pauseActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *
 	}
 	waitForActorStatus(ctx, t, clients, actorID, ateapipb.Actor_STATUS_RUNNING)
 
-	resp, err := callActor(t, actorID)
+	resp, err := callActor(t, demoAtespace, actorID)
 	if err != nil {
 		t.Fatalf("failed to call actor: %v", err)
 	}
@@ -358,7 +359,7 @@ func pauseActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *
 	}
 	waitForActorStatus(ctx, t, clients, actorID, ateapipb.Actor_STATUS_RUNNING)
 
-	resp, err = callActor(t, actorID)
+	resp, err = callActor(t, demoAtespace, actorID)
 	if err != nil {
 		t.Fatalf("failed to call actor again: %v", err)
 	}
@@ -422,7 +423,7 @@ func suspendActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj
 	}
 	waitForActorStatus(ctx, t, clients, actorID, ateapipb.Actor_STATUS_RUNNING)
 
-	resp, err := callActor(t, actorID)
+	resp, err := callActor(t, demoAtespace, actorID)
 	if err != nil {
 		t.Fatalf("failed to call actor: %v", err)
 	}
@@ -452,7 +453,7 @@ func suspendActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj
 	}
 	waitForActorStatus(ctx, t, clients, actorID, ateapipb.Actor_STATUS_RUNNING)
 
-	resp, err = callActor(t, actorID)
+	resp, err = callActor(t, demoAtespace, actorID)
 	if err != nil {
 		t.Fatalf("failed to call actor again: %v", err)
 	}
@@ -629,7 +630,7 @@ func waitForActorStatus(ctx context.Context, t *testing.T, clients *e2e.Clients,
 	t.Fatalf("timed out waiting for actor %q to reach status %v", actorID, expectedStatus)
 }
 
-func callActor(t *testing.T, actorID string) (string, error) {
+func callActor(t *testing.T, atespace, actorID string) (string, error) {
 	t.Helper()
 	clients := e2e.GetClients()
 
@@ -700,7 +701,7 @@ func callActor(t *testing.T, actorID string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to create request: %w", err)
 	}
-	reqHttp.Host = fmt.Sprintf("%s.actors.resources.substrate.ate.dev", actorID)
+	reqHttp.Host = resources.ActorDNSName(atespace, actorID)
 
 	httpClient := &http.Client{Timeout: 15 * time.Second}
 	resp, err := httpClient.Do(reqHttp)

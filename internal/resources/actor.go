@@ -17,13 +17,14 @@ package resources
 import (
 	"fmt"
 	"regexp"
+	"strings"
 )
 
 const (
 	// ActorIDRegexPattern is the regular expression pattern for matching valid actor IDs.
 	ActorIDRegexPattern = `[a-z0-9]([-a-z0-9]*[a-z0-9])?`
 	// ActorDNSSuffix is suffix to the DNS name for direct access to Actor
-	// "<actor id>.actors.resources.substrate.ate.dev."
+	// "<actor id>.<atespace>.actors.resources.substrate.ate.dev."
 	ActorDNSSuffix = "actors.resources.substrate.ate.dev"
 )
 
@@ -59,4 +60,33 @@ func ValidateAtespace(atespace string) error {
 		return fmt.Errorf("invalid atespace: must start and end with a lower case alphanumeric character, and consist only of lower case alphanumeric characters or '-'")
 	}
 	return nil
+}
+
+// ActorDNSName returns the mesh DNS name an actor is reachable at:
+// "<actor_id>.<atespace>.actors.resources.substrate.ate.dev". The atespace is
+// part of the name because an actor id is only unique within its atespace.
+func ActorDNSName(atespace, actorID string) string {
+	return actorID + "." + atespace + "." + ActorDNSSuffix
+}
+
+// ParseActorDNSName parses a mesh DNS name of the form
+// "<actor_id>.<atespace>.actors.resources.substrate.ate.dev" (a trailing dot is
+// tolerated) into its atespace and actor id, validating both. It does not accept
+// a host:port; callers must strip the port first.
+func ParseActorDNSName(name string) (atespace, actorID string, err error) {
+	rest, found := strings.CutSuffix(strings.TrimSuffix(name, "."), "."+ActorDNSSuffix)
+	if !found {
+		return "", "", fmt.Errorf("invalid actor DNS name: must end with %s, got %q", ActorDNSSuffix, name)
+	}
+	actorID, atespace, found = strings.Cut(rest, ".")
+	if !found {
+		return "", "", fmt.Errorf("invalid actor DNS name: expected <actor_id>.<atespace>.%s, got %q", ActorDNSSuffix, name)
+	}
+	if err := ValidateActorID(actorID); err != nil {
+		return "", "", err
+	}
+	if err := ValidateAtespace(atespace); err != nil {
+		return "", "", err
+	}
+	return atespace, actorID, nil
 }

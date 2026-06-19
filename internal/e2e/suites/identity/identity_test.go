@@ -181,7 +181,7 @@ func createAndResumeActor(t *testing.T, ctx context.Context, clients *e2e.Client
 
 func whoami(t *testing.T, ctx context.Context, rc *e2e.RouterClient, id string) whoamiResponse {
 	t.Helper()
-	resp, err := rc.Get(ctx, id, "/whoami")
+	resp, err := rc.Get(ctx, probeNamespace, id, "/whoami")
 	if err != nil {
 		t.Fatalf("GET /whoami for %q: %v", id, err)
 	}

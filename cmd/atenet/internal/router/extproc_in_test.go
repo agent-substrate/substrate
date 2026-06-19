@@ -119,60 +119,68 @@ func TestExtractMetadata(t *testing.T) {
 	}
 }
 
-func TestParseActorID(t *testing.T) {
+func TestParseActorRef(t *testing.T) {
 	tests := []struct {
-		name    string
-		host    string
-		wantID  string
-		wantErr bool
+		name         string
+		host         string
+		wantAtespace string
+		wantID       string
+		wantErr      bool
 	}{
 		{
-			name:    "valid host without port",
+			name:         "valid host without port",
+			host:         "my-actor.team-a.actors.resources.substrate.ate.dev",
+			wantAtespace: "team-a",
+			wantID:       "my-actor",
+			wantErr:      false,
+		},
+		{
+			name:         "valid host with port",
+			host:         "my-actor.team-a.actors.resources.substrate.ate.dev:8443",
+			wantAtespace: "team-a",
+			wantID:       "my-actor",
+			wantErr:      false,
+		},
+		{
+			name:         "valid host with trailing dot",
+			host:         "my-actor.team-a.actors.resources.substrate.ate.dev.",
+			wantAtespace: "team-a",
+			wantID:       "my-actor",
+			wantErr:      false,
+		},
+		{
+			name:         "valid host with trailing dot and port",
+			host:         "my-actor.team-a.actors.resources.substrate.ate.dev.:8080",
+			wantAtespace: "team-a",
+			wantID:       "my-actor",
+			wantErr:      false,
+		},
+		{
+			name:    "missing atespace label",
 			host:    "my-actor.actors.resources.substrate.ate.dev",
-			wantID:  "my-actor",
-			wantErr: false,
-		},
-		{
-			name:    "valid host with port",
-			host:    "my-actor.actors.resources.substrate.ate.dev:8443",
-			wantID:  "my-actor",
-			wantErr: false,
-		},
-		{
-			name:    "valid host with trailing dot",
-			host:    "my-actor.actors.resources.substrate.ate.dev.",
-			wantID:  "my-actor",
-			wantErr: false,
-		},
-		{
-			name:    "valid host with trailing dot and port",
-			host:    "my-actor.actors.resources.substrate.ate.dev.:8080",
-			wantID:  "my-actor",
-			wantErr: false,
+			wantErr: true,
 		},
 		{
 			name:    "invalid suffix",
-			host:    "my-actor.example.com",
-			wantID:  "",
+			host:    "my-actor.team-a.example.com",
 			wantErr: true,
 		},
 		{
 			name:    "invalid host port format",
-			host:    "my-actor.actors.resources.substrate.ate.dev:invalid:port",
-			wantID:  "",
+			host:    "my-actor.team-a.actors.resources.substrate.ate.dev:invalid:port",
 			wantErr: true,
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			gotID, err := parseActorID(tc.host)
+			gotAtespace, gotID, err := parseActorRef(tc.host)
 			if (err != nil) != tc.wantErr {
-				t.Errorf("parseActorID(%q) error = %v, wantErr %v", tc.host, err, tc.wantErr)
+				t.Errorf("parseActorRef(%q) error = %v, wantErr %v", tc.host, err, tc.wantErr)
 				return
 			}
-			if gotID != tc.wantID {
-				t.Errorf("parseActorID(%q) gotID = %v, want %v", tc.host, gotID, tc.wantID)
+			if gotAtespace != tc.wantAtespace || gotID != tc.wantID {
+				t.Errorf("parseActorRef(%q) = (%q, %q), want (%q, %q)", tc.host, gotAtespace, gotID, tc.wantAtespace, tc.wantID)
 			}
 		})
 	}

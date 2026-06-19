@@ -41,13 +41,17 @@ func NewActorResumer(apiClient ateapipb.ControlClient) *ActorResumer {
 }
 
 // ResumeActor ensures the requested actor is running. It deduplicates concurrent
-// requests within the process and retries when needed.
-func (r *ActorResumer) ResumeActor(ctx context.Context, actorID string) (*ateapipb.Actor, error) {
+// requests within the process and retries when needed. The actor is addressed by
+// (atespace, actorID) since an actor id is only unique within its atespace.
+func (r *ActorResumer) ResumeActor(ctx context.Context, atespace, actorID string) (*ateapipb.Actor, error) {
 	ctx, span := otel.Tracer(routerServiceName).Start(ctx, "ResumeActor",
-		trace.WithAttributes(attribute.String("actor_id", actorID)))
+		trace.WithAttributes(
+			attribute.String("atespace", atespace),
+			attribute.String("actor_id", actorID),
+		))
 	defer span.End()
 
-	ch := r.flight.DoChan(actorID, func() (interface{}, error) {
+	ch := r.flight.DoChan(atespace+"/"+actorID, func() (interface{}, error) {
 		// We detach the context from the first caller using a fixed background timeout.
 		// This guarantees that if Caller 1 disconnects or times out, the underlying
 		// resume operation continues running for Caller 2 and Caller 3 without failing.
@@ -66,7 +70,8 @@ func (r *ActorResumer) ResumeActor(ctx context.Context, actorID string) (*ateapi
 		err := wait.ExponentialBackoffWithContext(bgCtx, backoff, func(ctx context.Context) (bool, error) {
 			var err error
 			resumeResp, err = r.apiClient.ResumeActor(ctx, &ateapipb.ResumeActorRequest{
-				ActorId: actorID,
+				ActorId:  actorID,
+				Atespace: atespace,
 			})
 			if err == nil {
 				return true, nil

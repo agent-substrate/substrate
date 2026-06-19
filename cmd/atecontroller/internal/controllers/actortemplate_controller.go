@@ -81,6 +81,7 @@ func (r *ActorTemplateReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 
 		createReq := &ateapipb.CreateActorRequest{
 			ActorId:                actorID,
+			Atespace:               at.ObjectMeta.Namespace,
 			ActorTemplateNamespace: at.ObjectMeta.Namespace,
 			ActorTemplateName:      at.ObjectMeta.Name,
 		}
@@ -109,7 +110,8 @@ func (r *ActorTemplateReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		// TODO: Maybe this should go through a different RPC dedicated to
 		// booting an actor from scratch.
 		resumeReq := &ateapipb.ResumeActorRequest{
-			ActorId: at.Status.GoldenActorID,
+			ActorId:  at.Status.GoldenActorID,
+			Atespace: at.ObjectMeta.Namespace,
 		}
 		_, err := r.AteClient.ResumeActor(ctx, resumeReq)
 		if err != nil {
@@ -135,7 +137,8 @@ func (r *ActorTemplateReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		// from it.
 
 		req := &ateapipb.SuspendActorRequest{
-			ActorId: at.Status.GoldenActorID,
+			ActorId:  at.Status.GoldenActorID,
+			Atespace: at.ObjectMeta.Namespace,
 		}
 		resp, err := r.AteClient.SuspendActor(ctx, req)
 		if err != nil {

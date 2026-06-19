@@ -43,3 +43,50 @@ func TestValidateActorID(t *testing.T) {
 		})
 	}
 }
+
+func TestActorDNSName(t *testing.T) {
+	got := ActorDNSName("team-a", "act-1")
+	want := "act-1.team-a." + ActorDNSSuffix
+	if got != want {
+		t.Errorf("ActorDNSName() = %q, want %q", got, want)
+	}
+
+	// Round-trips through ParseActorDNSName.
+	atespace, actorID, err := ParseActorDNSName(got)
+	if err != nil || atespace != "team-a" || actorID != "act-1" {
+		t.Errorf("round-trip = (%q, %q, %v), want (team-a, act-1, <nil>)", atespace, actorID, err)
+	}
+}
+
+func TestParseActorDNSName(t *testing.T) {
+	tests := []struct {
+		name         string
+		input        string
+		wantAtespace string
+		wantActorID  string
+		wantErr      bool
+	}{
+		{"valid", "act-1.team-a." + ActorDNSSuffix, "team-a", "act-1", false},
+		{"valid trailing dot", "act-1.team-a." + ActorDNSSuffix + ".", "team-a", "act-1", false},
+		{"wrong suffix", "act-1.team-a.example.com", "", "", true},
+		{"missing atespace", "act-1." + ActorDNSSuffix, "", "", true},
+		{"invalid actor id", "ACT-1.team-a." + ActorDNSSuffix, "", "", true},
+		{"invalid atespace", "act-1.TEAM." + ActorDNSSuffix, "", "", true},
+		{"host:port not accepted", "act-1.team-a." + ActorDNSSuffix + ":8080", "", "", true},
+		{"empty", "", "", "", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			atespace, actorID, err := ParseActorDNSName(tt.input)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("ParseActorDNSName(%q) error = %v, wantErr %v", tt.input, err, tt.wantErr)
+			}
+			if err != nil {
+				return
+			}
+			if atespace != tt.wantAtespace || actorID != tt.wantActorID {
+				t.Errorf("ParseActorDNSName(%q) = (%q, %q), want (%q, %q)", tt.input, atespace, actorID, tt.wantAtespace, tt.wantActorID)
+			}
+		})
+	}
+}
