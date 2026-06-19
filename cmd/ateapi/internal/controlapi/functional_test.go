@@ -858,6 +858,45 @@ func TestListActors_ByAtespace(t *testing.T) {
 	assertGrpcError(t, err, codes.NotFound, "Actor id1 not found")
 }
 
+// TestListActors_AllAtespaces verifies that an empty atespace lists actors across
+// all atespaces (the `-A` / admin view), unlike the scoped single-tenant listing.
+func TestListActors_AllAtespaces(t *testing.T) {
+	ns := namespaceForTest("ns-list-all-atespaces")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	createTemplate(t, tc, ns)
+
+	create := func(id, atespace string) {
+		if _, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{
+			ActorTemplateNamespace: ns,
+			ActorTemplateName:      "tmpl1",
+			ActorId:                id,
+			Atespace:               atespace,
+		}); err != nil {
+			t.Fatalf("CreateActor(%s, atespace=%q) failed: %v", id, atespace, err)
+		}
+	}
+	create("id1", "team-a")
+	create("id2", "team-b")
+
+	// Empty atespace lists across all atespaces; returned actors carry their atespace.
+	resp, err := tc.client.ListActors(context.Background(), &ateapipb.ListActorsRequest{})
+	if err != nil {
+		t.Fatalf("ListActors(all) failed: %v", err)
+	}
+	got := map[string]string{}
+	for _, a := range resp.GetActors() {
+		got[a.GetActorId()] = a.GetAtespace()
+	}
+	if got["id1"] != "team-a" {
+		t.Errorf("ListActors(all): got[id1]=%q, want team-a", got["id1"])
+	}
+	if got["id2"] != "team-b" {
+		t.Errorf("ListActors(all): got[id2]=%q, want team-b", got["id2"])
+	}
+}
+
 // TestListActors_Pagination tests that ListActors correctly paginates results.
 func TestListActors_Pagination(t *testing.T) {
 	ns := namespaceForTest("ns-list-actors-pagination")

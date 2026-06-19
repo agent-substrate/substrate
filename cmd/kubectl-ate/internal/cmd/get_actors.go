@@ -23,7 +23,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var getActorsAtespaceFlag string
+var (
+	getActorsAtespaceFlag string
+	getActorsAllAtespaces bool
+)
 
 var getActorsCmd = &cobra.Command{
 	Use:     "actors [actor-id]",
@@ -41,11 +44,28 @@ var getActorsCmd = &cobra.Command{
 
 		// 2. Handle Get Single Actor
 		if len(args) > 0 {
+			// A single actor is addressed by (atespace, id), so the tenant is
+			// mandatory and "all atespaces" is meaningless here.
+			if getActorsAllAtespaces {
+				return fmt.Errorf("-A/--all-atespaces cannot be used when getting a specific actor; pass --atespace")
+			}
+			if getActorsAtespaceFlag == "" {
+				return fmt.Errorf("--atespace is required when getting a specific actor")
+			}
 			resp, err := apiClient.GetActor(ctx, &ateapipb.GetActorRequest{ActorId: args[0], Atespace: getActorsAtespaceFlag})
 			if err != nil {
 				return fmt.Errorf("failed to get actor: %w", err)
 			}
 			return printer.PrintActor(resp.GetActor(), outputFmt)
+		}
+
+		// Listing requires exactly one of --atespace (one tenant) or -A (all
+		// tenants). There is no default atespace to fall back on.
+		if getActorsAllAtespaces && getActorsAtespaceFlag != "" {
+			return fmt.Errorf("--atespace and -A/--all-atespaces are mutually exclusive")
+		}
+		if !getActorsAllAtespaces && getActorsAtespaceFlag == "" {
+			return fmt.Errorf("specify --atespace <name> to list one atespace, or -A/--all-atespaces for all")
 		}
 
 		// 3. Handle List All Actors
@@ -74,7 +94,7 @@ var getActorsCmd = &cobra.Command{
 }
 
 func init() {
-	getActorsCmd.Flags().StringVar(&getActorsAtespaceFlag, "atespace", "", "Atespace (tenant) to list/get actors in (required)")
-	_ = getActorsCmd.MarkFlagRequired("atespace")
+	getActorsCmd.Flags().StringVar(&getActorsAtespaceFlag, "atespace", "", "Atespace (tenant) to list/get actors in. Required for a single actor; for listing, use this or -A.")
+	getActorsCmd.Flags().BoolVarP(&getActorsAllAtespaces, "all-atespaces", "A", false, "List actors across all atespaces (listing only; mutually exclusive with --atespace)")
 	getCmd.AddCommand(getActorsCmd)
 }

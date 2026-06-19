@@ -874,13 +874,13 @@ func TestListActors_ScopedByAtespace(t *testing.T) {
 		t.Errorf("ListActors(team-b) = %v, want exactly {b1}", got)
 	}
 
-	// The empty (default) atespace sees none of the namespaced actors.
-	empty, _, err := s.ListActors(ctx, "", 1000, "")
+	// An empty atespace lists across all atespaces (the admin/dev `-A` view).
+	all, _, err := s.ListActors(ctx, "", 1000, "")
 	if err != nil {
-		t.Fatalf("ListActors(empty) failed: %v", err)
+		t.Fatalf("ListActors(all) failed: %v", err)
 	}
-	if len(empty) != 0 {
-		t.Errorf("ListActors(empty) = %v, want none", actorIDSet(empty))
+	if got := actorIDSet(all); !got["a1"] || !got["a2"] || !got["b1"] || len(got) != 3 {
+		t.Errorf("ListActors(all) = %v, want exactly {a1, a2, b1}", got)
 	}
 
 	// Get is scoped too: right atespace hits, wrong/empty atespace misses.

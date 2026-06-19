@@ -36,6 +36,9 @@ func PrintActors(actors []*ateapipb.Actor, format string) error {
 
 func sortActors(actors []*ateapipb.Actor) {
 	slices.SortFunc(actors, func(a, b *ateapipb.Actor) int {
+		if c := cmp.Compare(a.GetAtespace(), b.GetAtespace()); c != 0 {
+			return c
+		}
 		if c := cmp.Compare(a.GetActorTemplateNamespace(), b.GetActorTemplateNamespace()); c != 0 {
 			return c
 		}
@@ -54,8 +57,9 @@ func PrintActorsTo(out io.Writer, actors []*ateapipb.Actor, format string) error
 		return printProto(out, &ateapipb.ListActorsResponse{Actors: actors}, format)
 	case "table":
 		w := tabwriter.NewWriter(out, 0, 0, 3, ' ', 0)
-		fmt.Fprintln(w, "NAMESPACE\tTEMPLATE\tID\tSTATUS\tATEOM POD\tATEOM IP\tVERSION")
+		fmt.Fprintln(w, "ATESPACE\tNAMESPACE\tTEMPLATE\tID\tSTATUS\tATEOM POD\tATEOM IP\tVERSION")
 		for _, actor := range actors {
+			atespace := actor.GetAtespace()
 			ns := actor.GetActorTemplateNamespace()
 			tmpl := actor.GetActorTemplateName()
 			id := actor.GetActorId()
@@ -67,7 +71,7 @@ func PrintActorsTo(out io.Writer, actors []*ateapipb.Actor, format string) error
 			}
 
 			version := actor.GetVersion()
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%d\n", ns, tmpl, id, status, worker, actor.GetAteomPodIp(), version)
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%d\n", atespace, ns, tmpl, id, status, worker, actor.GetAteomPodIp(), version)
 		}
 		return w.Flush()
 	default:

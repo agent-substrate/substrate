@@ -90,6 +90,16 @@ func actorDBKey(atespace, id string) string {
 	return "actor:" + atespace + ":" + id
 }
 
+// actorScanPattern returns the SCAN match pattern for listing actors. An empty
+// atespace lists across all atespaces (actor:*); a non-empty atespace scopes the
+// scan to that tenant (actor:<atespace>:*).
+func actorScanPattern(atespace string) string {
+	if atespace == "" {
+		return "actor:*"
+	}
+	return "actor:" + atespace + ":*"
+}
+
 func workerDBKey(namespace, poolName, podName string) string {
 	return "worker:" + namespace + ":" + poolName + ":" + podName
 }
@@ -513,6 +523,9 @@ func hashShardAddr(addr string) string {
 	return hex.EncodeToString(h[:])
 }
 
+// ListActors lists actors, scoped to the given atespace. An empty atespace lists
+// across all atespaces (SCAN actor:*); a non-empty atespace restricts the scan to
+// that tenant (SCAN actor:<atespace>:*).
 func (s *Persistence) ListActors(ctx context.Context, atespace string, pageSize int32, pageTokenStr string) ([]*ateapipb.Actor, string, error) {
 	token, err := decodePageToken(pageTokenStr)
 	if err != nil {
@@ -562,7 +575,7 @@ func (s *Persistence) ListActors(ctx context.Context, atespace string, pageSize 
 			}
 
 			var keys []string
-			keys, cursor, err = master.Scan(ctx, cursor, "actor:"+atespace+":*", int64(remaining)).Result()
+			keys, cursor, err = master.Scan(ctx, cursor, actorScanPattern(atespace), int64(remaining)).Result()
 			if err != nil {
 				return nil, "", fmt.Errorf("while scanning shard %s: %w", shardAddr, err)
 			}

@@ -27,6 +27,7 @@ func TestPrintActorsTo_Table(t *testing.T) {
 	actors := []*ateapipb.Actor{
 		{
 			ActorId:                "id-1",
+			Atespace:               "team-a",
 			ActorTemplateNamespace: "default",
 			ActorTemplateName:      "template-1",
 			Status:                 ateapipb.Actor_STATUS_RUNNING,
@@ -42,8 +43,8 @@ func TestPrintActorsTo_Table(t *testing.T) {
 	}
 	output := buf.String()
 
-	expected := `NAMESPACE   TEMPLATE     ID     STATUS           ATEOM POD         ATEOM IP   VERSION
-default     template-1   id-1   STATUS_RUNNING   worker-ns/pod-1   1.2.3.4    2
+	expected := `ATESPACE   NAMESPACE   TEMPLATE     ID     STATUS           ATEOM POD         ATEOM IP   VERSION
+team-a     default     template-1   id-1   STATUS_RUNNING   worker-ns/pod-1   1.2.3.4    2
 `
 	if diff := cmp.Diff(expected, output); diff != "" {
 		t.Errorf("output mismatch (-want +got):\n%s", diff)
@@ -106,18 +107,21 @@ func TestPrintActorsTo_Table_Sorted(t *testing.T) {
 	actors := []*ateapipb.Actor{
 		{
 			ActorId:                "zebra",
+			Atespace:               "team-b",
 			ActorTemplateNamespace: "default",
 			ActorTemplateName:      "template-1",
 			Status:                 ateapipb.Actor_STATUS_SUSPENDED,
 		},
 		{
 			ActorId:                "alpha",
+			Atespace:               "team-a",
 			ActorTemplateNamespace: "default",
 			ActorTemplateName:      "template-1",
 			Status:                 ateapipb.Actor_STATUS_RUNNING,
 		},
 		{
 			ActorId:                "beta",
+			Atespace:               "team-a",
 			ActorTemplateNamespace: "other",
 			ActorTemplateName:      "template-2",
 			Status:                 ateapipb.Actor_STATUS_SUSPENDED,
@@ -128,10 +132,11 @@ func TestPrintActorsTo_Table_Sorted(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	expected := `NAMESPACE   TEMPLATE     ID      STATUS             ATEOM POD   ATEOM IP   VERSION
-default     template-1   alpha   STATUS_RUNNING     <none>                 0
-default     template-1   zebra   STATUS_SUSPENDED   <none>                 0
-other       template-2   beta    STATUS_SUSPENDED   <none>                 0
+	// Sorted by atespace first, then template namespace, template name, id.
+	expected := `ATESPACE   NAMESPACE   TEMPLATE     ID      STATUS             ATEOM POD   ATEOM IP   VERSION
+team-a     default     template-1   alpha   STATUS_RUNNING     <none>                 0
+team-a     other       template-2   beta    STATUS_SUSPENDED   <none>                 0
+team-b     default     template-1   zebra   STATUS_SUSPENDED   <none>                 0
 `
 	if diff := cmp.Diff(expected, buf.String()); diff != "" {
 		t.Errorf("output mismatch (-want +got):\n%s", diff)

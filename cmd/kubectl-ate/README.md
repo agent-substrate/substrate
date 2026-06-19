@@ -74,15 +74,20 @@ These flags can be appended to any command:
 List and inspect the state of actors and workers across the cluster.
 
 ```bash
-# List all actors in a clean table format
-kubectl ate get actors
+# List actors in one atespace (tenant)
+kubectl ate get actors --atespace <atespace>
+
+# List actors across all atespaces
+kubectl ate get actors -A
 
 # Get a specific actor by ID and output as raw YAML
-kubectl ate get actor <actor-id> -o yaml
+kubectl ate get actor <actor-id> --atespace <atespace> -o yaml
 
 # List all physical workers and see which actors are assigned to them
 kubectl ate get workers
 ```
+
+> **Note:** `get actors` requires either `--atespace <name>` (one tenant) or `-A`/`--all-atespaces` (all tenants) — there is no default atespace. Getting a single actor always requires `--atespace`, since an actor is addressed by `(atespace, id)`.
 
 > **Note:** Actors and workers are not Kubernetes CRDs — they live in the Substrate control plane (valkey/redis), not `etcd`. `kubectl get actor` and `kubectl get worker` will not return anything; only `kubectl ate get …` queries the control plane. `kubectl get actortemplate` and `kubectl get workerpool` *do* work, because those are CRDs.
 
@@ -90,7 +95,8 @@ kubectl ate get workers
 
 | Column | Meaning |
 |---|---|
-| `NAMESPACE` | The namespace of the `ActorTemplate` the actor was created from. |
+| `ATESPACE` | The atespace (tenant boundary) the actor belongs to. Part of the actor's identity; folded into the storage key as `actor:<atespace>:<id>`. |
+| `NAMESPACE` | The namespace of the `ActorTemplate` the actor was created from (distinct from `ATESPACE`). |
 | `TEMPLATE` | The `ActorTemplate` name. |
 | `ID` | Actor ID. User-provided for application actors; UUID for the golden actor that each template materialises during `ResumeGoldenActor`. |
 | `STATUS` | One of `STATUS_RESUMING`, `STATUS_RUNNING`, `STATUS_SUSPENDING`, `STATUS_SUSPENDED`. |
