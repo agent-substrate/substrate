@@ -24,6 +24,7 @@ The `WorkerPool` defines the pool of physical "warm" compute capacity. It manage
 | `tolerations` | `[]Toleration` | `spec.tolerations` (max 16) |
 | `priorityClassName` | `string` | `spec.priorityClassName` |
 | `nodeAffinity` | `NodeAffinity` | `spec.affinity.nodeAffinity` |
+| `resources` | `ResourceRequirements` | `spec.containers[].resources` |
 
 ### Example
 
@@ -68,6 +69,13 @@ spec:
           - key: workload
             operator: In
             values: [substrate]
+    resources:
+      requests:
+        cpu: 500m
+        memory: 1Gi
+      limits:
+        cpu: "1"
+        memory: 2Gi
 ```
 
 ---

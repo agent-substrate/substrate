@@ -59,7 +59,7 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool) *appsv1ac.Deployment
 				WithPath(ateompath.BasePath).
 				WithType(corev1.HostPathDirectoryOrCreate)))
 
-	applyWorkerPoolPodTemplate(podSpecAC, wp.Spec.Template)
+	applyWorkerPoolPodTemplate(podSpecAC, containerAC, wp.Spec.Template)
 	podSpecAC.WithContainers(containerAC)
 
 	return appsv1ac.Deployment(deploymentName(wp.Name), wp.Namespace).
@@ -83,12 +83,15 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool) *appsv1ac.Deployment
 
 func applyWorkerPoolPodTemplate(
 	podSpecAC *corev1ac.PodSpecApplyConfiguration,
+	containerAC *corev1ac.ContainerApplyConfiguration,
 	tmpl *atev1alpha1.WorkerPoolPodTemplate,
 ) {
 	podSpecAC.NodeSelector = map[string]string{}
 	podSpecAC.Tolerations = []corev1ac.TolerationApplyConfiguration{}
 	podSpecAC.WithPriorityClassName("")
 	podSpecAC.WithAffinity(corev1ac.Affinity())
+	resourcesAC := corev1ac.ResourceRequirements()
+	containerAC.WithResources(resourcesAC)
 
 	if tmpl == nil {
 		return
@@ -102,6 +105,15 @@ func applyWorkerPoolPodTemplate(
 
 	if tmpl.NodeAffinity != nil {
 		podSpecAC.WithAffinity(corev1ac.Affinity().WithNodeAffinity(nodeAffinityToApply(tmpl.NodeAffinity)))
+	}
+
+	if tmpl.Resources != nil {
+		if tmpl.Resources.Requests != nil {
+			resourcesAC.WithRequests(tmpl.Resources.Requests)
+		}
+		if tmpl.Resources.Limits != nil {
+			resourcesAC.WithLimits(tmpl.Resources.Limits)
+		}
 	}
 }
 

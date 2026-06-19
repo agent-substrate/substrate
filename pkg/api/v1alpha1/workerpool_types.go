@@ -44,6 +44,11 @@ type WorkerPoolPodTemplate struct {
 	//
 	// +optional
 	NodeAffinity *corev1.NodeAffinity `json:"nodeAffinity,omitempty"`
+
+	// Resources are the compute resources allocated for each worker pod.
+	//
+	// +optional
+	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
 }
 
 type WorkerPoolSpec struct {

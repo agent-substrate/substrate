@@ -19,6 +19,7 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	appsv1ac "k8s.io/client-go/applyconfigurations/apps/v1"
 	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
@@ -132,6 +133,32 @@ func TestBuildDeploymentApplyConfig(t *testing.T) {
 			}),
 		},
 		{
+			name: "with resources",
+			wp: testWorkerPoolApplyConfig(&atev1alpha1.WorkerPoolPodTemplate{
+				Resources: &corev1.ResourceRequirements{
+					Requests: corev1.ResourceList{
+						corev1.ResourceCPU:    resource.MustParse("500m"),
+						corev1.ResourceMemory: resource.MustParse("1Gi"),
+					},
+					Limits: corev1.ResourceList{
+						corev1.ResourceCPU:    resource.MustParse("1"),
+						corev1.ResourceMemory: resource.MustParse("2Gi"),
+					},
+				},
+			}),
+			want: expectedDeploymentApplyConfig(func(podSpecAC *corev1ac.PodSpecApplyConfiguration) {
+				podSpecAC.Containers[0].WithResources(corev1ac.ResourceRequirements().
+					WithRequests(corev1.ResourceList{
+						corev1.ResourceCPU:    resource.MustParse("500m"),
+						corev1.ResourceMemory: resource.MustParse("1Gi"),
+					}).
+					WithLimits(corev1.ResourceList{
+						corev1.ResourceCPU:    resource.MustParse("1"),
+						corev1.ResourceMemory: resource.MustParse("2Gi"),
+					}))
+			}),
+		},
+		{
 			name: "with combined scheduling fields",
 			wp: testWorkerPoolApplyConfig(&atev1alpha1.WorkerPoolPodTemplate{
 				NodeSelector: map[string]string{
@@ -220,7 +247,8 @@ func expectedDeploymentApplyConfig(mutatePodSpec func(*corev1ac.PodSpecApplyConf
 						WithFieldPath("metadata.uid")))).
 			WithVolumeMounts(corev1ac.VolumeMount().
 				WithName("run-ateom").
-				WithMountPath(ateompath.BasePath)))
+				WithMountPath(ateompath.BasePath)).
+			WithResources(corev1ac.ResourceRequirements()))
 
 	podSpecAC.NodeSelector = map[string]string{}
 	podSpecAC.Tolerations = []corev1ac.TolerationApplyConfiguration{}
