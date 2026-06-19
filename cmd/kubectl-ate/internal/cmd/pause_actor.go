@@ -50,7 +50,7 @@ var pauseActorCmd = &cobra.Command{
 }
 
 func init() {
-	pauseActorCmd.Flags().StringVar(&pauseAtespaceFlag, "atespace", "", "Atespace (tenant) the actor lives in")
+	pauseActorCmd.Flags().StringVarP(&pauseAtespaceFlag, "atespace", "a", "", "Atespace (tenant) the actor lives in")
 	_ = pauseActorCmd.MarkFlagRequired("atespace")
 	pauseCmd.AddCommand(pauseActorCmd)
 }

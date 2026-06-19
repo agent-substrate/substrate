@@ -94,7 +94,7 @@ var getActorsCmd = &cobra.Command{
 }
 
 func init() {
-	getActorsCmd.Flags().StringVar(&getActorsAtespaceFlag, "atespace", "", "Atespace (tenant) to list/get actors in. Required for a single actor; for listing, use this or -A.")
+	getActorsCmd.Flags().StringVarP(&getActorsAtespaceFlag, "atespace", "a", "", "Atespace (tenant) to list/get actors in. Required for a single actor; for listing, use this or -A.")
 	getActorsCmd.Flags().BoolVarP(&getActorsAllAtespaces, "all-atespaces", "A", false, "List actors across all atespaces (listing only; mutually exclusive with --atespace)")
 	getCmd.AddCommand(getActorsCmd)
 }

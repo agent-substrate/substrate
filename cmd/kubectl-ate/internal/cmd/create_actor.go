@@ -62,7 +62,7 @@ var createActorCmd = &cobra.Command{
 func init() {
 	createActorCmd.Flags().StringVarP(&templateFlag, "template", "t", "", "Template to derive the actor from in <namespace>/<name> format (required)")
 	_ = createActorCmd.MarkFlagRequired("template")
-	createActorCmd.Flags().StringVar(&atespaceFlag, "atespace", "", "Atespace (tenant) to create the actor in (required)")
+	createActorCmd.Flags().StringVarP(&atespaceFlag, "atespace", "a", "", "Atespace to create the actor in (required)")
 	_ = createActorCmd.MarkFlagRequired("atespace")
 	createCmd.AddCommand(createActorCmd)
 }

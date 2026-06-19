@@ -43,8 +43,8 @@ func TestPrintActorsTo_Table(t *testing.T) {
 	}
 	output := buf.String()
 
-	expected := `ATESPACE   NAMESPACE   TEMPLATE     ID     STATUS           ATEOM POD         ATEOM IP   VERSION
-team-a     default     template-1   id-1   STATUS_RUNNING   worker-ns/pod-1   1.2.3.4    2
+	expected := `ATESPACE   TEMPLATE NS   TEMPLATE     ID     STATUS           ATEOM POD         ATEOM IP   VERSION
+team-a     default       template-1   id-1   STATUS_RUNNING   worker-ns/pod-1   1.2.3.4    2
 `
 	if diff := cmp.Diff(expected, output); diff != "" {
 		t.Errorf("output mismatch (-want +got):\n%s", diff)
@@ -133,10 +133,10 @@ func TestPrintActorsTo_Table_Sorted(t *testing.T) {
 	}
 
 	// Sorted by atespace first, then template namespace, template name, id.
-	expected := `ATESPACE   NAMESPACE   TEMPLATE     ID      STATUS             ATEOM POD   ATEOM IP   VERSION
-team-a     default     template-1   alpha   STATUS_RUNNING     <none>                 0
-team-a     other       template-2   beta    STATUS_SUSPENDED   <none>                 0
-team-b     default     template-1   zebra   STATUS_SUSPENDED   <none>                 0
+	expected := `ATESPACE   TEMPLATE NS   TEMPLATE     ID      STATUS             ATEOM POD   ATEOM IP   VERSION
+team-a     default       template-1   alpha   STATUS_RUNNING     <none>                 0
+team-a     other         template-2   beta    STATUS_SUSPENDED   <none>                 0
+team-b     default       template-1   zebra   STATUS_SUSPENDED   <none>                 0
 `
 	if diff := cmp.Diff(expected, buf.String()); diff != "" {
 		t.Errorf("output mismatch (-want +got):\n%s", diff)
