@@ -78,7 +78,7 @@ class CounterUser(User):
         self.actor_id = f"sb-{uuid.uuid4()}"
         try:
             with traced_grpc("CreateActor", self.__class__.__name__) as metadata:
-                self.stub.CreateActor(
+                _, metadata.call = self.stub.CreateActor.with_call(
                     ateapi_pb2.CreateActorRequest(
                         actor_id=self.actor_id,
                         actor_template_namespace="ate-demo-counter",
@@ -100,7 +100,7 @@ class CounterUser(User):
         update_user_count(-1, self.__class__.__name__)
         try:
             with traced_grpc("SuspendActor", self.__class__.__name__) as metadata:
-                self.stub.SuspendActor(
+                _, metadata.call = self.stub.SuspendActor.with_call(
                     ateapi_pb2.SuspendActorRequest(actor_id=self.actor_id),
                     metadata=metadata,
                 )
@@ -119,7 +119,7 @@ class CounterUser(User):
         # traced_grpc.
         try:
             with traced_grpc("ResumeActor", self.__class__.__name__) as metadata:
-                self.stub.ResumeActor(
+                _, metadata.call = self.stub.ResumeActor.with_call(
                     ateapi_pb2.ResumeActorRequest(actor_id=self.actor_id),
                     metadata=metadata,
                 )
@@ -162,7 +162,7 @@ class CounterUser(User):
         # 3. SuspendActor (gRPC). Swallow as above; event already reported.
         try:
             with traced_grpc("SuspendActor", self.__class__.__name__) as metadata:
-                self.stub.SuspendActor(
+                _, metadata.call = self.stub.SuspendActor.with_call(
                     ateapi_pb2.SuspendActorRequest(actor_id=self.actor_id),
                     metadata=metadata,
                 )

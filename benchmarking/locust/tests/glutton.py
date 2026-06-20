@@ -21,6 +21,7 @@ init_grpc_gevent()
 
 import time
 import uuid
+import gevent
 import grpc
 import requests
 from common import ateapi_pb2
@@ -89,7 +90,7 @@ class GluttonUser(User):
 
         try:
             with traced_grpc("CreateActor", self.__class__.__name__) as metadata:
-                self.api_stub.CreateActor(
+                _, metadata.call = self.api_stub.CreateActor.with_call(
                     ateapi_pb2.CreateActorRequest(
                         actor_id=self.actor_id,
                         actor_template_namespace="benchmark-workloads",
@@ -122,7 +123,7 @@ class GluttonUser(User):
         metric = "ResumeActorColdStart" if boot else "ResumeActor"
         try:
             with traced_grpc(metric, self.__class__.__name__) as metadata:
-                self.api_stub.ResumeActor(
+                _, metadata.call = self.api_stub.ResumeActor.with_call(
                     ateapi_pb2.ResumeActorRequest(
                         actor_id=self.actor_id, boot=boot
                     ),
@@ -139,7 +140,7 @@ class GluttonUser(User):
         """SuspendActor (channel stays open across iterations)."""
         try:
             with traced_grpc("SuspendActor", self.__class__.__name__) as metadata:
-                self.api_stub.SuspendActor(
+                _, metadata.call = self.api_stub.SuspendActor.with_call(
                     ateapi_pb2.SuspendActorRequest(actor_id=self.actor_id),
                     metadata=metadata,
                 )
@@ -153,7 +154,7 @@ class GluttonUser(User):
             self._suspend_actor()
         try:
             with traced_grpc("DeleteActor", self.__class__.__name__) as metadata:
-                self.api_stub.DeleteActor(
+                _, metadata.call = self.api_stub.DeleteActor.with_call(
                     ateapi_pb2.DeleteActorRequest(actor_id=self.actor_id),
                     metadata=metadata,
                 )
@@ -185,18 +186,25 @@ class GluttonUser(User):
                 "Content-Type": "application/x-protobuf",
             }
             inject(headers)
+            resp = None
             try:
                 resp = self.http_session.post(
                     self.ping_url, data=body, headers=headers
                 )
                 resp.raise_for_status()
+<<<<<<< HEAD
                 duration_ms = (time.time() - start_time) * 1000
+=======
+>>>>>>> 81b1450 (Use server-side request timing)
                 pong = glutton_pb2.PingResponse()
                 pong.ParseFromString(resp.content)
                 if pong.message != msg:
                     raise RuntimeError(
                         f"Ping echo mismatch: sent={msg!r}, recv={pong.message!r}"
                     )
+                duration, source = self._ping_duration_ms(resp, start_time)
+                if source == "router":
+                    span.set_attribute("router.elapsed_ms", duration)
                 events.request.fire(
                     request_type="http",
                     name="GluttonPing",
@@ -206,12 +214,20 @@ class GluttonUser(User):
                     user_class=self.__class__.__name__,
                 )
                 if span.get_span_context().trace_flags.sampled:
-                    logger.info(
+                    gevent.spawn(
+                        logger.info,
                         f"Traced GluttonPing: trace_id={span.get_span_context().trace_id:032x}, "
+<<<<<<< HEAD
                         f"duration={duration_ms:.2f}ms"
                     )
             except Exception as e:
                 duration_ms = (time.time() - start_time) * 1000
+=======
+                        f"duration={duration:.2f}ms ({source})",
+                    )
+            except Exception as e:
+                duration, source = self._ping_duration_ms(resp, start_time)
+>>>>>>> 81b1450 (Use server-side request timing)
                 events.request.fire(
                     request_type="http",
                     name="GluttonPing",
@@ -221,7 +237,26 @@ class GluttonUser(User):
                     user_class=self.__class__.__name__,
                 )
                 if span.get_span_context().trace_flags.sampled:
-                    logger.info(
+                    gevent.spawn(
+                        logger.info,
                         f"Traced GluttonPing (failed): trace_id={span.get_span_context().trace_id:032x}, "
+<<<<<<< HEAD
                         f"duration={duration_ms:.2f}ms"
+=======
+                        f"duration={duration:.2f}ms ({source})",
+>>>>>>> 81b1450 (Use server-side request timing)
                     )
+
+    @staticmethod
+    def _ping_duration_ms(resp, start_time):
+        """Prefer the router-emitted elapsed (excludes client scheduling), fall
+        back to the client-side wall clock when the header is absent (e.g.
+        connection failures, or atenet older than the matching server change)."""
+        if resp is not None:
+            raw = resp.headers.get("x-atenet-elapsed-us")
+            if raw is not None:
+                try:
+                    return int(raw) / 1000.0, "router"
+                except ValueError:
+                    pass
+        return (time.time() - start_time) * 1000, "client"

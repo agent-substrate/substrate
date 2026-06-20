@@ -12,18 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from locust import User, task, events
+from locust import User, task
 from locust.exception import StopUser
-import time
 import random
 import uuid
 import grpc
 from common import ateapi_pb2
 from common import ateapi_pb2_grpc
+from common.grpc_tracing import traced_grpc
 from common.metrics import init_metrics, update_user_count
-from common.trace import init_tracing, get_tracer
+from common.trace import init_tracing
 from common.wait_time import init_wait_time, dynamic_wait_time
-from opentelemetry.propagate import inject
 import logging
 
 logger = logging.getLogger(__name__)
@@ -35,8 +34,6 @@ init_metrics()
 
 # Initialize wait time
 init_wait_time()
-
-tracer = get_tracer(__name__)
 
 
 
@@ -82,108 +79,30 @@ class AteAPIUser(User):
 
     @task
     def invoke_target(self) -> None:
-        # GetActor
-        start_time = time.time()
-        with tracer.start_as_current_span("GetActor") as span:
-            headers = {}
-            inject(headers)
-            metadata = list(headers.items())
-            try:
-                response = self.stub.GetActor(
+        try:
+            with traced_grpc("GetActor", self.__class__.__name__) as metadata:
+                _, metadata.call = self.stub.GetActor.with_call(
                     ateapi_pb2.GetActorRequest(actor_id=self.actor_id),
-                    metadata=metadata
+                    metadata=metadata,
                 )
-                duration = (time.time() - start_time) * 1000
-                events.request.fire(
-                    request_type="grpc",
-                    name="GetActor",
-                    response_time=duration,
-                    response_length=0,
-                    exception=None,
-                    user_class=self.__class__.__name__
-                )
-                if span.get_span_context().trace_flags.sampled:
-                    logger.info(f"Traced GetActor: trace_id={span.get_span_context().trace_id:032x}, duration={duration:.2f}ms")
-            except Exception as e:
-                duration = (time.time() - start_time) * 1000
-                events.request.fire(
-                    request_type="grpc",
-                    name="GetActor",
-                    response_time=duration,
-                    response_length=0,
-                    exception=e,
-                    user_class=self.__class__.__name__
-                )
-                if span.get_span_context().trace_flags.sampled:
-                    logger.info(f"Traced GetActor (failed): trace_id={span.get_span_context().trace_id:032x}, duration={duration:.2f}ms")
+        except Exception:
+            pass
 
-        # ResumeActor
-        start_time = time.time()
-        with tracer.start_as_current_span("ResumeActor") as span:
-            headers = {}
-            inject(headers)
-            metadata = list(headers.items())
-            try:
-                response = self.stub.ResumeActor(
+        try:
+            with traced_grpc("ResumeActor", self.__class__.__name__) as metadata:
+                _, metadata.call = self.stub.ResumeActor.with_call(
                     ateapi_pb2.ResumeActorRequest(actor_id=self.actor_id),
-                    metadata=metadata
+                    metadata=metadata,
                 )
-                duration = (time.time() - start_time) * 1000
-                events.request.fire(
-                    request_type="grpc",
-                    name="ResumeActor",
-                    response_time=duration,
-                    response_length=0,
-                    exception=None,
-                    user_class=self.__class__.__name__
-                )
-                if span.get_span_context().trace_flags.sampled:
-                    logger.info(f"Traced ResumeActor: trace_id={span.get_span_context().trace_id:032x}, duration={duration:.2f}ms")
-            except Exception as e:
-                duration = (time.time() - start_time) * 1000
-                events.request.fire(
-                    request_type="grpc",
-                    name="ResumeActor",
-                    response_time=duration,
-                    response_length=0,
-                    exception=e,
-                    user_class=self.__class__.__name__
-                )
-                if span.get_span_context().trace_flags.sampled:
-                    logger.info(f"Traced ResumeActor (failed): trace_id={span.get_span_context().trace_id:032x}, duration={duration:.2f}ms")
+        except Exception:
+            pass
 
-        # SuspendActor
-        start_time = time.time()
-        with tracer.start_as_current_span("SuspendActor") as span:
-            headers = {}
-            inject(headers)
-            metadata = list(headers.items())
-            try:
-                response = self.stub.SuspendActor(
+        try:
+            with traced_grpc("SuspendActor", self.__class__.__name__) as metadata:
+                _, metadata.call = self.stub.SuspendActor.with_call(
                     ateapi_pb2.SuspendActorRequest(actor_id=self.actor_id),
-                    metadata=metadata
+                    metadata=metadata,
                 )
-                duration = (time.time() - start_time) * 1000
-                events.request.fire(
-                    request_type="grpc",
-                    name="SuspendActor",
-                    response_time=duration,
-                    response_length=0,
-                    exception=None,
-                    user_class=self.__class__.__name__
-                )
-                if span.get_span_context().trace_flags.sampled:
-                    logger.info(f"Traced SuspendActor: trace_id={span.get_span_context().trace_id:032x}, duration={duration:.2f}ms")
-            except Exception as e:
-                duration = (time.time() - start_time) * 1000
-                events.request.fire(
-                    request_type="grpc",
-                    name="SuspendActor",
-                    response_time=duration,
-                    response_length=0,
-                    exception=e,
-                    user_class=self.__class__.__name__
-                )
-                if span.get_span_context().trace_flags.sampled:
-                    logger.info(f"Traced SuspendActor (failed): trace_id={span.get_span_context().trace_id:032x}, duration={duration:.2f}ms")
+        except Exception:
+            pass
 
