@@ -16,6 +16,8 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -34,6 +36,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateerrors"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/ateompath"
+	"github.com/agent-substrate/substrate/internal/credbundle"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/resources"
@@ -53,6 +56,7 @@ import (
 	"google.golang.org/api/option"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/reflection"
 	"google.golang.org/grpc/status"
@@ -64,6 +68,9 @@ import (
 var (
 	port              = pflag.Int("port", 8085, "The port to listen on")
 	metricsListenAddr = pflag.String("metrics-listen-addr", ":9090", "Address and port the prometheus metrics server should listen on.")
+
+	grpcServerCredBundle = pflag.String("grpc-server-cred-bundle", "/run/podidentity.podcert.ate.dev/credential-bundle.pem", "Credential bundle atelet presents as its gRPC serving certificate.")
+	clientCACerts        = pflag.String("client-ca-certs", "/run/podidentity.podcert.ate.dev/trust-bundle.pem", "CA bundle used to verify gRPC client certificates.")
 
 	gcpAuthForImagePulls         = pflag.Bool("gcp-auth-for-image-pulls", true, "Use GCP application default credentials mechanism.")
 	localhostRegistryReplacement = pflag.String("localhost-registry-replacement", "", "The replacement registry endpoint for localhost and/or loopback IP addresses, useful for local development. for example kind-registry:5000")
@@ -173,7 +180,16 @@ func main() {
 		serverboot.Fatal(ctx, "Failed to listen", err)
 	}
 
-	svr := grpc.NewServer(grpc.StatsHandler(otelgrpc.NewServerHandler()), grpc.UnaryInterceptor(ateinterceptors.InternalServerUnaryInterceptor))
+	tlsCfg, err := ateletServerTLSConfig(*grpcServerCredBundle, *clientCACerts)
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to build server TLS config", err)
+	}
+
+	svr := grpc.NewServer(
+		grpc.Creds(credentials.NewTLS(tlsCfg)),
+		grpc.StatsHandler(otelgrpc.NewServerHandler()),
+		grpc.UnaryInterceptor(ateinterceptors.InternalServerUnaryInterceptor),
+	)
 	ateletpb.RegisterAteomHerderServer(svr, wmService)
 	reflection.Register(svr)
 	slog.InfoContext(ctx, "WorkersManagerService listening", slog.Any("address", lis.Addr()))
@@ -1059,4 +1075,24 @@ func resetActorDirs(atespace, actorName string) error {
 	}
 
 	return nil
+}
+
+// ateletServerTLSConfig builds a *tls.Config for a gRPC server that presents the
+// credential bundle at servingBundlePath, requires a client certificate
+// chaining to a CA in clientCAPath.
+func ateletServerTLSConfig(servingBundlePath, clientCAPath string) (*tls.Config, error) {
+	caBytes, err := os.ReadFile(clientCAPath)
+	if err != nil {
+		return nil, fmt.Errorf("read CA bundle %s: %w", clientCAPath, err)
+	}
+	clientCAs := x509.NewCertPool()
+	if !clientCAs.AppendCertsFromPEM(caBytes) {
+		return nil, fmt.Errorf("parse CA bundle from %s", clientCAPath)
+	}
+	return &tls.Config{
+		MinVersion:     tls.VersionTLS12,
+		GetCertificate: credbundle.Loader(servingBundlePath),
+		ClientAuth:     tls.RequireAndVerifyClientCert,
+		ClientCAs:      clientCAs,
+	}, nil
 }

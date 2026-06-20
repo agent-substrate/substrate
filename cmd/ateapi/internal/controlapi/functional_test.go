@@ -42,6 +42,7 @@ import (
 	"github.com/redis/go-redis/v9"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
@@ -309,7 +310,13 @@ func setupTest(t *testing.T, ns string) *testContext {
 		t.Fatalf("failed to start worker cache: %v", err)
 	}
 
-	dialer := NewAteletDialer(workerInformer.GetIndexer(), ateletInformer.GetIndexer())
+	dialer := NewAteletDialer(workerInformer.GetIndexer(), ateletInformer.GetIndexer(), "", "")
+	// Dial the fake atelet over insecure transport instead of per-atelet mTLS,
+	// so DialForWorker's real lookup/dial/cache path is exercised under test.
+	dialer.dialCredentials = func(_ string) (credentials.TransportCredentials, error) {
+		return insecure.NewCredentials(), nil
+	}
+
 	service := NewService(persistence, wc, actorTemplateLister, workerPoolLister, sandboxConfigLister, dialer, k8sClient)
 
 	// 5. Start REAL gRPC Server for ATE API

@@ -69,6 +69,8 @@ spec:
         image: ko://github.com/agent-substrate/substrate/cmd/atelet
         args:
         - --gcp-auth-for-image-pulls=true
+        - --grpc-server-cred-bundle=/run/podidentity.podcert.ate.dev/credential-bundle.pem
+        - --client-ca-certs=/run/podidentity.podcert.ate.dev/trust-bundle.pem
         securityContext:
           privileged: true
         env:
@@ -105,8 +107,27 @@ spec:
         volumeMounts:
         - name: run-ateom
           mountPath: /var/lib/ateom-gvisor
+        - name: podidentity
+          mountPath: /run/podidentity.podcert.ate.dev
       volumes:
       - name: run-ateom
         hostPath:
           path: /var/lib/ateom-gvisor
           type: DirectoryOrCreate
+      # Identity for mutual TLS with the ate-apiserver. atelet is not behind a
+      # Service, so it uses a podidentity (SPIFFE) cert rather than a servicedns
+      # serving cert (which requires DNS SANs it would not have); the
+      # clusterTrustBundle verifies the apiserver's client certificate.
+      - name: podidentity
+        projected:
+          sources:
+          - podCertificate:
+              signerName: podidentity.podcert.ate.dev/identity
+              keyType: ECDSAP256
+              credentialBundlePath: credential-bundle.pem
+          - clusterTrustBundle:
+              signerName: podidentity.podcert.ate.dev/identity
+              labelSelector:
+                matchLabels:
+                  podcert.ate.dev/canarying: live
+              path: trust-bundle.pem

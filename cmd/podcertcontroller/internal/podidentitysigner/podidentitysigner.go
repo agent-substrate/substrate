@@ -19,6 +19,8 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/asn1"
 	"encoding/pem"
 	"fmt"
 	"net/url"
@@ -37,6 +39,9 @@ import (
 
 const Name = "podidentity.podcert.ate.dev/identity"
 const CTBPrefix = "podidentity.podcert.ate.dev:identity:"
+
+// oidPodUID represents the Pod UID within a certificate extension.
+var oidPodUID = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 11129, 2, 6, 1, 3}
 
 type Impl struct {
 	kc     kubernetes.Interface
@@ -57,6 +62,10 @@ var _ signercontroller.SignerImpl = (*Impl)(nil)
 
 func (h *Impl) SignerName() string {
 	return Name
+}
+
+type customExtensionVal struct {
+	S string `asn1:"utf8"`
 }
 
 func (h *Impl) DesiredClusterTrustBundles() []*certsv1beta1.ClusterTrustBundle {
@@ -122,18 +131,30 @@ func (h *Impl) MakeCert(ctx context.Context, pcr *certsv1beta1.PodCertificateReq
 	}
 
 	parent := h.caPool.CAs[0].RootCertificate
+
+	podUIDExt, err := asn1.Marshal(customExtensionVal{S: string(pod.UID)})
+	if err != nil {
+		return fmt.Errorf("failed to marshal pod UID %s: %w", pod.UID, err)
+	}
 	template := &x509.Certificate{
 		BasicConstraintsValid: true,
 		NotBefore:             notBefore,
 		NotAfter:              notAfter,
 		URIs:                  []*url.URL{spiffeURI},
 		KeyUsage:              x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
 		// Link the leaf to its issuing CA by key id so verifiers can disambiguate
 		// a multi-CA trust bundle (e.g. valkey trusts both the servicedns and
 		// podidentity CAs).
 		// https://datatracker.ietf.org/doc/html/rfc5280#section-4.2.1.1
 		AuthorityKeyId: parent.SubjectKeyId,
+		ExtraExtensions: []pkix.Extension{
+			{
+				Id:       oidPodUID,
+				Critical: false,
+				Value:    podUIDExt,
+			},
+		},
 	}
 
 	subjectCertDER, err := x509.CreateCertificate(rand.Reader, template, parent, subjectPublicKey, h.caPool.CAs[0].SigningKey)

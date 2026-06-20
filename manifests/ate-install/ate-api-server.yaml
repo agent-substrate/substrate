@@ -120,7 +120,9 @@ spec:
         # servicedns: the apiserver's own gRPC serving cert (DNS SAN api.ate-system.svc).
         - name: "servicedns"
           mountPath: "/run/servicedns.podcert.ate.dev"
-        # podidentity: the apiserver's client identity (SPIFFE) when it dials valkey.
+        # podidentity: the apiserver's client identity (SPIFFE) when it dials
+        # valkey and atelet, plus the trust bundle for verifying atelet's
+        # serving certificate.
         - name: "podidentity"
           mountPath: "/run/podidentity.podcert.ate.dev"
         - name: "session-id-jwt-pool"
@@ -160,6 +162,12 @@ spec:
               signerName: podidentity.podcert.ate.dev/identity
               keyType: ECDSAP256
               credentialBundlePath: credential-bundle.pem
+          - clusterTrustBundle:
+              signerName: podidentity.podcert.ate.dev/identity
+              labelSelector:
+                matchLabels:
+                  podcert.ate.dev/canarying: live
+              path: trust-bundle.pem
       - name: "session-id-jwt-pool"
         projected:
           sources:
