@@ -15,18 +15,10 @@
 package router
 
 import (
-	"strconv"
-	"time"
-
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	extproc "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 	envoy_type "github.com/envoyproxy/go-control-plane/envoy/type/v3"
 )
-
-// RouterElapsedHeader carries the microseconds the request spent inside the
-// atenet ExtProc filter, measured from RequestHeaders to ResponseHeaders.
-// Clients can use it as a latency unaffected by their own scheduling overhead.
-const RouterElapsedHeader = "x-atenet-elapsed-us"
 
 // reqError carries an HTTP-mappable status code and a client-safe message.
 // The underlying cause (if any) is preserved via Unwrap so logs can inspect
@@ -46,17 +38,6 @@ func addAuthorityMutation(auth string, mut *extproc.HeaderMutation) {
 			Header: &corev3.HeaderValue{
 				Key:      ":authority",
 				RawValue: []byte(auth),
-			},
-		},
-	)
-}
-
-func setRouterElapsedHeader(elapsed time.Duration, mut *extproc.HeaderMutation) {
-	mut.SetHeaders = append(mut.SetHeaders,
-		&corev3.HeaderValueOption{
-			Header: &corev3.HeaderValue{
-				Key:      RouterElapsedHeader,
-				RawValue: []byte(strconv.FormatInt(elapsed.Microseconds(), 10)),
 			},
 		},
 	)

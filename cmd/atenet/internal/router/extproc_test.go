@@ -19,9 +19,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"io"
 	"log/slog"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -252,96 +250,5 @@ func TestExtProcHeadersEvaluation(t *testing.T) {
 				t.Errorf("expected query trace entries, got: %v", queries)
 			}
 		})
-	}
-}
-
-// fakeProcessStream satisfies extprocv3.ExternalProcessor_ProcessServer well
-// enough to drive Process end-to-end in a unit test. Methods not used by
-// Process inherit nil implementations from the embedded interface and panic
-// if invoked; that's deliberate so accidental new dependencies fail loudly.
-type fakeProcessStream struct {
-	extprocv3.ExternalProcessor_ProcessServer
-	ctx      context.Context
-	incoming []*extprocv3.ProcessingRequest
-	sent     []*extprocv3.ProcessingResponse
-}
-
-func (f *fakeProcessStream) Context() context.Context { return f.ctx }
-
-func (f *fakeProcessStream) Recv() (*extprocv3.ProcessingRequest, error) {
-	if len(f.incoming) == 0 {
-		return nil, io.EOF
-	}
-	req := f.incoming[0]
-	f.incoming = f.incoming[1:]
-	return req, nil
-}
-
-func (f *fakeProcessStream) Send(resp *extprocv3.ProcessingResponse) error {
-	f.sent = append(f.sent, resp)
-	return nil
-}
-
-func TestProcessEmitsRouterElapsedHeaderOnResponse(t *testing.T) {
-	const testUUID = "123e4567-e89b-12d3-a456-426614174000"
-
-	clientMock := &mockClient{
-		resumeFn: func(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
-			return &ateapipb.ResumeActorResponse{
-				Actor: &ateapipb.Actor{AteomPodIp: "10.0.0.1"},
-			}, nil
-		},
-	}
-	s := NewExtProcServer(0, clientMock, nil)
-
-	stream := &fakeProcessStream{
-		ctx: context.Background(),
-		incoming: []*extprocv3.ProcessingRequest{
-			{Request: &extprocv3.ProcessingRequest_RequestHeaders{
-				RequestHeaders: &extprocv3.HttpHeaders{
-					Headers: &corev3.HeaderMap{Headers: []*corev3.HeaderValue{
-						{Key: ":path", Value: "/v1/actors/invoke"},
-						{Key: ":authority", Value: testUUID + ".actors.resources.substrate.ate.dev"},
-						{Key: ":method", Value: "POST"},
-					}},
-				},
-			}},
-			{Request: &extprocv3.ProcessingRequest_ResponseHeaders{
-				ResponseHeaders: &extprocv3.HttpHeaders{Headers: &corev3.HeaderMap{}},
-			}},
-		},
-	}
-
-	if err := s.Process(stream); err != nil {
-		t.Fatalf("Process: %v", err)
-	}
-	if len(stream.sent) != 2 {
-		t.Fatalf("expected 2 responses, got %d", len(stream.sent))
-	}
-
-	respHeaders := stream.sent[1].GetResponseHeaders()
-	if respHeaders == nil {
-		t.Fatalf("second response was not ResponseHeaders: %v", stream.sent[1])
-	}
-
-	var elapsedRaw string
-	var found bool
-	for _, opt := range respHeaders.GetResponse().GetHeaderMutation().GetSetHeaders() {
-		if opt.GetHeader().GetKey() == RouterElapsedHeader {
-			elapsedRaw = string(opt.GetHeader().GetRawValue())
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Fatalf("response mutation missing %s header", RouterElapsedHeader)
-	}
-
-	elapsedUs, err := strconv.ParseInt(elapsedRaw, 10, 64)
-	if err != nil {
-		t.Fatalf("unparseable elapsed value %q: %v", elapsedRaw, err)
-	}
-	if elapsedUs <= 0 {
-		t.Errorf("expected positive elapsed; got %d", elapsedUs)
 	}
 }

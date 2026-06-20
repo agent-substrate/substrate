@@ -17,17 +17,45 @@
 Runs locust with the given flags, converts the resulting stats CSV
 to JSONL, and uploads everything to either GCS or local disk under
 <dest>/runs/<tag>/<timestamp>/.
+
+When the test target is glutton.py, also spawns the boomer-glutton Go
+worker as a subprocess (locust runs in --master + --expect-workers=1
+mode) so the GluttonUser load comes from boomer instead of Python+gevent.
 """
 
 import argparse
 import csv
 import json
+import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
+import threading
+import time
 from datetime import datetime, timezone
 from pathlib import Path
+
+from common.boomer_config import build_config_json
+
+# Path inside the locust image to the boomer-glutton binary baked in by
+# benchmarking/locust/Dockerfile.
+BOOMER_BINARY = "/app/boomer-glutton"
+
+# Tab-separated columns written to traces.txt. Order matters — readers split
+# on \t and index positionally.
+TRACE_COLUMNS = ("time", "name", "duration_ms", "latency_source", "trace_id", "err")
+
+# Python locust per-trace log line. Emitted by common/grpc_tracing.py and
+# tests/counter_demo.py as:
+#   Traced {name}[ (failed)]: trace_id={32hex}, duration={float}ms ({src})
+PY_TRACE_RE = re.compile(
+    r"Traced\s+(?P<name>\S+)(?:\s+\(failed\))?:\s*"
+    r"trace_id=(?P<trace_id>[0-9a-f]{32}),\s*"
+    r"duration=(?P<duration>[0-9.]+)ms\s*"
+    r"\((?P<source>\w+)\)"
+)
 
 
 def parse_args():
@@ -51,42 +79,177 @@ def parse_args():
     return args
 
 
+def needs_boomer(test_file):
+    """Return True if the test file is the glutton stub; the real GluttonUser
+    implementation lives in the boomer-glutton binary."""
+    return os.path.basename(test_file) == "glutton.py"
+
+
 def tee(logs, msg):
     print(msg, flush=True)
     logs.write(msg + "\n")
     logs.flush()
 
 
-def run_locust(args, csv_prefix, logs):
-    cmd = [
-        sys.executable,
-        "-m",
-        "locust",
-        "--headless",
-        "-f",
-        args.file,
-        "-t",
-        args.duration,
-        "-u",
-        str(args.users),
-        "--csv",
-        str(csv_prefix),
-        *args.locust_extra,
+def log_run_config(args, run_id, work_dir, logs):
+    """Emit a structured summary of the test config at the top of every run
+    so anyone reading logs.txt later can see exactly what was executed
+    without cross-referencing tests.yaml + the orchestrator's invocation."""
+    lines = [
+        "==== Run config ====",
+        f"  run_id:         {run_id}",
+        f"  name:           {args.name}",
+        f"  tag:            {args.tag}",
+        f"  test_file:      {args.file}",
+        f"  duration:       {args.duration}",
+        f"  users:          {args.users}",
+        f"  uses_boomer:    {needs_boomer(args.file)}",
+        f"  dest:           {args.dest}",
+        f"  work_dir:       {work_dir}",
+        f"  extra flags:    {' '.join(args.locust_extra) if args.locust_extra else '(none)'}",
+        "====================",
     ]
-    tee(logs, f"Running: {' '.join(cmd)}")
-    proc = subprocess.Popen(
-        cmd,
+    for line in lines:
+        tee(logs, line)
+
+
+def extract_trace_record(prefix, line):
+    """Parse `line` into a trace record dict (TRACE_COLUMNS keys) if it
+    describes a sampled span, else return None. Handles boomer slog JSON
+    lines (msg starts with 'traced span') and Python locust 'Traced ...:'
+    free-form lines. Failed-span fields land in `err`."""
+    if prefix == "boomer":
+        if "trace_id" not in line:
+            return None
+        try:
+            obj = json.loads(line)
+        except ValueError:
+            return None
+        if not isinstance(obj, dict) or not str(obj.get("msg", "")).startswith("traced span"):
+            return None
+        if "trace_id" not in obj:
+            return None
+        duration = obj.get("duration_ms")
+        return {
+            "time": str(obj.get("time", "")),
+            "name": str(obj.get("name", "")),
+            "duration_ms": "" if duration is None else f"{float(duration):.3f}",
+            "latency_source": str(obj.get("source", "")),
+            "trace_id": str(obj["trace_id"]),
+            "err": str(obj.get("err", "")),
+        }
+    m = PY_TRACE_RE.search(line)
+    if not m:
+        return None
+    return {
+        "time": "",
+        "name": m.group("name"),
+        "duration_ms": m.group("duration"),
+        "latency_source": m.group("source"),
+        "trace_id": m.group("trace_id"),
+        "err": "failed" if "(failed)" in line else "",
+    }
+
+
+def pump_stream(prefix, stream, logs, traces):
+    """Forward each line of `stream` to stdout + logs (with a per-source
+    prefix) and append any extracted trace records to `traces` as TSV rows."""
+    for line in stream:
+        line = line.rstrip("\n")
+        tagged = f"[{prefix}] {line}"
+        sys.stdout.write(tagged + "\n")
+        sys.stdout.flush()
+        logs.write(tagged + "\n")
+        logs.flush()
+        record = extract_trace_record(prefix, line)
+        if record is not None:
+            traces.write("\t".join(record[c] for c in TRACE_COLUMNS) + "\n")
+            traces.flush()
+
+
+def run_test(args, csv_prefix, logs, traces):
+    """Run locust (and boomer, when needed). Returns locust's exit code.
+
+    Stdout from each subprocess is forwarded to logs.txt with a `[locust]` /
+    `[boomer]` prefix so they're distinguishable; trace_id matches are
+    siphoned into traces.txt as a deduped one-per-line list.
+    """
+    with_boomer = needs_boomer(args.file)
+
+    locust_cmd = [
+        sys.executable, "-m", "locust",
+        "--headless",
+        "-f", args.file,
+        "-t", args.duration,
+        "-u", str(args.users),
+        "--csv", str(csv_prefix),
+    ]
+    if with_boomer:
+        # Master mode so boomer can connect as a worker on localhost:5557.
+        # --expect-workers=1 makes locust wait for boomer before starting.
+        locust_cmd += ["--master", "--expect-workers", "1"]
+    locust_cmd += list(args.locust_extra)
+
+    tee(logs, f"Running: {' '.join(locust_cmd)}")
+    locust_proc = subprocess.Popen(
+        locust_cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         bufsize=1,
         text=True,
     )
-    for line in proc.stdout:
-        sys.stdout.write(line)
-        sys.stdout.flush()
-        logs.write(line)
-        logs.flush()
-    return proc.wait()
+
+    pumps = []
+    pumps.append(threading.Thread(
+        target=pump_stream,
+        args=("locust", locust_proc.stdout, logs, traces),
+        daemon=True,
+    ))
+
+    boomer_proc = None
+    if with_boomer:
+        boomer_cmd = [BOOMER_BINARY]
+        cfg_json = build_config_json(args.locust_extra)
+        if cfg_json:
+            boomer_cmd += ["--config-json", cfg_json]
+        tee(logs, f"Running: {' '.join(boomer_cmd)}")
+        boomer_proc = subprocess.Popen(
+            boomer_cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            bufsize=1,
+            text=True,
+        )
+        pumps.append(threading.Thread(
+            target=pump_stream,
+            args=("boomer", boomer_proc.stdout, logs, traces),
+            daemon=True,
+        ))
+
+    for t in pumps:
+        t.start()
+
+    locust_exit = locust_proc.wait()
+    tee(logs, f"Locust exited with code {locust_exit}")
+
+    if boomer_proc is not None:
+        # Locust finishing means the test window is over; let boomer drain
+        # its actor cleanup before tearing it down hard. The boomer process
+        # suspends+deletes every actor it created on SIGTERM.
+        tee(logs, "Stopping boomer...")
+        boomer_proc.send_signal(signal.SIGTERM)
+        try:
+            boomer_proc.wait(timeout=90)
+        except subprocess.TimeoutExpired:
+            tee(logs, "Boomer did not exit within 90s; killing")
+            boomer_proc.kill()
+            boomer_proc.wait()
+        tee(logs, f"Boomer exited with code {boomer_proc.returncode}")
+
+    for t in pumps:
+        t.join(timeout=5)
+
+    return locust_exit
 
 
 def stats_to_jsonl(stats_csv, jsonl_path, timestamp, tag, test_name):
@@ -149,18 +312,21 @@ def main():
     # RFC 3339 / ISO 8601 extended for the JSONL data column
     data_ts = now.strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    work_dir = Path(f"/tmp/locust-runner-{path_ts}")
+    work_dir = Path(f"/tmp/{path_ts}-locust-runner")
     work_dir.mkdir(parents=True, exist_ok=True)
     csv_prefix = work_dir / args.name
     stats_csv = work_dir / f"{args.name}_stats.csv"
     jsonl_path = work_dir / f"{args.name}.jsonl"
     run_id = f"{args.tag}_{path_ts}"
     logs_path = work_dir / f"{args.name}_logs.txt"
+    traces_path = work_dir / f"{args.name}_traces.txt"
     status_path = work_dir / f"{args.name}_status.json"
 
-    with open(logs_path, "w") as logs:
-        exit_code = run_locust(args, csv_prefix, logs)
-        tee(logs, f"Locust exited with code {exit_code}")
+    with open(logs_path, "w") as logs, open(traces_path, "w") as traces:
+        traces.write("\t".join(TRACE_COLUMNS) + "\n")
+        traces.flush()
+        log_run_config(args, run_id, work_dir, logs)
+        exit_code = run_test(args, csv_prefix, logs, traces)
 
         stats_generated = False
         if stats_csv.exists():
@@ -195,6 +361,7 @@ def main():
     files = [
         status_path,
         logs_path,
+        traces_path,
         jsonl_path,
         stats_csv,
         work_dir / f"{args.name}_exceptions.csv",

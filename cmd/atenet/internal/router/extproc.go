@@ -78,11 +78,6 @@ func (s *ExtProcServer) Serve(ctx context.Context, lis net.Listener) error {
 }
 
 func (s *ExtProcServer) Process(stream extprocv3.ExternalProcessor_ProcessServer) error {
-	// requestStart marks when ExtProc first saw RequestHeaders for the
-	// current request; reused when ResponseHeaders fires to emit a
-	// total-time-in-Envoy header. Envoy uses one stream per HTTP request
-	// by default, so this stays scoped correctly across loop iterations.
-	var requestStart time.Time
 	for {
 		req, err := stream.Recv()
 		if err == io.EOF {
@@ -96,9 +91,9 @@ func (s *ExtProcServer) Process(stream extprocv3.ExternalProcessor_ProcessServer
 
 		switch reqType := req.Request.(type) {
 		case *extprocv3.ProcessingRequest_RequestHeaders:
-			requestStart = time.Now()
+			start := time.Now()
 			hResponse, rqm, target, tmplNs, tmplName, err := s.handleRequestHeaders(stream.Context(), reqType.RequestHeaders)
-			elapsed := time.Since(requestStart)
+			elapsed := time.Since(start)
 			if err != nil {
 				slog.ErrorContext(stream.Context(), "Error during ext_proc RequestHeaders processing", slog.String("err", err.Error()))
 				var reqErr *reqError
@@ -108,24 +103,11 @@ func (s *ExtProcServer) Process(stream extprocv3.ExternalProcessor_ProcessServer
 					resp = immediateResponse(envoy_type.StatusCode_InternalServerError, err.Error())
 				}
 				s.recordRouteDuration(stream.Context(), elapsed, tmplNs, tmplName, classifyOutcome(err))
-				s.recorder.AddRouterRequest(requestStart, elapsed, "Error", "-", rqm)
+				s.recorder.AddRouterRequest(start, elapsed, "Error", "-", rqm)
 			} else {
 				resp.Response = &extprocv3.ProcessingResponse_RequestHeaders{RequestHeaders: hResponse}
 				s.recordRouteDuration(stream.Context(), elapsed, tmplNs, tmplName, "ok")
-				s.recorder.AddRouterRequest(requestStart, elapsed, "Route ok", target, rqm)
-			}
-
-		case *extprocv3.ProcessingRequest_ResponseHeaders:
-			mutation := &extprocv3.HeaderMutation{}
-			if !requestStart.IsZero() {
-				setRouterElapsedHeader(time.Since(requestStart), mutation)
-			}
-			resp.Response = &extprocv3.ProcessingResponse_ResponseHeaders{
-				ResponseHeaders: &extprocv3.HeadersResponse{
-					Response: &extprocv3.CommonResponse{
-						HeaderMutation: mutation,
-					},
-				},
+				s.recorder.AddRouterRequest(start, elapsed, "Route ok", target, rqm)
 			}
 
 		default:

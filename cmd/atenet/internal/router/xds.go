@@ -399,10 +399,8 @@ func (x *XdsServer) buildHcm(statPrefix string) *anypb.Any {
 		// Explicitly configure the message timeout to avoid the 200ms default
 		MessageTimeout: durationpb.New(5 * time.Second),
 		ProcessingMode: &extprocv3filter.ProcessingMode{
-			RequestHeaderMode: extprocv3filter.ProcessingMode_SEND,
-			// SEND on the response so ExtProc can attach an elapsed-time
-			// header spanning the request's entire stay inside Envoy.
-			ResponseHeaderMode:  extprocv3filter.ProcessingMode_SEND,
+			RequestHeaderMode:   extprocv3filter.ProcessingMode_SEND,
+			ResponseHeaderMode:  extprocv3filter.ProcessingMode_SKIP,
 			RequestBodyMode:     extprocv3filter.ProcessingMode_NONE,
 			ResponseBodyMode:    extprocv3filter.ProcessingMode_NONE,
 			RequestTrailerMode:  extprocv3filter.ProcessingMode_SKIP,

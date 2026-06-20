@@ -50,6 +50,8 @@ spec:
             restartPolicy: Always
             securityContext:
               privileged: true
+            args:
+            - --registry-mirror=https://mirror.gcr.io
             env:
             - name: DOCKER_TLS_CERTDIR
               value: ""

@@ -12,6 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# The pod runs three containers sharing the network namespace:
+#   * locust-master: Python locust master, serves --class-picker UI on :8089
+#     and accepts worker connections on :5557. Aggregates stats from both
+#     workers and exposes them at /metrics on :8000.
+#   * locust-python-worker: Python locust worker for the non-glutton tests.
+#     LOCUST_NO_GLUTTON_USER=1 prevents tests/glutton.py from declaring the
+#     stub User on this worker so GluttonUser spawns are owned exclusively
+#     by the boomer container.
+#   * boomer-glutton: Go re-implementation of GluttonUser. Connects to the
+#     master at localhost:5557 via the locust worker ZMQ protocol; exposes
+#     its own per-worker diagnostics at /metrics on :8001 (aggregate stats
+#     flow through the master via boomer.RecordSuccess).
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -33,7 +45,7 @@ spec:
         prometheus.io/port: "8000"
     spec:
       containers:
-      - name: locust
+      - name: locust-master
         image: us-docker.pkg.dev/${PROJECT_ID}/gcr.io/ate-images/locust-test:latest
         imagePullPolicy: Always
         args:
@@ -41,9 +53,10 @@ spec:
         - "locust"
         - "-f"
         - "/app/tests"
+        - "--master"
+        - "--master-bind-host=0.0.0.0"
         - "--class-picker"
         env:
-
         - name: OTEL_EXPORTER_OTLP_ENDPOINT
           value: http://opentelemetry-collector.gke-managed-otel.svc.cluster.local:4317
         ports:
@@ -53,6 +66,9 @@ spec:
         - name: web
           containerPort: 8089
           protocol: TCP
+        - name: zmq
+          containerPort: 5557
+          protocol: TCP
         volumeMounts:
         - name: servicedns-ca
           mountPath: /run/servicedns-ca
@@ -61,6 +77,59 @@ spec:
           requests:
             cpu: "500m"
             memory: "512Mi"
+
+      - name: locust-python-worker
+        image: us-docker.pkg.dev/${PROJECT_ID}/gcr.io/ate-images/locust-test:latest
+        imagePullPolicy: Always
+        args:
+        - "-m"
+        - "locust"
+        - "-f"
+        - "/app/tests"
+        - "--worker"
+        - "--master-host=localhost"
+        env:
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: http://opentelemetry-collector.gke-managed-otel.svc.cluster.local:4317
+        # Skips the GluttonUser stub declaration so the master never assigns
+        # GluttonUser spawns to this worker — boomer owns that class.
+        - name: LOCUST_NO_GLUTTON_USER
+          value: "1"
+        volumeMounts:
+        - name: servicedns-ca
+          mountPath: /run/servicedns-ca
+          readOnly: true
+        resources:
+          requests:
+            cpu: "500m"
+            memory: "512Mi"
+
+      - name: boomer-glutton
+        # Same image as the master/worker — the boomer-glutton Go binary is
+        # baked in at /app/boomer-glutton by benchmarking/locust/Dockerfile.
+        image: us-docker.pkg.dev/${PROJECT_ID}/gcr.io/ate-images/locust-test:latest
+        imagePullPolicy: Always
+        command: ["/app/boomer-glutton"]
+        args:
+        - "--prometheus-addr=:8001"
+        # Fetch runtime config (trace probability, wait-time bounds) from
+        # http://{master-host}:{master-web-port}/boomer-config on each
+        # spawn message so values the operator types into the web UI form
+        # are honored. The endpoint is served by
+        # benchmarking/locust/common/boomer_config.py on the master.
+        - "--master-web-port=8089"
+        env:
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: opentelemetry-collector.gke-managed-otel.svc.cluster.local:4317
+        ports:
+        - name: boomer-prom
+          containerPort: 8001
+          protocol: TCP
+        resources:
+          requests:
+            cpu: "500m"
+            memory: "256Mi"
+
       volumes:
       - name: servicedns-ca
         projected:
@@ -89,3 +158,7 @@ spec:
     protocol: TCP
     port: 8000
     targetPort: 8000
+  - name: boomer-prom
+    protocol: TCP
+    port: 8001
+    targetPort: 8001

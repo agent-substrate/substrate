@@ -1,0 +1,19 @@
+language: go
+warnings_are_errors: false
+
+go:
+        - 1.x
+
+before_install:
+        - git clone git://github.com/jedisct1/libsodium.git --branch stable
+        - ( cd libsodium; ./autogen.sh; ./configure; make check; sudo make install; sudo ldconfig )
+        - git clone git://github.com/zeromq/libzmq.git
+        - ( cd libzmq; ./autogen.sh; ./configure; make check; sudo make install; sudo ldconfig )
+        - git clone git://github.com/zeromq/czmq.git
+        - ( cd czmq; ./autogen.sh; ./configure; make check; sudo make install; sudo ldconfig )
+
+install:
+        - go get github.com/myzhan/gomq/zmtp
+        - go get github.com/myzhan/gomq
+script:
+        - go test -v .

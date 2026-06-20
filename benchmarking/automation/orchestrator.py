@@ -158,7 +158,7 @@ def build_locust_image(commit):
             image,
             "-f",
             "benchmarking/locust/Dockerfile",
-            "benchmarking/locust/",
+            ".",
         ]
     )
     run(["docker", "push", image])

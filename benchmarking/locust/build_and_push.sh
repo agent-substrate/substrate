@@ -32,7 +32,9 @@ fi
 IMAGE="us-docker.pkg.dev/${PROJECT_ID}/gcr.io/ate-images/locust-test:latest"
 
 echo "Building Docker image: $IMAGE"
-docker build -t "$IMAGE" -f benchmarking/locust/Dockerfile benchmarking/locust/
+# Build context is the monorepo root because the Dockerfile compiles the
+# boomer-glutton Go binary alongside the Python install (see Dockerfile).
+docker build -t "$IMAGE" -f benchmarking/locust/Dockerfile .
 
 echo "Pushing Docker image..."
 docker push "$IMAGE"
