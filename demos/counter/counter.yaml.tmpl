@@ -47,8 +47,16 @@ spec:
       httpGet:
         path: /readyz
         port: 80
+    volumeMounts:
+    - name: myhomedir
+      mountPath: /home/counter
   workerSelector:
     matchLabels:
       workload: counter
   snapshotsConfig:
+    onPause: process
+    onCommit: homedir
     location: gs://${BUCKET_NAME}/ate-demo-counter/
+  volumes:
+  - name: myhomedir
+    homeDir: {}

@@ -36,6 +36,22 @@ func workloadSpecFromActorTemplate(ctx context.Context, kubeClient kubernetes.In
 	workloadSpec := &ateletpb.WorkloadSpec{
 		PauseImage: actorTemplate.Spec.PauseImage,
 	}
+
+	// add volumes
+	for _, vol := range actorTemplate.Spec.Volumes {
+		// volume is homedir type
+		if vol.VolumeSource.HomeDir != nil {
+			ateletVol := &ateletpb.Volume{
+				Name: vol.Name,
+				Type: ateletpb.VolumeType_VOLUME_TYPE_HOMEDIR,
+				Source: &ateletpb.Volume_HomeDir{
+					HomeDir: &ateletpb.HomedirVolume{},
+				},
+			}
+			workloadSpec.Volumes = append(workloadSpec.Volumes, ateletVol)
+		}
+	}
+
 	resolver := envResolver{
 		kubeClient: kubeClient,
 		namespace:  actorTemplate.Namespace,
@@ -58,6 +74,13 @@ func workloadSpecFromActorTemplate(ctx context.Context, kubeClient kubernetes.In
 				ateletCtr.Env = append(ateletCtr.Env, ateletEnv)
 			}
 		}
+		for _, mount := range ctr.VolumeMounts {
+			ateletCtr.VolumeMounts = append(ateletCtr.VolumeMounts, &ateletpb.VolumeMount{
+				Name:      mount.Name,
+				MountPath: mount.MountPath,
+			})
+		}
+
 		workloadSpec.Containers = append(workloadSpec.Containers, ateletCtr)
 	}
 

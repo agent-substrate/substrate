@@ -135,6 +135,7 @@ func validCheckpointRequest() *ateletpb.CheckpointRequest {
 				SnapshotUriPrefix: "gs://bucket/actors/1/snapshots/2/",
 			},
 		},
+		Scope: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_PROCESS,
 	}
 }
 
@@ -151,6 +152,7 @@ func validRestoreRequest() *ateletpb.RestoreRequest {
 				SnapshotUriPrefix: "gs://bucket/actors/1/snapshots/2/",
 			},
 		},
+		Scope: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_PROCESS,
 	}
 }
 
@@ -200,6 +202,8 @@ func TestValidateCheckpointRequest(t *testing.T) {
 			r.Config = &ateletpb.CheckpointRequest_LocalConfig{LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotPrefix: ""}}
 		}), true},
 		{"unspecified snapshot type", makeReq(func(r *ateletpb.CheckpointRequest) { r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_UNSPECIFIED }), true},
+		{"unspecified snapshot scope", makeReq(func(r *ateletpb.CheckpointRequest) { r.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED }), true},
+		{"invalid snapshot scope", makeReq(func(r *ateletpb.CheckpointRequest) { r.Scope = ateletpb.SnapshotScope(23) }), true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -233,6 +237,8 @@ func TestValidateRestoreRequest(t *testing.T) {
 			r.Config = &ateletpb.RestoreRequest_LocalConfig{LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotPrefix: ""}}
 		}), true},
 		{"unspecified snapshot type", makeReq(func(r *ateletpb.RestoreRequest) { r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_UNSPECIFIED }), true},
+		{"unspecified snapshot scope", makeReq(func(r *ateletpb.RestoreRequest) { r.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED }), true},
+		{"invalid snapshot scope", makeReq(func(r *ateletpb.RestoreRequest) { r.Scope = ateletpb.SnapshotScope(23) }), true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

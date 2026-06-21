@@ -23,6 +23,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"sync"
@@ -205,7 +206,7 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	}
 
 	// Create and start pause container
-	if err := rcmd.cmdCreate(ctx, os.Stdout, "pause"); err != nil {
+	if err := rcmd.cmdCreate(ctx, os.Stdout, "pause", nil); err != nil {
 		return nil, fmt.Errorf("while creating pause container: %w", err)
 	}
 	if err := rcmd.cmdStart(ctx, os.Stdout, "pause"); err != nil {
@@ -220,7 +221,7 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 			return nil, fmt.Errorf("while starting json log pipe for %q: %w", ac.GetName(), err)
 		}
 		defer pw.Close()
-		if err := rcmd.cmdCreate(ctx, pw, ac.GetName()); err != nil {
+		if err := rcmd.cmdCreate(ctx, pw, ac.GetName(), nil); err != nil {
 			return nil, fmt.Errorf("while creating %q application container: %w", ac.GetName(), err)
 		}
 		if err := rcmd.cmdStart(ctx, pw, ac.GetName()); err != nil {
@@ -261,9 +262,35 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 		return nil, fmt.Errorf("while creating checkpoint directory: %w", err)
 	}
 
-	// Checkpoint pause container (root of the sandbox)
-	if err := rcmd.cmdCheckpoint(ctx, "pause", checkpointPath); err != nil {
-		return nil, fmt.Errorf("while checkpointing pause: %w", err)
+	// Always take homedir snapshot if at least one container has homedir volume mount
+	// TODO(dberkov): this is a temporary workaround until gVisor will support taking homedir snapshots in a single request with process snapshot.
+	var hdv []string
+	for _, ctr := range req.GetSpec().GetContainers() {
+		hdv = append(hdv, ctr.GetHomeDirVolumes()...)
+	}
+	if len(hdv) > 0 {
+		// TODO(dberkov) add control for "resume=true" flag
+		// Checkpoint each homedir volume
+
+		// prepare homedir checkpoint folder
+		fsCheckpointPath := filepath.Join(checkpointPath, ateompath.HomedirSnapshotsSubfoldderName)
+		if err := os.MkdirAll(fsCheckpointPath, 0o700); err != nil {
+			return nil, fmt.Errorf("while creating fscheckpoint directory: %w", err)
+		}
+
+		// keep gVisor running if process snapshot is requested.
+		leaveRunning := req.GetScope() == ateompb.SnapshotScope_SNAPSHOT_SCOPE_PROCESS
+		if err := rcmd.cmdFsCheckpoint(ctx, "pause", fsCheckpointPath, hdv, leaveRunning); err != nil {
+			return nil, fmt.Errorf("while fscheckpointing homedir %q: %w", hdv[0], err)
+		}
+	}
+
+	// take process snapshot if requested
+	if req.GetScope() == ateompb.SnapshotScope_SNAPSHOT_SCOPE_PROCESS {
+		// Checkpoint pause container (root of the sandbox)
+		if err := rcmd.cmdCheckpoint(ctx, "pause", checkpointPath); err != nil {
+			return nil, fmt.Errorf("while checkpointing pause: %w", err)
+		}
 	}
 
 	// After checkpointing the sandbox root, runsc may no longer have a usable
@@ -365,12 +392,25 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 
 	checkpointDir := ateompath.RestoreStateDir(req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId())
 
-	// Create and restore pause container
-	if err := rcmd.cmdCreate(ctx, os.Stdout, "pause"); err != nil {
-		return nil, fmt.Errorf("while creating pause container: %w", err)
-	}
-	if err := rcmd.cmdRestore(ctx, os.Stdout, "pause", checkpointDir); err != nil {
-		return nil, fmt.Errorf("while starting pause container: %w", err)
+	switch req.GetScope() {
+	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_HOMEDIR:
+		// Create and restore pause container
+		if err := rcmd.cmdCreate(ctx, os.Stdout, "pause", []string{"--fs-restore-image-path", filepath.Join(checkpointDir, ateompath.HomedirSnapshotsSubfoldderName)}); err != nil {
+			return nil, fmt.Errorf("while creating pause container: %w", err)
+		}
+		if err := rcmd.cmdStart(ctx, os.Stdout, "pause"); err != nil {
+			return nil, fmt.Errorf("while starting pause container: %w", err)
+		}
+	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_PROCESS:
+		// Create and restore pause container
+		if err := rcmd.cmdCreate(ctx, os.Stdout, "pause", nil); err != nil {
+			return nil, fmt.Errorf("while creating pause container: %w", err)
+		}
+		if err := rcmd.cmdRestore(ctx, os.Stdout, "pause", checkpointDir); err != nil {
+			return nil, fmt.Errorf("while starting pause container: %w", err)
+		}
+	default:
+		return nil, fmt.Errorf("unexpected snapshot scope: %v", req.GetScope())
 	}
 
 	// Create and restore each application container, each with its own log pipe so
@@ -381,11 +421,23 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 			return nil, fmt.Errorf("while starting json log pipe for %q: %w", ac.GetName(), err)
 		}
 		defer pw.Close()
-		if err := rcmd.cmdCreate(ctx, pw, ac.GetName()); err != nil {
-			return nil, fmt.Errorf("while creating %q application container: %w", ac.GetName(), err)
-		}
-		if err := rcmd.cmdRestore(ctx, pw, ac.GetName(), checkpointDir); err != nil {
-			return nil, fmt.Errorf("while starting %q application container: %w", ac.GetName(), err)
+		switch req.GetScope() {
+		case ateompb.SnapshotScope_SNAPSHOT_SCOPE_HOMEDIR:
+			if err := rcmd.cmdCreate(ctx, pw, ac.GetName(), nil); err != nil {
+				return nil, fmt.Errorf("while creating %q application container: %w", ac.GetName(), err)
+			}
+			if err := rcmd.cmdStart(ctx, pw, ac.GetName()); err != nil {
+				return nil, fmt.Errorf("while starting %q application container: %w", ac.GetName(), err)
+			}
+		case ateompb.SnapshotScope_SNAPSHOT_SCOPE_PROCESS:
+			if err := rcmd.cmdCreate(ctx, pw, ac.GetName(), nil); err != nil {
+				return nil, fmt.Errorf("while creating %q application container: %w", ac.GetName(), err)
+			}
+			if err := rcmd.cmdRestore(ctx, pw, ac.GetName(), checkpointDir); err != nil {
+				return nil, fmt.Errorf("while starting %q application container: %w", ac.GetName(), err)
+			}
+		default:
+			return nil, fmt.Errorf("unexpected snapshot scope: %v", req.GetScope())
 		}
 	}
 

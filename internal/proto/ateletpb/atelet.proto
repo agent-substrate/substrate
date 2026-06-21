@@ -77,14 +77,39 @@ message SandboxAssets {
 message WorkloadSpec {
   repeated Container containers  = 1;
   string             pause_image = 2;
+  repeated Volume    volumes     = 3;
+}
+
+enum VolumeType {
+  VOLUME_TYPE_UNSPECIFIED = 0;
+  VOLUME_TYPE_HOMEDIR     = 1;
+}
+
+message HomedirVolume {
+}
+
+message Volume {
+  string name = 1;
+
+  VolumeType type = 2;
+
+  oneof source{
+    HomedirVolume home_dir = 3;
+  }
+}
+
+message VolumeMount{
+  string name = 1;
+  string mount_path = 2;
 }
 
 message Container {
-  string            name    = 1;
-  string            image   = 2;
-  repeated string   command = 3;
-  repeated EnvEntry env     = 4;
-  Readyz            readyz  = 5;
+  string               name          = 1;
+  string               image         = 2;
+  repeated string      command       = 3;
+  repeated EnvEntry    env           = 4;
+  Readyz               readyz  = 5;
+  repeated VolumeMount volume_mounts = 6;
 }
 
 message EnvEntry {
@@ -138,6 +163,15 @@ enum CheckpointType {
   CHECKPOINT_TYPE_EXTERNAL = 2;
 }
 
+enum SnapshotScope {
+  // Not valid option; should never happen.
+  SNAPSHOT_SCOPE_UNSPECIFIED = 0;
+  // Snapshot memory and the full rootfs (including homedir content).
+  SNAPSHOT_SCOPE_PROCESS = 1;
+  // Snapshot only the homedir; memory and the rest of rootfs are excluded.
+  SNAPSHOT_SCOPE_HOMEDIR = 2;
+}
+
 message CheckpointRequest {
   string target_ateom_uid = 1;
 
@@ -162,6 +196,9 @@ message CheckpointRequest {
     LocalCheckpointConfiguration local_config    = 10;
     ExternalCheckpointConfiguration external_config = 11;
   }
+
+  // What should be included in the checkpoint.
+  SnapshotScope scope = 12;
 }
 
 message CheckpointResponse {
@@ -192,6 +229,9 @@ message RestoreRequest {
     LocalCheckpointConfiguration local_config    = 10;
     ExternalCheckpointConfiguration external_config = 11;
   }
+
+  // What content to restore from the checkpoint.
+  SnapshotScope scope = 12;
 }
 
 message RestoreResponse {

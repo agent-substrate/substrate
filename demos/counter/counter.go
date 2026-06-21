@@ -27,6 +27,8 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -36,7 +38,28 @@ import (
 var (
 	requestCount uint64
 	ready        atomic.Bool
+	fileMutex    sync.Mutex
 )
+
+const fileCounterPath = "/home/counter/a.txt"
+
+func incrementFileCounter() int {
+	fileMutex.Lock()
+	defer fileMutex.Unlock()
+	counter := 0
+	data, err := os.ReadFile(fileCounterPath)
+	if err == nil {
+		if i, err := strconv.Atoi(string(data)); err == nil {
+			counter = i
+		}
+	}
+	counter++
+	err = os.WriteFile(fileCounterPath, []byte(strconv.Itoa(counter)), 0644)
+	if err != nil {
+		return -1
+	}
+	return counter
+}
 
 func main() {
 	pflag.Parse()
@@ -47,10 +70,13 @@ func main() {
 	defaultMux := http.NewServeMux()
 	defaultMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
-		count := atomic.AddUint64(&requestCount, 1)
+		fileCounter := incrementFileCounter()
+
+		memoryCounter := atomic.AddUint64(&requestCount, 1)
 		currentIP := getCurrentIP()
-		response := fmt.Sprintf("hello from: %s | preserved memory count: %d\n", currentIP, count)
+		response := fmt.Sprintf("hello from: %s | preserved memory count: %d | preserved file counter: %d\n", currentIP, memoryCounter, fileCounter)
 		slog.InfoContext(ctx, "Handled request", slog.String("response", response))
+
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(response))
 	})

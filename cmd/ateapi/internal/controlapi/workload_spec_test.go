@@ -26,72 +26,65 @@ import (
 	"google.golang.org/protobuf/testing/protocmp"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
 	"k8s.io/utils/ptr"
 )
 
-func TestWorkloadSpecFromActorTemplateResolvesValueFromEnv(t *testing.T) {
-	ctx := context.Background()
-	kubeClient := fake.NewSimpleClientset(
-		&corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "some-secret",
-				Namespace: "agent-ns",
+func TestWorkloadSpecFromActorTemplate(t *testing.T) {
+	tests := []struct {
+		name        string
+		secrets     []runtime.Object
+		template    *atev1alpha1.ActorTemplate
+		want        *ateletpb.WorkloadSpec
+		wantErrCode codes.Code
+	}{
+		{
+			name: "resolves literal and secretKeyRef env",
+			secrets: []runtime.Object{
+				&corev1.Secret{
+					ObjectMeta: metav1.ObjectMeta{Name: "some-secret", Namespace: "agent-ns"},
+					Data:       map[string][]byte{"some-key": []byte("some-value")},
+				},
 			},
-			Data: map[string][]byte{
-				"some-key": []byte("some-value"),
-			},
-		},
-	)
-
-	got, err := workloadSpecFromActorTemplate(ctx, kubeClient, nil, &atev1alpha1.ActorTemplate{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "tmpl1",
-			Namespace: "agent-ns",
-		},
-		Spec: atev1alpha1.ActorTemplateSpec{
-			PauseImage: "pause",
-			Containers: []atev1alpha1.Container{
-				{
-					Name:    "main",
-					Image:   "main",
-					Command: []string{"/main"},
-					Env: []atev1alpha1.EnvVar{
+			template: &atev1alpha1.ActorTemplate{
+				ObjectMeta: metav1.ObjectMeta{Name: "tmpl1", Namespace: "agent-ns"},
+				Spec: atev1alpha1.ActorTemplateSpec{
+					PauseImage: "pause",
+					Containers: []atev1alpha1.Container{
 						{
-							Name:  "LITERAL",
-							Value: ptr.To("plain"),
-						},
-						{
-							Name: "SOME_KEY",
-							ValueFrom: &atev1alpha1.EnvVarSource{
-								SecretKeyRef: &atev1alpha1.SecretKeySelector{
-									Name: "some-secret",
-									Key:  "some-key",
+							Name:    "main",
+							Image:   "main",
+							Command: []string{"/main"},
+							Env: []atev1alpha1.EnvVar{
+								{Name: "LITERAL", Value: ptr.To("plain")},
+								{
+									Name: "SOME_KEY",
+									ValueFrom: &atev1alpha1.EnvVarSource{
+										SecretKeyRef: &atev1alpha1.SecretKeySelector{Name: "some-secret", Key: "some-key"},
+									},
 								},
 							},
 						},
 					},
 				},
 			},
-		},
-	})
-	if err != nil {
-		t.Fatalf("workloadSpecFromActorTemplate failed: %v", err)
-	}
-
-	want := &ateletpb.WorkloadSpec{
-		PauseImage: "pause",
-		Containers: []*ateletpb.Container{
-			{
-				Name:    "main",
-				Image:   "main",
-				Command: []string{"/main"},
-				Env: []*ateletpb.EnvEntry{
-					{Name: "LITERAL", Value: "plain"},
-					{Name: "SOME_KEY", Value: "some-value"},
+			want: &ateletpb.WorkloadSpec{
+				PauseImage: "pause",
+				Containers: []*ateletpb.Container{
+					{
+						Name:    "main",
+						Image:   "main",
+						Command: []string{"/main"},
+						Env: []*ateletpb.EnvEntry{
+							{Name: "LITERAL", Value: "plain"},
+							{Name: "SOME_KEY", Value: "some-value"},
+						},
+					},
 				},
 			},
 		},
+<<<<<<< HEAD
 	}
 	if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
 		t.Errorf("WorkloadSpec mismatch (-want +got):\n%s", diff)
@@ -155,86 +148,198 @@ func TestWorkloadSpecFromActorTemplateOptionalSecretKeyRefSkipsMissingSecret(t *
 					Name:  "main",
 					Image: "main",
 					Env: []atev1alpha1.EnvVar{
+=======
+		{
+			name: "skips optional missing secret",
+			template: &atev1alpha1.ActorTemplate{
+				ObjectMeta: metav1.ObjectMeta{Name: "tmpl1", Namespace: "agent-ns"},
+				Spec: atev1alpha1.ActorTemplateSpec{
+					Containers: []atev1alpha1.Container{
+>>>>>>> 3962a2c (implement suspend/resume with homedir support)
 						{
-							Name: "OPTIONAL",
-							ValueFrom: &atev1alpha1.EnvVarSource{
-								SecretKeyRef: &atev1alpha1.SecretKeySelector{
-									Name:     "missing",
-									Key:      "key",
-									Optional: &optional,
+							Name:  "main",
+							Image: "main",
+							Env: []atev1alpha1.EnvVar{
+								{
+									Name: "OPTIONAL",
+									ValueFrom: &atev1alpha1.EnvVarSource{
+										SecretKeyRef: &atev1alpha1.SecretKeySelector{Name: "missing", Key: "key", Optional: ptr.To(true)},
+									},
 								},
 							},
 						},
 					},
 				},
 			},
+			want: &ateletpb.WorkloadSpec{
+				Containers: []*ateletpb.Container{{Name: "main", Image: "main"}},
+			},
 		},
-	})
-	if err != nil {
-		t.Fatalf("workloadSpecFromActorTemplate failed: %v", err)
-	}
-	if len(got.GetContainers()) != 1 {
-		t.Fatalf("expected one container, got %d", len(got.GetContainers()))
-	}
-	if len(got.GetContainers()[0].GetEnv()) != 0 {
-		t.Fatalf("expected optional missing env to be skipped, got %v", got.GetContainers()[0].GetEnv())
-	}
-}
-
-func TestWorkloadSpecFromActorTemplateSecretKeyRefMissingSecretFails(t *testing.T) {
-	_, err := workloadSpecFromActorTemplate(context.Background(), fake.NewSimpleClientset(), nil, &atev1alpha1.ActorTemplate{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "tmpl1",
-			Namespace: "agent-ns",
-		},
-		Spec: atev1alpha1.ActorTemplateSpec{
-			Containers: []atev1alpha1.Container{
-				{
-					Name:  "main",
-					Image: "main",
-					Env: []atev1alpha1.EnvVar{
+		{
+			name: "required missing secret fails",
+			template: &atev1alpha1.ActorTemplate{
+				ObjectMeta: metav1.ObjectMeta{Name: "tmpl1", Namespace: "agent-ns"},
+				Spec: atev1alpha1.ActorTemplateSpec{
+					Containers: []atev1alpha1.Container{
 						{
-							Name: "REQUIRED",
-							ValueFrom: &atev1alpha1.EnvVarSource{
-								SecretKeyRef: &atev1alpha1.SecretKeySelector{
-									Name: "missing",
-									Key:  "key",
+							Name:  "main",
+							Image: "main",
+							Env: []atev1alpha1.EnvVar{
+								{
+									Name: "REQUIRED",
+									ValueFrom: &atev1alpha1.EnvVarSource{
+										SecretKeyRef: &atev1alpha1.SecretKeySelector{Name: "missing", Key: "key"},
+									},
 								},
 							},
 						},
 					},
 				},
 			},
+			wantErrCode: codes.FailedPrecondition,
 		},
-	})
-	if status.Code(err) != codes.FailedPrecondition {
-		t.Fatalf("expected FailedPrecondition, got %v: %v", status.Code(err), err)
-	}
-}
-
-func TestWorkloadSpecFromActorTemplateEmptyValueFromFails(t *testing.T) {
-	_, err := workloadSpecFromActorTemplate(context.Background(), fake.NewSimpleClientset(), nil, &atev1alpha1.ActorTemplate{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "tmpl1",
-			Namespace: "agent-ns",
-		},
-		Spec: atev1alpha1.ActorTemplateSpec{
-			Containers: []atev1alpha1.Container{
-				{
-					Name:  "main",
-					Image: "main",
-					Env: []atev1alpha1.EnvVar{
+		{
+			name: "empty valueFrom fails",
+			template: &atev1alpha1.ActorTemplate{
+				ObjectMeta: metav1.ObjectMeta{Name: "tmpl1", Namespace: "agent-ns"},
+				Spec: atev1alpha1.ActorTemplateSpec{
+					Containers: []atev1alpha1.Container{
 						{
-							Name:      "EMPTY",
-							ValueFrom: &atev1alpha1.EnvVarSource{},
+							Name:  "main",
+							Image: "main",
+							Env: []atev1alpha1.EnvVar{
+								{Name: "EMPTY", ValueFrom: &atev1alpha1.EnvVarSource{}},
+							},
+						},
+					},
+				},
+			},
+			wantErrCode: codes.FailedPrecondition,
+		},
+		{
+			name: "converts HomeDir volume and mounts",
+			template: &atev1alpha1.ActorTemplate{
+				ObjectMeta: metav1.ObjectMeta{Name: "tmpl1", Namespace: "agent-ns"},
+				Spec: atev1alpha1.ActorTemplateSpec{
+					PauseImage: "pause",
+					Volumes: []atev1alpha1.Volume{
+						{Name: "home", VolumeSource: atev1alpha1.VolumeSource{HomeDir: &atev1alpha1.HomedirVolumeSource{}}},
+					},
+					Containers: []atev1alpha1.Container{
+						{
+							Name:  "main",
+							Image: "main",
+							VolumeMounts: []atev1alpha1.VolumeMount{
+								{Name: "home", MountPath: "/home/user"},
+								{Name: "home", MountPath: "/workspace"},
+							},
+						},
+					},
+				},
+			},
+			want: &ateletpb.WorkloadSpec{
+				PauseImage: "pause",
+				Volumes: []*ateletpb.Volume{
+					{
+						Name:   "home",
+						Type:   ateletpb.VolumeType_VOLUME_TYPE_HOMEDIR,
+						Source: &ateletpb.Volume_HomeDir{HomeDir: &ateletpb.HomedirVolume{}},
+					},
+				},
+				Containers: []*ateletpb.Container{
+					{
+						Name:  "main",
+						Image: "main",
+						VolumeMounts: []*ateletpb.VolumeMount{
+							{Name: "home", MountPath: "/home/user"},
+							{Name: "home", MountPath: "/workspace"},
 						},
 					},
 				},
 			},
 		},
-	})
-	if status.Code(err) != codes.FailedPrecondition {
-		t.Fatalf("expected FailedPrecondition, got %v: %v", status.Code(err), err)
+		{
+			name: "skips non-HomeDir volumes",
+			template: &atev1alpha1.ActorTemplate{
+				ObjectMeta: metav1.ObjectMeta{Name: "tmpl1", Namespace: "agent-ns"},
+				Spec: atev1alpha1.ActorTemplateSpec{
+					Volumes: []atev1alpha1.Volume{
+						{Name: "unsupported", VolumeSource: atev1alpha1.VolumeSource{}},
+						{Name: "home", VolumeSource: atev1alpha1.VolumeSource{HomeDir: &atev1alpha1.HomedirVolumeSource{}}},
+					},
+					Containers: []atev1alpha1.Container{
+						{
+							Name:  "main",
+							Image: "main",
+							VolumeMounts: []atev1alpha1.VolumeMount{
+								{Name: "home", MountPath: "/workspace"},
+							},
+						},
+					},
+				},
+			},
+			want: &ateletpb.WorkloadSpec{
+				Volumes: []*ateletpb.Volume{
+					{
+						Name:   "home",
+						Type:   ateletpb.VolumeType_VOLUME_TYPE_HOMEDIR,
+						Source: &ateletpb.Volume_HomeDir{HomeDir: &ateletpb.HomedirVolume{}},
+					},
+				},
+				Containers: []*ateletpb.Container{
+					{
+						Name:  "main",
+						Image: "main",
+						VolumeMounts: []*ateletpb.VolumeMount{
+							{Name: "home", MountPath: "/workspace"},
+						},
+					},
+				},
+			},
+		},
+		{
+			name: "container without volume mounts has none",
+			template: &atev1alpha1.ActorTemplate{
+				ObjectMeta: metav1.ObjectMeta{Name: "tmpl1", Namespace: "agent-ns"},
+				Spec: atev1alpha1.ActorTemplateSpec{
+					Volumes: []atev1alpha1.Volume{
+						{Name: "home", VolumeSource: atev1alpha1.VolumeSource{HomeDir: &atev1alpha1.HomedirVolumeSource{}}},
+					},
+					Containers: []atev1alpha1.Container{
+						{Name: "main", Image: "main"},
+					},
+				},
+			},
+			want: &ateletpb.WorkloadSpec{
+				Volumes: []*ateletpb.Volume{
+					{
+						Name:   "home",
+						Type:   ateletpb.VolumeType_VOLUME_TYPE_HOMEDIR,
+						Source: &ateletpb.Volume_HomeDir{HomeDir: &ateletpb.HomedirVolume{}},
+					},
+				},
+				Containers: []*ateletpb.Container{{Name: "main", Image: "main"}},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			kubeClient := fake.NewSimpleClientset(tt.secrets...)
+			got, err := workloadSpecFromActorTemplate(context.Background(), kubeClient, nil, tt.template)
+			if tt.wantErrCode != codes.OK {
+				if status.Code(err) != tt.wantErrCode {
+					t.Fatalf("error code = %v, want %v: %v", status.Code(err), tt.wantErrCode, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("workloadSpecFromActorTemplate failed: %v", err)
+			}
+			if diff := cmp.Diff(tt.want, got, protocmp.Transform()); diff != "" {
+				t.Errorf("WorkloadSpec mismatch (-want +got):\n%s", diff)
+			}
+		})
 	}
 }
 

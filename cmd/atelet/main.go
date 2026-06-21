@@ -338,6 +338,7 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 		RunscPath:              runscPathFor(assetPaths),
 		RuntimeAssetPaths:      assetPaths,
 		Spec:                   buildAteomWorkloadSpec(req.GetSpec()),
+		Scope:                  toAteomSnapshotScope(req.GetScope()),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("while calling ateom.CheckpointWorkload: %w", err)
@@ -349,11 +350,11 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 
 	switch req.GetType() {
 	case ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL:
-		if err := s.uploadExternalCheckpoint(ctx, req, checkpointDir, sandboxRec); err != nil {
+		if err := s.uploadExternalCheckpoint(ctx, req, checkpointDir, sandboxRec, req.GetScope() == ateletpb.SnapshotScope_SNAPSHOT_SCOPE_PROCESS, hasHomedirVolumeMount(req.GetSpec())); err != nil {
 			return nil, err
 		}
 	case ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL:
-		if err := s.moveLocalCheckpoint(ctx, req, checkpointDir, sandboxRec); err != nil {
+		if err := s.moveLocalCheckpoint(ctx, req, checkpointDir, sandboxRec, req.GetScope() == ateletpb.SnapshotScope_SNAPSHOT_SCOPE_PROCESS, hasHomedirVolumeMount(req.GetSpec())); err != nil {
 			return nil, err
 		}
 	default:
@@ -367,7 +368,35 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 	return &ateletpb.CheckpointResponse{}, nil
 }
 
-func (s *AteomHerder) moveLocalCheckpoint(ctx context.Context, req *ateletpb.CheckpointRequest, checkpointDir string, rec *sandboxAssetsRecord) error {
+// returns true if at least one of the containers in the workload spec has a homedir volume mount
+func hasHomedirVolumeMount(spec *ateletpb.WorkloadSpec) bool {
+	hdv := make(map[string]bool)
+	for _, v := range spec.GetVolumes() {
+		if v.GetType() == ateletpb.VolumeType_VOLUME_TYPE_HOMEDIR {
+			hdv[v.GetName()] = true
+		}
+	}
+	for _, ctr := range spec.GetContainers() {
+		for _, vm := range ctr.GetVolumeMounts() {
+			if hdv[vm.GetName()] {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func toAteomSnapshotScope(scope ateletpb.SnapshotScope) ateompb.SnapshotScope {
+	// assumption the request already been valdated and scope is in the valid values set
+	switch scope {
+	case ateletpb.SnapshotScope_SNAPSHOT_SCOPE_HOMEDIR:
+		return ateompb.SnapshotScope_SNAPSHOT_SCOPE_HOMEDIR
+	default:
+		return ateompb.SnapshotScope_SNAPSHOT_SCOPE_PROCESS
+	}
+}
+
+func (s *AteomHerder) moveLocalCheckpoint(ctx context.Context, req *ateletpb.CheckpointRequest, checkpointDir string, rec *sandboxAssetsRecord, moveProcessFiles bool, moveHomedirFiles bool) error {
 	localCheckpointPath := filepath.Join(ateompath.LocalCheckpointsDir(req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId()), req.GetLocalConfig().GetSnapshotPrefix())
 	if err := os.MkdirAll(localCheckpointPath, 0o700); err != nil {
 		return fmt.Errorf("while creating local checkpoint directory: %w", err)
@@ -375,14 +404,32 @@ func (s *AteomHerder) moveLocalCheckpoint(ctx context.Context, req *ateletpb.Che
 
 	ns, tmpl := req.GetActorTemplateNamespace(), req.GetActorTemplateName()
 
-	// Move exactly the files ateom reported.
-	for _, fileName := range rec.SnapshotFiles {
-		src := filepath.Join(checkpointDir, fileName)
-		dst := filepath.Join(localCheckpointPath, fileName)
-		recordSnapshotSize(ctx, strings.TrimSuffix(fileName, ".img"), src, ns, tmpl)
+	if moveProcessFiles {
+		// Move exactly the files ateom reported.
+		for _, fileName := range rec.SnapshotFiles {
+			src := filepath.Join(checkpointDir, fileName)
+			dst := filepath.Join(localCheckpointPath, fileName)
+			recordSnapshotSize(ctx, strings.TrimSuffix(fileName, ".img"), src, ns, tmpl)
 
-		if err := os.Rename(src, dst); err != nil {
-			return fmt.Errorf("failed to move %s to %s: %w", src, dst, err)
+			if err := os.Rename(src, dst); err != nil {
+				return fmt.Errorf("failed to move %s to %s: %w", src, dst, err)
+			}
+		}
+	}
+
+	if moveHomedirFiles {
+		// move homedir files
+		homedirCheckpointDir := filepath.Join(checkpointDir, ateompath.HomedirSnapshotsSubfoldderName)
+		homeDirLocaclCheckpointPath := filepath.Join(localCheckpointPath, ateompath.HomedirSnapshotsSubfoldderName)
+		if err := os.MkdirAll(homeDirLocaclCheckpointPath, 0o700); err != nil {
+			return fmt.Errorf("while creating local checkpoint directory: %w", err)
+		}
+		for _, fileName := range []string{"fscheckpoint.json", "multitar.img", "pages.img", "pages_meta.img"} {
+			src := filepath.Join(homedirCheckpointDir, fileName)
+			dst := filepath.Join(homeDirLocaclCheckpointPath, fileName)
+			if err := os.Rename(src, dst); err != nil {
+				return fmt.Errorf("failed to move %s to %s: %w", src, dst, err)
+			}
 		}
 	}
 
@@ -399,25 +446,45 @@ func (s *AteomHerder) moveLocalCheckpoint(ctx context.Context, req *ateletpb.Che
 	return nil
 }
 
-func (s *AteomHerder) uploadExternalCheckpoint(ctx context.Context, req *ateletpb.CheckpointRequest, checkpointDir string, rec *sandboxAssetsRecord) error {
+func (s *AteomHerder) uploadExternalCheckpoint(ctx context.Context, req *ateletpb.CheckpointRequest, checkpointDir string, rec *sandboxAssetsRecord, uploadProcessFiles bool, uploadHomedirFiles bool) error {
 	ns, tmpl := req.GetActorTemplateNamespace(), req.GetActorTemplateName()
 	prefix := strings.TrimSuffix(req.GetExternalConfig().GetSnapshotUriPrefix(), "/")
 
 	// Upload exactly the files ateom reported (each zstd-compressed).
 	g, gCtx := errgroup.WithContext(ctx)
-	for _, fileName := range rec.SnapshotFiles {
-		fileName := fileName
-		local := filepath.Join(checkpointDir, fileName)
-		recordSnapshotSize(ctx, strings.TrimSuffix(fileName, ".img"), local, ns, tmpl)
-		g.Go(func() error {
-			if err := ategcs.SendLocalFileToGCSWithZstd(gCtx, s.gcsClient, prefix+"/"+fileName+".zstd", local); err != nil {
-				return fmt.Errorf("while uploading %s to GCS: %w", fileName, err)
-			}
-			return nil
-		})
+
+	if uploadProcessFiles {
+
+		for _, fileName := range rec.SnapshotFiles {
+			fileName := fileName
+			local := filepath.Join(checkpointDir, fileName)
+			recordSnapshotSize(ctx, strings.TrimSuffix(fileName, ".img"), local, ns, tmpl)
+			g.Go(func() error {
+				if err := ategcs.SendLocalFileToGCSWithZstd(gCtx, s.gcsClient, prefix+"/"+fileName+".zstd", local); err != nil {
+					return fmt.Errorf("while uploading %s to GCS: %w", fileName, err)
+				}
+				return nil
+			})
+		}
+		if err := g.Wait(); err != nil {
+			return err
+		}
 	}
-	if err := g.Wait(); err != nil {
-		return err
+
+	if uploadHomedirFiles {
+		for _, fileName := range []string{"fscheckpoint.json", "multitar.img", "pages.img", "pages_meta.img"} {
+			impPath := filepath.Join(checkpointDir, ateompath.HomedirSnapshotsSubfoldderName, fileName)
+
+			before, _, _ := strings.Cut(fileName, ".")
+			recordSnapshotSize(ctx, before, impPath, ns, tmpl)
+
+			if err := uploadIfExists(ctx, s.gcsClient,
+				fmt.Sprintf("%s/homedir/%s.zstd", prefix, fileName),
+				impPath,
+			); err != nil {
+				return err
+			}
+		}
 	}
 
 	// Pin the sandbox binaries + snapshot file list into a manifest beside the
@@ -465,7 +532,11 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		if err != nil {
 			return nil, fmt.Errorf("while fetching snapshot manifest: %w", err)
 		}
-		if sandboxRec, err = unmarshalSandboxRecord(manifest); err != nil {
+		sandboxRec, err = unmarshalSandboxRecord(manifest)
+		if err != nil {
+			return nil, err
+		}
+		if err := s.downloadExternalCheckpoint(ctx, prefix, checkpointDir, req.GetScope()); err != nil {
 			return nil, err
 		}
 	case ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL:
@@ -475,7 +546,11 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		if err != nil {
 			return nil, fmt.Errorf("while reading local snapshot manifest: %w", err)
 		}
-		if sandboxRec, err = unmarshalSandboxRecord(manifest); err != nil {
+		sandboxRec, err = unmarshalSandboxRecord(manifest)
+		if err != nil {
+			return nil, err
+		}
+		if err := s.copyLocalCheckpoint(ctx, snapshotPrefix, localCheckpointDir, checkpointDir, req.GetScope()); err != nil {
 			return nil, err
 		}
 	default:
@@ -537,6 +612,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		RunscPath:              runscPathFor(assetPaths),
 		RuntimeAssetPaths:      assetPaths,
 		Spec:                   buildAteomWorkloadSpec(req.GetSpec()),
+		Scope:                  toAteomSnapshotScope(req.GetScope()),
 	}); err != nil {
 		return nil, fmt.Errorf("while calling ateom.RestoreWorkload: %w", err)
 	}
@@ -556,18 +632,36 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	return &ateletpb.RestoreResponse{}, nil
 }
 
-func (s *AteomHerder) copyLocalCheckpoint(ctx context.Context, snapshotPrefix string, srcDir, dstDir string, files []string) error {
-	for _, fileName := range files {
-		if ctx.Err() != nil {
-			return fmt.Errorf("context cancelled: %w", ctx.Err())
+func (s *AteomHerder) copyLocalCheckpoint(ctx context.Context, snapshotPrefix string, srcDir, dstDir string, files []string, scope ateletpb.SnapshotScope) error {
+	switch scope {
+	case ateletpb.SnapshotScope_SNAPSHOT_SCOPE_PROCESS:
+		for _, fileName := range files {
+			if ctx.Err() != nil {
+				return fmt.Errorf("context cancelled: %w", ctx.Err())
+			}
+			src := filepath.Join(srcDir, snapshotPrefix, fileName)
+			dst := filepath.Join(dstDir, fileName)
+			if _, err := copyFile(src, dst); err != nil {
+				return fmt.Errorf("failed to copy %s to %s: %w", src, dst, err)
+			}
 		}
-		src := filepath.Join(srcDir, snapshotPrefix, fileName)
-		dst := filepath.Join(dstDir, fileName)
-		if _, err := copyFile(src, dst); err != nil {
-			return fmt.Errorf("failed to copy %s to %s: %w", src, dst, err)
+	case ateletpb.SnapshotScope_SNAPSHOT_SCOPE_HOMEDIR:
+		hdDstDir := filepath.Join(dstDir, ateompath.HomedirSnapshotsSubfoldderName)
+		if err := os.MkdirAll(hdDstDir, 0o700); err != nil {
+			return fmt.Errorf("while creating homedir directory: %w", err)
+		}
+
+		for _, fileName := range []string{"fscheckpoint.json", "multitar.img", "pages.img", "pages_meta.img"} {
+			if ctx.Err() != nil {
+				return fmt.Errorf("context cancelled: %w", ctx.Err())
+			}
+			src := filepath.Join(srcDir, snapshotPrefix, ateompath.HomedirSnapshotsSubfoldderName, fileName)
+			dst := filepath.Join(hdDstDir, fileName)
+			if _, err := copyFile(src, dst); err != nil {
+				return fmt.Errorf("failed to copy %s to %s: %w", src, dst, err)
+			}
 		}
 	}
-
 	return nil
 }
 
@@ -596,19 +690,39 @@ func copyFile(src, dst string) (int64, error) {
 	return nBytes, err
 }
 
-func (s *AteomHerder) downloadExternalCheckpoint(ctx context.Context, snapshotUriPrefix string, dstDir string, files []string) error {
+func (s *AteomHerder) downloadExternalCheckpoint(ctx context.Context, snapshotUriPrefix string, dstDir string, files []string, scope ateletpb.SnapshotScope) error {
 	prefix := strings.TrimSuffix(snapshotUriPrefix, "/")
 	g, gCtx := errgroup.WithContext(ctx)
-	for _, fileName := range files {
-		fileName := fileName
-		local := filepath.Join(dstDir, fileName)
-		g.Go(func() error {
-			if err := ategcs.FetchLocalFileFromGCSWithZstd(gCtx, s.gcsClient, prefix+"/"+fileName+".zstd", local); err != nil {
-				return fmt.Errorf("while downloading %s from GCS: %w", fileName, err)
-			}
-			return nil
-		})
+
+	switch scope {
+	case ateletpb.SnapshotScope_SNAPSHOT_SCOPE_PROCESS:
+		g, gCtx := errgroup.WithContext(ctx)
+		for _, fileName := range files {
+			fileName := fileName
+			local := filepath.Join(dstDir, fileName)
+			g.Go(func() error {
+				if err := ategcs.FetchLocalFileFromGCSWithZstd(gCtx, s.gcsClient, prefix+"/"+fileName+".zstd", local); err != nil {
+					return fmt.Errorf("while downloading %s from GCS: %w", fileName, err)
+				}
+				return nil
+			})
+		}
+		if err := g.Wait(); err != nil {
+			return err
+		}
+	case ateletpb.SnapshotScope_SNAPSHOT_SCOPE_HOMEDIR:
+		for _, fileName := range []string{"fscheckpoint.json", "multitar.img", "pages.img", "pages_meta.img"} {
+			remote := fmt.Sprintf("%s/%s/%s.zstd", prefix, ateompath.HomedirSnapshotsSubfoldderName, fileName)
+			g.Go(func() error {
+				local := filepath.Join(dstDir, ateompath.HomedirSnapshotsSubfoldderName, fileName)
+				if err := ategcs.FetchLocalFileFromGCSWithZstd(gCtx, s.gcsClient, remote, local); err != nil {
+					return fmt.Errorf("while downloading %s from GCS: %w", remote, err)
+				}
+				return nil
+			})
+		}
 	}
+
 	if err := g.Wait(); err != nil {
 		return err
 	}
@@ -637,10 +751,36 @@ func (s *AteomHerder) prepareOCIBundles(
 		return fmt.Errorf("while writing actor identity file: %w", err)
 	}
 
+	hdVolumes := make(map[string]bool)
+	// make directories for all homedir volumes
+	for _, vol := range spec.GetVolumes() {
+		if vol.GetType() == ateletpb.VolumeType_VOLUME_TYPE_HOMEDIR {
+			hdVolumes[vol.GetName()] = true
+			volPath := ateompath.HomedirVolumeMountPoint(actorTemplateNamespace, actorTemplateName, actorID, vol.GetName())
+			if err := os.MkdirAll(volPath, 0o700); err != nil {
+				return fmt.Errorf("while creating %q: %w", volPath, err)
+			}
+		}
+	}
+
 	g, gCtx := errgroup.WithContext(ctx)
 
 	// Pause container.
 	g.Go(func() error {
+		annotations := map[string]string{
+			"io.kubernetes.cri.container-type": "sandbox",
+			"io.kubernetes.cri.container-name": "pause",
+		}
+		// add anotation for every homedir volume
+		// TODO(dberkov) needs to revist this logic once gVisor will support multiple homedir volumes.
+		for _, vol := range spec.GetVolumes() {
+			if vol.GetType() == ateletpb.VolumeType_VOLUME_TYPE_HOMEDIR {
+				annotations["dev.gvisor.spec.mount.homedir.type"] = "bind"
+				annotations["dev.gvisor.spec.mount.homedir.share"] = "container"
+				annotations["dev.gvisor.spec.mount.homedir.source"] = ateompath.HomedirVolumeMountPoint(actorTemplateNamespace, actorTemplateName, actorID, vol.GetName())
+			}
+		}
+
 		if err := prepareOCIDirectory(
 			gCtx,
 			s.pullCache,
@@ -649,12 +789,10 @@ func (s *AteomHerder) prepareOCIBundles(
 			spec.GetPauseImage(),
 			[]string{"/pause"},
 			nil,
-			map[string]string{
-				"io.kubernetes.cri.container-type": "sandbox",
-				"io.kubernetes.cri.container-name": "pause",
-			},
+			annotations,
 			netnsPath,
 			"", // pause is sandbox infra; it gets no actor identity mount.
+			nil,
 		); err != nil {
 			return fmt.Errorf("while creating pause OCI bundle: %w", err)
 		}
@@ -667,6 +805,12 @@ func (s *AteomHerder) prepareOCIBundles(
 		var envs []string
 		for _, env := range ctr.GetEnv() {
 			envs = append(envs, fmt.Sprintf("%s=%s", env.GetName(), env.GetValue()))
+		}
+		var hdMounts []*ateletpb.VolumeMount
+		for _, vm := range ctr.GetVolumeMounts() {
+			if hdVolumes[vm.GetName()] {
+				hdMounts = append(hdMounts, vm)
+			}
 		}
 		g.Go(func() error {
 			if err := prepareOCIDirectory(
@@ -684,6 +828,7 @@ func (s *AteomHerder) prepareOCIBundles(
 				},
 				netnsPath,
 				identityDir,
+				hdMounts,
 			); err != nil {
 				return fmt.Errorf("while creating %q OCI bundle: %w", ctr.GetName(), err)
 			}
@@ -709,9 +854,16 @@ func (s *AteomHerder) dialAteom(ctx context.Context, targetAteomUid string) (ate
 func buildAteomWorkloadSpec(spec *ateletpb.WorkloadSpec) *ateompb.WorkloadSpec {
 	out := &ateompb.WorkloadSpec{}
 	for _, ctr := range spec.GetContainers() {
+		var hdMountPaths []string
+		for _, vm := range ctr.GetVolumeMounts() {
+			if hdVolumes[vm.GetName()] {
+				hdMountPaths = append(hdMountPaths, vm.GetMountPath())
+			}
+		}
 		out.Containers = append(out.Containers, &ateompb.Container{
-			Name:   ctr.GetName(),
-			Readyz: toAteomReadyz(ctr.GetReadyz()),
+			Name:           ctr.GetName(),
+			HomeDirVolumes: hdMountPaths,
+			Readyz:         toAteomReadyz(ctr.GetReadyz()),
 		})
 	}
 	return out
@@ -730,6 +882,19 @@ func toAteomReadyz(in *ateletpb.Readyz) *ateompb.Readyz {
 			Path: hg.GetPath(),
 			Port: hg.GetPort(),
 		}
+	}
+	return out
+}
+
+// uploadIfExists uploads a local file to GCS (zstd-compressed) only if
+// the file is present. Missing files are silently skipped — used for
+// optional checkpoint side-files (pages.img, pages_meta.img).
+func uploadIfExists(ctx context.Context, gcs ategcs.ObjectStorage, remoteURI, localPath string) error {
+	if _, err := os.Stat(localPath); err != nil {
+		return nil
+	}
+	if err := ategcs.SendLocalFileToGCSWithZstd(ctx, gcs, remoteURI, localPath); err != nil {
+		return fmt.Errorf("while uploading %s to GCS: %w", filepath.Base(localPath), err)
 	}
 	return out
 }
@@ -776,6 +941,11 @@ func validateCheckpointRequest(req *ateletpb.CheckpointRequest) error {
 	if err := validateActorRequest(req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId(), req.GetTargetAteomUid(), req.GetSpec()); err != nil {
 		return err
 	}
+
+	if err := validateSnapshotScope(req.GetScope()); err != nil {
+		return err
+	}
+
 	switch req.GetType() {
 	case ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL:
 		if err := resources.ValidateSnapshotURIPrefix(req.GetExternalConfig().GetSnapshotUriPrefix()); err != nil {
@@ -795,6 +965,11 @@ func validateRestoreRequest(req *ateletpb.RestoreRequest) error {
 	if err := validateActorRequest(req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId(), req.GetTargetAteomUid(), req.GetSpec()); err != nil {
 		return err
 	}
+
+	if err := validateSnapshotScope(req.GetScope()); err != nil {
+		return err
+	}
+
 	switch req.GetType() {
 	case ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL:
 		if err := resources.ValidateSnapshotURIPrefix(req.GetExternalConfig().GetSnapshotUriPrefix()); err != nil {
@@ -808,6 +983,18 @@ func validateRestoreRequest(req *ateletpb.RestoreRequest) error {
 		return fmt.Errorf("invalid checkpoint type: %v", req.GetType())
 	}
 	return nil
+}
+
+func validateSnapshotScope(scope ateletpb.SnapshotScope) error {
+	switch scope {
+	case ateletpb.SnapshotScope_SNAPSHOT_SCOPE_PROCESS,
+		ateletpb.SnapshotScope_SNAPSHOT_SCOPE_HOMEDIR:
+		return nil
+	case ateletpb.SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED:
+		return fmt.Errorf("snapshot scope must be non-zero")
+	default:
+		return fmt.Errorf("invalid snapshot scope: %v", scope)
+	}
 }
 
 // validateActorRequest is the shared core for the fields common to all three
@@ -908,6 +1095,11 @@ func resetActorDirs(actorTemplateNamespace, actorTemplateName, actorID string) e
 		return fmt.Errorf("while creating restore-state dir: %w", err)
 	}
 
+	restoreStateHomeDir := filepath.Join(restoreStateDir, ateompath.HomedirSnapshotsSubfoldderName)
+	if err := os.MkdirAll(restoreStateHomeDir, 0o700); err != nil {
+		return fmt.Errorf("while creating restore-state homedir dir: %w", err)
+	}
+
 	// World-readable (0o755): bind-mounted into the actor, whose workload
 	// reads it through the gofer.
 	identityDir := ateompath.ActorIdentityDirPath(actorTemplateNamespace, actorTemplateName, actorID)
@@ -916,6 +1108,14 @@ func resetActorDirs(actorTemplateNamespace, actorTemplateName, actorID string) e
 	}
 	if err := os.MkdirAll(identityDir, 0o755); err != nil {
 		return fmt.Errorf("while creating actor identity dir: %w", err)
+	}
+
+	homedirVolumesMountDir := ateompath.HommedirVolumeMountsDir(actorTemplateNamespace, actorTemplateName, actorID)
+	if err := os.RemoveAll(homedirVolumesMountDir); err != nil {
+		return fmt.Errorf("while deleting homedir volumes mount dir: %w", err)
+	}
+	if err := os.MkdirAll(homedirVolumesMountDir, 0o755); err != nil {
+		return fmt.Errorf("while creating homedir volumes mount dir: %w", err)
 	}
 
 	return nil
