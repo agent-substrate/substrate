@@ -36,7 +36,7 @@ if os.environ.get("LOCUST_NO_GLUTTON_USER") != "1":
         host = "api.ate-system.svc.cluster.local:443"
 
         @task
-        def noop(self):
+        def noop(self) -> None:
             # Unreached under normal operation: the Python worker container
             # does not load this file (LOCUST_NO_GLUTTON_USER=1). Body is
             # required because locust validates that every User has at least

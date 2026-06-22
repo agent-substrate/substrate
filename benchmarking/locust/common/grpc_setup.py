@@ -15,7 +15,7 @@
 _initialized = False
 
 
-def init_grpc_gevent():
+def init_grpc_gevent() -> None:
     """Patch gRPC to cooperate with the gevent hub.
 
     Locust monkey-patches the stdlib for gevent on import, but gRPC's C

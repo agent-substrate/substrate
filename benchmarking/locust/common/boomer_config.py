@@ -28,8 +28,11 @@ Keep _FLAGS aligned with internal/boomer/dynconfig.payload.
 import argparse
 import json
 import logging
+from collections.abc import Iterable
 
 from locust import events
+from locust.argument_parser import LocustArgumentParser
+from locust.env import Environment
 
 logger = logging.getLogger(__name__)
 
@@ -41,11 +44,11 @@ _FLAGS = ("--trace-probability", "--min-wait-time", "--max-wait-time")
 _LOCUST_DEFAULTS = {"--min-wait-time": 0.0, "--max-wait-time": 0.5}
 
 
-def _attr(flag):
+def _attr(flag: str) -> str:
     return flag.lstrip("-").replace("-", "_")
 
 
-def _add_args(parser, locust_aware):
+def _add_args(parser: argparse.ArgumentParser, locust_aware: bool) -> None:
     """Add the boomer flags to `parser`. Locust's configargparse accepts
     env_var/include_in_web_ui; stdlib argparse doesn't — gate via
     locust_aware."""
@@ -59,7 +62,7 @@ def _add_args(parser, locust_aware):
         parser.add_argument(flag, **kwargs)
 
 
-def build_config_json(argv):
+def build_config_json(argv: Iterable[str]) -> str:
     """Parse `argv` and return the JSON config payload for boomer-glutton's
     --config-json flag. Unknown args are ignored; unset flags are omitted so
     boomer falls back to its own defaults."""
@@ -74,24 +77,24 @@ def build_config_json(argv):
     return json.dumps(cfg) if cfg else ""
 
 
-def init_boomer_config():
+def init_boomer_config() -> None:
     """Register boomer-tunable CLI flags with locust's parser and expose
     them at /boomer-config so boomer-Go workers can fetch them at runtime.
     Idempotent within a single locust process via locust's event system."""
 
     @events.init_command_line_parser.add_listener
-    def on_init_parser(parser):
+    def on_init_parser(parser: LocustArgumentParser) -> None:
         _add_args(parser, locust_aware=True)
 
     @events.init.add_listener
-    def on_init(environment, **kwargs):
+    def on_init(environment: Environment, **kwargs) -> None:
         if environment.web_ui is None:
             # Headless / worker process: no Flask app to register against.
             # runner.py forwards the same flags to boomer via --config-json.
             return
 
         @environment.web_ui.app.route("/boomer-config")
-        def boomer_config():
+        def boomer_config() -> dict[str, float | None]:
             opts = environment.parsed_options
             return {_attr(f): getattr(opts, _attr(f), None) for f in _FLAGS}
 

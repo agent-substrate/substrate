@@ -36,6 +36,7 @@ import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import IO, TextIO
 
 from common.boomer_config import build_config_json
 
@@ -49,16 +50,16 @@ TRACE_COLUMNS = ("time", "name", "duration_ms", "latency_source", "trace_id", "e
 
 # Python locust per-trace log line. Emitted by common/grpc_tracing.py and
 # tests/counter_demo.py as:
-#   Traced {name}[ (failed)]: trace_id={32hex}, duration={float}ms ({src})
+#   Traced {name}[ (failed)]: trace_id={32hex}, duration_ms={float} ({src})
 PY_TRACE_RE = re.compile(
     r"Traced\s+(?P<name>\S+)(?:\s+\(failed\))?:\s*"
     r"trace_id=(?P<trace_id>[0-9a-f]{32}),\s*"
-    r"duration=(?P<duration>[0-9.]+)ms\s*"
+    r"duration_ms=(?P<duration>[0-9.]+)\s+"
     r"\((?P<source>\w+)\)"
 )
 
 
-def parse_args():
+def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("-f", required=True, dest="file", help="Locust test file (-f)")
     p.add_argument("-t", required=True, dest="duration", help="Run duration (-t)")
@@ -79,19 +80,19 @@ def parse_args():
     return args
 
 
-def needs_boomer(test_file):
+def needs_boomer(test_file: str) -> bool:
     """Return True if the test file is the glutton stub; the real GluttonUser
     implementation lives in the boomer-glutton binary."""
     return os.path.basename(test_file) == "glutton.py"
 
 
-def tee(logs, msg):
+def tee(logs: TextIO, msg: str) -> None:
     print(msg, flush=True)
     logs.write(msg + "\n")
     logs.flush()
 
 
-def log_run_config(args, run_id, work_dir, logs):
+def log_run_config(args: argparse.Namespace, run_id: str, work_dir: Path, logs: TextIO) -> None:
     """Emit a structured summary of the test config at the top of every run
     so anyone reading logs.txt later can see exactly what was executed
     without cross-referencing tests.yaml + the orchestrator's invocation."""
@@ -113,7 +114,7 @@ def log_run_config(args, run_id, work_dir, logs):
         tee(logs, line)
 
 
-def extract_trace_record(prefix, line):
+def extract_trace_record(prefix: str, line: str) -> dict[str, str] | None:
     """Parse `line` into a trace record dict (TRACE_COLUMNS keys) if it
     describes a sampled span, else return None. Handles boomer slog JSON
     lines (msg starts with 'traced span') and Python locust 'Traced ...:'
@@ -151,7 +152,7 @@ def extract_trace_record(prefix, line):
     }
 
 
-def pump_stream(prefix, stream, logs, traces):
+def pump_stream(prefix: str, stream: IO[str], logs: TextIO, traces: TextIO) -> None:
     """Forward each line of `stream` to stdout + logs (with a per-source
     prefix) and append any extracted trace records to `traces` as TSV rows."""
     for line in stream:
@@ -167,7 +168,7 @@ def pump_stream(prefix, stream, logs, traces):
             traces.flush()
 
 
-def run_test(args, csv_prefix, logs, traces):
+def run_test(args: argparse.Namespace, csv_prefix: Path, logs: TextIO, traces: TextIO) -> int:
     """Run locust (and boomer, when needed). Returns locust's exit code.
 
     Stdout from each subprocess is forwarded to logs.txt with a `[locust]` /
@@ -252,7 +253,7 @@ def run_test(args, csv_prefix, logs, traces):
     return locust_exit
 
 
-def stats_to_jsonl(stats_csv, jsonl_path, timestamp, tag, test_name):
+def stats_to_jsonl(stats_csv: Path, jsonl_path: Path, timestamp: str, tag: str, test_name: str) -> int:
     rows_written = 0
     with open(stats_csv) as f, open(jsonl_path, "w") as out:
         reader = csv.DictReader(f)
@@ -285,7 +286,7 @@ def stats_to_jsonl(stats_csv, jsonl_path, timestamp, tag, test_name):
     return rows_written
 
 
-def upload_to_gcs(local_path, gcs_uri):
+def upload_to_gcs(local_path: Path, gcs_uri: str) -> None:
     # Imported here so non-GCS use doesn't require google-cloud-storage.
     from google.cloud import storage
 
@@ -295,7 +296,7 @@ def upload_to_gcs(local_path, gcs_uri):
     )
 
 
-def upload(src, dest):
+def upload(src: Path, dest: str) -> None:
     if dest.startswith("gs://"):
         upload_to_gcs(src, dest)
     else:
@@ -304,7 +305,7 @@ def upload(src, dest):
         shutil.copy(src, dest_path)
 
 
-def main():
+def main() -> None:
     args = parse_args()
     now = datetime.now(timezone.utc)
     # Path-safe timestamp for filesystem

@@ -14,9 +14,11 @@
 
 import logging
 import time
+from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 
 import gevent
+import grpc
 from locust import events
 from opentelemetry.propagate import inject
 
@@ -41,12 +43,12 @@ class TracedMetadata(list):
     trailer and reports that instead of the client-measured duration.
     """
 
-    def __init__(self, items):
+    def __init__(self, items: Iterable[tuple[str, str]]) -> None:
         super().__init__(items)
-        self.call = None
+        self.call: grpc.Call | None = None
 
 
-def _read_server_elapsed_ms(call):
+def _read_server_elapsed_ms(call: grpc.Call | None) -> float | None:
     """Return server-reported handler duration in ms, or None if absent."""
     if call is None:
         return None
@@ -64,7 +66,7 @@ def _read_server_elapsed_ms(call):
 
 
 @contextmanager
-def traced_grpc(name, user_class):
+def traced_grpc(name: str, user_class: str) -> Iterator[TracedMetadata]:
     """Wrap a gRPC unary call with tracing + locust reporting.
 
     Yields a TracedMetadata (a list subclass) with W3C trace context already
@@ -116,5 +118,5 @@ def traced_grpc(name, user_class):
                 gevent.spawn(
                     logger.info,
                     f"Traced {name}{suffix}: trace_id={ctx.trace_id:032x}, "
-                    f"duration={reported_ms:.2f}ms ({source})",
+                    f"duration_ms={reported_ms:.2f} ({source})",
                 )

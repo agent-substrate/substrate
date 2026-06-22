@@ -144,7 +144,7 @@ class CounterUser(User):
                     user_class=self.__class__.__name__,
                 )
                 if span.get_span_context().trace_flags.sampled:
-                    logger.info(f"Traced RunCounter: trace_id={span.get_span_context().trace_id:032x}, duration={duration:.2f}ms")
+                    logger.info(f"Traced RunCounter: trace_id={span.get_span_context().trace_id:032x}, duration_ms={duration:.2f} (client)")
             except Exception as e:
                 duration = (time.time() - start_time) * 1000
                 events.request.fire(
@@ -157,7 +157,7 @@ class CounterUser(User):
                 )
                 logger.error(f"RunCounter failed: {e}")
                 if span.get_span_context().trace_flags.sampled:
-                    logger.info(f"Traced RunCounter (failed): trace_id={span.get_span_context().trace_id:032x}, duration={duration:.2f}ms")
+                    logger.info(f"Traced RunCounter (failed): trace_id={span.get_span_context().trace_id:032x}, duration_ms={duration:.2f} (client)")
 
         # 3. SuspendActor (gRPC). Swallow as above; event already reported.
         try:

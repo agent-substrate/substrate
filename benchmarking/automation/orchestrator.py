@@ -30,7 +30,9 @@ import subprocess
 import sys
 import time
 import uuid
+from collections.abc import Iterable
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -47,7 +49,7 @@ NAMESPACE = "benchmarking"
 _ORIG_ENV = dict(os.environ)
 
 
-def parse_args():
+def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--repo", required=True, help="Git URL of substrate repo to clone")
     p.add_argument("--branch", default="main", help="Branch to benchmark")
@@ -64,17 +66,17 @@ def parse_args():
     return p.parse_args()
 
 
-def run(cmd, **kwargs):
+def run(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
     print(f"$ {' '.join(shlex.quote(c) for c in cmd)}", flush=True)
     return subprocess.run(cmd, check=True, **kwargs)
 
 
-def run_no_check(cmd, **kwargs):
+def run_no_check(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
     print(f"$ {' '.join(shlex.quote(c) for c in cmd)}", flush=True)
     return subprocess.run(cmd, check=False, **kwargs)
 
 
-def source_env(path):
+def source_env(path: str) -> None:
     result = subprocess.run(
         ["bash", "-c", f'set -a; source "{path}"; env'],
         check=True,
@@ -88,7 +90,7 @@ def source_env(path):
         os.environ[k] = v
 
 
-def apply_target_cluster(target_cluster):
+def apply_target_cluster(target_cluster: str) -> None:
     """Copy /etc/orchestrator/target-clusters/<name>.sh into the cloned
     substrate repo as .ate-dev-env.sh (so install-ate.sh / deploy.sh source
     it) and merge it into this process's env (so the orchestrator's own
@@ -112,13 +114,13 @@ def apply_target_cluster(target_cluster):
             )
 
 
-def clear_target_cluster():
+def clear_target_cluster() -> None:
     dst = Path(SUBSTRATE_DIR) / ENV_FILE_NAME
     if dst.exists():
         dst.unlink()
 
 
-def gcloud_setup_for_target_cluster():
+def gcloud_setup_for_target_cluster() -> None:
     """Per-target-cluster gcloud setup: configure docker creds for the new
     registry and switch kubectl to the new cluster."""
     run(
@@ -145,7 +147,7 @@ def gcloud_setup_for_target_cluster():
     )
 
 
-def build_locust_image(commit):
+def build_locust_image(commit: str) -> str:
     """Build & push the locust image to the current config's registry. The
     image must live in the same project as the test cluster so the runner
     Job can pull it. Returns the fully-qualified image reference."""
@@ -165,7 +167,7 @@ def build_locust_image(commit):
     return image
 
 
-def wait_for_docker(timeout=120):
+def wait_for_docker(timeout: int = 120) -> None:
     print("Waiting for DIND sidecar...", flush=True)
     start = time.time()
     while time.time() - start < timeout:
@@ -177,15 +179,15 @@ def wait_for_docker(timeout=120):
     raise RuntimeError("DIND sidecar did not become ready within timeout")
 
 
-def registry_host(ko_docker_repo):
+def registry_host(ko_docker_repo: str) -> str:
     return ko_docker_repo.split("/", 1)[0]
 
 
-def sanitize(name):
+def sanitize(name: str) -> str:
     return re.sub(r"[^a-z0-9-]+", "-", name.lower()).strip("-")
 
 
-def render_template(path, subs, extra_args=()):
+def render_template(path: str, subs: dict[str, Any], extra_args: Iterable[str] = ()) -> str:
     text = Path(path).read_text()
     for k, v in subs.items():
         text = text.replace("${" + k + "}", str(v))
@@ -200,7 +202,7 @@ def render_template(path, subs, extra_args=()):
     return yaml.safe_dump_all(docs)
 
 
-def parse_duration_seconds(s):
+def parse_duration_seconds(s: str) -> int:
     m = re.fullmatch(r"(\d+)\s*([smh]?)", s.strip())
     if not m:
         raise ValueError(f"unrecognized duration: {s}")
@@ -209,7 +211,7 @@ def parse_duration_seconds(s):
     return n * {"s": 1, "m": 60, "h": 3600}[unit]
 
 
-def wait_for_no_active_runners(timeout=300):
+def wait_for_no_active_runners(timeout: int = 300) -> None:
     start = time.time()
     while time.time() - start < timeout:
         r = subprocess.run(
@@ -248,7 +250,7 @@ def wait_for_no_active_runners(timeout=300):
     )
 
 
-def wait_for_job(name, timeout_seconds):
+def wait_for_job(name: str, timeout_seconds: int) -> str:
     start = time.time()
     while time.time() - start < timeout_seconds:
         r = subprocess.run(
@@ -270,15 +272,15 @@ def wait_for_job(name, timeout_seconds):
     return "timeout"
 
 
-def deploy_substrate():
+def deploy_substrate() -> None:
     run(["hack/install-ate.sh", "--deploy-ate-system"])
 
 
-def teardown_substrate():
+def teardown_substrate() -> None:
     run_no_check(["hack/install-ate.sh", "--delete-ate-system"])
 
 
-def deploy_workloads(worker_count=1):
+def deploy_workloads(worker_count: int = 1) -> None:
     run(
         [
             "benchmarking/workloads/deploy.sh",
@@ -302,11 +304,11 @@ def deploy_workloads(worker_count=1):
     )
 
 
-def teardown_workloads():
+def teardown_workloads() -> None:
     run_no_check(["benchmarking/workloads/deploy.sh", "--delete"])
 
 
-def run_test(test, image, dest, commit):
+def run_test(test: dict[str, Any], image: str, dest: str, commit: str) -> str:
     name = test["name"]
     job_name = f"runner-{sanitize(name)}-{commit[:7]}-{uuid.uuid4().hex[:6]}"
     subs = {
@@ -335,7 +337,7 @@ def run_test(test, image, dest, commit):
     return result
 
 
-def main():
+def main() -> None:
     args = parse_args()
 
     # Config-independent setup: DIND + clone the substrate branch once.
