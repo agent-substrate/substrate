@@ -89,7 +89,7 @@ func main() {
 	defer serverboot.ShutdownProvider("MeterProvider", mp.Shutdown)
 
 	if err := os.MkdirAll(*dataDir, 0o700); err != nil {
-		serverboot.Fatal(ctx, "Failed to create data directory", err)
+		serverboot.Fatal(ctx, "Failed to create data directory", fmt.Errorf("%s: %w", *dataDir, err))
 	}
 
 	svc, err := newGluttonService(*dataDir)
@@ -100,7 +100,7 @@ func main() {
 
 	lis, err := net.Listen("tcp", *listenAddr)
 	if err != nil {
-		serverboot.Fatal(ctx, "Failed to start listener", err)
+		serverboot.Fatal(ctx, "Failed to start listener", fmt.Errorf("%s: %w", *listenAddr, err))
 	}
 
 	srv := grpc.NewServer(
@@ -249,6 +249,8 @@ func (s *gluttonService) Close() {
 	}
 }
 
+// Write to RAM, either overwriting previously-used RAM or allocating additional RAM
+// per request instructions. Data written will be random bytes.
 func (s *gluttonService) WriteRAM(ctx context.Context, req *glutton.WriteRAMRequest) (*glutton.WriteRAMResponse, error) {
 	if req.GetKey() == "" {
 		return nil, status.Error(codes.InvalidArgument, "key is required")
@@ -287,6 +289,7 @@ func (s *gluttonService) WriteRAM(ctx context.Context, req *glutton.WriteRAMRequ
 	return &glutton.WriteRAMResponse{}, nil
 }
 
+// Write to disk using the specified mode. Data written will be random bytes.
 func (s *gluttonService) WriteDisk(ctx context.Context, req *glutton.WriteDiskRequest) (*glutton.WriteDiskResponse, error) {
 	if !diskKeyRE.MatchString(req.GetKey()) {
 		return nil, status.Errorf(codes.InvalidArgument, "key %q must match %s", req.GetKey(), diskKeyRE)
@@ -322,6 +325,9 @@ func (s *gluttonService) WriteDisk(ctx context.Context, req *glutton.WriteDiskRe
 	return &glutton.WriteDiskResponse{}, nil
 }
 
+// Make sure it has the specified number of file descriptors open. It will open or
+// close file descriptors to hit the desired count (note this count is in addition to the other
+// FDs needed to run the process).
 func (s *gluttonService) OpenFD(_ context.Context, req *glutton.OpenFDRequest) (*glutton.OpenFDResponse, error) {
 	if req.GetCount() < 0 {
 		return nil, status.Error(codes.InvalidArgument, "count must be non-negative")
@@ -349,11 +355,14 @@ func (s *gluttonService) OpenFD(_ context.Context, req *glutton.OpenFDRequest) (
 	return &glutton.OpenFDResponse{}, nil
 }
 
+// Receive a ping request, echoing the same response back.
 func (s *gluttonService) Ping(ctx context.Context, req *glutton.PingRequest) (*glutton.PingResponse, error) {
 	s.pingsReceived.Add(ctx, 1)
 	return &glutton.PingResponse{Message: req.GetMessage()}, nil
 }
 
+// Sends network traffic to a peer glutton. Messages will be sent
+// on regular intervals separated by delay_ms.
 func (s *gluttonService) Gossip(_ context.Context, req *glutton.GossipRequest) (*glutton.GossipResponse, error) {
 	want := make(map[string]*glutton.Peer, len(req.GetPeers()))
 	for _, p := range req.GetPeers() {

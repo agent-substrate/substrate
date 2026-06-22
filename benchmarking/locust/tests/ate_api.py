@@ -45,7 +45,7 @@ class AteAPIUser(User):
 
     host = "api.ate-system.svc.cluster.local:443"
 
-    def on_start(self):
+    def on_start(self) -> None:
         update_user_count(1, self.__class__.__name__)
 
         # Setup gRPC
@@ -70,7 +70,7 @@ class AteAPIUser(User):
         except Exception as e:
             print(f"Failed to create actor: {e}")
 
-    def on_stop(self):
+    def on_stop(self) -> None:
         update_user_count(-1, self.__class__.__name__)
         try:
             self.stub.SuspendActor(
@@ -81,7 +81,7 @@ class AteAPIUser(User):
         self.channel.close()
 
     @task
-    def invoke_target(self):
+    def invoke_target(self) -> None:
         # GetActor
         start_time = time.time()
         with tracer.start_as_current_span("GetActor") as span:

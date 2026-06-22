@@ -55,9 +55,10 @@ class GluttonUser(User):
     api_host = "api.ate-system.svc.cluster.local:443"
     template_name = "glutton"
 
-    def on_start(self):
+    def on_start(self) -> None:
         update_user_count(1, self.__class__.__name__)
 
+        # Replace protocol prefix because gRPC does not use it.
         target = self.api_host.replace("http://", "").replace("https://", "")
         with open("/run/servicedns-ca/ca.crt", "rb") as f:
             ca_cert = f.read()
@@ -114,7 +115,7 @@ class GluttonUser(User):
         self.glutton_channel = grpc.insecure_channel(f"{actor_ip}:{GLUTTON_PORT}")
         self.glutton_stub = glutton_pb2_grpc.GluttonStub(self.glutton_channel)
 
-    def on_stop(self):
+    def on_stop(self) -> None:
         update_user_count(-1, self.__class__.__name__)
         if self.glutton_channel is not None:
             try:
@@ -124,7 +125,7 @@ class GluttonUser(User):
         self._teardown_actor()
         self.api_channel.close()
 
-    def _teardown_actor(self):
+    def _teardown_actor(self) -> None:
         try:
             self.api_stub.SuspendActor(
                 ateapi_pb2.SuspendActorRequest(actor_id=self.actor_id)
@@ -143,7 +144,7 @@ class GluttonUser(User):
             )
 
     @task
-    def ping(self):
+    def ping(self) -> None:
         if self.glutton_stub is None:
             return
 
@@ -158,7 +159,7 @@ class GluttonUser(User):
                     glutton_pb2.PingRequest(message=msg),
                     metadata=metadata,
                 )
-                duration = (time.time() - start_time) * 1000
+                duration_ms = (time.time() - start_time) * 1000
                 if resp.message != msg:
                     raise RuntimeError(
                         f"Ping echo mismatch: sent={msg!r}, recv={resp.message!r}"
@@ -166,7 +167,7 @@ class GluttonUser(User):
                 events.request.fire(
                     request_type="grpc",
                     name="GluttonPing",
-                    response_time=duration,
+                    response_time=duration_ms,
                     response_length=len(resp.message),
                     exception=None,
                     user_class=self.__class__.__name__,
@@ -174,14 +175,14 @@ class GluttonUser(User):
                 if span.get_span_context().trace_flags.sampled:
                     logger.info(
                         f"Traced GluttonPing: trace_id={span.get_span_context().trace_id:032x}, "
-                        f"duration={duration:.2f}ms"
+                        f"duration={duration_ms:.2f}ms"
                     )
             except Exception as e:
-                duration = (time.time() - start_time) * 1000
+                duration_ms = (time.time() - start_time) * 1000
                 events.request.fire(
                     request_type="grpc",
                     name="GluttonPing",
-                    response_time=duration,
+                    response_time=duration_ms,
                     response_length=0,
                     exception=e,
                     user_class=self.__class__.__name__,
@@ -189,5 +190,5 @@ class GluttonUser(User):
                 if span.get_span_context().trace_flags.sampled:
                     logger.info(
                         f"Traced GluttonPing (failed): trace_id={span.get_span_context().trace_id:032x}, "
-                        f"duration={duration:.2f}ms"
+                        f"duration={duration_ms:.2f}ms"
                     )
