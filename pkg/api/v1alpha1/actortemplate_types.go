@@ -34,17 +34,37 @@ const (
 type DurableDirVolumeSource struct {
 }
 
+// Represents a storage volume declared in the assigned WorkerPool's
+// storageVolumes. The actor references it by name; it cannot request storage
+// the pool does not provide.
+type WorkerPoolStorageVolumeSource struct {
+	// name of the WorkerPool storageVolume to mount. Must match a volume
+	// declared in the assigned WorkerPool's storageVolumes field.
+	//
+	// +required
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:XValidation:rule="!format.dns1123Label().validate(self).hasValue()",message="Name must be a valid DNS label"
+	Name string `json:"name" protobuf:"bytes,1,opt,name=name"`
+}
+
 // Represents the source of a volume to mount.
 // Exactly one of its members must be specified.
 //
 // When adding a new source type, list it in the ExactlyOneOf marker below.
 //
-// +kubebuilder:validation:ExactlyOneOf={durableDir}
+// +kubebuilder:validation:ExactlyOneOf={durableDir,workerPoolStorage}
 type VolumeSource struct {
 	// durableDir represents a durable directory on rootfs that persists across
 	// resumes and participates in snapshots.
 	// +optional
 	DurableDir *DurableDirVolumeSource `json:"durableDir,omitempty" protobuf:"bytes,2,opt,name=durableDir"`
+
+	// workerPoolStorage references a storage volume declared in the assigned
+	// WorkerPool's storageVolumes (NFS, PVC, or HostPath). Unlike durableDir,
+	// its contents are external shared storage and are not captured in
+	// snapshots.
+	// +optional
+	WorkerPoolStorage *WorkerPoolStorageVolumeSource `json:"workerPoolStorage,omitempty" protobuf:"bytes,3,opt,name=workerPoolStorage"`
 }
 
 type Volume struct {
@@ -75,6 +95,23 @@ type VolumeMount struct {
 	// +kubebuilder:validation:MaxLength=4096
 	// +kubebuilder:validation:XValidation:rule="self.startsWith('/') && size(self) > 1 && !self.endsWith('/') && !self.contains('//') && !self.contains(':') && !self.matches('[\\x00-\\x1f\\x7f]') && !self.matches('(^|/)[.][.]?(/|$)')",message="MountPath must be a clean absolute Unix path: must start with '/', not be '/', and contain no ':', '..', '.', '//', trailing '/', or control characters"
 	MountPath string `json:"mountPath" protobuf:"bytes,3,opt,name=mountPath"`
+
+	// readOnly mounts the volume read-only inside the container. Ignored for
+	// DurableDir volumes, which are always writable.
+	//
+	// +optional
+	ReadOnly bool `json:"readOnly,omitempty" protobuf:"varint,4,opt,name=readOnly"`
+
+	// subPath mounts a sub-directory of the volume instead of its root. The
+	// literal "${ACTOR_ID}" is replaced with the actor's ID at mount time,
+	// enabling per-actor subdirectories on shared storage. Must be a relative
+	// path and must not escape the volume via "..". Only meaningful for
+	// WorkerPoolStorage volumes.
+	//
+	// +optional
+	// +kubebuilder:validation:MaxLength=4096
+	// +kubebuilder:validation:XValidation:rule="!self.startsWith('/') && !self.contains('//') && !self.matches('[\\x00-\\x1f\\x7f]') && !self.matches('(^|/)[.][.](/|$)')",message="SubPath must be a relative path with no '..' segments, no leading '/', no '//', and no control characters"
+	SubPath string `json:"subPath,omitempty" protobuf:"bytes,5,opt,name=subPath"`
 }
 
 // A single application container that you want to run within a WorkerPool.

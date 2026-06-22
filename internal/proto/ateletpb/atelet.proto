@@ -81,11 +81,21 @@ message WorkloadSpec {
 }
 
 enum VolumeType {
-  VOLUME_TYPE_UNSPECIFIED  = 0;
-  VOLUME_TYPE_DURABLE_DIR  = 1;
+  VOLUME_TYPE_UNSPECIFIED       = 0;
+  VOLUME_TYPE_DURABLE_DIR       = 1;
+  VOLUME_TYPE_WORKER_POOL_STORAGE = 2;
 }
 
 message DurableDirVolume {
+}
+
+// WorkerPoolStorageVolume references a storage volume declared in the
+// WorkerPool's storageVolumes. The named volume is mounted into the ateom
+// container by the WorkerPool controller; atelet bind-mounts it (optionally a
+// sub-path of it) into the actor's containers.
+message WorkerPoolStorageVolume {
+  // name of the WorkerPool storageVolume to mount.
+  string name = 1;
 }
 
 message Volume {
@@ -94,13 +104,20 @@ message Volume {
   VolumeType type = 2;
 
   oneof source{
-    DurableDirVolume durable_dir = 3;
+    DurableDirVolume        durable_dir         = 3;
+    WorkerPoolStorageVolume worker_pool_storage = 4;
   }
 }
 
 message VolumeMount{
-  string name = 1;
+  string name       = 1;
   string mount_path = 2;
+  // read_only mounts the volume read-only inside the container.
+  bool   read_only  = 3;
+  // sub_path mounts a sub-directory of the volume instead of its root. The
+  // literal "${ACTOR_ID}" is replaced with the actor's ID at mount time,
+  // enabling per-actor subdirectories on shared storage.
+  string sub_path   = 4;
 }
 
 message Container {

@@ -650,14 +650,26 @@ func (s *AteomHerder) prepareOCIBundles(
 	}
 
 	ddVolumes := make(map[string]bool)
+	// wpStorageVolumes maps the name of each WorkerPool-storage-typed volume to
+	// the host path (inside the ateom container) where the WorkerPool controller
+	// mounted it. Actor VolumeMounts referencing these names are bind-mounted
+	// into the container from that path.
+	wpStorageVolumes := make(map[string]string)
 	// make directories for all durable-dir volumes
 	for _, vol := range spec.GetVolumes() {
-		if vol.GetType() == ateletpb.VolumeType_VOLUME_TYPE_DURABLE_DIR {
+		switch vol.GetType() {
+		case ateletpb.VolumeType_VOLUME_TYPE_DURABLE_DIR:
 			ddVolumes[vol.GetName()] = true
 			volPath := ateompath.DurableDirVolumeMountPoint(actorTemplateNamespace, actorTemplateName, actorID, vol.GetName())
 			if err := os.MkdirAll(volPath, 0o700); err != nil {
 				return fmt.Errorf("while creating %q: %w", volPath, err)
 			}
+		case ateletpb.VolumeType_VOLUME_TYPE_WORKER_POOL_STORAGE:
+			srcName := vol.GetWorkerPoolStorage().GetName()
+			if srcName == "" {
+				srcName = vol.GetName()
+			}
+			wpStorageVolumes[vol.GetName()] = filepath.Join(ateompath.StorageVolumesPath, srcName)
 		}
 	}
 
@@ -689,8 +701,9 @@ func (s *AteomHerder) prepareOCIBundles(
 			nil,
 			annotations,
 			netnsPath,
-			"", // pause is sandbox infra; it gets no actor identity mount.
-			nil,
+			"",  // pause is sandbox infra; it gets no actor identity mount.
+			nil, // pause gets no durable-dir volume mounts.
+			nil, // pause gets no storage volume mounts.
 		); err != nil {
 			return fmt.Errorf("while creating pause OCI bundle: %w", err)
 		}
@@ -705,9 +718,18 @@ func (s *AteomHerder) prepareOCIBundles(
 			envs = append(envs, fmt.Sprintf("%s=%s", env.GetName(), env.GetValue()))
 		}
 		var ddMounts []*ateletpb.VolumeMount
+		var storageMounts []VolumeMountConfig
 		for _, vm := range ctr.GetVolumeMounts() {
 			if ddVolumes[vm.GetName()] {
 				ddMounts = append(ddMounts, vm)
+				continue
+			}
+			if hostPath, ok := wpStorageVolumes[vm.GetName()]; ok {
+				mount, err := resolveStorageVolumeMount(vm, hostPath, actorID)
+				if err != nil {
+					return fmt.Errorf("while resolving volume mount %q for container %q: %w", vm.GetName(), ctr.GetName(), err)
+				}
+				storageMounts = append(storageMounts, mount)
 			}
 		}
 		g.Go(func() error {
@@ -727,6 +749,7 @@ func (s *AteomHerder) prepareOCIBundles(
 				netnsPath,
 				identityDir,
 				ddMounts,
+				storageMounts,
 			); err != nil {
 				return fmt.Errorf("while creating %q OCI bundle: %w", ctr.GetName(), err)
 			}
@@ -735,6 +758,36 @@ func (s *AteomHerder) prepareOCIBundles(
 	}
 
 	return g.Wait()
+}
+
+// resolveStorageVolumeMount converts a proto VolumeMount that references a
+// WorkerPool-storage-typed volume into a host-path-based bind-mount config.
+// hostPath is where the WorkerPool controller mounted the volume inside the
+// ateom container ({ateompath.StorageVolumesPath}/{volumeName}). The
+// "${ACTOR_ID}" placeholder in sub_path is replaced with the actor's actual
+// ID, enabling per-actor subdirectories on shared storage.
+//
+// The resolved source is confined to hostPath: sub_path must not escape the
+// volume via "..". This is defense-in-depth on top of the API-server-side CEL
+// validation, since a compromised or buggy caller could still send a raw
+// proto here.
+func resolveStorageVolumeMount(m *ateletpb.VolumeMount, hostPath, actorID string) (VolumeMountConfig, error) {
+	source := hostPath
+	if sub := m.GetSubPath(); sub != "" {
+		sub = strings.ReplaceAll(sub, "${ACTOR_ID}", actorID)
+		joined := filepath.Join(hostPath, sub)
+		// filepath.Join cleans the path; confirm it did not climb above the
+		// volume root (e.g. sub_path "../../etc").
+		if joined != hostPath && !strings.HasPrefix(joined, hostPath+string(os.PathSeparator)) {
+			return VolumeMountConfig{}, fmt.Errorf("sub_path %q escapes volume root", m.GetSubPath())
+		}
+		source = joined
+	}
+	return VolumeMountConfig{
+		MountPath: m.GetMountPath(),
+		Source:    source,
+		ReadOnly:  m.GetReadOnly(),
+	}, nil
 }
 
 // dialAteom opens (or reuses) the gRPC connection to the target ateom
