@@ -69,6 +69,14 @@ type Interface interface {
 	// Lists all known workers. Returns nil if none found.
 	ListWorkers(ctx context.Context) ([]*ateapipb.Worker, error)
 
+	// Stores the latest full image-cache snapshot reported by the atelet on a
+	// node. The record expires unless it is refreshed before ttl elapses.
+	SetNodeImageCache(ctx context.Context, cache *ateapipb.NodeImageCache, ttl time.Duration) error
+
+	// Fetches the image-cache snapshot for a node. Returns ErrNotFound when no
+	// report exists or the last report has expired.
+	GetNodeImageCache(ctx context.Context, nodeName string) (*ateapipb.NodeImageCache, error)
+
 	// AcquireLock attempts to acquire a distributed lock with a TTL.
 	// Returns true if the lock was successfully acquired.
 	// Returns false if the lock is already held by another client (conflict).

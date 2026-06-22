@@ -22,7 +22,9 @@ import (
 	"log/slog"
 	"net"
 	"runtime"
+	"sort"
 	"strings"
+	"sync"
 
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
@@ -40,6 +42,10 @@ type MemoryPullCache struct {
 	// Map from hexadecimal sha256 hash of image to byte contents of composed
 	// tarball
 	cache *lru.Cache
+
+	cacheMutationMu sync.Mutex
+	digestsMu       sync.RWMutex
+	digests         map[string]struct{}
 }
 
 func NewMemoryPullCache(ctx context.Context, gcpAuthenticator authn.Authenticator, localhostRegistryReplacement string) (*MemoryPullCache, error) {
@@ -56,9 +62,18 @@ func NewMemoryPullCache(ctx context.Context, gcpAuthenticator authn.Authenticato
 		// caches that could fill up or have weird behavior, it might be better
 		// to just have two levels.  Store some images in ateom memory, and the
 		// rest are kept in a shared GCS cache.
-		cache:                        lru.New(256),
 		localhostRegistryReplacement: localhostRegistryReplacement,
+		digests:                      make(map[string]struct{}),
 	}
+	c.cache = lru.NewWithEvictionFunc(256, func(key lru.Key, _ interface{}) {
+		digest, ok := key.(string)
+		if !ok {
+			return
+		}
+		c.digestsMu.Lock()
+		delete(c.digests, digest)
+		c.digestsMu.Unlock()
+	})
 
 	c.gcpAuthenticator = gcpAuthenticator
 
@@ -171,7 +186,7 @@ func (c *MemoryPullCache) Fetch(ctx context.Context, ref string) (io.ReadCloser,
 		// not be the same as the digest of the image we actually downloaded
 		// from the registry.  We need to place the cache entry under the digest
 		// they requested.
-		c.cache.Add(requestedDigest.DigestStr(), memData)
+		c.add(requestedDigest.DigestStr(), memData)
 		slog.InfoContext(
 			ctx,
 			"Populated image cache",
@@ -181,6 +196,35 @@ func (c *MemoryPullCache) Fetch(ctx context.Context, ref string) (io.ReadCloser,
 	}
 
 	return io.NopCloser(bytes.NewReader(memData)), nil
+}
+
+func (c *MemoryPullCache) add(digest string, contents []byte) {
+	// Serialize membership changes with Digests. The LRU's eviction callback is
+	// synchronous, so it updates the reporting index before Add returns.
+	c.cacheMutationMu.Lock()
+	defer c.cacheMutationMu.Unlock()
+
+	c.cache.Add(digest, contents)
+	c.digestsMu.Lock()
+	c.digests[digest] = struct{}{}
+	c.digestsMu.Unlock()
+}
+
+// Digests returns a sorted snapshot of the image digests currently held in
+// the in-memory pull cache.
+func (c *MemoryPullCache) Digests() []string {
+	c.cacheMutationMu.Lock()
+	defer c.cacheMutationMu.Unlock()
+
+	c.digestsMu.RLock()
+	digests := make([]string, 0, len(c.digests))
+	for digest := range c.digests {
+		digests = append(digests, digest)
+	}
+	c.digestsMu.RUnlock()
+
+	sort.Strings(digests)
+	return digests
 }
 
 func registryHost(ref string) string {

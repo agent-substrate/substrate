@@ -87,6 +87,49 @@ func workerDBKey(namespace, poolName, podName string) string {
 	return "worker:" + namespace + ":" + poolName + ":" + podName
 }
 
+func nodeImageCacheDBKey(nodeName string) string {
+	return "node-image-cache:" + nodeName
+}
+
+func (s *Persistence) SetNodeImageCache(ctx context.Context, cache *ateapipb.NodeImageCache, ttl time.Duration) error {
+	if cache.GetNodeName() == "" {
+		return fmt.Errorf("node_name is required")
+	}
+	if ttl <= 0 {
+		return fmt.Errorf("ttl must be positive")
+	}
+
+	dbCache := proto.Clone(cache).(*ateapipb.NodeImageCache)
+	sort.Strings(dbCache.ImageDigests)
+	b, err := protojson.Marshal(dbCache)
+	if err != nil {
+		return fmt.Errorf("while marshaling node image cache: %w", err)
+	}
+	if err := s.rdb.Set(ctx, nodeImageCacheDBKey(cache.GetNodeName()), b, ttl).Err(); err != nil {
+		return fmt.Errorf("while storing node image cache: %w", err)
+	}
+	return nil
+}
+
+func (s *Persistence) GetNodeImageCache(ctx context.Context, nodeName string) (*ateapipb.NodeImageCache, error) {
+	b, err := s.rdb.Get(ctx, nodeImageCacheDBKey(nodeName)).Bytes()
+	if err != nil {
+		if errors.Is(err, redis.Nil) {
+			return nil, store.ErrNotFound
+		}
+		return nil, fmt.Errorf("while getting node image cache: %w", err)
+	}
+
+	cache := &ateapipb.NodeImageCache{}
+	if err := protojson.Unmarshal(b, cache); err != nil {
+		return nil, fmt.Errorf("while unmarshaling node image cache: %w", err)
+	}
+	if cache.GetNodeName() != nodeName {
+		return nil, fmt.Errorf("(impossible) mismatch between stored node name and key")
+	}
+	return cache, nil
+}
+
 // DebugClearAll flushes all data from Redis.
 func (s *Persistence) DebugClearAll(ctx context.Context) error {
 	// Iterate through every Primary (Master) node in the cluster

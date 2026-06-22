@@ -35,16 +35,17 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	Control_GetActor_FullMethodName     = "/ateapi.Control/GetActor"
-	Control_CreateActor_FullMethodName  = "/ateapi.Control/CreateActor"
-	Control_UpdateActor_FullMethodName  = "/ateapi.Control/UpdateActor"
-	Control_SuspendActor_FullMethodName = "/ateapi.Control/SuspendActor"
-	Control_PauseActor_FullMethodName   = "/ateapi.Control/PauseActor"
-	Control_ResumeActor_FullMethodName  = "/ateapi.Control/ResumeActor"
-	Control_DeleteActor_FullMethodName  = "/ateapi.Control/DeleteActor"
-	Control_ListWorkers_FullMethodName  = "/ateapi.Control/ListWorkers"
-	Control_ListActors_FullMethodName   = "/ateapi.Control/ListActors"
-	Control_DebugClear_FullMethodName   = "/ateapi.Control/DebugClear"
+	Control_GetActor_FullMethodName             = "/ateapi.Control/GetActor"
+	Control_CreateActor_FullMethodName          = "/ateapi.Control/CreateActor"
+	Control_UpdateActor_FullMethodName          = "/ateapi.Control/UpdateActor"
+	Control_SuspendActor_FullMethodName         = "/ateapi.Control/SuspendActor"
+	Control_PauseActor_FullMethodName           = "/ateapi.Control/PauseActor"
+	Control_ResumeActor_FullMethodName          = "/ateapi.Control/ResumeActor"
+	Control_DeleteActor_FullMethodName          = "/ateapi.Control/DeleteActor"
+	Control_ListWorkers_FullMethodName          = "/ateapi.Control/ListWorkers"
+	Control_ListActors_FullMethodName           = "/ateapi.Control/ListActors"
+	Control_ReportNodeImageCache_FullMethodName = "/ateapi.Control/ReportNodeImageCache"
+	Control_DebugClear_FullMethodName           = "/ateapi.Control/DebugClear"
 )
 
 // ControlClient is the client API for Control service.
@@ -71,6 +72,9 @@ type ControlClient interface {
 	ListWorkers(ctx context.Context, in *ListWorkersRequest, opts ...grpc.CallOption) (*ListWorkersResponse, error)
 	// List all actors currently reflected in redis.
 	ListActors(ctx context.Context, in *ListActorsRequest, opts ...grpc.CallOption) (*ListActorsResponse, error)
+	// Report the image digests cached by the atelet on a node. Reports are full
+	// snapshots and expire unless the atelet refreshes them periodically.
+	ReportNodeImageCache(ctx context.Context, in *ReportNodeImageCacheRequest, opts ...grpc.CallOption) (*ReportNodeImageCacheResponse, error)
 	// Debugging: drop all data from the ate database.
 	DebugClear(ctx context.Context, in *DebugClearRequest, opts ...grpc.CallOption) (*DebugClearResponse, error)
 }
@@ -173,6 +177,16 @@ func (c *controlClient) ListActors(ctx context.Context, in *ListActorsRequest, o
 	return out, nil
 }
 
+func (c *controlClient) ReportNodeImageCache(ctx context.Context, in *ReportNodeImageCacheRequest, opts ...grpc.CallOption) (*ReportNodeImageCacheResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ReportNodeImageCacheResponse)
+	err := c.cc.Invoke(ctx, Control_ReportNodeImageCache_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *controlClient) DebugClear(ctx context.Context, in *DebugClearRequest, opts ...grpc.CallOption) (*DebugClearResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(DebugClearResponse)
@@ -207,6 +221,9 @@ type ControlServer interface {
 	ListWorkers(context.Context, *ListWorkersRequest) (*ListWorkersResponse, error)
 	// List all actors currently reflected in redis.
 	ListActors(context.Context, *ListActorsRequest) (*ListActorsResponse, error)
+	// Report the image digests cached by the atelet on a node. Reports are full
+	// snapshots and expire unless the atelet refreshes them periodically.
+	ReportNodeImageCache(context.Context, *ReportNodeImageCacheRequest) (*ReportNodeImageCacheResponse, error)
 	// Debugging: drop all data from the ate database.
 	DebugClear(context.Context, *DebugClearRequest) (*DebugClearResponse, error)
 	mustEmbedUnimplementedControlServer()
@@ -245,6 +262,9 @@ func (UnimplementedControlServer) ListWorkers(context.Context, *ListWorkersReque
 }
 func (UnimplementedControlServer) ListActors(context.Context, *ListActorsRequest) (*ListActorsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListActors not implemented")
+}
+func (UnimplementedControlServer) ReportNodeImageCache(context.Context, *ReportNodeImageCacheRequest) (*ReportNodeImageCacheResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReportNodeImageCache not implemented")
 }
 func (UnimplementedControlServer) DebugClear(context.Context, *DebugClearRequest) (*DebugClearResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DebugClear not implemented")
@@ -432,6 +452,24 @@ func _Control_ListActors_Handler(srv interface{}, ctx context.Context, dec func(
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Control_ReportNodeImageCache_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReportNodeImageCacheRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).ReportNodeImageCache(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_ReportNodeImageCache_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).ReportNodeImageCache(ctx, req.(*ReportNodeImageCacheRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _Control_DebugClear_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(DebugClearRequest)
 	if err := dec(in); err != nil {
@@ -492,6 +530,10 @@ var Control_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ListActors",
 			Handler:    _Control_ListActors_Handler,
+		},
+		{
+			MethodName: "ReportNodeImageCache",
+			Handler:    _Control_ReportNodeImageCache_Handler,
 		},
 		{
 			MethodName: "DebugClear",

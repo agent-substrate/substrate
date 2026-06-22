@@ -15,8 +15,36 @@
 package memorypullcache
 
 import (
+	"context"
+	"fmt"
+	"slices"
 	"testing"
 )
+
+func addCachedDigest(c *MemoryPullCache, digest string) {
+	c.add(digest, []byte(digest))
+}
+
+func TestDigestsTracksLRUContents(t *testing.T) {
+	c, err := NewMemoryPullCache(context.Background(), nil, "")
+	if err != nil {
+		t.Fatalf("NewMemoryPullCache failed: %v", err)
+	}
+	for i := 0; i < 257; i++ {
+		addCachedDigest(c, fmt.Sprintf("sha256:%03d", i))
+	}
+
+	digests := c.Digests()
+	if len(digests) != 256 {
+		t.Fatalf("Digests returned %d entries, want 256", len(digests))
+	}
+	if slices.Contains(digests, "sha256:000") {
+		t.Error("Digests contains the evicted oldest entry")
+	}
+	if !slices.IsSorted(digests) {
+		t.Errorf("Digests is not sorted: %v", digests)
+	}
+}
 
 func TestIsLocalRegistry(t *testing.T) {
 	tests := []struct {

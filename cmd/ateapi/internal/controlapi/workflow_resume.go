@@ -21,6 +21,7 @@ import (
 	"log/slog"
 	"math/rand"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
@@ -155,7 +156,18 @@ func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, stat
 
 	// If not, find a free one using randomized shuffling
 	if assignedWorker == nil {
-		pickedWorker := s.findFreeWorker(workers, eligible, state.Actor.GetLatestSnapshotInfo().GetLocal().GetNodeVmsWithLocalSnapshots())
+		requiredDigests, err := actorTemplateImageDigests(state.ActorTemplate)
+		if err != nil {
+			return fmt.Errorf("while resolving actor image digests: %w", err)
+		}
+		nodeCaches := s.loadNodeImageCaches(ctx, workers)
+		pickedWorker := s.findFreeWorker(
+			workers,
+			eligible,
+			state.Actor.GetLatestSnapshotInfo().GetLocal().GetNodeVmsWithLocalSnapshots(),
+			requiredDigests,
+			nodeCaches,
+		)
 		if pickedWorker == nil {
 			return status.Errorf(codes.FailedPrecondition, "no free workers available")
 		}
@@ -194,8 +206,79 @@ func (s *AssignWorkerStep) RetryBackoff() *wait.Backoff {
 	}
 }
 
-func (s *AssignWorkerStep) findFreeWorker(workers []*ateapipb.Worker, eligible map[types.NamespacedName]struct{}, nodesRestrictions []string) *ateapipb.Worker {
+func actorTemplateImageDigests(actorTemplate *atev1alpha1.ActorTemplate) ([]string, error) {
+	refs := make([]string, 0, len(actorTemplate.Spec.Containers)+1)
+	refs = append(refs, actorTemplate.Spec.PauseImage)
+	for _, container := range actorTemplate.Spec.Containers {
+		refs = append(refs, container.Image)
+	}
+
+	digestSet := make(map[string]struct{}, len(refs))
+	for _, ref := range refs {
+		at := strings.LastIndexByte(ref, '@')
+		if at < 0 || at == len(ref)-1 {
+			return nil, fmt.Errorf("image reference %q is not digest-pinned", ref)
+		}
+		digestSet[ref[at+1:]] = struct{}{}
+	}
+
+	digests := make([]string, 0, len(digestSet))
+	for digest := range digestSet {
+		digests = append(digests, digest)
+	}
+	slices.Sort(digests)
+	return digests, nil
+}
+
+func (s *AssignWorkerStep) loadNodeImageCaches(ctx context.Context, workers []*ateapipb.Worker) map[string]*ateapipb.NodeImageCache {
+	caches := make(map[string]*ateapipb.NodeImageCache)
+	seen := make(map[string]struct{})
+	for _, worker := range workers {
+		nodeName := worker.GetNodeName()
+		if nodeName == "" {
+			continue
+		}
+		if _, ok := seen[nodeName]; ok {
+			continue
+		}
+		seen[nodeName] = struct{}{}
+		cache, err := s.store.GetNodeImageCache(ctx, nodeName)
+		if err != nil {
+			if !errors.Is(err, store.ErrNotFound) {
+				slog.WarnContext(ctx, "Ignoring unavailable node image-cache report", "node", nodeName, "err", err)
+			}
+			continue
+		}
+		caches[nodeName] = cache
+	}
+	return caches
+}
+
+func hasAllImageDigests(cache *ateapipb.NodeImageCache, requiredDigests []string) bool {
+	if cache == nil || len(requiredDigests) == 0 {
+		return false
+	}
+	cached := make(map[string]struct{}, len(cache.GetImageDigests()))
+	for _, digest := range cache.GetImageDigests() {
+		cached[digest] = struct{}{}
+	}
+	for _, digest := range requiredDigests {
+		if _, ok := cached[digest]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func (s *AssignWorkerStep) findFreeWorker(
+	workers []*ateapipb.Worker,
+	eligible map[types.NamespacedName]struct{},
+	nodesRestrictions []string,
+	requiredDigests []string,
+	nodeCaches map[string]*ateapipb.NodeImageCache,
+) *ateapipb.Worker {
 	var freeWorkers []*ateapipb.Worker
+	var cacheHitWorkers []*ateapipb.Worker
 	for _, worker := range workers {
 		if worker.GetActorId() != "" {
 			continue
@@ -205,9 +288,18 @@ func (s *AssignWorkerStep) findFreeWorker(workers []*ateapipb.Worker, eligible m
 		}
 		if len(nodesRestrictions) == 0 || slices.Contains(nodesRestrictions, worker.GetNodeName()) {
 			freeWorkers = append(freeWorkers, worker)
+			if hasAllImageDigests(nodeCaches[worker.GetNodeName()], requiredDigests) {
+				cacheHitWorkers = append(cacheHitWorkers, worker)
+			}
 		}
 	}
 
+	if len(cacheHitWorkers) > 0 {
+		rand.Shuffle(len(cacheHitWorkers), func(i, j int) {
+			cacheHitWorkers[i], cacheHitWorkers[j] = cacheHitWorkers[j], cacheHitWorkers[i]
+		})
+		return cacheHitWorkers[0]
+	}
 	if len(freeWorkers) > 0 {
 		rand.Shuffle(len(freeWorkers), func(i, j int) {
 			freeWorkers[i], freeWorkers[j] = freeWorkers[j], freeWorkers[i]

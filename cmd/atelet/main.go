@@ -16,6 +16,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -26,6 +27,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"cloud.google.com/go/storage"
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/ategcs"
@@ -37,6 +39,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/agent-substrate/substrate/internal/version"
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/google/go-containerregistry/pkg/authn"
@@ -51,6 +54,7 @@ import (
 	"google.golang.org/api/option"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/reflection"
 	"google.golang.org/grpc/status"
@@ -63,6 +67,8 @@ var (
 
 	gcpAuthForImagePulls         = pflag.Bool("gcp-auth-for-image-pulls", true, "Use GCP application default credentials mechanism.")
 	localhostRegistryReplacement = pflag.String("localhost-registry-replacement", "", "The replacement registry endpoint for localhost and/or loopback IP addresses, useful for local development. for example kind-registry:5000")
+	ateapiAddress                = pflag.String("ateapi-address", "api.ate-system.svc:443", "gRPC address of the ateapi Control service used for image-cache reports.")
+	imageCacheReportInterval     = pflag.Duration("image-cache-report-interval", 30*time.Second, "How often to report the full node image-cache contents to ateapi.")
 
 	showVersion = pflag.Bool("version", false, "Print version and exit.")
 )
@@ -112,6 +118,29 @@ func main() {
 	pullCache, err := memorypullcache.NewMemoryPullCache(ctx, gcpRegistryAuthn, *localhostRegistryReplacement)
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to create pull cache", err)
+	}
+	if nodeName, ateletPodUID := os.Getenv("MY_NODE_NAME"), os.Getenv("POD_UID"); nodeName == "" || ateletPodUID == "" {
+		slog.WarnContext(ctx, "Image-cache reporting disabled because MY_NODE_NAME or POD_UID is unset")
+	} else if *imageCacheReportInterval <= 0 {
+		slog.WarnContext(ctx, "Image-cache reporting disabled because report interval is not positive")
+	} else {
+		apiConn, err := grpc.NewClient(
+			*ateapiAddress,
+			grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{InsecureSkipVerify: true})),
+			grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
+		)
+		if err != nil {
+			serverboot.Fatal(ctx, "Failed to create ateapi client for image-cache reporting", err)
+		}
+		defer apiConn.Close()
+		reporter := &nodeImageCacheReporter{
+			client:       ateapipb.NewControlClient(apiConn),
+			cache:        pullCache,
+			nodeName:     nodeName,
+			ateletPodUID: ateletPodUID,
+			interval:     *imageCacheReportInterval,
+		}
+		go reporter.run(ctx)
 	}
 
 	anonGCSClient, err := storage.NewClient(ctx, option.WithoutAuthentication())
