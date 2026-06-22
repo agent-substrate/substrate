@@ -25,6 +25,7 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
+	"github.com/agent-substrate/substrate/internal/resources"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -241,6 +242,12 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 		return err
 	}
 
+	// Validate that the ActorTemplate's volume references are satisfied by the
+	// assigned WorkerPool's storageVolumes.
+	if err := s.validateVolumeRefs(ctx, state); err != nil {
+		return err
+	}
+
 	if state.Actor.GetLatestSnapshotInfo().GetType() != ateapipb.SnapshotType_SNAPSHOT_TYPE_UNSPECIFIED {
 		slog.InfoContext(ctx, "Actor has snapshot; Restoring from snapshot")
 
@@ -328,6 +335,33 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 }
 
 func (s *CallAteletRestoreStep) RetryBackoff() *wait.Backoff { return nil }
+
+// validateVolumeRefs checks that every volume referenced by the ActorTemplate
+// exists in the assigned WorkerPool's storageVolumes.
+func (s *CallAteletRestoreStep) validateVolumeRefs(ctx context.Context, state *ResumeState) error {
+	if len(state.ActorTemplate.Spec.Volumes) == 0 {
+		return nil
+	}
+	pool, err := s.workerPoolLister.WorkerPools(state.Actor.GetAteomPodNamespace()).Get(state.Actor.GetWorkerPoolName())
+	if err != nil {
+		return fmt.Errorf("while getting worker pool for volume validation: %w", err)
+	}
+	poolVolumes := make(map[string]bool, len(pool.Spec.StorageVolumes))
+	for _, sv := range pool.Spec.StorageVolumes {
+		poolVolumes[sv.Name] = true
+	}
+	for _, v := range state.ActorTemplate.Spec.Volumes {
+		if !poolVolumes[v.Name] {
+			return status.Errorf(codes.FailedPrecondition,
+				"actor template references volume %q not provided by worker pool %s",
+				v.Name, pool.Name)
+		}
+		if err := resources.ValidateVolumeMountPath(v.MountPath); err != nil {
+			return status.Errorf(codes.InvalidArgument, "invalid volume mount: %v", err)
+		}
+	}
+	return nil
+}
 
 type FinalizeRunningStep struct {
 	store store.Interface

@@ -125,6 +125,37 @@ type SecretKeySelector struct {
 	Optional *bool `json:"optional,omitempty"`
 }
 
+// ActorVolume maps a WorkerPool storage volume into the actor's containers.
+// The name must match a volume defined in the assigned WorkerPool's
+// storageVolumes field.
+type ActorVolume struct {
+	// Name of the volume (must match a WorkerPool storageVolume name).
+	//
+	// +required
+	// +kubebuilder:validation:MinLength=1
+	Name string `json:"name"`
+
+	// MountPath is the absolute path inside the actor's containers where
+	// the volume will be mounted.
+	//
+	// +required
+	// +kubebuilder:validation:Pattern=`^/`
+	MountPath string `json:"mountPath"`
+
+	// ReadOnly forces the volume to be read-only inside the actor.
+	//
+	// +optional
+	ReadOnly bool `json:"readOnly,omitempty"`
+
+	// SubPath is an optional sub-directory within the volume to mount
+	// instead of the whole volume. The literal "${ACTOR_ID}" is replaced
+	// with the actor's ID at mount time, enabling per-actor subdirectories
+	// on shared storage.
+	//
+	// +optional
+	SubPath string `json:"subPath,omitempty"`
+}
+
 type SnapshotsConfig struct {
 	// Location to store snapshots in.
 	//
@@ -165,6 +196,15 @@ type ActorTemplateSpec struct {
 	//
 	// +optional
 	WorkerSelector *metav1.LabelSelector `json:"workerSelector,omitempty"`
+
+	// Volumes defines storage volumes available to this actor's containers.
+	// Each volume references a name defined in the assigned WorkerPool's
+	// storageVolumes. The actor cannot request storage the pool doesn't provide.
+	//
+	// +optional
+	// +kubebuilder:validation:MaxItems=16
+	// +listType=atomic
+	Volumes []ActorVolume `json:"volumes,omitempty"`
 }
 
 // TODO: add validation

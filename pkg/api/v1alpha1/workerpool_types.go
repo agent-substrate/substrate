@@ -46,6 +46,36 @@ type WorkerPoolPodTemplate struct {
 	NodeAffinity *corev1.NodeAffinity `json:"nodeAffinity,omitempty"`
 }
 
+// StorageVolume describes a network or persistent storage volume to be mounted
+// into each worker pod. Actors reference these by name via their ActorTemplate's
+// Volumes field. Exactly one source (NFS, PersistentVolumeClaim, or HostPath)
+// must be specified.
+type StorageVolume struct {
+	// Name of the volume. Referenced by ActorTemplate volume entries.
+	//
+	// +required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-zA-Z][a-zA-Z0-9-]*$`
+	Name string `json:"name"`
+
+	// NFS represents an NFS mount on the host.
+	//
+	// +optional
+	NFS *corev1.NFSVolumeSource `json:"nfs,omitempty"`
+
+	// PersistentVolumeClaim references a PVC in the worker pool's namespace.
+	//
+	// +optional
+	PersistentVolumeClaim *corev1.PersistentVolumeClaimVolumeSource `json:"persistentVolumeClaim,omitempty"`
+
+	// HostPath represents a pre-existing host path (e.g., NFS already
+	// mounted at a well-known path on all nodes).
+	//
+	// +optional
+	HostPath *corev1.HostPathVolumeSource `json:"hostPath,omitempty"`
+}
+
 type WorkerPoolSpec struct {
 	// Replicas is the number of worker pods to run.
 	// +required
@@ -78,6 +108,15 @@ type WorkerPoolSpec struct {
 	// SandboxClass is used.
 	// +optional
 	SandboxConfigName string `json:"sandboxConfigName,omitempty"`
+
+	// StorageVolumes defines network or persistent storage volumes that will be
+	// mounted into each worker pod. Actors can reference these by name via their
+	// ActorTemplate's volumes field.
+	//
+	// +optional
+	// +kubebuilder:validation:MaxItems=16
+	// +listType=atomic
+	StorageVolumes []StorageVolume `json:"storageVolumes,omitempty"`
 }
 
 type WorkerPoolStatus struct {

@@ -136,3 +136,19 @@ func ValidateSnapshotURIPrefix(prefix string) error {
 	}
 	return nil
 }
+
+// ValidateVolumeMountPath ensures a volume mount path is an absolute path that
+// does not contain traversal sequences. The path is used as the mount
+// destination inside the OCI bundle rootfs, so it must be safe.
+func ValidateVolumeMountPath(mountPath string) error {
+	if mountPath == "" {
+		return fmt.Errorf("volume mount path must not be empty")
+	}
+	if mountPath[0] != '/' {
+		return fmt.Errorf("volume mount path %q must be absolute", mountPath)
+	}
+	if strings.Contains(mountPath, "..") {
+		return fmt.Errorf("volume mount path %q must not contain '..'", mountPath)
+	}
+	return nil
+}

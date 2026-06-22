@@ -608,6 +608,9 @@ func (s *AteomHerder) prepareOCIBundles(
 		return fmt.Errorf("while writing actor identity file: %w", err)
 	}
 
+	// Resolve volume mounts from proto to host-path-based configs.
+	volumeMounts := resolveVolumeMounts(spec.GetVolumeMounts(), actorID)
+
 	g, gCtx := errgroup.WithContext(ctx)
 
 	// Pause container.
@@ -625,7 +628,8 @@ func (s *AteomHerder) prepareOCIBundles(
 				"io.kubernetes.cri.container-name": "pause",
 			},
 			netnsPath,
-			"", // pause is sandbox infra; it gets no actor identity mount.
+			"",              // pause is sandbox infra; it gets no actor identity mount.
+			nil,             // pause gets no storage volume mounts.
 		); err != nil {
 			return fmt.Errorf("while creating pause OCI bundle: %w", err)
 		}
@@ -655,6 +659,7 @@ func (s *AteomHerder) prepareOCIBundles(
 				},
 				netnsPath,
 				identityDir,
+				volumeMounts,
 			); err != nil {
 				return fmt.Errorf("while creating %q OCI bundle: %w", ctr.GetName(), err)
 			}
@@ -663,6 +668,31 @@ func (s *AteomHerder) prepareOCIBundles(
 	}
 
 	return g.Wait()
+}
+
+// resolveVolumeMounts converts proto VolumeMounts to host-path-based mount
+// configs. The host path is {ateompath.StorageVolumesPath}/{volumeName},
+// which is where the WorkerPool controller mounted the volume in the ateom
+// container. The ${ACTOR_ID} placeholder in SubPath is replaced with the
+// actor's actual ID.
+func resolveVolumeMounts(protoMounts []*ateletpb.VolumeMount, actorID string) []VolumeMountConfig {
+	if len(protoMounts) == 0 {
+		return nil
+	}
+	mounts := make([]VolumeMountConfig, 0, len(protoMounts))
+	for _, m := range protoMounts {
+		hostPath := filepath.Join(ateompath.StorageVolumesPath, m.GetName())
+		subPath := m.GetSubPath()
+		subPath = strings.ReplaceAll(subPath, "${ACTOR_ID}", actorID)
+		mounts = append(mounts, VolumeMountConfig{
+			Name:      m.GetName(),
+			MountPath: m.GetMountPath(),
+			HostPath:  hostPath,
+			SubPath:   subPath,
+			ReadOnly:  m.GetReadOnly(),
+		})
+	}
+	return mounts
 }
 
 // dialAteom opens (or reuses) the gRPC connection to the target ateom

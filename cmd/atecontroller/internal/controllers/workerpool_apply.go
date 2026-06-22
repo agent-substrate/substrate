@@ -15,6 +15,8 @@
 package controllers
 
 import (
+	"path/filepath"
+
 	corev1 "k8s.io/api/core/v1"
 	appsv1ac "k8s.io/client-go/applyconfigurations/apps/v1"
 	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
@@ -58,6 +60,39 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool) *appsv1ac.Deployment
 			WithHostPath(corev1ac.HostPathVolumeSource().
 				WithPath(ateompath.BasePath).
 				WithType(corev1.HostPathDirectoryOrCreate)))
+
+	// Add storage volumes from WorkerPool spec. Each volume is mounted into
+	// the ateom container at a well-known path so atelet can create OCI bind
+	// mounts from it into actor sandboxes.
+	for _, sv := range wp.Spec.StorageVolumes {
+		vol := corev1ac.Volume().WithName(sv.Name)
+		switch {
+		case sv.NFS != nil:
+			vol.WithNFS(corev1ac.NFSVolumeSource().
+				WithServer(sv.NFS.Server).
+				WithPath(sv.NFS.Path).
+				WithReadOnly(sv.NFS.ReadOnly))
+		case sv.PersistentVolumeClaim != nil:
+			vol.WithPersistentVolumeClaim(corev1ac.PersistentVolumeClaimVolumeSource().
+				WithClaimName(sv.PersistentVolumeClaim.ClaimName).
+				WithReadOnly(sv.PersistentVolumeClaim.ReadOnly))
+		case sv.HostPath != nil:
+			hp := corev1ac.HostPathVolumeSource().WithPath(sv.HostPath.Path)
+			if sv.HostPath.Type != nil {
+				hp.WithType(*sv.HostPath.Type)
+			}
+			vol.WithHostPath(hp)
+		}
+		podSpecAC.WithVolumes(vol)
+
+		// Mount the volume into the ateom container at StorageVolumesPath/<name>
+		// so atelet can reference it when building OCI bind mounts.
+		mountPath := filepath.Join(ateompath.StorageVolumesPath, sv.Name)
+		containerAC.WithVolumeMounts(
+			corev1ac.VolumeMount().
+				WithName(sv.Name).
+				WithMountPath(mountPath))
+	}
 
 	applyWorkerPoolPodTemplate(podSpecAC, wp.Spec.Template)
 	podSpecAC.WithContainers(containerAC)
