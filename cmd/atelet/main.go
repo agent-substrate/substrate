@@ -30,6 +30,7 @@ import (
 	"cloud.google.com/go/storage"
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/ategcs"
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/memorypullcache"
+	"github.com/agent-substrate/substrate/cmd/atelet/internal/rootfscache"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
@@ -114,6 +115,11 @@ func main() {
 		serverboot.Fatal(ctx, "Failed to create pull cache", err)
 	}
 
+	rootfsDiskCache, err := rootfscache.New(ctx, ateompath.RootfsCacheDir, 0)
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to create rootfs cache", err)
+	}
+
 	anonGCSClient, err := storage.NewClient(ctx, option.WithoutAuthentication())
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to create anonymous GCS client", err)
@@ -162,6 +168,7 @@ func main() {
 		wrappedAnonGCS,
 		wrappedGCS,
 		pullCache,
+		rootfsDiskCache,
 	)
 
 	lis, err := net.Listen("tcp", ":"+strconv.Itoa(*port))
@@ -185,6 +192,7 @@ type AteomHerder struct {
 
 	ateomDialer   *AteomDialer
 	pullCache     *memorypullcache.MemoryPullCache
+	rootfsCache   *rootfscache.Cache
 	anonGCSClient ategcs.ObjectStorage
 	gcsClient     ategcs.ObjectStorage
 }
@@ -198,10 +206,12 @@ func NewService(
 	anonGCSClient ategcs.ObjectStorage,
 	gcsClient ategcs.ObjectStorage,
 	pullCache *memorypullcache.MemoryPullCache,
+	rootfsCache *rootfscache.Cache,
 ) *AteomHerder {
 	wms := &AteomHerder{
 		ateomDialer:   ateomDialer,
 		pullCache:     pullCache,
+		rootfsCache:   rootfsCache,
 		anonGCSClient: anonGCSClient,
 		gcsClient:     gcsClient,
 	}
@@ -615,6 +625,7 @@ func (s *AteomHerder) prepareOCIBundles(
 		if err := prepareOCIDirectory(
 			gCtx,
 			s.pullCache,
+			s.rootfsCache,
 			actorTemplateNamespace, actorTemplateName, actorID,
 			"pause",
 			spec.GetPauseImage(),
@@ -643,6 +654,7 @@ func (s *AteomHerder) prepareOCIBundles(
 			if err := prepareOCIDirectory(
 				gCtx,
 				s.pullCache,
+				s.rootfsCache,
 				actorTemplateNamespace, actorTemplateName, actorID,
 				ctr.GetName(),
 				ctr.GetImage(),
@@ -833,6 +845,19 @@ func resetActorDirs(actorTemplateNamespace, actorTemplateName, actorID string) e
 	// Explicitly leave runsc logs dir untouched.
 
 	bundleDir := ateompath.OCIBundleDir(actorTemplateNamespace, actorTemplateName, actorID)
+
+	// Unmount any overlayfs rootfs mounts before deleting the bundle
+	// directory.  Each container's rootfs/ may be an overlayfs mountpoint;
+	// unmounting with MNT_DETACH ensures the mount is released even if
+	// something still holds a reference (e.g. a lingering process).
+	if entries, err := os.ReadDir(bundleDir); err == nil {
+		for _, e := range entries {
+			if e.IsDir() {
+				unmountActorRootfs(bundleDir, e.Name())
+			}
+		}
+	}
+
 	if err := os.RemoveAll(bundleDir); err != nil {
 		return fmt.Errorf("while deleting bundle dir: %w", err)
 	}
