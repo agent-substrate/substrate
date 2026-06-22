@@ -33,10 +33,17 @@ func pool(namespace, name string, labels map[string]string) *atev1alpha1.WorkerP
 	}
 }
 
+func poolWithClass(namespace, name string, class atev1alpha1.SandboxClass, labels map[string]string) *atev1alpha1.WorkerPool {
+	p := pool(namespace, name, labels)
+	p.Spec.SandboxClass = class
+	return p
+}
+
 func TestEligibleWorkerPools(t *testing.T) {
 	tests := []struct {
 		name              string
 		pools             []*atev1alpha1.WorkerPool
+		templateClass     atev1alpha1.SandboxClass
 		templateSelector  *metav1.LabelSelector
 		actorSelector     *ateapipb.Selector
 		wantEligibleNames []string // pool names expected in the result
@@ -120,11 +127,44 @@ func TestEligibleWorkerPools(t *testing.T) {
 			actorSelector:     nil,
 			wantEligibleNames: nil,
 		},
+		{
+			name: "microvm template matches only microvm pools",
+			pools: []*atev1alpha1.WorkerPool{
+				poolWithClass("ns", "micro", atev1alpha1.SandboxClassMicroVM, nil),
+				poolWithClass("ns", "gvisor", atev1alpha1.SandboxClassGvisor, nil),
+			},
+			templateClass:     atev1alpha1.SandboxClassMicroVM,
+			wantEligibleNames: []string{"micro"},
+		},
+		{
+			name: "gvisor template excludes microvm pools",
+			pools: []*atev1alpha1.WorkerPool{
+				poolWithClass("ns", "micro", atev1alpha1.SandboxClassMicroVM, nil),
+				poolWithClass("ns", "gvisor", atev1alpha1.SandboxClassGvisor, nil),
+			},
+			templateClass:     atev1alpha1.SandboxClassGvisor,
+			wantEligibleNames: []string{"gvisor"},
+		},
+		{
+			name: "class gate AND's with label selector",
+			pools: []*atev1alpha1.WorkerPool{
+				poolWithClass("ns", "match", atev1alpha1.SandboxClassMicroVM, map[string]string{"tier": "paid"}),
+				// Right class, wrong label.
+				poolWithClass("ns", "wrong-label", atev1alpha1.SandboxClassMicroVM, map[string]string{"tier": "free"}),
+				// Right label, wrong class.
+				poolWithClass("ns", "wrong-class", atev1alpha1.SandboxClassGvisor, map[string]string{"tier": "paid"}),
+			},
+			templateClass: atev1alpha1.SandboxClassMicroVM,
+			templateSelector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{"tier": "paid"},
+			},
+			wantEligibleNames: []string{"match"},
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := eligibleWorkerPools(tt.pools, tt.templateSelector, tt.actorSelector)
+			got, err := eligibleWorkerPools(tt.pools, tt.templateClass, tt.templateSelector, tt.actorSelector)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}

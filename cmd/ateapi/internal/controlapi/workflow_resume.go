@@ -80,7 +80,7 @@ func (s *LoadActorForResumeStep) Execute(ctx context.Context, input *ResumeInput
 
 func (s *LoadActorForResumeStep) RetryBackoff() *wait.Backoff { return nil }
 
-func eligibleWorkerPools(pools []*atev1alpha1.WorkerPool, templateSelector *metav1.LabelSelector, actorSelector *ateapipb.Selector) (map[types.NamespacedName]struct{}, error) {
+func eligibleWorkerPools(pools []*atev1alpha1.WorkerPool, templateClass atev1alpha1.SandboxClass, templateSelector *metav1.LabelSelector, actorSelector *ateapipb.Selector) (map[types.NamespacedName]struct{}, error) {
 	templateSel := labels.Everything()
 	if templateSelector != nil {
 		sel, err := metav1.LabelSelectorAsSelector(templateSelector)
@@ -94,6 +94,13 @@ func eligibleWorkerPools(pools []*atev1alpha1.WorkerPool, templateSelector *meta
 
 	eligible := make(map[types.NamespacedName]struct{})
 	for _, pool := range pools {
+		// Snapshots are not portable across sandbox classes, so the pool's class
+		// must match the template's. This is a hard gate AND'd with the label
+		// selectors below. Both classes are populated by the CRD default (gvisor),
+		// so we compare them directly.
+		if pool.Spec.SandboxClass != templateClass {
+			continue
+		}
 		set := labels.Set(pool.GetLabels())
 		if templateSel.Matches(set) && actorSel.Matches(set) {
 			eligible[types.NamespacedName{Namespace: pool.GetNamespace(), Name: pool.GetName()}] = struct{}{}
@@ -117,12 +124,12 @@ func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, stat
 	if err != nil {
 		return fmt.Errorf("while listing worker pools: %w", err)
 	}
-	eligible, err := eligibleWorkerPools(pools, state.ActorTemplate.Spec.WorkerSelector, state.Actor.GetWorkerSelector())
+	eligible, err := eligibleWorkerPools(pools, state.ActorTemplate.Spec.SandboxClass, state.ActorTemplate.Spec.WorkerSelector, state.Actor.GetWorkerSelector())
 	if err != nil {
 		return fmt.Errorf("while computing eligible worker pools: %w", err)
 	}
 	if len(eligible) == 0 {
-		return status.Errorf(codes.FailedPrecondition, "no worker pool matches the template and actor selectors")
+		return status.Errorf(codes.FailedPrecondition, "no worker pool matches the template's sandboxClass and the template/actor selectors")
 	}
 
 	workers, err := s.store.ListWorkers(ctx)

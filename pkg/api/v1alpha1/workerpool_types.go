@@ -66,6 +66,9 @@ type WorkerPoolSpec struct {
 	// the worker pod shape (KVM/vhost device mounts and node placement) and which
 	// SandboxConfigs are eligible. The concrete binary is still selected by
 	// AteomImage. Defaults to gvisor.
+	//
+	// See Also: TODOs in ActorTemplate SandboxClass
+	//
 	// +optional
 	// +kubebuilder:validation:Enum=gvisor;microvm
 	// +kubebuilder:default=gvisor

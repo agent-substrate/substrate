@@ -81,11 +81,14 @@ The `ActorTemplate` defines the code, environment, and state-management policies
 | Field | Type | Description |
 | :--- | :--- | :--- |
 | `containers` | `[]Container` | **Required.** The workload definition (image, command, env, ports). |
+| `sandboxClass` | `string` | Optional. The sandbox runtime family this template's actors require: `gvisor` (default) or `microvm`. Only `WorkerPool`s whose `sandboxClass` matches are eligible. |
 | `workerSelector` | `*LabelSelector` | Optional. Gates which `WorkerPool`s actors from this template may use, by matching against each pool's labels. If unset, all pools are eligible (subject to the actor's own `worker_selector`). |
 | `snapshotsConfig` | `SnapshotsConfig` | **Required.** GCS bucket and folder where memory snapshots are stored. |
 | `pauseImage` | `string` | **Required.** The image used for the sandbox root (e.g. `gcr.io/gke-release/pause`). |
 
 The sandbox binaries (e.g. the gVisor `runsc` binary) are **no longer configured on the `ActorTemplate`**. They are resolved from the referenced `WorkerPool`'s [`SandboxConfig`](#3-sandboxconfig-sandbox-binaries) — by name (`workerPool.spec.sandboxConfigName`) or, by default, the cluster default `SandboxConfig` for the pool's `sandboxClass`.
+
+Because a snapshot is not restorable across sandbox runtimes, `sandboxClass` is a **hard scheduling gate**: an actor is only ever placed on a `WorkerPool` of the matching class. It is AND'd with `workerSelector` (and the actor's `worker_selector`), which can only narrow the eligible pools further. It defaults to `gvisor` and, like the rest of the spec, is immutable, so each template's class is fixed at creation.
 
 Container environment variables support literal `value` entries and `valueFrom.secretKeyRef`. Secret references are resolved by `ate-api-server` from the `ActorTemplate` namespace when a workload spec is materialized. For the golden actor, the resolved values are captured in the golden snapshot and future actors inherit those values until the golden snapshot is recreated. For an actor that bypasses the golden snapshot and boots from the current template spec, the resolved values are sent to atelet but are not serialized into the public Actor API. Other Kubernetes `valueFrom` sources are not supported yet. Secret changes do not automatically restart actors or invalidate snapshots; rotating a Secret requires an explicit actor or template lifecycle action.
 
@@ -117,6 +120,8 @@ spec:
     command: ["/app/server"]
     ports:
     - containerPort: 80
+  # sandboxClass defaults to gvisor; set to microvm to require micro-VM pools.
+  sandboxClass: gvisor
   workerSelector:
     matchLabels:
       workload: secret-agent

@@ -30,7 +30,11 @@ spec:
     singular: actortemplate
   scope: Namespaced
   versions:
-  - name: v1alpha1
+  - additionalPrinterColumns:
+    - jsonPath: .spec.sandboxClass
+      name: Class
+      type: string
+    name: v1alpha1
     schema:
       openAPIV3Schema:
         properties:
@@ -167,6 +171,25 @@ spec:
                 - message: All images must be pinned (changing the image invalidates
                     snapshots)
                   rule: self.contains('@')
+              sandboxClass:
+                default: gvisor
+                description: |-
+                  SandboxClass selects the sandbox runtime family this template's actors run
+                  on. Only worker pools whose SandboxClass matches are eligible. Snapshots are
+                  not portable across classes, so this is a hard gate, AND'd with WorkerSelector
+                  and the actor's worker_selector. Defaults to gvisor.
+
+
+                  1) How does someone discover what classes are available, or what they mean?
+                  2) How does someone define a new sandbox class?
+                  3) Does a class mean the specific type of sandbox tech or does it include some aspect of config (e.g. can we have 2 different classes which both use gVisor with different config, or 2 classes which use different microvms)
+                  4) How does the default get set and who sets it?
+
+                  See Also: WorkerPool SandboxClass
+                enum:
+                - gvisor
+                - microvm
+                type: string
               snapshotsConfig:
                 description: Snapshots configuration for the actor.
                 properties:
