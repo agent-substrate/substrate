@@ -26,7 +26,7 @@ request_counter = None
 request_latency = None
 locust_users = None
 
-def init_metrics():
+def init_metrics() -> None:
     global _initialized, request_counter, request_latency, locust_users
     if _initialized:
         logger.info("Metrics already initialized, skipping.")
@@ -64,7 +64,15 @@ def init_metrics():
     logger.info("Metrics initialized.")
 
 @events.request.add_listener
-def on_request(request_type, name, response_time, response_length, exception, context=None, **kwargs):
+def on_request(
+    request_type: str,
+    name: str,
+    response_time: float,
+    response_length: int,
+    exception: Exception | None,
+    context: dict | None = None,
+    **kwargs,
+) -> None:
     if not _initialized:
         return
 
@@ -86,7 +94,7 @@ def on_request(request_type, name, response_time, response_length, exception, co
     request_latency.record((response_time or 0), attributes)
 
 
-def update_user_count(delta, user_class):
+def update_user_count(delta: int, user_class: str) -> None:
     if not _initialized:
         logger.warning("Metrics not initialized, cannot update user count.")
         return

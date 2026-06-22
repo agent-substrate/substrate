@@ -39,7 +39,7 @@ class KernelMemUser(User):
     host = "api.ate-system.svc.cluster.local:443"
     template_name = "kernelmem"
 
-    def on_start(self):
+    def on_start(self) -> None:
         update_user_count(1, self.__class__.__name__)
 
         # Setup gRPC
@@ -65,7 +65,7 @@ class KernelMemUser(User):
             self.channel.close()
             raise StopUser()
 
-    def on_stop(self):
+    def on_stop(self) -> None:
         update_user_count(-1, self.__class__.__name__)
         # Suspend first
         try:
@@ -86,7 +86,7 @@ class KernelMemUser(User):
         self.channel.close()
 
     @task
-    def workload_cycle(self):
+    def workload_cycle(self) -> None:
         # Start with a half-second sleep
         time.sleep(0.5)
 
