@@ -92,20 +92,19 @@ def tee(logs: TextIO, msg: str) -> None:
     logs.flush()
 
 
-def log_run_config(args: argparse.Namespace, run_id: str, work_dir: Path, logs: TextIO) -> None:
+def log_run_config(args: argparse.Namespace, dest_prefix: str, work_dir: Path, logs: TextIO) -> None:
     """Emit a structured summary of the test config at the top of every run
     so anyone reading logs.txt later can see exactly what was executed
     without cross-referencing tests.yaml + the orchestrator's invocation."""
     lines = [
         "==== Run config ====",
-        f"  run_id:         {run_id}",
         f"  name:           {args.name}",
         f"  tag:            {args.tag}",
         f"  test_file:      {args.file}",
         f"  duration:       {args.duration}",
         f"  users:          {args.users}",
         f"  uses_boomer:    {needs_boomer(args.file)}",
-        f"  dest:           {args.dest}",
+        f"  dest_prefix:    {dest_prefix}",
         f"  work_dir:       {work_dir}",
         f"  extra flags:    {' '.join(args.locust_extra) if args.locust_extra else '(none)'}",
         "====================",
@@ -308,25 +307,32 @@ def upload(src: Path, dest: str) -> None:
 def main() -> None:
     args = parse_args()
     now = datetime.now(timezone.utc)
-    # Path-safe timestamp for filesystem
+    # Path-safe timestamp for the local work dir (no Hive semantics here).
     path_ts = now.strftime("%Y%m%dT%H%M%SZ")
     # RFC 3339 / ISO 8601 extended for the JSONL data column
     data_ts = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    # Hive partition values for the GCS layout
+    run_date = now.strftime("%Y-%m-%d")
+    run_ts = int(now.timestamp())
 
     work_dir = Path(f"/tmp/{path_ts}-locust-runner")
     work_dir.mkdir(parents=True, exist_ok=True)
     csv_prefix = work_dir / args.name
     stats_csv = work_dir / f"{args.name}_stats.csv"
     jsonl_path = work_dir / f"{args.name}.jsonl"
-    run_id = f"{args.tag}_{path_ts}"
     logs_path = work_dir / f"{args.name}_logs.txt"
     traces_path = work_dir / f"{args.name}_traces.txt"
     status_path = work_dir / f"{args.name}_status.json"
 
+    prefix = (
+        f"{args.dest.rstrip('/')}/runs/{args.name}"
+        f"/run_date={run_date}/run_ts={run_ts}/run_tag={args.tag}"
+    )
+
     with open(logs_path, "w") as logs, open(traces_path, "w") as traces:
         traces.write("\t".join(TRACE_COLUMNS) + "\n")
         traces.flush()
-        log_run_config(args, run_id, work_dir, logs)
+        log_run_config(args, prefix, work_dir, logs)
         exit_code = run_test(args, csv_prefix, logs, traces)
 
         stats_generated = False
@@ -358,22 +364,23 @@ def main() -> None:
         )
     )
 
-    prefix = f"{args.dest.rstrip('/')}/runs/{args.name}/{run_id}"
-    files = [
-        status_path,
-        logs_path,
-        traces_path,
-        jsonl_path,
-        stats_csv,
-        work_dir / f"{args.name}_exceptions.csv",
-        work_dir / f"{args.name}_failures.csv",
-        work_dir / f"{args.name}_stats_history.csv",
+    files: list[tuple[Path, str]] = [
+        (status_path, "status.json"),
+        (logs_path, "logs.txt"),
+        (traces_path, "traces.txt"),
+        (jsonl_path, "stats.jsonl"),
+        (stats_csv, "stats.csv"),
+        (work_dir / f"{args.name}_exceptions.csv", "exceptions.csv"),
+        (work_dir / f"{args.name}_failures.csv", "failures.csv"),
+        (work_dir / f"{args.name}_stats_history.csv", "stats_history.csv"),
+        # TODO: remove after data migration
+        (jsonl_path, f"{args.name}.jsonl"),
     ]
-    for src in files:
+    for src, basename in files:
         if not src.exists():
             print(f"Skipping {src}: not produced", flush=True)
             continue
-        dest = f"{prefix}/{src.name}"
+        dest = f"{prefix}/{basename}"
         upload(src, dest)
         print(f"Uploaded {src} -> {dest}", flush=True)
 
