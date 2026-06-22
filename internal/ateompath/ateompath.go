@@ -28,7 +28,20 @@ const (
 var (
 	// StaticFilesDir holds things like downloaded runsc binaries.
 	StaticFilesDir = filepath.Join(BasePath, "static-files")
+
+	// RootfsCacheDir is the node-level directory that holds extracted,
+	// read-only rootfs directories keyed by image digest.  On a cache hit the
+	// per-actor rootfs is materialized as an overlayfs mount instead of
+	// re-extracting the tarball.
+	RootfsCacheDir = filepath.Join(BasePath, "rootfs-cache")
 )
+
+// RootfsCacheLowerDir returns the read-only rootfs directory for a given image
+// digest inside the node-level cache.  This is the "lowerdir" for an overlayfs
+// mount.
+func RootfsCacheLowerDir(digest string) string {
+	return filepath.Join(RootfsCacheDir, digest, "lower")
+}
 
 func RunSCBinaryPath(sha256 string) string {
 	return filepath.Join(StaticFilesDir, "runsc-"+sha256)
