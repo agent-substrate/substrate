@@ -74,6 +74,34 @@ kubectl ate suspend actor my-counter-1
 kubectl ate delete actor my-counter-1
 ```
 
+## Micro-VM variant
+
+The same in-RAM-counter suspend/resume-continuity demo also runs on the micro-VM
+sandbox class (`ateom-microvm`: a Kata guest on Cloud Hypervisor), proving that
+the guest-memory snapshot round-trips just as gVisor's process snapshot does.
+
+- [`demos/counter/counter-microvm.yaml.tmpl`](counter-microvm.yaml.tmpl) — the
+  `WorkerPool` + `ActorTemplate` for the micro-VM sandbox class.
+- [`hack/run-microvm-demo.sh`](../../hack/run-microvm-demo.sh) — one-shot bring-up
+  that builds the micro-VM worker image, stages the guest assets, deploys the
+  control plane, and applies the manifest above. Like the other hack scripts it
+  reads `.ate-dev-env.sh` for GKE; use the kind wrapper for a local cluster.
+
+Run it and follow the printed next steps:
+
+```bash
+# GKE (uses .ate-dev-env.sh, uploads assets to GCS):
+./hack/run-microvm-demo.sh
+
+# local kind (local registry + in-cluster rustfs):
+KIND_CLUSTER_NAME=<cluster> ./hack/run-microvm-demo-kind.sh
+```
+
+Then create an actor, increment the counter, suspend it, resume it (even on a
+different worker), and confirm the count continues — the actor's counter lives in
+guest RAM, so a continuing count proves the guest-memory snapshot survived the
+round trip.
+
 ## How to Uninstall
 
 To remove the counter demo resources from your cluster, run:

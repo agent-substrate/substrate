@@ -68,7 +68,7 @@ Below is a collection of finer-grained efforts which we believe align with the a
 * Audit logging on API and lifecycle operations.
 * Sandbox integrations for threat detection telemetry.
 * Harden actor networking to further isolate from the surrounding node (e.g. with current networking
-* Support for additional sandboxing technologies beyond gVisor, including at least one flavor of microVM.
+* Support for additional sandboxing technologies beyond gVisor. An initial microVM sandbox class (based on Cloud Hypervisor) is now available.
 
 ### Observability
 

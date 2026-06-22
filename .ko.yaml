@@ -21,3 +21,11 @@ defaultPlatforms:
 baseImageOverrides:
   github.com/agent-substrate/substrate/demos/sandbox: alpine
   github.com/agent-substrate/substrate/demos/agent-secret: alpine
+  # ateom-microvm owns the cloud-hypervisor boot and builds the actor's writable
+  # virtio-blk rootfs at runtime, which needs mkfs.ext4 (e2fsprogs) plus glibc for
+  # the fetched cloud-hypervisor binary. The committed debian:stable-slim base has
+  # glibc + coreutils but NOT mkfs.ext4, so this default cannot build the rootfs on
+  # its own. hack/run-microvm-demo.sh builds hack/ateom-base (debian-slim +
+  # e2fsprogs) and overrides this base at build time via KO_CONFIG_PATH, so running
+  # the demo never edits this file. The committed default stays debian:stable-slim.
+  github.com/agent-substrate/substrate/cmd/ateom-microvm: debian:stable-slim
