@@ -20,6 +20,7 @@ RUN npm install
 # Copy source code
 COPY ui/ ./ui/
 COPY workload/ ./workload/
+COPY broker/ ./broker/
 
 # Build zero-dependency bundles
 RUN ./node_modules/.bin/esbuild workload/agent.ts \
@@ -34,6 +35,13 @@ RUN ./node_modules/.bin/esbuild ui/demo-ui.ts \
     --platform=node \
     --target=node22 \
     --outfile=dist/demo-ui.js \
+    --external:node:*
+
+RUN ./node_modules/.bin/esbuild broker/server.ts \
+    --bundle \
+    --platform=node \
+    --target=node22 \
+    --outfile=dist/broker.js \
     --external:node:*
 
 # Stage 2: Final Production Image

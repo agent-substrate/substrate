@@ -9,6 +9,9 @@ spec:
     name: agent
     ports:
     - containerPort: 8080
+    env:
+    - name: BROKER_URL
+      value: "http://nano-broker.sub-agent.svc.cluster.local:8091"
   pauseImage: registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4
   runsc:
     amd64:
@@ -32,53 +35,39 @@ spec:
   ateomImage: gcr.io/gke-ai-eco-dev/ate-images/ateom-gvisor-715889664656de67e44382a8d6ab981d@sha256:a877e335fdb6e5576714ab53ad6bf88ee676dfe642516c07673a3d9df56053b3
   replicas: 2
 ---
-apiVersion: batch/v1
-kind: CronJob
+apiVersion: apps/v1
+kind: Deployment
 metadata:
-  name: agent-luna-trigger
+  name: nano-broker
   namespace: sub-agent
 spec:
-  schedule: "*/1 * * * *"
-  jobTemplate:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nano-broker
+  template:
+    metadata:
+      labels:
+        app: nano-broker
     spec:
-      template:
-        spec:
-          containers:
-          - name: trigger
-            image: curlimages/curl:latest
-            command: ["curl", "-X", "POST", "http://demo-ui.sub-agent.svc.cluster.local/api/give-task?source=cron&agent=agent-luna"]
-          restartPolicy: OnFailure
+      containers:
+      - name: broker
+        image: ${SUB_AGENT_IMAGE}
+        command: ["/usr/bin/tini", "--", "node", "dist/broker.js"]
+        ports:
+        - containerPort: 8091
+        env:
+        - name: ATE_ENDPOINT
+          value: "api.ate-system.svc.cluster.local:443"
 ---
-apiVersion: batch/v1
-kind: CronJob
+apiVersion: v1
+kind: Service
 metadata:
-  name: agent-mars-trigger
+  name: nano-broker
   namespace: sub-agent
 spec:
-  schedule: "*/2 * * * *"
-  jobTemplate:
-    spec:
-      template:
-        spec:
-          containers:
-          - name: trigger
-            image: curlimages/curl:latest
-            command: ["curl", "-X", "POST", "http://demo-ui.sub-agent.svc.cluster.local/api/give-task?source=cron&agent=agent-mars"]
-          restartPolicy: OnFailure
----
-apiVersion: batch/v1
-kind: CronJob
-metadata:
-  name: agent-nova-trigger
-  namespace: sub-agent
-spec:
-  schedule: "*/3 * * * *"
-  jobTemplate:
-    spec:
-      template:
-        spec:
-          containers:
-          - name: trigger
-            image: curlimages/curl:latest
-            command: ["curl", "-X", "POST", "http://demo-ui.sub-agent.svc.cluster.local/api/give-task?source=cron&agent=agent-nova"]
-          restartPolicy: OnFailure
+  selector:
+    app: nano-broker
+  ports:
+  - port: 8091
+    targetPort: 8091

@@ -11,10 +11,30 @@ import { serve } from "@hono/node-server";
 class NanoClawAgent {
   private taskCounter: number = 0;
   private readonly actorId: string;
+  private readonly brokerUrl: string;
 
   constructor() {
     this.actorId = process.env.ATE_ACTOR_ID || "unknown";
+    this.brokerUrl = process.env.BROKER_URL || "http://nano-broker.sub-agent.svc.cluster.local:8091";
     console.log(`[NanoClawAgent] Identity ${this.actorId} initialized.`);
+    
+    // Self-register with the Fleet Management Broker
+    this.registerWithBroker();
+  }
+
+  private async registerWithBroker() {
+    console.log(`[NanoClawAgent] Attempting self-registration with broker: ${this.brokerUrl}`);
+    try {
+      const resp = await fetch(`${this.brokerUrl}/register`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ actorId: this.actorId })
+      });
+      const data = await resp.json();
+      console.log(`[NanoClawAgent] Registration successful:`, data);
+    } catch (e: any) {
+      console.error(`[NanoClawAgent] Registration failed: ${e.message}`);
+    }
   }
 
   public async performTask(durationMs: number) {

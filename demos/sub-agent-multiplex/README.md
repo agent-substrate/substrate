@@ -64,7 +64,7 @@ kubectl apply -f demo-ui.yaml
 Open the dashboard and use the following interaction patterns:
 
 - **Pulse (Manual Wakeup)**: Trigger tasks across the registry. Watch the **colored icons** rapidly cycle through the 2 worker slots.
-- **Live Logs**: Observe the MT Broker logs. You will see different Agent IDs appearing in the **same log stream**, proving that physical hardware is being recycled in real-time.
+- **Live Logs**: Observe the Fleet Decision Stream. You will see agent registrations and task dispatching events proving that physical hardware is being recycled in real-time.
 - **Cron Tracker**: Observe real-time countdowns as the automated schedule triggers orchestration events.
 
 ## Integrating a Real LLM API

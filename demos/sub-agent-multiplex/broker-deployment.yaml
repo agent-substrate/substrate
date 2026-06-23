@@ -1,0 +1,38 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nano-broker
+  namespace: sub-agent
+  labels:
+    app: nano-broker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nano-broker
+  template:
+    metadata:
+      labels:
+        app: nano-broker
+    spec:
+      containers:
+      - name: broker
+        image: gcr.io/gke-ai-eco-dev/substrate-demos/sub-agent:latest
+        command: ["/usr/bin/tini", "--", "node", "dist/broker.js"]
+        ports:
+        - containerPort: 8091
+        env:
+        - name: ATE_ENDPOINT
+          value: "api.ate-system.svc.cluster.local:443"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nano-broker
+  namespace: sub-agent
+spec:
+  selector:
+    app: nano-broker
+  ports:
+  - port: 8091
+    targetPort: 8091
