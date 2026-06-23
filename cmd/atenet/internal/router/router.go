@@ -78,6 +78,13 @@ type RouterConfig struct {
 	EnvoyCertPath  string
 	LogLevel       string
 	MetricsAddr    string
+
+	// Request parking: hold and retry requests whose actor cannot be served
+	// immediately due to transient worker-pool saturation, instead of failing
+	// fast. See parkingConfig.
+	ParkingEnabled   bool
+	ParkingMaxWait   time.Duration
+	ParkingMaxParked int
 }
 
 // RouterServer instantiates and coordinates runtime threads executing system modules.
@@ -187,6 +194,11 @@ func (s *RouterServer) Run(ctx context.Context) error {
 
 	xdsSrv := NewXdsServer(s.cfg.XdsPort)
 	xdsSrv.SetConfig(s.cfg.HttpPort, s.cfg.ExtprocPort, s.cfg.ExtprocAddr)
+	if s.cfg.ParkingEnabled && s.cfg.ParkingMaxWait > 0 {
+		// Envoy must keep a parked request open at least as long as the router
+		// will hold it; add a margin so the router surfaces its own 503 first.
+		xdsSrv.SetExtProcMessageTimeout(s.cfg.ParkingMaxWait + 5*time.Second)
+	}
 
 	var certContent, keyContent string
 	if s.cfg.EnvoyCertPath == "" {
@@ -204,7 +216,16 @@ func (s *RouterServer) Run(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("failed to create route-duration histogram: %w", err)
 		}
-		s.extprocSrv = NewExtProcServer(s.cfg.ExtprocPort, s.apiClient, routeDuration)
+		parkMetrics, err := newParkingMetrics()
+		if err != nil {
+			return fmt.Errorf("failed to create parking metrics: %w", err)
+		}
+		parkCfg := parkingConfig{
+			enabled:   s.cfg.ParkingEnabled,
+			maxWait:   s.cfg.ParkingMaxWait,
+			maxParked: s.cfg.ParkingMaxParked,
+		}
+		s.extprocSrv = NewExtProcServer(s.cfg.ExtprocPort, s.apiClient, routeDuration, parkCfg, parkMetrics)
 	}
 	ctrl := NewController(s.k8sClient, s.clientset, s.cfg, xdsSrv, s.extprocSrv)
 

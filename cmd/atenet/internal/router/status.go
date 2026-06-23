@@ -127,6 +127,14 @@ type TemplateInfo struct {
 	Namespace string `json:"namespace"`
 }
 
+// ParkingStatus is a snapshot of the request-parking lot for the status page.
+type ParkingStatus struct {
+	Enabled   bool   `json:"enabled"`
+	Active    int    `json:"active"`
+	MaxParked int    `json:"max_parked"`
+	MaxWait   string `json:"max_wait"`
+}
+
 type DashboardContext struct {
 	BuildTag        string             `json:"build_tag"`
 	RouterClusterIP string             `json:"router_cluster_ip"`
@@ -140,6 +148,7 @@ type DashboardContext struct {
 	Queries         []FormattedQuery   `json:"queries"`
 	Health          RouterHealthReport `json:"health"`
 	Templates       []TemplateInfo     `json:"templates"`
+	Parking         ParkingStatus      `json:"parking"`
 }
 
 type FormattedQuery struct {
@@ -234,6 +243,11 @@ func (s *RouterServer) handleStatusz(w http.ResponseWriter, req *http.Request) {
 		}
 	}
 
+	var parking ParkingStatus
+	if s.extprocSrv != nil {
+		parking = s.extprocSrv.parking.status()
+	}
+
 	data := DashboardContext{
 		BuildTag:        buildInfo,
 		RouterClusterIP: routerIP,
@@ -247,6 +261,7 @@ func (s *RouterServer) handleStatusz(w http.ResponseWriter, req *http.Request) {
 		Queries:         formattedQueries,
 		Health:          hr,
 		Templates:       templateInfos,
+		Parking:         parking,
 	}
 
 	accept := req.Header.Get("Accept")

@@ -167,3 +167,108 @@ func TestActorResumer_ResumeActor(t *testing.T) {
 		}
 	})
 }
+
+func TestActorResumer_Parking(t *testing.T) {
+	const testActorID = "actor-park"
+	const expectedIP = "10.0.0.77"
+
+	t.Run("ParksThenSucceedsOnCapacityError", func(t *testing.T) {
+		var mu sync.Mutex
+		var calls int
+		mock := &resumerMockClient{
+			resumeFn: func(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
+				mu.Lock()
+				calls++
+				n := calls
+				mu.Unlock()
+				if n < 3 {
+					// Worker pool momentarily saturated.
+					return nil, status.Error(codes.FailedPrecondition, "no free workers available")
+				}
+				return &ateapipb.ResumeActorResponse{
+					Actor: &ateapipb.Actor{ActorId: testActorID, Status: ateapipb.Actor_STATUS_RUNNING, AteomPodIp: expectedIP},
+				}, nil
+			},
+		}
+
+		resumer := NewActorResumer(mock, withParking(true, 5*time.Second))
+		actor, err := resumer.ResumeActor(context.Background(), testActorID)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if actor.GetAteomPodIp() != expectedIP {
+			t.Errorf("expected IP %q, got %q", expectedIP, actor.GetAteomPodIp())
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if calls != 3 {
+			t.Errorf("expected 3 resume attempts (parked through 2 capacity errors), got %d", calls)
+		}
+	})
+
+	t.Run("BudgetExpiryReturnsUnderlyingCapacityError", func(t *testing.T) {
+		var mu sync.Mutex
+		var calls int
+		mock := &resumerMockClient{
+			resumeFn: func(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
+				mu.Lock()
+				calls++
+				mu.Unlock()
+				return nil, status.Error(codes.FailedPrecondition, "no free workers available")
+			},
+		}
+
+		// Budget large enough for a few ~500ms-spaced retries before it elapses;
+		// the pool never frees up.
+		resumer := NewActorResumer(mock, withParking(true, 1500*time.Millisecond))
+		_, err := resumer.ResumeActor(context.Background(), testActorID)
+		// The client must see the meaningful capacity error, not a generic timeout.
+		if got := status.Code(err); got != codes.FailedPrecondition {
+			t.Errorf("expected FailedPrecondition after park budget elapsed, got %v (err=%v)", got, err)
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if calls < 2 {
+			t.Errorf("expected the resume to be retried at least twice while parked, got %d", calls)
+		}
+	})
+
+	t.Run("DisabledFailsFastOnCapacityError", func(t *testing.T) {
+		var mu sync.Mutex
+		var calls int
+		mock := &resumerMockClient{
+			resumeFn: func(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
+				mu.Lock()
+				calls++
+				mu.Unlock()
+				return nil, status.Error(codes.FailedPrecondition, "no free workers available")
+			},
+		}
+
+		// Default constructor => parking disabled => legacy fail-fast.
+		resumer := NewActorResumer(mock)
+		_, err := resumer.ResumeActor(context.Background(), testActorID)
+		if got := status.Code(err); got != codes.FailedPrecondition {
+			t.Errorf("expected FailedPrecondition, got %v (err=%v)", got, err)
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if calls != 1 {
+			t.Errorf("expected exactly 1 resume attempt when parking disabled, got %d", calls)
+		}
+	})
+}
+
+func TestResumeBackoffHasNoCap(t *testing.T) {
+	// Regression: the resume backoff must NOT set wait.Backoff.Cap. delay() zeroes
+	// Steps the moment the delay reaches Cap, which would end parking retries far
+	// short of the budget (a 2s Cap stops the loop in ~7 steps / ~5s). The budget
+	// context — not the step count or a cap — must bound how long a request parks.
+	b := resumeBackoff()
+	if b.Cap != 0 {
+		t.Errorf("resume backoff must not set Cap (it would stop retries at the cap); got %v", b.Cap)
+	}
+	if b.Steps < 1<<20 {
+		t.Errorf("resume backoff Steps must be high so the budget bounds the wait; got %d", b.Steps)
+	}
+}

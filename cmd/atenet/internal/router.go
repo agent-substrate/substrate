@@ -56,6 +56,9 @@ func NewRouterCmd() *cobra.Command {
 	cmd.Flags().DurationVar(&cfg.HealthInterval, "health-interval", 1*time.Second, "Interval for checking health of dependent services")
 	cmd.Flags().IntVar(&cfg.HttpsPort, "port-https", 8443, "TCP port for HTTPS workload traffic entering through the Envoy Router")
 	cmd.Flags().StringVar(&cfg.EnvoyCertPath, "envoy-cert-path", "", "Path to the Envoy certificate file (if empty, a self-signed cert will be generated for testing)")
+	cmd.Flags().BoolVar(&cfg.ParkingEnabled, "parking-enabled", true, "Park (hold and retry) requests whose actor cannot be served immediately due to transient worker-pool saturation, instead of failing fast")
+	cmd.Flags().DurationVar(&cfg.ParkingMaxWait, "parking-max-wait", 30*time.Second, "Maximum time a request may be parked waiting for its actor to become routable")
+	cmd.Flags().IntVar(&cfg.ParkingMaxParked, "parking-max-parked", 2048, "Maximum number of requests that may be parked simultaneously; excess requests are shed with 503")
 
 	return cmd
 }
