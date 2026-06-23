@@ -30,6 +30,8 @@ data:
     tls-key-file /run/servicedns.podcert.ate.dev/credential-bundle.pem
     tls-ca-cert-file /etc/valkey-ca/ca.crt
     tls-auth-clients yes
+    # Reload the cert every 12h.
+    tls-auto-reload-interval 43200
 
     # Enable cluster mode
     cluster-enabled yes
@@ -87,7 +89,7 @@ spec:
     spec:
       containers:
       - name: valkey
-        image: valkey/valkey:8.0
+        image: valkey/valkey:9.1@sha256:4963247afc4cd33c7d3b2d2816b9f7f8eeebab148d29056c2ca4d7cbc966f2d9
         command:
         - /bin/sh
         - -c
@@ -159,7 +161,7 @@ spec:
       restartPolicy: OnFailure
       containers:
       - name: init
-        image: valkey/valkey:8.0
+        image: valkey/valkey:9.1@sha256:4963247afc4cd33c7d3b2d2816b9f7f8eeebab148d29056c2ca4d7cbc966f2d9
         volumeMounts:
         - name: servicedns
           mountPath: /run/servicedns.podcert.ate.dev
