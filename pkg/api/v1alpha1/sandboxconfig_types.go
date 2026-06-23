@@ -43,10 +43,12 @@ type AssetFile struct {
 
 	// SHA256 is the lower-case hex SHA256 of the asset. It both names the cached
 	// file (preventing collisions) and verifies the download's integrity.
+	// When omitted, atelet downloads the asset, computes the hash on the fly,
+	// and uses it for caching and the snapshot manifest.
 	//
-	// +required
-	// +kubebuilder:validation:Pattern=`^[a-f0-9]{64}$`
-	SHA256 string `json:"sha256"`
+	// +optional
+	// +kubebuilder:validation:Pattern=`^([a-f0-9]{64})?$`
+	SHA256 string `json:"sha256,omitempty"`
 }
 
 // SandboxConfigSpec is the desired state of a SandboxConfig.

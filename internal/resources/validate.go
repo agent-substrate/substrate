@@ -101,6 +101,9 @@ func ValidateContainerNames(names []string) error {
 // point the cache-hit early return (and the download target) at an arbitrary
 // binary outside the static-files dir.
 func ValidateRunscHash(sha256Hash string) error {
+	if sha256Hash == "" {
+		return nil
+	}
 	if len(sha256Hash) != 64 {
 		return fmt.Errorf("invalid runsc sha256 hash: want 64 hex chars, got %d", len(sha256Hash))
 	}

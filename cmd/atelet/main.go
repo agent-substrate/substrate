@@ -26,6 +26,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 
 	"cloud.google.com/go/storage"
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/ategcs"
@@ -187,6 +188,9 @@ type AteomHerder struct {
 	pullCache     *memorypullcache.MemoryPullCache
 	anonGCSClient ategcs.ObjectStorage
 	gcsClient     ategcs.ObjectStorage
+
+	urlHashMu    sync.Mutex
+	urlHashCache map[string]string
 }
 
 var _ ateletpb.AteomHerderServer = (*AteomHerder)(nil)
@@ -204,6 +208,7 @@ func NewService(
 		pullCache:     pullCache,
 		anonGCSClient: anonGCSClient,
 		gcsClient:     gcsClient,
+		urlHashCache:  make(map[string]string),
 	}
 	return wms
 }

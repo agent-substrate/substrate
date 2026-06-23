@@ -86,81 +86,183 @@ func recordFromRequest(sa *ateletpb.SandboxAssets) (*sandboxAssetsRecord, error)
 // local path. For gVisor this is the single "runsc" asset, passed to ateom as
 // RunscPath. Binaries are content-addressed and cached, so re-fetching at
 // Checkpoint/Restore is a no-op once present.
+//
+// When the asset's SHA256 is empty (the SandboxConfig omitted it), the binary
+// is downloaded and hashed on the fly; the resolved hash is written back into
+// rec so that writeSandboxRecord persists the real hash for checkpoint/restore.
 func (s *AteomHerder) ensureSandboxBinary(ctx context.Context, rec *sandboxAssetsRecord) (string, error) {
 	if err := os.MkdirAll(ateompath.StaticFilesDir, 0o700); err != nil {
 		return "", fmt.Errorf("while creating static files dir: %w", err)
 	}
-	// gVisor uses a single "runsc" asset.
 	entry, ok := rec.Assets["runsc"]
 	if !ok {
 		return "", status.Errorf(codes.InvalidArgument, "sandbox assets for class %q missing required %q file", rec.SandboxClass, "runsc")
 	}
-	return s.fetchAsset(ctx, entry)
+	path, resolvedHash, err := s.fetchAsset(ctx, entry)
+	if err != nil {
+		return "", err
+	}
+	if entry.SHA256 != resolvedHash {
+		entry.SHA256 = resolvedHash
+		rec.Assets["runsc"] = entry
+	}
+	return path, nil
 }
 
-// fetchAsset downloads one content-addressed asset (verifying its sha256) into
-// the shared static-files cache and returns its local path. On a cache hit it
-// returns immediately.
-func (s *AteomHerder) fetchAsset(ctx context.Context, entry assetEntry) (string, error) {
+// fetchAsset downloads one content-addressed asset into the shared static-files
+// cache and returns its local path and resolved SHA256. When entry.SHA256 is
+// provided, the download is verified against the expected hash. When empty, the
+// hash is computed on the fly and an in-memory URL→hash cache avoids redundant
+// downloads within the same atelet process lifetime.
+func (s *AteomHerder) fetchAsset(ctx context.Context, entry assetEntry) (string, string, error) {
 	if err := resources.ValidateRunscHash(entry.SHA256); err != nil {
-		return "", status.Error(codes.InvalidArgument, err.Error())
+		return "", "", status.Error(codes.InvalidArgument, err.Error())
 	}
 
+	if entry.SHA256 != "" {
+		return s.fetchAssetPinned(ctx, entry)
+	}
+	return s.fetchAssetUnpinned(ctx, entry)
+}
+
+// fetchAssetPinned handles the case where the expected SHA256 is known: check
+// the disk cache, download on miss, and verify the hash.
+func (s *AteomHerder) fetchAssetPinned(ctx context.Context, entry assetEntry) (string, string, error) {
 	localPath := ateompath.RunSCBinaryPath(entry.SHA256)
 	_, err := os.Stat(localPath)
-	if err == nil { // EQUALS nil
-		return localPath, nil
+	if err == nil {
+		return localPath, entry.SHA256, nil
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return "", fmt.Errorf("while stat-ing local file: %w", err)
+		return "", "", fmt.Errorf("while stat-ing local file: %w", err)
 	}
-
-	// gVisor's runsc lives in the public gs://gvisor bucket, so the anonymous
-	// client suffices. TODO: drive authenticated asset fetches from atelet
-	// configuration for assets in private buckets.
-	rc, err := ategcs.Open(ctx, s.anonGCSClient, entry.URL)
-	if err != nil {
-		return "", fmt.Errorf("while fetching %v: %w", entry.URL, err)
-	}
-	defer rc.Close()
 
 	wantSum, err := hex.DecodeString(entry.SHA256)
 	if err != nil {
-		return "", fmt.Errorf("while parsing sha256 hash: %w", err)
+		return "", "", fmt.Errorf("while parsing sha256 hash: %w", err)
 	}
+
+	gotHash, err := s.downloadAsset(ctx, entry.URL, localPath, wantSum)
+	if err != nil {
+		return "", "", err
+	}
+	return localPath, gotHash, nil
+}
+
+// fetchAssetUnpinned handles the case where no SHA256 was provided: consult the
+// in-memory URL→hash cache first, then download and compute the hash on the fly.
+func (s *AteomHerder) fetchAssetUnpinned(ctx context.Context, entry assetEntry) (string, string, error) {
+	s.urlHashMu.Lock()
+	cachedHash := s.urlHashCache[entry.URL]
+	s.urlHashMu.Unlock()
+
+	if cachedHash != "" {
+		localPath := ateompath.RunSCBinaryPath(cachedHash)
+		if _, err := os.Stat(localPath); err == nil {
+			return localPath, cachedHash, nil
+		}
+	}
+
+	localPath, computedHash, err := s.downloadAndCache(ctx, entry.URL)
+	if err != nil {
+		return "", "", err
+	}
+
+	s.urlHashMu.Lock()
+	s.urlHashCache[entry.URL] = computedHash
+	s.urlHashMu.Unlock()
+
+	return localPath, computedHash, nil
+}
+
+// downloadAndCache downloads an asset to a temp file while computing its SHA256,
+// then places it in the content-addressed cache. If a file with the computed
+// hash already exists on disk, the download is discarded and the existing file
+// is returned.
+func (s *AteomHerder) downloadAndCache(ctx context.Context, url string) (string, string, error) {
+	rc, err := ategcs.Open(ctx, s.anonGCSClient, url)
+	if err != nil {
+		return "", "", fmt.Errorf("while fetching %v: %w", url, err)
+	}
+	defer rc.Close()
+
+	tmpFile, err := os.CreateTemp(ateompath.StaticFilesDir, "runsc-download-")
+	if err != nil {
+		return "", "", fmt.Errorf("while creating temp file: %w", err)
+	}
+	tmpName := tmpFile.Name()
+	defer os.Remove(tmpName)
+	defer tmpFile.Close()
+
+	hasher := sha256.New()
+	n, err := io.Copy(io.MultiWriter(tmpFile, hasher), io.LimitReader(rc, maxAssetBytes+1))
+	if err != nil {
+		return "", "", fmt.Errorf("while downloading %v: %w", url, err)
+	}
+	if n > maxAssetBytes {
+		return "", "", fmt.Errorf("asset %v exceeds %d-byte cap", url, maxAssetBytes)
+	}
+
+	computedHash := hex.EncodeToString(hasher.Sum(nil))
+	localPath := ateompath.RunSCBinaryPath(computedHash)
+
+	if _, err := os.Stat(localPath); err == nil {
+		return localPath, computedHash, nil
+	}
+
+	if err := tmpFile.Chmod(0o755); err != nil {
+		return "", "", fmt.Errorf("while setting file mode: %w", err)
+	}
+	if err := tmpFile.Close(); err != nil {
+		return "", "", fmt.Errorf("while closing temp file: %w", err)
+	}
+	if err := os.Rename(tmpName, localPath); err != nil {
+		return "", "", fmt.Errorf("while renaming temp file to target: %w", err)
+	}
+
+	return localPath, computedHash, nil
+}
+
+// downloadAsset downloads a URL to localPath, verifying the content against
+// wantSum. Returns the hex-encoded hash of the downloaded content.
+func (s *AteomHerder) downloadAsset(ctx context.Context, url, localPath string, wantSum []byte) (string, error) {
+	rc, err := ategcs.Open(ctx, s.anonGCSClient, url)
+	if err != nil {
+		return "", fmt.Errorf("while fetching %v: %w", url, err)
+	}
+	defer rc.Close()
 
 	tmpFile, err := os.CreateTemp(filepath.Dir(localPath), filepath.Base(localPath)+"-download-")
 	if err != nil {
 		return "", fmt.Errorf("while creating temp file: %w", err)
 	}
 	tmpName := tmpFile.Name()
-	defer os.Remove(tmpName) // partial-download cleanup; no-op after rename
+	defer os.Remove(tmpName)
 	defer tmpFile.Close()
 
-	// Stream to disk, hashing as we go; +1 lets an over-cap asset trip n > cap.
-	// Verify-after-copy keeps a bad download at the temp path, never the cache.
 	hasher := sha256.New()
 	n, err := io.Copy(io.MultiWriter(tmpFile, hasher), io.LimitReader(rc, maxAssetBytes+1))
 	if err != nil {
-		return "", fmt.Errorf("while downloading %v: %w", entry.URL, err)
+		return "", fmt.Errorf("while downloading %v: %w", url, err)
 	}
 	if n > maxAssetBytes {
-		return "", fmt.Errorf("asset %v exceeds %d-byte cap", entry.URL, maxAssetBytes)
+		return "", fmt.Errorf("asset %v exceeds %d-byte cap", url, maxAssetBytes)
 	}
-	if got := hasher.Sum(nil); !bytes.Equal(got, wantSum) {
-		return "", fmt.Errorf("sha256 mismatch; got=%x want=%s", got, entry.SHA256)
+	got := hasher.Sum(nil)
+	if !bytes.Equal(got, wantSum) {
+		return "", fmt.Errorf("sha256 mismatch; got=%x want=%x", got, wantSum)
 	}
 
 	if err := tmpFile.Chmod(0o755); err != nil {
 		return "", fmt.Errorf("while setting file mode: %w", err)
 	}
-	if err := tmpFile.Close(); err != nil { // flush before rename
+	if err := tmpFile.Close(); err != nil {
 		return "", fmt.Errorf("while closing temp file: %w", err)
 	}
 	if err := os.Rename(tmpName, localPath); err != nil {
 		return "", fmt.Errorf("while renaming temp file to target: %w", err)
 	}
 
-	return localPath, nil
+	return hex.EncodeToString(got), nil
 }
 
 // writeSandboxRecord persists the actor's running sandbox assets on-node so a

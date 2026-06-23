@@ -121,7 +121,7 @@ func TestValidateRunscHash(t *testing.T) {
 	}{
 		{"valid lowercase", valid, false},
 		{"valid uppercase", strings.ToUpper(valid), false},
-		{"empty", "", true},
+		{"empty", "", false},
 		{"too short", "abc123", true},
 		{"too long", valid + "00", true},
 		{"separator", strings.Repeat("a", 60) + "/../", true},
