@@ -89,6 +89,7 @@ func TestBuildActorOCISpec_IdentityMount(t *testing.T) {
 		map[string]string{"k": "v"},
 		"/run/netns/x",
 		"/host/actors/ns:tmpl:id/identity",
+		nil,
 	)
 	found := false
 	for _, m := range spec.Mounts {
@@ -113,7 +114,7 @@ func TestBuildActorOCISpec_IdentityMount(t *testing.T) {
 
 // Without an identity dir (the pause container), no identity mount appears.
 func TestBuildActorOCISpec_NoIdentityMountForPause(t *testing.T) {
-	bare := buildActorOCISpec([]string{"/pause"}, nil, nil, "/run/netns/x", "")
+	bare := buildActorOCISpec([]string{"/pause"}, nil, nil, "/run/netns/x", "", nil)
 	for _, m := range bare.Mounts {
 		if m.Destination == IdentityMountPath {
 			t.Errorf("identity mount must be absent when identityDir is empty")
@@ -524,5 +525,174 @@ func TestUntar_TruncatedArchive(t *testing.T) {
 	if !strings.Contains(err.Error(), "in tarReader.Next") &&
 		!strings.Contains(err.Error(), "unexpected EOF") {
 		t.Errorf("error = %v, want it to surface the underlying tar/copy error", err)
+	}
+}
+
+// --- Volume mount tests ---
+
+func TestBuildActorOCISpec_VolumeMounts(t *testing.T) {
+	volumeMounts := []VolumeMountConfig{
+		{
+			Name:      "shared-data",
+			MountPath: "/workspace",
+			HostPath:  "/var/lib/ateom-storage/shared-data",
+			ReadOnly:  false,
+		},
+		{
+			Name:      "model-cache",
+			MountPath: "/models",
+			HostPath:  "/var/lib/ateom-storage/model-cache",
+			ReadOnly:  true,
+		},
+	}
+
+	spec := buildActorOCISpec(
+		[]string{"/app"},
+		nil,
+		nil,
+		"/run/netns/test",
+		"/var/lib/ateom-gvisor/actors/ns:tmpl:id/identity",
+		volumeMounts,
+	)
+
+	// 4 standard + 1 identity + 2 volume mounts = 7
+	if got := len(spec.Mounts); got != 7 {
+		t.Fatalf("mount count = %d, want 7; mounts: %+v", got, spec.Mounts)
+	}
+
+	// Check shared-data mount (read-write)
+	sharedDataMount := spec.Mounts[5]
+	if sharedDataMount.Destination != "/workspace" {
+		t.Errorf("shared-data mount destination = %q, want %q", sharedDataMount.Destination, "/workspace")
+	}
+	if sharedDataMount.Source != "/var/lib/ateom-storage/shared-data" {
+		t.Errorf("shared-data mount source = %q, want %q", sharedDataMount.Source, "/var/lib/ateom-storage/shared-data")
+	}
+	if sharedDataMount.Type != "bind" {
+		t.Errorf("shared-data mount type = %q, want %q", sharedDataMount.Type, "bind")
+	}
+	if slices.Contains(sharedDataMount.Options, "ro") {
+		t.Errorf("shared-data mount should NOT be read-only, options=%v", sharedDataMount.Options)
+	}
+
+	// Check model-cache mount (read-only)
+	modelCacheMount := spec.Mounts[6]
+	if modelCacheMount.Destination != "/models" {
+		t.Errorf("model-cache mount destination = %q, want %q", modelCacheMount.Destination, "/models")
+	}
+	if !slices.Contains(modelCacheMount.Options, "ro") {
+		t.Errorf("model-cache mount must be read-only, options=%v", modelCacheMount.Options)
+	}
+}
+
+func TestBuildActorOCISpec_VolumeMountWithSubPath(t *testing.T) {
+	volumeMounts := []VolumeMountConfig{
+		{
+			Name:      "shared-data",
+			MountPath: "/workspace",
+			HostPath:  "/var/lib/ateom-storage/shared-data",
+			SubPath:   "actor-123/workspace",
+			ReadOnly:  false,
+		},
+	}
+
+	spec := buildActorOCISpec(
+		[]string{"/app"},
+		nil,
+		nil,
+		"/run/netns/test",
+		"",
+		volumeMounts,
+	)
+
+	// 4 standard + 1 volume mount = 5
+	mount := spec.Mounts[4]
+	wantSource := "/var/lib/ateom-storage/shared-data/actor-123/workspace"
+	if mount.Source != wantSource {
+		t.Errorf("mount source = %q, want %q", mount.Source, wantSource)
+	}
+	if mount.Destination != "/workspace" {
+		t.Errorf("mount destination = %q, want %q", mount.Destination, "/workspace")
+	}
+}
+
+func TestBuildActorOCISpec_NoVolumeMounts(t *testing.T) {
+	spec := buildActorOCISpec(
+		[]string{"/app"},
+		nil,
+		nil,
+		"/run/netns/test",
+		"",
+		nil,
+	)
+
+	// 4 standard mounts only
+	if got := len(spec.Mounts); got != 4 {
+		t.Errorf("mount count = %d, want 4", got)
+	}
+	for _, m := range spec.Mounts {
+		if m.Destination == "/workspace" || m.Destination == "/models" {
+			t.Errorf("unexpected volume mount at %q", m.Destination)
+		}
+	}
+}
+
+func TestBuildActorOCISpec_MountOrder(t *testing.T) {
+	volumeMounts := []VolumeMountConfig{
+		{Name: "vol1", MountPath: "/a", HostPath: "/host/a"},
+		{Name: "vol2", MountPath: "/b", HostPath: "/host/b"},
+	}
+
+	spec := buildActorOCISpec(
+		[]string{"/app"},
+		nil,
+		nil,
+		"/run/netns/test",
+		"/identity/dir",
+		volumeMounts,
+	)
+
+	// Expected order: proc, dev, sys, resolv.conf, identity, vol1, vol2
+	wantDests := []string{
+		"/proc", "/dev", "/sys", "/etc/resolv.conf",
+		IdentityMountPath, "/a", "/b",
+	}
+
+	if len(spec.Mounts) != len(wantDests) {
+		t.Fatalf("mount count = %d, want %d", len(spec.Mounts), len(wantDests))
+	}
+
+	for i, want := range wantDests {
+		if spec.Mounts[i].Destination != want {
+			t.Errorf("mount[%d].Destination = %q, want %q", i, spec.Mounts[i].Destination, want)
+		}
+	}
+}
+
+func TestCreateMountPoint_VolumePath(t *testing.T) {
+	root := t.TempDir()
+	if err := createMountPoint(root, "/workspace"); err != nil {
+		t.Fatalf("createMountPoint: %v", err)
+	}
+	info, err := os.Stat(filepath.Join(root, "workspace"))
+	if err != nil {
+		t.Fatalf("mount point not created: %v", err)
+	}
+	if !info.IsDir() {
+		t.Errorf("mount point must be a directory")
+	}
+}
+
+func TestCreateMountPoint_NestedVolumePath(t *testing.T) {
+	root := t.TempDir()
+	if err := createMountPoint(root, "/data/nested/path"); err != nil {
+		t.Fatalf("createMountPoint: %v", err)
+	}
+	info, err := os.Stat(filepath.Join(root, "data", "nested", "path"))
+	if err != nil {
+		t.Fatalf("nested mount point not created: %v", err)
+	}
+	if !info.IsDir() {
+		t.Errorf("nested mount point must be a directory")
 	}
 }

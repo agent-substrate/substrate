@@ -73,10 +73,20 @@ message SandboxAssets {
   map<string, ArchAssets> assets = 2; // arch -> {name -> file}
 }
 
+// VolumeMount describes a single storage volume mount for an actor container.
+// The volume name references a storage volume defined on the WorkerPool.
+message VolumeMount {
+  string name       = 1;  // References a WorkerPool storageVolume name
+  string mount_path = 2;  // Absolute path inside the container
+  bool   read_only  = 3;  // Mount as read-only
+  string sub_path   = 4;  // Optional sub-directory within the volume
+}
+
 // WorkloadSpec parallels Pod, but with far fewer configurable fields.
 message WorkloadSpec {
-  repeated Container containers  = 1;
-  string             pause_image = 2;
+  repeated Container    containers   = 1;
+  string                pause_image  = 2;
+  repeated VolumeMount  volume_mounts = 3;  // Storage volume mounts
 }
 
 message Container {

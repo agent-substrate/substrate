@@ -200,6 +200,46 @@ spec:
                 required:
                 - location
                 type: object
+              volumes:
+                description: |-
+                  Volumes defines storage volumes available to this actor's containers.
+                  Each volume references a name defined in the assigned WorkerPool's
+                  storageVolumes. The actor cannot request storage the pool doesn't provide.
+                items:
+                  description: |-
+                    ActorVolume maps a WorkerPool storage volume into the actor's containers.
+                    The name must match a volume defined in the assigned WorkerPool's
+                    storageVolumes field.
+                  properties:
+                    mountPath:
+                      description: |-
+                        MountPath is the absolute path inside the actor's containers where
+                        the volume will be mounted.
+                      pattern: ^/
+                      type: string
+                    name:
+                      description: Name of the volume (must match a WorkerPool storageVolume
+                        name).
+                      minLength: 1
+                      type: string
+                    readOnly:
+                      description: ReadOnly forces the volume to be read-only inside
+                        the actor.
+                      type: boolean
+                    subPath:
+                      description: |-
+                        SubPath is an optional sub-directory within the volume to mount
+                        instead of the whole volume. The literal "${ACTOR_ID}" is replaced
+                        with the actor's ID at mount time, enabling per-actor subdirectories
+                        on shared storage.
+                      type: string
+                  required:
+                  - mountPath
+                  - name
+                  type: object
+                maxItems: 16
+                type: array
+                x-kubernetes-list-type: atomic
               workerSelector:
                 description: |-
                   WorkerSelector restricts which worker pools actors from this template may

@@ -51,7 +51,19 @@ const (
 	ActorIDFileName = "actor-id"
 )
 
-func prepareOCIDirectory(ctx context.Context, pullCache *memorypullcache.MemoryPullCache, actorTemplateNamespace, actorTemplateName, actorID, containerName, ref string, args []string, env []string, annotations map[string]string, netns string, identityDir string) error {
+// VolumeMountConfig holds the resolved configuration for a single volume
+// mount to be added to an actor container's OCI spec. HostPath is the
+// absolute path on the host (inside the ateom container) where the storage
+// volume is mounted.
+type VolumeMountConfig struct {
+	Name      string
+	MountPath string
+	HostPath  string
+	SubPath   string
+	ReadOnly  bool
+}
+
+func prepareOCIDirectory(ctx context.Context, pullCache *memorypullcache.MemoryPullCache, actorTemplateNamespace, actorTemplateName, actorID, containerName, ref string, args []string, env []string, annotations map[string]string, netns string, identityDir string, volumeMounts []VolumeMountConfig) error {
 	tracer := otel.Tracer("prepareOCIDirectory")
 
 	ctx, span := tracer.Start(ctx, "prepareOCIDirectory")
@@ -88,7 +100,14 @@ func prepareOCIDirectory(ctx context.Context, pullCache *memorypullcache.MemoryP
 		}
 	}
 
-	ociSpec := buildActorOCISpec(args, env, annotations, netns, identityDir)
+	// Create mount point directories in rootfs for each storage volume mount.
+	for _, vm := range volumeMounts {
+		if err := createMountPoint(rootPath, vm.MountPath); err != nil {
+			return fmt.Errorf("while creating volume mount point %q: %w", vm.MountPath, err)
+		}
+	}
+
+	ociSpec := buildActorOCISpec(args, env, annotations, netns, identityDir, volumeMounts)
 	ociSpecBytes, err := json.MarshalIndent(ociSpec, "", "  ")
 	if err != nil {
 		return fmt.Errorf("while marshaling OCI spec: %w", err)
@@ -105,7 +124,8 @@ func prepareOCIDirectory(ctx context.Context, pullCache *memorypullcache.MemoryP
 // When identityDir is non-empty it adds a read-only bind mount of that host
 // directory at IdentityMountPath so the actor can read its own ID (see
 // IdentityMountPath for why this is a bind mount rather than env vars).
-func buildActorOCISpec(args []string, env []string, annotations map[string]string, netns string, identityDir string) *specs.Spec {
+// volumeMounts are additional bind mounts from WorkerPool storage volumes.
+func buildActorOCISpec(args []string, env []string, annotations map[string]string, netns string, identityDir string, volumeMounts []VolumeMountConfig) *specs.Spec {
 	envVars := []string{
 		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
 	}
@@ -146,6 +166,24 @@ func buildActorOCISpec(args []string, env []string, annotations map[string]strin
 			Type:        "bind",
 			Source:      identityDir,
 			Options:     []string{"ro"},
+		})
+	}
+
+	// Add storage volume bind mounts from WorkerPool.
+	for _, vm := range volumeMounts {
+		options := []string{"bind"}
+		if vm.ReadOnly {
+			options = append(options, "ro")
+		}
+		source := vm.HostPath
+		if vm.SubPath != "" {
+			source = filepath.Join(source, vm.SubPath)
+		}
+		mounts = append(mounts, specs.Mount{
+			Destination: vm.MountPath,
+			Type:        "bind",
+			Source:      source,
+			Options:     options,
 		})
 	}
 

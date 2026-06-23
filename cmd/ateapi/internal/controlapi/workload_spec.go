@@ -60,6 +60,16 @@ func workloadSpecFromActorTemplate(ctx context.Context, kubeClient kubernetes.In
 		workloadSpec.Containers = append(workloadSpec.Containers, ateletCtr)
 	}
 
+	// Convert ActorTemplate volumes to proto VolumeMounts.
+	for _, v := range actorTemplate.Spec.Volumes {
+		workloadSpec.VolumeMounts = append(workloadSpec.VolumeMounts, &ateletpb.VolumeMount{
+			Name:      v.Name,
+			MountPath: v.MountPath,
+			ReadOnly:  v.ReadOnly,
+			SubPath:   v.SubPath,
+		})
+	}
+
 	return workloadSpec, nil
 }
 
