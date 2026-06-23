@@ -1,5 +1,4 @@
-#!/usr/bin/env bash
-
+#!/bin/bash
 # Copyright 2026 Google LLC
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -14,9 +13,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-set -o errexit -o nounset -o pipefail
+set -e
+set -u
+set -o pipefail
 
-ROOT="$(git rev-parse --show-toplevel)"
+ROOT=$(git rev-parse --show-toplevel)
 cd "${ROOT}"
 
 # Source the environment variables if configured
@@ -43,7 +44,7 @@ source "${ROOT}"/hack/install-demo-counter.sh
 source "${ROOT}"/hack/install-demo-sandbox.sh
 source "${ROOT}"/hack/install-demo-claude-code-multiplex.sh
 source "${ROOT}"/hack/install-demo-agent-secret.sh
-source "${ROOT}"/hack/install-demo-multi-template.sh
+source "${ROOT}"/hack/install-demo-sub-agent-multiplex.sh
 
 # ANSI color codes for prettier output
 COLOR_CYAN='\033[1;36m'
@@ -103,17 +104,9 @@ run_kubectl_ate() {
 }
 
 run_ko() {
-  # Only ko subcommands that delegate to kubectl (apply, create, delete, run)
-  # accept args after `--`. ko build, resolve, deps, login etc. reject
-  # `--context=...` as an unknown subcommand and abort the install.
-  case "${1:-}" in
-    apply|create|delete|run)
-      ./hack/run-tool.sh ko "$@" ${KUBECTL_CONTEXT:+-- --context="${KUBECTL_CONTEXT}"}
-      ;;
-    *)
-      ./hack/run-tool.sh ko "$@"
-      ;;
-  esac
+  ./hack/run-tool.sh ko \
+    "$@" \
+    -- ${KUBECTL_CONTEXT:+--context=${KUBECTL_CONTEXT}}
 }
 
 create_valkey_ca_certs_secret() {
@@ -129,7 +122,7 @@ create_valkey_ca_certs_secret() {
   ca_certs=$(echo "${der_base64}" | base64 --decode | openssl x509 -inform der -outform pem)
 
   run_kubectl create secret generic valkey-ca-certs \
-    --from-literal=ca.crt="${ca_certs}" \
+    --from-literal=ca.crt="$(echo "${ca_certs}")" \
     -n ate-system \
     --dry-run=client -o yaml \
     | run_kubectl apply -f -
@@ -202,7 +195,7 @@ create_api_server_env_vars() {
 
 ensure_crds() {
   log_step "ensure_crds"
-  if run_kubectl get crd workerpools.ate.dev actortemplates.ate.dev sandboxconfigs.ate.dev >/dev/null 2>&1; then
+  if run_kubectl get crd workerpools.ate.dev actortemplates.ate.dev >/dev/null 2>&1; then
     return
   fi
 
@@ -217,16 +210,6 @@ deploy_crds() {
 deploy_ate_system() {
   log_step "deploy_ate_system"
   ensure_crds
-
-  # Enforce per-class SandboxConfig asset requirements (applied before any
-  # SandboxConfig so the defaults below are validated too).
-  run_kubectl apply -f manifests/ate-install/sandboxconfig-validation.yaml
-
-  # Install the cluster-wide default sandbox config(s). Sandbox binaries live on
-  # cluster-scoped SandboxConfigs resolved via each WorkerPool's SandboxClass
-  # (decoupled from ActorTemplate). gVisor pools resolve to this default unless
-  # they name their own SandboxConfig.
-  run_kubectl apply -f manifests/ate-install/sandboxconfig-gvisor.yaml
 
   # Ensure namespace exists
   run_kubectl apply -f manifests/ate-install/ate-system-namespace.yaml \
