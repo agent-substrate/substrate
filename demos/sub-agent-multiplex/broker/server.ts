@@ -74,6 +74,16 @@ app.post("/register", async (c) => {
   return c.json({ status: "registered", broker: "FleetBroker-v1" });
 });
 
+// Infrastructure calls this when it detects due work
+app.post("/notify-due", async (c) => {
+  const { sessionId, dueCount } = await c.req.json();
+  log("orchestrator", `Infrastructure Alert: **${sessionId}** has ${dueCount} tasks pending.`);
+  
+  // Custom Platform Policy: Always trigger if work is due
+  performTask(sessionId);
+  return c.json({ status: "processed" });
+});
+
 // Dashboard polls this for "Platform View"
 app.get("/status", (c) => {
   return c.json({
