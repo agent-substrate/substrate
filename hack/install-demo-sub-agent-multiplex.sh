@@ -14,12 +14,12 @@
 #
 # This is sourced as part of install-ate.sh. Do not run directly.
 
-ATE_DEMOS+=(demo-openclaw) # register demo-openclaw
+ATE_DEMOS+=(sub-agent-multiplex) # register sub-agent-multiplex
 
-demo-openclaw_cmdline() {
+sub-agent-multiplex_cmdline() {
   case "${1}" in
-    --deploy-demo-openclaw) demo-openclaw_deploy ;;
-    --delete-demo-openclaw) demo-openclaw_delete ;;
+    --deploy-sub-agent-multiplex) sub-agent-multiplex_deploy ;;
+    --delete-sub-agent-multiplex) sub-agent-multiplex_delete ;;
     *)
       return 1
       ;;
@@ -27,61 +27,58 @@ demo-openclaw_cmdline() {
   return 0
 }
 
-# Build the unified image (UI + Workload), push to ${KO_DOCKER_REPO}, and echo 
-# the resolved digest-pinned reference.
-# This is a TypeScript application, so it uses docker buildx rather than ko.
-demo-openclaw_build_image() {
-  local repo="${KO_DOCKER_REPO}/openclaw-demo"
+sub-agent-multiplex_build_image() {
+  local repo="${KO_DOCKER_REPO}/sub-agent-multiplex"
   local stage_tag="${repo}:build-$(date +%s)"
+  cp bin/kubectl-ate demos/sub-agent-multiplex/
   docker buildx build \
     --platform=linux/amd64 \
     --push \
     -t "${stage_tag}" \
-    demos/openclaw >&2
+    demos/sub-agent-multiplex >&2
   local digest
   digest=$(docker buildx imagetools inspect "${stage_tag}" --format '{{json .}}' \
              | jq -r '.manifest.digest')
   if [[ -z "${digest}" || "${digest}" == "null" ]]; then
-    echo "Failed to resolve openclaw image digest from ${stage_tag}" >&2
+    echo "Failed to resolve sub-agent-multiplex image digest from ${stage_tag}" >&2
     return 1
   fi
   echo "${repo}@${digest}"
 }
 
-demo-openclaw_deploy() {
-  log_step "demo-openclaw_deploy"
+sub-agent-multiplex_deploy() {
+  log_step "sub-agent-multiplex_deploy"
   if [[ -z "${BUCKET_NAME:-}" ]]; then
     echo "BUCKET_NAME must be set" >&2
     return 1
   fi
   if [[ -z "${KO_DOCKER_REPO:-}" ]]; then
-    echo "KO_DOCKER_REPO must be set (see hack/ate-dev-env.sh.example)" >&2
+    echo "KO_DOCKER_REPO must be set" >&2
     return 1
   fi
 
-  local openclaw_image
-  openclaw_image=$(demo-openclaw_build_image)
-  if [[ -z "${openclaw_image}" ]]; then
+  local image
+  image=$(sub-agent-multiplex_build_image)
+  if [[ -z "${image}" ]]; then
     return 1
   fi
-  log_step "  openclaw image: ${openclaw_image}"
+  log_step "  sub-agent-multiplex image: ${image}"
 
   sed -e "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" \
-      -e "s|\${OPENCLAW_IMAGE}|${openclaw_image}|g" \
-      demos/openclaw/openclaw-multiplex.yaml.tmpl \
+      -e "s|\${SUB_AGENT_IMAGE}|${image}|g" \
+      demos/sub-agent-multiplex/sub-agent-multiplex.yaml.tmpl \
     | run_kubectl apply -f -
 }
 
-demo-openclaw_delete() {
-  log_step "demo-openclaw_delete"
-  sed -e "s|\${BUCKET_NAME}|${BUCKET_NAME:-placeholder}|g" \
-      -e "s|\${OPENCLAW_IMAGE}|placeholder|g" \
-      demos/openclaw/openclaw-multiplex.yaml.tmpl \
+sub-agent-multiplex_delete() {
+  log_step "sub-agent-multiplex_delete"
+  sed -e "s|\${BUCKET_NAME}|placeholder|g" \
+      -e "s|\${SUB_AGENT_IMAGE}|placeholder|g" \
+      demos/sub-agent-multiplex/sub-agent-multiplex.yaml.tmpl \
     | run_kubectl delete --ignore-not-found -f -
 }
 
-demo-openclaw_usage() {
+sub-agent-multiplex_usage() {
   echo ""
   echo "  Required env: BUCKET_NAME, KO_DOCKER_REPO"
-  echo "  See demos/openclaw/README.md for the walkthrough."
 }

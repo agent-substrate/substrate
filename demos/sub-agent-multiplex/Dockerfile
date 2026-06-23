@@ -18,17 +18,18 @@ COPY package.json ./
 RUN npm install
 
 # Copy source code
-COPY src/ ./src/
+COPY ui/ ./ui/
+COPY workload/ ./workload/
 
 # Build zero-dependency bundles
-RUN ./node_modules/.bin/esbuild src/agent.ts \
+RUN ./node_modules/.bin/esbuild workload/agent.ts \
     --bundle \
     --platform=node \
     --target=node22 \
     --outfile=dist/agent.js \
     --external:node:*
 
-RUN ./node_modules/.bin/esbuild src/demo-ui.ts \
+RUN ./node_modules/.bin/esbuild ui/demo-ui.ts \
     --bundle \
     --platform=node \
     --target=node22 \

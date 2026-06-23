@@ -1,0 +1,84 @@
+apiVersion: ate.dev/v1alpha1
+kind: ActorTemplate
+metadata:
+  name: sub-agent-agent
+  namespace: sub-agent
+spec:
+  containers:
+  - image: ${SUB_AGENT_IMAGE}
+    name: agent
+    ports:
+    - containerPort: 8080
+  pauseImage: registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4
+  runsc:
+    amd64:
+      sha256Hash: a397be1abc2420d26bce6c70e6e2ff96c73aaaab929756c56f5e2089ea842b63
+      url: gs://gvisor/releases/nightly/2026-05-19/x86_64/runsc
+    arm64:
+      sha256Hash: 1ba2366ae2efceba166046f51a4104f9261c9cb72c6db8f5b3fe2dc57dea86b9
+      url: gs://gvisor/releases/nightly/2026-05-19/aarch64/runsc
+  snapshotsConfig:
+    location: gs://${BUCKET_NAME}/sub-agent-agent/v12/
+  workerPoolRef:
+    name: agent-pool
+    namespace: sub-agent
+---
+apiVersion: ate.dev/v1alpha1
+kind: WorkerPool
+metadata:
+  name: agent-pool
+  namespace: sub-agent
+spec:
+  ateomImage: gcr.io/gke-ai-eco-dev/ate-images/ateom-gvisor-715889664656de67e44382a8d6ab981d@sha256:a877e335fdb6e5576714ab53ad6bf88ee676dfe642516c07673a3d9df56053b3
+  replicas: 2
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: agent-luna-trigger
+  namespace: sub-agent
+spec:
+  schedule: "*/1 * * * *"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: trigger
+            image: curlimages/curl:latest
+            command: ["curl", "-X", "POST", "http://demo-ui.sub-agent.svc.cluster.local/api/give-task?source=cron&agent=agent-luna"]
+          restartPolicy: OnFailure
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: agent-mars-trigger
+  namespace: sub-agent
+spec:
+  schedule: "*/2 * * * *"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: trigger
+            image: curlimages/curl:latest
+            command: ["curl", "-X", "POST", "http://demo-ui.sub-agent.svc.cluster.local/api/give-task?source=cron&agent=agent-mars"]
+          restartPolicy: OnFailure
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: agent-nova-trigger
+  namespace: sub-agent
+spec:
+  schedule: "*/3 * * * *"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: trigger
+            image: curlimages/curl:latest
+            command: ["curl", "-X", "POST", "http://demo-ui.sub-agent.svc.cluster.local/api/give-task?source=cron&agent=agent-nova"]
+          restartPolicy: OnFailure
