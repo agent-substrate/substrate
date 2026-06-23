@@ -210,14 +210,14 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 		return nil, fmt.Errorf("while starting pause container: %w", err)
 	}
 
-	pw, err := s.actorLogger.StartJSONLogPipe(req.GetActorId(), req.GetActorTemplateName(), req.GetActorTemplateNamespace())
-	if err != nil {
-		return nil, fmt.Errorf("while starting json log pipe: %w", err)
-	}
-	defer pw.Close()
-
-	// Create and start each application container
+	// Create and start each application container, each with its own log pipe so
+	// every line is tagged with the originating container (ate.dev/container_name).
 	for _, ac := range req.GetSpec().GetContainers() {
+		pw, err := s.actorLogger.StartJSONLogPipe(req.GetActorId(), req.GetActorTemplateName(), req.GetActorTemplateNamespace(), ac.GetName())
+		if err != nil {
+			return nil, fmt.Errorf("while starting json log pipe for %q: %w", ac.GetName(), err)
+		}
+		defer pw.Close()
 		if err := rcmd.cmdCreate(ctx, pw, ac.GetName()); err != nil {
 			return nil, fmt.Errorf("while creating %q application container: %w", ac.GetName(), err)
 		}
@@ -342,14 +342,14 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 		return nil, fmt.Errorf("while starting pause container: %w", err)
 	}
 
-	pw, err := s.actorLogger.StartJSONLogPipe(req.GetActorId(), req.GetActorTemplateName(), req.GetActorTemplateNamespace())
-	if err != nil {
-		return nil, fmt.Errorf("while starting json log pipe: %w", err)
-	}
-	defer pw.Close()
-
-	// Create and restore each application container
+	// Create and restore each application container, each with its own log pipe so
+	// every line is tagged with the originating container (ate.dev/container_name).
 	for _, ac := range req.GetSpec().GetContainers() {
+		pw, err := s.actorLogger.StartJSONLogPipe(req.GetActorId(), req.GetActorTemplateName(), req.GetActorTemplateNamespace(), ac.GetName())
+		if err != nil {
+			return nil, fmt.Errorf("while starting json log pipe for %q: %w", ac.GetName(), err)
+		}
+		defer pw.Close()
 		if err := rcmd.cmdCreate(ctx, pw, ac.GetName()); err != nil {
 			return nil, fmt.Errorf("while creating %q application container: %w", ac.GetName(), err)
 		}

@@ -78,21 +78,26 @@ func (al *ActorLogger) EmitLifecycleLog(msg, actorID, actorTemplateName, actorTe
 	}
 }
 
-// StartJSONLogPipe intercepts container raw stdout/stderr streams and pipes them through the logger.
-func (al *ActorLogger) StartJSONLogPipe(actorID, actorTemplateName, actorTemplateNamespace string) (io.WriteCloser, error) {
+// StartJSONLogPipe intercepts container raw stdout/stderr streams and pipes them
+// through the logger. containerName tags every line with the originating container;
+// callers that multiplex multiple containers should give each its own pipe so the
+// tag is meaningful.
+func (al *ActorLogger) StartJSONLogPipe(actorID, actorTemplateName, actorTemplateNamespace, containerName string) (io.WriteCloser, error) {
 	pr, pw, err := os.Pipe()
 	if err != nil {
 		return nil, err
 	}
 	go func() {
-		al.WrapContainerLogs(pr, actorID, actorTemplateName, actorTemplateNamespace)
+		al.WrapContainerLogs(pr, actorID, actorTemplateName, actorTemplateNamespace, containerName)
 		pr.Close()
 	}()
 	return pw, nil
 }
 
-// WrapContainerLogs reads log lines from r, parses them, and logs them in a unified structured format.
-func (al *ActorLogger) WrapContainerLogs(r io.Reader, actorID, actorTemplateName, actorTemplateNamespace string) {
+// WrapContainerLogs reads log lines from r, parses them, and logs them in a unified
+// structured format. containerName is added as the ate.dev/container_name label so
+// multi-container actors can be demultiplexed.
+func (al *ActorLogger) WrapContainerLogs(r io.Reader, actorID, actorTemplateName, actorTemplateNamespace, containerName string) {
 	rdr := bufio.NewReader(r)
 	for {
 		lineBytes, err := rdr.ReadBytes('\n')
@@ -118,14 +123,16 @@ func (al *ActorLogger) WrapContainerLogs(r io.Reader, actorID, actorTemplateName
 			}
 
 			if unmarshalErr != nil {
+				labels := map[string]string{
+					"ate.dev/actor_id":                 actorID,
+					"ate.dev/actor_template_name":      actorTemplateName,
+					"ate.dev/actor_template_namespace": actorTemplateNamespace,
+					"ate.dev/container_name":           containerName,
+				}
 				envelope = map[string]any{
-					"time":    time.Now().Format(time.RFC3339Nano),
-					"message": string(lineBytes),
-					al.labelsKey: map[string]string{
-						"ate.dev/actor_id":                 actorID,
-						"ate.dev/actor_template_name":      actorTemplateName,
-						"ate.dev/actor_template_namespace": actorTemplateNamespace,
-					},
+					"time":       time.Now().Format(time.RFC3339Nano),
+					"message":    string(lineBytes),
+					al.labelsKey: labels,
 				}
 			} else {
 				if _, ok := m["time"]; !ok {
@@ -139,6 +146,7 @@ func (al *ActorLogger) WrapContainerLogs(r io.Reader, actorID, actorTemplateName
 				labels["ate.dev/actor_id"] = actorID
 				labels["ate.dev/actor_template_name"] = actorTemplateName
 				labels["ate.dev/actor_template_namespace"] = actorTemplateNamespace
+				labels["ate.dev/container_name"] = containerName
 				envelope = m
 			}
 
