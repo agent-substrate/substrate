@@ -128,6 +128,8 @@ curl -X POST -H "Host: my-counter-1.actors.resources.substrate.ate.dev" -i http:
 
 ### GKE Quickstart (Development)
 
+> For a declarative, Terraform-based setup that starts from a vanilla Google Cloud project, see [hack/gcp/iac/README.md](hack/gcp/iac/README.md) (GKE Quickstart (Production)).
+
 1. Create and configure your environment file:
    ```bash
    cp hack/ate-dev-env.sh.example .ate-dev-env.sh
