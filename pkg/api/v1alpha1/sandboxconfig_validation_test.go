@@ -127,10 +127,9 @@ func TestSandboxConfigValidation(t *testing.T) {
 		wantErr: true,
 		errMsg:  "url",
 	}, {
-		name:    "asset missing sha256",
-		sc:      sandboxConfig("bad-no-sha", SandboxClassGvisor, map[string]map[string]AssetFile{"amd64": {"runsc": {URL: "gs://bucket/runsc"}}}),
-		wantErr: true,
-		errMsg:  "sha256",
+		name:    "valid gvisor with runsc, no sha256",
+		sc:      sandboxConfig("ok-no-sha", SandboxClassGvisor, map[string]map[string]AssetFile{"amd64": {"runsc": {URL: "gs://bucket/runsc"}}}),
+		wantErr: false,
 	}, {
 		name:    "asset sha256 not 64 hex",
 		sc:      sandboxConfig("bad-sha", SandboxClassGvisor, map[string]map[string]AssetFile{"amd64": {"runsc": {URL: "gs://bucket/runsc", SHA256: "deadbeef"}}}),

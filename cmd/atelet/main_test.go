@@ -259,8 +259,8 @@ func TestFetchAssetRejectsBadHash(t *testing.T) {
 		t.Fatalf("planting cache file: %v", err)
 	}
 
-	s := &AteomHerder{}
-	if _, err := s.fetchAsset(context.Background(), assetEntry{SHA256: badHash}); err == nil {
+	s := &AteomHerder{urlHashCache: make(map[string]string)}
+	if _, _, err := s.fetchAsset(context.Background(), assetEntry{SHA256: badHash}); err == nil {
 		t.Error("fetchAsset returned a cache hit for an invalid hash; validation must run before the os.Stat early return")
 	}
 }
@@ -292,10 +292,13 @@ func TestFetchAssetStreaming(t *testing.T) {
 
 	t.Run("good asset is cached", func(t *testing.T) {
 		ateompath.StaticFilesDir = t.TempDir()
-		s := &AteomHerder{anonGCSClient: fakeObjectStorage{data: content}}
-		path, err := s.fetchAsset(context.Background(), assetEntry{URL: url, SHA256: goodHash})
+		s := &AteomHerder{anonGCSClient: fakeObjectStorage{data: content}, urlHashCache: make(map[string]string)}
+		path, resolvedHash, err := s.fetchAsset(context.Background(), assetEntry{URL: url, SHA256: goodHash})
 		if err != nil {
 			t.Fatalf("fetchAsset: %v", err)
+		}
+		if resolvedHash != goodHash {
+			t.Errorf("resolvedHash = %q, want %q", resolvedHash, goodHash)
 		}
 		got, err := os.ReadFile(path)
 		if err != nil {
@@ -309,8 +312,8 @@ func TestFetchAssetStreaming(t *testing.T) {
 	t.Run("over-cap asset rejected, cache not written", func(t *testing.T) {
 		ateompath.StaticFilesDir = t.TempDir()
 		maxAssetBytes = 4 // content is longer than this
-		s := &AteomHerder{anonGCSClient: fakeObjectStorage{data: content}}
-		if _, err := s.fetchAsset(context.Background(), assetEntry{URL: url, SHA256: goodHash}); err == nil {
+		s := &AteomHerder{anonGCSClient: fakeObjectStorage{data: content}, urlHashCache: make(map[string]string)}
+		if _, _, err := s.fetchAsset(context.Background(), assetEntry{URL: url, SHA256: goodHash}); err == nil {
 			t.Fatal("fetchAsset accepted an over-cap asset")
 		}
 		if _, err := os.Stat(ateompath.RunSCBinaryPath(goodHash)); !errors.Is(err, os.ErrNotExist) {
@@ -322,12 +325,59 @@ func TestFetchAssetStreaming(t *testing.T) {
 		ateompath.StaticFilesDir = t.TempDir()
 		maxAssetBytes = origCap
 		wrongHash := strings.Repeat("a", 64) // valid 64-hex format, wrong value
-		s := &AteomHerder{anonGCSClient: fakeObjectStorage{data: content}}
-		if _, err := s.fetchAsset(context.Background(), assetEntry{URL: url, SHA256: wrongHash}); err == nil {
+		s := &AteomHerder{anonGCSClient: fakeObjectStorage{data: content}, urlHashCache: make(map[string]string)}
+		if _, _, err := s.fetchAsset(context.Background(), assetEntry{URL: url, SHA256: wrongHash}); err == nil {
 			t.Fatal("fetchAsset accepted a hash mismatch")
 		}
 		if _, err := os.Stat(ateompath.RunSCBinaryPath(wrongHash)); !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("mismatched download left a file at the cache path (stat err = %v)", err)
+		}
+	})
+
+	t.Run("empty sha256 downloads and computes hash", func(t *testing.T) {
+		ateompath.StaticFilesDir = t.TempDir()
+		maxAssetBytes = origCap
+		s := &AteomHerder{anonGCSClient: fakeObjectStorage{data: content}, urlHashCache: make(map[string]string)}
+		path, resolvedHash, err := s.fetchAsset(context.Background(), assetEntry{URL: url, SHA256: ""})
+		if err != nil {
+			t.Fatalf("fetchAsset: %v", err)
+		}
+		if resolvedHash != goodHash {
+			t.Errorf("resolvedHash = %q, want %q", resolvedHash, goodHash)
+		}
+		got, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("reading cached asset: %v", err)
+		}
+		if !bytes.Equal(got, content) {
+			t.Errorf("cached bytes = %q, want %q", got, content)
+		}
+	})
+
+	t.Run("empty sha256 uses in-memory cache on second call", func(t *testing.T) {
+		ateompath.StaticFilesDir = t.TempDir()
+		maxAssetBytes = origCap
+		s := &AteomHerder{anonGCSClient: fakeObjectStorage{data: content}, urlHashCache: make(map[string]string)}
+		_, _, err := s.fetchAsset(context.Background(), assetEntry{URL: url, SHA256: ""})
+		if err != nil {
+			t.Fatalf("first fetchAsset: %v", err)
+		}
+		// Replace the GCS client with one that errors — the in-memory cache
+		// should prevent a second download.
+		s.anonGCSClient = fakeObjectStorage{err: fmt.Errorf("should not be called")}
+		path2, resolvedHash2, err := s.fetchAsset(context.Background(), assetEntry{URL: url, SHA256: ""})
+		if err != nil {
+			t.Fatalf("second fetchAsset should hit cache: %v", err)
+		}
+		if resolvedHash2 != goodHash {
+			t.Errorf("resolvedHash = %q, want %q", resolvedHash2, goodHash)
+		}
+		got, err := os.ReadFile(path2)
+		if err != nil {
+			t.Fatalf("reading cached asset: %v", err)
+		}
+		if !bytes.Equal(got, content) {
+			t.Errorf("cached bytes = %q, want %q", got, content)
 		}
 	})
 }
