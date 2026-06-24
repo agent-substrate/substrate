@@ -27,9 +27,9 @@ spec:
   assets:
     amd64:
       runsc:
-        url: "gs://gvisor/releases/nightly/2026-05-19/x86_64/runsc"
-        sha256: "a397be1abc2420d26bce6c70e6e2ff96c73aaaab929756c56f5e2089ea842b63"
+        url: "gs://gvisor/releases/release/20260608/x86_64/runsc"
+        sha256: "4ec073363641a44cc5d171f63f1e23b76016ef632eb3269395c79ac8aecb71bc"
     arm64:
       runsc:
-        url: "gs://gvisor/releases/nightly/2026-05-19/aarch64/runsc"
-        sha256: "1ba2366ae2efceba166046f51a4104f9261c9cb72c6db8f5b3fe2dc57dea86b9"
+        url: "gs://gvisor/releases/release/20260608/aarch64/runsc"
+        sha256: "4bbd0e66f61ae770086e5ca7a47a8385f3e876aa8853e1bc6f7793e4dbd51a0f"
