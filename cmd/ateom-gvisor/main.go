@@ -147,8 +147,7 @@ func do(ctx context.Context) error {
 	reflection.Register(svr)
 
 	if err := svr.Serve(lis); err != nil {
-		slog.ErrorContext(ctx, "Failed to serve", slog.Any("err", err))
-		os.Exit(1)
+		return fmt.Errorf("failed to serve: %w", err)
 	}
 
 	return nil

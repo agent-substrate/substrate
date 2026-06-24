@@ -31,6 +31,8 @@ linters:
     - misspell
     # Reconciliation and RPC calls should inherit the caller's context.
     - contextcheck
+    # High-signal bug-pattern checks without enabling style-only churn.
+    - gocritic
 
   settings:
     errcheck:
@@ -57,6 +59,36 @@ linters:
     misspell:
       mode: default
 
+    gocritic:
+      # Opt in explicitly rather than inheriting gocritic's default set, which
+      # includes opinionated style checks. We only want the bug-pattern checks.
+      disable-all: true
+      enabled-checks:
+        - appendAssign
+        - argOrder
+        - badCall
+        - badCond
+        - badLock
+        - badRegexp
+        - badSorting
+        - badSyncOnceFunc
+        - caseOrder
+        - dupArg
+        - dupBranchBody
+        - dupCase
+        - dupSubExpr
+        - dynamicFmtString
+        - exitAfterDefer
+        - mapKey
+        - nilValReturn
+        - offBy1
+        - regexpMust
+        - sloppyLen
+        - sloppyReassign
+        - sloppyTypeAssert
+        - truncateCmp
+        - uncheckedInlineErr
+
   exclusions:
     # Built-in presets that suppress the most common idiomatic false
     # positives across the standard linters.
@@ -73,14 +105,14 @@ linters:
     rules:
       # Generated code: ignore findings entirely.
       - path: '\.pb\.go$'
-        linters: [errcheck, govet, ineffassign, staticcheck, unused, contextcheck]
+        linters: [errcheck, govet, ineffassign, staticcheck, unused, contextcheck, gocritic]
       - path: '\.pb\.gw\.go$'
-        linters: [errcheck, govet, ineffassign, staticcheck, unused, contextcheck]
+        linters: [errcheck, govet, ineffassign, staticcheck, unused, contextcheck, gocritic]
       - path: 'zz_generated.*\.go$'
-        linters: [errcheck, govet, ineffassign, staticcheck, unused, contextcheck]
+        linters: [errcheck, govet, ineffassign, staticcheck, unused, contextcheck, gocritic]
       # Kubernetes client-gen / informer-gen / lister-gen output.
       - path: '^pkg/client/'
-        linters: [errcheck, govet, ineffassign, staticcheck, unused, contextcheck]
+        linters: [errcheck, govet, ineffassign, staticcheck, unused, contextcheck, gocritic]
       # Tests routinely discard error returns from setup helpers.
       - path: '_test\.go'
         linters:
@@ -88,7 +120,7 @@ linters:
       # Demo binaries intentionally favor concise examples over production
       # control-flow discipline.
       - path: '^demos/'
-        linters: [contextcheck]
+        linters: [gocritic, contextcheck]
       # Suppress staticcheck QF* (quickfix) recommendations. They are
       # stylistic rewrites rather than bug detectors and would generate a
       # large amount of churn if applied indiscriminately.
