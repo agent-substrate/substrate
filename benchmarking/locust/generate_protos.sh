@@ -24,8 +24,7 @@ if [[ -f .ate-dev-env.sh ]]; then
   source .ate-dev-env.sh
 fi
 
-PROTO_PATH="pkg/proto/ateapipb"
-PROTO_FILE="$PROTO_PATH/ateapi.proto"
+OUT_DIR="benchmarking/locust/common"
 
 # Create and activate virtual environment if it doesn't exist
 VENV_DIR="benchmarking/locust/venv"
@@ -41,22 +40,43 @@ else
   source "$VENV_DIR/bin/activate"
 fi
 
-echo "Generating Python proto clients from $PROTO_FILE..."
+# generate_proto compiles a single .proto file into ${OUT_DIR}, prepends the
+# project's license header, and rewrites the generated grpc file's intra-package
+# import to a relative form so it resolves under the `common` package.
+#
+# Args:
+#   $1  Directory containing the .proto file (passed to protoc -I)
+#   $2  Base name of the .proto (e.g. "ateapi" for ateapi.proto)
+generate_proto() {
+  local proto_path="$1"
+  local proto_base="$2"
+  local proto_file="${proto_path}/${proto_base}.proto"
 
-python3 -m grpc_tools.protoc -I"$PROTO_PATH" --python_out=benchmarking/locust/common/ --grpc_python_out=benchmarking/locust/common/ "$PROTO_FILE"
+  echo "Generating Python proto clients from ${proto_file}..."
+  python3 -m grpc_tools.protoc \
+    -I"${proto_path}" \
+    --python_out="${OUT_DIR}/" \
+    --grpc_python_out="${OUT_DIR}/" \
+    "${proto_file}"
 
-# Prepend ASLv2 header to generated files
-for file in benchmarking/locust/common/ateapi_pb2.py benchmarking/locust/common/ateapi_pb2_grpc.py; do
-  if [ -f "$file" ]; then
-    cat hack/boilerplate/sh.txt "$file" > "${file}.tmp"
-    mv "${file}.tmp" "$file"
+  local pb_file="${OUT_DIR}/${proto_base}_pb2.py"
+  local grpc_file="${OUT_DIR}/${proto_base}_pb2_grpc.py"
+
+  for file in "${pb_file}" "${grpc_file}"; do
+    if [ -f "${file}" ]; then
+      cat hack/boilerplate/sh.txt "${file}" > "${file}.tmp"
+      mv "${file}.tmp" "${file}"
+    fi
+  done
+
+  # protoc emits `import foo_pb2 as foo__pb2`, which doesn't resolve under our
+  # `common` package; rewrite to a relative import.
+  if [ -f "${grpc_file}" ]; then
+    sed -i "s/^import ${proto_base}_pb2 as ${proto_base}__pb2/from . import ${proto_base}_pb2 as ${proto_base}__pb2/" "${grpc_file}"
   fi
-done
+}
 
-# Fix relative import in generated grpc file
-GRPC_FILE="benchmarking/locust/common/ateapi_pb2_grpc.py"
-if [ -f "$GRPC_FILE" ]; then
-  sed -i 's/^import ateapi_pb2 as ateapi__pb2/from . import ateapi_pb2 as ateapi__pb2/' "$GRPC_FILE"
-fi
+generate_proto "pkg/proto/ateapipb" "ateapi"
+generate_proto "internal/proto/glutton" "glutton"
 
 echo "Done!"

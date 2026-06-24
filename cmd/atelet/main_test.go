@@ -15,9 +15,15 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
+	"errors"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/agent-substrate/substrate/internal/ateompath"
@@ -257,6 +263,73 @@ func TestFetchAssetRejectsBadHash(t *testing.T) {
 	if _, err := s.fetchAsset(context.Background(), assetEntry{SHA256: badHash}); err == nil {
 		t.Error("fetchAsset returned a cache hit for an invalid hash; validation must run before the os.Stat early return")
 	}
+}
+
+// fakeObjectStorage serves fixed bytes for GetObject so fetchAsset can be tested.
+type fakeObjectStorage struct {
+	data []byte
+	err  error
+}
+
+func (f fakeObjectStorage) GetObject(_ context.Context, _, _ string) (io.ReadCloser, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return io.NopCloser(bytes.NewReader(f.data)), nil
+}
+
+func (fakeObjectStorage) PutObject(_ context.Context, _, _ string, _ io.Reader) error { return nil }
+
+// TestFetchAssetStreaming covers the streamed download: good asset cached,
+// over-cap rejected, hash mismatch rejected (failures leave no cache file).
+func TestFetchAssetStreaming(t *testing.T) {
+	origDir, origCap := ateompath.StaticFilesDir, maxAssetBytes
+	t.Cleanup(func() { ateompath.StaticFilesDir, maxAssetBytes = origDir, origCap })
+
+	content := []byte("micro-vm kernel bytes")
+	goodHash := fmt.Sprintf("%x", sha256.Sum256(content))
+	const url = "gs://test-bucket/asset"
+
+	t.Run("good asset is cached", func(t *testing.T) {
+		ateompath.StaticFilesDir = t.TempDir()
+		s := &AteomHerder{anonGCSClient: fakeObjectStorage{data: content}}
+		path, err := s.fetchAsset(context.Background(), assetEntry{URL: url, SHA256: goodHash})
+		if err != nil {
+			t.Fatalf("fetchAsset: %v", err)
+		}
+		got, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("reading cached asset: %v", err)
+		}
+		if !bytes.Equal(got, content) {
+			t.Errorf("cached bytes = %q, want %q", got, content)
+		}
+	})
+
+	t.Run("over-cap asset rejected, cache not written", func(t *testing.T) {
+		ateompath.StaticFilesDir = t.TempDir()
+		maxAssetBytes = 4 // content is longer than this
+		s := &AteomHerder{anonGCSClient: fakeObjectStorage{data: content}}
+		if _, err := s.fetchAsset(context.Background(), assetEntry{URL: url, SHA256: goodHash}); err == nil {
+			t.Fatal("fetchAsset accepted an over-cap asset")
+		}
+		if _, err := os.Stat(ateompath.RunSCBinaryPath(goodHash)); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("over-cap download left a file at the cache path (stat err = %v)", err)
+		}
+	})
+
+	t.Run("hash mismatch rejected, cache not written", func(t *testing.T) {
+		ateompath.StaticFilesDir = t.TempDir()
+		maxAssetBytes = origCap
+		wrongHash := strings.Repeat("a", 64) // valid 64-hex format, wrong value
+		s := &AteomHerder{anonGCSClient: fakeObjectStorage{data: content}}
+		if _, err := s.fetchAsset(context.Background(), assetEntry{URL: url, SHA256: wrongHash}); err == nil {
+			t.Fatal("fetchAsset accepted a hash mismatch")
+		}
+		if _, err := os.Stat(ateompath.RunSCBinaryPath(wrongHash)); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("mismatched download left a file at the cache path (stat err = %v)", err)
+		}
+	})
 }
 
 // TestRPCBoundariesReject confirms each of the three RPCs validates path inputs

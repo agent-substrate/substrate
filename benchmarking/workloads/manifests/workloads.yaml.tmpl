@@ -49,3 +49,27 @@ spec:
   snapshotsConfig:
     location: gs://${BUCKET_NAME}/benchmark-workloads/sleep/
 
+---
+
+apiVersion: ate.dev/v1alpha1
+kind: ActorTemplate
+metadata:
+  name: glutton
+  namespace: benchmark-workloads
+spec:
+  pauseImage: "gcr.io/gke-release/pause@sha256:bcbd57ba5653580ec647b16d8163cdd1112df3609129b01f912a8032e48265da"
+  containers:
+  - name: glutton
+    image: ko://github.com/agent-substrate/substrate/cmd/testing/glutton
+    # Port 80 is the only inbound port nftables forwards from the worker pod
+    # into the actor sandbox (see cmd/ateom-gvisor/main.go).
+    command:
+    - "/ko-app/glutton"
+    - "--grpc-listen-addr=:80"
+    - "--metrics-listen-addr=:9090"
+    - "--data-dir=/tmp/glutton"
+  workerSelector:
+    matchLabels:
+      workload: benchmark-ateom
+  snapshotsConfig:
+    location: gs://${BUCKET_NAME}/benchmark-workloads/glutton/

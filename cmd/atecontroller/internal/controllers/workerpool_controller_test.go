@@ -24,6 +24,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	k8errors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -361,6 +362,16 @@ func sampleWorkerPoolPodTemplate() *atev1alpha1.WorkerPoolPodTemplate {
 				}},
 			},
 		},
+		Resources: &corev1.ResourceRequirements{
+			Requests: corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse("500m"),
+				corev1.ResourceMemory: resource.MustParse("1Gi"),
+			},
+			Limits: corev1.ResourceList{
+				corev1.ResourceCPU:    resource.MustParse("1"),
+				corev1.ResourceMemory: resource.MustParse("2Gi"),
+			},
+		},
 	}
 }
 
@@ -394,7 +405,10 @@ func TestWorkerPoolPodTemplatePropagation(t *testing.T) {
 		if podSpec.Affinity == nil || podSpec.Affinity.NodeAffinity == nil {
 			return false, nil
 		}
-		return len(container.Resources.Requests) == 0 && len(container.Resources.Limits) == 0, nil
+		return container.Resources.Requests.Cpu().String() == "500m" &&
+			container.Resources.Requests.Memory().String() == "1Gi" &&
+			container.Resources.Limits.Cpu().String() == "1" &&
+			container.Resources.Limits.Memory().String() == "2Gi", nil
 	})
 }
 
@@ -428,7 +442,7 @@ func TestWorkerPoolPodTemplateUpdate(t *testing.T) {
 		}
 		podSpec := dep.Spec.Template.Spec
 		return podSpec.NodeSelector["workload"] == "updated" &&
-			len(podSpec.Containers[0].Resources.Requests) == 0, nil
+			podSpec.Containers[0].Resources.Requests.Cpu().String() == "500m", nil
 	})
 }
 
@@ -486,7 +500,7 @@ func TestWorkerPoolPodTemplateClearAll(t *testing.T) {
 			podSpec.PriorityClassName == "substrate-workers" &&
 			podSpec.Affinity != nil &&
 			podSpec.Affinity.NodeAffinity != nil &&
-			len(container.Resources.Requests) == 0, nil
+			container.Resources.Requests.Cpu().String() == "500m", nil
 	})
 
 	if err := k8sClient.Get(testCtx, types.NamespacedName{Name: wp.Name, Namespace: wp.Namespace}, wp); err != nil {

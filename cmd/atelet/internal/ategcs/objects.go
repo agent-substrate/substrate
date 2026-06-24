@@ -58,6 +58,20 @@ func FetchFromGCS(ctx context.Context, client ObjectStorage, gsURL string) ([]by
 	return content, nil
 }
 
+// Open streams the object at gsURL; the caller must Close the returned reader.
+// Unlike FetchFromGCS it does not buffer the whole object in memory.
+func Open(ctx context.Context, client ObjectStorage, gsURL string) (io.ReadCloser, error) {
+	bucket, object, err := parseGCSURL(gsURL)
+	if err != nil {
+		return nil, fmt.Errorf("while parsing url: %w", err)
+	}
+	rc, err := client.GetObject(ctx, bucket, object)
+	if err != nil {
+		return nil, fmt.Errorf("while getting object bucket=%q object=%q: %w", bucket, object, err)
+	}
+	return rc, nil
+}
+
 // SendBytesToGCS uploads the given bytes (uncompressed) to gsURL. Intended for
 // small objects such as the snapshot manifest.
 func SendBytesToGCS(ctx context.Context, client ObjectStorage, gsURL string, content []byte) error {

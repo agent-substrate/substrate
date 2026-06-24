@@ -15,8 +15,11 @@
 package router
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -37,6 +40,54 @@ type mockClient struct {
 
 func (m *mockClient) ResumeActor(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
 	return m.resumeFn(ctx, in, opts...)
+}
+
+func TestHandleRequestHeadersDoesNotLogSensitiveData(t *testing.T) {
+	const testUUID = "123e4567-e89b-12d3-a456-426614174000"
+	const secret = "do-not-log-me"
+
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	s := NewExtProcServer(50051, &mockClient{
+		resumeFn: func(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
+			return &ateapipb.ResumeActorResponse{Actor: &ateapipb.Actor{AteomPodIp: "10.0.0.52"}}, nil
+		},
+	}, nil)
+
+	reqHeaders := &extprocv3.HttpHeaders{
+		Headers: &corev3.HeaderMap{
+			Headers: []*corev3.HeaderValue{
+				{Key: ":path", Value: "/api/v1/reset?token=" + secret},
+				{Key: ":authority", Value: testUUID + ".actors.resources.substrate.ate.dev"},
+				{Key: ":method", Value: "POST"},
+				{Key: "authorization", Value: "Bearer " + secret},
+				{Key: "cookie", Value: "session=" + secret},
+			},
+		},
+	}
+
+	_, metadata, target, _, _, err := s.handleRequestHeaders(context.Background(), reqHeaders)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	out := buf.String()
+	if strings.Contains(out, secret) {
+		t.Errorf("router log leaked sensitive value: %s", out)
+	}
+	if !strings.Contains(out, testUUID) {
+		t.Errorf("router log missing actor/host routing context: %s", out)
+	}
+
+	s.recorder.AddRouterRequest(time.Now(), time.Millisecond, "Route ok", target, metadata)
+	for _, q := range s.recorder.Get() {
+		if blob, _ := json.Marshal(q); strings.Contains(string(blob), secret) {
+			t.Errorf("recorder/statusz retained sensitive value: %s", blob)
+		}
+	}
 }
 
 func TestExtProcHeadersEvaluation(t *testing.T) {

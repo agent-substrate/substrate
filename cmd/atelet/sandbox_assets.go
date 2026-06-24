@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -39,6 +40,10 @@ import (
 // checkpoint images (in the external object store, or the local checkpoint dir)
 // so a Restore — possibly on another node — is self-describing.
 const sandboxManifestName = "manifest.json"
+
+// maxAssetBytes guards disk against an unbounded download URL; a var so tests can lower it.
+// ponytail: 8GiB ceiling, make it a flag if a rootfs ever needs more.
+var maxAssetBytes int64 = 8 << 30
 
 // assetEntry is one content-addressed sandbox asset (url + sha256).
 type assetEntry struct {
@@ -112,41 +117,46 @@ func (s *AteomHerder) fetchAsset(ctx context.Context, entry assetEntry) (string,
 	// gVisor's runsc lives in the public gs://gvisor bucket, so the anonymous
 	// client suffices. TODO: drive authenticated asset fetches from atelet
 	// configuration for assets in private buckets.
-	content, err := ategcs.FetchFromGCS(ctx, s.anonGCSClient, entry.URL)
+	rc, err := ategcs.Open(ctx, s.anonGCSClient, entry.URL)
 	if err != nil {
 		return "", fmt.Errorf("while fetching %v: %w", entry.URL, err)
 	}
+	defer rc.Close()
 
-	sum := sha256.Sum256(content)
 	wantSum, err := hex.DecodeString(entry.SHA256)
 	if err != nil {
 		return "", fmt.Errorf("while parsing sha256 hash: %w", err)
 	}
-	if !bytes.Equal(sum[:], wantSum) {
-		return "", fmt.Errorf("sha256 mismatch; got=%s want=%s", hex.EncodeToString(sum[:]), entry.SHA256)
-	}
 
-	tmpFileName, err := func() (string, error) {
-		localDir := filepath.Dir(localPath)
-		tmpFile, err := os.CreateTemp(localDir, filepath.Base(localPath)+"-download-")
-		if err != nil {
-			return "", fmt.Errorf("while temp file: %w", err)
-		}
-		defer tmpFile.Close()
-
-		if _, err := tmpFile.Write(content); err != nil {
-			return "", fmt.Errorf("while writing content to temp file: %w", err)
-		}
-		if err := tmpFile.Chmod(0o755); err != nil {
-			return "", fmt.Errorf("while setting file mode: %w", err)
-		}
-		return tmpFile.Name(), nil
-	}()
+	tmpFile, err := os.CreateTemp(filepath.Dir(localPath), filepath.Base(localPath)+"-download-")
 	if err != nil {
-		return "", fmt.Errorf("while populating temp file: %w", err)
+		return "", fmt.Errorf("while creating temp file: %w", err)
+	}
+	tmpName := tmpFile.Name()
+	defer os.Remove(tmpName) // partial-download cleanup; no-op after rename
+	defer tmpFile.Close()
+
+	// Stream to disk, hashing as we go; +1 lets an over-cap asset trip n > cap.
+	// Verify-after-copy keeps a bad download at the temp path, never the cache.
+	hasher := sha256.New()
+	n, err := io.Copy(io.MultiWriter(tmpFile, hasher), io.LimitReader(rc, maxAssetBytes+1))
+	if err != nil {
+		return "", fmt.Errorf("while downloading %v: %w", entry.URL, err)
+	}
+	if n > maxAssetBytes {
+		return "", fmt.Errorf("asset %v exceeds %d-byte cap", entry.URL, maxAssetBytes)
+	}
+	if got := hasher.Sum(nil); !bytes.Equal(got, wantSum) {
+		return "", fmt.Errorf("sha256 mismatch; got=%x want=%s", got, entry.SHA256)
 	}
 
-	if err := os.Rename(tmpFileName, localPath); err != nil {
+	if err := tmpFile.Chmod(0o755); err != nil {
+		return "", fmt.Errorf("while setting file mode: %w", err)
+	}
+	if err := tmpFile.Close(); err != nil { // flush before rename
+		return "", fmt.Errorf("while closing temp file: %w", err)
+	}
+	if err := os.Rename(tmpName, localPath); err != nil {
 		return "", fmt.Errorf("while renaming temp file to target: %w", err)
 	}
 

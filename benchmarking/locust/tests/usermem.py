@@ -13,6 +13,7 @@
 # limitations under the License.
 
 from locust import User, task, events
+from locust.exception import StopUser
 import time
 import uuid
 import grpc
@@ -38,7 +39,7 @@ class UserMemUser(User):
     host = "api.ate-system.svc.cluster.local:443"
     template_name = "usermem"
 
-    def on_start(self):
+    def on_start(self) -> None:
         update_user_count(1, self.__class__.__name__)
 
         # Setup gRPC
@@ -60,9 +61,11 @@ class UserMemUser(User):
                 )
             )
         except Exception as e:
-            print(f"Failed to create actor {self.actor_id}: {e}")
+            logger.error(f"Failed to create actor {self.actor_id}: {e}")
+            self.channel.close()
+            raise StopUser()
 
-    def on_stop(self):
+    def on_stop(self) -> None:
         update_user_count(-1, self.__class__.__name__)
         # Suspend first
         try:
@@ -70,7 +73,7 @@ class UserMemUser(User):
                 ateapi_pb2.SuspendActorRequest(actor_id=self.actor_id)
             )
         except Exception as e:
-            print(f"Failed to suspend actor {self.actor_id} during teardown: {e}")
+            logger.warning(f"Failed to suspend actor {self.actor_id} during teardown: {e}")
 
         # Delete actor
         try:
@@ -78,12 +81,12 @@ class UserMemUser(User):
                 ateapi_pb2.DeleteActorRequest(actor_id=self.actor_id)
             )
         except Exception as e:
-            print(f"Failed to delete actor {self.actor_id}: {e}")
+            logger.warning(f"Failed to delete actor {self.actor_id}: {e}")
 
         self.channel.close()
 
     @task
-    def workload_cycle(self):
+    def workload_cycle(self) -> None:
         # Start with a half-second sleep
         time.sleep(0.5)
 

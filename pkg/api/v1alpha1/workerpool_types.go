@@ -44,6 +44,11 @@ type WorkerPoolPodTemplate struct {
 	//
 	// +optional
 	NodeAffinity *corev1.NodeAffinity `json:"nodeAffinity,omitempty"`
+
+	// Resources are the compute resources allocated for each worker pod.
+	//
+	// +optional
+	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
 }
 
 type WorkerPoolSpec struct {
@@ -66,6 +71,9 @@ type WorkerPoolSpec struct {
 	// the worker pod shape (KVM/vhost device mounts and node placement) and which
 	// SandboxConfigs are eligible. The concrete binary is still selected by
 	// AteomImage. Defaults to gvisor.
+	//
+	// See Also: TODOs in ActorTemplate SandboxClass
+	//
 	// +optional
 	// +kubebuilder:validation:Enum=gvisor;microvm
 	// +kubebuilder:default=gvisor

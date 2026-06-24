@@ -10,6 +10,7 @@ To make underlying infrastructure transitions transparent, Agent Substrate estab
 * `ate.dev/actor_id`: The unique identifier of the actor (e.g., `my-counter-1` or `test`).
 * `ate.dev/actor_template_name`: The name of the actor's ActorTemplate (e.g., `counter`).
 * `ate.dev/actor_template_namespace`: The Kubernetes namespace of the actor's ActorTemplate (e.g., `ate-demo-counter`).
+* `ate.dev/container_name`: The name of the container within the actor that produced the log line (e.g., `counter`), so a multi-container actor's logs can be demultiplexed by container.
 
 Currently, Agent Substrate automatically wraps container output and injects these metadata labels into **container logs**. For metrics and distributed tracing, Agent Substrate provides foundational system telemetry and on-demand request tracing, with roadmap plans to fully integrate actor-level correlation.
 

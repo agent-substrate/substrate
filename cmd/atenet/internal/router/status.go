@@ -103,6 +103,12 @@ func (qr *QueryRecorder) Get() []RecordedQuery {
 	return res
 }
 
+// redactPath drops the query string, which may carry credentials (CWE-598).
+func redactPath(path string) string {
+	p, _, _ := strings.Cut(path, "?")
+	return p
+}
+
 func (qr *QueryRecorder) AddRouterRequest(
 	start time.Time,
 	duration time.Duration,
@@ -114,7 +120,7 @@ func (qr *QueryRecorder) AddRouterRequest(
 		Timestamp: start,
 		Client:    m.headers[":authority"],
 		Host:      m.host,
-		Path:      m.path,
+		Path:      redactPath(m.path),
 		Method:    m.headers[":method"],
 		Action:    action,
 		Target:    target,

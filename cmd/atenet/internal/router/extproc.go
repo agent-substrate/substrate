@@ -108,7 +108,7 @@ func (s *ExtProcServer) Process(stream extprocv3.ExternalProcessor_ProcessServer
 		default:
 			// No modification for other processing states, but log because this should
 			// not be called.
-			slog.Error("Unexpected request type", slog.Any("reqType", reqType))
+			slog.Error("Unexpected request type", slog.String("reqType", fmt.Sprintf("%T", reqType)))
 			resp.Response = &extprocv3.ProcessingResponse_RequestHeaders{
 				RequestHeaders: &extprocv3.HeadersResponse{
 					Response: &extprocv3.CommonResponse{},
@@ -127,7 +127,7 @@ func (s *ExtProcServer) handleRequestHeaders(
 	reqHeaders *extprocv3.HttpHeaders,
 ) (*extprocv3.HeadersResponse, *requestMetadata, string, string, string, error) {
 	metadata := newRequestMetadata(reqHeaders.Headers.GetHeaders())
-	slog.InfoContext(ctx, "Request", slog.String("metadata", metadata.String()))
+	slog.InfoContext(ctx, "Request", slog.String("host", metadata.host))
 
 	actorID, err := parseActorID(metadata.host)
 	if err != nil {
@@ -137,12 +137,6 @@ func (s *ExtProcServer) handleRequestHeaders(
 
 	slog.InfoContext(ctx, "ResumeActor", slog.String("actorID", actorID))
 	actor, err := s.resumer.ResumeActor(ctx, actorID)
-
-	slog.InfoContext(ctx, "ResumeActor result",
-		slog.String("actor", fmt.Sprintf("%+v", actor)),
-		slog.String("worker_ip", actor.GetAteomPodIp()),
-		slog.Any("err", err))
-
 	if err != nil {
 		return nil, metadata, "", "", "", mapResumeError(actorID, err)
 	}
@@ -153,6 +147,11 @@ func (s *ExtProcServer) handleRequestHeaders(
 	tmplName := actor.GetActorTemplateName()
 
 	workerIP := actor.GetAteomPodIp()
+	slog.InfoContext(ctx, "ResumeActor result",
+		slog.String("actorID", actorID),
+		slog.String("status", actor.GetStatus().String()),
+		slog.String("workerIP", workerIP))
+
 	if ip := net.ParseIP(workerIP); ip == nil {
 		return nil, metadata, "", tmplNs, tmplName, newReqError(envoy_type.StatusCode_InternalServerError,
 			"actor %q routing failed", actorID)

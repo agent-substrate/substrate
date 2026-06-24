@@ -157,6 +157,26 @@ type ActorTemplateSpec struct {
 	// +required
 	SnapshotsConfig SnapshotsConfig `json:"snapshotsConfig"`
 
+	// SandboxClass selects the sandbox runtime family this template's actors run
+	// on. Only worker pools whose SandboxClass matches are eligible. Snapshots are
+	// not portable across classes, so this is a hard gate, AND'd with WorkerSelector
+	// and the actor's worker_selector. Defaults to gvisor.
+	//
+	// TODO: This is almost certainly insufficient.  We have to decide a number of things:
+	//
+	// 1) How does someone discover what classes are available, or what they mean?
+	// 2) How does someone define a new sandbox class?
+	// 3) Does a class mean the specific type of sandbox tech or does it include some aspect of config (e.g. can we have 2 different classes which both use gVisor with different config, or 2 classes which use different microvms)
+	// 4) How does the default get set and who sets it?
+	//
+	// See Also: WorkerPool SandboxClass
+	//
+	//
+	// +optional
+	// +kubebuilder:validation:Enum=gvisor;microvm
+	// +kubebuilder:default=gvisor
+	SandboxClass SandboxClass `json:"sandboxClass,omitempty"`
+
 	// WorkerSelector restricts which worker pools actors from this template may
 	// use. The scheduler only considers pools whose labels match this selector.
 	// If nil, all pools are eligible (subject to the actor's own worker_selector).
@@ -187,6 +207,7 @@ type ActorTemplateStatus struct {
 // +kubebuilder:object:root=true
 // +kubebuilder:resource:scope=Namespaced,shortName=actortemplate
 // +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="Class",type=string,JSONPath=`.spec.sandboxClass`
 type ActorTemplate struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

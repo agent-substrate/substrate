@@ -203,6 +203,7 @@ We provide several sample applications demonstrating Agent Substrate's capabilit
 ### Documentation & Guides
 * [API Configuration Guide](docs/api-guide.md): Detailed reference for configuring WorkerPools, ActorTemplates, Secrets, and Volumes.
 * [Full CLI Documentation](cmd/kubectl-ate/README.md): Installation and usage for `kubectl-ate`.
+* [Glossary](docs/glossary.md): Core terms (Actor, ActorTemplate, WorkerPool, Worker, ate-api-server, atenet, atelet, ateom) and how they relate.
 * [Observability Guide](docs/observability.md): Guide to actor logging, metrics, and distributed tracing.
 
 ## Tour

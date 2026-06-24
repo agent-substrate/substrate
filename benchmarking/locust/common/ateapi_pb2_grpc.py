@@ -19,7 +19,7 @@ import warnings
 
 from . import ateapi_pb2 as ateapi__pb2
 
-GRPC_GENERATED_VERSION = '1.80.0'
+GRPC_GENERATED_VERSION = '1.81.1'
 GRPC_VERSION = grpc.__version__
 _version_not_supported = False
 
@@ -39,7 +39,7 @@ if _version_not_supported:
     )
 
 
-class ControlStub(object):
+class ControlStub:
     """Control is the primary RPC interface for Agentic Substrate.
     """
 
@@ -91,7 +91,7 @@ class ControlStub(object):
                 _registered_method=True)
 
 
-class ControlServicer(object):
+class ControlServicer:
     """Control is the primary RPC interface for Agentic Substrate.
     """
 
@@ -202,7 +202,7 @@ def add_ControlServicer_to_server(servicer, server):
 
 
  # This class is part of an EXPERIMENTAL API.
-class Control(object):
+class Control:
     """Control is the primary RPC interface for Agentic Substrate.
     """
 
@@ -423,7 +423,7 @@ class Control(object):
             _registered_method=True)
 
 
-class SessionIdentityStub(object):
+class SessionIdentityStub:
     """SessionIdentity allows substrate workloads to exchange their
     infrastructure-level credentials (k8s service account token, etc.) for a
     substrate session-level credential.  A given substrate session might migrate
@@ -460,7 +460,7 @@ class SessionIdentityStub(object):
                 _registered_method=True)
 
 
-class SessionIdentityServicer(object):
+class SessionIdentityServicer:
     """SessionIdentity allows substrate workloads to exchange their
     infrastructure-level credentials (k8s service account token, etc.) for a
     substrate session-level credential.  A given substrate session might migrate
@@ -518,7 +518,7 @@ def add_SessionIdentityServicer_to_server(servicer, server):
 
 
  # This class is part of an EXPERIMENTAL API.
-class SessionIdentity(object):
+class SessionIdentity:
     """SessionIdentity allows substrate workloads to exchange their
     infrastructure-level credentials (k8s service account token, etc.) for a
     substrate session-level credential.  A given substrate session might migrate

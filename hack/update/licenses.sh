@@ -74,5 +74,23 @@ for target in "${targets[@]}"; do
   rm -rf "${tmp_out}"
 done
 
+# Collect upstream licenses for forked / copied-in third-party SOURCE under in-tree
+# third_party/ dirs. go-licenses only covers module dependencies (and treats our own
+# module — including these copies — as first-party), so mirror their LICENSE/NOTICE/
+# COPYING files into LICENSES/third_party/, keyed by their path under third_party/.
+# `git ls-files` is used so gitignored paths (e.g. nested worktrees under .claude/,
+# bin/) are skipped automatically; vendor/ and the output dir hold module deps /
+# generated output (not forked source), so skip those too. Mirrors kubernetes
+# hack/update-vendor-licenses.sh (see its LICENSES/third_party/). License paths are
+# plain ASCII, so newline-delimited iteration is safe.
+git ls-files --cached --others --exclude-standard \
+  | { grep -iE '(^|/)third_party/.*(licen[sc]e|notice|copying)[^/]*$' || true; } \
+  | while IFS= read -r f; do
+      case "${f}" in vendor/* | "${OUTDIR}"/*) continue ;; esac
+      dest="${OUTDIR}/third_party/${f##*third_party/}" # e.g. LICENSES/third_party/kata/agentpb/LICENSE
+      mkdir -p "$(dirname "${dest}")"
+      cp "${f}" "${dest}"
+    done
+
 # Clean up empty directories
 find "${OUTDIR}" -type d -empty -delete

@@ -1131,7 +1131,7 @@ func TestResumeActor_NoEligiblePool(t *testing.T) {
 	_, err = tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
 		ActorId: createResp.GetActor().GetActorId(),
 	})
-	assertGrpcError(t, err, codes.FailedPrecondition, "no worker pool matches the template and actor selectors")
+	assertGrpcError(t, err, codes.FailedPrecondition, "no worker pool matches the template's sandboxClass and the template/actor selectors")
 }
 
 // TestResumeActor_MultiPoolSelector exercises the AND-of-two-selectors path

@@ -23,7 +23,7 @@ class BurstShape(LoadTestShape):
     peak_users = 3
     spawn_rate = 1
 
-    def tick(self):
+    def tick(self) -> tuple[int, int]:
         run_time = self.get_run_time()
         t = run_time % self.cycle_length
 
