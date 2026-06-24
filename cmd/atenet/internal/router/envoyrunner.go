@@ -37,10 +37,10 @@ const (
 // Envoy proxy instance running inside Kubernetes.
 type envoyrunner struct {
 	k8sClient client.Client
-	cfg       RouterConfig
+	cfg       routerConfig
 }
 
-func newEnvoyRunner(k8sClient client.Client, cfg RouterConfig) *envoyrunner {
+func newEnvoyRunner(k8sClient client.Client, cfg routerConfig) *envoyrunner {
 	return &envoyrunner{
 		k8sClient: k8sClient,
 		cfg:       cfg,

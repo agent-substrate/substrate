@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/agent-substrate/substrate/cmd/atenet/internal/router"
 	"github.com/agent-substrate/substrate/internal/version"
 	"github.com/spf13/cobra"
 )
@@ -37,6 +38,6 @@ func Execute() {
 }
 
 func init() {
-	rootCmd.AddCommand(NewRouterCmd())
+	rootCmd.AddCommand(router.NewRouterCmd())
 	rootCmd.AddCommand(NewDnsCmd())
 }

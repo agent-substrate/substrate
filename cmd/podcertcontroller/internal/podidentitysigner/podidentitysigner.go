@@ -121,6 +121,7 @@ func (h *Impl) MakeCert(ctx context.Context, pcr *certsv1beta1.PodCertificateReq
 		Path:   path.Join("ns", pcr.ObjectMeta.Namespace, "sa", pcr.Spec.ServiceAccountName),
 	}
 
+	parent := h.caPool.CAs[0].RootCertificate
 	template := &x509.Certificate{
 		BasicConstraintsValid: true,
 		NotBefore:             notBefore,
@@ -128,9 +129,14 @@ func (h *Impl) MakeCert(ctx context.Context, pcr *certsv1beta1.PodCertificateReq
 		URIs:                  []*url.URL{spiffeURI},
 		KeyUsage:              x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+		// Link the leaf to its issuing CA by key id so verifiers can disambiguate
+		// a multi-CA trust bundle (e.g. valkey trusts both the servicedns and
+		// podidentity CAs). Mandated by RFC 5280 4.2.1.1 for the multiple-issuer
+		// case.
+		AuthorityKeyId: parent.SubjectKeyId,
 	}
 
-	subjectCertDER, err := x509.CreateCertificate(rand.Reader, template, h.caPool.CAs[0].RootCertificate, subjectPublicKey, h.caPool.CAs[0].SigningKey)
+	subjectCertDER, err := x509.CreateCertificate(rand.Reader, template, parent, subjectPublicKey, h.caPool.CAs[0].SigningKey)
 	if err != nil {
 		return fmt.Errorf("while signing subject cert: %w", err)
 	}

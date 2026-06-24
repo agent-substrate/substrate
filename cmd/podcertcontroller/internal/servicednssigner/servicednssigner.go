@@ -135,6 +135,13 @@ func (h *Impl) MakeCert(ctx context.Context, pcr *certsv1beta1.PodCertificateReq
 		}
 	}
 
+	// This is returned as a transient error to allow retries.
+	// Without this, ate-apiserver can have a servicedns cert without DNS name
+	// while the covering Service is being created, and cache it for 24 hours.
+	if len(dnsNames) == 0 {
+		return fmt.Errorf("pod %s/%s is not (yet) selected by any Service; refusing to issue a serving cert with no DNS SANs", pcr.ObjectMeta.Namespace, pcr.Spec.PodName)
+	}
+
 	// TODO: Encode the OIDC issuer of the cluster into the certificate.
 
 	subjectPublicKey, err := podcertificate.PublicKey(pcr)
@@ -156,6 +163,7 @@ func (h *Impl) MakeCert(ctx context.Context, pcr *certsv1beta1.PodCertificateReq
 	notAfter := notBefore.Add(lifetime)
 	beginRefreshAt := notAfter.Add(-30 * time.Minute)
 
+	parent := h.caPool.CAs[0].RootCertificate
 	template := &x509.Certificate{
 		BasicConstraintsValid: true,
 		NotBefore:             notBefore,
@@ -163,9 +171,12 @@ func (h *Impl) MakeCert(ctx context.Context, pcr *certsv1beta1.PodCertificateReq
 		DNSNames:              dnsNames,
 		KeyUsage:              x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
+		// Link the leaf to its issuing CA by key id. Needed this for Valkey
+		// to understand which CA to use when validating a client cert.
+		AuthorityKeyId: parent.SubjectKeyId,
 	}
 
-	subjectCertDER, err := x509.CreateCertificate(rand.Reader, template, h.caPool.CAs[0].RootCertificate, subjectPublicKey, h.caPool.CAs[0].SigningKey)
+	subjectCertDER, err := x509.CreateCertificate(rand.Reader, template, parent, subjectPublicKey, h.caPool.CAs[0].SigningKey)
 	if err != nil {
 		return fmt.Errorf("while signing subject cert: %w", err)
 	}

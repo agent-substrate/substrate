@@ -16,28 +16,19 @@ package router
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/rsa"
-	"crypto/tls"
-	"crypto/x509"
-	"crypto/x509/pkix"
-	"encoding/pem"
 	"errors"
 	"fmt"
 	"log/slog"
-	"math/big"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
-	"time"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/kubernetes"
@@ -60,29 +51,9 @@ func init() {
 	utilruntime.Must(v1alpha1.AddToScheme(scheme))
 }
 
-// RouterConfig holds deployment setup and endpoint options for the router node instance.
-type RouterConfig struct {
-	Standalone     bool
-	Namespace      string
-	Kubeconfig     string
-	AteapiAddr     string
-	HttpPort       int
-	XdsPort        int
-	ExtprocPort    int
-	ExtprocAddr    string
-	EnvoyImage     string
-	TemplatesFile  string
-	StatusPort     int
-	HealthInterval time.Duration
-	HttpsPort      int
-	EnvoyCertPath  string
-	LogLevel       string
-	MetricsAddr    string
-}
-
 // RouterServer instantiates and coordinates runtime threads executing system modules.
 type RouterServer struct {
-	cfg RouterConfig
+	cfg routerConfig
 
 	Cmd        *cobra.Command
 	k8sClient  client.Client
@@ -93,7 +64,7 @@ type RouterServer struct {
 	atStore    atStore
 }
 
-func NewRouterServer(cfg RouterConfig) (*RouterServer, error) {
+func NewRouterServer(cfg routerConfig) (*RouterServer, error) {
 	var k8sClient client.Client
 	var clientset kubernetes.Interface
 	var err error
@@ -125,7 +96,12 @@ func NewRouterServer(cfg RouterConfig) (*RouterServer, error) {
 		}
 	}
 
-	conn, err := grpc.NewClient(cfg.AteapiAddr, grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{InsecureSkipVerify: true})))
+	creds, err := cfg.apiTransportCredentials()
+	if err != nil {
+		return nil, fmt.Errorf("failed to build ateapi transport credentials: %w", err)
+	}
+
+	conn, err := grpc.NewClient(cfg.AteapiAddr, grpc.WithTransportCredentials(creds))
 	if err != nil {
 		return nil, fmt.Errorf("failed to establish grpc channel to ateapi client: %w", err)
 	}
@@ -188,17 +164,7 @@ func (s *RouterServer) Run(ctx context.Context) error {
 	xdsSrv := NewXdsServer(s.cfg.XdsPort)
 	xdsSrv.SetConfig(s.cfg.HttpPort, s.cfg.ExtprocPort, s.cfg.ExtprocAddr)
 
-	var certContent, keyContent string
-	if s.cfg.EnvoyCertPath == "" {
-		slog.InfoContext(ctx, "No Envoy certificate path provided, generating self-signed certificate for testing")
-		var err error
-		certContent, keyContent, err = generateSelfSignedCert()
-		if err != nil {
-			return fmt.Errorf("failed to generate self-signed cert: %w", err)
-		}
-	}
-
-	xdsSrv.SetTlsConfig(s.cfg.HttpsPort, s.cfg.EnvoyCertPath, certContent, keyContent)
+	xdsSrv.SetTlsConfig(s.cfg.HttpsPort, s.cfg.EnvoyCertPath)
 	if s.extprocSrv == nil {
 		routeDuration, err := newRouteDurationHistogram()
 		if err != nil {
@@ -273,40 +239,4 @@ func (s *RouterServer) Run(ctx context.Context) error {
 	}
 
 	return g.Wait()
-}
-
-func generateSelfSignedCert() (string, string, error) {
-	priv, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		return "", "", err
-	}
-
-	template := x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject: pkix.Name{
-			Organization: []string{"Substrate Local Test"},
-		},
-		NotBefore: time.Now(),
-		NotAfter:  time.Now().Add(time.Hour * 24 * 365),
-
-		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		BasicConstraintsValid: true,
-		DNSNames:              []string{"localhost"},
-	}
-
-	derBytes, err := x509.CreateCertificate(rand.Reader, &template, &template, &priv.PublicKey, priv)
-	if err != nil {
-		return "", "", err
-	}
-
-	certPem := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: derBytes})
-
-	privBytes, err := x509.MarshalPKCS8PrivateKey(priv)
-	if err != nil {
-		return "", "", err
-	}
-	keyPem := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: privBytes})
-
-	return string(certPem), string(keyPem), nil
 }

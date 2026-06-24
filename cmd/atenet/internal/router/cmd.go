@@ -12,25 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package internal
+package router
 
 import (
 	"fmt"
 	"time"
 
 	"github.com/spf13/cobra"
-
-	"github.com/agent-substrate/substrate/cmd/atenet/internal/router"
 )
 
 func NewRouterCmd() *cobra.Command {
-	var cfg router.RouterConfig
+	var cfg routerConfig
 
 	cmd := &cobra.Command{
 		Use:   "router",
 		Short: "Router components including xDS server and Envoy ExtProc gateway processing server",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			srv, err := router.NewRouterServer(cfg)
+			srv, err := NewRouterServer(cfg)
 			if err != nil {
 				return fmt.Errorf("failed to create router server: %w", err)
 			}
@@ -46,6 +44,8 @@ func NewRouterCmd() *cobra.Command {
 	cmd.Flags().StringVar(&cfg.Namespace, "namespace", "default", "Target operations namespace")
 	cmd.Flags().StringVar(&cfg.Kubeconfig, "kubeconfig", "", "Absolute path to the kubeconfig configuration file")
 	cmd.Flags().StringVar(&cfg.AteapiAddr, "ateapi-address", "api.ate-system.svc:443", "gRPC host address of the cluster ateapi Control instance")
+	cmd.Flags().StringVar(&cfg.Auth.AteapiClientCertPath, "ateapi-client-cert", "/run/podidentity.podcert.ate.dev/credential-bundle.pem", "Path to the podidentity credential bundle the router presents as its client cert to ateapi.")
+	cmd.Flags().StringVar(&cfg.Auth.AteapiCACertsPath, "ateapi-ca-certs", "/run/servicedns-ca.podcert.ate.dev/trust-bundle.pem", "Path to the servicedns trust bundle used to verify ateapi's serving cert.")
 	cmd.Flags().IntVar(&cfg.HttpPort, "port-http", 8080, "TCP port for workload traffic entering through the Envoy Router")
 	cmd.Flags().IntVar(&cfg.XdsPort, "port-xds", 18000, "TCP port listening for the xDS dynamic Envoy connections")
 	cmd.Flags().IntVar(&cfg.ExtprocPort, "port-extproc", 50051, "Listen port for the Envoy dynamic External Processing (ext_proc) server")
@@ -55,7 +55,7 @@ func NewRouterCmd() *cobra.Command {
 	cmd.Flags().IntVar(&cfg.StatusPort, "status-port", 4040, "Port to serve /statusz on (set <= 0 to disable serving status)")
 	cmd.Flags().DurationVar(&cfg.HealthInterval, "health-interval", 1*time.Second, "Interval for checking health of dependent services")
 	cmd.Flags().IntVar(&cfg.HttpsPort, "port-https", 8443, "TCP port for HTTPS workload traffic entering through the Envoy Router")
-	cmd.Flags().StringVar(&cfg.EnvoyCertPath, "envoy-cert-path", "", "Path to the Envoy certificate file (if empty, a self-signed cert will be generated for testing)")
+	cmd.Flags().StringVar(&cfg.EnvoyCertPath, "envoy-cert-path", "", "Path to the Envoy certificate file.")
 
 	return cmd
 }
