@@ -69,7 +69,7 @@ func prepareOCIDirectory(ctx context.Context, pullCache *memorypullcache.MemoryP
 		return fmt.Errorf("in os.MkdirAll for container bundle dir: %w", err)
 	}
 
-	tarData, err := pullCache.Fetch(ctx, ref)
+	tarData, imageEnv, err := pullCache.Fetch(ctx, ref)
 	if err != nil {
 		return fmt.Errorf("in pullCache.Fetch: %w", err)
 	}
@@ -88,7 +88,7 @@ func prepareOCIDirectory(ctx context.Context, pullCache *memorypullcache.MemoryP
 		}
 	}
 
-	ociSpec := buildActorOCISpec(args, env, annotations, netns, identityDir)
+	ociSpec := buildActorOCISpec(imageEnv, args, env, annotations, netns, identityDir)
 	ociSpecBytes, err := json.MarshalIndent(ociSpec, "", "  ")
 	if err != nil {
 		return fmt.Errorf("while marshaling OCI spec: %w", err)
@@ -101,15 +101,37 @@ func prepareOCIDirectory(ctx context.Context, pullCache *memorypullcache.MemoryP
 	return nil
 }
 
+// mergeActorEnv builds the actor's env from the default PATH, the ActorTemplate env, and the image's ENV.
+// duplicated keys are removed in favor of precedence. The precedence is default PATH > actor template env > image env.
+func mergeActorEnv(imageEnv, templateEnv []string) []string {
+	seen := make(map[string]struct{})
+	var out []string
+	add := func(entries ...string) {
+		for _, e := range entries {
+			key, _, _ := strings.Cut(e, "=")
+			if key == "" {
+				continue
+			}
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			out = append(out, e)
+		}
+	}
+
+	add("PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
+	add(templateEnv...)
+	add(imageEnv...)
+	return out
+}
+
 // buildActorOCISpec assembles the OCI runtime spec for an actor container.
 // When identityDir is non-empty it adds a read-only bind mount of that host
 // directory at IdentityMountPath so the actor can read its own ID (see
 // IdentityMountPath for why this is a bind mount rather than env vars).
-func buildActorOCISpec(args []string, env []string, annotations map[string]string, netns string, identityDir string) *specs.Spec {
-	envVars := []string{
-		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-	}
-	envVars = append(envVars, env...)
+func buildActorOCISpec(imageEnv []string, args []string, env []string, annotations map[string]string, netns string, identityDir string) *specs.Spec {
+	envVars := mergeActorEnv(imageEnv, env)
 
 	mounts := []specs.Mount{
 		{
