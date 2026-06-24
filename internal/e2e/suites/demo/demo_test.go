@@ -42,7 +42,7 @@ func TestActorLifecycle(t *testing.T) {
 	clients := e2e.GetClients()
 
 	// Create actor template.
-	at, err := createActorTemplate(ctx, t, clients, nsObj)
+	at, err := createActorTemplate(ctx, t, clients, nsObj, v1alpha1.SnapshotScopeProcess, v1alpha1.SnapshotScopeProcess)
 	if err != nil {
 		t.Fatalf("failed to initialize ActorTemplate: %v", err)
 	}
@@ -73,7 +73,171 @@ func TestActorLifecycle(t *testing.T) {
 			}
 		})
 	}
+}
 
+// Verify that file and memory counters behavior after pause and suspend, for different snapshot scopes.
+// Test case:
+//  1. Create actor.
+//  2. Call to actor and validate memory and file counters.
+//  3. Pause & Resume actor.
+//  4. Call to actor and validate memory and file counters.
+//  5. Suspend & Resume actor.
+//  6. Call to actor and validate memory and file counters.
+func TestHomedirLifecycle(t *testing.T) {
+	tests := []struct {
+		name                   string
+		onCommit               v1alpha1.SnapshotScope
+		onPause                v1alpha1.SnapshotScope
+		wantMemoryAfterPause   int
+		wantFileAfterPause     int
+		wantMemoryAfterSuspend int
+		wantFileAfterSuspend   int
+	}{
+		{
+			name:                   "onCommit:process, onPause:process",
+			onCommit:               v1alpha1.SnapshotScopeProcess,
+			onPause:                v1alpha1.SnapshotScopeProcess,
+			wantMemoryAfterPause:   2,
+			wantFileAfterPause:     2,
+			wantMemoryAfterSuspend: 3,
+			wantFileAfterSuspend:   3,
+		},
+		{
+			name:                   "onCommit:homedir, onPause:process",
+			onCommit:               v1alpha1.SnapshotScopeHomedir,
+			onPause:                v1alpha1.SnapshotScopeProcess,
+			wantMemoryAfterPause:   2,
+			wantFileAfterPause:     2,
+			wantMemoryAfterSuspend: 1,
+			wantFileAfterSuspend:   3,
+		},
+		{
+			name:                   "onCommit:homedir, onPause:homedir",
+			onCommit:               v1alpha1.SnapshotScopeHomedir,
+			onPause:                v1alpha1.SnapshotScopeHomedir,
+			wantMemoryAfterPause:   1,
+			wantFileAfterPause:     2,
+			wantMemoryAfterSuspend: 1,
+			wantFileAfterSuspend:   3,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			// Create namespace
+			nsObj := e2e.CreateNamespace(t)
+
+			ctx := context.Background()
+			clients := e2e.GetClients()
+
+			// Create actor template.
+			at, err := createActorTemplate(ctx, t, clients, nsObj, tc.onCommit, tc.onPause)
+			if err != nil {
+				t.Fatalf("failed to initialize ActorTemplate: %v", err)
+			}
+
+			//
+			// Create an Actor.
+			//
+			actorID := "homedir-lifecycle" + "-" + nsObj.Name
+
+			t.Logf("Creating Actor %q using Substrate API...", actorID)
+			createResp, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{
+				ActorId:                actorID,
+				ActorTemplateNamespace: nsObj.Name,
+				ActorTemplateName:      at.Name,
+			})
+			if err != nil {
+				t.Fatalf("failed to create Actor: %v", err)
+			}
+			t.Logf("Successfully created Actor: %s", createResp.GetActor().GetActorId())
+			defer func() {
+				clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{
+					ActorId: actorID,
+				})
+			}()
+
+			// Resuming the actor
+			t.Logf("Resuming Actor %q...", actorID)
+			if _, err := clients.SubstrateAPI.ResumeActor(ctx, &ateapipb.ResumeActorRequest{
+				ActorId: actorID,
+			}); err != nil {
+				t.Fatalf("failed to resume Actor: %v", err)
+			}
+			waitForActorStatus(ctx, t, clients, actorID, ateapipb.Actor_STATUS_RUNNING)
+
+			resp, err := callActor(t, actorID)
+			if err != nil {
+				t.Fatalf("failed to call actor: %v", err)
+			}
+			validateCounterResponse(t, resp, "after creation", 1, 1)
+
+			//
+			// Pausing the actor
+			//
+			t.Logf("Pausing Actor %q...", actorID)
+			if _, err := clients.SubstrateAPI.PauseActor(ctx, &ateapipb.PauseActorRequest{
+				ActorId: actorID,
+			}); err != nil {
+				t.Fatalf("failed to pause Actor: %v", err)
+			}
+			waitForActorStatus(ctx, t, clients, actorID, ateapipb.Actor_STATUS_PAUSED)
+
+			// Resuming the actor
+			t.Logf("Resuming Actor %q again...", actorID)
+			if _, err := clients.SubstrateAPI.ResumeActor(ctx, &ateapipb.ResumeActorRequest{
+				ActorId: actorID,
+			}); err != nil {
+				t.Fatalf("failed to resume Actor again: %v", err)
+			}
+			waitForActorStatus(ctx, t, clients, actorID, ateapipb.Actor_STATUS_RUNNING)
+
+			resp, err = callActor(t, actorID)
+			if err != nil {
+				t.Fatalf("failed to call actor again: %v", err)
+			}
+			validateCounterResponse(t, resp, "after paise", tc.wantMemoryAfterPause, tc.wantFileAfterPause)
+
+			//
+			// Suspending the actor
+			//
+			t.Logf("Suspending Actor %q...", actorID)
+			if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
+				ActorId: actorID,
+			}); err != nil {
+				t.Fatalf("failed to suspend Actor: %v", err)
+			}
+			waitForActorStatus(ctx, t, clients, actorID, ateapipb.Actor_STATUS_SUSPENDED)
+
+			// Resuming the actor
+			t.Logf("Resuming Actor %q again...", actorID)
+			if _, err := clients.SubstrateAPI.ResumeActor(ctx, &ateapipb.ResumeActorRequest{
+				ActorId: actorID,
+			}); err != nil {
+				t.Fatalf("failed to resume Actor again: %v", err)
+			}
+			waitForActorStatus(ctx, t, clients, actorID, ateapipb.Actor_STATUS_RUNNING)
+
+			resp, err = callActor(t, actorID)
+			if err != nil {
+				t.Fatalf("failed to call actor again: %v", err)
+			}
+			validateCounterResponse(t, resp, "after suspend", tc.wantMemoryAfterSuspend, tc.wantFileAfterSuspend)
+		})
+	}
+}
+
+func validateCounterResponse(t *testing.T, resp string, stage string, wantMemory, wantFile int) {
+	memoryCounterPrefix := "preserved memory count: "
+	fileCounterPrefix := "preserved file counter: "
+
+	if !strings.Contains(resp, memoryCounterPrefix+fmt.Sprintf("%d", wantMemory)) {
+		t.Errorf("[%s] expected memory count %d, got response: %s", stage, wantMemory, resp)
+	}
+	if !strings.Contains(resp, fileCounterPrefix+fmt.Sprintf("%d", wantFile)) {
+		t.Errorf("[%s] expected file count %d, got response: %s", stage, wantFile, resp)
+	}
 }
 
 func createActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, at *v1alpha1.ActorTemplate) error {
@@ -157,9 +321,7 @@ func pauseActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *
 	if err != nil {
 		t.Fatalf("failed to call actor: %v", err)
 	}
-	if !strings.Contains(resp, "preserved memory count: 1") {
-		t.Fatalf("expected count 1, got response: %s", resp)
-	}
+	validateCounterResponse(t, resp, "after creation", 1, 1)
 
 	// Pausing the actor
 	t.Logf("Pausing Actor %q...", actorID)
@@ -183,9 +345,7 @@ func pauseActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *
 	if err != nil {
 		t.Fatalf("failed to call actor again: %v", err)
 	}
-	if !strings.Contains(resp, "preserved memory count: 2") {
-		t.Fatalf("expected count 2, got response: %s", resp)
-	}
+	validateCounterResponse(t, resp, "after pause", 2, 2)
 
 	// Suspending the actor before deletion
 	t.Logf("Suspending Actor %q before deletion...", actorID)
@@ -240,9 +400,7 @@ func suspendActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj
 	if err != nil {
 		t.Fatalf("failed to call actor: %v", err)
 	}
-	if !strings.Contains(resp, "preserved memory count: 1") {
-		t.Fatalf("expected count 1, got response: %s", resp)
-	}
+	validateCounterResponse(t, resp, "after creation", 1, 1)
 
 	// Suspending the actor
 	t.Logf("Suspending Actor %q...", actorID)
@@ -266,9 +424,7 @@ func suspendActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj
 	if err != nil {
 		t.Fatalf("failed to call actor again: %v", err)
 	}
-	if !strings.Contains(resp, "preserved memory count: 2") {
-		t.Fatalf("expected count 2, got response: %s", resp)
-	}
+	validateCounterResponse(t, resp, "after pause", 2, 2)
 
 	// Suspending the actor before deletion
 	t.Logf("Suspending Actor %q before deletion...", actorID)
@@ -296,7 +452,7 @@ func suspendActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj
 	return nil
 }
 
-func createActorTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace) (*v1alpha1.ActorTemplate, error) {
+func createActorTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, onCommit, onPause v1alpha1.SnapshotScope) (*v1alpha1.ActorTemplate, error) {
 	env, err := e2e.CheckEnv("BUCKET_NAME", "KO_DOCKER_REPO")
 	if err != nil {
 		t.Fatalf("CheckEnv failed: %v", err)
@@ -364,7 +520,10 @@ func createActorTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients
 			Containers:   existingAt.Spec.Containers,
 			SnapshotsConfig: v1alpha1.SnapshotsConfig{
 				Location: "gs://" + env["BUCKET_NAME"] + "/ate-demo-counter",
+				OnPause:  onPause,
+				OnCommit: onCommit,
 			},
+			Volumes: existingAt.Spec.Volumes,
 		},
 	}
 	_, err = clients.SubstrateK8s.ApiV1alpha1().ActorTemplates(nsObj.Name).Create(ctx, at, metav1.CreateOptions{})
