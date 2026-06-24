@@ -203,13 +203,18 @@ func TestCreateWorker_Success(t *testing.T) {
 	mr, s, ctx := setupTest(t)
 	defer mr.Close()
 
+	watch, err := s.WatchWorkers(ctx)
+	if err != nil {
+		t.Fatalf("WatchWorkers failed: %v", err)
+	}
+
 	worker := &ateapipb.Worker{
 		WorkerNamespace: "default",
 		WorkerPool:      "pool-1",
 		WorkerPod:       "pod-1",
 	}
 
-	err := s.CreateWorker(ctx, worker)
+	err = s.CreateWorker(ctx, worker)
 	if err != nil {
 		t.Fatalf("CreateWorker failed: %v", err)
 	}
@@ -227,6 +232,14 @@ func TestCreateWorker_Success(t *testing.T) {
 	if diff := cmp.Diff(worker, got, protocmp.Transform()); diff != "" {
 		t.Errorf("GetWorker returned unexpected worker (-want +got):\n%s", diff)
 	}
+
+	event := receiveEvent(t, watch.Events)
+	if event.Type != store.WorkerEventCreated {
+		t.Errorf("expected WorkerEventCreated, got %v", event.Type)
+	}
+	if diff := cmp.Diff(worker, event.Worker, protocmp.Transform()); diff != "" {
+		t.Errorf("created event worker mismatch (-want +got):\n%s", diff)
+	}
 }
 
 func TestUpdateWorker_Success(t *testing.T) {
@@ -239,17 +252,21 @@ func TestUpdateWorker_Success(t *testing.T) {
 		WorkerPod:       "pod-1",
 	}
 
-	err := s.CreateWorker(ctx, worker)
-	if err != nil {
+	if err := s.CreateWorker(ctx, worker); err != nil {
 		t.Fatalf("CreateWorker failed: %v", err)
+	}
+
+	// Subscribe after create so the create event doesn't pollute the channel.
+	watch, err := s.WatchWorkers(ctx)
+	if err != nil {
+		t.Fatalf("WatchWorkers failed: %v", err)
 	}
 
 	worker.ActorNamespace = "default"
 	worker.ActorTemplate = "test-template"
 	worker.ActorId = "session-1"
 
-	err = s.UpdateWorker(ctx, worker, 1)
-	if err != nil {
+	if err := s.UpdateWorker(ctx, worker, 1); err != nil {
 		t.Fatalf("UpdateWorker failed: %v", err)
 	}
 
@@ -266,6 +283,14 @@ func TestUpdateWorker_Success(t *testing.T) {
 	if diff := cmp.Diff(worker, got, protocmp.Transform()); diff != "" {
 		t.Errorf("UpdateWorker yielded unexpected state in DB (-want +got):\n%s", diff)
 	}
+
+	event := receiveEvent(t, watch.Events)
+	if event.Type != store.WorkerEventUpdated {
+		t.Errorf("expected WorkerEventUpdated, got %v", event.Type)
+	}
+	if diff := cmp.Diff(worker, event.Worker, protocmp.Transform()); diff != "" {
+		t.Errorf("updated event worker mismatch (-want +got):\n%s", diff)
+	}
 }
 
 func TestDeleteWorker(t *testing.T) {
@@ -278,19 +303,32 @@ func TestDeleteWorker(t *testing.T) {
 		WorkerPod:       "pod-1",
 	}
 
-	err := s.CreateWorker(ctx, worker)
-	if err != nil {
+	if err := s.CreateWorker(ctx, worker); err != nil {
 		t.Fatalf("CreateWorker failed: %v", err)
 	}
 
-	err = s.DeleteWorker(ctx, "default", "pool-1", "pod-1")
+	// Subscribe after create so the create event doesn't pollute the channel.
+	watch, err := s.WatchWorkers(ctx)
 	if err != nil {
+		t.Fatalf("WatchWorkers failed: %v", err)
+	}
+
+	if err := s.DeleteWorker(ctx, "default", "pool-1", "pod-1"); err != nil {
 		t.Fatalf("DeleteWorker failed: %v", err)
 	}
 
 	_, err = s.GetWorker(ctx, "default", "pool-1", "pod-1")
 	if !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("expected ErrNotFound after delete, got %v", err)
+	}
+
+	event := receiveEvent(t, watch.Events)
+	if event.Type != store.WorkerEventDeleted {
+		t.Errorf("expected WorkerEventDeleted, got %v", event.Type)
+	}
+	want := &ateapipb.Worker{WorkerNamespace: "default", WorkerPod: "pod-1"}
+	if diff := cmp.Diff(want, event.Worker, protocmp.Transform()); diff != "" {
+		t.Errorf("deleted event worker mismatch (-want +got):\n%s", diff)
 	}
 }
 
@@ -752,6 +790,20 @@ func TestAcquireLock_TTLExpiration(t *testing.T) {
 	}
 	if !acquired {
 		t.Errorf("expected lock to be acquired by token-2 after TTL expiration")
+	}
+}
+
+func receiveEvent(t *testing.T, ch <-chan store.WorkerEvent) store.WorkerEvent {
+	t.Helper()
+	select {
+	case event, ok := <-ch:
+		if !ok {
+			t.Fatal("watch channel closed unexpectedly")
+		}
+		return event
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for worker event")
+		return store.WorkerEvent{} // unreachable
 	}
 }
 

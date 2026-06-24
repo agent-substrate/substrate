@@ -24,12 +24,14 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
@@ -111,6 +113,7 @@ func eligibleWorkerPools(pools []*atev1alpha1.WorkerPool, templateClass atev1alp
 
 type AssignWorkerStep struct {
 	store            store.Interface
+	workerCache      *workercache.Cache
 	workerPoolLister listersv1alpha1.WorkerPoolLister
 }
 
@@ -132,7 +135,7 @@ func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, stat
 		return status.Errorf(codes.FailedPrecondition, "no worker pool matches the template's sandboxClass and the template/actor selectors")
 	}
 
-	workers, err := s.store.ListWorkers(ctx)
+	workers, err := s.workerCache.Workers()
 	if err != nil {
 		return fmt.Errorf("while listing workers: %w", err)
 	}
@@ -152,10 +155,13 @@ func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, stat
 			assignedWorker = worker
 			break
 		}
-		worker.ActorId = ""
-		worker.ActorNamespace = ""
-		worker.ActorTemplate = ""
-		if err := s.store.UpdateWorker(ctx, worker, worker.Version); err != nil {
+		// Workers() returns pointers directly from the cache so we need to clone before
+		// mutating so that the cache is not corrupted if UpdateWorker fails.
+		release := proto.Clone(worker).(*ateapipb.Worker)
+		release.ActorId = ""
+		release.ActorNamespace = ""
+		release.ActorTemplate = ""
+		if err := s.store.UpdateWorker(ctx, release, release.Version); err != nil {
 			return fmt.Errorf("while releasing stale worker assignment: %w", err)
 		}
 	}
@@ -171,6 +177,9 @@ func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, stat
 		slog.InfoContext(ctx, "Picked worker", slog.Any("worker", pickedWorker.String()))
 	}
 
+	// Workers() returns pointers directly from the cache so we need to clone before
+	// mutating so that the cache is not corrupted if UpdateWorker fails.
+	assignedWorker = proto.Clone(assignedWorker).(*ateapipb.Worker)
 	assignedWorker.ActorId = input.ActorID
 	assignedWorker.ActorNamespace = state.Actor.GetActorTemplateNamespace()
 	assignedWorker.ActorTemplate = state.Actor.GetActorTemplateName()

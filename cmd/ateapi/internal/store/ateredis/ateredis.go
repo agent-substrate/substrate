@@ -47,6 +47,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"sync"
@@ -59,10 +60,16 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+type workerPubSubMsg struct {
+	Type   int    `json:"t"`
+	Worker string `json:"w"` // protojson-encoded Worker
+}
+
 type redisClient interface {
 	redis.Cmdable
 	ForEachMaster(ctx context.Context, fn func(ctx context.Context, client *redis.Client) error) error
 	Watch(ctx context.Context, fn func(*redis.Tx) error, keys ...string) error
+	Subscribe(ctx context.Context, channels ...string) *redis.PubSub
 }
 
 // Persistence is a service that stores information about applications in Redis.
@@ -85,6 +92,77 @@ func actorDBKey(id string) string {
 
 func workerDBKey(namespace, poolName, podName string) string {
 	return "worker:" + namespace + ":" + poolName + ":" + podName
+}
+
+func marshalWorkerEvent(eventType store.WorkerEventType, worker *ateapipb.Worker) (string, error) {
+	workerJSON, err := protojson.Marshal(worker)
+	if err != nil {
+		return "", fmt.Errorf("in protojson.Marshal: %w", err)
+	}
+	msg, err := json.Marshal(workerPubSubMsg{Type: int(eventType), Worker: string(workerJSON)})
+	if err != nil {
+		return "", fmt.Errorf("in json.Marshal: %w", err)
+	}
+	return string(msg), nil
+}
+
+func unmarshalWorkerEvent(payload string) (store.WorkerEvent, error) {
+	var msg workerPubSubMsg
+	if err := json.Unmarshal([]byte(payload), &msg); err != nil {
+		return store.WorkerEvent{}, fmt.Errorf("in json.Unmarshal: %w", err)
+	}
+	worker := &ateapipb.Worker{}
+	if err := protojson.Unmarshal([]byte(msg.Worker), worker); err != nil {
+		return store.WorkerEvent{}, fmt.Errorf("in protojson.Unmarshal: %w", err)
+	}
+	return store.WorkerEvent{Type: store.WorkerEventType(msg.Type), Worker: worker}, nil
+}
+
+const workerPubSubChannel = "worker-changes"
+
+func (s *Persistence) publishWorkerEvent(ctx context.Context, eventType store.WorkerEventType, worker *ateapipb.Worker) {
+	payload, err := marshalWorkerEvent(eventType, worker)
+	if err != nil {
+		slog.ErrorContext(ctx, "worker event marshal failed", slog.Any("err", err))
+		return
+	}
+	if err := s.rdb.Publish(ctx, workerPubSubChannel, payload).Err(); err != nil {
+		slog.ErrorContext(ctx, "worker event publish failed", slog.Any("err", err))
+	}
+}
+
+func (s *Persistence) WatchWorkers(ctx context.Context) (*store.WorkerWatch, error) {
+	// watchCtx scopes the subscription's lifetime: it is cancelled either by the
+	// caller via WorkerWatch.Close or when the parent ctx is cancelled.
+	watchCtx, cancel := context.WithCancel(ctx)
+	pubsub := s.rdb.Subscribe(watchCtx, workerPubSubChannel)
+	ch := make(chan store.WorkerEvent, 128)
+	go func() {
+		defer close(ch)
+		defer pubsub.Close()
+		msgCh := pubsub.Channel()
+		for {
+			select {
+			case <-watchCtx.Done():
+				return
+			case msg, ok := <-msgCh:
+				if !ok {
+					return
+				}
+				event, err := unmarshalWorkerEvent(msg.Payload)
+				if err != nil {
+					slog.ErrorContext(ctx, "worker event unmarshal failed", slog.Any("err", err))
+					continue
+				}
+				select {
+				case ch <- event:
+				case <-watchCtx.Done():
+					return
+				}
+			}
+		}
+	}()
+	return store.NewWorkerWatch(ch, cancel), nil
 }
 
 // DebugClearAll flushes all data from Redis.
@@ -169,6 +247,7 @@ func (s *Persistence) CreateWorker(ctx context.Context, worker *ateapipb.Worker)
 		return store.ErrAlreadyExists
 	}
 
+	s.publishWorkerEvent(ctx, store.WorkerEventCreated, dbWorker)
 	return nil
 }
 
@@ -251,6 +330,7 @@ func (s *Persistence) UpdateWorker(ctx context.Context, worker *ateapipb.Worker,
 		return fmt.Errorf("while executing update worker transaction: %w", err)
 	}
 
+	s.publishWorkerEvent(ctx, store.WorkerEventUpdated, dbWorker)
 	return nil
 }
 
@@ -260,6 +340,10 @@ func (s *Persistence) DeleteWorker(ctx context.Context, namespace, pool, pod str
 	if err != nil {
 		return fmt.Errorf("while deleting worker key %q: %w", dbKey, err)
 	}
+	s.publishWorkerEvent(ctx, store.WorkerEventDeleted, &ateapipb.Worker{
+		WorkerNamespace: namespace,
+		WorkerPod:       pod,
+	})
 	return nil
 }
 
