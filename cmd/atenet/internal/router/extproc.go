@@ -129,7 +129,7 @@ func (s *ExtProcServer) handleRequestHeaders(
 	metadata := newRequestMetadata(reqHeaders.Headers.GetHeaders())
 	slog.InfoContext(ctx, "Request", slog.String("metadata", metadata.String()))
 
-	actorID, err := parseActorID(metadata.host)
+	actorID, port, err := parseActorID(metadata.host)
 	if err != nil {
 		// Host is invalid, respond with 404.
 		return nil, metadata, "", "", "", invalidHostErr(metadata.host, err)
@@ -158,8 +158,7 @@ func (s *ExtProcServer) handleRequestHeaders(
 			"actor %q routing failed", actorID)
 	}
 
-	// TODO(bowei) -- handle more than port 80 on the actor.
-	targetAddr := net.JoinHostPort(workerIP, "80")
+	targetAddr := net.JoinHostPort(workerIP, port)
 
 	slog.InfoContext(ctx, "Route ok", slog.String("actorID", actorID), slog.String("targetAddr", targetAddr))
 

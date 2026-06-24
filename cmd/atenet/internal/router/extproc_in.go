@@ -17,6 +17,8 @@ package router
 import (
 	"fmt"
 	"net"
+	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/agent-substrate/substrate/internal/resources"
@@ -61,21 +63,56 @@ func newRequestMetadata(headers []*corev3.HeaderValue) *requestMetadata {
 	}
 }
 
-func parseActorID(host string) (string, error) {
+// defaultActorPort is the actor service port used when the host has no
+// "<port>-" prefix.
+const defaultActorPort = "80"
+
+// portPrefixRegex matches a "<port>-<actorID>" left-most host label. A leading
+// numeric run followed by "-" is treated as the target service port on the
+// actor. Actor IDs minted for multi-port access must therefore not themselves
+// begin with "<digits>-"; IDs without that shape keep routing to the default
+// port and remain backwards compatible.
+var portPrefixRegex = regexp.MustCompile(`^([0-9]+)-(.+)$`)
+
+// parseActorID extracts the actor ID and target service port from an actor
+// host. The default form
+//
+//	<actor-id>.<ActorDNSSuffix>            -> port 80
+//
+// while a port-prefixed form selects an explicit service port, letting a single
+// actor expose multiple services:
+//
+//	<port>-<actor-id>.<ActorDNSSuffix>     -> port <port>
+//
+// Any trailing ":<port>" on the host is the client connection port and is
+// stripped before parsing; it does not affect the routed service port.
+func parseActorID(host string) (string, string, error) {
 	var err error
 	if strings.Contains(host, ":") {
 		host, _, err = net.SplitHostPort(host)
 	}
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
-	actorID, found := strings.CutSuffix(strings.TrimSuffix(host, "."), "."+resources.ActorDNSSuffix)
+	label, found := strings.CutSuffix(strings.TrimSuffix(host, "."), "."+resources.ActorDNSSuffix)
 	if !found {
-		return "", fmt.Errorf("invalid actor_id: must end with %s, got %q", resources.ActorDNSSuffix, host)
-	}
-	if err := resources.ValidateActorID(actorID); err != nil {
-		return "", err
+		return "", "", fmt.Errorf("invalid actor_id: must end with %s, got %q", resources.ActorDNSSuffix, host)
 	}
 
-	return actorID, nil
+	port := defaultActorPort
+	actorID := label
+	if m := portPrefixRegex.FindStringSubmatch(label); m != nil {
+		p, perr := strconv.Atoi(m[1])
+		if perr != nil || p < 1 || p > 65535 {
+			return "", "", fmt.Errorf("invalid actor port %q in host %q: must be in 1..65535", m[1], host)
+		}
+		port = strconv.Itoa(p)
+		actorID = m[2]
+	}
+
+	if err := resources.ValidateActorID(actorID); err != nil {
+		return "", "", err
+	}
+
+	return actorID, port, nil
 }

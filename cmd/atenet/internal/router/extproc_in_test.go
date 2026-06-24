@@ -137,58 +137,119 @@ func TestRequestMetadata_String(t *testing.T) {
 
 func TestParseActorID(t *testing.T) {
 	tests := []struct {
-		name    string
-		host    string
-		wantID  string
-		wantErr bool
+		name     string
+		host     string
+		wantID   string
+		wantPort string
+		wantErr  bool
 	}{
 		{
-			name:    "valid host without port",
-			host:    "my-actor.actors.resources.substrate.ate.dev",
-			wantID:  "my-actor",
-			wantErr: false,
+			name:     "valid host without port",
+			host:     "my-actor.actors.resources.substrate.ate.dev",
+			wantID:   "my-actor",
+			wantPort: "80",
+			wantErr:  false,
 		},
 		{
-			name:    "valid host with port",
-			host:    "my-actor.actors.resources.substrate.ate.dev:8443",
-			wantID:  "my-actor",
-			wantErr: false,
+			name:     "valid host with port",
+			host:     "my-actor.actors.resources.substrate.ate.dev:8443",
+			wantID:   "my-actor",
+			wantPort: "80",
+			wantErr:  false,
 		},
 		{
-			name:    "valid host with trailing dot",
-			host:    "my-actor.actors.resources.substrate.ate.dev.",
-			wantID:  "my-actor",
-			wantErr: false,
+			name:     "valid host with trailing dot",
+			host:     "my-actor.actors.resources.substrate.ate.dev.",
+			wantID:   "my-actor",
+			wantPort: "80",
+			wantErr:  false,
 		},
 		{
-			name:    "valid host with trailing dot and port",
-			host:    "my-actor.actors.resources.substrate.ate.dev.:8080",
-			wantID:  "my-actor",
-			wantErr: false,
+			name:     "valid host with trailing dot and port",
+			host:     "my-actor.actors.resources.substrate.ate.dev.:8080",
+			wantID:   "my-actor",
+			wantPort: "80",
+			wantErr:  false,
+		},
+		{
+			name:     "port-prefixed host",
+			host:     "8080-my-actor.actors.resources.substrate.ate.dev",
+			wantID:   "my-actor",
+			wantPort: "8080",
+			wantErr:  false,
+		},
+		{
+			name:     "port-prefixed host with connection port",
+			host:     "49983-sbx1.actors.resources.substrate.ate.dev:443",
+			wantID:   "sbx1",
+			wantPort: "49983",
+			wantErr:  false,
+		},
+		{
+			name:     "port-prefixed host with trailing dot",
+			host:     "8080-my-actor.actors.resources.substrate.ate.dev.",
+			wantID:   "my-actor",
+			wantPort: "8080",
+			wantErr:  false,
+		},
+		{
+			name:     "min port",
+			host:     "1-my-actor.actors.resources.substrate.ate.dev",
+			wantID:   "my-actor",
+			wantPort: "1",
+			wantErr:  false,
+		},
+		{
+			name:     "max port",
+			host:     "65535-my-actor.actors.resources.substrate.ate.dev",
+			wantID:   "my-actor",
+			wantPort: "65535",
+			wantErr:  false,
+		},
+		{
+			name:    "port zero is invalid",
+			host:    "0-my-actor.actors.resources.substrate.ate.dev",
+			wantErr: true,
+		},
+		{
+			name:    "port above range is invalid",
+			host:    "65536-my-actor.actors.resources.substrate.ate.dev",
+			wantErr: true,
+		},
+		{
+			name:     "leading-zero port is normalized",
+			host:     "0080-my-actor.actors.resources.substrate.ate.dev",
+			wantID:   "my-actor",
+			wantPort: "80",
+			wantErr:  false,
 		},
 		{
 			name:    "invalid suffix",
 			host:    "my-actor.example.com",
-			wantID:  "",
 			wantErr: true,
 		},
 		{
 			name:    "invalid host port format",
 			host:    "my-actor.actors.resources.substrate.ate.dev:invalid:port",
-			wantID:  "",
 			wantErr: true,
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			gotID, err := parseActorID(tc.host)
+			gotID, gotPort, err := parseActorID(tc.host)
 			if (err != nil) != tc.wantErr {
 				t.Errorf("parseActorID(%q) error = %v, wantErr %v", tc.host, err, tc.wantErr)
 				return
 			}
+			if tc.wantErr {
+				return
+			}
 			if gotID != tc.wantID {
 				t.Errorf("parseActorID(%q) gotID = %v, want %v", tc.host, gotID, tc.wantID)
+			}
+			if gotPort != tc.wantPort {
+				t.Errorf("parseActorID(%q) gotPort = %v, want %v", tc.host, gotPort, tc.wantPort)
 			}
 		})
 	}
