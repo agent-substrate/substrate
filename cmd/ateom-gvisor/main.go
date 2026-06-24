@@ -35,7 +35,6 @@ import (
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/agent-substrate/substrate/internal/version"
 	"github.com/google/nftables"
-	"github.com/google/nftables/binaryutil"
 	"github.com/google/nftables/expr"
 	"github.com/hashicorp/go-reap"
 	"github.com/spf13/pflag"
@@ -609,8 +608,9 @@ func installActorNftablesRules(podIP net.IP) error {
 	//
 	//   * postrouting: masquerade actor egress from 169.254.17.2 behind the worker
 	//     pod IP so replies route back to the pod.
-	//   * prerouting: DNAT traffic sent to the worker pod IP on TCP/80 to the
-	//     actor veth IP on TCP/80, preserving existing inbound behavior.
+	//   * prerouting: DNAT inbound TCP sent to the worker pod IP to the actor
+	//     veth IP, preserving the destination port so multi-service actors are
+	//     reachable on any port atenet routes to.
 	//   * forward: accept forwarded packets between the actor veth and pod eth0.
 	//
 	// This is not the final egress policy path. The later AgentGateway phase
@@ -636,23 +636,26 @@ func installActorNftablesRules(podIP net.IP) error {
 	})
 	// TODO: Support inbound UDP DNAT for actors that expose UDP protocols such
 	// as QUIC.
-	// TODO: Replace the hard-coded HTTP port with the actor's configured
-	// inbound ports, either by adding one rule per port or by matching a set.
-	preroutingExprs := append(ipDestinationEqual(podIP.String()), tcpDestinationPortEqual(80)...)
+	//
+	// DNAT every inbound TCP segment destined for the worker pod IP to the actor
+	// veth IP, preserving the original destination port. atenet selects the
+	// target service port via the request host (e.g. "8080-<actor>") and
+	// forwards to <podIP>:<port>; this rule must therefore forward every port to
+	// the actor, not just 80, so multi-service actors work. The actor decides
+	// which ports it actually listens on. Only the destination address is
+	// rewritten (RegProtoMin is left unset), so the port carries through
+	// unchanged. ateom itself serves on a unix socket, not a pod-IP TCP port, so
+	// nothing on the control path is shadowed by this catch-all.
+	preroutingExprs := append(ipDestinationEqual(podIP.String()), tcpProtocol()...)
 	preroutingExprs = append(preroutingExprs,
 		&expr.Immediate{
 			Register: 1,
 			Data:     net.ParseIP(actorVethIP).To4(),
 		},
-		&expr.Immediate{
-			Register: 2,
-			Data:     binaryutil.BigEndian.PutUint16(80),
-		},
 		&expr.NAT{
-			Type:        expr.NATTypeDestNAT,
-			Family:      unix.NFPROTO_IPV4,
-			RegAddrMin:  1,
-			RegProtoMin: 2,
+			Type:       expr.NATTypeDestNAT,
+			Family:     unix.NFPROTO_IPV4,
+			RegAddrMin: 1,
 		},
 	)
 	c.AddRule(&nftables.Rule{
@@ -743,24 +746,13 @@ func ipPayloadEqual(offset uint32, ip string) []expr.Any {
 	}
 }
 
-func tcpDestinationPortEqual(port uint16) []expr.Any {
+func tcpProtocol() []expr.Any {
 	return []expr.Any{
 		&expr.Meta{Key: expr.MetaKeyL4PROTO, Register: 1},
 		&expr.Cmp{
 			Op:       expr.CmpOpEq,
 			Register: 1,
 			Data:     []byte{unix.IPPROTO_TCP},
-		},
-		&expr.Payload{
-			DestRegister: 1,
-			Base:         expr.PayloadBaseTransportHeader,
-			Offset:       2,
-			Len:          2,
-		},
-		&expr.Cmp{
-			Op:       expr.CmpOpEq,
-			Register: 1,
-			Data:     binaryutil.BigEndian.PutUint16(port),
 		},
 	}
 }
