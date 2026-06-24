@@ -108,7 +108,7 @@ func (h *Impl) MakeCert(ctx context.Context, pcr *certsv1beta1.PodCertificateReq
 		switch svc.Spec.Type {
 		case corev1.ServiceTypeClusterIP, corev1.ServiceTypeNodePort, corev1.ServiceTypeLoadBalancer:
 			// ok
-		default:
+		case corev1.ServiceTypeExternalName:
 			// This service type doesn't select pods using a label selector.
 			continue
 		}

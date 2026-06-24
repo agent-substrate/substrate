@@ -162,6 +162,9 @@ func (r *ActorTemplateReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return ctrl.Result{}, nil
 	case atev1alpha1.PhaseReady:
 		return ctrl.Result{}, nil
+	case atev1alpha1.PhaseFailed:
+		// Terminal state; nothing left to reconcile.
+		return ctrl.Result{}, nil
 	default:
 		return ctrl.Result{}, fmt.Errorf("unrecognized phase %q", at.Status.Phase)
 	}

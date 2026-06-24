@@ -33,6 +33,8 @@ linters:
     - contextcheck
     # High-signal bug-pattern checks without enabling style-only churn.
     - gocritic
+    # CRD phase/state-machine switches should handle every declared state.
+    - exhaustive
 
   settings:
     errcheck:
@@ -89,6 +91,19 @@ linters:
         - truncateCmp
         - uncheckedInlineErr
 
+    exhaustive:
+      # Controller phase/state-machine switches should handle every declared
+      # state explicitly; a bare default hides the gap.
+      check:
+        - switch
+        - map
+      default-signifies-exhaustive: false
+      package-scope-only: true
+      # Map literals are opt-in (annotate with //exhaustive:enforce). Most maps
+      # here are k8s corev1.ResourceList values, which are partial by design;
+      # requiring every ResourceName key would be noise, not a bug check.
+      explicit-exhaustive-map: true
+
   exclusions:
     # Built-in presets that suppress the most common idiomatic false
     # positives across the standard linters.
@@ -105,14 +120,14 @@ linters:
     rules:
       # Generated code: ignore findings entirely.
       - path: '\.pb\.go$'
-        linters: [errcheck, govet, ineffassign, staticcheck, unused, contextcheck, gocritic]
+        linters: [errcheck, govet, ineffassign, staticcheck, unused, contextcheck, gocritic, exhaustive]
       - path: '\.pb\.gw\.go$'
-        linters: [errcheck, govet, ineffassign, staticcheck, unused, contextcheck, gocritic]
+        linters: [errcheck, govet, ineffassign, staticcheck, unused, contextcheck, gocritic, exhaustive]
       - path: 'zz_generated.*\.go$'
-        linters: [errcheck, govet, ineffassign, staticcheck, unused, contextcheck, gocritic]
+        linters: [errcheck, govet, ineffassign, staticcheck, unused, contextcheck, gocritic, exhaustive]
       # Kubernetes client-gen / informer-gen / lister-gen output.
       - path: '^pkg/client/'
-        linters: [errcheck, govet, ineffassign, staticcheck, unused, contextcheck, gocritic]
+        linters: [errcheck, govet, ineffassign, staticcheck, unused, contextcheck, gocritic, exhaustive]
       # Tests routinely discard error returns from setup helpers.
       - path: '_test\.go'
         linters:

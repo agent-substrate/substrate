@@ -84,7 +84,7 @@ func mapResumeError(actorID string, err error) error {
 	case codes.ResourceExhausted:
 		re.statusCode = int(envoy_type.StatusCode_TooManyRequests)
 		re.msg = fmt.Sprintf("actor %q rate limited", actorID)
-	default:
+	case codes.OK, codes.Canceled, codes.Unknown, codes.InvalidArgument, codes.AlreadyExists, codes.Aborted, codes.OutOfRange, codes.Unimplemented, codes.Internal, codes.DataLoss:
 		re.statusCode = int(envoy_type.StatusCode_InternalServerError)
 		re.msg = fmt.Sprintf("error resuming actor %q", actorID)
 	}

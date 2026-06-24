@@ -279,6 +279,8 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 		if err := rcmd.cmdCheckpoint(ctx, "pause", checkpointPath); err != nil {
 			return nil, fmt.Errorf("while checkpointing pause: %w", err)
 		}
+	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED:
+		fallthrough
 	default:
 		return nil, fmt.Errorf("unsupported snapshot scope: %v", req.GetScope())
 	}
@@ -399,6 +401,8 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 		if err := rcmd.cmdRestore(ctx, os.Stdout, "pause", checkpointDir); err != nil {
 			return nil, fmt.Errorf("while starting pause container: %w", err)
 		}
+	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED:
+		fallthrough
 	default:
 		return nil, fmt.Errorf("unexpected snapshot scope: %v", req.GetScope())
 	}
@@ -426,6 +430,8 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 			if err := rcmd.cmdRestore(ctx, pw, ac.GetName(), checkpointDir); err != nil {
 				return nil, fmt.Errorf("while starting %q application container: %w", ac.GetName(), err)
 			}
+		case ateompb.SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED:
+			fallthrough
 		default:
 			return nil, fmt.Errorf("unexpected snapshot scope: %v", req.GetScope())
 		}

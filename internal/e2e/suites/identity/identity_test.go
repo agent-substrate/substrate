@@ -149,6 +149,8 @@ func waitForGolden(t *testing.T, ctx context.Context, clients *e2e.Clients) stri
 				return at.Status.GoldenActorID
 			case v1alpha1.PhaseFailed:
 				t.Fatalf("probe ActorTemplate entered PhaseFailed")
+			case v1alpha1.PhaseInitial, v1alpha1.PhaseResumeGoldenActor, v1alpha1.PhaseWaitGoldenActor:
+				// Still provisioning the golden actor; keep polling.
 			}
 		}
 		time.Sleep(2 * time.Second)
