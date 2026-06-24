@@ -80,13 +80,13 @@ func main() {
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to initialize tracing", err)
 	}
-	defer serverboot.ShutdownProvider("TracerProvider", tp.Shutdown)
+	defer serverboot.ShutdownProvider(ctx, "TracerProvider", tp.Shutdown)
 
 	mp, err := serverboot.InitMetrics(ctx, "glutton")
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to initialize metrics", err)
 	}
-	defer serverboot.ShutdownProvider("MeterProvider", mp.Shutdown)
+	defer serverboot.ShutdownProvider(ctx, "MeterProvider", mp.Shutdown)
 
 	if err := os.MkdirAll(*dataDir, 0o700); err != nil {
 		serverboot.Fatal(ctx, "Failed to create data directory", fmt.Errorf("%s: %w", *dataDir, err))
@@ -408,7 +408,7 @@ func (s *gluttonService) Gossip(_ context.Context, req *glutton.GossipRequest) (
 		s.mu.Lock()
 		s.peers[w.GetHost()] = pg
 		s.mu.Unlock()
-		go s.runGossip(gctx, pg)
+		go s.runGossip(gctx, pg) //nolint:contextcheck // Each peer-gossip worker has its own lifecycle (cancelled via pg.cancel) and must outlive the StartGossip RPC.
 	}
 
 	return &glutton.GossipResponse{}, nil

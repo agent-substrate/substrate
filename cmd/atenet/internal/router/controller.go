@@ -92,7 +92,7 @@ func (c *Controller) reconcile(ctx context.Context) error {
 		return err
 	}
 
-	if err := c.xdsSrv.UpdateSnapshot(); err != nil {
+	if err := c.xdsSrv.UpdateSnapshot(ctx); err != nil {
 		slog.ErrorContext(ctx, "xDS Configuration generation problem", slog.String("err", err.Error()))
 		return err
 	}

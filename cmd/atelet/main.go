@@ -84,13 +84,13 @@ func main() {
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to initialize tracing", err)
 	}
-	defer serverboot.ShutdownProvider("TracerProvider", tp.Shutdown)
+	defer serverboot.ShutdownProvider(ctx, "TracerProvider", tp.Shutdown)
 
 	mp, err := serverboot.InitMetrics(ctx, "atelet")
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to initialize metrics", err)
 	}
-	defer serverboot.ShutdownProvider("MeterProvider", mp.Shutdown)
+	defer serverboot.ShutdownProvider(ctx, "MeterProvider", mp.Shutdown)
 
 	if err := initSnapshotSizeMetric(); err != nil {
 		serverboot.Fatal(ctx, "Failed to create snapshot size metric", err)

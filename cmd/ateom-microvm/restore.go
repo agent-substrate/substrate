@@ -193,7 +193,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	} else {
 		ra.logAgent = logAC
 		for _, c := range containers {
-			s.startActorLogForwarding(logAC, id, overlayWorkloadID(c.GetName()), c.GetName(), name, ns)
+			s.startActorLogForwarding(logAC, id, overlayWorkloadID(c.GetName()), c.GetName(), name, ns) //nolint:contextcheck // Log forwarders run for the actor's lifetime, not the RPC's: they detach to a background context and exit when teardownActor closes the agent client.
 		}
 	}
 

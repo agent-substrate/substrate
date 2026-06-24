@@ -92,7 +92,7 @@ func do(ctx context.Context) error {
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to initialize tracing", err)
 	}
-	defer serverboot.ShutdownProvider("TracerProvider", tp.Shutdown)
+	defer serverboot.ShutdownProvider(ctx, "TracerProvider", tp.Shutdown)
 
 	// Create ateom dir.
 	ateomDir := ateompath.AteomPath(*podUID)

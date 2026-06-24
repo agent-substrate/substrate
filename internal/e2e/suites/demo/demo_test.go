@@ -171,7 +171,7 @@ func TestDurableDirLifecycle(t *testing.T) {
 			}
 			waitForActorStatus(ctx, t, clients, actorID, ateapipb.Actor_STATUS_RUNNING)
 
-			resp, err := callActor(t, actorID)
+			resp, err := callActor(ctx, t, actorID)
 			if err != nil {
 				t.Fatalf("failed to call actor: %v", err)
 			}
@@ -197,7 +197,7 @@ func TestDurableDirLifecycle(t *testing.T) {
 			}
 			waitForActorStatus(ctx, t, clients, actorID, ateapipb.Actor_STATUS_RUNNING)
 
-			resp, err = callActor(t, actorID)
+			resp, err = callActor(ctx, t, actorID)
 			if err != nil {
 				t.Fatalf("failed to call actor again: %v", err)
 			}
@@ -223,7 +223,7 @@ func TestDurableDirLifecycle(t *testing.T) {
 			}
 			waitForActorStatus(ctx, t, clients, actorID, ateapipb.Actor_STATUS_RUNNING)
 
-			resp, err = callActor(t, actorID)
+			resp, err = callActor(ctx, t, actorID)
 			if err != nil {
 				t.Fatalf("failed to call actor again: %v", err)
 			}
@@ -321,7 +321,7 @@ func pauseActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *
 	}
 	waitForActorStatus(ctx, t, clients, actorID, ateapipb.Actor_STATUS_RUNNING)
 
-	resp, err := callActor(t, actorID)
+	resp, err := callActor(ctx, t, actorID)
 	if err != nil {
 		t.Fatalf("failed to call actor: %v", err)
 	}
@@ -350,7 +350,7 @@ func pauseActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *
 	}
 	waitForActorStatus(ctx, t, clients, actorID, ateapipb.Actor_STATUS_RUNNING)
 
-	resp, err = callActor(t, actorID)
+	resp, err = callActor(ctx, t, actorID)
 	if err != nil {
 		t.Fatalf("failed to call actor again: %v", err)
 	}
@@ -409,7 +409,7 @@ func suspendActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj
 	}
 	waitForActorStatus(ctx, t, clients, actorID, ateapipb.Actor_STATUS_RUNNING)
 
-	resp, err := callActor(t, actorID)
+	resp, err := callActor(ctx, t, actorID)
 	if err != nil {
 		t.Fatalf("failed to call actor: %v", err)
 	}
@@ -437,7 +437,7 @@ func suspendActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj
 	}
 	waitForActorStatus(ctx, t, clients, actorID, ateapipb.Actor_STATUS_RUNNING)
 
-	resp, err = callActor(t, actorID)
+	resp, err = callActor(ctx, t, actorID)
 	if err != nil {
 		t.Fatalf("failed to call actor again: %v", err)
 	}
@@ -610,17 +610,17 @@ func waitForActorStatus(ctx context.Context, t *testing.T, clients *e2e.Clients,
 	t.Fatalf("timed out waiting for actor %q to reach status %v", actorID, expectedStatus)
 }
 
-func callActor(t *testing.T, actorID string) (string, error) {
+func callActor(ctx context.Context, t *testing.T, actorID string) (string, error) {
 	t.Helper()
 	clients := e2e.GetClients()
 
-	svc, err := clients.K8s.CoreV1().Services("ate-system").Get(context.Background(), "atenet-router", metav1.GetOptions{})
+	svc, err := clients.K8s.CoreV1().Services("ate-system").Get(ctx, "atenet-router", metav1.GetOptions{})
 	if err != nil {
 		return "", fmt.Errorf("failed to get atenet-router service: %w", err)
 	}
 
 	selector := labels.SelectorFromSet(svc.Spec.Selector).String()
-	pods, err := clients.K8s.CoreV1().Pods("ate-system").List(context.Background(), metav1.ListOptions{LabelSelector: selector})
+	pods, err := clients.K8s.CoreV1().Pods("ate-system").List(ctx, metav1.ListOptions{LabelSelector: selector})
 	if err != nil {
 		return "", fmt.Errorf("failed to list atenet-router pods: %w", err)
 	}

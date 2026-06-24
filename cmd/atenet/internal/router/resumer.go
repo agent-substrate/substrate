@@ -47,7 +47,7 @@ func (r *ActorResumer) ResumeActor(ctx context.Context, actorID string) (*ateapi
 		trace.WithAttributes(attribute.String("actor_id", actorID)))
 	defer span.End()
 
-	ch := r.flight.DoChan(actorID, func() (interface{}, error) {
+	ch := r.flight.DoChan(actorID, func() (interface{}, error) { //nolint:contextcheck // Shared resume work must outlive the first caller's cancellation.
 		// We detach the context from the first caller using a fixed background timeout.
 		// This guarantees that if Caller 1 disconnects or times out, the underlying
 		// resume operation continues running for Caller 2 and Caller 3 without failing.

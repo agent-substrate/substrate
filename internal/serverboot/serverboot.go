@@ -26,6 +26,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"time"
 
 	"github.com/agent-substrate/substrate/internal/contextlogging"
 	"github.com/google/uuid"
@@ -153,9 +154,15 @@ func Fatal(ctx context.Context, msg string, err error) {
 // ShutdownProvider invokes the OTel provider's Shutdown and logs any
 // error. Designed to be deferred from main():
 //
-//	defer serverboot.ShutdownProvider("TracerProvider", tp.Shutdown)
-func ShutdownProvider(name string, shutdown func(context.Context) error) {
-	if err := shutdown(context.Background()); err != nil {
+//	defer serverboot.ShutdownProvider(ctx, "TracerProvider", tp.Shutdown)
+func ShutdownProvider(ctx context.Context, name string, shutdown func(context.Context) error) {
+	// Detach from the caller's cancellation (main's ctx is usually already
+	// cancelled by the time these deferred shutdowns run) but keep a bound so
+	// a wedged exporter can't hang process exit.
+	shutdownCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+
+	if err := shutdown(shutdownCtx); err != nil {
 		slog.Error("Failed to shutdown "+name, slog.Any("err", err))
 	}
 }

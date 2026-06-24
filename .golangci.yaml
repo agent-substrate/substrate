@@ -29,6 +29,8 @@ linters:
   enable:
     # Spelling errors in comments, strings, and identifiers.
     - misspell
+    # Reconciliation and RPC calls should inherit the caller's context.
+    - contextcheck
 
   settings:
     errcheck:
@@ -71,18 +73,22 @@ linters:
     rules:
       # Generated code: ignore findings entirely.
       - path: '\.pb\.go$'
-        linters: [errcheck, govet, ineffassign, staticcheck, unused]
+        linters: [errcheck, govet, ineffassign, staticcheck, unused, contextcheck]
       - path: '\.pb\.gw\.go$'
-        linters: [errcheck, govet, ineffassign, staticcheck, unused]
+        linters: [errcheck, govet, ineffassign, staticcheck, unused, contextcheck]
       - path: 'zz_generated.*\.go$'
-        linters: [errcheck, govet, ineffassign, staticcheck, unused]
+        linters: [errcheck, govet, ineffassign, staticcheck, unused, contextcheck]
       # Kubernetes client-gen / informer-gen / lister-gen output.
       - path: '^pkg/client/'
-        linters: [errcheck, govet, ineffassign, staticcheck, unused]
+        linters: [errcheck, govet, ineffassign, staticcheck, unused, contextcheck]
       # Tests routinely discard error returns from setup helpers.
       - path: '_test\.go'
         linters:
           - errcheck
+      # Demo binaries intentionally favor concise examples over production
+      # control-flow discipline.
+      - path: '^demos/'
+        linters: [contextcheck]
       # Suppress staticcheck QF* (quickfix) recommendations. They are
       # stylistic rewrites rather than bug detectors and would generate a
       # large amount of churn if applied indiscriminately.
