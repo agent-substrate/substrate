@@ -49,18 +49,14 @@ import (
 )
 
 var (
-	podUID = flag.String("pod-uid", "", "The UID of the current pod")
-
-	chBinary = flag.String("cloud-hypervisor-binary", "cloud-hypervisor", "Path to the cloud-hypervisor binary (used to relaunch on restore).")
-
-	kataConfig = flag.String("kata-config", "", "Path to a kata configuration.toml (passed to the shim as KATA_CONF_FILE). Empty uses kata's default. atelet generates one pointing at runtime-fetched assets.")
-
-	kataDebug = flag.Bool("kata-debug", false, "Verbose kata-agent debugging: raise the guest agent log level and forward the guest console (incl. agent logs) into the pod logs.")
-
+	podUID      = flag.String("pod-uid", "", "The UID of the current pod")
+	chBinary    = flag.String("cloud-hypervisor-binary", "cloud-hypervisor", "Path to the cloud-hypervisor binary (used to relaunch on restore).")
+	kataConfig  = flag.String("kata-config", "", "Path to a kata configuration.toml (passed to the shim as KATA_CONF_FILE). Empty uses kata's default. atelet generates one pointing at runtime-fetched assets.")
+	kataDebug   = flag.Bool("kata-debug", false, "Verbose kata-agent debugging: raise the guest agent log level and forward the guest console (incl. agent logs) into the pod logs.")
 	showVersion = flag.Bool("version", false, "Print version and exit.")
 
-	// reapLock guards subprocess exec against the child reaper, mirroring
-	// ateom-gvisor. ateom-microvm spawns the cloud-hypervisor process under it.
+	// reapLock guards subprocess exec against the child reaper: ateom-microvm
+	// spawns the cloud-hypervisor process under it.
 	reapLock sync.RWMutex
 )
 
@@ -84,7 +80,7 @@ func do(ctx context.Context) error {
 
 	// Share one synchronized writer between the runtime logger and the actor-log
 	// forwarder (created below) so the two log streams to the pod's stdout don't
-	// interleave-corrupt each other's lines (mirrors ateom-gvisor).
+	// interleave-corrupt each other's lines.
 	logWriter := actorlog.NewSyncedWriter(os.Stdout)
 	serverboot.InitLoggerWithWriter(logWriter)
 	slog.InfoContext(ctx, "ateom-microvm booting", slog.String("version", version.String()))
@@ -132,9 +128,8 @@ func do(ctx context.Context) error {
 		return fmt.Errorf("while opening unix socket: %w", err)
 	}
 
-	// Networking (mirrors ateom-gvisor's veth model): create a named interior
-	// netns; each activation builds a fresh veth pair into it (see net.go) and
-	// points kata at it.
+	// Networking: create a named interior netns; each activation builds a fresh
+	// veth pair into it (see net.go) and points kata at it.
 	interiorNetNS, err := createNetNSWithoutSwitching(ateompath.AteomNetNSName(*podUID))
 	if err != nil {
 		return fmt.Errorf("while creating interior netns: %w", err)

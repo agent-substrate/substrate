@@ -419,25 +419,11 @@ func TestServiceResetToGoldenBlkRootfs(t *testing.T) {
 }
 
 func lastLines(s string, n int) string {
-	lines := []string{}
-	start := 0
-	for i := 0; i < len(s); i++ {
-		if s[i] == '\n' {
-			lines = append(lines, s[start:i])
-			start = i + 1
-		}
-	}
-	if start < len(s) {
-		lines = append(lines, s[start:])
-	}
+	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
 	if len(lines) > n {
 		lines = lines[len(lines)-n:]
 	}
-	out := ""
-	for _, l := range lines {
-		out += l + "\n"
-	}
-	return out
+	return strings.Join(lines, "\n") + "\n"
 }
 
 func envOrTest(key, def string) string {

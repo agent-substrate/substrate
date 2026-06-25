@@ -62,7 +62,7 @@ type runningActor struct {
 	// path when restored via OnDemand. CheckpointWorkload overlays CH's new (sparse,
 	// faulted-only) snapshot onto this base to produce a COMPLETE snapshot (CH's
 	// OnDemand snapshot alone drops the un-faulted pages). Empty for cold-run actors
-	// (their snapshot is already complete) and for the eager/shim paths.
+	// (their snapshot is already complete).
 	restoreSourceDir string
 
 	// logAgent is the kata-agent ttrpc client kept open for the lifetime of the
@@ -129,22 +129,25 @@ func copyDiskFile(ctx context.Context, src, dst string) error {
 // resolvedRuntime holds the concrete binary/config paths for a request, taken
 // from fetched runtime assets when present, else the process flags.
 type resolvedRuntime struct {
-	ch         string
-	configFile string
+	chBinary   string // path to the cloud-hypervisor binary
+	configFile string // path to the kata configuration.toml
 }
 
-func firstNonEmpty(a, b string) string {
-	if a != "" {
-		return a
+// firstNonEmpty returns the first non-empty string, or "" if all are empty.
+func firstNonEmpty(vals ...string) string {
+	for _, v := range vals {
+		if v != "" {
+			return v
+		}
 	}
-	return b
+	return ""
 }
 
 // resolveRuntime resolves the cloud-hypervisor binary + the kata config path from
 // fetched assets, falling back to flags.
 func (s *AteomService) resolveRuntime(paths map[string]string) resolvedRuntime {
 	return resolvedRuntime{
-		ch:         firstNonEmpty(paths[assetCH], s.chBinary),
+		chBinary:   firstNonEmpty(paths[assetCH], s.chBinary),
 		configFile: firstNonEmpty(paths[assetConfig], s.kataConfig),
 	}
 }
@@ -237,7 +240,7 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	}
 
 	// Clean stale per-sandbox state + create the runtime dir for the sockets.
-	kata.CleanupSandboxState(id)
+	kata.CleanupSandboxState(ctx, id)
 	if err := os.MkdirAll(kata.VMDir(id), 0o700); err != nil {
 		return nil, fmt.Errorf("while creating VM dir: %w", err)
 	}
@@ -245,7 +248,7 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	// Launch a bare VMM (CH + api-socket); ateom owns this process for teardown.
 	apiSocket := filepath.Join(kata.VMDir(id), "clh-api.sock")
 	chCmd, client, err := ch.LaunchVMM(ctx, ch.LaunchVMMOptions{
-		Binary:    rr.ch,
+		Binary:    rr.chBinary,
 		APISocket: apiSocket,
 		Stdout:    slogWriter{ctx},
 		Stderr:    slogWriter{ctx},
@@ -654,14 +657,14 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	checkpointDir := ateompath.CheckpointStateDir(ns, name, id)
 	// Start from a clean dir so CH's snapshot files are the only contents.
 	if err := os.RemoveAll(checkpointDir); err != nil {
-		return nil, fmt.Errorf("while clearing checkpoint dir: %w", err)
+		return nil, fmt.Errorf("while clearing checkpoint dir %q: %w", checkpointDir, err)
 	}
 	if err := os.MkdirAll(checkpointDir, 0o700); err != nil {
-		return nil, fmt.Errorf("while creating checkpoint dir: %w", err)
+		return nil, fmt.Errorf("while creating checkpoint dir %q: %w", checkpointDir, err)
 	}
 
 	// Record the FROZEN base id (the id the guest's virtio-fs find-paths are pinned
-	// to, <baseID>/rootfs). For a cold (shim-owned) actor this is its own id; for a
+	// to, <baseID>/rootfs). For a cold (owned-boot) actor this is its own id; for a
 	// restored actor it is the golden id propagated via ra.baseID (set from the
 	// snapshot we restored from). RestoreWorkload reads this to lay the
 	// reconstructed-from-image base at the path the guest expects. We can NOT derive
@@ -799,7 +802,7 @@ func (s *AteomService) teardownActor(ctx context.Context, id string, ra *running
 
 	// Sweep any leftover per-sandbox host-side state + orphaned per-sandbox
 	// processes. This is ateom's own cleanup (process kill + unmount + rm).
-	kata.CleanupSandboxState(id)
+	kata.CleanupSandboxState(ctx, id)
 }
 
 // RestoreWorkload restores the actor on a (possibly different) pod by relaunching
@@ -828,7 +831,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	s.actorLogger.EmitLifecycleLog("Actor restoring", id, name, ns)
 
 	rr := s.resolveRuntime(req.GetRuntimeAssetPaths())
-	kata.CleanupSandboxState(id)
+	kata.CleanupSandboxState(ctx, id)
 
 	// Repoint the snapshot's vsock socket to this actor's VMDir (the disk + kernel
 	// paths are content-addressed/per-actor and already line up on the same node).
@@ -922,7 +925,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	// /dev/vda (image) + /dev/vdb (actor rootfs) from the snapshot config paths.
 	apiSocket := filepath.Join(kata.VMDir(id), "clh-api-restore.sock")
 	chCmd, client, err := ch.LaunchVMM(ctx, ch.LaunchVMMOptions{
-		Binary: rr.ch, APISocket: apiSocket, Stdout: slogWriter{ctx}, Stderr: slogWriter{ctx},
+		Binary: rr.chBinary, APISocket: apiSocket, Stdout: slogWriter{ctx}, Stderr: slogWriter{ctx},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("while launching VMM for restore: %w", err)
