@@ -370,3 +370,96 @@ func TestCopyZstdSparse(t *testing.T) {
 		}
 	}
 }
+
+// TestWriteDecodeContentRoundTrip exercises the io-only compress/decompress halves
+// (writeContent / decodeContent) directly — no object store — for both the sparse
+// (file source) and plain (non-file reader) paths.
+func TestWriteDecodeContentRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+
+	t.Run("sparse file", func(t *testing.T) {
+		const size = 8 << 20
+		srcPath := filepath.Join(dir, "src")
+		src, err := os.Create(srcPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer src.Close()
+		if err := src.Truncate(size); err != nil {
+			t.Fatal(err)
+		}
+		data := make([]byte, 70000)
+		for i := range data {
+			data[i] = byte(i%251 + 1)
+		}
+		if _, err := src.WriteAt(data, 2<<20); err != nil { // one extent in a sea of holes
+			t.Fatal(err)
+		}
+		if err := src.Sync(); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := src.Seek(0, io.SeekStart); err != nil {
+			t.Fatal(err)
+		}
+
+		var buf bytes.Buffer
+		wres, err := writeContent(&buf, src)
+		if err != nil {
+			t.Fatalf("writeContent: %v", err)
+		}
+		if !wres.sparse {
+			t.Error("writeContent: sparse=false for a file source")
+		}
+		if wres.logicalBytes != size {
+			t.Errorf("writeContent logicalBytes=%d, want %d", wres.logicalBytes, size)
+		}
+
+		dstPath := filepath.Join(dir, "dst")
+		dst, err := os.Create(dstPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer dst.Close()
+		dres, err := decodeContent(dst, &buf)
+		if err != nil {
+			t.Fatalf("decodeContent: %v", err)
+		}
+		if !dres.sparse {
+			t.Error("decodeContent: sparse=false for a sparse-extent stream")
+		}
+		if dres.logicalBytes != size {
+			t.Errorf("decodeContent logicalBytes=%d, want %d", dres.logicalBytes, size)
+		}
+
+		want, err := os.ReadFile(srcPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got, err := os.ReadFile(dstPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(got, want) {
+			t.Fatalf("sparse round-trip mismatch: len(got)=%d len(want)=%d", len(got), len(want))
+		}
+	})
+
+	t.Run("plain reader", func(t *testing.T) {
+		want := bytes.Repeat([]byte("substrate payload\n"), 1000)
+		var buf bytes.Buffer
+		wres, err := writeContent(&buf, bytes.NewReader(want))
+		if err != nil {
+			t.Fatalf("writeContent: %v", err)
+		}
+		if wres.sparse {
+			t.Error("writeContent: sparse=true for a non-file reader")
+		}
+		var out bytes.Buffer
+		if _, err := decodeContent(&out, &buf); err != nil {
+			t.Fatalf("decodeContent: %v", err)
+		}
+		if !bytes.Equal(out.Bytes(), want) {
+			t.Fatalf("plain round-trip mismatch: len(got)=%d len(want)=%d", out.Len(), len(want))
+		}
+	})
+}

@@ -120,6 +120,37 @@ func SendLocalFileToGCSWithZstd(ctx context.Context, client ObjectStorage, gsURL
 // streaming body without buffering (GCS). See gcsClient.SupportsStreamingPut.
 type streamingPutter interface{ SupportsStreamingPut() bool }
 
+// writeContentResult reports what writeContent compressed.
+type writeContentResult struct {
+	// logicalBytes is the total logical size of the source, including the holes
+	// for a sparse file.
+	logicalBytes int64
+	// populatedBytes is the count of bytes actually read + compressed: the non-hole
+	// (resident) set for the sparse-extent format, == logicalBytes for a plain stream.
+	populatedBytes int64
+	// sparse is true when the sparse-extent format was used (the source was a file).
+	sparse bool
+}
+
+// writeContent compresses content to out, choosing the sparse-extent format for a
+// seekable *os.File (compress only the populated extents, skip the holes) or a
+// plain zstd stream otherwise. It touches only io, so it is unit-testable without
+// an object store, and is shared by the buffered and streaming upload paths.
+func writeContent(out io.Writer, content io.Reader) (writeContentResult, error) {
+	if f, ok := content.(*os.File); ok {
+		logical, populated, err := writeSparseZstd(out, f)
+		if err != nil {
+			return writeContentResult{}, err
+		}
+		return writeContentResult{logicalBytes: logical, populatedBytes: populated, sparse: true}, nil
+	}
+	logical, err := plainZstd(out, content)
+	if err != nil {
+		return writeContentResult{}, err
+	}
+	return writeContentResult{logicalBytes: logical, populatedBytes: logical}, nil
+}
+
 // sendZstd zstd-compresses content and uploads it to gsURL.
 //
 // The snapshot memory-ranges is the large object here (the whole guest RAM image,
@@ -135,17 +166,22 @@ type streamingPutter interface{ SupportsStreamingPut() bool }
 //   - S3/rustfs PutObject hands the body to the AWS SDK, which needs a seekable body
 //     to sign + set Content-Length (a non-seekable pipe hangs there), so we compress
 //     to a SEEKABLE temp file first.
-func sendZstd(ctx context.Context, client ObjectStorage, gsURL string, content io.Reader) (err error) {
+func sendZstd(ctx context.Context, client ObjectStorage, gsURL string, content io.Reader) error {
 	bucket, object, err := parseGCSURL(gsURL)
 	if err != nil {
 		return fmt.Errorf("while parsing URL: %w", err)
 	}
 	tStart := time.Now()
-
 	if sp, ok := client.(streamingPutter); ok && sp.SupportsStreamingPut() {
 		return sendStreamingZstd(ctx, client, bucket, object, content, tStart)
 	}
+	return sendBufferedZstd(ctx, client, bucket, object, content, tStart)
+}
 
+// sendBufferedZstd compresses content to a seekable temp file, then uploads it.
+// Used for backends (S3/rustfs) whose PutObject needs a seekable body to sign and
+// set Content-Length; the streaming counterpart is sendStreamingZstd.
+func sendBufferedZstd(ctx context.Context, client ObjectStorage, bucket, object string, content io.Reader, tStart time.Time) error {
 	tmpFile, err := os.CreateTemp("", "substrate-upload-compress-")
 	if err != nil {
 		return fmt.Errorf("while creating temp compress file: %w", err)
@@ -154,26 +190,9 @@ func sendZstd(ctx context.Context, client ObjectStorage, gsURL string, content i
 	defer tmpFile.Close()
 
 	t0 := time.Now()
-	var logical, dataBytes int64
-	sparse := false
-	if f, ok := content.(*os.File); ok {
-		// Sparse-extent format: compress ONLY the populated extents (skip the holes).
-		// The memory-ranges image is mostly holes (free guest RAM), so this cuts the
-		// compress from scanning the whole logical image to scanning the resident set.
-		// readers auto-detect this via the magic header (older plain-zstd snapshots
-		// still restore). See writeSparseZstd.
-		logical, dataBytes, err = writeSparseZstd(tmpFile, f)
-		if err != nil {
-			return fmt.Errorf("while sparse-compressing %q: %w", object, err)
-		}
-		sparse = true
-	} else {
-		// Non-file reader (no holes to exploit): plain zstd stream.
-		logical, err = plainZstd(tmpFile, content)
-		if err != nil {
-			return fmt.Errorf("while compressing data to temp file: %w", err)
-		}
-		dataBytes = logical
+	res, err := writeContent(tmpFile, content)
+	if err != nil {
+		return fmt.Errorf("while compressing %q: %w", object, err)
 	}
 	dCompress := time.Since(t0)
 
@@ -184,8 +203,8 @@ func sendZstd(ctx context.Context, client ObjectStorage, gsURL string, content i
 		return fmt.Errorf("while putting object %q: %w", object, err)
 	}
 	slog.InfoContext(ctx, "Compressed zstd upload",
-		slog.String("object", object), slog.Bool("sparse", sparse),
-		slog.Int64("logical", logical), slog.Int64("data", dataBytes),
+		slog.String("object", object), slog.Bool("sparse", res.sparse),
+		slog.Int64("logical_bytes", res.logicalBytes), slog.Int64("populated_bytes", res.populatedBytes),
 		slog.Duration("compress", dCompress), slog.Duration("total", time.Since(tStart)))
 	return nil
 }
@@ -197,24 +216,16 @@ func sendZstd(ctx context.Context, client ObjectStorage, gsURL string, content i
 // backends (GCS); see sendZstd.
 func sendStreamingZstd(ctx context.Context, client ObjectStorage, bucket, object string, content io.Reader, tStart time.Time) error {
 	type result struct {
-		logical, dataBytes int64
-		sparse             bool
-		err                error
+		res writeContentResult
+		err error
 	}
 	pr, pw := io.Pipe()
 	ch := make(chan result, 1)
 	go func() {
-		var r result
-		if f, ok := content.(*os.File); ok {
-			r.sparse = true
-			r.logical, r.dataBytes, r.err = writeSparseZstd(pw, f)
-		} else {
-			r.logical, r.err = plainZstd(pw, content)
-			r.dataBytes = r.logical
-		}
+		res, err := writeContent(pw, content)
 		// Closing the writer delivers EOF (or the compress error) to PutObject.
-		_ = pw.CloseWithError(r.err)
-		ch <- r
+		_ = pw.CloseWithError(err)
+		ch <- result{res: res, err: err}
 	}()
 
 	putErr := client.PutObject(ctx, bucket, object, pr)
@@ -231,8 +242,8 @@ func sendStreamingZstd(ctx context.Context, client ObjectStorage, bucket, object
 		return fmt.Errorf("while compressing %q: %w", object, r.err)
 	}
 	slog.InfoContext(ctx, "Compressed zstd upload",
-		slog.String("object", object), slog.Bool("sparse", r.sparse), slog.Bool("streaming", true),
-		slog.Int64("logical", r.logical), slog.Int64("data", r.dataBytes),
+		slog.String("object", object), slog.Bool("sparse", r.res.sparse), slog.Bool("streaming", true),
+		slog.Int64("logical_bytes", r.res.logicalBytes), slog.Int64("populated_bytes", r.res.populatedBytes),
 		slog.Duration("total", time.Since(tStart)))
 	return nil
 }
@@ -303,54 +314,71 @@ func fetchFromGCSWithZstd(ctx context.Context, client ObjectStorage, gsURL strin
 		}
 	}()
 
-	// Peek the first bytes to pick the decode path: the sparse-extent format starts
-	// with sparseMagic; anything else is a plain zstd stream (older snapshots, or the
-	// non-file upload path). This keeps restore backward-compatible with snapshots
-	// written before the sparse-extent format.
+	t0 := time.Now()
+	res, err := decodeContent(out, rc)
+	if err != nil {
+		return err
+	}
+	slog.InfoContext(ctx, "Decompressed zstd download",
+		slog.Bool("sparse", res.sparse), slog.Int64("logical_bytes", res.logicalBytes),
+		slog.Int64("written_bytes", res.writtenBytes), slog.Duration("took", time.Since(t0)))
+	return nil
+}
+
+// decodeContentResult reports what decodeContent decompressed.
+type decodeContentResult struct {
+	// logicalBytes is the logical size written to out (the original image size).
+	logicalBytes int64
+	// writtenBytes is the count of non-hole bytes actually written on the sparse
+	// file path; 0 on the io.Copy fallback (non-file destination).
+	writtenBytes int64
+	// sparse is true when the input used the sparse-extent format.
+	sparse bool
+}
+
+// decodeContent decompresses src into out, auto-detecting the format from the
+// leading magic: the sparse-extent format (sparseMagic) vs a plain zstd stream
+// (older snapshots, or the non-file upload path). When out is an *os.File the plain
+// path writes SPARSE (skips zero blocks → holes) so only the resident set is
+// written, not a dense multi-GiB image. It touches only io, so it is unit-testable
+// without an object store, mirroring writeContent.
+func decodeContent(out io.Writer, src io.Reader) (decodeContentResult, error) {
 	magic := make([]byte, len(sparseMagic))
-	n, rerr := io.ReadFull(rc, magic)
+	n, rerr := io.ReadFull(src, magic)
 	if rerr == nil && string(magic) == sparseMagic {
 		f, ok := out.(*os.File)
 		if !ok {
-			return fmt.Errorf("sparse-extent snapshot requires a file destination, got %T", out)
+			return decodeContentResult{}, fmt.Errorf("sparse-extent snapshot requires a file destination, got %T", out)
 		}
-		t0 := time.Now()
-		size, derr := readSparseZstd(f, rc) // rc is positioned just after the magic
+		size, derr := readSparseZstd(f, src) // src is positioned just after the magic
 		if derr != nil {
-			return fmt.Errorf("in sparse-extent decode: %w", derr)
+			return decodeContentResult{}, fmt.Errorf("in sparse-extent decode: %w", derr)
 		}
-		slog.InfoContext(ctx, "Sparse-extent zstd download",
-			slog.Int64("size", size), slog.Duration("took", time.Since(t0)))
-		return nil
+		return decodeContentResult{logicalBytes: size, sparse: true}, nil
 	}
 	if rerr != nil && rerr != io.EOF && rerr != io.ErrUnexpectedEOF {
-		return fmt.Errorf("while reading object header: %w", rerr)
+		return decodeContentResult{}, fmt.Errorf("while reading object header: %w", rerr)
 	}
 
-	// Plain zstd stream: put back the bytes we peeked, then decompress. Write SPARSE
-	// when the destination is a file (skip zero blocks → holes) so we only write the
-	// resident set, not a dense multi-GiB image; falls back to io.Copy otherwise.
-	src := io.MultiReader(bytes.NewReader(magic[:n]), rc)
-	zrc, err := zstd.NewReader(src, zstd.WithDecoderConcurrency(1))
+	// Plain zstd stream: put back the peeked bytes, then decompress.
+	r := io.MultiReader(bytes.NewReader(magic[:n]), src)
+	zrc, err := zstd.NewReader(r, zstd.WithDecoderConcurrency(1))
 	if err != nil {
-		return fmt.Errorf("in zstd.NewReader: %w", err)
+		return decodeContentResult{}, fmt.Errorf("in zstd.NewReader: %w", err)
 	}
 	defer zrc.Close()
 	if f, ok := out.(*os.File); ok {
-		t0 := time.Now()
 		size, written, derr := copyZstdSparse(f, zrc)
 		if derr != nil {
-			return fmt.Errorf("in sparse decompress: %w", derr)
+			return decodeContentResult{}, fmt.Errorf("in sparse decompress: %w", derr)
 		}
-		slog.InfoContext(ctx, "Sparse zstd download (plain)",
-			slog.Int64("size", size), slog.Int64("written", written), slog.Duration("took", time.Since(t0)))
-		return nil
+		return decodeContentResult{logicalBytes: size, writtenBytes: written}, nil
 	}
-	if _, err = io.Copy(out, zrc); err != nil {
-		return fmt.Errorf("in io.Copy: %w", err)
+	size, cerr := io.Copy(out, zrc)
+	if cerr != nil {
+		return decodeContentResult{}, fmt.Errorf("in io.Copy: %w", cerr)
 	}
-
-	return nil
+	return decodeContentResult{logicalBytes: size}, nil
 }
 
 // copyZstdSparse writes src into dst skipping all-zero blocks, so dst becomes a
