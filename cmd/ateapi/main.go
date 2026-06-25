@@ -401,6 +401,8 @@ func buildK8sServiceAccountIssuerDiscoveryClient(ctx context.Context, caFile, is
 
 // k8sServiceAccountIssuerDiscoveryTransport injects the pod's ServiceAccount
 // Bearer token only when fetching OIDC documents within the configured issuer.
+// Other URLs, such as the jwks_uri returned by the trusted discovery document,
+// are fetched without the token.
 // Reads the token file fresh on each request so token rotation is handled
 // automatically.
 type k8sServiceAccountIssuerDiscoveryTransport struct {
@@ -410,13 +412,12 @@ type k8sServiceAccountIssuerDiscoveryTransport struct {
 }
 
 func (t *k8sServiceAccountIssuerDiscoveryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	if !issuerScopedURL(req.URL.String(), t.issuer) {
-		return nil, fmt.Errorf("refusing Kubernetes ServiceAccount issuer discovery request outside issuer scope: %s", req.URL.Redacted())
-	}
-	token, err := os.ReadFile(t.tokenFile)
-	if err == nil && len(token) > 0 {
-		req = req.Clone(req.Context())
-		req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(string(token)))
+	if issuerScopedURL(req.URL.String(), t.issuer) {
+		token, err := os.ReadFile(t.tokenFile)
+		if err == nil && len(token) > 0 {
+			req = req.Clone(req.Context())
+			req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(string(token)))
+		}
 	}
 	return t.base.RoundTrip(req)
 }
