@@ -60,7 +60,7 @@ If running clients locally, port-forward the API and router in separate terminal
 
 ```bash
 # Terminal 1: API Server
-kubectl port-forward -n ate-system svc/api 8080:443
+kubectl port-forward -n ate-system svc/ateapi 8080:443
 
 # Terminal 2: Router
 kubectl port-forward -n ate-system svc/atenet-router 8000:80
