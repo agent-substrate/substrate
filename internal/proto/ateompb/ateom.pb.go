@@ -42,8 +42,8 @@ type RunWorkloadRequest struct {
 	ActorId                string                 `protobuf:"bytes,3,opt,name=actor_id,json=actorId,proto3" json:"actor_id,omitempty"`
 	RunscPath              string                 `protobuf:"bytes,4,opt,name=runsc_path,json=runscPath,proto3" json:"runsc_path,omitempty"`
 	Spec                   *WorkloadSpec          `protobuf:"bytes,5,opt,name=spec,proto3" json:"spec,omitempty"`
-	// runtime_asset_paths maps a runtime asset name (e.g. "kata-shim",
-	// "cloud-hypervisor", "virtiofsd", "kata-kernel", "kata-image", "kata-config")
+	// runtime_asset_paths maps a runtime asset name (e.g. "cloud-hypervisor",
+	// "virtiofsd", "kata-kernel", "kata-image", "kata-config")
 	// to the local on-disk path atelet fetched it to (content-addressed, like
 	// runsc_path). Empty for the gVisor runtime, which uses runsc_path.
 	RuntimeAssetPaths map[string]string `protobuf:"bytes,7,rep,name=runtime_asset_paths,json=runtimeAssetPaths,proto3" json:"runtime_asset_paths,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`

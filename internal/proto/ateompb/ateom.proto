@@ -56,8 +56,8 @@ message RunWorkloadRequest {
 
   WorkloadSpec spec = 5;
 
-  // runtime_asset_paths maps a runtime asset name (e.g. "kata-shim",
-  // "cloud-hypervisor", "virtiofsd", "kata-kernel", "kata-image", "kata-config")
+  // runtime_asset_paths maps a runtime asset name (e.g. "cloud-hypervisor",
+  // "virtiofsd", "kata-kernel", "kata-image", "kata-config")
   // to the local on-disk path atelet fetched it to (content-addressed, like
   // runsc_path). Empty for the gVisor runtime, which uses runsc_path.
   map<string, string> runtime_asset_paths = 7;
