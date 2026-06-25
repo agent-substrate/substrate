@@ -55,6 +55,35 @@ func TestGetActor_NotFound(t *testing.T) {
 	}
 }
 
+func TestNodeImageCache(t *testing.T) {
+	mr, s, ctx := setupTest(t)
+	defer mr.Close()
+
+	cache := &ateapipb.NodeImageCache{
+		NodeName:     "node-1",
+		AteletPodUid: "atelet-uid",
+		ImageDigests: []string{"sha256:b", "sha256:a"},
+	}
+	if err := s.SetNodeImageCache(ctx, cache, time.Minute); err != nil {
+		t.Fatalf("SetNodeImageCache failed: %v", err)
+	}
+
+	got, err := s.GetNodeImageCache(ctx, "node-1")
+	if err != nil {
+		t.Fatalf("GetNodeImageCache failed: %v", err)
+	}
+	want := proto.Clone(cache).(*ateapipb.NodeImageCache)
+	want.ImageDigests = []string{"sha256:a", "sha256:b"}
+	if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
+		t.Errorf("node image cache mismatch (-want +got):\n%s", diff)
+	}
+
+	mr.FastForward(time.Minute)
+	if _, err := s.GetNodeImageCache(ctx, "node-1"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("GetNodeImageCache after TTL = %v, want ErrNotFound", err)
+	}
+}
+
 func TestCreateActor_Success(t *testing.T) {
 	mr, s, ctx := setupTest(t)
 	defer mr.Close()

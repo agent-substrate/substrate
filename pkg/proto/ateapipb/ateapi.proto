@@ -50,6 +50,10 @@ service Control {
   // List all actors currently reflected in redis.
   rpc ListActors(ListActorsRequest) returns (ListActorsResponse) {}
 
+  // Report the image digests cached by the atelet on a node. Reports are full
+  // snapshots and expire unless the atelet refreshes them periodically.
+  rpc ReportNodeImageCache(ReportNodeImageCacheRequest) returns (ReportNodeImageCacheResponse) {}
+
   // Debugging: drop all data from the ate database.
   rpc DebugClear(DebugClearRequest) returns (DebugClearResponse) {}
 }
@@ -245,6 +249,18 @@ message Worker {
   string worker_pod_uid  = 9;
   string node_name       = 10;
 }
+
+message NodeImageCache {
+  string node_name      = 1;
+  string atelet_pod_uid = 2;
+  repeated string image_digests = 3;
+}
+
+message ReportNodeImageCacheRequest {
+  NodeImageCache cache = 1;
+}
+
+message ReportNodeImageCacheResponse {}
 
 message DebugClearRequest {}
 

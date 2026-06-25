@@ -15,8 +15,11 @@
 package controlapi
 
 import (
+	"context"
 	"testing"
+	"time"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -37,6 +40,88 @@ func poolWithClass(namespace, name string, class atev1alpha1.SandboxClass, label
 	p := pool(namespace, name, labels)
 	p.Spec.SandboxClass = class
 	return p
+}
+
+const (
+	testDigestA = "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	testDigestB = "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+)
+
+func TestActorTemplateImageDigests(t *testing.T) {
+	actorTemplate := &atev1alpha1.ActorTemplate{
+		Spec: atev1alpha1.ActorTemplateSpec{
+			PauseImage: "example.com/pause@" + testDigestA,
+			Containers: []atev1alpha1.Container{
+				{Image: "example.com/app@" + testDigestB},
+				{Image: "example.com/duplicate@" + testDigestA},
+			},
+		},
+	}
+	got, err := actorTemplateImageDigests(actorTemplate)
+	if err != nil {
+		t.Fatalf("actorTemplateImageDigests failed: %v", err)
+	}
+	if len(got) != 2 || got[0] != testDigestA || got[1] != testDigestB {
+		t.Fatalf("actorTemplateImageDigests = %v, want [%s %s]", got, testDigestA, testDigestB)
+	}
+}
+
+func TestFindFreeWorkerPrefersCompleteImageCacheHit(t *testing.T) {
+	step := &AssignWorkerStep{}
+	eligible := map[types.NamespacedName]struct{}{{Namespace: "ns", Name: "pool"}: {}}
+	workers := []*ateapipb.Worker{
+		{WorkerNamespace: "ns", WorkerPool: "pool", WorkerPod: "cold", NodeName: "node-cold"},
+		{WorkerNamespace: "ns", WorkerPool: "pool", WorkerPod: "warm", NodeName: "node-warm"},
+	}
+	caches := map[string]*ateapipb.NodeImageCache{
+		"node-warm": {NodeName: "node-warm", ImageDigests: []string{testDigestA, testDigestB}},
+	}
+
+	got := step.findFreeWorker(workers, eligible, nil, []string{testDigestA, testDigestB}, caches)
+	if got.GetWorkerPod() != "warm" {
+		t.Fatalf("findFreeWorker selected %q, want warm", got.GetWorkerPod())
+	}
+}
+
+func TestFindFreeWorkerSnapshotRestrictionPrecedesImageAffinity(t *testing.T) {
+	step := &AssignWorkerStep{}
+	eligible := map[types.NamespacedName]struct{}{{Namespace: "ns", Name: "pool"}: {}}
+	workers := []*ateapipb.Worker{
+		{WorkerNamespace: "ns", WorkerPool: "pool", WorkerPod: "snapshot-local", NodeName: "node-snapshot"},
+		{WorkerNamespace: "ns", WorkerPool: "pool", WorkerPod: "warm", NodeName: "node-warm"},
+	}
+	caches := map[string]*ateapipb.NodeImageCache{
+		"node-warm": {NodeName: "node-warm", ImageDigests: []string{testDigestA}},
+	}
+
+	got := step.findFreeWorker(workers, eligible, []string{"node-snapshot"}, []string{testDigestA}, caches)
+	if got.GetWorkerPod() != "snapshot-local" {
+		t.Fatalf("findFreeWorker selected %q, want snapshot-local", got.GetWorkerPod())
+	}
+}
+
+func TestHasAllImageDigestsRejectsPartialHit(t *testing.T) {
+	cache := &ateapipb.NodeImageCache{ImageDigests: []string{testDigestA}}
+	if hasAllImageDigests(cache, []string{testDigestA, testDigestB}) {
+		t.Fatal("partial image-cache hit was treated as a complete hit")
+	}
+}
+
+func TestLoadNodeImageCachesDeduplicatesNodes(t *testing.T) {
+	store, cleanup := storetest.SetupTestStore(t)
+	defer cleanup()
+	if err := store.SetNodeImageCache(context.Background(), &ateapipb.NodeImageCache{
+		NodeName: "node-1", ImageDigests: []string{testDigestA},
+	}, time.Minute); err != nil {
+		t.Fatalf("SetNodeImageCache failed: %v", err)
+	}
+	step := &AssignWorkerStep{store: store}
+	got := step.loadNodeImageCaches(context.Background(), []*ateapipb.Worker{
+		{NodeName: "node-1"}, {NodeName: "node-1"}, {NodeName: "node-missing"},
+	})
+	if len(got) != 1 || got["node-1"] == nil {
+		t.Fatalf("loadNodeImageCaches = %v, want only node-1", got)
+	}
 }
 
 func TestEligibleWorkerPools(t *testing.T) {
