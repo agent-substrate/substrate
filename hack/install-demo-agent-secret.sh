@@ -38,6 +38,7 @@ demo-agent-secret_deploy() {
 
 demo-agent-secret_delete() {
   log_step "demo-agent-secret_delete"
+  delete_demo_actors ate-demo-secret-agent-v2 agent-secret
   sed "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" demos/agent-secret/agent-secret.yaml.tmpl \
     | run_kubectl delete --ignore-not-found -f -
 }

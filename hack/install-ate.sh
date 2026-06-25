@@ -102,6 +102,8 @@ run_kubectl_ate() {
     "$@"
 }
 
+source "${ROOT}"/hack/lib-demo-delete.sh
+
 run_ko() {
   # Only ko subcommands that delegate to kubectl (apply, create, delete, run)
   # accept args after `--`. ko build, resolve, deps, login etc. reject
