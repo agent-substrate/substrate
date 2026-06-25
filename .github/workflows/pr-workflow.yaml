@@ -32,6 +32,11 @@ jobs:
       run: hack/verify-all.sh
   e2e-test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        auth-mode: [mtls, jwt]
+    name: e2e-test (${{ matrix.auth-mode }})
     steps:
     - name: Checkout
       uses: actions/checkout@v5
@@ -42,7 +47,7 @@ jobs:
     - name: Create cluster
       run: hack/create-kind-cluster.sh
     - name: Install Agent Substrate
-      run: hack/install-ate-kind.sh --deploy-ate-system
+      run: hack/install-ate-kind.sh --deploy-ate-system --auth-mode=${{ matrix.auth-mode }}
     - name: Deploy Counter Demo
       run: hack/install-ate-kind.sh --deploy-demo-counter
     - name: Run E2E tests
