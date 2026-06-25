@@ -99,7 +99,7 @@ func TestK8sServiceAccountIssuerDiscoveryTransport(t *testing.T) {
 	}
 }
 
-func TestK8sServiceAccountIssuerDiscoveryTransportDoesNotSendTokenOutOfScope(t *testing.T) {
+func TestK8sServiceAccountIssuerDiscoveryTransportSendsTokenToKubernetesJWKSURL(t *testing.T) {
 	tokenFile := t.TempDir() + "/token"
 	if err := os.WriteFile(tokenFile, []byte("test-token\n"), 0o600); err != nil {
 		t.Fatalf("write token: %v", err)
@@ -120,6 +120,38 @@ func TestK8sServiceAccountIssuerDiscoveryTransportDoesNotSendTokenOutOfScope(t *
 	}
 
 	req, err := http.NewRequest(http.MethodGet, "https://172.18.0.2:6443/openid/v1/jwks", nil)
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	if _, err := transport.RoundTrip(req); err != nil {
+		t.Fatalf("RoundTrip() error = %v", err)
+	}
+	if gotAuth != "Bearer test-token" {
+		t.Fatalf("Authorization = %q, want Bearer test-token", gotAuth)
+	}
+}
+
+func TestK8sServiceAccountIssuerDiscoveryTransportDoesNotSendTokenToArbitraryURL(t *testing.T) {
+	tokenFile := t.TempDir() + "/token"
+	if err := os.WriteFile(tokenFile, []byte("test-token\n"), 0o600); err != nil {
+		t.Fatalf("write token: %v", err)
+	}
+
+	var gotAuth string
+	transport := &k8sServiceAccountIssuerDiscoveryTransport{
+		base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			gotAuth = req.Header.Get("Authorization")
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(nil),
+				Header:     make(http.Header),
+			}, nil
+		}),
+		tokenFile: tokenFile,
+		issuer:    "https://kubernetes.default.svc",
+	}
+
+	req, err := http.NewRequest(http.MethodGet, "https://attacker.example/.well-known/openid-configuration", nil)
 	if err != nil {
 		t.Fatalf("new request: %v", err)
 	}

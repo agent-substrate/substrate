@@ -401,8 +401,9 @@ func buildK8sServiceAccountIssuerDiscoveryClient(ctx context.Context, caFile, is
 
 // k8sServiceAccountIssuerDiscoveryTransport injects the pod's ServiceAccount
 // Bearer token only when fetching OIDC documents within the configured issuer.
-// Other URLs, such as the jwks_uri returned by the trusted discovery document,
-// are fetched without the token.
+// Kubernetes' discovered jwks_uri can point at the API server's routable host
+// instead of the issuer host (for example, Kind advertises the node IP), so the
+// standard Kubernetes JWKS path is also allowed.
 // Reads the token file fresh on each request so token rotation is handled
 // automatically.
 type k8sServiceAccountIssuerDiscoveryTransport struct {
@@ -412,7 +413,7 @@ type k8sServiceAccountIssuerDiscoveryTransport struct {
 }
 
 func (t *k8sServiceAccountIssuerDiscoveryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	if issuerScopedURL(req.URL.String(), t.issuer) {
+	if issuerScopedURL(req.URL.String(), t.issuer) || isKubernetesJWKSURL(req.URL.String()) {
 		token, err := os.ReadFile(t.tokenFile)
 		if err == nil && len(token) > 0 {
 			req = req.Clone(req.Context())
@@ -443,6 +444,14 @@ func issuerScopedURL(rawURL, issuer string) bool {
 		return strings.HasPrefix(requestPath, "/")
 	}
 	return requestPath == issuerPath || strings.HasPrefix(requestPath, issuerPath+"/")
+}
+
+func isKubernetesJWKSURL(rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	return strings.EqualFold(u.Scheme, "https") && u.EscapedPath() == "/openid/v1/jwks"
 }
 
 func isInClusterKubernetesIssuer(issuer string) bool {
