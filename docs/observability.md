@@ -27,7 +27,7 @@ For quick, on-demand debugging of an active actor, use the Agent Substrate CLI:
 kubectl ate logs actors <actor_id> [--follow / -f]
 ```
 
-> **Note:** By default, `kubectl ate logs` queries the Kubernetes API of the worker pod where the actor is *currently* running. It is designed for immediate inspection of active actors. To view historical logs across past worker pods and suspension cycles, use a centralized logging backend.
+> **Note:** By default, `kubectl ate logs actors` queries the Kubernetes API of the worker pod where the actor is *currently* running. It is designed for immediate inspection of active actors. To view historical logs across past worker pods and suspension cycles, use a centralized logging backend.
 
 #### Example 1: Actor Not Currently Running
 If an actor is suspended or not assigned to a worker pod, the CLI informs you immediately:
@@ -60,6 +60,18 @@ Actor is currently running on pod ate-demo-counter/counter-deployment-ab123-x4y5
 {"time":"2026-05-22T21:50:02.123456789Z","count":2,"fshash":"mCY7...","level":"INFO","msg":"Count"}
 ```
 
+#### Example 4: Filtering by Container or Supervisor
+An actor may run multiple containers, and Agent Substrate also emits synthetic supervisor lifecycle events (e.g., `Actor started`, `Actor checkpointing`). By default `kubectl ate logs actors` shows all of an actor's log lines. You can narrow the output to a single container or to just the supervisor:
+
+```bash
+# Only logs from a specific container within the actor (-c for short).
+kubectl ate logs actors <actor_id> --container <container_name>
+
+# Only the ateom supervisor (lifecycle) logs.
+kubectl ate logs actors <actor_id> --supervisor
+```
+
+`--container` and `--supervisor` are mutually exclusive. Container log lines are identified by the `ate.dev/container_name` label; supervisor lifecycle lines do not carry that label.
 
 ---
 

@@ -36,6 +36,8 @@ func TestFilterAndDisplayLogLine(t *testing.T) {
 		name          string
 		line          string
 		targetActorID string
+		container     string
+		supervisor    bool
 		wantMatched   bool
 		wantTime      string
 		wantOutput    string
@@ -77,7 +79,7 @@ func TestFilterAndDisplayLogLine(t *testing.T) {
 			line:          `{"time":"2026-05-16T01:03:38Z","message":"Hello world","logging.googleapis.com/labels":{"ate.dev/actor_id":"act-2"}}`,
 			targetActorID: "act-1",
 			wantMatched:   false,
-			wantTime:      "2026-05-16T01:03:38Z",
+			wantTime:      "", // zero time: another actor's line must not advance follow's resume cursor
 			wantOutput:    "",
 		},
 		{
@@ -120,12 +122,86 @@ func TestFilterAndDisplayLogLine(t *testing.T) {
 			wantTime:      "2026-05-16T01:03:38Z",
 			wantOutput:    `{"time":"2026-05-16T01:03:38Z","level":"info","logging.googleapis.com/labels":{"app":"my-app"},"msg":"Hello"}`,
 		},
+		{
+			name:          "container filter matches the named container",
+			line:          `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"hi","logging.googleapis.com/labels":{"ate.dev/actor_id":"act-1","ate.dev/container_name":"counter"}}`,
+			targetActorID: "act-1",
+			container:     "counter",
+			wantMatched:   true,
+			wantTime:      "2026-05-16T01:03:38Z",
+			wantOutput:    `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"hi"}`,
+		},
+		{
+			name:          "container filter excludes a different container",
+			line:          `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"hi","logging.googleapis.com/labels":{"ate.dev/actor_id":"act-1","ate.dev/container_name":"sidecar"}}`,
+			targetActorID: "act-1",
+			container:     "counter",
+			wantMatched:   false,
+			wantTime:      "", // filtered out: only displayed lines may advance follow's resume cursor
+			wantOutput:    "",
+		},
+		{
+			name:          "supervisor filter matches a lifecycle line without container_name",
+			line:          `{"time":"2026-05-16T01:03:38Z","message":"Actor started","logging.googleapis.com/labels":{"ate.dev/actor_id":"act-1"}}`,
+			targetActorID: "act-1",
+			supervisor:    true,
+			wantMatched:   true,
+			wantTime:      "2026-05-16T01:03:38Z",
+			wantOutput:    `{"time":"2026-05-16T01:03:38Z","message":"Actor started"}`,
+		},
+		{
+			name:          "supervisor filter excludes a container line",
+			line:          `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"hi","logging.googleapis.com/labels":{"ate.dev/actor_id":"act-1","ate.dev/container_name":"counter"}}`,
+			targetActorID: "act-1",
+			supervisor:    true,
+			wantMatched:   false,
+			wantTime:      "", // filtered out: only displayed lines may advance follow's resume cursor
+			wantOutput:    "",
+		},
+		{
+			name:          "default filter shows a container line",
+			line:          `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"hi","logging.googleapis.com/labels":{"ate.dev/actor_id":"act-1","ate.dev/container_name":"counter"}}`,
+			targetActorID: "act-1",
+			wantMatched:   true,
+			wantTime:      "2026-05-16T01:03:38Z",
+			wantOutput:    `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"hi"}`,
+		},
+		{
+			// Non-GCE shape: actor metadata under "labels", app labels under the GCE key.
+			name:          "metadata under labels key, app data under GCE key",
+			line:          `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"hi","logging.googleapis.com/labels":{"app":"my-app"},"labels":{"ate.dev/actor_id":"act-1","ate.dev/container_name":"counter"}}`,
+			targetActorID: "act-1",
+			container:     "counter",
+			wantMatched:   true,
+			wantTime:      "2026-05-16T01:03:38Z",
+			wantOutput:    `{"time":"2026-05-16T01:03:38Z","level":"info","logging.googleapis.com/labels":{"app":"my-app"},"msg":"hi"}`,
+		},
+		{
+			// Both keys carry metadata: GCE key wins; container read from its map (counter).
+			name:          "both keys carry metadata, GCE key wins atomically",
+			line:          `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"hi","logging.googleapis.com/labels":{"ate.dev/actor_id":"act-1","ate.dev/container_name":"counter"},"labels":{"ate.dev/actor_id":"act-1","ate.dev/container_name":"sidecar"}}`,
+			targetActorID: "act-1",
+			container:     "counter",
+			wantMatched:   true,
+			wantTime:      "2026-05-16T01:03:38Z",
+			wantOutput:    `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"hi"}`,
+		},
+		{
+			// Same line: the non-authoritative key's container (sidecar) is ignored.
+			name:          "both keys carry metadata, non-GCE container is ignored",
+			line:          `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"hi","logging.googleapis.com/labels":{"ate.dev/actor_id":"act-1","ate.dev/container_name":"counter"},"labels":{"ate.dev/actor_id":"act-1","ate.dev/container_name":"sidecar"}}`,
+			targetActorID: "act-1",
+			container:     "sidecar",
+			wantMatched:   false,
+			wantTime:      "",
+			wantOutput:    "",
+		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			var buf bytes.Buffer
-			logTime, matched := filterAndDisplayLogLine(tc.line, tc.targetActorID, &buf)
+			logTime, matched := filterAndDisplayLogLine(tc.line, logLineFilter{actorID: tc.targetActorID, container: tc.container, supervisor: tc.supervisor}, &buf)
 
 			if matched != tc.wantMatched {
 				t.Errorf("got matched = %v, want %v", matched, tc.wantMatched)
@@ -236,6 +312,171 @@ func TestLogsActorRunner_Run_OneShotSuccess(t *testing.T) {
 	wantOutput := `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"Hello world"}`
 	if gotOutput != wantOutput {
 		t.Errorf("got stdout %q, want %q", gotOutput, wantOutput)
+	}
+}
+
+func TestLogsActorRunner_Run_OneShot_ContainerFilter(t *testing.T) {
+	actorID := "act-123"
+	podName := "pod-xyz"
+	namespace := "ns-abc"
+
+	mockAPI := &mockAteAPIClient{
+		GetActorFunc: func(ctx context.Context, in *ateapipb.GetActorRequest, opts ...grpc.CallOption) (*ateapipb.GetActorResponse, error) {
+			return &ateapipb.GetActorResponse{
+				Actor: &ateapipb.Actor{
+					ActorId:           actorID,
+					AteomPodName:      podName,
+					AteomPodNamespace: namespace,
+					Status:            ateapipb.Actor_STATUS_RUNNING,
+				},
+			}, nil
+		},
+	}
+
+	counterLine := `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"from counter","logging.googleapis.com/labels":{"ate.dev/actor_id":"act-123","ate.dev/container_name":"counter"}}`
+	sidecarLine := `{"time":"2026-05-16T01:03:39Z","level":"info","msg":"from sidecar","logging.googleapis.com/labels":{"ate.dev/actor_id":"act-123","ate.dev/container_name":"sidecar"}}`
+	supervisorLine := `{"time":"2026-05-16T01:03:40Z","message":"Actor started","logging.googleapis.com/labels":{"ate.dev/actor_id":"act-123"}}`
+
+	mockStreamer := &mockPodLogsStreamer{
+		StreamLogsFunc: func(ctx context.Context, ns, name string, opts *corev1.PodLogOptions) (io.ReadCloser, error) {
+			return io.NopCloser(strings.NewReader(counterLine + "\n" + sidecarLine + "\n" + supervisorLine + "\n")), nil
+		},
+	}
+
+	var stdout, stderr bytes.Buffer
+	runner := &LogsActorRunner{
+		apiClient: mockAPI,
+		streamer:  mockStreamer,
+		stdout:    &stdout,
+		stderr:    &stderr,
+		follow:    false,
+		container: "counter",
+	}
+
+	if err := runner.Run(context.Background(), actorID); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	gotOutput := strings.TrimSpace(stdout.String())
+	wantOutput := `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"from counter"}`
+	if gotOutput != wantOutput {
+		t.Errorf("got stdout %q, want only the counter line %q", gotOutput, wantOutput)
+	}
+}
+
+func TestLogsActorRunner_Run_OneShot_SupervisorFilter(t *testing.T) {
+	actorID := "act-123"
+	podName := "pod-xyz"
+	namespace := "ns-abc"
+
+	mockAPI := &mockAteAPIClient{
+		GetActorFunc: func(ctx context.Context, in *ateapipb.GetActorRequest, opts ...grpc.CallOption) (*ateapipb.GetActorResponse, error) {
+			return &ateapipb.GetActorResponse{
+				Actor: &ateapipb.Actor{
+					ActorId:           actorID,
+					AteomPodName:      podName,
+					AteomPodNamespace: namespace,
+					Status:            ateapipb.Actor_STATUS_RUNNING,
+				},
+			}, nil
+		},
+	}
+
+	counterLine := `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"from counter","logging.googleapis.com/labels":{"ate.dev/actor_id":"act-123","ate.dev/container_name":"counter"}}`
+	supervisorLine := `{"time":"2026-05-16T01:03:40Z","message":"Actor started","logging.googleapis.com/labels":{"ate.dev/actor_id":"act-123"}}`
+
+	mockStreamer := &mockPodLogsStreamer{
+		StreamLogsFunc: func(ctx context.Context, ns, name string, opts *corev1.PodLogOptions) (io.ReadCloser, error) {
+			return io.NopCloser(strings.NewReader(counterLine + "\n" + supervisorLine + "\n")), nil
+		},
+	}
+
+	var stdout, stderr bytes.Buffer
+	runner := &LogsActorRunner{
+		apiClient:  mockAPI,
+		streamer:   mockStreamer,
+		stdout:     &stdout,
+		stderr:     &stderr,
+		follow:     false,
+		supervisor: true,
+	}
+
+	if err := runner.Run(context.Background(), actorID); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	gotOutput := strings.TrimSpace(stdout.String())
+	wantOutput := `{"time":"2026-05-16T01:03:40Z","message":"Actor started"}`
+	if gotOutput != wantOutput {
+		t.Errorf("got stdout %q, want only the supervisor line %q", gotOutput, wantOutput)
+	}
+}
+
+func TestValidateLogFilterFlags(t *testing.T) {
+	tests := []struct {
+		name       string
+		container  string
+		supervisor bool
+		wantErr    bool
+	}{
+		{"neither", "", false, false},
+		{"container only", "counter", false, false},
+		{"supervisor only", "", true, false},
+		{"both", "counter", true, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateLogFilterFlags(tc.container, tc.supervisor)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatal("expected an error, got nil")
+				}
+				if !strings.Contains(err.Error(), "mutually exclusive") {
+					t.Errorf("error %q missing substring %q", err, "mutually exclusive")
+				}
+			} else if err != nil {
+				t.Errorf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+// TestLogsActorRunner_Run_RejectsContainerAndSupervisor verifies the runner
+// enforces its own invariant when constructed directly (not only via the CLI),
+// failing fast before any control-plane or pod calls.
+func TestLogsActorRunner_Run_RejectsContainerAndSupervisor(t *testing.T) {
+	mockAPI := &mockAteAPIClient{
+		GetActorFunc: func(ctx context.Context, in *ateapipb.GetActorRequest, opts ...grpc.CallOption) (*ateapipb.GetActorResponse, error) {
+			t.Error("GetActor should not be called when filters are mutually exclusive")
+			return nil, fmt.Errorf("should not be called")
+		},
+	}
+	mockStreamer := &mockPodLogsStreamer{
+		StreamLogsFunc: func(ctx context.Context, ns, name string, opts *corev1.PodLogOptions) (io.ReadCloser, error) {
+			t.Error("StreamLogs should not be called when filters are mutually exclusive")
+			return nil, fmt.Errorf("should not be called")
+		},
+	}
+
+	var stdout, stderr bytes.Buffer
+	runner := &LogsActorRunner{
+		apiClient:  mockAPI,
+		streamer:   mockStreamer,
+		stdout:     &stdout,
+		stderr:     &stderr,
+		container:  "counter",
+		supervisor: true,
+	}
+
+	err := runner.Run(context.Background(), "act-1")
+	if err == nil {
+		t.Fatal("expected an error when both --container and --supervisor are set, got nil")
+	}
+	if !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Errorf("unexpected error: %v (want substring %q)", err, "mutually exclusive")
+	}
+	if mockAPI.CloseCalls != 1 {
+		t.Errorf("expected Close to be called once, got %d", mockAPI.CloseCalls)
 	}
 }
 
@@ -378,6 +619,98 @@ func TestLogsActorRunner_Run_Follow_SuspendedToRunning(t *testing.T) {
 	wantStdout := `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"Follow hello"}`
 	if gotStdout != wantStdout {
 		t.Errorf("got stdout %q, want %q", gotStdout, wantStdout)
+	}
+}
+
+// TestLogsActorRunner_Run_Follow_ForeignActorLineDoesNotAdvanceCursor is a
+// regression test: a worker pod's log stream can contain lines from a different
+// actor that previously ran on it. Those foreign lines must never advance the
+// follow resume cursor (SinceTime); otherwise a reconnect could skip the target
+// actor's own logs.
+func TestLogsActorRunner_Run_Follow_ForeignActorLineDoesNotAdvanceCursor(t *testing.T) {
+	actorID := "act-123"
+	podName := "pod-xyz"
+	namespace := "ns-abc"
+
+	mockAPI := &mockAteAPIClient{
+		GetActorFunc: func(ctx context.Context, in *ateapipb.GetActorRequest, opts ...grpc.CallOption) (*ateapipb.GetActorResponse, error) {
+			return &ateapipb.GetActorResponse{
+				Actor: &ateapipb.Actor{
+					ActorId:           actorID,
+					AteomPodName:      podName,
+					AteomPodNamespace: namespace,
+					Status:            ateapipb.Actor_STATUS_RUNNING,
+				},
+			}, nil
+		},
+	}
+
+	// A line belonging to a DIFFERENT actor that shares the worker pod's stream.
+	// It carries a parseable timestamp but must not move the resume cursor.
+	foreignLine := `{"time":"2026-05-16T01:03:38Z","message":"not mine","logging.googleapis.com/labels":{"ate.dev/actor_id":"other"}}`
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var mu sync.Mutex
+	var streamCalls int
+	var reconnectHadSinceTime bool
+	secondCall := make(chan struct{})
+	var once sync.Once
+
+	mockStreamer := &mockPodLogsStreamer{
+		StreamLogsFunc: func(streamCtx context.Context, ns, name string, opts *corev1.PodLogOptions) (io.ReadCloser, error) {
+			mu.Lock()
+			streamCalls++
+			call := streamCalls
+			mu.Unlock()
+
+			if call == 1 {
+				// First connection: emit one foreign line, then EOF to force a reconnect.
+				return io.NopCloser(strings.NewReader(foreignLine + "\n")), nil
+			}
+
+			// Reconnection: record whether a resume cursor was carried over.
+			mu.Lock()
+			reconnectHadSinceTime = opts.SinceTime != nil
+			mu.Unlock()
+			once.Do(func() { close(secondCall) })
+			<-streamCtx.Done()
+			return nil, streamCtx.Err()
+		},
+	}
+
+	runner := &LogsActorRunner{
+		apiClient:         mockAPI,
+		streamer:          mockStreamer,
+		stdout:            &bytes.Buffer{},
+		stderr:            &bytes.Buffer{},
+		follow:            true,
+		pollInterval:      1 * time.Millisecond,
+		reconnectInterval: 1 * time.Millisecond,
+		tickerInterval:    time.Hour, // keep the migration monitor out of the way
+	}
+
+	done := make(chan struct{})
+	go func() {
+		_ = runner.Run(ctx, actorID)
+		close(done)
+	}()
+
+	select {
+	case <-secondCall:
+	case <-time.After(2 * time.Second):
+		cancel()
+		t.Fatal("reconnect (second StreamLogs call) never happened")
+	}
+
+	cancel()
+	<-done
+
+	mu.Lock()
+	defer mu.Unlock()
+	if reconnectHadSinceTime {
+		t.Error("reconnect carried a SinceTime cursor; a foreign actor's line must not advance the follow cursor")
 	}
 }
 
