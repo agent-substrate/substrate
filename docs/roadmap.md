@@ -54,7 +54,6 @@ Below is a collection of finer-grained efforts which we believe align with the a
   * incremental snapshots
 * Support for S3 (via plugin)
 * Distinct lifecycle for “rootfs” and memory snapshots vs. “working” space.  Needs API surface of where to mount.
-*
 * ConfigMaps as volumes
 * Data locality in scheduling (needs to expose per-node available snapshots via API)
 

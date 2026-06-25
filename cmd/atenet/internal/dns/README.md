@@ -1,6 +1,6 @@
 # DNS Controller
 
-The DNS Controller orchsterates the configuration needed to setup the ATE routing.
+The DNS Controller orchestrates the configuration needed to setup the ATE routing.
 
 We want to resolve requests for <actor id>.actors.resources.substrate.ate.dev to the router service address.
 
