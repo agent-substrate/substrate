@@ -82,6 +82,40 @@ const (
 	actorVethSubnet = "169.254.17.0/30"
 )
 
+// Parsed forms of the fixed network constants above, cooked once at package init
+// (a malformed constant is a programmer error, so these panic). Callers use them
+// directly instead of re-parsing on every activation.
+var (
+	hostVethAddr   = mustParseAddr(hostVethCIDR)
+	hostVethHWAddr = mustParseMAC(hostVethMAC)
+	actorVethAddr  = mustParseAddr(actorVethCIDR)
+	actorVethGwIP  = mustParseIP(actorVethGateway)
+)
+
+func mustParseAddr(cidr string) *netlink.Addr {
+	a, err := parseAddr(cidr)
+	if err != nil {
+		panic(fmt.Sprintf("parsing constant CIDR %q: %v", cidr, err))
+	}
+	return a
+}
+
+func mustParseMAC(s string) net.HardwareAddr {
+	m, err := net.ParseMAC(s)
+	if err != nil {
+		panic(fmt.Sprintf("parsing constant MAC %q: %v", s, err))
+	}
+	return m
+}
+
+func mustParseIP(s string) net.IP {
+	ip := net.ParseIP(s).To4()
+	if ip == nil {
+		panic(fmt.Sprintf("parsing constant IPv4 %q", s))
+	}
+	return ip
+}
+
 // setupActorNetwork builds a fresh point-to-point network between the worker
 // pod netns and the kata interior netns (see the package comment). Idempotent
 // via cleanup-before-setup; also sweeps stale kata taps out of the interior
@@ -119,19 +153,10 @@ func (s *AteomService) setupActorNetwork(ctx context.Context) (retErr error) {
 		return err
 	}
 
-	hostAddr, err := parseAddr(hostVethCIDR)
-	if err != nil {
-		return err
-	}
-	hostMAC, err := net.ParseMAC(hostVethMAC)
-	if err != nil {
-		return fmt.Errorf("while parsing host veth MAC: %w", err)
-	}
-
 	veth := &netlink.Veth{
 		LinkAttrs: netlink.LinkAttrs{
 			Name:         hostVethName,
-			HardwareAddr: hostMAC,
+			HardwareAddr: hostVethHWAddr,
 		},
 		PeerName: actorVethTempName,
 	}
@@ -143,7 +168,7 @@ func (s *AteomService) setupActorNetwork(ctx context.Context) (retErr error) {
 	if err != nil {
 		return fmt.Errorf("while getting host veth: %w", err)
 	}
-	if err := netlink.AddrReplace(hostLink, hostAddr); err != nil {
+	if err := netlink.AddrReplace(hostLink, hostVethAddr); err != nil {
 		return fmt.Errorf("while assigning host veth address: %w", err)
 	}
 	if err := netlink.LinkSetUp(hostLink); err != nil {
@@ -198,24 +223,16 @@ func configureActorVeth(ctx context.Context) error {
 		return fmt.Errorf("while reacquiring actor veth in interior netns: %w", err)
 	}
 
-	actorAddr, err := parseAddr(actorVethCIDR)
-	if err != nil {
-		return err
-	}
-	if err := netlink.AddrReplace(actorLink, actorAddr); err != nil {
+	if err := netlink.AddrReplace(actorLink, actorVethAddr); err != nil {
 		return fmt.Errorf("while assigning actor veth address: %w", err)
 	}
 	if err := netlink.LinkSetUp(actorLink); err != nil {
 		return fmt.Errorf("while bringing up actor veth: %w", err)
 	}
 
-	gw := net.ParseIP(actorVethGateway).To4()
-	if gw == nil {
-		return fmt.Errorf("invalid actor veth gateway %q", actorVethGateway)
-	}
 	if err := netlink.RouteReplace(&netlink.Route{
 		LinkIndex: actorLink.Attrs().Index,
-		Gw:        gw,
+		Gw:        actorVethGwIP,
 	}); err != nil {
 		return fmt.Errorf("while installing actor default route: %w", err)
 	}
@@ -227,11 +244,12 @@ func configureActorVeth(ctx context.Context) error {
 // Intentionally idempotent: runs before setup, after checkpoint, and from
 // setup-failure cleanup.
 func (s *AteomService) cleanupActorNetwork(ctx context.Context) error {
+	var cleanupErr error
 	if err := removeActorNftablesRules(); err != nil {
-		return err
+		cleanupErr = errors.Join(cleanupErr, fmt.Errorf("while removing actor nftables rules: %w", err))
+		slog.WarnContext(ctx, "Failed to remove actor nftables rules; continuing actor netns cleanup", slog.Any("err", err))
 	}
 
-	var cleanupErr error
 	if link, err := netlink.LinkByName(hostVethName); err == nil {
 		if err := netlink.LinkDel(link); err != nil {
 			cleanupErr = errors.Join(cleanupErr, fmt.Errorf("while deleting host veth: %w", err))
@@ -302,7 +320,14 @@ func parseAddr(cidr string) (*netlink.Addr, error) {
 func enableIPv4Forwarding() error {
 	// Actor packets enter the worker pod via the host-side veth and leave
 	// through the pod's eth0; the kernel will not route between them otherwise.
-	if err := os.WriteFile("/proc/sys/net/ipv4/ip_forward", []byte("1\n"), 0o644); err != nil {
+	// Open the existing sysctl O_WRONLY (not os.WriteFile, which would create a
+	// regular file if the knob were missing) so an absent knob is a clear error.
+	f, err := os.OpenFile("/proc/sys/net/ipv4/ip_forward", os.O_WRONLY, 0)
+	if err != nil {
+		return fmt.Errorf("while opening ip_forward sysctl: %w", err)
+	}
+	defer f.Close()
+	if _, err := f.Write([]byte("1\n")); err != nil {
 		return fmt.Errorf("while enabling IPv4 forwarding in worker pod netns: %w", err)
 	}
 	return nil
@@ -582,6 +607,9 @@ func (s *AteomService) actorVethMTU(ctx context.Context) int {
 	_ = netNSDo(ctx, s.interiorNetNS, func(ctx context.Context) error {
 		if l, err := netlink.LinkByName(actorVethName); err == nil {
 			mtu = l.Attrs().MTU
+		} else {
+			slog.WarnContext(ctx, "Failed to read actor veth MTU; using default",
+				slog.String("link", actorVethName), slog.Int("default_mtu", mtu), slog.Any("err", err))
 		}
 		return nil
 	})
