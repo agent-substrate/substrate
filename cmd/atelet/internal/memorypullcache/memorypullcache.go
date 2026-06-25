@@ -22,6 +22,7 @@ import (
 	"log/slog"
 	"net"
 	"runtime"
+	"slices"
 	"strings"
 
 	"github.com/google/go-containerregistry/pkg/authn"
@@ -155,7 +156,7 @@ func (c *MemoryPullCache) Fetch(ctx context.Context, ref string) (io.ReadCloser,
 	if cfg, cfgErr := img.ConfigFile(); cfgErr != nil {
 		return nil, nil, fmt.Errorf("while reading image config: %w", cfgErr)
 	} else if cfg != nil {
-		imageEnv = append([]string(nil), cfg.Config.Env...)
+		imageEnv = slices.Clone(cfg.Config.Env)
 	}
 
 	size, err := img.Size()
