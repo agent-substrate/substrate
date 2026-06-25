@@ -33,81 +33,47 @@ import (
 const sparseMagic = "ATESPRSE"
 
 // sparseVersion is the sparse-extent format version, written as a little-endian
-// uint32 immediately after sparseMagic. Bump it on any incompatible layout change
-// so readers reject snapshots they don't understand instead of misparsing them.
-const sparseVersion uint32 = 1
+// uint32 immediately after sparseMagic (in the clear, before the zstd stream). Bump
+// it on any incompatible layout change so readers reject snapshots they don't
+// understand instead of misparsing them.
+const sparseVersion uint32 = 2
 
-// extent is a populated (non-hole) byte range of a sparse file.
-type extent struct {
-	off    int64
-	length int64
-}
-
-// sparseExtents returns the populated regions of f (via SEEK_DATA/SEEK_HOLE) and
-// f's logical size. Holes are the gaps between extents. It leaves f's offset
-// undefined (callers seek explicitly before reading).
-func sparseExtents(f *os.File) ([]extent, int64, error) {
-	fi, err := f.Stat()
-	if err != nil {
-		return nil, 0, err
-	}
-	size := fi.Size()
-	fd := int(f.Fd())
-	var exts []extent
-	off := int64(0)
-	for off < size {
-		ds, err := unix.Seek(fd, off, unix.SEEK_DATA)
-		if err != nil {
-			if err == unix.ENXIO { // no more data: rest is a hole
-				break
-			}
-			return nil, 0, fmt.Errorf("SEEK_DATA: %w", err)
-		}
-		de, err := unix.Seek(fd, ds, unix.SEEK_HOLE)
-		if err != nil {
-			return nil, 0, fmt.Errorf("SEEK_HOLE: %w", err)
-		}
-		exts = append(exts, extent{off: ds, length: de - ds})
-		off = de
-	}
-	return exts, size, nil
-}
+// sparseEndOffset is the end-of-stream sentinel: an extent-frame offset of -1 marks
+// the end of the frames (a real extent offset is always >= 0). Using an end marker
+// keeps the format streamable — the writer need not know the extent count up front
+// and the reader stops when it sees the sentinel.
+const sparseEndOffset int64 = -1
 
 // writeSparseZstd encodes a sparse file src to dst in the sparse-extent format:
 //
-//	magic[8] | version:u32 | totalSize:i64 | numExtents:i64 | (off:i64,len:i64)*numExtents | zstd(data...)
+//	magic[8] | version:u32 | zstd( totalSize:i64 | (off:i64, len:i64, data[len])* | -1:i64 )
 //
-// where the trailing zstd stream is the concatenation of ONLY the populated extents
-// (the holes are not read or compressed). This is the upload mirror of the sparse
-// DOWNLOAD: a guest memory-ranges image is mostly holes (free RAM), so feeding only
-// the real extents to zstd cuts the compress from "scan the whole logical image"
-// (e.g. 2GiB) to "scan the resident set" (e.g. ~150MiB). Returns the logical size
-// and the data (pre-compression) bytes. The integers are little-endian.
+// The magic + version are in the clear so a reader can dispatch on them; everything
+// after is a single zstd stream of the metadata interleaved with ONLY the populated
+// extents' data (holes are neither read nor compressed), terminated by the
+// end-offset sentinel. The extents are discovered and emitted incrementally
+// (SEEK_DATA/SEEK_HOLE), so the format is streamable — no extent count is written
+// up front.
+//
+// This is the upload mirror of the sparse DOWNLOAD: a guest memory-ranges image is
+// mostly holes (free RAM), so feeding only the real extents to zstd cuts the
+// compress from "scan the whole logical image" (e.g. 2GiB) to "scan the resident
+// set" (e.g. ~150MiB). Returns the logical size and the populated (pre-compression)
+// byte count. All integers are little-endian.
 func writeSparseZstd(dst io.Writer, src *os.File) (logical, dataBytes int64, err error) {
-	exts, size, err := sparseExtents(src)
+	fi, err := src.Stat()
 	if err != nil {
 		return 0, 0, err
 	}
-	// Buffer the (small) header so the few fixed-size writes don't each hit dst.
+	size := fi.Size()
+
+	// magic + version in the clear (buffered: a couple of tiny writes).
 	bw := bufio.NewWriter(dst)
 	if _, err := bw.WriteString(sparseMagic); err != nil {
 		return 0, 0, err
 	}
 	if err := binary.Write(bw, binary.LittleEndian, sparseVersion); err != nil {
 		return 0, 0, err
-	}
-	for _, v := range []int64{size, int64(len(exts))} {
-		if err := binary.Write(bw, binary.LittleEndian, v); err != nil {
-			return 0, 0, err
-		}
-	}
-	for _, e := range exts {
-		if err := binary.Write(bw, binary.LittleEndian, e.off); err != nil {
-			return 0, 0, err
-		}
-		if err := binary.Write(bw, binary.LittleEndian, e.length); err != nil {
-			return 0, 0, err
-		}
 	}
 	if err := bw.Flush(); err != nil {
 		return 0, 0, err
@@ -119,17 +85,48 @@ func writeSparseZstd(dst io.Writer, src *os.File) (logical, dataBytes int64, err
 	if err != nil {
 		return 0, 0, err
 	}
-	for _, e := range exts {
-		if _, err := src.Seek(e.off, io.SeekStart); err != nil {
-			zw.Close()
-			return 0, 0, err
+	// fail closes the encoder before returning err (Close flushes/frees state).
+	fail := func(e error) (int64, int64, error) {
+		zw.Close()
+		return 0, 0, e
+	}
+	if err := binary.Write(zw, binary.LittleEndian, size); err != nil {
+		return fail(err)
+	}
+
+	fd := int(src.Fd())
+	off := int64(0)
+	for off < size {
+		ds, serr := unix.Seek(fd, off, unix.SEEK_DATA)
+		if serr != nil {
+			if serr == unix.ENXIO { // no more data: the rest is a hole
+				break
+			}
+			return fail(fmt.Errorf("SEEK_DATA: %w", serr))
 		}
-		n, err := io.CopyN(zw, src, e.length)
+		de, serr := unix.Seek(fd, ds, unix.SEEK_HOLE)
+		if serr != nil {
+			return fail(fmt.Errorf("SEEK_HOLE: %w", serr))
+		}
+		length := de - ds
+		if err := binary.Write(zw, binary.LittleEndian, ds); err != nil {
+			return fail(err)
+		}
+		if err := binary.Write(zw, binary.LittleEndian, length); err != nil {
+			return fail(err)
+		}
+		if _, err := src.Seek(ds, io.SeekStart); err != nil {
+			return fail(err)
+		}
+		n, cerr := io.CopyN(zw, src, length)
 		dataBytes += n
-		if err != nil {
-			zw.Close()
-			return 0, 0, fmt.Errorf("reading extent @%d+%d: %w", e.off, e.length, err)
+		if cerr != nil {
+			return fail(fmt.Errorf("reading extent @%d+%d: %w", ds, length, cerr))
 		}
+		off = de
+	}
+	if err := binary.Write(zw, binary.LittleEndian, sparseEndOffset); err != nil {
+		return fail(err)
 	}
 	if err := zw.Close(); err != nil {
 		return 0, 0, err
@@ -149,50 +146,50 @@ func readSparseZstd(dst *os.File, src io.Reader) (logical int64, err error) {
 	if ver != sparseVersion {
 		return 0, fmt.Errorf("unsupported sparse snapshot format version %d (this build supports %d)", ver, sparseVersion)
 	}
-	var size, numExt int64
-	if err := binary.Read(src, binary.LittleEndian, &size); err != nil {
-		return 0, fmt.Errorf("reading totalSize: %w", err)
-	}
-	if err := binary.Read(src, binary.LittleEndian, &numExt); err != nil {
-		return 0, fmt.Errorf("reading numExtents: %w", err)
-	}
-	if numExt < 0 || numExt > 1<<28 {
-		return 0, fmt.Errorf("implausible numExtents %d", numExt)
-	}
-	if size < 0 {
-		return 0, fmt.Errorf("negative totalSize %d", size)
-	}
-	exts := make([]extent, numExt)
-	for i := range exts {
-		if err := binary.Read(src, binary.LittleEndian, &exts[i].off); err != nil {
-			return 0, err
-		}
-		if err := binary.Read(src, binary.LittleEndian, &exts[i].length); err != nil {
-			return 0, err
-		}
-		// Validate against the declared size (the header comes from the downloaded
-		// snapshot): an out-of-range extent would seek/write past the file or wrap
-		// on the off+length arithmetic. size-off is safe because off <= size.
-		if exts[i].off < 0 || exts[i].length < 0 || exts[i].off > size || exts[i].length > size-exts[i].off {
-			return 0, fmt.Errorf("sparse extent %d out of range (off=%d len=%d size=%d)", i, exts[i].off, exts[i].length, size)
-		}
-	}
-	if err := dst.Truncate(size); err != nil {
-		return 0, err
-	}
+
 	zr, err := zstd.NewReader(src, zstd.WithDecoderConcurrency(1))
 	if err != nil {
 		return 0, err
 	}
 	defer zr.Close()
-	// The zstd stream is the extents' data concatenated in order; slice it back out
-	// by length and write each at its offset (the gaps stay holes).
-	for _, e := range exts {
-		if _, err := dst.Seek(e.off, io.SeekStart); err != nil {
+
+	var size int64
+	if err := binary.Read(zr, binary.LittleEndian, &size); err != nil {
+		return 0, fmt.Errorf("reading totalSize: %w", err)
+	}
+	if size < 0 {
+		return 0, fmt.Errorf("negative totalSize %d", size)
+	}
+	if err := dst.Truncate(size); err != nil {
+		return 0, err
+	}
+
+	// Replay the extent frames written by writeSparseZstd. Each frame is an offset
+	// (i64), a length (i64), then that many data bytes; the stream ends with a
+	// terminator frame whose offset is sparseEndOffset (-1) and carries no len/data.
+	for {
+		var off int64
+		if err := binary.Read(zr, binary.LittleEndian, &off); err != nil {
+			return 0, fmt.Errorf("reading extent offset: %w", err)
+		}
+		if off == sparseEndOffset {
+			break
+		}
+		var length int64
+		if err := binary.Read(zr, binary.LittleEndian, &length); err != nil {
+			return 0, fmt.Errorf("reading extent length: %w", err)
+		}
+		// Validate against the declared size (the stream is the downloaded snapshot):
+		// an out-of-range extent would seek/write past the file or wrap on the
+		// off+length arithmetic. size-off is safe because off <= size.
+		if off < 0 || length < 0 || off > size || length > size-off {
+			return 0, fmt.Errorf("sparse extent out of range (off=%d len=%d size=%d)", off, length, size)
+		}
+		if _, err := dst.Seek(off, io.SeekStart); err != nil {
 			return 0, err
 		}
-		if _, err := io.CopyN(dst, zr, e.length); err != nil {
-			return 0, fmt.Errorf("writing extent @%d+%d: %w", e.off, e.length, err)
+		if _, err := io.CopyN(dst, zr, length); err != nil {
+			return 0, fmt.Errorf("writing extent @%d+%d: %w", off, length, err)
 		}
 	}
 	return size, nil
