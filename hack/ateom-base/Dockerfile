@@ -18,4 +18,5 @@ FROM debian:stable-slim
 # provides coreutils (cp --sparse) and glibc for the fetched cloud-hypervisor binary.
 RUN apt-get update \
  && apt-get install -y --no-install-recommends e2fsprogs \
- && rm -rf /var/lib/apt/lists/*
+ && apt-get clean \
+ && rm -rf /var/lib/apt/lists/* /tmp/* /var/tmp/*

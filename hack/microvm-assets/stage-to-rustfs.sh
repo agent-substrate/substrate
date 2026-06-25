@@ -31,6 +31,11 @@ BUCKET="${BUCKET:-ate-snapshots}"
 NAMESPACE="${NAMESPACE:-ate-system}"
 KUBECTL_CONTEXT="${KUBECTL_CONTEXT:-}"
 
+if ! command -v aws >/dev/null 2>&1; then
+  echo "error: the 'aws' CLI is required but was not found in PATH" >&2
+  exit 1
+fi
+
 export AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID:-rustfsadmin}"
 export AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY:-rustfsadmin}"
 export AWS_REGION="${AWS_REGION:-us-east-1}"
