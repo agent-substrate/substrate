@@ -42,7 +42,8 @@ type ClientConfig struct {
 	Mode Mode
 
 	// CAFile is a PEM file containing CA certs that sign the server cert.
-	// Required for ModeJWT. Ignored for ModeMTLS.
+	// Required in all modes. Ignored for ModeMTLS until mTLS verification is
+	// fully wired.
 	CAFile string
 
 	// ServerName overrides SNI / hostname verification. Optional.
@@ -56,6 +57,9 @@ type ClientConfig struct {
 // DialOptions returns the grpc.DialOption set described by cfg, suitable to
 // pass to grpc.NewClient.
 func DialOptions(cfg ClientConfig) ([]grpc.DialOption, error) {
+	if cfg.CAFile == "" {
+		return nil, fmt.Errorf("ateapiauth: CAFile is required")
+	}
 	switch cfg.Mode {
 	case "", ModeMTLS:
 		tlsCfg := &tls.Config{InsecureSkipVerify: true} //nolint:gosec // explicit opt-in
@@ -64,9 +68,6 @@ func DialOptions(cfg ClientConfig) ([]grpc.DialOption, error) {
 		}, nil
 
 	case ModeJWT:
-		if cfg.CAFile == "" {
-			return nil, fmt.Errorf("ateapiauth: jwt mode requires CAFile")
-		}
 		if cfg.TokenFile == "" {
 			return nil, fmt.Errorf("ateapiauth: jwt mode requires TokenFile")
 		}

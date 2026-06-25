@@ -22,10 +22,6 @@ spec:
     spec:
       containers:
       - name: ate-controller
-        args:
-        - --ateapi-auth=jwt
-        - --ateapi-ca-file=/run/servicedns-ca/trust-bundle.pem
-        - --ateapi-token-file=/run/ateapi-token/token
         volumeMounts:
         - name: ateapi-token
           mountPath: /run/ateapi-token

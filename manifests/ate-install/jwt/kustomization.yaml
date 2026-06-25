@@ -40,7 +40,7 @@ patches:
       group: apps
       version: v1
       kind: Deployment
-      name: atenet-router
+      name: ate-controller
       namespace: ate-system
     patch: |-
       - op: add
@@ -48,7 +48,17 @@ patches:
         value: --ateapi-auth=jwt
       - op: add
         path: /spec/template/spec/containers/0/args/-
-        value: --ateapi-ca-file=/run/servicedns-ca/trust-bundle.pem
+        value: --ateapi-token-file=/run/ateapi-token/token
+  - target:
+      group: apps
+      version: v1
+      kind: Deployment
+      name: atenet-router
+      namespace: ate-system
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/args/-
+        value: --ateapi-auth=jwt
       - op: add
         path: /spec/template/spec/containers/0/args/-
         value: --ateapi-token-file=/run/ateapi-token/token

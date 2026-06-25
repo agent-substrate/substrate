@@ -21,6 +21,15 @@ metadata:
 apiVersion: v1
 kind: ServiceAccount
 metadata:
+  name: ate-client
+  namespace: ate-system
+  labels:
+    apps: ate-client
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
   name: ate-controller
   namespace: ate-system
   labels:
@@ -79,6 +88,8 @@ spec:
       containers:
       - name: ate-controller
         image: ko://github.com/agent-substrate/substrate/cmd/atecontroller
+        args:
+        - --ateapi-ca-file=/run/servicedns-ca/trust-bundle.pem
         ports:
         - name: metrics
           containerPort: 8080

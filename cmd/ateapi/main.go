@@ -360,13 +360,21 @@ func buildServerCreds(ctx context.Context) (credentials.TransportCredentials, er
 	}), nil
 }
 
-// buildK8sServiceAccountIssuerDiscoveryClient returns an *http.Client scoped to
-// Kubernetes ServiceAccount issuer discovery. It trusts caFile for TLS
-// verification and injects the pod's ServiceAccount Bearer token only for URLs
-// under issuer. Returns nil (use http.DefaultClient) if issuer or caFile is
-// empty or unreadable.
+// buildK8sServiceAccountIssuerDiscoveryClient returns an *http.Client for
+// Kubernetes ServiceAccount issuer discovery. External issuers use system roots
+// and no pod ServiceAccount token. The in-cluster Kubernetes issuer trusts
+// caFile for TLS verification and injects the pod's ServiceAccount Bearer token
+// only for URLs under issuer. Returns nil (use the k8sjwt default timeout
+// client) if issuer is empty, or if the in-cluster issuer is configured but
+// caFile is empty or unreadable.
 func buildK8sServiceAccountIssuerDiscoveryClient(ctx context.Context, caFile, issuer string) *http.Client {
-	if caFile == "" || issuer == "" {
+	if issuer == "" {
+		return nil
+	}
+	if !isInClusterKubernetesIssuer(issuer) {
+		return &http.Client{Timeout: 10 * time.Second}
+	}
+	if caFile == "" {
 		return nil
 	}
 	ca, err := os.ReadFile(caFile)
@@ -434,4 +442,12 @@ func issuerScopedURL(rawURL, issuer string) bool {
 		return strings.HasPrefix(requestPath, "/")
 	}
 	return requestPath == issuerPath || strings.HasPrefix(requestPath, issuerPath+"/")
+}
+
+func isInClusterKubernetesIssuer(issuer string) bool {
+	u, err := url.Parse(issuer)
+	if err != nil {
+		return false
+	}
+	return u.Scheme == "https" && (u.Host == "kubernetes.default.svc" || u.Host == "kubernetes.default.svc.cluster.local")
 }

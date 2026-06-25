@@ -24,7 +24,6 @@ package ateapiauth
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"strings"
 
 	"google.golang.org/grpc"
@@ -77,10 +76,6 @@ type ServerConfig struct {
 	// VerifyBearerToken verifies a Bearer token presented by a client. Required
 	// for ModeJWT and ignored for ModeMTLS.
 	VerifyBearerToken func(context.Context, string) error
-
-	// HTTPClient is kept for source compatibility with older callers. Token
-	// verification belongs in VerifyBearerToken.
-	HTTPClient *http.Client
 }
 
 // UnaryServerInterceptor returns a gRPC unary interceptor enforcing cfg.

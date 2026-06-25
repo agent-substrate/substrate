@@ -122,6 +122,37 @@ func TestK8sServiceAccountIssuerDiscoveryTransportRejectsOutOfScopeURL(t *testin
 	}
 }
 
+func TestBuildK8sServiceAccountIssuerDiscoveryClientUsesDefaultTransportForExternalIssuer(t *testing.T) {
+	client := buildK8sServiceAccountIssuerDiscoveryClient(t.Context(), "/does/not/matter", "https://container.googleapis.com/v1/projects/p/locations/l/clusters/c")
+	if client == nil {
+		t.Fatalf("buildK8sServiceAccountIssuerDiscoveryClient() = nil, want client")
+	}
+	if client.Timeout == 0 {
+		t.Fatalf("client timeout = 0, want nonzero timeout")
+	}
+	if _, ok := client.Transport.(*k8sServiceAccountIssuerDiscoveryTransport); ok {
+		t.Fatalf("external issuer should not use ServiceAccount token transport")
+	}
+}
+
+func TestIsInClusterKubernetesIssuer(t *testing.T) {
+	for _, tt := range []struct {
+		issuer string
+		want   bool
+	}{
+		{issuer: "https://kubernetes.default.svc", want: true},
+		{issuer: "https://kubernetes.default.svc.cluster.local", want: true},
+		{issuer: "https://container.googleapis.com/v1/projects/p/locations/l/clusters/c", want: false},
+		{issuer: "https://attacker.example", want: false},
+	} {
+		t.Run(tt.issuer, func(t *testing.T) {
+			if got := isInClusterKubernetesIssuer(tt.issuer); got != tt.want {
+				t.Fatalf("isInClusterKubernetesIssuer(%q) = %v, want %v", tt.issuer, got, tt.want)
+			}
+		})
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
