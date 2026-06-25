@@ -93,10 +93,6 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 		return nil, fmt.Errorf("while writing %s: %w", baseIDFile, err)
 	}
 
-	// NB: the snapshot is memory-only (config/state/memory-ranges + base-id). The RO
-	// base (/dev/vda) and the writable rootfs (/dev/vdb, reset to golden at restore)
-	// are reconstructed on every node, so neither ships in the snapshot.
-
 	slog.InfoContext(ctx, "Snapshotting guest", slog.String("id", id), slog.String("dir", checkpointDir))
 	tSnapshot := time.Now()
 	if err := client.Snapshot(ctx, checkpointDir); err != nil {
