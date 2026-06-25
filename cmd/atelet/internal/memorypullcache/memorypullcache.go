@@ -153,12 +153,7 @@ func (c *MemoryPullCache) Fetch(ctx context.Context, ref string) (io.ReadCloser,
 
 	var imageEnv []string
 	if cfg, cfgErr := img.ConfigFile(); cfgErr != nil {
-		slog.WarnContext(
-			ctx,
-			"Failed to read image config; image ENV will be omitted",
-			slog.String("ref", ref),
-			slog.String("error", cfgErr.Error()),
-		)
+		return nil, nil, fmt.Errorf("while reading image config: %w", cfgErr)
 	} else if cfg != nil {
 		imageEnv = append([]string(nil), cfg.Config.Env...)
 	}

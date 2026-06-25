@@ -101,8 +101,8 @@ func prepareOCIDirectory(ctx context.Context, pullCache *memorypullcache.MemoryP
 	return nil
 }
 
-// mergeActorEnv builds the actor's env from the default PATH, the ActorTemplate env, and the image's ENV.
-// duplicated keys are removed in favor of precedence. The precedence is default PATH > actor template env > image env.
+// mergeActorEnv merges the ActorTemplate env and the image's ENV, with the template taking precedence.
+// duplicated keys are removed in favor of the following precedence template env > image env.
 func mergeActorEnv(imageEnv, templateEnv []string) []string {
 	seen := make(map[string]struct{})
 	var out []string
@@ -120,7 +120,6 @@ func mergeActorEnv(imageEnv, templateEnv []string) []string {
 		}
 	}
 
-	add("PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
 	add(templateEnv...)
 	add(imageEnv...)
 	return out

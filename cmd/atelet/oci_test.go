@@ -84,6 +84,7 @@ func runUntar(t *testing.T, entries []tarEntry) (string, error) {
 // With an identity dir, a read-only bind mount appears at IdentityMountPath.
 func TestBuildActorOCISpec_IdentityMount(t *testing.T) {
 	spec := buildActorOCISpec(
+		nil,
 		[]string{"/app"},
 		[]string{"FOO=bar"},
 		map[string]string{"k": "v"},
@@ -111,9 +112,49 @@ func TestBuildActorOCISpec_IdentityMount(t *testing.T) {
 	}
 }
 
+// mergeActorEnv test template env overrides image env.
+func TestMergeActorEnv(t *testing.T) {
+	t.Run("template overrides image by key", func(t *testing.T) {
+		imageEnv := []string{"FOO=image"}
+		templateEnv := []string{"FOO=template"}
+		got := mergeActorEnv(imageEnv, templateEnv)
+		if c := countKey(got, "FOO"); c != 1 {
+			t.Fatalf("FOO appears %d times, want 1 (no duplicates): %v", c, got)
+		}
+		if !slices.Contains(got, "FOO=template") {
+			t.Errorf("template value must win over image: %v", got)
+		}
+	})
+
+	t.Run("blank/keyless entries are dropped", func(t *testing.T) {
+		imageEnv := []string{"", "=novalue"}
+		var templateEnv []string
+		mergedEnv := mergeActorEnv(imageEnv, templateEnv)
+		for _, env := range mergedEnv {
+			if env == "" || strings.HasPrefix(env, "=") {
+				t.Errorf("blank entry allowed: %q in %v", env, mergedEnv)
+			}
+		}
+	})
+}
+
+func countKey(env []string, key string) int {
+	n := 0
+	for _, e := range env {
+		k := e
+		if i := strings.IndexByte(e, '='); i >= 0 {
+			k = e[:i]
+		}
+		if k == key {
+			n++
+		}
+	}
+	return n
+}
+
 // Without an identity dir (the pause container), no identity mount appears.
 func TestBuildActorOCISpec_NoIdentityMountForPause(t *testing.T) {
-	bare := buildActorOCISpec([]string{"/pause"}, nil, nil, "/run/netns/x", "")
+	bare := buildActorOCISpec(nil, []string{"/pause"}, nil, nil, "/run/netns/x", "")
 	for _, m := range bare.Mounts {
 		if m.Destination == IdentityMountPath {
 			t.Errorf("identity mount must be absent when identityDir is empty")
