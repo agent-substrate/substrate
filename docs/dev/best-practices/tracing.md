@@ -131,7 +131,7 @@ If you want to provide visibility into the internal workings of the server, you 
 ```go
 tracer := otel.Tracer("my-package-name")
 
-func someFunc(ctx) {
+func someFunc(ctx context.Context) {
   ctx, span := tracer.Start(ctx, "operationIdentifier")
   defer span.End()
 }
@@ -157,7 +157,7 @@ func initTracing(ctx context.Context, enabled bool) (*sdktrace.TracerProvider, e
 		return nil, fmt.Errorf("failed to create resource: %w", err)
 	}
 
-  sampler := sdktrace.NeverSample()
+	sampler := sdktrace.NeverSample()
 	if enabled {
 		sampler = sdktrace.AlwaysSample()
 	}
@@ -212,7 +212,7 @@ from opentelemetry.sdk.resources import SERVICE_NAME, Resource
 from opentelemetry.propagate import set_global_textmap, inject
 from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 
-def init_tracing():
+def init_tracing(probability: float = 1.0):
   sampler = TraceIdRatioBased(probability)
   resource = Resource(attributes={
       SERVICE_NAME: "my-locust-service"
@@ -229,9 +229,9 @@ When using a gRPC client, simply instantiate a span and inject the headers, send
 
 ```python
 from opentelemetry import trace
-from opentelemetry.sdk.trace.sampling import TraceIdRatioBased
-from opentelemetry.propagate import set_global_textmap, inject
-from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
+from opentelemetry.propagate import inject
+
+tracer = trace.get_tracer("my-service")
 
 def call_with_trace(stub, method, request):
   with tracer.start_as_current_span("operationIdentifier") as span:
@@ -239,7 +239,7 @@ def call_with_trace(stub, method, request):
     inject(headers)
     metadata = list(headers.items())
     response = stub.GetActor(
-        ateapi_pb2.GetActorRequest(actor_key=self.actor_key),
+        ateapi_pb2.GetActorRequest(actor_key="my-actor"),
         metadata=metadata
     )
 ```
@@ -250,9 +250,9 @@ For HTTP clients, instantiate a span and inject the headers into the HTTP reques
 
 ```python
 from opentelemetry import trace
-from opentelemetry.sdk.trace.sampling import TraceIdRatioBased
-from opentelemetry.propagate import set_global_textmap, inject
-from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
+from opentelemetry.propagate import inject
+
+tracer = trace.get_tracer("my-service")
 
 def call_with_trace(stub, method, request):
   with tracer.start_as_current_span("operationIdentifier") as span:
