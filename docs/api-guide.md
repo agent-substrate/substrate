@@ -121,6 +121,7 @@ metadata:
 spec:
   # No sandbox/runsc config here — the binaries come from the WorkerPool's
   # SandboxConfig (see section 3).
+  # GKE clusters: use gcr.io/gke-release/pause. Other clusters: registry.k8s.io/pause:3.9
   pauseImage: "gcr.io/gke-release/pause@sha256:bcbd57ba5653580ec647b16d8163cdd1112df3609129b01f912a8032e48265da"
   containers:
   - name: agent

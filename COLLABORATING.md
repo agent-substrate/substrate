@@ -90,7 +90,7 @@ community, and it helps prevent silos from forming within the community.
 
 We want to move quickly, but we also want to be respectful of each other's
 time.  For the sake of consistency, this project's "working hours" are Monday
-to Friday, 8am to 8pm, US Pacific Time (GMT-7). Please avoid merging PRs late
+to Friday, 8am to 8pm, US Pacific Time (PT). Please avoid merging PRs late
 at night or on weekends, unless it is an urgent fix.  This allows for people to
 have a better work-life balance and prevents burnout.  If you do need to merge
 something outside of normal working hours, please try to give a heads up to the
