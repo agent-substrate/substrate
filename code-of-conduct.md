@@ -90,6 +90,6 @@ harassment or threats to anyone's safety, we may take action without notice.
 
 ## Attribution
 
-This Code of Conduct is adapted from the Contributor Covenant, version 1.4,
+This Code of Conduct is adapted from the Contributor Covenant, version 2.1,
 available at
-https://www.contributor-covenant.org/version/1/4/code-of-conduct/
+https://www.contributor-covenant.org/version/2/1/code_of_conduct/
