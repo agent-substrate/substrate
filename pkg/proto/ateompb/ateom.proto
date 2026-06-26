@@ -52,14 +52,14 @@ message RunWorkloadRequest {
   string actor_template_name      = 2;
   string actor_id                 = 3;
 
-  string runsc_path = 4;
+  reserved 4; // was runsc_path; backends now read runtime_asset_paths instead.
 
   WorkloadSpec spec = 5;
 
-  // runtime_asset_paths maps a runtime asset name (e.g. "cloud-hypervisor",
-  // "virtiofsd", "kata-kernel", "kata-image", "kata-config")
-  // to the local on-disk path atelet fetched it to (content-addressed, like
-  // runsc_path). Empty for the gVisor runtime, which uses runsc_path.
+  // runtime_asset_paths maps a runtime asset name to the local on-disk path
+  // atelet fetched it to (content-addressed). Each backend reads the names it
+  // needs: gVisor reads "runsc"; a micro-VM backend reads "cloud-hypervisor",
+  // "kata-kernel", "kata-image", "kata-config"; a custom ateom-* reads its own.
   map<string, string> runtime_asset_paths = 7;
 }
 
@@ -80,7 +80,7 @@ message CheckpointWorkloadRequest {
   string actor_template_name      = 2;
   string actor_id                 = 3;
 
-  string runsc_path = 4;
+  reserved 4; // was runsc_path; backends now read runtime_asset_paths instead.
 
   WorkloadSpec spec = 5;
 
@@ -94,8 +94,8 @@ message CheckpointWorkloadRequest {
   // For example: "gs://bucket/actors/1234/snapshots/5678/"
   string snapshot_uri_prefix = 6;
 
-  // runtime_asset_paths maps a runtime asset name to the local on-disk path
-  // atelet fetched it to (see RunWorkloadRequest). Empty for gVisor.
+  // runtime_asset_paths maps a runtime asset name to its local on-disk path
+  // (see RunWorkloadRequest). gVisor reads "runsc".
   map<string, string> runtime_asset_paths = 7;
 }
 
@@ -111,15 +111,15 @@ message RestoreWorkloadRequest {
   string actor_template_name      = 2;
   string actor_id                 = 3;
 
-  string runsc_path = 4;
+  reserved 4; // was runsc_path; backends now read runtime_asset_paths instead.
 
   WorkloadSpec spec = 5;
 
   // The object storage URI prefix of the snapshot to restore.
   string snapshot_uri_prefix = 6;
 
-  // runtime_asset_paths maps a runtime asset name to the local on-disk path
-  // atelet fetched it to (see RunWorkloadRequest). Empty for gVisor.
+  // runtime_asset_paths maps a runtime asset name to its local on-disk path
+  // (see RunWorkloadRequest). gVisor reads "runsc".
   map<string, string> runtime_asset_paths = 7;
 }
 

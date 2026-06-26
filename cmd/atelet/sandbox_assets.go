@@ -107,10 +107,6 @@ func (s *AteomHerder) ensureSandboxAssets(ctx context.Context, rec *sandboxAsset
 	return paths, nil
 }
 
-// runscPathFor returns the local path of the gVisor "runsc" asset from a fetched
-// asset-path map, or "" if the runtime has none (e.g. micro-VM).
-func runscPathFor(paths map[string]string) string { return paths["runsc"] }
-
 // fetchAsset downloads one content-addressed asset (verifying its sha256) into
 // the shared static-files cache and returns its local path. On a cache hit it
 // returns immediately.

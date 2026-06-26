@@ -40,12 +40,11 @@ type RunWorkloadRequest struct {
 	ActorTemplateNamespace string                 `protobuf:"bytes,1,opt,name=actor_template_namespace,json=actorTemplateNamespace,proto3" json:"actor_template_namespace,omitempty"`
 	ActorTemplateName      string                 `protobuf:"bytes,2,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
 	ActorId                string                 `protobuf:"bytes,3,opt,name=actor_id,json=actorId,proto3" json:"actor_id,omitempty"`
-	RunscPath              string                 `protobuf:"bytes,4,opt,name=runsc_path,json=runscPath,proto3" json:"runsc_path,omitempty"`
 	Spec                   *WorkloadSpec          `protobuf:"bytes,5,opt,name=spec,proto3" json:"spec,omitempty"`
-	// runtime_asset_paths maps a runtime asset name (e.g. "cloud-hypervisor",
-	// "virtiofsd", "kata-kernel", "kata-image", "kata-config")
-	// to the local on-disk path atelet fetched it to (content-addressed, like
-	// runsc_path). Empty for the gVisor runtime, which uses runsc_path.
+	// runtime_asset_paths maps a runtime asset name to the local on-disk path
+	// atelet fetched it to (content-addressed). Each backend reads the names it
+	// needs: gVisor reads "runsc"; a micro-VM backend reads "cloud-hypervisor",
+	// "kata-kernel", "kata-image", "kata-config"; a custom ateom-* reads its own.
 	RuntimeAssetPaths map[string]string `protobuf:"bytes,7,rep,name=runtime_asset_paths,json=runtimeAssetPaths,proto3" json:"runtime_asset_paths,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
@@ -98,13 +97,6 @@ func (x *RunWorkloadRequest) GetActorTemplateName() string {
 func (x *RunWorkloadRequest) GetActorId() string {
 	if x != nil {
 		return x.ActorId
-	}
-	return ""
-}
-
-func (x *RunWorkloadRequest) GetRunscPath() string {
-	if x != nil {
-		return x.RunscPath
 	}
 	return ""
 }
@@ -253,7 +245,6 @@ type CheckpointWorkloadRequest struct {
 	ActorTemplateNamespace string                 `protobuf:"bytes,1,opt,name=actor_template_namespace,json=actorTemplateNamespace,proto3" json:"actor_template_namespace,omitempty"`
 	ActorTemplateName      string                 `protobuf:"bytes,2,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
 	ActorId                string                 `protobuf:"bytes,3,opt,name=actor_id,json=actorId,proto3" json:"actor_id,omitempty"`
-	RunscPath              string                 `protobuf:"bytes,4,opt,name=runsc_path,json=runscPath,proto3" json:"runsc_path,omitempty"`
 	Spec                   *WorkloadSpec          `protobuf:"bytes,5,opt,name=spec,proto3" json:"spec,omitempty"`
 	// An object storage URI prefix below which the checkpoint data will be
 	// stored.
@@ -264,8 +255,8 @@ type CheckpointWorkloadRequest struct {
 	//
 	// For example: "gs://bucket/actors/1234/snapshots/5678/"
 	SnapshotUriPrefix string `protobuf:"bytes,6,opt,name=snapshot_uri_prefix,json=snapshotUriPrefix,proto3" json:"snapshot_uri_prefix,omitempty"`
-	// runtime_asset_paths maps a runtime asset name to the local on-disk path
-	// atelet fetched it to (see RunWorkloadRequest). Empty for gVisor.
+	// runtime_asset_paths maps a runtime asset name to its local on-disk path
+	// (see RunWorkloadRequest). gVisor reads "runsc".
 	RuntimeAssetPaths map[string]string `protobuf:"bytes,7,rep,name=runtime_asset_paths,json=runtimeAssetPaths,proto3" json:"runtime_asset_paths,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
@@ -318,13 +309,6 @@ func (x *CheckpointWorkloadRequest) GetActorTemplateName() string {
 func (x *CheckpointWorkloadRequest) GetActorId() string {
 	if x != nil {
 		return x.ActorId
-	}
-	return ""
-}
-
-func (x *CheckpointWorkloadRequest) GetRunscPath() string {
-	if x != nil {
-		return x.RunscPath
 	}
 	return ""
 }
@@ -402,12 +386,11 @@ type RestoreWorkloadRequest struct {
 	ActorTemplateNamespace string                 `protobuf:"bytes,1,opt,name=actor_template_namespace,json=actorTemplateNamespace,proto3" json:"actor_template_namespace,omitempty"`
 	ActorTemplateName      string                 `protobuf:"bytes,2,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
 	ActorId                string                 `protobuf:"bytes,3,opt,name=actor_id,json=actorId,proto3" json:"actor_id,omitempty"`
-	RunscPath              string                 `protobuf:"bytes,4,opt,name=runsc_path,json=runscPath,proto3" json:"runsc_path,omitempty"`
 	Spec                   *WorkloadSpec          `protobuf:"bytes,5,opt,name=spec,proto3" json:"spec,omitempty"`
 	// The object storage URI prefix of the snapshot to restore.
 	SnapshotUriPrefix string `protobuf:"bytes,6,opt,name=snapshot_uri_prefix,json=snapshotUriPrefix,proto3" json:"snapshot_uri_prefix,omitempty"`
-	// runtime_asset_paths maps a runtime asset name to the local on-disk path
-	// atelet fetched it to (see RunWorkloadRequest). Empty for gVisor.
+	// runtime_asset_paths maps a runtime asset name to its local on-disk path
+	// (see RunWorkloadRequest). gVisor reads "runsc".
 	RuntimeAssetPaths map[string]string `protobuf:"bytes,7,rep,name=runtime_asset_paths,json=runtimeAssetPaths,proto3" json:"runtime_asset_paths,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
@@ -460,13 +443,6 @@ func (x *RestoreWorkloadRequest) GetActorTemplateName() string {
 func (x *RestoreWorkloadRequest) GetActorId() string {
 	if x != nil {
 		return x.ActorId
-	}
-	return ""
-}
-
-func (x *RestoreWorkloadRequest) GetRunscPath() string {
-	if x != nil {
-		return x.RunscPath
 	}
 	return ""
 }
@@ -532,51 +508,45 @@ var File_ateom_proto protoreflect.FileDescriptor
 
 const file_ateom_proto_rawDesc = "" +
 	"\n" +
-	"\vateom.proto\x12\x05ateom\"\x89\x03\n" +
+	"\vateom.proto\x12\x05ateom\"\xf0\x02\n" +
 	"\x12RunWorkloadRequest\x128\n" +
 	"\x18actor_template_namespace\x18\x01 \x01(\tR\x16actorTemplateNamespace\x12.\n" +
 	"\x13actor_template_name\x18\x02 \x01(\tR\x11actorTemplateName\x12\x19\n" +
-	"\bactor_id\x18\x03 \x01(\tR\aactorId\x12\x1d\n" +
-	"\n" +
-	"runsc_path\x18\x04 \x01(\tR\trunscPath\x12'\n" +
+	"\bactor_id\x18\x03 \x01(\tR\aactorId\x12'\n" +
 	"\x04spec\x18\x05 \x01(\v2\x13.ateom.WorkloadSpecR\x04spec\x12`\n" +
 	"\x13runtime_asset_paths\x18\a \x03(\v20.ateom.RunWorkloadRequest.RuntimeAssetPathsEntryR\x11runtimeAssetPaths\x1aD\n" +
 	"\x16RuntimeAssetPathsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"@\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01J\x04\b\x04\x10\x05\"@\n" +
 	"\fWorkloadSpec\x120\n" +
 	"\n" +
 	"containers\x18\x01 \x03(\v2\x10.ateom.ContainerR\n" +
 	"containers\"\x1f\n" +
 	"\tContainer\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\"\x15\n" +
-	"\x13RunWorkloadResponse\"\xc7\x03\n" +
+	"\x13RunWorkloadResponse\"\xae\x03\n" +
 	"\x19CheckpointWorkloadRequest\x128\n" +
 	"\x18actor_template_namespace\x18\x01 \x01(\tR\x16actorTemplateNamespace\x12.\n" +
 	"\x13actor_template_name\x18\x02 \x01(\tR\x11actorTemplateName\x12\x19\n" +
-	"\bactor_id\x18\x03 \x01(\tR\aactorId\x12\x1d\n" +
-	"\n" +
-	"runsc_path\x18\x04 \x01(\tR\trunscPath\x12'\n" +
+	"\bactor_id\x18\x03 \x01(\tR\aactorId\x12'\n" +
 	"\x04spec\x18\x05 \x01(\v2\x13.ateom.WorkloadSpecR\x04spec\x12.\n" +
 	"\x13snapshot_uri_prefix\x18\x06 \x01(\tR\x11snapshotUriPrefix\x12g\n" +
 	"\x13runtime_asset_paths\x18\a \x03(\v27.ateom.CheckpointWorkloadRequest.RuntimeAssetPathsEntryR\x11runtimeAssetPaths\x1aD\n" +
 	"\x16RuntimeAssetPathsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"C\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01J\x04\b\x04\x10\x05\"C\n" +
 	"\x1aCheckpointWorkloadResponse\x12%\n" +
-	"\x0esnapshot_files\x18\x01 \x03(\tR\rsnapshotFiles\"\xc1\x03\n" +
+	"\x0esnapshot_files\x18\x01 \x03(\tR\rsnapshotFiles\"\xa8\x03\n" +
 	"\x16RestoreWorkloadRequest\x128\n" +
 	"\x18actor_template_namespace\x18\x01 \x01(\tR\x16actorTemplateNamespace\x12.\n" +
 	"\x13actor_template_name\x18\x02 \x01(\tR\x11actorTemplateName\x12\x19\n" +
-	"\bactor_id\x18\x03 \x01(\tR\aactorId\x12\x1d\n" +
-	"\n" +
-	"runsc_path\x18\x04 \x01(\tR\trunscPath\x12'\n" +
+	"\bactor_id\x18\x03 \x01(\tR\aactorId\x12'\n" +
 	"\x04spec\x18\x05 \x01(\v2\x13.ateom.WorkloadSpecR\x04spec\x12.\n" +
 	"\x13snapshot_uri_prefix\x18\x06 \x01(\tR\x11snapshotUriPrefix\x12d\n" +
 	"\x13runtime_asset_paths\x18\a \x03(\v24.ateom.RestoreWorkloadRequest.RuntimeAssetPathsEntryR\x11runtimeAssetPaths\x1aD\n" +
 	"\x16RuntimeAssetPathsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x19\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01J\x04\b\x04\x10\x05\"\x19\n" +
 	"\x17RestoreWorkloadResponse2\x80\x02\n" +
 	"\x05Ateom\x12F\n" +
 	"\vRunWorkload\x12\x19.ateom.RunWorkloadRequest\x1a\x1a.ateom.RunWorkloadResponse\"\x00\x12[\n" +
