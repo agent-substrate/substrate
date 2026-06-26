@@ -90,6 +90,10 @@ spec:
         image: ko://github.com/agent-substrate/substrate/cmd/atecontroller
         args:
         - --ateapi-ca-file=/run/servicedns-ca/trust-bundle.pem
+        envFrom:
+        - configMapRef:
+            name: ate-egress-capture
+            optional: true
         ports:
         - name: metrics
           containerPort: 8080

@@ -26,6 +26,7 @@ import (
 	metav1ac "k8s.io/client-go/applyconfigurations/meta/v1"
 
 	"github.com/agent-substrate/substrate/internal/ateompath"
+	"github.com/agent-substrate/substrate/internal/egresscapture"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 )
 
@@ -258,6 +259,43 @@ func TestMicroVMPodShape(t *testing.T) {
 					hasVol, hasMount, hasSelector, hasTol, tt.wantMicroVM)
 			}
 		})
+	}
+}
+
+func TestWorkerPoolEgressCaptureEnvPropagation(t *testing.T) {
+	t.Setenv(egresscapture.EnvCaptureEnabled, "1")
+	t.Setenv(egresscapture.EnvPEPAddress, "ate-egress.agentgateway-system.svc.cluster.local:15008")
+	t.Setenv(egresscapture.EnvTunnelProtocol, egresscapture.TunnelProtocolConnectTLS)
+	t.Setenv(egresscapture.EnvConnectTLSServerName, "ate-egress.agentgateway-system.svc.cluster.local")
+	t.Setenv(egresscapture.EnvConnectTLSCAFile, "/run/egress-ca/ca.crt")
+	t.Setenv(egresscapture.EnvConnectTLSInsecureSkipVerify, "true")
+
+	wp := testWorkerPoolApplyConfig(nil)
+	deployment := buildDeploymentApplyConfig(wp)
+	containers := deployment.Spec.Template.Spec.Containers
+	if len(containers) != 1 {
+		t.Fatalf("containers length = %d, want 1", len(containers))
+	}
+
+	got := map[string]string{}
+	for _, env := range containers[0].Env {
+		if env.Name != nil && env.Value != nil {
+			got[*env.Name] = *env.Value
+		}
+	}
+
+	want := map[string]string{
+		egresscapture.EnvCaptureEnabled:               "true",
+		egresscapture.EnvPEPAddress:                   "ate-egress.agentgateway-system.svc.cluster.local:15008",
+		egresscapture.EnvTunnelProtocol:               egresscapture.TunnelProtocolConnectTLS,
+		egresscapture.EnvConnectTLSServerName:         "ate-egress.agentgateway-system.svc.cluster.local",
+		egresscapture.EnvConnectTLSCAFile:             "/run/egress-ca/ca.crt",
+		egresscapture.EnvConnectTLSInsecureSkipVerify: "true",
+	}
+	for name, value := range want {
+		if got[name] != value {
+			t.Errorf("env %s = %q, want %q", name, got[name], value)
+		}
 	}
 }
 
