@@ -585,6 +585,59 @@ func (x *Atespace) GetName() string {
 	return ""
 }
 
+// ActorRef identifies an actor: a name is only unique within its atespace.
+type ActorRef struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Atespace      string                 `protobuf:"bytes,1,opt,name=atespace,proto3" json:"atespace,omitempty"`
+	Name          string                 `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ActorRef) Reset() {
+	*x = ActorRef{}
+	mi := &file_ateapi_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ActorRef) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ActorRef) ProtoMessage() {}
+
+func (x *ActorRef) ProtoReflect() protoreflect.Message {
+	mi := &file_ateapi_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ActorRef.ProtoReflect.Descriptor instead.
+func (*ActorRef) Descriptor() ([]byte, []int) {
+	return file_ateapi_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *ActorRef) GetAtespace() string {
+	if x != nil {
+		return x.Atespace
+	}
+	return ""
+}
+
+func (x *ActorRef) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
 type CreateAtespaceRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
@@ -594,7 +647,7 @@ type CreateAtespaceRequest struct {
 
 func (x *CreateAtespaceRequest) Reset() {
 	*x = CreateAtespaceRequest{}
-	mi := &file_ateapi_proto_msgTypes[6]
+	mi := &file_ateapi_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -606,7 +659,7 @@ func (x *CreateAtespaceRequest) String() string {
 func (*CreateAtespaceRequest) ProtoMessage() {}
 
 func (x *CreateAtespaceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ateapi_proto_msgTypes[6]
+	mi := &file_ateapi_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -619,7 +672,7 @@ func (x *CreateAtespaceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateAtespaceRequest.ProtoReflect.Descriptor instead.
 func (*CreateAtespaceRequest) Descriptor() ([]byte, []int) {
-	return file_ateapi_proto_rawDescGZIP(), []int{6}
+	return file_ateapi_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *CreateAtespaceRequest) GetName() string {
@@ -638,7 +691,7 @@ type CreateAtespaceResponse struct {
 
 func (x *CreateAtespaceResponse) Reset() {
 	*x = CreateAtespaceResponse{}
-	mi := &file_ateapi_proto_msgTypes[7]
+	mi := &file_ateapi_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -650,7 +703,7 @@ func (x *CreateAtespaceResponse) String() string {
 func (*CreateAtespaceResponse) ProtoMessage() {}
 
 func (x *CreateAtespaceResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ateapi_proto_msgTypes[7]
+	mi := &file_ateapi_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -663,7 +716,7 @@ func (x *CreateAtespaceResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateAtespaceResponse.ProtoReflect.Descriptor instead.
 func (*CreateAtespaceResponse) Descriptor() ([]byte, []int) {
-	return file_ateapi_proto_rawDescGZIP(), []int{7}
+	return file_ateapi_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *CreateAtespaceResponse) GetAtespace() *Atespace {
@@ -682,7 +735,7 @@ type GetAtespaceRequest struct {
 
 func (x *GetAtespaceRequest) Reset() {
 	*x = GetAtespaceRequest{}
-	mi := &file_ateapi_proto_msgTypes[8]
+	mi := &file_ateapi_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -694,7 +747,7 @@ func (x *GetAtespaceRequest) String() string {
 func (*GetAtespaceRequest) ProtoMessage() {}
 
 func (x *GetAtespaceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ateapi_proto_msgTypes[8]
+	mi := &file_ateapi_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -707,7 +760,7 @@ func (x *GetAtespaceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetAtespaceRequest.ProtoReflect.Descriptor instead.
 func (*GetAtespaceRequest) Descriptor() ([]byte, []int) {
-	return file_ateapi_proto_rawDescGZIP(), []int{8}
+	return file_ateapi_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *GetAtespaceRequest) GetName() string {
@@ -726,7 +779,7 @@ type GetAtespaceResponse struct {
 
 func (x *GetAtespaceResponse) Reset() {
 	*x = GetAtespaceResponse{}
-	mi := &file_ateapi_proto_msgTypes[9]
+	mi := &file_ateapi_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -738,7 +791,7 @@ func (x *GetAtespaceResponse) String() string {
 func (*GetAtespaceResponse) ProtoMessage() {}
 
 func (x *GetAtespaceResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ateapi_proto_msgTypes[9]
+	mi := &file_ateapi_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -751,7 +804,7 @@ func (x *GetAtespaceResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetAtespaceResponse.ProtoReflect.Descriptor instead.
 func (*GetAtespaceResponse) Descriptor() ([]byte, []int) {
-	return file_ateapi_proto_rawDescGZIP(), []int{9}
+	return file_ateapi_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *GetAtespaceResponse) GetAtespace() *Atespace {
@@ -769,7 +822,7 @@ type ListAtespacesRequest struct {
 
 func (x *ListAtespacesRequest) Reset() {
 	*x = ListAtespacesRequest{}
-	mi := &file_ateapi_proto_msgTypes[10]
+	mi := &file_ateapi_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -781,7 +834,7 @@ func (x *ListAtespacesRequest) String() string {
 func (*ListAtespacesRequest) ProtoMessage() {}
 
 func (x *ListAtespacesRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ateapi_proto_msgTypes[10]
+	mi := &file_ateapi_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -794,7 +847,7 @@ func (x *ListAtespacesRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListAtespacesRequest.ProtoReflect.Descriptor instead.
 func (*ListAtespacesRequest) Descriptor() ([]byte, []int) {
-	return file_ateapi_proto_rawDescGZIP(), []int{10}
+	return file_ateapi_proto_rawDescGZIP(), []int{11}
 }
 
 type ListAtespacesResponse struct {
@@ -806,7 +859,7 @@ type ListAtespacesResponse struct {
 
 func (x *ListAtespacesResponse) Reset() {
 	*x = ListAtespacesResponse{}
-	mi := &file_ateapi_proto_msgTypes[11]
+	mi := &file_ateapi_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -818,7 +871,7 @@ func (x *ListAtespacesResponse) String() string {
 func (*ListAtespacesResponse) ProtoMessage() {}
 
 func (x *ListAtespacesResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ateapi_proto_msgTypes[11]
+	mi := &file_ateapi_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -831,7 +884,7 @@ func (x *ListAtespacesResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListAtespacesResponse.ProtoReflect.Descriptor instead.
 func (*ListAtespacesResponse) Descriptor() ([]byte, []int) {
-	return file_ateapi_proto_rawDescGZIP(), []int{11}
+	return file_ateapi_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *ListAtespacesResponse) GetAtespaces() []*Atespace {
@@ -850,7 +903,7 @@ type DeleteAtespaceRequest struct {
 
 func (x *DeleteAtespaceRequest) Reset() {
 	*x = DeleteAtespaceRequest{}
-	mi := &file_ateapi_proto_msgTypes[12]
+	mi := &file_ateapi_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -862,7 +915,7 @@ func (x *DeleteAtespaceRequest) String() string {
 func (*DeleteAtespaceRequest) ProtoMessage() {}
 
 func (x *DeleteAtespaceRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ateapi_proto_msgTypes[12]
+	mi := &file_ateapi_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -875,7 +928,7 @@ func (x *DeleteAtespaceRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteAtespaceRequest.ProtoReflect.Descriptor instead.
 func (*DeleteAtespaceRequest) Descriptor() ([]byte, []int) {
-	return file_ateapi_proto_rawDescGZIP(), []int{12}
+	return file_ateapi_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *DeleteAtespaceRequest) GetName() string {
@@ -893,7 +946,7 @@ type DeleteAtespaceResponse struct {
 
 func (x *DeleteAtespaceResponse) Reset() {
 	*x = DeleteAtespaceResponse{}
-	mi := &file_ateapi_proto_msgTypes[13]
+	mi := &file_ateapi_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -905,7 +958,7 @@ func (x *DeleteAtespaceResponse) String() string {
 func (*DeleteAtespaceResponse) ProtoMessage() {}
 
 func (x *DeleteAtespaceResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ateapi_proto_msgTypes[13]
+	mi := &file_ateapi_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -918,20 +971,19 @@ func (x *DeleteAtespaceResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteAtespaceResponse.ProtoReflect.Descriptor instead.
 func (*DeleteAtespaceResponse) Descriptor() ([]byte, []int) {
-	return file_ateapi_proto_rawDescGZIP(), []int{13}
+	return file_ateapi_proto_rawDescGZIP(), []int{14}
 }
 
 type GetActorRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	ActorId       string                 `protobuf:"bytes,1,opt,name=actor_id,json=actorId,proto3" json:"actor_id,omitempty"`
-	Atespace      string                 `protobuf:"bytes,2,opt,name=atespace,proto3" json:"atespace,omitempty"`
+	ActorRef      *ActorRef              `protobuf:"bytes,1,opt,name=actor_ref,json=actorRef,proto3" json:"actor_ref,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *GetActorRequest) Reset() {
 	*x = GetActorRequest{}
-	mi := &file_ateapi_proto_msgTypes[14]
+	mi := &file_ateapi_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -943,7 +995,7 @@ func (x *GetActorRequest) String() string {
 func (*GetActorRequest) ProtoMessage() {}
 
 func (x *GetActorRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ateapi_proto_msgTypes[14]
+	mi := &file_ateapi_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -956,21 +1008,14 @@ func (x *GetActorRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetActorRequest.ProtoReflect.Descriptor instead.
 func (*GetActorRequest) Descriptor() ([]byte, []int) {
-	return file_ateapi_proto_rawDescGZIP(), []int{14}
+	return file_ateapi_proto_rawDescGZIP(), []int{15}
 }
 
-func (x *GetActorRequest) GetActorId() string {
+func (x *GetActorRequest) GetActorRef() *ActorRef {
 	if x != nil {
-		return x.ActorId
+		return x.ActorRef
 	}
-	return ""
-}
-
-func (x *GetActorRequest) GetAtespace() string {
-	if x != nil {
-		return x.Atespace
-	}
-	return ""
+	return nil
 }
 
 type GetActorResponse struct {
@@ -982,7 +1027,7 @@ type GetActorResponse struct {
 
 func (x *GetActorResponse) Reset() {
 	*x = GetActorResponse{}
-	mi := &file_ateapi_proto_msgTypes[15]
+	mi := &file_ateapi_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -994,7 +1039,7 @@ func (x *GetActorResponse) String() string {
 func (*GetActorResponse) ProtoMessage() {}
 
 func (x *GetActorResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ateapi_proto_msgTypes[15]
+	mi := &file_ateapi_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1007,7 +1052,7 @@ func (x *GetActorResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetActorResponse.ProtoReflect.Descriptor instead.
 func (*GetActorResponse) Descriptor() ([]byte, []int) {
-	return file_ateapi_proto_rawDescGZIP(), []int{15}
+	return file_ateapi_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *GetActorResponse) GetActor() *Actor {
@@ -1020,8 +1065,8 @@ func (x *GetActorResponse) GetActor() *Actor {
 // Request to create a new Actor.
 type CreateActorRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// The custom identifier for the new Actor. Must be a valid DNS-1123 label.
-	ActorId string `protobuf:"bytes,1,opt,name=actor_id,json=actorId,proto3" json:"actor_id,omitempty"`
+	// The new actor's atespace and actor_id (actor_id must be a valid DNS-1123 label).
+	ActorRef *ActorRef `protobuf:"bytes,1,opt,name=actor_ref,json=actorRef,proto3" json:"actor_ref,omitempty"`
 	// The namespace of the ActorTemplate to derive from.
 	ActorTemplateNamespace string `protobuf:"bytes,2,opt,name=actor_template_namespace,json=actorTemplateNamespace,proto3" json:"actor_template_namespace,omitempty"`
 	// The name of the ActorTemplate to derive from.
@@ -1029,15 +1074,13 @@ type CreateActorRequest struct {
 	// worker_selector sets the actor's placement constraint at creation time.
 	// If empty, the actor matches any pool admitted by the template's selector.
 	WorkerSelector *Selector `protobuf:"bytes,4,opt,name=worker_selector,json=workerSelector,proto3" json:"worker_selector,omitempty"`
-	// The atespace to create the actor into.
-	Atespace      string `protobuf:"bytes,5,opt,name=atespace,proto3" json:"atespace,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *CreateActorRequest) Reset() {
 	*x = CreateActorRequest{}
-	mi := &file_ateapi_proto_msgTypes[16]
+	mi := &file_ateapi_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1049,7 +1092,7 @@ func (x *CreateActorRequest) String() string {
 func (*CreateActorRequest) ProtoMessage() {}
 
 func (x *CreateActorRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ateapi_proto_msgTypes[16]
+	mi := &file_ateapi_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1062,14 +1105,14 @@ func (x *CreateActorRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateActorRequest.ProtoReflect.Descriptor instead.
 func (*CreateActorRequest) Descriptor() ([]byte, []int) {
-	return file_ateapi_proto_rawDescGZIP(), []int{16}
+	return file_ateapi_proto_rawDescGZIP(), []int{17}
 }
 
-func (x *CreateActorRequest) GetActorId() string {
+func (x *CreateActorRequest) GetActorRef() *ActorRef {
 	if x != nil {
-		return x.ActorId
+		return x.ActorRef
 	}
-	return ""
+	return nil
 }
 
 func (x *CreateActorRequest) GetActorTemplateNamespace() string {
@@ -1093,13 +1136,6 @@ func (x *CreateActorRequest) GetWorkerSelector() *Selector {
 	return nil
 }
 
-func (x *CreateActorRequest) GetAtespace() string {
-	if x != nil {
-		return x.Atespace
-	}
-	return ""
-}
-
 type CreateActorResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Actor         *Actor                 `protobuf:"bytes,1,opt,name=actor,proto3" json:"actor,omitempty"`
@@ -1109,7 +1145,7 @@ type CreateActorResponse struct {
 
 func (x *CreateActorResponse) Reset() {
 	*x = CreateActorResponse{}
-	mi := &file_ateapi_proto_msgTypes[17]
+	mi := &file_ateapi_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1121,7 +1157,7 @@ func (x *CreateActorResponse) String() string {
 func (*CreateActorResponse) ProtoMessage() {}
 
 func (x *CreateActorResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ateapi_proto_msgTypes[17]
+	mi := &file_ateapi_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1134,7 +1170,7 @@ func (x *CreateActorResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CreateActorResponse.ProtoReflect.Descriptor instead.
 func (*CreateActorResponse) Descriptor() ([]byte, []int) {
-	return file_ateapi_proto_rawDescGZIP(), []int{17}
+	return file_ateapi_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *CreateActorResponse) GetActor() *Actor {
@@ -1148,20 +1184,18 @@ func (x *CreateActorResponse) GetActor() *Actor {
 // May be called regardless of the actor's current status.
 // Changes take effect on the next ResumeActor call.
 type UpdateActorRequest struct {
-	state   protoimpl.MessageState `protogen:"open.v1"`
-	ActorId string                 `protobuf:"bytes,1,opt,name=actor_id,json=actorId,proto3" json:"actor_id,omitempty"`
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	ActorRef *ActorRef              `protobuf:"bytes,1,opt,name=actor_ref,json=actorRef,proto3" json:"actor_ref,omitempty"`
 	// worker_selector replaces the actor's current placement constraint.
 	// Takes effect on the next ResumeActor call.
 	WorkerSelector *Selector `protobuf:"bytes,2,opt,name=worker_selector,json=workerSelector,proto3" json:"worker_selector,omitempty"`
-	// The atespace the actor lives in.
-	Atespace      string `protobuf:"bytes,3,opt,name=atespace,proto3" json:"atespace,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *UpdateActorRequest) Reset() {
 	*x = UpdateActorRequest{}
-	mi := &file_ateapi_proto_msgTypes[18]
+	mi := &file_ateapi_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1173,7 +1207,7 @@ func (x *UpdateActorRequest) String() string {
 func (*UpdateActorRequest) ProtoMessage() {}
 
 func (x *UpdateActorRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ateapi_proto_msgTypes[18]
+	mi := &file_ateapi_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1186,14 +1220,14 @@ func (x *UpdateActorRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateActorRequest.ProtoReflect.Descriptor instead.
 func (*UpdateActorRequest) Descriptor() ([]byte, []int) {
-	return file_ateapi_proto_rawDescGZIP(), []int{18}
+	return file_ateapi_proto_rawDescGZIP(), []int{19}
 }
 
-func (x *UpdateActorRequest) GetActorId() string {
+func (x *UpdateActorRequest) GetActorRef() *ActorRef {
 	if x != nil {
-		return x.ActorId
+		return x.ActorRef
 	}
-	return ""
+	return nil
 }
 
 func (x *UpdateActorRequest) GetWorkerSelector() *Selector {
@@ -1201,13 +1235,6 @@ func (x *UpdateActorRequest) GetWorkerSelector() *Selector {
 		return x.WorkerSelector
 	}
 	return nil
-}
-
-func (x *UpdateActorRequest) GetAtespace() string {
-	if x != nil {
-		return x.Atespace
-	}
-	return ""
 }
 
 type UpdateActorResponse struct {
@@ -1219,7 +1246,7 @@ type UpdateActorResponse struct {
 
 func (x *UpdateActorResponse) Reset() {
 	*x = UpdateActorResponse{}
-	mi := &file_ateapi_proto_msgTypes[19]
+	mi := &file_ateapi_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1231,7 +1258,7 @@ func (x *UpdateActorResponse) String() string {
 func (*UpdateActorResponse) ProtoMessage() {}
 
 func (x *UpdateActorResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ateapi_proto_msgTypes[19]
+	mi := &file_ateapi_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1244,7 +1271,7 @@ func (x *UpdateActorResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use UpdateActorResponse.ProtoReflect.Descriptor instead.
 func (*UpdateActorResponse) Descriptor() ([]byte, []int) {
-	return file_ateapi_proto_rawDescGZIP(), []int{19}
+	return file_ateapi_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *UpdateActorResponse) GetActor() *Actor {
@@ -1256,15 +1283,14 @@ func (x *UpdateActorResponse) GetActor() *Actor {
 
 type SuspendActorRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	ActorId       string                 `protobuf:"bytes,1,opt,name=actor_id,json=actorId,proto3" json:"actor_id,omitempty"`
-	Atespace      string                 `protobuf:"bytes,2,opt,name=atespace,proto3" json:"atespace,omitempty"`
+	ActorRef      *ActorRef              `protobuf:"bytes,1,opt,name=actor_ref,json=actorRef,proto3" json:"actor_ref,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *SuspendActorRequest) Reset() {
 	*x = SuspendActorRequest{}
-	mi := &file_ateapi_proto_msgTypes[20]
+	mi := &file_ateapi_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1276,7 +1302,7 @@ func (x *SuspendActorRequest) String() string {
 func (*SuspendActorRequest) ProtoMessage() {}
 
 func (x *SuspendActorRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ateapi_proto_msgTypes[20]
+	mi := &file_ateapi_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1289,21 +1315,14 @@ func (x *SuspendActorRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SuspendActorRequest.ProtoReflect.Descriptor instead.
 func (*SuspendActorRequest) Descriptor() ([]byte, []int) {
-	return file_ateapi_proto_rawDescGZIP(), []int{20}
+	return file_ateapi_proto_rawDescGZIP(), []int{21}
 }
 
-func (x *SuspendActorRequest) GetActorId() string {
+func (x *SuspendActorRequest) GetActorRef() *ActorRef {
 	if x != nil {
-		return x.ActorId
+		return x.ActorRef
 	}
-	return ""
-}
-
-func (x *SuspendActorRequest) GetAtespace() string {
-	if x != nil {
-		return x.Atespace
-	}
-	return ""
+	return nil
 }
 
 type SuspendActorResponse struct {
@@ -1315,7 +1334,7 @@ type SuspendActorResponse struct {
 
 func (x *SuspendActorResponse) Reset() {
 	*x = SuspendActorResponse{}
-	mi := &file_ateapi_proto_msgTypes[21]
+	mi := &file_ateapi_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1327,7 +1346,7 @@ func (x *SuspendActorResponse) String() string {
 func (*SuspendActorResponse) ProtoMessage() {}
 
 func (x *SuspendActorResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ateapi_proto_msgTypes[21]
+	mi := &file_ateapi_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1340,7 +1359,7 @@ func (x *SuspendActorResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SuspendActorResponse.ProtoReflect.Descriptor instead.
 func (*SuspendActorResponse) Descriptor() ([]byte, []int) {
-	return file_ateapi_proto_rawDescGZIP(), []int{21}
+	return file_ateapi_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *SuspendActorResponse) GetActor() *Actor {
@@ -1352,15 +1371,14 @@ func (x *SuspendActorResponse) GetActor() *Actor {
 
 type PauseActorRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	ActorId       string                 `protobuf:"bytes,1,opt,name=actor_id,json=actorId,proto3" json:"actor_id,omitempty"`
-	Atespace      string                 `protobuf:"bytes,2,opt,name=atespace,proto3" json:"atespace,omitempty"`
+	ActorRef      *ActorRef              `protobuf:"bytes,1,opt,name=actor_ref,json=actorRef,proto3" json:"actor_ref,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *PauseActorRequest) Reset() {
 	*x = PauseActorRequest{}
-	mi := &file_ateapi_proto_msgTypes[22]
+	mi := &file_ateapi_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1372,7 +1390,7 @@ func (x *PauseActorRequest) String() string {
 func (*PauseActorRequest) ProtoMessage() {}
 
 func (x *PauseActorRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ateapi_proto_msgTypes[22]
+	mi := &file_ateapi_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1385,21 +1403,14 @@ func (x *PauseActorRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PauseActorRequest.ProtoReflect.Descriptor instead.
 func (*PauseActorRequest) Descriptor() ([]byte, []int) {
-	return file_ateapi_proto_rawDescGZIP(), []int{22}
+	return file_ateapi_proto_rawDescGZIP(), []int{23}
 }
 
-func (x *PauseActorRequest) GetActorId() string {
+func (x *PauseActorRequest) GetActorRef() *ActorRef {
 	if x != nil {
-		return x.ActorId
+		return x.ActorRef
 	}
-	return ""
-}
-
-func (x *PauseActorRequest) GetAtespace() string {
-	if x != nil {
-		return x.Atespace
-	}
-	return ""
+	return nil
 }
 
 type PauseActorResponse struct {
@@ -1411,7 +1422,7 @@ type PauseActorResponse struct {
 
 func (x *PauseActorResponse) Reset() {
 	*x = PauseActorResponse{}
-	mi := &file_ateapi_proto_msgTypes[23]
+	mi := &file_ateapi_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1423,7 +1434,7 @@ func (x *PauseActorResponse) String() string {
 func (*PauseActorResponse) ProtoMessage() {}
 
 func (x *PauseActorResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ateapi_proto_msgTypes[23]
+	mi := &file_ateapi_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1436,7 +1447,7 @@ func (x *PauseActorResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PauseActorResponse.ProtoReflect.Descriptor instead.
 func (*PauseActorResponse) Descriptor() ([]byte, []int) {
-	return file_ateapi_proto_rawDescGZIP(), []int{23}
+	return file_ateapi_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *PauseActorResponse) GetActor() *Actor {
@@ -1447,18 +1458,17 @@ func (x *PauseActorResponse) GetActor() *Actor {
 }
 
 type ResumeActorRequest struct {
-	state   protoimpl.MessageState `protogen:"open.v1"`
-	ActorId string                 `protobuf:"bytes,1,opt,name=actor_id,json=actorId,proto3" json:"actor_id,omitempty"`
+	state    protoimpl.MessageState `protogen:"open.v1"`
+	ActorRef *ActorRef              `protobuf:"bytes,1,opt,name=actor_ref,json=actorRef,proto3" json:"actor_ref,omitempty"`
 	// If true, skip golden snapshot and boot the workload from scratch.
-	Boot          bool   `protobuf:"varint,2,opt,name=boot,proto3" json:"boot,omitempty"`
-	Atespace      string `protobuf:"bytes,3,opt,name=atespace,proto3" json:"atespace,omitempty"`
+	Boot          bool `protobuf:"varint,2,opt,name=boot,proto3" json:"boot,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ResumeActorRequest) Reset() {
 	*x = ResumeActorRequest{}
-	mi := &file_ateapi_proto_msgTypes[24]
+	mi := &file_ateapi_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1470,7 +1480,7 @@ func (x *ResumeActorRequest) String() string {
 func (*ResumeActorRequest) ProtoMessage() {}
 
 func (x *ResumeActorRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ateapi_proto_msgTypes[24]
+	mi := &file_ateapi_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1483,14 +1493,14 @@ func (x *ResumeActorRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResumeActorRequest.ProtoReflect.Descriptor instead.
 func (*ResumeActorRequest) Descriptor() ([]byte, []int) {
-	return file_ateapi_proto_rawDescGZIP(), []int{24}
+	return file_ateapi_proto_rawDescGZIP(), []int{25}
 }
 
-func (x *ResumeActorRequest) GetActorId() string {
+func (x *ResumeActorRequest) GetActorRef() *ActorRef {
 	if x != nil {
-		return x.ActorId
+		return x.ActorRef
 	}
-	return ""
+	return nil
 }
 
 func (x *ResumeActorRequest) GetBoot() bool {
@@ -1498,13 +1508,6 @@ func (x *ResumeActorRequest) GetBoot() bool {
 		return x.Boot
 	}
 	return false
-}
-
-func (x *ResumeActorRequest) GetAtespace() string {
-	if x != nil {
-		return x.Atespace
-	}
-	return ""
 }
 
 type ResumeActorResponse struct {
@@ -1516,7 +1519,7 @@ type ResumeActorResponse struct {
 
 func (x *ResumeActorResponse) Reset() {
 	*x = ResumeActorResponse{}
-	mi := &file_ateapi_proto_msgTypes[25]
+	mi := &file_ateapi_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1528,7 +1531,7 @@ func (x *ResumeActorResponse) String() string {
 func (*ResumeActorResponse) ProtoMessage() {}
 
 func (x *ResumeActorResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ateapi_proto_msgTypes[25]
+	mi := &file_ateapi_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1541,7 +1544,7 @@ func (x *ResumeActorResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResumeActorResponse.ProtoReflect.Descriptor instead.
 func (*ResumeActorResponse) Descriptor() ([]byte, []int) {
-	return file_ateapi_proto_rawDescGZIP(), []int{25}
+	return file_ateapi_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *ResumeActorResponse) GetActor() *Actor {
@@ -1553,15 +1556,14 @@ func (x *ResumeActorResponse) GetActor() *Actor {
 
 type DeleteActorRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	ActorId       string                 `protobuf:"bytes,1,opt,name=actor_id,json=actorId,proto3" json:"actor_id,omitempty"`
-	Atespace      string                 `protobuf:"bytes,2,opt,name=atespace,proto3" json:"atespace,omitempty"`
+	ActorRef      *ActorRef              `protobuf:"bytes,1,opt,name=actor_ref,json=actorRef,proto3" json:"actor_ref,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *DeleteActorRequest) Reset() {
 	*x = DeleteActorRequest{}
-	mi := &file_ateapi_proto_msgTypes[26]
+	mi := &file_ateapi_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1573,7 +1575,7 @@ func (x *DeleteActorRequest) String() string {
 func (*DeleteActorRequest) ProtoMessage() {}
 
 func (x *DeleteActorRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ateapi_proto_msgTypes[26]
+	mi := &file_ateapi_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1586,21 +1588,14 @@ func (x *DeleteActorRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteActorRequest.ProtoReflect.Descriptor instead.
 func (*DeleteActorRequest) Descriptor() ([]byte, []int) {
-	return file_ateapi_proto_rawDescGZIP(), []int{26}
+	return file_ateapi_proto_rawDescGZIP(), []int{27}
 }
 
-func (x *DeleteActorRequest) GetActorId() string {
+func (x *DeleteActorRequest) GetActorRef() *ActorRef {
 	if x != nil {
-		return x.ActorId
+		return x.ActorRef
 	}
-	return ""
-}
-
-func (x *DeleteActorRequest) GetAtespace() string {
-	if x != nil {
-		return x.Atespace
-	}
-	return ""
+	return nil
 }
 
 type DeleteActorResponse struct {
@@ -1611,7 +1606,7 @@ type DeleteActorResponse struct {
 
 func (x *DeleteActorResponse) Reset() {
 	*x = DeleteActorResponse{}
-	mi := &file_ateapi_proto_msgTypes[27]
+	mi := &file_ateapi_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1623,7 +1618,7 @@ func (x *DeleteActorResponse) String() string {
 func (*DeleteActorResponse) ProtoMessage() {}
 
 func (x *DeleteActorResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ateapi_proto_msgTypes[27]
+	mi := &file_ateapi_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1636,7 +1631,7 @@ func (x *DeleteActorResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteActorResponse.ProtoReflect.Descriptor instead.
 func (*DeleteActorResponse) Descriptor() ([]byte, []int) {
-	return file_ateapi_proto_rawDescGZIP(), []int{27}
+	return file_ateapi_proto_rawDescGZIP(), []int{28}
 }
 
 type ListWorkersRequest struct {
@@ -1647,7 +1642,7 @@ type ListWorkersRequest struct {
 
 func (x *ListWorkersRequest) Reset() {
 	*x = ListWorkersRequest{}
-	mi := &file_ateapi_proto_msgTypes[28]
+	mi := &file_ateapi_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1659,7 +1654,7 @@ func (x *ListWorkersRequest) String() string {
 func (*ListWorkersRequest) ProtoMessage() {}
 
 func (x *ListWorkersRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ateapi_proto_msgTypes[28]
+	mi := &file_ateapi_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1672,7 +1667,7 @@ func (x *ListWorkersRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListWorkersRequest.ProtoReflect.Descriptor instead.
 func (*ListWorkersRequest) Descriptor() ([]byte, []int) {
-	return file_ateapi_proto_rawDescGZIP(), []int{28}
+	return file_ateapi_proto_rawDescGZIP(), []int{29}
 }
 
 type ListWorkersResponse struct {
@@ -1684,7 +1679,7 @@ type ListWorkersResponse struct {
 
 func (x *ListWorkersResponse) Reset() {
 	*x = ListWorkersResponse{}
-	mi := &file_ateapi_proto_msgTypes[29]
+	mi := &file_ateapi_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1696,7 +1691,7 @@ func (x *ListWorkersResponse) String() string {
 func (*ListWorkersResponse) ProtoMessage() {}
 
 func (x *ListWorkersResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ateapi_proto_msgTypes[29]
+	mi := &file_ateapi_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1709,7 +1704,7 @@ func (x *ListWorkersResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListWorkersResponse.ProtoReflect.Descriptor instead.
 func (*ListWorkersResponse) Descriptor() ([]byte, []int) {
-	return file_ateapi_proto_rawDescGZIP(), []int{29}
+	return file_ateapi_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *ListWorkersResponse) GetWorkers() []*Worker {
@@ -1738,7 +1733,7 @@ type ListActorsRequest struct {
 
 func (x *ListActorsRequest) Reset() {
 	*x = ListActorsRequest{}
-	mi := &file_ateapi_proto_msgTypes[30]
+	mi := &file_ateapi_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1750,7 +1745,7 @@ func (x *ListActorsRequest) String() string {
 func (*ListActorsRequest) ProtoMessage() {}
 
 func (x *ListActorsRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ateapi_proto_msgTypes[30]
+	mi := &file_ateapi_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1763,7 +1758,7 @@ func (x *ListActorsRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListActorsRequest.ProtoReflect.Descriptor instead.
 func (*ListActorsRequest) Descriptor() ([]byte, []int) {
-	return file_ateapi_proto_rawDescGZIP(), []int{30}
+	return file_ateapi_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *ListActorsRequest) GetPageSize() int32 {
@@ -1801,7 +1796,7 @@ type ListActorsResponse struct {
 
 func (x *ListActorsResponse) Reset() {
 	*x = ListActorsResponse{}
-	mi := &file_ateapi_proto_msgTypes[31]
+	mi := &file_ateapi_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1813,7 +1808,7 @@ func (x *ListActorsResponse) String() string {
 func (*ListActorsResponse) ProtoMessage() {}
 
 func (x *ListActorsResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ateapi_proto_msgTypes[31]
+	mi := &file_ateapi_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1826,7 +1821,7 @@ func (x *ListActorsResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListActorsResponse.ProtoReflect.Descriptor instead.
 func (*ListActorsResponse) Descriptor() ([]byte, []int) {
-	return file_ateapi_proto_rawDescGZIP(), []int{31}
+	return file_ateapi_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *ListActorsResponse) GetActors() []*Actor {
@@ -1864,7 +1859,7 @@ type Worker struct {
 
 func (x *Worker) Reset() {
 	*x = Worker{}
-	mi := &file_ateapi_proto_msgTypes[32]
+	mi := &file_ateapi_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1876,7 +1871,7 @@ func (x *Worker) String() string {
 func (*Worker) ProtoMessage() {}
 
 func (x *Worker) ProtoReflect() protoreflect.Message {
-	mi := &file_ateapi_proto_msgTypes[32]
+	mi := &file_ateapi_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1889,7 +1884,7 @@ func (x *Worker) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Worker.ProtoReflect.Descriptor instead.
 func (*Worker) Descriptor() ([]byte, []int) {
-	return file_ateapi_proto_rawDescGZIP(), []int{32}
+	return file_ateapi_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *Worker) GetWorkerNamespace() string {
@@ -1977,7 +1972,7 @@ type DebugClearRequest struct {
 
 func (x *DebugClearRequest) Reset() {
 	*x = DebugClearRequest{}
-	mi := &file_ateapi_proto_msgTypes[33]
+	mi := &file_ateapi_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1989,7 +1984,7 @@ func (x *DebugClearRequest) String() string {
 func (*DebugClearRequest) ProtoMessage() {}
 
 func (x *DebugClearRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ateapi_proto_msgTypes[33]
+	mi := &file_ateapi_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2002,7 +1997,7 @@ func (x *DebugClearRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DebugClearRequest.ProtoReflect.Descriptor instead.
 func (*DebugClearRequest) Descriptor() ([]byte, []int) {
-	return file_ateapi_proto_rawDescGZIP(), []int{33}
+	return file_ateapi_proto_rawDescGZIP(), []int{34}
 }
 
 type DebugClearResponse struct {
@@ -2013,7 +2008,7 @@ type DebugClearResponse struct {
 
 func (x *DebugClearResponse) Reset() {
 	*x = DebugClearResponse{}
-	mi := &file_ateapi_proto_msgTypes[34]
+	mi := &file_ateapi_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2025,7 +2020,7 @@ func (x *DebugClearResponse) String() string {
 func (*DebugClearResponse) ProtoMessage() {}
 
 func (x *DebugClearResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ateapi_proto_msgTypes[34]
+	mi := &file_ateapi_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2038,7 +2033,7 @@ func (x *DebugClearResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DebugClearResponse.ProtoReflect.Descriptor instead.
 func (*DebugClearResponse) Descriptor() ([]byte, []int) {
-	return file_ateapi_proto_rawDescGZIP(), []int{34}
+	return file_ateapi_proto_rawDescGZIP(), []int{35}
 }
 
 type MintJWTRequest struct {
@@ -2053,7 +2048,7 @@ type MintJWTRequest struct {
 
 func (x *MintJWTRequest) Reset() {
 	*x = MintJWTRequest{}
-	mi := &file_ateapi_proto_msgTypes[35]
+	mi := &file_ateapi_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2065,7 +2060,7 @@ func (x *MintJWTRequest) String() string {
 func (*MintJWTRequest) ProtoMessage() {}
 
 func (x *MintJWTRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ateapi_proto_msgTypes[35]
+	mi := &file_ateapi_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2078,7 +2073,7 @@ func (x *MintJWTRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MintJWTRequest.ProtoReflect.Descriptor instead.
 func (*MintJWTRequest) Descriptor() ([]byte, []int) {
-	return file_ateapi_proto_rawDescGZIP(), []int{35}
+	return file_ateapi_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *MintJWTRequest) GetAudience() []string {
@@ -2138,7 +2133,7 @@ type MintJWTResponse struct {
 
 func (x *MintJWTResponse) Reset() {
 	*x = MintJWTResponse{}
-	mi := &file_ateapi_proto_msgTypes[36]
+	mi := &file_ateapi_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2150,7 +2145,7 @@ func (x *MintJWTResponse) String() string {
 func (*MintJWTResponse) ProtoMessage() {}
 
 func (x *MintJWTResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ateapi_proto_msgTypes[36]
+	mi := &file_ateapi_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2163,7 +2158,7 @@ func (x *MintJWTResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MintJWTResponse.ProtoReflect.Descriptor instead.
 func (*MintJWTResponse) Descriptor() ([]byte, []int) {
-	return file_ateapi_proto_rawDescGZIP(), []int{36}
+	return file_ateapi_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *MintJWTResponse) GetSessionJwt() string {
@@ -2188,7 +2183,7 @@ type MintCertRequest struct {
 
 func (x *MintCertRequest) Reset() {
 	*x = MintCertRequest{}
-	mi := &file_ateapi_proto_msgTypes[37]
+	mi := &file_ateapi_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2200,7 +2195,7 @@ func (x *MintCertRequest) String() string {
 func (*MintCertRequest) ProtoMessage() {}
 
 func (x *MintCertRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ateapi_proto_msgTypes[37]
+	mi := &file_ateapi_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2213,7 +2208,7 @@ func (x *MintCertRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MintCertRequest.ProtoReflect.Descriptor instead.
 func (*MintCertRequest) Descriptor() ([]byte, []int) {
-	return file_ateapi_proto_rawDescGZIP(), []int{37}
+	return file_ateapi_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *MintCertRequest) GetAppId() string {
@@ -2256,7 +2251,7 @@ type MintCertResponse struct {
 
 func (x *MintCertResponse) Reset() {
 	*x = MintCertResponse{}
-	mi := &file_ateapi_proto_msgTypes[38]
+	mi := &file_ateapi_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2268,7 +2263,7 @@ func (x *MintCertResponse) String() string {
 func (*MintCertResponse) ProtoMessage() {}
 
 func (x *MintCertResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ateapi_proto_msgTypes[38]
+	mi := &file_ateapi_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2281,7 +2276,7 @@ func (x *MintCertResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MintCertResponse.ProtoReflect.Descriptor instead.
 func (*MintCertResponse) Descriptor() ([]byte, []int) {
-	return file_ateapi_proto_rawDescGZIP(), []int{38}
+	return file_ateapi_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *MintCertResponse) GetSessionCertificates() [][]byte {
@@ -2338,7 +2333,10 @@ const file_ateapi_proto_rawDesc = "" +
 	"\rSTATUS_PAUSED\x10\x06J\x04\b\t\x10\n" +
 	"\"\x1e\n" +
 	"\bAtespace\x12\x12\n" +
-	"\x04name\x18\x01 \x01(\tR\x04name\"+\n" +
+	"\x04name\x18\x01 \x01(\tR\x04name\":\n" +
+	"\bActorRef\x12\x1a\n" +
+	"\batespace\x18\x01 \x01(\tR\batespace\x12\x12\n" +
+	"\x04name\x18\x02 \x01(\tR\x04name\"+\n" +
 	"\x15CreateAtespaceRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\"F\n" +
 	"\x16CreateAtespaceResponse\x12,\n" +
@@ -2352,45 +2350,38 @@ const file_ateapi_proto_rawDesc = "" +
 	"\tatespaces\x18\x01 \x03(\v2\x10.ateapi.AtespaceR\tatespaces\"+\n" +
 	"\x15DeleteAtespaceRequest\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\"\x18\n" +
-	"\x16DeleteAtespaceResponse\"H\n" +
-	"\x0fGetActorRequest\x12\x19\n" +
-	"\bactor_id\x18\x01 \x01(\tR\aactorId\x12\x1a\n" +
-	"\batespace\x18\x02 \x01(\tR\batespace\"7\n" +
+	"\x16DeleteAtespaceResponse\"@\n" +
+	"\x0fGetActorRequest\x12-\n" +
+	"\tactor_ref\x18\x01 \x01(\v2\x10.ateapi.ActorRefR\bactorRef\"7\n" +
 	"\x10GetActorResponse\x12#\n" +
-	"\x05actor\x18\x01 \x01(\v2\r.ateapi.ActorR\x05actor\"\xf0\x01\n" +
-	"\x12CreateActorRequest\x12\x19\n" +
-	"\bactor_id\x18\x01 \x01(\tR\aactorId\x128\n" +
+	"\x05actor\x18\x01 \x01(\v2\r.ateapi.ActorR\x05actor\"\xe8\x01\n" +
+	"\x12CreateActorRequest\x12-\n" +
+	"\tactor_ref\x18\x01 \x01(\v2\x10.ateapi.ActorRefR\bactorRef\x128\n" +
 	"\x18actor_template_namespace\x18\x02 \x01(\tR\x16actorTemplateNamespace\x12.\n" +
 	"\x13actor_template_name\x18\x03 \x01(\tR\x11actorTemplateName\x129\n" +
-	"\x0fworker_selector\x18\x04 \x01(\v2\x10.ateapi.SelectorR\x0eworkerSelector\x12\x1a\n" +
-	"\batespace\x18\x05 \x01(\tR\batespace\":\n" +
+	"\x0fworker_selector\x18\x04 \x01(\v2\x10.ateapi.SelectorR\x0eworkerSelector\":\n" +
 	"\x13CreateActorResponse\x12#\n" +
-	"\x05actor\x18\x01 \x01(\v2\r.ateapi.ActorR\x05actor\"\x86\x01\n" +
-	"\x12UpdateActorRequest\x12\x19\n" +
-	"\bactor_id\x18\x01 \x01(\tR\aactorId\x129\n" +
-	"\x0fworker_selector\x18\x02 \x01(\v2\x10.ateapi.SelectorR\x0eworkerSelector\x12\x1a\n" +
-	"\batespace\x18\x03 \x01(\tR\batespace\":\n" +
+	"\x05actor\x18\x01 \x01(\v2\r.ateapi.ActorR\x05actor\"~\n" +
+	"\x12UpdateActorRequest\x12-\n" +
+	"\tactor_ref\x18\x01 \x01(\v2\x10.ateapi.ActorRefR\bactorRef\x129\n" +
+	"\x0fworker_selector\x18\x02 \x01(\v2\x10.ateapi.SelectorR\x0eworkerSelector\":\n" +
 	"\x13UpdateActorResponse\x12#\n" +
-	"\x05actor\x18\x01 \x01(\v2\r.ateapi.ActorR\x05actor\"L\n" +
-	"\x13SuspendActorRequest\x12\x19\n" +
-	"\bactor_id\x18\x01 \x01(\tR\aactorId\x12\x1a\n" +
-	"\batespace\x18\x02 \x01(\tR\batespace\";\n" +
+	"\x05actor\x18\x01 \x01(\v2\r.ateapi.ActorR\x05actor\"D\n" +
+	"\x13SuspendActorRequest\x12-\n" +
+	"\tactor_ref\x18\x01 \x01(\v2\x10.ateapi.ActorRefR\bactorRef\";\n" +
 	"\x14SuspendActorResponse\x12#\n" +
-	"\x05actor\x18\x01 \x01(\v2\r.ateapi.ActorR\x05actor\"J\n" +
-	"\x11PauseActorRequest\x12\x19\n" +
-	"\bactor_id\x18\x01 \x01(\tR\aactorId\x12\x1a\n" +
-	"\batespace\x18\x02 \x01(\tR\batespace\"9\n" +
+	"\x05actor\x18\x01 \x01(\v2\r.ateapi.ActorR\x05actor\"B\n" +
+	"\x11PauseActorRequest\x12-\n" +
+	"\tactor_ref\x18\x01 \x01(\v2\x10.ateapi.ActorRefR\bactorRef\"9\n" +
 	"\x12PauseActorResponse\x12#\n" +
-	"\x05actor\x18\x01 \x01(\v2\r.ateapi.ActorR\x05actor\"_\n" +
-	"\x12ResumeActorRequest\x12\x19\n" +
-	"\bactor_id\x18\x01 \x01(\tR\aactorId\x12\x12\n" +
-	"\x04boot\x18\x02 \x01(\bR\x04boot\x12\x1a\n" +
-	"\batespace\x18\x03 \x01(\tR\batespace\":\n" +
+	"\x05actor\x18\x01 \x01(\v2\r.ateapi.ActorR\x05actor\"W\n" +
+	"\x12ResumeActorRequest\x12-\n" +
+	"\tactor_ref\x18\x01 \x01(\v2\x10.ateapi.ActorRefR\bactorRef\x12\x12\n" +
+	"\x04boot\x18\x02 \x01(\bR\x04boot\":\n" +
 	"\x13ResumeActorResponse\x12#\n" +
-	"\x05actor\x18\x01 \x01(\v2\r.ateapi.ActorR\x05actor\"K\n" +
-	"\x12DeleteActorRequest\x12\x19\n" +
-	"\bactor_id\x18\x01 \x01(\tR\aactorId\x12\x1a\n" +
-	"\batespace\x18\x02 \x01(\tR\batespace\"\x15\n" +
+	"\x05actor\x18\x01 \x01(\v2\r.ateapi.ActorR\x05actor\"C\n" +
+	"\x12DeleteActorRequest\x12-\n" +
+	"\tactor_ref\x18\x01 \x01(\v2\x10.ateapi.ActorRefR\bactorRef\"\x15\n" +
 	"\x13DeleteActorResponse\"\x14\n" +
 	"\x12ListWorkersRequest\"?\n" +
 	"\x13ListWorkersResponse\x12(\n" +
@@ -2476,7 +2467,7 @@ func file_ateapi_proto_rawDescGZIP() []byte {
 }
 
 var file_ateapi_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
-var file_ateapi_proto_msgTypes = make([]protoimpl.MessageInfo, 40)
+var file_ateapi_proto_msgTypes = make([]protoimpl.MessageInfo, 41)
 var file_ateapi_proto_goTypes = []any{
 	(SnapshotType)(0),              // 0: ateapi.SnapshotType
 	(Actor_Status)(0),              // 1: ateapi.Actor.Status
@@ -2486,99 +2477,107 @@ var file_ateapi_proto_goTypes = []any{
 	(*Selector)(nil),               // 5: ateapi.Selector
 	(*Actor)(nil),                  // 6: ateapi.Actor
 	(*Atespace)(nil),               // 7: ateapi.Atespace
-	(*CreateAtespaceRequest)(nil),  // 8: ateapi.CreateAtespaceRequest
-	(*CreateAtespaceResponse)(nil), // 9: ateapi.CreateAtespaceResponse
-	(*GetAtespaceRequest)(nil),     // 10: ateapi.GetAtespaceRequest
-	(*GetAtespaceResponse)(nil),    // 11: ateapi.GetAtespaceResponse
-	(*ListAtespacesRequest)(nil),   // 12: ateapi.ListAtespacesRequest
-	(*ListAtespacesResponse)(nil),  // 13: ateapi.ListAtespacesResponse
-	(*DeleteAtespaceRequest)(nil),  // 14: ateapi.DeleteAtespaceRequest
-	(*DeleteAtespaceResponse)(nil), // 15: ateapi.DeleteAtespaceResponse
-	(*GetActorRequest)(nil),        // 16: ateapi.GetActorRequest
-	(*GetActorResponse)(nil),       // 17: ateapi.GetActorResponse
-	(*CreateActorRequest)(nil),     // 18: ateapi.CreateActorRequest
-	(*CreateActorResponse)(nil),    // 19: ateapi.CreateActorResponse
-	(*UpdateActorRequest)(nil),     // 20: ateapi.UpdateActorRequest
-	(*UpdateActorResponse)(nil),    // 21: ateapi.UpdateActorResponse
-	(*SuspendActorRequest)(nil),    // 22: ateapi.SuspendActorRequest
-	(*SuspendActorResponse)(nil),   // 23: ateapi.SuspendActorResponse
-	(*PauseActorRequest)(nil),      // 24: ateapi.PauseActorRequest
-	(*PauseActorResponse)(nil),     // 25: ateapi.PauseActorResponse
-	(*ResumeActorRequest)(nil),     // 26: ateapi.ResumeActorRequest
-	(*ResumeActorResponse)(nil),    // 27: ateapi.ResumeActorResponse
-	(*DeleteActorRequest)(nil),     // 28: ateapi.DeleteActorRequest
-	(*DeleteActorResponse)(nil),    // 29: ateapi.DeleteActorResponse
-	(*ListWorkersRequest)(nil),     // 30: ateapi.ListWorkersRequest
-	(*ListWorkersResponse)(nil),    // 31: ateapi.ListWorkersResponse
-	(*ListActorsRequest)(nil),      // 32: ateapi.ListActorsRequest
-	(*ListActorsResponse)(nil),     // 33: ateapi.ListActorsResponse
-	(*Worker)(nil),                 // 34: ateapi.Worker
-	(*DebugClearRequest)(nil),      // 35: ateapi.DebugClearRequest
-	(*DebugClearResponse)(nil),     // 36: ateapi.DebugClearResponse
-	(*MintJWTRequest)(nil),         // 37: ateapi.MintJWTRequest
-	(*MintJWTResponse)(nil),        // 38: ateapi.MintJWTResponse
-	(*MintCertRequest)(nil),        // 39: ateapi.MintCertRequest
-	(*MintCertResponse)(nil),       // 40: ateapi.MintCertResponse
-	nil,                            // 41: ateapi.Selector.MatchLabelsEntry
+	(*ActorRef)(nil),               // 8: ateapi.ActorRef
+	(*CreateAtespaceRequest)(nil),  // 9: ateapi.CreateAtespaceRequest
+	(*CreateAtespaceResponse)(nil), // 10: ateapi.CreateAtespaceResponse
+	(*GetAtespaceRequest)(nil),     // 11: ateapi.GetAtespaceRequest
+	(*GetAtespaceResponse)(nil),    // 12: ateapi.GetAtespaceResponse
+	(*ListAtespacesRequest)(nil),   // 13: ateapi.ListAtespacesRequest
+	(*ListAtespacesResponse)(nil),  // 14: ateapi.ListAtespacesResponse
+	(*DeleteAtespaceRequest)(nil),  // 15: ateapi.DeleteAtespaceRequest
+	(*DeleteAtespaceResponse)(nil), // 16: ateapi.DeleteAtespaceResponse
+	(*GetActorRequest)(nil),        // 17: ateapi.GetActorRequest
+	(*GetActorResponse)(nil),       // 18: ateapi.GetActorResponse
+	(*CreateActorRequest)(nil),     // 19: ateapi.CreateActorRequest
+	(*CreateActorResponse)(nil),    // 20: ateapi.CreateActorResponse
+	(*UpdateActorRequest)(nil),     // 21: ateapi.UpdateActorRequest
+	(*UpdateActorResponse)(nil),    // 22: ateapi.UpdateActorResponse
+	(*SuspendActorRequest)(nil),    // 23: ateapi.SuspendActorRequest
+	(*SuspendActorResponse)(nil),   // 24: ateapi.SuspendActorResponse
+	(*PauseActorRequest)(nil),      // 25: ateapi.PauseActorRequest
+	(*PauseActorResponse)(nil),     // 26: ateapi.PauseActorResponse
+	(*ResumeActorRequest)(nil),     // 27: ateapi.ResumeActorRequest
+	(*ResumeActorResponse)(nil),    // 28: ateapi.ResumeActorResponse
+	(*DeleteActorRequest)(nil),     // 29: ateapi.DeleteActorRequest
+	(*DeleteActorResponse)(nil),    // 30: ateapi.DeleteActorResponse
+	(*ListWorkersRequest)(nil),     // 31: ateapi.ListWorkersRequest
+	(*ListWorkersResponse)(nil),    // 32: ateapi.ListWorkersResponse
+	(*ListActorsRequest)(nil),      // 33: ateapi.ListActorsRequest
+	(*ListActorsResponse)(nil),     // 34: ateapi.ListActorsResponse
+	(*Worker)(nil),                 // 35: ateapi.Worker
+	(*DebugClearRequest)(nil),      // 36: ateapi.DebugClearRequest
+	(*DebugClearResponse)(nil),     // 37: ateapi.DebugClearResponse
+	(*MintJWTRequest)(nil),         // 38: ateapi.MintJWTRequest
+	(*MintJWTResponse)(nil),        // 39: ateapi.MintJWTResponse
+	(*MintCertRequest)(nil),        // 40: ateapi.MintCertRequest
+	(*MintCertResponse)(nil),       // 41: ateapi.MintCertResponse
+	nil,                            // 42: ateapi.Selector.MatchLabelsEntry
 }
 var file_ateapi_proto_depIdxs = []int32{
 	0,  // 0: ateapi.SnapshotInfo.type:type_name -> ateapi.SnapshotType
 	2,  // 1: ateapi.SnapshotInfo.external:type_name -> ateapi.ExternalSnapshotInfo
 	3,  // 2: ateapi.SnapshotInfo.local:type_name -> ateapi.LocalSnapshotInfo
-	41, // 3: ateapi.Selector.match_labels:type_name -> ateapi.Selector.MatchLabelsEntry
+	42, // 3: ateapi.Selector.match_labels:type_name -> ateapi.Selector.MatchLabelsEntry
 	1,  // 4: ateapi.Actor.status:type_name -> ateapi.Actor.Status
 	4,  // 5: ateapi.Actor.latest_snapshot_info:type_name -> ateapi.SnapshotInfo
 	5,  // 6: ateapi.Actor.worker_selector:type_name -> ateapi.Selector
 	7,  // 7: ateapi.CreateAtespaceResponse.atespace:type_name -> ateapi.Atespace
 	7,  // 8: ateapi.GetAtespaceResponse.atespace:type_name -> ateapi.Atespace
 	7,  // 9: ateapi.ListAtespacesResponse.atespaces:type_name -> ateapi.Atespace
-	6,  // 10: ateapi.GetActorResponse.actor:type_name -> ateapi.Actor
-	5,  // 11: ateapi.CreateActorRequest.worker_selector:type_name -> ateapi.Selector
-	6,  // 12: ateapi.CreateActorResponse.actor:type_name -> ateapi.Actor
-	5,  // 13: ateapi.UpdateActorRequest.worker_selector:type_name -> ateapi.Selector
-	6,  // 14: ateapi.UpdateActorResponse.actor:type_name -> ateapi.Actor
-	6,  // 15: ateapi.SuspendActorResponse.actor:type_name -> ateapi.Actor
-	6,  // 16: ateapi.PauseActorResponse.actor:type_name -> ateapi.Actor
-	6,  // 17: ateapi.ResumeActorResponse.actor:type_name -> ateapi.Actor
-	34, // 18: ateapi.ListWorkersResponse.workers:type_name -> ateapi.Worker
-	6,  // 19: ateapi.ListActorsResponse.actors:type_name -> ateapi.Actor
-	16, // 20: ateapi.Control.GetActor:input_type -> ateapi.GetActorRequest
-	18, // 21: ateapi.Control.CreateActor:input_type -> ateapi.CreateActorRequest
-	20, // 22: ateapi.Control.UpdateActor:input_type -> ateapi.UpdateActorRequest
-	22, // 23: ateapi.Control.SuspendActor:input_type -> ateapi.SuspendActorRequest
-	24, // 24: ateapi.Control.PauseActor:input_type -> ateapi.PauseActorRequest
-	26, // 25: ateapi.Control.ResumeActor:input_type -> ateapi.ResumeActorRequest
-	28, // 26: ateapi.Control.DeleteActor:input_type -> ateapi.DeleteActorRequest
-	30, // 27: ateapi.Control.ListWorkers:input_type -> ateapi.ListWorkersRequest
-	32, // 28: ateapi.Control.ListActors:input_type -> ateapi.ListActorsRequest
-	8,  // 29: ateapi.Control.CreateAtespace:input_type -> ateapi.CreateAtespaceRequest
-	10, // 30: ateapi.Control.GetAtespace:input_type -> ateapi.GetAtespaceRequest
-	12, // 31: ateapi.Control.ListAtespaces:input_type -> ateapi.ListAtespacesRequest
-	14, // 32: ateapi.Control.DeleteAtespace:input_type -> ateapi.DeleteAtespaceRequest
-	35, // 33: ateapi.Control.DebugClear:input_type -> ateapi.DebugClearRequest
-	37, // 34: ateapi.SessionIdentity.MintJWT:input_type -> ateapi.MintJWTRequest
-	39, // 35: ateapi.SessionIdentity.MintCert:input_type -> ateapi.MintCertRequest
-	17, // 36: ateapi.Control.GetActor:output_type -> ateapi.GetActorResponse
-	19, // 37: ateapi.Control.CreateActor:output_type -> ateapi.CreateActorResponse
-	21, // 38: ateapi.Control.UpdateActor:output_type -> ateapi.UpdateActorResponse
-	23, // 39: ateapi.Control.SuspendActor:output_type -> ateapi.SuspendActorResponse
-	25, // 40: ateapi.Control.PauseActor:output_type -> ateapi.PauseActorResponse
-	27, // 41: ateapi.Control.ResumeActor:output_type -> ateapi.ResumeActorResponse
-	29, // 42: ateapi.Control.DeleteActor:output_type -> ateapi.DeleteActorResponse
-	31, // 43: ateapi.Control.ListWorkers:output_type -> ateapi.ListWorkersResponse
-	33, // 44: ateapi.Control.ListActors:output_type -> ateapi.ListActorsResponse
-	9,  // 45: ateapi.Control.CreateAtespace:output_type -> ateapi.CreateAtespaceResponse
-	11, // 46: ateapi.Control.GetAtespace:output_type -> ateapi.GetAtespaceResponse
-	13, // 47: ateapi.Control.ListAtespaces:output_type -> ateapi.ListAtespacesResponse
-	15, // 48: ateapi.Control.DeleteAtespace:output_type -> ateapi.DeleteAtespaceResponse
-	36, // 49: ateapi.Control.DebugClear:output_type -> ateapi.DebugClearResponse
-	38, // 50: ateapi.SessionIdentity.MintJWT:output_type -> ateapi.MintJWTResponse
-	40, // 51: ateapi.SessionIdentity.MintCert:output_type -> ateapi.MintCertResponse
-	36, // [36:52] is the sub-list for method output_type
-	20, // [20:36] is the sub-list for method input_type
-	20, // [20:20] is the sub-list for extension type_name
-	20, // [20:20] is the sub-list for extension extendee
-	0,  // [0:20] is the sub-list for field type_name
+	8,  // 10: ateapi.GetActorRequest.actor_ref:type_name -> ateapi.ActorRef
+	6,  // 11: ateapi.GetActorResponse.actor:type_name -> ateapi.Actor
+	8,  // 12: ateapi.CreateActorRequest.actor_ref:type_name -> ateapi.ActorRef
+	5,  // 13: ateapi.CreateActorRequest.worker_selector:type_name -> ateapi.Selector
+	6,  // 14: ateapi.CreateActorResponse.actor:type_name -> ateapi.Actor
+	8,  // 15: ateapi.UpdateActorRequest.actor_ref:type_name -> ateapi.ActorRef
+	5,  // 16: ateapi.UpdateActorRequest.worker_selector:type_name -> ateapi.Selector
+	6,  // 17: ateapi.UpdateActorResponse.actor:type_name -> ateapi.Actor
+	8,  // 18: ateapi.SuspendActorRequest.actor_ref:type_name -> ateapi.ActorRef
+	6,  // 19: ateapi.SuspendActorResponse.actor:type_name -> ateapi.Actor
+	8,  // 20: ateapi.PauseActorRequest.actor_ref:type_name -> ateapi.ActorRef
+	6,  // 21: ateapi.PauseActorResponse.actor:type_name -> ateapi.Actor
+	8,  // 22: ateapi.ResumeActorRequest.actor_ref:type_name -> ateapi.ActorRef
+	6,  // 23: ateapi.ResumeActorResponse.actor:type_name -> ateapi.Actor
+	8,  // 24: ateapi.DeleteActorRequest.actor_ref:type_name -> ateapi.ActorRef
+	35, // 25: ateapi.ListWorkersResponse.workers:type_name -> ateapi.Worker
+	6,  // 26: ateapi.ListActorsResponse.actors:type_name -> ateapi.Actor
+	17, // 27: ateapi.Control.GetActor:input_type -> ateapi.GetActorRequest
+	19, // 28: ateapi.Control.CreateActor:input_type -> ateapi.CreateActorRequest
+	21, // 29: ateapi.Control.UpdateActor:input_type -> ateapi.UpdateActorRequest
+	23, // 30: ateapi.Control.SuspendActor:input_type -> ateapi.SuspendActorRequest
+	25, // 31: ateapi.Control.PauseActor:input_type -> ateapi.PauseActorRequest
+	27, // 32: ateapi.Control.ResumeActor:input_type -> ateapi.ResumeActorRequest
+	29, // 33: ateapi.Control.DeleteActor:input_type -> ateapi.DeleteActorRequest
+	31, // 34: ateapi.Control.ListWorkers:input_type -> ateapi.ListWorkersRequest
+	33, // 35: ateapi.Control.ListActors:input_type -> ateapi.ListActorsRequest
+	9,  // 36: ateapi.Control.CreateAtespace:input_type -> ateapi.CreateAtespaceRequest
+	11, // 37: ateapi.Control.GetAtespace:input_type -> ateapi.GetAtespaceRequest
+	13, // 38: ateapi.Control.ListAtespaces:input_type -> ateapi.ListAtespacesRequest
+	15, // 39: ateapi.Control.DeleteAtespace:input_type -> ateapi.DeleteAtespaceRequest
+	36, // 40: ateapi.Control.DebugClear:input_type -> ateapi.DebugClearRequest
+	38, // 41: ateapi.SessionIdentity.MintJWT:input_type -> ateapi.MintJWTRequest
+	40, // 42: ateapi.SessionIdentity.MintCert:input_type -> ateapi.MintCertRequest
+	18, // 43: ateapi.Control.GetActor:output_type -> ateapi.GetActorResponse
+	20, // 44: ateapi.Control.CreateActor:output_type -> ateapi.CreateActorResponse
+	22, // 45: ateapi.Control.UpdateActor:output_type -> ateapi.UpdateActorResponse
+	24, // 46: ateapi.Control.SuspendActor:output_type -> ateapi.SuspendActorResponse
+	26, // 47: ateapi.Control.PauseActor:output_type -> ateapi.PauseActorResponse
+	28, // 48: ateapi.Control.ResumeActor:output_type -> ateapi.ResumeActorResponse
+	30, // 49: ateapi.Control.DeleteActor:output_type -> ateapi.DeleteActorResponse
+	32, // 50: ateapi.Control.ListWorkers:output_type -> ateapi.ListWorkersResponse
+	34, // 51: ateapi.Control.ListActors:output_type -> ateapi.ListActorsResponse
+	10, // 52: ateapi.Control.CreateAtespace:output_type -> ateapi.CreateAtespaceResponse
+	12, // 53: ateapi.Control.GetAtespace:output_type -> ateapi.GetAtespaceResponse
+	14, // 54: ateapi.Control.ListAtespaces:output_type -> ateapi.ListAtespacesResponse
+	16, // 55: ateapi.Control.DeleteAtespace:output_type -> ateapi.DeleteAtespaceResponse
+	37, // 56: ateapi.Control.DebugClear:output_type -> ateapi.DebugClearResponse
+	39, // 57: ateapi.SessionIdentity.MintJWT:output_type -> ateapi.MintJWTResponse
+	41, // 58: ateapi.SessionIdentity.MintCert:output_type -> ateapi.MintCertResponse
+	43, // [43:59] is the sub-list for method output_type
+	27, // [27:43] is the sub-list for method input_type
+	27, // [27:27] is the sub-list for extension type_name
+	27, // [27:27] is the sub-list for extension extendee
+	0,  // [0:27] is the sub-list for field type_name
 }
 
 func init() { file_ateapi_proto_init() }
@@ -2596,7 +2595,7 @@ func file_ateapi_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_ateapi_proto_rawDesc), len(file_ateapi_proto_rawDesc)),
 			NumEnums:      2,
-			NumMessages:   40,
+			NumMessages:   41,
 			NumExtensions: 0,
 			NumServices:   2,
 		},

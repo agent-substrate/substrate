@@ -31,10 +31,10 @@ func (s *Service) UpdateActor(ctx context.Context, req *ateapipb.UpdateActorRequ
 		return nil, err
 	}
 
-	actor, err := s.persistence.GetActor(ctx, req.GetAtespace(), req.GetActorId())
+	actor, err := s.persistence.GetActor(ctx, req.GetActorRef().GetAtespace(), req.GetActorRef().GetName())
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, status.Errorf(codes.NotFound, "Actor %s not found", req.GetActorId())
+			return nil, status.Errorf(codes.NotFound, "Actor %s not found", req.GetActorRef().GetName())
 		}
 		return nil, fmt.Errorf("while getting actor: %w", err)
 	}
@@ -51,13 +51,13 @@ func (s *Service) UpdateActor(ctx context.Context, req *ateapipb.UpdateActorRequ
 }
 
 func validateUpdateActorRequest(req *ateapipb.UpdateActorRequest) error {
-	if req.GetActorId() == "" {
+	if req.GetActorRef().GetName() == "" {
 		return status.Error(codes.InvalidArgument, "actor_id is required")
 	}
-	if req.GetAtespace() == "" {
+	if req.GetActorRef().GetAtespace() == "" {
 		return status.Error(codes.InvalidArgument, "atespace is required")
 	}
-	if err := resources.ValidateAtespace(req.GetAtespace()); err != nil {
+	if err := resources.ValidateAtespace(req.GetActorRef().GetAtespace()); err != nil {
 		return status.Error(codes.InvalidArgument, err.Error())
 	}
 	if err := validateSelector(req.GetWorkerSelector()); err != nil {

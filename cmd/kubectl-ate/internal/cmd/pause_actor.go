@@ -38,8 +38,7 @@ var pauseActorCmd = &cobra.Command{
 		defer apiClient.Close()
 
 		resp, err := apiClient.PauseActor(ctx, &ateapipb.PauseActorRequest{
-			ActorId:  args[0],
-			Atespace: pauseAtespaceFlag,
+			ActorRef: &ateapipb.ActorRef{Atespace: pauseAtespaceFlag, Name: args[0]},
 		})
 		if err != nil {
 			return fmt.Errorf("failed to pause actor: %w", err)

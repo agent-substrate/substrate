@@ -48,8 +48,7 @@ var createActorCmd = &cobra.Command{
 		resp, err := apiClient.CreateActor(ctx, &ateapipb.CreateActorRequest{
 			ActorTemplateNamespace: parts[0],
 			ActorTemplateName:      parts[1],
-			ActorId:                actorID,
-			Atespace:               atespaceFlag,
+			ActorRef:               &ateapipb.ActorRef{Atespace: atespaceFlag, Name: actorID},
 		})
 		if err != nil {
 			return fmt.Errorf("failed to create actor: %w", err)

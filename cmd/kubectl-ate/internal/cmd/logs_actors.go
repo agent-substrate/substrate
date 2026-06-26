@@ -109,7 +109,7 @@ func (r *LogsActorRunner) Run(ctx context.Context, actorID string) error {
 }
 
 func (r *LogsActorRunner) runOneShot(ctx context.Context, actorID string) error {
-	actorResp, err := r.apiClient.GetActor(ctx, &ateapipb.GetActorRequest{ActorId: actorID, Atespace: r.atespace})
+	actorResp, err := r.apiClient.GetActor(ctx, &ateapipb.GetActorRequest{ActorRef: &ateapipb.ActorRef{Atespace: r.atespace, Name: actorID}})
 	if err != nil {
 		return fmt.Errorf("failed to get actor: %w", err)
 	}
@@ -156,7 +156,7 @@ func (r *LogsActorRunner) runFollow(ctx context.Context, actorID string) error {
 		default:
 		}
 
-		actorResp, err := r.apiClient.GetActor(ctx, &ateapipb.GetActorRequest{ActorId: actorID, Atespace: r.atespace})
+		actorResp, err := r.apiClient.GetActor(ctx, &ateapipb.GetActorRequest{ActorRef: &ateapipb.ActorRef{Atespace: r.atespace, Name: actorID}})
 		if err != nil {
 			if status.Code(err) == codes.NotFound {
 				return fmt.Errorf("actor %s not found: %w", actorID, err)
@@ -264,7 +264,7 @@ func (r *LogsActorRunner) startMigrationMonitor(
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				resp, err := r.apiClient.GetActor(ctx, &ateapipb.GetActorRequest{ActorId: actorID, Atespace: r.atespace})
+				resp, err := r.apiClient.GetActor(ctx, &ateapipb.GetActorRequest{ActorRef: &ateapipb.ActorRef{Atespace: r.atespace, Name: actorID}})
 				if err == nil {
 					act := resp.GetActor()
 					if act.GetStatus() != ateapipb.Actor_STATUS_RUNNING || act.GetAteomPodName() != currentPod {

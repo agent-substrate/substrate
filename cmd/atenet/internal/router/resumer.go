@@ -70,8 +70,7 @@ func (r *ActorResumer) ResumeActor(ctx context.Context, atespace, actorID string
 		err := wait.ExponentialBackoffWithContext(bgCtx, backoff, func(ctx context.Context) (bool, error) {
 			var err error
 			resumeResp, err = r.apiClient.ResumeActor(ctx, &ateapipb.ResumeActorRequest{
-				ActorId:  actorID,
-				Atespace: atespace,
+				ActorRef: &ateapipb.ActorRef{Atespace: atespace, Name: actorID},
 			})
 			if err == nil {
 				return true, nil
