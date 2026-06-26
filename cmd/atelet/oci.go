@@ -15,19 +15,17 @@
 package main
 
 import (
-	"archive/tar"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"path"
-	"path/filepath"
 	"strings"
 
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/memorypullcache"
+	"github.com/agent-substrate/substrate/cmd/atelet/internal/rootfscache"
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"go.opentelemetry.io/otel"
@@ -51,7 +49,12 @@ const (
 	ActorIDFileName = "actor-id"
 )
 
-func prepareOCIDirectory(ctx context.Context, pullCache *memorypullcache.MemoryPullCache, actorTemplateNamespace, actorTemplateName, actorID, containerName, ref string, args []string, env []string, annotations map[string]string, netns string, identityDir string) error {
+// prepareOCIDirectory assembles the OCI bundle for one container inside an
+// actor.  When a rootfsCache is available and the image ref contains a digest,
+// the rootfs is materialized via an overlayfs mount over a node-local cache
+// instead of re-extracting the tarball — reducing per-restore latency from
+// seconds to sub-millisecond on cache hits.
+func prepareOCIDirectory(ctx context.Context, pullCache *memorypullcache.MemoryPullCache, rootfsCache *rootfscache.Cache, actorTemplateNamespace, actorTemplateName, actorID, containerName, ref string, args []string, env []string, annotations map[string]string, netns string, identityDir string) error {
 	tracer := otel.Tracer("prepareOCIDirectory")
 
 	ctx, span := tracer.Start(ctx, "prepareOCIDirectory")
@@ -61,22 +64,56 @@ func prepareOCIDirectory(ctx context.Context, pullCache *memorypullcache.MemoryP
 	bundlePath := ateompath.OCIBundlePath(actorTemplateNamespace, actorTemplateName, actorID, containerName)
 	rootPath := path.Join(bundlePath, "rootfs")
 
-	if err := os.RemoveAll(rootPath); err != nil {
-		return fmt.Errorf("while clearing rootfs %q: %w", rootPath, err)
-	}
+	// Try the overlayfs cache path first.  This succeeds when:
+	//   1. rootfsCache is non-nil, AND
+	//   2. the image ref includes a digest (@sha256:…).
+	// On a cache hit, tarData is NOT consumed, so we can skip the untar
+	// entirely.  On a miss, the cache extracts and caches for next time.
+	digest := extractDigestFromRef(ref)
+	if rootfsCache != nil && digest != "" {
+		tarData, err := pullCache.Fetch(ctx, ref)
+		if err != nil {
+			return fmt.Errorf("in pullCache.Fetch: %w", err)
+		}
+		defer tarData.Close()
 
-	if err := os.MkdirAll(rootPath, 0o700); err != nil {
-		return fmt.Errorf("in os.MkdirAll for container bundle dir: %w", err)
-	}
+		lowerDir, _, err := rootfsCache.EnsureRootfs(ctx, digest, tarData)
+		if err != nil {
+			return fmt.Errorf("in rootfsCache.EnsureRootfs: %w", err)
+		}
 
-	tarData, err := pullCache.Fetch(ctx, ref)
-	if err != nil {
-		return fmt.Errorf("in pullCache.Fetch: %w", err)
-	}
-	defer tarData.Close()
+		// Create the overlay mount target.
+		if err := os.MkdirAll(rootPath, 0o700); err != nil {
+			return fmt.Errorf("in os.MkdirAll for rootfs mount target: %w", err)
+		}
 
-	if err := untar(ctx, tarData, rootPath); err != nil {
-		return fmt.Errorf("in untar: %w", err)
+		upperDir := path.Join(bundlePath, "upper")
+		workDir := path.Join(bundlePath, "work")
+		if err := setupOverlayfs(rootPath, lowerDir, upperDir, workDir); err != nil {
+			return fmt.Errorf("setting up overlayfs (lower=%s, target=%s): %w", lowerDir, rootPath, err)
+		}
+
+		span.SetAttributes(attribute.String("rootfs_method", "overlay"))
+	} else {
+		// Fallback: no digest or no cache — extract directly (original path).
+		if err := os.RemoveAll(rootPath); err != nil {
+			return fmt.Errorf("while clearing rootfs %q: %w", rootPath, err)
+		}
+		if err := os.MkdirAll(rootPath, 0o700); err != nil {
+			return fmt.Errorf("in os.MkdirAll for container bundle dir: %w", err)
+		}
+
+		tarData, err := pullCache.Fetch(ctx, ref)
+		if err != nil {
+			return fmt.Errorf("in pullCache.Fetch: %w", err)
+		}
+		defer tarData.Close()
+
+		if err := rootfscache.Untar(ctx, tarData, rootPath); err != nil {
+			return fmt.Errorf("in untar: %w", err)
+		}
+
+		span.SetAttributes(attribute.String("rootfs_method", "untar"))
 	}
 
 	// Bind-mount the per-actor identity directory so the workload can read its
@@ -99,6 +136,19 @@ func prepareOCIDirectory(ctx context.Context, pullCache *memorypullcache.MemoryP
 	}
 
 	return nil
+}
+
+// extractDigestFromRef extracts the sha256 digest from an image reference.
+// Returns "" if the ref does not contain a digest.
+//   - "registry/image@sha256:abc123" → "sha256:abc123"
+//   - "registry/image:latest"        → ""
+func extractDigestFromRef(ref string) string {
+	const prefix = "@sha256:"
+	idx := strings.LastIndex(ref, prefix)
+	if idx < 0 {
+		return ""
+	}
+	return strings.TrimPrefix(ref[idx:], "@")
 }
 
 // buildActorOCISpec assembles the OCI runtime spec for an actor container.
@@ -237,148 +287,27 @@ func createMountPoint(rootPath, mountPath string) error {
 	return nil
 }
 
-func validateTarName(name string) (cleaned string, skip bool, err error) {
-	if name == "" {
-		return "", true, nil
+// unmountActorRootfs attempts to unmount the rootfs overlay for a single
+// container inside an actor's bundle directory.  Returns nil if the rootfs
+// is not a mountpoint (i.e. was produced by direct untar).
+func unmountActorRootfs(bundleDir, containerName string) error {
+	rootfsPath := path.Join(bundleDir, containerName, "rootfs")
+	if err := teardownOverlayfs(rootfsPath); err != nil {
+		// ENOTDIR/ENOENT/EINVAL — not a mountpoint, nothing to do.
+		slog.Debug("rootfs unmount skipped (not a mountpoint)", "path", rootfsPath, "err", err)
 	}
-	cleaned = filepath.Clean(name)
-	if cleaned == "." {
-		return "", true, nil
-	}
-	cleaned = strings.TrimPrefix(cleaned, "/")
-	if cleaned == "" || cleaned == "." {
-		return "", true, nil
-	}
-	if !filepath.IsLocal(cleaned) {
-		return "", false, fmt.Errorf("not a local path: %q", name)
-	}
-	return cleaned, false, nil
+	return nil
 }
 
+// untar is a thin wrapper around rootfscache.Untar kept in this package so
+// that existing tests (package main) continue to compile without importing
+// the rootfscache package directly.
 func untar(ctx context.Context, tarData io.Reader, rootPath string) error {
-	tracer := otel.Tracer("ateom-gvisor")
-	ctx, span := tracer.Start(ctx, "untar")
-	defer span.End()
+	return rootfscache.Untar(ctx, tarData, rootPath)
+}
 
-	// os.Root confines file operations to rootPath: ".." components and
-	// out-of-tree symlinks are refused by the kernel.
-	root, err := os.OpenRoot(rootPath)
-	if err != nil {
-		return fmt.Errorf("while opening rootfs %q as os.Root: %w", rootPath, err)
-	}
-	defer root.Close()
-
-	tarReader := tar.NewReader(tarData)
-	for {
-		hdr, err := tarReader.Next()
-		if errors.Is(err, io.EOF) {
-			break
-		} else if err != nil {
-			return fmt.Errorf("in tarReader.Next: %w", err)
-		}
-
-		name, skip, err := validateTarName(hdr.Name)
-		if err != nil {
-			return fmt.Errorf("invalid tar entry: %w", err)
-		}
-		if skip {
-			continue
-		}
-
-		mode := hdr.FileInfo().Mode().Perm()
-
-		switch hdr.Typeflag {
-		case tar.TypeReg: // Regular file
-			// Same "later entry wins" handling: if any entry exists at the target path,
-			// remove it first. This ensures that:
-			// 1. If it's a symlink, we don't write through it (security vulnerability / incorrectness).
-			// 2. If it's a hardlink, we unlink it instead of truncating the shared inode.
-			// 3. If it's a directory, we recursively remove it so we can write the file.
-			if _, err := root.Lstat(name); err == nil {
-				if err := root.RemoveAll(name); err != nil {
-					return fmt.Errorf("while replacing existing path at %q before regular file: %w", name, err)
-				}
-			} else if !errors.Is(err, os.ErrNotExist) {
-				return fmt.Errorf("while checking existing path at %q before regular file: %w", name, err)
-			}
-
-			// Stream directly from tarReader to target file to avoid buffering in memory.
-			outFile, err := root.OpenFile(name, os.O_CREATE|os.O_RDWR|os.O_TRUNC, mode)
-			if err != nil {
-				return fmt.Errorf("while creating file %q: %w", name, err)
-			}
-
-			_, err = io.Copy(outFile, tarReader)
-			closeErr := outFile.Close()
-
-			if err != nil {
-				return fmt.Errorf("while writing contents of %q from tar stream: %w", name, err)
-			}
-			if closeErr != nil {
-				return fmt.Errorf("while closing file %q: %w", name, closeErr)
-			}
-
-		case tar.TypeDir:
-			err := root.Mkdir(name, mode)
-			if errors.Is(err, os.ErrExist) {
-				// Ignore --- real images produced by ko seem to have directory entries placed multiple times?
-			} else if err != nil {
-				return fmt.Errorf("while creating directory=%q, mode=%v: %w", name, mode, err)
-			}
-
-		case tar.TypeSymlink:
-			// OCI image layers may re-define the same path across layers (e.g.
-			// an earlier layer creates /var/run as a directory and a later
-			// layer re-declares it as a symlink to /run). Standard tar-extract
-			// semantics are "later entry wins": replace any existing entry.
-			if existing, err := root.Lstat(name); err == nil {
-				// If it's already the same symlink, skip the unlink+symlink pair.
-				if existing.Mode()&os.ModeSymlink != 0 {
-					if cur, rerr := root.Readlink(name); rerr == nil && cur == hdr.Linkname {
-						continue
-					}
-				}
-				// Root.RemoveAll removes the symlink entry itself; it does NOT
-				// traverse and remove the directory the symlink points to.
-				// That's the desired semantic here — replace this path's
-				// entry without touching whatever the prior symlink targeted.
-				if err := root.RemoveAll(name); err != nil {
-					return fmt.Errorf("while replacing existing path at %q before symlink: %w", name, err)
-				}
-			} else if !errors.Is(err, os.ErrNotExist) {
-				return fmt.Errorf("while checking existing path at %q before symlink: %w", name, err)
-			}
-			if err := root.Symlink(hdr.Linkname, name); err != nil {
-				return fmt.Errorf("while creating symlink src=%q target=%q: %w", name, hdr.Linkname, err)
-			}
-
-		case tar.TypeLink:
-			linkname, linkSkip, err := validateTarName(hdr.Linkname)
-			if err != nil {
-				return fmt.Errorf("invalid hardlink target for %q: %w", name, err)
-			}
-			if linkSkip {
-				return fmt.Errorf("invalid hardlink target for %q: empty", name)
-			}
-			// Same "later entry wins" handling as TypeSymlink: replace existing entry.
-			if _, err := root.Lstat(name); err == nil {
-				if err := root.RemoveAll(name); err != nil {
-					return fmt.Errorf("while replacing existing path at %q before hardlink: %w", name, err)
-				}
-			} else if !errors.Is(err, os.ErrNotExist) {
-				return fmt.Errorf("while checking existing path at %q before hardlink: %w", name, err)
-			}
-			if err := root.Link(linkname, name); err != nil {
-				return fmt.Errorf("while creating hardlink src=%q target=%q: %w", name, linkname, err)
-			}
-
-		default:
-			tfStr := string([]byte{hdr.Typeflag})
-			slog.ErrorContext(ctx, "Unhandled tar entry typeflag", slog.String("typeflag", tfStr), slog.Any("hdr", hdr))
-			return fmt.Errorf("unhandled tar entry typeflag %q", tfStr)
-		}
-
-	}
-
-	return nil
+// validateTarName is re-exported here for the same reason as untar: tests in
+// package main call it directly.
+func validateTarName(name string) (cleaned string, skip bool, err error) {
+	return rootfscache.ValidateTarName(name)
 }
