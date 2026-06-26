@@ -26,6 +26,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"strconv"
 	"sync"
@@ -61,6 +62,8 @@ func incrementFileCounter() int {
 	return counter
 }
 
+const defaultEgressURL = "https://httpbin.org/get"
+
 func main() {
 	pflag.Parse()
 	ctx := context.Background()
@@ -92,6 +95,7 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("ok\n"))
 	})
+	defaultMux.HandleFunc("/egress", handleEgress)
 
 	go func() {
 		slog.InfoContext(ctx, "Starting counter server on port 80")
@@ -121,6 +125,70 @@ func main() {
 		slog.InfoContext(ctx, "Count", slog.Int("count", count), slog.String("fshash", hashRandomFile()))
 		count++
 	}
+}
+
+func handleEgress(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	defer cancel()
+
+	targetURL, err := egressTargetURL(r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, targetURL, nil)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("invalid egress target %q: %v", targetURL, err), http.StatusBadRequest)
+		return
+	}
+
+	start := time.Now()
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		slog.ErrorContext(ctx, "Egress request failed", slog.String("target", targetURL), slog.Any("err", err))
+		http.Error(w, fmt.Sprintf("egress request to %s failed: %v\n", targetURL, err), http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1024))
+	if err != nil {
+		slog.ErrorContext(ctx, "Failed reading egress response", slog.String("target", targetURL), slog.Any("err", err))
+		http.Error(w, fmt.Sprintf("reading egress response from %s failed: %v\n", targetURL, err), http.StatusBadGateway)
+		return
+	}
+
+	slog.InfoContext(ctx, "Egress request completed",
+		slog.String("target", targetURL),
+		slog.Int("upstream_status", resp.StatusCode),
+		slog.Duration("duration", time.Since(start)))
+
+	w.Header().Set("Content-Type", "text/plain")
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprintf(w, "egress target: %s\n", targetURL)
+	fmt.Fprintf(w, "upstream status: %s\n", resp.Status)
+	fmt.Fprintf(w, "body bytes read: %d\n", len(body))
+	fmt.Fprintf(w, "body:\n%s\n", body)
+}
+
+func egressTargetURL(r *http.Request) (string, error) {
+	targetURL := r.URL.Query().Get("url")
+	if targetURL == "" {
+		targetURL = defaultEgressURL
+	}
+
+	parsed, err := url.Parse(targetURL)
+	if err != nil {
+		return "", fmt.Errorf("invalid egress target %q: %w", targetURL, err)
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return "", fmt.Errorf("invalid egress target %q: scheme must be http or https", targetURL)
+	}
+	if parsed.Host == "" {
+		return "", fmt.Errorf("invalid egress target %q: host is required", targetURL)
+	}
+	return targetURL, nil
 }
 
 func writeRandomFile() error {
