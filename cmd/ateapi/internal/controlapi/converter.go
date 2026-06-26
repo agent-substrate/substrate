@@ -15,6 +15,8 @@
 package controlapi
 
 import (
+	"log/slog"
+
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 )
@@ -27,6 +29,7 @@ func toAteletSnapshotScope(in atev1alpha1.SnapshotScope) ateletpb.SnapshotScope 
 	case atev1alpha1.SnapshotScopeData:
 		return ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA
 	default:
+		slog.Warn("unknown SnapshotScope; falling back to Full", "scope", string(in))
 		return ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL
 	}
 }

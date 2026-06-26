@@ -243,6 +243,7 @@ type SnapshotsConfig struct {
 	// If not provided, the "Full" behavior is used by default.
 	//
 	// +optional
+	// +kubebuilder:default=Full
 	OnPause SnapshotScope `json:"onPause,omitempty"`
 
 	// OnCommit specifies what to include in the snapshot when a commit is requested.
@@ -254,6 +255,7 @@ type SnapshotsConfig struct {
 	//   - if onPause is "Data", then onCommit must be "Data".
 	//
 	// +optional
+	// +kubebuilder:default=Full
 	OnCommit SnapshotScope `json:"onCommit,omitempty"`
 }
 

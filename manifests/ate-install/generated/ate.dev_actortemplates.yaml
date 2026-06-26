@@ -267,6 +267,7 @@ spec:
                     minLength: 1
                     type: string
                   onCommit:
+                    default: Full
                     description: |-
                       OnCommit specifies what to include in the snapshot when a commit is requested.
                       If not provided, the "Full" behavior is used by default.
@@ -280,6 +281,7 @@ spec:
                     - Data
                     type: string
                   onPause:
+                    default: Full
                     description: |-
                       OnPause specifies what to include in the snapshot when the actor is paused.
                       If not provided, the "Full" behavior is used by default.
