@@ -81,6 +81,21 @@ spec:
   sandboxClass: microvm
   sandboxConfigName: counter-microvm
   ateomImage: ko://github.com/agent-substrate/substrate/cmd/ateom-microvm
+  # The micro-VM pod shape is now declared as data (it used to be hardcoded in the
+  # controller for the "microvm" class): expose /dev/kvm and pin to KVM-capable,
+  # nested-virt nodes. hack/create-kind-cluster.sh labels+taints the node
+  # ate.dev/sandboxClass=microvm; GKE pools are labeled via --node-labels.
+  template:
+    hostDevices:
+    - path: /dev/kvm
+      type: CharDevice
+    nodeSelector:
+      ate.dev/sandboxClass: microvm
+    tolerations:
+    - key: ate.dev/sandboxClass
+      operator: Equal
+      value: microvm
+      effect: NoSchedule
 
 ---
 

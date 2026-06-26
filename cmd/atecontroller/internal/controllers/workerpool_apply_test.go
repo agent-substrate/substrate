@@ -209,32 +209,42 @@ func TestBuildDeploymentApplyConfig(t *testing.T) {
 	}
 }
 
-// TestMicroVMPodShape asserts the micro-VM sandbox class adds the /dev/kvm
-// device (volume + container mount) and node placement (nodeSelector +
-// toleration on ate.dev/sandboxClass); other classes get none of it.
-func TestMicroVMPodShape(t *testing.T) {
+// TestPodTemplateHostDevices asserts a WorkerPool whose spec.template declares
+// host devices + node placement gets them on its pods — the generic, data-driven
+// replacement for the former hardcoded micro-VM /dev/kvm branch. A pool that
+// declares none (e.g. a default gVisor pool) gets none.
+func TestPodTemplateHostDevices(t *testing.T) {
+	// What a micro-VM pool now declares as data (instead of the controller
+	// hardcoding it for the class).
+	microvmTmpl := &atev1alpha1.WorkerPoolPodTemplate{
+		NodeSelector: map[string]string{"ate.dev/sandboxClass": "microvm"},
+		Tolerations: []corev1.Toleration{{
+			Key:      "ate.dev/sandboxClass",
+			Operator: corev1.TolerationOpEqual,
+			Value:    "microvm",
+			Effect:   corev1.TaintEffectNoSchedule,
+		}},
+		HostDevices: []atev1alpha1.HostDevice{{Path: "/dev/kvm", Type: corev1.HostPathCharDev}},
+	}
 	tests := []struct {
-		name        string
-		class       atev1alpha1.SandboxClass
-		wantMicroVM bool
+		name string
+		tmpl *atev1alpha1.WorkerPoolPodTemplate
+		want bool
 	}{
-		{"gvisor default", "", false},
-		{"gvisor explicit", atev1alpha1.SandboxClassGvisor, false},
-		{"microvm", atev1alpha1.SandboxClassMicroVM, true},
+		{"no template (gVisor pool)", nil, false},
+		{"template declares /dev/kvm + placement", microvmTmpl, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			wp := testWorkerPoolApplyConfig(nil)
-			wp.Spec.SandboxClass = tt.class
+			wp := testWorkerPoolApplyConfig(tt.tmpl)
 			ps := buildDeploymentApplyConfig(wp).Spec.Template.Spec
 
 			hasVol := false
 			for _, v := range ps.Volumes {
-				if v.Name != nil && *v.Name == "dev-kvm" {
+				if v.HostPath != nil && v.HostPath.Path != nil && *v.HostPath.Path == "/dev/kvm" {
 					hasVol = true
-					if v.HostPath == nil || v.HostPath.Path == nil || *v.HostPath.Path != "/dev/kvm" ||
-						v.HostPath.Type == nil || *v.HostPath.Type != corev1.HostPathCharDev {
-						t.Errorf("dev-kvm volume = %+v, want /dev/kvm CharDevice", v.HostPath)
+					if v.HostPath.Type == nil || *v.HostPath.Type != corev1.HostPathCharDev {
+						t.Errorf("/dev/kvm volume type = %v, want CharDevice", v.HostPath.Type)
 					}
 				}
 			}
@@ -253,9 +263,9 @@ func TestMicroVMPodShape(t *testing.T) {
 					hasTol = true
 				}
 			}
-			if hasVol != tt.wantMicroVM || hasMount != tt.wantMicroVM || hasSelector != tt.wantMicroVM || hasTol != tt.wantMicroVM {
-				t.Errorf("microvm shape: vol=%v mount=%v selector=%v toleration=%v, want all %v",
-					hasVol, hasMount, hasSelector, hasTol, tt.wantMicroVM)
+			if hasVol != tt.want || hasMount != tt.want || hasSelector != tt.want || hasTol != tt.want {
+				t.Errorf("pod shape: vol=%v mount=%v selector=%v toleration=%v, want all %v",
+					hasVol, hasMount, hasSelector, hasTol, tt.want)
 			}
 		})
 	}

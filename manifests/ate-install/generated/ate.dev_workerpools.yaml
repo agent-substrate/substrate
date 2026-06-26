@@ -100,6 +100,40 @@ spec:
                 description: Template holds optional pod scheduling and resource settings
                   for worker pods.
                 properties:
+                  hostDevices:
+                    description: |-
+                      HostDevices are host device files to expose to the ateom container; each is
+                      mounted as a hostPath volume at its own path (e.g. /dev/kvm for the micro-VM
+                      runtime). This lets a sandbox class declare the devices its workers need as
+                      data, instead of the controller hardcoding them per class.
+                    items:
+                      description: HostDevice is a host device file exposed to the
+                        ateom container at Path.
+                      properties:
+                        path:
+                          description: |-
+                            Path is the absolute host device path, also used as the in-container mount
+                            path (e.g. "/dev/kvm").
+                          maxLength: 511
+                          minLength: 1
+                          pattern: ^/
+                          type: string
+                        type:
+                          default: CharDevice
+                          description: |-
+                            Type is the hostPath type of the device file: CharDevice (default) or
+                            BlockDevice.
+                          enum:
+                          - CharDevice
+                          - BlockDevice
+                          type: string
+                      required:
+                      - path
+                      type: object
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - path
+                    x-kubernetes-list-type: map
                   nodeAffinity:
                     description: |-
                       NodeAffinity scheduling rules for the worker pods. Mapped to

@@ -49,6 +49,36 @@ type WorkerPoolPodTemplate struct {
 	//
 	// +optional
 	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
+
+	// HostDevices are host device files to expose to the ateom container; each is
+	// mounted as a hostPath volume at its own path (e.g. /dev/kvm for the micro-VM
+	// runtime). This lets a sandbox class declare the devices its workers need as
+	// data, instead of the controller hardcoding them per class.
+	//
+	// +optional
+	// +listType=map
+	// +listMapKey=path
+	HostDevices []HostDevice `json:"hostDevices,omitempty"`
+}
+
+// HostDevice is a host device file exposed to the ateom container at Path.
+type HostDevice struct {
+	// Path is the absolute host device path, also used as the in-container mount
+	// path (e.g. "/dev/kvm").
+	//
+	// +required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=511
+	// +kubebuilder:validation:Pattern=`^/`
+	Path string `json:"path"`
+
+	// Type is the hostPath type of the device file: CharDevice (default) or
+	// BlockDevice.
+	//
+	// +optional
+	// +kubebuilder:default=CharDevice
+	// +kubebuilder:validation:Enum=CharDevice;BlockDevice
+	Type corev1.HostPathType `json:"type,omitempty"`
 }
 
 type WorkerPoolSpec struct {

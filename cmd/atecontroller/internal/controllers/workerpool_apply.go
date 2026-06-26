@@ -15,6 +15,11 @@
 package controllers
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"regexp"
+	"strings"
+
 	corev1 "k8s.io/api/core/v1"
 	appsv1ac "k8s.io/client-go/applyconfigurations/apps/v1"
 	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
@@ -60,7 +65,6 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool) *appsv1ac.Deployment
 				WithType(corev1.HostPathDirectoryOrCreate)))
 
 	applyWorkerPoolPodTemplate(podSpecAC, containerAC, wp.Spec.Template)
-	maybeApplyMicroVMPodShape(podSpecAC, containerAC, wp.Spec.SandboxClass)
 	podSpecAC.WithContainers(containerAC)
 
 	return appsv1ac.Deployment(deploymentName(wp.Name), wp.Namespace).
@@ -80,53 +84,6 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool) *appsv1ac.Deployment
 					"ate.dev/worker-pool": wp.Name,
 				}).
 				WithSpec(podSpecAC)))
-}
-
-// maybeApplyMicroVMPodShape adds the /dev/kvm device and node placement a
-// micro-VM (kata + cloud-hypervisor) worker pool needs, on top of any
-// pod-template settings. No-op unless sandboxClass is the micro-VM class.
-//
-// TODO: this hardcodes one sandbox class's pod requirements in the controller.
-// Consider making it generic so a sandbox class can declare its own pod shape
-// (e.g. required devices/mounts + node placement on the SandboxConfig spec)
-// instead of branching on SandboxClass here, so new classes don't need a
-// controller change.
-func maybeApplyMicroVMPodShape(
-	podSpecAC *corev1ac.PodSpecApplyConfiguration,
-	containerAC *corev1ac.ContainerApplyConfiguration,
-	sandboxClass atev1alpha1.SandboxClass,
-) {
-	if sandboxClass != atev1alpha1.SandboxClassMicroVM {
-		return
-	}
-
-	// The micro-VM runtime needs /dev/kvm. The container is already privileged
-	// (so it can also reach vhost devices), but we mount /dev/kvm explicitly.
-	containerAC.WithVolumeMounts(corev1ac.VolumeMount().
-		WithName("dev-kvm").
-		WithMountPath("/dev/kvm"))
-	podSpecAC.WithVolumes(corev1ac.Volume().
-		WithName("dev-kvm").
-		WithHostPath(corev1ac.HostPathVolumeSource().
-			WithPath("/dev/kvm").
-			WithType(corev1.HostPathCharDev)))
-
-	// Pin placement to KVM-capable, nested-virt nodes via nodeSelector +
-	// toleration on ate.dev/sandboxClass=microvm. This is our own convention
-	// (GKE attaches no label/taint to nested-virt pools): applied to kind nodes
-	// by hack/create-kind-cluster.sh and via --node-labels at GKE pool creation.
-	// Additive on top of the WorkerPool's configurable scheduling fields
-	// (spec.template nodeSelector/tolerations/affinity, added in #247) — merge,
-	// don't overwrite.
-	if podSpecAC.NodeSelector == nil {
-		podSpecAC.NodeSelector = map[string]string{}
-	}
-	podSpecAC.NodeSelector["ate.dev/sandboxClass"] = string(atev1alpha1.SandboxClassMicroVM)
-	podSpecAC.WithTolerations(corev1ac.Toleration().
-		WithKey("ate.dev/sandboxClass").
-		WithOperator(corev1.TolerationOpEqual).
-		WithValue(string(atev1alpha1.SandboxClassMicroVM)).
-		WithEffect(corev1.TaintEffectNoSchedule))
 }
 
 func applyWorkerPoolPodTemplate(
@@ -163,6 +120,41 @@ func applyWorkerPoolPodTemplate(
 			resourcesAC.WithLimits(tmpl.Resources.Limits)
 		}
 	}
+
+	// HostDevices: expose each host device file to the ateom container as a
+	// hostPath volume mounted at its own path (e.g. /dev/kvm for the micro-VM
+	// runtime). This replaces the former hardcoded per-class /dev/kvm branch — a
+	// sandbox class now declares the devices its workers need as data.
+	for i := range tmpl.HostDevices {
+		d := &tmpl.HostDevices[i]
+		volName := hostDeviceVolumeName(d.Path)
+		hostPath := corev1ac.HostPathVolumeSource().WithPath(d.Path)
+		if d.Type != "" {
+			hostPath.WithType(d.Type)
+		}
+		podSpecAC.WithVolumes(corev1ac.Volume().WithName(volName).WithHostPath(hostPath))
+		containerAC.WithVolumeMounts(corev1ac.VolumeMount().WithName(volName).WithMountPath(d.Path))
+	}
+}
+
+var volNameInvalidChars = regexp.MustCompile(`[^a-z0-9-]+`)
+
+// hostDeviceVolumeName derives a valid, unique DNS-1123 volume name from a host
+// device path. A readable sanitized prefix (e.g. "dev-kvm" for "/dev/kvm") is
+// suffixed with a short hash of the full path, so arbitrary paths can't produce
+// an over-long, invalid, or colliding volume name.
+func hostDeviceVolumeName(path string) string {
+	sum := sha256.Sum256([]byte(path))
+	suffix := hex.EncodeToString(sum[:])[:8]
+	prefix := strings.Trim(volNameInvalidChars.ReplaceAllString(strings.ToLower(path), "-"), "-")
+	const maxPrefix = 63 - 1 - 8 // leave room for "-" + 8 hex chars (<= 63 total)
+	if len(prefix) > maxPrefix {
+		prefix = strings.Trim(prefix[:maxPrefix], "-")
+	}
+	if prefix == "" {
+		prefix = "hostdev"
+	}
+	return prefix + "-" + suffix
 }
 
 func tolerationApplyValues(tolerations []*corev1ac.TolerationApplyConfiguration) []corev1ac.TolerationApplyConfiguration {
