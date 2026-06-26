@@ -111,7 +111,7 @@ func TestValidateContainerNames(t *testing.T) {
 	}
 }
 
-func TestValidateRunscHash(t *testing.T) {
+func TestValidateAssetHash(t *testing.T) {
 	const valid = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
 	tests := []struct {
@@ -129,8 +129,8 @@ func TestValidateRunscHash(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if err := ValidateRunscHash(tt.hash); (err != nil) != tt.wantErr {
-				t.Errorf("ValidateRunscHash(%q) err = %v, wantErr %v", tt.hash, err, tt.wantErr)
+			if err := ValidateAssetHash(tt.hash); (err != nil) != tt.wantErr {
+				t.Errorf("ValidateAssetHash(%q) err = %v, wantErr %v", tt.hash, err, tt.wantErr)
 			}
 		})
 	}

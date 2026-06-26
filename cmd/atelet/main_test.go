@@ -255,7 +255,7 @@ func TestFetchAssetRejectsBadHash(t *testing.T) {
 	// Invalid (8 chars, not 64) but separator-free, so it resolves to a normal
 	// filename inside the temp StaticFilesDir.
 	const badHash = "deadbeef"
-	if err := os.WriteFile(ateompath.RunSCBinaryPath(badHash), []byte("planted"), 0o755); err != nil {
+	if err := os.WriteFile(ateompath.CachedAssetPath(badHash), []byte("planted"), 0o755); err != nil {
 		t.Fatalf("planting cache file: %v", err)
 	}
 
@@ -313,7 +313,7 @@ func TestFetchAssetStreaming(t *testing.T) {
 		if _, err := s.fetchAsset(context.Background(), assetEntry{URL: url, SHA256: goodHash}); err == nil {
 			t.Fatal("fetchAsset accepted an over-cap asset")
 		}
-		if _, err := os.Stat(ateompath.RunSCBinaryPath(goodHash)); !errors.Is(err, os.ErrNotExist) {
+		if _, err := os.Stat(ateompath.CachedAssetPath(goodHash)); !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("over-cap download left a file at the cache path (stat err = %v)", err)
 		}
 	})
@@ -326,7 +326,7 @@ func TestFetchAssetStreaming(t *testing.T) {
 		if _, err := s.fetchAsset(context.Background(), assetEntry{URL: url, SHA256: wrongHash}); err == nil {
 			t.Fatal("fetchAsset accepted a hash mismatch")
 		}
-		if _, err := os.Stat(ateompath.RunSCBinaryPath(wrongHash)); !errors.Is(err, os.ErrNotExist) {
+		if _, err := os.Stat(ateompath.CachedAssetPath(wrongHash)); !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("mismatched download left a file at the cache path (stat err = %v)", err)
 		}
 	})

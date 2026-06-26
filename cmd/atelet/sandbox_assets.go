@@ -115,11 +115,11 @@ func runscPathFor(paths map[string]string) string { return paths["runsc"] }
 // the shared static-files cache and returns its local path. On a cache hit it
 // returns immediately.
 func (s *AteomHerder) fetchAsset(ctx context.Context, entry assetEntry) (string, error) {
-	if err := resources.ValidateRunscHash(entry.SHA256); err != nil {
+	if err := resources.ValidateAssetHash(entry.SHA256); err != nil {
 		return "", status.Error(codes.InvalidArgument, err.Error())
 	}
 
-	localPath := ateompath.RunSCBinaryPath(entry.SHA256)
+	localPath := ateompath.CachedAssetPath(entry.SHA256)
 	_, err := os.Stat(localPath)
 	if err == nil { // EQUALS nil
 		return localPath, nil

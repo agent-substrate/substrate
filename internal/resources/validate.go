@@ -94,19 +94,19 @@ func ValidateContainerNames(names []string) error {
 	return nil
 }
 
-// ValidateRunscHash ensures the runsc SHA-256 hash is exactly 64 hex
-// characters before it is used to build the on-disk binary path
-// (static-files/runsc-<hash>) and, on a cache hit, returned for ateom to
-// execute. Without this, a hash containing path separators or ".." could
-// point the cache-hit early return (and the download target) at an arbitrary
-// binary outside the static-files dir.
-func ValidateRunscHash(sha256Hash string) error {
+// ValidateAssetHash ensures a content-addressed asset's SHA-256 hash is exactly
+// 64 hex characters before it is used to build the on-disk cache path
+// (static-files/runsc-<hash>) and, on a cache hit, returned for ateom to use.
+// Without this, a hash containing path separators or ".." could point the
+// cache-hit early return (and the download target) at an arbitrary file outside
+// the static-files dir.
+func ValidateAssetHash(sha256Hash string) error {
 	if len(sha256Hash) != 64 {
-		return fmt.Errorf("invalid runsc sha256 hash: want 64 hex chars, got %d", len(sha256Hash))
+		return fmt.Errorf("invalid asset sha256 hash: want 64 hex chars, got %d", len(sha256Hash))
 	}
 	// Same decoder atelet's digest comparison uses.
 	if _, err := hex.DecodeString(sha256Hash); err != nil {
-		return fmt.Errorf("invalid runsc sha256 hash %q: must be hex", sha256Hash)
+		return fmt.Errorf("invalid asset sha256 hash %q: must be hex", sha256Hash)
 	}
 	return nil
 }
