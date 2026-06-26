@@ -57,9 +57,7 @@ func main() {
 }
 
 func handleRequest(w http.ResponseWriter, r *http.Request) {
-	log.Printf("DEBUG: Request received. Path=%s Host=%s", r.URL.Path, r.Host)
-
-	// 1. Identify Actor (Robust extraction)
+	// 1. Identify Actor
 	actorID := r.Header.Get("X-AgentSet-Session")
 	if actorID == "" {
 		actorID = r.Header.Get("x-agentset-session")
@@ -80,23 +78,15 @@ func handleRequest(w http.ResponseWriter, r *http.Request) {
 		actorID = "unknown"
 	}
 
-	log.Printf("DEBUG: Identified ActorID: [%s]", actorID)
-
 	body, _ := io.ReadAll(r.Body)
 	message := string(body)
 	if message == "" {
 		message = "Status Check"
 	}
 
-	// 1. Respond to user
+	// 2. Respond
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("Agent Response: [%s] | Identity: %s | Session: %s\n", message, residentSecret, actorID))
-	if actorID == "" {
-		sb.WriteString("DEBUG: ID Missing. Headers received:\n")
-		for k, v := range r.Header {
-			sb.WriteString(fmt.Sprintf("  %s: %v\n", k, v))
-		}
-	}
 	response := sb.String()
 	w.Header().Set("Content-Type", "text/plain")
 	w.WriteHeader(http.StatusOK)
