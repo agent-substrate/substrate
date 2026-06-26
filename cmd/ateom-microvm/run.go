@@ -150,6 +150,28 @@ func (s *AteomService) resolveRuntime(paths map[string]string) resolvedRuntime {
 	}
 }
 
+// writeGuestResolvConf copies the worker pod's /etc/resolv.conf into the bundle
+// rootfs (before it's packed into the ext4 disk) so the guest gets cluster DNS:
+// ateom drops atelet's resolv.conf bind and sends no CreateSandbox.Dns, so the
+// guest can otherwise reach IPs but not resolve names.
+func writeGuestResolvConf(rootfs string) error {
+	content, err := os.ReadFile("/etc/resolv.conf")
+	if err != nil {
+		return fmt.Errorf("reading host resolv.conf: %w", err)
+	}
+	if len(content) == 0 {
+		return fmt.Errorf("host /etc/resolv.conf is empty")
+	}
+	etc := filepath.Join(rootfs, "etc")
+	if err := os.MkdirAll(etc, 0o755); err != nil {
+		return fmt.Errorf("creating %q: %w", etc, err)
+	}
+	if err := os.WriteFile(filepath.Join(etc, "resolv.conf"), content, 0o644); err != nil {
+		return fmt.Errorf("writing guest resolv.conf: %w", err)
+	}
+	return nil
+}
+
 // RunWorkload boots the actor as a cloud-hypervisor micro-VM that ateom owns.
 //
 // ateom boots cloud-hypervisor itself — no kata shim — and gives the actor a
@@ -217,6 +239,9 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	// Build the actor's writable rootfs as a raw ext4 virtio-blk disk from the
 	// atelet-populated OCI bundle rootfs. This becomes /dev/vdb.
 	diskPath := filepath.Join(actorDir, actorRootfsDiskName)
+	if err := writeGuestResolvConf(filepath.Join(bundle, "rootfs")); err != nil {
+		return nil, fmt.Errorf("while writing guest resolv.conf: %w", err)
+	}
 	if err := kata.BuildExt4Image(ctx, filepath.Join(bundle, "rootfs"), diskPath); err != nil {
 		return nil, fmt.Errorf("while building actor rootfs disk: %w", err)
 	}

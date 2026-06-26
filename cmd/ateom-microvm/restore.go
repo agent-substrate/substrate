@@ -99,6 +99,12 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 		slog.InfoContext(ctx, "Reset actor rootfs disk to golden (template)", slog.String("id", id))
 	} else {
 		bundleRootfs := filepath.Join(ateompath.OCIBundlePath(ns, name, id, containers[0].GetName()), "rootfs")
+		// Cross-node restore rebuilds from the bundle (no local golden template),
+		// so re-inject DNS here too; the same-node golden-copy path above already
+		// carries it from the golden boot.
+		if err := writeGuestResolvConf(bundleRootfs); err != nil {
+			return nil, fmt.Errorf("while writing guest resolv.conf: %w", err)
+		}
 		if err := kata.BuildExt4Image(ctx, bundleRootfs, diskPath); err != nil {
 			return nil, fmt.Errorf("while reconstructing rootfs disk from image: %w", err)
 		}
