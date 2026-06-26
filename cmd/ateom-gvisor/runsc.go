@@ -24,7 +24,7 @@ import (
 	"os"
 	"os/exec"
 
-	"github.com/agent-substrate/substrate/internal/ateompath"
+	"github.com/agent-substrate/substrate/pkg/ateompath"
 )
 
 type runsc struct {

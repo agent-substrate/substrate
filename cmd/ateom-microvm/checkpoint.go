@@ -26,8 +26,8 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/ch"
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/kata"
-	"github.com/agent-substrate/substrate/internal/ateompath"
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/pkg/ateompath"
+	"github.com/agent-substrate/substrate/pkg/proto/ateompb"
 )
 
 // CheckpointWorkload suspends the actor and writes a portable CH snapshot.

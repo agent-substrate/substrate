@@ -28,9 +28,9 @@ import (
 	"runtime"
 
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/ategcs"
-	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
+	"github.com/agent-substrate/substrate/pkg/ateompath"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -107,19 +107,15 @@ func (s *AteomHerder) ensureSandboxAssets(ctx context.Context, rec *sandboxAsset
 	return paths, nil
 }
 
-// runscPathFor returns the local path of the gVisor "runsc" asset from a fetched
-// asset-path map, or "" if the runtime has none (e.g. micro-VM).
-func runscPathFor(paths map[string]string) string { return paths["runsc"] }
-
 // fetchAsset downloads one content-addressed asset (verifying its sha256) into
 // the shared static-files cache and returns its local path. On a cache hit it
 // returns immediately.
 func (s *AteomHerder) fetchAsset(ctx context.Context, entry assetEntry) (string, error) {
-	if err := resources.ValidateRunscHash(entry.SHA256); err != nil {
+	if err := resources.ValidateAssetHash(entry.SHA256); err != nil {
 		return "", status.Error(codes.InvalidArgument, err.Error())
 	}
 
-	localPath := ateompath.RunSCBinaryPath(entry.SHA256)
+	localPath := ateompath.CachedAssetPath(entry.SHA256)
 	_, err := os.Stat(localPath)
 	if err == nil { // EQUALS nil
 		return localPath, nil

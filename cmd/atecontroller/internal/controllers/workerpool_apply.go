@@ -20,8 +20,8 @@ import (
 	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
 	metav1ac "k8s.io/client-go/applyconfigurations/meta/v1"
 
-	"github.com/agent-substrate/substrate/internal/ateompath"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
+	"github.com/agent-substrate/substrate/pkg/ateompath"
 )
 
 // buildDeploymentApplyConfig constructs the SSA apply configuration for the

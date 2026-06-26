@@ -30,11 +30,11 @@ import (
 	"cloud.google.com/go/compute/metadata"
 	"github.com/agent-substrate/substrate/internal/actorlog"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
-	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/contextlogging"
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/agent-substrate/substrate/internal/version"
+	"github.com/agent-substrate/substrate/pkg/ateompath"
+	"github.com/agent-substrate/substrate/pkg/proto/ateompb"
 	"github.com/google/nftables"
 	"github.com/google/nftables/binaryutil"
 	"github.com/google/nftables/expr"
@@ -197,7 +197,7 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	}()
 
 	rcmd := &runsc{
-		path:                   req.GetRunscPath(),
+		path:                   req.GetRuntimeAssetPaths()["runsc"],
 		actorTemplateNamespace: req.GetActorTemplateNamespace(),
 		actorTemplateName:      req.GetActorTemplateName(),
 		actorID:                req.GetActorId(),
@@ -244,7 +244,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	//   * After we exit, atelet will tear down OCI bundles and reset the actor directory.
 
 	rcmd := &runsc{
-		path:                   req.GetRunscPath(),
+		path:                   req.GetRuntimeAssetPaths()["runsc"],
 		actorTemplateNamespace: req.GetActorTemplateNamespace(),
 		actorTemplateName:      req.GetActorTemplateName(),
 		actorID:                req.GetActorId(),
@@ -351,7 +351,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	}()
 
 	rcmd := &runsc{
-		path:                   req.GetRunscPath(),
+		path:                   req.GetRuntimeAssetPaths()["runsc"],
 		actorTemplateNamespace: req.GetActorTemplateNamespace(),
 		actorTemplateName:      req.GetActorTemplateName(),
 		actorID:                req.GetActorId(),

@@ -26,11 +26,14 @@ const (
 )
 
 var (
-	// StaticFilesDir holds things like downloaded runsc binaries.
+	// StaticFilesDir holds downloaded, content-addressed sandbox assets.
 	StaticFilesDir = filepath.Join(BasePath, "static-files")
 )
 
-func RunSCBinaryPath(sha256 string) string {
+// CachedAssetPath returns the on-disk cache path for a content-addressed
+// sandbox asset, keyed by its SHA-256 hash. The "runsc-" filename prefix is
+// kept for backward compatibility — existing snapshots embed this absolute path.
+func CachedAssetPath(sha256 string) string {
 	return filepath.Join(StaticFilesDir, "runsc-"+sha256)
 }
 

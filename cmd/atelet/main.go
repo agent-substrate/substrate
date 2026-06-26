@@ -32,12 +32,12 @@ import (
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/ategcs"
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/memorypullcache"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
-	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
-	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/agent-substrate/substrate/internal/version"
+	"github.com/agent-substrate/substrate/pkg/ateompath"
+	"github.com/agent-substrate/substrate/pkg/proto/ateompb"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/google/go-containerregistry/pkg/authn"
@@ -249,13 +249,13 @@ func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (*atele
 		return nil, err
 	}
 
-	// Tell ateom to start the workload. gVisor uses RunscPath; the micro-VM
-	// runtime uses the full RuntimeAssetPaths set.
+	// Tell ateom to start the workload. Every backend reads the assets it needs
+	// from RuntimeAssetPaths (gVisor reads "runsc"; the micro-VM runtime reads its
+	// cloud-hypervisor/kata-* set).
 	if _, err := client.RunWorkload(ctx, &ateompb.RunWorkloadRequest{
 		ActorTemplateNamespace: ns,
 		ActorTemplateName:      tmpl,
 		ActorId:                actorID,
-		RunscPath:              runscPathFor(assetPaths),
 		RuntimeAssetPaths:      assetPaths,
 		Spec:                   buildAteomWorkloadSpec(req.GetSpec()),
 	}); err != nil {
@@ -335,7 +335,6 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 		ActorTemplateNamespace: ns,
 		ActorTemplateName:      tmpl,
 		ActorId:                actorID,
-		RunscPath:              runscPathFor(assetPaths),
 		RuntimeAssetPaths:      assetPaths,
 		Spec:                   buildAteomWorkloadSpec(req.GetSpec()),
 	})
@@ -534,7 +533,6 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		ActorTemplateNamespace: ns,
 		ActorTemplateName:      tmpl,
 		ActorId:                actorID,
-		RunscPath:              runscPathFor(assetPaths),
 		RuntimeAssetPaths:      assetPaths,
 		Spec:                   buildAteomWorkloadSpec(req.GetSpec()),
 	}); err != nil {
