@@ -84,7 +84,7 @@ func TestActorLifecycle(t *testing.T) {
 //  5. Suspend & Resume actor.
 //  6. Call to actor and validate memory and file counters.
 func TestDurableDirLifecycle(t *testing.T) {
-	if isMicroVMEnvironment()
+	if isMicroVMEnvironment() {
 		t.Skip("Skipping TestDurableDirLifecycle for microVM environment")
 	}
 
