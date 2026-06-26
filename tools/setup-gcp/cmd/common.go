@@ -14,27 +14,58 @@
 
 package cmd
 
-import "os"
+import (
+	"os"
+	"strconv"
+)
 
 type Config struct {
-	ProjectID       string
-	ProjectNumber   string
-	Region          string
+	ProjectID     string
+	ProjectNumber string
+	Region        string
+
 	ClusterName     string
 	ClusterLocation string
 	ClusterVersion  string
-	Network         string
-	Subnetwork      string
+
+	Network           string
+	Subnetwork        string
+	EnableDataplaneV2 bool
+
 	NodePoolName    string
 	NodePoolVersion string
 	MachineType     string
-	BucketName      string
-	DashboardDir    string
+
+	BucketName string
+
+	DashboardDir string
 }
 
-func getEnv(key, fallback string) string {
-	if val, ok := os.LookupEnv(key); ok {
-		return val
+type getEnvType interface {
+	string | bool
+}
+
+// getEnv retrieves an environment variable by key and parses it into the specified type.
+// If the environment variable is not set or parsing fails, it returns the fallback value.
+func getEnv[T getEnvType](key string, fallback T) T {
+	val, ok := os.LookupEnv(key)
+	if !ok {
+		return fallback
 	}
+
+	var ret any
+	var err error
+
+	switch any(fallback).(type) {
+	case string:
+		ret = val
+	case bool:
+		ret, err = strconv.ParseBool(val)
+	}
+
+	if err == nil {
+		return ret.(T)
+	}
+
 	return fallback
 }

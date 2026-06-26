@@ -53,6 +53,12 @@ func deleteCluster(ctx context.Context, cfg *Config) error {
 
 func createClusterInternal(ctx context.Context, cfg *Config, client *container.ClusterManagerClient, parent string) error {
 	slog.Info("Cluster does not exist. Creating...", slog.String("cluster", cfg.ClusterName))
+	var networkConfig *containerpb.NetworkConfig
+	if cfg.EnableDataplaneV2 {
+		networkConfig = &containerpb.NetworkConfig{
+			DatapathProvider: containerpb.DatapathProvider_ADVANCED_DATAPATH,
+		}
+	}
 	req := &containerpb.CreateClusterRequest{
 		Parent: parent,
 		Cluster: &containerpb.Cluster{
@@ -73,8 +79,9 @@ func createClusterInternal(ctx context.Context, cfg *Config, client *container.C
 			WorkloadIdentityConfig: &containerpb.WorkloadIdentityConfig{
 				WorkloadPool: fmt.Sprintf("%s.svc.id.goog", cfg.ProjectID),
 			},
-			Network:    cfg.Network,
-			Subnetwork: cfg.Subnetwork,
+			Network:       cfg.Network,
+			Subnetwork:    cfg.Subnetwork,
+			NetworkConfig: networkConfig,
 		},
 	}
 	op, err := client.CreateCluster(ctx, req)
@@ -120,6 +127,16 @@ func createClusterIdempotent(ctx context.Context, cfg *Config) error {
 	expectedSubnetwork := fmt.Sprintf("projects/%s/regions/%s/subnetworks/%s", cfg.ProjectID, cfg.Region, cfg.Subnetwork)
 	if cluster.NetworkConfig != nil && cluster.NetworkConfig.Subnetwork != "" && !strings.HasSuffix(cluster.NetworkConfig.Subnetwork, expectedSubnetwork) {
 		slog.Info("Mismatch in subnetwork", slog.String("current", cluster.NetworkConfig.Subnetwork), slog.String("expected", expectedSubnetwork))
+		if err := deleteCluster(ctx, cfg); err != nil {
+			return err
+		}
+		return createClusterInternal(ctx, cfg, client, parent)
+	}
+
+	// Recreate cluster if dataplane v2 configuration mismatches.
+	currentIsV2 := cluster.NetworkConfig != nil && cluster.NetworkConfig.DatapathProvider == containerpb.DatapathProvider_ADVANCED_DATAPATH
+	if currentIsV2 != cfg.EnableDataplaneV2 {
+		slog.Info("Mismatch in Dataplane V2 configuration", slog.Bool("current", currentIsV2), slog.Bool("expected", cfg.EnableDataplaneV2))
 		if err := deleteCluster(ctx, cfg); err != nil {
 			return err
 		}
@@ -253,4 +270,5 @@ func init() {
 	clusterCmd.Flags().StringVar(&cfg.Network, "network", getEnv("NETWORK", "default"), "VPC network name [env: NETWORK]")
 	clusterCmd.Flags().StringVar(&cfg.Subnetwork, "subnetwork", getEnv("SUBNETWORK", "default"), "VPC subnetwork name [env: SUBNETWORK]")
 	clusterCmd.Flags().StringVar(&cfg.MachineType, "machine-type", getEnv("GVISOR_NODE_MACHINE_TYPE", "c3-standard-4"), "Machine type for the gVisor node pool [env: GVISOR_NODE_MACHINE_TYPE]")
+	clusterCmd.Flags().BoolVar(&cfg.EnableDataplaneV2, "enable-dataplane-v2", getEnv("ENABLE_DATAPLANE_V2", true), "Enable Dataplane V2 [env: ENABLE_DATAPLANE_V2]")
 }
