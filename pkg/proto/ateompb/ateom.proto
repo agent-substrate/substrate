@@ -16,7 +16,7 @@ syntax = "proto3";
 
 package ateom;
 
-option go_package = "github.com/agent-substrate/substrate/internal/proto/ateompb";
+option go_package = "github.com/agent-substrate/substrate/pkg/proto/ateompb";
 
 // Ateom is the interface to control a single gVisor (or, in the future microVM)
 // guest inside a worker pod.

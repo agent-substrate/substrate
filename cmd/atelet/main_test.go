@@ -26,8 +26,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
+	"github.com/agent-substrate/substrate/pkg/ateompath"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )

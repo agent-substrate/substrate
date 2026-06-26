@@ -28,7 +28,7 @@ import (
 	"strings"
 
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/memorypullcache"
-	"github.com/agent-substrate/substrate/internal/ateompath"
+	"github.com/agent-substrate/substrate/pkg/ateompath"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"

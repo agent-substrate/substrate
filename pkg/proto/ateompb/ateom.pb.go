@@ -581,7 +581,7 @@ const file_ateom_proto_rawDesc = "" +
 	"\x05Ateom\x12F\n" +
 	"\vRunWorkload\x12\x19.ateom.RunWorkloadRequest\x1a\x1a.ateom.RunWorkloadResponse\"\x00\x12[\n" +
 	"\x12CheckpointWorkload\x12 .ateom.CheckpointWorkloadRequest\x1a!.ateom.CheckpointWorkloadResponse\"\x00\x12R\n" +
-	"\x0fRestoreWorkload\x12\x1d.ateom.RestoreWorkloadRequest\x1a\x1e.ateom.RestoreWorkloadResponse\"\x00B=Z;github.com/agent-substrate/substrate/internal/proto/ateompbb\x06proto3"
+	"\x0fRestoreWorkload\x12\x1d.ateom.RestoreWorkloadRequest\x1a\x1e.ateom.RestoreWorkloadResponse\"\x00B8Z6github.com/agent-substrate/substrate/pkg/proto/ateompbb\x06proto3"
 
 var (
 	file_ateom_proto_rawDescOnce sync.Once
