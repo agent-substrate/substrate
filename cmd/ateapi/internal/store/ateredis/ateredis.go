@@ -581,6 +581,9 @@ func (s *Persistence) ListActors(ctx context.Context, pageSize int32, pageTokenS
 				} else {
 					nextToken = ""
 				}
+				if len(result) >= int(pageSize) {
+					stop = true
+				}
 				break
 			}
 		}
