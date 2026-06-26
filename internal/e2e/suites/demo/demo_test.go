@@ -84,13 +84,8 @@ func TestActorLifecycle(t *testing.T) {
 //  5. Suspend & Resume actor.
 //  6. Call to actor and validate memory and file counters.
 func TestDurableDirLifecycle(t *testing.T) {
-	// TODO(BenTheElder) remove it once https://github.com/agent-substrate/substrate/pull/313 is merged.
-	srcName := "counter"
-	if v := os.Getenv("E2E_TEMPLATE_NAME"); v != "" {
-		srcName = v
-	}
-	if srcName != "counter" {
-		t.Skip("Skipping TestDurableDirLifecycle because E2E_TEMPLATE_NAME is not set to \"counter\"")
+	if isMicroVMEnvironment()
+		t.Skip("Skipping TestDurableDirLifecycle for microVM environment")
 	}
 
 	tests := []struct {
@@ -330,7 +325,12 @@ func pauseActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *
 	if err != nil {
 		t.Fatalf("failed to call actor: %v", err)
 	}
-	validateCounterResponse(t, resp, "after creation", 1, 1)
+
+	if isMicroVMEnvironment() {
+		validateCounterResponse(t, resp, "after creation", 1, -1)
+	} else {
+		validateCounterResponse(t, resp, "after creation", 1, 1)
+	}
 
 	// Pausing the actor
 	t.Logf("Pausing Actor %q...", actorID)
@@ -354,7 +354,11 @@ func pauseActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *
 	if err != nil {
 		t.Fatalf("failed to call actor again: %v", err)
 	}
-	validateCounterResponse(t, resp, "after pause", 2, 2)
+	if isMicroVMEnvironment() {
+		validateCounterResponse(t, resp, "after pause", 2, -1)
+	} else {
+		validateCounterResponse(t, resp, "after pause", 2, 2)
+	}
 
 	// Suspending the actor before deletion
 	t.Logf("Suspending Actor %q before deletion...", actorID)
@@ -409,7 +413,11 @@ func suspendActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj
 	if err != nil {
 		t.Fatalf("failed to call actor: %v", err)
 	}
-	validateCounterResponse(t, resp, "after creation", 1, 1)
+	if isMicroVMEnvironment() {
+		validateCounterResponse(t, resp, "after creation", 1, -1)
+	} else {
+		validateCounterResponse(t, resp, "after creation", 1, 1)
+	}
 
 	// Suspending the actor
 	t.Logf("Suspending Actor %q...", actorID)
@@ -433,7 +441,11 @@ func suspendActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj
 	if err != nil {
 		t.Fatalf("failed to call actor again: %v", err)
 	}
-	validateCounterResponse(t, resp, "after suspend", 2, 2)
+	if isMicroVMEnvironment() {
+		validateCounterResponse(t, resp, "after suspend", 2, -1)
+	} else {
+		validateCounterResponse(t, resp, "after suspend", 2, 2)
+	}
 
 	// Suspending the actor before deletion
 	t.Logf("Suspending Actor %q before deletion...", actorID)
@@ -688,4 +700,9 @@ func callActor(t *testing.T, actorID string) (string, error) {
 	}
 
 	return string(body), nil
+}
+
+func isMicroVMEnvironment() bool {
+	// TODO(BenTheElder) remove it once https://github.com/agent-substrate/substrate/pull/313 is merged.
+	return os.Getenv("E2E_TEMPLATE_NAMESPACE") == "ate-demo-counter-microvm"
 }
