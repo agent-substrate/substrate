@@ -218,14 +218,15 @@ func (s *FinalizePausedStep) Execute(ctx context.Context, input *PauseInput, sta
 		}
 		// TODO(dberkov) - what if InProgressSnapshot is empty? That shouldn't be possible.
 		if latestActor.InProgressSnapshot != "" {
+			localInfo := &ateapipb.LocalSnapshotInfo{
+				SnapshotPrefix: latestActor.InProgressSnapshot,
+			}
+			if nodeName != "" {
+				localInfo.NodeVmsWithLocalSnapshots = []string{nodeName}
+			}
 			latestActor.LatestSnapshotInfo = &ateapipb.SnapshotInfo{
 				Type: ateapipb.SnapshotType_SNAPSHOT_TYPE_LOCAL,
-				Data: &ateapipb.SnapshotInfo_Local{
-					Local: &ateapipb.LocalSnapshotInfo{
-						SnapshotPrefix:            latestActor.InProgressSnapshot,
-						NodeVmsWithLocalSnapshots: []string{nodeName},
-					},
-				},
+				Data: &ateapipb.SnapshotInfo_Local{Local: localInfo},
 			}
 			latestActor.InProgressSnapshot = ""
 		}
