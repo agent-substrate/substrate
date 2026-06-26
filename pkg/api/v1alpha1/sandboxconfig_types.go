@@ -20,13 +20,19 @@ import (
 
 // SandboxClass selects the sandbox runtime family. It is shared by WorkerPool
 // (which family a pool runs) and SandboxConfig (which family a config is for).
+//
+// It is an open lowercase DNS-label string. "gvisor" and "microvm" are the
+// built-in classes, but an out-of-tree backend (a custom ateom-*) may define its
+// own class value and ship a matching SandboxConfig + WorkerPool (the WorkerPool
+// declaring any device mounts / node placement via spec.template) without
+// changing substrate.
 type SandboxClass string
 
 const (
 	// SandboxClassGvisor is the gVisor/runsc runtime (cmd/ateom-gvisor). Default.
 	SandboxClassGvisor SandboxClass = "gvisor"
-	// SandboxClassMicroVM is the micro-VM runtime (cmd/ateom-microvm); needs
-	// /dev/kvm and vhost devices.
+	// SandboxClassMicroVM is the micro-VM runtime (cmd/ateom-microvm); it needs
+	// /dev/kvm and vhost devices, declared on the WorkerPool's spec.template.
 	SandboxClassMicroVM SandboxClass = "microvm"
 )
 
@@ -55,7 +61,8 @@ type SandboxConfigSpec struct {
 	// WorkerPool only uses SandboxConfigs whose SandboxClass matches its own.
 	//
 	// +required
-	// +kubebuilder:validation:Enum=gvisor;microvm
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+	// +kubebuilder:validation:MaxLength=63
 	// +kubebuilder:default=gvisor
 	SandboxClass SandboxClass `json:"sandboxClass"`
 

@@ -371,12 +371,18 @@ func TestActorTemplateValidation(t *testing.T) {
 		},
 		wantErr: false,
 	}, {
-		name: "invalid SandboxClass",
+		name: "custom SandboxClass accepted (open class for out-of-tree backends)",
 		mutate: func(at *ActorTemplate) {
-			at.Spec.SandboxClass = "kvm"
+			at.Spec.SandboxClass = "foobar"
+		},
+		wantErr: false,
+	}, {
+		name: "invalid SandboxClass (violates DNS-label pattern)",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.SandboxClass = "Bad_Class"
 		},
 		wantErr: true,
-		errMsg:  "Unsupported value",
+		errMsg:  "should match",
 	}}
 
 	for _, tt := range tests {

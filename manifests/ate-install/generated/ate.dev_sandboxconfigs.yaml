@@ -113,9 +113,8 @@ spec:
                 description: |-
                   SandboxClass is the sandbox runtime family this config applies to. A
                   WorkerPool only uses SandboxConfigs whose SandboxClass matches its own.
-                enum:
-                - gvisor
-                - microvm
+                maxLength: 63
+                pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
                 type: string
             required:
             - sandboxClass

@@ -186,9 +186,8 @@ spec:
                   4) How does the default get set and who sets it?
 
                   See Also: WorkerPool SandboxClass
-                enum:
-                - gvisor
-                - microvm
+                maxLength: 63
+                pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
                 type: string
               snapshotsConfig:
                 description: Snapshots configuration for the actor.
