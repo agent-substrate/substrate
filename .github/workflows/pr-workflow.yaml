@@ -30,7 +30,7 @@ jobs:
     - run: go test -v ./...
     - name: verify
       run: hack/verify-all.sh
-  e2e-test:
+  e2e-test-matrix:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -52,3 +52,14 @@ jobs:
       run: hack/install-ate-kind.sh --deploy-demo-counter
     - name: Run E2E tests
       run: hack/run-e2e-kind.sh -v -args --no-color
+  e2e-test:
+    runs-on: ubuntu-latest
+    needs: e2e-test-matrix
+    if: always()
+    steps:
+    - name: Check E2E matrix
+      run: |
+        if [ "${{ needs.e2e-test-matrix.result }}" != "success" ]; then
+          echo "e2e-test-matrix result: ${{ needs.e2e-test-matrix.result }}"
+          exit 1
+        fi
