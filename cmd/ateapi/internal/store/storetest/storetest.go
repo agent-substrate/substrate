@@ -37,7 +37,10 @@ func SetupTestStore(t *testing.T) (store.Interface, func()) {
 		Addrs: []string{mr.Addr()},
 	})
 
-	persistence := ateredis.NewPersistence(rdb)
+	persistence, err := ateredis.NewPersistence(rdb)
+	if err != nil {
+		t.Fatalf("ateredis.NewPersistence: %v", err)
+	}
 
 	cleanup := func() {
 		mr.Close()

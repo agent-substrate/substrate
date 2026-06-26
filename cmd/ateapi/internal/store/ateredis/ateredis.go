@@ -56,6 +56,9 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/redis/go-redis/v9"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 )
@@ -74,16 +77,25 @@ type redisClient interface {
 
 // Persistence is a service that stores information about applications in Redis.
 type Persistence struct {
-	rdb redisClient
+	rdb                        redisClient
+	metricWorkerPubsubMessages metric.Int64Counter
 }
 
 var _ store.Interface = (*Persistence)(nil)
 
 // NewPersistence creates a new Persistence.
-func NewPersistence(redisClient *redis.ClusterClient) *Persistence {
-	return &Persistence{
-		rdb: redisClient,
+func NewPersistence(redisClient *redis.ClusterClient) (*Persistence, error) {
+	publishMessages, err := otel.Meter("ateredis").Int64Counter(
+		"persistence.worker.pubsub.messages",
+		metric.WithUnit("{message}"),
+		metric.WithDescription("Total worker-changes pub/sub PUBLISH attempts."))
+	if err != nil {
+		return nil, fmt.Errorf("create persistence.worker.pubsub.messages counter: %w", err)
 	}
+	return &Persistence{
+		rdb:                        redisClient,
+		metricWorkerPubsubMessages: publishMessages,
+	}, nil
 }
 
 func actorDBKey(id string) string {
@@ -128,6 +140,9 @@ func (s *Persistence) publishWorkerEvent(ctx context.Context, eventType store.Wo
 	}
 	if err := s.rdb.Publish(ctx, workerPubSubChannel, payload).Err(); err != nil {
 		slog.ErrorContext(ctx, "worker event publish failed", slog.Any("err", err))
+		s.metricWorkerPubsubMessages.Add(ctx, 1, metric.WithAttributes(attribute.String("error.type", "_OTHER")))
+	} else {
+		s.metricWorkerPubsubMessages.Add(ctx, 1)
 	}
 }
 

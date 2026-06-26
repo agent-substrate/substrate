@@ -253,7 +253,11 @@ func setupTest(t *testing.T, ns string) *testContext {
 	rdb := redis.NewClusterClient(&redis.ClusterOptions{
 		Addrs: []string{mr.Addr()},
 	})
-	persistence := ateredis.NewPersistence(rdb)
+	persistence, err := ateredis.NewPersistence(rdb)
+	if err != nil {
+		mr.Close()
+		t.Fatalf("ateredis.NewPersistence: %v", err)
+	}
 
 	// 2. Initialize Clientsets using global cfg
 	k8sClient, err := kubernetes.NewForConfig(cfg)
@@ -291,7 +295,12 @@ func setupTest(t *testing.T, ns string) *testContext {
 	substrateInformerFactory.WaitForCacheSync(ctx.Done())
 
 	// 4. Initialize Service
-	wc := workercache.New(persistence, 5*time.Minute)
+	wc, err := workercache.New(persistence, 5*time.Minute)
+	if err != nil {
+		cancel()
+		mr.Close()
+		t.Fatalf("workercache.New: %v", err)
+	}
 	if err := wc.Start(ctx); err != nil {
 		cancel()
 		mr.Close()
