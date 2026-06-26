@@ -22,6 +22,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -41,9 +42,16 @@ import (
 )
 
 // InitLogger sets the global slog logger to a JSON handler wrapped in
-// contextlogging.NewHandler. Call once at process start.
+// contextlogging.NewHandler, writing to os.Stdout. Call once at process start.
 func InitLogger() {
-	slog.SetDefault(slog.New(contextlogging.NewHandler(slog.NewJSONHandler(os.Stdout, nil))))
+	InitLoggerWithWriter(os.Stdout)
+}
+
+// InitLoggerWithWriter is InitLogger with an explicit destination. Use it to share
+// one synchronized writer between the runtime logger and a separate writer (e.g.
+// ateom's actor-log forwarder) so their lines don't interleave.
+func InitLoggerWithWriter(w io.Writer) {
+	slog.SetDefault(slog.New(contextlogging.NewHandler(slog.NewJSONHandler(w, nil))))
 }
 
 // serviceInstanceID is generated once so the tracer and meter resources share it.

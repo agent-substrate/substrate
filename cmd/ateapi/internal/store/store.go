@@ -69,6 +69,13 @@ type Interface interface {
 	// Lists all known workers. Returns nil if none found.
 	ListWorkers(ctx context.Context) ([]*ateapipb.Worker, error)
 
+	// WatchWorkers returns an active subscription to track worker state changes.
+	// The watch's Events channel is closed when the caller calls Close, the
+	// context is cancelled, or the underlying notification system is lost.
+	// Callers should treat a closed channel as a signal to re-subscribe, and
+	// must Close the watch to release its subscription.
+	WatchWorkers(ctx context.Context) (*WorkerWatch, error)
+
 	// AcquireLock attempts to acquire a distributed lock with a TTL.
 	// Returns true if the lock was successfully acquired.
 	// Returns false if the lock is already held by another client (conflict).
@@ -84,3 +91,39 @@ type Interface interface {
 	// DebugClearAll drop all data from the database. Useful for debugging / local testing/
 	DebugClearAll(ctx context.Context) error
 }
+
+// WorkerEventType indicates the type of change to a Worker.
+type WorkerEventType int
+
+const (
+	WorkerEventCreated WorkerEventType = iota
+	WorkerEventUpdated
+	WorkerEventDeleted
+)
+
+// WorkerEvent carries a single worker state change notification.
+type WorkerEvent struct {
+	Type   WorkerEventType
+	Worker *ateapipb.Worker
+}
+
+// WorkerWatch is an active subscription to worker state changes. The caller
+// must call Close when done to release the underlying subscription. Events is
+// closed when Close is called, the originating context is cancelled, or the
+// underlying notification system is lost.
+type WorkerWatch struct {
+	// Events delivers worker state changes until the watch is torn down.
+	Events <-chan WorkerEvent
+	// stop releases the subscription backing Events. It is a context.CancelFunc,
+	// so it is safe to call multiple times.
+	stop context.CancelFunc
+}
+
+// NewWorkerWatch builds a WorkerWatch from an events channel and the cancel
+// func that tears down its subscription.
+func NewWorkerWatch(events <-chan WorkerEvent, stop context.CancelFunc) *WorkerWatch {
+	return &WorkerWatch{Events: events, stop: stop}
+}
+
+// Close releases the subscription. Safe to call multiple times.
+func (w *WorkerWatch) Close() { w.stop() }

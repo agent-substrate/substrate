@@ -35,6 +35,15 @@ func (g *gcsClient) GetObject(ctx context.Context, bucket, object string) (io.Re
 	return g.client.Bucket(bucket).Object(object).NewReader(ctx)
 }
 
+// supportsStreamingPut is the streamingPutter marker: the GCS client's PutObject
+// accepts a non-seekable streaming body without buffering (it copies the reader
+// straight into a storage.Writer — no Content-Length / signing requirement), so
+// callers can pipe compression directly into the upload (overlap) instead of
+// staging a seekable temp file. (S3's PutObject needs a seekable body, so s3Client
+// does NOT implement this — see objects.go sendZstd.) Never called: its presence is
+// the signal.
+func (g *gcsClient) supportsStreamingPut() {}
+
 func (g *gcsClient) PutObject(ctx context.Context, bucket, object string, reader io.Reader) error {
 	wc := g.client.Bucket(bucket).Object(object).NewWriter(ctx)
 	// io.Copy reports local read errors; wc.Close() reports the actual

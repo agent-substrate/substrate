@@ -54,7 +54,6 @@ Below is a collection of finer-grained efforts which we believe align with the a
   * incremental snapshots
 * Support for S3 (via plugin)
 * Distinct lifecycle for “rootfs” and memory snapshots vs. “working” space.  Needs API surface of where to mount.
-*
 * ConfigMaps as volumes
 * Data locality in scheduling (needs to expose per-node available snapshots via API)
 
@@ -68,7 +67,6 @@ Below is a collection of finer-grained efforts which we believe align with the a
 * Audit logging on API and lifecycle operations.
 * Sandbox integrations for threat detection telemetry.
 * Harden actor networking to further isolate from the surrounding node (e.g. with current networking
-* Support for additional sandboxing technologies beyond gVisor, including at least one flavor of microVM.
 
 ### Observability
 

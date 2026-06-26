@@ -209,6 +209,58 @@ func TestBuildDeploymentApplyConfig(t *testing.T) {
 	}
 }
 
+// TestMicroVMPodShape asserts the micro-VM sandbox class adds the /dev/kvm
+// device (volume + container mount) and node placement (nodeSelector +
+// toleration on ate.dev/sandboxClass); other classes get none of it.
+func TestMicroVMPodShape(t *testing.T) {
+	tests := []struct {
+		name        string
+		class       atev1alpha1.SandboxClass
+		wantMicroVM bool
+	}{
+		{"gvisor default", "", false},
+		{"gvisor explicit", atev1alpha1.SandboxClassGvisor, false},
+		{"microvm", atev1alpha1.SandboxClassMicroVM, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			wp := testWorkerPoolApplyConfig(nil)
+			wp.Spec.SandboxClass = tt.class
+			ps := buildDeploymentApplyConfig(wp).Spec.Template.Spec
+
+			hasVol := false
+			for _, v := range ps.Volumes {
+				if v.Name != nil && *v.Name == "dev-kvm" {
+					hasVol = true
+					if v.HostPath == nil || v.HostPath.Path == nil || *v.HostPath.Path != "/dev/kvm" ||
+						v.HostPath.Type == nil || *v.HostPath.Type != corev1.HostPathCharDev {
+						t.Errorf("dev-kvm volume = %+v, want /dev/kvm CharDevice", v.HostPath)
+					}
+				}
+			}
+			hasMount := false
+			for _, c := range ps.Containers {
+				for _, m := range c.VolumeMounts {
+					if m.MountPath != nil && *m.MountPath == "/dev/kvm" {
+						hasMount = true
+					}
+				}
+			}
+			_, hasSelector := ps.NodeSelector["ate.dev/sandboxClass"]
+			hasTol := false
+			for _, tol := range ps.Tolerations {
+				if tol.Key != nil && *tol.Key == "ate.dev/sandboxClass" {
+					hasTol = true
+				}
+			}
+			if hasVol != tt.wantMicroVM || hasMount != tt.wantMicroVM || hasSelector != tt.wantMicroVM || hasTol != tt.wantMicroVM {
+				t.Errorf("microvm shape: vol=%v mount=%v selector=%v toleration=%v, want all %v",
+					hasVol, hasMount, hasSelector, hasTol, tt.wantMicroVM)
+			}
+		})
+	}
+}
+
 func testWorkerPoolApplyConfig(tmpl *atev1alpha1.WorkerPoolPodTemplate) *atev1alpha1.WorkerPool {
 	return &atev1alpha1.WorkerPool{
 		ObjectMeta: metav1.ObjectMeta{Name: "pool", Namespace: "default", UID: "uid"},
