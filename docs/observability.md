@@ -10,6 +10,7 @@ To make underlying infrastructure transitions transparent, Agent Substrate estab
 * `ate.dev/actor_id`: The unique identifier of the actor (e.g., `my-counter-1` or `test`).
 * `ate.dev/actor_template_name`: The name of the actor's ActorTemplate (e.g., `counter`).
 * `ate.dev/actor_template_namespace`: The Kubernetes namespace of the actor's ActorTemplate (e.g., `ate-demo-counter`).
+* `ate.dev/container_name`: The name of the container within the actor that produced the log line (e.g., `counter`), so a multi-container actor's logs can be demultiplexed by container.
 
 Currently, Agent Substrate automatically wraps container output and injects these metadata labels into **container logs**. For metrics and distributed tracing, Agent Substrate provides foundational system telemetry and on-demand request tracing, with roadmap plans to fully integrate actor-level correlation.
 
@@ -23,7 +24,7 @@ Agent Substrate captures container standard output/error, wraps them into struct
 For quick, on-demand debugging of an active actor, use the Agent Substrate CLI:
 
 ```bash
-kubectl ate logs <actor_id> [--follow / -f]
+kubectl ate logs actors <actor_id> [--follow / -f]
 ```
 
 > **Note:** By default, `kubectl ate logs` queries the Kubernetes API of the worker pod where the actor is *currently* running. It is designed for immediate inspection of active actors. To view historical logs across past worker pods and suspension cycles, use a centralized logging backend.
@@ -32,7 +33,7 @@ kubectl ate logs <actor_id> [--follow / -f]
 If an actor is suspended or not assigned to a worker pod, the CLI informs you immediately:
 
 ```bash
-$ kubectl ate logs test
+$ kubectl ate logs actors test
 Error: actor test is not currently running on any worker pod
 ```
 
@@ -40,7 +41,7 @@ Error: actor test is not currently running on any worker pod
 When an active actor is assigned to a worker pod, the CLI outputs clean, uniform JSON lines stripped of Substrate metadata, perfectly matching standard `kubectl logs` behavior:
 
 ```bash
-$ kubectl ate logs test
+$ kubectl ate logs actors test
 {"time":"2026-05-22T21:49:15.23700774Z","message":"Actor started"}
 {"time":"2026-05-22T21:49:15.23700774Z","level":"INFO","msg":"Starting counter server on port 80"}
 {"time":"2026-05-22T21:49:15.255765354Z","count":0,"fshash":"mCY7G4S318ztOUojPTF2NA/W+ZSmWyr+T5K3udFuP50","level":"INFO","msg":"Count"}
@@ -51,7 +52,7 @@ $ kubectl ate logs test
 To stream actor logs in real-time, append the `--follow` (or `-f`) flag. The CLI is fully actor-aware, automatically resuming the stream if the actor is suspended or migrates to a different worker pod:
 
 ```bash
-$ kubectl ate logs test -f
+$ kubectl ate logs actors test -f
 Actor is currently running on pod ate-demo-counter/counter-deployment-d8f99-m7d96
 {"time":"2026-05-22T21:49:15.255765354Z","count":0,"fshash":"mCY7...","level":"INFO","msg":"Count"}
 {"time":"2026-05-22T21:49:25.263744806Z","count":1,"fshash":"mCY7...","level":"INFO","msg":"Count"}

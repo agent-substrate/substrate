@@ -37,6 +37,7 @@ const _ = grpc.SupportPackageIsVersion9
 const (
 	Control_GetActor_FullMethodName     = "/ateapi.Control/GetActor"
 	Control_CreateActor_FullMethodName  = "/ateapi.Control/CreateActor"
+	Control_UpdateActor_FullMethodName  = "/ateapi.Control/UpdateActor"
 	Control_SuspendActor_FullMethodName = "/ateapi.Control/SuspendActor"
 	Control_PauseActor_FullMethodName   = "/ateapi.Control/PauseActor"
 	Control_ResumeActor_FullMethodName  = "/ateapi.Control/ResumeActor"
@@ -56,6 +57,8 @@ type ControlClient interface {
 	GetActor(ctx context.Context, in *GetActorRequest, opts ...grpc.CallOption) (*GetActorResponse, error)
 	// Create a new Actor deriving from a given ActorTemplate.
 	CreateActor(ctx context.Context, in *CreateActorRequest, opts ...grpc.CallOption) (*CreateActorResponse, error)
+	// Update mutable fields on an existing Actor.
+	UpdateActor(ctx context.Context, in *UpdateActorRequest, opts ...grpc.CallOption) (*UpdateActorResponse, error)
 	// Suspend a given actor to a new snapshot.
 	SuspendActor(ctx context.Context, in *SuspendActorRequest, opts ...grpc.CallOption) (*SuspendActorResponse, error)
 	// Pause a given actor and keep its snapshots on node VM.
@@ -94,6 +97,16 @@ func (c *controlClient) CreateActor(ctx context.Context, in *CreateActorRequest,
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(CreateActorResponse)
 	err := c.cc.Invoke(ctx, Control_CreateActor_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) UpdateActor(ctx context.Context, in *UpdateActorRequest, opts ...grpc.CallOption) (*UpdateActorResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(UpdateActorResponse)
+	err := c.cc.Invoke(ctx, Control_UpdateActor_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -180,6 +193,8 @@ type ControlServer interface {
 	GetActor(context.Context, *GetActorRequest) (*GetActorResponse, error)
 	// Create a new Actor deriving from a given ActorTemplate.
 	CreateActor(context.Context, *CreateActorRequest) (*CreateActorResponse, error)
+	// Update mutable fields on an existing Actor.
+	UpdateActor(context.Context, *UpdateActorRequest) (*UpdateActorResponse, error)
 	// Suspend a given actor to a new snapshot.
 	SuspendActor(context.Context, *SuspendActorRequest) (*SuspendActorResponse, error)
 	// Pause a given actor and keep its snapshots on node VM.
@@ -209,6 +224,9 @@ func (UnimplementedControlServer) GetActor(context.Context, *GetActorRequest) (*
 }
 func (UnimplementedControlServer) CreateActor(context.Context, *CreateActorRequest) (*CreateActorResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method CreateActor not implemented")
+}
+func (UnimplementedControlServer) UpdateActor(context.Context, *UpdateActorRequest) (*UpdateActorResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method UpdateActor not implemented")
 }
 func (UnimplementedControlServer) SuspendActor(context.Context, *SuspendActorRequest) (*SuspendActorResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method SuspendActor not implemented")
@@ -284,6 +302,24 @@ func _Control_CreateActor_Handler(srv interface{}, ctx context.Context, dec func
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(ControlServer).CreateActor(ctx, req.(*CreateActorRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_UpdateActor_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateActorRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).UpdateActor(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_UpdateActor_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).UpdateActor(ctx, req.(*UpdateActorRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -428,6 +464,10 @@ var Control_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "CreateActor",
 			Handler:    _Control_CreateActor_Handler,
+		},
+		{
+			MethodName: "UpdateActor",
+			Handler:    _Control_UpdateActor_Handler,
 		},
 		{
 			MethodName: "SuspendActor",

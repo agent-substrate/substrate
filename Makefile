@@ -29,12 +29,8 @@ ATECTL := $(BINDIR)/kubectl-ate
 # Version stamping. Override on the make command line to pin
 # (e.g. `make VERSION=v0.5.0 build`).
 VERSION    ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-COMMIT     ?= $(shell git rev-parse HEAD 2>/dev/null || echo unknown)
-BUILD_DATE ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 VERSION_PKG := github.com/agent-substrate/substrate/internal/version
-LDFLAGS := -X $(VERSION_PKG).Version=$(VERSION) \
-           -X $(VERSION_PKG).Commit=$(COMMIT) \
-           -X $(VERSION_PKG).BuildDate=$(BUILD_DATE)
+LDFLAGS := -X=$(VERSION_PKG).Version=$(VERSION)
 
 .PHONY: all
 all: build
@@ -44,10 +40,12 @@ build: build-images build-atectl
 
 .PHONY: build-images
 build-images:
-	$(KO) build --ldflags "$(LDFLAGS)" ./cmd/ateapi
-	$(KO) build --ldflags "$(LDFLAGS)" ./cmd/atelet
-	$(KO) build --ldflags "$(LDFLAGS)" ./cmd/podcertcontroller
-	$(KO) build --ldflags "$(LDFLAGS)" ./cmd/atenet
+	GOFLAGS='"-ldflags=$(LDFLAGS)"' \
+	$(KO) build \
+	    ./cmd/ateapi \
+	    ./cmd/atelet \
+	    ./cmd/podcertcontroller \
+	    ./cmd/atenet
 
 .PHONY: build-atectl
 build-atectl:
@@ -59,7 +57,8 @@ build-atenet:
 
 .PHONY: build-demos
 build-demos:
-	$(KO) build --ldflags "$(LDFLAGS)" ./demos/counter
+	GOFLAGS='"-ldflags=$(LDFLAGS)"' \
+	    $(KO) build ./demos/counter
 
 .PHONY: test
 test:

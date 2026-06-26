@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/uuid"
@@ -128,6 +129,7 @@ func runStep[Params any, Context any](ctx context.Context, params Params, wCtx C
 // ActorWorkflow handles the workflows for actor's resume / suspend operations.
 type ActorWorkflow struct {
 	store               store.Interface
+	workerCache         *workercache.Cache
 	dialer              *AteletDialer
 	actorTemplateLister listersv1alpha1.ActorTemplateLister
 	workerPoolLister    listersv1alpha1.WorkerPoolLister
@@ -144,6 +146,7 @@ type ActorWorkflow struct {
 // long a single Resume/Suspend can run end-to-end.
 func NewActorWorkflow(
 	store store.Interface,
+	workerCache *workercache.Cache,
 	dialer *AteletDialer,
 	actorTemplateLister listersv1alpha1.ActorTemplateLister,
 	workerPoolLister listersv1alpha1.WorkerPoolLister,
@@ -153,6 +156,7 @@ func NewActorWorkflow(
 ) *ActorWorkflow {
 	return &ActorWorkflow{
 		store:               store,
+		workerCache:         workerCache,
 		dialer:              dialer,
 		actorTemplateLister: actorTemplateLister,
 		workerPoolLister:    workerPoolLister,
@@ -179,7 +183,7 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, id string, boot bool) (
 
 	steps := []WorkflowStep[*ResumeInput, *ResumeState]{
 		&LoadActorForResumeStep{store: w.store, actorTemplateLister: w.actorTemplateLister},
-		&AssignWorkerStep{store: w.store},
+		&AssignWorkerStep{store: w.store, workerCache: w.workerCache, workerPoolLister: w.workerPoolLister},
 		&CallAteletRestoreStep{dialer: w.dialer, kubeClient: w.kubeClient, secretCache: w.secretCache, workerPoolLister: w.workerPoolLister, sandboxConfigLister: w.sandboxConfigLister},
 		&FinalizeRunningStep{store: w.store},
 	}

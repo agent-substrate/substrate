@@ -30,7 +30,11 @@ spec:
     singular: actortemplate
   scope: Namespaced
   versions:
-  - name: v1alpha1
+  - additionalPrinterColumns:
+    - jsonPath: .spec.sandboxClass
+      name: Class
+      type: string
+    name: v1alpha1
     schema:
       openAPIV3Schema:
         properties:
@@ -167,6 +171,25 @@ spec:
                 - message: All images must be pinned (changing the image invalidates
                     snapshots)
                   rule: self.contains('@')
+              sandboxClass:
+                default: gvisor
+                description: |-
+                  SandboxClass selects the sandbox runtime family this template's actors run
+                  on. Only worker pools whose SandboxClass matches are eligible. Snapshots are
+                  not portable across classes, so this is a hard gate, AND'd with WorkerSelector
+                  and the actor's worker_selector. Defaults to gvisor.
+
+
+                  1) How does someone discover what classes are available, or what they mean?
+                  2) How does someone define a new sandbox class?
+                  3) Does a class mean the specific type of sandbox tech or does it include some aspect of config (e.g. can we have 2 different classes which both use gVisor with different config, or 2 classes which use different microvms)
+                  4) How does the default get set and who sets it?
+
+                  See Also: WorkerPool SandboxClass
+                enum:
+                - gvisor
+                - microvm
+                type: string
               snapshotsConfig:
                 description: Snapshots configuration for the actor.
                 properties:
@@ -177,54 +200,60 @@ spec:
                 required:
                 - location
                 type: object
-              workerPoolRef:
-                description: |
-                  Name of the worker pool to use for the actor.
+              workerSelector:
+                description: |-
+                  WorkerSelector restricts which worker pools actors from this template may
+                  use. The scheduler only considers pools whose labels match this selector.
+                  If nil, all pools are eligible (subject to the actor's own worker_selector).
+                  Acts as a gate: the actor's worker_selector can only narrow this set further,
+                  never expand it.
                 properties:
-                  apiVersion:
-                    description: API version of the referent.
-                    type: string
-                  fieldPath:
+                  matchExpressions:
+                    description: matchExpressions is a list of label selector requirements.
+                      The requirements are ANDed.
+                    items:
+                      description: |-
+                        A label selector requirement is a selector that contains values, a key, and an operator that
+                        relates the key and values.
+                      properties:
+                        key:
+                          description: key is the label key that the selector applies
+                            to.
+                          type: string
+                        operator:
+                          description: |-
+                            operator represents a key's relationship to a set of values.
+                            Valid operators are In, NotIn, Exists and DoesNotExist.
+                          type: string
+                        values:
+                          description: |-
+                            values is an array of string values. If the operator is In or NotIn,
+                            the values array must be non-empty. If the operator is Exists or DoesNotExist,
+                            the values array must be empty. This array is replaced during a strategic
+                            merge patch.
+                          items:
+                            type: string
+                          type: array
+                          x-kubernetes-list-type: atomic
+                      required:
+                      - key
+                      - operator
+                      type: object
+                    type: array
+                    x-kubernetes-list-type: atomic
+                  matchLabels:
+                    additionalProperties:
+                      type: string
                     description: |-
-                      If referring to a piece of an object instead of an entire object, this string
-                      should contain a valid JSON/Go field access statement, such as desiredState.manifest.containers[2].
-                      For example, if the object reference is to a container within a pod, this would take on a value like:
-                      "spec.containers{name}" (where "name" refers to the name of the container that triggered
-                      the event) or if no container name is specified "spec.containers[2]" (container with
-                      index 2 in this pod). This syntax is chosen only to have some well-defined way of
-                      referencing a part of an object.
-                    type: string
-                  kind:
-                    description: |-
-                      Kind of the referent.
-                      More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
-                    type: string
-                  name:
-                    description: |-
-                      Name of the referent.
-                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#names
-                    type: string
-                  namespace:
-                    description: |-
-                      Namespace of the referent.
-                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/namespaces/
-                    type: string
-                  resourceVersion:
-                    description: |-
-                      Specific resourceVersion to which this reference is made, if any.
-                      More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#concurrency-control-and-consistency
-                    type: string
-                  uid:
-                    description: |-
-                      UID of the referent.
-                      More info: https://kubernetes.io/docs/concepts/overview/working-with-objects/names/#uids
-                    type: string
+                      matchLabels is a map of {key,value} pairs. A single {key,value} in the matchLabels
+                      map is equivalent to an element of matchExpressions, whose key field is "key", the
+                      operator is "In", and the values array contains only "value". The requirements are ANDed.
+                    type: object
                 type: object
                 x-kubernetes-map-type: atomic
             required:
             - pauseImage
             - snapshotsConfig
-            - workerPoolRef
             type: object
             x-kubernetes-validations:
             - message: Spec is immutable

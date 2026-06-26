@@ -24,19 +24,17 @@ import (
 )
 
 // resolveSandboxAssets determines the sandbox binaries an actor should boot with
-// and projects them onto the ateletpb.SandboxAssets atelet fetches. It resolves
-// the actor's WorkerPool, takes its SandboxClass (default gvisor), then picks the
-// SandboxConfig named by the pool — or, if none is named, the cluster default
-// SandboxConfig for that class.
+// and projects them onto the ateletpb.SandboxAssets atelet fetches. It takes the
+// SandboxClass (default gvisor) of a given worker pool, then picks the SandboxConfig
+// named by the pool — or, if none is named, the cluster default SandboxConfig for that class.
 func resolveSandboxAssets(
 	workerPoolLister listersv1alpha1.WorkerPoolLister,
 	sandboxConfigLister listersv1alpha1.SandboxConfigLister,
-	at *atev1alpha1.ActorTemplate,
+	poolNamespace, poolName string,
 ) (*ateletpb.SandboxAssets, error) {
-	ref := at.Spec.WorkerPoolRef
-	wp, err := workerPoolLister.WorkerPools(ref.Namespace).Get(ref.Name)
+	wp, err := workerPoolLister.WorkerPools(poolNamespace).Get(poolName)
 	if err != nil {
-		return nil, fmt.Errorf("while getting WorkerPool %s/%s: %w", ref.Namespace, ref.Name, err)
+		return nil, fmt.Errorf("while getting WorkerPool %s/%s: %w", poolNamespace, poolName, err)
 	}
 
 	class := wp.Spec.SandboxClass
@@ -52,7 +50,7 @@ func resolveSandboxAssets(
 		}
 		if sc.Spec.SandboxClass != class {
 			return nil, fmt.Errorf("SandboxConfig %q has class %q but WorkerPool %s/%s is class %q",
-				name, sc.Spec.SandboxClass, ref.Namespace, ref.Name, class)
+				name, sc.Spec.SandboxClass, poolNamespace, poolName, class)
 		}
 	} else {
 		sc, err = defaultSandboxConfig(sandboxConfigLister, class)

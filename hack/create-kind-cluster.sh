@@ -42,13 +42,38 @@ if [ "$(docker inspect -f '{{.State.Running}}' "${reg_name}" 2>/dev/null || true
     registry:3
 fi
 
-# 2. Create kind configuration with containerdConfigPatches and feature gates
+# 2. Create kind configuration with containerdConfigPatches and feature gates.
+#
+# Probe for /dev/kvm where the kind nodes will actually run — inside the Docker
+# provider VM on macOS (Lima/Colima/Docker Desktop), the host itself on Linux —
+# and only wire up micro-VM (kata + cloud-hypervisor) support when present.
+# Without KVM the cluster still works for gVisor.
+echo "Probing for /dev/kvm in the Docker environment..."
+HAS_KVM=0
+if docker run --rm --device /dev/kvm busybox true >/dev/null 2>&1; then
+  HAS_KVM=1
+  echo "/dev/kvm found: micro-VM (kata + cloud-hypervisor) support will be enabled."
+else
+  echo "/dev/kvm not available: micro-VM support disabled (gVisor still works)."
+fi
+
 echo "Creating kind configuration for cluster '${KIND_CLUSTER_NAME}'..."
 cat <<EOF > "${ROOT}/bin/kind-config.yaml"
 kind: Cluster
 apiVersion: kind.x-k8s.io/v1alpha4
 nodes:
 - role: control-plane
+EOF
+if [ "${HAS_KVM}" = "1" ]; then
+  cat <<EOF >> "${ROOT}/bin/kind-config.yaml"
+  # Bind-mount /dev/kvm into the node so micro-VM (kata + cloud-hypervisor)
+  # worker pods can use KVM.
+  extraMounts:
+  - hostPath: /dev/kvm
+    containerPath: /dev/kvm
+EOF
+fi
+cat <<EOF >> "${ROOT}/bin/kind-config.yaml"
 # cmd/podcertcontroller depends on ClusterTrustBundle & PodCertificateRequest.
 # They are not enabled by default as of Kubernetes v1.36
 # https://github.com/kubernetes/kubernetes/blob/master/test/compatibility_lifecycle/reference/versioned_feature_list.yaml
@@ -71,6 +96,16 @@ echo "Enabling Proxy ARP on kind nodes..."
 for node in $("${ROOT}"/hack/kind.sh get nodes --name "${KIND_CLUSTER_NAME}"); do
   docker exec "${node}" sysctl net.ipv4.conf.all.proxy_arp=1
 done
+
+# 2.6 When KVM is available: make /dev/kvm usable inside the node and label
+# nodes so micro-VM WorkerPools (nodeSelector ate.dev/sandboxClass=microvm) schedule.
+if [ "${HAS_KVM}" = "1" ]; then
+  echo "Preparing kind nodes for micro-VM (kata + cloud-hypervisor) runtime..."
+  for node in $("${ROOT}"/hack/kind.sh get nodes --name "${KIND_CLUSTER_NAME}"); do
+    docker exec "${node}" chmod 666 /dev/kvm
+    kubectl label node "${node}" ate.dev/sandboxClass=microvm --overwrite
+  done
+fi
 
 # 3. Add the registry config to the nodes
 echo "Adding registry config to kind nodes..."

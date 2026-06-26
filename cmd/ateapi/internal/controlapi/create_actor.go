@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/resources"
@@ -25,6 +26,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/util/validation"
 )
 
 func (s *Service) CreateActor(ctx context.Context, req *ateapipb.CreateActorRequest) (*ateapipb.CreateActorResponse, error) {
@@ -46,6 +48,7 @@ func (s *Service) CreateActor(ctx context.Context, req *ateapipb.CreateActorRequ
 		Status:                 ateapipb.Actor_STATUS_SUSPENDED,
 		ActorTemplateNamespace: req.GetActorTemplateNamespace(),
 		ActorTemplateName:      req.GetActorTemplateName(),
+		WorkerSelector:         req.GetWorkerSelector(),
 	}
 	err = s.persistence.CreateActor(ctx, actor)
 	if err != nil {
@@ -77,6 +80,25 @@ func validateCreateActorRequest(req *ateapipb.CreateActorRequest) error {
 	}
 	if err := resources.ValidateActorID(req.GetActorId()); err != nil {
 		return status.Error(codes.InvalidArgument, err.Error())
+	}
+	if err := validateSelector(req.GetWorkerSelector()); err != nil {
+		return status.Error(codes.InvalidArgument, err.Error())
+	}
+	return nil
+}
+
+func validateSelector(sel *ateapipb.Selector) error {
+	const maxSelectorMatchLabels = 10
+	if n := len(sel.GetMatchLabels()); n > maxSelectorMatchLabels {
+		return fmt.Errorf("worker_selector has %d match_labels entries, exceeding the limit of %d", n, maxSelectorMatchLabels)
+	}
+	for k, v := range sel.GetMatchLabels() {
+		if errs := validation.IsQualifiedName(k); len(errs) > 0 {
+			return fmt.Errorf("invalid worker_selector label key %q: %s", k, strings.Join(errs, "; "))
+		}
+		if errs := validation.IsValidLabelValue(v); len(errs) > 0 {
+			return fmt.Errorf("invalid worker_selector label value %q for key %q: %s", v, k, strings.Join(errs, "; "))
+		}
 	}
 	return nil
 }

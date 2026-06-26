@@ -30,12 +30,20 @@ spec:
       resources:   ["sandboxconfigs"]
   validations:
   # gVisor needs a "runsc" asset for every architecture it advertises.
-  # microvm requirements are enforced separately by the micro-VM runtime.
   - expression: >-
       object.spec.sandboxClass != 'gvisor' ||
       (has(object.spec.assets) && size(object.spec.assets) > 0 &&
        object.spec.assets.all(arch, 'runsc' in object.spec.assets[arch]))
     message: "a gvisor SandboxConfig must define a 'runsc' asset for every architecture under spec.assets"
+  # The micro-VM (cloud-hypervisor) runtime needs its asset set for every
+  # architecture it advertises.
+  - expression: >-
+      object.spec.sandboxClass != 'microvm' ||
+      (has(object.spec.assets) && size(object.spec.assets) > 0 &&
+       object.spec.assets.all(arch,
+         ['cloud-hypervisor', 'kata-kernel', 'kata-image', 'kata-config']
+           .all(name, name in object.spec.assets[arch])))
+    message: "a microvm SandboxConfig must define cloud-hypervisor, kata-kernel, kata-image, and kata-config assets for every architecture under spec.assets"
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding

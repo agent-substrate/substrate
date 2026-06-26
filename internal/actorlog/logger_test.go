@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package ateom
+package actorlog
 
 import (
 	"bytes"
@@ -28,7 +28,7 @@ func TestWrapContainerLogs(t *testing.T) {
 
 	var buf bytes.Buffer
 	al := NewActorLogger(&buf, false)
-	al.WrapContainerLogs(rdr, "act-1", "tmpl-1", "default")
+	al.WrapContainerLogs(rdr, "act-1", "tmpl-1", "default", "ctr-1")
 
 	var m map[string]any
 	if err := json.Unmarshal(buf.Bytes(), &m); err != nil {
@@ -63,6 +63,9 @@ func TestWrapContainerLogs(t *testing.T) {
 	if labels["ate.dev/actor_template_namespace"] != "default" {
 		t.Errorf("got actor_template_namespace = %v, want 'default'", labels["ate.dev/actor_template_namespace"])
 	}
+	if labels["ate.dev/container_name"] != "ctr-1" {
+		t.Errorf("got container_name = %v, want 'ctr-1'", labels["ate.dev/container_name"])
+	}
 }
 
 func TestWrapContainerLogs_JSONInput(t *testing.T) {
@@ -72,7 +75,7 @@ func TestWrapContainerLogs_JSONInput(t *testing.T) {
 
 	var buf bytes.Buffer
 	al := NewActorLogger(&buf, false)
-	al.WrapContainerLogs(rdr, "act-1", "tmpl-1", "default")
+	al.WrapContainerLogs(rdr, "act-1", "tmpl-1", "default", "ctr-1")
 
 	dec := json.NewDecoder(&buf)
 	dec.UseNumber()
@@ -161,7 +164,7 @@ func TestWrapContainerLogs_MergeLabels(t *testing.T) {
 
 	var buf bytes.Buffer
 	al := NewActorLogger(&buf, false) // labelsKey will be "labels"
-	al.WrapContainerLogs(rdr, "act-1", "tmpl-1", "default")
+	al.WrapContainerLogs(rdr, "act-1", "tmpl-1", "default", "ctr-1")
 
 	var m map[string]any
 	if err := json.Unmarshal(buf.Bytes(), &m); err != nil {
@@ -186,6 +189,9 @@ func TestWrapContainerLogs_MergeLabels(t *testing.T) {
 	if labels["ate.dev/actor_id"] != "act-1" {
 		t.Errorf("got actor_id = %v, want 'act-1'", labels["ate.dev/actor_id"])
 	}
+	if labels["ate.dev/container_name"] != "ctr-1" {
+		t.Errorf("got container_name = %v, want 'ctr-1'", labels["ate.dev/container_name"])
+	}
 }
 
 func TestWrapContainerLogs_LabelCollision(t *testing.T) {
@@ -194,7 +200,7 @@ func TestWrapContainerLogs_LabelCollision(t *testing.T) {
 
 	var buf bytes.Buffer
 	al := NewActorLogger(&buf, false)
-	al.WrapContainerLogs(rdr, "act-1", "tmpl-1", "default")
+	al.WrapContainerLogs(rdr, "act-1", "tmpl-1", "default", "ctr-1")
 
 	var m map[string]any
 	if err := json.Unmarshal(buf.Bytes(), &m); err != nil {
@@ -224,7 +230,7 @@ func TestWrapContainerLogs_TrailingGarbage(t *testing.T) {
 
 	var buf bytes.Buffer
 	al := NewActorLogger(&buf, false)
-	al.WrapContainerLogs(rdr, "act-1", "tmpl-1", "default")
+	al.WrapContainerLogs(rdr, "act-1", "tmpl-1", "default", "ctr-1")
 
 	var m map[string]any
 	if err := json.Unmarshal(buf.Bytes(), &m); err != nil {

@@ -52,6 +52,7 @@ Each subdirectory of `cmd/` corresponds to one compiled binary:
 | `cmd/atelet`         | Node supervisor (DaemonSet)                           |
 | `cmd/atenet`         | Network proxy / Envoy external-processing server      |
 | `cmd/ateom-gvisor`   | In-pod gVisor container image entry point             |
+| `cmd/ateom-microvm`  | In-pod kata + cloud-hypervisor micro-VM container image entry point |
 | `cmd/kubectl-ate`    | `kubectl` plugin for interacting with Substrate       |
 | `cmd/podcertcontroller` | Controller that issues pod TLS certificates        |
 

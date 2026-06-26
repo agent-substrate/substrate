@@ -25,8 +25,11 @@ import (
 
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 	envoy_type "github.com/envoyproxy/go-control-plane/envoy/type/v3"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/propagation"
 	"google.golang.org/grpc"
 
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -53,7 +56,9 @@ func NewExtProcServer(port int, apiClient ateapipb.ControlClient, routeDuration 
 }
 
 func (s *ExtProcServer) Serve(ctx context.Context, lis net.Listener) error {
-	grpcServer := grpc.NewServer()
+	grpcServer := grpc.NewServer(
+		grpc.StatsHandler(otelgrpc.NewServerHandler()),
+	)
 	extprocv3.RegisterExternalProcessorServer(grpcServer, s)
 
 	errChan := make(chan error, 1)
@@ -108,7 +113,7 @@ func (s *ExtProcServer) Process(stream extprocv3.ExternalProcessor_ProcessServer
 		default:
 			// No modification for other processing states, but log because this should
 			// not be called.
-			slog.Error("Unexpected request type", slog.Any("reqType", reqType))
+			slog.Error("Unexpected request type", slog.String("reqType", fmt.Sprintf("%T", reqType)))
 			resp.Response = &extprocv3.ProcessingResponse_RequestHeaders{
 				RequestHeaders: &extprocv3.HeadersResponse{
 					Response: &extprocv3.CommonResponse{},
@@ -127,7 +132,15 @@ func (s *ExtProcServer) handleRequestHeaders(
 	reqHeaders *extprocv3.HttpHeaders,
 ) (*extprocv3.HeadersResponse, *requestMetadata, string, string, string, error) {
 	metadata := newRequestMetadata(reqHeaders.Headers.GetHeaders())
-	slog.InfoContext(ctx, "Request", slog.String("metadata", metadata.String()))
+	slog.InfoContext(ctx, "Request", slog.String("host", metadata.host))
+
+	// Envoy doesn't propagate trace context into the ext_proc gRPC
+	// stream's metadata — the per-request traceparent arrives in the
+	// HTTP headers carried inside the ProcessingRequest payload. Extract
+	// from there so our span links to the Envoy ingress span.
+	ctx = otel.GetTextMapPropagator().Extract(ctx, propagation.MapCarrier(metadata.headers))
+	ctx, span := otel.Tracer(routerServiceName).Start(ctx, "ExtProc.RequestHeaders")
+	defer span.End()
 
 	actorID, err := parseActorID(metadata.host)
 	if err != nil {
@@ -137,12 +150,6 @@ func (s *ExtProcServer) handleRequestHeaders(
 
 	slog.InfoContext(ctx, "ResumeActor", slog.String("actorID", actorID))
 	actor, err := s.resumer.ResumeActor(ctx, actorID)
-
-	slog.InfoContext(ctx, "ResumeActor result",
-		slog.String("actor", fmt.Sprintf("%+v", actor)),
-		slog.String("worker_ip", actor.GetAteomPodIp()),
-		slog.Any("err", err))
-
 	if err != nil {
 		return nil, metadata, "", "", "", mapResumeError(actorID, err)
 	}
@@ -153,6 +160,11 @@ func (s *ExtProcServer) handleRequestHeaders(
 	tmplName := actor.GetActorTemplateName()
 
 	workerIP := actor.GetAteomPodIp()
+	slog.InfoContext(ctx, "ResumeActor result",
+		slog.String("actorID", actorID),
+		slog.String("status", actor.GetStatus().String()),
+		slog.String("workerIP", workerIP))
+
 	if ip := net.ParseIP(workerIP); ip == nil {
 		return nil, metadata, "", tmplNs, tmplName, newReqError(envoy_type.StatusCode_InternalServerError,
 			"actor %q routing failed", actorID)

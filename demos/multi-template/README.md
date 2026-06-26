@@ -3,8 +3,8 @@
 This demo shows that **two different `ActorTemplate`s running two different binaries
 can share a single `WorkerPool` — even when all three live in different namespaces**.
 
-Each `ActorTemplate` binds to the pool via `workerPoolRef`, whose `namespace` points at
-wherever the pool lives.
+Each `ActorTemplate` gates on the pool via `workerSelector`, a label selector matched
+against the pool's labels — pool selection is cluster-wide, not scoped by namespace.
 
 ## Prerequisites
 
@@ -30,7 +30,8 @@ This command will:
   `ate-demo-multi-template-counter`, and `ate-demo-multi-template-fspersist`.
 - Create one `WorkerPool` (`shared-pool`) in `ate-demo-multi-template-pool` and two
   `ActorTemplate`s — `counter` in `ate-demo-multi-template-counter` and `fspersist` in
-  `ate-demo-multi-template-fspersist`, both binding to the pool across namespaces.
+  `ate-demo-multi-template-fspersist`, both selecting the pool via the same
+  `workerSelector` label.
 - Wait until both templates are `Ready` (golden snapshots built).
 
 ### 2. Create one actor per template

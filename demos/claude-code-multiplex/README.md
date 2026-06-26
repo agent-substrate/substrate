@@ -43,8 +43,6 @@ This guide assumes you know Kubernetes and the general shape of agent runtimes (
 | `demos/claude-code-multiplex/workload/` | The agent container image source (Dockerfile + entrypoint that wires Claude Code; built and pushed by the deploy step) |
 | `demos/claude-code-multiplex/ui/` | Static dashboard (`index.html` + `server.go`) that talks to the cluster |
 
-(Files will be added across iterations of this PR.)
-
 ## How to Run
 
 ### 1. Deploy the demo
@@ -104,19 +102,10 @@ With three agents and two pods, the third agent stays suspended (state snapshott
 
 ## Upstream blockers worked around for this demo
 
-This demo currently applies workarounds at runtime for two Substrate issues. Each will be addressed by a separate upstream fix PR; details + workarounds in the linked issue threads.
+This demo currently applies workarounds at runtime for two Substrate issues. See the linked issue threads for details and workarounds.
 
-- **`#189`** — Atelet OCI bundle gaps (`Args`, `Secret`, symlinks). Bundled fix PR forthcoming.
-- **`#197` Bug 3** — Atelet symlink resolution. Fix PR forthcoming.
-
-> [!NOTE]
-> `@AlexBulankou` asked for this guide as the main deliverable for the Claude-Code-on-Substrate demo work. The fix PRs are filed separately so each blocker has its own upstream review thread.
-
-## Status
-
-**This PR is a draft.** Initial commit lands the structural README. Subsequent commits will add the manifests, the workload Dockerfile/entrypoint, and the UI source. Each addition will keep the README in sync.
-
-Feedback on shape/audience welcome before content fills out.
+- **`#189`** — Atelet OCI bundle gaps (`Args`, `Secret`, symlinks).
+- **`#197` Bug 3** — Atelet symlink resolution.
 
 ## Teardown
 

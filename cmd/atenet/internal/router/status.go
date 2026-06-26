@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/spf13/pflag"
+	"go.opentelemetry.io/otel"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -103,6 +104,12 @@ func (qr *QueryRecorder) Get() []RecordedQuery {
 	return res
 }
 
+// redactPath drops the query string, which may carry credentials (CWE-598).
+func redactPath(path string) string {
+	p, _, _ := strings.Cut(path, "?")
+	return p
+}
+
 func (qr *QueryRecorder) AddRouterRequest(
 	start time.Time,
 	duration time.Duration,
@@ -114,7 +121,7 @@ func (qr *QueryRecorder) AddRouterRequest(
 		Timestamp: start,
 		Client:    m.headers[":authority"],
 		Host:      m.host,
-		Path:      m.path,
+		Path:      redactPath(m.path),
 		Method:    m.headers[":method"],
 		Action:    action,
 		Target:    target,
@@ -171,7 +178,10 @@ func (s *RouterServer) getRouterIP(ctx context.Context) string {
 }
 
 func (s *RouterServer) handleStatusz(w http.ResponseWriter, req *http.Request) {
-	ctx, cancel := context.WithTimeout(req.Context(), 3*time.Second)
+	ctx, span := otel.Tracer(routerServiceName).Start(req.Context(), "handleStatusz")
+	defer span.End()
+
+	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 
 	routerIP := s.getRouterIP(ctx)

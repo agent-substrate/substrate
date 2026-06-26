@@ -15,7 +15,6 @@
 package router
 
 import (
-	"fmt"
 	"reflect"
 	"testing"
 
@@ -117,21 +116,6 @@ func TestExtractMetadata(t *testing.T) {
 				t.Errorf("extractMetadata() host = %v, want %v", got.host, tc.wantHost)
 			}
 		})
-	}
-}
-
-func TestRequestMetadata_String(t *testing.T) {
-	headers := []*corev3.HeaderValue{
-		{Key: ":path", Value: "/api/v1/test"},
-		{Key: ":authority", Value: "example.com"},
-	}
-	m := newRequestMetadata(headers)
-	str := m.String()
-	if str == "" {
-		t.Errorf("expected non-empty string from String()")
-	}
-	if !reflect.DeepEqual(str, fmt.Sprintf("%+v", *m)) {
-		t.Errorf("String() = %q, want %q", str, fmt.Sprintf("%+v", *m))
 	}
 }
 

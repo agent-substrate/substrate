@@ -181,7 +181,7 @@ func (s *FinalizePausedStep) Execute(ctx context.Context, input *PauseInput, sta
 		workerNs := latestActor.GetAteomPodNamespace()
 		workerPod := latestActor.GetAteomPodName()
 
-		workerPool := state.ActorTemplate.Spec.WorkerPoolRef.Name
+		workerPool := latestActor.GetWorkerPoolName()
 
 		worker, err := s.store.GetWorker(ctx, workerNs, workerPool, workerPod)
 		nodeName := ""
@@ -232,6 +232,7 @@ func (s *FinalizePausedStep) Execute(ctx context.Context, input *PauseInput, sta
 		latestActor.AteomPodNamespace = ""
 		latestActor.AteomPodName = ""
 		latestActor.AteomPodIp = ""
+		latestActor.WorkerPoolName = ""
 		err = s.store.UpdateActor(ctx, latestActor, latestActor.GetVersion())
 		if err != nil {
 			return err

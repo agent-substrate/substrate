@@ -33,8 +33,9 @@ metadata:
 spec:
   snapshotsConfig:
     location: "gs://test-bucket/snapshots"
-  workerPoolRef:
-    name: pool-1
+  workerSelector:
+    matchLabels:
+      workload: pool-1
 `
 
 	multiTmpl := `
@@ -46,8 +47,9 @@ metadata:
 spec:
   snapshotsConfig:
     location: "gs://prod-bucket/a"
-  workerPoolRef:
-    name: heavy-pool
+  workerSelector:
+    matchLabels:
+      workload: heavy-pool
 ---
 apiVersion: substrate.storage.ate.dev/v1alpha1
 kind: ActorTemplate
@@ -57,8 +59,9 @@ metadata:
 spec:
   snapshotsConfig:
     location: "gs://prod-bucket/b"
-  workerPoolRef:
-    name: light-pool
+  workerSelector:
+    matchLabels:
+      workload: light-pool
 `
 
 	listTmpl := `
@@ -73,8 +76,9 @@ items:
   spec:
     snapshotsConfig:
       location: "gs://dev-bucket/a"
-    workerPoolRef:
-      name: dev-pool
+    workerSelector:
+      matchLabels:
+        workload: dev-pool
 - apiVersion: substrate.storage.ate.dev/v1alpha1
   kind: ActorTemplate
   metadata:
@@ -83,8 +87,9 @@ items:
   spec:
     snapshotsConfig:
       location: "gs://dev-bucket/b"
-    workerPoolRef:
-      name: dev-pool
+    workerSelector:
+      matchLabels:
+        workload: dev-pool
 `
 
 	tests := []struct {

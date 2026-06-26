@@ -28,6 +28,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/credbundle"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/sessionidentity"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/ateredis"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/agent-substrate/substrate/internal/version"
@@ -113,6 +114,11 @@ func main() {
 
 	redisPersistence := ateredis.NewPersistence(redisClient)
 
+	workerCache := workercache.New(redisPersistence)
+	if err := workerCache.Start(ctx); err != nil {
+		serverboot.Fatal(ctx, "Failed to seed worker cache", err)
+	}
+
 	ateFactory := externalversions.NewSharedInformerFactory(ateClient, 0)
 	actorTemplateLister := ateFactory.Api().V1alpha1().ActorTemplates().Lister()
 	workerPoolLister := ateFactory.Api().V1alpha1().WorkerPools().Lister()
@@ -135,7 +141,7 @@ func main() {
 	ateFactory.WaitForCacheSync(stopCh)
 
 	dialer := controlapi.NewAteletDialer(workerPodInformer.GetIndexer(), ateletPodInformer.GetIndexer())
-	sm := controlapi.NewService(redisPersistence, actorTemplateLister, workerPoolLister, sandboxConfigLister, dialer, clientset, *actorWorkflowDeadline)
+	sm := controlapi.NewService(redisPersistence, workerCache, actorTemplateLister, workerPoolLister, sandboxConfigLister, dialer, clientset, *actorWorkflowDeadline)
 
 	sessionIdentitySrv := sessionidentity.New(*clientJWTIssuer, *clientJWTAudience, *sessionIDJWTPoolFile, *sessionIDCAPoolFile, *workerpoolCACerts)
 

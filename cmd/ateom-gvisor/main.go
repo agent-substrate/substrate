@@ -24,10 +24,11 @@ import (
 	"net"
 	"os"
 	"runtime"
+	"sort"
 	"sync"
 
 	"cloud.google.com/go/compute/metadata"
-	"github.com/agent-substrate/substrate/cmd/ateom-gvisor/internal/ateom"
+	"github.com/agent-substrate/substrate/internal/actorlog"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/contextlogging"
@@ -86,7 +87,7 @@ func do(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	syncedWriter := ateom.NewSyncedWriter(os.Stdout)
+	syncedWriter := actorlog.NewSyncedWriter(os.Stdout)
 	logger := slog.New(contextlogging.NewHandler(slog.NewJSONHandler(syncedWriter, nil)))
 	slog.SetDefault(logger)
 
@@ -134,7 +135,7 @@ func do(ctx context.Context) error {
 		return fmt.Errorf("while creating ateom-interior netns: %w", err)
 	}
 
-	actorLogger := ateom.NewActorLogger(syncedWriter, metadata.OnGCE())
+	actorLogger := actorlog.NewActorLogger(syncedWriter, metadata.OnGCE())
 	ateomService := NewService(interiorNetNS, actorLogger)
 
 	svr := grpc.NewServer(
@@ -161,13 +162,13 @@ type AteomService struct {
 	lock sync.Mutex
 
 	interiorNetNS netns.NsHandle
-	actorLogger   *ateom.ActorLogger
+	actorLogger   *actorlog.ActorLogger
 }
 
 var _ ateompb.AteomServer = (*AteomService)(nil)
 
 // NewService creates a new AteomService.
-func NewService(interiorNetNS netns.NsHandle, actorLogger *ateom.ActorLogger) *AteomService {
+func NewService(interiorNetNS netns.NsHandle, actorLogger *actorlog.ActorLogger) *AteomService {
 	svc := &AteomService{
 		interiorNetNS: interiorNetNS,
 		actorLogger:   actorLogger,
@@ -210,14 +211,14 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 		return nil, fmt.Errorf("while starting pause container: %w", err)
 	}
 
-	pw, err := s.actorLogger.StartJSONLogPipe(req.GetActorId(), req.GetActorTemplateName(), req.GetActorTemplateNamespace())
-	if err != nil {
-		return nil, fmt.Errorf("while starting json log pipe: %w", err)
-	}
-	defer pw.Close()
-
-	// Create and start each application container
+	// Create and start each application container, each with its own log pipe so
+	// every line is tagged with the originating container (ate.dev/container_name).
 	for _, ac := range req.GetSpec().GetContainers() {
+		pw, err := s.actorLogger.StartJSONLogPipe(req.GetActorId(), req.GetActorTemplateName(), req.GetActorTemplateNamespace(), ac.GetName())
+		if err != nil {
+			return nil, fmt.Errorf("while starting json log pipe for %q: %w", ac.GetName(), err)
+		}
+		defer pw.Close()
 		if err := rcmd.cmdCreate(ctx, pw, ac.GetName()); err != nil {
 			return nil, fmt.Errorf("while creating %q application container: %w", ac.GetName(), err)
 		}
@@ -273,9 +274,33 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 
 	s.cleanupActorNetworkOrExit(ctx, "Failed to clean up actor network after checkpoint")
 
+	// Report exactly the files runsc wrote so atelet ships precisely this set
+	// (checkpoint.img plus any pages images), rather than a hardcoded list.
+	snapshotFiles, err := listSnapshotFiles(checkpointPath)
+	if err != nil {
+		return nil, fmt.Errorf("while listing checkpoint files: %w", err)
+	}
+
 	s.actorLogger.EmitLifecycleLog("Actor checkpointed", req.GetActorId(), req.GetActorTemplateName(), req.GetActorTemplateNamespace())
 
-	return nil, nil
+	return &ateompb.CheckpointWorkloadResponse{SnapshotFiles: snapshotFiles}, nil
+}
+
+// listSnapshotFiles returns the (relative) names of regular files directly under
+// dir, which atelet ships to object storage as the snapshot.
+func listSnapshotFiles(dir string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	var files []string
+	for _, e := range entries {
+		if e.Type().IsRegular() {
+			files = append(files, e.Name())
+		}
+	}
+	sort.Strings(files)
+	return files, nil
 }
 
 func (r *runsc) cleanupContainersAfterCheckpoint(ctx context.Context, containers []*ateompb.Container) error {
@@ -342,14 +367,14 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 		return nil, fmt.Errorf("while starting pause container: %w", err)
 	}
 
-	pw, err := s.actorLogger.StartJSONLogPipe(req.GetActorId(), req.GetActorTemplateName(), req.GetActorTemplateNamespace())
-	if err != nil {
-		return nil, fmt.Errorf("while starting json log pipe: %w", err)
-	}
-	defer pw.Close()
-
-	// Create and restore each application container
+	// Create and restore each application container, each with its own log pipe so
+	// every line is tagged with the originating container (ate.dev/container_name).
 	for _, ac := range req.GetSpec().GetContainers() {
+		pw, err := s.actorLogger.StartJSONLogPipe(req.GetActorId(), req.GetActorTemplateName(), req.GetActorTemplateNamespace(), ac.GetName())
+		if err != nil {
+			return nil, fmt.Errorf("while starting json log pipe for %q: %w", ac.GetName(), err)
+		}
+		defer pw.Close()
 		if err := rcmd.cmdCreate(ctx, pw, ac.GetName()); err != nil {
 			return nil, fmt.Errorf("while creating %q application container: %w", ac.GetName(), err)
 		}

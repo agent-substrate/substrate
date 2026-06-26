@@ -186,6 +186,7 @@ func (s *WorkerPoolSyncer) releaseActorOnDeadWorker(ctx context.Context, namespa
 	actor.AteomPodName = ""
 	actor.AteomPodIp = ""
 	actor.InProgressSnapshot = ""
+	actor.WorkerPoolName = ""
 	if err := s.persistence.UpdateActor(ctx, actor, actor.GetVersion()); err != nil && !errors.Is(err, store.ErrPersistenceRetry) {
 		return err
 	}

@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -40,6 +41,10 @@ import (
 // so a Restore — possibly on another node — is self-describing.
 const sandboxManifestName = "manifest.json"
 
+// maxAssetBytes guards disk against an unbounded download URL; a var so tests can lower it.
+// ponytail: 8GiB ceiling, make it a flag if a rootfs ever needs more.
+var maxAssetBytes int64 = 8 << 30
+
 // assetEntry is one content-addressed sandbox asset (url + sha256).
 type assetEntry struct {
 	URL    string `json:"url"`
@@ -54,6 +59,12 @@ type assetEntry struct {
 type sandboxAssetsRecord struct {
 	SandboxClass string                `json:"sandboxClass"`
 	Assets       map[string]assetEntry `json:"assets"`
+	// SnapshotFiles are the (relative) names of the files ateom wrote into the
+	// checkpoint directory, as reported by CheckpointWorkloadResponse. Recorded
+	// in the snapshot manifest so Restore ships/downloads exactly this set
+	// (gVisor's image files, cloud-hypervisor's snapshot set, ...). Empty in the
+	// on-node record written at Run/Restore; populated at Checkpoint.
+	SnapshotFiles []string `json:"snapshotFiles,omitempty"`
 }
 
 // recordFromRequest projects a request's per-architecture SandboxAssets onto the
@@ -77,21 +88,28 @@ func recordFromRequest(sa *ateletpb.SandboxAssets) (*sandboxAssetsRecord, error)
 	return rec, nil
 }
 
-// ensureSandboxBinary fetches the sandbox binary an actor needs and returns its
-// local path. For gVisor this is the single "runsc" asset, passed to ateom as
-// RunscPath. Binaries are content-addressed and cached, so re-fetching at
-// Checkpoint/Restore is a no-op once present.
-func (s *AteomHerder) ensureSandboxBinary(ctx context.Context, rec *sandboxAssetsRecord) (string, error) {
+// ensureSandboxAssets fetches every asset in the record content-addressed and
+// returns a map of asset name to local path. gVisor has a single "runsc" asset;
+// the micro-VM runtime has several (kata-shim, cloud-hypervisor, ...). Assets are
+// cached, so re-fetching at Checkpoint/Restore is a no-op once present.
+func (s *AteomHerder) ensureSandboxAssets(ctx context.Context, rec *sandboxAssetsRecord) (map[string]string, error) {
 	if err := os.MkdirAll(ateompath.StaticFilesDir, 0o700); err != nil {
-		return "", fmt.Errorf("while creating static files dir: %w", err)
+		return nil, fmt.Errorf("while creating static files dir: %w", err)
 	}
-	// gVisor uses a single "runsc" asset.
-	entry, ok := rec.Assets["runsc"]
-	if !ok {
-		return "", status.Errorf(codes.InvalidArgument, "sandbox assets for class %q missing required %q file", rec.SandboxClass, "runsc")
+	paths := make(map[string]string, len(rec.Assets))
+	for name, entry := range rec.Assets {
+		p, err := s.fetchAsset(ctx, entry)
+		if err != nil {
+			return nil, fmt.Errorf("while fetching sandbox asset %q: %w", name, err)
+		}
+		paths[name] = p
 	}
-	return s.fetchAsset(ctx, entry)
+	return paths, nil
 }
+
+// runscPathFor returns the local path of the gVisor "runsc" asset from a fetched
+// asset-path map, or "" if the runtime has none (e.g. micro-VM).
+func runscPathFor(paths map[string]string) string { return paths["runsc"] }
 
 // fetchAsset downloads one content-addressed asset (verifying its sha256) into
 // the shared static-files cache and returns its local path. On a cache hit it
@@ -109,48 +127,77 @@ func (s *AteomHerder) fetchAsset(ctx context.Context, entry assetEntry) (string,
 		return "", fmt.Errorf("while stat-ing local file: %w", err)
 	}
 
-	// gVisor's runsc lives in the public gs://gvisor bucket, so the anonymous
-	// client suffices. TODO: drive authenticated asset fetches from atelet
-	// configuration for assets in private buckets.
-	content, err := ategcs.FetchFromGCS(ctx, s.anonGCSClient, entry.URL)
+	// Assets live in one of two places: public buckets (gVisor's runsc in
+	// gs://gvisor — read anonymously) or the cluster's own object store (micro-VM
+	// kata/CH assets staged into the snapshot bucket — read with the main client,
+	// which is rustfs/S3 in kind and authenticated GCS on GKE). Auth is an
+	// atelet-level decision, not per-asset: try the anonymous client first so the
+	// common public-gVisor path stays fast, then fall back to the main client. The
+	// asset is streamed (not buffered) to disk below.
+	rc, err := s.openAsset(ctx, entry.URL)
 	if err != nil {
 		return "", fmt.Errorf("while fetching %v: %w", entry.URL, err)
 	}
+	defer rc.Close()
 
-	sum := sha256.Sum256(content)
 	wantSum, err := hex.DecodeString(entry.SHA256)
 	if err != nil {
 		return "", fmt.Errorf("while parsing sha256 hash: %w", err)
 	}
-	if !bytes.Equal(sum[:], wantSum) {
-		return "", fmt.Errorf("sha256 mismatch; got=%s want=%s", hex.EncodeToString(sum[:]), entry.SHA256)
-	}
 
-	tmpFileName, err := func() (string, error) {
-		localDir := filepath.Dir(localPath)
-		tmpFile, err := os.CreateTemp(localDir, filepath.Base(localPath)+"-download-")
-		if err != nil {
-			return "", fmt.Errorf("while temp file: %w", err)
-		}
-		defer tmpFile.Close()
-
-		if _, err := tmpFile.Write(content); err != nil {
-			return "", fmt.Errorf("while writing content to temp file: %w", err)
-		}
-		if err := tmpFile.Chmod(0o755); err != nil {
-			return "", fmt.Errorf("while setting file mode: %w", err)
-		}
-		return tmpFile.Name(), nil
-	}()
+	tmpFile, err := os.CreateTemp(filepath.Dir(localPath), filepath.Base(localPath)+"-download-")
 	if err != nil {
-		return "", fmt.Errorf("while populating temp file: %w", err)
+		return "", fmt.Errorf("while creating temp file: %w", err)
+	}
+	tmpName := tmpFile.Name()
+	defer os.Remove(tmpName) // partial-download cleanup; no-op after rename
+	defer tmpFile.Close()
+
+	// Stream to disk, hashing as we go; +1 lets an over-cap asset trip n > cap.
+	// Verify-after-copy keeps a bad download at the temp path, never the cache.
+	hasher := sha256.New()
+	n, err := io.Copy(io.MultiWriter(tmpFile, hasher), io.LimitReader(rc, maxAssetBytes+1))
+	if err != nil {
+		return "", fmt.Errorf("while downloading %v: %w", entry.URL, err)
+	}
+	if n > maxAssetBytes {
+		return "", fmt.Errorf("asset %v exceeds %d-byte cap", entry.URL, maxAssetBytes)
+	}
+	if got := hasher.Sum(nil); !bytes.Equal(got, wantSum) {
+		return "", fmt.Errorf("sha256 mismatch; got=%x want=%s", got, entry.SHA256)
 	}
 
-	if err := os.Rename(tmpFileName, localPath); err != nil {
+	if err := tmpFile.Chmod(0o755); err != nil {
+		return "", fmt.Errorf("while setting file mode: %w", err)
+	}
+	if err := tmpFile.Close(); err != nil { // flush before rename
+		return "", fmt.Errorf("while closing temp file: %w", err)
+	}
+	if err := os.Rename(tmpName, localPath); err != nil {
 		return "", fmt.Errorf("while renaming temp file to target: %w", err)
 	}
 
 	return localPath, nil
+}
+
+// openAsset streams url, trying the anonymous client first (public buckets like
+// gs://gvisor) then the main object-storage client (the cluster's own bucket, e.g.
+// micro-VM assets in rustfs/S3 or an authenticated GCS bucket). The caller closes
+// the returned reader. Streaming (rather than buffering the whole asset) keeps a
+// multi-hundred-MiB guest image off the heap.
+func (s *AteomHerder) openAsset(ctx context.Context, url string) (io.ReadCloser, error) {
+	rc, anonErr := ategcs.Open(ctx, s.anonGCSClient, url)
+	if anonErr == nil {
+		return rc, nil
+	}
+	if s.gcsClient == nil {
+		return nil, anonErr
+	}
+	rc, mainErr := ategcs.Open(ctx, s.gcsClient, url)
+	if mainErr != nil {
+		return nil, fmt.Errorf("anonymous open failed (%v); main client open failed: %w", anonErr, mainErr)
+	}
+	return rc, nil
 }
 
 // writeSandboxRecord persists the actor's running sandbox assets on-node so a

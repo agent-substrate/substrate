@@ -32,6 +32,8 @@ kind: WorkerPool
 metadata:
   name: benchmark-ateom
   namespace: benchmark-workloads
+  labels:
+    workload: benchmark-ateom
 spec:
   replicas: 5
   ateomImage: ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor
@@ -44,21 +46,14 @@ metadata:
   name: sleep
   namespace: benchmark-workloads
 spec:
-  runsc:
-    amd64:
-      url: "gs://gvisor/releases/nightly/2026-05-19/x86_64/runsc"
-      sha256Hash: "a397be1abc2420d26bce6c70e6e2ff96c73aaaab929756c56f5e2089ea842b63"
-    arm64:
-      url: "gs://gvisor/releases/nightly/2026-05-19/aarch64/runsc"
-      sha256Hash: "1ba2366ae2efceba166046f51a4104f9261c9cb72c6db8f5b3fe2dc57dea86b9"
   pauseImage: "gcr.io/gke-release/pause@sha256:bcbd57ba5653580ec647b16d8163cdd1112df3609129b01f912a8032e48265da"
   containers:
   - name: sleep
     image: busybox@sha256:1487d0af5f52b4ba31c7e465126ee2123fe3f2305d638e7827681e7cf6c83d5e
     command: ["/bin/sleep", "1000000"]
-  workerPoolRef:
-    namespace: benchmark-workloads
-    name: benchmark-ateom
+  workerSelector:
+    matchLabels:
+      workload: benchmark-ateom
   snapshotsConfig:
     location: gs://${BUCKET_NAME}/benchmark-workloads/sleep/
 
@@ -70,21 +65,14 @@ metadata:
   name: usermem
   namespace: benchmark-workloads
 spec:
-  runsc:
-    amd64:
-      url: "gs://gvisor/releases/nightly/2026-05-19/x86_64/runsc"
-      sha256Hash: "a397be1abc2420d26bce6c70e6e2ff96c73aaaab929756c56f5e2089ea842b63"
-    arm64:
-      url: "gs://gvisor/releases/nightly/2026-05-19/aarch64/runsc"
-      sha256Hash: "1ba2366ae2efceba166046f51a4104f9261c9cb72c6db8f5b3fe2dc57dea86b9"
   pauseImage: "gcr.io/gke-release/pause@sha256:bcbd57ba5653580ec647b16d8163cdd1112df3609129b01f912a8032e48265da"
   containers:
   - name: usermem
     image: containerstack/alpine-stress:latest
     command: ["stress", "--vm", "1", "--vm-bytes", "1G", "--vm-keep", "--vm-hang", "0"]
-  workerPoolRef:
-    namespace: benchmark-workloads
-    name: benchmark-ateom
+  workerSelector:
+    matchLabels:
+      workload: benchmark-ateom
   snapshotsConfig:
     location: gs://${BUCKET_NAME}/benchmark-workloads/usermem/
 
@@ -96,6 +84,25 @@ metadata:
   name: kernelmem
   namespace: benchmark-workloads
 spec:
+  pauseImage: "gcr.io/gke-release/pause@sha256:bcbd57ba5653580ec647b16d8163cdd1112df3609129b01f912a8032e48265da"
+  containers:
+  - name: kernelmem
+    image: containerstack/alpine-stress:latest
+    command: ["sh", "-c", "find /; for i in $(seq 50000); do sleep 10000 & done; sleep 10000"]
+  workerSelector:
+    matchLabels:
+      workload: benchmark-ateom
+  snapshotsConfig:
+    location: gs://${BUCKET_NAME}/benchmark-workloads/kernelmem/
+
+---
+
+apiVersion: ate.dev/v1alpha1
+kind: ActorTemplate
+metadata:
+  name: glutton
+  namespace: benchmark-workloads
+spec:
   runsc:
     amd64:
       url: "gs://gvisor/releases/nightly/2026-05-19/x86_64/runsc"
@@ -105,11 +112,17 @@ spec:
       sha256Hash: "1ba2366ae2efceba166046f51a4104f9261c9cb72c6db8f5b3fe2dc57dea86b9"
   pauseImage: "gcr.io/gke-release/pause@sha256:bcbd57ba5653580ec647b16d8163cdd1112df3609129b01f912a8032e48265da"
   containers:
-  - name: kernelmem
-    image: containerstack/alpine-stress:latest
-    command: ["sh", "-c", "find /; for i in $(seq 50000); do sleep 10000 & done; sleep 10000"]
+  - name: glutton
+    image: ko://github.com/agent-substrate/substrate/cmd/testing/glutton
+    # Port 80 is the only inbound port nftables forwards from the worker pod
+    # into the actor sandbox (see cmd/ateom-gvisor/main.go).
+    command:
+    - "/ko-app/glutton"
+    - "--grpc-listen-addr=:80"
+    - "--metrics-listen-addr=:9090"
+    - "--data-dir=/tmp/glutton"
   workerPoolRef:
     namespace: benchmark-workloads
     name: benchmark-ateom
   snapshotsConfig:
-    location: gs://${BUCKET_NAME}/benchmark-workloads/kernelmem/
+    location: gs://${BUCKET_NAME}/benchmark-workloads/glutton/

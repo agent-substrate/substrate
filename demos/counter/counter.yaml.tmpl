@@ -24,6 +24,8 @@ kind: WorkerPool
 metadata:
   name: counter
   namespace: ate-demo-counter
+  labels:
+    workload: counter
 spec:
   replicas: 5
   ateomImage: ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor
@@ -41,8 +43,8 @@ spec:
   - name: counter
     image: ko://github.com/agent-substrate/substrate/demos/counter
     command: ["/ko-app/counter"]
-  workerPoolRef:
-    namespace: ate-demo-counter
-    name: counter
+  workerSelector:
+    matchLabels:
+      workload: counter
   snapshotsConfig:
     location: gs://${BUCKET_NAME}/ate-demo-counter/

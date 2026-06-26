@@ -95,8 +95,8 @@ func TestActorTemplateValidation(t *testing.T) {
 			SnapshotsConfig: SnapshotsConfig{
 				Location: "gs://test-bucket/test-folder",
 			},
-			WorkerPoolRef: corev1.ObjectReference{
-				Name: "test-pool",
+			WorkerSelector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{"pool": "test-pool"},
 			},
 		},
 	}
@@ -364,6 +364,19 @@ func TestActorTemplateValidation(t *testing.T) {
 		},
 		wantErr: true,
 		errMsg:  "Invalid value",
+	}, {
+		name: "valid SandboxClass microvm",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.SandboxClass = SandboxClassMicroVM
+		},
+		wantErr: false,
+	}, {
+		name: "invalid SandboxClass",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.SandboxClass = "kvm"
+		},
+		wantErr: true,
+		errMsg:  "Unsupported value",
 	}}
 
 	for _, tt := range tests {
@@ -403,8 +416,8 @@ func TestActorTemplateSpecImmutability(t *testing.T) {
 			SnapshotsConfig: SnapshotsConfig{
 				Location: "gs://test-bucket/test-folder",
 			},
-			WorkerPoolRef: corev1.ObjectReference{
-				Name: "test-pool",
+			WorkerSelector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{"pool": "test-pool"},
 			},
 		},
 	}
@@ -426,9 +439,15 @@ func TestActorTemplateSpecImmutability(t *testing.T) {
 			},
 		},
 		{
-			name: "update-worker-pool-ref-name",
+			name: "update-worker-selector",
 			mutate: func(at *ActorTemplate) {
-				at.Spec.WorkerPoolRef.Name = "new-pool"
+				at.Spec.WorkerSelector.MatchLabels["pool"] = "new-pool"
+			},
+		},
+		{
+			name: "update-sandbox-class",
+			mutate: func(at *ActorTemplate) {
+				at.Spec.SandboxClass = SandboxClassMicroVM
 			},
 		},
 	}

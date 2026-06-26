@@ -7,7 +7,7 @@ eligible for the [Google Open Source Software Vulnerability Rewards Program](htt
 
 ## What is Agent Substrate?
 
-Agent substrate is a system built on top of Kubernetes which manages agent-like
+Agent Substrate is a system built on top of Kubernetes which manages agent-like
 workloads to achieve higher scale and efficiency than Kubernetes alone can
 offer, with lower latency.  It builds on top of Kubernetes features like
 Pods and Pod autoscaling, but takes the Kubernetes control-plane out of the
@@ -167,10 +167,10 @@ go run ./tools/setup-gcp --create-gvisor-node-pool
 Similarly, you can deploy or cleanup specific Agent Substrate components using the installation script. See `./hack/install-ate.sh --help` for all options.
 ```bash
 # Re-deploy only ate-apiserver of the ATE system
-./hack/install-ate-kind.sh --deploy-ate-apiserver
+./hack/install-ate.sh --deploy-ate-apiserver
 
 # Delete everything (core system and all demos)
-./hack/install-ate-kind.sh --delete-all
+./hack/install-ate.sh --delete-all
 ```
 
 #### Tearing down resources (GCP)
@@ -203,6 +203,7 @@ We provide several sample applications demonstrating Agent Substrate's capabilit
 ### Documentation & Guides
 * [API Configuration Guide](docs/api-guide.md): Detailed reference for configuring WorkerPools, ActorTemplates, Secrets, and Volumes.
 * [Full CLI Documentation](cmd/kubectl-ate/README.md): Installation and usage for `kubectl-ate`.
+* [Glossary](docs/glossary.md): Core terms (Actor, ActorTemplate, WorkerPool, Worker, ate-api-server, atenet, atelet, ateom) and how they relate.
 * [Observability Guide](docs/observability.md): Guide to actor logging, metrics, and distributed tracing.
 
 ## Tour

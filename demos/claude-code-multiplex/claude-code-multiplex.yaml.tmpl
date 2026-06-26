@@ -46,6 +46,8 @@ kind: WorkerPool
 metadata:
   name: claude-workerpool
   namespace: claude-multiplex-demo
+  labels:
+    workload: claude-multiplex
 spec:
   replicas: 2
   ateomImage: ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor
@@ -79,9 +81,9 @@ spec:
         secretKeyRef:
           name: anthropic-api-key
           key: api-key
-  workerPoolRef:
-    namespace: claude-multiplex-demo
-    name: claude-workerpool
+  workerSelector:
+    matchLabels:
+      workload: claude-multiplex
   snapshotsConfig:
     location: gs://${BUCKET_NAME}/claude-multiplex-demo/
 
@@ -109,9 +111,9 @@ spec:
         secretKeyRef:
           name: anthropic-api-key
           key: api-key
-  workerPoolRef:
-    namespace: claude-multiplex-demo
-    name: claude-workerpool
+  workerSelector:
+    matchLabels:
+      workload: claude-multiplex
   snapshotsConfig:
     location: gs://${BUCKET_NAME}/claude-multiplex-demo/
 
@@ -139,8 +141,8 @@ spec:
         secretKeyRef:
           name: anthropic-api-key
           key: api-key
-  workerPoolRef:
-    namespace: claude-multiplex-demo
-    name: claude-workerpool
+  workerSelector:
+    matchLabels:
+      workload: claude-multiplex
   snapshotsConfig:
     location: gs://${BUCKET_NAME}/claude-multiplex-demo/

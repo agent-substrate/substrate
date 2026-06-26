@@ -263,6 +263,48 @@ and Performance:
       and Templates) allows platform teams to apply familiar RBAC, auditing,
       and policy enforcement to the underlying infrastructure.
 
+### Resource Model
+
+The CRDs and control-plane records described above, with their relationships and
+multiplicities (UML class diagram):
+
+```mermaid
+classDiagram
+    namespace kube-apiserver {
+        class ActorTemplate {
+            <<CRD>>
+        }
+        class WorkerPool {
+            <<CRD>>
+        }
+        class Deployment
+        class WorkerPod {
+            ateom
+            runsc
+        }
+    }
+
+    namespace ate-api-server {
+        class Actor {
+            <<record>>
+            status
+            snapshotRefs
+        }
+        class Worker {
+            <<record>>
+            actorId
+            podIP
+        }
+    }
+
+    ActorTemplate "1" --> "1" WorkerPool : workerPoolRef
+    WorkerPool ..> Deployment : reconciled by atecontroller
+    Deployment "1" *-- "*" WorkerPod : manages
+    Actor ..> ActorTemplate : derived from
+    Actor "0..1" --> "0..1" Worker : runs on
+    Worker "1" --> "1" WorkerPod : maps to
+```
+
 ## System Components
 
 ### Control Plane (`ate-api-server`)
@@ -284,11 +326,19 @@ The node-level subsystem manages the physical execution of sandboxes and the mov
 
   * **atelet**: A lightweight supervisor running on each node as a DaemonSet. It acts as the "Herder," managing a pool of physical pods and communicating with the Control Plane.
 
-  * **ateom**: A specialized "interior gVisor" container image that runs inside the physical worker pods. It provides a gRPC interface for `atelet` to trigger `RunWorkload`, `CheckpointWorkload`, and `RestoreWorkload` operations. This separation ensures that the physical pod lifecycle remains decoupled from the sandboxed agent process.
+  * **ateom**: A specialized sandbox-herder container image — one per sandbox class (`ateom-gvisor`, `ateom-microvm`) — that runs inside the physical worker pods. It provides a gRPC interface for `atelet` to trigger `RunWorkload`, `CheckpointWorkload`, and `RestoreWorkload` operations. This separation ensures that the physical pod lifecycle remains decoupled from the sandboxed agent process.
 
-  * **Lifecycle Management**: The `ateom` process invokes the sandbox runtime (e.g., `runsc` for gVisor) to checkpoint or restore processes within the physical pod boundaries. (Note: Substrate currently requires a `runsc` version with the `--allow-connected-on-save` flag to work around a bug in networking resumption during checkpointing).
+  * **Lifecycle Management**: The `ateom` process invokes the sandbox runtime to checkpoint or restore processes within the physical pod boundaries — `runsc` for gVisor, or the Kata + Cloud Hypervisor stack for micro-VMs. (Note: the gVisor backend currently requires a `runsc` version with the `--allow-connected-on-save` flag to work around a bug in networking resumption during checkpointing.)
 
   * **Storage Mover**: The `atelet` streams snapshots to and from GCS/S3, ensuring process state is persistent and portable across the cluster.
+
+### Sandbox Classes
+
+A `WorkerPool` selects a **sandbox class** (`spec.sandboxClass`), and each class has a matching `ateom` herder image. The sandbox binaries themselves are not baked into the worker image — they are fetched at runtime from a cluster-scoped [`SandboxConfig`](api-guide.md#3-sandboxconfig-sandbox-binaries) and pinned into each snapshot's manifest so restores stay reproducible across runtime upgrades.
+
+  * **gVisor** (`ateom-gvisor`, the default): runs the workload under `runsc`. Suspend/resume uses gVisor's checkpoint/restore of the sandboxed process tree.
+
+  * **micro-VM** (`ateom-microvm`): runs the workload inside a [Kata Containers](https://katacontainers.io/) guest (Kata 3.31 guest assets) on the [Cloud Hypervisor](https://www.cloudhypervisor.org/) VMM. `ateom` owns the Cloud Hypervisor boot directly — there is **no Kata shim and no containerd daemon**: it launches Cloud Hypervisor, boots the guest kernel + OS image, and then drives the Kata agent over its hybrid-vsock ttrpc API itself (creating the sandbox, configuring guest networking, and starting the container). The actor's container rootfs is a writable boot-time virtio-blk disk (`/dev/vdb`) that `ateom` builds with `mkfs.ext4` from the OCI bundle, so rootfs writes land off guest RAM on a host-backed disk. Suspend captures a Cloud Hypervisor **memory-only snapshot** of the running guest (no memory balloon); resume relaunches Cloud Hypervisor with its **OnDemand** (userfaultfd) memory restore — demand-paging from the snapshot while a diff-merge folds newly-faulted pages back in to keep the snapshot complete — so full in-RAM state comes back on any worker, including a different node. On each restore `/dev/vdb` is recreated byte-identical to the golden image (**reset-to-golden**), so rootfs writes are discarded across suspend/resume (matching gVisor's semantics) while in-RAM state persists. The actor container's stdout/stderr is forwarded to the pod log with `ate.dev/*` labels (parity with `ateom-gvisor`). Micro-VM workers require `/dev/kvm` and nested-virtualization-capable nodes; the controller adds the KVM device mount and pins these pods to nodes labeled `ate.dev/sandboxClass=microvm`. See [`hack/microvm-assets/`](../hack/microvm-assets/) for assembling the asset set.
 
 ### Networking Stack (`atenet` + Envoy)
 
@@ -302,7 +352,48 @@ Handles session-aware routing and automatic re-animation.
 
 ## Actor Lifecycle
 
-The lifecycle of an actor follows a state-driven sequence.
+The lifecycle of an actor follows a state-driven sequence. A request reaches an
+actor through the networking stack, which resumes it onto a worker if it is
+suspended (UML sequence diagram):
+
+```mermaid
+sequenceDiagram
+    actor Client
+    participant DNS as atenet DNS
+    participant Router as atenet router
+    participant API as ate-api-server
+    participant Atelet as atelet
+    participant Ateom as ateom
+    participant Store as snapshot storage
+
+    Client->>DNS: resolve actor DNS name
+    DNS-->>Client: router address
+    Client->>Router: HTTP request (Host = actor)
+    Router->>API: ResumeActor(actorID)
+    API->>Atelet: Restore
+    Store-->>Atelet: download snapshot
+    Atelet->>Ateom: RestoreWorkload
+    Note over Ateom: runsc restore
+    Ateom-->>Atelet: ready
+    Atelet-->>API: worker pod IP
+    API-->>Router: worker pod IP
+    Router->>Ateom: proxy request to worker pod
+    Ateom-->>Router: response
+    Router-->>Client: response
+    Note over API,Store: later: an explicit SuspendActor checkpoints back to storage and frees the worker
+```
+
+An Actor's `status` moves through these states (UML state machine diagram):
+
+```mermaid
+stateDiagram-v2
+    [*] --> SUSPENDED : CreateActor
+    SUSPENDED --> RESUMING : ResumeActor
+    RESUMING --> RUNNING : restore / boot complete
+    RUNNING --> SUSPENDING : SuspendActor
+    SUSPENDING --> SUSPENDED : checkpoint complete
+    SUSPENDED --> [*] : DeleteActor
+```
 
 ### Phase 1: Creation (`CreateActor`)
 

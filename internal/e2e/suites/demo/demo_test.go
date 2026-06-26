@@ -27,7 +27,6 @@ import (
 	"github.com/agent-substrate/substrate/internal/e2e"
 	"github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/tools/portforward"
@@ -313,11 +312,14 @@ func createActorTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients
 		t.Fatalf("failed to get existing ActorTemplate: %v", err)
 	}
 
-	// Create WorkerPool
+	// Create WorkerPool. Labeled uniquely to this test's namespace so the
+	// cluster-wide scheduler doesn't make this pool's workers eligible for
+	// (or eligible to receive) any other namespace's actors.
 	wp := &v1alpha1.WorkerPool{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "counter",
 			Namespace: nsObj.Name,
+			Labels:    map[string]string{"demo": nsObj.Name},
 		},
 		Spec: v1alpha1.WorkerPoolSpec{
 			Replicas:          5,
@@ -338,9 +340,8 @@ func createActorTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients
 			Namespace: nsObj.Name,
 		},
 		Spec: v1alpha1.ActorTemplateSpec{
-			WorkerPoolRef: corev1.ObjectReference{
-				Namespace: nsObj.Name,
-				Name:      "counter",
+			WorkerSelector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{"demo": nsObj.Name},
 			},
 			PauseImage: existingAt.Spec.PauseImage,
 			Containers: existingAt.Spec.Containers,

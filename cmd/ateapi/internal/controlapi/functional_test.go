@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/ateredis"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/envtestbins"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
@@ -150,6 +151,7 @@ type FakeAteletServer struct {
 
 	RunCalled  bool
 	RunRequest *ateletpb.RunRequest
+	FailRun    error
 
 	CheckpointCalled  bool
 	CheckpointRequest *ateletpb.CheckpointRequest
@@ -166,6 +168,7 @@ func (f *FakeAteletServer) Reset() {
 
 	f.RunCalled = false
 	f.RunRequest = nil
+	f.FailRun = nil
 
 	f.CheckpointCalled = false
 	f.CheckpointRequest = nil
@@ -182,6 +185,9 @@ func (f *FakeAteletServer) Run(ctx context.Context, req *ateletpb.RunRequest) (*
 
 	f.RunCalled = true
 	f.RunRequest = proto.Clone(req).(*ateletpb.RunRequest)
+	if f.FailRun != nil {
+		return nil, f.FailRun
+	}
 
 	return &ateletpb.RunResponse{}, nil
 }
@@ -285,8 +291,15 @@ func setupTest(t *testing.T, ns string) *testContext {
 	substrateInformerFactory.WaitForCacheSync(ctx.Done())
 
 	// 4. Initialize Service
+	wc := workercache.New(persistence)
+	if err := wc.Start(ctx); err != nil {
+		cancel()
+		mr.Close()
+		t.Fatalf("failed to start worker cache: %v", err)
+	}
+
 	dialer := NewAteletDialer(workerInformer.GetIndexer(), ateletInformer.GetIndexer())
-	service := NewService(persistence, actorTemplateLister, workerPoolLister, sandboxConfigLister, dialer, k8sClient, 30*time.Second)
+	service := NewService(persistence, wc, actorTemplateLister, workerPoolLister, sandboxConfigLister, dialer, k8sClient, 30*time.Second)
 
 	// 5. Start REAL gRPC Server for ATE API
 	grpcServer := grpc.NewServer(grpc.UnaryInterceptor(ateinterceptors.ServerUnaryInterceptor))
@@ -356,6 +369,14 @@ func namespaceForTest(baseName string) string {
 	return fmt.Sprintf("%s-%d", baseName, time.Now().UnixNano())
 }
 
+func selectorLabelsOfSize(n int) map[string]string {
+	labels := make(map[string]string, n)
+	for i := 0; i < n; i++ {
+		labels[fmt.Sprintf("k%d", i)] = "v"
+	}
+	return labels
+}
+
 func createTemplate(t *testing.T, tc *testContext, ns string) {
 	t.Helper()
 	createTemplateWithContainers(t, tc, ns, []atev1alpha1.Container{
@@ -367,15 +388,16 @@ func createTemplate(t *testing.T, tc *testContext, ns string) {
 	})
 }
 
+const poolLabelKey = "pool"
+
 func createTemplateWithContainers(t *testing.T, tc *testContext, ns string, containers []atev1alpha1.Container) {
 	t.Helper()
 
 	// Sandbox binaries now live on a (cluster-scoped) SandboxConfig resolved via
 	// the actor's WorkerPool, not on the ActorTemplate. Create a default gvisor
-	// SandboxConfig and the pool the template references so a boot-from-spec Run
-	// can resolve its assets.
+	// SandboxConfig so a boot-from-spec Run can resolve its assets.
 	ensureDefaultGvisorSandboxConfig(t, tc)
-	ensureWorkerPool(t, tc, ns, "pool1")
+	createWorkerPool(t, tc, ns, "pool1", map[string]string{poolLabelKey: ns})
 
 	actorTemplate := &atev1alpha1.ActorTemplate{
 		ObjectMeta: metav1.ObjectMeta{
@@ -388,9 +410,8 @@ func createTemplateWithContainers(t *testing.T, tc *testContext, ns string, cont
 				Location: "gs://fake-fake-fake",
 			},
 			Containers: containers,
-			WorkerPoolRef: corev1.ObjectReference{
-				Namespace: ns,
-				Name:      "pool1",
+			WorkerSelector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{poolLabelKey: ns},
 			},
 		},
 	}
@@ -454,37 +475,74 @@ func ensureDefaultGvisorSandboxConfig(t *testing.T, tc *testContext) {
 	}
 }
 
-// ensureWorkerPool creates the namespaced WorkerPool an ActorTemplate references
-// (idempotently) and waits for it to appear in the lister.
-func ensureWorkerPool(t *testing.T, tc *testContext, ns, name string) {
+func createWorkerPool(t *testing.T, tc *testContext, ns string, name string, labels map[string]string) {
 	t.Helper()
 	wp := &atev1alpha1.WorkerPool{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: ns,
+			Labels:    labels,
+		},
 		Spec: atev1alpha1.WorkerPoolSpec{
-			Replicas:     1,
-			AteomImage:   "ateom@sha256:abc",
-			SandboxClass: atev1alpha1.SandboxClassGvisor,
+			Replicas:   1,
+			AteomImage: "ateom@sha256:abc",
 		},
 	}
-	if _, err := tc.substrateClient.ApiV1alpha1().WorkerPools(ns).Create(context.Background(), wp, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
+	_, err := tc.substrateClient.ApiV1alpha1().WorkerPools(ns).Create(context.Background(), wp, metav1.CreateOptions{})
+	if err != nil {
 		t.Fatalf("failed to create WorkerPool: %v", err)
 	}
-	if err := wait.PollUntilContextTimeout(context.Background(), 100*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
+
+	err = wait.PollUntilContextTimeout(context.Background(), 100*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
 		_, err := tc.workerPoolLister.WorkerPools(ns).Get(name)
 		return err == nil, nil
-	}); err != nil {
-		t.Fatalf("WorkerPool not synced into lister: %v", err)
+	})
+	if err != nil {
+		t.Fatalf("failed to wait for WorkerPool %s/%s in informer: %v", ns, name, err)
 	}
 }
 
-func createWorkerPod(t *testing.T, tc *testContext, ns string, name string, nodeName string) {
+func createTemplateWithSelector(t *testing.T, tc *testContext, ns string, name string, selector *metav1.LabelSelector) {
+	t.Helper()
+	ensureDefaultGvisorSandboxConfig(t, tc)
+	actorTemplate := &atev1alpha1.ActorTemplate{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: ns,
+		},
+		Spec: atev1alpha1.ActorTemplateSpec{
+			PauseImage: "pause@sha256:abc",
+			SnapshotsConfig: atev1alpha1.SnapshotsConfig{
+				Location: "gs://fake-fake-fake",
+			},
+			Containers: []atev1alpha1.Container{
+				{Name: "main", Image: "main@sha256:abc", Command: []string{"/main"}},
+			},
+			WorkerSelector: selector,
+		},
+	}
+	_, err := tc.substrateClient.ApiV1alpha1().ActorTemplates(ns).Create(context.Background(), actorTemplate, metav1.CreateOptions{})
+	if err != nil {
+		t.Fatalf("failed to create actor template: %v", err)
+	}
+
+	err = wait.PollUntilContextTimeout(context.Background(), 100*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
+		_, err := tc.actorTemplateLister.ActorTemplates(ns).Get(name)
+		return err == nil, nil
+	})
+	if err != nil {
+		t.Fatalf("failed to wait for template %s/%s in informer: %v", ns, name, err)
+	}
+}
+
+func createWorkerPod(t *testing.T, tc *testContext, ns string, name string, nodeName string, poolName string) {
 	t.Helper()
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: ns,
 			Labels: map[string]string{
-				"ate.dev/worker-pool": "pool1",
+				"ate.dev/worker-pool": poolName,
 			},
 		},
 		Spec: corev1.PodSpec{
@@ -564,6 +622,7 @@ func TestCreateActor_Success(t *testing.T) {
 		ActorTemplateNamespace: ns,
 		ActorTemplateName:      "tmpl1",
 		ActorId:                "id1",
+		WorkerSelector:         &ateapipb.Selector{MatchLabels: map[string]string{"tier": "free"}},
 	})
 	if err != nil {
 		t.Fatalf("CreateActor failed: %v", err)
@@ -576,6 +635,7 @@ func TestCreateActor_Success(t *testing.T) {
 			ActorTemplateNamespace: ns,
 			ActorTemplateName:      "tmpl1",
 			Status:                 ateapipb.Actor_STATUS_SUSPENDED,
+			WorkerSelector:         &ateapipb.Selector{MatchLabels: map[string]string{"tier": "free"}},
 		},
 	}
 
@@ -818,7 +878,7 @@ func TestListWorkers(t *testing.T) {
 	tc := setupTest(t, ns)
 	defer tc.cleanup()
 
-	createWorkerPod(t, tc, ns, "worker-1", "")
+	createWorkerPod(t, tc, ns, "worker-1", "", "pool1")
 
 	listResp, err := tc.client.ListWorkers(context.Background(), &ateapipb.ListWorkersRequest{})
 	if err != nil {
@@ -864,7 +924,7 @@ func TestResumeActor(t *testing.T) {
 
 	createTemplate(t, tc, ns)
 
-	createWorkerPod(t, tc, ns, "worker-1", "node1")
+	createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
 
 	_, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{
 		ActorTemplateNamespace: ns,
@@ -902,6 +962,7 @@ func TestResumeActor(t *testing.T) {
 			AteomPodNamespace:      ns,
 			AteomPodName:           "worker-1",
 			AteomPodIp:             "127.0.0.1",
+			WorkerPoolName:         "pool1",
 		},
 	}
 	if diff := cmp.Diff(want, getResp, protocmp.Transform(), protocmp.IgnoreFields(&ateapipb.Actor{}, "version"), protocmp.IgnoreFields(&ateapipb.Actor{}, "ateom_pod_uid")); diff != "" {
@@ -980,7 +1041,7 @@ func TestResumeActorResolvesValueFromEnv(t *testing.T) {
 			},
 		},
 	})
-	createWorkerPod(t, tc, ns, "worker-1", "node1")
+	createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
 
 	_, err = tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{
 		ActorTemplateNamespace: ns,
@@ -1053,6 +1114,127 @@ func TestResumeActor_NoWorkers(t *testing.T) {
 	assertGrpcError(t, err, codes.FailedPrecondition, "no free workers available")
 }
 
+// TestResumeActor_NoEligiblePool tests the distinct failure mode from
+// TestResumeActor_NoWorkers: here no WorkerPool's labels satisfy the
+// template's WorkerSelector at all, so there isn't even a pool to look for
+// free workers in.
+func TestResumeActor_NoEligiblePool(t *testing.T) {
+	ns := namespaceForTest("ns-resume-no-eligible-pool")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	createTemplateWithSelector(t, tc, ns, "tmpl1", &metav1.LabelSelector{
+		MatchLabels: map[string]string{"nonexistent": ns},
+	})
+
+	createResp, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{
+		ActorTemplateNamespace: ns,
+		ActorTemplateName:      "tmpl1",
+		ActorId:                "id1",
+	})
+	if err != nil {
+		t.Fatalf("CreateActor failed: %v", err)
+	}
+
+	_, err = tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
+		ActorId: createResp.GetActor().GetActorId(),
+	})
+	assertGrpcError(t, err, codes.FailedPrecondition, "no worker pool matches the template's sandboxClass and the template/actor selectors")
+}
+
+// TestResumeActor_MultiPoolSelector exercises the AND-of-two-selectors path
+// end to end: a template's WorkerSelector gates two pools, and the actor's
+// worker_selector narrows to just one of them.
+func TestResumeActor_MultiPoolSelector(t *testing.T) {
+	ns := namespaceForTest("ns-multi-pool")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	createWorkerPool(t, tc, ns, "pool-a", map[string]string{"group": ns, "tier": "a"})
+	createWorkerPool(t, tc, ns, "pool-b", map[string]string{"group": ns, "tier": "b"})
+	createTemplateWithSelector(t, tc, ns, "tmpl1", &metav1.LabelSelector{
+		MatchLabels: map[string]string{"group": ns},
+	})
+
+	createWorkerPod(t, tc, ns, "worker-a", "node1", "pool-a")
+	createWorkerPod(t, tc, ns, "worker-b", "node1", "pool-b")
+
+	_, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{
+		ActorTemplateNamespace: ns,
+		ActorTemplateName:      "tmpl1",
+		ActorId:                "id1",
+		WorkerSelector: &ateapipb.Selector{
+			MatchLabels: map[string]string{"tier": "b"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateActor failed: %v", err)
+	}
+
+	_, err = tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{ActorId: "id1"})
+	if err != nil {
+		t.Fatalf("ResumeActor failed: %v", err)
+	}
+
+	getResp, err := tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{ActorId: "id1"})
+	if err != nil {
+		t.Fatalf("GetActor failed: %v", err)
+	}
+	if got := getResp.GetActor().GetAteomPodName(); got != "worker-b" {
+		t.Errorf("expected actor to be assigned to worker-b (pool-b, matching narrowed selector), got %q", got)
+	}
+	if got := getResp.GetActor().GetWorkerPoolName(); got != "pool-b" {
+		t.Errorf("expected actor's worker_pool_name to be pool-b, got %q", got)
+	}
+}
+
+// TestResumeActor_RequiresBothSelectorsToMatch proves eligibility is the AND
+// of the template's WorkerSelector and the actor's worker_selector, not
+// either one alone: a pool matching only the template selector and a pool
+// matching only the actor selector must both be rejected, end to end
+// through CreateActor/ResumeActor (not just the eligibleWorkerPools unit
+// test), while a pool matching both is the one actually used.
+func TestResumeActor_RequiresBothSelectorsToMatch(t *testing.T) {
+	ns := namespaceForTest("ns-resume-and-selectors")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	createWorkerPool(t, tc, ns, "pool-both", map[string]string{"group": ns, "tier": "b"})
+	createWorkerPool(t, tc, ns, "pool-template-only", map[string]string{"group": ns, "tier": "a"})
+	createWorkerPool(t, tc, ns, "pool-actor-only", map[string]string{"tier": "b"})
+	createTemplateWithSelector(t, tc, ns, "tmpl1", &metav1.LabelSelector{
+		MatchLabels: map[string]string{"group": ns},
+	})
+
+	createWorkerPod(t, tc, ns, "worker-both", "node1", "pool-both")
+	createWorkerPod(t, tc, ns, "worker-template-only", "node1", "pool-template-only")
+	createWorkerPod(t, tc, ns, "worker-actor-only", "node1", "pool-actor-only")
+
+	_, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{
+		ActorTemplateNamespace: ns,
+		ActorTemplateName:      "tmpl1",
+		ActorId:                "id1",
+		WorkerSelector: &ateapipb.Selector{
+			MatchLabels: map[string]string{"tier": "b"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateActor failed: %v", err)
+	}
+
+	if _, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{ActorId: "id1"}); err != nil {
+		t.Fatalf("ResumeActor failed: %v", err)
+	}
+
+	getResp, err := tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{ActorId: "id1"})
+	if err != nil {
+		t.Fatalf("GetActor failed: %v", err)
+	}
+	if got := getResp.GetActor().GetWorkerPoolName(); got != "pool-both" {
+		t.Errorf("expected actor to be assigned to pool-both (the only pool matching both selectors), got worker_pool_name=%q", got)
+	}
+}
+
 // TestResumeActor_Reentrancy tests the failure recovery and re-entrancy of ResumeActor.
 // Workflow:
 // 1. Creates a mock ActorTemplate.
@@ -1071,7 +1253,7 @@ func TestResumeActor_Reentrancy(t *testing.T) {
 	createTemplate(t, tc, ns)
 
 	// Create Worker Pod
-	createWorkerPod(t, tc, ns, "worker-1", "node1")
+	createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
 
 	_, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{
 		ActorTemplateNamespace: ns,
@@ -1144,7 +1326,7 @@ func TestSuspendActor(t *testing.T) {
 
 	createTemplate(t, tc, ns)
 
-	createWorkerPod(t, tc, ns, "worker-1", "node1")
+	createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
 
 	_, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{
 		ActorTemplateNamespace: ns,
@@ -1228,7 +1410,7 @@ func TestPauseActor(t *testing.T) {
 
 	createTemplate(t, tc, ns)
 
-	createWorkerPod(t, tc, ns, "worker-1", "node1")
+	createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
 
 	_, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{
 		ActorTemplateNamespace: ns,
@@ -1296,6 +1478,245 @@ func TestPauseActor(t *testing.T) {
 	}
 }
 
+// TestUpdateActor_Success verifies UpdateActor replaces the actor's
+// worker_selector and that the change is durably persisted.
+func TestUpdateActor_Success(t *testing.T) {
+	ns := namespaceForTest("ns-update-actor")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	createTemplate(t, tc, ns)
+
+	_, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{
+		ActorTemplateNamespace: ns,
+		ActorTemplateName:      "tmpl1",
+		ActorId:                "id1",
+		WorkerSelector: &ateapipb.Selector{
+			MatchLabels: map[string]string{"tier": "free"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateActor failed: %v", err)
+	}
+
+	updateResp, err := tc.client.UpdateActor(context.Background(), &ateapipb.UpdateActorRequest{
+		ActorId: "id1",
+		WorkerSelector: &ateapipb.Selector{
+			MatchLabels: map[string]string{"tier": "paid"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("UpdateActor failed: %v", err)
+	}
+
+	wantActor := &ateapipb.Actor{
+		ActorId:                "id1",
+		Version:                2,
+		ActorTemplateNamespace: ns,
+		ActorTemplateName:      "tmpl1",
+		Status:                 ateapipb.Actor_STATUS_SUSPENDED,
+		WorkerSelector: &ateapipb.Selector{
+			MatchLabels: map[string]string{"tier": "paid"},
+		},
+	}
+	wantUpdateResp := &ateapipb.UpdateActorResponse{Actor: wantActor}
+	if diff := cmp.Diff(wantUpdateResp, updateResp, protocmp.Transform()); diff != "" {
+		t.Errorf("UpdateActor response mismatch (-want +got):\n%s", diff)
+	}
+
+	getResp, err := tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{ActorId: "id1"})
+	if err != nil {
+		t.Fatalf("GetActor failed: %v", err)
+	}
+	wantGetResp := &ateapipb.GetActorResponse{Actor: wantActor}
+	if diff := cmp.Diff(wantGetResp, getResp, protocmp.Transform()); diff != "" {
+		t.Errorf("GetActor response mismatch after UpdateActor (-want +got):\n%s", diff)
+	}
+}
+
+func TestUpdateActor_NotFound(t *testing.T) {
+	ns := namespaceForTest("ns-update-actor-notfound")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	_, err := tc.client.UpdateActor(context.Background(), &ateapipb.UpdateActorRequest{ActorId: "does-not-exist"})
+	assertGrpcError(t, err, codes.NotFound, "Actor does-not-exist not found")
+}
+
+// TestResumeActor_ReleasesStaleWorkerWhenPoolBecomesIneligible verifies that
+// a worker claimed by a failed resume attempt is released back to the free
+// pool if, by the next resume attempt, the actor's worker_selector has
+// changed such that the worker's pool is no longer eligible.
+// Workflow:
+//  1. Creates pool-a (tier=a) and pool-b (tier=b), and an actor narrowed to
+//     tier=a.
+//  2. Makes the fake atelet fail Run, then resumes: the actor gets assigned
+//     to worker-a (the only eligible pool) and the resume fails after the
+//     worker is claimed, leaving worker-a's actor_id set and the actor
+//     stuck in RESUMING.
+//  3. Updates the actor's selector to tier=b, making pool-a ineligible.
+//  4. Resumes again; asserts it succeeds onto worker-b, and that worker-a
+//     has been released (actor_id cleared) rather than left dangling.
+func TestResumeActor_ReleasesStaleWorkerWhenPoolBecomesIneligible(t *testing.T) {
+	ns := namespaceForTest("ns-resume-release-stale")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	createWorkerPool(t, tc, ns, "pool-a", map[string]string{"group": ns, "tier": "a"})
+	createWorkerPool(t, tc, ns, "pool-b", map[string]string{"group": ns, "tier": "b"})
+	createTemplateWithSelector(t, tc, ns, "tmpl1", &metav1.LabelSelector{
+		MatchLabels: map[string]string{"group": ns},
+	})
+	createWorkerPod(t, tc, ns, "worker-a", "node1", "pool-a")
+	createWorkerPod(t, tc, ns, "worker-b", "node1", "pool-b")
+
+	id := "id1"
+	_, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{
+		ActorTemplateNamespace: ns,
+		ActorTemplateName:      "tmpl1",
+		ActorId:                id,
+		WorkerSelector:         &ateapipb.Selector{MatchLabels: map[string]string{"tier": "a"}},
+	})
+	if err != nil {
+		t.Fatalf("CreateActor failed: %v", err)
+	}
+
+	tc.fakeAtelet.FailRun = fmt.Errorf("mock atelet failure")
+	_, err = tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{ActorId: id})
+	if err == nil {
+		t.Fatalf("expected first ResumeActor (onto worker-a) to fail")
+	}
+	tc.fakeAtelet.FailRun = nil
+
+	if _, err := tc.client.UpdateActor(context.Background(), &ateapipb.UpdateActorRequest{
+		ActorId:        id,
+		WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"tier": "b"}},
+	}); err != nil {
+		t.Fatalf("UpdateActor failed: %v", err)
+	}
+
+	if _, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{ActorId: id}); err != nil {
+		t.Fatalf("second ResumeActor failed: %v", err)
+	}
+
+	getResp, err := tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{ActorId: id})
+	if err != nil {
+		t.Fatalf("GetActor failed: %v", err)
+	}
+	if got := getResp.GetActor().GetWorkerPoolName(); got != "pool-b" {
+		t.Errorf("expected actor to land on pool-b, got worker_pool_name=%q", got)
+	}
+	if got := getResp.GetActor().GetStatus(); got != ateapipb.Actor_STATUS_RUNNING {
+		t.Errorf("expected actor status RUNNING, got %v", got)
+	}
+
+	listResp, err := tc.client.ListWorkers(context.Background(), &ateapipb.ListWorkersRequest{})
+	if err != nil {
+		t.Fatalf("ListWorkers failed: %v", err)
+	}
+	for _, w := range listResp.GetWorkers() {
+		if w.GetWorkerNamespace() != ns {
+			continue
+		}
+		switch w.GetWorkerPool() {
+		case "pool-a":
+			if got := w.GetActorId(); got != "" {
+				t.Errorf("expected worker-a (now-ineligible pool-a) to be released, got actor_id=%q", got)
+			}
+		case "pool-b":
+			if got := w.GetActorId(); got != id {
+				t.Errorf("expected worker-b to be claimed by %q, got actor_id=%q", id, got)
+			}
+		}
+	}
+}
+
+// TestUpdateActor_ReassignsPoolAcrossSuspendResume verifies that updating an
+// actor's worker_selector moves it onto a different eligible pool not just
+// on the next fresh resume, but also across a full suspend/resume cycle of
+// an already-running actor.
+// Workflow:
+//  1. Creates two WorkerPools, pool-a (tier=a) and pool-b (tier=b), both
+//     under the template's gating selector.
+//  2. Creates an actor narrowed to tier=a and resumes it; asserts it lands on
+//     pool-a/worker-a.
+//  3. Updates the actor's selector to tier=b while it's still running.
+//  4. Suspends then resumes the actor; asserts it now lands on
+//     pool-b/worker-b, proving the updated selector — not the one in effect
+//     when it was first scheduled — governs the new placement.
+func TestUpdateActor_ReassignsPoolAcrossSuspendResume(t *testing.T) {
+	ns := namespaceForTest("ns-update-actor-suspend-resume")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	createWorkerPool(t, tc, ns, "pool-a", map[string]string{"group": ns, "tier": "a"})
+	createWorkerPool(t, tc, ns, "pool-b", map[string]string{"group": ns, "tier": "b"})
+	createTemplateWithSelector(t, tc, ns, "tmpl1", &metav1.LabelSelector{
+		MatchLabels: map[string]string{"group": ns},
+	})
+
+	createWorkerPod(t, tc, ns, "worker-a", "node1", "pool-a")
+	createWorkerPod(t, tc, ns, "worker-b", "node1", "pool-b")
+
+	id := "id1"
+	_, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{
+		ActorTemplateNamespace: ns,
+		ActorTemplateName:      "tmpl1",
+		ActorId:                id,
+		WorkerSelector: &ateapipb.Selector{
+			MatchLabels: map[string]string{"tier": "a"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateActor failed: %v", err)
+	}
+
+	if _, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{ActorId: id}); err != nil {
+		t.Fatalf("first ResumeActor failed: %v", err)
+	}
+
+	getResp, err := tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{ActorId: id})
+	if err != nil {
+		t.Fatalf("GetActor failed: %v", err)
+	}
+	if got := getResp.GetActor().GetWorkerPoolName(); got != "pool-a" {
+		t.Fatalf("expected actor to first resume onto pool-a, got worker_pool_name=%q", got)
+	}
+	if got := getResp.GetActor().GetAteomPodName(); got != "worker-a" {
+		t.Fatalf("expected actor to first resume onto worker-a, got ateom_pod_name=%q", got)
+	}
+
+	if _, err := tc.client.UpdateActor(context.Background(), &ateapipb.UpdateActorRequest{
+		ActorId: id,
+		WorkerSelector: &ateapipb.Selector{
+			MatchLabels: map[string]string{"tier": "b"},
+		},
+	}); err != nil {
+		t.Fatalf("UpdateActor failed: %v", err)
+	}
+
+	if _, err := tc.client.SuspendActor(context.Background(), &ateapipb.SuspendActorRequest{ActorId: id}); err != nil {
+		t.Fatalf("SuspendActor failed: %v", err)
+	}
+	if _, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{ActorId: id}); err != nil {
+		t.Fatalf("second ResumeActor failed: %v", err)
+	}
+
+	getResp, err = tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{ActorId: id})
+	if err != nil {
+		t.Fatalf("GetActor failed: %v", err)
+	}
+	if got := getResp.GetActor().GetWorkerPoolName(); got != "pool-b" {
+		t.Errorf("expected actor to resume onto pool-b after selector update, got worker_pool_name=%q", got)
+	}
+	if got := getResp.GetActor().GetAteomPodName(); got != "worker-b" {
+		t.Errorf("expected actor to resume onto worker-b after selector update, got ateom_pod_name=%q", got)
+	}
+	if got := getResp.GetActor().GetStatus(); got != ateapipb.Actor_STATUS_RUNNING {
+		t.Errorf("expected actor status RUNNING after second resume, got %v", got)
+	}
+}
+
 // TestValidation tests the negative validation cases for all gRPC methods.
 // Workflow:
 // 1. Uses table-driven tests for each RPC method (CreateActor, GetActor, ResumeActor, SuspendActor).
@@ -1312,11 +1733,41 @@ func TestValidation(t *testing.T) {
 			req     *ateapipb.CreateActorRequest
 			wantMsg string
 		}{
-			{"missing namespace", &ateapipb.CreateActorRequest{ActorTemplateName: "tmpl1", ActorId: "id1"}, "actor_template_namespace is required"},
-			{"missing template name", &ateapipb.CreateActorRequest{ActorTemplateNamespace: "ns1", ActorId: "id1"}, "actor_template_name is required"},
-			{"missing actor id", &ateapipb.CreateActorRequest{ActorTemplateNamespace: "ns1", ActorTemplateName: "tmpl1"}, "actor_id is required"},
-			{"invalid actor id (capitals)", &ateapipb.CreateActorRequest{ActorTemplateNamespace: "ns1", ActorTemplateName: "tmpl1", ActorId: "ID1"}, "invalid actor_id: must start and end with a lower case alphanumeric character, and consist only of lower case alphanumeric characters or '-'"},
-			{"invalid actor id (special chars)", &ateapipb.CreateActorRequest{ActorTemplateNamespace: "ns1", ActorTemplateName: "tmpl1", ActorId: "id_1"}, "invalid actor_id: must start and end with a lower case alphanumeric character, and consist only of lower case alphanumeric characters or '-'"},
+			{
+				"missing namespace",
+				&ateapipb.CreateActorRequest{ActorTemplateName: "tmpl1", ActorId: "id1"},
+				"actor_template_namespace is required"},
+			{
+				"missing template name",
+				&ateapipb.CreateActorRequest{ActorTemplateNamespace: "ns1", ActorId: "id1"},
+				"actor_template_name is required"},
+			{
+				"missing actor id",
+				&ateapipb.CreateActorRequest{ActorTemplateNamespace: "ns1", ActorTemplateName: "tmpl1"},
+				"actor_id is required"},
+			{
+				"invalid actor id (capitals)",
+				&ateapipb.CreateActorRequest{ActorTemplateNamespace: "ns1", ActorTemplateName: "tmpl1", ActorId: "ID1"},
+				"invalid actor_id: must start and end with a lower case alphanumeric character, and consist only of lower case alphanumeric characters or '-'"},
+			{
+				"invalid actor id (special chars)",
+				&ateapipb.CreateActorRequest{ActorTemplateNamespace: "ns1", ActorTemplateName: "tmpl1", ActorId: "id_1"},
+				"invalid actor_id: must start and end with a lower case alphanumeric character, and consist only of lower case alphanumeric characters or '-'"},
+			{
+				"invalid worker_selector label key",
+				&ateapipb.CreateActorRequest{ActorTemplateNamespace: "ns1", ActorTemplateName: "tmpl1", ActorId: "id1", WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"bad key!": "x"}}},
+				`invalid worker_selector label key "bad key!": name part must consist of alphanumeric characters, '-', '_' or '.', and must start and end with an alphanumeric character (e.g. 'MyName',  or 'my.name',  or '123-abc', regex used for validation is '([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9]')`,
+			},
+			{
+				"invalid worker_selector label value",
+				&ateapipb.CreateActorRequest{ActorTemplateNamespace: "ns1", ActorTemplateName: "tmpl1", ActorId: "id1", WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"tier": "not valid!"}}},
+				`invalid worker_selector label value "not valid!" for key "tier": a valid label must be an empty string or consist of alphanumeric characters, '-', '_' or '.', and must start and end with an alphanumeric character (e.g. 'MyValue',  or 'my_value',  or '12345', regex used for validation is '(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])?')`,
+			},
+			{
+				"too many worker_selector match_labels",
+				&ateapipb.CreateActorRequest{ActorTemplateNamespace: "ns1", ActorTemplateName: "tmpl1", ActorId: "id1", WorkerSelector: &ateapipb.Selector{MatchLabels: selectorLabelsOfSize(11)}},
+				"worker_selector has 11 match_labels entries, exceeding the limit of 10",
+			},
 		}
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
@@ -1374,6 +1825,37 @@ func TestValidation(t *testing.T) {
 		}
 	})
 
+	t.Run("UpdateActor", func(t *testing.T) {
+		tests := []struct {
+			name    string
+			req     *ateapipb.UpdateActorRequest
+			wantMsg string
+		}{
+			{"missing id", &ateapipb.UpdateActorRequest{}, "actor_id is required"},
+			{
+				"invalid worker_selector label key",
+				&ateapipb.UpdateActorRequest{ActorId: "id1", WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"bad key!": "x"}}},
+				`invalid worker_selector label key "bad key!": name part must consist of alphanumeric characters, '-', '_' or '.', and must start and end with an alphanumeric character (e.g. 'MyName',  or 'my.name',  or '123-abc', regex used for validation is '([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9]')`,
+			},
+			{
+				"invalid worker_selector label value",
+				&ateapipb.UpdateActorRequest{ActorId: "id1", WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"tier": "not valid!"}}},
+				`invalid worker_selector label value "not valid!" for key "tier": a valid label must be an empty string or consist of alphanumeric characters, '-', '_' or '.', and must start and end with an alphanumeric character (e.g. 'MyValue',  or 'my_value',  or '12345', regex used for validation is '(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])?')`,
+			},
+			{
+				"too many worker_selector match_labels",
+				&ateapipb.UpdateActorRequest{ActorId: "id1", WorkerSelector: &ateapipb.Selector{MatchLabels: selectorLabelsOfSize(11)}},
+				"worker_selector has 11 match_labels entries, exceeding the limit of 10",
+			},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				_, err := tc.client.UpdateActor(context.Background(), tt.req)
+				assertGrpcError(t, err, codes.InvalidArgument, tt.wantMsg)
+			})
+		}
+	})
+
 	t.Run("DeleteActor", func(t *testing.T) {
 		tests := []struct {
 			name    string
@@ -1400,7 +1882,7 @@ func TestResumeActor_LockConflict(t *testing.T) {
 
 	createTemplate(t, tc, ns)
 
-	createWorkerPod(t, tc, ns, "worker-1", "node1")
+	createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
 
 	_, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{
 		ActorTemplateNamespace: ns,
@@ -1447,7 +1929,7 @@ func TestResumeActor_DanglingWorker(t *testing.T) {
 	createTemplate(t, tc, ns)
 
 	// 1. Create Worker Pod A
-	createWorkerPod(t, tc, ns, "worker-a", "node1")
+	createWorkerPod(t, tc, ns, "worker-a", "node1", "pool1")
 
 	_, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{
 		ActorTemplateNamespace: ns,
@@ -1488,7 +1970,7 @@ func TestResumeActor_DanglingWorker(t *testing.T) {
 	deleteWorkerPod(t, tc, ns, "worker-a")
 
 	// 6. Create Worker Pod B
-	createWorkerPod(t, tc, ns, "worker-b", "node1")
+	createWorkerPod(t, tc, ns, "worker-b", "node1", "pool1")
 
 	// 7. Configure fake Atelet to SUCCEED on Restore
 	tc.fakeAtelet.FailRestore = nil
@@ -1527,7 +2009,7 @@ func TestSuspendActor_DanglingWorker(t *testing.T) {
 	createTemplate(t, tc, ns)
 
 	// 1. Create Worker Pod
-	createWorkerPod(t, tc, ns, "worker-1", "node1")
+	createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
 
 	_, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{
 		ActorTemplateNamespace: ns,
@@ -1613,7 +2095,7 @@ func TestDeleteActor_NotSuspended(t *testing.T) {
 	defer tc.cleanup()
 
 	createTemplate(t, tc, ns)
-	createWorkerPod(t, tc, ns, "worker-1", "node1")
+	createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
 
 	_, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{
 		ActorTemplateNamespace: ns,

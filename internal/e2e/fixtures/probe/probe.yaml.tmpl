@@ -24,6 +24,8 @@ kind: WorkerPool
 metadata:
   name: probe
   namespace: ate-e2e-probe
+  labels:
+    workload: probe
 spec:
   replicas: 3
   ateomImage: ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor
@@ -41,8 +43,8 @@ spec:
   - name: probe
     image: ko://github.com/agent-substrate/substrate/internal/e2e/fixtures/probe
     command: ["/ko-app/probe"]
-  workerPoolRef:
-    namespace: ate-e2e-probe
-    name: probe
+  workerSelector:
+    matchLabels:
+      workload: probe
   snapshotsConfig:
     location: gs://${BUCKET_NAME}/ate-e2e-probe/

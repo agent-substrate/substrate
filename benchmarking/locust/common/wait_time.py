@@ -12,19 +12,20 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from locust import events
+from locust import events, User
+from locust.argument_parser import LocustArgumentParser
 import random
 
 _initialized = False
 
-def init_wait_time():
+def init_wait_time() -> None:
     """Initialize wait time logic and register command line parser listeners."""
     global _initialized
     if _initialized:
         return
 
     @events.init_command_line_parser.add_listener
-    def on_init_parser(parser):
+    def on_init_parser(parser: LocustArgumentParser) -> None:
         parser.add_argument(
             "--min-wait-time",
             type=float,
@@ -44,7 +45,7 @@ def init_wait_time():
 
     _initialized = True
 
-def dynamic_wait_time(user_instance):
+def dynamic_wait_time(user_instance: User) -> float:
     opts = user_instance.environment.parsed_options
     min_wait = opts.min_wait_time if (opts and hasattr(opts, "min_wait_time") and opts.min_wait_time is not None) else 0.0
     max_wait = opts.max_wait_time if (opts and hasattr(opts, "max_wait_time") and opts.max_wait_time is not None) else 0.5

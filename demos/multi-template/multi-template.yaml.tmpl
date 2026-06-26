@@ -15,10 +15,12 @@
 # This demo shows that two ActorTemplates running two different binaries can
 # share a single WorkerPool, even when all three live in different namespaces.
 # A WorkerPool is image-agnostic capacity (its pods only run the ateom
-# supervisor); each ActorTemplate carries its own workload image and binds to
-# the pool via workerPoolRef, whose namespace points at wherever the pool lives.
+# supervisor); each ActorTemplate carries its own workload image and gates on
+# the pool via workerSelector, a label selector matched against the pool's
+# labels (no namespace scoping involved: pool selection is cluster-wide).
 # Below, the "counter" and "fspersist" templates each sit in their own namespace
-# and bind cross-namespace to the one "shared-pool" in a third namespace.
+# and both select the one "shared-pool" in a third namespace via the same
+# workload label.
 
 apiVersion: v1
 kind: Namespace
@@ -40,6 +42,8 @@ kind: WorkerPool
 metadata:
   name: shared-pool
   namespace: ate-demo-multi-template-pool
+  labels:
+    workload: multi-template-shared
 spec:
   replicas: 3
   ateomImage: ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor
@@ -55,9 +59,9 @@ spec:
   - name: counter
     image: ko://github.com/agent-substrate/substrate/demos/counter
     command: ["/ko-app/counter"]
-  workerPoolRef:
-    namespace: ate-demo-multi-template-pool
-    name: shared-pool
+  workerSelector:
+    matchLabels:
+      workload: multi-template-shared
   snapshotsConfig:
     location: gs://${BUCKET_NAME}/ate-demo-multi-template-counter/
 ---
@@ -72,8 +76,8 @@ spec:
   - name: fspersist
     image: ko://github.com/agent-substrate/substrate/demos/multi-template/fspersist
     command: ["/ko-app/fspersist"]
-  workerPoolRef:
-    namespace: ate-demo-multi-template-pool
-    name: shared-pool
+  workerSelector:
+    matchLabels:
+      workload: multi-template-shared
   snapshotsConfig:
     location: gs://${BUCKET_NAME}/ate-demo-multi-template-fspersist/

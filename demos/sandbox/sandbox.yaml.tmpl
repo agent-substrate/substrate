@@ -22,6 +22,8 @@ kind: WorkerPool
 metadata:
   name: sandbox-workerpool
   namespace: ate-demo-sandbox
+  labels:
+    workload: sandbox
 spec:
   replicas: 2
   ateomImage: ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor
@@ -32,16 +34,14 @@ metadata:
   name: sandbox-template
   namespace: ate-demo-sandbox
 spec:
-  workerPoolRef:
-    name: sandbox-workerpool
-    namespace: ate-demo-sandbox
+  workerSelector:
+    matchLabels:
+      workload: sandbox
   pauseImage: "registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4"
   containers:
   - name: sandbox
     image: ko://github.com/agent-substrate/substrate/demos/sandbox
     command: ["/ko-app/sandbox"]
-    ports:
-    - containerPort: 80
     env:
     - name: PORT
       value: "80"

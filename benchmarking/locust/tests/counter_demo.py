@@ -45,7 +45,7 @@ class CounterUser(HttpUser):
     host = "http://atenet-router.ate-system.svc.cluster.local:80"
     api_host = "api.ate-system.svc.cluster.local:443"
 
-    def on_start(self):
+    def on_start(self) -> None:
         update_user_count(1, self.__class__.__name__)
 
         # Setup gRPC
@@ -69,7 +69,7 @@ class CounterUser(HttpUser):
         except Exception as e:
             logger.error(f"Failed to create actor {self.actor_id}: {e}")
 
-    def on_stop(self):
+    def on_stop(self) -> None:
         update_user_count(-1, self.__class__.__name__)
         try:
             self.stub.SuspendActor(
@@ -80,7 +80,7 @@ class CounterUser(HttpUser):
         self.channel.close()
 
     @task
-    def run_and_suspend(self):
+    def run_and_suspend(self) -> None:
         # 1. ResumeActor (gRPC)
         start_time = time.time()
         with tracer.start_as_current_span("ResumeActor") as span:

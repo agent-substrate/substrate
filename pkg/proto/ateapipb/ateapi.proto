@@ -29,6 +29,9 @@ service Control {
   // Create a new Actor deriving from a given ActorTemplate.
   rpc CreateActor(CreateActorRequest) returns (CreateActorResponse) {}
 
+  // Update mutable fields on an existing Actor.
+  rpc UpdateActor(UpdateActorRequest) returns (UpdateActorResponse) {}
+
   // Suspend a given actor to a new snapshot.
   rpc SuspendActor(SuspendActorRequest) returns (SuspendActorResponse) {}
 
@@ -75,6 +78,12 @@ message SnapshotInfo {
   }
 }
 
+// Selector matches worker pools by label.
+// Only equality-based matching is supported.
+message Selector {
+  map<string, string> match_labels = 1;
+}
+
 message Actor {
   string actor_id = 1;
   int64  version  = 2;
@@ -102,6 +111,20 @@ message Actor {
   string in_progress_snapshot = 10;
   string ateom_pod_uid        = 11;
   SnapshotInfo latest_snapshot_info = 12;
+
+  // worker_selector is the per-actor placement constraint. The scheduler
+  // evaluates the AND of this selector and the template's workerSelector to
+  // find eligible pools. Set at CreateActor; may be updated at any time via
+  // UpdateActor. Changes take effect on the next ResumeActor call.
+  Selector worker_selector = 13;
+
+  // worker_pool_name is the name of the WorkerPool that owns the currently
+  // assigned worker, in the same namespace as ateom_pod_namespace (pool and
+  // pod namespaces always match). Set by the scheduler at assignment time
+  // and cleared when the worker is freed. Needed to release the worker on
+  // suspend/pause since eligibility is no longer a single fixed pool
+  // reference on the ActorTemplate.
+  string worker_pool_name = 14;
 }
 
 message GetActorRequest {
@@ -122,9 +145,28 @@ message CreateActorRequest {
 
   // The name of the ActorTemplate to derive from.
   string actor_template_name = 3;
+
+  // worker_selector sets the actor's placement constraint at creation time.
+  // If empty, the actor matches any pool admitted by the template's selector.
+  Selector worker_selector = 4;
 }
 
 message CreateActorResponse {
+  Actor actor = 1;
+}
+
+// Request to update mutable fields on an existing Actor.
+// May be called regardless of the actor's current status.
+// Changes take effect on the next ResumeActor call.
+message UpdateActorRequest {
+  string actor_id = 1;
+
+  // worker_selector replaces the actor's current placement constraint.
+  // Takes effect on the next ResumeActor call.
+  Selector worker_selector = 2;
+}
+
+message UpdateActorResponse {
   Actor actor = 1;
 }
 

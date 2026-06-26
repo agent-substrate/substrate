@@ -55,6 +55,12 @@ message RunWorkloadRequest {
   string runsc_path = 4;
 
   WorkloadSpec spec = 5;
+
+  // runtime_asset_paths maps a runtime asset name (e.g. "cloud-hypervisor",
+  // "virtiofsd", "kata-kernel", "kata-image", "kata-config")
+  // to the local on-disk path atelet fetched it to (content-addressed, like
+  // runsc_path). Empty for the gVisor runtime, which uses runsc_path.
+  map<string, string> runtime_asset_paths = 7;
 }
 
 // WorkloadSpec parallels Pod, but with far fewer configurable fields.
@@ -87,10 +93,17 @@ message CheckpointWorkloadRequest {
   //
   // For example: "gs://bucket/actors/1234/snapshots/5678/"
   string snapshot_uri_prefix = 6;
+
+  // runtime_asset_paths maps a runtime asset name to the local on-disk path
+  // atelet fetched it to (see RunWorkloadRequest). Empty for gVisor.
+  map<string, string> runtime_asset_paths = 7;
 }
 
 message CheckpointWorkloadResponse {
-
+  // snapshot_files lists the files ateom wrote into the checkpoint directory
+  // (relative names) for atelet to ship to object storage. Each runtime reports
+  // its own set (gVisor's image files, cloud-hypervisor's snapshot set, ...).
+  repeated string snapshot_files = 1;
 }
 
 message RestoreWorkloadRequest {
@@ -104,6 +117,10 @@ message RestoreWorkloadRequest {
 
   // The object storage URI prefix of the snapshot to restore.
   string snapshot_uri_prefix = 6;
+
+  // runtime_asset_paths maps a runtime asset name to the local on-disk path
+  // atelet fetched it to (see RunWorkloadRequest). Empty for gVisor.
+  map<string, string> runtime_asset_paths = 7;
 }
 
 message RestoreWorkloadResponse {
