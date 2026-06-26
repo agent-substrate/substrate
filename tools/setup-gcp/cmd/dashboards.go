@@ -16,6 +16,7 @@ package cmd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -23,30 +24,29 @@ import (
 
 	dashboard "cloud.google.com/go/monitoring/dashboard/apiv1"
 	"cloud.google.com/go/monitoring/dashboard/apiv1/dashboardpb"
+	"github.com/spf13/cobra"
 	"google.golang.org/api/iterator"
 	"google.golang.org/protobuf/encoding/protojson"
 )
 
-// dashboardsToApply lists the Cloud Monitoring dashboard JSON files (relative to
-// the repo root, so run setup from the repo root) that setup creates or updates.
-var dashboardsToApply = []string{
-	"tools/setup-gcp/dashboards/ate-grpc-dashboard.json",
-	"tools/setup-gcp/dashboards/ate-e2e-latency-dashboard.json",
-	"tools/setup-gcp/dashboards/ate-snapshot-dashboard.json",
+var dashboardFiles = []string{
+	"ate-grpc-dashboard.json",
+	"ate-e2e-latency-dashboard.json",
+	"ate-snapshot-dashboard.json",
 }
 
 // createMonitoringDashboards creates or updates each dashboard in
-// dashboardsToApply. It is idempotent: dashboards are matched by displayName and
+// dashboardFiles. It is idempotent: dashboards are matched by displayName and
 // updated in place, because CreateDashboard always creates a new dashboard (so
 // calling it repeatedly would produce duplicates).
-func createMonitoringDashboards(ctx context.Context, env *Environment) error {
+func createMonitoringDashboards(ctx context.Context, cfg *Config) error {
 	client, err := dashboard.NewDashboardsClient(ctx)
 	if err != nil {
 		return fmt.Errorf("create dashboards client: %w", err)
 	}
 	defer client.Close()
 
-	parent := "projects/" + env.ProjectID
+	parent := "projects/" + cfg.ProjectID
 
 	// Index existing dashboards by displayName to decide create vs update.
 	existing := map[string]*dashboardpb.Dashboard{}
@@ -62,7 +62,13 @@ func createMonitoringDashboards(ctx context.Context, env *Environment) error {
 		existing[d.GetDisplayName()] = d
 	}
 
-	for _, path := range dashboardsToApply {
+	dir := cfg.DashboardDir
+	if dir == "" {
+		dir = "tools/setup-gcp/dashboards"
+	}
+
+	for _, file := range dashboardFiles {
+		path := filepath.Join(dir, file)
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return fmt.Errorf("read %s: %w", path, err)
@@ -93,4 +99,20 @@ func createMonitoringDashboards(ctx context.Context, env *Environment) error {
 		}
 	}
 	return nil
+}
+
+var dashboardsCmd = &cobra.Command{
+	Use:   "dashboards",
+	Short: "Create Cloud Monitoring dashboards",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if cfg.ProjectID == "" {
+			return errors.New("--project-id is required")
+		}
+		return createMonitoringDashboards(cmd.Context(), &cfg)
+	},
+}
+
+func init() {
+	createCmd.AddCommand(dashboardsCmd)
+	dashboardsCmd.Flags().StringVar(&cfg.DashboardDir, "dir", getEnv("DASHBOARD_DIR", "tools/setup-gcp/dashboards"), "Directory containing dashboard JSON files [env: DASHBOARD_DIR]")
 }

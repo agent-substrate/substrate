@@ -18,23 +18,14 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var cfg Config
-
-var rootCmd = &cobra.Command{
-	Use:   "setup-gcp",
-	Short: "Setup GCP resources for Agent Substrate",
-	Long:  `A tool to provision and configure GCP resources required for Agent Substrate.`,
+var createCmd = &cobra.Command{
+	Use:   "create",
+	Short: "Create GCP resources",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		return cmd.Help()
 	},
 }
 
-func Execute() error {
-	return rootCmd.Execute()
-}
-
 func init() {
-	rootCmd.PersistentFlags().StringVar(&cfg.ProjectID, "project-id", getEnv("PROJECT_ID", ""), "GCP Project ID [env: PROJECT_ID]")
-	rootCmd.PersistentFlags().StringVar(&cfg.ProjectNumber, "project-number", getEnv("PROJECT_NUMBER", ""), "GCP Project Number [env: PROJECT_NUMBER]")
-	rootCmd.PersistentFlags().StringVar(&cfg.Region, "region", getEnv("GCE_REGION", "us-central1"), "GCP Region [env: GCE_REGION]")
+	rootCmd.AddCommand(createCmd)
 }
