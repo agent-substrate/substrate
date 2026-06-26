@@ -70,7 +70,7 @@ var (
 	workerpoolCACerts   = pflag.String("workerpool-ca-certs", "", "The file that contains the CA for verifying workerpool client certificates.")
 
 	showVersion     = pflag.Bool("version", false, "Print version and exit.")
-	authMode        = pflag.String("auth-mode", "mtls", "Auth mode for incoming gRPC: mtls|jwt. 'mtls' (default) relies on transport-level mTLS for client identity. 'jwt' additionally requires a Kubernetes ServiceAccount Bearer token on every RPC.")
+	authMode        = pflag.String("auth-mode", "mtls", "Auth mode for incoming gRPC: mtls|jwt. 'mtls' (default) relies on transport-level mTLS for client identity. 'jwt' additionally requires a Kubernetes ServiceAccount Bearer token on every RPC. Substrate will drop support for JWT auth mode once the Pod Certificates feature is enabled by default in the minimum supported Kubernetes version.")
 	clientJWTCAFile = pflag.String("client-jwt-ca-cert", ateapiauth.DefaultServiceAccountCAFile, "CA cert file used to verify TLS when fetching the OIDC discovery document and JWKS for JWT authentication. Defaults to the in-cluster service account CA.")
 )
 
@@ -148,6 +148,9 @@ func main() {
 	sm := controlapi.NewService(redisPersistence, actorTemplateLister, workerPoolLister, sandboxConfigLister, dialer, clientset)
 
 	jwtIssuerDiscoveryClient := buildK8sServiceAccountIssuerDiscoveryClient(ctx, *clientJWTCAFile, *clientJWTIssuer)
+	if authModeParsed == ateapiauth.ModeJWT && jwtIssuerDiscoveryClient == nil {
+		serverboot.Fatal(ctx, "JWT auth mode requires a Kubernetes ServiceAccount issuer discovery client", fmt.Errorf("client JWT issuer %q is not usable for discovery", *clientJWTIssuer))
+	}
 
 	sessionIdentitySrv := sessionidentity.New(*clientJWTIssuer, *clientJWTAudience, *sessionIDJWTPoolFile, *sessionIDCAPoolFile, *workerpoolCACerts, jwtIssuerDiscoveryClient)
 

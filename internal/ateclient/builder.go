@@ -52,8 +52,6 @@ type Client struct {
 	tracerProvider *sdktrace.TracerProvider
 }
 
-const ateAPIClientServiceAccount = "ate-client"
-
 // Close closes the underlying gRPC connection and stops the port-forwarder.
 func (c *Client) Close() {
 	if c.tracerProvider != nil {
@@ -256,7 +254,7 @@ func jwtDialOptions(ctx context.Context, clientset *kubernetes.Clientset) ([]grp
 			ExpirationSeconds: &expirationSeconds,
 		},
 	}
-	token, err := clientset.CoreV1().ServiceAccounts("ate-system").CreateToken(ctx, ateAPIClientServiceAccount, tokenRequest, metav1.CreateOptions{})
+	token, err := clientset.CoreV1().ServiceAccounts("ate-system").CreateToken(ctx, "ate-client", tokenRequest, metav1.CreateOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("failed to request ateapi bearer token: %w", err)
 	}
