@@ -23,7 +23,7 @@ benchmarking/ # Load-testing tools and workloads
 tools/        # Standalone Go tools (go run ./tools/<name>) for Dev/CI
 ```
 
-**Where to put new Go code — quick rules:**
+**Where to put new Go code:**
 
 | Situation | Location |
 |---|---|

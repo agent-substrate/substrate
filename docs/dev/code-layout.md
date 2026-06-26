@@ -24,7 +24,7 @@ substrate/
 
 ### `pkg/` vs `internal/`
 
-**`pkg/`** is for Go packages with an external API contract — code that users or
+**`pkg/`** is for Go packages with an external API contract, code that users or
 third-party tools may import directly from
 `github.com/agent-substrate/substrate/pkg/...`. Putting a package here signals
 a commitment to backwards-compatibility and discoverability.
@@ -35,7 +35,7 @@ enforces that nothing outside `github.com/agent-substrate/substrate` can import
 these.
 
 > **Use `pkg/` sparingly.** Once the project reaches GA, any exported type,
-> function, or field in `pkg/` becomes subject to a compatibility guarantee —
+> function, or field in `pkg/` becomes subject to a compatibility guarantee:
 > removing or renaming it is a breaking change for external consumers. Prefer
 > keeping new code in `internal/` until its API has stabilized. The bar for
 > adding to `pkg/` is: "I am confident external users need to import this, and I
@@ -57,8 +57,8 @@ Each subdirectory of `cmd/` corresponds to one compiled binary:
 | `cmd/podcertcontroller` | Controller that issues pod TLS certificates        |
 
 Each `cmd/<binary>/` contains:
-- `main.go` — the entry point, kept thin (flag parsing, wiring, signal handling)
-- `internal/` — packages private to that binary; **not** shared with other binaries
+- `main.go`: the entry point, kept thin (flag parsing, wiring, signal handling)
+- `internal/`: packages private to that binary; **not** shared with other binaries
 
 If a package is only used by one binary, put it under `cmd/<binary>/internal/`.
 If two or more binaries share a package, move it to `internal/` (or `pkg/` if
