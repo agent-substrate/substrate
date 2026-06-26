@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -301,15 +302,27 @@ func createActorTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients
 		t.Fatalf("CheckEnv failed: %v", err)
 	}
 
-	// Query existing WorkerPool and ActorTemplate to get the resolved container images
-	existingWp, err := clients.SubstrateK8s.ApiV1alpha1().WorkerPools("ate-demo-counter").Get(ctx, "counter", metav1.GetOptions{})
-	if err != nil {
-		t.Fatalf("failed to get existing WorkerPool: %v", err)
+	// The source WorkerPool+ActorTemplate to copy the resolved runtime (sandbox class,
+	// ateom image, container images) from. Defaults to the gVisor counter demo; CI
+	// overrides these to point this same lifecycle test at the micro-VM counter.
+	srcNS := "ate-demo-counter"
+	if v := os.Getenv("E2E_TEMPLATE_NAMESPACE"); v != "" {
+		srcNS = v
+	}
+	srcName := "counter"
+	if v := os.Getenv("E2E_TEMPLATE_NAME"); v != "" {
+		srcName = v
 	}
 
-	existingAt, err := clients.SubstrateK8s.ApiV1alpha1().ActorTemplates("ate-demo-counter").Get(ctx, "counter", metav1.GetOptions{})
+	// Query existing WorkerPool and ActorTemplate to get the resolved container images
+	existingWp, err := clients.SubstrateK8s.ApiV1alpha1().WorkerPools(srcNS).Get(ctx, srcName, metav1.GetOptions{})
 	if err != nil {
-		t.Fatalf("failed to get existing ActorTemplate: %v", err)
+		t.Fatalf("failed to get existing WorkerPool %s/%s: %v", srcNS, srcName, err)
+	}
+
+	existingAt, err := clients.SubstrateK8s.ApiV1alpha1().ActorTemplates(srcNS).Get(ctx, srcName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("failed to get existing ActorTemplate %s/%s: %v", srcNS, srcName, err)
 	}
 
 	// Create WorkerPool. Labeled uniquely to this test's namespace so the
@@ -343,8 +356,12 @@ func createActorTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients
 			WorkerSelector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{"demo": nsObj.Name},
 			},
-			PauseImage: existingAt.Spec.PauseImage,
-			Containers: existingAt.Spec.Containers,
+			// SandboxClass must match the per-test WorkerPool's (copied above) so the
+			// ActorTemplate↔WorkerPool match succeeds. The micro-VM source sets
+			// "microvm"; the gVisor source leaves it "" — copying keeps both correct.
+			SandboxClass: existingAt.Spec.SandboxClass,
+			PauseImage:   existingAt.Spec.PauseImage,
+			Containers:   existingAt.Spec.Containers,
 			SnapshotsConfig: v1alpha1.SnapshotsConfig{
 				Location: "gs://" + env["BUCKET_NAME"] + "/ate-demo-counter",
 			},
@@ -356,8 +373,17 @@ func createActorTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients
 	}
 
 	// Wait for ActorTemplate to be Ready (golden snapshot created) before creating an actor.
+	// The micro-VM golden (CH boot + checkpoint on nested KVM) is slower than gVisor, so
+	// CI raises this via E2E_TEMPLATE_READY_TIMEOUT.
 	t.Logf("Waiting for ActorTemplate %s to be Ready...", at.Name)
-	const tmplTimeout = 90 * time.Second
+	tmplTimeout := 90 * time.Second
+	if v := os.Getenv("E2E_TEMPLATE_READY_TIMEOUT"); v != "" {
+		d, perr := time.ParseDuration(v)
+		if perr != nil {
+			t.Fatalf("invalid E2E_TEMPLATE_READY_TIMEOUT %q: %v", v, perr)
+		}
+		tmplTimeout = d
+	}
 	tmplCtx, tmplCancel := context.WithTimeout(ctx, tmplTimeout)
 	defer tmplCancel()
 	var lastPhase v1alpha1.PhaseType
