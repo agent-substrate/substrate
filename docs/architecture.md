@@ -52,7 +52,7 @@ Standard Kubernetes Pods are simply too heavy for many agentic workloads.
 ### Terminology: "Actor"
 
 Agent Substrate seeks to solve these problems for "agent-like" workloads.
-Often we simply say "agents", but it's important clarify that "agent-like"
+Often we simply say "agents", but it's important to clarify that "agent-like"
 workloads are not necessarily literally AI agents.  In most of the docs we
 instead use the term "actor" to refer to an instance of an agent-like workload.
 
@@ -167,7 +167,7 @@ There are a few different personas that interact with the system:
   2) **Substrate admins**: These are the people who set up and own the Agent
      Substrate instance(s) in a Kubernetes cluster.  They are obviously aware
      that it is running in a Kubernetes cluster, and are responsible for
-     configuring the Kubernetes resources for it (such as WarmPools).
+     configuring the Kubernetes resources for it (such as WorkerPools).
 
   3) **Agent developers**: These are the people who deploy agents into a substrate
      for users or higher-level systems to consume. They might have to be aware
