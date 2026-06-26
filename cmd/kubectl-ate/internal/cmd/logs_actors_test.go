@@ -196,6 +196,57 @@ func TestFilterAndDisplayLogLine(t *testing.T) {
 			wantTime:      "",
 			wantOutput:    "",
 		},
+		{
+			// Empty actor_id under the GCE key must not shadow the labels key.
+			name:          "empty actor_id under GCE key falls through to labels key",
+			line:          `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"hi","logging.googleapis.com/labels":{"ate.dev/actor_id":""},"labels":{"ate.dev/actor_id":"act-1","ate.dev/container_name":"counter"}}`,
+			targetActorID: "act-1",
+			container:     "counter",
+			wantMatched:   true,
+			wantTime:      "2026-05-16T01:03:38Z",
+			wantOutput:    `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"hi"}`,
+		},
+		{
+			// Non-string actor_id under the GCE key fails the type assertion and falls through.
+			name:          "non-string actor_id under GCE key falls through to labels key",
+			line:          `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"hi","logging.googleapis.com/labels":{"ate.dev/actor_id":123},"labels":{"ate.dev/actor_id":"act-1","ate.dev/container_name":"counter"}}`,
+			targetActorID: "act-1",
+			container:     "counter",
+			wantMatched:   true,
+			wantTime:      "2026-05-16T01:03:38Z",
+			wantOutput:    `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"hi"}`,
+		},
+		{
+			// An empty actor_id with no other identifying key is not our actor.
+			name:          "empty actor_id under the only key is dropped",
+			line:          `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"hi","logging.googleapis.com/labels":{"ate.dev/actor_id":""}}`,
+			targetActorID: "act-1",
+			wantMatched:   false,
+			wantTime:      "",
+			wantOutput:    "",
+		},
+		{
+			// actor_id is under the GCE key (which carries no container_name);
+			// container_name lives only under the labels key. Filtering by container
+			// must not borrow it from the non-selected map, so the line is not matched.
+			name:          "container_name only under non-selected key is not borrowed",
+			line:          `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"hi","logging.googleapis.com/labels":{"ate.dev/actor_id":"act-1"},"labels":{"ate.dev/container_name":"counter"}}`,
+			targetActorID: "act-1",
+			container:     "counter",
+			wantMatched:   false,
+			wantTime:      "",
+			wantOutput:    "",
+		},
+		{
+			// Same line, default filter: the line is the actor's and is shown, and the
+			// stray container_name under the labels key is stripped, not adopted.
+			name:          "container_name under non-selected key, default filter shows the line",
+			line:          `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"hi","logging.googleapis.com/labels":{"ate.dev/actor_id":"act-1"},"labels":{"ate.dev/container_name":"counter"}}`,
+			targetActorID: "act-1",
+			wantMatched:   true,
+			wantTime:      "2026-05-16T01:03:38Z",
+			wantOutput:    `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"hi"}`,
+		},
 	}
 
 	for _, tc := range tests {

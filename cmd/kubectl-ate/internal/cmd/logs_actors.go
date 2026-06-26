@@ -367,6 +367,24 @@ const (
 // logActorLabelKeys are the keys a line may carry labels under, GCE key first.
 var logActorLabelKeys = []string{"logging.googleapis.com/labels", "labels"}
 
+// actorSource returns the actor_id and container_name from the first recognized
+// label map that carries a non-empty ate.dev/actor_id. Both are read from that
+// same map so a line's source is never split across the two keys; actor_id is ""
+// when no map identifies an actor.
+func actorSource(m map[string]any) (actorID, containerName string) {
+	for _, key := range logActorLabelKeys {
+		labels, ok := m[key].(map[string]any)
+		if !ok {
+			continue
+		}
+		if id, _ := labels[ateActorIDLabel].(string); id != "" {
+			containerName, _ = labels[ateContainerNameLabel].(string)
+			return id, containerName
+		}
+	}
+	return "", ""
+}
+
 // filterAndDisplayLogLine writes the cleaned line (ate.dev labels stripped) to w
 // when it belongs to the target actor and passes the filter. It returns the
 // line's timestamp only for displayed lines (zero otherwise), so follow mode
@@ -389,27 +407,7 @@ func filterAndDisplayLogLine(line string, filter logLineFilter, w io.Writer) (ti
 		}
 	}
 
-	// Read actor_id and container_name from the same (first actor-identifying)
-	// label map so a line's source is never split across the two keys.
-	var actorID, containerName string
-	for _, labelKey := range logActorLabelKeys {
-		labelsAny, ok := m[labelKey]
-		if !ok {
-			continue
-		}
-		labels, ok := labelsAny.(map[string]any)
-		if !ok {
-			continue
-		}
-		id, _ := labels[ateActorIDLabel].(string)
-		if id == "" {
-			continue
-		}
-		actorID = id
-		containerName, _ = labels[ateContainerNameLabel].(string)
-		break
-	}
-
+	actorID, containerName := actorSource(m)
 	if actorID == "" || actorID != filter.actorID {
 		return time.Time{}, false
 	}
