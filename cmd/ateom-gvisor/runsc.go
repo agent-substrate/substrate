@@ -156,7 +156,7 @@ func (r *runsc) cmdFsCheckpoint(ctx context.Context, containerName, checkpointPa
 		args = append(args, "-path", ddv)
 	}
 
-	// name of the container must be the last paramter.
+	// name of the container must be the last parameter.
 	args = append(args, containerName)
 
 	cmd := exec.CommandContext(
