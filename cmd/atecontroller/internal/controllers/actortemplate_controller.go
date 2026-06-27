@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/resources"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/uuid"
@@ -81,14 +82,14 @@ func (r *ActorTemplateReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	case atev1alpha1.PhaseInitial:
 		actorID := uuid.NewString()
 
-		// The golden actor lives in the template's namespace as its atespace.
-		_, err := r.AteClient.CreateAtespace(ctx, &ateapipb.CreateAtespaceRequest{Name: at.ObjectMeta.Namespace})
+		// Golden actors live in the reserved ate-golden system atespace.
+		_, err := r.AteClient.CreateAtespace(ctx, &ateapipb.CreateAtespaceRequest{Name: resources.GoldenActorAtespace})
 		if err != nil && status.Code(err) != codes.AlreadyExists {
-			return ctrl.Result{}, fmt.Errorf("while ensuring atespace %q: %w", at.ObjectMeta.Namespace, err)
+			return ctrl.Result{}, fmt.Errorf("while ensuring atespace %q: %w", resources.GoldenActorAtespace, err)
 		}
 
 		createReq := &ateapipb.CreateActorRequest{
-			ActorRef:               &ateapipb.ActorRef{Atespace: at.ObjectMeta.Namespace, Name: actorID},
+			ActorRef:               &ateapipb.ActorRef{Atespace: resources.GoldenActorAtespace, Name: actorID},
 			ActorTemplateNamespace: at.ObjectMeta.Namespace,
 			ActorTemplateName:      at.ObjectMeta.Name,
 		}
@@ -117,7 +118,7 @@ func (r *ActorTemplateReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		// TODO: Maybe this should go through a different RPC dedicated to
 		// booting an actor from scratch.
 		resumeReq := &ateapipb.ResumeActorRequest{
-			ActorRef: &ateapipb.ActorRef{Atespace: at.ObjectMeta.Namespace, Name: at.Status.GoldenActorID},
+			ActorRef: &ateapipb.ActorRef{Atespace: resources.GoldenActorAtespace, Name: at.Status.GoldenActorID},
 		}
 		_, err := r.AteClient.ResumeActor(ctx, resumeReq)
 		if err != nil {
@@ -143,7 +144,7 @@ func (r *ActorTemplateReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		// from it.
 
 		req := &ateapipb.SuspendActorRequest{
-			ActorRef: &ateapipb.ActorRef{Atespace: at.ObjectMeta.Namespace, Name: at.Status.GoldenActorID},
+			ActorRef: &ateapipb.ActorRef{Atespace: resources.GoldenActorAtespace, Name: at.Status.GoldenActorID},
 		}
 		resp, err := r.AteClient.SuspendActor(ctx, req)
 		if err != nil {

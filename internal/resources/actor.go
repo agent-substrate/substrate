@@ -26,6 +26,9 @@ const (
 	// ActorDNSSuffix is suffix to the DNS name for direct access to Actor
 	// "<actor id>.<atespace>.actors.resources.substrate.ate.dev."
 	ActorDNSSuffix = "actors.resources.substrate.ate.dev"
+	// GoldenActorAtespace is the reserved system atespace that per-template golden
+	// actors live in.
+	GoldenActorAtespace = "ate-golden"
 )
 
 var actorIDRegex = regexp.MustCompile("^" + ActorIDRegexPattern + "$")
