@@ -152,6 +152,39 @@ spec:
                       x-kubernetes-validations:
                       - message: Name must be a valid DNS label
                         rule: '!format.dns1123Label().validate(self).hasValue()'
+                    readyz:
+                      description: |-
+                        Readyz is an optional HTTP readiness probe. When set, the actor is not
+                        considered ready (and Run/Restore RPCs do not return success) until the
+                        container's HTTP endpoint returns 200.
+                      properties:
+                        httpGet:
+                          description: HTTPGet specifies the HTTP request to perform
+                            against the container.
+                          properties:
+                            path:
+                              default: /readyz
+                              description: |-
+                                Path to access on the HTTP server. Defaults to "/readyz".
+                                Must be a valid URL path starting with "/". Only characters permitted
+                                by RFC 3986 path segments are accepted; percent-escapes must be a
+                                literal "%" followed by exactly two hex digits. Query strings ("?")
+                                and fragments ("#") must be omitted.
+                              maxLength: 1024
+                              pattern: ^/([A-Za-z0-9\-._~!$&'()*+,;=:@/]|%[0-9A-Fa-f]{2})*$
+                              type: string
+                            port:
+                              description: Port to access on the container.
+                              format: int32
+                              maximum: 65535
+                              minimum: 1
+                              type: integer
+                          required:
+                          - port
+                          type: object
+                      required:
+                      - httpGet
+                      type: object
                   required:
                   - image
                   - name

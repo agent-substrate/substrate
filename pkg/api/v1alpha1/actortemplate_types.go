@@ -56,6 +56,44 @@ type Container struct {
 	// +optional
 	// +kubebuilder:validation:MaxItems=32
 	Env []EnvVar `json:"env,omitempty"`
+
+	// Readyz is an optional HTTP readiness probe. When set, the actor is not
+	// considered ready (and Run/Restore RPCs do not return success) until the
+	// container's HTTP endpoint returns 200.
+	//
+	// +optional
+	Readyz *ContainerReadyz `json:"readyz,omitempty"`
+}
+
+// ContainerReadyz configures the readiness signal for a container.
+type ContainerReadyz struct {
+	// HTTPGet specifies the HTTP request to perform against the container.
+	//
+	// +required
+	HTTPGet *HTTPGetAction `json:"httpGet"`
+}
+
+// HTTPGetAction describes an HTTP GET request to perform against the
+// container's interior IP. Modeled after a subset of corev1.HTTPGetAction.
+type HTTPGetAction struct {
+	// Path to access on the HTTP server. Defaults to "/readyz".
+	// Must be a valid URL path starting with "/". Only characters permitted
+	// by RFC 3986 path segments are accepted; percent-escapes must be a
+	// literal "%" followed by exactly two hex digits. Query strings ("?")
+	// and fragments ("#") must be omitted.
+	//
+	// +optional
+	// +kubebuilder:default="/readyz"
+	// +kubebuilder:validation:MaxLength=1024
+	// +kubebuilder:validation:Pattern=`^/([A-Za-z0-9\-._~!$&'()*+,;=:@/]|%[0-9A-Fa-f]{2})*$`
+	Path string `json:"path,omitempty"`
+
+	// Port to access on the container.
+	//
+	// +required
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=65535
+	Port int32 `json:"port"`
 }
 
 // EnvVar represents an environment variable supplied to a container in an

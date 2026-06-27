@@ -98,6 +98,50 @@ func TestWorkloadSpecFromActorTemplateResolvesValueFromEnv(t *testing.T) {
 	}
 }
 
+func TestWorkloadSpecFromActorTemplatePropagatesReadyz(t *testing.T) {
+	ctx := context.Background()
+	got, err := workloadSpecFromActorTemplate(ctx, fake.NewSimpleClientset(), nil, &atev1alpha1.ActorTemplate{
+		ObjectMeta: metav1.ObjectMeta{Name: "tmpl-readyz", Namespace: "agent-ns"},
+		Spec: atev1alpha1.ActorTemplateSpec{
+			Containers: []atev1alpha1.Container{
+				{
+					Name:  "with-probe",
+					Image: "main",
+					Readyz: &atev1alpha1.ContainerReadyz{
+						HTTPGet: &atev1alpha1.HTTPGetAction{Path: "/health", Port: 8080},
+					},
+				},
+				{
+					Name:  "without-probe",
+					Image: "side",
+				},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("workloadSpecFromActorTemplate failed: %v", err)
+	}
+
+	want := &ateletpb.WorkloadSpec{
+		Containers: []*ateletpb.Container{
+			{
+				Name:  "with-probe",
+				Image: "main",
+				Readyz: &ateletpb.Readyz{
+					HttpGet: &ateletpb.HTTPGetAction{Path: "/health", Port: 8080},
+				},
+			},
+			{
+				Name:  "without-probe",
+				Image: "side",
+			},
+		},
+	}
+	if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
+		t.Errorf("WorkloadSpec mismatch (-want +got):\n%s", diff)
+	}
+}
+
 func TestWorkloadSpecFromActorTemplateOptionalSecretKeyRefSkipsMissingSecret(t *testing.T) {
 	optional := true
 	got, err := workloadSpecFromActorTemplate(context.Background(), fake.NewSimpleClientset(), nil, &atev1alpha1.ActorTemplate{

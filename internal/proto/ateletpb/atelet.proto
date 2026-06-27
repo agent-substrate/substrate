@@ -84,11 +84,26 @@ message Container {
   string            image   = 2;
   repeated string   command = 3;
   repeated EnvEntry env     = 4;
+  Readyz            readyz  = 5;
 }
 
 message EnvEntry {
   string name  = 1;
   string value = 2;
+}
+
+// Readyz describes how to check that a container is ready to serve.
+// Only HTTP is supported today.
+message Readyz {
+  HTTPGetAction http_get = 1;
+}
+
+// HTTPGetAction performs an HTTP GET against the container.
+message HTTPGetAction {
+  // Path to access on the HTTP server. Empty means "/readyz".
+  string path = 1;
+  // TCP port to connect to (1..65535).
+  int32  port = 2;
 }
 
 message RunResponse {

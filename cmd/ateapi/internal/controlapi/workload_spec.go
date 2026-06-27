@@ -47,6 +47,7 @@ func workloadSpecFromActorTemplate(ctx context.Context, kubeClient kubernetes.In
 			Name:    ctr.Name,
 			Image:   ctr.Image,
 			Command: ctr.Command,
+			Readyz:  toAteletReadyz(ctr.Readyz),
 		}
 		for _, env := range ctr.Env {
 			ateletEnv, err := resolver.resolve(ctx, ctr.Name, env)
@@ -61,6 +62,23 @@ func workloadSpecFromActorTemplate(ctx context.Context, kubeClient kubernetes.In
 	}
 
 	return workloadSpec, nil
+}
+
+// toAteletReadyz projects the CRD readyz field onto the ateletpb wire type.
+// Returns nil when the source is nil so containers without a probe stay
+// unchanged on the wire.
+func toAteletReadyz(in *atev1alpha1.ContainerReadyz) *ateletpb.Readyz {
+	if in == nil {
+		return nil
+	}
+	out := &ateletpb.Readyz{}
+	if in.HTTPGet != nil {
+		out.HttpGet = &ateletpb.HTTPGetAction{
+			Path: in.HTTPGet.Path,
+			Port: in.HTTPGet.Port,
+		}
+	}
+	return out
 }
 
 type envResolver struct {

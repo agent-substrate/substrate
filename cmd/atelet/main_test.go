@@ -28,8 +28,11 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
+	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/google/go-cmp/cmp"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/testing/protocmp"
 )
 
 func TestWriteFileAtomic(t *testing.T) {
@@ -376,4 +379,37 @@ func TestRPCBoundariesReject(t *testing.T) {
 		})
 		wantInvalidArgument(t, "Restore", err)
 	})
+}
+
+func TestBuildAteomWorkloadSpecForwardsReadyz(t *testing.T) {
+	in := &ateletpb.WorkloadSpec{
+		PauseImage: "pause",
+		Containers: []*ateletpb.Container{
+			{
+				Name:  "with-probe",
+				Image: "main",
+				Readyz: &ateletpb.Readyz{
+					HttpGet: &ateletpb.HTTPGetAction{Path: "/health", Port: 8080},
+				},
+			},
+			{
+				Name: "without-probe",
+			},
+		},
+	}
+	want := &ateompb.WorkloadSpec{
+		Containers: []*ateompb.Container{
+			{
+				Name: "with-probe",
+				Readyz: &ateompb.Readyz{
+					HttpGet: &ateompb.HTTPGetAction{Path: "/health", Port: 8080},
+				},
+			},
+			{Name: "without-probe"},
+		},
+	}
+	got := buildAteomWorkloadSpec(in)
+	if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
+		t.Errorf("buildAteomWorkloadSpec mismatch (-want +got):\n%s", diff)
+	}
 }

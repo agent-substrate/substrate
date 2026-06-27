@@ -31,6 +31,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/third_party/kata/agentpb"
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/readyz"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"golang.org/x/sys/unix"
 	"google.golang.org/grpc/codes"
@@ -338,6 +339,11 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	// Post-boot kata-agent setup: sandbox, guest networking, start the container.
 	if err := s.startActorContainer(ctx, ac, id, vsockPath, spec); err != nil {
 		return nil, err
+	}
+
+	// Block until every readyz-enabled container reports 200.
+	if err := readyz.WaitAll(ctx, containers, actorVethIP); err != nil {
+		return nil, fmt.Errorf("while waiting for container readyz: %w", err)
 	}
 
 	ra := &runningActor{chCmd: chCmd, apiSocket: apiSocket, containerName: containerName, baseID: id, logAgent: ac}

@@ -33,6 +33,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/contextlogging"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/readyz"
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/agent-substrate/substrate/internal/version"
 	"github.com/google/nftables"
@@ -227,6 +228,11 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 		}
 	}
 
+	// Block until every readyz-enabled container reports 200.
+	if err := readyz.WaitAll(ctx, req.GetSpec().GetContainers(), actorVethIP); err != nil {
+		return nil, fmt.Errorf("while waiting for container readyz: %w", err)
+	}
+
 	s.actorLogger.EmitLifecycleLog("Actor started", req.GetActorId(), req.GetActorTemplateName(), req.GetActorTemplateNamespace())
 
 	return &ateompb.RunWorkloadResponse{}, nil
@@ -381,6 +387,11 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 		if err := rcmd.cmdRestore(ctx, pw, ac.GetName(), checkpointDir); err != nil {
 			return nil, fmt.Errorf("while starting %q application container: %w", ac.GetName(), err)
 		}
+	}
+
+	// Block until every readyz-enabled container reports 200.
+	if err := readyz.WaitAll(ctx, req.GetSpec().GetContainers(), actorVethIP); err != nil {
+		return nil, fmt.Errorf("while waiting for container readyz: %w", err)
 	}
 
 	s.actorLogger.EmitLifecycleLog("Actor restored", req.GetActorId(), req.GetActorTemplateName(), req.GetActorTemplateNamespace())

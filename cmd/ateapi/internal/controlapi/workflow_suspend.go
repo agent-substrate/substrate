@@ -139,6 +139,7 @@ func (s *CallAteletSuspendStep) Execute(ctx context.Context, input *SuspendInput
 			Name:    ctr.Name,
 			Image:   ctr.Image,
 			Command: ctr.Command,
+			Readyz:  toAteletReadyz(ctr.Readyz),
 		}
 		for _, env := range ctr.Env {
 			var val string

@@ -705,11 +705,31 @@ func (s *AteomHerder) dialAteom(ctx context.Context, targetAteomUid string) (ate
 }
 
 // buildAteomWorkloadSpec projects the atelet-facing workload spec onto
-// the ateom-facing one — currently just the container names.
+// the ateom-facing one.
 func buildAteomWorkloadSpec(spec *ateletpb.WorkloadSpec) *ateompb.WorkloadSpec {
 	out := &ateompb.WorkloadSpec{}
 	for _, ctr := range spec.GetContainers() {
-		out.Containers = append(out.Containers, &ateompb.Container{Name: ctr.GetName()})
+		out.Containers = append(out.Containers, &ateompb.Container{
+			Name:   ctr.GetName(),
+			Readyz: toAteomReadyz(ctr.GetReadyz()),
+		})
+	}
+	return out
+}
+
+// toAteomReadyz converts an ateletpb readyz probe into the ateompb wire
+// type. Returns nil when the source is nil so containers without a probe
+// stay unchanged on the wire to ateom.
+func toAteomReadyz(in *ateletpb.Readyz) *ateompb.Readyz {
+	if in == nil {
+		return nil
+	}
+	out := &ateompb.Readyz{}
+	if hg := in.GetHttpGet(); hg != nil {
+		out.HttpGet = &ateompb.HTTPGetAction{
+			Path: hg.GetPath(),
+			Port: hg.GetPort(),
+		}
 	}
 	return out
 }

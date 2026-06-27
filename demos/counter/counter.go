@@ -33,7 +33,10 @@ import (
 	"github.com/spf13/pflag"
 )
 
-var requestCount uint64
+var (
+	requestCount uint64
+	ready        atomic.Bool
+)
 
 func main() {
 	pflag.Parse()
@@ -51,6 +54,18 @@ func main() {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(response))
 	})
+	// /readyz is the endpoint the ateom-gvisor readyz probe polls. It returns
+	// 200 only once initialization (the random-file write) has completed.
+	// After a checkpoint+restore the atomic flag is part of the snapshot, so
+	// the endpoint returns 200 immediately on resume.
+	defaultMux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
+		if !ready.Load() {
+			http.Error(w, "not ready", http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("ok\n"))
+	})
 
 	go func() {
 		slog.InfoContext(ctx, "Starting counter server on port 80")
@@ -67,6 +82,9 @@ func main() {
 	} else {
 		slog.InfoContext(ctx, "Wrote content to random file", slog.String("fshash", hashRandomFile()))
 	}
+
+	ready.Store(true)
+	slog.InfoContext(ctx, "Readyz now reports OK")
 
 	count := 0
 	slog.InfoContext(ctx, "Count", slog.Int("count", count), slog.String("fshash", hashRandomFile()))

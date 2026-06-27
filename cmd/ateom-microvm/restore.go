@@ -30,6 +30,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/kata"
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/readyz"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -182,6 +183,11 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	}
 	if err := client.Resume(ctx); err != nil {
 		return nil, fmt.Errorf("while resuming restored guest: %w", err)
+	}
+
+	// Block until every readyz-enabled container reports 200.
+	if err := readyz.WaitAll(ctx, containers, actorVethIP); err != nil {
+		return nil, fmt.Errorf("while waiting for container readyz: %w", err)
 	}
 
 	ra := &runningActor{chCmd: chCmd, apiSocket: apiSocket, baseID: srcID, restoreSourceDir: restoreDir}

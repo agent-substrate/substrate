@@ -365,6 +365,109 @@ func TestActorTemplateValidation(t *testing.T) {
 		wantErr: true,
 		errMsg:  "Invalid value",
 	}, {
+		name: "valid Readyz with default path",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Containers[0].Readyz = &ContainerReadyz{
+				HTTPGet: &HTTPGetAction{Port: 8080},
+			}
+		},
+		wantErr: false,
+	}, {
+		name: "valid Readyz with explicit path",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Containers[0].Readyz = &ContainerReadyz{
+				HTTPGet: &HTTPGetAction{Path: "/health", Port: 8080},
+			}
+		},
+		wantErr: false,
+	}, {
+		name: "Readyz missing HTTPGet",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Containers[0].Readyz = &ContainerReadyz{}
+		},
+		wantErr: true,
+		errMsg:  "Required value",
+	}, {
+		name: "Readyz port zero",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Containers[0].Readyz = &ContainerReadyz{
+				HTTPGet: &HTTPGetAction{Port: 0},
+			}
+		},
+		wantErr: true,
+		errMsg:  "should be greater than or equal to 1",
+	}, {
+		name: "Readyz port too large",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Containers[0].Readyz = &ContainerReadyz{
+				HTTPGet: &HTTPGetAction{Port: 65536},
+			}
+		},
+		wantErr: true,
+		errMsg:  "should be less than or equal to 65535",
+	}, {
+		name: "Readyz Path with nested segments and percent encoding",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Containers[0].Readyz = &ContainerReadyz{
+				HTTPGet: &HTTPGetAction{Path: "/v1/health/check%20me", Port: 80},
+			}
+		},
+		wantErr: false,
+	}, {
+		name: "Readyz Path missing leading slash",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Containers[0].Readyz = &ContainerReadyz{
+				HTTPGet: &HTTPGetAction{Path: "readyz", Port: 80},
+			}
+		},
+		wantErr: true,
+		errMsg:  "should match",
+	}, {
+		name: "Readyz Path with query string",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Containers[0].Readyz = &ContainerReadyz{
+				HTTPGet: &HTTPGetAction{Path: "/readyz?check=1", Port: 80},
+			}
+		},
+		wantErr: true,
+		errMsg:  "should match",
+	}, {
+		name: "Readyz Path with fragment",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Containers[0].Readyz = &ContainerReadyz{
+				HTTPGet: &HTTPGetAction{Path: "/readyz#frag", Port: 80},
+			}
+		},
+		wantErr: true,
+		errMsg:  "should match",
+	}, {
+		name: "Readyz Path with whitespace",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Containers[0].Readyz = &ContainerReadyz{
+				HTTPGet: &HTTPGetAction{Path: "/ready z", Port: 80},
+			}
+		},
+		wantErr: true,
+		errMsg:  "should match",
+	}, {
+		name: "Readyz Path with bare percent",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Containers[0].Readyz = &ContainerReadyz{
+				HTTPGet: &HTTPGetAction{Path: "/foo%", Port: 80},
+			}
+		},
+		wantErr: true,
+		errMsg:  "should match",
+	}, {
+		name: "Readyz Path with malformed percent-escape",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Containers[0].Readyz = &ContainerReadyz{
+				HTTPGet: &HTTPGetAction{Path: "/bar%zz", Port: 80},
+			}
+		},
+		wantErr: true,
+		errMsg:  "should match",
+	}, {
 		name: "valid SandboxClass microvm",
 		mutate: func(at *ActorTemplate) {
 			at.Spec.SandboxClass = SandboxClassMicroVM
@@ -398,6 +501,41 @@ func TestActorTemplateValidation(t *testing.T) {
 				_ = k8sClient.Delete(ctx, at)
 			}
 		})
+	}
+}
+
+func TestActorTemplateReadyzPathDefault(t *testing.T) {
+	ctx := t.Context()
+
+	at := &ActorTemplate{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "readyz-default",
+			Namespace: "default",
+		},
+		Spec: ActorTemplateSpec{
+			PauseImage: "gcr.io/gke-release/pause@sha256:bcbd57ba5653580ec647b16d8163cdd1112df3609129b01f912a8032e48265da",
+			Containers: []Container{{
+				Name:  "main",
+				Image: "busybox@sha256:326e0e090a9a4057e62a1b94236e7a2df2f2f76722f67232e0e47854e4df9c53",
+				Readyz: &ContainerReadyz{
+					HTTPGet: &HTTPGetAction{Port: 8080},
+				},
+			}},
+			SnapshotsConfig: SnapshotsConfig{Location: "gs://test-bucket/test-folder"},
+			WorkerSelector:  &metav1.LabelSelector{MatchLabels: map[string]string{"pool": "test-pool"}},
+		},
+	}
+	if err := k8sClient.Create(ctx, at); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	defer func() { _ = k8sClient.Delete(ctx, at) }()
+
+	got := &ActorTemplate{}
+	if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(at), got); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if want, gotPath := "/readyz", got.Spec.Containers[0].Readyz.HTTPGet.Path; gotPath != want {
+		t.Errorf("Readyz.HTTPGet.Path = %q, want %q (CRD default)", gotPath, want)
 	}
 }
 
