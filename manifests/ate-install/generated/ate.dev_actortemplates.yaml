@@ -179,48 +179,47 @@ spec:
                               maximum: 65535
                               minimum: 1
                               type: integer
-                            volumeMounts:
-                              description: volumeMounts define the volumes to mount
-                                into this container.
-                              items:
-                                description: VolumeMount describes a mounting of a
-                                  Volume within a actor.
-                                properties:
-                                  mountPath:
-                                    description: |-
-                                      Path within the actor at which the volume should be mounted. Must be a
-                                      clean absolute Unix path: must start with '/', not be '/', and contain
-                                      no ':', '..', '.', '//', trailing '/', or control characters.
-                                    maxLength: 4096
-                                    type: string
-                                    x-kubernetes-validations:
-                                    - message: 'MountPath must be a clean absolute
-                                        Unix path: must start with ''/'', not be ''/'',
-                                        and contain no '':'', ''..'', ''.'', ''//'',
-                                        trailing ''/'', or control characters'
-                                      rule: self.startsWith('/') && size(self) > 1
-                                        && !self.endsWith('/') && !self.contains('//')
-                                        && !self.contains(':') && !self.matches('[\x00-\x1f\x7f]')
-                                        && !self.matches('(^|/)[.][.]?(/|$)')
-                                  name:
-                                    description: This must match the Name of a Volume.
-                                    maxLength: 63
-                                    type: string
-                                    x-kubernetes-validations:
-                                    - message: Name must be a valid DNS label
-                                      rule: '!format.dns1123Label().validate(self).hasValue()'
-                                required:
-                                - mountPath
-                                - name
-                                type: object
-                              maxItems: 32
-                              type: array
                           required:
                           - port
                           type: object
                       required:
                       - httpGet
                       type: object
+                    volumeMounts:
+                      description: volumeMounts define the volumes to mount into this
+                        container.
+                      items:
+                        description: VolumeMount describes a mounting of a Volume
+                          within a actor.
+                        properties:
+                          mountPath:
+                            description: |-
+                              Path within the actor at which the volume should be mounted. Must be a
+                              clean absolute Unix path: must start with '/', not be '/', and contain
+                              no ':', '..', '.', '//', trailing '/', or control characters.
+                            maxLength: 4096
+                            type: string
+                            x-kubernetes-validations:
+                            - message: 'MountPath must be a clean absolute Unix path:
+                                must start with ''/'', not be ''/'', and contain no
+                                '':'', ''..'', ''.'', ''//'', trailing ''/'', or control
+                                characters'
+                              rule: self.startsWith('/') && size(self) > 1 && !self.endsWith('/')
+                                && !self.contains('//') && !self.contains(':') &&
+                                !self.matches('[\x00-\x1f\x7f]') && !self.matches('(^|/)[.][.]?(/|$)')
+                          name:
+                            description: This must match the Name of a Volume.
+                            maxLength: 63
+                            type: string
+                            x-kubernetes-validations:
+                            - message: Name must be a valid DNS label
+                              rule: '!format.dns1123Label().validate(self).hasValue()'
+                        required:
+                        - mountPath
+                        - name
+                        type: object
+                      maxItems: 32
+                      type: array
                   required:
                   - image
                   - name

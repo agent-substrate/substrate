@@ -111,6 +111,12 @@ type Container struct {
 	//
 	// +optional
 	Readyz *ContainerReadyz `json:"readyz,omitempty"`
+
+	// volumeMounts define the volumes to mount into this container.
+	//
+	// +optional
+	// +kubebuilder:validation:MaxItems=32
+	VolumeMounts []VolumeMount `json:"volumeMounts,omitempty"`
 }
 
 // ContainerReadyz configures the readiness signal for a container.
@@ -142,12 +148,6 @@ type HTTPGetAction struct {
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:validation:Maximum=65535
 	Port int32 `json:"port"`
-
-	// volumeMounts define the volumes to mount into this container.
-	//
-	// +optional
-	// +kubebuilder:validation:MaxItems=32
-	VolumeMounts []VolumeMount `json:"volumeMounts,omitempty"`
 }
 
 // EnvVar represents an environment variable supplied to a container in an
