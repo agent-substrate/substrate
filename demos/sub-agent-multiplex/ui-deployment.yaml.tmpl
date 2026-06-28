@@ -1,0 +1,39 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: demo-ui
+  namespace: sub-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: demo-ui
+  template:
+    metadata:
+      labels:
+        app: demo-ui
+    spec:
+      containers:
+      - name: ui
+        image: ${SUB_AGENT_IMAGE}
+        command: ["/usr/bin/tini", "--", "node", "dist/demo-ui.js"]
+        ports:
+        - containerPort: 8090
+        env:
+        - name: ATE_ENDPOINT
+          value: "api.ate-system.svc.cluster.local:443"
+        - name: DEMO_NAMESPACE
+          value: "sub-agent"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: demo-ui
+  namespace: sub-agent
+spec:
+  selector:
+    app: demo-ui
+  ports:
+  - port: 8090
+    targetPort: 8090
+  type: LoadBalancer

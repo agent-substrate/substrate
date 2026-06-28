@@ -1,16 +1,22 @@
 {
   "name": "sub-agent-multiplex",
-  "version": "1.0.0",
-  "description": "NanoClaw on Agent Substrate PoC",
+  "version": "1.1.0",
+  "description": "NanoClaw on Agent Substrate PoC with Real WhatsApp Integration",
   "private": true,
   "scripts": {
-    "build": "esbuild src/agent.ts --bundle --platform=node --target=node22 --outfile=dist/agent.js --external:node:* && esbuild src/demo-ui.ts --bundle --platform=node --target=node22 --outfile=dist/demo-ui.js --external:node:*",
+    "build": "esbuild workload/index.ts --bundle --platform=node --target=node22 --outfile=dist/agent.js --external:node:* && esbuild ui/demo-ui.ts --bundle --platform=node --target=node22 --outfile=dist/demo-ui.js --external:node:* && esbuild broker/server.ts --bundle --platform=node --target=node22 --outfile=dist/broker.js --external:node:*",
     "start:ui": "node dist/demo-ui.js",
+    "start:broker": "node dist/broker.js",
     "start:agent": "node dist/agent.js"
   },
   "dependencies": {
     "@hono/node-server": "^1.11.1",
-    "hono": "^4.4.2"
+    "hono": "^4.4.2",
+    "redis": "^4.6.14",
+    "@whiskeysockets/baileys": "6.6.0",
+    "qrcode": "^1.5.3",
+    "pino": "^8.14.1",
+    "link-preview-js": "^3.0.4"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

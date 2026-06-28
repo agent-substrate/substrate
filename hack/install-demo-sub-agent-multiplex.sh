@@ -66,7 +66,12 @@ sub-agent-multiplex_deploy() {
 
   sed -e "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" \
       -e "s|\${SUB_AGENT_IMAGE}|${image}|g" \
+      -e "s|\${WHATSAPP_PHONE}|${WHATSAPP_PHONE:-1234567890}|g" \
       demos/sub-agent-multiplex/sub-agent-multiplex.yaml.tmpl \
+    | run_kubectl apply -f -
+
+  sed -e "s|\${SUB_AGENT_IMAGE}|${image}|g" \
+      demos/sub-agent-multiplex/ui-deployment.yaml.tmpl \
     | run_kubectl apply -f -
 }
 
@@ -75,6 +80,10 @@ sub-agent-multiplex_delete() {
   sed -e "s|\${BUCKET_NAME}|placeholder|g" \
       -e "s|\${SUB_AGENT_IMAGE}|placeholder|g" \
       demos/sub-agent-multiplex/sub-agent-multiplex.yaml.tmpl \
+    | run_kubectl delete --ignore-not-found -f -
+
+  sed -e "s|\${SUB_AGENT_IMAGE}|placeholder|g" \
+      demos/sub-agent-multiplex/ui-deployment.yaml.tmpl \
     | run_kubectl delete --ignore-not-found -f -
 }
 

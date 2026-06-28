@@ -59,6 +59,15 @@ spec:
         env:
         - name: ATE_ENDPOINT
           value: "api.ate-system.svc.cluster.local:443"
+        - name: WHATSAPP_PHONE
+          value: "${WHATSAPP_PHONE}"
+        volumeMounts:
+        - name: auth-volume
+          mountPath: /app/store/auth
+      volumes:
+      - name: auth-volume
+        persistentVolumeClaim:
+          claimName: wa-auth-pvc
 ---
 apiVersion: v1
 kind: Service
@@ -71,3 +80,15 @@ spec:
   ports:
   - port: 8091
     targetPort: 8091
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: wa-auth-pvc
+  namespace: sub-agent
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
