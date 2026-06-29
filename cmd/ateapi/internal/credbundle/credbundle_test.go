@@ -15,8 +15,6 @@
 package credbundle
 
 import (
-	"crypto/ecdsa"
-	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
@@ -28,66 +26,38 @@ import (
 	"time"
 )
 
-func TestParsePrivateKeyBlockTypes(t *testing.T) {
-	for _, tt := range []struct {
-		name      string
-		blockType string
-		keyDER    func(t *testing.T) []byte
-	}{
-		{
-			name:      "pkcs8",
-			blockType: "PRIVATE KEY",
-			keyDER: func(t *testing.T) []byte {
-				key := generateRSAKey(t)
-				der, err := x509.MarshalPKCS8PrivateKey(key)
-				if err != nil {
-					t.Fatalf("marshal PKCS8 key: %v", err)
-				}
-				return der
-			},
-		},
-		{
-			name:      "rsa",
-			blockType: "RSA PRIVATE KEY",
-			keyDER: func(t *testing.T) []byte {
-				return x509.MarshalPKCS1PrivateKey(generateRSAKey(t))
-			},
-		},
-		{
-			name:      "ec",
-			blockType: "EC PRIVATE KEY",
-			keyDER: func(t *testing.T) []byte {
-				key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-				if err != nil {
-					t.Fatalf("generate EC key: %v", err)
-				}
-				der, err := x509.MarshalECPrivateKey(key)
-				if err != nil {
-					t.Fatalf("marshal EC key: %v", err)
-				}
-				return der
-			},
-		},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			certDER := generateCertificate(t)
-			bundle := append(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER}), pem.EncodeToMemory(&pem.Block{Type: tt.blockType, Bytes: tt.keyDER(t)})...)
+func TestParsePKCS8PrivateKeyBlock(t *testing.T) {
+	key := generateRSAKey(t)
+	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatalf("marshal PKCS8 key: %v", err)
+	}
+	certDER := generateCertificate(t)
+	bundle := append(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER}), pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})...)
 
-			bundlePath := writeBundle(t, bundle)
-			cert, err := Parse(bundlePath)
-			if err != nil {
-				t.Fatalf("Parse() error = %v", err)
-			}
-			if len(cert.Certificate) != 1 {
-				t.Fatalf("Parse() certificate chain length = %d, want 1", len(cert.Certificate))
-			}
-			if cert.PrivateKey == nil {
-				t.Fatalf("Parse() private key is nil")
-			}
-			if cert.Leaf == nil {
-				t.Fatalf("Parse() leaf certificate is nil")
-			}
-		})
+	bundlePath := writeBundle(t, bundle)
+	cert, err := Parse(bundlePath)
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if len(cert.Certificate) != 1 {
+		t.Fatalf("Parse() certificate chain length = %d, want 1", len(cert.Certificate))
+	}
+	if cert.PrivateKey == nil {
+		t.Fatalf("Parse() private key is nil")
+	}
+	if cert.Leaf == nil {
+		t.Fatalf("Parse() leaf certificate is nil")
+	}
+}
+
+func TestParseRejectsNonPKCS8PrivateKeyBlock(t *testing.T) {
+	certDER := generateCertificate(t)
+	bundle := append(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER}), pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(generateRSAKey(t))})...)
+
+	bundlePath := writeBundle(t, bundle)
+	if _, err := Parse(bundlePath); err == nil {
+		t.Fatalf("Parse() error = nil, want unsupported private key block error")
 	}
 }
 

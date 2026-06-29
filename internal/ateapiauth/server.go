@@ -129,6 +129,8 @@ func serverAuthenticatorFor(cfg ServerConfig) serverAuthenticator {
 type mtlsServerAuthenticator struct{}
 
 func (mtlsServerAuthenticator) authenticate(ctx context.Context) (context.Context, error) {
+	// TODO: Extract the transport-authenticated client identity and attach it
+	// to ctx once ateapi has an authorization layer.
 	return ctx, nil
 }
 
@@ -144,6 +146,8 @@ func (a jwtServerAuthenticator) authenticate(ctx context.Context) (context.Conte
 	if err := a.verifyBearerToken(ctx, bearer); err != nil {
 		return nil, status.Errorf(codes.Unauthenticated, "invalid bearer token: %v", err)
 	}
+	// TODO: Attach the verified JWT identity to ctx once ateapi has an
+	// authorization layer that consumes it.
 	return ctx, nil
 }
 

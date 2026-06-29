@@ -110,7 +110,10 @@ type KubernetesClaims struct {
 	WarnAfter time.Time
 }
 
-var permittedSkew = 5 * time.Minute
+var (
+	permittedSkew     = 5 * time.Minute
+	defaultHTTPClient = &http.Client{Timeout: 10 * time.Second}
+)
 
 // Verify verifies and extracts claims from a Kubernetes JWT.
 //
@@ -430,7 +433,7 @@ func discoverKeysForIssuer(ctx context.Context, httpClient *http.Client, issuer 
 func fetchJSON[T any](httpClient *http.Client, url string) (T, error) {
 	var parsedBody T
 	if httpClient == nil {
-		httpClient = &http.Client{Timeout: 10 * time.Second}
+		httpClient = defaultHTTPClient
 	}
 	resp, err := httpClient.Get(url)
 	if err != nil {
