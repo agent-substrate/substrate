@@ -15,64 +15,57 @@
 package cmd
 
 import (
-	"fmt"
 	"os"
-	"strings"
+	"strconv"
 )
 
-type Environment struct {
-	ProjectID             string
-	ProjectNumber         string
-	ClusterName           string
-	ClusterLocation       string
-	ClusterVersion        string
-	Network               string
-	Subnetwork            string
-	NodePoolName          string
-	NodePoolVersion       string
-	GCERegion             string
-	BucketName            string
-	GVisorNodeMachineType string
+type Config struct {
+	ProjectID     string
+	ProjectNumber string
+	Region        string
+
+	ClusterName     string
+	ClusterLocation string
+	ClusterVersion  string
+
+	Network           string
+	Subnetwork        string
+	EnableDataplaneV2 bool
+
+	NodePoolName    string
+	NodePoolVersion string
+	MachineType     string
+
+	BucketName string
+
+	DashboardDir string
 }
 
-func loadEnv() (*Environment, error) {
-	requiredEnvVars := []string{
-		"PROJECT_ID",
-		"PROJECT_NUMBER",
-		"CLUSTER_NAME",
-		"CLUSTER_LOCATION",
-		"CLUSTER_VERSION",
-		"NETWORK",
-		"SUBNETWORK",
-		"NODE_POOL_NAME",
-		"NODE_POOL_VERSION",
-		"GCE_REGION",
-		"BUCKET_NAME",
-		"GVISOR_NODE_MACHINE_TYPE",
+type getEnvType interface {
+	string | bool
+}
+
+// getEnv retrieves an environment variable by key and parses it into the specified type.
+// If the environment variable is not set or parsing fails, it returns the fallback value.
+func getEnv[T getEnvType](key string, fallback T) T {
+	val, ok := os.LookupEnv(key)
+	if !ok {
+		return fallback
 	}
 
-	missing := []string{}
-	for _, key := range requiredEnvVars {
-		if os.Getenv(key) == "" {
-			missing = append(missing, key)
-		}
-	}
-	if len(missing) > 0 {
-		return nil, fmt.Errorf("missing required environment variables: %s", strings.Join(missing, ", "))
+	var ret any
+	var err error
+
+	switch any(fallback).(type) {
+	case string:
+		ret = val
+	case bool:
+		ret, err = strconv.ParseBool(val)
 	}
 
-	return &Environment{
-		ProjectID:             os.Getenv("PROJECT_ID"),
-		ProjectNumber:         os.Getenv("PROJECT_NUMBER"),
-		ClusterName:           os.Getenv("CLUSTER_NAME"),
-		ClusterLocation:       os.Getenv("CLUSTER_LOCATION"),
-		ClusterVersion:        os.Getenv("CLUSTER_VERSION"),
-		Network:               os.Getenv("NETWORK"),
-		Subnetwork:            os.Getenv("SUBNETWORK"),
-		NodePoolName:          os.Getenv("NODE_POOL_NAME"),
-		NodePoolVersion:       os.Getenv("NODE_POOL_VERSION"),
-		GCERegion:             os.Getenv("GCE_REGION"),
-		BucketName:            os.Getenv("BUCKET_NAME"),
-		GVisorNodeMachineType: os.Getenv("GVISOR_NODE_MACHINE_TYPE"),
-	}, nil
+	if err == nil {
+		return ret.(T)
+	}
+
+	return fallback
 }

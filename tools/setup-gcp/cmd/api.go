@@ -24,7 +24,7 @@ import (
 	"cloud.google.com/go/serviceusage/apiv1/serviceusagepb"
 )
 
-func enableRequiredAPIs(ctx context.Context, env *Environment) error {
+func enableRequiredAPIs(ctx context.Context, cfg *Config) error {
 	suClient, err := serviceusage.NewClient(ctx)
 	if err != nil {
 		return err
@@ -42,7 +42,7 @@ func enableRequiredAPIs(ctx context.Context, env *Environment) error {
 	slog.Info("Batch enabling services", slog.String("services", strings.Join(services, ", ")))
 
 	req := &serviceusagepb.BatchEnableServicesRequest{
-		Parent:     fmt.Sprintf("projects/%s", env.ProjectID),
+		Parent:     fmt.Sprintf("projects/%s", cfg.ProjectID),
 		ServiceIds: services,
 	}
 

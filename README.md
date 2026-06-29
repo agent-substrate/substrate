@@ -143,7 +143,7 @@ curl -X POST -H "Host: my-counter-1.actors.resources.substrate.ate.dev" -i http:
 
 3. Provision the required GCP resources (GKE cluster, Redis, GCS, and IAM bindings):
    ```bash
-   go run ./tools/setup-gcp --all
+   go run ./tools/setup-gcp bootstrap
    ```
 
 4. Deploy the Agent Substrate system to your cluster (remember to navigate back to root directory of this repo before running the following commands):
@@ -160,8 +160,8 @@ curl -X POST -H "Host: my-counter-1.actors.resources.substrate.ate.dev" -i http:
 
 You can run individual setup steps to create GCP resources as needed. See `go run ./tools/setup-gcp --help` for available options. For example:
 ```bash
-go run ./tools/setup-gcp --create-cluster
-go run ./tools/setup-gcp --create-gvisor-node-pool
+go run ./tools/setup-gcp create cluster
+go run ./tools/setup-gcp create bucket
 ```
 
 Similarly, you can deploy or cleanup specific Agent Substrate components using the installation script. See `./hack/install-ate.sh --help` for all options.

@@ -158,9 +158,9 @@ func (a *AgentClient) StartContainer(ctx context.Context, containerID string) er
 
 // CreateSandbox establishes the agent's sandbox context (sandbox id, hostname,
 // sandbox pidns) before any container is created. The kata shim normally issues
-// this once at VM boot; on the ateom-owned-boot path (no shim) ateom must call it
-// itself so the agent has a sandbox to attach containers to. Storages is empty —
-// the actor rootfs arrives as a per-container "blk" storage, not a sandbox mount.
+// this once at VM boot; ateom (no shim) must call it itself so the agent has a
+// sandbox to attach containers to. Storages carries the shared virtio-fs mount
+// (the overlay lowers); each container's rootfs is assembled per-container.
 // Mirrors grpc.AgentService/CreateSandbox (returns google.protobuf.Empty).
 func (a *AgentClient) CreateSandbox(ctx context.Context, req *agentpb.CreateSandboxRequest) error {
 	if err := a.client.Call(ctx, "grpc.AgentService", "CreateSandbox", req, &emptypb.Empty{}); err != nil {
@@ -169,10 +169,10 @@ func (a *AgentClient) CreateSandbox(ctx context.Context, req *agentpb.CreateSand
 	return nil
 }
 
-// UpdateInterface configures a guest network interface (the kata shim's job; on
-// the owned-boot path ateom does it). The agent matches the link by HwAddr, then
-// applies the name/IP/MTU. Mirrors grpc.AgentService/UpdateInterface (returns the
-// resulting Interface).
+// UpdateInterface configures a guest network interface (the kata shim's job, which
+// ateom does itself). The agent matches the link by HwAddr, then applies the
+// name/IP/MTU. Mirrors grpc.AgentService/UpdateInterface (returns the resulting
+// Interface).
 func (a *AgentClient) UpdateInterface(ctx context.Context, iface *agentpb.Interface) error {
 	req := &agentpb.UpdateInterfaceRequest{Interface: iface}
 	if err := a.client.Call(ctx, "grpc.AgentService", "UpdateInterface", req, &agentpb.Interface{}); err != nil {
@@ -208,7 +208,7 @@ func (a *AgentClient) AddARPNeighbors(ctx context.Context, neighbors []*agentpb.
 // buffered (up to max), so callers loop until it returns an error — the agent
 // returns an error/EOF-like status once the stream ends (container exit / connection
 // close). Mirrors grpc.AgentService/ReadStdout. The kata-agent keys the stream by
-// ExecId, which the owned-boot path sets equal to ContainerId (see StartBlkWorkload).
+// ExecId, which ateom sets equal to ContainerId.
 func (a *AgentClient) ReadStdout(ctx context.Context, containerID, execID string, max uint32) ([]byte, error) {
 	resp := &agentpb.ReadStreamResponse{}
 	req := &agentpb.ReadStreamRequest{ContainerId: containerID, ExecId: execID, Len: max}
@@ -246,8 +246,8 @@ type StreamReader struct {
 }
 
 // NewStdioReader returns an io.Reader over the container's stdout (stderr=false)
-// or stderr (stderr=true). execID matches the value passed to StartBlkWorkload
-// (equal to containerID on the owned-boot path).
+// or stderr (stderr=true). execID equals containerID (ateom sets ExecId ==
+// ContainerId when it creates the container).
 func NewStdioReader(ctx context.Context, ac *AgentClient, containerID, execID string, stderr bool) *StreamReader {
 	return &StreamReader{ctx: ctx, ac: ac, containerID: containerID, execID: execID, stderr: stderr}
 }

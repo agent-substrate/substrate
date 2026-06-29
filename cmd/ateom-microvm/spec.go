@@ -90,11 +90,10 @@ func ensureKataCompatibleSpec(bundle, id, netnsPath string) (*specs.Spec, error)
 	//
 	// KNOWN GAP vs the gVisor runtime: this also drops atelet's read-only actor
 	// identity bind mount (/run/ate/actor-id). The micro-VM guest can't see host
-	// paths (the rootfs is a virtio-blk disk, not a shared filesystem), and
-	// reset-to-golden restores guest RAM + rootfs from the golden snapshot, so a
-	// per-actor file written into the rootfs would be shadowed/incorrect on restore.
-	// Exposing the identity needs a per-actor volume injected from OUTSIDE the golden
-	// state; not yet implemented. No micro-VM workload depends on it today.
+	// paths (the rootfs is an overlay of a virtio-fs base + a guest-RAM upper, not a
+	// host bind), so atelet's host-path identity mount has nothing to bind to.
+	// Exposing the identity needs a per-actor volume plumbed into the guest; not yet
+	// implemented. No micro-VM workload depends on it today.
 	spec.Mounts = defaultKataMounts()
 
 	out, err := json.MarshalIndent(&spec, "", "  ")

@@ -32,8 +32,8 @@ type KataConfig struct {
 	VCPUs int
 	// KernelParams is the guest kernel command line ([hypervisor.clh]
 	// kernel_params): the kata-agent parameters (agent.log, the systemd target,
-	// etc.). The owned boot appends these to the cloud-hypervisor payload cmdline,
-	// since there is no kata shim to inject them.
+	// etc.). ateom appends these to the cloud-hypervisor payload cmdline, since
+	// there is no kata shim to inject them.
 	KernelParams string
 }
 
@@ -52,7 +52,7 @@ type clhConfigTOML struct {
 // ParseConfig reads the guest sizing and kernel_params from a kata
 // configuration.toml. memDefault/vcpuDefault are substituted when the key is
 // absent or non-positive (kata also accepts default_vcpus = -1 meaning "all host
-// CPUs", which the owned boot does not support).
+// CPUs", which ateom does not support).
 func ParseConfig(base []byte, memDefault, vcpuDefault int) (KataConfig, error) {
 	var c clhConfigTOML
 	if err := toml.Unmarshal(base, &c); err != nil {

@@ -49,7 +49,7 @@ func TestParseConfig(t *testing.T) {
 
 // TestParseConfigDefaults asserts the mem/vcpu defaults kick in when the keys are
 // absent or non-positive (kata also accepts default_vcpus = -1 meaning "all host
-// CPUs", which the owned boot does not support).
+// CPUs", which ateom does not support).
 func TestParseConfigDefaults(t *testing.T) {
 	for _, tc := range []struct {
 		name string

@@ -27,13 +27,39 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"strconv"
+	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/spf13/pflag"
 )
 
-var requestCount uint64
+var (
+	requestCount uint64
+	ready        atomic.Bool
+	fileMutex    sync.Mutex
+)
+
+const fileCounterPath = "/home/counter/a.txt"
+
+func incrementFileCounter() int {
+	fileMutex.Lock()
+	defer fileMutex.Unlock()
+	counter := 0
+	data, err := os.ReadFile(fileCounterPath)
+	if err == nil {
+		if i, err := strconv.Atoi(string(data)); err == nil {
+			counter = i
+		}
+	}
+	counter++
+	err = os.WriteFile(fileCounterPath, []byte(strconv.Itoa(counter)), 0o644)
+	if err != nil {
+		return -1
+	}
+	return counter
+}
 
 func main() {
 	pflag.Parse()
@@ -44,12 +70,27 @@ func main() {
 	defaultMux := http.NewServeMux()
 	defaultMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
-		count := atomic.AddUint64(&requestCount, 1)
+		fileCounter := incrementFileCounter()
+
+		memoryCounter := atomic.AddUint64(&requestCount, 1)
 		currentIP := getCurrentIP()
-		response := fmt.Sprintf("hello from: %s | preserved memory count: %d\n", currentIP, count)
+		response := fmt.Sprintf("hello from: %s | preserved memory count: %d | preserved file counter: %d\n", currentIP, memoryCounter, fileCounter)
 		slog.InfoContext(ctx, "Handled request", slog.String("response", response))
+
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(response))
+	})
+	// /readyz is the endpoint the ateom-gvisor readyz probe polls. It returns
+	// 200 only once initialization (the random-file write) has completed.
+	// After a checkpoint+restore the atomic flag is part of the snapshot, so
+	// the endpoint returns 200 immediately on resume.
+	defaultMux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
+		if !ready.Load() {
+			http.Error(w, "not ready", http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("ok\n"))
 	})
 
 	go func() {
@@ -67,6 +108,9 @@ func main() {
 	} else {
 		slog.InfoContext(ctx, "Wrote content to random file", slog.String("fshash", hashRandomFile()))
 	}
+
+	ready.Store(true)
+	slog.InfoContext(ctx, "Readyz now reports OK")
 
 	count := 0
 	slog.InfoContext(ctx, "Count", slog.Int("count", count), slog.String("fshash", hashRandomFile()))

@@ -36,7 +36,8 @@ import (
 // TODO: add metrics — at minimum a gauge for worker count, a counter for
 // resync events, and a counter for failed PUBLISH operations (in ateredis).
 type Cache struct {
-	store store.Interface
+	store          store.Interface
+	relistInterval time.Duration
 
 	mu      sync.RWMutex
 	workers map[string]*ateapipb.Worker
@@ -44,22 +45,26 @@ type Cache struct {
 	ready atomic.Bool
 }
 
-// New creates a Cache backed by a given store.
-func New(store store.Interface) *Cache {
+// New creates a Cache backed by a given store. relistInterval controls how
+// often the cache performs a full ListWorkers to recover from state drifts
+// caused by missing WorkerWatch events.
+func New(store store.Interface, relistInterval time.Duration) *Cache {
 	return &Cache{
-		store:   store,
-		workers: make(map[string]*ateapipb.Worker),
+		store:          store,
+		relistInterval: relistInterval,
+		workers:        make(map[string]*ateapipb.Worker),
 	}
 }
 
 // Start syncs the cache synchronously, then spawns a background goroutine
-// that streams updates and resyncs on connection loss.
+// that streams updates, relists periodically, and resyncs on connection loss.
 // Returns as soon as the initial sync succeeds.
 func (c *Cache) Start(ctx context.Context) error {
 	watch, err := c.sync(ctx)
 	if err != nil {
 		return err
 	}
+	c.ready.Store(true)
 	go c.watchEvents(ctx, watch)
 	return nil
 }
@@ -86,31 +91,33 @@ func (c *Cache) sync(ctx context.Context) (*store.WorkerWatch, error) {
 	if err != nil {
 		return nil, fmt.Errorf("WatchWorkers: %w", err)
 	}
+	if err := c.relist(ctx); err != nil {
+		watch.Close()
+		return nil, err
+	}
+	return watch, nil
+}
 
+func (c *Cache) relist(ctx context.Context) error {
 	workers, err := c.store.ListWorkers(ctx)
 	if err != nil {
-		watch.Close()
-		return nil, fmt.Errorf("ListWorkers: %w", err)
+		return fmt.Errorf("ListWorkers: %w", err)
 	}
-
 	newMap := make(map[string]*ateapipb.Worker, len(workers))
 	for _, w := range workers {
 		newMap[workerKey(w)] = w
 	}
-
 	c.mu.Lock()
 	c.workers = newMap
 	c.mu.Unlock()
-	c.ready.Store(true)
-
 	slog.InfoContext(ctx, "worker cache synced", slog.Int("count", len(newMap)))
-	return watch, nil
+	return nil
 }
 
 func (c *Cache) watchEvents(ctx context.Context, watch *store.WorkerWatch) {
+	ticker := time.NewTicker(c.relistInterval)
+	defer ticker.Stop()
 	for {
-		// TODO: Add a periodic "relist" so we can recover from state drifts
-		// caused by missed watch events.
 		select {
 		case event, ok := <-watch.Events:
 			if !ok {
@@ -124,8 +131,13 @@ func (c *Cache) watchEvents(ctx context.Context, watch *store.WorkerWatch) {
 				if watch == nil {
 					return // context cancelled
 				}
+				c.ready.Store(true)
 			} else {
 				c.applyEvent(event)
+			}
+		case <-ticker.C:
+			if err := c.relist(ctx); err != nil {
+				slog.WarnContext(ctx, "worker cache: periodic relist failed", slog.Any("err", err))
 			}
 		case <-ctx.Done():
 			c.ready.Store(false)

@@ -24,10 +24,10 @@ This guide assumes you know Kubernetes and the general shape of agent runtimes (
 
 - A Kubernetes cluster with **Agent Substrate** installed (`./hack/install-ate.sh` from this repo's root).
 - `kubectl` configured against that cluster (the dashboard uses the operator's kubeconfig via [`client-go`](https://github.com/kubernetes/client-go) for pod-log reads).
-- Network reach to the substrate **ateapi** gRPC service (`ateapi.ate-system:8080`). When running the dashboard from outside the cluster, port-forward it in a separate terminal (same convention as [`demos/sandbox/README.md`](../sandbox/README.md#3-port-forward-services)) and keep it running for the lifetime of the demo:
+- Network reach to the substrate **api** gRPC service (`api.ate-system:443`). When running the dashboard from outside the cluster, port-forward it in a separate terminal (same convention as [`demos/sandbox/README.md`](../sandbox/README.md#3-port-forward-services)) and keep it running for the lifetime of the demo:
   ```bash
-  # Terminal 1: ateapi port-forward
-  kubectl port-forward svc/ateapi 8080:8080 -n ate-system
+  # Terminal 1: api port-forward
+  kubectl port-forward svc/api 8080:443 -n ate-system
   ```
 - An **Anthropic API key** (the agents call Claude).
 - A GCS bucket for substrate state snapshots (configured during Substrate install).

@@ -37,14 +37,14 @@ kubectl patch workerpool agent-secret -n ate-demo-secret-agent-v2 \
 Create a single actor and watch it automatically yield compute after use:
 ```bash
 # Create the actor
-./kubectl-ate create actor my-agent --template ate-demo-secret-agent-v2/agent-secret
+kubectl ate create actor my-agent --template ate-demo-secret-agent-v2/agent-secret
 
 # Send a request via the Substrate Router (Note the official DNS suffix)
 curl -H "Host: my-agent.actors.resources.substrate.ate.dev" http://localhost:8000
 ```
 
 **What to observe:**
-*   In a separate terminal, run `watch ./kubectl-ate get actors`.
+*   In a separate terminal, run `watch kubectl ate get actors`.
 *   Notice that the actor status flips to `STATUS_RUNNING` instantly upon the request, and then **automatically** flips back to `STATUS_SUSPENDED` after the 7-second "visibility linger" period.
 
 ### 2. Verify Identity Persistence
@@ -59,7 +59,7 @@ To show the scale at which Substrate can manage sessions, run this loop to popul
 
 ```bash
 for i in {001..023}; do
-  ./kubectl-ate create actor session-$i --template ate-demo-secret-agent-v2/agent-secret
+  kubectl ate create actor session-$i --template ate-demo-secret-agent-v2/agent-secret
 done
 ```
 

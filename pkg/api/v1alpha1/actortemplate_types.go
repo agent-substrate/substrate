@@ -29,6 +29,54 @@ const (
 	PhaseFailed            PhaseType = "Failed"
 )
 
+// Represents a durable directory on rootfs that persists across resumes and
+// participates in snapshots.
+type DurableDirVolumeSource struct {
+}
+
+// Represents the source of a volume to mount.
+// Exactly one of its members must be specified.
+//
+// When adding a new source type, list it in the ExactlyOneOf marker below.
+//
+// +kubebuilder:validation:ExactlyOneOf={durableDir}
+type VolumeSource struct {
+	// durableDir represents a durable directory on rootfs that persists across
+	// resumes and participates in snapshots.
+	// +optional
+	DurableDir *DurableDirVolumeSource `json:"durableDir,omitempty" protobuf:"bytes,2,opt,name=durableDir"`
+}
+
+type Volume struct {
+	// name of the volume.
+	//
+	// +required
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:XValidation:rule="!format.dns1123Label().validate(self).hasValue()",message="Name must be a valid DNS label"
+	Name string `json:"name" protobuf:"bytes,1,opt,name=name"`
+
+	// volumeSource represents the location and type of the mounted volume.
+	VolumeSource `json:",inline" protobuf:"bytes,2,opt,name=volumeSource"`
+}
+
+// VolumeMount describes a mounting of a Volume within a actor.
+type VolumeMount struct {
+	// This must match the Name of a Volume.
+	//
+	// +required
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:XValidation:rule="!format.dns1123Label().validate(self).hasValue()",message="Name must be a valid DNS label"
+	Name string `json:"name" protobuf:"bytes,1,opt,name=name"`
+	// Path within the actor at which the volume should be mounted. Must be a
+	// clean absolute Unix path: must start with '/', not be '/', and contain
+	// no ':', '..', '.', '//', trailing '/', or control characters.
+	//
+	// +required
+	// +kubebuilder:validation:MaxLength=4096
+	// +kubebuilder:validation:XValidation:rule="self.startsWith('/') && size(self) > 1 && !self.endsWith('/') && !self.contains('//') && !self.contains(':') && !self.matches('[\\x00-\\x1f\\x7f]') && !self.matches('(^|/)[.][.]?(/|$)')",message="MountPath must be a clean absolute Unix path: must start with '/', not be '/', and contain no ':', '..', '.', '//', trailing '/', or control characters"
+	MountPath string `json:"mountPath" protobuf:"bytes,3,opt,name=mountPath"`
+}
+
 // A single application container that you want to run within a WorkerPool.
 type Container struct {
 	// Name of the container.
@@ -56,6 +104,50 @@ type Container struct {
 	// +optional
 	// +kubebuilder:validation:MaxItems=32
 	Env []EnvVar `json:"env,omitempty"`
+
+	// Readyz is an optional HTTP readiness probe. When set, the actor is not
+	// considered ready (and Run/Restore RPCs do not return success) until the
+	// container's HTTP endpoint returns 200.
+	//
+	// +optional
+	Readyz *ContainerReadyz `json:"readyz,omitempty"`
+
+	// volumeMounts define the volumes to mount into this container.
+	//
+	// +optional
+	// +kubebuilder:validation:MaxItems=32
+	VolumeMounts []VolumeMount `json:"volumeMounts,omitempty"`
+}
+
+// ContainerReadyz configures the readiness signal for a container.
+type ContainerReadyz struct {
+	// HTTPGet specifies the HTTP request to perform against the container.
+	//
+	// +required
+	HTTPGet *HTTPGetAction `json:"httpGet"`
+}
+
+// HTTPGetAction describes an HTTP GET request to perform against the
+// container's interior IP. Modeled after a subset of corev1.HTTPGetAction.
+type HTTPGetAction struct {
+	// Path to access on the HTTP server. Defaults to "/readyz".
+	// Must be a valid URL path starting with "/". Only characters permitted
+	// by RFC 3986 path segments are accepted; percent-escapes must be a
+	// literal "%" followed by exactly two hex digits. Query strings ("?")
+	// and fragments ("#") must be omitted.
+	//
+	// +optional
+	// +kubebuilder:default="/readyz"
+	// +kubebuilder:validation:MaxLength=1024
+	// +kubebuilder:validation:Pattern=`^/([A-Za-z0-9\-._~!$&'()*+,;=:@/]|%[0-9A-Fa-f]{2})*$`
+	Path string `json:"path,omitempty"`
+
+	// Port to access on the container.
+	//
+	// +required
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=65535
+	Port int32 `json:"port"`
 }
 
 // EnvVar represents an environment variable supplied to a container in an
@@ -125,15 +217,53 @@ type SecretKeySelector struct {
 	Optional *bool `json:"optional,omitempty"`
 }
 
+// SnapshotScope defines what components to include in a snapshot.
+// +kubebuilder:validation:Enum=Full;Data
+type SnapshotScope string
+
+const (
+	// Full captures process memory plus the entire filesystem delta on top of
+	// the OCI image (including any attached DurableDir volumes).
+	SnapshotScopeFull SnapshotScope = "Full"
+	// Data captures only the contents of attached volumes that support
+	// snapshots (currently DurableDir-typed volumes). Process memory and
+	// the rest of rootfs are excluded.
+	SnapshotScopeData SnapshotScope = "Data"
+)
+
+// +kubebuilder:validation:XValidation:rule="(has(self.onPause) ? self.onPause : 'Full') == 'Full' || (has(self.onCommit) ? self.onCommit : 'Full') == (has(self.onPause) ? self.onPause : 'Full')",message="onCommit must be a subset of onPause"
 type SnapshotsConfig struct {
 	// Location to store snapshots in.
 	//
 	// +required
 	// +kubebuilder:validation:MinLength=1
 	Location string `json:"location"`
+
+	// OnPause specifies what to include in the snapshot when the actor is paused.
+	// If not provided, the "Full" behavior is used by default.
+	//
+	// +optional
+	// +kubebuilder:default=Full
+	OnPause SnapshotScope `json:"onPause,omitempty"`
+
+	// OnCommit specifies what to include in the snapshot when a commit is requested.
+	// If not provided, the "Full" behavior is used by default.
+	// onCommit must be a subset of the onPause content.
+	//
+	// For example:
+	//   - if onPause is "Full", then onCommit can be "Full" or "Data".
+	//   - if onPause is "Data", then onCommit must be "Data".
+	//
+	// +optional
+	// +kubebuilder:default=Full
+	OnCommit SnapshotScope `json:"onCommit,omitempty"`
 }
 
 // ActorTemplateSpec defined desired spec of an actor.
+//
+// +kubebuilder:validation:XValidation:rule="!has(self.volumes) || self.volumes.filter(v, has(v.durableDir)).size() <= 1",message="At most one DurableDir-typed volume is supported per ActorTemplate"
+// +kubebuilder:validation:XValidation:rule="!has(self.containers) || self.containers.all(c, !has(c.volumeMounts) || c.volumeMounts.filter(vm, has(self.volumes) && self.volumes.exists(v, v.name == vm.name && has(v.durableDir))).size() <= 1)",message="A container may mount at most one DurableDir-typed volume"
+// +kubebuilder:validation:XValidation:rule="!has(self.sandboxClass) || self.sandboxClass != 'microvm' || !has(self.volumes) || !self.volumes.exists(v, has(v.durableDir))",message="DurableDir volumes are not supported when sandboxClass is 'microvm'"
 type ActorTemplateSpec struct {
 	// PauseImage is the container to use as the root sandbox container.
 	//
@@ -185,6 +315,12 @@ type ActorTemplateSpec struct {
 	//
 	// +optional
 	WorkerSelector *metav1.LabelSelector `json:"workerSelector,omitempty"`
+
+	// Volumes defines the volumes to mount into all containers in the actor.
+	//
+	// +optional
+	// +kubebuilder:validation:MaxItems=32
+	Volumes []Volume `json:"volumes,omitempty"`
 }
 
 // TODO: add validation

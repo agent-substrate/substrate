@@ -114,7 +114,7 @@ func main() {
 
 	redisPersistence := ateredis.NewPersistence(redisClient)
 
-	workerCache := workercache.New(redisPersistence)
+	workerCache := workercache.New(redisPersistence, 5*time.Minute)
 	if err := workerCache.Start(ctx); err != nil {
 		serverboot.Fatal(ctx, "Failed to seed worker cache", err)
 	}

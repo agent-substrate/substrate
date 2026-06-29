@@ -291,7 +291,7 @@ func setupTest(t *testing.T, ns string) *testContext {
 	substrateInformerFactory.WaitForCacheSync(ctx.Done())
 
 	// 4. Initialize Service
-	wc := workercache.New(persistence)
+	wc := workercache.New(persistence, 5*time.Minute)
 	if err := wc.Start(ctx); err != nil {
 		cancel()
 		mr.Close()

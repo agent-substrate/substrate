@@ -41,9 +41,9 @@ spec:
       object.spec.sandboxClass != 'microvm' ||
       (has(object.spec.assets) && size(object.spec.assets) > 0 &&
        object.spec.assets.all(arch,
-         ['cloud-hypervisor', 'kata-kernel', 'kata-image', 'kata-config']
+         ['cloud-hypervisor', 'virtiofsd', 'kata-kernel', 'kata-image', 'kata-config']
            .all(name, name in object.spec.assets[arch])))
-    message: "a microvm SandboxConfig must define cloud-hypervisor, kata-kernel, kata-image, and kata-config assets for every architecture under spec.assets"
+    message: "a microvm SandboxConfig must define cloud-hypervisor, virtiofsd, kata-kernel, kata-image, and kata-config assets for every architecture under spec.assets"
 ---
 apiVersion: admissionregistration.k8s.io/v1
 kind: ValidatingAdmissionPolicyBinding

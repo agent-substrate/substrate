@@ -17,6 +17,11 @@ on:
   pull_request:
   push:
     branches: [main]
+  schedule:
+    # Weekly run on the default branch keeps the micro-VM asset cache warm (GitHub
+    # evicts caches idle for 7 days). The push-to-main run populates the cache that
+    # PRs inherit; this refreshes it so PRs keep hitting it (no virtiofsd rebuild).
+    - cron: '37 4 * * 1'
 jobs:
   run-tests:
     runs-on: ubuntu-latest
@@ -30,6 +35,9 @@ jobs:
     - run: go test -v ./...
     - name: verify
       run: hack/verify-all.sh
+  # One kind cluster exercises BOTH runtimes. Free x86-64 ubuntu-latest runners
+  # expose /dev/kvm (with a udev rule), so create-kind-cluster.sh mounts it and the
+  # micro-VM (kata + cloud-hypervisor) sandbox class works alongside gVisor.
   e2e-test:
     runs-on: ubuntu-latest
     steps:
@@ -39,11 +47,70 @@ jobs:
       uses: actions/setup-go@v5
       with:
         go-version-file: 'go.mod'
+    - name: Free disk space
+      # The micro-VM guest image/kernel + cloud-hypervisor + kind node image +
+      # control-plane images + snapshots are tight on the ~14GB runner disk.
+      run: |
+        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+        df -h /
+    - name: Cache micro-VM assets
+      id: microvm-assets
+      uses: actions/cache@v4
+      with:
+        # Assembling the assets (download kata-static + cloud-hypervisor, build
+        # virtiofsd from source for the overlay rootfs) is the slow part and is fully
+        # pinned by assemble.sh, so key the cache on its hash. The push-to-main run
+        # populates the default-branch cache PRs inherit; the weekly schedule refreshes
+        # it. run-microvm-demo-kind.sh skips assembling when these are present.
+        path: bin/microvm-assets/amd64
+        key: microvm-assets-amd64-${{ hashFiles('hack/microvm-assets/assemble.sh') }}
+    - name: Install micro-VM asset build deps
+      # Only needed when (re)assembling (cache miss): building virtiofsd from source.
+      if: steps.microvm-assets.outputs.cache-hit != 'true'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y --no-install-recommends libcap-ng-dev libseccomp-dev pkg-config
+        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+        echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+    - name: Enable KVM
+      # Grant the runner access to /dev/kvm so create-kind-cluster.sh mounts it into
+      # the node and labels it for the micro-VM sandbox class.
+      run: |
+        echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+          | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+        sudo udevadm control --reload-rules
+        sudo udevadm trigger --name-match=kvm
     - name: Create cluster
       run: hack/create-kind-cluster.sh
     - name: Install Agent Substrate
       run: hack/install-ate-kind.sh --deploy-ate-system
-    - name: Deploy Counter Demo
+    - name: Deploy micro-VM counter demo
+      # Stages the (cached) assets into the cluster's rustfs and applies the
+      # counter-microvm demo onto the control plane installed above.
+      run: hack/run-microvm-demo-kind.sh
+    - name: Deploy gVisor counter demo
       run: hack/install-ate-kind.sh --deploy-demo-counter
-    - name: Run E2E tests
+    - name: Wait for micro-VM golden snapshot
+      run: |
+        kubectl --context kind-kind wait --for=condition=Ready \
+          actortemplate/counter-microvm -n ate-demo-counter-microvm --timeout=600s
+    - name: Run E2E tests (gVisor)
       run: hack/run-e2e-kind.sh -v -args --no-color
+    - name: Run E2E tests (micro-VM)
+      # Same demo lifecycle suite (create -> suspend -> resume -> in-RAM continuity),
+      # pointed at the micro-VM counter via env (see createActorTemplate in demo_test.go).
+      env:
+        E2E_TEMPLATE_NAMESPACE: ate-demo-counter-microvm
+        E2E_TEMPLATE_NAME: counter-microvm
+        E2E_TEMPLATE_READY_TIMEOUT: 600s
+      run: hack/run-e2e-kind.sh ./internal/e2e/suites/demo -v -args --no-color
+    - name: Dump diagnostics on failure
+      if: failure()
+      run: |
+        kubectl --context kind-kind get actortemplate,workerpool,pods -A -o wide || true
+        for ns in ate-demo-counter-microvm ate-demo-counter ate-system; do
+          for p in $(kubectl --context kind-kind get pods -n "$ns" -o name 2>/dev/null); do
+            echo "=== logs: $ns/$p ==="
+            kubectl --context kind-kind logs -n "$ns" "$p" --all-containers --tail=200 2>/dev/null || true
+          done
+        done

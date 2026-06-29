@@ -252,7 +252,7 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 	}
 	client := ateletpb.NewAteomHerderClient(ateletConn)
 
-	workloadSpec, err := workloadSpecFromActorTemplate(ctx, s.kubeClient, s.secretCache, state.ActorTemplate)
+	workloadSpec, err := workloadSpecFromActorTemplateWithEnv(ctx, s.kubeClient, s.secretCache, state.ActorTemplate)
 	if err != nil {
 		return err
 	}
@@ -275,6 +275,7 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 					SnapshotPrefix: state.Actor.GetLatestSnapshotInfo().GetLocal().SnapshotPrefix,
 				},
 			}
+			req.Scope = toAteletSnapshotScope(state.ActorTemplate.Spec.SnapshotsConfig.OnPause)
 		case ateapipb.SnapshotType_SNAPSHOT_TYPE_EXTERNAL:
 			req.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL
 			req.Config = &ateletpb.RestoreRequest_ExternalConfig{
@@ -282,6 +283,7 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 					SnapshotUriPrefix: state.Actor.GetLatestSnapshotInfo().GetExternal().SnapshotUriPrefix,
 				},
 			}
+			req.Scope = toAteletSnapshotScope(state.ActorTemplate.Spec.SnapshotsConfig.OnCommit)
 		default:
 			return fmt.Errorf("unsupported snapshot type: %v", state.Actor.GetLatestSnapshotInfo().GetType())
 		}
@@ -308,6 +310,7 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 					SnapshotUriPrefix: snapshot,
 				},
 			},
+			Scope: toAteletSnapshotScope(state.ActorTemplate.Spec.SnapshotsConfig.OnCommit),
 		}
 		_, err = client.Restore(ctx, req)
 		if err != nil {
