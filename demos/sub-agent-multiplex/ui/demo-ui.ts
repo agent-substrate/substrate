@@ -281,11 +281,11 @@ app.get("/", (c) => {
       </div>
     </div>
     <div class="card" style="margin-top: 15px; background: var(--panel-2); padding:10px; border-color: var(--pink);">
-      <h2 style="border-left-color: var(--pink)">Amin Review Baseline</h2>
+      <h2 style="border-left-color: var(--pink)">Operational Efficiency Projection</h2>
       <div style="font-size: 0.72em; line-height: 1.6;">
         <div class="cron-line"><span>Workflow Baseline (X)</span><span style="color:var(--green)">110 crons / hr</span></div>
         <div class="cron-line"><span>Measured Intensity (Y)</span><span id="proj-duration" style="color:var(--orange)">-- s / task</span></div>
-        <div class="cron-line"><span>Overcommit Reality</span><span id="proj-overcommit" style="color:var(--cyan)">-- x</span></div>
+        <div class="cron-line"><span>Oversubscription Efficiency</span><span id="proj-overcommit" style="color:var(--cyan)">-- x</span></div>
         <div style="margin-top:8px; font-size:0.85em; color:var(--muted); font-style: italic; border-top: 1px solid var(--line); padding-top:5px;">
            Substrate maps 3 agents to 2 workers with 10x potential cost reduction.
         </div>
