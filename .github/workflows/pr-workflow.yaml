@@ -92,7 +92,7 @@ jobs:
     - name: Deploy micro-VM counter demo
       # Stages the (cached) assets into the cluster's rustfs and applies the
       # counter-microvm demo onto the control plane installed above.
-      run: hack/run-microvm-demo-kind.sh
+      run: hack/run-microvm-demo-kind.sh --auth-mode=${{ matrix.auth-mode }}
     - name: Deploy gVisor counter demo
       run: hack/install-ate-kind.sh --deploy-demo-counter
     - name: Wait for micro-VM golden snapshot
