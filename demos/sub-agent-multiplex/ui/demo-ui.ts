@@ -251,15 +251,21 @@ app.get("/", (c) => {
 </head>
 <body>
 <header>
-  <h1>NanoClaw Substrate Integration Demo <span style="font-size:0.6em; vertical-align:middle; opacity:0.8;">V1.1.38 STABLE</span></h1>
+  <h1>NanoClaw Substrate Integration Demo <span style="font-size:0.6em; vertical-align:middle; opacity:0.8;">V1.1.39 STABLE</span></h1>
   <div id="heartbeat" style="font-size:0.7em; color:var(--muted)">Initializing...</div>
   <button class="btn" style="background:var(--red); color:#fff;" onclick="deepClean()">Deep Clean</button>
 </header>
 
 <div class="grid-master">
-  <div class="card">
-    <h2>NanoClaw Decision Stream</h2>
-    <div id="shell" class="shell-container"></div>
+  <div>
+    <div class="card" style="margin-bottom: 1.5em;">
+      <h2>NanoClaw Decision Stream</h2>
+      <div id="shell" class="shell-container"></div>
+    </div>
+    <div class="card">
+      <h2>Task Timeline</h2>
+      <div id="timeline" class="timeline"></div>
+    </div>
   </div>
   <div>
     <div class="card" style="margin-bottom: 1.5em;">
@@ -302,11 +308,6 @@ app.get("/", (c) => {
     <h2>NanoClaw Logical Agent Fleet</h2>
     <div id="actors" style="display:grid; grid-template-columns: 1fr; gap:10px;"></div>
   </div>
-</div>
-
-<div class="card" style="margin-bottom: 1.5em;">
-  <h2>Task Timeline</h2>
-  <div id="timeline" class="timeline"></div>
 </div>
 
 <div class="card">
