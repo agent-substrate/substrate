@@ -1,3 +1,0 @@
-jobs: 1
-check-coverage: false
-timeout: 60000
