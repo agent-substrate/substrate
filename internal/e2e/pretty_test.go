@@ -19,18 +19,6 @@ import (
 	"testing"
 )
 
-func setColorState(t *testing.T, noColorFlag, envNoColorFlag bool) {
-	t.Helper()
-	origNoColor := NoColor
-	origEnvNoColor := envNoColor
-	NoColor = noColorFlag
-	envNoColor = envNoColorFlag
-	t.Cleanup(func() {
-		NoColor = origNoColor
-		envNoColor = origEnvNoColor
-	})
-}
-
 func TestColorf(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -110,7 +98,8 @@ func TestColorf(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			setColorState(t, tc.noColor, false)
+			NoColor = tc.noColor
+			defer func() { NoColor = false }()
 
 			got := Colorf(tc.format, tc.args...)
 			if got != tc.want {
@@ -123,7 +112,7 @@ func TestColorf(t *testing.T) {
 func TestFColorfAndFColorfln(t *testing.T) {
 	t.Run("FColorf", func(t *testing.T) {
 		var buf bytes.Buffer
-		setColorState(t, false, false)
+		NoColor = false
 		err := FColorf(&buf, "Hello <green>%s</green>", "world")
 		if err != nil {
 			t.Fatalf("FColorf failed: %v", err)
@@ -136,7 +125,7 @@ func TestFColorfAndFColorfln(t *testing.T) {
 
 	t.Run("FColorfln", func(t *testing.T) {
 		var buf bytes.Buffer
-		setColorState(t, false, false)
+		NoColor = false
 		err := FColorfln(&buf, "Hello <green>%s</green>", "world")
 		if err != nil {
 			t.Fatalf("FColorfln failed: %v", err)
@@ -149,7 +138,8 @@ func TestFColorfAndFColorfln(t *testing.T) {
 
 	t.Run("FColorf no color", func(t *testing.T) {
 		var buf bytes.Buffer
-		setColorState(t, true, false)
+		NoColor = true
+		defer func() { NoColor = false }()
 		err := FColorf(&buf, "Hello <green>%s</green>", "world")
 		if err != nil {
 			t.Fatalf("FColorf failed: %v", err)
@@ -201,7 +191,8 @@ func TestColorWriter(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			setColorState(t, tc.noColor, false)
+			NoColor = tc.noColor
+			defer func() { NoColor = false }()
 
 			var buf bytes.Buffer
 			cw := &ColorWriter{W: &buf, ANSI: tc.ansi}
@@ -289,7 +280,8 @@ func TestIndentAndColorChaining(t *testing.T) {
 	cyanWriter := &ColorWriter{W: &buf, ANSI: "\033[36m"}
 	iw := NewIndentWriter(cyanWriter, "        ")
 
-	setColorState(t, false, false)
+	NoColor = false
+	defer func() { NoColor = false }()
 
 	_, err := iw.Write([]byte("hello\nworld\n"))
 	if err != nil {
