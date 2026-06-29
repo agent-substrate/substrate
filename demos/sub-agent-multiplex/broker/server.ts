@@ -19,6 +19,7 @@ const logger = pino({ level: "info" });
 const ATE_ENDPOINT = process.env.ATE_ENDPOINT || "api.ate-system.svc.cluster.local:443";
 const AUTH_DIR = "/app/store/auth/v1";
 const PHONE_NUMBER = process.env.WHATSAPP_PHONE || "1234567890"; // Use WHATSAPP_PHONE env var
+const TEMPLATE = "sub-agent/sub-agent-agent";
 
 // --- Types ---
 interface RegisteredAgent {
@@ -66,10 +67,14 @@ let lastTriggerTime: Record<string, number> = { "agent-luna": Date.now(), "agent
 let cronIterations: Record<string, number> = { "agent-luna": 0, "agent-mars": 0, "agent-nova": 0 };
 
 const runCmd = (cmd: string): Promise<string> => {
-  return new Promise((resolve, reject) => {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(""), 8000);
     exec(cmd, (error, stdout, stderr) => {
-      if (error) reject(new Error(stderr || error.message));
-      else resolve(stdout);
+      clearTimeout(timer);
+      if (error) {
+        console.error(`[CMD ERROR] ${cmd}: ${stderr || error.message}`);
+        resolve("");
+      } else resolve(stdout);
     });
   });
 };
@@ -77,8 +82,8 @@ const runCmd = (cmd: string): Promise<string> => {
 const log = (module: BrokerLog["module"], message: string, level: BrokerLog["level"] = "info") => {
   const entry: BrokerLog = { timestamp: new Date().toISOString().slice(11, 19), module, message, level };
   brokerLogs.push(entry);
-  if (brokerLogs.length > 100) brokerLogs.shift();
-  logger.info(`[${entry.timestamp}] [${module}] ${message}`);
+  if (brokerLogs.length > 150) brokerLogs.shift();
+  console.log(`[${entry.timestamp}] [${module}] ${message}`);
 };
 
 // --- WhatsApp Logic (Baileys) ---
@@ -88,7 +93,7 @@ async function connectToWhatsApp() {
   const { version, isLatest } = await fetchLatestWaWebVersion({});
   
   connectionStatus = "connecting";
-  log("whatsapp", `WhatsApp connection using v${version.join(".")}, isLatest: ${isLatest}`);
+  log("whatsapp", `Initializing WhatsApp v${version.join(".")}`);
 
   const sock = makeWASocket({
     version,
@@ -105,9 +110,9 @@ async function connectToWhatsApp() {
       try {
         const code = await sock.requestPairingCode(PHONE_NUMBER);
         pairingCode = code;
-        log("whatsapp", `PAREING CODE GENERATED: ${pairingCode}`);
+        log("whatsapp", `NEW LINK CODE: ${pairingCode}`);
       } catch (e: any) {
-        log("whatsapp", `Failed to get pairing code: ${e.message}`, "error");
+        log("whatsapp", `Pairing failed: ${e.message}`, "error");
       }
     }, 5000);
   }
@@ -120,35 +125,39 @@ async function connectToWhatsApp() {
       connectionStatus = "closed";
       const statusCode = (lastDisconnect?.error as any)?.output?.statusCode;
       const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-      
-      log("whatsapp", `Connection closed (Status: ${statusCode}). Reconnecting: ${shouldReconnect}`, shouldReconnect ? "info" : "error");
-      
-      if (shouldReconnect) {
-        setTimeout(connectToWhatsApp, 3000);
-      } else {
-        pairingCode = "LOGGED_OUT";
-      }
+      log("whatsapp", `Connection closed (${statusCode}). Reconnecting: ${shouldReconnect}`, shouldReconnect ? "info" : "error");
+      if (shouldReconnect) setTimeout(connectToWhatsApp, 3000);
+      else pairingCode = "LOGGED_OUT";
     } else if (connection === "open") {
       connectionStatus = "open";
       pairingCode = null;
-      log("whatsapp", "WHATSAPP CONNECTION OPEN.");
+      log("whatsapp", "WHATSAPP BRIDGE LIVE.");
+      // Send heart-beat to user
+      sock.sendMessage(`${PHONE_NUMBER}@s.whatsapp.net`, { text: "🤖 Substrate Fleet Broker is now ONLINE and listening for your messages." });
     }
   });
 
   sock.ev.on("messages.upsert", async (m) => {
     const msg = m.messages[0];
-    if (!msg.message || msg.key.fromMe) return;
+    if (!msg.message) return;
+
     const from = msg.key.remoteJid || "";
     const text = msg.message.conversation || msg.message.extendedTextMessage?.text || "";
-    log("whatsapp", `Received message from ${from}: "${text}"`);
+    const name = msg.pushName || "User";
+    const fromMe = msg.key.fromMe;
     
-    // Logic: Route to a specific actor based on the message
-    // Defaulting to Mars because it is currently healthy
-    const targetActorId = "agent-mars-v12";
+    log("whatsapp", `📩 Msg Event [Me:${fromMe}] from ${name} (${from}): "${text}"`);
+    
+    // PREVENT INFINITE LOOP: Ignore our own robot ACKs
+    if (text.startsWith("🤖") || text.startsWith("✅")) {
+       return;
+    }
 
-    // 1. Wake up actor
-    await orchestrateActor(targetActorId, text, from, sock);
+    // Auto-ACK
+    await sock.sendMessage(from, { text: `🤖 Message acknowledged! (Event Sync: ${fromMe ? 'Internal' : 'External'})` });
 
+    // Orchestrate
+    await orchestrateActor("agent-mars-v12", text, from, sock);
   });
   
   globalSock = sock;
@@ -158,7 +167,7 @@ async function connectToWhatsApp() {
 // --- Orchestration Logic ---
 async function orchestrateActor(actorId: string, task: string, sender: string, sock: any) {
   if (activeTasks.has(actorId)) {
-    if (sock && connectionStatus === "open") await sock.sendMessage(sender, { text: "⚠️ System busy. Please wait." });
+    log("orchestrator", `Actor ${actorId} busy. Skipping task: ${task}`);
     return;
   }
   activeTasks.add(actorId);
@@ -169,44 +178,53 @@ async function orchestrateActor(actorId: string, task: string, sender: string, s
 
   try {
     asg.state = "running";
-    log("orchestrator", `Waking actor ${actorId} for task from ${sender}`);
-    await runCmd(`kubectl-ate --endpoint ${ATE_ENDPOINT} resume actor ${actorId}`).catch(() => {});
+    log("orchestrator", `Resuming ${actorId} for ${sender}...`);
+    
+    // Try resume with aggressive retry/healing
+    let resumed = false;
+    for(let i=0; i<3; i++) {
+        try {
+            await runCmd(`kubectl-ate --endpoint ${ATE_ENDPOINT} resume actor ${actorId}`);
+            resumed = true;
+            break;
+        } catch(e) {
+            log("substrate", `Resume Attempt ${i+1} failed. Resetting identity...`, "warn");
+            await runCmd(`kubectl-ate --endpoint ${ATE_ENDPOINT} delete actor ${actorId}`).catch(()=>{});
+            await delay(3000);
+            await runCmd(`kubectl-ate --endpoint ${ATE_ENDPOINT} create actor ${actorId} --template ${TEMPLATE}`);
+        }
+    }
+
+    if (!resumed) throw new Error("Hard Rehydration Failure");
     
     let actorIP = "";
-    for (let i = 0; i < 30; i++) {
+    for (let i = 0; i < 40; i++) {
       const out = await runCmd(`kubectl-ate --endpoint ${ATE_ENDPOINT} get actor ${actorId} -o json`);
       const actor = JSON.parse(out).actors?.[0] || JSON.parse(out);
       if (actor.status === "STATUS_RUNNING" && actor.ateomPodIp) { actorIP = actor.ateomPodIp; break; }
       await delay(1000);
     }
-    if (!actorIP) throw new Error("Rehydration Timeout");
+    if (!actorIP) throw new Error("IP Assignment Timeout");
     
     log("substrate", `Actor ${actorId} rehydrated at ${actorIP}. Settling network...`);
-    await delay(5000);
+    await delay(6000); // 6s warm-up
     
     const payload = JSON.stringify({ task, sender, source: "whatsapp" });
     const result = await runCmd(`curl -s -f -m 10 -X POST http://${actorIP}:8080/task -H "Content-Type: application/json" -d '${payload}'`);
     const data = JSON.parse(result);
     
-    log("orchestrator", `Task completed by ${actorId}.`);
+    log("orchestrator", `Task SUCCESS for ${actorId}.`);
     
-    taskAudits.push({
-      id: "audit-"+Date.now(),
-      agent: actorId,
-      timestamp: new Date().toISOString().slice(11, 19),
-      task,
-      result: data.result || "Success",
-      status: "success"
-    });
+    taskAudits.push({ id: "audit-"+Date.now(), agent: actorId, timestamp: new Date().toISOString().slice(11, 19), task, result: data.result || "Success", status: "success" });
     if (taskAudits.length > 50) taskAudits.shift();
 
-    if (sock && connectionStatus === "open") await sock.sendMessage(sender, { text: `🤖 Task processed successfully on Substrate!` });
+    await sock.sendMessage(sender, { text: `✅ Task completed! Check the dashboard for the full reasoning payload.` });
     
-    log("substrate", `Yielding hardware for ${actorId}.`);
+    log("substrate", `Suspending ${actorId} (Idle).`);
     await runCmd(`kubectl-ate --endpoint ${ATE_ENDPOINT} suspend actor ${actorId}`);
 
   } catch (e: any) {
-    log("substrate", `Orchestration failed: ${e.message}`, "error");
+    log("substrate", `Workflow failed: ${e.message}`, "error");
     taskAudits.push({ id: "audit-"+Date.now(), agent: actorId, timestamp: new Date().toISOString().slice(11,19), task, result: e.message, status: "error" });
   } finally {
     asg.state = "completed";
@@ -220,27 +238,27 @@ async function orchestrateActor(actorId: string, task: string, sender: string, s
 app.post("/register", async (c) => {
   const { actorId } = await c.req.json();
   registry[actorId] = { actorId, lastSeen: Date.now() };
-  log("registry", `Actor **${actorId}** checked in.`);
+  log("registry", `Agent **${actorId}** online.`);
   return c.json({ status: "registered", broker: "V1.1-WhatsApp-Live" });
 });
 
 app.post("/api/give-task", async (c) => {
-  const q = c.req.query("source");
-  const agentKey = c.req.query("agent");
-  const actorId = agentKey === "agent-luna" ? "agent-luna-v12" : (agentKey === "agent-mars" ? "agent-mars-v12" : "agent-nova-v11");
+  const agentKey = c.req.query("agent") || "agent-mars";
+  const source = c.req.query("source") || "manual";
   
-  if (q === "cron") {
-    lastTriggerTime[agentKey] = Date.now();
-    cronIterations[agentKey]++;
-    log("alert", `Infrastructure Alert: **${agentKey}** scheduled trigger.`);
+  if (source === "cron") {
+     return c.json({ ok: false, error: "Cron disabled for stability" });
   }
-  
-  orchestrateActor(actorId, "Periodic health check", "CRON_SYSTEM", globalSock);
+
+  const actorId = agentKey.includes("luna") ? "agent-luna-v12" : (agentKey.includes("nova") ? "agent-nova-v11" : "agent-mars-v12");
+  log("alert", `Manual trigger for **${agentKey}**.`);
+  orchestrateActor(actorId, "Manual Pulse", "DASHBOARD", globalSock);
   return c.json({ ok: true });
 });
 
 app.post("/send-message", async (c) => {
   const { to, text } = await c.req.json();
+  log("whatsapp", `Outbound WhatsApp to ${to}`);
   if (globalSock && connectionStatus === "open") {
     await globalSock.sendMessage(to, { text });
     return c.json({ ok: true });
@@ -260,7 +278,6 @@ app.get("/status", (c) => c.json({
 
 const port = 8091;
 serve({ fetch: app.fetch, port, hostname: "0.0.0.0" }, async () => {
-  logger.info(`Fleet Broker (WhatsApp) active on port ${port}`);
   if (!fs.existsSync(AUTH_DIR)) fs.mkdirSync(AUTH_DIR, { recursive: true });
   await connectToWhatsApp();
 });
