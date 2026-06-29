@@ -37,6 +37,9 @@ type DnsConfig struct {
 	Kubeconfig        string
 	ReconcileInterval time.Duration
 	CorefilePath      string
+	SystemNamespace   string
+	RouterServiceName string
+	DNSServiceName    string
 }
 
 func NewDnsCmd() *cobra.Command {
@@ -87,10 +90,13 @@ func NewDnsCmd() *cobra.Command {
 			}
 
 			dnsController := &dns.Controller{
-				Client:       k8sClient,
-				Interval:     cfg.ReconcileInterval,
-				CorefilePath: cfg.CorefilePath,
-				Reloader:     dns.NewConfigReloader(),
+				Client:            k8sClient,
+				Interval:          cfg.ReconcileInterval,
+				CorefilePath:      cfg.CorefilePath,
+				Reloader:          dns.NewConfigReloader(),
+				SystemNamespace:   cfg.SystemNamespace,
+				RouterServiceName: cfg.RouterServiceName,
+				DNSServiceName:    cfg.DNSServiceName,
 			}
 
 			slog.InfoContext(ctx, "Starting DNS Controller subsystem")
@@ -102,6 +108,9 @@ func NewDnsCmd() *cobra.Command {
 	cmd.Flags().StringVar(&cfg.Kubeconfig, "kubeconfig", "", "Absolute path to the kubeconfig configuration file")
 	cmd.Flags().DurationVar(&cfg.ReconcileInterval, "interval", 10*time.Second, "Interval for reconciling DNS configurations")
 	cmd.Flags().StringVar(&cfg.CorefilePath, "corefile-path", "/etc/coredns/Corefile", "Path to the local Corefile configuration on shared volume")
+	cmd.Flags().StringVar(&cfg.SystemNamespace, "system-namespace", dns.DefaultSystemNamespace, "Namespace where atenet-router and substrate's CoreDNS Service live. Override when the deployment uses a different namespace.")
+	cmd.Flags().StringVar(&cfg.RouterServiceName, "router-service-name", dns.DefaultRouterServiceName, "Service name of the atenet-router. Override when the deployment renames the Service.")
+	cmd.Flags().StringVar(&cfg.DNSServiceName, "dns-service-name", dns.DefaultDNSServiceName, "Service name of substrate's CoreDNS. Override when the deployment renames the Service.")
 
 	return cmd
 }

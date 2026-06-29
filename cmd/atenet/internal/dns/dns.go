@@ -33,10 +33,15 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
+// Default resource names match the canonical install manifests in
+// manifests/ate-install/ (atenet-router and dns Services in the
+// ate-system namespace). Deployments that use a different namespace or
+// rename these Services must pass the actual values via the matching
+// flags on the dns command.
 const (
-	// serviceName is the name of the CoreDNS service.
-	serviceName     = "dns"
-	systemNamespace = "ate-system"
+	DefaultSystemNamespace   = "ate-system"
+	DefaultRouterServiceName = "atenet-router"
+	DefaultDNSServiceName    = "dns"
 )
 
 // Controller manages the DNS configuration for the ATE.
@@ -45,6 +50,17 @@ type Controller struct {
 	Interval     time.Duration
 	CorefilePath string
 	Reloader     ConfigReloader
+
+	// SystemNamespace is the namespace where atenet-router and the substrate
+	// CoreDNS Service live. Defaults to DefaultSystemNamespace.
+	SystemNamespace string
+	// RouterServiceName is the Service name of the atenet-router that the
+	// CoreDNS Corefile forwards actor traffic to. Defaults to
+	// DefaultRouterServiceName.
+	RouterServiceName string
+	// DNSServiceName is the Service name of substrate's CoreDNS. Defaults to
+	// DefaultDNSServiceName.
+	DNSServiceName string
 }
 
 // Run the DNS orchestration loop until ctx is canceled.
@@ -71,14 +87,15 @@ func (c *Controller) Run(ctx context.Context) error {
 func (c *Controller) reconcile(ctx context.Context) error {
 	slog.DebugContext(ctx, "Reconciling DNS orchestration configuration...")
 
-	// 1. Get the ClusterIP of atenet-router in ate-system namespace
+	// 1. Get the ClusterIP of the atenet-router Service in the substrate namespace.
 	routerSvc := &corev1.Service{}
-	if err := c.Client.Get(ctx, types.NamespacedName{Name: "atenet-router", Namespace: systemNamespace}, routerSvc); err != nil {
+	if err := c.Client.Get(ctx, types.NamespacedName{Name: c.RouterServiceName, Namespace: c.SystemNamespace}, routerSvc); err != nil {
 		if errors.IsNotFound(err) {
-			slog.WarnContext(ctx, "atenet-router service not found, skipping until it is available")
+			slog.WarnContext(ctx, "atenet-router service not found, skipping until it is available",
+				slog.String("name", c.RouterServiceName), slog.String("namespace", c.SystemNamespace))
 			return nil
 		}
-		return fmt.Errorf("failed to get atenet-router service: %w", err)
+		return fmt.Errorf("failed to get atenet-router service %s/%s: %w", c.SystemNamespace, c.RouterServiceName, err)
 	}
 
 	routerIP := routerSvc.Spec.ClusterIP
@@ -87,14 +104,15 @@ func (c *Controller) reconcile(ctx context.Context) error {
 		return nil
 	}
 
-	// 2. Get the ClusterIP of dns service in ate-system namespace
+	// 2. Get the ClusterIP of substrate's CoreDNS Service in the same namespace.
 	dnsSvc := &corev1.Service{}
-	if err := c.Client.Get(ctx, types.NamespacedName{Name: serviceName, Namespace: systemNamespace}, dnsSvc); err != nil {
+	if err := c.Client.Get(ctx, types.NamespacedName{Name: c.DNSServiceName, Namespace: c.SystemNamespace}, dnsSvc); err != nil {
 		if errors.IsNotFound(err) {
-			slog.WarnContext(ctx, "dns service not found, skipping until it is available")
+			slog.WarnContext(ctx, "dns service not found, skipping until it is available",
+				slog.String("name", c.DNSServiceName), slog.String("namespace", c.SystemNamespace))
 			return nil
 		}
-		return fmt.Errorf("failed to get dns service: %w", err)
+		return fmt.Errorf("failed to get dns service %s/%s: %w", c.SystemNamespace, c.DNSServiceName, err)
 	}
 
 	dnsIP := dnsSvc.Spec.ClusterIP

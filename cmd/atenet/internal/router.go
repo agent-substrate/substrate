@@ -44,6 +44,7 @@ func NewRouterCmd() *cobra.Command {
 	cmd.Flags().StringVar(&cfg.MetricsAddr, "metrics-listen-addr", ":9090", "Address and port the prometheus metrics server should listen on.")
 	cmd.Flags().BoolVar(&cfg.Standalone, "standalone", false, "Run in standalone mode, bypassing creation of managed deployment and services in Kubernetes cluster")
 	cmd.Flags().StringVar(&cfg.Namespace, "namespace", "default", "Target operations namespace")
+	cmd.Flags().StringVar(&cfg.RouterServiceName, "router-service-name", router.DefaultRouterServiceName, "Service name of this atenet-router in the operations namespace. Override when the deployment renames the Service.")
 	cmd.Flags().StringVar(&cfg.Kubeconfig, "kubeconfig", "", "Absolute path to the kubeconfig configuration file")
 	cmd.Flags().StringVar(&cfg.AteapiAddr, "ateapi-address", "api.ate-system.svc:443", "gRPC host address of the cluster ateapi Control instance")
 	cmd.Flags().IntVar(&cfg.HttpPort, "port-http", 8080, "TCP port for workload traffic entering through the Envoy Router")

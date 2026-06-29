@@ -94,10 +94,13 @@ func TestReconcile(t *testing.T) {
 
 	reloader := &mockConfigReloader{}
 	controller := &Controller{
-		Client:       client,
-		Interval:     1 * time.Second,
-		CorefilePath: corefilePath,
-		Reloader:     reloader,
+		Client:            client,
+		Interval:          1 * time.Second,
+		CorefilePath:      corefilePath,
+		Reloader:          reloader,
+		SystemNamespace:   DefaultSystemNamespace,
+		RouterServiceName: DefaultRouterServiceName,
+		DNSServiceName:    DefaultDNSServiceName,
 	}
 
 	// Run one reconciliation loop
@@ -185,10 +188,13 @@ func TestReconcileKubeDNSNotFound(t *testing.T) {
 		Build()
 
 	controller := &Controller{
-		Client:       client,
-		Interval:     1 * time.Second,
-		CorefilePath: corefilePath,
-		Reloader:     &mockConfigReloader{},
+		Client:            client,
+		Interval:          1 * time.Second,
+		CorefilePath:      corefilePath,
+		Reloader:          &mockConfigReloader{},
+		SystemNamespace:   DefaultSystemNamespace,
+		RouterServiceName: DefaultRouterServiceName,
+		DNSServiceName:    DefaultDNSServiceName,
 	}
 
 	ctx := context.Background()

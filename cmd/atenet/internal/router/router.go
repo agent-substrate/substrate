@@ -63,12 +63,22 @@ func init() {
 	utilruntime.Must(v1alpha1.AddToScheme(scheme))
 }
 
+// DefaultRouterServiceName matches the atenet-router Service name in the
+// canonical install manifests under manifests/ate-install/. Deployments
+// that rename the Service must pass the actual name via
+// --router-service-name.
+const DefaultRouterServiceName = "atenet-router"
+
 // RouterConfig holds deployment setup and endpoint options for the router node instance.
 type RouterConfig struct {
-	Standalone     bool
-	Namespace      string
-	Kubeconfig     string
-	AteapiAddr     string
+	Standalone bool
+	Namespace  string
+	// RouterServiceName is the Service name of this atenet-router in the
+	// release namespace, used by /statusz to look up its own ClusterIP.
+	// Defaults to DefaultRouterServiceName.
+	RouterServiceName string
+	Kubeconfig        string
+	AteapiAddr        string
 	HttpPort       int
 	XdsPort        int
 	ExtprocPort    int

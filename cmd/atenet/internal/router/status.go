@@ -165,7 +165,7 @@ func (s *RouterServer) getRouterIP(ctx context.Context) string {
 		return "Standalone Mode (No Cluster IP)"
 	}
 
-	svc, err := s.clientset.CoreV1().Services(s.cfg.Namespace).Get(ctx, "atenet-router", metav1.GetOptions{})
+	svc, err := s.clientset.CoreV1().Services(s.cfg.Namespace).Get(ctx, s.cfg.RouterServiceName, metav1.GetOptions{})
 	if err != nil {
 		return fmt.Sprintf("Lookup Failed: %v", err)
 	}
