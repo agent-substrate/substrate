@@ -2752,9 +2752,9 @@ var stats = {
   lastSync: Date.now()
 };
 var AGENT_META = {
-  "agent-luna": { color: "#79c0ff", id: "agent-luna-v14", interval: 6e4 },
-  "agent-mars": { color: "#ff79c6", id: "agent-mars-v12", interval: 12e4 },
-  "agent-nova": { color: "#f1fa8c", id: "agent-nova-v11", interval: 18e4 }
+  "agent-luna": { color: "#79c0ff", id: "agent-luna-v14", interval: 12e4 },
+  "agent-mars": { color: "#ff79c6", id: "agent-mars-v12", interval: 3e5 },
+  "agent-nova": { color: "#f1fa8c", id: "agent-nova-v11", interval: 6e5 }
 };
 var ID_TO_DISPLAY = Object.entries(AGENT_META).reduce((acc, [display, meta]) => {
   acc[meta.id] = display;
@@ -2957,41 +2957,42 @@ app.get("/", (c) => {
 </head>
 <body>
 <header>
-  <h1>Fleet Management Master <span style="font-size:0.6em; vertical-align:middle; opacity:0.8;">V1.1.27 STABLE</span></h1>
+  <h1>NanoClaw Substrate Integration Demo <span style="font-size:0.6em; vertical-align:middle; opacity:0.8;">V1.1.39 STABLE</span></h1>
   <div id="heartbeat" style="font-size:0.7em; color:var(--muted)">Initializing...</div>
   <button class="btn" style="background:var(--red); color:#fff;" onclick="deepClean()">Deep Clean</button>
 </header>
 
 <div class="grid-master">
-  <div class="card">
-    <h2>Fleet Decision Stream</h2>
-    <div id="shell" class="shell-container"></div>
+  <div>
+    <div class="card" style="margin-bottom: 1.5em;">
+      <h2>NanoClaw Decision Stream</h2>
+      <div id="shell" class="shell-container"></div>
+    </div>
+    <div class="card">
+      <h2>Task Timeline</h2>
+      <div id="timeline" class="timeline"></div>
+    </div>
   </div>
-  <div class="card">
-    <h2>WhatsApp Bridge</h2>
-    <div id="wa-status"></div>
-    <div id="pairing-section" style="display:none;">
-      <div class="pairing-box">
-        <div style="font-size:0.7em; color:var(--muted); margin-bottom:8px;">LINK DEVICE: ENTER CODE ON YOUR PHONE</div>
-        <div id="pairing-code" class="pairing-code">---- ----</div>
+  <div>
+    <div class="card" style="margin-bottom: 1.5em;">
+      <h2>WhatsApp Bridge</h2>
+      <div id="wa-status"></div>
+      <div id="pairing-section" style="display:none;">
+        <div class="pairing-box">
+          <div style="font-size:0.7em; color:var(--muted); margin-bottom:8px;">LINK DEVICE: ENTER CODE ON YOUR PHONE</div>
+          <div id="pairing-code" class="pairing-code">---- ----</div>
+        </div>
+      </div>
+      <div id="wa-active" style="display:none; color:var(--green); font-size:0.9em; font-weight:800; text-align:center; padding:15px; border:1px solid var(--green); border-radius:4px; margin-top:10px;">
+         LIVE CONNECTION: LISTENING
       </div>
     </div>
-    <div id="wa-active" style="display:none; color:var(--green); font-size:0.9em; font-weight:800; text-align:center; padding:15px; border:1px solid var(--green); border-radius:4px; margin-top:10px;">
-       LIVE CONNECTION: LISTENING
-    </div>
-    <div class="card" style="margin-top: 15px; background: transparent; border:none; padding:0;">
-      <h2 style="border-left-color: var(--yellow)">Managed Fleet Economics</h2>
-      <div class="metric-highlight-grid">
-         <div class="metric-item"><div id="stat-density" class="metric-val">1.50x</div><div style="font-size:0.6em;color:var(--muted)">OVERSUBSCRIPTION (3:2)</div></div>
-         <div class="metric-item"><div id="stat-savings" class="metric-val">33.3%</div><div style="font-size:0.6em;color:var(--muted)">COST REDUCTION</div></div>
-      </div>
-    </div>
-    <div class="card" style="margin-top: 15px; background: var(--panel-2); padding:10px; border-color: var(--pink);">
-      <h2 style="border-left-color: var(--pink)">Amin Review Baseline</h2>
+    <div class="card" style="background: var(--panel-2); padding:10px; border-color: var(--pink);">
+      <h2 style="border-left-color: var(--pink)">Operational Efficiency Projection</h2>
       <div style="font-size: 0.72em; line-height: 1.6;">
-        <div class="cron-line"><span>Workflow Baseline (X)</span><span style="color:var(--green)">110 crons / hr</span></div>
+        <div class="cron-line"><span>Workflow Baseline (X)</span><span style="color:var(--green)">48 crons / hr</span></div>
         <div class="cron-line"><span>Measured Intensity (Y)</span><span id="proj-duration" style="color:var(--orange)">-- s / task</span></div>
-        <div class="cron-line"><span>Overcommit Reality</span><span id="proj-overcommit" style="color:var(--cyan)">-- x</span></div>
+        <div class="cron-line"><span>Oversubscription Efficiency</span><span id="proj-overcommit" style="color:var(--cyan)">-- x</span></div>
         <div style="margin-top:8px; font-size:0.85em; color:var(--muted); font-style: italic; border-top: 1px solid var(--line); padding-top:5px;">
            Substrate maps 3 agents to 2 workers with 10x potential cost reduction.
         </div>
@@ -3010,14 +3011,9 @@ app.get("/", (c) => {
     <div id="pods"></div>
   </div>
   <div class="card">
-    <h2>Logical Actor Fleet</h2>
+    <h2>NanoClaw Logical Agent Fleet</h2>
     <div id="actors" style="display:grid; grid-template-columns: 1fr; gap:10px;"></div>
   </div>
-</div>
-
-<div class="card" style="margin-bottom: 1.5em;">
-  <h2>Task Timeline</h2>
-  <div id="timeline" class="timeline"></div>
 </div>
 
 <div class="card">
@@ -3032,9 +3028,9 @@ app.get("/", (c) => {
 
 <script>
 const AGENT_META = { 
-  "agent-luna": { color: "#79c0ff", interval: 60000 }, 
-  "agent-mars": { color: "#ff79c6", interval: 120000 }, 
-  "agent-nova": { color: "#f1fa8c", interval: 180000 } 
+  "agent-luna": { color: "#79c0ff", interval: 120000 }, 
+  "agent-mars": { color: "#ff79c6", interval: 300000 }, 
+  "agent-nova": { color: "#f1fa8c", interval: 600000 } 
 };
 
 async function trigger(agentKey) { 
@@ -3073,7 +3069,7 @@ async function refresh() {
 
     // Amin Baseline Logic
     const avgY = Math.round(stats.avgTaskDurationSec || 12);
-    const totalX = 110; // Total crons per hour from our 60/120/180 cycle
+    const totalX = 48; // Total crons per hour from our 2/5/10 min cycle
     const workersNeeded = (totalX * avgY) / 3600;
     const dynamicOvercommit = (3 / Math.max(0.1, workersNeeded)).toFixed(1);
 
