@@ -31,11 +31,23 @@
 #   OUT              asset dir (default: $PWD/bin/microvm-assets/$ARCH, gitignored).
 #   ATE_INSTALL_KIND "true" for the kind path (stage assets to rustfs + install-ate-kind.sh);
 #                    default false uploads assets to GCS + uses install-ate.sh.
+#
+# Flags:
+#   --egress         Enable actor egress capture via agentgateway (forwarded to
+#                    install-ate.sh / install-ate-kind.sh).
 
 set -o errexit -o nounset -o pipefail
 
 ROOT="$(git rev-parse --show-toplevel)"
 cd "${ROOT}"
+
+# Parse flags before sourcing the environment so they are available to all steps.
+EGRESS_FLAG=""
+for arg in "$@"; do
+  case "${arg}" in
+    --egress) EGRESS_FLAG="--egress" ;;
+  esac
+done
 
 # Source the environment (cluster, registry, bucket) like the other hack scripts;
 # hack/run-microvm-demo-kind.sh sets NO_DEV_ENV to skip this and use kind defaults.
@@ -103,10 +115,10 @@ fi
 log "Deploying the ate control plane (--deploy-ate-system)..."
 if [[ "${ATE_INSTALL_KIND}" == "true" ]]; then
   # install-ate-kind.sh sets NO_DEV_ENV/KO_DOCKER_REPO/ARCH/ATE_INSTALL_KIND itself.
-  KUBECTL_CONTEXT="${KUBECTL_CONTEXT}" hack/install-ate-kind.sh --deploy-ate-system
+  KUBECTL_CONTEXT="${KUBECTL_CONTEXT}" hack/install-ate-kind.sh --deploy-ate-system ${EGRESS_FLAG}
 else
   # GKE path: pass KO_DOCKER_REPO/BUCKET_NAME/KUBECTL_CONTEXT through the env.
-  KUBECTL_CONTEXT="${KUBECTL_CONTEXT}" hack/install-ate.sh --deploy-ate-system
+  KUBECTL_CONTEXT="${KUBECTL_CONTEXT}" hack/install-ate.sh --deploy-ate-system ${EGRESS_FLAG}
 fi
 
 # --- 4. apply the demo ------------------------------------------------------
