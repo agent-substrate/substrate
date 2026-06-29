@@ -258,6 +258,12 @@ app.get("/", (c) => {
 
 <div class="grid-master">
   <div>
+    <div class="card">
+      <h2>NanoClaw Decision Stream</h2>
+      <div id="shell" class="shell-container"></div>
+    </div>
+  </div>
+  <div>
     <div class="card" style="margin-bottom: 1.5em;">
       <h2>WhatsApp Bridge</h2>
       <div id="wa-status"></div>
@@ -269,19 +275,6 @@ app.get("/", (c) => {
       </div>
       <div id="wa-active" style="display:none; color:var(--green); font-size:0.9em; font-weight:800; text-align:center; padding:15px; border:1px solid var(--green); border-radius:4px; margin-top:10px;">
          LIVE CONNECTION: LISTENING
-      </div>
-    </div>
-    <div class="card">
-      <h2>NanoClaw Decision Stream</h2>
-      <div id="shell" class="shell-container"></div>
-    </div>
-  </div>
-  <div>
-    <div class="card" style="margin-top: 0; background: transparent; border:none; padding:0; margin-bottom: 15px;">
-      <h2 style="border-left-color: var(--yellow)">NanoClaw Economics</h2>
-      <div class="metric-highlight-grid">
-         <div class="metric-item"><div id="stat-density" class="metric-val">1.50x</div><div style="font-size:0.6em;color:var(--muted)">OVERSUBSCRIPTION (3:2)</div></div>
-         <div class="metric-item"><div id="stat-savings" class="metric-val">33.3%</div><div style="font-size:0.6em;color:var(--muted)">COST REDUCTION</div></div>
       </div>
     </div>
     <div class="card" style="background: var(--panel-2); padding:10px; border-color: var(--pink);">
