@@ -1,0 +1,29 @@
+{
+  "name": "node-wav",
+  "version": "0.0.2",
+  "description": "High performance WAV file decoder and encoder",
+  "main": "./index.js",
+  "scripts": {
+    "test": "./node_modules/nodeunit/bin/nodeunit ./tests/test.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/andreasgal/node-wav.git"
+  },
+  "keywords": [
+    "wav",
+    "decode"
+  ],
+  "author": "Andreas Gal",
+  "license": "MIT",
+  "homepage": "https://github.com/andreasgal/node-wav",
+  "engines": {
+    "node": ">=4.4.0"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "nodeunit": "^0.9.1",
+    "wav-decoder": "^1.1.0",
+    "wav-encoder": "^1.1.0"
+  }
+}

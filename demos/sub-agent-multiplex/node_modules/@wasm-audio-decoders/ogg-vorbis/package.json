@@ -1,0 +1,58 @@
+{
+  "name": "@wasm-audio-decoders/ogg-vorbis",
+  "version": "0.1.20",
+  "description": "Web Assembly streaming Ogg Vorbis decoder",
+  "type": "module",
+  "main": "./index.js",
+  "exports": {
+    "types": "./types.d.ts",
+    "default": "./index.js"
+  },
+  "sideEffects": false,
+  "types": "types.d.ts",
+  "files": [
+    "index.js",
+    "types.d.ts",
+    "src/EmscriptenWasm.js",
+    "src/OggVorbisDecoder.js",
+    "src/OggVorbisDecoderWebWorker.js",
+    "dist/ogg-vorbis-decoder.min.js",
+    "dist/ogg-vorbis-decoder.min.js.map"
+  ],
+  "keywords": [
+    "Vorbis",
+    "Ogg",
+    "audio",
+    "decoder",
+    "multichannel",
+    "surround",
+    "stream",
+    "streams",
+    "libvorbis",
+    "Web Assembly",
+    "Wasm",
+    "Web Worker"
+  ],
+  "author": {
+    "name": "Ethan Halsall",
+    "email": "ethanhalsall@pm.me"
+  },
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/eshaz/wasm-audio-decoders/issues"
+  },
+  "homepage": "https://github.com/eshaz/wasm-audio-decoders/tree/main/src/ogg-vorbis",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/eshaz/wasm-audio-decoders.git",
+    "directory": "src/ogg-vorbis"
+  },
+  "funding": {
+    "type": "individual",
+    "url": "https://github.com/sponsors/eshaz"
+  },
+  "dependencies": {
+    "@wasm-audio-decoders/common": "9.0.7",
+    "codec-parser": "2.5.0"
+  }
+}

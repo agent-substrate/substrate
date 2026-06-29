@@ -1,0 +1,54 @@
+{
+  "name": "@eshaz/web-worker",
+  "version": "1.2.2",
+  "description": "Consistent Web Workers in browser and Node.",
+  "main": "./cjs/node.js",
+  "browser": "./cjs/browser.js",
+  "types": "index.d.ts",
+  "files": [
+    "cjs",
+    "browser.js",
+    "node.js",
+    "index.d.ts"
+  ],
+  "scripts": {
+    "prepare": "babel node.js browser.js -d cjs",
+    "test": "eslint '*.js' test && node --experimental-modules ./node_modules/.bin/ava"
+  },
+  "babel": {
+    "plugins": [
+      "@babel/plugin-syntax-dynamic-import",
+      "babel-plugin-commonjs-lite"
+    ]
+  },
+  "repository": "https://github.com/eshaz/web-worker",
+  "keywords": [
+    "worker",
+    "worker_threads",
+    "webworker",
+    "web worker",
+    "web-worker",
+    "threads"
+  ],
+  "authors": [],
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/eshaz/web-worker",
+  "eslintConfig": {
+    "extends": "developit",
+    "rules": {
+      "no-console": 0
+    }
+  },
+  "devDependencies": {
+    "@babel/cli": "^7.7.7",
+    "@babel/core": "^7.7.7",
+    "@babel/plugin-syntax-dynamic-import": "^7.7.4",
+    "@babel/plugin-transform-modules-commonjs": "^7.7.5",
+    "@babel/preset-env": "^7.7.7",
+    "ava": "^2.4.0",
+    "babel-plugin-commonjs-lite": "gist:3e38560d5bed35da1fd708d635e4acb3",
+    "eslint": "^6.8.0",
+    "eslint-config-developit": "^1.1.1",
+    "eslint-plugin-compat": "^4.1.4"
+  }
+}

@@ -1,0 +1,56 @@
+{
+  "name": "opus-decoder",
+  "version": "0.7.11",
+  "description": "Web Assembly streaming Opus decoder",
+  "type": "module",
+  "main": "./index.js",
+  "exports": {
+    "types": "./types.d.ts",
+    "default": "./index.js"
+  },
+  "sideEffects": false,
+  "types": "types.d.ts",
+  "files": [
+    "index.js",
+    "types.d.ts",
+    "src/EmscriptenWasm.js",
+    "src/OpusDecoder.js",
+    "src/OpusDecoderWebWorker.js",
+    "dist/opus-decoder.min.js",
+    "dist/opus-decoder.min.js.map"
+  ],
+  "keywords": [
+    "Opus",
+    "audio",
+    "decoder",
+    "multichannel",
+    "surround",
+    "stream",
+    "streams",
+    "libopus",
+    "Web Assembly",
+    "Wasm",
+    "Web Worker"
+  ],
+  "author": {
+    "name": "Ethan Halsall",
+    "email": "ethanhalsall@pm.me"
+  },
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/eshaz/wasm-audio-decoders/issues"
+  },
+  "homepage": "https://github.com/eshaz/wasm-audio-decoders/tree/main/src/opus-decoder",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/eshaz/wasm-audio-decoders.git",
+    "directory": "src/opus-decoder"
+  },
+  "funding": {
+    "type": "individual",
+    "url": "https://github.com/sponsors/eshaz"
+  },
+  "dependencies": {
+    "@wasm-audio-decoders/common": "9.0.7"
+  }
+}

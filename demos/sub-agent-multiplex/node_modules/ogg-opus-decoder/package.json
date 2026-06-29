@@ -1,0 +1,74 @@
+{
+  "name": "ogg-opus-decoder",
+  "version": "1.7.3",
+  "description": "Web Assembly streaming Ogg Opus decoder",
+  "type": "module",
+  "main": "./index.js",
+  "exports": {
+    "types": "./types.d.ts",
+    "default": "./index.js"
+  },
+  "sideEffects": false,
+  "types": "types.d.ts",
+  "files": [
+    "index.js",
+    "types.d.ts",
+    "src/EmscriptenWasm.js",
+    "src/OggOpusDecoder.js",
+    "src/OggOpusDecoderWebWorker.js",
+    "dist/ogg-opus-decoder.min.js",
+    "dist/ogg-opus-decoder.min.js.map",
+    "dist/ogg-opus-decoder.opus-ml.min.js",
+    "dist/ogg-opus-decoder.opus-ml.min.js.map"
+  ],
+  "keywords": [
+    "Opus",
+    "audio",
+    "decoder",
+    "multichannel",
+    "surround",
+    "stream",
+    "streams",
+    "libopus",
+    "libopusfile",
+    "Ogg Opus",
+    "Web Assembly",
+    "Wasm",
+    "Web Worker"
+  ],
+  "author": {
+    "name": "Ethan Halsall",
+    "email": "ethanhalsall@pm.me"
+  },
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/eshaz/wasm-audio-decoders/issues"
+  },
+  "homepage": "https://github.com/eshaz/wasm-audio-decoders/tree/main/src/ogg-opus-decoder",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/eshaz/wasm-audio-decoders.git",
+    "directory": "src/ogg-opus-decoder"
+  },
+  "funding": {
+    "type": "individual",
+    "url": "https://github.com/sponsors/eshaz"
+  },
+  "scripts": {
+    "build": "rm -f ./dist/* && webpack",
+    "build:analyze": "rm -f ./dist/* && webpack --profile --json > ./dist/stats.json && webpack-bundle-analyzer ./dist/stats.json"
+  },
+  "devDependencies": {
+    "babel-plugin-syntax-dynamic-import": "^6.18.0",
+    "terser-webpack-plugin": "^5.3.14",
+    "webpack": "^5.99.7",
+    "webpack-bundle-analyzer": "^4.10.2",
+    "webpack-cli": "^6.0.1"
+  },
+  "dependencies": {
+    "@wasm-audio-decoders/common": "9.0.7",
+    "@wasm-audio-decoders/opus-ml": "0.0.2",
+    "opus-decoder": "0.7.11",
+    "codec-parser": "2.5.0"
+  }
+}

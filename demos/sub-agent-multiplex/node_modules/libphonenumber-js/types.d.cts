@@ -1,0 +1,181 @@
+// The rationale for having a separate `CountryCode` type instead of just a `string`:
+// https://github.com/catamphetamine/libphonenumber-js/issues/170#issuecomment-363156068
+export type CountryCode = 'AC' | 'AD' | 'AE' | 'AF' | 'AG' | 'AI' | 'AL' | 'AM' | 'AO' | 'AR' | 'AS' | 'AT' | 'AU' | 'AW' | 'AX' | 'AZ' | 'BA' | 'BB' | 'BD' | 'BE' | 'BF' | 'BG' | 'BH' | 'BI' | 'BJ' | 'BL' | 'BM' | 'BN' | 'BO' | 'BQ' | 'BR' | 'BS' | 'BT' | 'BW' | 'BY' | 'BZ' | 'CA' | 'CC' | 'CD' | 'CF' | 'CG' | 'CH' | 'CI' | 'CK' | 'CL' | 'CM' | 'CN' | 'CO' | 'CR' | 'CU' | 'CV' | 'CW' | 'CX' | 'CY' | 'CZ' | 'DE' | 'DJ' | 'DK' | 'DM' | 'DO' | 'DZ' | 'EC' | 'EE' | 'EG' | 'EH' | 'ER' | 'ES' | 'ET' | 'FI' | 'FJ' | 'FK' | 'FM' | 'FO' | 'FR' | 'GA' | 'GB' | 'GD' | 'GE' | 'GF' | 'GG' | 'GH' | 'GI' | 'GL' | 'GM' | 'GN' | 'GP' | 'GQ' | 'GR' | 'GT' | 'GU' | 'GW' | 'GY' | 'HK' | 'HN' | 'HR' | 'HT' | 'HU' | 'ID' | 'IE' | 'IL' | 'IM' | 'IN' | 'IO' | 'IQ' | 'IR' | 'IS' | 'IT' | 'JE' | 'JM' | 'JO' | 'JP' | 'KE' | 'KG' | 'KH' | 'KI' | 'KM' | 'KN' | 'KP' | 'KR' | 'KW' | 'KY' | 'KZ' | 'LA' | 'LB' | 'LC' | 'LI' | 'LK' | 'LR' | 'LS' | 'LT' | 'LU' | 'LV' | 'LY' | 'MA' | 'MC' | 'MD' | 'ME' | 'MF' | 'MG' | 'MH' | 'MK' | 'ML' | 'MM' | 'MN' | 'MO' | 'MP' | 'MQ' | 'MR' | 'MS' | 'MT' | 'MU' | 'MV' | 'MW' | 'MX' | 'MY' | 'MZ' | 'NA' | 'NC' | 'NE' | 'NF' | 'NG' | 'NI' | 'NL' | 'NO' | 'NP' | 'NR' | 'NU' | 'NZ' | 'OM' | 'PA' | 'PE' | 'PF' | 'PG' | 'PH' | 'PK' | 'PL' | 'PM' | 'PR' | 'PS' | 'PT' | 'PW' | 'PY' | 'QA' | 'RE' | 'RO' | 'RS' | 'RU' | 'RW' | 'SA' | 'SB' | 'SC' | 'SD' | 'SE' | 'SG' | 'SH' | 'SI' | 'SJ' | 'SK' | 'SL' | 'SM' | 'SN' | 'SO' | 'SR' | 'SS' | 'ST' | 'SV' | 'SX' | 'SY' | 'SZ' | 'TA' | 'TC' | 'TD' | 'TG' | 'TH' | 'TJ' | 'TK' | 'TL' | 'TM' | 'TN' | 'TO' | 'TR' | 'TT' | 'TV' | 'TW' | 'TZ' | 'UA' | 'UG' | 'US' | 'UY' | 'UZ' | 'VA' | 'VC' | 'VE' | 'VG' | 'VI' | 'VN' | 'VU' | 'WF' | 'WS' | 'XK' | 'YE' | 'YT' | 'ZA' | 'ZM' | 'ZW';
+
+// Seems like it doesn't work for some reason:
+// https://gitlab.com/catamphetamine/libphonenumber-js/-/issues/94
+//
+// import metadata from './metadata.min.json'
+// // Reads the list of ISO country codes from the JSON file.
+// // https://github.com/catamphetamine/libphonenumber-js/issues/405#issuecomment-1447027961
+// const getObjectKeys = Object.keys as <T>(object: T) => Array<keyof T>
+// const CountryCodes = getObjectKeys(metadata.countries)
+// // The `CountryCode` type is generated from the list of `CountryCodes`.
+// // https://github.com/catamphetamine/libphonenumber-js/issues/405
+// export type CountryCode = typeof CountryCodes[number];
+
+export type CountryCallingCodeToCountryCodes = {
+  // For each "calling code", it lists the countries that have it.
+  [countryCallingCode: CountryCallingCode]: CountryCode[];
+};
+
+// A non-minified telephone numbering plan looks like:
+//
+// {
+//   phone_code: string,
+//   idd_prefix: string,
+//   national_number_pattern: string,
+//   types: object,
+//   examples: object,
+//   formats: object[]?,
+//   possible_lengths: number[],
+//   ...
+// }
+//
+// While minified telephone numbering plan is the same data but in the form of an array
+// where each index corresponds to a pre-defined property name in the original object.
+//
+export type MinifiedTelephoneNumberingPlan = any[];
+
+// Telephone numbering plan for each country.
+export type CountryCodeToMinifiedTelephoneNumberingPlan = {
+  // `in` operator docs:
+  // https://www.typescriptlang.org/docs/handbook/advanced-types.html#mapped-types
+  // `country in CountryCode` means "for each and every CountryCode".
+  [country in CountryCode]?: MinifiedTelephoneNumberingPlan;
+};
+
+export type MetadataJson = {
+	// Metadata format version.
+	// Previously, it used to be a "semver" string but now it's an integer.
+  // Specifically:
+  // There was no `version` property in V1 of metadata.
+  // Then, `version` was a "semver" string in V2, V3 and V4 of metadata.
+  // Then, metadata stayed at version V4 but the `version` property was changed to a simple integer.
+  // From then on, `version` has stayed at numeric value `4`.
+  version: number;
+  // For each "calling code", it lists the countries that have it.
+	// Some "calling codes" correspond to only one country.
+	// Others are shared between multiple countries.
+  country_calling_codes: CountryCallingCodeToCountryCodes;
+	// Telephone numbering plan for each country.
+  countries: CountryCodeToMinifiedTelephoneNumberingPlan;
+	// Telephone numbering plans for "non-geographic" calling codes.
+	// http://npmjs.com/package/libphonenumber-js#non-geographic
+  // "Non-geographic" calling codes are "calling codes" that don't belong to
+  // any given country or territory and are inherently international.
+  nonGeographic: Record<CountryCallingCode, MinifiedTelephoneNumberingPlan>;
+};
+
+export type Examples = {
+  // `in` operator docs:
+  // https://www.typescriptlang.org/docs/handbook/advanced-types.html#mapped-types
+  // `country in CountryCode` means "for each and every CountryCode".
+  [country in CountryCode]: NationalNumber;
+};
+
+export type NumberFormat = 'NATIONAL' | 'INTERNATIONAL' | 'E.164' | 'RFC3966' | 'IDD';
+export type PhoneNumberType = 'PREMIUM_RATE' | 'TOLL_FREE' | 'SHARED_COST' | 'VOIP' | 'PERSONAL_NUMBER' | 'PAGER' | 'UAN' | 'VOICEMAIL' | 'FIXED_LINE_OR_MOBILE' | 'FIXED_LINE' | 'MOBILE';
+
+/**
+ * @deprecated Originally, for some weird reason, someone decided to declare
+ * `NumberType` type as `undefined | 'PREMIUM_RATE' | 'TOLL_FREE' | ...`
+ * which doesn't make any sense — why even include `undefined` in there?
+ * At that time, I wasn't familiar with TypeScript so this weird type definition slipped through.
+ * Now though I can see how "unconventional" it looks, so I created a new type
+ * called `PhoneNumberType` which is same as `NumberType` except it can't be `undefined`.
+ */
+export type NumberType = PhoneNumberType | undefined;
+
+export type E164Number = string;
+export type NationalNumber = string;
+export type Extension = string;
+export type CarrierCode = string;
+export type CountryCallingCode = string;
+
+type FormatExtension = (formattedNumber: string, extension: Extension, metadata: MetadataJson) => string
+
+// The options for the `format()` function when the format is "NATIONAL" or "INTERNATIONAL".
+export interface FormatNumberOptionsForNationalOrInternational {
+  // Adds a national prefix in the formatted number.
+  // Works when formatting a "NATIONAL" or "INTERNATIONAL" phone number.
+  nationalPrefix?: boolean;
+  // A function that appends an "extension" to a formatted phone number.
+  formatExtension?: FormatExtension;
+}
+
+// The options for the `format()` function when the format is "IDD".
+export interface FormatNumberOptionsForIDD extends FormatNumberOptionsForNationalOrInternational {
+  // A country from which the call will be made.
+  // It is only relevant when calling via "IDD" (International Direct Dialing)
+  // when the caller can use a special "00" prefix instead of using the "+" character.
+  fromCountry: CountryCode;
+  // `humanReadable` option was removed in version `1.8.6`.
+  // Now it's always `true` by default.
+  // humanReadable?: boolean;
+}
+
+// All possible `options` for the `format()` function,
+// regardless of the actual format being used.
+export type FormatNumberOptions = FormatNumberOptionsForNationalOrInternational | FormatNumberOptionsForIDD
+
+// // https://stackoverflow.com/a/67026991
+// type ArrayOfAtLeastOneCountryCode = [CountryCode, ...CountryCode[]];
+
+// For some weird reason, `export class PhoneNumber implements IPhoneNumber {}` approach
+// didn't work, so the declaration of the `PhoneNumber` class had to be copy-pasted everywhere
+// instead of being declared once in this file.
+//
+// export interface PhoneNumber {
+//   countryCallingCode: CountryCallingCode;
+//   country?: CountryCode;
+//   nationalNumber: NationalNumber;
+//   number: E164Number;
+//   carrierCode?: CarrierCode;
+//   ext?: Extension;
+//   setExt(ext: Extension): void;
+//   getPossibleCountries(): CountryCode[];
+//   isPossible(): boolean;
+//   isValid(): boolean;
+//   getType(): NumberType;
+//   format(format: NumberFormat, options?: FormatNumberOptions): string;
+//   formatNational(options?: FormatNumberOptionsForNationalOrInternational): string;
+//   formatInternational(options?: FormatNumberOptionsForNationalOrInternational): string;
+//   getURI(): string;
+//   isNonGeographic(): boolean;
+//   isEqual(phoneNumber: PhoneNumber): boolean;
+// }
+//
+// Because `PhoneNumber` interface was commented out,
+// `NumberFound` also had to be copy-pasted everywhere
+// instead of being declared once in this file.
+//
+// export interface NumberFound {
+//   number: PhoneNumber;
+//   startsAt: number;
+//   endsAt: number;
+// }
+
+// Deprecated
+export interface NumberFoundLegacy {
+  country: CountryCode;
+  phone: NationalNumber;
+  ext?: Extension;
+  startsAt: number;
+  endsAt: number;
+}
+
+export class ParseError {
+  message: string;
+}
+
+export interface NumberingPlan {
+  leadingDigits(): string | undefined;
+  possibleLengths(): number[];
+  IDDPrefix(): string;
+  defaultIDDPrefix(): string | undefined;
+}
+
+// The rationale for having a separate type for the result "enum" instead of just a `string`:
+// https://github.com/catamphetamine/libphonenumber-js/issues/170#issuecomment-363156068
+export type ValidatePhoneNumberLengthResult = 'INVALID_COUNTRY' | 'NOT_A_NUMBER' | 'TOO_SHORT' | 'TOO_LONG' | 'INVALID_LENGTH';

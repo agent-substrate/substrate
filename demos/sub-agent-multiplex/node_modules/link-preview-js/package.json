@@ -1,0 +1,52 @@
+{
+  "name": "link-preview-js",
+  "version": "3.2.0",
+  "description": "Javascript module to extract and fetch HTTP link information from blocks of text.",
+  "main": "build/index.js",
+  "exports": {
+    ".": {
+      "require": "./build/index.js",
+      "import": "./build/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "types": "build/index.d.ts",
+  "scripts": {
+    "test": "jest",
+    "test:ci": "jest --testLocationInResults --ci --outputFile=test_results.json --json",
+    "build": "tsc",
+    "bump": "./bump-version.sh",
+    "prepublishOnly": "tsc"
+  },
+  "keywords": [
+    "javascript",
+    "link",
+    "url",
+    "http",
+    "preview"
+  ],
+  "author": "Oscar Franco",
+  "email": "ospfranco@protonmail.com",
+  "license": "MIT",
+  "repository": "https://github.com/ospfranco/link-preview-js",
+  "dependencies": {
+    "cheerio": "1.0.0-rc.11",
+    "url": "0.11.0"
+  },
+  "files": [
+    "build"
+  ],
+  "devDependencies": {
+    "@skypack/package-check": "^0.2.2",
+    "@types/cheerio": "0.22.24",
+    "@types/jest": "^28.1.4",
+    "jest": "^28.1.2",
+    "prettier": "2.7.1",
+    "ts-jest": "^28.0.5",
+    "typescript": "^4.7.4"
+  },
+  "packageManager": "yarn@1.22.22+sha1.ac34549e6aa8e7ead463a7407e1c7390f61a6610",
+  "engines": {
+    "node": ">=18"
+  }
+}

@@ -1,0 +1,42 @@
+{
+  "name": "cache-manager",
+  "version": "4.0.1",
+  "description": "Cache module for Node.js",
+  "main": "index.js",
+  "files": [
+    "index.js",
+    "/examples",
+    "/lib"
+  ],
+  "scripts": {
+    "test": "make"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/BryanDonovan/node-cache-manager.git"
+  },
+  "keywords": [
+    "cache",
+    "redis",
+    "lru-cache",
+    "memory cache",
+    "multiple cache"
+  ],
+  "author": "Bryan Donovan",
+  "license": "MIT",
+  "dependencies": {
+    "async": "3.2.3",
+    "lodash.clonedeep": "^4.5.0",
+    "lru-cache": "^7.10.1"
+  },
+  "devDependencies": {
+    "coveralls": "3.1.0",
+    "es6-promise": "^4.2.8",
+    "eslint": "7.7.0",
+    "jsdoc": "3.6.5",
+    "mocha": "8.1.1",
+    "nyc": "15.1.0",
+    "optimist": "0.6.1",
+    "sinon": "9.0.3"
+  }
+}

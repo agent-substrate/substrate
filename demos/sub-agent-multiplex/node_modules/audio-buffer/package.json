@@ -1,0 +1,37 @@
+{
+  "name": "audio-buffer",
+  "version": "5.0.0",
+  "description": "AudioBuffer class for node/browser",
+  "main": "index.js",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/audiojs/audio-buffer"
+  },
+  "scripts": {
+    "test": "node test"
+  },
+  "keywords": [
+    "audio",
+    "audiojs",
+    "pcm",
+    "dsp",
+    "sound",
+    "processing",
+    "ndsamples",
+    "ponyfill",
+    "audio-buffer",
+    "web-audio",
+    "waa",
+    "audiodata"
+  ],
+  "author": "Dmitry Iv <df.creative@gmail.com>",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/audiojs/audio-buffer/issues"
+  },
+  "homepage": "https://github.com/audiojs/audio-buffer",
+  "devDependencies": {
+    "tape": "^5.6.3"
+  }
+}

@@ -1,0 +1,146 @@
+import stripIddPrefix from './stripIddPrefix.js';
+import extractCountryCallingCodeFromInternationalNumberWithoutPlusSign from './extractCountryCallingCodeFromInternationalNumberWithoutPlusSign.js';
+import Metadata from '../metadata.js';
+import { MAX_LENGTH_COUNTRY_CODE } from '../constants.js';
+
+/**
+ * Attempts to extract a calling code from a phone number.
+ * * If the phone number is found to be "international":
+ *   * It will attempt to identify the calling code part of it and whether that part is complete and valid.
+ *     * If the calling code part is complete and valid, it will return two properties:
+ *       that calling code part (without `+`) and the rest of the digits.
+ *     * Otherwise, i.e. if the calling code part is incomplete or invalid,
+ *       it will return an empty object.
+ * * Otherwise, i.e. if the phone number is national, there's no callind code to extract
+ *   so it will just return the originally-passed `number` string as the only property.
+ * @param  {string} number — Phone number digits (possibly with a `+`).
+ * @param  {string} [country] — Country.
+ * @param  {string} [defaultCountry] — Default country.
+ * @param  {string} [defaultCallingCode] — Default calling code (some phone numbering plans are non-geographic).
+ * @param  {object} metadataJson
+ * @return {object} `{ countryCallingCodeSource: string?, countryCallingCode: string?, number: string }`, where `countryCallingCodeSource` tells how the returned calling code was extracted (if it was extracted), `countryCallingCode` is the calling code that was extracted from the input `number` string, and `number` is the originally passed `number` without the extracted calling code (and without a `+`). If the calling code is present but incomplete or invalid, it will return an empty object.
+ * @example
+ * // Returns `{ countryCallingCode: "1", number: "2133734253" }`.
+ * extractCountryCallingCode('2133734253', 'US', null, null, metadata)
+ * extractCountryCallingCode('2133734253', null, 'US', null, metadata)
+ * extractCountryCallingCode('2133734253', null, null, '1', metadata)
+ * extractCountryCallingCode('+12133734253', null, null, null, metadata)
+ * extractCountryCallingCode('+12133734253', null, 'RU', null, metadata)
+ */
+export default function extractCountryCallingCode(number, country, defaultCountry, defaultCallingCode, metadataJson) {
+  if (!number) {
+    return {};
+  }
+  var isNumberWithIddPrefix;
+
+  // If this is not an international phone number,
+  // then either extract an "IDD" prefix, or extract a
+  // country calling code from a number by autocorrecting it
+  // by prepending a leading `+` in cases when it starts
+  // with the country calling code.
+  // https://wikitravel.org/en/International_dialling_prefix
+  // https://github.com/catamphetamine/libphonenumber-js/issues/376
+  if (number[0] !== '+') {
+    // Convert an "out-of-country" dialing phone number
+    // to a proper international phone number.
+    var numberWithoutIDD = stripIddPrefix(number, country || defaultCountry, defaultCallingCode, metadataJson);
+    // If an IDD prefix was stripped then
+    // convert the number to international one
+    // for subsequent parsing.
+    if (numberWithoutIDD && numberWithoutIDD !== number) {
+      isNumberWithIddPrefix = true;
+      number = '+' + numberWithoutIDD;
+    } else {
+      // Check to see if the number starts with the country calling code
+      // for the default country. If so, we remove the country calling code,
+      // and do some checks on the validity of the number before and after.
+      // https://github.com/catamphetamine/libphonenumber-js/issues/376
+      if (country || defaultCountry || defaultCallingCode) {
+        var _extractCountryCallin = extractCountryCallingCodeFromInternationalNumberWithoutPlusSign(number, country, defaultCountry, defaultCallingCode, metadataJson),
+          countryCallingCode = _extractCountryCallin.countryCallingCode,
+          shorterNumber = _extractCountryCallin.number;
+        if (countryCallingCode) {
+          return {
+            countryCallingCodeSource: 'FROM_NUMBER_WITHOUT_PLUS_SIGN',
+            countryCallingCode: countryCallingCode,
+            number: shorterNumber
+          };
+        }
+      }
+      return {
+        // No need to set it to `UNSPECIFIED`. It can be just `undefined`.
+        // countryCallingCodeSource: 'UNSPECIFIED',
+        number: number
+      };
+    }
+  }
+
+  // `number` can only be international at this point.
+
+  // Fast abortion: country codes do not begin with a '0'
+  if (number[1] === '0') {
+    return {};
+  }
+  var metadata = new Metadata(metadataJson);
+
+  // The thing with country phone codes
+  // is that they are orthogonal to each other
+  // i.e. there's no such country phone code A
+  // for which country phone code B exists
+  // where B starts with A.
+  // Therefore, while scanning digits,
+  // if a valid country code is found,
+  // that means that it is the country code.
+  //
+  var i = 2;
+  while (i - 1 <= MAX_LENGTH_COUNTRY_CODE && i <= number.length) {
+    var _countryCallingCode = number.slice(1, i);
+    if (metadata.hasCallingCode(_countryCallingCode)) {
+      metadata.selectNumberingPlan(_countryCallingCode);
+      return {
+        countryCallingCodeSource: isNumberWithIddPrefix ? 'FROM_NUMBER_WITH_IDD' : 'FROM_NUMBER_WITH_PLUS_SIGN',
+        countryCallingCode: _countryCallingCode,
+        number: number.slice(i)
+      };
+    }
+    i++;
+  }
+  return {};
+}
+
+// The possible values for the returned `countryCallingCodeSource` are:
+//
+// Copy-pasted from:
+// https://github.com/google/libphonenumber/blob/master/resources/phonenumber.proto
+//
+// // The source from which the country_code is derived. This is not set in the
+// // general parsing method, but in the method that parses and keeps raw_input.
+// // New fields could be added upon request.
+// enum CountryCodeSource {
+//  // Default value returned if this is not set, because the phone number was
+//  // created using parse, not parseAndKeepRawInput. hasCountryCodeSource will
+//  // return false if this is the case.
+//  UNSPECIFIED = 0;
+//
+//  // The country_code is derived based on a phone number with a leading "+",
+//  // e.g. the French number "+33 1 42 68 53 00".
+//  FROM_NUMBER_WITH_PLUS_SIGN = 1;
+//
+//  // The country_code is derived based on a phone number with a leading IDD,
+//  // e.g. the French number "011 33 1 42 68 53 00", as it is dialled from US.
+//  FROM_NUMBER_WITH_IDD = 5;
+//
+//  // The country_code is derived based on a phone number without a leading
+//  // "+", e.g. the French number "33 1 42 68 53 00" when defaultCountry is
+//  // supplied as France.
+//  FROM_NUMBER_WITHOUT_PLUS_SIGN = 10;
+//
+//  // The country_code is derived NOT based on the phone number itself, but
+//  // from the defaultCountry parameter provided in the parsing function by the
+//  // clients. This happens mostly for numbers written in the national format
+//  // (without country code). For example, this would be set when parsing the
+//  // French number "01 42 68 53 00", when defaultCountry is supplied as
+//  // France.
+//  FROM_DEFAULT_COUNTRY = 20;
+// }
+//# sourceMappingURL=extractCountryCallingCode.js.map

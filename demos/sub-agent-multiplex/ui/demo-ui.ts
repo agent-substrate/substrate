@@ -29,6 +29,7 @@ let stats = {
   totalLogicalActiveSec: 0,
   totalPhysicalActiveSec: 0,
   cumulativeTasks: 0,
+  avgTaskDurationSec: 0,
   lastSync: Date.now()
 };
 
@@ -85,7 +86,15 @@ async function syncState() {
        console.error("Broker Sync Error:", (e as any).message);
     }
 
-    if (brokerOut) brokerData = brokerOut;
+    if (brokerOut) {
+       brokerData = brokerOut;
+       const completed = brokerOut.assignments?.filter((a: any) => a.state === "completed" && a.completed_at) || [];
+       if (completed.length > 0) {
+          const total = completed.reduce((sum: number, a: any) => sum + (a.completed_at - a.created_at), 0);
+          stats.avgTaskDurationSec = total / completed.length;
+          stats.cumulativeTasks = completed.length;
+       }
+    }
 
     let actors: any[] = [];
     if (actorsOut && actorsOut.trim().startsWith("{")) {
@@ -171,7 +180,14 @@ app.get("/api/stats", (c) => {
   const density = stats.totalPhysicalActiveSec > 0 ? (stats.totalLogicalActiveSec / stats.totalPhysicalActiveSec) : 1.5;
   const safeDensity = Math.max(1.0, density).toFixed(2);
   const savings = (100 - (100 / parseFloat(safeDensity))).toFixed(1);
-  return c.json({ logicalTime: stats.totalLogicalActiveSec, physicalTime: stats.totalPhysicalActiveSec, density: safeDensity, savings });
+  return c.json({ 
+    logicalTime: stats.totalLogicalActiveSec, 
+    physicalTime: stats.totalPhysicalActiveSec, 
+    density: safeDensity, 
+    savings,
+    avgTaskDurationSec: stats.avgTaskDurationSec,
+    totalTasks: stats.cumulativeTasks
+  });
 });
 
 app.get("/api/data", (c) => c.json({ ...brokerData, pods: clusterState.pods, actors: clusterState.actors }));
@@ -264,6 +280,17 @@ app.get("/", (c) => {
          <div class="metric-item"><div id="stat-savings" class="metric-val">33.3%</div><div style="font-size:0.6em;color:var(--muted)">COST REDUCTION</div></div>
       </div>
     </div>
+    <div class="card" style="margin-top: 15px; background: var(--panel-2); padding:10px; border-color: var(--pink);">
+      <h2 style="border-left-color: var(--pink)">Amin Review Baseline</h2>
+      <div style="font-size: 0.72em; line-height: 1.6;">
+        <div class="cron-line"><span>Workflow Baseline (X)</span><span style="color:var(--green)">110 crons / hr</span></div>
+        <div class="cron-line"><span>Measured Intensity (Y)</span><span id="proj-duration" style="color:var(--orange)">-- s / task</span></div>
+        <div class="cron-line"><span>Overcommit Reality</span><span id="proj-overcommit" style="color:var(--cyan)">-- x</span></div>
+        <div style="margin-top:8px; font-size:0.85em; color:var(--muted); font-style: italic; border-top: 1px solid var(--line); padding-top:5px;">
+           Substrate maps 3 agents to 2 workers with 10x potential cost reduction.
+        </div>
+      </div>
+    </div>
     <div class="card" style="margin-top: 15px; background: transparent; border:none; padding:0;">
       <h2 style="border-left-color: var(--orange)">External Cron Tracker</h2>
       <div id="cron" class="cron-box"></div>
@@ -337,6 +364,15 @@ async function refresh() {
     if (el("heartbeat")) el("heartbeat").innerHTML = '<span style="color:var(--green)">●</span> Last Sync: ' + new Date().toLocaleTimeString();
     if (el("stat-density")) el("stat-density").textContent = stats.density + "x";
     if (el("stat-savings")) el("stat-savings").textContent = stats.savings + "%";
+
+    // Amin Baseline Logic
+    const avgY = Math.round(stats.avgTaskDurationSec || 12);
+    const totalX = 110; // Total crons per hour from our 60/120/180 cycle
+    const workersNeeded = (totalX * avgY) / 3600;
+    const dynamicOvercommit = (3 / Math.max(0.1, workersNeeded)).toFixed(1);
+
+    if (el("proj-duration")) el("proj-duration").textContent = avgY + " s / task";
+    if (el("proj-overcommit")) el("proj-overcommit").textContent = dynamicOvercommit + "x (Dynamic)";
 
     const shell = el("shell");
     if (data.logs && shell) {

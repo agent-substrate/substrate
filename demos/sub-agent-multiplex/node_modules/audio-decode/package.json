@@ -1,0 +1,54 @@
+{
+  "name": "audio-decode",
+  "version": "2.2.3",
+  "description": "Decode audio data in node or browser",
+  "main": "audio-decode.js",
+  "module": "audio-decode.js",
+  "browser": "audio-decode.js",
+  "type": "module",
+  "types": "audio-decode.d.ts",
+  "dependencies": {
+    "@wasm-audio-decoders/flac": "^0.2.4",
+    "@wasm-audio-decoders/ogg-vorbis": "^0.1.15",
+    "audio-buffer": "^5.0.0",
+    "audio-type": "^2.2.1",
+    "mpg123-decoder": "^1.0.0",
+    "node-wav": "^0.0.2",
+    "ogg-opus-decoder": "^1.6.12",
+    "qoa-format": "^1.0.1"
+  },
+  "devDependencies": {
+    "audio-lena": "^2.3.0",
+    "base64-arraybuffer": "^1.0.2",
+    "tst": "^7.3.0"
+  },
+  "scripts": {
+    "test": "node test.js"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/audiojs/audio-decode.git"
+  },
+  "keywords": [
+    "audiojs",
+    "audio",
+    "dsp",
+    "decode",
+    "audio decode",
+    "audio decoder",
+    "web audio decoder",
+    "codec",
+    "mp3",
+    "wav",
+    "ogg",
+    "vorbis",
+    "opus",
+    "web-audio"
+  ],
+  "author": "ΔY <dfcreative@gmail.com>",
+  "license": "MIT",
+  "bugs": {
+    "url": "https://github.com/audiojs/audio-decode/issues"
+  },
+  "homepage": "https://github.com/audiojs/audio-decode#readme"
+}

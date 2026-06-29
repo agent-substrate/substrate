@@ -1,0 +1,110 @@
+"use strict";
+
+Object.defineProperty(exports, "__esModule", {
+  value: true
+});
+exports["default"] = getNumberType;
+exports.normalizeArguments = normalizeArguments;
+var _isViablePhoneNumber = _interopRequireDefault(require("../helpers/isViablePhoneNumber.js"));
+var _getNumberType2 = _interopRequireDefault(require("../helpers/getNumberType.js"));
+var _isObject = _interopRequireDefault(require("../helpers/isObject.js"));
+var _parse = _interopRequireDefault(require("../parse.js"));
+function _interopRequireDefault(e) { return e && e.__esModule ? e : { "default": e }; }
+// Finds out national phone number type (fixed line, mobile, etc)
+function getNumberType() {
+  var _normalizeArguments = normalizeArguments(arguments),
+    input = _normalizeArguments.input,
+    options = _normalizeArguments.options,
+    metadata = _normalizeArguments.metadata;
+  // `parseNumber()` would return `{}` when no phone number could be parsed from the input.
+  if (!input.phone) {
+    return;
+  }
+  return (0, _getNumberType2["default"])(input, options, metadata);
+}
+
+// Sort out arguments
+function normalizeArguments(args) {
+  // This line of code appeared to not work correctly with `babel`/`istanbul`:
+  // for some weird reason, it caused coverage less than 100%.
+  // That's because `babel`/`istanbul`, for some weird reason,
+  // apparently doesn't know how to properly exclude Babel polyfills from code coverage.
+  //
+  // const [arg_1, arg_2, arg_3, arg_4] = Array.prototype.slice.call(args)
+
+  var arg_1 = args[0];
+  var arg_2 = args[1];
+  var arg_3 = args[2];
+  var arg_4 = args[3];
+  var input;
+  var options = {};
+  var metadata;
+
+  // If the phone number is passed as a string.
+  // `getNumberType('88005553535', ...)`.
+  if (typeof arg_1 === 'string') {
+    // If "default country" argument is being passed
+    // then convert it to an `options` object.
+    // `getNumberType('88005553535', 'RU', metadata)`.
+    if (!(0, _isObject["default"])(arg_2)) {
+      if (arg_4) {
+        options = arg_3;
+        metadata = arg_4;
+      } else {
+        metadata = arg_3;
+      }
+
+      // `parse` extracts phone numbers from raw text,
+      // therefore it will cut off all "garbage" characters,
+      // while this `validate` function needs to verify
+      // that the phone number contains no "garbage"
+      // therefore the explicit `isViablePhoneNumber` check.
+      if ((0, _isViablePhoneNumber["default"])(arg_1)) {
+        input = (0, _parse["default"])(arg_1, {
+          defaultCountry: arg_2
+        }, metadata);
+      } else {
+        input = {};
+      }
+    }
+    // No "resrict country" argument is being passed.
+    // International phone number is passed.
+    // `getNumberType('+78005553535', metadata)`.
+    else {
+      if (arg_3) {
+        options = arg_2;
+        metadata = arg_3;
+      } else {
+        metadata = arg_2;
+      }
+
+      // `parse` extracts phone numbers from raw text,
+      // therefore it will cut off all "garbage" characters,
+      // while this `validate` function needs to verify
+      // that the phone number contains no "garbage"
+      // therefore the explicit `isViablePhoneNumber` check.
+      if ((0, _isViablePhoneNumber["default"])(arg_1)) {
+        input = (0, _parse["default"])(arg_1, undefined, metadata);
+      } else {
+        input = {};
+      }
+    }
+  }
+  // If the phone number is passed as a parsed phone number.
+  // `getNumberType({ phone: '88005553535', country: 'RU' }, ...)`.
+  else if ((0, _isObject["default"])(arg_1)) {
+    input = arg_1;
+    if (arg_3) {
+      options = arg_2;
+      metadata = arg_3;
+    } else {
+      metadata = arg_2;
+    }
+  } else throw new TypeError('A phone number must either be a string or an object of shape { phone, [country] }.');
+  return {
+    input: input,
+    options: options,
+    metadata: metadata
+  };
+}
+//# sourceMappingURL=getNumberType.js.map
