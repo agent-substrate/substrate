@@ -34,9 +34,9 @@ let stats = {
 };
 
 const AGENT_META: Record<string, { color: string, id: string, interval: number }> = {
-  "agent-luna": { color: "#79c0ff", id: "agent-luna-v14", interval: 60000 },
-  "agent-mars": { color: "#ff79c6", id: "agent-mars-v12", interval: 120000 },
-  "agent-nova": { color: "#f1fa8c", id: "agent-nova-v11", interval: 180000 },
+  "agent-luna": { color: "#79c0ff", id: "agent-luna-v14", interval: 120000 },
+  "agent-mars": { color: "#ff79c6", id: "agent-mars-v12", interval: 300000 },
+  "agent-nova": { color: "#f1fa8c", id: "agent-nova-v11", interval: 600000 },
 };
 
 const ID_TO_DISPLAY: Record<string, string> = Object.entries(AGENT_META).reduce((acc, [display, meta]) => {
@@ -280,7 +280,7 @@ app.get("/", (c) => {
     <div class="card" style="background: var(--panel-2); padding:10px; border-color: var(--pink);">
       <h2 style="border-left-color: var(--pink)">Operational Efficiency Projection</h2>
       <div style="font-size: 0.72em; line-height: 1.6;">
-        <div class="cron-line"><span>Workflow Baseline (X)</span><span style="color:var(--green)">110 crons / hr</span></div>
+        <div class="cron-line"><span>Workflow Baseline (X)</span><span style="color:var(--green)">48 crons / hr</span></div>
         <div class="cron-line"><span>Measured Intensity (Y)</span><span id="proj-duration" style="color:var(--orange)">-- s / task</span></div>
         <div class="cron-line"><span>Oversubscription Efficiency</span><span id="proj-overcommit" style="color:var(--cyan)">-- x</span></div>
         <div style="margin-top:8px; font-size:0.85em; color:var(--muted); font-style: italic; border-top: 1px solid var(--line); padding-top:5px;">
@@ -323,9 +323,9 @@ app.get("/", (c) => {
 
 <script>
 const AGENT_META = { 
-  "agent-luna": { color: "#79c0ff", interval: 60000 }, 
-  "agent-mars": { color: "#ff79c6", interval: 120000 }, 
-  "agent-nova": { color: "#f1fa8c", interval: 180000 } 
+  "agent-luna": { color: "#79c0ff", interval: 120000 }, 
+  "agent-mars": { color: "#ff79c6", interval: 300000 }, 
+  "agent-nova": { color: "#f1fa8c", interval: 600000 } 
 };
 
 async function trigger(agentKey) { 
@@ -364,7 +364,7 @@ async function refresh() {
 
     // Amin Baseline Logic
     const avgY = Math.round(stats.avgTaskDurationSec || 12);
-    const totalX = 110; // Total crons per hour from our 60/120/180 cycle
+    const totalX = 48; // Total crons per hour from our 2/5/10 min cycle
     const workersNeeded = (totalX * avgY) / 3600;
     const dynamicOvercommit = (3 / Math.max(0.1, workersNeeded)).toFixed(1);
 
