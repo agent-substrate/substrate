@@ -251,36 +251,40 @@ app.get("/", (c) => {
 </head>
 <body>
 <header>
-  <h1>Fleet Management Master <span style="font-size:0.6em; vertical-align:middle; opacity:0.8;">V1.1.27 STABLE</span></h1>
+  <h1>NanoClaw Substrate Integration Demo <span style="font-size:0.6em; vertical-align:middle; opacity:0.8;">V1.1.30 STABLE</span></h1>
   <div id="heartbeat" style="font-size:0.7em; color:var(--muted)">Initializing...</div>
   <button class="btn" style="background:var(--red); color:#fff;" onclick="deepClean()">Deep Clean</button>
 </header>
 
 <div class="grid-master">
-  <div class="card">
-    <h2>Fleet Decision Stream</h2>
-    <div id="shell" class="shell-container"></div>
-  </div>
-  <div class="card">
-    <h2>WhatsApp Bridge</h2>
-    <div id="wa-status"></div>
-    <div id="pairing-section" style="display:none;">
-      <div class="pairing-box">
-        <div style="font-size:0.7em; color:var(--muted); margin-bottom:8px;">LINK DEVICE: ENTER CODE ON YOUR PHONE</div>
-        <div id="pairing-code" class="pairing-code">---- ----</div>
+  <div>
+    <div class="card" style="margin-bottom: 1.5em;">
+      <h2>WhatsApp Bridge</h2>
+      <div id="wa-status"></div>
+      <div id="pairing-section" style="display:none;">
+        <div class="pairing-box">
+          <div style="font-size:0.7em; color:var(--muted); margin-bottom:8px;">LINK DEVICE: ENTER CODE ON YOUR PHONE</div>
+          <div id="pairing-code" class="pairing-code">---- ----</div>
+        </div>
+      </div>
+      <div id="wa-active" style="display:none; color:var(--green); font-size:0.9em; font-weight:800; text-align:center; padding:15px; border:1px solid var(--green); border-radius:4px; margin-top:10px;">
+         LIVE CONNECTION: LISTENING
       </div>
     </div>
-    <div id="wa-active" style="display:none; color:var(--green); font-size:0.9em; font-weight:800; text-align:center; padding:15px; border:1px solid var(--green); border-radius:4px; margin-top:10px;">
-       LIVE CONNECTION: LISTENING
+    <div class="card">
+      <h2>NanoClaw Decision Stream</h2>
+      <div id="shell" class="shell-container"></div>
     </div>
-    <div class="card" style="margin-top: 15px; background: transparent; border:none; padding:0;">
-      <h2 style="border-left-color: var(--yellow)">Managed Fleet Economics</h2>
+  </div>
+  <div>
+    <div class="card" style="margin-top: 0; background: transparent; border:none; padding:0; margin-bottom: 15px;">
+      <h2 style="border-left-color: var(--yellow)">NanoClaw Economics</h2>
       <div class="metric-highlight-grid">
          <div class="metric-item"><div id="stat-density" class="metric-val">1.50x</div><div style="font-size:0.6em;color:var(--muted)">OVERSUBSCRIPTION (3:2)</div></div>
          <div class="metric-item"><div id="stat-savings" class="metric-val">33.3%</div><div style="font-size:0.6em;color:var(--muted)">COST REDUCTION</div></div>
       </div>
     </div>
-    <div class="card" style="margin-top: 15px; background: var(--panel-2); padding:10px; border-color: var(--pink);">
+    <div class="card" style="background: var(--panel-2); padding:10px; border-color: var(--pink);">
       <h2 style="border-left-color: var(--pink)">Operational Efficiency Projection</h2>
       <div style="font-size: 0.72em; line-height: 1.6;">
         <div class="cron-line"><span>Workflow Baseline (X)</span><span style="color:var(--green)">110 crons / hr</span></div>
@@ -304,7 +308,7 @@ app.get("/", (c) => {
     <div id="pods"></div>
   </div>
   <div class="card">
-    <h2>Logical Actor Fleet</h2>
+    <h2>NanoClaw Logical Agent Fleet</h2>
     <div id="actors" style="display:grid; grid-template-columns: 1fr; gap:10px;"></div>
   </div>
 </div>
