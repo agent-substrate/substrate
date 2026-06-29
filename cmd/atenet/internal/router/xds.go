@@ -23,6 +23,7 @@ import (
 	"sync"
 	"time"
 
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/anypb"
 	"google.golang.org/protobuf/types/known/durationpb"
@@ -35,6 +36,7 @@ import (
 	endpointv3 "github.com/envoyproxy/go-control-plane/envoy/config/endpoint/v3"
 	listenerv3 "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
 	routev3 "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
+	tracev3 "github.com/envoyproxy/go-control-plane/envoy/config/trace/v3"
 	streamaccesslogv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/access_loggers/stream/v3"
 	dfpclusterv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/clusters/dynamic_forward_proxy/v3"
 	dfpcommonv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/common/dynamic_forward_proxy/v3"
@@ -50,6 +52,7 @@ import (
 	endpointgrpc "github.com/envoyproxy/go-control-plane/envoy/service/endpoint/v3"
 	listenergrpc "github.com/envoyproxy/go-control-plane/envoy/service/listener/v3"
 	routegrpc "github.com/envoyproxy/go-control-plane/envoy/service/route/v3"
+	typev3 "github.com/envoyproxy/go-control-plane/envoy/type/v3"
 	"github.com/envoyproxy/go-control-plane/pkg/cache/types"
 	cachev3 "github.com/envoyproxy/go-control-plane/pkg/cache/v3"
 	resourcev3 "github.com/envoyproxy/go-control-plane/pkg/resource/v3"
@@ -62,6 +65,7 @@ const (
 	IngressHTTPSListener = "ingress_https_listener"
 	RouteName            = "substrate_routes"
 	ClusterName          = "ate-cluster"
+	OtlpClusterName      = "otel_collector_cluster"
 )
 
 // XdsServer implements an aggregated discovery service server for dynamic Envoy router nodes.
@@ -80,6 +84,9 @@ type XdsServer struct {
 	certPath    string
 	certContent string
 	keyContent  string
+
+	otlpHost string
+	otlpPort uint32
 }
 
 func NewXdsServer(xdsPort int) *XdsServer {
@@ -113,6 +120,31 @@ func (x *XdsServer) SetTlsConfig(httpsPort int, certPath string, certContent str
 	x.keyContent = keyContent
 }
 
+// SetOtlpCollector enables Envoy-side tracing pointed at the OTLP gRPC
+// collector at host:port. addr empty disables tracing. port defaults to
+// 4317 if omitted.
+func (x *XdsServer) SetOtlpCollector(addr string) error {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	if addr == "" {
+		x.otlpHost = ""
+		x.otlpPort = 0
+		return nil
+	}
+	host, portStr, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+		portStr = "4317"
+	}
+	port, err := strconv.ParseUint(portStr, 10, 32)
+	if err != nil {
+		return fmt.Errorf("parse OTLP collector port from %q: %w", addr, err)
+	}
+	x.otlpHost = host
+	x.otlpPort = uint32(port)
+	return nil
+}
+
 func (x *XdsServer) UpdateSnapshot() error {
 	x.mu.Lock()
 	defer x.mu.Unlock()
@@ -124,6 +156,9 @@ func (x *XdsServer) UpdateSnapshot() error {
 	clusters := []types.Resource{
 		x.buildCluster(),
 		x.buildDynamicForwardProxyCluster(),
+	}
+	if x.otlpHost != "" {
+		clusters = append(clusters, x.buildOtlpCollectorCluster())
 	}
 
 	// Routes
@@ -164,7 +199,9 @@ func (x *XdsServer) Serve(ctx context.Context, lis net.Listener) error {
 		slog.ErrorContext(ctx, "Warning - initial xDS setup update failed", slog.String("err", err.Error()))
 	}
 
-	grpcServer := grpc.NewServer()
+	grpcServer := grpc.NewServer(
+		grpc.StatsHandler(otelgrpc.NewServerHandler()),
+	)
 	discoverygrpc.RegisterAggregatedDiscoveryServiceServer(grpcServer, x.srv)
 	clustergrpc.RegisterClusterDiscoveryServiceServer(grpcServer, x.srv)
 	endpointgrpc.RegisterEndpointDiscoveryServiceServer(grpcServer, x.srv)
@@ -242,6 +279,56 @@ func buildDnsCacheConfig() *dfpcommonv3.DnsCacheConfig {
 		TypedDnsResolverConfig: &corev3.TypedExtensionConfig{
 			Name:        "envoy.network.dns_resolver.getaddrinfo",
 			TypedConfig: resolverConfigAny,
+		},
+	}
+}
+
+// buildOtlpCollectorCluster builds a STRICT_DNS HTTP/2 cluster that
+// targets the OTLP gRPC collector. Required when HCM tracing is enabled
+// so Envoy has somewhere to ship spans.
+func (x *XdsServer) buildOtlpCollectorCluster() *clusterv3.Cluster {
+	h2Opts, _ := anypb.New(&httpv3.HttpProtocolOptions{
+		UpstreamProtocolOptions: &httpv3.HttpProtocolOptions_ExplicitHttpConfig_{
+			ExplicitHttpConfig: &httpv3.HttpProtocolOptions_ExplicitHttpConfig{
+				ProtocolConfig: &httpv3.HttpProtocolOptions_ExplicitHttpConfig_Http2ProtocolOptions{},
+			},
+		},
+	})
+
+	return &clusterv3.Cluster{
+		Name:           OtlpClusterName,
+		ConnectTimeout: durationpb.New(1 * time.Second),
+		ClusterDiscoveryType: &clusterv3.Cluster_Type{
+			Type: clusterv3.Cluster_STRICT_DNS,
+		},
+		LbPolicy: clusterv3.Cluster_ROUND_ROBIN,
+		LoadAssignment: &endpointv3.ClusterLoadAssignment{
+			ClusterName: OtlpClusterName,
+			Endpoints: []*endpointv3.LocalityLbEndpoints{
+				{
+					LbEndpoints: []*endpointv3.LbEndpoint{
+						{
+							HostIdentifier: &endpointv3.LbEndpoint_Endpoint{
+								Endpoint: &endpointv3.Endpoint{
+									Address: &corev3.Address{
+										Address: &corev3.Address_SocketAddress{
+											SocketAddress: &corev3.SocketAddress{
+												Address: x.otlpHost,
+												PortSpecifier: &corev3.SocketAddress_PortValue{
+													PortValue: x.otlpPort,
+												},
+											},
+										},
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+		TypedExtensionProtocolOptions: map[string]*anypb.Any{
+			"envoy.extensions.upstreams.http.v3.HttpProtocolOptions": h2Opts,
 		},
 	}
 }
@@ -334,6 +421,7 @@ func (x *XdsServer) buildHcm(statPrefix string) *anypb.Any {
 	hcm, _ := anypb.New(&hcmv3.HttpConnectionManager{
 		StatPrefix:        statPrefix,
 		GenerateRequestId: &wrapperspb.BoolValue{Value: true},
+		Tracing:           x.buildTracing(),
 		AccessLog: []*accesslogv3.AccessLog{
 			{
 				Name: "envoy.access_loggers.stdout",
@@ -375,6 +463,41 @@ func (x *XdsServer) buildHcm(statPrefix string) *anypb.Any {
 		},
 	})
 	return hcm
+}
+
+// buildTracing returns the HCM Tracing block that points Envoy at the
+// configured OTLP gRPC collector. Returns nil when no collector is set,
+// in which case Envoy emits no spans on its own.
+//
+// `RandomSampling: 100%` makes Envoy ALWAYS sample requests that arrive
+// with no parent traceparent. We rely on upstream clients (locust, etc.)
+// to gate sampling: requests without a sampled parent are still tagged
+// `sampled` here but downstream services in this repo use
+// `ParentBased(NeverSample)` so unsampled-by-client requests stay
+// unsampled overall.
+func (x *XdsServer) buildTracing() *hcmv3.HttpConnectionManager_Tracing {
+	if x.otlpHost == "" {
+		return nil
+	}
+	otelConfig, _ := anypb.New(&tracev3.OpenTelemetryConfig{
+		GrpcService: &corev3.GrpcService{
+			TargetSpecifier: &corev3.GrpcService_EnvoyGrpc_{
+				EnvoyGrpc: &corev3.GrpcService_EnvoyGrpc{
+					ClusterName: OtlpClusterName,
+				},
+			},
+		},
+		ServiceName: "atenet-router-envoy",
+	})
+	return &hcmv3.HttpConnectionManager_Tracing{
+		RandomSampling: &typev3.Percent{Value: 100},
+		Provider: &tracev3.Tracing_Http{
+			Name: "envoy.tracers.opentelemetry",
+			ConfigType: &tracev3.Tracing_Http_TypedConfig{
+				TypedConfig: otelConfig,
+			},
+		},
+	}
 }
 
 func (x *XdsServer) buildListener() *listenerv3.Listener {

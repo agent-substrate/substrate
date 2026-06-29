@@ -44,6 +44,9 @@ demo-multi-template_deploy() {
 
 demo-multi-template_delete() {
   log_step "demo-multi-template_delete"
+  delete_demo_actors \
+    ate-demo-multi-template-counter counter \
+    ate-demo-multi-template-fspersist fspersist
   sed "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" demos/multi-template/multi-template.yaml.tmpl \
     | run_kubectl delete --ignore-not-found -f -
 }

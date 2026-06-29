@@ -55,6 +55,12 @@ message RunWorkloadRequest {
   string runsc_path = 4;
 
   WorkloadSpec spec = 5;
+
+  // runtime_asset_paths maps a runtime asset name (e.g. "cloud-hypervisor",
+  // "virtiofsd", "kata-kernel", "kata-image", "kata-config")
+  // to the local on-disk path atelet fetched it to (content-addressed, like
+  // runsc_path). Empty for the gVisor runtime, which uses runsc_path.
+  map<string, string> runtime_asset_paths = 7;
 }
 
 // WorkloadSpec parallels Pod, but with far fewer configurable fields.
@@ -63,10 +69,38 @@ message WorkloadSpec {
 }
 
 message Container {
-  string name = 1;
+  string          name                = 1;
+  Readyz          readyz              = 2;
+  repeated string durable_dir_volumes = 3;
+}
+
+// Readyz describes how to check that a container is ready to serve.
+// Only HTTP is supported today.
+message Readyz {
+  HTTPGetAction http_get = 1;
+}
+
+// HTTPGetAction performs an HTTP GET against the container.
+message HTTPGetAction {
+  // Path to access on the HTTP server. Empty means "/readyz".
+  string path = 1;
+  // TCP port to connect to (1..65535).
+  int32  port = 2;
 }
 
 message RunWorkloadResponse {
+}
+
+enum SnapshotScope {
+  // Not valid option; should never happen.
+  SNAPSHOT_SCOPE_UNSPECIFIED = 0;
+  // Capture process memory plus the full filesystem delta on top of the OCI
+  // image (including any attached DurableDir volumes).
+  SNAPSHOT_SCOPE_FULL = 1;
+  // Capture only the contents of attached volumes that support snapshots
+  // (currently DurableDir-typed volumes). Memory and the rest of rootfs are
+  // excluded.
+  SNAPSHOT_SCOPE_DATA = 2;
 }
 
 message CheckpointWorkloadRequest {
@@ -87,10 +121,20 @@ message CheckpointWorkloadRequest {
   //
   // For example: "gs://bucket/actors/1234/snapshots/5678/"
   string snapshot_uri_prefix = 6;
+
+  // runtime_asset_paths maps a runtime asset name to the local on-disk path
+  // atelet fetched it to (see RunWorkloadRequest). Empty for gVisor.
+  map<string, string> runtime_asset_paths = 7;
+
+  // What content to include in the checkpoint.
+  SnapshotScope scope = 8;
 }
 
 message CheckpointWorkloadResponse {
-
+  // snapshot_files lists the files ateom wrote into the checkpoint directory
+  // (relative names) for atelet to ship to object storage. Each runtime reports
+  // its own set (gVisor's image files, cloud-hypervisor's snapshot set, ...).
+  repeated string snapshot_files = 1;
 }
 
 message RestoreWorkloadRequest {
@@ -104,6 +148,13 @@ message RestoreWorkloadRequest {
 
   // The object storage URI prefix of the snapshot to restore.
   string snapshot_uri_prefix = 6;
+
+  // runtime_asset_paths maps a runtime asset name to the local on-disk path
+  // atelet fetched it to (see RunWorkloadRequest). Empty for gVisor.
+  map<string, string> runtime_asset_paths = 7;
+
+  // What content to restore from the snapshot.
+  SnapshotScope scope = 8;
 }
 
 message RestoreWorkloadResponse {

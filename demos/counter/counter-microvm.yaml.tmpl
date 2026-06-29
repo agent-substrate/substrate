@@ -1,0 +1,127 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Micro-VM (kata + cloud-hypervisor) variant of the counter demo. The counter is
+# in-RAM (atomic uint64), so a successful suspend/resume across pods shows the
+# count continuing — proving the guest memory snapshot round-tripped.
+#
+# The sandbox binaries (cloud-hypervisor, virtiofsd, guest kernel, guest rootfs,
+# base configuration.toml) live on a cluster-scoped SandboxConfig, FETCHED at runtime
+# from the cluster object store bucket ${BUCKET_NAME} under kata-assets/ (rustfs on
+# kind, GCS on GKE) — NOT baked into the worker image. ateom boots cloud-hypervisor
+# itself and gives the actor an overlay rootfs (virtio-fs RO lower + guest-tmpfs
+# upper), so it fetches virtiofsd (built from upstream main — vhost 0.16; the
+# snapshot/restore fix is not in a release tag yet). The kata containerd shim is NOT
+# fetched (ateom drives the kata-agent directly). kata assets are 3.32.0.
+# The per-arch sha256 values below are the asset sets produced by
+# hack/microvm-assets/assemble.sh; atelet selects the block matching the node's
+# architecture, and each cluster's bucket holds that arch's binaries at these paths
+# (staged by run-microvm-demo[-kind].sh).
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ate-demo-counter-microvm
+
+---
+
+apiVersion: ate.dev/v1alpha1
+kind: SandboxConfig
+metadata:
+  name: counter-microvm
+spec:
+  sandboxClass: microvm
+  assets:
+    arm64:
+      cloud-hypervisor:
+        url: "gs://${BUCKET_NAME}/kata-assets/cloud-hypervisor"
+        sha256: "bf004ddc1a148f47caa87ac49a783b8dbd6bf9bc27abe522ed197df7b982d3b1"
+      # virtiofsd serves the overlay RO lower (virtio-fs); built from a pinned source
+      # commit (vhost 0.16 — the snapshot/restore fix is not in a release tag yet).
+      virtiofsd:
+        url: "gs://${BUCKET_NAME}/kata-assets/virtiofsd"
+        # virtiofsd is built from source (pinned commit in assemble.sh), so its binary
+        # is not byte-reproducible across toolchains/arches and can't carry a fixed pin.
+        # run-microvm-demo.sh computes this from the freshly-staged binary at deploy.
+        sha256: "${VIRTIOFSD_SHA256}"
+      kata-kernel:
+        url: "gs://${BUCKET_NAME}/kata-assets/vmlinux"
+        sha256: "f437320bab94f19105d12b932aa29735f0d54d2588218872254367f312c1027c"
+      kata-image:
+        url: "gs://${BUCKET_NAME}/kata-assets/rootfs.img"
+        sha256: "31ffb41177571c5654d3a28a2728eaac9d6d3daed90bb993f64e0b4b3ca6b235"
+      kata-config:
+        url: "gs://${BUCKET_NAME}/kata-assets/configuration-clh.toml"
+        sha256: "8a09a40543a527dbdc3ff26d229bae0de9aebb655475c28d7e5482dbedefa030"
+    # amd64 assets are kata 3.32 + virtiofsd (assemble.sh ARCH=amd64), matching arm64.
+    amd64:
+      cloud-hypervisor:
+        url: "gs://${BUCKET_NAME}/kata-assets/cloud-hypervisor"
+        sha256: "829af01ff075bb96c4f183905134c453a88d68cbabdc6b87df21098842581ee9"
+      virtiofsd:
+        url: "gs://${BUCKET_NAME}/kata-assets/virtiofsd"
+        # Built from source (see the arm64 note above); sha injected at deploy by
+        # run-microvm-demo.sh from the freshly-staged binary.
+        sha256: "${VIRTIOFSD_SHA256}"
+      kata-kernel:
+        url: "gs://${BUCKET_NAME}/kata-assets/vmlinux"
+        sha256: "43701715ae2885f936bbe5c66a2de7c14dc51de7d19412d04833e4bbcf205bd0"
+      kata-image:
+        url: "gs://${BUCKET_NAME}/kata-assets/rootfs.img"
+        sha256: "e9548ff64f51c120791d3a2d1a81ebfd275df2bf0737368bd3e6381a6e967855"
+      kata-config:
+        url: "gs://${BUCKET_NAME}/kata-assets/configuration-clh.toml"
+        sha256: "8cce580e5abf78c05c8e9b929c24a524b9a81fc47be4e2e4f38dcae5ef052be6"
+
+---
+
+apiVersion: ate.dev/v1alpha1
+kind: WorkerPool
+metadata:
+  name: counter-microvm
+  namespace: ate-demo-counter-microvm
+  labels:
+    workload: counter-microvm
+spec:
+  replicas: 2
+  sandboxClass: microvm
+  sandboxConfigName: counter-microvm
+  ateomImage: ko://github.com/agent-substrate/substrate/cmd/ateom-microvm
+
+---
+
+apiVersion: ate.dev/v1alpha1
+kind: ActorTemplate
+metadata:
+  name: counter-microvm
+  namespace: ate-demo-counter-microvm
+spec:
+  # Must match the WorkerPool's sandboxClass: a snapshot is not portable across
+  # sandbox classes, so only pools of the same class are eligible to run this
+  # template's actors.
+  sandboxClass: microvm
+  pauseImage: "registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4"
+  containers:
+  - name: counter
+    image: ko://github.com/agent-substrate/substrate/demos/counter
+    command: ["/ko-app/counter"]
+    readyz:
+      httpGet:
+        path: /readyz
+        port: 80
+  workerSelector:
+    matchLabels:
+      workload: counter-microvm
+  snapshotsConfig:
+    location: gs://${BUCKET_NAME}/ate-demo-counter-microvm/

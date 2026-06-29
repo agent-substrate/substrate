@@ -135,6 +135,7 @@ spec:
         - "--status-port=4040"
         - "--port-https=8443"
         - "--envoy-cert-path=/run/servicedns.podcert.ate.dev/credential-bundle.pem"
+        - "--otlp-collector-address=opentelemetry-collector.gke-managed-otel.svc.cluster.local:4317"
         env:
         - name: POD_NAME
           valueFrom:

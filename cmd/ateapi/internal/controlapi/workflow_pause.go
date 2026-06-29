@@ -114,6 +114,8 @@ func (s *CallAteletPauseStep) Execute(ctx context.Context, input *PauseInput, st
 	}
 	client := ateletpb.NewAteomHerderClient(ateletConn)
 
+	workloadSpec := workloadSpecFromActorTemplate(state.ActorTemplate)
+
 	// Checkpoint does not carry the sandbox config: atelet uses the version the
 	// actor is currently running (recorded on-node at Run/Restore) and pins it
 	// into the snapshot manifest.
@@ -122,35 +124,16 @@ func (s *CallAteletPauseStep) Execute(ctx context.Context, input *PauseInput, st
 		ActorTemplateNamespace: state.Actor.GetActorTemplateNamespace(),
 		ActorTemplateName:      state.Actor.GetActorTemplateName(),
 		ActorId:                state.Actor.GetActorId(),
-		Spec: &ateletpb.WorkloadSpec{
-			PauseImage: state.ActorTemplate.Spec.PauseImage,
-		},
-		Type: ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
+		Spec:                   workloadSpec,
+		Type:                   ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
 		Config: &ateletpb.CheckpointRequest_LocalConfig{
 			LocalConfig: &ateletpb.LocalCheckpointConfiguration{
 				SnapshotPrefix: state.Actor.InProgressSnapshot,
 			},
 		},
+		Scope: toAteletSnapshotScope(state.ActorTemplate.Spec.SnapshotsConfig.OnPause),
 	}
-	for _, ctr := range state.ActorTemplate.Spec.Containers {
-		ateletCtr := &ateletpb.Container{
-			Name:    ctr.Name,
-			Image:   ctr.Image,
-			Command: ctr.Command,
-		}
-		for _, env := range ctr.Env {
-			var val string
-			if env.Value != nil {
-				val = *env.Value
-			}
-			ateletEnv := &ateletpb.EnvEntry{
-				Name:  env.Name,
-				Value: val,
-			}
-			ateletCtr.Env = append(ateletCtr.Env, ateletEnv)
-		}
-		req.Spec.Containers = append(req.Spec.Containers, ateletCtr)
-	}
+
 	_, err = client.Checkpoint(ctx, req)
 	if err != nil {
 		return fmt.Errorf("while checkpointing workload: %w", err)

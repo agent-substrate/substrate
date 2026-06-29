@@ -47,6 +47,20 @@ func sandboxConfig(name string, class SandboxClass, assets map[string]map[string
 
 func runscAsset() AssetFile { return AssetFile{URL: "gs://bucket/runsc", SHA256: validSHA256} }
 
+// microVMAssets returns a full, valid micro-VM asset set for one architecture:
+// the five assets the policy requires. The overlay rootfs serves the OCI image
+// over virtio-fs, so virtiofsd is part of the set.
+func microVMAssets() map[string]AssetFile {
+	a := AssetFile{URL: "gs://bucket/asset", SHA256: validSHA256}
+	return map[string]AssetFile{
+		"cloud-hypervisor": a,
+		"virtiofsd":        a,
+		"kata-kernel":      a,
+		"kata-image":       a,
+		"kata-config":      a,
+	}
+}
+
 // applyVAP installs the shipped ValidatingAdmissionPolicy + binding into the
 // envtest API server and waits for the apiserver to actually enforce it (policy
 // activation is asynchronous), confirmed by a sentinel that must be denied.
@@ -103,9 +117,31 @@ func TestSandboxConfigValidation(t *testing.T) {
 		sc:      sandboxConfig("ok-gvisor", SandboxClassGvisor, map[string]map[string]AssetFile{"amd64": {"runsc": runscAsset()}, "arm64": {"runsc": runscAsset()}}),
 		wantErr: false,
 	}, {
-		name:    "microvm is unconstrained by the gvisor rule",
-		sc:      sandboxConfig("ok-microvm", "microvm", map[string]map[string]AssetFile{"amd64": {"cloud-hypervisor": runscAsset()}}),
+		name:    "valid microvm with full asset set",
+		sc:      sandboxConfig("ok-microvm", "microvm", map[string]map[string]AssetFile{"amd64": microVMAssets()}),
 		wantErr: false,
+	}, {
+		name:    "valid microvm arm64 asset set",
+		sc:      sandboxConfig("ok-microvm-arm64", "microvm", map[string]map[string]AssetFile{"arm64": microVMAssets()}),
+		wantErr: false,
+	}, {
+		name: "microvm missing an asset",
+		sc: sandboxConfig("bad-microvm", "microvm", map[string]map[string]AssetFile{"amd64": func() map[string]AssetFile {
+			m := microVMAssets()
+			delete(m, "kata-image")
+			return m
+		}()}),
+		wantErr: true,
+		errMsg:  "microvm SandboxConfig must define",
+	}, {
+		name: "microvm missing virtiofsd",
+		sc: sandboxConfig("bad-microvm-novfsd", "microvm", map[string]map[string]AssetFile{"amd64": func() map[string]AssetFile {
+			m := microVMAssets()
+			delete(m, "virtiofsd")
+			return m
+		}()}),
+		wantErr: true,
+		errMsg:  "microvm SandboxConfig must define",
 	}, {
 		name:    "gvisor arch missing runsc",
 		sc:      sandboxConfig("bad-no-runsc", SandboxClassGvisor, map[string]map[string]AssetFile{"amd64": {"notrunsc": runscAsset()}}),

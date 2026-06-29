@@ -365,6 +365,109 @@ func TestActorTemplateValidation(t *testing.T) {
 		wantErr: true,
 		errMsg:  "Invalid value",
 	}, {
+		name: "valid Readyz with default path",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Containers[0].Readyz = &ContainerReadyz{
+				HTTPGet: &HTTPGetAction{Port: 8080},
+			}
+		},
+		wantErr: false,
+	}, {
+		name: "valid Readyz with explicit path",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Containers[0].Readyz = &ContainerReadyz{
+				HTTPGet: &HTTPGetAction{Path: "/health", Port: 8080},
+			}
+		},
+		wantErr: false,
+	}, {
+		name: "Readyz missing HTTPGet",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Containers[0].Readyz = &ContainerReadyz{}
+		},
+		wantErr: true,
+		errMsg:  "Required value",
+	}, {
+		name: "Readyz port zero",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Containers[0].Readyz = &ContainerReadyz{
+				HTTPGet: &HTTPGetAction{Port: 0},
+			}
+		},
+		wantErr: true,
+		errMsg:  "should be greater than or equal to 1",
+	}, {
+		name: "Readyz port too large",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Containers[0].Readyz = &ContainerReadyz{
+				HTTPGet: &HTTPGetAction{Port: 65536},
+			}
+		},
+		wantErr: true,
+		errMsg:  "should be less than or equal to 65535",
+	}, {
+		name: "Readyz Path with nested segments and percent encoding",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Containers[0].Readyz = &ContainerReadyz{
+				HTTPGet: &HTTPGetAction{Path: "/v1/health/check%20me", Port: 80},
+			}
+		},
+		wantErr: false,
+	}, {
+		name: "Readyz Path missing leading slash",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Containers[0].Readyz = &ContainerReadyz{
+				HTTPGet: &HTTPGetAction{Path: "readyz", Port: 80},
+			}
+		},
+		wantErr: true,
+		errMsg:  "should match",
+	}, {
+		name: "Readyz Path with query string",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Containers[0].Readyz = &ContainerReadyz{
+				HTTPGet: &HTTPGetAction{Path: "/readyz?check=1", Port: 80},
+			}
+		},
+		wantErr: true,
+		errMsg:  "should match",
+	}, {
+		name: "Readyz Path with fragment",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Containers[0].Readyz = &ContainerReadyz{
+				HTTPGet: &HTTPGetAction{Path: "/readyz#frag", Port: 80},
+			}
+		},
+		wantErr: true,
+		errMsg:  "should match",
+	}, {
+		name: "Readyz Path with whitespace",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Containers[0].Readyz = &ContainerReadyz{
+				HTTPGet: &HTTPGetAction{Path: "/ready z", Port: 80},
+			}
+		},
+		wantErr: true,
+		errMsg:  "should match",
+	}, {
+		name: "Readyz Path with bare percent",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Containers[0].Readyz = &ContainerReadyz{
+				HTTPGet: &HTTPGetAction{Path: "/foo%", Port: 80},
+			}
+		},
+		wantErr: true,
+		errMsg:  "should match",
+	}, {
+		name: "Readyz Path with malformed percent-escape",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Containers[0].Readyz = &ContainerReadyz{
+				HTTPGet: &HTTPGetAction{Path: "/bar%zz", Port: 80},
+			}
+		},
+		wantErr: true,
+		errMsg:  "should match",
+	}, {
 		name: "valid SandboxClass microvm",
 		mutate: func(at *ActorTemplate) {
 			at.Spec.SandboxClass = SandboxClassMicroVM
@@ -377,6 +480,440 @@ func TestActorTemplateValidation(t *testing.T) {
 		},
 		wantErr: true,
 		errMsg:  "Unsupported value",
+	}, {
+		name: "SnapshotsConfig: OnPause=Full, OnCommit=Full",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.SnapshotsConfig.OnPause = SnapshotScopeFull
+			at.Spec.SnapshotsConfig.OnCommit = SnapshotScopeFull
+		},
+		wantErr: false,
+	}, {
+		name: "SnapshotsConfig: OnPause=Full, OnCommit=Data",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.SnapshotsConfig.OnPause = SnapshotScopeFull
+			at.Spec.SnapshotsConfig.OnCommit = SnapshotScopeData
+		},
+		wantErr: false,
+	}, {
+		name: "SnapshotsConfig: OnPause=Data, OnCommit=Data",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.SnapshotsConfig.OnPause = SnapshotScopeData
+			at.Spec.SnapshotsConfig.OnCommit = SnapshotScopeData
+		},
+		wantErr: false,
+	}, {
+		name: "SnapshotsConfig: OnPause=Data, OnCommit=Full (invalid)",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.SnapshotsConfig.OnPause = SnapshotScopeData
+			at.Spec.SnapshotsConfig.OnCommit = SnapshotScopeFull
+		},
+		wantErr: true,
+		errMsg:  "onCommit must be a subset of onPause",
+	}, {
+		name: "SnapshotsConfig: OnPause=Data, OnCommit unset (defaults to Full, invalid)",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.SnapshotsConfig.OnPause = SnapshotScopeData
+		},
+		wantErr: true,
+		errMsg:  "onCommit must be a subset of onPause",
+	}, {
+		name: "SnapshotsConfig: OnPause unset (defaults to Full), OnCommit=Data",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.SnapshotsConfig.OnCommit = SnapshotScopeData
+		},
+		wantErr: false,
+	}, {
+		name: "SnapshotsConfig: OnPause invalid enum value",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.SnapshotsConfig.OnPause = SnapshotScope("bogus")
+		},
+		wantErr: true,
+		errMsg:  "Unsupported value",
+	}, {
+		name: "SnapshotsConfig: OnCommit invalid enum value",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.SnapshotsConfig.OnCommit = SnapshotScope("bogus")
+		},
+		wantErr: true,
+		errMsg:  "Unsupported value",
+	}, {
+		name: "Volumes: 1 DurableDir mount is valid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Volumes = []Volume{
+				{Name: "vol1", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
+			}
+			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
+				{Name: "vol1", MountPath: "/home"},
+			}
+		},
+		wantErr: false,
+	}, {
+		name: "Volumes: 2 DurableDir volumes in template is invalid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Volumes = []Volume{
+				{Name: "vol1", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
+				{Name: "vol2", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
+			}
+			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
+				{Name: "vol1", MountPath: "/home1"},
+				{Name: "vol2", MountPath: "/home2"},
+			}
+		},
+		wantErr: true,
+		errMsg:  "At most one DurableDir-typed volume is supported per ActorTemplate",
+	}, {
+		name: "Volumes: 2 DurableDir volumes spread across containers is invalid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Volumes = []Volume{
+				{Name: "vol1", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
+				{Name: "vol2", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
+			}
+			at.Spec.Containers = append(at.Spec.Containers, Container{
+				Name:  "sidecar",
+				Image: "busybox@sha256:326e0e090a9a4057e62a1b94236e7a2df2f2f76722f67232e0e47854e4df9c53",
+				VolumeMounts: []VolumeMount{
+					{Name: "vol2", MountPath: "/home2"},
+				},
+			})
+			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
+				{Name: "vol1", MountPath: "/home1"},
+			}
+		},
+		wantErr: true,
+		errMsg:  "At most one DurableDir-typed volume is supported per ActorTemplate",
+	}, {
+		name: "Volumes: same DurableDir volume mounted twice in one container is invalid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Volumes = []Volume{
+				{Name: "vol1", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
+			}
+			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
+				{Name: "vol1", MountPath: "/home1"},
+				{Name: "vol1", MountPath: "/home2"},
+			}
+		},
+		wantErr: true,
+		errMsg:  "A container may mount at most one DurableDir-typed volume",
+	}, {
+		name: "Volumes: same DurableDir volume mounted across two containers is valid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Volumes = []Volume{
+				{Name: "vol1", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
+			}
+			at.Spec.Containers = append(at.Spec.Containers, Container{
+				Name:  "sidecar",
+				Image: "busybox@sha256:326e0e090a9a4057e62a1b94236e7a2df2f2f76722f67232e0e47854e4df9c53",
+				VolumeMounts: []VolumeMount{
+					{Name: "vol1", MountPath: "/home-sidecar"},
+				},
+			})
+			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
+				{Name: "vol1", MountPath: "/home-main"},
+			}
+		},
+		wantErr: false,
+	}, {
+		name: "Volumes: VolumeSource with no source set is invalid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Volumes = []Volume{
+				{Name: "vol1", VolumeSource: VolumeSource{}},
+			}
+		},
+		wantErr: true,
+		errMsg:  "exactly one of the fields in [durableDir] must be set",
+	}, {
+		name: "Volumes: VolumeSource with no source set is invalid (mixed with a valid DurableDir volume)",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Volumes = []Volume{
+				{Name: "vol1", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
+				{Name: "vol2", VolumeSource: VolumeSource{}},
+			}
+			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
+				{Name: "vol1", MountPath: "/home1"},
+				{Name: "vol2", MountPath: "/mnt"},
+			}
+		},
+		wantErr: true,
+		errMsg:  "exactly one of the fields in [durableDir] must be set",
+	}, {
+		name: "Volumes: DurableDir MountPath with nested absolute path is valid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Volumes = []Volume{
+				{Name: "vol1", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
+			}
+			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
+				{Name: "vol1", MountPath: "/home/user/data"},
+			}
+		},
+		wantErr: false,
+	}, {
+		name: "Volumes: DurableDir MountPath as bare root is invalid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Volumes = []Volume{
+				{Name: "vol1", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
+			}
+			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
+				{Name: "vol1", MountPath: "/"},
+			}
+		},
+		wantErr: true,
+		errMsg:  "MountPath must be a clean absolute Unix path",
+	}, {
+		name: "Volumes: DurableDir MountPath with relative path is invalid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Volumes = []Volume{
+				{Name: "vol1", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
+			}
+			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
+				{Name: "vol1", MountPath: "home/user"},
+			}
+		},
+		wantErr: true,
+		errMsg:  "MountPath must be a clean absolute Unix path",
+	}, {
+		name: "Volumes: DurableDir MountPath as empty string is invalid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Volumes = []Volume{
+				{Name: "vol1", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
+			}
+			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
+				{Name: "vol1", MountPath: ""},
+			}
+		},
+		wantErr: true,
+		errMsg:  "MountPath must be a clean absolute Unix path",
+	}, {
+		name: "Volumes: DurableDir MountPath with leading whitespace is invalid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Volumes = []Volume{
+				{Name: "vol1", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
+			}
+			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
+				{Name: "vol1", MountPath: " /home"},
+			}
+		},
+		wantErr: true,
+		errMsg:  "MountPath must be a clean absolute Unix path",
+	}, {
+		name: "Volumes: DurableDir MountPath with trailing slash is invalid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Volumes = []Volume{
+				{Name: "vol1", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
+			}
+			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
+				{Name: "vol1", MountPath: "/home/"},
+			}
+		},
+		wantErr: true,
+		errMsg:  "MountPath must be a clean absolute Unix path",
+	}, {
+		name: "Volumes: DurableDir MountPath with consecutive slashes is invalid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Volumes = []Volume{
+				{Name: "vol1", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
+			}
+			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
+				{Name: "vol1", MountPath: "/home//user"},
+			}
+		},
+		wantErr: true,
+		errMsg:  "MountPath must be a clean absolute Unix path",
+	}, {
+		name: "Volumes: DurableDir MountPath containing ':' is invalid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Volumes = []Volume{
+				{Name: "vol1", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
+			}
+			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
+				{Name: "vol1", MountPath: "/ho:me"},
+			}
+		},
+		wantErr: true,
+		errMsg:  "MountPath must be a clean absolute Unix path",
+	}, {
+		name: "Volumes: DurableDir MountPath with '..' component is invalid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Volumes = []Volume{
+				{Name: "vol1", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
+			}
+			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
+				{Name: "vol1", MountPath: "/home/../etc"},
+			}
+		},
+		wantErr: true,
+		errMsg:  "MountPath must be a clean absolute Unix path",
+	}, {
+		name: "Volumes: DurableDir MountPath with trailing '..' is invalid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Volumes = []Volume{
+				{Name: "vol1", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
+			}
+			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
+				{Name: "vol1", MountPath: "/home/.."},
+			}
+		},
+		wantErr: true,
+		errMsg:  "MountPath must be a clean absolute Unix path",
+	}, {
+		name: "Volumes: DurableDir MountPath with '.' component is invalid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Volumes = []Volume{
+				{Name: "vol1", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
+			}
+			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
+				{Name: "vol1", MountPath: "/home/./user"},
+			}
+		},
+		wantErr: true,
+		errMsg:  "MountPath must be a clean absolute Unix path",
+	}, {
+		name: "Volumes: DurableDir MountPath containing dotfile is valid (only bare '.' / '..' components are rejected)",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Volumes = []Volume{
+				{Name: "vol1", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
+			}
+			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
+				{Name: "vol1", MountPath: "/home/.config"},
+			}
+		},
+		wantErr: false,
+	}, {
+		name: "Volumes: DurableDir MountPath with segment starting with '..' is valid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Volumes = []Volume{
+				{Name: "vol1", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
+			}
+			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
+				{Name: "vol1", MountPath: "/home/..config"},
+			}
+		},
+		wantErr: false,
+	}, {
+		name: "Volumes: DurableDir MountPath with embedded dots inside a segment is valid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Volumes = []Volume{
+				{Name: "vol1", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
+			}
+			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
+				{Name: "vol1", MountPath: "/home/x..y"},
+			}
+		},
+		wantErr: false,
+	}, {
+		name: "Volumes: DurableDir MountPath with spaces is valid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Volumes = []Volume{
+				{Name: "vol1", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
+			}
+			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
+				{Name: "vol1", MountPath: "/my home directory"},
+			}
+		},
+		wantErr: false,
+	}, {
+		name: "Volumes: DurableDir MountPath with NUL byte is invalid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Volumes = []Volume{
+				{Name: "vol1", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
+			}
+			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
+				{Name: "vol1", MountPath: "/home\x00/user"},
+			}
+		},
+		wantErr: true,
+		errMsg:  "MountPath must be a clean absolute Unix path",
+	}, {
+		name: "Volumes: DurableDir MountPath with control character is invalid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Volumes = []Volume{
+				{Name: "vol1", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
+			}
+			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
+				{Name: "vol1", MountPath: "/home\t/user"},
+			}
+		},
+		wantErr: true,
+		errMsg:  "MountPath must be a clean absolute Unix path",
+	}, {
+		name: "Volumes: DurableDir mount with invalid MountPath in second container is rejected",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Volumes = []Volume{
+				{Name: "vol1", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
+			}
+			at.Spec.Containers = append(at.Spec.Containers, Container{
+				Name:  "sidecar",
+				Image: "busybox@sha256:326e0e090a9a4057e62a1b94236e7a2df2f2f76722f67232e0e47854e4df9c53",
+				VolumeMounts: []VolumeMount{
+					{Name: "vol1", MountPath: "home1"},
+				},
+			})
+			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
+				{Name: "vol1", MountPath: "/home1"},
+			}
+		},
+		wantErr: true,
+		errMsg:  "MountPath must be a clean absolute Unix path",
+	}, {
+		name: "Volumes: Volume Name with uppercase is invalid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Volumes = []Volume{
+				{Name: "Vol1", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
+			}
+		},
+		wantErr: true,
+		errMsg:  "Name must be a valid DNS label",
+	}, {
+		name: "Volumes: Volume Name with underscore is invalid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Volumes = []Volume{
+				{Name: "vol_1", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
+			}
+		},
+		wantErr: true,
+		errMsg:  "Name must be a valid DNS label",
+	}, {
+		name: "Volumes: VolumeMount Name with uppercase is invalid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Volumes = []Volume{
+				{Name: "vol1", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
+			}
+			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
+				{Name: "Vol1", MountPath: "/home/user"},
+			}
+		},
+		wantErr: true,
+		errMsg:  "Name must be a valid DNS label",
+	}, {
+		name: "Volumes: DurableDir volume with SandboxClass microvm is invalid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.SandboxClass = SandboxClassMicroVM
+			at.Spec.Volumes = []Volume{
+				{Name: "vol1", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
+			}
+			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
+				{Name: "vol1", MountPath: "/home/user"},
+			}
+		},
+		wantErr: true,
+		errMsg:  "DurableDir volumes are not supported when sandboxClass is 'microvm'",
+	}, {
+		name: "Volumes: DurableDir volume with SandboxClass gvisor is valid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.SandboxClass = SandboxClassGvisor
+			at.Spec.Volumes = []Volume{
+				{Name: "vol1", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
+			}
+			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
+				{Name: "vol1", MountPath: "/home/user"},
+			}
+		},
+		wantErr: false,
+	}, {
+		name: "Volumes: SandboxClass microvm without DurableDir volumes is valid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.SandboxClass = SandboxClassMicroVM
+		},
+		wantErr: false,
 	}}
 
 	for _, tt := range tests {
@@ -398,6 +935,41 @@ func TestActorTemplateValidation(t *testing.T) {
 				_ = k8sClient.Delete(ctx, at)
 			}
 		})
+	}
+}
+
+func TestActorTemplateReadyzPathDefault(t *testing.T) {
+	ctx := t.Context()
+
+	at := &ActorTemplate{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "readyz-default",
+			Namespace: "default",
+		},
+		Spec: ActorTemplateSpec{
+			PauseImage: "gcr.io/gke-release/pause@sha256:bcbd57ba5653580ec647b16d8163cdd1112df3609129b01f912a8032e48265da",
+			Containers: []Container{{
+				Name:  "main",
+				Image: "busybox@sha256:326e0e090a9a4057e62a1b94236e7a2df2f2f76722f67232e0e47854e4df9c53",
+				Readyz: &ContainerReadyz{
+					HTTPGet: &HTTPGetAction{Port: 8080},
+				},
+			}},
+			SnapshotsConfig: SnapshotsConfig{Location: "gs://test-bucket/test-folder"},
+			WorkerSelector:  &metav1.LabelSelector{MatchLabels: map[string]string{"pool": "test-pool"}},
+		},
+	}
+	if err := k8sClient.Create(ctx, at); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	defer func() { _ = k8sClient.Delete(ctx, at) }()
+
+	got := &ActorTemplate{}
+	if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(at), got); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if want, gotPath := "/readyz", got.Spec.Containers[0].Readyz.HTTPGet.Path; gotPath != want {
+		t.Errorf("Readyz.HTTPGet.Path = %q, want %q (CRD default)", gotPath, want)
 	}
 }
 

@@ -136,6 +136,23 @@ func LocalCheckpointsDir(actorTemplateNamespace, actorTemplateName, actorID stri
 	)
 }
 
+// DurableDirVolumeMountsDir is the directory where individual durable-dir
+// volumes are mounted.
+func DurableDirVolumeMountsDir(actorTemplateNamespace, actorTemplateName, actorID string) string {
+	return filepath.Join(
+		ActorPath(actorTemplateNamespace, actorTemplateName, actorID),
+		"durable-dir",
+	)
+}
+
+// DurableDirVolumeMountPoint returns the path where a specific durable-dir volume is mounted on the nodeVM.
+func DurableDirVolumeMountPoint(actorTemplateNamespace, actorTemplateName, actorID, volumeName string) string {
+	return filepath.Join(
+		DurableDirVolumeMountsDir(actorTemplateNamespace, actorTemplateName, actorID),
+		volumeName,
+	)
+}
+
 // RestoreStateDir is the local directory to use to restore an actor from a
 // checkpoint downloaded from GCS.
 //

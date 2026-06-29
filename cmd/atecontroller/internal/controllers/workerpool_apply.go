@@ -60,6 +60,7 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool) *appsv1ac.Deployment
 				WithType(corev1.HostPathDirectoryOrCreate)))
 
 	applyWorkerPoolPodTemplate(podSpecAC, containerAC, wp.Spec.Template)
+	maybeApplyMicroVMPodShape(podSpecAC, containerAC, wp.Spec.SandboxClass)
 	podSpecAC.WithContainers(containerAC)
 
 	return appsv1ac.Deployment(deploymentName(wp.Name), wp.Namespace).
@@ -79,6 +80,53 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool) *appsv1ac.Deployment
 					"ate.dev/worker-pool": wp.Name,
 				}).
 				WithSpec(podSpecAC)))
+}
+
+// maybeApplyMicroVMPodShape adds the /dev/kvm device and node placement a
+// micro-VM (kata + cloud-hypervisor) worker pool needs, on top of any
+// pod-template settings. No-op unless sandboxClass is the micro-VM class.
+//
+// TODO: this hardcodes one sandbox class's pod requirements in the controller.
+// Consider making it generic so a sandbox class can declare its own pod shape
+// (e.g. required devices/mounts + node placement on the SandboxConfig spec)
+// instead of branching on SandboxClass here, so new classes don't need a
+// controller change.
+func maybeApplyMicroVMPodShape(
+	podSpecAC *corev1ac.PodSpecApplyConfiguration,
+	containerAC *corev1ac.ContainerApplyConfiguration,
+	sandboxClass atev1alpha1.SandboxClass,
+) {
+	if sandboxClass != atev1alpha1.SandboxClassMicroVM {
+		return
+	}
+
+	// The micro-VM runtime needs /dev/kvm. The container is already privileged
+	// (so it can also reach vhost devices), but we mount /dev/kvm explicitly.
+	containerAC.WithVolumeMounts(corev1ac.VolumeMount().
+		WithName("dev-kvm").
+		WithMountPath("/dev/kvm"))
+	podSpecAC.WithVolumes(corev1ac.Volume().
+		WithName("dev-kvm").
+		WithHostPath(corev1ac.HostPathVolumeSource().
+			WithPath("/dev/kvm").
+			WithType(corev1.HostPathCharDev)))
+
+	// Pin placement to KVM-capable, nested-virt nodes via nodeSelector +
+	// toleration on ate.dev/sandboxClass=microvm. This is our own convention
+	// (GKE attaches no label/taint to nested-virt pools): applied to kind nodes
+	// by hack/create-kind-cluster.sh and via --node-labels at GKE pool creation.
+	// Additive on top of the WorkerPool's configurable scheduling fields
+	// (spec.template nodeSelector/tolerations/affinity, added in #247) — merge,
+	// don't overwrite.
+	if podSpecAC.NodeSelector == nil {
+		podSpecAC.NodeSelector = map[string]string{}
+	}
+	podSpecAC.NodeSelector["ate.dev/sandboxClass"] = string(atev1alpha1.SandboxClassMicroVM)
+	podSpecAC.WithTolerations(corev1ac.Toleration().
+		WithKey("ate.dev/sandboxClass").
+		WithOperator(corev1.TolerationOpEqual).
+		WithValue(string(atev1alpha1.SandboxClassMicroVM)).
+		WithEffect(corev1.TaintEffectNoSchedule))
 }
 
 func applyWorkerPoolPodTemplate(

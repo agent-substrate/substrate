@@ -32,6 +32,8 @@ import (
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+
+	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 )
 
 const (
@@ -51,7 +53,7 @@ const (
 	ActorIDFileName = "actor-id"
 )
 
-func prepareOCIDirectory(ctx context.Context, pullCache *memorypullcache.MemoryPullCache, actorTemplateNamespace, actorTemplateName, actorID, containerName, ref string, args []string, env []string, annotations map[string]string, netns string, identityDir string) error {
+func prepareOCIDirectory(ctx context.Context, pullCache *memorypullcache.MemoryPullCache, actorTemplateNamespace, actorTemplateName, actorID, containerName, ref string, args []string, env []string, annotations map[string]string, netns string, identityDir string, durableDirVolumeMounts []*ateletpb.VolumeMount) error {
 	tracer := otel.Tracer("prepareOCIDirectory")
 
 	ctx, span := tracer.Start(ctx, "prepareOCIDirectory")
@@ -88,7 +90,7 @@ func prepareOCIDirectory(ctx context.Context, pullCache *memorypullcache.MemoryP
 		}
 	}
 
-	ociSpec := buildActorOCISpec(imageEnv, args, env, annotations, netns, identityDir)
+	ociSpec := buildActorOCISpec(actorTemplateNamespace, actorTemplateName, actorID, imageEnv, args, env, annotations, netns, identityDir, durableDirVolumeMounts)
 	ociSpecBytes, err := json.MarshalIndent(ociSpec, "", "  ")
 	if err != nil {
 		return fmt.Errorf("while marshaling OCI spec: %w", err)
@@ -129,7 +131,7 @@ func mergeActorEnv(imageEnv, templateEnv []string) []string {
 // When identityDir is non-empty it adds a read-only bind mount of that host
 // directory at IdentityMountPath so the actor can read its own ID (see
 // IdentityMountPath for why this is a bind mount rather than env vars).
-func buildActorOCISpec(imageEnv []string, args []string, env []string, annotations map[string]string, netns string, identityDir string) *specs.Spec {
+func buildActorOCISpec(actorTemplateNamespace string, actorTemplateName string, actorID string, imageEnv []string, args []string, env []string, annotations map[string]string, netns string, identityDir string, durableDirVolumeMounts []*ateletpb.VolumeMount) *specs.Spec {
 	envVars := mergeActorEnv(imageEnv, env)
 
 	mounts := []specs.Mount{
@@ -170,7 +172,7 @@ func buildActorOCISpec(imageEnv []string, args []string, env []string, annotatio
 		})
 	}
 
-	return &specs.Spec{
+	spec := &specs.Spec{
 		Process: &specs.Process{
 			User: specs.User{
 				UID: 0,
@@ -238,6 +240,17 @@ func buildActorOCISpec(imageEnv []string, args []string, env []string, annotatio
 		},
 		Annotations: annotations,
 	}
+
+	// Prepare and mount durable-dir volumes.
+	for _, vm := range durableDirVolumeMounts {
+		spec.Mounts = append(spec.Mounts, specs.Mount{
+			Destination: vm.GetMountPath(),
+			Type:        "bind",
+			Source:      ateompath.DurableDirVolumeMountPoint(actorTemplateNamespace, actorTemplateName, actorID, vm.GetName()),
+		})
+	}
+
+	return spec
 }
 
 // createMountPoint creates the directory mountPath (an absolute in-rootfs

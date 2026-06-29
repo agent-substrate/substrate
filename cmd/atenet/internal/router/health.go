@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"k8s.io/client-go/kubernetes"
 )
 
@@ -50,10 +51,11 @@ type routerHealth struct {
 
 	report RouterHealthReport
 
-	interval  time.Duration
-	clientset kubernetes.Interface
-	apiClient ateapipb.ControlClient
-	cfg       RouterConfig
+	interval    time.Duration
+	clientset   kubernetes.Interface
+	apiClient   ateapipb.ControlClient
+	cfg         RouterConfig
+	envoyClient *http.Client
 }
 
 func newRouterHealth(interval time.Duration, clientset kubernetes.Interface, apiClient ateapipb.ControlClient, cfg RouterConfig) *routerHealth {
@@ -61,10 +63,11 @@ func newRouterHealth(interval time.Duration, clientset kubernetes.Interface, api
 		interval = time.Second
 	}
 	return &routerHealth{
-		interval:  interval,
-		clientset: clientset,
-		apiClient: apiClient,
-		cfg:       cfg,
+		interval:    interval,
+		clientset:   clientset,
+		apiClient:   apiClient,
+		cfg:         cfg,
+		envoyClient: &http.Client{Transport: otelhttp.NewTransport(http.DefaultTransport)},
 	}
 }
 
@@ -152,7 +155,7 @@ func (rh *routerHealth) checkEnvoy(ctx context.Context) (bool, string) {
 		return false, err.Error()
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := rh.envoyClient.Do(req)
 	if err != nil {
 		return false, err.Error()
 	}

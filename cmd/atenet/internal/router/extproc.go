@@ -25,8 +25,11 @@ import (
 
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 	envoy_type "github.com/envoyproxy/go-control-plane/envoy/type/v3"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
+	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
+	"go.opentelemetry.io/otel/propagation"
 	"google.golang.org/grpc"
 
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -53,7 +56,9 @@ func NewExtProcServer(port int, apiClient ateapipb.ControlClient, routeDuration 
 }
 
 func (s *ExtProcServer) Serve(ctx context.Context, lis net.Listener) error {
-	grpcServer := grpc.NewServer()
+	grpcServer := grpc.NewServer(
+		grpc.StatsHandler(otelgrpc.NewServerHandler()),
+	)
 	extprocv3.RegisterExternalProcessorServer(grpcServer, s)
 
 	errChan := make(chan error, 1)
@@ -128,6 +133,14 @@ func (s *ExtProcServer) handleRequestHeaders(
 ) (*extprocv3.HeadersResponse, *requestMetadata, string, string, string, error) {
 	metadata := newRequestMetadata(reqHeaders.Headers.GetHeaders())
 	slog.InfoContext(ctx, "Request", slog.String("host", metadata.host))
+
+	// Envoy doesn't propagate trace context into the ext_proc gRPC
+	// stream's metadata — the per-request traceparent arrives in the
+	// HTTP headers carried inside the ProcessingRequest payload. Extract
+	// from there so our span links to the Envoy ingress span.
+	ctx = otel.GetTextMapPropagator().Extract(ctx, propagation.MapCarrier(metadata.headers))
+	ctx, span := otel.Tracer(routerServiceName).Start(ctx, "ExtProc.RequestHeaders")
+	defer span.End()
 
 	actorID, err := parseActorID(metadata.host)
 	if err != nil {

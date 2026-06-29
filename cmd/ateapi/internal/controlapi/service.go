@@ -16,6 +16,7 @@ package controlapi
 
 import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"k8s.io/client-go/kubernetes"
@@ -36,6 +37,7 @@ var _ ateapipb.ControlServer = (*Service)(nil)
 // NewService creates a service.
 func NewService(
 	persistence store.Interface,
+	workerCache *workercache.Cache,
 	actorTemplateLister listersv1alpha1.ActorTemplateLister,
 	workerPoolLister listersv1alpha1.WorkerPoolLister,
 	sandboxConfigLister listersv1alpha1.SandboxConfigLister,
@@ -47,7 +49,7 @@ func NewService(
 		actorTemplateLister: actorTemplateLister,
 		workerPoolLister:    workerPoolLister,
 		dialer:              dialer,
-		actorWorkflow:       NewActorWorkflow(persistence, dialer, actorTemplateLister, workerPoolLister, sandboxConfigLister, kubeClient),
+		actorWorkflow:       NewActorWorkflow(persistence, workerCache, dialer, actorTemplateLister, workerPoolLister, sandboxConfigLister, kubeClient),
 	}
 
 	return s

@@ -88,7 +88,7 @@ The `ActorTemplate` defines the code, environment, and state-management policies
 
 | Field | Type | Description |
 | :--- | :--- | :--- |
-| `containers` | `[]Container` | **Required.** The workload definition (image, command, env, ports). |
+| `containers` | `[]Container` | **Required.** The workload definition (image, command, env, ports). Each container may also declare an optional `readyz` HTTP probe — see [Container Readiness Probe](#container-readiness-probe-readyz). |
 | `sandboxClass` | `string` | Optional. The sandbox runtime family this template's actors require: `gvisor` (default) or `microvm`. Only `WorkerPool`s whose `sandboxClass` matches are eligible. |
 | `workerSelector` | `*LabelSelector` | Optional. Gates which `WorkerPool`s actors from this template may use, by matching against each pool's labels. If unset, all pools are eligible (subject to the actor's own `worker_selector`). |
 | `snapshotsConfig` | `SnapshotsConfig` | **Required.** GCS bucket and folder where memory snapshots are stored. |
@@ -110,6 +110,25 @@ Substrate bind-mounts a read-only, per-actor identity directory at **`/run/ate`*
 
 Read it fresh rather than caching it at process start. It is delivered as a per-actor bind mount, not an environment variable, precisely so it carries the correct ID after a resume from the golden snapshot — an env var (or a file baked into the image) would be frozen at the *golden* actor's ID, since it lives in the checkpointed process memory, and would therefore be identical for every actor of the template.
 
+### Container Readiness Probe (`readyz`)
+
+Each entry in `containers` may declare an optional **HTTP readiness probe** so the platform only treats the actor as "started" once the workload is actually serving traffic. This mirrors the role of `readinessProbe.httpGet` on a Kubernetes Pod container, but the gate is enforced inside ateom (the in-pod sandbox driver) rather than by the kubelet.
+
+| Field | Type | Description |
+| :--- | :--- | :--- |
+| `readyz.httpGet.path` | `string` | Optional. URL path to GET. Defaults to `/readyz`. Must begin with `/` and contain only RFC 3986 path characters (no query string `?` or fragment `#`). |
+| `readyz.httpGet.port` | `int32` | **Required.** TCP port on the container to probe (`1..65535`). |
+
+How it behaves:
+
+- **Where the probe runs.** ateom (gVisor or microvm) reaches the container at the actor's interior IP (`169.254.17.2` today) — one network hop, no DNS, no router involved.
+- **Block-until-ready semantics.** `RunWorkload` (cold start) and `RestoreWorkload` (resume from snapshot) only return successfully after every container with a `readyz` block returns HTTP 200. A failure surfaces as a Run/Restore error and is retried by the control plane; the overall wait is bounded by an internal 30s deadline.
+- **Aggressive polling.** The poll loop is tuned for single-millisecond detection latency: a keep-alive HTTP client with a ~500µs interval and 250ms per-request timeout. While the workload is still booting, kernel `RST`s return in microseconds, so the loop spends almost no time blocked; once the listener is up, the next attempt completes on veth-local latency.
+- **Golden snapshot warm-up shortcut.** When **every** container in a template declares `readyz`, the actor template controller skips its default ~20s "give the workload time to settle" delay before taking the golden snapshot — `ResumeActor` already blocked until the workload reported 200, so the workload is known to be initialized. Templates that omit `readyz` on any container keep the 20s warm-up as a safety net.
+- **Snapshot/restore interaction.** The TCP listener is part of the checkpointed RAM, so on resume `readyz` typically returns 200 on the first attempt, with no observable latency penalty.
+
+If `readyz` is omitted from a container, the prior "started == ready" behavior is preserved — the platform considers the container ready as soon as `runsc start` / `vm.boot` returns.
+
 ### Example
 
 ```yaml
@@ -128,6 +147,12 @@ spec:
     command: ["/app/server"]
     ports:
     - containerPort: 80
+    # Optional: gate Run/Restore on the agent's HTTP readiness endpoint.
+    # See "Container Readiness Probe (readyz)" above.
+    readyz:
+      httpGet:
+        path: /readyz
+        port: 80
   # sandboxClass defaults to gvisor; set to microvm to require micro-VM pools.
   sandboxClass: gvisor
   workerSelector:
@@ -175,6 +200,12 @@ spec:
         url: "gs://gvisor/releases/nightly/2026-05-19/aarch64/runsc"
         sha256: "1ba2366ae2efceba166046f51a4104f9261c9cb72c6db8f5b3fe2dc57dea86b9"
 ```
+
+### Micro-VM SandboxConfig
+
+A `microvm` `SandboxConfig` supplies the [Kata Containers](https://katacontainers.io/) + [Cloud Hypervisor](https://www.cloudhypervisor.org/) toolchain instead of `runsc`. Each architecture must define the full asset set — `kata-shim`, `cloud-hypervisor`, `virtiofsd`, `kata-kernel`, `kata-image`, and `kata-config` — which a `ValidatingAdmissionPolicy` enforces at apply time. Worker pods for a micro-VM pool require `/dev/kvm` and nested-virtualization-capable nodes labeled `ate.dev/sandboxClass=microvm` (the controller adds the device mount and node placement automatically).
+
+See [`hack/microvm-assets/`](../hack/microvm-assets/) for scripts that assemble and stage these assets, plus a worked counter demo (`demos/counter/counter-microvm.yaml.tmpl`) that suspends and resumes an in-RAM counter across worker pods.
 
 ---
 

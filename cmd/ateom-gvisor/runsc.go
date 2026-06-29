@@ -34,19 +34,17 @@ type runsc struct {
 	actorID                string
 }
 
-func (r *runsc) cmdCreate(ctx context.Context, out io.Writer, containerName string) error {
+func (r *runsc) cmdCreate(ctx context.Context, out io.Writer, containerName string, additionalArgs []string) error {
 	reapLock.RLock()
 	defer reapLock.RUnlock()
 
 	slog.InfoContext(ctx, "About to run runsc create", slog.String("container", containerName))
 
-	cmd := exec.CommandContext(
-		ctx,
-		r.path,
+	args := []string{
 		"-log-format", "json",
 		"--alsologtostderr",
 		// "-debug",
-		// "-debug-log", ateompath.RunscDebugLogDir(r.actorTemplateNamespace, r.actorTemplateName, r.actorID, containerName)+"/",
+		// "-debug-log", ateompath.RunscDebugLogDir(r.actorTemplateNamespace, r.actorTemplateName, r.actorID, containerName) + "/",
 		// "-debug-to-user-log",
 		// "-log-packets",
 		// "-strace",
@@ -54,7 +52,14 @@ func (r *runsc) cmdCreate(ctx context.Context, out io.Writer, containerName stri
 		"create",
 		"-bundle", ateompath.OCIBundlePath(r.actorTemplateNamespace, r.actorTemplateName, r.actorID, containerName),
 		"-pid-file", ateompath.PIDFilePath(r.actorTemplateNamespace, r.actorTemplateName, r.actorID, containerName),
-		containerName, // Name of the container
+	}
+
+	args = append(args, additionalArgs...)
+	args = append(args, containerName) // Name of the container
+	cmd := exec.CommandContext(
+		ctx,
+		r.path,
+		args...,
 	)
 	cmd.Stdout = out
 	cmd.Stderr = out
@@ -125,6 +130,45 @@ func (r *runsc) cmdCheckpoint(ctx context.Context, containerName, checkpointPath
 	err := cmd.Run()
 	if err != nil {
 		return fmt.Errorf("while running `runsc checkpoint`: %w", err)
+	}
+	return nil
+}
+
+func (r *runsc) cmdFsCheckpoint(ctx context.Context, containerName, checkpointPath string, durableDirMounts []string) error {
+	reapLock.RLock()
+	defer reapLock.RUnlock()
+
+	slog.InfoContext(ctx, "About to run runsc fscheckpoint", slog.String("container", containerName))
+
+	args := []string{
+		"-log-format", "json",
+		"--alsologtostderr",
+		// "-debug",
+		// "-debug-log", ateompath.RunscDebugLogDir(r.actorTemplateNamespace, r.actorTemplateName, r.actorID, containerName)+"/",
+		// "-debug-to-user-log",
+		// "-log-packets",
+		// "-strace",
+		"-root", ateompath.RunSCStateDir(r.actorTemplateNamespace, r.actorTemplateName, r.actorID),
+		"fscheckpoint",
+		"-image-path", checkpointPath,
+	}
+	for _, ddv := range durableDirMounts {
+		args = append(args, "-path", ddv)
+	}
+
+	// name of the container must be the last parameter.
+	args = append(args, containerName)
+
+	cmd := exec.CommandContext(
+		ctx,
+		r.path,
+		args...,
+	)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	err := cmd.Run()
+	if err != nil {
+		return fmt.Errorf("while running `runsc fscheckpoint`: %w", err)
 	}
 	return nil
 }

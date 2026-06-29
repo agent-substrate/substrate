@@ -24,14 +24,16 @@ import (
 	"net"
 	"os"
 	"runtime"
+	"sort"
 	"sync"
 
 	"cloud.google.com/go/compute/metadata"
-	"github.com/agent-substrate/substrate/cmd/ateom-gvisor/internal/ateom"
+	"github.com/agent-substrate/substrate/internal/actorlog"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/contextlogging"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/readyz"
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/agent-substrate/substrate/internal/version"
 	"github.com/google/nftables"
@@ -86,7 +88,7 @@ func do(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
-	syncedWriter := ateom.NewSyncedWriter(os.Stdout)
+	syncedWriter := actorlog.NewSyncedWriter(os.Stdout)
 	logger := slog.New(contextlogging.NewHandler(slog.NewJSONHandler(syncedWriter, nil)))
 	slog.SetDefault(logger)
 
@@ -134,7 +136,7 @@ func do(ctx context.Context) error {
 		return fmt.Errorf("while creating ateom-interior netns: %w", err)
 	}
 
-	actorLogger := ateom.NewActorLogger(syncedWriter, metadata.OnGCE())
+	actorLogger := actorlog.NewActorLogger(syncedWriter, metadata.OnGCE())
 	ateomService := NewService(interiorNetNS, actorLogger)
 
 	svr := grpc.NewServer(
@@ -161,13 +163,13 @@ type AteomService struct {
 	lock sync.Mutex
 
 	interiorNetNS netns.NsHandle
-	actorLogger   *ateom.ActorLogger
+	actorLogger   *actorlog.ActorLogger
 }
 
 var _ ateompb.AteomServer = (*AteomService)(nil)
 
 // NewService creates a new AteomService.
-func NewService(interiorNetNS netns.NsHandle, actorLogger *ateom.ActorLogger) *AteomService {
+func NewService(interiorNetNS netns.NsHandle, actorLogger *actorlog.ActorLogger) *AteomService {
 	svc := &AteomService{
 		interiorNetNS: interiorNetNS,
 		actorLogger:   actorLogger,
@@ -203,7 +205,7 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	}
 
 	// Create and start pause container
-	if err := rcmd.cmdCreate(ctx, os.Stdout, "pause"); err != nil {
+	if err := rcmd.cmdCreate(ctx, os.Stdout, "pause", nil); err != nil {
 		return nil, fmt.Errorf("while creating pause container: %w", err)
 	}
 	if err := rcmd.cmdStart(ctx, os.Stdout, "pause"); err != nil {
@@ -218,12 +220,17 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 			return nil, fmt.Errorf("while starting json log pipe for %q: %w", ac.GetName(), err)
 		}
 		defer pw.Close()
-		if err := rcmd.cmdCreate(ctx, pw, ac.GetName()); err != nil {
+		if err := rcmd.cmdCreate(ctx, pw, ac.GetName(), nil); err != nil {
 			return nil, fmt.Errorf("while creating %q application container: %w", ac.GetName(), err)
 		}
 		if err := rcmd.cmdStart(ctx, pw, ac.GetName()); err != nil {
 			return nil, fmt.Errorf("while starting %q application container: %w", ac.GetName(), err)
 		}
+	}
+
+	// Block until every readyz-enabled container reports 200.
+	if err := readyz.WaitAll(ctx, req.GetSpec().GetContainers(), actorVethIP); err != nil {
+		return nil, fmt.Errorf("while waiting for container readyz: %w", err)
 	}
 
 	s.actorLogger.EmitLifecycleLog("Actor started", req.GetActorId(), req.GetActorTemplateName(), req.GetActorTemplateNamespace())
@@ -254,9 +261,27 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 		return nil, fmt.Errorf("while creating checkpoint directory: %w", err)
 	}
 
-	// Checkpoint pause container (root of the sandbox)
-	if err := rcmd.cmdCheckpoint(ctx, "pause", checkpointPath); err != nil {
-		return nil, fmt.Errorf("while checkpointing pause: %w", err)
+	// Always take durable-dir snapshot if at least one container has a durable-dir volume mount.
+	// TODO(dberkov): this is a temporary workaround until gVisor supports taking durable-dir snapshots in a single request with the process snapshot.
+	switch req.GetScope() {
+	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA:
+		var ddv []string
+		for _, ctr := range req.GetSpec().GetContainers() {
+			ddv = append(ddv, ctr.GetDurableDirVolumes()...)
+		}
+		if len(ddv) == 0 {
+			return nil, fmt.Errorf("no durable-dir volumes found for DATA snapshot")
+		}
+		if err := rcmd.cmdFsCheckpoint(ctx, "pause", checkpointPath, ddv); err != nil {
+			return nil, fmt.Errorf("while fscheckpointing durable-dir %q: %w", ddv[0], err)
+		}
+	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL:
+		// Checkpoint pause container (root of the sandbox)
+		if err := rcmd.cmdCheckpoint(ctx, "pause", checkpointPath); err != nil {
+			return nil, fmt.Errorf("while checkpointing pause: %w", err)
+		}
+	default:
+		return nil, fmt.Errorf("unsupported snapshot scope: %v", req.GetScope())
 	}
 
 	// After checkpointing the sandbox root, runsc may no longer have a usable
@@ -273,9 +298,33 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 
 	s.cleanupActorNetworkOrExit(ctx, "Failed to clean up actor network after checkpoint")
 
+	// Report exactly the files runsc wrote so atelet ships precisely this set
+	// (checkpoint.img plus any pages images), rather than a hardcoded list.
+	snapshotFiles, err := listSnapshotFiles(checkpointPath)
+	if err != nil {
+		return nil, fmt.Errorf("while listing checkpoint files: %w", err)
+	}
+
 	s.actorLogger.EmitLifecycleLog("Actor checkpointed", req.GetActorId(), req.GetActorTemplateName(), req.GetActorTemplateNamespace())
 
-	return nil, nil
+	return &ateompb.CheckpointWorkloadResponse{SnapshotFiles: snapshotFiles}, nil
+}
+
+// listSnapshotFiles returns the (relative) names of regular files directly under
+// dir, which atelet ships to object storage as the snapshot.
+func listSnapshotFiles(dir string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	var files []string
+	for _, e := range entries {
+		if e.Type().IsRegular() {
+			files = append(files, e.Name())
+		}
+	}
+	sort.Strings(files)
+	return files, nil
 }
 
 func (r *runsc) cleanupContainersAfterCheckpoint(ctx context.Context, containers []*ateompb.Container) error {
@@ -334,12 +383,25 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 
 	checkpointDir := ateompath.RestoreStateDir(req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId())
 
-	// Create and restore pause container
-	if err := rcmd.cmdCreate(ctx, os.Stdout, "pause"); err != nil {
-		return nil, fmt.Errorf("while creating pause container: %w", err)
-	}
-	if err := rcmd.cmdRestore(ctx, os.Stdout, "pause", checkpointDir); err != nil {
-		return nil, fmt.Errorf("while starting pause container: %w", err)
+	switch req.GetScope() {
+	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA:
+		// Create and restore pause container
+		if err := rcmd.cmdCreate(ctx, os.Stdout, "pause", []string{"--fs-restore-image-path", checkpointDir}); err != nil {
+			return nil, fmt.Errorf("while creating pause container: %w", err)
+		}
+		if err := rcmd.cmdStart(ctx, os.Stdout, "pause"); err != nil {
+			return nil, fmt.Errorf("while starting pause container: %w", err)
+		}
+	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL:
+		// Create and restore pause container
+		if err := rcmd.cmdCreate(ctx, os.Stdout, "pause", nil); err != nil {
+			return nil, fmt.Errorf("while creating pause container: %w", err)
+		}
+		if err := rcmd.cmdRestore(ctx, os.Stdout, "pause", checkpointDir); err != nil {
+			return nil, fmt.Errorf("while starting pause container: %w", err)
+		}
+	default:
+		return nil, fmt.Errorf("unexpected snapshot scope: %v", req.GetScope())
 	}
 
 	// Create and restore each application container, each with its own log pipe so
@@ -350,12 +412,29 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 			return nil, fmt.Errorf("while starting json log pipe for %q: %w", ac.GetName(), err)
 		}
 		defer pw.Close()
-		if err := rcmd.cmdCreate(ctx, pw, ac.GetName()); err != nil {
-			return nil, fmt.Errorf("while creating %q application container: %w", ac.GetName(), err)
+		switch req.GetScope() {
+		case ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA:
+			if err := rcmd.cmdCreate(ctx, pw, ac.GetName(), nil); err != nil {
+				return nil, fmt.Errorf("while creating %q application container: %w", ac.GetName(), err)
+			}
+			if err := rcmd.cmdStart(ctx, pw, ac.GetName()); err != nil {
+				return nil, fmt.Errorf("while starting %q application container: %w", ac.GetName(), err)
+			}
+		case ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL:
+			if err := rcmd.cmdCreate(ctx, pw, ac.GetName(), nil); err != nil {
+				return nil, fmt.Errorf("while creating %q application container: %w", ac.GetName(), err)
+			}
+			if err := rcmd.cmdRestore(ctx, pw, ac.GetName(), checkpointDir); err != nil {
+				return nil, fmt.Errorf("while starting %q application container: %w", ac.GetName(), err)
+			}
+		default:
+			return nil, fmt.Errorf("unexpected snapshot scope: %v", req.GetScope())
 		}
-		if err := rcmd.cmdRestore(ctx, pw, ac.GetName(), checkpointDir); err != nil {
-			return nil, fmt.Errorf("while starting %q application container: %w", ac.GetName(), err)
-		}
+	}
+
+	// Block until every readyz-enabled container reports 200.
+	if err := readyz.WaitAll(ctx, req.GetSpec().GetContainers(), actorVethIP); err != nil {
+		return nil, fmt.Errorf("while waiting for container readyz: %w", err)
 	}
 
 	s.actorLogger.EmitLifecycleLog("Actor restored", req.GetActorId(), req.GetActorTemplateName(), req.GetActorTemplateNamespace())

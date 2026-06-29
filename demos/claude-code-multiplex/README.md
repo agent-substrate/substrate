@@ -24,10 +24,10 @@ This guide assumes you know Kubernetes and the general shape of agent runtimes (
 
 - A Kubernetes cluster with **Agent Substrate** installed (`./hack/install-ate.sh` from this repo's root).
 - `kubectl` configured against that cluster (the dashboard uses the operator's kubeconfig via [`client-go`](https://github.com/kubernetes/client-go) for pod-log reads).
-- Network reach to the substrate **ateapi** gRPC service (`ateapi.ate-system:8080`). When running the dashboard from outside the cluster, port-forward it in a separate terminal (same convention as [`demos/sandbox/README.md`](../sandbox/README.md#3-port-forward-services)) and keep it running for the lifetime of the demo:
+- Network reach to the substrate **api** gRPC service (`api.ate-system:443`). When running the dashboard from outside the cluster, port-forward it in a separate terminal (same convention as [`demos/sandbox/README.md`](../sandbox/README.md#3-port-forward-services)) and keep it running for the lifetime of the demo:
   ```bash
-  # Terminal 1: ateapi port-forward
-  kubectl port-forward svc/ateapi 8080:8080 -n ate-system
+  # Terminal 1: api port-forward
+  kubectl port-forward svc/api 8080:443 -n ate-system
   ```
 - An **Anthropic API key** (the agents call Claude).
 - A GCS bucket for substrate state snapshots (configured during Substrate install).
@@ -42,8 +42,6 @@ This guide assumes you know Kubernetes and the general shape of agent runtimes (
 | `hack/install-demo-claude-code-multiplex.sh` | Sourced by `install-ate.sh`; registers `--deploy-demo-claude-code-multiplex` and `--delete-demo-claude-code-multiplex` |
 | `demos/claude-code-multiplex/workload/` | The agent container image source (Dockerfile + entrypoint that wires Claude Code; built and pushed by the deploy step) |
 | `demos/claude-code-multiplex/ui/` | Static dashboard (`index.html` + `server.go`) that talks to the cluster |
-
-(Files will be added across iterations of this PR.)
 
 ## How to Run
 
@@ -104,19 +102,10 @@ With three agents and two pods, the third agent stays suspended (state snapshott
 
 ## Upstream blockers worked around for this demo
 
-This demo currently applies workarounds at runtime for two Substrate issues. Each will be addressed by a separate upstream fix PR; details + workarounds in the linked issue threads.
+This demo currently applies workarounds at runtime for two Substrate issues. See the linked issue threads for details and workarounds.
 
-- **`#189`** — Atelet OCI bundle gaps (`Args`, `Secret`, symlinks). Bundled fix PR forthcoming.
-- **`#197` Bug 3** — Atelet symlink resolution. Fix PR forthcoming.
-
-> [!NOTE]
-> `@AlexBulankou` asked for this guide as the main deliverable for the Claude-Code-on-Substrate demo work. The fix PRs are filed separately so each blocker has its own upstream review thread.
-
-## Status
-
-**This PR is a draft.** Initial commit lands the structural README. Subsequent commits will add the manifests, the workload Dockerfile/entrypoint, and the UI source. Each addition will keep the README in sync.
-
-Feedback on shape/audience welcome before content fills out.
+- **`#189`** — Atelet OCI bundle gaps (`Args`, `Secret`, symlinks).
+- **`#197` Bug 3** — Atelet symlink resolution.
 
 ## Teardown
 

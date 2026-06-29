@@ -12,7 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package ateom
+// Package actorlog provides structured JSON logging for actor sandboxes shared
+// by the gVisor and micro-VM ateom runtimes. It forwards an actor container's
+// stdout/stderr to the worker pod's stdout, annotated with ate.dev/* labels, and
+// emits synthetic actor lifecycle events.
+package actorlog
 
 import (
 	"bufio"
