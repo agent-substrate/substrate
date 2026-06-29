@@ -89,9 +89,9 @@ type XdsServer struct {
 	otlpPort uint32
 }
 
-func NewXdsServer(xdsPort int) *XdsServer {
+func NewXdsServer(ctx context.Context, xdsPort int) *XdsServer {
 	cache := cachev3.NewSnapshotCache(true, cachev3.IDHash{}, nil)
-	srv := serverv3.NewServer(context.Background(), cache, nil)
+	srv := serverv3.NewServer(ctx, cache, nil)
 
 	return &XdsServer{
 		xdsPort:     xdsPort,
@@ -145,7 +145,7 @@ func (x *XdsServer) SetOtlpCollector(addr string) error {
 	return nil
 }
 
-func (x *XdsServer) UpdateSnapshot() error {
+func (x *XdsServer) UpdateSnapshot(ctx context.Context) error {
 	x.mu.Lock()
 	defer x.mu.Unlock()
 
@@ -190,12 +190,12 @@ func (x *XdsServer) UpdateSnapshot() error {
 	}
 
 	slog.Info("Deploying updated xDS configuration snapshot", slog.String("version", ver))
-	return x.snapshot.SetSnapshot(context.Background(), NodeID, snapshot)
+	return x.snapshot.SetSnapshot(ctx, NodeID, snapshot)
 }
 
 func (x *XdsServer) Serve(ctx context.Context, lis net.Listener) error {
 	// Ensure a first snapshot is deployed
-	if err := x.UpdateSnapshot(); err != nil {
+	if err := x.UpdateSnapshot(ctx); err != nil {
 		slog.ErrorContext(ctx, "Warning - initial xDS setup update failed", slog.String("err", err.Error()))
 	}
 

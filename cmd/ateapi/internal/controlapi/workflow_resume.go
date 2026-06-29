@@ -284,6 +284,8 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 				},
 			}
 			req.Scope = toAteletSnapshotScope(state.ActorTemplate.Spec.SnapshotsConfig.OnCommit)
+		case ateapipb.SnapshotType_SNAPSHOT_TYPE_UNSPECIFIED:
+			fallthrough
 		default:
 			return fmt.Errorf("unsupported snapshot type: %v", state.Actor.GetLatestSnapshotInfo().GetType())
 		}

@@ -206,6 +206,8 @@ func newKubeClient() (*kubernetes.Clientset, error) {
 // / etc).
 func actorStatusString(s ateapipb.Actor_Status) string {
 	switch s {
+	case ateapipb.Actor_STATUS_UNSPECIFIED:
+		return "?"
 	case ateapipb.Actor_STATUS_RESUMING:
 		return "Resuming"
 	case ateapipb.Actor_STATUS_RUNNING:
@@ -214,6 +216,10 @@ func actorStatusString(s ateapipb.Actor_Status) string {
 		return "Suspending"
 	case ateapipb.Actor_STATUS_SUSPENDED:
 		return "Suspended"
+	case ateapipb.Actor_STATUS_PAUSING:
+		return "Pausing"
+	case ateapipb.Actor_STATUS_PAUSED:
+		return "Paused"
 	default:
 		return "?"
 	}

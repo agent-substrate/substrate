@@ -103,6 +103,8 @@ func SpecToAgentPB(s *specs.Spec) *agentpb.Spec {
 			switch ns.Type {
 			case specs.NetworkNamespace, specs.CgroupNamespace, specs.TimeNamespace:
 				continue
+			case specs.PIDNamespace, specs.MountNamespace, specs.IPCNamespace, specs.UTSNamespace, specs.UserNamespace:
+				// Kept: appended below with an emptied host Path.
 			}
 			l.Namespaces = append(l.Namespaces, &agentpb.LinuxNamespace{Type: string(ns.Type)})
 		}

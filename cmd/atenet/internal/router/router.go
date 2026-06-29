@@ -179,13 +179,13 @@ func (s *RouterServer) Run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to initialize tracing: %w", err)
 	}
-	defer serverboot.ShutdownProvider("TracerProvider", tp.Shutdown)
+	defer serverboot.ShutdownProvider(ctx, "TracerProvider", tp.Shutdown)
 
 	mp, err := serverboot.InitMetrics(ctx, routerServiceName)
 	if err != nil {
 		return fmt.Errorf("failed to initialize metrics: %w", err)
 	}
-	defer serverboot.ShutdownProvider("MeterProvider", mp.Shutdown)
+	defer serverboot.ShutdownProvider(ctx, "MeterProvider", mp.Shutdown)
 
 	go serverboot.StartMetricsServer(ctx, serverboot.MetricsServerOptions{Addr: s.cfg.MetricsAddr})
 
@@ -204,7 +204,7 @@ func (s *RouterServer) Run(ctx context.Context) error {
 
 	g, ctx := errgroup.WithContext(ctx)
 
-	xdsSrv := NewXdsServer(s.cfg.XdsPort)
+	xdsSrv := NewXdsServer(ctx, s.cfg.XdsPort)
 	xdsSrv.SetConfig(s.cfg.HttpPort, s.cfg.ExtprocPort, s.cfg.ExtprocAddr)
 	if err := xdsSrv.SetOtlpCollector(s.cfg.OtlpCollectorAddress); err != nil {
 		return fmt.Errorf("configure OTLP collector: %w", err)

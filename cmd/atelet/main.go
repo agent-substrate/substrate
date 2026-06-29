@@ -84,13 +84,13 @@ func main() {
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to initialize tracing", err)
 	}
-	defer serverboot.ShutdownProvider("TracerProvider", tp.Shutdown)
+	defer serverboot.ShutdownProvider(ctx, "TracerProvider", tp.Shutdown)
 
 	mp, err := serverboot.InitMetrics(ctx, "atelet")
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to initialize metrics", err)
 	}
-	defer serverboot.ShutdownProvider("MeterProvider", mp.Shutdown)
+	defer serverboot.ShutdownProvider(ctx, "MeterProvider", mp.Shutdown)
 
 	if err := initSnapshotSizeMetric(); err != nil {
 		serverboot.Fatal(ctx, "Failed to create snapshot size metric", err)
@@ -357,6 +357,8 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 		if err := s.moveLocalCheckpoint(ctx, req, checkpointDir, sandboxRec); err != nil {
 			return nil, err
 		}
+	case ateletpb.CheckpointType_CHECKPOINT_TYPE_UNSPECIFIED:
+		fallthrough
 	default:
 		return nil, fmt.Errorf("unexpected checkpoint type: %v", req.GetType())
 	}
@@ -373,6 +375,8 @@ func toAteomSnapshotScope(scope ateletpb.SnapshotScope) ateompb.SnapshotScope {
 	switch scope {
 	case ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA:
 		return ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA
+	case ateletpb.SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED, ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL:
+		return ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL
 	default:
 		return ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL
 	}
@@ -489,6 +493,8 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		if sandboxRec, err = unmarshalSandboxRecord(manifest); err != nil {
 			return nil, err
 		}
+	case ateletpb.CheckpointType_CHECKPOINT_TYPE_UNSPECIFIED:
+		fallthrough
 	default:
 		return nil, fmt.Errorf("unexpected checkpoint type: %v", req.GetType())
 	}
@@ -513,6 +519,8 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 			if err := s.copyLocalCheckpoint(gctx, req.GetLocalConfig().GetSnapshotPrefix(), ateompath.LocalCheckpointsDir(ns, tmpl, actorID), checkpointDir, sandboxRec.SnapshotFiles); err != nil {
 				return err
 			}
+		case ateletpb.CheckpointType_CHECKPOINT_TYPE_UNSPECIFIED:
+			// Rejected by validateRestoreRequest before we get here; nothing to fetch.
 		}
 		dDownload = time.Since(t)
 		return nil
@@ -847,6 +855,8 @@ func validateCheckpointRequest(req *ateletpb.CheckpointRequest) error {
 		if req.GetLocalConfig().GetSnapshotPrefix() == "" {
 			return fmt.Errorf("snapshot prefix must be non-empty for type %s", req.GetType().String())
 		}
+	case ateletpb.CheckpointType_CHECKPOINT_TYPE_UNSPECIFIED:
+		fallthrough
 	default:
 		return fmt.Errorf("invalid checkpoint type: %v", req.GetType())
 	}
@@ -871,6 +881,8 @@ func validateRestoreRequest(req *ateletpb.RestoreRequest) error {
 		if req.GetLocalConfig().GetSnapshotPrefix() == "" {
 			return fmt.Errorf("snapshot prefix must be non-empty for type %s", req.GetType().String())
 		}
+	case ateletpb.CheckpointType_CHECKPOINT_TYPE_UNSPECIFIED:
+		fallthrough
 	default:
 		return fmt.Errorf("invalid checkpoint type: %v", req.GetType())
 	}

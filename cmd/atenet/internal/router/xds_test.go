@@ -29,10 +29,10 @@ import (
 )
 
 func TestXdsServer_UpdateSnapshot(t *testing.T) {
-	server := NewXdsServer(18000)
+	server := NewXdsServer(context.Background(), 18000)
 	server.SetConfig(8081, 50052, "10.0.0.1")
 
-	err := server.UpdateSnapshot()
+	err := server.UpdateSnapshot(context.Background())
 	if err != nil {
 		t.Fatalf("UpdateSnapshot failed: %v", err)
 	}
@@ -139,11 +139,11 @@ func TestXdsServer_UpdateSnapshot(t *testing.T) {
 }
 
 func TestXdsServer_UpdateSnapshot_WithHttps(t *testing.T) {
-	server := NewXdsServer(18000)
+	server := NewXdsServer(context.Background(), 18000)
 	server.SetConfig(8085, 50053, "127.0.0.1")
 	server.SetTlsConfig(8443, "", "dummy-cert", "dummy-key")
 
-	err := server.UpdateSnapshot()
+	err := server.UpdateSnapshot(context.Background())
 	if err != nil {
 		t.Fatalf("UpdateSnapshot failed: %v", err)
 	}
@@ -182,7 +182,7 @@ func TestXdsServer_UpdateSnapshot_WithHttps(t *testing.T) {
 }
 
 func TestXdsServer_Serve_Shutdown(t *testing.T) {
-	server := NewXdsServer(18000)
+	server := NewXdsServer(context.Background(), 18000)
 	server.SetConfig(8085, 50053, "127.0.0.1")
 
 	lis, err := net.Listen("tcp", "127.0.0.1:0")

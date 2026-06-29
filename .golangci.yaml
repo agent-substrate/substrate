@@ -29,6 +29,12 @@ linters:
   enable:
     # Spelling errors in comments, strings, and identifiers.
     - misspell
+    # Reconciliation and RPC calls should inherit the caller's context.
+    - contextcheck
+    # High-signal bug-pattern checks without enabling style-only churn.
+    - gocritic
+    # CRD phase/state-machine switches should handle every declared state.
+    - exhaustive
 
   settings:
     errcheck:
@@ -55,6 +61,49 @@ linters:
     misspell:
       mode: default
 
+    gocritic:
+      # Opt in explicitly rather than inheriting gocritic's default set, which
+      # includes opinionated style checks. We only want the bug-pattern checks.
+      disable-all: true
+      enabled-checks:
+        - appendAssign
+        - argOrder
+        - badCall
+        - badCond
+        - badLock
+        - badRegexp
+        - badSorting
+        - badSyncOnceFunc
+        - caseOrder
+        - dupArg
+        - dupBranchBody
+        - dupCase
+        - dupSubExpr
+        - dynamicFmtString
+        - exitAfterDefer
+        - mapKey
+        - nilValReturn
+        - offBy1
+        - regexpMust
+        - sloppyLen
+        - sloppyReassign
+        - sloppyTypeAssert
+        - truncateCmp
+        - uncheckedInlineErr
+
+    exhaustive:
+      # Controller phase/state-machine switches should handle every declared
+      # state explicitly; a bare default hides the gap.
+      check:
+        - switch
+        - map
+      default-signifies-exhaustive: false
+      package-scope-only: true
+      # Map literals are opt-in (annotate with //exhaustive:enforce). Most maps
+      # here are k8s corev1.ResourceList values, which are partial by design;
+      # requiring every ResourceName key would be noise, not a bug check.
+      explicit-exhaustive-map: true
+
   exclusions:
     # Built-in presets that suppress the most common idiomatic false
     # positives across the standard linters.
@@ -71,18 +120,22 @@ linters:
     rules:
       # Generated code: ignore findings entirely.
       - path: '\.pb\.go$'
-        linters: [errcheck, govet, ineffassign, staticcheck, unused]
+        linters: [errcheck, govet, ineffassign, staticcheck, unused, contextcheck, gocritic, exhaustive]
       - path: '\.pb\.gw\.go$'
-        linters: [errcheck, govet, ineffassign, staticcheck, unused]
+        linters: [errcheck, govet, ineffassign, staticcheck, unused, contextcheck, gocritic, exhaustive]
       - path: 'zz_generated.*\.go$'
-        linters: [errcheck, govet, ineffassign, staticcheck, unused]
+        linters: [errcheck, govet, ineffassign, staticcheck, unused, contextcheck, gocritic, exhaustive]
       # Kubernetes client-gen / informer-gen / lister-gen output.
       - path: '^pkg/client/'
-        linters: [errcheck, govet, ineffassign, staticcheck, unused]
+        linters: [errcheck, govet, ineffassign, staticcheck, unused, contextcheck, gocritic, exhaustive]
       # Tests routinely discard error returns from setup helpers.
       - path: '_test\.go'
         linters:
           - errcheck
+      # Demo binaries intentionally favor concise examples over production
+      # control-flow discipline.
+      - path: '^demos/'
+        linters: [gocritic, contextcheck]
       # Suppress staticcheck QF* (quickfix) recommendations. They are
       # stylistic rewrites rather than bug detectors and would generate a
       # large amount of churn if applied indiscriminately.

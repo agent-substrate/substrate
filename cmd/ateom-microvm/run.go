@@ -357,7 +357,7 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	// that and tag with the display container name. The goroutines read over ac for the
 	// actor's lifetime and exit (io.EOF) when teardownActor closes ac.
 	for _, c := range ctrs {
-		s.startActorLogForwarding(ac, id, overlayWorkloadID(c.name), c.name, name, ns)
+		s.startActorLogForwarding(ac, id, overlayWorkloadID(c.name), c.name, name, ns) //nolint:contextcheck // Log forwarders run for the actor's lifetime, not the RPC's: they detach to a background context and exit when teardownActor closes the agent client.
 	}
 
 	s.actorLogger.EmitLifecycleLog("Actor started", id, name, ns)
