@@ -31,6 +31,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/third_party/kata/agentpb"
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/readyz"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"golang.org/x/sys/unix"
 	"google.golang.org/grpc/codes"
@@ -41,8 +42,6 @@ import (
 // cloud-hypervisor process directly (booted by RunWorkload or relaunched by
 // RestoreWorkload), so it tracks that process and its api-socket for teardown.
 type runningActor struct {
-	containerName string
-
 	// baseID is the FROZEN base sandbox id propagated across this actor's restore
 	// lineage. For a cold-run actor this is the actor's own id; for a restored
 	// actor it is the id read from the snapshot's base-id file (the golden id,
@@ -52,15 +51,18 @@ type runningActor struct {
 
 	// ateom owns this CH process (booted at Run or relaunched at Restore).
 	chCmd *exec.Cmd
+	// vfsdCmd is the virtiofsd serving the overlay RO lower (the CH fs device
+	// demand-pages from it for the actor's lifetime). ateom owns it; teardownActor
+	// kills it after the CH process.
+	vfsdCmd *exec.Cmd
 	// apiSocket is the CH api-socket for this ateom-owned VMM.
 	apiSocket string
 
 	// restoreSourceDir is the snapshot dir this actor was OnDemand-restored from
-	// (the base CH is demand-paging from). Set only on the owned-boot virtio-blk
-	// path when restored via OnDemand. CheckpointWorkload overlays CH's new (sparse,
-	// faulted-only) snapshot onto this base to produce a COMPLETE snapshot (CH's
-	// OnDemand snapshot alone drops the un-faulted pages). Empty for cold-run actors
-	// (their snapshot is already complete).
+	// (CH demand-pages its guest RAM from it). Set when restored via OnDemand.
+	// CheckpointWorkload overlays CH's new (sparse, faulted-only) snapshot onto this
+	// base to produce a COMPLETE snapshot (CH's OnDemand snapshot alone drops the
+	// un-faulted pages). Empty for cold-run actors (their snapshot is already complete).
 	restoreSourceDir string
 
 	// logAgent is the kata-agent ttrpc client kept open for the lifetime of the
@@ -86,42 +88,37 @@ const baseIDFile = "base-id"
 // Asset names in RunWorkloadRequest.runtime_asset_paths (set by atelet's
 // fetchRuntimeAssets, keyed by the ActorTemplate runtime asset names).
 const (
-	assetCH     = "cloud-hypervisor"
-	assetKernel = "kata-kernel"
-	assetImage  = "kata-image"
-	assetConfig = "kata-config"
+	assetCH        = "cloud-hypervisor"
+	assetKernel    = "kata-kernel"
+	assetImage     = "kata-image"
+	assetConfig    = "kata-config"
+	assetVirtiofsd = "virtiofsd"
 )
 
-// actorRootfsDiskName is the actor's writable rootfs disk file under the actor
-// dir; it is the /dev/vdb backing path recorded in the snapshot config.json and
-// reopened verbatim on restore.
-const actorRootfsDiskName = "actor-rootfs.ext4"
+// maxActorContainers is a sanity cap on containers per actor (all share the one
+// micro-VM + virtiofsd). 25 is far above any real pod.
+const maxActorContainers = 25
 
-// goldenRootfsDiskName is the verbatim copy of the actor's /dev/vdb disk AS-OF the
-// golden snapshot, kept under the actor dir. reset-to-golden recreates /dev/vdb
-// from it on restore (byte-identical to what the snapshot's guest RAM/ext4 cache
-// expects), discarding the actor's later rootfs writes — gVisor semantics.
-const goldenRootfsDiskName = "golden-rootfs.ext4"
+// overlayWorkloadID is the kata containerID of a container's overlay WORKLOAD,
+// distinct from its carrier container (the carrier keeps the bare container name so
+// the agent binds the RO base to /run/kata-containers/<name>/rootfs; the workload
+// overlays on top). Stable across the restore lineage (container names don't change).
+//
+// The "_ovl" separator is deliberately a character that is invalid in a Kubernetes
+// container name (DNS-1123 labels are [a-z0-9-]): the carrier id is the bare name, so a
+// workload id can never equal a carrier id (a bare name has no "_") nor another workload
+// id (names are unique within an actor) — even for containers named "x" and "x-ovl". A
+// "-ovl" suffix would let "x"'s workload id collide with the "x-ovl" carrier id.
+func overlayWorkloadID(name string) string { return name + "_ovl" }
 
-// fileMissing reports whether path does not exist.
-func fileMissing(path string) bool {
-	_, err := os.Stat(path)
-	return os.IsNotExist(err)
-}
-
-// copyDiskFile copies a (sparse) disk image verbatim, preserving holes so the
-// (mostly-empty) ext4 image doesn't materialize its scratch blocks. Used to
-// save/restore the golden rootfs disk template.
-func copyDiskFile(ctx context.Context, src, dst string) error {
-	tmp := dst + ".tmp"
-	_ = os.Remove(tmp)
-	if out, err := exec.CommandContext(ctx, "cp", "--sparse=always", src, tmp).CombinedOutput(); err != nil {
-		return fmt.Errorf("cp %s -> %s: %w: %s", src, tmp, err, out)
-	}
-	if err := os.Rename(tmp, dst); err != nil {
-		return fmt.Errorf("rename %s -> %s: %w", tmp, dst, err)
-	}
-	return nil
+// actorContainer is one of the actor's containers prepared for the shared micro-VM:
+// its name (also the kata containerID + the overlay lower's find-paths subdir), the
+// host OCI bundle rootfs that backs the RO lower, and its OCI spec. The writable
+// overlay upper is a guest tmpfs (OverlayUpperBase(name)), so there is no host disk.
+type actorContainer struct {
+	name         string
+	bundleRootfs string
+	spec         *specs.Spec
 }
 
 // resolvedRuntime holds the concrete binary/config paths for a request, taken
@@ -129,6 +126,7 @@ func copyDiskFile(ctx context.Context, src, dst string) error {
 type resolvedRuntime struct {
 	chBinary   string // path to the cloud-hypervisor binary
 	configFile string // path to the kata configuration.toml
+	virtiofsd  string // path to virtiofsd (overlay RO lower); "" => "virtiofsd" on PATH
 }
 
 // firstNonEmpty returns the first non-empty string, or "" if all are empty.
@@ -147,13 +145,14 @@ func (s *AteomService) resolveRuntime(paths map[string]string) resolvedRuntime {
 	return resolvedRuntime{
 		chBinary:   firstNonEmpty(paths[assetCH], s.chBinary),
 		configFile: firstNonEmpty(paths[assetConfig], s.kataConfig),
+		virtiofsd:  paths[assetVirtiofsd],
 	}
 }
 
-// writeGuestResolvConf copies the worker pod's /etc/resolv.conf into the bundle
-// rootfs (before it's packed into the ext4 disk) so the guest gets cluster DNS:
-// ateom drops atelet's resolv.conf bind and sends no CreateSandbox.Dns, so the
-// guest can otherwise reach IPs but not resolve names.
+// writeGuestResolvConf copies the worker pod's /etc/resolv.conf into a container's
+// bundle rootfs (the overlay RO lower) so the guest gets cluster DNS: ateom drops
+// atelet's resolv.conf bind and sends no CreateSandbox.Dns, so the guest can
+// otherwise reach IPs but not resolve names.
 func writeGuestResolvConf(rootfs string) error {
 	content, err := os.ReadFile("/etc/resolv.conf")
 	if err != nil {
@@ -172,20 +171,18 @@ func writeGuestResolvConf(rootfs string) error {
 	return nil
 }
 
-// RunWorkload boots the actor as a cloud-hypervisor micro-VM that ateom owns.
+// RunWorkload boots the actor as a cloud-hypervisor micro-VM and starts its containers.
 //
-// ateom boots cloud-hypervisor itself — no kata shim — and gives the actor a
-// writable boot-time virtio-blk disk (/dev/vdb, built from the OCI bundle rootfs)
-// as its container rootfs. Rootfs data lives on that host-backed disk rather than
-// a guest tmpfs overlay-upper, so the CH snapshot is memory-only with no balloon
-// needed to reclaim a RAM-backed upper. It replicates the kata clh boot (vm.create
-// kernel+image, add-net, vm.boot) and the shim's post-boot work (agent
-// CreateSandbox + guest network config) before driving the kata-agent to start the
-// blk-rootfs container.
+// ateom boots cloud-hypervisor directly (no kata shim) and gives each container an
+// overlay rootfs: its OCI image read-only over virtio-fs (the lower) plus a guest
+// tmpfs (the writable upper). It drives the kata clh boot (vm.create kernel+image+fs,
+// add-net, vm.boot) and the post-boot setup the shim would otherwise do (agent
+// CreateSandbox + guest network config) before having the kata-agent assemble and
+// start each container.
 //
-// Contract with atelet (mirrors ateom-gvisor):
-//   - The runtime assets (guest kernel, guest OS image, cloud-hypervisor, base
-//     kata config) are on disk and passed as runtime asset paths.
+// Contract with atelet:
+//   - The runtime assets (guest kernel, guest OS image, cloud-hypervisor, virtiofsd,
+//     base kata config) are on disk and passed as runtime asset paths.
 //   - The OCI bundle (config.json + populated rootfs/) is prepared per container.
 func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkloadRequest) (resp *ateompb.RunWorkloadResponse, retErr error) {
 	s.lock.Lock()
@@ -197,24 +194,25 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 
 	s.actorLogger.EmitLifecycleLog("Actor starting", id, name, ns)
 
-	// KNOWN GAP vs the gVisor runtime: it runs multiple containers per actor; this
-	// runtime is single-container for now. Multi-container is a mechanical extension
-	// (one boot-time virtio-blk rootfs disk + agent CreateContainer per container,
-	// sharing the one guest/sandbox) and is tracked as follow-up work.
+	// All of the actor's containers share the one micro-VM (which is the pod
+	// sandbox): each gets its own overlay rootfs and its own kata-agent
+	// CreateContainer/StartContainer, driven below after the shared boot +
+	// CreateSandbox + guest networking.
 	containers := req.GetSpec().GetContainers()
-	if len(containers) != 1 {
-		return nil, status.Errorf(codes.Unimplemented, "ateom-microvm supports exactly one container, got %d", len(containers))
+	if len(containers) == 0 {
+		return nil, status.Error(codes.InvalidArgument, "actor spec has no containers")
 	}
-	containerName := containers[0].GetName()
+	if len(containers) > maxActorContainers {
+		return nil, status.Errorf(codes.Unimplemented, "ateom-microvm supports at most %d containers, got %d", maxActorContainers, len(containers))
+	}
 
-	// Owned-boot builds the CH vm.create itself, so it needs the guest kernel +
-	// image paths directly.
+	// ateom builds the CH vm.create itself, so it needs the guest kernel + image
+	// paths directly.
 	paths := req.GetRuntimeAssetPaths()
 	kernel, image := paths[assetKernel], paths[assetImage]
 	if kernel == "" || image == "" {
-		return nil, fmt.Errorf("owned-boot requires %q and %q asset paths", assetKernel, assetImage)
+		return nil, fmt.Errorf("ateom-microvm requires %q and %q asset paths", assetKernel, assetImage)
 	}
-	actorDir := ateompath.ActorPath(ns, name, id)
 	rr := s.resolveRuntime(paths)
 
 	// Networking (host side): per-activation veth into the interior netns. The
@@ -230,20 +228,11 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 		}
 	}()
 
-	bundle := ateompath.OCIBundlePath(ns, name, id, containerName)
-	spec, err := ensureKataCompatibleSpec(bundle, id, ateompath.AteomNetNSPath(s.podUID))
+	// Prepare each container's OCI spec + record its bundle rootfs (the overlay RO
+	// lower). No host disk — the rootfs is overlay(virtio-fs lower + guest-tmpfs upper).
+	ctrs, err := s.buildActorContainers(ns, name, id, containers)
 	if err != nil {
-		return nil, fmt.Errorf("while preparing kata OCI spec: %w", err)
-	}
-
-	// Build the actor's writable rootfs as a raw ext4 virtio-blk disk from the
-	// atelet-populated OCI bundle rootfs. This becomes /dev/vdb.
-	diskPath := filepath.Join(actorDir, actorRootfsDiskName)
-	if err := writeGuestResolvConf(filepath.Join(bundle, "rootfs")); err != nil {
-		return nil, fmt.Errorf("while writing guest resolv.conf: %w", err)
-	}
-	if err := kata.BuildExt4Image(ctx, filepath.Join(bundle, "rootfs"), diskPath); err != nil {
-		return nil, fmt.Errorf("while building actor rootfs disk: %w", err)
+		return nil, err
 	}
 
 	// Guest sizing + agent kernel params from the kata config.
@@ -257,6 +246,20 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	if err := os.MkdirAll(kata.VMDir(id), 0o700); err != nil {
 		return nil, fmt.Errorf("while creating VM dir: %w", err)
 	}
+
+	// Stage the overlay RO lowers (bind each image into the shared dir) + start the
+	// virtiofsd that serves them. CH connects to it at vm.create and demand-pages for
+	// the actor's lifetime, so ateom owns the process (killed in teardownActor).
+	vfsdCmd, err := s.stageOverlayLowers(ctx, rr, id, ctrs)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if retErr != nil && vfsdCmd.Process != nil {
+			_ = vfsdCmd.Process.Kill()
+			_, _ = vfsdCmd.Process.Wait()
+		}
+	}()
 
 	// Launch a bare VMM (CH + api-socket); ateom owns this process for teardown.
 	apiSocket := filepath.Join(kata.VMDir(id), "clh-api.sock")
@@ -276,11 +279,12 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 		}
 	}()
 
-	// Assemble the CH VmConfig (kata-compatible cmdline, RO image on /dev/vda +
-	// writable rootfs on /dev/vdb). serialLog is also read on a failed agent dial
+	// Assemble the CH VmConfig (kata-compatible cmdline, RO kata image on /dev/vda +
+	// the virtio-fs device for the overlay RO lower; no actor virtio-blk disks — the
+	// writable upper is a guest tmpfs). serialLog is also read on a failed agent dial
 	// below, so keep it here.
 	serialLog := filepath.Join(kata.VMDir(id), "serial.log")
-	vmCfg := buildVMConfig(id, kernel, image, diskPath, kparams, serialLog, memMiB, vcpus)
+	vmCfg := buildVMConfig(id, kernel, image, kparams, serialLog, memMiB, vcpus)
 	if err := client.CreateVM(ctx, vmCfg); err != nil {
 		return nil, fmt.Errorf("while creating VM: %w", err)
 	}
@@ -308,7 +312,7 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	if err := client.BootVM(ctx); err != nil {
 		return nil, fmt.Errorf("while booting VM: %w", err)
 	}
-	slog.InfoContext(ctx, "Micro-VM booted (owned-boot)", slog.String("id", id), slog.String("api", apiSocket))
+	slog.InfoContext(ctx, "Micro-VM booted", slog.String("id", id), slog.String("api", apiSocket))
 
 	// Dial the kata-agent over hybrid-vsock. The agent only starts listening once
 	// the guest's init reaches kata-containers.target — well after CH creates the
@@ -335,23 +339,84 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 		}
 	}()
 
-	// Post-boot kata-agent setup: sandbox, guest networking, start the container.
-	if err := s.startActorContainer(ctx, ac, id, vsockPath, spec); err != nil {
+	// Post-boot kata-agent setup: sandbox, guest networking, start each container.
+	if err := s.startActorContainers(ctx, ac, id, vsockPath, ctrs); err != nil {
 		return nil, err
 	}
 
-	ra := &runningActor{chCmd: chCmd, apiSocket: apiSocket, containerName: containerName, baseID: id, logAgent: ac}
+	// Block until every readyz-enabled container reports 200.
+	if err := readyz.WaitAll(ctx, containers, actorVethIP); err != nil {
+		return nil, fmt.Errorf("while waiting for container readyz: %w", err)
+	}
+
+	ra := &runningActor{chCmd: chCmd, vfsdCmd: vfsdCmd, apiSocket: apiSocket, baseID: id, logAgent: ac}
 	s.running[id] = ra
 
-	// Forward the actor container's stdout/stderr into the pod logs (parity with
-	// ateom-gvisor). StartBlkWorkload uses containerID==execID==id, so the agent
-	// keys the streams by id. The goroutines read over ac for the actor's lifetime
-	// and exit (io.EOF) when teardownActor closes ac.
-	s.startActorLogForwarding(ac, id, name, ns, containerName)
+	// Forward each container's stdout/stderr into the pod logs. The overlay workload's
+	// container/exec id is <name>_ovl (see startOverlayContainer), so key the streams by
+	// that and tag with the display container name. The goroutines read over ac for the
+	// actor's lifetime and exit (io.EOF) when teardownActor closes ac.
+	for _, c := range ctrs {
+		s.startActorLogForwarding(ac, id, overlayWorkloadID(c.name), c.name, name, ns)
+	}
 
 	s.actorLogger.EmitLifecycleLog("Actor started", id, name, ns)
-	slog.InfoContext(ctx, "Actor started (owned-boot, virtio-blk rootfs)", slog.String("id", id))
+	slog.InfoContext(ctx, "Actor started (overlay rootfs)", slog.String("id", id))
 	return &ateompb.RunWorkloadResponse{}, nil
+}
+
+// buildActorContainers prepares each of the actor's containers for the shared
+// micro-VM: it loads the OCI spec from the per-container bundle, injects guest DNS,
+// and records the bundle rootfs that backs the overlay's RO lower. No host disk is
+// built — the rootfs is overlay(virtio-fs RO lower + guest-tmpfs upper); the lowers
+// are bound into virtiofsd's shared dir in stageOverlayLowers after the sandbox state
+// is clean. Both RunWorkload and RestoreWorkload go through here.
+func (s *AteomService) buildActorContainers(ns, name, id string, containers []*ateompb.Container) ([]actorContainer, error) {
+	netnsPath := ateompath.AteomNetNSPath(s.podUID)
+	ctrs := make([]actorContainer, len(containers))
+	for i, c := range containers {
+		cn := c.GetName()
+		bundle := ateompath.OCIBundlePath(ns, name, id, cn)
+		spec, err := ensureKataCompatibleSpec(bundle, id, netnsPath)
+		if err != nil {
+			return nil, fmt.Errorf("while preparing kata OCI spec for %q: %w", cn, err)
+		}
+		bundleRootfs := filepath.Join(bundle, "rootfs")
+		// Write cluster DNS into the lower before it's served over virtio-fs: ateom
+		// drops atelet's resolv.conf bind and sends no CreateSandbox.Dns, so without
+		// this the guest can reach IPs but not resolve names. Doing it here covers both
+		// run and restore (both reconstruct the lower from the bundle).
+		if err := writeGuestResolvConf(bundleRootfs); err != nil {
+			return nil, fmt.Errorf("while writing guest resolv.conf for %q: %w", cn, err)
+		}
+		ctrs[i] = actorContainer{name: cn, bundleRootfs: bundleRootfs, spec: spec}
+	}
+	return ctrs, nil
+}
+
+// stageOverlayLowers makes each container's RO lower available to virtiofsd by
+// bind-mounting its OCI image rootfs into virtiofsd's find-paths location
+// (SharedDir(id)/<cid>/rootfs), then starts the one virtiofsd that serves them all.
+// Must run AFTER CleanupSandboxState (which wipes SharedDir) and the VM dir exists.
+// The returned virtiofsd cmd outlives this call (CH demand-pages from it); the caller
+// owns it (tracked on runningActor, killed in teardownActor).
+func (s *AteomService) stageOverlayLowers(ctx context.Context, rr resolvedRuntime, id string, ctrs []actorContainer) (*exec.Cmd, error) {
+	for _, c := range ctrs {
+		if err := kata.ReconstructSharedDirFromImage(ctx, c.bundleRootfs, id, c.name); err != nil {
+			return nil, fmt.Errorf("while staging overlay lower for %q: %w", c.name, err)
+		}
+	}
+	vfsdLog, _ := os.OpenFile(filepath.Join(kata.VMDir(id), "virtiofsd.log"), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	vfsdCmd, err := kata.StartVirtiofsd(ctx, kata.VirtiofsdOptions{
+		Binary:     rr.virtiofsd,
+		SocketPath: kata.VirtiofsdSocketPath(id),
+		SharedDir:  kata.SharedDir(id),
+		Log:        vfsdLog,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("while starting virtiofsd: %w", err)
+	}
+	return vfsdCmd, nil
 }
 
 // guestConfig reads guest sizing + agent kernel params from the resolved kata
@@ -373,16 +438,13 @@ func (s *AteomService) guestConfig(rr resolvedRuntime) (memMiB, vcpus int, kpara
 	return cfg.MemoryMiB, cfg.VCPUs, kparams, nil
 }
 
-// buildVMConfig assembles the cloud-hypervisor VmConfig for the owned boot. The
-// kernel cmdline replicates kata's clh boot cmdline (verified against a live kata
-// snapshot's payload.cmdline): beyond the root/clh base params it MUST include
-// systemd.unit=kata-containers.target (else systemd boots the default target and
-// powers off — the guest exits ~6s in) and mask systemd-networkd (the agent owns
-// eth0). The console is ARCH-SPECIFIC: ttyAMA0 (PL011) on arm64, ttyS0 (8250) on
-// amd64 — the wrong one => "unable to open an initial console". The config's
-// kernel_params are appended; serial is captured to serialLog for boot debugging.
-// The RO guest image is /dev/vda, the writable rootfs /dev/vdb.
-func buildVMConfig(id, kernel, image, diskPath, kparams, serialLog string, memMiB, vcpus int) ch.VmConfig {
+// buildVMConfig assembles the cloud-hypervisor VmConfig. The kernel cmdline replicates
+// kata's clh boot cmdline; beyond the base params it must set
+// systemd.unit=kata-containers.target (else the guest powers off ~6s in) and mask
+// systemd-networkd (the agent owns eth0). The console is arch-specific: ttyAMA0 on
+// arm64, ttyS0 on amd64. /dev/vda is the RO guest image; the actor rootfs's RO lower is
+// the virtio-fs device on PCI segment 1 (hence num_pci_segments=2), with no actor disks.
+func buildVMConfig(id, kernel, image, kparams, serialLog string, memMiB, vcpus int) ch.VmConfig {
 	console := "ttyS0"
 	if runtime.GOARCH == "arm64" {
 		console = "ttyAMA0"
@@ -399,22 +461,28 @@ func buildVMConfig(id, kernel, image, diskPath, kparams, serialLog string, memMi
 		Payload: ch.PayloadConfig{Kernel: kernel, Cmdline: cmdline},
 		Disks: []ch.DiskConfig{
 			{Path: image, Readonly: true, ImageType: "Raw", NumQueues: int32(vcpus), QueueSize: 1024},
-			{Path: diskPath, Readonly: false, ImageType: "Raw", NumQueues: int32(vcpus), QueueSize: 1024},
 		},
-		Rng:    &ch.RngConfig{Src: "/dev/urandom"},
-		Serial: &ch.ConsoleConfig{Mode: "File", File: serialLog},
-		Vsock:  &ch.VsockConfig{Cid: 3, Socket: kata.VsockSocketPath(id)},
+		Fs: []ch.FsConfig{{
+			Tag: kata.FsTag, Socket: kata.VirtiofsdSocketPath(id),
+			NumQueues: 1, QueueSize: 1024, PciSegment: 1,
+		}},
+		Platform: &ch.PlatformConfig{NumPciSegments: 2},
+		Rng:      &ch.RngConfig{Src: "/dev/urandom"},
+		Serial:   &ch.ConsoleConfig{Mode: "File", File: serialLog},
+		Vsock:    &ch.VsockConfig{Cid: 3, Socket: kata.VsockSocketPath(id)},
 	}
 }
 
-// startActorContainer performs the post-boot kata-agent setup the shim normally
-// does at boot: establish the sandbox, configure guest networking (eth0
-// IP/MAC/MTU + routes), and start the actor container on its /dev/vdb rootfs. On
-// failure it dumps guest diagnostics over the debug console.
-func (s *AteomService) startActorContainer(ctx context.Context, ac *kata.AgentClient, id, vsockPath string, spec *specs.Spec) error {
-	// Establish the agent sandbox (the shim normally does this at boot).
+// startActorContainers performs the post-boot kata-agent setup the shim normally
+// does at boot: establish the sandbox once (mounting the kataShared virtio-fs base),
+// configure guest networking (eth0 IP/MAC/MTU + routes) once, then start each
+// container on its own overlay rootfs. On failure it dumps guest diagnostics.
+func (s *AteomService) startActorContainers(ctx context.Context, ac *kata.AgentClient, id, vsockPath string, ctrs []actorContainer) error {
+	// Establish the agent sandbox + the kataShared virtio-fs mount (the RO base for
+	// every container's overlay lower). All containers share it, so use the first
+	// container's hostname.
 	sbCtx, sbCancel := context.WithTimeout(ctx, 20*time.Second)
-	err := ac.CreateSandbox(sbCtx, &agentpb.CreateSandboxRequest{Hostname: spec.Hostname, SandboxId: id})
+	err := ac.CreateSandboxForActor(sbCtx, id, ctrs[0].spec.Hostname)
 	sbCancel()
 	if err != nil {
 		return fmt.Errorf("while creating agent sandbox: %w", err)
@@ -431,16 +499,38 @@ func (s *AteomService) startActorContainer(ctx context.Context, ac *kata.AgentCl
 		return fmt.Errorf("while configuring guest network: %w", err)
 	}
 
-	// Start the actor with its rootfs on /dev/vdb (single blk storage).
+	for _, c := range ctrs {
+		if err := startOverlayContainer(ctx, ac, vsockPath, c); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// startOverlayContainer brings up one container's rootfs as overlay(virtio-fs RO
+// lower + guest-tmpfs upper): a carrier container (id == name) eager-binds the RO base
+// to /run/kata-containers/<name>/rootfs, then the workload (id == <name>_ovl) overlays
+// it with a tmpfs upper. On failure it dumps the guest overlay state.
+func startOverlayContainer(ctx context.Context, ac *kata.AgentClient, vsockPath string, c actorContainer) error {
+	carrierCtx, carrierCancel := context.WithTimeout(ctx, 30*time.Second)
+	err := ac.CreateCarrier(carrierCtx, c.name, c.spec)
+	carrierCancel()
+	if err != nil {
+		dump := kata.DebugConsoleDump(ctx, vsockPath, "echo '== shared/containers =='; ls -la /run/kata-containers/shared/containers/ 2>&1 | head -40")
+		slog.ErrorContext(ctx, "carrier create failed; dump", slog.String("container", c.name), slog.String("dump", dump))
+		return fmt.Errorf("while creating carrier %q: %w", c.name, err)
+	}
+
+	upperBase := kata.OverlayUpperBase(c.name)
 	wlCtx, wlCancel := context.WithTimeout(ctx, 30*time.Second)
-	err = ac.StartBlkWorkload(wlCtx, id, "/dev/vdb", spec)
+	err = ac.StartOverlayWorkload(wlCtx, c.name, overlayWorkloadID(c.name), upperBase, c.spec)
 	wlCancel()
 	if err != nil {
 		dump := kata.DebugConsoleDump(ctx, vsockPath,
-			"echo '== /dev/vdb =='; ls -l /dev/vdb 2>&1; blkid /dev/vdb 2>&1; "+
-				"echo '== mounts =='; grep kata /proc/mounts 2>&1")
-		slog.ErrorContext(ctx, "blk workload failed; dump", slog.String("dump", dump))
-		return fmt.Errorf("while starting blk workload: %w", err)
+			"echo '== upper =='; ls -la "+upperBase+" 2>&1; echo '== lower =='; ls /run/kata-containers/"+c.name+"/rootfs/ 2>&1 | head; "+
+				"echo '== mounts =='; grep -E 'kata|overlay' /proc/mounts 2>&1")
+		slog.ErrorContext(ctx, "overlay workload failed; dump", slog.String("container", c.name), slog.String("dump", dump))
+		return fmt.Errorf("while starting overlay workload %q: %w", c.name, err)
 	}
 	return nil
 }
@@ -450,17 +540,18 @@ func (s *AteomService) startActorContainer(ctx context.Context, ac *kata.AgentCl
 // ReadStdout/ReadStderr) through the shared actorlog forwarder, which annotates
 // each line with the actor's ate.dev/* labels and writes it to the pod's stdout.
 //
-// The streams are keyed by containerID==execID==id (the value StartBlkWorkload
-// passed); lines are tagged with the container name (ate.dev/container_name). The
-// reader contexts are context.Background() — the goroutines are NOT bound to the RPC
-// that started them; they terminate when ac is closed (by teardownActor), which
-// makes the in-flight ReadStdout/ReadStderr fail and the StreamReader return
-// io.EOF, ending WrapContainerLogs. This keeps the agent connection (which ttrpc
-// allows concurrent Calls on) alive for forwarding while guaranteeing no goroutine
-// outlives the connection.
-func (s *AteomService) startActorLogForwarding(ac *kata.AgentClient, id, name, ns, containerName string) {
-	go s.actorLogger.WrapContainerLogs(kata.NewStdioReader(context.Background(), ac, id, id, false), id, name, ns, containerName)
-	go s.actorLogger.WrapContainerLogs(kata.NewStdioReader(context.Background(), ac, id, id, true), id, name, ns, containerName)
+// The streams are keyed by streamID == the kata containerID==execID (the overlay
+// workload id); lines are tagged with actorID + containerName
+// (ate.dev/container_name) so a multi-container actor demultiplexes.
+// The reader contexts are context.Background() — the goroutines are NOT bound to the
+// RPC that started them; they terminate when ac is closed (by teardownActor), which
+// makes the in-flight ReadStdout/ReadStderr fail and the StreamReader return io.EOF,
+// ending WrapContainerLogs. This keeps the agent connection (which ttrpc allows
+// concurrent Calls on) alive for forwarding while guaranteeing no goroutine outlives
+// the connection.
+func (s *AteomService) startActorLogForwarding(ac *kata.AgentClient, actorID, streamID, containerName, name, ns string) {
+	go s.actorLogger.WrapContainerLogs(kata.NewStdioReader(context.Background(), ac, streamID, streamID, false), actorID, name, ns, containerName)
+	go s.actorLogger.WrapContainerLogs(kata.NewStdioReader(context.Background(), ac, streamID, streamID, true), actorID, name, ns, containerName)
 }
 
 // dialAgentRetry polls DialAgent until the kata-agent answers the hybrid-vsock

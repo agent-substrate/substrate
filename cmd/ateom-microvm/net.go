@@ -69,9 +69,9 @@ const (
 	// gateway MAC keeps the frozen entry valid on every pod.
 	hostVethMAC = "02:a8:1e:00:00:01"
 
-	// actorGuestMAC is the FIXED MAC for the guest's eth0 (the CH virtio-net) on
-	// the ateom-owned-boot path. Fixed for the same reason as hostVethMAC: a cold
-	// boot freezes this MAC into the guest+snapshot, and restore re-adds the
+	// actorGuestMAC is the FIXED MAC for the guest's eth0 (the CH virtio-net).
+	// Fixed for the same reason as hostVethMAC: a cold boot freezes this MAC into
+	// the guest+snapshot, and restore re-adds the
 	// virtio-net under the same MAC (SnapshotNetDevices reads it back), so the
 	// guest's frozen interface config stays valid across pods. Distinct from the
 	// gateway MAC (…:01).
@@ -599,8 +599,8 @@ func (s *AteomService) setupRestoreTap(ctx context.Context, name string, queuePa
 	return fds, nil
 }
 
-// actorVethMTU reads the MTU of the actor veth (eth0 in the interior netns) so the
-// owned-boot path can configure the guest eth0 with a matching MTU via the agent
+// actorVethMTU reads the MTU of the actor veth (eth0 in the interior netns) so
+// ateom can configure the guest eth0 with a matching MTU via the agent
 // (UpdateInterface). Defaults to 1500 if the link can't be read.
 func (s *AteomService) actorVethMTU(ctx context.Context) int {
 	mtu := 1500

@@ -51,7 +51,7 @@ func TestStatusErrorInterceptor(t *testing.T) {
 			name:       "RawErrorFallback",
 			handlerErr: errors.New("database connection failed"),
 			wantCode:   codes.Internal,
-			wantMsg:    "internal server error",
+			wantMsg:    "internal server error: database connection failed",
 		},
 	}
 

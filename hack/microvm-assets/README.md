@@ -1,11 +1,14 @@
 # Micro-VM runtime assets + counter demo (kind, fetch-not-bake)
 
 The `microvm` runtime (`cmd/ateom-microvm`, kata + cloud-hypervisor) fetches its
-toolchain at runtime — nothing kata-specific is baked into the worker image. ateom owns
-the cloud-hypervisor boot and gives the actor a writable virtio-blk rootfs, so neither the
-kata shim nor virtiofsd is needed. The asset set is just four files:
+toolchain at runtime — nothing kata-specific is baked into the worker image. ateom drives
+the kata-agent directly (no kata shim, no containerd). Each actor container's rootfs is an
+overlay of a read-only lower (the OCI image, served into the guest over virtio-fs by
+`virtiofsd`) and a writable upper on a guest tmpfs, so `virtiofsd` is part of the asset
+set. The asset set is five files:
 
 - `cloud-hypervisor` — the VMM binary (fetched from its release)
+- `virtiofsd` — the virtio-fs daemon serving the RO lower (built from source; see `assemble.sh`)
 - `vmlinux` — the guest kernel (from kata-static)
 - `rootfs.img` — the guest rootfs image (from kata-static)
 - `configuration-clh.toml` — the base kata config (from kata-static)
@@ -16,9 +19,9 @@ available, `hack/create-kind-cluster.sh` mounts it into the node and labels the 
 `ate.dev/sandboxClass=microvm`.
 
 > [!TIP]
-> `hack/run-microvm-demo.sh` automates the full bring-up below (ateom-base image, ko base
-> override, assets, control plane, demo apply) for kind OR GKE without editing committed
-> files. The steps here are the manual equivalent.
+> `hack/run-microvm-demo.sh` automates the full bring-up below (assets, control plane,
+> demo apply) for kind OR GKE without editing committed files. The steps here are the
+> manual equivalent.
 
 ## Steps (run on a KVM-capable Linux host matching the node arch)
 

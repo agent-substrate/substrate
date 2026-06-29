@@ -15,7 +15,7 @@ per-method / per-stage latency / throughput / error views.
 Dashboards are created/updated (idempotently) by setup:
 
 ```sh
-go run ./tools/setup-gcp --create-monitoring-dashboards   # also part of: --all
+go run ./tools/setup-gcp create dashboards   # also part of: bootstrap
 ```
 
 Or apply any single file by hand:

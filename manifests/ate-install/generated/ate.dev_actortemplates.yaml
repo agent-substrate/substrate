@@ -152,6 +152,74 @@ spec:
                       x-kubernetes-validations:
                       - message: Name must be a valid DNS label
                         rule: '!format.dns1123Label().validate(self).hasValue()'
+                    readyz:
+                      description: |-
+                        Readyz is an optional HTTP readiness probe. When set, the actor is not
+                        considered ready (and Run/Restore RPCs do not return success) until the
+                        container's HTTP endpoint returns 200.
+                      properties:
+                        httpGet:
+                          description: HTTPGet specifies the HTTP request to perform
+                            against the container.
+                          properties:
+                            path:
+                              default: /readyz
+                              description: |-
+                                Path to access on the HTTP server. Defaults to "/readyz".
+                                Must be a valid URL path starting with "/". Only characters permitted
+                                by RFC 3986 path segments are accepted; percent-escapes must be a
+                                literal "%" followed by exactly two hex digits. Query strings ("?")
+                                and fragments ("#") must be omitted.
+                              maxLength: 1024
+                              pattern: ^/([A-Za-z0-9\-._~!$&'()*+,;=:@/]|%[0-9A-Fa-f]{2})*$
+                              type: string
+                            port:
+                              description: Port to access on the container.
+                              format: int32
+                              maximum: 65535
+                              minimum: 1
+                              type: integer
+                          required:
+                          - port
+                          type: object
+                      required:
+                      - httpGet
+                      type: object
+                    volumeMounts:
+                      description: volumeMounts define the volumes to mount into this
+                        container.
+                      items:
+                        description: VolumeMount describes a mounting of a Volume
+                          within a actor.
+                        properties:
+                          mountPath:
+                            description: |-
+                              Path within the actor at which the volume should be mounted. Must be a
+                              clean absolute Unix path: must start with '/', not be '/', and contain
+                              no ':', '..', '.', '//', trailing '/', or control characters.
+                            maxLength: 4096
+                            type: string
+                            x-kubernetes-validations:
+                            - message: 'MountPath must be a clean absolute Unix path:
+                                must start with ''/'', not be ''/'', and contain no
+                                '':'', ''..'', ''.'', ''//'', trailing ''/'', or control
+                                characters'
+                              rule: self.startsWith('/') && size(self) > 1 && !self.endsWith('/')
+                                && !self.contains('//') && !self.contains(':') &&
+                                !self.matches('[\x00-\x1f\x7f]') && !self.matches('(^|/)[.][.]?(/|$)')
+                          name:
+                            description: This must match the Name of a Volume.
+                            maxLength: 63
+                            type: string
+                            x-kubernetes-validations:
+                            - message: Name must be a valid DNS label
+                              rule: '!format.dns1123Label().validate(self).hasValue()'
+                        required:
+                        - mountPath
+                        - name
+                        type: object
+                      maxItems: 32
+                      type: array
                   required:
                   - image
                   - name
@@ -197,9 +265,62 @@ spec:
                     description: Location to store snapshots in.
                     minLength: 1
                     type: string
+                  onCommit:
+                    default: Full
+                    description: |-
+                      OnCommit specifies what to include in the snapshot when a commit is requested.
+                      If not provided, the "Full" behavior is used by default.
+                      onCommit must be a subset of the onPause content.
+
+                      For example:
+                        - if onPause is "Full", then onCommit can be "Full" or "Data".
+                        - if onPause is "Data", then onCommit must be "Data".
+                    enum:
+                    - Full
+                    - Data
+                    type: string
+                  onPause:
+                    default: Full
+                    description: |-
+                      OnPause specifies what to include in the snapshot when the actor is paused.
+                      If not provided, the "Full" behavior is used by default.
+                    enum:
+                    - Full
+                    - Data
+                    type: string
                 required:
                 - location
                 type: object
+                x-kubernetes-validations:
+                - message: onCommit must be a subset of onPause
+                  rule: '(has(self.onPause) ? self.onPause : ''Full'') == ''Full''
+                    || (has(self.onCommit) ? self.onCommit : ''Full'') == (has(self.onPause)
+                    ? self.onPause : ''Full'')'
+              volumes:
+                description: Volumes defines the volumes to mount into all containers
+                  in the actor.
+                items:
+                  properties:
+                    durableDir:
+                      description: |-
+                        durableDir represents a durable directory on rootfs that persists across
+                        resumes and participates in snapshots.
+                      type: object
+                    name:
+                      description: name of the volume.
+                      maxLength: 63
+                      type: string
+                      x-kubernetes-validations:
+                      - message: Name must be a valid DNS label
+                        rule: '!format.dns1123Label().validate(self).hasValue()'
+                  required:
+                  - name
+                  type: object
+                  x-kubernetes-validations:
+                  - message: exactly one of the fields in [durableDir] must be set
+                    rule: '[has(self.durableDir)].filter(x,x==true).size() == 1'
+                maxItems: 32
+                type: array
               workerSelector:
                 description: |-
                   WorkerSelector restricts which worker pools actors from this template may
@@ -258,6 +379,16 @@ spec:
             x-kubernetes-validations:
             - message: Spec is immutable
               rule: self == oldSelf
+            - message: At most one DurableDir-typed volume is supported per ActorTemplate
+              rule: '!has(self.volumes) || self.volumes.filter(v, has(v.durableDir)).size()
+                <= 1'
+            - message: A container may mount at most one DurableDir-typed volume
+              rule: '!has(self.containers) || self.containers.all(c, !has(c.volumeMounts)
+                || c.volumeMounts.filter(vm, has(self.volumes) && self.volumes.exists(v,
+                v.name == vm.name && has(v.durableDir))).size() <= 1)'
+            - message: DurableDir volumes are not supported when sandboxClass is 'microvm'
+              rule: '!has(self.sandboxClass) || self.sandboxClass != ''microvm'' ||
+                !has(self.volumes) || !self.volumes.exists(v, has(v.durableDir))'
           status:
             description: status is the observed state of ActorTemplate
             properties:

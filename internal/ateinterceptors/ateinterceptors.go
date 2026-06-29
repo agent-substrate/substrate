@@ -51,7 +51,7 @@ func ServerUnaryInterceptor(ctx context.Context, req any, info *grpc.UnaryServer
 		}
 
 		// No status error found in chain.
-		return nil, status.Error(codes.Internal, "internal server error")
+		return nil, status.Errorf(codes.Internal, "internal server error: %v", err)
 	}
 
 	return resp, err

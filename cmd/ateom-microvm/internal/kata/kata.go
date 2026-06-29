@@ -13,15 +13,14 @@
 // limitations under the License.
 
 // Package kata holds the helpers ateom uses to boot and drive a kata guest in a
-// cloud-hypervisor micro-VM WITHOUT the kata shim: ateom boots cloud-hypervisor
-// itself (see internal/ch), then drives the stock kata-agent over its
-// hybrid-vsock ttrpc API (DialAgent / AgentClient) to create the sandbox and
-// start the actor's container on a writable virtio-blk rootfs (StartBlkWorkload).
+// cloud-hypervisor micro-VM without the kata shim: ateom boots cloud-hypervisor
+// itself (see internal/ch), then drives the stock kata-agent over its hybrid-vsock
+// ttrpc API (DialAgent / AgentClient) to create the sandbox and assemble each
+// container's overlay rootfs (overlay_linux.go).
 //
-// It also renders the kata configuration.toml (for the agent kernel_params +
-// guest sizing) from runtime-fetched assets (config.go), builds the actor's ext4
-// rootfs disk (BuildExt4Image), and sweeps leftover per-sandbox host-side state
-// (CleanupSandboxState).
+// It also renders the kata configuration.toml (for the agent kernel_params + guest
+// sizing) from runtime-fetched assets (config.go) and sweeps leftover per-sandbox
+// host-side state (CleanupSandboxState).
 package kata
 
 import (

@@ -69,10 +69,38 @@ message WorkloadSpec {
 }
 
 message Container {
-  string name = 1;
+  string          name                = 1;
+  Readyz          readyz              = 2;
+  repeated string durable_dir_volumes = 3;
+}
+
+// Readyz describes how to check that a container is ready to serve.
+// Only HTTP is supported today.
+message Readyz {
+  HTTPGetAction http_get = 1;
+}
+
+// HTTPGetAction performs an HTTP GET against the container.
+message HTTPGetAction {
+  // Path to access on the HTTP server. Empty means "/readyz".
+  string path = 1;
+  // TCP port to connect to (1..65535).
+  int32  port = 2;
 }
 
 message RunWorkloadResponse {
+}
+
+enum SnapshotScope {
+  // Not valid option; should never happen.
+  SNAPSHOT_SCOPE_UNSPECIFIED = 0;
+  // Capture process memory plus the full filesystem delta on top of the OCI
+  // image (including any attached DurableDir volumes).
+  SNAPSHOT_SCOPE_FULL = 1;
+  // Capture only the contents of attached volumes that support snapshots
+  // (currently DurableDir-typed volumes). Memory and the rest of rootfs are
+  // excluded.
+  SNAPSHOT_SCOPE_DATA = 2;
 }
 
 message CheckpointWorkloadRequest {
@@ -97,6 +125,9 @@ message CheckpointWorkloadRequest {
   // runtime_asset_paths maps a runtime asset name to the local on-disk path
   // atelet fetched it to (see RunWorkloadRequest). Empty for gVisor.
   map<string, string> runtime_asset_paths = 7;
+
+  // What content to include in the checkpoint.
+  SnapshotScope scope = 8;
 }
 
 message CheckpointWorkloadResponse {
@@ -121,6 +152,9 @@ message RestoreWorkloadRequest {
   // runtime_asset_paths maps a runtime asset name to the local on-disk path
   // atelet fetched it to (see RunWorkloadRequest). Empty for gVisor.
   map<string, string> runtime_asset_paths = 7;
+
+  // What content to restore from the snapshot.
+  SnapshotScope scope = 8;
 }
 
 message RestoreWorkloadResponse {

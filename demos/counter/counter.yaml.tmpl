@@ -43,8 +43,20 @@ spec:
   - name: counter
     image: ko://github.com/agent-substrate/substrate/demos/counter
     command: ["/ko-app/counter"]
+    readyz:
+      httpGet:
+        path: /readyz
+        port: 80
+    volumeMounts:
+    - name: data
+      mountPath: /home/counter
   workerSelector:
     matchLabels:
       workload: counter
   snapshotsConfig:
+    onPause: Full
+    onCommit: Data
     location: gs://${BUCKET_NAME}/ate-demo-counter/
+  volumes:
+  - name: data
+    durableDir: {}

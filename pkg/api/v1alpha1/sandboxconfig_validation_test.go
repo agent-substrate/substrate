@@ -48,13 +48,13 @@ func sandboxConfig(name string, class SandboxClass, assets map[string]map[string
 func runscAsset() AssetFile { return AssetFile{URL: "gs://bucket/runsc", SHA256: validSHA256} }
 
 // microVMAssets returns a full, valid micro-VM asset set for one architecture:
-// the four assets the policy requires. ateom owns the cloud-hypervisor boot and
-// gives the actor a writable virtio-blk rootfs, so the set has no kata-shim or
-// virtiofsd.
+// the five assets the policy requires. The overlay rootfs serves the OCI image
+// over virtio-fs, so virtiofsd is part of the set.
 func microVMAssets() map[string]AssetFile {
 	a := AssetFile{URL: "gs://bucket/asset", SHA256: validSHA256}
 	return map[string]AssetFile{
 		"cloud-hypervisor": a,
+		"virtiofsd":        a,
 		"kata-kernel":      a,
 		"kata-image":       a,
 		"kata-config":      a,
@@ -129,6 +129,15 @@ func TestSandboxConfigValidation(t *testing.T) {
 		sc: sandboxConfig("bad-microvm", "microvm", map[string]map[string]AssetFile{"amd64": func() map[string]AssetFile {
 			m := microVMAssets()
 			delete(m, "kata-image")
+			return m
+		}()}),
+		wantErr: true,
+		errMsg:  "microvm SandboxConfig must define",
+	}, {
+		name: "microvm missing virtiofsd",
+		sc: sandboxConfig("bad-microvm-novfsd", "microvm", map[string]map[string]AssetFile{"amd64": func() map[string]AssetFile {
+			m := microVMAssets()
+			delete(m, "virtiofsd")
 			return m
 		}()}),
 		wantErr: true,

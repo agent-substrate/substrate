@@ -32,15 +32,15 @@ import (
 
 // CheckpointWorkload suspends the actor and writes a portable CH snapshot.
 //
-// Contract with atelet (mirrors ateom-gvisor): after we return, atelet uploads
-// the checkpoint dir to object storage, then tears down bundles and resets the
-// actor dir.
+// Contract with atelet: after we return, atelet uploads the checkpoint dir to object
+// storage, then tears down bundles and resets the actor dir.
 //
-// ateom drives the ateom-owned CH's REST api-socket: pause -> snapshot
-// file://<CheckpointStateDir> (config.json + state.json + sparse memory-ranges) ->
-// tear the VMM down. The actor's rootfs lives on the host-backed /dev/vdb, not a
-// guest tmpfs overlay-upper, so the snapshot is naturally memory-only and small —
-// no RAM-backed upper to wipe and no balloon to inflate before snapshot.
+// ateom drives the CH REST api-socket: pause -> snapshot file://<CheckpointStateDir>
+// (config.json + state.json + sparse memory-ranges) -> tear the VMM down. Each
+// container's rootfs is overlay(virtio-fs RO lower + guest-tmpfs upper), so the
+// writable upper lives in guest RAM and is captured by the memory snapshot — process
+// memory and rootfs writes both persist across suspend/resume. The RO lower is
+// reconstructed from the OCI image at restore, so nothing rootfs-related ships here.
 func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.CheckpointWorkloadRequest) (*ateompb.CheckpointWorkloadResponse, error) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
@@ -79,9 +79,9 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	}
 
 	// Record the FROZEN base id (the id the guest's virtio-fs find-paths are pinned
-	// to, <baseID>/rootfs). For a cold (owned-boot) actor this is its own id; for a
-	// restored actor it is the golden id propagated via ra.baseID (set from the
-	// snapshot we restored from). RestoreWorkload reads this to lay the
+	// to, <baseID>/rootfs). For a cold-run actor this is its own id; for a restored
+	// actor it is the golden id propagated via ra.baseID (set from the snapshot we
+	// restored from). RestoreWorkload reads this to lay the
 	// reconstructed-from-image base at the path the guest expects. We can NOT derive
 	// it from config.json (its socket paths get rewritten to the current id on every
 	// restore, losing the invariant golden id).
@@ -120,25 +120,13 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 			slog.String("id", id), slog.Duration("merge", time.Since(tMerge)))
 	}
 
-	// reset-to-golden support: save the actor's /dev/vdb AS-OF this (paused,
-	// consistent) snapshot as a verbatim golden template, so future restores can
-	// recreate the disk byte-identical to what the snapshot's guest RAM expects
-	// while discarding the actor's later rootfs writes. Saved once (the first/golden
-	// checkpoint) and kept; best-effort (without it, restore reopens the live disk =
-	// continuity). TODO: ship the template with the snapshot for cross-node restore
-	// (it's golden, shipped once per template, like the OCI base).
-	actorDir := ateompath.ActorPath(ns, name, id)
-	if tmpl := filepath.Join(actorDir, goldenRootfsDiskName); fileMissing(tmpl) {
-		if cerr := copyDiskFile(ctx, filepath.Join(actorDir, actorRootfsDiskName), tmpl); cerr != nil {
-			slog.WarnContext(ctx, "Failed to save golden rootfs template; restore will reopen live disk", slog.Any("err", cerr))
-		} else {
-			slog.InfoContext(ctx, "Saved golden rootfs disk template", slog.String("id", id))
-		}
-	}
+	// Nothing rootfs-related ships: the overlay's writable upper is a guest tmpfs, so
+	// the actor's rootfs writes are already in the memory snapshot above, and the RO
+	// lower is reconstructed from the OCI image at restore (it never changes).
 
 	// Report exactly the files we wrote so atelet ships precisely the CH snapshot
-	// (config.json + state.json + memory-ranges + base-id), not gVisor's fixed set.
-	// Memory-only: the RO base is reconstructed from the OCI image at restore.
+	// (config.json + state.json + memory-ranges + base-id). The RO base is
+	// reconstructed from the OCI image at restore.
 	snapshotFiles, err := listFiles(checkpointDir)
 	if err != nil {
 		return nil, fmt.Errorf("while listing snapshot files: %w", err)
@@ -151,7 +139,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	dTeardown := time.Since(tTeardown)
 	delete(s.running, id)
 
-	// Tear down the per-activation actor network (mirrors gVisor).
+	// Tear down the per-activation actor network.
 	if err := s.cleanupActorNetwork(ctx); err != nil {
 		slog.WarnContext(ctx, "Failed to clean up actor network after checkpoint", slog.Any("err", err))
 	}
@@ -206,6 +194,11 @@ func (s *AteomService) teardownActor(ctx context.Context, id string, ra *running
 		if ra.chCmd != nil && ra.chCmd.Process != nil {
 			_ = ra.chCmd.Process.Kill()
 			_, _ = ra.chCmd.Process.Wait()
+		}
+		// Kill the virtiofsd serving the overlay RO lower (after CH, its only client).
+		if ra.vfsdCmd != nil && ra.vfsdCmd.Process != nil {
+			_ = ra.vfsdCmd.Process.Kill()
+			_, _ = ra.vfsdCmd.Process.Wait()
 		}
 	}
 

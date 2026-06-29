@@ -338,6 +338,7 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 		RunscPath:              runscPathFor(assetPaths),
 		RuntimeAssetPaths:      assetPaths,
 		Spec:                   buildAteomWorkloadSpec(req.GetSpec()),
+		Scope:                  toAteomSnapshotScope(req.GetScope()),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("while calling ateom.CheckpointWorkload: %w", err)
@@ -365,6 +366,16 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 	}
 
 	return &ateletpb.CheckpointResponse{}, nil
+}
+
+func toAteomSnapshotScope(scope ateletpb.SnapshotScope) ateompb.SnapshotScope {
+	// assumption the request already been validated and scope is in the valid values set
+	switch scope {
+	case ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA:
+		return ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA
+	default:
+		return ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL
+	}
 }
 
 func (s *AteomHerder) moveLocalCheckpoint(ctx context.Context, req *ateletpb.CheckpointRequest, checkpointDir string, rec *sandboxAssetsRecord) error {
@@ -537,6 +548,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		RunscPath:              runscPathFor(assetPaths),
 		RuntimeAssetPaths:      assetPaths,
 		Spec:                   buildAteomWorkloadSpec(req.GetSpec()),
+		Scope:                  toAteomSnapshotScope(req.GetScope()),
 	}); err != nil {
 		return nil, fmt.Errorf("while calling ateom.RestoreWorkload: %w", err)
 	}
@@ -637,10 +649,36 @@ func (s *AteomHerder) prepareOCIBundles(
 		return fmt.Errorf("while writing actor identity file: %w", err)
 	}
 
+	ddVolumes := make(map[string]bool)
+	// make directories for all durable-dir volumes
+	for _, vol := range spec.GetVolumes() {
+		if vol.GetType() == ateletpb.VolumeType_VOLUME_TYPE_DURABLE_DIR {
+			ddVolumes[vol.GetName()] = true
+			volPath := ateompath.DurableDirVolumeMountPoint(actorTemplateNamespace, actorTemplateName, actorID, vol.GetName())
+			if err := os.MkdirAll(volPath, 0o700); err != nil {
+				return fmt.Errorf("while creating %q: %w", volPath, err)
+			}
+		}
+	}
+
 	g, gCtx := errgroup.WithContext(ctx)
 
 	// Pause container.
 	g.Go(func() error {
+		annotations := map[string]string{
+			"io.kubernetes.cri.container-type": "sandbox",
+			"io.kubernetes.cri.container-name": "pause",
+		}
+		// add annotation for every durable-dir volume
+		// TODO(dberkov) needs to revisit this logic once gVisor supports multiple durable-dir volumes.
+		for _, vol := range spec.GetVolumes() {
+			if vol.GetType() == ateletpb.VolumeType_VOLUME_TYPE_DURABLE_DIR {
+				annotations["dev.gvisor.spec.mount.durabledir.type"] = "bind"
+				annotations["dev.gvisor.spec.mount.durabledir.share"] = "container"
+				annotations["dev.gvisor.spec.mount.durabledir.source"] = ateompath.DurableDirVolumeMountPoint(actorTemplateNamespace, actorTemplateName, actorID, vol.GetName())
+			}
+		}
+
 		if err := prepareOCIDirectory(
 			gCtx,
 			s.pullCache,
@@ -649,12 +687,10 @@ func (s *AteomHerder) prepareOCIBundles(
 			spec.GetPauseImage(),
 			[]string{"/pause"},
 			nil,
-			map[string]string{
-				"io.kubernetes.cri.container-type": "sandbox",
-				"io.kubernetes.cri.container-name": "pause",
-			},
+			annotations,
 			netnsPath,
 			"", // pause is sandbox infra; it gets no actor identity mount.
+			nil,
 		); err != nil {
 			return fmt.Errorf("while creating pause OCI bundle: %w", err)
 		}
@@ -667,6 +703,12 @@ func (s *AteomHerder) prepareOCIBundles(
 		var envs []string
 		for _, env := range ctr.GetEnv() {
 			envs = append(envs, fmt.Sprintf("%s=%s", env.GetName(), env.GetValue()))
+		}
+		var ddMounts []*ateletpb.VolumeMount
+		for _, vm := range ctr.GetVolumeMounts() {
+			if ddVolumes[vm.GetName()] {
+				ddMounts = append(ddMounts, vm)
+			}
 		}
 		g.Go(func() error {
 			if err := prepareOCIDirectory(
@@ -684,6 +726,7 @@ func (s *AteomHerder) prepareOCIBundles(
 				},
 				netnsPath,
 				identityDir,
+				ddMounts,
 			); err != nil {
 				return fmt.Errorf("while creating %q OCI bundle: %w", ctr.GetName(), err)
 			}
@@ -705,11 +748,45 @@ func (s *AteomHerder) dialAteom(ctx context.Context, targetAteomUid string) (ate
 }
 
 // buildAteomWorkloadSpec projects the atelet-facing workload spec onto
-// the ateom-facing one — currently just the container names.
+// the ateom-facing one.
 func buildAteomWorkloadSpec(spec *ateletpb.WorkloadSpec) *ateompb.WorkloadSpec {
+	ddVolumes := make(map[string]bool)
+	for _, vol := range spec.GetVolumes() {
+		if vol.GetType() == ateletpb.VolumeType_VOLUME_TYPE_DURABLE_DIR {
+			ddVolumes[vol.GetName()] = true
+		}
+	}
+
 	out := &ateompb.WorkloadSpec{}
 	for _, ctr := range spec.GetContainers() {
-		out.Containers = append(out.Containers, &ateompb.Container{Name: ctr.GetName()})
+		var ddMountPaths []string
+		for _, vm := range ctr.GetVolumeMounts() {
+			if ddVolumes[vm.GetName()] {
+				ddMountPaths = append(ddMountPaths, vm.GetMountPath())
+			}
+		}
+		out.Containers = append(out.Containers, &ateompb.Container{
+			Name:              ctr.GetName(),
+			DurableDirVolumes: ddMountPaths,
+			Readyz:            toAteomReadyz(ctr.GetReadyz()),
+		})
+	}
+	return out
+}
+
+// toAteomReadyz converts an ateletpb readyz probe into the ateompb wire
+// type. Returns nil when the source is nil so containers without a probe
+// stay unchanged on the wire to ateom.
+func toAteomReadyz(in *ateletpb.Readyz) *ateompb.Readyz {
+	if in == nil {
+		return nil
+	}
+	out := &ateompb.Readyz{}
+	if hg := in.GetHttpGet(); hg != nil {
+		out.HttpGet = &ateompb.HTTPGetAction{
+			Path: hg.GetPath(),
+			Port: hg.GetPort(),
+		}
 	}
 	return out
 }
@@ -756,6 +833,11 @@ func validateCheckpointRequest(req *ateletpb.CheckpointRequest) error {
 	if err := validateActorRequest(req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId(), req.GetTargetAteomUid(), req.GetSpec()); err != nil {
 		return err
 	}
+
+	if err := validateSnapshotScope(req.GetScope()); err != nil {
+		return err
+	}
+
 	switch req.GetType() {
 	case ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL:
 		if err := resources.ValidateSnapshotURIPrefix(req.GetExternalConfig().GetSnapshotUriPrefix()); err != nil {
@@ -775,6 +857,11 @@ func validateRestoreRequest(req *ateletpb.RestoreRequest) error {
 	if err := validateActorRequest(req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId(), req.GetTargetAteomUid(), req.GetSpec()); err != nil {
 		return err
 	}
+
+	if err := validateSnapshotScope(req.GetScope()); err != nil {
+		return err
+	}
+
 	switch req.GetType() {
 	case ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL:
 		if err := resources.ValidateSnapshotURIPrefix(req.GetExternalConfig().GetSnapshotUriPrefix()); err != nil {
@@ -788,6 +875,18 @@ func validateRestoreRequest(req *ateletpb.RestoreRequest) error {
 		return fmt.Errorf("invalid checkpoint type: %v", req.GetType())
 	}
 	return nil
+}
+
+func validateSnapshotScope(scope ateletpb.SnapshotScope) error {
+	switch scope {
+	case ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
+		ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA:
+		return nil
+	case ateletpb.SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED:
+		return fmt.Errorf("snapshot scope must be non-zero")
+	default:
+		return fmt.Errorf("invalid snapshot scope: %v", scope)
+	}
 }
 
 // validateActorRequest is the shared core for the fields common to all three
@@ -896,6 +995,14 @@ func resetActorDirs(actorTemplateNamespace, actorTemplateName, actorID string) e
 	}
 	if err := os.MkdirAll(identityDir, 0o755); err != nil {
 		return fmt.Errorf("while creating actor identity dir: %w", err)
+	}
+
+	durableDirVolumesMountDir := ateompath.DurableDirVolumeMountsDir(actorTemplateNamespace, actorTemplateName, actorID)
+	if err := os.RemoveAll(durableDirVolumesMountDir); err != nil {
+		return fmt.Errorf("while deleting durable-dir volumes mount dir: %w", err)
+	}
+	if err := os.MkdirAll(durableDirVolumesMountDir, 0o755); err != nil {
+		return fmt.Errorf("while creating durable-dir volumes mount dir: %w", err)
 	}
 
 	return nil

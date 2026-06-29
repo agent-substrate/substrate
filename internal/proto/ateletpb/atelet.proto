@@ -77,18 +77,58 @@ message SandboxAssets {
 message WorkloadSpec {
   repeated Container containers  = 1;
   string             pause_image = 2;
+  repeated Volume    volumes     = 3;
+}
+
+enum VolumeType {
+  VOLUME_TYPE_UNSPECIFIED  = 0;
+  VOLUME_TYPE_DURABLE_DIR  = 1;
+}
+
+message DurableDirVolume {
+}
+
+message Volume {
+  string name = 1;
+
+  VolumeType type = 2;
+
+  oneof source{
+    DurableDirVolume durable_dir = 3;
+  }
+}
+
+message VolumeMount{
+  string name = 1;
+  string mount_path = 2;
 }
 
 message Container {
-  string            name    = 1;
-  string            image   = 2;
-  repeated string   command = 3;
-  repeated EnvEntry env     = 4;
+  string               name          = 1;
+  string               image         = 2;
+  repeated string      command       = 3;
+  repeated EnvEntry    env           = 4;
+  Readyz               readyz  = 5;
+  repeated VolumeMount volume_mounts = 6;
 }
 
 message EnvEntry {
   string name  = 1;
   string value = 2;
+}
+
+// Readyz describes how to check that a container is ready to serve.
+// Only HTTP is supported today.
+message Readyz {
+  HTTPGetAction http_get = 1;
+}
+
+// HTTPGetAction performs an HTTP GET against the container.
+message HTTPGetAction {
+  // Path to access on the HTTP server. Empty means "/readyz".
+  string path = 1;
+  // TCP port to connect to (1..65535).
+  int32  port = 2;
 }
 
 message RunResponse {
@@ -123,6 +163,18 @@ enum CheckpointType {
   CHECKPOINT_TYPE_EXTERNAL = 2;
 }
 
+enum SnapshotScope {
+  // Not valid option; should never happen.
+  SNAPSHOT_SCOPE_UNSPECIFIED = 0;
+  // Capture process memory plus the full filesystem delta on top of the OCI
+  // image (including any attached DurableDir volumes).
+  SNAPSHOT_SCOPE_FULL = 1;
+  // Capture only the contents of attached volumes that support snapshots
+  // (currently DurableDir-typed volumes). Memory and the rest of rootfs are
+  // excluded.
+  SNAPSHOT_SCOPE_DATA = 2;
+}
+
 message CheckpointRequest {
   string target_ateom_uid = 1;
 
@@ -147,6 +199,9 @@ message CheckpointRequest {
     LocalCheckpointConfiguration local_config    = 10;
     ExternalCheckpointConfiguration external_config = 11;
   }
+
+  // What should be included in the checkpoint.
+  SnapshotScope scope = 12;
 }
 
 message CheckpointResponse {
@@ -177,6 +232,9 @@ message RestoreRequest {
     LocalCheckpointConfiguration local_config    = 10;
     ExternalCheckpointConfiguration external_config = 11;
   }
+
+  // What content to restore from the checkpoint.
+  SnapshotScope scope = 12;
 }
 
 message RestoreResponse {

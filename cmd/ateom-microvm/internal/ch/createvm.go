@@ -20,19 +20,35 @@ import (
 )
 
 // VmConfig is the body of /api/v1/vm.create — the subset of cloud-hypervisor's
-// VmConfig ateom sets to boot a kata guest itself (the "ateom owns the boot"
-// path, replacing the kata shim). Modeled on kata's clh driver
-// (src/runtime/virtcontainers/clh.go) and the proven suspend-bench vmConfig.
-// vm.create + vm.boot use PUT (empirically accepted by CH, like the bench).
+// VmConfig ateom sets to boot the kata guest. Modeled on kata's clh driver
+// (src/runtime/virtcontainers/clh.go). vm.create + vm.boot are issued with PUT.
 type VmConfig struct {
-	Cpus    CpusConfig     `json:"cpus"`
-	Memory  MemoryConfig   `json:"memory"`
-	Payload PayloadConfig  `json:"payload"`
-	Disks   []DiskConfig   `json:"disks,omitempty"`
-	Rng     *RngConfig     `json:"rng,omitempty"`
-	Serial  *ConsoleConfig `json:"serial,omitempty"`
-	Console *ConsoleConfig `json:"console,omitempty"`
-	Vsock   *VsockConfig   `json:"vsock,omitempty"`
+	Cpus     CpusConfig      `json:"cpus"`
+	Memory   MemoryConfig    `json:"memory"`
+	Payload  PayloadConfig   `json:"payload"`
+	Disks    []DiskConfig    `json:"disks,omitempty"`
+	Fs       []FsConfig      `json:"fs,omitempty"`
+	Rng      *RngConfig      `json:"rng,omitempty"`
+	Serial   *ConsoleConfig  `json:"serial,omitempty"`
+	Console  *ConsoleConfig  `json:"console,omitempty"`
+	Vsock    *VsockConfig    `json:"vsock,omitempty"`
+	Platform *PlatformConfig `json:"platform,omitempty"`
+}
+
+// FsConfig is a virtio-fs device backed by a vhost-user (virtiofsd) socket. The
+// overlay rootfs path uses it as the RO lower; the guest mounts it via the FsTag.
+type FsConfig struct {
+	Tag        string `json:"tag"`
+	Socket     string `json:"socket"`
+	NumQueues  int32  `json:"num_queues,omitempty"`
+	QueueSize  int32  `json:"queue_size,omitempty"`
+	PciSegment int32  `json:"pci_segment,omitempty"`
+}
+
+// PlatformConfig sets VM-wide platform options. NumPciSegments must be >1 when a
+// virtio-fs device sits on a non-zero PCI segment (kata puts fs on segment 1).
+type PlatformConfig struct {
+	NumPciSegments int32 `json:"num_pci_segments,omitempty"`
 }
 
 // CpusConfig sets the boot/max vCPU counts.
@@ -56,10 +72,9 @@ type PayloadConfig struct {
 	Cmdline string `json:"cmdline"`
 }
 
-// DiskConfig is one virtio-blk disk. The kata guest image is disk 0 (/dev/vda,
-// readonly); ateom appends the actor rootfs as disk 1 (/dev/vdb, writable). The
-// guest sees disks in config order. NumQueues/QueueSize mirror kata's clh
-// (num_queues = vcpus, queue_size = 1024).
+// DiskConfig is one virtio-blk disk. The only disk is the kata guest image
+// (/dev/vda, read-only); the actor rootfs is an overlay served over virtio-fs, not a
+// disk. NumQueues/QueueSize mirror kata's clh (num_queues = vcpus, queue_size = 1024).
 type DiskConfig struct {
 	Path      string `json:"path"`
 	Readonly  bool   `json:"readonly"`

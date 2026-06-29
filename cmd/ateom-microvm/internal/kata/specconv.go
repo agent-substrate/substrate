@@ -17,63 +17,19 @@
 package kata
 
 import (
-	"context"
-	"fmt"
-
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/third_party/kata/agentpb"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 )
 
-// StartBlkWorkload starts the actor container with its rootfs backed by a single
-// boot-time virtio-blk disk (devPath, e.g. "/dev/vdb") — the virtio-blk-rootfs
-// path. There is NO overlay, NO virtio-fs, NO tmpfs upper: the agent direct-mounts
-// devPath (ext4) as the container rootfs, so rootfs writes land on the host-backed
-// disk file (off guest RAM) and the CH snapshot stays memory-only with no balloon.
-//
-// One "blk" storage: source is the /dev node (kata's block storage handler mounts
-// it directly when source starts with /dev — no uevent/auto-enumeration wait,
-// unlike a hotplugged disk), fstype ext4, mounted at the container rootfs path.
-// The spec's Root.Path is set to that mount point, which the agent's setup_bundle
-// then uses as the container root.
-func (a *AgentClient) StartBlkWorkload(ctx context.Context, containerID, devPath string, spec *specs.Spec) error {
-	rootfs := "/run/kata-containers/" + containerID + "/rootfs"
-	storages := []*agentpb.Storage{
-		{
-			Driver:     "blk",
-			Source:     devPath,
-			Fstype:     "ext4",
-			MountPoint: rootfs,
-			Options:    []string{"rw"},
-		},
-	}
-
-	pbSpec := SpecToAgentPB(spec)
-	pbSpec.Root = &agentpb.Root{Path: rootfs, Readonly: false}
-
-	if err := a.CreateContainer(ctx, &agentpb.CreateContainerRequest{
-		ContainerId: containerID,
-		ExecId:      containerID,
-		Storages:    storages,
-		OCI:         pbSpec,
-	}); err != nil {
-		return fmt.Errorf("creating blk workload %q: %w", containerID, err)
-	}
-	if err := a.StartContainer(ctx, containerID); err != nil {
-		return fmt.Errorf("starting blk workload %q: %w", containerID, err)
-	}
-	return nil
-}
-
 // SpecToAgentPB converts an OCI runtime spec into the kata-agent's protobuf Spec
-// (agentpb.Spec) for a CreateContainer ttrpc call. The shim normally does this
-// conversion; ateom does it itself when it drives the agent directly ("be your
-// own hook scheduler"). A blind json round-trip does NOT work: agentpb's Spec
-// JSON tags are PascalCase (from oci.proto), while OCI config.json is lowercase.
+// (agentpb.Spec) for a CreateContainer ttrpc call. A blind json round-trip does NOT
+// work: agentpb's Spec JSON tags are PascalCase (from oci.proto), while OCI
+// config.json is lowercase.
 //
 // Only the fields the kata-agent needs to create + start a container are mapped
-// (process, root, mounts, linux namespaces/resources/cgroup/masked+readonly
-// paths). The container rootfs is provided out-of-band as storages; the caller
-// is expected to set the returned spec's Root.Path to the overlay mount point.
+// (process, root, mounts, linux namespaces/resources/cgroup/masked+readonly paths).
+// The container rootfs is provided out-of-band as storages; the caller sets the
+// returned spec's Root.Path to the overlay mount point.
 func SpecToAgentPB(s *specs.Spec) *agentpb.Spec {
 	if s == nil {
 		return nil
