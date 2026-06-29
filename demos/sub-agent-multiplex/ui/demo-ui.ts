@@ -206,15 +206,13 @@ app.get("/", (c) => {
   header { border-bottom: 2px solid var(--green); padding-bottom: 0.8em; margin-bottom: 1.5em; display: flex; justify-content: space-between; align-items: baseline; }
   h1 { font-size: 1.25em; margin: 0; color: var(--green); font-weight: 800; text-transform: uppercase; }
   
-  .grid-master { display: grid; gap: 1.5em; grid-template-columns: 1.6fr 1fr; margin-bottom: 1.5em; align-items: stretch; }
-  .grid-master > div { display: flex; flex-direction: column; gap: 1.5em; }
+  .grid-master { display: grid; gap: 1.5em; grid-template-columns: 1.6fr 1fr; margin-bottom: 1.5em; }
   .grid-side { display: grid; gap: 1.5em; grid-template-columns: 1fr 1fr; margin-bottom: 1.5em; }
   
   .card { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 1.2em; position: relative; }
-  .grid-master > div:first-child > .card { flex: 1; display: flex; flex-direction: column; }
   .card h2 { font-size: 0.75em; margin: 0 0 1em 0; color: var(--muted); text-transform: uppercase; font-weight: 800; border-left: 3px solid var(--green); padding-left: 8px; }
 
-  .shell-container { background: var(--panel-2); flex: 1; overflow: auto; padding: 1em; border: 1px solid #000; box-shadow: inset 0 2px 15px rgba(0,0,0,0.7); }
+  .shell-container { background: var(--panel-2); height: 250px; overflow: auto; padding: 1em; border: 1px solid #000; box-shadow: inset 0 2px 15px rgba(0,0,0,0.7); }
   .shell-line { font-size: 0.82em; color: #d1d5db; margin-bottom: 0.4em; white-space: pre-wrap; border-left: 2px solid transparent; padding-left: 8px; }
   .shell-line.whatsapp { color: var(--green); border-color: var(--green); }
   .shell-line.orchestrator { color: var(--pink); border-color: var(--pink); }
@@ -253,20 +251,18 @@ app.get("/", (c) => {
 </head>
 <body>
 <header>
-  <h1>NanoClaw Substrate Integration Demo <span style="font-size:0.6em; vertical-align:middle; opacity:0.8;">V1.1.36 STABLE</span></h1>
+  <h1>NanoClaw Substrate Integration Demo <span style="font-size:0.6em; vertical-align:middle; opacity:0.8;">V1.1.38 STABLE</span></h1>
   <div id="heartbeat" style="font-size:0.7em; color:var(--muted)">Initializing...</div>
   <button class="btn" style="background:var(--red); color:#fff;" onclick="deepClean()">Deep Clean</button>
 </header>
 
 <div class="grid-master">
-  <div>
-    <div class="card">
-      <h2>NanoClaw Decision Stream</h2>
-      <div id="shell" class="shell-container"></div>
-    </div>
+  <div class="card">
+    <h2>NanoClaw Decision Stream</h2>
+    <div id="shell" class="shell-container"></div>
   </div>
   <div>
-    <div class="card">
+    <div class="card" style="margin-bottom: 1.5em;">
       <h2>WhatsApp Bridge</h2>
       <div id="wa-status"></div>
       <div id="pairing-section" style="display:none;">
@@ -290,7 +286,7 @@ app.get("/", (c) => {
         </div>
       </div>
     </div>
-    <div class="card" style="background: transparent; border:none; padding:0;">
+    <div class="card" style="margin-top: 15px; background: transparent; border:none; padding:0;">
       <h2 style="border-left-color: var(--orange)">External Cron Tracker</h2>
       <div id="cron" class="cron-box"></div>
     </div>
