@@ -206,13 +206,15 @@ app.get("/", (c) => {
   header { border-bottom: 2px solid var(--green); padding-bottom: 0.8em; margin-bottom: 1.5em; display: flex; justify-content: space-between; align-items: baseline; }
   h1 { font-size: 1.25em; margin: 0; color: var(--green); font-weight: 800; text-transform: uppercase; }
   
-  .grid-master { display: grid; gap: 1.5em; grid-template-columns: 1.6fr 1fr; margin-bottom: 1.5em; }
+  .grid-master { display: grid; gap: 1.5em; grid-template-columns: 1.6fr 1fr; margin-bottom: 1.5em; align-items: stretch; }
+  .grid-master > div { display: flex; flex-direction: column; }
   .grid-side { display: grid; gap: 1.5em; grid-template-columns: 1fr 1fr; margin-bottom: 1.5em; }
   
   .card { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 1.2em; position: relative; }
+  .grid-master > div:first-child > .card { flex: 1; display: flex; flex-direction: column; }
   .card h2 { font-size: 0.75em; margin: 0 0 1em 0; color: var(--muted); text-transform: uppercase; font-weight: 800; border-left: 3px solid var(--green); padding-left: 8px; }
 
-  .shell-container { background: var(--panel-2); height: 250px; overflow: auto; padding: 1em; border: 1px solid #000; box-shadow: inset 0 2px 15px rgba(0,0,0,0.7); }
+  .shell-container { background: var(--panel-2); flex: 1; overflow: auto; padding: 1em; border: 1px solid #000; box-shadow: inset 0 2px 15px rgba(0,0,0,0.7); }
   .shell-line { font-size: 0.82em; color: #d1d5db; margin-bottom: 0.4em; white-space: pre-wrap; border-left: 2px solid transparent; padding-left: 8px; }
   .shell-line.whatsapp { color: var(--green); border-color: var(--green); }
   .shell-line.orchestrator { color: var(--pink); border-color: var(--pink); }
