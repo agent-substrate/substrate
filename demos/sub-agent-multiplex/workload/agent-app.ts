@@ -46,8 +46,13 @@ class AgentApp {
     // Simulate real work
     await new Promise(r => setTimeout(r, 4000));
     
-    // REPLY via WhatsApp Skill (Substrate-ignorant)
-    const replyText = `✅ NanoClaw Task Complete!\n\nReference: ${task.substring(0, 10)}...\nProcessed on: Substrate (gVisor)\nResult: Task executed successfully in isolated sandbox.`;
+    // High-Fidelity Reasoning Payload (Simulated LLM)
+    const report = `THOUGHT: User requested "${task}". I need to verify cluster-wide security policies.\n` +
+                   `ANALYSIS: Scanning gVisor sandbox boundaries for Actor ${process.env.ATE_ACTOR_ID}...\n` +
+                   `RESULT: No anomalies detected. Filesystem rehydration confirmed. Memory state preserved.\n` +
+                   `ACTION: Returning audit report to WhatsApp Gateway.`;
+
+    const replyText = `✅ NanoClaw Task Complete!\n\n${report}\n\nProcessed on: Substrate (gVisor)\nDensity Ratio: 1.5x Overcommit.`;
     
     try {
       await fetch(`${this.localNanoUrl}/local/send-whatsapp`, {

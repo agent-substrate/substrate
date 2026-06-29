@@ -18,7 +18,7 @@ const logger = pino({ level: "info" });
 // --- Configuration ---
 const ATE_ENDPOINT = process.env.ATE_ENDPOINT || "api.ate-system.svc.cluster.local:443";
 const AUTH_DIR = "/app/store/auth/v1";
-const PHONE_NUMBER = process.env.WHATSAPP_PHONE || "1234567890"; // Use WHATSAPP_PHONE env var
+const PHONE_NUMBER = process.env.WHATSAPP_PHONE || "1234567890"; // Sanitized for backup
 const TEMPLATE = "sub-agent/sub-agent-agent";
 
 // --- Types ---
@@ -153,6 +153,23 @@ async function connectToWhatsApp() {
        return;
     }
 
+    // --- Burst Command ---
+    if (text.toLowerCase().startsWith("/burst")) {
+       const count = parseInt(text.split(" ")[1]) || 5;
+       const safeCount = Math.min(count, 15);
+       log("whatsapp", `🚀 Burst Triggered: Dispatching ${safeCount} tasks...`);
+       await sock.sendMessage(from, { text: `🚀 BURST MODE: Dispatching ${safeCount} tasks. I will spread these across Luna, Mars, and Nova with rehydration healing active.` });
+       
+       for(let i=0; i<safeCount; i++) {
+          const agents = ["agent-luna-v12", "agent-mars-v12", "agent-nova-v11"];
+          const target = agents[i % agents.length];
+          // Don't await, let them run in parallel
+          orchestrateActor(target, `Burst Task #${i+1}: High-frequency stress test`, from, sock);
+          await delay(2000); // 2s jitter to prevent control-plane race conditions
+       }
+       return;
+    }
+
     // Auto-ACK
     await sock.sendMessage(from, { text: `🤖 Message acknowledged! (Event Sync: ${fromMe ? 'Internal' : 'External'})` });
 
@@ -184,24 +201,33 @@ async function orchestrateActor(actorId: string, task: string, sender: string, s
     let resumed = false;
     for(let i=0; i<3; i++) {
         try {
-            await runCmd(`kubectl-ate --endpoint ${ATE_ENDPOINT} resume actor ${actorId}`);
+            log("substrate", `> kubectl-ate resume actor ${actorId} (Attempt ${i+1}/3)`);
+            const out = await runCmd(`kubectl-ate --endpoint ${ATE_ENDPOINT} resume actor ${actorId}`);
+            if (out.includes("Error") || out.includes("internal server error")) {
+               throw new Error(out);
+            }
             resumed = true;
             break;
-        } catch(e) {
-            log("substrate", `Resume Attempt ${i+1} failed. Resetting identity...`, "warn");
+        } catch(e: any) {
+            log("substrate", `Resume failed: ${e.message}. Wiping identity...`, "warn");
             await runCmd(`kubectl-ate --endpoint ${ATE_ENDPOINT} delete actor ${actorId}`).catch(()=>{});
-            await delay(3000);
+            await delay(4000);
             await runCmd(`kubectl-ate --endpoint ${ATE_ENDPOINT} create actor ${actorId} --template ${TEMPLATE}`);
+            await delay(2000);
         }
     }
 
     if (!resumed) throw new Error("Hard Rehydration Failure");
     
     let actorIP = "";
-    for (let i = 0; i < 40; i++) {
+    for (let i = 0; i < 60; i++) { // 60s timeout for IP
       const out = await runCmd(`kubectl-ate --endpoint ${ATE_ENDPOINT} get actor ${actorId} -o json`);
+      if (!out) continue;
       const actor = JSON.parse(out).actors?.[0] || JSON.parse(out);
-      if (actor.status === "STATUS_RUNNING" && actor.ateomPodIp) { actorIP = actor.ateomPodIp; break; }
+      if (actor.status === "STATUS_RUNNING" && actor.ateomPodIp) { 
+        actorIP = actor.ateomPodIp; 
+        break; 
+      }
       await delay(1000);
     }
     if (!actorIP) throw new Error("IP Assignment Timeout");
