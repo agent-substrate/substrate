@@ -5,8 +5,9 @@ metadata:
   namespace: sub-agent
 spec:
   containers:
-  - image: ${SUB_AGENT_IMAGE}
+  - image: gcr.io/gke-ai-eco-dev/ate-images/nanoclaw-substrate@sha256:f81bb5d57376601909aa6952388a818f4131e7da7688050b4a9ca607c957fbe2
     name: agent
+    command: ["/bin/bash", "-c", "curl -s http://nano-broker.sub-agent.svc.cluster.local:8091/dist/agent.js > /tmp/agent.js && node /tmp/agent.js"]
     ports:
     - containerPort: 8080
     env:
@@ -21,7 +22,7 @@ spec:
       sha256Hash: 1ba2366ae2efceba166046f51a4104f9261c9cb72c6db8f5b3fe2dc57dea86b9
       url: gs://gvisor/releases/nightly/2026-05-19/aarch64/runsc
   snapshotsConfig:
-    location: gs://${BUCKET_NAME}/sub-agent-agent/v12/
+    location: gs://snapshot-substrate-gke-ai-eco-dev/sub-agent-agent/v11/
   workerPoolRef:
     name: agent-pool
     namespace: sub-agent
@@ -50,10 +51,17 @@ spec:
       labels:
         app: nano-broker
     spec:
+      initContainers:
+      - name: deps
+        image: node:22-slim
+        command: ["bash", "-c", "mkdir -p /app/node_modules && cd /app && npm install @whiskeysockets/baileys pino qrcode hono @hono/node-server"]
+        volumeMounts:
+        - name: deps-volume
+          mountPath: /app/node_modules
       containers:
       - name: broker
-        image: ${SUB_AGENT_IMAGE}
-        command: ["/usr/bin/tini", "--", "node", "dist/broker.js"]
+        image: gcr.io/gke-ai-eco-dev/ate-images/nanoclaw-substrate@sha256:f81bb5d57376601909aa6952388a818f4131e7da7688050b4a9ca607c957fbe2
+        command: ["/usr/local/bin/node", "/app/dist/broker.js"]
         ports:
         - containerPort: 8091
         env:
@@ -64,10 +72,23 @@ spec:
         volumeMounts:
         - name: auth-volume
           mountPath: /app/store/auth
+        - name: deps-volume
+          mountPath: /app/node_modules
+        - name: logic-volume
+          mountPath: /app/dist/broker.js
+          subPath: broker.js
+        - name: logic-volume
+          mountPath: /app/dist/agent.js
+          subPath: agent.js
       volumes:
       - name: auth-volume
         persistentVolumeClaim:
           claimName: wa-auth-pvc
+      - name: deps-volume
+        emptyDir: {}
+      - name: logic-volume
+        configMap:
+          name: broker-logic
 ---
 apiVersion: v1
 kind: Service
