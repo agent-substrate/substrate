@@ -270,7 +270,7 @@ func setupTest(t *testing.T, ns string) *testContext {
 
 	// 3. Initialize Informers
 	workerFactory, workerInformer := WorkerPodInformer(k8sClient)
-	ateletFactory, ateletInformer := AteletInformer(k8sClient)
+	ateletFactory, ateletInformer := AteletInformer(k8sClient, DefaultAteletNamespace)
 
 	substrateInformerFactory := externalversions.NewSharedInformerFactory(substrateClient, 0)
 	actorTemplateLister := substrateInformerFactory.Api().V1alpha1().ActorTemplates().Lister()

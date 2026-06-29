@@ -25,15 +25,20 @@ import (
 )
 
 const (
-	ateletNamespace    = "ate-system"
-	byNamespaceAndName = "by-namespace-and-name"
-	byWorkerPool       = "by-worker-pool"
-	byNode             = "by-node"
-	workerPodLabel     = "ate.dev/worker-pool"
+	// DefaultAteletNamespace matches the atelet DaemonSet's namespace in
+	// the canonical install manifests under manifests/ate-install/.
+	// Deployments that run atelet elsewhere must override this via the
+	// --atelet-namespace flag on ateapi.
+	DefaultAteletNamespace = "ate-system"
+	byNamespaceAndName     = "by-namespace-and-name"
+	byWorkerPool           = "by-worker-pool"
+	byNode                 = "by-node"
+	workerPodLabel         = "ate.dev/worker-pool"
 )
 
-// AteletInformer creates a SharedInformerFactory and SharedIndexInformer for Atelet pods.
-func AteletInformer(kc kubernetes.Interface) (informers.SharedInformerFactory, cache.SharedIndexInformer) {
+// AteletInformer creates a SharedInformerFactory and SharedIndexInformer for
+// Atelet pods in the given namespace.
+func AteletInformer(kc kubernetes.Interface, ateletNamespace string) (informers.SharedInformerFactory, cache.SharedIndexInformer) {
 	factory := informers.NewSharedInformerFactoryWithOptions(kc, 0,
 		informers.WithNamespace(ateletNamespace),
 		informers.WithTweakListOptions(func(options *metav1.ListOptions) {

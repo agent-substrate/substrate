@@ -66,6 +66,8 @@ var (
 	workerpoolCACerts   = pflag.String("workerpool-ca-certs", "", "The file that contains the CA for verifying workerpool client certificates.")
 
 	showVersion = pflag.Bool("version", false, "Print version and exit.")
+
+	ateletNamespace = pflag.String("atelet-namespace", controlapi.DefaultAteletNamespace, "Namespace where atelet pods run. Override when the deployment runs atelet in a namespace other than the default.")
 )
 
 func main() {
@@ -123,7 +125,7 @@ func main() {
 	sandboxConfigLister := ateFactory.Api().V1alpha1().SandboxConfigs().Lister()
 
 	workerPodInformerFactory, workerPodInformer := controlapi.WorkerPodInformer(clientset)
-	ateletPodInformerFactory, ateletPodInformer := controlapi.AteletInformer(clientset)
+	ateletPodInformerFactory, ateletPodInformer := controlapi.AteletInformer(clientset, *ateletNamespace)
 
 	syncer := controlapi.NewWorkerPoolSyncer(redisPersistence, workerPodInformer)
 	syncer.Start(ctx)
