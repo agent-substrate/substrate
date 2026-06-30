@@ -72,14 +72,14 @@ Because the logging pipeline indexes the core metadata labels, you can query you
 To track the unified, continuous lifecycle of a single actor regardless of how many times it migrated across worker pods or was suspended/resumed:
 
 ```text
-labels.actor_id="test"
+labels."ate.dev/actor_id"="test"
 ```
 
 #### 2. Template-Centric View
 To monitor or debug all actor instances created from a specific template (e.g., analyzing the collective behavior or error rates of all counter actors):
 
 ```text
-labels.actor_template="counter"
+labels."ate.dev/actor_template_name"="counter"
 ```
 
 #### 3. Pod-Centric View
