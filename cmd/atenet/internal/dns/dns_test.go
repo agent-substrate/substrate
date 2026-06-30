@@ -28,6 +28,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+
+	"github.com/agent-substrate/substrate/internal/installdefaults"
 )
 
 type mockConfigReloader struct {
@@ -98,9 +100,9 @@ func TestReconcile(t *testing.T) {
 		Interval:          1 * time.Second,
 		CorefilePath:      corefilePath,
 		Reloader:          reloader,
-		SystemNamespace:   DefaultSystemNamespace,
-		RouterServiceName: DefaultRouterServiceName,
-		DNSServiceName:    DefaultDNSServiceName,
+		SystemNamespace:   installdefaults.SystemNamespace,
+		RouterServiceName: installdefaults.RouterServiceName,
+		DNSServiceName:    installdefaults.DNSServiceName,
 	}
 
 	// Run one reconciliation loop
@@ -192,9 +194,9 @@ func TestReconcileKubeDNSNotFound(t *testing.T) {
 		Interval:          1 * time.Second,
 		CorefilePath:      corefilePath,
 		Reloader:          &mockConfigReloader{},
-		SystemNamespace:   DefaultSystemNamespace,
-		RouterServiceName: DefaultRouterServiceName,
-		DNSServiceName:    DefaultDNSServiceName,
+		SystemNamespace:   installdefaults.SystemNamespace,
+		RouterServiceName: installdefaults.RouterServiceName,
+		DNSServiceName:    installdefaults.DNSServiceName,
 	}
 
 	ctx := context.Background()

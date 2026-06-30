@@ -30,6 +30,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 
 	"github.com/agent-substrate/substrate/cmd/atenet/internal/dns"
+	"github.com/agent-substrate/substrate/internal/installdefaults"
 )
 
 type DnsConfig struct {
@@ -108,9 +109,9 @@ func NewDnsCmd() *cobra.Command {
 	cmd.Flags().StringVar(&cfg.Kubeconfig, "kubeconfig", "", "Absolute path to the kubeconfig configuration file")
 	cmd.Flags().DurationVar(&cfg.ReconcileInterval, "interval", 10*time.Second, "Interval for reconciling DNS configurations")
 	cmd.Flags().StringVar(&cfg.CorefilePath, "corefile-path", "/etc/coredns/Corefile", "Path to the local Corefile configuration on shared volume")
-	cmd.Flags().StringVar(&cfg.SystemNamespace, "system-namespace", dns.DefaultSystemNamespace, "Namespace where atenet-router and substrate's CoreDNS Service live. Override when the deployment uses a different namespace.")
-	cmd.Flags().StringVar(&cfg.RouterServiceName, "router-service-name", dns.DefaultRouterServiceName, "Service name of the atenet-router. Override when the deployment renames the Service.")
-	cmd.Flags().StringVar(&cfg.DNSServiceName, "dns-service-name", dns.DefaultDNSServiceName, "Service name of substrate's CoreDNS. Override when the deployment renames the Service.")
+	cmd.Flags().StringVar(&cfg.SystemNamespace, "system-namespace", installdefaults.SystemNamespace, "Namespace where atenet-router and substrate's CoreDNS Service live. Override when the deployment uses a different namespace.")
+	cmd.Flags().StringVar(&cfg.RouterServiceName, "router-service-name", installdefaults.RouterServiceName, "Service name of the atenet-router. Override when the deployment renames the Service.")
+	cmd.Flags().StringVar(&cfg.DNSServiceName, "dns-service-name", installdefaults.DNSServiceName, "Service name of substrate's CoreDNS. Override when the deployment renames the Service.")
 
 	return cmd
 }

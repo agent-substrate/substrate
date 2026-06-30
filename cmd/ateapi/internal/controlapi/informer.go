@@ -25,15 +25,10 @@ import (
 )
 
 const (
-	// DefaultAteletNamespace matches the atelet DaemonSet's namespace in
-	// the canonical install manifests under manifests/ate-install/.
-	// Deployments that run atelet elsewhere must override this via the
-	// --atelet-namespace flag on ateapi.
-	DefaultAteletNamespace = "ate-system"
-	byNamespaceAndName     = "by-namespace-and-name"
-	byWorkerPool           = "by-worker-pool"
-	byNode                 = "by-node"
-	workerPodLabel         = "ate.dev/worker-pool"
+	byNamespaceAndName = "by-namespace-and-name"
+	byWorkerPool       = "by-worker-pool"
+	byNode             = "by-node"
+	workerPodLabel     = "ate.dev/worker-pool"
 )
 
 // AteletInformer creates a SharedInformerFactory and SharedIndexInformer for

@@ -33,17 +33,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-// Default resource names match the canonical install manifests in
-// manifests/ate-install/ (atenet-router and dns Services in the
-// ate-system namespace). Deployments that use a different namespace or
-// rename these Services must pass the actual values via the matching
-// flags on the dns command.
-const (
-	DefaultSystemNamespace   = "ate-system"
-	DefaultRouterServiceName = "atenet-router"
-	DefaultDNSServiceName    = "dns"
-)
-
 // Controller manages the DNS configuration for the ATE.
 type Controller struct {
 	Client       client.Client
@@ -52,14 +41,14 @@ type Controller struct {
 	Reloader     ConfigReloader
 
 	// SystemNamespace is the namespace where atenet-router and the substrate
-	// CoreDNS Service live. Defaults to DefaultSystemNamespace.
+	// CoreDNS Service live. Defaults to installdefaults.SystemNamespace.
 	SystemNamespace string
 	// RouterServiceName is the Service name of the atenet-router that the
 	// CoreDNS Corefile forwards actor traffic to. Defaults to
-	// DefaultRouterServiceName.
+	// installdefaults.RouterServiceName.
 	RouterServiceName string
 	// DNSServiceName is the Service name of substrate's CoreDNS. Defaults to
-	// DefaultDNSServiceName.
+	// installdefaults.DNSServiceName.
 	DNSServiceName string
 }
 

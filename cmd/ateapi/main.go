@@ -30,6 +30,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/ateredis"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
+	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/agent-substrate/substrate/internal/version"
 	"github.com/agent-substrate/substrate/pkg/client/clientset/versioned"
@@ -66,8 +67,6 @@ var (
 	workerpoolCACerts   = pflag.String("workerpool-ca-certs", "", "The file that contains the CA for verifying workerpool client certificates.")
 
 	showVersion = pflag.Bool("version", false, "Print version and exit.")
-
-	ateletNamespace = pflag.String("atelet-namespace", controlapi.DefaultAteletNamespace, "Namespace where atelet pods run. Override when the deployment runs atelet in a namespace other than the default.")
 )
 
 func main() {
@@ -124,8 +123,17 @@ func main() {
 	workerPoolLister := ateFactory.Api().V1alpha1().WorkerPools().Lister()
 	sandboxConfigLister := ateFactory.Api().V1alpha1().SandboxConfigs().Lister()
 
+	// atelet shares ateapi's namespace in every supported deployment topology.
+	// POD_NAMESPACE comes from Kubernetes' downward API; the install fallback
+	// keeps non-k8s invocations (tests, local dev) working.
+	ateletNamespace := os.Getenv("POD_NAMESPACE")
+	if ateletNamespace == "" {
+		ateletNamespace = installdefaults.SystemNamespace
+	}
+	slog.InfoContext(ctx, "Resolved atelet namespace", slog.String("atelet-namespace", ateletNamespace))
+
 	workerPodInformerFactory, workerPodInformer := controlapi.WorkerPodInformer(clientset)
-	ateletPodInformerFactory, ateletPodInformer := controlapi.AteletInformer(clientset, *ateletNamespace)
+	ateletPodInformerFactory, ateletPodInformer := controlapi.AteletInformer(clientset, ateletNamespace)
 
 	syncer := controlapi.NewWorkerPoolSyncer(redisPersistence, workerPodInformer)
 	syncer.Start(ctx)
