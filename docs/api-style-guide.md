@@ -117,17 +117,26 @@ message Actor {
 The field name is the logical name of the reference (e.g., `actor_template`), not `actor_template_name` or `actor_template_ref`.
 Note that this assumes that ActorTemplates are also resources in the substrate gRPC API (not in KRM).
 
-**Global-scoped resources** have no atespace, so no wrapper type is needed — use a plain `string {resource}_name` field:
+**Global-scoped resources** have no atespace, but still **must** have a corresponding `{Resource}Ref` message — with only a `name` field:
+
+```proto
+message WorkerRef {
+  string name = 1;
+}
+```
+
+Use it the same way as atespace-scoped `{Resource}Ref` messages — in request messages and cross-resource references:
 
 ```proto
 message Actor {
-  // worker_name references the global-scoped Worker assigned to this actor.
-  string worker_name = 10;
+  // The Worker assigned to this actor.
+  WorkerRef worker = 10;
 }
 ```
 
 * Do not embed the full resource message as a reference field.
 - Do not use a single combined string like `"atespace/name"`. Callers would have to parse it.
+- Do not use a plain `string {resource}_name` field for global-scoped references — use `{Resource}Ref` for consistency and type safety.
 
 ---
 
@@ -151,7 +160,7 @@ Rules:
 - RPC name **must** begin with `Get` followed by the singular resource name.
 - Request message name **must** match the RPC name with a `Request` suffix.
 - Response **must** be the resource itself — not a `GetActorResponse` wrapper.
-- Request **must** identify the resource with a single `{Resource}Ref` field (atespace-scoped) or `string name` (global-scoped).
+- Request **must** identify the resource with a single `{Resource}Ref` field (for both atespace-scoped and global-scoped resources).
 - If the resource does not exist: return `NOT_FOUND`.
 
 ### 3.2 List
@@ -264,7 +273,7 @@ message DeleteActorRequest {
 Rules:
 - RPC name **must** begin with `Delete` followed by the singular resource name.
 - Response **must** be `google.protobuf.Empty` (no `DeleteActorResponse` wrapper).
-- Request **must** identify the resource with a `{Resource}Ref` field (atespace-scoped) or `string name` (global-scoped).
+- Request **must** identify the resource with a `{Resource}Ref` field (for both atespace-scoped and global-scoped resources).
 - If the resource does not exist: return `NOT_FOUND`.
 
 ---
@@ -286,7 +295,7 @@ message SuspendActorRequest {
 Rules:
 - RPC name **must** be a verb phrase: `{Verb}{Resource}` (e.g., `SuspendActor`, `ResumeActor`).
 - Request message name **must** match the RPC name with a `Request` suffix.
-- The request **must** identify the target resource using a `{Resource}Ref` field (atespace-scoped) or `string name` (global-scoped).
+- The request **must** identify the target resource using a `{Resource}Ref` field (for both atespace-scoped and global-scoped resources).
 - The response **should** return the updated resource when the operation mutates it (e.g., all Actor lifecycle methods return the updated `Actor`).
 
 ---
