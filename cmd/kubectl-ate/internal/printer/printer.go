@@ -36,6 +36,9 @@ func PrintActors(actors []*ateapipb.Actor, format string) error {
 
 func sortActors(actors []*ateapipb.Actor) {
 	slices.SortFunc(actors, func(a, b *ateapipb.Actor) int {
+		if c := cmp.Compare(a.GetAtespace(), b.GetAtespace()); c != 0 {
+			return c
+		}
 		if c := cmp.Compare(a.GetActorTemplateNamespace(), b.GetActorTemplateNamespace()); c != 0 {
 			return c
 		}
@@ -54,8 +57,9 @@ func PrintActorsTo(out io.Writer, actors []*ateapipb.Actor, format string) error
 		return printProto(out, &ateapipb.ListActorsResponse{Actors: actors}, format)
 	case "table":
 		w := tabwriter.NewWriter(out, 0, 0, 3, ' ', 0)
-		fmt.Fprintln(w, "NAMESPACE\tTEMPLATE\tID\tSTATUS\tATEOM POD\tATEOM IP\tVERSION")
+		fmt.Fprintln(w, "ATESPACE\tTEMPLATE NS\tTEMPLATE\tID\tSTATUS\tATEOM POD\tATEOM IP\tVERSION")
 		for _, actor := range actors {
+			atespace := actor.GetAtespace()
 			ns := actor.GetActorTemplateNamespace()
 			tmpl := actor.GetActorTemplateName()
 			id := actor.GetActorId()
@@ -67,7 +71,7 @@ func PrintActorsTo(out io.Writer, actors []*ateapipb.Actor, format string) error
 			}
 
 			version := actor.GetVersion()
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%d\n", ns, tmpl, id, status, worker, actor.GetAteomPodIp(), version)
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%d\n", atespace, ns, tmpl, id, status, worker, actor.GetAteomPodIp(), version)
 		}
 		return w.Flush()
 	default:
@@ -124,6 +128,40 @@ func PrintWorkersTo(out io.Writer, workers []*ateapipb.Worker, format string) er
 // PrintActor prints a single actor in the requested format.
 func PrintActor(actor *ateapipb.Actor, format string) error {
 	return PrintActors([]*ateapipb.Actor{actor}, format)
+}
+
+// PrintAtespaces prints a slice of atespaces to stdout in the requested format.
+func PrintAtespaces(atespaces []*ateapipb.Atespace, format string) error {
+	return PrintAtespacesTo(os.Stdout, atespaces, format)
+}
+
+func sortAtespaces(atespaces []*ateapipb.Atespace) {
+	slices.SortFunc(atespaces, func(a, b *ateapipb.Atespace) int {
+		return cmp.Compare(a.GetName(), b.GetName())
+	})
+}
+
+// PrintAtespacesTo prints a slice of atespaces to the provided writer.
+func PrintAtespacesTo(out io.Writer, atespaces []*ateapipb.Atespace, format string) error {
+	sortAtespaces(atespaces)
+	switch format {
+	case "json", "yaml":
+		return printProto(out, &ateapipb.ListAtespacesResponse{Atespaces: atespaces}, format)
+	case "table":
+		w := tabwriter.NewWriter(out, 0, 0, 3, ' ', 0)
+		fmt.Fprintln(w, "NAME")
+		for _, a := range atespaces {
+			fmt.Fprintf(w, "%s\n", a.GetName())
+		}
+		return w.Flush()
+	default:
+		return fmt.Errorf("unsupported format %q", format)
+	}
+}
+
+// PrintAtespace prints a single atespace in the requested format.
+func PrintAtespace(atespace *ateapipb.Atespace, format string) error {
+	return PrintAtespaces([]*ateapipb.Atespace{atespace}, format)
 }
 
 func printProto(out io.Writer, msg proto.Message, format string) error {

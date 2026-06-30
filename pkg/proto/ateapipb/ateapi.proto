@@ -50,6 +50,18 @@ service Control {
   // List all actors currently reflected in redis.
   rpc ListActors(ListActorsRequest) returns (ListActorsResponse) {}
 
+  // Create a new Atespace (tenant boundary). Substrate-native, stored in Redis.
+  rpc CreateAtespace(CreateAtespaceRequest) returns (CreateAtespaceResponse) {}
+
+  // Get an Atespace by name.
+  rpc GetAtespace(GetAtespaceRequest) returns (GetAtespaceResponse) {}
+
+  // List all Atespaces.
+  rpc ListAtespaces(ListAtespacesRequest) returns (ListAtespacesResponse) {}
+
+  // Delete an empty Atespace. Rejects (FailedPrecondition) if any actors remain.
+  rpc DeleteAtespace(DeleteAtespaceRequest) returns (DeleteAtespaceResponse) {}
+
   // Debugging: drop all data from the ate database.
   rpc DebugClear(DebugClearRequest) returns (DebugClearResponse) {}
 }
@@ -125,10 +137,49 @@ message Actor {
   // suspend/pause since eligibility is no longer a single fixed pool
   // reference on the ActorTemplate.
   string worker_pool_name = 14;
+
+  // The atespace (tenant boundary) this actor belongs to. Part of the actor's
+  // resource identity; folded into the Redis key as actor:<atespace>:<actor_id>.
+  string atespace = 15;
 }
 
+// Atespace is the tenant boundary an Actor is created into.
+message Atespace {
+  string name = 1;
+}
+
+// ActorRef identifies an actor: a name is only unique within its atespace.
+message ActorRef {
+  string atespace = 1;
+  string name     = 2;
+}
+
+message CreateAtespaceRequest {
+  string name = 1;
+}
+message CreateAtespaceResponse {
+  Atespace atespace = 1;
+}
+
+message GetAtespaceRequest {
+  string name = 1;
+}
+message GetAtespaceResponse {
+  Atespace atespace = 1;
+}
+
+message ListAtespacesRequest {}
+message ListAtespacesResponse {
+  repeated Atespace atespaces = 1;
+}
+
+message DeleteAtespaceRequest {
+  string name = 1;
+}
+message DeleteAtespaceResponse {}
+
 message GetActorRequest {
-  string actor_id = 1;
+  ActorRef actor_ref = 1;
 }
 
 message GetActorResponse {
@@ -137,8 +188,8 @@ message GetActorResponse {
 
 // Request to create a new Actor.
 message CreateActorRequest {
-  // The custom identifier for the new Actor. Must be a valid DNS-1123 label.
-  string actor_id = 1;
+  // The new actor's atespace and actor_id (actor_id must be a valid DNS-1123 label).
+  ActorRef actor_ref = 1;
 
   // The namespace of the ActorTemplate to derive from.
   string actor_template_namespace = 2;
@@ -159,7 +210,7 @@ message CreateActorResponse {
 // May be called regardless of the actor's current status.
 // Changes take effect on the next ResumeActor call.
 message UpdateActorRequest {
-  string actor_id = 1;
+  ActorRef actor_ref = 1;
 
   // worker_selector replaces the actor's current placement constraint.
   // Takes effect on the next ResumeActor call.
@@ -171,7 +222,7 @@ message UpdateActorResponse {
 }
 
 message SuspendActorRequest {
-  string actor_id = 1;
+  ActorRef actor_ref = 1;
 }
 
 message SuspendActorResponse {
@@ -179,7 +230,7 @@ message SuspendActorResponse {
 }
 
 message PauseActorRequest {
-  string actor_id = 1;
+  ActorRef actor_ref = 1;
 }
 
 message PauseActorResponse {
@@ -187,7 +238,7 @@ message PauseActorResponse {
 }
 
 message ResumeActorRequest {
-  string actor_id = 1;
+  ActorRef actor_ref = 1;
 
   // If true, skip golden snapshot and boot the workload from scratch.
   bool boot = 2;
@@ -198,7 +249,7 @@ message ResumeActorResponse {
 }
 
 message DeleteActorRequest {
-  string actor_id = 1;
+  ActorRef actor_ref = 1;
 }
 
 message DeleteActorResponse {}
@@ -220,6 +271,9 @@ message ListActorsRequest {
   // An opaque pagination token obtained from a previous ListActorsResponse.
   // Empty for the first request.
   string page_token = 2;
+
+  // If set, list only actors in this atespace (scoped SCAN actor:<atespace>:*).
+  string atespace = 3;
 }
 
 // Response for a ListActors operation.
@@ -244,6 +298,10 @@ message Worker {
   int64  version         = 8;
   string worker_pod_uid  = 9;
   string node_name       = 10;
+
+  // The atespace of the actor currently running on this worker. Set when an actor
+  // is assigned, cleared when freed. It is NOT the worker's own atespace.
+  string actor_atespace = 11;
 }
 
 message DebugClearRequest {}

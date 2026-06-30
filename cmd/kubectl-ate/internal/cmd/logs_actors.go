@@ -39,6 +39,7 @@ import (
 )
 
 var followLogs bool
+var logsAtespaceFlag string
 
 var logsActorsCmd = &cobra.Command{
 	Use:     "actors <actor-id>",
@@ -50,6 +51,8 @@ var logsActorsCmd = &cobra.Command{
 
 func init() {
 	logsActorsCmd.Flags().BoolVarP(&followLogs, "follow", "f", false, "Specify if the logs should be streamed.")
+	logsActorsCmd.Flags().StringVarP(&logsAtespaceFlag, "atespace", "a", "", "Atespace (tenant) the actor lives in")
+	_ = logsActorsCmd.MarkFlagRequired("atespace")
 	logsCmd.AddCommand(logsActorsCmd)
 }
 
@@ -77,6 +80,7 @@ func (s *k8sPodLogsStreamer) StreamLogs(ctx context.Context, namespace, podName 
 type LogsActorRunner struct {
 	apiClient         AteAPIClient
 	streamer          PodLogsStreamer
+	atespace          string
 	stdout            io.Writer
 	stderr            io.Writer
 	follow            bool
@@ -105,7 +109,7 @@ func (r *LogsActorRunner) Run(ctx context.Context, actorID string) error {
 }
 
 func (r *LogsActorRunner) runOneShot(ctx context.Context, actorID string) error {
-	actorResp, err := r.apiClient.GetActor(ctx, &ateapipb.GetActorRequest{ActorId: actorID})
+	actorResp, err := r.apiClient.GetActor(ctx, &ateapipb.GetActorRequest{ActorRef: &ateapipb.ActorRef{Atespace: r.atespace, Name: actorID}})
 	if err != nil {
 		return fmt.Errorf("failed to get actor: %w", err)
 	}
@@ -152,7 +156,7 @@ func (r *LogsActorRunner) runFollow(ctx context.Context, actorID string) error {
 		default:
 		}
 
-		actorResp, err := r.apiClient.GetActor(ctx, &ateapipb.GetActorRequest{ActorId: actorID})
+		actorResp, err := r.apiClient.GetActor(ctx, &ateapipb.GetActorRequest{ActorRef: &ateapipb.ActorRef{Atespace: r.atespace, Name: actorID}})
 		if err != nil {
 			if status.Code(err) == codes.NotFound {
 				return fmt.Errorf("actor %s not found: %w", actorID, err)
@@ -260,7 +264,7 @@ func (r *LogsActorRunner) startMigrationMonitor(
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				resp, err := r.apiClient.GetActor(ctx, &ateapipb.GetActorRequest{ActorId: actorID})
+				resp, err := r.apiClient.GetActor(ctx, &ateapipb.GetActorRequest{ActorRef: &ateapipb.ActorRef{Atespace: r.atespace, Name: actorID}})
 				if err == nil {
 					act := resp.GetActor()
 					if act.GetStatus() != ateapipb.Actor_STATUS_RUNNING || act.GetAteomPodName() != currentPod {
@@ -292,6 +296,7 @@ func runLogsActor(cmd *cobra.Command, args []string) error {
 	runner := &LogsActorRunner{
 		apiClient:         apiClient,
 		streamer:          &k8sPodLogsStreamer{clientset: k8sClient},
+		atespace:          logsAtespaceFlag,
 		stdout:            os.Stdout,
 		stderr:            os.Stderr,
 		follow:            followLogs,

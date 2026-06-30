@@ -23,13 +23,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var bootFlag bool
-var resumeAtespaceFlag string
-
-var resumeActorCmd = &cobra.Command{
-	Use:   "actor [actor-id]",
-	Short: "Resume an actor",
-	Args:  cobra.ExactArgs(1),
+var getAtespacesCmd = &cobra.Command{
+	Use:     "atespaces [name]",
+	Aliases: []string{"atespace"},
+	Short:   "List all atespaces or get a specific atespace",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
 		apiClient, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, traceEnabled)
@@ -38,21 +35,22 @@ var resumeActorCmd = &cobra.Command{
 		}
 		defer apiClient.Close()
 
-		resp, err := apiClient.ResumeActor(ctx, &ateapipb.ResumeActorRequest{
-			ActorRef: &ateapipb.ActorRef{Atespace: resumeAtespaceFlag, Name: args[0]},
-			Boot:     bootFlag,
-		})
-		if err != nil {
-			return fmt.Errorf("failed to resume actor: %w", err)
+		if len(args) > 0 {
+			resp, err := apiClient.GetAtespace(ctx, &ateapipb.GetAtespaceRequest{Name: args[0]})
+			if err != nil {
+				return fmt.Errorf("failed to get atespace: %w", err)
+			}
+			return printer.PrintAtespace(resp.GetAtespace(), outputFmt)
 		}
 
-		return printer.PrintActor(resp.GetActor(), outputFmt)
+		resp, err := apiClient.ListAtespaces(ctx, &ateapipb.ListAtespacesRequest{})
+		if err != nil {
+			return fmt.Errorf("failed to list atespaces: %w", err)
+		}
+		return printer.PrintAtespaces(resp.GetAtespaces(), outputFmt)
 	},
 }
 
 func init() {
-	resumeActorCmd.Flags().BoolVarP(&bootFlag, "boot", "", false, "Skip golden snapshot and boot from scratch.")
-	resumeActorCmd.Flags().StringVarP(&resumeAtespaceFlag, "atespace", "a", "", "Atespace (tenant) the actor lives in")
-	_ = resumeActorCmd.MarkFlagRequired("atespace")
-	resumeCmd.AddCommand(resumeActorCmd)
+	getCmd.AddCommand(getAtespacesCmd)
 }

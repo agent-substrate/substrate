@@ -20,32 +20,33 @@ import (
 	"fmt"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
-func (s *Service) GetActor(ctx context.Context, req *ateapipb.GetActorRequest) (*ateapipb.GetActorResponse, error) {
-	if err := validateGetActorRequest(req); err != nil {
+func (s *Service) GetAtespace(ctx context.Context, req *ateapipb.GetAtespaceRequest) (*ateapipb.GetAtespaceResponse, error) {
+	if err := validateGetAtespaceRequest(req); err != nil {
 		return nil, err
 	}
-	actor, err := s.persistence.GetActor(ctx, req.GetActorRef().GetAtespace(), req.GetActorRef().GetName())
+
+	atespace, err := s.persistence.GetAtespace(ctx, req.GetName())
 	if errors.Is(err, store.ErrNotFound) {
-		return nil, status.Errorf(codes.NotFound, "Actor %s not found", req.GetActorRef().GetName())
+		return nil, status.Errorf(codes.NotFound, "Atespace %s not found", req.GetName())
 	} else if err != nil {
-		return nil, fmt.Errorf("while getting actor from DB: %w", err)
+		return nil, fmt.Errorf("while getting atespace from DB: %w", err)
 	}
-	return &ateapipb.GetActorResponse{
-		Actor: actor,
-	}, nil
+
+	return &ateapipb.GetAtespaceResponse{Atespace: atespace}, nil
 }
 
-func validateGetActorRequest(req *ateapipb.GetActorRequest) error {
-	if req.GetActorRef().GetName() == "" {
-		return status.Error(codes.InvalidArgument, "id is required")
+func validateGetAtespaceRequest(req *ateapipb.GetAtespaceRequest) error {
+	if req.GetName() == "" {
+		return status.Error(codes.InvalidArgument, "name is required")
 	}
-	if req.GetActorRef().GetAtespace() == "" {
-		return status.Error(codes.InvalidArgument, "atespace is required")
+	if err := resources.ValidateAtespace(req.GetName()); err != nil {
+		return status.Error(codes.InvalidArgument, err.Error())
 	}
 	return nil
 }

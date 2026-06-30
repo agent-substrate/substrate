@@ -17,18 +17,14 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/agent-substrate/substrate/cmd/kubectl-ate/internal/printer"
 	"github.com/agent-substrate/substrate/internal/ateclient"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/spf13/cobra"
 )
 
-var bootFlag bool
-var resumeAtespaceFlag string
-
-var resumeActorCmd = &cobra.Command{
-	Use:   "actor [actor-id]",
-	Short: "Resume an actor",
+var deleteAtespaceCmd = &cobra.Command{
+	Use:   "atespace [name]",
+	Short: "Delete an empty atespace (fails if any actors remain)",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
@@ -38,21 +34,16 @@ var resumeActorCmd = &cobra.Command{
 		}
 		defer apiClient.Close()
 
-		resp, err := apiClient.ResumeActor(ctx, &ateapipb.ResumeActorRequest{
-			ActorRef: &ateapipb.ActorRef{Atespace: resumeAtespaceFlag, Name: args[0]},
-			Boot:     bootFlag,
-		})
-		if err != nil {
-			return fmt.Errorf("failed to resume actor: %w", err)
+		name := args[0]
+		if _, err := apiClient.DeleteAtespace(ctx, &ateapipb.DeleteAtespaceRequest{Name: name}); err != nil {
+			return fmt.Errorf("failed to delete atespace: %w", err)
 		}
 
-		return printer.PrintActor(resp.GetActor(), outputFmt)
+		fmt.Printf("atespace %q deleted\n", name)
+		return nil
 	},
 }
 
 func init() {
-	resumeActorCmd.Flags().BoolVarP(&bootFlag, "boot", "", false, "Skip golden snapshot and boot from scratch.")
-	resumeActorCmd.Flags().StringVarP(&resumeAtespaceFlag, "atespace", "a", "", "Atespace (tenant) the actor lives in")
-	_ = resumeActorCmd.MarkFlagRequired("atespace")
-	resumeCmd.AddCommand(resumeActorCmd)
+	deleteCmd.AddCommand(deleteAtespaceCmd)
 }

@@ -15,7 +15,7 @@
 // Package ateredis is an ate storage backend built on Redis.
 //
 // Actors are stored in keys of the form
-// `actor:<actor-id>`.  They are
+// `actor:<atespace>:<actor-id>`.  They are
 // stored as DBActor JSON-serialized objects, which lets us manipulate them from
 // Redis lua.
 //
@@ -86,8 +86,128 @@ func NewPersistence(redisClient *redis.ClusterClient) *Persistence {
 	}
 }
 
-func actorDBKey(id string) string {
-	return "actor:" + id
+func actorDBKey(atespace, id string) string {
+	return "actor:" + atespace + ":" + id
+}
+
+// actorScanPattern returns the SCAN match pattern for listing actors. An empty
+// atespace lists across all atespaces (actor:*); a non-empty atespace scopes the
+// scan to that tenant (actor:<atespace>:*).
+func actorScanPattern(atespace string) string {
+	if atespace == "" {
+		return "actor:*"
+	}
+	return "actor:" + atespace + ":*"
+}
+
+func atespaceDBKey(name string) string {
+	return "atespace:" + name
+}
+
+func (s *Persistence) CreateAtespace(ctx context.Context, atespace *ateapipb.Atespace) error {
+	dbKey := atespaceDBKey(atespace.GetName())
+	dbBytes, err := protojson.Marshal(atespace)
+	if err != nil {
+		return fmt.Errorf("in protojson.Marshal: %w", err)
+	}
+	ok, err := s.rdb.SetNX(ctx, dbKey, dbBytes, 0).Result()
+	if err != nil {
+		return fmt.Errorf("while executing redis set: %w", err)
+	}
+	if !ok {
+		return store.ErrAlreadyExists
+	}
+	return nil
+}
+
+func (s *Persistence) GetAtespace(ctx context.Context, name string) (*ateapipb.Atespace, error) {
+	dbKey := atespaceDBKey(name)
+	dbBytes, err := s.rdb.Get(ctx, dbKey).Bytes()
+	if err != nil {
+		if errors.Is(err, redis.Nil) {
+			return nil, store.ErrNotFound
+		}
+		return nil, fmt.Errorf("while getting atespace key %q: %w", dbKey, err)
+	}
+	atespace := &ateapipb.Atespace{}
+	if err := protojson.Unmarshal(dbBytes, atespace); err != nil {
+		return nil, fmt.Errorf("while unmarshaling atespace: %w", err)
+	}
+	if atespace.GetName() != name {
+		return nil, fmt.Errorf("(impossible) mismatch between stored name and key %q", dbKey)
+	}
+	return atespace, nil
+}
+
+// AtespaceExists reports whether the atespace object exists. This is a plain
+// EXISTS check and is NOT atomic with respect to a concurrent DeleteAtespace.
+func (s *Persistence) AtespaceExists(ctx context.Context, name string) (bool, error) {
+	n, err := s.rdb.Exists(ctx, atespaceDBKey(name)).Result()
+	if err != nil {
+		return false, fmt.Errorf("while checking atespace existence: %w", err)
+	}
+	return n > 0, nil
+}
+
+func (s *Persistence) ListAtespaces(ctx context.Context) ([]*ateapipb.Atespace, error) {
+	var result []*ateapipb.Atespace
+	var mu sync.Mutex
+
+	err := s.rdb.ForEachMaster(ctx, func(ctx context.Context, master *redis.Client) error {
+		iter := master.Scan(ctx, 0, "atespace:*", 0).Iterator()
+		for iter.Next(ctx) {
+			key := iter.Val()
+			getCmd := master.Get(ctx, key)
+			if getCmd.Err() != nil {
+				return fmt.Errorf("while getting atespace %q: %w", key, getCmd.Err())
+			}
+			atespace := &ateapipb.Atespace{}
+			if err := protojson.Unmarshal([]byte(getCmd.Val()), atespace); err != nil {
+				return fmt.Errorf("in protojson.Unmarshal: %w", err)
+			}
+			mu.Lock()
+			result = append(result, atespace)
+			mu.Unlock()
+		}
+		if err := iter.Err(); err != nil {
+			return fmt.Errorf("error from iterator: %w", err)
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("while iterating all redis master: %w", err)
+	}
+	return result, nil
+}
+
+// DeleteAtespace deletes an empty atespace. Returns store.ErrNotFound if the
+// atespace does not exist, or store.ErrFailedPrecondition if any actor still
+// lives in it.
+func (s *Persistence) DeleteAtespace(ctx context.Context, name string) error {
+	dbKey := atespaceDBKey(name)
+
+	// Existence first, so a missing atespace returns NotFound, not a silent no-op.
+	exists, err := s.rdb.Exists(ctx, dbKey).Result()
+	if err != nil {
+		return fmt.Errorf("while checking atespace key %q: %w", dbKey, err)
+	}
+	if exists == 0 {
+		return store.ErrNotFound
+	}
+
+	// Reject a non-empty atespace.
+	actors, _, err := s.ListActors(ctx, name, 1, "")
+	if err != nil {
+		return fmt.Errorf("while checking atespace emptiness: %w", err)
+	}
+	if len(actors) > 0 {
+		return store.ErrFailedPrecondition
+	}
+
+	if err := s.rdb.Del(ctx, dbKey).Err(); err != nil {
+		return fmt.Errorf("while deleting atespace key %q: %w", dbKey, err)
+	}
+	return nil
 }
 
 func workerDBKey(namespace, poolName, podName string) string {
@@ -179,8 +299,8 @@ func (s *Persistence) DebugClearAll(ctx context.Context) error {
 	return err
 }
 
-func (s *Persistence) GetActor(ctx context.Context, id string) (*ateapipb.Actor, error) {
-	dbKey := actorDBKey(id)
+func (s *Persistence) GetActor(ctx context.Context, atespace, id string) (*ateapipb.Actor, error) {
+	dbKey := actorDBKey(atespace, id)
 
 	dbActorBytes, err := s.rdb.Get(ctx, dbKey).Bytes()
 	if err != nil {
@@ -195,15 +315,15 @@ func (s *Persistence) GetActor(ctx context.Context, id string) (*ateapipb.Actor,
 		return nil, fmt.Errorf("while unmarshaling actor: %w", err)
 	}
 
-	if actor.GetActorId() != id {
-		return nil, fmt.Errorf("(impossible) mismatch between stored id and key id")
+	if actor.GetActorId() != id || actor.GetAtespace() != atespace {
+		return nil, fmt.Errorf("(impossible) mismatch between stored id/atespace and key")
 	}
 
 	return actor, nil
 }
 
 func (s *Persistence) CreateActor(ctx context.Context, actor *ateapipb.Actor) error {
-	dbKey := actorDBKey(actor.GetActorId())
+	dbKey := actorDBKey(actor.GetAtespace(), actor.GetActorId())
 
 	// Clone because we will update the version field, and we don't want to
 	// stomp the caller's copy.
@@ -347,8 +467,8 @@ func (s *Persistence) DeleteWorker(ctx context.Context, namespace, pool, pod str
 	return nil
 }
 
-func (s *Persistence) DeleteActor(ctx context.Context, id string) error {
-	dbKey := actorDBKey(id)
+func (s *Persistence) DeleteActor(ctx context.Context, atespace, id string) error {
+	dbKey := actorDBKey(atespace, id)
 	err := s.rdb.Watch(ctx, func(tx *redis.Tx) error {
 		currentVal, err := tx.Get(ctx, dbKey).Bytes()
 		if err != nil {
@@ -385,7 +505,7 @@ func (s *Persistence) DeleteActor(ctx context.Context, id string) error {
 }
 
 func (s *Persistence) UpdateActor(ctx context.Context, actor *ateapipb.Actor, expectedVersion int64) error {
-	dbKey := actorDBKey(actor.GetActorId())
+	dbKey := actorDBKey(actor.GetAtespace(), actor.GetActorId())
 
 	// Clone because we will update the version field, and we don't want to
 	// stomp the caller's copy.
@@ -411,6 +531,9 @@ func (s *Persistence) UpdateActor(ctx context.Context, actor *ateapipb.Actor, ex
 		dbActor.Version = currentActor.GetVersion() + 1
 		if currentActor.GetActorId() != dbActor.GetActorId() {
 			return fmt.Errorf("actor_id is immutable")
+		}
+		if currentActor.GetAtespace() != dbActor.GetAtespace() {
+			return fmt.Errorf("atespace is immutable")
 		}
 		if currentActor.GetActorTemplateNamespace() != dbActor.GetActorTemplateNamespace() {
 			return fmt.Errorf("actor_template_namespace is immutable")
@@ -510,7 +633,10 @@ func hashShardAddr(addr string) string {
 	return hex.EncodeToString(h[:])
 }
 
-func (s *Persistence) ListActors(ctx context.Context, pageSize int32, pageTokenStr string) ([]*ateapipb.Actor, string, error) {
+// ListActors lists actors, scoped to the given atespace. An empty atespace lists
+// across all atespaces (SCAN actor:*); a non-empty atespace restricts the scan to
+// that tenant (SCAN actor:<atespace>:*).
+func (s *Persistence) ListActors(ctx context.Context, atespace string, pageSize int32, pageTokenStr string) ([]*ateapipb.Actor, string, error) {
 	token, err := decodePageToken(pageTokenStr)
 	if err != nil {
 		return nil, "", fmt.Errorf("invalid page token: %w", err)
@@ -559,7 +685,7 @@ func (s *Persistence) ListActors(ctx context.Context, pageSize int32, pageTokenS
 			}
 
 			var keys []string
-			keys, cursor, err = master.Scan(ctx, cursor, "actor:*", int64(remaining)).Result()
+			keys, cursor, err = master.Scan(ctx, cursor, actorScanPattern(atespace), int64(remaining)).Result()
 			if err != nil {
 				return nil, "", fmt.Errorf("while scanning shard %s: %w", shardAddr, err)
 			}

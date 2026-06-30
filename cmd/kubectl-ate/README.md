@@ -74,15 +74,21 @@ These flags can be appended to any command:
 List and inspect the state of actors and workers across the cluster.
 
 ```bash
-# List all actors in a clean table format
-kubectl ate get actors
+# List actors in one atespace (tenant); -a is shorthand for --atespace
+kubectl ate get actors --atespace <atespace>
+kubectl ate get actors -a <atespace>
+
+# List actors across all atespaces
+kubectl ate get actors -A
 
 # Get a specific actor by ID and output as raw YAML
-kubectl ate get actor <actor-id> -o yaml
+kubectl ate get actor <actor-id> --atespace <atespace> -o yaml
 
 # List all physical workers and see which actors are assigned to them
 kubectl ate get workers
 ```
+
+> **Note:** `get actors` requires either `--atespace <name>` / `-a <name>` (one tenant) or `-A`/`--all-atespaces` (all tenants) — there is no default atespace. Getting a single actor always requires `--atespace`/`-a`, since an actor is addressed by `(atespace, id)`. `-a` (lower-case) scopes to one atespace; `-A` (upper-case) spans all.
 
 > **Note:** Actors and workers are not Kubernetes CRDs — they live in the Substrate control plane (valkey/redis), not `etcd`. `kubectl get actor` and `kubectl get worker` will not return anything; only `kubectl ate get …` queries the control plane. `kubectl get actortemplate` and `kubectl get workerpool` *do* work, because those are CRDs.
 
@@ -90,7 +96,8 @@ kubectl ate get workers
 
 | Column | Meaning |
 |---|---|
-| `NAMESPACE` | The namespace of the `ActorTemplate` the actor was created from. |
+| `ATESPACE` | The atespace (tenant boundary) the actor belongs to. Part of the actor's identity; folded into the storage key as `actor:<atespace>:<id>`. |
+| `TEMPLATE NS` | The namespace of the `ActorTemplate` the actor was created from (distinct from `ATESPACE`). |
 | `TEMPLATE` | The `ActorTemplate` name. |
 | `ID` | Actor ID. User-provided for application actors; UUID for the golden actor that each template materialises during `ResumeGoldenActor`. |
 | `STATUS` | One of `STATUS_RESUMING`, `STATUS_RUNNING`, `STATUS_SUSPENDING`, `STATUS_SUSPENDED`. |
@@ -108,22 +115,44 @@ kubectl ate get workers
 | `STATUS` | `FREE` (idle, ready to receive an actor) or `ASSIGNED` (currently hosting an actor). |
 | `ASSIGNED ACTOR` | If `STATUS=ASSIGNED`, the actor reference `<namespace>/<template>/<actor-id>`. |
 
+### Atespaces
+
+An **atespace** is the tenant boundary an actor belongs to. It must exist before you can create actors in it.
+
+```bash
+# Create an atespace
+kubectl ate create atespace <atespace>
+
+# List all atespaces
+kubectl ate get atespaces
+
+# Get an atespace
+kubectl ate get atespace <atespace>
+
+# Delete an atespace (must be empty — fails if any actors remain)
+kubectl ate delete atespace <atespace>
+```
+
+> **Note:** `create actor … -a <atespace>` requires the atespace to already exist, otherwise it fails with `FailedPrecondition`. `delete atespace` only removes an **empty** atespace; delete its actors first (cascade delete is not yet supported).
+
 ### Actor Lifecycle
 Manage the execution state of your workloads.
 *(Note: Actors are identified by a user-provided ID, which must be a valid DNS-1123 label)*
 
 ```bash
-# Create a new actor deriving from a specific ActorTemplate
-kubectl ate create actor my-actor --template=ate-demo-counter/counter
+# Create a new actor deriving from a specific ActorTemplate.
+# -a/--atespace is required and the atespace must already exist
+# (kubectl ate create atespace <atespace>).
+kubectl ate create actor my-actor --template=ate-demo-counter/counter -a <atespace>
 
 # Resume an actor (assigns it to a free worker and restores its state)
-kubectl ate resume actor my-actor
+kubectl ate resume actor my-actor -a <atespace>
 
 # Suspend an actor (snapshots its state to storage and frees the worker)
-kubectl ate suspend actor my-actor
+kubectl ate suspend actor my-actor -a <atespace>
 
 # Delete an actor.
-kubectl ate delete actor my-actor
+kubectl ate delete actor my-actor -a <atespace>
 ```
 
 ### Logs

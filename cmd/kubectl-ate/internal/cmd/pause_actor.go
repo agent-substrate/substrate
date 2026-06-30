@@ -23,6 +23,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var pauseAtespaceFlag string
+
 var pauseActorCmd = &cobra.Command{
 	Use:   "actor [actor-id]",
 	Short: "Pause an actor",
@@ -36,7 +38,7 @@ var pauseActorCmd = &cobra.Command{
 		defer apiClient.Close()
 
 		resp, err := apiClient.PauseActor(ctx, &ateapipb.PauseActorRequest{
-			ActorId: args[0],
+			ActorRef: &ateapipb.ActorRef{Atespace: pauseAtespaceFlag, Name: args[0]},
 		})
 		if err != nil {
 			return fmt.Errorf("failed to pause actor: %w", err)
@@ -47,5 +49,7 @@ var pauseActorCmd = &cobra.Command{
 }
 
 func init() {
+	pauseActorCmd.Flags().StringVarP(&pauseAtespaceFlag, "atespace", "a", "", "Atespace (tenant) the actor lives in")
+	_ = pauseActorCmd.MarkFlagRequired("atespace")
 	pauseCmd.AddCommand(pauseActorCmd)
 }

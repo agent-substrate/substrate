@@ -142,14 +142,14 @@ func (s *ExtProcServer) handleRequestHeaders(
 	ctx, span := otel.Tracer(routerServiceName).Start(ctx, "ExtProc.RequestHeaders")
 	defer span.End()
 
-	actorID, err := parseActorID(metadata.host)
+	atespace, actorID, err := parseActorRef(metadata.host)
 	if err != nil {
 		// Host is invalid, respond with 404.
 		return nil, metadata, "", "", "", invalidHostErr(metadata.host, err)
 	}
 
-	slog.InfoContext(ctx, "ResumeActor", slog.String("actorID", actorID))
-	actor, err := s.resumer.ResumeActor(ctx, actorID)
+	slog.InfoContext(ctx, "ResumeActor", slog.String("atespace", atespace), slog.String("actorID", actorID))
+	actor, err := s.resumer.ResumeActor(ctx, atespace, actorID)
 	if err != nil {
 		return nil, metadata, "", "", "", mapResumeError(actorID, err)
 	}
@@ -161,6 +161,7 @@ func (s *ExtProcServer) handleRequestHeaders(
 
 	workerIP := actor.GetAteomPodIp()
 	slog.InfoContext(ctx, "ResumeActor result",
+		slog.String("atespace", atespace),
 		slog.String("actorID", actorID),
 		slog.String("status", actor.GetStatus().String()),
 		slog.String("workerIP", workerIP))

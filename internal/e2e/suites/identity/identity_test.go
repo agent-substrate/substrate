@@ -159,8 +159,10 @@ func waitForGolden(t *testing.T, ctx context.Context, clients *e2e.Clients) stri
 
 func createAndResumeActor(t *testing.T, ctx context.Context, clients *e2e.Clients, id string) {
 	t.Helper()
+	// CreateActor requires the atespace to exist first.
+	_, _ = clients.SubstrateAPI.CreateAtespace(ctx, &ateapipb.CreateAtespaceRequest{Name: probeNamespace})
 	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{
-		ActorId:                id,
+		ActorRef:               &ateapipb.ActorRef{Atespace: probeNamespace, Name: id},
 		ActorTemplateNamespace: probeNamespace,
 		ActorTemplateName:      probeTemplate,
 	}); err != nil {
@@ -168,19 +170,19 @@ func createAndResumeActor(t *testing.T, ctx context.Context, clients *e2e.Client
 	}
 	t.Cleanup(func() {
 		// DeleteActor requires the actor to be suspended.
-		_, _ = clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{ActorId: id})
-		_, _ = clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{ActorId: id})
+		_, _ = clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{ActorRef: &ateapipb.ActorRef{Atespace: probeNamespace, Name: id}})
+		_, _ = clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{ActorRef: &ateapipb.ActorRef{Atespace: probeNamespace, Name: id}})
 	})
 
 	// Resume from the golden snapshot (the restore path, not --boot).
-	if _, err := clients.SubstrateAPI.ResumeActor(ctx, &ateapipb.ResumeActorRequest{ActorId: id}); err != nil {
+	if _, err := clients.SubstrateAPI.ResumeActor(ctx, &ateapipb.ResumeActorRequest{ActorRef: &ateapipb.ActorRef{Atespace: probeNamespace, Name: id}}); err != nil {
 		t.Fatalf("ResumeActor %q: %v", id, err)
 	}
 }
 
 func whoami(t *testing.T, ctx context.Context, rc *e2e.RouterClient, id string) whoamiResponse {
 	t.Helper()
-	resp, err := rc.Get(ctx, id, "/whoami")
+	resp, err := rc.Get(ctx, probeNamespace, id, "/whoami")
 	if err != nil {
 		t.Fatalf("GET /whoami for %q: %v", id, err)
 	}

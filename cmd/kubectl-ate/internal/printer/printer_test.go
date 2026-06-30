@@ -27,6 +27,7 @@ func TestPrintActorsTo_Table(t *testing.T) {
 	actors := []*ateapipb.Actor{
 		{
 			ActorId:                "id-1",
+			Atespace:               "team-a",
 			ActorTemplateNamespace: "default",
 			ActorTemplateName:      "template-1",
 			Status:                 ateapipb.Actor_STATUS_RUNNING,
@@ -42,8 +43,8 @@ func TestPrintActorsTo_Table(t *testing.T) {
 	}
 	output := buf.String()
 
-	expected := `NAMESPACE   TEMPLATE     ID     STATUS           ATEOM POD         ATEOM IP   VERSION
-default     template-1   id-1   STATUS_RUNNING   worker-ns/pod-1   1.2.3.4    2
+	expected := `ATESPACE   TEMPLATE NS   TEMPLATE     ID     STATUS           ATEOM POD         ATEOM IP   VERSION
+team-a     default       template-1   id-1   STATUS_RUNNING   worker-ns/pod-1   1.2.3.4    2
 `
 	if diff := cmp.Diff(expected, output); diff != "" {
 		t.Errorf("output mismatch (-want +got):\n%s", diff)
@@ -106,18 +107,21 @@ func TestPrintActorsTo_Table_Sorted(t *testing.T) {
 	actors := []*ateapipb.Actor{
 		{
 			ActorId:                "zebra",
+			Atespace:               "team-b",
 			ActorTemplateNamespace: "default",
 			ActorTemplateName:      "template-1",
 			Status:                 ateapipb.Actor_STATUS_SUSPENDED,
 		},
 		{
 			ActorId:                "alpha",
+			Atespace:               "team-a",
 			ActorTemplateNamespace: "default",
 			ActorTemplateName:      "template-1",
 			Status:                 ateapipb.Actor_STATUS_RUNNING,
 		},
 		{
 			ActorId:                "beta",
+			Atespace:               "team-a",
 			ActorTemplateNamespace: "other",
 			ActorTemplateName:      "template-2",
 			Status:                 ateapipb.Actor_STATUS_SUSPENDED,
@@ -128,10 +132,11 @@ func TestPrintActorsTo_Table_Sorted(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	expected := `NAMESPACE   TEMPLATE     ID      STATUS             ATEOM POD   ATEOM IP   VERSION
-default     template-1   alpha   STATUS_RUNNING     <none>                 0
-default     template-1   zebra   STATUS_SUSPENDED   <none>                 0
-other       template-2   beta    STATUS_SUSPENDED   <none>                 0
+	// Sorted by atespace first, then template namespace, template name, id.
+	expected := `ATESPACE   TEMPLATE NS   TEMPLATE     ID      STATUS             ATEOM POD   ATEOM IP   VERSION
+team-a     default       template-1   alpha   STATUS_RUNNING     <none>                 0
+team-a     other         template-2   beta    STATUS_SUSPENDED   <none>                 0
+team-b     default       template-1   zebra   STATUS_SUSPENDED   <none>                 0
 `
 	if diff := cmp.Diff(expected, buf.String()); diff != "" {
 		t.Errorf("output mismatch (-want +got):\n%s", diff)
@@ -233,6 +238,95 @@ func TestPrintWorkersTo_Invalid(t *testing.T) {
 	var buf bytes.Buffer
 	err := PrintWorkersTo(&buf, nil, "xml")
 	if err == nil {
+		t.Errorf("expected error for invalid format, got nil")
+	}
+}
+
+func TestPrintAtespacesTo_Table(t *testing.T) {
+	var buf bytes.Buffer
+	atespaces := []*ateapipb.Atespace{
+		{Name: "team-a"},
+	}
+
+	if err := PrintAtespacesTo(&buf, atespaces, "table"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	expected := `NAME
+team-a
+`
+	if diff := cmp.Diff(expected, buf.String()); diff != "" {
+		t.Errorf("output mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestPrintAtespacesTo_JSON(t *testing.T) {
+	var buf bytes.Buffer
+	atespaces := []*ateapipb.Atespace{
+		{Name: "team-a"},
+	}
+
+	if err := PrintAtespacesTo(&buf, atespaces, "json"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	expected := `{
+  "atespaces": [
+    {
+      "name": "team-a"
+    }
+  ]
+}
+`
+	if diff := cmp.Diff(expected, buf.String()); diff != "" {
+		t.Errorf("output mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestPrintAtespacesTo_YAML(t *testing.T) {
+	var buf bytes.Buffer
+	atespaces := []*ateapipb.Atespace{
+		{Name: "team-a"},
+	}
+
+	if err := PrintAtespacesTo(&buf, atespaces, "yaml"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	expected := `atespaces:
+- name: team-a
+`
+	if diff := cmp.Diff(expected, buf.String()); diff != "" {
+		t.Errorf("output mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestPrintAtespacesTo_Table_Sorted(t *testing.T) {
+	var buf bytes.Buffer
+	atespaces := []*ateapipb.Atespace{
+		{Name: "team-c"},
+		{Name: "team-a"},
+		{Name: "team-b"},
+	}
+
+	if err := PrintAtespacesTo(&buf, atespaces, "table"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Sorted by name.
+	expected := `NAME
+team-a
+team-b
+team-c
+`
+	if diff := cmp.Diff(expected, buf.String()); diff != "" {
+		t.Errorf("output mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestPrintAtespacesTo_Invalid(t *testing.T) {
+	var buf bytes.Buffer
+	if err := PrintAtespacesTo(&buf, nil, "xml"); err == nil {
 		t.Errorf("expected error for invalid format, got nil")
 	}
 }
