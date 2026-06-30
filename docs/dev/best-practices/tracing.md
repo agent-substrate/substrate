@@ -29,7 +29,7 @@ Servers have an exporter service that batches spans and pushes them to a remote 
 
 ### For servers
 
-All servers need to initialize an OpenTelemetry exporter and tracer provider.  See `cmd/ateapi/ateapi.go:initTracing()` for an example:
+All servers need to initialize an OpenTelemetry exporter and tracer provider.  See `internal/serverboot.InitTracing()` (used by `cmd/ateapi/main.go`) for an example:
 
 ```go
 func initTracing(ctx context.Context) (*sdktrace.TracerProvider, error) {
