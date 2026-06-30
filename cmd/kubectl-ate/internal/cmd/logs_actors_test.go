@@ -17,6 +17,7 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -247,6 +248,40 @@ func TestFilterAndDisplayLogLine(t *testing.T) {
 			wantTime:      "2026-05-16T01:03:38Z",
 			wantOutput:    `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"hi"}`,
 		},
+		{
+			// Union: with both --container and --supervisor, the named container's
+			// lines are included.
+			name:          "container+supervisor includes the named container line",
+			line:          `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"hi","logging.googleapis.com/labels":{"ate.dev/actor_id":"act-1","ate.dev/container_name":"counter"}}`,
+			targetActorID: "act-1",
+			container:     "counter",
+			supervisor:    true,
+			wantMatched:   true,
+			wantTime:      "2026-05-16T01:03:38Z",
+			wantOutput:    `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"hi"}`,
+		},
+		{
+			// Union: supervisor lifecycle lines are included alongside the container.
+			name:          "container+supervisor includes the supervisor line",
+			line:          `{"time":"2026-05-16T01:03:38Z","message":"Actor started","logging.googleapis.com/labels":{"ate.dev/actor_id":"act-1"}}`,
+			targetActorID: "act-1",
+			container:     "counter",
+			supervisor:    true,
+			wantMatched:   true,
+			wantTime:      "2026-05-16T01:03:38Z",
+			wantOutput:    `{"time":"2026-05-16T01:03:38Z","message":"Actor started"}`,
+		},
+		{
+			// Union still excludes other containers: only the named one and supervisor.
+			name:          "container+supervisor excludes a different container",
+			line:          `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"hi","logging.googleapis.com/labels":{"ate.dev/actor_id":"act-1","ate.dev/container_name":"sidecar"}}`,
+			targetActorID: "act-1",
+			container:     "counter",
+			supervisor:    true,
+			wantMatched:   false,
+			wantTime:      "",
+			wantOutput:    "",
+		},
 	}
 
 	for _, tc := range tests {
@@ -463,49 +498,35 @@ func TestLogsActorRunner_Run_OneShot_SupervisorFilter(t *testing.T) {
 	}
 }
 
-func TestValidateLogFilterFlags(t *testing.T) {
-	tests := []struct {
-		name       string
-		container  string
-		supervisor bool
-		wantErr    bool
-	}{
-		{"neither", "", false, false},
-		{"container only", "counter", false, false},
-		{"supervisor only", "", true, false},
-		{"both", "counter", true, true},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			err := validateLogFilterFlags(tc.container, tc.supervisor)
-			if tc.wantErr {
-				if err == nil {
-					t.Fatal("expected an error, got nil")
-				}
-				if !strings.Contains(err.Error(), "mutually exclusive") {
-					t.Errorf("error %q missing substring %q", err, "mutually exclusive")
-				}
-			} else if err != nil {
-				t.Errorf("unexpected error: %v", err)
-			}
-		})
-	}
-}
+// TestLogsActorRunner_Run_OneShot_ContainerAndSupervisor verifies that
+// --container and --supervisor are additive when constructed directly: the
+// named container's lines and the supervisor lifecycle lines are both shown,
+// while other containers are excluded.
+func TestLogsActorRunner_Run_OneShot_ContainerAndSupervisor(t *testing.T) {
+	actorID := "act-123"
+	podName := "pod-xyz"
+	namespace := "ns-abc"
 
-// TestLogsActorRunner_Run_RejectsContainerAndSupervisor verifies the runner
-// enforces its own invariant when constructed directly (not only via the CLI),
-// failing fast before any control-plane or pod calls.
-func TestLogsActorRunner_Run_RejectsContainerAndSupervisor(t *testing.T) {
 	mockAPI := &mockAteAPIClient{
 		GetActorFunc: func(ctx context.Context, in *ateapipb.GetActorRequest, opts ...grpc.CallOption) (*ateapipb.GetActorResponse, error) {
-			t.Error("GetActor should not be called when filters are mutually exclusive")
-			return nil, fmt.Errorf("should not be called")
+			return &ateapipb.GetActorResponse{
+				Actor: &ateapipb.Actor{
+					ActorId:           actorID,
+					AteomPodName:      podName,
+					AteomPodNamespace: namespace,
+					Status:            ateapipb.Actor_STATUS_RUNNING,
+				},
+			}, nil
 		},
 	}
+
+	counterLine := `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"from counter","logging.googleapis.com/labels":{"ate.dev/actor_id":"act-123","ate.dev/container_name":"counter"}}`
+	sidecarLine := `{"time":"2026-05-16T01:03:39Z","level":"info","msg":"from sidecar","logging.googleapis.com/labels":{"ate.dev/actor_id":"act-123","ate.dev/container_name":"sidecar"}}`
+	supervisorLine := `{"time":"2026-05-16T01:03:40Z","message":"Actor started","logging.googleapis.com/labels":{"ate.dev/actor_id":"act-123"}}`
+
 	mockStreamer := &mockPodLogsStreamer{
 		StreamLogsFunc: func(ctx context.Context, ns, name string, opts *corev1.PodLogOptions) (io.ReadCloser, error) {
-			t.Error("StreamLogs should not be called when filters are mutually exclusive")
-			return nil, fmt.Errorf("should not be called")
+			return io.NopCloser(strings.NewReader(counterLine + "\n" + sidecarLine + "\n" + supervisorLine + "\n")), nil
 		},
 	}
 
@@ -515,16 +536,20 @@ func TestLogsActorRunner_Run_RejectsContainerAndSupervisor(t *testing.T) {
 		streamer:   mockStreamer,
 		stdout:     &stdout,
 		stderr:     &stderr,
+		follow:     false,
 		container:  "counter",
 		supervisor: true,
 	}
 
-	err := runner.Run(context.Background(), "act-1")
-	if err == nil {
-		t.Fatal("expected an error when both --container and --supervisor are set, got nil")
+	if err := runner.Run(context.Background(), actorID); err != nil {
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if !strings.Contains(err.Error(), "mutually exclusive") {
-		t.Errorf("unexpected error: %v (want substring %q)", err, "mutually exclusive")
+
+	gotOutput := strings.TrimSpace(stdout.String())
+	wantOutput := `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"from counter"}` + "\n" +
+		`{"time":"2026-05-16T01:03:40Z","message":"Actor started"}`
+	if gotOutput != wantOutput {
+		t.Errorf("got stdout %q, want counter + supervisor lines %q", gotOutput, wantOutput)
 	}
 	if mockAPI.CloseCalls != 1 {
 		t.Errorf("expected Close to be called once, got %d", mockAPI.CloseCalls)
@@ -652,7 +677,7 @@ func TestLogsActorRunner_Run_Follow_SuspendedToRunning(t *testing.T) {
 	}
 
 	err := runner.Run(ctx, actorID)
-	if err != nil && err != context.Canceled {
+	if err != nil && !errors.Is(err, context.Canceled) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -670,6 +695,157 @@ func TestLogsActorRunner_Run_Follow_SuspendedToRunning(t *testing.T) {
 	wantStdout := `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"Follow hello"}`
 	if gotStdout != wantStdout {
 		t.Errorf("got stdout %q, want %q", gotStdout, wantStdout)
+	}
+}
+
+// lineSignalWriter is a concurrency-safe writer that closes done once its
+// accumulated output contains needle, letting a test wait for specific output
+// before acting instead of racing on the follow loop's internal timing.
+type lineSignalWriter struct {
+	mu     sync.Mutex
+	buf    bytes.Buffer
+	needle string
+	done   chan struct{}
+	once   sync.Once
+}
+
+func (w *lineSignalWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	n, err := w.buf.Write(p)
+	if strings.Contains(w.buf.String(), w.needle) {
+		w.once.Do(func() { close(w.done) })
+	}
+	return n, err
+}
+
+func (w *lineSignalWriter) String() string {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	return w.buf.String()
+}
+
+// TestLogsActorRunner_Run_Follow_ContainerAndSupervisor verifies that the
+// streaming (follow) path applies the same additive --container + --supervisor
+// union semantics as one-shot mode: interleaved lines from the named container
+// and the supervisor are both shown, while a different container is excluded.
+func TestLogsActorRunner_Run_Follow_ContainerAndSupervisor(t *testing.T) {
+	actorID := "act-123"
+	podName := "pod-xyz"
+	namespace := "ns-abc"
+
+	mockAPI := &mockAteAPIClient{
+		GetActorFunc: func(ctx context.Context, in *ateapipb.GetActorRequest, opts ...grpc.CallOption) (*ateapipb.GetActorResponse, error) {
+			return &ateapipb.GetActorResponse{
+				Actor: &ateapipb.Actor{
+					ActorId:           actorID,
+					AteomPodName:      podName,
+					AteomPodNamespace: namespace,
+					Status:            ateapipb.Actor_STATUS_RUNNING,
+				},
+			}, nil
+		},
+	}
+
+	// Interleaved sources on a single stream: counter (selected), sidecar
+	// (different container, excluded), supervisor (selected), counter again.
+	counterLine1 := `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"from counter","logging.googleapis.com/labels":{"ate.dev/actor_id":"act-123","ate.dev/container_name":"counter"}}`
+	sidecarLine := `{"time":"2026-05-16T01:03:39Z","level":"info","msg":"from sidecar","logging.googleapis.com/labels":{"ate.dev/actor_id":"act-123","ate.dev/container_name":"sidecar"}}`
+	supervisorLine := `{"time":"2026-05-16T01:03:40Z","message":"Actor started","logging.googleapis.com/labels":{"ate.dev/actor_id":"act-123"}}`
+	counterLine2 := `{"time":"2026-05-16T01:03:41Z","level":"info","msg":"from counter again","logging.googleapis.com/labels":{"ate.dev/actor_id":"act-123","ate.dev/container_name":"counter"}}`
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	var mu sync.Mutex
+	var streamCalls int
+
+	mockStreamer := &mockPodLogsStreamer{
+		StreamLogsFunc: func(streamCtx context.Context, ns, name string, opts *corev1.PodLogOptions) (io.ReadCloser, error) {
+			mu.Lock()
+			streamCalls++
+			call := streamCalls
+			mu.Unlock()
+
+			if call > 1 {
+				// A second call means an unexpected reconnect; block until
+				// cancel (no busy-spin) and let the streamCalls assertion flag it.
+				<-streamCtx.Done()
+				return nil, streamCtx.Err()
+			}
+			if !opts.Follow {
+				return nil, fmt.Errorf("expected follow to be true in follow mode")
+			}
+
+			// Deliver all lines on one stream, then stay open like a live follow
+			// until cancel, so the test never relies on reconnect-after-EOF.
+			pr, pw := io.Pipe()
+			go func() {
+				_, _ = io.WriteString(pw,
+					counterLine1+"\n"+sidecarLine+"\n"+supervisorLine+"\n"+counterLine2+"\n")
+				<-streamCtx.Done()
+				_ = pw.CloseWithError(streamCtx.Err())
+			}()
+			return pr, nil
+		},
+	}
+
+	// stdout signals once the final expected line is printed, so the test
+	// cancels only after the runner has drained and displayed every line.
+	stdout := &lineSignalWriter{needle: "from counter again", done: make(chan struct{})}
+	var stderr bytes.Buffer
+	runner := &LogsActorRunner{
+		apiClient:         mockAPI,
+		streamer:          mockStreamer,
+		stdout:            stdout,
+		stderr:            &stderr,
+		follow:            true,
+		container:         "counter",
+		supervisor:        true,
+		pollInterval:      50 * time.Millisecond,
+		reconnectInterval: 50 * time.Millisecond,
+		tickerInterval:    time.Hour, // keep the migration monitor out of the way
+	}
+
+	done := make(chan struct{})
+	var runErr error
+	go func() {
+		runErr = runner.Run(ctx, actorID)
+		close(done)
+	}()
+
+	// Cancel only after the final expected line is printed, so the assertion
+	// never races with the follow loop draining the stream.
+	select {
+	case <-stdout.done:
+	case <-time.After(2 * time.Second):
+		cancel()
+		t.Fatal("follow stream never printed the final line")
+	}
+
+	cancel()
+	<-done
+
+	if runErr != nil && !errors.Is(runErr, context.Canceled) {
+		t.Fatalf("unexpected error: %v", runErr)
+	}
+
+	mu.Lock()
+	gotCalls := streamCalls
+	mu.Unlock()
+	if gotCalls != 1 {
+		t.Errorf("expected exactly one StreamLogs call (single follow stream), got %d", gotCalls)
+	}
+
+	gotStdout := strings.TrimSpace(stdout.String())
+	wantStdout := `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"from counter"}` + "\n" +
+		`{"time":"2026-05-16T01:03:40Z","message":"Actor started"}` + "\n" +
+		`{"time":"2026-05-16T01:03:41Z","level":"info","msg":"from counter again"}`
+	if gotStdout != wantStdout {
+		t.Errorf("got stdout %q, want counter + supervisor lines (sidecar excluded) %q", gotStdout, wantStdout)
+	}
+	if strings.Contains(gotStdout, "from sidecar") {
+		t.Errorf("sidecar line should be excluded, but stdout was %q", gotStdout)
 	}
 }
 
@@ -903,7 +1079,7 @@ func TestLogsActorRunner_Run_Follow_ActorMigration(t *testing.T) {
 	}
 
 	err := runner.Run(ctx, actorID)
-	if err != nil && err != context.Canceled {
+	if err != nil && !errors.Is(err, context.Canceled) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -1023,7 +1199,7 @@ func TestLogsActorRunner_Run_Follow_ActorSuspendedMidStream(t *testing.T) {
 	}
 
 	err := runner.Run(ctx, actorID)
-	if err != nil && err != context.Canceled {
+	if err != nil && !errors.Is(err, context.Canceled) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 

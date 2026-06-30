@@ -61,17 +61,20 @@ Actor is currently running on pod ate-demo-counter/counter-deployment-ab123-x4y5
 ```
 
 #### Example 4: Filtering by Container or Supervisor
-An actor may run multiple containers, and Agent Substrate also emits synthetic supervisor lifecycle events (e.g., `Actor started`, `Actor checkpointing`). By default `kubectl ate logs actors` shows all of an actor's log lines. You can narrow the output to a single container or to just the supervisor:
+An actor may run multiple containers, and Agent Substrate also emits synthetic supervisor lifecycle events (e.g., `Actor started`, `Actor checkpointing`). By default `kubectl ate logs actors` shows all of an actor's log lines. Use `--container` and/or `--supervisor` to scope the output to a single container, to just the supervisor, or to both at once:
 
 ```bash
-# Only logs from a specific container within the actor (-c for short).
-kubectl ate logs actors <actor_id> --container <container_name>
+# Logs from a specific container within the actor (-c for short).
+kubectl ate logs actors <actor_id> -a <atespace> --container <container_name>
 
-# Only the ateom supervisor (lifecycle) logs.
-kubectl ate logs actors <actor_id> --supervisor
+# The ateom supervisor (lifecycle) logs.
+kubectl ate logs actors <actor_id> -a <atespace> --supervisor
+
+# Both together: the container's logs plus the supervisor lifecycle logs.
+kubectl ate logs actors <actor_id> -a <atespace> --container <container_name> --supervisor
 ```
 
-`--container` and `--supervisor` are mutually exclusive. Container log lines are identified by the `ate.dev/container_name` label; supervisor lifecycle lines do not carry that label.
+`--container` and `--supervisor` are additive selectors: passing both shows that container's lines together with the supervisor lines. Container log lines are identified by the `ate.dev/container_name` label; supervisor lifecycle lines do not carry that label.
 
 ---
 

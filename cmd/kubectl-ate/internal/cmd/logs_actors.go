@@ -57,8 +57,8 @@ func init() {
 	logsActorsCmd.Flags().BoolVarP(&followLogs, "follow", "f", false, "Specify if the logs should be streamed.")
 	logsActorsCmd.Flags().StringVarP(&logsAtespaceFlag, "atespace", "a", "", "Atespace the actor lives in")
 	_ = logsActorsCmd.MarkFlagRequired("atespace")
-	logsActorsCmd.Flags().StringVarP(&containerFlag, "container", "c", "", "Show logs only from the named container within the actor. Mutually exclusive with --supervisor.")
-	logsActorsCmd.Flags().BoolVar(&supervisorFlag, "supervisor", false, "Show only the ateom supervisor (lifecycle) logs. Mutually exclusive with --container.")
+	logsActorsCmd.Flags().StringVarP(&containerFlag, "container", "c", "", "Show logs from the named container, filtering out other containers and the supervisor; add --supervisor to also include lifecycle logs.")
+	logsActorsCmd.Flags().BoolVar(&supervisorFlag, "supervisor", false, "Show only the ateom supervisor (lifecycle) logs, filtering out container logs; add --container to also include that container's logs.")
 	logsCmd.AddCommand(logsActorsCmd)
 }
 
@@ -110,9 +110,6 @@ func (r *LogsActorRunner) Run(ctx context.Context, actorID string) error {
 	}
 
 	defer r.apiClient.Close()
-	if err := validateLogFilterFlags(r.container, r.supervisor); err != nil {
-		return err
-	}
 	if r.follow {
 		return r.runFollow(ctx, actorID)
 	}
@@ -291,22 +288,9 @@ func (r *LogsActorRunner) startMigrationMonitor(
 	}()
 }
 
-// validateLogFilterFlags rejects the one unsupported filter combination: a
-// container filter and the supervisor filter cannot be requested together.
-func validateLogFilterFlags(container string, supervisor bool) error {
-	if container != "" && supervisor {
-		return fmt.Errorf("--container and --supervisor are mutually exclusive; specify only one")
-	}
-	return nil
-}
-
 func runLogsActor(cmd *cobra.Command, args []string) error {
 	ctx := cmd.Context()
 	actorID := args[0]
-
-	if err := validateLogFilterFlags(containerFlag, supervisorFlag); err != nil {
-		return err
-	}
 
 	apiClient, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, traceEnabled)
 	if err != nil {
@@ -337,24 +321,30 @@ func runLogsActor(cmd *cobra.Command, args []string) error {
 }
 
 // logLineFilter selects which of an actor's log lines are displayed. container
-// and supervisor are mutually exclusive; zero values show all of the lines.
+// and supervisor each select a log source: container alone shows only the named
+// container's lines, supervisor alone shows only the supervisor (lifecycle)
+// lines, and setting both shows the union of the two. When neither is set, all
+// lines are shown.
 type logLineFilter struct {
 	actorID    string
-	container  string // when non-empty, show only lines from this container
-	supervisor bool   // when true, show only supervisor (non-container) lines
+	container  string // when non-empty, include lines from this container
+	supervisor bool   // when true, include supervisor (non-container) lines
 }
 
 // matchesSource reports whether a line from the given container (empty for
-// supervisor lines) passes the filter's source selection.
+// supervisor lines) passes the filter's source selection: container alone
+// matches only the named container, supervisor alone matches only supervisor
+// lines, setting both matches the union, and setting neither matches every
+// line. Supervisor lines are identified by the absence of a container name (the
+// producer tags every container line, so only lifecycle events lack one).
 func (f logLineFilter) matchesSource(containerName string) bool {
-	switch {
-	case f.supervisor:
-		return containerName == ""
-	case f.container != "":
-		return containerName == f.container
-	default:
+	if f.container == "" && !f.supervisor {
 		return true
 	}
+	if f.supervisor && containerName == "" {
+		return true
+	}
+	return f.container != "" && containerName == f.container
 }
 
 // Reserved Substrate log labels, written under one of logActorLabelKeys.
