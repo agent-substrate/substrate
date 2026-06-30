@@ -947,8 +947,11 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 func resetActorDirs(actorTemplateNamespace, actorTemplateName, actorID string) error {
 	// Explicitly leave runsc logs dir untouched.
 
+	// removeAllWritable, not os.RemoveAll: the bundle holds unpacked actor-image
+	// rootfs whose directories keep the image's (possibly read-only) modes, which
+	// atelet can't remove as plain root without first making them writable.
 	bundleDir := ateompath.OCIBundleDir(actorTemplateNamespace, actorTemplateName, actorID)
-	if err := os.RemoveAll(bundleDir); err != nil {
+	if err := removeAllWritable(bundleDir); err != nil {
 		return fmt.Errorf("while deleting bundle dir: %w", err)
 	}
 	if err := os.MkdirAll(bundleDir, 0o700); err != nil {
