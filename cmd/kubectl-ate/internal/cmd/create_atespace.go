@@ -25,7 +25,7 @@ import (
 
 var createAtespaceCmd = &cobra.Command{
 	Use:   "atespace [name]",
-	Short: "Create an atespace (tenant boundary)",
+	Short: "Create an atespace",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()

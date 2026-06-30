@@ -1065,7 +1065,7 @@ func TestDeleteAtespace_EmptyAfterActorsRemoved(t *testing.T) {
 	}
 }
 
-func TestDeleteAtespace_EmptyWhileOtherTenantNonEmpty(t *testing.T) {
+func TestDeleteAtespace_EmptyWhileOtherAtespaceNonEmpty(t *testing.T) {
 	mr, s, ctx := setupTest(t)
 	defer mr.Close()
 

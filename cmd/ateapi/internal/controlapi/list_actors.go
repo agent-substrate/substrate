@@ -47,7 +47,7 @@ func (s *Service) ListActors(ctx context.Context, req *ateapipb.ListActorsReques
 
 func validateListActorsRequest(req *ateapipb.ListActorsRequest) error {
 	// An empty atespace is allowed here and means "all atespaces"(used by `kubectl ate get actors -A`).
-	// A non-empty atespace is validated and scopes the listing to that tenant.
+	// A non-empty atespace is validated and scopes the listing to that atespace.
 	if req.GetAtespace() != "" {
 		if err := resources.ValidateAtespace(req.GetAtespace()); err != nil {
 			return err

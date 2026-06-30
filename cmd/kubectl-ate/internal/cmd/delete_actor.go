@@ -50,7 +50,7 @@ var deleteActorCmd = &cobra.Command{
 }
 
 func init() {
-	deleteActorCmd.Flags().StringVarP(&deleteAtespaceFlag, "atespace", "a", "", "Atespace (tenant) the actor lives in")
+	deleteActorCmd.Flags().StringVarP(&deleteAtespaceFlag, "atespace", "a", "", "Atespace the actor lives in")
 	_ = deleteActorCmd.MarkFlagRequired("atespace")
 	deleteCmd.AddCommand(deleteActorCmd)
 }

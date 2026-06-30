@@ -405,7 +405,7 @@ type Actor struct {
 	// suspend/pause since eligibility is no longer a single fixed pool
 	// reference on the ActorTemplate.
 	WorkerPoolName string `protobuf:"bytes,14,opt,name=worker_pool_name,json=workerPoolName,proto3" json:"worker_pool_name,omitempty"`
-	// The atespace (tenant boundary) this actor belongs to. Part of the actor's
+	// The atespace this actor belongs to. Part of the actor's
 	// resource identity; folded into the Redis key as actor:<atespace>:<actor_id>.
 	Atespace      string `protobuf:"bytes,15,opt,name=atespace,proto3" json:"atespace,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -540,7 +540,7 @@ func (x *Actor) GetAtespace() string {
 	return ""
 }
 
-// Atespace is the tenant boundary an Actor is created into.
+// Atespace is the isolation boundary an Actor is created into.
 type Atespace struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`

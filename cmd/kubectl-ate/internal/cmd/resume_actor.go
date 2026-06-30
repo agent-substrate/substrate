@@ -52,7 +52,7 @@ var resumeActorCmd = &cobra.Command{
 
 func init() {
 	resumeActorCmd.Flags().BoolVarP(&bootFlag, "boot", "", false, "Skip golden snapshot and boot from scratch.")
-	resumeActorCmd.Flags().StringVarP(&resumeAtespaceFlag, "atespace", "a", "", "Atespace (tenant) the actor lives in")
+	resumeActorCmd.Flags().StringVarP(&resumeAtespaceFlag, "atespace", "a", "", "Atespace the actor lives in")
 	_ = resumeActorCmd.MarkFlagRequired("atespace")
 	resumeCmd.AddCommand(resumeActorCmd)
 }

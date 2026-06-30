@@ -75,7 +75,7 @@ type ControlClient interface {
 	ListWorkers(ctx context.Context, in *ListWorkersRequest, opts ...grpc.CallOption) (*ListWorkersResponse, error)
 	// List all actors currently reflected in redis.
 	ListActors(ctx context.Context, in *ListActorsRequest, opts ...grpc.CallOption) (*ListActorsResponse, error)
-	// Create a new Atespace (tenant boundary). Substrate-native, stored in Redis.
+	// Create a new Atespace. Substrate-native, stored in Redis.
 	CreateAtespace(ctx context.Context, in *CreateAtespaceRequest, opts ...grpc.CallOption) (*CreateAtespaceResponse, error)
 	// Get an Atespace by name.
 	GetAtespace(ctx context.Context, in *GetAtespaceRequest, opts ...grpc.CallOption) (*GetAtespaceResponse, error)
@@ -259,7 +259,7 @@ type ControlServer interface {
 	ListWorkers(context.Context, *ListWorkersRequest) (*ListWorkersResponse, error)
 	// List all actors currently reflected in redis.
 	ListActors(context.Context, *ListActorsRequest) (*ListActorsResponse, error)
-	// Create a new Atespace (tenant boundary). Substrate-native, stored in Redis.
+	// Create a new Atespace. Substrate-native, stored in Redis.
 	CreateAtespace(context.Context, *CreateAtespaceRequest) (*CreateAtespaceResponse, error)
 	// Get an Atespace by name.
 	GetAtespace(context.Context, *GetAtespaceRequest) (*GetAtespaceResponse, error)

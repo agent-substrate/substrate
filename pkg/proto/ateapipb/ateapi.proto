@@ -50,7 +50,7 @@ service Control {
   // List all actors currently reflected in redis.
   rpc ListActors(ListActorsRequest) returns (ListActorsResponse) {}
 
-  // Create a new Atespace (tenant boundary). Substrate-native, stored in Redis.
+  // Create a new Atespace. Substrate-native, stored in Redis.
   rpc CreateAtespace(CreateAtespaceRequest) returns (CreateAtespaceResponse) {}
 
   // Get an Atespace by name.
@@ -138,12 +138,12 @@ message Actor {
   // reference on the ActorTemplate.
   string worker_pool_name = 14;
 
-  // The atespace (tenant boundary) this actor belongs to. Part of the actor's
+  // The atespace this actor belongs to. Part of the actor's
   // resource identity; folded into the Redis key as actor:<atespace>:<actor_id>.
   string atespace = 15;
 }
 
-// Atespace is the tenant boundary an Actor is created into.
+// Atespace is the isolation boundary an Actor is created into.
 message Atespace {
   string name = 1;
 }
