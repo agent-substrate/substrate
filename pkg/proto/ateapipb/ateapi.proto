@@ -300,9 +300,13 @@ message Worker {
 }
 
 message Assignment {
-  string actor_template_namespace = 1;
-  string actor_template_name  = 2;
-  ActorRef actor = 3;
+  KubeNamespacedObjectRef actor_template = 1;
+  ActorRef actor = 2;
+}
+
+message KubeNamespacedObjectRef {
+  string namespace = 1;
+  string name  = 2;
 }
 
 message DebugClearRequest {}

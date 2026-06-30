@@ -263,8 +263,10 @@ func TestUpdateWorker_Success(t *testing.T) {
 	}
 
 	worker.Assignment = &ateapipb.Assignment{
-		ActorTemplateNamespace: "default",
-		ActorTemplateName:      "test-template",
+		ActorTemplate: &ateapipb.KubeNamespacedObjectRef{
+			Namespace: "default",
+			Name:      "test-template",
+		},
 		Actor: &ateapipb.ActorRef{
 			Name: "session-1",
 		},
