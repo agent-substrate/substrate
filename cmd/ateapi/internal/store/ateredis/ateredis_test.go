@@ -793,6 +793,97 @@ func TestAcquireLock_TTLExpiration(t *testing.T) {
 	}
 }
 
+func TestRefreshLock_ExtendsTTL(t *testing.T) {
+	mr, s, ctx := setupTest(t)
+	defer mr.Close()
+
+	key := "test-lock"
+	value := "token-1"
+	otherValue := "token-2"
+	ttl := 10 * time.Second
+
+	acquired, err := s.AcquireLock(ctx, key, value, ttl)
+	if err != nil {
+		t.Fatalf("AcquireLock failed: %v", err)
+	}
+	if !acquired {
+		t.Fatalf("expected lock to be acquired")
+	}
+
+	// Advance to just before expiry, refresh, and verify another holder still
+	// can't acquire after the original TTL would have elapsed.
+	mr.FastForward(8 * time.Second)
+	refreshed, err := s.RefreshLock(ctx, key, value, ttl)
+	if err != nil {
+		t.Fatalf("RefreshLock failed: %v", err)
+	}
+	if !refreshed {
+		t.Fatalf("expected lock to be refreshed")
+	}
+
+	mr.FastForward(5 * time.Second)
+	stolen, err := s.AcquireLock(ctx, key, otherValue, ttl)
+	if err != nil {
+		t.Fatalf("AcquireLock failed: %v", err)
+	}
+	if stolen {
+		t.Errorf("expected refreshed lock to still be held, but it was stolen")
+	}
+}
+
+func TestRefreshLock_WrongValueReturnsFalse(t *testing.T) {
+	mr, s, ctx := setupTest(t)
+	defer mr.Close()
+
+	key := "test-lock"
+	value := "token-1"
+	otherValue := "token-2"
+	ttl := 10 * time.Second
+
+	acquired, err := s.AcquireLock(ctx, key, value, ttl)
+	if err != nil {
+		t.Fatalf("AcquireLock failed: %v", err)
+	}
+	if !acquired {
+		t.Fatalf("expected lock to be acquired")
+	}
+
+	refreshed, err := s.RefreshLock(ctx, key, otherValue, ttl)
+	if err != nil {
+		t.Fatalf("RefreshLock failed: %v", err)
+	}
+	if refreshed {
+		t.Errorf("expected RefreshLock with wrong value to return false")
+	}
+}
+
+func TestRefreshLock_AfterExpirationReturnsFalse(t *testing.T) {
+	mr, s, ctx := setupTest(t)
+	defer mr.Close()
+
+	key := "test-lock"
+	value := "token-1"
+	ttl := 5 * time.Second
+
+	acquired, err := s.AcquireLock(ctx, key, value, ttl)
+	if err != nil {
+		t.Fatalf("AcquireLock failed: %v", err)
+	}
+	if !acquired {
+		t.Fatalf("expected lock to be acquired")
+	}
+
+	mr.FastForward(6 * time.Second)
+
+	refreshed, err := s.RefreshLock(ctx, key, value, ttl)
+	if err != nil {
+		t.Fatalf("RefreshLock failed: %v", err)
+	}
+	if refreshed {
+		t.Errorf("expected RefreshLock after expiration to return false")
+	}
+}
+
 func receiveEvent(t *testing.T, ch <-chan store.WorkerEvent) store.WorkerEvent {
 	t.Helper()
 	select {
