@@ -110,6 +110,27 @@ type KubernetesClaims struct {
 	WarnAfter time.Time
 }
 
+var _ slog.LogValuer = KubernetesClaims{}
+
+// Allowlist of non-sensitive claims; the value receiver stops a logged copy from bypassing it.
+func (c KubernetesClaims) LogValue() slog.Value {
+	attrs := []slog.Attr{
+		slog.String("issuer", c.Issuer),
+		slog.String("subject", c.Subject),
+		slog.Any("audiences", c.Audiences),
+		slog.Time("issuedAt", c.IssuedAt),
+		slog.Time("expiration", c.Expiration),
+		slog.String("jti", c.JTI),
+		slog.String("namespace", c.Namespace),
+		slog.String("serviceAccount", c.ServiceAccountName),
+		slog.String("pod", c.PodName),
+	}
+	if c.NodeName != "" {
+		attrs = append(attrs, slog.String("node", c.NodeName))
+	}
+	return slog.GroupValue(attrs...)
+}
+
 var permittedSkew = 5 * time.Minute
 
 // Verify verifies and extracts claims from a Kubernetes JWT.
