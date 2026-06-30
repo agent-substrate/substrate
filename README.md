@@ -115,7 +115,7 @@ hack/install-ate-kind.sh --deploy-demo-counter
 go install ./cmd/kubectl-ate
 
 # create a counter actor and demo it
-kubectl ate create actor my-counter-1 --template ate-demo-counter/counter
+kubectl ate create actor my-counter-1 --template=ate-demo-counter/counter
 
 # port-forward the network router to bind to local port `8000`
 kubectl port-forward -n ate-system svc/atenet-router 8000:80
@@ -146,7 +146,7 @@ curl -X POST -H "Host: my-counter-1.actors.resources.substrate.ate.dev" -i http:
    go run ./tools/setup-gcp bootstrap
    ```
 
-4. Deploy the Agent Substrate system to your cluster (remember to navigate back to root directory of this repo before running the following commands):
+4. Deploy the Agent Substrate system to your cluster:
    ```bash
    ./hack/install-ate.sh --deploy-ate-system
    ```
