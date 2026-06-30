@@ -159,8 +159,10 @@ func TestPrintWorkersTo_Table(t *testing.T) {
 			WorkerPool:      "pool-1",
 			WorkerPod:       "pod-1",
 			Assignment: &ateapipb.Assignment{
-				ActorTemplateNamespace: "default",
-				ActorTemplateName:      "template-1",
+				ActorTemplate: &ateapipb.KubeNamespacedObjectRef{
+					Namespace: "default",
+					Name:      "template-1",
+				},
 				Actor: &ateapipb.ActorRef{
 					Name: "id-1",
 				},

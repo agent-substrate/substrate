@@ -1113,8 +1113,10 @@ func TestResumeActor(t *testing.T) {
 		WorkerPool:      "pool1",
 		WorkerPod:       "worker-1",
 		Assignment: &ateapipb.Assignment{
-			ActorTemplateNamespace: ns,
-			ActorTemplateName:      "tmpl1",
+			ActorTemplate: &ateapipb.KubeNamespacedObjectRef{
+				Namespace: ns,
+				Name:      "tmpl1",
+			},
 			Actor: &ateapipb.ActorRef{
 				Name:     id,
 				Atespace: testAtespace,

@@ -183,8 +183,10 @@ func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, stat
 	// mutating so that the cache is not corrupted if UpdateWorker fails.
 	assignedWorker = proto.Clone(assignedWorker).(*ateapipb.Worker)
 	assignedWorker.Assignment = &ateapipb.Assignment{
-		ActorTemplateNamespace: state.Actor.GetActorTemplateNamespace(),
-		ActorTemplateName:      state.Actor.GetActorTemplateName(),
+		ActorTemplate: &ateapipb.KubeNamespacedObjectRef{
+			Namespace: state.Actor.GetActorTemplateNamespace(),
+			Name:      state.Actor.GetActorTemplateName(),
+		},
 		Actor: &ateapipb.ActorRef{
 			Name:     input.ActorID,
 			Atespace: state.Actor.GetAtespace(),

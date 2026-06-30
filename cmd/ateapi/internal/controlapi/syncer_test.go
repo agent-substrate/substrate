@@ -197,8 +197,10 @@ func TestSyncer_DeleteBoundWorker_ClearsActor(t *testing.T) {
 	}
 	w, _ := persistence.GetWorker(ctx, ns, pool, pod)
 	w.Assignment = &ateapipb.Assignment{
-		ActorTemplateNamespace: ns,
-		ActorTemplateName:      "tmpl",
+		ActorTemplate: &ateapipb.KubeNamespacedObjectRef{
+			Namespace: ns,
+			Name:      "tmpl",
+		},
 		Actor: &ateapipb.ActorRef{
 			Name:     actorID,
 			Atespace: "team-orphan",
