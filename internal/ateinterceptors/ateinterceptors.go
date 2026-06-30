@@ -71,6 +71,36 @@ func ServerUnaryInterceptor(ctx context.Context, req any, info *grpc.UnaryServer
 	return resp, err
 }
 
+// InternalServerUnaryInterceptor is for internal services to return full gRPC errors with specific error codes and debugging details.
+func InternalServerUnaryInterceptor(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+	startTime := time.Now()
+
+	resp, err := handler(ctx, req)
+
+	slog.InfoContext(ctx, "Handle RPC",
+		slog.String("method", info.FullMethod),
+		slog.Any("req", sanitizeForLog(req)),
+		slog.Any("resp", sanitizeForLog(resp)),
+		slog.Any("err", err),
+		slog.String("elapsed-time", time.Since(startTime).String()),
+	)
+
+	if err != nil {
+		var statusErr interface {
+			GRPCStatus() *status.Status
+		}
+
+		if errors.As(err, &statusErr) {
+			return nil, statusErr.GRPCStatus().Err()
+		}
+
+		// No status error found in chain.
+		return nil, status.Error(codes.Internal, err.Error())
+	}
+
+	return resp, err
+}
+
 func sanitizeForLog(v any) any {
 	msg, ok := v.(proto.Message)
 	if !ok {

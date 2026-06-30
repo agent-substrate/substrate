@@ -28,6 +28,7 @@ import (
 	"runtime"
 
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/ategcs"
+	"github.com/agent-substrate/substrate/internal/ateerrors"
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
@@ -232,7 +233,7 @@ func readSandboxRecord(actorTemplateNamespace, actorTemplateName, actorID string
 func unmarshalSandboxRecord(data []byte) (*sandboxAssetsRecord, error) {
 	rec := &sandboxAssetsRecord{}
 	if err := json.Unmarshal(data, rec); err != nil {
-		return nil, fmt.Errorf("while parsing sandbox record/manifest: %w", err)
+		return nil, fmt.Errorf("%w: while parsing sandbox record/manifest: %w", ateerrors.ErrAteletSnapshotCorrupt, err)
 	}
 	return rec, nil
 }

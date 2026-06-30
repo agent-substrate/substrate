@@ -28,6 +28,8 @@ import (
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"k8s.io/apimachinery/pkg/util/wait"
 )
 
@@ -58,6 +60,12 @@ func (s *LoadActorForSuspendStep) Execute(ctx context.Context, input *SuspendInp
 	if err != nil {
 		return err
 	}
+
+	if actor.GetStatus() == ateapipb.Actor_STATUS_CRASHED {
+		return status.Errorf(codes.FailedPrecondition,
+			"can not suspend crashed actor %s", input.ActorID)
+	}
+
 	state.Actor = actor
 
 	actorTemplate, err := s.actorTemplateLister.ActorTemplates(actor.GetActorTemplateNamespace()).Get(actor.GetActorTemplateName())
@@ -94,6 +102,7 @@ func (s *MarkSuspendingStep) Execute(ctx context.Context, input *SuspendInput, s
 func (s *MarkSuspendingStep) RetryBackoff() *wait.Backoff { return nil }
 
 type CallAteletSuspendStep struct {
+	store  store.Interface
 	dialer *AteletDialer
 }
 
@@ -138,11 +147,7 @@ func (s *CallAteletSuspendStep) Execute(ctx context.Context, input *SuspendInput
 	}
 
 	_, err = client.Checkpoint(ctx, req)
-	if err != nil {
-		return fmt.Errorf("while checkpointing workload: %w", err)
-	}
-
-	return nil
+	return maybeCrashActor(ctx, s.store, input.Atespace, input.ActorID, err, "while checkpointing workload")
 }
 
 func (s *CallAteletSuspendStep) RetryBackoff() *wait.Backoff { return nil }

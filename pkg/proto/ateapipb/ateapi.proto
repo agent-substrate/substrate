@@ -111,6 +111,7 @@ message Actor {
     STATUS_SUSPENDED   = 4;
     STATUS_PAUSING     = 5;
     STATUS_PAUSED      = 6;
+    STATUS_CRASHED     = 7;
   }
   Status status = 5;
 

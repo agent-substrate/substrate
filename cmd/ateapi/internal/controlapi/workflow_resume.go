@@ -70,6 +70,12 @@ func (s *LoadActorForResumeStep) Execute(ctx context.Context, input *ResumeInput
 		}
 		return fmt.Errorf("while getting actor from DB: %w", err)
 	}
+
+	if actor.GetStatus() == ateapipb.Actor_STATUS_CRASHED {
+		return status.Errorf(codes.FailedPrecondition,
+			"can not resume crashed actor %s", input.ActorID)
+	}
+
 	state.Actor = actor
 
 	actorTemplate, err := s.actorTemplateLister.ActorTemplates(actor.GetActorTemplateNamespace()).Get(actor.GetActorTemplateName())
@@ -236,6 +242,7 @@ func (s *AssignWorkerStep) findFreeWorker(workers []*ateapipb.Worker, eligible m
 }
 
 type CallAteletRestoreStep struct {
+	store               store.Interface
 	dialer              *AteletDialer
 	kubeClient          kubernetes.Interface
 	secretCache         *envSecretCache
@@ -291,10 +298,7 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 		}
 
 		_, err = client.Restore(ctx, req)
-		if err != nil {
-			return fmt.Errorf("while restoring workload: %w", err)
-		}
-		return nil
+		return maybeCrashActor(ctx, s.store, input.Atespace, input.ActorID, err, "while restoring workload")
 	} else if state.ActorTemplate.Status.GoldenSnapshot != "" && !input.Boot {
 		slog.InfoContext(ctx, "Actor has no snapshot; ActorTemplate has golden snapshot; Restoring from golden snapshot")
 
@@ -315,10 +319,7 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 			Scope: toAteletSnapshotScope(state.ActorTemplate.Spec.SnapshotsConfig.OnCommit),
 		}
 		_, err = client.Restore(ctx, req)
-		if err != nil {
-			return fmt.Errorf("while creating workload from golden snapshot: %w", err)
-		}
-		return nil
+		return maybeCrashActor(ctx, s.store, input.Atespace, input.ActorID, err, "while restoring workload")
 	} else {
 		slog.InfoContext(ctx, "Actor has no snapshot; ActorTemplate has no golden snapshot; Booting from ActorTemplate spec")
 
@@ -339,11 +340,7 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 			Spec:                   workloadSpec,
 		}
 		_, err = client.Run(ctx, req)
-		if err != nil {
-			return fmt.Errorf("while creating workload from spec: %w", err)
-		}
-
-		return nil
+		return maybeCrashActor(ctx, s.store, input.Atespace, input.ActorID, err, "while restoring workload")
 	}
 	// Unreachable
 }
