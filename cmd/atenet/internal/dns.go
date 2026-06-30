@@ -38,7 +38,6 @@ type DnsConfig struct {
 	Kubeconfig        string
 	ReconcileInterval time.Duration
 	CorefilePath      string
-	SystemNamespace   string
 	RouterServiceName string
 	DNSServiceName    string
 }
@@ -90,12 +89,22 @@ func NewDnsCmd() *cobra.Command {
 				return fmt.Errorf("failed to initialize cluster client: %w", err)
 			}
 
+			// atenet shares the system namespace with atenet-router and
+			// substrate's CoreDNS in every supported deployment topology.
+			// POD_NAMESPACE comes from Kubernetes' downward API; the install
+			// fallback keeps non-k8s invocations (tests, local dev) working.
+			systemNamespace := os.Getenv("POD_NAMESPACE")
+			if systemNamespace == "" {
+				systemNamespace = installdefaults.SystemNamespace
+			}
+			slog.InfoContext(ctx, "Resolved system namespace", slog.String("system-namespace", systemNamespace))
+
 			dnsController := &dns.Controller{
 				Client:            k8sClient,
 				Interval:          cfg.ReconcileInterval,
 				CorefilePath:      cfg.CorefilePath,
 				Reloader:          dns.NewConfigReloader(),
-				SystemNamespace:   cfg.SystemNamespace,
+				SystemNamespace:   systemNamespace,
 				RouterServiceName: cfg.RouterServiceName,
 				DNSServiceName:    cfg.DNSServiceName,
 			}
@@ -109,7 +118,6 @@ func NewDnsCmd() *cobra.Command {
 	cmd.Flags().StringVar(&cfg.Kubeconfig, "kubeconfig", "", "Absolute path to the kubeconfig configuration file")
 	cmd.Flags().DurationVar(&cfg.ReconcileInterval, "interval", 10*time.Second, "Interval for reconciling DNS configurations")
 	cmd.Flags().StringVar(&cfg.CorefilePath, "corefile-path", "/etc/coredns/Corefile", "Path to the local Corefile configuration on shared volume")
-	cmd.Flags().StringVar(&cfg.SystemNamespace, "system-namespace", installdefaults.SystemNamespace, "Namespace where atenet-router and substrate's CoreDNS Service live. Override when the deployment uses a different namespace.")
 	cmd.Flags().StringVar(&cfg.RouterServiceName, "router-service-name", installdefaults.RouterServiceName, "Service name of the atenet-router. Override when the deployment renames the Service.")
 	cmd.Flags().StringVar(&cfg.DNSServiceName, "dns-service-name", installdefaults.DNSServiceName, "Service name of substrate's CoreDNS. Override when the deployment renames the Service.")
 
