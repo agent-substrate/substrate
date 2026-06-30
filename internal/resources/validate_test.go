@@ -19,7 +19,7 @@ import (
 	"testing"
 )
 
-func TestValidateActorRef(t *testing.T) {
+func TestValidateActorRefFields(t *testing.T) {
 	const okNS, okTmpl, okID = "ate-demo", "counter", "counter-1"
 
 	tests := []struct {
@@ -55,9 +55,9 @@ func TestValidateActorRef(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := ValidateActorRef(tt.ns, tt.tmpl, tt.id)
+			err := ValidateActorRefFields(tt.ns, tt.tmpl, tt.id)
 			if (err != nil) != tt.wantErr {
-				t.Errorf("ValidateActorRef(%q, %q, %q) err = %v, wantErr %v", tt.ns, tt.tmpl, tt.id, err, tt.wantErr)
+				t.Errorf("ValidateActorRefFields(%q, %q, %q) err = %v, wantErr %v", tt.ns, tt.tmpl, tt.id, err, tt.wantErr)
 			}
 		})
 	}
