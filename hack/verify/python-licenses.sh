@@ -60,17 +60,35 @@ check_project() {
   # to the caller; the subshell inherits errexit/nounset/pipefail.
   (
     if [[ ! -d "${venv}" ]]; then
-      echo "Creating venv at ${venv}..."
-      python3 -m venv "${venv}"
+      echo "  Creating venv at ${venv}..."
+      python3 -m venv "${venv}" || {
+        echo "ERROR: failed to create venv at ${venv}" >&2
+        exit 1
+      }
+      echo "  Activating ${venv}..."
       source "${venv}/bin/activate"
-      pip install --quiet --upgrade pip
-      pip install --quiet -r "${dir}/requirements.txt"
+      echo "  Upgrading pip in ${venv}..."
+      pip install --quiet --upgrade pip || {
+        echo "ERROR: failed to upgrade pip in ${venv}" >&2
+        exit 1
+      }
+      echo "  Installing ${dir}/requirements.txt into ${venv}..."
+      pip install --quiet -r "${dir}/requirements.txt" || {
+        echo "ERROR: failed to install ${dir}/requirements.txt into ${venv}" >&2
+        exit 1
+      }
     else
+      echo "  Activating ${venv}..."
       source "${venv}/bin/activate"
     fi
     if ! command -v pip-licenses >/dev/null 2>&1; then
-      pip install --quiet pip-licenses
+      echo "  Installing pip-licenses into ${venv}..."
+      pip install --quiet pip-licenses || {
+        echo "ERROR: failed to install pip-licenses into ${venv}" >&2
+        exit 1
+      }
     fi
+    echo "  Checking licenses in ${venv}..."
     pip-licenses --fail-on="${DISALLOWED}"
   )
 }
