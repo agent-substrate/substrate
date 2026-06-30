@@ -333,51 +333,48 @@ func TestDeleteWorker(t *testing.T) {
 }
 
 func TestDeleteActor(t *testing.T) {
-	mr, s, ctx := setupTest(t)
-	defer mr.Close()
-
-	actor := &ateapipb.Actor{
-		ActorId:                "session-1",
-		ActorTemplateNamespace: "default",
-		ActorTemplateName:      "test-template",
-		Status:                 ateapipb.Actor_STATUS_SUSPENDED,
+	tests := []struct {
+		name    string
+		status  ateapipb.Actor_Status
+		wantErr error
+	}{
+		{name: "suspended", status: ateapipb.Actor_STATUS_SUSPENDED},
+		{name: "crashed", status: ateapipb.Actor_STATUS_CRASHED},
+		{name: "running", status: ateapipb.Actor_STATUS_RUNNING, wantErr: store.ErrFailedPrecondition},
+		{name: "paused", status: ateapipb.Actor_STATUS_PAUSED, wantErr: store.ErrFailedPrecondition},
 	}
 
-	err := s.CreateActor(ctx, actor)
-	if err != nil {
-		t.Fatalf("CreateActor failed: %v", err)
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			mr, s, ctx := setupTest(t)
+			defer mr.Close()
 
-	err = s.DeleteActor(ctx, "", "session-1")
-	if err != nil {
-		t.Fatalf("DeleteActor failed: %v", err)
-	}
+			actor := &ateapipb.Actor{
+				ActorId:                "session-1",
+				ActorTemplateNamespace: "default",
+				ActorTemplateName:      "test-template",
+				Status:                 tt.status,
+			}
 
-	_, err = s.GetActor(ctx, "", "session-1")
-	if !errors.Is(err, store.ErrNotFound) {
-		t.Errorf("expected ErrNotFound after delete, got %v", err)
-	}
-}
+			if err := s.CreateActor(ctx, actor); err != nil {
+				t.Fatalf("CreateActor failed: %v", err)
+			}
 
-func TestDeleteActor_NotSuspended(t *testing.T) {
-	mr, s, ctx := setupTest(t)
-	defer mr.Close()
+			err := s.DeleteActor(ctx, "", "session-1")
+			if tt.wantErr != nil {
+				if !errors.Is(err, tt.wantErr) {
+					t.Errorf("DeleteActor: expected %v, got %v", tt.wantErr, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("DeleteActor failed: %v", err)
+			}
 
-	actor := &ateapipb.Actor{
-		ActorId:                "session-1",
-		ActorTemplateNamespace: "default",
-		ActorTemplateName:      "test-template",
-		Status:                 ateapipb.Actor_STATUS_RUNNING,
-	}
-
-	err := s.CreateActor(ctx, actor)
-	if err != nil {
-		t.Fatalf("CreateActor failed: %v", err)
-	}
-
-	err = s.DeleteActor(ctx, "", "session-1")
-	if !errors.Is(err, store.ErrFailedPrecondition) {
-		t.Errorf("expected ErrFailedPrecondition deleting running actor, got %v", err)
+			if _, err := s.GetActor(ctx, "", "session-1"); !errors.Is(err, store.ErrNotFound) {
+				t.Errorf("expected ErrNotFound after delete, got %v", err)
+			}
+		})
 	}
 }
 

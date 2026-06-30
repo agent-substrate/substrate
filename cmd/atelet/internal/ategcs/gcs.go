@@ -21,6 +21,7 @@ import (
 	"io"
 
 	"cloud.google.com/go/storage"
+	"github.com/agent-substrate/substrate/internal/ateerrors"
 )
 
 type gcsClient struct {
@@ -32,7 +33,14 @@ func NewGCSClient(client *storage.Client) ObjectStorage {
 }
 
 func (g *gcsClient) GetObject(ctx context.Context, bucket, object string) (io.ReadCloser, error) {
-	return g.client.Bucket(bucket).Object(object).NewReader(ctx)
+	rc, err := g.client.Bucket(bucket).Object(object).NewReader(ctx)
+	if err != nil {
+		if errors.Is(err, storage.ErrObjectNotExist) || errors.Is(err, storage.ErrBucketNotExist) {
+			return nil, fmt.Errorf("%w: Bucket:%q, Object:%q", ateerrors.ErrAteletSnapshotNotFound, bucket, object)
+		}
+		return nil, err
+	}
+	return rc, nil
 }
 
 // supportsStreamingPut is the streamingPutter marker: the GCS client's PutObject

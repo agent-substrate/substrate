@@ -96,6 +96,7 @@ const (
 	Actor_STATUS_SUSPENDED   Actor_Status = 4
 	Actor_STATUS_PAUSING     Actor_Status = 5
 	Actor_STATUS_PAUSED      Actor_Status = 6
+	Actor_STATUS_CRASHED     Actor_Status = 7
 )
 
 // Enum value maps for Actor_Status.
@@ -108,6 +109,7 @@ var (
 		4: "STATUS_SUSPENDED",
 		5: "STATUS_PAUSING",
 		6: "STATUS_PAUSED",
+		7: "STATUS_CRASHED",
 	}
 	Actor_Status_value = map[string]int32{
 		"STATUS_UNSPECIFIED": 0,
@@ -117,6 +119,7 @@ var (
 		"STATUS_SUSPENDED":   4,
 		"STATUS_PAUSING":     5,
 		"STATUS_PAUSED":      6,
+		"STATUS_CRASHED":     7,
 	}
 )
 
@@ -2305,7 +2308,7 @@ const file_ateapi_proto_rawDesc = "" +
 	"\fmatch_labels\x18\x01 \x03(\v2!.ateapi.Selector.MatchLabelsEntryR\vmatchLabels\x1a>\n" +
 	"\x10MatchLabelsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x91\x06\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xa5\x06\n" +
 	"\x05Actor\x12\x19\n" +
 	"\bactor_id\x18\x01 \x01(\tR\aactorId\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\x03R\aversion\x128\n" +
@@ -2322,7 +2325,7 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x14latest_snapshot_info\x18\f \x01(\v2\x14.ateapi.SnapshotInfoR\x12latestSnapshotInfo\x129\n" +
 	"\x0fworker_selector\x18\r \x01(\v2\x10.ateapi.SelectorR\x0eworkerSelector\x12(\n" +
 	"\x10worker_pool_name\x18\x0e \x01(\tR\x0eworkerPoolName\x12\x1a\n" +
-	"\batespace\x18\x0f \x01(\tR\batespace\"\x9d\x01\n" +
+	"\batespace\x18\x0f \x01(\tR\batespace\"\xb1\x01\n" +
 	"\x06Status\x12\x16\n" +
 	"\x12STATUS_UNSPECIFIED\x10\x00\x12\x13\n" +
 	"\x0fSTATUS_RESUMING\x10\x01\x12\x12\n" +
@@ -2330,7 +2333,8 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x11STATUS_SUSPENDING\x10\x03\x12\x14\n" +
 	"\x10STATUS_SUSPENDED\x10\x04\x12\x12\n" +
 	"\x0eSTATUS_PAUSING\x10\x05\x12\x11\n" +
-	"\rSTATUS_PAUSED\x10\x06J\x04\b\t\x10\n" +
+	"\rSTATUS_PAUSED\x10\x06\x12\x12\n" +
+	"\x0eSTATUS_CRASHED\x10\aJ\x04\b\t\x10\n" +
 	"\"\x1e\n" +
 	"\bAtespace\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\":\n" +

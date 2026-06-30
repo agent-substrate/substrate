@@ -16,10 +16,14 @@ package ategcs
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"io"
 
+	"github.com/agent-substrate/substrate/internal/ateerrors"
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
 
 type s3Client struct {
@@ -36,6 +40,9 @@ func (s *s3Client) GetObject(ctx context.Context, bucket, object string) (io.Rea
 		Key:    aws.String(object),
 	})
 	if err != nil {
+		if _, ok := errors.AsType[*s3types.NoSuchKey](err); ok {
+			return nil, fmt.Errorf("%w: Failed to get S3 Bucket:%q, Object:%q", ateerrors.ErrAteletSnapshotNotFound, bucket, object)
+		}
 		return nil, err
 	}
 	return output.Body, nil
