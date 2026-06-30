@@ -79,6 +79,14 @@ func main() {
 		os.Exit(1)
 	}
 
+	if err = (&controllers.NetworkPolicyReconciler{
+		Client: mgr.GetClient(),
+		Scheme: mgr.GetScheme(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "NetPolicy")
+		os.Exit(1)
+	}
+
 	if err = (&controllers.ActorTemplateReconciler{
 		Client:    mgr.GetClient(),
 		Scheme:    mgr.GetScheme(),
