@@ -114,11 +114,9 @@ hack/install-ate-kind.sh --deploy-demo-counter
 # install kubectl-ate
 go install ./cmd/kubectl-ate
 
-# create an atespace to deploy an actor into
-kubectl ate create atespace default
-
-# create a counter actor and demo it
-kubectl ate create actor my-counter-1 -a default --template ate-demo-counter/counter
+# create an atespace (required before creating actors), then a counter actor in it
+kubectl ate create atespace demo
+kubectl ate create actor my-counter-1 -a demo --template ate-demo-counter/counter
 
 # port-forward the network router to bind to local port `8000`
 kubectl port-forward -n ate-system svc/atenet-router 8000:80
@@ -126,7 +124,7 @@ kubectl port-forward -n ate-system svc/atenet-router 8000:80
 
 3. In a **separate terminal**, send an HTTP request to increment the counter:
 ```shell
-curl -X POST -H "Host: my-counter-1.default.actors.resources.substrate.ate.dev" -i http://localhost:8000/
+curl -X POST -H "Host: my-counter-1.demo.actors.resources.substrate.ate.dev" -i http://localhost:8000/
 ```
 
 ### GKE Quickstart (Development)

@@ -44,14 +44,17 @@ kubectl wait --for=condition=Ready actortemplate/sandbox-template -n ate-demo-sa
 
 ### 2. Create a Sandbox Actor
 
-Use `kubectl ate` to create an instance of the sandbox actor with a chosen ID (e.g., `my-sandbox-1`):
+Actors live in an **atespace**, which must exist before you create actors in it. Create one (e.g., `demo`), then create the sandbox actor with a chosen ID (e.g., `my-sandbox-1`):
 
 ```bash
 # Install the CLI as a kubectl plugin if not already installed
 go install ./cmd/kubectl-ate
 
-# Create the actor using the kubectl plugin
-kubectl ate create actor my-sandbox-1 --template ate-demo-sandbox/sandbox-template
+# Create the atespace (required before creating actors).
+kubectl ate create atespace demo
+
+# Create the actor in the atespace, using the sandbox template.
+kubectl ate create actor my-sandbox-1 -a demo --template ate-demo-sandbox/sandbox-template
 ```
 
 ### 3. Port-Forward Services
@@ -73,7 +76,7 @@ Build and run the client REPL:
 ```bash
 go build -o bin/sandbox-client ./demos/sandbox/client
 
-./bin/sandbox-client --ateapi=localhost:8080 --atenet=localhost:8000 --id=my-sandbox-1
+./bin/sandbox-client --ateapi=localhost:8080 --atenet=localhost:8000 --atespace=demo --id=my-sandbox-1
 ```
 
 Once in the `sandbox>` prompt, you can run commands:
@@ -87,9 +90,10 @@ sandbox> cat test.txt
 
 Type `exit` to leave. This will automatically trigger the suspension of the actor.
 
-To permanently delete the suspended actor:
+To permanently delete the suspended actor, then the now-empty atespace:
 ```bash
-kubectl ate delete actor my-sandbox-1
+kubectl ate delete actor my-sandbox-1 -a demo
+kubectl ate delete atespace demo
 ```
 
 ## How to Uninstall
