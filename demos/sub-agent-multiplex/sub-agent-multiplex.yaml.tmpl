@@ -1,0 +1,115 @@
+apiVersion: ate.dev/v1alpha1
+kind: ActorTemplate
+metadata:
+  name: sub-agent-agent
+  namespace: sub-agent
+spec:
+  containers:
+  - image: gcr.io/gke-ai-eco-dev/ate-images/nanoclaw-substrate@sha256:f81bb5d57376601909aa6952388a818f4131e7da7688050b4a9ca607c957fbe2
+    name: agent
+    command: ["/bin/bash", "-c", "curl -s http://nano-broker.sub-agent.svc.cluster.local:8091/dist/agent.js > /tmp/agent.js && node /tmp/agent.js"]
+    ports:
+    - containerPort: 8080
+    env:
+    - name: BROKER_URL
+      value: "http://nano-broker.sub-agent.svc.cluster.local:8091"
+  pauseImage: registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4
+  runsc:
+    amd64:
+      sha256Hash: a397be1abc2420d26bce6c70e6e2ff96c73aaaab929756c56f5e2089ea842b63
+      url: gs://gvisor/releases/nightly/2026-05-19/x86_64/runsc
+    arm64:
+      sha256Hash: 1ba2366ae2efceba166046f51a4104f9261c9cb72c6db8f5b3fe2dc57dea86b9
+      url: gs://gvisor/releases/nightly/2026-05-19/aarch64/runsc
+  snapshotsConfig:
+    location: gs://snapshot-substrate-gke-ai-eco-dev/sub-agent-agent/v11/
+  workerPoolRef:
+    name: agent-pool
+    namespace: sub-agent
+---
+apiVersion: ate.dev/v1alpha1
+kind: WorkerPool
+metadata:
+  name: agent-pool
+  namespace: sub-agent
+spec:
+  ateomImage: gcr.io/gke-ai-eco-dev/ate-images/ateom-gvisor-715889664656de67e44382a8d6ab981d@sha256:a877e335fdb6e5576714ab53ad6bf88ee676dfe642516c07673a3d9df56053b3
+  replicas: 2
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nano-broker
+  namespace: sub-agent
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nano-broker
+  template:
+    metadata:
+      labels:
+        app: nano-broker
+    spec:
+      initContainers:
+      - name: deps
+        image: node:22-slim
+        command: ["bash", "-c", "mkdir -p /app/node_modules && cd /app && npm install @whiskeysockets/baileys pino qrcode hono @hono/node-server"]
+        volumeMounts:
+        - name: deps-volume
+          mountPath: /app/node_modules
+      containers:
+      - name: broker
+        image: gcr.io/gke-ai-eco-dev/ate-images/nanoclaw-substrate@sha256:f81bb5d57376601909aa6952388a818f4131e7da7688050b4a9ca607c957fbe2
+        command: ["/usr/local/bin/node", "/app/dist/broker.js"]
+        ports:
+        - containerPort: 8091
+        env:
+        - name: ATE_ENDPOINT
+          value: "api.ate-system.svc.cluster.local:443"
+        - name: WHATSAPP_PHONE
+          value: "${WHATSAPP_PHONE}"
+        volumeMounts:
+        - name: auth-volume
+          mountPath: /app/store/auth
+        - name: deps-volume
+          mountPath: /app/node_modules
+        - name: logic-volume
+          mountPath: /app/dist/broker.js
+          subPath: broker.js
+        - name: logic-volume
+          mountPath: /app/dist/agent.js
+          subPath: agent.js
+      volumes:
+      - name: auth-volume
+        persistentVolumeClaim:
+          claimName: wa-auth-pvc
+      - name: deps-volume
+        emptyDir: {}
+      - name: logic-volume
+        configMap:
+          name: broker-logic
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nano-broker
+  namespace: sub-agent
+spec:
+  selector:
+    app: nano-broker
+  ports:
+  - port: 8091
+    targetPort: 8091
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: wa-auth-pvc
+  namespace: sub-agent
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
