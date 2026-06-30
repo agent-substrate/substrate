@@ -83,31 +83,43 @@ class GluttonServicer:
     """
 
     def WriteRAM(self, request, context):
-        """Missing associated documentation comment in .proto file."""
+        """Tells glutton to write to RAM, either overwriting previously-used
+        RAM or allocating additional RAM per request instructions. Data written
+        will be random bytes.
+        """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
     def WriteDisk(self, request, context):
-        """Missing associated documentation comment in .proto file."""
+        """Tells glutton to write to disk using the specified mode. Data
+        written will be random bytes.
+        """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
     def OpenFD(self, request, context):
-        """Missing associated documentation comment in .proto file."""
+        """Tells glutton to make sure it has the specified number of file
+        descriptors open. It will open or close file descriptors to
+        hit the desired count (note this count is in addition to the other
+        FDs needed to run the process).
+        """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
     def Ping(self, request, context):
-        """Missing associated documentation comment in .proto file."""
+        """Send a request to the glutton, expecting the same response back.
+        """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
     def Gossip(self, request, context):
-        """Missing associated documentation comment in .proto file."""
+        """Tells the glutton to send network traffic to a peer glutton.
+        messages will be sent on regular intervals separated by delay_ms.
+        """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')

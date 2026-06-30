@@ -42,7 +42,9 @@ import (
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -66,6 +68,9 @@ type Config struct {
 	HTTPClient *http.Client
 	// RouterURL is the base URL of the atenet router (no trailing slash).
 	RouterURL string
+	// Atespace every actor this worker creates lives in. Required; caller
+	// is responsible for having ensured it exists (see EnsureAtespace).
+	Atespace string
 	// Dyn is the runtime-mutable config (wait-time bounds, trace
 	// probability). Required — every per-iteration read goes through it,
 	// so tests can mutate it without touching glutton internals.
@@ -124,8 +129,12 @@ func (r *taskRuntime) startUser(ctx context.Context) (*gluttonUser, error) {
 		actorID:     "sb-" + uuid.NewString(),
 		firstResume: true,
 	}
-	u.hostHeader = u.actorID + "." + actorDomain
+	u.hostHeader = u.actorID + "." + u.cfg.Atespace + "." + actorDomain
 	bmetrics.UpdateUsers(userClass, 1)
+	if err := u.ensureAtespace(ctx); err != nil {
+		bmetrics.UpdateUsers(userClass, -1)
+		return nil, err
+	}
 	if err := u.create(ctx); err != nil {
 		bmetrics.UpdateUsers(userClass, -1)
 		return nil, err
@@ -166,10 +175,33 @@ type gluttonUser struct {
 	actorRunning bool
 }
 
+func (u *gluttonUser) ref() *ateapipb.ActorRef {
+	return &ateapipb.ActorRef{Atespace: u.cfg.Atespace, Name: u.actorID}
+}
+
+// ensureAtespace creates the configured atespace, swallowing AlreadyExists
+// so concurrent VUs racing the first creation all see it as a success. The
+// call goes through tracedCall so it shows up in stats/spans like every
+// other API call.
+func (u *gluttonUser) ensureAtespace(ctx context.Context) error {
+	return u.tracedCall(ctx, "CreateAtespace", func(callCtx context.Context, tr *metadata.MD) error {
+		_, err := u.cfg.APIStub.CreateAtespace(callCtx, &ateapipb.CreateAtespaceRequest{
+			Name: u.cfg.Atespace,
+		}, grpc.Trailer(tr))
+		if err == nil {
+			return nil
+		}
+		if s, ok := status.FromError(err); ok && s.Code() == codes.AlreadyExists {
+			return nil
+		}
+		return err
+	})
+}
+
 func (u *gluttonUser) create(ctx context.Context) error {
 	return u.tracedCall(ctx, "CreateActor", func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.CreateActor(callCtx, &ateapipb.CreateActorRequest{
-			ActorId:                u.actorID,
+			ActorRef:               u.ref(),
 			ActorTemplateNamespace: templateNS,
 			ActorTemplateName:      templateName,
 		}, grpc.Trailer(tr))
@@ -184,8 +216,8 @@ func (u *gluttonUser) resume(ctx context.Context) bool {
 	}
 	err := u.tracedCall(ctx, metricName, func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.ResumeActor(callCtx, &ateapipb.ResumeActorRequest{
-			ActorId: u.actorID,
-			Boot:    u.firstResume,
+			ActorRef: u.ref(),
+			Boot:     u.firstResume,
 		}, grpc.Trailer(tr))
 		return err
 	})
@@ -200,7 +232,7 @@ func (u *gluttonUser) resume(ctx context.Context) bool {
 func (u *gluttonUser) suspend(ctx context.Context) {
 	_ = u.tracedCall(ctx, "SuspendActor", func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.SuspendActor(callCtx, &ateapipb.SuspendActorRequest{
-			ActorId: u.actorID,
+			ActorRef: u.ref(),
 		}, grpc.Trailer(tr))
 		return err
 	})
@@ -210,7 +242,7 @@ func (u *gluttonUser) suspend(ctx context.Context) {
 func (u *gluttonUser) delete(ctx context.Context) {
 	_ = u.tracedCall(ctx, "DeleteActor", func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.DeleteActor(callCtx, &ateapipb.DeleteActorRequest{
-			ActorId: u.actorID,
+			ActorRef: u.ref(),
 		}, grpc.Trailer(tr))
 		return err
 	})

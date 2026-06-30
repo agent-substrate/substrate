@@ -67,7 +67,7 @@ _sampler = UpdatableSampler(0.0)
 SERVICE_NAME_VALUE = "substrate-locust"
 
 
-def init_tracing(service_name: str) -> None:
+def init_tracing() -> None:
     global _initialized, _sampler
     if _initialized:
         logger.info("Tracing already initialized, skipping.")
@@ -79,7 +79,9 @@ def init_tracing(service_name: str) -> None:
             "--trace-probability",
             type=float,
             default=0.0,
-            help="Probability of tracing requests (0.0 to 1.0)"
+            env_var="LOCUST_TRACE_PROBABILITY",
+            help="Probability of tracing requests (0.0 to 1.0)",
+            include_in_web_ui=True,
         )
 
     @events.init.add_listener

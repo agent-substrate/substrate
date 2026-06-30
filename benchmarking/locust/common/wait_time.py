@@ -12,9 +12,10 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import random
+
 from locust import events, User
 from locust.argument_parser import LocustArgumentParser
-import random
 
 _initialized = False
 

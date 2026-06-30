@@ -12,12 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-"""Single source of truth for boomer-tunable runtime flags.
+"""Boomer-tunable runtime flags.
 
-Defines the flags once and exposes them three ways:
-  * init_boomer_config(): registers them on locust's CLI parser AND serves
-    them at /boomer-config so the boomer-Go workers can fetch values the
-    operator set in the web UI form.
+Flag registration lives in the modules that own each flag:
+  * --trace-probability             → common.trace.init_tracing
+  * --min-wait-time / --max-wait-time → common.wait_time.init_wait_time
+
+This module ties them together so boomer-Go workers can pick up the values
+the operator set in the web UI form:
+  * init_boomer_config(): ensures the owning init_*() hooks have run, then
+    serves the current parsed values at /boomer-config on the master.
   * build_config_json(): parses an argv list and returns the JSON payload
     that runner.py hands to boomer-glutton via --config-json in headless
     mode (no web UI to fetch from).
@@ -31,35 +35,20 @@ import logging
 from collections.abc import Iterable
 
 from locust import events
-from locust.argument_parser import LocustArgumentParser
 from locust.env import Environment
+
+from common.trace import init_tracing
+from common.wait_time import init_wait_time
 
 logger = logging.getLogger(__name__)
 
-# Boomer-tunable flags. CLI form ("--foo-bar") is converted to the attribute
-# / JSON-key form ("foo_bar") by _attr(). Defaults apply only to locust's
-# parser (so the web UI form has sensible values); build_config_json omits
-# unset flags so boomer can fall back to its own defaults.
+# Boomer-tunable flags. CLI form ("--foo-bar") is converted to the
+# attribute / JSON-key form ("foo_bar") by _attr().
 _FLAGS = ("--trace-probability", "--min-wait-time", "--max-wait-time")
-_LOCUST_DEFAULTS = {"--min-wait-time": 0.0, "--max-wait-time": 0.5}
 
 
 def _attr(flag: str) -> str:
     return flag.lstrip("-").replace("-", "_")
-
-
-def _add_args(parser: argparse.ArgumentParser, locust_aware: bool) -> None:
-    """Add the boomer flags to `parser`. Locust's configargparse accepts
-    env_var/include_in_web_ui; stdlib argparse doesn't — gate via
-    locust_aware."""
-    for flag in _FLAGS:
-        kwargs = {"type": float}
-        if locust_aware:
-            kwargs["env_var"] = "LOCUST_" + _attr(flag).upper()
-            kwargs["include_in_web_ui"] = True
-            if flag in _LOCUST_DEFAULTS:
-                kwargs["default"] = _LOCUST_DEFAULTS[flag]
-        parser.add_argument(flag, **kwargs)
 
 
 def build_config_json(argv: Iterable[str]) -> str:
@@ -67,7 +56,8 @@ def build_config_json(argv: Iterable[str]) -> str:
     --config-json flag. Unknown args are ignored; unset flags are omitted so
     boomer falls back to its own defaults."""
     p = argparse.ArgumentParser(add_help=False)
-    _add_args(p, locust_aware=False)
+    for flag in _FLAGS:
+        p.add_argument(flag, type=float)
     parsed, _ = p.parse_known_args(argv)
     cfg = {
         _attr(f): getattr(parsed, _attr(f))
@@ -78,13 +68,11 @@ def build_config_json(argv: Iterable[str]) -> str:
 
 
 def init_boomer_config() -> None:
-    """Register boomer-tunable CLI flags with locust's parser and expose
-    them at /boomer-config so boomer-Go workers can fetch them at runtime.
-    Idempotent within a single locust process via locust's event system."""
-
-    @events.init_command_line_parser.add_listener
-    def on_init_parser(parser: LocustArgumentParser) -> None:
-        _add_args(parser, locust_aware=True)
+    """Ensure the owning modules have registered the boomer-tunable flags,
+    then expose their current values at /boomer-config so boomer-Go workers
+    can fetch them at runtime."""
+    init_tracing()
+    init_wait_time()
 
     @events.init.add_listener
     def on_init(environment: Environment, **kwargs) -> None:

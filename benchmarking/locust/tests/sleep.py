@@ -19,6 +19,7 @@ import uuid
 import grpc
 from common import ateapi_pb2
 from common import ateapi_pb2_grpc
+from common.atespace import ATESPACE, ensure_atespace
 from common.grpc_tracing import traced_grpc
 from common.metrics import init_metrics, update_user_count
 from common.trace import init_tracing
@@ -48,12 +49,20 @@ class SleepUser(User):
         self.channel = grpc.secure_channel(target, grpc.ssl_channel_credentials(root_certificates=ca_cert), options=options)
         self.stub = ateapi_pb2_grpc.ControlStub(self.channel)
 
+        try:
+            ensure_atespace(self.stub, self.__class__.__name__)
+        except Exception as e:
+            logger.error(f"Failed to ensure atespace {ATESPACE}: {e}")
+            self.channel.close()
+            raise StopUser()
+
         # Call CreateActor
         self.actor_id = f"sb-{uuid.uuid4()}"
+        self.actor_ref = ateapi_pb2.ActorRef(atespace=ATESPACE, name=self.actor_id)
         try:
             self.stub.CreateActor(
                 ateapi_pb2.CreateActorRequest(
-                    actor_id=self.actor_id,
+                    actor_ref=self.actor_ref,
                     actor_template_namespace="benchmark-workloads",
                     actor_template_name=self.template_name
                 )
@@ -68,7 +77,7 @@ class SleepUser(User):
         # Suspend first
         try:
             self.stub.SuspendActor(
-                ateapi_pb2.SuspendActorRequest(actor_id=self.actor_id)
+                ateapi_pb2.SuspendActorRequest(actor_ref=self.actor_ref)
             )
         except Exception as e:
             logger.warning(f"Failed to suspend actor {self.actor_id} during teardown: {e}")
@@ -76,7 +85,7 @@ class SleepUser(User):
         # Delete actor
         try:
             self.stub.DeleteActor(
-                ateapi_pb2.DeleteActorRequest(actor_id=self.actor_id)
+                ateapi_pb2.DeleteActorRequest(actor_ref=self.actor_ref)
             )
         except Exception as e:
             logger.warning(f"Failed to delete actor {self.actor_id}: {e}")
@@ -91,7 +100,7 @@ class SleepUser(User):
         try:
             with traced_grpc("SuspendActor", self.__class__.__name__) as metadata:
                 _, metadata.call = self.stub.SuspendActor.with_call(
-                    ateapi_pb2.SuspendActorRequest(actor_id=self.actor_id),
+                    ateapi_pb2.SuspendActorRequest(actor_ref=self.actor_ref),
                     metadata=metadata,
                 )
         except Exception:
@@ -103,7 +112,7 @@ class SleepUser(User):
         try:
             with traced_grpc("ResumeActor", self.__class__.__name__) as metadata:
                 _, metadata.call = self.stub.ResumeActor.with_call(
-                    ateapi_pb2.ResumeActorRequest(actor_id=self.actor_id),
+                    ateapi_pb2.ResumeActorRequest(actor_ref=self.actor_ref),
                     metadata=metadata,
                 )
         except Exception:
