@@ -51,7 +51,7 @@ func invalidHostErr(host string, cause error) error {
 // short, human-readable bodies. The original error is preserved via Unwrap
 // so callers can still inspect it via errors.Is / errors.As when logging.
 //
-// Unrecognised errors collapse to 500 with a generic body to avoid leaking
+// Unrecognized errors collapse to 500 with a generic body to avoid leaking
 // server-side detail (stack traces, internal IDs) to clients.
 func mapResumeError(actorID string, err error) error {
 	if err == nil {
