@@ -22,7 +22,7 @@ Defines the flags once and exposes them three ways:
     that runner.py hands to boomer-glutton via --config-json in headless
     mode (no web UI to fetch from).
 
-Keep _FLAGS aligned with internal/boomer/dynconfig.payload.
+Keep _FLAGS aligned with internal/benchmarking/boomer/dynconfig.payload.
 """
 
 import argparse

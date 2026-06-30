@@ -27,10 +27,10 @@ import (
 	"os"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/boomer/dynconfig"
-	"github.com/agent-substrate/substrate/internal/boomer/glutton"
-	bmetrics "github.com/agent-substrate/substrate/internal/boomer/metrics"
-	btrace "github.com/agent-substrate/substrate/internal/boomer/trace"
+	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/dynconfig"
+	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/glutton"
+	bmetrics "github.com/agent-substrate/substrate/internal/benchmarking/boomer/metrics"
+	btrace "github.com/agent-substrate/substrate/internal/benchmarking/boomer/trace"
 	"github.com/myzhan/boomer"
 )
 

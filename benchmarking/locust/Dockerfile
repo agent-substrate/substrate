@@ -31,7 +31,7 @@ COPY vendor ./vendor
 COPY cmd ./cmd
 COPY internal ./internal
 COPY pkg ./pkg
-RUN CGO_ENABLED=0 GOFLAGS=-mod=vendor go build -o /out/boomer-glutton ./cmd/testing/boomer-glutton
+RUN CGO_ENABLED=0 GOFLAGS=-mod=vendor go build -o /out/boomer-glutton ./cmd/benchmarking/boomer-glutton
 
 # Stage 3: Distroless runner. Carries the locust install AND the boomer
 # binary; the manifest decides which to launch via the `args` field.
