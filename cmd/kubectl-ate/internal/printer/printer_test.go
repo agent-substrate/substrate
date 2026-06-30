@@ -161,8 +161,8 @@ func TestPrintWorkersTo_Table(t *testing.T) {
 			Assignment: &ateapipb.Assignment{
 				ActorTemplateNamespace: "default",
 				ActorTemplateName:      "template-1",
+				ActorId:                "id-1",
 			},
-			ActorId: "id-1",
 		},
 	}
 

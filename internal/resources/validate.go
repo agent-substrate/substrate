@@ -199,15 +199,8 @@ func ValidateWorker(worker *ateapipb.Worker, fldPath *field.Path) field.ErrorLis
 		}
 	}
 
-	// TODO(thockin): either all or none of these field should be set
 	if val := worker.Assignment; val != nil {
 		errs = append(errs, ValidateAssignment(val, fldPath.Child("assignment"))...)
-	}
-	if val, fldPath := worker.ActorId, fldPath.Child("actor_id"); val != "" {
-		errs = append(errs, ValidateResourceName(val, fldPath)...)
-	}
-	if val, fldPath := worker.ActorAtespace, fldPath.Child("actor_atespace"); val != "" {
-		errs = append(errs, ValidateResourceName(val, fldPath)...)
 	}
 
 	if val, fldPath := worker.Ip, fldPath.Child("ip"); val == "" {
@@ -250,6 +243,18 @@ func ValidateAssignment(assignment *ateapipb.Assignment, fldPath *field.Path) fi
 		for _, msg := range content.IsDNS1123Subdomain(val) {
 			errs = append(errs, field.Invalid(fldPath.Child("actor_template_name"), val, msg))
 		}
+	}
+
+	if val, fldPath := assignment.ActorId, fldPath.Child("actor_id"); val == "" {
+		errs = append(errs, field.Required(fldPath, ""))
+	} else {
+		errs = append(errs, ValidateResourceName(val, fldPath)...)
+	}
+
+	if val, fldPath := assignment.ActorAtespace, fldPath.Child("actor_atespace"); val == "" {
+		errs = append(errs, field.Required(fldPath, ""))
+	} else {
+		errs = append(errs, ValidateResourceName(val, fldPath)...)
 	}
 
 	return errs

@@ -262,10 +262,10 @@ func TestUpdateWorker_Success(t *testing.T) {
 		t.Fatalf("WatchWorkers failed: %v", err)
 	}
 
-	worker.ActorId = "session-1"
 	worker.Assignment = &ateapipb.Assignment{
 		ActorTemplateNamespace: "default",
 		ActorTemplateName:      "test-template",
+		ActorId:                "session-1",
 	}
 
 	if err := s.UpdateWorker(ctx, worker, 1); err != nil {
@@ -531,14 +531,14 @@ func TestUpdateWorker_Conflict(t *testing.T) {
 	}
 
 	// Update instance 1
-	worker1.ActorId = "session-1"
+	worker1.Assignment = &ateapipb.Assignment{ActorId: "session-1"}
 	err = s.UpdateWorker(ctx, worker1, worker1.Version)
 	if err != nil {
 		t.Fatalf("UpdateWorker failed: %v", err)
 	}
 
 	// Try to update instance 2
-	worker2.ActorId = "session-2"
+	worker2.Assignment = &ateapipb.Assignment{ActorId: "session-2"}
 	err = s.UpdateWorker(ctx, worker2, worker2.Version)
 	if !errors.Is(err, store.ErrPersistenceRetry) {
 		t.Errorf("expected ErrPersistenceRetry, got %v", err)
