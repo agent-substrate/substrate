@@ -1942,8 +1942,7 @@ type Assignment struct {
 	state                  protoimpl.MessageState `protogen:"open.v1"`
 	ActorTemplateNamespace string                 `protobuf:"bytes,1,opt,name=actor_template_namespace,json=actorTemplateNamespace,proto3" json:"actor_template_namespace,omitempty"`
 	ActorTemplateName      string                 `protobuf:"bytes,2,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
-	ActorId                string                 `protobuf:"bytes,3,opt,name=actor_id,json=actorId,proto3" json:"actor_id,omitempty"`
-	ActorAtespace          string                 `protobuf:"bytes,4,opt,name=actor_atespace,json=actorAtespace,proto3" json:"actor_atespace,omitempty"`
+	Actor                  *ActorRef              `protobuf:"bytes,3,opt,name=actor,proto3" json:"actor,omitempty"`
 	unknownFields          protoimpl.UnknownFields
 	sizeCache              protoimpl.SizeCache
 }
@@ -1992,18 +1991,11 @@ func (x *Assignment) GetActorTemplateName() string {
 	return ""
 }
 
-func (x *Assignment) GetActorId() string {
+func (x *Assignment) GetActor() *ActorRef {
 	if x != nil {
-		return x.ActorId
+		return x.Actor
 	}
-	return ""
-}
-
-func (x *Assignment) GetActorAtespace() string {
-	if x != nil {
-		return x.ActorAtespace
-	}
-	return ""
+	return nil
 }
 
 type DebugClearRequest struct {
@@ -2448,13 +2440,12 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x02ip\x18\x05 \x01(\tR\x02ip\x12\x18\n" +
 	"\aversion\x18\x06 \x01(\x03R\aversion\x12$\n" +
 	"\x0eworker_pod_uid\x18\a \x01(\tR\fworkerPodUid\x12\x1b\n" +
-	"\tnode_name\x18\b \x01(\tR\bnodeName\"\xb8\x01\n" +
+	"\tnode_name\x18\b \x01(\tR\bnodeName\"\x9e\x01\n" +
 	"\n" +
 	"Assignment\x128\n" +
 	"\x18actor_template_namespace\x18\x01 \x01(\tR\x16actorTemplateNamespace\x12.\n" +
-	"\x13actor_template_name\x18\x02 \x01(\tR\x11actorTemplateName\x12\x19\n" +
-	"\bactor_id\x18\x03 \x01(\tR\aactorId\x12%\n" +
-	"\x0eactor_atespace\x18\x04 \x01(\tR\ractorAtespace\"\x13\n" +
+	"\x13actor_template_name\x18\x02 \x01(\tR\x11actorTemplateName\x12&\n" +
+	"\x05actor\x18\x03 \x01(\v2\x10.ateapi.ActorRefR\x05actor\"\x13\n" +
 	"\x11DebugClearRequest\"\x14\n" +
 	"\x12DebugClearResponse\"{\n" +
 	"\x0eMintJWTRequest\x12\x1a\n" +
@@ -2589,43 +2580,44 @@ var file_ateapi_proto_depIdxs = []int32{
 	35, // 25: ateapi.ListWorkersResponse.workers:type_name -> ateapi.Worker
 	6,  // 26: ateapi.ListActorsResponse.actors:type_name -> ateapi.Actor
 	36, // 27: ateapi.Worker.assignment:type_name -> ateapi.Assignment
-	17, // 28: ateapi.Control.GetActor:input_type -> ateapi.GetActorRequest
-	19, // 29: ateapi.Control.CreateActor:input_type -> ateapi.CreateActorRequest
-	21, // 30: ateapi.Control.UpdateActor:input_type -> ateapi.UpdateActorRequest
-	23, // 31: ateapi.Control.SuspendActor:input_type -> ateapi.SuspendActorRequest
-	25, // 32: ateapi.Control.PauseActor:input_type -> ateapi.PauseActorRequest
-	27, // 33: ateapi.Control.ResumeActor:input_type -> ateapi.ResumeActorRequest
-	29, // 34: ateapi.Control.DeleteActor:input_type -> ateapi.DeleteActorRequest
-	31, // 35: ateapi.Control.ListWorkers:input_type -> ateapi.ListWorkersRequest
-	33, // 36: ateapi.Control.ListActors:input_type -> ateapi.ListActorsRequest
-	9,  // 37: ateapi.Control.CreateAtespace:input_type -> ateapi.CreateAtespaceRequest
-	11, // 38: ateapi.Control.GetAtespace:input_type -> ateapi.GetAtespaceRequest
-	13, // 39: ateapi.Control.ListAtespaces:input_type -> ateapi.ListAtespacesRequest
-	15, // 40: ateapi.Control.DeleteAtespace:input_type -> ateapi.DeleteAtespaceRequest
-	37, // 41: ateapi.Control.DebugClear:input_type -> ateapi.DebugClearRequest
-	39, // 42: ateapi.SessionIdentity.MintJWT:input_type -> ateapi.MintJWTRequest
-	41, // 43: ateapi.SessionIdentity.MintCert:input_type -> ateapi.MintCertRequest
-	18, // 44: ateapi.Control.GetActor:output_type -> ateapi.GetActorResponse
-	20, // 45: ateapi.Control.CreateActor:output_type -> ateapi.CreateActorResponse
-	22, // 46: ateapi.Control.UpdateActor:output_type -> ateapi.UpdateActorResponse
-	24, // 47: ateapi.Control.SuspendActor:output_type -> ateapi.SuspendActorResponse
-	26, // 48: ateapi.Control.PauseActor:output_type -> ateapi.PauseActorResponse
-	28, // 49: ateapi.Control.ResumeActor:output_type -> ateapi.ResumeActorResponse
-	30, // 50: ateapi.Control.DeleteActor:output_type -> ateapi.DeleteActorResponse
-	32, // 51: ateapi.Control.ListWorkers:output_type -> ateapi.ListWorkersResponse
-	34, // 52: ateapi.Control.ListActors:output_type -> ateapi.ListActorsResponse
-	10, // 53: ateapi.Control.CreateAtespace:output_type -> ateapi.CreateAtespaceResponse
-	12, // 54: ateapi.Control.GetAtespace:output_type -> ateapi.GetAtespaceResponse
-	14, // 55: ateapi.Control.ListAtespaces:output_type -> ateapi.ListAtespacesResponse
-	16, // 56: ateapi.Control.DeleteAtespace:output_type -> ateapi.DeleteAtespaceResponse
-	38, // 57: ateapi.Control.DebugClear:output_type -> ateapi.DebugClearResponse
-	40, // 58: ateapi.SessionIdentity.MintJWT:output_type -> ateapi.MintJWTResponse
-	42, // 59: ateapi.SessionIdentity.MintCert:output_type -> ateapi.MintCertResponse
-	44, // [44:60] is the sub-list for method output_type
-	28, // [28:44] is the sub-list for method input_type
-	28, // [28:28] is the sub-list for extension type_name
-	28, // [28:28] is the sub-list for extension extendee
-	0,  // [0:28] is the sub-list for field type_name
+	8,  // 28: ateapi.Assignment.actor:type_name -> ateapi.ActorRef
+	17, // 29: ateapi.Control.GetActor:input_type -> ateapi.GetActorRequest
+	19, // 30: ateapi.Control.CreateActor:input_type -> ateapi.CreateActorRequest
+	21, // 31: ateapi.Control.UpdateActor:input_type -> ateapi.UpdateActorRequest
+	23, // 32: ateapi.Control.SuspendActor:input_type -> ateapi.SuspendActorRequest
+	25, // 33: ateapi.Control.PauseActor:input_type -> ateapi.PauseActorRequest
+	27, // 34: ateapi.Control.ResumeActor:input_type -> ateapi.ResumeActorRequest
+	29, // 35: ateapi.Control.DeleteActor:input_type -> ateapi.DeleteActorRequest
+	31, // 36: ateapi.Control.ListWorkers:input_type -> ateapi.ListWorkersRequest
+	33, // 37: ateapi.Control.ListActors:input_type -> ateapi.ListActorsRequest
+	9,  // 38: ateapi.Control.CreateAtespace:input_type -> ateapi.CreateAtespaceRequest
+	11, // 39: ateapi.Control.GetAtespace:input_type -> ateapi.GetAtespaceRequest
+	13, // 40: ateapi.Control.ListAtespaces:input_type -> ateapi.ListAtespacesRequest
+	15, // 41: ateapi.Control.DeleteAtespace:input_type -> ateapi.DeleteAtespaceRequest
+	37, // 42: ateapi.Control.DebugClear:input_type -> ateapi.DebugClearRequest
+	39, // 43: ateapi.SessionIdentity.MintJWT:input_type -> ateapi.MintJWTRequest
+	41, // 44: ateapi.SessionIdentity.MintCert:input_type -> ateapi.MintCertRequest
+	18, // 45: ateapi.Control.GetActor:output_type -> ateapi.GetActorResponse
+	20, // 46: ateapi.Control.CreateActor:output_type -> ateapi.CreateActorResponse
+	22, // 47: ateapi.Control.UpdateActor:output_type -> ateapi.UpdateActorResponse
+	24, // 48: ateapi.Control.SuspendActor:output_type -> ateapi.SuspendActorResponse
+	26, // 49: ateapi.Control.PauseActor:output_type -> ateapi.PauseActorResponse
+	28, // 50: ateapi.Control.ResumeActor:output_type -> ateapi.ResumeActorResponse
+	30, // 51: ateapi.Control.DeleteActor:output_type -> ateapi.DeleteActorResponse
+	32, // 52: ateapi.Control.ListWorkers:output_type -> ateapi.ListWorkersResponse
+	34, // 53: ateapi.Control.ListActors:output_type -> ateapi.ListActorsResponse
+	10, // 54: ateapi.Control.CreateAtespace:output_type -> ateapi.CreateAtespaceResponse
+	12, // 55: ateapi.Control.GetAtespace:output_type -> ateapi.GetAtespaceResponse
+	14, // 56: ateapi.Control.ListAtespaces:output_type -> ateapi.ListAtespacesResponse
+	16, // 57: ateapi.Control.DeleteAtespace:output_type -> ateapi.DeleteAtespaceResponse
+	38, // 58: ateapi.Control.DebugClear:output_type -> ateapi.DebugClearResponse
+	40, // 59: ateapi.SessionIdentity.MintJWT:output_type -> ateapi.MintJWTResponse
+	42, // 60: ateapi.SessionIdentity.MintCert:output_type -> ateapi.MintCertResponse
+	45, // [45:61] is the sub-list for method output_type
+	29, // [29:45] is the sub-list for method input_type
+	29, // [29:29] is the sub-list for extension type_name
+	29, // [29:29] is the sub-list for extension extendee
+	0,  // [0:29] is the sub-list for field type_name
 }
 
 func init() { file_ateapi_proto_init() }

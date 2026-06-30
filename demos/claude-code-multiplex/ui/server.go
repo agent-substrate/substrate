@@ -224,7 +224,7 @@ func actorStatusString(s ateapipb.Actor_Status) string {
 // The UI's badgeFor() treats "running" as green; "idle" falls through
 // to the neutral badge, which is the right visual treatment.
 func workerPhase(w *ateapipb.Worker) string {
-	if w.Assignment.GetActorId() != "" {
+	if w.Assignment != nil && w.Assignment.Actor != nil && w.Assignment.Actor.Name != "" {
 		return "Running"
 	}
 	return "Idle"
@@ -382,11 +382,15 @@ func handlePods(w http.ResponseWriter, r *http.Request) {
 		if ns, wkns := namespace, wk.Assignment.GetActorTemplateNamespace(); ns != "" && wkns != "" && wkns != ns {
 			continue
 		}
+		ready := false
+		if wk.Assignment != nil && wk.Assignment.Actor != nil && wk.Assignment.Actor.Name != "" {
+			ready = true
+		}
 		pods = append(pods, podSummary{
 			Name:      wk.GetWorkerPod(),
 			Node:      wk.GetWorkerPool(), // closest semantic analog
 			Phase:     workerPhase(wk),
-			Ready:     wk.Assignment.GetActorId() != "",
+			Ready:     ready,
 			StartedAt: "", // not exposed by ateapi today
 		})
 	}
