@@ -892,7 +892,7 @@ func validateSnapshotScope(scope ateletpb.SnapshotScope) error {
 // validateActorRequest is the shared core for the fields common to all three
 // RPCs.
 func validateActorRequest(namespace, template, actorID, targetAteomUID string, spec *ateletpb.WorkloadSpec) error {
-	if err := resources.ValidateActorRef(namespace, template, actorID); err != nil {
+	if err := resources.ValidateActorRefFields(namespace, template, actorID); err != nil {
 		return err
 	}
 	if err := resources.ValidateAteomUID(targetAteomUID); err != nil {

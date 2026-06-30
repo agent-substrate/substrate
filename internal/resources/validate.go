@@ -30,7 +30,7 @@ import (
 // tree, or collide OCI bundles. They are exported so the API server and
 // controller can apply the same rules at their own boundaries.
 
-// ValidateActorRef ensures every component of the per-actor directory tree is
+// ValidateActorRefFields ensures every component of the per-actor directory tree is
 // a valid DNS-1123 name. namespace+template+actorID are concatenated by
 // ateompath.ActorPath into a host path on which atelet runs os.RemoveAll and
 // os.MkdirAll, so all three must be validated. Checking only one would still
@@ -39,7 +39,8 @@ import (
 //
 // The actor ID rule here is DNS-1123 label, which matches ValidateActorID;
 // unifying the two implementations is tracked separately.
-func ValidateActorRef(namespace, template, actorID string) error {
+// TODO(thockin): unify this with the more structural validation to come.
+func ValidateActorRefFields(namespace, template, actorID string) error {
 	if errs := content.IsDNS1123Label(namespace); len(errs) > 0 {
 		return fmt.Errorf("invalid namespace %q: %s", namespace, strings.Join(errs, "; "))
 	}
