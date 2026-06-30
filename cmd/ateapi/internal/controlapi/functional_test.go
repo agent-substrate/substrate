@@ -1115,11 +1115,11 @@ func TestResumeActor(t *testing.T) {
 		Assignment: &ateapipb.Assignment{
 			ActorTemplateNamespace: ns,
 			ActorTemplateName:      "tmpl1",
+			ActorId:                id,
+			ActorAtespace:          testAtespace,
 		},
-		ActorId:       id,
-		ActorAtespace: testAtespace,
-		Ip:            "127.0.0.1",
-		NodeName:      "node1",
+		Ip:       "127.0.0.1",
+		NodeName: "node1",
 	}
 
 	if diff := cmp.Diff(wantWorker, actorWorker, protocmp.Transform(), protocmp.IgnoreFields(&ateapipb.Worker{}, "version"), protocmp.IgnoreFields(&ateapipb.Worker{}, "worker_pod_uid")); diff != "" {
@@ -1749,11 +1749,11 @@ func TestResumeActor_ReleasesStaleWorkerWhenPoolBecomesIneligible(t *testing.T) 
 		}
 		switch w.GetWorkerPool() {
 		case "pool-a":
-			if got := w.GetActorId(); got != "" {
+			if got := w.Assignment.GetActorId(); got != "" {
 				t.Errorf("expected worker-a (now-ineligible pool-a) to be released, got actor_id=%q", got)
 			}
 		case "pool-b":
-			if got := w.GetActorId(); got != id {
+			if got := w.Assignment.GetActorId(); got != id {
 				t.Errorf("expected worker-b to be claimed by %q, got actor_id=%q", id, got)
 			}
 		}

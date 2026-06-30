@@ -177,10 +177,8 @@ func (s *FinalizeSuspendedStep) Execute(ctx context.Context, input *SuspendInput
 			slog.Warn("Worker already gone during finalize suspend, skipping release", "worker", workerPod)
 		} else {
 			// Only free it if it still belongs to us
-			if worker.GetActorId() == input.ActorID {
+			if worker.Assignment.GetActorId() == input.ActorID {
 				worker.Assignment = nil
-				worker.ActorId = ""
-				worker.ActorAtespace = ""
 
 				err = s.store.UpdateWorker(ctx, worker, worker.Version)
 				if err != nil {

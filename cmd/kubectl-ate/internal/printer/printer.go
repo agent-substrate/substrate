@@ -112,10 +112,10 @@ func PrintWorkersTo(out io.Writer, workers []*ateapipb.Worker, format string) er
 
 			status := "FREE"
 			assignedActor := "<none>"
-			if worker.GetActorId() != "" {
+			if worker.Assignment.GetActorId() != "" {
 				status = "ASSIGNED"
 				assignedActor = fmt.Sprintf("%s/%s/%s",
-					worker.Assignment.GetActorTemplateNamespace(), worker.Assignment.GetActorTemplateName(), worker.GetActorId())
+					worker.Assignment.GetActorTemplateNamespace(), worker.Assignment.GetActorTemplateName(), worker.Assignment.GetActorId())
 			}
 
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n", ns, pool, pod, status, assignedActor)

@@ -1844,16 +1844,12 @@ type Worker struct {
 	WorkerPool      string                 `protobuf:"bytes,2,opt,name=worker_pool,json=workerPool,proto3" json:"worker_pool,omitempty"`
 	WorkerPod       string                 `protobuf:"bytes,3,opt,name=worker_pod,json=workerPod,proto3" json:"worker_pod,omitempty"`
 	Assignment      *Assignment            `protobuf:"bytes,4,opt,name=assignment,proto3" json:"assignment,omitempty"`
-	ActorId         string                 `protobuf:"bytes,5,opt,name=actor_id,json=actorId,proto3" json:"actor_id,omitempty"`
-	Ip              string                 `protobuf:"bytes,6,opt,name=ip,proto3" json:"ip,omitempty"`
-	Version         int64                  `protobuf:"varint,7,opt,name=version,proto3" json:"version,omitempty"`
-	WorkerPodUid    string                 `protobuf:"bytes,8,opt,name=worker_pod_uid,json=workerPodUid,proto3" json:"worker_pod_uid,omitempty"`
-	NodeName        string                 `protobuf:"bytes,9,opt,name=node_name,json=nodeName,proto3" json:"node_name,omitempty"`
-	// The atespace of the actor currently running on this worker. Set when an actor
-	// is assigned, cleared when freed. It is NOT the worker's own atespace.
-	ActorAtespace string `protobuf:"bytes,10,opt,name=actor_atespace,json=actorAtespace,proto3" json:"actor_atespace,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Ip              string                 `protobuf:"bytes,5,opt,name=ip,proto3" json:"ip,omitempty"`
+	Version         int64                  `protobuf:"varint,6,opt,name=version,proto3" json:"version,omitempty"`
+	WorkerPodUid    string                 `protobuf:"bytes,7,opt,name=worker_pod_uid,json=workerPodUid,proto3" json:"worker_pod_uid,omitempty"`
+	NodeName        string                 `protobuf:"bytes,8,opt,name=node_name,json=nodeName,proto3" json:"node_name,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *Worker) Reset() {
@@ -1914,13 +1910,6 @@ func (x *Worker) GetAssignment() *Assignment {
 	return nil
 }
 
-func (x *Worker) GetActorId() string {
-	if x != nil {
-		return x.ActorId
-	}
-	return ""
-}
-
 func (x *Worker) GetIp() string {
 	if x != nil {
 		return x.Ip
@@ -1949,17 +1938,12 @@ func (x *Worker) GetNodeName() string {
 	return ""
 }
 
-func (x *Worker) GetActorAtespace() string {
-	if x != nil {
-		return x.ActorAtespace
-	}
-	return ""
-}
-
 type Assignment struct {
 	state                  protoimpl.MessageState `protogen:"open.v1"`
 	ActorTemplateNamespace string                 `protobuf:"bytes,1,opt,name=actor_template_namespace,json=actorTemplateNamespace,proto3" json:"actor_template_namespace,omitempty"`
 	ActorTemplateName      string                 `protobuf:"bytes,2,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
+	ActorId                string                 `protobuf:"bytes,3,opt,name=actor_id,json=actorId,proto3" json:"actor_id,omitempty"`
+	ActorAtespace          string                 `protobuf:"bytes,4,opt,name=actor_atespace,json=actorAtespace,proto3" json:"actor_atespace,omitempty"`
 	unknownFields          protoimpl.UnknownFields
 	sizeCache              protoimpl.SizeCache
 }
@@ -2004,6 +1988,20 @@ func (x *Assignment) GetActorTemplateNamespace() string {
 func (x *Assignment) GetActorTemplateName() string {
 	if x != nil {
 		return x.ActorTemplateName
+	}
+	return ""
+}
+
+func (x *Assignment) GetActorId() string {
+	if x != nil {
+		return x.ActorId
+	}
+	return ""
+}
+
+func (x *Assignment) GetActorAtespace() string {
+	if x != nil {
+		return x.ActorAtespace
 	}
 	return ""
 }
@@ -2437,7 +2435,7 @@ const file_ateapi_proto_rawDesc = "" +
 	"\batespace\x18\x03 \x01(\tR\batespace\"c\n" +
 	"\x12ListActorsResponse\x12%\n" +
 	"\x06actors\x18\x01 \x03(\v2\r.ateapi.ActorR\x06actors\x12&\n" +
-	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"\xd6\x02\n" +
+	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"\x94\x02\n" +
 	"\x06Worker\x12)\n" +
 	"\x10worker_namespace\x18\x01 \x01(\tR\x0fworkerNamespace\x12\x1f\n" +
 	"\vworker_pool\x18\x02 \x01(\tR\n" +
@@ -2446,18 +2444,17 @@ const file_ateapi_proto_rawDesc = "" +
 	"worker_pod\x18\x03 \x01(\tR\tworkerPod\x122\n" +
 	"\n" +
 	"assignment\x18\x04 \x01(\v2\x12.ateapi.AssignmentR\n" +
-	"assignment\x12\x19\n" +
-	"\bactor_id\x18\x05 \x01(\tR\aactorId\x12\x0e\n" +
-	"\x02ip\x18\x06 \x01(\tR\x02ip\x12\x18\n" +
-	"\aversion\x18\a \x01(\x03R\aversion\x12$\n" +
-	"\x0eworker_pod_uid\x18\b \x01(\tR\fworkerPodUid\x12\x1b\n" +
-	"\tnode_name\x18\t \x01(\tR\bnodeName\x12%\n" +
-	"\x0eactor_atespace\x18\n" +
-	" \x01(\tR\ractorAtespace\"v\n" +
+	"assignment\x12\x0e\n" +
+	"\x02ip\x18\x05 \x01(\tR\x02ip\x12\x18\n" +
+	"\aversion\x18\x06 \x01(\x03R\aversion\x12$\n" +
+	"\x0eworker_pod_uid\x18\a \x01(\tR\fworkerPodUid\x12\x1b\n" +
+	"\tnode_name\x18\b \x01(\tR\bnodeName\"\xb8\x01\n" +
 	"\n" +
 	"Assignment\x128\n" +
 	"\x18actor_template_namespace\x18\x01 \x01(\tR\x16actorTemplateNamespace\x12.\n" +
-	"\x13actor_template_name\x18\x02 \x01(\tR\x11actorTemplateName\"\x13\n" +
+	"\x13actor_template_name\x18\x02 \x01(\tR\x11actorTemplateName\x12\x19\n" +
+	"\bactor_id\x18\x03 \x01(\tR\aactorId\x12%\n" +
+	"\x0eactor_atespace\x18\x04 \x01(\tR\ractorAtespace\"\x13\n" +
 	"\x11DebugClearRequest\"\x14\n" +
 	"\x12DebugClearResponse\"{\n" +
 	"\x0eMintJWTRequest\x12\x1a\n" +

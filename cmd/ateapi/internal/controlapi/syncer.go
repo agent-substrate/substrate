@@ -184,10 +184,10 @@ func (s *WorkerPoolSyncer) releaseActorOnDeadWorker(ctx context.Context, namespa
 		}
 		return err
 	}
-	if worker.GetActorId() == "" {
+	if worker.Assignment == nil {
 		return nil
 	}
-	actor, err := s.persistence.GetActor(ctx, worker.GetActorAtespace(), worker.GetActorId())
+	actor, err := s.persistence.GetActor(ctx, worker.Assignment.ActorAtespace, worker.Assignment.ActorId)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return nil
