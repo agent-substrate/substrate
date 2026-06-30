@@ -92,7 +92,7 @@ func actorDBKey(atespace, id string) string {
 
 // actorScanPattern returns the SCAN match pattern for listing actors. An empty
 // atespace lists across all atespaces (actor:*); a non-empty atespace scopes the
-// scan to that tenant (actor:<atespace>:*).
+// scan to that atespace (actor:<atespace>:*).
 func actorScanPattern(atespace string) string {
 	if atespace == "" {
 		return "actor:*"
@@ -635,7 +635,7 @@ func hashShardAddr(addr string) string {
 
 // ListActors lists actors, scoped to the given atespace. An empty atespace lists
 // across all atespaces (SCAN actor:*); a non-empty atespace restricts the scan to
-// that tenant (SCAN actor:<atespace>:*).
+// that atespace (SCAN actor:<atespace>:*).
 func (s *Persistence) ListActors(ctx context.Context, atespace string, pageSize int32, pageTokenStr string) ([]*ateapipb.Actor, string, error) {
 	token, err := decodePageToken(pageTokenStr)
 	if err != nil {

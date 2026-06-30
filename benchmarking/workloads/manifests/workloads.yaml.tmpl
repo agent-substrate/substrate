@@ -27,7 +27,7 @@ metadata:
   labels:
     workload: benchmark-ateom
 spec:
-  replicas: 1
+  replicas: ${WORKER_COUNT}
   ateomImage: ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor
 
 ---
@@ -60,14 +60,16 @@ spec:
   pauseImage: "gcr.io/gke-release/pause@sha256:bcbd57ba5653580ec647b16d8163cdd1112df3609129b01f912a8032e48265da"
   containers:
   - name: glutton
-    image: ko://github.com/agent-substrate/substrate/cmd/testing/glutton
+    image: ko://github.com/agent-substrate/substrate/cmd/benchmarking/glutton
     # Port 80 is the only inbound port nftables forwards from the worker pod
-    # into the actor sandbox (see cmd/ateom-gvisor/main.go).
+    # into the actor sandbox (see cmd/ateom-gvisor/main.go). HTTP/1.1 mode
+    # lets the atenet router (which forwards HTTP/1.1 upstream) reach Ping.
     command:
     - "/ko-app/glutton"
     - "--grpc-listen-addr=:80"
     - "--metrics-listen-addr=:9090"
     - "--data-dir=/tmp/glutton"
+    - "--mode=http"
   workerSelector:
     matchLabels:
       workload: benchmark-ateom

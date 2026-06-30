@@ -26,19 +26,18 @@ fi
 
 OUT_DIR="benchmarking/locust/common"
 
-# Create and activate virtual environment if it doesn't exist
+# Create the venv if it doesn't exist, then always install requirements.
+# pip skips already-installed packages, so this is cheap on re-runs.
 VENV_DIR="benchmarking/locust/venv"
 if [ ! -d "$VENV_DIR" ]; then
   echo "Creating virtual environment in $VENV_DIR..."
   python3 -m venv "$VENV_DIR"
-  source "$VENV_DIR/bin/activate"
-  echo "Installing dependencies..."
-  pip install --upgrade pip
-  pip install grpcio-tools
-else
-  echo "Activating virtual environment..."
-  source "$VENV_DIR/bin/activate"
 fi
+echo "Activating virtual environment..."
+source "$VENV_DIR/bin/activate"
+echo "Installing dependencies from benchmarking/locust/requirements.txt..."
+pip install --upgrade pip
+pip install -r benchmarking/locust/requirements.txt
 
 # generate_proto compiles a single .proto file into ${OUT_DIR}, prepends the
 # project's license header, and rewrites the generated grpc file's intra-package

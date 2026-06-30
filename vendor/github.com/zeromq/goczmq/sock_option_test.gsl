@@ -1,0 +1,83 @@
+.#  This is a code generator built using the iMatix GSL code generation
+.#  language. See https://github.com/imatix/gsl for details. This script 
+.#  is licensed under MIT/X11.
+.#
+.output "./sock_option_test.go"
+//go:generate gsl sockopts.xml
+package goczmq
+/*  =========================================================================
+    zsock_option - get/set 0MQ socket options
+
+            ****************************************************
+            *   GENERATED SOURCE CODE, DO NOT EDIT!!           *
+            ****************************************************
+
+    Copyright (c) the Contributors as noted in the AUTHORS file.
+    This file is part of goczmq, the high-level go binding for CZMQ:
+    http://github.com/zeromq/goczmq
+
+    This Source Code Form is subject to the terms of the Mozilla Public
+    License, v. 2.0. If a copy of the MPL was not distributed with this
+    file, You can obtain one at http://mozilla.org/MPL/2.0/.
+    =========================================================================
+*/
+
+import (
+	"testing"
+)
+.for version
+.if major = "4"
+.for option where defined(test)
+.if mode = "rw" | mode = "w"
+.if type = "uint64" | type = "int64" | type = "uint32" | type = "int"
+func Test$(name:pascal)(t *testing.T) {
+	sock := NewSock($(test:neat))
+	testval := $(test_value?'1':)
+	sock.Set$(name:pascal)(testval)
+.if mode = "rw"
+	val := sock.$(name:pascal)()
+	if val != testval && val != 0 {
+		t.Errorf("$(name:pascal) returned %d, should be %d", val, testval)
+	}
+.endif
+	sock.Destroy()
+}
+
+.endif
+.if type = "string" | type = "key"
+func Test$(name:pascal)(t *testing.T) {
+	sock := NewSock($(test:neat))
+	testval := "$(test_value?'test':)"
+	sock.Set$(name:pascal)(testval)
+.if mode = "rw"
+	val := sock.$(name:pascal)()
+	if val != testval && val != "" {
+		t.Errorf("$(name:pascal) returned %s should be %s", val, testval)
+	}
+.endif
+	sock.Destroy()
+}
+
+.endif
+.if mode = "r"
+.if type = "uint64" | type = "int64" | type = "uint32" | type = "int"
+func Test$(name:pascal)(t *testing.T) {
+	sock := NewSock($(test:neat))
+	_ = sock.$(name:pascal)()
+	sock.Destroy()
+}
+
+.endif
+.if type = "string" | type = "key"
+func Test$(name:pascal)(t *testing.T) {
+	sock := NewSock($(test:pascal))
+	_ = sock.$(name:pascal)()
+	sock.Destroy()
+}
+
+.endif
+.endif
+.endif
+.endfor
+.endif
+.endfor

@@ -61,7 +61,7 @@ func dialAteAPI(endpoint string) (ateapipb.ControlClient, *grpc.ClientConn, erro
 
 func main() {
 	actorID := pflag.String("id", "", "ID of the sandbox actor (required)")
-	atespace := pflag.String("atespace", "", "Atespace (tenant) the actor lives in (required)")
+	atespace := pflag.String("atespace", "", "Atespace the actor lives in (required)")
 	ateapiAddr := pflag.String("ateapi", "localhost:8080", "Address of the ateapi gRPC server")
 	atenetAddr := pflag.String("atenet", "localhost:8000", "Address of the atenet HTTP router")
 	pflag.Parse()

@@ -1,0 +1,82 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Each test runs `runner.py -f <file> -t <duration> -u <users> --name <name>`
+# with --tag set to the build commit hash and --dest set from the orchestrator's
+# --dest flag. The orchestrator deploys + tears down substrate + workloads
+# around each test so runs don't pollute each other.
+#
+# Optional `flags` is a list of arbitrary strings appended to runner.py's
+# argv; runner.py forwards them to locust verbatim.
+#
+# Optional `workerCount` (default 1) sets the WorkerPool replica count for
+# the deploy that runs before this test. The orchestrator redeploys
+# workloads between tests, so each test can pick its own scale.
+#
+# Required `targetCluster` names a config file under
+# /etc/orchestrator/target-clusters/ (e.g. `targetCluster: dev` ->
+# /etc/orchestrator/target-clusters/dev.sh). The orchestrator copies that
+# file into the cloned repo as .ate-dev-env.sh before the test runs and
+# deletes it after, so different tests can target different clusters /
+# projects from one CronJob run.
+
+tests:
+  - name: glutton_baseline_1_user
+    description: "Glutton baseline: 1 concurrent user for 1 minute"
+    targetCluster: dev
+    file: /app/tests/glutton.py
+    duration: 1m
+    users: 1
+    workerCount: 1
+    flags:
+      - "--min-wait-time"
+      - "1.0"
+      - "--max-wait-time"
+      - "1.0"
+  - name: glutton_baseline_5_users
+    description: "Glutton baseline: 5 concurrent users for 1 minute"
+    targetCluster: dev
+    file: /app/tests/glutton.py
+    duration: 1m
+    users: 5
+    workerCount: 5
+    flags:
+      - "--min-wait-time"
+      - "1.0"
+      - "--max-wait-time"
+      - "1.0"
+  - name: glutton_baseline_10_users
+    description: "Glutton baseline: 10 concurrent users for 1 minute (doubles the number of workers/node)"
+    targetCluster: dev
+    file: /app/tests/glutton.py
+    duration: 1m
+    users: 10
+    workerCount: 10
+    flags:
+      - "--min-wait-time"
+      - "1.0"
+      - "--max-wait-time"
+      - "1.0"
+  - name: glutton_oversubscribe_15_users
+    description: "Glutton baseline: 15 concurrent users for 2 minutes (50% oversubscribed)"
+    targetCluster: dev
+    file: /app/tests/glutton.py
+    duration: 2m
+    users: 15
+    workerCount: 10
+    flags:
+      - "--min-wait-time"
+      - "0.5"
+      - "--max-wait-time"
+      - "1.0"

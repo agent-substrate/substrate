@@ -36,27 +36,34 @@ if [[ ! -f "${MANIFEST_TEMPLATE}" ]]; then
   exit 1
 fi
 
+WORKER_COUNT=1
+
 usage() {
   echo "Usage: $0 [options]"
   echo ""
   echo "Options:"
-  echo "  --deploy    Substitute BUCKET_NAME and deploy workloads to the cluster using ko apply"
-  echo "  --delete    Substitute BUCKET_NAME and delete workloads from the cluster"
-  echo "  -h, --help  Show this help message"
+  echo "  --deploy             Substitute env vars and deploy workloads to the cluster using ko apply"
+  echo "  --delete             Substitute env vars and delete workloads from the cluster"
+  echo "  --worker-count N     Number of WorkerPool replicas (default: 1)"
+  echo "  -h, --help           Show this help message"
+}
+
+substitute() {
+  sed -e "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" \
+      -e "s|\${WORKER_COUNT}|${WORKER_COUNT}|g" \
+      "${MANIFEST_TEMPLATE}"
 }
 
 deploy() {
-  echo "Deploying workloads..."
-  sed "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" "${MANIFEST_TEMPLATE}" \
-    | hack/run-tool.sh ko apply -f -
+  echo "Deploying workloads (worker_count=${WORKER_COUNT})..."
+  substitute | hack/run-tool.sh ko apply -f -
 }
 
 delete() {
   echo "Deleting workloads..."
   # The template contains ko:// image references; route through `ko delete`
   # so they get resolved before kubectl sees them.
-  sed "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" "${MANIFEST_TEMPLATE}" \
-    | hack/run-tool.sh ko delete --ignore-not-found -f -
+  substitute | hack/run-tool.sh ko delete --ignore-not-found -f -
 }
 
 if [[ "$#" -eq 0 ]]; then
@@ -72,6 +79,13 @@ while [[ "$#" -gt 0 ]]; do
       ;;
     --delete)
       action="delete"
+      ;;
+    --worker-count)
+      shift
+      WORKER_COUNT="$1"
+      ;;
+    --worker-count=*)
+      WORKER_COUNT="${1#*=}"
       ;;
     -h|--help)
       usage

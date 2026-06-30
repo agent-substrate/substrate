@@ -1,0 +1,84 @@
+.#  This is a code generator built using the iMatix GSL code generation
+.#  language. See https://github.com/imatix/gsl for details. This script 
+.#  is licensed under MIT/X11.
+.#
+.output "./sock_option.go"
+//go:generate gsl sockopts.xml
+package goczmq
+
+/*  =========================================================================
+    zsock_option - get/set 0MQ socket options
+
+            ****************************************************
+            *   GENERATED SOURCE CODE, DO NOT EDIT!!           *
+            *   TO CHANGE THIS, EDIT sockopts.gsl              *
+            *   AND RUN gsl -q sockopts.xml                    *
+            ****************************************************
+
+    Copyright (c) the Contributors as noted in the AUTHORS file.
+    This file is part of goczmq, the high-level go binding for CZMQ:
+    http://github.com/zeromq/goczmq
+
+    This Source Code Form is subject to the terms of the Mozilla Public
+    License, v. 2.0. If a copy of the MPL was not distributed with this
+    file, You can obtain one at http://mozilla.org/MPL/2.0/.
+    =========================================================================
+*/
+
+/*
+#include "czmq.h"
+#include <stdlib.h>
+#include <string.h>
+*/
+import "C"
+
+import (
+	"unsafe"
+)
+
+.for version
+.if major = "4"
+.for option
+.if mode = "rw" | mode = "w"
+.if type = "uint64" | type = "int64" | type = "uint32" | type = "int"
+// Set$(name:pascal) sets the $(name) option for the socket
+func (s *Sock) Set$(name:pascal)(val $(gotype)) {
+	C.zsock_set_$(name)(unsafe.Pointer(s.zsockT), C.int(val))
+}
+
+.endif
+.if type = "string" | type = "key"
+// Set$(name:pascal) sets the $(name) option for the socket
+func (s *Sock) Set$(name:pascal)(val $(gotype)) {
+    cVal := C.CString(val)
+    defer C.free(unsafe.Pointer(cVal))
+
+	C.zsock_set_$(name)(unsafe.Pointer(s.zsockT), cVal)
+}
+
+.endif
+.endif
+.if mode = "rw" | mode = "r"
+.if type = "uint64" | type = "int64" | type = "uint32" | type = "int"
+// $(name:pascal) returns the current value of the socket's $(name) option
+func (s *Sock) $(name:pascal)() $(gotype) {
+	val := C.zsock_$(name)(unsafe.Pointer(s.zsockT))
+	return int(val)
+}
+
+.endif
+.if type = "string" | type = "key"
+// $(name:pascal) returns the current value of the socket's $(name) option
+func (s *Sock) $(name:pascal)() $(gotype) {
+	val := C.zsock_$(name)(unsafe.Pointer(s.zsockT))
+	return C.GoString(val)
+}
+
+.endif
+.endif
+.endfor
+.endif
+.for source
+$(string.trim(.):)
+.endfor
+.endfor

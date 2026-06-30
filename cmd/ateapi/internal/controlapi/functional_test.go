@@ -868,7 +868,7 @@ func TestListActors_ByAtespace(t *testing.T) {
 }
 
 // TestListActors_AllAtespaces verifies that an empty atespace lists actors across
-// all atespaces (the `-A` / admin view), unlike the scoped single-tenant listing.
+// all atespaces (the `-A` / admin view), unlike the scoped single-atespace listing.
 func TestListActors_AllAtespaces(t *testing.T) {
 	ns := namespaceForTest("ns-list-all-atespaces")
 	tc := setupTest(t, ns)

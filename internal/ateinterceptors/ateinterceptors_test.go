@@ -19,12 +19,15 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
 
@@ -90,6 +93,51 @@ func TestStatusErrorInterceptor(t *testing.T) {
 				t.Errorf("expected message %q, got %q", tt.wantMsg, st.Message())
 			}
 		})
+	}
+}
+
+type trailerStream struct {
+	method   string
+	trailers metadata.MD
+}
+
+func (s *trailerStream) Method() string                  { return s.method }
+func (s *trailerStream) SetHeader(md metadata.MD) error  { return nil }
+func (s *trailerStream) SendHeader(md metadata.MD) error { return nil }
+func (s *trailerStream) SetTrailer(md metadata.MD) error {
+	if s.trailers == nil {
+		s.trailers = metadata.MD{}
+	}
+	for k, v := range md {
+		s.trailers[k] = append(s.trailers[k], v...)
+	}
+	return nil
+}
+
+func TestServerUnaryInterceptorEmitsElapsedTrailer(t *testing.T) {
+	const minHandlerDuration = 5 * time.Millisecond
+	stream := &trailerStream{method: "/test.Service/Method"}
+	ctx := grpc.NewContextWithServerTransportStream(context.Background(), stream)
+
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		time.Sleep(minHandlerDuration)
+		return "response", nil
+	}
+
+	if _, err := ServerUnaryInterceptor(ctx, "request", &grpc.UnaryServerInfo{FullMethod: stream.method}, handler); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	vals := stream.trailers.Get(ServerElapsedTrailer)
+	if len(vals) != 1 {
+		t.Fatalf("expected one %s trailer, got %v", ServerElapsedTrailer, vals)
+	}
+	elapsedUs, err := strconv.ParseInt(vals[0], 10, 64)
+	if err != nil {
+		t.Fatalf("could not parse %s as int64: %v", vals[0], err)
+	}
+	if got, min := time.Duration(elapsedUs)*time.Microsecond, minHandlerDuration; got < min {
+		t.Errorf("trailer reported %s; expected at least %s (handler sleep)", got, min)
 	}
 }
 

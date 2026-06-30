@@ -37,6 +37,10 @@ func enableRequiredAPIs(ctx context.Context, cfg *Config) error {
 		"networkconnectivity.googleapis.com",
 		"serviceusage.googleapis.com",
 		"storage.googleapis.com",
+		"logging.googleapis.com",
+		"monitoring.googleapis.com",
+		"cloudtrace.googleapis.com",
+		"telemetry.googleapis.com",
 	}
 
 	slog.Info("Batch enabling services", slog.String("services", strings.Join(services, ", ")))

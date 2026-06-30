@@ -1,0 +1,20 @@
+# Intellij IDEA
+.idea
+
+# VS Code
+.vscode
+
+# dummy.py
+*.pyc
+
+# go test coverage result
+coverage.txt
+
+# profiling file
+mem.pprof
+cpu.pprof
+
+cover.out
+
+# sphinx build
+docs/build
