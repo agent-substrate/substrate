@@ -625,7 +625,7 @@ func callActor(t *testing.T, atespace, actorID string) (string, error) {
 	deadline := time.Now().Add(30 * time.Second)
 	var lastErr error
 	for time.Now().Before(deadline) {
-		resp, err := callActorOnce(t, actorID)
+		resp, err := callActorOnce(t, atespace, actorID)
 		if err == nil {
 			return resp, nil
 		}
@@ -636,7 +636,7 @@ func callActor(t *testing.T, atespace, actorID string) (string, error) {
 	return "", fmt.Errorf("timed out waiting for actor response: %w", lastErr)
 }
 
-func callActorOnce(t *testing.T, actorID string) (string, error) {
+func callActorOnce(t *testing.T, atespace, actorID string) (string, error) {
 	t.Helper()
 	clients := e2e.GetClients()
 
