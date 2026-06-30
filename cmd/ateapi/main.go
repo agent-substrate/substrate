@@ -110,9 +110,15 @@ func main() {
 		serverboot.Fatal(ctx, "Failed to build server credentials", err)
 	}
 
-	redisPersistence := ateredis.NewPersistence(redisClient)
+	redisPersistence, err := ateredis.NewPersistence(redisClient)
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to create Redis persistence", err)
+	}
 
-	workerCache := workercache.New(redisPersistence, 5*time.Minute)
+	workerCache, err := workercache.New(redisPersistence, 5*time.Minute)
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to create worker cache", err)
+	}
 	if err := workerCache.Start(ctx); err != nil {
 		serverboot.Fatal(ctx, "Failed to seed worker cache", err)
 	}

@@ -42,7 +42,11 @@ func setupTest(t *testing.T) (*miniredis.Miniredis, *Persistence, context.Contex
 	rdb := redis.NewClusterClient(&redis.ClusterOptions{
 		Addrs: []string{mr.Addr()},
 	})
-	return mr, &Persistence{rdb: rdb}, context.Background()
+	p, err := NewPersistence(rdb)
+	if err != nil {
+		t.Fatalf("NewPersistence: %v", err)
+	}
+	return mr, p, context.Background()
 }
 
 func TestGetActor_NotFound(t *testing.T) {
