@@ -224,6 +224,49 @@ func TestWrapContainerLogs_LabelCollision(t *testing.T) {
 	}
 }
 
+func TestWrapContainerLogs_CrossKeyLabelSpoofing(t *testing.T) {
+	// Non-GCE logger writes under "labels"; an app must not be able to spoof
+	// metadata under the other recognized key and have a consumer trust it.
+	input := `{"level":"info","msg":"App log","logging.googleapis.com/labels":{"ate.dev/actor_id":"victim","ate.dev/container_name":"spoofed","app":"keep-me"}}` + "\n"
+	rdr := strings.NewReader(input)
+
+	var buf bytes.Buffer
+	al := NewActorLogger(&buf, false) // non-GCE => authoritative key is "labels"
+	al.WrapContainerLogs(rdr, "act-1", "tmpl-1", "default", "ctr-1")
+
+	var m map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &m); err != nil {
+		t.Fatalf("failed to parse JSON output: %v", err)
+	}
+
+	// Substrate's real metadata lives under the environment key ("labels").
+	authoritative, ok := m["labels"].(map[string]any)
+	if !ok {
+		t.Fatal("missing authoritative labels group")
+	}
+	if authoritative["ate.dev/actor_id"] != "act-1" {
+		t.Errorf("got actor_id = %v, want 'act-1'", authoritative["ate.dev/actor_id"])
+	}
+	if authoritative["ate.dev/container_name"] != "ctr-1" {
+		t.Errorf("got container_name = %v, want 'ctr-1'", authoritative["ate.dev/container_name"])
+	}
+
+	// The spoofed ate.dev/* labels are stripped; the app's own labels are kept.
+	spoofed, ok := m["logging.googleapis.com/labels"].(map[string]any)
+	if !ok {
+		t.Fatal("expected the application's logging.googleapis.com/labels map to survive")
+	}
+	if _, present := spoofed["ate.dev/actor_id"]; present {
+		t.Error("spoofed ate.dev/actor_id survived under logging.googleapis.com/labels")
+	}
+	if _, present := spoofed["ate.dev/container_name"]; present {
+		t.Error("spoofed ate.dev/container_name survived under logging.googleapis.com/labels")
+	}
+	if spoofed["app"] != "keep-me" {
+		t.Errorf("non-reserved app label not preserved: got %v", spoofed["app"])
+	}
+}
+
 func TestWrapContainerLogs_TrailingGarbage(t *testing.T) {
 	input := `{"count": 1} garbage` + "\n"
 	rdr := strings.NewReader(input)

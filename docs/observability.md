@@ -27,7 +27,7 @@ For quick, on-demand debugging of an active actor, use the Agent Substrate CLI:
 kubectl ate logs actors <actor_id> [--follow / -f]
 ```
 
-> **Note:** By default, `kubectl ate logs` queries the Kubernetes API of the worker pod where the actor is *currently* running. It is designed for immediate inspection of active actors. To view historical logs across past worker pods and suspension cycles, use a centralized logging backend.
+> **Note:** By default, `kubectl ate logs actors` queries the Kubernetes API of the worker pod where the actor is *currently* running. It is designed for immediate inspection of active actors. To view historical logs across past worker pods and suspension cycles, use a centralized logging backend.
 
 #### Example 1: Actor Not Currently Running
 If an actor is suspended or not assigned to a worker pod, the CLI informs you immediately:
@@ -60,6 +60,21 @@ Actor is currently running on pod ate-demo-counter/counter-deployment-ab123-x4y5
 {"time":"2026-05-22T21:50:02.123456789Z","count":2,"fshash":"mCY7...","level":"INFO","msg":"Count"}
 ```
 
+#### Example 4: Filtering by Container or Supervisor
+An actor may run multiple containers, and Agent Substrate also emits synthetic supervisor lifecycle events (e.g., `Actor started`, `Actor checkpointing`). By default `kubectl ate logs actors` shows all of an actor's log lines. Use `--container` and/or `--supervisor` to scope the output to a single container, to just the supervisor, or to both at once:
+
+```bash
+# Logs from a specific container within the actor (-c for short).
+kubectl ate logs actors <actor_id> -a <atespace> --container <container_name>
+
+# The ateom supervisor (lifecycle) logs.
+kubectl ate logs actors <actor_id> -a <atespace> --supervisor
+
+# Both together: the container's logs plus the supervisor lifecycle logs.
+kubectl ate logs actors <actor_id> -a <atespace> --container <container_name> --supervisor
+```
+
+`--container` and `--supervisor` are additive selectors: passing both shows that container's lines together with the supervisor lines. Container log lines are identified by the `ate.dev/container_name` label; supervisor lifecycle lines do not carry that label.
 
 ---
 

@@ -160,10 +160,21 @@ kubectl ate delete actor my-actor -a <atespace>
 `kubectl ate logs` requires a resource-type subcommand; running `kubectl ate logs <id>` on its own prints help. The only supported resource type is `actors`:
 
 ```bash
-# Stream logs for an actor (follows by default; aggregated across worker
-# reassignments so the same actor is queryable as it teleports between pods).
-kubectl ate logs actors my-actor
+# Stream logs for an actor (aggregated across worker reassignments so the same
+# actor is queryable as it teleports between pods).
+kubectl ate logs actors my-actor -a <atespace>
+
+# Show logs from a single container within the actor (-c for short).
+kubectl ate logs actors my-actor -a <atespace> --container my-container
+
+# Show only the ateom supervisor (lifecycle) logs, e.g. "Actor started".
+kubectl ate logs actors my-actor -a <atespace> --supervisor
+
+# Combine both: that container's logs plus the supervisor lifecycle logs.
+kubectl ate logs actors my-actor -a <atespace> --container my-container --supervisor
 ```
+
+By default all of the actor's logs are shown. Use `-c`/`--container <name>` to show only that container's logs, or `--supervisor` to show only ateom's lifecycle logs. The two flags are additive: pass both to see that container's logs together with the supervisor lifecycle logs.
 
 Logs are streamable only while the actor is bound to a worker (i.e., `STATUS_RUNNING`). For history across worker migrations, route through a centralized log backend (Cloud Logging, Loki, etc.); see `docs/observability.md`.
 

@@ -25,9 +25,16 @@ import (
 	"errors"
 	"io"
 	"os"
+	"strings"
 	"sync"
 	"time"
 )
+
+const ateLabelPrefix = "ate.dev/"
+
+// recognizedLabelKeys are the keys a log line may carry labels under
+// ("logging.googleapis.com/labels" on GCE, "labels" elsewhere).
+var recognizedLabelKeys = []string{"labels", "logging.googleapis.com/labels"}
 
 // SyncedWriter wraps an io.Writer and synchronizes writes across goroutines.
 type SyncedWriter struct {
@@ -141,6 +148,17 @@ func (al *ActorLogger) WrapContainerLogs(r io.Reader, actorID, actorTemplateName
 			} else {
 				if _, ok := m["time"]; !ok {
 					m["time"] = time.Now().Format(time.RFC3339Nano)
+				}
+				// Strip app-provided ate.dev/* labels from every recognized key
+				// (not just the one we write) so apps can't spoof Substrate metadata.
+				for _, key := range recognizedLabelKeys {
+					if existing, ok := m[key].(map[string]any); ok {
+						for k := range existing {
+							if strings.HasPrefix(k, ateLabelPrefix) {
+								delete(existing, k)
+							}
+						}
+					}
 				}
 				labels, ok := m[al.labelsKey].(map[string]any)
 				if !ok {
