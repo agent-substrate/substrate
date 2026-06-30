@@ -18,12 +18,30 @@
 // the canonical layout pass actual values via the corresponding flags.
 package installdefaults
 
+import "os"
+
 const (
 	// SystemNamespace is the namespace where substrate's control-plane
 	// components and the atelet DaemonSet run.
 	SystemNamespace = "ate-system"
+	// APIServiceName is the Service name of ate-api-server.
+	APIServiceName = "api"
 	// RouterServiceName is the Service name of atenet-router.
 	RouterServiceName = "atenet-router"
 	// DNSServiceName is the Service name of substrate's CoreDNS.
 	DNSServiceName = "dns"
+
+	// PodNamespaceEnv is the conventional env var name for the namespace
+	// a pod is running in, exposed via Kubernetes' downward API.
+	PodNamespaceEnv = "POD_NAMESPACE"
 )
+
+// NamespaceFromPodEnv returns the namespace from the PodNamespaceEnv env
+// var when set (typically populated via Kubernetes' downward API), and
+// falls back to SystemNamespace for non-k8s invocations (tests, local dev).
+func NamespaceFromPodEnv() string {
+	if ns := os.Getenv(PodNamespaceEnv); ns != "" {
+		return ns
+	}
+	return SystemNamespace
+}

@@ -89,14 +89,10 @@ func NewDnsCmd() *cobra.Command {
 				return fmt.Errorf("failed to initialize cluster client: %w", err)
 			}
 
-			// atenet shares the system namespace with atenet-router and
-			// substrate's CoreDNS in every supported deployment topology.
-			// POD_NAMESPACE comes from Kubernetes' downward API; the install
-			// fallback keeps non-k8s invocations (tests, local dev) working.
-			systemNamespace := os.Getenv("POD_NAMESPACE")
-			if systemNamespace == "" {
-				systemNamespace = installdefaults.SystemNamespace
-			}
+			// atenet shares its namespace with atenet-router and substrate's
+			// CoreDNS in every supported deployment topology, so we read it
+			// from Kubernetes' downward API rather than expose a flag.
+			systemNamespace := installdefaults.NamespaceFromPodEnv()
 			slog.InfoContext(ctx, "Resolved system namespace", slog.String("system-namespace", systemNamespace))
 
 			dnsController := &dns.Controller{

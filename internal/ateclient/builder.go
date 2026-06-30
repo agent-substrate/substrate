@@ -23,6 +23,7 @@ import (
 	"os"
 	"sync"
 
+	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.opentelemetry.io/otel"
@@ -130,22 +131,22 @@ func dialPortForward(ctx context.Context, kubeconfigPath, k8sContext string, tra
 		return nil, fmt.Errorf("failed to create k8s client: %w", err)
 	}
 
-	// Look up the 'api' Service to dynamically get its pod selector
-	svc, err := clientset.CoreV1().Services("ate-system").Get(ctx, "api", metav1.GetOptions{})
+	// Look up the ateapi Service to dynamically get its pod selector.
+	svc, err := clientset.CoreV1().Services(installdefaults.SystemNamespace).Get(ctx, installdefaults.APIServiceName, metav1.GetOptions{})
 	if err != nil {
-		return nil, fmt.Errorf("failed to get api service: %w", err)
+		return nil, fmt.Errorf("failed to get ateapi service %s/%s: %w", installdefaults.SystemNamespace, installdefaults.APIServiceName, err)
 	}
 	selector := labels.SelectorFromSet(svc.Spec.Selector).String()
 
 	// Find the pods backing the service
-	pods, err := clientset.CoreV1().Pods("ate-system").List(ctx, metav1.ListOptions{
+	pods, err := clientset.CoreV1().Pods(installdefaults.SystemNamespace).List(ctx, metav1.ListOptions{
 		LabelSelector: selector,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to list ateapi pods: %w", err)
 	}
 	if len(pods.Items) == 0 {
-		return nil, fmt.Errorf("no ate-api-server pods found in ate-system namespace")
+		return nil, fmt.Errorf("no ate-api-server pods found in %q namespace", installdefaults.SystemNamespace)
 	}
 	targetPod := pods.Items[0]
 

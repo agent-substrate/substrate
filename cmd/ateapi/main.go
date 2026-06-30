@@ -123,13 +123,9 @@ func main() {
 	workerPoolLister := ateFactory.Api().V1alpha1().WorkerPools().Lister()
 	sandboxConfigLister := ateFactory.Api().V1alpha1().SandboxConfigs().Lister()
 
-	// atelet shares ateapi's namespace in every supported deployment topology.
-	// POD_NAMESPACE comes from Kubernetes' downward API; the install fallback
-	// keeps non-k8s invocations (tests, local dev) working.
-	ateletNamespace := os.Getenv("POD_NAMESPACE")
-	if ateletNamespace == "" {
-		ateletNamespace = installdefaults.SystemNamespace
-	}
+	// atelet shares ateapi's namespace in every supported deployment topology,
+	// so we read it from Kubernetes' downward API rather than expose a flag.
+	ateletNamespace := installdefaults.NamespaceFromPodEnv()
 	slog.InfoContext(ctx, "Resolved atelet namespace", slog.String("atelet-namespace", ateletNamespace))
 
 	workerPodInformerFactory, workerPodInformer := controlapi.WorkerPodInformer(clientset)
