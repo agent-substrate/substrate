@@ -25,15 +25,15 @@ import (
 )
 
 const (
-	ateletNamespace    = "ate-system"
 	byNamespaceAndName = "by-namespace-and-name"
 	byWorkerPool       = "by-worker-pool"
 	byNode             = "by-node"
 	workerPodLabel     = "ate.dev/worker-pool"
 )
 
-// AteletInformer creates a SharedInformerFactory and SharedIndexInformer for Atelet pods.
-func AteletInformer(kc kubernetes.Interface) (informers.SharedInformerFactory, cache.SharedIndexInformer) {
+// AteletInformer creates a SharedInformerFactory and SharedIndexInformer for
+// Atelet pods in the given namespace.
+func AteletInformer(kc kubernetes.Interface, ateletNamespace string) (informers.SharedInformerFactory, cache.SharedIndexInformer) {
 	factory := informers.NewSharedInformerFactoryWithOptions(kc, 0,
 		informers.WithNamespace(ateletNamespace),
 		informers.WithTweakListOptions(func(options *metav1.ListOptions) {

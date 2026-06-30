@@ -65,10 +65,14 @@ func init() {
 
 // RouterConfig holds deployment setup and endpoint options for the router node instance.
 type RouterConfig struct {
-	Standalone     bool
-	Namespace      string
-	Kubeconfig     string
-	AteapiAddr     string
+	Standalone bool
+	Namespace  string
+	// RouterServiceName is the Service name of this atenet-router in the
+	// release namespace, used by /statusz to look up its own ClusterIP.
+	// Defaults to installdefaults.RouterServiceName.
+	RouterServiceName string
+	Kubeconfig        string
+	AteapiAddr        string
 	HttpPort       int
 	XdsPort        int
 	ExtprocPort    int

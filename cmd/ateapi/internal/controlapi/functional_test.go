@@ -29,6 +29,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/envtestbins"
+	"github.com/agent-substrate/substrate/internal/installdefaults"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/client/clientset/versioned"
@@ -272,7 +273,7 @@ func setupTest(t *testing.T, ns string) *testContext {
 
 	// 3. Initialize Informers
 	workerFactory, workerInformer := WorkerPodInformer(k8sClient)
-	ateletFactory, ateletInformer := AteletInformer(k8sClient)
+	ateletFactory, ateletInformer := AteletInformer(k8sClient, installdefaults.SystemNamespace)
 
 	substrateInformerFactory := externalversions.NewSharedInformerFactory(substrateClient, 0)
 	actorTemplateLister := substrateInformerFactory.Api().V1alpha1().ActorTemplates().Lister()
