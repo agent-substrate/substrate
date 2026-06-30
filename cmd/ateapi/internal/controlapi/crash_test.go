@@ -46,8 +46,7 @@ func seedActor(t *testing.T, ctx context.Context, st store.Interface, atespace, 
 	}
 }
 
-// assertCrashed reloads the actor and verifies it is CRASHED with all
-// worker-binding fields cleared.
+// assertCrashed reloads the actor and verifies it is CRASHED.
 func assertCrashed(t *testing.T, ctx context.Context, st store.Interface, atespace, id string) {
 	t.Helper()
 	got, err := st.GetActor(ctx, atespace, id)
@@ -56,13 +55,6 @@ func assertCrashed(t *testing.T, ctx context.Context, st store.Interface, atespa
 	}
 	if got.GetStatus() != ateapipb.Actor_STATUS_CRASHED {
 		t.Errorf("status = %v, want %v", got.GetStatus(), ateapipb.Actor_STATUS_CRASHED)
-	}
-	if got.GetAteomPodNamespace() != "" || got.GetAteomPodName() != "" ||
-		got.GetAteomPodIp() != "" || got.GetAteomPodUid() != "" ||
-		got.GetWorkerPoolName() != "" {
-		t.Errorf("worker fields not cleared: ns=%q name=%q ip=%q uid=%q pool=%q",
-			got.GetAteomPodNamespace(), got.GetAteomPodName(), got.GetAteomPodIp(),
-			got.GetAteomPodUid(), got.GetWorkerPoolName())
 	}
 }
 

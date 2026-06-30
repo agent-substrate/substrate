@@ -60,6 +60,7 @@ func (s *LoadActorForPauseStep) Execute(ctx context.Context, input *PauseInput, 
 		return err
 	}
 
+	// TODO: add a CheckPrerequisite() step in controlapi.WorkflowStep to validate prerequisites like this.
 	if actor.GetStatus() == ateapipb.Actor_STATUS_CRASHED {
 		return status.Errorf(codes.FailedPrecondition,
 			"can not pause crashed actor %s", input.ActorID)
@@ -114,8 +115,11 @@ func (s *CallAteletPauseStep) Execute(ctx context.Context, input *PauseInput, st
 		return fmt.Errorf("expected actor in PAUSING state, got: %v", state.Actor.GetStatus())
 	}
 
-	if state.Actor.GetAteomPodNamespace() == "" {
-		return fmt.Errorf("actor is in PAUSING state but has no active worker")
+	if state.Actor.GetAteomPodNamespace() == "" || state.Actor.GetAteomPodName() == "" {
+		if err := crashActor(ctx, s.store, state.Actor.Atespace, state.Actor.ActorId); err != nil {
+			slog.Error("Failed to crash actor", slog.String("err", err.Error()))
+		}
+		return fmt.Errorf("actor is CRASHED because it was in PAUSING state but has no active worker")
 	}
 
 	ateletConn, err := s.dialer.DialForWorker(state.Actor.GetAteomPodNamespace(), state.Actor.GetAteomPodName())

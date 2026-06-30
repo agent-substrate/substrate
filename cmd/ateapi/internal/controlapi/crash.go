@@ -49,12 +49,14 @@ func crashActor(ctx context.Context, st store.Interface, atespace, actorID strin
 		return fmt.Errorf("while loading actor to crash: %w", err)
 	}
 	actor.Status = ateapipb.Actor_STATUS_CRASHED
-	// TODO(zoezhao): Mark the worker as unhealthy if needed.
-	actor.AteomPodNamespace = ""
-	actor.AteomPodName = ""
-	actor.AteomPodIp = ""
-	actor.AteomPodUid = ""
-	actor.WorkerPoolName = ""
+	// TODO(zoezhao):
+	// 1. If the Actor crashed because the worker is unhealthy,
+	//    free the worker and mark it as unhealthy(or delete it)
+	//    to prevent other actors from being scheduled on it.
+	// 2. If the Actor crashed while resuming from a Paused state,
+	//    we must preserve the Actor's assigned node VM in order
+	//    to support `ate actor dump` command.
+	// (https://github.com/agent-substrate/substrate/issues/119)
 	if err := st.UpdateActor(ctx, actor, actor.GetVersion()); err != nil {
 		return fmt.Errorf("while marking actor crashed: %w", err)
 	}

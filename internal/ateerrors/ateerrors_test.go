@@ -89,6 +89,40 @@ func TestNewGRPCError(t *testing.T) {
 	}
 }
 
+// TestNewGRPCErrorInvalidInput verifies that a nil sentinel, a nil err, or an OK
+// code yields a plain validation error (not a gRPC status, so it carries no
+// Reason that the control plane could misclassify).
+func TestNewGRPCErrorInvalidInput(t *testing.T) {
+	tests := []struct {
+		name     string
+		grpcCode codes.Code
+		sentinel error
+		err      error
+	}{
+		{name: "nil sentinel", grpcCode: codes.NotFound, sentinel: nil, err: ErrAteletSnapshotNotFound},
+		{name: "nil err", grpcCode: codes.NotFound, sentinel: ErrReasonCrashActor, err: nil},
+		{name: "both nil with non-OK code", grpcCode: codes.NotFound, sentinel: nil, err: nil},
+		{name: "OK code with valid sentinel and err", grpcCode: codes.OK, sentinel: ErrReasonCrashActor, err: ErrAteletSnapshotNotFound},
+		{name: "OK code with both nil", grpcCode: codes.OK, sentinel: nil, err: nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := NewGRPCError(tt.grpcCode, tt.sentinel, tt.err)
+			if err == nil {
+				t.Fatalf("NewGRPCError(%v, %v, %v) = nil, want a validation error", tt.grpcCode, tt.sentinel, tt.err)
+			}
+			// The validation error is a plain error, not a gRPC status, and it must
+			// not carry a classifiable Reason.
+			if _, ok := status.FromError(err); ok {
+				t.Errorf("NewGRPCError(...) = %v; want a plain error, not a gRPC status", err)
+			}
+			if got := ErrorReasonsFromStatus(err); len(got) != 0 {
+				t.Errorf("ErrorReasonsFromStatus() = %q, want no reasons", got)
+			}
+		})
+	}
+}
+
 func TestErrorReasonsFromStatus(t *testing.T) {
 	tests := []struct {
 		name string

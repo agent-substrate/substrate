@@ -16,6 +16,8 @@ package ateerrors
 
 import (
 	"errors"
+	"fmt"
+	"log/slog"
 
 	epb "google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
@@ -35,6 +37,11 @@ var (
 // The control plane reads the ErrorInfo.Reason via ErrorReasonsFromStatus
 // to classify the failure.
 func NewGRPCError(grpcCode codes.Code, sentinel, err error) error {
+	// Validate the input parameters.
+	if sentinel == nil || err == nil || grpcCode == codes.OK {
+		return fmt.Errorf("cannot use NewGRPCError with OK error code, or a nil err or sentinel. sentinel=%w, err=%w, grpcCode=%v. Return nil instead", sentinel, err, grpcCode)
+	}
+	// Construct the grpc Error with details.
 	st, derr := status.New(grpcCode, err.Error()).WithDetails(
 		&epb.ErrorInfo{
 			Domain: errorDomain,
@@ -42,7 +49,12 @@ func NewGRPCError(grpcCode codes.Code, sentinel, err error) error {
 		},
 	)
 	if derr != nil {
-		return status.Error(grpcCode, err.Error())
+		// WithDetails on *epb.ErrorInfo should never fail; but if it ever does, the
+		// reason is lost and the control plane will misclassify the failure
+		// (e.g. a real crash read as a transient error). Log loudly for debugging purpose.
+		slog.Error("ateerrors: failed to attach ErrorInfo to gRPC status; adding `Reason` to the error message instead",
+			"err", derr, "reason", sentinel.Error(), "code", grpcCode)
+		return status.Error(grpcCode, fmt.Errorf("Reason:%w, Error %w", sentinel, err).Error())
 	}
 	return st.Err()
 }

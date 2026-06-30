@@ -71,6 +71,7 @@ func (s *LoadActorForResumeStep) Execute(ctx context.Context, input *ResumeInput
 		return fmt.Errorf("while getting actor from DB: %w", err)
 	}
 
+	// TODO: add a CheckPrerequisite() step in controlapi.WorkflowStep to validate prerequisites like this.
 	if actor.GetStatus() == ateapipb.Actor_STATUS_CRASHED {
 		return status.Errorf(codes.FailedPrecondition,
 			"can not resume crashed actor %s", input.ActorID)

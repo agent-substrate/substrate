@@ -61,6 +61,7 @@ func (s *LoadActorForSuspendStep) Execute(ctx context.Context, input *SuspendInp
 		return err
 	}
 
+	// TODO: add a CheckPrerequisite() step in controlapi.WorkflowStep to validate prerequisites like this.
 	if actor.GetStatus() == ateapipb.Actor_STATUS_CRASHED {
 		return status.Errorf(codes.FailedPrecondition,
 			"can not suspend crashed actor %s", input.ActorID)
@@ -112,8 +113,11 @@ func (s *CallAteletSuspendStep) IsComplete(ctx context.Context, input *SuspendIn
 	return state.Actor.GetStatus() == ateapipb.Actor_STATUS_SUSPENDED, nil
 }
 func (s *CallAteletSuspendStep) Execute(ctx context.Context, input *SuspendInput, state *SuspendState) error {
-	if state.Actor.GetAteomPodNamespace() == "" {
-		return fmt.Errorf("actor is in SUSPENDING state but has no active worker")
+	if state.Actor.GetAteomPodNamespace() == "" || state.Actor.GetAteomPodName() == "" {
+		if err := crashActor(ctx, s.store, state.Actor.Atespace, state.Actor.ActorId); err != nil {
+			slog.Error("Failed to crash actor", slog.String("err", err.Error()))
+		}
+		return fmt.Errorf("actor is CRASHED because it was in SUSPENDING state but has no active worker")
 	}
 
 	ateletConn, err := s.dialer.DialForWorker(state.Actor.GetAteomPodNamespace(), state.Actor.GetAteomPodName())
