@@ -179,8 +179,7 @@ func (s *FinalizePausedStep) Execute(ctx context.Context, input *PauseInput, sta
 			nodeName = worker.GetNodeName()
 			// Only free it if it still belongs to us
 			if worker.GetActorId() == input.ActorID {
-				worker.ActorNamespace = ""
-				worker.ActorTemplate = ""
+				worker.Assignment = nil
 				worker.ActorId = ""
 				worker.ActorAtespace = ""
 

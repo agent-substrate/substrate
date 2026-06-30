@@ -379,7 +379,7 @@ func handlePods(w http.ResponseWriter, r *http.Request) {
 		// Filter to the demo namespace when set — workers may live
 		// in their own pool namespace (worker_namespace) so we
 		// compare against actor_namespace too.
-		if namespace != "" && wk.GetActorNamespace() != "" && wk.GetActorNamespace() != namespace {
+		if ns, wkns := namespace, wk.Assignment.GetActorTemplateNamespace(); ns != "" && wkns != "" && wkns != ns {
 			continue
 		}
 		pods = append(pods, podSummary{

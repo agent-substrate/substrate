@@ -196,7 +196,11 @@ func TestSyncer_DeleteBoundWorker_ClearsActor(t *testing.T) {
 		t.Fatalf("create actor: %v", err)
 	}
 	w, _ := persistence.GetWorker(ctx, ns, pool, pod)
-	w.ActorId, w.ActorNamespace, w.ActorTemplate, w.ActorAtespace = actorID, ns, "tmpl", "team-orphan"
+	w.ActorId, w.ActorAtespace = actorID, "team-orphan"
+	w.Assignment = &ateapipb.Assignment{
+		ActorTemplateNamespace: ns,
+		ActorTemplateName:      "tmpl",
+	}
 	if err := persistence.UpdateWorker(ctx, w, w.Version); err != nil {
 		t.Fatalf("update worker: %v", err)
 	}

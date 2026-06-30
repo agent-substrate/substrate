@@ -1112,12 +1112,14 @@ func TestResumeActor(t *testing.T) {
 		WorkerNamespace: ns,
 		WorkerPool:      "pool1",
 		WorkerPod:       "worker-1",
-		ActorNamespace:  ns,
-		ActorTemplate:   "tmpl1",
-		ActorId:         id,
-		ActorAtespace:   testAtespace,
-		Ip:              "127.0.0.1",
-		NodeName:        "node1",
+		Assignment: &ateapipb.Assignment{
+			ActorTemplateNamespace: ns,
+			ActorTemplateName:      "tmpl1",
+		},
+		ActorId:       id,
+		ActorAtespace: testAtespace,
+		Ip:            "127.0.0.1",
+		NodeName:      "node1",
 	}
 
 	if diff := cmp.Diff(wantWorker, actorWorker, protocmp.Transform(), protocmp.IgnoreFields(&ateapipb.Worker{}, "version"), protocmp.IgnoreFields(&ateapipb.Worker{}, "worker_pod_uid")); diff != "" {

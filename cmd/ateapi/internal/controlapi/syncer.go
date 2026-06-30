@@ -129,7 +129,13 @@ func (s *WorkerPoolSyncer) syncWorkerToStore(ctx context.Context, pod *corev1.Po
 			// created.  If/when this becomes a regular API, validation should
 			// move there.
 			if errs := resources.ValidateWorker(worker, nil); len(errs) > 0 {
-				err := status.Error(codes.InvalidArgument, errs.ToAggregate().Error())
+				var errstr string
+				if len(errs) == 1 {
+					errstr = errs[0].Error()
+				} else {
+					errstr = errs.ToAggregate().Error()
+				}
+				err := status.Error(codes.InvalidArgument, errstr)
 				slog.ErrorContext(ctx, "Invalid worker", slog.Any("err", err))
 			}
 			err = s.persistence.CreateWorker(ctx, worker)

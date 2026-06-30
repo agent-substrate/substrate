@@ -291,17 +291,22 @@ message Worker {
   string worker_pool      = 2;
   string worker_pod       = 3;
 
-  string actor_namespace = 4;
-  string actor_template  = 5;
-  string actor_id        = 6;
-  string ip              = 7;
-  int64  version         = 8;
-  string worker_pod_uid  = 9;
-  string node_name       = 10;
+  Assignment assignment = 4;
+
+  string actor_id        = 5;
+  string ip              = 6;
+  int64  version         = 7;
+  string worker_pod_uid  = 8;
+  string node_name       = 9;
 
   // The atespace of the actor currently running on this worker. Set when an actor
   // is assigned, cleared when freed. It is NOT the worker's own atespace.
-  string actor_atespace = 11;
+  string actor_atespace = 10;
+}
+
+message Assignment {
+  string actor_template_namespace = 1;
+  string actor_template_name  = 2;
 }
 
 message DebugClearRequest {}
