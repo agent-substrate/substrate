@@ -149,7 +149,10 @@ func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, stat
 	// to the free pool instead of leaving it claimed forever — nothing else
 	// reclaims a healthy worker whose actor moved on to a different pool.
 	for _, worker := range workers {
-		if worker.Assignment.GetActorId() != input.ActorID {
+		if worker.Assignment == nil {
+			continue
+		}
+		if worker.Assignment.Actor.Name != input.ActorID {
 			continue
 		}
 		if _, ok := eligible[types.NamespacedName{Namespace: worker.GetWorkerNamespace(), Name: worker.GetWorkerPool()}]; ok {
@@ -182,8 +185,10 @@ func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, stat
 	assignedWorker.Assignment = &ateapipb.Assignment{
 		ActorTemplateNamespace: state.Actor.GetActorTemplateNamespace(),
 		ActorTemplateName:      state.Actor.GetActorTemplateName(),
-		ActorId:                input.ActorID,
-		ActorAtespace:          state.Actor.GetAtespace(),
+		Actor: &ateapipb.ActorRef{
+			Name:     input.ActorID,
+			Atespace: state.Actor.GetAtespace(),
+		},
 	}
 
 	if err := s.store.UpdateWorker(ctx, assignedWorker, assignedWorker.Version); err != nil {

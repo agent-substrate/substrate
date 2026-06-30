@@ -238,8 +238,10 @@ func TestValidateWorker(t *testing.T) {
 			Assignment: &ateapipb.Assignment{
 				ActorTemplateNamespace: "actor-ns",
 				ActorTemplateName:      "actor-template",
-				ActorId:                "actor-id",
-				ActorAtespace:          "actor-atespace",
+				Actor: &ateapipb.ActorRef{
+					Name:     "actor-id",
+					Atespace: "actor-atespace",
+				},
 			},
 			Ip:           "10.0.0.1",
 			WorkerPodUid: "123e4567-e89b-12d3-a456-426614174000",
@@ -254,8 +256,10 @@ func TestValidateWorker(t *testing.T) {
 			WorkerPod:       "pod-1",
 			Assignment: &ateapipb.Assignment{
 				ActorTemplateName: "actor-template",
-				ActorId:           "actor-id",
-				ActorAtespace:     "actor-atespace",
+				Actor: &ateapipb.ActorRef{
+					Name:     "actor-id",
+					Atespace: "actor-atespace",
+				},
 			},
 			Ip:           "10.0.0.1",
 			WorkerPodUid: "123e4567-e89b-12d3-a456-426614174000",
@@ -270,8 +274,10 @@ func TestValidateWorker(t *testing.T) {
 			WorkerPod:       "pod-1",
 			Assignment: &ateapipb.Assignment{
 				ActorTemplateNamespace: "actor-ns",
-				ActorId:                "actor-id",
-				ActorAtespace:          "actor-atespace",
+				Actor: &ateapipb.ActorRef{
+					Name:     "actor-id",
+					Atespace: "actor-atespace",
+				},
 			},
 			Ip:           "10.0.0.1",
 			WorkerPodUid: "123e4567-e89b-12d3-a456-426614174000",
@@ -279,7 +285,7 @@ func TestValidateWorker(t *testing.T) {
 		},
 		wantMsg: "worker.assignment.actor_template_name: Required value",
 	}, {
-		name: "partially assigned worker, missing actor_id",
+		name: "partially assigned worker, missing actor",
 		worker: &ateapipb.Worker{
 			WorkerNamespace: "ns-1",
 			WorkerPool:      "pool-1",
@@ -287,15 +293,14 @@ func TestValidateWorker(t *testing.T) {
 			Assignment: &ateapipb.Assignment{
 				ActorTemplateName:      "actor-template",
 				ActorTemplateNamespace: "actor-ns",
-				ActorAtespace:          "actor-atespace",
 			},
 			Ip:           "10.0.0.1",
 			WorkerPodUid: "123e4567-e89b-12d3-a456-426614174000",
 			NodeName:     "node-1.example.com",
 		},
-		wantMsg: "worker.assignment.actor_id: Required value",
+		wantMsg: "worker.assignment.actor: Required value",
 	}, {
-		name: "partially assigned worker, missing actor_atespace",
+		name: "partially assigned worker, missing actor.name",
 		worker: &ateapipb.Worker{
 			WorkerNamespace: "ns-1",
 			WorkerPool:      "pool-1",
@@ -303,13 +308,33 @@ func TestValidateWorker(t *testing.T) {
 			Assignment: &ateapipb.Assignment{
 				ActorTemplateName:      "actor-template",
 				ActorTemplateNamespace: "actor-ns",
-				ActorId:                "actor-id",
+				Actor: &ateapipb.ActorRef{
+					Atespace: "actor-atespace",
+				},
 			},
 			Ip:           "10.0.0.1",
 			WorkerPodUid: "123e4567-e89b-12d3-a456-426614174000",
 			NodeName:     "node-1.example.com",
 		},
-		wantMsg: "worker.assignment.actor_atespace: Required value",
+		wantMsg: "worker.assignment.actor.name: Required value",
+	}, {
+		name: "partially assigned worker, missing actor.atespace",
+		worker: &ateapipb.Worker{
+			WorkerNamespace: "ns-1",
+			WorkerPool:      "pool-1",
+			WorkerPod:       "pod-1",
+			Assignment: &ateapipb.Assignment{
+				ActorTemplateName:      "actor-template",
+				ActorTemplateNamespace: "actor-ns",
+				Actor: &ateapipb.ActorRef{
+					Name: "actor-id",
+				},
+			},
+			Ip:           "10.0.0.1",
+			WorkerPodUid: "123e4567-e89b-12d3-a456-426614174000",
+			NodeName:     "node-1.example.com",
+		},
+		wantMsg: "worker.assignment.actor.atespace: Required value",
 	}, {
 		name: "missing worker_namespace",
 		worker: &ateapipb.Worker{

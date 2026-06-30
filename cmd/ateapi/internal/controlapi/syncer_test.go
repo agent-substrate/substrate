@@ -199,8 +199,10 @@ func TestSyncer_DeleteBoundWorker_ClearsActor(t *testing.T) {
 	w.Assignment = &ateapipb.Assignment{
 		ActorTemplateNamespace: ns,
 		ActorTemplateName:      "tmpl",
-		ActorId:                actorID,
-		ActorAtespace:          "team-orphan",
+		Actor: &ateapipb.ActorRef{
+			Name:     actorID,
+			Atespace: "team-orphan",
+		},
 	}
 	if err := persistence.UpdateWorker(ctx, w, w.Version); err != nil {
 		t.Fatalf("update worker: %v", err)

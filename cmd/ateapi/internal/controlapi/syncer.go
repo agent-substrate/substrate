@@ -187,7 +187,7 @@ func (s *WorkerPoolSyncer) releaseActorOnDeadWorker(ctx context.Context, namespa
 	if worker.Assignment == nil {
 		return nil
 	}
-	actor, err := s.persistence.GetActor(ctx, worker.Assignment.ActorAtespace, worker.Assignment.ActorId)
+	actor, err := s.persistence.GetActor(ctx, worker.Assignment.Actor.Atespace, worker.Assignment.Actor.Name)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return nil

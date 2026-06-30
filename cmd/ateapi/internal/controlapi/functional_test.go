@@ -1115,8 +1115,10 @@ func TestResumeActor(t *testing.T) {
 		Assignment: &ateapipb.Assignment{
 			ActorTemplateNamespace: ns,
 			ActorTemplateName:      "tmpl1",
-			ActorId:                id,
-			ActorAtespace:          testAtespace,
+			Actor: &ateapipb.ActorRef{
+				Name:     id,
+				Atespace: testAtespace,
+			},
 		},
 		Ip:       "127.0.0.1",
 		NodeName: "node1",
@@ -1749,12 +1751,24 @@ func TestResumeActor_ReleasesStaleWorkerWhenPoolBecomesIneligible(t *testing.T) 
 		}
 		switch w.GetWorkerPool() {
 		case "pool-a":
-			if got := w.Assignment.GetActorId(); got != "" {
+			if wass := w.Assignment; wass != nil {
+				got := "<nil-actor>"
+				if wass.Actor != nil {
+					got = wass.Actor.Name
+				}
 				t.Errorf("expected worker-a (now-ineligible pool-a) to be released, got actor_id=%q", got)
 			}
 		case "pool-b":
-			if got := w.Assignment.GetActorId(); got != id {
-				t.Errorf("expected worker-b to be claimed by %q, got actor_id=%q", id, got)
+			if wass := w.Assignment; wass == nil {
+				t.Errorf("expected worker-b to be claimed by %q, got nil assignment", id)
+			} else {
+				if wact := wass.Actor; wact == nil {
+					t.Errorf("expected worker-b to be claimed by %q, got nil assignment.actor", id)
+				} else {
+					if got := wact.Name; got != id {
+						t.Errorf("expected worker-b to be claimed by %q, got actor_id=%q", id, got)
+					}
+				}
 			}
 		}
 	}

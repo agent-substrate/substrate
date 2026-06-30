@@ -302,8 +302,7 @@ message Worker {
 message Assignment {
   string actor_template_namespace = 1;
   string actor_template_name  = 2;
-  string actor_id        = 3;
-  string actor_atespace = 4;
+  ActorRef actor = 3;
 }
 
 message DebugClearRequest {}

@@ -178,12 +178,14 @@ func (s *FinalizePausedStep) Execute(ctx context.Context, input *PauseInput, sta
 			// TODO(dberkov) - what if worker does not belong to this actor?
 			nodeName = worker.GetNodeName()
 			// Only free it if it still belongs to us
-			if worker.Assignment.GetActorId() == input.ActorID {
-				worker.Assignment = nil
 
-				err = s.store.UpdateWorker(ctx, worker, worker.Version)
-				if err != nil {
-					return err
+			if wass := worker.Assignment; wass != nil {
+				if wass.Actor.Name == input.ActorID {
+					worker.Assignment = nil
+					err = s.store.UpdateWorker(ctx, worker, worker.Version)
+					if err != nil {
+						return err
+					}
 				}
 			}
 		}
