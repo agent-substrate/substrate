@@ -32,8 +32,8 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
-	"github.com/agent-substrate/substrate/internal/boomer/dynconfig"
-	bmetrics "github.com/agent-substrate/substrate/internal/boomer/metrics"
+	"github.com/agent-substrate/substrate/internal/benchmarking/boomer/dynconfig"
+	bmetrics "github.com/agent-substrate/substrate/internal/benchmarking/boomer/metrics"
 	gluttonpb "github.com/agent-substrate/substrate/internal/proto/glutton"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/uuid"

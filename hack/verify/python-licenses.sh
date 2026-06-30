@@ -28,10 +28,20 @@ ROOT="$(git rev-parse --show-toplevel)"
 cd "${ROOT}"
 
 # Python projects with a requirements.txt to check. Each entry is a directory
-# that contains requirements.txt; its venv lives at <dir>/venv.
-PROJECTS=(
-  "benchmarking/locust"
-  "benchmarking/automation"
+# that contains requirements.txt; its venv lives at <dir>/venv. Discovered
+# dynamically from tracked/untracked (but not ignored) requirements.txt files,
+# excluding vendored trees and the LICENSES/ directory.
+mapfile -t PROJECTS < <(
+  git ls-files \
+    -cmo \
+    --exclude-standard \
+    -- \
+    ':(glob)**/requirements.txt' \
+    ':!:vendor/*' \
+    ':!:**/vendor/*' \
+    ':!:LICENSES/*' \
+  | xargs -r -n1 dirname \
+  | sort -u
 )
 
 # Fail if any installed package's license string contains one of these
