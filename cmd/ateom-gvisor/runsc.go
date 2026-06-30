@@ -28,10 +28,8 @@ import (
 )
 
 type runsc struct {
-	path                   string
-	actorTemplateNamespace string
-	actorTemplateName      string
-	actorID                string
+	path    string
+	actorID string
 }
 
 func (r *runsc) cmdCreate(ctx context.Context, out io.Writer, containerName string, additionalArgs []string) error {
@@ -48,10 +46,10 @@ func (r *runsc) cmdCreate(ctx context.Context, out io.Writer, containerName stri
 		// "-debug-to-user-log",
 		// "-log-packets",
 		// "-strace",
-		"-root", ateompath.RunSCStateDir(r.actorTemplateNamespace, r.actorTemplateName, r.actorID),
+		"-root", ateompath.RunSCStateDir(r.actorID),
 		"create",
-		"-bundle", ateompath.OCIBundlePath(r.actorTemplateNamespace, r.actorTemplateName, r.actorID, containerName),
-		"-pid-file", ateompath.PIDFilePath(r.actorTemplateNamespace, r.actorTemplateName, r.actorID, containerName),
+		"-bundle", ateompath.OCIBundlePath(r.actorID, containerName),
+		"-pid-file", ateompath.PIDFilePath(r.actorID, containerName),
 	}
 
 	args = append(args, additionalArgs...)
@@ -89,7 +87,7 @@ func (r *runsc) cmdStart(ctx context.Context, out io.Writer, containerName strin
 		// "-log-packets",
 		// "-strace",
 		"-allow-connected-on-save",
-		"-root", ateompath.RunSCStateDir(r.actorTemplateNamespace, r.actorTemplateName, r.actorID),
+		"-root", ateompath.RunSCStateDir(r.actorID),
 		"start",
 		containerName, // Name of the container
 	)
@@ -120,7 +118,7 @@ func (r *runsc) cmdCheckpoint(ctx context.Context, containerName, checkpointPath
 		// "-debug-to-user-log",
 		// "-log-packets",
 		// "-strace",
-		"-root", ateompath.RunSCStateDir(r.actorTemplateNamespace, r.actorTemplateName, r.actorID),
+		"-root", ateompath.RunSCStateDir(r.actorID),
 		"checkpoint",
 		"-image-path", checkpointPath,
 		containerName, // Name of the container
@@ -144,11 +142,11 @@ func (r *runsc) cmdFsCheckpoint(ctx context.Context, containerName, checkpointPa
 		"-log-format", "json",
 		"--alsologtostderr",
 		// "-debug",
-		// "-debug-log", ateompath.RunscDebugLogDir(r.actorTemplateNamespace, r.actorTemplateName, r.actorID, containerName)+"/",
+		// "-debug-log", ateompath.RunscDebugLogDir(r.actorID, containerName)+"/",
 		// "-debug-to-user-log",
 		// "-log-packets",
 		// "-strace",
-		"-root", ateompath.RunSCStateDir(r.actorTemplateNamespace, r.actorTemplateName, r.actorID),
+		"-root", ateompath.RunSCStateDir(r.actorID),
 		"fscheckpoint",
 		"-image-path", checkpointPath,
 	}
@@ -191,11 +189,11 @@ func (r *runsc) cmdRestore(ctx context.Context, out io.Writer, containerName, ch
 		// "-debug-to-user-log",
 		// "-log-packets",
 		// "-strace",
-		"-root", ateompath.RunSCStateDir(r.actorTemplateNamespace, r.actorTemplateName, r.actorID),
+		"-root", ateompath.RunSCStateDir(r.actorID),
 		"restore",
-		"-bundle", ateompath.OCIBundlePath(r.actorTemplateNamespace, r.actorTemplateName, r.actorID, containerName),
+		"-bundle", ateompath.OCIBundlePath(r.actorID, containerName),
 		"-image-path", checkpointPath,
-		"-pid-file", ateompath.PIDFilePath(r.actorTemplateNamespace, r.actorTemplateName, r.actorID, containerName),
+		"-pid-file", ateompath.PIDFilePath(r.actorID, containerName),
 		"-background",
 		"-direct",
 		"-detach",
@@ -222,7 +220,7 @@ func (r *runsc) cmdDelete(ctx context.Context, containerName string) error {
 		"-log-format", "json",
 		"--alsologtostderr",
 		// "-debug",
-		"-root", ateompath.RunSCStateDir(r.actorTemplateNamespace, r.actorTemplateName, r.actorID),
+		"-root", ateompath.RunSCStateDir(r.actorID),
 		"delete",
 		"-force",
 		containerName,
@@ -247,7 +245,7 @@ func (r *runsc) cmdState(ctx context.Context, containerName string) error {
 		r.path,
 		"-log-format", "json",
 		"--alsologtostderr",
-		"-root", ateompath.RunSCStateDir(r.actorTemplateNamespace, r.actorTemplateName, r.actorID),
+		"-root", ateompath.RunSCStateDir(r.actorID),
 		"state",
 		containerName,
 	)

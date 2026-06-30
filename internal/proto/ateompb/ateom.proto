@@ -48,9 +48,7 @@ service Ateom {
 }
 
 message RunWorkloadRequest {
-  string actor_template_namespace = 1;
-  string actor_template_name      = 2;
-  string actor_id                 = 3;
+  string actor_id = 3;
 
   string runsc_path = 4;
 
@@ -61,6 +59,8 @@ message RunWorkloadRequest {
   // to the local on-disk path atelet fetched it to (content-addressed, like
   // runsc_path). Empty for the gVisor runtime, which uses runsc_path.
   map<string, string> runtime_asset_paths = 7;
+  reserved 1, 2;
+  reserved "actor_template_namespace", "actor_template_name";
 }
 
 // WorkloadSpec parallels Pod, but with far fewer configurable fields.
@@ -104,9 +104,7 @@ enum SnapshotScope {
 }
 
 message CheckpointWorkloadRequest {
-  string actor_template_namespace = 1;
-  string actor_template_name      = 2;
-  string actor_id                 = 3;
+  string actor_id = 3;
 
   string runsc_path = 4;
 
@@ -128,6 +126,8 @@ message CheckpointWorkloadRequest {
 
   // What content to include in the checkpoint.
   SnapshotScope scope = 8;
+  reserved 1, 2;
+  reserved "actor_template_namespace", "actor_template_name";
 }
 
 message CheckpointWorkloadResponse {
@@ -138,9 +138,7 @@ message CheckpointWorkloadResponse {
 }
 
 message RestoreWorkloadRequest {
-  string actor_template_namespace = 1;
-  string actor_template_name      = 2;
-  string actor_id                 = 3;
+  string actor_id = 3;
 
   string runsc_path = 4;
 
@@ -155,6 +153,8 @@ message RestoreWorkloadRequest {
 
   // What content to restore from the snapshot.
   SnapshotScope scope = 8;
+  reserved 1, 2;
+  reserved "actor_template_namespace", "actor_template_name";
 }
 
 message RestoreWorkloadResponse {

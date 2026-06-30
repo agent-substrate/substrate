@@ -8,8 +8,6 @@ This guide explains how Agent Substrate achieves observability across these susp
 
 To make underlying infrastructure transitions transparent, Agent Substrate establishes a standardized metadata model to identify actors across worker pods:
 * `ate.dev/actor_id`: The unique identifier of the actor (e.g., `my-counter-1` or `test`).
-* `ate.dev/actor_template_name`: The name of the actor's ActorTemplate (e.g., `counter`).
-* `ate.dev/actor_template_namespace`: The Kubernetes namespace of the actor's ActorTemplate (e.g., `ate-demo-counter`).
 * `ate.dev/container_name`: The name of the container within the actor that produced the log line (e.g., `counter`), so a multi-container actor's logs can be demultiplexed by container.
 
 Currently, Agent Substrate automatically wraps container output and injects these metadata labels into **container logs**. For metrics and distributed tracing, Agent Substrate provides foundational system telemetry and on-demand request tracing, with roadmap plans to fully integrate actor-level correlation.
@@ -75,14 +73,7 @@ To track the unified, continuous lifecycle of a single actor regardless of how m
 labels.actor_id="test"
 ```
 
-#### 2. Template-Centric View
-To monitor or debug all actor instances created from a specific template (e.g., analyzing the collective behavior or error rates of all counter actors):
-
-```text
-labels.actor_template="counter"
-```
-
-#### 3. Pod-Centric View
+#### 2. Pod-Centric View
 To inspect the physical worker pod's aggregate stream and see all co-located actors multiplexed together (useful for investigating pod-level resource exhaustion or noisy neighbor issues):
 
 ```text

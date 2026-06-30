@@ -181,7 +181,7 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	s.lock.Lock()
 	defer s.lock.Unlock()
 
-	s.actorLogger.EmitLifecycleLog("Actor starting", req.GetActorId(), req.GetActorTemplateName(), req.GetActorTemplateNamespace())
+	s.actorLogger.EmitLifecycleLog("Actor starting", req.GetActorId())
 
 	// Contract with atelet:
 	//
@@ -198,10 +198,8 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	}()
 
 	rcmd := &runsc{
-		path:                   req.GetRunscPath(),
-		actorTemplateNamespace: req.GetActorTemplateNamespace(),
-		actorTemplateName:      req.GetActorTemplateName(),
-		actorID:                req.GetActorId(),
+		path:    req.GetRunscPath(),
+		actorID: req.GetActorId(),
 	}
 
 	// Create and start pause container
@@ -215,7 +213,7 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	// Create and start each application container, each with its own log pipe so
 	// every line is tagged with the originating container (ate.dev/container_name).
 	for _, ac := range req.GetSpec().GetContainers() {
-		pw, err := s.actorLogger.StartJSONLogPipe(req.GetActorId(), req.GetActorTemplateName(), req.GetActorTemplateNamespace(), ac.GetName())
+		pw, err := s.actorLogger.StartJSONLogPipe(req.GetActorId(), ac.GetName())
 		if err != nil {
 			return nil, fmt.Errorf("while starting json log pipe for %q: %w", ac.GetName(), err)
 		}
@@ -233,7 +231,7 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 		return nil, fmt.Errorf("while waiting for container readyz: %w", err)
 	}
 
-	s.actorLogger.EmitLifecycleLog("Actor started", req.GetActorId(), req.GetActorTemplateName(), req.GetActorTemplateNamespace())
+	s.actorLogger.EmitLifecycleLog("Actor started", req.GetActorId())
 
 	return &ateompb.RunWorkloadResponse{}, nil
 }
@@ -242,7 +240,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	s.lock.Lock()
 	defer s.lock.Unlock()
 
-	s.actorLogger.EmitLifecycleLog("Actor checkpointing", req.GetActorId(), req.GetActorTemplateName(), req.GetActorTemplateNamespace())
+	s.actorLogger.EmitLifecycleLog("Actor checkpointing", req.GetActorId())
 
 	// Contract with atelet:
 	//
@@ -250,13 +248,11 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	//   * After we exit, atelet will tear down OCI bundles and reset the actor directory.
 
 	rcmd := &runsc{
-		path:                   req.GetRunscPath(),
-		actorTemplateNamespace: req.GetActorTemplateNamespace(),
-		actorTemplateName:      req.GetActorTemplateName(),
-		actorID:                req.GetActorId(),
+		path:    req.GetRunscPath(),
+		actorID: req.GetActorId(),
 	}
 
-	checkpointPath := ateompath.CheckpointStateDir(req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId())
+	checkpointPath := ateompath.CheckpointStateDir(req.GetActorId())
 	if err := os.MkdirAll(checkpointPath, 0o700); err != nil {
 		return nil, fmt.Errorf("while creating checkpoint directory: %w", err)
 	}
@@ -291,8 +287,6 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	if err := rcmd.cleanupContainersAfterCheckpoint(ctx, req.GetSpec().GetContainers()); err != nil {
 		slog.WarnContext(ctx, "Failed to clean up runsc containers after checkpoint",
 			"actorID", req.GetActorId(),
-			"actorTemplateName", req.GetActorTemplateName(),
-			"actorTemplateNamespace", req.GetActorTemplateNamespace(),
 			"err", err)
 	}
 
@@ -305,7 +299,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 		return nil, fmt.Errorf("while listing checkpoint files: %w", err)
 	}
 
-	s.actorLogger.EmitLifecycleLog("Actor checkpointed", req.GetActorId(), req.GetActorTemplateName(), req.GetActorTemplateNamespace())
+	s.actorLogger.EmitLifecycleLog("Actor checkpointed", req.GetActorId())
 
 	return &ateompb.CheckpointWorkloadResponse{SnapshotFiles: snapshotFiles}, nil
 }
@@ -357,7 +351,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	s.lock.Lock()
 	defer s.lock.Unlock()
 
-	s.actorLogger.EmitLifecycleLog("Actor restoring", req.GetActorId(), req.GetActorTemplateName(), req.GetActorTemplateNamespace())
+	s.actorLogger.EmitLifecycleLog("Actor restoring", req.GetActorId())
 
 	// Contract with atelet:
 	//
@@ -375,13 +369,11 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	}()
 
 	rcmd := &runsc{
-		path:                   req.GetRunscPath(),
-		actorTemplateNamespace: req.GetActorTemplateNamespace(),
-		actorTemplateName:      req.GetActorTemplateName(),
-		actorID:                req.GetActorId(),
+		path:    req.GetRunscPath(),
+		actorID: req.GetActorId(),
 	}
 
-	checkpointDir := ateompath.RestoreStateDir(req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId())
+	checkpointDir := ateompath.RestoreStateDir(req.GetActorId())
 
 	switch req.GetScope() {
 	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA:
@@ -407,7 +399,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	// Create and restore each application container, each with its own log pipe so
 	// every line is tagged with the originating container (ate.dev/container_name).
 	for _, ac := range req.GetSpec().GetContainers() {
-		pw, err := s.actorLogger.StartJSONLogPipe(req.GetActorId(), req.GetActorTemplateName(), req.GetActorTemplateNamespace(), ac.GetName())
+		pw, err := s.actorLogger.StartJSONLogPipe(req.GetActorId(), ac.GetName())
 		if err != nil {
 			return nil, fmt.Errorf("while starting json log pipe for %q: %w", ac.GetName(), err)
 		}
@@ -437,7 +429,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 		return nil, fmt.Errorf("while waiting for container readyz: %w", err)
 	}
 
-	s.actorLogger.EmitLifecycleLog("Actor restored", req.GetActorId(), req.GetActorTemplateName(), req.GetActorTemplateNamespace())
+	s.actorLogger.EmitLifecycleLog("Actor restored", req.GetActorId())
 
 	return &ateompb.RestoreWorkloadResponse{}, nil
 }

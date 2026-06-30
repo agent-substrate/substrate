@@ -30,31 +30,15 @@ import (
 // tree, or collide OCI bundles. They are exported so the API server and
 // controller can apply the same rules at their own boundaries.
 
-// ValidateActorRef ensures every component of the per-actor directory tree is
-// a valid DNS-1123 name. namespace+template+actorID are concatenated by
-// ateompath.ActorPath into a host path on which atelet runs os.RemoveAll and
-// os.MkdirAll, so all three must be validated. Checking only one would still
-// leave a traversal window via the others. Template names are DNS-1123
-// subdomains (dots allowed); namespaces and actor IDs are labels.
+// ValidateActorRef ensures that the actor ID is a valid DNS-1123 name. The
+// actor ID forms part of a host path on which atelet runs os.RemoveAll and
+// os.MkdirAll.
 //
 // The actor ID rule here is DNS-1123 label, which matches ValidateActorID;
 // unifying the two implementations is tracked separately.
-func ValidateActorRef(namespace, template, actorID string) error {
-	if errs := validation.IsDNS1123Label(namespace); len(errs) > 0 {
-		return fmt.Errorf("invalid namespace %q: %s", namespace, strings.Join(errs, "; "))
-	}
-	if errs := validation.IsDNS1123Subdomain(template); len(errs) > 0 {
-		return fmt.Errorf("invalid template %q: %s", template, strings.Join(errs, "; "))
-	}
+func ValidateActorRef(actorID string) error {
 	if errs := validation.IsDNS1123Label(actorID); len(errs) > 0 {
 		return fmt.Errorf("invalid actor ID %q: %s", actorID, strings.Join(errs, "; "))
-	}
-	// The three names are joined into a single path component
-	// (<namespace>:<template>:<actorID>, see ateompath.ActorPath), which must
-	// fit the 255-byte filename limit of common filesystems. Individually
-	// valid DNS names can exceed it: 63 + 253 + 63 plus separators is 381.
-	if n := len(namespace) + 1 + len(template) + 1 + len(actorID); n > 255 {
-		return fmt.Errorf("actor ref %s:%s:%s is %d bytes; the combined path component must be at most 255", namespace, template, actorID, n)
 	}
 	return nil
 }
