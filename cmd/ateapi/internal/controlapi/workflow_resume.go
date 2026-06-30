@@ -160,8 +160,8 @@ func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, stat
 		// mutating so that the cache is not corrupted if UpdateWorker fails.
 		release := proto.Clone(worker).(*ateapipb.Worker)
 		release.ActorId = ""
-		release.ActorNamespace = ""
-		release.ActorTemplate = ""
+		release.ActorAtespace = ""
+		release.Assignment = nil
 		if err := s.store.UpdateWorker(ctx, release, release.Version); err != nil {
 			return fmt.Errorf("while releasing stale worker assignment: %w", err)
 		}
@@ -182,9 +182,11 @@ func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, stat
 	// mutating so that the cache is not corrupted if UpdateWorker fails.
 	assignedWorker = proto.Clone(assignedWorker).(*ateapipb.Worker)
 	assignedWorker.ActorId = input.ActorID
-	assignedWorker.ActorNamespace = state.Actor.GetActorTemplateNamespace()
-	assignedWorker.ActorTemplate = state.Actor.GetActorTemplateName()
 	assignedWorker.ActorAtespace = state.Actor.GetAtespace()
+	assignedWorker.Assignment = &ateapipb.Assignment{
+		ActorTemplateNamespace: state.Actor.GetActorTemplateNamespace(),
+		ActorTemplateName:      state.Actor.GetActorTemplateName(),
+	}
 
 	if err := s.store.UpdateWorker(ctx, assignedWorker, assignedWorker.Version); err != nil {
 		return err

@@ -262,9 +262,11 @@ func TestUpdateWorker_Success(t *testing.T) {
 		t.Fatalf("WatchWorkers failed: %v", err)
 	}
 
-	worker.ActorNamespace = "default"
-	worker.ActorTemplate = "test-template"
 	worker.ActorId = "session-1"
+	worker.Assignment = &ateapipb.Assignment{
+		ActorTemplateNamespace: "default",
+		ActorTemplateName:      "test-template",
+	}
 
 	if err := s.UpdateWorker(ctx, worker, 1); err != nil {
 		t.Fatalf("UpdateWorker failed: %v", err)

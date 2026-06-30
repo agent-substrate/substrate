@@ -178,8 +178,7 @@ func (s *FinalizeSuspendedStep) Execute(ctx context.Context, input *SuspendInput
 		} else {
 			// Only free it if it still belongs to us
 			if worker.GetActorId() == input.ActorID {
-				worker.ActorNamespace = ""
-				worker.ActorTemplate = ""
+				worker.Assignment = nil
 				worker.ActorId = ""
 				worker.ActorAtespace = ""
 
