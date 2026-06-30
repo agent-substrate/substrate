@@ -20,7 +20,7 @@ import (
 	"net/url"
 	"strings"
 
-	"k8s.io/apimachinery/pkg/util/validation"
+	"k8s.io/apimachinery/pkg/api/validate/content"
 )
 
 // The validators in this file guard inputs that atelet turns into host
@@ -40,13 +40,13 @@ import (
 // The actor ID rule here is DNS-1123 label, which matches ValidateActorID;
 // unifying the two implementations is tracked separately.
 func ValidateActorRef(namespace, template, actorID string) error {
-	if errs := validation.IsDNS1123Label(namespace); len(errs) > 0 {
+	if errs := content.IsDNS1123Label(namespace); len(errs) > 0 {
 		return fmt.Errorf("invalid namespace %q: %s", namespace, strings.Join(errs, "; "))
 	}
-	if errs := validation.IsDNS1123Subdomain(template); len(errs) > 0 {
+	if errs := content.IsDNS1123Subdomain(template); len(errs) > 0 {
 		return fmt.Errorf("invalid template %q: %s", template, strings.Join(errs, "; "))
 	}
-	if errs := validation.IsDNS1123Label(actorID); len(errs) > 0 {
+	if errs := content.IsDNS1123Label(actorID); len(errs) > 0 {
 		return fmt.Errorf("invalid actor ID %q: %s", actorID, strings.Join(errs, "; "))
 	}
 	// The three names are joined into a single path component
@@ -65,7 +65,7 @@ func ValidateActorRef(namespace, template, actorID string) error {
 // which are valid DNS-1123 labels, so a label check accepts every legitimate
 // value while rejecting separators and "..".
 func ValidateAteomUID(targetAteomUID string) error {
-	if errs := validation.IsDNS1123Label(targetAteomUID); len(errs) > 0 {
+	if errs := content.IsDNS1123Label(targetAteomUID); len(errs) > 0 {
 		return fmt.Errorf("invalid target ateom UID %q: %s", targetAteomUID, strings.Join(errs, "; "))
 	}
 	return nil
@@ -80,7 +80,7 @@ func ValidateAteomUID(targetAteomUID string) error {
 func ValidateContainerNames(names []string) error {
 	seen := make(map[string]struct{})
 	for _, name := range names {
-		if errs := validation.IsDNS1123Label(name); len(errs) > 0 {
+		if errs := content.IsDNS1123Label(name); len(errs) > 0 {
 			return fmt.Errorf("invalid container name %q: %s", name, strings.Join(errs, "; "))
 		}
 		if name == "pause" {
