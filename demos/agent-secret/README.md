@@ -34,13 +34,16 @@ kubectl patch workerpool agent-secret -n ate-demo-secret-agent-v2 \
 ## 📽️ Interaction Guide
 
 ### 1. Basic Interaction
-Create a single actor and watch it automatically yield compute after use:
+Actors live in an **atespace** (the Substrate namespace an actor lives in), which must exist first. Create one, then create a single actor and watch it automatically yield compute after use:
 ```bash
+# Create the atespace (required before creating actors).
+kubectl ate create atespace demo
+
 # Create the actor
-kubectl ate create actor my-agent --template ate-demo-secret-agent-v2/agent-secret
+kubectl ate create actor my-agent -a demo --template ate-demo-secret-agent-v2/agent-secret
 
 # Send a request via the Substrate Router (Note the official DNS suffix)
-curl -H "Host: my-agent.actors.resources.substrate.ate.dev" http://localhost:8000
+curl -H "Host: my-agent.demo.actors.resources.substrate.ate.dev" http://localhost:8000
 ```
 
 **What to observe:**
@@ -50,7 +53,7 @@ curl -H "Host: my-agent.actors.resources.substrate.ate.dev" http://localhost:800
 ### 2. Verify Identity Persistence
 Send another request to the same actor:
 ```bash
-curl -H "Host: my-agent.actors.resources.substrate.ate.dev" http://localhost:8000
+curl -H "Host: my-agent.demo.actors.resources.substrate.ate.dev" http://localhost:8000
 ```
 The "Identity" secret returned will be identical to the first response, even if the actor was resumed on a different physical pod. This proves the volatile RAM survived the hibernation cycle.
 
@@ -59,7 +62,7 @@ To show the scale at which Substrate can manage sessions, run this loop to popul
 
 ```bash
 for i in {001..023}; do
-  kubectl ate create actor session-$i --template ate-demo-secret-agent-v2/agent-secret
+  kubectl ate create actor session-$i -a demo --template ate-demo-secret-agent-v2/agent-secret
 done
 ```
 
@@ -71,7 +74,7 @@ for wave in 0 1 2; do
   echo "Triggering Wave $((wave + 1))..."
   for i in {1..8}; do
     num=$(printf "%03d" $((wave * 8 + i)))
-    curl -s -H "Host: session-$num.actors.resources.substrate.ate.dev" http://localhost:8000 &
+    curl -s -H "Host: session-$num.demo.actors.resources.substrate.ate.dev" http://localhost:8000 &
   done
   sleep 8 # 7s linger + 1s buffer
 done

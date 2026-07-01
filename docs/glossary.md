@@ -114,5 +114,5 @@ because they change too frequently for etcd.
 ## Networking
 
 - **Uniform DNS Mesh**: every Actor is reachable at a uniform address,
-  `<actor-id>.actors.resources.substrate.ate.dev`, resolved by atenet. Traffic to
+  `<actor-id>.<atespace>.actors.resources.substrate.ate.dev`, resolved by atenet. Traffic to
   that name is routed (and the Actor resumed if needed) automatically.

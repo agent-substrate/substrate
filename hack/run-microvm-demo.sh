@@ -137,15 +137,16 @@ cat <<EOF
        kubectl${KCTX_FLAG} wait --for=condition=Ready \\
          actortemplate/counter-microvm -n ate-demo-counter-microvm --timeout=600s
 
-  2. Create + resume an actor (kubectl-ate; install with: go install ./cmd/kubectl-ate):
-       kubectl ate${KCTX_FLAG} create actor my-counter-1 \\
+  2. Create an atespace and an actor (kubectl-ate; install with: go install ./cmd/kubectl-ate):
+       kubectl ate${KCTX_FLAG} create atespace demo
+       kubectl ate${KCTX_FLAG} create actor my-counter-1 -a demo \\
          --template ate-demo-counter-microvm/counter-microvm
 
   3. Port-forward the atenet-router and curl the in-RAM counter:
        kubectl${KCTX_FLAG} port-forward -n ate-system svc/atenet-router 8000:80 &
-       curl -X POST -H "Host: my-counter-1.actors.resources.substrate.ate.dev" \\
+       curl -X POST -H "Host: my-counter-1.demo.actors.resources.substrate.ate.dev" \\
          http://localhost:8000
 
-     Increment, suspend (kubectl ate suspend actor my-counter-1), resume on another
+     Increment, suspend (kubectl ate suspend actor my-counter-1 -a demo), resume on another
      worker, and confirm the count continues — the guest memory snapshot round-tripped.
 EOF
