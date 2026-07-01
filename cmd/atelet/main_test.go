@@ -89,20 +89,19 @@ func TestValidateActorRequest(t *testing.T) {
 	okSpec := &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{Name: "worker"}}}
 
 	tests := []struct {
-		name              string
-		ns, tmpl, id, uid string
-		spec              *ateletpb.WorkloadSpec
-		wantErr           bool
+		name    string
+		id, uid string
+		spec    *ateletpb.WorkloadSpec
+		wantErr bool
 	}{
-		{"all valid", okNS, okTmpl, okID, okUID, okSpec, false},
-		{"bad namespace", "../x", okTmpl, okID, okUID, okSpec, true},
-		{"bad actor id", okNS, okTmpl, "../x", okUID, okSpec, true},
-		{"bad uid", okNS, okTmpl, okID, "../x", okSpec, true},
-		{"bad container", okNS, okTmpl, okID, okUID, &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{Name: "../x"}}}, true},
+		{"all valid", okID, okUID, okSpec, false},
+		{"bad actor id", "../x", okUID, okSpec, true},
+		{"bad uid", okID, "../x", okSpec, true},
+		{"bad container", okID, okUID, &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{Name: "../x"}}}, true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if err := validateActorRequest(tc.ns, tc.tmpl, tc.id, tc.uid, tc.spec); (err != nil) != tc.wantErr {
+			if err := validateActorRequest(tc.id, tc.uid, tc.spec); (err != nil) != tc.wantErr {
 				t.Errorf("validateActorRequest err = %v, wantErr %v", err, tc.wantErr)
 			}
 		})

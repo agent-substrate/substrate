@@ -20,44 +20,31 @@ import (
 )
 
 func TestValidateActorRef(t *testing.T) {
-	const okNS, okTmpl, okID = "ate-demo", "counter", "counter-1"
+	const okID = "counter-1"
 
 	tests := []struct {
-		name         string
-		ns, tmpl, id string
-		wantErr      bool
+		name    string
+		id      string
+		wantErr bool
 	}{
-		{"all valid", okNS, okTmpl, okID, false},
-		{"uuid id valid", okNS, okTmpl, "422938ba-8860-4983-a25d-d6bcb0a69d4e", false},
+		{"all valid", okID, false},
+		{"uuid id valid", "422938ba-8860-4983-a25d-d6bcb0a69d4e", false},
 
 		// Label vs subdomain distinction: template names are DNS-1123
 		// subdomains (dots allowed); namespaces and actor IDs are labels.
-		{"dotted template valid (subdomain)", okNS, "probe.v1", okID, false},
-		{"dotted namespace invalid (label)", "ate.demo", okTmpl, okID, true},
-		{"dotted id invalid (label)", okNS, okTmpl, "probe.alpha", true},
+		{"dotted id invalid (label)", "probe.alpha", true},
 
-		{"id traversal", okNS, okTmpl, "..", true},
-		{"id separator", okNS, okTmpl, "a/b", true},
-		{"id empty", okNS, okTmpl, "", true},
-		{"id uppercase", okNS, okTmpl, "Counter", true},
-		{"id too long", okNS, okTmpl, strings.Repeat("a", 64), true},
-
-		{"namespace separator", "a/b", okTmpl, okID, true},
-		{"namespace traversal", "..", okTmpl, okID, true},
-		{"namespace empty", "", okTmpl, okID, true},
-		{"template separator", okNS, "a/b", okID, true},
-		{"template traversal", okNS, "..", okID, true},
-
-		// The names join into one <ns>:<tmpl>:<id> path component, capped at
-		// 255 bytes even when each name is individually valid.
-		{"combined fits filename limit", strings.Repeat("a", 63), strings.Repeat("b", 120), strings.Repeat("c", 63), false},
-		{"combined exceeds filename limit", strings.Repeat("a", 63), strings.Repeat("b", 253), strings.Repeat("c", 63), true},
+		{"id traversal", "..", true},
+		{"id separator", "a/b", true},
+		{"id empty", "", true},
+		{"id uppercase", "Counter", true},
+		{"id too long", strings.Repeat("a", 64), true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := ValidateActorRef(tt.ns, tt.tmpl, tt.id)
+			err := ValidateActorRef(tt.id)
 			if (err != nil) != tt.wantErr {
-				t.Errorf("ValidateActorRef(%q, %q, %q) err = %v, wantErr %v", tt.ns, tt.tmpl, tt.id, err, tt.wantErr)
+				t.Errorf("ValidateActorRef(%q) err = %v, wantErr %v", tt.id, err, tt.wantErr)
 			}
 		})
 	}
