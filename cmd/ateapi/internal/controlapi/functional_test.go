@@ -561,6 +561,7 @@ func createWorkerPod(t *testing.T, tc *testContext, ns string, name string, node
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: ns,
+			UID:       "08675309-4a65-6e6e-7973-6e756d626572",
 			Labels: map[string]string{
 				"ate.dev/worker-pool": poolName,
 			},
@@ -572,6 +573,23 @@ func createWorkerPod(t *testing.T, tc *testContext, ns string, name string, node
 			},
 		},
 	}
+	/*
+			   pod := &corev1.Pod{
+		          ObjectMeta: metav1.ObjectMeta{
+		              Name:      podName,
+		              Namespace: ns,
+		              UID:       "08675309-4a65-6e6e-7973-6e756d626572",
+		              Labels: map[string]string{
+		                  workerPodLabel: poolName,
+		              },
+		          },
+		          Spec: corev1.PodSpec{
+		              NodeName:   "node1",
+		              Containers: []corev1.Container{{Name: "main", Image: "nginx"}},
+		          },
+		      }
+
+	*/
 	createdPod, err := tc.k8sClient.CoreV1().Pods(ns).Create(context.Background(), pod, metav1.CreateOptions{})
 	if err != nil {
 		t.Fatalf("failed to create worker pod: %v", err)
@@ -1000,7 +1018,7 @@ func TestListWorkers(t *testing.T) {
 	tc := setupTest(t, ns)
 	defer tc.cleanup()
 
-	createWorkerPod(t, tc, ns, "worker-1", "", "pool1")
+	createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
 
 	listResp, err := tc.client.ListWorkers(context.Background(), &ateapipb.ListWorkersRequest{})
 	if err != nil {
@@ -1019,6 +1037,7 @@ func TestListWorkers(t *testing.T) {
 			WorkerNamespace: ns,
 			WorkerPool:      "pool1",
 			WorkerPod:       "worker-1",
+			NodeName:        "node1",
 			Ip:              "127.0.0.1",
 			Version:         1,
 		},

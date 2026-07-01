@@ -212,3 +212,213 @@ func TestValidateSnapshotURIPrefix(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateWorker(t *testing.T) {
+	tests := []struct {
+		name    string
+		worker  *ateapipb.Worker
+		wantMsg string // empty means valid
+	}{{
+		name: "valid unassigned worker",
+		worker: &ateapipb.Worker{
+			WorkerNamespace: "ns-1",
+			WorkerPool:      "pool-1",
+			WorkerPod:       "pod-1",
+			Ip:              "10.0.0.1",
+			WorkerPodUid:    "123e4567-e89b-12d3-a456-426614174000",
+			NodeName:        "node-1.example.com",
+		},
+		wantMsg: "",
+	}, {
+		name: "valid assigned worker",
+		worker: &ateapipb.Worker{
+			WorkerNamespace: "ns-1",
+			WorkerPool:      "pool-1",
+			WorkerPod:       "pod-1",
+			ActorNamespace:  "actor-ns",
+			ActorTemplate:   "actor-template",
+			ActorId:         "actor-id",
+			ActorAtespace:   "actor-atespace",
+			Ip:              "10.0.0.1",
+			WorkerPodUid:    "123e4567-e89b-12d3-a456-426614174000",
+			NodeName:        "node-1.example.com",
+		},
+		wantMsg: "",
+	}, {
+		name: "missing worker_namespace",
+		worker: &ateapipb.Worker{
+			WorkerPool:   "pool-1",
+			WorkerPod:    "pod-1",
+			Ip:           "10.0.0.1",
+			WorkerPodUid: "123e4567-e89b-12d3-a456-426614174000",
+			NodeName:     "node-1",
+		},
+		wantMsg: "worker_namespace: Required value",
+	}, {
+		name: "invalid worker_namespace",
+		worker: &ateapipb.Worker{
+			WorkerNamespace: "NS-1",
+			WorkerPool:      "pool-1",
+			WorkerPod:       "pod-1",
+			Ip:              "10.0.0.1",
+			WorkerPodUid:    "123e4567-e89b-12d3-a456-426614174000",
+			NodeName:        "node-1",
+		},
+		wantMsg: "worker_namespace: Invalid value",
+	}, {
+		name: "missing ip",
+		worker: &ateapipb.Worker{
+			WorkerNamespace: "ns-1",
+			WorkerPool:      "pool-1",
+			WorkerPod:       "pod-1",
+			WorkerPodUid:    "123e4567-e89b-12d3-a456-426614174000",
+			NodeName:        "node-1",
+		},
+		wantMsg: "ip: Required value",
+	}, {
+		name: "invalid ip",
+		worker: &ateapipb.Worker{
+			WorkerNamespace: "ns-1",
+			WorkerPool:      "pool-1",
+			WorkerPod:       "pod-1",
+			Ip:              "not-an-ip",
+			WorkerPodUid:    "123e4567-e89b-12d3-a456-426614174000",
+			NodeName:        "node-1",
+		},
+		wantMsg: "ip: Invalid value",
+	}, {
+		name: "missing worker_pod_uid",
+		worker: &ateapipb.Worker{
+			WorkerNamespace: "ns-1",
+			WorkerPool:      "pool-1",
+			WorkerPod:       "pod-1",
+			Ip:              "10.0.0.1",
+			NodeName:        "node-1",
+		},
+		wantMsg: "worker_pod_uid: Required value",
+	}, {
+		name: "invalid worker_pod_uid",
+		worker: &ateapipb.Worker{
+			WorkerNamespace: "ns-1",
+			WorkerPool:      "pool-1",
+			WorkerPod:       "pod-1",
+			Ip:              "10.0.0.1",
+			WorkerPodUid:    "INVALID-UUID",
+			NodeName:        "node-1",
+		},
+		wantMsg: "worker_pod_uid: Invalid value",
+	}, {
+		name: "missing node_name",
+		worker: &ateapipb.Worker{
+			WorkerNamespace: "ns-1",
+			WorkerPool:      "pool-1",
+			WorkerPod:       "pod-1",
+			Ip:              "10.0.0.1",
+			WorkerPodUid:    "123e4567-e89b-12d3-a456-426614174000",
+		},
+		wantMsg: "node_name: Required value",
+	}, {
+		name: "invalid node_name",
+		worker: &ateapipb.Worker{
+			WorkerNamespace: "ns-1",
+			WorkerPool:      "pool-1",
+			WorkerPod:       "pod-1",
+			Ip:              "10.0.0.1",
+			WorkerPodUid:    "123e4567-e89b-12d3-a456-426614174000",
+			NodeName:        "NODE_NAME",
+		},
+		wantMsg: "node_name: Invalid value",
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			errs := ValidateWorker(tt.worker, field.NewPath("worker"))
+			if tt.wantMsg == "" {
+				if len(errs) > 0 {
+					t.Fatalf("expected 0 errors, got %v", errs)
+				}
+			} else {
+				if len(errs) == 0 {
+					t.Fatalf("expected error matching %q, got 0", tt.wantMsg)
+				}
+				err := errs[0]
+				got := err.Error()
+				if matched, matchErr := regexp.MatchString(tt.wantMsg, got); matchErr != nil {
+					t.Fatalf("failed to compile regex %q: %v", tt.wantMsg, matchErr)
+				} else if !matched {
+					t.Errorf("expected message matching %q, got %q", tt.wantMsg, got)
+				}
+			}
+		})
+	}
+}
+
+func TestValidateIP(t *testing.T) {
+	tests := []struct {
+		name    string
+		ip      string
+		wantMsg string // empty means valid
+	}{
+		{"valid ipv4", "192.168.1.1", ""},
+		{"valid ipv6", "2001:db8::1", ""},
+		{"invalid format", "not-an-ip", "must be a valid IP address"},
+		{"ipv4-mapped ipv6", "::ffff:192.168.1.1", "must not be an IPv4-mapped IPv6 address"},
+		{"non-canonical ipv6", "2001:db8:0:0:0:0:0:1", "must be in canonical form"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			errs := ValidateIP(tt.ip, field.NewPath("ip"))
+			if tt.wantMsg == "" {
+				if len(errs) > 0 {
+					t.Fatalf("expected 0 errors, got %v", errs)
+				}
+			} else {
+				if len(errs) == 0 {
+					t.Fatalf("expected error matching %q, got 0", tt.wantMsg)
+				}
+				err := errs[0]
+				got := err.Error()
+				if matched, matchErr := regexp.MatchString(tt.wantMsg, got); matchErr != nil {
+					t.Fatalf("failed to compile regex %q: %v", tt.wantMsg, matchErr)
+				} else if !matched {
+					t.Errorf("expected message matching %q, got %q", tt.wantMsg, got)
+				}
+			}
+		})
+	}
+}
+
+func TestValidateUUID(t *testing.T) {
+	tests := []struct {
+		name    string
+		uuid    string
+		wantMsg string // empty means valid
+	}{
+		{"valid", "123e4567-e89b-12d3-a456-426614174000", ""},
+		{"too short", "123e4567", "must be a lowercase UUID"},
+		{"too long", "123e4567-e89b-12d3-a456-4266141740001", "must be a lowercase UUID"},
+		{"missing dashes", "123e4567e89b12d3a456426614174000", "must be a lowercase UUID"},
+		{"uppercase hex", "123E4567-E89B-12D3-A456-426614174000", "must be a lowercase UUID"},
+		{"invalid characters", "123e4567-e89b-12d3-a456-42661417400g", "must be a lowercase UUID"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			errs := ValidateUUID(tt.uuid, field.NewPath("uuid"))
+			if tt.wantMsg == "" {
+				if len(errs) > 0 {
+					t.Fatalf("expected 0 errors, got %v", errs)
+				}
+			} else {
+				if len(errs) == 0 {
+					t.Fatalf("expected error matching %q, got 0", tt.wantMsg)
+				}
+				err := errs[0]
+				got := err.Error()
+				if matched, matchErr := regexp.MatchString(tt.wantMsg, got); matchErr != nil {
+					t.Fatalf("failed to compile regex %q: %v", tt.wantMsg, matchErr)
+				} else if !matched {
+					t.Errorf("expected message matching %q, got %q", tt.wantMsg, got)
+				}
+			}
+		})
+	}
+}
