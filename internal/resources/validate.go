@@ -17,6 +17,7 @@ package resources
 import (
 	"encoding/hex"
 	"fmt"
+	"net/netip"
 	"net/url"
 	"strings"
 
@@ -166,6 +167,124 @@ func ValidateSnapshotURIPrefix(prefix string) error {
 	// path), silently redirecting the upload/download to a different object.
 	if u.Opaque != "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 		return fmt.Errorf("invalid snapshot URI prefix %q: must contain only a scheme, bucket, and path", prefix)
+	}
+	return nil
+}
+
+// ValidateWorker checks that the worker message is well-formed.
+func ValidateWorker(worker *ateapipb.Worker, fldPath *field.Path) field.ErrorList {
+	var errs field.ErrorList
+
+	if val := worker.WorkerNamespace; val == "" {
+		errs = append(errs, field.Required(fldPath.Child("worker_namespace"), ""))
+	} else {
+		for _, msg := range content.IsDNS1123Label(val) {
+			errs = append(errs, field.Invalid(fldPath.Child("worker_namespace"), val, msg))
+		}
+	}
+
+	if val := worker.WorkerPool; val == "" {
+		errs = append(errs, field.Required(fldPath.Child("worker_pool"), ""))
+	} else {
+		for _, msg := range content.IsDNS1123Subdomain(val) {
+			errs = append(errs, field.Invalid(fldPath.Child("worker_pool"), val, msg))
+		}
+	}
+
+	if val := worker.WorkerPod; val == "" {
+		errs = append(errs, field.Required(fldPath.Child("worker_pod"), ""))
+	} else {
+		for _, msg := range content.IsDNS1123Subdomain(val) {
+			errs = append(errs, field.Invalid(fldPath.Child("worker_pod"), val, msg))
+		}
+	}
+
+	// TODO(thockin): either all or none of these field should be set
+	if val := worker.ActorNamespace; val != "" {
+		for _, msg := range content.IsDNS1123Label(val) {
+			errs = append(errs, field.Invalid(fldPath.Child("actor_namespace"), val, msg))
+		}
+	}
+	if val := worker.ActorTemplate; val != "" {
+		for _, msg := range content.IsDNS1123Subdomain(val) {
+			errs = append(errs, field.Invalid(fldPath.Child("actor_template"), val, msg))
+		}
+	}
+	if val, fldPath := worker.ActorId, fldPath.Child("actor_id"); val != "" {
+		errs = append(errs, ValidateResourceName(val, fldPath)...)
+	}
+	if val, fldPath := worker.ActorAtespace, fldPath.Child("actor_atespace"); val != "" {
+		errs = append(errs, ValidateResourceName(val, fldPath)...)
+	}
+
+	if val, fldPath := worker.Ip, fldPath.Child("ip"); val == "" {
+		errs = append(errs, field.Required(fldPath, ""))
+	} else {
+		errs = append(errs, ValidateIP(val, fldPath)...)
+	}
+
+	if val, fldPath := worker.WorkerPodUid, fldPath.Child("worker_pod_uid"); val == "" {
+		errs = append(errs, field.Required(fldPath, ""))
+	} else {
+		errs = append(errs, ValidateUUID(val, fldPath)...)
+	}
+
+	if val := worker.NodeName; val == "" {
+		errs = append(errs, field.Required(fldPath.Child("node_name"), ""))
+	} else {
+		for _, msg := range content.IsDNS1123Subdomain(val) {
+			errs = append(errs, field.Invalid(fldPath.Child("node_name"), val, msg))
+		}
+	}
+
+	return errs
+}
+
+// ValidateIP checks that the given string is a valid IP address, is not an
+// IPv4-mapped IPv6 address, and is in canonical form.
+func ValidateIP(ip string, fldPath *field.Path) field.ErrorList {
+	var errs field.ErrorList
+
+	addr, err := netip.ParseAddr(ip)
+	if err != nil || !addr.IsValid() {
+		errs = append(errs, field.Invalid(fldPath, ip, "must be a valid IP address"))
+		return errs
+	}
+	if addr.Is4In6() {
+		errs = append(errs, field.Invalid(fldPath, ip, "must not be an IPv4-mapped IPv6 address"))
+	}
+	if canon := addr.String(); ip != canon {
+		errs = append(errs, field.Invalid(fldPath, ip, fmt.Sprintf("must be in canonical form (%q)", canon)))
+	}
+	//TODO(thockin): prevent localhost and link-local addresses which might confuse callers?
+
+	return errs
+}
+
+// ValidateUUID verifies that the specified value is a valid UUID (RFC 4122).
+//   - must be 36 characters long
+//   - must be in the normalized form `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`
+//   - must use only lowercase hexadecimal characters
+func ValidateUUID(uuid string, fldPath *field.Path) field.ErrorList {
+	const uuidErrorMessage = "must be a lowercase UUID in 8-4-4-4-12 format"
+
+	if len(uuid) != 36 {
+		return field.ErrorList{field.Invalid(fldPath, uuid, uuidErrorMessage)}
+	}
+
+	for idx := 0; idx < len(uuid); idx++ {
+		character := uuid[idx]
+		switch idx {
+		case 8, 13, 18, 23:
+			if character != '-' {
+				return field.ErrorList{field.Invalid(fldPath, uuid, uuidErrorMessage)}
+			}
+		default:
+			// should be lower case hexadecimal.
+			if (character < '0' || character > '9') && (character < 'a' || character > 'f') {
+				return field.ErrorList{field.Invalid(fldPath, uuid, uuidErrorMessage)}
+			}
+		}
 	}
 	return nil
 }
