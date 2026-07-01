@@ -12,12 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package egresscapture
+package egress
 
 import (
 	"context"
 	"crypto/tls"
-	"crypto/x509"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -45,15 +44,7 @@ type ActorIdentity struct {
 
 type Config struct {
 	PEPAddress string
-	Protocol   string
-	TLS        TLSConfig
 	Listeners  []Listener
-}
-
-type TLSConfig struct {
-	ServerName         string
-	CAFile             string
-	InsecureSkipVerify bool
 }
 
 type Listener struct {
@@ -68,29 +59,6 @@ type Capture struct {
 	wg        sync.WaitGroup
 }
 
-type TunnelTransport interface {
-	Open(ctx context.Context, identity ActorIdentity, originalDst net.Addr, authority string) (io.ReadWriteCloser, error)
-}
-
-type TunnelTransportFactory func(Config) (TunnelTransport, error)
-
-var tunnelTransportFactories = map[string]TunnelTransportFactory{}
-
-func init() {
-	// Keep tunnel protocol support behind factories so additional transports
-	// such as HBONE can plug in without changing capture/listener logic.
-	RegisterTunnelTransport(TunnelProtocolConnect, newPlaintextCONNECTTunnelTransport)
-	RegisterTunnelTransport(TunnelProtocolPlaintext, newPlaintextCONNECTTunnelTransport)
-	RegisterTunnelTransport(TunnelProtocolH2C, newPlaintextCONNECTTunnelTransport)
-	RegisterTunnelTransport(TunnelProtocolConnectTLS, newTLSCONNECTTunnelTransport)
-	RegisterTunnelTransport(TunnelProtocolHTTPSConnect, newTLSCONNECTTunnelTransport)
-	RegisterTunnelTransport(TunnelProtocolTLSConnect, newTLSCONNECTTunnelTransport)
-}
-
-func RegisterTunnelTransport(protocol string, factory TunnelTransportFactory) {
-	tunnelTransportFactories[strings.ToLower(strings.TrimSpace(protocol))] = factory
-}
-
 func EnabledFromEnv() bool {
 	enabled, _ := strconv.ParseBool(os.Getenv(EnvCaptureEnabled))
 	return enabled
@@ -103,32 +71,14 @@ func ConfigFromEnv(listeners []Listener) (Config, error) {
 	}
 	cfg := Config{
 		PEPAddress: pepAddress,
-		Protocol:   DefaultTunnelProtocol,
-		TLS: TLSConfig{
-			ServerName:         os.Getenv(EnvConnectTLSServerName),
-			CAFile:             os.Getenv(EnvConnectTLSCAFile),
-			InsecureSkipVerify: boolEnv(EnvConnectTLSInsecureSkipVerify),
-		},
-		Listeners: listeners,
-	}
-	if v := os.Getenv(EnvTunnelProtocol); v != "" {
-		cfg.Protocol = v
+		Listeners:  listeners,
 	}
 	return cfg, nil
-}
-
-func boolEnv(name string) bool {
-	enabled, _ := strconv.ParseBool(os.Getenv(name))
-	return enabled
 }
 
 func Start(ctx context.Context, identity ActorIdentity, cfg Config, originalDestination OriginalDestinationFunc) (*Capture, error) {
 	if originalDestination == nil {
 		return nil, errors.New("original destination resolver must be set")
-	}
-	transport, err := NewTunnelTransport(cfg)
-	if err != nil {
-		return nil, err
 	}
 
 	ctx, cancel := newCaptureContext(ctx)
@@ -142,11 +92,10 @@ func Start(ctx context.Context, identity ActorIdentity, cfg Config, originalDest
 
 		capture.listeners = append(capture.listeners, lis)
 		capture.wg.Add(1)
-		go capture.serve(ctx, lis, identity, transport, originalDestination)
+		go capture.serve(ctx, lis, identity, cfg.PEPAddress, originalDestination)
 		slog.InfoContext(ctx, "Started actor egress capture listener",
 			"port", listenerCfg.Port,
-			"pepAddress", cfg.PEPAddress,
-			"protocol", cfg.Protocol)
+			"pepAddress", cfg.PEPAddress)
 	}
 	return capture, nil
 }
@@ -172,7 +121,7 @@ func (c *Capture) Close() error {
 	return err
 }
 
-func (c *Capture) serve(ctx context.Context, lis net.Listener, identity ActorIdentity, transport TunnelTransport, originalDestination OriginalDestinationFunc) {
+func (c *Capture) serve(ctx context.Context, lis net.Listener, identity ActorIdentity, pepAddress string, originalDestination OriginalDestinationFunc) {
 	defer c.wg.Done()
 	for {
 		conn, err := lis.Accept()
@@ -186,12 +135,12 @@ func (c *Capture) serve(ctx context.Context, lis net.Listener, identity ActorIde
 		c.wg.Add(1)
 		go func() {
 			defer c.wg.Done()
-			handleCapturedEgress(ctx, conn, identity, transport, originalDestination)
+			handleCapturedEgress(ctx, conn, identity, pepAddress, originalDestination)
 		}()
 	}
 }
 
-func handleCapturedEgress(ctx context.Context, actorConn net.Conn, identity ActorIdentity, transport TunnelTransport, originalDestination OriginalDestinationFunc) {
+func handleCapturedEgress(ctx context.Context, actorConn net.Conn, identity ActorIdentity, pepAddress string, originalDestination OriginalDestinationFunc) {
 	stopActorClose := context.AfterFunc(ctx, func() {
 		_ = actorConn.Close()
 	})
@@ -205,7 +154,7 @@ func handleCapturedEgress(ctx context.Context, actorConn net.Conn, identity Acto
 	}
 
 	authority, initialBytes := deriveConnectAuthority(ctx, actorConn, originalDst)
-	tunnel, err := transport.Open(ctx, identity, originalDst, authority)
+	tunnel, err := openCONNECTTunnel(ctx, pepAddress, identity, originalDst, authority)
 	if err != nil {
 		slog.WarnContext(ctx, "Failed to open egress tunnel",
 			"originalDestination", originalDst.String(),
@@ -255,92 +204,18 @@ func proxyByteStream(ctx context.Context, actorConn net.Conn, tunnel io.ReadWrit
 	wg.Wait()
 }
 
-func NewTunnelTransport(cfg Config) (TunnelTransport, error) {
-	protocol := strings.ToLower(strings.TrimSpace(cfg.Protocol))
-	if protocol == "" {
-		protocol = DefaultTunnelProtocol
-	}
-	factory, ok := tunnelTransportFactories[protocol]
-	if !ok {
-		return nil, fmt.Errorf("unsupported egress tunnel protocol %q", cfg.Protocol)
-	}
-	return factory(cfg)
-}
-
-type PlaintextCONNECTTunnelTransport struct {
-	PEPAddress string
-}
-
-func newPlaintextCONNECTTunnelTransport(cfg Config) (TunnelTransport, error) {
-	return &PlaintextCONNECTTunnelTransport{PEPAddress: cfg.PEPAddress}, nil
-}
-
-func (t *PlaintextCONNECTTunnelTransport) Open(ctx context.Context, identity ActorIdentity, originalDst net.Addr, authority string) (io.ReadWriteCloser, error) {
-	req, pr, pw := newConnectRequest(ctx, "http", identity, originalDst, authority)
+func openCONNECTTunnel(ctx context.Context, pepAddress string, identity ActorIdentity, originalDst net.Addr, authority string) (io.ReadWriteCloser, error) {
+	// TODO: Add a transport selector here when there is a second supported
+	// egress tunnel protocol, such as TLS CONNECT or HBONE.
+	req, pr, pw := newConnectRequest(ctx, identity, originalDst, authority)
 	transport := &http2.Transport{
 		AllowHTTP: true,
 		DialTLSContext: func(ctx context.Context, network, _ string, _ *tls.Config) (net.Conn, error) {
 			var dialer net.Dialer
-			return dialer.DialContext(ctx, network, t.PEPAddress)
+			return dialer.DialContext(ctx, network, pepAddress)
 		},
 	}
-	return roundTripConnect(transport, req, pr, pw, authority, t.PEPAddress)
-}
-
-type TLSCONNECTTunnelTransport struct {
-	PEPAddress string
-	TLS        TLSConfig
-}
-
-func newTLSCONNECTTunnelTransport(cfg Config) (TunnelTransport, error) {
-	return &TLSCONNECTTunnelTransport{PEPAddress: cfg.PEPAddress, TLS: cfg.TLS}, nil
-}
-
-func (t *TLSCONNECTTunnelTransport) Open(ctx context.Context, identity ActorIdentity, originalDst net.Addr, authority string) (io.ReadWriteCloser, error) {
-	req, pr, pw := newConnectRequest(ctx, "https", identity, originalDst, authority)
-	tlsConfig, err := t.tlsConfig()
-	if err != nil {
-		_ = pr.CloseWithError(err)
-		_ = pw.CloseWithError(err)
-		return nil, err
-	}
-	transport := &http2.Transport{
-		DialTLSContext: func(ctx context.Context, network, _ string, _ *tls.Config) (net.Conn, error) {
-			var dialer net.Dialer
-			conn, err := dialer.DialContext(ctx, network, t.PEPAddress)
-			if err != nil {
-				return nil, err
-			}
-			tlsConn := tls.Client(conn, tlsConfig)
-			if err := tlsConn.HandshakeContext(ctx); err != nil {
-				_ = conn.Close()
-				return nil, err
-			}
-			return tlsConn, nil
-		},
-	}
-	return roundTripConnect(transport, req, pr, pw, authority, t.PEPAddress)
-}
-
-func (t *TLSCONNECTTunnelTransport) tlsConfig() (*tls.Config, error) {
-	cfg := &tls.Config{
-		NextProtos:         []string{"h2"},
-		ServerName:         t.TLS.ServerName,
-		InsecureSkipVerify: t.TLS.InsecureSkipVerify,
-	}
-	if t.TLS.CAFile == "" {
-		return cfg, nil
-	}
-	rootsPEM, err := os.ReadFile(t.TLS.CAFile)
-	if err != nil {
-		return nil, fmt.Errorf("while reading CONNECT TLS CA file %q: %w", t.TLS.CAFile, err)
-	}
-	roots := x509.NewCertPool()
-	if !roots.AppendCertsFromPEM(rootsPEM) {
-		return nil, fmt.Errorf("CONNECT TLS CA file %q contains no certificates", t.TLS.CAFile)
-	}
-	cfg.RootCAs = roots
-	return cfg, nil
+	return roundTripConnect(transport, req, pr, pw, authority, pepAddress)
 }
 
 func deriveConnectAuthority(ctx context.Context, actorConn net.Conn, originalDst net.Addr) (string, []byte) {
@@ -543,11 +418,11 @@ func tlsClientHelloSNI(data []byte) (string, bool, bool) {
 	return "", false, false
 }
 
-func newConnectRequest(ctx context.Context, scheme string, identity ActorIdentity, originalDst net.Addr, authority string) (*http.Request, *io.PipeReader, *io.PipeWriter) {
+func newConnectRequest(ctx context.Context, identity ActorIdentity, originalDst net.Addr, authority string) (*http.Request, *io.PipeReader, *io.PipeWriter) {
 	pr, pw := io.Pipe()
 	req := &http.Request{
 		Method:        http.MethodConnect,
-		URL:           &url.URL{Scheme: scheme, Host: authority},
+		URL:           &url.URL{Scheme: "http", Host: authority},
 		Host:          authority,
 		Header:        make(http.Header),
 		Body:          pr,
@@ -591,28 +466,28 @@ func roundTripConnect(
 		transport.CloseIdleConnections()
 		return nil, err
 	}
-	return &hboneStream{
+	return &connectStream{
 		requestWriter: pw,
 		responseBody:  resp.Body,
 		closeIdle:     transport.CloseIdleConnections,
 	}, nil
 }
 
-type hboneStream struct {
+type connectStream struct {
 	requestWriter *io.PipeWriter
 	responseBody  io.ReadCloser
 	closeIdle     func()
 }
 
-func (s *hboneStream) Read(p []byte) (int, error) {
+func (s *connectStream) Read(p []byte) (int, error) {
 	return s.responseBody.Read(p)
 }
 
-func (s *hboneStream) Write(p []byte) (int, error) {
+func (s *connectStream) Write(p []byte) (int, error) {
 	return s.requestWriter.Write(p)
 }
 
-func (s *hboneStream) Close() error {
+func (s *connectStream) Close() error {
 	err := errors.Join(s.requestWriter.Close(), s.responseBody.Close())
 	if s.closeIdle != nil {
 		s.closeIdle()

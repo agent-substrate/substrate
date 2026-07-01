@@ -12,12 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package egresscapture
+package egress
 
 import (
 	"context"
 	"crypto/tls"
-	"fmt"
 	"io"
 	"net"
 	"strings"
@@ -61,10 +60,6 @@ func TestConfigFromEnvRequiresPEPAddress(t *testing.T) {
 
 func TestConfigFromEnv(t *testing.T) {
 	t.Setenv(EnvPEPAddress, "ate-egress.example:15008")
-	t.Setenv(EnvTunnelProtocol, TunnelProtocolConnectTLS)
-	t.Setenv(EnvConnectTLSServerName, "ate-egress.example")
-	t.Setenv(EnvConnectTLSCAFile, "/run/egress-ca/ca.crt")
-	t.Setenv(EnvConnectTLSInsecureSkipVerify, "true")
 
 	listeners := []Listener{{Port: 15001}}
 	cfg, err := ConfigFromEnv(listeners)
@@ -74,64 +69,14 @@ func TestConfigFromEnv(t *testing.T) {
 	if cfg.PEPAddress != "ate-egress.example:15008" {
 		t.Fatalf("cfg.PEPAddress = %q, want ate-egress.example:15008", cfg.PEPAddress)
 	}
-	if cfg.Protocol != TunnelProtocolConnectTLS {
-		t.Fatalf("cfg.Protocol = %q, want %s", cfg.Protocol, TunnelProtocolConnectTLS)
-	}
-	if cfg.TLS.ServerName != "ate-egress.example" {
-		t.Fatalf("cfg.TLS.ServerName = %q, want ate-egress.example", cfg.TLS.ServerName)
-	}
-	if cfg.TLS.CAFile != "/run/egress-ca/ca.crt" {
-		t.Fatalf("cfg.TLS.CAFile = %q, want /run/egress-ca/ca.crt", cfg.TLS.CAFile)
-	}
-	if !cfg.TLS.InsecureSkipVerify {
-		t.Fatal("cfg.TLS.InsecureSkipVerify = false, want true")
-	}
 	if len(cfg.Listeners) != 1 || cfg.Listeners[0].Port != 15001 {
 		t.Fatalf("cfg.Listeners = %+v, want port 15001", cfg.Listeners)
 	}
 }
 
-func TestNewTunnelTransportUsesRegisteredFactories(t *testing.T) {
-	for _, tc := range []struct {
-		name     string
-		protocol string
-		wantType any
-	}{
-		{
-			name:     "default connect",
-			protocol: "",
-			wantType: &PlaintextCONNECTTunnelTransport{},
-		},
-		{
-			name:     "plaintext alias",
-			protocol: TunnelProtocolPlaintext,
-			wantType: &PlaintextCONNECTTunnelTransport{},
-		},
-		{
-			name:     "tls connect alias",
-			protocol: TunnelProtocolTLSConnect,
-			wantType: &TLSCONNECTTunnelTransport{},
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			got, err := NewTunnelTransport(Config{PEPAddress: "ate-egress.example:15008", Protocol: tc.protocol})
-			if err != nil {
-				t.Fatalf("NewTunnelTransport() returned error: %v", err)
-			}
-			if fmt.Sprintf("%T", got) != fmt.Sprintf("%T", tc.wantType) {
-				t.Fatalf("NewTunnelTransport() = %T, want %T", got, tc.wantType)
-			}
-		})
-	}
-
-	if _, err := NewTunnelTransport(Config{Protocol: "does-not-exist"}); err == nil {
-		t.Fatal("NewTunnelTransport() returned nil error for unsupported protocol")
-	}
-}
-
 func TestNewConnectRequestUsesConfiguredAuthority(t *testing.T) {
 	originalDst := &net.TCPAddr{IP: net.ParseIP("203.0.113.10"), Port: 443}
-	req, pr, pw := newConnectRequest(context.Background(), "http", ActorIdentity{
+	req, pr, pw := newConnectRequest(context.Background(), ActorIdentity{
 		Namespace: "default",
 		Template:  "counter",
 		ActorID:   "my-counter-1",
@@ -233,12 +178,12 @@ func TestProxyByteStreamStopsWhenContextCancelled(t *testing.T) {
 	}
 }
 
-func TestHBONEStreamCloseClosesIdleTransportConnections(t *testing.T) {
+func TestConnectStreamCloseClosesIdleTransportConnections(t *testing.T) {
 	pr, pw := io.Pipe()
 	defer pr.Close()
 
 	called := false
-	stream := &hboneStream{
+	stream := &connectStream{
 		requestWriter: pw,
 		responseBody:  io.NopCloser(strings.NewReader("")),
 		closeIdle: func() {

@@ -24,40 +24,22 @@ import (
 	"syscall"
 	"unsafe"
 
-	"github.com/agent-substrate/substrate/internal/egresscapture"
+	"github.com/agent-substrate/substrate/internal/egress"
 	"github.com/google/nftables"
 	"github.com/google/nftables/binaryutil"
 	"github.com/google/nftables/expr"
 	"golang.org/x/sys/unix"
 )
 
-const (
-	egressCapturePort       = uint16(15001)
-	egressOriginalHTTPPort  = uint16(80)
-	egressOriginalHTTPSPort = uint16(443)
-)
-
-var defaultEgressCaptureRedirects = []struct {
-	originalPort uint16
-	capturePort  uint16
-}{
-	{originalPort: egressOriginalHTTPPort, capturePort: egressCapturePort},
-	{originalPort: egressOriginalHTTPSPort, capturePort: egressCapturePort},
-}
-
-var defaultEgressCaptureListeners = []egresscapture.Listener{
-	{Port: egressCapturePort},
-}
-
-func (s *AteomService) startEgressCaptureIfEnabled(ctx context.Context, identity egresscapture.ActorIdentity) error {
-	if !egresscapture.EnabledFromEnv() {
+func (s *AteomService) startEgressCaptureIfEnabled(ctx context.Context, identity egress.ActorIdentity) error {
+	if !egress.EnabledFromEnv() {
 		return nil
 	}
-	cfg, err := egresscapture.ConfigFromEnv(defaultEgressCaptureListeners)
+	cfg, err := egress.ConfigFromEnv(egress.DefaultCaptureListeners)
 	if err != nil {
 		return err
 	}
-	capture, err := egresscapture.Start(ctx, identity, cfg, originalDestination)
+	capture, err := egress.Start(ctx, identity, cfg, originalDestination)
 	if err != nil {
 		return fmt.Errorf("while starting actor egress capture: %w", err)
 	}
@@ -66,11 +48,11 @@ func (s *AteomService) startEgressCaptureIfEnabled(ctx context.Context, identity
 }
 
 func addEgressCaptureRedirectRules(c *nftables.Conn, table *nftables.Table, prerouting *nftables.Chain, sourceIP string) {
-	for _, redirect := range defaultEgressCaptureRedirects {
+	for _, redirect := range egress.DefaultCaptureRedirects {
 		c.AddRule(&nftables.Rule{
 			Table: table,
 			Chain: prerouting,
-			Exprs: tcpRedirectExprs(sourceIP, redirect.originalPort, redirect.capturePort),
+			Exprs: tcpRedirectExprs(sourceIP, redirect.OriginalPort, redirect.CapturePort),
 		})
 	}
 }

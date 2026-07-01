@@ -26,7 +26,7 @@ import (
 	metav1ac "k8s.io/client-go/applyconfigurations/meta/v1"
 
 	"github.com/agent-substrate/substrate/internal/ateompath"
-	"github.com/agent-substrate/substrate/internal/egresscapture"
+	"github.com/agent-substrate/substrate/internal/egress"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 )
 
@@ -263,12 +263,8 @@ func TestMicroVMPodShape(t *testing.T) {
 }
 
 func TestWorkerPoolEgressCaptureEnvPropagation(t *testing.T) {
-	t.Setenv(egresscapture.EnvCaptureEnabled, "1")
-	t.Setenv(egresscapture.EnvPEPAddress, "ate-egress.agentgateway-system.svc.cluster.local:15008")
-	t.Setenv(egresscapture.EnvTunnelProtocol, egresscapture.TunnelProtocolConnectTLS)
-	t.Setenv(egresscapture.EnvConnectTLSServerName, "ate-egress.agentgateway-system.svc.cluster.local")
-	t.Setenv(egresscapture.EnvConnectTLSCAFile, "/run/egress-ca/ca.crt")
-	t.Setenv(egresscapture.EnvConnectTLSInsecureSkipVerify, "true")
+	t.Setenv(egress.EnvCaptureEnabled, "1")
+	t.Setenv(egress.EnvPEPAddress, "ate-egress.agentgateway-system.svc.cluster.local:15008")
 
 	wp := testWorkerPoolApplyConfig(nil)
 	deployment := buildDeploymentApplyConfig(wp)
@@ -285,12 +281,8 @@ func TestWorkerPoolEgressCaptureEnvPropagation(t *testing.T) {
 	}
 
 	want := map[string]string{
-		egresscapture.EnvCaptureEnabled:               "true",
-		egresscapture.EnvPEPAddress:                   "ate-egress.agentgateway-system.svc.cluster.local:15008",
-		egresscapture.EnvTunnelProtocol:               egresscapture.TunnelProtocolConnectTLS,
-		egresscapture.EnvConnectTLSServerName:         "ate-egress.agentgateway-system.svc.cluster.local",
-		egresscapture.EnvConnectTLSCAFile:             "/run/egress-ca/ca.crt",
-		egresscapture.EnvConnectTLSInsecureSkipVerify: "true",
+		egress.EnvCaptureEnabled: "true",
+		egress.EnvPEPAddress:     "ate-egress.agentgateway-system.svc.cluster.local:15008",
 	}
 	for name, value := range want {
 		if got[name] != value {

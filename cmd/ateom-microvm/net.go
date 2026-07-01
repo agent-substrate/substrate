@@ -48,7 +48,7 @@ import (
 	"github.com/vishvananda/netns"
 	"golang.org/x/sys/unix"
 
-	"github.com/agent-substrate/substrate/internal/egresscapture"
+	"github.com/agent-substrate/substrate/internal/egress"
 	"github.com/agent-substrate/substrate/internal/serverboot"
 )
 
@@ -121,7 +121,7 @@ func mustParseIP(s string) net.IP {
 // pod netns and the kata interior netns (see the package comment). Idempotent
 // via cleanup-before-setup; also sweeps stale kata taps out of the interior
 // netns so the sandbox always builds on a clean slate.
-func (s *AteomService) setupActorNetwork(ctx context.Context, identity egresscapture.ActorIdentity) (retErr error) {
+func (s *AteomService) setupActorNetwork(ctx context.Context, identity egress.ActorIdentity) (retErr error) {
 	s.cleanupActorNetworkOrExit(ctx, "Failed to clean up stale actor network before setup")
 	defer func() {
 		if retErr != nil {

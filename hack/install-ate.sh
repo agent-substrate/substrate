@@ -40,6 +40,7 @@ ATE_DEMOS=()
 
 # Include demos.
 source "${ROOT}"/hack/install-demo-counter.sh
+source "${ROOT}"/hack/install-demo-egress.sh
 source "${ROOT}"/hack/install-demo-sandbox.sh
 source "${ROOT}"/hack/install-demo-claude-code-multiplex.sh
 source "${ROOT}"/hack/install-demo-agent-secret.sh
@@ -51,13 +52,8 @@ COLOR_RESET='\033[0m'
 
 ATE_EGRESS_CAPTURE="${ATE_EGRESS_CAPTURE:-false}"
 ATE_EGRESS_PEP_ADDRESS="${ATE_EGRESS_PEP_ADDRESS:-ate-egress.agentgateway-system.svc.cluster.local:15008}"
-ATE_EGRESS_TUNNEL_PROTOCOL="${ATE_EGRESS_TUNNEL_PROTOCOL:-connect}"
 ATE_EGRESS_CAPTURE_ENABLED_ENV="ATE_EGRESS_CAPTURE_ENABLED"
 ATE_EGRESS_PEP_ADDRESS_ENV="ATE_EGRESS_PEP_ADDRESS"
-ATE_EGRESS_TUNNEL_PROTOCOL_ENV="ATE_EGRESS_TUNNEL_PROTOCOL"
-ATE_EGRESS_CONNECT_TLS_SERVER_NAME_ENV="ATE_EGRESS_CONNECT_TLS_SERVER_NAME"
-ATE_EGRESS_CONNECT_TLS_CA_FILE_ENV="ATE_EGRESS_CONNECT_TLS_CA_FILE"
-ATE_EGRESS_CONNECT_TLS_INSECURE_SKIP_VERIFY_ENV="ATE_EGRESS_CONNECT_TLS_INSECURE_SKIP_VERIFY"
 
 function log_step() {
   local step_name="$1"
@@ -355,17 +351,7 @@ create_egress_capture_config() {
   local literals=(
     --from-literal="${ATE_EGRESS_CAPTURE_ENABLED_ENV}=true"
     --from-literal="${ATE_EGRESS_PEP_ADDRESS_ENV}=${ATE_EGRESS_PEP_ADDRESS}"
-    --from-literal="${ATE_EGRESS_TUNNEL_PROTOCOL_ENV}=${ATE_EGRESS_TUNNEL_PROTOCOL}"
   )
-  if [[ -n "${ATE_EGRESS_CONNECT_TLS_SERVER_NAME:-}" ]]; then
-    literals+=(--from-literal="${ATE_EGRESS_CONNECT_TLS_SERVER_NAME_ENV}=${ATE_EGRESS_CONNECT_TLS_SERVER_NAME}")
-  fi
-  if [[ -n "${ATE_EGRESS_CONNECT_TLS_CA_FILE:-}" ]]; then
-    literals+=(--from-literal="${ATE_EGRESS_CONNECT_TLS_CA_FILE_ENV}=${ATE_EGRESS_CONNECT_TLS_CA_FILE}")
-  fi
-  if [[ -n "${ATE_EGRESS_CONNECT_TLS_INSECURE_SKIP_VERIFY:-}" ]]; then
-    literals+=(--from-literal="${ATE_EGRESS_CONNECT_TLS_INSECURE_SKIP_VERIFY_ENV}=${ATE_EGRESS_CONNECT_TLS_INSECURE_SKIP_VERIFY}")
-  fi
   # TODO: Updating this ConfigMap does not by itself restart an already-running
   # ate-controller, so enabling egress after a non-egress install may not take
   # effect until the controller rolls. Wire a pod-template checksum or restart

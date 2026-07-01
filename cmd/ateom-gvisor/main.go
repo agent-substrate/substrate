@@ -32,7 +32,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/contextlogging"
-	"github.com/agent-substrate/substrate/internal/egresscapture"
+	"github.com/agent-substrate/substrate/internal/egress"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/readyz"
 	"github.com/agent-substrate/substrate/internal/serverboot"
@@ -165,7 +165,7 @@ type AteomService struct {
 
 	interiorNetNS netns.NsHandle
 	actorLogger   *actorlog.ActorLogger
-	egressCapture *egresscapture.Capture
+	egressCapture *egress.Capture
 }
 
 var _ ateompb.AteomServer = (*AteomService)(nil)
@@ -440,7 +440,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	return &ateompb.RestoreWorkloadResponse{}, nil
 }
 
-func (s *AteomService) setupActorNetwork(ctx context.Context, identity egresscapture.ActorIdentity) (retErr error) {
+func (s *AteomService) setupActorNetwork(ctx context.Context, identity egress.ActorIdentity) (retErr error) {
 	// Build a fresh point-to-point network between the worker pod netns and the
 	// gVisor interior netns. The worker side keeps the pod's real eth0, creates
 	// ateom0 as the gateway, and moves only the veth peer into the actor netns.
@@ -859,16 +859,16 @@ func tcpDestinationPortEqual(port uint16) []expr.Any {
 	}
 }
 
-func actorIdentityFromRun(req *ateompb.RunWorkloadRequest) egresscapture.ActorIdentity {
-	return egresscapture.ActorIdentity{
+func actorIdentityFromRun(req *ateompb.RunWorkloadRequest) egress.ActorIdentity {
+	return egress.ActorIdentity{
 		Namespace: req.GetActorTemplateNamespace(),
 		Template:  req.GetActorTemplateName(),
 		ActorID:   req.GetActorId(),
 	}
 }
 
-func actorIdentityFromRestore(req *ateompb.RestoreWorkloadRequest) egresscapture.ActorIdentity {
-	return egresscapture.ActorIdentity{
+func actorIdentityFromRestore(req *ateompb.RestoreWorkloadRequest) egress.ActorIdentity {
+	return egress.ActorIdentity{
 		Namespace: req.GetActorTemplateNamespace(),
 		Template:  req.GetActorTemplateName(),
 		ActorID:   req.GetActorId(),

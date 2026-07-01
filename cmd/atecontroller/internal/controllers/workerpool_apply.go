@@ -24,7 +24,7 @@ import (
 	metav1ac "k8s.io/client-go/applyconfigurations/meta/v1"
 
 	"github.com/agent-substrate/substrate/internal/ateompath"
-	"github.com/agent-substrate/substrate/internal/egresscapture"
+	"github.com/agent-substrate/substrate/internal/egress"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 )
 
@@ -89,32 +89,20 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool) *appsv1ac.Deployment
 }
 
 func egressCaptureEnvFromController() []*corev1ac.EnvVarApplyConfiguration {
-	enabled, _ := strconv.ParseBool(os.Getenv(egresscapture.EnvCaptureEnabled))
+	enabled, _ := strconv.ParseBool(os.Getenv(egress.EnvCaptureEnabled))
 	if !enabled {
 		return nil
 	}
 
 	env := []*corev1ac.EnvVarApplyConfiguration{
 		corev1ac.EnvVar().
-			WithName(egresscapture.EnvCaptureEnabled).
+			WithName(egress.EnvCaptureEnabled).
 			WithValue("true"),
 	}
-	if v := os.Getenv(egresscapture.EnvPEPAddress); v != "" {
+	if v := os.Getenv(egress.EnvPEPAddress); v != "" {
 		env = append(env, corev1ac.EnvVar().
-			WithName(egresscapture.EnvPEPAddress).
+			WithName(egress.EnvPEPAddress).
 			WithValue(v))
-	}
-	if v := os.Getenv(egresscapture.EnvTunnelProtocol); v != "" {
-		env = append(env, corev1ac.EnvVar().
-			WithName(egresscapture.EnvTunnelProtocol).
-			WithValue(v))
-	}
-	for _, name := range egresscapture.OptionalEnvNames {
-		if v := os.Getenv(name); v != "" {
-			env = append(env, corev1ac.EnvVar().
-				WithName(name).
-				WithValue(v))
-		}
 	}
 	return env
 }

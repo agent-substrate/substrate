@@ -28,22 +28,22 @@ func TestEgressTargetURL(t *testing.T) {
 	}{
 		{
 			name: "default",
-			path: "/egress",
+			path: "/",
 			want: defaultEgressURL,
 		},
 		{
 			name: "custom url",
-			path: "/egress?url=https%3A%2F%2Fhttpbin.org%2Fheaders",
+			path: "/?url=https%3A%2F%2Fhttpbin.org%2Fheaders",
 			want: "https://httpbin.org/headers",
 		},
 		{
 			name:    "reject missing host",
-			path:    "/egress?url=https%3A%2F%2F",
+			path:    "/?url=https%3A%2F%2F",
 			wantErr: true,
 		},
 		{
 			name:    "reject unsupported scheme",
-			path:    "/egress?url=ftp%3A%2F%2Fexample.com%2Ffile",
+			path:    "/?url=ftp%3A%2F%2Fexample.com%2Ffile",
 			wantErr: true,
 		},
 	} {
