@@ -20,15 +20,47 @@ import (
 	"net/url"
 	"strings"
 
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"k8s.io/apimachinery/pkg/api/validate/content"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
-// The validators in this file guard inputs that atelet turns into host
-// filesystem paths. atelet listens on an insecure hostPort, so any reachable
-// caller could otherwise smuggle a path separator or ".." through these
-// fields and make atelet read/RemoveAll/write outside the intended directory
-// tree, or collide OCI bundles. They are exported so the API server and
-// controller can apply the same rules at their own boundaries.
+// ValidateResourceName checks that a string conforms to Agent Substrate's
+// rules for a resource name, which is a subset of the rules for an RFC-1123
+// DNS label.  This does not check for zero-length strings, which callers may
+// want to handle differently (e.g., by returning a "required" error).
+func ValidateResourceName(name string, fldPath *field.Path) field.ErrorList {
+	var errs field.ErrorList
+	for _, msg := range content.IsDNS1123Label(name) {
+		errs = append(errs, field.Invalid(fldPath, name, msg))
+	}
+	return errs
+}
+
+// ValidateActorRef checks that the actor reference is well-formed and that
+// each of its components is a valid resource name. It does not check that the
+// referenced actor actually exists.
+func ValidateActorRef(ref *ateapipb.ActorRef, fldPath *field.Path) field.ErrorList {
+	if ref == nil {
+		return nil
+	}
+
+	var errs field.ErrorList
+
+	if val, fldPath := ref.Atespace, fldPath.Child("atespace"); val == "" {
+		errs = append(errs, field.Required(fldPath, ""))
+	} else {
+		errs = append(errs, ValidateResourceName(val, fldPath)...)
+	}
+
+	if val, fldPath := ref.Name, fldPath.Child("name"); val == "" {
+		errs = append(errs, field.Required(fldPath, ""))
+	} else {
+		errs = append(errs, ValidateResourceName(val, fldPath)...)
+	}
+
+	return errs
+}
 
 // ValidateActorRefFields ensures every component of the per-actor directory tree is
 // a valid DNS-1123 name. namespace+template+actorID are concatenated by

@@ -24,6 +24,7 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
 func (s *Service) UpdateActor(ctx context.Context, req *ateapipb.UpdateActorRequest) (*ateapipb.UpdateActorResponse, error) {
@@ -51,17 +52,21 @@ func (s *Service) UpdateActor(ctx context.Context, req *ateapipb.UpdateActorRequ
 }
 
 func validateUpdateActorRequest(req *ateapipb.UpdateActorRequest) error {
-	if req.GetActorRef().GetName() == "" {
-		return status.Error(codes.InvalidArgument, "actor_id is required")
+	var fldPath *field.Path
+	var errs field.ErrorList
+
+	if val := req.ActorRef; val == nil {
+		errs = append(errs, field.Required(fldPath.Child("actor_ref"), ""))
+	} else {
+		errs = append(errs, resources.ValidateActorRef(val, fldPath.Child("actor_ref"))...)
 	}
-	if req.GetActorRef().GetAtespace() == "" {
-		return status.Error(codes.InvalidArgument, "atespace is required")
+
+	if val := req.WorkerSelector; val != nil {
+		errs = append(errs, validateSelector(val, fldPath.Child("worker_selector"))...)
 	}
-	if err := resources.ValidateAtespace(req.GetActorRef().GetAtespace()); err != nil {
-		return status.Error(codes.InvalidArgument, err.Error())
-	}
-	if err := validateSelector(req.GetWorkerSelector()); err != nil {
-		return status.Error(codes.InvalidArgument, err.Error())
+
+	if len(errs) > 0 {
+		return status.Error(codes.InvalidArgument, errs.ToAggregate().Error())
 	}
 	return nil
 }
