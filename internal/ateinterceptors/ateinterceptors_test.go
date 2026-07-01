@@ -24,7 +24,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/ateerrors"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
+	epb "google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
@@ -91,6 +93,82 @@ func TestStatusErrorInterceptor(t *testing.T) {
 
 			if st.Message() != tt.wantMsg {
 				t.Errorf("expected message %q, got %q", tt.wantMsg, st.Message())
+			}
+		})
+	}
+}
+
+// errorInfoOf returns the ErrorInfo detail carried by err, or nil if none.
+func errorInfoOf(t *testing.T, err error) *epb.ErrorInfo {
+	t.Helper()
+	st, ok := status.FromError(err)
+	if !ok {
+		t.Fatalf("status.FromError(%v) = _, false; want a status error", err)
+	}
+	for _, d := range st.Details() {
+		if info, ok := d.(*epb.ErrorInfo); ok {
+			return info
+		}
+	}
+	return nil
+}
+
+// TestInternalServerUnaryInterceptorPreservesDetails verifies the interceptor
+// returns structured errors (from NewGRPCError) intact — preserving the code and
+// the ErrorInfo carrying the Reason — while collapsing plain errors to Internal
+// with no ErrorInfo detail.
+func TestInternalServerUnaryInterceptorPreservesDetails(t *testing.T) {
+	tests := []struct {
+		name          string
+		handlerErr    error
+		wantCode      codes.Code
+		wantReason    string
+		wantErrorInfo bool
+	}{
+		{
+			name:          "structured error keeps code and reason",
+			handlerErr:    ateerrors.NewGRPCError(context.Background(), codes.DataLoss, ateerrors.ReasonSnapshotNotFound, ateerrors.ActorCrashedMetadata(), errors.New("boom")),
+			wantCode:      codes.DataLoss,
+			wantReason:    string(ateerrors.ReasonSnapshotNotFound),
+			wantErrorInfo: true,
+		},
+		{
+			name:          "plain error collapses to Internal with no ErrorInfo",
+			handlerErr:    errors.New("database connection failed"),
+			wantCode:      codes.Internal,
+			wantErrorInfo: false,
+		},
+	}
+
+	interceptor := InternalServerUnaryInterceptor
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+				return nil, tt.handlerErr
+			}
+
+			_, err := interceptor(context.Background(), "request", &grpc.UnaryServerInfo{FullMethod: "/test.Service/Method"}, handler)
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+
+			st, _ := status.FromError(err)
+			if st.Code() != tt.wantCode {
+				t.Errorf("code = %v, want %v", st.Code(), tt.wantCode)
+			}
+
+			info := errorInfoOf(t, err)
+			if !tt.wantErrorInfo {
+				if info != nil {
+					t.Errorf("ErrorInfo = %v, want none", info)
+				}
+				return
+			}
+			if info == nil {
+				t.Fatal("status is missing the ErrorInfo detail")
+			}
+			if got := info.GetReason(); got != tt.wantReason {
+				t.Errorf("ErrorInfo.Reason = %q, want %q", got, tt.wantReason)
 			}
 		})
 	}

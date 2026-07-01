@@ -21,7 +21,6 @@ import (
 	"io"
 
 	"cloud.google.com/go/storage"
-	"github.com/agent-substrate/substrate/internal/ateerrors"
 )
 
 type gcsClient struct {
@@ -36,7 +35,7 @@ func (g *gcsClient) GetObject(ctx context.Context, bucket, object string) (io.Re
 	rc, err := g.client.Bucket(bucket).Object(object).NewReader(ctx)
 	if err != nil {
 		if errors.Is(err, storage.ErrObjectNotExist) || errors.Is(err, storage.ErrBucketNotExist) {
-			return nil, fmt.Errorf("%w: Bucket:%q, Object:%q", ateerrors.ErrAteletSnapshotNotFound, bucket, object)
+			return nil, fmt.Errorf("%w: Bucket:%q, Object:%q", ErrObjectNotFound, bucket, object)
 		}
 		return nil, err
 	}

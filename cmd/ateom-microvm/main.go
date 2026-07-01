@@ -143,7 +143,7 @@ func do(ctx context.Context) error {
 
 	svr := grpc.NewServer(
 		grpc.StatsHandler(otelgrpc.NewServerHandler()),
-		grpc.UnaryInterceptor(ateinterceptors.ServerUnaryInterceptor),
+		grpc.UnaryInterceptor(ateinterceptors.InternalServerUnaryInterceptor),
 	)
 	ateompb.RegisterAteomServer(svr, NewService(*podUID, *chBinary, *kataConfig, *kataDebug, interiorNetNS, actorLogger))
 	reflection.Register(svr)

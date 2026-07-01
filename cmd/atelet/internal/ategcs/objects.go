@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -33,6 +34,14 @@ import (
 
 var tracer = otel.Tracer("ategcs")
 
+// Sentinel errors for terminal failures: retrying cannot succeed for a missing
+// object or a malformed URL. Callers classify with errors.Is; untagged errors
+// (network, auth) are transient.
+var (
+	ErrObjectNotFound   = errors.New("object not found")
+	ErrInvalidObjectURL = errors.New("invalid object URL")
+)
+
 type ObjectStorage interface {
 	GetObject(ctx context.Context, bucket, object string) (io.ReadCloser, error)
 	PutObject(ctx context.Context, bucket, object string, reader io.Reader) error
@@ -44,7 +53,7 @@ func FetchFromGCS(ctx context.Context, client ObjectStorage, gsURL string) ([]by
 
 	bucket, object, err := parseGCSURL(gsURL)
 	if err != nil {
-		return nil, fmt.Errorf("while parsing url: %w", err)
+		return nil, fmt.Errorf("%w: while parsing url: %w", ErrInvalidObjectURL, err)
 	}
 
 	rc, err := client.GetObject(ctx, bucket, object)
@@ -66,7 +75,7 @@ func FetchFromGCS(ctx context.Context, client ObjectStorage, gsURL string) ([]by
 func Open(ctx context.Context, client ObjectStorage, gsURL string) (io.ReadCloser, error) {
 	bucket, object, err := parseGCSURL(gsURL)
 	if err != nil {
-		return nil, fmt.Errorf("while parsing url: %w", err)
+		return nil, fmt.Errorf("%w: while parsing url: %w", ErrInvalidObjectURL, err)
 	}
 	rc, err := client.GetObject(ctx, bucket, object)
 	if err != nil {
@@ -83,7 +92,7 @@ func SendBytesToGCS(ctx context.Context, client ObjectStorage, gsURL string, con
 
 	bucket, object, err := parseGCSURL(gsURL)
 	if err != nil {
-		return fmt.Errorf("while parsing URL: %w", err)
+		return fmt.Errorf("%w: while parsing url: %w", ErrInvalidObjectURL, err)
 	}
 	if err := client.PutObject(ctx, bucket, object, bytes.NewReader(content)); err != nil {
 		return fmt.Errorf("while putting object bucket=%q object=%q: %w", bucket, object, err)
@@ -170,7 +179,7 @@ func writeContent(out io.Writer, content io.Reader) (writeContentResult, error) 
 func sendZstd(ctx context.Context, client ObjectStorage, gsURL string, content io.Reader) error {
 	bucket, object, err := parseGCSURL(gsURL)
 	if err != nil {
-		return fmt.Errorf("while parsing URL: %w", err)
+		return fmt.Errorf("%w: while parsing url: %w", ErrInvalidObjectURL, err)
 	}
 	tStart := time.Now()
 	if _, ok := client.(streamingPutter); ok {

@@ -17,7 +17,6 @@ package controlapi
 import (
 	"context"
 	"fmt"
-	"slices"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/ateerrors"
@@ -26,14 +25,13 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// maybeCrashActor inspects err returned by an atelet RPC. If err carries the
-// CRASH_ACTOR reason, it crashes the actor and returns a DataLoss error;
-// otherwise it wraps err with wrapMsg. A nil err returns nil.
+// maybeCrashActor inspects err returned by an atelet RPC, it crashes
+// the actor if the err carries the actorCrashed=true metadata directive.
 func maybeCrashActor(ctx context.Context, st store.Interface, atespace, actorID string, err error, wrapMsg string) error {
 	if err == nil {
 		return nil
 	}
-	if slices.Contains(ateerrors.ErrorReasonsFromStatus(err), ateerrors.ErrReasonCrashActor.Error()) {
+	if ateerrors.ActorCrashRequested(err) {
 		if cerr := crashActor(ctx, st, atespace, actorID); cerr != nil {
 			return cerr
 		}

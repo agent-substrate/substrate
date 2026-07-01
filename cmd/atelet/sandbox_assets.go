@@ -26,14 +26,13 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"syscall"
 
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/ategcs"
 	"github.com/agent-substrate/substrate/internal/ateerrors"
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 // sandboxManifestName is the object/file name of the per-snapshot manifest that
@@ -95,7 +94,7 @@ func recordFromRequest(sa *ateletpb.SandboxAssets) (*sandboxAssetsRecord, error)
 // cached, so re-fetching at Checkpoint/Restore is a no-op once present.
 func (s *AteomHerder) ensureSandboxAssets(ctx context.Context, rec *sandboxAssetsRecord) (map[string]string, error) {
 	if err := os.MkdirAll(ateompath.StaticFilesDir, 0o700); err != nil {
-		return nil, fmt.Errorf("while creating static files dir: %w", err)
+		return nil, wrapFileErr("while creating static files dir", err)
 	}
 	paths := make(map[string]string, len(rec.Assets))
 	for name, entry := range rec.Assets {
@@ -116,16 +115,17 @@ func runscPathFor(paths map[string]string) string { return paths["runsc"] }
 // the shared static-files cache and returns its local path. On a cache hit it
 // returns immediately.
 func (s *AteomHerder) fetchAsset(ctx context.Context, entry assetEntry) (string, error) {
+	// Terminal: a malformed/unsupported hash can never succeed on retry.
 	if err := resources.ValidateRunscHash(entry.SHA256); err != nil {
-		return "", status.Error(codes.InvalidArgument, err.Error())
+		return "", fmt.Errorf("%w: while validating asset hash: %w", ateerrors.ReasonFailedFetchSandboxAsset, err)
 	}
 
 	localPath := ateompath.RunSCBinaryPath(entry.SHA256)
 	_, err := os.Stat(localPath)
-	if err == nil { // EQUALS nil
+	if err == nil { // cache hit
 		return localPath, nil
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return "", fmt.Errorf("while stat-ing local file: %w", err)
+		return "", wrapFileErr("while stat-ing local file", err)
 	}
 
 	// Assets live in one of two places: public buckets (gVisor's runsc in
@@ -137,18 +137,25 @@ func (s *AteomHerder) fetchAsset(ctx context.Context, entry assetEntry) (string,
 	// asset is streamed (not buffered) to disk below.
 	rc, err := s.openAsset(ctx, entry.URL)
 	if err != nil {
+		// openAsset tags terminal causes (a missing object, a malformed URL) with an
+		// ategcs sentinel; an untagged error is transient (network/auth) and stays
+		// retriable.
+		if errors.Is(err, ategcs.ErrObjectNotFound) || errors.Is(err, ategcs.ErrInvalidObjectURL) {
+			return "", fmt.Errorf("%w: while fetching %v: %w", ateerrors.ReasonFailedFetchSandboxAsset, entry.URL, err)
+		}
 		return "", fmt.Errorf("while fetching %v: %w", entry.URL, err)
 	}
 	defer rc.Close()
 
+	// Terminal: a hash that fails to parse can never succeed on retry.
 	wantSum, err := hex.DecodeString(entry.SHA256)
 	if err != nil {
-		return "", fmt.Errorf("while parsing sha256 hash: %w", err)
+		return "", fmt.Errorf("%w: while parsing sha256 hash: %w", ateerrors.ReasonFailedFetchSandboxAsset, err)
 	}
 
 	tmpFile, err := os.CreateTemp(filepath.Dir(localPath), filepath.Base(localPath)+"-download-")
 	if err != nil {
-		return "", fmt.Errorf("while creating temp file: %w", err)
+		return "", wrapFileErr("while creating temp file", err)
 	}
 	tmpName := tmpFile.Name()
 	defer os.Remove(tmpName) // partial-download cleanup; no-op after rename
@@ -159,23 +166,26 @@ func (s *AteomHerder) fetchAsset(ctx context.Context, entry assetEntry) (string,
 	hasher := sha256.New()
 	n, err := io.Copy(io.MultiWriter(tmpFile, hasher), io.LimitReader(rc, maxAssetBytes+1))
 	if err != nil {
+		// Retriable: a mid-stream read/write failure (network or transient disk).
 		return "", fmt.Errorf("while downloading %v: %w", entry.URL, err)
 	}
+	// Terminal: an over-cap asset or a content/hash mismatch is a property of the
+	// record itself, so it will fail identically on every retry.
 	if n > maxAssetBytes {
-		return "", fmt.Errorf("asset %v exceeds %d-byte cap", entry.URL, maxAssetBytes)
+		return "", fmt.Errorf("%w: asset %v exceeds %d-byte cap", ateerrors.ReasonFailedFetchSandboxAsset, entry.URL, maxAssetBytes)
 	}
 	if got := hasher.Sum(nil); !bytes.Equal(got, wantSum) {
-		return "", fmt.Errorf("sha256 mismatch; got=%x want=%s", got, entry.SHA256)
+		return "", fmt.Errorf("%w: sha256 mismatch; got=%x want=%s", ateerrors.ReasonFailedFetchSandboxAsset, got, entry.SHA256)
 	}
 
 	if err := tmpFile.Chmod(0o755); err != nil {
-		return "", fmt.Errorf("while setting file mode: %w", err)
+		return "", wrapFileErr("while setting file mode", err)
 	}
 	if err := tmpFile.Close(); err != nil { // flush before rename
-		return "", fmt.Errorf("while closing temp file: %w", err)
+		return "", wrapFileErr("while closing temp file", err)
 	}
 	if err := os.Rename(tmpName, localPath); err != nil {
-		return "", fmt.Errorf("while renaming temp file to target: %w", err)
+		return "", wrapFileErr("while renaming temp file to target", err)
 	}
 
 	return localPath, nil
@@ -225,6 +235,9 @@ func readSandboxRecord(actorTemplateNamespace, actorTemplateName, actorID string
 	path := ateompath.ActorSandboxAssetsFile(actorTemplateNamespace, actorTemplateName, actorID)
 	data, err := os.ReadFile(path)
 	if err != nil {
+		if isTerminalFileErr(err) {
+			return nil, fmt.Errorf("%w: non-retriable error reading sandbox record at path %s: %w", ateerrors.ReasonFailedGetSandboxRecord, path, err)
+		}
 		return nil, fmt.Errorf("while reading sandbox record %s: %w", path, err)
 	}
 	return unmarshalSandboxRecord(data)
@@ -233,7 +246,37 @@ func readSandboxRecord(actorTemplateNamespace, actorTemplateName, actorID string
 func unmarshalSandboxRecord(data []byte) (*sandboxAssetsRecord, error) {
 	rec := &sandboxAssetsRecord{}
 	if err := json.Unmarshal(data, rec); err != nil {
-		return nil, fmt.Errorf("%w: while parsing sandbox record/manifest: %w", ateerrors.ErrAteletSnapshotCorrupt, err)
+		return nil, fmt.Errorf("%w: while parsing sandbox record/manifest: %w", ateerrors.ReasonSnapshotCorrupt, err)
 	}
 	return rec, nil
+}
+
+// isTerminalFileErr reports whether a local-filesystem error (from a read such
+// as os.ReadFile, or a write such as os.CreateTemp/Rename/MkdirAll) is terminal
+// — i.e. retrying the same operation on the same path will fail the same way, so
+// the caller should give up rather than retry. Transient errors (EMFILE, ESTALE,
+// EAGAIN, EIO, ENOSPC, ...) are left retriable.
+func isTerminalFileErr(err error) bool {
+	var terminalFileErrs = []error{
+		os.ErrNotExist,
+		os.ErrPermission,
+		syscall.EISDIR,
+		syscall.ENOTDIR,
+		syscall.ENAMETOOLONG,
+		syscall.ELOOP,
+		syscall.EROFS,
+	}
+	for _, target := range terminalFileErrs {
+		if errors.Is(err, target) {
+			return true
+		}
+	}
+	return false
+}
+
+func wrapFileErr(msg string, err error) error {
+	if isTerminalFileErr(err) {
+		return fmt.Errorf("%w: %s: %w", ateerrors.ReasonFailedFetchSandboxAsset, msg, err)
+	}
+	return fmt.Errorf("%s: %w", msg, err)
 }

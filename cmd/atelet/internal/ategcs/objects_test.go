@@ -17,6 +17,7 @@ package ategcs
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -504,5 +505,18 @@ func TestCopyZstdSparseClearsStaleData(t *testing.T) {
 	}
 	if !bytes.Equal(got, want) {
 		t.Fatalf("stale data not cleared / wrong size: len(got)=%d len(want)=%d", len(got), len(want))
+	}
+}
+
+// TestOpenMalformedURL confirms Open tags an unparseable URL as terminal
+// (ErrInvalidObjectURL) so callers don't retry it forever.
+func TestOpenMalformedURL(t *testing.T) {
+	// Invalid percent-escape: url.Parse rejects it before GetObject is reached.
+	_, err := Open(context.Background(), newMemStore(), "gs://bucket/%zz")
+	if err == nil {
+		t.Fatal("Open accepted a malformed URL")
+	}
+	if !errors.Is(err, ErrInvalidObjectURL) {
+		t.Errorf("malformed-url error not tagged ErrInvalidObjectURL: %v", err)
 	}
 }

@@ -24,8 +24,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 
+	"github.com/agent-substrate/substrate/cmd/atelet/internal/ategcs"
+	"github.com/agent-substrate/substrate/internal/ateerrors"
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
@@ -269,8 +272,13 @@ func TestFetchAssetRejectsBadHash(t *testing.T) {
 	}
 
 	s := &AteomHerder{}
-	if _, err := s.fetchAsset(context.Background(), assetEntry{SHA256: badHash}); err == nil {
-		t.Error("fetchAsset returned a cache hit for an invalid hash; validation must run before the os.Stat early return")
+	_, err := s.fetchAsset(context.Background(), assetEntry{SHA256: badHash})
+	if err == nil {
+		t.Fatal("fetchAsset returned a cache hit for an invalid hash; validation must run before the os.Stat early return")
+	}
+	// A bad hash is terminal: the actor must be crashed, not retried.
+	if !errors.Is(err, ateerrors.ReasonFailedFetchSandboxAsset) {
+		t.Errorf("bad-hash error not tagged terminal: %v", err)
 	}
 }
 
@@ -319,8 +327,12 @@ func TestFetchAssetStreaming(t *testing.T) {
 		ateompath.StaticFilesDir = t.TempDir()
 		maxAssetBytes = 4 // content is longer than this
 		s := &AteomHerder{anonGCSClient: fakeObjectStorage{data: content}}
-		if _, err := s.fetchAsset(context.Background(), assetEntry{URL: url, SHA256: goodHash}); err == nil {
+		_, err := s.fetchAsset(context.Background(), assetEntry{URL: url, SHA256: goodHash})
+		if err == nil {
 			t.Fatal("fetchAsset accepted an over-cap asset")
+		}
+		if !errors.Is(err, ateerrors.ReasonFailedFetchSandboxAsset) {
+			t.Errorf("over-cap error not tagged terminal: %v", err)
 		}
 		if _, err := os.Stat(ateompath.RunSCBinaryPath(goodHash)); !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("over-cap download left a file at the cache path (stat err = %v)", err)
@@ -332,11 +344,51 @@ func TestFetchAssetStreaming(t *testing.T) {
 		maxAssetBytes = origCap
 		wrongHash := strings.Repeat("a", 64) // valid 64-hex format, wrong value
 		s := &AteomHerder{anonGCSClient: fakeObjectStorage{data: content}}
-		if _, err := s.fetchAsset(context.Background(), assetEntry{URL: url, SHA256: wrongHash}); err == nil {
+		_, err := s.fetchAsset(context.Background(), assetEntry{URL: url, SHA256: wrongHash})
+		if err == nil {
 			t.Fatal("fetchAsset accepted a hash mismatch")
+		}
+		if !errors.Is(err, ateerrors.ReasonFailedFetchSandboxAsset) {
+			t.Errorf("hash-mismatch error not tagged terminal: %v", err)
 		}
 		if _, err := os.Stat(ateompath.RunSCBinaryPath(wrongHash)); !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("mismatched download left a file at the cache path (stat err = %v)", err)
+		}
+	})
+
+	t.Run("missing object is terminal", func(t *testing.T) {
+		ateompath.StaticFilesDir = t.TempDir()
+		maxAssetBytes = origCap
+		// gcsClient.GetObject tags a missing object with ategcs.ErrObjectNotFound.
+		notFound := fmt.Errorf("%w: no such object", ategcs.ErrObjectNotFound)
+		s := &AteomHerder{anonGCSClient: fakeObjectStorage{err: notFound}}
+		_, err := s.fetchAsset(context.Background(), assetEntry{URL: url, SHA256: goodHash})
+		if !errors.Is(err, ateerrors.ReasonFailedFetchSandboxAsset) {
+			t.Errorf("missing-object error not tagged terminal: %v", err)
+		}
+	})
+
+	t.Run("malformed url is terminal", func(t *testing.T) {
+		ateompath.StaticFilesDir = t.TempDir()
+		maxAssetBytes = origCap
+		s := &AteomHerder{anonGCSClient: fakeObjectStorage{data: content}}
+		// Invalid percent-escape: url.Parse rejects it, so openAsset never runs.
+		_, err := s.fetchAsset(context.Background(), assetEntry{URL: "gs://bucket/%zz", SHA256: goodHash})
+		if !errors.Is(err, ateerrors.ReasonFailedFetchSandboxAsset) {
+			t.Errorf("malformed-url error not tagged terminal: %v", err)
+		}
+	})
+
+	t.Run("network error is retriable", func(t *testing.T) {
+		ateompath.StaticFilesDir = t.TempDir()
+		maxAssetBytes = origCap
+		s := &AteomHerder{anonGCSClient: fakeObjectStorage{err: errors.New("connection refused")}}
+		_, err := s.fetchAsset(context.Background(), assetEntry{URL: url, SHA256: goodHash})
+		if err == nil {
+			t.Fatal("fetchAsset accepted a failing open")
+		}
+		if errors.Is(err, ateerrors.ReasonFailedFetchSandboxAsset) {
+			t.Errorf("transient network error wrongly tagged terminal: %v", err)
 		}
 	})
 }
@@ -417,5 +469,34 @@ func TestBuildAteomWorkloadSpecForwardsReadyz(t *testing.T) {
 	got := buildAteomWorkloadSpec(in)
 	if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
 		t.Errorf("buildAteomWorkloadSpec mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestIsTerminalFileErr(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"not exist", os.ErrNotExist, true},
+		{"permission", os.ErrPermission, true},
+		{"is a directory", syscall.EISDIR, true},
+		{"not a directory", syscall.ENOTDIR, true},
+		{"name too long", syscall.ENAMETOOLONG, true},
+		{"symlink loop", syscall.ELOOP, true},
+		{"read-only filesystem", syscall.EROFS, true},
+		{"wrapped not exist", fmt.Errorf("while reading: %w", os.ErrNotExist), true},
+		{"too many open files", syscall.EMFILE, false},
+		{"stale nfs handle", syscall.ESTALE, false},
+		{"try again", syscall.EAGAIN, false},
+		{"io error", syscall.EIO, false},
+		{"nil", nil, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isTerminalFileErr(tt.err); got != tt.want {
+				t.Errorf("isTerminalFileErr(%v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
 	}
 }

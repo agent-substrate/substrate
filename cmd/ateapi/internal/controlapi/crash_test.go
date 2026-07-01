@@ -120,7 +120,10 @@ func TestMaybeCrashActor(t *testing.T) {
 		wrapMsg  = "calling atelet"
 	)
 
-	crashErr := ateerrors.NewGRPCError(codes.NotFound, ateerrors.ErrReasonCrashActor, errors.New("boom"))
+	crashErr := ateerrors.NewGRPCError(context.Background(), codes.NotFound, ateerrors.ReasonSnapshotNotFound, ateerrors.ActorCrashedMetadata(), errors.New("boom"))
+	// A structured error carrying a reason but no actorCrashed directive must be
+	// wrapped, not crash the actor.
+	noCrashErr := ateerrors.NewGRPCError(context.Background(), codes.NotFound, ateerrors.ReasonRestoreFailed, nil, errors.New("infra"))
 	plainErr := errors.New("transient")
 
 	tests := []struct {
@@ -167,6 +170,30 @@ func TestMaybeCrashActor(t *testing.T) {
 				}
 				if !errors.Is(err, store.ErrNotFound) {
 					t.Errorf("maybeCrashActor() error = %v, want errors.Is(store.ErrNotFound)", err)
+				}
+			},
+		},
+		{
+			name: "status error without crash directive is wrapped",
+			seed: true,
+			err:  noCrashErr,
+			check: func(t *testing.T, ctx context.Context, st store.Interface, err error) {
+				if err == nil {
+					t.Fatal("maybeCrashActor() = nil, want error")
+				}
+				if !errors.Is(err, noCrashErr) {
+					t.Errorf("maybeCrashActor() error = %v, want errors.Is(noCrashErr)", err)
+				}
+				if !strings.HasPrefix(err.Error(), wrapMsg) {
+					t.Errorf("maybeCrashActor() error = %q, want prefix %q", err, wrapMsg)
+				}
+				// The actor must not have been crashed.
+				got, gerr := st.GetActor(ctx, atespace, actorID)
+				if gerr != nil {
+					t.Fatalf("GetActor() = %v, want nil", gerr)
+				}
+				if got.GetStatus() == ateapipb.Actor_STATUS_CRASHED {
+					t.Errorf("status = CRASHED, want it unchanged")
 				}
 			},
 		},
