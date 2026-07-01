@@ -193,6 +193,12 @@ func (c *RouterClient) Close() {
 	close(c.stopCh)
 }
 
+// BaseURL returns the local URL of the port-forwarded router (e.g.
+// http://127.0.0.1:34567). HTTP requests against it must set Host to the
+// actor's mesh DNS name (see resources.ActorDNSName) for the router to
+// route them.
+func (c *RouterClient) BaseURL() string { return c.baseURL }
+
 // Get issues GET path to (atespace, actorID) through the router, setting the
 // actor's mesh Host so the router routes (and resumes) it. The caller must close
 // the body.
