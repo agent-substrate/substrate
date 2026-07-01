@@ -16,12 +16,18 @@ package ateapiauth
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
+	"net/url"
 	"testing"
 
+	"github.com/agent-substrate/substrate/internal/principal"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 )
 
@@ -56,7 +62,7 @@ func TestValidateServerConfig(t *testing.T) {
 	}{
 		{name: "mtls zero config", cfg: ServerConfig{Mode: ModeMTLS}},
 		{name: "empty mode zero config", cfg: ServerConfig{}},
-		{name: "jwt valid", cfg: ServerConfig{Mode: ModeJWT, VerifyBearerToken: func(context.Context, string) error { return nil }}},
+		{name: "jwt valid", cfg: ServerConfig{Mode: ModeJWT, VerifyBearerToken: func(context.Context, string) (string, error) { return "", nil }}},
 		{name: "jwt missing verifier", cfg: ServerConfig{Mode: ModeJWT}, wantErr: true},
 		{name: "unknown mode", cfg: ServerConfig{Mode: Mode("bogus")}, wantErr: true},
 	}
@@ -71,17 +77,66 @@ func TestValidateServerConfig(t *testing.T) {
 	}
 }
 
-func TestMTLSServerAuthenticatorAllowsAnonymous(t *testing.T) {
-	_, err := (mtlsServerAuthenticator{}).authenticate(context.Background())
-	if err != nil {
-		t.Fatalf("ModeMTLS should not error: %v", err)
+func TestMTLSServerAuthenticatorPrincipal(t *testing.T) {
+	spiffeID := &url.URL{Scheme: "spiffe", Host: "ate.dev", Path: "/ns/default/sa/router"}
+	tests := []struct {
+		name string
+		ctx  context.Context
+		want principal.PrincipalInfo
+	}{
+		{
+			name: "no peer",
+			ctx:  context.Background(),
+			want: principal.PrincipalInfo{ID: "anonymous"},
+		},
+		{
+			name: "peer without certificates",
+			ctx: peer.NewContext(context.Background(), &peer.Peer{
+				AuthInfo: credentials.TLSInfo{},
+			}),
+			want: principal.PrincipalInfo{ID: "anonymous"},
+		},
+		{
+			name: "certificate without URI SAN",
+			ctx: peer.NewContext(context.Background(), &peer.Peer{
+				AuthInfo: credentials.TLSInfo{State: tls.ConnectionState{
+					PeerCertificates: []*x509.Certificate{{}},
+				}},
+			}),
+			want: principal.PrincipalInfo{ID: "anonymous"},
+		},
+		{
+			name: "certificate with SPIFFE URI SAN",
+			ctx: peer.NewContext(context.Background(), &peer.Peer{
+				AuthInfo: credentials.TLSInfo{State: tls.ConnectionState{
+					PeerCertificates: []*x509.Certificate{{URIs: []*url.URL{spiffeID}}},
+				}},
+			}),
+			want: principal.PrincipalInfo{ID: spiffeID.String(), Kind: principal.KindMTLS},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			newCtx, err := (mtlsServerAuthenticator{}).authenticate(tt.ctx)
+			if err != nil {
+				t.Fatalf("ModeMTLS should not error: %v", err)
+			}
+			got, ok := principal.FromContext(newCtx)
+			if !ok {
+				t.Fatal("no principal in context")
+			}
+			if got != tt.want {
+				t.Errorf("principal=%+v want %+v", got, tt.want)
+			}
+		})
 	}
 }
 
 func TestJWTServerAuthenticatorRequiresBearer(t *testing.T) {
 	auth := jwtServerAuthenticator{
-		verifyBearerToken: func(context.Context, string) error {
-			return fmt.Errorf("bad token")
+		verifyBearerToken: func(context.Context, string) (string, error) {
+			return "", fmt.Errorf("bad token")
 		},
 	}
 
@@ -96,6 +151,29 @@ func TestJWTServerAuthenticatorRequiresBearer(t *testing.T) {
 	_, err = auth.authenticate(ctx)
 	if code := status.Code(err); code != codes.Unauthenticated {
 		t.Fatalf("bad bearer: want Unauthenticated, got %v (err=%v)", code, err)
+	}
+}
+
+func TestJWTServerAuthenticatorInjectsPrincipal(t *testing.T) {
+	const subject = "system:serviceaccount:default:router"
+	auth := jwtServerAuthenticator{
+		verifyBearerToken: func(context.Context, string) (string, error) {
+			return subject, nil
+		},
+	}
+
+	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", "Bearer good-token"))
+	newCtx, err := auth.authenticate(ctx)
+	if err != nil {
+		t.Fatalf("authenticate: %v", err)
+	}
+	got, ok := principal.FromContext(newCtx)
+	if !ok {
+		t.Fatal("no principal in context")
+	}
+	want := principal.PrincipalInfo{ID: subject, Kind: principal.KindJWT}
+	if got != want {
+		t.Errorf("principal=%+v want %+v", got, want)
 	}
 }
 

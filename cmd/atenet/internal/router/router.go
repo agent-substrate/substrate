@@ -18,6 +18,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
@@ -39,6 +40,7 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/kubernetes"
@@ -48,6 +50,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 
 	"github.com/agent-substrate/substrate/internal/ateapiauth"
+	"github.com/agent-substrate/substrate/internal/credbundle"
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	v1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -88,6 +91,13 @@ type RouterConfig struct {
 	AteapiCAFile     string
 	AteapiServerName string
 	AteapiTokenFile  string
+
+	// mTLS mode (ateapi-auth=mtls) material: the router presents
+	// AteapiClientCertPath (the podidentity credential bundle) as its client
+	// cert and verifies ateapi's serving cert against AteapiCACertsPath (the
+	// servicedns trust bundle).
+	AteapiClientCertPath string
+	AteapiCACertsPath    string
 }
 
 // RouterServer instantiates and coordinates runtime threads executing system modules.
@@ -149,6 +159,53 @@ func NewRouterServer(cfg RouterConfig) (*RouterServer, error) {
 	}, nil
 }
 
+// ateapiTransportCreds builds the mTLS credentials the router uses to dial
+// ateapi in ateapi-auth=mtls mode. When both the servicedns trust bundle and
+// the podidentity client credential bundle are present (the in-cluster case,
+// mounted via projected pod-certificate volumes), it verifies ateapi's serving
+// cert against the servicedns trust bundle and presents its own podidentity
+// SPIFFE client cert. When that material is absent, it returns an error rather
+// than falling back to an insecure connection.
+func ateapiTransportCreds(cfg RouterConfig) (credentials.TransportCredentials, error) {
+	tlsCfg, err := ateapiTLSConfig(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return credentials.NewTLS(tlsCfg), nil
+}
+
+func ateapiTLSConfig(cfg RouterConfig) (*tls.Config, error) {
+	haveCA := fileExists(cfg.AteapiCACertsPath)
+	haveClientCert := fileExists(cfg.AteapiClientCertPath)
+
+	if !haveCA || !haveClientCert {
+		return nil, fmt.Errorf("ateapi mTLS material not found: ca-certs=%q client-cert=%q",
+			cfg.AteapiCACertsPath, cfg.AteapiClientCertPath)
+	}
+
+	caBytes, err := os.ReadFile(cfg.AteapiCACertsPath)
+	if err != nil {
+		return nil, fmt.Errorf("read ateapi CA certs: %w", err)
+	}
+	rootCAs := x509.NewCertPool()
+	if !rootCAs.AppendCertsFromPEM(caBytes) {
+		return nil, fmt.Errorf("parse ateapi CA certs from %s", cfg.AteapiCACertsPath)
+	}
+
+	return &tls.Config{
+		RootCAs:              rootCAs,
+		GetClientCertificate: credbundle.ClientLoader(cfg.AteapiClientCertPath),
+	}, nil
+}
+
+func fileExists(path string) bool {
+	if path == "" {
+		return false
+	}
+	_, err := os.Stat(path)
+	return err == nil
+}
+
 func (s *RouterServer) Run(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -197,14 +254,26 @@ func (s *RouterServer) Run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("invalid --ateapi-auth: %w", err)
 	}
-	dialOpts, err := ateapiauth.DialOptions(ateapiauth.ClientConfig{
-		Mode:       authMode,
-		CAFile:     s.cfg.AteapiCAFile,
-		ServerName: s.cfg.AteapiServerName,
-		TokenFile:  s.cfg.AteapiTokenFile,
-	})
-	if err != nil {
-		return fmt.Errorf("building ateapi dial options: %w", err)
+	var dialOpts []grpc.DialOption
+	switch authMode {
+	case ateapiauth.ModeMTLS:
+		// Real mutual TLS: present the router's podidentity client cert and
+		// verify ateapi's serving cert against the servicedns trust bundle.
+		creds, err := ateapiTransportCreds(s.cfg)
+		if err != nil {
+			return fmt.Errorf("building ateapi mTLS credentials: %w", err)
+		}
+		dialOpts = []grpc.DialOption{grpc.WithTransportCredentials(creds)}
+	default:
+		dialOpts, err = ateapiauth.DialOptions(ateapiauth.ClientConfig{
+			Mode:       authMode,
+			CAFile:     s.cfg.AteapiCAFile,
+			ServerName: s.cfg.AteapiServerName,
+			TokenFile:  s.cfg.AteapiTokenFile,
+		})
+		if err != nil {
+			return fmt.Errorf("building ateapi dial options: %w", err)
+		}
 	}
 	dialOpts = append(dialOpts, grpc.WithStatsHandler(otelgrpc.NewClientHandler()))
 	conn, err := grpc.NewClient(

@@ -24,11 +24,15 @@ package ateapiauth
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"strings"
 
+	"github.com/agent-substrate/substrate/internal/principal"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 )
 
@@ -73,9 +77,10 @@ func ValidateServerConfig(cfg ServerConfig) error {
 type ServerConfig struct {
 	Mode Mode
 
-	// VerifyBearerToken verifies a Bearer token presented by a client. Required
-	// for ModeJWT and ignored for ModeMTLS.
-	VerifyBearerToken func(context.Context, string) error
+	// VerifyBearerToken verifies a Bearer token presented by a client and
+	// returns the authenticated principal's ID (e.g. the JWT subject).
+	// Required for ModeJWT and ignored for ModeMTLS.
+	VerifyBearerToken func(context.Context, string) (string, error)
 }
 
 // UnaryServerInterceptor returns a gRPC unary interceptor enforcing cfg.
@@ -129,13 +134,51 @@ func serverAuthenticatorFor(cfg ServerConfig) serverAuthenticator {
 type mtlsServerAuthenticator struct{}
 
 func (mtlsServerAuthenticator) authenticate(ctx context.Context) (context.Context, error) {
-	// TODO: Extract the transport-authenticated client identity and attach it
-	// to ctx once ateapi has an authorization layer.
-	return ctx, nil
+	pInfo := principal.PrincipalInfo{
+		ID: "anonymous",
+	}
+	if id, ok := mtlsPeerIdentity(ctx); ok {
+		pInfo = principal.PrincipalInfo{
+			ID:   id,
+			Kind: principal.KindMTLS,
+		}
+	}
+	return principal.InjectContext(ctx, pInfo), nil
+}
+
+// mtlsPeerIdentity extracts the client identity (the first URI SAN, a SPIFFE
+// ID) from the transport-authenticated peer certificate, if any.
+func mtlsPeerIdentity(ctx context.Context) (string, bool) {
+	p, ok := peer.FromContext(ctx)
+	if !ok || p.AuthInfo == nil {
+		slog.ErrorContext(ctx, "Authentication failed: no peer or auth info in context.")
+		return "", false
+	}
+
+	tlsInfo, ok := p.AuthInfo.(credentials.TLSInfo)
+	if !ok {
+		slog.ErrorContext(ctx, "Authentication failed: no TLS info in context.")
+		return "", false
+	}
+
+	if len(tlsInfo.State.PeerCertificates) == 0 {
+		slog.ErrorContext(ctx, "Authentication failed: no peer certificates in TLS info.")
+		return "", false
+	}
+
+	clientCert := tlsInfo.State.PeerCertificates[0]
+	if len(clientCert.URIs) == 0 {
+		slog.ErrorContext(ctx, "Authentication failed: no URIs in peer certificate.")
+		return "", false
+	}
+
+	id := clientCert.URIs[0].String()
+	slog.InfoContext(ctx, "Authentication successful", slog.String("id", id))
+	return id, true
 }
 
 type jwtServerAuthenticator struct {
-	verifyBearerToken func(context.Context, string) error
+	verifyBearerToken func(context.Context, string) (string, error)
 }
 
 func (a jwtServerAuthenticator) authenticate(ctx context.Context) (context.Context, error) {
@@ -143,12 +186,14 @@ func (a jwtServerAuthenticator) authenticate(ctx context.Context) (context.Conte
 	if !ok {
 		return nil, status.Error(codes.Unauthenticated, "missing bearer token")
 	}
-	if err := a.verifyBearerToken(ctx, bearer); err != nil {
+	id, err := a.verifyBearerToken(ctx, bearer)
+	if err != nil {
 		return nil, status.Errorf(codes.Unauthenticated, "invalid bearer token: %v", err)
 	}
-	// TODO: Attach the verified JWT identity to ctx once ateapi has an
-	// authorization layer that consumes it.
-	return ctx, nil
+	return principal.InjectContext(ctx, principal.PrincipalInfo{
+		ID:   id,
+		Kind: principal.KindJWT,
+	}), nil
 }
 
 type invalidServerAuthenticator struct {
