@@ -175,27 +175,27 @@ func ValidateSnapshotURIPrefix(prefix string) error {
 func ValidateWorker(worker *ateapipb.Worker, fldPath *field.Path) field.ErrorList {
 	var errs field.ErrorList
 
-	if val := worker.WorkerNamespace; val == "" {
-		errs = append(errs, field.Required(fldPath.Child("worker_namespace"), ""))
+	if val, fldPath := worker.WorkerNamespace, fldPath.Child("worker_namespace"); val == "" {
+		errs = append(errs, field.Required(fldPath, ""))
 	} else {
 		for _, msg := range content.IsDNS1123Label(val) {
-			errs = append(errs, field.Invalid(fldPath.Child("worker_namespace"), val, msg))
+			errs = append(errs, field.Invalid(fldPath, val, msg))
 		}
 	}
 
-	if val := worker.WorkerPool; val == "" {
-		errs = append(errs, field.Required(fldPath.Child("worker_pool"), ""))
+	if val, fldPath := worker.WorkerPool, fldPath.Child("worker_pool"); val == "" {
+		errs = append(errs, field.Required(fldPath, ""))
 	} else {
 		for _, msg := range content.IsDNS1123Subdomain(val) {
-			errs = append(errs, field.Invalid(fldPath.Child("worker_pool"), val, msg))
+			errs = append(errs, field.Invalid(fldPath, val, msg))
 		}
 	}
 
-	if val := worker.WorkerPod; val == "" {
-		errs = append(errs, field.Required(fldPath.Child("worker_pod"), ""))
+	if val, fldPath := worker.WorkerPod, fldPath.Child("worker_pod"); val == "" {
+		errs = append(errs, field.Required(fldPath, ""))
 	} else {
 		for _, msg := range content.IsDNS1123Subdomain(val) {
-			errs = append(errs, field.Invalid(fldPath.Child("worker_pod"), val, msg))
+			errs = append(errs, field.Invalid(fldPath, val, msg))
 		}
 	}
 
@@ -215,11 +215,11 @@ func ValidateWorker(worker *ateapipb.Worker, fldPath *field.Path) field.ErrorLis
 		errs = append(errs, ValidateUUID(val, fldPath)...)
 	}
 
-	if val := worker.NodeName; val == "" {
-		errs = append(errs, field.Required(fldPath.Child("node_name"), ""))
+	if val, fldPath := worker.NodeName, fldPath.Child("node_name"); val == "" {
+		errs = append(errs, field.Required(fldPath, ""))
 	} else {
 		for _, msg := range content.IsDNS1123Subdomain(val) {
-			errs = append(errs, field.Invalid(fldPath.Child("node_name"), val, msg))
+			errs = append(errs, field.Invalid(fldPath, val, msg))
 		}
 	}
 
@@ -232,19 +232,19 @@ func ValidateAssignment(assignment *ateapipb.Assignment, fldPath *field.Path) fi
 	if val, fldPath := assignment.ActorTemplate, fldPath.Child("actor_template"); val == nil {
 		errs = append(errs, field.Required(fldPath, ""))
 	} else {
-		if val := assignment.ActorTemplate.Namespace; val == "" {
-			errs = append(errs, field.Required(fldPath.Child("namespace"), ""))
+		if val, fldPath := assignment.ActorTemplate.Namespace, fldPath.Child("namespace"); val == "" {
+			errs = append(errs, field.Required(fldPath, ""))
 		} else {
 			for _, msg := range content.IsDNS1123Label(val) {
-				errs = append(errs, field.Invalid(fldPath.Child("namespace"), val, msg))
+				errs = append(errs, field.Invalid(fldPath, val, msg))
 			}
 		}
 
-		if val := assignment.ActorTemplate.Name; val == "" {
-			errs = append(errs, field.Required(fldPath.Child("name"), ""))
+		if val, fldPath := assignment.ActorTemplate.Name, fldPath.Child("name"); val == "" {
+			errs = append(errs, field.Required(fldPath, ""))
 		} else {
 			for _, msg := range content.IsDNS1123Subdomain(val) {
-				errs = append(errs, field.Invalid(fldPath.Child("name"), val, msg))
+				errs = append(errs, field.Invalid(fldPath, val, msg))
 			}
 		}
 	}

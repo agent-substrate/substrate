@@ -56,10 +56,10 @@ func validateDeleteActorRequest(req *ateapipb.DeleteActorRequest) error {
 	var fldPath *field.Path
 	var errs field.ErrorList
 
-	if val := req.ActorRef; val == nil {
-		errs = append(errs, field.Required(fldPath.Child("actor_ref"), ""))
+	if val, fldPath := req.ActorRef, fldPath.Child("actor_ref"); val == nil {
+		errs = append(errs, field.Required(fldPath, ""))
 	} else {
-		errs = append(errs, resources.ValidateActorRef(val, fldPath.Child("actor_ref"))...)
+		errs = append(errs, resources.ValidateActorRef(val, fldPath)...)
 	}
 
 	if len(errs) > 0 {
