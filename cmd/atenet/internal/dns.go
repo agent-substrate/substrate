@@ -33,10 +33,11 @@ import (
 )
 
 type DnsConfig struct {
-	LogLevel          string
-	Kubeconfig        string
-	ReconcileInterval time.Duration
-	CorefilePath      string
+	LogLevel           string
+	Kubeconfig         string
+	ReconcileInterval  time.Duration
+	CorefilePath       string
+	IngressServiceName string
 }
 
 func NewDnsCmd() *cobra.Command {
@@ -87,10 +88,11 @@ func NewDnsCmd() *cobra.Command {
 			}
 
 			dnsController := &dns.Controller{
-				Client:       k8sClient,
-				Interval:     cfg.ReconcileInterval,
-				CorefilePath: cfg.CorefilePath,
-				Reloader:     dns.NewConfigReloader(),
+				Client:             k8sClient,
+				Interval:           cfg.ReconcileInterval,
+				CorefilePath:       cfg.CorefilePath,
+				Reloader:           dns.NewConfigReloader(),
+				IngressServiceName: cfg.IngressServiceName,
 			}
 
 			slog.InfoContext(ctx, "Starting DNS Controller subsystem")
@@ -102,6 +104,9 @@ func NewDnsCmd() *cobra.Command {
 	cmd.Flags().StringVar(&cfg.Kubeconfig, "kubeconfig", "", "Absolute path to the kubeconfig configuration file")
 	cmd.Flags().DurationVar(&cfg.ReconcileInterval, "interval", 10*time.Second, "Interval for reconciling DNS configurations")
 	cmd.Flags().StringVar(&cfg.CorefilePath, "corefile-path", "/etc/coredns/Corefile", "Path to the local Corefile configuration on shared volume")
+	cmd.Flags().StringVar(&cfg.IngressServiceName, "ingress-service-name", dns.DefaultIngressServiceName,
+		"Kubernetes Service in ate-system whose ClusterIP actor DNS resolves to. "+
+			"Set this to whatever Service fronts your gateway if you didn't name it \"atenet-gateway\".")
 
 	return cmd
 }

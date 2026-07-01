@@ -17,15 +17,11 @@ package router
 import (
 	"context"
 	"fmt"
-	"io"
 	"log/slog"
-	"net/http"
-	"strings"
 	"sync"
 	"time"
 
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"k8s.io/client-go/kubernetes"
 )
 
@@ -39,7 +35,6 @@ type ComponentHealth struct {
 }
 
 type RouterHealthReport struct {
-	Envoy  ComponentHealth `json:"envoy"`
 	K8sAPI ComponentHealth `json:"k8s_api"`
 	AteAPI ComponentHealth `json:"ate_api"`
 }
@@ -51,11 +46,10 @@ type routerHealth struct {
 
 	report RouterHealthReport
 
-	interval    time.Duration
-	clientset   kubernetes.Interface
-	apiClient   ateapipb.ControlClient
-	cfg         RouterConfig
-	envoyClient *http.Client
+	interval  time.Duration
+	clientset kubernetes.Interface
+	apiClient ateapipb.ControlClient
+	cfg       RouterConfig
 }
 
 func newRouterHealth(interval time.Duration, clientset kubernetes.Interface, apiClient ateapipb.ControlClient, cfg RouterConfig) *routerHealth {
@@ -63,11 +57,10 @@ func newRouterHealth(interval time.Duration, clientset kubernetes.Interface, api
 		interval = time.Second
 	}
 	return &routerHealth{
-		interval:    interval,
-		clientset:   clientset,
-		apiClient:   apiClient,
-		cfg:         cfg,
-		envoyClient: &http.Client{Transport: otelhttp.NewTransport(http.DefaultTransport)},
+		interval:  interval,
+		clientset: clientset,
+		apiClient: apiClient,
+		cfg:       cfg,
 	}
 }
 
@@ -94,24 +87,7 @@ func (rh *routerHealth) check(ctx context.Context) {
 
 	slog.InfoContext(ctx, "Checking health")
 
-	// 1. Check Envoy
-	{
-		healthy, msg := rh.checkEnvoy(ctx)
-		if healthy {
-			rh.report.Envoy.Healthy = true
-			rh.report.Envoy.Message = msg
-			rh.report.Envoy.LastSuccess = time.Now()
-			rh.report.Envoy.SuccessCount++
-		} else {
-			rh.report.Envoy.Healthy = false
-			rh.report.Envoy.Message = msg
-			rh.report.Envoy.LastFailure = time.Now()
-			rh.report.Envoy.FailureCount++
-			slog.ErrorContext(ctx, "Envoy health check failed", slog.String("msg", msg))
-		}
-	}
-
-	// 2. Check Kubernetes API
+	// 1. Check Kubernetes API
 	{
 		healthy, msg := rh.checkK8s()
 		if healthy {
@@ -128,7 +104,7 @@ func (rh *routerHealth) check(ctx context.Context) {
 		}
 	}
 
-	// 3. Check ATE API gRPC
+	// 2. Check ATE API gRPC
 	{
 		healthy, msg := rh.checkAteAPI(ctx)
 		if healthy {
@@ -144,38 +120,6 @@ func (rh *routerHealth) check(ctx context.Context) {
 			slog.ErrorContext(ctx, "ATE API gRPC health check failed", slog.String("msg", msg))
 		}
 	}
-}
-
-func (rh *routerHealth) checkEnvoy(ctx context.Context) (bool, string) {
-	timeoutCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(timeoutCtx, "GET", "http://127.0.0.1:9901/ready", nil)
-	if err != nil {
-		return false, err.Error()
-	}
-
-	resp, err := rh.envoyClient.Do(req)
-	if err != nil {
-		return false, err.Error()
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return false, fmt.Sprintf("unexpected status code %d", resp.StatusCode)
-	}
-
-	bodyBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return false, err.Error()
-	}
-
-	bodyStr := strings.TrimSpace(string(bodyBytes))
-	if bodyStr != "LIVE" {
-		return false, fmt.Sprintf("expected LIVE but got %q", bodyStr)
-	}
-
-	return true, "LIVE"
 }
 
 func (rh *routerHealth) checkK8s() (bool, string) {

@@ -11,7 +11,14 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
+#
+# atenet-router: the actor-aware routing core and ExtProc server.
+#
+# Substrate does not ship or manage a proxy. atenet-router exposes an ext_proc
+# gRPC endpoint on port 50051 that any dynamic-forwarding proxy can call to
+# resolve actor routes; you bring and configure your own gateway in front of
+# it. See docs/dev/ingress.md for reference gateway configs.
+---
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -47,58 +54,6 @@ roleRef:
   name: atenet-router
   apiGroup: rbac.authorization.k8s.io
 ---
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: atenet-router-envoy-config
-  namespace: ate-system
-data:
-  envoy.yaml: |
-    admin:
-      address:
-        socket_address:
-          address: 0.0.0.0
-          port_value: 9901
-
-    node:
-      id: substrate-envoy-node
-      cluster: substrate-router-cluster
-
-    dynamic_resources:
-      lds_config:
-        resource_api_version: V3
-        ads: {}
-      cds_config:
-        resource_api_version: V3
-        ads: {}
-      ads_config:
-        api_type: GRPC
-        transport_api_version: V3
-        grpc_services:
-        - envoy_grpc:
-            cluster_name: xds_cluster
-
-    static_resources:
-      clusters:
-      - name: xds_cluster
-        connect_timeout: 0.25s
-        type: STRICT_DNS
-        lb_policy: ROUND_ROBIN
-        typed_extension_protocol_options:
-          envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
-            "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
-            explicit_http_config:
-              http2_protocol_options: {}
-        load_assignment:
-          cluster_name: xds_cluster
-          endpoints:
-          - lb_endpoints:
-            - endpoint:
-                address:
-                  socket_address:
-                    address: 127.0.0.1
-                    port_value: 18000
----
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -127,16 +82,11 @@ spec:
         - "router"
         - "--standalone"
         - "--namespace=ate-system"
-        - "--port-http=8080"
-        - "--port-xds=18000"
         - "--port-extproc=50051"
-        - "--extproc-address=127.0.0.1"
+        # Bind ExtProc on all interfaces so external proxies can reach it.
+        - "--extproc-address=0.0.0.0"
         - "--ateapi-address=api.ate-system.svc:443"
         - "--status-port=4040"
-        - "--port-https=8443"
-        - "--envoy-cert-path=/run/servicedns.podcert.ate.dev/credential-bundle.pem"
-        - "--otlp-collector-address=opentelemetry-collector.gke-managed-otel.svc.cluster.local:4317"
-        - "--ateapi-ca-file=/run/servicedns-ca/trust-bundle.pem"
         env:
         - name: POD_NAME
           valueFrom:
@@ -155,45 +105,12 @@ spec:
         - name: OTEL_EXPORTER_OTLP_ENDPOINT
           value: http://opentelemetry-collector.gke-managed-otel.svc.cluster.local:4317
         ports:
-        - name: xds
-          containerPort: 18000
         - name: extproc
           containerPort: 50051
         - name: status
           containerPort: 4040
         - name: metrics
           containerPort: 9090
-      - name: envoy
-        image: envoyproxy/envoy:v1.30-latest
-        command:
-        - "/usr/local/bin/envoy"
-        - "-c"
-        - "/etc/envoy/envoy.yaml"
-        - "--component-log-level"
-        - "upstream:debug,router:debug,ext_proc:debug"
-        ports:
-        - name: http
-          containerPort: 8080
-        - name: https
-          containerPort: 8443
-        - name: admin
-          containerPort: 9901
-        volumeMounts:
-        - name: envoy-config
-          mountPath: /etc/envoy
-        - name: "servicedns"
-          mountPath: "/run/servicedns.podcert.ate.dev"
-      volumes:
-      - name: envoy-config
-        configMap:
-          name: atenet-router-envoy-config
-      - name: "servicedns"
-        projected:
-          sources:
-          - podCertificate:
-              signerName: servicedns.podcert.ate.dev/identity
-              keyType: ECDSAP256
-              credentialBundlePath: credential-bundle.pem
 ---
 apiVersion: v1
 kind: Service
@@ -205,11 +122,12 @@ spec:
   selector:
     app: atenet-router
   ports:
-  - name: http
-    port: 80
-    targetPort: 8080
+  # ExtProc port exposed cluster-internally so an external proxy can call it.
+  - name: extproc
+    port: 50051
+    targetPort: 50051
     protocol: TCP
-  - name: https
-    port: 443
-    targetPort: 8443
+  - name: status
+    port: 4040
+    targetPort: 4040
     protocol: TCP

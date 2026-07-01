@@ -1,0 +1,123 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# atenet-gateway (agentgateway variant) — reference external proxy, power-user
+# alternative to atenet-gateway-envoy.yaml.
+#
+# This is the agentgateway equivalent of atenet-gateway-envoy.yaml (Envoy). It is
+# a standalone agentgateway (https://agentgateway.dev) configured by a
+# hand-written config file — NOT via the Kubernetes Gateway API / a gateway
+# controller. All actor-aware routing is delegated to atenet-router via the
+# ext_proc gRPC filter, exactly as in the Envoy variant.
+#
+# Why direct config and not Gateway API: the standard Gateway API policy CRDs
+# (EnvoyExtensionPolicy / AgentgatewayPolicy) do not expose the two knobs this
+# pipeline needs — permission for ext_proc to rewrite :authority, and a dynamic
+# forward proxy backend. Authoring the proxy config directly is the only way to
+# combine them without raw-xDS patches or the Gateway API Inference Extension.
+#
+# Deploy INSTEAD OF atenet-gateway-envoy.yaml (they share the atenet-gateway
+# Service name), alongside manifests/ate-install/atenet-router.yaml. DNS must
+# resolve actor hostnames to the atenet-gateway Service ClusterIP — see
+# docs/dev/ingress.md.
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: atenet-gateway-agentgateway-config
+  namespace: ate-system
+data:
+  config.yaml: |
+    # yaml-language-server: $schema=https://agentgateway.dev/schema/config
+    binds:
+    - port: 8080
+      listeners:
+      - name: ingress
+        protocol: HTTP
+        routes:
+        # No `matches`/`hostnames` => matches every request (any host, any path),
+        # mirroring the Envoy variant's domains:["*"] prefix:"/" route.
+        - name: actors
+          policies:
+            # Step 1: call atenet-router ext_proc to resolve actor -> worker IP.
+            # On success it rewrites :authority to <worker-ip>:80; on denial it
+            # returns an ImmediateResponse (404/503/etc), which agentgateway honors.
+            extProc:
+              host: "atenet-router.ate-system.svc:50051"
+              failureMode: failClosed
+              processingOptions:
+                requestHeaderMode: send
+                responseHeaderMode: skip
+                requestBodyMode: none   # headers-only; do not stream the body
+                responseBodyMode: none
+                requestTrailerMode: skip
+                responseTrailerMode: skip
+          backends:
+          # Step 2: dynamic forward proxy. agentgateway re-resolves the upstream
+          # target from the :authority the ext_proc set, and connects to that
+          # <worker-ip>:80 directly.
+          - dynamic: {}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: atenet-gateway
+  namespace: ate-system
+  labels:
+    app: atenet-gateway
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: atenet-gateway
+  template:
+    metadata:
+      labels:
+        app: atenet-gateway
+    spec:
+      containers:
+      - name: agentgateway
+        image: ghcr.io/agentgateway/agentgateway:latest
+        args:
+        - "-f"
+        - "/etc/agentgateway/config.yaml"
+        ports:
+        - name: http
+          containerPort: 8080
+        - name: admin
+          containerPort: 15000
+        volumeMounts:
+        - name: config
+          mountPath: /etc/agentgateway
+      volumes:
+      - name: config
+        configMap:
+          name: atenet-gateway-agentgateway-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: atenet-gateway
+  namespace: ate-system
+  labels:
+    app: atenet-gateway
+spec:
+  type: ClusterIP
+  selector:
+    app: atenet-gateway
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8080
+    protocol: TCP

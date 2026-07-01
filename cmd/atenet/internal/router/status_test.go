@@ -51,8 +51,6 @@ func TestStatuszEndpoint(t *testing.T) {
 		Standalone:    true,
 		Namespace:     "default",
 		StatusPort:    httpPort,
-		HttpPort:      8080,
-		XdsPort:       18000,
 		ExtprocPort:   50051,
 		TemplatesFile: tmpFile.Name(),
 		MetricsAddr:   "127.0.0.1:0",
@@ -64,7 +62,7 @@ func TestStatuszEndpoint(t *testing.T) {
 		t.Fatalf("Failed generating router server: %v", err)
 	}
 
-	srv.extprocSrv = NewExtProcServer(cfg.ExtprocPort, &mockClient{}, nil)
+	srv.extprocSrv = NewExtProcServer(cfg.ExtprocPort, &mockResolver{}, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

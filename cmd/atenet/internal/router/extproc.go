@@ -31,26 +31,24 @@ import (
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/propagation"
 	"google.golang.org/grpc"
-
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
-// ExtProcServer implements the Envoy external processing gRPC server
-// to dynamically manage actor activations based on request traffic.
+// ExtProcServer implements the Envoy external processing gRPC server.
+// It is a thin adapter: it translates Envoy ExtProc protocol to/from the
+// gateway-neutral RouteResolver and records metrics.
 type ExtProcServer struct {
 	port          int
-	apiClient     ateapipb.ControlClient
+	resolver      RouteResolver
 	recorder      *QueryRecorder
-	resumer       *ActorResumer
 	routeDuration metric.Float64Histogram
 }
 
-func NewExtProcServer(port int, apiClient ateapipb.ControlClient, routeDuration metric.Float64Histogram) *ExtProcServer {
+// NewExtProcServer creates an ExtProcServer backed by the given resolver.
+func NewExtProcServer(port int, resolver RouteResolver, routeDuration metric.Float64Histogram) *ExtProcServer {
 	return &ExtProcServer{
 		port:          port,
-		apiClient:     apiClient,
+		resolver:      resolver,
 		recorder:      NewQueryRecorder(100),
-		resumer:       NewActorResumer(apiClient),
 		routeDuration: routeDuration,
 	}
 }
@@ -92,7 +90,7 @@ func (s *ExtProcServer) Process(stream extprocv3.ExternalProcessor_ProcessServer
 		switch reqType := req.Request.(type) {
 		case *extprocv3.ProcessingRequest_RequestHeaders:
 			start := time.Now()
-			hResponse, rqm, target, tmplNs, tmplName, err := s.handleRequestHeaders(stream.Context(), reqType.RequestHeaders)
+			hResponse, rqm, res, err := s.handleRequestHeaders(stream.Context(), reqType.RequestHeaders)
 			elapsed := time.Since(start)
 			if err != nil {
 				slog.ErrorContext(stream.Context(), "Error during ext_proc RequestHeaders processing", slog.String("err", err.Error()))
@@ -102,10 +100,18 @@ func (s *ExtProcServer) Process(stream extprocv3.ExternalProcessor_ProcessServer
 				} else {
 					resp = immediateResponse(envoy_type.StatusCode_InternalServerError, err.Error())
 				}
+				var tmplNs, tmplName string
+				if res != nil && res.Denial != nil {
+					// outcome already captured; labels stay empty for denials from parse failures
+					_ = res
+				}
 				s.recordRouteDuration(stream.Context(), elapsed, tmplNs, tmplName, classifyOutcome(err))
 				s.recorder.AddRouterRequest(start, elapsed, "Error", "-", rqm)
 			} else {
 				resp.Response = &extprocv3.ProcessingResponse_RequestHeaders{RequestHeaders: hResponse}
+				tmplNs := res.Success.TemplateRef.Namespace
+				tmplName := res.Success.TemplateRef.Name
+				target := net.JoinHostPort(res.Success.Backend.IP, fmt.Sprintf("%d", res.Success.Backend.Port))
 				s.recordRouteDuration(stream.Context(), elapsed, tmplNs, tmplName, "ok")
 				s.recorder.AddRouterRequest(start, elapsed, "Route ok", target, rqm)
 			}
@@ -127,10 +133,16 @@ func (s *ExtProcServer) Process(stream extprocv3.ExternalProcessor_ProcessServer
 	}
 }
 
+// handleRequestHeaders is the ExtProc adapter for a single request. It
+// extracts trace context, builds a RouteRequest, calls the resolver, and
+// maps the RouteResolution to an extproc HeadersResponse.
+//
+// On denial, it returns a non-nil *reqError so Process() can build an
+// ImmediateResponse. The RouteResolution is returned alongside for label access.
 func (s *ExtProcServer) handleRequestHeaders(
 	ctx context.Context,
 	reqHeaders *extprocv3.HttpHeaders,
-) (*extprocv3.HeadersResponse, *requestMetadata, string, string, string, error) {
+) (*extprocv3.HeadersResponse, *requestMetadata, *RouteResolution, error) {
 	metadata := newRequestMetadata(reqHeaders.Headers.GetHeaders())
 	slog.InfoContext(ctx, "Request", slog.String("host", metadata.host))
 
@@ -142,41 +154,28 @@ func (s *ExtProcServer) handleRequestHeaders(
 	ctx, span := otel.Tracer(routerServiceName).Start(ctx, "ExtProc.RequestHeaders")
 	defer span.End()
 
-	atespace, actorID, err := parseActorRef(metadata.host)
-	if err != nil {
-		// Host is invalid, respond with 404.
-		return nil, metadata, "", "", "", invalidHostErr(metadata.host, err)
+	req := RouteRequest{
+		Authority: metadata.host,
+		Path:      metadata.path,
+		Headers:   metadata.headers,
+		Adapter:   "extproc",
 	}
 
-	slog.InfoContext(ctx, "ResumeActor", slog.String("atespace", atespace), slog.String("actorID", actorID))
-	actor, err := s.resumer.ResumeActor(ctx, atespace, actorID)
-	if err != nil {
-		return nil, metadata, "", "", "", mapResumeError(actorID, err)
+	res := s.resolver.ResolveRoute(ctx, req)
+	if res.Denial != nil {
+		d := res.Denial
+		re := &reqError{
+			msg:        d.Message,
+			cause:      d.Cause,
+			statusCode: d.HTTPStatus,
+		}
+		return nil, metadata, &res, re
 	}
 
-	// Actor template identity, used as low-cardinality route-latency metric
-	// attributes (see recordRouteDuration).
-	tmplNs := actor.GetActorTemplateNamespace()
-	tmplName := actor.GetActorTemplateName()
+	success := res.Success
+	targetAddr := net.JoinHostPort(success.Backend.IP, fmt.Sprintf("%d", success.Backend.Port))
+	slog.InfoContext(ctx, "Route ok", slog.String("actorID", success.ActorID), slog.String("targetAddr", targetAddr))
 
-	workerIP := actor.GetAteomPodIp()
-	slog.InfoContext(ctx, "ResumeActor result",
-		slog.String("atespace", atespace),
-		slog.String("actorID", actorID),
-		slog.String("status", actor.GetStatus().String()),
-		slog.String("workerIP", workerIP))
-
-	if ip := net.ParseIP(workerIP); ip == nil {
-		return nil, metadata, "", tmplNs, tmplName, newReqError(envoy_type.StatusCode_InternalServerError,
-			"actor %q routing failed", actorID)
-	}
-
-	// TODO(bowei) -- handle more than port 80 on the actor.
-	targetAddr := net.JoinHostPort(workerIP, "80")
-
-	slog.InfoContext(ctx, "Route ok", slog.String("actorID", actorID), slog.String("targetAddr", targetAddr))
-
-	// Route by rewriting the :authority header.
 	mutation := &extprocv3.HeaderMutation{}
 	addAuthorityMutation(targetAddr, mutation)
 
@@ -184,7 +183,7 @@ func (s *ExtProcServer) handleRequestHeaders(
 		Response: &extprocv3.CommonResponse{
 			HeaderMutation: mutation,
 		},
-	}, metadata, targetAddr, tmplNs, tmplName, nil
+	}, metadata, &res, nil
 }
 
 func (s *ExtProcServer) recordRouteDuration(ctx context.Context, d time.Duration, tmplNs, tmplName, outcome string) {

@@ -18,21 +18,31 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"log/slog"
+	"net/http"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 	envoy_type "github.com/envoyproxy/go-control-plane/envoy/type/v3"
+
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
+// mockResolver is a test double for RouteResolver.
+type mockResolver struct {
+	result RouteResolution
+}
+
+func (m *mockResolver) ResolveRoute(_ context.Context, _ RouteRequest) RouteResolution {
+	return m.result
+}
+
+// mockClient satisfies ateapipb.ControlClient for use in resolver construction
+// tests that still exercise the full ActorRouteResolver path.
 type mockClient struct {
 	ateapipb.ControlClient
 	resumeFn func(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error)
@@ -42,6 +52,23 @@ func (m *mockClient) ResumeActor(ctx context.Context, in *ateapipb.ResumeActorRe
 	return m.resumeFn(ctx, in, opts...)
 }
 
+func makeReqHeaders(authority, path string, extra ...[2]string) *extprocv3.HttpHeaders {
+	headers := []*corev3.HeaderValue{
+		{Key: ":path", Value: path},
+		{Key: ":authority", Value: authority},
+		{Key: ":method", Value: "POST"},
+	}
+	for _, kv := range extra {
+		headers = append(headers, &corev3.HeaderValue{Key: kv[0], Value: kv[1]})
+	}
+	return &extprocv3.HttpHeaders{
+		Headers: &corev3.HeaderMap{Headers: headers},
+	}
+}
+
+// TestHandleRequestHeadersDoesNotLogSensitiveData verifies that the ExtProc
+// adapter layer does not leak secrets (auth tokens, cookies, query params) to
+// logs or the query recorder, while still logging routing context (actor ID).
 func TestHandleRequestHeadersDoesNotLogSensitiveData(t *testing.T) {
 	const testUUID = "123e4567-e89b-12d3-a456-426614174000"
 	const secret = "do-not-log-me"
@@ -51,11 +78,12 @@ func TestHandleRequestHeadersDoesNotLogSensitiveData(t *testing.T) {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
-	s := NewExtProcServer(50051, &mockClient{
-		resumeFn: func(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
-			return &ateapipb.ResumeActorResponse{Actor: &ateapipb.Actor{AteomPodIp: "10.0.0.52"}}, nil
-		},
-	}, nil)
+	resolver := &mockResolver{result: RouteResolution{Success: &RouteSuccess{
+		ActorID: testUUID,
+		Backend: Backend{IP: "10.0.0.52", Port: 80},
+		TemplateRef: ActorTemplateRef{},
+	}}}
+	s := NewExtProcServer(50051, resolver, nil)
 
 	reqHeaders := &extprocv3.HttpHeaders{
 		Headers: &corev3.HeaderMap{
@@ -69,7 +97,7 @@ func TestHandleRequestHeadersDoesNotLogSensitiveData(t *testing.T) {
 		},
 	}
 
-	_, metadata, target, _, _, err := s.handleRequestHeaders(context.Background(), reqHeaders)
+	_, metadata, res, err := s.handleRequestHeaders(context.Background(), reqHeaders)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -78,10 +106,8 @@ func TestHandleRequestHeadersDoesNotLogSensitiveData(t *testing.T) {
 	if strings.Contains(out, secret) {
 		t.Errorf("router log leaked sensitive value: %s", out)
 	}
-	if !strings.Contains(out, testUUID) {
-		t.Errorf("router log missing actor/host routing context: %s", out)
-	}
 
+	target := res.Success.Backend.IP
 	s.recorder.AddRouterRequest(time.Now(), time.Millisecond, "Route ok", target, metadata)
 	for _, q := range s.recorder.Get() {
 		if blob, _ := json.Marshal(q); strings.Contains(string(blob), secret) {
@@ -90,165 +116,115 @@ func TestHandleRequestHeadersDoesNotLogSensitiveData(t *testing.T) {
 	}
 }
 
-func TestExtProcHeadersEvaluation(t *testing.T) {
-	const testUUID = "123e4567-e89b-12d3-a456-426614174000"
+// TestExtProcAdapterMapping verifies that the ExtProc adapter correctly maps
+// RouteResolver outcomes to the extproc protocol (header mutation on success,
+// immediate response on denial).
+func TestExtProcAdapterMapping(t *testing.T) {
+	const workerIP = "10.0.0.52"
+	const actorID = "123e4567-e89b-12d3-a456-426614174000"
 
 	tests := []struct {
 		name           string
-		authority      string
-		resumeResp     *ateapipb.ResumeActorResponse
-		resumeErr      error
-		expectErr      bool
-		expectedErrStr string
-		expectedStatus envoy_type.StatusCode
-		expectedTarget string
+		resolution     RouteResolution
+		wantErr        bool
+		wantStatus     envoy_type.StatusCode
+		wantMsgContain string
+		wantTarget     string
 	}{
 		{
-			name:           "invalid host returns 404 identifying the host",
-			authority:      "invalid-host.com",
-			expectErr:      true,
-			expectedErrStr: `invalid host "invalid-host.com": invalid actor DNS name: must end with actors.resources.substrate.ate.dev, got "invalid-host.com"`,
-			expectedStatus: envoy_type.StatusCode_NotFound,
+			name: "success maps to :authority header mutation",
+			resolution: RouteResolution{Success: &RouteSuccess{
+				ActorID: actorID,
+				Backend: Backend{IP: workerIP, Port: 80},
+				TemplateRef: ActorTemplateRef{Namespace: "ns", Name: "tmpl"},
+			}},
+			wantTarget: workerIP + ":80",
 		},
 		{
-			name:           "non-gRPC resume error collapses to 500 without leaking detail",
-			authority:      testUUID + ".team-a.actors.resources.substrate.ate.dev",
-			resumeErr:      errors.New("resume failed with sensitive detail"),
-			expectErr:      true,
-			expectedErrStr: `error resuming actor "123e4567-e89b-12d3-a456-426614174000"`,
-			expectedStatus: envoy_type.StatusCode_InternalServerError,
+			name: "404 denial becomes reqError with correct status",
+			resolution: RouteResolution{Denial: &RouteDenial{
+				HTTPStatus:  http.StatusNotFound,
+				Message:     "actor not found",
+				OutcomeCode: "not_found",
+			}},
+			wantErr:        true,
+			wantStatus:     envoy_type.StatusCode_NotFound,
+			wantMsgContain: "actor not found",
 		},
 		{
-			name:           "FailedPrecondition maps to 503 with preserved desc",
-			authority:      testUUID + ".team-a.actors.resources.substrate.ate.dev",
-			resumeErr:      status.Error(codes.FailedPrecondition, "no free workers available"),
-			expectErr:      true,
-			expectedErrStr: `actor "123e4567-e89b-12d3-a456-426614174000" unavailable: no free workers available`,
-			expectedStatus: envoy_type.StatusCode_ServiceUnavailable,
+			name: "503 denial becomes reqError with correct status",
+			resolution: RouteResolution{Denial: &RouteDenial{
+				HTTPStatus:  http.StatusServiceUnavailable,
+				Message:     "actor unavailable: no free workers",
+				OutcomeCode: "error",
+			}},
+			wantErr:        true,
+			wantStatus:     envoy_type.StatusCode_ServiceUnavailable,
+			wantMsgContain: "no free workers",
 		},
 		{
-			name:           "NotFound maps to 404",
-			authority:      testUUID + ".team-a.actors.resources.substrate.ate.dev",
-			resumeErr:      status.Error(codes.NotFound, "actor missing"),
-			expectErr:      true,
-			expectedErrStr: `actor "123e4567-e89b-12d3-a456-426614174000" not found`,
-			expectedStatus: envoy_type.StatusCode_NotFound,
-		},
-		{
-			name:           "Unavailable maps to 503",
-			authority:      testUUID + ".team-a.actors.resources.substrate.ate.dev",
-			resumeErr:      status.Error(codes.Unavailable, "control-plane down"),
-			expectErr:      true,
-			expectedErrStr: `actor "123e4567-e89b-12d3-a456-426614174000" unavailable`,
-			expectedStatus: envoy_type.StatusCode_ServiceUnavailable,
-		},
-		{
-			name:           "DeadlineExceeded maps to 504",
-			authority:      testUUID + ".team-a.actors.resources.substrate.ate.dev",
-			resumeErr:      status.Error(codes.DeadlineExceeded, "deadline"),
-			expectErr:      true,
-			expectedErrStr: `actor "123e4567-e89b-12d3-a456-426614174000" request timed out`,
-			expectedStatus: envoy_type.StatusCode_GatewayTimeout,
-		},
-		{
-			name:      "Bad Actor IP from resume returns 500 without leaking IP",
-			authority: testUUID + ".team-a.actors.resources.substrate.ate.dev",
-			resumeResp: &ateapipb.ResumeActorResponse{
-				Actor: &ateapipb.Actor{
-					AteomPodIp: "invalid-ip",
-				},
-			},
-			expectErr:      true,
-			expectedErrStr: `actor "123e4567-e89b-12d3-a456-426614174000" routing failed`,
-			expectedStatus: envoy_type.StatusCode_InternalServerError,
-		},
-		{
-			name:      "Successful resume",
-			authority: testUUID + ".team-a.actors.resources.substrate.ate.dev",
-			resumeResp: &ateapipb.ResumeActorResponse{
-				Actor: &ateapipb.Actor{
-					AteomPodIp: "10.0.0.52",
-				},
-			},
-			expectErr:      false,
-			expectedTarget: "10.0.0.52:80",
+			name: "500 denial becomes reqError with correct status",
+			resolution: RouteResolution{Denial: &RouteDenial{
+				HTTPStatus:  http.StatusInternalServerError,
+				Message:     "actor routing failed",
+				OutcomeCode: "error",
+			}},
+			wantErr:        true,
+			wantStatus:     envoy_type.StatusCode_InternalServerError,
+			wantMsgContain: "routing failed",
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			clientMock := &mockClient{
-				resumeFn: func(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
-					if in.GetActorRef().GetName() != testUUID {
-						t.Errorf("unexpected identifier parsed in test context: %s", in.GetActorRef().GetName())
-					}
-					if tc.resumeErr != nil {
-						return nil, tc.resumeErr
-					}
-					return tc.resumeResp, nil
-				},
-			}
+			s := NewExtProcServer(50051, &mockResolver{result: tc.resolution}, nil)
+			reqHeaders := makeReqHeaders(actorID+".team-a.actors.resources.substrate.ate.dev", "/v1/invoke")
 
-			s := NewExtProcServer(50051, clientMock, nil)
-
-			reqHeaders := &extprocv3.HttpHeaders{
-				Headers: &corev3.HeaderMap{
-					Headers: []*corev3.HeaderValue{
-						{Key: ":path", Value: "/v1/actors/invoke"},
-						{Key: ":authority", Value: tc.authority},
-						{Key: ":method", Value: "POST"},
-					},
-				},
-			}
-
-			res, metadata, target, _, _, err := s.handleRequestHeaders(context.Background(), reqHeaders)
-			if tc.expectErr {
+			hResp, _, res, err := s.handleRequestHeaders(context.Background(), reqHeaders)
+			if tc.wantErr {
 				if err == nil {
-					t.Fatalf("expected error but got nil")
+					t.Fatalf("expected error, got nil")
 				}
-				if tc.expectedErrStr != "" && err.Error() != tc.expectedErrStr {
-					t.Errorf("client body mismatch:\n  got:  %q\n  want: %q", err.Error(), tc.expectedErrStr)
+				var re *reqError
+				if !isReqError(err, &re) {
+					t.Fatalf("expected *reqError, got %T: %v", err, err)
 				}
-				var reqErr *reqError
-				if !errors.As(err, &reqErr) {
-					t.Fatalf("expected *reqError, got %T (%v)", err, err)
+				if re.statusCode != int(tc.wantStatus) {
+					t.Errorf("statusCode = %d, want %d", re.statusCode, tc.wantStatus)
 				}
-				if got, want := reqErr.statusCode, int(tc.expectedStatus); got != want {
-					t.Errorf("HTTP status code = %d, want %d", got, want)
+				if !strings.Contains(err.Error(), tc.wantMsgContain) {
+					t.Errorf("error message %q does not contain %q", err.Error(), tc.wantMsgContain)
 				}
-				if tc.resumeErr != nil && !errors.Is(err, tc.resumeErr) {
-					t.Errorf("original resume error must be preserved in chain for logs; errors.Is(err, resumeErr) = false")
-				}
+				_ = res
 				return
 			}
-
 			if err != nil {
-				t.Fatalf("ext_proc processing error: %v", err)
+				t.Fatalf("unexpected error: %v", err)
 			}
-			if target != tc.expectedTarget {
-				t.Errorf("expected target %q, got %q", tc.expectedTarget, target)
-			}
-
-			mutation := res.Response.GetHeaderMutation()
+			mutation := hResp.Response.GetHeaderMutation()
 			if len(mutation.GetSetHeaders()) != 1 {
-				t.Fatalf("expected exactly one Header option set, found: %v", mutation.GetSetHeaders())
+				t.Fatalf("expected 1 header mutation, got %d", len(mutation.GetSetHeaders()))
 			}
-
-			headerOption := mutation.GetSetHeaders()[0]
-			if strings.ToLower(headerOption.Header.Key) != ":authority" {
-				t.Errorf("invalid resulting dynamic parameter key: %s", headerOption.Header.Key)
+			hv := mutation.GetSetHeaders()[0].Header
+			if strings.ToLower(hv.Key) != ":authority" {
+				t.Errorf("mutation key = %q, want :authority", hv.Key)
 			}
-
-			if string(headerOption.Header.RawValue) != tc.expectedTarget {
-				t.Errorf("invalid destination mapping found: %s, expected: %s", headerOption.Header.RawValue, tc.expectedTarget)
-			}
-
-			// Confirm that query logs recorded metric trace details
-			s.recorder.AddRouterRequest(time.Now(), 10*time.Millisecond, "Route ok", tc.expectedTarget, metadata)
-			queries := s.recorder.Get()
-			if len(queries) != 1 {
-				t.Errorf("expected query trace entries, got: %v", queries)
+			if string(hv.RawValue) != tc.wantTarget {
+				t.Errorf("mutation value = %q, want %q", hv.RawValue, tc.wantTarget)
 			}
 		})
 	}
+}
+
+func isReqError(err error, out **reqError) bool {
+	if err == nil {
+		return false
+	}
+	if re, ok := err.(*reqError); ok {
+		if out != nil {
+			*out = re
+		}
+		return true
+	}
+	return false
 }

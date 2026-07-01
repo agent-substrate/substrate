@@ -37,6 +37,13 @@ const (
 	// serviceName is the name of the CoreDNS service.
 	serviceName     = "dns"
 	systemNamespace = "ate-system"
+
+	// DefaultIngressServiceName is the Kubernetes Service whose ClusterIP
+	// CoreDNS resolves actor hostnames to. atenet-router only serves ext_proc
+	// gRPC, not HTTP, so this must be the Service fronting whatever gateway
+	// you bring (see docs/dev/ingress.md); atenet-gateway is the name used by
+	// the reference configs there.
+	DefaultIngressServiceName = "atenet-gateway"
 )
 
 // Controller manages the DNS configuration for the ATE.
@@ -45,6 +52,10 @@ type Controller struct {
 	Interval     time.Duration
 	CorefilePath string
 	Reloader     ConfigReloader
+	// IngressServiceName is the Kubernetes Service in ate-system whose
+	// ClusterIP is written into the CoreDNS Corefile as the ingress target.
+	// Defaults to DefaultIngressServiceName ("atenet-gateway") when empty.
+	IngressServiceName string
 }
 
 // Run the DNS orchestration loop until ctx is canceled.
@@ -71,19 +82,25 @@ func (c *Controller) Run(ctx context.Context) error {
 func (c *Controller) reconcile(ctx context.Context) error {
 	slog.DebugContext(ctx, "Reconciling DNS orchestration configuration...")
 
-	// 1. Get the ClusterIP of atenet-router in ate-system namespace
+	// 1. Get the ClusterIP of the ingress service (your gateway) in ate-system.
+	ingressSvcName := c.IngressServiceName
+	if ingressSvcName == "" {
+		ingressSvcName = DefaultIngressServiceName
+	}
 	routerSvc := &corev1.Service{}
-	if err := c.Client.Get(ctx, types.NamespacedName{Name: "atenet-router", Namespace: systemNamespace}, routerSvc); err != nil {
+	if err := c.Client.Get(ctx, types.NamespacedName{Name: ingressSvcName, Namespace: systemNamespace}, routerSvc); err != nil {
 		if errors.IsNotFound(err) {
-			slog.WarnContext(ctx, "atenet-router service not found, skipping until it is available")
+			slog.WarnContext(ctx, "ingress service not found, skipping until it is available",
+				slog.String("service", ingressSvcName))
 			return nil
 		}
-		return fmt.Errorf("failed to get atenet-router service: %w", err)
+		return fmt.Errorf("failed to get ingress service %q: %w", ingressSvcName, err)
 	}
 
 	routerIP := routerSvc.Spec.ClusterIP
 	if routerIP == "" || routerIP == "None" {
-		slog.WarnContext(ctx, "atenet-router service has no ClusterIP yet, waiting...")
+		slog.WarnContext(ctx, "ingress service has no ClusterIP yet, waiting...",
+			slog.String("service", ingressSvcName))
 		return nil
 	}
 

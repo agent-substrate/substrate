@@ -16,15 +16,9 @@ package router
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/rsa"
-	"crypto/x509"
-	"crypto/x509/pkix"
-	"encoding/pem"
 	"errors"
 	"fmt"
 	"log/slog"
-	"math/big"
 	"net"
 	"net/http"
 	"os"
@@ -68,21 +62,13 @@ type RouterConfig struct {
 	Namespace      string
 	Kubeconfig     string
 	AteapiAddr     string
-	HttpPort       int
-	XdsPort        int
 	ExtprocPort    int
 	ExtprocAddr    string
-	EnvoyImage     string
 	TemplatesFile  string
 	StatusPort     int
 	HealthInterval time.Duration
-	HttpsPort      int
-	EnvoyCertPath  string
 	LogLevel       string
 	MetricsAddr    string
-	// OtlpCollectorAddress is the host:port of the OTLP gRPC collector that
-	// Envoy reports tracing spans to. Empty disables Envoy-side tracing.
-	OtlpCollectorAddress string
 
 	AteapiAuthMode   string
 	AteapiCAFile     string
@@ -217,35 +203,21 @@ func (s *RouterServer) Run(ctx context.Context) error {
 	slog.InfoContext(ctx, "Connecting to ateapi", slog.String("address", s.cfg.AteapiAddr), slog.String("auth", string(authMode)))
 	s.apiClient = ateapipb.NewControlClient(conn)
 
-	slog.InfoContext(ctx, "Starting substrate router subsystem", slog.Bool("standalone", s.cfg.Standalone))
+	slog.InfoContext(ctx, "Starting substrate router subsystem",
+		slog.Bool("standalone", s.cfg.Standalone))
 
 	g, ctx := errgroup.WithContext(ctx)
 
-	xdsSrv := NewXdsServer(s.cfg.XdsPort)
-	xdsSrv.SetConfig(s.cfg.HttpPort, s.cfg.ExtprocPort, s.cfg.ExtprocAddr)
-	if err := xdsSrv.SetOtlpCollector(s.cfg.OtlpCollectorAddress); err != nil {
-		return fmt.Errorf("configure OTLP collector: %w", err)
-	}
-
-	var certContent, keyContent string
-	if s.cfg.EnvoyCertPath == "" {
-		slog.InfoContext(ctx, "No Envoy certificate path provided, generating self-signed certificate for testing")
-		var err error
-		certContent, keyContent, err = generateSelfSignedCert()
-		if err != nil {
-			return fmt.Errorf("failed to generate self-signed cert: %w", err)
-		}
-	}
-
-	xdsSrv.SetTlsConfig(s.cfg.HttpsPort, s.cfg.EnvoyCertPath, certContent, keyContent)
 	if s.extprocSrv == nil {
 		routeDuration, err := newRouteDurationHistogram()
 		if err != nil {
 			return fmt.Errorf("failed to create route-duration histogram: %w", err)
 		}
-		s.extprocSrv = NewExtProcServer(s.cfg.ExtprocPort, s.apiClient, routeDuration)
+		resumer := NewActorResumer(s.apiClient)
+		resolver := NewActorRouteResolver(resumer)
+		s.extprocSrv = NewExtProcServer(s.cfg.ExtprocPort, resolver, routeDuration)
 	}
-	ctrl := NewController(s.k8sClient, s.clientset, s.cfg, xdsSrv, s.extprocSrv)
+	ctrl := NewController(s.k8sClient, s.clientset, s.cfg, s.extprocSrv)
 
 	s.health = newRouterHealth(s.cfg.HealthInterval, s.clientset, s.apiClient, s.cfg)
 
@@ -260,18 +232,6 @@ func (s *RouterServer) Run(ctx context.Context) error {
 		slog.InfoContext(ctx, "Starting periodic health checker", slog.Duration("interval", s.cfg.HealthInterval))
 		s.health.Start(ctx)
 		return nil
-	})
-
-	// Start xDS Server
-	g.Go(func() error {
-		slog.InfoContext(ctx, "Starting Envoy xDS Server", slog.Int("port", s.cfg.XdsPort))
-		lis, err := net.Listen("tcp", fmt.Sprintf(":%d", s.cfg.XdsPort))
-		if err != nil {
-			return fmt.Errorf("failed to listen on port %d: %w", s.cfg.XdsPort, err)
-		}
-		defer lis.Close()
-
-		return xdsSrv.Serve(ctx, lis)
 	})
 
 	// Start ExtProc Server
@@ -312,40 +272,4 @@ func (s *RouterServer) Run(ctx context.Context) error {
 	}
 
 	return g.Wait()
-}
-
-func generateSelfSignedCert() (string, string, error) {
-	priv, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		return "", "", err
-	}
-
-	template := x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject: pkix.Name{
-			Organization: []string{"Substrate Local Test"},
-		},
-		NotBefore: time.Now(),
-		NotAfter:  time.Now().Add(time.Hour * 24 * 365),
-
-		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		BasicConstraintsValid: true,
-		DNSNames:              []string{"localhost"},
-	}
-
-	derBytes, err := x509.CreateCertificate(rand.Reader, &template, &template, &priv.PublicKey, priv)
-	if err != nil {
-		return "", "", err
-	}
-
-	certPem := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: derBytes})
-
-	privBytes, err := x509.MarshalPKCS8PrivateKey(priv)
-	if err != nil {
-		return "", "", err
-	}
-	keyPem := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: privBytes})
-
-	return string(certPem), string(keyPem), nil
 }

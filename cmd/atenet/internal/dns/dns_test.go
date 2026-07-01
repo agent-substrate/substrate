@@ -46,7 +46,7 @@ func TestReconcile(t *testing.T) {
 	// 1. Create mock services
 	routerSvc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "atenet-router",
+			Name:      "atenet-gateway",
 			Namespace: "ate-system",
 		},
 		Spec: corev1.ServiceSpec{
@@ -151,7 +151,7 @@ func TestReconcileKubeDNSNotFound(t *testing.T) {
 
 	routerSvc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "atenet-router",
+			Name:      "atenet-gateway",
 			Namespace: "ate-system",
 		},
 		Spec: corev1.ServiceSpec{

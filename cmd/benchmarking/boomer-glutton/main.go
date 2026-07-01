@@ -37,7 +37,7 @@ import (
 func main() {
 	var (
 		apiEndpoint   = flag.String("api-endpoint", "api.ate-system.svc.cluster.local:443", "ateapi gRPC endpoint host:port.")
-		routerURL     = flag.String("router-url", "http://atenet-router.ate-system.svc.cluster.local", "atenet HTTP router base URL (no trailing slash).")
+		routerURL     = flag.String("router-url", "http://atenet-gateway.ate-system.svc.cluster.local", "atenet HTTP gateway base URL (no trailing slash). atenet-router itself only serves ExtProc gRPC, not HTTP.")
 		atespace      = flag.String("atespace", "benchmark", "Atespace every actor this worker creates lives in. Ensured (CreateAtespace, AlreadyExists is ok) at startup.")
 		promAddr      = flag.String("prometheus-addr", ":8001", "Address for the Prometheus /metrics endpoint.")
 		configJSON    = flag.String("config-json", "", "Initial dynconfig as a JSON object (keys: trace_probability, min_wait_time, max_wait_time in seconds). Unset fields keep their built-in defaults.")

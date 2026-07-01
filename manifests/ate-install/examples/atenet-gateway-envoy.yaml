@@ -1,0 +1,200 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# atenet-gateway — a reference external Envoy proxy that calls atenet-router's
+# ExtProc endpoint for actor-aware routing.
+#
+# This is a standalone Envoy deployment; Substrate does not generate or manage
+# it. It is a reference config you apply yourself, alongside
+# manifests/ate-install/atenet-router.yaml. DNS must be repointed to the
+# atenet-gateway Service ClusterIP — see docs/dev/ingress.md.
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: atenet-gateway-envoy-config
+  namespace: ate-system
+data:
+  envoy.yaml: |
+    admin:
+      address:
+        socket_address:
+          address: 0.0.0.0
+          port_value: 9901
+
+    node:
+      id: atenet-gateway-node
+      cluster: atenet-gateway-cluster
+
+    static_resources:
+      listeners:
+      - name: ingress_http_listener
+        address:
+          socket_address:
+            address: 0.0.0.0
+            port_value: 8080
+        filter_chains:
+        - filters:
+          - name: envoy.filters.network.http_connection_manager
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+              stat_prefix: ingress_http
+              generate_request_id: true
+              access_log:
+              - name: envoy.access_loggers.stdout
+                typed_config:
+                  "@type": type.googleapis.com/envoy.extensions.access_loggers.stream.v3.StdoutAccessLog
+              http_filters:
+              # Step 1: call atenet-router ExtProc to resolve actor → worker IP.
+              # On success ExtProc rewrites :authority to <worker-ip>:80.
+              # On denial ExtProc returns an immediate HTTP response (404/503/etc).
+              - name: envoy.filters.http.ext_proc
+                typed_config:
+                  "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExternalProcessor
+                  grpc_service:
+                    envoy_grpc:
+                      cluster_name: extproc_cluster
+                    timeout: 5s
+                  mutation_rules:
+                    allow_all_routing: true
+                  message_timeout: 5s
+                  processing_mode:
+                    request_header_mode: SEND
+                    response_header_mode: SKIP
+                    request_body_mode: NONE
+                    response_body_mode: NONE
+                    request_trailer_mode: SKIP
+                    response_trailer_mode: SKIP
+              # Step 2: dynamic_forward_proxy resolves the :authority set by ExtProc
+              # (now <worker-ip>:80) to the actual upstream endpoint.
+              - name: envoy.filters.http.dynamic_forward_proxy
+                typed_config:
+                  "@type": type.googleapis.com/envoy.extensions.filters.http.dynamic_forward_proxy.v3.FilterConfig
+                  dns_cache_config:
+                    name: dynamic_forward_proxy_cache_config
+                    dns_lookup_family: V4_ONLY
+                    typed_dns_resolver_config:
+                      name: envoy.network.dns_resolver.getaddrinfo
+                      typed_config:
+                        "@type": type.googleapis.com/envoy.extensions.network.dns_resolver.getaddrinfo.v3.GetAddrInfoDnsResolverConfig
+              - name: envoy.filters.http.router
+                typed_config:
+                  "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+              route_config:
+                name: local_route
+                virtual_hosts:
+                - name: local_service
+                  domains: ["*"]
+                  routes:
+                  - match:
+                      prefix: "/"
+                    route:
+                      cluster: dynamic_forward_proxy_cluster
+                      timeout: 10s
+
+      clusters:
+      # ExtProc cluster: gRPC/H2 to atenet-router's ExtProc port.
+      # STRICT_DNS so the address resolves through cluster DNS.
+      - name: extproc_cluster
+        connect_timeout: 0.25s
+        type: STRICT_DNS
+        lb_policy: ROUND_ROBIN
+        typed_extension_protocol_options:
+          envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+            "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+            explicit_http_config:
+              http2_protocol_options: {}
+        load_assignment:
+          cluster_name: extproc_cluster
+          endpoints:
+          - lb_endpoints:
+            - endpoint:
+                address:
+                  socket_address:
+                    # atenet-router binds ExtProc on 0.0.0.0 by default
+                    # (see manifests/ate-install/atenet-router.yaml).
+                    address: atenet-router.ate-system.svc
+                    port_value: 50051
+
+      # Dynamic forward proxy cluster: Envoy resolves :authority at request time
+      # to reach the worker pod IP rewritten by ExtProc.
+      - name: dynamic_forward_proxy_cluster
+        lb_policy: CLUSTER_PROVIDED
+        cluster_type:
+          name: envoy.clusters.dynamic_forward_proxy
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.clusters.dynamic_forward_proxy.v3.ClusterConfig
+            dns_cache_config:
+              name: dynamic_forward_proxy_cache_config
+              dns_lookup_family: V4_ONLY
+              typed_dns_resolver_config:
+                name: envoy.network.dns_resolver.getaddrinfo
+                typed_config:
+                  "@type": type.googleapis.com/envoy.extensions.network.dns_resolver.getaddrinfo.v3.GetAddrInfoDnsResolverConfig
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: atenet-gateway
+  namespace: ate-system
+  labels:
+    app: atenet-gateway
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: atenet-gateway
+  template:
+    metadata:
+      labels:
+        app: atenet-gateway
+    spec:
+      containers:
+      - name: envoy
+        image: envoyproxy/envoy:v1.30-latest
+        command:
+        - "/usr/local/bin/envoy"
+        - "-c"
+        - "/etc/envoy/envoy.yaml"
+        - "--component-log-level"
+        - "upstream:debug,router:debug,ext_proc:debug"
+        ports:
+        - name: http
+          containerPort: 8080
+        - name: admin
+          containerPort: 9901
+        volumeMounts:
+        - name: envoy-config
+          mountPath: /etc/envoy
+      volumes:
+      - name: envoy-config
+        configMap:
+          name: atenet-gateway-envoy-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: atenet-gateway
+  namespace: ate-system
+  labels:
+    app: atenet-gateway
+spec:
+  type: ClusterIP
+  selector:
+    app: atenet-gateway
+  ports:
+  - name: http
+    port: 80
+    targetPort: 8080
+    protocol: TCP

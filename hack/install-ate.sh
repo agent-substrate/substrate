@@ -292,10 +292,16 @@ deploy_ate_system() {
   manifests="$(render_ate_system_manifests)"
   echo "${manifests}" | run_kubectl apply -f -
 
+  # atenet-router only serves ExtProc gRPC now; deploy the basic reference
+  # Envoy gateway in front of it so actor traffic has somewhere to land.
+  # See docs/dev/ingress.md for other (power-user) gateway options.
+  run_kubectl apply -f manifests/ate-install/examples/atenet-gateway-envoy.yaml
+
   log_step "Waiting for ATE system components to be ready..."
   run_kubectl rollout status deployment/ate-api-server-deployment -n ate-system --timeout=120s
   run_kubectl rollout status deployment/ate-controller -n ate-system --timeout=120s
   run_kubectl rollout status deployment/atenet-router -n ate-system --timeout=120s
+  run_kubectl rollout status deployment/atenet-gateway -n ate-system --timeout=120s
   run_kubectl rollout status statefulset/valkey-cluster -n ate-system --timeout=120s
   run_kubectl rollout status daemonset/atelet -n ate-system --timeout=120s
 }
@@ -360,8 +366,13 @@ deploy_atenet() {
 
   run_ko apply -f manifests/ate-install/atenet-router.yaml
   run_ko apply -f manifests/ate-install/atenet-dns.yaml
+  # atenet-router only serves ExtProc gRPC now; deploy the basic reference
+  # Envoy gateway in front of it so actor traffic has somewhere to land.
+  # See docs/dev/ingress.md for other (power-user) gateway options.
+  run_kubectl apply -f manifests/ate-install/examples/atenet-gateway-envoy.yaml
   run_kubectl rollout status deployment/atenet-router -n ate-system --timeout=120s
   run_kubectl rollout status deployment/atenet-dns -n ate-system --timeout=120s
+  run_kubectl rollout status deployment/atenet-gateway -n ate-system --timeout=120s
 }
 
 # get_actor_status echoes the actor's status enum (e.g. STATUS_SUSPENDED).
@@ -467,12 +478,14 @@ delete_ate_system() {
   else
     run_kubectl delete --ignore-not-found -f manifests/ate-install
   fi
+  run_kubectl delete --ignore-not-found -f manifests/ate-install/examples/atenet-gateway-envoy.yaml
   run_kubectl delete --ignore-not-found -f manifests/ate-install/generated
 }
 
 delete_atenet() {
   log_step "delete_atenet"
   run_kubectl delete --ignore-not-found -f manifests/ate-install/atenet-router.yaml
+  run_kubectl delete --ignore-not-found -f manifests/ate-install/examples/atenet-gateway-envoy.yaml
 }
 
 deploy_benchmarks() {

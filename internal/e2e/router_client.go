@@ -34,12 +34,15 @@ import (
 
 const (
 	routerNamespace = "ate-system"
-	routerService   = "atenet-router"
+	// routerService is the gateway Service that fronts atenet-router — the
+	// router itself only serves ExtProc gRPC, not HTTP. This must match
+	// whatever gateway hack/install-ate.sh deploys (see docs/dev/ingress.md).
+	routerService = "atenet-gateway"
 )
 
-// RouterClient sends HTTP requests to actors through the atenet router, the
+// RouterClient sends HTTP requests to actors through the atenet gateway, the
 // same way real traffic arrives (so the request is routed and, if needed, the
-// actor is resumed). It port-forwards the router Service, mirroring the
+// actor is resumed). It port-forwards the gateway Service, mirroring the
 // approach in internal/ateclient.
 type RouterClient struct {
 	baseURL string

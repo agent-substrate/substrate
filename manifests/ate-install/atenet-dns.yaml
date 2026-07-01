@@ -149,6 +149,7 @@ spec:
         - "--log-level=debug"
         - "--interval=10s"
         - "--corefile-path=/etc/coredns/Corefile"
+        - "--ingress-service-name=atenet-gateway"
         volumeMounts:
         - name: dns-config-volume
           mountPath: /etc/coredns
