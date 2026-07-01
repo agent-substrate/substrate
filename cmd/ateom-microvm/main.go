@@ -36,6 +36,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/actorlog"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/ateompath"
+	"github.com/agent-substrate/substrate/internal/egresscapture"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/agent-substrate/substrate/internal/version"
@@ -204,6 +205,10 @@ type AteomService struct {
 	// stdout as ate.dev/*-labeled JSON and emits actor lifecycle events (parity
 	// with ateom-gvisor).
 	actorLogger *actorlog.ActorLogger
+
+	// egressCapture owns the per-activation capture listener when egress capture is
+	// enabled for this worker pod.
+	egressCapture *egresscapture.Capture
 
 	// running maps actor id -> the live micro-VM, kept so CheckpointWorkload can
 	// pause+snapshot+teardown the same sandbox (and RestoreWorkload can track the

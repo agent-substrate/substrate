@@ -49,6 +49,16 @@ source "${ROOT}"/hack/install-demo-multi-template.sh
 COLOR_CYAN='\033[1;36m'
 COLOR_RESET='\033[0m'
 
+ATE_EGRESS_CAPTURE="${ATE_EGRESS_CAPTURE:-false}"
+ATE_EGRESS_PEP_ADDRESS="${ATE_EGRESS_PEP_ADDRESS:-ate-egress.agentgateway-system.svc.cluster.local:15008}"
+ATE_EGRESS_TUNNEL_PROTOCOL="${ATE_EGRESS_TUNNEL_PROTOCOL:-connect}"
+ATE_EGRESS_CAPTURE_ENABLED_ENV="ATE_EGRESS_CAPTURE_ENABLED"
+ATE_EGRESS_PEP_ADDRESS_ENV="ATE_EGRESS_PEP_ADDRESS"
+ATE_EGRESS_TUNNEL_PROTOCOL_ENV="ATE_EGRESS_TUNNEL_PROTOCOL"
+ATE_EGRESS_CONNECT_TLS_SERVER_NAME_ENV="ATE_EGRESS_CONNECT_TLS_SERVER_NAME"
+ATE_EGRESS_CONNECT_TLS_CA_FILE_ENV="ATE_EGRESS_CONNECT_TLS_CA_FILE"
+ATE_EGRESS_CONNECT_TLS_INSECURE_SKIP_VERIFY_ENV="ATE_EGRESS_CONNECT_TLS_INSECURE_SKIP_VERIFY"
+
 function log_step() {
   local step_name="$1"
   echo -e "${COLOR_CYAN}[step]: ${step_name}${COLOR_RESET}"
@@ -68,7 +78,9 @@ function usage() {
   echo ""
   echo "  --deploy-atelet                        Deploy atelet only"
   echo "  --deploy-ate-apiserver                 Deploy ate-api-server only"
+  echo "  --deploy-ate-controller                Deploy ate-controller only"
   echo "  --deploy-atenet                        Deploy atenet only"
+  echo "  --egress                               Enable actor egress capture via agentgateway"
   echo ""
   echo "To create individual resources used by ate-system (Note: These are"
   echo "called automatically by --deploy-ate-system):"
@@ -102,6 +114,12 @@ run_kubectl() {
     "$@"
 }
 
+run_helm() {
+  helm \
+    ${KUBECTL_CONTEXT:+--kube-context=${KUBECTL_CONTEXT}} \
+    "$@"
+}
+
 run_kubectl_ate() {
   go run ./cmd/kubectl-ate \
     ${KUBECTL_CONTEXT:+--context=${KUBECTL_CONTEXT}} \
@@ -120,6 +138,218 @@ run_ko() {
       ./hack/run-tool.sh ko "$@"
       ;;
   esac
+}
+
+resolve_ipv4_addresses() {
+  local host="$1"
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "${host}" <<'PY'
+import socket
+import sys
+
+host = sys.argv[1]
+addresses = sorted({
+    result[4][0]
+    for result in socket.getaddrinfo(host, None, socket.AF_INET, socket.SOCK_STREAM)
+})
+print(" ".join(addresses))
+PY
+    return
+  fi
+  if command -v python >/dev/null 2>&1; then
+    python - "${host}" <<'PY'
+import socket
+import sys
+
+host = sys.argv[1]
+addresses = sorted(set(
+    result[4][0]
+    for result in socket.getaddrinfo(host, None, socket.AF_INET, socket.SOCK_STREAM)
+))
+print(" ".join(addresses))
+PY
+    return
+  fi
+  if command -v dig >/dev/null 2>&1; then
+    dig +short A "${host}" | tr '\n' ' '
+    return
+  fi
+  if command -v nslookup >/dev/null 2>&1; then
+    nslookup "${host}" | awk '/^Address: / { print $2 }' | tr '\n' ' '
+    return
+  fi
+  echo "unable to resolve ${host}: python3, python, dig, or nslookup is required" >&2
+  return 1
+}
+
+ensure_gateway_api() {
+  log_step "ensure_gateway_api"
+  if run_kubectl get crd \
+    gatewayclasses.gateway.networking.k8s.io \
+    gateways.gateway.networking.k8s.io \
+    tcproutes.gateway.networking.k8s.io >/dev/null 2>&1; then
+    return
+  fi
+
+  run_kubectl apply --server-side -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.5.0/experimental-install.yaml
+}
+
+deploy_agentgateway() {
+  log_step "deploy_agentgateway"
+  local httpbin_ips="${HTTPBIN_EGRESS_IPS:-}"
+  if [[ -z "${httpbin_ips}" ]]; then
+    httpbin_ips="$(resolve_ipv4_addresses httpbin.org)"
+  fi
+  if [[ -z "${httpbin_ips}" ]]; then
+    echo "failed to resolve httpbin.org IPv4 addresses" >&2
+    exit 1
+  fi
+
+  local httpbin_endpoints=""
+  local ip=""
+  for ip in ${httpbin_ips}; do
+    httpbin_endpoints+="  - addresses:\n    - ${ip}\n"
+  done
+
+  ensure_gateway_api
+  run_helm upgrade -i --create-namespace \
+    --namespace agentgateway-system \
+    --version v1.3.1 agentgateway-crds oci://cr.agentgateway.dev/charts/agentgateway-crds
+  run_helm upgrade -i -n agentgateway-system agentgateway oci://cr.agentgateway.dev/charts/agentgateway \
+    --version v1.3.1
+  run_kubectl delete deployment -n agentgateway-system ate-egress --ignore-not-found >/dev/null 2>&1 || true
+  run_kubectl delete service -n agentgateway-system ate-egress --ignore-not-found >/dev/null 2>&1 || true
+  run_kubectl delete service -n agentgateway-system httpbin-egress --ignore-not-found >/dev/null 2>&1 || true
+  run_kubectl delete endpointslice -n agentgateway-system httpbin-egress --ignore-not-found >/dev/null 2>&1 || true
+  run_kubectl delete gateway -n agentgateway-system ate-egress --ignore-not-found >/dev/null 2>&1 || true
+  run_kubectl delete agentgatewaypolicy -n agentgateway-system ate-egress-connect --ignore-not-found >/dev/null 2>&1 || true
+  printf "%b" "$(cat <<EOF
+apiVersion: v1
+kind: Service
+metadata:
+  name: httpbin-egress
+  namespace: agentgateway-system
+spec:
+  ports:
+  - name: https
+    port: 443
+    targetPort: 443
+---
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: httpbin-egress
+  namespace: agentgateway-system
+  labels:
+    kubernetes.io/service-name: httpbin-egress
+addressType: IPv4
+ports:
+- name: https
+  protocol: TCP
+  port: 443
+endpoints:
+${httpbin_endpoints}---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: ate-egress
+  namespace: agentgateway-system
+spec:
+  gatewayClassName: agentgateway
+  listeners:
+  - name: connect
+    port: 15008
+    protocol: HTTP
+    allowedRoutes:
+      namespaces:
+        from: Same
+  - name: https
+    port: 443
+    protocol: TCP
+    allowedRoutes:
+      kinds:
+      - group: gateway.networking.k8s.io
+        kind: TCPRoute
+      namespaces:
+        from: Same
+---
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: TCPRoute
+metadata:
+  name: httpbin-egress
+  namespace: agentgateway-system
+spec:
+  parentRefs:
+  - name: ate-egress
+    sectionName: https
+  rules:
+  - backendRefs:
+    - name: httpbin-egress
+      port: 443
+---
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata:
+  name: ate-egress-connect
+  namespace: agentgateway-system
+spec:
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: ate-egress
+  frontend:
+    connect:
+      mode: Tunnel
+EOF
+)" | run_kubectl apply -f -
+  run_kubectl delete agentgatewayparameters -n agentgateway-system ate-egress-params --ignore-not-found
+}
+
+create_egress_capture_config() {
+  log_step "create_egress_capture_config"
+  run_kubectl create namespace ate-system --dry-run=client -o yaml \
+    | run_kubectl apply -f -
+  local literals=(
+    --from-literal="${ATE_EGRESS_CAPTURE_ENABLED_ENV}=true"
+    --from-literal="${ATE_EGRESS_PEP_ADDRESS_ENV}=${ATE_EGRESS_PEP_ADDRESS}"
+    --from-literal="${ATE_EGRESS_TUNNEL_PROTOCOL_ENV}=${ATE_EGRESS_TUNNEL_PROTOCOL}"
+  )
+  if [[ -n "${ATE_EGRESS_CONNECT_TLS_SERVER_NAME:-}" ]]; then
+    literals+=(--from-literal="${ATE_EGRESS_CONNECT_TLS_SERVER_NAME_ENV}=${ATE_EGRESS_CONNECT_TLS_SERVER_NAME}")
+  fi
+  if [[ -n "${ATE_EGRESS_CONNECT_TLS_CA_FILE:-}" ]]; then
+    literals+=(--from-literal="${ATE_EGRESS_CONNECT_TLS_CA_FILE_ENV}=${ATE_EGRESS_CONNECT_TLS_CA_FILE}")
+  fi
+  if [[ -n "${ATE_EGRESS_CONNECT_TLS_INSECURE_SKIP_VERIFY:-}" ]]; then
+    literals+=(--from-literal="${ATE_EGRESS_CONNECT_TLS_INSECURE_SKIP_VERIFY_ENV}=${ATE_EGRESS_CONNECT_TLS_INSECURE_SKIP_VERIFY}")
+  fi
+  # TODO: Updating this ConfigMap does not by itself restart an already-running
+  # ate-controller, so enabling egress after a non-egress install may not take
+  # effect until the controller rolls. Wire a pod-template checksum or restart
+  # automation so users do not need to run a manual rollout.
+  run_kubectl create configmap -n ate-system ate-egress-capture \
+    "${literals[@]}" \
+    --dry-run=client -o yaml \
+    | run_kubectl apply -f -
+}
+
+rollout_worker_deployments_for_egress() {
+  log_step "rollout_worker_deployments_for_egress"
+  local deployments
+  deployments="$(run_kubectl get deployments -A -o go-template='{{range .items}}{{if index .spec.selector.matchLabels "ate.dev/worker-pool"}}{{.metadata.namespace}} {{.metadata.name}}{{"\n"}}{{end}}{{end}}' 2>/dev/null || true)"
+  if [[ -z "${deployments}" ]]; then
+    echo "No worker deployments found to restart for egress."
+    return
+  fi
+
+  local ns name
+  while read -r ns name; do
+    if [[ -z "${ns}" || -z "${name}" ]]; then
+      continue
+    fi
+    run_kubectl rollout restart "deployment/${name}" -n "${ns}"
+    run_kubectl rollout status "deployment/${name}" -n "${ns}" --timeout=120s
+  done <<< "${deployments}"
 }
 
 create_valkey_ca_certs_secret() {
@@ -224,6 +454,11 @@ deploy_ate_system() {
   log_step "deploy_ate_system"
   ensure_crds
 
+  if [[ "${ATE_EGRESS_CAPTURE}" == "true" ]]; then
+    deploy_agentgateway
+    create_egress_capture_config
+  fi
+
   # Enforce per-class SandboxConfig asset requirements (applied before any
   # SandboxConfig so the defaults below are validated too).
   run_kubectl apply -f manifests/ate-install/sandboxconfig-validation.yaml
@@ -319,6 +554,19 @@ deploy_atelet() {
   fi
   echo "${manifest}" | run_kubectl apply -f -
   run_kubectl rollout status daemonset/atelet -n ate-system --timeout=120s
+}
+
+deploy_ate_controller() {
+  log_step "deploy_ate_controller"
+  if [[ "${ATE_EGRESS_CAPTURE}" == "true" ]]; then
+    deploy_agentgateway
+    create_egress_capture_config
+  fi
+  run_ko apply -f manifests/ate-install/ate-controller.yaml
+  run_kubectl rollout status deployment/ate-controller -n ate-system --timeout=120s
+  if [[ "${ATE_EGRESS_CAPTURE}" == "true" ]]; then
+    rollout_worker_deployments_for_egress
+  fi
 }
 
 deploy_atenet() {
@@ -478,6 +726,9 @@ for arg in "$@"; do
       usage
       exit 0
       ;;
+    --egress)
+      ATE_EGRESS_CAPTURE="true"
+      ;;
   esac
 done
 
@@ -518,9 +769,11 @@ while [[ "$#" -gt 0 ]]; do
 
     --deploy-atelet) deploy_atelet ;;
     --deploy-ate-apiserver) deploy_ate_apiserver ;;
+    --deploy-ate-controller) deploy_ate_controller ;;
 
     --deploy-atenet) deploy_atenet ;;
     --delete-atenet) delete_atenet ;;
+    --egress) ;;
 
     --deploy-benchmarks) deploy_benchmarks ;;
     --delete-benchmarks) delete_benchmarks ;;

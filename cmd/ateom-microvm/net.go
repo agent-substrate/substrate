@@ -48,6 +48,7 @@ import (
 	"github.com/vishvananda/netns"
 	"golang.org/x/sys/unix"
 
+	"github.com/agent-substrate/substrate/internal/egresscapture"
 	"github.com/agent-substrate/substrate/internal/serverboot"
 )
 
@@ -120,7 +121,7 @@ func mustParseIP(s string) net.IP {
 // pod netns and the kata interior netns (see the package comment). Idempotent
 // via cleanup-before-setup; also sweeps stale kata taps out of the interior
 // netns so the sandbox always builds on a clean slate.
-func (s *AteomService) setupActorNetwork(ctx context.Context) (retErr error) {
+func (s *AteomService) setupActorNetwork(ctx context.Context, identity egresscapture.ActorIdentity) (retErr error) {
 	s.cleanupActorNetworkOrExit(ctx, "Failed to clean up stale actor network before setup")
 	defer func() {
 		if retErr != nil {
@@ -190,7 +191,10 @@ func (s *AteomService) setupActorNetwork(ctx context.Context) (retErr error) {
 	if err := enableIPv4Forwarding(); err != nil {
 		return err
 	}
-	if err := installActorNftablesRules(podIP); err != nil {
+	if err := s.startEgressCaptureIfEnabled(ctx, identity); err != nil {
+		return err
+	}
+	if err := installActorNftablesRules(podIP, s.egressCapture != nil); err != nil {
 		return err
 	}
 
@@ -248,6 +252,12 @@ func (s *AteomService) cleanupActorNetwork(ctx context.Context) error {
 	if err := removeActorNftablesRules(); err != nil {
 		cleanupErr = errors.Join(cleanupErr, fmt.Errorf("while removing actor nftables rules: %w", err))
 		slog.WarnContext(ctx, "Failed to remove actor nftables rules; continuing actor netns cleanup", slog.Any("err", err))
+	}
+	if s.egressCapture != nil {
+		if err := s.egressCapture.Close(); err != nil {
+			slog.WarnContext(ctx, "Failed to close actor egress capture", slog.Any("err", err))
+		}
+		s.egressCapture = nil
 	}
 
 	if link, err := netlink.LinkByName(hostVethName); err == nil {
@@ -333,7 +343,7 @@ func enableIPv4Forwarding() error {
 	return nil
 }
 
-func installActorNftablesRules(podIP net.IP) error {
+func installActorNftablesRules(podIP net.IP, egressCapture bool) error {
 	// Dedicated ateom-owned IPv4 table (cheap cleanup, no CNI chain mutation):
 	//   * postrouting: masquerade actor egress (169.254.17.2) behind the pod IP.
 	//   * prerouting: DNAT pod-IP:80/tcp to the actor veth IP.
@@ -357,6 +367,9 @@ func installActorNftablesRules(podIP net.IP) error {
 		Hooknum:  nftables.ChainHookPrerouting,
 		Priority: nftables.ChainPriorityNATDest,
 	})
+	if egressCapture {
+		addEgressCaptureRedirectRules(c, table, prerouting, actorVethIP)
+	}
 	preroutingExprs := append(ipDestinationEqual(podIP.String()), tcpDestinationPortEqual(80)...)
 	preroutingExprs = append(preroutingExprs,
 		&expr.Immediate{

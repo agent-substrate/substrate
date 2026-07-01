@@ -111,7 +111,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 
 	// Networking: rebuild the per-activation veth + tap; the snapshot's virtio-net
 	// is fd-backed, so CH needs fresh tap FDs (net_fds) on restore.
-	if err := s.setupActorNetwork(ctx); err != nil {
+	if err := s.setupActorNetwork(ctx, actorIdentityFromRestore(req)); err != nil {
 		return nil, fmt.Errorf("while setting up actor network: %w", err)
 	}
 	defer func() {

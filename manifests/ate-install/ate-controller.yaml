@@ -79,6 +79,10 @@ spec:
       containers:
       - name: ate-controller
         image: ko://github.com/agent-substrate/substrate/cmd/atecontroller
+        envFrom:
+        - configMapRef:
+            name: ate-egress-capture
+            optional: true
         ports:
         - name: metrics
           containerPort: 8080

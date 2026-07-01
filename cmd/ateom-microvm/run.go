@@ -217,7 +217,7 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 
 	// Networking (host side): per-activation veth into the interior netns. The
 	// tap + TC mirror is built below (after the VM exists) so its FDs are fresh.
-	if err := s.setupActorNetwork(ctx); err != nil {
+	if err := s.setupActorNetwork(ctx, actorIdentityFromRun(req)); err != nil {
 		return nil, fmt.Errorf("while setting up actor network: %w", err)
 	}
 	defer func() {
