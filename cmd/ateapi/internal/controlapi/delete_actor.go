@@ -24,6 +24,7 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
 func (s *Service) DeleteActor(ctx context.Context, req *ateapipb.DeleteActorRequest) (*ateapipb.DeleteActorResponse, error) {
@@ -52,14 +53,17 @@ func (s *Service) DeleteActor(ctx context.Context, req *ateapipb.DeleteActorRequ
 }
 
 func validateDeleteActorRequest(req *ateapipb.DeleteActorRequest) error {
-	if req.GetActorRef().GetName() == "" {
-		return status.Error(codes.InvalidArgument, "actor_id is required")
+	var fldPath *field.Path
+	var errs field.ErrorList
+
+	if val := req.ActorRef; val == nil {
+		errs = append(errs, field.Required(fldPath.Child("actor_ref"), ""))
+	} else {
+		errs = append(errs, resources.ValidateActorRef(val, fldPath.Child("actor_ref"))...)
 	}
-	if err := resources.ValidateActorID(req.GetActorRef().GetName()); err != nil {
-		return status.Error(codes.InvalidArgument, err.Error())
-	}
-	if req.GetActorRef().GetAtespace() == "" {
-		return status.Error(codes.InvalidArgument, "atespace is required")
+
+	if len(errs) > 0 {
+		return status.Error(codes.InvalidArgument, errs.ToAggregate().Error())
 	}
 	return nil
 }

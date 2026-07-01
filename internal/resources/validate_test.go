@@ -15,9 +15,55 @@
 package resources
 
 import (
+	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 )
+
+func TestValidateActorRef(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   *ateapipb.ActorRef
+		wantMsg string
+	}{{
+		"missing atespace",
+		&ateapipb.ActorRef{Name: "id1"},
+		"atespace: Required value",
+	}, {
+		"invalid atespace",
+		&ateapipb.ActorRef{Atespace: "NS1", Name: "id1"},
+		"atespace: Invalid value",
+	}, {
+		"missing name",
+		&ateapipb.ActorRef{Atespace: "ns1"},
+		"name: Required value",
+	}, {
+		"invalid name",
+		&ateapipb.ActorRef{Atespace: "ns1", Name: "ID1"},
+		"name: Invalid value",
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			errs := ValidateActorRef(tt.input, field.NewPath("path"))
+			if len(errs) == 0 {
+				t.Fatalf("expected 1 error, got 0")
+			}
+			if len(errs) > 1 {
+				t.Fatalf("expected 1 error, got %v", errs)
+			}
+			err := errs[0]
+			got := err.Error()
+			if matched, matchErr := regexp.MatchString(tt.wantMsg, got); matchErr != nil {
+				t.Fatalf("failed to compile regex %q: %v", tt.wantMsg, matchErr)
+			} else if !matched {
+				t.Errorf("expected message %q, got %q", tt.wantMsg, got)
+			}
+		})
+	}
+}
 
 func TestValidateActorRefFields(t *testing.T) {
 	const okNS, okTmpl, okID = "ate-demo", "counter", "counter-1"
