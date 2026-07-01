@@ -82,26 +82,26 @@ func validateCreateActorRequest(req *ateapipb.CreateActorRequest) error {
 	var fldPath *field.Path
 	var errs field.ErrorList
 
-	if val := req.ActorTemplateNamespace; val == "" {
-		errs = append(errs, field.Required(fldPath.Child("actor_template_namespace"), ""))
+	if val, fldPath := req.ActorTemplateNamespace, fldPath.Child("actor_template_namespace"); val == "" {
+		errs = append(errs, field.Required(fldPath, ""))
 	} else {
 		for _, msg := range content.IsDNS1123Label(val) {
-			errs = append(errs, field.Invalid(fldPath.Child("actor_template_namespace"), val, msg))
+			errs = append(errs, field.Invalid(fldPath, val, msg))
 		}
 	}
 
-	if val := req.ActorTemplateName; val == "" {
-		errs = append(errs, field.Required(fldPath.Child("actor_template_name"), ""))
+	if val, fldPath := req.ActorTemplateName, fldPath.Child("actor_template_name"); val == "" {
+		errs = append(errs, field.Required(fldPath, ""))
 	} else {
 		for _, msg := range content.IsDNS1123Subdomain(val) {
-			errs = append(errs, field.Invalid(fldPath.Child("actor_template_name"), val, msg))
+			errs = append(errs, field.Invalid(fldPath, val, msg))
 		}
 	}
 
-	if val := req.ActorRef; val == nil {
-		errs = append(errs, field.Required(fldPath.Child("actor_ref"), ""))
+	if val, fldPath := req.ActorRef, fldPath.Child("actor_ref"); val == nil {
+		errs = append(errs, field.Required(fldPath, ""))
 	} else {
-		errs = append(errs, resources.ValidateActorRef(val, fldPath.Child("actor_ref"))...)
+		errs = append(errs, resources.ValidateActorRef(val, fldPath)...)
 	}
 
 	if val := req.WorkerSelector; val != nil {
