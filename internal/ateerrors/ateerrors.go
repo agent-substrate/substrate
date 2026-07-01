@@ -54,7 +54,7 @@ func NewGRPCError(grpcCode codes.Code, sentinel, err error) error {
 		// (e.g. a real crash read as a transient error). Log loudly for debugging purpose.
 		slog.Error("ateerrors: failed to attach ErrorInfo to gRPC status; adding `Reason` to the error message instead",
 			"err", derr, "reason", sentinel.Error(), "code", grpcCode)
-		return status.Error(grpcCode, fmt.Errorf("Reason:%w, Error %w", sentinel, err).Error())
+		return status.Error(grpcCode, fmt.Errorf("reason:%w, error %w", sentinel, err).Error())
 	}
 	return st.Err()
 }
