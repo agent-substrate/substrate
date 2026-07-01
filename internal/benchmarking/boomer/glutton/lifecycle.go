@@ -20,6 +20,7 @@ package glutton
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -77,6 +78,11 @@ type Config struct {
 	Dyn *dynconfig.Holder
 	// Tracer anchors sampled spans; falls back to the otel global if nil.
 	Tracer trace.Tracer
+	// InterCallDelay is the pause between successive RPC calls inside a
+	// single boomer iteration (Resume→Ping and Ping→Suspend). Zero
+	// (default) disables it. Useful in slower environments where the atenet router needs a moment to
+	// pick up the actor's Resume before a Ping can be routed correctly.
+	InterCallDelay time.Duration
 }
 
 // Register creates a runtime tied to cfg and returns a boomer-compatible task
@@ -113,14 +119,33 @@ func (r *taskRuntime) iterate() {
 	}
 	user := val.(*gluttonUser)
 
-	ctx := context.Background()
-	if !user.resume(ctx) {
-		return
-	}
-	user.ping(ctx)
-	user.suspend(ctx)
+	_ = user.runIteration(context.Background())
 
 	time.Sleep(r.dynamicWait())
+}
+
+// runIteration is one boomer iteration for a single user: Resume, then
+// (on successful resume) Ping and Suspend. Ping and Suspend both run
+// regardless of Ping's outcome so a failed ping still puts the actor
+// back to Suspended. Returned error aggregates whatever went wrong;
+// production callers ignore it (failures land in metrics inside
+// tracedCall), tests use it to fail loudly on contract breakage.
+func (u *gluttonUser) runIteration(ctx context.Context) error {
+	ok, err := u.resume(ctx)
+	if !ok {
+		return err
+	}
+	u.interCallDelay()
+	pingErr := u.ping(ctx)
+	u.interCallDelay()
+	suspendErr := u.suspend(ctx)
+	return errors.Join(pingErr, suspendErr)
+}
+
+func (u *gluttonUser) interCallDelay() {
+	if d := u.cfg.InterCallDelay; d > 0 {
+		time.Sleep(d)
+	}
 }
 
 func (r *taskRuntime) startUser(ctx context.Context) (*gluttonUser, error) {
@@ -150,9 +175,9 @@ func (r *taskRuntime) shutdown(ctx context.Context) {
 	r.users.Range(func(_, val any) bool {
 		u := val.(*gluttonUser)
 		if u.actorRunning {
-			u.suspend(ctx)
+			_ = u.suspend(ctx)
 		}
-		u.delete(ctx)
+		_ = u.delete(ctx)
 		bmetrics.UpdateUsers(userClass, -1)
 		return true
 	})
@@ -209,7 +234,11 @@ func (u *gluttonUser) create(ctx context.Context) error {
 	})
 }
 
-func (u *gluttonUser) resume(ctx context.Context) bool {
+// resume returns (ok, err): ok mirrors iterate()'s "should I keep going"
+// gate, err carries the underlying gRPC error so contract tests can fail
+// loudly. Production callers ignore err — the failure is already reported
+// to metrics inside tracedCall.
+func (u *gluttonUser) resume(ctx context.Context) (bool, error) {
 	metricName := "ResumeActor"
 	if u.firstResume {
 		metricName = "ResumeActorColdStart"
@@ -222,25 +251,26 @@ func (u *gluttonUser) resume(ctx context.Context) bool {
 		return err
 	})
 	if err != nil {
-		return false
+		return false, err
 	}
 	u.firstResume = false
 	u.actorRunning = true
-	return true
+	return true, nil
 }
 
-func (u *gluttonUser) suspend(ctx context.Context) {
-	_ = u.tracedCall(ctx, "SuspendActor", func(callCtx context.Context, tr *metadata.MD) error {
+func (u *gluttonUser) suspend(ctx context.Context) error {
+	err := u.tracedCall(ctx, "SuspendActor", func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.SuspendActor(callCtx, &ateapipb.SuspendActorRequest{
 			ActorRef: u.ref(),
 		}, grpc.Trailer(tr))
 		return err
 	})
 	u.actorRunning = false
+	return err
 }
 
-func (u *gluttonUser) delete(ctx context.Context) {
-	_ = u.tracedCall(ctx, "DeleteActor", func(callCtx context.Context, tr *metadata.MD) error {
+func (u *gluttonUser) delete(ctx context.Context) error {
+	return u.tracedCall(ctx, "DeleteActor", func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.DeleteActor(callCtx, &ateapipb.DeleteActorRequest{
 			ActorRef: u.ref(),
 		}, grpc.Trailer(tr))
@@ -274,7 +304,10 @@ func (u *gluttonUser) tracedCall(ctx context.Context, name string, do func(conte
 	return nil
 }
 
-func (u *gluttonUser) ping(ctx context.Context) {
+// ping returns nil on a successful echo. Production callers ignore the
+// return value — failures are already reported to metrics — but contract
+// tests use it to fail loudly on router/actor breakage.
+func (u *gluttonUser) ping(ctx context.Context) error {
 	ctx, span := u.cfg.Tracer.Start(ctx, "GluttonPing")
 	defer span.End()
 
@@ -282,13 +315,13 @@ func (u *gluttonUser) ping(ctx context.Context) {
 	body, err := proto.Marshal(&gluttonpb.PingRequest{Message: message})
 	if err != nil {
 		bmetrics.RecordFailure("http", "GluttonPing", userClass, 0, err.Error())
-		return
+		return err
 	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, u.cfg.RouterURL+pingPath, bytes.NewReader(body))
 	if err != nil {
 		bmetrics.RecordFailure("http", "GluttonPing", userClass, 0, err.Error())
-		return
+		return err
 	}
 	httpReq.Host = u.hostHeader
 	httpReq.Header.Set("Content-Type", "application/x-protobuf")
@@ -299,37 +332,38 @@ func (u *gluttonUser) ping(ctx context.Context) {
 	clientLatency := time.Since(start)
 	if err != nil {
 		bmetrics.RecordFailure("http", "GluttonPing", userClass, clientLatency, err.Error())
-		return
+		return err
 	}
 	defer resp.Body.Close()
 
 	respBody, readErr := io.ReadAll(resp.Body)
 	if readErr != nil {
 		bmetrics.RecordFailure("http", "GluttonPing", userClass, clientLatency, readErr.Error())
-		return
+		return readErr
 	}
 
 	if resp.StatusCode >= 400 {
 		httpErr := fmt.Errorf("HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
 		logSampledTrace(span, "GluttonPing", clientLatency, sourceClient, httpErr)
 		bmetrics.RecordFailure("http", "GluttonPing", userClass, clientLatency, httpErr.Error())
-		return
+		return httpErr
 	}
 
 	pong := &gluttonpb.PingResponse{}
 	if err := proto.Unmarshal(respBody, pong); err != nil {
 		logSampledTrace(span, "GluttonPing", clientLatency, sourceClient, err)
 		bmetrics.RecordFailure("http", "GluttonPing", userClass, clientLatency, err.Error())
-		return
+		return err
 	}
 	if pong.Message != message {
 		mismatch := fmt.Errorf("ping echo mismatch: sent=%q recv=%q", message, pong.Message)
 		logSampledTrace(span, "GluttonPing", clientLatency, sourceClient, mismatch)
 		bmetrics.RecordFailure("http", "GluttonPing", userClass, clientLatency, mismatch.Error())
-		return
+		return mismatch
 	}
 	logSampledTrace(span, "GluttonPing", clientLatency, sourceClient, nil)
 	bmetrics.RecordSuccess("http", "GluttonPing", userClass, clientLatency, int64(len(respBody)))
+	return nil
 }
 
 // logSampledTrace emits a single structured line per sampled span. Operators
