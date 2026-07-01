@@ -19,9 +19,11 @@ import (
 	"errors"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
 func (s *Service) PauseActor(ctx context.Context, req *ateapipb.PauseActorRequest) (*ateapipb.PauseActorResponse, error) {
@@ -44,11 +46,17 @@ func (s *Service) PauseActor(ctx context.Context, req *ateapipb.PauseActorReques
 }
 
 func validatePauseActorRequest(req *ateapipb.PauseActorRequest) error {
-	if req.GetActorRef().GetName() == "" {
-		return status.Error(codes.InvalidArgument, "id is required")
+	var fldPath *field.Path
+	var errs field.ErrorList
+
+	if val, fldPath := req.ActorRef, fldPath.Child("actor_ref"); val == nil {
+		errs = append(errs, field.Required(fldPath, ""))
+	} else {
+		errs = append(errs, resources.ValidateActorRef(val, fldPath)...)
 	}
-	if req.GetActorRef().GetAtespace() == "" {
-		return status.Error(codes.InvalidArgument, "atespace is required")
+
+	if len(errs) > 0 {
+		return status.Error(codes.InvalidArgument, errs.ToAggregate().Error())
 	}
 	return nil
 }

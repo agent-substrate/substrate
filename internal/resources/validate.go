@@ -17,20 +17,53 @@ package resources
 import (
 	"encoding/hex"
 	"fmt"
+	"net/netip"
 	"net/url"
 	"strings"
 
-	"k8s.io/apimachinery/pkg/util/validation"
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"k8s.io/apimachinery/pkg/api/validate/content"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
-// The validators in this file guard inputs that atelet turns into host
-// filesystem paths. atelet listens on an insecure hostPort, so any reachable
-// caller could otherwise smuggle a path separator or ".." through these
-// fields and make atelet read/RemoveAll/write outside the intended directory
-// tree, or collide OCI bundles. They are exported so the API server and
-// controller can apply the same rules at their own boundaries.
+// ValidateResourceName checks that a string conforms to Agent Substrate's
+// rules for a resource name, which is a subset of the rules for an RFC-1123
+// DNS label.  This does not check for zero-length strings, which callers may
+// want to handle differently (e.g., by returning a "required" error).
+func ValidateResourceName(name string, fldPath *field.Path) field.ErrorList {
+	var errs field.ErrorList
+	for _, msg := range content.IsDNS1123Label(name) {
+		errs = append(errs, field.Invalid(fldPath, name, msg))
+	}
+	return errs
+}
 
-// ValidateActorRef ensures every component of the per-actor directory tree is
+// ValidateActorRef checks that the actor reference is well-formed and that
+// each of its components is a valid resource name. It does not check that the
+// referenced actor actually exists.
+func ValidateActorRef(ref *ateapipb.ActorRef, fldPath *field.Path) field.ErrorList {
+	if ref == nil {
+		return nil
+	}
+
+	var errs field.ErrorList
+
+	if val, fldPath := ref.Atespace, fldPath.Child("atespace"); val == "" {
+		errs = append(errs, field.Required(fldPath, ""))
+	} else {
+		errs = append(errs, ValidateResourceName(val, fldPath)...)
+	}
+
+	if val, fldPath := ref.Name, fldPath.Child("name"); val == "" {
+		errs = append(errs, field.Required(fldPath, ""))
+	} else {
+		errs = append(errs, ValidateResourceName(val, fldPath)...)
+	}
+
+	return errs
+}
+
+// ValidateActorRefFields ensures every component of the per-actor directory tree is
 // a valid DNS-1123 name. namespace+template+actorID are concatenated by
 // ateompath.ActorPath into a host path on which atelet runs os.RemoveAll and
 // os.MkdirAll, so all three must be validated. Checking only one would still
@@ -39,14 +72,15 @@ import (
 //
 // The actor ID rule here is DNS-1123 label, which matches ValidateActorID;
 // unifying the two implementations is tracked separately.
-func ValidateActorRef(namespace, template, actorID string) error {
-	if errs := validation.IsDNS1123Label(namespace); len(errs) > 0 {
+// TODO(thockin): unify this with the more structural validation to come.
+func ValidateActorRefFields(namespace, template, actorID string) error {
+	if errs := content.IsDNS1123Label(namespace); len(errs) > 0 {
 		return fmt.Errorf("invalid namespace %q: %s", namespace, strings.Join(errs, "; "))
 	}
-	if errs := validation.IsDNS1123Subdomain(template); len(errs) > 0 {
+	if errs := content.IsDNS1123Subdomain(template); len(errs) > 0 {
 		return fmt.Errorf("invalid template %q: %s", template, strings.Join(errs, "; "))
 	}
-	if errs := validation.IsDNS1123Label(actorID); len(errs) > 0 {
+	if errs := content.IsDNS1123Label(actorID); len(errs) > 0 {
 		return fmt.Errorf("invalid actor ID %q: %s", actorID, strings.Join(errs, "; "))
 	}
 	// The three names are joined into a single path component
@@ -65,7 +99,7 @@ func ValidateActorRef(namespace, template, actorID string) error {
 // which are valid DNS-1123 labels, so a label check accepts every legitimate
 // value while rejecting separators and "..".
 func ValidateAteomUID(targetAteomUID string) error {
-	if errs := validation.IsDNS1123Label(targetAteomUID); len(errs) > 0 {
+	if errs := content.IsDNS1123Label(targetAteomUID); len(errs) > 0 {
 		return fmt.Errorf("invalid target ateom UID %q: %s", targetAteomUID, strings.Join(errs, "; "))
 	}
 	return nil
@@ -80,7 +114,7 @@ func ValidateAteomUID(targetAteomUID string) error {
 func ValidateContainerNames(names []string) error {
 	seen := make(map[string]struct{})
 	for _, name := range names {
-		if errs := validation.IsDNS1123Label(name); len(errs) > 0 {
+		if errs := content.IsDNS1123Label(name); len(errs) > 0 {
 			return fmt.Errorf("invalid container name %q: %s", name, strings.Join(errs, "; "))
 		}
 		if name == "pause" {
@@ -133,6 +167,152 @@ func ValidateSnapshotURIPrefix(prefix string) error {
 	// path), silently redirecting the upload/download to a different object.
 	if u.Opaque != "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
 		return fmt.Errorf("invalid snapshot URI prefix %q: must contain only a scheme, bucket, and path", prefix)
+	}
+	return nil
+}
+
+// ValidateWorker checks that the worker message is well-formed.
+func ValidateWorker(worker *ateapipb.Worker, fldPath *field.Path) field.ErrorList {
+	var errs field.ErrorList
+
+	if val, fldPath := worker.WorkerNamespace, fldPath.Child("worker_namespace"); val == "" {
+		errs = append(errs, field.Required(fldPath, ""))
+	} else {
+		for _, msg := range content.IsDNS1123Label(val) {
+			errs = append(errs, field.Invalid(fldPath, val, msg))
+		}
+	}
+
+	if val, fldPath := worker.WorkerPool, fldPath.Child("worker_pool"); val == "" {
+		errs = append(errs, field.Required(fldPath, ""))
+	} else {
+		for _, msg := range content.IsDNS1123Subdomain(val) {
+			errs = append(errs, field.Invalid(fldPath, val, msg))
+		}
+	}
+
+	if val, fldPath := worker.WorkerPod, fldPath.Child("worker_pod"); val == "" {
+		errs = append(errs, field.Required(fldPath, ""))
+	} else {
+		for _, msg := range content.IsDNS1123Subdomain(val) {
+			errs = append(errs, field.Invalid(fldPath, val, msg))
+		}
+	}
+
+	if val := worker.Assignment; val != nil {
+		errs = append(errs, ValidateAssignment(val, fldPath.Child("assignment"))...)
+	}
+
+	if val, fldPath := worker.Ip, fldPath.Child("ip"); val == "" {
+		errs = append(errs, field.Required(fldPath, ""))
+	} else {
+		errs = append(errs, ValidateIP(val, fldPath)...)
+	}
+
+	if val, fldPath := worker.WorkerPodUid, fldPath.Child("worker_pod_uid"); val == "" {
+		errs = append(errs, field.Required(fldPath, ""))
+	} else {
+		errs = append(errs, ValidateUUID(val, fldPath)...)
+	}
+
+	if val, fldPath := worker.NodeName, fldPath.Child("node_name"); val == "" {
+		errs = append(errs, field.Required(fldPath, ""))
+	} else {
+		for _, msg := range content.IsDNS1123Subdomain(val) {
+			errs = append(errs, field.Invalid(fldPath, val, msg))
+		}
+	}
+
+	return errs
+}
+
+func ValidateAssignment(assignment *ateapipb.Assignment, fldPath *field.Path) field.ErrorList {
+	var errs field.ErrorList
+
+	if val, fldPath := assignment.ActorTemplate, fldPath.Child("actor_template"); val == nil {
+		errs = append(errs, field.Required(fldPath, ""))
+	} else {
+		if val, fldPath := assignment.ActorTemplate.Namespace, fldPath.Child("namespace"); val == "" {
+			errs = append(errs, field.Required(fldPath, ""))
+		} else {
+			for _, msg := range content.IsDNS1123Label(val) {
+				errs = append(errs, field.Invalid(fldPath, val, msg))
+			}
+		}
+
+		if val, fldPath := assignment.ActorTemplate.Name, fldPath.Child("name"); val == "" {
+			errs = append(errs, field.Required(fldPath, ""))
+		} else {
+			for _, msg := range content.IsDNS1123Subdomain(val) {
+				errs = append(errs, field.Invalid(fldPath, val, msg))
+			}
+		}
+	}
+
+	if val, fldPath := assignment.Actor, fldPath.Child("actor"); val == nil {
+		errs = append(errs, field.Required(fldPath, ""))
+	} else {
+		if val, fldPath := assignment.Actor.Name, fldPath.Child("name"); val == "" {
+			errs = append(errs, field.Required(fldPath, ""))
+		} else {
+			errs = append(errs, ValidateResourceName(val, fldPath)...)
+		}
+
+		if val, fldPath := assignment.Actor.Atespace, fldPath.Child("atespace"); val == "" {
+			errs = append(errs, field.Required(fldPath, ""))
+		} else {
+			errs = append(errs, ValidateResourceName(val, fldPath)...)
+		}
+	}
+
+	return errs
+}
+
+// ValidateIP checks that the given string is a valid IP address, is not an
+// IPv4-mapped IPv6 address, and is in canonical form.
+func ValidateIP(ip string, fldPath *field.Path) field.ErrorList {
+	var errs field.ErrorList
+
+	addr, err := netip.ParseAddr(ip)
+	if err != nil || !addr.IsValid() {
+		errs = append(errs, field.Invalid(fldPath, ip, "must be a valid IP address"))
+		return errs
+	}
+	if addr.Is4In6() {
+		errs = append(errs, field.Invalid(fldPath, ip, "must not be an IPv4-mapped IPv6 address"))
+	}
+	if canon := addr.String(); ip != canon {
+		errs = append(errs, field.Invalid(fldPath, ip, fmt.Sprintf("must be in canonical form (%q)", canon)))
+	}
+	//TODO(thockin): prevent localhost and link-local addresses which might confuse callers?
+
+	return errs
+}
+
+// ValidateUUID verifies that the specified value is a valid UUID (RFC 4122).
+//   - must be 36 characters long
+//   - must be in the normalized form `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx`
+//   - must use only lowercase hexadecimal characters
+func ValidateUUID(uuid string, fldPath *field.Path) field.ErrorList {
+	const uuidErrorMessage = "must be a lowercase UUID in 8-4-4-4-12 format"
+
+	if len(uuid) != 36 {
+		return field.ErrorList{field.Invalid(fldPath, uuid, uuidErrorMessage)}
+	}
+
+	for idx := 0; idx < len(uuid); idx++ {
+		character := uuid[idx]
+		switch idx {
+		case 8, 13, 18, 23:
+			if character != '-' {
+				return field.ErrorList{field.Invalid(fldPath, uuid, uuidErrorMessage)}
+			}
+		default:
+			// should be lower case hexadecimal.
+			if (character < '0' || character > '9') && (character < 'a' || character > 'f') {
+				return field.ErrorList{field.Invalid(fldPath, uuid, uuidErrorMessage)}
+			}
+		}
 	}
 	return nil
 }

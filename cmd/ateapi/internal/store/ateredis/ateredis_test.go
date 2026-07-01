@@ -262,9 +262,15 @@ func TestUpdateWorker_Success(t *testing.T) {
 		t.Fatalf("WatchWorkers failed: %v", err)
 	}
 
-	worker.ActorNamespace = "default"
-	worker.ActorTemplate = "test-template"
-	worker.ActorId = "session-1"
+	worker.Assignment = &ateapipb.Assignment{
+		ActorTemplate: &ateapipb.KubeNamespacedObjectRef{
+			Namespace: "default",
+			Name:      "test-template",
+		},
+		Actor: &ateapipb.ActorRef{
+			Name: "session-1",
+		},
+	}
 
 	if err := s.UpdateWorker(ctx, worker, 1); err != nil {
 		t.Fatalf("UpdateWorker failed: %v", err)
@@ -529,14 +535,14 @@ func TestUpdateWorker_Conflict(t *testing.T) {
 	}
 
 	// Update instance 1
-	worker1.ActorId = "session-1"
+	worker1.Assignment = &ateapipb.Assignment{Actor: &ateapipb.ActorRef{Name: "session-1"}}
 	err = s.UpdateWorker(ctx, worker1, worker1.Version)
 	if err != nil {
 		t.Fatalf("UpdateWorker failed: %v", err)
 	}
 
 	// Try to update instance 2
-	worker2.ActorId = "session-2"
+	worker2.Assignment = &ateapipb.Assignment{Actor: &ateapipb.ActorRef{Name: "session-2"}}
 	err = s.UpdateWorker(ctx, worker2, worker2.Version)
 	if !errors.Is(err, store.ErrPersistenceRetry) {
 		t.Errorf("expected ErrPersistenceRetry, got %v", err)
