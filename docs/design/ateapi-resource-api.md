@@ -51,14 +51,26 @@ in-place mutation is meaningless. Template changes = create a new template
 and migrate actors. Delete returns `FAILED_PRECONDITION` while any actor
 references the template.
 
-**D4. At most one WorkerPoolGrant per (atespace, worker pool).** Grants are
-fully conventional resources (caller-named, standard methods), but Create
-enforces uniqueness on the pair — a duplicate grant for the same pool
-returns `ALREADY_EXISTS` regardless of its name (same pattern as the
-single-default SandboxConfig rule). This keeps revocation unambiguous and
-lets the scheduler's `(atespace, pool)` check stay a point lookup via a
-server-side index. Grants are immutable; future policy fields (quotas)
-would add Update.
+**D4. WorkerPoolGrant is a separate resource because pool capacity and
+atespace access have different owners and lifecycles.** A WorkerPool is
+global platform capacity; an ActorTemplate is tenant/atespace-scoped demand.
+The scheduler needs an explicit admission edge between them: selectors answer
+"does this pool match?", while grants answer "may this atespace use it?".
+Putting grants on WorkerPool would make every pool update rewrite a shared
+allow-list and would couple capacity changes to tenant access control.
+Putting grants on ActorTemplate would duplicate the same permission across
+templates and make revocation ambiguous. A separate resource gives admins a
+small auditable object to create/delete, supports future per-grant policy
+(quotas, priority, expiry), and keeps scheduling as a simple
+`(atespace, worker_pool)` check.
+
+At most one WorkerPoolGrant may exist per `(atespace, worker_pool)`. Grants
+are fully conventional resources (caller-named, standard methods), but Create
+enforces uniqueness on the pair — a duplicate grant for the same pool returns
+`ALREADY_EXISTS` regardless of its name (same pattern as the single-default
+SandboxConfig rule). This keeps revocation unambiguous and lets the
+scheduler's `(atespace, pool)` check stay a point lookup via a server-side
+index. Grants are immutable; future policy fields would add Update.
 
 **D5. One Kubernetes pocket: `WorkerPoolSpec.kubernetes`.** Everything
 k8s-specific about materializing a pool — namespace, node_selector,

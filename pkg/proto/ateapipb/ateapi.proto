@@ -809,10 +809,16 @@ message DeleteSandboxConfigRequest {
 // WorkerPoolGrant
 // ---------------------------------------------------------------------------
 
-// WorkerPoolGrant allows one atespace to schedule actors onto one worker
-// pool. At most one grant may exist per (atespace, worker_pool) pair:
-// Create returns ALREADY_EXISTS for a duplicate pair regardless of the
-// grant's name, so revocation is always unambiguous.
+// WorkerPoolGrant is the explicit admission edge between tenant demand and
+// platform capacity: selectors decide whether a pool matches an actor, grants
+// decide whether an atespace may use that pool. Keeping this as its own
+// resource avoids embedding tenant allow-lists in global WorkerPools or
+// duplicating access on every ActorTemplate, and gives admins a small object
+// to audit and revoke.
+//
+// At most one grant may exist per (atespace, worker_pool) pair: Create
+// returns ALREADY_EXISTS for a duplicate pair regardless of the grant's name,
+// so revocation is always unambiguous.
 //
 // Grants are immutable (no Update). Future per-grant policy fields (e.g.
 // quotas) would make them mutable and add an Update method.
