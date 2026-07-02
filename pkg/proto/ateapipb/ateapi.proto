@@ -12,64 +12,302 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// TODO: Here and everywhere, s/Session/Actor to align with the glossary.
+// DESIGN DRAFT (issue #368) — expected final shape of the ateapi surface
+// after decoupling substrate-plane resources from Kubernetes CRDs.
+// For review only: generated code and server implementation intentionally
+// lag this file until the shape is agreed.
+//
+// The API follows docs/api-style-guide.md (PR #351); deliberate
+// divergences are listed in docs/design/ateapi-resource-api.md
+// ("Style-guide conformance").
+//
+// Because the package renames from `ateapi` to `ateapi.v1alpha1`, every
+// message here is a new proto type: field numbers are assigned fresh and
+// carry no wire-compatibility obligation to the previous proto. Migration
+// is a coordinated client cutover, not in-place field evolution.
+//
+// Error model (canonical gRPC codes):
+//   - INVALID_ARGUMENT:    malformed names, missing required fields,
+//                          empty/absent update_mask, unknown mask paths,
+//                          negative page_size, scope violations
+//                          (e.g. atespace set on a global resource).
+//   - NOT_FOUND:           resource does not exist.
+//   - ALREADY_EXISTS:      Create with an existing (atespace, name).
+//   - ABORTED:             version guard mismatch (client echoed a non-zero
+//                          meta.version / request version that is stale).
+//   - FAILED_PRECONDITION: referential-integrity or state-machine
+//                          violations (delete a referenced template/pool,
+//                          delete a non-empty atespace, resume a
+//                          non-suspended actor, second default
+//                          SandboxConfig, ...).
 
 syntax = "proto3";
 
-package ateapi;
+package ateapi.v1alpha1;
 
+import "google/protobuf/field_mask.proto";
+import "google/protobuf/timestamp.proto";
+
+// Go package layout (ateapipb vs ateapipb/v1alpha1) is decided at
+// implementation time; out of scope for this design.
 option go_package = "github.com/agent-substrate/substrate/pkg/proto/ateapipb";
 
+// ---------------------------------------------------------------------------
+// Services
+// ---------------------------------------------------------------------------
 
-// Control is the primary RPC interface for Agentic Substrate.
+// Control is the user-plane API: everything a tenant needs to define
+// templates and run actors inside an atespace.
 service Control {
-  // Get an Actor.
-  rpc GetActor(GetActorRequest) returns (GetActorResponse) {}
+  // --- Atespace (global-scoped, immutable: no Update) ---
 
-  // Create a new Actor deriving from a given ActorTemplate.
-  rpc CreateActor(CreateActorRequest) returns (CreateActorResponse) {}
+  // Create an Atespace.
+  rpc CreateAtespace(CreateAtespaceRequest) returns (Atespace) {}
 
-  // Update mutable fields on an existing Actor.
-  rpc UpdateActor(UpdateActorRequest) returns (UpdateActorResponse) {}
+  // Get an Atespace.
+  rpc GetAtespace(GetAtespaceRequest) returns (Atespace) {}
 
-  // Suspend a given actor to a new snapshot.
-  rpc SuspendActor(SuspendActorRequest) returns (SuspendActorResponse) {}
-
-  // Pause a given actor and keep its snapshots on node VM.
-  rpc PauseActor(PauseActorRequest) returns (PauseActorResponse) {}
-
-  // Resume an actor from its latest snapshot.
-  rpc ResumeActor(ResumeActorRequest) returns (ResumeActorResponse) {}
-
-  // Delete an actor. Only suspended actors can be deleted.
-  rpc DeleteActor(DeleteActorRequest) returns (DeleteActorResponse) {}
-
-  // List all workers currently reflected in redis.
-  rpc ListWorkers(ListWorkersRequest) returns (ListWorkersResponse) {}
-
-  // List all actors currently reflected in redis.
-  rpc ListActors(ListActorsRequest) returns (ListActorsResponse) {}
-
-  // Create a new Atespace. Substrate-native, stored in Redis.
-  rpc CreateAtespace(CreateAtespaceRequest) returns (CreateAtespaceResponse) {}
-
-  // Get an Atespace by name.
-  rpc GetAtespace(GetAtespaceRequest) returns (GetAtespaceResponse) {}
-
-  // List all Atespaces.
+  // List Atespaces.
   rpc ListAtespaces(ListAtespacesRequest) returns (ListAtespacesResponse) {}
 
-  // Delete an empty Atespace. Rejects (FailedPrecondition) if any actors remain.
-  rpc DeleteAtespace(DeleteAtespaceRequest) returns (DeleteAtespaceResponse) {}
+  // Delete an empty Atespace.
+  // Returns FAILED_PRECONDITION if any actors or actor templates remain.
+  rpc DeleteAtespace(DeleteAtespaceRequest) returns (Atespace) {}
+
+  // --- ActorTemplate (atespace-scoped, immutable spec: no Update) ---
+
+  // Create an ActorTemplate. The spec is immutable after creation: golden
+  // snapshots are only valid for the exact spec they were taken from. To
+  // change a template, create a new one and migrate actors.
+  rpc CreateActorTemplate(CreateActorTemplateRequest) returns (ActorTemplate) {}
+
+  // Get an ActorTemplate.
+  rpc GetActorTemplate(GetActorTemplateRequest) returns (ActorTemplate) {}
+
+  // List ActorTemplates.
+  rpc ListActorTemplates(ListActorTemplatesRequest) returns (ListActorTemplatesResponse) {}
+
+  // Delete an ActorTemplate.
+  // Returns FAILED_PRECONDITION while any actor references it.
+  rpc DeleteActorTemplate(DeleteActorTemplateRequest) returns (ActorTemplate) {}
+
+  // Watch ActorTemplate changes after an initial snapshot of current state.
+  // Delivery is at-least-once; events carry full resource state. A SYNCED
+  // event marks the end of the initial snapshot.
+  rpc WatchActorTemplates(WatchActorTemplatesRequest) returns (stream WatchActorTemplatesResponse) {}
+
+  // --- Actor (atespace-scoped) ---
+
+  // Create a new Actor deriving from an ActorTemplate.
+  rpc CreateActor(CreateActorRequest) returns (Actor) {}
+
+  // Get an Actor.
+  rpc GetActor(GetActorRequest) returns (Actor) {}
+
+  // List Actors.
+  rpc ListActors(ListActorsRequest) returns (ListActorsResponse) {}
+
+  // Update mutable Actor fields (currently only worker_selector).
+  // Changes take effect on the next ResumeActor call.
+  rpc UpdateActor(UpdateActorRequest) returns (Actor) {}
+
+  // Delete an Actor. Returns FAILED_PRECONDITION unless the actor is
+  // suspended.
+  rpc DeleteActor(DeleteActorRequest) returns (Actor) {}
+
+  // Suspend an actor to a new snapshot.
+  rpc SuspendActor(SuspendActorRequest) returns (Actor) {}
+
+  // Pause an actor, keeping its snapshots on the node VM.
+  rpc PauseActor(PauseActorRequest) returns (Actor) {}
+
+  // Resume an actor from its latest snapshot.
+  rpc ResumeActor(ResumeActorRequest) returns (Actor) {}
+}
+
+// Admin is the platform-plane API: capacity (worker pools), sandbox
+// configuration, and cross-atespace access control (grants). Intended for
+// platform operators, not tenants.
+service Admin {
+  // --- WorkerPool (global-scoped) ---
+
+  // Create a WorkerPool.
+  rpc CreateWorkerPool(CreateWorkerPoolRequest) returns (WorkerPool) {}
+
+  // Get a WorkerPool.
+  rpc GetWorkerPool(GetWorkerPoolRequest) returns (WorkerPool) {}
+
+  // List WorkerPools.
+  rpc ListWorkerPools(ListWorkerPoolsRequest) returns (ListWorkerPoolsResponse) {}
+
+  // Update a WorkerPool.
+  rpc UpdateWorkerPool(UpdateWorkerPoolRequest) returns (WorkerPool) {}
+
+  // Delete a WorkerPool.
+  // Returns FAILED_PRECONDITION while any WorkerPoolGrant references it or
+  // any actor is currently assigned a worker from it.
+  rpc DeleteWorkerPool(DeleteWorkerPoolRequest) returns (WorkerPool) {}
+
+  // Watch WorkerPool changes after an initial snapshot of current state.
+  // Same delivery semantics as WatchActorTemplates.
+  rpc WatchWorkerPools(WatchWorkerPoolsRequest) returns (stream WatchWorkerPoolsResponse) {}
+
+  // --- SandboxConfig (global-scoped) ---
+
+  // Create a SandboxConfig. At most one SandboxConfig may set
+  // spec.default=true; violating this returns FAILED_PRECONDITION.
+  rpc CreateSandboxConfig(CreateSandboxConfigRequest) returns (SandboxConfig) {}
+
+  // Get a SandboxConfig.
+  rpc GetSandboxConfig(GetSandboxConfigRequest) returns (SandboxConfig) {}
+
+  // List SandboxConfigs.
+  rpc ListSandboxConfigs(ListSandboxConfigsRequest) returns (ListSandboxConfigsResponse) {}
+
+  // Update a SandboxConfig.
+  rpc UpdateSandboxConfig(UpdateSandboxConfigRequest) returns (SandboxConfig) {}
+
+  // Delete a SandboxConfig.
+  // Returns FAILED_PRECONDITION while any WorkerPool references it.
+  rpc DeleteSandboxConfig(DeleteSandboxConfigRequest) returns (SandboxConfig) {}
+
+  // --- WorkerPoolGrant (atespace-scoped, immutable) ---
+
+  // Grant an atespace access to a worker pool. At most one grant may
+  // exist per (atespace, worker_pool) pair; a second grant for the same
+  // pool returns ALREADY_EXISTS regardless of its name.
+  rpc CreateWorkerPoolGrant(CreateWorkerPoolGrantRequest) returns (WorkerPoolGrant) {}
+
+  // Get a WorkerPoolGrant.
+  rpc GetWorkerPoolGrant(GetWorkerPoolGrantRequest) returns (WorkerPoolGrant) {}
+
+  // List WorkerPoolGrants, optionally scoped to one atespace.
+  rpc ListWorkerPoolGrants(ListWorkerPoolGrantsRequest) returns (ListWorkerPoolGrantsResponse) {}
+
+  // Revoke (delete) a WorkerPoolGrant. Existing assignments are not
+  // interrupted; the grant is checked at scheduling time.
+  rpc DeleteWorkerPoolGrant(DeleteWorkerPoolGrantRequest) returns (WorkerPoolGrant) {}
+
+  // --- Debug / introspection ---
+
+  // List all workers currently reflected in the store. Debug surface:
+  // exposes infrastructure detail and is not a managed resource API.
+  rpc ListWorkers(ListWorkersRequest) returns (ListWorkersResponse) {}
 
   // Debugging: drop all data from the ate database.
   rpc DebugClear(DebugClearRequest) returns (DebugClearResponse) {}
 }
 
+// ---------------------------------------------------------------------------
+// Shared types
+// ---------------------------------------------------------------------------
+
+// ResourceMetadata holds the standard fields common to all managed
+// resources. Always field 1 of the resource message, named `meta`.
+// See docs/api-style-guide.md section 6.
+message ResourceMetadata {
+  // The atespace this resource belongs to. Must be empty for global-scoped
+  // resource types (Atespace, WorkerPool, SandboxConfig) and set for
+  // atespace-scoped types (Actor, ActorTemplate, WorkerPoolGrant).
+  string atespace = 1;
+
+  // The name of this resource, unique within its scope. Must be a valid
+  // RFC-1123 DNS label. Caller-specified on Create.
+  string name = 2;
+
+  // Server-assigned UUID4, immutable for the life of the resource.
+  string uid = 3;
+
+  // Monotonically increasing version: starts at 1 on creation and
+  // increments by 1 on every mutation, including system-internal ones.
+  // Output-only; echo a non-zero value back on Update/Delete to guard
+  // against concurrent modification (mismatch returns ABORTED).
+  int64 version = 4;
+
+  // When the resource was created. Output-only.
+  google.protobuf.Timestamp create_time = 5;
+
+  // When the resource was last updated. Output-only.
+  google.protobuf.Timestamp update_time = 6;
+
+  // labels are user-defined key/value pairs used for organization and
+  // selection. WorkerPool labels are matched by template and actor
+  // worker_selectors at scheduling time. Mutable on resources that
+  // support Update. (Not yet in the draft style guide's ResourceMetadata.)
+  map<string, string> labels = 7;
+}
+
+// ObjectRef is a pointer to a resource: request identity and
+// cross-resource references. For references to global-scoped resources,
+// atespace must be empty.
+message ObjectRef {
+  string atespace = 1;
+  string name     = 2;
+}
+
+// Selector matches worker pools by their meta.labels.
+// Only equality-based matching is supported (all pairs must match).
+// An empty selector matches every pool.
+message Selector {
+  map<string, string> match_labels = 1;
+}
+
+// ResourceEventType classifies watch stream events.
+enum ResourceEventType {
+  RESOURCE_EVENT_TYPE_UNSPECIFIED = 0;
+  RESOURCE_EVENT_TYPE_CREATED     = 1;
+  RESOURCE_EVENT_TYPE_UPDATED     = 2;
+  RESOURCE_EVENT_TYPE_DELETED     = 3;
+  // SYNCED is sent exactly once, after the initial snapshot has been fully
+  // delivered. It carries no resource. Consumers can use it to know their
+  // local cache is complete before acting.
+  RESOURCE_EVENT_TYPE_SYNCED      = 4;
+}
+
+// ---------------------------------------------------------------------------
+// Atespace
+// ---------------------------------------------------------------------------
+
+// Atespace is the isolation boundary actors are created into.
+// Global-scoped; immutable (no Update method).
+message Atespace {
+  ResourceMetadata meta = 1;
+}
+
+message CreateAtespaceRequest {
+  // atespace.meta.name is required; atespace.meta.atespace must be empty.
+  Atespace atespace = 1;
+}
+
+message GetAtespaceRequest {
+  ObjectRef atespace = 1;
+}
+
+message ListAtespacesRequest {
+  // Maximum number of results to return; see style guide 3.2 for paging
+  // semantics (applies to all List methods in this file).
+  int32 page_size = 1;
+  string page_token = 2;
+}
+message ListAtespacesResponse {
+  repeated Atespace atespaces = 1;
+  string next_page_token = 2;
+}
+
+message DeleteAtespaceRequest {
+  ObjectRef atespace = 1;
+  // Optional freshness guard; 0 = skip check.
+  int64 version = 2;
+}
+
+// ---------------------------------------------------------------------------
+// Actor
+// ---------------------------------------------------------------------------
+
 enum SnapshotType {
   SNAPSHOT_TYPE_UNSPECIFIED = 0;
   SNAPSHOT_TYPE_LOCAL       = 1;
-  SNAPSHOT_TYPE_EXTERNAL      = 2;
+  SNAPSHOT_TYPE_EXTERNAL    = 2;
 }
 
 message ExternalSnapshotInfo {
@@ -78,7 +316,7 @@ message ExternalSnapshotInfo {
 
 message LocalSnapshotInfo {
   string snapshot_prefix = 1;
-  // Node VMs that have local snapshots for this actor, while it's PAUSED.
+  // Node VMs that have local snapshots for this actor while it is PAUSED.
   repeated string node_vms_with_local_snapshots = 2;
 }
 
@@ -90,18 +328,15 @@ message SnapshotInfo {
   }
 }
 
-// Selector matches worker pools by label.
-// Only equality-based matching is supported.
-message Selector {
-  map<string, string> match_labels = 1;
-}
-
+// Actor is a running (or suspended) instance of an ActorTemplate.
+// Atespace-scoped.
 message Actor {
-  string actor_id = 1;
-  int64  version  = 2;
+  ResourceMetadata meta = 1;
 
-  string actor_template_namespace = 3;
-  string actor_template_name      = 4;
+  // The ActorTemplate this actor derives from. Set at creation; immutable.
+  // Must currently reside in the actor's own atespace; the ObjectRef shape
+  // leaves room for cross-atespace template sharing later.
+  ObjectRef actor_template = 2;
 
   enum Status {
     STATUS_UNSPECIFIED = 0;
@@ -112,206 +347,541 @@ message Actor {
     STATUS_PAUSING     = 5;
     STATUS_PAUSED      = 6;
   }
-  Status status = 5;
-
-  string ateom_pod_namespace = 6;
-  string ateom_pod_name      = 7;
-  string ateom_pod_ip        = 8;
-
-  // last_snapshot
-  reserved 9;
-  string in_progress_snapshot = 10;
-  string ateom_pod_uid        = 11;
-  SnapshotInfo latest_snapshot_info = 12;
+  // Output-only lifecycle state.
+  Status status = 3;
 
   // worker_selector is the per-actor placement constraint. The scheduler
-  // evaluates the AND of this selector and the template's workerSelector to
-  // find eligible pools. Set at CreateActor; may be updated at any time via
-  // UpdateActor. Changes take effect on the next ResumeActor call.
-  Selector worker_selector = 13;
+  // evaluates the AND of this selector and the template's worker_selector
+  // to find eligible pools. Set at CreateActor; mutable via UpdateActor.
+  // Changes take effect on the next ResumeActor call.
+  Selector worker_selector = 4;
 
-  // worker_pool_name is the name of the WorkerPool that owns the currently
-  // assigned worker, in the same namespace as ateom_pod_namespace (pool and
-  // pod namespaces always match). Set by the scheduler at assignment time
-  // and cleared when the worker is freed. Needed to release the worker on
-  // suspend/pause since eligibility is no longer a single fixed pool
-  // reference on the ActorTemplate.
-  string worker_pool_name = 14;
+  // The WorkerPool that owns the currently assigned worker. Output-only:
+  // set by the scheduler at assignment time, cleared when the worker is
+  // freed on suspend/pause.
+  ObjectRef worker_pool = 5;
 
-  // The atespace this actor belongs to. Part of the actor's
-  // resource identity; folded into the Redis key as actor:<atespace>:<actor_id>.
-  string atespace = 15;
-}
+  // Output-only snapshot bookkeeping.
+  string in_progress_snapshot = 6;
+  SnapshotInfo latest_snapshot_info = 7;
 
-// Atespace is the isolation boundary an Actor is created into.
-message Atespace {
-  string name = 1;
-}
-
-// ActorRef identifies an actor: a name is only unique within its atespace.
-message ActorRef {
-  string atespace = 1;
-  string name     = 2;
+  // Output-only infrastructure debugging fields describing the Kubernetes
+  // pod currently backing this actor. Not part of the portable resource
+  // model; may be moved to a debug-only surface in a future version.
+  string ateom_pod_namespace = 8;
+  string ateom_pod_name      = 9;
+  string ateom_pod_ip        = 10;
+  string ateom_pod_uid       = 11;
 }
 
-message CreateAtespaceRequest {
-  string name = 1;
+message CreateActorRequest {
+  // The actor to create. Caller sets meta.atespace, meta.name (a valid
+  // DNS-1123 label), actor_template, and optionally worker_selector.
+  // All other fields are output-only and must be unset.
+  Actor actor = 1;
 }
-message CreateAtespaceResponse {
-  Atespace atespace = 1;
-}
-
-message GetAtespaceRequest {
-  string name = 1;
-}
-message GetAtespaceResponse {
-  Atespace atespace = 1;
-}
-
-message ListAtespacesRequest {}
-message ListAtespacesResponse {
-  repeated Atespace atespaces = 1;
-}
-
-message DeleteAtespaceRequest {
-  string name = 1;
-}
-message DeleteAtespaceResponse {}
 
 message GetActorRequest {
-  ActorRef actor_ref = 1;
+  ObjectRef actor = 1;
 }
 
-message GetActorResponse {
-  Actor actor = 1;
-}
-
-// Request to create a new Actor.
-message CreateActorRequest {
-  // The new actor's atespace and actor_id (actor_id must be a valid DNS-1123 label).
-  ActorRef actor_ref = 1;
-
-  // The namespace of the ActorTemplate to derive from.
-  string actor_template_namespace = 2;
-
-  // The name of the ActorTemplate to derive from.
-  string actor_template_name = 3;
-
-  // worker_selector sets the actor's placement constraint at creation time.
-  // If empty, the actor matches any pool admitted by the template's selector.
-  Selector worker_selector = 4;
-}
-
-message CreateActorResponse {
-  Actor actor = 1;
-}
-
-// Request to update mutable fields on an existing Actor.
-// May be called regardless of the actor's current status.
-// Changes take effect on the next ResumeActor call.
-message UpdateActorRequest {
-  ActorRef actor_ref = 1;
-
-  // worker_selector replaces the actor's current placement constraint.
-  // Takes effect on the next ResumeActor call.
-  Selector worker_selector = 2;
-}
-
-message UpdateActorResponse {
-  Actor actor = 1;
-}
-
-message SuspendActorRequest {
-  ActorRef actor_ref = 1;
-}
-
-message SuspendActorResponse {
-  Actor actor = 1;
-}
-
-message PauseActorRequest {
-  ActorRef actor_ref = 1;
-}
-
-message PauseActorResponse {
-  Actor actor = 1;
-}
-
-message ResumeActorRequest {
-  ActorRef actor_ref = 1;
-
-  // If true, skip golden snapshot and boot the workload from scratch.
-  bool boot = 2;
-}
-
-message ResumeActorResponse {
-  Actor actor = 1;
-}
-
-message DeleteActorRequest {
-  ActorRef actor_ref = 1;
-}
-
-message DeleteActorResponse {}
-
-message ListWorkersRequest {}
-
-message ListWorkersResponse {
-  repeated Worker workers = 1;
-}
-
-// Request to list actors with pagination.
-// This operation provides "soft" guarantees: actors may be missed or duplicated
-// if the system state changes during pagination.
+// List actors with pagination. This operation provides "soft" guarantees:
+// actors may be missed or duplicated if the system state changes during
+// pagination.
 message ListActorsRequest {
-  // The maximum number of actors to return. The server may enforce a hard limit
-  // (e.g., 1000) regardless of the requested size.
-  int32 page_size = 1;
-
-  // An opaque pagination token obtained from a previous ListActorsResponse.
-  // Empty for the first request.
-  string page_token = 2;
-
-  // If set, list only actors in this atespace (scoped SCAN actor:<atespace>:*).
-  string atespace = 3;
+  // The atespace to list actors from. Empty lists across all atespaces.
+  string atespace = 1;
+  int32 page_size = 2;
+  string page_token = 3;
 }
-
-// Response for a ListActors operation.
 message ListActorsResponse {
-  // The page of actors. This list may be empty even if there are more results.
   repeated Actor actors = 1;
-
-  // An opaque token to retrieve the next page of results.
-  // If empty, there are no more results. Clients must loop until this is empty.
   string next_page_token = 2;
 }
 
+message UpdateActorRequest {
+  // actor.meta.atespace and actor.meta.name identify the resource.
+  // A non-zero actor.meta.version acts as a freshness guard.
+  Actor actor = 1;
+
+  // Required. The only updatable path today is "worker_selector"; any
+  // other path returns INVALID_ARGUMENT.
+  google.protobuf.FieldMask update_mask = 2;
+}
+
+message DeleteActorRequest {
+  ObjectRef actor = 1;
+  // Optional freshness guard; 0 = skip check.
+  int64 version = 2;
+}
+
+message SuspendActorRequest {
+  ObjectRef actor = 1;
+}
+
+message PauseActorRequest {
+  ObjectRef actor = 1;
+}
+
+message ResumeActorRequest {
+  ObjectRef actor = 1;
+
+  // If true, skip the golden snapshot and boot the workload from scratch.
+  bool boot = 2;
+}
+
+// ---------------------------------------------------------------------------
+// ActorTemplate
+// ---------------------------------------------------------------------------
+
+// ActorTemplate defines the workload actors are stamped from.
+// Atespace-scoped. The spec is immutable after creation (golden snapshots
+// are only valid for the exact spec they were taken from), so there is no
+// UpdateActorTemplate method: create a new template instead.
+message ActorTemplate {
+  ResourceMetadata meta = 1;
+  ActorTemplateSpec spec = 2;
+  // Output-only.
+  ActorTemplateStatus status = 3;
+}
+
+message ActorTemplateSpec {
+  // Image used to hold the sandbox while no actor is resumed into it.
+  string pause_image = 1;
+
+  // The workload containers. Images must be pinned by digest.
+  repeated Container containers = 2;
+
+  SnapshotsConfig snapshots_config = 3;
+
+  // The sandbox class this workload requires. Matched against
+  // WorkerPoolSpec.sandbox_class at scheduling time. Open string: the set
+  // of classes is defined by the SandboxConfigs installed by the platform
+  // operator.
+  string sandbox_class = 4;
+
+  // Restricts which worker pools actors from this template may be placed
+  // on. ANDed with the per-actor worker_selector.
+  Selector worker_selector = 5;
+
+  repeated Volume volumes = 6;
+}
+
+message ActorTemplateStatus {
+  enum State {
+    STATE_UNSPECIFIED  = 0;
+    // Waiting for a golden snapshot to be scheduled.
+    STATE_PENDING      = 1;
+    // The golden snapshot is being taken.
+    STATE_SNAPSHOTTING = 2;
+    // Golden snapshot exists; actors can be created from this template.
+    STATE_READY        = 3;
+    // Golden snapshotting failed; see error_message.
+    STATE_FAILED       = 4;
+  }
+  State state = 1;
+
+  // The golden actor used to produce the golden snapshot.
+  string golden_actor_id = 2;
+
+  // URI prefix of the golden snapshot, once taken.
+  string golden_snapshot = 3;
+
+  // Human-readable failure detail when state is FAILED.
+  string error_message = 4;
+}
+
+message Container {
+  string name = 1;
+  // Must be pinned by digest (image@sha256:...) so that golden snapshots
+  // cannot drift from the running image.
+  string image = 2;
+  repeated string command = 3;
+  repeated EnvVar env = 4;
+  ContainerReadyz readyz = 5;
+  repeated VolumeMount volume_mounts = 6;
+}
+
+message ContainerReadyz {
+  HTTPGetAction http_get = 1;
+}
+
+message HTTPGetAction {
+  string path = 1;
+  int32 port = 2;
+}
+
+message EnvVar {
+  string name = 1;
+  oneof source {
+    // Literal value.
+    string value = 2;
+    // Value read from a named secret at actor start.
+    SecretRef secret = 3;
+  }
+}
+
+// SecretRef names a secret managed by the platform the workers run on
+// (a Kubernetes Secret today). Deliberately plane-neutral: no k8s types.
+message SecretRef {
+  // Name of the secret, resolved in the worker's environment.
+  string name = 1;
+  // Key within the secret.
+  string key = 2;
+  // If true, a missing secret or key is skipped instead of failing the
+  // actor start.
+  bool optional = 3;
+}
+
+message Volume {
+  string name = 1;
+  VolumeSource volume_source = 2;
+}
+
+// VolumeSource is an extension point; DurableDir is the only source today.
+message VolumeSource {
+  DurableDirVolumeSource durable_dir = 1;
+}
+
+message DurableDirVolumeSource {}
+
+message VolumeMount {
+  string name = 1;
+  string mount_path = 2;
+}
+
+message SnapshotsConfig {
+  enum Scope {
+    SCOPE_UNSPECIFIED = 0;
+    // Snapshot the full sandbox state (memory + filesystem).
+    SCOPE_FULL        = 1;
+    // Snapshot durable data only.
+    SCOPE_DATA        = 2;
+  }
+
+  // URI prefix under which snapshots are stored.
+  string location = 1;
+
+  // Scope taken on PauseActor / SuspendActor.
+  Scope on_pause = 2;
+
+  // Scope taken on commit. Must be a subset of on_pause
+  // (INVALID_ARGUMENT otherwise).
+  Scope on_commit = 3;
+}
+
+message CreateActorTemplateRequest {
+  ActorTemplate actor_template = 1;
+}
+
+message GetActorTemplateRequest {
+  ObjectRef actor_template = 1;
+}
+
+message ListActorTemplatesRequest {
+  // The atespace to list templates from. Empty lists across all atespaces.
+  string atespace = 1;
+  int32 page_size = 2;
+  string page_token = 3;
+}
+message ListActorTemplatesResponse {
+  repeated ActorTemplate actor_templates = 1;
+  string next_page_token = 2;
+}
+
+message DeleteActorTemplateRequest {
+  ObjectRef actor_template = 1;
+  // Optional freshness guard; 0 = skip check.
+  int64 version = 2;
+}
+
+message WatchActorTemplatesRequest {}
+message WatchActorTemplatesResponse {
+  ResourceEventType type = 1;
+  // Unset when type is SYNCED.
+  ActorTemplate actor_template = 2;
+}
+
+// ---------------------------------------------------------------------------
+// WorkerPool
+// ---------------------------------------------------------------------------
+
+// WorkerPool declares a pool of ready workers that actors are multiplexed
+// onto. Global-scoped: pools are platform capacity, shared across
+// atespaces via WorkerPoolGrants. meta.labels are the match target for
+// template/actor worker_selectors.
+message WorkerPool {
+  ResourceMetadata meta = 1;
+  WorkerPoolSpec spec = 2;
+  // Output-only.
+  WorkerPoolStatus status = 3;
+}
+
+message WorkerPoolSpec {
+  // Desired number of ready workers.
+  int32 replicas = 1;
+
+  // Image of the ateom management container run in each worker.
+  string ateom_image = 2;
+
+  // The sandbox class workers in this pool provide. Matched against
+  // ActorTemplateSpec.sandbox_class at scheduling time.
+  string sandbox_class = 3;
+
+  // The SandboxConfig applied to workers in this pool (global-scoped
+  // reference: atespace must be empty).
+  ObjectRef sandbox_config = 4;
+
+  // How the pool is materialized on Kubernetes. This is the single,
+  // clearly-marked pocket of Kubernetes-specific configuration in the
+  // substrate API; everything outside it is plane-neutral. A future
+  // non-k8s substrate would add a sibling placement message.
+  KubernetesPlacement kubernetes = 5;
+}
+
+message WorkerPoolStatus {
+  // Number of workers currently backing the pool.
+  int32 replicas = 1;
+}
+
+// KubernetesPlacement configures how backing worker pods are placed on a
+// Kubernetes cluster. Messages below mirror k8s.io/api/core/v1 verbatim
+// and are quarantined to this pocket.
+message KubernetesPlacement {
+  // Kubernetes namespace the backing Deployment/pods are created in.
+  // (The POC called this deployment_atespace; it is and always was a
+  // Kubernetes namespace, so it is named honestly here.)
+  string namespace = 1;
+
+  map<string, string> node_selector = 2;
+  repeated Toleration tolerations = 3;
+  NodeAffinity node_affinity = 4;
+  ResourceRequirements resources = 5;
+  string priority_class_name = 6;
+}
+
+message Toleration {
+  string key = 1;
+  string operator = 2;
+  string value = 3;
+  string effect = 4;
+  optional int64 toleration_seconds = 5;
+}
+
+message NodeAffinity {
+  NodeSelector required_during_scheduling_ignored_during_execution = 1;
+  repeated PreferredSchedulingTerm preferred_during_scheduling_ignored_during_execution = 2;
+}
+
+message NodeSelector {
+  repeated NodeSelectorTerm node_selector_terms = 1;
+}
+
+message PreferredSchedulingTerm {
+  int32 weight = 1;
+  NodeSelectorTerm preference = 2;
+}
+
+message NodeSelectorTerm {
+  repeated NodeSelectorRequirement match_expressions = 1;
+  repeated NodeSelectorRequirement match_fields = 2;
+}
+
+message NodeSelectorRequirement {
+  string key = 1;
+  string operator = 2;
+  repeated string values = 3;
+}
+
+message ResourceRequirements {
+  map<string, string> limits = 1;
+  map<string, string> requests = 2;
+}
+
+message CreateWorkerPoolRequest {
+  WorkerPool worker_pool = 1;
+}
+
+message GetWorkerPoolRequest {
+  ObjectRef worker_pool = 1;
+}
+
+message ListWorkerPoolsRequest {
+  int32 page_size = 1;
+  string page_token = 2;
+}
+message ListWorkerPoolsResponse {
+  repeated WorkerPool worker_pools = 1;
+  string next_page_token = 2;
+}
+
+message UpdateWorkerPoolRequest {
+  // worker_pool.meta.name identifies the resource; a non-zero
+  // worker_pool.meta.version acts as a freshness guard.
+  WorkerPool worker_pool = 1;
+
+  // Required. Top-level field paths only (e.g. "spec.replicas",
+  // "spec.kubernetes", "meta.labels"); naming a message or map field
+  // replaces that field wholesale. Unknown or immutable paths return
+  // INVALID_ARGUMENT.
+  google.protobuf.FieldMask update_mask = 2;
+}
+
+message DeleteWorkerPoolRequest {
+  ObjectRef worker_pool = 1;
+  // Optional freshness guard; 0 = skip check.
+  int64 version = 2;
+}
+
+message WatchWorkerPoolsRequest {}
+message WatchWorkerPoolsResponse {
+  ResourceEventType type = 1;
+  // Unset when type is SYNCED.
+  WorkerPool worker_pool = 2;
+}
+
+// ---------------------------------------------------------------------------
+// SandboxConfig
+// ---------------------------------------------------------------------------
+
+// SandboxConfig defines a sandbox class: the runtime assets and settings
+// workers of that class are provisioned with. Global-scoped. The set of
+// SandboxConfigs is the de-facto registry of valid sandbox_class values.
+message SandboxConfig {
+  ResourceMetadata meta = 1;
+  SandboxConfigSpec spec = 2;
+}
+
+message SandboxConfigSpec {
+  // The sandbox class this config defines.
+  string sandbox_class = 1;
+
+  // If true, this config is applied to pools that do not name one
+  // explicitly. At most one SandboxConfig may be default.
+  bool default = 2;
+
+  // Assets provisioned into the sandbox, keyed by asset group name.
+  map<string, SandboxAssetFiles> assets = 3;
+}
+
+message SandboxAssetFiles {
+  // Files keyed by destination path.
+  map<string, AssetFile> files = 1;
+}
+
+message AssetFile {
+  string url = 1;
+  string sha256 = 2;
+}
+
+message CreateSandboxConfigRequest {
+  SandboxConfig sandbox_config = 1;
+}
+
+message GetSandboxConfigRequest {
+  ObjectRef sandbox_config = 1;
+}
+
+message ListSandboxConfigsRequest {
+  int32 page_size = 1;
+  string page_token = 2;
+}
+message ListSandboxConfigsResponse {
+  repeated SandboxConfig sandbox_configs = 1;
+  string next_page_token = 2;
+}
+
+message UpdateSandboxConfigRequest {
+  SandboxConfig sandbox_config = 1;
+
+  // Required. Same path semantics as UpdateWorkerPoolRequest.update_mask
+  // (e.g. "spec.assets" replaces the whole assets map).
+  google.protobuf.FieldMask update_mask = 2;
+}
+
+message DeleteSandboxConfigRequest {
+  ObjectRef sandbox_config = 1;
+  // Optional freshness guard; 0 = skip check.
+  int64 version = 2;
+}
+
+// ---------------------------------------------------------------------------
+// WorkerPoolGrant
+// ---------------------------------------------------------------------------
+
+// WorkerPoolGrant allows one atespace to schedule actors onto one worker
+// pool. At most one grant may exist per (atespace, worker_pool) pair:
+// Create returns ALREADY_EXISTS for a duplicate pair regardless of the
+// grant's name, so revocation is always unambiguous.
+//
+// Grants are immutable (no Update). Future per-grant policy fields (e.g.
+// quotas) would make them mutable and add an Update method.
+message WorkerPoolGrant {
+  ResourceMetadata meta = 1;
+
+  // The worker pool being granted (global-scoped reference: atespace must
+  // be empty). Required on Create; immutable.
+  ObjectRef worker_pool = 2;
+}
+
+message CreateWorkerPoolGrantRequest {
+  WorkerPoolGrant worker_pool_grant = 1;
+}
+
+message GetWorkerPoolGrantRequest {
+  ObjectRef worker_pool_grant = 1;
+}
+
+message ListWorkerPoolGrantsRequest {
+  // The atespace to list grants from. Empty lists across all atespaces.
+  string atespace = 1;
+  int32 page_size = 2;
+  string page_token = 3;
+}
+message ListWorkerPoolGrantsResponse {
+  repeated WorkerPoolGrant worker_pool_grants = 1;
+  string next_page_token = 2;
+}
+
+message DeleteWorkerPoolGrantRequest {
+  ObjectRef worker_pool_grant = 1;
+  // Optional freshness guard; 0 = skip check.
+  int64 version = 2;
+}
+
+// ---------------------------------------------------------------------------
+// Worker (debug projection, not a managed resource)
+// ---------------------------------------------------------------------------
+
+// Worker is a read-only projection of a worker pod's state in the store.
+// It is not a managed resource (no ResourceMetadata, no CRUD): it exists
+// for operator debugging via ListWorkers and intentionally exposes
+// infrastructure detail.
 message Worker {
   string worker_namespace = 1;
   string worker_pool      = 2;
   string worker_pod       = 3;
 
-  Assignment assignment = 4;
-
-  string ip              = 5;
-  int64  version         = 6;
-  string worker_pod_uid  = 7;
-  string node_name       = 8;
+  string actor_atespace  = 4;
+  string actor_template  = 5;
+  string actor_id        = 6;
+  string ip              = 7;
+  int64  version         = 8;
+  string worker_pod_uid  = 9;
+  string node_name       = 10;
 }
 
-message Assignment {
-  KubeNamespacedObjectRef actor_template = 1;
-  ActorRef actor = 2;
-}
-
-message KubeNamespacedObjectRef {
-  string namespace = 1;
-  string name  = 2;
+message ListWorkersRequest {}
+message ListWorkersResponse {
+  repeated Worker workers = 1;
 }
 
 message DebugClearRequest {}
-
 message DebugClearResponse {}
+
+// ---------------------------------------------------------------------------
+// SessionIdentity (unchanged from the POC surface)
+// ---------------------------------------------------------------------------
 
 // SessionIdentity allows substrate workloads to exchange their
 // infrastructure-level credentials (k8s service account token, etc.) for a
