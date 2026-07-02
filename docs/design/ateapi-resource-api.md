@@ -64,6 +64,11 @@ small auditable object to create/delete, supports future per-grant policy
 (quotas, priority, expiry), and keeps scheduling as a simple
 `(atespace, worker_pool)` check.
 
+If WorkerPools were atespace-scoped, this resource would not be necessary:
+pool ownership would already define who may schedule onto it. The grant exists
+because this design keeps WorkerPools global, so access from an atespace to a
+global pool must be represented explicitly.
+
 At most one WorkerPoolGrant may exist per `(atespace, worker_pool)`. Grants
 are fully conventional resources (caller-named, standard methods), but Create
 enforces uniqueness on the pair — a duplicate grant for the same pool returns

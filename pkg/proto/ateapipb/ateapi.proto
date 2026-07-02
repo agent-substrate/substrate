@@ -815,6 +815,8 @@ message DeleteSandboxConfigRequest {
 // resource avoids embedding tenant allow-lists in global WorkerPools or
 // duplicating access on every ActorTemplate, and gives admins a small object
 // to audit and revoke.
+// If WorkerPools become atespace-scoped, ownership would already define
+// scheduling access and this resource would no longer be needed.
 //
 // At most one grant may exist per (atespace, worker_pool) pair: Create
 // returns ALREADY_EXISTS for a duplicate pair regardless of the grant's name,
