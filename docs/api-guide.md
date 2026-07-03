@@ -239,7 +239,7 @@ The Substrate Control Plane (`ate-api-server`) exposes a gRPC interface for mana
 #### `CreateActor`
 Registers a new logical actor in the system.
 *   **Request:** `CreateActorRequest`
-    *   `actor_id`: Unique identifier (DNS-1123 label).
+    *   `actor_ref`: `ActorRef` (atespace and actor ID, ID must be a DNS-1123 label).
     *   `actor_template_namespace`: Namespace of the `ActorTemplate`.
     *   `actor_template_name`: Name of the `ActorTemplate`.
 *   **Response:** `CreateActorResponse` containing the initialized `Actor` object.
@@ -247,14 +247,14 @@ Registers a new logical actor in the system.
 #### `ResumeActor`
 Activates a suspended actor by restoring it onto a physical worker.
 *   **Request:** `ResumeActorRequest`
-    *   `actor_id`: ID of the actor to resume.
+    *   `actor_ref`: `ActorRef` of the actor to resume.
     *   `boot`: (Optional) If `true`, bypasses snapshots and performs a cold boot.
 *   **Response:** `ResumeActorResponse` containing the updated `Actor` object (including the physical `worker_ip`).
 
 #### `SuspendActor`
 Hibernate a running actor, capturing its current RAM and disk state into a snapshot.
 *   **Request:** `SuspendActorRequest`
-    *   `actor_id`: ID of the actor to suspend.
+    *   `actor_ref`: `ActorRef` of the actor to suspend.
 *   **Response:** `SuspendActorResponse` containing the `Actor` object in `STATUS_SUSPENDED`.
 
 #### `DeleteActor`
