@@ -147,9 +147,9 @@ To visualize traces locally:
 
 3. **Generate Traces**: Run a CLI command or API call with the `--trace` flag, e.g.:
    ```bash
-   kubectl ate get actor --trace
+   kubectl ate get actor -A --trace
    # or
-   kubectl ate suspend actor <actor-id> --trace
+   kubectl ate suspend actor <actor-id> -a <atespace> --trace
    ```
 
 4. **Search and Inspect**: Copy the printed Trace ID from the CLI output and paste it into the Jaeger search box (top right), or select `ateapi` or `atelet` under the **Service** dropdown and click **Find Traces** to inspect detailed call stacks, DB transactions, state updates, and worker pod handoffs.
