@@ -239,7 +239,7 @@ def call_with_trace(stub, method, request):
     inject(headers)
     metadata = list(headers.items())
     response = stub.GetActor(
-        ateapi_pb2.GetActorRequest(actor_key="my-actor"),
+        ateapi_pb2.GetActorRequest(actor_ref=ateapi_pb2.ActorRef(atespace="default", name="my-actor")),
         metadata=metadata
     )
 ```
