@@ -46,8 +46,10 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	otelcodes "go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/metric"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/api/option"
 	"google.golang.org/grpc"
@@ -265,6 +267,8 @@ func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (*atele
 	return &ateletpb.RunResponse{}, nil
 }
 
+var tracer = otel.Tracer("atelet")
+
 var snapshotSizeBytes metric.Int64Histogram
 
 func initSnapshotSizeMetric() error {
@@ -281,32 +285,92 @@ func initSnapshotSizeMetric() error {
 	return err
 }
 
-func recordSnapshotSize(ctx context.Context, kind, path, atNamespace, atName string) {
-	if snapshotSizeBytes == nil {
-		return
-	}
+// recordSnapshotSize stats path, records its size to the atelet.snapshot.size
+// histogram, and attaches a per-kind size attribute to the span in ctx. Returns
+// the file size in bytes, or 0 if the file is missing or unstat-able.
+func recordSnapshotSize(ctx context.Context, kind, path, atNamespace, atName string) int64 {
 	fi, err := os.Stat(path)
 	if errors.Is(err, os.ErrNotExist) {
-		return
+		return 0
 	}
 	if err != nil {
 		slog.WarnContext(ctx, "Failed to stat snapshot image for size metric",
 			slog.String("kind", kind), slog.String("path", path), slog.Any("err", err))
-		return
+		return 0
 	}
-	snapshotSizeBytes.Record(ctx, fi.Size(), metric.WithAttributes(
-		attribute.String("kind", kind),
-		attribute.String("actor_template_namespace", atNamespace),
-		attribute.String("actor_template_name", atName),
-	))
+	size := fi.Size()
+	if snapshotSizeBytes != nil {
+		snapshotSizeBytes.Record(ctx, size, metric.WithAttributes(
+			attribute.String("kind", kind),
+			attribute.String("actor_template_namespace", atNamespace),
+			attribute.String("actor_template_name", atName),
+		))
+	}
+	if span := trace.SpanFromContext(ctx); span.IsRecording() {
+		span.SetAttributes(attribute.Int64("atelet.snapshot.size_bytes."+kind, size))
+	}
+	return size
 }
 
-func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest) (*ateletpb.CheckpointResponse, error) {
+// recordRestoredSnapshotSizes stats each snapshot file that Restore has placed
+// under checkpointDir and attaches per-kind + total size attributes to the span
+// in ctx. Unlike recordSnapshotSize it does not emit the atelet.snapshot.size
+// histogram — that metric measures bytes written during Checkpoint.
+func recordRestoredSnapshotSizes(ctx context.Context, checkpointDir string, files []string) {
+	span := trace.SpanFromContext(ctx)
+	if !span.IsRecording() {
+		return
+	}
+	var totalSize int64
+	for _, fileName := range files {
+		fi, err := os.Stat(filepath.Join(checkpointDir, fileName))
+		if err != nil {
+			slog.WarnContext(ctx, "Failed to stat restored snapshot image for span attr",
+				slog.String("file", fileName), slog.Any("err", err))
+			continue
+		}
+		totalSize += fi.Size()
+		span.SetAttributes(attribute.Int64("atelet.snapshot.size_bytes."+strings.TrimSuffix(fileName, ".img"), fi.Size()))
+	}
+	span.SetAttributes(
+		attribute.Int64("atelet.snapshot.total_size_bytes", totalSize),
+		attribute.Int("atelet.snapshot.file_count", len(files)),
+	)
+}
+
+// recordSnapshotTotals attaches aggregate size + count attributes to the span
+// in ctx. Call once per Checkpoint/Restore after per-file recording.
+func recordSnapshotTotals(ctx context.Context, totalBytes int64, fileCount int) {
+	span := trace.SpanFromContext(ctx)
+	if !span.IsRecording() {
+		return
+	}
+	span.SetAttributes(
+		attribute.Int64("atelet.snapshot.total_size_bytes", totalBytes),
+		attribute.Int("atelet.snapshot.file_count", fileCount),
+	)
+}
+
+func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest) (_ *ateletpb.CheckpointResponse, retErr error) {
 	if err := validateCheckpointRequest(req); err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
 	ns, tmpl, actorID := req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId()
+
+	ctx, span := tracer.Start(ctx, "atelet.Checkpoint", trace.WithAttributes(
+		attribute.String("atelet.actor_template.namespace", ns),
+		attribute.String("atelet.actor_template.name", tmpl),
+		attribute.String("atelet.actor_id", actorID),
+		attribute.String("atelet.checkpoint.type", req.GetType().String()),
+	))
+	defer func() {
+		if retErr != nil {
+			span.RecordError(retErr)
+			span.SetStatus(otelcodes.Error, retErr.Error())
+		}
+		span.End()
+	}()
 
 	// Checkpoint requests no longer carry the sandbox config; recover the
 	// version this actor was started with from the on-node record and re-fetch
@@ -387,15 +451,17 @@ func (s *AteomHerder) moveLocalCheckpoint(ctx context.Context, req *ateletpb.Che
 	ns, tmpl := req.GetActorTemplateNamespace(), req.GetActorTemplateName()
 
 	// Move exactly the files ateom reported.
+	var totalSize int64
 	for _, fileName := range rec.SnapshotFiles {
 		src := filepath.Join(checkpointDir, fileName)
 		dst := filepath.Join(localCheckpointPath, fileName)
-		recordSnapshotSize(ctx, strings.TrimSuffix(fileName, ".img"), src, ns, tmpl)
+		totalSize += recordSnapshotSize(ctx, strings.TrimSuffix(fileName, ".img"), src, ns, tmpl)
 
 		if err := os.Rename(src, dst); err != nil {
 			return fmt.Errorf("failed to move %s to %s: %w", src, dst, err)
 		}
 	}
+	recordSnapshotTotals(ctx, totalSize, len(rec.SnapshotFiles))
 
 	// Pin the sandbox binaries + snapshot file list into a manifest beside the
 	// images so a later Restore is self-describing.
@@ -416,10 +482,11 @@ func (s *AteomHerder) uploadExternalCheckpoint(ctx context.Context, req *ateletp
 
 	// Upload exactly the files ateom reported (each zstd-compressed).
 	g, gCtx := errgroup.WithContext(ctx)
+	var totalSize int64
 	for _, fileName := range rec.SnapshotFiles {
 		fileName := fileName
 		local := filepath.Join(checkpointDir, fileName)
-		recordSnapshotSize(ctx, strings.TrimSuffix(fileName, ".img"), local, ns, tmpl)
+		totalSize += recordSnapshotSize(ctx, strings.TrimSuffix(fileName, ".img"), local, ns, tmpl)
 		g.Go(func() error {
 			if err := ategcs.SendLocalFileToGCSWithZstd(gCtx, s.gcsClient, prefix+"/"+fileName+".zstd", local); err != nil {
 				return fmt.Errorf("while uploading %s to GCS: %w", fileName, err)
@@ -427,6 +494,7 @@ func (s *AteomHerder) uploadExternalCheckpoint(ctx context.Context, req *ateletp
 			return nil
 		})
 	}
+	recordSnapshotTotals(ctx, totalSize, len(rec.SnapshotFiles))
 	if err := g.Wait(); err != nil {
 		return err
 	}
@@ -443,12 +511,26 @@ func (s *AteomHerder) uploadExternalCheckpoint(ctx context.Context, req *ateletp
 	return nil
 }
 
-func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (*ateletpb.RestoreResponse, error) {
+func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (_ *ateletpb.RestoreResponse, retErr error) {
 	if err := validateRestoreRequest(req); err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
 
 	ns, tmpl, actorID := req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId()
+
+	ctx, span := tracer.Start(ctx, "atelet.Restore", trace.WithAttributes(
+		attribute.String("atelet.actor_template.namespace", ns),
+		attribute.String("atelet.actor_template.name", tmpl),
+		attribute.String("atelet.actor_id", actorID),
+		attribute.String("atelet.checkpoint.type", req.GetType().String()),
+	))
+	defer func() {
+		if retErr != nil {
+			span.RecordError(retErr)
+			span.SetStatus(otelcodes.Error, retErr.Error())
+		}
+		span.End()
+	}()
 
 	if err := resetActorDirs(ns, tmpl, actorID); err != nil {
 		return nil, fmt.Errorf("while resetting actor dirs: %w", err)
@@ -532,6 +614,8 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	if err := g.Wait(); err != nil {
 		return nil, err
 	}
+
+	recordRestoredSnapshotSizes(ctx, checkpointDir, sandboxRec.SnapshotFiles)
 
 	client, err := s.dialAteom(ctx, req.GetTargetAteomUid())
 	if err != nil {
