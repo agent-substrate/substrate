@@ -73,13 +73,13 @@ func prepareOCIDirectory(ctx context.Context, pullCache *memorypullcache.MemoryP
 	// entirely.  On a miss, the cache extracts and caches for next time.
 	digest := extractDigestFromRef(ref)
 	if rootfsCache != nil && digest != "" {
-		tarData, err := pullCache.Fetch(ctx, ref)
-		if err != nil {
-			return fmt.Errorf("in pullCache.Fetch: %w", err)
-		}
-		defer tarData.Close()
-
-		lowerDir, _, err := rootfsCache.EnsureRootfs(ctx, digest, tarData)
+		// Pass Fetch as a lazy provider: on a cache hit EnsureRootfs returns the
+		// on-disk lowerDir without invoking it, so we do NOT pull or extract the
+		// image (and never buffer it in the memory pull cache) on the hot path.
+		// The pull only happens on a genuine cache miss.
+		lowerDir, _, err := rootfsCache.EnsureRootfs(ctx, digest, func() (io.ReadCloser, error) {
+			return pullCache.Fetch(ctx, ref)
+		})
 		if err != nil {
 			return fmt.Errorf("in rootfsCache.EnsureRootfs: %w", err)
 		}

@@ -137,17 +137,23 @@ func (c *Cache) LowerDir(digest string) string {
 }
 
 // EnsureRootfs guarantees that the rootfs for digest is extracted into the
-// cache.  On a cache hit it returns the lowerDir immediately without reading
-// tarData.  On a miss it consumes tarData to populate the cache.
+// cache.  On a cache hit it returns the lowerDir immediately WITHOUT invoking
+// tarProvider — so the caller pays no image pull/extract cost when the rootfs
+// is already on disk.  On a miss it calls tarProvider to obtain the extracted
+// image tar stream and consumes it to populate the cache.
+//
+// tarProvider is a lazy source of the image's extracted rootfs tar (e.g. a
+// closure over MemoryPullCache.Fetch). It is invoked at most once, and only on
+// a cache miss; the returned reader is closed by EnsureRootfs.
 //
 // Returns:
 //
 //	lowerDir – the read-only rootfs path (non-empty on success)
-//	cached   – true if the cache was hit (tarData was NOT consumed)
+//	cached   – true if the cache was hit (tarProvider was NOT invoked)
 //	err      – any error
 //
 // The digest MUST be a valid directory name (hex-encoded sha256, no slashes).
-func (c *Cache) EnsureRootfs(ctx context.Context, digest string, tarData io.Reader) (string, bool, error) {
+func (c *Cache) EnsureRootfs(ctx context.Context, digest string, tarProvider func() (io.ReadCloser, error)) (string, bool, error) {
 	tracer := otel.Tracer("rootfscache")
 	ctx, span := tracer.Start(ctx, "EnsureRootfs")
 	span.SetAttributes(attribute.String("digest", digest))
@@ -157,7 +163,8 @@ func (c *Cache) EnsureRootfs(ctx context.Context, digest string, tarData io.Read
 		return "", false, err
 	}
 
-	// Fast path: already cached.
+	// Fast path: already cached. tarProvider is never invoked, so on a hit the
+	// caller neither pulls nor extracts the image.
 	c.mu.Lock()
 	if e, ok := c.entries[digest]; ok {
 		c.mu.Unlock()
@@ -184,8 +191,9 @@ func (c *Cache) EnsureRootfs(ctx context.Context, digest string, tarData io.Read
 	c.inflight[digest] = infl
 	c.mu.Unlock()
 
-	// Do the actual extraction outside the lock.
-	lowerDir, err := c.extract(ctx, digest, tarData)
+	// Cache miss: obtain the tar stream lazily (only now that we know we need
+	// it) and extract, outside the lock.
+	lowerDir, err := c.fetchAndExtract(ctx, digest, tarProvider)
 
 	c.mu.Lock()
 	delete(c.inflight, digest)
@@ -207,6 +215,20 @@ func (c *Cache) EnsureRootfs(ctx context.Context, digest string, tarData io.Read
 	infl.err = nil
 	close(infl.done)
 	return lowerDir, false, nil
+}
+
+// fetchAndExtract invokes tarProvider to obtain the image tar stream and
+// extracts it into the cache. It is only called on a cache miss.
+func (c *Cache) fetchAndExtract(ctx context.Context, digest string, tarProvider func() (io.ReadCloser, error)) (string, error) {
+	if tarProvider == nil {
+		return "", fmt.Errorf("rootfs cache miss for digest %q but no tar provider supplied", digest)
+	}
+	tarData, err := tarProvider()
+	if err != nil {
+		return "", fmt.Errorf("obtaining image tar for digest %q: %w", digest, err)
+	}
+	defer tarData.Close()
+	return c.extract(ctx, digest, tarData)
 }
 
 // extract untars tarData into the cache directory for digest, writes the

@@ -18,6 +18,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"context"
+	"io"
 	"os"
 	"path/filepath"
 	"sync"
@@ -60,6 +61,14 @@ func buildTar(t *testing.T, entries []struct{ name, body string; typeflag byte; 
 	return buf.Bytes()
 }
 
+// tarProviderFor returns an EnsureRootfs tar provider that yields a fresh
+// reader over data on each call.
+func tarProviderFor(data []byte) func() (io.ReadCloser, error) {
+	return func() (io.ReadCloser, error) {
+		return io.NopCloser(bytes.NewReader(data)), nil
+	}
+}
+
 func TestEnsureRootfs_CacheMiss(t *testing.T) {
 	base := t.TempDir()
 	c, err := New(context.Background(), base, 0)
@@ -73,7 +82,7 @@ func TestEnsureRootfs_CacheMiss(t *testing.T) {
 		{name: "etc/hostname", typeflag: tar.TypeReg, body: "test-host\n"},
 	})
 
-	lowerDir, cached, err := c.EnsureRootfs(context.Background(), testDigest, bytes.NewReader(tarData))
+	lowerDir, cached, err := c.EnsureRootfs(context.Background(), testDigest, tarProviderFor(tarData))
 	if err != nil {
 		t.Fatalf("EnsureRootfs: %v", err)
 	}
@@ -117,7 +126,7 @@ func TestEnsureRootfs_CacheHit(t *testing.T) {
 	})
 
 	// First call: cache miss.
-	if _, _, err := c.EnsureRootfs(context.Background(), testDigest, bytes.NewReader(tarData)); err != nil {
+	if _, _, err := c.EnsureRootfs(context.Background(), testDigest, tarProviderFor(tarData)); err != nil {
 		t.Fatalf("EnsureRootfs (miss): %v", err)
 	}
 
@@ -168,7 +177,7 @@ func TestEnsureRootfs_ConcurrentMisses(t *testing.T) {
 			defer wg.Done()
 			// Each goroutine gets its own reader over the same data.
 			lowerDirs[i], cachedFlags[i], errs[i] = c.EnsureRootfs(
-				context.Background(), testDigest, bytes.NewReader(tarData),
+				context.Background(), testDigest, tarProviderFor(tarData),
 			)
 		}()
 	}
@@ -227,7 +236,7 @@ func TestEnsureRootfs_PartialEntryCleanup(t *testing.T) {
 		{name: ".", typeflag: tar.TypeDir},
 		{name: "fresh", typeflag: tar.TypeReg, body: "data"},
 	})
-	lowerDir, cached, err := c.EnsureRootfs(context.Background(), testDigest, bytes.NewReader(tarData))
+	lowerDir, cached, err := c.EnsureRootfs(context.Background(), testDigest, tarProviderFor(tarData))
 	if err != nil {
 		t.Fatalf("EnsureRootfs: %v", err)
 	}
@@ -258,10 +267,10 @@ func TestEvictLRU(t *testing.T) {
 		{name: "d2", typeflag: tar.TypeReg, body: "data2"},
 	})
 
-	if _, _, err := c.EnsureRootfs(context.Background(), digest1, bytes.NewReader(tarData1)); err != nil {
+	if _, _, err := c.EnsureRootfs(context.Background(), digest1, tarProviderFor(tarData1)); err != nil {
 		t.Fatalf("EnsureRootfs d1: %v", err)
 	}
-	if _, _, err := c.EnsureRootfs(context.Background(), digest2, bytes.NewReader(tarData2)); err != nil {
+	if _, _, err := c.EnsureRootfs(context.Background(), digest2, tarProviderFor(tarData2)); err != nil {
 		t.Fatalf("EnsureRootfs d2: %v", err)
 	}
 
@@ -302,7 +311,7 @@ func TestLowerDir(t *testing.T) {
 	tarData := buildTar(t, []struct{ name, body string; typeflag byte; mode int64 }{
 		{name: ".", typeflag: tar.TypeDir},
 	})
-	if _, _, err := c.EnsureRootfs(context.Background(), testDigest, bytes.NewReader(tarData)); err != nil {
+	if _, _, err := c.EnsureRootfs(context.Background(), testDigest, tarProviderFor(tarData)); err != nil {
 		t.Fatalf("EnsureRootfs: %v", err)
 	}
 
