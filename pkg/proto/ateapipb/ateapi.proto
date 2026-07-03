@@ -20,7 +20,6 @@ package ateapi;
 
 option go_package = "github.com/agent-substrate/substrate/pkg/proto/ateapipb";
 
-
 // Control is the primary RPC interface for Agentic Substrate.
 service Control {
   // Get an Actor.
@@ -59,17 +58,27 @@ service Control {
   // List all Atespaces.
   rpc ListAtespaces(ListAtespacesRequest) returns (ListAtespacesResponse) {}
 
-  // Delete an empty Atespace. Rejects (FailedPrecondition) if any actors remain.
+  // Delete an empty Atespace. Rejects (FailedPrecondition) if any actors
+  // remain.
   rpc DeleteAtespace(DeleteAtespaceRequest) returns (DeleteAtespaceResponse) {}
 
   // Debugging: drop all data from the ate database.
   rpc DebugClear(DebugClearRequest) returns (DebugClearResponse) {}
 }
 
+// FIXME: comments
+message ValidationError {
+  string Type = 1;
+  string Field = 2;
+  string Detail = 3;
+  string Origin = 4; // FIXME: passing this back up to users is ugly, but we
+                     // test validathion thru the real API for now
+}
+
 enum SnapshotType {
   SNAPSHOT_TYPE_UNSPECIFIED = 0;
-  SNAPSHOT_TYPE_LOCAL       = 1;
-  SNAPSHOT_TYPE_EXTERNAL      = 2;
+  SNAPSHOT_TYPE_LOCAL = 1;
+  SNAPSHOT_TYPE_EXTERNAL = 2;
 }
 
 message ExternalSnapshotInfo {
@@ -86,42 +95,46 @@ message SnapshotInfo {
   SnapshotType type = 1;
   oneof data {
     ExternalSnapshotInfo external = 2;
-    LocalSnapshotInfo    local    = 3;
+    LocalSnapshotInfo local = 3;
   }
 }
 
 // Selector matches worker pools by label.
 // Only equality-based matching is supported.
 message Selector {
+  // +k8s:optional
+  // +k8s:maxProperties=10
+  // +k8s:alpha(since: "0.0")=+k8s:eachKey=+k8s:format=k8s-label-key
+  // +k8s:alpha(since: "0.0")=+k8s:eachVal=+k8s:format=k8s-label-value
   map<string, string> match_labels = 1;
 }
 
 message Actor {
   string actor_id = 1;
-  int64  version  = 2;
+  int64 version = 2;
 
   string actor_template_namespace = 3;
-  string actor_template_name      = 4;
+  string actor_template_name = 4;
 
   enum Status {
     STATUS_UNSPECIFIED = 0;
-    STATUS_RESUMING    = 1;
-    STATUS_RUNNING     = 2;
-    STATUS_SUSPENDING  = 3;
-    STATUS_SUSPENDED   = 4;
-    STATUS_PAUSING     = 5;
-    STATUS_PAUSED      = 6;
+    STATUS_RESUMING = 1;
+    STATUS_RUNNING = 2;
+    STATUS_SUSPENDING = 3;
+    STATUS_SUSPENDED = 4;
+    STATUS_PAUSING = 5;
+    STATUS_PAUSED = 6;
   }
   Status status = 5;
 
   string ateom_pod_namespace = 6;
-  string ateom_pod_name      = 7;
-  string ateom_pod_ip        = 8;
+  string ateom_pod_name = 7;
+  string ateom_pod_ip = 8;
 
   // last_snapshot
   reserved 9;
   string in_progress_snapshot = 10;
-  string ateom_pod_uid        = 11;
+  string ateom_pod_uid = 11;
   SnapshotInfo latest_snapshot_info = 12;
 
   // worker_selector is the per-actor placement constraint. The scheduler
@@ -139,7 +152,8 @@ message Actor {
   string worker_pool_name = 14;
 
   // The atespace this actor belongs to. Part of the actor's
-  // resource identity; folded into the Redis key as actor:<atespace>:<actor_id>.
+  // resource identity; folded into the Redis key as
+  // actor:<atespace>:<actor_id>.
   string atespace = 15;
 }
 
@@ -150,8 +164,12 @@ message Atespace {
 
 // ActorRef identifies an actor: a name is only unique within its atespace.
 message ActorRef {
+  // +k8s:required
+  // +k8s:format=k8s-short-name
   string atespace = 1;
-  string name     = 2;
+  // +k8s:required
+  // +k8s:format=k8s-short-name
+  string name = 2;
 }
 
 message CreateAtespaceRequest {
@@ -179,6 +197,7 @@ message DeleteAtespaceRequest {
 message DeleteAtespaceResponse {}
 
 message GetActorRequest {
+  // +k8s:required
   ActorRef actor_ref = 1;
 }
 
@@ -188,17 +207,25 @@ message GetActorResponse {
 
 // Request to create a new Actor.
 message CreateActorRequest {
-  // The new actor's atespace and actor_id (actor_id must be a valid DNS-1123 label).
+  // The new actor's atespace and actor_id (actor_id must be a valid DNS-1123
+  // label).
+  // +k8s:required
   ActorRef actor_ref = 1;
 
   // The namespace of the ActorTemplate to derive from.
+  // TODO: Use KubeNamespacedObjectRef
+  // +k8s:required
+  // +k8s:format=k8s-short-name
   string actor_template_namespace = 2;
 
   // The name of the ActorTemplate to derive from.
+  // +k8s:required
+  // +k8s:format=k8s-long-name
   string actor_template_name = 3;
 
   // worker_selector sets the actor's placement constraint at creation time.
   // If empty, the actor matches any pool admitted by the template's selector.
+  // +k8s:optional
   Selector worker_selector = 4;
 }
 
@@ -210,10 +237,12 @@ message CreateActorResponse {
 // May be called regardless of the actor's current status.
 // Changes take effect on the next ResumeActor call.
 message UpdateActorRequest {
+  // +k8s:required
   ActorRef actor_ref = 1;
 
   // worker_selector replaces the actor's current placement constraint.
   // Takes effect on the next ResumeActor call.
+  // +k8s:optional
   Selector worker_selector = 2;
 }
 
@@ -222,6 +251,7 @@ message UpdateActorResponse {
 }
 
 message SuspendActorRequest {
+  // +k8s:required
   ActorRef actor_ref = 1;
 }
 
@@ -230,6 +260,7 @@ message SuspendActorResponse {
 }
 
 message PauseActorRequest {
+  // +k8s:required
   ActorRef actor_ref = 1;
 }
 
@@ -238,6 +269,7 @@ message PauseActorResponse {
 }
 
 message ResumeActorRequest {
+  // +k8s:required
   ActorRef actor_ref = 1;
 
   // If true, skip golden snapshot and boot the workload from scratch.
@@ -249,6 +281,7 @@ message ResumeActorResponse {
 }
 
 message DeleteActorRequest {
+  // +k8s:required
   ActorRef actor_ref = 1;
 }
 
@@ -286,27 +319,31 @@ message ListActorsResponse {
   string next_page_token = 2;
 }
 
+// +k8s:validation-gen=true
 message Worker {
   string worker_namespace = 1;
-  string worker_pool      = 2;
-  string worker_pod       = 3;
+  string worker_pool = 2;
+  string worker_pod = 3;
 
+  // +k8s:optional
   Assignment assignment = 4;
 
-  string ip              = 5;
-  int64  version         = 6;
-  string worker_pod_uid  = 7;
-  string node_name       = 8;
+  string ip = 5;
+  int64 version = 6;
+  string worker_pod_uid = 7;
+  string node_name = 8;
 }
 
 message Assignment {
+  // +k8s:required
   KubeNamespacedObjectRef actor_template = 1;
+  // +k8s:required
   ActorRef actor = 2;
 }
 
 message KubeNamespacedObjectRef {
   string namespace = 1;
-  string name  = 2;
+  string name = 2;
 }
 
 message DebugClearRequest {}
@@ -344,8 +381,8 @@ service SessionIdentity {
 message MintJWTRequest {
   repeated string audience = 1;
 
-  string app_id     = 2;
-  string user_id    = 3;
+  string app_id = 2;
+  string user_id = 3;
   string session_id = 4;
 }
 
@@ -372,8 +409,8 @@ message MintJWTResponse {
 }
 
 message MintCertRequest {
-  string app_id     = 1;
-  string user_id    = 2;
+  string app_id = 1;
+  string user_id = 2;
   string session_id = 3;
 
   // Request contains DER encoded bytes of a x509 certificate signing request.
@@ -383,8 +420,8 @@ message MintCertRequest {
 }
 
 message MintCertResponse {
-  // Response contains a list of DER encoded certificates. The first entry is the
-  // leaf certificate, and any remaining entries are intermediates in
+  // Response contains a list of DER encoded certificates. The first entry is
+  // the leaf certificate, and any remaining entries are intermediates in
   // leaf-to-root order.
   repeated bytes session_certificates = 1;
 }

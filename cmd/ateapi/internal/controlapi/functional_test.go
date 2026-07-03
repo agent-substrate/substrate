@@ -1891,6 +1891,7 @@ func TestValidation(t *testing.T) {
 	tc := setupTest(t, ns)
 	defer tc.cleanup()
 
+	// FIXME: this should move next to the proto files and the validate method
 	t.Run("CreateActor", func(t *testing.T) {
 		tests := []struct {
 			name    string
@@ -1964,7 +1965,7 @@ func TestValidation(t *testing.T) {
 				ActorTemplateName:      "tmpl1",
 				WorkerSelector:         &ateapipb.Selector{MatchLabels: map[string]string{"bad key!": "x"}},
 			},
-			`worker_selector.match_labels\[bad key!\]: Invalid value`,
+			`worker_selector.match_labels: Invalid value: \"bad key!\"`,
 		}, {
 			"invalid worker_selector label value",
 			&ateapipb.CreateActorRequest{

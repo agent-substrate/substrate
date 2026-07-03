@@ -26,6 +26,7 @@ import (
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/protoadapt"
 	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
@@ -61,7 +62,23 @@ func ServerUnaryInterceptor(ctx context.Context, req any, info *grpc.UnaryServer
 
 		if errors.As(err, &statusErr) {
 			st := statusErr.GRPCStatus()
-			return nil, status.Error(st.Code(), st.Message())
+			//FIXME: investigate why we are doing this error deconstruction
+			result := status.New(st.Code(), st.Message())
+
+			origDetails := st.Details()
+			v1Details := make([]protoadapt.MessageV1, 0, len(origDetails))
+			for _, d := range origDetails {
+				if msg, ok := d.(protoadapt.MessageV2); ok {
+					v1Details = append(v1Details, protoadapt.MessageV1Of(msg))
+				} else {
+					return nil, status.Errorf(codes.Internal, "internal error saving error details: not a protoadapt.MessageV2")
+				}
+			}
+			result, err := result.WithDetails(v1Details...)
+			if err != nil {
+				return nil, status.Errorf(codes.Internal, "internal error saving error details: %v", err)
+			}
+			return nil, result.Err()
 		}
 
 		// No status error found in chain.

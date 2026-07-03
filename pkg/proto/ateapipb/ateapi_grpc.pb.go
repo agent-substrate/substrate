@@ -81,7 +81,8 @@ type ControlClient interface {
 	GetAtespace(ctx context.Context, in *GetAtespaceRequest, opts ...grpc.CallOption) (*GetAtespaceResponse, error)
 	// List all Atespaces.
 	ListAtespaces(ctx context.Context, in *ListAtespacesRequest, opts ...grpc.CallOption) (*ListAtespacesResponse, error)
-	// Delete an empty Atespace. Rejects (FailedPrecondition) if any actors remain.
+	// Delete an empty Atespace. Rejects (FailedPrecondition) if any actors
+	// remain.
 	DeleteAtespace(ctx context.Context, in *DeleteAtespaceRequest, opts ...grpc.CallOption) (*DeleteAtespaceResponse, error)
 	// Debugging: drop all data from the ate database.
 	DebugClear(ctx context.Context, in *DebugClearRequest, opts ...grpc.CallOption) (*DebugClearResponse, error)
@@ -265,7 +266,8 @@ type ControlServer interface {
 	GetAtespace(context.Context, *GetAtespaceRequest) (*GetAtespaceResponse, error)
 	// List all Atespaces.
 	ListAtespaces(context.Context, *ListAtespacesRequest) (*ListAtespacesResponse, error)
-	// Delete an empty Atespace. Rejects (FailedPrecondition) if any actors remain.
+	// Delete an empty Atespace. Rejects (FailedPrecondition) if any actors
+	// remain.
 	DeleteAtespace(context.Context, *DeleteAtespaceRequest) (*DeleteAtespaceResponse, error)
 	// Debugging: drop all data from the ate database.
 	DebugClear(context.Context, *DebugClearRequest) (*DebugClearResponse, error)

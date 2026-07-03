@@ -20,7 +20,6 @@ import (
 	"fmt"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
-	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -30,7 +29,7 @@ import (
 )
 
 func (s *Service) CreateActor(ctx context.Context, req *ateapipb.CreateActorRequest) (*ateapipb.CreateActorResponse, error) {
-	if err := validateCreateActorRequest(req); err != nil {
+	if err := req.Validate(ctx); err != nil {
 		return nil, err
 	}
 	_, err := s.actorTemplateLister.ActorTemplates(req.GetActorTemplateNamespace()).Get(req.GetActorTemplateName())
@@ -76,42 +75,6 @@ func (s *Service) CreateActor(ctx context.Context, req *ateapipb.CreateActorRequ
 	return &ateapipb.CreateActorResponse{
 		Actor: storedActor,
 	}, nil
-}
-
-func validateCreateActorRequest(req *ateapipb.CreateActorRequest) error {
-	var fldPath *field.Path
-	var errs field.ErrorList
-
-	if val, fldPath := req.ActorTemplateNamespace, fldPath.Child("actor_template_namespace"); val == "" {
-		errs = append(errs, field.Required(fldPath, ""))
-	} else {
-		for _, msg := range content.IsDNS1123Label(val) {
-			errs = append(errs, field.Invalid(fldPath, val, msg))
-		}
-	}
-
-	if val, fldPath := req.ActorTemplateName, fldPath.Child("actor_template_name"); val == "" {
-		errs = append(errs, field.Required(fldPath, ""))
-	} else {
-		for _, msg := range content.IsDNS1123Subdomain(val) {
-			errs = append(errs, field.Invalid(fldPath, val, msg))
-		}
-	}
-
-	if val, fldPath := req.ActorRef, fldPath.Child("actor_ref"); val == nil {
-		errs = append(errs, field.Required(fldPath, ""))
-	} else {
-		errs = append(errs, resources.ValidateActorRef(val, fldPath)...)
-	}
-
-	if val := req.WorkerSelector; val != nil {
-		errs = append(errs, validateSelector(val, fldPath.Child("worker_selector"))...)
-	}
-
-	if len(errs) > 0 {
-		return status.Error(codes.InvalidArgument, errs.ToAggregate().Error())
-	}
-	return nil
 }
 
 func validateSelector(sel *ateapipb.Selector, fldPath *field.Path) field.ErrorList {
