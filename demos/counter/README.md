@@ -37,8 +37,11 @@ Use `kubectl ate` to create an instance of the counter actor with a chosen ID (e
 # Install the CLI as a kubectl plugin if not already installed
 go install ./cmd/kubectl-ate
 
-# Create the actor using the counter template.
-kubectl ate create actor my-counter-1 --template ate-demo-counter/counter
+# Create an atespace to deploy the actor into.
+kubectl ate create atespace default
+
+# Create the actor using the counter template in that atespace.
+kubectl ate create actor my-counter-1 -a default --template ate-demo-counter/counter
 ```
 
 ### 3. Port-Forward Services
@@ -56,22 +59,22 @@ When you send an HTTP request through the router, Substrate automatically detect
 
 1. Send an HTTP POST request to increment the counter:
 ```bash
-curl -X POST -H "Host: my-counter-1.actors.resources.substrate.ate.dev" http://localhost:8000
+curl -X POST -H "Host: my-counter-1.default.actors.resources.substrate.ate.dev" http://localhost:8000
 ```
 
 2. Verify that the actor is now in a `RUNNING` state and assigned to a worker pod:
 ```bash
-kubectl ate get actor my-counter-1
+kubectl ate get actor my-counter-1 -a default
 ```
 
 3. When finished, you can manually suspend the actor back to snapshot storage:
 ```bash
-kubectl ate suspend actor my-counter-1
+kubectl ate suspend actor my-counter-1 -a default
 ```
 
 4. To permanently delete the suspended actor:
 ```bash
-kubectl ate delete actor my-counter-1
+kubectl ate delete actor my-counter-1 -a default
 ```
 
 ## Micro-VM variant
@@ -97,7 +100,7 @@ Run it and follow the printed next steps:
 KIND_CLUSTER_NAME=<cluster> ./hack/run-microvm-demo-kind.sh
 ```
 
-Then create an actor, increment the counter, suspend it, resume it (even on a
+Then create an atespace and actor, increment the counter, suspend it, resume it (even on a
 different worker), and confirm the count continues — the actor's counter lives in
 guest RAM, so a continuing count proves the guest-memory snapshot survived the
 round trip.
