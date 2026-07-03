@@ -78,7 +78,7 @@ demo-claude-code-multiplex_deploy() {
       -e "s|\${ANTHROPIC_API_KEY}|${ANTHROPIC_API_KEY}|g" \
       -e "s|\${WORKLOAD_IMAGE}|${workload_image}|g" \
       demos/claude-code-multiplex/claude-code-multiplex.yaml.tmpl \
-    | run_kubectl apply -f -
+    | run_ko apply -f -
 }
 
 demo-claude-code-multiplex_delete() {
