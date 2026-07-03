@@ -96,6 +96,91 @@ spec:
                   this pool's SandboxClass. If empty, the default SandboxConfig for the
                   SandboxClass is used.
                 type: string
+              storageVolumes:
+                description: |-
+                  StorageVolumes defines network or persistent storage volumes that will be
+                  mounted into each worker pod. Actors can reference these by name via their
+                  ActorTemplate's volumes field.
+                items:
+                  description: |-
+                    StorageVolume describes a network or persistent storage volume to be mounted
+                    into each worker pod. Actors reference these by name via their ActorTemplate's
+                    Volumes field. Exactly one source (NFS, PersistentVolumeClaim, or HostPath)
+                    must be specified.
+                  properties:
+                    hostPath:
+                      description: |-
+                        HostPath represents a pre-existing host path (e.g., NFS already
+                        mounted at a well-known path on all nodes).
+                      properties:
+                        path:
+                          description: |-
+                            path of the directory on the host.
+                            If the path is a symlink, it will follow the link to the real path.
+                            More info: https://kubernetes.io/docs/concepts/storage/volumes#hostpath
+                          type: string
+                        type:
+                          description: |-
+                            type for HostPath Volume
+                            Defaults to ""
+                            More info: https://kubernetes.io/docs/concepts/storage/volumes#hostpath
+                          type: string
+                      required:
+                      - path
+                      type: object
+                    name:
+                      description: Name of the volume. Referenced by ActorTemplate
+                        volume entries.
+                      maxLength: 63
+                      minLength: 1
+                      pattern: ^[a-zA-Z][a-zA-Z0-9-]*$
+                      type: string
+                    nfs:
+                      description: NFS represents an NFS mount on the host.
+                      properties:
+                        path:
+                          description: |-
+                            path that is exported by the NFS server.
+                            More info: https://kubernetes.io/docs/concepts/storage/volumes#nfs
+                          type: string
+                        readOnly:
+                          description: |-
+                            readOnly here will force the NFS export to be mounted with read-only permissions.
+                            Defaults to false.
+                            More info: https://kubernetes.io/docs/concepts/storage/volumes#nfs
+                          type: boolean
+                        server:
+                          description: |-
+                            server is the hostname or IP address of the NFS server.
+                            More info: https://kubernetes.io/docs/concepts/storage/volumes#nfs
+                          type: string
+                      required:
+                      - path
+                      - server
+                      type: object
+                    persistentVolumeClaim:
+                      description: PersistentVolumeClaim references a PVC in the worker
+                        pool's namespace.
+                      properties:
+                        claimName:
+                          description: |-
+                            claimName is the name of a PersistentVolumeClaim in the same namespace as the pod using this volume.
+                            More info: https://kubernetes.io/docs/concepts/storage/persistent-volumes#persistentvolumeclaims
+                          type: string
+                        readOnly:
+                          description: |-
+                            readOnly Will force the ReadOnly setting in VolumeMounts.
+                            Default false.
+                          type: boolean
+                      required:
+                      - claimName
+                      type: object
+                  required:
+                  - name
+                  type: object
+                maxItems: 16
+                type: array
+                x-kubernetes-list-type: atomic
               template:
                 description: Template holds optional pod scheduling and resource settings
                   for worker pods.

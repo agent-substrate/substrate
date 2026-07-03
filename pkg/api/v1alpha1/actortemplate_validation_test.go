@@ -620,7 +620,7 @@ func TestActorTemplateValidation(t *testing.T) {
 			}
 		},
 		wantErr: true,
-		errMsg:  "exactly one of the fields in [durableDir] must be set",
+		errMsg:  "exactly one of the fields in [durableDir workerPoolStorage] must be set",
 	}, {
 		name: "Volumes: VolumeSource with no source set is invalid (mixed with a valid DurableDir volume)",
 		mutate: func(at *ActorTemplate) {
@@ -634,7 +634,7 @@ func TestActorTemplateValidation(t *testing.T) {
 			}
 		},
 		wantErr: true,
-		errMsg:  "exactly one of the fields in [durableDir] must be set",
+		errMsg:  "exactly one of the fields in [durableDir workerPoolStorage] must be set",
 	}, {
 		name: "Volumes: DurableDir MountPath with nested absolute path is valid",
 		mutate: func(at *ActorTemplate) {
@@ -646,6 +646,67 @@ func TestActorTemplateValidation(t *testing.T) {
 			}
 		},
 		wantErr: false,
+	}, {
+		name: "Volumes: WorkerPoolStorage source is valid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Volumes = []Volume{
+				{Name: "shared", VolumeSource: VolumeSource{WorkerPoolStorage: &WorkerPoolStorageVolumeSource{Name: "pool-nfs"}}},
+			}
+			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
+				{Name: "shared", MountPath: "/workspace"},
+			}
+		},
+		wantErr: false,
+	}, {
+		name: "Volumes: WorkerPoolStorage and DurableDir both set is invalid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Volumes = []Volume{
+				{Name: "vol1", VolumeSource: VolumeSource{
+					DurableDir:        &DurableDirVolumeSource{},
+					WorkerPoolStorage: &WorkerPoolStorageVolumeSource{Name: "pool-nfs"},
+				}},
+			}
+			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
+				{Name: "vol1", MountPath: "/workspace"},
+			}
+		},
+		wantErr: true,
+		errMsg:  "exactly one of the fields in [durableDir workerPoolStorage] must be set",
+	}, {
+		name: "Volumes: VolumeMount subPath with ACTOR_ID placeholder is valid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Volumes = []Volume{
+				{Name: "shared", VolumeSource: VolumeSource{WorkerPoolStorage: &WorkerPoolStorageVolumeSource{Name: "pool-nfs"}}},
+			}
+			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
+				{Name: "shared", MountPath: "/workspace", SubPath: "${ACTOR_ID}/workspace"},
+			}
+		},
+		wantErr: false,
+	}, {
+		name: "Volumes: VolumeMount subPath with .. traversal is invalid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Volumes = []Volume{
+				{Name: "shared", VolumeSource: VolumeSource{WorkerPoolStorage: &WorkerPoolStorageVolumeSource{Name: "pool-nfs"}}},
+			}
+			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
+				{Name: "shared", MountPath: "/workspace", SubPath: "../../etc"},
+			}
+		},
+		wantErr: true,
+		errMsg:  "SubPath must be a relative path",
+	}, {
+		name: "Volumes: VolumeMount subPath with leading slash is invalid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Volumes = []Volume{
+				{Name: "shared", VolumeSource: VolumeSource{WorkerPoolStorage: &WorkerPoolStorageVolumeSource{Name: "pool-nfs"}}},
+			}
+			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
+				{Name: "shared", MountPath: "/workspace", SubPath: "/abs/path"},
+			}
+		},
+		wantErr: true,
+		errMsg:  "SubPath must be a relative path",
 	}, {
 		name: "Volumes: DurableDir MountPath as bare root is invalid",
 		mutate: func(at *ActorTemplate) {

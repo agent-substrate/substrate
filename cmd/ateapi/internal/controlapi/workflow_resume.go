@@ -266,6 +266,12 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 		return err
 	}
 
+	// Validate that the ActorTemplate's volume references are satisfied by the
+	// assigned WorkerPool's storageVolumes.
+	if err := s.validateVolumeRefs(ctx, state); err != nil {
+		return err
+	}
+
 	if state.Actor.GetLatestSnapshotInfo().GetType() != ateapipb.SnapshotType_SNAPSHOT_TYPE_UNSPECIFIED {
 		slog.InfoContext(ctx, "Actor has snapshot; Restoring from snapshot")
 
@@ -356,6 +362,39 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 }
 
 func (s *CallAteletRestoreStep) RetryBackoff() *wait.Backoff { return nil }
+
+// validateVolumeRefs checks that every WorkerPool-storage-typed volume
+// referenced by the ActorTemplate exists in the assigned WorkerPool's
+// storageVolumes. DurableDir volumes are node-local and need no pool backing,
+// so they are skipped. Mount paths and sub-paths are validated by CEL on the
+// ActorTemplate CRD, so no additional path checks are needed here.
+func (s *CallAteletRestoreStep) validateVolumeRefs(ctx context.Context, state *ResumeState) error {
+	if len(state.ActorTemplate.Spec.Volumes) == 0 {
+		return nil
+	}
+	var poolVolumes map[string]bool
+	for _, v := range state.ActorTemplate.Spec.Volumes {
+		if v.WorkerPoolStorage == nil {
+			continue
+		}
+		if poolVolumes == nil {
+			pool, err := s.workerPoolLister.WorkerPools(state.Actor.GetAteomPodNamespace()).Get(state.Actor.GetWorkerPoolName())
+			if err != nil {
+				return fmt.Errorf("while getting worker pool for volume validation: %w", err)
+			}
+			poolVolumes = make(map[string]bool, len(pool.Spec.StorageVolumes))
+			for _, sv := range pool.Spec.StorageVolumes {
+				poolVolumes[sv.Name] = true
+			}
+		}
+		if !poolVolumes[v.WorkerPoolStorage.Name] {
+			return status.Errorf(codes.FailedPrecondition,
+				"actor template volume %q references worker pool storage %q not provided by worker pool %s",
+				v.Name, v.WorkerPoolStorage.Name, state.Actor.GetWorkerPoolName())
+		}
+	}
+	return nil
+}
 
 type FinalizeRunningStep struct {
 	store store.Interface

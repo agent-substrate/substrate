@@ -53,7 +53,17 @@ const (
 	ActorIDFileName = "actor-id"
 )
 
-func prepareOCIDirectory(ctx context.Context, pullCache *memorypullcache.MemoryPullCache, actorTemplateNamespace, actorTemplateName, actorID, containerName, ref string, args []string, env []string, annotations map[string]string, netns string, identityDir string, durableDirVolumeMounts []*ateletpb.VolumeMount) error {
+// VolumeMountConfig holds the resolved configuration for a single
+// WorkerPool storage volume mount to be added to an actor container's OCI
+// spec. Source is the absolute path on the host (inside the ateom container)
+// to bind-mount, already including any resolved sub-path.
+type VolumeMountConfig struct {
+	MountPath string
+	Source    string
+	ReadOnly  bool
+}
+
+func prepareOCIDirectory(ctx context.Context, pullCache *memorypullcache.MemoryPullCache, actorTemplateNamespace, actorTemplateName, actorID, containerName, ref string, args []string, env []string, annotations map[string]string, netns string, identityDir string, durableDirVolumeMounts []*ateletpb.VolumeMount, storageVolumeMounts []VolumeMountConfig) error {
 	tracer := otel.Tracer("prepareOCIDirectory")
 
 	ctx, span := tracer.Start(ctx, "prepareOCIDirectory")
@@ -90,7 +100,17 @@ func prepareOCIDirectory(ctx context.Context, pullCache *memorypullcache.MemoryP
 		}
 	}
 
-	ociSpec := buildActorOCISpec(actorTemplateNamespace, actorTemplateName, actorID, args, env, annotations, netns, identityDir, durableDirVolumeMounts)
+	// Create mount point directories in rootfs for each WorkerPool storage
+	// volume mount. Reuses createMountPoint's os.OpenRoot confinement so a
+	// symlink planted by the image cannot redirect the mount target outside
+	// the extracted rootfs.
+	for _, vm := range storageVolumeMounts {
+		if err := createMountPoint(rootPath, vm.MountPath); err != nil {
+			return fmt.Errorf("while creating volume mount point %q: %w", vm.MountPath, err)
+		}
+	}
+
+	ociSpec := buildActorOCISpec(actorTemplateNamespace, actorTemplateName, actorID, args, env, annotations, netns, identityDir, durableDirVolumeMounts, storageVolumeMounts)
 	ociSpecBytes, err := json.MarshalIndent(ociSpec, "", "  ")
 	if err != nil {
 		return fmt.Errorf("while marshaling OCI spec: %w", err)
@@ -107,7 +127,9 @@ func prepareOCIDirectory(ctx context.Context, pullCache *memorypullcache.MemoryP
 // When identityDir is non-empty it adds a read-only bind mount of that host
 // directory at IdentityMountPath so the actor can read its own ID (see
 // IdentityMountPath for why this is a bind mount rather than env vars).
-func buildActorOCISpec(actorTemplateNamespace string, actorTemplateName string, actorID string, args []string, env []string, annotations map[string]string, netns string, identityDir string, durableDirVolumeMounts []*ateletpb.VolumeMount) *specs.Spec {
+// durableDirVolumeMounts are bind mounts of per-actor durable directories.
+// storageVolumeMounts are bind mounts from WorkerPool storage volumes.
+func buildActorOCISpec(actorTemplateNamespace string, actorTemplateName string, actorID string, args []string, env []string, annotations map[string]string, netns string, identityDir string, durableDirVolumeMounts []*ateletpb.VolumeMount, storageVolumeMounts []VolumeMountConfig) *specs.Spec {
 	envVars := []string{
 		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
 	}
@@ -148,6 +170,21 @@ func buildActorOCISpec(actorTemplateNamespace string, actorTemplateName string, 
 			Type:        "bind",
 			Source:      identityDir,
 			Options:     []string{"ro"},
+		})
+	}
+
+	// Add WorkerPool storage volume bind mounts. Source is pre-resolved by
+	// resolveVolumeMounts (including any sub-path), so it is bind-mounted as-is.
+	for _, vm := range storageVolumeMounts {
+		options := []string{"bind"}
+		if vm.ReadOnly {
+			options = append(options, "ro")
+		}
+		mounts = append(mounts, specs.Mount{
+			Destination: vm.MountPath,
+			Type:        "bind",
+			Source:      vm.Source,
+			Options:     options,
 		})
 	}
 

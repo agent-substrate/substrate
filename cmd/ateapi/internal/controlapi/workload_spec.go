@@ -42,13 +42,23 @@ func workloadSpecFromActorTemplate(actorTemplate *atev1alpha1.ActorTemplate) *at
 
 	// add volumes
 	for _, vol := range actorTemplate.Spec.Volumes {
-		// volume is durable-dir type
-		if vol.VolumeSource.DurableDir != nil {
+		switch {
+		case vol.VolumeSource.DurableDir != nil:
 			workloadSpec.Volumes = append(workloadSpec.Volumes, &ateletpb.Volume{
 				Name: vol.Name,
 				Type: ateletpb.VolumeType_VOLUME_TYPE_DURABLE_DIR,
 				Source: &ateletpb.Volume_DurableDir{
 					DurableDir: &ateletpb.DurableDirVolume{},
+				},
+			})
+		case vol.VolumeSource.WorkerPoolStorage != nil:
+			workloadSpec.Volumes = append(workloadSpec.Volumes, &ateletpb.Volume{
+				Name: vol.Name,
+				Type: ateletpb.VolumeType_VOLUME_TYPE_WORKER_POOL_STORAGE,
+				Source: &ateletpb.Volume_WorkerPoolStorage{
+					WorkerPoolStorage: &ateletpb.WorkerPoolStorageVolume{
+						Name: vol.VolumeSource.WorkerPoolStorage.Name,
+					},
 				},
 			})
 		}
@@ -65,6 +75,8 @@ func workloadSpecFromActorTemplate(actorTemplate *atev1alpha1.ActorTemplate) *at
 			ateletCtr.VolumeMounts = append(ateletCtr.VolumeMounts, &ateletpb.VolumeMount{
 				Name:      mount.Name,
 				MountPath: mount.MountPath,
+				ReadOnly:  mount.ReadOnly,
+				SubPath:   mount.SubPath,
 			})
 		}
 		workloadSpec.Containers = append(workloadSpec.Containers, ateletCtr)
