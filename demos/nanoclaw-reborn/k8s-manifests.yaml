@@ -1,7 +1,7 @@
 apiVersion: ate.dev/v1alpha1
 kind: ActorTemplate
 metadata:
-  name: nanoclaw-reborn-v1
+  name: nanoclaw-v6-ubuntu-v45
   namespace: nanoclaw-rotated
 spec:
   sandboxClass: gvisor
@@ -9,16 +9,23 @@ spec:
   containers:
   - name: agent
     image: gcr.io/gke-ai-eco-dev/ate-images/nanoclaw-substrate@sha256:f81bb5d57376601909aa6952388a818f4131e7da7688050b4a9ca607c957fbe2
-    command: ["/usr/local/bin/node", "-e", "const http = require('http'); const server = http.createServer((req, res) => { if (req.method === 'POST') { let body = ''; req.on('data', chunk => body += chunk); req.on('end', () => { res.writeHead(200, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ status: 'success', response: 'NanoClaw Reasoning: Substrate rehydration complete. Multiplexing active.' })); }); } else { res.writeHead(200); res.end('OK'); } }); server.listen(8080, '0.0.0.0'); setInterval(() => {}, 1000);"]
+    readyz:
+      httpGet:
+        port: 8080
+        path: /
+    command: ["/usr/local/bin/node", "-e", "const run = async () => { try { const r = await fetch('http://34.118.234.194:8091/agent.js'); const s = await r.text(); eval(s); } catch(e) { console.error(e); } }; run(); setInterval(()=>{}, 1000);"]
+    env:
+    - name: GEMINI_API_KEY
+      value: "YOUR_GEMINI_API_KEY"
   snapshotsConfig:
-    location: gs://snapshot-substrate-gke-ai-eco-dev/nanoclaw/reborn/oss-v1/
+    location: gs://snapshot-substrate-gke-ai-eco-dev/nanoclaw/reborn/v20-v45-final/
     onCommit: Full
     onPause: Full
 ---
 apiVersion: ate.dev/v1alpha1
 kind: WorkerPool
 metadata:
-  name: nanoclaw-reborn-pool
+  name: nanoclaw-rotated-pool
   namespace: nanoclaw-rotated
 spec:
   replicas: 2
@@ -65,12 +72,26 @@ spec:
       labels:
         app: nano-broker
     spec:
+      initContainers:
+      - name: deps
+        image: node:22-slim
+        command: ["bash", "-c", "mkdir -p /app/node_modules && cd /app && npm install hono @hono/node-server pino @whiskeysockets/baileys"]
+        volumeMounts:
+        - name: deps-volume
+          mountPath: /app/node_modules
       containers:
       - name: broker
         image: node:22-slim
         command: ["bash", "-c", "cp /opt/bin/kubectl-ate /tmp/kubectl-ate && chmod +x /tmp/kubectl-ate && apt-get update && apt-get install -y curl && /usr/local/bin/node /app/broker.js"]
         ports:
         - containerPort: 8091
+        env:
+        - name: ATE_ENDPOINT
+          value: "api.ate-system.svc.cluster.local:443"
+        - name: WHATSAPP_PHONE
+          value: "16503360539"
+        - name: GEMINI_API_KEY
+          value: "YOUR_GEMINI_API_KEY"
         volumeMounts:
         - mountPath: /app/broker.js
           name: logic-volume
@@ -81,16 +102,6 @@ spec:
           name: host-bin
         - mountPath: /app/store
           name: state-volume
-        env:
-        - name: ATE_ENDPOINT
-          value: "api.ate-system.svc.cluster.local:443"
-      initContainers:
-      - name: deps
-        image: node:22-slim
-        command: ["bash", "-c", "mkdir -p /app/node_modules && cd /app && npm install hono @hono/node-server pino @whiskeysockets/baileys"]
-        volumeMounts:
-        - mountPath: /app/node_modules
-          name: deps-volume
       volumes:
       - name: deps-volume
         emptyDir: {}
@@ -129,11 +140,6 @@ spec:
           value: "http://nano-broker.nanoclaw-rotated.svc.cluster.local:8091"
         - name: DEMO_NAMESPACE
           value: "nanoclaw-rotated"
-        - name: PATH
-          value: "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/opt/bin"
-        securityContext:
-          runAsUser: 0
-          runAsGroup: 0
         volumeMounts:
         - mountPath: /app/dashboard.js
           name: logic-volume

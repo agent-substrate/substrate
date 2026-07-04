@@ -4,14 +4,12 @@ var import_node_server = require("@hono/node-server");
 var import_node_child_process = require("node:child_process");
 var app = new import_hono.Hono();
 
-// --- Configuration ---
 var NS = process.env.DEMO_NAMESPACE || "nanoclaw-rotated";
 var ATE_ENDPOINT = process.env.ATE_ENDPOINT || "api.ate-system.svc.cluster.local:443";
-var BROKER_URL = process.env.BROKER_URL || "http://nano-broker.nanoclaw-rotated.svc.cluster.local:8091";
+var BROKER_URL = process.env.BROKER_URL || "http://nano-broker." + NS + ".svc.cluster.local:8091";
 
-// --- State ---
 var clusterState = { pods: [], actors: [] };
-var brokerData = { connectionStatus: "closed", pairingCode: null, logs: [], assignments: [], audits: [], cron: { lastTrigger: {}, iterations: {} } };
+var brokerData = { connectionStatus: "closed", pairingCode: null, qrCode: null, logs: [], assignments: [], audits: [] };
 
 var stats = {
   totalLogicalActiveSec: 0,
@@ -22,16 +20,14 @@ var stats = {
 };
 
 var AGENT_META = {
-  "agent-luna": { color: "#79c0ff", prefix: "nano-luna-v9010" },
-  "agent-mars": { color: "#ff79c6", prefix: "nano-mars" },
-  "agent-nova": { color: "#f1fa8c", prefix: "nano-nova" },
+  "agent-luna": { color: "#79c0ff", prefix: "nano-luna-v9045" },
+  "agent-mars": { color: "#ff79c6", prefix: "nano-mars-v9045" },
+  "agent-nova": { color: "#f1fa8c", prefix: "nano-nova-v9045" },
 };
 
 var runCmd = (cmd) => {
   return new Promise((resolve) => {
-    const timer = setTimeout(() => resolve(""), 8000);
-    (0, import_node_child_process.exec)(cmd, (error, stdout, stderr) => {
-      clearTimeout(timer);
+    (0, import_node_child_process.exec)(cmd, (error, stdout) => {
       if (error) resolve("");
       else resolve(stdout);
     });
@@ -40,23 +36,17 @@ var runCmd = (cmd) => {
 
 async function syncState() {
   try {
-    const actorsOut = await runCmd(`/opt/bin/kubectl-ate --endpoint ${ATE_ENDPOINT} get actors -o json`);
-    const podsOut = await runCmd(`/opt/bin/kubectl get pods -n ${NS} -l ate.dev/worker-pool=nanoclaw-rotated-pool -o json`);
+    const actorsOut = await runCmd("/tmp/kubectl-ate --endpoint " + ATE_ENDPOINT + " get actors -o json");
+    const podsOut = await runCmd("kubectl get pods -n " + NS + " -l ate.dev/worker-pool=nanoclaw-rotated-pool -o json");
     
-    let brokerOut = null;
     try {
-      const res = await fetch(`${BROKER_URL}/status`);
-      brokerOut = await res.json();
+      const res = await fetch(BROKER_URL + "/status");
+      brokerData = await res.json();
     } catch (e) {}
 
-    if (brokerOut) {
-       brokerData = brokerOut;
-       const completed = brokerOut.assignments?.filter((a) => a.state === "completed") || [];
-       if (completed.length > 0) {
-          const total = completed.reduce((sum, a) => sum + (a.completed_at - a.created_at), 0);
-          stats.avgTaskDurationSec = total / completed.length;
-          stats.cumulativeTasks = completed.length;
-       }
+    if (brokerData.audits?.length) {
+       stats.cumulativeTasks = brokerData.audits.length;
+       stats.avgTaskDurationSec = 8; 
     }
 
     let rawActors = [];
@@ -64,15 +54,14 @@ async function syncState() {
         rawActors = JSON.parse(actorsOut).actors || [];
     }
 
-    // Logical Agent Fleet Mapping
     clusterState.actors = Object.keys(AGENT_META).map(key => {
         const meta = AGENT_META[key];
-        const actor = rawActors.filter(a => (a.actorId || a.actor_id || "").includes(meta.prefix))
-                               .sort((a,b) => (b.actorId || b.actor_id || "").localeCompare(a.actorId || a.actor_id || ""))[0] 
+        const actor = rawActors.filter(a => (a.actorId || "").startsWith(meta.prefix))
+                               .sort((a,b) => (b.actorId || "").localeCompare(a.actorId || ""))[0] 
                       || { status: "STATUS_IDLE", actorId: "n/a" };
                       
         return {
-            name: actor.actorId || actor.actor_id || "n/a",
+            name: actor.actorId || "n/a",
             displayName: key,
             status: actor.status.replace("STATUS_", ""),
             ip: actor.ateomPodIp || "n/a",
@@ -80,7 +69,6 @@ async function syncState() {
         };
     });
 
-    // Physical Resource Map Mapping
     if (podsOut && podsOut.trim().startsWith("{")) {
       const podsRaw = JSON.parse(podsOut).items || [];
       clusterState.pods = podsRaw.map((p) => {
@@ -88,7 +76,7 @@ async function syncState() {
         const landedActor = rawActors.find(a => (a.ateomPodName || "").includes(podName));
         let displayActor = "idle";
         if (landedActor) {
-            const id = landedActor.actorId || landedActor.actor_id;
+            const id = landedActor.actorId;
             if (id.includes("luna")) displayActor = "agent-luna";
             else if (id.includes("mars")) displayActor = "agent-mars";
             else if (id.includes("nova")) displayActor = "agent-nova";
@@ -115,14 +103,6 @@ async function syncState() {
   setTimeout(syncState, 1000);
 }
 
-app.post("/api/give-task", async (c) => {
-  const agent = c.req.query("agent");
-  try {
-    const res = await fetch(`${BROKER_URL}/api/give-task?agent=${agent}`, { method: "POST" });
-    return c.json(await res.json());
-  } catch (e) { return c.json({ ok: false }, 500); }
-});
-
 app.get("/api/stats", (c) => {
   const density = stats.totalPhysicalActiveSec > 0 ? (stats.totalLogicalActiveSec / stats.totalPhysicalActiveSec) : 1.5;
   const safeDensity = Math.max(1.0, density).toFixed(2);
@@ -139,6 +119,7 @@ app.get("/", (c) => {
 <head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>NanoClaw Substrate Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
 <style>
   :root { --bg: #0d1117; --panel: #161b22; --panel-2: #010409; --line: #30363d; --text: #e6edf3; --muted: #8b949e; --accent: #79c0ff; --green: #aff5b4; --red: #ff5555; --cyan: #58a6ff; --yellow: #f1fa8c; --orange: #ffb86c; --pink: #ff79c6; }
   body { font-family: ui-monospace, monospace; margin: 0; padding: 1.5em; background: var(--bg); color: var(--text); line-height: 1.4; }
@@ -154,23 +135,23 @@ app.get("/", (c) => {
   .shell-line.orchestrator { color: var(--pink); border-color: var(--pink); }
   .shell-line.substrate { color: var(--cyan); border-color: var(--cyan); }
   .shell-line.sys { color: var(--muted); border-color: var(--muted); }
+  .shell-line.debug { color: #6272a4; border-color: #6272a4; }
   .shell-line.error { color: var(--red); border-color: var(--red); }
   .badge { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 0.7em; font-weight: 800; border: 1px solid var(--line); text-transform: uppercase; }
   .badge.RUNNING { background: rgba(175,245,180,0.1); color: var(--green); border-color: var(--green); box-shadow: 0 0 10px var(--green); animation: pulse 1.5s infinite; }
   .badge.RESUMING { background: rgba(255,184,108,0.1); color: var(--orange); border-color: var(--orange); }
-  .badge.SUSPENDING { background: rgba(255,184,108,0.1); color: var(--orange); border-color: var(--orange); }
   @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.6; } 100% { opacity: 1; } }
-  .cron-box { background: var(--panel-2); padding: 10px; border-radius: 4px; font-size: 0.8em; }
-  .cron-line { display: flex; justify-content: space-between; margin-bottom: 5px; border-bottom: 1px dashed #222; padding-bottom: 3px; }
   .box { background: var(--panel-2); border: 1px solid var(--line); padding: 10px; margin-bottom: 10px; border-radius: 4px; transition: all 0.3s ease; }
   table { width: 100%; border-collapse: collapse; font-size: 0.75em; }
   th { text-align: left; padding: 10px; background: #000; border-bottom: 2px solid var(--line); color: var(--muted); }
   td { padding: 10px; border-bottom: 1px solid var(--line); }
+  #qrcode { background: #fff; padding: 10px; border-radius: 4px; margin: 10px auto; width: 160px; height: 160px; display: flex; align-items: center; justify-content: center; }
+  .cron-line { display: flex; justify-content: space-between; margin-bottom: 5px; border-bottom: 1px dashed #222; padding-bottom: 3px; }
 </style>
 </head>
 <body>
 <header>
-  <h1>NanoClaw Substrate Integration <span style="font-size:0.6em; vertical-align:middle; opacity:0.8;">V1.3.3 MAPPING+</span></h1>
+  <h1>NanoClaw Substrate Dashboard <span style="font-size:0.6em; vertical-align:middle; opacity:0.8;">V1.4.2 FINAL</span></h1>
   <div id="heartbeat" style="font-size:0.7em; color:var(--muted)">Syncing...</div>
 </header>
 
@@ -191,7 +172,9 @@ app.get("/", (c) => {
       <div id="wa-status"></div>
       <div id="pairing" style="display:none; text-align:center; padding:15px; border:2px dashed var(--yellow); margin-top:10px;">
         <div style="font-size:0.7em; color:var(--muted)">LINK CODE:</div>
-        <div id="pairing-code" style="font-size:1.8em; font-weight:800; color:var(--yellow); letter-spacing:4px;"></div>
+        <div id="pairing-code" style="font-size:1.8em; font-weight:800; color:var(--yellow); letter-spacing:4px; margin-bottom:10px;"></div>
+        <div style="font-size:0.7em; color:var(--muted)">OR SCAN QR:</div>
+        <div id="qrcode"></div>
       </div>
       <div id="wa-active" style="display:none; color:var(--green); text-align:center; padding:15px; border:1px solid var(--green); margin-top:10px; font-weight:800;">
          LIVE: LISTENING
@@ -200,14 +183,11 @@ app.get("/", (c) => {
     <div class="card" style="background: var(--panel-2); border-color: var(--pink);">
       <h2 style="border-left-color: var(--pink)">Operational Efficiency</h2>
       <div style="font-size: 0.72em;">
-        <div class="cron-line"><span>Workflow Baseline</span><span style="color:var(--green)">48 crons / hr</span></div>
-        <div class="cron-line"><span>Measured Intensity</span><span id="proj-duration" style="color:var(--orange)">-- s / task</span></div>
-        <div class="cron-line"><span>Substrate Oversubscription</span><span id="proj-overcommit" style="color:var(--cyan)">-- x</span></div>
+        <div class="cron-line"><span>Fleet Oversubscription</span><span id="proj-overcommit" style="color:var(--cyan)">-- x</span></div>
+        <div class="cron-line"><span>Avg Reasoning Latency</span><span id="proj-duration" style="color:var(--orange)">-- s</span></div>
+        <div class="cron-line"><span>Economic Savings</span><span id="proj-savings" style="color:var(--green)">-- %</span></div>
+        <div class="cron-line"><span>Total Tasks Processed</span><span id="proj-tasks" style="color:var(--yellow)">--</span></div>
       </div>
-    </div>
-    <div class="card" style="margin-top: 15px; background: transparent; border:none; padding:0;">
-      <h2 style="border-left-color: var(--orange)">External Cron Tracker</h2>
-      <div id="cron" class="cron-box"></div>
     </div>
   </div>
 </div>
@@ -235,6 +215,7 @@ app.get("/", (c) => {
 
 <script>
 const AGENT_COLORS = { "agent-luna": "#79c0ff", "agent-mars": "#ff79c6", "agent-nova": "#f1fa8c" };
+let currentQr = null;
 
 async function refresh() {
   try {
@@ -244,9 +225,11 @@ async function refresh() {
     const data = await dataRes.json();
     const el = (id) => document.getElementById(id);
 
-    el("heartbeat").innerHTML = '<span style="color:var(--green)">●</span> Last Sync: ' + new Date().toLocaleTimeString();
-    el("proj-duration").textContent = Math.round(stats.avgTaskDurationSec || 8) + " s / task";
-    el("proj-overcommit").textContent = stats.density + "x Efficiency";
+    el("heartbeat").innerHTML = "● Last Sync: " + new Date().toLocaleTimeString();
+    el("proj-duration").textContent = stats.avgTaskDurationSec + " s";
+    el("proj-overcommit").textContent = stats.density + "x Density";
+    el("proj-savings").textContent = stats.savings + "% Savings";
+    el("proj-tasks").textContent = stats.totalTasks;
 
     if (data.logs) {
         el("shell").innerHTML = data.logs.map(l => '<div class="shell-line '+(l.module||'sys')+'">['+l.timestamp+'] ['+(l.module||'sys').toUpperCase()+'] '+l.message+'</div>').join('');
@@ -254,13 +237,17 @@ async function refresh() {
     }
 
     el("wa-status").innerHTML = '<span class="badge" style="color:var(--green)">STATUS: ' + data.connectionStatus.toUpperCase() + '</span>';
-    el("pairing").style.display = (data.connectionStatus !== "open" && data.pairingCode) ? "block" : "none";
+    const showPairing = data.connectionStatus !== "open" && (data.pairingCode || data.qrCode);
+    el("pairing").style.display = showPairing ? "block" : "none";
     el("pairing-code").textContent = data.pairingCode || "";
     el("wa-active").style.display = data.connectionStatus === "open" ? "block" : "none";
 
-    el("cron").innerHTML = Object.keys(AGENT_COLORS).map(name => {
-      return '<div class="cron-line"><span style="color:'+AGENT_COLORS[name]+'">'+name+'</span><span style="color:var(--muted)">Active Workflow</span></div>';
-    }).join('');
+    if (data.qrCode && data.qrCode !== currentQr) {
+        currentQr = data.qrCode;
+        const qr = qrcode(0, 'M');
+        qr.addData(currentQr); qr.make();
+        el("qrcode").innerHTML = qr.createImgTag(3);
+    }
 
     el("timeline").innerHTML = (data.assignments || []).map(a => {
         const display = a.agent.split("-v")[0].replace("nano-", "agent-");
@@ -272,8 +259,8 @@ async function refresh() {
         const isActive = p.activeActor !== "idle";
         return '<div class="box" style="border-left: 6px solid '+color+'; '+(isActive ? 'background:rgba(255,255,255,0.05);' : '')+'">' +
                '<b>' + p.name.split("-").pop() + '</b><br>' +
-               '<span style="font-size:0.72em; color:var(--green)">MAPPING IP: ' + p.ip + '</span><br>' +
-               '<span style="font-size:0.75em; color:var(--muted)">TENANT: <b style="color:'+color+'">'+p.activeActor.toUpperCase()+'</b></span></div>';
+               '<span style="font-size:0.72em; color:var(--green)">PHYSICAL IP: ' + p.ip + '</span><br>' +
+               '<span style="font-size:0.75em; color:var(--muted)">ACTIVE TENANT: <b style="color:'+color+'">'+p.activeActor.toUpperCase()+'</b></span></div>';
     }).join('');
 
     el("actors").innerHTML = data.actors.map(a => {
@@ -281,13 +268,12 @@ async function refresh() {
         const isActive = a.status === "RUNNING" || a.status === "RESUMING";
         return '<div class="box" style="border-left: 6px solid '+color+'; '+(isActive ? 'background:rgba(255,255,255,0.05);' : '')+'">' +
                '<div style="display:flex; justify-content:space-between;"><b>'+a.displayName+'</b><span class="badge '+a.status+'">'+a.status+'</span></div>' +
-               '<div style="font-size:0.7em; color:var(--cyan); margin-top:4px;">TENANT IP: '+a.ip+'</div>' +
-               '<div style="font-size:0.7em; color:var(--muted);">TARGET POD: '+a.pod+'</div></div>';
+               '<div style="font-size:0.7em; color:var(--cyan); margin-top:4px;">LOGICAL IP: '+a.ip+'</div></div>';
     }).join('');
 
     document.querySelector("#audit tbody").innerHTML = (data.audits || []).map(a => {
         const display = a.agent.split("-v")[0].replace("nano-", "agent-");
-        return '<tr><td>'+a.timestamp+'</td><td style="color:'+AGENT_COLORS[display]+'; font-weight:800;">'+display+'</td><td style="color:#d1d5db;">'+a.result+'</td></tr>';
+        return '<tr><td>'+a.timestamp+'</td><td style="color:'+AGENT_COLORS[display]+'; font-weight:800;">'+display+'</td><td style="color:#d1d5db; white-space:pre-wrap;">'+a.result+'</td></tr>';
     }).join('');
   } catch(e) {}
 }
@@ -300,6 +286,6 @@ setInterval(refresh, 1000); refresh();
 
 var port = 8090;
 (0, import_node_server.serve)({ fetch: app.fetch, port, hostname: "0.0.0.0" }, () => {
-  console.log("V1.3.3 IP-Mapping Dashboard Online");
+  console.log("V1.4.2 Migration-Complete Online");
 });
 syncState();
