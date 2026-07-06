@@ -1,0 +1,152 @@
+apiVersion: ate.dev/v1alpha1
+kind: ActorTemplate
+metadata:
+  name: nanoclaw-reborn-v1
+  namespace: nanoclaw-reborn
+spec:
+  containers:
+  - image: gcr.io/gke-ai-eco-dev/ate-images/nanoclaw-substrate@sha256:f81bb5d57376601909aa6952388a818f4131e7da7688050b4a9ca607c957fbe2
+    name: agent
+    command: ["/bin/bash", "-c", "sleep 15 && curl -s -f http://nano-broker.nanoclaw-reborn.svc.cluster.local:8091/dist/prod-agent.js > /tmp/agent.js || (echo FAIL && exit 1) && node /tmp/agent.js"]
+    env:
+    - name: BROKER_URL
+      value: "http://nano-broker.nanoclaw-reborn.svc.cluster.local:8091"
+    - name: GEMINI_API_KEY
+      value: "YOUR_GEMINI_API_KEY"
+  pauseImage: registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4
+  snapshotsConfig:
+    location: gs://snapshot-substrate-gke-ai-eco-dev/nanoclaw/reborn/v1/
+---
+apiVersion: ate.dev/v1alpha1
+kind: WorkerPool
+metadata:
+  name: nanoclaw-reborn-pool
+  namespace: nanoclaw-reborn
+spec:
+  ateomImage: ttl.sh/poc-ateom/ateom-gvisor-715889664656de67e44382a8d6ab981d:final
+  replicas: 2
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nano-broker
+  namespace: nanoclaw-reborn
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nano-broker
+  template:
+    metadata:
+      labels:
+        app: nano-broker
+    spec:
+      initContainers:
+      - name: deps
+        image: node:22-slim
+        command: ["bash", "-c", "mkdir -p /app/node_modules && cd /app && npm install @whiskeysockets/baileys pino qrcode hono @hono/node-server"]
+        volumeMounts:
+        - name: deps-volume
+          mountPath: /app/node_modules
+      containers:
+      - name: broker
+        image: gcr.io/gke-ai-eco-dev/ate-images/nanoclaw-substrate@sha256:f81bb5d57376601909aa6952388a818f4131e7da7688050b4a9ca607c957fbe2
+        command: ["/usr/local/bin/node", "/app/dist/broker.js"]
+        ports:
+        - containerPort: 8091
+        env:
+        - name: ATE_ENDPOINT
+          value: "api.ate-system.svc.cluster.local:443"
+        - name: WHATSAPP_PHONE
+          value: "16503360539"
+        - name: GEMINI_API_KEY
+          value: "YOUR_GEMINI_API_KEY"
+        volumeMounts:
+        - name: auth-volume
+          mountPath: /app/store/auth
+        - name: deps-volume
+          mountPath: /app/node_modules
+        - name: logic-volume
+          mountPath: /app/dist/broker.js
+          subPath: broker.js
+      volumes:
+      - name: auth-volume
+        persistentVolumeClaim:
+          claimName: wa-auth-pvc
+      - name: deps-volume
+        emptyDir: {}
+      - name: logic-volume
+        configMap:
+          name: broker-logic
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nano-broker
+  namespace: nanoclaw-reborn
+spec:
+  selector:
+    app: nano-broker
+  ports:
+  - port: 8091
+    targetPort: 8091
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: wa-auth-pvc
+  namespace: nanoclaw-reborn
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: demo-ui
+  namespace: nanoclaw-reborn
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: demo-ui
+  template:
+    metadata:
+      labels:
+        app: demo-ui
+    spec:
+      containers:
+      - name: ui
+        image: gcr.io/gke-ai-eco-dev/ate-images/nanoclaw-substrate@sha256:f81bb5d57376601909aa6952388a818f4131e7da7688050b4a9ca607c957fbe2
+        command: ["/usr/local/bin/node", "/app/dist/ui.js"]
+        ports:
+        - containerPort: 8090
+        env:
+        - name: DEMO_NAMESPACE
+          value: "nanoclaw-reborn"
+        - name: ATE_ENDPOINT
+          value: "api.ate-system.svc.cluster.local:443"
+        volumeMounts:
+        - name: logic-volume
+          mountPath: /app/dist/ui.js
+          subPath: ui.js
+      volumes:
+      - name: logic-volume
+        configMap:
+          name: ui-logic
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: demo-ui
+  namespace: nanoclaw-reborn
+spec:
+  selector:
+    app: demo-ui
+  ports:
+  - port: 80
+    targetPort: 8090
+  type: LoadBalancer

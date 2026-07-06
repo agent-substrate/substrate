@@ -1,0 +1,166 @@
+apiVersion: ate.dev/v1alpha1
+kind: ActorTemplate
+metadata:
+  name: nanoclaw-v6-ubuntu-v62
+  namespace: nanoclaw-rotated
+spec:
+  sandboxClass: gvisor
+  pauseImage: registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4
+  containers:
+  - name: agent
+    image: gcr.io/gke-ai-eco-dev/ate-images/nanoclaw-substrate@sha256:f81bb5d57376601909aa6952388a818f4131e7da7688050b4a9ca607c957fbe2
+    readyz:
+      httpGet:
+        port: 8080
+        path: /
+    command: ["/usr/local/bin/node", "-e", "const run = async () => { try { const r = await fetch('http://34.118.234.194:8091/agent.js'); const s = await r.text(); eval(s); } catch(e) { console.error(e); } }; run(); setInterval(()=>{}, 1000);"]
+    env:
+    - name: GEMINI_API_KEY
+      value: "YOUR_GEMINI_API_KEY"
+  snapshotsConfig:
+    location: gs://snapshot-substrate-gke-ai-eco-dev/nanoclaw/reborn/v20-v45-final/
+    onCommit: Full
+    onPause: Full
+---
+apiVersion: ate.dev/v1alpha1
+kind: WorkerPool
+metadata:
+  name: nanoclaw-rotated-pool
+  namespace: nanoclaw-rotated
+spec:
+  replicas: 2
+  sandboxClass: gvisor
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nano-broker
+  namespace: nanoclaw-rotated
+spec:
+  type: LoadBalancer
+  selector:
+    app: nano-broker
+  ports:
+  - port: 8091
+    targetPort: 8091
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nano-dashboard
+  namespace: nanoclaw-rotated
+spec:
+  type: LoadBalancer
+  selector:
+    app: nano-dashboard
+  ports:
+  - port: 80
+    targetPort: 8090
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nano-broker
+  namespace: nanoclaw-rotated
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nano-broker
+  template:
+    metadata:
+      labels:
+        app: nano-broker
+    spec:
+      initContainers:
+      - name: deps
+        image: node:22-slim
+        command: ["bash", "-c", "mkdir -p /app/node_modules && cd /app && npm install hono @hono/node-server pino @whiskeysockets/baileys"]
+        volumeMounts:
+        - name: deps-volume
+          mountPath: /app/node_modules
+      containers:
+      - name: broker
+        image: node:22-slim
+        command: ["bash", "-c", "cp /opt/bin/kubectl-ate /tmp/kubectl-ate && chmod +x /tmp/kubectl-ate && apt-get update && apt-get install -y curl && /usr/local/bin/node /app/broker.js"]
+        ports:
+        - containerPort: 8091
+        env:
+        - name: ATE_ENDPOINT
+          value: "api.ate-system.svc.cluster.local:443"
+        - name: WHATSAPP_PHONE
+          value: "16503360539"
+        - name: GEMINI_API_KEY
+          value: "YOUR_GEMINI_API_KEY"
+        volumeMounts:
+        - mountPath: /app/broker.js
+          name: logic-volume
+          subPath: broker.js
+        - mountPath: /app/node_modules
+          name: deps-volume
+        - mountPath: /opt/bin
+          name: host-bin
+        - mountPath: /app/store
+          name: state-volume
+      volumes:
+      - name: deps-volume
+        emptyDir: {}
+      - name: host-bin
+        hostPath:
+          path: /usr/local/bin
+      - name: logic-volume
+        configMap:
+          name: broker-logic
+      - name: state-volume
+        hostPath:
+          path: /var/lib/ate-broker-state
+          type: DirectoryOrCreate
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nano-dashboard
+  namespace: nanoclaw-rotated
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nano-dashboard
+  template:
+    metadata:
+      labels:
+        app: nano-dashboard
+    spec:
+      containers:
+      - name: dashboard
+        image: node:22-slim
+        command: ["/usr/local/bin/node", "/app/dashboard.js"]
+        env:
+        - name: BROKER_URL
+          value: "http://nano-broker.nanoclaw-rotated.svc.cluster.local:8091"
+        - name: DEMO_NAMESPACE
+          value: "nanoclaw-rotated"
+        volumeMounts:
+        - mountPath: /app/dashboard.js
+          name: logic-volume
+          subPath: dashboard.js
+        - mountPath: /app/node_modules
+          name: deps-volume
+        - mountPath: /opt/bin
+          name: host-bin
+      initContainers:
+      - name: deps
+        image: node:22-slim
+        command: ["bash", "-c", "mkdir -p /app/node_modules && cd /app && npm install hono @hono/node-server"]
+        volumeMounts:
+        - mountPath: /app/node_modules
+          name: deps-volume
+      volumes:
+      - name: deps-volume
+        emptyDir: {}
+      - name: host-bin
+        hostPath:
+          path: /usr/local/bin
+      - name: logic-volume
+        configMap:
+          name: dashboard-logic

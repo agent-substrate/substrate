@@ -1,0 +1,35 @@
+apiVersion: ate.dev/v1alpha1
+kind: ActorTemplate
+metadata:
+  name: sub-agent-agent
+  namespace: sub-agent
+spec:
+  containers:
+  - image: gcr.io/gke-ai-eco-dev/ate-images/nanoclaw-substrate:v28
+    name: agent
+    ports:
+    - containerPort: 8080
+    env:
+    - name: BROKER_URL
+      value: "http://nano-broker.sub-agent.svc.cluster.local:8091"
+    volumeMounts:
+    - name: logic-volume
+      mountPath: /app/dist/agent.js
+      subPath: agent.js
+  volumes:
+  - name: logic-volume
+    configMap:
+      name: agent-logic
+  pauseImage: registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4
+  runsc:
+    amd64:
+      sha256Hash: a397be1abc2420d26bce6c70e6e2ff96c73aaaab929756c56f5e2089ea842b63
+      url: gs://gvisor/releases/nightly/2026-05-19/x86_64/runsc
+    arm64:
+      sha256Hash: 1ba2366ae2efceba166046f51a4104f9261c9cb72c6db8f5b3fe2dc57dea86b9
+      url: gs://gvisor/releases/nightly/2026-05-19/aarch64/runsc
+  snapshotsConfig:
+    location: gs://ate-demo-snapshots/sub-agent-agent/v13/
+  workerPoolRef:
+    name: agent-pool
+    namespace: sub-agent
