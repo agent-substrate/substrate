@@ -72,7 +72,7 @@ app.get("/", (c) => c.html(`
 <!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8"><title>NanoClaw Substrate Integration Demo</title>
+<meta charset="utf-8"><title>NanoClaw Substrate Integration</title>
 <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.min.js"></script>
 <style>
   :root { --bg: #0d1117; --panel: #161b22; --panel-2: #010409; --line: #30363d; --text: #e6edf3; --muted: #8b949e; --accent: #79c0ff; --green: #aff5b4; --red: #ff5555; --cyan: #58a6ff; --yellow: #f1fa8c; --orange: #ffb86c; --pink: #ff79c6; }
@@ -83,7 +83,7 @@ app.get("/", (c) => c.html(`
   .grid-side { display: grid; gap: 1.5em; grid-template-columns: 1fr 1fr; margin-bottom: 1.5em; }
   .card { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 1.2em; }
   .card h2 { font-size: 0.75em; margin: 0 0 5px 0; color: var(--muted); text-transform: uppercase; border-left: 3px solid var(--green); padding-left: 8px; }
-  .card .desc { font-size: 0.65em; color: var(--muted); margin-bottom: 12px; font-style: italic; line-height: 1.2; }
+  .card .desc { font-size: 0.65em; color: var(--muted); margin-bottom: 12px; font-style: italic; line-height: 1.3; }
   .shell-container { background: var(--panel-2); height: 220px; overflow: auto; padding: 1em; border: 1px solid #000; }
   .shell-line { font-size: 0.82em; margin-bottom: 0.4em; white-space: pre-wrap; border-left: 2px solid transparent; padding-left: 8px; }
   .shell-line.whatsapp { color: var(--green); } .shell-line.cron { color: var(--yellow); } .shell-line.substrate { color: var(--cyan); } .shell-line.sys { color: var(--muted); }
@@ -101,19 +101,19 @@ app.get("/", (c) => c.html(`
 </style>
 </head>
 <body>
-<header><h1>NanoClaw Substrate Integration Demo <span style="font-size:0.6em; vertical-align:middle; opacity:0.8;">V1.5.3 FINAL</span></h1><div id="heartbeat" style="font-size:0.7em; color:var(--muted)">Syncing...</div></header>
+<header><h1>NanoClaw Substrate Dashboard <span style="font-size:0.6em; vertical-align:middle; opacity:0.8;">V1.5.4 ENTERPRISE</span></h1><div id="heartbeat" style="font-size:0.7em; color:var(--muted)">Syncing...</div></header>
 <div class="grid-master">
-  <div><div class="card" style="margin-bottom: 1.5em;"><h2>Decision Stream</h2><div class="desc">Live orchestrated logs showing broker-to-agent signals and Substrate API resume/suspend events.</div><div id="shell" class="shell-container"></div></div>
-  <div class="card"><h2>Task Timeline</h2><div class="desc">Sequential history of all tasks (WhatsApp, Cron, Burst) queued to the Substrate fleet.</div><div id="timeline" style="height: 100px; overflow: auto; background: var(--panel-2); border: 1px solid var(--line); padding: 8px;"></div></div></div>
-  <div><div class="card" style="margin-bottom: 1.5em;"><h2>WhatsApp Bridge</h2><div class="desc">Persistent 24/7 gateway. Agents remain dormant until a message is received here.</div><div id="wa-status"></div>
+  <div><div class="card" style="margin-bottom: 1.5em;"><h2>Decision Stream</h2><div class="desc">Real-time orchestration logs tracking broker-to-agent signals and Substrate lifecycle events (Resume/Suspend).</div><div id="shell" class="shell-container"></div></div>
+  <div class="card"><h2>Task Timeline</h2><div class="desc">Chronological log of all incoming requests dispatched to the logical fleet via WhatsApp, Cron, or Burst triggers.</div><div id="timeline" style="height: 100px; overflow: auto; background: var(--panel-2); border: 1px solid var(--line); padding: 8px;"></div></div></div>
+  <div><div class="card" style="margin-bottom: 1.5em;"><h2>WhatsApp Gateway</h2><div class="desc">Multi-tenant persistent bridge. Agents remain suspended in snapshots until a message is received here.</div><div id="wa-status"></div>
   <div id="pairing" style="display:none; text-align:center; padding:15px; border:2px dashed var(--yellow); margin-top:10px;"><div id="qrcode" style="background:#fff; padding:10px; border-radius:4px; margin-bottom:10px;"></div><div id="pairing-code" style="font-size:1.5em; font-weight:800; color:var(--yellow); letter-spacing:3px;"></div></div>
-  <div id="wa-active" style="display:none; color:var(--green); text-align:center; padding:15px; border:1px solid var(--green); margin-top:10px; font-weight:800;">LIVE CONNECTION: LISTENING</div></div>
-  <div class="card" style="background: var(--panel-2); border-color: var(--pink);"><h2 style="border-left-color: var(--pink)">Operational Efficiency</h2><div class="desc">Real-time cost saving metrics. Shows logical activity vs. physical resource footprint.</div>
-  <div style="font-size: 0.72em;"><div class="cron-line"><span>Workflow Baseline</span><span style="color:var(--green)">48 crons / hr</span></div><div class="cron-line"><span>Measured Intensity</span><span id="proj-duration" style="color:var(--orange)">-- s / task</span></div><div class="cron-line"><span>Oversubscription Efficiency</span><span id="proj-overcommit" style="color:var(--cyan)">-- x Density</span></div></div></div>
-  <div class="card" style="margin-top: 15px; background: transparent; border:none; padding:0;"><h2>External Cron Tracker</h2><div class="desc">Staggered pulses simulating autonomous background work for each agent.</div><div id="cron" class="cron-box"></div></div></div></div>
-<div class="grid-side"><div class="card"><h2>Physical Resource Map</h2><div class="desc">The Hardware layer. Shows which logical tenant is currently 'landed' on a physical worker.</div><div id="pods"></div></div>
-<div class="card"><h2>Logical Agent Fleet</h2><div class="desc">The Application layer. Agents are 'frozen' in RAM until the Broker signals a resume.</div><div id="actors"></div></div></div>
-<div class="card" style="margin-top:1.5em;"><h2>Task Audit: Reasoning History</h2><div class="desc">Complete transparency into Gemini 1.5 Flash 'Thinking' process and final responses.</div><div style="height:250px; overflow:auto; background: var(--panel-2); border: 1px solid var(--line);"><table id="audit"><thead><tr><th style="width:90px">Time</th><th style="width:130px">Agent</th><th>Reasoning Payload</th></tr></thead><tbody></tbody></table></div></div>
+  <div id="wa-active" style="display:none; color:var(--green); text-align:center; padding:15px; border:1px solid var(--green); margin-top:10px; font-weight:800;">BRIDGE STATUS: ACTIVE</div></div>
+  <div class="card" style="background: var(--panel-2); border-color: var(--pink);"><h2 style="border-left-color: var(--pink)">Operational Efficiency</h2><div class="desc">Quantitative metrics demonstrating logical-to-physical density and projected resource utilization savings.</div>
+  <div style="font-size: 0.72em;"><div class="cron-line"><span>Workflow Baseline</span><span style="color:var(--green)">48 crons / hr</span></div><div class="cron-line"><span>Measured Intensity</span><span id="proj-duration" style="color:var(--orange)">-- s / task</span></div><div class="cron-line"><span>Oversubscription Ratio</span><span id="proj-overcommit" style="color:var(--cyan)">-- x Density</span></div></div></div>
+  <div class="card" style="margin-top: 15px; background: transparent; border:none; padding:0;"><h2>Background Task Orchestrator</h2><div class="desc">Staggered autonomous pulses simulating consistent background activity for logical fleet validation.</div><div id="cron" class="cron-box"></div></div></div></div>
+<div class="grid-side"><div class="card"><h2>Infrastructure Resource Map</h2><div class="desc">Hardware layer visualization. Shows the real-time mapping of logical tenants onto physical worker pods.</div><div id="pods"></div></div>
+<div class="card"><h2>Logical Agent Fleet</h2><div class="desc">Virtualized application layer. Agents are frozen in RAM snapshots until the Broker signals a resume.</div><div id="actors"></div></div></div>
+<div class="card" style="margin-top:1.5em;"><h2>Reasoning Audit Log</h2><div class="desc">Complete transparency into Gemini 1.5 Flash processing, including deep thinking and tool execution.</div><div style="height:250px; overflow:auto; background: var(--panel-2); border: 1px solid var(--line);"><table id="audit"><thead><tr><th style="width:90px">Time</th><th style="width:130px">Agent</th><th>Reasoning Payload</th></tr></thead><tbody></tbody></table></div></div>
 <script>
 const AGENT_META = { "agent-luna": { color: "#79c0ff", interval: 120000 }, "agent-mars": { color: "#ff79c6", interval: 300000 }, "agent-nova": { color: "#f1fa8c", interval: 600000 } };
 let currentQr = null; async function refresh() { try { const statsRes = await fetch("/api/stats?t=" + Date.now()); const dataRes = await fetch("/api/data?t=" + Date.now()); const stats = await statsRes.json(); const data = await dataRes.json(); const el = (id) => document.getElementById(id); el("heartbeat").innerHTML = "● Last Sync: " + new Date().toLocaleTimeString(); el("proj-duration").textContent = Math.round(stats.avgTaskDurationSec || 8) + " s / task"; el("proj-overcommit").textContent = stats.density + "x"; if (data.logs) { el("shell").innerHTML = data.logs.map(l => "<div class='shell-line "+(l.module||"sys")+"'>["+l.timestamp+"] ["+(l.module||"sys").toUpperCase()+"] "+l.message+"</div>").join(""); el("shell").scrollTop = el("shell").scrollHeight; } el("wa-status").innerHTML = "<span class='badge' style='color:var(--green)'>STATUS: " + data.connectionStatus.toUpperCase() + "</span>"; const showPairing = data.connectionStatus !== "open" && (data.pairingCode || data.qrCode); el("pairing").style.display = showPairing ? "block" : "none"; el("pairing-code").textContent = data.pairingCode || ""; if (data.qrCode && data.qrCode !== currentQr) { currentQr = data.qrCode; const qr = qrcode(0, "M"); qr.addData(currentQr); qr.make(); el("qrcode").innerHTML = qr.createImgTag(3); } el("wa-active").style.display = data.connectionStatus === "open" ? "block" : "none";
@@ -125,5 +125,5 @@ document.querySelector("#audit tbody").innerHTML = (data.audits || []).map(a => 
 </script></body></html>
 `));
 var port = 8090;
-(0, import_node_server.serve)({ fetch: app.fetch, port, hostname: "0.0.0.0" }, () => { console.log("V1.5.3 Dashboard Online"); });
+(0, import_node_server.serve)({ fetch: app.fetch, port, hostname: "0.0.0.0" }, () => { console.log("V1.5.4 Dashboard Online"); });
 syncState();
