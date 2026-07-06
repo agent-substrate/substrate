@@ -148,6 +148,13 @@ func New(ctx context.Context, basePath string, maxCacheBytes int64, opts ...Opti
 		slog.WarnContext(ctx, "Failed to load rootfs cache index, starting empty", slog.Any("err", err))
 	}
 
+	// A node can boot already over budget — e.g. the budget was lowered across
+	// a restart, or a prior version filled the cache. Eviction is otherwise
+	// only triggered by a miss (extract), so without this a steady-state,
+	// all-hits node would never reclaim disk. Run one pass now (best-effort,
+	// detached from the startup ctx so it isn't cancelled when New returns).
+	go c.evictIfNeeded(context.Background())
+
 	return c, nil
 }
 
@@ -275,7 +282,8 @@ func (c *Cache) extract(ctx context.Context, digest string, tarData io.Reader) (
 		slog.String("lowerDir", lowerDir),
 	)
 
-	if err := Untar(ctx, tarData, lowerDir); err != nil {
+	size, err := Untar(ctx, tarData, lowerDir)
+	if err != nil {
 		// Clean up on failure so the next attempt starts fresh.
 		_ = os.RemoveAll(filepath.Join(c.basePath, digest))
 		return "", fmt.Errorf("extracting rootfs: %w", err)
@@ -296,8 +304,8 @@ func (c *Cache) extract(ctx context.Context, digest string, tarData io.Reader) (
 		return "", fmt.Errorf("writing last_access: %w", err)
 	}
 
-	// Register in the in-memory index.
-	size := dirSize(lowerDir)
+	// Register in the in-memory index. size came from Untar, so we avoid a
+	// second full-tree walk here.
 	c.mu.Lock()
 	c.entries[digest] = &entryState{
 		digest:     digest,
@@ -497,30 +505,34 @@ func (c *Cache) Count() int {
 
 // Untar extracts a tar stream into rootPath.  It is a self-contained copy of
 // the untar logic from cmd/atelet/oci.go, using os.OpenRoot for path-traversal
-// safety.
-func Untar(ctx context.Context, tarData io.Reader, rootPath string) error {
+// safety.  It returns the total bytes of regular-file content written, so the
+// caller can size the cache entry without a second full-tree walk (hardlinks
+// share content and are not double-counted).  The byte count is only meaningful
+// when err is nil.
+func Untar(ctx context.Context, tarData io.Reader, rootPath string) (int64, error) {
 	tracer := otel.Tracer("rootfscache")
 	_, span := tracer.Start(ctx, "Untar")
 	defer span.End()
 
 	root, err := os.OpenRoot(rootPath)
 	if err != nil {
-		return fmt.Errorf("opening rootfs %q as os.Root: %w", rootPath, err)
+		return 0, fmt.Errorf("opening rootfs %q as os.Root: %w", rootPath, err)
 	}
 	defer root.Close()
 
+	var totalBytes int64
 	tarReader := tar.NewReader(tarData)
 	for {
 		hdr, err := tarReader.Next()
 		if errors.Is(err, io.EOF) {
 			break
 		} else if err != nil {
-			return fmt.Errorf("in tarReader.Next: %w", err)
+			return 0, fmt.Errorf("in tarReader.Next: %w", err)
 		}
 
 		name, skip, err := ValidateTarName(hdr.Name)
 		if err != nil {
-			return fmt.Errorf("invalid tar entry: %w", err)
+			return 0, fmt.Errorf("invalid tar entry: %w", err)
 		}
 		if skip {
 			continue
@@ -532,31 +544,32 @@ func Untar(ctx context.Context, tarData io.Reader, rootPath string) error {
 		case tar.TypeReg:
 			if _, err := root.Lstat(name); err == nil {
 				if err := root.RemoveAll(name); err != nil {
-					return fmt.Errorf("while replacing existing path at %q before regular file: %w", name, err)
+					return 0, fmt.Errorf("while replacing existing path at %q before regular file: %w", name, err)
 				}
 			} else if !errors.Is(err, os.ErrNotExist) {
-				return fmt.Errorf("while checking existing path at %q before regular file: %w", name, err)
+				return 0, fmt.Errorf("while checking existing path at %q before regular file: %w", name, err)
 			}
 
 			outFile, err := root.OpenFile(name, os.O_CREATE|os.O_RDWR|os.O_TRUNC, mode)
 			if err != nil {
-				return fmt.Errorf("while creating file %q: %w", name, err)
+				return 0, fmt.Errorf("while creating file %q: %w", name, err)
 			}
-			_, err = io.Copy(outFile, tarReader)
+			n, err := io.Copy(outFile, tarReader)
 			closeErr := outFile.Close()
 			if err != nil {
-				return fmt.Errorf("while writing contents of %q from tar stream: %w", name, err)
+				return 0, fmt.Errorf("while writing contents of %q from tar stream: %w", name, err)
 			}
 			if closeErr != nil {
-				return fmt.Errorf("while closing file %q: %w", name, closeErr)
+				return 0, fmt.Errorf("while closing file %q: %w", name, closeErr)
 			}
+			totalBytes += n
 
 		case tar.TypeDir:
 			err := root.Mkdir(name, mode)
 			if errors.Is(err, os.ErrExist) {
 				// Tolerate repeated directory entries.
 			} else if err != nil {
-				return fmt.Errorf("while creating directory=%q, mode=%v: %w", name, mode, err)
+				return 0, fmt.Errorf("while creating directory=%q, mode=%v: %w", name, mode, err)
 			}
 
 		case tar.TypeSymlink:
@@ -567,42 +580,42 @@ func Untar(ctx context.Context, tarData io.Reader, rootPath string) error {
 					}
 				}
 				if err := root.RemoveAll(name); err != nil {
-					return fmt.Errorf("while replacing existing path at %q before symlink: %w", name, err)
+					return 0, fmt.Errorf("while replacing existing path at %q before symlink: %w", name, err)
 				}
 			} else if !errors.Is(err, os.ErrNotExist) {
-				return fmt.Errorf("while checking existing path at %q before symlink: %w", name, err)
+				return 0, fmt.Errorf("while checking existing path at %q before symlink: %w", name, err)
 			}
 			if err := root.Symlink(hdr.Linkname, name); err != nil {
-				return fmt.Errorf("while creating symlink src=%q target=%q: %w", name, hdr.Linkname, err)
+				return 0, fmt.Errorf("while creating symlink src=%q target=%q: %w", name, hdr.Linkname, err)
 			}
 
 		case tar.TypeLink:
 			linkname, linkSkip, err := ValidateTarName(hdr.Linkname)
 			if err != nil {
-				return fmt.Errorf("invalid hardlink target for %q: %w", name, err)
+				return 0, fmt.Errorf("invalid hardlink target for %q: %w", name, err)
 			}
 			if linkSkip {
-				return fmt.Errorf("invalid hardlink target for %q: empty", name)
+				return 0, fmt.Errorf("invalid hardlink target for %q: empty", name)
 			}
 			if _, err := root.Lstat(name); err == nil {
 				if err := root.RemoveAll(name); err != nil {
-					return fmt.Errorf("while replacing existing path at %q before hardlink: %w", name, err)
+					return 0, fmt.Errorf("while replacing existing path at %q before hardlink: %w", name, err)
 				}
 			} else if !errors.Is(err, os.ErrNotExist) {
-				return fmt.Errorf("while checking existing path at %q before hardlink: %w", name, err)
+				return 0, fmt.Errorf("while checking existing path at %q before hardlink: %w", name, err)
 			}
 			if err := root.Link(linkname, name); err != nil {
-				return fmt.Errorf("while creating hardlink src=%q target=%q: %w", name, linkname, err)
+				return 0, fmt.Errorf("while creating hardlink src=%q target=%q: %w", name, linkname, err)
 			}
 
 		default:
 			tfStr := string([]byte{hdr.Typeflag})
 			slog.ErrorContext(ctx, "Unhandled tar entry typeflag", slog.String("typeflag", tfStr), slog.Any("hdr", hdr))
-			return fmt.Errorf("unhandled tar entry typeflag %q", tfStr)
+			return 0, fmt.Errorf("unhandled tar entry typeflag %q", tfStr)
 		}
 	}
 
-	return nil
+	return totalBytes, nil
 }
 
 // --- helpers --------------------------------------------------------------

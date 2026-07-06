@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"sync"
 	"testing"
+	"time"
 )
 
 const testDigest = "sha256:abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
@@ -487,6 +488,111 @@ func TestLowerDir(t *testing.T) {
 	}
 	if got != filepath.Join(base, testDigest, "lower") {
 		t.Errorf("LowerDir = %q, want %q", got, filepath.Join(base, testDigest, "lower"))
+	}
+}
+
+// seedReadyEntryOnDisk writes a completed cache entry (lower/ + .ready +
+// .last_access) directly to disk so a freshly constructed Cache picks it up via
+// loadIndex. bodySize bytes of content are written so the entry has nonzero
+// size; accessedAt sets the recorded last-access time (older sorts as the LRU
+// victim).
+func seedReadyEntryOnDisk(t *testing.T, base, digest string, bodySize int, accessedAt time.Time) {
+	t.Helper()
+	lower := filepath.Join(base, digest, "lower")
+	if err := os.MkdirAll(lower, 0o700); err != nil {
+		t.Fatalf("mkdir lower: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(lower, "blob"), make([]byte, bodySize), 0o644); err != nil {
+		t.Fatalf("write blob: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(base, digest, readySentinel), []byte(accessedAt.Format(time.RFC3339)), 0o444); err != nil {
+		t.Fatalf("write ready: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(base, digest, lastAccessFile), []byte(accessedAt.Format(time.RFC3339Nano)), 0o644); err != nil {
+		t.Fatalf("write last_access: %v", err)
+	}
+}
+
+// TestUntar_ReturnsByteCount verifies Untar reports the total regular-file
+// content bytes it wrote, so the cache can size an entry without a second walk.
+func TestUntar_ReturnsByteCount(t *testing.T) {
+	tarData := buildTar(t, []struct {
+		name, body string
+		typeflag   byte
+		mode       int64
+	}{
+		{name: ".", typeflag: tar.TypeDir},
+		{name: "a", typeflag: tar.TypeReg, body: "hello"}, // 5
+		{name: "sub/", typeflag: tar.TypeDir},
+		{name: "sub/b", typeflag: tar.TypeReg, body: "world!!"}, // 7
+	})
+	dir := t.TempDir()
+	n, err := Untar(context.Background(), bytes.NewReader(tarData), dir)
+	if err != nil {
+		t.Fatalf("Untar: %v", err)
+	}
+	if n != 12 {
+		t.Errorf("Untar bytes = %d, want 12", n)
+	}
+}
+
+// TestEnsureRootfs_RecordsSizeFromUntar verifies the byte count Untar returns is
+// threaded into the cache entry's size (rather than recomputed via a tree walk).
+func TestEnsureRootfs_RecordsSizeFromUntar(t *testing.T) {
+	base := t.TempDir()
+	c, err := New(context.Background(), base, 0)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	tarData := buildTar(t, []struct {
+		name, body string
+		typeflag   byte
+		mode       int64
+	}{
+		{name: ".", typeflag: tar.TypeDir},
+		{name: "f", typeflag: tar.TypeReg, body: "0123456789"}, // 10
+	})
+	if _, _, err := c.EnsureRootfs(context.Background(), testDigest, tarProviderFor(tarData)); err != nil {
+		t.Fatalf("EnsureRootfs: %v", err)
+	}
+	if got := c.Size(); got != 10 {
+		t.Errorf("Size = %d, want 10", got)
+	}
+}
+
+// TestNew_EvictsWhenBootingOverBudget verifies that a Cache which loads an
+// already-over-budget set of entries from disk reclaims space at startup,
+// evicting the least-recently-used entry — not only on the next miss.
+func TestNew_EvictsWhenBootingOverBudget(t *testing.T) {
+	base := t.TempDir()
+	older := time.Now().Add(-2 * time.Hour)
+	newer := time.Now().Add(-1 * time.Hour)
+	// Two ~4 KiB entries; a 6000-byte budget fits one but not both, so the
+	// older entry (evictDigest1) must be evicted at startup.
+	seedReadyEntryOnDisk(t, base, evictDigest1, 4096, older)
+	seedReadyEntryOnDisk(t, base, evictDigest2, 4096, newer)
+
+	c, err := New(context.Background(), base, 6000)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	// Startup eviction runs asynchronously; poll until it converges.
+	deadline := time.Now().Add(2 * time.Second)
+	for c.Size() > 6000 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := c.Size(); got > 6000 {
+		t.Fatalf("still over budget after startup eviction: size=%d", got)
+	}
+	if got := c.Count(); got != 1 {
+		t.Fatalf("count = %d, want 1 after startup eviction", got)
+	}
+	if c.LowerDir(evictDigest1) != "" {
+		t.Errorf("older digest1 still present; expected it evicted")
+	}
+	if c.LowerDir(evictDigest2) == "" {
+		t.Errorf("newer digest2 missing; expected it retained")
 	}
 }
 

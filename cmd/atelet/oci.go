@@ -121,7 +121,7 @@ func prepareOCIDirectory(ctx context.Context, pullCache *memorypullcache.MemoryP
 		}
 		defer tarData.Close()
 
-		if err := rootfscache.Untar(ctx, tarData, rootPath); err != nil {
+		if _, err := rootfscache.Untar(ctx, tarData, rootPath); err != nil {
 			return fmt.Errorf("in untar: %w", err)
 		}
 
@@ -318,7 +318,8 @@ func createMountPoint(rootPath, mountPath string) error {
 // that existing tests (package main) continue to compile without importing
 // the rootfscache package directly.
 func untar(ctx context.Context, tarData io.Reader, rootPath string) error {
-	return rootfscache.Untar(ctx, tarData, rootPath)
+	_, err := rootfscache.Untar(ctx, tarData, rootPath)
+	return err
 }
 
 // validateTarName is re-exported here for the same reason as untar: tests in
