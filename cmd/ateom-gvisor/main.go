@@ -270,6 +270,14 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 		actorID:                req.GetActorId(),
 	}
 
+	// Tear down the overlay rootfs mounts before this ateom resets to
+	// available, regardless of whether the checkpoint below succeeds. The
+	// mounts live in ateom's mount namespace (invisible to atelet), so
+	// atelet's bundle RemoveAll cannot unmount them; deferring here ensures an
+	// early-return checkpoint failure does not leak the mount into a
+	// long-lived ateom that goes on to serve more actors.
+	defer unmountWorkloadOverlays(ctx, req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId(), req.GetSpec())
+
 	checkpointPath := ateompath.CheckpointStateDir(req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId())
 	if err := os.MkdirAll(checkpointPath, 0o700); err != nil {
 		return nil, fmt.Errorf("while creating checkpoint directory: %w", err)
@@ -309,12 +317,6 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 			"actorTemplateNamespace", req.GetActorTemplateNamespace(),
 			"err", err)
 	}
-
-	// Tear down the overlay rootfs mounts before this ateom resets to
-	// available. The mounts live in ateom's mount namespace (invisible to
-	// atelet), so atelet's bundle RemoveAll cannot unmount them; a live,
-	// long-lived ateom would otherwise accumulate leaked mounts across actors.
-	unmountWorkloadOverlays(ctx, req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId(), req.GetSpec())
 
 	s.cleanupActorNetworkOrExit(ctx, "Failed to clean up actor network after checkpoint")
 

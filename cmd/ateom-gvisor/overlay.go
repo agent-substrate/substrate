@@ -83,6 +83,14 @@ func mountOverlayRootfsIfRequested(ctx context.Context, ns, tmpl, id, container 
 	upperDir := ateompath.OverlayUpperDir(ns, tmpl, id, container)
 	workDir := ateompath.OverlayWorkDir(ns, tmpl, id, container)
 
+	// Best-effort unmount of any stale overlay left at this target before
+	// mounting. Mirrors setupActorNetwork's "clean stale network before setup":
+	// a prior actor on this ateom whose CheckpointWorkload failed before its
+	// unmount, or a crash-and-reuse, can leave the target still mounted —
+	// re-mounting on top would stack a second overlay. MNT_DETACH tolerates a
+	// target that is not (or is no longer) a mountpoint.
+	_ = unix.Unmount(target, unix.MNT_DETACH)
+
 	for _, d := range []string{upperDir, workDir} {
 		if err := os.MkdirAll(d, 0o700); err != nil {
 			return fmt.Errorf("while creating overlay dir %s: %w", d, err)
