@@ -27,7 +27,11 @@ import (
 
 const testDigest = "sha256:abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
 
-func buildTar(t *testing.T, entries []struct{ name, body string; typeflag byte; mode int64 }) []byte {
+func buildTar(t *testing.T, entries []struct {
+	name, body string
+	typeflag   byte
+	mode       int64
+}) []byte {
 	t.Helper()
 	var buf bytes.Buffer
 	tw := tar.NewWriter(&buf)
@@ -76,7 +80,11 @@ func TestEnsureRootfs_CacheMiss(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	tarData := buildTar(t, []struct{ name, body string; typeflag byte; mode int64 }{
+	tarData := buildTar(t, []struct {
+		name, body string
+		typeflag   byte
+		mode       int64
+	}{
 		{name: ".", typeflag: tar.TypeDir},
 		{name: "etc/", typeflag: tar.TypeDir},
 		{name: "etc/hostname", typeflag: tar.TypeReg, body: "test-host\n"},
@@ -120,7 +128,11 @@ func TestEnsureRootfs_CacheHit(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	tarData := buildTar(t, []struct{ name, body string; typeflag byte; mode int64 }{
+	tarData := buildTar(t, []struct {
+		name, body string
+		typeflag   byte
+		mode       int64
+	}{
 		{name: ".", typeflag: tar.TypeDir},
 		{name: "hello", typeflag: tar.TypeReg, body: "world"},
 	})
@@ -159,7 +171,11 @@ func TestEnsureRootfs_ConcurrentMisses(t *testing.T) {
 		t.Fatalf("New: %v", err)
 	}
 
-	tarData := buildTar(t, []struct{ name, body string; typeflag byte; mode int64 }{
+	tarData := buildTar(t, []struct {
+		name, body string
+		typeflag   byte
+		mode       int64
+	}{
 		{name: ".", typeflag: tar.TypeDir},
 		{name: "concurrent", typeflag: tar.TypeReg, body: "ok"},
 	})
@@ -232,7 +248,11 @@ func TestEnsureRootfs_PartialEntryCleanup(t *testing.T) {
 	}
 
 	// Now a fresh extraction should succeed.
-	tarData := buildTar(t, []struct{ name, body string; typeflag byte; mode int64 }{
+	tarData := buildTar(t, []struct {
+		name, body string
+		typeflag   byte
+		mode       int64
+	}{
 		{name: ".", typeflag: tar.TypeDir},
 		{name: "fresh", typeflag: tar.TypeReg, body: "data"},
 	})
@@ -258,11 +278,19 @@ func TestEvictLRU(t *testing.T) {
 	digest1 := "sha256:1111111111111111111111111111111111111111111111111111111111111111"
 	digest2 := "sha256:2222222222222222222222222222222222222222222222222222222222222222"
 
-	tarData1 := buildTar(t, []struct{ name, body string; typeflag byte; mode int64 }{
+	tarData1 := buildTar(t, []struct {
+		name, body string
+		typeflag   byte
+		mode       int64
+	}{
 		{name: ".", typeflag: tar.TypeDir},
 		{name: "d1", typeflag: tar.TypeReg, body: "data1"},
 	})
-	tarData2 := buildTar(t, []struct{ name, body string; typeflag byte; mode int64 }{
+	tarData2 := buildTar(t, []struct {
+		name, body string
+		typeflag   byte
+		mode       int64
+	}{
 		{name: ".", typeflag: tar.TypeDir},
 		{name: "d2", typeflag: tar.TypeReg, body: "data2"},
 	})
@@ -296,6 +324,139 @@ func TestEvictLRU(t *testing.T) {
 	}
 }
 
+// seedTwoEntries populates the cache with digest1 (older) and digest2 (newer)
+// and returns their lowerDirs. digest1 is guaranteed to sort as the LRU victim.
+func seedTwoEntries(t *testing.T, c *Cache) (digest1, digest2, lower1, lower2 string) {
+	t.Helper()
+	digest1, digest2 = evictDigest1, evictDigest2
+
+	tarData1 := buildTar(t, []struct {
+		name, body string
+		typeflag   byte
+		mode       int64
+	}{
+		{name: ".", typeflag: tar.TypeDir},
+		{name: "d1", typeflag: tar.TypeReg, body: "data1"},
+	})
+	tarData2 := buildTar(t, []struct {
+		name, body string
+		typeflag   byte
+		mode       int64
+	}{
+		{name: ".", typeflag: tar.TypeDir},
+		{name: "d2", typeflag: tar.TypeReg, body: "data2"},
+	})
+
+	l1, _, err := c.EnsureRootfs(context.Background(), digest1, tarProviderFor(tarData1))
+	if err != nil {
+		t.Fatalf("EnsureRootfs d1: %v", err)
+	}
+	l2, _, err := c.EnsureRootfs(context.Background(), digest2, tarProviderFor(tarData2))
+	if err != nil {
+		t.Fatalf("EnsureRootfs d2: %v", err)
+	}
+	return digest1, digest2, l1, l2
+}
+
+const (
+	evictDigest1 = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+	evictDigest2 = "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+)
+
+// lowerPathFor returns the deterministic lowerDir a cache rooted at base would
+// use for digest. Tests use it to pre-build an in-use set before seeding, so the
+// injected provider never mutates shared state concurrently with the background
+// eviction goroutine (which would otherwise trip the race detector).
+func lowerPathFor(base, digest string) string {
+	return filepath.Join(base, digest, "lower")
+}
+
+// TestEvictLRU_SkipsInUse verifies that an in-use lowerDir (as reported by the
+// injected provider) is never selected as the eviction victim, even when it is
+// the least-recently-used entry — deleting a mounted lowerdir would corrupt a
+// live actor.
+func TestEvictLRU_SkipsInUse(t *testing.T) {
+	base := t.TempDir()
+
+	// Pin the older entry (digest1) up front. Eviction must skip it and take
+	// digest2. The set is immutable after New, so the background eviction
+	// goroutine can read it race-free.
+	pinned := map[string]bool{lowerPathFor(base, evictDigest1): true}
+	c, err := New(context.Background(), base, 0, WithInUseFunc(func() (map[string]bool, error) {
+		return pinned, nil
+	}))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	digest1, digest2, _, _ := seedTwoEntries(t, c)
+
+	evicted, size := c.EvictLRU()
+	if evicted != digest2 {
+		t.Errorf("evicted = %q, want %q (the pinned LRU entry must be skipped)", evicted, digest2)
+	}
+	if size <= 0 {
+		t.Errorf("evicted size = %d, want > 0", size)
+	}
+	if c.LowerDir(digest1) == "" {
+		t.Errorf("pinned digest1 was evicted; it must remain")
+	}
+	if _, err := os.Stat(filepath.Join(base, digest1)); err != nil {
+		t.Errorf("pinned digest1 dir missing: %v", err)
+	}
+}
+
+// TestEvictLRU_AllPinned verifies that when every entry is in use, EvictLRU
+// evicts nothing rather than deleting a live lowerdir.
+func TestEvictLRU_AllPinned(t *testing.T) {
+	base := t.TempDir()
+
+	pinned := map[string]bool{
+		lowerPathFor(base, evictDigest1): true,
+		lowerPathFor(base, evictDigest2): true,
+	}
+	c, err := New(context.Background(), base, 0, WithInUseFunc(func() (map[string]bool, error) {
+		return pinned, nil
+	}))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	seedTwoEntries(t, c)
+
+	evicted, size := c.EvictLRU()
+	if evicted != "" || size != 0 {
+		t.Errorf("EvictLRU = (%q, %d), want (\"\", 0) when all entries pinned", evicted, size)
+	}
+	if c.Count() != 2 {
+		t.Errorf("count = %d, want 2 (nothing should be evicted)", c.Count())
+	}
+}
+
+// TestEvictLRU_ProviderError verifies that a failing in-use provider makes
+// eviction a no-op (conservative: exceeding the budget beats corrupting a
+// possibly-live lowerdir).
+func TestEvictLRU_ProviderError(t *testing.T) {
+	base := t.TempDir()
+
+	c, err := New(context.Background(), base, 0, WithInUseFunc(func() (map[string]bool, error) {
+		return nil, io.ErrUnexpectedEOF
+	}))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	seedTwoEntries(t, c)
+
+	evicted, size := c.EvictLRU()
+	if evicted != "" || size != 0 {
+		t.Errorf("EvictLRU = (%q, %d), want (\"\", 0) on provider error", evicted, size)
+	}
+	if c.Count() != 2 {
+		t.Errorf("count = %d, want 2 (nothing should be evicted on provider error)", c.Count())
+	}
+}
+
 func TestLowerDir(t *testing.T) {
 	base := t.TempDir()
 	c, err := New(context.Background(), base, 0)
@@ -308,7 +469,11 @@ func TestLowerDir(t *testing.T) {
 		t.Errorf("LowerDir before cache = %q, want empty", got)
 	}
 
-	tarData := buildTar(t, []struct{ name, body string; typeflag byte; mode int64 }{
+	tarData := buildTar(t, []struct {
+		name, body string
+		typeflag   byte
+		mode       int64
+	}{
 		{name: ".", typeflag: tar.TypeDir},
 	})
 	if _, _, err := c.EnsureRootfs(context.Background(), testDigest, tarProviderFor(tarData)); err != nil {

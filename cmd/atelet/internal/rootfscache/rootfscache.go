@@ -48,6 +48,24 @@ const readySentinel = ".ready"
 // most recent cache hit, used for LRU eviction.
 const lastAccessFile = ".last_access"
 
+// InUseFunc reports the set of lowerDir paths currently referenced by a live
+// actor (keyed by absolute lowerDir path, value always true). Eviction skips
+// any entry whose lowerDir is in this set: an overlayfs mount forbids modifying
+// its lowerdir while mounted, so os.RemoveAll of a live lowerdir would corrupt
+// a running actor. The signal must be restart-safe (derived from on-disk state,
+// not an in-memory refcount) because atelet restarts independently of the
+// actors whose overlays are mounted in ateom's mount namespace.
+type InUseFunc func() (map[string]bool, error)
+
+// Option configures a Cache at construction time.
+type Option func(*Cache)
+
+// WithInUseFunc installs a provider that reports the lowerDirs currently in use
+// by live actors, so eviction can skip them. If unset, eviction pins nothing.
+func WithInUseFunc(fn InUseFunc) Option {
+	return func(c *Cache) { c.inUse = fn }
+}
+
 // entryState tracks one cached digest.  All fields are immutable after
 // construction except lastAccess, which is updated on cache hits.
 type entryState struct {
@@ -60,11 +78,15 @@ type entryState struct {
 // Cache is a node-local, digest-keyed rootfs cache.  It is safe for
 // concurrent use.
 type Cache struct {
-	basePath     string
+	basePath      string
 	maxCacheBytes int64
 
 	mu      sync.Mutex
 	entries map[string]*entryState // keyed by digest
+
+	// inUse, when non-nil, reports lowerDirs currently mounted by a live
+	// actor. Eviction consults it to avoid deleting an in-use lowerdir.
+	inUse InUseFunc
 
 	// inflight deduplicates concurrent EnsureRootfs calls for the same
 	// digest: the first goroutine extracts while others wait.
@@ -85,8 +107,9 @@ type inflightEntry struct {
 
 // New creates a Cache rooted at basePath.  The directory is created if it does
 // not exist.  maxCacheBytes caps total disk usage; pass 0 for
-// DefaultMaxCacheBytes.
-func New(ctx context.Context, basePath string, maxCacheBytes int64) (*Cache, error) {
+// DefaultMaxCacheBytes. Optional behavior (e.g. an in-use provider for
+// eviction) is configured via Options.
+func New(ctx context.Context, basePath string, maxCacheBytes int64, opts ...Option) (*Cache, error) {
 	if maxCacheBytes <= 0 {
 		maxCacheBytes = DefaultMaxCacheBytes
 	}
@@ -115,6 +138,9 @@ func New(ctx context.Context, basePath string, maxCacheBytes int64) (*Cache, err
 		inflight:      make(map[string]*inflightEntry),
 		cacheHits:     cacheHits,
 		cacheMisses:   cacheMisses,
+	}
+	for _, opt := range opts {
+		opt(c)
 	}
 
 	// Load existing cache entries from disk.
@@ -351,6 +377,16 @@ func (c *Cache) touchAccess(digest string) error {
 // evictIfNeeded removes the oldest entries until total cache size is within
 // the budget.  It is called asynchronously after each extraction.
 func (c *Cache) evictIfNeeded(ctx context.Context) {
+	// Compute the in-use set before taking c.mu: the provider does disk I/O
+	// (globbing bundle markers) and must not run under the cache lock. On
+	// provider error, skip this eviction pass entirely — exceeding the budget
+	// is safe; deleting a live lowerdir is not.
+	inUse, err := c.currentInUse()
+	if err != nil {
+		slog.WarnContext(ctx, "Skipping rootfs cache eviction: in-use lookup failed", slog.Any("err", err))
+		return
+	}
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -360,14 +396,23 @@ func (c *Cache) evictIfNeeded(ctx context.Context) {
 	}
 
 	for total > c.maxCacheBytes && len(c.entries) > 0 {
-		// Find the entry with the oldest lastAccess.
+		// Find the oldest entry that is not currently in use by a live actor.
 		var oldest *entryState
 		for _, e := range c.entries {
+			if inUse[e.lowerDir] {
+				continue
+			}
 			if oldest == nil || e.lastAccess.Before(oldest.lastAccess) {
 				oldest = e
 			}
 		}
 		if oldest == nil {
+			// Every remaining entry is pinned by a live actor. Better to
+			// exceed the disk budget than corrupt a mounted lowerdir.
+			slog.WarnContext(ctx, "Rootfs cache over budget but all entries in use; deferring eviction",
+				slog.Int64("totalBytes", total),
+				slog.Int64("maxCacheBytes", c.maxCacheBytes),
+			)
 			break
 		}
 
@@ -387,14 +432,34 @@ func (c *Cache) evictIfNeeded(ctx context.Context) {
 	}
 }
 
-// EvictLRU removes the least-recently-used cache entry and returns its digest
-// and size, or ("", 0) if the cache is empty.  This is exported for tests.
+// currentInUse returns the set of lowerDirs currently referenced by live
+// actors, or an empty set when no provider is configured. The provider does
+// disk I/O, so callers must invoke this outside c.mu.
+func (c *Cache) currentInUse() (map[string]bool, error) {
+	if c.inUse == nil {
+		return nil, nil
+	}
+	return c.inUse()
+}
+
+// EvictLRU removes the least-recently-used cache entry that is not currently in
+// use by a live actor and returns its digest and size, or ("", 0) if there is
+// no evictable entry (cache empty or every entry pinned).  This is exported for
+// tests.
 func (c *Cache) EvictLRU() (string, int64) {
+	inUse, err := c.currentInUse()
+	if err != nil {
+		return "", 0
+	}
+
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
 	var oldest *entryState
 	for _, e := range c.entries {
+		if inUse[e.lowerDir] {
+			continue
+		}
 		if oldest == nil || e.lastAccess.Before(oldest.lastAccess) {
 			oldest = e
 		}

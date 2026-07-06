@@ -116,7 +116,7 @@ func main() {
 		serverboot.Fatal(ctx, "Failed to create pull cache", err)
 	}
 
-	rootfsDiskCache, err := rootfscache.New(ctx, ateompath.RootfsCacheDir, 0)
+	rootfsDiskCache, err := rootfscache.New(ctx, ateompath.RootfsCacheDir, 0, rootfscache.WithInUseFunc(overlayLowerInUse))
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to create rootfs cache", err)
 	}

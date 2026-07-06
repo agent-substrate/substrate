@@ -81,6 +81,13 @@ func ActorPath(actorTemplateNamespace, actorTemplateName, actorID string) string
 	)
 }
 
+// ActorsDir is the parent directory holding every per-actor directory. It is
+// the glob root for enumerating live actors on this node (e.g. to find which
+// overlay lowerdirs are currently in use before evicting the rootfs cache).
+func ActorsDir() string {
+	return filepath.Join(BasePath, "actors")
+}
+
 // ActorIdentityDirPath is the host directory atelet populates with the
 // actor's identity data (currently the single file "actor-id") and
 // bind-mounts read-only into the actor. It is per-actor and regenerated on
