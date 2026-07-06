@@ -7,7 +7,7 @@ var import_pino = require("pino");
 var import_baileys = require("@whiskeysockets/baileys");
 
 var app = new import_hono.Hono();
-var AUTH_DIR = "/app/store/auth/persistent_demo_v1"; 
+var AUTH_DIR = "/app/store/auth/persistent_demo_v3"; 
 var PHONE_NUMBER = "16503360539";
 var TEMPLATE = "nanoclaw-rotated/nanoclaw-v6-ubuntu-v62"; 
 var ATE_ENDPOINT = "api.ate-system.svc.cluster.local:443";

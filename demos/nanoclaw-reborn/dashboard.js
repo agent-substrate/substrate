@@ -22,7 +22,8 @@ var runCmd = (cmd) => new Promise((resolve) => { (0, import_node_child_process.e
 
 async function syncState() {
   try {
-    const actorsOut = await runCmd("/tmp/kubectl-ate --endpoint " + ATE_ENDPOINT + " get actors -o json");
+    // CORRECTED PATH: /opt/bin/kubectl-ate for the dashboard pod
+    const actorsOut = await runCmd("/opt/bin/kubectl-ate --endpoint " + ATE_ENDPOINT + " get actors -o json");
     const podsOut = await runCmd("kubectl get pods -n " + NS + " -l ate.dev/worker-pool=nanoclaw-rotated-pool -o json");
     try { const res = await fetch(BROKER_URL + "/status"); brokerData = await res.json(); } catch (e) {}
     
@@ -42,7 +43,8 @@ async function syncState() {
     if (podsOut?.startsWith("{")) {
       const podsRaw = JSON.parse(podsOut).items || [];
       clusterState.pods = podsRaw.map(p => {
-        const landedActor = rawActors.find(a => (a.ateomPodName || "").includes(p.metadata.name));
+        // Only match actors that are actually RUNNING or RESUMING
+        const landedActor = rawActors.find(a => (a.ateomPodName || "").includes(p.metadata.name) && (a.status === "STATUS_RUNNING" || a.status === "STATUS_RESUMING"));
         let displayActor = "idle";
         if (landedActor) {
             const id = landedActor.actorId;
@@ -88,8 +90,10 @@ app.get("/", (c) => c.html(`
   .shell-line.whatsapp { color: var(--green); } .shell-line.cron { color: var(--yellow); } .shell-line.substrate { color: var(--cyan); } .shell-line.sys { color: var(--muted); }
   .badge { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 0.7em; font-weight: 800; border: 1px solid var(--line); text-transform: uppercase; }
   .badge.RUNNING { background: rgba(175,245,180,0.1); color: var(--green); border-color: var(--green); animation: pulse 1.5s infinite; }
+  .box { background: var(--panel-2); border: 1px solid var(--line); padding: 10px; margin-bottom: 10px; border-radius: 4px; transition: all 0.3s ease; }
+  .box.active-worker { background: rgba(175,245,180,0.05); border-color: var(--green); box-shadow: 0 0 10px rgba(175,245,180,0.1); }
+  .box.active-actor { background: rgba(88,166,255,0.05); border-color: var(--cyan); }
   @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.6; } 100% { opacity: 1; } }
-  .box { background: var(--panel-2); border: 1px solid var(--line); padding: 10px; margin-bottom: 10px; border-radius: 4px; }
   table { width: 100%; border-collapse: collapse; font-size: 0.75em; }
   th { text-align: left; padding: 10px; background: #000; border-bottom: 2px solid var(--line); color: var(--muted); }
   td { padding: 10px; border-bottom: 1px solid var(--line); }
@@ -98,7 +102,7 @@ app.get("/", (c) => c.html(`
 </style>
 </head>
 <body>
-<header><h1>NanoClaw Substrate Integration Demo <span style="font-size:0.6em; vertical-align:middle; opacity:0.8;">V1.5.1 STAGGERED-CRON</span></h1><div id="heartbeat" style="font-size:0.7em; color:var(--muted)">Syncing...</div></header>
+<header><h1>NanoClaw Substrate Integration Demo <span style="font-size:0.6em; vertical-align:middle; opacity:0.8;">V1.5.2 TELEMETRY-FIX</span></h1><div id="heartbeat" style="font-size:0.7em; color:var(--muted)">Syncing...</div></header>
 <div class="grid-master">
   <div><div class="card" style="margin-bottom: 1.5em;"><h2>NanoClaw Decision Stream</h2><div id="shell" class="shell-container"></div></div>
   <div class="card"><h2>Task Timeline</h2><div id="timeline" style="height: 100px; overflow: auto; background: var(--panel-2); border: 1px solid var(--line); padding: 8px;"></div></div></div>
@@ -114,9 +118,12 @@ app.get("/", (c) => c.html(`
 const AGENT_META = { "agent-luna": { color: "#79c0ff", interval: 120000 }, "agent-mars": { color: "#ff79c6", interval: 300000 }, "agent-nova": { color: "#f1fa8c", interval: 600000 } };
 let currentQr = null; async function refresh() { try { const statsRes = await fetch("/api/stats?t=" + Date.now()); const dataRes = await fetch("/api/data?t=" + Date.now()); const stats = await statsRes.json(); const data = await dataRes.json(); const el = (id) => document.getElementById(id); el("heartbeat").innerHTML = "● Last Sync: " + new Date().toLocaleTimeString(); el("proj-duration").textContent = Math.round(stats.avgTaskDurationSec || 8) + " s / task"; el("proj-overcommit").textContent = stats.density + "x Density"; if (data.logs) { el("shell").innerHTML = data.logs.map(l => "<div class='shell-line "+(l.module||"sys")+"'>["+l.timestamp+"] ["+(l.module||"sys").toUpperCase()+"] "+l.message+"</div>").join(""); el("shell").scrollTop = el("shell").scrollHeight; } el("wa-status").innerHTML = "<span class='badge' style='color:var(--green)'>STATUS: " + data.connectionStatus.toUpperCase() + "</span>"; const showPairing = data.connectionStatus !== "open" && (data.pairingCode || data.qrCode); el("pairing").style.display = showPairing ? "block" : "none"; el("pairing-code").textContent = data.pairingCode || ""; if (data.qrCode && data.qrCode !== currentQr) { currentQr = data.qrCode; const qr = qrcode(0, "M"); qr.addData(currentQr); qr.make(); el("qrcode").innerHTML = qr.createImgTag(3); } el("wa-active").style.display = data.connectionStatus === "open" ? "block" : "none";
 const cronBox = el("cron"); if (data.cron && cronBox) { cronBox.innerHTML = Object.keys(AGENT_META).map(name => { const remaining = Math.max(0, Math.round((AGENT_META[name].interval - (Date.now() - (data.cron.lastTrigger[name]||0)) % AGENT_META[name].interval) / 1000)); return '<div class="cron-line"><span style="color:'+AGENT_META[name].color+'">'+name+'</span><span>'+remaining+'s left</span></div>'; }).join(''); }
-el("timeline").innerHTML = (data.assignments || []).map(a => { const display = a.agent.split("-v")[0].replace("nano-", "agent-"); return "<div style='font-size:0.7em; border-bottom:1px solid #222; padding:4px;'>["+new Date(a.created_at*1000).toISOString().slice(11,19)+"] <b style='color:"+AGENT_META[display].color+"'>"+display+"</b>: "+a.task+" <span class='badge "+a.state+"' style='float:right'>"+a.state+"</span></div>"; }).join(""); el("pods").innerHTML = data.pods.map(p => { const color = (AGENT_META[p.activeActor] ? AGENT_META[p.activeActor].color : "#333"); return "<div class='box' style='border-left: 6px solid "+color+"'><b>" + p.name.split("-").pop() + "</b><br><span style='font-size:0.72em; color:var(--green)'>PHYSICAL IP: " + p.ip + "</span><br><span style='font-size:0.75em; color:var(--muted)'>ACTIVE TENANT: <b style='color:"+color+"'>"+p.activeActor.toUpperCase()+"</b></span></div>"; }).join(""); el("actors").innerHTML = data.actors.map(a => { const color = AGENT_META[a.displayName].color; return "<div class='box' style='border-left: 6px solid "+color+"'><div style='display:flex; justify-content:space-between;'><b>"+a.displayName+"</b><span class='badge "+a.status+"'>"+a.status+"</span></div><div style='font-size:0.7em; color:var(--cyan); margin-top:4px;'>LOGICAL IP: "+a.ip+"</div></div>"; }).join(""); document.querySelector("#audit tbody").innerHTML = (data.audits || []).map(a => { const display = a.agent.split("-v")[0].replace("nano-", "agent-"); return "<tr><td>"+a.timestamp+"</td><td style='color:"+AGENT_META[display].color+"; font-weight:800;'>"+display+"</td><td style='color:#d1d5db; white-space:pre-wrap;'>"+a.result+"</td></tr>"; }).join(""); } catch(e) {} } setInterval(refresh, 1000); refresh();
+el("timeline").innerHTML = (data.assignments || []).map(a => { const display = a.agent.split("-v")[0].replace("nano-", "agent-"); const color = AGENT_META[display] ? AGENT_META[display].color : "#fff"; return "<div style='font-size:0.7em; border-bottom:1px solid #222; padding:4px;'>["+new Date(a.created_at*1000).toISOString().slice(11,19)+"] <b style='color:"+color+"'>"+display+"</b>: "+a.task+" <span class='badge "+a.state+"' style='float:right'>"+a.state+"</span></div>"; }).join(""); 
+el("pods").innerHTML = data.pods.map(p => { const isActive = p.activeActor !== "idle"; const color = (AGENT_META[p.activeActor] ? AGENT_META[p.activeActor].color : "#333"); return "<div class='box "+(isActive ? "active-worker" : "")+"' style='border-left: 6px solid "+color+"'><b>" + p.name.split("-").pop() + "</b><br><span style='font-size:0.72em; color:var(--green)'>PHYSICAL IP: " + p.ip + "</span><br><span style='font-size:0.75em; color:var(--muted)'>ACTIVE TENANT: <b style='color:"+color+"'>"+p.activeActor.toUpperCase()+"</b></span></div>"; }).join(""); 
+el("actors").innerHTML = data.actors.map(a => { const isActive = a.status === "RUNNING" || a.status === "RESUMING"; const color = AGENT_META[a.displayName].color; return "<div class='box "+(isActive ? "active-actor" : "")+"' style='border-left: 6px solid "+color+"'><div style='display:flex; justify-content:space-between;'><b>"+a.displayName+"</b><span class='badge "+a.status+"'>"+a.status+"</span></div><div style='font-size:0.7em; color:var(--cyan); margin-top:4px;'>LOGICAL IP: "+a.ip+"</div></div>"; }).join(""); 
+document.querySelector("#audit tbody").innerHTML = (data.audits || []).map(a => { const display = a.agent.split("-v")[0].replace("nano-", "agent-"); const color = AGENT_META[display] ? AGENT_META[display].color : "#fff"; return "<tr><td>"+a.timestamp+"</td><td style='color:"+color+"; font-weight:800;'>"+display+"</td><td style='color:#d1d5db; white-space:pre-wrap;'>"+a.result+"</td></tr>"; }).join(""); } catch(e) {} } setInterval(refresh, 1000); refresh();
 </script></body></html>
 `));
 var port = 8090;
-(0, import_node_server.serve)({ fetch: app.fetch, port, hostname: "0.0.0.0" }, () => { console.log("V1.5.1 Dashboard Online"); });
+(0, import_node_server.serve)({ fetch: app.fetch, port, hostname: "0.0.0.0" }, () => { console.log("V1.5.2 Dashboard Online"); });
 syncState();
