@@ -122,6 +122,68 @@ The PEP binding is a **snapshot taken at resume**, recorded on the actor as
                         on the next resume
 ```
 
+The full resume / egress / suspend sequence, component by component:
+
+```mermaid
+sequenceDiagram
+    autonumber
+
+    participant CLI as kubectl ate
+    participant API as ate-api
+    participant GW as Gateway indexer
+    participant ST as Redis/Valkey
+    participant LET as atelet
+    participant OM as ateom
+    participant CAP as capture listener<br/>:15001
+    participant PEP as agentgateway PEP<br/>:15008
+    participant EXT as httpbin.org:443
+
+    rect rgb(235, 243, 255)
+        Note over CLI,ST: Resume
+        CLI->>API: resume actor my-egress-1 -a demo
+        API->>ST: Load suspended actor
+        API->>GW: Resolve egress PEP for actor
+        GW-->>API: Best programmed Gateway address
+        API->>ST: Claim worker
+        API->>ST: Set RESUMING and EgressPepAddress
+    end
+
+    rect rgb(235, 255, 238)
+        Note over API,OM: Restore workload
+        API->>LET: Run/Restore with EgressPepAddress
+        LET->>OM: RunWorkload/RestoreWorkload with EgressPepAddress
+        OM->>OM: setupActorNetwork<br/>veth plus netns
+        OM->>CAP: Start capture listener
+        OM->>OM: nftables redirects actor TCP to :15001
+        OM-->>LET: ok
+        LET-->>API: ok
+        API->>ST: Set RUNNING
+    end
+
+    rect rgb(255, 248, 225)
+        Note over OM,EXT: Actor egress connection
+        OM->>CAP: Actor conn (nftables redirect) to httpbin.org:443
+        CAP->>CAP: Get original destination<br/>sniff SNI or Host
+        CAP->>PEP: HTTP/2 CONNECT httpbin.org:443<br/>with actor metadata
+        PEP->>EXT: Route via TCPRoute
+        Note over CAP,EXT: TLS remains end-to-end<br/>PEP routes encrypted bytes only
+        CAP-->>OM: Proxy byte stream
+    end
+
+    rect rgb(255, 235, 238)
+        Note over CLI,ST: Suspend
+        CLI->>API: suspend actor
+        API->>ST: Set SUSPENDING
+        API->>LET: Checkpoint
+        LET->>OM: CheckpointWorkload
+        OM->>CAP: Close listener and streams
+        OM-->>LET: snapshot files
+        LET-->>API: ok (snapshot uploaded)
+        API->>ST: Release worker<br/>clear EgressPepAddress
+        Note over API,GW: Next resume re-resolves Gateway binding
+    end
+```
+
 To move a running actor to a different PEP: relabel the Gateways **and** cycle
 the actor (see "Point an actor at a different PEP").
 
