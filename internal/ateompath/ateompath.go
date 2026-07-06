@@ -28,7 +28,20 @@ const (
 var (
 	// StaticFilesDir holds things like downloaded runsc binaries.
 	StaticFilesDir = filepath.Join(BasePath, "static-files")
+
+	// RootfsCacheDir is the node-level directory that holds extracted,
+	// read-only rootfs directories keyed by image digest.  On a cache hit the
+	// per-actor rootfs is materialized as an overlayfs mount instead of
+	// re-extracting the tarball.
+	RootfsCacheDir = filepath.Join(BasePath, "rootfs-cache")
 )
+
+// RootfsCacheLowerDir returns the read-only rootfs directory for a given image
+// digest inside the node-level cache.  This is the "lowerdir" for an overlayfs
+// mount.
+func RootfsCacheLowerDir(digest string) string {
+	return filepath.Join(RootfsCacheDir, digest, "lower")
+}
 
 func RunSCBinaryPath(sha256 string) string {
 	return filepath.Join(StaticFilesDir, "runsc-"+sha256)
@@ -66,6 +79,13 @@ func ActorPath(actorTemplateNamespace, actorTemplateName, actorID string) string
 		"actors",
 		actorTemplateNamespace+":"+actorTemplateName+":"+actorID,
 	)
+}
+
+// ActorsDir is the parent directory holding every per-actor directory. It is
+// the glob root for enumerating live actors on this node (e.g. to find which
+// overlay lowerdirs are currently in use before evicting the rootfs cache).
+func ActorsDir() string {
+	return filepath.Join(BasePath, "actors")
 }
 
 // ActorIdentityDirPath is the host directory atelet populates with the
@@ -111,6 +131,46 @@ func OCIBundlePath(actorTemplateNamespace, actorTemplateName, actorID, container
 	return filepath.Join(
 		OCIBundleDir(actorTemplateNamespace, actorTemplateName, actorID),
 		containerName,
+	)
+}
+
+// ContainerRootfsDir is the rootfs directory inside a container's OCI bundle.
+// It is the OCI spec's Root.Path target: either an overlayfs mountpoint (when
+// the rootfs cache is used) or a directly-extracted rootfs (fallback).
+func ContainerRootfsDir(actorTemplateNamespace, actorTemplateName, actorID, containerName string) string {
+	return filepath.Join(
+		OCIBundlePath(actorTemplateNamespace, actorTemplateName, actorID, containerName),
+		"rootfs",
+	)
+}
+
+// OverlayUpperDir is the per-container writable overlay layer (overlayfs
+// upperdir); copy-ups of the read-only shared lowerdir land here.
+func OverlayUpperDir(actorTemplateNamespace, actorTemplateName, actorID, containerName string) string {
+	return filepath.Join(
+		OCIBundlePath(actorTemplateNamespace, actorTemplateName, actorID, containerName),
+		"upper",
+	)
+}
+
+// OverlayWorkDir is the overlayfs work directory required alongside upperdir.
+func OverlayWorkDir(actorTemplateNamespace, actorTemplateName, actorID, containerName string) string {
+	return filepath.Join(
+		OCIBundlePath(actorTemplateNamespace, actorTemplateName, actorID, containerName),
+		"work",
+	)
+}
+
+// OverlayLowerMarkerFile is the per-container marker atelet writes (containing
+// the node-local read-only lowerdir path) to request that the privileged ateom
+// worker mount an overlayfs rootfs for this container. atelet cannot call
+// mount(2) after its capabilities were dropped, so the mount is performed by
+// ateom just before `runsc create`. The file's absence means no overlay:
+// atelet populated ContainerRootfsDir by direct untar instead.
+func OverlayLowerMarkerFile(actorTemplateNamespace, actorTemplateName, actorID, containerName string) string {
+	return filepath.Join(
+		OCIBundlePath(actorTemplateNamespace, actorTemplateName, actorID, containerName),
+		"overlay-lower",
 	)
 }
 

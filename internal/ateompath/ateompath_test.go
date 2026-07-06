@@ -58,3 +58,39 @@ func TestAteomPathUniqueness(t *testing.T) {
 		t.Errorf("expected different paths for different pod UIDs, got %q", path1)
 	}
 }
+
+// TestOverlayPathHelpers checks that every per-container overlay path helper is
+// rooted under the container's OCI bundle, that they are mutually distinct
+// (upper/work/lower must not collide with each other or with rootfs — an
+// overlayfs mount requires them separate), and that they are deterministic.
+func TestOverlayPathHelpers(t *testing.T) {
+	const (
+		ns        = "team-a"
+		tmpl      = "web"
+		id        = "actor-1"
+		container = "app"
+	)
+
+	bundle := OCIBundlePath(ns, tmpl, id, container)
+
+	cases := []struct {
+		name string
+		got  string
+	}{
+		{"rootfs", ContainerRootfsDir(ns, tmpl, id, container)},
+		{"upper", OverlayUpperDir(ns, tmpl, id, container)},
+		{"work", OverlayWorkDir(ns, tmpl, id, container)},
+		{"marker", OverlayLowerMarkerFile(ns, tmpl, id, container)},
+	}
+
+	seen := make(map[string]string, len(cases))
+	for _, tc := range cases {
+		if !strings.HasPrefix(tc.got, bundle+"/") {
+			t.Errorf("%s: %q is not under bundle %q", tc.name, tc.got, bundle)
+		}
+		if prev, dup := seen[tc.got]; dup {
+			t.Errorf("%s and %s collide on path %q", prev, tc.name, tc.got)
+		}
+		seen[tc.got] = tc.name
+	}
+}

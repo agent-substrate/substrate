@@ -31,8 +31,10 @@ import (
 	"cloud.google.com/go/storage"
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/ategcs"
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/memorypullcache"
+	"github.com/agent-substrate/substrate/cmd/atelet/internal/rootfscache"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/ateompath"
+	"github.com/agent-substrate/substrate/internal/overlayfallback"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/resources"
@@ -64,6 +66,8 @@ var (
 
 	gcpAuthForImagePulls         = pflag.Bool("gcp-auth-for-image-pulls", true, "Use GCP application default credentials mechanism.")
 	localhostRegistryReplacement = pflag.String("localhost-registry-replacement", "", "The replacement registry endpoint for localhost and/or loopback IP addresses, useful for local development. for example kind-registry:5000")
+
+	rootfsCacheMaxBytes = pflag.Int64("rootfs-cache-max-bytes", rootfscache.DefaultMaxCacheBytes, "Maximum disk budget in bytes for the node-local overlayfs rootfs cache. When exceeded, least-recently-used entries are evicted.")
 
 	showVersion = pflag.Bool("version", false, "Print version and exit.")
 )
@@ -115,6 +119,11 @@ func main() {
 		serverboot.Fatal(ctx, "Failed to create pull cache", err)
 	}
 
+	rootfsDiskCache, err := rootfscache.New(ctx, ateompath.RootfsCacheDir, *rootfsCacheMaxBytes, rootfscache.WithInUseFunc(overlayLowerInUse))
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to create rootfs cache", err)
+	}
+
 	anonGCSClient, err := storage.NewClient(ctx, option.WithoutAuthentication())
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to create anonymous GCS client", err)
@@ -163,6 +172,7 @@ func main() {
 		wrappedAnonGCS,
 		wrappedGCS,
 		pullCache,
+		rootfsDiskCache,
 	)
 
 	lis, err := net.Listen("tcp", ":"+strconv.Itoa(*port))
@@ -186,6 +196,7 @@ type AteomHerder struct {
 
 	ateomDialer   *AteomDialer
 	pullCache     *memorypullcache.MemoryPullCache
+	rootfsCache   *rootfscache.Cache
 	anonGCSClient ategcs.ObjectStorage
 	gcsClient     ategcs.ObjectStorage
 }
@@ -199,10 +210,12 @@ func NewService(
 	anonGCSClient ategcs.ObjectStorage,
 	gcsClient ategcs.ObjectStorage,
 	pullCache *memorypullcache.MemoryPullCache,
+	rootfsCache *rootfscache.Cache,
 ) *AteomHerder {
 	wms := &AteomHerder{
 		ateomDialer:   ateomDialer,
 		pullCache:     pullCache,
+		rootfsCache:   rootfsCache,
 		anonGCSClient: anonGCSClient,
 		gcsClient:     gcsClient,
 	}
@@ -239,7 +252,7 @@ func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (*atele
 	}
 
 	if err := s.prepareOCIBundles(ctx, ns, tmpl, actorID,
-		req.GetSpec(), req.GetTargetAteomUid(),
+		req.GetSpec(), req.GetTargetAteomUid(), false,
 	); err != nil {
 		return nil, err
 	}
@@ -251,15 +264,33 @@ func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (*atele
 
 	// Tell ateom to start the workload. gVisor uses RunscPath; the micro-VM
 	// runtime uses the full RuntimeAssetPaths set.
-	if _, err := client.RunWorkload(ctx, &ateompb.RunWorkloadRequest{
+	runReq := &ateompb.RunWorkloadRequest{
 		ActorTemplateNamespace: ns,
 		ActorTemplateName:      tmpl,
 		ActorId:                actorID,
 		RunscPath:              runscPathFor(assetPaths),
 		RuntimeAssetPaths:      assetPaths,
 		Spec:                   buildAteomWorkloadSpec(req.GetSpec()),
-	}); err != nil {
-		return nil, fmt.Errorf("while calling ateom.RunWorkload: %w", err)
+	}
+	if _, err := client.RunWorkload(ctx, runReq); err != nil {
+		if !overlayfallback.IsMountFailure(err) {
+			return nil, fmt.Errorf("while calling ateom.RunWorkload: %w", err)
+		}
+		// ateom could not mount the overlay rootfs. It mounts after we returned
+		// from bundle preparation and holds no tar, so it cannot recover; we
+		// re-prepare the bundles as a plain untar (clearing the overlay marker)
+		// and retry once. The mount is ateom's first step and its failure defer
+		// tears down the network + any partial mounts, leaving a clean slate.
+		slog.WarnContext(ctx, "ateom overlay rootfs mount failed; falling back to untar and retrying",
+			slog.String("actor", actorID), slog.Any("err", err))
+		if err := s.prepareOCIBundles(ctx, ns, tmpl, actorID,
+			req.GetSpec(), req.GetTargetAteomUid(), true,
+		); err != nil {
+			return nil, fmt.Errorf("while re-preparing OCI bundles for untar fallback: %w", err)
+		}
+		if _, err := client.RunWorkload(ctx, runReq); err != nil {
+			return nil, fmt.Errorf("while calling ateom.RunWorkload after untar fallback: %w", err)
+		}
 	}
 
 	return &ateletpb.RunResponse{}, nil
@@ -523,7 +554,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 			return err
 		}
 		t := time.Now()
-		if err := s.prepareOCIBundles(gctx, ns, tmpl, actorID, req.GetSpec(), req.GetTargetAteomUid()); err != nil {
+		if err := s.prepareOCIBundles(gctx, ns, tmpl, actorID, req.GetSpec(), req.GetTargetAteomUid(), false); err != nil {
 			return err
 		}
 		dBundles = time.Since(t)
@@ -541,7 +572,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	// Tell ateom to do runsc create + runsc restore for pause container and
 	// all application containers.
 	tAteom := time.Now()
-	if _, err := client.RestoreWorkload(ctx, &ateompb.RestoreWorkloadRequest{
+	restoreReq := &ateompb.RestoreWorkloadRequest{
 		ActorTemplateNamespace: ns,
 		ActorTemplateName:      tmpl,
 		ActorId:                actorID,
@@ -549,8 +580,22 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		RuntimeAssetPaths:      assetPaths,
 		Spec:                   buildAteomWorkloadSpec(req.GetSpec()),
 		Scope:                  toAteomSnapshotScope(req.GetScope()),
-	}); err != nil {
-		return nil, fmt.Errorf("while calling ateom.RestoreWorkload: %w", err)
+	}
+	if _, err := client.RestoreWorkload(ctx, restoreReq); err != nil {
+		if !overlayfallback.IsMountFailure(err) {
+			return nil, fmt.Errorf("while calling ateom.RestoreWorkload: %w", err)
+		}
+		// See RunWorkload: recover an overlay mount failure by re-preparing the
+		// bundles as a plain untar and retrying once. The image bytes are
+		// already downloaded, so this only re-unpacks the OCI bundle.
+		slog.WarnContext(ctx, "ateom overlay rootfs mount failed on restore; falling back to untar and retrying",
+			slog.String("actor", actorID), slog.Any("err", err))
+		if err := s.prepareOCIBundles(ctx, ns, tmpl, actorID, req.GetSpec(), req.GetTargetAteomUid(), true); err != nil {
+			return nil, fmt.Errorf("while re-preparing OCI bundles for untar fallback: %w", err)
+		}
+		if _, err := client.RestoreWorkload(ctx, restoreReq); err != nil {
+			return nil, fmt.Errorf("while calling ateom.RestoreWorkload after untar fallback: %w", err)
+		}
 	}
 	dAteom = time.Since(tAteom)
 
@@ -630,11 +675,16 @@ func (s *AteomHerder) downloadExternalCheckpoint(ctx context.Context, snapshotUr
 
 // prepareOCIBundles pulls images and assembles OCI bundles for the pause
 // container and every application container in spec, in parallel.
+//
+// forceUntar is threaded to prepareOCIDirectory: when true every container's
+// rootfs is extracted directly rather than via the overlay cache. atelet sets
+// it when re-preparing bundles after ateom reports an overlay mount failure.
 func (s *AteomHerder) prepareOCIBundles(
 	ctx context.Context,
 	actorTemplateNamespace, actorTemplateName, actorID string,
 	spec *ateletpb.WorkloadSpec,
 	targetAteomUid string,
+	forceUntar bool,
 ) error {
 	netnsPath := ateompath.AteomNetNSPath(targetAteomUid)
 
@@ -682,6 +732,7 @@ func (s *AteomHerder) prepareOCIBundles(
 		if err := prepareOCIDirectory(
 			gCtx,
 			s.pullCache,
+			s.rootfsCache,
 			actorTemplateNamespace, actorTemplateName, actorID,
 			"pause",
 			spec.GetPauseImage(),
@@ -691,6 +742,7 @@ func (s *AteomHerder) prepareOCIBundles(
 			netnsPath,
 			"", // pause is sandbox infra; it gets no actor identity mount.
 			nil,
+			forceUntar,
 		); err != nil {
 			return fmt.Errorf("while creating pause OCI bundle: %w", err)
 		}
@@ -714,6 +766,7 @@ func (s *AteomHerder) prepareOCIBundles(
 			if err := prepareOCIDirectory(
 				gCtx,
 				s.pullCache,
+				s.rootfsCache,
 				actorTemplateNamespace, actorTemplateName, actorID,
 				ctr.GetName(),
 				ctr.GetImage(),
@@ -727,6 +780,7 @@ func (s *AteomHerder) prepareOCIBundles(
 				netnsPath,
 				identityDir,
 				ddMounts,
+				forceUntar,
 			); err != nil {
 				return fmt.Errorf("while creating %q OCI bundle: %w", ctr.GetName(), err)
 			}
@@ -948,6 +1002,13 @@ func resetActorDirs(actorTemplateNamespace, actorTemplateName, actorID string) e
 	// Explicitly leave runsc logs dir untouched.
 
 	bundleDir := ateompath.OCIBundleDir(actorTemplateNamespace, actorTemplateName, actorID)
+
+	// Any overlayfs rootfs mounts live in the privileged ateom worker's mount
+	// namespace (atelet cannot mount(2) after its capabilities were dropped),
+	// so they are not visible here and are torn down by ateom on
+	// checkpoint/reset. atelet only needs to remove the on-disk bundle tree;
+	// with hostPath propagation=None, removing the (host-view) mountpoint dir
+	// does not disturb ateom's mount.
 	if err := os.RemoveAll(bundleDir); err != nil {
 		return fmt.Errorf("while deleting bundle dir: %w", err)
 	}
