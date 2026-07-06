@@ -42,16 +42,12 @@ type Reason string
 func (r Reason) Error() string { return string(r) }
 
 const (
-	ReasonFailedGetSandboxRecord       Reason = "FAILED_GET_SANDBOX_RECORD"
-	ReasonFailedFetchSandboxAsset      Reason = "FAILED_FETCH_SANDBOX_ASSET"
-	ReasonInvalidObjectURL             Reason = "INVALID_OBJECT_URL"
-	ReasonNoSnapshotFiles              Reason = "NO_SNAPSHOT_FILES"
-	ReasonFailedUploadExternalSnapshot Reason = "FAILED_UPLOAD_EXTERNAL_SNAPSHOT"
-	ReasonFailedSaveLocalSnapshot      Reason = "FAILED_SAVE_LOCAL_SNAPSHOT"
-	ReasonSnapshotNotFound             Reason = "SNAPSHOT_NOT_FOUND"
-	ReasonSnapshotCorrupt              Reason = "SNAPSHOT_CORRUPT"
-	ReasonCheckpointFailed             Reason = "CHECKPOINT_FAILED"
-	ReasonRestoreFailed                Reason = "RESTORE_FAILED"
+	ReasonTerminalFileSystemError Reason = "TERMINAL_FILE_SYSTEM_ERROR"
+	ReasonInvalidSandboxAsset     Reason = "INVALID_SANDBOX_ASSET"
+	ReasonInvalidCheckpointResult Reason = "INVALID_CHECKPOINT_RESULT"
+	ReasonFaileSaveSnapshot       Reason = "FAILED_SAVE_SNAPSHOT"
+	ReasonInvalidObjectURL        Reason = "INVALID_OBJECT_URL"
+	ReasonFailedGetExternalObject Reason = "FAILED_GET_EXTERNAL_OBJECT"
 )
 
 // MetadataKeyActorCrashed marks (in ErrorInfo.Metadata) a failure that requires
@@ -108,23 +104,6 @@ func CrashIfReason(ctx context.Context, err error, reasons ...Reason) error {
 		return err
 	}
 	return NewGRPCError(ctx, codes.DataLoss, r, ActorCrashedMetadata(), err)
-}
-
-// ErrorReasonsFromStatus returns the google.rpc.ErrorInfo.Reason carried by err,
-// or "" if none.
-func ErrorReasonsFromStatus(err error) []string {
-	st, ok := status.FromError(err)
-	if !ok {
-		return nil
-	}
-	reasons := []string{}
-	// Returns the reason of the first ErrorInfo found in st.Details.
-	for _, d := range st.Details() {
-		if info, ok := d.(*epb.ErrorInfo); ok {
-			reasons = append(reasons, info.GetReason())
-		}
-	}
-	return reasons
 }
 
 // ActorCrashRequested reports whether any ErrorInfo carried by err has the

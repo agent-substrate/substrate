@@ -28,6 +28,23 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+// errorReasonsFromStatus extracts the ErrorInfo reasons carried by a gRPC
+// status error, mirroring how the ateapi control plane classifies failures.
+// It returns nil when err is not a status error or carries no ErrorInfo.
+func errorReasonsFromStatus(err error) []string {
+	st, ok := status.FromError(err)
+	if !ok {
+		return nil
+	}
+	var reasons []string
+	for _, d := range st.Details() {
+		if info, ok := d.(*epb.ErrorInfo); ok {
+			reasons = append(reasons, info.GetReason())
+		}
+	}
+	return reasons
+}
+
 // TestNewGRPCError verifies the message comes from err, the Reason and metadata
 // come from the arguments, the Domain is the package constant, and that they
 // round-trip through the gRPC status as an ErrorInfo detail.
@@ -41,16 +58,16 @@ func TestNewGRPCError(t *testing.T) {
 	}{
 		{
 			name:         "actor crashed metadata",
-			reason:       ReasonSnapshotNotFound,
+			reason:       ReasonFaileSaveSnapshot,
 			metadata:     ActorCrashedMetadata(),
-			wantReason:   string(ReasonSnapshotNotFound),
+			wantReason:   string(ReasonFaileSaveSnapshot),
 			wantMetadata: map[string]string{MetadataKeyActorCrashed: "true"},
 		},
 		{
 			name:         "no metadata",
-			reason:       ReasonRestoreFailed,
+			reason:       ReasonInvalidCheckpointResult,
 			metadata:     nil,
-			wantReason:   string(ReasonRestoreFailed),
+			wantReason:   string(ReasonInvalidCheckpointResult),
 			wantMetadata: nil,
 		},
 		{
@@ -79,8 +96,8 @@ func TestNewGRPCError(t *testing.T) {
 
 			// The reason must be extractable so the ateapi control plane can classify
 			// the failure.
-			if got := ErrorReasonsFromStatus(err); !slices.Contains(got, tt.wantReason) {
-				t.Errorf("ErrorReasonsFromStatus() = %q, want it to contain %q", got, tt.wantReason)
+			if got := errorReasonsFromStatus(err); !slices.Contains(got, tt.wantReason) {
+				t.Errorf("errorReasonsFromStatus() = %q, want it to contain %q", got, tt.wantReason)
 			}
 
 			var info *epb.ErrorInfo
@@ -121,7 +138,7 @@ func TestNewGRPCErrorInvalidInput(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := NewGRPCError(context.Background(), tt.grpcCode, ReasonRestoreFailed, nil, tt.err)
+			err := NewGRPCError(context.Background(), tt.grpcCode, ReasonInvalidCheckpointResult, nil, tt.err)
 			if err == nil {
 				t.Fatalf("NewGRPCError(%v, nil, %v) = nil, want a validation error", tt.grpcCode, tt.err)
 			}
@@ -130,8 +147,8 @@ func TestNewGRPCErrorInvalidInput(t *testing.T) {
 			if _, ok := status.FromError(err); ok {
 				t.Errorf("NewGRPCError(...) = %v; want a plain error, not a gRPC status", err)
 			}
-			if got := ErrorReasonsFromStatus(err); len(got) != 0 {
-				t.Errorf("ErrorReasonsFromStatus() = %q, want no reasons", got)
+			if got := errorReasonsFromStatus(err); len(got) != 0 {
+				t.Errorf("errorReasonsFromStatus() = %q, want no reasons", got)
 			}
 			if ActorCrashRequested(err) {
 				t.Errorf("ActorCrashRequested(%v) = true, want false", err)
@@ -144,19 +161,19 @@ func TestNewGRPCErrorInvalidInput(t *testing.T) {
 // the domain meaning of a failure wraps it with %w, and callers recover it with
 // errors.Is (a specific Reason) or errors.As (any Reason).
 func TestReasonTagging(t *testing.T) {
-	err := fmt.Errorf("%w: while reading record: %w", ReasonFailedGetSandboxRecord, errors.New("eof"))
-	if !errors.Is(err, ReasonFailedGetSandboxRecord) {
-		t.Errorf("errors.Is(%v, ReasonFailedGetSandboxRecord) = false, want true", err)
+	err := fmt.Errorf("%w: while reading record: %w", ReasonFailedGetExternalObject, errors.New("eof"))
+	if !errors.Is(err, ReasonFailedGetExternalObject) {
+		t.Errorf("errors.Is(%v, ReasonFailedGetExternalObject) = false, want true", err)
 	}
-	if errors.Is(err, ReasonSnapshotCorrupt) {
-		t.Errorf("errors.Is(%v, ReasonSnapshotCorrupt) = true, want false", err)
+	if errors.Is(err, ReasonInvalidSandboxAsset) {
+		t.Errorf("errors.Is(%v, ReasonInvalidSandboxAsset) = true, want false", err)
 	}
 	var r Reason
 	if !errors.As(err, &r) {
 		t.Fatalf("errors.As(%v, *Reason) = false, want true", err)
 	}
-	if r != ReasonFailedGetSandboxRecord {
-		t.Errorf("errors.As recovered Reason %q, want %q", r, ReasonFailedGetSandboxRecord)
+	if r != ReasonFailedGetExternalObject {
+		t.Errorf("errors.As recovered Reason %q, want %q", r, ReasonFailedGetExternalObject)
 	}
 }
 
@@ -166,8 +183,8 @@ func TestReasonTagging(t *testing.T) {
 // tagged with an unclaimed Reason — passes through unchanged.
 func TestCrashIfReason(t *testing.T) {
 	t.Run("claimed reason escalates to DataLoss and crash", func(t *testing.T) {
-		tagged := fmt.Errorf("%w: while parsing manifest: %w", ReasonSnapshotCorrupt, errors.New("bad json"))
-		err := CrashIfReason(context.Background(), tagged, ReasonFailedGetSandboxRecord, ReasonSnapshotCorrupt)
+		tagged := fmt.Errorf("%w: while parsing manifest: %w", ReasonInvalidSandboxAsset, errors.New("bad json"))
+		err := CrashIfReason(context.Background(), tagged, ReasonFailedGetExternalObject, ReasonInvalidSandboxAsset)
 
 		st, ok := status.FromError(err)
 		if !ok {
@@ -176,8 +193,8 @@ func TestCrashIfReason(t *testing.T) {
 		if got, want := st.Code(), codes.DataLoss; got != want {
 			t.Errorf("status code = %v, want %v", got, want)
 		}
-		if got := ErrorReasonsFromStatus(err); !slices.Contains(got, string(ReasonSnapshotCorrupt)) {
-			t.Errorf("ErrorReasonsFromStatus() = %q, want it to contain %q", got, ReasonSnapshotCorrupt)
+		if got := errorReasonsFromStatus(err); !slices.Contains(got, string(ReasonInvalidSandboxAsset)) {
+			t.Errorf("errorReasonsFromStatus() = %q, want it to contain %q", got, ReasonInvalidSandboxAsset)
 		}
 		if !ActorCrashRequested(err) {
 			t.Errorf("ActorCrashRequested(%v) = false, want true", err)
@@ -185,10 +202,10 @@ func TestCrashIfReason(t *testing.T) {
 	})
 
 	t.Run("unclaimed reason passes through unchanged", func(t *testing.T) {
-		// The Restore-asset-failure semantic: the chain is tagged terminal, but
-		// this boundary does not claim that Reason, so the actor must not crash.
-		tagged := fmt.Errorf("%w: sha256 mismatch: %w", ReasonFailedFetchSandboxAsset, errors.New("boom"))
-		got := CrashIfReason(context.Background(), tagged, ReasonSnapshotCorrupt)
+		// The chain is tagged terminal, but this boundary does not claim that
+		// Reason, so the actor must not crash.
+		tagged := fmt.Errorf("%w: sha256 mismatch: %w", ReasonInvalidObjectURL, errors.New("boom"))
+		got := CrashIfReason(context.Background(), tagged, ReasonInvalidSandboxAsset)
 		if got != tagged {
 			t.Errorf("CrashIfReason(tagged, unclaimed) = %v, want the same error back", got)
 		}
@@ -199,13 +216,13 @@ func TestCrashIfReason(t *testing.T) {
 
 	t.Run("untagged error passes through unchanged", func(t *testing.T) {
 		plain := errors.New("transient network failure")
-		if got := CrashIfReason(context.Background(), plain, ReasonSnapshotCorrupt); got != plain {
+		if got := CrashIfReason(context.Background(), plain, ReasonInvalidSandboxAsset); got != plain {
 			t.Errorf("CrashIfReason(plain) = %v, want the same error back", got)
 		}
 	})
 
 	t.Run("nil error returns nil", func(t *testing.T) {
-		if got := CrashIfReason(context.Background(), nil, ReasonSnapshotCorrupt); got != nil {
+		if got := CrashIfReason(context.Background(), nil, ReasonInvalidSandboxAsset); got != nil {
 			t.Errorf("CrashIfReason(nil) = %v, want nil", got)
 		}
 	})
@@ -222,16 +239,16 @@ func TestErrorReasonsFromStatus(t *testing.T) {
 		{name: "status without error info", err: status.Error(codes.Unavailable, "transient"), want: nil},
 		{
 			name: "grpc error carries reason",
-			err:  NewGRPCError(context.Background(), codes.NotFound, ReasonSnapshotNotFound, nil, errors.New("boom")),
-			want: []string{string(ReasonSnapshotNotFound)},
+			err:  NewGRPCError(context.Background(), codes.NotFound, ReasonFaileSaveSnapshot, nil, errors.New("boom")),
+			want: []string{string(ReasonFaileSaveSnapshot)},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// slices.Equal treats nil and empty as equal, which is the intent here:
 			// "no reasons" may surface as either.
-			if got := ErrorReasonsFromStatus(tt.err); !slices.Equal(got, tt.want) {
-				t.Errorf("ErrorReasonsFromStatus() = %q, want %q", got, tt.want)
+			if got := errorReasonsFromStatus(tt.err); !slices.Equal(got, tt.want) {
+				t.Errorf("errorReasonsFromStatus() = %q, want %q", got, tt.want)
 			}
 		})
 	}
@@ -248,17 +265,17 @@ func TestActorCrashRequested(t *testing.T) {
 		{name: "status without error info", err: status.Error(codes.Unavailable, "transient"), want: false},
 		{
 			name: "actor crashed metadata",
-			err:  NewGRPCError(context.Background(), codes.DataLoss, ReasonRestoreFailed, ActorCrashedMetadata(), errors.New("boom")),
+			err:  NewGRPCError(context.Background(), codes.DataLoss, ReasonInvalidCheckpointResult, ActorCrashedMetadata(), errors.New("boom")),
 			want: true,
 		},
 		{
 			name: "no metadata",
-			err:  NewGRPCError(context.Background(), codes.DataLoss, ReasonRestoreFailed, nil, errors.New("boom")),
+			err:  NewGRPCError(context.Background(), codes.DataLoss, ReasonInvalidCheckpointResult, nil, errors.New("boom")),
 			want: false,
 		},
 		{
 			name: "metadata without crash key",
-			err:  NewGRPCError(context.Background(), codes.DataLoss, ReasonRestoreFailed, map[string]string{"other": "x"}, errors.New("boom")),
+			err:  NewGRPCError(context.Background(), codes.DataLoss, ReasonInvalidCheckpointResult, map[string]string{"other": "x"}, errors.New("boom")),
 			want: false,
 		},
 	}

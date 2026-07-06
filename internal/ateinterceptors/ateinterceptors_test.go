@@ -127,9 +127,9 @@ func TestInternalServerUnaryInterceptorPreservesDetails(t *testing.T) {
 	}{
 		{
 			name:          "structured error keeps code and reason",
-			handlerErr:    ateerrors.NewGRPCError(context.Background(), codes.DataLoss, ateerrors.ReasonSnapshotNotFound, ateerrors.ActorCrashedMetadata(), errors.New("boom")),
+			handlerErr:    ateerrors.NewGRPCError(context.Background(), codes.DataLoss, ateerrors.ReasonFaileSaveSnapshot, ateerrors.ActorCrashedMetadata(), errors.New("boom")),
 			wantCode:      codes.DataLoss,
-			wantReason:    string(ateerrors.ReasonSnapshotNotFound),
+			wantReason:    string(ateerrors.ReasonFaileSaveSnapshot),
 			wantErrorInfo: true,
 		},
 		{

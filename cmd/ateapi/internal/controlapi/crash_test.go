@@ -120,10 +120,10 @@ func TestMaybeCrashActor(t *testing.T) {
 		wrapMsg  = "calling atelet"
 	)
 
-	crashErr := ateerrors.NewGRPCError(context.Background(), codes.NotFound, ateerrors.ReasonSnapshotNotFound, ateerrors.ActorCrashedMetadata(), errors.New("boom"))
+	crashErr := ateerrors.NewGRPCError(context.Background(), codes.NotFound, ateerrors.ReasonTerminalFileSystemError, ateerrors.ActorCrashedMetadata(), errors.New("boom"))
 	// A structured error carrying a reason but no actorCrashed directive must be
 	// wrapped, not crash the actor.
-	noCrashErr := ateerrors.NewGRPCError(context.Background(), codes.NotFound, ateerrors.ReasonRestoreFailed, nil, errors.New("infra"))
+	noCrashErr := ateerrors.NewGRPCError(context.Background(), codes.NotFound, ateerrors.ReasonFailedGetExternalObject, nil, errors.New("infra"))
 	plainErr := errors.New("transient")
 
 	tests := []struct {

@@ -70,13 +70,6 @@ func (s *LoadActorForResumeStep) Execute(ctx context.Context, input *ResumeInput
 		}
 		return fmt.Errorf("while getting actor from DB: %w", err)
 	}
-
-	// TODO: add a CheckPrerequisite() step in controlapi.WorkflowStep to validate prerequisites like this.
-	if actor.GetStatus() == ateapipb.Actor_STATUS_CRASHED {
-		return status.Errorf(codes.FailedPrecondition,
-			"can not resume crashed actor %s", input.ActorID)
-	}
-
 	state.Actor = actor
 
 	actorTemplate, err := s.actorTemplateLister.ActorTemplates(actor.GetActorTemplateNamespace()).Get(actor.GetActorTemplateName())
@@ -329,7 +322,7 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 			Scope: toAteletSnapshotScope(state.ActorTemplate.Spec.SnapshotsConfig.OnCommit),
 		}
 		_, err = client.Restore(ctx, req)
-		return maybeCrashActor(ctx, s.store, input.Atespace, input.ActorID, err, "while restoring workload")
+		return maybeCrashActor(ctx, s.store, input.Atespace, input.ActorID, err, "while creating workload from golden snapshot")
 	} else {
 		slog.InfoContext(ctx, "Actor has no snapshot; ActorTemplate has no golden snapshot; Booting from ActorTemplate spec")
 
@@ -351,7 +344,7 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 			Spec:                   workloadSpec,
 		}
 		_, err = client.Run(ctx, req)
-		return maybeCrashActor(ctx, s.store, input.Atespace, input.ActorID, err, "while restoring workload")
+		return maybeCrashActor(ctx, s.store, input.Atespace, input.ActorID, err, "while creating workload from spec")
 	}
 	// Unreachable
 }

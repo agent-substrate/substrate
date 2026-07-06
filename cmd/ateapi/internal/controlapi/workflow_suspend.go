@@ -28,8 +28,6 @@ import (
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	"k8s.io/apimachinery/pkg/util/wait"
 )
 
@@ -60,13 +58,6 @@ func (s *LoadActorForSuspendStep) Execute(ctx context.Context, input *SuspendInp
 	if err != nil {
 		return err
 	}
-
-	// TODO: add a CheckPrerequisite() step in controlapi.WorkflowStep to validate prerequisites like this.
-	if actor.GetStatus() == ateapipb.Actor_STATUS_CRASHED {
-		return status.Errorf(codes.FailedPrecondition,
-			"can not suspend crashed actor %s", input.ActorID)
-	}
-
 	state.Actor = actor
 
 	actorTemplate, err := s.actorTemplateLister.ActorTemplates(actor.GetActorTemplateNamespace()).Get(actor.GetActorTemplateName())

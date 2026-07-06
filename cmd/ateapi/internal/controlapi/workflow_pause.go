@@ -27,8 +27,6 @@ import (
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	"k8s.io/apimachinery/pkg/util/wait"
 )
 
@@ -59,13 +57,6 @@ func (s *LoadActorForPauseStep) Execute(ctx context.Context, input *PauseInput, 
 	if err != nil {
 		return err
 	}
-
-	// TODO: add a CheckPrerequisite() step in controlapi.WorkflowStep to validate prerequisites like this.
-	if actor.GetStatus() == ateapipb.Actor_STATUS_CRASHED {
-		return status.Errorf(codes.FailedPrecondition,
-			"can not pause crashed actor %s", input.ActorID)
-	}
-
 	state.Actor = actor
 
 	actorTemplate, err := s.actorTemplateLister.ActorTemplates(actor.GetActorTemplateNamespace()).Get(actor.GetActorTemplateName())
@@ -111,10 +102,6 @@ func (s *CallAteletPauseStep) IsComplete(ctx context.Context, input *PauseInput,
 	return state.Actor.GetStatus() == ateapipb.Actor_STATUS_PAUSED, nil
 }
 func (s *CallAteletPauseStep) Execute(ctx context.Context, input *PauseInput, state *PauseState) error {
-	if state.Actor.GetStatus() != ateapipb.Actor_STATUS_PAUSING {
-		return fmt.Errorf("expected actor in PAUSING state, got: %v", state.Actor.GetStatus())
-	}
-
 	if state.Actor.GetAteomPodNamespace() == "" || state.Actor.GetAteomPodName() == "" {
 		if err := crashActor(ctx, s.store, state.Actor.Atespace, state.Actor.ActorId); err != nil {
 			slog.Error("Failed to crash actor", slog.String("err", err.Error()))

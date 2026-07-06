@@ -27,7 +27,6 @@ import (
 	"syscall"
 	"testing"
 
-	"github.com/agent-substrate/substrate/cmd/atelet/internal/ategcs"
 	"github.com/agent-substrate/substrate/internal/ateerrors"
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
@@ -274,9 +273,10 @@ func TestFetchAssetRejectsBadHash(t *testing.T) {
 	if err == nil {
 		t.Fatal("fetchAsset returned a cache hit for an invalid hash; validation must run before the os.Stat early return")
 	}
-	// A bad hash is terminal: the actor must be crashed, not retried.
-	if !errors.Is(err, ateerrors.ReasonFailedFetchSandboxAsset) {
-		t.Errorf("bad-hash error not tagged terminal: %v", err)
+	// The error must come from the validation step, proving it ran before the
+	// cache-hit stat could return the planted file.
+	if !strings.Contains(err.Error(), "while validating asset hash") {
+		t.Errorf("error did not come from hash validation: %v", err)
 	}
 }
 
@@ -329,7 +329,7 @@ func TestFetchAssetStreaming(t *testing.T) {
 		if err == nil {
 			t.Fatal("fetchAsset accepted an over-cap asset")
 		}
-		if !errors.Is(err, ateerrors.ReasonFailedFetchSandboxAsset) {
+		if !errors.Is(err, ateerrors.ReasonInvalidSandboxAsset) {
 			t.Errorf("over-cap error not tagged terminal: %v", err)
 		}
 		if _, err := os.Stat(ateompath.RunSCBinaryPath(goodHash)); !errors.Is(err, os.ErrNotExist) {
@@ -346,7 +346,7 @@ func TestFetchAssetStreaming(t *testing.T) {
 		if err == nil {
 			t.Fatal("fetchAsset accepted a hash mismatch")
 		}
-		if !errors.Is(err, ateerrors.ReasonFailedFetchSandboxAsset) {
+		if !errors.Is(err, ateerrors.ReasonInvalidSandboxAsset) {
 			t.Errorf("hash-mismatch error not tagged terminal: %v", err)
 		}
 		if _, err := os.Stat(ateompath.RunSCBinaryPath(wrongHash)); !errors.Is(err, os.ErrNotExist) {
@@ -357,11 +357,11 @@ func TestFetchAssetStreaming(t *testing.T) {
 	t.Run("missing object is terminal", func(t *testing.T) {
 		ateompath.StaticFilesDir = t.TempDir()
 		maxAssetBytes = origCap
-		// gcsClient.GetObject tags a missing object with ategcs.ErrObjectNotFound.
-		notFound := fmt.Errorf("%w: no such object", ategcs.ErrObjectNotFound)
+		// The ategcs clients tag a missing object with ReasonFailedGetExternalObject.
+		notFound := fmt.Errorf("%w: no such object", ateerrors.ReasonFailedGetExternalObject)
 		s := &AteomHerder{anonGCSClient: fakeObjectStorage{err: notFound}}
 		_, err := s.fetchAsset(context.Background(), assetEntry{URL: url, SHA256: goodHash})
-		if !errors.Is(err, ateerrors.ReasonFailedFetchSandboxAsset) {
+		if !errors.Is(err, ateerrors.ReasonFailedGetExternalObject) {
 			t.Errorf("missing-object error not tagged terminal: %v", err)
 		}
 	})
@@ -370,14 +370,15 @@ func TestFetchAssetStreaming(t *testing.T) {
 		ateompath.StaticFilesDir = t.TempDir()
 		maxAssetBytes = origCap
 		s := &AteomHerder{anonGCSClient: fakeObjectStorage{data: content}}
-		// Invalid percent-escape: url.Parse rejects it, so openAsset never runs.
+		// Invalid percent-escape: url.Parse rejects it inside ategcs.Open, which
+		// tags the failure with ReasonInvalidObjectURL.
 		_, err := s.fetchAsset(context.Background(), assetEntry{URL: "gs://bucket/%zz", SHA256: goodHash})
-		if !errors.Is(err, ateerrors.ReasonFailedFetchSandboxAsset) {
+		if !errors.Is(err, ateerrors.ReasonInvalidObjectURL) {
 			t.Errorf("malformed-url error not tagged terminal: %v", err)
 		}
 	})
 
-	t.Run("network error is retriable", func(t *testing.T) {
+	t.Run("network error is tagged invalid sandbox asset", func(t *testing.T) {
 		ateompath.StaticFilesDir = t.TempDir()
 		maxAssetBytes = origCap
 		s := &AteomHerder{anonGCSClient: fakeObjectStorage{err: errors.New("connection refused")}}
@@ -385,8 +386,15 @@ func TestFetchAssetStreaming(t *testing.T) {
 		if err == nil {
 			t.Fatal("fetchAsset accepted a failing open")
 		}
-		if errors.Is(err, ateerrors.ReasonFailedFetchSandboxAsset) {
-			t.Errorf("transient network error wrongly tagged terminal: %v", err)
+		// fetchAsset currently tags every openAsset failure — transient or not —
+		// with ReasonInvalidSandboxAsset (see the TODO in fetchAsset about
+		// distinguishing gcs errors). It must not, however, invent a
+		// terminal-file-system or external-object classification.
+		if !errors.Is(err, ateerrors.ReasonInvalidSandboxAsset) {
+			t.Errorf("open failure not tagged ReasonInvalidSandboxAsset: %v", err)
+		}
+		if errors.Is(err, ateerrors.ReasonTerminalFileSystemError) || errors.Is(err, ateerrors.ReasonFailedGetExternalObject) {
+			t.Errorf("network error wrongly tagged with an unrelated reason: %v", err)
 		}
 	})
 }
@@ -492,8 +500,8 @@ func TestIsTerminalFileErr(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := isTerminalFileErr(tt.err); got != tt.want {
-				t.Errorf("isTerminalFileErr(%v) = %v, want %v", tt.err, got, tt.want)
+			if got := isTerminalFileSystemErr(tt.err); got != tt.want {
+				t.Errorf("isTerminalFileSystemErr(%v) = %v, want %v", tt.err, got, tt.want)
 			}
 		})
 	}
