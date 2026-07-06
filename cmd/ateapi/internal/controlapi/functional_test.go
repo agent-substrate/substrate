@@ -237,6 +237,7 @@ type testContext struct {
 	k8sClient           kubernetes.Interface
 	substrateClient     versioned.Interface
 	persistence         *ateredis.Persistence
+	workerCache         *workercache.Cache
 	fakeAtelet          *FakeAteletServer
 	cleanup             func()
 	actorTemplateLister listersv1alpha1.ActorTemplateLister
@@ -369,6 +370,7 @@ func setupTest(t *testing.T, ns string) *testContext {
 		k8sClient:           k8sClient,
 		substrateClient:     substrateClient,
 		persistence:         persistence,
+		workerCache:         wc,
 		fakeAtelet:          fakeAtelet,
 		cleanup:             cleanup,
 		actorTemplateLister: actorTemplateLister,
@@ -617,6 +619,23 @@ func createWorkerPod(t *testing.T, tc *testContext, ns string, name string, node
 	if err != nil {
 		t.Fatalf("failed to wait for worker to be registered: %v", err)
 	}
+
+	// Wait for the worker to appear in worker cache.
+	err = wait.PollUntilContextTimeout(context.Background(), 10*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
+		workers, err := tc.workerCache.Workers()
+		if err != nil {
+			return false, nil // Cache not ready yet; retry.
+		}
+		for _, w := range workers {
+			if w.GetWorkerNamespace() == ns && w.GetWorkerPod() == name {
+				return true, nil
+			}
+		}
+		return false, nil
+	})
+	if err != nil {
+		t.Fatalf("failed to wait for worker to appear in worker cache: %v", err)
+	}
 }
 
 func deleteWorkerPod(t *testing.T, tc *testContext, ns string, name string) {
@@ -641,6 +660,22 @@ func deleteWorkerPod(t *testing.T, tc *testContext, ns string, name string) {
 	})
 	if err != nil {
 		t.Fatalf("failed to wait for worker to be removed: %v", err)
+	}
+
+	err = wait.PollUntilContextTimeout(context.Background(), 10*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
+		workers, err := tc.workerCache.Workers()
+		if err != nil {
+			return false, nil // Cache not ready yet; retry.
+		}
+		for _, w := range workers {
+			if w.GetWorkerNamespace() == ns && w.GetWorkerPod() == name {
+				return false, nil // Still there
+			}
+		}
+		return true, nil
+	})
+	if err != nil {
+		t.Fatalf("failed to wait for worker to be removed from worker cache: %v", err)
 	}
 }
 
