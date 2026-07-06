@@ -28,7 +28,6 @@ var brokerLogs = [];
 var assignments = [];
 var taskAudits = [];
 
-// --- STAGGERED CRON STATE ---
 var lastTriggerTime = { "agent-luna": Date.now(), "agent-mars": Date.now(), "agent-nova": Date.now() };
 var cronIterations = { "agent-luna": 0, "agent-mars": 0, "agent-nova": 0 };
 
@@ -39,6 +38,17 @@ var log = (module, message, level = "info") => {
   if (brokerLogs.length > 100) brokerLogs.shift();
   console.log("[" + ts + "] [" + module + "] " + message);
 };
+
+// --- AGENT-LIKE COMPLEX TASKS ---
+var AGENT_TASKS = [
+  "Analyze this repository's Dockerfiles for root-privilege vulnerabilities and generate a hardened OCI-compliant manifest.",
+  "Trace the dependency graph of this TypeScript project and identify circular imports that will break the build in a ESM environment.",
+  "Review these three multi-page vendor contracts and flag any clauses that conflict with GDPR data-sovereignty requirements.",
+  "Scan 500 lines of recent production logs and correlate them with CI/CD deployment timestamps to isolate the commit causing the 502 errors.",
+  "Crawl this internal API documentation and generate a structured JSON specification (OpenAPI 3.0) for the authentication endpoints.",
+  "Perform a cross-service trace analysis to identify N+1 query bottlenecks in the logical GraphQL resolver layer.",
+  "Audit the Kubernetes resource requests vs actual usage for this fleet and suggest a VPA-aligned optimization strategy."
+];
 
 const FINAL_AGENT_SCRIPT = `
 const http = require('http');
@@ -104,7 +114,6 @@ app.post("/api/task-result", async (c) => {
     return c.json({ ok: true });
 });
 
-// --- STAGGERED CRON ENGINE (Restore previous logic) ---
 function setupCron(agentKey, interval) {
   setInterval(() => {
     const actorId = agentKey.includes("luna") ? "nano-luna-v9062" : agentKey.includes("mars") ? "nano-mars-v9062" : "nano-nova-v9062";
@@ -146,10 +155,26 @@ async function connectToWhatsApp() {
     if (m.type !== 'notify') return;
     const msg = m.messages[0];
     if (!msg.message) return;
-    const text = msg.message.conversation || msg.message.extendedTextMessage?.text || "";
+    const text = (msg.message.conversation || msg.message.extendedTextMessage?.text || "").toLowerCase();
     if (!text || text.includes("✅")) return;
+    const from = msg.key.remoteJid;
     log("whatsapp", "Received: " + text);
-    queueTask(agentsList[roundRobinIndex++ % 3], text, msg.key.remoteJid);
+
+    if (text.startsWith("/burst")) {
+      const count = parseInt(text.split(" ")[1]) || 5;
+      const safeCount = Math.min(count, 15);
+      log("orchestrator", `🚀 BURST: Queuing ${safeCount} Agentic Analysis tasks.`);
+      await sock.sendMessage(from, { text: `🚀 BURST MODE: Dispatching ${safeCount} reasoning-heavy agent tasks across the Substrate logical fleet.` });
+      
+      for (let i=0; i<safeCount; i++) {
+          const task = AGENT_TASKS[Math.floor(Math.random() * AGENT_TASKS.length)];
+          const target = agentsList[i % 3];
+          queueTask(target, "[BURST]: " + task, from);
+      }
+      return;
+    }
+
+    queueTask(agentsList[roundRobinIndex++ % 3], text, from);
   });
   globalSock = sock;
 }
@@ -157,7 +182,7 @@ async function connectToWhatsApp() {
 function queueTask(actorId, task, sender) {
   if (!taskQueues[actorId]) taskQueues[actorId] = [];
   taskQueues[actorId].push({ task, sender });
-  assignments.push({ id: Date.now(), agent: actorId, task, state: "queued", created_at: Date.now()/1000 });
+  assignments.push({ id: Date.now() + Math.random(), agent: actorId, task, state: "queued", created_at: Date.now()/1000 });
   if (assignments.length > 50) assignments.shift();
   processQueue(actorId);
 }
@@ -172,15 +197,15 @@ async function processQueue(actorId) {
       pendingTasks[actorId] = task;
       taskResults[actorId] = null;
       (0, import_node_child_process.exec)("/tmp/kubectl-ate --endpoint " + ATE_ENDPOINT + " resume actor " + actorId);
-      for (let i=0; i<60; i++) {
+      for (let i=0; i<90; i++) {
           if (taskResults[actorId]) break;
           await new Promise(r => setTimeout(r, 1000));
       }
       if (asg) { asg.state = "completed"; asg.completed_at = Date.now()/1000; }
-      taskAudits.push({ id: Date.now(), agent: actorId, timestamp: new Date().toISOString().slice(11,19), task, result: taskResults[actorId] || "Timeout", status: "success" });
+      taskAudits.push({ id: Date.now(), agent: actorId, timestamp: new Date().toISOString().slice(11,19), task, result: taskResults[actorId] || "Reasoning Handoff Timeout", status: "success" });
       if (taskAudits.length > 50) taskAudits.shift();
-      if (globalSock && sender && sender.includes("@")) {
-          await globalSock.sendMessage(sender, { text: "✅ " + actorId + ":\\n" + (taskResults[actorId] || "Timeout") });
+      if (globalSock && sender && sender.includes("@") && !task.includes("[CRON]")) {
+          await globalSock.sendMessage(sender, { text: "✅ " + actorId + ":\\n" + (taskResults[actorId] || "Handoff Timeout") });
       }
       (0, import_node_child_process.exec)("/tmp/kubectl-ate --endpoint " + ATE_ENDPOINT + " suspend actor " + actorId);
   } catch (e) {}
@@ -191,10 +216,8 @@ async function processQueue(actorId) {
 app.get("/status", (c) => c.json({ connectionStatus, pairingCode, qrCode, logs: brokerLogs, assignments: [...assignments].reverse(), audits: taskAudits, cron: { lastTrigger: lastTriggerTime, iterations: cronIterations } }));
 
 (0, import_node_server.serve)({ fetch: app.fetch, port: 8091, hostname: "0.0.0.0" }, () => {
-  log("sys", "NanoClaw Broker v65 (Staggered-Cron-Restore) Online");
+  log("sys", "NanoClaw Broker v66 (Agentic-Burst) Online");
   connectToWhatsApp().catch(e => log("error", "Init Fail: " + e.message));
-  
-  // Restore staggered pulses: 2m, 5m, 10m
   setupCron("agent-luna", 120000);
   setupCron("agent-mars", 300000);
   setupCron("agent-nova", 600000);
