@@ -60,7 +60,6 @@ func handleRequest(w http.ResponseWriter, r *http.Request) {
 	log.Printf("DEBUG: Request received. Path=%s Host=%s", r.URL.Path, r.Host)
 
 	// 1. Identify Actor (Robust extraction)
-	// New architecture uses Host: <actor-id>.actors.resources.substrate.k8s.io
 	actorID := r.Header.Get("X-AgentSet-Session")
 	if actorID == "" {
 		actorID = r.Header.Get("x-agentset-session")
@@ -70,7 +69,7 @@ func handleRequest(w http.ResponseWriter, r *http.Request) {
 		if host == "" {
 			host = r.Header.Get("Host")
 		}
-		// Extract prefix from <id>.actors.resources.substrate.k8s.io
+		// Extract the actor id (first label) from <id>.<atespace>.actors.resources.substrate.ate.dev
 		parts := strings.Split(host, ".")
 		if len(parts) > 1 {
 			actorID = parts[0]
@@ -131,7 +130,7 @@ func suspendSelf(id string) {
 	client := ateapipb.NewControlClient(conn)
 
 	log.Printf("Yielding compute. Requesting self-suspension for actor %s...", id)
-	_, err = client.SuspendActor(context.Background(), &ateapipb.SuspendActorRequest{ActorId: id})
+	_, err = client.SuspendActor(context.Background(), &ateapipb.SuspendActorRequest{ActorRef: &ateapipb.ActorRef{Name: id}})
 	if err != nil {
 		log.Printf("Failed to self-suspend: %v", err)
 	}

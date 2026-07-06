@@ -8,6 +8,7 @@ This guide explains how Agent Substrate achieves observability across these susp
 
 To make underlying infrastructure transitions transparent, Agent Substrate establishes a standardized metadata model to identify actors across worker pods:
 * `ate.dev/actor_id`: The unique identifier of the actor (e.g., `my-counter-1` or `test`).
+* `ate.dev/actor_atespace`: The atespace the actor lives in (e.g., `ate-demo-counter`).
 * `ate.dev/actor_template_name`: The name of the actor's ActorTemplate (e.g., `counter`).
 * `ate.dev/actor_template_namespace`: The Kubernetes namespace of the actor's ActorTemplate (e.g., `ate-demo-counter`).
 * `ate.dev/container_name`: The name of the container within the actor that produced the log line (e.g., `counter`), so a multi-container actor's logs can be demultiplexed by container.
@@ -75,14 +76,21 @@ To track the unified, continuous lifecycle of a single actor regardless of how m
 labels.actor_id="test"
 ```
 
-#### 2. Template-Centric View
-To monitor or debug all actor instances created from a specific template (e.g., analyzing the collective behavior or error rates of all counter actors):
+#### 2. Atespace-Centric View
+To monitor or debug all actor instances in a specific atespace (e.g., analyzing the collective behavior or error rates of all actors belonging to one tenant):
 
 ```text
-labels.actor_template="counter"
+labels.actor_atespace="ate-demo-counter"
 ```
 
-#### 3. Pod-Centric View
+#### 3. Template-Centric View
+To monitor or debug all actor instances created from a specific ActorTemplate (e.g., analyzing the collective behavior or error rates of all counter actors). One atespace can run actors from many templates, so this is a distinct dimension from the atespace view above:
+
+```text
+labels.actor_template_name="counter"
+```
+
+#### 4. Pod-Centric View
 To inspect the physical worker pod's aggregate stream and see all co-located actors multiplexed together (useful for investigating pod-level resource exhaustion or noisy neighbor issues):
 
 ```text
@@ -99,7 +107,7 @@ Agent Substrate emits foundational OpenTelemetry system and server metrics to mo
 |--------|------------|------|----------|
 | `rpc.server.call.duration` | ateapi & atelet (gRPC servers, via `otelgrpc`) | histogram | per-method gRPC latency, request rate, and errors (labels `rpc.method`, `rpc.response.status_code`) |
 | `atenet.router.route.duration` | atenet-router | histogram | Substrate E2E — Envoy receiving a request to Envoy forwarding it to the resolved worker, excluding actor compute and the response |
-| `atelet.snapshot.size` | atelet | histogram | uncompressed size in bytes of each gVisor snapshot image written during checkpoint (labels `kind`, `actor_template_name`) |
+| `atelet.snapshot.size` | atelet | histogram | uncompressed size in bytes of each gVisor snapshot image written during checkpoint (labels `kind`, `actor_template_namespace`, `actor_template_name`) |
 
 The table lists the OpenTelemetry instrument names. How a name appears in a query depends on the backend (Cloud Monitoring (GMP) / Kind collector).
 

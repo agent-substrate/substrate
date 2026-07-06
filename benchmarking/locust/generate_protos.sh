@@ -26,18 +26,10 @@ fi
 
 OUT_DIR="benchmarking/locust/common"
 
-# Create and activate virtual environment if it doesn't exist
 VENV_DIR="benchmarking/locust/venv"
 if [ ! -d "$VENV_DIR" ]; then
   echo "Creating virtual environment in $VENV_DIR..."
   python3 -m venv "$VENV_DIR"
-  source "$VENV_DIR/bin/activate"
-  echo "Installing dependencies..."
-  pip install --upgrade pip
-  pip install grpcio-tools
-else
-  echo "Activating virtual environment..."
-  source "$VENV_DIR/bin/activate"
 fi
 
 # generate_proto compiles a single .proto file into ${OUT_DIR}, prepends the
@@ -76,7 +68,18 @@ generate_proto() {
   fi
 }
 
-generate_proto "pkg/proto/ateapipb" "ateapi"
-generate_proto "internal/proto/glutton" "glutton"
+# Run inside a subshell so `activate` doesn't leak VIRTUAL_ENV/PATH back to
+# the caller; the subshell inherits errexit/nounset/pipefail. pip skips
+# already-installed packages, so the install is cheap on re-runs.
+(
+  echo "Activating virtual environment..."
+  source "$VENV_DIR/bin/activate"
+  echo "Installing dependencies from benchmarking/locust/requirements.txt..."
+  pip install --upgrade pip
+  pip install -r benchmarking/locust/requirements.txt
+
+  generate_proto "pkg/proto/ateapipb" "ateapi"
+  generate_proto "internal/proto/glutton" "glutton"
+)
 
 echo "Done!"

@@ -1,0 +1,32 @@
+.#  This is a code generator built using the iMatix GSL code generation
+.#  language. See https://github.com/imatix/gsl for details. This script 
+.#  is licensed under MIT/X11.
+.#
+.template 0
+for version
+    #  Expand any macros
+    for include
+        for options.macro where name = include.name
+            for . as child
+                copy child to version
+            endfor
+        endfor
+    endfor
+    #   Preprocess options
+    for option
+        if type = "uint64" | type = "int64" | type = "uint32" | type = "int"
+            option.ctype = "int"
+            option.ctype_const = "int"
+            option.gotype = "int"
+        elsif type = "string" | type = "key"
+            option.ctype = "char *"   #   Enforce C strings
+            option.ctype_const = "const char *"
+            option.gotype = "string"
+        else
+            echo "E: unknown type: $(type)"
+        endif
+    endfor
+endfor
+.endtemplate
+.include "sock_option.gsl"
+.include "sock_option_test.gsl"

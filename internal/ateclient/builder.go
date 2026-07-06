@@ -21,6 +21,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -33,6 +34,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 
+	authv1 "k8s.io/api/authentication/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/kubernetes"
@@ -209,6 +211,12 @@ func dialPortForward(ctx context.Context, kubeconfigPath, k8sContext string, tra
 	var opts []grpc.DialOption
 	opts = append(opts, grpc.WithTransportCredentials(transportCreds))
 	opts = append(opts, grpc.WithStatsHandler(otelgrpc.NewClientHandler()))
+	jwtOpts, err := jwtDialOptions(ctx, clientset)
+	if err != nil {
+		close(stopCh)
+		return nil, err
+	}
+	opts = append(opts, jwtOpts...)
 
 	if traceEnabled {
 		opts = append(opts, grpc.WithUnaryInterceptor(newTraceInterceptor()))
@@ -229,6 +237,74 @@ func dialPortForward(ctx context.Context, kubeconfigPath, k8sContext string, tra
 		},
 	}, nil
 }
+
+func jwtDialOptions(ctx context.Context, clientset *kubernetes.Clientset) ([]grpc.DialOption, error) {
+	jwtMode, err := isJWTMode(ctx, clientset)
+	if err != nil {
+		return nil, err
+	}
+	if !jwtMode {
+		return nil, nil
+	}
+
+	expirationSeconds := int64(3600)
+	tokenRequest := &authv1.TokenRequest{
+		Spec: authv1.TokenRequestSpec{
+			Audiences:         []string{"api.ate-system.svc"},
+			ExpirationSeconds: &expirationSeconds,
+		},
+	}
+	token, err := clientset.CoreV1().ServiceAccounts("ate-system").CreateToken(ctx, "ate-client", tokenRequest, metav1.CreateOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to request ateapi bearer token: %w", err)
+	}
+	if token.Status.Token == "" {
+		return nil, fmt.Errorf("failed to request ateapi bearer token: token response was empty")
+	}
+	return []grpc.DialOption{grpc.WithPerRPCCredentials(bearerTokenCreds(token.Status.Token))}, nil
+}
+
+func isJWTMode(ctx context.Context, clientset *kubernetes.Clientset) (bool, error) {
+	// TODO: Replace deployment introspection with an explicit client-readable
+	// config file once ateapi auth mode is part of install/runtime config.
+	deployment, err := clientset.AppsV1().Deployments("ate-system").Get(ctx, "ate-api-server-deployment", metav1.GetOptions{})
+	if err != nil {
+		return false, fmt.Errorf("failed to get ate-api-server deployment: %w", err)
+	}
+	for _, container := range deployment.Spec.Template.Spec.Containers {
+		if container.Name != "ate-api-server" {
+			continue
+		}
+		return isJWTAuthModeArg(container.Args), nil
+	}
+	return false, fmt.Errorf("failed to find ate-api-server container in deployment")
+}
+
+func isJWTAuthModeArg(args []string) bool {
+	for i, arg := range args {
+		if arg == "--auth-mode=jwt" {
+			return true
+		}
+		if strings.HasPrefix(arg, "--auth-mode=") {
+			return strings.TrimPrefix(arg, "--auth-mode=") == "jwt"
+		}
+		if arg == "--auth-mode" && i+1 < len(args) {
+			return args[i+1] == "jwt"
+		}
+	}
+	return false
+}
+
+type bearerTokenCreds string
+
+func (c bearerTokenCreds) GetRequestMetadata(_ context.Context, _ ...string) (map[string]string, error) {
+	if c == "" {
+		return nil, fmt.Errorf("bearer token is empty")
+	}
+	return map[string]string{"authorization": "Bearer " + string(c)}, nil
+}
+
+func (c bearerTokenCreds) RequireTransportSecurity() bool { return true }
 
 func initTracing(ctx context.Context, enabled bool) (*sdktrace.TracerProvider, error) {
 	res, err := resource.New(ctx,

@@ -24,6 +24,7 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
 func (s *Service) DeleteActor(ctx context.Context, req *ateapipb.DeleteActorRequest) (*ateapipb.DeleteActorResponse, error) {
@@ -31,16 +32,16 @@ func (s *Service) DeleteActor(ctx context.Context, req *ateapipb.DeleteActorRequ
 		return nil, err
 	}
 
-	if err := s.persistence.DeleteActor(ctx, req.GetActorId()); err != nil {
+	if err := s.persistence.DeleteActor(ctx, req.GetActorRef().GetAtespace(), req.GetActorRef().GetName()); err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, status.Errorf(codes.NotFound, "Actor %s not found", req.GetActorId())
+			return nil, status.Errorf(codes.NotFound, "Actor %s not found", req.GetActorRef().GetName())
 		}
 		if errors.Is(err, store.ErrFailedPrecondition) {
-			actor, getErr := s.persistence.GetActor(ctx, req.GetActorId())
+			actor, getErr := s.persistence.GetActor(ctx, req.GetActorRef().GetAtespace(), req.GetActorRef().GetName())
 			if getErr == nil {
-				return nil, status.Errorf(codes.FailedPrecondition, "Actor %s is not suspended (status: %v)", req.GetActorId(), actor.GetStatus())
+				return nil, status.Errorf(codes.FailedPrecondition, "Actor %s is not suspended (status: %v)", req.GetActorRef().GetName(), actor.GetStatus())
 			}
-			return nil, status.Errorf(codes.FailedPrecondition, "Actor %s is not suspended", req.GetActorId())
+			return nil, status.Errorf(codes.FailedPrecondition, "Actor %s is not suspended", req.GetActorRef().GetName())
 		}
 		if errors.Is(err, store.ErrPersistenceRetry) {
 			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
@@ -52,11 +53,17 @@ func (s *Service) DeleteActor(ctx context.Context, req *ateapipb.DeleteActorRequ
 }
 
 func validateDeleteActorRequest(req *ateapipb.DeleteActorRequest) error {
-	if req.GetActorId() == "" {
-		return status.Error(codes.InvalidArgument, "actor_id is required")
+	var fldPath *field.Path
+	var errs field.ErrorList
+
+	if val, fldPath := req.ActorRef, fldPath.Child("actor_ref"); val == nil {
+		errs = append(errs, field.Required(fldPath, ""))
+	} else {
+		errs = append(errs, resources.ValidateActorRef(val, fldPath)...)
 	}
-	if err := resources.ValidateActorID(req.GetActorId()); err != nil {
-		return status.Error(codes.InvalidArgument, err.Error())
+
+	if len(errs) > 0 {
+		return status.Error(codes.InvalidArgument, errs.ToAggregate().Error())
 	}
 	return nil
 }

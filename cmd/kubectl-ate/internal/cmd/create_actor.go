@@ -25,6 +25,7 @@ import (
 )
 
 var templateFlag string
+var atespaceFlag string
 
 var createActorCmd = &cobra.Command{
 	Use:   "actor [actor-id]",
@@ -47,7 +48,7 @@ var createActorCmd = &cobra.Command{
 		resp, err := apiClient.CreateActor(ctx, &ateapipb.CreateActorRequest{
 			ActorTemplateNamespace: parts[0],
 			ActorTemplateName:      parts[1],
-			ActorId:                actorID,
+			ActorRef:               &ateapipb.ActorRef{Atespace: atespaceFlag, Name: actorID},
 		})
 		if err != nil {
 			return fmt.Errorf("failed to create actor: %w", err)
@@ -60,5 +61,7 @@ var createActorCmd = &cobra.Command{
 func init() {
 	createActorCmd.Flags().StringVarP(&templateFlag, "template", "t", "", "Template to derive the actor from in <namespace>/<name> format (required)")
 	_ = createActorCmd.MarkFlagRequired("template")
+	createActorCmd.Flags().StringVarP(&atespaceFlag, "atespace", "a", "", "Atespace to create the actor in (required)")
+	_ = createActorCmd.MarkFlagRequired("atespace")
 	createCmd.AddCommand(createActorCmd)
 }

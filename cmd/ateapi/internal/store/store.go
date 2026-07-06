@@ -39,8 +39,8 @@ var (
 
 // Interface defines the contract for the persistence layer storing actor state.
 type Interface interface {
-	// Fetches an actor by id. Returns ErrNotFound if missing.
-	GetActor(ctx context.Context, id string) (*ateapipb.Actor, error)
+	// Fetches an actor by (atespace, id). Returns ErrNotFound if missing.
+	GetActor(ctx context.Context, atespace, id string) (*ateapipb.Actor, error)
 
 	// Stores a new actor in suspended state. Returns ErrAlreadyExists if key is taken.
 	CreateActor(ctx context.Context, actor *ateapipb.Actor) error
@@ -49,10 +49,27 @@ type Interface interface {
 	UpdateActor(ctx context.Context, actor *ateapipb.Actor, expectedVersion int64) error
 
 	// Removes an actor. Returns ErrNotFound if missing, or ErrFailedPrecondition if not suspended.
-	DeleteActor(ctx context.Context, id string) error
+	DeleteActor(ctx context.Context, atespace, id string) error
 
-	// Lists all known actors. Returns a page of actors and a next page token.
-	ListActors(ctx context.Context, pageSize int32, pageToken string) ([]*ateapipb.Actor, string, error)
+	// Lists actors in the given atespace (scoped scan), or across ALL atespaces if atespace is
+	// empty. Returns a page of actors and a next page token.
+	ListActors(ctx context.Context, atespace string, pageSize int32, pageToken string) ([]*ateapipb.Actor, string, error)
+
+	// Stores a new atespace. Returns ErrAlreadyExists if the name is taken.
+	CreateAtespace(ctx context.Context, atespace *ateapipb.Atespace) error
+
+	// Fetches an atespace by name. Returns ErrNotFound if missing.
+	GetAtespace(ctx context.Context, name string) (*ateapipb.Atespace, error)
+
+	// Lists all atespaces. Returns nil if none found.
+	ListAtespaces(ctx context.Context) ([]*ateapipb.Atespace, error)
+
+	// AtespaceExists reports whether the atespace object exists.
+	AtespaceExists(ctx context.Context, name string) (bool, error)
+
+	// Removes an empty atespace. Returns ErrNotFound if missing, or
+	// ErrFailedPrecondition if any actor:<name>:* key still exists.
+	DeleteAtespace(ctx context.Context, name string) error
 
 	// Fetches worker state by namespace, pool, and pod name. Returns ErrNotFound if missing.
 	GetWorker(ctx context.Context, namespace, pool, pod string) (*ateapipb.Worker, error)

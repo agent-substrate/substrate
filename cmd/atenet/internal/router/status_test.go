@@ -55,6 +55,8 @@ func TestStatuszEndpoint(t *testing.T) {
 		XdsPort:       18000,
 		ExtprocPort:   50051,
 		TemplatesFile: tmpFile.Name(),
+		MetricsAddr:   "127.0.0.1:0",
+		AteapiCAFile:  "unused-in-mtls-mode",
 	}
 
 	srv, err := NewRouterServer(cfg)

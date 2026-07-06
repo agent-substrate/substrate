@@ -53,7 +53,10 @@ linters:
         - (k8s.io/client-go/tools/cache.SharedIndexInformer).AddIndexers
 
     misspell:
-      mode: default
+      locale: US
+      mode: restricted # comments only
+      ignore-rules:
+        - cancelled
 
   exclusions:
     # Built-in presets that suppress the most common idiomatic false

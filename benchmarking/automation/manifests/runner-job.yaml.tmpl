@@ -1,0 +1,87 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Per-test Job manifest. Rendered by orchestrator.py at runtime; placeholders
+# (${JOB_NAME}, ${IMAGE}, ${TEST_FILE}, ${DURATION}, ${USERS}, ${TAG},
+# ${NAME}, ${DEST}) are substituted before kubectl apply.
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: benchmarking
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: benchmark-runner
+  namespace: benchmarking
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ${JOB_NAME}
+  namespace: benchmarking
+spec:
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        app: substrate-benchmark-runner
+        test-name: ${NAME}
+        tag: ${TAG}
+    spec:
+      restartPolicy: Never
+      serviceAccountName: benchmark-runner
+      containers:
+      - name: runner
+        image: ${IMAGE}
+        imagePullPolicy: IfNotPresent
+        command:
+        - "python3"
+        - "/app/runner.py"
+        args:
+        - "-f"
+        - "${TEST_FILE}"
+        - "-t"
+        - "${DURATION}"
+        - "-u"
+        - "${USERS}"
+        - "--tag"
+        - "${TAG}"
+        - "--name"
+        - "${NAME}"
+        - "--dest"
+        - "${DEST}"
+        env:
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: http://opentelemetry-collector.gke-managed-otel.svc.cluster.local:4317
+        volumeMounts:
+        - name: servicedns-ca
+          mountPath: /run/servicedns-ca
+          readOnly: true
+        resources:
+          requests:
+            cpu: "500m"
+            memory: "512Mi"
+      volumes:
+      - name: servicedns-ca
+        projected:
+          sources:
+          - clusterTrustBundle:
+              signerName: servicedns.podcert.ate.dev/identity
+              labelSelector:
+                matchLabels:
+                  podcert.ate.dev/canarying: live
+              path: ca.crt

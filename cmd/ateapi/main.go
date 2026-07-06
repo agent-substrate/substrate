@@ -21,14 +21,19 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/http"
+	"net/url"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/controlapi"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/credbundle"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/k8sjwt"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/sessionidentity"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/ateredis"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
+	"github.com/agent-substrate/substrate/internal/ateapiauth"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/agent-substrate/substrate/internal/version"
@@ -65,7 +70,9 @@ var (
 	sessionIDCAPoolFile = pflag.String("session-id-ca-pool", "", "The file that contains the CA pool for signing session JWTs")
 	workerpoolCACerts   = pflag.String("workerpool-ca-certs", "", "The file that contains the CA for verifying workerpool client certificates.")
 
-	showVersion = pflag.Bool("version", false, "Print version and exit.")
+	showVersion     = pflag.Bool("version", false, "Print version and exit.")
+	authMode        = pflag.String("auth-mode", "mtls", "Auth mode for incoming gRPC: mtls|jwt. 'mtls' (default) relies on transport-level mTLS for client identity. 'jwt' additionally requires a Kubernetes ServiceAccount Bearer token on every RPC. Substrate will drop support for JWT auth mode once the Pod Certificates feature is enabled by default in the minimum supported Kubernetes version.")
+	clientJWTCAFile = pflag.String("client-jwt-ca-cert", ateapiauth.DefaultServiceAccountCAFile, "CA cert file used to verify TLS when fetching the OIDC discovery document and JWKS for JWT authentication. Defaults to the in-cluster service account CA.")
 )
 
 func main() {
@@ -94,6 +101,11 @@ func main() {
 
 	loadFlagsFromEnv()
 	logFlagValues(ctx)
+
+	authModeParsed, err := ateapiauth.ParseMode(*authMode)
+	if err != nil {
+		serverboot.Fatal(ctx, "Invalid --auth-mode", err)
+	}
 
 	redisClient, err := connectRedis(ctx)
 	if err != nil {
@@ -141,7 +153,12 @@ func main() {
 	dialer := controlapi.NewAteletDialer(workerPodInformer.GetIndexer(), ateletPodInformer.GetIndexer())
 	sm := controlapi.NewService(redisPersistence, workerCache, actorTemplateLister, workerPoolLister, sandboxConfigLister, dialer, clientset)
 
-	sessionIdentitySrv := sessionidentity.New(*clientJWTIssuer, *clientJWTAudience, *sessionIDJWTPoolFile, *sessionIDCAPoolFile, *workerpoolCACerts)
+	jwtIssuerDiscoveryClient := buildK8sServiceAccountIssuerDiscoveryClient(ctx, *clientJWTCAFile, *clientJWTIssuer)
+	if authModeParsed == ateapiauth.ModeJWT && jwtIssuerDiscoveryClient == nil {
+		serverboot.Fatal(ctx, "JWT auth mode requires a Kubernetes ServiceAccount issuer discovery client", fmt.Errorf("client JWT issuer %q is not usable for discovery", *clientJWTIssuer))
+	}
+
+	sessionIdentitySrv := sessionidentity.New(*clientJWTIssuer, *clientJWTAudience, *sessionIDJWTPoolFile, *sessionIDCAPoolFile, *workerpoolCACerts, jwtIssuerDiscoveryClient)
 
 	lisCfg := &net.ListenConfig{}
 	lis, err := lisCfg.Listen(ctx, "tcp", *listenAddr)
@@ -149,10 +166,27 @@ func main() {
 		serverboot.Fatal(ctx, "Failed to start listener", err)
 	}
 
+	authCfg := ateapiauth.ServerConfig{
+		Mode: authModeParsed,
+		VerifyBearerToken: func(ctx context.Context, bearer string) error {
+			_, err := k8sjwt.Verify(ctx, jwtIssuerDiscoveryClient, bearer, *clientJWTIssuer, *clientJWTAudience, time.Now())
+			return err
+		},
+	}
+	if err := ateapiauth.ValidateServerConfig(authCfg); err != nil {
+		serverboot.Fatal(ctx, "Invalid auth config", err)
+	}
+
 	mux := grpc.NewServer(
 		grpc.Creds(serverCreds),
 		grpc.StatsHandler(otelgrpc.NewServerHandler()),
-		grpc.UnaryInterceptor(ateinterceptors.ServerUnaryInterceptor),
+		grpc.ChainUnaryInterceptor(
+			ateapiauth.UnaryServerInterceptor(authCfg),
+			ateinterceptors.ServerUnaryInterceptor,
+		),
+		grpc.ChainStreamInterceptor(
+			ateapiauth.StreamServerInterceptor(authCfg),
+		),
 	)
 	reflection.Register(mux)
 	ateapipb.RegisterControlServer(mux, sm)
@@ -204,6 +238,7 @@ func logFlagValues(ctx context.Context) {
 		slog.String("session-id-jwt-pool", *sessionIDJWTPoolFile),
 		slog.String("session-id-ca-pool", *sessionIDCAPoolFile),
 		slog.String("workerpool-ca-certs", *workerpoolCACerts),
+		slog.String("auth-mode", *authMode),
 	)
 }
 
@@ -332,4 +367,106 @@ func buildServerCreds(ctx context.Context) (credentials.TransportCredentials, er
 		ClientAuth:     tls.VerifyClientCertIfGiven,
 		ClientCAs:      clientCAs,
 	}), nil
+}
+
+// buildK8sServiceAccountIssuerDiscoveryClient returns an *http.Client for
+// Kubernetes ServiceAccount issuer discovery. External issuers use system roots
+// and no pod ServiceAccount token. The in-cluster Kubernetes issuer trusts
+// caFile for TLS verification and injects the pod's ServiceAccount Bearer token
+// only for URLs under issuer. Returns nil (use the k8sjwt default timeout
+// client) if issuer is empty, or if the in-cluster issuer is configured but
+// caFile is empty or unreadable.
+func buildK8sServiceAccountIssuerDiscoveryClient(ctx context.Context, caFile, issuer string) *http.Client {
+	if issuer == "" {
+		return nil
+	}
+	if !isInClusterKubernetesIssuer(issuer) {
+		return &http.Client{Timeout: 10 * time.Second}
+	}
+	if caFile == "" {
+		return nil
+	}
+	ca, err := os.ReadFile(caFile)
+	if err != nil {
+		slog.WarnContext(ctx, "Could not read JWT CA cert file; OIDC discovery will use system trust", slog.String("path", caFile), slog.Any("err", err))
+		return nil
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(ca) {
+		slog.WarnContext(ctx, "Could not parse JWT CA cert file; OIDC discovery will use system trust", slog.String("path", caFile))
+		return nil
+	}
+	return &http.Client{
+		Timeout: 10 * time.Second,
+		Transport: &k8sServiceAccountIssuerDiscoveryTransport{
+			base: &http.Transport{
+				TLSClientConfig: &tls.Config{RootCAs: pool},
+			},
+			tokenFile: ateapiauth.DefaultServiceAccountTokenFile,
+			issuer:    issuer,
+		},
+	}
+}
+
+// k8sServiceAccountIssuerDiscoveryTransport injects the pod's ServiceAccount
+// Bearer token only when fetching OIDC documents within the configured issuer.
+// Kubernetes' discovered jwks_uri can point at the API server's routable host
+// instead of the issuer host (for example, Kind advertises the node IP), so the
+// standard Kubernetes JWKS path is also allowed.
+// Reads the token file fresh on each request so token rotation is handled
+// automatically.
+type k8sServiceAccountIssuerDiscoveryTransport struct {
+	base      http.RoundTripper
+	tokenFile string
+	issuer    string
+}
+
+func (t *k8sServiceAccountIssuerDiscoveryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if issuerScopedURL(req.URL.String(), t.issuer) || isKubernetesJWKSURL(req.URL.String()) {
+		token, err := os.ReadFile(t.tokenFile)
+		if err == nil && len(token) > 0 {
+			req = req.Clone(req.Context())
+			req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(string(token)))
+		}
+	}
+	return t.base.RoundTrip(req)
+}
+
+func issuerScopedURL(rawURL, issuer string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	issuerURL, err := url.Parse(issuer)
+	if err != nil {
+		return false
+	}
+	if !strings.EqualFold(u.Scheme, issuerURL.Scheme) || !strings.EqualFold(u.Host, issuerURL.Host) {
+		return false
+	}
+	issuerPath := strings.TrimRight(issuerURL.EscapedPath(), "/")
+	if issuerPath == "" {
+		issuerPath = "/"
+	}
+	requestPath := u.EscapedPath()
+	if issuerPath == "/" {
+		return strings.HasPrefix(requestPath, "/")
+	}
+	return requestPath == issuerPath || strings.HasPrefix(requestPath, issuerPath+"/")
+}
+
+func isKubernetesJWKSURL(rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	return strings.EqualFold(u.Scheme, "https") && u.EscapedPath() == "/openid/v1/jwks"
+}
+
+func isInClusterKubernetesIssuer(issuer string) bool {
+	u, err := url.Parse(issuer)
+	if err != nil {
+		return false
+	}
+	return u.Scheme == "https" && (u.Host == "kubernetes.default.svc" || u.Host == "kubernetes.default.svc.cluster.local")
 }

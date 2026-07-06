@@ -48,6 +48,34 @@ KO_DOCKER_REPO="${KO_DOCKER_REPO:-}"
 KUBECTL_CONTEXT="${KUBECTL_CONTEXT:-}"
 BUCKET_NAME="${BUCKET_NAME:-ate-snapshots}"
 ATE_INSTALL_KIND="${ATE_INSTALL_KIND:-false}"
+ATE_API_AUTH_MODE="${ATE_API_AUTH_MODE:-mtls}"
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --auth-mode=*) ATE_API_AUTH_MODE="${1#*=}" ;;
+    --auth-mode)
+      if [[ $# -lt 2 ]]; then
+        echo "Error: --auth-mode requires mtls or jwt" >&2
+        exit 1
+      fi
+      shift
+      ATE_API_AUTH_MODE="$1"
+      ;;
+    *)
+      echo "Error: unknown argument $1" >&2
+      exit 1
+      ;;
+  esac
+  shift
+done
+
+case "${ATE_API_AUTH_MODE}" in
+  mtls|jwt) ;;
+  *)
+    echo "Error: --auth-mode must be mtls or jwt, got '${ATE_API_AUTH_MODE}'" >&2
+    exit 1
+    ;;
+esac
 
 # Target arch: match the images' platform (KO_DEFAULTPLATFORMS is set by
 # .ate-dev-env.sh on GKE and by the kind wrapper); fall back to the host arch.
@@ -103,10 +131,10 @@ fi
 log "Deploying the ate control plane (--deploy-ate-system)..."
 if [[ "${ATE_INSTALL_KIND}" == "true" ]]; then
   # install-ate-kind.sh sets NO_DEV_ENV/KO_DOCKER_REPO/ARCH/ATE_INSTALL_KIND itself.
-  KUBECTL_CONTEXT="${KUBECTL_CONTEXT}" hack/install-ate-kind.sh --deploy-ate-system
+  KUBECTL_CONTEXT="${KUBECTL_CONTEXT}" hack/install-ate-kind.sh --deploy-ate-system --auth-mode="${ATE_API_AUTH_MODE}"
 else
   # GKE path: pass KO_DOCKER_REPO/BUCKET_NAME/KUBECTL_CONTEXT through the env.
-  KUBECTL_CONTEXT="${KUBECTL_CONTEXT}" hack/install-ate.sh --deploy-ate-system
+  KUBECTL_CONTEXT="${KUBECTL_CONTEXT}" hack/install-ate.sh --deploy-ate-system --auth-mode="${ATE_API_AUTH_MODE}"
 fi
 
 # --- 4. apply the demo ------------------------------------------------------
@@ -137,15 +165,16 @@ cat <<EOF
        kubectl${KCTX_FLAG} wait --for=condition=Ready \\
          actortemplate/counter-microvm -n ate-demo-counter-microvm --timeout=600s
 
-  2. Create + resume an actor (kubectl-ate; install with: go install ./cmd/kubectl-ate):
-       kubectl ate${KCTX_FLAG} create actor my-counter-1 \\
+  2. Create an atespace and an actor (kubectl-ate; install with: go install ./cmd/kubectl-ate):
+       kubectl ate${KCTX_FLAG} create atespace demo
+       kubectl ate${KCTX_FLAG} create actor my-counter-1 -a demo \\
          --template ate-demo-counter-microvm/counter-microvm
 
   3. Port-forward the atenet-router and curl the in-RAM counter:
        kubectl${KCTX_FLAG} port-forward -n ate-system svc/atenet-router 8000:80 &
-       curl -X POST -H "Host: my-counter-1.actors.resources.substrate.ate.dev" \\
+       curl -X POST -H "Host: my-counter-1.demo.actors.resources.substrate.ate.dev" \\
          http://localhost:8000
 
-     Increment, suspend (kubectl ate suspend actor my-counter-1), resume on another
+     Increment, suspend (kubectl ate suspend actor my-counter-1 -a demo), resume on another
      worker, and confirm the count continues — the guest memory snapshot round-tripped.
 EOF

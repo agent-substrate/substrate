@@ -344,7 +344,7 @@ A `WorkerPool` selects a **sandbox class** (`spec.sandboxClass`), and each class
 
 Handles session-aware routing and automatic re-animation.
 
-  * **Uniform DNS Mesh**: Substrate provides a location-transparent actor discovery scheme via a global DNS suffix (`<id>.actors.resources.substrate.ate.dev`).
+  * **Uniform DNS Mesh**: Substrate provides a location-transparent actor discovery scheme via a global DNS suffix (`<id>.<atespace>.actors.resources.substrate.ate.dev`).
 
   * **Routing**: The `atenet` router (powered by Envoy and an External Processing server) intercepts traffic destined for the mesh. It extracts the actor ID from the `Host` header, queries the Control Plane to determine the actor's current location, and triggers a `ResumeActor` workflow if the session is currently suspended.
 
@@ -478,7 +478,7 @@ Agent Substrate is built on a **Defense-in-Depth** model:
 
   * **Request Authorization**: The system currently performs **Identity-Aware
     Routing** by utilizing a uniform DNS routing scheme
-    (`<actor id>.actors.resources.substrate.ate.dev`)
+    (`<actor id>.<atespace>.actors.resources.substrate.ate.dev`)
     at the gateway to extract and validate actor identifiers from incoming traffic. This
     ensures requests are only routed to recognized, registered actors.
     Pluggable, granular authorization policies are planned for future

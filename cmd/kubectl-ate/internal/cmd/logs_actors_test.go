@@ -187,8 +187,8 @@ func TestLogsActorRunner_Run_OneShotSuccess(t *testing.T) {
 
 	mockAPI := &mockAteAPIClient{
 		GetActorFunc: func(ctx context.Context, in *ateapipb.GetActorRequest, opts ...grpc.CallOption) (*ateapipb.GetActorResponse, error) {
-			if in.ActorId != actorID {
-				return nil, fmt.Errorf("unexpected actor ID: %s", in.ActorId)
+			if in.GetActorRef().GetName() != actorID {
+				return nil, fmt.Errorf("unexpected actor ID: %s", in.GetActorRef().GetName())
 			}
 			return &ateapipb.GetActorResponse{
 				Actor: &ateapipb.Actor{

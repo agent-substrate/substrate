@@ -21,14 +21,26 @@ option go_package = "github.com/agent-substrate/substrate/internal/proto/glutton
 // A glutton is a single small piece of a larger benchmarking suite. It is designed to be instantiated
 // multiple times, with each piece configured to do different units of work.
 service Glutton {
+    // Tells glutton to write to RAM, either overwriting previously-used
+    // RAM or allocating additional RAM per request instructions. Data written
+    // will be random bytes.
     rpc WriteRAM(WriteRAMRequest) returns (WriteRAMResponse) {}
 
+    // Tells glutton to write to disk using the specified mode. Data
+    // written will be random bytes.
     rpc WriteDisk(WriteDiskRequest) returns (WriteDiskResponse) {}
     
+    // Tells glutton to make sure it has the specified number of file
+    // descriptors open. It will open or close file descriptors to
+    // hit the desired count (note this count is in addition to the other
+    // FDs needed to run the process).
     rpc OpenFD(OpenFDRequest) returns (OpenFDResponse) {}
 
+    // Send a request to the glutton, expecting the same response back.
     rpc Ping(PingRequest) returns (PingResponse) {}
 
+    // Tells the glutton to send network traffic to a peer glutton.
+    // messages will be sent on regular intervals separated by delay_ms.
     rpc Gossip(GossipRequest) returns (GossipResponse) {}
 }
 

@@ -79,9 +79,10 @@ func createClusterInternal(ctx context.Context, cfg *Config, client *container.C
 			WorkloadIdentityConfig: &containerpb.WorkloadIdentityConfig{
 				WorkloadPool: fmt.Sprintf("%s.svc.id.goog", cfg.ProjectID),
 			},
-			Network:       cfg.Network,
-			Subnetwork:    cfg.Subnetwork,
-			NetworkConfig: networkConfig,
+			Network:                    cfg.Network,
+			Subnetwork:                 cfg.Subnetwork,
+			NetworkConfig:              networkConfig,
+			ManagedOpentelemetryConfig: &containerpb.ManagedOpenTelemetryConfig{Scope: containerpb.ManagedOpenTelemetryConfig_COLLECTION_AND_INSTRUMENTATION_COMPONENTS.Enum()},
 		},
 	}
 	op, err := client.CreateCluster(ctx, req)
@@ -202,6 +203,28 @@ func createClusterIdempotent(ctx context.Context, cfg *Config) error {
 		}
 	} else {
 		slog.Info("Cluster EnableK8SBetaApis match perfectly.", slog.String("cluster", cfg.ClusterName))
+	}
+
+	desiredOTelScope := containerpb.ManagedOpenTelemetryConfig_COLLECTION_AND_INSTRUMENTATION_COMPONENTS
+	if cluster.GetManagedOpentelemetryConfig().GetScope() != desiredOTelScope {
+		slog.Info("Mismatch in Managed OpenTelemetry config",
+			slog.String("current", cluster.GetManagedOpentelemetryConfig().GetScope().String()),
+			slog.String("expected", desiredOTelScope.String()))
+		slog.Info("Updating cluster ManagedOpentelemetryConfig...")
+		op, err := client.UpdateCluster(ctx, &containerpb.UpdateClusterRequest{
+			Name: clusterName,
+			Update: &containerpb.ClusterUpdate{
+				DesiredManagedOpentelemetryConfig: &containerpb.ManagedOpenTelemetryConfig{Scope: desiredOTelScope.Enum()},
+			},
+		})
+		if err != nil {
+			return fmt.Errorf("update cluster managed opentelemetry: %w", err)
+		}
+		if err := waitContainerOperation(ctx, client, op.Name, cfg); err != nil {
+			return err
+		}
+	} else {
+		slog.Info("Cluster ManagedOpentelemetryConfig match perfectly.", slog.String("cluster", cfg.ClusterName))
 	}
 
 	return nil

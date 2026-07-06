@@ -59,10 +59,20 @@ class ControlStub:
                 request_serializer=ateapi__pb2.CreateActorRequest.SerializeToString,
                 response_deserializer=ateapi__pb2.CreateActorResponse.FromString,
                 _registered_method=True)
+        self.UpdateActor = channel.unary_unary(
+                '/ateapi.Control/UpdateActor',
+                request_serializer=ateapi__pb2.UpdateActorRequest.SerializeToString,
+                response_deserializer=ateapi__pb2.UpdateActorResponse.FromString,
+                _registered_method=True)
         self.SuspendActor = channel.unary_unary(
                 '/ateapi.Control/SuspendActor',
                 request_serializer=ateapi__pb2.SuspendActorRequest.SerializeToString,
                 response_deserializer=ateapi__pb2.SuspendActorResponse.FromString,
+                _registered_method=True)
+        self.PauseActor = channel.unary_unary(
+                '/ateapi.Control/PauseActor',
+                request_serializer=ateapi__pb2.PauseActorRequest.SerializeToString,
+                response_deserializer=ateapi__pb2.PauseActorResponse.FromString,
                 _registered_method=True)
         self.ResumeActor = channel.unary_unary(
                 '/ateapi.Control/ResumeActor',
@@ -83,6 +93,26 @@ class ControlStub:
                 '/ateapi.Control/ListActors',
                 request_serializer=ateapi__pb2.ListActorsRequest.SerializeToString,
                 response_deserializer=ateapi__pb2.ListActorsResponse.FromString,
+                _registered_method=True)
+        self.CreateAtespace = channel.unary_unary(
+                '/ateapi.Control/CreateAtespace',
+                request_serializer=ateapi__pb2.CreateAtespaceRequest.SerializeToString,
+                response_deserializer=ateapi__pb2.CreateAtespaceResponse.FromString,
+                _registered_method=True)
+        self.GetAtespace = channel.unary_unary(
+                '/ateapi.Control/GetAtespace',
+                request_serializer=ateapi__pb2.GetAtespaceRequest.SerializeToString,
+                response_deserializer=ateapi__pb2.GetAtespaceResponse.FromString,
+                _registered_method=True)
+        self.ListAtespaces = channel.unary_unary(
+                '/ateapi.Control/ListAtespaces',
+                request_serializer=ateapi__pb2.ListAtespacesRequest.SerializeToString,
+                response_deserializer=ateapi__pb2.ListAtespacesResponse.FromString,
+                _registered_method=True)
+        self.DeleteAtespace = channel.unary_unary(
+                '/ateapi.Control/DeleteAtespace',
+                request_serializer=ateapi__pb2.DeleteAtespaceRequest.SerializeToString,
+                response_deserializer=ateapi__pb2.DeleteAtespaceResponse.FromString,
                 _registered_method=True)
         self.DebugClear = channel.unary_unary(
                 '/ateapi.Control/DebugClear',
@@ -109,8 +139,22 @@ class ControlServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def UpdateActor(self, request, context):
+        """Update mutable fields on an existing Actor.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def SuspendActor(self, request, context):
         """Suspend a given actor to a new snapshot.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def PauseActor(self, request, context):
+        """Pause a given actor and keep its snapshots on node VM.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -144,6 +188,34 @@ class ControlServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def CreateAtespace(self, request, context):
+        """Create a new Atespace. Substrate-native, stored in Redis.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def GetAtespace(self, request, context):
+        """Get an Atespace by name.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ListAtespaces(self, request, context):
+        """List all Atespaces.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def DeleteAtespace(self, request, context):
+        """Delete an empty Atespace. Rejects (FailedPrecondition) if any actors remain.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def DebugClear(self, request, context):
         """Debugging: drop all data from the ate database.
         """
@@ -164,10 +236,20 @@ def add_ControlServicer_to_server(servicer, server):
                     request_deserializer=ateapi__pb2.CreateActorRequest.FromString,
                     response_serializer=ateapi__pb2.CreateActorResponse.SerializeToString,
             ),
+            'UpdateActor': grpc.unary_unary_rpc_method_handler(
+                    servicer.UpdateActor,
+                    request_deserializer=ateapi__pb2.UpdateActorRequest.FromString,
+                    response_serializer=ateapi__pb2.UpdateActorResponse.SerializeToString,
+            ),
             'SuspendActor': grpc.unary_unary_rpc_method_handler(
                     servicer.SuspendActor,
                     request_deserializer=ateapi__pb2.SuspendActorRequest.FromString,
                     response_serializer=ateapi__pb2.SuspendActorResponse.SerializeToString,
+            ),
+            'PauseActor': grpc.unary_unary_rpc_method_handler(
+                    servicer.PauseActor,
+                    request_deserializer=ateapi__pb2.PauseActorRequest.FromString,
+                    response_serializer=ateapi__pb2.PauseActorResponse.SerializeToString,
             ),
             'ResumeActor': grpc.unary_unary_rpc_method_handler(
                     servicer.ResumeActor,
@@ -188,6 +270,26 @@ def add_ControlServicer_to_server(servicer, server):
                     servicer.ListActors,
                     request_deserializer=ateapi__pb2.ListActorsRequest.FromString,
                     response_serializer=ateapi__pb2.ListActorsResponse.SerializeToString,
+            ),
+            'CreateAtespace': grpc.unary_unary_rpc_method_handler(
+                    servicer.CreateAtespace,
+                    request_deserializer=ateapi__pb2.CreateAtespaceRequest.FromString,
+                    response_serializer=ateapi__pb2.CreateAtespaceResponse.SerializeToString,
+            ),
+            'GetAtespace': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetAtespace,
+                    request_deserializer=ateapi__pb2.GetAtespaceRequest.FromString,
+                    response_serializer=ateapi__pb2.GetAtespaceResponse.SerializeToString,
+            ),
+            'ListAtespaces': grpc.unary_unary_rpc_method_handler(
+                    servicer.ListAtespaces,
+                    request_deserializer=ateapi__pb2.ListAtespacesRequest.FromString,
+                    response_serializer=ateapi__pb2.ListAtespacesResponse.SerializeToString,
+            ),
+            'DeleteAtespace': grpc.unary_unary_rpc_method_handler(
+                    servicer.DeleteAtespace,
+                    request_deserializer=ateapi__pb2.DeleteAtespaceRequest.FromString,
+                    response_serializer=ateapi__pb2.DeleteAtespaceResponse.SerializeToString,
             ),
             'DebugClear': grpc.unary_unary_rpc_method_handler(
                     servicer.DebugClear,
@@ -261,6 +363,33 @@ class Control:
             _registered_method=True)
 
     @staticmethod
+    def UpdateActor(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/ateapi.Control/UpdateActor',
+            ateapi__pb2.UpdateActorRequest.SerializeToString,
+            ateapi__pb2.UpdateActorResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
     def SuspendActor(request,
             target,
             options=(),
@@ -277,6 +406,33 @@ class Control:
             '/ateapi.Control/SuspendActor',
             ateapi__pb2.SuspendActorRequest.SerializeToString,
             ateapi__pb2.SuspendActorResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def PauseActor(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/ateapi.Control/PauseActor',
+            ateapi__pb2.PauseActorRequest.SerializeToString,
+            ateapi__pb2.PauseActorResponse.FromString,
             options,
             channel_credentials,
             insecure,
@@ -385,6 +541,114 @@ class Control:
             '/ateapi.Control/ListActors',
             ateapi__pb2.ListActorsRequest.SerializeToString,
             ateapi__pb2.ListActorsResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def CreateAtespace(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/ateapi.Control/CreateAtespace',
+            ateapi__pb2.CreateAtespaceRequest.SerializeToString,
+            ateapi__pb2.CreateAtespaceResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetAtespace(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/ateapi.Control/GetAtespace',
+            ateapi__pb2.GetAtespaceRequest.SerializeToString,
+            ateapi__pb2.GetAtespaceResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ListAtespaces(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/ateapi.Control/ListAtespaces',
+            ateapi__pb2.ListAtespacesRequest.SerializeToString,
+            ateapi__pb2.ListAtespacesResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def DeleteAtespace(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/ateapi.Control/DeleteAtespace',
+            ateapi__pb2.DeleteAtespaceRequest.SerializeToString,
+            ateapi__pb2.DeleteAtespaceResponse.FromString,
             options,
             channel_credentials,
             insecure,

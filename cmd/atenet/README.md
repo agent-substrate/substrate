@@ -3,7 +3,6 @@
 atenet is a combined daemon for all networking functionality.
 
 * DNS server for ATE Actor resolution: `atenet dns`
-* Lightweight mTLS proxy sidecar for demonstrating using ATE identities. `atenet sidecar`
 * Envoy control plane for programming ATE resolution. `atenet router`
 
 This is built as a single binary for convenience in the prototyping.

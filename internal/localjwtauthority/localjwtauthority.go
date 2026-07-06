@@ -22,6 +22,7 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 )
 
@@ -43,6 +44,7 @@ type serializedAuthority struct {
 	ID              string
 	Algorithm       string
 	SigningKeyPKCS8 []byte
+	SigningKeyPEM   string
 }
 
 // Marshal serializes a Pool to JSON.
@@ -86,7 +88,7 @@ func Unmarshal(wireBytes []byte) (*Pool, error) {
 			Algorithm: wireAuthority.Algorithm,
 		}
 
-		signingKey, err := x509.ParsePKCS8PrivateKey(wireAuthority.SigningKeyPKCS8)
+		signingKey, err := parsePrivateKey(wireAuthority.SigningKeyPKCS8, wireAuthority.SigningKeyPEM)
 		if err != nil {
 			return nil, fmt.Errorf("while parsing signing key: %w", err)
 		}
@@ -96,6 +98,28 @@ func Unmarshal(wireBytes []byte) (*Pool, error) {
 	}
 
 	return pool, nil
+}
+
+func parsePrivateKey(pkcs8 []byte, pemData string) (crypto.PrivateKey, error) {
+	if len(pkcs8) != 0 {
+		return x509.ParsePKCS8PrivateKey(pkcs8)
+	}
+
+	block, _ := pem.Decode([]byte(pemData))
+	if block == nil {
+		return nil, fmt.Errorf("missing PEM block")
+	}
+
+	if key, err := x509.ParsePKCS8PrivateKey(block.Bytes); err == nil {
+		return key, nil
+	}
+	if key, err := x509.ParseECPrivateKey(block.Bytes); err == nil {
+		return key, nil
+	}
+	if key, err := x509.ParsePKCS1PrivateKey(block.Bytes); err == nil {
+		return key, nil
+	}
+	return nil, fmt.Errorf("unsupported private key PEM type %q", block.Type)
 }
 
 // GenerateECDSAP256Authority generates an ECDSA P256 JWT signing key.

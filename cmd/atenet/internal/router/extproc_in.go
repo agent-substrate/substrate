@@ -15,7 +15,6 @@
 package router
 
 import (
-	"fmt"
 	"net"
 	"strings"
 
@@ -57,21 +56,17 @@ func newRequestMetadata(headers []*corev3.HeaderValue) *requestMetadata {
 	}
 }
 
-func parseActorID(host string) (string, error) {
-	var err error
+// parseActorRef extracts the (atespace, actor id) an incoming request is
+// addressed to from its Host/:authority, which has the form
+// "<actor_id>.<atespace>.actors.resources.substrate.ate.dev" (optionally with a
+// port). The atespace is required because an actor id is only unique within its
+// atespace.
+func parseActorRef(host string) (atespace, actorID string, err error) {
 	if strings.Contains(host, ":") {
 		host, _, err = net.SplitHostPort(host)
+		if err != nil {
+			return "", "", err
+		}
 	}
-	if err != nil {
-		return "", err
-	}
-	actorID, found := strings.CutSuffix(strings.TrimSuffix(host, "."), "."+resources.ActorDNSSuffix)
-	if !found {
-		return "", fmt.Errorf("invalid actor_id: must end with %s, got %q", resources.ActorDNSSuffix, host)
-	}
-	if err := resources.ValidateActorID(actorID); err != nil {
-		return "", err
-	}
-
-	return actorID, nil
+	return resources.ParseActorDNSName(host)
 }

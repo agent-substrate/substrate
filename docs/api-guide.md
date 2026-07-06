@@ -101,9 +101,9 @@ Because a snapshot is not restorable across sandbox runtimes, `sandboxClass` is 
 Container environment variables support literal `value` entries and `valueFrom.secretKeyRef`. Secret references are resolved by `ate-api-server` from the `ActorTemplate` namespace when a workload spec is materialized. For the golden actor, the resolved values are captured in the golden snapshot and future actors inherit those values until the golden snapshot is recreated. For an actor that bypasses the golden snapshot and boots from the current template spec, the resolved values are sent to atelet but are not serialized into the public Actor API. Other Kubernetes `valueFrom` sources are not supported yet. Secret changes do not automatically restart actors or invalidate snapshots; rotating a Secret requires an explicit actor or template lifecycle action.
 
 ### Workload Connectivity (Uniform DNS)
-Substrate has standardized on a **Uniform DNS Mesh**. You no longer need to define `SessionDiscovery` rules. Every actor created from a template is automatically reachable through the **Substrate Router** via its unique ID:
+Substrate uses a **Uniform DNS Mesh**: every actor created from a template is automatically reachable through the **Substrate Router** via its atespace and ID:
 
-**Format:** `<actor-id>.actors.resources.substrate.ate.dev`
+**Format:** `<actor-id>.<atespace>.actors.resources.substrate.ate.dev`
 
 ### Actor Identity
 Substrate bind-mounts a read-only, per-actor identity directory at **`/run/ate`** into each of the actor's containers. An actor can learn its own ID without parsing the `Host` header by reading the file **`/run/ate/actor-id`** inside it, which contains the raw actor ID with no trailing newline. Further identity and configuration data may appear in this directory over time.

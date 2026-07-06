@@ -19,9 +19,11 @@ import (
 	"errors"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
 func (s *Service) PauseActor(ctx context.Context, req *ateapipb.PauseActorRequest) (*ateapipb.PauseActorResponse, error) {
@@ -29,13 +31,13 @@ func (s *Service) PauseActor(ctx context.Context, req *ateapipb.PauseActorReques
 		return nil, err
 	}
 
-	actor, err := s.actorWorkflow.PauseActor(ctx, req.GetActorId())
+	actor, err := s.actorWorkflow.PauseActor(ctx, req.GetActorRef().GetAtespace(), req.GetActorRef().GetName())
 	if err != nil {
 		if errors.Is(err, store.ErrPersistenceRetry) {
 			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
 		}
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, status.Errorf(codes.NotFound, "Actor %s not found", req.GetActorId())
+			return nil, status.Errorf(codes.NotFound, "Actor %s not found", req.GetActorRef().GetName())
 		}
 		return nil, err
 	}
@@ -44,8 +46,17 @@ func (s *Service) PauseActor(ctx context.Context, req *ateapipb.PauseActorReques
 }
 
 func validatePauseActorRequest(req *ateapipb.PauseActorRequest) error {
-	if req.GetActorId() == "" {
-		return status.Error(codes.InvalidArgument, "id is required")
+	var fldPath *field.Path
+	var errs field.ErrorList
+
+	if val, fldPath := req.ActorRef, fldPath.Child("actor_ref"); val == nil {
+		errs = append(errs, field.Required(fldPath, ""))
+	} else {
+		errs = append(errs, resources.ValidateActorRef(val, fldPath)...)
+	}
+
+	if len(errs) > 0 {
+		return status.Error(codes.InvalidArgument, errs.ToAggregate().Error())
 	}
 	return nil
 }
