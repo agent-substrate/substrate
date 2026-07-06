@@ -25,9 +25,9 @@ export NETWORK=default
 export SUBNETWORK=default
 
 export CLUSTER_NAME=substrate-poc
-export CLUSTER_VERSION=1.35.0-gke.2398000
+export CLUSTER_VERSION=1.35.5-gke.1163012
 export NODE_POOL_NAME=gvisor-pool
-export NODE_POOL_VERSION=1.35.0-gke.2398000
+export NODE_POOL_VERSION=1.35.5-gke.1163012
 export GVISOR_NODE_MACHINE_TYPE=c3-standard-4
 
 # Set this if you are using an existing cluster with a different context name.

@@ -52,36 +52,45 @@ mapfile -t PROJECTS < <(
 # vs. PEP-639 expression).
 DISALLOWED="AGPL;GPLv2;GPLv3;GPL-2.0;GPL-3.0;GNU General Public License;GNU Affero General Public License;Server Side Public License;SSPL;Commons Clause"
 
-ensure_venv() {
-  local dir="$1"
-  local venv="${dir}/venv"
-  if [[ ! -d "${venv}" ]]; then
-    echo "Creating venv at ${venv}..."
-    python3 -m venv "${venv}" || return 1
-    "${venv}/bin/pip" install --quiet --upgrade pip || return 1
-    "${venv}/bin/pip" install --quiet -r "${dir}/requirements.txt" || {
-      echo "ERROR: failed to install ${dir}/requirements.txt into ${venv}" >&2
-      return 1
-    }
-  fi
-  if ! "${venv}/bin/pip" show pip-licenses >/dev/null 2>&1; then
-    "${venv}/bin/pip" install --quiet pip-licenses || {
-      echo "ERROR: failed to install pip-licenses into ${venv}" >&2
-      return 1
-    }
-  fi
-}
-
 check_project() {
   local dir="$1"
   local venv="${dir}/venv"
-  ensure_venv "${dir}" || return 1
   echo "==> ${dir}"
-  # --ignore-packages skips the tools themselves so the venv doesn't fail
-  # itself; pip / setuptools / pip-licenses are infrastructure.
-  "${venv}/bin/pip-licenses" \
-    --fail-on="${DISALLOWED}" \
-    --ignore-packages pip setuptools pip-licenses prettytable wcwidth tomli
+  # Run inside a subshell so `activate` doesn't leak VIRTUAL_ENV/PATH back
+  # to the caller; the subshell inherits errexit/nounset/pipefail.
+  (
+    if [[ ! -d "${venv}" ]]; then
+      echo "  Creating venv at ${venv}..."
+      python3 -m venv "${venv}" || {
+        echo "ERROR: failed to create venv at ${venv}" >&2
+        exit 1
+      }
+      echo "  Activating ${venv}..."
+      source "${venv}/bin/activate"
+      echo "  Upgrading pip in ${venv}..."
+      pip install --quiet --upgrade pip || {
+        echo "ERROR: failed to upgrade pip in ${venv}" >&2
+        exit 1
+      }
+      echo "  Installing ${dir}/requirements.txt into ${venv}..."
+      pip install --quiet -r "${dir}/requirements.txt" || {
+        echo "ERROR: failed to install ${dir}/requirements.txt into ${venv}" >&2
+        exit 1
+      }
+    else
+      echo "  Activating ${venv}..."
+      source "${venv}/bin/activate"
+    fi
+    if ! command -v pip-licenses >/dev/null 2>&1; then
+      echo "  Installing pip-licenses into ${venv}..."
+      pip install --quiet pip-licenses || {
+        echo "ERROR: failed to install pip-licenses into ${venv}" >&2
+        exit 1
+      }
+    fi
+    echo "  Checking licenses in ${venv}..."
+    pip-licenses --fail-on="${DISALLOWED}"
+  )
 }
 
 fail=0

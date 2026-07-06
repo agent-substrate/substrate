@@ -22,6 +22,7 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"time"
 )
@@ -43,7 +44,9 @@ type serializedPool struct {
 type serializedCA struct {
 	ID                          string
 	SigningKeyPKCS8             []byte
+	SigningKeyPEM               string
 	RootCertificateDER          []byte
+	RootCertificatePEM          string
 	IntermediateCertificatesDER [][]byte
 }
 
@@ -92,12 +95,12 @@ func Unmarshal(wireBytes []byte) (*Pool, error) {
 			ID: wireCA.ID,
 		}
 
-		ca.SigningKey, err = x509.ParsePKCS8PrivateKey(wireCA.SigningKeyPKCS8)
+		ca.SigningKey, err = parsePrivateKey(wireCA.SigningKeyPKCS8, wireCA.SigningKeyPEM)
 		if err != nil {
 			return nil, fmt.Errorf("while parsing signing key: %w", err)
 		}
 
-		ca.RootCertificate, err = x509.ParseCertificate(wireCA.RootCertificateDER)
+		ca.RootCertificate, err = parseCertificate(wireCA.RootCertificateDER, wireCA.RootCertificatePEM)
 		if err != nil {
 			return nil, fmt.Errorf("while parsing root certificate: %w", err)
 		}
@@ -114,6 +117,43 @@ func Unmarshal(wireBytes []byte) (*Pool, error) {
 	}
 
 	return pool, nil
+}
+
+func parsePrivateKey(pkcs8 []byte, pemData string) (crypto.PrivateKey, error) {
+	if len(pkcs8) != 0 {
+		return x509.ParsePKCS8PrivateKey(pkcs8)
+	}
+
+	block, _ := pem.Decode([]byte(pemData))
+	if block == nil {
+		return nil, fmt.Errorf("missing PEM block")
+	}
+
+	if key, err := x509.ParsePKCS8PrivateKey(block.Bytes); err == nil {
+		return key, nil
+	}
+	if key, err := x509.ParseECPrivateKey(block.Bytes); err == nil {
+		return key, nil
+	}
+	if key, err := x509.ParsePKCS1PrivateKey(block.Bytes); err == nil {
+		return key, nil
+	}
+	return nil, fmt.Errorf("unsupported private key PEM type %q", block.Type)
+}
+
+func parseCertificate(der []byte, pemData string) (*x509.Certificate, error) {
+	if len(der) != 0 {
+		return x509.ParseCertificate(der)
+	}
+
+	block, _ := pem.Decode([]byte(pemData))
+	if block == nil {
+		return nil, fmt.Errorf("missing PEM block")
+	}
+	if block.Type != "CERTIFICATE" {
+		return nil, fmt.Errorf("unsupported certificate PEM type %q", block.Type)
+	}
+	return x509.ParseCertificate(block.Bytes)
 }
 
 func GenerateED25519CA(id string) (*CA, error) {

@@ -20,7 +20,10 @@ import (
 	"log/slog"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/tools/cache"
 )
@@ -114,14 +117,23 @@ func (s *WorkerPoolSyncer) syncWorkerToStore(ctx context.Context, pod *corev1.Po
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			slog.InfoContext(ctx, "Syncer: creating worker in store", slog.String("worker", pod.Namespace+"/"+pod.Name))
-			err = s.persistence.CreateWorker(ctx, &ateapipb.Worker{
+			worker := &ateapipb.Worker{
 				WorkerNamespace: pod.Namespace,
 				WorkerPool:      pod.Labels[workerPodLabel],
 				WorkerPod:       pod.Name,
 				Ip:              pod.Status.PodIP,
 				WorkerPodUid:    string(pod.UID),
 				NodeName:        pod.Spec.NodeName,
-			})
+			}
+			// TODO(thockin): for now this is the only place Workers are
+			// created.  If/when this becomes a regular API, validation should
+			// move there.
+			if errs := resources.ValidateWorker(worker, nil); len(errs) > 0 {
+				err := status.Error(codes.InvalidArgument, errs.ToAggregate().Error())
+				slog.ErrorContext(ctx, "Invalid worker", slog.Any("err", err))
+				return
+			}
+			err = s.persistence.CreateWorker(ctx, worker)
 			if err != nil && !errors.Is(err, store.ErrAlreadyExists) {
 				slog.ErrorContext(ctx, "Failed to create worker in store", slog.Any("err", err))
 			}
@@ -167,10 +179,10 @@ func (s *WorkerPoolSyncer) releaseActorOnDeadWorker(ctx context.Context, namespa
 		}
 		return err
 	}
-	if worker.GetActorId() == "" {
+	if worker.Assignment == nil {
 		return nil
 	}
-	actor, err := s.persistence.GetActor(ctx, worker.GetActorAtespace(), worker.GetActorId())
+	actor, err := s.persistence.GetActor(ctx, worker.Assignment.Actor.Atespace, worker.Assignment.Actor.Name)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return nil

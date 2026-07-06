@@ -73,15 +73,14 @@ func TestSyncer_Lifecycle(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      podName,
 			Namespace: ns,
+			UID:       "08675309-4a65-6e6e-7973-6e756d626572",
 			Labels: map[string]string{
 				workerPodLabel: poolName,
 			},
 		},
 		Spec: corev1.PodSpec{
-			NodeName: "node1",
-			Containers: []corev1.Container{
-				{Name: "main", Image: "nginx"},
-			},
+			NodeName:   "node1",
+			Containers: []corev1.Container{{Name: "main", Image: "nginx"}},
 		},
 	}
 
@@ -164,12 +163,23 @@ func TestSyncer_DeleteBoundWorker_ClearsActor(t *testing.T) {
 	defer cleanup()
 
 	ns, pool, pod, ip := "ns-orphan", "pool1", "worker-orphan", "10.0.0.1"
-	if _, err := fakeK8s.CoreV1().Pods(ns).Create(ctx, &corev1.Pod{
-		ObjectMeta: metav1.ObjectMeta{Name: pod, Namespace: ns,
-			Labels: map[string]string{workerPodLabel: pool}},
-		Status: corev1.PodStatus{Phase: corev1.PodRunning, PodIP: ip,
-			PodIPs: []corev1.PodIP{{IP: ip}}},
-	}, metav1.CreateOptions{}); err != nil {
+	if _, err := fakeK8s.CoreV1().Pods(ns).Create(ctx,
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      pod,
+				Namespace: ns,
+				UID:       "08675309-4a65-6e6e-7973-6e756d626572",
+				Labels:    map[string]string{workerPodLabel: pool},
+			},
+			Spec: corev1.PodSpec{
+				NodeName:   "node1",
+				Containers: []corev1.Container{{Name: "main", Image: "nginx"}},
+			},
+			Status: corev1.PodStatus{
+				Phase: corev1.PodRunning, PodIP: ip,
+				PodIPs: []corev1.PodIP{{IP: ip}},
+			},
+		}, metav1.CreateOptions{}); err != nil {
 		t.Fatalf("create pod: %v", err)
 	}
 	if err := wait.PollUntilContextTimeout(ctx, 50*time.Millisecond, 2*time.Second, true, func(c context.Context) (bool, error) {
@@ -196,7 +206,16 @@ func TestSyncer_DeleteBoundWorker_ClearsActor(t *testing.T) {
 		t.Fatalf("create actor: %v", err)
 	}
 	w, _ := persistence.GetWorker(ctx, ns, pool, pod)
-	w.ActorId, w.ActorNamespace, w.ActorTemplate, w.ActorAtespace = actorID, ns, "tmpl", "team-orphan"
+	w.Assignment = &ateapipb.Assignment{
+		ActorTemplate: &ateapipb.KubeNamespacedObjectRef{
+			Namespace: ns,
+			Name:      "tmpl",
+		},
+		Actor: &ateapipb.ActorRef{
+			Name:     actorID,
+			Atespace: "team-orphan",
+		},
+	}
 	if err := persistence.UpdateWorker(ctx, w, w.Version); err != nil {
 		t.Fatalf("update worker: %v", err)
 	}

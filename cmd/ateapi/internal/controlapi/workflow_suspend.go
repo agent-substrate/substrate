@@ -137,9 +137,10 @@ func (s *CallAteletSuspendStep) Execute(ctx context.Context, input *SuspendInput
 	// into the snapshot manifest.
 	req := &ateletpb.CheckpointRequest{
 		TargetAteomUid:         state.Actor.GetAteomPodUid(),
+		Atespace:               state.Actor.GetAtespace(),
+		ActorId:                state.Actor.GetActorId(),
 		ActorTemplateNamespace: state.Actor.GetActorTemplateNamespace(),
 		ActorTemplateName:      state.Actor.GetActorTemplateName(),
-		ActorId:                state.Actor.GetActorId(),
 		Spec:                   workloadSpec,
 		Type:                   ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
 		Config: &ateletpb.CheckpointRequest_ExternalConfig{
@@ -186,15 +187,13 @@ func (s *FinalizeSuspendedStep) Execute(ctx context.Context, input *SuspendInput
 			slog.Warn("Worker already gone during finalize suspend, skipping release", "worker", workerPod)
 		} else {
 			// Only free it if it still belongs to us
-			if worker.GetActorId() == input.ActorID {
-				worker.ActorNamespace = ""
-				worker.ActorTemplate = ""
-				worker.ActorId = ""
-				worker.ActorAtespace = ""
-
-				err = s.store.UpdateWorker(ctx, worker, worker.Version)
-				if err != nil {
-					return err
+			if wass := worker.Assignment; wass != nil {
+				if wass.Actor.Name == input.ActorID {
+					worker.Assignment = nil
+					err = s.store.UpdateWorker(ctx, worker, worker.Version)
+					if err != nil {
+						return err
+					}
 				}
 			}
 		}

@@ -621,6 +621,23 @@ func waitForActorStatus(ctx context.Context, t *testing.T, clients *e2e.Clients,
 
 func callActor(t *testing.T, atespace, actorID string) (string, error) {
 	t.Helper()
+
+	deadline := time.Now().Add(30 * time.Second)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		resp, err := callActorOnce(t, atespace, actorID)
+		if err == nil {
+			return resp, nil
+		}
+		lastErr = err
+		time.Sleep(1 * time.Second)
+	}
+
+	return "", fmt.Errorf("timed out waiting for actor response: %w", lastErr)
+}
+
+func callActorOnce(t *testing.T, atespace, actorID string) (string, error) {
+	t.Helper()
 	clients := e2e.GetClients()
 
 	svc, err := clients.K8s.CoreV1().Services("ate-system").Get(context.Background(), "atenet-router", metav1.GetOptions{})

@@ -110,7 +110,10 @@ type KubernetesClaims struct {
 	WarnAfter time.Time
 }
 
-var permittedSkew = 5 * time.Minute
+var (
+	permittedSkew     = 5 * time.Minute
+	defaultHTTPClient = &http.Client{Timeout: 10 * time.Second}
+)
 
 // Verify verifies and extracts claims from a Kubernetes JWT.
 //
@@ -119,7 +122,10 @@ var permittedSkew = 5 * time.Minute
 // the object binding claims. If needed for your use case, you will need check the object bindings
 // by connecting to the cluster and seeing if the object(s) the bindings name still exist within the
 // cluster.
-func Verify(ctx context.Context, jwt string, expectedIssuer, expectedAudience string, now time.Time) (*KubernetesClaims, error) {
+//
+// httpClient is used for OIDC discovery and JWKS fetches; nil uses a default
+// client with a whole-request timeout.
+func Verify(ctx context.Context, httpClient *http.Client, jwt string, expectedIssuer, expectedAudience string, now time.Time) (*KubernetesClaims, error) {
 	segments := strings.Split(jwt, ".")
 	if len(segments) != 3 {
 		return nil, fmt.Errorf("malformed JWT")
@@ -169,7 +175,7 @@ func Verify(ctx context.Context, jwt string, expectedIssuer, expectedAudience st
 	}
 
 	// TODO: Cache keys, and only fetch new keys if the JWT's key ID is not in the cache.
-	keys, err := discoverKeysForIssuer(ctx, rawClaims.Issuer)
+	keys, err := discoverKeysForIssuer(ctx, httpClient, rawClaims.Issuer)
 	if err != nil {
 		return nil, fmt.Errorf("while discovering keys from issuer: %w", err)
 	}
@@ -358,7 +364,7 @@ type jwkT struct {
 	RSAE string `json:"e"`
 }
 
-func discoverKeysForIssuer(ctx context.Context, issuer string) ([]*KeyAndID, error) {
+func discoverKeysForIssuer(ctx context.Context, httpClient *http.Client, issuer string) ([]*KeyAndID, error) {
 	var discoveryDocURL string
 	if strings.HasSuffix(issuer, "/") {
 		discoveryDocURL = issuer + ".well-known/openid-configuration"
@@ -366,14 +372,14 @@ func discoverKeysForIssuer(ctx context.Context, issuer string) ([]*KeyAndID, err
 		discoveryDocURL = issuer + "/.well-known/openid-configuration"
 	}
 
-	oidcConfig, err := fetchJSON[oidcConfigT](discoveryDocURL)
+	oidcConfig, err := fetchJSON[oidcConfigT](httpClient, discoveryDocURL)
 	if err != nil {
 		return nil, fmt.Errorf("while fetching OIDC Discovery document: %w", err)
 	}
 
 	slog.InfoContext(ctx, "Fetched discovery doc", slog.Any("doc", oidcConfig))
 
-	jwkSet, err := fetchJSON[jwkSetT](oidcConfig.JWKSURI)
+	jwkSet, err := fetchJSON[jwkSetT](httpClient, oidcConfig.JWKSURI)
 	if err != nil {
 		return nil, fmt.Errorf("while fetching JWKS: %w", err)
 	}
@@ -424,10 +430,12 @@ func discoverKeysForIssuer(ctx context.Context, issuer string) ([]*KeyAndID, err
 	return ret, nil
 }
 
-func fetchJSON[T any](url string) (T, error) {
+func fetchJSON[T any](httpClient *http.Client, url string) (T, error) {
 	var parsedBody T
-
-	resp, err := http.Get(url)
+	if httpClient == nil {
+		httpClient = defaultHTTPClient
+	}
+	resp, err := httpClient.Get(url)
 	if err != nil {
 		return parsedBody, fmt.Errorf("while making HTTP request: %w", err)
 	}

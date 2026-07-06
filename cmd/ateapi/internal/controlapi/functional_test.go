@@ -20,6 +20,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -560,6 +561,7 @@ func createWorkerPod(t *testing.T, tc *testContext, ns string, name string, node
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: ns,
+			UID:       "08675309-4a65-6e6e-7973-6e756d626572",
 			Labels: map[string]string{
 				"ate.dev/worker-pool": poolName,
 			},
@@ -571,6 +573,23 @@ func createWorkerPod(t *testing.T, tc *testContext, ns string, name string, node
 			},
 		},
 	}
+	/*
+			   pod := &corev1.Pod{
+		          ObjectMeta: metav1.ObjectMeta{
+		              Name:      podName,
+		              Namespace: ns,
+		              UID:       "08675309-4a65-6e6e-7973-6e756d626572",
+		              Labels: map[string]string{
+		                  workerPodLabel: poolName,
+		              },
+		          },
+		          Spec: corev1.PodSpec{
+		              NodeName:   "node1",
+		              Containers: []corev1.Container{{Name: "main", Image: "nginx"}},
+		          },
+		      }
+
+	*/
 	createdPod, err := tc.k8sClient.CoreV1().Pods(ns).Create(context.Background(), pod, metav1.CreateOptions{})
 	if err != nil {
 		t.Fatalf("failed to create worker pod: %v", err)
@@ -821,7 +840,7 @@ func TestListActors_ByAtespace(t *testing.T) {
 	createAtespace(t, tc, "team-a")
 	createAtespace(t, tc, "team-b")
 
-	create := func(id, atespace string) *ateapipb.Actor {
+	create := func(atespace, id string) *ateapipb.Actor {
 		resp, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{
 			ActorRef:               &ateapipb.ActorRef{Atespace: atespace, Name: id},
 			ActorTemplateNamespace: ns,
@@ -832,9 +851,9 @@ func TestListActors_ByAtespace(t *testing.T) {
 		}
 		return resp.GetActor()
 	}
-	a1 := create("id1", "team-a")
-	a2 := create("id2", "team-a")
-	b1 := create("id3", "team-b")
+	a1 := create("team-a", "id1")
+	a2 := create("team-a", "id2")
+	b1 := create("team-b", "id3")
 
 	sortByID := []cmp.Option{
 		protocmp.Transform(),
@@ -878,7 +897,7 @@ func TestListActors_AllAtespaces(t *testing.T) {
 	createAtespace(t, tc, "team-a")
 	createAtespace(t, tc, "team-b")
 
-	create := func(id, atespace string) {
+	create := func(atespace, id string) {
 		if _, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{
 			ActorRef:               &ateapipb.ActorRef{Atespace: atespace, Name: id},
 			ActorTemplateNamespace: ns,
@@ -887,8 +906,8 @@ func TestListActors_AllAtespaces(t *testing.T) {
 			t.Fatalf("CreateActor(%s, atespace=%q) failed: %v", id, atespace, err)
 		}
 	}
-	create("id1", "team-a")
-	create("id2", "team-b")
+	create("team-a", "id1")
+	create("team-b", "id2")
 
 	// Empty atespace lists across all atespaces; returned actors carry their atespace.
 	resp, err := tc.client.ListActors(context.Background(), &ateapipb.ListActorsRequest{})
@@ -999,7 +1018,7 @@ func TestListWorkers(t *testing.T) {
 	tc := setupTest(t, ns)
 	defer tc.cleanup()
 
-	createWorkerPod(t, tc, ns, "worker-1", "", "pool1")
+	createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
 
 	listResp, err := tc.client.ListWorkers(context.Background(), &ateapipb.ListWorkersRequest{})
 	if err != nil {
@@ -1018,6 +1037,7 @@ func TestListWorkers(t *testing.T) {
 			WorkerNamespace: ns,
 			WorkerPool:      "pool1",
 			WorkerPod:       "worker-1",
+			NodeName:        "node1",
 			Ip:              "127.0.0.1",
 			Version:         1,
 		},
@@ -1111,12 +1131,18 @@ func TestResumeActor(t *testing.T) {
 		WorkerNamespace: ns,
 		WorkerPool:      "pool1",
 		WorkerPod:       "worker-1",
-		ActorNamespace:  ns,
-		ActorTemplate:   "tmpl1",
-		ActorId:         id,
-		ActorAtespace:   testAtespace,
-		Ip:              "127.0.0.1",
-		NodeName:        "node1",
+		Assignment: &ateapipb.Assignment{
+			ActorTemplate: &ateapipb.KubeNamespacedObjectRef{
+				Namespace: ns,
+				Name:      "tmpl1",
+			},
+			Actor: &ateapipb.ActorRef{
+				Name:     id,
+				Atespace: testAtespace,
+			},
+		},
+		Ip:       "127.0.0.1",
+		NodeName: "node1",
 	}
 
 	if diff := cmp.Diff(wantWorker, actorWorker, protocmp.Transform(), protocmp.IgnoreFields(&ateapipb.Worker{}, "version"), protocmp.IgnoreFields(&ateapipb.Worker{}, "worker_pod_uid")); diff != "" {
@@ -1746,12 +1772,24 @@ func TestResumeActor_ReleasesStaleWorkerWhenPoolBecomesIneligible(t *testing.T) 
 		}
 		switch w.GetWorkerPool() {
 		case "pool-a":
-			if got := w.GetActorId(); got != "" {
+			if wass := w.Assignment; wass != nil {
+				got := "<nil-actor>"
+				if wass.Actor != nil {
+					got = wass.Actor.Name
+				}
 				t.Errorf("expected worker-a (now-ineligible pool-a) to be released, got actor_id=%q", got)
 			}
 		case "pool-b":
-			if got := w.GetActorId(); got != id {
-				t.Errorf("expected worker-b to be claimed by %q, got actor_id=%q", id, got)
+			if wass := w.Assignment; wass == nil {
+				t.Errorf("expected worker-b to be claimed by %q, got nil assignment", id)
+			} else {
+				if wact := wass.Actor; wact == nil {
+					t.Errorf("expected worker-b to be claimed by %q, got nil assignment.actor", id)
+				} else {
+					if got := wact.Name; got != id {
+						t.Errorf("expected worker-b to be claimed by %q, got actor_id=%q", id, got)
+					}
+				}
 			}
 		}
 	}
@@ -1858,47 +1896,97 @@ func TestValidation(t *testing.T) {
 			name    string
 			req     *ateapipb.CreateActorRequest
 			wantMsg string
-		}{
-			{
-				"missing namespace",
-				&ateapipb.CreateActorRequest{ActorRef: &ateapipb.ActorRef{Atespace: testAtespace, Name: "id1"}, ActorTemplateName: "tmpl1"},
-				"actor_template_namespace is required"},
-			{
-				"missing template name",
-				&ateapipb.CreateActorRequest{ActorRef: &ateapipb.ActorRef{Atespace: testAtespace, Name: "id1"}, ActorTemplateNamespace: "ns1"},
-				"actor_template_name is required"},
-			{
-				"missing actor id",
-				&ateapipb.CreateActorRequest{ActorRef: &ateapipb.ActorRef{Atespace: testAtespace}, ActorTemplateNamespace: "ns1", ActorTemplateName: "tmpl1"},
-				"actor_id is required"},
-			{
-				"invalid actor id (capitals)",
-				&ateapipb.CreateActorRequest{ActorRef: &ateapipb.ActorRef{Atespace: testAtespace, Name: "ID1"}, ActorTemplateNamespace: "ns1", ActorTemplateName: "tmpl1"},
-				"invalid actor_id: must start and end with a lower case alphanumeric character, and consist only of lower case alphanumeric characters or '-'"},
-			{
-				"invalid actor id (special chars)",
-				&ateapipb.CreateActorRequest{ActorRef: &ateapipb.ActorRef{Atespace: testAtespace, Name: "id_1"}, ActorTemplateNamespace: "ns1", ActorTemplateName: "tmpl1"},
-				"invalid actor_id: must start and end with a lower case alphanumeric character, and consist only of lower case alphanumeric characters or '-'"},
-			{
-				"invalid worker_selector label key",
-				&ateapipb.CreateActorRequest{ActorRef: &ateapipb.ActorRef{Atespace: testAtespace, Name: "id1"}, ActorTemplateNamespace: "ns1", ActorTemplateName: "tmpl1", WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"bad key!": "x"}}},
-				`invalid worker_selector label key "bad key!": name part must consist of alphanumeric characters, '-', '_' or '.', and must start and end with an alphanumeric character (e.g. 'MyName',  or 'my.name',  or '123-abc', regex used for validation is '([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9]')`,
+		}{{
+			"missing actor_template_namespace",
+			&ateapipb.CreateActorRequest{ActorRef: &ateapipb.ActorRef{Atespace: "ns1", Name: "id1"}, ActorTemplateName: "tmpl1"},
+			"actor_template_namespace: Required value",
+		}, {
+			"invalid actor_template_namespace",
+			&ateapipb.CreateActorRequest{
+				ActorRef:               &ateapipb.ActorRef{Atespace: "ns1", Name: "id1"},
+				ActorTemplateNamespace: "invalid value",
+				ActorTemplateName:      "tmpl1",
 			},
-			{
-				"invalid worker_selector label value",
-				&ateapipb.CreateActorRequest{ActorRef: &ateapipb.ActorRef{Atespace: testAtespace, Name: "id1"}, ActorTemplateNamespace: "ns1", ActorTemplateName: "tmpl1", WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"tier": "not valid!"}}},
-				`invalid worker_selector label value "not valid!" for key "tier": a valid label must be an empty string or consist of alphanumeric characters, '-', '_' or '.', and must start and end with an alphanumeric character (e.g. 'MyValue',  or 'my_value',  or '12345', regex used for validation is '(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])?')`,
+			"actor_template_namespace: Invalid value",
+		}, {
+			"missing actor_template_name",
+			&ateapipb.CreateActorRequest{ActorRef: &ateapipb.ActorRef{Atespace: "ns1", Name: "id1"}, ActorTemplateNamespace: "ns1"},
+			"actor_template_name: Required value",
+		}, {
+			"invalid actor_template_name",
+			&ateapipb.CreateActorRequest{
+				ActorRef:               &ateapipb.ActorRef{Atespace: "ns1", Name: "id1"},
+				ActorTemplateNamespace: "ns1",
+				ActorTemplateName:      "invalid value",
 			},
-			{
-				"too many worker_selector match_labels",
-				&ateapipb.CreateActorRequest{ActorRef: &ateapipb.ActorRef{Atespace: testAtespace, Name: "id1"}, ActorTemplateNamespace: "ns1", ActorTemplateName: "tmpl1", WorkerSelector: &ateapipb.Selector{MatchLabels: selectorLabelsOfSize(11)}},
-				"worker_selector has 11 match_labels entries, exceeding the limit of 10",
+			"actor_template_name: Invalid value",
+		}, {
+			"missing actor_ref",
+			&ateapipb.CreateActorRequest{ActorTemplateNamespace: "ns1", ActorTemplateName: "tmpl1"},
+			"actor_ref: Required value",
+		}, {
+			"missing actor_ref.atespace",
+			&ateapipb.CreateActorRequest{
+				ActorRef:               &ateapipb.ActorRef{Name: "id1"},
+				ActorTemplateNamespace: "ns1",
+				ActorTemplateName:      "tmpl1",
 			},
-		}
+			"actor_ref.atespace: Required value",
+		}, {
+			"invalid actor_ref.atespace",
+			&ateapipb.CreateActorRequest{
+				ActorRef:               &ateapipb.ActorRef{Atespace: "NS1", Name: "id1"},
+				ActorTemplateNamespace: "ns1",
+				ActorTemplateName:      "tmpl1",
+			},
+			"actor_ref.atespace: Invalid value",
+		}, {
+			"missing actor_ref.name",
+			&ateapipb.CreateActorRequest{
+				ActorRef:               &ateapipb.ActorRef{Atespace: "ns1"},
+				ActorTemplateNamespace: "ns1",
+				ActorTemplateName:      "tmpl1",
+			},
+			"actor_ref.name: Required value",
+		}, {
+			"invalid actor_ref.name",
+			&ateapipb.CreateActorRequest{
+				ActorRef:               &ateapipb.ActorRef{Atespace: "ns1", Name: "ID1"},
+				ActorTemplateNamespace: "ns1",
+				ActorTemplateName:      "tmpl1",
+			},
+			"actor_ref.name: Invalid value",
+		}, {
+			"invalid worker_selector label key",
+			&ateapipb.CreateActorRequest{
+				ActorRef:               &ateapipb.ActorRef{Atespace: "ns1", Name: "id1"},
+				ActorTemplateNamespace: "ns1",
+				ActorTemplateName:      "tmpl1",
+				WorkerSelector:         &ateapipb.Selector{MatchLabels: map[string]string{"bad key!": "x"}},
+			},
+			`worker_selector.match_labels\[bad key!\]: Invalid value`,
+		}, {
+			"invalid worker_selector label value",
+			&ateapipb.CreateActorRequest{
+				ActorRef:               &ateapipb.ActorRef{Atespace: "ns1", Name: "id1"},
+				ActorTemplateNamespace: "ns1",
+				ActorTemplateName:      "tmpl1",
+				WorkerSelector:         &ateapipb.Selector{MatchLabels: map[string]string{"tier": "not valid!"}},
+			},
+			`worker_selector.match_labels\[tier\]: Invalid value`,
+		}, {
+			"too many worker_selector.match_labels",
+			&ateapipb.CreateActorRequest{
+				ActorRef:               &ateapipb.ActorRef{Atespace: "ns1", Name: "id1"},
+				ActorTemplateNamespace: "ns1",
+				ActorTemplateName:      "tmpl1",
+				WorkerSelector:         &ateapipb.Selector{MatchLabels: selectorLabelsOfSize(11)}},
+			"worker_selector.match_labels: Too many",
+		}}
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
 				_, err := tc.client.CreateActor(context.Background(), tt.req)
-				assertGrpcError(t, err, codes.InvalidArgument, tt.wantMsg)
+				assertGrpcErrorRegex(t, err, codes.InvalidArgument, tt.wantMsg)
 			})
 		}
 	})
@@ -1908,13 +1996,39 @@ func TestValidation(t *testing.T) {
 			name    string
 			req     *ateapipb.GetActorRequest
 			wantMsg string
-		}{
-			{"missing id", &ateapipb.GetActorRequest{ActorRef: &ateapipb.ActorRef{Atespace: testAtespace}}, "id is required"},
-		}
+		}{{
+			"missing actor_ref",
+			&ateapipb.GetActorRequest{},
+			"actor_ref: Required value",
+		}, {
+			"missing actor_ref.atespace",
+			&ateapipb.GetActorRequest{
+				ActorRef: &ateapipb.ActorRef{Name: "id1"},
+			},
+			"actor_ref.atespace: Required value",
+		}, {
+			"invalid actor_ref.atespace",
+			&ateapipb.GetActorRequest{
+				ActorRef: &ateapipb.ActorRef{Atespace: "NS1", Name: "id1"},
+			},
+			"actor_ref.atespace: Invalid value",
+		}, {
+			"missing actor_ref.name",
+			&ateapipb.GetActorRequest{
+				ActorRef: &ateapipb.ActorRef{Atespace: "ns1"},
+			},
+			"actor_ref.name: Required value",
+		}, {
+			"invalid actor_ref.name",
+			&ateapipb.GetActorRequest{
+				ActorRef: &ateapipb.ActorRef{Atespace: "ns1", Name: "ID1"},
+			},
+			"actor_ref.name: Invalid value",
+		}}
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
 				_, err := tc.client.GetActor(context.Background(), tt.req)
-				assertGrpcError(t, err, codes.InvalidArgument, tt.wantMsg)
+				assertGrpcErrorRegex(t, err, codes.InvalidArgument, tt.wantMsg)
 			})
 		}
 	})
@@ -1924,13 +2038,81 @@ func TestValidation(t *testing.T) {
 			name    string
 			req     *ateapipb.ResumeActorRequest
 			wantMsg string
-		}{
-			{"missing id", &ateapipb.ResumeActorRequest{ActorRef: &ateapipb.ActorRef{Atespace: testAtespace}}, "id is required"},
-		}
+		}{{
+			"missing actor_ref",
+			&ateapipb.ResumeActorRequest{},
+			"actor_ref: Required value",
+		}, {
+			"missing actor_ref.atespace",
+			&ateapipb.ResumeActorRequest{
+				ActorRef: &ateapipb.ActorRef{Name: "id1"},
+			},
+			"actor_ref.atespace: Required value",
+		}, {
+			"invalid actor_ref.atespace",
+			&ateapipb.ResumeActorRequest{
+				ActorRef: &ateapipb.ActorRef{Atespace: "NS1", Name: "id1"},
+			},
+			"actor_ref.atespace: Invalid value",
+		}, {
+			"missing actor_ref.name",
+			&ateapipb.ResumeActorRequest{
+				ActorRef: &ateapipb.ActorRef{Atespace: "ns1"},
+			},
+			"actor_ref.name: Required value",
+		}, {
+			"invalid actor_ref.name",
+			&ateapipb.ResumeActorRequest{
+				ActorRef: &ateapipb.ActorRef{Atespace: "ns1", Name: "ID1"},
+			},
+			"actor_ref.name: Invalid value",
+		}}
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
 				_, err := tc.client.ResumeActor(context.Background(), tt.req)
-				assertGrpcError(t, err, codes.InvalidArgument, tt.wantMsg)
+				assertGrpcErrorRegex(t, err, codes.InvalidArgument, tt.wantMsg)
+			})
+		}
+	})
+
+	t.Run("PauseActor", func(t *testing.T) {
+		tests := []struct {
+			name    string
+			req     *ateapipb.PauseActorRequest
+			wantMsg string
+		}{{
+			"missing actor_ref",
+			&ateapipb.PauseActorRequest{},
+			"actor_ref: Required value",
+		}, {
+			"missing actor_ref.atespace",
+			&ateapipb.PauseActorRequest{
+				ActorRef: &ateapipb.ActorRef{Name: "id1"},
+			},
+			"actor_ref.atespace: Required value",
+		}, {
+			"invalid actor_ref.atespace",
+			&ateapipb.PauseActorRequest{
+				ActorRef: &ateapipb.ActorRef{Atespace: "NS1", Name: "id1"},
+			},
+			"actor_ref.atespace: Invalid value",
+		}, {
+			"missing actor_ref.name",
+			&ateapipb.PauseActorRequest{
+				ActorRef: &ateapipb.ActorRef{Atespace: "ns1"},
+			},
+			"actor_ref.name: Required value",
+		}, {
+			"invalid actor_ref.name",
+			&ateapipb.PauseActorRequest{
+				ActorRef: &ateapipb.ActorRef{Atespace: "ns1", Name: "ID1"},
+			},
+			"actor_ref.name: Invalid value",
+		}}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				_, err := tc.client.PauseActor(context.Background(), tt.req)
+				assertGrpcErrorRegex(t, err, codes.InvalidArgument, tt.wantMsg)
 			})
 		}
 	})
@@ -1940,13 +2122,39 @@ func TestValidation(t *testing.T) {
 			name    string
 			req     *ateapipb.SuspendActorRequest
 			wantMsg string
-		}{
-			{"missing id", &ateapipb.SuspendActorRequest{ActorRef: &ateapipb.ActorRef{Atespace: testAtespace}}, "id is required"},
-		}
+		}{{
+			"missing actor_ref",
+			&ateapipb.SuspendActorRequest{},
+			"actor_ref: Required value",
+		}, {
+			"missing actor_ref.atespace",
+			&ateapipb.SuspendActorRequest{
+				ActorRef: &ateapipb.ActorRef{Name: "id1"},
+			},
+			"actor_ref.atespace: Required value",
+		}, {
+			"invalid actor_ref.atespace",
+			&ateapipb.SuspendActorRequest{
+				ActorRef: &ateapipb.ActorRef{Atespace: "NS1", Name: "id1"},
+			},
+			"actor_ref.atespace: Invalid value",
+		}, {
+			"missing actor_ref.name",
+			&ateapipb.SuspendActorRequest{
+				ActorRef: &ateapipb.ActorRef{Atespace: "ns1"},
+			},
+			"actor_ref.name: Required value",
+		}, {
+			"invalid actor_ref.name",
+			&ateapipb.SuspendActorRequest{
+				ActorRef: &ateapipb.ActorRef{Atespace: "ns1", Name: "ID1"},
+			},
+			"actor_ref.name: Invalid value",
+		}}
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
 				_, err := tc.client.SuspendActor(context.Background(), tt.req)
-				assertGrpcError(t, err, codes.InvalidArgument, tt.wantMsg)
+				assertGrpcErrorRegex(t, err, codes.InvalidArgument, tt.wantMsg)
 			})
 		}
 	})
@@ -1956,28 +2164,59 @@ func TestValidation(t *testing.T) {
 			name    string
 			req     *ateapipb.UpdateActorRequest
 			wantMsg string
-		}{
-			{"missing id", &ateapipb.UpdateActorRequest{ActorRef: &ateapipb.ActorRef{Atespace: testAtespace}}, "actor_id is required"},
-			{
-				"invalid worker_selector label key",
-				&ateapipb.UpdateActorRequest{ActorRef: &ateapipb.ActorRef{Atespace: testAtespace, Name: "id1"}, WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"bad key!": "x"}}},
-				`invalid worker_selector label key "bad key!": name part must consist of alphanumeric characters, '-', '_' or '.', and must start and end with an alphanumeric character (e.g. 'MyName',  or 'my.name',  or '123-abc', regex used for validation is '([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9]')`,
+		}{{
+			"missing actor_ref",
+			&ateapipb.UpdateActorRequest{},
+			"actor_ref: Required value",
+		}, {
+			"missing actor_ref.atespace",
+			&ateapipb.UpdateActorRequest{
+				ActorRef: &ateapipb.ActorRef{Name: "id1"},
 			},
-			{
-				"invalid worker_selector label value",
-				&ateapipb.UpdateActorRequest{ActorRef: &ateapipb.ActorRef{Atespace: testAtespace, Name: "id1"}, WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"tier": "not valid!"}}},
-				`invalid worker_selector label value "not valid!" for key "tier": a valid label must be an empty string or consist of alphanumeric characters, '-', '_' or '.', and must start and end with an alphanumeric character (e.g. 'MyValue',  or 'my_value',  or '12345', regex used for validation is '(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])?')`,
+			"actor_ref.atespace: Required value",
+		}, {
+			"invalid actor_ref.atespace",
+			&ateapipb.UpdateActorRequest{
+				ActorRef: &ateapipb.ActorRef{Atespace: "NS1", Name: "id1"},
 			},
-			{
-				"too many worker_selector match_labels",
-				&ateapipb.UpdateActorRequest{ActorRef: &ateapipb.ActorRef{Atespace: testAtespace, Name: "id1"}, WorkerSelector: &ateapipb.Selector{MatchLabels: selectorLabelsOfSize(11)}},
-				"worker_selector has 11 match_labels entries, exceeding the limit of 10",
+			"actor_ref.atespace: Invalid value",
+		}, {
+			"missing actor_ref.name",
+			&ateapipb.UpdateActorRequest{
+				ActorRef: &ateapipb.ActorRef{Atespace: "ns1"},
 			},
-		}
+			"actor_ref.name: Required value",
+		}, {
+			"invalid actor_ref.name",
+			&ateapipb.UpdateActorRequest{
+				ActorRef: &ateapipb.ActorRef{Atespace: "ns1", Name: "ID1"},
+			},
+			"actor_ref.name: Invalid value",
+		}, {
+			"invalid worker_selector label key",
+			&ateapipb.UpdateActorRequest{
+				ActorRef:       &ateapipb.ActorRef{Atespace: "ns1", Name: "id1"},
+				WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"bad key!": "x"}},
+			},
+			`worker_selector.match_labels\[bad key!\]: Invalid value`,
+		}, {
+			"invalid worker_selector label value",
+			&ateapipb.UpdateActorRequest{
+				ActorRef:       &ateapipb.ActorRef{Atespace: "ns1", Name: "id1"},
+				WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"tier": "not valid!"}},
+			},
+			`worker_selector.match_labels\[tier\]: Invalid value`,
+		}, {
+			"too many worker_selector.match_labels",
+			&ateapipb.UpdateActorRequest{
+				ActorRef:       &ateapipb.ActorRef{Atespace: "ns1", Name: "id1"},
+				WorkerSelector: &ateapipb.Selector{MatchLabels: selectorLabelsOfSize(11)}},
+			"worker_selector.match_labels: Too many",
+		}}
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
 				_, err := tc.client.UpdateActor(context.Background(), tt.req)
-				assertGrpcError(t, err, codes.InvalidArgument, tt.wantMsg)
+				assertGrpcErrorRegex(t, err, codes.InvalidArgument, tt.wantMsg)
 			})
 		}
 	})
@@ -1987,15 +2226,39 @@ func TestValidation(t *testing.T) {
 			name    string
 			req     *ateapipb.DeleteActorRequest
 			wantMsg string
-		}{
-			{"missing id", &ateapipb.DeleteActorRequest{ActorRef: &ateapipb.ActorRef{Atespace: testAtespace}}, "actor_id is required"},
-			{"invalid actor id (capitals)", &ateapipb.DeleteActorRequest{ActorRef: &ateapipb.ActorRef{Atespace: testAtespace, Name: "ID1"}}, "invalid actor_id: must start and end with a lower case alphanumeric character, and consist only of lower case alphanumeric characters or '-'"},
-			{"invalid actor id (special chars)", &ateapipb.DeleteActorRequest{ActorRef: &ateapipb.ActorRef{Atespace: testAtespace, Name: "id_1"}}, "invalid actor_id: must start and end with a lower case alphanumeric character, and consist only of lower case alphanumeric characters or '-'"},
-		}
+		}{{
+			"missing actor_ref",
+			&ateapipb.DeleteActorRequest{},
+			"actor_ref: Required value",
+		}, {
+			"missing actor_ref.atespace",
+			&ateapipb.DeleteActorRequest{
+				ActorRef: &ateapipb.ActorRef{Name: "id1"},
+			},
+			"actor_ref.atespace: Required value",
+		}, {
+			"invalid actor_ref.atespace",
+			&ateapipb.DeleteActorRequest{
+				ActorRef: &ateapipb.ActorRef{Atespace: "NS1", Name: "id1"},
+			},
+			"actor_ref.atespace: Invalid value",
+		}, {
+			"missing actor_ref.name",
+			&ateapipb.DeleteActorRequest{
+				ActorRef: &ateapipb.ActorRef{Atespace: "ns1"},
+			},
+			"actor_ref.name: Required value",
+		}, {
+			"invalid actor_ref.name",
+			&ateapipb.DeleteActorRequest{
+				ActorRef: &ateapipb.ActorRef{Atespace: "ns1", Name: "ID1"},
+			},
+			"actor_ref.name: Invalid value",
+		}}
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
 				_, err := tc.client.DeleteActor(context.Background(), tt.req)
-				assertGrpcError(t, err, codes.InvalidArgument, tt.wantMsg)
+				assertGrpcErrorRegex(t, err, codes.InvalidArgument, tt.wantMsg)
 			})
 		}
 	})
@@ -2256,7 +2519,27 @@ func TestDeleteActor_NotFound(t *testing.T) {
 	assertGrpcError(t, err, codes.NotFound, "Actor non-existent not found")
 }
 
+func assertGrpcErrorRegex(t *testing.T, err error, wantCode codes.Code, wantMsg string) {
+	t.Helper()
+	fn := func(got string) (string, bool) {
+		matched, matchErr := regexp.MatchString(wantMsg, got)
+		if matchErr != nil {
+			t.Fatalf("failed to compile regex %q: %v", wantMsg, matchErr)
+		}
+		return wantMsg, matched
+	}
+	assertGrpcErrorImpl(t, err, wantCode, fn)
+}
+
 func assertGrpcError(t *testing.T, err error, wantCode codes.Code, wantMsg string) {
+	t.Helper()
+	fn := func(got string) (string, bool) {
+		return wantMsg, got == wantMsg
+	}
+	assertGrpcErrorImpl(t, err, wantCode, fn)
+}
+
+func assertGrpcErrorImpl(t *testing.T, err error, wantCode codes.Code, msgMatches func(got string) (string, bool)) {
 	t.Helper()
 	if err == nil {
 		t.Fatalf("expected error, got nil")
@@ -2268,8 +2551,8 @@ func assertGrpcError(t *testing.T, err error, wantCode codes.Code, wantMsg strin
 	if st.Code() != wantCode {
 		t.Errorf("expected status %v, got %v", wantCode, st.Code())
 	}
-	if st.Message() != wantMsg {
-		t.Errorf("expected message %q, got %q", wantMsg, st.Message())
+	if want, ok := msgMatches(st.Message()); !ok {
+		t.Errorf("expected message %q, got %q", want, st.Message())
 	}
 }
 

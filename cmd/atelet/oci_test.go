@@ -87,12 +87,12 @@ func runUntar(t *testing.T, entries []tarEntry) (string, error) {
 // With an identity dir, a read-only bind mount appears at IdentityMountPath.
 func TestBuildActorOCISpec_IdentityMount(t *testing.T) {
 	spec := buildActorOCISpec(
-		"ns", "tmpl", "id",
+		"atespace", "id",
 		[]string{"/app"},
 		[]string{"FOO=bar"},
 		map[string]string{"k": "v"},
 		"/run/netns/x",
-		"/host/actors/ns:tmpl:id/identity",
+		"/host/actors/atespace:id/identity",
 		nil,
 	)
 	found := false
@@ -101,7 +101,7 @@ func TestBuildActorOCISpec_IdentityMount(t *testing.T) {
 			continue
 		}
 		found = true
-		if m.Source != "/host/actors/ns:tmpl:id/identity" {
+		if m.Source != "/host/actors/atespace:id/identity" {
 			t.Errorf("identity mount source = %q, want the per-actor identity dir", m.Source)
 		}
 		if m.Type != "bind" {
@@ -118,7 +118,7 @@ func TestBuildActorOCISpec_IdentityMount(t *testing.T) {
 
 // Without an identity dir (the pause container), no identity mount appears.
 func TestBuildActorOCISpec_NoIdentityMountForPause(t *testing.T) {
-	bare := buildActorOCISpec("ns", "tmpl", "id", []string{"/pause"}, nil, nil, "/run/netns/x", "", nil)
+	bare := buildActorOCISpec("atespace", "id", []string{"/pause"}, nil, nil, "/run/netns/x", "", nil)
 	for _, m := range bare.Mounts {
 		if m.Destination == IdentityMountPath {
 			t.Errorf("identity mount must be absent when identityDir is empty")
@@ -129,13 +129,13 @@ func TestBuildActorOCISpec_NoIdentityMountForPause(t *testing.T) {
 // Each durable-dir volume mount becomes a bind mount whose source is the
 // per-actor on-host DurableDirVolumeMountPoint for that volume name.
 func TestBuildActorOCISpec_DurableDirVolumeMounts(t *testing.T) {
-	const ns, tmpl, id = "ns", "tmpl", "id"
+	const atespace, id = "atespace", "id"
 	durableDirs := []*ateletpb.VolumeMount{
 		{Name: "data", MountPath: "/var/data"},
 		{Name: "cache", MountPath: "/var/cache"},
 	}
 	spec := buildActorOCISpec(
-		ns, tmpl, id,
+		atespace, id,
 		[]string{"/app"}, nil, nil,
 		"/run/netns/x",
 		"",
@@ -143,7 +143,7 @@ func TestBuildActorOCISpec_DurableDirVolumeMounts(t *testing.T) {
 	)
 
 	for _, vm := range durableDirs {
-		wantSrc := ateompath.DurableDirVolumeMountPoint(ns, tmpl, id, vm.Name)
+		wantSrc := ateompath.DurableDirVolumeMountPoint(atespace, id, vm.Name)
 		found := false
 		for _, m := range spec.Mounts {
 			if m.Destination != vm.MountPath {

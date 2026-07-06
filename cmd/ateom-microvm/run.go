@@ -188,11 +188,12 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	s.lock.Lock()
 	defer s.lock.Unlock()
 
-	ns := req.GetActorTemplateNamespace()
-	name := req.GetActorTemplateName()
+	atespace := req.GetAtespace()
 	id := req.GetActorId()
+	templateNS := req.GetActorTemplateNamespace()
+	templateName := req.GetActorTemplateName()
 
-	s.actorLogger.EmitLifecycleLog("Actor starting", id, name, ns)
+	s.actorLogger.EmitLifecycleLog("Actor starting", atespace, id, templateNS, templateName)
 
 	// All of the actor's containers share the one micro-VM (which is the pod
 	// sandbox): each gets its own overlay rootfs and its own kata-agent
@@ -230,7 +231,7 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 
 	// Prepare each container's OCI spec + record its bundle rootfs (the overlay RO
 	// lower). No host disk — the rootfs is overlay(virtio-fs lower + guest-tmpfs upper).
-	ctrs, err := s.buildActorContainers(ns, name, id, containers)
+	ctrs, err := s.buildActorContainers(atespace, id, containers)
 	if err != nil {
 		return nil, err
 	}
@@ -357,10 +358,10 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	// that and tag with the display container name. The goroutines read over ac for the
 	// actor's lifetime and exit (io.EOF) when teardownActor closes ac.
 	for _, c := range ctrs {
-		s.startActorLogForwarding(ac, id, overlayWorkloadID(c.name), c.name, name, ns)
+		s.startActorLogForwarding(ac, atespace, id, templateNS, templateName, overlayWorkloadID(c.name), c.name)
 	}
 
-	s.actorLogger.EmitLifecycleLog("Actor started", id, name, ns)
+	s.actorLogger.EmitLifecycleLog("Actor started", atespace, id, templateNS, templateName)
 	slog.InfoContext(ctx, "Actor started (overlay rootfs)", slog.String("id", id))
 	return &ateompb.RunWorkloadResponse{}, nil
 }
@@ -371,12 +372,12 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 // built — the rootfs is overlay(virtio-fs RO lower + guest-tmpfs upper); the lowers
 // are bound into virtiofsd's shared dir in stageOverlayLowers after the sandbox state
 // is clean. Both RunWorkload and RestoreWorkload go through here.
-func (s *AteomService) buildActorContainers(ns, name, id string, containers []*ateompb.Container) ([]actorContainer, error) {
+func (s *AteomService) buildActorContainers(atespace, id string, containers []*ateompb.Container) ([]actorContainer, error) {
 	netnsPath := ateompath.AteomNetNSPath(s.podUID)
 	ctrs := make([]actorContainer, len(containers))
 	for i, c := range containers {
 		cn := c.GetName()
-		bundle := ateompath.OCIBundlePath(ns, name, id, cn)
+		bundle := ateompath.OCIBundlePath(atespace, id, cn)
 		spec, err := ensureKataCompatibleSpec(bundle, id, netnsPath)
 		if err != nil {
 			return nil, fmt.Errorf("while preparing kata OCI spec for %q: %w", cn, err)
@@ -549,9 +550,9 @@ func startOverlayContainer(ctx context.Context, ac *kata.AgentClient, vsockPath 
 // ending WrapContainerLogs. This keeps the agent connection (which ttrpc allows
 // concurrent Calls on) alive for forwarding while guaranteeing no goroutine outlives
 // the connection.
-func (s *AteomService) startActorLogForwarding(ac *kata.AgentClient, actorID, streamID, containerName, name, ns string) {
-	go s.actorLogger.WrapContainerLogs(kata.NewStdioReader(context.Background(), ac, streamID, streamID, false), actorID, name, ns, containerName)
-	go s.actorLogger.WrapContainerLogs(kata.NewStdioReader(context.Background(), ac, streamID, streamID, true), actorID, name, ns, containerName)
+func (s *AteomService) startActorLogForwarding(ac *kata.AgentClient, atespace, actorID, actorTemplateNamespace, actorTemplateName, streamID, containerName string) {
+	go s.actorLogger.WrapContainerLogs(kata.NewStdioReader(context.Background(), ac, streamID, streamID, false), atespace, actorID, actorTemplateNamespace, actorTemplateName, containerName)
+	go s.actorLogger.WrapContainerLogs(kata.NewStdioReader(context.Background(), ac, streamID, streamID, true), atespace, actorID, actorTemplateNamespace, actorTemplateName, containerName)
 }
 
 // dialAgentRetry polls DialAgent until the kata-agent answers the hybrid-vsock

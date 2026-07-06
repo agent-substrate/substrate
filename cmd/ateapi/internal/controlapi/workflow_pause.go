@@ -139,9 +139,10 @@ func (s *CallAteletPauseStep) Execute(ctx context.Context, input *PauseInput, st
 	// into the snapshot manifest.
 	req := &ateletpb.CheckpointRequest{
 		TargetAteomUid:         state.Actor.GetAteomPodUid(),
+		Atespace:               state.Actor.GetAtespace(),
+		ActorId:                state.Actor.GetActorId(),
 		ActorTemplateNamespace: state.Actor.GetActorTemplateNamespace(),
 		ActorTemplateName:      state.Actor.GetActorTemplateName(),
-		ActorId:                state.Actor.GetActorId(),
 		Spec:                   workloadSpec,
 		Type:                   ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
 		Config: &ateletpb.CheckpointRequest_LocalConfig{
@@ -191,15 +192,14 @@ func (s *FinalizePausedStep) Execute(ctx context.Context, input *PauseInput, sta
 			// TODO(dberkov) - what if worker does not belong to this actor?
 			nodeName = worker.GetNodeName()
 			// Only free it if it still belongs to us
-			if worker.GetActorId() == input.ActorID {
-				worker.ActorNamespace = ""
-				worker.ActorTemplate = ""
-				worker.ActorId = ""
-				worker.ActorAtespace = ""
 
-				err = s.store.UpdateWorker(ctx, worker, worker.Version)
-				if err != nil {
-					return err
+			if wass := worker.Assignment; wass != nil {
+				if wass.Actor.Name == input.ActorID {
+					worker.Assignment = nil
+					err = s.store.UpdateWorker(ctx, worker, worker.Version)
+					if err != nil {
+						return err
+					}
 				}
 			}
 		}

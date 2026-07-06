@@ -28,7 +28,7 @@ func TestWrapContainerLogs(t *testing.T) {
 
 	var buf bytes.Buffer
 	al := NewActorLogger(&buf, false)
-	al.WrapContainerLogs(rdr, "act-1", "tmpl-1", "default", "ctr-1")
+	al.WrapContainerLogs(rdr, "default", "act-1", "tmpl-ns", "tmpl-1", "ctr-1")
 
 	var m map[string]any
 	if err := json.Unmarshal(buf.Bytes(), &m); err != nil {
@@ -57,11 +57,14 @@ func TestWrapContainerLogs(t *testing.T) {
 	if labels["ate.dev/actor_id"] != "act-1" {
 		t.Errorf("got actor_id = %v, want 'act-1'", labels["ate.dev/actor_id"])
 	}
+	if labels["ate.dev/actor_atespace"] != "default" {
+		t.Errorf("got actor_atespace = %v, want 'default'", labels["ate.dev/actor_atespace"])
+	}
+	if labels["ate.dev/actor_template_namespace"] != "tmpl-ns" {
+		t.Errorf("got actor_template_namespace = %v, want 'tmpl-ns'", labels["ate.dev/actor_template_namespace"])
+	}
 	if labels["ate.dev/actor_template_name"] != "tmpl-1" {
 		t.Errorf("got actor_template_name = %v, want 'tmpl-1'", labels["ate.dev/actor_template_name"])
-	}
-	if labels["ate.dev/actor_template_namespace"] != "default" {
-		t.Errorf("got actor_template_namespace = %v, want 'default'", labels["ate.dev/actor_template_namespace"])
 	}
 	if labels["ate.dev/container_name"] != "ctr-1" {
 		t.Errorf("got container_name = %v, want 'ctr-1'", labels["ate.dev/container_name"])
@@ -75,7 +78,7 @@ func TestWrapContainerLogs_JSONInput(t *testing.T) {
 
 	var buf bytes.Buffer
 	al := NewActorLogger(&buf, false)
-	al.WrapContainerLogs(rdr, "act-1", "tmpl-1", "default", "ctr-1")
+	al.WrapContainerLogs(rdr, "default", "act-1", "tmpl-ns", "tmpl-1", "ctr-1")
 
 	dec := json.NewDecoder(&buf)
 	dec.UseNumber()
@@ -114,6 +117,12 @@ func TestWrapContainerLogs_JSONInput(t *testing.T) {
 
 	if labels["ate.dev/actor_id"] != "act-1" {
 		t.Errorf("got actor_id = %v, want 'act-1'", labels["ate.dev/actor_id"])
+	}
+	if labels["ate.dev/actor_template_namespace"] != "tmpl-ns" {
+		t.Errorf("got actor_template_namespace = %v, want 'tmpl-ns'", labels["ate.dev/actor_template_namespace"])
+	}
+	if labels["ate.dev/actor_template_name"] != "tmpl-1" {
+		t.Errorf("got actor_template_name = %v, want 'tmpl-1'", labels["ate.dev/actor_template_name"])
 	}
 }
 
@@ -164,7 +173,7 @@ func TestWrapContainerLogs_MergeLabels(t *testing.T) {
 
 	var buf bytes.Buffer
 	al := NewActorLogger(&buf, false) // labelsKey will be "labels"
-	al.WrapContainerLogs(rdr, "act-1", "tmpl-1", "default", "ctr-1")
+	al.WrapContainerLogs(rdr, "default", "act-1", "tmpl-ns", "tmpl-1", "ctr-1")
 
 	var m map[string]any
 	if err := json.Unmarshal(buf.Bytes(), &m); err != nil {
@@ -200,7 +209,7 @@ func TestWrapContainerLogs_LabelCollision(t *testing.T) {
 
 	var buf bytes.Buffer
 	al := NewActorLogger(&buf, false)
-	al.WrapContainerLogs(rdr, "act-1", "tmpl-1", "default", "ctr-1")
+	al.WrapContainerLogs(rdr, "default", "act-1", "tmpl-ns", "tmpl-1", "ctr-1")
 
 	var m map[string]any
 	if err := json.Unmarshal(buf.Bytes(), &m); err != nil {
@@ -230,7 +239,7 @@ func TestWrapContainerLogs_TrailingGarbage(t *testing.T) {
 
 	var buf bytes.Buffer
 	al := NewActorLogger(&buf, false)
-	al.WrapContainerLogs(rdr, "act-1", "tmpl-1", "default", "ctr-1")
+	al.WrapContainerLogs(rdr, "default", "act-1", "tmpl-ns", "tmpl-1", "ctr-1")
 
 	var m map[string]any
 	if err := json.Unmarshal(buf.Bytes(), &m); err != nil {

@@ -36,7 +36,9 @@ The CLI supports on-demand tracing using the `--trace` flag. When enabled, the C
 gcloud services enable cloudtrace.googleapis.com --project=PROJECT_ID
 ```
 
-2. The GKE cluster must have **Managed OpenTelemetry** enabled. If it is not enabled, you can enable it using the following `gcloud` command:
+2. The GKE cluster must have **Managed OpenTelemetry** enabled. Clusters created by
+`setup-gcp` (`--create-cluster` / `--all`) always enable it. For a cluster that does
+not have it, enable it with:
 
 ```bash
 gcloud beta container clusters update CLUSTER_NAME \

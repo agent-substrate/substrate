@@ -48,13 +48,15 @@ service Ateom {
 }
 
 message RunWorkloadRequest {
-  string actor_template_namespace = 1;
-  string actor_template_name      = 2;
-  string actor_id                 = 3;
+  string atespace = 1;
+  string actor_id = 2;
 
-  string runsc_path = 4;
+  string actor_template_namespace = 3;
+  string actor_template_name      = 4;
 
-  WorkloadSpec spec = 5;
+  string runsc_path = 5;
+
+  WorkloadSpec spec = 6;
 
   // runtime_asset_paths maps a runtime asset name (e.g. "cloud-hypervisor",
   // "virtiofsd", "kata-kernel", "kata-image", "kata-config")
@@ -104,13 +106,15 @@ enum SnapshotScope {
 }
 
 message CheckpointWorkloadRequest {
-  string actor_template_namespace = 1;
-  string actor_template_name      = 2;
-  string actor_id                 = 3;
+  string atespace = 1;
+  string actor_id = 2;
 
-  string runsc_path = 4;
+  string actor_template_namespace = 3;
+  string actor_template_name      = 4;
 
-  WorkloadSpec spec = 5;
+  string runsc_path = 5;
+
+  WorkloadSpec spec = 6;
 
   // An object storage URI prefix below which the checkpoint data will be
   // stored.
@@ -120,14 +124,14 @@ message CheckpointWorkloadRequest {
   // memory, sentry state, and filesystem deltas.
   //
   // For example: "gs://bucket/actors/1234/snapshots/5678/"
-  string snapshot_uri_prefix = 6;
+  string snapshot_uri_prefix = 7;
 
   // runtime_asset_paths maps a runtime asset name to the local on-disk path
   // atelet fetched it to (see RunWorkloadRequest). Empty for gVisor.
-  map<string, string> runtime_asset_paths = 7;
+  map<string, string> runtime_asset_paths = 8;
 
   // What content to include in the checkpoint.
-  SnapshotScope scope = 8;
+  SnapshotScope scope = 9;
 }
 
 message CheckpointWorkloadResponse {
@@ -138,23 +142,25 @@ message CheckpointWorkloadResponse {
 }
 
 message RestoreWorkloadRequest {
-  string actor_template_namespace = 1;
-  string actor_template_name      = 2;
-  string actor_id                 = 3;
+  string atespace = 1;
+  string actor_id = 2;
 
-  string runsc_path = 4;
+  string actor_template_namespace = 3;
+  string actor_template_name      = 4;
 
-  WorkloadSpec spec = 5;
+  string runsc_path = 5;
+
+  WorkloadSpec spec = 6;
 
   // The object storage URI prefix of the snapshot to restore.
-  string snapshot_uri_prefix = 6;
+  string snapshot_uri_prefix = 7;
 
   // runtime_asset_paths maps a runtime asset name to the local on-disk path
   // atelet fetched it to (see RunWorkloadRequest). Empty for gVisor.
-  map<string, string> runtime_asset_paths = 7;
+  map<string, string> runtime_asset_paths = 8;
 
   // What content to restore from the snapshot.
-  SnapshotScope scope = 8;
+  SnapshotScope scope = 9;
 }
 
 message RestoreWorkloadResponse {

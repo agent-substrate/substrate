@@ -156,7 +156,10 @@ func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, stat
 	// to the free pool instead of leaving it claimed forever — nothing else
 	// reclaims a healthy worker whose actor moved on to a different pool.
 	for _, worker := range workers {
-		if worker.GetActorId() != input.ActorID {
+		if worker.Assignment == nil {
+			continue
+		}
+		if worker.Assignment.Actor.Name != input.ActorID {
 			continue
 		}
 		if _, ok := eligible[types.NamespacedName{Namespace: worker.GetWorkerNamespace(), Name: worker.GetWorkerPool()}]; ok {
@@ -166,9 +169,7 @@ func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, stat
 		// Workers() returns pointers directly from the cache so we need to clone before
 		// mutating so that the cache is not corrupted if UpdateWorker fails.
 		release := proto.Clone(worker).(*ateapipb.Worker)
-		release.ActorId = ""
-		release.ActorNamespace = ""
-		release.ActorTemplate = ""
+		release.Assignment = nil
 		if err := s.store.UpdateWorker(ctx, release, release.Version); err != nil {
 			return fmt.Errorf("while releasing stale worker assignment: %w", err)
 		}
@@ -188,10 +189,16 @@ func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, stat
 	// Workers() returns pointers directly from the cache so we need to clone before
 	// mutating so that the cache is not corrupted if UpdateWorker fails.
 	assignedWorker = proto.Clone(assignedWorker).(*ateapipb.Worker)
-	assignedWorker.ActorId = input.ActorID
-	assignedWorker.ActorNamespace = state.Actor.GetActorTemplateNamespace()
-	assignedWorker.ActorTemplate = state.Actor.GetActorTemplateName()
-	assignedWorker.ActorAtespace = state.Actor.GetAtespace()
+	assignedWorker.Assignment = &ateapipb.Assignment{
+		ActorTemplate: &ateapipb.KubeNamespacedObjectRef{
+			Namespace: state.Actor.GetActorTemplateNamespace(),
+			Name:      state.Actor.GetActorTemplateName(),
+		},
+		Actor: &ateapipb.ActorRef{
+			Name:     input.ActorID,
+			Atespace: state.Actor.GetAtespace(),
+		},
+	}
 
 	if err := s.store.UpdateWorker(ctx, assignedWorker, assignedWorker.Version); err != nil {
 		return err
@@ -222,7 +229,7 @@ func (s *AssignWorkerStep) RetryBackoff() *wait.Backoff {
 func (s *AssignWorkerStep) findFreeWorker(workers []*ateapipb.Worker, eligible map[types.NamespacedName]struct{}, nodesRestrictions []string) *ateapipb.Worker {
 	var freeWorkers []*ateapipb.Worker
 	for _, worker := range workers {
-		if worker.GetActorId() != "" {
+		if worker.Assignment != nil {
 			continue
 		}
 		if _, ok := eligible[types.NamespacedName{Namespace: worker.GetWorkerNamespace(), Name: worker.GetWorkerPool()}]; !ok {
@@ -272,9 +279,10 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 
 		req := &ateletpb.RestoreRequest{
 			TargetAteomUid:         state.Actor.GetAteomPodUid(),
+			Atespace:               state.Actor.GetAtespace(),
+			ActorId:                state.Actor.GetActorId(),
 			ActorTemplateNamespace: state.Actor.GetActorTemplateNamespace(),
 			ActorTemplateName:      state.Actor.GetActorTemplateName(),
-			ActorId:                state.Actor.GetActorId(),
 			Spec:                   workloadSpec,
 		}
 		switch state.Actor.GetLatestSnapshotInfo().GetType() {
@@ -307,9 +315,10 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 
 		req := &ateletpb.RestoreRequest{
 			TargetAteomUid:         state.Actor.GetAteomPodUid(),
+			Atespace:               state.Actor.GetAtespace(),
+			ActorId:                state.Actor.GetActorId(),
 			ActorTemplateNamespace: state.Actor.GetActorTemplateNamespace(),
 			ActorTemplateName:      state.Actor.GetActorTemplateName(),
-			ActorId:                state.Actor.GetActorId(),
 			Spec:                   workloadSpec,
 			Type:                   ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
 			Config: &ateletpb.RestoreRequest_ExternalConfig{
@@ -334,9 +343,10 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 
 		req := &ateletpb.RunRequest{
 			TargetAteomUid:         state.Actor.GetAteomPodUid(),
+			Atespace:               state.Actor.GetAtespace(),
+			ActorId:                state.Actor.GetActorId(),
 			ActorTemplateNamespace: state.Actor.GetActorTemplateNamespace(),
 			ActorTemplateName:      state.Actor.GetActorTemplateName(),
-			ActorId:                state.Actor.GetActorId(),
 			SandboxAssets:          sandboxAssets,
 			Spec:                   workloadSpec,
 		}

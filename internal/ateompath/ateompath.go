@@ -60,11 +60,11 @@ func AteomNetNSPath(podUID string) string {
 	)
 }
 
-func ActorPath(actorTemplateNamespace, actorTemplateName, actorID string) string {
+func ActorPath(atespace, actorID string) string {
 	return filepath.Join(
 		BasePath,
 		"actors",
-		actorTemplateNamespace+":"+actorTemplateName+":"+actorID,
+		atespace+":"+actorID,
 	)
 }
 
@@ -73,9 +73,9 @@ func ActorPath(actorTemplateNamespace, actorTemplateName, actorID string) string
 // bind-mounts read-only into the actor. It is per-actor and regenerated on
 // every resume, so (unlike the checkpointed process environment) it reflects
 // the correct ID after a restore from the golden snapshot.
-func ActorIdentityDirPath(actorTemplateNamespace, actorTemplateName, actorID string) string {
+func ActorIdentityDirPath(atespace, actorID string) string {
 	return filepath.Join(
-		ActorPath(actorTemplateNamespace, actorTemplateName, actorID),
+		ActorPath(atespace, actorID),
 		"identity",
 	)
 }
@@ -86,69 +86,69 @@ func ActorIdentityDirPath(actorTemplateNamespace, actorTemplateName, actorID str
 // Checkpoint (when the request no longer carries the sandbox config). It lives
 // directly under ActorPath — NOT under a subdir wiped by atelet's
 // resetActorDirs — so it survives between Run and a later Checkpoint.
-func ActorSandboxAssetsFile(actorTemplateNamespace, actorTemplateName, actorID string) string {
+func ActorSandboxAssetsFile(atespace, actorID string) string {
 	return filepath.Join(
-		ActorPath(actorTemplateNamespace, actorTemplateName, actorID),
+		ActorPath(atespace, actorID),
 		"sandbox-assets.json",
 	)
 }
 
-func RunSCStateDir(actorTemplateNamespace, actorTemplateName, actorID string) string {
+func RunSCStateDir(atespace, actorID string) string {
 	return filepath.Join(
-		ActorPath(actorTemplateNamespace, actorTemplateName, actorID),
+		ActorPath(atespace, actorID),
 		"runsc-state",
 	)
 }
 
-func OCIBundleDir(actorTemplateNamespace, actorTemplateName, actorID string) string {
+func OCIBundleDir(atespace, actorID string) string {
 	return filepath.Join(
-		ActorPath(actorTemplateNamespace, actorTemplateName, actorID),
+		ActorPath(atespace, actorID),
 		"bundles",
 	)
 }
 
-func OCIBundlePath(actorTemplateNamespace, actorTemplateName, actorID, containerName string) string {
+func OCIBundlePath(atespace, actorID, containerName string) string {
 	return filepath.Join(
-		OCIBundleDir(actorTemplateNamespace, actorTemplateName, actorID),
+		OCIBundleDir(atespace, actorID),
 		containerName,
 	)
 }
 
-func RunscDebugLogDir(actorTemplateNamespace, actorTemplateName, actorID, containerName string) string {
+func RunscDebugLogDir(atespace, actorID, containerName string) string {
 	return filepath.Join(
-		ActorPath(actorTemplateNamespace, actorTemplateName, actorID),
+		ActorPath(atespace, actorID),
 		"runsc-debug-logs",
 		containerName,
 	)
 }
 
-func CheckpointStateDir(actorTemplateNamespace, actorTemplateName, actorID string) string {
+func CheckpointStateDir(atespace, actorID string) string {
 	return filepath.Join(
-		ActorPath(actorTemplateNamespace, actorTemplateName, actorID),
+		ActorPath(atespace, actorID),
 		"checkpoint-state",
 	)
 }
 
-func LocalCheckpointsDir(actorTemplateNamespace, actorTemplateName, actorID string) string {
+func LocalCheckpointsDir(atespace, actorID string) string {
 	return filepath.Join(
-		ActorPath(actorTemplateNamespace, actorTemplateName, actorID),
+		ActorPath(atespace, actorID),
 		"local-checkpoint",
 	)
 }
 
 // DurableDirVolumeMountsDir is the directory where individual durable-dir
 // volumes are mounted.
-func DurableDirVolumeMountsDir(actorTemplateNamespace, actorTemplateName, actorID string) string {
+func DurableDirVolumeMountsDir(atespace, actorID string) string {
 	return filepath.Join(
-		ActorPath(actorTemplateNamespace, actorTemplateName, actorID),
+		ActorPath(atespace, actorID),
 		"durable-dir",
 	)
 }
 
 // DurableDirVolumeMountPoint returns the path where a specific durable-dir volume is mounted on the nodeVM.
-func DurableDirVolumeMountPoint(actorTemplateNamespace, actorTemplateName, actorID, volumeName string) string {
+func DurableDirVolumeMountPoint(atespace, actorID, volumeName string) string {
 	return filepath.Join(
-		DurableDirVolumeMountsDir(actorTemplateNamespace, actorTemplateName, actorID),
+		DurableDirVolumeMountsDir(atespace, actorID),
 		volumeName,
 	)
 }
@@ -164,23 +164,23 @@ func DurableDirVolumeMountPoint(actorTemplateNamespace, actorTemplateName, actor
 // make sure we write the suspension checkpoint to a different location.  This
 // will work properly, with `runsc checkpoint` paging in any data that hasn't
 // yet been loaded.
-func RestoreStateDir(actorTemplateNamespace, actorTemplateName, actorID string) string {
+func RestoreStateDir(atespace, actorID string) string {
 	return filepath.Join(
-		ActorPath(actorTemplateNamespace, actorTemplateName, actorID),
+		ActorPath(atespace, actorID),
 		"restore-state",
 	)
 }
 
-func PIDFileDir(actorTemplateNamespace, actorTemplateName, actorID string) string {
+func PIDFileDir(atespace, actorID string) string {
 	return filepath.Join(
-		ActorPath(actorTemplateNamespace, actorTemplateName, actorID),
+		ActorPath(atespace, actorID),
 		"pidfiles",
 	)
 }
 
-func PIDFilePath(actorTemplateNamespace, actorTemplateName, actorID, containerName string) string {
+func PIDFilePath(atespace, actorID, containerName string) string {
 	return filepath.Join(
-		PIDFileDir(actorTemplateNamespace, actorTemplateName, actorID),
+		PIDFileDir(atespace, actorID),
 		containerName+".pid",
 	)
 }

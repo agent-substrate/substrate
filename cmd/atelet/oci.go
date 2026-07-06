@@ -53,14 +53,14 @@ const (
 	ActorIDFileName = "actor-id"
 )
 
-func prepareOCIDirectory(ctx context.Context, pullCache *memorypullcache.MemoryPullCache, actorTemplateNamespace, actorTemplateName, actorID, containerName, ref string, args []string, env []string, annotations map[string]string, netns string, identityDir string, durableDirVolumeMounts []*ateletpb.VolumeMount) error {
+func prepareOCIDirectory(ctx context.Context, pullCache *memorypullcache.MemoryPullCache, atespace, actorID, containerName, ref string, args []string, env []string, annotations map[string]string, netns string, identityDir string, durableDirVolumeMounts []*ateletpb.VolumeMount) error {
 	tracer := otel.Tracer("prepareOCIDirectory")
 
 	ctx, span := tracer.Start(ctx, "prepareOCIDirectory")
 	span.SetAttributes(attribute.String("image", ref))
 	defer span.End()
 
-	bundlePath := ateompath.OCIBundlePath(actorTemplateNamespace, actorTemplateName, actorID, containerName)
+	bundlePath := ateompath.OCIBundlePath(atespace, actorID, containerName)
 	rootPath := path.Join(bundlePath, "rootfs")
 
 	if err := os.RemoveAll(rootPath); err != nil {
@@ -90,7 +90,7 @@ func prepareOCIDirectory(ctx context.Context, pullCache *memorypullcache.MemoryP
 		}
 	}
 
-	ociSpec := buildActorOCISpec(actorTemplateNamespace, actorTemplateName, actorID, args, env, annotations, netns, identityDir, durableDirVolumeMounts)
+	ociSpec := buildActorOCISpec(atespace, actorID, args, env, annotations, netns, identityDir, durableDirVolumeMounts)
 	ociSpecBytes, err := json.MarshalIndent(ociSpec, "", "  ")
 	if err != nil {
 		return fmt.Errorf("while marshaling OCI spec: %w", err)
@@ -107,7 +107,7 @@ func prepareOCIDirectory(ctx context.Context, pullCache *memorypullcache.MemoryP
 // When identityDir is non-empty it adds a read-only bind mount of that host
 // directory at IdentityMountPath so the actor can read its own ID (see
 // IdentityMountPath for why this is a bind mount rather than env vars).
-func buildActorOCISpec(actorTemplateNamespace string, actorTemplateName string, actorID string, args []string, env []string, annotations map[string]string, netns string, identityDir string, durableDirVolumeMounts []*ateletpb.VolumeMount) *specs.Spec {
+func buildActorOCISpec(atespace string, actorID string, args []string, env []string, annotations map[string]string, netns string, identityDir string, durableDirVolumeMounts []*ateletpb.VolumeMount) *specs.Spec {
 	envVars := []string{
 		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
 	}
@@ -225,7 +225,7 @@ func buildActorOCISpec(actorTemplateNamespace string, actorTemplateName string, 
 		spec.Mounts = append(spec.Mounts, specs.Mount{
 			Destination: vm.GetMountPath(),
 			Type:        "bind",
-			Source:      ateompath.DurableDirVolumeMountPoint(actorTemplateNamespace, actorTemplateName, actorID, vm.GetName()),
+			Source:      ateompath.DurableDirVolumeMountPoint(atespace, actorID, vm.GetName()),
 		})
 	}
 
