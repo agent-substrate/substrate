@@ -52,7 +52,7 @@ message RunWorkloadRequest {
   string actor_id = 2;
 
   string actor_template_namespace = 3;
-  string actor_template_name      = 4;
+  string actor_template_name = 4;
 
   string runsc_path = 5;
 
@@ -71,8 +71,8 @@ message WorkloadSpec {
 }
 
 message Container {
-  string          name                = 1;
-  Readyz          readyz              = 2;
+  string name = 1;
+  Readyz readyz = 2;
   repeated string durable_dir_volumes = 3;
 }
 
@@ -87,7 +87,7 @@ message HTTPGetAction {
   // Path to access on the HTTP server. Empty means "/readyz".
   string path = 1;
   // TCP port to connect to (1..65535).
-  int32  port = 2;
+  int32 port = 2;
 }
 
 message RunWorkloadResponse {
@@ -110,7 +110,7 @@ message CheckpointWorkloadRequest {
   string actor_id = 2;
 
   string actor_template_namespace = 3;
-  string actor_template_name      = 4;
+  string actor_template_name = 4;
 
   string runsc_path = 5;
 
@@ -146,7 +146,7 @@ message RestoreWorkloadRequest {
   string actor_id = 2;
 
   string actor_template_namespace = 3;
-  string actor_template_name      = 4;
+  string actor_template_name = 4;
 
   string runsc_path = 5;
 
@@ -164,5 +164,4 @@ message RestoreWorkloadRequest {
 }
 
 message RestoreWorkloadResponse {
-
 }

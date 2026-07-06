@@ -22,7 +22,6 @@ import "google/protobuf/timestamp.proto";
 
 option go_package = "github.com/agent-substrate/substrate/pkg/proto/ateapipb";
 
-
 // Control is the primary RPC interface for Agentic Substrate.
 service Control {
   // Get an Actor.
@@ -81,7 +80,7 @@ message LocalSnapshotInfo {
 message SnapshotInfo {
   oneof data {
     ExternalSnapshotInfo external = 2;
-    LocalSnapshotInfo    local    = 3;
+    LocalSnapshotInfo local = 3;
   }
 
   reserved 1;
@@ -123,26 +122,26 @@ message Actor {
   ResourceMetadata metadata = 1;
 
   string actor_template_namespace = 2;
-  string actor_template_name      = 3;
+  string actor_template_name = 3;
 
   enum Status {
     STATUS_UNSPECIFIED = 0;
-    STATUS_RESUMING    = 1;
-    STATUS_RUNNING     = 2;
-    STATUS_SUSPENDING  = 3;
-    STATUS_SUSPENDED   = 4;
-    STATUS_PAUSING     = 5;
-    STATUS_PAUSED      = 6;
-    STATUS_CRASHED     = 7;
+    STATUS_RESUMING = 1;
+    STATUS_RUNNING = 2;
+    STATUS_SUSPENDING = 3;
+    STATUS_SUSPENDED = 4;
+    STATUS_PAUSING = 5;
+    STATUS_PAUSED = 6;
+    STATUS_CRASHED = 7;
   }
   Status status = 4;
 
   string ateom_pod_namespace = 5;
-  string ateom_pod_name      = 6;
-  string ateom_pod_ip        = 7;
+  string ateom_pod_name = 6;
+  string ateom_pod_ip = 7;
 
   string in_progress_snapshot = 8;
-  string ateom_pod_uid        = 9;
+  string ateom_pod_uid = 9;
   SnapshotInfo latest_snapshot_info = 10;
 
   // worker_selector is the per-actor placement constraint. The scheduler
@@ -173,7 +172,7 @@ message ObjectRef {
   string atespace = 1;
   // The name of the resource. Required. Unique within an atespace, or globally
   // unique if the resource is global-scoped.
-  string name     = 2;
+  string name = 2;
 }
 
 message CreateAtespaceRequest {
@@ -284,16 +283,16 @@ message ListActorsResponse {
 
 message Worker {
   string worker_namespace = 1;
-  string worker_pool      = 2;
-  string worker_pod       = 3;
+  string worker_pool = 2;
+  string worker_pod = 3;
 
   Assignment assignment = 4;
 
-  string ip              = 5;
-  int64  version         = 6;
-  string worker_pod_uid  = 7;
-  string node_name       = 8;
-  string sandbox_class   = 9;
+  string ip = 5;
+  int64 version = 6;
+  string worker_pod_uid = 7;
+  string node_name = 8;
+  string sandbox_class = 9;
   map<string, string> labels = 10;
 }
 
@@ -304,7 +303,7 @@ message Assignment {
 
 message KubeNamespacedObjectRef {
   string namespace = 1;
-  string name  = 2;
+  string name = 2;
 }
 
 message DebugClearRequest {}
@@ -342,8 +341,8 @@ service SessionIdentity {
 message MintJWTRequest {
   repeated string audience = 1;
 
-  string app_id     = 2;
-  string user_id    = 3;
+  string app_id = 2;
+  string user_id = 3;
   string session_id = 4;
 }
 
@@ -370,8 +369,8 @@ message MintJWTResponse {
 }
 
 message MintCertRequest {
-  string app_id     = 1;
-  string user_id    = 2;
+  string app_id = 1;
+  string user_id = 2;
   string session_id = 3;
 
   // Request contains DER encoded bytes of a x509 certificate signing request.

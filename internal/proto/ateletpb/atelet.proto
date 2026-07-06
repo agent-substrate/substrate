@@ -39,7 +39,7 @@ message RunRequest {
   string actor_id = 3;
 
   string actor_template_namespace = 4;
-  string actor_template_name      = 5;
+  string actor_template_name = 5;
 
   WorkloadSpec spec = 6;
 
@@ -69,20 +69,20 @@ message ArchAssets {
 // architecture (GOARCH) and then by asset name. atelet's backend code
 // interprets the asset names (gVisor expects "runsc").
 message SandboxAssets {
-  string sandbox_class = 1;          // e.g. "gvisor"
+  string sandbox_class = 1;           // e.g. "gvisor"
   map<string, ArchAssets> assets = 2; // arch -> {name -> file}
 }
 
 // WorkloadSpec parallels Pod, but with far fewer configurable fields.
 message WorkloadSpec {
-  repeated Container containers  = 1;
-  string             pause_image = 2;
-  repeated Volume    volumes     = 3;
+  repeated Container containers = 1;
+  string pause_image = 2;
+  repeated Volume volumes = 3;
 }
 
 enum VolumeType {
-  VOLUME_TYPE_UNSPECIFIED  = 0;
-  VOLUME_TYPE_DURABLE_DIR  = 1;
+  VOLUME_TYPE_UNSPECIFIED = 0;
+  VOLUME_TYPE_DURABLE_DIR = 1;
 }
 
 message DurableDirVolume {
@@ -93,27 +93,27 @@ message Volume {
 
   VolumeType type = 2;
 
-  oneof source{
+  oneof source {
     DurableDirVolume durable_dir = 3;
   }
 }
 
-message VolumeMount{
+message VolumeMount {
   string name = 1;
   string mount_path = 2;
 }
 
 message Container {
-  string               name          = 1;
-  string               image         = 2;
-  repeated string      command       = 3;
-  repeated EnvEntry    env           = 4;
-  Readyz               readyz  = 5;
+  string name = 1;
+  string image = 2;
+  repeated string command = 3;
+  repeated EnvEntry env = 4;
+  Readyz readyz = 5;
   repeated VolumeMount volume_mounts = 6;
 }
 
 message EnvEntry {
-  string name  = 1;
+  string name = 1;
   string value = 2;
 }
 
@@ -128,7 +128,7 @@ message HTTPGetAction {
   // Path to access on the HTTP server. Empty means "/readyz".
   string path = 1;
   // TCP port to connect to (1..65535).
-  int32  port = 2;
+  int32 port = 2;
 }
 
 message RunResponse {
@@ -158,7 +158,7 @@ enum CheckpointType {
   // Should never happen
   CHECKPOINT_TYPE_UNSPECIFIED = 0;
   // Save snapshot only in local filesystem
-  CHECKPOINT_TYPE_LOCAL  = 1;
+  CHECKPOINT_TYPE_LOCAL = 1;
   // Save snapshot to object storage
   CHECKPOINT_TYPE_EXTERNAL = 2;
 }
@@ -182,7 +182,7 @@ message CheckpointRequest {
   string actor_id = 3;
 
   string actor_template_namespace = 4;
-  string actor_template_name      = 5;
+  string actor_template_name = 5;
 
   // Sandbox binary config is not sent on checkpoint: atelet uses the version the
   // actor is currently running (recorded with the actor's on-node state at
@@ -193,7 +193,7 @@ message CheckpointRequest {
 
   // The checkpoint configuration, depending on the type.
   oneof config {
-    LocalCheckpointConfiguration local_config    = 8;
+    LocalCheckpointConfiguration local_config = 8;
     ExternalCheckpointConfiguration external_config = 9;
   }
 
@@ -202,7 +202,6 @@ message CheckpointRequest {
 }
 
 message CheckpointResponse {
-
 }
 
 message RestoreRequest {
@@ -212,7 +211,7 @@ message RestoreRequest {
   string actor_id = 3;
 
   string actor_template_namespace = 4;
-  string actor_template_name      = 5;
+  string actor_template_name = 5;
 
   // Sandbox binary config is not sent on restore: the snapshot is
   // self-describing. atelet reads the snapshot manifest to recover the pinned
@@ -223,7 +222,7 @@ message RestoreRequest {
 
   // The checkpoint configuration, depending on the type.
   oneof config {
-    LocalCheckpointConfiguration local_config    = 8;
+    LocalCheckpointConfiguration local_config = 8;
     ExternalCheckpointConfiguration external_config = 9;
   }
 
@@ -232,5 +231,4 @@ message RestoreRequest {
 }
 
 message RestoreResponse {
-
 }
