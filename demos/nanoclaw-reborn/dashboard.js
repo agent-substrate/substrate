@@ -22,7 +22,6 @@ var runCmd = (cmd) => new Promise((resolve) => { (0, import_node_child_process.e
 
 async function syncState() {
   try {
-    // CORRECTED PATH: /opt/bin/kubectl-ate for the dashboard pod
     const actorsOut = await runCmd("/opt/bin/kubectl-ate --endpoint " + ATE_ENDPOINT + " get actors -o json");
     const podsOut = await runCmd("kubectl get pods -n " + NS + " -l ate.dev/worker-pool=nanoclaw-rotated-pool -o json");
     try { const res = await fetch(BROKER_URL + "/status"); brokerData = await res.json(); } catch (e) {}
@@ -43,7 +42,6 @@ async function syncState() {
     if (podsOut?.startsWith("{")) {
       const podsRaw = JSON.parse(podsOut).items || [];
       clusterState.pods = podsRaw.map(p => {
-        // Only match actors that are actually RUNNING or RESUMING
         const landedActor = rawActors.find(a => (a.ateomPodName || "").includes(p.metadata.name) && (a.status === "STATUS_RUNNING" || a.status === "STATUS_RESUMING"));
         let displayActor = "idle";
         if (landedActor) {
@@ -84,7 +82,8 @@ app.get("/", (c) => c.html(`
   .grid-master { display: grid; gap: 1.5em; grid-template-columns: 1.6fr 1fr; margin-bottom: 1.5em; }
   .grid-side { display: grid; gap: 1.5em; grid-template-columns: 1fr 1fr; margin-bottom: 1.5em; }
   .card { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 1.2em; }
-  .card h2 { font-size: 0.75em; margin: 0 0 1em 0; color: var(--muted); text-transform: uppercase; border-left: 3px solid var(--green); padding-left: 8px; }
+  .card h2 { font-size: 0.75em; margin: 0 0 5px 0; color: var(--muted); text-transform: uppercase; border-left: 3px solid var(--green); padding-left: 8px; }
+  .card .desc { font-size: 0.65em; color: var(--muted); margin-bottom: 12px; font-style: italic; line-height: 1.2; }
   .shell-container { background: var(--panel-2); height: 220px; overflow: auto; padding: 1em; border: 1px solid #000; }
   .shell-line { font-size: 0.82em; margin-bottom: 0.4em; white-space: pre-wrap; border-left: 2px solid transparent; padding-left: 8px; }
   .shell-line.whatsapp { color: var(--green); } .shell-line.cron { color: var(--yellow); } .shell-line.substrate { color: var(--cyan); } .shell-line.sys { color: var(--muted); }
@@ -102,21 +101,22 @@ app.get("/", (c) => c.html(`
 </style>
 </head>
 <body>
-<header><h1>NanoClaw Substrate Integration Demo <span style="font-size:0.6em; vertical-align:middle; opacity:0.8;">V1.5.2 TELEMETRY-FIX</span></h1><div id="heartbeat" style="font-size:0.7em; color:var(--muted)">Syncing...</div></header>
+<header><h1>NanoClaw Substrate Integration Demo <span style="font-size:0.6em; vertical-align:middle; opacity:0.8;">V1.5.3 FINAL</span></h1><div id="heartbeat" style="font-size:0.7em; color:var(--muted)">Syncing...</div></header>
 <div class="grid-master">
-  <div><div class="card" style="margin-bottom: 1.5em;"><h2>NanoClaw Decision Stream</h2><div id="shell" class="shell-container"></div></div>
-  <div class="card"><h2>Task Timeline</h2><div id="timeline" style="height: 100px; overflow: auto; background: var(--panel-2); border: 1px solid var(--line); padding: 8px;"></div></div></div>
-  <div><div class="card" style="margin-bottom: 1.5em;"><h2>WhatsApp Bridge</h2><div id="wa-status"></div>
+  <div><div class="card" style="margin-bottom: 1.5em;"><h2>Decision Stream</h2><div class="desc">Live orchestrated logs showing broker-to-agent signals and Substrate API resume/suspend events.</div><div id="shell" class="shell-container"></div></div>
+  <div class="card"><h2>Task Timeline</h2><div class="desc">Sequential history of all tasks (WhatsApp, Cron, Burst) queued to the Substrate fleet.</div><div id="timeline" style="height: 100px; overflow: auto; background: var(--panel-2); border: 1px solid var(--line); padding: 8px;"></div></div></div>
+  <div><div class="card" style="margin-bottom: 1.5em;"><h2>WhatsApp Bridge</h2><div class="desc">Persistent 24/7 gateway. Agents remain dormant until a message is received here.</div><div id="wa-status"></div>
   <div id="pairing" style="display:none; text-align:center; padding:15px; border:2px dashed var(--yellow); margin-top:10px;"><div id="qrcode" style="background:#fff; padding:10px; border-radius:4px; margin-bottom:10px;"></div><div id="pairing-code" style="font-size:1.5em; font-weight:800; color:var(--yellow); letter-spacing:3px;"></div></div>
   <div id="wa-active" style="display:none; color:var(--green); text-align:center; padding:15px; border:1px solid var(--green); margin-top:10px; font-weight:800;">LIVE CONNECTION: LISTENING</div></div>
-  <div class="card" style="background: var(--panel-2); border-color: var(--pink);"><h2 style="border-left-color: var(--pink)">Operational Efficiency Projection</h2>
-  <div style="font-size: 0.72em;"><div class="cron-line"><span>Workflow Baseline</span><span style="color:var(--green)">48 crons / hr</span></div><div class="cron-line"><span>Measured Intensity</span><span id="proj-duration" style="color:var(--orange)">-- s / task</span></div><div class="cron-line"><span>Oversubscription Efficiency</span><span id="proj-overcommit" style="color:var(--cyan)">-- x</span></div></div></div>
-  <div class="card" style="margin-top: 15px; background: transparent; border:none; padding:0;"><h2>External Cron Tracker</h2><div id="cron" class="cron-box"></div></div></div></div>
-<div class="grid-side"><div class="card"><h2>Physical Resource Map</h2><div id="pods"></div></div><div class="card"><h2>Logical Agent Fleet</h2><div id="actors"></div></div></div>
-<div class="card" style="margin-top:1.5em;"><h2>Task Audit: Reasoning History</h2><div style="height:250px; overflow:auto; background: var(--panel-2); border: 1px solid var(--line);"><table id="audit"><thead><tr><th style="width:90px">Time</th><th style="width:130px">Agent</th><th>Reasoning Payload</th></tr></thead><tbody></tbody></table></div></div>
+  <div class="card" style="background: var(--panel-2); border-color: var(--pink);"><h2 style="border-left-color: var(--pink)">Operational Efficiency</h2><div class="desc">Real-time cost saving metrics. Shows logical activity vs. physical resource footprint.</div>
+  <div style="font-size: 0.72em;"><div class="cron-line"><span>Workflow Baseline</span><span style="color:var(--green)">48 crons / hr</span></div><div class="cron-line"><span>Measured Intensity</span><span id="proj-duration" style="color:var(--orange)">-- s / task</span></div><div class="cron-line"><span>Oversubscription Efficiency</span><span id="proj-overcommit" style="color:var(--cyan)">-- x Density</span></div></div></div>
+  <div class="card" style="margin-top: 15px; background: transparent; border:none; padding:0;"><h2>External Cron Tracker</h2><div class="desc">Staggered pulses simulating autonomous background work for each agent.</div><div id="cron" class="cron-box"></div></div></div></div>
+<div class="grid-side"><div class="card"><h2>Physical Resource Map</h2><div class="desc">The Hardware layer. Shows which logical tenant is currently 'landed' on a physical worker.</div><div id="pods"></div></div>
+<div class="card"><h2>Logical Agent Fleet</h2><div class="desc">The Application layer. Agents are 'frozen' in RAM until the Broker signals a resume.</div><div id="actors"></div></div></div>
+<div class="card" style="margin-top:1.5em;"><h2>Task Audit: Reasoning History</h2><div class="desc">Complete transparency into Gemini 1.5 Flash 'Thinking' process and final responses.</div><div style="height:250px; overflow:auto; background: var(--panel-2); border: 1px solid var(--line);"><table id="audit"><thead><tr><th style="width:90px">Time</th><th style="width:130px">Agent</th><th>Reasoning Payload</th></tr></thead><tbody></tbody></table></div></div>
 <script>
 const AGENT_META = { "agent-luna": { color: "#79c0ff", interval: 120000 }, "agent-mars": { color: "#ff79c6", interval: 300000 }, "agent-nova": { color: "#f1fa8c", interval: 600000 } };
-let currentQr = null; async function refresh() { try { const statsRes = await fetch("/api/stats?t=" + Date.now()); const dataRes = await fetch("/api/data?t=" + Date.now()); const stats = await statsRes.json(); const data = await dataRes.json(); const el = (id) => document.getElementById(id); el("heartbeat").innerHTML = "● Last Sync: " + new Date().toLocaleTimeString(); el("proj-duration").textContent = Math.round(stats.avgTaskDurationSec || 8) + " s / task"; el("proj-overcommit").textContent = stats.density + "x Density"; if (data.logs) { el("shell").innerHTML = data.logs.map(l => "<div class='shell-line "+(l.module||"sys")+"'>["+l.timestamp+"] ["+(l.module||"sys").toUpperCase()+"] "+l.message+"</div>").join(""); el("shell").scrollTop = el("shell").scrollHeight; } el("wa-status").innerHTML = "<span class='badge' style='color:var(--green)'>STATUS: " + data.connectionStatus.toUpperCase() + "</span>"; const showPairing = data.connectionStatus !== "open" && (data.pairingCode || data.qrCode); el("pairing").style.display = showPairing ? "block" : "none"; el("pairing-code").textContent = data.pairingCode || ""; if (data.qrCode && data.qrCode !== currentQr) { currentQr = data.qrCode; const qr = qrcode(0, "M"); qr.addData(currentQr); qr.make(); el("qrcode").innerHTML = qr.createImgTag(3); } el("wa-active").style.display = data.connectionStatus === "open" ? "block" : "none";
+let currentQr = null; async function refresh() { try { const statsRes = await fetch("/api/stats?t=" + Date.now()); const dataRes = await fetch("/api/data?t=" + Date.now()); const stats = await statsRes.json(); const data = await dataRes.json(); const el = (id) => document.getElementById(id); el("heartbeat").innerHTML = "● Last Sync: " + new Date().toLocaleTimeString(); el("proj-duration").textContent = Math.round(stats.avgTaskDurationSec || 8) + " s / task"; el("proj-overcommit").textContent = stats.density + "x"; if (data.logs) { el("shell").innerHTML = data.logs.map(l => "<div class='shell-line "+(l.module||"sys")+"'>["+l.timestamp+"] ["+(l.module||"sys").toUpperCase()+"] "+l.message+"</div>").join(""); el("shell").scrollTop = el("shell").scrollHeight; } el("wa-status").innerHTML = "<span class='badge' style='color:var(--green)'>STATUS: " + data.connectionStatus.toUpperCase() + "</span>"; const showPairing = data.connectionStatus !== "open" && (data.pairingCode || data.qrCode); el("pairing").style.display = showPairing ? "block" : "none"; el("pairing-code").textContent = data.pairingCode || ""; if (data.qrCode && data.qrCode !== currentQr) { currentQr = data.qrCode; const qr = qrcode(0, "M"); qr.addData(currentQr); qr.make(); el("qrcode").innerHTML = qr.createImgTag(3); } el("wa-active").style.display = data.connectionStatus === "open" ? "block" : "none";
 const cronBox = el("cron"); if (data.cron && cronBox) { cronBox.innerHTML = Object.keys(AGENT_META).map(name => { const remaining = Math.max(0, Math.round((AGENT_META[name].interval - (Date.now() - (data.cron.lastTrigger[name]||0)) % AGENT_META[name].interval) / 1000)); return '<div class="cron-line"><span style="color:'+AGENT_META[name].color+'">'+name+'</span><span>'+remaining+'s left</span></div>'; }).join(''); }
 el("timeline").innerHTML = (data.assignments || []).map(a => { const display = a.agent.split("-v")[0].replace("nano-", "agent-"); const color = AGENT_META[display] ? AGENT_META[display].color : "#fff"; return "<div style='font-size:0.7em; border-bottom:1px solid #222; padding:4px;'>["+new Date(a.created_at*1000).toISOString().slice(11,19)+"] <b style='color:"+color+"'>"+display+"</b>: "+a.task+" <span class='badge "+a.state+"' style='float:right'>"+a.state+"</span></div>"; }).join(""); 
 el("pods").innerHTML = data.pods.map(p => { const isActive = p.activeActor !== "idle"; const color = (AGENT_META[p.activeActor] ? AGENT_META[p.activeActor].color : "#333"); return "<div class='box "+(isActive ? "active-worker" : "")+"' style='border-left: 6px solid "+color+"'><b>" + p.name.split("-").pop() + "</b><br><span style='font-size:0.72em; color:var(--green)'>PHYSICAL IP: " + p.ip + "</span><br><span style='font-size:0.75em; color:var(--muted)'>ACTIVE TENANT: <b style='color:"+color+"'>"+p.activeActor.toUpperCase()+"</b></span></div>"; }).join(""); 
@@ -125,5 +125,5 @@ document.querySelector("#audit tbody").innerHTML = (data.audits || []).map(a => 
 </script></body></html>
 `));
 var port = 8090;
-(0, import_node_server.serve)({ fetch: app.fetch, port, hostname: "0.0.0.0" }, () => { console.log("V1.5.2 Dashboard Online"); });
+(0, import_node_server.serve)({ fetch: app.fetch, port, hostname: "0.0.0.0" }, () => { console.log("V1.5.3 Dashboard Online"); });
 syncState();
