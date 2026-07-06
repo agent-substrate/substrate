@@ -32,6 +32,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/contextlogging"
+	"github.com/agent-substrate/substrate/internal/overlayfallback"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/readyz"
 	"github.com/agent-substrate/substrate/internal/serverboot"
@@ -208,9 +209,11 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	// per-bundle marker. atelet cannot mount(2) (its capabilities are dropped),
 	// so the privileged ateom worker performs it here — in ateom's mount
 	// namespace, which the runsc child shares. On failure the deferred
-	// unmount tears down any partial mounts.
+	// unmount tears down any partial mounts. The failure is wrapped as a
+	// recognizable status so atelet can fall back to per-restore untar and
+	// retry (the mount cannot be retried in-band here — atelet holds the tar).
 	if err := mountWorkloadOverlays(ctx, req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId(), req.GetSpec()); err != nil {
-		return nil, fmt.Errorf("while mounting overlay rootfs: %w", err)
+		return nil, overlayfallback.MountFailure(fmt.Errorf("while mounting overlay rootfs: %w", err))
 	}
 	defer func() {
 		if retErr != nil {
@@ -406,9 +409,11 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	// Mount the overlayfs rootfs for any container atelet flagged via a
 	// per-bundle marker, mirroring RunWorkload. The mount happens in ateom's
 	// mount namespace (shared by the runsc child); on failure the deferred
-	// unmount tears down any partial mounts.
+	// unmount tears down any partial mounts. The failure is wrapped as a
+	// recognizable status so atelet can fall back to per-restore untar and
+	// retry.
 	if err := mountWorkloadOverlays(ctx, req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId(), req.GetSpec()); err != nil {
-		return nil, fmt.Errorf("while mounting overlay rootfs: %w", err)
+		return nil, overlayfallback.MountFailure(fmt.Errorf("while mounting overlay rootfs: %w", err))
 	}
 	defer func() {
 		if retErr != nil {

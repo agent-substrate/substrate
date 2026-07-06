@@ -55,7 +55,13 @@ const (
 // the rootfs is materialized via an overlayfs mount over a node-local cache
 // instead of re-extracting the tarball — reducing per-restore latency from
 // seconds to sub-millisecond on cache hits.
-func prepareOCIDirectory(ctx context.Context, pullCache *memorypullcache.MemoryPullCache, rootfsCache *rootfscache.Cache, actorTemplateNamespace, actorTemplateName, actorID, containerName, ref string, args []string, env []string, annotations map[string]string, netns string, identityDir string, durableDirVolumeMounts []*ateletpb.VolumeMount) error {
+//
+// forceUntar bypasses the overlay path unconditionally and extracts the tarball
+// directly. atelet sets it when retrying after ateom reports an overlay mount
+// failure (see overlayfallback): the overlay mount is performed by ateom after
+// this function has returned, so the only recovery is to re-prepare the bundle
+// as a plain untar and retry the RPC.
+func prepareOCIDirectory(ctx context.Context, pullCache *memorypullcache.MemoryPullCache, rootfsCache *rootfscache.Cache, actorTemplateNamespace, actorTemplateName, actorID, containerName, ref string, args []string, env []string, annotations map[string]string, netns string, identityDir string, durableDirVolumeMounts []*ateletpb.VolumeMount, forceUntar bool) error {
 	tracer := otel.Tracer("prepareOCIDirectory")
 
 	ctx, span := tracer.Start(ctx, "prepareOCIDirectory")
@@ -67,11 +73,12 @@ func prepareOCIDirectory(ctx context.Context, pullCache *memorypullcache.MemoryP
 
 	// Try the overlayfs cache path first.  This succeeds when:
 	//   1. rootfsCache is non-nil, AND
-	//   2. the image ref includes a digest (@sha256:…).
+	//   2. the image ref includes a digest (@sha256:…), AND
+	//   3. we are not being forced onto the untar fallback.
 	// On a cache hit, tarData is NOT consumed, so we can skip the untar
 	// entirely.  On a miss, the cache extracts and caches for next time.
 	digest := extractDigestFromRef(ref)
-	if rootfsCache != nil && digest != "" {
+	if rootfsCache != nil && digest != "" && !forceUntar {
 		// Pass Fetch as a lazy provider: on a cache hit EnsureRootfs returns the
 		// on-disk lowerDir without invoking it, so we do NOT pull or extract the
 		// image (and never buffer it in the memory pull cache) on the hot path.
@@ -107,7 +114,19 @@ func prepareOCIDirectory(ctx context.Context, pullCache *memorypullcache.MemoryP
 
 		span.SetAttributes(attribute.String("rootfs_method", "overlay"))
 	} else {
-		// Fallback: no digest or no cache — extract directly (original path).
+		// Fallback: no digest, no cache, or forced onto untar after an overlay
+		// mount failure — extract directly (original path).
+		//
+		// Remove any overlay-lower marker a prior overlay attempt left behind.
+		// Its presence is ateom's signal to mount an overlay; on the untar
+		// fallback the rootfs is the real root and no overlay must be mounted,
+		// so the stale marker has to go or ateom would try to mount again on
+		// the retry.
+		markerPath := ateompath.OverlayLowerMarkerFile(actorTemplateNamespace, actorTemplateName, actorID, containerName)
+		if err := os.Remove(markerPath); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("while removing stale overlay lower marker: %w", err)
+		}
+
 		if err := os.RemoveAll(rootPath); err != nil {
 			return fmt.Errorf("while clearing rootfs %q: %w", rootPath, err)
 		}
