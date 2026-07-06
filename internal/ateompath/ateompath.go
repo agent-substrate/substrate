@@ -127,6 +127,46 @@ func OCIBundlePath(actorTemplateNamespace, actorTemplateName, actorID, container
 	)
 }
 
+// ContainerRootfsDir is the rootfs directory inside a container's OCI bundle.
+// It is the OCI spec's Root.Path target: either an overlayfs mountpoint (when
+// the rootfs cache is used) or a directly-extracted rootfs (fallback).
+func ContainerRootfsDir(actorTemplateNamespace, actorTemplateName, actorID, containerName string) string {
+	return filepath.Join(
+		OCIBundlePath(actorTemplateNamespace, actorTemplateName, actorID, containerName),
+		"rootfs",
+	)
+}
+
+// OverlayUpperDir is the per-container writable overlay layer (overlayfs
+// upperdir); copy-ups of the read-only shared lowerdir land here.
+func OverlayUpperDir(actorTemplateNamespace, actorTemplateName, actorID, containerName string) string {
+	return filepath.Join(
+		OCIBundlePath(actorTemplateNamespace, actorTemplateName, actorID, containerName),
+		"upper",
+	)
+}
+
+// OverlayWorkDir is the overlayfs work directory required alongside upperdir.
+func OverlayWorkDir(actorTemplateNamespace, actorTemplateName, actorID, containerName string) string {
+	return filepath.Join(
+		OCIBundlePath(actorTemplateNamespace, actorTemplateName, actorID, containerName),
+		"work",
+	)
+}
+
+// OverlayLowerMarkerFile is the per-container marker atelet writes (containing
+// the node-local read-only lowerdir path) to request that the privileged ateom
+// worker mount an overlayfs rootfs for this container. atelet cannot call
+// mount(2) after its capabilities were dropped, so the mount is performed by
+// ateom just before `runsc create`. The file's absence means no overlay:
+// atelet populated ContainerRootfsDir by direct untar instead.
+func OverlayLowerMarkerFile(actorTemplateNamespace, actorTemplateName, actorID, containerName string) string {
+	return filepath.Join(
+		OCIBundlePath(actorTemplateNamespace, actorTemplateName, actorID, containerName),
+		"overlay-lower",
+	)
+}
+
 func RunscDebugLogDir(actorTemplateNamespace, actorTemplateName, actorID, containerName string) string {
 	return filepath.Join(
 		ActorPath(actorTemplateNamespace, actorTemplateName, actorID),

@@ -19,7 +19,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
 	"os"
 	"path"
 	"strings"
@@ -84,15 +83,19 @@ func prepareOCIDirectory(ctx context.Context, pullCache *memorypullcache.MemoryP
 			return fmt.Errorf("in rootfsCache.EnsureRootfs: %w", err)
 		}
 
-		// Create the overlay mount target.
+		// Create the overlay mount target. The actual overlayfs mount is
+		// performed by the privileged ateom worker just before `runsc create`,
+		// because atelet runs with all capabilities dropped and cannot call
+		// mount(2). We record the read-only lowerdir in a per-bundle marker file
+		// that ateom reads; its presence is ateom's signal to mount an overlay
+		// (upperdir/workdir/target are derived from the bundle path by
+		// convention on both sides).
 		if err := os.MkdirAll(rootPath, 0o700); err != nil {
 			return fmt.Errorf("in os.MkdirAll for rootfs mount target: %w", err)
 		}
-
-		upperDir := path.Join(bundlePath, "upper")
-		workDir := path.Join(bundlePath, "work")
-		if err := setupOverlayfs(rootPath, lowerDir, upperDir, workDir); err != nil {
-			return fmt.Errorf("setting up overlayfs (lower=%s, target=%s): %w", lowerDir, rootPath, err)
+		markerPath := ateompath.OverlayLowerMarkerFile(actorTemplateNamespace, actorTemplateName, actorID, containerName)
+		if err := os.WriteFile(markerPath, []byte(lowerDir), 0o600); err != nil {
+			return fmt.Errorf("while writing overlay lower marker: %w", err)
 		}
 
 		span.SetAttributes(attribute.String("rootfs_method", "overlay"))
@@ -296,18 +299,6 @@ func createMountPoint(rootPath, mountPath string) error {
 	rel := strings.TrimPrefix(mountPath, "/")
 	if err := root.MkdirAll(rel, 0o755); err != nil {
 		return fmt.Errorf("creating mount dir %q: %w", rel, err)
-	}
-	return nil
-}
-
-// unmountActorRootfs attempts to unmount the rootfs overlay for a single
-// container inside an actor's bundle directory.  Returns nil if the rootfs
-// is not a mountpoint (i.e. was produced by direct untar).
-func unmountActorRootfs(bundleDir, containerName string) error {
-	rootfsPath := path.Join(bundleDir, containerName, "rootfs")
-	if err := teardownOverlayfs(rootfsPath); err != nil {
-		// ENOTDIR/ENOENT/EINVAL — not a mountpoint, nothing to do.
-		slog.Debug("rootfs unmount skipped (not a mountpoint)", "path", rootfsPath, "err", err)
 	}
 	return nil
 }

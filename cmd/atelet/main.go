@@ -961,18 +961,12 @@ func resetActorDirs(actorTemplateNamespace, actorTemplateName, actorID string) e
 
 	bundleDir := ateompath.OCIBundleDir(actorTemplateNamespace, actorTemplateName, actorID)
 
-	// Unmount any overlayfs rootfs mounts before deleting the bundle
-	// directory.  Each container's rootfs/ may be an overlayfs mountpoint;
-	// unmounting with MNT_DETACH ensures the mount is released even if
-	// something still holds a reference (e.g. a lingering process).
-	if entries, err := os.ReadDir(bundleDir); err == nil {
-		for _, e := range entries {
-			if e.IsDir() {
-				unmountActorRootfs(bundleDir, e.Name())
-			}
-		}
-	}
-
+	// Any overlayfs rootfs mounts live in the privileged ateom worker's mount
+	// namespace (atelet cannot mount(2) after its capabilities were dropped),
+	// so they are not visible here and are torn down by ateom on
+	// checkpoint/reset. atelet only needs to remove the on-disk bundle tree;
+	// with hostPath propagation=None, removing the (host-view) mountpoint dir
+	// does not disturb ateom's mount.
 	if err := os.RemoveAll(bundleDir); err != nil {
 		return fmt.Errorf("while deleting bundle dir: %w", err)
 	}

@@ -204,6 +204,20 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 		actorID:                req.GetActorId(),
 	}
 
+	// Mount the overlayfs rootfs for any container atelet flagged via a
+	// per-bundle marker. atelet cannot mount(2) (its capabilities are dropped),
+	// so the privileged ateom worker performs it here — in ateom's mount
+	// namespace, which the runsc child shares. On failure the deferred
+	// unmount tears down any partial mounts.
+	if err := mountWorkloadOverlays(ctx, req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId(), req.GetSpec()); err != nil {
+		return nil, fmt.Errorf("while mounting overlay rootfs: %w", err)
+	}
+	defer func() {
+		if retErr != nil {
+			unmountWorkloadOverlays(ctx, req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId(), req.GetSpec())
+		}
+	}()
+
 	// Create and start pause container
 	if err := rcmd.cmdCreate(ctx, os.Stdout, "pause", nil); err != nil {
 		return nil, fmt.Errorf("while creating pause container: %w", err)
@@ -296,6 +310,12 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 			"err", err)
 	}
 
+	// Tear down the overlay rootfs mounts before this ateom resets to
+	// available. The mounts live in ateom's mount namespace (invisible to
+	// atelet), so atelet's bundle RemoveAll cannot unmount them; a live,
+	// long-lived ateom would otherwise accumulate leaked mounts across actors.
+	unmountWorkloadOverlays(ctx, req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId(), req.GetSpec())
+
 	s.cleanupActorNetworkOrExit(ctx, "Failed to clean up actor network after checkpoint")
 
 	// Report exactly the files runsc wrote so atelet ships precisely this set
@@ -380,6 +400,19 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 		actorTemplateName:      req.GetActorTemplateName(),
 		actorID:                req.GetActorId(),
 	}
+
+	// Mount the overlayfs rootfs for any container atelet flagged via a
+	// per-bundle marker, mirroring RunWorkload. The mount happens in ateom's
+	// mount namespace (shared by the runsc child); on failure the deferred
+	// unmount tears down any partial mounts.
+	if err := mountWorkloadOverlays(ctx, req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId(), req.GetSpec()); err != nil {
+		return nil, fmt.Errorf("while mounting overlay rootfs: %w", err)
+	}
+	defer func() {
+		if retErr != nil {
+			unmountWorkloadOverlays(ctx, req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId(), req.GetSpec())
+		}
+	}()
 
 	checkpointDir := ateompath.RestoreStateDir(req.GetActorTemplateNamespace(), req.GetActorTemplateName(), req.GetActorId())
 
