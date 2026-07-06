@@ -571,8 +571,8 @@ deploy_atenet() {
 
 # get_actor_status echoes the actor's status enum (e.g. STATUS_SUSPENDED).
 get_actor_status() {
-  local actor_id="$1"
-  local atespace="$2"
+  local atespace="$1"
+  local actor_id="$2"
   local json
 
   if ! json=$(run_kubectl_ate get actor "${actor_id}" -a "${atespace}" -o json 2>/dev/null); then
@@ -584,14 +584,14 @@ get_actor_status() {
 # prepare_actor_for_delete suspends (or resumes then suspends) until DeleteActor
 # is allowed. Actors must be STATUS_SUSPENDED before deletion.
 prepare_actor_for_delete() {
-  local actor_id="$1"
-  local atespace="$2"
+  local atespace="$1"
+  local actor_id="$2"
   local timeout_secs="${3:-120}"
   local deadline=$((SECONDS + timeout_secs))
   local status
 
   while ((SECONDS < deadline)); do
-    if ! status=$(get_actor_status "${actor_id}" "${atespace}"); then
+    if ! status=$(get_actor_status "${atespace}" "${actor_id}"); then
       return 0
     fi
 
@@ -646,7 +646,7 @@ delete_demo_actors() {
     return 0
   fi
 
-  local ns tmpl atespace actor_id
+  local ns tmpl actor_ref atespace actor_id
   while (($# > 0)); do
     ns="$1"
     tmpl="$2"
@@ -654,13 +654,14 @@ delete_demo_actors() {
 
     log_step "Deleting actors for ${ns}/${tmpl}"
     while IFS=$'\t' read -r atespace actor_id; do
-      [[ -z "${actor_id}" ]] && continue
-      log_step "  preparing actor ${atespace}/${actor_id} for delete"
-      prepare_actor_for_delete "${actor_id}" "${atespace}"
+      [[ -z "${atespace}" || -z "${actor_id}" ]] && continue
+      actor_ref="${atespace}/${actor_id}"
+      log_step "  preparing actor ${actor_ref} for delete"
+      prepare_actor_for_delete "${atespace}" "${actor_id}"
       run_kubectl_ate delete actor "${actor_id}" -a "${atespace}"
     done < <(
       jq -r --arg ns "${ns}" --arg tmpl "${tmpl}" \
-        '.actors[]? | select(.actorTemplateNamespace == $ns and .actorTemplateName == $tmpl) | "\(.atespace)\t\(.actorId)"' \
+        '.actors[]? | select(.actorTemplateNamespace == $ns and .actorTemplateName == $tmpl) | [.atespace, .actorId] | @tsv' \
         <<<"${actors_json}"
     )
   done

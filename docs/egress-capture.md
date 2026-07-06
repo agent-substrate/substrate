@@ -10,20 +10,20 @@ by default.
 Egress capture has no global on/off switch. ate-api watches Gateways labeled
 `ate.dev/egress-pep`. On actor resume, ate-api picks the best matching PEP
 Gateway for that actor and sends one optional PEP address to ateom. An empty PEP
-address means no redirect, so capture is enabled per actor purely by whether a
-matching labeled Gateway exists. The reusable capture core lives in
-`internal/egress`:
+address means no redirect, so capture is enabled per actor only when a matching
+programmed labeled Gateway with an HTTP listener resolves. The reusable capture
+core lives in `internal/egress`:
 it owns capture listeners, authority derivation, CONNECT tunnel transports, and
 byte proxying. The runtime-specific `ateom` egress proxy setup supplies the
 original-destination lookup and packet-capture rules.
 
-The current gVisor implementation starts a local capture listener and installs
-actor-network redirects for TCP/80 and TCP/443. From the actor's point of view
-it still opens a normal HTTP or HTTPS connection to the original destination.
-MicroVM or future hypervisor implementations should reuse
-`internal/egress` for the local listener, authority derivation, tunnel
-transport, and byte proxying. Each runtime still provides its own egress proxy
-setup for redirecting actor traffic and recovering the original destination.
+The current gVisor and MicroVM implementations start a local capture listener
+and install actor-network redirects for TCP egress. From the actor's point of
+view it still opens a normal TCP connection to the original destination. Future
+hypervisor implementations should reuse `internal/egress` for the local
+listener, authority derivation, tunnel transport, and byte proxying. Each
+runtime still provides its own egress proxy setup for redirecting actor traffic
+and recovering the original destination.
 
 The redirected connection lands on `ateom`, which records the original
 destination and derives a stable CONNECT authority from the first bytes of the
@@ -31,8 +31,9 @@ actor connection:
 
 | Actor traffic | Authority source | Example CONNECT authority |
 | --- | --- | --- |
-| HTTPS / TCP 443 | TLS ClientHello SNI | `httpbin.org:443` |
-| Plaintext HTTP / TCP 80 | HTTP `Host` header | `example.com:80` |
+| HTTPS / any TCP port | TLS ClientHello SNI + original destination port | `httpbin.org:443` |
+| Plaintext HTTP / any TCP port | HTTP `Host` header, defaulting to original destination port when the header has no port | `example.com:80` |
+| Other TCP | Original destination address | `203.0.113.10:2222` |
 
 The shared capture core then opens a plaintext HTTP/2 CONNECT stream to the PEP
 address selected by ate-api. Only Gateways with condition `Programmed=True` are
@@ -45,11 +46,12 @@ stays pending). The port is the Gateway's HTTP listener port. Agentgateway maps
 the CONNECT authority to its configured TCP listener and routes the tunnel to a
 Kubernetes Service backed by an EndpointSlice.
 
-The demo setup configures only `httpbin.org:443` for egress.
-Other hosts or plaintext HTTP destinations need their own agentgateway
-Service, EndpointSlice, listener, and route. For HTTPS, TLS is still end-to-end
-between the actor and the external service; agentgateway only routes the
-encrypted bytes after CONNECT succeeds.
+The demo setup configures only `httpbin.org:443` for egress. Any other CONNECT
+authority, including plaintext HTTP destinations or fallback original IP:port
+authorities, needs its own matching agentgateway Service, EndpointSlice,
+listener, and route. For HTTPS, TLS is still end-to-end between the actor and
+the external service; agentgateway only routes the encrypted bytes after
+CONNECT succeeds.
 
 ### Selecting a PEP for an actor
 
@@ -73,7 +75,7 @@ highest-precedence match (`resolveEgressPEPAddress` in
 | Situation | Result |
 | --- | --- |
 | Multiple candidates tied at the top score | Lowest `(namespace, name)` wins; the others are **silently ignored** |
-| No labeled candidate | Empty PEP address → no redirect, capture off |
+| No matching programmed candidate | Empty PEP address → no redirect, capture off |
 
 Don't deploy multiple PEPs at the same tier for the same actor — use the
 scoping labels to raise the intended one's tier instead of relying on name
@@ -88,8 +90,8 @@ label a Gateway can:
 
 - **Intercept actor egress**: copy an actor's `ate.dev/atespace` +
   `ate.dev/actor` labels onto their own Gateway to out-score its real PEP.
-- **Block all resumes**: label a Gateway with no HTTP listener (broken PEP
-  config fails resolution cluster-wide by design).
+- **Block resumes**: label a programmed Gateway with no HTTP listener (broken
+  PEP config fails PEP resolution by design).
 
 Substrate deliberately does not second-guess labeled Gateways. If Gateway RBAC
 can't be that strict, scope the watch to an allowlist of PEP namespaces in
@@ -163,7 +165,7 @@ sequenceDiagram
     rect rgb(255, 248, 225)
         Note over OM,EXT: Actor egress connection
         OM->>CAP: Actor conn (nftables redirect) to httpbin.org:443
-        CAP->>CAP: Get original destination<br/>sniff SNI or Host
+        CAP->>CAP: Get original destination<br/>classify SNI, Host, or original dst
         CAP->>PEP: HTTP/2 CONNECT httpbin.org:443<br/>with actor metadata
         PEP->>EXT: Route via TCPRoute
         Note over CAP,EXT: TLS remains end-to-end<br/>PEP routes encrypted bytes only
@@ -218,8 +220,9 @@ system. No fixed PEP address is configured; ate-api derives the address from the
 labeled Gateway's HTTP listener.
 
 The install script resolves `httpbin.org` during install and creates the
-`httpbin-egress` Service and EndpointSlice for those IPs. `ateom` derives the
-CONNECT authority from SNI for this HTTPS demo.
+`httpbin-egress` Service and EndpointSlice for those IPs. For the default HTTPS
+demo request, `ateom` derives the CONNECT authority from TLS SNI and the
+original destination port.
 
 Verify the static agentgateway resources and PEP label:
 
@@ -299,8 +302,9 @@ curl -i -X POST --get \
   "http://localhost:8000"
 ```
 
-Do not use this query parameter for a different host unless you also update the
-agentgateway route. `ateom` will derive the new host from SNI, but the demo
+Do not use this query parameter for a different host or port unless you also
+update the agentgateway route. `ateom` will derive the new CONNECT authority
+from TLS SNI, the HTTP `Host` header, or the original destination, but the demo
 agentgateway config only routes `httpbin.org:443`.
 
 ## Verify capture was installed
@@ -490,9 +494,9 @@ EOF
      http://localhost:8000
    ```
 
-   The authoritative signal is the ateom capture log, which names the PEP the
-   actor actually tunnelled through (see "Verify capture was installed" for how
-   to find the worker pod):
+   The authoritative signal is the ateom capture log, which names the PEP
+   configured for the actor's current activation (see "Verify capture was
+   installed" for how to find the worker pod):
 
    ```bash
    kubectl logs -n "${ateom_ns}" "${ateom_pod}" -c ateom | grep "Started actor egress capture listener"
@@ -593,21 +597,12 @@ PEP address, so `egressPepAddress` on the actor can report a binding the
 sandbox does not enforce. If capture logs are missing despite a resolved PEP,
 check the WorkerPool's ateom image version.
 
-If the capture listener logs are missing, confirm that the actor is running on a
-fresh worker pod created after egress was enabled:
+If the egress request fails after changing the `url` host or port, remember that
+this demo only configures agentgateway for `httpbin.org:443`. Add matching static
+agentgateway backend resources for the CONNECT authority that `ateom` will send:
 
-```bash
-kubectl ate get actor my-egress-1 -a demo
-kubectl get pods -n ate-demo-egress -l ate.dev/worker-pool=egress
-```
-
-If the egress request fails after changing the `url` host, remember that this demo only
-configures agentgateway for `httpbin.org:443`. Add matching static agentgateway
-backend resources for the new destination:
-
-- HTTPS: Service, EndpointSlice, TCP listener on `443`, and TCPRoute.
-- Plaintext HTTP: Service, EndpointSlice, TCP listener on `80`, and TCPRoute.
-
-Traffic without SNI or a plaintext HTTP `Host` header falls back to the captured
-original destination IP and port, which requires matching agentgateway routing
-for that address.
+- HTTPS: SNI plus the original destination port, for example `example.com:443`.
+- Plaintext HTTP: `Host` header authority, defaulting to the original
+  destination port when the header has no port, for example `example.com:80`.
+- Other TCP: captured original destination IP and port, for example
+  `203.0.113.10:2222`.
