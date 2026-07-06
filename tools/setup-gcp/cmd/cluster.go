@@ -70,6 +70,7 @@ func createClusterInternal(ctx context.Context, cfg *Config, client *container.C
 					InitialNodeCount: 2,
 					Config: &containerpb.NodeConfig{
 						MachineType: cfg.MachineType,
+						ImageType:   "UBUNTU_CONTAINERD",
 					},
 				},
 			},
@@ -89,6 +90,28 @@ func createClusterInternal(ctx context.Context, cfg *Config, client *container.C
 		return fmt.Errorf("create cluster: %w", err)
 	}
 	return waitContainerOperation(ctx, client, op.Name, cfg)
+}
+
+func ensureNodePoolUbuntu(ctx context.Context, client *container.ClusterManagerClient, cfg *Config, cluster *containerpb.Cluster) error {
+	for _, np := range cluster.NodePools {
+		if np.Config.ImageType != "UBUNTU_CONTAINERD" {
+			slog.Info("Node pool image type mismatch", slog.String("pool", np.Name), slog.String("current", np.Config.ImageType), slog.String("expected", "UBUNTU_CONTAINERD"))
+			name := fmt.Sprintf("projects/%s/locations/%s/clusters/%s/nodePools/%s", cfg.ProjectID, cfg.ClusterLocation, cfg.ClusterName, np.Name)
+			op, err := client.UpdateNodePool(ctx, &containerpb.UpdateNodePoolRequest{
+				Name:      name,
+				ImageType: "UBUNTU_CONTAINERD",
+			})
+			if err != nil {
+				return fmt.Errorf("updating node pool %s to ubuntu: %w", np.Name, err)
+			}
+			if err := waitContainerOperation(ctx, client, op.Name, cfg); err != nil {
+				return err
+			}
+		} else {
+			slog.Info("Node pool image type matches perfectly.", slog.String("pool", np.Name))
+		}
+	}
+	return nil
 }
 
 func createClusterIdempotent(ctx context.Context, cfg *Config) error {
@@ -204,7 +227,7 @@ func createClusterIdempotent(ctx context.Context, cfg *Config) error {
 		slog.Info("Cluster EnableK8SBetaApis match perfectly.", slog.String("cluster", cfg.ClusterName))
 	}
 
-	return nil
+	return ensureNodePoolUbuntu(ctx, client, cfg, cluster)
 }
 
 func waitContainerOperation(ctx context.Context, client *container.ClusterManagerClient, opName string, cfg *Config) error {
