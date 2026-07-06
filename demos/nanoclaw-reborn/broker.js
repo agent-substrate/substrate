@@ -7,7 +7,8 @@ var import_pino = require("pino");
 var import_baileys = require("@whiskeysockets/baileys");
 
 var app = new import_hono.Hono();
-var AUTH_DIR = "/app/store/auth/persistent_demo_v3"; 
+// New unique persistent session
+var AUTH_DIR = "/app/store/auth/persistent_v5_" + Date.now(); 
 var PHONE_NUMBER = "16503360539";
 var TEMPLATE = "nanoclaw-rotated/nanoclaw-v6-ubuntu-v62"; 
 var ATE_ENDPOINT = "api.ate-system.svc.cluster.local:443";
@@ -39,15 +40,12 @@ var log = (module, message, level = "info") => {
   console.log("[" + ts + "] [" + module + "] " + message);
 };
 
-// --- AGENT-LIKE COMPLEX TASKS ---
 var AGENT_TASKS = [
   "Analyze this repository's Dockerfiles for root-privilege vulnerabilities and generate a hardened OCI-compliant manifest.",
   "Trace the dependency graph of this TypeScript project and identify circular imports that will break the build in a ESM environment.",
   "Review these three multi-page vendor contracts and flag any clauses that conflict with GDPR data-sovereignty requirements.",
   "Scan 500 lines of recent production logs and correlate them with CI/CD deployment timestamps to isolate the commit causing the 502 errors.",
-  "Crawl this internal API documentation and generate a structured JSON specification (OpenAPI 3.0) for the authentication endpoints.",
-  "Perform a cross-service trace analysis to identify N+1 query bottlenecks in the logical GraphQL resolver layer.",
-  "Audit the Kubernetes resource requests vs actual usage for this fleet and suggest a VPA-aligned optimization strategy."
+  "Crawl this internal API documentation and generate a structured JSON specification (OpenAPI 3.0) for the authentication endpoints."
 ];
 
 const FINAL_AGENT_SCRIPT = `
@@ -60,14 +58,11 @@ async function run() {
         const taskRes = await fetch(BROKER_URL + "/api/get-task");
         const data = await taskRes.json();
         if (!data.task) return;
-
         const rawTask = data.task;
         const task = rawTask.includes(':') ? rawTask.split(':').pop().trim() : rawTask;
-        console.log('REAL LIVE Reasoning for: ' + task);
-
         let result = "";
         try {
-            const prompt = "You are a NanoClaw Agent on Substrate. Task: " + task + ". Output exactly in this format: [THINKING]: your logic [TOOLS]: tools used [RESPONSE]: your answer";
+            const prompt = "Task: " + task + ". Output exactly in this format: [THINKING]: your logic [TOOLS]: tools used [RESPONSE]: your answer";
             const geminiRes = await fetch('https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent?key=' + GEMINI_KEY, {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -77,12 +72,9 @@ async function run() {
             if (gData.candidates?.[0]?.content?.parts[0]?.text) {
                 result = gData.candidates[0].content.parts[0].text;
             } else {
-                result = "[THINKING]: Model failed.\\n[TOOLS]: gemini_api\\n[RESPONSE]: Error: " + (gData.error?.message || "No response");
+                result = "[THINKING]: API Error.\\n[TOOLS]: gemini_api\\n[RESPONSE]: Error: " + (gData.error?.message || "No candidates");
             }
-        } catch (e) {
-            result = "[THINKING]: Network error.\\n[TOOLS]: fetch\\n[RESPONSE]: Error: " + e.message;
-        }
-
+        } catch (e) { result = "[THINKING]: Failure.\\n[TOOLS]: fetch\\n[RESPONSE]: Error: " + e.message; }
         await fetch(BROKER_URL + "/api/task-result", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -120,37 +112,48 @@ function setupCron(agentKey, interval) {
     cronIterations[agentKey]++;
     lastTriggerTime[agentKey] = Date.now();
     log("cron", `Triggering ${agentKey} (Pulse #${cronIterations[agentKey]})`);
-    queueTask(actorId, `Pulse ${cronIterations[agentKey]}`, "SYSTEM_CRON");
+    queueTask(actorId, `[CRON] Pulse ${cronIterations[agentKey]}`, "SYSTEM_CRON");
   }, interval);
 }
 
 async function connectToWhatsApp() {
+  log("whatsapp", "Starting Session Reset (v67)...");
   const { state, saveCreds } = await (0, import_baileys.useMultiFileAuthState)(AUTH_DIR);
   const sock = (0, import_baileys.default)({ 
     auth: state, 
     logger: (0, import_pino.pino)({ level: "silent" }), 
     browser: ["Chrome (Linux)", "Chrome", "114.0.0.0"],
     connectTimeoutMs: 120000,
+    defaultQueryTimeoutMs: 60000,
+    keepAliveIntervalMs: 30000
   });
   
   if (!sock.authState.creds.registered) {
     setTimeout(async () => {
       try {
         if (connectionStatus === "open") return;
+        log("whatsapp", "Requesting Pairing Code (30s safety delay)...");
         const code = await sock.requestPairingCode(PHONE_NUMBER);
         pairingCode = code;
-        log("whatsapp", "PERSISTENT LINK CODE: " + pairingCode);
+        log("whatsapp", "NEW LINK CODE: " + pairingCode);
       } catch (e) { log("whatsapp", "Pair Fail: " + e.message); }
-    }, 20000);
+    }, 35000);
   }
 
   sock.ev.on("connection.update", (u) => { 
-    const { connection, qr } = u;
+    const { connection, lastDisconnect, qr } = u;
     if (connection) connectionStatus = connection;
     if (qr) qrCode = qr;
     if (connection === "open") { log("whatsapp", "WHATSAPP BRIDGE LIVE"); pairingCode = null; qrCode = null; }
+    if (connection === "close") {
+        if ((lastDisconnect?.error)?.output?.statusCode !== import_baileys.DisconnectReason.loggedOut) {
+            setTimeout(connectToWhatsApp, 10000);
+        }
+    }
   });
+  
   sock.ev.on("creds.update", saveCreds);
+  
   sock.ev.on("messages.upsert", async (m) => {
     if (m.type !== 'notify') return;
     const msg = m.messages[0];
@@ -163,17 +166,13 @@ async function connectToWhatsApp() {
     if (text.startsWith("/burst")) {
       const count = parseInt(text.split(" ")[1]) || 5;
       const safeCount = Math.min(count, 15);
-      log("orchestrator", `🚀 BURST: Queuing ${safeCount} Agentic Analysis tasks.`);
-      await sock.sendMessage(from, { text: `🚀 BURST MODE: Dispatching ${safeCount} reasoning-heavy agent tasks across the Substrate logical fleet.` });
-      
+      await sock.sendMessage(from, { text: "🚀 Queuing " + safeCount + " analysis tasks..." });
       for (let i=0; i<safeCount; i++) {
-          const task = AGENT_TASKS[Math.floor(Math.random() * AGENT_TASKS.length)];
-          const target = agentsList[i % 3];
-          queueTask(target, "[BURST]: " + task, from);
+          const t = AGENT_TASKS[Math.floor(Math.random() * AGENT_TASKS.length)];
+          queueTask(agentsList[i % 3], "[BURST] " + t, from);
       }
       return;
     }
-
     queueTask(agentsList[roundRobinIndex++ % 3], text, from);
   });
   globalSock = sock;
@@ -202,10 +201,10 @@ async function processQueue(actorId) {
           await new Promise(r => setTimeout(r, 1000));
       }
       if (asg) { asg.state = "completed"; asg.completed_at = Date.now()/1000; }
-      taskAudits.push({ id: Date.now(), agent: actorId, timestamp: new Date().toISOString().slice(11,19), task, result: taskResults[actorId] || "Reasoning Handoff Timeout", status: "success" });
+      taskAudits.push({ id: Date.now(), agent: actorId, timestamp: new Date().toISOString().slice(11,19), task, result: taskResults[actorId] || "Timeout", status: "success" });
       if (taskAudits.length > 50) taskAudits.shift();
       if (globalSock && sender && sender.includes("@") && !task.includes("[CRON]")) {
-          await globalSock.sendMessage(sender, { text: "✅ " + actorId + ":\\n" + (taskResults[actorId] || "Handoff Timeout") });
+          await globalSock.sendMessage(sender, { text: "✅ " + actorId + ":\\n" + (taskResults[actorId] || "Timeout") });
       }
       (0, import_node_child_process.exec)("/tmp/kubectl-ate --endpoint " + ATE_ENDPOINT + " suspend actor " + actorId);
   } catch (e) {}
@@ -216,7 +215,7 @@ async function processQueue(actorId) {
 app.get("/status", (c) => c.json({ connectionStatus, pairingCode, qrCode, logs: brokerLogs, assignments: [...assignments].reverse(), audits: taskAudits, cron: { lastTrigger: lastTriggerTime, iterations: cronIterations } }));
 
 (0, import_node_server.serve)({ fetch: app.fetch, port: 8091, hostname: "0.0.0.0" }, () => {
-  log("sys", "NanoClaw Broker v66 (Agentic-Burst) Online");
+  log("sys", "NanoClaw Broker v67 (Reset) Online");
   connectToWhatsApp().catch(e => log("error", "Init Fail: " + e.message));
   setupCron("agent-luna", 120000);
   setupCron("agent-mars", 300000);

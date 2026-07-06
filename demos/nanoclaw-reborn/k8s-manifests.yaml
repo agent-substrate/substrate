@@ -1,7 +1,7 @@
 apiVersion: ate.dev/v1alpha1
 kind: ActorTemplate
 metadata:
-  name: nanoclaw-v6-ubuntu-v45
+  name: nanoclaw-v6-ubuntu-v62
   namespace: nanoclaw-rotated
 spec:
   sandboxClass: gvisor
