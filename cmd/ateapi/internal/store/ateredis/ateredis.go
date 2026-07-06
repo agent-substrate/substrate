@@ -256,6 +256,14 @@ func (s *Persistence) WatchWorkers(ctx context.Context) (*store.WorkerWatch, err
 	// caller via WorkerWatch.Close or when the parent ctx is cancelled.
 	watchCtx, cancel := context.WithCancel(ctx)
 	pubsub := s.rdb.Subscribe(watchCtx, workerPubSubChannel)
+	// Subscribe sends the SUBSCRIBE command asynchronously; wait for the
+	// confirmation reply so that events published after WatchWorkers returns
+	// are guaranteed to be delivered to this subscription.
+	if _, err := pubsub.Receive(watchCtx); err != nil {
+		pubsub.Close()
+		cancel()
+		return nil, fmt.Errorf("while confirming worker subscription: %w", err)
+	}
 	ch := make(chan store.WorkerEvent, 128)
 	go func() {
 		defer close(ch)
