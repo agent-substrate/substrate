@@ -67,6 +67,8 @@ var (
 	gcpAuthForImagePulls         = pflag.Bool("gcp-auth-for-image-pulls", true, "Use GCP application default credentials mechanism.")
 	localhostRegistryReplacement = pflag.String("localhost-registry-replacement", "", "The replacement registry endpoint for localhost and/or loopback IP addresses, useful for local development. for example kind-registry:5000")
 
+	rootfsCacheMaxBytes = pflag.Int64("rootfs-cache-max-bytes", rootfscache.DefaultMaxCacheBytes, "Maximum disk budget in bytes for the node-local overlayfs rootfs cache. When exceeded, least-recently-used entries are evicted.")
+
 	showVersion = pflag.Bool("version", false, "Print version and exit.")
 )
 
@@ -117,7 +119,7 @@ func main() {
 		serverboot.Fatal(ctx, "Failed to create pull cache", err)
 	}
 
-	rootfsDiskCache, err := rootfscache.New(ctx, ateompath.RootfsCacheDir, 0, rootfscache.WithInUseFunc(overlayLowerInUse))
+	rootfsDiskCache, err := rootfscache.New(ctx, ateompath.RootfsCacheDir, *rootfsCacheMaxBytes, rootfscache.WithInUseFunc(overlayLowerInUse))
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to create rootfs cache", err)
 	}
