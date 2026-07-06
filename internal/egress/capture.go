@@ -219,59 +219,35 @@ func openCONNECTTunnel(ctx context.Context, pepAddress string, identity ActorIde
 }
 
 func deriveConnectAuthority(ctx context.Context, actorConn net.Conn, originalDst net.Addr) (string, []byte) {
-	if tcpAddr, ok := originalDst.(*net.TCPAddr); ok && tcpAddr.Port == 443 {
-		authority, initialBytes := deriveTLSConnectAuthority(ctx, actorConn, tcpAddr)
-		return authority, initialBytes
-	}
-	if tcpAddr, ok := originalDst.(*net.TCPAddr); ok && tcpAddr.Port == 80 {
-		authority, initialBytes := deriveHTTPConnectAuthority(ctx, actorConn, tcpAddr)
-		return authority, initialBytes
+	if tcpAddr, ok := originalDst.(*net.TCPAddr); ok {
+		return classifyConnectAuthority(ctx, actorConn, tcpAddr)
 	}
 	return originalDst.String(), nil
 }
 
-func deriveTLSConnectAuthority(ctx context.Context, actorConn net.Conn, originalDst *net.TCPAddr) (string, []byte) {
-	const maxClientHelloBytes = 16 * 1024
+func classifyConnectAuthority(ctx context.Context, actorConn net.Conn, originalDst *net.TCPAddr) (string, []byte) {
+	const maxSniffBytes = 16 * 1024
 	_ = actorConn.SetReadDeadline(time.Now().Add(2 * time.Second))
 	defer actorConn.SetReadDeadline(time.Time{})
 
 	var initialBytes []byte
 	buf := make([]byte, 2048)
-	for len(initialBytes) < maxClientHelloBytes {
+	for len(initialBytes) < maxSniffBytes {
 		n, err := actorConn.Read(buf)
 		if n > 0 {
 			initialBytes = append(initialBytes, buf[:n]...)
-			if sni, ok, needMore := tlsClientHelloSNI(initialBytes); ok {
-				return net.JoinHostPort(sni, strconv.Itoa(originalDst.Port)), initialBytes
-			} else if !needMore {
-				break
-			}
-		}
-		if err != nil {
-			if ctx.Err() != nil {
-				return originalDst.String(), initialBytes
-			}
-			break
-		}
-	}
-	return originalDst.String(), initialBytes
-}
-
-func deriveHTTPConnectAuthority(ctx context.Context, actorConn net.Conn, originalDst *net.TCPAddr) (string, []byte) {
-	const maxHeaderBytes = 16 * 1024
-	_ = actorConn.SetReadDeadline(time.Now().Add(2 * time.Second))
-	defer actorConn.SetReadDeadline(time.Time{})
-
-	var initialBytes []byte
-	buf := make([]byte, 2048)
-	for len(initialBytes) < maxHeaderBytes {
-		n, err := actorConn.Read(buf)
-		if n > 0 {
-			initialBytes = append(initialBytes, buf[:n]...)
-			if host, ok, needMore := httpHostHeader(initialBytes); ok {
-				return authorityWithDefaultPort(host, originalDst.Port), initialBytes
-			} else if !needMore {
-				break
+			if initialBytes[0] == 0x16 {
+				if sni, ok, needMore := tlsClientHelloSNI(initialBytes); ok {
+					return net.JoinHostPort(sni, strconv.Itoa(originalDst.Port)), initialBytes
+				} else if !needMore {
+					break
+				}
+			} else {
+				if host, ok, needMore := httpHostHeader(initialBytes); ok {
+					return authorityWithDefaultPort(host, originalDst.Port), initialBytes
+				} else if !needMore {
+					break
+				}
 			}
 		}
 		if err != nil {

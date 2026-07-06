@@ -20,20 +20,8 @@ const (
 )
 
 const (
-	DefaultCapturePort      = uint16(15001)
-	DefaultOriginalHTTPPort = uint16(80)
-	DefaultOriginalTLSPort  = uint16(443)
+	DefaultCapturePort = uint16(15001)
 )
-
-type Redirect struct {
-	OriginalPort uint16
-	CapturePort  uint16
-}
-
-var DefaultCaptureRedirects = []Redirect{
-	{OriginalPort: DefaultOriginalHTTPPort, CapturePort: DefaultCapturePort},
-	{OriginalPort: DefaultOriginalTLSPort, CapturePort: DefaultCapturePort},
-}
 
 var DefaultCaptureListeners = []Listener{
 	{Port: DefaultCapturePort},

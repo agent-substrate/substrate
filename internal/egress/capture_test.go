@@ -132,6 +132,35 @@ func TestDeriveConnectAuthorityFromTLSClientHelloSNI(t *testing.T) {
 	}
 }
 
+func TestDeriveConnectAuthorityFromTLSClientHelloSNIOnAnyPort(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	defer clientConn.Close()
+	defer serverConn.Close()
+
+	errCh := make(chan error, 1)
+	go func() {
+		tlsConn := tls.Client(clientConn, &tls.Config{
+			ServerName:         "httpbin.org",
+			InsecureSkipVerify: true,
+		})
+		errCh <- tlsConn.Handshake()
+	}()
+
+	authority, initialBytes := deriveConnectAuthority(context.Background(), serverConn, &net.TCPAddr{
+		IP:   net.ParseIP("203.0.113.10"),
+		Port: 8443,
+	})
+	if authority != "httpbin.org:8443" {
+		t.Fatalf("deriveConnectAuthority() authority = %q, want httpbin.org:8443", authority)
+	}
+	if len(initialBytes) == 0 {
+		t.Fatal("deriveConnectAuthority() returned no initial bytes")
+	}
+
+	_ = clientConn.Close()
+	<-errCh
+}
+
 func TestDeriveConnectAuthorityFromHTTPHost(t *testing.T) {
 	clientConn, serverConn := net.Pipe()
 	defer clientConn.Close()
@@ -153,6 +182,52 @@ func TestDeriveConnectAuthorityFromHTTPHost(t *testing.T) {
 	}
 	if err := <-errCh; err != nil {
 		t.Fatalf("client write returned error: %v", err)
+	}
+}
+
+func TestDeriveConnectAuthorityFromHTTPHostOnAnyPort(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	defer clientConn.Close()
+	defer serverConn.Close()
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := clientConn.Write([]byte("GET /get HTTP/1.1\r\nHost: httpbin.org\r\n\r\n"))
+		errCh <- err
+	}()
+
+	authority, initialBytes := deriveConnectAuthority(context.Background(), serverConn, &net.TCPAddr{
+		IP:   net.ParseIP("203.0.113.10"),
+		Port: 8080,
+	})
+	if authority != "httpbin.org:8080" {
+		t.Fatalf("deriveConnectAuthority() authority = %q, want httpbin.org:8080", authority)
+	}
+	if string(initialBytes) != "GET /get HTTP/1.1\r\nHost: httpbin.org\r\n\r\n" {
+		t.Fatalf("initial bytes = %q", string(initialBytes))
+	}
+	if err := <-errCh; err != nil {
+		t.Fatalf("client write returned error: %v", err)
+	}
+}
+
+func TestDeriveConnectAuthorityFallsBackToOriginalDestination(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	defer clientConn.Close()
+	defer serverConn.Close()
+
+	go func() {
+		_, _ = clientConn.Write([]byte("not http or tls"))
+		_ = clientConn.Close()
+	}()
+
+	originalDst := &net.TCPAddr{IP: net.ParseIP("203.0.113.10"), Port: 2222}
+	authority, initialBytes := deriveConnectAuthority(context.Background(), serverConn, originalDst)
+	if authority != originalDst.String() {
+		t.Fatalf("deriveConnectAuthority() authority = %q, want %q", authority, originalDst.String())
+	}
+	if string(initialBytes) != "not http or tls" {
+		t.Fatalf("initial bytes = %q", string(initialBytes))
 	}
 }
 

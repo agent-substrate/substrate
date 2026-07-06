@@ -134,7 +134,8 @@ registry and snapshot bucket settings:
 Create an actor:
 
 ```bash
-kubectl ate create actor my-egress-1 --template ate-demo-egress/egress
+kubectl ate create atespace demo
+kubectl ate create actor my-egress-1 --template ate-demo-egress/egress -a demo
 ```
 
 Forward the router locally:
@@ -148,7 +149,7 @@ will make an outbound HTTPS request to `https://httpbin.org/get` by default:
 
 ```bash
 curl -i -X POST \
-  -H "Host: my-egress-1.actors.resources.substrate.ate.dev" \
+  -H "Host: my-egress-1.demo.actors.resources.substrate.ate.dev" \
   http://localhost:8000
 ```
 
@@ -168,7 +169,7 @@ To test a different `httpbin.org` path, pass it as the `url` query parameter:
 
 ```bash
 curl -i -X POST --get \
-  -H "Host: my-egress-1.actors.resources.substrate.ate.dev" \
+  -H "Host: my-egress-1.demo.actors.resources.substrate.ate.dev" \
   --data-urlencode "url=https://httpbin.org/headers" \
   "http://localhost:8000"
 ```
@@ -182,7 +183,7 @@ agentgateway config only routes `httpbin.org:443`.
 Find the worker pod hosting the actor:
 
 ```bash
-actor_json=$(kubectl ate get actor my-egress-1 -o json)
+actor_json=$(kubectl ate get actor my-egress-1 -a demo -o json)
 ateom_ns=$(jq -r '.actors[0].ateomPodNamespace' <<<"${actor_json}")
 ateom_pod=$(jq -r '.actors[0].ateomPodName' <<<"${actor_json}")
 
@@ -256,8 +257,8 @@ kubectl logs -n agentgateway-system deploy/agentgateway --tail=200
 ## Clean up
 
 ```bash
-kubectl ate suspend actor my-egress-1
-kubectl ate delete actor my-egress-1
+kubectl ate suspend actor my-egress-1 -a demo
+kubectl ate delete actor my-egress-1 -a demo
 ./hack/install-ate.sh --delete-demo-egress
 ```
 
@@ -286,7 +287,7 @@ If the capture listener logs are missing, confirm that the actor is running on a
 fresh worker pod created after egress was enabled:
 
 ```bash
-kubectl ate get actor my-egress-1
+kubectl ate get actor my-egress-1 -a demo
 kubectl get pods -n ate-demo-egress -l ate.dev/worker-pool=egress
 ```
 

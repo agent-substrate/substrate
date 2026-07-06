@@ -48,17 +48,22 @@ func (s *AteomService) startEgressCaptureIfEnabled(ctx context.Context, identity
 }
 
 func addEgressCaptureRedirectRules(c *nftables.Conn, table *nftables.Table, prerouting *nftables.Chain, sourceIP string) {
-	for _, redirect := range egress.DefaultCaptureRedirects {
-		c.AddRule(&nftables.Rule{
-			Table: table,
-			Chain: prerouting,
-			Exprs: tcpRedirectExprs(sourceIP, redirect.OriginalPort, redirect.CapturePort),
-		})
-	}
+	c.AddRule(&nftables.Rule{
+		Table: table,
+		Chain: prerouting,
+		Exprs: tcpRedirectExprs(sourceIP, egress.DefaultCapturePort),
+	})
 }
 
-func tcpRedirectExprs(sourceIP string, originalPort, capturePort uint16) []expr.Any {
-	exprs := append(ipSourceEqual(sourceIP), tcpDestinationPortEqual(originalPort)...)
+func tcpRedirectExprs(sourceIP string, capturePort uint16) []expr.Any {
+	exprs := append(ipSourceEqual(sourceIP),
+		&expr.Meta{Key: expr.MetaKeyL4PROTO, Register: 1},
+		&expr.Cmp{
+			Op:       expr.CmpOpEq,
+			Register: 1,
+			Data:     []byte{unix.IPPROTO_TCP},
+		},
+	)
 	exprs = append(exprs,
 		&expr.Immediate{
 			Register: 1,

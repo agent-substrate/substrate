@@ -179,6 +179,8 @@ render_ate_system_manifests() {
     # Build everything resolved with base manifests for GKE
     run_ko resolve -f manifests/ate-install
   fi
+}
+
 resolve_ipv4_addresses() {
   local host="$1"
   if command -v python3 >/dev/null 2>&1; then
