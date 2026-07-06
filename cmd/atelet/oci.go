@@ -98,6 +98,13 @@ func prepareOCIDirectory(ctx context.Context, pullCache *memorypullcache.MemoryP
 			return fmt.Errorf("while writing overlay lower marker: %w", err)
 		}
 
+		// We deliberately do NOT pre-create the identity mount point here: ateom
+		// mounts the overlay over rootPath after prepareOCIDirectory returns,
+		// which would shadow anything created now. runsc auto-creates the bind
+		// target inside the sandbox (the new dir lands in the overlay upperdir),
+		// so the identity bind mount attaches without our help. (Verified: a bind
+		// mount to a path absent from the image lower still attaches.)
+
 		span.SetAttributes(attribute.String("rootfs_method", "overlay"))
 	} else {
 		// Fallback: no digest or no cache — extract directly (original path).
@@ -118,16 +125,20 @@ func prepareOCIDirectory(ctx context.Context, pullCache *memorypullcache.MemoryP
 			return fmt.Errorf("in untar: %w", err)
 		}
 
-		span.SetAttributes(attribute.String("rootfs_method", "untar"))
-	}
-
-	// Bind-mount the per-actor identity directory so the workload can read its
-	// own ID at IdentityMountPath/ActorIDFileName. The bind target must exist
-	// in the rootfs for the mount to attach.
-	if identityDir != "" {
-		if err := createMountPoint(rootPath, IdentityMountPath); err != nil {
-			return fmt.Errorf("while creating identity mount point: %w", err)
+		// Pre-create the identity bind-mount target. On this (untar) path the
+		// rootfs is the container's actual root with no overlay on top, so runsc
+		// resolves the bind destination against the extracted image; if the image
+		// lacks IdentityMountPath the mount would fail. We create it here so the
+		// target always exists. (On the overlay path this is unnecessary — and
+		// would be shadowed by ateom's later overlay mount anyway — because runsc
+		// auto-creates the missing target into the overlay upperdir.)
+		if identityDir != "" {
+			if err := createMountPoint(rootPath, IdentityMountPath); err != nil {
+				return fmt.Errorf("while creating identity mount point: %w", err)
+			}
 		}
+
+		span.SetAttributes(attribute.String("rootfs_method", "untar"))
 	}
 
 	ociSpec := buildActorOCISpec(actorTemplateNamespace, actorTemplateName, actorID, args, env, annotations, netns, identityDir, durableDirVolumeMounts)
