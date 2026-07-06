@@ -101,7 +101,7 @@ app.get("/", (c) => c.html(`
 </style>
 </head>
 <body>
-<header><h1>NanoClaw Substrate Dashboard <span style="font-size:0.6em; vertical-align:middle; opacity:0.8;">V1.5.4 ENTERPRISE</span></h1><div id="heartbeat" style="font-size:0.7em; color:var(--muted)">Syncing...</div></header>
+<header><h1>NanoClaw Substrate Integration <span style="font-size:0.6em; vertical-align:middle; opacity:0.8;">V1.5.1</span></h1><div id="heartbeat" style="font-size:0.7em; color:var(--muted)">Syncing...</div></header>
 <div class="grid-master">
   <div><div class="card" style="margin-bottom: 1.5em;"><h2>Decision Stream</h2><div class="desc">Real-time orchestration logs tracking broker-to-agent signals and Substrate lifecycle events (Resume/Suspend).</div><div id="shell" class="shell-container"></div></div>
   <div class="card"><h2>Task Timeline</h2><div class="desc">Chronological log of all incoming requests dispatched to the logical fleet via WhatsApp, Cron, or Burst triggers.</div><div id="timeline" style="height: 100px; overflow: auto; background: var(--panel-2); border: 1px solid var(--line); padding: 8px;"></div></div></div>
@@ -125,5 +125,5 @@ document.querySelector("#audit tbody").innerHTML = (data.audits || []).map(a => 
 </script></body></html>
 `));
 var port = 8090;
-(0, import_node_server.serve)({ fetch: app.fetch, port, hostname: "0.0.0.0" }, () => { console.log("V1.5.4 Dashboard Online"); });
+(0, import_node_server.serve)({ fetch: app.fetch, port, hostname: "0.0.0.0" }, () => { console.log("V1.5.1 Final Dashboard Online"); });
 syncState();
