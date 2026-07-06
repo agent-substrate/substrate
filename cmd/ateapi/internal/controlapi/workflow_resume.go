@@ -220,6 +220,12 @@ func (s *AssignWorkerStep) RetryBackoff() *wait.Backoff {
 }
 
 func (s *AssignWorkerStep) findFreeWorker(workers []*ateapipb.Worker, eligible map[types.NamespacedName]struct{}, nodesRestrictions []string) *ateapipb.Worker {
+	// Drop empty node names from the restriction list. Actor records written
+	// before FinalizePausedStep guarded against an unknown node contain [""],
+	// which no worker's NodeName can ever match; treating that as "no
+	// restriction" keeps those actors schedulable.
+	nodesRestrictions = slices.DeleteFunc(slices.Clone(nodesRestrictions), func(n string) bool { return n == "" })
+
 	var freeWorkers []*ateapipb.Worker
 	for _, worker := range workers {
 		if worker.Assignment != nil {

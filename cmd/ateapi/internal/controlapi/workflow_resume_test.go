@@ -185,3 +185,82 @@ func TestEligibleWorkerPools(t *testing.T) {
 		})
 	}
 }
+
+func freeWorker(pool, pod, node string) *ateapipb.Worker {
+	return &ateapipb.Worker{
+		WorkerNamespace: "ns",
+		WorkerPool:      pool,
+		WorkerPod:       pod,
+		NodeName:        node,
+	}
+}
+
+func TestFindFreeWorker_NodeRestrictions(t *testing.T) {
+	eligible := map[types.NamespacedName]struct{}{
+		{Namespace: "ns", Name: "pool1"}: {},
+	}
+	workers := []*ateapipb.Worker{
+		freeWorker("pool1", "w1", "node1"),
+		freeWorker("pool1", "w2", "node2"),
+	}
+
+	tests := []struct {
+		name              string
+		nodesRestrictions []string
+		wantNodes         []string // acceptable NodeNames for the picked worker
+		wantNil           bool
+	}{
+		{
+			name:              "no restrictions picks any worker",
+			nodesRestrictions: nil,
+			wantNodes:         []string{"node1", "node2"},
+		},
+		{
+			name:              "restriction filters to the matching node",
+			nodesRestrictions: []string{"node2"},
+			wantNodes:         []string{"node2"},
+		},
+		{
+			name:              "restriction on an absent node matches nothing",
+			nodesRestrictions: []string{"node3"},
+			wantNil:           true,
+		},
+		{
+			// Actor records written before FinalizePausedStep guarded against
+			// an unknown node contain [""]; it must not exclude every worker.
+			name:              "empty node name is ignored, not treated as a restriction",
+			nodesRestrictions: []string{""},
+			wantNodes:         []string{"node1", "node2"},
+		},
+		{
+			name:              "empty node name alongside a real one keeps the real restriction",
+			nodesRestrictions: []string{"", "node1"},
+			wantNodes:         []string{"node1"},
+		},
+	}
+
+	s := &AssignWorkerStep{}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := s.findFreeWorker(workers, eligible, tt.nodesRestrictions)
+			if tt.wantNil {
+				if got != nil {
+					t.Fatalf("expected no worker, got %v", got)
+				}
+				return
+			}
+			if got == nil {
+				t.Fatalf("expected a worker, got nil")
+			}
+			found := false
+			for _, n := range tt.wantNodes {
+				if got.GetNodeName() == n {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("picked worker on node %q, want one of %v", got.GetNodeName(), tt.wantNodes)
+			}
+		})
+	}
+}

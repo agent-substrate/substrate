@@ -203,12 +203,21 @@ func (s *FinalizePausedStep) Execute(ctx context.Context, input *PauseInput, sta
 		}
 		// TODO(dberkov) - what if InProgressSnapshot is empty? That shouldn't be possible.
 		if latestActor.InProgressSnapshot != "" {
+			// If the worker record was already gone we don't know which node
+			// holds the checkpoint. Record no locality rather than an empty
+			// node name: findFreeWorker treats any non-empty restriction list
+			// as a hard filter, and no worker has an empty node name, so [""]
+			// would make the actor permanently unschedulable.
+			var nodesWithSnapshot []string
+			if nodeName != "" {
+				nodesWithSnapshot = []string{nodeName}
+			}
 			latestActor.LatestSnapshotInfo = &ateapipb.SnapshotInfo{
 				Type: ateapipb.SnapshotType_SNAPSHOT_TYPE_LOCAL,
 				Data: &ateapipb.SnapshotInfo_Local{
 					Local: &ateapipb.LocalSnapshotInfo{
 						SnapshotPrefix:            latestActor.InProgressSnapshot,
-						NodeVmsWithLocalSnapshots: []string{nodeName},
+						NodeVmsWithLocalSnapshots: nodesWithSnapshot,
 					},
 				},
 			}
