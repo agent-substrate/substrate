@@ -18,6 +18,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
+	"sync"
 	"testing"
 	"time"
 
@@ -1093,5 +1095,69 @@ func TestDeleteAtespace_EmptyWhileOtherAtespaceNonEmpty(t *testing.T) {
 	// team-b is still non-empty → still rejected.
 	if err := s.DeleteAtespace(ctx, "team-b"); !errors.Is(err, store.ErrFailedPrecondition) {
 		t.Errorf("DeleteAtespace(team-b, non-empty) = %v, want ErrFailedPrecondition", err)
+	}
+}
+
+// concurrentMasterClient fakes a cluster with several masters. Like the real
+// ClusterClient.ForEachMaster, it invokes the callback concurrently, one
+// goroutine per master.
+type concurrentMasterClient struct {
+	redisClient
+	masters []*redis.Client
+}
+
+func (c *concurrentMasterClient) ForEachMaster(ctx context.Context, fn func(ctx context.Context, client *redis.Client) error) error {
+	var wg sync.WaitGroup
+	errCh := make(chan error, 1)
+	for _, master := range c.masters {
+		wg.Add(1)
+		go func(master *redis.Client) {
+			defer wg.Done()
+			if err := fn(ctx, master); err != nil {
+				select {
+				case errCh <- err:
+				default:
+				}
+			}
+		}(master)
+	}
+	wg.Wait()
+	select {
+	case err := <-errCh:
+		return err
+	default:
+		return nil
+	}
+}
+
+// TestGetSortedMasters_ConcurrentCallbacks guards against dropping a shard
+// when ForEachMaster's concurrent callbacks append to the shared slice: a
+// dropped master makes ListActors silently skip every actor on that shard.
+// Run with -race; the pre-fix unsynchronized append fails here.
+func TestGetSortedMasters_ConcurrentCallbacks(t *testing.T) {
+	const numMasters = 8
+	fake := &concurrentMasterClient{}
+	want := make([]string, 0, numMasters)
+	for i := range numMasters {
+		addr := fmt.Sprintf("shard-%d:6379", i)
+		// Never connected to: getSortedMasters only reads Options().Addr.
+		fake.masters = append(fake.masters, redis.NewClient(&redis.Options{Addr: addr}))
+		want = append(want, addr)
+	}
+	sort.Strings(want)
+	s := &Persistence{rdb: fake}
+
+	for range 100 {
+		masters, err := s.getSortedMasters(context.Background())
+		if err != nil {
+			t.Fatalf("getSortedMasters failed: %v", err)
+		}
+		got := make([]string, 0, len(masters))
+		for _, m := range masters {
+			got = append(got, m.Options().Addr)
+		}
+		if diff := cmp.Diff(want, got); diff != "" {
+			t.Fatalf("getSortedMasters returned wrong masters (-want +got):\n%s", diff)
+		}
 	}
 }

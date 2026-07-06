@@ -725,8 +725,12 @@ func (s *Persistence) ListActors(ctx context.Context, atespace string, pageSize 
 }
 
 func (s *Persistence) getSortedMasters(ctx context.Context) ([]*redis.Client, error) {
+	var mu sync.Mutex
 	var masters []*redis.Client
+	// ForEachMaster invokes the callback concurrently, one goroutine per master.
 	err := s.rdb.ForEachMaster(ctx, func(ctx context.Context, master *redis.Client) error {
+		mu.Lock()
+		defer mu.Unlock()
 		masters = append(masters, master)
 		return nil
 	})
