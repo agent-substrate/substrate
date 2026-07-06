@@ -139,8 +139,7 @@ func (s *AteomHerder) fetchAsset(ctx context.Context, entry assetEntry) (string,
 	// asset is streamed (not buffered) to disk below.
 	rc, err := s.openAsset(ctx, entry.URL)
 	if err != nil {
-		// TODO: check gcs err.
-		return "", fmt.Errorf("%w: while fetching %v: %w", ateerrors.ReasonInvalidSandboxAsset, entry.URL, err)
+		return "", fmt.Errorf("while fetching %v: %w", entry.URL, err)
 	}
 	defer rc.Close()
 

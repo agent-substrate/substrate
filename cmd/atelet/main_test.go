@@ -364,6 +364,14 @@ func TestFetchAssetStreaming(t *testing.T) {
 		if !errors.Is(err, ateerrors.ReasonFailedGetExternalObject) {
 			t.Errorf("missing-object error not tagged terminal: %v", err)
 		}
+		if errors.Is(err, ateerrors.ReasonInvalidSandboxAsset) {
+			t.Errorf("missing-object error wrongly tagged ReasonInvalidSandboxAsset: %v", err)
+		}
+		// The extracted (outermost) Reason drives CrashIfReason's ErrorInfo;
+		// it must be the client tag, not a fetchAsset blanket wrap.
+		if r, ok := errors.AsType[ateerrors.Reason](err); !ok || r != ateerrors.ReasonFailedGetExternalObject {
+			t.Errorf("extracted reason = %v (ok=%v), want ReasonFailedGetExternalObject", r, ok)
+		}
 	})
 
 	t.Run("malformed url is terminal", func(t *testing.T) {
@@ -378,7 +386,7 @@ func TestFetchAssetStreaming(t *testing.T) {
 		}
 	})
 
-	t.Run("network error is tagged invalid sandbox asset", func(t *testing.T) {
+	t.Run("network error stays untagged (retriable)", func(t *testing.T) {
 		ateompath.StaticFilesDir = t.TempDir()
 		maxAssetBytes = origCap
 		s := &AteomHerder{anonGCSClient: fakeObjectStorage{err: errors.New("connection refused")}}
@@ -386,15 +394,14 @@ func TestFetchAssetStreaming(t *testing.T) {
 		if err == nil {
 			t.Fatal("fetchAsset accepted a failing open")
 		}
-		// fetchAsset currently tags every openAsset failure — transient or not —
-		// with ReasonInvalidSandboxAsset (see the TODO in fetchAsset about
-		// distinguishing gcs errors). It must not, however, invent a
-		// terminal-file-system or external-object classification.
-		if !errors.Is(err, ateerrors.ReasonInvalidSandboxAsset) {
-			t.Errorf("open failure not tagged ReasonInvalidSandboxAsset: %v", err)
+		// A transient open failure must carry no Reason at all: any tag here
+		// is claimed by CrashIfReason in Checkpoint/Restore and would mark a
+		// recoverable actor CRASHED instead of letting the control plane retry.
+		if r, ok := errors.AsType[ateerrors.Reason](err); ok {
+			t.Errorf("network error wrongly tagged with reason %v: %v", r, err)
 		}
-		if errors.Is(err, ateerrors.ReasonTerminalFileSystemError) || errors.Is(err, ateerrors.ReasonFailedGetExternalObject) {
-			t.Errorf("network error wrongly tagged with an unrelated reason: %v", err)
+		if !strings.Contains(err.Error(), "while fetching") {
+			t.Errorf("open failure lost its context wrap: %v", err)
 		}
 	})
 }

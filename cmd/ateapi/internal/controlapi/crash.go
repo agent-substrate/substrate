@@ -17,6 +17,7 @@ package controlapi
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/ateerrors"
@@ -31,8 +32,11 @@ func maybeCrashActor(ctx context.Context, st store.Interface, atespace, actorID 
 	if err == nil {
 		return nil
 	}
+
 	if ateerrors.ActorCrashRequested(err) {
+		slog.ErrorContext(ctx, "Setting Actor to crashed due to error", slog.Any("error", err))
 		if cerr := crashActor(ctx, st, atespace, actorID); cerr != nil {
+			slog.ErrorContext(ctx, "Failed to crash actor", slog.Any("cerr", cerr))
 			return cerr
 		}
 		return status.Errorf(codes.DataLoss, "actor %s crashed", actorID)
@@ -40,7 +44,7 @@ func maybeCrashActor(ctx context.Context, st store.Interface, atespace, actorID 
 	return fmt.Errorf("%s: %w", wrapMsg, err)
 }
 
-// crashActor moves the actor to CRASHED and removes its worker pointer.
+// crashActor moves the actor to CRASHED state.
 func crashActor(ctx context.Context, st store.Interface, atespace, actorID string) error {
 	actor, err := st.GetActor(ctx, atespace, actorID)
 	if err != nil {

@@ -193,7 +193,9 @@ func (s *WorkerPoolSyncer) releaseActorOnDeadWorker(ctx context.Context, namespa
 	if actor.GetAteomPodNamespace() != namespace || actor.GetAteomPodName() != podName {
 		return nil
 	}
-	actor.Status = ateapipb.Actor_STATUS_SUSPENDED
+	if actor.Status != ateapipb.Actor_STATUS_CRASHED {
+		actor.Status = ateapipb.Actor_STATUS_SUSPENDED
+	}
 	actor.AteomPodNamespace = ""
 	actor.AteomPodName = ""
 	actor.AteomPodIp = ""
