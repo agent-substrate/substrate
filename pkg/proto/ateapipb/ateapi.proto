@@ -157,6 +157,13 @@ message Actor {
   // suspend/pause since eligibility is no longer a single fixed pool
   // reference on the ActorTemplate.
   string worker_pool_name = 12;
+
+  // The egress PEP address ate-api resolved for this actor on its most recent
+  // resume, in the form <gateway>.<namespace>.svc.cluster.local:<port>. Empty
+  // means no PEP matched and egress capture is off. Set at worker assignment and
+  // cleared when the worker is released (suspend/pause). Records which PEP an
+  // actor is using so global-PEP membership is queryable without scanning logs.
+  string egress_pep_address = 13;
 }
 
 // Atespace is the isolation boundary an Actor is created into. Global-scoped:

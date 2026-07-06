@@ -214,6 +214,7 @@ func (s *FinalizeSuspendedStep) Execute(ctx context.Context, input *SuspendInput
 		latestActor.AteomPodName = ""
 		latestActor.AteomPodIp = ""
 		latestActor.WorkerPoolName = ""
+		latestActor.EgressPepAddress = ""
 		updatedActor, err := s.store.UpdateActor(ctx, latestActor, latestActor.GetMetadata().GetVersion())
 		if err != nil {
 			return err

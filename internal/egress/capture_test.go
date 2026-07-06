@@ -46,25 +46,11 @@ func TestNewCaptureContextIgnoresParentCancellation(t *testing.T) {
 	}
 }
 
-func TestConfigFromEnvRequiresPEPAddress(t *testing.T) {
-	t.Setenv(EnvPEPAddress, "")
-
-	_, err := ConfigFromEnv(nil)
-	if err == nil {
-		t.Fatal("ConfigFromEnv() returned nil error, want error")
-	}
-	if !strings.Contains(err.Error(), EnvPEPAddress) {
-		t.Fatalf("ConfigFromEnv() error = %v, want %s", err, EnvPEPAddress)
-	}
-}
-
-func TestConfigFromEnv(t *testing.T) {
-	t.Setenv(EnvPEPAddress, "ate-egress.example:15008")
-
+func TestConfigForPEPAddress(t *testing.T) {
 	listeners := []Listener{{Port: 15001}}
-	cfg, err := ConfigFromEnv(listeners)
-	if err != nil {
-		t.Fatalf("ConfigFromEnv() returned error: %v", err)
+	cfg, ok := ConfigForPEPAddress("ate-egress.example:15008", listeners)
+	if !ok {
+		t.Fatal("ConfigForPEPAddress() ok = false, want true")
 	}
 	if cfg.PEPAddress != "ate-egress.example:15008" {
 		t.Fatalf("cfg.PEPAddress = %q, want ate-egress.example:15008", cfg.PEPAddress)
@@ -74,12 +60,19 @@ func TestConfigFromEnv(t *testing.T) {
 	}
 }
 
+func TestConfigForPEPAddressEmpty(t *testing.T) {
+	if _, ok := ConfigForPEPAddress("", nil); ok {
+		t.Fatal("ConfigForPEPAddress() ok = true, want false")
+	}
+}
+
 func TestNewConnectRequestUsesConfiguredAuthority(t *testing.T) {
 	originalDst := &net.TCPAddr{IP: net.ParseIP("203.0.113.10"), Port: 443}
 	req, pr, pw := newConnectRequest(context.Background(), ActorIdentity{
 		Namespace: "default",
 		Template:  "counter",
 		ActorID:   "my-counter-1",
+		Atespace:  "team-a",
 	}, originalDst, "httpbin.org:443")
 	defer pr.Close()
 	defer pw.Close()
@@ -95,6 +88,9 @@ func TestNewConnectRequestUsesConfiguredAuthority(t *testing.T) {
 	}
 	if got := req.Header.Get("x-ate-connect-authority"); got != "httpbin.org:443" {
 		t.Fatalf("x-ate-connect-authority = %q, want httpbin.org:443", got)
+	}
+	if got := req.Header.Get("x-ate-atespace"); got != "team-a" {
+		t.Fatalf("x-ate-atespace = %q, want team-a", got)
 	}
 }
 
@@ -253,24 +249,61 @@ func TestProxyByteStreamStopsWhenContextCancelled(t *testing.T) {
 	}
 }
 
-func TestConnectStreamCloseClosesIdleTransportConnections(t *testing.T) {
+func TestConnectStreamCloseClosesPipes(t *testing.T) {
 	pr, pw := io.Pipe()
 	defer pr.Close()
 
-	called := false
 	stream := &connectStream{
 		requestWriter: pw,
 		responseBody:  io.NopCloser(strings.NewReader("")),
-		closeIdle: func() {
-			called = true
-		},
 	}
 
 	if err := stream.Close(); err != nil {
 		t.Fatalf("stream.Close() returned error: %v", err)
 	}
-	if !called {
-		t.Fatal("stream.Close() did not close idle transport connections")
+	// The request pipe is closed: a subsequent write fails.
+	if _, err := pw.Write([]byte("x")); err == nil {
+		t.Fatal("stream.Close() did not close the request writer")
+	}
+}
+
+func TestHTTPHeadersCompleteDetectsMarkerSplitAcrossReads(t *testing.T) {
+	// The "\r\n\r\n" marker is delivered across two calls: "...\r\n\r" then "\n".
+	// The incremental search must still detect it via the small re-scan overlap.
+	scanned := 0
+	first := []byte("GET / HTTP/1.1\r\nHost: example.com\r\n\r")
+	if httpHeadersComplete(first, &scanned) {
+		t.Fatal("httpHeadersComplete() = true on partial marker, want false")
+	}
+	if scanned != len(first) {
+		t.Fatalf("scanned = %d, want %d", scanned, len(first))
+	}
+	full := append(first, '\n')
+	if !httpHeadersComplete(full, &scanned) {
+		t.Fatal("httpHeadersComplete() = false after marker completed, want true")
+	}
+}
+
+func TestDeriveConnectAuthorityFromHTTPHostByteAtATime(t *testing.T) {
+	clientConn, serverConn := net.Pipe()
+	defer clientConn.Close()
+	defer serverConn.Close()
+
+	request := "GET /get HTTP/1.1\r\nHost: httpbin.org\r\n\r\n"
+	go func() {
+		for i := 0; i < len(request); i++ {
+			if _, err := clientConn.Write([]byte{request[i]}); err != nil {
+				return
+			}
+		}
+	}()
+
+	authority, _ := deriveConnectAuthority(context.Background(), serverConn, &net.TCPAddr{
+		IP:   net.ParseIP("203.0.113.10"),
+		Port: 80,
+	})
+	if authority != "httpbin.org:80" {
+		t.Fatalf("deriveConnectAuthority() authority = %q, want httpbin.org:80", authority)
 	}
 }
 

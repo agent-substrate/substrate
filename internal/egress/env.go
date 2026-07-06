@@ -15,8 +15,9 @@
 package egress
 
 const (
-	EnvCaptureEnabled = "ATE_EGRESS_CAPTURE_ENABLED"
-	EnvPEPAddress     = "ATE_EGRESS_PEP_ADDRESS"
+	LabelPEP      = "ate.dev/egress-pep"
+	LabelAtespace = "ate.dev/atespace"
+	LabelActor    = "ate.dev/actor"
 )
 
 const (

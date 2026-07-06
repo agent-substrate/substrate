@@ -31,6 +31,7 @@ import (
 	"google.golang.org/grpc/status"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/tools/cache"
 )
 
 // WorkflowStep represents a single, idempotent operation in a workflow graph.
@@ -122,6 +123,7 @@ type ActorWorkflow struct {
 	workerPoolLister    listersv1alpha1.WorkerPoolLister
 	sandboxConfigLister listersv1alpha1.SandboxConfigLister
 	kubeClient          kubernetes.Interface
+	gatewayPEPIndexer   cache.Indexer
 	secretCache         *envSecretCache
 }
 
@@ -134,6 +136,7 @@ func NewActorWorkflow(
 	workerPoolLister listersv1alpha1.WorkerPoolLister,
 	sandboxConfigLister listersv1alpha1.SandboxConfigLister,
 	kubeClient kubernetes.Interface,
+	gatewayPEPIndexer cache.Indexer,
 ) *ActorWorkflow {
 	return &ActorWorkflow{
 		store:               store,
@@ -143,6 +146,7 @@ func NewActorWorkflow(
 		workerPoolLister:    workerPoolLister,
 		sandboxConfigLister: sandboxConfigLister,
 		kubeClient:          kubeClient,
+		gatewayPEPIndexer:   gatewayPEPIndexer,
 		secretCache:         newEnvSecretCache(envSecretCacheTTL),
 	}
 }
@@ -166,7 +170,7 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, atespace, name string, 
 
 	steps := []WorkflowStep[*ResumeInput, *ResumeState]{
 		&LoadActorForResumeStep{store: w.store, actorTemplateLister: w.actorTemplateLister},
-		&AssignWorkerStep{store: w.store, workerCache: w.workerCache},
+		&AssignWorkerStep{store: w.store, workerCache: w.workerCache, gatewayPEPIndexer: w.gatewayPEPIndexer},
 		&CallAteletRestoreStep{store: w.store, dialer: w.dialer, kubeClient: w.kubeClient, secretCache: w.secretCache, workerPoolLister: w.workerPoolLister, sandboxConfigLister: w.sandboxConfigLister},
 		&FinalizeRunningStep{store: w.store},
 	}

@@ -29,9 +29,6 @@ package main
 // CONSTANT, a restored guest's frozen network config stays valid on any pod —
 // no in-guest reconfiguration needed.
 //
-// (Copied with light adaptation from cmd/ateom-gvisor; expected to be
-// de-duplicated into a shared package later.)
-
 import (
 	"context"
 	"errors"
@@ -48,6 +45,7 @@ import (
 	"github.com/vishvananda/netns"
 	"golang.org/x/sys/unix"
 
+	"github.com/agent-substrate/substrate/internal/ateomegress"
 	"github.com/agent-substrate/substrate/internal/egress"
 	"github.com/agent-substrate/substrate/internal/serverboot"
 )
@@ -121,7 +119,7 @@ func mustParseIP(s string) net.IP {
 // pod netns and the kata interior netns (see the package comment). Idempotent
 // via cleanup-before-setup; also sweeps stale kata taps out of the interior
 // netns so the sandbox always builds on a clean slate.
-func (s *AteomService) setupActorNetwork(ctx context.Context, identity egress.ActorIdentity) (retErr error) {
+func (s *AteomService) setupActorNetwork(ctx context.Context, identity egress.ActorIdentity, egressPEPAddress string) (retErr error) {
 	s.cleanupActorNetworkOrExit(ctx, "Failed to clean up stale actor network before setup")
 	defer func() {
 		if retErr != nil {
@@ -191,9 +189,11 @@ func (s *AteomService) setupActorNetwork(ctx context.Context, identity egress.Ac
 	if err := enableIPv4Forwarding(); err != nil {
 		return err
 	}
-	if err := s.startEgressCaptureIfEnabled(ctx, identity); err != nil {
+	egressCapture, err := ateomegress.StartCaptureIfEnabled(ctx, identity, egressPEPAddress)
+	if err != nil {
 		return err
 	}
+	s.egressCapture = egressCapture
 	if err := installActorNftablesRules(podIP, s.egressCapture != nil); err != nil {
 		return err
 	}
@@ -368,7 +368,7 @@ func installActorNftablesRules(podIP net.IP, egressCapture bool) error {
 		Priority: nftables.ChainPriorityNATDest,
 	})
 	if egressCapture {
-		addEgressCaptureRedirectRules(c, table, prerouting, actorVethIP)
+		ateomegress.AddCaptureRedirectRules(c, table, prerouting, actorVethIP)
 	}
 	preroutingExprs := append(ipDestinationEqual(podIP.String()), tcpDestinationPortEqual(80)...)
 	preroutingExprs = append(preroutingExprs,

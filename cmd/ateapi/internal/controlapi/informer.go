@@ -17,8 +17,12 @@ package controlapi
 import (
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/egress"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/dynamic/dynamicinformer"
 	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
@@ -31,6 +35,13 @@ const (
 	byNode             = "by-node"
 	workerPodLabel     = "ate.dev/worker-pool"
 )
+
+// GatewayGVR is the Gateway API resource ate-api watches for egress PEPs.
+var GatewayGVR = schema.GroupVersionResource{
+	Group:    "gateway.networking.k8s.io",
+	Version:  "v1",
+	Resource: "gateways",
+}
 
 // AteletInformer creates a SharedInformerFactory and SharedIndexInformer for Atelet pods.
 func AteletInformer(kc kubernetes.Interface) (informers.SharedInformerFactory, cache.SharedIndexInformer) {
@@ -72,4 +83,18 @@ func WorkerPodInformer(kc kubernetes.Interface) (informers.SharedInformerFactory
 	})
 
 	return factory, workerPodInformer
+}
+
+// GatewayPEPInformer watches labeled Gateways that ate-api can use as egress PEPs.
+//
+// The watch is cluster-wide and trusts Gateway labels: RBAC on Gateways is the
+// security boundary (see docs/egress-capture.md, "Trust model"). If Gateway
+// write access can't be restricted to the platform team, scope this watch to
+// an allowlist of PEP namespaces instead.
+func GatewayPEPInformer(dc dynamic.Interface) (dynamicinformer.DynamicSharedInformerFactory, cache.SharedIndexInformer) {
+	factory := dynamicinformer.NewFilteredDynamicSharedInformerFactory(dc, 0, metav1.NamespaceAll, func(options *metav1.ListOptions) {
+		options.LabelSelector = egress.LabelPEP
+	})
+	gatewayInformer := factory.ForResource(GatewayGVR).Informer()
+	return factory, gatewayInformer
 }

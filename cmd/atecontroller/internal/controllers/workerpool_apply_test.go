@@ -26,7 +26,6 @@ import (
 	metav1ac "k8s.io/client-go/applyconfigurations/meta/v1"
 
 	"github.com/agent-substrate/substrate/internal/ateompath"
-	"github.com/agent-substrate/substrate/internal/egress"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 )
 
@@ -259,35 +258,6 @@ func TestMicroVMPodShape(t *testing.T) {
 					hasVol, hasMount, hasSelector, hasTol, tt.wantMicroVM)
 			}
 		})
-	}
-}
-
-func TestWorkerPoolEgressCaptureEnvPropagation(t *testing.T) {
-	t.Setenv(egress.EnvCaptureEnabled, "1")
-	t.Setenv(egress.EnvPEPAddress, "ate-egress.agentgateway-system.svc.cluster.local:15008")
-
-	wp := testWorkerPoolApplyConfig(nil)
-	deployment := buildDeploymentApplyConfig(wp)
-	containers := deployment.Spec.Template.Spec.Containers
-	if len(containers) != 1 {
-		t.Fatalf("containers length = %d, want 1", len(containers))
-	}
-
-	got := map[string]string{}
-	for _, env := range containers[0].Env {
-		if env.Name != nil && env.Value != nil {
-			got[*env.Name] = *env.Value
-		}
-	}
-
-	want := map[string]string{
-		egress.EnvCaptureEnabled: "true",
-		egress.EnvPEPAddress:     "ate-egress.agentgateway-system.svc.cluster.local:15008",
-	}
-	for name, value := range want {
-		if got[name] != value {
-			t.Errorf("env %s = %q, want %q", name, got[name], value)
-		}
 	}
 }
 

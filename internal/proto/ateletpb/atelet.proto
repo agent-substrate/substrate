@@ -47,6 +47,8 @@ message RunRequest {
   // fetches the relevant assets and records them with the actor's on-node state
   // so a later Checkpoint can pin the same version into the snapshot manifest.
   SandboxAssets sandbox_assets = 7;
+
+  string egress_pep_address = 8;
 }
 
 // AssetFile is one content-addressed file atelet fetches for a sandbox runtime
@@ -228,6 +230,8 @@ message RestoreRequest {
 
   // What content to restore from the checkpoint.
   SnapshotScope scope = 10;
+
+  string egress_pep_address = 11;
 }
 
 message RestoreResponse {

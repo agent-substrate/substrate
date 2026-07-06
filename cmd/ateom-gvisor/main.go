@@ -30,6 +30,7 @@ import (
 	"cloud.google.com/go/compute/metadata"
 	"github.com/agent-substrate/substrate/internal/actorlog"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
+	"github.com/agent-substrate/substrate/internal/ateomegress"
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/contextlogging"
 	"github.com/agent-substrate/substrate/internal/egress"
@@ -190,7 +191,7 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	//   * Correct runsc version is downloaded and placed on disk.
 	//   * All OCI bundles are set up, including for "pause" container.
 
-	if err := s.setupActorNetwork(ctx, actorIdentityFromRun(req)); err != nil {
+	if err := s.setupActorNetwork(ctx, ateomegress.ActorIdentityFromRun(req), req.GetEgressPepAddress()); err != nil {
 		return nil, fmt.Errorf("while setting up actor network: %w", err)
 	}
 	defer func() {
@@ -364,7 +365,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	//   * All OCI bundles are set up, including for "pause" container.
 	//   * Checkpoint downloaded and placed on disk
 
-	if err := s.setupActorNetwork(ctx, actorIdentityFromRestore(req)); err != nil {
+	if err := s.setupActorNetwork(ctx, ateomegress.ActorIdentityFromRestore(req), req.GetEgressPepAddress()); err != nil {
 		return nil, fmt.Errorf("while setting up actor network: %w", err)
 	}
 	defer func() {
@@ -440,7 +441,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	return &ateompb.RestoreWorkloadResponse{}, nil
 }
 
-func (s *AteomService) setupActorNetwork(ctx context.Context, identity egress.ActorIdentity) (retErr error) {
+func (s *AteomService) setupActorNetwork(ctx context.Context, identity egress.ActorIdentity, egressPEPAddress string) (retErr error) {
 	// Build a fresh point-to-point network between the worker pod netns and the
 	// gVisor interior netns. The worker side keeps the pod's real eth0, creates
 	// ateom0 as the gateway, and moves only the veth peer into the actor netns.
@@ -508,9 +509,11 @@ func (s *AteomService) setupActorNetwork(ctx context.Context, identity egress.Ac
 	if err := enableIPv4Forwarding(); err != nil {
 		return err
 	}
-	if err := s.startEgressCaptureIfEnabled(ctx, identity); err != nil {
+	egressCapture, err := ateomegress.StartCaptureIfEnabled(ctx, identity, egressPEPAddress)
+	if err != nil {
 		return err
 	}
+	s.egressCapture = egressCapture
 
 	if err := installActorNftablesRules(podIP, s.egressCapture != nil); err != nil {
 		return err
@@ -722,7 +725,7 @@ func installActorNftablesRules(podIP net.IP, egressCapture bool) error {
 		Priority: nftables.ChainPriorityNATDest,
 	})
 	if egressCapture {
-		addEgressCaptureRedirectRules(c, table, prerouting, actorVethIP)
+		ateomegress.AddCaptureRedirectRules(c, table, prerouting, actorVethIP)
 	}
 	// TODO: Support optional DNS capture for hostname recovery for non-SNI,
 	// non-HTTP, or DNS-policy egress. The current HTTP/HTTPS path derives
@@ -856,22 +859,6 @@ func tcpDestinationPortEqual(port uint16) []expr.Any {
 			Register: 1,
 			Data:     binaryutil.BigEndian.PutUint16(port),
 		},
-	}
-}
-
-func actorIdentityFromRun(req *ateompb.RunWorkloadRequest) egress.ActorIdentity {
-	return egress.ActorIdentity{
-		Namespace: req.GetActorTemplateNamespace(),
-		Template:  req.GetActorTemplateName(),
-		ActorID:   req.GetActorId(),
-	}
-}
-
-func actorIdentityFromRestore(req *ateompb.RestoreWorkloadRequest) egress.ActorIdentity {
-	return egress.ActorIdentity{
-		Namespace: req.GetActorTemplateNamespace(),
-		Template:  req.GetActorTemplateName(),
-		ActorID:   req.GetActorId(),
 	}
 }
 

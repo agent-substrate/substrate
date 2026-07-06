@@ -15,16 +15,12 @@
 package controllers
 
 import (
-	"os"
-	"strconv"
-
 	corev1 "k8s.io/api/core/v1"
 	appsv1ac "k8s.io/client-go/applyconfigurations/apps/v1"
 	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
 	metav1ac "k8s.io/client-go/applyconfigurations/meta/v1"
 
 	"github.com/agent-substrate/substrate/internal/ateompath"
-	"github.com/agent-substrate/substrate/internal/egress"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 )
 
@@ -49,7 +45,6 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool) *appsv1ac.Deployment
 					WithFieldRef(corev1ac.ObjectFieldSelector().
 						WithFieldPath("metadata.uid"))),
 		)
-	containerAC.WithEnv(egressCaptureEnvFromController()...)
 	containerAC.
 		WithVolumeMounts(corev1ac.VolumeMount().
 			WithName("run-ateom").
@@ -86,25 +81,6 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool) *appsv1ac.Deployment
 					"ate.dev/worker-pool": wp.Name,
 				}).
 				WithSpec(podSpecAC)))
-}
-
-func egressCaptureEnvFromController() []*corev1ac.EnvVarApplyConfiguration {
-	enabled, _ := strconv.ParseBool(os.Getenv(egress.EnvCaptureEnabled))
-	if !enabled {
-		return nil
-	}
-
-	env := []*corev1ac.EnvVarApplyConfiguration{
-		corev1ac.EnvVar().
-			WithName(egress.EnvCaptureEnabled).
-			WithValue("true"),
-	}
-	if v := os.Getenv(egress.EnvPEPAddress); v != "" {
-		env = append(env, corev1ac.EnvVar().
-			WithName(egress.EnvPEPAddress).
-			WithValue(v))
-	}
-	return env
 }
 
 // maybeApplyMicroVMPodShape adds the /dev/kvm device and node placement a

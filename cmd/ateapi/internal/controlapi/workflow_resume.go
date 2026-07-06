@@ -36,6 +36,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/tools/cache"
 )
 
 // ResumeInput holds the immutable parameters requested by the client.
@@ -106,8 +107,9 @@ func isWorkerEligibleForActor(worker *ateapipb.Worker, templateClass atev1alpha1
 }
 
 type AssignWorkerStep struct {
-	store       store.Interface
-	workerCache *workercache.Cache
+	store             store.Interface
+	workerCache       *workercache.Cache
+	gatewayPEPIndexer cache.Indexer
 }
 
 func (s *AssignWorkerStep) Name() string { return "AssignWorker" }
@@ -116,6 +118,29 @@ func (s *AssignWorkerStep) IsComplete(ctx context.Context, input *ResumeInput, s
 	return state.Actor.GetStatus() == ateapipb.Actor_STATUS_RUNNING, nil
 }
 func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, state *ResumeState) error {
+	// Resolve the egress PEP for this actor and record it on the actor so the
+	// binding is observable (e.g. "which actors use the global PEP?"). The binding
+	// is computed dynamically against whatever PEP Gateways exist right now, so we
+	// re-resolve on every resume. An empty address means no PEP matched and egress
+	// capture stays off. CallAteletRestoreStep reads this back to tell ateom.
+	// Resolved before any worker is claimed so a resolution error (e.g. a
+	// malformed labeled Gateway) fails the resume without stranding a worker
+	// assignment.
+	egressPEPAddress, err := resolveEgressPEPAddress(ctx, s.gatewayPEPIndexer, state.Actor.GetMetadata().GetAtespace(), state.Actor.GetMetadata().GetName())
+	if err != nil {
+		return err
+	}
+	if egressPEPAddress == "" {
+		slog.InfoContext(ctx, "Resolved no egress PEP for actor; egress capture disabled",
+			"actorId", state.Actor.GetMetadata().GetName(),
+			"atespace", state.Actor.GetMetadata().GetAtespace())
+	} else {
+		slog.InfoContext(ctx, "Resolved egress PEP for actor",
+			"actorId", state.Actor.GetMetadata().GetName(),
+			"atespace", state.Actor.GetMetadata().GetAtespace(),
+			"pepAddress", egressPEPAddress)
+	}
+
 	workers, err := s.workerCache.Workers()
 	if err != nil {
 		return fmt.Errorf("while listing workers: %w", err)
@@ -190,6 +215,7 @@ func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, stat
 	state.Actor.AteomPodIp = assignedWorker.GetIp()
 	state.Actor.AteomPodUid = assignedWorker.GetWorkerPodUid()
 	state.Actor.WorkerPoolName = assignedWorker.GetWorkerPool()
+	state.Actor.EgressPepAddress = egressPEPAddress
 
 	updatedActor, err := s.store.UpdateActor(ctx, state.Actor, state.Actor.GetMetadata().GetVersion())
 	if err != nil {
@@ -265,6 +291,9 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 	if err != nil {
 		return err
 	}
+	// AssignWorkerStep resolved and persisted the egress PEP for this resume; read
+	// it back to tell ateom where to tunnel captured egress (empty = no redirect).
+	egressPEPAddress := state.Actor.GetEgressPepAddress()
 
 	if data := state.Actor.GetLatestSnapshotInfo().GetData(); data != nil {
 		slog.InfoContext(ctx, "Actor has snapshot; Restoring from snapshot")
@@ -275,6 +304,7 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 			ActorName:              state.Actor.GetMetadata().GetName(),
 			ActorTemplateNamespace: state.Actor.GetActorTemplateNamespace(),
 			ActorTemplateName:      state.Actor.GetActorTemplateName(),
+			EgressPepAddress:       egressPEPAddress,
 			Spec:                   workloadSpec,
 		}
 		switch d := data.(type) {
@@ -311,6 +341,7 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 			ActorName:              state.Actor.GetMetadata().GetName(),
 			ActorTemplateNamespace: state.Actor.GetActorTemplateNamespace(),
 			ActorTemplateName:      state.Actor.GetActorTemplateName(),
+			EgressPepAddress:       egressPEPAddress,
 			Spec:                   workloadSpec,
 			Type:                   ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
 			Config: &ateletpb.RestoreRequest_ExternalConfig{
@@ -339,6 +370,7 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 			ActorName:              state.Actor.GetMetadata().GetName(),
 			ActorTemplateNamespace: state.Actor.GetActorTemplateNamespace(),
 			ActorTemplateName:      state.Actor.GetActorTemplateName(),
+			EgressPepAddress:       egressPEPAddress,
 			SandboxAssets:          sandboxAssets,
 			Spec:                   workloadSpec,
 		}

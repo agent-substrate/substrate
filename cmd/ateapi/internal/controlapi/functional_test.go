@@ -310,7 +310,7 @@ func setupTest(t *testing.T, ns string) *testContext {
 	}
 
 	dialer := NewAteletDialer(workerInformer.GetIndexer(), ateletInformer.GetIndexer())
-	service := NewService(persistence, wc, actorTemplateLister, workerPoolLister, sandboxConfigLister, dialer, k8sClient)
+	service := NewService(persistence, wc, actorTemplateLister, workerPoolLister, sandboxConfigLister, dialer, k8sClient, nil)
 
 	// 5. Start REAL gRPC Server for ATE API
 	grpcServer := grpc.NewServer(grpc.UnaryInterceptor(ateinterceptors.ServerUnaryInterceptor))

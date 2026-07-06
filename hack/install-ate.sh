@@ -51,9 +51,6 @@ COLOR_CYAN='\033[1;36m'
 COLOR_RESET='\033[0m'
 
 ATE_EGRESS_CAPTURE="${ATE_EGRESS_CAPTURE:-false}"
-ATE_EGRESS_PEP_ADDRESS="${ATE_EGRESS_PEP_ADDRESS:-ate-egress.agentgateway-system.svc.cluster.local:15008}"
-ATE_EGRESS_CAPTURE_ENABLED_ENV="ATE_EGRESS_CAPTURE_ENABLED"
-ATE_EGRESS_PEP_ADDRESS_ENV="ATE_EGRESS_PEP_ADDRESS"
 
 function log_step() {
   local step_name="$1"
@@ -77,7 +74,7 @@ function usage() {
   echo "  --deploy-ate-apiserver                 Deploy ate-api-server only"
   echo "  --deploy-ate-controller                Deploy ate-controller only"
   echo "  --deploy-atenet                        Deploy atenet only"
-  echo "  --egress                               Enable actor egress capture via agentgateway"
+  echo "  --egress                               Enable actor egress capture via labeled agentgateway PEP Gateways"
   echo ""
   echo "To create individual resources used by ate-system (Note: These are"
   echo "called automatically by --deploy-ate-system):"
@@ -295,6 +292,8 @@ kind: Gateway
 metadata:
   name: ate-egress
   namespace: agentgateway-system
+  labels:
+    ate.dev/egress-pep: "true"
 spec:
   gatewayClassName: agentgateway
   listeners:
@@ -344,43 +343,6 @@ spec:
 EOF
 )" | run_kubectl apply -f -
   run_kubectl delete agentgatewayparameters -n agentgateway-system ate-egress-params --ignore-not-found
-}
-
-create_egress_capture_config() {
-  log_step "create_egress_capture_config"
-  run_kubectl create namespace ate-system --dry-run=client -o yaml \
-    | run_kubectl apply -f -
-  local literals=(
-    --from-literal="${ATE_EGRESS_CAPTURE_ENABLED_ENV}=true"
-    --from-literal="${ATE_EGRESS_PEP_ADDRESS_ENV}=${ATE_EGRESS_PEP_ADDRESS}"
-  )
-  # TODO: Updating this ConfigMap does not by itself restart an already-running
-  # ate-controller, so enabling egress after a non-egress install may not take
-  # effect until the controller rolls. Wire a pod-template checksum or restart
-  # automation so users do not need to run a manual rollout.
-  run_kubectl create configmap -n ate-system ate-egress-capture \
-    "${literals[@]}" \
-    --dry-run=client -o yaml \
-    | run_kubectl apply -f -
-}
-
-rollout_worker_deployments_for_egress() {
-  log_step "rollout_worker_deployments_for_egress"
-  local deployments
-  deployments="$(run_kubectl get deployments -A -o go-template='{{range .items}}{{if index .spec.selector.matchLabels "ate.dev/worker-pool"}}{{.metadata.namespace}} {{.metadata.name}}{{"\n"}}{{end}}{{end}}' 2>/dev/null || true)"
-  if [[ -z "${deployments}" ]]; then
-    echo "No worker deployments found to restart for egress."
-    return
-  fi
-
-  local ns name
-  while read -r ns name; do
-    if [[ -z "${ns}" || -z "${name}" ]]; then
-      continue
-    fi
-    run_kubectl rollout restart "deployment/${name}" -n "${ns}"
-    run_kubectl rollout status "deployment/${name}" -n "${ns}" --timeout=120s
-  done <<< "${deployments}"
 }
 
 create_valkey_ca_certs_secret() {
@@ -487,7 +449,6 @@ deploy_ate_system() {
 
   if [[ "${ATE_EGRESS_CAPTURE}" == "true" ]]; then
     deploy_agentgateway
-    create_egress_capture_config
   fi
 
   # Enforce per-class SandboxConfig asset requirements (applied before any
@@ -551,6 +512,13 @@ deploy_ate_apiserver() {
   log_step "deploy_ate_apiserver"
   ensure_crds
 
+  # ate-api is the component that watches PEP Gateways, and it checks for the
+  # Gateway API once at startup — deploy agentgateway (which installs the
+  # Gateway API CRDs) before the apiserver rolls.
+  if [[ "${ATE_EGRESS_CAPTURE}" == "true" ]]; then
+    deploy_agentgateway
+  fi
+
   # Ensure namespace exists
   run_kubectl apply -f manifests/ate-install/ate-system-namespace.yaml \
     && run_kubectl wait --for=jsonpath='{.status.phase}'=Active namespace/ate-system --timeout=60s
@@ -583,15 +551,8 @@ deploy_atelet() {
 
 deploy_ate_controller() {
   log_step "deploy_ate_controller"
-  if [[ "${ATE_EGRESS_CAPTURE}" == "true" ]]; then
-    deploy_agentgateway
-    create_egress_capture_config
-  fi
   run_ko apply -f manifests/ate-install/ate-controller.yaml
   run_kubectl rollout status deployment/ate-controller -n ate-system --timeout=120s
-  if [[ "${ATE_EGRESS_CAPTURE}" == "true" ]]; then
-    rollout_worker_deployments_for_egress
-  fi
 }
 
 deploy_atenet() {

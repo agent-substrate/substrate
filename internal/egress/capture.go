@@ -15,6 +15,7 @@
 package egress
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"encoding/binary"
@@ -25,7 +26,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -38,6 +38,7 @@ type ActorIdentity struct {
 	Namespace string
 	Template  string
 	ActorID   string
+	Atespace  string
 	// TODO: Include worker_uid once egress identity is modeled as a signed
 	// first-class Substrate identity rather than plain actor metadata headers.
 }
@@ -56,24 +57,16 @@ type OriginalDestinationFunc func(net.Conn) (net.Addr, error)
 type Capture struct {
 	cancel    context.CancelFunc
 	listeners []net.Listener
+	transport *http2.Transport
 	wg        sync.WaitGroup
 }
 
-func EnabledFromEnv() bool {
-	enabled, _ := strconv.ParseBool(os.Getenv(EnvCaptureEnabled))
-	return enabled
-}
-
-func ConfigFromEnv(listeners []Listener) (Config, error) {
-	pepAddress := strings.TrimSpace(os.Getenv(EnvPEPAddress))
+func ConfigForPEPAddress(pepAddress string, listeners []Listener) (Config, bool) {
+	pepAddress = strings.TrimSpace(pepAddress)
 	if pepAddress == "" {
-		return Config{}, fmt.Errorf("%s must be set when egress capture is enabled", EnvPEPAddress)
+		return Config{}, false
 	}
-	cfg := Config{
-		PEPAddress: pepAddress,
-		Listeners:  listeners,
-	}
-	return cfg, nil
+	return Config{PEPAddress: pepAddress, Listeners: listeners}, true
 }
 
 func Start(ctx context.Context, identity ActorIdentity, cfg Config, originalDestination OriginalDestinationFunc) (*Capture, error) {
@@ -82,7 +75,11 @@ func Start(ctx context.Context, identity ActorIdentity, cfg Config, originalDest
 	}
 
 	ctx, cancel := newCaptureContext(ctx)
-	capture := &Capture{cancel: cancel}
+	// One HTTP/2 transport for the whole capture. The PEP address is fixed for
+	// the actor's lifetime, so CONNECT streams to the same destination authority
+	// multiplex over a pooled connection to the PEP instead of paying a fresh TCP
+	// dial + h2 handshake per captured connection.
+	capture := &Capture{cancel: cancel, transport: newPEPTransport(cfg.PEPAddress)}
 	for _, listenerCfg := range cfg.Listeners {
 		lis, err := net.Listen("tcp4", net.JoinHostPort("0.0.0.0", strconv.Itoa(int(listenerCfg.Port))))
 		if err != nil {
@@ -98,6 +95,18 @@ func Start(ctx context.Context, identity ActorIdentity, cfg Config, originalDest
 			"pepAddress", cfg.PEPAddress)
 	}
 	return capture, nil
+}
+
+// newPEPTransport builds the shared HTTP/2 transport whose connections all dial
+// the fixed PEP address, regardless of the CONNECT authority.
+func newPEPTransport(pepAddress string) *http2.Transport {
+	return &http2.Transport{
+		AllowHTTP: true,
+		DialTLSContext: func(ctx context.Context, network, _ string, _ *tls.Config) (net.Conn, error) {
+			var dialer net.Dialer
+			return dialer.DialContext(ctx, network, pepAddress)
+		},
+	}
 }
 
 func newCaptureContext(ctx context.Context) (context.Context, context.CancelFunc) {
@@ -118,6 +127,9 @@ func (c *Capture) Close() error {
 		}
 	}
 	c.wg.Wait()
+	if c.transport != nil {
+		c.transport.CloseIdleConnections()
+	}
 	return err
 }
 
@@ -133,14 +145,15 @@ func (c *Capture) serve(ctx context.Context, lis net.Listener, identity ActorIde
 			continue
 		}
 		c.wg.Add(1)
+		transport := c.transport
 		go func() {
 			defer c.wg.Done()
-			handleCapturedEgress(ctx, conn, identity, pepAddress, originalDestination)
+			handleCapturedEgress(ctx, conn, identity, transport, pepAddress, originalDestination)
 		}()
 	}
 }
 
-func handleCapturedEgress(ctx context.Context, actorConn net.Conn, identity ActorIdentity, pepAddress string, originalDestination OriginalDestinationFunc) {
+func handleCapturedEgress(ctx context.Context, actorConn net.Conn, identity ActorIdentity, transport *http2.Transport, pepAddress string, originalDestination OriginalDestinationFunc) {
 	stopActorClose := context.AfterFunc(ctx, func() {
 		_ = actorConn.Close()
 	})
@@ -154,7 +167,7 @@ func handleCapturedEgress(ctx context.Context, actorConn net.Conn, identity Acto
 	}
 
 	authority, initialBytes := deriveConnectAuthority(ctx, actorConn, originalDst)
-	tunnel, err := openCONNECTTunnel(ctx, pepAddress, identity, originalDst, authority)
+	tunnel, err := openCONNECTTunnel(ctx, transport, pepAddress, identity, originalDst, authority)
 	if err != nil {
 		slog.WarnContext(ctx, "Failed to open egress tunnel",
 			"originalDestination", originalDst.String(),
@@ -204,17 +217,10 @@ func proxyByteStream(ctx context.Context, actorConn net.Conn, tunnel io.ReadWrit
 	wg.Wait()
 }
 
-func openCONNECTTunnel(ctx context.Context, pepAddress string, identity ActorIdentity, originalDst net.Addr, authority string) (io.ReadWriteCloser, error) {
+func openCONNECTTunnel(ctx context.Context, transport *http2.Transport, pepAddress string, identity ActorIdentity, originalDst net.Addr, authority string) (io.ReadWriteCloser, error) {
 	// TODO: Add a transport selector here when there is a second supported
 	// egress tunnel protocol, such as TLS CONNECT or HBONE.
 	req, pr, pw := newConnectRequest(ctx, identity, originalDst, authority)
-	transport := &http2.Transport{
-		AllowHTTP: true,
-		DialTLSContext: func(ctx context.Context, network, _ string, _ *tls.Config) (net.Conn, error) {
-			var dialer net.Dialer
-			return dialer.DialContext(ctx, network, pepAddress)
-		},
-	}
 	return roundTripConnect(transport, req, pr, pw, authority, pepAddress)
 }
 
@@ -225,54 +231,81 @@ func deriveConnectAuthority(ctx context.Context, actorConn net.Conn, originalDst
 	return originalDst.String(), nil
 }
 
+// sniffReadTimeout bounds how long capture waits for the actor to send the
+// bytes that reveal a CONNECT authority (TLS SNI or HTTP Host). The authority
+// is derived from those bytes, so the tunnel cannot be opened until they
+// arrive; a client that speaks only after the server (SMTP, some databases)
+// waits out this deadline and then falls back to the original destination.
+const sniffReadTimeout = 2 * time.Second
+
+const maxSniffBytes = 16 * 1024
+
 func classifyConnectAuthority(ctx context.Context, actorConn net.Conn, originalDst *net.TCPAddr) (string, []byte) {
-	const maxSniffBytes = 16 * 1024
-	_ = actorConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	_ = actorConn.SetReadDeadline(time.Now().Add(sniffReadTimeout))
 	defer actorConn.SetReadDeadline(time.Time{})
 
 	var initialBytes []byte
+	httpScanned := 0 // bytes already searched for the HTTP header terminator
 	buf := make([]byte, 2048)
 	for len(initialBytes) < maxSniffBytes {
 		n, err := actorConn.Read(buf)
 		if n > 0 {
 			initialBytes = append(initialBytes, buf[:n]...)
 			if initialBytes[0] == 0x16 {
+				// tlsClientHelloSNI is O(1) on an incomplete record (it checks
+				// the record length prefix before walking).
 				if sni, ok, needMore := tlsClientHelloSNI(initialBytes); ok {
 					return net.JoinHostPort(sni, strconv.Itoa(originalDst.Port)), initialBytes
 				} else if !needMore {
 					break
 				}
-			} else {
-				if host, ok, needMore := httpHostHeader(initialBytes); ok {
+			} else if httpHeadersComplete(initialBytes, &httpScanned) {
+				// Parse only once the full header block has arrived so a slow or
+				// byte-at-a-time sender does not re-parse the buffer each read.
+				if host, ok, _ := httpHostHeader(initialBytes); ok {
 					return authorityWithDefaultPort(host, originalDst.Port), initialBytes
-				} else if !needMore {
-					break
 				}
+				break
 			}
 		}
 		if err != nil {
-			if ctx.Err() != nil {
-				return originalDst.String(), initialBytes
-			}
 			break
 		}
 	}
 	return originalDst.String(), initialBytes
 }
 
+// httpHeadersComplete reports whether data contains the end-of-headers marker,
+// searching only the bytes appended since the last call (with a small overlap
+// for a marker split across reads) so the total scan cost stays linear in the
+// sniffed byte count. It advances *scanned to the current length.
+func httpHeadersComplete(data []byte, scanned *int) bool {
+	start := *scanned - 3
+	if start < 0 {
+		start = 0
+	}
+	if bytes.Contains(data[start:], []byte("\r\n\r\n")) || bytes.Contains(data[start:], []byte("\n\n")) {
+		return true
+	}
+	*scanned = len(data)
+	return false
+}
+
 func httpHostHeader(data []byte) (string, bool, bool) {
-	headers := string(data)
-	headerEnd := strings.Index(headers, "\r\n\r\n")
+	// Scan for the end-of-headers marker on the raw bytes so an incomplete
+	// request does not copy the whole accumulated buffer into a string on every
+	// sniff read; only the bounded header block below is stringified.
+	headerEnd := bytes.Index(data, []byte("\r\n\r\n"))
 	separator := "\r\n"
 	if headerEnd == -1 {
-		headerEnd = strings.Index(headers, "\n\n")
+		headerEnd = bytes.Index(data, []byte("\n\n"))
 		separator = "\n"
 	}
 	if headerEnd == -1 {
-		return "", false, len(data) < 16*1024
+		return "", false, len(data) < maxSniffBytes
 	}
 
-	lines := strings.Split(headers[:headerEnd], separator)
+	lines := strings.Split(string(data[:headerEnd]), separator)
 	if len(lines) == 0 || !strings.Contains(lines[0], " ") {
 		return "", false, false
 	}
@@ -410,6 +443,7 @@ func newConnectRequest(ctx context.Context, identity ActorIdentity, originalDst 
 	// iat, worker_uid, and the original destination so policy is evaluated over
 	// verified request identity rather than unsigned metadata.
 	req.Header.Set("x-ate-actor-id", identity.ActorID)
+	req.Header.Set("x-ate-atespace", identity.Atespace)
 	req.Header.Set("x-ate-actor-template", identity.Template)
 	req.Header.Set("x-ate-actor-template-namespace", identity.Namespace)
 	req.Header.Set("x-ate-original-destination", originalDst.String())
@@ -427,11 +461,13 @@ func roundTripConnect(
 	connectAuthority string,
 	pepAddress string,
 ) (io.ReadWriteCloser, error) {
+	// The transport is shared across all captured connections, so failures close
+	// only this stream's pipes; idle connections to the PEP are reaped once in
+	// Capture.Close so unrelated in-flight streams keep multiplexing.
 	resp, err := transport.RoundTrip(req)
 	if err != nil {
 		_ = pr.CloseWithError(err)
 		_ = pw.CloseWithError(err)
-		transport.CloseIdleConnections()
 		return nil, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode > 299 {
@@ -439,20 +475,17 @@ func roundTripConnect(
 		err := fmt.Errorf("CONNECT to %s through %s returned %s", connectAuthority, pepAddress, resp.Status)
 		_ = pr.CloseWithError(err)
 		_ = pw.CloseWithError(err)
-		transport.CloseIdleConnections()
 		return nil, err
 	}
 	return &connectStream{
 		requestWriter: pw,
 		responseBody:  resp.Body,
-		closeIdle:     transport.CloseIdleConnections,
 	}, nil
 }
 
 type connectStream struct {
 	requestWriter *io.PipeWriter
 	responseBody  io.ReadCloser
-	closeIdle     func()
 }
 
 func (s *connectStream) Read(p []byte) (int, error) {
@@ -464,9 +497,5 @@ func (s *connectStream) Write(p []byte) (int, error) {
 }
 
 func (s *connectStream) Close() error {
-	err := errors.Join(s.requestWriter.Close(), s.responseBody.Close())
-	if s.closeIdle != nil {
-		s.closeIdle()
-	}
-	return err
+	return errors.Join(s.requestWriter.Close(), s.responseBody.Close())
 }

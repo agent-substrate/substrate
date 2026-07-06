@@ -103,6 +103,7 @@ type RunWorkloadRequest struct {
 	// to the local on-disk path atelet fetched it to (content-addressed, like
 	// runsc_path). Empty for the gVisor runtime, which uses runsc_path.
 	RuntimeAssetPaths map[string]string `protobuf:"bytes,7,rep,name=runtime_asset_paths,json=runtimeAssetPaths,proto3" json:"runtime_asset_paths,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	EgressPepAddress  string            `protobuf:"bytes,8,opt,name=egress_pep_address,json=egressPepAddress,proto3" json:"egress_pep_address,omitempty"`
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
 }
@@ -184,6 +185,13 @@ func (x *RunWorkloadRequest) GetRuntimeAssetPaths() map[string]string {
 		return x.RuntimeAssetPaths
 	}
 	return nil
+}
+
+func (x *RunWorkloadRequest) GetEgressPepAddress() string {
+	if x != nil {
+		return x.EgressPepAddress
+	}
+	return ""
 }
 
 // WorkloadSpec parallels Pod, but with far fewer configurable fields.
@@ -392,6 +400,12 @@ func (x *HTTPGetAction) GetPort() int32 {
 	return 0
 }
 
+// TODO: Add an EgressCaptureStatus ack (state enum with UNSPECIFIED=0 +
+// requested/active PEP address) to RunWorkloadResponse/RestoreWorkloadResponse
+// so ate-api persists the PEP the sandbox actually enforces instead of the one
+// it requested. The zero-value enum makes pre-egress binaries detectable.
+// Today a stale ateom image silently ignores egress_pep_address while actor
+// status reports the binding.
 type RunWorkloadResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -608,9 +622,10 @@ type RestoreWorkloadRequest struct {
 	// atelet fetched it to (see RunWorkloadRequest). Empty for gVisor.
 	RuntimeAssetPaths map[string]string `protobuf:"bytes,8,rep,name=runtime_asset_paths,json=runtimeAssetPaths,proto3" json:"runtime_asset_paths,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	// What content to restore from the snapshot.
-	Scope         SnapshotScope `protobuf:"varint,9,opt,name=scope,proto3,enum=ateom.SnapshotScope" json:"scope,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Scope            SnapshotScope `protobuf:"varint,9,opt,name=scope,proto3,enum=ateom.SnapshotScope" json:"scope,omitempty"`
+	EgressPepAddress string        `protobuf:"bytes,10,opt,name=egress_pep_address,json=egressPepAddress,proto3" json:"egress_pep_address,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *RestoreWorkloadRequest) Reset() {
@@ -706,6 +721,13 @@ func (x *RestoreWorkloadRequest) GetScope() SnapshotScope {
 	return SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED
 }
 
+func (x *RestoreWorkloadRequest) GetEgressPepAddress() string {
+	if x != nil {
+		return x.EgressPepAddress
+	}
+	return ""
+}
+
 type RestoreWorkloadResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -746,7 +768,7 @@ var File_ateom_proto protoreflect.FileDescriptor
 
 const file_ateom_proto_rawDesc = "" +
 	"\n" +
-	"\vateom.proto\x12\x05ateom\"\xa9\x03\n" +
+	"\vateom.proto\x12\x05ateom\"\xd7\x03\n" +
 	"\x12RunWorkloadRequest\x12\x1a\n" +
 	"\batespace\x18\x01 \x01(\tR\batespace\x12\x1d\n" +
 	"\n" +
@@ -756,7 +778,8 @@ const file_ateom_proto_rawDesc = "" +
 	"\n" +
 	"runsc_path\x18\x05 \x01(\tR\trunscPath\x12'\n" +
 	"\x04spec\x18\x06 \x01(\v2\x13.ateom.WorkloadSpecR\x04spec\x12`\n" +
-	"\x13runtime_asset_paths\x18\a \x03(\v20.ateom.RunWorkloadRequest.RuntimeAssetPathsEntryR\x11runtimeAssetPaths\x1aD\n" +
+	"\x13runtime_asset_paths\x18\a \x03(\v20.ateom.RunWorkloadRequest.RuntimeAssetPathsEntryR\x11runtimeAssetPaths\x12,\n" +
+	"\x12egress_pep_address\x18\b \x01(\tR\x10egressPepAddress\x1aD\n" +
 	"\x16RuntimeAssetPathsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"@\n" +
@@ -790,7 +813,7 @@ const file_ateom_proto_rawDesc = "" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"C\n" +
 	"\x1aCheckpointWorkloadResponse\x12%\n" +
-	"\x0esnapshot_files\x18\x01 \x03(\tR\rsnapshotFiles\"\x8d\x04\n" +
+	"\x0esnapshot_files\x18\x01 \x03(\tR\rsnapshotFiles\"\xbb\x04\n" +
 	"\x16RestoreWorkloadRequest\x12\x1a\n" +
 	"\batespace\x18\x01 \x01(\tR\batespace\x12\x1d\n" +
 	"\n" +
@@ -802,7 +825,9 @@ const file_ateom_proto_rawDesc = "" +
 	"\x04spec\x18\x06 \x01(\v2\x13.ateom.WorkloadSpecR\x04spec\x12.\n" +
 	"\x13snapshot_uri_prefix\x18\a \x01(\tR\x11snapshotUriPrefix\x12d\n" +
 	"\x13runtime_asset_paths\x18\b \x03(\v24.ateom.RestoreWorkloadRequest.RuntimeAssetPathsEntryR\x11runtimeAssetPaths\x12*\n" +
-	"\x05scope\x18\t \x01(\x0e2\x14.ateom.SnapshotScopeR\x05scope\x1aD\n" +
+	"\x05scope\x18\t \x01(\x0e2\x14.ateom.SnapshotScopeR\x05scope\x12,\n" +
+	"\x12egress_pep_address\x18\n" +
+	" \x01(\tR\x10egressPepAddress\x1aD\n" +
 	"\x16RuntimeAssetPathsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\x19\n" +

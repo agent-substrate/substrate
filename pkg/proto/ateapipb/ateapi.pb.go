@@ -446,8 +446,14 @@ type Actor struct {
 	// suspend/pause since eligibility is no longer a single fixed pool
 	// reference on the ActorTemplate.
 	WorkerPoolName string `protobuf:"bytes,12,opt,name=worker_pool_name,json=workerPoolName,proto3" json:"worker_pool_name,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// The egress PEP address ate-api resolved for this actor on its most recent
+	// resume, in the form <gateway>.<namespace>.svc.cluster.local:<port>. Empty
+	// means no PEP matched and egress capture is off. Set at worker assignment and
+	// cleared when the worker is released (suspend/pause). Records which PEP an
+	// actor is using so global-PEP membership is queryable without scanning logs.
+	EgressPepAddress string `protobuf:"bytes,13,opt,name=egress_pep_address,json=egressPepAddress,proto3" json:"egress_pep_address,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *Actor) Reset() {
@@ -560,6 +566,13 @@ func (x *Actor) GetWorkerSelector() *Selector {
 func (x *Actor) GetWorkerPoolName() string {
 	if x != nil {
 		return x.WorkerPoolName
+	}
+	return ""
+}
+
+func (x *Actor) GetEgressPepAddress() string {
+	if x != nil {
+		return x.EgressPepAddress
 	}
 	return ""
 }
@@ -2161,7 +2174,7 @@ const file_ateapi_proto_rawDesc = "" +
 	"\vcreate_time\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"createTime\x12;\n" +
 	"\vupdate_time\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
-	"updateTime\"\x84\x06\n" +
+	"updateTime\"\xb2\x06\n" +
 	"\x05Actor\x124\n" +
 	"\bmetadata\x18\x01 \x01(\v2\x18.ateapi.ResourceMetadataR\bmetadata\x128\n" +
 	"\x18actor_template_namespace\x18\x02 \x01(\tR\x16actorTemplateNamespace\x12.\n" +
@@ -2176,7 +2189,8 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x14latest_snapshot_info\x18\n" +
 	" \x01(\v2\x14.ateapi.SnapshotInfoR\x12latestSnapshotInfo\x129\n" +
 	"\x0fworker_selector\x18\v \x01(\v2\x10.ateapi.SelectorR\x0eworkerSelector\x12(\n" +
-	"\x10worker_pool_name\x18\f \x01(\tR\x0eworkerPoolName\"\xb1\x01\n" +
+	"\x10worker_pool_name\x18\f \x01(\tR\x0eworkerPoolName\x12,\n" +
+	"\x12egress_pep_address\x18\r \x01(\tR\x10egressPepAddress\"\xb1\x01\n" +
 	"\x06Status\x12\x16\n" +
 	"\x12STATUS_UNSPECIFIED\x10\x00\x12\x13\n" +
 	"\x0fSTATUS_RESUMING\x10\x01\x12\x12\n" +

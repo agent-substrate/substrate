@@ -14,7 +14,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package main
+package ateomegress
 
 import (
 	"context"
@@ -25,34 +25,49 @@ import (
 	"unsafe"
 
 	"github.com/agent-substrate/substrate/internal/egress"
+	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/google/nftables"
 	"github.com/google/nftables/binaryutil"
 	"github.com/google/nftables/expr"
 	"golang.org/x/sys/unix"
 )
 
-func (s *AteomService) startEgressCaptureIfEnabled(ctx context.Context, identity egress.ActorIdentity) error {
-	if !egress.EnabledFromEnv() {
-		return nil
-	}
-	cfg, err := egress.ConfigFromEnv(egress.DefaultCaptureListeners)
-	if err != nil {
-		return err
+func StartCaptureIfEnabled(ctx context.Context, identity egress.ActorIdentity, egressPEPAddress string) (*egress.Capture, error) {
+	cfg, ok := egress.ConfigForPEPAddress(egressPEPAddress, egress.DefaultCaptureListeners)
+	if !ok {
+		return nil, nil
 	}
 	capture, err := egress.Start(ctx, identity, cfg, originalDestination)
 	if err != nil {
-		return fmt.Errorf("while starting actor egress capture: %w", err)
+		return nil, fmt.Errorf("while starting actor egress capture: %w", err)
 	}
-	s.egressCapture = capture
-	return nil
+	return capture, nil
 }
 
-func addEgressCaptureRedirectRules(c *nftables.Conn, table *nftables.Table, prerouting *nftables.Chain, sourceIP string) {
+func AddCaptureRedirectRules(c *nftables.Conn, table *nftables.Table, prerouting *nftables.Chain, sourceIP string) {
 	c.AddRule(&nftables.Rule{
 		Table: table,
 		Chain: prerouting,
 		Exprs: tcpRedirectExprs(sourceIP, egress.DefaultCapturePort),
 	})
+}
+
+func ActorIdentityFromRun(req *ateompb.RunWorkloadRequest) egress.ActorIdentity {
+	return egress.ActorIdentity{
+		Namespace: req.GetActorTemplateNamespace(),
+		Template:  req.GetActorTemplateName(),
+		ActorID:   req.GetActorId(),
+		Atespace:  req.GetAtespace(),
+	}
+}
+
+func ActorIdentityFromRestore(req *ateompb.RestoreWorkloadRequest) egress.ActorIdentity {
+	return egress.ActorIdentity{
+		Namespace: req.GetActorTemplateNamespace(),
+		Template:  req.GetActorTemplateName(),
+		ActorID:   req.GetActorId(),
+		Atespace:  req.GetAtespace(),
+	}
 }
 
 func tcpRedirectExprs(sourceIP string, capturePort uint16) []expr.Any {
@@ -74,6 +89,22 @@ func tcpRedirectExprs(sourceIP string, capturePort uint16) []expr.Any {
 		},
 	)
 	return exprs
+}
+
+func ipSourceEqual(ip string) []expr.Any {
+	return []expr.Any{
+		&expr.Payload{
+			DestRegister: 1,
+			Base:         expr.PayloadBaseNetworkHeader,
+			Offset:       12,
+			Len:          4,
+		},
+		&expr.Cmp{
+			Op:       expr.CmpOpEq,
+			Register: 1,
+			Data:     net.ParseIP(ip).To4(),
+		},
+	}
 }
 
 func originalDestination(conn net.Conn) (net.Addr, error) {

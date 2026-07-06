@@ -28,6 +28,7 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/ch"
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/kata"
+	"github.com/agent-substrate/substrate/internal/ateomegress"
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/readyz"
@@ -112,7 +113,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 
 	// Networking: rebuild the per-activation veth + tap; the snapshot's virtio-net
 	// is fd-backed, so CH needs fresh tap FDs (net_fds) on restore.
-	if err := s.setupActorNetwork(ctx, actorIdentityFromRestore(req)); err != nil {
+	if err := s.setupActorNetwork(ctx, ateomegress.ActorIdentityFromRestore(req), req.GetEgressPepAddress()); err != nil {
 		return nil, fmt.Errorf("while setting up actor network: %w", err)
 	}
 	defer func() {
