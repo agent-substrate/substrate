@@ -8,7 +8,8 @@ implementation to the Worker-centric model.
 
 Substrate core should manage scheduling intent and observed worker capacity:
 
-- `ActorTemplate` and `Actor` are tenant/control-plane resources in ateapi.
+- `ActorTemplate` is a global control-plane resource in ateapi.
+- `Actor` is an atespace-scoped tenant/control-plane resource in ateapi.
 - `Worker` is the substrate scheduling primitive and a managed Admin resource.
 - Kubernetes may still have a WorkerPool CRD, Helm value, Deployment wrapper,
   or autoscaler input, but that belongs to the Kubernetes worker provider.

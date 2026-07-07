@@ -70,10 +70,10 @@ service Control {
   rpc ListAtespaces(ListAtespacesRequest) returns (ListAtespacesResponse) {}
 
   // Delete an empty Atespace.
-  // Returns FAILED_PRECONDITION if any actors or actor templates remain.
+  // Returns FAILED_PRECONDITION if any actors remain.
   rpc DeleteAtespace(DeleteAtespaceRequest) returns (Atespace) {}
 
-  // --- ActorTemplate (atespace-scoped, immutable spec: no Update) ---
+  // --- ActorTemplate (global-scoped, immutable spec: no Update) ---
 
   // Create an ActorTemplate. The spec is immutable after creation: to change
   // a template, create a new one and migrate actors.
@@ -163,8 +163,8 @@ service Admin {
 // See docs/api-style-guide.md section 6.
 message ResourceMetadata {
   // The atespace this resource belongs to. Must be empty for global-scoped
-  // resource types (Atespace, Worker) and set for atespace-scoped types
-  // (Actor, ActorTemplate).
+  // resource types (Atespace, ActorTemplate, Worker) and set for
+  // atespace-scoped types (Actor).
   string atespace = 1;
 
   // The name of this resource, unique within its scope. Must be a valid
@@ -290,8 +290,8 @@ message Actor {
   ResourceMetadata meta = 1;
 
   // The ActorTemplate this actor derives from. Set at creation; immutable.
-  // Must currently reside in the actor's own atespace; the ObjectRef shape
-  // leaves room for cross-atespace template sharing later.
+  // ActorTemplates are global resources, so actor_template.atespace must be
+  // empty.
   ObjectRef actor_template = 2;
 
   enum Status {
@@ -518,10 +518,8 @@ message GetActorTemplateRequest {
 }
 
 message ListActorTemplatesRequest {
-  // The atespace to list templates from. Empty lists across all atespaces.
-  string atespace = 1;
-  int32 page_size = 2;
-  string page_token = 3;
+  int32 page_size = 1;
+  string page_token = 2;
 }
 message ListActorTemplatesResponse {
   repeated ActorTemplate actor_templates = 1;

@@ -20,7 +20,7 @@ deliberate divergences are listed at the [end](#style-guide-conformance).
 | Resource | Scope | Service | Mutable? | Notes |
 |---|---|---|---|---|
 | Atespace | global | Control | no | isolation boundary |
-| ActorTemplate | atespace | Control | no (immutable spec) | + Watch |
+| ActorTemplate | global | Control | no (immutable spec) | + Watch |
 | Actor | atespace | Control | `worker_selector` only | + Suspend/Pause/Resume |
 | Worker | global | Admin | yes | provider-owned capacity; + Watch |
 
@@ -73,7 +73,9 @@ surface (atespaces, templates, actors); `Admin` is the platform surface
 a future authz story a natural boundary.
 
 **D3. ActorTemplate spec is immutable — no UpdateActorTemplate.** Template
-changes = create a new template and migrate actors. Delete returns
+changes = create a new template and migrate actors. ActorTemplates start
+global-scoped because it is easier to add atespace scoping later than to
+relax it after clients rely on cross-atespace reuse. Delete returns
 `FAILED_PRECONDITION` while any actor references the template.
 
 **D4. Worker is a managed Admin resource.** Worker owners create/update/delete
@@ -89,8 +91,8 @@ belongs to the provider until substrate has a concrete cross-provider access
 model.
 
 **D6. Referential integrity on delete.** Deletes that would orphan
-dependents return `FAILED_PRECONDITION`: atespace↔actors/templates,
-template↔actors, worker↔assigned actors.
+dependents return `FAILED_PRECONDITION`: atespace↔actors, template↔actors,
+worker↔assigned actors.
 
 **D7. Status is a closed enum, not phase strings or conditions.** Actors,
 templates, and workers use closed state enums plus a human-readable error or
