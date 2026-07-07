@@ -7,14 +7,19 @@ by default.
 
 ## Architecture
 
-Egress capture has no global on/off switch. ate-api watches Gateways labeled
-`ate.dev/egress-pep`. On actor resume, ate-api picks the best matching PEP
-Gateway for that actor and sends one optional PEP address to ateom. An empty PEP
-address means no redirect, so capture is enabled per actor only when a matching
-programmed labeled Gateway with an HTTP listener resolves. The reusable capture
-core lives in `internal/egress`:
-it owns capture listeners, authority derivation, CONNECT tunnel transports, and
-byte proxying. The runtime-specific `ateom` egress proxy setup supplies the
+Egress capture has no global on/off switch. PEP selection is **consumer-driven**,
+following the Istio ambient waypoint model: an actor (or its atespace, or a
+global default) names the egress PEP it wants via the `ate.dev/use-egress-pep`
+selector, exactly as Istio's `istio.io/use-waypoint` names a waypoint. The
+difference from Istio is that the selector's value is the PEP **address**
+(`<host>:<port>`) directly — ate-api has **no Gateway API dependency at all**: it
+does not watch, look up, or validate any Gateway resource. On actor resume it
+reads the actor's selector (falling back to the atespace's, then the
+`--default-egress-pep` flag) and sends that address to ateom as given. An empty
+address means no redirect, so capture is enabled per actor only when a selector
+resolves to an address. The reusable capture core lives in `internal/egress`: it
+owns capture listeners, authority derivation, CONNECT tunnel transports, and byte
+proxying. The runtime-specific `ateom` egress proxy setup supplies the
 original-destination lookup and packet-capture rules.
 
 The current gVisor and MicroVM implementations start a local capture listener
@@ -36,15 +41,12 @@ actor connection:
 | Other TCP | Original destination address | `203.0.113.10:2222` |
 
 The shared capture core then opens a plaintext HTTP/2 CONNECT stream to the PEP
-address selected by ate-api. Only Gateways with condition `Programmed=True` are
-candidates; an unprovisioned Gateway is skipped so resolution falls back to the
-next-best PEP. The address host comes from the Gateway's `status.addresses`
-when the implementation publishes one, and otherwise falls back to
-`<gateway>.<namespace>.svc.cluster.local`, matching the agentgateway service
-convention (agentgateway on kind publishes no address because the LoadBalancer
-stays pending). The port is the Gateway's HTTP listener port. Agentgateway maps
-the CONNECT authority to its configured TCP listener and routes the tunnel to a
-Kubernetes Service backed by an EndpointSlice.
+address ate-api resolved for the actor. That address is whatever the selector
+supplied — for the demo, the agentgateway service DNS name
+`ate-egress.agentgateway-system.svc.cluster.local:15008`. ate-api does not
+resolve or health-check it; a wrong address simply fails the tunnel at connect
+time. Agentgateway maps the CONNECT authority to its configured TCP listener and
+routes the tunnel to a Kubernetes Service backed by an EndpointSlice.
 
 The demo setup configures only `httpbin.org:443` for egress. Any other CONNECT
 authority, including plaintext HTTP destinations or fallback original IP:port
@@ -55,52 +57,47 @@ CONNECT succeeds.
 
 ### Selecting a PEP for an actor
 
-`ate.dev/egress-pep` is a marker: its value is ignored, any Gateway carrying
-the label key is a candidate PEP. The atespace/actor labels scope which actors
-a candidate serves:
+Selection lives on the consumer via the `ate.dev/use-egress-pep` label, whose
+value is the PEP address `<host>:<port>`. ate-api reads it from three tiers and
+uses the highest-precedence one that is set:
 
-| Gateway labels | Scope | Match precedence |
+| Selector | Scope | Precedence |
 | --- | --- | --- |
-| `ate.dev/egress-pep` only | Global (any actor) | lowest |
-| `ate.dev/egress-pep` + `ate.dev/atespace=<atespace>` | All actors in an atespace | medium |
-| `ate.dev/egress-pep` + `ate.dev/atespace=<atespace>` + `ate.dev/actor=<actor-id>` | One actor | highest |
+| `--default-egress-pep` flag on ate-api | Global (any actor) | lowest |
+| `ate.dev/use-egress-pep` on the **Atespace** | All actors in the atespace | medium |
+| `ate.dev/use-egress-pep` on the **Actor** | One actor | highest |
 
-Actor scoping requires **both** scoping labels; `ate.dev/actor` alone matches
-no actor and ate-api logs a warning. On resume, ate-api picks the
-highest-precedence match (`resolveEgressPEPAddress` in
-`cmd/ateapi/internal/controlapi/egress_pep.go`).
+On resume, ate-api walks actor → atespace → global default in order and uses the
+first tier whose value is set (`resolveEgressPEPAddress` in
+`cmd/ateapi/internal/controlapi/egress_pep.go`). The value is passed straight
+through to ateom; ate-api never contacts the Gateway API.
 
-#### Tie-breaking
+#### Fall-through
 
 | Situation | Result |
 | --- | --- |
-| Multiple candidates tied at the top score | Lowest `(namespace, name)` wins; the others are **silently ignored** |
-| No matching programmed candidate | Empty PEP address → no redirect, capture off |
+| A tier's selector is unset | Skipped; ate-api uses the next tier |
+| No tier is set | Empty PEP address → no redirect, capture off |
+| An actor/atespace selector is not a valid `<host>:<port>` | Configuration error; rejected at `CreateActor` / `UpdateActor` / `CreateAtespace`, and the resume fails loudly as defense-in-depth |
+| The global default (`--default-egress-pep`) is not a valid `<host>:<port>` | ate-api logs a warning at startup and degrades to no global default (the value is cleared, never sent to ateom); actor/atespace selectors are unaffected |
 
-Don't deploy multiple PEPs at the same tier for the same actor — use the
-scoping labels to raise the intended one's tier instead of relying on name
-order.
+Each tier supplies exactly one address, so selection is unambiguous — there is no
+tie-breaking.
 
 #### Trust model
 
-The `ate.dev/egress-pep` label **is** the PEP control surface: ate-api trusts
-every labeled Gateway in every namespace, so Gateway RBAC is the security
-boundary — restrict Gateway create/update to the platform team. Anyone who can
-label a Gateway can:
-
-- **Intercept actor egress**: copy an actor's `ate.dev/atespace` +
-  `ate.dev/actor` labels onto their own Gateway to out-score its real PEP.
-- **Block resumes**: label a programmed Gateway with no HTTP listener (broken
-  PEP config fails PEP resolution by design).
-
-Substrate deliberately does not second-guess labeled Gateways. If Gateway RBAC
-can't be that strict, scope the watch to an allowlist of PEP namespaces in
-ate-api first.
+The control surface is the ate-api API. Who can point an actor at a PEP is
+governed entirely by RBAC on `CreateActor` / `UpdateActor` / `CreateAtespace`
+and on the `--default-egress-pep` flag (set at install). Because the selector
+carries a raw address and ate-api enforces no allowlist, anyone who can set an
+actor/atespace selector can direct that actor's egress tunnel to any reachable
+`<host>:<port>`. Restrict those RPCs to the platform team. (This trades the old
+Gateway-label allowlist for zero Gateway API dependency — an explicit choice.)
 
 #### When the binding is (re)computed
 
 The PEP binding is a **snapshot taken at resume**, recorded on the actor as
-`egress_pep_address`. Gateway relabels have no effect on RUNNING actors.
+`egress_pep_address`. Selector changes have no effect on RUNNING actors.
 
 ```
    create
@@ -110,13 +107,14 @@ The PEP binding is a **snapshot taken at resume**, recorded on the actor as
       │  resume / boot                         │
       ▼                                        │
   RESUMING   ── resolve PEP now:               │
-      │         AssignWorkerStep scores every  │
-      │         labeled Gateway and writes     │
+      │         AssignWorkerStep reads the     │
+      │         actor/atespace/global selector │
+      │         and writes its address to      │
       │         actor.egress_pep_address       │
       ▼                                        │
   RUNNING    ── uses the PEP captured at        │
       │         resume for its whole lifetime;  │
-      │         Gateway relabels are IGNORED    │
+      │         selector changes are IGNORED    │
       │  suspend / pause                        │
       ▼                                        │
   SUSPENDED / PAUSED ── egress_pep_address ─────┘
@@ -132,7 +130,6 @@ sequenceDiagram
 
     participant CLI as kubectl ate
     participant API as ate-api
-    participant GW as Gateway indexer
     participant ST as Redis/Valkey
     participant LET as atelet
     participant OM as ateom
@@ -143,9 +140,8 @@ sequenceDiagram
     rect rgb(235, 243, 255)
         Note over CLI,ST: Resume
         CLI->>API: resume actor my-egress-1 -a demo
-        API->>ST: Load suspended actor
-        API->>GW: Resolve egress PEP for actor
-        GW-->>API: Best programmed Gateway address
+        API->>ST: Load suspended actor + atespace
+        API->>API: Resolve PEP address<br/>actor > atespace > global default
         API->>ST: Claim worker
         API->>ST: Set RESUMING and EgressPepAddress
     end
@@ -173,7 +169,7 @@ sequenceDiagram
     end
 
     rect rgb(255, 235, 238)
-        Note over CLI,ST: Suspend
+        Note over CLI,ST: Suspend (pause clears EgressPepAddress the same way)
         CLI->>API: suspend actor
         API->>ST: Set SUSPENDING
         API->>LET: Checkpoint
@@ -182,12 +178,12 @@ sequenceDiagram
         OM-->>LET: snapshot files
         LET-->>API: ok (snapshot uploaded)
         API->>ST: Release worker<br/>clear EgressPepAddress
-        Note over API,GW: Next resume re-resolves Gateway binding
+        Note over API,ST: Next resume re-resolves the selector
     end
 ```
 
-To move a running actor to a different PEP: relabel the Gateways **and** cycle
-the actor (see "Point an actor at a different PEP").
+To move a running actor to a different PEP: change its `ate.dev/use-egress-pep`
+selector **and** cycle the actor (see "Point an actor at a different PEP").
 
 ## Prerequisites
 
@@ -214,20 +210,26 @@ For kind:
 ./hack/install-ate-kind.sh --egress --deploy-ate-system
 ```
 
-This deploys agentgateway with a static `httpbin.org:443` egress route, labels
-the `agentgateway-system/ate-egress` Gateway as a PEP, and deploys the ATE
-system. No fixed PEP address is configured; ate-api derives the address from the
-labeled Gateway's HTTP listener.
+This deploys agentgateway with a static `httpbin.org:443` egress route, sets
+ate-api's
+`--default-egress-pep=ate-egress.agentgateway-system.svc.cluster.local:15008`
+(the global-default selector address), and deploys the ATE system. Actors and
+atespaces can override the default with an `ate.dev/use-egress-pep` selector.
+
+A malformed `--default-egress-pep` does not crash-loop ate-api; it logs a
+warning at startup and degrades to no global default (see the "Fall-through"
+table). Grep ate-api startup logs for `Ignoring invalid --default-egress-pep`
+to catch a typo.
 
 The install script resolves `httpbin.org` during install and creates the
 `httpbin-egress` Service and EndpointSlice for those IPs. For the default HTTPS
 demo request, `ateom` derives the CONNECT authority from TLS SNI and the
 original destination port.
 
-Verify the static agentgateway resources and PEP label:
+Verify the static agentgateway resources:
 
 ```bash
-kubectl get gateway -n agentgateway-system ate-egress --show-labels
+kubectl get gateway -n agentgateway-system ate-egress
 kubectl get tcproute -n agentgateway-system httpbin-egress
 kubectl get agentgatewaypolicy -n agentgateway-system ate-egress-connect
 kubectl get service -n agentgateway-system httpbin-egress
@@ -237,12 +239,15 @@ kubectl get endpointslice -n agentgateway-system httpbin-egress
 Expected resources include:
 
 ```text
-gateway.gateway.networking.k8s.io/ate-egress ... ate.dev/egress-pep=true
+gateway.gateway.networking.k8s.io/ate-egress
 tcproute.gateway.networking.k8s.io/httpbin-egress
 agentgatewaypolicy.agentgateway.dev/ate-egress-connect
 service/httpbin-egress
 endpointslice.discovery.k8s.io/httpbin-egress
 ```
+
+ate-api does not read these resources; the Gateway is the agentgateway PEP the
+selector address points at. No `ate.dev/egress-pep` marker is needed.
 
 ## Deploy and call the egress actor
 
@@ -346,7 +351,7 @@ Proxying captured actor egress ... "originalDestination":"...:443" ... "connectA
 ## Check which PEP an actor uses
 
 ate-api records the PEP it resolved for the actor on its most recent resume, so
-you can read the binding directly instead of inferring it from Gateway labels.
+you can read the binding directly instead of inferring it from selectors.
 
 From the actor status (`null` means no PEP matched — the field is omitted from
 JSON when empty — so capture is off):
@@ -383,11 +388,12 @@ disabled` instead, and their `egressPepAddress` status field is absent.
 Suppose you want `my-egress-1` to egress through a second Gateway,
 `ate-egress-alt`, instead of the shared `ate-egress` PEP. Because an actor's PEP
 is a snapshot taken at resume (see "When the binding is (re)computed"), you both
-relabel the Gateways and cycle the actor.
+set the actor's selector and cycle the actor. You do not touch the actor's
+current Gateway — the actor's `ate.dev/use-egress-pep` selector out-ranks the
+atespace and global-default tiers regardless.
 
-1. Create the alternate Gateway and label it so it out-scores the global PEP for
-   this actor. Scoping it to the actor (atespace + actor) gives it the highest
-   tier, so it wins regardless of the global PEP:
+1. Create the alternate Gateway. No labels are needed on it — ate-api never reads
+   Gateways; selection happens entirely on the actor:
 
 ```bash
 kubectl apply -f - <<'EOF'
@@ -396,10 +402,6 @@ kind: Gateway
 metadata:
   name: ate-egress-alt
   namespace: agentgateway-system
-  labels:
-    ate.dev/egress-pep: "true"
-    ate.dev/atespace: "demo"
-    ate.dev/actor: "my-egress-1"
 spec:
   gatewayClassName: agentgateway
   listeners:
@@ -421,12 +423,11 @@ spec:
 EOF
 ```
 
-   The `connect` listener must be `protocol: HTTP` — ate-api derives the PEP
-   address from the Gateway's HTTP listener, and a labeled Gateway without one
-   is treated as a configuration error that fails PEP resolution.
+   The `connect` listener on `15008` is the address the selector will point at
+   (`ate-egress-alt.agentgateway-system.svc.cluster.local:15008`).
 
 2. Give the alternate Gateway the CONNECT policy and a route to the backend.
-   Labeling alone is not enough: without these the tunnel opens but agentgateway
+   The Gateway alone is not enough: without these the tunnel opens but agentgateway
    has nothing routing `httpbin.org:443`, and egress fails with a 502 / connection
    reset. The `httpbin-egress` Service and EndpointSlice created by the installer
    are backend resources and can be reused as-is; you only need a CONNECT policy
@@ -466,13 +467,40 @@ EOF
      -o jsonpath='{range .status.parents[*]}{.parentRef.name}{" Accepted="}{.conditions[?(@.type=="Accepted")].status}{"\n"}{end}'
    ```
 
-3. Cycle the actor so ate-api re-resolves the PEP. A running actor keeps its old
-   PEP until it is suspended (or paused) and resumed:
+3. Point the actor at the alternate Gateway and cycle it so ate-api re-resolves
+   the PEP. A running actor keeps its old PEP until it is suspended (or paused)
+   and resumed:
 
    ```bash
+   kubectl ate update actor my-egress-1 -a demo \
+     --egress-pep ate-egress-alt.agentgateway-system.svc.cluster.local:15008
    kubectl ate suspend actor my-egress-1 -a demo
    kubectl ate resume actor my-egress-1 -a demo
    ```
+
+   `update actor --egress-pep` sets the actor's `ate.dev/use-egress-pep` label to
+   the given address. Equivalently, set it once at creation with `kubectl ate
+   create actor ... --egress-pep <host>:<port>`, for example:
+
+   ```bash
+   kubectl ate create actor my-egress-1 --template ate-demo-egress/egress -a demo \
+     --egress-pep ate-egress-alt.agentgateway-system.svc.cluster.local:15008
+   ```
+
+   To scope a whole atespace, set the selector when you create the atespace:
+
+   ```bash
+   kubectl ate create atespace demo \
+     --egress-pep ate-egress.agentgateway-system.svc.cluster.local:15008
+   ```
+
+   The atespace-tier selector can only be set at atespace creation — there is no
+   `kubectl ate update atespace`. To change the atespace default afterward,
+   override it per actor with `update actor --egress-pep` (highest precedence);
+   new actors can pass `--egress-pep` at creation so they never inherit the old
+   default. Recreating the atespace is only an option while it is empty:
+   `delete atespace` refuses a non-empty atespace, so once actors exist the
+   per-actor override is the practical path.
 
 4. Confirm the actor now points at the alternate PEP:
 
@@ -514,17 +542,19 @@ EOF
      --all-containers --tail=200 | grep "gateway=agentgateway-system/ate-egress-alt"
    ```
 
-To revert, remove the alternate Gateway's route parent and delete the Gateway
-and its CONNECT policy, then cycle the actor again; ate-api falls back to the
-next-best PEP, the global `ate-egress`:
+To revert, clear the actor's selector so it falls back to the global default
+(`ate-egress`), then cycle it; afterward you can remove the alternate Gateway's
+route parent and delete the Gateway and its CONNECT policy:
 
 ```bash
+kubectl ate update actor my-egress-1 -a demo --egress-pep ""
+kubectl ate suspend actor my-egress-1 -a demo
+kubectl ate resume actor my-egress-1 -a demo
+
 kubectl patch tcproute -n agentgateway-system httpbin-egress --type=json \
   -p '[{"op":"remove","path":"/spec/parentRefs/1"}]'
 kubectl delete gateway -n agentgateway-system ate-egress-alt
 kubectl delete agentgatewaypolicy -n agentgateway-system ate-egress-alt-connect
-kubectl ate suspend actor my-egress-1 -a demo
-kubectl ate resume actor my-egress-1 -a demo
 ```
 
 ## Check agentgateway logs
@@ -570,17 +600,17 @@ Invalid value: Spec is immutable`, recreate the demo resources:
 ./hack/install-ate-kind.sh --deploy-demo-egress
 ```
 
-If capture listener logs are missing after labeling a Gateway on an
-already-running ATE system, no ate-api restart is needed for the label itself —
-the Gateway watcher is a live watch and sees label changes immediately. The
-usual cause is that the actor was already running: the PEP binding is a
-snapshot taken at resume, so cycle the actor (suspend, then resume) to
-re-resolve.
+If capture listener logs are missing after setting an actor/atespace selector on
+an already-running ATE system, no ate-api restart is needed — the selector is
+read from the actor and atespace at resume. The usual cause is that the actor was
+already running: the PEP binding is a snapshot taken at resume, so cycle the
+actor (suspend, then resume) to re-resolve. Selector changes never affect a
+RUNNING actor. Confirm which address resolved from ate-api logs
+(`Resolved egress PEP for actor`) or the actor's `egressPepAddress` field; if the
+address is wrong, the tunnel fails at connect time in ateom.
 
-The one case that does require an ate-api restart is installing the Gateway API
-CRDs *after* ate-api started: ate-api checks for the Gateway resource once at
-boot and disables PEP resolution if it is absent (it logs
-`Gateway API resource not served; egress PEP resolution disabled`):
+Changing the global default (`--default-egress-pep`) does require an ate-api
+restart, since it is a process flag / ConfigMap value read at boot:
 
 ```bash
 kubectl rollout restart deployment/ate-api-server-deployment -n ate-system
@@ -589,8 +619,7 @@ kubectl rollout status deployment/ate-api-server-deployment -n ate-system
 
 Capture is decided per resume from the PEP address ate-api sends to ateom, so
 worker pods do not need to carry any egress config or be restarted. An actor
-already running before its PEP Gateway existed picks up capture on its next
-resume.
+already running before its selector was set picks up capture on its next resume.
 
 Worker images must include egress support: an older ateom silently ignores the
 PEP address, so `egressPepAddress` on the actor can report a binding the

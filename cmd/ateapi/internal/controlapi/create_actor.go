@@ -67,6 +67,7 @@ func (s *Service) CreateActor(ctx context.Context, req *ateapipb.CreateActorRequ
 		ActorTemplateNamespace: templateNamespace,
 		ActorTemplateName:      templateName,
 		WorkerSelector:         in.GetWorkerSelector(),
+		Labels:                 normalizeLabels(in.GetLabels()),
 	}
 	stored, err := s.persistence.CreateActor(ctx, actor)
 	if err != nil {
@@ -120,6 +121,9 @@ func validateCreateActorRequest(req *ateapipb.CreateActorRequest) error {
 	if val := actor.GetWorkerSelector(); val != nil {
 		errs = append(errs, validateSelector(val, actorPath.Child("worker_selector"))...)
 	}
+
+	errs = append(errs, validateLabels(actor.GetLabels(), actorPath.Child("labels"))...)
+	errs = append(errs, validateEgressPEPSelector(actor.GetLabels(), actorPath.Child("labels"))...)
 
 	if len(errs) > 0 {
 		return status.Error(codes.InvalidArgument, errs.ToAggregate().Error())

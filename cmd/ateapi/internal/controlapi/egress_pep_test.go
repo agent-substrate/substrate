@@ -15,17 +15,37 @@
 package controlapi
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/agent-substrate/substrate/internal/egress"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/client-go/tools/cache"
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
-func TestResolveEgressPEPAddressEmpty(t *testing.T) {
-	indexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{})
+func actorWithPEP(address string) *ateapipb.Actor {
+	a := &ateapipb.Actor{
+		Metadata: &ateapipb.ResourceMetadata{
+			Atespace: "space-a",
+			Name:     "actor-a",
+		},
+	}
+	if address != "" {
+		a.Labels = map[string]string{egress.LabelUseEgressPEP: address}
+	}
+	return a
+}
 
-	got, err := resolveEgressPEPAddress(t.Context(), indexer, "space-a", "actor-a")
+func atespaceWithPEP(address string) *ateapipb.Atespace {
+	s := &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: "space-a"}}
+	if address != "" {
+		s.Labels = map[string]string{egress.LabelUseEgressPEP: address}
+	}
+	return s
+}
+
+func TestResolveEgressPEPAddressNoSelector(t *testing.T) {
+	got, err := resolveEgressPEPAddress(actorWithPEP(""), atespaceWithPEP(""), "")
 	if err != nil {
 		t.Fatalf("resolveEgressPEPAddress() error = %v", err)
 	}
@@ -34,202 +54,109 @@ func TestResolveEgressPEPAddressEmpty(t *testing.T) {
 	}
 }
 
-func TestResolveEgressPEPAddressSelectsBestGateway(t *testing.T) {
-	indexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{})
-	for _, gw := range []*unstructured.Unstructured{
-		gatewayPEP("global", "ate-system", map[string]string{
-			egress.LabelPEP: "true",
-		}, "HTTP", int64(15080)),
-		gatewayPEP("space", "ate-system", map[string]string{
-			egress.LabelPEP:      "true",
-			egress.LabelAtespace: "space-a",
-		}, "HTTP", int64(15081)),
-		gatewayPEP("actor", "ate-system", map[string]string{
-			egress.LabelPEP:      "true",
-			egress.LabelAtespace: "space-a",
-			egress.LabelActor:    "actor-a",
-		}, "HTTP", int64(15082)),
-		gatewayPEP("other-actor", "ate-system", map[string]string{
-			egress.LabelPEP:      "true",
-			egress.LabelAtespace: "space-a",
-			egress.LabelActor:    "actor-b",
-		}, "HTTP", int64(15083)),
-		gatewayPEP("other-space", "ate-system", map[string]string{
-			egress.LabelPEP:      "true",
-			egress.LabelAtespace: "space-b",
-		}, "HTTP", int64(15084)),
-		gatewayPEP("unlabeled", "ate-system", nil, "HTTP", int64(15085)),
-	} {
-		if err := indexer.Add(gw); err != nil {
-			t.Fatalf("indexer.Add() error = %v", err)
-		}
-	}
+func TestResolveEgressPEPAddressPrefersActorThenAtespaceThenGlobal(t *testing.T) {
+	const (
+		actorPEP  = "ate-egress-actor.agentgateway-system.svc.cluster.local:15008"
+		spacePEP  = "ate-egress-space.agentgateway-system.svc.cluster.local:15008"
+		globalPEP = "ate-egress.agentgateway-system.svc.cluster.local:15008"
+	)
 
-	got, err := resolveEgressPEPAddress(t.Context(), indexer, "space-a", "actor-a")
+	// Actor selector wins over atespace and global default.
+	got, err := resolveEgressPEPAddress(actorWithPEP(actorPEP), atespaceWithPEP(spacePEP), globalPEP)
 	if err != nil {
 		t.Fatalf("resolveEgressPEPAddress() error = %v", err)
 	}
-	want := "actor.ate-system.svc.cluster.local:15082"
-	if got != want {
-		t.Fatalf("resolveEgressPEPAddress() = %q, want %q", got, want)
-	}
-}
-
-func TestResolveEgressPEPAddressFallsBackToAtespaceThenGlobal(t *testing.T) {
-	indexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{})
-	for _, gw := range []*unstructured.Unstructured{
-		gatewayPEP("global", "ate-system", map[string]string{
-			egress.LabelPEP: "true",
-		}, "HTTP", int64(15080)),
-		gatewayPEP("space", "ate-system", map[string]string{
-			egress.LabelPEP:      "true",
-			egress.LabelAtespace: "space-a",
-		}, "HTTP", int64(15081)),
-	} {
-		if err := indexer.Add(gw); err != nil {
-			t.Fatalf("indexer.Add() error = %v", err)
-		}
+	if got != actorPEP {
+		t.Fatalf("resolveEgressPEPAddress() = %q, want %q", got, actorPEP)
 	}
 
-	got, err := resolveEgressPEPAddress(t.Context(), indexer, "space-a", "actor-without-specific-pep")
+	// No actor selector: atespace wins over global default.
+	got, err = resolveEgressPEPAddress(actorWithPEP(""), atespaceWithPEP(spacePEP), globalPEP)
 	if err != nil {
 		t.Fatalf("resolveEgressPEPAddress() error = %v", err)
 	}
-	if want := "space.ate-system.svc.cluster.local:15081"; got != want {
-		t.Fatalf("resolveEgressPEPAddress() = %q, want %q", got, want)
+	if got != spacePEP {
+		t.Fatalf("resolveEgressPEPAddress() = %q, want %q", got, spacePEP)
 	}
 
-	got, err = resolveEgressPEPAddress(t.Context(), indexer, "space-without-specific-pep", "actor-a")
+	// No actor or atespace selector: global default is used.
+	got, err = resolveEgressPEPAddress(actorWithPEP(""), atespaceWithPEP(""), globalPEP)
 	if err != nil {
 		t.Fatalf("resolveEgressPEPAddress() error = %v", err)
 	}
-	if want := "global.ate-system.svc.cluster.local:15080"; got != want {
-		t.Fatalf("resolveEgressPEPAddress() = %q, want %q", got, want)
+	if got != globalPEP {
+		t.Fatalf("resolveEgressPEPAddress() = %q, want %q", got, globalPEP)
 	}
 }
 
-func TestResolveEgressPEPAddressRequiresHTTPListener(t *testing.T) {
-	indexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{})
-	if err := indexer.Add(gatewayPEP("tcp-only", "ate-system", map[string]string{
-		egress.LabelPEP: "true",
-	}, "TCP", int64(15080))); err != nil {
-		t.Fatalf("indexer.Add() error = %v", err)
-	}
-
-	if _, err := resolveEgressPEPAddress(t.Context(), indexer, "space-a", "actor-a"); err == nil {
-		t.Fatal("resolveEgressPEPAddress() error = nil, want error")
+func TestResolveEgressPEPAddressMalformedErrors(t *testing.T) {
+	if _, err := resolveEgressPEPAddress(actorWithPEP("no-port-here"), atespaceWithPEP(""), ""); err == nil {
+		t.Fatal("resolveEgressPEPAddress() error = nil, want error for malformed address")
 	}
 }
 
-func gatewayPEP(name, namespace string, labels map[string]string, protocol string, port int64) *unstructured.Unstructured {
-	u := &unstructured.Unstructured{
-		Object: map[string]any{
-			"apiVersion": "gateway.networking.k8s.io/v1",
-			"kind":       "Gateway",
-			"spec": map[string]any{
-				"listeners": []any{
-					map[string]any{
-						"name":     "http",
-						"protocol": protocol,
-						"port":     port,
-					},
-				},
-			},
-			"status": map[string]any{
-				"conditions": []any{
-					map[string]any{
-						"type":   "Programmed",
-						"status": "True",
-					},
-				},
-			},
-		},
+func TestValidateDefaultEgressPEPAddress(t *testing.T) {
+	// Empty is allowed: no global default configured.
+	if err := ValidateDefaultEgressPEPAddress(""); err != nil {
+		t.Fatalf("ValidateDefaultEgressPEPAddress(\"\") error = %v, want nil", err)
 	}
-	u.SetName(name)
-	u.SetNamespace(namespace)
-	u.SetLabels(labels)
-	return u
-}
-
-func TestResolveEgressPEPAddressSkipsUnprogrammedGateway(t *testing.T) {
-	indexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{})
-	unprogrammed := gatewayPEP("actor", "ate-system", map[string]string{
-		egress.LabelPEP:      "true",
-		egress.LabelAtespace: "space-a",
-		egress.LabelActor:    "actor-a",
-	}, "HTTP", int64(15082))
-	if err := unstructured.SetNestedSlice(unprogrammed.Object, []any{
-		map[string]any{"type": "Programmed", "status": "False"},
-	}, "status", "conditions"); err != nil {
-		t.Fatalf("SetNestedSlice() error = %v", err)
+	if err := ValidateDefaultEgressPEPAddress("ate-egress.agentgateway-system.svc.cluster.local:15008"); err != nil {
+		t.Fatalf("ValidateDefaultEgressPEPAddress() valid address error = %v", err)
 	}
-	for _, gw := range []*unstructured.Unstructured{
-		unprogrammed,
-		gatewayPEP("global", "ate-system", map[string]string{
-			egress.LabelPEP: "true",
-		}, "HTTP", int64(15080)),
-	} {
-		if err := indexer.Add(gw); err != nil {
-			t.Fatalf("indexer.Add() error = %v", err)
-		}
-	}
-
-	// The unprogrammed actor-scoped PEP is skipped; resolution falls back to
-	// the programmed global PEP.
-	got, err := resolveEgressPEPAddress(t.Context(), indexer, "space-a", "actor-a")
-	if err != nil {
-		t.Fatalf("resolveEgressPEPAddress() error = %v", err)
-	}
-	if want := "global.ate-system.svc.cluster.local:15080"; got != want {
-		t.Fatalf("resolveEgressPEPAddress() = %q, want %q", got, want)
+	if err := ValidateDefaultEgressPEPAddress("no-port-here"); err == nil {
+		t.Fatal("ValidateDefaultEgressPEPAddress() malformed address error = nil, want error")
 	}
 }
 
-func TestResolveEgressPEPAddressActorLabelWithoutAtespaceMatchesNothing(t *testing.T) {
-	indexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{})
-	for _, gw := range []*unstructured.Unstructured{
-		// Misconfigured: actor label without an atespace label can never match.
-		gatewayPEP("broken-actor", "ate-system", map[string]string{
-			egress.LabelPEP:   "true",
-			egress.LabelActor: "actor-a",
-		}, "HTTP", int64(15082)),
-		gatewayPEP("global", "ate-system", map[string]string{
-			egress.LabelPEP: "true",
-		}, "HTTP", int64(15080)),
-	} {
-		if err := indexer.Add(gw); err != nil {
-			t.Fatalf("indexer.Add() error = %v", err)
-		}
+func TestValidateEgressPEPSelector(t *testing.T) {
+	if errs := validateEgressPEPSelector(map[string]string{egress.LabelUseEgressPEP: "pep.example:15008"}, nil); len(errs) != 0 {
+		t.Fatalf("validateEgressPEPSelector() valid address returned errors: %v", errs)
 	}
-
-	got, err := resolveEgressPEPAddress(t.Context(), indexer, "space-a", "actor-a")
-	if err != nil {
-		t.Fatalf("resolveEgressPEPAddress() error = %v", err)
+	if errs := validateEgressPEPSelector(map[string]string{egress.LabelUseEgressPEP: "missing-port"}, nil); len(errs) == 0 {
+		t.Fatal("validateEgressPEPSelector() malformed address returned no errors")
 	}
-	if want := "global.ate-system.svc.cluster.local:15080"; got != want {
-		t.Fatalf("resolveEgressPEPAddress() = %q, want %q", got, want)
+	// A signed port must be rejected (ParsePort, unlike Atoi, refuses "+80").
+	if errs := validateEgressPEPSelector(map[string]string{egress.LabelUseEgressPEP: "pep.example:+80"}, nil); len(errs) == 0 {
+		t.Fatal("validateEgressPEPSelector() signed port returned no errors")
+	}
+	if errs := validateEgressPEPSelector(nil, nil); len(errs) != 0 {
+		t.Fatalf("validateEgressPEPSelector() absent label returned errors: %v", errs)
+	}
+	// An explicit empty value means "no selector" (delete on UpdateActor) and
+	// must be accepted.
+	if errs := validateEgressPEPSelector(map[string]string{egress.LabelUseEgressPEP: ""}, nil); len(errs) != 0 {
+		t.Fatalf("validateEgressPEPSelector() empty value returned errors: %v", errs)
 	}
 }
 
-func TestResolveEgressPEPAddressPrefersStatusAddress(t *testing.T) {
-	indexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{})
-	gw := gatewayPEP("global", "ate-system", map[string]string{
-		egress.LabelPEP: "true",
-	}, "HTTP", int64(15080))
-	if err := unstructured.SetNestedSlice(gw.Object, []any{
-		map[string]any{"type": "Hostname", "value": "pep.example.internal"},
-	}, "status", "addresses"); err != nil {
-		t.Fatalf("SetNestedSlice() error = %v", err)
+func TestValidateLabels(t *testing.T) {
+	if errs := validateLabels(map[string]string{"team": "a", egress.LabelUseEgressPEP: "pep.example:15008"}, nil); len(errs) != 0 {
+		t.Fatalf("validateLabels() valid labels returned errors: %v", errs)
 	}
-	if err := indexer.Add(gw); err != nil {
-		t.Fatalf("indexer.Add() error = %v", err)
+	if errs := validateLabels(map[string]string{"not a label key!": "v"}, nil); len(errs) == 0 {
+		t.Fatal("validateLabels() invalid key returned no errors")
 	}
+	if errs := validateLabels(map[string]string{"k": strings.Repeat("v", maxLabelValueLength+1)}, nil); len(errs) == 0 {
+		t.Fatal("validateLabels() oversized value returned no errors")
+	}
+	tooMany := map[string]string{}
+	for i := 0; i <= maxLabels; i++ {
+		tooMany[fmt.Sprintf("key-%d", i)] = "v"
+	}
+	if errs := validateLabels(tooMany, nil); len(errs) == 0 {
+		t.Fatal("validateLabels() too many entries returned no errors")
+	}
+}
 
-	got, err := resolveEgressPEPAddress(t.Context(), indexer, "space-a", "actor-a")
-	if err != nil {
-		t.Fatalf("resolveEgressPEPAddress() error = %v", err)
+func TestNormalizeLabels(t *testing.T) {
+	got := normalizeLabels(map[string]string{"keep": "v", "drop": ""})
+	if len(got) != 1 || got["keep"] != "v" {
+		t.Fatalf("normalizeLabels() = %v, want only the non-empty entry", got)
 	}
-	if want := "pep.example.internal:15080"; got != want {
-		t.Fatalf("resolveEgressPEPAddress() = %q, want %q", got, want)
+	if got := normalizeLabels(map[string]string{"drop": ""}); got != nil {
+		t.Fatalf("normalizeLabels() all-empty = %v, want nil", got)
+	}
+	if got := normalizeLabels(nil); got != nil {
+		t.Fatalf("normalizeLabels(nil) = %v, want nil", got)
 	}
 }

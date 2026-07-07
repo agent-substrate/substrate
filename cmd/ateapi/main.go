@@ -48,11 +48,8 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/reflection"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
-	"k8s.io/client-go/tools/cache"
 )
 
 var (
@@ -72,6 +69,8 @@ var (
 
 	sessionIDCAPoolFile = pflag.String("session-id-ca-pool", "", "The file that contains the CA pool for signing session JWTs")
 	workerpoolCACerts   = pflag.String("workerpool-ca-certs", "", "The file that contains the CA for verifying workerpool client certificates.")
+
+	defaultEgressPEP = pflag.String("default-egress-pep", "", "The global-default egress PEP address, as <host>:<port>. Used for actors and atespaces that set no ate.dev/use-egress-pep selector. Empty disables the global default (capture off unless a per-actor/atespace selector matches).")
 
 	showVersion     = pflag.Bool("version", false, "Print version and exit.")
 	authMode        = pflag.String("auth-mode", "mtls", "Auth mode for incoming gRPC: mtls|jwt. 'mtls' (default) relies on transport-level mTLS for client identity. 'jwt' additionally requires a Kubernetes ServiceAccount Bearer token on every RPC. Substrate will drop support for JWT auth mode once the Pod Certificates feature is enabled by default in the minimum supported Kubernetes version.")
@@ -103,6 +102,19 @@ func main() {
 	defer serverboot.ShutdownProvider("MeterProvider", mp.Shutdown)
 
 	loadFlagsFromEnv()
+
+	// A malformed --default-egress-pep degrades to "no global default" rather than
+	// crash-looping the deployment: the flag only affects actors that fall through
+	// to the global tier, and per-actor/atespace selectors keep working. We clear
+	// it so the bad value can't reach ateom and fail every fall-through resume at
+	// connect time; the warning is the operator's signal to fix the flag. Cleared
+	// before logFlagValues so the "Final flag values" line reports the effective
+	// (empty) value, not the ignored one.
+	if err := controlapi.ValidateDefaultEgressPEPAddress(*defaultEgressPEP); err != nil {
+		slog.WarnContext(ctx, "Ignoring invalid --default-egress-pep; global-default egress PEP disabled", "err", err)
+		*defaultEgressPEP = ""
+	}
+
 	logFlagValues(ctx)
 
 	authModeParsed, err := ateapiauth.ParseMode(*authMode)
@@ -115,7 +127,7 @@ func main() {
 		serverboot.Fatal(ctx, "Failed to set up Redis/Valkey", err)
 	}
 
-	clientset, ateClient, dynamicClient, err := newKubeClients()
+	clientset, ateClient, err := newKubeClients()
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to create Kubernetes clients", err)
 	}
@@ -153,32 +165,8 @@ func main() {
 	ateletPodInformerFactory.WaitForCacheSync(stopCh)
 	ateFactory.WaitForCacheSync(stopCh)
 
-	// The Gateway PEP watch is optional: clusters without the Gateway API CRD
-	// (any non-egress install) must start cleanly, so only create the informer
-	// when the resource is served. Without it the PEP indexer stays nil and
-	// resolveEgressPEPAddress resolves no PEP, leaving egress capture off.
-	// Installing the CRD later requires an ate-api restart to start the watch.
-	var gatewayPEPIndexer cache.Indexer
-	if gatewayAPIAvailable(ctx, clientset) {
-		gatewayPEPInformerFactory, gatewayPEPInformer := controlapi.GatewayPEPInformer(dynamicClient)
-		gatewayPEPInformerFactory.Start(stopCh)
-		// Bound the sync wait: the CRD can be served while list/watch is still
-		// denied (e.g. ate-api rolled before the updated ClusterRole), and an
-		// unbounded wait would hang startup. On timeout the indexer is used
-		// anyway — it stays empty (capture off) until the watch syncs, and
-		// recovers live once RBAC is fixed.
-		syncCtx, cancelSync := context.WithTimeout(ctx, time.Minute)
-		if !cache.WaitForCacheSync(syncCtx.Done(), gatewayPEPInformer.HasSynced) {
-			slog.ErrorContext(ctx, "Gateway PEP informer sync timed out; egress PEP resolution degraded until it syncs")
-		}
-		cancelSync()
-		gatewayPEPIndexer = gatewayPEPInformer.GetIndexer()
-	} else {
-		slog.InfoContext(ctx, "Gateway API resource not served; egress PEP resolution disabled")
-	}
-
 	dialer := controlapi.NewAteletDialer(workerPodInformer.GetIndexer(), ateletPodInformer.GetIndexer())
-	sm := controlapi.NewService(redisPersistence, workerCache, actorTemplateLister, workerPoolLister, sandboxConfigLister, dialer, clientset, gatewayPEPIndexer)
+	sm := controlapi.NewService(redisPersistence, workerCache, actorTemplateLister, workerPoolLister, sandboxConfigLister, dialer, clientset, *defaultEgressPEP)
 
 	jwtIssuerDiscoveryClient := buildK8sServiceAccountIssuerDiscoveryClient(ctx, *clientJWTCAFile, *clientJWTIssuer)
 	if authModeParsed == ateapiauth.ModeJWT && jwtIssuerDiscoveryClient == nil {
@@ -243,6 +231,7 @@ func loadFlagsFromEnv() {
 		{redisUseIAMAuth, "ATE_API_REDIS_USE_IAM_AUTH"},
 		{redisTLSServerName, "ATE_API_REDIS_TLS_SERVER_NAME"},
 		{redisClientCert, "ATE_API_REDIS_CLIENT_CERT"},
+		{defaultEgressPEP, "ATE_API_DEFAULT_EGRESS_PEP"},
 	}
 	for _, o := range overrides {
 		if *o.flag == "@env" {
@@ -266,6 +255,7 @@ func logFlagValues(ctx context.Context) {
 		slog.String("session-id-ca-pool", *sessionIDCAPoolFile),
 		slog.String("workerpool-ca-certs", *workerpoolCACerts),
 		slog.String("auth-mode", *authMode),
+		slog.String("default-egress-pep", *defaultEgressPEP),
 	)
 }
 
@@ -354,54 +344,22 @@ func pingRedisWithRetries(ctx context.Context, client *redis.ClusterClient) erro
 	return fmt.Errorf("ping Redis/Valkey after 30 retries: %w", pingErr)
 }
 
-// gatewayAPIAvailable reports whether the cluster serves the Gateway API
-// gateways resource. Clusters without the Gateway API CRDs must not gate
-// ate-api startup on a watch that can never sync.
-//
-// Checked once at startup: a NotFound means the CRD is absent (expected on
-// non-egress PEP setups), any other error means discovery failed. Either way
-// egress PEP resolution is disabled until ate-api is restarted — the failed
-// case logs at Error since it may fail open on a cluster that serves the CRD.
-//
-// TODO: missing gateway api currently disables egress until restart, can add retries here
-func gatewayAPIAvailable(ctx context.Context, clientset *kubernetes.Clientset) bool {
-	resources, err := clientset.Discovery().ServerResourcesForGroupVersion(controlapi.GatewayGVR.GroupVersion().String())
-	if err != nil {
-		if apierrors.IsNotFound(err) {
-			slog.InfoContext(ctx, "Gateway API not served; egress PEP resolution disabled")
-		} else {
-			slog.ErrorContext(ctx, "Gateway API discovery failed; egress PEP resolution disabled until restart", slog.Any("err", err))
-		}
-		return false
-	}
-	for _, r := range resources.APIResources {
-		if r.Name == controlapi.GatewayGVR.Resource {
-			return true
-		}
-	}
-	return false
-}
-
 // newKubeClients builds the standard Kubernetes clientset and the ate
 // (substrate CRD) clientset from in-cluster config.
-func newKubeClients() (*kubernetes.Clientset, versioned.Interface, dynamic.Interface, error) {
+func newKubeClients() (*kubernetes.Clientset, versioned.Interface, error) {
 	config, err := rest.InClusterConfig()
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("get cluster config: %w", err)
+		return nil, nil, fmt.Errorf("get cluster config: %w", err)
 	}
 	clientset, err := kubernetes.NewForConfig(config)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("create clientset: %w", err)
+		return nil, nil, fmt.Errorf("create clientset: %w", err)
 	}
 	ateClient, err := versioned.NewForConfig(config)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("create ate clientset: %w", err)
+		return nil, nil, fmt.Errorf("create ate clientset: %w", err)
 	}
-	dynamicClient, err := dynamic.NewForConfig(config)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("create dynamic clientset: %w", err)
-	}
-	return clientset, ateClient, dynamicClient, nil
+	return clientset, ateClient, nil
 }
 
 // buildServerCreds loads the workerpool CA pool (if configured) and

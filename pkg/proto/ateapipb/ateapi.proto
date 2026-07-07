@@ -164,6 +164,13 @@ message Actor {
   // cleared when the worker is released (suspend/pause). Records which PEP an
   // actor is using so global-PEP membership is queryable without scanning logs.
   string egress_pep_address = 13;
+
+  // Selector labels on the actor. The `ate.dev/use-egress-pep` key supplies the
+  // egress PEP address (as <host>:<port>) this actor should use, following
+  // the Istio ambient `istio.io/use-waypoint` model. This is the highest-
+  // precedence egress PEP selector (actor > atespace > global default). Set at
+  // create and mutable via UpdateActor; changes take effect on the next resume.
+  map<string, string> labels = 14;
 }
 
 // Atespace is the isolation boundary an Actor is created into. Global-scoped:
@@ -171,6 +178,12 @@ message Actor {
 message Atespace {
   // Common resource metadata: name, uid, version, timestamps.
   ResourceMetadata metadata = 1;
+
+  // Selector labels on the atespace. The `ate.dev/use-egress-pep` key supplies
+  // the egress PEP address (as <host>:<port>) all actors in this atespace
+  // should use unless the actor sets its own. Medium-precedence egress PEP
+  // selector (actor > atespace > global default).
+  map<string, string> labels = 2;
 }
 
 // ObjectRef references a Substrate resource by its (atespace, name) identity.
@@ -219,6 +232,14 @@ message UpdateActorRequest {
   // worker_selector replaces the actor's current placement constraint.
   // Takes effect on the next ResumeActor call.
   Selector worker_selector = 2;
+
+  // labels is merged into the actor's selector labels: a key with a non-empty
+  // value is set (e.g. `ate.dev/use-egress-pep` with a <host>:<port> egress PEP
+  // address), a key with an empty value is deleted, and keys not present are
+  // left unchanged — an absent/empty map is a no-op, so callers unaware of
+  // labels cannot clear selectors set by others. Takes effect on the next
+  // ResumeActor call.
+  map<string, string> labels = 3;
 }
 
 message UpdateActorResponse {

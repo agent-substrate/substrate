@@ -15,9 +15,12 @@
 package egress
 
 const (
-	LabelPEP      = "ate.dev/egress-pep"
-	LabelAtespace = "ate.dev/atespace"
-	LabelActor    = "ate.dev/actor"
+	// LabelUseEgressPEP is the consumer-side selector key (on an Actor or
+	// Atespace) that supplies the egress PEP address to use, as "<host>:<port>"
+	// (analogous to Istio ambient's istio.io/use-waypoint). Precedence is
+	// actor > atespace > global default (--default-egress-pep). ate-api uses the
+	// value directly and has no Gateway API dependency.
+	LabelUseEgressPEP = "ate.dev/use-egress-pep"
 )
 
 const (

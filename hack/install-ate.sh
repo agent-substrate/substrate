@@ -292,8 +292,6 @@ kind: Gateway
 metadata:
   name: ate-egress
   namespace: agentgateway-system
-  labels:
-    ate.dev/egress-pep: "true"
 spec:
   gatewayClassName: agentgateway
   listeners:
@@ -419,12 +417,24 @@ create_api_server_env_vars() {
     fi
   fi
 
+  # When egress capture is enabled, point the global-default egress PEP at the
+  # demo agentgateway address. Actors and atespaces can override this with an
+  # ate.dev/use-egress-pep selector (precedence: actor > atespace > global). Left
+  # empty otherwise, which keeps egress capture off. ate-api uses this address
+  # directly; it has no Gateway API dependency.
+  local default_egress_pep=""
+  if [[ "${ATE_EGRESS_CAPTURE}" == "true" ]]; then
+    default_egress_pep="ate-egress.agentgateway-system.svc.cluster.local:15008"
+  fi
+  echo "DEFAULT_EGRESS_PEP: ${default_egress_pep}"
+
   run_kubectl create configmap -n ate-system ate-api-server-envvars \
     --from-literal=ATE_API_REDIS_ADDRESS="${redis_address}" \
     --from-literal=ATE_API_REDIS_USE_IAM_AUTH="${use_iam_auth}" \
     --from-literal=ATE_API_REDIS_TLS_SERVER_NAME="${tls_server_name}" \
     --from-literal=ATE_API_REDIS_CLIENT_CERT="${client_cert}" \
     --from-literal=ATE_API_K8SJWT_ISSUER="${jwt_issuer}" \
+    --from-literal=ATE_API_DEFAULT_EGRESS_PEP="${default_egress_pep}" \
     --dry-run=client -o yaml \
     | run_kubectl apply -f -
 }

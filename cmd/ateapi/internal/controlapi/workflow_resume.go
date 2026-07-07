@@ -36,7 +36,6 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/tools/cache"
 )
 
 // ResumeInput holds the immutable parameters requested by the client.
@@ -107,9 +106,9 @@ func isWorkerEligibleForActor(worker *ateapipb.Worker, templateClass atev1alpha1
 }
 
 type AssignWorkerStep struct {
-	store             store.Interface
-	workerCache       *workercache.Cache
-	gatewayPEPIndexer cache.Indexer
+	store            store.Interface
+	workerCache      *workercache.Cache
+	defaultEgressPEP string
 }
 
 func (s *AssignWorkerStep) Name() string { return "AssignWorker" }
@@ -119,14 +118,29 @@ func (s *AssignWorkerStep) IsComplete(ctx context.Context, input *ResumeInput, s
 }
 func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, state *ResumeState) error {
 	// Resolve the egress PEP for this actor and record it on the actor so the
-	// binding is observable (e.g. "which actors use the global PEP?"). The binding
-	// is computed dynamically against whatever PEP Gateways exist right now, so we
-	// re-resolve on every resume. An empty address means no PEP matched and egress
-	// capture stays off. CallAteletRestoreStep reads this back to tell ateom.
-	// Resolved before any worker is claimed so a resolution error (e.g. a
-	// malformed labeled Gateway) fails the resume without stranding a worker
-	// assignment.
-	egressPEPAddress, err := resolveEgressPEPAddress(ctx, s.gatewayPEPIndexer, state.Actor.GetMetadata().GetAtespace(), state.Actor.GetMetadata().GetName())
+	// binding is observable (e.g. "which actors use the global PEP?"). Selection
+	// is consumer-driven (actor > atespace > global default) and re-resolved on
+	// every resume, so we load the atespace to read its ate.dev/use-egress-pep
+	// selector. An empty address means no PEP matched and egress capture stays
+	// off. CallAteletRestoreStep reads this back to tell ateom. Resolved before
+	// any worker is claimed so a resolution error (e.g. a malformed address)
+	// fails the resume without stranding a worker assignment.
+	// A missing atespace record must not strand the actor: actors can predate
+	// mandatory atespace records or survive the non-atomic AtespaceExists /
+	// DeleteAtespace race, and before egress selection resume never read the
+	// atespace at all. GetLabels is nil-safe, so a nil atespace degrades to
+	// actor-label / global-default resolution.
+	atespace, err := s.store.GetAtespace(ctx, state.Actor.GetMetadata().GetAtespace())
+	if err != nil {
+		if !errors.Is(err, store.ErrNotFound) {
+			return fmt.Errorf("while loading atespace for egress PEP resolution: %w", err)
+		}
+		slog.WarnContext(ctx, "Atespace record not found during egress PEP resolution; using actor/global tiers only",
+			"actorId", state.Actor.GetMetadata().GetName(),
+			"atespace", state.Actor.GetMetadata().GetAtespace())
+		atespace = nil
+	}
+	egressPEPAddress, err := resolveEgressPEPAddress(state.Actor, atespace, s.defaultEgressPEP)
 	if err != nil {
 		return err
 	}

@@ -19,9 +19,12 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/kubectl-ate/internal/printer"
 	"github.com/agent-substrate/substrate/internal/ateclient"
+	"github.com/agent-substrate/substrate/internal/egress"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/spf13/cobra"
 )
+
+var createAtespaceEgressPEPFlag string
 
 var createAtespaceCmd = &cobra.Command{
 	Use:   "atespace [name]",
@@ -35,11 +38,17 @@ var createAtespaceCmd = &cobra.Command{
 		}
 		defer apiClient.Close()
 
+		var labels map[string]string
+		if createAtespaceEgressPEPFlag != "" {
+			labels = map[string]string{egress.LabelUseEgressPEP: createAtespaceEgressPEPFlag}
+		}
+
 		resp, err := apiClient.CreateAtespace(ctx, &ateapipb.CreateAtespaceRequest{
 			Atespace: &ateapipb.Atespace{
 				Metadata: &ateapipb.ResourceMetadata{
 					Name: args[0],
 				},
+				Labels: labels,
 			},
 		})
 		if err != nil {
@@ -51,5 +60,6 @@ var createAtespaceCmd = &cobra.Command{
 }
 
 func init() {
+	createAtespaceCmd.Flags().StringVar(&createAtespaceEgressPEPFlag, "egress-pep", "", "Egress PEP address for all actors in this atespace, as <host>:<port>. Sets the ate.dev/use-egress-pep selector (precedence: actor > atespace > global default).")
 	createCmd.AddCommand(createAtespaceCmd)
 }

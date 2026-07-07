@@ -29,6 +29,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/ateredis"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
+	"github.com/agent-substrate/substrate/internal/egress"
 	"github.com/agent-substrate/substrate/internal/envtestbins"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
@@ -310,7 +311,7 @@ func setupTest(t *testing.T, ns string) *testContext {
 	}
 
 	dialer := NewAteletDialer(workerInformer.GetIndexer(), ateletInformer.GetIndexer())
-	service := NewService(persistence, wc, actorTemplateLister, workerPoolLister, sandboxConfigLister, dialer, k8sClient, nil)
+	service := NewService(persistence, wc, actorTemplateLister, workerPoolLister, sandboxConfigLister, dialer, k8sClient, "")
 
 	// 5. Start REAL gRPC Server for ATE API
 	grpcServer := grpc.NewServer(grpc.UnaryInterceptor(ateinterceptors.ServerUnaryInterceptor))
@@ -1716,6 +1717,75 @@ func TestUpdateActor_Success(t *testing.T) {
 	wantGetResp := wantActor
 	if diff := cmp.Diff(wantGetResp, getResp, protocmp.Transform(), ignoreUID, ignoreTimestamps); diff != "" {
 		t.Errorf("GetActor response mismatch after UpdateActor (-want +got):\n%s", diff)
+	}
+}
+
+// TestUpdateActor_MergesLabels verifies UpdateActor merges labels rather than
+// replacing them: an absent map leaves labels untouched, a non-empty value sets
+// its key, and an empty value deletes it.
+func TestUpdateActor_MergesLabels(t *testing.T) {
+	ns := namespaceForTest("ns-update-actor-labels")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	createTemplate(t, tc, ns)
+
+	const pep = "pep.example:15008"
+	actorRef := &ateapipb.ObjectRef{Atespace: testAtespace, Name: "id1"}
+	if _, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{
+		Actor: &ateapipb.Actor{
+			Metadata:               &ateapipb.ResourceMetadata{Atespace: actorRef.GetAtespace(), Name: actorRef.GetName()},
+			ActorTemplateNamespace: ns,
+			ActorTemplateName:      "tmpl1",
+			Labels:                 map[string]string{egress.LabelUseEgressPEP: pep, "team": "a"},
+		},
+	}); err != nil {
+		t.Fatalf("CreateActor failed: %v", err)
+	}
+
+	// A labels-unaware update (nil map) must not touch existing labels.
+	if _, err := tc.client.UpdateActor(context.Background(), &ateapipb.UpdateActorRequest{Actor: actorRef}); err != nil {
+		t.Fatalf("UpdateActor (nil labels) failed: %v", err)
+	}
+	getResp, err := tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{Actor: actorRef})
+	if err != nil {
+		t.Fatalf("GetActor failed: %v", err)
+	}
+	wantLabels := map[string]string{egress.LabelUseEgressPEP: pep, "team": "a"}
+	if diff := cmp.Diff(wantLabels, getResp.GetLabels()); diff != "" {
+		t.Errorf("labels after nil-labels update mismatch (-want +got):\n%s", diff)
+	}
+
+	// A partial update sets its key and leaves the others alone.
+	if _, err := tc.client.UpdateActor(context.Background(), &ateapipb.UpdateActorRequest{
+		Actor:  actorRef,
+		Labels: map[string]string{"team": "b"},
+	}); err != nil {
+		t.Fatalf("UpdateActor (set team) failed: %v", err)
+	}
+	getResp, err = tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{Actor: actorRef})
+	if err != nil {
+		t.Fatalf("GetActor failed: %v", err)
+	}
+	wantLabels = map[string]string{egress.LabelUseEgressPEP: pep, "team": "b"}
+	if diff := cmp.Diff(wantLabels, getResp.GetLabels()); diff != "" {
+		t.Errorf("labels after partial update mismatch (-want +got):\n%s", diff)
+	}
+
+	// An empty value deletes its key.
+	if _, err := tc.client.UpdateActor(context.Background(), &ateapipb.UpdateActorRequest{
+		Actor:  actorRef,
+		Labels: map[string]string{egress.LabelUseEgressPEP: ""},
+	}); err != nil {
+		t.Fatalf("UpdateActor (clear egress PEP) failed: %v", err)
+	}
+	getResp, err = tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{Actor: actorRef})
+	if err != nil {
+		t.Fatalf("GetActor failed: %v", err)
+	}
+	wantLabels = map[string]string{"team": "b"}
+	if diff := cmp.Diff(wantLabels, getResp.GetLabels()); diff != "" {
+		t.Errorf("labels after delete-by-empty mismatch (-want +got):\n%s", diff)
 	}
 }
 

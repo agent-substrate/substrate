@@ -15,247 +15,135 @@
 package controlapi
 
 import (
-	"context"
 	"fmt"
-	"log/slog"
 	"net"
-	"sort"
-	"strconv"
-	"strings"
 
 	"github.com/agent-substrate/substrate/internal/egress"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/client-go/tools/cache"
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"k8s.io/apimachinery/pkg/api/validate/content"
+	"k8s.io/apimachinery/pkg/util/validation/field"
+	netutils "k8s.io/utils/net"
 )
 
-type egressPEPGateway struct {
-	namespace string
-	name      string
-	address   string
-	labels    map[string]string
-}
-
-func resolveEgressPEPAddress(ctx context.Context, gatewayIndexer cache.Indexer, atespace, actorID string) (string, error) {
-	if gatewayIndexer == nil {
-		return "", nil
+// resolveEgressPEPAddress selects the egress PEP address for an actor by
+// consumer-driven precedence, following the Istio ambient istio.io/use-waypoint
+// model: the actor's own selector wins, then the atespace's, then the global
+// default. Each tier supplies the PEP address directly as "<host>:<port>" via
+// the ate.dev/use-egress-pep label (the global default comes from the
+// --default-egress-pep flag).
+//
+// ate-api has no dependency on the Gateway API: it does not look up, watch, or
+// validate any Gateway resource. The selected address is passed to ateom as
+// given. An empty result means no PEP selected and egress capture stays off. A
+// malformed address is a configuration error and fails resolution loudly.
+func resolveEgressPEPAddress(actor *ateapipb.Actor, atespace *ateapipb.Atespace, defaultAddr string) (string, error) {
+	tiers := []struct {
+		source  string
+		address string
+	}{
+		{"actor", actor.GetLabels()[egress.LabelUseEgressPEP]},
+		{"atespace", atespace.GetLabels()[egress.LabelUseEgressPEP]},
+		{"global", defaultAddr},
 	}
 
-	var candidates []egressPEPGateway
-	for _, obj := range gatewayIndexer.List() {
-		u, ok := obj.(*unstructured.Unstructured)
-		if !ok {
-			return "", fmt.Errorf("egress PEP cache contained %T, want *unstructured.Unstructured", obj)
-		}
-		pep, ok, err := egressPEPGatewayFromUnstructured(u)
-		if err != nil {
-			return "", err
-		}
-		if !ok {
+	for _, tier := range tiers {
+		if tier.address == "" {
 			continue
 		}
-		// An actor-scoped PEP needs both labels: the actor label alone scores 0
-		// for every actor (egressPEPGatewayScore requires the atespace to match
-		// too), so the Gateway silently matches nothing. Warn instead of failing
-		// so the actor still falls back to the next-best PEP.
-		if pep.labels[egress.LabelActor] != "" && pep.labels[egress.LabelAtespace] == "" {
-			slog.WarnContext(ctx, "Egress PEP Gateway has an actor label but no atespace label; it can never match any actor",
-				"gateway", pep.namespace+"/"+pep.name)
+		if err := validatePEPAddress(tier.address); err != nil {
+			return "", fmt.Errorf("%s egress PEP: %w", tier.source, err)
 		}
-		candidates = append(candidates, pep)
-	}
-
-	bestScore := 0
-	var best *egressPEPGateway
-	sort.Slice(candidates, func(i, j int) bool {
-		if candidates[i].namespace != candidates[j].namespace {
-			return candidates[i].namespace < candidates[j].namespace
-		}
-		return candidates[i].name < candidates[j].name
-	})
-	for i := range candidates {
-		score := egressPEPGatewayScore(candidates[i].labels, atespace, actorID)
-		if score > bestScore {
-			bestScore = score
-			best = &candidates[i]
-		}
-	}
-	if best == nil {
-		return "", nil
-	}
-	return best.address, nil
-}
-
-func egressPEPGatewayScore(labels map[string]string, atespace, actorID string) int {
-	if _, ok := labels[egress.LabelPEP]; !ok {
-		return 0
-	}
-
-	pepAtespace := labels[egress.LabelAtespace]
-	pepActor := labels[egress.LabelActor]
-	switch {
-	case pepActor != "":
-		if pepActor == actorID && pepAtespace == atespace {
-			return 3
-		}
-	case pepAtespace != "":
-		if pepAtespace == atespace {
-			return 2
-		}
-	default:
-		return 1
-	}
-	return 0
-}
-
-func egressPEPGatewayFromUnstructured(u *unstructured.Unstructured) (egressPEPGateway, bool, error) {
-	labels := u.GetLabels()
-	if _, ok := labels[egress.LabelPEP]; !ok {
-		return egressPEPGateway{}, false, nil
-	}
-
-	// Only Programmed Gateways are candidates: an unprovisioned dataplane has no
-	// working address, and selecting it would hand ateom a dead PEP. Skipping
-	// (rather than erroring) lets resolution fall back to the next-best PEP
-	// while a Gateway is still being reconciled.
-	programmed, err := gatewayProgrammed(u)
-	if err != nil {
-		return egressPEPGateway{}, false, fmt.Errorf("egress PEP Gateway %s/%s: %w", u.GetNamespace(), u.GetName(), err)
-	}
-	if !programmed {
-		return egressPEPGateway{}, false, nil
-	}
-
-	port, ok, err := gatewayHTTPListenerPort(u)
-	if err != nil {
-		return egressPEPGateway{}, false, fmt.Errorf("egress PEP Gateway %s/%s: %w", u.GetNamespace(), u.GetName(), err)
-	}
-	if !ok {
-		return egressPEPGateway{}, false, fmt.Errorf("egress PEP Gateway %s/%s has no HTTP listener", u.GetNamespace(), u.GetName())
-	}
-
-	// Prefer the address the Gateway implementation published in
-	// status.addresses; fall back to the agentgateway convention of a Service
-	// named after the Gateway when the implementation publishes none (e.g.
-	// agentgateway on kind, where the LoadBalancer address stays pending).
-	host, err := gatewayStatusAddress(u)
-	if err != nil {
-		return egressPEPGateway{}, false, fmt.Errorf("egress PEP Gateway %s/%s: %w", u.GetNamespace(), u.GetName(), err)
-	}
-	if host == "" {
-		host = fmt.Sprintf("%s.%s.svc.cluster.local", u.GetName(), u.GetNamespace())
-	}
-
-	return egressPEPGateway{
-		namespace: u.GetNamespace(),
-		name:      u.GetName(),
-		address:   net.JoinHostPort(host, strconv.FormatInt(port, 10)),
-		labels:    labels,
-	}, true, nil
-}
-
-// gatewayProgrammed reports whether the Gateway has condition Programmed=True.
-func gatewayProgrammed(u *unstructured.Unstructured) (bool, error) {
-	conditions, ok, err := unstructured.NestedSlice(u.Object, "status", "conditions")
-	if err != nil {
-		return false, fmt.Errorf("read status.conditions: %w", err)
-	}
-	if !ok {
-		return false, nil
-	}
-	for _, condition := range conditions {
-		m, ok := condition.(map[string]any)
-		if !ok {
-			return false, fmt.Errorf("condition had type %T, want map[string]any", condition)
-		}
-		conditionType, _, err := unstructured.NestedString(m, "type")
-		if err != nil {
-			return false, fmt.Errorf("read condition type: %w", err)
-		}
-		if conditionType != "Programmed" {
-			continue
-		}
-		conditionStatus, _, err := unstructured.NestedString(m, "status")
-		if err != nil {
-			return false, fmt.Errorf("read condition status: %w", err)
-		}
-		return conditionStatus == "True", nil
-	}
-	return false, nil
-}
-
-// gatewayStatusAddress returns the first address the Gateway implementation
-// published in status.addresses, or "" if none is published.
-func gatewayStatusAddress(u *unstructured.Unstructured) (string, error) {
-	addresses, ok, err := unstructured.NestedSlice(u.Object, "status", "addresses")
-	if err != nil {
-		return "", fmt.Errorf("read status.addresses: %w", err)
-	}
-	if !ok {
-		return "", nil
-	}
-	for _, address := range addresses {
-		m, ok := address.(map[string]any)
-		if !ok {
-			return "", fmt.Errorf("address had type %T, want map[string]any", address)
-		}
-		value, _, err := unstructured.NestedString(m, "value")
-		if err != nil {
-			return "", fmt.Errorf("read address value: %w", err)
-		}
-		if value != "" {
-			return value, nil
-		}
+		return tier.address, nil
 	}
 	return "", nil
 }
 
-func gatewayHTTPListenerPort(u *unstructured.Unstructured) (int64, bool, error) {
-	listeners, ok, err := unstructured.NestedSlice(u.Object, "spec", "listeners")
-	if err != nil {
-		return 0, false, fmt.Errorf("read spec.listeners: %w", err)
+// validateEgressPEPSelector validates the ate.dev/use-egress-pep selector label
+// (if present and non-empty) parses as "<host>:<port>". An absent key means no
+// selector; an explicit empty value also means no selector — resolution skips
+// empty tiers, and on UpdateActor an empty value deletes the key.
+func validateEgressPEPSelector(labels map[string]string, fldPath *field.Path) field.ErrorList {
+	address := labels[egress.LabelUseEgressPEP]
+	if address == "" {
+		return nil
 	}
-	if !ok {
-		return 0, false, nil
+	if err := validatePEPAddress(address); err != nil {
+		return field.ErrorList{field.Invalid(fldPath.Key(egress.LabelUseEgressPEP), address, err.Error())}
 	}
-	for _, listener := range listeners {
-		m, ok := listener.(map[string]any)
-		if !ok {
-			return 0, false, fmt.Errorf("listener had type %T, want map[string]any", listener)
-		}
-		protocol, _, err := unstructured.NestedString(m, "protocol")
-		if err != nil {
-			return 0, false, fmt.Errorf("read listener protocol: %w", err)
-		}
-		if !strings.EqualFold(protocol, "HTTP") {
-			continue
-		}
-		port, ok, err := listenerPort(m)
-		if err != nil {
-			return 0, false, err
-		}
-		if !ok {
-			return 0, false, fmt.Errorf("HTTP listener has no port")
-		}
-		return port, true, nil
-	}
-	return 0, false, nil
+	return nil
 }
 
-func listenerPort(listener map[string]any) (int64, bool, error) {
-	port, ok := listener["port"]
-	if !ok {
-		return 0, false, nil
+const (
+	// maxLabels bounds the number of selector-label entries on an actor or
+	// atespace, mirroring maxSelectorMatchLabels for worker selectors.
+	maxLabels = 10
+	// maxLabelValueLength bounds label values. Values are not restricted to the
+	// Kubernetes label-value charset because the egress PEP selector carries a
+	// "<host>:<port>" address; the cap allows a maximal DNS name (253) plus a
+	// colon and port with margin.
+	maxLabelValueLength = 320
+)
+
+// validateLabels bounds a request's selector-label map: entry count, Kubernetes
+// label-key syntax, and value length. Value contents beyond length are only
+// checked for keys with dedicated validators (validateEgressPEPSelector).
+func validateLabels(labels map[string]string, fldPath *field.Path) field.ErrorList {
+	var errs field.ErrorList
+	if n := len(labels); n > maxLabels {
+		return field.ErrorList{field.TooMany(fldPath, n, maxLabels)}
 	}
-	switch v := port.(type) {
-	case int64:
-		return v, true, nil
-	case int32:
-		return int64(v), true, nil
-	case int:
-		return int64(v), true, nil
-	case float64:
-		return int64(v), true, nil
-	default:
-		return 0, false, fmt.Errorf("HTTP listener port had type %T, want integer", port)
+	for k, v := range labels {
+		for _, msg := range content.IsLabelKey(k) {
+			errs = append(errs, field.Invalid(fldPath.Key(k), k, msg))
+		}
+		if len(v) > maxLabelValueLength {
+			errs = append(errs, field.TooLong(fldPath.Key(k), v, maxLabelValueLength))
+		}
 	}
+	return errs
+}
+
+// ValidateDefaultEgressPEPAddress validates the global-default egress PEP address
+// (the --default-egress-pep flag) at boot. Empty is allowed (no global default).
+// A malformed non-empty address is a configuration error the caller surfaces so
+// a typo does not silently reach ateom and fail every actor resume that falls
+// through to the global tier; ate-api logs it and degrades to no global default.
+func ValidateDefaultEgressPEPAddress(address string) error {
+	if address == "" {
+		return nil
+	}
+	return validatePEPAddress(address)
+}
+
+// normalizeLabels returns a copy of labels without empty-valued entries (an
+// empty value means "no selector"), or nil when nothing remains. Create paths
+// use it so an explicit empty selector is stored the same as an absent one.
+func normalizeLabels(labels map[string]string) map[string]string {
+	var out map[string]string
+	for k, v := range labels {
+		if v == "" {
+			continue
+		}
+		if out == nil {
+			out = map[string]string{}
+		}
+		out[k] = v
+	}
+	return out
+}
+
+// validatePEPAddress checks that an egress PEP address is a "<host>:<port>" pair
+// with a numeric port in range. ate-api does not verify the host resolves or
+// that a Gateway actually serves it — the address is used as given.
+func validatePEPAddress(address string) error {
+	host, port, err := net.SplitHostPort(address)
+	if err != nil || host == "" || port == "" {
+		return fmt.Errorf("egress PEP address %q must be in the form <host>:<port>", address)
+	}
+	// ParsePort rejects sign prefixes ("+80") and out-of-range ports that
+	// SplitHostPort passes through unchecked.
+	if _, err := netutils.ParsePort(port, false); err != nil {
+		return fmt.Errorf("egress PEP address %q has an invalid port %q", address, port)
+	}
+	return nil
 }

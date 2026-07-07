@@ -37,6 +37,7 @@ func (s *Service) CreateAtespace(ctx context.Context, req *ateapipb.CreateAtespa
 		Metadata: &ateapipb.ResourceMetadata{
 			Name: name,
 		},
+		Labels: normalizeLabels(req.GetAtespace().GetLabels()),
 	}
 	stored, err := s.persistence.CreateAtespace(ctx, atespace)
 	if err != nil {
@@ -71,6 +72,8 @@ func validateCreateAtespaceRequest(req *ateapipb.CreateAtespaceRequest) error {
 		errs = append(errs, resources.ValidateResourceName(val, p)...)
 	}
 
+	errs = append(errs, validateLabels(atespace.GetLabels(), atespacePath.Child("labels"))...)
+	errs = append(errs, validateEgressPEPSelector(atespace.GetLabels(), atespacePath.Child("labels"))...)
 	if len(errs) > 0 {
 		return status.Error(codes.InvalidArgument, errs.ToAggregate().Error())
 	}
