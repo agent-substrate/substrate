@@ -33,7 +33,21 @@ func (s *Service) DeleteActor(ctx context.Context, req *ateapipb.DeleteActorRequ
 	}
 	setSpanActorRefAttributes(ctx, req.GetActor().GetAtespace(), req.GetActor().GetName())
 
-	deleted, err := s.persistence.DeleteActor(ctx, req.GetActor().GetAtespace(), req.GetActor().GetName())
+	atespace := req.GetActor().GetAtespace()
+	name := req.GetActor().GetName()
+
+	actor, err := s.persistence.GetActor(ctx, atespace, name)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, status.Errorf(codes.NotFound, "Actor %s not found", name)
+		}
+		return nil, fmt.Errorf("while fetching actor: %w", err)
+	}
+
+	// Delete associated volumes (TODO: best effort?)
+	s.deleteActorVolumes(ctx, req.GetActor(), actor.GetActorVolumes())
+
+	deleted, err := s.persistence.DeleteActor(ctx, atespace, name)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, status.Errorf(codes.NotFound, "Actor %s not found", req.GetActor().GetName())

@@ -114,6 +114,24 @@ message ResourceMetadata {
   google.protobuf.Timestamp update_time = 6;
 }
 
+message ExternalVolume {
+  // actor_id + the volume name specified in the actor template.
+  string actor_volume_id = 1;
+
+  // The volume_id returned from the storage system.
+  string storage_volume_id = 2;
+
+  // Internal volume plugin name or CSI driver name.
+  string volume_type = 3;
+
+  enum Status {
+    PROVISIONING = 0;
+    CREATED = 1;
+    DELETING = 2;
+  }
+  Status status = 4;
+}
+
 message Actor {
   // Common resource metadata: atespace, name, uid, version, timestamps.
   ResourceMetadata metadata = 1;
@@ -154,6 +172,10 @@ message Actor {
   // suspend/pause since eligibility is no longer a single fixed pool
   // reference on the ActorTemplate.
   string worker_pool_name = 12;
+
+  // Volumes attached to the actor. These volumes only live as long as the actor.
+  // They are deleted when the actor is deleted.
+  repeated ExternalVolume actor_volumes = 16;
 }
 
 // Atespace is the isolation boundary an Actor is created into. Global-scoped:

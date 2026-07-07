@@ -138,7 +138,10 @@ func (s *CallAteletPauseStep) Execute(ctx context.Context, input *PauseInput, st
 	}
 	client := ateletpb.NewAteomHerderClient(ateletConn)
 
-	workloadSpec := workloadSpecFromActorTemplate(state.ActorTemplate)
+	workloadSpec, err := workloadSpecFromActorTemplate(state.ActorTemplate, state.Actor)
+	if err != nil {
+		return err
+	}
 
 	// Checkpoint does not carry the sandbox config: atelet uses the version the
 	// actor is currently running (recorded on-node at Run/Restore) and pins it
@@ -165,6 +168,29 @@ func (s *CallAteletPauseStep) Execute(ctx context.Context, input *PauseInput, st
 }
 
 func (s *CallAteletPauseStep) RetryBackoff() *wait.Backoff { return nil }
+
+// TODO: There is no difference between suspend and pause for now, but we could optimize
+// pause by not detaching. We would need to make sure Resume is idempotent.
+type DetachVolumesForPauseStep struct {
+	store store.Interface
+}
+
+func (s *DetachVolumesForPauseStep) Name() string { return "DetachVolumesForPause" }
+
+func (s *DetachVolumesForPauseStep) IsComplete(ctx context.Context, input *PauseInput, state *PauseState) (bool, error) {
+	// TODO replace with a proper check on the volumes.
+	return state.Actor.GetStatus() == ateapipb.Actor_STATUS_PAUSED && state.Actor.GetAteomPodNamespace() == "", nil
+}
+
+func (s *DetachVolumesForPauseStep) CheckPrerequisite(ctx context.Context, input *PauseInput, state *PauseState) error {
+	return nil
+}
+
+func (s *DetachVolumesForPauseStep) Execute(ctx context.Context, input *PauseInput, state *PauseState) error {
+	return detachActorVolumes(ctx, s.store, state.Actor, state.ActorTemplate, "pause")
+}
+
+func (s *DetachVolumesForPauseStep) RetryBackoff() *wait.Backoff { return nil }
 
 type FinalizePausedStep struct {
 	store store.Interface

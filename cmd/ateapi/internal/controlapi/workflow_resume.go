@@ -260,6 +260,49 @@ func (s *AssignWorkerStep) RetryBackoff() *wait.Backoff {
 	}
 }
 
+type AttachVolumesStep struct {
+	store store.Interface
+}
+
+func (s *AttachVolumesStep) Name() string { return "AttachVolumes" }
+
+func (s *AttachVolumesStep) IsComplete(ctx context.Context, input *ResumeInput, state *ResumeState) (bool, error) {
+	// TODO replace with a proper check on the volumes.
+	return state.Actor.GetStatus() == ateapipb.Actor_STATUS_RUNNING, nil
+}
+
+func (s *AttachVolumesStep) CheckPrerequisite(ctx context.Context, input *ResumeInput, state *ResumeState) error {
+	return nil
+}
+
+func (s *AttachVolumesStep) Execute(ctx context.Context, input *ResumeInput, state *ResumeState) error {
+	if state.Actor.GetAteomPodNamespace() == "" {
+		return fmt.Errorf("actor has no assigned worker pod")
+	}
+
+	worker, err := s.store.GetWorker(ctx, state.Actor.GetAteomPodNamespace(), state.Actor.GetWorkerPoolName(), state.Actor.GetAteomPodName())
+	if err != nil {
+		return fmt.Errorf("failed to get worker for volume attachment: %w", err)
+	}
+
+	node := worker.GetNodeName()
+	if node == "" {
+		return fmt.Errorf("assigned worker has no node name")
+	}
+
+	ref := &ateapipb.ObjectRef{Atespace: state.Actor.GetMetadata().GetAtespace(), Name: state.Actor.GetMetadata().GetName()}
+	for _, vol := range getMountedActorVolumes(ctx, ref, state.Actor.GetActorVolumes(), state.ActorTemplate) {
+		slog.InfoContext(ctx, "Attaching volume to node", slog.String("volume_id", vol.GetStorageVolumeId()), slog.String("node", node))
+		err := getVolumePlugin().AttachVolume(ctx, vol.GetStorageVolumeId(), node)
+		if err != nil {
+			return fmt.Errorf("failed to attach volume %q to node %q: %w", vol.GetStorageVolumeId(), node, err)
+		}
+	}
+	return nil
+}
+
+func (s *AttachVolumesStep) RetryBackoff() *wait.Backoff { return nil }
+
 func (s *AssignWorkerStep) findFreeWorker(
 	workers []*ateapipb.Worker,
 	templateClass atev1alpha1.SandboxClass,
@@ -353,7 +396,7 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 	}
 	client := ateletpb.NewAteomHerderClient(ateletConn)
 
-	workloadSpec, err := workloadSpecFromActorTemplateWithEnv(ctx, s.kubeClient, s.secretCache, state.ActorTemplate)
+	workloadSpec, err := workloadSpecFromActorTemplateWithEnv(ctx, s.kubeClient, s.secretCache, state.ActorTemplate, state.Actor)
 	if err != nil {
 		return err
 	}

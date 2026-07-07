@@ -141,7 +141,10 @@ func (s *CallAteletSuspendStep) Execute(ctx context.Context, input *SuspendInput
 	}
 	client := ateletpb.NewAteomHerderClient(ateletConn)
 
-	workloadSpec := workloadSpecFromActorTemplate(state.ActorTemplate)
+	workloadSpec, err := workloadSpecFromActorTemplate(state.ActorTemplate, state.Actor)
+	if err != nil {
+		return err
+	}
 
 	// Checkpoint does not carry the sandbox config: atelet uses the version the
 	// actor is currently running (recorded on-node at Run/Restore) and pins it
@@ -168,6 +171,27 @@ func (s *CallAteletSuspendStep) Execute(ctx context.Context, input *SuspendInput
 }
 
 func (s *CallAteletSuspendStep) RetryBackoff() *wait.Backoff { return nil }
+
+type DetachVolumesStep struct {
+	store store.Interface
+}
+
+func (s *DetachVolumesStep) Name() string { return "DetachVolumes" }
+
+func (s *DetachVolumesStep) IsComplete(ctx context.Context, input *SuspendInput, state *SuspendState) (bool, error) {
+	// TODO replace with a proper check on the volumes.
+	return state.Actor.GetStatus() == ateapipb.Actor_STATUS_SUSPENDED && state.Actor.GetAteomPodNamespace() == "", nil
+}
+
+func (s *DetachVolumesStep) CheckPrerequisite(ctx context.Context, input *SuspendInput, state *SuspendState) error {
+	return nil
+}
+
+func (s *DetachVolumesStep) Execute(ctx context.Context, input *SuspendInput, state *SuspendState) error {
+	return detachActorVolumes(ctx, s.store, state.Actor, state.ActorTemplate, "suspend")
+}
+
+func (s *DetachVolumesStep) RetryBackoff() *wait.Backoff { return nil }
 
 type FinalizeSuspendedStep struct {
 	store store.Interface

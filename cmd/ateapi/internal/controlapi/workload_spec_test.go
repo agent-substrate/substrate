@@ -20,6 +20,7 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/go-cmp/cmp"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -196,7 +197,10 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := workloadSpecFromActorTemplate(tt.template)
+			got, err := workloadSpecFromActorTemplate(tt.template, nil)
+			if err != nil {
+				t.Fatalf("workloadSpecFromActorTemplate failed: %v", err)
+			}
 			if diff := cmp.Diff(tt.want, got, protocmp.Transform()); diff != "" {
 				t.Errorf("WorkloadSpec mismatch (-want +got):\n%s", diff)
 			}
@@ -328,7 +332,7 @@ func TestWorkloadSpecFromActorTemplateWithEnv(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			kubeClient := fake.NewSimpleClientset(tt.secrets...)
-			got, err := workloadSpecFromActorTemplateWithEnv(context.Background(), kubeClient, nil, tt.template)
+			got, err := workloadSpecFromActorTemplateWithEnv(context.Background(), kubeClient, nil, tt.template, nil)
 			if tt.wantErrCode != codes.OK {
 				if status.Code(err) != tt.wantErrCode {
 					t.Fatalf("error code = %v, want %v: %v", status.Code(err), tt.wantErrCode, err)
@@ -346,7 +350,7 @@ func TestWorkloadSpecFromActorTemplateWithEnv(t *testing.T) {
 }
 
 func TestWorkloadSpecFromActorTemplatePropagatesReadyz(t *testing.T) {
-	got := workloadSpecFromActorTemplate(&atev1alpha1.ActorTemplate{
+	got, err := workloadSpecFromActorTemplate(&atev1alpha1.ActorTemplate{
 		ObjectMeta: metav1.ObjectMeta{Name: "tmpl-readyz", Namespace: "agent-ns"},
 		Spec: atev1alpha1.ActorTemplateSpec{
 			Containers: []atev1alpha1.Container{
@@ -363,7 +367,10 @@ func TestWorkloadSpecFromActorTemplatePropagatesReadyz(t *testing.T) {
 				},
 			},
 		},
-	})
+	}, nil)
+	if err != nil {
+		t.Fatalf("workloadSpecFromActorTemplate failed: %v", err)
+	}
 
 	want := &ateletpb.WorkloadSpec{
 		Containers: []*ateletpb.Container{
@@ -425,10 +432,10 @@ func TestWorkloadSpecFromActorTemplateWithEnvCachesSecretsAcrossCalls(t *testing
 		},
 	}
 
-	if _, err := workloadSpecFromActorTemplateWithEnv(ctx, kubeClient, secretCache, actorTemplate); err != nil {
+	if _, err := workloadSpecFromActorTemplateWithEnv(ctx, kubeClient, secretCache, actorTemplate, nil); err != nil {
 		t.Fatalf("first workloadSpecFromActorTemplateWithEnv failed: %v", err)
 	}
-	if _, err := workloadSpecFromActorTemplateWithEnv(ctx, kubeClient, secretCache, actorTemplate); err != nil {
+	if _, err := workloadSpecFromActorTemplateWithEnv(ctx, kubeClient, secretCache, actorTemplate, nil); err != nil {
 		t.Fatalf("second workloadSpecFromActorTemplateWithEnv failed: %v", err)
 	}
 	if got := secretGetCount(kubeClient); got != 1 {
@@ -436,7 +443,7 @@ func TestWorkloadSpecFromActorTemplateWithEnvCachesSecretsAcrossCalls(t *testing
 	}
 
 	expireSecretCache(secretCache)
-	if _, err := workloadSpecFromActorTemplateWithEnv(ctx, kubeClient, secretCache, actorTemplate); err != nil {
+	if _, err := workloadSpecFromActorTemplateWithEnv(ctx, kubeClient, secretCache, actorTemplate, nil); err != nil {
 		t.Fatalf("third workloadSpecFromActorTemplateWithEnv failed: %v", err)
 	}
 	if got := secretGetCount(kubeClient); got != 2 {
@@ -462,4 +469,93 @@ func secretGetCount(kubeClient *fake.Clientset) int {
 		}
 	}
 	return count
+}
+
+func TestAppendExternalVolumes(t *testing.T) {
+	template := &atev1alpha1.ActorTemplate{
+		Spec: atev1alpha1.ActorTemplateSpec{
+			Containers: []atev1alpha1.Container{
+				{
+					Name: "main",
+					VolumeMounts: []atev1alpha1.VolumeMount{
+						{Name: "vol-1", MountPath: "/mnt/vol1"},
+					},
+				},
+			},
+			Volumes: []atev1alpha1.Volume{
+				{
+					Name: "vol-1",
+					VolumeSource: atev1alpha1.VolumeSource{
+						ExternalVolumeTemplate: &atev1alpha1.ExternalVolumeTemplate{
+							StorageClassName: "pd-standard",
+						},
+					},
+				},
+				{
+					Name: "vol-2",
+					VolumeSource: atev1alpha1.VolumeSource{
+						DurableDir: &atev1alpha1.DurableDirVolumeSource{},
+					},
+				},
+				{
+					Name: "unmounted-vol",
+					VolumeSource: atev1alpha1.VolumeSource{
+						ExternalVolumeTemplate: &atev1alpha1.ExternalVolumeTemplate{
+							StorageClassName: "pd-standard",
+						},
+					},
+				},
+			},
+		},
+	}
+
+	actor := &ateapipb.Actor{
+		Metadata: &ateapipb.ResourceMetadata{
+			Atespace: "space-abc",
+			Name:     "actor-123",
+		},
+		ActorVolumes: []*ateapipb.ExternalVolume{
+			{
+				ActorVolumeId:   "space-abc-actor-123-vol-1",
+				StorageVolumeId: "vol-gce-pd-123",
+				VolumeType:      "pd-standard",
+			},
+		},
+	}
+
+	workloadSpec := &ateletpb.WorkloadSpec{}
+	if err := appendExternalVolumes(workloadSpec, template, actor); err != nil {
+		t.Fatalf("appendExternalVolumes unexpected error: %v", err)
+	}
+
+	want := &ateletpb.WorkloadSpec{
+		Volumes: []*ateletpb.Volume{
+			{
+				Name: "vol-1",
+				Type: ateletpb.VolumeType_VOLUME_TYPE_EXTERNAL,
+				Source: &ateletpb.Volume_External{
+					External: &ateletpb.ExternalVolumeSource{
+						StorageVolumeId: "vol-gce-pd-123",
+						VolumeType:      "pd-standard",
+					},
+				},
+			},
+		},
+	}
+
+	if diff := cmp.Diff(want, workloadSpec, protocmp.Transform()); diff != "" {
+		t.Errorf("appendExternalVolumes mismatch (-want +got):\n%s", diff)
+	}
+
+	// Test missing mounted volume returns an error
+	missingActor := &ateapipb.Actor{
+		Metadata: &ateapipb.ResourceMetadata{
+			Atespace: "space-abc",
+			Name:     "actor-123",
+		},
+		ActorVolumes: []*ateapipb.ExternalVolume{},
+	}
+	if err := appendExternalVolumes(&ateletpb.WorkloadSpec{}, template, missingActor); err == nil {
+		t.Errorf("appendExternalVolumes expected error for missing volume, got nil")
+	}
 }
