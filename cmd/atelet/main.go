@@ -216,7 +216,7 @@ func NewService(
 	return wms
 }
 
-func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (*ateletpb.RunResponse, error) {
+func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *ateletpb.RunResponse, err error) {
 	if err := validateRunRequest(req); err != nil {
 		// status.Error so the interceptor surfaces InvalidArgument and the
 		// message instead of masking both as Internal.
@@ -237,6 +237,16 @@ func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (*atele
 	if err := resetActorDirs(actorUID); err != nil {
 		return nil, fmt.Errorf("while resetting actor dirs: %w", err)
 	}
+
+	if err := s.mountExternalVolumes(ctx, actorUID, req.GetSpec().GetVolumes()); err != nil {
+		return nil, err
+	}
+	defer func() {
+		if err != nil {
+			// TODO cleanup orphaned volumes
+			_ = s.unmountExternalVolumes(ctx, actorUID, req.GetSpec().GetVolumes())
+		}
+	}()
 
 	// Record the sandbox binaries this actor is running so a later Checkpoint
 	// (whose request no longer carries the sandbox config) can re-fetch the same
@@ -356,6 +366,7 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 		// in the metadata if the error is not retriable.
 		return nil, fmt.Errorf("while calling ateom.CheckpointWorkload: %w", err)
 	}
+
 	sandboxRec.SnapshotFiles = resp.GetSnapshotFiles()
 	if len(sandboxRec.SnapshotFiles) == 0 {
 		return nil, ateerrors.NewGRPCError(ctx, codes.DataLoss, ateerrors.ReasonInvalidCheckpointResult, ateerrors.ActorCrashedMetadata(), errors.New("ateom reported no snapshot files for checkpoint"))
@@ -374,6 +385,9 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 	default:
 		return nil, fmt.Errorf("unexpected checkpoint type: %v", req.GetType())
 	}
+
+	// TODO cleanup orphaned volumes
+	_ = s.unmountExternalVolumes(ctx, actorUID, req.GetSpec().GetVolumes())
 
 	// Note: we do not crash the actor if resetting the directory fails.
 	if err := resetActorDirs(actorUID); err != nil {
@@ -455,7 +469,7 @@ func (s *AteomHerder) uploadExternalCheckpoint(ctx context.Context, req *ateletp
 	return nil
 }
 
-func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (*ateletpb.RestoreResponse, error) {
+func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest) (resp *ateletpb.RestoreResponse, err error) {
 	if err := validateRestoreRequest(req); err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
@@ -467,6 +481,16 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	if err := resetActorDirs(actorUID); err != nil {
 		return nil, fmt.Errorf("while resetting actor dirs: %w", err)
 	}
+
+	if err := s.mountExternalVolumes(ctx, actorUID, req.GetSpec().GetVolumes()); err != nil {
+		return nil, err
+	}
+	defer func() {
+		if err != nil {
+			// TODO cleanup orphaned mounts
+			_ = s.unmountExternalVolumes(ctx, actorUID, req.GetSpec().GetVolumes())
+		}
+	}()
 
 	checkpointDir := ateompath.RestoreStateDir(actorUID)
 
@@ -665,12 +689,9 @@ func (s *AteomHerder) prepareOCIBundles(
 	if err := writeFileAtomic(filepath.Join(identityDir, ActorIDFileName), []byte(actorName), 0o644); err != nil {
 		return fmt.Errorf("while writing actor identity file: %w", err)
 	}
-
-	ddVolumes := make(map[string]bool)
 	// make directories for all durable-dir volumes
 	for _, vol := range spec.GetVolumes() {
 		if vol.GetType() == ateletpb.VolumeType_VOLUME_TYPE_DURABLE_DIR {
-			ddVolumes[vol.GetName()] = true
 			volPath := ateompath.DurableDirVolumeMountPoint(actorUID, vol.GetName())
 			if err := os.MkdirAll(volPath, 0o700); err != nil {
 				return fmt.Errorf("while creating %q: %w", volPath, err)
@@ -709,6 +730,7 @@ func (s *AteomHerder) prepareOCIBundles(
 			ateompath.AteomNetNSPath(targetAteomUid),
 			"", // pause is sandbox infra; it gets no actor identity mount.
 			nil,
+			nil,
 		); err != nil {
 			return wrapFileSystemErr("while creating pause OCI bundle", err)
 		}
@@ -721,12 +743,6 @@ func (s *AteomHerder) prepareOCIBundles(
 		var envs []string
 		for _, env := range ctr.GetEnv() {
 			envs = append(envs, fmt.Sprintf("%s=%s", env.GetName(), env.GetValue()))
-		}
-		var ddMounts []*ateletpb.VolumeMount
-		for _, vm := range ctr.GetVolumeMounts() {
-			if ddVolumes[vm.GetName()] {
-				ddMounts = append(ddMounts, vm)
-			}
 		}
 		g.Go(func() error {
 			if err := prepareOCIDirectory(
@@ -745,7 +761,8 @@ func (s *AteomHerder) prepareOCIBundles(
 				},
 				ateompath.AteomNetNSPath(targetAteomUid),
 				identityDir,
-				ddMounts,
+				spec.GetVolumes(),
+				ctr.GetVolumeMounts(),
 			); err != nil {
 				return wrapFileSystemErr(fmt.Sprintf("while creating %q OCI bundle", ctr.GetName()), err)
 			}
@@ -1075,6 +1092,23 @@ func resetActorDirs(actorUID string) error {
 	}
 	if err := os.MkdirAll(durableDirVolumesMountDir, 0o755); err != nil {
 		return wrapFileSystemErr("while creating durable-dir volumes mount dir: %w", err)
+	}
+
+	// Do not call RemoveAll on volume directories in case the unmount failed.
+	// We do not want to delete mount content.
+	volumesDir := ateompath.VolumesDir(actorUID)
+	entries, err := os.ReadDir(volumesDir)
+	if err != nil && !os.IsNotExist(err) {
+		return wrapFileSystemErr("while reading volumes dir: %w", err)
+	}
+	for _, entry := range entries {
+		volPath := filepath.Join(volumesDir, entry.Name())
+		if err := os.Remove(volPath); err != nil {
+			return wrapFileSystemErr("while removing volume dir: %w", err)
+		}
+	}
+	if err := os.MkdirAll(volumesDir, 0o755); err != nil {
+		return wrapFileSystemErr("while creating volumes dir: %w", err)
 	}
 
 	return nil
