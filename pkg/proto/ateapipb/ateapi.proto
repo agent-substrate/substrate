@@ -36,10 +36,9 @@
 //   - ABORTED:             version guard mismatch (client echoed a non-zero
 //                          meta.version / request version that is stale).
 //   - FAILED_PRECONDITION: referential-integrity or state-machine
-//                          violations (delete a referenced template/pool,
+//                          violations (delete a referenced template/worker,
 //                          delete a non-empty atespace, resume a
-//                          non-suspended actor, second default
-//                          SandboxConfig, ...).
+//                          non-suspended actor, ...).
 
 syntax = "proto3";
 
@@ -76,9 +75,8 @@ service Control {
 
   // --- ActorTemplate (atespace-scoped, immutable spec: no Update) ---
 
-  // Create an ActorTemplate. The spec is immutable after creation: golden
-  // snapshots are only valid for the exact spec they were taken from. To
-  // change a template, create a new one and migrate actors.
+  // Create an ActorTemplate. The spec is immutable after creation: to change
+  // a template, create a new one and migrate actors.
   rpc CreateActorTemplate(CreateActorTemplateRequest) returns (ActorTemplate) {}
 
   // Get an ActorTemplate.
@@ -125,74 +123,32 @@ service Control {
   rpc ResumeActor(ResumeActorRequest) returns (Actor) {}
 }
 
-// Admin is the platform-plane API: capacity (worker pools), sandbox
-// configuration, and cross-atespace access control (grants). Intended for
-// platform operators, not tenants.
+// Admin is the platform-plane API: worker capacity and debug surfaces.
+// Intended for platform operators and worker providers, not tenants.
 service Admin {
-  // --- WorkerPool (global-scoped) ---
+  // --- Worker (global-scoped) ---
 
-  // Create a WorkerPool.
-  rpc CreateWorkerPool(CreateWorkerPoolRequest) returns (WorkerPool) {}
+  // Create a Worker. Worker providers call this when capacity becomes
+  // available to substrate.
+  rpc CreateWorker(CreateWorkerRequest) returns (Worker) {}
 
-  // Get a WorkerPool.
-  rpc GetWorkerPool(GetWorkerPoolRequest) returns (WorkerPool) {}
+  // Get a Worker.
+  rpc GetWorker(GetWorkerRequest) returns (Worker) {}
 
-  // List WorkerPools.
-  rpc ListWorkerPools(ListWorkerPoolsRequest) returns (ListWorkerPoolsResponse) {}
-
-  // Update a WorkerPool.
-  rpc UpdateWorkerPool(UpdateWorkerPoolRequest) returns (WorkerPool) {}
-
-  // Delete a WorkerPool.
-  // Returns FAILED_PRECONDITION while any WorkerPoolGrant references it or
-  // any actor is currently assigned a worker from it.
-  rpc DeleteWorkerPool(DeleteWorkerPoolRequest) returns (WorkerPool) {}
-
-  // Watch WorkerPool changes after an initial snapshot of current state.
-  // Same delivery semantics as WatchActorTemplates.
-  rpc WatchWorkerPools(WatchWorkerPoolsRequest) returns (stream WatchWorkerPoolsResponse) {}
-
-  // --- SandboxConfig (global-scoped) ---
-
-  // Create a SandboxConfig. At most one SandboxConfig may set
-  // spec.default=true; violating this returns FAILED_PRECONDITION.
-  rpc CreateSandboxConfig(CreateSandboxConfigRequest) returns (SandboxConfig) {}
-
-  // Get a SandboxConfig.
-  rpc GetSandboxConfig(GetSandboxConfigRequest) returns (SandboxConfig) {}
-
-  // List SandboxConfigs.
-  rpc ListSandboxConfigs(ListSandboxConfigsRequest) returns (ListSandboxConfigsResponse) {}
-
-  // Update a SandboxConfig.
-  rpc UpdateSandboxConfig(UpdateSandboxConfigRequest) returns (SandboxConfig) {}
-
-  // Delete a SandboxConfig.
-  // Returns FAILED_PRECONDITION while any WorkerPool references it.
-  rpc DeleteSandboxConfig(DeleteSandboxConfigRequest) returns (SandboxConfig) {}
-
-  // --- WorkerPoolGrant (atespace-scoped, immutable) ---
-
-  // Grant an atespace access to a worker pool. At most one grant may
-  // exist per (atespace, worker_pool) pair; a second grant for the same
-  // pool returns ALREADY_EXISTS regardless of its name.
-  rpc CreateWorkerPoolGrant(CreateWorkerPoolGrantRequest) returns (WorkerPoolGrant) {}
-
-  // Get a WorkerPoolGrant.
-  rpc GetWorkerPoolGrant(GetWorkerPoolGrantRequest) returns (WorkerPoolGrant) {}
-
-  // List WorkerPoolGrants, optionally scoped to one atespace.
-  rpc ListWorkerPoolGrants(ListWorkerPoolGrantsRequest) returns (ListWorkerPoolGrantsResponse) {}
-
-  // Revoke (delete) a WorkerPoolGrant. Existing assignments are not
-  // interrupted; the grant is checked at scheduling time.
-  rpc DeleteWorkerPoolGrant(DeleteWorkerPoolGrantRequest) returns (WorkerPoolGrant) {}
-
-  // --- Debug / introspection ---
-
-  // List all workers currently reflected in the store. Debug surface:
-  // exposes infrastructure detail and is not a managed resource API.
+  // List Workers.
   rpc ListWorkers(ListWorkersRequest) returns (ListWorkersResponse) {}
+
+  // Update mutable Worker fields. Worker providers may use this for
+  // heartbeat-style status updates.
+  rpc UpdateWorker(UpdateWorkerRequest) returns (Worker) {}
+
+  // Delete a Worker. Returns FAILED_PRECONDITION while any actor is assigned
+  // to it.
+  rpc DeleteWorker(DeleteWorkerRequest) returns (Worker) {}
+
+  // Watch Worker changes after an initial snapshot of current state.
+  // Same delivery semantics as WatchActorTemplates.
+  rpc WatchWorkers(WatchWorkersRequest) returns (stream WatchWorkersResponse) {}
 
   // Debugging: drop all data from the ate database.
   rpc DebugClear(DebugClearRequest) returns (DebugClearResponse) {}
@@ -207,8 +163,8 @@ service Admin {
 // See docs/api-style-guide.md section 6.
 message ResourceMetadata {
   // The atespace this resource belongs to. Must be empty for global-scoped
-  // resource types (Atespace, WorkerPool, SandboxConfig) and set for
-  // atespace-scoped types (Actor, ActorTemplate, WorkerPoolGrant).
+  // resource types (Atespace, Worker) and set for atespace-scoped types
+  // (Actor, ActorTemplate).
   string atespace = 1;
 
   // The name of this resource, unique within its scope. Must be a valid
@@ -231,9 +187,9 @@ message ResourceMetadata {
   google.protobuf.Timestamp update_time = 6;
 
   // labels are user-defined key/value pairs used for organization and
-  // selection. WorkerPool labels are matched by template and actor
-  // worker_selectors at scheduling time. Mutable on resources that
-  // support Update. (Not yet in the draft style guide's ResourceMetadata.)
+  // selection. Worker labels are matched by template and actor
+  // worker_selectors at scheduling time. Mutable on resources that support
+  // Update. (Not yet in the draft style guide's ResourceMetadata.)
   map<string, string> labels = 7;
 }
 
@@ -245,9 +201,9 @@ message ObjectRef {
   string name     = 2;
 }
 
-// Selector matches worker pools by their meta.labels.
+// Selector matches workers by their meta.labels.
 // Only equality-based matching is supported (all pairs must match).
-// An empty selector matches every pool.
+// An empty selector matches every worker.
 message Selector {
   map<string, string> match_labels = 1;
 }
@@ -352,26 +308,17 @@ message Actor {
 
   // worker_selector is the per-actor placement constraint. The scheduler
   // evaluates the AND of this selector and the template's worker_selector
-  // to find eligible pools. Set at CreateActor; mutable via UpdateActor.
+  // to find eligible workers. Set at CreateActor; mutable via UpdateActor.
   // Changes take effect on the next ResumeActor call.
   Selector worker_selector = 4;
 
-  // The WorkerPool that owns the currently assigned worker. Output-only:
-  // set by the scheduler at assignment time, cleared when the worker is
-  // freed on suspend/pause.
-  ObjectRef worker_pool = 5;
+  // The currently assigned Worker. Output-only: set by the scheduler at
+  // assignment time, cleared when the worker is freed on suspend/pause.
+  ObjectRef worker = 5;
 
   // Output-only snapshot bookkeeping.
   string in_progress_snapshot = 6;
   SnapshotInfo latest_snapshot_info = 7;
-
-  // Output-only infrastructure debugging fields describing the Kubernetes
-  // pod currently backing this actor. Not part of the portable resource
-  // model; may be moved to a debug-only surface in a future version.
-  string ateom_pod_namespace = 8;
-  string ateom_pod_name      = 9;
-  string ateom_pod_ip        = 10;
-  string ateom_pod_uid       = 11;
 }
 
 message CreateActorRequest {
@@ -426,7 +373,8 @@ message PauseActorRequest {
 message ResumeActorRequest {
   ObjectRef actor = 1;
 
-  // If true, skip the golden snapshot and boot the workload from scratch.
+  // If true, boot the workload from scratch. Process snapshots, including
+  // golden snapshots, are deferred from the P0 API.
   bool boot = 2;
 }
 
@@ -435,8 +383,7 @@ message ResumeActorRequest {
 // ---------------------------------------------------------------------------
 
 // ActorTemplate defines the workload actors are stamped from.
-// Atespace-scoped. The spec is immutable after creation (golden snapshots
-// are only valid for the exact spec they were taken from), so there is no
+// Atespace-scoped. The spec is immutable after creation, so there is no
 // UpdateActorTemplate method: create a new template instead.
 message ActorTemplate {
   ResourceMetadata meta = 1;
@@ -455,13 +402,12 @@ message ActorTemplateSpec {
   SnapshotsConfig snapshots_config = 3;
 
   // The sandbox class this workload requires. Matched against
-  // WorkerPoolSpec.sandbox_class at scheduling time. Open string: the set
-  // of classes is defined by the SandboxConfigs installed by the platform
-  // operator.
+  // WorkerSpec.sandbox_class at scheduling time. Open string: providers are
+  // responsible for creating workers that advertise accurate classes.
   string sandbox_class = 4;
 
-  // Restricts which worker pools actors from this template may be placed
-  // on. ANDed with the per-actor worker_selector.
+  // Restricts which workers actors from this template may be placed on. ANDed
+  // with the per-actor worker_selector.
   Selector worker_selector = 5;
 
   repeated Volume volumes = 6;
@@ -469,32 +415,24 @@ message ActorTemplateSpec {
 
 message ActorTemplateStatus {
   enum State {
-    STATE_UNSPECIFIED  = 0;
-    // Waiting for a golden snapshot to be scheduled.
-    STATE_PENDING      = 1;
-    // The golden snapshot is being taken.
-    STATE_SNAPSHOTTING = 2;
-    // Golden snapshot exists; actors can be created from this template.
-    STATE_READY        = 3;
-    // Golden snapshotting failed; see error_message.
-    STATE_FAILED       = 4;
+    STATE_UNSPECIFIED = 0;
+    // Waiting for validation or required provider state.
+    STATE_PENDING     = 1;
+    // Actors can be created from this template.
+    STATE_READY       = 2;
+    // Template validation failed; see error_message.
+    STATE_FAILED      = 3;
   }
   State state = 1;
 
-  // The golden actor used to produce the golden snapshot.
-  string golden_actor_id = 2;
-
-  // URI prefix of the golden snapshot, once taken.
-  string golden_snapshot = 3;
-
   // Human-readable failure detail when state is FAILED.
-  string error_message = 4;
+  string error_message = 2;
 }
 
 message Container {
   string name = 1;
-  // Must be pinned by digest (image@sha256:...) so that golden snapshots
-  // cannot drift from the running image.
+  // Must be pinned by digest (image@sha256:...) so actor starts are
+  // reproducible.
   string image = 2;
   repeated string command = 3;
   repeated EnvVar env = 4;
@@ -553,8 +491,9 @@ message VolumeMount {
 message SnapshotsConfig {
   enum Scope {
     SCOPE_UNSPECIFIED = 0;
-    // Snapshot the full sandbox state (memory + filesystem).
-    SCOPE_FULL        = 1;
+    // Deprecated for P0: process snapshots imply runtime/version/hardware
+    // compatibility constraints that are intentionally deferred.
+    SCOPE_FULL        = 1 [deprecated = true];
     // Snapshot durable data only.
     SCOPE_DATA        = 2;
   }
@@ -603,292 +542,109 @@ message WatchActorTemplatesResponse {
 }
 
 // ---------------------------------------------------------------------------
-// WorkerPool
+// Worker
 // ---------------------------------------------------------------------------
 
-// WorkerPool declares a pool of ready workers that actors are multiplexed
-// onto. Global-scoped: pools are platform capacity, shared across
-// atespaces via WorkerPoolGrants. meta.labels are the match target for
-// template/actor worker_selectors.
-message WorkerPool {
-  ResourceMetadata meta = 1;
-  WorkerPoolSpec spec = 2;
-  // Output-only.
-  WorkerPoolStatus status = 3;
-}
-
-message WorkerPoolSpec {
-  // Desired number of ready workers.
-  int32 replicas = 1;
-
-  // Image of the ateom management container run in each worker.
-  string ateom_image = 2;
-
-  // The sandbox class workers in this pool provide. Matched against
-  // ActorTemplateSpec.sandbox_class at scheduling time.
-  string sandbox_class = 3;
-
-  // The SandboxConfig applied to workers in this pool (global-scoped
-  // reference: atespace must be empty).
-  ObjectRef sandbox_config = 4;
-
-  // How the pool is materialized on Kubernetes. This is the single,
-  // clearly-marked pocket of Kubernetes-specific configuration in the
-  // substrate API; everything outside it is plane-neutral. A future
-  // non-k8s substrate would add a sibling placement message.
-  KubernetesPlacement kubernetes = 5;
-}
-
-message WorkerPoolStatus {
-  // Number of workers currently backing the pool.
-  int32 replicas = 1;
-}
-
-// KubernetesPlacement configures how backing worker pods are placed on a
-// Kubernetes cluster. Messages below mirror k8s.io/api/core/v1 verbatim
-// and are quarantined to this pocket.
-message KubernetesPlacement {
-  // Kubernetes namespace the backing Deployment/pods are created in.
-  // (The POC called this deployment_atespace; it is and always was a
-  // Kubernetes namespace, so it is named honestly here.)
-  string namespace = 1;
-
-  map<string, string> node_selector = 2;
-  repeated Toleration tolerations = 3;
-  NodeAffinity node_affinity = 4;
-  ResourceRequirements resources = 5;
-  string priority_class_name = 6;
-}
-
-message Toleration {
-  string key = 1;
-  string operator = 2;
-  string value = 3;
-  string effect = 4;
-  optional int64 toleration_seconds = 5;
-}
-
-message NodeAffinity {
-  NodeSelector required_during_scheduling_ignored_during_execution = 1;
-  repeated PreferredSchedulingTerm preferred_during_scheduling_ignored_during_execution = 2;
-}
-
-message NodeSelector {
-  repeated NodeSelectorTerm node_selector_terms = 1;
-}
-
-message PreferredSchedulingTerm {
-  int32 weight = 1;
-  NodeSelectorTerm preference = 2;
-}
-
-message NodeSelectorTerm {
-  repeated NodeSelectorRequirement match_expressions = 1;
-  repeated NodeSelectorRequirement match_fields = 2;
-}
-
-message NodeSelectorRequirement {
-  string key = 1;
-  string operator = 2;
-  repeated string values = 3;
-}
-
-message ResourceRequirements {
-  map<string, string> limits = 1;
-  map<string, string> requests = 2;
-}
-
-message CreateWorkerPoolRequest {
-  WorkerPool worker_pool = 1;
-}
-
-message GetWorkerPoolRequest {
-  ObjectRef worker_pool = 1;
-}
-
-message ListWorkerPoolsRequest {
-  int32 page_size = 1;
-  string page_token = 2;
-}
-message ListWorkerPoolsResponse {
-  repeated WorkerPool worker_pools = 1;
-  string next_page_token = 2;
-}
-
-message UpdateWorkerPoolRequest {
-  // worker_pool.meta.name identifies the resource; a non-zero
-  // worker_pool.meta.version acts as a freshness guard.
-  WorkerPool worker_pool = 1;
-
-  // Required. Top-level field paths only (e.g. "spec.replicas",
-  // "spec.kubernetes", "meta.labels"); naming a message or map field
-  // replaces that field wholesale. Unknown or immutable paths return
-  // INVALID_ARGUMENT.
-  google.protobuf.FieldMask update_mask = 2;
-}
-
-message DeleteWorkerPoolRequest {
-  ObjectRef worker_pool = 1;
-  // Optional freshness guard; 0 = skip check.
-  int64 version = 2;
-}
-
-message WatchWorkerPoolsRequest {}
-message WatchWorkerPoolsResponse {
-  ResourceEventType type = 1;
-  // Unset when type is SYNCED.
-  WorkerPool worker_pool = 2;
-}
-
-// ---------------------------------------------------------------------------
-// SandboxConfig
-// ---------------------------------------------------------------------------
-
-// SandboxConfig defines a sandbox class: the runtime assets and settings
-// workers of that class are provisioned with. Global-scoped. The set of
-// SandboxConfigs is the de-facto registry of valid sandbox_class values.
-message SandboxConfig {
-  ResourceMetadata meta = 1;
-  SandboxConfigSpec spec = 2;
-}
-
-message SandboxConfigSpec {
-  // The sandbox class this config defines.
-  string sandbox_class = 1;
-
-  // If true, this config is applied to pools that do not name one
-  // explicitly. At most one SandboxConfig may be default.
-  bool default = 2;
-
-  // Assets provisioned into the sandbox, keyed by asset group name.
-  map<string, SandboxAssetFiles> assets = 3;
-}
-
-message SandboxAssetFiles {
-  // Files keyed by destination path.
-  map<string, AssetFile> files = 1;
-}
-
-message AssetFile {
-  string url = 1;
-  string sha256 = 2;
-}
-
-message CreateSandboxConfigRequest {
-  SandboxConfig sandbox_config = 1;
-}
-
-message GetSandboxConfigRequest {
-  ObjectRef sandbox_config = 1;
-}
-
-message ListSandboxConfigsRequest {
-  int32 page_size = 1;
-  string page_token = 2;
-}
-message ListSandboxConfigsResponse {
-  repeated SandboxConfig sandbox_configs = 1;
-  string next_page_token = 2;
-}
-
-message UpdateSandboxConfigRequest {
-  SandboxConfig sandbox_config = 1;
-
-  // Required. Same path semantics as UpdateWorkerPoolRequest.update_mask
-  // (e.g. "spec.assets" replaces the whole assets map).
-  google.protobuf.FieldMask update_mask = 2;
-}
-
-message DeleteSandboxConfigRequest {
-  ObjectRef sandbox_config = 1;
-  // Optional freshness guard; 0 = skip check.
-  int64 version = 2;
-}
-
-// ---------------------------------------------------------------------------
-// WorkerPoolGrant
-// ---------------------------------------------------------------------------
-
-// WorkerPoolGrant is the explicit admission edge between tenant demand and
-// platform capacity: selectors decide whether a pool matches an actor, grants
-// decide whether an atespace may use that pool. Keeping this as its own
-// resource avoids embedding tenant allow-lists in global WorkerPools or
-// duplicating access on every ActorTemplate, and gives admins a small object
-// to audit and revoke.
-// If WorkerPools become atespace-scoped, ownership would already define
-// scheduling access and this resource would no longer be needed.
-//
-// At most one grant may exist per (atespace, worker_pool) pair: Create
-// returns ALREADY_EXISTS for a duplicate pair regardless of the grant's name,
-// so revocation is always unambiguous.
-//
-// Grants are immutable (no Update). Future per-grant policy fields (e.g.
-// quotas) would make them mutable and add an Update method.
-message WorkerPoolGrant {
-  ResourceMetadata meta = 1;
-
-  // The worker pool being granted (global-scoped reference: atespace must
-  // be empty). Required on Create; immutable.
-  ObjectRef worker_pool = 2;
-}
-
-message CreateWorkerPoolGrantRequest {
-  WorkerPoolGrant worker_pool_grant = 1;
-}
-
-message GetWorkerPoolGrantRequest {
-  ObjectRef worker_pool_grant = 1;
-}
-
-message ListWorkerPoolGrantsRequest {
-  // The atespace to list grants from. Empty lists across all atespaces.
-  string atespace = 1;
-  int32 page_size = 2;
-  string page_token = 3;
-}
-message ListWorkerPoolGrantsResponse {
-  repeated WorkerPoolGrant worker_pool_grants = 1;
-  string next_page_token = 2;
-}
-
-message DeleteWorkerPoolGrantRequest {
-  ObjectRef worker_pool_grant = 1;
-  // Optional freshness guard; 0 = skip check.
-  int64 version = 2;
-}
-
-// ---------------------------------------------------------------------------
-// Worker (debug projection, not a managed resource)
-// ---------------------------------------------------------------------------
-
-// Worker is a read-only projection of a worker pod's state in the store.
-// It is not a managed resource (no ResourceMetadata, no CRUD): it exists
-// for operator debugging via ListWorkers and intentionally exposes
-// infrastructure detail.
+// Worker is the substrate scheduling primitive. Worker providers create and
+// maintain Workers; substrate schedules Actors onto Workers by matching
+// Actor/ActorTemplate requirements against Worker labels, sandbox_class, and
+// readiness/capacity.
 message Worker {
-  string worker_namespace = 1;
-  string worker_pool      = 2;
-  string worker_pod       = 3;
-
-  string actor_atespace  = 4;
-  string actor_template  = 5;
-  string actor_id        = 6;
-  string ip              = 7;
-  int64  version         = 8;
-  string worker_pod_uid  = 9;
-  string node_name       = 10;
+  ResourceMetadata meta = 1;
+  WorkerSpec spec = 2;
+  // Output/status from the worker provider.
+  WorkerStatus status = 3;
 }
 
-message ListWorkersRequest {}
+message WorkerSpec {
+  // Provider that owns this Worker, e.g. "kubernetes", "vm", or "local".
+  string provider = 1;
+
+  // Provider-local identity for debug/correlation. For Kubernetes this may be
+  // a Pod UID or namespace/name. Not part of the substrate resource key.
+  string provider_id = 2;
+
+  // Routable ateom endpoint for this Worker.
+  string address = 3;
+
+  // Runtime compatibility class this Worker provides. Matched against
+  // ActorTemplateSpec.sandbox_class at scheduling time. This is scalar for P0;
+  // it can be extended to repeated sandbox classes if workers need to
+  // advertise multiple compatible runtimes.
+  string sandbox_class = 4;
+}
+
+message WorkerStatus {
+  enum State {
+    STATE_UNSPECIFIED = 0;
+    // Worker can accept actor assignments.
+    STATE_READY       = 1;
+    // Worker exists but should not receive new assignments.
+    STATE_NOT_READY   = 2;
+    // Worker is intentionally draining and should not receive new assignments.
+    STATE_DRAINING    = 3;
+  }
+
+  State state = 1;
+
+  // Capacity reported by the worker provider.
+  int32 slots_total = 2;
+  int32 slots_available = 3;
+
+  // Human-readable status detail.
+  string message = 4;
+
+  // Last successful provider heartbeat/update time. Output-only.
+  google.protobuf.Timestamp last_heartbeat_time = 5;
+}
+
+message CreateWorkerRequest {
+  // worker.meta.name is required; worker.meta.atespace must be empty.
+  Worker worker = 1;
+}
+
+message GetWorkerRequest {
+  ObjectRef worker = 1;
+}
+
+message ListWorkersRequest {
+  int32 page_size = 1;
+  string page_token = 2;
+}
 message ListWorkersResponse {
   repeated Worker workers = 1;
+  string next_page_token = 2;
+}
+
+message UpdateWorkerRequest {
+  // worker.meta.name identifies the resource; a non-zero
+  // worker.meta.version acts as a freshness guard.
+  Worker worker = 1;
+
+  // Required. Top-level field paths only (e.g. "spec.address",
+  // "status", "meta.labels"); naming a message or map field replaces it
+  // wholesale. Unknown or immutable paths return INVALID_ARGUMENT.
+  google.protobuf.FieldMask update_mask = 2;
+}
+
+message DeleteWorkerRequest {
+  ObjectRef worker = 1;
+  // Optional freshness guard; 0 = skip check.
+  int64 version = 2;
+}
+
+message WatchWorkersRequest {}
+message WatchWorkersResponse {
+  ResourceEventType type = 1;
+  // Unset when type is SYNCED.
+  Worker worker = 2;
 }
 
 message DebugClearRequest {}
 message DebugClearResponse {}
 
 // ---------------------------------------------------------------------------
-// SessionIdentity (unchanged from the POC surface)
+// SessionIdentity
 // ---------------------------------------------------------------------------
 
 // SessionIdentity allows substrate workloads to exchange their

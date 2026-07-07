@@ -1,67 +1,149 @@
 # Migrating substrate-plane resources from CRDs to ateapi (issue #368)
 
 Companion to [ateapi-resource-api.md](ateapi-resource-api.md), which defines
-the target API. This doc covers the transition: what changes relative to the
-Kubernetes CRDs and the POC proto (`poc-decouple-upstream`), and the
-migration path.
+the target API. This doc covers how to move the current Kubernetes-backed
+implementation to the Worker-centric model.
 
-## Why the POC shape changes
+## Target shape
 
-The POC copied the CRD Go types field-for-field to move fast. That imported
-Kubernetes idioms that don't pull their weight in a native API:
+Substrate core should manage scheduling intent and observed worker capacity:
 
-| # | Leak | Where | Problem |
-|---|------|-------|---------|
-| 1 | `deployment_atespace` | WorkerPoolSpec | It's a **Kubernetes namespace** (the projector uses it verbatim as the Deployment namespace), mislabeled with a substrate term. Renamed `kubernetes.namespace`. |
-| 2 | `WorkerPoolPodTemplate` + Toleration/NodeAffinity/ResourceRequirements at top level | WorkerPool | corev1 mirrored into the public API without a boundary marking it k8s-specific. Quarantined into `KubernetesPlacement`. |
-| 3 | `EnvVarSource`/`SecretKeySelector` | Container env | corev1's three-field env shape; invalid states representable (value + value_from). Now a `oneof`. |
-| 4 | `LabelSelector.match_expressions` | template worker_selector | Set-based operators copied but only equality is implemented or meaningful today. Dropped. |
-| 5 | `Condition` list + string `phase` | ActorTemplateStatus | KRM condition machinery; `observed_generation` has no generation to observe. Replaced by a state enum. |
-| 6 | Stringly-typed enums (`on_pause: "Full"`) | SnapshotsConfig | CEL-validated strings instead of proto enums. Now `Scope` enum. |
-| 7 | Update RPCs with unspecified FieldMask semantics | templates, pools, configs | The POC marked mask semantics TODO. Now defined (top-level paths), and templates lose Update entirely. |
-| 8 | Grant identity `(atespace, name)` with free-form name | WorkerPoolGrant | The scheduler looks up grants by `(atespace, pool)`; the POC allows multiple grants for the same pair, making revocation ambiguous. The POC's own `GetWorkerPoolGrant` is documented "by atespace and worker pool" but keyed by name. Now: Create enforces at most one grant per (atespace, pool). |
+- `ActorTemplate` and `Actor` are tenant/control-plane resources in ateapi.
+- `Worker` is the substrate scheduling primitive and a managed Admin resource.
+- Kubernetes may still have a WorkerPool CRD, Helm value, Deployment wrapper,
+  or autoscaler input, but that belongs to the Kubernetes worker provider.
 
-## Behavior deltas vs the POC
+The split mirrors Kubernetes Nodes and cloud-provider NodePools: core
+substrate schedules against Workers; providers decide how to create and manage
+many Workers.
 
-1. **No UpdateActorTemplate** — POC has it; the target API drops it
-   (immutable spec).
-2. **Grant uniqueness** — Create rejects a second grant for the same
-   (atespace, worker_pool) pair with `ALREADY_EXISTS`; the store gains a
-   `(atespace, pool)` index so the scheduler check stays a point lookup.
-3. **Delete returns the resource** — POC returned `Empty` for
-   templates/pools/configs/grants and an empty message for actors.
-4. **Required update_mask** — Update without a mask becomes
-   `INVALID_ARGUMENT`; POC treated masks as TODO/full-replace.
-5. **Actor RPC shapes** — bare-resource returns, `ObjectRef` identity, and
-   the legacy `actor_template_namespace/name` create path is gone. The
-   package rename (`ateapi` → `ateapi.v1alpha1`) makes every message a new
-   proto type, so this is a clean break: field numbers are assigned fresh,
-   no `reserved` scar tissue, and migration is a coordinated client cutover
-   rather than in-place field evolution. (The POC has no external users.)
-6. **Referential integrity on delete** — template↔actor, pool↔grant,
-   pool↔assigned-actor, config↔pool checks return `FAILED_PRECONDITION`;
-   the POC checks only atespace emptiness.
-7. **Watch SYNCED event** — new; consumers can await cache completeness.
+## Current CRD responsibilities
 
-## CRD validations that move into handlers
+The existing Kubernetes CRDs combine several responsibilities that need to be
+split apart:
 
-Validation currently expressed as CEL/OpenAPI on the CRDs moves into
-Create (and Update, where applicable) handlers:
+| Current concept | Current responsibility | Target owner |
+|---|---|---|
+| `ActorTemplate` CRD | workload template and scheduling constraints | ateapi `ActorTemplate` |
+| `WorkerPool` CRD | desired worker capacity, Kubernetes placement, common labels | Kubernetes worker provider |
+| Worker pod | actual schedulable capacity | ateapi `Worker` projection/resource |
 
-- DNS-1123 label names (atespace, name — per style guide §2.3)
-- template spec immutability (`self == oldSelf` → no Update method)
-- container images pinned by digest
-- volume mount-path rules
-- `snapshots_config.on_commit` ⊆ `on_pause`
-- at most one `default: true` SandboxConfig
+The key change is that substrate scheduling no longer follows
+`ActorTemplate -> WorkerPool -> Pod`. It follows
+`ActorTemplate/Actor -> Worker`.
 
-## Migration path
+## Kubernetes provider flow
 
-1. Land the target proto as `ateapi.v1alpha1` alongside the POC `ateapi`
-   package; generate both.
-2. Port store keys/values: add the grant `(atespace, pool)` uniqueness
-   index; template records gain immutability enforcement.
-3. Move CRD validation into handlers (table above); delete the CRDs and the
-   projector's CRD-watching path.
-4. Cut clients (atectl, atelet caches, demos) over to `v1alpha1`; delete
-   the POC package.
+The Kubernetes implementation can start with a simple pod watcher:
+
+1. Some Kubernetes mechanism creates worker Pods. This can be a Deployment,
+   Helm-managed workload, an existing WorkerPool CRD, or a future autoscaler.
+2. Worker Pods opt into substrate by setting
+   `pod.ate.dev/is-worker: "true"` from
+   [label-registry.md](label-registry.md).
+3. A worker sync goroutine watches those Pods.
+4. For each matching Pod, the syncer creates or updates an ateapi `Worker`.
+5. When a matching Pod disappears, the syncer deletes or marks the Worker not
+   ready.
+6. The scheduler uses the existing worker cache, but the cache is populated
+   from `WatchWorkers` / `ListWorkers` rather than Kubernetes-specific pod
+   state.
+
+The syncer can initially run inside `ateapi` as a standalone goroutine. It
+should be factored so it can later move into a separate worker-provider
+process without changing the core API.
+
+## Worker data copied from Pods
+
+The first Kubernetes syncer should populate provider-neutral Worker fields:
+
+- `meta.name`: stable substrate Worker name.
+- `meta.labels`: scheduling labels copied under a documented policy.
+- `spec.provider`: `"kubernetes"`.
+- `spec.provider_id`: Kubernetes Pod UID or namespace/name for correlation.
+- `spec.address`: routable ateom endpoint.
+- `spec.sandbox_class`: runtime class advertised by this Worker.
+- `status.state`: ready/not-ready/draining.
+- `status.slots_total` and `status.slots_available`: reported capacity.
+- `status.last_heartbeat_time`: last observed provider update.
+
+Open label policy: copy all Pod labels, only substrate-owned labels, or a
+configured allowlist. Because selectors depend on Worker labels, copied labels
+become API contract and should be documented before broad use.
+
+## Kubernetes WorkerPool
+
+WorkerPool remains useful as a Kubernetes/provider abstraction, just not as a
+portable substrate API resource.
+
+Provider-level WorkerPool can own Kubernetes-specific concerns:
+
+- desired replica count or autoscaling policy
+- pod template
+- node selectors, tolerations, affinity, resources, priority class
+- common labels copied onto produced Workers
+- future desired distributions of worker sizes, e.g. `4x2Gi`, `8x4Gi`,
+  `12x8Gi`
+
+Substrate core should not depend on that shape. If the Kubernetes provider
+uses WorkerPool internally, it reconciles WorkerPool to Pods; the pod syncer
+then reconciles Pods to ateapi Workers.
+
+## Behavior deltas
+
+1. **Scheduling uses Workers directly.** Selectors match
+   `Worker.meta.labels`, and sandbox compatibility matches
+   `ActorTemplate.spec.sandbox_class` to `Worker.spec.sandbox_class`.
+2. **Worker is no longer debug-only.** It becomes the managed Admin resource
+   that worker providers create/update/delete.
+3. **Kubernetes fields leave core ateapi.** Pod namespace/name/UID, node name,
+   tolerations, affinity, and resource requirements are provider details.
+   Correlation can live in `Worker.spec.provider_id`; placement stays in the
+   provider.
+4. **Process snapshots, including goldens, are deferred.** P0 should work
+   without golden snapshots. Re-enabling them requires a compatibility model
+   across runtime version, architecture, kernel/hardware shape, and possibly N
+   goldens per template.
+5. **Delete returns the resource.** Standard methods return the deleted
+   resource instead of `Empty`.
+6. **Required update_mask.** Update without a mask returns
+   `INVALID_ARGUMENT`; accepted paths are defined by the API.
+7. **Watch SYNCED event.** Watch streams deliver initial state, `SYNCED`, then
+   incremental events.
+
+## Validation migration
+
+Validation currently expressed as CEL/OpenAPI on CRDs moves into ateapi
+handlers or provider controllers, depending on ownership:
+
+| Validation | Target owner |
+|---|---|
+| DNS-1123 names for ateapi resources | ateapi handlers |
+| ActorTemplate spec immutability | no UpdateActorTemplate method |
+| container images pinned by digest | ateapi handlers |
+| volume mount-path rules | ateapi handlers |
+| `snapshots_config.on_commit` subset of `on_pause` | ateapi handlers |
+| Worker labels and selector syntax | ateapi handlers |
+| Worker status/capacity invariants | ateapi handlers |
+| Kubernetes namespace, pod template, tolerations, affinity, resources | Kubernetes provider |
+
+## Implementation migration path
+
+1. Update the draft proto to expose Worker CRUD/watch.
+2. Update the store to key Workers by provider-neutral resource identity
+   instead of Kubernetes namespace/pool/pod.
+3. Convert `cmd/ateapi/internal/workercache` to consume `ListWorkers` and
+   `WatchWorkers` over managed Worker records.
+4. Add a Kubernetes worker sync goroutine that watches Pods labeled
+   `pod.ate.dev/is-worker=true` and writes Worker records through the same
+   store/API path as any future provider.
+5. Change scheduling to select Workers directly using Worker labels,
+   `sandbox_class`, readiness, and capacity.
+6. Remove Actor references to WorkerPool; record the assigned Worker instead.
+7. Move Kubernetes WorkerPool reconciliation out of substrate core. It may
+   stay as a Kubernetes provider controller or be replaced by plain
+   Deployments for the first cut.
+8. Cut clients and demos to create ActorTemplates/Actors through ateapi and to
+   inspect Workers through Admin APIs.
+9. Delete the old CRD-watching/projector path from core once the Kubernetes
+   provider path owns pod-to-Worker reconciliation.
