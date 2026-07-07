@@ -34,7 +34,6 @@ import (
 	"google.golang.org/protobuf/proto"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
-	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
 )
@@ -83,39 +82,32 @@ func (s *LoadActorForResumeStep) Execute(ctx context.Context, input *ResumeInput
 
 func (s *LoadActorForResumeStep) RetryBackoff() *wait.Backoff { return nil }
 
-func eligibleWorkerPools(pools []*atev1alpha1.WorkerPool, templateClass atev1alpha1.SandboxClass, templateSelector *metav1.LabelSelector, actorSelector *ateapipb.Selector) (map[types.NamespacedName]struct{}, error) {
+func isWorkerEligibleForActor(worker *ateapipb.Worker, templateClass atev1alpha1.SandboxClass, templateSelector *metav1.LabelSelector, actorSelector *ateapipb.Selector) (bool, error) {
+	// Snapshots are not portable across sandbox classes, so the worker's class
+	// must match the template's. Both classes are populated by the CRD default
+	// (gvisor), so we compare them directly.
+	if worker.GetSandboxClass() != string(templateClass) {
+		return false, nil
+	}
+
 	templateSel := labels.Everything()
 	if templateSelector != nil {
 		sel, err := metav1.LabelSelectorAsSelector(templateSelector)
 		if err != nil {
-			return nil, fmt.Errorf("invalid template worker selector: %w", err)
+			return false, fmt.Errorf("invalid template worker selector: %w", err)
 		}
 		templateSel = sel
 	}
 
 	actorSel := labels.SelectorFromSet(labels.Set(actorSelector.GetMatchLabels()))
 
-	eligible := make(map[types.NamespacedName]struct{})
-	for _, pool := range pools {
-		// Snapshots are not portable across sandbox classes, so the pool's class
-		// must match the template's. This is a hard gate AND'd with the label
-		// selectors below. Both classes are populated by the CRD default (gvisor),
-		// so we compare them directly.
-		if pool.Spec.SandboxClass != templateClass {
-			continue
-		}
-		set := labels.Set(pool.GetLabels())
-		if templateSel.Matches(set) && actorSel.Matches(set) {
-			eligible[types.NamespacedName{Namespace: pool.GetNamespace(), Name: pool.GetName()}] = struct{}{}
-		}
-	}
-	return eligible, nil
+	set := labels.Set(worker.GetLabels())
+	return templateSel.Matches(set) && actorSel.Matches(set), nil
 }
 
 type AssignWorkerStep struct {
-	store            store.Interface
-	workerCache      *workercache.Cache
-	workerPoolLister listersv1alpha1.WorkerPoolLister
+	store       store.Interface
+	workerCache *workercache.Cache
 }
 
 func (s *AssignWorkerStep) Name() string { return "AssignWorker" }
@@ -124,18 +116,6 @@ func (s *AssignWorkerStep) IsComplete(ctx context.Context, input *ResumeInput, s
 	return state.Actor.GetStatus() == ateapipb.Actor_STATUS_RUNNING, nil
 }
 func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, state *ResumeState) error {
-	pools, err := s.workerPoolLister.List(labels.Everything())
-	if err != nil {
-		return fmt.Errorf("while listing worker pools: %w", err)
-	}
-	eligible, err := eligibleWorkerPools(pools, state.ActorTemplate.Spec.SandboxClass, state.ActorTemplate.Spec.WorkerSelector, state.Actor.GetWorkerSelector())
-	if err != nil {
-		return fmt.Errorf("while computing eligible worker pools: %w", err)
-	}
-	if len(eligible) == 0 {
-		return status.Errorf(codes.FailedPrecondition, "no worker pool matches the template's sandboxClass and the template/actor selectors")
-	}
-
 	workers, err := s.workerCache.Workers()
 	if err != nil {
 		return fmt.Errorf("while listing workers: %w", err)
@@ -155,7 +135,11 @@ func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, stat
 		if worker.Assignment.Actor.Name != input.ActorID {
 			continue
 		}
-		if _, ok := eligible[types.NamespacedName{Namespace: worker.GetWorkerNamespace(), Name: worker.GetWorkerPool()}]; ok {
+		eligible, err := isWorkerEligibleForActor(worker, state.ActorTemplate.Spec.SandboxClass, state.ActorTemplate.Spec.WorkerSelector, state.Actor.GetWorkerSelector())
+		if err != nil {
+			return fmt.Errorf("while checking worker eligibility: %w", err)
+		}
+		if eligible {
 			assignedWorker = worker
 			break
 		}
@@ -170,7 +154,10 @@ func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, stat
 
 	// If not, find a free one using randomized shuffling
 	if assignedWorker == nil {
-		pickedWorker := s.findFreeWorker(workers, eligible, state.Actor.GetLatestSnapshotInfo().GetLocal().GetNodeVmsWithLocalSnapshots())
+		pickedWorker, err := s.findFreeWorker(workers, state.ActorTemplate.Spec.SandboxClass, state.ActorTemplate.Spec.WorkerSelector, state.Actor.GetWorkerSelector(), state.Actor.GetLatestSnapshotInfo().GetLocal().GetNodeVmsWithLocalSnapshots())
+		if err != nil {
+			return err
+		}
 		if pickedWorker == nil {
 			return status.Errorf(codes.FailedPrecondition, "no free workers available")
 		}
@@ -219,13 +206,23 @@ func (s *AssignWorkerStep) RetryBackoff() *wait.Backoff {
 	}
 }
 
-func (s *AssignWorkerStep) findFreeWorker(workers []*ateapipb.Worker, eligible map[types.NamespacedName]struct{}, nodesRestrictions []string) *ateapipb.Worker {
+func (s *AssignWorkerStep) findFreeWorker(
+	workers []*ateapipb.Worker,
+	templateClass atev1alpha1.SandboxClass,
+	templateSelector *metav1.LabelSelector,
+	actorSelector *ateapipb.Selector,
+	nodesRestrictions []string,
+) (*ateapipb.Worker, error) {
 	var freeWorkers []*ateapipb.Worker
 	for _, worker := range workers {
 		if worker.Assignment != nil {
 			continue
 		}
-		if _, ok := eligible[types.NamespacedName{Namespace: worker.GetWorkerNamespace(), Name: worker.GetWorkerPool()}]; !ok {
+		eligible, err := isWorkerEligibleForActor(worker, templateClass, templateSelector, actorSelector)
+		if err != nil {
+			return nil, err
+		}
+		if !eligible {
 			continue
 		}
 		if len(nodesRestrictions) == 0 || slices.Contains(nodesRestrictions, worker.GetNodeName()) {
@@ -237,9 +234,9 @@ func (s *AssignWorkerStep) findFreeWorker(workers []*ateapipb.Worker, eligible m
 		rand.Shuffle(len(freeWorkers), func(i, j int) {
 			freeWorkers[i], freeWorkers[j] = freeWorkers[j], freeWorkers[i]
 		})
-		return freeWorkers[0]
+		return freeWorkers[0], nil
 	}
-	return nil
+	return nil, nil
 }
 
 type CallAteletRestoreStep struct {

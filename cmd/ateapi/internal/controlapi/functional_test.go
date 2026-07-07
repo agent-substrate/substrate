@@ -283,7 +283,7 @@ func setupTest(t *testing.T, ns string) *testContext {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	syncer := NewWorkerPoolSyncer(persistence, workerInformer)
+	syncer := NewWorkerPoolSyncer(persistence, workerInformer, workerPoolLister)
 	syncer.Start(ctx)
 
 	workerFactory.Start(ctx.Done())
@@ -1044,15 +1044,17 @@ func TestListActors_PageSizeValidation(t *testing.T) {
 
 // TestListWorkers tests that workers mirrored to Redis are listed.
 // Workflow:
-// 1. Creates a mock worker Pod in Kubernetes.
-// 2. Waits for the background WorkerPoolSyncer to mirror it to Redis.
-// 3. Calls ListWorkers RPC.
-// 4. Verifies that the worker appears in the response.
+// 1. Creates a mock WorkerPool in Kubernetes.
+// 2. Creates a mock worker Pod in Kubernetes belonging to that pool.
+// 3. Waits for the background WorkerPoolSyncer to mirror it to Redis.
+// 4. Calls ListWorkers RPC.
+// 5. Verifies that the worker appears in the response.
 func TestListWorkers(t *testing.T) {
 	ns := namespaceForTest("ns-list-workers")
 	tc := setupTest(t, ns)
 	defer tc.cleanup()
 
+	createWorkerPool(t, tc, ns, "pool1", map[string]string{"foo": "bar"})
 	createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
 
 	listResp, err := tc.client.ListWorkers(context.Background(), &ateapipb.ListWorkersRequest{})
@@ -1075,6 +1077,8 @@ func TestListWorkers(t *testing.T) {
 			NodeName:        "node1",
 			Ip:              "127.0.0.1",
 			Version:         1,
+			SandboxClass:    "gvisor",
+			Labels:          map[string]string{"foo": "bar"},
 		},
 	}
 
@@ -1176,8 +1180,10 @@ func TestResumeActor(t *testing.T) {
 				Atespace: testAtespace,
 			},
 		},
-		Ip:       "127.0.0.1",
-		NodeName: "node1",
+		Ip:           "127.0.0.1",
+		NodeName:     "node1",
+		SandboxClass: "gvisor",
+		Labels:       map[string]string{poolLabelKey: ns},
 	}
 
 	if diff := cmp.Diff(wantWorker, actorWorker, protocmp.Transform(), protocmp.IgnoreFields(&ateapipb.Worker{}, "version"), protocmp.IgnoreFields(&ateapipb.Worker{}, "worker_pod_uid")); diff != "" {
@@ -1296,34 +1302,6 @@ func TestResumeActor_NoWorkers(t *testing.T) {
 		ActorRef: &ateapipb.ActorRef{Atespace: testAtespace, Name: id},
 	})
 	assertGrpcError(t, err, codes.FailedPrecondition, "no free workers available")
-}
-
-// TestResumeActor_NoEligiblePool tests the distinct failure mode from
-// TestResumeActor_NoWorkers: here no WorkerPool's labels satisfy the
-// template's WorkerSelector at all, so there isn't even a pool to look for
-// free workers in.
-func TestResumeActor_NoEligiblePool(t *testing.T) {
-	ns := namespaceForTest("ns-resume-no-eligible-pool")
-	tc := setupTest(t, ns)
-	defer tc.cleanup()
-
-	createTemplateWithSelector(t, tc, ns, "tmpl1", &metav1.LabelSelector{
-		MatchLabels: map[string]string{"nonexistent": ns},
-	})
-
-	createResp, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{
-		ActorRef:               &ateapipb.ActorRef{Atespace: testAtespace, Name: "id1"},
-		ActorTemplateNamespace: ns,
-		ActorTemplateName:      "tmpl1",
-	})
-	if err != nil {
-		t.Fatalf("CreateActor failed: %v", err)
-	}
-
-	_, err = tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
-		ActorRef: &ateapipb.ActorRef{Atespace: testAtespace, Name: createResp.GetActor().GetActorId()},
-	})
-	assertGrpcError(t, err, codes.FailedPrecondition, "no worker pool matches the template's sandboxClass and the template/actor selectors")
 }
 
 // TestResumeActor_MultiPoolSelector exercises the AND-of-two-selectors path

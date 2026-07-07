@@ -166,7 +166,7 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, atespace, id string, bo
 
 	steps := []WorkflowStep[*ResumeInput, *ResumeState]{
 		&LoadActorForResumeStep{store: w.store, actorTemplateLister: w.actorTemplateLister},
-		&AssignWorkerStep{store: w.store, workerCache: w.workerCache, workerPoolLister: w.workerPoolLister},
+		&AssignWorkerStep{store: w.store, workerCache: w.workerCache},
 		&CallAteletRestoreStep{store: w.store, dialer: w.dialer, kubeClient: w.kubeClient, secretCache: w.secretCache, workerPoolLister: w.workerPoolLister, sandboxConfigLister: w.sandboxConfigLister},
 		&FinalizeRunningStep{store: w.store},
 	}

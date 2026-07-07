@@ -20,167 +20,144 @@ import (
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
 )
 
-func pool(namespace, name string, labels map[string]string) *atev1alpha1.WorkerPool {
-	return &atev1alpha1.WorkerPool{
-		ObjectMeta: metav1.ObjectMeta{
-			Namespace: namespace,
-			Name:      name,
-			Labels:    labels,
-		},
-	}
-}
-
-func poolWithClass(namespace, name string, class atev1alpha1.SandboxClass, labels map[string]string) *atev1alpha1.WorkerPool {
-	p := pool(namespace, name, labels)
-	p.Spec.SandboxClass = class
-	return p
-}
-
-func TestEligibleWorkerPools(t *testing.T) {
+func TestIsWorkerEligibleForActor(t *testing.T) {
 	tests := []struct {
-		name              string
-		pools             []*atev1alpha1.WorkerPool
-		templateClass     atev1alpha1.SandboxClass
-		templateSelector  *metav1.LabelSelector
-		actorSelector     *ateapipb.Selector
-		wantEligibleNames []string // pool names expected in the result
+		name             string
+		worker           *ateapipb.Worker
+		templateClass    atev1alpha1.SandboxClass
+		templateSelector *metav1.LabelSelector
+		actorSelector    *ateapipb.Selector
+		wantEligible     bool
 	}{
 		{
 			name: "both nil matches everything",
-			pools: []*atev1alpha1.WorkerPool{
-				pool("ns", "a", map[string]string{"foo": "bar"}),
-				pool("ns", "b", nil),
+			worker: &ateapipb.Worker{
+				SandboxClass: "gvisor",
+				Labels:       map[string]string{"foo": "bar"},
 			},
-			templateSelector:  nil,
-			actorSelector:     nil,
-			wantEligibleNames: []string{"a", "b"},
+			templateClass:    atev1alpha1.SandboxClassGvisor,
+			templateSelector: nil,
+			actorSelector:    nil,
+			wantEligible:     true,
 		},
 		{
-			name: "template selector only",
-			pools: []*atev1alpha1.WorkerPool{
-				pool("ns", "match", map[string]string{"workload": "code-sandbox"}),
-				pool("ns", "nomatch", map[string]string{"workload": "browser-agent"}),
+			name: "template selector only match",
+			worker: &ateapipb.Worker{
+				SandboxClass: "gvisor",
+				Labels:       map[string]string{"workload": "code-sandbox"},
 			},
+			templateClass: atev1alpha1.SandboxClassGvisor,
 			templateSelector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{"workload": "code-sandbox"},
 			},
-			actorSelector:     nil,
-			wantEligibleNames: []string{"match"},
+			actorSelector: nil,
+			wantEligible:  true,
 		},
 		{
-			name: "actor selector only",
-			pools: []*atev1alpha1.WorkerPool{
-				pool("ns", "match", map[string]string{"tier": "paid"}),
-				pool("ns", "nomatch", map[string]string{"tier": "free"}),
+			name: "template selector only no match",
+			worker: &ateapipb.Worker{
+				SandboxClass: "gvisor",
+				Labels:       map[string]string{"workload": "browser-agent"},
 			},
+			templateClass: atev1alpha1.SandboxClassGvisor,
+			templateSelector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{"workload": "code-sandbox"},
+			},
+			actorSelector: nil,
+			wantEligible:  false,
+		},
+		{
+			name: "actor selector only match",
+			worker: &ateapipb.Worker{
+				SandboxClass: "gvisor",
+				Labels:       map[string]string{"tier": "paid"},
+			},
+			templateClass:    atev1alpha1.SandboxClassGvisor,
 			templateSelector: nil,
 			actorSelector: &ateapipb.Selector{
 				MatchLabels: map[string]string{"tier": "paid"},
 			},
-			wantEligibleNames: []string{"match"},
+			wantEligible: true,
 		},
 		{
-			name: "AND of two selectors on the same pool",
-			pools: []*atev1alpha1.WorkerPool{
-				pool("ns", "both", map[string]string{"workload": "code-sandbox", "tier": "paid"}),
-				pool("ns", "template-only", map[string]string{"workload": "code-sandbox", "tier": "free"}),
-				pool("ns", "actor-only", map[string]string{"workload": "browser-agent", "tier": "paid"}),
-				pool("ns", "neither", map[string]string{"workload": "browser-agent", "tier": "free"}),
+			name: "actor selector only no match",
+			worker: &ateapipb.Worker{
+				SandboxClass: "gvisor",
+				Labels:       map[string]string{"tier": "free"},
 			},
+			templateClass:    atev1alpha1.SandboxClassGvisor,
+			templateSelector: nil,
+			actorSelector: &ateapipb.Selector{
+				MatchLabels: map[string]string{"tier": "paid"},
+			},
+			wantEligible: false,
+		},
+		{
+			name: "AND of two selectors match",
+			worker: &ateapipb.Worker{
+				SandboxClass: "gvisor",
+				Labels:       map[string]string{"workload": "code-sandbox", "tier": "paid"},
+			},
+			templateClass: atev1alpha1.SandboxClassGvisor,
 			templateSelector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{"workload": "code-sandbox"},
 			},
 			actorSelector: &ateapipb.Selector{
 				MatchLabels: map[string]string{"tier": "paid"},
 			},
-			wantEligibleNames: []string{"both"},
+			wantEligible: true,
 		},
 		{
-			name: "disjoint label keys: independent evaluation, not a merged map",
-			pools: []*atev1alpha1.WorkerPool{
-				// Has the template's key/value but not the actor's.
-				pool("ns", "template-key-only", map[string]string{"workload": "x"}),
-				// Has the actor's key/value but not the template's.
-				pool("ns", "actor-key-only", map[string]string{"zone": "y"}),
-				// Has both keys with matching values: must be the only eligible pool.
-				pool("ns", "both-keys", map[string]string{"workload": "x", "zone": "y"}),
+			name: "AND of two selectors one fails",
+			worker: &ateapipb.Worker{
+				SandboxClass: "gvisor",
+				Labels:       map[string]string{"workload": "code-sandbox", "tier": "free"},
 			},
+			templateClass: atev1alpha1.SandboxClassGvisor,
 			templateSelector: &metav1.LabelSelector{
-				MatchLabels: map[string]string{"workload": "x"},
+				MatchLabels: map[string]string{"workload": "code-sandbox"},
 			},
 			actorSelector: &ateapipb.Selector{
-				MatchLabels: map[string]string{"zone": "y"},
-			},
-			wantEligibleNames: []string{"both-keys"},
-		},
-		{
-			name: "no eligible pool",
-			pools: []*atev1alpha1.WorkerPool{
-				pool("ns", "a", map[string]string{"workload": "x"}),
-			},
-			templateSelector: &metav1.LabelSelector{
-				MatchLabels: map[string]string{"workload": "y"},
-			},
-			actorSelector:     nil,
-			wantEligibleNames: nil,
-		},
-		{
-			name: "microvm template matches only microvm pools",
-			pools: []*atev1alpha1.WorkerPool{
-				poolWithClass("ns", "micro", atev1alpha1.SandboxClassMicroVM, nil),
-				poolWithClass("ns", "gvisor", atev1alpha1.SandboxClassGvisor, nil),
-			},
-			templateClass:     atev1alpha1.SandboxClassMicroVM,
-			wantEligibleNames: []string{"micro"},
-		},
-		{
-			name: "gvisor template excludes microvm pools",
-			pools: []*atev1alpha1.WorkerPool{
-				poolWithClass("ns", "micro", atev1alpha1.SandboxClassMicroVM, nil),
-				poolWithClass("ns", "gvisor", atev1alpha1.SandboxClassGvisor, nil),
-			},
-			templateClass:     atev1alpha1.SandboxClassGvisor,
-			wantEligibleNames: []string{"gvisor"},
-		},
-		{
-			name: "class gate AND's with label selector",
-			pools: []*atev1alpha1.WorkerPool{
-				poolWithClass("ns", "match", atev1alpha1.SandboxClassMicroVM, map[string]string{"tier": "paid"}),
-				// Right class, wrong label.
-				poolWithClass("ns", "wrong-label", atev1alpha1.SandboxClassMicroVM, map[string]string{"tier": "free"}),
-				// Right label, wrong class.
-				poolWithClass("ns", "wrong-class", atev1alpha1.SandboxClassGvisor, map[string]string{"tier": "paid"}),
-			},
-			templateClass: atev1alpha1.SandboxClassMicroVM,
-			templateSelector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{"tier": "paid"},
 			},
-			wantEligibleNames: []string{"match"},
+			wantEligible: false,
+		},
+		{
+			name: "microvm template matches only microvm worker",
+			worker: &ateapipb.Worker{
+				SandboxClass: "microvm",
+			},
+			templateClass: atev1alpha1.SandboxClassMicroVM,
+			wantEligible:  true,
+		},
+		{
+			name: "microvm template excludes gvisor worker",
+			worker: &ateapipb.Worker{
+				SandboxClass: "gvisor",
+			},
+			templateClass: atev1alpha1.SandboxClassMicroVM,
+			wantEligible:  false,
+		},
+		{
+			name: "gvisor template excludes microvm worker",
+			worker: &ateapipb.Worker{
+				SandboxClass: "microvm",
+			},
+			templateClass: atev1alpha1.SandboxClassGvisor,
+			wantEligible:  false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := eligibleWorkerPools(tt.pools, tt.templateClass, tt.templateSelector, tt.actorSelector)
+			got, err := isWorkerEligibleForActor(tt.worker, tt.templateClass, tt.templateSelector, tt.actorSelector)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
 			}
-
-			wantKeys := make(map[types.NamespacedName]struct{}, len(tt.wantEligibleNames))
-			for _, name := range tt.wantEligibleNames {
-				wantKeys[types.NamespacedName{Namespace: "ns", Name: name}] = struct{}{}
-			}
-
-			if len(got) != len(wantKeys) {
-				t.Fatalf("got %d eligible pools, want %d: got=%v want=%v", len(got), len(wantKeys), got, wantKeys)
-			}
-			for k := range wantKeys {
-				if _, ok := got[k]; !ok {
-					t.Errorf("expected pool %v to be eligible, but it was not: got=%v", k, got)
-				}
+			if got != tt.wantEligible {
+				t.Errorf("got eligible=%t, want %t", got, tt.wantEligible)
 			}
 		})
 	}

@@ -18,9 +18,11 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"maps"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/resources"
+	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -31,15 +33,17 @@ import (
 // WorkerPoolSyncer reconciles the state of worker pods from Kubernetes Informer
 // into the store.
 type WorkerPoolSyncer struct {
-	persistence    store.Interface
-	workerInformer cache.SharedIndexInformer
+	persistence      store.Interface
+	workerInformer   cache.SharedIndexInformer
+	workerPoolLister listersv1alpha1.WorkerPoolLister
 }
 
 // NewWorkerPoolSyncer creates a new WorkerPoolSyncer.
-func NewWorkerPoolSyncer(persistence store.Interface, workerInformer cache.SharedIndexInformer) *WorkerPoolSyncer {
+func NewWorkerPoolSyncer(persistence store.Interface, workerInformer cache.SharedIndexInformer, workerPoolLister listersv1alpha1.WorkerPoolLister) *WorkerPoolSyncer {
 	return &WorkerPoolSyncer{
-		persistence:    persistence,
-		workerInformer: workerInformer,
+		persistence:      persistence,
+		workerInformer:   workerInformer,
+		workerPoolLister: workerPoolLister,
 	}
 }
 
@@ -113,17 +117,26 @@ func (s *WorkerPoolSyncer) syncWorkerToStore(ctx context.Context, pod *corev1.Po
 		return
 	}
 
-	w, err := s.persistence.GetWorker(ctx, pod.Namespace, pod.Labels[workerPodLabel], pod.Name)
+	poolName := pod.Labels[workerPodLabel]
+	pool, err := s.workerPoolLister.WorkerPools(pod.Namespace).Get(poolName)
+	if err != nil {
+		slog.ErrorContext(ctx, "Failed to get WorkerPool for worker pod", slog.String("worker", pod.Namespace+"/"+pod.Name), slog.String("pool", poolName), slog.Any("err", err))
+		return
+	}
+
+	w, err := s.persistence.GetWorker(ctx, pod.Namespace, poolName, pod.Name)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			slog.InfoContext(ctx, "Syncer: creating worker in store", slog.String("worker", pod.Namespace+"/"+pod.Name))
 			worker := &ateapipb.Worker{
 				WorkerNamespace: pod.Namespace,
-				WorkerPool:      pod.Labels[workerPodLabel],
+				WorkerPool:      poolName,
 				WorkerPod:       pod.Name,
 				Ip:              pod.Status.PodIP,
 				WorkerPodUid:    string(pod.UID),
 				NodeName:        pod.Spec.NodeName,
+				SandboxClass:    string(pool.Spec.SandboxClass),
+				Labels:          pool.GetLabels(),
 			}
 			// TODO(thockin): for now this is the only place Workers are
 			// created.  If/when this becomes a regular API, validation should
@@ -143,10 +156,25 @@ func (s *WorkerPoolSyncer) syncWorkerToStore(ctx context.Context, pod *corev1.Po
 		return
 	}
 
+	changed := false
 	if w.Ip != pod.Status.PodIP {
 		// TODO: I don't think this is possible, but handling this case so we can log it just in case we can reproduce it.
 		slog.InfoContext(ctx, "Syncer: updating worker in store (IP changed)", slog.String("worker", pod.Namespace+"/"+pod.Name))
 		w.Ip = pod.Status.PodIP
+		changed = true
+	}
+	if w.SandboxClass != string(pool.Spec.SandboxClass) {
+		slog.InfoContext(ctx, "Syncer: updating worker in store (SandboxClass changed)", slog.String("worker", pod.Namespace+"/"+pod.Name))
+		w.SandboxClass = string(pool.Spec.SandboxClass)
+		changed = true
+	}
+	if !maps.Equal(w.Labels, pool.GetLabels()) {
+		slog.InfoContext(ctx, "Syncer: updating worker in store (labels changed)", slog.String("worker", pod.Namespace+"/"+pod.Name))
+		w.Labels = pool.GetLabels()
+		changed = true
+	}
+
+	if changed {
 		if err = s.persistence.UpdateWorker(ctx, w, w.Version); err != nil {
 			slog.ErrorContext(ctx, "Failed to update worker in store", slog.Any("err", err))
 		}

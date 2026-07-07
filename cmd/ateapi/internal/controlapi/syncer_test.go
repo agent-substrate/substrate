@@ -18,20 +18,25 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"testing"
 	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
+	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
+	atefake "github.com/agent-substrate/substrate/pkg/client/clientset/versioned/fake"
+	"github.com/agent-substrate/substrate/pkg/client/informers/externalversions"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes/fake"
 )
 
 // setupSyncerTest sets up a real store with fake Redis and a fake K8s client with informer.
-func setupSyncerTest(t *testing.T, ctx context.Context) (store.Interface, *fake.Clientset, func()) {
+func setupSyncerTest(t *testing.T, ctx context.Context, initPools ...*atev1alpha1.WorkerPool) (store.Interface, *fake.Clientset, *atefake.Clientset, func()) {
 	t.Helper()
 
 	persistence, cleanup := storetest.SetupTestStore(t)
@@ -39,25 +44,48 @@ func setupSyncerTest(t *testing.T, ctx context.Context) (store.Interface, *fake.
 	fakeK8s := fake.NewSimpleClientset()
 	workerFactory, workerInformer := WorkerPodInformer(fakeK8s)
 
-	syncer := NewWorkerPoolSyncer(persistence, workerInformer)
+	objects := make([]runtime.Object, len(initPools))
+	for i, pool := range initPools {
+		objects[i] = pool
+	}
+	//nolint:staticcheck // NewSimpleClientset is the only available fake clientset for versioned CRDs.
+	fakeAte := atefake.NewSimpleClientset(objects...)
+	ateInformerFactory := externalversions.NewSharedInformerFactory(fakeAte, 0)
+	workerPoolLister := ateInformerFactory.Api().V1alpha1().WorkerPools().Lister()
+
+	syncer := NewWorkerPoolSyncer(persistence, workerInformer, workerPoolLister)
 	syncer.Start(ctx)
 
 	workerFactory.Start(ctx.Done())
-	workerFactory.WaitForCacheSync(ctx.Done())
+	ateInformerFactory.Start(ctx.Done())
 
-	return persistence, fakeK8s, cleanup
+	workerFactory.WaitForCacheSync(ctx.Done())
+	ateInformerFactory.WaitForCacheSync(ctx.Done())
+
+	return persistence, fakeK8s, fakeAte, cleanup
 }
 
 func TestSyncer_Lifecycle(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	persistence, fakeK8s, cleanup := setupSyncerTest(t, ctx)
-	defer cleanup()
-
 	ns := "ns-syncer-lifecycle"
 	podName := "worker-unit-1"
 	poolName := "pool1"
+
+	pool := &atev1alpha1.WorkerPool{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      poolName,
+			Namespace: ns,
+			Labels:    map[string]string{"foo": "bar"},
+		},
+		Spec: atev1alpha1.WorkerPoolSpec{
+			SandboxClass: "gvisor",
+		},
+	}
+
+	persistence, fakeK8s, _, cleanup := setupSyncerTest(t, ctx, pool)
+	defer cleanup()
 
 	// 1. Verify no workers in Redis initially
 	workers, err := persistence.ListWorkers(context.Background())
@@ -127,7 +155,16 @@ func TestSyncer_Lifecycle(t *testing.T) {
 			}
 			return false, err
 		}
-		return w.Ip == "127.0.0.1", nil
+		if w.Ip != "127.0.0.1" {
+			return false, nil
+		}
+		if w.SandboxClass != "gvisor" {
+			return false, fmt.Errorf("expected SandboxClass gvisor, got %q", w.SandboxClass)
+		}
+		if !maps.Equal(w.Labels, map[string]string{"foo": "bar"}) {
+			return false, fmt.Errorf("expected labels map[foo:bar], got %v", w.Labels)
+		}
+		return true, nil
 	})
 	if err != nil {
 		t.Fatalf("Worker not found in Redis after update: %v", err)
@@ -159,10 +196,20 @@ func TestSyncer_DeleteBoundWorker_ClearsActor(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	persistence, fakeK8s, cleanup := setupSyncerTest(t, ctx)
-	defer cleanup()
-
 	ns, pool, pod, ip := "ns-orphan", "pool1", "worker-orphan", "10.0.0.1"
+	workerPool := &atev1alpha1.WorkerPool{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      pool,
+			Namespace: ns,
+			Labels:    map[string]string{"foo": "bar"},
+		},
+		Spec: atev1alpha1.WorkerPoolSpec{
+			SandboxClass: "gvisor",
+		},
+	}
+
+	persistence, fakeK8s, _, cleanup := setupSyncerTest(t, ctx, workerPool)
+	defer cleanup()
 	if _, err := fakeK8s.CoreV1().Pods(ns).Create(ctx,
 		&corev1.Pod{
 			ObjectMeta: metav1.ObjectMeta{
@@ -238,5 +285,78 @@ func TestSyncer_DeleteBoundWorker_ClearsActor(t *testing.T) {
 	}
 	if got.GetLatestSnapshotInfo().GetExternal().SnapshotUriPrefix == "" {
 		t.Errorf("External SnapshotUriPrefix must be preserved")
+	}
+}
+
+func TestSyncer_OmittedFields(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	ns := "ns-syncer-omitted"
+	podName := "worker-unit-1"
+	poolName := "pool1"
+
+	// Create a pool with omitted sandbox class and no labels
+	pool := &atev1alpha1.WorkerPool{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      poolName,
+			Namespace: ns,
+		},
+		Spec: atev1alpha1.WorkerPoolSpec{
+			// Spec has no SandboxClass and no Labels
+		},
+	}
+
+	persistence, fakeK8s, _, cleanup := setupSyncerTest(t, ctx, pool)
+	defer cleanup()
+
+	// Create a pod
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      podName,
+			Namespace: ns,
+			UID:       "08675309-4a65-6e6e-7973-6e756d626572",
+			Labels: map[string]string{
+				workerPodLabel: poolName,
+			},
+		},
+		Spec: corev1.PodSpec{
+			NodeName:   "node1",
+			Containers: []corev1.Container{{Name: "main", Image: "nginx"}},
+		},
+		Status: corev1.PodStatus{
+			Phase:  corev1.PodRunning,
+			PodIP:  "127.0.0.1",
+			PodIPs: []corev1.PodIP{{IP: "127.0.0.1"}},
+		},
+	}
+
+	_, err := fakeK8s.CoreV1().Pods(ns).Create(context.Background(), pod, metav1.CreateOptions{})
+	if err != nil {
+		t.Fatalf("failed to create pod: %v", err)
+	}
+
+	// Verify that it is created in Redis with empty SandboxClass and empty Labels
+	err = wait.PollUntilContextTimeout(context.Background(), 100*time.Millisecond, 2*time.Second, true, func(ctx context.Context) (bool, error) {
+		w, err := persistence.GetWorker(ctx, ns, poolName, podName)
+		if err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				return false, nil
+			}
+			return false, err
+		}
+		if w.Ip != "127.0.0.1" {
+			return false, nil
+		}
+		if w.SandboxClass != "" {
+			return false, fmt.Errorf("expected SandboxClass to be empty, got %q", w.SandboxClass)
+		}
+		if len(w.Labels) != 0 {
+			return false, fmt.Errorf("expected labels to be empty, got %v", w.Labels)
+		}
+		return true, nil
+	})
+	if err != nil {
+		t.Fatalf("Worker state check failed: %v", err)
 	}
 }

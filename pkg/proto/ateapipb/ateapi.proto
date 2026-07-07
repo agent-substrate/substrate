@@ -294,6 +294,8 @@ message Worker {
   int64  version         = 6;
   string worker_pod_uid  = 7;
   string node_name       = 8;
+  string sandbox_class   = 9;
+  map<string, string> labels = 10;
 }
 
 message Assignment {
