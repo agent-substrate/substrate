@@ -31,9 +31,6 @@ import (
 
 func (s *AteomHerder) mountExternalVolumes(ctx context.Context, actorUID string, volumes []*ateletpb.Volume) error {
 	for _, vol := range volumes {
-		if vol.GetType() != ateletpb.VolumeType_VOLUME_TYPE_EXTERNAL {
-			continue
-		}
 		ext := vol.GetExternal()
 		if ext == nil {
 			continue
@@ -57,9 +54,6 @@ func (s *AteomHerder) mountExternalVolumes(ctx context.Context, actorUID string,
 func (s *AteomHerder) unmountExternalVolumes(ctx context.Context, actorUID string, volumes []*ateletpb.Volume) error {
 	var errs []error
 	for _, vol := range volumes {
-		if vol.GetType() != ateletpb.VolumeType_VOLUME_TYPE_EXTERNAL {
-			continue
-		}
 		ext := vol.GetExternal()
 		if ext == nil {
 			continue

@@ -705,9 +705,9 @@ func TestBuildAteomWorkloadSpecForwardsReadyz(t *testing.T) {
 func TestBuildAteomWorkloadSpecForwardsDurableDirMounts(t *testing.T) {
 	in := &ateletpb.WorkloadSpec{
 		Volumes: []*ateletpb.Volume{
-			{Name: "data", Type: ateletpb.VolumeType_VOLUME_TYPE_DURABLE_DIR},
-			{Name: "cache", Type: ateletpb.VolumeType_VOLUME_TYPE_DURABLE_DIR},
-			{Name: "scratch", Type: ateletpb.VolumeType_VOLUME_TYPE_EXTERNAL},
+			{Name: "data", Source: &ateletpb.Volume_DurableDir{DurableDir: &ateletpb.DurableDirVolume{}}},
+			{Name: "cache", Source: &ateletpb.Volume_DurableDir{DurableDir: &ateletpb.DurableDirVolume{}}},
+			{Name: "scratch", Source: &ateletpb.Volume_External{External: &ateletpb.ExternalVolumeSource{}}},
 		},
 		Containers: []*ateletpb.Container{
 			{
@@ -771,7 +771,7 @@ func TestBuildAteomWorkloadSpecValidation(t *testing.T) {
 			name: "missing volume definition",
 			in: &ateletpb.WorkloadSpec{
 				Volumes: []*ateletpb.Volume{
-					{Name: "data", Type: ateletpb.VolumeType_VOLUME_TYPE_DURABLE_DIR},
+					{Name: "data", Source: &ateletpb.Volume_DurableDir{DurableDir: &ateletpb.DurableDirVolume{}}},
 				},
 				Containers: []*ateletpb.Container{
 					{
@@ -785,10 +785,10 @@ func TestBuildAteomWorkloadSpecValidation(t *testing.T) {
 			wantErr: `container "ctr" mounts volume "missing-vol" which is not defined in workload volumes`,
 		},
 		{
-			name: "unsupported volume type",
+			name: "unsupported volume source",
 			in: &ateletpb.WorkloadSpec{
 				Volumes: []*ateletpb.Volume{
-					{Name: "data", Type: ateletpb.VolumeType_VOLUME_TYPE_UNSPECIFIED},
+					{Name: "data"},
 				},
 				Containers: []*ateletpb.Container{
 					{
@@ -799,14 +799,14 @@ func TestBuildAteomWorkloadSpecValidation(t *testing.T) {
 					},
 				},
 			},
-			wantErr: `container "ctr" mounts volume "data" with unsupported type VOLUME_TYPE_UNSPECIFIED`,
+			wantErr: `container "ctr" mounts volume "data" with unsupported source <nil>`,
 		},
 		{
 			name: "duplicate volume names",
 			in: &ateletpb.WorkloadSpec{
 				Volumes: []*ateletpb.Volume{
-					{Name: "data", Type: ateletpb.VolumeType_VOLUME_TYPE_DURABLE_DIR},
-					{Name: "data", Type: ateletpb.VolumeType_VOLUME_TYPE_EXTERNAL},
+					{Name: "data", Source: &ateletpb.Volume_DurableDir{DurableDir: &ateletpb.DurableDirVolume{}}},
+					{Name: "data", Source: &ateletpb.Volume_External{External: &ateletpb.ExternalVolumeSource{}}},
 				},
 				Containers: []*ateletpb.Container{
 					{
@@ -1682,7 +1682,7 @@ func TestShouldHaveSnapshots(t *testing.T) {
 				Scope: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA,
 				Spec: &ateletpb.WorkloadSpec{
 					Volumes: []*ateletpb.Volume{
-						{Name: "durable", Type: ateletpb.VolumeType_VOLUME_TYPE_DURABLE_DIR},
+						{Name: "durable", Source: &ateletpb.Volume_DurableDir{DurableDir: &ateletpb.DurableDirVolume{}}},
 					},
 				},
 			},
@@ -1694,7 +1694,7 @@ func TestShouldHaveSnapshots(t *testing.T) {
 				Scope: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA,
 				Spec: &ateletpb.WorkloadSpec{
 					Volumes: []*ateletpb.Volume{
-						{Name: "csi", Type: ateletpb.VolumeType_VOLUME_TYPE_EXTERNAL},
+						{Name: "csi", Source: &ateletpb.Volume_External{External: &ateletpb.ExternalVolumeSource{}}},
 					},
 				},
 			},
@@ -1706,8 +1706,8 @@ func TestShouldHaveSnapshots(t *testing.T) {
 				Scope: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA,
 				Spec: &ateletpb.WorkloadSpec{
 					Volumes: []*ateletpb.Volume{
-						{Name: "durable", Type: ateletpb.VolumeType_VOLUME_TYPE_DURABLE_DIR},
-						{Name: "csi", Type: ateletpb.VolumeType_VOLUME_TYPE_EXTERNAL},
+						{Name: "durable", Source: &ateletpb.Volume_DurableDir{DurableDir: &ateletpb.DurableDirVolume{}}},
+						{Name: "csi", Source: &ateletpb.Volume_External{External: &ateletpb.ExternalVolumeSource{}}},
 					},
 				},
 			},

@@ -726,7 +726,7 @@ func shouldHaveSnapshots(req *ateletpb.CheckpointRequest) bool {
 	}
 
 	for _, vol := range req.GetSpec().GetVolumes() {
-		if vol.GetType() == ateletpb.VolumeType_VOLUME_TYPE_DURABLE_DIR {
+		if _, ok := vol.GetSource().(*ateletpb.Volume_DurableDir); ok {
 			return true
 		}
 	}
@@ -1446,7 +1446,7 @@ func (s *AteomHerder) prepareOCIBundles(
 	}
 	// make directories for all durable-dir volumes
 	for _, vol := range spec.GetVolumes() {
-		if vol.GetType() == ateletpb.VolumeType_VOLUME_TYPE_DURABLE_DIR {
+		if vol.GetDurableDir() != nil {
 			volPath := ateompath.DurableDirVolumeMountPoint(actorUID, vol.GetName())
 			if err := os.MkdirAll(volPath, 0o700); err != nil {
 				return fmt.Errorf("while creating %q: %w", volPath, err)
@@ -1465,7 +1465,7 @@ func (s *AteomHerder) prepareOCIBundles(
 		// Declare durable-dir volumes to gVisor. We use the volume name as the
 		// mount hint name to support multiple durable-dir volumes.
 		for _, vol := range spec.GetVolumes() {
-			if vol.GetType() == ateletpb.VolumeType_VOLUME_TYPE_DURABLE_DIR {
+			if vol.GetDurableDir() != nil {
 				annotations[fmt.Sprintf("dev.gvisor.spec.mount.%s.type", vol.GetName())] = "bind"
 				annotations[fmt.Sprintf("dev.gvisor.spec.mount.%s.share", vol.GetName())] = "container"
 				annotations[fmt.Sprintf("dev.gvisor.spec.mount.%s.source", vol.GetName())] = ateompath.DurableDirVolumeMountPoint(actorUID, vol.GetName())
@@ -1543,13 +1543,13 @@ func (s *AteomHerder) dialAteom(ctx context.Context, targetAteomUid string) (ate
 // buildAteomWorkloadSpec projects the atelet-facing workload spec onto
 // the ateom-facing one.
 func buildAteomWorkloadSpec(spec *ateletpb.WorkloadSpec) (*ateompb.WorkloadSpec, error) {
-	volumes := make(map[string]ateletpb.VolumeType)
+	volumes := make(map[string]*ateletpb.Volume)
 	for _, vol := range spec.GetVolumes() {
 		name := vol.GetName()
 		if _, duplicate := volumes[name]; duplicate {
 			return nil, fmt.Errorf("duplicate volume name %q in workload spec", name)
 		}
-		volumes[name] = vol.GetType()
+		volumes[name] = vol
 	}
 
 	out := &ateompb.WorkloadSpec{}
@@ -1558,24 +1558,24 @@ func buildAteomWorkloadSpec(spec *ateletpb.WorkloadSpec) (*ateompb.WorkloadSpec,
 		var csiMounts []*ateompb.VolumeMount
 		for _, vm := range ctr.GetVolumeMounts() {
 			volName := vm.GetName()
-			volType, ok := volumes[volName]
+			vol, ok := volumes[volName]
 			if !ok {
 				return nil, fmt.Errorf("container %q mounts volume %q which is not defined in workload volumes", ctr.GetName(), volName)
 			}
 
-			switch volType {
-			case ateletpb.VolumeType_VOLUME_TYPE_DURABLE_DIR:
+			switch vol.GetSource().(type) {
+			case *ateletpb.Volume_DurableDir:
 				ddMounts = append(ddMounts, &ateompb.DurableDirVolumeMount{
 					VolumeName: volName,
 					MountPath:  vm.GetMountPath(),
 				})
-			case ateletpb.VolumeType_VOLUME_TYPE_EXTERNAL:
+			case *ateletpb.Volume_External:
 				csiMounts = append(csiMounts, &ateompb.VolumeMount{
 					VolumeName: volName,
 					MountPath:  vm.GetMountPath(),
 				})
 			default:
-				return nil, fmt.Errorf("container %q mounts volume %q with unsupported type %v", ctr.GetName(), volName, volType)
+				return nil, fmt.Errorf("container %q mounts volume %q with unsupported source %T", ctr.GetName(), volName, vol.GetSource())
 			}
 		}
 		out.Containers = append(out.Containers, &ateompb.Container{

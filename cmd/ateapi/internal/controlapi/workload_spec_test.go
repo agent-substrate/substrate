@@ -55,7 +55,6 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 				Volumes: []*ateletpb.Volume{
 					{
 						Name:   "home",
-						Type:   ateletpb.VolumeType_VOLUME_TYPE_DURABLE_DIR,
 						Source: &ateletpb.Volume_DurableDir{DurableDir: &ateletpb.DurableDirVolume{}},
 					},
 				},
@@ -95,7 +94,6 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 				Volumes: []*ateletpb.Volume{
 					{
 						Name:   "home",
-						Type:   ateletpb.VolumeType_VOLUME_TYPE_DURABLE_DIR,
 						Source: &ateletpb.Volume_DurableDir{DurableDir: &ateletpb.DurableDirVolume{}},
 					},
 				},
@@ -127,7 +125,6 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 				Volumes: []*ateletpb.Volume{
 					{
 						Name:   "home",
-						Type:   ateletpb.VolumeType_VOLUME_TYPE_DURABLE_DIR,
 						Source: &ateletpb.Volume_DurableDir{DurableDir: &ateletpb.DurableDirVolume{}},
 					},
 				},
@@ -310,7 +307,6 @@ func TestAppendExternalVolumes(t *testing.T) {
 		Volumes: []*ateletpb.Volume{
 			{
 				Name: "vol-1",
-				Type: ateletpb.VolumeType_VOLUME_TYPE_EXTERNAL,
 				Source: &ateletpb.Volume_External{
 					External: &ateletpb.ExternalVolumeSource{
 						StorageVolumeId: "vol-gce-pd-123",

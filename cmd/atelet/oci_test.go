@@ -212,8 +212,8 @@ func TestBuildActorOCISpec_DurableDirVolumeMounts(t *testing.T) {
 		{Name: "cache", MountPath: "/var/cache"},
 	}
 	volumes := []*ateletpb.Volume{
-		{Name: "data", Type: ateletpb.VolumeType_VOLUME_TYPE_DURABLE_DIR},
-		{Name: "cache", Type: ateletpb.VolumeType_VOLUME_TYPE_DURABLE_DIR},
+		{Name: "data", Source: &ateletpb.Volume_DurableDir{DurableDir: &ateletpb.DurableDirVolume{}}},
+		{Name: "cache", Source: &ateletpb.Volume_DurableDir{DurableDir: &ateletpb.DurableDirVolume{}}},
 	}
 	spec := buildActorOCISpec(
 		actorUID,
