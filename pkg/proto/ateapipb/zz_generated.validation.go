@@ -48,7 +48,7 @@ func Validate_ActorRef(
 			}
 			// call field-attached validations
 			earlyReturn := false
-			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
 				errs = append(errs, e...)
 				earlyReturn = true
 			}
@@ -80,7 +80,7 @@ func Validate_ActorRef(
 			}
 			// call field-attached validations
 			earlyReturn := false
-			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
 				errs = append(errs, e...)
 				earlyReturn = true
 			}
@@ -121,7 +121,7 @@ func Validate_Assignment(
 			}
 			// call field-attached validations
 			earlyReturn := false
-			if e := validate.RequiredPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+			if e := validate.RequiredPointer(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
 				errs = append(errs, e...)
 				earlyReturn = true
 			}
@@ -150,7 +150,7 @@ func Validate_Assignment(
 			}
 			// call field-attached validations
 			earlyReturn := false
-			if e := validate.RequiredPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+			if e := validate.RequiredPointer(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
 				errs = append(errs, e...)
 				earlyReturn = true
 			}
@@ -190,7 +190,7 @@ func Validate_CreateActorRequest(
 			}
 			// call field-attached validations
 			earlyReturn := false
-			if e := validate.RequiredPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+			if e := validate.RequiredPointer(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
 				errs = append(errs, e...)
 				earlyReturn = true
 			}
@@ -221,7 +221,7 @@ func Validate_CreateActorRequest(
 			}
 			// call field-attached validations
 			earlyReturn := false
-			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
 				errs = append(errs, e...)
 				earlyReturn = true
 			}
@@ -253,7 +253,7 @@ func Validate_CreateActorRequest(
 			}
 			// call field-attached validations
 			earlyReturn := false
-			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+			if e := validate.RequiredValue(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
 				errs = append(errs, e...)
 				earlyReturn = true
 			}
@@ -285,7 +285,7 @@ func Validate_CreateActorRequest(
 			}
 			// call field-attached validations
 			earlyReturn := false
-			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
 				earlyReturn = true
 			}
 			if earlyReturn {
@@ -324,7 +324,7 @@ func Validate_DeleteActorRequest(
 			}
 			// call field-attached validations
 			earlyReturn := false
-			if e := validate.RequiredPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+			if e := validate.RequiredPointer(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
 				errs = append(errs, e...)
 				earlyReturn = true
 			}
@@ -364,7 +364,7 @@ func Validate_GetActorRequest(
 			}
 			// call field-attached validations
 			earlyReturn := false
-			if e := validate.RequiredPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+			if e := validate.RequiredPointer(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
 				errs = append(errs, e...)
 				earlyReturn = true
 			}
@@ -404,7 +404,7 @@ func Validate_PauseActorRequest(
 			}
 			// call field-attached validations
 			earlyReturn := false
-			if e := validate.RequiredPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+			if e := validate.RequiredPointer(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
 				errs = append(errs, e...)
 				earlyReturn = true
 			}
@@ -444,7 +444,7 @@ func Validate_ResumeActorRequest(
 			}
 			// call field-attached validations
 			earlyReturn := false
-			if e := validate.RequiredPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+			if e := validate.RequiredPointer(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
 				errs = append(errs, e...)
 				earlyReturn = true
 			}
@@ -485,11 +485,13 @@ func Validate_Selector(
 			}
 			// call field-attached validations
 			earlyReturn := false
-			if e := validate.MaxProperties(ctx, op, fldPath, obj, oldObj, 10).MarkShortCircuit(); len(e) != 0 {
+			/* not public yet
+			if e := validate.MaxProperties(ctx, op, fldPath, obj, oldObj, 10); len(e) != 0 {
 				errs = append(errs, e...)
 				earlyReturn = true
 			}
-			if e := validate.OptionalMap(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+			*/
+			if e := validate.OptionalMap(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
 				earlyReturn = true
 			}
 			if earlyReturn {
@@ -532,7 +534,7 @@ func Validate_SuspendActorRequest(
 			}
 			// call field-attached validations
 			earlyReturn := false
-			if e := validate.RequiredPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+			if e := validate.RequiredPointer(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
 				errs = append(errs, e...)
 				earlyReturn = true
 			}
@@ -572,7 +574,7 @@ func Validate_UpdateActorRequest(
 			}
 			// call field-attached validations
 			earlyReturn := false
-			if e := validate.RequiredPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+			if e := validate.RequiredPointer(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
 				errs = append(errs, e...)
 				earlyReturn = true
 			}
@@ -603,7 +605,7 @@ func Validate_UpdateActorRequest(
 			}
 			// call field-attached validations
 			earlyReturn := false
-			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
 				earlyReturn = true
 			}
 			if earlyReturn {
@@ -646,7 +648,7 @@ func Validate_Worker(
 			}
 			// call field-attached validations
 			earlyReturn := false
-			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj); len(e) != 0 {
 				earlyReturn = true
 			}
 			if earlyReturn {
