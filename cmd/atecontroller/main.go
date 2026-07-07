@@ -15,9 +15,11 @@ package main
 
 import (
 	"os"
+	"time"
 
 	"github.com/agent-substrate/substrate/cmd/atecontroller/internal/controllers"
 	"github.com/agent-substrate/substrate/internal/ateapiauth"
+	"github.com/agent-substrate/substrate/internal/autoscaler"
 	clientv1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/spf13/pflag"
@@ -101,6 +103,21 @@ func main() {
 		AteClient: ateapiClient,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ActorTemplate")
+		os.Exit(1)
+	}
+
+	if err = (&controllers.WorkerPoolAutoscaler{
+		Client:    mgr.GetClient(),
+		AteClient: ateapiClient,
+		Config: autoscaler.Config{
+			// Cluster-wide defaults; a pool overrides them per-field via
+			// spec.autoscaling (scaleDownStabilization, maxScaleUpStep).
+			ScaleDownStabilization: 60 * time.Second,
+			MaxScaleUpStep:         0, // unlimited
+		},
+		Interval: 10 * time.Second,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "WorkerPoolAutoscaler")
 		os.Exit(1)
 	}
 

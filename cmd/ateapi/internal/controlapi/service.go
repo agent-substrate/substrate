@@ -30,6 +30,7 @@ type Service struct {
 	actorTemplateLister listersv1alpha1.ActorTemplateLister
 	workerPoolLister    listersv1alpha1.WorkerPoolLister
 	actorWorkflow       *ActorWorkflow
+	pressure            *CapacityPressureHub
 }
 
 var _ ateapipb.ControlServer = (*Service)(nil)
@@ -44,12 +45,16 @@ func NewService(
 	dialer *AteletDialer,
 	kubeClient kubernetes.Interface,
 ) *Service {
+	// The hub is shared: the resume workflow publishes capacity-pressure events
+	// to it, and the WatchCapacityPressure RPC streams them to subscribers.
+	pressure := NewCapacityPressureHub()
 	s := &Service{
 		persistence:         persistence,
 		actorTemplateLister: actorTemplateLister,
 		workerPoolLister:    workerPoolLister,
 		dialer:              dialer,
-		actorWorkflow:       NewActorWorkflow(persistence, workerCache, dialer, actorTemplateLister, workerPoolLister, sandboxConfigLister, kubeClient),
+		actorWorkflow:       NewActorWorkflow(persistence, workerCache, dialer, actorTemplateLister, workerPoolLister, sandboxConfigLister, kubeClient, pressure),
+		pressure:            pressure,
 	}
 
 	return s

@@ -116,6 +116,7 @@ type AssignWorkerStep struct {
 	store            store.Interface
 	workerCache      *workercache.Cache
 	workerPoolLister listersv1alpha1.WorkerPoolLister
+	pressure         *CapacityPressureHub
 }
 
 func (s *AssignWorkerStep) Name() string { return "AssignWorker" }
@@ -172,6 +173,15 @@ func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, stat
 	if assignedWorker == nil {
 		pickedWorker := s.findFreeWorker(workers, eligible, state.Actor.GetLatestSnapshotInfo().GetLocal().GetNodeVmsWithLocalSnapshots())
 		if pickedWorker == nil {
+			// Signal capacity pressure so the autoscaler can react at the request
+			// edge instead of waiting for its next poll. Eligibility is a set:
+			// every eligible pool is out of free workers for this resume, so each
+			// gets the signal — autoscaled pools react per their own bounds.
+			if s.pressure != nil {
+				for pool := range eligible {
+					s.pressure.Publish(pool.Namespace, pool.Name)
+				}
+			}
 			return status.Errorf(codes.FailedPrecondition, "no free workers available")
 		}
 

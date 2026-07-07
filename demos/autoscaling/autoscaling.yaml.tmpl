@@ -1,0 +1,83 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ate-demo-autoscaling
+
+---
+
+apiVersion: ate.dev/v1alpha1
+kind: WorkerPool
+metadata:
+  name: autoscaling
+  namespace: ate-demo-autoscaling
+  labels:
+    workload: autoscaling
+spec:
+  # replicas becomes the autoscaler's to own once the bounds below are set;
+  # this is only the starting point. At steady state the autoscaler keeps
+  # `targetBuffer` idle workers, so a fresh pool settles at minReady warm.
+  replicas: 2
+  ateomImage: ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor
+
+  # --- Autoscaling (the feature this demo exercises, issue #198) ---
+  # Presence of this block is what enables autoscaling for the pool.
+  autoscaling:
+    # Never scale below 2 warm workers (the reservation floor).
+    minReady: 2
+    # Keep ~2 idle (warm) workers ready to absorb a resume burst.
+    targetBuffer: 2
+    # Ceiling the autoscaler may grow to.
+    maxReplicas: 8
+    # Hold scale-downs until the surplus has lasted this long (matches the
+    # cluster default; shown here as the per-pool knob). Scale-up is never
+    # delayed — omit maxScaleUpStep to keep it uncapped.
+    scaleDownStabilization: 60s
+
+---
+
+apiVersion: ate.dev/v1alpha1
+kind: ActorTemplate
+metadata:
+  name: autoscaling
+  namespace: ate-demo-autoscaling
+spec:
+  pauseImage: "registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4"
+  containers:
+  - name: workload
+    # Any workload works; the counter demo binary is reused so this demo has no
+    # source of its own — the focus is the WorkerPool, not the actor.
+    image: ko://github.com/agent-substrate/substrate/demos/counter
+    command: ["/ko-app/counter"]
+    readyz:
+      httpGet:
+        path: /readyz
+        port: 80
+    volumeMounts:
+    - name: data
+      mountPath: /home/counter
+  # Actors from this template may run on any pool carrying this label — here,
+  # exactly the autoscaled pool above.
+  workerSelector:
+    matchLabels:
+      workload: autoscaling
+  snapshotsConfig:
+    onPause: Full
+    onCommit: Data
+    location: gs://${BUCKET_NAME}/ate-demo-autoscaling/
+  volumes:
+  - name: data
+    durableDir: {}

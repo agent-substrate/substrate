@@ -64,6 +64,11 @@ service Control {
 
   // Debugging: drop all data from the ate database.
   rpc DebugClear(DebugClearRequest) returns (DebugClearResponse) {}
+
+  // Stream a notification whenever a resume finds no free worker in a pool — a
+  // capacity-pressure signal sensed at the request edge. The autoscaler
+  // subscribes so it can react immediately instead of waiting for its poll.
+  rpc WatchCapacityPressure(WatchCapacityPressureRequest) returns (stream CapacityPressureEvent) {}
 }
 
 enum SnapshotType {
@@ -312,6 +317,15 @@ message KubeNamespacedObjectRef {
 message DebugClearRequest {}
 
 message DebugClearResponse {}
+
+message WatchCapacityPressureRequest {}
+
+// CapacityPressureEvent signals that a worker pool had no free worker for a
+// resume, identifying the pool so a consumer can react per-pool.
+message CapacityPressureEvent {
+  string worker_namespace = 1;
+  string worker_pool      = 2;
+}
 
 // SessionIdentity allows substrate workloads to exchange their
 // infrastructure-level credentials (k8s service account token, etc.) for a

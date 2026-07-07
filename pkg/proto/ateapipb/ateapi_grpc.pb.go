@@ -35,20 +35,21 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	Control_GetActor_FullMethodName       = "/ateapi.Control/GetActor"
-	Control_CreateActor_FullMethodName    = "/ateapi.Control/CreateActor"
-	Control_UpdateActor_FullMethodName    = "/ateapi.Control/UpdateActor"
-	Control_SuspendActor_FullMethodName   = "/ateapi.Control/SuspendActor"
-	Control_PauseActor_FullMethodName     = "/ateapi.Control/PauseActor"
-	Control_ResumeActor_FullMethodName    = "/ateapi.Control/ResumeActor"
-	Control_DeleteActor_FullMethodName    = "/ateapi.Control/DeleteActor"
-	Control_ListWorkers_FullMethodName    = "/ateapi.Control/ListWorkers"
-	Control_ListActors_FullMethodName     = "/ateapi.Control/ListActors"
-	Control_CreateAtespace_FullMethodName = "/ateapi.Control/CreateAtespace"
-	Control_GetAtespace_FullMethodName    = "/ateapi.Control/GetAtespace"
-	Control_ListAtespaces_FullMethodName  = "/ateapi.Control/ListAtespaces"
-	Control_DeleteAtespace_FullMethodName = "/ateapi.Control/DeleteAtespace"
-	Control_DebugClear_FullMethodName     = "/ateapi.Control/DebugClear"
+	Control_GetActor_FullMethodName              = "/ateapi.Control/GetActor"
+	Control_CreateActor_FullMethodName           = "/ateapi.Control/CreateActor"
+	Control_UpdateActor_FullMethodName           = "/ateapi.Control/UpdateActor"
+	Control_SuspendActor_FullMethodName          = "/ateapi.Control/SuspendActor"
+	Control_PauseActor_FullMethodName            = "/ateapi.Control/PauseActor"
+	Control_ResumeActor_FullMethodName           = "/ateapi.Control/ResumeActor"
+	Control_DeleteActor_FullMethodName           = "/ateapi.Control/DeleteActor"
+	Control_ListWorkers_FullMethodName           = "/ateapi.Control/ListWorkers"
+	Control_ListActors_FullMethodName            = "/ateapi.Control/ListActors"
+	Control_CreateAtespace_FullMethodName        = "/ateapi.Control/CreateAtespace"
+	Control_GetAtespace_FullMethodName           = "/ateapi.Control/GetAtespace"
+	Control_ListAtespaces_FullMethodName         = "/ateapi.Control/ListAtespaces"
+	Control_DeleteAtespace_FullMethodName        = "/ateapi.Control/DeleteAtespace"
+	Control_DebugClear_FullMethodName            = "/ateapi.Control/DebugClear"
+	Control_WatchCapacityPressure_FullMethodName = "/ateapi.Control/WatchCapacityPressure"
 )
 
 // ControlClient is the client API for Control service.
@@ -85,6 +86,10 @@ type ControlClient interface {
 	DeleteAtespace(ctx context.Context, in *DeleteAtespaceRequest, opts ...grpc.CallOption) (*DeleteAtespaceResponse, error)
 	// Debugging: drop all data from the ate database.
 	DebugClear(ctx context.Context, in *DebugClearRequest, opts ...grpc.CallOption) (*DebugClearResponse, error)
+	// Stream a notification whenever a resume finds no free worker in a pool — a
+	// capacity-pressure signal sensed at the request edge. The autoscaler
+	// subscribes so it can react immediately instead of waiting for its poll.
+	WatchCapacityPressure(ctx context.Context, in *WatchCapacityPressureRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[CapacityPressureEvent], error)
 }
 
 type controlClient struct {
@@ -235,6 +240,25 @@ func (c *controlClient) DebugClear(ctx context.Context, in *DebugClearRequest, o
 	return out, nil
 }
 
+func (c *controlClient) WatchCapacityPressure(ctx context.Context, in *WatchCapacityPressureRequest, opts ...grpc.CallOption) (grpc.ServerStreamingClient[CapacityPressureEvent], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &Control_ServiceDesc.Streams[0], Control_WatchCapacityPressure_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[WatchCapacityPressureRequest, CapacityPressureEvent]{ClientStream: stream}
+	if err := x.ClientStream.SendMsg(in); err != nil {
+		return nil, err
+	}
+	if err := x.ClientStream.CloseSend(); err != nil {
+		return nil, err
+	}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type Control_WatchCapacityPressureClient = grpc.ServerStreamingClient[CapacityPressureEvent]
+
 // ControlServer is the server API for Control service.
 // All implementations must embed UnimplementedControlServer
 // for forward compatibility.
@@ -269,6 +293,10 @@ type ControlServer interface {
 	DeleteAtespace(context.Context, *DeleteAtespaceRequest) (*DeleteAtespaceResponse, error)
 	// Debugging: drop all data from the ate database.
 	DebugClear(context.Context, *DebugClearRequest) (*DebugClearResponse, error)
+	// Stream a notification whenever a resume finds no free worker in a pool — a
+	// capacity-pressure signal sensed at the request edge. The autoscaler
+	// subscribes so it can react immediately instead of waiting for its poll.
+	WatchCapacityPressure(*WatchCapacityPressureRequest, grpc.ServerStreamingServer[CapacityPressureEvent]) error
 	mustEmbedUnimplementedControlServer()
 }
 
@@ -320,6 +348,9 @@ func (UnimplementedControlServer) DeleteAtespace(context.Context, *DeleteAtespac
 }
 func (UnimplementedControlServer) DebugClear(context.Context, *DebugClearRequest) (*DebugClearResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method DebugClear not implemented")
+}
+func (UnimplementedControlServer) WatchCapacityPressure(*WatchCapacityPressureRequest, grpc.ServerStreamingServer[CapacityPressureEvent]) error {
+	return status.Error(codes.Unimplemented, "method WatchCapacityPressure not implemented")
 }
 func (UnimplementedControlServer) mustEmbedUnimplementedControlServer() {}
 func (UnimplementedControlServer) testEmbeddedByValue()                 {}
@@ -594,6 +625,17 @@ func _Control_DebugClear_Handler(srv interface{}, ctx context.Context, dec func(
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Control_WatchCapacityPressure_Handler(srv interface{}, stream grpc.ServerStream) error {
+	m := new(WatchCapacityPressureRequest)
+	if err := stream.RecvMsg(m); err != nil {
+		return err
+	}
+	return srv.(ControlServer).WatchCapacityPressure(m, &grpc.GenericServerStream[WatchCapacityPressureRequest, CapacityPressureEvent]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type Control_WatchCapacityPressureServer = grpc.ServerStreamingServer[CapacityPressureEvent]
+
 // Control_ServiceDesc is the grpc.ServiceDesc for Control service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -658,7 +700,13 @@ var Control_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _Control_DebugClear_Handler,
 		},
 	},
-	Streams:  []grpc.StreamDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "WatchCapacityPressure",
+			Handler:       _Control_WatchCapacityPressure_Handler,
+			ServerStreams: true,
+		},
+	},
 	Metadata: "ateapi.proto",
 }
 
