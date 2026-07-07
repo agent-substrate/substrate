@@ -69,8 +69,8 @@ message ArchAssets {
 // architecture (GOARCH) and then by asset name. atelet's backend code
 // interprets the asset names (gVisor expects "runsc").
 message SandboxAssets {
-  string sandbox_class = 1;          // e.g. "gvisor"
-  map<string, ArchAssets> assets = 2; // arch -> {name -> file}
+  string                  sandbox_class = 1;          // e.g. "gvisor"
+  map<string, ArchAssets> assets        = 2; // arch -> {name -> file}
 }
 
 // WorkloadSpec parallels Pod, but with far fewer configurable fields.
@@ -80,26 +80,22 @@ message WorkloadSpec {
   repeated Volume    volumes     = 3;
 }
 
-enum VolumeType {
-  VOLUME_TYPE_UNSPECIFIED  = 0;
-  VOLUME_TYPE_DURABLE_DIR  = 1;
-}
-
 message DurableDirVolume {
 }
 
 message Volume {
   string name = 1;
 
-  VolumeType type = 2;
-
-  oneof source{
+  oneof source {
     DurableDirVolume durable_dir = 3;
   }
+
+  reserved 2;
+  reserved "type";
 }
 
 message VolumeMount{
-  string name = 1;
+  string name       = 1;
   string mount_path = 2;
 }
 
@@ -108,7 +104,7 @@ message Container {
   string               image         = 2;
   repeated string      command       = 3;
   repeated EnvEntry    env           = 4;
-  Readyz               readyz  = 5;
+  Readyz               readyz        = 5;
   repeated VolumeMount volume_mounts = 6;
 }
 
@@ -128,7 +124,7 @@ message HTTPGetAction {
   // Path to access on the HTTP server. Empty means "/readyz".
   string path = 1;
   // TCP port to connect to (1..65535).
-  int32  port = 2;
+  int32 port = 2;
 }
 
 message RunResponse {
@@ -158,7 +154,7 @@ enum CheckpointType {
   // Should never happen
   CHECKPOINT_TYPE_UNSPECIFIED = 0;
   // Save snapshot only in local filesystem
-  CHECKPOINT_TYPE_LOCAL  = 1;
+  CHECKPOINT_TYPE_LOCAL = 1;
   // Save snapshot to object storage
   CHECKPOINT_TYPE_EXTERNAL = 2;
 }
