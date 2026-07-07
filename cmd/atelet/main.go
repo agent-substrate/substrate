@@ -1401,7 +1401,7 @@ func (s *AteomHerder) prepareOCIBundles(
 	}
 	// make directories for all durable-dir volumes
 	for _, vol := range spec.GetVolumes() {
-		if vol.GetType() == ateletpb.VolumeType_VOLUME_TYPE_DURABLE_DIR {
+		if vol.GetDurableDir() != nil {
 			volPath := ateompath.DurableDirVolumeMountPoint(actorUID, vol.GetName())
 			if err := os.MkdirAll(volPath, 0o700); err != nil {
 				return fmt.Errorf("while creating %q: %w", volPath, err)
@@ -1420,7 +1420,7 @@ func (s *AteomHerder) prepareOCIBundles(
 		// Declare durable-dir volumes to gVisor. We use the volume name as the
 		// mount hint name to support multiple durable-dir volumes.
 		for _, vol := range spec.GetVolumes() {
-			if vol.GetType() == ateletpb.VolumeType_VOLUME_TYPE_DURABLE_DIR {
+			if vol.GetDurableDir() != nil {
 				annotations[fmt.Sprintf("dev.gvisor.spec.mount.%s.type", vol.GetName())] = "bind"
 				annotations[fmt.Sprintf("dev.gvisor.spec.mount.%s.share", vol.GetName())] = "container"
 				annotations[fmt.Sprintf("dev.gvisor.spec.mount.%s.source", vol.GetName())] = ateompath.DurableDirVolumeMountPoint(actorUID, vol.GetName())
@@ -1498,7 +1498,8 @@ func (s *AteomHerder) dialAteom(ctx context.Context, targetAteomUid string) (ate
 func buildAteomWorkloadSpec(spec *ateletpb.WorkloadSpec) *ateompb.WorkloadSpec {
 	ddVolumes := make(map[string]bool)
 	for _, vol := range spec.GetVolumes() {
-		if vol.GetType() == ateletpb.VolumeType_VOLUME_TYPE_DURABLE_DIR {
+		switch vol.GetSource().(type) {
+		case *ateletpb.Volume_DurableDir:
 			ddVolumes[vol.GetName()] = true
 		}
 	}

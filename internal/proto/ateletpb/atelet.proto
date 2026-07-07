@@ -132,12 +132,6 @@ message WorkloadSpec {
   reserved "pause_image"; // moved to SandboxAssets
 }
 
-enum VolumeType {
-  VOLUME_TYPE_UNSPECIFIED = 0;
-  VOLUME_TYPE_DURABLE_DIR = 1;
-  VOLUME_TYPE_EXTERNAL = 2;
-}
-
 message DurableDirVolume {
 }
 
@@ -150,11 +144,9 @@ message ExternalVolumeSource {
 message Volume {
   string name = 1;
 
-  VolumeType type = 2;
-
   oneof source {
-    DurableDirVolume durable_dir = 3;
-    ExternalVolumeSource external = 4;
+    DurableDirVolume durable_dir = 2;
+    ExternalVolumeSource external = 3;
   }
 }
 

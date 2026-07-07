@@ -295,17 +295,17 @@ func buildActorOCISpec(actorUID string, args []string, env []string, annotations
 	}
 
 	// Prepare and mount all volumes.
-	volumeTypes := make(map[string]ateletpb.VolumeType)
+	volumesByName := make(map[string]*ateletpb.Volume)
 	for _, vol := range volumes {
-		volumeTypes[vol.GetName()] = vol.GetType()
+		volumesByName[vol.GetName()] = vol
 	}
 
 	for _, vm := range volumeMounts {
 		var srcPath string
-		switch volumeTypes[vm.GetName()] {
-		case ateletpb.VolumeType_VOLUME_TYPE_DURABLE_DIR:
+		switch volumesByName[vm.GetName()].GetSource().(type) {
+		case *ateletpb.Volume_DurableDir:
 			srcPath = ateompath.DurableDirVolumeMountPoint(actorUID, vm.GetName())
-		case ateletpb.VolumeType_VOLUME_TYPE_EXTERNAL:
+		case *ateletpb.Volume_External:
 			srcPath = ateompath.VolumeHostPath(actorUID, vm.GetName())
 		default:
 			continue
