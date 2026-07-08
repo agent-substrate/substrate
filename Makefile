@@ -40,8 +40,8 @@ build: build-images build-atectl
 
 .PHONY: build-images
 build-images:
-	GOFLAGS='"-ldflags=$(LDFLAGS)"' \
 	$(KO) build \
+	    --ldflags="$(LDFLAGS)" \
 	    ./cmd/ateapi \
 	    ./cmd/atelet \
 	    ./cmd/podcertcontroller \
@@ -57,8 +57,7 @@ build-atenet:
 
 .PHONY: build-demos
 build-demos:
-	GOFLAGS='"-ldflags=$(LDFLAGS)"' \
-	    $(KO) build ./demos/counter
+	$(KO) build --ldflags="$(LDFLAGS)" ./demos/counter
 
 .PHONY: test
 test:
@@ -69,6 +68,12 @@ e2e: build build-demos
 	hack/run-e2e.sh
 
 .PHONY: fmt verify-fmt
+
+# Prints the Go ldflags (used for scripts to do version stamping).
+ldflags:
+	@for flag in $(LDFLAGS); do \
+		echo $$flag; \
+	done
 
 # Formats all Go files in the project
 fmt:

@@ -110,15 +110,25 @@ run_kubectl_ate() {
 }
 
 run_ko() {
+  # Build up a set of ldflags to pass to ko.
+  local ldflags=()
+  mapfile -t ldflags < <(make ldflags)
+  for i in "${!ldflags[@]}"; do
+    ldflags[i]="--ldflags=${ldflags[i]}"
+  done
+
   # Only ko subcommands that delegate to kubectl (apply, create, delete, run)
   # accept args after `--`. ko build, resolve, deps, login etc. reject
   # `--context=...` as an unknown subcommand and abort the install.
   case "${1:-}" in
     apply|create|delete|run)
-      ./hack/run-tool.sh ko "$@" ${KUBECTL_CONTEXT:+-- --context="${KUBECTL_CONTEXT}"}
+      ./hack/run-tool.sh ko "$@" \
+          "${ldflags[@]}" \
+          ${KUBECTL_CONTEXT:+-- --context="${KUBECTL_CONTEXT}"}
       ;;
     *)
-      ./hack/run-tool.sh ko "$@"
+      ./hack/run-tool.sh ko "$@" \
+          "${ldflags[@]}"
       ;;
   esac
 }
