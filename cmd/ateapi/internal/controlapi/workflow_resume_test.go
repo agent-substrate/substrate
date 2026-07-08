@@ -185,3 +185,150 @@ func TestEligibleWorkerPools(t *testing.T) {
 		})
 	}
 }
+
+func freeWorker(pool, pod, node string) *ateapipb.Worker {
+	return &ateapipb.Worker{
+		WorkerNamespace: "ns",
+		WorkerPool:      pool,
+		WorkerPod:       pod,
+		NodeName:        node,
+	}
+}
+
+func TestFindFreeWorker_NodeRestrictions(t *testing.T) {
+	eligible := map[types.NamespacedName]struct{}{
+		{Namespace: "ns", Name: "pool1"}: {},
+	}
+	workers := []*ateapipb.Worker{
+		freeWorker("pool1", "w1", "node1"),
+		freeWorker("pool1", "w2", "node2"),
+	}
+
+	tests := []struct {
+		name              string
+		nodesRestrictions []string
+		wantNodes         []string // acceptable NodeNames for the picked worker
+		wantNil           bool
+	}{
+		{
+			name:              "no restrictions picks any worker",
+			nodesRestrictions: nil,
+			wantNodes:         []string{"node1", "node2"},
+		},
+		{
+			name:              "restriction filters to the matching node",
+			nodesRestrictions: []string{"node2"},
+			wantNodes:         []string{"node2"},
+		},
+		{
+			name:              "restriction on an absent node matches nothing",
+			nodesRestrictions: []string{"node3"},
+			wantNil:           true,
+		},
+		{
+			// Actor records written before FinalizePausedStep guarded against
+			// an unknown node contain [""]; it must not exclude every worker.
+			name:              "empty node name is ignored, not treated as a restriction",
+			nodesRestrictions: []string{""},
+			wantNodes:         []string{"node1", "node2"},
+		},
+		{
+			name:              "empty node name alongside a real one keeps the real restriction",
+			nodesRestrictions: []string{"", "node1"},
+			wantNodes:         []string{"node1"},
+		},
+	}
+
+	s := &AssignWorkerStep{}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := s.findFreeWorker(workers, eligible, tt.nodesRestrictions).picked
+			if tt.wantNil {
+				if got != nil {
+					t.Fatalf("expected no worker, got %v", got)
+				}
+				return
+			}
+			if got == nil {
+				t.Fatalf("expected a worker, got nil")
+			}
+			found := false
+			for _, n := range tt.wantNodes {
+				if got.GetNodeName() == n {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("picked worker on node %q, want one of %v", got.GetNodeName(), tt.wantNodes)
+			}
+		})
+	}
+}
+
+func busyWorker(pool, pod, node string) *ateapipb.Worker {
+	w := freeWorker(pool, pod, node)
+	w.Assignment = &ateapipb.Assignment{
+		Actor: &ateapipb.ActorRef{Atespace: "ate", Name: "other"},
+	}
+	return w
+}
+
+func TestNoWorkerMessage(t *testing.T) {
+	eligible := map[types.NamespacedName]struct{}{
+		{Namespace: "ns", Name: "pool1"}: {},
+	}
+
+	tests := []struct {
+		name              string
+		workers           []*ateapipb.Worker
+		nodesRestrictions []string
+		wantMessage       string
+	}{
+		{
+			name:              "no restriction keeps the generic message",
+			workers:           []*ateapipb.Worker{busyWorker("pool1", "w1", "node1")},
+			nodesRestrictions: nil,
+			wantMessage:       "no free workers available",
+		},
+		{
+			name: "snapshot node busy",
+			workers: []*ateapipb.Worker{
+				busyWorker("pool1", "w1", "node1"),
+				freeWorker("pool1", "w2", "node2"),
+			},
+			nodesRestrictions: []string{"node1"},
+			wantMessage:       "actor's local snapshot is on node(s) [node1] but all eligible workers on those nodes are busy",
+		},
+		{
+			name: "snapshot node gone",
+			workers: []*ateapipb.Worker{
+				freeWorker("pool1", "w2", "node2"),
+			},
+			nodesRestrictions: []string{"node1"},
+			wantMessage:       "actor's local snapshot is on node(s) [node1] but no eligible workers exist on those nodes (the node(s) may have been removed)",
+		},
+		{
+			// A worker on the snapshot's node in an ineligible pool must not
+			// flip the message from "gone" to "busy".
+			name: "ineligible pools don't count as workers on the node",
+			workers: []*ateapipb.Worker{
+				busyWorker("pool2", "w1", "node1"),
+			},
+			nodesRestrictions: []string{"node1"},
+			wantMessage:       "actor's local snapshot is on node(s) [node1] but no eligible workers exist on those nodes (the node(s) may have been removed)",
+		},
+	}
+
+	s := &AssignWorkerStep{}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			scan := s.findFreeWorker(tt.workers, eligible, tt.nodesRestrictions)
+			if scan.picked != nil {
+				t.Fatalf("expected no worker to be picked, got %v", scan.picked)
+			}
+			if got := scan.noWorkerMessage(); got != tt.wantMessage {
+				t.Errorf("noWorkerMessage() = %q, want %q", got, tt.wantMessage)
+			}
+		})
+	}
+}

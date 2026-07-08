@@ -170,13 +170,13 @@ func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, stat
 
 	// If not, find a free one using randomized shuffling
 	if assignedWorker == nil {
-		pickedWorker := s.findFreeWorker(workers, eligible, state.Actor.GetLatestSnapshotInfo().GetLocal().GetNodeVmsWithLocalSnapshots())
-		if pickedWorker == nil {
-			return status.Errorf(codes.FailedPrecondition, "no free workers available")
+		scan := s.findFreeWorker(workers, eligible, state.Actor.GetLatestSnapshotInfo().GetLocal().GetNodeVmsWithLocalSnapshots())
+		if scan.picked == nil {
+			return status.Errorf(codes.FailedPrecondition, "%s", scan.noWorkerMessage())
 		}
 
-		assignedWorker = pickedWorker
-		slog.InfoContext(ctx, "Picked worker", slog.Any("worker", pickedWorker.String()))
+		assignedWorker = scan.picked
+		slog.InfoContext(ctx, "Picked worker", slog.Any("worker", assignedWorker.String()))
 	}
 
 	// Workers() returns pointers directly from the cache so we need to clone before
@@ -219,16 +219,58 @@ func (s *AssignWorkerStep) RetryBackoff() *wait.Backoff {
 	}
 }
 
-func (s *AssignWorkerStep) findFreeWorker(workers []*ateapipb.Worker, eligible map[types.NamespacedName]struct{}, nodesRestrictions []string) *ateapipb.Worker {
+// workerScan is the outcome of a findFreeWorker pass. When picked is nil,
+// restrictedNodes and sawWorkerOnRestrictedNode (gathered during the same
+// pass) let the error distinguish a snapshot-locality conflict from plain
+// capacity exhaustion.
+type workerScan struct {
+	picked *ateapipb.Worker
+	// restrictedNodes is the snapshot-locality restriction in effect,
+	// with empty entries dropped.
+	restrictedNodes []string
+	// sawWorkerOnRestrictedNode reports whether any eligible worker exists on
+	// a restricted node; when picked is nil, all such workers are busy.
+	sawWorkerOnRestrictedNode bool
+}
+
+// noWorkerMessage explains a failed scan. A bare "no free workers available"
+// points operators at cluster capacity, which is the wrong place to look when
+// the real conflict is snapshot locality — or worse, a removed node that held
+// the actor's only checkpoint.
+func (sc workerScan) noWorkerMessage() string {
+	if len(sc.restrictedNodes) == 0 {
+		return "no free workers available"
+	}
+	if !sc.sawWorkerOnRestrictedNode {
+		return fmt.Sprintf(
+			"actor's local snapshot is on node(s) %v but no eligible workers exist on those nodes (the node(s) may have been removed)",
+			sc.restrictedNodes)
+	}
+	return fmt.Sprintf(
+		"actor's local snapshot is on node(s) %v but all eligible workers on those nodes are busy",
+		sc.restrictedNodes)
+}
+
+func (s *AssignWorkerStep) findFreeWorker(workers []*ateapipb.Worker, eligible map[types.NamespacedName]struct{}, nodesRestrictions []string) workerScan {
+	// Drop empty node names from the restriction list. Actor records written
+	// before FinalizePausedStep guarded against an unknown node contain [""],
+	// which no worker's NodeName can ever match; treating that as "no
+	// restriction" keeps those actors schedulable.
+	scan := workerScan{
+		restrictedNodes: slices.DeleteFunc(slices.Clone(nodesRestrictions), func(n string) bool { return n == "" }),
+	}
+
 	var freeWorkers []*ateapipb.Worker
 	for _, worker := range workers {
-		if worker.Assignment != nil {
-			continue
-		}
 		if _, ok := eligible[types.NamespacedName{Namespace: worker.GetWorkerNamespace(), Name: worker.GetWorkerPool()}]; !ok {
 			continue
 		}
-		if len(nodesRestrictions) == 0 || slices.Contains(nodesRestrictions, worker.GetNodeName()) {
+		if slices.Contains(scan.restrictedNodes, worker.GetNodeName()) {
+			scan.sawWorkerOnRestrictedNode = true
+		} else if len(scan.restrictedNodes) > 0 {
+			continue
+		}
+		if worker.Assignment == nil {
 			freeWorkers = append(freeWorkers, worker)
 		}
 	}
@@ -237,9 +279,9 @@ func (s *AssignWorkerStep) findFreeWorker(workers []*ateapipb.Worker, eligible m
 		rand.Shuffle(len(freeWorkers), func(i, j int) {
 			freeWorkers[i], freeWorkers[j] = freeWorkers[j], freeWorkers[i]
 		})
-		return freeWorkers[0]
+		scan.picked = freeWorkers[0]
 	}
-	return nil
+	return scan
 }
 
 type CallAteletRestoreStep struct {
