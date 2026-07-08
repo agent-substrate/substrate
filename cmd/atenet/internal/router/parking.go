@@ -18,7 +18,6 @@ import (
 	"context"
 	"errors"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -78,7 +77,8 @@ type parkingLot struct {
 	cfg     parkingConfig
 	metrics *parkingMetrics
 
-	active int64 // current number of occupied slots; accessed atomically
+	mu     sync.Mutex
+	active int // current number of occupied slots; guarded by mu
 }
 
 func newParkingLot(cfg parkingConfig, m *parkingMetrics) *parkingLot {
@@ -96,17 +96,14 @@ func (l *parkingLot) enter(ctx context.Context) (release func(outcome parkOutcom
 		return func(parkOutcome) {}, true
 	}
 
-	for {
-		cur := atomic.LoadInt64(&l.active)
-		if cur >= int64(l.cfg.maxParked) {
-			l.metrics.recordRejected(ctx)
-			return nil, false
-		}
-		if atomic.CompareAndSwapInt64(&l.active, cur, cur+1) {
-			break
-		}
-		// Lost the race to another goroutine; reload and retry.
+	l.mu.Lock()
+	if l.active >= l.cfg.maxParked {
+		l.mu.Unlock()
+		l.metrics.recordRejected(ctx)
+		return nil, false
 	}
+	l.active++
+	l.mu.Unlock()
 
 	start := time.Now()
 	l.metrics.addActive(ctx, 1)
@@ -114,7 +111,9 @@ func (l *parkingLot) enter(ctx context.Context) (release func(outcome parkOutcom
 	var once sync.Once
 	return func(outcome parkOutcome) {
 		once.Do(func() {
-			atomic.AddInt64(&l.active, -1)
+			l.mu.Lock()
+			l.active--
+			l.mu.Unlock()
 			l.metrics.addActive(ctx, -1)
 			l.metrics.recordWait(ctx, time.Since(start), outcome)
 		})
@@ -126,7 +125,9 @@ func (l *parkingLot) activeCount() int {
 	if l == nil {
 		return 0
 	}
-	return int(atomic.LoadInt64(&l.active))
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.active
 }
 
 // status returns a snapshot of the lot for the /statusz page. Safe on nil.
