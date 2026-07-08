@@ -240,6 +240,10 @@ func unmarshalWorkerEvent(payload string) (store.WorkerEvent, error) {
 
 const workerPubSubChannel = "worker-changes"
 
+// subscribeConfirmTimeout bounds WatchWorkers' wait for the SUBSCRIBE
+// confirmation.
+const subscribeConfirmTimeout = 5 * time.Second
+
 func (s *Persistence) publishWorkerEvent(ctx context.Context, eventType store.WorkerEventType, worker *ateapipb.Worker) {
 	payload, err := marshalWorkerEvent(eventType, worker)
 	if err != nil {
@@ -259,7 +263,9 @@ func (s *Persistence) WatchWorkers(ctx context.Context) (*store.WorkerWatch, err
 	// Subscribe sends the SUBSCRIBE command asynchronously; wait for the
 	// confirmation reply so that events published after WatchWorkers returns
 	// are guaranteed to be delivered to this subscription.
-	if _, err := pubsub.Receive(watchCtx); err != nil {
+	receiveCtx, receiveCancel := context.WithTimeout(watchCtx, subscribeConfirmTimeout)
+	defer receiveCancel()
+	if _, err := pubsub.Receive(receiveCtx); err != nil {
 		pubsub.Close()
 		cancel()
 		return nil, fmt.Errorf("while confirming worker subscription: %w", err)
