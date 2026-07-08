@@ -58,8 +58,7 @@ type routerConfig struct {
 
 	// Request parking: hold and retry requests whose actor cannot be served
 	// immediately due to transient worker-pool saturation, instead of failing
-	// fast. See parkingConfig.
-	ParkingEnabled   bool
+	// fast. A non-positive ParkingMaxParked disables parking. See parkingConfig.
 	ParkingMaxWait   time.Duration
 	ParkingMaxParked int
 }

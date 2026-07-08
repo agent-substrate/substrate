@@ -60,9 +60,8 @@ func NewRouterCmd() *cobra.Command {
 	cmd.Flags().StringVar(&cfg.Auth.AteapiServerName, "ateapi-server-name", "", "SNI / hostname expected on the ateapi server cert. Optional.")
 	cmd.Flags().BoolVar(&cfg.Auth.AteapiUseTokenAuth, "ateapi-use-token-auth", false, "Authenticate to ateapi with the Bearer token from --ateapi-token-file instead of the client certificate from --ateapi-client-cert.")
 	cmd.Flags().StringVar(&cfg.Auth.AteapiTokenFile, "ateapi-token-file", "", "Projected SA token file used as Bearer credential. Required with --ateapi-use-token-auth, ignored otherwise.")
-	cmd.Flags().BoolVar(&cfg.ParkingEnabled, "parking-enabled", defaultParkingEnabled, "Park (hold and retry) requests whose actor cannot be served immediately due to transient worker-pool saturation, instead of failing fast")
-	cmd.Flags().DurationVar(&cfg.ParkingMaxWait, "parking-max-wait", defaultParkingMaxWait, "Maximum time a request may be parked waiting for its actor to become routable")
-	cmd.Flags().IntVar(&cfg.ParkingMaxParked, "parking-max-parked", defaultParkingMaxParked, "Maximum number of requests that may be parked simultaneously; excess requests are shed with 503")
+	cmd.Flags().DurationVar(&cfg.ParkingMaxWait, "parking-max-wait", defaultParkingMaxWait, "Maximum time a request may be parked (held and retried) waiting for its actor to become routable")
+	cmd.Flags().IntVar(&cfg.ParkingMaxParked, "parking-max-parked", defaultParkingMaxParked, "Maximum number of requests that may be parked simultaneously; excess requests are shed with 503. 0 disables parking (requests fail fast on worker-pool saturation)")
 
 	return cmd
 }

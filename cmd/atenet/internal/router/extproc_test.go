@@ -269,9 +269,14 @@ func TestExtProc_ParkingLotFull(t *testing.T) {
 		},
 	}
 
-	// maxParked == 0 with parking enabled rejects every admission, deterministically
-	// simulating a full lot without needing concurrent in-flight requests.
-	s := NewExtProcServer(50051, clientMock, nil, parkingConfig{enabled: true, maxWait: time.Second, maxParked: 0}, nil)
+	// A 1-slot lot with the slot already occupied deterministically simulates a
+	// full lot without needing a concurrent in-flight request.
+	s := NewExtProcServer(50051, clientMock, nil, parkingConfig{maxWait: time.Second, maxParked: 1}, nil)
+	occupy, ok := s.parking.enter(context.Background())
+	if !ok {
+		t.Fatal("priming enter should be admitted")
+	}
+	defer occupy(parkOutcomeServed)
 
 	reqHeaders := &extprocv3.HttpHeaders{
 		Headers: &corev3.HeaderMap{

@@ -68,7 +68,7 @@ immediately, preserving prior semantics:
 | `DeadlineExceeded`                    | Fail fast → `504`                 |
 | `PermissionDenied` / `Unauthenticated`| Fail fast → `403` / `401`         |
 
-When parking is **disabled** (`--parking-enabled=false`), the router preserves
+When parking is **disabled** (`--parking-max-parked=0`), the router preserves
 its legacy fail-fast behavior: `FailedPrecondition` fails fast, there is no
 admission cap, and only `Aborted` (concurrent-resume) conflicts are retried,
 within the historical `15s` budget.
@@ -77,9 +77,8 @@ within the historical `15s` budget.
 
 | Flag                   | Default | Meaning                                                            |
 | ---------------------- | ------- | ------------------------------------------------------------------ |
-| `--parking-enabled`    | `true`  | Park requests on transient saturation instead of failing fast.     |
 | `--parking-max-wait`   | `30s`   | Max time a single request may stay parked awaiting resume.         |
-| `--parking-max-parked` | `2048`  | Max concurrent parked/in-flight resume requests; excess shed (503).|
+| `--parking-max-parked` | `2048`  | Max concurrent parked/in-flight resume requests; excess shed (503). `0` disables parking. |
 
 ## Observability
 

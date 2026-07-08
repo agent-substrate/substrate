@@ -60,7 +60,7 @@ kubectl port-forward -n ate-system svc/atenet-router 8000:80
 
 ## How to Use
 
-Parking is **on by default** (`--parking-enabled=true`, `--parking-max-wait=30s`,
+Parking is **on by default** (`--parking-max-wait=30s`,
 `--parking-max-parked=2048`), so the cluster you just deployed already parks.
 
 ### A. Watch a 503 become a served request
@@ -135,7 +135,7 @@ container's args:
 
 ```bash
 kubectl -n ate-system patch deployment atenet-router --type=json \
-  -p='[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--parking-enabled=false"}]'
+  -p='[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--parking-max-parked=0"}]'
 kubectl -n ate-system rollout status deployment/atenet-router
 ```
 

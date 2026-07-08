@@ -25,7 +25,7 @@
 #
 # Compare two runs:
 #   * parking ON  (default router config)        -> ~all 200, some elevated latency
-#   * parking OFF (--parking-enabled=false)       -> a burst of 503s
+#   * parking OFF (--parking-max-parked=0)       -> a burst of 503s
 # See README.md for how to flip the router flag.
 #
 # Usage:
@@ -143,7 +143,7 @@ printf "    200 latency    : avg %ss, slowest %ss  <- parked requests sit here\n
 echo
 if [[ "${busy}" -eq 0 ]]; then
   echo "    => 0 failures under saturation: parking absorbed the contention."
-  echo "       Re-run with the router started --parking-enabled=false to see 503s."
+  echo "       Re-run with the router started --parking-max-parked=0 to see 503s."
 else
   echo "    => ${busy} requests were shed with 503 (parking off, or lot full / budget exceeded)."
 fi

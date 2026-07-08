@@ -24,7 +24,6 @@ import (
 // Default request-parking parameters. See parkingConfig for the meaning of each
 // field; these are also the flag defaults wired up in NewCmd.
 const (
-	defaultParkingEnabled   = true
 	defaultParkingMaxWait   = 30 * time.Second
 	defaultParkingMaxParked = 2048
 )
@@ -49,18 +48,22 @@ const (
 // parking enabled the router holds ("parks") such a request and keeps retrying
 // the resume until the actor becomes routable or maxWait elapses, instead of
 // failing the request immediately. maxParked bounds how many requests may be
-// parked at once so the router sheds load rather than queueing without bound.
+// parked at once so the router sheds load rather than queueing without bound;
+// a non-positive maxParked disables parking entirely.
 type parkingConfig struct {
-	enabled   bool
 	maxWait   time.Duration
 	maxParked int
 }
+
+// enabled reports whether request parking is active. Parking has no separate
+// on/off switch: setting maxParked to 0 disables it, preserving the legacy
+// fail-fast behavior (no admission cap, no retry on pool saturation).
+func (c parkingConfig) enabled() bool { return c.maxParked > 0 }
 
 // defaultParkingConfig returns the built-in parking configuration (matching the
 // NewCmd flag defaults).
 func defaultParkingConfig() parkingConfig {
 	return parkingConfig{
-		enabled:   defaultParkingEnabled,
 		maxWait:   defaultParkingMaxWait,
 		maxParked: defaultParkingMaxParked,
 	}
@@ -71,8 +74,8 @@ func defaultParkingConfig() parkingConfig {
 // attempt; when the lot is full further requests are shed immediately so the
 // router applies backpressure instead of accumulating waiters without bound.
 //
-// A nil *parkingLot and a disabled config are both safe: enter always admits
-// and performs no accounting, preserving the router's legacy behavior.
+// With parking disabled (maxParked <= 0) enter always admits and performs no
+// accounting, preserving the router's legacy behavior.
 type parkingLot struct {
 	cfg     parkingConfig
 	metrics *parkingMetrics
@@ -92,7 +95,7 @@ func newParkingLot(cfg parkingConfig, m *parkingMetrics) *parkingLot {
 // waiting. When parking is disabled every request is admitted and no slot
 // accounting or metrics are recorded.
 func (l *parkingLot) enter(ctx context.Context) (release func(outcome parkOutcome), ok bool) {
-	if l == nil || !l.cfg.enabled {
+	if !l.cfg.enabled() {
 		return func(parkOutcome) {}, true
 	}
 
@@ -120,23 +123,17 @@ func (l *parkingLot) enter(ctx context.Context) (release func(outcome parkOutcom
 	}, true
 }
 
-// activeCount returns the number of requests currently parked. Safe on nil.
+// activeCount returns the number of requests currently parked.
 func (l *parkingLot) activeCount() int {
-	if l == nil {
-		return 0
-	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.active
 }
 
-// status returns a snapshot of the lot for the /statusz page. Safe on nil.
+// status returns a snapshot of the lot for the /statusz page.
 func (l *parkingLot) status() ParkingStatus {
-	if l == nil {
-		return ParkingStatus{}
-	}
 	return ParkingStatus{
-		Enabled:   l.cfg.enabled,
+		Enabled:   l.cfg.enabled(),
 		Active:    l.activeCount(),
 		MaxParked: l.cfg.maxParked,
 		MaxWait:   l.cfg.maxWait.String(),

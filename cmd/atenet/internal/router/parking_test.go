@@ -22,7 +22,7 @@ import (
 )
 
 func TestParkingLot_CapacityAndRelease(t *testing.T) {
-	lot := newParkingLot(parkingConfig{enabled: true, maxWait: time.Second, maxParked: 2}, nil)
+	lot := newParkingLot(parkingConfig{maxWait: time.Second, maxParked: 2}, nil)
 	ctx := context.Background()
 
 	r1, ok := lot.enter(ctx)
@@ -60,7 +60,7 @@ func TestParkingLot_CapacityAndRelease(t *testing.T) {
 }
 
 func TestParkingLot_ReleaseIsIdempotent(t *testing.T) {
-	lot := newParkingLot(parkingConfig{enabled: true, maxWait: time.Second, maxParked: 1}, nil)
+	lot := newParkingLot(parkingConfig{maxWait: time.Second, maxParked: 1}, nil)
 
 	release, ok := lot.enter(context.Background())
 	if !ok {
@@ -74,8 +74,9 @@ func TestParkingLot_ReleaseIsIdempotent(t *testing.T) {
 }
 
 func TestParkingLot_DisabledAlwaysAdmits(t *testing.T) {
-	// maxParked is 0, but a disabled lot ignores capacity entirely.
-	lot := newParkingLot(parkingConfig{enabled: false, maxParked: 0}, nil)
+	// maxParked == 0 means parking is disabled: every request is admitted
+	// with no slot accounting.
+	lot := newParkingLot(parkingConfig{maxParked: 0}, nil)
 
 	for i := 0; i < 5; i++ {
 		release, ok := lot.enter(context.Background())
@@ -87,27 +88,15 @@ func TestParkingLot_DisabledAlwaysAdmits(t *testing.T) {
 	if got := lot.activeCount(); got != 0 {
 		t.Fatalf("disabled lot should not account slots, active = %d", got)
 	}
-}
-
-func TestParkingLot_NilSafe(t *testing.T) {
-	var lot *parkingLot
-	release, ok := lot.enter(context.Background())
-	if !ok {
-		t.Fatal("nil lot should admit")
-	}
-	release(parkOutcomeServed) // must not panic
-	if got := lot.activeCount(); got != 0 {
-		t.Fatalf("nil lot active = %d, want 0", got)
-	}
-	if s := lot.status(); s.Enabled || s.Active != 0 {
-		t.Fatalf("nil lot status = %+v, want zero value", s)
+	if s := lot.status(); s.Enabled {
+		t.Fatalf("maxParked=0 must report parking disabled, got %+v", s)
 	}
 }
 
 func TestParkingLot_ConcurrentEntryRespectsCapacity(t *testing.T) {
 	const capacity = 8
 	const goroutines = 100
-	lot := newParkingLot(parkingConfig{enabled: true, maxWait: time.Second, maxParked: capacity}, nil)
+	lot := newParkingLot(parkingConfig{maxWait: time.Second, maxParked: capacity}, nil)
 
 	var admitted int64
 	var mu sync.Mutex

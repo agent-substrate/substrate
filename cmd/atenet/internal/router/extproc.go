@@ -51,7 +51,7 @@ func NewExtProcServer(port int, apiClient ateapipb.ControlClient, routeDuration 
 		port:          port,
 		apiClient:     apiClient,
 		recorder:      NewQueryRecorder(100),
-		resumer:       NewActorResumer(apiClient, withParking(parkCfg.enabled, parkCfg.maxWait)),
+		resumer:       NewActorResumer(apiClient, withParking(parkCfg.enabled(), parkCfg.maxWait)),
 		routeDuration: routeDuration,
 		parking:       newParkingLot(parkCfg, parkMetrics),
 	}
