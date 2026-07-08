@@ -38,7 +38,7 @@ import (
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	semconv "go.opentelemetry.io/otel/semconv/v1.21.0"
+	semconv "go.opentelemetry.io/otel/semconv/v1.40.0"
 )
 
 // InitLogger sets the global slog logger to a JSON handler wrapped in
@@ -62,6 +62,9 @@ var serviceInstanceID = uuid.NewString()
 func newResource(ctx context.Context, serviceName string) (*resource.Resource, error) {
 	res, err := resource.New(ctx,
 		resource.WithTelemetrySDK(),
+		// Must track the schema version the SDK's own detectors emit, else the
+		// merge drops the schema URL with ErrSchemaURLConflict (tolerated below).
+		resource.WithSchemaURL(semconv.SchemaURL),
 		resource.WithAttributes(
 			semconv.ServiceName(serviceName),
 			semconv.ServiceInstanceID(serviceInstanceID),

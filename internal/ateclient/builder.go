@@ -30,7 +30,7 @@ import (
 	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
-	semconv "go.opentelemetry.io/otel/semconv/v1.21.0"
+	semconv "go.opentelemetry.io/otel/semconv/v1.40.0"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 
@@ -308,6 +308,7 @@ func (c bearerTokenCreds) RequireTransportSecurity() bool { return true }
 
 func initTracing(ctx context.Context, enabled bool) (*sdktrace.TracerProvider, error) {
 	res, err := resource.New(ctx,
+		resource.WithSchemaURL(semconv.SchemaURL),
 		resource.WithAttributes(
 			semconv.UserAgentOriginal("kubectl-ate"),
 		),
