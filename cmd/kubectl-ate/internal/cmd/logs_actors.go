@@ -38,8 +38,12 @@ import (
 	"k8s.io/client-go/kubernetes"
 )
 
-var followLogs bool
-var logsAtespaceFlag string
+var (
+	followLogs       bool
+	containerFlag    string
+	supervisorFlag   bool
+	logsAtespaceFlag string
+)
 
 var logsActorsCmd = &cobra.Command{
 	Use:     "actors <actor-id>",
@@ -53,6 +57,8 @@ func init() {
 	logsActorsCmd.Flags().BoolVarP(&followLogs, "follow", "f", false, "Specify if the logs should be streamed.")
 	logsActorsCmd.Flags().StringVarP(&logsAtespaceFlag, "atespace", "a", "", "Atespace the actor lives in")
 	_ = logsActorsCmd.MarkFlagRequired("atespace")
+	logsActorsCmd.Flags().StringVarP(&containerFlag, "container", "c", "", "Show logs from the named container, filtering out other containers and the supervisor; add --supervisor to also include lifecycle logs.")
+	logsActorsCmd.Flags().BoolVar(&supervisorFlag, "supervisor", false, "Show only the ateom supervisor (lifecycle) logs, filtering out container logs; add --container to also include that container's logs.")
 	logsCmd.AddCommand(logsActorsCmd)
 }
 
@@ -84,6 +90,8 @@ type LogsActorRunner struct {
 	stdout            io.Writer
 	stderr            io.Writer
 	follow            bool
+	container         string
+	supervisor        bool
 	pollInterval      time.Duration
 	reconnectInterval time.Duration
 	tickerInterval    time.Duration
@@ -132,12 +140,13 @@ func (r *LogsActorRunner) runOneShot(ctx context.Context, actorID string) error 
 	}
 	defer stream.Close()
 
+	filter := logLineFilter{actorID: actorID, container: r.container, supervisor: r.supervisor}
 	scanner := bufio.NewScanner(stream)
 	buf := make([]byte, 0, 64*1024)
 	scanner.Buffer(buf, 1024*1024) // Support up to 1MB lines
 	for scanner.Scan() {
 		line := scanner.Text()
-		filterAndDisplayLogLine(line, actorID, r.stdout)
+		filterAndDisplayLogLine(line, filter, r.stdout)
 	}
 	if err := scanner.Err(); err != nil {
 		return fmt.Errorf("error reading log stream: %w", err)
@@ -210,12 +219,13 @@ func (r *LogsActorRunner) runFollow(ctx context.Context, actorID string) error {
 		var wg sync.WaitGroup
 		r.startMigrationMonitor(streamCtx, streamCancel, &wg, actorID, podName)
 
+		filter := logLineFilter{actorID: actorID, container: r.container, supervisor: r.supervisor}
 		scanner := bufio.NewScanner(stream)
 		buf := make([]byte, 0, 64*1024)
 		scanner.Buffer(buf, 1024*1024) // Support up to 1MB lines
 		for scanner.Scan() {
 			line := scanner.Text()
-			logTime, _ := filterAndDisplayLogLine(line, actorID, r.stdout)
+			logTime, _ := filterAndDisplayLogLine(line, filter, r.stdout)
 			if !logTime.IsZero() {
 				lastSeenTime = logTime
 			}
@@ -300,6 +310,8 @@ func runLogsActor(cmd *cobra.Command, args []string) error {
 		stdout:            os.Stdout,
 		stderr:            os.Stderr,
 		follow:            followLogs,
+		container:         containerFlag,
+		supervisor:        supervisorFlag,
 		pollInterval:      2 * time.Second,
 		reconnectInterval: 1 * time.Second,
 		tickerInterval:    2 * time.Second,
@@ -308,7 +320,67 @@ func runLogsActor(cmd *cobra.Command, args []string) error {
 	return runner.Run(ctx, actorID)
 }
 
-func filterAndDisplayLogLine(line, targetActorID string, w io.Writer) (time.Time, bool) {
+// logLineFilter selects which of an actor's log lines are displayed. container
+// and supervisor each select a log source: container alone shows only the named
+// container's lines, supervisor alone shows only the supervisor (lifecycle)
+// lines, and setting both shows the union of the two. When neither is set, all
+// lines are shown.
+type logLineFilter struct {
+	actorID    string
+	container  string // when non-empty, include lines from this container
+	supervisor bool   // when true, include supervisor (non-container) lines
+}
+
+// matchesSource reports whether a line from the given container (empty for
+// supervisor lines) passes the filter's source selection: container alone
+// matches only the named container, supervisor alone matches only supervisor
+// lines, setting both matches the union, and setting neither matches every
+// line. Supervisor lines are identified by the absence of a container name (the
+// producer tags every container line, so only lifecycle events lack one).
+func (f logLineFilter) matchesSource(containerName string) bool {
+	if f.container == "" && !f.supervisor {
+		return true
+	}
+	if f.supervisor && containerName == "" {
+		return true
+	}
+	return f.container != "" && containerName == f.container
+}
+
+// Reserved Substrate log labels, written under one of logActorLabelKeys.
+const (
+	ateLabelPrefix        = "ate.dev/"
+	ateActorIDLabel       = ateLabelPrefix + "actor_id"
+	ateContainerNameLabel = ateLabelPrefix + "container_name"
+)
+
+// logActorLabelKeys are the keys a line may carry labels under, GCE key first.
+var logActorLabelKeys = []string{"logging.googleapis.com/labels", "labels"}
+
+// actorSource returns the actor_id and container_name from the first recognized
+// label map that carries a non-empty ate.dev/actor_id. Both are read from that
+// same map so a line's source is never split across the two keys; actor_id is ""
+// when no map identifies an actor.
+func actorSource(m map[string]any) (actorID, containerName string) {
+	for _, key := range logActorLabelKeys {
+		labels, ok := m[key].(map[string]any)
+		if !ok {
+			continue
+		}
+		if id, _ := labels[ateActorIDLabel].(string); id != "" {
+			containerName, _ = labels[ateContainerNameLabel].(string)
+			return id, containerName
+		}
+	}
+	return "", ""
+}
+
+// filterAndDisplayLogLine writes the cleaned line (ate.dev labels stripped) to w
+// when it belongs to the target actor and passes the filter. It returns the
+// line's timestamp only for displayed lines (zero otherwise), so follow mode
+// never advances its resume cursor past a filtered-out or foreign line and skips
+// logs on reconnect. The bool reports whether the line was written.
+func filterAndDisplayLogLine(line string, filter logLineFilter, w io.Writer) (time.Time, bool) {
 	var m map[string]any
 	dec := json.NewDecoder(strings.NewReader(line))
 	dec.UseNumber()
@@ -325,30 +397,21 @@ func filterAndDisplayLogLine(line, targetActorID string, w io.Writer) (time.Time
 		}
 	}
 
-	var actorID string
-	for _, labelKey := range []string{"logging.googleapis.com/labels", "labels"} {
-		if labelsAny, ok := m[labelKey]; ok {
-			if labels, ok := labelsAny.(map[string]any); ok {
-				if id, ok := labels["ate.dev/actor_id"].(string); ok && id != "" {
-					actorID = id
-					break
-				}
-			}
-		}
+	actorID, containerName := actorSource(m)
+	if actorID == "" || actorID != filter.actorID {
+		return time.Time{}, false
 	}
 
-	matched := (actorID != "" && actorID == targetActorID)
-
-	if !matched {
-		return logTime, false
+	if !filter.matchesSource(containerName) {
+		return time.Time{}, false
 	}
 
 	// remove actor labels from CLI output
-	for _, labelKey := range []string{"logging.googleapis.com/labels", "labels"} {
+	for _, labelKey := range logActorLabelKeys {
 		if labelsAny, ok := m[labelKey]; ok {
 			if labels, ok := labelsAny.(map[string]any); ok {
 				for k := range labels {
-					if strings.HasPrefix(k, "ate.dev/") {
+					if strings.HasPrefix(k, ateLabelPrefix) {
 						delete(labels, k)
 					}
 				}
@@ -368,7 +431,7 @@ func filterAndDisplayLogLine(line, targetActorID string, w io.Writer) (time.Time
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
 	if err := enc.Encode(m); err != nil {
-		return logTime, false
+		return time.Time{}, false
 	}
 
 	encodedStr := strings.TrimSpace(buf.String())
