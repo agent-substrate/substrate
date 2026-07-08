@@ -15,10 +15,15 @@
 package controlapi
 
 import (
+	"context"
 	"testing"
+	"time"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -160,5 +165,54 @@ func TestIsWorkerEligibleForActor(t *testing.T) {
 				t.Errorf("got eligible=%t, want %t", got, tt.wantEligible)
 			}
 		})
+	}
+}
+
+func TestAssignWorkerStep_SkipsWorkerAssignedInOtherAtespace(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+
+	// The only worker is held by a same-named actor in another atespace. It is
+	// eligible for the template, so a name-only match would adopt it.
+	worker := &ateapipb.Worker{
+		WorkerNamespace: "worker-ns",
+		WorkerPool:      "pool",
+		WorkerPod:       "pod-1",
+		SandboxClass:    "gvisor",
+		Assignment: &ateapipb.Assignment{
+			Actor: &ateapipb.ActorRef{Atespace: "team-b", Name: "shared"},
+		},
+	}
+	if err := persistence.CreateWorker(ctx, worker); err != nil {
+		t.Fatalf("CreateWorker: %v", err)
+	}
+
+	cacheCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	wc := workercache.New(persistence, time.Minute)
+	if err := wc.Start(cacheCtx); err != nil {
+		t.Fatalf("workercache.Start: %v", err)
+	}
+
+	step := &AssignWorkerStep{store: persistence, workerCache: wc}
+	state := &ResumeState{
+		Actor: &ateapipb.Actor{
+			Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "shared"},
+		},
+		ActorTemplate: &atev1alpha1.ActorTemplate{
+			Spec: atev1alpha1.ActorTemplateSpec{SandboxClass: atev1alpha1.SandboxClassGvisor},
+		},
+	}
+	err := step.Execute(ctx, &ResumeInput{ActorName: "shared", Atespace: "team-a"}, state)
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("Execute() error = %v, want FailedPrecondition (no free workers)", err)
+	}
+
+	stored, err := persistence.GetWorker(ctx, "worker-ns", "pool", "pod-1")
+	if err != nil {
+		t.Fatalf("GetWorker: %v", err)
+	}
+	if got := stored.GetAssignment().GetActor().GetAtespace(); got != "team-b" {
+		t.Errorf("worker assignment atespace = %q, want %q (assignment: %v)", got, "team-b", stored.GetAssignment())
 	}
 }

@@ -132,7 +132,7 @@ func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, stat
 		if worker.Assignment == nil {
 			continue
 		}
-		if worker.Assignment.Actor.Name != input.ActorName {
+		if worker.Assignment.Actor.Atespace != input.Atespace || worker.Assignment.Actor.Name != input.ActorName {
 			continue
 		}
 		eligible, err := isWorkerEligibleForActor(worker, state.ActorTemplate.Spec.SandboxClass, state.ActorTemplate.Spec.WorkerSelector, state.Actor.GetWorkerSelector())
