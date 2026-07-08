@@ -86,7 +86,10 @@ within the historical `15s` budget.
 
 - `atenet.router.parking.active` — up/down counter: requests currently parked.
 - `atenet.router.parking.wait.duration` — histogram (seconds) of time spent
-  parked, labeled `outcome` ∈ {`served`, `timeout`, `canceled`, `error`}.
+  parked, labeled `outcome` ∈ {`served`, `budget_exhausted`, `timeout`,
+  `canceled`, `error`}. `budget_exhausted` means the full park budget elapsed
+  while the pool stayed saturated — the signal that capacity, not a fault, is
+  the bottleneck.
 - `atenet.router.parking.rejected` — counter: requests shed because the lot was
   full.
 

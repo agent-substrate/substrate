@@ -34,10 +34,11 @@ type parkOutcome string
 
 // Park-wait outcomes, recorded on the parking.wait.duration histogram.
 const (
-	parkOutcomeServed   parkOutcome = "served"   // resume succeeded and the request was routed
-	parkOutcomeTimeout  parkOutcome = "timeout"  // the request's deadline elapsed while parked
-	parkOutcomeCanceled parkOutcome = "canceled" // the client disconnected while parked
-	parkOutcomeError    parkOutcome = "error"    // resume failed (including park-budget exhaustion)
+	parkOutcomeServed          parkOutcome = "served"           // resume succeeded and the request was routed
+	parkOutcomeBudgetExhausted parkOutcome = "budget_exhausted" // the park budget elapsed while still blocked on a retryable condition
+	parkOutcomeTimeout         parkOutcome = "timeout"          // the request's deadline elapsed while parked
+	parkOutcomeCanceled        parkOutcome = "canceled"         // the client disconnected while parked
+	parkOutcomeError           parkOutcome = "error"            // resume failed
 )
 
 // parkingConfig controls how the router parks resume-gated requests.
@@ -141,12 +142,14 @@ func (l *parkingLot) status() ParkingStatus {
 }
 
 // parkOutcomeFor classifies a completed resume attempt for the wait-duration
-// metric. A budget-exhausted park surfaces the underlying capacity error and is
-// reported as parkOutcomeError.
+// metric.
 func parkOutcomeFor(err error) parkOutcome {
+	var budget *budgetExhaustedError
 	switch {
 	case err == nil:
 		return parkOutcomeServed
+	case errors.As(err, &budget):
+		return parkOutcomeBudgetExhausted
 	case errors.Is(err, context.Canceled):
 		return parkOutcomeCanceled
 	case errors.Is(err, context.DeadlineExceeded):

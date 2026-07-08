@@ -60,6 +60,16 @@ func resumeBackoff() wait.Backoff {
 	}
 }
 
+// budgetExhaustedError marks a resume that was still blocked on a retryable
+// condition (e.g. "no free workers available") when the parking budget elapsed.
+// It wraps the last retryable error, so the HTTP boundary still maps the
+// underlying gRPC status faithfully (503 with the capacity message), while the
+// parking metrics can report budget exhaustion as its own outcome.
+type budgetExhaustedError struct{ cause error }
+
+func (e *budgetExhaustedError) Error() string { return e.cause.Error() }
+func (e *budgetExhaustedError) Unwrap() error { return e.cause }
+
 // ActorResumer coordinates safe, deduplicated resumption of actors.
 type ActorResumer struct {
 	apiClient ateapipb.ControlClient
@@ -159,9 +169,10 @@ func (r *ActorResumer) ResumeActor(ctx context.Context, actorRef resources.Actor
 			// If the budget elapsed (DeadlineExceeded) while we were still retrying a
 			// transient error, surface that underlying error rather than the generic
 			// wait error so the HTTP boundary maps it faithfully (e.g. 503 "no free
-			// workers available") instead of a misleading timeout.
+			// workers available") instead of a misleading timeout. The wrapper marks
+			// the exhaustion explicitly for the parking wait-duration metric.
 			if lastRetryErr != nil && (errors.Is(err, context.DeadlineExceeded) || wait.Interrupted(err)) {
-				return nil, lastRetryErr
+				return nil, &budgetExhaustedError{cause: lastRetryErr}
 			}
 			return nil, err
 		}

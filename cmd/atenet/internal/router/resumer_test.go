@@ -16,6 +16,7 @@ package router
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -227,9 +228,14 @@ func TestActorResumer_Parking(t *testing.T) {
 		// the pool never frees up.
 		resumer := NewActorResumer(mock, withParking(true, 1500*time.Millisecond))
 		_, err := resumer.ResumeActor(context.Background(), testAtespace, testActorName)
-		// The client must see the meaningful capacity error, not a generic timeout.
+		// The client must see the meaningful capacity error, not a generic
+		// timeout: status.Code must unwrap through the budget-exhaustion marker.
 		if got := status.Code(err); got != codes.FailedPrecondition {
 			t.Errorf("expected FailedPrecondition after park budget elapsed, got %v (err=%v)", got, err)
+		}
+		var budget *budgetExhaustedError
+		if !errors.As(err, &budget) {
+			t.Errorf("expected the error to be marked as budget exhaustion, got %T (%v)", err, err)
 		}
 		mu.Lock()
 		defer mu.Unlock()
