@@ -32,6 +32,20 @@ import (
 	"k8s.io/utils/lru"
 )
 
+// maxCacheableImageBytes bounds which images are held in the in-memory pull
+// cache, compared against the image's total compressed (download) size.
+//
+// Why compressed size and not the extracted (uncompressed) size that is what we
+// actually hold in memory: the extracted size is not recorded anywhere in the
+// image metadata (neither the manifest nor the config carries it), so the only
+// way to learn it is to download and decompress every layer — exactly the work
+// this guard exists to avoid for large images. The compressed layer sizes, by
+// contrast, are listed in the manifest and readable with a single small
+// request. Compressed size is always <= extracted size, so it is a
+// conservative lower bound: anything we reject as too large is definitely too
+// large uncompressed too. The threshold may be revisited later.
+const maxCacheableImageBytes = 100 * 1024 * 1024
+
 type MemoryPullCache struct {
 	gcpAuthenticator authn.Authenticator
 
@@ -145,17 +159,27 @@ func (c *MemoryPullCache) Fetch(ctx context.Context, ref string) (io.ReadCloser,
 		return nil, fmt.Errorf("in remote.Image: %w", err)
 	}
 
-	size, err := img.Size()
+	// Guard the in-memory cache against large images. NOTE: img.Size() returns
+	// the size of the *manifest* (a few KB), not the image, so it must NOT be
+	// used here — it never exceeds the threshold and the guard would be a no-op.
+	// Sum the compressed layer sizes from the manifest instead (see
+	// maxCacheableImageBytes for why compressed, not extracted, size). Images
+	// over the threshold are streamed through without caching.
+	manifest, err := img.Manifest()
 	if err != nil {
-		return nil, fmt.Errorf("in img.Size(): %w", err)
+		return nil, fmt.Errorf("in img.Manifest(): %w", err)
 	}
-	if size > 100*1024*1024 {
+	var compressedSize int64
+	for _, layer := range manifest.Layers {
+		compressedSize += layer.Size
+	}
+	if compressedSize > maxCacheableImageBytes {
 		slog.InfoContext(ctx,
 			"Image is too large to cache",
 			slog.String("ref", ref),
-			slog.Int64("size", size),
+			slog.Int64("compressed_size", compressedSize),
 		)
-		return mutate.Extract(img), err
+		return mutate.Extract(img), nil
 	}
 
 	tarData := mutate.Extract(img)
