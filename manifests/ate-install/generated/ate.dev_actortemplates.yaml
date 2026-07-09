@@ -313,12 +313,17 @@ spec:
                       x-kubernetes-validations:
                       - message: Name must be a valid DNS label
                         rule: '!format.dns1123Label().validate(self).hasValue()'
+                    systemInfo:
+                      description: systemInfo configures a system information volume.
+                      type: object
                   required:
                   - name
                   type: object
                   x-kubernetes-validations:
-                  - message: exactly one of the fields in [durableDir] must be set
-                    rule: '[has(self.durableDir)].filter(x,x==true).size() == 1'
+                  - message: exactly one of the fields in [durableDir systemInfo]
+                      must be set
+                    rule: '[has(self.durableDir),has(self.systemInfo)].filter(x,x==true).size()
+                      == 1'
                 maxItems: 32
                 type: array
               workerSelector:

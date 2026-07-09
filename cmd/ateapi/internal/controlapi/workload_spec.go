@@ -40,16 +40,43 @@ func workloadSpecFromActorTemplate(actorTemplate *atev1alpha1.ActorTemplate) *at
 		PauseImage: actorTemplate.Spec.PauseImage,
 	}
 
-	// add volumes
+	// Convert volumes to atelet's representation.  ActorTemplate validation has
+	// already ensured that only one source is set.
 	for _, vol := range actorTemplate.Spec.Volumes {
-		// volume is durable-dir type
-		if vol.VolumeSource.DurableDir != nil {
+		switch {
+		case vol.VolumeSource.DurableDir != nil:
 			workloadSpec.Volumes = append(workloadSpec.Volumes, &ateletpb.Volume{
 				Name: vol.Name,
 				Source: &ateletpb.Volume_DurableDir{
 					DurableDir: &ateletpb.DurableDirVolume{},
 				},
 			})
+
+		case vol.VolumeSource.SystemInfo != nil:
+			ateletSystemInfo := &ateletpb.SystemInfoVolume{}
+			for _, dataSource := range vol.VolumeSource.SystemInfo.DataSources {
+				switch {
+				case dataSource.ActorIdentity != nil:
+					ateletSystemInfo.DataSources = append(ateletSystemInfo.DataSources, &ateletpb.SystemInfoDataSource{
+						DataSource: &ateletpb.SystemInfoDataSource_ActorIdentity{
+							ActorIdentity: &ateletpb.ActorIdentityDataSource{
+								Path: dataSource.ActorIdentity.Path,
+							},
+						},
+					})
+				default:
+					continue // Drop unrecognized data sources
+				}
+			}
+			workloadSpec.Volumes = append(workloadSpec.Volumes, &ateletpb.Volume{
+				Name: vol.Name,
+				Source: &ateletpb.Volume_SystemInfo{
+					SystemInfo: ateletSystemInfo,
+				},
+			})
+
+		default:
+			continue // Drop unrecognized volumes.
 		}
 	}
 

@@ -20,12 +20,11 @@ import (
 	"context"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 
-	"github.com/agent-substrate/substrate/internal/ateompath"
-	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
+	"github.com/google/go-cmp/cmp"
+	"github.com/opencontainers/runtime-spec/specs-go"
 )
 
 type tarEntry struct {
@@ -85,91 +84,46 @@ func runUntar(t *testing.T, entries []tarEntry) (string, error) {
 }
 
 // With an identity dir, a read-only bind mount appears at IdentityMountPath.
-func TestBuildActorOCISpec_IdentityMount(t *testing.T) {
+func TestBuildActorOCISpec_AdditionalMounts(t *testing.T) {
+	wantMount := specs.Mount{
+		Destination: "foo/bar",
+		Type:        "bind",
+		Source:      "/var/lib/ateom-gvisor/x:y:z/volume-roots/foo",
+		Options:     []string{"ro"},
+	}
+
 	spec := buildActorOCISpec(
 		"atespace", "id",
 		[]string{"/app"},
 		[]string{"FOO=bar"},
 		map[string]string{"k": "v"},
 		"/run/netns/x",
-		"/host/actors/atespace:id/identity",
-		nil,
+		[]specs.Mount{
+			wantMount,
+		},
 	)
-	found := false
+	var foundMount *specs.Mount
 	for _, m := range spec.Mounts {
-		if m.Destination != IdentityMountPath {
-			continue
-		}
-		found = true
-		if m.Source != "/host/actors/atespace:id/identity" {
-			t.Errorf("identity mount source = %q, want the per-actor identity dir", m.Source)
-		}
-		if m.Type != "bind" {
-			t.Errorf("identity mount type = %q, want bind", m.Type)
-		}
-		if !slices.Contains(m.Options, "ro") {
-			t.Errorf("identity mount must be read-only, options=%v", m.Options)
+		if m.Destination == "foo/bar" {
+			foundMount = &m
 		}
 	}
-	if !found {
-		t.Fatalf("identity mount %q missing; mounts=%v", IdentityMountPath, spec.Mounts)
+	if foundMount == nil {
+		t.Fatalf("additional mount foo/bar missing; mounts=%v", spec.Mounts)
 	}
-}
 
-// Without an identity dir (the pause container), no identity mount appears.
-func TestBuildActorOCISpec_NoIdentityMountForPause(t *testing.T) {
-	bare := buildActorOCISpec("atespace", "id", []string{"/pause"}, nil, nil, "/run/netns/x", "", nil)
-	for _, m := range bare.Mounts {
-		if m.Destination == IdentityMountPath {
-			t.Errorf("identity mount must be absent when identityDir is empty")
-		}
-	}
-}
-
-// Each durable-dir volume mount becomes a bind mount whose source is the
-// per-actor on-host DurableDirVolumeMountPoint for that volume name.
-func TestBuildActorOCISpec_DurableDirVolumeMounts(t *testing.T) {
-	const atespace, id = "atespace", "id"
-	durableDirs := []*ateletpb.VolumeMount{
-		{Name: "data", MountPath: "/var/data"},
-		{Name: "cache", MountPath: "/var/cache"},
-	}
-	spec := buildActorOCISpec(
-		atespace, id,
-		[]string{"/app"}, nil, nil,
-		"/run/netns/x",
-		"",
-		durableDirs,
-	)
-
-	for _, vm := range durableDirs {
-		wantSrc := ateompath.DurableDirVolumeMountPoint(atespace, id, vm.Name)
-		found := false
-		for _, m := range spec.Mounts {
-			if m.Destination != vm.MountPath {
-				continue
-			}
-			found = true
-			if m.Source != wantSrc {
-				t.Errorf("durable-dir %q source = %q, want %q", vm.Name, m.Source, wantSrc)
-			}
-			if m.Type != "bind" {
-				t.Errorf("durable-dir %q type = %q, want bind", vm.Name, m.Type)
-			}
-		}
-		if !found {
-			t.Fatalf("durable-dir mount for %q missing; mounts=%v", vm.MountPath, spec.Mounts)
-		}
+	if diff := cmp.Diff(*foundMount, wantMount); diff != "" {
+		t.Errorf("additional mount was not copied exactly; diff (-got +want)\n%s", diff)
 	}
 }
 
 func TestCreateMountPoint(t *testing.T) {
 	t.Run("creates target inside rootfs", func(t *testing.T) {
 		root := t.TempDir()
-		if err := createMountPoint(root, IdentityMountPath); err != nil {
+		if err := createFoldersInRootfs(root, "/a/b"); err != nil {
 			t.Fatalf("createMountPoint: %v", err)
 		}
-		info, err := os.Stat(filepath.Join(root, "run", "ate"))
+		info, err := os.Stat(filepath.Join(root, "a", "b"))
 		if err != nil {
 			t.Fatalf("mount point not created in rootfs: %v", err)
 		}
@@ -183,10 +137,10 @@ func TestCreateMountPoint(t *testing.T) {
 		outside := t.TempDir()
 		// A malicious image could ship /run as a symlink pointing out of the
 		// rootfs; os.Root must refuse to follow it.
-		if err := os.Symlink(outside, filepath.Join(root, "run")); err != nil {
+		if err := os.Symlink(outside, filepath.Join(root, "a")); err != nil {
 			t.Fatalf("planting symlink: %v", err)
 		}
-		if err := createMountPoint(root, IdentityMountPath); err == nil {
+		if err := createFoldersInRootfs(root, "/a/b"); err == nil {
 			t.Errorf("expected error when /run escapes the rootfs, got nil")
 		}
 		// Nothing may be created through the escaping symlink.

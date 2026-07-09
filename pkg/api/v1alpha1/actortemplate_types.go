@@ -34,17 +34,48 @@ const (
 type DurableDirVolumeSource struct {
 }
 
+// ActorIdentityDataSource is a SystemInfo volume data source that writes the
+// actor's ID to a file.
+type ActorIdentityDataSource struct {
+	// Relative path from the root of the SystemInfo volume that the actor
+	// identity file should be written.
+	Path string `json:"path,omitempty" protobuf:"bytes,1,opt,name=path"`
+}
+
+// SystemInfoDataSource is a container allowing you to pick a particular
+// SystemInfo data source.
+//
+// Exactly one member must be set.
+//
+// +kubebuilder:validation:ExactlyOneOf={actorIdentity}
+type SystemInfoDataSource struct {
+	ActorIdentity *ActorIdentityDataSource `json:"actorIdentity,omitempty" protobuf:"bytes,1,opt,name=actorIdentity"`
+}
+
+// Represents a system information volume, which provides files containing the
+// actor ID, an actor identity JWT, and an actor identity certificate.
+type SystemInfoVolumeSource struct {
+	// DataSources is the list of data sources to place within the SystemInfo
+	// volume.
+	DataSources []SystemInfoDataSource `json:"dataSources,omitempty" protobuf:"bytes,1,opt,name=dataSources"`
+}
+
 // Represents the source of a volume to mount.
 // Exactly one of its members must be specified.
 //
 // When adding a new source type, list it in the ExactlyOneOf marker below.
 //
-// +kubebuilder:validation:ExactlyOneOf={durableDir}
+// +kubebuilder:validation:ExactlyOneOf={durableDir,systemInfo}
 type VolumeSource struct {
 	// durableDir represents a durable directory on rootfs that persists across
 	// resumes and participates in snapshots.
 	// +optional
 	DurableDir *DurableDirVolumeSource `json:"durableDir,omitempty" protobuf:"bytes,2,opt,name=durableDir"`
+
+	// systemInfo configures a system information volume.
+	//
+	// +optional
+	SystemInfo *SystemInfoVolumeSource `json:"systemInfo,omitempty" protobuf:"bytes,3,opt,name=systemInfo"`
 }
 
 type Volume struct {

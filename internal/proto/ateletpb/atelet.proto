@@ -83,11 +83,26 @@ message WorkloadSpec {
 message DurableDirVolume {
 }
 
+message ActorIdentityDataSource {
+  string path = 1;
+}
+
+message SystemInfoDataSource {
+  oneof data_source {
+    ActorIdentityDataSource actor_identity = 2;
+  }
+}
+
+message SystemInfoVolume {
+  repeated SystemInfoDataSource data_sources = 1;
+}
+
 message Volume {
   string name = 1;
 
   oneof source {
     DurableDirVolume durable_dir = 3;
+    SystemInfoVolume system_info = 4;
   }
 
   reserved 2;

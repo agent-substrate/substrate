@@ -68,18 +68,6 @@ func ActorPath(atespace, actorID string) string {
 	)
 }
 
-// ActorIdentityDirPath is the host directory atelet populates with the
-// actor's identity data (currently the single file "actor-id") and
-// bind-mounts read-only into the actor. It is per-actor and regenerated on
-// every resume, so (unlike the checkpointed process environment) it reflects
-// the correct ID after a restore from the golden snapshot.
-func ActorIdentityDirPath(atespace, actorID string) string {
-	return filepath.Join(
-		ActorPath(atespace, actorID),
-		"identity",
-	)
-}
-
 // ActorSandboxAssetsFile is the per-actor file where atelet records the sandbox
 // binaries (class + content-addressed asset set, for this node's architecture)
 // the actor is currently running. It is written at Run/Restore and read at
@@ -136,19 +124,20 @@ func LocalCheckpointsDir(atespace, actorID string) string {
 	)
 }
 
-// DurableDirVolumeMountsDir is the directory where individual durable-dir
-// volumes are mounted.
-func DurableDirVolumeMountsDir(atespace, actorID string) string {
+// VolumeRootsDir is the folder that contains all of the root folders of the
+// volumes that will be bind-mounted to locations within the actor guest
+// filesystem.
+func VolumeRootsDir(atespace, actorID string) string {
 	return filepath.Join(
 		ActorPath(atespace, actorID),
-		"durable-dir",
+		"volume-roots",
 	)
 }
 
-// DurableDirVolumeMountPoint returns the path where a specific durable-dir volume is mounted on the nodeVM.
-func DurableDirVolumeMountPoint(atespace, actorID, volumeName string) string {
+// VolumeRoot returns the host path for the root directory for a specific volume.
+func VolumeRoot(atespace, actorID, volumeName string) string {
 	return filepath.Join(
-		DurableDirVolumeMountsDir(atespace, actorID),
+		VolumeRootsDir(atespace, actorID),
 		volumeName,
 	)
 }

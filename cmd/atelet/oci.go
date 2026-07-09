@@ -32,28 +32,21 @@ import (
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
-
-	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 )
 
-const (
-	// IdentityMountPath is the in-actor directory at which atelet bind-mounts
-	// the actor's identity data. Workloads read the files inside it (at
-	// request time, not cached at startup) to learn about themselves. It is
-	// delivered as a per-actor bind mount rather than environment variables
-	// because env lives in the checkpointed process memory and would be
-	// frozen at the golden snapshot's values after a restore; a bind mount is
-	// re-attached per-actor on every resume. A directory (rather than a
-	// single-file mount) so further identity data can be added without
-	// changing the mount shape.
-	IdentityMountPath = "/run/ate"
-
-	// ActorIDFileName is the file inside IdentityMountPath holding the
-	// actor's own ID, raw with no trailing newline.
-	ActorIDFileName = "actor-id"
-)
-
-func prepareOCIDirectory(ctx context.Context, pullCache *memorypullcache.MemoryPullCache, atespace, actorID, containerName, ref string, args []string, env []string, annotations map[string]string, netns string, identityDir string, durableDirVolumeMounts []*ateletpb.VolumeMount) error {
+func prepareOCIDirectory(
+	ctx context.Context,
+	pullCache *memorypullcache.MemoryPullCache,
+	atespace,
+	actorID,
+	containerName,
+	ref string,
+	args []string,
+	env []string,
+	annotations map[string]string,
+	netns string,
+	additionalMounts []specs.Mount,
+) error {
 	tracer := otel.Tracer("prepareOCIDirectory")
 
 	ctx, span := tracer.Start(ctx, "prepareOCIDirectory")
@@ -81,16 +74,15 @@ func prepareOCIDirectory(ctx context.Context, pullCache *memorypullcache.MemoryP
 		return fmt.Errorf("in untar: %w", err)
 	}
 
-	// Bind-mount the per-actor identity directory so the workload can read its
-	// own ID at IdentityMountPath/ActorIDFileName. The bind target must exist
-	// in the rootfs for the mount to attach.
-	if identityDir != "" {
-		if err := createMountPoint(rootPath, IdentityMountPath); err != nil {
-			return fmt.Errorf("while creating identity mount point: %w", err)
-		}
-	}
-
-	ociSpec := buildActorOCISpec(atespace, actorID, args, env, annotations, netns, identityDir, durableDirVolumeMounts)
+	ociSpec := buildActorOCISpec(
+		atespace,
+		actorID,
+		args,
+		env,
+		annotations,
+		netns,
+		additionalMounts,
+	)
 	ociSpecBytes, err := json.MarshalIndent(ociSpec, "", "  ")
 	if err != nil {
 		return fmt.Errorf("while marshaling OCI spec: %w", err)
@@ -107,7 +99,14 @@ func prepareOCIDirectory(ctx context.Context, pullCache *memorypullcache.MemoryP
 // When identityDir is non-empty it adds a read-only bind mount of that host
 // directory at IdentityMountPath so the actor can read its own ID (see
 // IdentityMountPath for why this is a bind mount rather than env vars).
-func buildActorOCISpec(atespace string, actorID string, args []string, env []string, annotations map[string]string, netns string, identityDir string, durableDirVolumeMounts []*ateletpb.VolumeMount) *specs.Spec {
+func buildActorOCISpec(
+	atespace, actorID string,
+	args []string,
+	env []string,
+	annotations map[string]string,
+	netns string,
+	additionalMounts []specs.Mount,
+) *specs.Spec {
 	envVars := []string{
 		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
 	}
@@ -142,14 +141,7 @@ func buildActorOCISpec(atespace string, actorID string, args []string, env []str
 			Options:     []string{"ro"},
 		},
 	}
-	if identityDir != "" {
-		mounts = append(mounts, specs.Mount{
-			Destination: IdentityMountPath,
-			Type:        "bind",
-			Source:      identityDir,
-			Options:     []string{"ro"},
-		})
-	}
+	mounts = append(mounts, additionalMounts...)
 
 	spec := &specs.Spec{
 		Process: &specs.Process{
@@ -220,23 +212,15 @@ func buildActorOCISpec(atespace string, actorID string, args []string, env []str
 		Annotations: annotations,
 	}
 
-	// Prepare and mount durable-dir volumes.
-	for _, vm := range durableDirVolumeMounts {
-		spec.Mounts = append(spec.Mounts, specs.Mount{
-			Destination: vm.GetMountPath(),
-			Type:        "bind",
-			Source:      ateompath.DurableDirVolumeMountPoint(atespace, actorID, vm.GetName()),
-		})
-	}
-
 	return spec
 }
 
-// createMountPoint creates the directory mountPath (an absolute in-rootfs
-// path) to serve as a bind-mount target. It uses os.Root so the operation is
-// confined to rootPath: a symlink planted by the image cannot redirect the
-// write outside the extracted rootfs (same protection untar relies on).
-func createMountPoint(rootPath, mountPath string) error {
+// createFoldersInRootfs makes sure that
+//
+// gVisor is smart enough, if we tell it to bind-mount a host folder to /a/b, to
+// create b.  However, /a needs to already exist in the rootfs (otherwise gVisor
+// would have to make up an owner, permissions, etc)
+func createFoldersInRootfs(rootPath, mountPath string) error {
 	root, err := os.OpenRoot(rootPath)
 	if err != nil {
 		return fmt.Errorf("opening rootfs %q: %w", rootPath, err)

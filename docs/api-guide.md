@@ -105,10 +105,18 @@ Substrate uses a **Uniform DNS Mesh**: every actor created from a template is au
 
 **Format:** `<actor-id>.<atespace>.actors.resources.substrate.ate.dev`
 
-### Actor Identity
-Substrate bind-mounts a read-only, per-actor identity directory at **`/run/ate`** into each of the actor's containers. An actor can learn its own ID without parsing the `Host` header by reading the file **`/run/ate/actor-id`** inside it, which contains the raw actor ID with no trailing newline. Further identity and configuration data may appear in this directory over time.
+### SystemInfo Volumes
 
-Read it fresh rather than caching it at process start. It is delivered as a per-actor bind mount, not an environment variable, precisely so it carries the correct ID after a resume from the golden snapshot — an env var (or a file baked into the image) would be frozen at the *golden* actor's ID, since it lives in the checkpointed process memory, and would therefore be identical for every actor of the template.
+To deliver identity information, including credentials, to a running actor, you can use a SystemInformation volume.  Define it in spec.Volumes, and mount it into each container that needs it.
+
+Available information sources:
+
+#### ActorIdentity
+The ActorIdentity data source places a file that contains the actor's ID at a configurable relative path in the volume.
+
+TODO: Example ActorTemplate
+
+Read it fresh rather than caching it at process start. It is delivered as a file, not an environment variable, precisely so it carries the correct ID after a resume from the golden snapshot — an env var (or a file baked into the image) would be frozen at the *golden* actor's ID, since it lives in the checkpointed process memory, and would therefore be identical for every actor of the template.
 
 ### Container Readiness Probe (`readyz`)
 

@@ -31,6 +31,7 @@ import (
 	"cloud.google.com/go/storage"
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/ategcs"
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/memorypullcache"
+	"github.com/agent-substrate/substrate/cmd/atelet/internal/third_party/atomicwriter"
 	"github.com/agent-substrate/substrate/internal/ateerrors"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/ateompath"
@@ -43,6 +44,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/google/go-containerregistry/pkg/authn"
 	googlecontainerauth "github.com/google/go-containerregistry/pkg/v1/google"
+	"github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/spf13/pflag"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.opentelemetry.io/otel"
@@ -647,26 +649,46 @@ func (s *AteomHerder) prepareOCIBundles(
 	spec *ateletpb.WorkloadSpec,
 	targetAteomUid string,
 ) error {
-	// Populate the per-actor identity directory that gets bind-mounted into
-	// the application containers. Regenerated on every resume, so it carries
-	// the correct per-actor ID even when restoring from the golden snapshot.
-	identityDir := ateompath.ActorIdentityDirPath(atespace, actorID)
-	if err := os.MkdirAll(identityDir, 0o755); err != nil {
-		return fmt.Errorf("while creating actor identity dir: %w", err)
-	}
-	if err := writeFileAtomic(filepath.Join(identityDir, ActorIDFileName), []byte(actorID), 0o644); err != nil {
-		return fmt.Errorf("while writing actor identity file: %w", err)
+	netnsPath := ateompath.AteomNetNSPath(targetAteomUid)
+
+	// Index of volumes by name, for looking them up while processing volume
+	// mounts.
+	volumesByName := map[string]*ateletpb.Volume{}
+	for _, vol := range spec.GetVolumes() {
+		volumesByName[vol.GetName()] = vol
 	}
 
-	ddVolumes := make(map[string]bool)
-	// make directories for all durable-dir volumes
+	// Prepare host folders for volume types that need them.
 	for _, vol := range spec.GetVolumes() {
-		switch vol.GetSource().(type) {
+		volRootHostPath := ateompath.VolumeRoot(actorTemplateNamespace, actorTemplateName, actorID, vol.GetName())
+		if err := os.MkdirAll(volRootHostPath, 0o755); err != nil {
+			return fmt.Errorf("while creating %q: %w", volRootHostPath, err)
+		}
+
+		switch volSrc := vol.GetSource().(type) {
 		case *ateletpb.Volume_DurableDir:
-			ddVolumes[vol.GetName()] = true
-			volPath := ateompath.DurableDirVolumeMountPoint(atespace, actorID, vol.GetName())
-			if err := os.MkdirAll(volPath, 0o700); err != nil {
-				return fmt.Errorf("while creating %q: %w", volPath, err)
+			// No additional work beyond creating the folder.
+
+		case *ateletpb.Volume_SystemInfo:
+			aw, err := atomicwriter.NewAtomicWriter(volRootHostPath)
+			if err != nil {
+				return fmt.Errorf("while creating atomicwriter: %w", err)
+			}
+
+			contents := map[string]atomicwriter.FileProjection{}
+
+			for _, dataSourceAny := range volSrc.SystemInfo.GetDataSources() {
+				switch dataSource := dataSourceAny.GetDataSource().(type) {
+				case *ateletpb.SystemInfoDataSource_ActorIdentity:
+					contents[dataSource.ActorIdentity.GetPath()] = atomicwriter.FileProjection{
+						Data: []byte(actorID),
+						Mode: 0o644,
+					}
+				}
+			}
+
+			if err := aw.Write(ctx, contents, nil); err != nil {
+				return fmt.Errorf("while writing contents of SystemInfoVolume: %w", err)
 			}
 		}
 	}
@@ -686,7 +708,7 @@ func (s *AteomHerder) prepareOCIBundles(
 			case *ateletpb.Volume_DurableDir:
 				annotations["dev.gvisor.spec.mount.durabledir.type"] = "bind"
 				annotations["dev.gvisor.spec.mount.durabledir.share"] = "container"
-				annotations["dev.gvisor.spec.mount.durabledir.source"] = ateompath.DurableDirVolumeMountPoint(atespace, actorID, vol.GetName())
+				annotations["dev.gvisor.spec.mount.durabledir.source"] = ateompath.VolumeRoot(atespace, actorID, vol.GetName())
 			}
 		}
 
@@ -700,8 +722,7 @@ func (s *AteomHerder) prepareOCIBundles(
 			nil,
 			annotations,
 			ateompath.AteomNetNSPath(targetAteomUid),
-			"", // pause is sandbox infra; it gets no actor identity mount.
-			nil,
+			nil, // No additional mounts for pause container.
 		); err != nil {
 			return wrapFileSystemErr("while creating pause OCI bundle", err)
 		}
@@ -715,12 +736,42 @@ func (s *AteomHerder) prepareOCIBundles(
 		for _, env := range ctr.GetEnv() {
 			envs = append(envs, fmt.Sprintf("%s=%s", env.GetName(), env.GetValue()))
 		}
-		var ddMounts []*ateletpb.VolumeMount
+
+		additionalMounts := []specs.Mount{}
 		for _, vm := range ctr.GetVolumeMounts() {
-			if ddVolumes[vm.GetName()] {
-				ddMounts = append(ddMounts, vm)
+			// Look up corresponding volume
+			vol, ok := volumesByName[vm.GetName()]
+			if !ok {
+				return fmt.Errorf("volume mount names %q which does not exist", vm.GetName())
 			}
+
+			// Make sure that the mount point exists in the rootfs
+			bundlePath := ateompath.OCIBundlePath(actorTemplateNamespace, actorTemplateName, actorID, ctr.GetName())
+			rootPath := filepath.Join(bundlePath, "rootfs")
+			if err := createFoldersInRootfs(rootPath, vm.GetMountPath()); err != nil {
+				return fmt.Errorf("while creating identity mount point: %w", err)
+			}
+
+			switch vol.GetSource().(type) {
+			case *ateletpb.Volume_DurableDir:
+				additionalMounts = append(additionalMounts,
+					specs.Mount{
+						Destination: vm.GetMountPath(),
+						Type:        "bind",
+						Source:      ateompath.VolumeRoot(actorTemplateNamespace, actorTemplateName, actorID, vol.GetName()),
+					})
+
+			case *ateletpb.Volume_SystemInfo:
+				additionalMounts = append(additionalMounts, specs.Mount{
+					Destination: vm.GetMountPath(),
+					Type:        "bind",
+					Source:      ateompath.VolumeRoot(actorTemplateNamespace, actorTemplateName, actorID, vol.GetName()),
+					Options:     []string{"ro"},
+				})
+			}
+
 		}
+
 		g.Go(func() error {
 			if err := prepareOCIDirectory(
 				gCtx,
@@ -736,8 +787,7 @@ func (s *AteomHerder) prepareOCIBundles(
 					"io.kubernetes.cri.container-name": ctr.GetName(),
 				},
 				ateompath.AteomNetNSPath(targetAteomUid),
-				identityDir,
-				ddMounts,
+				additionalMounts,
 			); err != nil {
 				return wrapFileSystemErr(fmt.Sprintf("while creating %q OCI bundle", ctr.GetName()), err)
 			}
@@ -1043,22 +1093,13 @@ func resetActorDirs(atespace, actorID string) error {
 		return wrapFileSystemErr("while creating restore-state dir: %w", err)
 	}
 
-	// World-readable (0o755): bind-mounted into the actor, whose workload
-	// reads it through the gofer.
-	identityDir := ateompath.ActorIdentityDirPath(atespace, actorID)
-	if err := os.RemoveAll(identityDir); err != nil {
-		return wrapFileSystemErr("while deleting actor identity dir: %w", err)
+	// Remove all volume roots.
+	volumeRootsHostDir := ateompath.VolumeRootsDir(atespace, actorID)
+	if err := os.RemoveAll(volumeRootsHostDir); err != nil {
+		return fmt.Errorf("while deleting actor identity dir: %w", err)
 	}
-	if err := os.MkdirAll(identityDir, 0o755); err != nil {
-		return wrapFileSystemErr("while creating actor identity dir: %w", err)
-	}
-
-	durableDirVolumesMountDir := ateompath.DurableDirVolumeMountsDir(atespace, actorID)
-	if err := os.RemoveAll(durableDirVolumesMountDir); err != nil {
-		return wrapFileSystemErr("while deleting durable-dir volumes mount dir: %w", err)
-	}
-	if err := os.MkdirAll(durableDirVolumesMountDir, 0o755); err != nil {
-		return wrapFileSystemErr("while creating durable-dir volumes mount dir: %w", err)
+	if err := os.MkdirAll(volumeRootsHostDir, 0o755); err != nil {
+		return fmt.Errorf("while creating actor identity dir: %w", err)
 	}
 
 	return nil
