@@ -117,62 +117,52 @@ func TestBuildActorOCISpec_IdentityMount(t *testing.T) {
 	}
 }
 
-// mergeActorEnv test template env overrides image env.
 func TestMergeActorEnv(t *testing.T) {
-	t.Run("template overrides image by key", func(t *testing.T) {
-		imageEnv := []string{"FOO=image"}
-		templateEnv := []string{"FOO=template"}
-		got := mergeActorEnv(imageEnv, templateEnv)
-		if c := countKey(got, "FOO"); c != 1 {
-			t.Fatalf("FOO appears %d times, want 1 (no duplicates): %v", c, got)
-		}
-		if !slices.Contains(got, "FOO=template") {
-			t.Errorf("template value must win over image: %v", got)
-		}
-	})
+	defaultPath := "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 
-	t.Run("default PATH applies when neither template nor image set PATH", func(t *testing.T) {
-		got := mergeActorEnv([]string{"FOO=image"}, []string{"BAR=template"})
-		if !slices.Contains(got, "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin") {
-			t.Errorf("default PATH missing: %v", got)
-		}
-	})
-
-	t.Run("image and template PATH take precedence over the default", func(t *testing.T) {
-		got := mergeActorEnv([]string{"PATH=/image/bin"}, nil)
-		if !slices.Contains(got, "PATH=/image/bin") || countKey(got, "PATH") != 1 {
-			t.Errorf("image PATH must win over the default: %v", got)
-		}
-		got = mergeActorEnv(nil, []string{"PATH=/template/bin"})
-		if !slices.Contains(got, "PATH=/template/bin") || countKey(got, "PATH") != 1 {
-			t.Errorf("template PATH must win over the default: %v", got)
-		}
-	})
-
-	t.Run("blank/keyless entries are dropped", func(t *testing.T) {
-		imageEnv := []string{"", "=novalue"}
-		var templateEnv []string
-		mergedEnv := mergeActorEnv(imageEnv, templateEnv)
-		for _, env := range mergedEnv {
-			if env == "" || strings.HasPrefix(env, "=") {
-				t.Errorf("blank entry allowed: %q in %v", env, mergedEnv)
-			}
-		}
-	})
-}
-
-func countKey(env []string, key string) int {
-	n := 0
-	for _, e := range env {
-		k := e
-		if i := strings.IndexByte(e, '='); i >= 0 {
-			k = e[:i]
-		}
-		if k == key {
-			n++
-		}
+	tests := []struct {
+		name        string
+		imageEnv    []string
+		templateEnv []string
+		want        []string
+	}{
+		{
+			name:        "template overrides image by key",
+			imageEnv:    []string{"FOO=image"},
+			templateEnv: []string{"FOO=template"},
+			want:        []string{"FOO=template", defaultPath},
+		},
+		{
+			name:        "default PATH applies when neither sets it",
+			imageEnv:    []string{"FOO=image"},
+			templateEnv: []string{"BAR=template"},
+			want:        []string{"BAR=template", "FOO=image", defaultPath},
+		},
+		{
+			name:     "image PATH overrides default",
+			imageEnv: []string{"PATH=/image/bin"},
+			want:     []string{"PATH=/image/bin"},
+		},
+		{
+			name:        "template PATH overrides default",
+			templateEnv: []string{"PATH=/template/bin"},
+			want:        []string{"PATH=/template/bin"},
+		},
+		{
+			name:     "blank and keyless entries are dropped",
+			imageEnv: []string{"", "=novalue"},
+			want:     []string{defaultPath},
+		},
 	}
-	return n
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := mergeActorEnv(tc.imageEnv, tc.templateEnv)
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("mergeActorEnv(%v, %v) =\n  %v\nwant:\n  %v", tc.imageEnv, tc.templateEnv, got, tc.want)
+			}
+		})
+	}
 }
 
 // Without an identity dir (the pause container), no identity mount appears.
