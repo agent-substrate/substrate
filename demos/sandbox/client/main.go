@@ -94,7 +94,7 @@ func main() {
 	defer conn.Close()
 
 	log.Printf("Resuming actor %s...", *actorID)
-	_, err = cli.ResumeActor(ctx, &ateapipb.ResumeActorRequest{ActorRef: &ateapipb.ActorRef{Atespace: *atespace, Name: *actorID}})
+	_, err = cli.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: &ateapipb.ObjectRef{Atespace: *atespace, Name: *actorID}})
 	if err != nil {
 		log.Fatalf("Failed to resume actor: %v", err)
 	}
@@ -104,7 +104,7 @@ func main() {
 	defer func() {
 		log.Printf("Suspending actor %s...", *actorID)
 		suspendCtx := context.Background()
-		_, err := cli.SuspendActor(suspendCtx, &ateapipb.SuspendActorRequest{ActorRef: &ateapipb.ActorRef{Atespace: *atespace, Name: *actorID}})
+		_, err := cli.SuspendActor(suspendCtx, &ateapipb.SuspendActorRequest{Actor: &ateapipb.ObjectRef{Atespace: *atespace, Name: *actorID}})
 		if err != nil {
 			log.Printf("Failed to suspend actor: %v", err)
 		} else {

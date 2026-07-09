@@ -52,11 +52,11 @@ var getActorsCmd = &cobra.Command{
 			if getActorsAtespaceFlag == "" {
 				return fmt.Errorf("--atespace is required when getting a specific actor")
 			}
-			resp, err := apiClient.GetActor(ctx, &ateapipb.GetActorRequest{ActorRef: &ateapipb.ActorRef{Atespace: getActorsAtespaceFlag, Name: args[0]}})
+			resp, err := apiClient.GetActor(ctx, &ateapipb.GetActorRequest{Actor: &ateapipb.ObjectRef{Atespace: getActorsAtespaceFlag, Name: args[0]}})
 			if err != nil {
 				return fmt.Errorf("failed to get actor: %w", err)
 			}
-			return printer.PrintActor(resp.GetActor(), outputFmt)
+			return printer.PrintActor(resp, outputFmt)
 		}
 
 		// Listing requires exactly one of --atespace (one atespace) or -A (all

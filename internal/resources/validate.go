@@ -38,10 +38,9 @@ func ValidateResourceName(name string, fldPath *field.Path) field.ErrorList {
 	return errs
 }
 
-// ValidateActorRef checks that the actor reference is well-formed and that
-// each of its components is a valid resource name. It does not check that the
-// referenced actor actually exists.
-func ValidateActorRef(ref *ateapipb.ActorRef, fldPath *field.Path) field.ErrorList {
+// ValidateObjectRef checks that the object reference is well-formed and that
+// each of its components is a valid resource name.
+func ValidateObjectRef(ref *ateapipb.ObjectRef, fldPath *field.Path) field.ErrorList {
 	if ref == nil {
 		return nil
 	}
@@ -52,6 +51,30 @@ func ValidateActorRef(ref *ateapipb.ActorRef, fldPath *field.Path) field.ErrorLi
 		errs = append(errs, field.Required(fldPath, ""))
 	} else {
 		errs = append(errs, ValidateResourceName(val, fldPath)...)
+	}
+
+	if val, fldPath := ref.Name, fldPath.Child("name"); val == "" {
+		errs = append(errs, field.Required(fldPath, ""))
+	} else {
+		errs = append(errs, ValidateResourceName(val, fldPath)...)
+	}
+
+	return errs
+}
+
+// ValidateGlobalObjectRef checks that a reference to a global-scoped resource is
+// well-formed: its atespace must be empty (global resources do not belong to an
+// atespace) and its name must be a valid resource name. It does not check that
+// the referenced resource actually exists.
+func ValidateGlobalObjectRef(ref *ateapipb.ObjectRef, fldPath *field.Path) field.ErrorList {
+	if ref == nil {
+		return nil
+	}
+
+	var errs field.ErrorList
+
+	if val, fldPath := ref.Atespace, fldPath.Child("atespace"); val != "" {
+		errs = append(errs, field.Invalid(fldPath, val, "must be empty for a global-scoped resource"))
 	}
 
 	if val, fldPath := ref.Name, fldPath.Child("name"); val == "" {

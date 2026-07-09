@@ -130,7 +130,7 @@ func suspendSelf(id string) {
 	client := ateapipb.NewControlClient(conn)
 
 	log.Printf("Yielding compute. Requesting self-suspension for actor %s...", id)
-	_, err = client.SuspendActor(context.Background(), &ateapipb.SuspendActorRequest{ActorRef: &ateapipb.ActorRef{Name: id}})
+	_, err = client.SuspendActor(context.Background(), &ateapipb.SuspendActorRequest{Actor: &ateapipb.ObjectRef{Name: id}})
 	if err != nil {
 		log.Printf("Failed to self-suspend: %v", err)
 	}

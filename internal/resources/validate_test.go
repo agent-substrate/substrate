@@ -23,31 +23,31 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
-func TestValidateActorRef(t *testing.T) {
+func TestValidateObjectRef(t *testing.T) {
 	tests := []struct {
 		name    string
-		input   *ateapipb.ActorRef
+		input   *ateapipb.ObjectRef
 		wantMsg string
 	}{{
 		"missing atespace",
-		&ateapipb.ActorRef{Name: "id1"},
+		&ateapipb.ObjectRef{Name: "id1"},
 		"atespace: Required value",
 	}, {
 		"invalid atespace",
-		&ateapipb.ActorRef{Atespace: "NS1", Name: "id1"},
+		&ateapipb.ObjectRef{Atespace: "NS1", Name: "id1"},
 		"atespace: Invalid value",
 	}, {
 		"missing name",
-		&ateapipb.ActorRef{Atespace: "ns1"},
+		&ateapipb.ObjectRef{Atespace: "ns1"},
 		"name: Required value",
 	}, {
 		"invalid name",
-		&ateapipb.ActorRef{Atespace: "ns1", Name: "ID1"},
+		&ateapipb.ObjectRef{Atespace: "ns1", Name: "ID1"},
 		"name: Invalid value",
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			errs := ValidateActorRef(tt.input, field.NewPath("path"))
+			errs := ValidateObjectRef(tt.input, field.NewPath("path"))
 			if len(errs) == 0 {
 				t.Fatalf("expected 1 error, got 0")
 			}
@@ -56,6 +56,50 @@ func TestValidateActorRef(t *testing.T) {
 			}
 			err := errs[0]
 			got := err.Error()
+			if matched, matchErr := regexp.MatchString(tt.wantMsg, got); matchErr != nil {
+				t.Fatalf("failed to compile regex %q: %v", tt.wantMsg, matchErr)
+			} else if !matched {
+				t.Errorf("expected message %q, got %q", tt.wantMsg, got)
+			}
+		})
+	}
+}
+
+func TestValidateGlobalObjectRef(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   *ateapipb.ObjectRef
+		wantMsg string // empty means no error is expected
+	}{{
+		"valid global ref",
+		&ateapipb.ObjectRef{Name: "team-a"},
+		"",
+	}, {
+		"atespace must be empty",
+		&ateapipb.ObjectRef{Atespace: "ns1", Name: "team-a"},
+		"atespace: Invalid value",
+	}, {
+		"missing name",
+		&ateapipb.ObjectRef{},
+		"name: Required value",
+	}, {
+		"invalid name",
+		&ateapipb.ObjectRef{Name: "TEAM-A"},
+		"name: Invalid value",
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			errs := ValidateGlobalObjectRef(tt.input, field.NewPath("path"))
+			if tt.wantMsg == "" {
+				if len(errs) != 0 {
+					t.Fatalf("expected no errors, got %v", errs)
+				}
+				return
+			}
+			if len(errs) != 1 {
+				t.Fatalf("expected 1 error, got %v", errs)
+			}
+			got := errs[0].Error()
 			if matched, matchErr := regexp.MatchString(tt.wantMsg, got); matchErr != nil {
 				t.Fatalf("failed to compile regex %q: %v", tt.wantMsg, matchErr)
 			} else if !matched {
@@ -196,7 +240,7 @@ func TestValidateWorker(t *testing.T) {
 					Namespace: "actor-ns",
 					Name:      "actor-template",
 				},
-				Actor: &ateapipb.ActorRef{
+				Actor: &ateapipb.ObjectRef{
 					Name:     "actor-id",
 					Atespace: "actor-atespace",
 				},
@@ -213,7 +257,7 @@ func TestValidateWorker(t *testing.T) {
 			WorkerPool:      "pool-1",
 			WorkerPod:       "pod-1",
 			Assignment: &ateapipb.Assignment{
-				Actor: &ateapipb.ActorRef{
+				Actor: &ateapipb.ObjectRef{
 					Name:     "actor-id",
 					Atespace: "actor-atespace",
 				},
@@ -233,7 +277,7 @@ func TestValidateWorker(t *testing.T) {
 				ActorTemplate: &ateapipb.KubeNamespacedObjectRef{
 					Name: "actor-template",
 				},
-				Actor: &ateapipb.ActorRef{
+				Actor: &ateapipb.ObjectRef{
 					Name:     "actor-id",
 					Atespace: "actor-atespace",
 				},
@@ -253,7 +297,7 @@ func TestValidateWorker(t *testing.T) {
 				ActorTemplate: &ateapipb.KubeNamespacedObjectRef{
 					Namespace: "actor-ns",
 				},
-				Actor: &ateapipb.ActorRef{
+				Actor: &ateapipb.ObjectRef{
 					Name:     "actor-id",
 					Atespace: "actor-atespace",
 				},
@@ -291,7 +335,7 @@ func TestValidateWorker(t *testing.T) {
 					Name:      "actor-template",
 					Namespace: "actor-ns",
 				},
-				Actor: &ateapipb.ActorRef{
+				Actor: &ateapipb.ObjectRef{
 					Atespace: "actor-atespace",
 				},
 			},
@@ -311,7 +355,7 @@ func TestValidateWorker(t *testing.T) {
 					Name:      "actor-template",
 					Namespace: "actor-ns",
 				},
-				Actor: &ateapipb.ActorRef{
+				Actor: &ateapipb.ObjectRef{
 					Name: "actor-id",
 				},
 			},

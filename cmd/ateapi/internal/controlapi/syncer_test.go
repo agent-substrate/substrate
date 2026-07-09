@@ -257,7 +257,7 @@ func TestSyncer_DeleteBoundWorker_ClearsActor(t *testing.T) {
 			Namespace: ns,
 			Name:      "tmpl",
 		},
-		Actor: &ateapipb.ActorRef{
+		Actor: &ateapipb.ObjectRef{
 			Name:     actorName,
 			Atespace: "team-orphan",
 		},

@@ -66,7 +66,7 @@ func TestFinalizeSuspendedStep_ReleasesOnlyOwnWorker(t *testing.T) {
 				WorkerPool:      "pool",
 				WorkerPod:       "pod-1",
 				Assignment: &ateapipb.Assignment{
-					Actor: &ateapipb.ActorRef{Atespace: tt.assignmentAtespace, Name: "shared"},
+					Actor: &ateapipb.ObjectRef{Atespace: tt.assignmentAtespace, Name: "shared"},
 				},
 			}
 			if err := persistence.CreateWorker(ctx, worker); err != nil {

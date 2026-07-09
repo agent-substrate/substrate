@@ -154,11 +154,11 @@ func TestFilterAndDisplayLogLine(t *testing.T) {
 }
 
 type mockAteAPIClient struct {
-	GetActorFunc func(ctx context.Context, in *ateapipb.GetActorRequest, opts ...grpc.CallOption) (*ateapipb.GetActorResponse, error)
+	GetActorFunc func(ctx context.Context, in *ateapipb.GetActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error)
 	CloseCalls   int
 }
 
-func (m *mockAteAPIClient) GetActor(ctx context.Context, in *ateapipb.GetActorRequest, opts ...grpc.CallOption) (*ateapipb.GetActorResponse, error) {
+func (m *mockAteAPIClient) GetActor(ctx context.Context, in *ateapipb.GetActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error) {
 	if m.GetActorFunc != nil {
 		return m.GetActorFunc(ctx, in, opts...)
 	}
@@ -186,17 +186,15 @@ func TestLogsActorRunner_Run_OneShotSuccess(t *testing.T) {
 	namespace := "ns-abc"
 
 	mockAPI := &mockAteAPIClient{
-		GetActorFunc: func(ctx context.Context, in *ateapipb.GetActorRequest, opts ...grpc.CallOption) (*ateapipb.GetActorResponse, error) {
-			if in.GetActorRef().GetName() != actorID {
-				return nil, fmt.Errorf("unexpected actor ID: %s", in.GetActorRef().GetName())
+		GetActorFunc: func(ctx context.Context, in *ateapipb.GetActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error) {
+			if in.GetActor().GetName() != actorID {
+				return nil, fmt.Errorf("unexpected actor ID: %s", in.GetActor().GetName())
 			}
-			return &ateapipb.GetActorResponse{
-				Actor: &ateapipb.Actor{
-					Metadata:          &ateapipb.ResourceMetadata{Name: actorID},
-					AteomPodName:      podName,
-					AteomPodNamespace: namespace,
-					Status:            ateapipb.Actor_STATUS_RUNNING,
-				},
+			return &ateapipb.Actor{
+				Metadata:          &ateapipb.ResourceMetadata{Name: actorID},
+				AteomPodName:      podName,
+				AteomPodNamespace: namespace,
+				Status:            ateapipb.Actor_STATUS_RUNNING,
 			}, nil
 		},
 	}
@@ -243,12 +241,10 @@ func TestLogsActorRunner_Run_OneShot_ActorNotRunning(t *testing.T) {
 	actorID := "act-123"
 
 	mockAPI := &mockAteAPIClient{
-		GetActorFunc: func(ctx context.Context, in *ateapipb.GetActorRequest, opts ...grpc.CallOption) (*ateapipb.GetActorResponse, error) {
-			return &ateapipb.GetActorResponse{
-				Actor: &ateapipb.Actor{
-					Metadata: &ateapipb.ResourceMetadata{Name: actorID},
-					Status:   ateapipb.Actor_STATUS_SUSPENDED, // not running
-				},
+		GetActorFunc: func(ctx context.Context, in *ateapipb.GetActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error) {
+			return &ateapipb.Actor{
+				Metadata: &ateapipb.ResourceMetadata{Name: actorID},
+				Status:   ateapipb.Actor_STATUS_SUSPENDED, // not running
 			}, nil
 		},
 	}
@@ -292,29 +288,25 @@ func TestLogsActorRunner_Run_Follow_SuspendedToRunning(t *testing.T) {
 	var getActorMu sync.Mutex
 
 	mockAPI := &mockAteAPIClient{
-		GetActorFunc: func(ctx context.Context, in *ateapipb.GetActorRequest, opts ...grpc.CallOption) (*ateapipb.GetActorResponse, error) {
+		GetActorFunc: func(ctx context.Context, in *ateapipb.GetActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error) {
 			getActorMu.Lock()
 			defer getActorMu.Unlock()
 			getActorCalls++
 
 			if getActorCalls == 1 {
 				// First call: suspended
-				return &ateapipb.GetActorResponse{
-					Actor: &ateapipb.Actor{
-						Metadata: &ateapipb.ResourceMetadata{Name: actorID},
-						Status:   ateapipb.Actor_STATUS_SUSPENDED,
-					},
+				return &ateapipb.Actor{
+					Metadata: &ateapipb.ResourceMetadata{Name: actorID},
+					Status:   ateapipb.Actor_STATUS_SUSPENDED,
 				}, nil
 			}
 
 			// Subsequent calls: running
-			return &ateapipb.GetActorResponse{
-				Actor: &ateapipb.Actor{
-					Metadata:          &ateapipb.ResourceMetadata{Name: actorID},
-					AteomPodName:      podName,
-					AteomPodNamespace: namespace,
-					Status:            ateapipb.Actor_STATUS_RUNNING,
-				},
+			return &ateapipb.Actor{
+				Metadata:          &ateapipb.ResourceMetadata{Name: actorID},
+				AteomPodName:      podName,
+				AteomPodNamespace: namespace,
+				Status:            ateapipb.Actor_STATUS_RUNNING,
 			}, nil
 		},
 	}
@@ -385,7 +377,7 @@ func TestLogsActorRunner_Run_Follow_NotFoundActor(t *testing.T) {
 	actorID := "act-notfound"
 
 	mockAPI := &mockAteAPIClient{
-		GetActorFunc: func(ctx context.Context, in *ateapipb.GetActorRequest, opts ...grpc.CallOption) (*ateapipb.GetActorResponse, error) {
+		GetActorFunc: func(ctx context.Context, in *ateapipb.GetActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error) {
 			return nil, status.Error(codes.NotFound, "actor not found")
 		},
 	}
@@ -428,20 +420,18 @@ func TestLogsActorRunner_Run_Follow_ActorMigration(t *testing.T) {
 	lineRead := make(chan struct{})
 
 	mockAPI := &mockAteAPIClient{
-		GetActorFunc: func(ctx context.Context, in *ateapipb.GetActorRequest, opts ...grpc.CallOption) (*ateapipb.GetActorResponse, error) {
+		GetActorFunc: func(ctx context.Context, in *ateapipb.GetActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error) {
 			getActorMu.Lock()
 			defer getActorMu.Unlock()
 			getActorCalls++
 
 			if getActorCalls == 1 {
 				// 1. Initial call for stream 1: pod-1
-				return &ateapipb.GetActorResponse{
-					Actor: &ateapipb.Actor{
-						Metadata:          &ateapipb.ResourceMetadata{Name: actorID},
-						AteomPodName:      "pod-1",
-						AteomPodNamespace: "ns",
-						Status:            ateapipb.Actor_STATUS_RUNNING,
-					},
+				return &ateapipb.Actor{
+					Metadata:          &ateapipb.ResourceMetadata{Name: actorID},
+					AteomPodName:      "pod-1",
+					AteomPodNamespace: "ns",
+					Status:            ateapipb.Actor_STATUS_RUNNING,
 				}, nil
 			}
 
@@ -453,13 +443,11 @@ func TestLogsActorRunner_Run_Follow_ActorMigration(t *testing.T) {
 				return nil, ctx.Err()
 			}
 
-			return &ateapipb.GetActorResponse{
-				Actor: &ateapipb.Actor{
-					Metadata:          &ateapipb.ResourceMetadata{Name: actorID},
-					AteomPodName:      "pod-2",
-					AteomPodNamespace: "ns",
-					Status:            ateapipb.Actor_STATUS_RUNNING,
-				},
+			return &ateapipb.Actor{
+				Metadata:          &ateapipb.ResourceMetadata{Name: actorID},
+				AteomPodName:      "pod-2",
+				AteomPodNamespace: "ns",
+				Status:            ateapipb.Actor_STATUS_RUNNING,
 			}, nil
 		},
 	}
@@ -541,20 +529,18 @@ func TestLogsActorRunner_Run_Follow_ActorSuspendedMidStream(t *testing.T) {
 	lineRead := make(chan struct{})
 
 	mockAPI := &mockAteAPIClient{
-		GetActorFunc: func(ctx context.Context, in *ateapipb.GetActorRequest, opts ...grpc.CallOption) (*ateapipb.GetActorResponse, error) {
+		GetActorFunc: func(ctx context.Context, in *ateapipb.GetActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error) {
 			getActorMu.Lock()
 			defer getActorMu.Unlock()
 			getActorCalls++
 
 			// 1. Initial call: running on pod-1
 			if getActorCalls == 1 {
-				return &ateapipb.GetActorResponse{
-					Actor: &ateapipb.Actor{
-						Metadata:          &ateapipb.ResourceMetadata{Name: actorID},
-						AteomPodName:      "pod-1",
-						AteomPodNamespace: "ns",
-						Status:            ateapipb.Actor_STATUS_RUNNING,
-					},
+				return &ateapipb.Actor{
+					Metadata:          &ateapipb.ResourceMetadata{Name: actorID},
+					AteomPodName:      "pod-1",
+					AteomPodNamespace: "ns",
+					Status:            ateapipb.Actor_STATUS_RUNNING,
 				}, nil
 			}
 
@@ -566,32 +552,26 @@ func TestLogsActorRunner_Run_Follow_ActorSuspendedMidStream(t *testing.T) {
 				case <-ctx.Done():
 					return nil, ctx.Err()
 				}
-				return &ateapipb.GetActorResponse{
-					Actor: &ateapipb.Actor{
-						Metadata: &ateapipb.ResourceMetadata{Name: actorID},
-						Status:   ateapipb.Actor_STATUS_SUSPENDED,
-					},
+				return &ateapipb.Actor{
+					Metadata: &ateapipb.ResourceMetadata{Name: actorID},
+					Status:   ateapipb.Actor_STATUS_SUSPENDED,
 				}, nil
 			}
 
 			// 3. Loop reconnection call: suspended (still suspended, so it will wait)
 			if getActorCalls == 3 {
-				return &ateapipb.GetActorResponse{
-					Actor: &ateapipb.Actor{
-						Metadata: &ateapipb.ResourceMetadata{Name: actorID},
-						Status:   ateapipb.Actor_STATUS_SUSPENDED,
-					},
+				return &ateapipb.Actor{
+					Metadata: &ateapipb.ResourceMetadata{Name: actorID},
+					Status:   ateapipb.Actor_STATUS_SUSPENDED,
 				}, nil
 			}
 
 			// 4. Subsequent loop reconnection call: running again on pod-1
-			return &ateapipb.GetActorResponse{
-				Actor: &ateapipb.Actor{
-					Metadata:          &ateapipb.ResourceMetadata{Name: actorID},
-					AteomPodName:      "pod-1",
-					AteomPodNamespace: "ns",
-					Status:            ateapipb.Actor_STATUS_RUNNING,
-				},
+			return &ateapipb.Actor{
+				Metadata:          &ateapipb.ResourceMetadata{Name: actorID},
+				AteomPodName:      "pod-1",
+				AteomPodNamespace: "ns",
+				Status:            ateapipb.Actor_STATUS_RUNNING,
 			}, nil
 		},
 	}

@@ -26,10 +26,10 @@ option go_package = "github.com/agent-substrate/substrate/pkg/proto/ateapipb";
 // Control is the primary RPC interface for Agentic Substrate.
 service Control {
   // Get an Actor.
-  rpc GetActor(GetActorRequest) returns (GetActorResponse) {}
+  rpc GetActor(GetActorRequest) returns (Actor) {}
 
   // Create a new Actor deriving from a given ActorTemplate.
-  rpc CreateActor(CreateActorRequest) returns (CreateActorResponse) {}
+  rpc CreateActor(CreateActorRequest) returns (Actor) {}
 
   // Update mutable fields on an existing Actor.
   rpc UpdateActor(UpdateActorRequest) returns (UpdateActorResponse) {}
@@ -44,7 +44,7 @@ service Control {
   rpc ResumeActor(ResumeActorRequest) returns (ResumeActorResponse) {}
 
   // Delete an actor. Only suspended actors can be deleted.
-  rpc DeleteActor(DeleteActorRequest) returns (DeleteActorResponse) {}
+  rpc DeleteActor(DeleteActorRequest) returns (Actor) {}
 
   // List all workers currently reflected in redis.
   rpc ListWorkers(ListWorkersRequest) returns (ListWorkersResponse) {}
@@ -53,16 +53,16 @@ service Control {
   rpc ListActors(ListActorsRequest) returns (ListActorsResponse) {}
 
   // Create a new Atespace. Substrate-native, stored in Redis.
-  rpc CreateAtespace(CreateAtespaceRequest) returns (CreateAtespaceResponse) {}
+  rpc CreateAtespace(CreateAtespaceRequest) returns (Atespace) {}
 
   // Get an Atespace by name.
-  rpc GetAtespace(GetAtespaceRequest) returns (GetAtespaceResponse) {}
+  rpc GetAtespace(GetAtespaceRequest) returns (Atespace) {}
 
   // List all Atespaces.
   rpc ListAtespaces(ListAtespacesRequest) returns (ListAtespacesResponse) {}
 
   // Delete an empty Atespace. Rejects (FailedPrecondition) if any actors remain.
-  rpc DeleteAtespace(DeleteAtespaceRequest) returns (DeleteAtespaceResponse) {}
+  rpc DeleteAtespace(DeleteAtespaceRequest) returns (Atespace) {}
 
   // Debugging: drop all data from the ate database.
   rpc DebugClear(DebugClearRequest) returns (DebugClearResponse) {}
@@ -167,24 +167,22 @@ message Atespace {
   ResourceMetadata metadata = 1;
 }
 
-// ActorRef identifies an actor: a name is only unique within its atespace.
-message ActorRef {
+// ObjectRef references a Substrate resource by its (atespace, name) identity.
+message ObjectRef {
+  // The atespace where the resource lives. Empty if the resource is global-scoped.
   string atespace = 1;
+  // The name of the resource. Required. Unique within an atespace, or globally
+  // unique if the resource is global-scoped.
   string name     = 2;
 }
 
 message CreateAtespaceRequest {
-  string name = 1;
-}
-message CreateAtespaceResponse {
+  // The atespace to create.
   Atespace atespace = 1;
 }
 
 message GetAtespaceRequest {
-  string name = 1;
-}
-message GetAtespaceResponse {
-  Atespace atespace = 1;
+  ObjectRef atespace = 1;
 }
 
 message ListAtespacesRequest {}
@@ -193,35 +191,16 @@ message ListAtespacesResponse {
 }
 
 message DeleteAtespaceRequest {
-  string name = 1;
+  ObjectRef atespace = 1;
 }
-message DeleteAtespaceResponse {}
 
 message GetActorRequest {
-  ActorRef actor_ref = 1;
-}
-
-message GetActorResponse {
-  Actor actor = 1;
+  ObjectRef actor = 1;
 }
 
 // Request to create a new Actor.
 message CreateActorRequest {
-  // The new actor's atespace and actor_id (actor_id must be a valid DNS-1123 label).
-  ActorRef actor_ref = 1;
-
-  // The namespace of the ActorTemplate to derive from.
-  string actor_template_namespace = 2;
-
-  // The name of the ActorTemplate to derive from.
-  string actor_template_name = 3;
-
-  // worker_selector sets the actor's placement constraint at creation time.
-  // If empty, the actor matches any pool admitted by the template's selector.
-  Selector worker_selector = 4;
-}
-
-message CreateActorResponse {
+  // The actor to create.
   Actor actor = 1;
 }
 
@@ -229,7 +208,7 @@ message CreateActorResponse {
 // May be called regardless of the actor's current status.
 // Changes take effect on the next ResumeActor call.
 message UpdateActorRequest {
-  ActorRef actor_ref = 1;
+  ObjectRef actor = 1;
 
   // worker_selector replaces the actor's current placement constraint.
   // Takes effect on the next ResumeActor call.
@@ -241,7 +220,7 @@ message UpdateActorResponse {
 }
 
 message SuspendActorRequest {
-  ActorRef actor_ref = 1;
+  ObjectRef actor = 1;
 }
 
 message SuspendActorResponse {
@@ -249,7 +228,7 @@ message SuspendActorResponse {
 }
 
 message PauseActorRequest {
-  ActorRef actor_ref = 1;
+  ObjectRef actor = 1;
 }
 
 message PauseActorResponse {
@@ -257,7 +236,7 @@ message PauseActorResponse {
 }
 
 message ResumeActorRequest {
-  ActorRef actor_ref = 1;
+  ObjectRef actor = 1;
 
   // If true, skip golden snapshot and boot the workload from scratch.
   bool boot = 2;
@@ -268,10 +247,8 @@ message ResumeActorResponse {
 }
 
 message DeleteActorRequest {
-  ActorRef actor_ref = 1;
+  ObjectRef actor = 1;
 }
-
-message DeleteActorResponse {}
 
 message ListWorkersRequest {}
 
@@ -322,7 +299,7 @@ message Worker {
 
 message Assignment {
   KubeNamespacedObjectRef actor_template = 1;
-  ActorRef actor = 2;
+  ObjectRef actor = 2;
 }
 
 message KubeNamespacedObjectRef {

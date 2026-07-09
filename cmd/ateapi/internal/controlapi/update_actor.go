@@ -32,10 +32,10 @@ func (s *Service) UpdateActor(ctx context.Context, req *ateapipb.UpdateActorRequ
 		return nil, err
 	}
 
-	actor, err := s.persistence.GetActor(ctx, req.GetActorRef().GetAtespace(), req.GetActorRef().GetName())
+	actor, err := s.persistence.GetActor(ctx, req.GetActor().GetAtespace(), req.GetActor().GetName())
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, status.Errorf(codes.NotFound, "Actor %s not found", req.GetActorRef().GetName())
+			return nil, status.Errorf(codes.NotFound, "Actor %s not found", req.GetActor().GetName())
 		}
 		return nil, fmt.Errorf("while getting actor: %w", err)
 	}
@@ -56,10 +56,10 @@ func validateUpdateActorRequest(req *ateapipb.UpdateActorRequest) error {
 	var fldPath *field.Path
 	var errs field.ErrorList
 
-	if val, fldPath := req.ActorRef, fldPath.Child("actor_ref"); val == nil {
+	if val, fldPath := req.Actor, fldPath.Child("actor"); val == nil {
 		errs = append(errs, field.Required(fldPath, ""))
 	} else {
-		errs = append(errs, resources.ValidateActorRef(val, fldPath)...)
+		errs = append(errs, resources.ValidateObjectRef(val, fldPath)...)
 	}
 
 	if val := req.WorkerSelector; val != nil {

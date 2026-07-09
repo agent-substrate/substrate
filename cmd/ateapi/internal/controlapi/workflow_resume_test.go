@@ -180,7 +180,7 @@ func TestAssignWorkerStep_SkipsWorkerAssignedInOtherAtespace(t *testing.T) {
 		WorkerPod:       "pod-1",
 		SandboxClass:    "gvisor",
 		Assignment: &ateapipb.Assignment{
-			Actor: &ateapipb.ActorRef{Atespace: "team-b", Name: "shared"},
+			Actor: &ateapipb.ObjectRef{Atespace: "team-b", Name: "shared"},
 		},
 	}
 	if err := persistence.CreateWorker(ctx, worker); err != nil {

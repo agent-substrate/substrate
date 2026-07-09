@@ -35,12 +35,18 @@ var createAtespaceCmd = &cobra.Command{
 		}
 		defer apiClient.Close()
 
-		resp, err := apiClient.CreateAtespace(ctx, &ateapipb.CreateAtespaceRequest{Name: args[0]})
+		resp, err := apiClient.CreateAtespace(ctx, &ateapipb.CreateAtespaceRequest{
+			Atespace: &ateapipb.Atespace{
+				Metadata: &ateapipb.ResourceMetadata{
+					Name: args[0],
+				},
+			},
+		})
 		if err != nil {
 			return fmt.Errorf("failed to create atespace: %w", err)
 		}
 
-		return printer.PrintAtespace(resp.GetAtespace(), outputFmt)
+		return printer.PrintAtespace(resp, outputFmt)
 	},
 }
 

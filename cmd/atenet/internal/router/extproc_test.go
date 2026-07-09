@@ -179,8 +179,8 @@ func TestExtProcHeadersEvaluation(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			clientMock := &mockClient{
 				resumeFn: func(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
-					if in.GetActorRef().GetName() != testUUID {
-						t.Errorf("unexpected identifier parsed in test context: %s", in.GetActorRef().GetName())
+					if in.GetActor().GetName() != testUUID {
+						t.Errorf("unexpected identifier parsed in test context: %s", in.GetActor().GetName())
 					}
 					if tc.resumeErr != nil {
 						return nil, tc.resumeErr

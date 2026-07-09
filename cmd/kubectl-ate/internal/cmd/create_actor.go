@@ -46,15 +46,20 @@ var createActorCmd = &cobra.Command{
 		}
 
 		resp, err := apiClient.CreateActor(ctx, &ateapipb.CreateActorRequest{
-			ActorTemplateNamespace: parts[0],
-			ActorTemplateName:      parts[1],
-			ActorRef:               &ateapipb.ActorRef{Atespace: atespaceFlag, Name: actorID},
+			Actor: &ateapipb.Actor{
+				Metadata: &ateapipb.ResourceMetadata{
+					Atespace: atespaceFlag,
+					Name:     actorID,
+				},
+				ActorTemplateNamespace: parts[0],
+				ActorTemplateName:      parts[1],
+			},
 		})
 		if err != nil {
 			return fmt.Errorf("failed to create actor: %w", err)
 		}
 
-		return printer.PrintActor(resp.GetActor(), outputFmt)
+		return printer.PrintActor(resp, outputFmt)
 	},
 }
 

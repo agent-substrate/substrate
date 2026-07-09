@@ -29,38 +29,45 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
-func (s *Service) CreateActor(ctx context.Context, req *ateapipb.CreateActorRequest) (*ateapipb.CreateActorResponse, error) {
+func (s *Service) CreateActor(ctx context.Context, req *ateapipb.CreateActorRequest) (*ateapipb.Actor, error) {
 	if err := validateCreateActorRequest(req); err != nil {
 		return nil, err
 	}
-	setSpanActorRefIdentity(ctx, req.GetActorRef().GetAtespace(), req.GetActorRef().GetName())
-	_, err := s.actorTemplateLister.ActorTemplates(req.GetActorTemplateNamespace()).Get(req.GetActorTemplateName())
+	in := req.GetActor()
+	templateNamespace := in.GetActorTemplateNamespace()
+	templateName := in.GetActorTemplateName()
+
+	setSpanActorRefIdentity(ctx, in.GetMetadata().GetAtespace(), in.GetMetadata().GetName())
+
+	_, err := s.actorTemplateLister.ActorTemplates(templateNamespace).Get(templateName)
 	if err != nil {
 		if k8serrors.IsNotFound(err) {
-			return nil, status.Errorf(codes.FailedPrecondition, "ActorTemplate %s/%s not found", req.GetActorTemplateNamespace(), req.GetActorTemplateName())
+			return nil, status.Errorf(codes.FailedPrecondition, "ActorTemplate %s/%s not found", templateNamespace, templateName)
 		}
 		return nil, fmt.Errorf("while getting ActorTemplate: %w", err)
 	}
 
+	atespace := in.GetMetadata().GetAtespace()
+	name := in.GetMetadata().GetName()
+
 	// The atespace must already exist.
-	exists, err := s.persistence.AtespaceExists(ctx, req.GetActorRef().GetAtespace())
+	exists, err := s.persistence.AtespaceExists(ctx, atespace)
 	if err != nil {
 		return nil, fmt.Errorf("while checking atespace: %w", err)
 	}
 	if !exists {
-		return nil, status.Errorf(codes.FailedPrecondition, "Atespace %s not found", req.GetActorRef().GetAtespace())
+		return nil, status.Errorf(codes.FailedPrecondition, "Atespace %s not found", atespace)
 	}
 
-	name := req.GetActorRef().GetName()
 	actor := &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{
-			Atespace: req.GetActorRef().GetAtespace(),
+			Atespace: atespace,
 			Name:     name,
 		},
 		Status:                 ateapipb.Actor_STATUS_SUSPENDED,
-		ActorTemplateNamespace: req.GetActorTemplateNamespace(),
-		ActorTemplateName:      req.GetActorTemplateName(),
-		WorkerSelector:         req.GetWorkerSelector(),
+		ActorTemplateNamespace: templateNamespace,
+		ActorTemplateName:      templateName,
+		WorkerSelector:         in.GetWorkerSelector(),
 	}
 	stored, err := s.persistence.CreateActor(ctx, actor)
 	if err != nil {
@@ -71,39 +78,49 @@ func (s *Service) CreateActor(ctx context.Context, req *ateapipb.CreateActorRequ
 	}
 
 	setSpanActorIdentity(ctx, stored)
-	return &ateapipb.CreateActorResponse{
-		Actor: stored,
-	}, nil
+	return stored, nil
 }
 
 func validateCreateActorRequest(req *ateapipb.CreateActorRequest) error {
 	var fldPath *field.Path
 	var errs field.ErrorList
 
-	if val, fldPath := req.ActorTemplateNamespace, fldPath.Child("actor_template_namespace"); val == "" {
-		errs = append(errs, field.Required(fldPath, ""))
+	actor := req.GetActor()
+	actorPath := fldPath.Child("actor")
+	if actor == nil {
+		errs = append(errs, field.Required(actorPath, ""))
+		return status.Error(codes.InvalidArgument, errs.ToAggregate().Error())
+	}
+
+	metaPath := actorPath.Child("metadata")
+	if val, p := actor.GetMetadata().GetAtespace(), metaPath.Child("atespace"); val == "" {
+		errs = append(errs, field.Required(p, ""))
+	} else {
+		errs = append(errs, resources.ValidateResourceName(val, p)...)
+	}
+	if val, p := actor.GetMetadata().GetName(), metaPath.Child("name"); val == "" {
+		errs = append(errs, field.Required(p, ""))
+	} else {
+		errs = append(errs, resources.ValidateResourceName(val, p)...)
+	}
+
+	if val, p := actor.GetActorTemplateNamespace(), actorPath.Child("actor_template_namespace"); val == "" {
+		errs = append(errs, field.Required(p, ""))
 	} else {
 		for _, msg := range content.IsDNS1123Label(val) {
-			errs = append(errs, field.Invalid(fldPath, val, msg))
+			errs = append(errs, field.Invalid(p, val, msg))
 		}
 	}
-
-	if val, fldPath := req.ActorTemplateName, fldPath.Child("actor_template_name"); val == "" {
-		errs = append(errs, field.Required(fldPath, ""))
+	if val, p := actor.GetActorTemplateName(), actorPath.Child("actor_template_name"); val == "" {
+		errs = append(errs, field.Required(p, ""))
 	} else {
 		for _, msg := range content.IsDNS1123Subdomain(val) {
-			errs = append(errs, field.Invalid(fldPath, val, msg))
+			errs = append(errs, field.Invalid(p, val, msg))
 		}
 	}
 
-	if val, fldPath := req.ActorRef, fldPath.Child("actor_ref"); val == nil {
-		errs = append(errs, field.Required(fldPath, ""))
-	} else {
-		errs = append(errs, resources.ValidateActorRef(val, fldPath)...)
-	}
-
-	if val := req.WorkerSelector; val != nil {
-		errs = append(errs, validateSelector(val, fldPath.Child("worker_selector"))...)
+	if val := actor.GetWorkerSelector(); val != nil {
+		errs = append(errs, validateSelector(val, actorPath.Child("worker_selector"))...)
 	}
 
 	if len(errs) > 0 {

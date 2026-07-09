@@ -81,9 +81,11 @@ func TestCreateActor_StampsFullSpanIdentity(t *testing.T) {
 	sr := installSpanRecorder(t)
 	attrs := rootSpanAttrs(t, sr, func(ctx context.Context) {
 		if _, err := tc.service.CreateActor(ctx, &ateapipb.CreateActorRequest{
-			ActorRef:               &ateapipb.ActorRef{Atespace: testAtespace, Name: "id1"},
-			ActorTemplateNamespace: ns,
-			ActorTemplateName:      "tmpl1",
+			Actor: &ateapipb.Actor{
+				Metadata:               &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "id1"},
+				ActorTemplateNamespace: ns,
+				ActorTemplateName:      "tmpl1",
+			},
 		}); err != nil {
 			t.Fatalf("CreateActor: %v", err)
 		}
@@ -104,9 +106,11 @@ func TestDeleteActor_StampsRefSpanIdentity(t *testing.T) {
 	defer tc.cleanup()
 	createTemplate(t, tc, ns)
 	if _, err := tc.service.CreateActor(context.Background(), &ateapipb.CreateActorRequest{
-		ActorRef:               &ateapipb.ActorRef{Atespace: testAtespace, Name: "id1"},
-		ActorTemplateNamespace: ns,
-		ActorTemplateName:      "tmpl1",
+		Actor: &ateapipb.Actor{
+			Metadata:               &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "id1"},
+			ActorTemplateNamespace: ns,
+			ActorTemplateName:      "tmpl1",
+		},
 	}); err != nil {
 		t.Fatalf("seed CreateActor: %v", err)
 	}
@@ -114,7 +118,7 @@ func TestDeleteActor_StampsRefSpanIdentity(t *testing.T) {
 	sr := installSpanRecorder(t)
 	attrs := rootSpanAttrs(t, sr, func(ctx context.Context) {
 		if _, err := tc.service.DeleteActor(ctx, &ateapipb.DeleteActorRequest{
-			ActorRef: &ateapipb.ActorRef{Atespace: testAtespace, Name: "id1"},
+			Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "id1"},
 		}); err != nil {
 			t.Fatalf("DeleteActor: %v", err)
 		}
@@ -134,7 +138,7 @@ func TestResumeActor_ErrorStillStampsRefSpanIdentity(t *testing.T) {
 	sr := installSpanRecorder(t)
 	attrs := rootSpanAttrs(t, sr, func(ctx context.Context) {
 		if _, err := tc.service.ResumeActor(ctx, &ateapipb.ResumeActorRequest{
-			ActorRef: &ateapipb.ActorRef{Atespace: testAtespace, Name: "missing"},
+			Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "missing"},
 		}); err == nil {
 			t.Fatal("expected error resuming missing actor")
 		}

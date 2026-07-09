@@ -159,7 +159,7 @@ func TestPrintWorkersTo_Table(t *testing.T) {
 					Namespace: "default",
 					Name:      "template-1",
 				},
-				Actor: &ateapipb.ActorRef{
+				Actor: &ateapipb.ObjectRef{
 					Name: "id-1",
 				},
 			},

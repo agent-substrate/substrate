@@ -38,7 +38,7 @@ var suspendActorCmd = &cobra.Command{
 		defer apiClient.Close()
 
 		resp, err := apiClient.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
-			ActorRef: &ateapipb.ActorRef{Atespace: suspendAtespaceFlag, Name: args[0]},
+			Actor: &ateapipb.ObjectRef{Atespace: suspendAtespaceFlag, Name: args[0]},
 		})
 		if err != nil {
 			return fmt.Errorf("failed to suspend actor: %w", err)

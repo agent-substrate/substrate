@@ -58,7 +58,7 @@ func init() {
 
 // AteAPIClient abstracts the gRPC client calls.
 type AteAPIClient interface {
-	GetActor(ctx context.Context, in *ateapipb.GetActorRequest, opts ...grpc.CallOption) (*ateapipb.GetActorResponse, error)
+	GetActor(ctx context.Context, in *ateapipb.GetActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error)
 	Close()
 }
 
@@ -109,12 +109,11 @@ func (r *LogsActorRunner) Run(ctx context.Context, actorID string) error {
 }
 
 func (r *LogsActorRunner) runOneShot(ctx context.Context, actorID string) error {
-	actorResp, err := r.apiClient.GetActor(ctx, &ateapipb.GetActorRequest{ActorRef: &ateapipb.ActorRef{Atespace: r.atespace, Name: actorID}})
+	actor, err := r.apiClient.GetActor(ctx, &ateapipb.GetActorRequest{Actor: &ateapipb.ObjectRef{Atespace: r.atespace, Name: actorID}})
 	if err != nil {
 		return fmt.Errorf("failed to get actor: %w", err)
 	}
 
-	actor := actorResp.GetActor()
 	podName := actor.GetAteomPodName()
 	namespace := actor.GetAteomPodNamespace()
 
@@ -156,7 +155,7 @@ func (r *LogsActorRunner) runFollow(ctx context.Context, actorID string) error {
 		default:
 		}
 
-		actorResp, err := r.apiClient.GetActor(ctx, &ateapipb.GetActorRequest{ActorRef: &ateapipb.ActorRef{Atespace: r.atespace, Name: actorID}})
+		actor, err := r.apiClient.GetActor(ctx, &ateapipb.GetActorRequest{Actor: &ateapipb.ObjectRef{Atespace: r.atespace, Name: actorID}})
 		if err != nil {
 			if status.Code(err) == codes.NotFound {
 				return fmt.Errorf("actor %s not found: %w", actorID, err)
@@ -169,7 +168,6 @@ func (r *LogsActorRunner) runFollow(ctx context.Context, actorID string) error {
 			}
 		}
 
-		actor := actorResp.GetActor()
 		podName := actor.GetAteomPodName()
 		namespace := actor.GetAteomPodNamespace()
 
@@ -264,9 +262,9 @@ func (r *LogsActorRunner) startMigrationMonitor(
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				resp, err := r.apiClient.GetActor(ctx, &ateapipb.GetActorRequest{ActorRef: &ateapipb.ActorRef{Atespace: r.atespace, Name: actorID}})
+				resp, err := r.apiClient.GetActor(ctx, &ateapipb.GetActorRequest{Actor: &ateapipb.ObjectRef{Atespace: r.atespace, Name: actorID}})
 				if err == nil {
-					act := resp.GetActor()
+					act := resp
 					if act.GetStatus() != ateapipb.Actor_STATUS_RUNNING || act.GetAteomPodName() != currentPod {
 						// Actor suspended or migrated! Cancel stream context to reconnect.
 						cancel()

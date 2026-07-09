@@ -52,8 +52,9 @@ type Interface interface {
 	// mutated. Returns ErrNotFound if missing, or ErrPersistenceRetry on version mismatch.
 	UpdateActor(ctx context.Context, actor *ateapipb.Actor, expectedVersion int64) (*ateapipb.Actor, error)
 
-	// Removes an actor. Returns ErrNotFound if missing, or ErrFailedPrecondition if not suspended.
-	DeleteActor(ctx context.Context, atespace, name string) error
+	// Removes an actor and returns the deleted resource. Returns ErrNotFound if
+	// missing, or ErrFailedPrecondition if not suspended.
+	DeleteActor(ctx context.Context, atespace, name string) (*ateapipb.Actor, error)
 
 	// Lists actors in the given atespace (scoped scan), or across ALL atespaces if atespace is
 	// empty. Returns a page of actors and a next page token.
@@ -73,9 +74,10 @@ type Interface interface {
 	// AtespaceExists reports whether the atespace object exists.
 	AtespaceExists(ctx context.Context, name string) (bool, error)
 
-	// Removes an empty atespace. Returns ErrNotFound if missing, or
-	// ErrFailedPrecondition if any actor:<name>:* key still exists.
-	DeleteAtespace(ctx context.Context, name string) error
+	// Removes an empty atespace and returns the deleted resource. Returns
+	// ErrNotFound if missing, or ErrFailedPrecondition if the atespace is not empty
+	// (e.g. there are actors in it).
+	DeleteAtespace(ctx context.Context, name string) (*ateapipb.Atespace, error)
 
 	// Fetches worker state by namespace, pool, and pod name. Returns ErrNotFound if missing.
 	GetWorker(ctx context.Context, namespace, pool, pod string) (*ateapipb.Worker, error)

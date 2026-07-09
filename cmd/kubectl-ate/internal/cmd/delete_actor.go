@@ -38,7 +38,7 @@ var deleteActorCmd = &cobra.Command{
 
 		id := args[0]
 		_, err = c.ControlClient.DeleteActor(ctx, &ateapipb.DeleteActorRequest{
-			ActorRef: &ateapipb.ActorRef{Atespace: deleteAtespaceFlag, Name: id},
+			Actor: &ateapipb.ObjectRef{Atespace: deleteAtespaceFlag, Name: id},
 		})
 		if err != nil {
 			return err

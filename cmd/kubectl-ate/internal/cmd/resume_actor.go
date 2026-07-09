@@ -39,8 +39,8 @@ var resumeActorCmd = &cobra.Command{
 		defer apiClient.Close()
 
 		resp, err := apiClient.ResumeActor(ctx, &ateapipb.ResumeActorRequest{
-			ActorRef: &ateapipb.ActorRef{Atespace: resumeAtespaceFlag, Name: args[0]},
-			Boot:     bootFlag,
+			Actor: &ateapipb.ObjectRef{Atespace: resumeAtespaceFlag, Name: args[0]},
+			Boot:  bootFlag,
 		})
 		if err != nil {
 			return fmt.Errorf("failed to resume actor: %w", err)

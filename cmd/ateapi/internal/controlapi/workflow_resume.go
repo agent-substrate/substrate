@@ -174,7 +174,7 @@ func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, stat
 			Namespace: state.Actor.GetActorTemplateNamespace(),
 			Name:      state.Actor.GetActorTemplateName(),
 		},
-		Actor: &ateapipb.ActorRef{
+		Actor: &ateapipb.ObjectRef{
 			Name:     input.ActorName,
 			Atespace: state.Actor.GetMetadata().GetAtespace(),
 		},
