@@ -108,9 +108,6 @@ func prepareOCIDirectory(ctx context.Context, pullCache *memorypullcache.MemoryP
 // duplicated keys are removed in favor of the following precedence template env > image env.
 // default PATH stands in for an image config with no env
 func mergeActorEnv(imageEnv, templateEnv []string) []string {
-	if len(imageEnv) == 0 {
-		imageEnv = []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"}
-	}
 	seen := make(map[string]struct{})
 	var out []string
 	add := func(entries ...string) {
@@ -129,6 +126,7 @@ func mergeActorEnv(imageEnv, templateEnv []string) []string {
 
 	add(templateEnv...)
 	add(imageEnv...)
+	add("PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
 	return out
 }
 

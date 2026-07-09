@@ -131,6 +131,24 @@ func TestMergeActorEnv(t *testing.T) {
 		}
 	})
 
+	t.Run("default PATH applies when neither template nor image set PATH", func(t *testing.T) {
+		got := mergeActorEnv([]string{"FOO=image"}, []string{"BAR=template"})
+		if !slices.Contains(got, "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin") {
+			t.Errorf("default PATH missing: %v", got)
+		}
+	})
+
+	t.Run("image and template PATH take precedence over the default", func(t *testing.T) {
+		got := mergeActorEnv([]string{"PATH=/image/bin"}, nil)
+		if !slices.Contains(got, "PATH=/image/bin") || countKey(got, "PATH") != 1 {
+			t.Errorf("image PATH must win over the default: %v", got)
+		}
+		got = mergeActorEnv(nil, []string{"PATH=/template/bin"})
+		if !slices.Contains(got, "PATH=/template/bin") || countKey(got, "PATH") != 1 {
+			t.Errorf("template PATH must win over the default: %v", got)
+		}
+	})
+
 	t.Run("blank/keyless entries are dropped", func(t *testing.T) {
 		imageEnv := []string{"", "=novalue"}
 		var templateEnv []string
