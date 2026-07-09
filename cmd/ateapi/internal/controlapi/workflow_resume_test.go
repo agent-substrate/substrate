@@ -15,10 +15,14 @@
 package controlapi
 
 import (
+	"context"
 	"testing"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -158,6 +162,134 @@ func TestIsWorkerEligibleForActor(t *testing.T) {
 			}
 			if got != tt.wantEligible {
 				t.Errorf("got eligible=%t, want %t", got, tt.wantEligible)
+			}
+		})
+	}
+}
+
+// TestResumeActorWorkflow exercises the resume workflow end-to-end against
+// seeded actor statuses, covering both the rejected and the idempotent-success
+// paths. The worker cache and atelet dialer are nil, so any step that
+// unexpectedly reaches them panics.
+func TestResumeActorWorkflow(t *testing.T) {
+	tests := []struct {
+		name       string
+		seedStatus ateapipb.Actor_Status
+		// wantErr true means ResumeActor must fail with FailedPrecondition.
+		wantErr bool
+		// wantStatus is the stored status after the call.
+		wantStatus ateapipb.Actor_Status
+	}{
+		{
+			// The resume edge only exists from SUSPENDED, PAUSED, and
+			// RESUMING; a CRASHED actor is rejected by AssignWorkerStep's
+			// CheckPrerequisite and its status is left untouched.
+			name:       "crashed rejected",
+			seedStatus: ateapipb.Actor_STATUS_CRASHED,
+			wantErr:    true,
+			wantStatus: ateapipb.Actor_STATUS_CRASHED,
+		},
+		{
+			// Resuming a RUNNING actor succeeds idempotently: every step
+			// fast-forwards via IsComplete.
+			name:       "already running succeeds",
+			seedStatus: ateapipb.Actor_STATUS_RUNNING,
+			wantStatus: ateapipb.Actor_STATUS_RUNNING,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			st, cleanup := storetest.SetupTestStore(t)
+			defer cleanup()
+			w := newTestActorWorkflow(t, st, "ns", "tmpl1")
+
+			seedWorkflowActor(t, ctx, st, "team-a", "id1", "ns", "tmpl1", tc.seedStatus, func(a *ateapipb.Actor) {
+				a.AteomPodNamespace = "wns"
+				a.AteomPodName = "wpod"
+				a.AteomPodIp = "1.2.3.4"
+				a.AteomPodUid = "uid"
+				a.WorkerPoolName = "pool1"
+			})
+
+			actor, err := w.ResumeActor(ctx, "team-a", "id1", false)
+			if tc.wantErr {
+				if got := status.Code(err); got != codes.FailedPrecondition {
+					t.Fatalf("status.Code(err) = %v, want %v (err: %v)", got, codes.FailedPrecondition, err)
+				}
+			} else {
+				if err != nil {
+					t.Fatalf("ResumeActor failed: %v", err)
+				}
+				if actor.GetStatus() != tc.wantStatus {
+					t.Errorf("returned status = %v, want %v", actor.GetStatus(), tc.wantStatus)
+				}
+			}
+
+			got, err := st.GetActor(ctx, "team-a", "id1")
+			if err != nil {
+				t.Fatalf("GetActor failed: %v", err)
+			}
+			if got.GetStatus() != tc.wantStatus {
+				t.Errorf("stored status = %v, want %v", got.GetStatus(), tc.wantStatus)
+			}
+		})
+	}
+}
+
+// TestResumeSteps_CheckPrerequisite verifies each resume step's
+// CheckPrerequisite against every actor status: nil for the step's allowed
+// statuses, FailedPrecondition for all others.
+func TestResumeSteps_CheckPrerequisite(t *testing.T) {
+	tests := []struct {
+		name string
+		step WorkflowStep[*ResumeInput, *ResumeState]
+		// allowed lists the statuses CheckPrerequisite accepts; nil means
+		// every status is accepted.
+		allowed map[ateapipb.Actor_Status]bool
+	}{
+		{
+			// Loading has no prerequisite: it is allowed from every status.
+			name:    "LoadActorForResumeStep",
+			step:    &LoadActorForResumeStep{},
+			allowed: nil,
+		},
+		{
+			// Resuming is allowed from SUSPENDED, PAUSED, and RESUMING
+			// (retry of this step).
+			name: "AssignWorkerStep",
+			step: &AssignWorkerStep{},
+			allowed: map[ateapipb.Actor_Status]bool{
+				ateapipb.Actor_STATUS_SUSPENDED: true,
+				ateapipb.Actor_STATUS_PAUSED:    true,
+				ateapipb.Actor_STATUS_RESUMING:  true,
+			},
+		},
+		{
+			// The restore call is allowed only from RESUMING (RUNNING is
+			// fast-forwarded by IsComplete).
+			name: "CallAteletRestoreStep",
+			step: &CallAteletRestoreStep{},
+			allowed: map[ateapipb.Actor_Status]bool{
+				ateapipb.Actor_STATUS_RESUMING: true,
+			},
+		},
+		{
+			// Finalizing transitions RESUMING -> RUNNING; RUNNING itself is
+			// fast-forwarded by IsComplete before the prerequisite is checked.
+			name: "FinalizeRunningStep",
+			step: &FinalizeRunningStep{},
+			allowed: map[ateapipb.Actor_Status]bool{
+				ateapipb.Actor_STATUS_RESUMING: true,
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			for _, st := range allActorStatuses {
+				err := tc.step.CheckPrerequisite(ctx, &ResumeInput{ActorID: "id1"}, &ResumeState{Actor: &ateapipb.Actor{Status: st}})
+				assertPrerequisiteResult(t, st, err, tc.allowed == nil || tc.allowed[st])
 			}
 		})
 	}

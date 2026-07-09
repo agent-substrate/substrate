@@ -61,6 +61,9 @@ func (s *LoadActorForResumeStep) IsComplete(ctx context.Context, input *ResumeIn
 	// Always run this step to get the latest state from the DB
 	return false, nil
 }
+func (s *LoadActorForResumeStep) CheckPrerequisite(ctx context.Context, input *ResumeInput, state *ResumeState) error {
+	return nil
+}
 func (s *LoadActorForResumeStep) Execute(ctx context.Context, input *ResumeInput, state *ResumeState) error {
 	actor, err := s.store.GetActor(ctx, input.Atespace, input.ActorName)
 	if err != nil {
@@ -113,8 +116,22 @@ type AssignWorkerStep struct {
 func (s *AssignWorkerStep) Name() string { return "AssignWorker" }
 
 func (s *AssignWorkerStep) IsComplete(ctx context.Context, input *ResumeInput, state *ResumeState) (bool, error) {
+	// Only RUNNING is past this step. RESUMING intentionally re-runs because
+	// a retry must be able to release a stale worker whose pool became
+	// ineligible and pick a fresh one.
 	return state.Actor.GetStatus() == ateapipb.Actor_STATUS_RUNNING, nil
 }
+func (s *AssignWorkerStep) CheckPrerequisite(ctx context.Context, input *ResumeInput, state *ResumeState) error {
+	// The resume edge exists from SUSPENDED and PAUSED.
+	// RESUMING is allowed for retrying this step.
+	switch state.Actor.GetStatus() {
+	case ateapipb.Actor_STATUS_SUSPENDED, ateapipb.Actor_STATUS_PAUSED, ateapipb.Actor_STATUS_RESUMING:
+		return nil
+	default:
+		return status.Errorf(codes.FailedPrecondition, "AssignWorkerStep prerequisite not met for Actor: %s (got: %v, want %s, %s or %s)", input.ActorID, state.Actor.GetStatus(), ateapipb.Actor_STATUS_SUSPENDED, ateapipb.Actor_STATUS_PAUSED, ateapipb.Actor_STATUS_RESUMING)
+	}
+}
+
 func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, state *ResumeState) error {
 	workers, err := s.workerCache.Workers()
 	if err != nil {
@@ -254,6 +271,12 @@ func (s *CallAteletRestoreStep) Name() string { return "CallAteletRestore" }
 func (s *CallAteletRestoreStep) IsComplete(ctx context.Context, input *ResumeInput, state *ResumeState) (bool, error) {
 	return state.Actor.GetStatus() == ateapipb.Actor_STATUS_RUNNING, nil
 }
+func (s *CallAteletRestoreStep) CheckPrerequisite(ctx context.Context, input *ResumeInput, state *ResumeState) error {
+	if state.Actor.GetStatus() != ateapipb.Actor_STATUS_RESUMING {
+		return status.Errorf(codes.FailedPrecondition, "CallAteletRestoreStep prerequisite not met for Actor: %s (got: %v, want %s)", input.ActorID, state.Actor.GetStatus(), ateapipb.Actor_STATUS_RESUMING)
+	}
+	return nil
+}
 func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput, state *ResumeState) error {
 	ateletConn, err := s.dialer.DialForWorker(state.Actor.GetAteomPodNamespace(), state.Actor.GetAteomPodName())
 	if err != nil {
@@ -357,6 +380,12 @@ type FinalizeRunningStep struct {
 func (s *FinalizeRunningStep) Name() string { return "FinalizeRunning" }
 func (s *FinalizeRunningStep) IsComplete(ctx context.Context, input *ResumeInput, state *ResumeState) (bool, error) {
 	return state.Actor.GetStatus() == ateapipb.Actor_STATUS_RUNNING, nil
+}
+func (s *FinalizeRunningStep) CheckPrerequisite(ctx context.Context, input *ResumeInput, state *ResumeState) error {
+	if state.Actor.GetStatus() != ateapipb.Actor_STATUS_RESUMING {
+		return status.Errorf(codes.FailedPrecondition, "FinalizeRunningStep prerequisite not met for Actor: %s (got: %v, want %s)", input.ActorID, state.Actor.GetStatus(), ateapipb.Actor_STATUS_RESUMING)
+	}
+	return nil
 }
 func (s *FinalizeRunningStep) Execute(ctx context.Context, input *ResumeInput, state *ResumeState) error {
 	latestActor, err := s.store.GetActor(ctx, input.Atespace, input.ActorName)

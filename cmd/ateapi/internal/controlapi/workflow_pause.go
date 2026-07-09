@@ -27,6 +27,8 @@ import (
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"k8s.io/apimachinery/pkg/util/wait"
 )
 
@@ -51,6 +53,9 @@ func (s *LoadActorForPauseStep) Name() string { return "LoadActorForPause" }
 func (s *LoadActorForPauseStep) IsComplete(ctx context.Context, input *PauseInput, state *PauseState) (bool, error) {
 	// Always run to get the freshest state
 	return false, nil
+}
+func (s *LoadActorForPauseStep) CheckPrerequisite(ctx context.Context, input *PauseInput, state *PauseState) error {
+	return nil
 }
 func (s *LoadActorForPauseStep) Execute(ctx context.Context, input *PauseInput, state *PauseState) error {
 	actor, err := s.store.GetActor(ctx, input.Atespace, input.ActorName)
@@ -79,11 +84,14 @@ func (s *MarkPausingStep) IsComplete(ctx context.Context, input *PauseInput, sta
 	// Fast forward if we've already marked our intent or if we are further along.
 	return state.Actor.GetStatus() == ateapipb.Actor_STATUS_PAUSING || state.Actor.GetStatus() == ateapipb.Actor_STATUS_PAUSED, nil
 }
-func (s *MarkPausingStep) Execute(ctx context.Context, input *PauseInput, state *PauseState) error {
+func (s *MarkPausingStep) CheckPrerequisite(ctx context.Context, input *PauseInput, state *PauseState) error {
+	// The pause edge only exists from RUNNING; PAUSING/PAUSED are fast-forwarded by IsComplete.
 	if state.Actor.GetStatus() != ateapipb.Actor_STATUS_RUNNING {
-		return nil
+		return status.Errorf(codes.FailedPrecondition, "MarkPausingStep prerequisite not met for Actor: %s (got: %v, want %s)", input.ActorID, state.Actor.GetStatus(), ateapipb.Actor_STATUS_RUNNING)
 	}
-
+	return nil
+}
+func (s *MarkPausingStep) Execute(ctx context.Context, input *PauseInput, state *PauseState) error {
 	state.Actor.Status = ateapipb.Actor_STATUS_PAUSING
 	state.Actor.InProgressSnapshot = fmt.Sprintf("%s-%s-%s", state.Actor.GetMetadata().GetName(), time.Now().Format(time.RFC3339), rand.Text())
 	updatedActor, err := s.store.UpdateActor(ctx, state.Actor, state.Actor.GetMetadata().GetVersion())
@@ -105,6 +113,12 @@ func (s *CallAteletPauseStep) Name() string { return "CallAteletPause" }
 func (s *CallAteletPauseStep) IsComplete(ctx context.Context, input *PauseInput, state *PauseState) (bool, error) {
 	// If we are already PAUSED, we've already called Atelet
 	return state.Actor.GetStatus() == ateapipb.Actor_STATUS_PAUSED, nil
+}
+func (s *CallAteletPauseStep) CheckPrerequisite(ctx context.Context, input *PauseInput, state *PauseState) error {
+	if state.Actor.GetStatus() != ateapipb.Actor_STATUS_PAUSING {
+		return status.Errorf(codes.FailedPrecondition, "CallAteletPauseStep prerequisite not met for Actor: %s (got: %v, want %s)", input.ActorID, state.Actor.GetStatus(), ateapipb.Actor_STATUS_PAUSING)
+	}
+	return nil
 }
 func (s *CallAteletPauseStep) Execute(ctx context.Context, input *PauseInput, state *PauseState) error {
 	if state.Actor.GetAteomPodNamespace() == "" || state.Actor.GetAteomPodName() == "" {
@@ -157,8 +171,13 @@ type FinalizePausedStep struct {
 
 func (s *FinalizePausedStep) Name() string { return "FinalizePaused" }
 func (s *FinalizePausedStep) IsComplete(ctx context.Context, input *PauseInput, state *PauseState) (bool, error) {
-	// The workflow is completely done ONLY if the status is PAUSED *and* we've successfully freed the worker.
-	return state.Actor.GetStatus() == ateapipb.Actor_STATUS_PAUSED && state.Actor.GetAteomPodNamespace() == "", nil
+	return state.Actor.GetStatus() == ateapipb.Actor_STATUS_PAUSED, nil
+}
+func (s *FinalizePausedStep) CheckPrerequisite(ctx context.Context, input *PauseInput, state *PauseState) error {
+	if state.Actor.GetStatus() != ateapipb.Actor_STATUS_PAUSING {
+		return status.Errorf(codes.FailedPrecondition, "FinalizePausedStep prerequisite not met for Actor: %s (got: %v, want %s)", input.ActorID, state.Actor.GetStatus(), ateapipb.Actor_STATUS_PAUSING)
+	}
+	return nil
 }
 func (s *FinalizePausedStep) Execute(ctx context.Context, input *PauseInput, state *PauseState) error {
 	latestActor, err := s.store.GetActor(ctx, input.Atespace, input.ActorName)
