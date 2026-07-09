@@ -761,7 +761,7 @@ func TestActorTemplateValidation(t *testing.T) {
 			}
 		},
 		wantErr: true,
-		errMsg:  "exactly one of the fields in [durableDir externalVolumeTemplate] must be set",
+		errMsg:  "exactly one of the fields in [durableDir externalVolumeTemplate systemInfo] must be set",
 	}, {
 		name: "Volumes: VolumeSource with no source set is invalid",
 		mutate: func(at *ActorTemplate) {
@@ -770,7 +770,7 @@ func TestActorTemplateValidation(t *testing.T) {
 			}
 		},
 		wantErr: true,
-		errMsg:  "exactly one of the fields in [durableDir externalVolumeTemplate] must be set",
+		errMsg:  "exactly one of the fields in [durableDir externalVolumeTemplate systemInfo] must be set",
 	}, {
 		name: "Volumes: VolumeSource with no source set is invalid (mixed with a valid DurableDir volume)",
 		mutate: func(at *ActorTemplate) {
@@ -784,7 +784,7 @@ func TestActorTemplateValidation(t *testing.T) {
 			}
 		},
 		wantErr: true,
-		errMsg:  "exactly one of the fields in [durableDir externalVolumeTemplate] must be set",
+		errMsg:  "exactly one of the fields in [durableDir externalVolumeTemplate systemInfo] must be set",
 	}, {
 		name: "Volumes: DurableDir MountPath with nested absolute path is valid",
 		mutate: func(at *ActorTemplate) {

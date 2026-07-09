@@ -46,12 +46,44 @@ type ExternalVolumeTemplate struct {
 	StorageClassName string `json:"storageClassName"`
 }
 
+// ActorIdentityDataSource is a SystemInfo volume data source that writes the
+// actor's ID to a file.
+type ActorIdentityDataSource struct {
+	// Relative path from the root of the SystemInfo volume that the actor
+	// identity file should be written.
+	//
+	// +required
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=1024
+	Path string `json:"path"`
+}
+
+// SystemInfoDataSource is a container allowing you to pick a particular
+// SystemInfo data source.
+//
+// Exactly one member must be set.
+//
+// +kubebuilder:validation:ExactlyOneOf={actorIdentity}
+type SystemInfoDataSource struct {
+	ActorIdentity *ActorIdentityDataSource `json:"actorIdentity,omitempty"`
+}
+
+// Represents a system information volume, which provides files containing the
+// actor ID, an actor identity JWT, and an actor identity certificate.
+type SystemInfoVolumeSource struct {
+	// DataSources is the list of data sources to place within the SystemInfo
+	// volume.
+	//
+	// +kubebuilder:validation:MaxItems=32
+	DataSources []SystemInfoDataSource `json:"dataSources,omitempty"`
+}
+
 // Represents the source of a volume to mount.
 // Exactly one of its members must be specified.
 //
 // When adding a new source type, list it in the ExactlyOneOf marker below.
 //
-// +kubebuilder:validation:ExactlyOneOf={durableDir,externalVolumeTemplate}
+// +kubebuilder:validation:ExactlyOneOf={durableDir,externalVolumeTemplate,systemInfo}
 type VolumeSource struct {
 	// durableDir represents a durable directory on rootfs that persists across
 	// resumes and participates in snapshots.
@@ -63,6 +95,11 @@ type VolumeSource struct {
 	// when the actor is deleted.
 	// +optional
 	ExternalVolumeTemplate *ExternalVolumeTemplate `json:"externalVolumeTemplate,omitempty"`
+
+	// systemInfo configures a system information volume.
+	//
+	// +optional
+	SystemInfo *SystemInfoVolumeSource `json:"systemInfo,omitempty"`
 }
 
 type Volume struct {
