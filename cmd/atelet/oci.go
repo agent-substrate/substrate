@@ -25,32 +25,14 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateerrors"
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/imagecache"
+	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
-
-	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 )
 
-const (
-	// IdentityMountPath is the in-actor directory at which atelet bind-mounts
-	// the actor's identity data. Workloads read the files inside it (at
-	// request time, not cached at startup) to learn about themselves. It is
-	// delivered as a per-actor bind mount rather than environment variables
-	// because env lives in the checkpointed process memory and would be
-	// frozen at the golden snapshot's values after a restore; a bind mount is
-	// re-attached per-actor on every resume. A directory (rather than a
-	// single-file mount) so further identity data can be added without
-	// changing the mount shape.
-	IdentityMountPath = "/run/ate"
-
-	// ActorIDFileName is the file inside IdentityMountPath holding the
-	// actor's own ID, raw with no trailing newline.
-	ActorIDFileName = "actor-id"
-)
-
-func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, actorUID, containerName, ref string, command, args []string, env []string, annotations map[string]string, netns string, identityDir string, volumes []*ateletpb.Volume, volumeMounts []*ateletpb.VolumeMount) error {
+func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, actorUID, containerName, ref string, command, args []string, env []string, annotations map[string]string, netns string, volumes []*ateletpb.Volume, volumeMounts []*ateletpb.VolumeMount) error {
 	tracer := otel.Tracer("prepareOCIDirectory")
 
 	ctx, span := tracer.Start(ctx, "prepareOCIDirectory")
@@ -90,14 +72,10 @@ func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, acto
 	}
 	resolvedEnv := resolveActorEnv(&img.Config, env)
 
-	// The identity bind target must exist in the rootfs for the mount to
-	// attach; ateom creates it through the mounted overlay (it lands in the
-	// actor's upper) so the workload can read its own name at
-	// IdentityMountPath/ActorIDFileName.
+	// Every bind target must exist in the rootfs for the mount to attach;
+	// ateom creates them through the mounted overlay (they land in the
+	// actor's upper).
 	var extraDirs []string
-	if identityDir != "" {
-		extraDirs = append(extraDirs, IdentityMountPath)
-	}
 	for _, vm := range volumeMounts {
 		extraDirs = append(extraDirs, vm.GetMountPath())
 	}
@@ -109,7 +87,7 @@ func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, acto
 		return fmt.Errorf("while writing overlay spec: %w", err)
 	}
 
-	ociSpec := buildActorOCISpec(actorUID, resolvedArgs, resolvedEnv, annotations, netns, identityDir, volumes, volumeMounts)
+	ociSpec := buildActorOCISpec(actorUID, resolvedArgs, resolvedEnv, annotations, netns, volumes, volumeMounts)
 	ociSpecBytes, err := json.MarshalIndent(ociSpec, "", "  ")
 	if err != nil {
 		return fmt.Errorf("while marshaling OCI spec: %w", err)
@@ -183,10 +161,7 @@ func resolveProcessArgs(imageCfg *v1.Config, command, args []string) ([]string, 
 
 // buildActorOCISpec assembles the OCI runtime spec for an actor container from
 // already-resolved args and env (see resolveProcessArgs and resolveActorEnv).
-// When identityDir is non-empty it adds a read-only bind mount of that host
-// directory at IdentityMountPath so the actor can read its own ID (see
-// IdentityMountPath for why this is a bind mount rather than env vars).
-func buildActorOCISpec(actorUID string, args []string, env []string, annotations map[string]string, netns string, identityDir string, volumes []*ateletpb.Volume, volumeMounts []*ateletpb.VolumeMount) *specs.Spec {
+func buildActorOCISpec(actorUID string, args []string, env []string, annotations map[string]string, netns string, volumes []*ateletpb.Volume, volumeMounts []*ateletpb.VolumeMount) *specs.Spec {
 	mounts := []specs.Mount{
 		{
 			Destination: "/proc",
@@ -215,14 +190,6 @@ func buildActorOCISpec(actorUID string, args []string, env []string, annotations
 			Source:      "/etc/resolv.conf",
 			Options:     []string{"ro"},
 		},
-	}
-	if identityDir != "" {
-		mounts = append(mounts, specs.Mount{
-			Destination: IdentityMountPath,
-			Type:        "bind",
-			Source:      identityDir,
-			Options:     []string{"ro"},
-		})
 	}
 
 	spec := &specs.Spec{
@@ -302,11 +269,17 @@ func buildActorOCISpec(actorUID string, args []string, env []string, annotations
 
 	for _, vm := range volumeMounts {
 		var srcPath string
+		options := []string{"bind", "rw"}
 		switch volumesByName[vm.GetName()].GetSource().(type) {
 		case *ateletpb.Volume_DurableDir:
 			srcPath = ateompath.DurableDirVolumeMountPoint(actorUID, vm.GetName())
 		case *ateletpb.Volume_External:
 			srcPath = ateompath.VolumeHostPath(actorUID, vm.GetName())
+		case *ateletpb.Volume_SystemInfo:
+			// System-info contents are generated by atelet; the workload only
+			// reads them.
+			srcPath = ateompath.SystemInfoVolumeRoot(actorUID, vm.GetName())
+			options = []string{"bind", "ro"}
 		default:
 			continue
 		}
@@ -314,7 +287,7 @@ func buildActorOCISpec(actorUID string, args []string, env []string, annotations
 			Destination: vm.GetMountPath(),
 			Type:        "bind",
 			Source:      srcPath,
-			Options:     []string{"bind", "rw"},
+			Options:     options,
 		})
 	}
 
