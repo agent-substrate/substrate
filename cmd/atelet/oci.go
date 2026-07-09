@@ -29,6 +29,7 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/memorypullcache"
 	"github.com/agent-substrate/substrate/internal/ateompath"
+	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -71,7 +72,7 @@ func prepareOCIDirectory(ctx context.Context, pullCache *memorypullcache.MemoryP
 		return fmt.Errorf("in os.MkdirAll for container bundle dir: %w", err)
 	}
 
-	tarData, imageEnv, err := pullCache.Fetch(ctx, ref)
+	tarData, imageCfg, err := pullCache.Fetch(ctx, ref)
 	if err != nil {
 		return fmt.Errorf("in pullCache.Fetch: %w", err)
 	}
@@ -90,7 +91,7 @@ func prepareOCIDirectory(ctx context.Context, pullCache *memorypullcache.MemoryP
 		}
 	}
 
-	ociSpec := buildActorOCISpec(atespace, actorID, imageEnv, args, env, annotations, netns, identityDir, durableDirVolumeMounts)
+	ociSpec := buildActorOCISpec(atespace, actorID, imageCfg, args, env, annotations, netns, identityDir, durableDirVolumeMounts)
 	ociSpecBytes, err := json.MarshalIndent(ociSpec, "", "  ")
 	if err != nil {
 		return fmt.Errorf("while marshaling OCI spec: %w", err)
@@ -105,7 +106,11 @@ func prepareOCIDirectory(ctx context.Context, pullCache *memorypullcache.MemoryP
 
 // mergeActorEnv merges the ActorTemplate env and the image's ENV, with the template taking precedence.
 // duplicated keys are removed in favor of the following precedence template env > image env.
+// default PATH stands in for an image config with no env
 func mergeActorEnv(imageEnv, templateEnv []string) []string {
+	if len(imageEnv) == 0 {
+		imageEnv = []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"}
+	}
 	seen := make(map[string]struct{})
 	var out []string
 	add := func(entries ...string) {
@@ -131,7 +136,11 @@ func mergeActorEnv(imageEnv, templateEnv []string) []string {
 // When identityDir is non-empty it adds a read-only bind mount of that host
 // directory at IdentityMountPath so the actor can read its own ID (see
 // IdentityMountPath for why this is a bind mount rather than env vars).
-func buildActorOCISpec(atespace string, actorID string, imageEnv []string, args []string, env []string, annotations map[string]string, netns string, identityDir string, durableDirVolumeMounts []*ateletpb.VolumeMount) *specs.Spec {
+func buildActorOCISpec(atespace string, actorID string, imageCfg *v1.Config, args []string, env []string, annotations map[string]string, netns string, identityDir string, durableDirVolumeMounts []*ateletpb.VolumeMount) *specs.Spec {
+	var imageEnv []string
+	if imageCfg != nil {
+		imageEnv = imageCfg.Env
+	}
 	envVars := mergeActorEnv(imageEnv, env)
 
 	mounts := []specs.Mount{

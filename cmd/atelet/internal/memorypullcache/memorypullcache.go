@@ -22,7 +22,6 @@ import (
 	"log/slog"
 	"net"
 	"runtime"
-	"slices"
 	"strings"
 
 	"github.com/google/go-containerregistry/pkg/authn"
@@ -44,7 +43,7 @@ type MemoryPullCache struct {
 
 type cachedImage struct {
 	tar []byte
-	env []string
+	cfg v1.Config
 }
 
 func NewMemoryPullCache(ctx context.Context, gcpAuthenticator authn.Authenticator, localhostRegistryReplacement string) (*MemoryPullCache, error) {
@@ -70,8 +69,8 @@ func NewMemoryPullCache(ctx context.Context, gcpAuthenticator authn.Authenticato
 	return c, nil
 }
 
-// Fetch returns the image's extracted filesystem tarball and its image ENV.
-func (c *MemoryPullCache) Fetch(ctx context.Context, ref string) (io.ReadCloser, []string, error) {
+// Fetch returns the image's extracted filesystem tarball and its OCI image config.
+func (c *MemoryPullCache) Fetch(ctx context.Context, ref string) (io.ReadCloser, *v1.Config, error) {
 	// when running in kind we need to rewrite the registry endpoint similar to the
 	// containerd mirror config used in https://kind.sigs.k8s.io/docs/user/local-registry/
 	// for now we have simple opt-in support to rewrite local registries
@@ -113,7 +112,7 @@ func (c *MemoryPullCache) Fetch(ctx context.Context, ref string) (io.ReadCloser,
 				slog.String("digest", requestedDigest.DigestStr()),
 			)
 			img := vAny.(*cachedImage)
-			return io.NopCloser(bytes.NewReader(img.tar)), img.env, nil
+			return io.NopCloser(bytes.NewReader(img.tar)), &img.cfg, nil
 		}
 	}
 
@@ -152,24 +151,25 @@ func (c *MemoryPullCache) Fetch(ctx context.Context, ref string) (io.ReadCloser,
 		return nil, nil, fmt.Errorf("in remote.Image: %w", err)
 	}
 
-	var imageEnv []string
+	var imageCfg v1.Config
 	if cfg, cfgErr := img.ConfigFile(); cfgErr != nil {
 		return nil, nil, fmt.Errorf("while reading image config: %w", cfgErr)
 	} else if cfg != nil {
-		imageEnv = slices.Clone(cfg.Config.Env)
+		imageCfg = cfg.Config
 	}
 
 	size, err := img.Size()
 	if err != nil {
 		return nil, nil, fmt.Errorf("in img.Size(): %w", err)
 	}
+
 	if size > 100*1024*1024 {
 		slog.InfoContext(ctx,
 			"Image is too large to cache",
 			slog.String("ref", ref),
 			slog.Int64("size", size),
 		)
-		return mutate.Extract(img), imageEnv, err
+		return mutate.Extract(img), &imageCfg, err
 	}
 
 	tarData := mutate.Extract(img)
@@ -185,7 +185,7 @@ func (c *MemoryPullCache) Fetch(ctx context.Context, ref string) (io.ReadCloser,
 		// not be the same as the digest of the image we actually downloaded
 		// from the registry.  We need to place the cache entry under the digest
 		// they requested.
-		c.cache.Add(requestedDigest.DigestStr(), &cachedImage{tar: memData, env: imageEnv})
+		c.cache.Add(requestedDigest.DigestStr(), &cachedImage{tar: memData, cfg: imageCfg})
 		slog.InfoContext(
 			ctx,
 			"Populated image cache",
@@ -194,7 +194,7 @@ func (c *MemoryPullCache) Fetch(ctx context.Context, ref string) (io.ReadCloser,
 		)
 	}
 
-	return io.NopCloser(bytes.NewReader(memData)), imageEnv, nil
+	return io.NopCloser(bytes.NewReader(memData)), &imageCfg, nil
 }
 
 func registryHost(ref string) string {
