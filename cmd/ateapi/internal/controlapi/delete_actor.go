@@ -31,6 +31,7 @@ func (s *Service) DeleteActor(ctx context.Context, req *ateapipb.DeleteActorRequ
 	if err := validateDeleteActorRequest(req); err != nil {
 		return nil, err
 	}
+	setSpanActorRefIdentity(ctx, req.GetActorRef().GetAtespace(), req.GetActorRef().GetName())
 
 	if err := s.persistence.DeleteActor(ctx, req.GetActorRef().GetAtespace(), req.GetActorRef().GetName()); err != nil {
 		if errors.Is(err, store.ErrNotFound) {

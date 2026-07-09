@@ -30,6 +30,7 @@ func (s *Service) ResumeActor(ctx context.Context, req *ateapipb.ResumeActorRequ
 	if err := validateResumeActorRequest(req); err != nil {
 		return nil, err
 	}
+	setSpanActorRefIdentity(ctx, req.GetActorRef().GetAtespace(), req.GetActorRef().GetName())
 
 	actor, err := s.actorWorkflow.ResumeActor(ctx, req.GetActorRef().GetAtespace(), req.GetActorRef().GetName(), req.GetBoot())
 	if err != nil {
@@ -42,6 +43,7 @@ func (s *Service) ResumeActor(ctx context.Context, req *ateapipb.ResumeActorRequ
 		return nil, err
 	}
 
+	setSpanActorIdentity(ctx, actor)
 	return &ateapipb.ResumeActorResponse{Actor: actor}, nil
 }
 
