@@ -128,7 +128,7 @@ func (s *AssignWorkerStep) CheckPrerequisite(ctx context.Context, input *ResumeI
 	case ateapipb.Actor_STATUS_SUSPENDED, ateapipb.Actor_STATUS_PAUSED, ateapipb.Actor_STATUS_RESUMING:
 		return nil
 	default:
-		return status.Errorf(codes.FailedPrecondition, "AssignWorkerStep prerequisite not met for Actor: %s (got: %v, want %s, %s or %s)", input.ActorID, state.Actor.GetStatus(), ateapipb.Actor_STATUS_SUSPENDED, ateapipb.Actor_STATUS_PAUSED, ateapipb.Actor_STATUS_RESUMING)
+		return status.Errorf(codes.FailedPrecondition, "AssignWorkerStep prerequisite not met for Actor: %s (got: %v, want %s, %s or %s)", input.ActorName, state.Actor.GetStatus(), ateapipb.Actor_STATUS_SUSPENDED, ateapipb.Actor_STATUS_PAUSED, ateapipb.Actor_STATUS_RESUMING)
 	}
 }
 
@@ -273,7 +273,7 @@ func (s *CallAteletRestoreStep) IsComplete(ctx context.Context, input *ResumeInp
 }
 func (s *CallAteletRestoreStep) CheckPrerequisite(ctx context.Context, input *ResumeInput, state *ResumeState) error {
 	if state.Actor.GetStatus() != ateapipb.Actor_STATUS_RESUMING {
-		return status.Errorf(codes.FailedPrecondition, "CallAteletRestoreStep prerequisite not met for Actor: %s (got: %v, want %s)", input.ActorID, state.Actor.GetStatus(), ateapipb.Actor_STATUS_RESUMING)
+		return status.Errorf(codes.FailedPrecondition, "CallAteletRestoreStep prerequisite not met for Actor: %s (got: %v, want %s)", input.ActorName, state.Actor.GetStatus(), ateapipb.Actor_STATUS_RESUMING)
 	}
 	return nil
 }
@@ -383,7 +383,7 @@ func (s *FinalizeRunningStep) IsComplete(ctx context.Context, input *ResumeInput
 }
 func (s *FinalizeRunningStep) CheckPrerequisite(ctx context.Context, input *ResumeInput, state *ResumeState) error {
 	if state.Actor.GetStatus() != ateapipb.Actor_STATUS_RESUMING {
-		return status.Errorf(codes.FailedPrecondition, "FinalizeRunningStep prerequisite not met for Actor: %s (got: %v, want %s)", input.ActorID, state.Actor.GetStatus(), ateapipb.Actor_STATUS_RESUMING)
+		return status.Errorf(codes.FailedPrecondition, "FinalizeRunningStep prerequisite not met for Actor: %s (got: %v, want %s)", input.ActorName, state.Actor.GetStatus(), ateapipb.Actor_STATUS_RESUMING)
 	}
 	return nil
 }

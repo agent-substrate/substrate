@@ -87,7 +87,7 @@ func (s *MarkPausingStep) IsComplete(ctx context.Context, input *PauseInput, sta
 func (s *MarkPausingStep) CheckPrerequisite(ctx context.Context, input *PauseInput, state *PauseState) error {
 	// The pause edge only exists from RUNNING; PAUSING/PAUSED are fast-forwarded by IsComplete.
 	if state.Actor.GetStatus() != ateapipb.Actor_STATUS_RUNNING {
-		return status.Errorf(codes.FailedPrecondition, "MarkPausingStep prerequisite not met for Actor: %s (got: %v, want %s)", input.ActorID, state.Actor.GetStatus(), ateapipb.Actor_STATUS_RUNNING)
+		return status.Errorf(codes.FailedPrecondition, "MarkPausingStep prerequisite not met for Actor: %s (got: %v, want %s)", input.ActorName, state.Actor.GetStatus(), ateapipb.Actor_STATUS_RUNNING)
 	}
 	return nil
 }
@@ -116,7 +116,7 @@ func (s *CallAteletPauseStep) IsComplete(ctx context.Context, input *PauseInput,
 }
 func (s *CallAteletPauseStep) CheckPrerequisite(ctx context.Context, input *PauseInput, state *PauseState) error {
 	if state.Actor.GetStatus() != ateapipb.Actor_STATUS_PAUSING {
-		return status.Errorf(codes.FailedPrecondition, "CallAteletPauseStep prerequisite not met for Actor: %s (got: %v, want %s)", input.ActorID, state.Actor.GetStatus(), ateapipb.Actor_STATUS_PAUSING)
+		return status.Errorf(codes.FailedPrecondition, "CallAteletPauseStep prerequisite not met for Actor: %s (got: %v, want %s)", input.ActorName, state.Actor.GetStatus(), ateapipb.Actor_STATUS_PAUSING)
 	}
 	return nil
 }
@@ -175,7 +175,7 @@ func (s *FinalizePausedStep) IsComplete(ctx context.Context, input *PauseInput, 
 }
 func (s *FinalizePausedStep) CheckPrerequisite(ctx context.Context, input *PauseInput, state *PauseState) error {
 	if state.Actor.GetStatus() != ateapipb.Actor_STATUS_PAUSING {
-		return status.Errorf(codes.FailedPrecondition, "FinalizePausedStep prerequisite not met for Actor: %s (got: %v, want %s)", input.ActorID, state.Actor.GetStatus(), ateapipb.Actor_STATUS_PAUSING)
+		return status.Errorf(codes.FailedPrecondition, "FinalizePausedStep prerequisite not met for Actor: %s (got: %v, want %s)", input.ActorName, state.Actor.GetStatus(), ateapipb.Actor_STATUS_PAUSING)
 	}
 	return nil
 }

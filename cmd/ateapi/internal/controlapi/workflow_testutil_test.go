@@ -50,8 +50,7 @@ func newTestActorWorkflow(t *testing.T, st store.Interface, tmplNamespace, tmplN
 func seedWorkflowActor(t *testing.T, ctx context.Context, st store.Interface, atespace, id, tmplNamespace, tmplName string, actorStatus ateapipb.Actor_Status, opts ...func(*ateapipb.Actor)) {
 	t.Helper()
 	actor := &ateapipb.Actor{
-		ActorId:                id,
-		Atespace:               atespace,
+		Metadata:               &ateapipb.ResourceMetadata{Name: id, Atespace: atespace},
 		Status:                 actorStatus,
 		ActorTemplateNamespace: tmplNamespace,
 		ActorTemplateName:      tmplName,
@@ -59,7 +58,7 @@ func seedWorkflowActor(t *testing.T, ctx context.Context, st store.Interface, at
 	for _, opt := range opts {
 		opt(actor)
 	}
-	if err := st.CreateActor(ctx, actor); err != nil {
+	if _, err := st.CreateActor(ctx, actor); err != nil {
 		t.Fatalf("seed actor: %v", err)
 	}
 }

@@ -288,7 +288,7 @@ func TestResumeSteps_CheckPrerequisite(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
 			for _, st := range allActorStatuses {
-				err := tc.step.CheckPrerequisite(ctx, &ResumeInput{ActorID: "id1"}, &ResumeState{Actor: &ateapipb.Actor{Status: st}})
+				err := tc.step.CheckPrerequisite(ctx, &ResumeInput{ActorName: "id1"}, &ResumeState{Actor: &ateapipb.Actor{Status: st}})
 				assertPrerequisiteResult(t, st, err, tc.allowed == nil || tc.allowed[st])
 			}
 		})
