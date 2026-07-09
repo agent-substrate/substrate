@@ -152,11 +152,11 @@ func (c *MemoryPullCache) Fetch(ctx context.Context, ref string) (io.ReadCloser,
 	}
 
 	var imageCfg v1.Config
-	if cfg, cfgErr := img.ConfigFile(); cfgErr != nil {
+	cfg, cfgErr := img.ConfigFile()
+	if cfgErr != nil {
 		return nil, nil, fmt.Errorf("while reading image config: %w", cfgErr)
-	} else if cfg != nil {
-		imageCfg = cfg.Config
 	}
+	imageCfg = cfg.Config
 
 	size, err := img.Size()
 	if err != nil {
