@@ -90,6 +90,7 @@ spec:
         image: ko://github.com/agent-substrate/substrate/cmd/atecontroller
         args:
         - --ateapi-ca-file=/run/servicedns-ca/trust-bundle.pem
+        - --ateapi-client-cert=/run/podidentity.podcert.ate.dev/credential-bundle.pem
         ports:
         - name: metrics
           containerPort: 8080
@@ -97,3 +98,27 @@ spec:
         - name: healthz
           containerPort: 8081
           protocol: TCP
+        volumeMounts:
+        # Controller's own client identity presented to ateapi.
+        - name: "podidentity"
+          mountPath: "/run/podidentity.podcert.ate.dev"
+        # Trust bundle used to verify ateapi's servicedns serving cert.
+        - name: "servicedns-ca"
+          mountPath: "/run/servicedns-ca"
+      volumes:
+      - name: "podidentity"
+        projected:
+          sources:
+          - podCertificate:
+              signerName: podidentity.podcert.ate.dev/identity
+              keyType: ECDSAP256
+              credentialBundlePath: credential-bundle.pem
+      - name: "servicedns-ca"
+        projected:
+          sources:
+          - clusterTrustBundle:
+              signerName: servicedns.podcert.ate.dev/identity
+              labelSelector:
+                matchLabels:
+                  podcert.ate.dev/canarying: live
+              path: trust-bundle.pem

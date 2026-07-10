@@ -22,6 +22,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/agent-substrate/substrate/internal/credbundle"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 )
@@ -33,17 +34,16 @@ const (
 
 // ClientConfig configures how to dial the ateapi gRPC server.
 //
-//   - Mode=ModeMTLS: insecure TLS dial (InsecureSkipVerify=true). Client
-//     identity is expected to come from mTLS credentials projected into
-//     the pod (servicedns.podcert.ate.dev). No app-level credentials.
+//   - Mode=ModeMTLS: mutual TLS. Validates the server cert against CAFile and
+//     presents the client certificate from ClientCredBundle, re-read on every
+//     handshake so in-place pod-certificate rotations are picked up.
 //   - Mode=ModeJWT: validates the server cert against CAFile, sends a Bearer
 //     token from TokenFile as per-RPC credentials.
 type ClientConfig struct {
 	Mode Mode
 
 	// CAFile is a PEM file containing CA certs that sign the server cert.
-	// Required in all modes. Ignored for ModeMTLS until mTLS verification is
-	// fully wired.
+	// Required in all modes.
 	CAFile string
 
 	// ServerName overrides SNI / hostname verification. Optional.
@@ -52,6 +52,11 @@ type ClientConfig struct {
 	// TokenFile is a path to a Kubernetes projected ServiceAccount token used
 	// as a Bearer credential. Required for ModeJWT.
 	TokenFile string
+
+	// ClientCredBundle is a PEM file containing the client certificate chain
+	// and PKCS8 private key presented to the server. Required for ModeMTLS
+	// and ignored for ModeJWT.
+	ClientCredBundle string
 }
 
 // DialOptions returns the grpc.DialOption set described by cfg, suitable to
@@ -62,7 +67,19 @@ func DialOptions(cfg ClientConfig) ([]grpc.DialOption, error) {
 	}
 	switch cfg.Mode {
 	case "", ModeMTLS:
-		tlsCfg := &tls.Config{InsecureSkipVerify: true} //nolint:gosec // explicit opt-in
+		if cfg.ClientCredBundle == "" {
+			return nil, fmt.Errorf("ateapiauth: mtls mode requires ClientCredBundle")
+		}
+		pool, err := loadCAPool(cfg.CAFile)
+		if err != nil {
+			return nil, err
+		}
+		tlsCfg := &tls.Config{
+			MinVersion:           tls.VersionTLS12,
+			RootCAs:              pool,
+			ServerName:           cfg.ServerName,
+			GetClientCertificate: credbundle.ClientLoader(cfg.ClientCredBundle),
+		}
 		return []grpc.DialOption{
 			grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)),
 		}, nil
@@ -71,13 +88,9 @@ func DialOptions(cfg ClientConfig) ([]grpc.DialOption, error) {
 		if cfg.TokenFile == "" {
 			return nil, fmt.Errorf("ateapiauth: jwt mode requires TokenFile")
 		}
-		caPEM, err := os.ReadFile(cfg.CAFile)
+		pool, err := loadCAPool(cfg.CAFile)
 		if err != nil {
-			return nil, fmt.Errorf("ateapiauth: reading CA file: %w", err)
-		}
-		pool := x509.NewCertPool()
-		if !pool.AppendCertsFromPEM(caPEM) {
-			return nil, fmt.Errorf("ateapiauth: no certificates found in CA file %q", cfg.CAFile)
+			return nil, err
 		}
 		tlsCfg := &tls.Config{
 			MinVersion: tls.VersionTLS12,
@@ -92,6 +105,18 @@ func DialOptions(cfg ClientConfig) ([]grpc.DialOption, error) {
 	default:
 		return nil, fmt.Errorf("ateapiauth: unknown client mode %q", cfg.Mode)
 	}
+}
+
+func loadCAPool(caFile string) (*x509.CertPool, error) {
+	caPEM, err := os.ReadFile(caFile)
+	if err != nil {
+		return nil, fmt.Errorf("ateapiauth: reading CA file: %w", err)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(caPEM) {
+		return nil, fmt.Errorf("ateapiauth: no certificates found in CA file %q", caFile)
+	}
+	return pool, nil
 }
 
 // fileTokenCreds reads a Kubernetes projected SA token from disk for every
