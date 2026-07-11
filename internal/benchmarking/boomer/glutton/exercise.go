@@ -51,18 +51,18 @@ func ExerciseBenchmark(ctx context.Context, apiStub ateapipb.ControlClient, http
 	u.hostHeader = u.actorID + "." + cfg.Atespace + "." + actorDomain
 
 	if err := u.ensureAtespace(ctx); err != nil {
-		return fmt.Errorf("EnsureAtespace: %w", err)
+		return fmt.Errorf("u.ensureAtespace: %w", err)
 	}
 	if err := u.createActor(ctx); err != nil {
-		return fmt.Errorf("CreateActor: %w", err)
+		return fmt.Errorf("u.createActor: %w", err)
 	}
 	for _, phase := range []string{"cold", "warm"} {
 		if err := u.runIteration(ctx); err != nil {
-			return fmt.Errorf("%s runIteration: %w", phase, err)
+			return fmt.Errorf("%s u.runIteration: %w", phase, err)
 		}
 	}
 	if err := u.delete(ctx); err != nil {
-		return fmt.Errorf("delete: %w", err)
+		return fmt.Errorf("u.delete: %w", err)
 	}
 	return nil
 }
