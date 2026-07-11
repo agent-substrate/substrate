@@ -206,12 +206,12 @@ func (s *AteomHerder) openAsset(ctx context.Context, url string) (io.ReadCloser,
 // writeSandboxRecord persists the actor's running sandbox assets on-node so a
 // later Checkpoint (whose request no longer carries the sandbox config) can
 // re-fetch the same binaries and pin them into the snapshot manifest.
-func writeSandboxRecord(atespace, actorID string, rec *sandboxAssetsRecord) error {
+func writeSandboxRecord(atespace, actorName string, rec *sandboxAssetsRecord) error {
 	data, err := json.Marshal(rec)
 	if err != nil {
 		return wrapFileSystemErr("while marshaling sandbox record", err)
 	}
-	path := ateompath.ActorSandboxAssetsFile(atespace, actorID)
+	path := ateompath.ActorSandboxAssetsFile(atespace, actorName)
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return wrapFileSystemErr("while creating actor dir", err)
 	}
@@ -223,8 +223,8 @@ func writeSandboxRecord(atespace, actorID string, rec *sandboxAssetsRecord) erro
 
 // readSandboxRecord loads the actor's on-node sandbox record written at
 // Run/Restore.
-func readSandboxRecord(atespace, actorID string) (*sandboxAssetsRecord, error) {
-	path := ateompath.ActorSandboxAssetsFile(atespace, actorID)
+func readSandboxRecord(atespace, actorName string) (*sandboxAssetsRecord, error) {
+	path := ateompath.ActorSandboxAssetsFile(atespace, actorName)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, wrapFileSystemErr("while reading sandbox record", err)

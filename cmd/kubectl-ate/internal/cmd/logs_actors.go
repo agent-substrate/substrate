@@ -42,7 +42,7 @@ var followLogs bool
 var logsAtespaceFlag string
 
 var logsActorsCmd = &cobra.Command{
-	Use:     "actors <actor-id>",
+	Use:     "actors <actor-name>",
 	Aliases: []string{"actor"},
 	Short:   "Stream logs for a specific actor",
 	Args:    cobra.ExactArgs(1),
@@ -58,7 +58,7 @@ func init() {
 
 // AteAPIClient abstracts the gRPC client calls.
 type AteAPIClient interface {
-	GetActor(ctx context.Context, in *ateapipb.GetActorRequest, opts ...grpc.CallOption) (*ateapipb.GetActorResponse, error)
+	GetActor(ctx context.Context, in *ateapipb.GetActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error)
 	Close()
 }
 
@@ -90,7 +90,7 @@ type LogsActorRunner struct {
 }
 
 // Run executes the logs command.
-func (r *LogsActorRunner) Run(ctx context.Context, actorID string) error {
+func (r *LogsActorRunner) Run(ctx context.Context, actorName string) error {
 	if r.pollInterval <= 0 {
 		r.pollInterval = 2 * time.Second
 	}
@@ -103,23 +103,22 @@ func (r *LogsActorRunner) Run(ctx context.Context, actorID string) error {
 
 	defer r.apiClient.Close()
 	if r.follow {
-		return r.runFollow(ctx, actorID)
+		return r.runFollow(ctx, actorName)
 	}
-	return r.runOneShot(ctx, actorID)
+	return r.runOneShot(ctx, actorName)
 }
 
-func (r *LogsActorRunner) runOneShot(ctx context.Context, actorID string) error {
-	actorResp, err := r.apiClient.GetActor(ctx, &ateapipb.GetActorRequest{ActorRef: &ateapipb.ActorRef{Atespace: r.atespace, Name: actorID}})
+func (r *LogsActorRunner) runOneShot(ctx context.Context, actorName string) error {
+	actor, err := r.apiClient.GetActor(ctx, &ateapipb.GetActorRequest{Actor: &ateapipb.ObjectRef{Atespace: r.atespace, Name: actorName}})
 	if err != nil {
 		return fmt.Errorf("failed to get actor: %w", err)
 	}
 
-	actor := actorResp.GetActor()
 	podName := actor.GetAteomPodName()
 	namespace := actor.GetAteomPodNamespace()
 
 	if podName == "" || namespace == "" || actor.GetStatus() != ateapipb.Actor_STATUS_RUNNING {
-		return fmt.Errorf("actor %s is not currently running on any worker pod", actorID)
+		return fmt.Errorf("actor %s is not currently running on any worker pod", actorName)
 	}
 
 	opts := &corev1.PodLogOptions{
@@ -137,7 +136,7 @@ func (r *LogsActorRunner) runOneShot(ctx context.Context, actorID string) error 
 	scanner.Buffer(buf, 1024*1024) // Support up to 1MB lines
 	for scanner.Scan() {
 		line := scanner.Text()
-		filterAndDisplayLogLine(line, actorID, r.stdout)
+		filterAndDisplayLogLine(line, actorName, r.stdout)
 	}
 	if err := scanner.Err(); err != nil {
 		return fmt.Errorf("error reading log stream: %w", err)
@@ -145,7 +144,7 @@ func (r *LogsActorRunner) runOneShot(ctx context.Context, actorID string) error 
 	return nil
 }
 
-func (r *LogsActorRunner) runFollow(ctx context.Context, actorID string) error {
+func (r *LogsActorRunner) runFollow(ctx context.Context, actorName string) error {
 	var lastWorkerPod string
 	var lastSeenTime time.Time
 
@@ -156,10 +155,10 @@ func (r *LogsActorRunner) runFollow(ctx context.Context, actorID string) error {
 		default:
 		}
 
-		actorResp, err := r.apiClient.GetActor(ctx, &ateapipb.GetActorRequest{ActorRef: &ateapipb.ActorRef{Atespace: r.atespace, Name: actorID}})
+		actor, err := r.apiClient.GetActor(ctx, &ateapipb.GetActorRequest{Actor: &ateapipb.ObjectRef{Atespace: r.atespace, Name: actorName}})
 		if err != nil {
 			if status.Code(err) == codes.NotFound {
-				return fmt.Errorf("actor %s not found: %w", actorID, err)
+				return fmt.Errorf("actor %s not found: %w", actorName, err)
 			}
 			select {
 			case <-ctx.Done():
@@ -169,7 +168,6 @@ func (r *LogsActorRunner) runFollow(ctx context.Context, actorID string) error {
 			}
 		}
 
-		actor := actorResp.GetActor()
 		podName := actor.GetAteomPodName()
 		namespace := actor.GetAteomPodNamespace()
 
@@ -208,14 +206,14 @@ func (r *LogsActorRunner) runFollow(ctx context.Context, actorID string) error {
 		}
 
 		var wg sync.WaitGroup
-		r.startMigrationMonitor(streamCtx, streamCancel, &wg, actorID, podName)
+		r.startMigrationMonitor(streamCtx, streamCancel, &wg, actorName, podName)
 
 		scanner := bufio.NewScanner(stream)
 		buf := make([]byte, 0, 64*1024)
 		scanner.Buffer(buf, 1024*1024) // Support up to 1MB lines
 		for scanner.Scan() {
 			line := scanner.Text()
-			logTime, _ := filterAndDisplayLogLine(line, actorID, r.stdout)
+			logTime, _ := filterAndDisplayLogLine(line, actorName, r.stdout)
 			if !logTime.IsZero() {
 				lastSeenTime = logTime
 			}
@@ -251,7 +249,7 @@ func (r *LogsActorRunner) startMigrationMonitor(
 	ctx context.Context,
 	cancel context.CancelFunc,
 	wg *sync.WaitGroup,
-	actorID string,
+	actorName string,
 	currentPod string,
 ) {
 	wg.Add(1)
@@ -264,9 +262,9 @@ func (r *LogsActorRunner) startMigrationMonitor(
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				resp, err := r.apiClient.GetActor(ctx, &ateapipb.GetActorRequest{ActorRef: &ateapipb.ActorRef{Atespace: r.atespace, Name: actorID}})
+				resp, err := r.apiClient.GetActor(ctx, &ateapipb.GetActorRequest{Actor: &ateapipb.ObjectRef{Atespace: r.atespace, Name: actorName}})
 				if err == nil {
-					act := resp.GetActor()
+					act := resp
 					if act.GetStatus() != ateapipb.Actor_STATUS_RUNNING || act.GetAteomPodName() != currentPod {
 						// Actor suspended or migrated! Cancel stream context to reconnect.
 						cancel()
@@ -280,7 +278,7 @@ func (r *LogsActorRunner) startMigrationMonitor(
 
 func runLogsActor(cmd *cobra.Command, args []string) error {
 	ctx := cmd.Context()
-	actorID := args[0]
+	actorName := args[0]
 
 	apiClient, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, traceEnabled)
 	if err != nil {
@@ -305,10 +303,10 @@ func runLogsActor(cmd *cobra.Command, args []string) error {
 		tickerInterval:    2 * time.Second,
 	}
 
-	return runner.Run(ctx, actorID)
+	return runner.Run(ctx, actorName)
 }
 
-func filterAndDisplayLogLine(line, targetActorID string, w io.Writer) (time.Time, bool) {
+func filterAndDisplayLogLine(line, targetActorName string, w io.Writer) (time.Time, bool) {
 	var m map[string]any
 	dec := json.NewDecoder(strings.NewReader(line))
 	dec.UseNumber()
@@ -325,19 +323,19 @@ func filterAndDisplayLogLine(line, targetActorID string, w io.Writer) (time.Time
 		}
 	}
 
-	var actorID string
+	var actorName string
 	for _, labelKey := range []string{"logging.googleapis.com/labels", "labels"} {
 		if labelsAny, ok := m[labelKey]; ok {
 			if labels, ok := labelsAny.(map[string]any); ok {
-				if id, ok := labels["ate.dev/actor_id"].(string); ok && id != "" {
-					actorID = id
+				if name, ok := labels["ate.dev/actor_name"].(string); ok && name != "" {
+					actorName = name
 					break
 				}
 			}
 		}
 	}
 
-	matched := (actorID != "" && actorID == targetActorID)
+	matched := (actorName != "" && actorName == targetActorName)
 
 	if !matched {
 		return logTime, false

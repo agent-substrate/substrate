@@ -190,31 +190,37 @@ func (s *Persistence) ListAtespaces(ctx context.Context) ([]*ateapipb.Atespace, 
 // DeleteAtespace deletes an empty atespace. Returns store.ErrNotFound if the
 // atespace does not exist, or store.ErrFailedPrecondition if any actor still
 // lives in it.
-func (s *Persistence) DeleteAtespace(ctx context.Context, name string) error {
+func (s *Persistence) DeleteAtespace(ctx context.Context, name string) (*ateapipb.Atespace, error) {
 	dbKey := atespaceDBKey(name)
 
-	// Existence first, so a missing atespace returns NotFound, not a silent no-op.
-	exists, err := s.rdb.Exists(ctx, dbKey).Result()
+	// Read first, so a missing atespace returns NotFound (not a silent no-op) and
+	// so we can return the deleted resource.
+	currentVal, err := s.rdb.Get(ctx, dbKey).Bytes()
 	if err != nil {
-		return fmt.Errorf("while checking atespace key %q: %w", dbKey, err)
+		if errors.Is(err, redis.Nil) {
+			return nil, store.ErrNotFound
+		}
+		return nil, fmt.Errorf("while getting atespace key %q: %w", dbKey, err)
 	}
-	if exists == 0 {
-		return store.ErrNotFound
+
+	deleted := &ateapipb.Atespace{}
+	if err := protojson.Unmarshal(currentVal, deleted); err != nil {
+		return nil, fmt.Errorf("in protojson.Unmarshal: %w", err)
 	}
 
 	// Reject a non-empty atespace.
 	actors, _, err := s.ListActors(ctx, name, 1, "")
 	if err != nil {
-		return fmt.Errorf("while checking atespace emptiness: %w", err)
+		return nil, fmt.Errorf("while checking atespace emptiness: %w", err)
 	}
 	if len(actors) > 0 {
-		return store.ErrFailedPrecondition
+		return nil, store.ErrFailedPrecondition
 	}
 
 	if err := s.rdb.Del(ctx, dbKey).Err(); err != nil {
-		return fmt.Errorf("while deleting atespace key %q: %w", dbKey, err)
+		return nil, fmt.Errorf("while deleting atespace key %q: %w", dbKey, err)
 	}
-	return nil
+	return deleted, nil
 }
 
 func workerDBKey(namespace, poolName, podName string) string {
@@ -488,8 +494,9 @@ func (s *Persistence) DeleteWorker(ctx context.Context, namespace, pool, pod str
 	return nil
 }
 
-func (s *Persistence) DeleteActor(ctx context.Context, atespace, name string) error {
+func (s *Persistence) DeleteActor(ctx context.Context, atespace, name string) (*ateapipb.Actor, error) {
 	dbKey := actorDBKey(atespace, name)
+	var deleted *ateapipb.Actor
 	err := s.rdb.Watch(ctx, func(tx *redis.Tx) error {
 		currentVal, err := tx.Get(ctx, dbKey).Bytes()
 		if err != nil {
@@ -509,21 +516,24 @@ func (s *Persistence) DeleteActor(ctx context.Context, atespace, name string) er
 			return store.ErrFailedPrecondition
 		}
 
-		_, err = tx.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
+		if _, err := tx.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
 			pipe.Del(ctx, dbKey)
 			return nil
-		})
-		return err
+		}); err != nil {
+			return err
+		}
+		deleted = currentActor
+		return nil
 	}, dbKey)
 
 	if err != nil {
 		if errors.Is(err, redis.TxFailedErr) {
-			return store.ErrPersistenceRetry
+			return nil, store.ErrPersistenceRetry
 		}
-		return err
+		return nil, err
 	}
 
-	return nil
+	return deleted, nil
 }
 
 func (s *Persistence) UpdateActor(ctx context.Context, actor *ateapipb.Actor, expectedVersion int64) (*ateapipb.Actor, error) {

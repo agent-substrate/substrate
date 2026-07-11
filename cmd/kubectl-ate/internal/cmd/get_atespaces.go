@@ -36,11 +36,11 @@ var getAtespacesCmd = &cobra.Command{
 		defer apiClient.Close()
 
 		if len(args) > 0 {
-			resp, err := apiClient.GetAtespace(ctx, &ateapipb.GetAtespaceRequest{Name: args[0]})
+			resp, err := apiClient.GetAtespace(ctx, &ateapipb.GetAtespaceRequest{Atespace: &ateapipb.ObjectRef{Name: args[0]}})
 			if err != nil {
 				return fmt.Errorf("failed to get atespace: %w", err)
 			}
-			return printer.PrintAtespace(resp.GetAtespace(), outputFmt)
+			return printer.PrintAtespace(resp, outputFmt)
 		}
 
 		resp, err := apiClient.ListAtespaces(ctx, &ateapipb.ListAtespacesRequest{})

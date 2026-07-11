@@ -56,12 +56,12 @@ func newRequestMetadata(headers []*corev3.HeaderValue) *requestMetadata {
 	}
 }
 
-// parseActorRef extracts the (atespace, actor id) an incoming request is
+// parseActorRef extracts the (atespace, actor name) an incoming request is
 // addressed to from its Host/:authority, which has the form
-// "<actor_id>.<atespace>.actors.resources.substrate.ate.dev" (optionally with a
-// port). The atespace is required because an actor id is only unique within its
+// "<actor_name>.<atespace>.actors.resources.substrate.ate.dev" (optionally with a
+// port). The atespace is required because an actor name is only unique within its
 // atespace.
-func parseActorRef(host string) (atespace, actorID string, err error) {
+func parseActorRef(host string) (atespace, actorName string, err error) {
 	if strings.Contains(host, ":") {
 		host, _, err = net.SplitHostPort(host)
 		if err != nil {

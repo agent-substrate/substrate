@@ -24,33 +24,55 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
-func (s *Service) CreateAtespace(ctx context.Context, req *ateapipb.CreateAtespaceRequest) (*ateapipb.CreateAtespaceResponse, error) {
+func (s *Service) CreateAtespace(ctx context.Context, req *ateapipb.CreateAtespaceRequest) (*ateapipb.Atespace, error) {
 	if err := validateCreateAtespaceRequest(req); err != nil {
 		return nil, err
 	}
 
+	name := req.GetAtespace().GetMetadata().GetName()
 	atespace := &ateapipb.Atespace{
-		Metadata: &ateapipb.ResourceMetadata{Name: req.GetName()},
+		Metadata: &ateapipb.ResourceMetadata{
+			Name: name,
+		},
 	}
 	stored, err := s.persistence.CreateAtespace(ctx, atespace)
 	if err != nil {
 		if errors.Is(err, store.ErrAlreadyExists) {
-			return nil, status.Errorf(codes.AlreadyExists, "Atespace %s already exists", req.GetName())
+			return nil, status.Errorf(codes.AlreadyExists, "Atespace %s already exists", name)
 		}
 		return nil, fmt.Errorf("while recording atespace: %w", err)
 	}
 
-	return &ateapipb.CreateAtespaceResponse{Atespace: stored}, nil
+	return stored, nil
 }
 
 func validateCreateAtespaceRequest(req *ateapipb.CreateAtespaceRequest) error {
-	if req.GetName() == "" {
-		return status.Error(codes.InvalidArgument, "name is required")
+	var fldPath *field.Path
+	var errs field.ErrorList
+
+	atespace := req.GetAtespace()
+	atespacePath := fldPath.Child("atespace")
+	if atespace == nil {
+		errs = append(errs, field.Required(atespacePath, ""))
+		return status.Error(codes.InvalidArgument, errs.ToAggregate().Error())
 	}
-	if err := resources.ValidateAtespace(req.GetName()); err != nil {
-		return status.Error(codes.InvalidArgument, err.Error())
+
+	// Atespace is global-scoped: metadata.atespace must be empty, name required + valid.
+	metaPath := atespacePath.Child("metadata")
+	if val, p := atespace.GetMetadata().GetAtespace(), metaPath.Child("atespace"); val != "" {
+		errs = append(errs, field.Invalid(p, val, "must be empty for a global-scoped resource"))
+	}
+	if val, p := atespace.GetMetadata().GetName(), metaPath.Child("name"); val == "" {
+		errs = append(errs, field.Required(p, ""))
+	} else {
+		errs = append(errs, resources.ValidateResourceName(val, p)...)
+	}
+
+	if len(errs) > 0 {
+		return status.Error(codes.InvalidArgument, errs.ToAggregate().Error())
 	}
 	return nil
 }

@@ -22,12 +22,25 @@ import (
 	"os"
 	"slices"
 	"text/tabwriter"
+	"time"
 
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
+	"k8s.io/apimachinery/pkg/util/duration"
 	"sigs.k8s.io/yaml"
 )
+
+// timeNow returns the current time. It is a package variable so tests can pin
+// it and make age rendering deterministic.
+var timeNow = time.Now
+
+// formatAge renders a resource's age from its creation timestamp, kubectl-style
+// (e.g. "5m", "3h", "2d").
+func formatAge(ts *timestamppb.Timestamp) string {
+	return duration.HumanDuration(timeNow().Sub(ts.AsTime()))
+}
 
 // PrintActors prints a slice of actors to stdout in the requested format.
 func PrintActors(actors []*ateapipb.Actor, format string) error {
@@ -57,12 +70,11 @@ func PrintActorsTo(out io.Writer, actors []*ateapipb.Actor, format string) error
 		return printProto(out, &ateapipb.ListActorsResponse{Actors: actors}, format)
 	case "table":
 		w := tabwriter.NewWriter(out, 0, 0, 3, ' ', 0)
-		fmt.Fprintln(w, "ATESPACE\tTEMPLATE NS\tTEMPLATE\tID\tSTATUS\tATEOM POD\tATEOM IP\tVERSION")
+		fmt.Fprintln(w, "ATESPACE\tNAME\tTEMPLATE\tSTATUS\tATEOM POD\tATEOM IP\tVERSION\tAGE")
 		for _, actor := range actors {
 			atespace := actor.GetMetadata().GetAtespace()
-			ns := actor.GetActorTemplateNamespace()
-			tmpl := actor.GetActorTemplateName()
-			id := actor.GetMetadata().GetName()
+			name := actor.GetMetadata().GetName()
+			template := actor.GetActorTemplateNamespace() + "/" + actor.GetActorTemplateName()
 			status := actor.GetStatus().String()
 
 			worker := "<none>"
@@ -71,7 +83,8 @@ func PrintActorsTo(out io.Writer, actors []*ateapipb.Actor, format string) error
 			}
 
 			version := actor.GetMetadata().GetVersion()
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%d\n", atespace, ns, tmpl, id, status, worker, actor.GetAteomPodIp(), version)
+			age := formatAge(actor.GetMetadata().GetCreateTime())
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%d\t%s\n", atespace, name, template, status, worker, actor.GetAteomPodIp(), version, age)
 		}
 		return w.Flush()
 	default:
@@ -150,9 +163,9 @@ func PrintAtespacesTo(out io.Writer, atespaces []*ateapipb.Atespace, format stri
 		return printProto(out, &ateapipb.ListAtespacesResponse{Atespaces: atespaces}, format)
 	case "table":
 		w := tabwriter.NewWriter(out, 0, 0, 3, ' ', 0)
-		fmt.Fprintln(w, "NAME")
+		fmt.Fprintln(w, "NAME\tAGE")
 		for _, a := range atespaces {
-			fmt.Fprintf(w, "%s\n", a.GetMetadata().GetName())
+			fmt.Fprintf(w, "%s\t%s\n", a.GetMetadata().GetName(), formatAge(a.GetMetadata().GetCreateTime()))
 		}
 		return w.Flush()
 	default:

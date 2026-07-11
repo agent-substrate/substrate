@@ -33,7 +33,7 @@ import (
 // anything still mounted underneath them first, and kills orphaned per-sandbox
 // processes. ateom owns the cloud-hypervisor boot directly (no kata shim, no
 // containerd), so a failed Create does not fully self-clean; the deterministic
-// sandbox id (= actor id) then collides on the next attempt: "listen unix
+// sandbox id (= actor name) then collides on the next attempt: "listen unix
 // .../virtiofsd.sock: bind: address already in use", "Could not bind mount
 // .../shared/sandboxes/<id>/mounts", "directory not empty". Calling this
 // before each run gives a clean slate.

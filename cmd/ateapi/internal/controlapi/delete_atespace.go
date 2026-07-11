@@ -24,32 +24,41 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
-func (s *Service) DeleteAtespace(ctx context.Context, req *ateapipb.DeleteAtespaceRequest) (*ateapipb.DeleteAtespaceResponse, error) {
+func (s *Service) DeleteAtespace(ctx context.Context, req *ateapipb.DeleteAtespaceRequest) (*ateapipb.Atespace, error) {
 	if err := validateDeleteAtespaceRequest(req); err != nil {
 		return nil, err
 	}
 
-	if err := s.persistence.DeleteAtespace(ctx, req.GetName()); err != nil {
+	name := req.GetAtespace().GetName()
+	deleted, err := s.persistence.DeleteAtespace(ctx, name)
+	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, status.Errorf(codes.NotFound, "Atespace %s not found", req.GetName())
+			return nil, status.Errorf(codes.NotFound, "Atespace %s not found", name)
 		}
 		if errors.Is(err, store.ErrFailedPrecondition) {
-			return nil, status.Errorf(codes.FailedPrecondition, "Atespace %s is not empty", req.GetName())
+			return nil, status.Errorf(codes.FailedPrecondition, "Atespace %s is not empty", name)
 		}
 		return nil, fmt.Errorf("while deleting atespace from DB: %w", err)
 	}
 
-	return &ateapipb.DeleteAtespaceResponse{}, nil
+	return deleted, nil
 }
 
 func validateDeleteAtespaceRequest(req *ateapipb.DeleteAtespaceRequest) error {
-	if req.GetName() == "" {
-		return status.Error(codes.InvalidArgument, "name is required")
+	var fldPath *field.Path
+	var errs field.ErrorList
+
+	if val, fldPath := req.Atespace, fldPath.Child("atespace"); val == nil {
+		errs = append(errs, field.Required(fldPath, ""))
+	} else {
+		errs = append(errs, resources.ValidateGlobalObjectRef(val, fldPath)...)
 	}
-	if err := resources.ValidateAtespace(req.GetName()); err != nil {
-		return status.Error(codes.InvalidArgument, err.Error())
+
+	if len(errs) > 0 {
+		return status.Error(codes.InvalidArgument, errs.ToAggregate().Error())
 	}
 	return nil
 }

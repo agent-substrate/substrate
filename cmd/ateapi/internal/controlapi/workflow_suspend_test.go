@@ -18,8 +18,12 @@ import (
 	"context"
 	"testing"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/ateredis"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"github.com/alicebob/miniredis/v2"
+	"github.com/redis/go-redis/v9"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -139,6 +143,83 @@ func TestSuspendSteps_CheckPrerequisite(t *testing.T) {
 			for _, st := range allActorStatuses {
 				err := tc.step.CheckPrerequisite(ctx, &SuspendInput{ActorName: "id1"}, &SuspendState{Actor: &ateapipb.Actor{Status: st}})
 				assertPrerequisiteResult(t, st, err, tc.allowed == nil || tc.allowed[st])
+			}
+		})
+	}
+}
+
+// newTestPersistence returns a store backed by a throwaway miniredis.
+func newTestPersistence(t *testing.T) store.Interface {
+	t.Helper()
+	mr, err := miniredis.Run()
+	if err != nil {
+		t.Fatalf("failed to start miniredis: %v", err)
+	}
+	t.Cleanup(mr.Close)
+	rdb := redis.NewClusterClient(&redis.ClusterOptions{Addrs: []string{mr.Addr()}})
+	t.Cleanup(func() { rdb.Close() }) //nolint:errcheck // test cleanup
+	return ateredis.NewPersistence(rdb)
+}
+
+func TestFinalizeSuspendedStep_ReleasesOnlyOwnWorker(t *testing.T) {
+	tests := []struct {
+		name               string
+		assignmentAtespace string
+		wantReleased       bool
+	}{
+		{
+			name:               "frees worker assigned to this actor",
+			assignmentAtespace: "team-a",
+			wantReleased:       true,
+		},
+		{
+			name:               "keeps worker assigned to same-named actor in another atespace",
+			assignmentAtespace: "team-b",
+			wantReleased:       false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			persistence := newTestPersistence(t)
+
+			worker := &ateapipb.Worker{
+				WorkerNamespace: "worker-ns",
+				WorkerPool:      "pool",
+				WorkerPod:       "pod-1",
+				Assignment: &ateapipb.Assignment{
+					Actor: &ateapipb.ObjectRef{Atespace: tt.assignmentAtespace, Name: "shared"},
+				},
+			}
+			if err := persistence.CreateWorker(ctx, worker); err != nil {
+				t.Fatalf("CreateWorker: %v", err)
+			}
+
+			actor := &ateapipb.Actor{
+				Metadata:           &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "shared"},
+				Status:             ateapipb.Actor_STATUS_SUSPENDING,
+				AteomPodNamespace:  "worker-ns",
+				AteomPodName:       "pod-1",
+				WorkerPoolName:     "pool",
+				InProgressSnapshot: "gs://snapshots/shared/1",
+			}
+			if _, err := persistence.CreateActor(ctx, actor); err != nil {
+				t.Fatalf("CreateActor: %v", err)
+			}
+
+			step := &FinalizeSuspendedStep{store: persistence}
+			input := &SuspendInput{ActorName: "shared", Atespace: "team-a"}
+			if err := step.Execute(ctx, input, &SuspendState{}); err != nil {
+				t.Fatalf("Execute: %v", err)
+			}
+
+			stored, err := persistence.GetWorker(ctx, "worker-ns", "pool", "pod-1")
+			if err != nil {
+				t.Fatalf("GetWorker: %v", err)
+			}
+			if released := stored.GetAssignment() == nil; released != tt.wantReleased {
+				t.Errorf("worker released = %t, want %t (assignment: %v)", released, tt.wantReleased, stored.GetAssignment())
 			}
 		})
 	}

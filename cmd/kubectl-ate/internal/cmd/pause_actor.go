@@ -26,7 +26,7 @@ import (
 var pauseAtespaceFlag string
 
 var pauseActorCmd = &cobra.Command{
-	Use:   "actor [actor-id]",
+	Use:   "actor <actor-name>",
 	Short: "Pause an actor",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -38,7 +38,7 @@ var pauseActorCmd = &cobra.Command{
 		defer apiClient.Close()
 
 		resp, err := apiClient.PauseActor(ctx, &ateapipb.PauseActorRequest{
-			ActorRef: &ateapipb.ActorRef{Atespace: pauseAtespaceFlag, Name: args[0]},
+			Actor: &ateapipb.ObjectRef{Atespace: pauseAtespaceFlag, Name: args[0]},
 		})
 		if err != nil {
 			return fmt.Errorf("failed to pause actor: %w", err)

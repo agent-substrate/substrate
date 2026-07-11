@@ -233,7 +233,7 @@ func (a *AgentClient) StartOverlayWorkload(ctx context.Context, cid, workloadID,
 	}
 	pbSpec := SpecToAgentPB(spec)
 	pbSpec.Root = &agentpb.Root{Path: ovlRoot, Readonly: false}
-	// Per-workload cgroup: the shaped spec carries the actor-wide /ateomchv/<actorID>
+	// Per-workload cgroup: the shaped spec carries the actor-wide /ateomchv/<actorName>
 	// (spec.go), which collides across an actor's containers — mirror the carrier's
 	// per-id path so each workload gets its own cgroup.
 	if pbSpec.Linux != nil {

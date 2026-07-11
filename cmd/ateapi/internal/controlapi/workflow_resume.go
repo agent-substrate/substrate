@@ -149,7 +149,7 @@ func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, stat
 		if worker.Assignment == nil {
 			continue
 		}
-		if worker.Assignment.Actor.Name != input.ActorName {
+		if worker.Assignment.Actor.Atespace != input.Atespace || worker.Assignment.Actor.Name != input.ActorName {
 			continue
 		}
 		eligible, err := isWorkerEligibleForActor(worker, state.ActorTemplate.Spec.SandboxClass, state.ActorTemplate.Spec.WorkerSelector, state.Actor.GetWorkerSelector())
@@ -191,7 +191,7 @@ func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, stat
 			Namespace: state.Actor.GetActorTemplateNamespace(),
 			Name:      state.Actor.GetActorTemplateName(),
 		},
-		Actor: &ateapipb.ActorRef{
+		Actor: &ateapipb.ObjectRef{
 			Name:     input.ActorName,
 			Atespace: state.Actor.GetMetadata().GetAtespace(),
 		},
@@ -295,7 +295,7 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 		req := &ateletpb.RestoreRequest{
 			TargetAteomUid:         state.Actor.GetAteomPodUid(),
 			Atespace:               state.Actor.GetMetadata().GetAtespace(),
-			ActorId:                state.Actor.GetMetadata().GetName(),
+			ActorName:              state.Actor.GetMetadata().GetName(),
 			ActorTemplateNamespace: state.Actor.GetActorTemplateNamespace(),
 			ActorTemplateName:      state.Actor.GetActorTemplateName(),
 			Spec:                   workloadSpec,
@@ -331,7 +331,7 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 		req := &ateletpb.RestoreRequest{
 			TargetAteomUid:         state.Actor.GetAteomPodUid(),
 			Atespace:               state.Actor.GetMetadata().GetAtespace(),
-			ActorId:                state.Actor.GetMetadata().GetName(),
+			ActorName:              state.Actor.GetMetadata().GetName(),
 			ActorTemplateNamespace: state.Actor.GetActorTemplateNamespace(),
 			ActorTemplateName:      state.Actor.GetActorTemplateName(),
 			Spec:                   workloadSpec,
@@ -359,7 +359,7 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 		req := &ateletpb.RunRequest{
 			TargetAteomUid:         state.Actor.GetAteomPodUid(),
 			Atespace:               state.Actor.GetMetadata().GetAtespace(),
-			ActorId:                state.Actor.GetMetadata().GetName(),
+			ActorName:              state.Actor.GetMetadata().GetName(),
 			ActorTemplateNamespace: state.Actor.GetActorTemplateNamespace(),
 			ActorTemplateName:      state.Actor.GetActorTemplateName(),
 			SandboxAssets:          sandboxAssets,

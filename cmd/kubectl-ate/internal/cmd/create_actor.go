@@ -28,7 +28,7 @@ var templateFlag string
 var atespaceFlag string
 
 var createActorCmd = &cobra.Command{
-	Use:   "actor [actor-id]",
+	Use:   "actor <actor-name>",
 	Short: "Create an actor",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -39,22 +39,27 @@ var createActorCmd = &cobra.Command{
 		}
 		defer apiClient.Close()
 
-		actorID := args[0]
+		actorName := args[0]
 		parts := strings.Split(templateFlag, "/")
 		if len(parts) != 2 {
 			return fmt.Errorf("malformed --template: %s (expected <namespace>/<name>)", templateFlag)
 		}
 
 		resp, err := apiClient.CreateActor(ctx, &ateapipb.CreateActorRequest{
-			ActorTemplateNamespace: parts[0],
-			ActorTemplateName:      parts[1],
-			ActorRef:               &ateapipb.ActorRef{Atespace: atespaceFlag, Name: actorID},
+			Actor: &ateapipb.Actor{
+				Metadata: &ateapipb.ResourceMetadata{
+					Atespace: atespaceFlag,
+					Name:     actorName,
+				},
+				ActorTemplateNamespace: parts[0],
+				ActorTemplateName:      parts[1],
+			},
 		})
 		if err != nil {
 			return fmt.Errorf("failed to create actor: %w", err)
 		}
 
-		return printer.PrintActor(resp.GetActor(), outputFmt)
+		return printer.PrintActor(resp, outputFmt)
 	},
 }
 

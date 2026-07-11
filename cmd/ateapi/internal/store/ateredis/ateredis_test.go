@@ -315,7 +315,7 @@ func TestUpdateWorker_Success(t *testing.T) {
 			Namespace: "default",
 			Name:      "test-template",
 		},
-		Actor: &ateapipb.ActorRef{
+		Actor: &ateapipb.ObjectRef{
 			Name: "session-1",
 		},
 	}
@@ -414,7 +414,7 @@ func TestDeleteActor(t *testing.T) {
 				t.Fatalf("CreateActor failed: %v", err)
 			}
 
-			err := s.DeleteActor(ctx, testAtespace, "session-1")
+			deleted, err := s.DeleteActor(ctx, testAtespace, "session-1")
 			if tt.wantErr != nil {
 				if !errors.Is(err, tt.wantErr) {
 					t.Errorf("DeleteActor: expected %v, got %v", tt.wantErr, err)
@@ -423,6 +423,10 @@ func TestDeleteActor(t *testing.T) {
 			}
 			if err != nil {
 				t.Fatalf("DeleteActor failed: %v", err)
+			}
+			// DeleteActor returns the deleted resource.
+			if got := deleted.GetMetadata().GetName(); got != "session-1" {
+				t.Errorf("deleted actor name = %q, want session-1", got)
 			}
 
 			if _, err := s.GetActor(ctx, testAtespace, "session-1"); !errors.Is(err, store.ErrNotFound) {
@@ -436,7 +440,7 @@ func TestDeleteActor_NotFound(t *testing.T) {
 	mr, s, ctx := setupTest(t)
 	defer mr.Close()
 
-	err := s.DeleteActor(ctx, testAtespace, "non-existent")
+	_, err := s.DeleteActor(ctx, testAtespace, "non-existent")
 	if !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("expected ErrNotFound deleting non-existent actor, got %v", err)
 	}
@@ -578,14 +582,14 @@ func TestUpdateWorker_Conflict(t *testing.T) {
 	}
 
 	// Update instance 1
-	worker1.Assignment = &ateapipb.Assignment{Actor: &ateapipb.ActorRef{Name: "session-1"}}
+	worker1.Assignment = &ateapipb.Assignment{Actor: &ateapipb.ObjectRef{Name: "session-1"}}
 	err = s.UpdateWorker(ctx, worker1, worker1.Version)
 	if err != nil {
 		t.Fatalf("UpdateWorker failed: %v", err)
 	}
 
 	// Try to update instance 2
-	worker2.Assignment = &ateapipb.Assignment{Actor: &ateapipb.ActorRef{Name: "session-2"}}
+	worker2.Assignment = &ateapipb.Assignment{Actor: &ateapipb.ObjectRef{Name: "session-2"}}
 	err = s.UpdateWorker(ctx, worker2, worker2.Version)
 	if !errors.Is(err, store.ErrPersistenceRetry) {
 		t.Errorf("expected ErrPersistenceRetry, got %v", err)
@@ -1072,8 +1076,13 @@ func TestDeleteAtespace_Empty(t *testing.T) {
 	if _, err := s.CreateAtespace(ctx, newTestAtespace("team-a")); err != nil {
 		t.Fatalf("CreateAtespace failed: %v", err)
 	}
-	if err := s.DeleteAtespace(ctx, "team-a"); err != nil {
+	deleted, err := s.DeleteAtespace(ctx, "team-a")
+	if err != nil {
 		t.Fatalf("DeleteAtespace failed: %v", err)
+	}
+	// DeleteAtespace returns the deleted resource.
+	if got := deleted.GetMetadata().GetName(); got != "team-a" {
+		t.Errorf("deleted atespace name = %q, want team-a", got)
 	}
 	if _, err := s.GetAtespace(ctx, "team-a"); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("after delete, GetAtespace = %v, want ErrNotFound", err)
@@ -1084,7 +1093,7 @@ func TestDeleteAtespace_NotFound(t *testing.T) {
 	mr, s, ctx := setupTest(t)
 	defer mr.Close()
 
-	if err := s.DeleteAtespace(ctx, "nope"); !errors.Is(err, store.ErrNotFound) {
+	if _, err := s.DeleteAtespace(ctx, "nope"); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("expected ErrNotFound, got %v", err)
 	}
 }
@@ -1099,7 +1108,7 @@ func TestDeleteAtespace_NonEmpty_Rejected(t *testing.T) {
 	if _, err := s.CreateActor(ctx, &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Name: "id1", Atespace: "team-a"}, Status: ateapipb.Actor_STATUS_SUSPENDED}); err != nil {
 		t.Fatalf("CreateActor failed: %v", err)
 	}
-	if err := s.DeleteAtespace(ctx, "team-a"); !errors.Is(err, store.ErrFailedPrecondition) {
+	if _, err := s.DeleteAtespace(ctx, "team-a"); !errors.Is(err, store.ErrFailedPrecondition) {
 		t.Errorf("DeleteAtespace on non-empty = %v, want ErrFailedPrecondition", err)
 	}
 	// The atespace must survive a rejected delete.
@@ -1118,13 +1127,13 @@ func TestDeleteAtespace_EmptyAfterActorsRemoved(t *testing.T) {
 	if _, err := s.CreateActor(ctx, &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Name: "id1", Atespace: "team-a"}, Status: ateapipb.Actor_STATUS_SUSPENDED}); err != nil {
 		t.Fatalf("CreateActor failed: %v", err)
 	}
-	if err := s.DeleteAtespace(ctx, "team-a"); !errors.Is(err, store.ErrFailedPrecondition) {
+	if _, err := s.DeleteAtespace(ctx, "team-a"); !errors.Is(err, store.ErrFailedPrecondition) {
 		t.Fatalf("expected rejection while non-empty, got %v", err)
 	}
-	if err := s.DeleteActor(ctx, "team-a", "id1"); err != nil {
+	if _, err := s.DeleteActor(ctx, "team-a", "id1"); err != nil {
 		t.Fatalf("DeleteActor failed: %v", err)
 	}
-	if err := s.DeleteAtespace(ctx, "team-a"); err != nil {
+	if _, err := s.DeleteAtespace(ctx, "team-a"); err != nil {
 		t.Errorf("DeleteAtespace after actor removed = %v, want nil (re-scan should find it empty)", err)
 	}
 }
@@ -1145,14 +1154,14 @@ func TestDeleteAtespace_EmptyWhileOtherAtespaceNonEmpty(t *testing.T) {
 	}
 
 	// team-a is empty → delete must succeed.
-	if err := s.DeleteAtespace(ctx, "team-a"); err != nil {
+	if _, err := s.DeleteAtespace(ctx, "team-a"); err != nil {
 		t.Errorf("DeleteAtespace(team-a, empty) = %v, want nil (must not be blocked by team-b's actor)", err)
 	}
 	if _, err := s.GetAtespace(ctx, "team-a"); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("after delete, GetAtespace(team-a) = %v, want ErrNotFound", err)
 	}
 	// team-b is still non-empty → still rejected.
-	if err := s.DeleteAtespace(ctx, "team-b"); !errors.Is(err, store.ErrFailedPrecondition) {
+	if _, err := s.DeleteAtespace(ctx, "team-b"); !errors.Is(err, store.ErrFailedPrecondition) {
 		t.Errorf("DeleteAtespace(team-b, non-empty) = %v, want ErrFailedPrecondition", err)
 	}
 }

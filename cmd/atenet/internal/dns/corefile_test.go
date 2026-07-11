@@ -38,7 +38,7 @@ func TestMakeCoreFile(t *testing.T) {
 				"ready :8181",
 				"reload",
 				"template IN A actors.resources.substrate.ate.dev {",
-				`match "^` + resources.ActorIDRegexPattern + `\.` + resources.ActorIDRegexPattern + `\.actors\.resources\.substrate\.ate\.dev\.$"`,
+				`match "^` + resources.ResourceNameRegexPattern + `\.` + resources.ResourceNameRegexPattern + `\.actors\.resources\.substrate\.ate\.dev\.$"`,
 				`answer "{{ .Name }} 60 IN A 10.240.0.10"`,
 			},
 		},

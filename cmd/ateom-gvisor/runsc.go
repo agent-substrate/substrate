@@ -28,9 +28,9 @@ import (
 )
 
 type runsc struct {
-	path     string
-	atespace string
-	actorID  string
+	path      string
+	atespace  string
+	actorName string
 }
 
 func (r *runsc) cmdCreate(ctx context.Context, out io.Writer, containerName string, additionalArgs []string) error {
@@ -43,14 +43,14 @@ func (r *runsc) cmdCreate(ctx context.Context, out io.Writer, containerName stri
 		"-log-format", "json",
 		"--alsologtostderr",
 		// "-debug",
-		// "-debug-log", ateompath.RunscDebugLogDir(r.atespace, r.actorID, containerName) + "/",
+		// "-debug-log", ateompath.RunscDebugLogDir(r.atespace, r.actorName, containerName) + "/",
 		// "-debug-to-user-log",
 		// "-log-packets",
 		// "-strace",
-		"-root", ateompath.RunSCStateDir(r.atespace, r.actorID),
+		"-root", ateompath.RunSCStateDir(r.atespace, r.actorName),
 		"create",
-		"-bundle", ateompath.OCIBundlePath(r.atespace, r.actorID, containerName),
-		"-pid-file", ateompath.PIDFilePath(r.atespace, r.actorID, containerName),
+		"-bundle", ateompath.OCIBundlePath(r.atespace, r.actorName, containerName),
+		"-pid-file", ateompath.PIDFilePath(r.atespace, r.actorName, containerName),
 	}
 
 	args = append(args, additionalArgs...)
@@ -83,12 +83,12 @@ func (r *runsc) cmdStart(ctx context.Context, out io.Writer, containerName strin
 		"-log-format", "json",
 		"--alsologtostderr",
 		// "-debug",
-		// "-debug-log", ateompath.RunscDebugLogDir(r.atespace, r.actorID, containerName)+"/",
+		// "-debug-log", ateompath.RunscDebugLogDir(r.atespace, r.actorName, containerName)+"/",
 		// "-debug-to-user-log",
 		// "-log-packets",
 		// "-strace",
 		"-allow-connected-on-save",
-		"-root", ateompath.RunSCStateDir(r.atespace, r.actorID),
+		"-root", ateompath.RunSCStateDir(r.atespace, r.actorName),
 		"start",
 		containerName, // Name of the container
 	)
@@ -115,11 +115,11 @@ func (r *runsc) cmdCheckpoint(ctx context.Context, containerName, checkpointPath
 		"-log-format", "json",
 		"--alsologtostderr",
 		// "-debug",
-		// "-debug-log", ateompath.RunscDebugLogDir(r.atespace, r.actorID, containerName)+"/",
+		// "-debug-log", ateompath.RunscDebugLogDir(r.atespace, r.actorName, containerName)+"/",
 		// "-debug-to-user-log",
 		// "-log-packets",
 		// "-strace",
-		"-root", ateompath.RunSCStateDir(r.atespace, r.actorID),
+		"-root", ateompath.RunSCStateDir(r.atespace, r.actorName),
 		"checkpoint",
 		"-image-path", checkpointPath,
 		containerName, // Name of the container
@@ -143,11 +143,11 @@ func (r *runsc) cmdFsCheckpoint(ctx context.Context, containerName, checkpointPa
 		"-log-format", "json",
 		"--alsologtostderr",
 		// "-debug",
-		// "-debug-log", ateompath.RunscDebugLogDir(r.atespace, r.actorID, containerName)+"/",
+		// "-debug-log", ateompath.RunscDebugLogDir(r.atespace, r.actorName, containerName)+"/",
 		// "-debug-to-user-log",
 		// "-log-packets",
 		// "-strace",
-		"-root", ateompath.RunSCStateDir(r.atespace, r.actorID),
+		"-root", ateompath.RunSCStateDir(r.atespace, r.actorName),
 		"fscheckpoint",
 		"-image-path", checkpointPath,
 	}
@@ -186,15 +186,15 @@ func (r *runsc) cmdRestore(ctx context.Context, out io.Writer, containerName, ch
 		"-log-format", "json",
 		"--alsologtostderr",
 		// "-debug",
-		// "-debug-log", ateompath.RunscDebugLogDir(r.atespace, r.actorID, containerName)+"/",
+		// "-debug-log", ateompath.RunscDebugLogDir(r.atespace, r.actorName, containerName)+"/",
 		// "-debug-to-user-log",
 		// "-log-packets",
 		// "-strace",
-		"-root", ateompath.RunSCStateDir(r.atespace, r.actorID),
+		"-root", ateompath.RunSCStateDir(r.atespace, r.actorName),
 		"restore",
-		"-bundle", ateompath.OCIBundlePath(r.atespace, r.actorID, containerName),
+		"-bundle", ateompath.OCIBundlePath(r.atespace, r.actorName, containerName),
 		"-image-path", checkpointPath,
-		"-pid-file", ateompath.PIDFilePath(r.atespace, r.actorID, containerName),
+		"-pid-file", ateompath.PIDFilePath(r.atespace, r.actorName, containerName),
 		"-background",
 		"-direct",
 		"-detach",
@@ -221,7 +221,7 @@ func (r *runsc) cmdDelete(ctx context.Context, containerName string) error {
 		"-log-format", "json",
 		"--alsologtostderr",
 		// "-debug",
-		"-root", ateompath.RunSCStateDir(r.atespace, r.actorID),
+		"-root", ateompath.RunSCStateDir(r.atespace, r.actorName),
 		"delete",
 		"-force",
 		containerName,
@@ -246,7 +246,7 @@ func (r *runsc) cmdState(ctx context.Context, containerName string) error {
 		r.path,
 		"-log-format", "json",
 		"--alsologtostderr",
-		"-root", ateompath.RunSCStateDir(r.atespace, r.actorID),
+		"-root", ateompath.RunSCStateDir(r.atespace, r.actorName),
 		"state",
 		containerName,
 	)

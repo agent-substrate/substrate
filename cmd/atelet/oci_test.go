@@ -88,6 +88,7 @@ func runUntar(t *testing.T, entries []tarEntry) (string, error) {
 func TestBuildActorOCISpec_IdentityMount(t *testing.T) {
 	spec := buildActorOCISpec(
 		"atespace", "id",
+		nil,
 		[]string{"/app"},
 		[]string{"FOO=bar"},
 		map[string]string{"k": "v"},
@@ -102,7 +103,7 @@ func TestBuildActorOCISpec_IdentityMount(t *testing.T) {
 		}
 		found = true
 		if m.Source != "/host/actors/atespace:id/identity" {
-			t.Errorf("identity mount source = %q, want the per-actor identity dir", m.Source)
+			t.Errorf("identity mount source = %q, want the per-actor nameentity dir", m.Source)
 		}
 		if m.Type != "bind" {
 			t.Errorf("identity mount type = %q, want bind", m.Type)
@@ -116,9 +117,57 @@ func TestBuildActorOCISpec_IdentityMount(t *testing.T) {
 	}
 }
 
+func TestMergeActorEnv(t *testing.T) {
+	defaultPath := "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
+
+	tests := []struct {
+		name        string
+		imageEnv    []string
+		templateEnv []string
+		want        []string
+	}{
+		{
+			name:        "template overrides image by key",
+			imageEnv:    []string{"FOO=image"},
+			templateEnv: []string{"FOO=template"},
+			want:        []string{"FOO=template", defaultPath},
+		},
+		{
+			name:        "default PATH applies when neither sets it",
+			imageEnv:    []string{"FOO=image"},
+			templateEnv: []string{"BAR=template"},
+			want:        []string{"BAR=template", "FOO=image", defaultPath},
+		},
+		{
+			name:     "image PATH overrides default",
+			imageEnv: []string{"PATH=/image/bin"},
+			want:     []string{"PATH=/image/bin"},
+		},
+		{
+			name:        "template PATH overrides default",
+			templateEnv: []string{"PATH=/template/bin"},
+			want:        []string{"PATH=/template/bin"},
+		},
+		{
+			name:     "blank and keyless entries are dropped",
+			imageEnv: []string{"", "=novalue"},
+			want:     []string{defaultPath},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := mergeActorEnv(tc.imageEnv, tc.templateEnv)
+			if !slices.Equal(got, tc.want) {
+				t.Errorf("mergeActorEnv(%v, %v) =\n  %v\nwant:\n  %v", tc.imageEnv, tc.templateEnv, got, tc.want)
+			}
+		})
+	}
+}
+
 // Without an identity dir (the pause container), no identity mount appears.
 func TestBuildActorOCISpec_NoIdentityMountForPause(t *testing.T) {
-	bare := buildActorOCISpec("atespace", "id", []string{"/pause"}, nil, nil, "/run/netns/x", "", nil)
+	bare := buildActorOCISpec("atespace", "id", nil, []string{"/pause"}, nil, nil, "/run/netns/x", "", nil)
 	for _, m := range bare.Mounts {
 		if m.Destination == IdentityMountPath {
 			t.Errorf("identity mount must be absent when identityDir is empty")
@@ -136,7 +185,7 @@ func TestBuildActorOCISpec_DurableDirVolumeMounts(t *testing.T) {
 	}
 	spec := buildActorOCISpec(
 		atespace, id,
-		[]string{"/app"}, nil, nil,
+		nil, []string{"/app"}, nil, nil,
 		"/run/netns/x",
 		"",
 		durableDirs,

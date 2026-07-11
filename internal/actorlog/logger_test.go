@@ -54,8 +54,8 @@ func TestWrapContainerLogs(t *testing.T) {
 		t.Fatal("labels group is not a map")
 	}
 
-	if labels["ate.dev/actor_id"] != "act-1" {
-		t.Errorf("got actor_id = %v, want 'act-1'", labels["ate.dev/actor_id"])
+	if labels["ate.dev/actor_name"] != "act-1" {
+		t.Errorf("got actor_name = %v, want 'act-1'", labels["ate.dev/actor_name"])
 	}
 	if labels["ate.dev/actor_atespace"] != "default" {
 		t.Errorf("got actor_atespace = %v, want 'default'", labels["ate.dev/actor_atespace"])
@@ -115,8 +115,8 @@ func TestWrapContainerLogs_JSONInput(t *testing.T) {
 		t.Fatal("labels group is not a map")
 	}
 
-	if labels["ate.dev/actor_id"] != "act-1" {
-		t.Errorf("got actor_id = %v, want 'act-1'", labels["ate.dev/actor_id"])
+	if labels["ate.dev/actor_name"] != "act-1" {
+		t.Errorf("got actor_name = %v, want 'act-1'", labels["ate.dev/actor_name"])
 	}
 	if labels["ate.dev/actor_template_namespace"] != "tmpl-ns" {
 		t.Errorf("got actor_template_namespace = %v, want 'tmpl-ns'", labels["ate.dev/actor_template_namespace"])
@@ -195,8 +195,8 @@ func TestWrapContainerLogs_MergeLabels(t *testing.T) {
 	if labels["version"] != "v1" {
 		t.Errorf("got version = %v, want 'v1'", labels["version"])
 	}
-	if labels["ate.dev/actor_id"] != "act-1" {
-		t.Errorf("got actor_id = %v, want 'act-1'", labels["ate.dev/actor_id"])
+	if labels["ate.dev/actor_name"] != "act-1" {
+		t.Errorf("got actor_name = %v, want 'act-1'", labels["ate.dev/actor_name"])
 	}
 	if labels["ate.dev/container_name"] != "ctr-1" {
 		t.Errorf("got container_name = %v, want 'ctr-1'", labels["ate.dev/container_name"])
@@ -204,7 +204,7 @@ func TestWrapContainerLogs_MergeLabels(t *testing.T) {
 }
 
 func TestWrapContainerLogs_LabelCollision(t *testing.T) {
-	input := `{"level":"info","msg":"App log","labels":{"ate.dev/actor_id":"malicious-id","app":"my-app"}}` + "\n"
+	input := `{"level":"info","msg":"App log","labels":{"ate.dev/actor_name":"malicious-id","app":"my-app"}}` + "\n"
 	rdr := strings.NewReader(input)
 
 	var buf bytes.Buffer
@@ -228,8 +228,8 @@ func TestWrapContainerLogs_LabelCollision(t *testing.T) {
 	if labels["app"] != "my-app" {
 		t.Errorf("got app = %v, want 'my-app'", labels["app"])
 	}
-	if labels["ate.dev/actor_id"] != "act-1" {
-		t.Errorf("got actor_id = %v, want 'act-1' (Substrate metadata should take precedence)", labels["ate.dev/actor_id"])
+	if labels["ate.dev/actor_name"] != "act-1" {
+		t.Errorf("got actor_name = %v, want 'act-1' (Substrate metadata should take precedence)", labels["ate.dev/actor_name"])
 	}
 }
 
@@ -259,7 +259,7 @@ func TestWrapContainerLogs_TrailingGarbage(t *testing.T) {
 		t.Fatal("labels group is not a map")
 	}
 
-	if labels["ate.dev/actor_id"] != "act-1" {
-		t.Errorf("got actor_id = %v, want 'act-1'", labels["ate.dev/actor_id"])
+	if labels["ate.dev/actor_name"] != "act-1" {
+		t.Errorf("got actor_name = %v, want 'act-1'", labels["ate.dev/actor_name"])
 	}
 }

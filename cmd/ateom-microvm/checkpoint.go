@@ -46,16 +46,16 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	defer s.lock.Unlock()
 
 	atespace := req.GetAtespace()
-	id := req.GetActorId()
+	name := req.GetActorName()
 	templateNS := req.GetActorTemplateNamespace()
 	templateName := req.GetActorTemplateName()
 
-	s.actorLogger.EmitLifecycleLog("Actor checkpointing", atespace, id, templateNS, templateName)
+	s.actorLogger.EmitLifecycleLog("Actor checkpointing", atespace, name, templateNS, templateName)
 
 	// The actor's CH was booted by RunWorkload or relaunched by RestoreWorkload;
 	// either way ateom owns it and tracks its api-socket.
-	ra := s.running[id]
-	chSocket := kata.CLHSocketPath(id)
+	ra := s.running[name]
+	chSocket := kata.CLHSocketPath(name)
 	if ra != nil && ra.apiSocket != "" {
 		chSocket = ra.apiSocket
 	}
@@ -70,7 +70,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	}
 	dPause := time.Since(tPause)
 
-	checkpointDir := ateompath.CheckpointStateDir(atespace, id)
+	checkpointDir := ateompath.CheckpointStateDir(atespace, name)
 	// Start from a clean dir so CH's snapshot files are the only contents.
 	if err := os.RemoveAll(checkpointDir); err != nil {
 		return nil, fmt.Errorf("while clearing checkpoint dir %q: %w", checkpointDir, err)
@@ -86,7 +86,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	// reconstructed-from-image base at the path the guest expects. We can NOT derive
 	// it from config.json (its socket paths get rewritten to the current id on every
 	// restore, losing the invariant golden id).
-	baseID := id
+	baseID := name
 	if ra != nil && ra.baseID != "" {
 		baseID = ra.baseID
 	}
@@ -94,7 +94,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 		return nil, fmt.Errorf("while writing %s: %w", baseIDFile, err)
 	}
 
-	slog.InfoContext(ctx, "Snapshotting guest", slog.String("id", id), slog.String("dir", checkpointDir))
+	slog.InfoContext(ctx, "Snapshotting guest", slog.String("id", name), slog.String("dir", checkpointDir))
 	tSnapshot := time.Now()
 	if err := client.Snapshot(ctx, checkpointDir); err != nil {
 		return nil, fmt.Errorf("while snapshotting guest: %w", err)
@@ -118,7 +118,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 			return nil, fmt.Errorf("while merging OnDemand delta into restore source: %w", err)
 		}
 		slog.InfoContext(ctx, "Merged OnDemand delta into base (complete snapshot)",
-			slog.String("id", id), slog.Duration("merge", time.Since(tMerge)))
+			slog.String("id", name), slog.Duration("merge", time.Since(tMerge)))
 	}
 
 	// Nothing rootfs-related ships: the overlay's writable upper is a guest tmpfs, so
@@ -136,17 +136,17 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	// Tear down: the actor returns to "available". Best-effort; the snapshot is
 	// already on disk for atelet to ship.
 	tTeardown := time.Now()
-	s.teardownActor(ctx, id, ra, client)
+	s.teardownActor(ctx, name, ra, client)
 	dTeardown := time.Since(tTeardown)
-	delete(s.running, id)
+	delete(s.running, name)
 
 	// Tear down the per-activation actor network.
 	if err := s.cleanupActorNetwork(ctx); err != nil {
 		slog.WarnContext(ctx, "Failed to clean up actor network after checkpoint", slog.Any("err", err))
 	}
 
-	s.actorLogger.EmitLifecycleLog("Actor checkpointed", atespace, id, templateNS, templateName)
-	slog.InfoContext(ctx, "Actor checkpointed", slog.String("id", id), slog.Any("snapshot_files", snapshotFiles),
+	s.actorLogger.EmitLifecycleLog("Actor checkpointed", atespace, name, templateNS, templateName)
+	slog.InfoContext(ctx, "Actor checkpointed", slog.String("id", name), slog.Any("snapshot_files", snapshotFiles),
 		slog.Duration("pause", dPause),
 		slog.Duration("snapshot", dSnapshot), slog.Duration("teardown", dTeardown))
 	return &ateompb.CheckpointWorkloadResponse{SnapshotFiles: snapshotFiles}, nil

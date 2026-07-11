@@ -35,7 +35,7 @@ var deleteAtespaceCmd = &cobra.Command{
 		defer apiClient.Close()
 
 		name := args[0]
-		if _, err := apiClient.DeleteAtespace(ctx, &ateapipb.DeleteAtespaceRequest{Name: name}); err != nil {
+		if _, err := apiClient.DeleteAtespace(ctx, &ateapipb.DeleteAtespaceRequest{Atespace: &ateapipb.ObjectRef{Name: name}}); err != nil {
 			return fmt.Errorf("failed to delete atespace: %w", err)
 		}
 

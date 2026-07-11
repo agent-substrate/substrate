@@ -32,8 +32,8 @@ func newReqError(code envoy_type.StatusCode, format string, args ...any) error {
 }
 
 // actorNotFoundErr returns a 404 reqError identifying the missing actor.
-func actorNotFoundErr(actorID string) error {
-	return newReqError(envoy_type.StatusCode_NotFound, "actor %q not found", actorID)
+func actorNotFoundErr(actorName string) error {
+	return newReqError(envoy_type.StatusCode_NotFound, "actor %q not found", actorName)
 }
 
 // invalidHostErr returns a 404 reqError explaining why the request host was
@@ -53,7 +53,7 @@ func invalidHostErr(host string, cause error) error {
 //
 // Unrecognized errors collapse to 500 with a generic body to avoid leaking
 // server-side detail (stack traces, internal IDs) to clients.
-func mapResumeError(actorID string, err error) error {
+func mapResumeError(actorName string, err error) error {
 	if err == nil {
 		return nil
 	}
@@ -62,31 +62,31 @@ func mapResumeError(actorID string, err error) error {
 	switch status.Code(err) {
 	case codes.NotFound:
 		re.statusCode = int(envoy_type.StatusCode_NotFound)
-		re.msg = fmt.Sprintf("actor %q not found", actorID)
+		re.msg = fmt.Sprintf("actor %q not found", actorName)
 	case codes.FailedPrecondition:
 		// Preserve the gRPC description for FailedPrecondition only: it carries
 		// actionable client-facing context (e.g. "no free workers available")
 		// and is not security-sensitive.
 		re.statusCode = int(envoy_type.StatusCode_ServiceUnavailable)
-		re.msg = fmt.Sprintf("actor %q unavailable: %s", actorID, status.Convert(err).Message())
+		re.msg = fmt.Sprintf("actor %q unavailable: %s", actorName, status.Convert(err).Message())
 	case codes.Unavailable:
 		re.statusCode = int(envoy_type.StatusCode_ServiceUnavailable)
-		re.msg = fmt.Sprintf("actor %q unavailable", actorID)
+		re.msg = fmt.Sprintf("actor %q unavailable", actorName)
 	case codes.DeadlineExceeded:
 		re.statusCode = int(envoy_type.StatusCode_GatewayTimeout)
-		re.msg = fmt.Sprintf("actor %q request timed out", actorID)
+		re.msg = fmt.Sprintf("actor %q request timed out", actorName)
 	case codes.PermissionDenied:
 		re.statusCode = int(envoy_type.StatusCode_Forbidden)
-		re.msg = fmt.Sprintf("actor %q access denied", actorID)
+		re.msg = fmt.Sprintf("actor %q access denied", actorName)
 	case codes.Unauthenticated:
 		re.statusCode = int(envoy_type.StatusCode_Unauthorized)
-		re.msg = fmt.Sprintf("actor %q authentication required", actorID)
+		re.msg = fmt.Sprintf("actor %q authentication required", actorName)
 	case codes.ResourceExhausted:
 		re.statusCode = int(envoy_type.StatusCode_TooManyRequests)
-		re.msg = fmt.Sprintf("actor %q rate limited", actorID)
+		re.msg = fmt.Sprintf("actor %q rate limited", actorName)
 	default:
 		re.statusCode = int(envoy_type.StatusCode_InternalServerError)
-		re.msg = fmt.Sprintf("error resuming actor %q", actorID)
+		re.msg = fmt.Sprintf("error resuming actor %q", actorName)
 	}
 	return re
 }

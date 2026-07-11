@@ -39,12 +39,12 @@ func buildTemplate() string {
 	directives = append(directives, "ready :8181")
 	directives = append(directives, "reload")
 
-	// Construct match pattern for <ActorID>.<atespace>.<dnsDomain>. Both the
-	// actor id and the atespace are DNS-1123 labels (same regex).
+	// Construct match pattern for <ActorName>.<atespace>.<dnsDomain>. Both the
+	// actor name and the atespace are DNS-1123 labels (same regex).
 	directives = append(directives, fmt.Sprintf("template IN A %s {", resources.ActorDNSSuffix))
 	// Escape the suffix's dots so they match literally; the final \. matches the FQDN's trailing dot.
 	escapedSuffix := strings.ReplaceAll(resources.ActorDNSSuffix, ".", `\.`)
-	directives = append(directives, fmt.Sprintf(`  match "^%s\.%s\.%s\.$"`, resources.ActorIDRegexPattern, resources.ActorIDRegexPattern, escapedSuffix))
+	directives = append(directives, fmt.Sprintf(`  match "^%s\.%s\.%s\.$"`, resources.ResourceNameRegexPattern, resources.ResourceNameRegexPattern, escapedSuffix))
 	// Note the %s -- this will be filled with the router IP.
 	directives = append(directives, `  answer "{{ .Name }} 60 IN A %s"`)
 	directives = append(directives, "}")

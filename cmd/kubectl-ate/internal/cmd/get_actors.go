@@ -29,7 +29,7 @@ var (
 )
 
 var getActorsCmd = &cobra.Command{
-	Use:     "actors [actor-id]",
+	Use:     "actors <actor-name>",
 	Aliases: []string{"actor"},
 	Short:   "List all actors or get a specific actor",
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -44,7 +44,7 @@ var getActorsCmd = &cobra.Command{
 
 		// 2. Handle Get Single Actor
 		if len(args) > 0 {
-			// A single actor is addressed by (atespace, id), so the atespace is
+			// A single actor is addressed by (atespace, name), so the atespace is
 			// mandatory and "all atespaces" is meaningless here.
 			if getActorsAllAtespaces {
 				return fmt.Errorf("-A/--all-atespaces cannot be used when getting a specific actor; pass --atespace")
@@ -52,11 +52,11 @@ var getActorsCmd = &cobra.Command{
 			if getActorsAtespaceFlag == "" {
 				return fmt.Errorf("--atespace is required when getting a specific actor")
 			}
-			resp, err := apiClient.GetActor(ctx, &ateapipb.GetActorRequest{ActorRef: &ateapipb.ActorRef{Atespace: getActorsAtespaceFlag, Name: args[0]}})
+			resp, err := apiClient.GetActor(ctx, &ateapipb.GetActorRequest{Actor: &ateapipb.ObjectRef{Atespace: getActorsAtespaceFlag, Name: args[0]}})
 			if err != nil {
 				return fmt.Errorf("failed to get actor: %w", err)
 			}
-			return printer.PrintActor(resp.GetActor(), outputFmt)
+			return printer.PrintActor(resp, outputFmt)
 		}
 
 		// Listing requires exactly one of --atespace (one atespace) or -A (all

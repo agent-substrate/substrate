@@ -93,7 +93,7 @@ func (SnapshotScope) EnumDescriptor() ([]byte, []int) {
 type RunWorkloadRequest struct {
 	state                  protoimpl.MessageState `protogen:"open.v1"`
 	Atespace               string                 `protobuf:"bytes,1,opt,name=atespace,proto3" json:"atespace,omitempty"`
-	ActorId                string                 `protobuf:"bytes,2,opt,name=actor_id,json=actorId,proto3" json:"actor_id,omitempty"`
+	ActorName              string                 `protobuf:"bytes,2,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
 	ActorTemplateNamespace string                 `protobuf:"bytes,3,opt,name=actor_template_namespace,json=actorTemplateNamespace,proto3" json:"actor_template_namespace,omitempty"`
 	ActorTemplateName      string                 `protobuf:"bytes,4,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
 	RunscPath              string                 `protobuf:"bytes,5,opt,name=runsc_path,json=runscPath,proto3" json:"runsc_path,omitempty"`
@@ -144,9 +144,9 @@ func (x *RunWorkloadRequest) GetAtespace() string {
 	return ""
 }
 
-func (x *RunWorkloadRequest) GetActorId() string {
+func (x *RunWorkloadRequest) GetActorName() string {
 	if x != nil {
-		return x.ActorId
+		return x.ActorName
 	}
 	return ""
 }
@@ -431,7 +431,7 @@ func (*RunWorkloadResponse) Descriptor() ([]byte, []int) {
 type CheckpointWorkloadRequest struct {
 	state                  protoimpl.MessageState `protogen:"open.v1"`
 	Atespace               string                 `protobuf:"bytes,1,opt,name=atespace,proto3" json:"atespace,omitempty"`
-	ActorId                string                 `protobuf:"bytes,2,opt,name=actor_id,json=actorId,proto3" json:"actor_id,omitempty"`
+	ActorName              string                 `protobuf:"bytes,2,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
 	ActorTemplateNamespace string                 `protobuf:"bytes,3,opt,name=actor_template_namespace,json=actorTemplateNamespace,proto3" json:"actor_template_namespace,omitempty"`
 	ActorTemplateName      string                 `protobuf:"bytes,4,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
 	RunscPath              string                 `protobuf:"bytes,5,opt,name=runsc_path,json=runscPath,proto3" json:"runsc_path,omitempty"`
@@ -491,9 +491,9 @@ func (x *CheckpointWorkloadRequest) GetAtespace() string {
 	return ""
 }
 
-func (x *CheckpointWorkloadRequest) GetActorId() string {
+func (x *CheckpointWorkloadRequest) GetActorName() string {
 	if x != nil {
-		return x.ActorId
+		return x.ActorName
 	}
 	return ""
 }
@@ -597,7 +597,7 @@ func (x *CheckpointWorkloadResponse) GetSnapshotFiles() []string {
 type RestoreWorkloadRequest struct {
 	state                  protoimpl.MessageState `protogen:"open.v1"`
 	Atespace               string                 `protobuf:"bytes,1,opt,name=atespace,proto3" json:"atespace,omitempty"`
-	ActorId                string                 `protobuf:"bytes,2,opt,name=actor_id,json=actorId,proto3" json:"actor_id,omitempty"`
+	ActorName              string                 `protobuf:"bytes,2,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
 	ActorTemplateNamespace string                 `protobuf:"bytes,3,opt,name=actor_template_namespace,json=actorTemplateNamespace,proto3" json:"actor_template_namespace,omitempty"`
 	ActorTemplateName      string                 `protobuf:"bytes,4,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
 	RunscPath              string                 `protobuf:"bytes,5,opt,name=runsc_path,json=runscPath,proto3" json:"runsc_path,omitempty"`
@@ -650,9 +650,9 @@ func (x *RestoreWorkloadRequest) GetAtespace() string {
 	return ""
 }
 
-func (x *RestoreWorkloadRequest) GetActorId() string {
+func (x *RestoreWorkloadRequest) GetActorName() string {
 	if x != nil {
-		return x.ActorId
+		return x.ActorName
 	}
 	return ""
 }
@@ -746,10 +746,11 @@ var File_ateom_proto protoreflect.FileDescriptor
 
 const file_ateom_proto_rawDesc = "" +
 	"\n" +
-	"\vateom.proto\x12\x05ateom\"\xa5\x03\n" +
+	"\vateom.proto\x12\x05ateom\"\xa9\x03\n" +
 	"\x12RunWorkloadRequest\x12\x1a\n" +
-	"\batespace\x18\x01 \x01(\tR\batespace\x12\x19\n" +
-	"\bactor_id\x18\x02 \x01(\tR\aactorId\x128\n" +
+	"\batespace\x18\x01 \x01(\tR\batespace\x12\x1d\n" +
+	"\n" +
+	"actor_name\x18\x02 \x01(\tR\tactorName\x128\n" +
 	"\x18actor_template_namespace\x18\x03 \x01(\tR\x16actorTemplateNamespace\x12.\n" +
 	"\x13actor_template_name\x18\x04 \x01(\tR\x11actorTemplateName\x12\x1d\n" +
 	"\n" +
@@ -772,10 +773,11 @@ const file_ateom_proto_rawDesc = "" +
 	"\rHTTPGetAction\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12\x12\n" +
 	"\x04port\x18\x02 \x01(\x05R\x04port\"\x15\n" +
-	"\x13RunWorkloadResponse\"\x8f\x04\n" +
+	"\x13RunWorkloadResponse\"\x93\x04\n" +
 	"\x19CheckpointWorkloadRequest\x12\x1a\n" +
-	"\batespace\x18\x01 \x01(\tR\batespace\x12\x19\n" +
-	"\bactor_id\x18\x02 \x01(\tR\aactorId\x128\n" +
+	"\batespace\x18\x01 \x01(\tR\batespace\x12\x1d\n" +
+	"\n" +
+	"actor_name\x18\x02 \x01(\tR\tactorName\x128\n" +
 	"\x18actor_template_namespace\x18\x03 \x01(\tR\x16actorTemplateNamespace\x12.\n" +
 	"\x13actor_template_name\x18\x04 \x01(\tR\x11actorTemplateName\x12\x1d\n" +
 	"\n" +
@@ -788,10 +790,11 @@ const file_ateom_proto_rawDesc = "" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"C\n" +
 	"\x1aCheckpointWorkloadResponse\x12%\n" +
-	"\x0esnapshot_files\x18\x01 \x03(\tR\rsnapshotFiles\"\x89\x04\n" +
+	"\x0esnapshot_files\x18\x01 \x03(\tR\rsnapshotFiles\"\x8d\x04\n" +
 	"\x16RestoreWorkloadRequest\x12\x1a\n" +
-	"\batespace\x18\x01 \x01(\tR\batespace\x12\x19\n" +
-	"\bactor_id\x18\x02 \x01(\tR\aactorId\x128\n" +
+	"\batespace\x18\x01 \x01(\tR\batespace\x12\x1d\n" +
+	"\n" +
+	"actor_name\x18\x02 \x01(\tR\tactorName\x128\n" +
 	"\x18actor_template_namespace\x18\x03 \x01(\tR\x16actorTemplateNamespace\x12.\n" +
 	"\x13actor_template_name\x18\x04 \x01(\tR\x11actorTemplateName\x12\x1d\n" +
 	"\n" +

@@ -146,7 +146,7 @@ func (s *CallAteletPauseStep) Execute(ctx context.Context, input *PauseInput, st
 	req := &ateletpb.CheckpointRequest{
 		TargetAteomUid:         state.Actor.GetAteomPodUid(),
 		Atespace:               state.Actor.GetMetadata().GetAtespace(),
-		ActorId:                state.Actor.GetMetadata().GetName(),
+		ActorName:              state.Actor.GetMetadata().GetName(),
 		ActorTemplateNamespace: state.Actor.GetActorTemplateNamespace(),
 		ActorTemplateName:      state.Actor.GetActorTemplateName(),
 		Spec:                   workloadSpec,
@@ -205,7 +205,7 @@ func (s *FinalizePausedStep) Execute(ctx context.Context, input *PauseInput, sta
 			// Only free it if it still belongs to us
 
 			if wass := worker.Assignment; wass != nil {
-				if wass.Actor.Name == input.ActorName {
+				if wass.Actor.Atespace == input.Atespace && wass.Actor.Name == input.ActorName {
 					worker.Assignment = nil
 					err = s.store.UpdateWorker(ctx, worker, worker.Version)
 					if err != nil {

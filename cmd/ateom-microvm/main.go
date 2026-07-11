@@ -205,7 +205,7 @@ type AteomService struct {
 	// with ateom-gvisor).
 	actorLogger *actorlog.ActorLogger
 
-	// running maps actor id -> the live micro-VM, kept so CheckpointWorkload can
+	// running maps actor name -> the live micro-VM, kept so CheckpointWorkload can
 	// pause+snapshot+teardown the same sandbox (and RestoreWorkload can track the
 	// CH it relaunched).
 	running map[string]*runningActor

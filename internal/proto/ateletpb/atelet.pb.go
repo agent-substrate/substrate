@@ -192,7 +192,7 @@ type RunRequest struct {
 	state                  protoimpl.MessageState `protogen:"open.v1"`
 	TargetAteomUid         string                 `protobuf:"bytes,1,opt,name=target_ateom_uid,json=targetAteomUid,proto3" json:"target_ateom_uid,omitempty"`
 	Atespace               string                 `protobuf:"bytes,2,opt,name=atespace,proto3" json:"atespace,omitempty"`
-	ActorId                string                 `protobuf:"bytes,3,opt,name=actor_id,json=actorId,proto3" json:"actor_id,omitempty"`
+	ActorName              string                 `protobuf:"bytes,3,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
 	ActorTemplateNamespace string                 `protobuf:"bytes,4,opt,name=actor_template_namespace,json=actorTemplateNamespace,proto3" json:"actor_template_namespace,omitempty"`
 	ActorTemplateName      string                 `protobuf:"bytes,5,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
 	Spec                   *WorkloadSpec          `protobuf:"bytes,6,opt,name=spec,proto3" json:"spec,omitempty"`
@@ -248,9 +248,9 @@ func (x *RunRequest) GetAtespace() string {
 	return ""
 }
 
-func (x *RunRequest) GetActorId() string {
+func (x *RunRequest) GetActorName() string {
 	if x != nil {
-		return x.ActorId
+		return x.ActorName
 	}
 	return ""
 }
@@ -1049,7 +1049,7 @@ type CheckpointRequest struct {
 	state                  protoimpl.MessageState `protogen:"open.v1"`
 	TargetAteomUid         string                 `protobuf:"bytes,1,opt,name=target_ateom_uid,json=targetAteomUid,proto3" json:"target_ateom_uid,omitempty"`
 	Atespace               string                 `protobuf:"bytes,2,opt,name=atespace,proto3" json:"atespace,omitempty"`
-	ActorId                string                 `protobuf:"bytes,3,opt,name=actor_id,json=actorId,proto3" json:"actor_id,omitempty"`
+	ActorName              string                 `protobuf:"bytes,3,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
 	ActorTemplateNamespace string                 `protobuf:"bytes,4,opt,name=actor_template_namespace,json=actorTemplateNamespace,proto3" json:"actor_template_namespace,omitempty"`
 	ActorTemplateName      string                 `protobuf:"bytes,5,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
 	// Sandbox binary config is not sent on checkpoint: atelet uses the version the
@@ -1114,9 +1114,9 @@ func (x *CheckpointRequest) GetAtespace() string {
 	return ""
 }
 
-func (x *CheckpointRequest) GetActorId() string {
+func (x *CheckpointRequest) GetActorName() string {
 	if x != nil {
-		return x.ActorId
+		return x.ActorName
 	}
 	return ""
 }
@@ -1237,7 +1237,7 @@ type RestoreRequest struct {
 	state                  protoimpl.MessageState `protogen:"open.v1"`
 	TargetAteomUid         string                 `protobuf:"bytes,1,opt,name=target_ateom_uid,json=targetAteomUid,proto3" json:"target_ateom_uid,omitempty"`
 	Atespace               string                 `protobuf:"bytes,2,opt,name=atespace,proto3" json:"atespace,omitempty"`
-	ActorId                string                 `protobuf:"bytes,3,opt,name=actor_id,json=actorId,proto3" json:"actor_id,omitempty"`
+	ActorName              string                 `protobuf:"bytes,3,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
 	ActorTemplateNamespace string                 `protobuf:"bytes,4,opt,name=actor_template_namespace,json=actorTemplateNamespace,proto3" json:"actor_template_namespace,omitempty"`
 	ActorTemplateName      string                 `protobuf:"bytes,5,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
 	// Sandbox binary config is not sent on restore: the snapshot is
@@ -1302,9 +1302,9 @@ func (x *RestoreRequest) GetAtespace() string {
 	return ""
 }
 
-func (x *RestoreRequest) GetActorId() string {
+func (x *RestoreRequest) GetActorName() string {
 	if x != nil {
-		return x.ActorId
+		return x.ActorName
 	}
 	return ""
 }
@@ -1425,12 +1425,13 @@ var File_atelet_proto protoreflect.FileDescriptor
 
 const file_atelet_proto_rawDesc = "" +
 	"\n" +
-	"\fatelet.proto\x12\x06atelet\"\xbf\x02\n" +
+	"\fatelet.proto\x12\x06atelet\"\xc3\x02\n" +
 	"\n" +
 	"RunRequest\x12(\n" +
 	"\x10target_ateom_uid\x18\x01 \x01(\tR\x0etargetAteomUid\x12\x1a\n" +
-	"\batespace\x18\x02 \x01(\tR\batespace\x12\x19\n" +
-	"\bactor_id\x18\x03 \x01(\tR\aactorId\x128\n" +
+	"\batespace\x18\x02 \x01(\tR\batespace\x12\x1d\n" +
+	"\n" +
+	"actor_name\x18\x03 \x01(\tR\tactorName\x128\n" +
 	"\x18actor_template_namespace\x18\x04 \x01(\tR\x16actorTemplateNamespace\x12.\n" +
 	"\x13actor_template_name\x18\x05 \x01(\tR\x11actorTemplateName\x12(\n" +
 	"\x04spec\x18\x06 \x01(\v2\x14.atelet.WorkloadSpecR\x04spec\x12<\n" +
@@ -1488,11 +1489,12 @@ const file_atelet_proto_rawDesc = "" +
 	"\x1cLocalCheckpointConfiguration\x12'\n" +
 	"\x0fsnapshot_prefix\x18\x01 \x01(\tR\x0esnapshotPrefix\"Q\n" +
 	"\x1fExternalCheckpointConfiguration\x12.\n" +
-	"\x13snapshot_uri_prefix\x18\x01 \x01(\tR\x11snapshotUriPrefix\"\x8a\x04\n" +
+	"\x13snapshot_uri_prefix\x18\x01 \x01(\tR\x11snapshotUriPrefix\"\x8e\x04\n" +
 	"\x11CheckpointRequest\x12(\n" +
 	"\x10target_ateom_uid\x18\x01 \x01(\tR\x0etargetAteomUid\x12\x1a\n" +
-	"\batespace\x18\x02 \x01(\tR\batespace\x12\x19\n" +
-	"\bactor_id\x18\x03 \x01(\tR\aactorId\x128\n" +
+	"\batespace\x18\x02 \x01(\tR\batespace\x12\x1d\n" +
+	"\n" +
+	"actor_name\x18\x03 \x01(\tR\tactorName\x128\n" +
 	"\x18actor_template_namespace\x18\x04 \x01(\tR\x16actorTemplateNamespace\x12.\n" +
 	"\x13actor_template_name\x18\x05 \x01(\tR\x11actorTemplateName\x12(\n" +
 	"\x04spec\x18\x06 \x01(\v2\x14.atelet.WorkloadSpecR\x04spec\x12*\n" +
@@ -1502,11 +1504,12 @@ const file_atelet_proto_rawDesc = "" +
 	"\x05scope\x18\n" +
 	" \x01(\x0e2\x15.atelet.SnapshotScopeR\x05scopeB\b\n" +
 	"\x06config\"\x14\n" +
-	"\x12CheckpointResponse\"\x87\x04\n" +
+	"\x12CheckpointResponse\"\x8b\x04\n" +
 	"\x0eRestoreRequest\x12(\n" +
 	"\x10target_ateom_uid\x18\x01 \x01(\tR\x0etargetAteomUid\x12\x1a\n" +
-	"\batespace\x18\x02 \x01(\tR\batespace\x12\x19\n" +
-	"\bactor_id\x18\x03 \x01(\tR\aactorId\x128\n" +
+	"\batespace\x18\x02 \x01(\tR\batespace\x12\x1d\n" +
+	"\n" +
+	"actor_name\x18\x03 \x01(\tR\tactorName\x128\n" +
 	"\x18actor_template_namespace\x18\x04 \x01(\tR\x16actorTemplateNamespace\x12.\n" +
 	"\x13actor_template_name\x18\x05 \x01(\tR\x11actorTemplateName\x12(\n" +
 	"\x04spec\x18\x06 \x01(\v2\x14.atelet.WorkloadSpecR\x04spec\x12*\n" +

@@ -79,7 +79,7 @@ type runningActor struct {
 // to (<baseID>/rootfs). It is the id the RO base was FIRST shared under (the golden
 // actor's cold-run id) and is INVARIANT across every restore of that actor's
 // lineage: the guest memory keeps referencing <baseID>/rootfs, while the snapshot
-// config.json's socket paths get rewritten to the current actor id on each restore.
+// config.json's socket paths get rewritten to the current actor name on each restore.
 // RestoreWorkload reads this to lay the reconstructed-from-image base at the path
 // the guest expects. (The config.json socket id is the WRONG source — it equals the
 // current id, not the frozen golden id, for any restored-then-checkpointed actor.)
@@ -189,11 +189,11 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	defer s.lock.Unlock()
 
 	atespace := req.GetAtespace()
-	id := req.GetActorId()
+	name := req.GetActorName()
 	templateNS := req.GetActorTemplateNamespace()
 	templateName := req.GetActorTemplateName()
 
-	s.actorLogger.EmitLifecycleLog("Actor starting", atespace, id, templateNS, templateName)
+	s.actorLogger.EmitLifecycleLog("Actor starting", atespace, name, templateNS, templateName)
 
 	// All of the actor's containers share the one micro-VM (which is the pod
 	// sandbox): each gets its own overlay rootfs and its own kata-agent
@@ -231,7 +231,7 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 
 	// Prepare each container's OCI spec + record its bundle rootfs (the overlay RO
 	// lower). No host disk — the rootfs is overlay(virtio-fs lower + guest-tmpfs upper).
-	ctrs, err := s.buildActorContainers(atespace, id, containers)
+	ctrs, err := s.buildActorContainers(atespace, name, containers)
 	if err != nil {
 		return nil, err
 	}
@@ -243,15 +243,15 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	}
 
 	// Clean stale per-sandbox state + create the runtime dir for the sockets.
-	kata.CleanupSandboxState(ctx, id)
-	if err := os.MkdirAll(kata.VMDir(id), 0o700); err != nil {
+	kata.CleanupSandboxState(ctx, name)
+	if err := os.MkdirAll(kata.VMDir(name), 0o700); err != nil {
 		return nil, fmt.Errorf("while creating VM dir: %w", err)
 	}
 
 	// Stage the overlay RO lowers (bind each image into the shared dir) + start the
 	// virtiofsd that serves them. CH connects to it at vm.create and demand-pages for
 	// the actor's lifetime, so ateom owns the process (killed in teardownActor).
-	vfsdCmd, err := s.stageOverlayLowers(ctx, rr, id, ctrs)
+	vfsdCmd, err := s.stageOverlayLowers(ctx, rr, name, ctrs)
 	if err != nil {
 		return nil, err
 	}
@@ -263,7 +263,7 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	}()
 
 	// Launch a bare VMM (CH + api-socket); ateom owns this process for teardown.
-	apiSocket := filepath.Join(kata.VMDir(id), "clh-api.sock")
+	apiSocket := filepath.Join(kata.VMDir(name), "clh-api.sock")
 	chCmd, client, err := ch.LaunchVMM(ctx, ch.LaunchVMMOptions{
 		Binary:    rr.chBinary,
 		APISocket: apiSocket,
@@ -284,8 +284,8 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	// the virtio-fs device for the overlay RO lower; no actor virtio-blk disks — the
 	// writable upper is a guest tmpfs). serialLog is also read on a failed agent dial
 	// below, so keep it here.
-	serialLog := filepath.Join(kata.VMDir(id), "serial.log")
-	vmCfg := buildVMConfig(id, kernel, image, kparams, serialLog, memMiB, vcpus)
+	serialLog := filepath.Join(kata.VMDir(name), "serial.log")
+	vmCfg := buildVMConfig(name, kernel, image, kparams, serialLog, memMiB, vcpus)
 	if err := client.CreateVM(ctx, vmCfg); err != nil {
 		return nil, fmt.Errorf("while creating VM: %w", err)
 	}
@@ -313,13 +313,13 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	if err := client.BootVM(ctx); err != nil {
 		return nil, fmt.Errorf("while booting VM: %w", err)
 	}
-	slog.InfoContext(ctx, "Micro-VM booted", slog.String("id", id), slog.String("api", apiSocket))
+	slog.InfoContext(ctx, "Micro-VM booted", slog.String("id", name), slog.String("api", apiSocket))
 
 	// Dial the kata-agent over hybrid-vsock. The agent only starts listening once
 	// the guest's init reaches kata-containers.target — well after CH creates the
 	// vsock socket file — so poll the CONNECT until it answers (as the kata shim
 	// does), rather than dialing once.
-	vsockPath := kata.VsockSocketPath(id)
+	vsockPath := kata.VsockSocketPath(name)
 	if !waitForFile(vsockPath, 15*time.Second) {
 		return nil, fmt.Errorf("kata-agent vsock socket %q did not appear", vsockPath)
 	}
@@ -341,7 +341,7 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	}()
 
 	// Post-boot kata-agent setup: sandbox, guest networking, start each container.
-	if err := s.startActorContainers(ctx, ac, id, vsockPath, ctrs); err != nil {
+	if err := s.startActorContainers(ctx, ac, name, vsockPath, ctrs); err != nil {
 		return nil, err
 	}
 
@@ -350,19 +350,19 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 		return nil, fmt.Errorf("while waiting for container readyz: %w", err)
 	}
 
-	ra := &runningActor{chCmd: chCmd, vfsdCmd: vfsdCmd, apiSocket: apiSocket, baseID: id, logAgent: ac}
-	s.running[id] = ra
+	ra := &runningActor{chCmd: chCmd, vfsdCmd: vfsdCmd, apiSocket: apiSocket, baseID: name, logAgent: ac}
+	s.running[name] = ra
 
 	// Forward each container's stdout/stderr into the pod logs. The overlay workload's
 	// container/exec id is <name>_ovl (see startOverlayContainer), so key the streams by
 	// that and tag with the display container name. The goroutines read over ac for the
 	// actor's lifetime and exit (io.EOF) when teardownActor closes ac.
 	for _, c := range ctrs {
-		s.startActorLogForwarding(ac, atespace, id, templateNS, templateName, overlayWorkloadID(c.name), c.name)
+		s.startActorLogForwarding(ac, atespace, name, templateNS, templateName, overlayWorkloadID(c.name), c.name)
 	}
 
-	s.actorLogger.EmitLifecycleLog("Actor started", atespace, id, templateNS, templateName)
-	slog.InfoContext(ctx, "Actor started (overlay rootfs)", slog.String("id", id))
+	s.actorLogger.EmitLifecycleLog("Actor started", atespace, name, templateNS, templateName)
+	slog.InfoContext(ctx, "Actor started (overlay rootfs)", slog.String("id", name))
 	return &ateompb.RunWorkloadResponse{}, nil
 }
 
@@ -542,7 +542,7 @@ func startOverlayContainer(ctx context.Context, ac *kata.AgentClient, vsockPath 
 // each line with the actor's ate.dev/* labels and writes it to the pod's stdout.
 //
 // The streams are keyed by streamID == the kata containerID==execID (the overlay
-// workload id); lines are tagged with actorID + containerName
+// workload id); lines are tagged with actorName + containerName
 // (ate.dev/container_name) so a multi-container actor demultiplexes.
 // The reader contexts are context.Background() — the goroutines are NOT bound to the
 // RPC that started them; they terminate when ac is closed (by teardownActor), which
@@ -550,9 +550,9 @@ func startOverlayContainer(ctx context.Context, ac *kata.AgentClient, vsockPath 
 // ending WrapContainerLogs. This keeps the agent connection (which ttrpc allows
 // concurrent Calls on) alive for forwarding while guaranteeing no goroutine outlives
 // the connection.
-func (s *AteomService) startActorLogForwarding(ac *kata.AgentClient, atespace, actorID, actorTemplateNamespace, actorTemplateName, streamID, containerName string) {
-	go s.actorLogger.WrapContainerLogs(kata.NewStdioReader(context.Background(), ac, streamID, streamID, false), atespace, actorID, actorTemplateNamespace, actorTemplateName, containerName)
-	go s.actorLogger.WrapContainerLogs(kata.NewStdioReader(context.Background(), ac, streamID, streamID, true), atespace, actorID, actorTemplateNamespace, actorTemplateName, containerName)
+func (s *AteomService) startActorLogForwarding(ac *kata.AgentClient, atespace, actorName, actorTemplateNamespace, actorTemplateName, streamID, containerName string) {
+	go s.actorLogger.WrapContainerLogs(kata.NewStdioReader(context.Background(), ac, streamID, streamID, false), atespace, actorName, actorTemplateNamespace, actorTemplateName, containerName)
+	go s.actorLogger.WrapContainerLogs(kata.NewStdioReader(context.Background(), ac, streamID, streamID, true), atespace, actorName, actorTemplateNamespace, actorTemplateName, containerName)
 }
 
 // dialAgentRetry polls DialAgent until the kata-agent answers the hybrid-vsock
