@@ -30,61 +30,106 @@ func toMap(kvs []attribute.KeyValue) map[attribute.Key]attribute.Value {
 	return m
 }
 
-func TestActorIdentity(t *testing.T) {
-	a := &ateapipb.Actor{
-		Metadata: &ateapipb.ResourceMetadata{
-			Atespace: "team-a",
-			Name:     "support-agent-42",
-			Version:  7,
-		},
-		ActorTemplateNamespace: "ate-agents",
-		ActorTemplateName:      "support-agent",
+// assertAttrs checks each expected key is present with the expected value and
+// OTel type. want values are string or int64; int64 doubles as the "version must
+// not be stringified" check.
+func assertAttrs(t *testing.T, got map[attribute.Key]attribute.Value, want map[attribute.Key]any) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Errorf("got %d attributes, want %d: %v", len(got), len(want), got)
 	}
-
-	got := toMap(ActorIdentity(a))
-
-	wantStr := map[attribute.Key]string{
-		AtespaceKey:               "team-a",
-		ActorIDKey:                "support-agent-42",
-		ActorTemplateNameKey:      "support-agent",
-		ActorTemplateNamespaceKey: "ate-agents",
-	}
-	for k, want := range wantStr {
-		if v, ok := got[k]; !ok {
+	for k, wv := range want {
+		v, ok := got[k]
+		if !ok {
 			t.Errorf("missing attribute %s", k)
-		} else if v.AsString() != want {
-			t.Errorf("%s = %q, want %q", k, v.AsString(), want)
+			continue
 		}
-	}
-
-	// version must be typed int64, not stringified.
-	if v := got[ActorVersionKey]; v.Type() != attribute.INT64 {
-		t.Errorf("%s type = %v, want INT64", ActorVersionKey, v.Type())
-	} else if v.AsInt64() != 7 {
-		t.Errorf("%s = %d, want 7", ActorVersionKey, v.AsInt64())
+		switch exp := wv.(type) {
+		case string:
+			if v.Type() != attribute.STRING || v.AsString() != exp {
+				t.Errorf("%s = %v (%s), want string %q", k, v.Emit(), v.Type(), exp)
+			}
+		case int64:
+			if v.Type() != attribute.INT64 || v.AsInt64() != exp {
+				t.Errorf("%s = %v (%s), want int64 %d", k, v.Emit(), v.Type(), exp)
+			}
+		default:
+			t.Fatalf("unsupported want type for %s: %T", k, wv)
+		}
 	}
 }
 
-func TestActorIdentityNilSafe(t *testing.T) {
-	got := toMap(ActorIdentity(nil))
-	if v := got[AtespaceKey]; v.AsString() != "" {
-		t.Errorf("%s = %q, want empty", AtespaceKey, v.AsString())
+func TestActorIdentity(t *testing.T) {
+	tests := []struct {
+		name  string
+		actor *ateapipb.Actor
+		want  map[attribute.Key]any
+	}{
+		{
+			name: "full actor",
+			actor: &ateapipb.Actor{
+				Metadata:               &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "support-agent-42", Version: 7},
+				ActorTemplateNamespace: "ate-agents",
+				ActorTemplateName:      "support-agent",
+			},
+			want: map[attribute.Key]any{
+				AtespaceKey:               "team-a",
+				ActorIDKey:                "support-agent-42",
+				ActorTemplateNameKey:      "support-agent",
+				ActorTemplateNamespaceKey: "ate-agents",
+				ActorVersionKey:           int64(7),
+			},
+		},
+		{
+			name:  "nil actor yields zero values, not a panic",
+			actor: nil,
+			want: map[attribute.Key]any{
+				AtespaceKey:               "",
+				ActorIDKey:                "",
+				ActorTemplateNameKey:      "",
+				ActorTemplateNamespaceKey: "",
+				ActorVersionKey:           int64(0),
+			},
+		},
 	}
-	if v := got[ActorVersionKey]; v.AsInt64() != 0 {
-		t.Errorf("%s = %d, want 0", ActorVersionKey, v.AsInt64())
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertAttrs(t, toMap(ActorIdentity(tt.actor)), tt.want)
+		})
 	}
 }
 
 func TestActorRefIdentity(t *testing.T) {
-	kvs := ActorRefIdentity("team-a", "support-agent-42")
-	if len(kvs) != 2 {
-		t.Fatalf("len = %d, want 2", len(kvs))
+	tests := []struct {
+		name     string
+		atespace string
+		actorID  string
+		want     map[attribute.Key]any
+	}{
+		{
+			name:     "atespace and actor id only",
+			atespace: "team-a",
+			actorID:  "support-agent-42",
+			want: map[attribute.Key]any{
+				AtespaceKey: "team-a",
+				ActorIDKey:  "support-agent-42",
+			},
+		},
+		{
+			name:     "empty values still produce both keys",
+			atespace: "",
+			actorID:  "",
+			want: map[attribute.Key]any{
+				AtespaceKey: "",
+				ActorIDKey:  "",
+			},
+		},
 	}
-	got := toMap(kvs)
-	if got[AtespaceKey].AsString() != "team-a" {
-		t.Errorf("%s = %q, want team-a", AtespaceKey, got[AtespaceKey].AsString())
-	}
-	if got[ActorIDKey].AsString() != "support-agent-42" {
-		t.Errorf("%s = %q, want support-agent-42", ActorIDKey, got[ActorIDKey].AsString())
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertAttrs(t, toMap(ActorRefIdentity(tt.atespace, tt.actorID)), tt.want)
+		})
 	}
 }

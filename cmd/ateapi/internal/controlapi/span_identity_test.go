@@ -27,11 +27,10 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
-// The functional harness registers no otelgrpc StatsHandler, so there is no
-// server span on the client path. These tests instead call the Service methods
-// in-process under a self-provided recording root span, which stands in for the
-// span the otelgrpc handler injects in production and exercises the same
-// trace.SpanFromContext(ctx).SetAttributes path.
+// installSpanRecorder swaps in a recording global TracerProvider. Span-producing
+// code fetches its tracer from the global provider at call time, so this must not
+// run in parallel; the prior provider is restored on cleanup. Shared by the
+// per-method span tests (create/delete/resume_actor_test.go).
 func installSpanRecorder(t *testing.T) *tracetest.SpanRecorder {
 	t.Helper()
 	sr := tracetest.NewSpanRecorder()
@@ -42,6 +41,9 @@ func installSpanRecorder(t *testing.T) *tracetest.SpanRecorder {
 	return sr
 }
 
+// rootSpanAttrs runs fn under a fresh recording root span and returns that span's
+// attributes, so a test can observe what the code under test stamps on the span
+// carried in ctx.
 func rootSpanAttrs(t *testing.T, sr *tracetest.SpanRecorder, fn func(ctx context.Context)) map[attribute.Key]attribute.Value {
 	t.Helper()
 	ctx, root := otel.Tracer("test").Start(context.Background(), "root")
@@ -72,78 +74,46 @@ func assertSpanStr(t *testing.T, attrs map[attribute.Key]attribute.Value, key at
 	}
 }
 
-func TestCreateActor_StampsFullSpanIdentity(t *testing.T) {
-	ns := namespaceForTest("ns-span-create")
-	tc := setupTest(t, ns)
-	defer tc.cleanup()
-	createTemplate(t, tc, ns)
-
+func TestSetSpanActorIdentity(t *testing.T) {
 	sr := installSpanRecorder(t)
+	actor := &ateapipb.Actor{
+		Metadata:               &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "a1", Version: 3},
+		ActorTemplateNamespace: "ns1",
+		ActorTemplateName:      "tmpl1",
+	}
+
 	attrs := rootSpanAttrs(t, sr, func(ctx context.Context) {
-		if _, err := tc.service.CreateActor(ctx, &ateapipb.CreateActorRequest{
-			Actor: &ateapipb.Actor{
-				Metadata:               &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "id1"},
-				ActorTemplateNamespace: ns,
-				ActorTemplateName:      "tmpl1",
-			},
-		}); err != nil {
-			t.Fatalf("CreateActor: %v", err)
-		}
+		setSpanActorIdentity(ctx, actor)
 	})
 
-	assertSpanStr(t, attrs, ateattr.AtespaceKey, testAtespace)
-	assertSpanStr(t, attrs, ateattr.ActorIDKey, "id1")
+	assertSpanStr(t, attrs, ateattr.AtespaceKey, "team-a")
+	assertSpanStr(t, attrs, ateattr.ActorIDKey, "a1")
 	assertSpanStr(t, attrs, ateattr.ActorTemplateNameKey, "tmpl1")
-	assertSpanStr(t, attrs, ateattr.ActorTemplateNamespaceKey, ns)
-	if v, ok := attrs[ateattr.ActorVersionKey]; !ok || v.Type() != attribute.INT64 || v.AsInt64() != 1 {
-		t.Errorf("%s = %v, want int64 1", ateattr.ActorVersionKey, v.Emit())
+	assertSpanStr(t, attrs, ateattr.ActorTemplateNamespaceKey, "ns1")
+	if v, ok := attrs[ateattr.ActorVersionKey]; !ok || v.Type() != attribute.INT64 || v.AsInt64() != 3 {
+		t.Errorf("%s = %v, want int64 3", ateattr.ActorVersionKey, v.Emit())
 	}
 }
 
-func TestDeleteActor_StampsRefSpanIdentity(t *testing.T) {
-	ns := namespaceForTest("ns-span-delete")
-	tc := setupTest(t, ns)
-	defer tc.cleanup()
-	createTemplate(t, tc, ns)
-	if _, err := tc.service.CreateActor(context.Background(), &ateapipb.CreateActorRequest{
-		Actor: &ateapipb.Actor{
-			Metadata:               &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "id1"},
-			ActorTemplateNamespace: ns,
-			ActorTemplateName:      "tmpl1",
-		},
-	}); err != nil {
-		t.Fatalf("seed CreateActor: %v", err)
-	}
-
+func TestSetSpanActorRefIdentity(t *testing.T) {
 	sr := installSpanRecorder(t)
+
 	attrs := rootSpanAttrs(t, sr, func(ctx context.Context) {
-		if _, err := tc.service.DeleteActor(ctx, &ateapipb.DeleteActorRequest{
-			Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "id1"},
-		}); err != nil {
-			t.Fatalf("DeleteActor: %v", err)
-		}
+		setSpanActorRefIdentity(ctx, "team-a", "a1")
 	})
 
-	assertSpanStr(t, attrs, ateattr.AtespaceKey, testAtespace)
-	assertSpanStr(t, attrs, ateattr.ActorIDKey, "id1")
+	assertSpanStr(t, attrs, ateattr.AtespaceKey, "team-a")
+	assertSpanStr(t, attrs, ateattr.ActorIDKey, "a1")
+	// The ref-only stamp must not invent template/version (not known pre-resolve).
+	for _, k := range []attribute.Key{ateattr.ActorTemplateNameKey, ateattr.ActorTemplateNamespaceKey, ateattr.ActorVersionKey} {
+		if _, ok := attrs[k]; ok {
+			t.Errorf("unexpected %s on ref-only stamp", k)
+		}
+	}
 }
 
-// The early ref stamp must land on the span even when the operation fails, so a
-// failed resume is still attributable to who/where.
-func TestResumeActor_ErrorStillStampsRefSpanIdentity(t *testing.T) {
-	ns := namespaceForTest("ns-span-resume-err")
-	tc := setupTest(t, ns)
-	defer tc.cleanup()
-
-	sr := installSpanRecorder(t)
-	attrs := rootSpanAttrs(t, sr, func(ctx context.Context) {
-		if _, err := tc.service.ResumeActor(ctx, &ateapipb.ResumeActorRequest{
-			Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "missing"},
-		}); err == nil {
-			t.Fatal("expected error resuming missing actor")
-		}
-	})
-
-	assertSpanStr(t, attrs, ateattr.AtespaceKey, testAtespace)
-	assertSpanStr(t, attrs, ateattr.ActorIDKey, "missing")
+// A context with no recording span must be a safe no-op, so call sites need no guard.
+func TestSetSpanActorIdentity_NoRecordingSpanIsNoop(t *testing.T) {
+	setSpanActorIdentity(context.Background(), &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Name: "a1"}})
+	setSpanActorRefIdentity(context.Background(), "team-a", "a1")
 }
