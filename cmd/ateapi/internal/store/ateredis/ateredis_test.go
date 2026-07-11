@@ -1229,3 +1229,90 @@ func TestGetSortedMasters_ConcurrentCallbacks(t *testing.T) {
 		}
 	}
 }
+
+// TestListActors_MultiMaster_Pagination verifies that pagination across multiple
+// Redis master shards collects items from every shard without skipping or duplicating
+// shards when page boundaries align with shard boundaries.
+func TestListActors_MultiMaster_Pagination(t *testing.T) {
+	ctx := context.Background()
+	const numShards = 3
+
+	type shard struct {
+		client        *redis.Client
+		clusterClient *redis.ClusterClient
+	}
+	var shards []shard
+	for i := 0; i < numShards; i++ {
+		mr, err := miniredis.Run()
+		if err != nil {
+			t.Fatalf("failed to start miniredis %d: %v", i, err)
+		}
+		defer mr.Close()
+
+		client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+		clusterClient := redis.NewClusterClient(&redis.ClusterOptions{Addrs: []string{mr.Addr()}})
+		defer client.Close()
+		defer clusterClient.Close()
+
+		shards = append(shards, shard{
+			client:        client,
+			clusterClient: clusterClient,
+		})
+	}
+
+	sort.Slice(shards, func(i, j int) bool {
+		return shards[i].client.Options().Addr < shards[j].client.Options().Addr
+	})
+
+	var clients []*redis.Client
+	for shardIdx, sh := range shards {
+		clients = append(clients, sh.client)
+		tempS := &Persistence{rdb: sh.clusterClient}
+		for itemIdx := 0; itemIdx < 3; itemIdx++ {
+			actor := &ateapipb.Actor{
+				Metadata: &ateapipb.ResourceMetadata{
+					Name:     fmt.Sprintf("actor-shard%d-item%d", shardIdx, itemIdx),
+					Atespace: testAtespace,
+				},
+				ActorTemplateNamespace: "default",
+				ActorTemplateName:      "test-template",
+				Status:                 ateapipb.Actor_STATUS_SUSPENDED,
+			}
+			if _, err := tempS.CreateActor(ctx, actor); err != nil {
+				t.Fatalf("failed to seed actor: %v", err)
+			}
+		}
+	}
+
+	fake := &concurrentMasterClient{
+		redisClient: shards[0].clusterClient,
+		masters:     clients,
+	}
+	s := &Persistence{rdb: fake}
+
+	var allActors []*ateapipb.Actor
+	pageToken := ""
+	for {
+		actors, nextToken, err := s.ListActors(ctx, testAtespace, 2, pageToken)
+		if err != nil {
+			t.Fatalf("ListActors failed: %v", err)
+		}
+		allActors = append(allActors, actors...)
+		if nextToken == "" {
+			break
+		}
+		pageToken = nextToken
+	}
+
+	if len(allActors) != 9 {
+		t.Fatalf("expected 9 total actors across %d shards, got %d", numShards, len(allActors))
+	}
+
+	seen := make(map[string]bool)
+	for _, a := range allActors {
+		if seen[a.GetMetadata().GetName()] {
+			t.Errorf("duplicate actor found in paginated results: %s", a.GetMetadata().GetName())
+		}
+		seen[a.GetMetadata().GetName()] = true
+	}
+}

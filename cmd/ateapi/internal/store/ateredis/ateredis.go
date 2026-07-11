@@ -687,63 +687,38 @@ func (s *Persistence) ListActors(ctx context.Context, atespace string, pageSize 
 	}
 
 	var result []*ateapipb.Actor
-	var nextToken string
-	stop := false
+	i := startIndex
+	cursor := token.Cursor
 
-	for i := startIndex; i < len(masters) && !stop; i++ {
+	for i < len(masters) && len(result) < int(pageSize) {
 		master := masters[i]
-		shardAddr := master.Options().Addr
-		cursor := uint64(0)
-		if i == startIndex && token.ShardHash != "" {
-			cursor = token.Cursor
+		remaining := int(pageSize) - len(result)
+
+		var keys []string
+		keys, cursor, err = master.Scan(ctx, cursor, actorScanPattern(atespace), int64(remaining)).Result()
+		if err != nil {
+			return nil, "", fmt.Errorf("while scanning shard %s: %w", master.Options().Addr, err)
 		}
 
-		for {
-			remaining := int(pageSize) - len(result)
-			if remaining <= 0 {
-				if cursor != 0 {
-					nextToken = encodePageToken(listActorsPageToken{
-						ShardHash: hashShardAddr(shardAddr),
-						Cursor:    cursor,
-					})
-				} else if i+1 < len(masters) {
-					nextToken = encodePageToken(listActorsPageToken{
-						ShardHash: hashShardAddr(masters[i+1].Options().Addr),
-						Cursor:    0,
-					})
-				} else {
-					nextToken = ""
-				}
-				stop = true
-				break
-			}
-
-			var keys []string
-			keys, cursor, err = master.Scan(ctx, cursor, actorScanPattern(atespace), int64(remaining)).Result()
+		if len(keys) > 0 {
+			actors, err := s.fetchActors(ctx, master, keys)
 			if err != nil {
-				return nil, "", fmt.Errorf("while scanning shard %s: %w", shardAddr, err)
+				return nil, "", err
 			}
-
-			if len(keys) > 0 {
-				actors, err := s.fetchActors(ctx, master, keys)
-				if err != nil {
-					return nil, "", err
-				}
-				result = append(result, actors...)
-			}
-
-			if cursor == 0 {
-				if i+1 < len(masters) {
-					nextToken = encodePageToken(listActorsPageToken{
-						ShardHash: hashShardAddr(masters[i+1].Options().Addr),
-						Cursor:    0,
-					})
-				} else {
-					nextToken = ""
-				}
-				break
-			}
+			result = append(result, actors...)
 		}
+
+		if cursor == 0 {
+			i++
+		}
+	}
+
+	var nextToken string
+	if i < len(masters) {
+		nextToken = encodePageToken(listActorsPageToken{
+			ShardHash: hashShardAddr(masters[i].Options().Addr),
+			Cursor:    cursor,
+		})
 	}
 
 	return result, nextToken, nil
