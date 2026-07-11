@@ -160,7 +160,7 @@ func (r *taskRuntime) startUser(ctx context.Context) (*gluttonUser, error) {
 		bmetrics.UpdateUsers(userClass, -1)
 		return nil, err
 	}
-	if err := u.create(ctx); err != nil {
+	if err := u.createActor(ctx); err != nil {
 		bmetrics.UpdateUsers(userClass, -1)
 		return nil, err
 	}
@@ -227,7 +227,7 @@ func (u *gluttonUser) ensureAtespace(ctx context.Context) error {
 	})
 }
 
-func (u *gluttonUser) create(ctx context.Context) error {
+func (u *gluttonUser) createActor(ctx context.Context) error {
 	return u.tracedCall(ctx, "CreateActor", func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.CreateActor(callCtx, &ateapipb.CreateActorRequest{
 			Actor: &ateapipb.Actor{

@@ -53,16 +53,16 @@ func ExerciseBenchmark(ctx context.Context, apiStub ateapipb.ControlClient, http
 	if err := u.ensureAtespace(ctx); err != nil {
 		return fmt.Errorf("EnsureAtespace: %w", err)
 	}
-	if err := u.create(ctx); err != nil {
+	if err := u.createActor(ctx); err != nil {
 		return fmt.Errorf("CreateActor: %w", err)
 	}
 	for _, phase := range []string{"cold", "warm"} {
 		if err := u.runIteration(ctx); err != nil {
-			return fmt.Errorf("%s iteration: %w", phase, err)
+			return fmt.Errorf("%s runIteration: %w", phase, err)
 		}
 	}
 	if err := u.delete(ctx); err != nil {
-		return fmt.Errorf("DeleteActor: %w", err)
+		return fmt.Errorf("delete: %w", err)
 	}
 	return nil
 }
