@@ -28,11 +28,11 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// TestSuspendActorWorkflow exercises the suspend workflow end-to-end against
-// seeded actor statuses, covering both the rejected and the idempotent-success
-// paths. The atelet dialer is nil, so any step that unexpectedly reaches it
-// panics.
-func TestSuspendActorWorkflow(t *testing.T) {
+// TestSuspendActorWorkflow_RejectedAndIdempotentPaths covers the two
+// short-circuit paths of the suspend workflow: rejection by
+// MarkSuspendingStep's CheckPrerequisite and the IsComplete idempotent
+// fast-forward.
+func TestSuspendActorWorkflow_RejectedAndIdempotentPaths(t *testing.T) {
 	tests := []struct {
 		name       string
 		seedStatus ateapipb.Actor_Status
@@ -141,10 +141,37 @@ func TestSuspendSteps_CheckPrerequisite(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
 			for _, st := range allActorStatuses {
-				err := tc.step.CheckPrerequisite(ctx, &SuspendInput{ActorName: "id1"}, &SuspendState{Actor: &ateapipb.Actor{Status: st}})
+				// Worker pod fields are populated so CallAteletSuspendStep's
+				// missing-worker crash branch is not taken; this test only
+				// verifies status gating.
+				err := tc.step.CheckPrerequisite(ctx, &SuspendInput{ActorName: "id1"}, &SuspendState{Actor: &ateapipb.Actor{Status: st, AteomPodNamespace: "ns", AteomPodName: "worker-1"}})
 				assertPrerequisiteResult(t, st, err, tc.allowed == nil || tc.allowed[st])
 			}
 		})
+	}
+}
+
+// TestSuspendActor_CrashesWhenSuspendingActorMissingWorkerPod verifies that a
+// SUSPENDING actor with no worker pod recorded is moved to CRASHED by
+// CallAteletSuspendStep's prerequisite check and the suspend fails.
+func TestSuspendActor_CrashesWhenSuspendingActorMissingWorkerPod(t *testing.T) {
+	ctx := context.Background()
+	st, cleanup := storetest.SetupTestStore(t)
+	defer cleanup()
+	w := newTestActorWorkflow(t, st, "ns", "tmpl1")
+
+	seedWorkflowActor(t, ctx, st, "team-a", "id1", "ns", "tmpl1", ateapipb.Actor_STATUS_SUSPENDING)
+
+	if _, err := w.SuspendActor(ctx, "team-a", "id1"); err == nil {
+		t.Fatal("SuspendActor succeeded, want error for SUSPENDING actor with no worker pod")
+	}
+
+	got, err := st.GetActor(ctx, "team-a", "id1")
+	if err != nil {
+		t.Fatalf("GetActor failed: %v", err)
+	}
+	if got.GetStatus() != ateapipb.Actor_STATUS_CRASHED {
+		t.Errorf("stored status = %v, want %v", got.GetStatus(), ateapipb.Actor_STATUS_CRASHED)
 	}
 }
 

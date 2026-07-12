@@ -24,11 +24,10 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// TestPauseActorWorkflow exercises the pause workflow end-to-end against
-// seeded actor statuses, covering both the rejected and the idempotent-success
-// paths. The atelet dialer is nil, so any step that unexpectedly reaches it
-// panics.
-func TestPauseActorWorkflow(t *testing.T) {
+// TestPauseActorWorkflow_RejectedAndIdempotentPaths covers the two
+// short-circuit paths of the pause workflow: rejection by MarkPausingStep's
+// CheckPrerequisite and the IsComplete idempotent fast-forward.
+func TestPauseActorWorkflow_RejectedAndIdempotentPaths(t *testing.T) {
 	tests := []struct {
 		name       string
 		seedStatus ateapipb.Actor_Status
@@ -136,9 +135,38 @@ func TestPauseSteps_CheckPrerequisite(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
 			for _, st := range allActorStatuses {
-				err := tc.step.CheckPrerequisite(ctx, &PauseInput{ActorName: "id1"}, &PauseState{Actor: &ateapipb.Actor{Status: st}})
+				// Worker pod fields are populated so CallAteletPauseStep's
+				// missing-worker crash branch is not taken; this test only
+				// verifies status gating.
+				err := tc.step.CheckPrerequisite(ctx, &PauseInput{ActorName: "id1"}, &PauseState{Actor: &ateapipb.Actor{Status: st, AteomPodNamespace: "ns", AteomPodName: "worker-1"}})
 				assertPrerequisiteResult(t, st, err, tc.allowed == nil || tc.allowed[st])
 			}
 		})
+	}
+}
+
+// TestPauseActor_CrashesWhenPausingActorMissingWorkerPod verifies that a
+// PAUSING actor with no worker pod recorded is moved to CRASHED by
+// CallAteletPauseStep's prerequisite check and the pause fails with
+// FailedPrecondition.
+func TestPauseActor_CrashesWhenPausingActorMissingWorkerPod(t *testing.T) {
+	ctx := context.Background()
+	st, cleanup := storetest.SetupTestStore(t)
+	defer cleanup()
+	w := newTestActorWorkflow(t, st, "ns", "tmpl1")
+
+	seedWorkflowActor(t, ctx, st, "team-a", "id1", "ns", "tmpl1", ateapipb.Actor_STATUS_PAUSING)
+
+	_, err := w.PauseActor(ctx, "team-a", "id1")
+	if got := status.Code(err); got != codes.FailedPrecondition {
+		t.Fatalf("status.Code(err) = %v, want %v (err: %v)", got, codes.FailedPrecondition, err)
+	}
+
+	got, err := st.GetActor(ctx, "team-a", "id1")
+	if err != nil {
+		t.Fatalf("GetActor failed: %v", err)
+	}
+	if got.GetStatus() != ateapipb.Actor_STATUS_CRASHED {
+		t.Errorf("stored status = %v, want %v", got.GetStatus(), ateapipb.Actor_STATUS_CRASHED)
 	}
 }
