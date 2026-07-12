@@ -67,7 +67,7 @@ func TestStatuszEndpoint(t *testing.T) {
 		ExtprocPort:          50051,
 		TemplatesFile:        tmpFile.Name(),
 		MetricsAddr:          "127.0.0.1:0",
-		AteapiCACertsPath:    caPath,
+		AteapiCAFile:         caPath,
 		AteapiClientCertPath: clientCertPath,
 	}
 

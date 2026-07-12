@@ -131,14 +131,15 @@ spec:
         - "--port-xds=18000"
         - "--port-extproc=50051"
         - "--extproc-address=127.0.0.1"
-        - "--ateapi-address=api.ate-system.svc:443"
-        - "--ateapi-client-cert=/run/podidentity.podcert.ate.dev/credential-bundle.pem"
-        - "--ateapi-ca-certs=/run/servicedns-ca.podcert.ate.dev/trust-bundle.pem"
         - "--status-port=4040"
         - "--port-https=8443"
         - "--envoy-cert-path=/run/servicedns.podcert.ate.dev/credential-bundle.pem"
         - "--otlp-collector-address=opentelemetry-collector.gke-managed-otel.svc.cluster.local:4317"
+        # Client auth to ateapi (mtls): verify the serving cert against the
+        # servicedns trust bundle and present the podidentity client cert.
+        - "--ateapi-address=api.ate-system.svc:443"
         - "--ateapi-ca-file=/run/servicedns-ca/trust-bundle.pem"
+        - "--ateapi-client-cert=/run/podidentity.podcert.ate.dev/credential-bundle.pem"
         env:
         - name: POD_NAME
           valueFrom:
@@ -171,7 +172,7 @@ spec:
           mountPath: "/run/podidentity.podcert.ate.dev"
         # Trust bundle used to verify ateapi's servicedns serving cert.
         - name: "servicedns-ca"
-          mountPath: "/run/servicedns-ca.podcert.ate.dev"
+          mountPath: "/run/servicedns-ca"
       - name: envoy
         image: envoyproxy/envoy:v1.30-latest
         command:
