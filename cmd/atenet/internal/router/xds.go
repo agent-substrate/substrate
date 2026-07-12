@@ -80,10 +80,8 @@ type XdsServer struct {
 
 	mu sync.Mutex
 
-	httpsPort   int
-	certPath    string
-	certContent string
-	keyContent  string
+	httpsPort int
+	certPath  string
 
 	otlpHost string
 	otlpPort uint32
@@ -111,13 +109,11 @@ func (x *XdsServer) SetConfig(ingressPort int, extprocPort int, extprocAddr stri
 	x.extprocAddr = extprocAddr
 }
 
-func (x *XdsServer) SetTlsConfig(httpsPort int, certPath string, certContent string, keyContent string) {
+func (x *XdsServer) SetTlsConfig(httpsPort int, certPath string) {
 	x.mu.Lock()
 	defer x.mu.Unlock()
 	x.httpsPort = httpsPort
 	x.certPath = certPath
-	x.certContent = certContent
-	x.keyContent = keyContent
 }
 
 // SetOtlpCollector enables Envoy-side tracing pointed at the OTLP gRPC
@@ -576,30 +572,15 @@ func (x *XdsServer) buildHttpsListener() *listenerv3.Listener {
 }
 
 func (x *XdsServer) buildTlsCertificate() *tlsv3.TlsCertificate {
-	if x.certPath != "" {
-		return &tlsv3.TlsCertificate{
-			CertificateChain: &corev3.DataSource{
-				Specifier: &corev3.DataSource_Filename{
-					Filename: x.certPath,
-				},
-			},
-			PrivateKey: &corev3.DataSource{
-				Specifier: &corev3.DataSource_Filename{
-					Filename: x.certPath, // Assuming combined file
-				},
-			},
-		}
-	}
-
 	return &tlsv3.TlsCertificate{
 		CertificateChain: &corev3.DataSource{
-			Specifier: &corev3.DataSource_InlineString{
-				InlineString: x.certContent,
+			Specifier: &corev3.DataSource_Filename{
+				Filename: x.certPath,
 			},
 		},
 		PrivateKey: &corev3.DataSource{
-			Specifier: &corev3.DataSource_InlineString{
-				InlineString: x.keyContent,
+			Specifier: &corev3.DataSource_Filename{
+				Filename: x.certPath, // Assuming combined file
 			},
 		},
 	}

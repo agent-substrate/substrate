@@ -54,11 +54,11 @@ type routerHealth struct {
 	interval    time.Duration
 	clientset   kubernetes.Interface
 	apiClient   ateapipb.ControlClient
-	cfg         RouterConfig
+	cfg         routerConfig
 	envoyClient *http.Client
 }
 
-func newRouterHealth(interval time.Duration, clientset kubernetes.Interface, apiClient ateapipb.ControlClient, cfg RouterConfig) *routerHealth {
+func newRouterHealth(interval time.Duration, clientset kubernetes.Interface, apiClient ateapipb.ControlClient, cfg routerConfig) *routerHealth {
 	if interval <= 0 {
 		interval = time.Second
 	}

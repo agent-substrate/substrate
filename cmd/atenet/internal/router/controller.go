@@ -28,7 +28,7 @@ import (
 type Controller struct {
 	k8sClient  client.Client
 	clientset  kubernetes.Interface
-	cfg        RouterConfig
+	cfg        routerConfig
 	xdsSrv     *XdsServer
 	extprocSrv *ExtProcServer
 
@@ -39,7 +39,7 @@ type Controller struct {
 func NewController(
 	k8sClient client.Client,
 	clientset kubernetes.Interface,
-	cfg RouterConfig,
+	cfg routerConfig,
 	xdsSrv *XdsServer,
 	extprocSrv *ExtProcServer,
 ) *Controller {

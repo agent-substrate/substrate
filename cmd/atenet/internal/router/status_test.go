@@ -58,17 +58,19 @@ func TestStatuszEndpoint(t *testing.T) {
 	// Run() dials ateapi in mtls mode, which requires real TLS material; generate it.
 	caPath, clientCertPath := writeTestTLSMaterial(t)
 
-	cfg := RouterConfig{
-		Standalone:           true,
-		Namespace:            "default",
-		StatusPort:           httpPort,
-		HttpPort:             8080,
-		XdsPort:              18000,
-		ExtprocPort:          50051,
-		TemplatesFile:        tmpFile.Name(),
-		MetricsAddr:          "127.0.0.1:0",
-		AteapiCAFile:         caPath,
-		AteapiClientCertPath: clientCertPath,
+	cfg := routerConfig{
+		Standalone:    true,
+		Namespace:     "default",
+		StatusPort:    httpPort,
+		HttpPort:      8080,
+		XdsPort:       18000,
+		ExtprocPort:   50051,
+		TemplatesFile: tmpFile.Name(),
+		MetricsAddr:   "127.0.0.1:0",
+		Auth: authConfig{
+			AteapiCAFile:         caPath,
+			AteapiClientCertPath: clientCertPath,
+		},
 	}
 
 	srv, err := NewRouterServer(cfg)

@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package internal
+package router
 
 import (
 	"fmt"
@@ -20,18 +20,17 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/agent-substrate/substrate/cmd/atenet/internal/router"
 	"github.com/agent-substrate/substrate/internal/ateapiauth"
 )
 
 func NewRouterCmd() *cobra.Command {
-	var cfg router.RouterConfig
+	var cfg routerConfig
 
 	cmd := &cobra.Command{
 		Use:   "router",
 		Short: "Router components including xDS server and Envoy ExtProc gateway processing server",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			srv, err := router.NewRouterServer(cfg)
+			srv, err := NewRouterServer(cfg)
 			if err != nil {
 				return fmt.Errorf("failed to create router server: %w", err)
 			}
@@ -56,13 +55,13 @@ func NewRouterCmd() *cobra.Command {
 	cmd.Flags().IntVar(&cfg.StatusPort, "status-port", 4040, "Port to serve /statusz on (set <= 0 to disable serving status)")
 	cmd.Flags().DurationVar(&cfg.HealthInterval, "health-interval", 1*time.Second, "Interval for checking health of dependent services")
 	cmd.Flags().IntVar(&cfg.HttpsPort, "port-https", 8443, "TCP port for HTTPS workload traffic entering through the Envoy Router")
-	cmd.Flags().StringVar(&cfg.EnvoyCertPath, "envoy-cert-path", "", "Path to the Envoy certificate file (if empty, a self-signed cert will be generated for testing)")
+	cmd.Flags().StringVar(&cfg.EnvoyCertPath, "envoy-cert-path", "", "Path to the Envoy certificate file.")
 	cmd.Flags().StringVar(&cfg.OtlpCollectorAddress, "otlp-collector-address", "", "host:port of the OTLP gRPC collector that Envoy reports tracing spans to (empty disables Envoy tracing)")
-	cmd.Flags().StringVar(&cfg.AteapiAuthMode, "ateapi-auth", "mtls", "Client auth to ateapi: mtls|jwt. 'mtls' (default) verifies the server cert (--ateapi-ca-file) and presents the pod-projected client certificate (--ateapi-client-cert). 'jwt' verifies the server cert and sends a Bearer SA token.")
-	cmd.Flags().StringVar(&cfg.AteapiCAFile, "ateapi-ca-file", "", "PEM file with CAs trusted to verify the ateapi server cert. Required.")
-	cmd.Flags().StringVar(&cfg.AteapiClientCertPath, "ateapi-client-cert", "", "Credential bundle presented as the client certificate when dialing ateapi. Required for mtls.")
-	cmd.Flags().StringVar(&cfg.AteapiServerName, "ateapi-server-name", "", "SNI / hostname expected on the ateapi server cert. Optional.")
-	cmd.Flags().StringVar(&cfg.AteapiTokenFile, "ateapi-token-file", ateapiauth.DefaultServiceAccountTokenFile, "Projected SA token file used as Bearer credential. Required for jwt.")
+	cmd.Flags().StringVar(&cfg.Auth.AteapiAuthMode, "ateapi-auth", "mtls", "Client auth to ateapi: mtls|jwt. 'mtls' (default) verifies the server cert (--ateapi-ca-file) and presents the pod-projected client certificate (--ateapi-client-cert). 'jwt' verifies the server cert and sends a Bearer SA token.")
+	cmd.Flags().StringVar(&cfg.Auth.AteapiCAFile, "ateapi-ca-file", "", "PEM file with CAs trusted to verify the ateapi server cert. Required.")
+	cmd.Flags().StringVar(&cfg.Auth.AteapiClientCertPath, "ateapi-client-cert", "", "Credential bundle presented as the client certificate when dialing ateapi. Required for mtls.")
+	cmd.Flags().StringVar(&cfg.Auth.AteapiServerName, "ateapi-server-name", "", "SNI / hostname expected on the ateapi server cert. Optional.")
+	cmd.Flags().StringVar(&cfg.Auth.AteapiTokenFile, "ateapi-token-file", ateapiauth.DefaultServiceAccountTokenFile, "Projected SA token file used as Bearer credential. Required for jwt.")
 
 	return cmd
 }

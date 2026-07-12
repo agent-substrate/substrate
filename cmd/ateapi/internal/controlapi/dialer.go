@@ -173,9 +173,6 @@ func verifyAteletServerCert(roots *x509.CertPool, expectedPodUID string) func(tl
 				}
 			}
 		}
-		if foundPodUID.S == "" {
-			return fmt.Errorf("certificate is missing oidPodUID extension")
-		}
 		if foundPodUID.S != expectedPodUID {
 			return fmt.Errorf("pod UID is %q does not match expected %q", foundPodUID.S, expectedPodUID)
 		}

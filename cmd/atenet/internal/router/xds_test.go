@@ -141,7 +141,7 @@ func TestXdsServer_UpdateSnapshot(t *testing.T) {
 func TestXdsServer_UpdateSnapshot_WithHttps(t *testing.T) {
 	server := NewXdsServer(18000)
 	server.SetConfig(8085, 50053, "127.0.0.1")
-	server.SetTlsConfig(8443, "", "dummy-cert", "dummy-key")
+	server.SetTlsConfig(8443, "")
 
 	err := server.UpdateSnapshot()
 	if err != nil {

@@ -244,9 +244,9 @@ func logFlagValues(ctx context.Context) {
 		slog.String("session-id-jwt-pool", *sessionIDJWTPoolFile),
 		slog.String("session-id-ca-pool", *sessionIDCAPoolFile),
 		slog.String("workerpool-ca-certs", *workerpoolCACerts),
+		slog.String("auth-mode", *authMode),
 		slog.String("atelet-client-cred-bundle", *ateletClientCredBundle),
 		slog.String("atelet-ca-certs", *ateletCACerts),
-		slog.String("auth-mode", *authMode),
 	)
 }
 
