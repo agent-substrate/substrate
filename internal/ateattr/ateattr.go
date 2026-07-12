@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package ateattr projects an Actor onto substrate's ate.* identity attributes.
+// Package ateattr projects an Actor onto substrate's ate.* span attributes.
 // Identity is a span-level subject attribute (the producer is the substrate
 // component, the actor is the subject), so it belongs on spans rather than the
 // resource, and uses substrate's own ate.* namespace rather than service.*.
@@ -26,27 +26,35 @@ import (
 
 // Dotted ate.* matches the metric-instrument naming (atenet.*, atelet.*), not the
 // ate.dev/ slash form used for k8s labels and stdout log fields.
+// name vs uid mirror the k8s object model that ResourceMetadata follows:
+// ate.actor.name is the atespace-scoped addressable name, ate.actor.uid is the
+// server-assigned globally-unique key. There is deliberately no ate.actor.id
+// (an ambiguous term when both a name and a uid exist).
 const (
 	AtespaceKey               = attribute.Key("ate.atespace")
-	ActorIDKey                = attribute.Key("ate.actor.id")
+	ActorNameKey              = attribute.Key("ate.actor.name")
+	ActorUIDKey               = attribute.Key("ate.actor.uid")
 	ActorTemplateNameKey      = attribute.Key("ate.actor.template.name")
 	ActorTemplateNamespaceKey = attribute.Key("ate.actor.template.namespace")
 	ActorVersionKey           = attribute.Key("ate.actor.version")
 )
 
-// ActorRefIdentity returns the subset knowable before the Actor record resolves.
-func ActorRefIdentity(atespace, actorID string) []attribute.KeyValue {
+// ActorRefAttributes returns the subset knowable before the Actor record
+// resolves: only the (atespace, name) the request addresses. The uid and version
+// are server-assigned and unknown until the record loads, so they are omitted.
+func ActorRefAttributes(atespace, name string) []attribute.KeyValue {
 	return []attribute.KeyValue{
 		AtespaceKey.String(atespace),
-		ActorIDKey.String(actorID),
+		ActorNameKey.String(name),
 	}
 }
 
-// ActorIdentity is nil-safe; a nil Actor yields zero-valued attributes.
-func ActorIdentity(a *ateapipb.Actor) []attribute.KeyValue {
+// ActorAttributes is nil-safe; a nil Actor yields zero-valued attributes.
+func ActorAttributes(a *ateapipb.Actor) []attribute.KeyValue {
 	return []attribute.KeyValue{
 		AtespaceKey.String(a.GetMetadata().GetAtespace()),
-		ActorIDKey.String(a.GetMetadata().GetName()),
+		ActorNameKey.String(a.GetMetadata().GetName()),
+		ActorUIDKey.String(a.GetMetadata().GetUid()),
 		ActorTemplateNameKey.String(a.GetActorTemplateName()),
 		ActorTemplateNamespaceKey.String(a.GetActorTemplateNamespace()),
 		ActorVersionKey.Int64(a.GetMetadata().GetVersion()),

@@ -32,11 +32,10 @@ func TestCreateActor_StampsFullSpanIdentity(t *testing.T) {
 	defer tc.cleanup()
 	createTemplate(t, tc, ns)
 
-	sr := installSpanRecorder(t)
-	attrs := rootSpanAttrs(t, sr, func(ctx context.Context) {
+	attrs := recordRootSpanAttrs(t, func(ctx context.Context) {
 		if _, err := tc.service.CreateActor(ctx, &ateapipb.CreateActorRequest{
 			Actor: &ateapipb.Actor{
-				Metadata:               &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "id1"},
+				Metadata:               &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: testActorID},
 				ActorTemplateNamespace: ns,
 				ActorTemplateName:      "tmpl1",
 			},
@@ -46,9 +45,14 @@ func TestCreateActor_StampsFullSpanIdentity(t *testing.T) {
 	})
 
 	assertSpanStr(t, attrs, ateattr.AtespaceKey, testAtespace)
-	assertSpanStr(t, attrs, ateattr.ActorIDKey, "id1")
+	assertSpanStr(t, attrs, ateattr.ActorNameKey, testActorID)
 	assertSpanStr(t, attrs, ateattr.ActorTemplateNameKey, "tmpl1")
 	assertSpanStr(t, attrs, ateattr.ActorTemplateNamespaceKey, ns)
+	// uid is server-assigned on create, so assert it is present and non-empty
+	// rather than a fixed value.
+	if v, ok := attrs[ateattr.ActorUIDKey]; !ok || v.Type() != attribute.STRING || v.AsString() == "" {
+		t.Errorf("%s = %v, want non-empty server-assigned uid", ateattr.ActorUIDKey, v.Emit())
+	}
 	if v, ok := attrs[ateattr.ActorVersionKey]; !ok || v.Type() != attribute.INT64 || v.AsInt64() != 1 {
 		t.Errorf("%s = %v, want int64 1", ateattr.ActorVersionKey, v.Emit())
 	}

@@ -18,35 +18,35 @@ import (
 	"context"
 	"testing"
 
+	"go.opentelemetry.io/otel/attribute"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
-// Delete addresses the actor by ref (atespace + id) and does not resolve the
-// template/version, so only the ref identity is stamped.
-func TestDeleteActor_StampsRefSpanIdentity(t *testing.T) {
-	ns := namespaceForTest("ns-span-delete")
+// Pause stamps the ref identity before resolving the Actor record, so a failed
+// lookup still carries who/where; it must not invent template/version, which are
+// known only once the record resolves (and stamped on success).
+func TestPauseActor_FailedLookupStampsRefIdentityOnly(t *testing.T) {
+	ns := namespaceForTest("ns-span-pause-err")
 	tc := setupTest(t, ns)
 	defer tc.cleanup()
-	createTemplate(t, tc, ns)
-	if _, err := tc.service.CreateActor(context.Background(), &ateapipb.CreateActorRequest{
-		Actor: &ateapipb.Actor{
-			Metadata:               &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: testActorID},
-			ActorTemplateNamespace: ns,
-			ActorTemplateName:      "tmpl1",
-		},
-	}); err != nil {
-		t.Fatalf("seed CreateActor: %v", err)
-	}
 
 	attrs := recordRootSpanAttrs(t, func(ctx context.Context) {
-		if _, err := tc.service.DeleteActor(ctx, &ateapipb.DeleteActorRequest{
+		if _, err := tc.service.PauseActor(ctx, &ateapipb.PauseActorRequest{
 			Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: testActorID},
-		}); err != nil {
-			t.Fatalf("DeleteActor: %v", err)
+		}); status.Code(err) != codes.NotFound {
+			t.Fatalf("PauseActor(missing) error = %v, want code NotFound", err)
 		}
 	})
 
 	assertSpanStr(t, attrs, ateattr.AtespaceKey, testAtespace)
 	assertSpanStr(t, attrs, ateattr.ActorNameKey, testActorID)
+	for _, k := range []attribute.Key{ateattr.ActorUIDKey, ateattr.ActorTemplateNameKey, ateattr.ActorTemplateNamespaceKey, ateattr.ActorVersionKey} {
+		if _, ok := attrs[k]; ok {
+			t.Errorf("unexpected %s on failed-pause span", k)
+		}
+	}
 }

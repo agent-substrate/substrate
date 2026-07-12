@@ -59,7 +59,7 @@ func assertAttrs(t *testing.T, got map[attribute.Key]attribute.Value, want map[a
 	}
 }
 
-func TestActorIdentity(t *testing.T) {
+func TestActorAttributes(t *testing.T) {
 	tests := []struct {
 		name  string
 		actor *ateapipb.Actor
@@ -68,13 +68,14 @@ func TestActorIdentity(t *testing.T) {
 		{
 			name: "full actor",
 			actor: &ateapipb.Actor{
-				Metadata:               &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "support-agent-42", Version: 7},
+				Metadata:               &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "support-agent-42", Uid: "uid-abc", Version: 7},
 				ActorTemplateNamespace: "ate-agents",
 				ActorTemplateName:      "support-agent",
 			},
 			want: map[attribute.Key]any{
 				AtespaceKey:               "team-a",
-				ActorIDKey:                "support-agent-42",
+				ActorNameKey:              "support-agent-42",
+				ActorUIDKey:               "uid-abc",
 				ActorTemplateNameKey:      "support-agent",
 				ActorTemplateNamespaceKey: "ate-agents",
 				ActorVersionKey:           int64(7),
@@ -85,7 +86,8 @@ func TestActorIdentity(t *testing.T) {
 			actor: nil,
 			want: map[attribute.Key]any{
 				AtespaceKey:               "",
-				ActorIDKey:                "",
+				ActorNameKey:              "",
+				ActorUIDKey:               "",
 				ActorTemplateNameKey:      "",
 				ActorTemplateNamespaceKey: "",
 				ActorVersionKey:           int64(0),
@@ -95,41 +97,41 @@ func TestActorIdentity(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assertAttrs(t, toMap(ActorIdentity(tt.actor)), tt.want)
+			assertAttrs(t, toMap(ActorAttributes(tt.actor)), tt.want)
 		})
 	}
 }
 
-func TestActorRefIdentity(t *testing.T) {
+func TestActorRefAttributes(t *testing.T) {
 	tests := []struct {
-		name     string
-		atespace string
-		actorID  string
-		want     map[attribute.Key]any
+		name      string
+		atespace  string
+		actorName string
+		want      map[attribute.Key]any
 	}{
 		{
-			name:     "atespace and actor id only",
-			atespace: "team-a",
-			actorID:  "support-agent-42",
+			name:      "atespace and actor name only",
+			atespace:  "team-a",
+			actorName: "support-agent-42",
 			want: map[attribute.Key]any{
-				AtespaceKey: "team-a",
-				ActorIDKey:  "support-agent-42",
+				AtespaceKey:  "team-a",
+				ActorNameKey: "support-agent-42",
 			},
 		},
 		{
-			name:     "empty values still produce both keys",
-			atespace: "",
-			actorID:  "",
+			name:      "empty values still produce both keys",
+			atespace:  "",
+			actorName: "",
 			want: map[attribute.Key]any{
-				AtespaceKey: "",
-				ActorIDKey:  "",
+				AtespaceKey:  "",
+				ActorNameKey: "",
 			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assertAttrs(t, toMap(ActorRefIdentity(tt.atespace, tt.actorID)), tt.want)
+			assertAttrs(t, toMap(ActorRefAttributes(tt.atespace, tt.actorName)), tt.want)
 		})
 	}
 }

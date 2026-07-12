@@ -29,8 +29,7 @@ func TestResumeActor_ErrorStillStampsRefSpanIdentity(t *testing.T) {
 	tc := setupTest(t, ns)
 	defer tc.cleanup()
 
-	sr := installSpanRecorder(t)
-	attrs := rootSpanAttrs(t, sr, func(ctx context.Context) {
+	attrs := recordRootSpanAttrs(t, func(ctx context.Context) {
 		if _, err := tc.service.ResumeActor(ctx, &ateapipb.ResumeActorRequest{
 			Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "missing"},
 		}); err == nil {
@@ -39,5 +38,5 @@ func TestResumeActor_ErrorStillStampsRefSpanIdentity(t *testing.T) {
 	})
 
 	assertSpanStr(t, attrs, ateattr.AtespaceKey, testAtespace)
-	assertSpanStr(t, attrs, ateattr.ActorIDKey, "missing")
+	assertSpanStr(t, attrs, ateattr.ActorNameKey, "missing")
 }

@@ -26,11 +26,11 @@ import (
 // setSpanActorIdentity annotates the RPC's server span (from ctx) with the
 // actor's full identity. A no-op when ctx carries no recording span.
 func setSpanActorIdentity(ctx context.Context, a *ateapipb.Actor) {
-	trace.SpanFromContext(ctx).SetAttributes(ateattr.ActorIdentity(a)...)
+	trace.SpanFromContext(ctx).SetAttributes(ateattr.ActorAttributes(a)...)
 }
 
 // setSpanActorRefIdentity is setSpanActorIdentity for the identity subset known
 // before the Actor record resolves, so a failed lookup still carries who/where.
-func setSpanActorRefIdentity(ctx context.Context, atespace, actorID string) {
-	trace.SpanFromContext(ctx).SetAttributes(ateattr.ActorRefIdentity(atespace, actorID)...)
+func setSpanActorRefIdentity(ctx context.Context, atespace, name string) {
+	trace.SpanFromContext(ctx).SetAttributes(ateattr.ActorRefAttributes(atespace, name)...)
 }

@@ -63,7 +63,10 @@ var (
 	fakeAtelet = &FakeAteletServer{}
 )
 
-const testAtespace = "test-atespace"
+const (
+	testAtespace = "test-atespace"
+	testActorID  = "id1"
+)
 
 var (
 	ignoreUID        = protocmp.IgnoreFields(&ateapipb.ResourceMetadata{}, "uid")
