@@ -18,6 +18,8 @@ import (
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	extproc "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 	envoy_type "github.com/envoyproxy/go-control-plane/envoy/type/v3"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
 )
 
 // reqError carries an HTTP-mappable status code and a client-safe message.
@@ -41,6 +43,22 @@ func addAuthorityMutation(auth string, mut *extproc.HeaderMutation) {
 			},
 		},
 	)
+}
+
+// injectTraceContext injects the trace context from ctx into the header mutation,
+// so that Envoy forwards traceparent/tracestate to the upstream worker and spans
+// are connected across the full request path.
+func injectTraceContext(ctx context.Context, mutation *extproc.HeaderMutation) {
+	headers := make(map[string]string)
+	otel.GetTextMapPropagator().Inject(ctx, propagation.MapCarrier(headers))
+	for k, v := range headers {
+		mutation.SetHeaders = append(mutation.SetHeaders, &corev3.HeaderValueOption{
+			Header: &corev3.HeaderValue{
+				Key:   k,
+				Value: v,
+			},
+		})
+	}
 }
 
 func immediateResponse(statusCode envoy_type.StatusCode, message string) *extproc.ProcessingResponse {

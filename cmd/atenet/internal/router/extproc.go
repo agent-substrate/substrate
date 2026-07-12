@@ -147,6 +147,10 @@ func (s *ExtProcServer) handleRequestHeaders(
 		// Host is invalid, respond with 404.
 		return nil, metadata, "", "", "", invalidHostErr(metadata.host, err)
 	}
+	span.SetAttributes(
+		attribute.String("ate.atespace", atespace),
+		attribute.String("ate.actor_name", actorName),
+	)
 
 	slog.InfoContext(ctx, "ResumeActor", slog.String("atespace", atespace), slog.String("actor", actorName))
 	actor, err := s.resumer.ResumeActor(ctx, atespace, actorName)
@@ -176,9 +180,17 @@ func (s *ExtProcServer) handleRequestHeaders(
 
 	slog.InfoContext(ctx, "Route ok", slog.String("actor", actorName), slog.String("targetAddr", targetAddr))
 
-	// Route by rewriting the :authority header.
+	span.SetAttributes(
+		attribute.String("ate.target_addr", targetAddr),
+		attribute.String("ate.actor_template_namespace", tmplNs),
+		attribute.String("ate.actor_template_name", tmplName),
+	)
+
+	// Route by rewriting the :authority header and injecting trace context
+	// so the upstream worker receives the same trace as the ingress path.
 	mutation := &extprocv3.HeaderMutation{}
 	addAuthorityMutation(targetAddr, mutation)
+	injectTraceContext(ctx, mutation)
 
 	return &extprocv3.HeadersResponse{
 		Response: &extprocv3.CommonResponse{
@@ -192,9 +204,9 @@ func (s *ExtProcServer) recordRouteDuration(ctx context.Context, d time.Duration
 		return
 	}
 	s.routeDuration.Record(ctx, d.Seconds(), metric.WithAttributes(
-		attribute.String("actor_template_namespace", tmplNs),
-		attribute.String("actor_template_name", tmplName),
-		attribute.String("outcome", outcome),
+		attribute.String("ate.actor_template_namespace", tmplNs),
+		attribute.String("ate.actor_template_name", tmplName),
+		attribute.String("ate.outcome", outcome),
 	))
 }
 

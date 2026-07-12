@@ -230,17 +230,19 @@ func TestExtProcHeadersEvaluation(t *testing.T) {
 			}
 
 			mutation := res.Response.GetHeaderMutation()
-			if len(mutation.GetSetHeaders()) != 1 {
-				t.Fatalf("expected exactly one Header option set, found: %v", mutation.GetSetHeaders())
+			headers := mutation.GetSetHeaders()
+			var found bool
+			for _, h := range headers {
+				if strings.ToLower(h.Header.Key) == ":authority" {
+					found = true
+					if string(h.Header.RawValue) != tc.expectedTarget {
+						t.Errorf("invalid destination mapping found: %s, expected: %s", h.Header.RawValue, tc.expectedTarget)
+					}
+					break
+				}
 			}
-
-			headerOption := mutation.GetSetHeaders()[0]
-			if strings.ToLower(headerOption.Header.Key) != ":authority" {
-				t.Errorf("invalid resulting dynamic parameter key: %s", headerOption.Header.Key)
-			}
-
-			if string(headerOption.Header.RawValue) != tc.expectedTarget {
-				t.Errorf("invalid destination mapping found: %s, expected: %s", headerOption.Header.RawValue, tc.expectedTarget)
+			if !found {
+				t.Errorf(":authority header not found in mutation, got: %v", headers)
 			}
 
 			// Confirm that query logs recorded metric trace details

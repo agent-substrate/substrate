@@ -46,8 +46,8 @@ func NewActorResumer(apiClient ateapipb.ControlClient) *ActorResumer {
 func (r *ActorResumer) ResumeActor(ctx context.Context, atespace, actorName string) (*ateapipb.Actor, error) {
 	ctx, span := otel.Tracer(routerServiceName).Start(ctx, "ResumeActor",
 		trace.WithAttributes(
-			attribute.String("atespace", atespace),
-			attribute.String("actor", actorName),
+			attribute.String("ate.atespace", atespace),
+			attribute.String("ate.actor_name", actorName),
 		))
 	defer span.End()
 
@@ -57,6 +57,9 @@ func (r *ActorResumer) ResumeActor(ctx context.Context, atespace, actorName stri
 		// resume operation continues running for Caller 2 and Caller 3 without failing.
 		bgCtx, bgCancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer bgCancel()
+		// Propagate the caller's span context so the gRPC spans are children
+		// of ResumeActor rather than appearing as a separate trace.
+		bgCtx = trace.ContextWithSpanContext(bgCtx, trace.SpanContextFromContext(ctx))
 
 		backoff := wait.Backoff{
 			Steps:    7,
