@@ -28,13 +28,13 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/metric"
 	"k8s.io/apimachinery/pkg/util/wait"
 )
 
 // Cache maintains an in-memory snapshot of all workers.
-//
-// TODO: add metrics — at minimum a gauge for worker count, a counter for
-// resync events, and a counter for failed PUBLISH operations (in ateredis).
 type Cache struct {
 	store          store.Interface
 	relistInterval time.Duration
@@ -43,17 +43,53 @@ type Cache struct {
 	workers map[string]*ateapipb.Worker
 
 	ready atomic.Bool
+
+	metricWorkerCount      metric.Int64Gauge
+	metricNotReadyDuration metric.Float64Counter
+	metricResyncs          metric.Int64Counter
+	metricRelists          metric.Int64Counter
 }
 
 // New creates a Cache backed by a given store. relistInterval controls how
 // often the cache performs a full ListWorkers to recover from state drifts
 // caused by missing WorkerWatch events.
-func New(store store.Interface, relistInterval time.Duration) *Cache {
-	return &Cache{
-		store:          store,
+func New(s store.Interface, relistInterval time.Duration) (*Cache, error) {
+	c := &Cache{
+		store:          s,
 		relistInterval: relistInterval,
 		workers:        make(map[string]*ateapipb.Worker),
 	}
+	m := otel.Meter("workercache")
+	var err error
+	c.metricWorkerCount, err = m.Int64Gauge(
+		"cache.worker.count",
+		metric.WithUnit("{worker}"),
+		metric.WithDescription("Current number of workers in the cache."))
+	if err != nil {
+		return nil, fmt.Errorf("create cache.worker.count gauge failed: %w", err)
+	}
+	c.metricNotReadyDuration, err = m.Float64Counter(
+		"cache.not_ready.duration",
+		metric.WithUnit("s"),
+		metric.WithDescription("Total time the worker cache spent not ready, between a watch disconnect and a successful resync."))
+	if err != nil {
+		return nil, fmt.Errorf("create cache.not_ready.duration counter failed: %w", err)
+	}
+	c.metricResyncs, err = m.Int64Counter(
+		"cache.resyncs",
+		metric.WithUnit("{resync}"),
+		metric.WithDescription("Total full resyncs triggered by watch disconnects."))
+	if err != nil {
+		return nil, fmt.Errorf("create cache.resyncs counter failed: %w", err)
+	}
+	c.metricRelists, err = m.Int64Counter(
+		"cache.relists",
+		metric.WithUnit("{relist}"),
+		metric.WithDescription("Total relists (initial, resync, and periodic)."))
+	if err != nil {
+		return nil, fmt.Errorf("create cache.relists counter failed: %w", err)
+	}
+	return c, nil
 }
 
 // Start syncs the cache synchronously, then spawns a background goroutine
@@ -101,6 +137,7 @@ func (c *Cache) sync(ctx context.Context) (*store.WorkerWatch, error) {
 func (c *Cache) relist(ctx context.Context) error {
 	workers, err := c.store.ListWorkers(ctx)
 	if err != nil {
+		c.metricRelists.Add(ctx, 1, metric.WithAttributes(attribute.String("error.type", "_OTHER")))
 		return fmt.Errorf("ListWorkers: %w", err)
 	}
 	newMap := make(map[string]*ateapipb.Worker, len(workers))
@@ -109,8 +146,11 @@ func (c *Cache) relist(ctx context.Context) error {
 	}
 	c.mu.Lock()
 	c.workers = newMap
+	count := int64(len(newMap))
 	c.mu.Unlock()
-	slog.InfoContext(ctx, "worker cache synced", slog.Int("count", len(newMap)))
+	c.metricWorkerCount.Record(ctx, count)
+	c.metricRelists.Add(ctx, 1)
+	slog.InfoContext(ctx, "worker cache synced", slog.Int("count", int(count)))
 	return nil
 }
 
@@ -122,6 +162,7 @@ func (c *Cache) watchEvents(ctx context.Context, watch *store.WorkerWatch) {
 		case event, ok := <-watch.Events:
 			if !ok {
 				c.ready.Store(false)
+				notReadySince := time.Now()
 				watch.Close()
 				if ctx.Err() != nil {
 					return
@@ -132,8 +173,9 @@ func (c *Cache) watchEvents(ctx context.Context, watch *store.WorkerWatch) {
 					return // context cancelled
 				}
 				c.ready.Store(true)
+				c.metricNotReadyDuration.Add(ctx, time.Since(notReadySince).Seconds())
 			} else {
-				c.applyEvent(event)
+				c.applyEvent(ctx, event)
 			}
 		case <-ticker.C:
 			if err := c.relist(ctx); err != nil {
@@ -148,6 +190,7 @@ func (c *Cache) watchEvents(ctx context.Context, watch *store.WorkerWatch) {
 }
 
 func (c *Cache) resync(ctx context.Context) *store.WorkerWatch {
+	c.metricResyncs.Add(ctx, 1)
 	backoff := wait.Backoff{
 		Duration: time.Second,
 		Factor:   2.0,
@@ -167,10 +210,9 @@ func (c *Cache) resync(ctx context.Context) *store.WorkerWatch {
 	return watch
 }
 
-func (c *Cache) applyEvent(event store.WorkerEvent) {
+func (c *Cache) applyEvent(ctx context.Context, event store.WorkerEvent) {
 	key := workerKey(event.Worker)
 	c.mu.Lock()
-	defer c.mu.Unlock()
 	switch event.Type {
 	case store.WorkerEventDeleted:
 		delete(c.workers, key)
@@ -180,6 +222,9 @@ func (c *Cache) applyEvent(event store.WorkerEvent) {
 			c.workers[key] = event.Worker
 		}
 	}
+	count := int64(len(c.workers))
+	c.mu.Unlock()
+	c.metricWorkerCount.Record(ctx, count)
 }
 
 func workerKey(w *ateapipb.Worker) string {
