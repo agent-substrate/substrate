@@ -1253,7 +1253,11 @@ type RestoreRequest struct {
 	//	*RestoreRequest_ExternalConfig
 	Config isRestoreRequest_Config `protobuf_oneof:"config"`
 	// What content to restore from the checkpoint.
-	Scope         SnapshotScope `protobuf:"varint,10,opt,name=scope,proto3,enum=atelet.SnapshotScope" json:"scope,omitempty"`
+	Scope SnapshotScope `protobuf:"varint,10,opt,name=scope,proto3,enum=atelet.SnapshotScope" json:"scope,omitempty"`
+	// Which snapshot the restore reads from ("golden" or "latest"), decided by
+	// ateapi. Carried only so atelet can label its restore-duration metric; boots
+	// use Run, not Restore, so "boot" never appears here.
+	SnapshotKind  string `protobuf:"bytes,11,opt,name=snapshot_kind,json=snapshotKind,proto3" json:"snapshot_kind,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1367,6 +1371,13 @@ func (x *RestoreRequest) GetScope() SnapshotScope {
 		return x.Scope
 	}
 	return SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED
+}
+
+func (x *RestoreRequest) GetSnapshotKind() string {
+	if x != nil {
+		return x.SnapshotKind
+	}
+	return ""
 }
 
 type isRestoreRequest_Config interface {
@@ -1504,7 +1515,7 @@ const file_atelet_proto_rawDesc = "" +
 	"\x05scope\x18\n" +
 	" \x01(\x0e2\x15.atelet.SnapshotScopeR\x05scopeB\b\n" +
 	"\x06config\"\x14\n" +
-	"\x12CheckpointResponse\"\x8b\x04\n" +
+	"\x12CheckpointResponse\"\xb0\x04\n" +
 	"\x0eRestoreRequest\x12(\n" +
 	"\x10target_ateom_uid\x18\x01 \x01(\tR\x0etargetAteomUid\x12\x1a\n" +
 	"\batespace\x18\x02 \x01(\tR\batespace\x12\x1d\n" +
@@ -1517,7 +1528,8 @@ const file_atelet_proto_rawDesc = "" +
 	"\flocal_config\x18\b \x01(\v2$.atelet.LocalCheckpointConfigurationH\x00R\vlocalConfig\x12R\n" +
 	"\x0fexternal_config\x18\t \x01(\v2'.atelet.ExternalCheckpointConfigurationH\x00R\x0eexternalConfig\x12+\n" +
 	"\x05scope\x18\n" +
-	" \x01(\x0e2\x15.atelet.SnapshotScopeR\x05scopeB\b\n" +
+	" \x01(\x0e2\x15.atelet.SnapshotScopeR\x05scope\x12#\n" +
+	"\rsnapshot_kind\x18\v \x01(\tR\fsnapshotKindB\b\n" +
 	"\x06config\"\x11\n" +
 	"\x0fRestoreResponse*F\n" +
 	"\n" +

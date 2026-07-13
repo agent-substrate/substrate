@@ -326,3 +326,41 @@ func expectedDeploymentApplyConfig(mutatePodSpec func(*corev1ac.PodSpecApplyConf
 				WithLabels(map[string]string{"ate.dev/worker-pool": wp.Name}).
 				WithSpec(podSpecAC)))
 }
+
+func TestBuildDeploymentApplyConfig_OTLPEndpointPropagation(t *testing.T) {
+	const endpoint = "http://opentelemetry-collector.otel-system.svc:4317"
+	tests := []struct {
+		name        string
+		envValue    string
+		wantPresent bool
+	}{
+		{name: "endpoint set is propagated to the ateom pod", envValue: endpoint, wantPresent: true},
+		{name: "endpoint unset leaves the ateom pod on its default", envValue: "", wantPresent: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", tt.envValue)
+			dep := buildDeploymentApplyConfig(testWorkerPoolApplyConfig(nil))
+			ctr := dep.Spec.Template.Spec.Containers[0]
+			got, ok := findEnvValue(ctr.Env, "OTEL_EXPORTER_OTLP_ENDPOINT")
+			if ok != tt.wantPresent {
+				t.Fatalf("OTEL_EXPORTER_OTLP_ENDPOINT present = %v, want %v", ok, tt.wantPresent)
+			}
+			if tt.wantPresent && got != endpoint {
+				t.Errorf("OTEL_EXPORTER_OTLP_ENDPOINT = %q, want %q", got, endpoint)
+			}
+		})
+	}
+}
+
+func findEnvValue(env []corev1ac.EnvVarApplyConfiguration, name string) (string, bool) {
+	for _, e := range env {
+		if e.Name != nil && *e.Name == name {
+			if e.Value != nil {
+				return *e.Value, true
+			}
+			return "", true
+		}
+	}
+	return "", false
+}

@@ -103,6 +103,13 @@ func do(ctx context.Context) error {
 	}
 	defer serverboot.ShutdownProvider("TracerProvider", tp.Shutdown)
 
+	// Push-only: no StartMetricsServer, worker pods expose no scrape endpoint.
+	mp, err := serverboot.InitMetrics(ctx, "ateom-gvisor")
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to initialize metrics", err)
+	}
+	defer serverboot.ShutdownProvider("MeterProvider", mp.Shutdown)
+
 	// Create ateom dir
 	ateomDir := ateompath.AteomPath(*podUID)
 	if err := os.MkdirAll(ateomDir, 0o700); err != nil {

@@ -56,4 +56,20 @@ patches:
               env:
               - name: OTEL_EXPORTER_OTLP_ENDPOINT
                 value: http://opentelemetry-collector.otel-system.svc:4317
+  # ate-controller pushes its own telemetry here and propagates this endpoint to
+  # the ateom worker pods it creates (see buildDeploymentApplyConfig).
+  - patch: |-
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: ate-controller
+        namespace: ate-system
+      spec:
+        template:
+          spec:
+            containers:
+            - name: ate-controller
+              env:
+              - name: OTEL_EXPORTER_OTLP_ENDPOINT
+                value: http://opentelemetry-collector.otel-system.svc:4317
 

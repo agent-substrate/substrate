@@ -31,6 +31,7 @@ import (
 	"cloud.google.com/go/storage"
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/ategcs"
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/memorypullcache"
+	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/ateerrors"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/ateompath"
@@ -97,6 +98,12 @@ func main() {
 
 	if err := initSnapshotSizeMetric(); err != nil {
 		serverboot.Fatal(ctx, "Failed to create snapshot size metric", err)
+	}
+	if err := initRestoreDurationMetric(); err != nil {
+		serverboot.Fatal(ctx, "Failed to create restore duration metric", err)
+	}
+	if err := initCheckpointDurationMetric(); err != nil {
+		serverboot.Fatal(ctx, "Failed to create checkpoint duration metric", err)
 	}
 
 	go serverboot.StartMetricsServer(ctx, serverboot.MetricsServerOptions{Addr: *metricsListenAddr})
@@ -335,6 +342,8 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 	// Tell ateom to take the checkpoint and delete containers. ateom reports the
 	// exact files it wrote so we ship precisely that set (gVisor's image files,
 	// cloud-hypervisor's snapshot set, ...) rather than a hardcoded list.
+	// The freeze+write is opaque at this layer; splitting it needs ateom timing.
+	tCheckpoint := time.Now()
 	resp, err := client.CheckpointWorkload(ctx, &ateompb.CheckpointWorkloadRequest{
 		Atespace:               atespace,
 		ActorName:              actorName,
@@ -350,11 +359,13 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 		// in the metadata if the error is not retriable.
 		return nil, fmt.Errorf("while calling ateom.CheckpointWorkload: %w", err)
 	}
+	recordCheckpointPhase(ctx, ateattr.SnapshotPhaseCheckpoint, time.Since(tCheckpoint), req.GetActorTemplateNamespace(), req.GetActorTemplateName(), sandboxRec.SandboxClass)
 	sandboxRec.SnapshotFiles = resp.GetSnapshotFiles()
 	if len(sandboxRec.SnapshotFiles) == 0 {
 		return nil, ateerrors.NewGRPCError(ctx, codes.DataLoss, ateerrors.ReasonInvalidCheckpointResult, ateerrors.ActorCrashedMetadata(), errors.New("ateom reported no snapshot files for checkpoint"))
 	}
 
+	tUpload := time.Now()
 	switch req.GetType() {
 	case ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL:
 		// TODO(#362): Because we do not cache the external snapshot files when upload fails, we have to mark the Actor as CRASHED.
@@ -368,6 +379,7 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 	default:
 		return nil, fmt.Errorf("unexpected checkpoint type: %v", req.GetType())
 	}
+	recordCheckpointPhase(ctx, ateattr.SnapshotPhaseUpload, time.Since(tUpload), req.GetActorTemplateNamespace(), req.GetActorTemplateName(), sandboxRec.SandboxClass)
 
 	// Note: we do not crash the actor if resetting the directory fails.
 	if err := resetActorDirs(atespace, actorName); err != nil {
@@ -570,6 +582,12 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		// Note: crash the actor right away, if we cannot write the sandbox record now, we will not be able to checkpoint it later.
 		return nil, ateerrors.CrashIfReason(ctx, err, ateerrors.ReasonTerminalFileSystemError)
 	}
+
+	// Phases overlap (download and oci_unpack share the errgroup) so they do not
+	// sum to total; ensureSandboxAssets runs before dBundles and is in no phase.
+	recordRestorePhase(ctx, ateattr.SnapshotPhaseDownload, dDownload, req.GetActorTemplateNamespace(), req.GetActorTemplateName(), sandboxRec.SandboxClass, req.GetSnapshotKind())
+	recordRestorePhase(ctx, ateattr.SnapshotPhaseOCIUnpack, dBundles, req.GetActorTemplateNamespace(), req.GetActorTemplateName(), sandboxRec.SandboxClass, req.GetSnapshotKind())
+	recordRestorePhase(ctx, ateattr.SnapshotPhaseAteomRestore, dAteom, req.GetActorTemplateNamespace(), req.GetActorTemplateName(), sandboxRec.SandboxClass, req.GetSnapshotKind())
 
 	slog.InfoContext(ctx, "Restore timing breakdown", slog.String("actor", actorName),
 		slog.Duration("download", dDownload),   // rustfs/GCS fetch + decompress (or local copy)

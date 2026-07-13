@@ -43,6 +43,7 @@ import (
 	"github.com/redis/go-redis/v9"
 	"github.com/spf13/pflag"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
+	"go.opentelemetry.io/otel"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"golang.org/x/oauth2/google"
 	"google.golang.org/grpc"
@@ -129,6 +130,11 @@ func main() {
 		serverboot.Fatal(ctx, "Failed to seed worker cache", err)
 	}
 
+	instruments, err := controlapi.NewInstruments(otel.Meter("ateapi"), workerCache.Workers)
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to create metric instruments", err)
+	}
+
 	ateFactory := externalversions.NewSharedInformerFactory(ateClient, 0)
 	actorTemplateLister := ateFactory.Api().V1alpha1().ActorTemplates().Lister()
 	workerPoolLister := ateFactory.Api().V1alpha1().WorkerPools().Lister()
@@ -151,7 +157,7 @@ func main() {
 	ateFactory.WaitForCacheSync(stopCh)
 
 	dialer := controlapi.NewAteletDialer(workerPodInformer.GetIndexer(), ateletPodInformer.GetIndexer())
-	sm := controlapi.NewService(redisPersistence, workerCache, actorTemplateLister, workerPoolLister, sandboxConfigLister, dialer, clientset)
+	sm := controlapi.NewService(redisPersistence, workerCache, actorTemplateLister, workerPoolLister, sandboxConfigLister, dialer, clientset, instruments)
 
 	jwtIssuerDiscoveryClient := buildK8sServiceAccountIssuerDiscoveryClient(ctx, *clientJWTCAFile, *clientJWTIssuer)
 	if authModeParsed == ateapiauth.ModeJWT && jwtIssuerDiscoveryClient == nil {

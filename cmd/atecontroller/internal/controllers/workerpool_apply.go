@@ -15,6 +15,8 @@
 package controllers
 
 import (
+	"os"
+
 	corev1 "k8s.io/api/core/v1"
 	appsv1ac "k8s.io/client-go/applyconfigurations/apps/v1"
 	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
@@ -48,6 +50,15 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool) *appsv1ac.Deployment
 		WithVolumeMounts(corev1ac.VolumeMount().
 			WithName("run-ateom").
 			WithMountPath(ateompath.BasePath))
+
+	// Worker pods otherwise inherit only POD_UID, leaving ateom's OTLP exporter on
+	// its localhost default. Propagate the controller's own endpoint so the same
+	// collector configuration covers the pods it creates.
+	if endpoint := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"); endpoint != "" {
+		containerAC.WithEnv(corev1ac.EnvVar().
+			WithName("OTEL_EXPORTER_OTLP_ENDPOINT").
+			WithValue(endpoint))
+	}
 
 	podSpecAC := corev1ac.PodSpec().
 		WithSecurityContext(corev1ac.PodSecurityContext().

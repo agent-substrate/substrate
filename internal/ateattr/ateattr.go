@@ -1,0 +1,124 @@
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// Package ateattr is the single source of truth for substrate's ate.* telemetry
+// attributes: the identity keys stamped on spans/logs, and the bounded
+// value sets used as metric labels. Centralizing them keeps a key (and value)
+// meaning the same thing across every signal and binary, and lets an emit site
+// and its test share a constant rather than drift on stringly-typed literals.
+package ateattr
+
+import (
+	"go.opentelemetry.io/otel/attribute"
+
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+)
+
+// Identity keys. name vs uid mirror the k8s object model ResourceMetadata
+// follows: ate.actor.name is the atespace-scoped addressable name, ate.actor.uid
+// the server-assigned globally-unique key. There is deliberately no ate.actor.id,
+// which is ambiguous when both a name and a uid exist.
+const (
+	AtespaceKey               = attribute.Key("ate.atespace")
+	ActorNameKey              = attribute.Key("ate.actor.name")
+	ActorUIDKey               = attribute.Key("ate.actor.uid")
+	ActorTemplateNameKey      = attribute.Key("ate.actor.template.name")
+	ActorTemplateNamespaceKey = attribute.Key("ate.actor.template.namespace")
+	ActorVersionKey           = attribute.Key("ate.actor.version")
+)
+
+// Metric-label keys: the only ate.* attributes allowed on metric datapoints,
+// each with a small bounded value set. High-cardinality identity (actor
+// name/uid, atespace) is absent by design; it belongs on spans and logs.
+// ActorOperationNameKey follows the registry's *.operation.name pattern
+// (db.operation.name, gen_ai.operation.name). WorkerStateKey stays worker-rooted
+// rather than nesting under the pool so it can grow siblings.
+const (
+	ActorOperationNameKey = attribute.Key("ate.actor.operation.name")
+	WorkerPoolNameKey     = attribute.Key("ate.workerpool.name")
+	WorkerStateKey        = attribute.Key("ate.worker.state")
+	SandboxClassKey       = attribute.Key("ate.sandbox.class")
+	SnapshotKindKey       = attribute.Key("ate.snapshot.kind")
+	SnapshotPhaseKey      = attribute.Key("ate.snapshot.phase")
+	SchedulerOutcomeKey   = attribute.Key("ate.scheduler.outcome")
+)
+
+// ErrorTypeKey is the OTel registry attribute, reused verbatim (not aliased into
+// ate.*): failures are reported on the same instrument via this key, its absence
+// meaning success, never as a parallel _failures counter.
+const ErrorTypeKey = attribute.Key("error.type")
+
+// Values for ActorOperationNameKey.
+const (
+	OperationCreate  = "create"
+	OperationResume  = "resume"
+	OperationSuspend = "suspend"
+	OperationPause   = "pause"
+	OperationDelete  = "delete"
+)
+
+// Values for WorkerStateKey. Only idle and assigned are representable today;
+// starting and unhealthy workers are not modeled in the cache.
+const (
+	WorkerStateIdle     = "idle"
+	WorkerStateAssigned = "assigned"
+)
+
+// Values for SchedulerOutcomeKey. NoFreeWorker is a capacity signal, not an
+// error, so it is a distinct outcome rather than an error.type value.
+const (
+	SchedulerOutcomeAssigned     = "assigned"
+	SchedulerOutcomeNoFreeWorker = "no_free_worker"
+	SchedulerOutcomeError        = "error"
+)
+
+// Values for SnapshotKindKey. Boot is not a restore, so it appears only on the
+// ateapi lifecycle histogram, never on the atelet restore histogram.
+const (
+	SnapshotKindGolden = "golden"
+	SnapshotKindLatest = "latest"
+	SnapshotKindBoot   = "boot"
+)
+
+// Values for SnapshotPhaseKey: restore phases (download, oci_unpack,
+// ateom_restore) and checkpoint phases (checkpoint, upload) share the key.
+const (
+	SnapshotPhaseDownload     = "download"
+	SnapshotPhaseOCIUnpack    = "oci_unpack"
+	SnapshotPhaseAteomRestore = "ateom_restore"
+	SnapshotPhaseCheckpoint   = "checkpoint"
+	SnapshotPhaseUpload       = "upload"
+)
+
+// ActorRefAttributes returns the subset knowable before the Actor record
+// resolves: only the (atespace, name) the request addresses. The uid and version
+// are server-assigned and unknown until the record loads, so they are omitted.
+func ActorRefAttributes(atespace, name string) []attribute.KeyValue {
+	return []attribute.KeyValue{
+		AtespaceKey.String(atespace),
+		ActorNameKey.String(name),
+	}
+}
+
+// ActorAttributes is nil-safe; a nil Actor yields zero-valued attributes.
+func ActorAttributes(a *ateapipb.Actor) []attribute.KeyValue {
+	return []attribute.KeyValue{
+		AtespaceKey.String(a.GetMetadata().GetAtespace()),
+		ActorNameKey.String(a.GetMetadata().GetName()),
+		ActorUIDKey.String(a.GetMetadata().GetUid()),
+		ActorTemplateNameKey.String(a.GetActorTemplateName()),
+		ActorTemplateNamespaceKey.String(a.GetActorTemplateNamespace()),
+		ActorVersionKey.Int64(a.GetMetadata().GetVersion()),
+	}
+}

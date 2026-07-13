@@ -18,8 +18,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
@@ -27,12 +29,23 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
-func (s *Service) DeleteActor(ctx context.Context, req *ateapipb.DeleteActorRequest) (*ateapipb.Actor, error) {
-	if err := validateDeleteActorRequest(req); err != nil {
+func (s *Service) DeleteActor(ctx context.Context, req *ateapipb.DeleteActorRequest) (deleted *ateapipb.Actor, err error) {
+	start := time.Now()
+	// tmpl is whichever loaded record carries the template dimensions; the delete
+	// request itself only names the actor.
+	var tmpl *ateapipb.Actor
+	defer func() {
+		s.instruments.recordLifecycleOp(ctx, ateattr.OperationDelete, start, err,
+			ateattr.ActorTemplateNameKey.String(tmpl.GetActorTemplateName()),
+			ateattr.ActorTemplateNamespaceKey.String(tmpl.GetActorTemplateNamespace()),
+		)
+	}()
+
+	if err = validateDeleteActorRequest(req); err != nil {
 		return nil, err
 	}
 
-	deleted, err := s.persistence.DeleteActor(ctx, req.GetActor().GetAtespace(), req.GetActor().GetName())
+	deleted, err = s.persistence.DeleteActor(ctx, req.GetActor().GetAtespace(), req.GetActor().GetName())
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, status.Errorf(codes.NotFound, "Actor %s not found", req.GetActor().GetName())
@@ -40,6 +53,7 @@ func (s *Service) DeleteActor(ctx context.Context, req *ateapipb.DeleteActorRequ
 		if errors.Is(err, store.ErrFailedPrecondition) {
 			current, getErr := s.persistence.GetActor(ctx, req.GetActor().GetAtespace(), req.GetActor().GetName())
 			if getErr == nil {
+				tmpl = current
 				return nil, status.Errorf(codes.FailedPrecondition, "Actor %s is not suspended (status: %v)", req.GetActor().GetName(), current.GetStatus())
 			}
 			return nil, status.Errorf(codes.FailedPrecondition, "Actor %s is not suspended", req.GetActor().GetName())
@@ -50,6 +64,7 @@ func (s *Service) DeleteActor(ctx context.Context, req *ateapipb.DeleteActorRequ
 		return nil, fmt.Errorf("while deleting actor from DB: %w", err)
 	}
 
+	tmpl = deleted
 	return deleted, nil
 }
 

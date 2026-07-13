@@ -18,8 +18,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
@@ -29,16 +31,24 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
-func (s *Service) CreateActor(ctx context.Context, req *ateapipb.CreateActorRequest) (*ateapipb.Actor, error) {
-	if err := validateCreateActorRequest(req); err != nil {
+func (s *Service) CreateActor(ctx context.Context, req *ateapipb.CreateActorRequest) (created *ateapipb.Actor, err error) {
+	start := time.Now()
+	in := req.GetActor()
+	defer func() {
+		s.instruments.recordLifecycleOp(ctx, ateattr.OperationCreate, start, err,
+			ateattr.ActorTemplateNameKey.String(in.GetActorTemplateName()),
+			ateattr.ActorTemplateNamespaceKey.String(in.GetActorTemplateNamespace()),
+		)
+	}()
+
+	if err = validateCreateActorRequest(req); err != nil {
 		return nil, err
 	}
 
-	in := req.GetActor()
 	templateNamespace := in.GetActorTemplateNamespace()
 	templateName := in.GetActorTemplateName()
 
-	_, err := s.actorTemplateLister.ActorTemplates(templateNamespace).Get(templateName)
+	_, err = s.actorTemplateLister.ActorTemplates(templateNamespace).Get(templateName)
 	if err != nil {
 		if k8serrors.IsNotFound(err) {
 			return nil, status.Errorf(codes.FailedPrecondition, "ActorTemplate %s/%s not found", templateNamespace, templateName)

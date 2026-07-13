@@ -228,6 +228,11 @@ message RestoreRequest {
 
   // What content to restore from the checkpoint.
   SnapshotScope scope = 10;
+
+  // Which snapshot the restore reads from ("golden" or "latest"), decided by
+  // ateapi. Carried only so atelet can label its restore-duration metric; boots
+  // use Run, not Restore, so "boot" never appears here.
+  string snapshot_kind = 11;
 }
 
 message RestoreResponse {

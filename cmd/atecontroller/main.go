@@ -14,20 +14,24 @@
 package main
 
 import (
+	"context"
+	"log/slog"
 	"os"
 
 	"github.com/agent-substrate/substrate/cmd/atecontroller/internal/controllers"
 	"github.com/agent-substrate/substrate/internal/ateapiauth"
+	"github.com/agent-substrate/substrate/internal/serverboot"
 	clientv1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"github.com/go-logr/logr"
 	"github.com/spf13/pflag"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"google.golang.org/grpc"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
-	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
@@ -52,7 +56,27 @@ func init() {
 
 func main() {
 	pflag.Parse()
-	ctrl.SetLogger(zap.New(zap.UseDevMode(true)))
+
+	ctx := context.Background()
+	serverboot.InitLogger()
+	// Route controller-runtime's logr through the shared slog handler so all
+	// substrate binaries emit one structured log format on the OTLP path.
+	ctrl.SetLogger(logr.FromSlogHandler(slog.Default().Handler()))
+
+	tp, err := serverboot.InitTracing(ctx, serverboot.TracingOptions{
+		ServiceName: "atecontroller",
+		Sampler:     sdktrace.ParentBased(sdktrace.AlwaysSample()),
+	})
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to initialize tracing", err)
+	}
+	defer serverboot.ShutdownProvider("TracerProvider", tp.Shutdown)
+
+	mp, err := serverboot.InitMetrics(ctx, "atecontroller")
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to initialize metrics", err)
+	}
+	defer serverboot.ShutdownProvider("MeterProvider", mp.Shutdown)
 
 	mode, err := ateapiauth.ParseMode(*ateapiAuthMode)
 	if err != nil {

@@ -40,6 +40,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
 	"github.com/redis/go-redis/v9"
+	"go.opentelemetry.io/otel"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -310,7 +311,15 @@ func setupTest(t *testing.T, ns string) *testContext {
 	}
 
 	dialer := NewAteletDialer(workerInformer.GetIndexer(), ateletInformer.GetIndexer())
-	service := NewService(persistence, wc, actorTemplateLister, workerPoolLister, sandboxConfigLister, dialer, k8sClient)
+	// Real instruments (against the no-op global meter) so the full-stack flows
+	// exercise the deferred record path, not just the dedicated metric tests.
+	instruments, err := NewInstruments(otel.Meter("ateapi"), wc.Workers)
+	if err != nil {
+		cancel()
+		mr.Close()
+		t.Fatalf("failed to create instruments: %v", err)
+	}
+	service := NewService(persistence, wc, actorTemplateLister, workerPoolLister, sandboxConfigLister, dialer, k8sClient, instruments)
 
 	// 5. Start REAL gRPC Server for ATE API
 	grpcServer := grpc.NewServer(grpc.UnaryInterceptor(ateinterceptors.ServerUnaryInterceptor))
