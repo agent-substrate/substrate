@@ -63,6 +63,8 @@ message RunWorkloadRequest {
   // to the local on-disk path atelet fetched it to (content-addressed, like
   // runsc_path). Empty for the gVisor runtime, which uses runsc_path.
   map<string, string> runtime_asset_paths = 7;
+
+  string actor_uid = 8;
 }
 
 // WorkloadSpec parallels Pod, but with far fewer configurable fields.
@@ -132,6 +134,8 @@ message CheckpointWorkloadRequest {
 
   // What content to include in the checkpoint.
   SnapshotScope scope = 9;
+
+  string actor_uid = 10;
 }
 
 message CheckpointWorkloadResponse {
@@ -161,6 +165,8 @@ message RestoreWorkloadRequest {
 
   // What content to restore from the snapshot.
   SnapshotScope scope = 9;
+
+  string actor_uid = 10;
 }
 
 message RestoreWorkloadResponse {
