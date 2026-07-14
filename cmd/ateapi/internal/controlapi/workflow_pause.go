@@ -143,6 +143,7 @@ func (s *CallAteletPauseStep) Execute(ctx context.Context, input *PauseInput, st
 			},
 		},
 		Scope: toAteletSnapshotScope(state.ActorTemplate.Spec.SnapshotsConfig.OnPause),
+		ActorUid: state.Actor.GetMetadata().Uid,
 	}
 
 	_, err = client.Checkpoint(ctx, req)

@@ -145,6 +145,7 @@ func (s *CallAteletSuspendStep) Execute(ctx context.Context, input *SuspendInput
 			},
 		},
 		Scope: toAteletSnapshotScope(state.ActorTemplate.Spec.SnapshotsConfig.OnCommit),
+		ActorUid: state.Actor.GetMetadata().Uid,
 	}
 
 	_, err = client.Checkpoint(ctx, req)
