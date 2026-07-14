@@ -28,7 +28,7 @@ func TestWrapContainerLogs(t *testing.T) {
 
 	var buf bytes.Buffer
 	al := NewActorLogger(&buf, false)
-	al.WrapContainerLogs(rdr, "default", "act-1", "tmpl-ns", "tmpl-1", "ctr-1")
+	al.WrapContainerLogs(rdr, "default", "act-1", "uid-1", "tmpl-ns", "tmpl-1", "ctr-1")
 
 	var m map[string]any
 	if err := json.Unmarshal(buf.Bytes(), &m); err != nil {
@@ -78,7 +78,7 @@ func TestWrapContainerLogs_JSONInput(t *testing.T) {
 
 	var buf bytes.Buffer
 	al := NewActorLogger(&buf, false)
-	al.WrapContainerLogs(rdr, "default", "act-1", "tmpl-ns", "tmpl-1", "ctr-1")
+	al.WrapContainerLogs(rdr, "default", "act-1", "uid-1", "tmpl-ns", "tmpl-1", "ctr-1")
 
 	dec := json.NewDecoder(&buf)
 	dec.UseNumber()
@@ -173,7 +173,7 @@ func TestWrapContainerLogs_MergeLabels(t *testing.T) {
 
 	var buf bytes.Buffer
 	al := NewActorLogger(&buf, false) // labelsKey will be "labels"
-	al.WrapContainerLogs(rdr, "default", "act-1", "tmpl-ns", "tmpl-1", "ctr-1")
+	al.WrapContainerLogs(rdr, "default", "act-1", "uid-1", "tmpl-ns", "tmpl-1", "ctr-1")
 
 	var m map[string]any
 	if err := json.Unmarshal(buf.Bytes(), &m); err != nil {
@@ -209,7 +209,7 @@ func TestWrapContainerLogs_LabelCollision(t *testing.T) {
 
 	var buf bytes.Buffer
 	al := NewActorLogger(&buf, false)
-	al.WrapContainerLogs(rdr, "default", "act-1", "tmpl-ns", "tmpl-1", "ctr-1")
+	al.WrapContainerLogs(rdr, "default", "act-1", "uid-1", "tmpl-ns", "tmpl-1", "ctr-1")
 
 	var m map[string]any
 	if err := json.Unmarshal(buf.Bytes(), &m); err != nil {
@@ -239,7 +239,7 @@ func TestWrapContainerLogs_TrailingGarbage(t *testing.T) {
 
 	var buf bytes.Buffer
 	al := NewActorLogger(&buf, false)
-	al.WrapContainerLogs(rdr, "default", "act-1", "tmpl-ns", "tmpl-1", "ctr-1")
+	al.WrapContainerLogs(rdr, "default", "act-1", "uid-1", "tmpl-ns", "tmpl-1", "ctr-1")
 
 	var m map[string]any
 	if err := json.Unmarshal(buf.Bytes(), &m); err != nil {

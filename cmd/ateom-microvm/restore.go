@@ -96,7 +96,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	if len(containers) > maxActorContainers {
 		return nil, status.Errorf(codes.Unimplemented, "ateom-microvm supports at most %d containers, got %d", maxActorContainers, len(containers))
 	}
-	ctrs, err := s.buildActorContainers(atespace, actorUID, containers)
+	ctrs, err := s.buildActorContainers(actorUID, containers)
 	if err != nil {
 		return nil, err
 	}
@@ -199,7 +199,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 		}
 	}
 
-	s.running[name] = ra
+	s.running[actorUID] = ra
 	s.actorLogger.EmitLifecycleLog("Actor restored", atespace, name, actorUID, templateNS, templateName)
 	slog.InfoContext(ctx, "Actor restored (overlay rootfs)",
 		slog.String("id", actorUID), slog.Duration("total", time.Since(tStart)))

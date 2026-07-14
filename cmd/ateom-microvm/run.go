@@ -374,7 +374,7 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 // are bound into virtiofsd's shared dir in stageOverlayLowers after the sandbox state
 // is clean. Both RunWorkload and RestoreWorkload go through here.
 func (s *AteomService) buildActorContainers(actorUID string, containers []*ateompb.Container) ([]actorContainer, error) {
-	netnsPath := ateompath.AteomNetNSPath(s.podactorUID)
+	netnsPath := ateompath.AteomNetNSPath(s.podUID)
 	ctrs := make([]actorContainer, len(containers))
 	for i, c := range containers {
 		cn := c.GetName()
@@ -551,7 +551,7 @@ func startOverlayContainer(ctx context.Context, ac *kata.AgentClient, vsockPath 
 // ending WrapContainerLogs. This keeps the agent connection (which ttrpc allows
 // concurrent Calls on) alive for forwarding while guaranteeing no goroutine outlives
 // the connection.
-func (s *AteomService) startActorLogForwarding(ac *kata.AgentClient, atespace, actorName, actoractorUID, actorTemplateNamespace, actorTemplateName, streamID, containerName string) {
+func (s *AteomService) startActorLogForwarding(ac *kata.AgentClient, atespace, actorName, actorUID, actorTemplateNamespace, actorTemplateName, streamID, containerName string) {
 	go s.actorLogger.WrapContainerLogs(kata.NewStdioReader(context.Background(), ac, streamID, streamID, false), atespace, actorName, actoractorUID, actorTemplateNamespace, actorTemplateName, containerName)
 	go s.actorLogger.WrapContainerLogs(kata.NewStdioReader(context.Background(), ac, streamID, streamID, true), atespace, actorName, actoractorUID, actorTemplateNamespace, actorTemplateName, containerName)
 }
