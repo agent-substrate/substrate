@@ -60,6 +60,9 @@ func TestWrapContainerLogs(t *testing.T) {
 	if labels["ate.dev/actor_atespace"] != "default" {
 		t.Errorf("got actor_atespace = %v, want 'default'", labels["ate.dev/actor_atespace"])
 	}
+	if labels["ate.dev/actor_uid"] != "uid-1" {
+		t.Errorf("got actor_uid = %v, want 'uid-1'", labels["ate.dev/actor_uid"])
+	}
 	if labels["ate.dev/actor_template_namespace"] != "tmpl-ns" {
 		t.Errorf("got actor_template_namespace = %v, want 'tmpl-ns'", labels["ate.dev/actor_template_namespace"])
 	}
