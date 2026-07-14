@@ -142,7 +142,7 @@ func (s *CallAteletPauseStep) Execute(ctx context.Context, input *PauseInput, st
 				SnapshotPrefix: state.Actor.InProgressSnapshot,
 			},
 		},
-		Scope: toAteletSnapshotScope(state.ActorTemplate.Spec.SnapshotsConfig.OnPause),
+		Scope:    toAteletSnapshotScope(state.ActorTemplate.Spec.SnapshotsConfig.OnPause),
 		ActorUid: state.Actor.GetMetadata().Uid,
 	}
 

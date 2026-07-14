@@ -73,7 +73,7 @@ func (al *ActorLogger) EmitLifecycleLog(msg, atespace, actorName, actorUID, acto
 		al.labelsKey: map[string]string{
 			"ate.dev/actor_atespace":           atespace,
 			"ate.dev/actor_name":               actorName,
-			"ate.dev/actor_uid":								actorUID,
+			"ate.dev/actor_uid":                actorUID,
 			"ate.dev/actor_template_namespace": actorTemplateNamespace,
 			"ate.dev/actor_template_name":      actorTemplateName,
 		},
@@ -132,7 +132,7 @@ func (al *ActorLogger) WrapContainerLogs(r io.Reader, atespace, actorName, actor
 				labels := map[string]string{
 					"ate.dev/actor_atespace":           atespace,
 					"ate.dev/actor_name":               actorName,
-					"ate.dev/actor_uid": actorUID,
+					"ate.dev/actor_uid":                actorUID,
 					"ate.dev/actor_template_namespace": actorTemplateNamespace,
 					"ate.dev/actor_template_name":      actorTemplateName,
 					"ate.dev/container_name":           containerName,

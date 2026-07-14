@@ -262,7 +262,7 @@ func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (*atele
 		RunscPath:              runscPathFor(assetPaths),
 		RuntimeAssetPaths:      assetPaths,
 		Spec:                   buildAteomWorkloadSpec(req.GetSpec()),
-		ActorUid: actorUID,
+		ActorUid:               actorUID,
 	}); err != nil {
 		return nil, fmt.Errorf("while calling ateom.RunWorkload: %w", err)
 	}
@@ -345,7 +345,7 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 		RuntimeAssetPaths:      assetPaths,
 		Spec:                   buildAteomWorkloadSpec(req.GetSpec()),
 		Scope:                  toAteomSnapshotScope(req.GetScope()),
-		ActorUid: actorUID,
+		ActorUid:               actorUID,
 	})
 	if err != nil {
 		// TODO: Ateom should classify checkpoint failures, and set "should-crash"
@@ -560,7 +560,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		RuntimeAssetPaths:      assetPaths,
 		Spec:                   buildAteomWorkloadSpec(req.GetSpec()),
 		Scope:                  toAteomSnapshotScope(req.GetScope()),
-		ActorUid: req.GetActorUid(),
+		ActorUid:               req.GetActorUid(),
 	}); err != nil {
 		// TODO: classify the errors returned by Ateom and crash the actor if needed.
 		return nil, fmt.Errorf("while calling ateom.RestoreWorkload: %w", err)

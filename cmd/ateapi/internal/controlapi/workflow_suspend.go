@@ -144,7 +144,7 @@ func (s *CallAteletSuspendStep) Execute(ctx context.Context, input *SuspendInput
 				SnapshotUriPrefix: state.Actor.GetInProgressSnapshot(),
 			},
 		},
-		Scope: toAteletSnapshotScope(state.ActorTemplate.Spec.SnapshotsConfig.OnCommit),
+		Scope:    toAteletSnapshotScope(state.ActorTemplate.Spec.SnapshotsConfig.OnCommit),
 		ActorUid: state.Actor.GetMetadata().Uid,
 	}
 

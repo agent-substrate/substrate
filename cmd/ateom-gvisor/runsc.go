@@ -28,8 +28,8 @@ import (
 )
 
 type runsc struct {
-	path      string
-	actorUID  string
+	path     string
+	actorUID string
 }
 
 func (r *runsc) cmdCreate(ctx context.Context, out io.Writer, containerName string, additionalArgs []string) error {
