@@ -5,9 +5,7 @@
 **Do not open a public GitHub issue for security vulnerabilities.**
 
 Use [GitHub Private Vulnerability Reporting](https://github.com/agent-substrate/substrate/security/advisories/new)
-to report privately. Alternatively, email the maintainers at
-[ate-dev@googlegroups.com](mailto:ate-dev@googlegroups.com) with the subject
-line `[SECURITY]`.
+to report privately.
 
 Include the affected component, reproduction steps, and potential impact.
 
