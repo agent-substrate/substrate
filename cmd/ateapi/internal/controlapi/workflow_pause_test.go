@@ -27,7 +27,7 @@ import (
 // unknown.
 //
 // Old behavior: NodeVmsWithLocalSnapshots = []string{""}, which made
-// findFreeWorker search for a worker with node name "" — never found — a
+// findFreeWorker search for a worker with node name "", never found, a
 // permanent "no free workers available" on resume.
 //
 // Current behavior: NodeVmsWithLocalSnapshots is left nil, and the actor is
@@ -51,7 +51,7 @@ func TestFinalizePausedStep_WorkerGone(t *testing.T) {
 	if _, err := st.CreateActor(ctx, actor); err != nil {
 		t.Fatalf("CreateActor: %v", err)
 	}
-	// Intentionally NOT creating the worker in store — simulates worker already gone.
+	// Intentionally NOT creating the worker in store, simulates worker already gone.
 
 	step := &FinalizePausedStep{store: st}
 	input := &PauseInput{Atespace: atespace, ActorName: actorName}
@@ -70,7 +70,7 @@ func TestFinalizePausedStep_WorkerGone(t *testing.T) {
 	}
 	for _, n := range got.GetLatestSnapshotInfo().GetLocal().GetNodeVmsWithLocalSnapshots() {
 		if n == "" {
-			t.Errorf("BUG: empty string in NodeVmsWithLocalSnapshots — findFreeWorker would never match")
+			t.Errorf("BUG: empty string in NodeVmsWithLocalSnapshots, findFreeWorker would never match")
 		}
 	}
 
@@ -96,7 +96,7 @@ func TestFindFreeWorker_EmptyNodeRestriction(t *testing.T) {
 
 	s := &AssignWorkerStep{}
 
-	// Old behavior: []string{""} — no worker has NodeName == "", returns nil.
+	// Old behavior: []string{""}, no worker has NodeName == "", returns nil.
 	got, err := s.findFreeWorker(workers, "", nil, nil, []string{""})
 	if err != nil {
 		t.Fatalf("findFreeWorker: %v", err)
@@ -105,7 +105,7 @@ func TestFindFreeWorker_EmptyNodeRestriction(t *testing.T) {
 		t.Errorf("expected nil with old buggy input, got %v", got)
 	}
 
-	// Fixed behavior: nil restrictions — any free worker matches.
+	// Fixed behavior: nil restrictions, any free worker matches.
 	got, err = s.findFreeWorker(workers, "", nil, nil, nil)
 	if err != nil {
 		t.Fatalf("findFreeWorker: %v", err)
