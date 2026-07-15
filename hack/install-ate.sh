@@ -451,21 +451,21 @@ delete_demo_actors() {
     return 0
   fi
 
-  local ns tmpl atespace actor_id
+  local ns tmpl atespace actor_name
   while (($# > 0)); do
     ns="$1"
     tmpl="$2"
     shift 2
 
     log_step "Deleting actors for ${ns}/${tmpl}"
-    while IFS=$'\t' read -r atespace actor_id; do
-      [[ -z "${actor_id}" ]] && continue
-      log_step "  preparing actor ${atespace}/${actor_id} for delete"
-      prepare_actor_for_delete "${actor_id}" "${atespace}"
-      run_kubectl_ate delete actor "${actor_id}" -a "${atespace}"
+    while IFS=$'\t' read -r atespace actor_name; do
+      [[ -z "${actor_name}" ]] && continue
+      log_step "  preparing actor ${atespace}/${actor_name} for delete"
+      prepare_actor_for_delete "${actor_name}" "${atespace}"
+      run_kubectl_ate delete actor "${actor_name}" -a "${atespace}"
     done < <(
       jq -r --arg ns "${ns}" --arg tmpl "${tmpl}" \
-        '.actors[]? | select(.actorTemplateNamespace == $ns and .actorTemplateName == $tmpl) | "\(.atespace)\t\(.actorId)"' \
+        '.actors[]? | select(.actorTemplateNamespace == $ns and .actorTemplateName == $tmpl) | "\(.metadata.atespace)\t\(.metadata.name)"' \
         <<<"${actors_json}"
     )
   done
