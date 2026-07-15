@@ -33,13 +33,13 @@ import (
 	"sync"
 
 	"cloud.google.com/go/compute/metadata"
+	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/reaper"
 	"github.com/agent-substrate/substrate/internal/actorlog"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/agent-substrate/substrate/internal/version"
-	"github.com/hashicorp/go-reap"
 	"github.com/vishvananda/netns"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -54,10 +54,6 @@ var (
 	kataConfig  = flag.String("kata-config", "", "Path to a kata configuration.toml (passed to the shim as KATA_CONF_FILE). Empty uses kata's default. atelet generates one pointing at runtime-fetched assets.")
 	kataDebug   = flag.Bool("kata-debug", false, "Verbose kata-agent debugging: raise the guest agent log level and forward the guest console (incl. agent logs) into the pod logs.")
 	showVersion = flag.Bool("version", false, "Print version and exit.")
-
-	// reapLock guards subprocess exec against the child reaper: ateom-microvm
-	// spawns the cloud-hypervisor process under it.
-	reapLock sync.RWMutex
 )
 
 func main() {
@@ -100,9 +96,11 @@ func do(ctx context.Context) error {
 		return fmt.Errorf("in os.MkdirAll(%q): %w", ateomDir, err)
 	}
 
-	// Reap children reparented to us (cloud-hypervisor), guarded so our own
-	// exec.Cmd calls can take the wait.
-	go reap.ReapChildren(nil, nil, nil, &reapLock)
+	// Reap children reparented to us: the detached cloud-hypervisor VMM and
+	// virtiofsd. Synchronous subprocesses (mount, umount, cp, ...) instead go
+	// through reaper.Run/RunCombined so this reaper cannot collect them out from
+	// under their own wait (which would surface as "waitid: no child processes").
+	reaper.Start()
 	slog.InfoContext(ctx, "Child process reaper launched")
 
 	// kata's virtio-fs sharing depends on mount propagation: it slave-binds
