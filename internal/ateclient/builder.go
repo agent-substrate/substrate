@@ -267,7 +267,7 @@ func jwtDialOptions(ctx context.Context, clientset *kubernetes.Clientset) ([]grp
 func isJWTMode(ctx context.Context, clientset *kubernetes.Clientset) (bool, error) {
 	// TODO: Replace deployment introspection with an explicit client-readable
 	// config file once ateapi auth mode is part of install/runtime config.
-	deployment, err := clientset.AppsV1().Deployments("ate-system").Get(ctx, "ate-api-server-deployment", metav1.GetOptions{})
+	deployment, err := clientset.AppsV1().Deployments("ate-system").Get(ctx, "ate-api-server", metav1.GetOptions{})
 	if err != nil {
 		return false, fmt.Errorf("failed to get ate-api-server deployment: %w", err)
 	}

@@ -303,7 +303,7 @@ deploy_ate_system() {
   echo "${manifests}" | run_kubectl apply -f -
 
   log_step "Waiting for ATE system components to be ready..."
-  run_kubectl rollout status deployment/ate-api-server-deployment -n ate-system --timeout=120s
+  run_kubectl rollout status deployment/ate-api-server -n ate-system --timeout=120s
   run_kubectl rollout status deployment/ate-controller -n ate-system --timeout=120s
   run_kubectl rollout status deployment/atenet-router -n ate-system --timeout=120s
   run_kubectl rollout status statefulset/valkey-cluster -n ate-system --timeout=120s
@@ -337,7 +337,7 @@ deploy_ate_apiserver() {
   ensure_apiserver_prerequisites
 
   run_ko apply -f manifests/ate-install/ate-api-server.yaml
-  run_kubectl rollout status deployment/ate-api-server-deployment -n ate-system --timeout=120s
+  run_kubectl rollout status deployment/ate-api-server -n ate-system --timeout=120s
 }
 
 deploy_atelet() {
@@ -440,7 +440,7 @@ delete_demo_actors() {
     return 1
   fi
 
-  if ! run_kubectl get deployment/ate-api-server-deployment -n ate-system >/dev/null 2>&1; then
+  if ! run_kubectl get deployment/ate-api-server -n ate-system >/dev/null 2>&1; then
     log_step "ate-api-server not found; skipping actor cleanup"
     return 0
   fi

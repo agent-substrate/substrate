@@ -14,7 +14,7 @@
             "dataSets": [
               {
                 "timeSeriesQuery": {
-                  "prometheusQuery": "histogram_quantile(0.99, sum by (le, \"rpc.method\") (rate({\"rpc.server.call.duration_bucket\", top_level_controller_name=\"ate-api-server-deployment\"}[5m])))",
+                  "prometheusQuery": "histogram_quantile(0.99, sum by (le, \"rpc.method\") (rate({\"rpc.server.call.duration_bucket\", top_level_controller_name=\"ate-api-server\"}[5m])))",
                   "unitOverride": "s"
                 },
                 "plotType": "LINE",
@@ -39,7 +39,7 @@
             "dataSets": [
               {
                 "timeSeriesQuery": {
-                  "prometheusQuery": "sum by (\"rpc.method\") (rate({\"rpc.server.call.duration_count\", top_level_controller_name=\"ate-api-server-deployment\"}[5m]))",
+                  "prometheusQuery": "sum by (\"rpc.method\") (rate({\"rpc.server.call.duration_count\", top_level_controller_name=\"ate-api-server\"}[5m]))",
                   "unitOverride": "1/s"
                 },
                 "plotType": "LINE",
@@ -64,7 +64,7 @@
             "dataSets": [
               {
                 "timeSeriesQuery": {
-                  "prometheusQuery": "sum by (\"rpc.response.status_code\") (rate({\"rpc.server.call.duration_count\", top_level_controller_name=\"ate-api-server-deployment\", \"rpc.response.status_code\"!=\"OK\"}[5m]))",
+                  "prometheusQuery": "sum by (\"rpc.response.status_code\") (rate({\"rpc.server.call.duration_count\", top_level_controller_name=\"ate-api-server\", \"rpc.response.status_code\"!=\"OK\"}[5m]))",
                   "unitOverride": "1/s"
                 },
                 "plotType": "LINE",
