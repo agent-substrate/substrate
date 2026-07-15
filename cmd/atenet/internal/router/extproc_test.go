@@ -29,8 +29,11 @@ import (
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 	envoy_type "github.com/envoyproxy/go-control-plane/envoy/type/v3"
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/propagation"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -417,4 +420,65 @@ func TestRecordRouteDuration_Attributes(t *testing.T) {
 			t.Errorf("attribute %q = %q, want %q", k, val.AsString(), want)
 		}
 	}
+}
+
+func TestInjectTraceContext_AddsTraceparentMatchingParentSpan(t *testing.T) {
+	exporter := tracetest.NewInMemoryExporter()
+	tp := sdktrace.NewTracerProvider(
+		sdktrace.WithSampler(sdktrace.AlwaysSample()),
+		sdktrace.WithSpanProcessor(sdktrace.NewSimpleSpanProcessor(exporter)),
+	)
+
+	ctx, span := tp.Tracer("test").Start(context.Background(), "parent")
+	parentTraceID := span.SpanContext().TraceID()
+
+	mutation := &extprocv3.HeaderMutation{}
+	injectTraceContextWithPropagator(ctx, mutation, propagation.TraceContext{})
+	span.End()
+
+	var traceparent string
+	for _, h := range mutation.GetSetHeaders() {
+		if strings.ToLower(h.Header.Key) == "traceparent" {
+			traceparent = h.Header.Value
+			if h.GetAppendAction() != corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD {
+				t.Errorf("AppendAction = %v, want OVERWRITE_IF_EXISTS_OR_ADD", h.GetAppendAction())
+			}
+			break
+		}
+	}
+	if traceparent == "" {
+		t.Fatal("traceparent not found in header mutation")
+	}
+
+	parts := strings.Split(traceparent, "-")
+	if len(parts) < 2 {
+		t.Fatalf("invalid traceparent format: %s", traceparent)
+	}
+	if parts[1] != parentTraceID.String() {
+		t.Errorf("trace ID in traceparent = %s, want parent trace ID = %s", parts[1], parentTraceID.String())
+	}
+}
+
+func TestInjectTraceContext_AppendActionDefaultsToOverwrite(t *testing.T) {
+	exporter := tracetest.NewInMemoryExporter()
+	tp := sdktrace.NewTracerProvider(
+		sdktrace.WithSampler(sdktrace.AlwaysSample()),
+		sdktrace.WithSpanProcessor(sdktrace.NewSimpleSpanProcessor(exporter)),
+	)
+
+	ctx, span := tp.Tracer("test").Start(context.Background(), "parent")
+	defer span.End()
+
+	mutation := &extprocv3.HeaderMutation{}
+	injectTraceContextWithPropagator(ctx, mutation, propagation.TraceContext{})
+
+	for _, h := range mutation.GetSetHeaders() {
+		if strings.ToLower(h.Header.Key) == "traceparent" {
+			if h.GetAppendAction() != corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD {
+				t.Errorf("AppendAction = %v, want OVERWRITE_IF_EXISTS_OR_ADD", h.GetAppendAction())
+			}
+			return
+		}
+	}
+	t.Error("traceparent not found in mutation")
 }

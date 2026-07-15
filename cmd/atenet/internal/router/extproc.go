@@ -30,6 +30,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/propagation"
+	semconv "go.opentelemetry.io/otel/semconv/v1.40.0"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -153,6 +154,7 @@ func (s *ExtProcServer) handleRequestHeaders(
 		// Host is invalid, respond with 404.
 		return nil, metadata, "", "", "", ResumeOutcomeNone, invalidHostErr(metadata.host, err)
 	}
+	span.SetAttributes(ateattr.ActorRefAttributes(actorRef)...)
 
 	// Admit the request to the parking lot before resuming. While resume is
 	// in-flight the request occupies a slot; if the actor's worker pool is
@@ -186,6 +188,12 @@ func (s *ExtProcServer) handleRequestHeaders(
 		return nil, metadata, "", tmplNs, tmplName, resumeOutcome, newReqError(envoy_type.StatusCode_InternalServerError,
 			"actor %s routing failed", actorRef)
 	}
+	// Record the resolved worker endpoint with the stable OTel semconv
+	// attributes (replaces the earlier custom ate.target_addr key).
+	span.SetAttributes(
+		semconv.ServerAddress(workerIP),
+		semconv.ServerPort(443),
+	)
 
 	// The actor is reached through the in-worker atunnel ingress server, which
 	// listens on :443 (mTLS) and forwards to the actor's :80. The worker no
@@ -200,9 +208,11 @@ func (s *ExtProcServer) handleRequestHeaders(
 
 	// Route by telling the ORIGINAL_DST cluster which worker atunnel address to
 	// dial, without touching :authority — atunnel authorizes the actor by the
-	// original Host (actor DNS name).
+	// original Host (actor DNS name). Inject the trace context so the upstream
+	// worker receives the same trace as the ingress path.
 	mutation := &extprocv3.HeaderMutation{}
 	addOriginalDstMutation(targetAddr, mutation)
+	injectTraceContext(ctx, mutation)
 
 	return &extprocv3.HeadersResponse{
 		Response: &extprocv3.CommonResponse{

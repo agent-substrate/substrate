@@ -23,6 +23,8 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -509,5 +511,59 @@ func TestResumeBackoffHasNoCap(t *testing.T) {
 	}
 	if b.Steps < 1<<20 {
 		t.Errorf("resume backoff Steps must be high so the budget bounds the wait; got %d", b.Steps)
+	}
+}
+
+func TestActorResumer_ResumeChildSharesParentTraceID(t *testing.T) {
+	const testActorName = "actor-a"
+	const testAtespace = "team-a"
+	const expectedIP = "10.0.0.52"
+
+	exporter := tracetest.NewInMemoryExporter()
+	tp := sdktrace.NewTracerProvider(
+		sdktrace.WithSampler(sdktrace.AlwaysSample()),
+		sdktrace.WithSpanProcessor(sdktrace.NewSimpleSpanProcessor(exporter)),
+	)
+
+	ctx, parent := tp.Tracer("test").Start(context.Background(), "parent")
+	parentTraceID := parent.SpanContext().TraceID()
+	parentSpanID := parent.SpanContext().SpanID()
+
+	mock := &resumerMockClient{
+		resumeFn: func(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
+			return &ateapipb.ResumeActorResponse{
+				Actor: &ateapipb.Actor{
+					Status:     ateapipb.Actor_STATUS_RUNNING,
+					AteomPodIp: expectedIP,
+				},
+			}, nil
+		},
+	}
+
+	// withTracer injects the test tracer so the ResumeActor span lands in the
+	// in-memory exporter without swapping the process-global TracerProvider.
+	resumer := NewActorResumer(mock, withTracer(tp.Tracer("test")))
+	_, _, err := resumer.ResumeActor(ctx, resources.ActorRef{Atespace: testAtespace, Name: testActorName})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	parent.End()
+
+	var resumeSpan tracetest.SpanStub
+	for _, s := range exporter.GetSpans() {
+		if s.Name == "ResumeActor" {
+			resumeSpan = s
+			break
+		}
+	}
+	if resumeSpan.Name == "" {
+		t.Fatal("ResumeActor span not found in exporter")
+	}
+
+	if got, want := resumeSpan.SpanContext.TraceID(), parentTraceID; got != want {
+		t.Errorf("ResumeActor trace ID = %s, want parent trace ID = %s", got, want)
+	}
+	if got, want := resumeSpan.Parent.SpanID(), parentSpanID; got != want {
+		t.Errorf("ResumeActor parent span ID = %s, want %s", got, want)
 	}
 }

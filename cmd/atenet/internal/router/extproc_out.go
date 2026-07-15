@@ -15,9 +15,13 @@
 package router
 
 import (
+	"context"
+
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	extproc "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 	envoy_type "github.com/envoyproxy/go-control-plane/envoy/type/v3"
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
 )
 
 // reqError carries an HTTP-mappable status code and a client-safe message.
@@ -51,6 +55,30 @@ func addOriginalDstMutation(dst string, mut *extproc.HeaderMutation) {
 			},
 		},
 	)
+}
+
+// injectTraceContext injects the trace context from ctx into the header mutation,
+// so that Envoy forwards traceparent/tracestate to the upstream worker and spans
+// are connected across the full request path.
+func injectTraceContext(ctx context.Context, mutation *extproc.HeaderMutation) {
+	injectTraceContextWithPropagator(ctx, mutation, otel.GetTextMapPropagator())
+}
+
+// injectTraceContextWithPropagator is the injectable core of injectTraceContext.
+// Tests pass an explicit propagator so they can assert the injected headers
+// without swapping the process-global text map propagator.
+func injectTraceContextWithPropagator(ctx context.Context, mutation *extproc.HeaderMutation, propagator propagation.TextMapPropagator) {
+	headers := make(map[string]string)
+	propagator.Inject(ctx, propagation.MapCarrier(headers))
+	for k, v := range headers {
+		mutation.SetHeaders = append(mutation.SetHeaders, &corev3.HeaderValueOption{
+			Header: &corev3.HeaderValue{
+				Key:   k,
+				Value: v,
+			},
+			AppendAction: corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
+		})
+	}
 }
 
 func immediateResponse(statusCode envoy_type.StatusCode, message string) *extproc.ProcessingResponse {
