@@ -1,0 +1,48 @@
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package cmd
+
+import (
+	"testing"
+
+	"github.com/spf13/cobra"
+)
+
+func TestGetCommandArgs(t *testing.T) {
+	tests := []struct {
+		name    string
+		command *cobra.Command
+		args    []string
+		wantErr bool
+	}{
+		{name: "actors list", command: getActorsCmd},
+		{name: "actors get", command: getActorsCmd, args: []string{"actor-1"}},
+		{name: "actors reject extra argument", command: getActorsCmd, args: []string{"actor-1", "actor-2"}, wantErr: true},
+		{name: "atespaces list", command: getAtespacesCmd},
+		{name: "atespaces get", command: getAtespacesCmd, args: []string{"team-a"}},
+		{name: "atespaces reject extra argument", command: getAtespacesCmd, args: []string{"team-a", "team-b"}, wantErr: true},
+		{name: "workers list", command: getWorkersCmd},
+		{name: "workers reject argument", command: getWorkersCmd, args: []string{"worker-1"}, wantErr: true},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := test.command.Args(test.command, test.args)
+			if (err != nil) != test.wantErr {
+				t.Fatalf("Args(%q) error = %v, wantErr %t", test.args, err, test.wantErr)
+			}
+		})
+	}
+}

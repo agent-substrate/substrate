@@ -27,6 +27,7 @@ var getWorkersCmd = &cobra.Command{
 	Use:     "workers",
 	Aliases: []string{"worker"},
 	Short:   "List all workers",
+	Args:    cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
 		apiClient, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, traceEnabled)

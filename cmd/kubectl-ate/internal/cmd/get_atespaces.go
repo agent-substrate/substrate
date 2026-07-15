@@ -27,6 +27,7 @@ var getAtespacesCmd = &cobra.Command{
 	Use:     "atespaces [name]",
 	Aliases: []string{"atespace"},
 	Short:   "List all atespaces or get a specific atespace",
+	Args:    cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
 		apiClient, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, traceEnabled)

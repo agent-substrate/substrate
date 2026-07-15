@@ -32,6 +32,7 @@ var getActorsCmd = &cobra.Command{
 	Use:     "actors <actor-name>",
 	Aliases: []string{"actor"},
 	Short:   "List all actors or get a specific actor",
+	Args:    cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
 
