@@ -12,8 +12,6 @@ import (
 // DefaultJSONNameProvider is the default cache for types.
 var DefaultJSONNameProvider = NewNameProvider()
 
-var _ providerIface = (*NameProvider)(nil)
-
 // NameProvider represents an object capable of translating from go property names
 // to json property names.
 //
