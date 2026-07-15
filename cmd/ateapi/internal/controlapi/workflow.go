@@ -122,6 +122,7 @@ type ActorWorkflow struct {
 	workerPoolLister    listersv1alpha1.WorkerPoolLister
 	sandboxConfigLister listersv1alpha1.SandboxConfigLister
 	kubeClient          kubernetes.Interface
+	defaultEgressPEP    string
 	secretCache         *envSecretCache
 }
 
@@ -134,6 +135,7 @@ func NewActorWorkflow(
 	workerPoolLister listersv1alpha1.WorkerPoolLister,
 	sandboxConfigLister listersv1alpha1.SandboxConfigLister,
 	kubeClient kubernetes.Interface,
+	defaultEgressPEP string,
 ) *ActorWorkflow {
 	return &ActorWorkflow{
 		store:               store,
@@ -143,6 +145,7 @@ func NewActorWorkflow(
 		workerPoolLister:    workerPoolLister,
 		sandboxConfigLister: sandboxConfigLister,
 		kubeClient:          kubeClient,
+		defaultEgressPEP:    defaultEgressPEP,
 		secretCache:         newEnvSecretCache(envSecretCacheTTL),
 	}
 }
@@ -166,7 +169,7 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, atespace, name string, 
 
 	steps := []WorkflowStep[*ResumeInput, *ResumeState]{
 		&LoadActorForResumeStep{store: w.store, actorTemplateLister: w.actorTemplateLister},
-		&AssignWorkerStep{store: w.store, workerCache: w.workerCache},
+		&AssignWorkerStep{store: w.store, workerCache: w.workerCache, defaultEgressPEP: w.defaultEgressPEP},
 		&CallAteletRestoreStep{store: w.store, dialer: w.dialer, kubeClient: w.kubeClient, secretCache: w.secretCache, workerPoolLister: w.workerPoolLister, sandboxConfigLister: w.sandboxConfigLister},
 		&FinalizeRunningStep{store: w.store},
 	}

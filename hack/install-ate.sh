@@ -40,6 +40,7 @@ ATE_DEMOS=()
 
 # Include demos.
 source "${ROOT}"/hack/install-demo-counter.sh
+source "${ROOT}"/hack/install-demo-egress.sh
 source "${ROOT}"/hack/install-demo-sandbox.sh
 source "${ROOT}"/hack/install-demo-claude-code-multiplex.sh
 source "${ROOT}"/hack/install-demo-agent-secret.sh
@@ -48,6 +49,8 @@ source "${ROOT}"/hack/install-demo-multi-template.sh
 # ANSI color codes for prettier output
 COLOR_CYAN='\033[1;36m'
 COLOR_RESET='\033[0m'
+
+ATE_EGRESS_CAPTURE="${ATE_EGRESS_CAPTURE:-false}"
 
 function log_step() {
   local step_name="$1"
@@ -69,7 +72,9 @@ function usage() {
   echo ""
   echo "  --deploy-atelet                        Deploy atelet only"
   echo "  --deploy-ate-apiserver                 Deploy ate-api-server only"
+  echo "  --deploy-ate-controller                Deploy ate-controller only"
   echo "  --deploy-atenet                        Deploy atenet only"
+  echo "  --egress                               Enable actor egress capture via labeled agentgateway PEP Gateways"
   echo ""
   echo "To create individual resources used by ate-system (Note: These are"
   echo "called automatically by --deploy-ate-system):"
@@ -100,6 +105,12 @@ function usage() {
 run_kubectl() {
   kubectl \
     ${KUBECTL_CONTEXT:+--context=${KUBECTL_CONTEXT}} \
+    "$@"
+}
+
+run_helm() {
+  helm \
+    ${KUBECTL_CONTEXT:+--kube-context=${KUBECTL_CONTEXT}} \
     "$@"
 }
 
@@ -165,6 +176,171 @@ render_ate_system_manifests() {
     # Build everything resolved with base manifests for GKE
     run_ko resolve -f manifests/ate-install
   fi
+}
+
+resolve_ipv4_addresses() {
+  local host="$1"
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "${host}" <<'PY'
+import socket
+import sys
+
+host = sys.argv[1]
+addresses = sorted({
+    result[4][0]
+    for result in socket.getaddrinfo(host, None, socket.AF_INET, socket.SOCK_STREAM)
+})
+print(" ".join(addresses))
+PY
+    return
+  fi
+  if command -v python >/dev/null 2>&1; then
+    python - "${host}" <<'PY'
+import socket
+import sys
+
+host = sys.argv[1]
+addresses = sorted(set(
+    result[4][0]
+    for result in socket.getaddrinfo(host, None, socket.AF_INET, socket.SOCK_STREAM)
+))
+print(" ".join(addresses))
+PY
+    return
+  fi
+  if command -v dig >/dev/null 2>&1; then
+    dig +short A "${host}" | tr '\n' ' '
+    return
+  fi
+  if command -v nslookup >/dev/null 2>&1; then
+    nslookup "${host}" | awk '/^Address: / { print $2 }' | tr '\n' ' '
+    return
+  fi
+  echo "unable to resolve ${host}: python3, python, dig, or nslookup is required" >&2
+  return 1
+}
+
+ensure_gateway_api() {
+  log_step "ensure_gateway_api"
+  if run_kubectl get crd \
+    gatewayclasses.gateway.networking.k8s.io \
+    gateways.gateway.networking.k8s.io \
+    tcproutes.gateway.networking.k8s.io >/dev/null 2>&1; then
+    return
+  fi
+
+  run_kubectl apply --server-side -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.5.0/experimental-install.yaml
+}
+
+deploy_agentgateway() {
+  log_step "deploy_agentgateway"
+  local httpbin_ips="${HTTPBIN_EGRESS_IPS:-}"
+  if [[ -z "${httpbin_ips}" ]]; then
+    httpbin_ips="$(resolve_ipv4_addresses httpbin.org)"
+  fi
+  if [[ -z "${httpbin_ips}" ]]; then
+    echo "failed to resolve httpbin.org IPv4 addresses" >&2
+    exit 1
+  fi
+
+  local httpbin_endpoints=""
+  local ip=""
+  for ip in ${httpbin_ips}; do
+    httpbin_endpoints+="  - addresses:\n    - ${ip}\n"
+  done
+
+  ensure_gateway_api
+  run_helm upgrade -i --create-namespace \
+    --namespace agentgateway-system \
+    --version v1.3.1 agentgateway-crds oci://cr.agentgateway.dev/charts/agentgateway-crds
+  run_helm upgrade -i -n agentgateway-system agentgateway oci://cr.agentgateway.dev/charts/agentgateway \
+    --version v1.3.1
+  run_kubectl delete deployment -n agentgateway-system ate-egress --ignore-not-found >/dev/null 2>&1 || true
+  run_kubectl delete service -n agentgateway-system ate-egress --ignore-not-found >/dev/null 2>&1 || true
+  run_kubectl delete service -n agentgateway-system httpbin-egress --ignore-not-found >/dev/null 2>&1 || true
+  run_kubectl delete endpointslice -n agentgateway-system httpbin-egress --ignore-not-found >/dev/null 2>&1 || true
+  run_kubectl delete gateway -n agentgateway-system ate-egress --ignore-not-found >/dev/null 2>&1 || true
+  run_kubectl delete agentgatewaypolicy -n agentgateway-system ate-egress-connect --ignore-not-found >/dev/null 2>&1 || true
+  printf "%b" "$(cat <<EOF
+apiVersion: v1
+kind: Service
+metadata:
+  name: httpbin-egress
+  namespace: agentgateway-system
+spec:
+  ports:
+  - name: https
+    port: 443
+    targetPort: 443
+---
+apiVersion: discovery.k8s.io/v1
+kind: EndpointSlice
+metadata:
+  name: httpbin-egress
+  namespace: agentgateway-system
+  labels:
+    kubernetes.io/service-name: httpbin-egress
+addressType: IPv4
+ports:
+- name: https
+  protocol: TCP
+  port: 443
+endpoints:
+${httpbin_endpoints}---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: ate-egress
+  namespace: agentgateway-system
+spec:
+  gatewayClassName: agentgateway
+  listeners:
+  - name: connect
+    port: 15008
+    protocol: HTTP
+    allowedRoutes:
+      namespaces:
+        from: Same
+  - name: https
+    port: 443
+    protocol: TCP
+    allowedRoutes:
+      kinds:
+      - group: gateway.networking.k8s.io
+        kind: TCPRoute
+      namespaces:
+        from: Same
+---
+apiVersion: gateway.networking.k8s.io/v1alpha2
+kind: TCPRoute
+metadata:
+  name: httpbin-egress
+  namespace: agentgateway-system
+spec:
+  parentRefs:
+  - name: ate-egress
+    sectionName: https
+  rules:
+  - backendRefs:
+    - name: httpbin-egress
+      port: 443
+---
+apiVersion: agentgateway.dev/v1alpha1
+kind: AgentgatewayPolicy
+metadata:
+  name: ate-egress-connect
+  namespace: agentgateway-system
+spec:
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: ate-egress
+  frontend:
+    connect:
+      mode: Tunnel
+EOF
+)" | run_kubectl apply -f -
+  run_kubectl delete agentgatewayparameters -n agentgateway-system ate-egress-params --ignore-not-found
 }
 
 create_valkey_ca_certs_secret() {
@@ -241,12 +417,24 @@ create_api_server_env_vars() {
     fi
   fi
 
+  # When egress capture is enabled, point the global-default egress PEP at the
+  # demo agentgateway address. Actors and atespaces can override this with an
+  # ate.dev/use-egress-pep selector (precedence: actor > atespace > global). Left
+  # empty otherwise, which keeps egress capture off. ate-api uses this address
+  # directly; it has no Gateway API dependency.
+  local default_egress_pep=""
+  if [[ "${ATE_EGRESS_CAPTURE}" == "true" ]]; then
+    default_egress_pep="ate-egress.agentgateway-system.svc.cluster.local:15008"
+  fi
+  echo "DEFAULT_EGRESS_PEP: ${default_egress_pep}"
+
   run_kubectl create configmap -n ate-system ate-api-server-envvars \
     --from-literal=ATE_API_REDIS_ADDRESS="${redis_address}" \
     --from-literal=ATE_API_REDIS_USE_IAM_AUTH="${use_iam_auth}" \
     --from-literal=ATE_API_REDIS_TLS_SERVER_NAME="${tls_server_name}" \
     --from-literal=ATE_API_REDIS_CLIENT_CERT="${client_cert}" \
     --from-literal=ATE_API_K8SJWT_ISSUER="${jwt_issuer}" \
+    --from-literal=ATE_API_DEFAULT_EGRESS_PEP="${default_egress_pep}" \
     --dry-run=client -o yaml \
     | run_kubectl apply -f -
 }
@@ -268,6 +456,10 @@ deploy_crds() {
 deploy_ate_system() {
   log_step "deploy_ate_system"
   ensure_crds
+
+  if [[ "${ATE_EGRESS_CAPTURE}" == "true" ]]; then
+    deploy_agentgateway
+  fi
 
   # Enforce per-class SandboxConfig asset requirements (applied before any
   # SandboxConfig so the defaults below are validated too).
@@ -330,6 +522,13 @@ deploy_ate_apiserver() {
   log_step "deploy_ate_apiserver"
   ensure_crds
 
+  # ate-api is the component that watches PEP Gateways, and it checks for the
+  # Gateway API once at startup — deploy agentgateway (which installs the
+  # Gateway API CRDs) before the apiserver rolls.
+  if [[ "${ATE_EGRESS_CAPTURE}" == "true" ]]; then
+    deploy_agentgateway
+  fi
+
   # Ensure namespace exists
   run_kubectl apply -f manifests/ate-install/ate-system-namespace.yaml \
     && run_kubectl wait --for=jsonpath='{.status.phase}'=Active namespace/ate-system --timeout=60s
@@ -360,6 +559,12 @@ deploy_atelet() {
   run_kubectl rollout status daemonset/atelet -n ate-system --timeout=120s
 }
 
+deploy_ate_controller() {
+  log_step "deploy_ate_controller"
+  run_ko apply -f manifests/ate-install/ate-controller.yaml
+  run_kubectl rollout status deployment/ate-controller -n ate-system --timeout=120s
+}
+
 deploy_atenet() {
   log_step "deploy_atenet"
   ensure_crds
@@ -376,8 +581,8 @@ deploy_atenet() {
 
 # get_actor_status echoes the actor's status enum (e.g. STATUS_SUSPENDED).
 get_actor_status() {
-  local actor_id="$1"
-  local atespace="$2"
+  local atespace="$1"
+  local actor_id="$2"
   local json
 
   if ! json=$(run_kubectl_ate get actor "${actor_id}" -a "${atespace}" -o json 2>/dev/null); then
@@ -389,14 +594,14 @@ get_actor_status() {
 # prepare_actor_for_delete suspends (or resumes then suspends) until DeleteActor
 # is allowed. Actors must be STATUS_SUSPENDED before deletion.
 prepare_actor_for_delete() {
-  local actor_id="$1"
-  local atespace="$2"
+  local atespace="$1"
+  local actor_id="$2"
   local timeout_secs="${3:-120}"
   local deadline=$((SECONDS + timeout_secs))
   local status
 
   while ((SECONDS < deadline)); do
-    if ! status=$(get_actor_status "${actor_id}" "${atespace}"); then
+    if ! status=$(get_actor_status "${atespace}" "${actor_id}"); then
       return 0
     fi
 
@@ -451,7 +656,7 @@ delete_demo_actors() {
     return 0
   fi
 
-  local ns tmpl atespace actor_id
+  local ns tmpl actor_ref atespace actor_id
   while (($# > 0)); do
     ns="$1"
     tmpl="$2"
@@ -459,13 +664,14 @@ delete_demo_actors() {
 
     log_step "Deleting actors for ${ns}/${tmpl}"
     while IFS=$'\t' read -r atespace actor_id; do
-      [[ -z "${actor_id}" ]] && continue
-      log_step "  preparing actor ${atespace}/${actor_id} for delete"
-      prepare_actor_for_delete "${actor_id}" "${atespace}"
+      [[ -z "${atespace}" || -z "${actor_id}" ]] && continue
+      actor_ref="${atespace}/${actor_id}"
+      log_step "  preparing actor ${actor_ref} for delete"
+      prepare_actor_for_delete "${atespace}" "${actor_id}"
       run_kubectl_ate delete actor "${actor_id}" -a "${atespace}"
     done < <(
       jq -r --arg ns "${ns}" --arg tmpl "${tmpl}" \
-        '.actors[]? | select(.actorTemplateNamespace == $ns and .actorTemplateName == $tmpl) | "\(.atespace)\t\(.actorId)"' \
+        '.actors[]? | select(.actorTemplateNamespace == $ns and .actorTemplateName == $tmpl) | [.atespace, .actorId] | @tsv' \
         <<<"${actors_json}"
     )
   done
@@ -518,6 +724,9 @@ for arg in "$@"; do
     -h|--help)
       usage
       exit 0
+      ;;
+    --egress)
+      ATE_EGRESS_CAPTURE="true"
       ;;
   esac
 done
@@ -577,9 +786,11 @@ while [[ "$#" -gt 0 ]]; do
 
     --deploy-atelet) deploy_atelet ;;
     --deploy-ate-apiserver) deploy_ate_apiserver ;;
+    --deploy-ate-controller) deploy_ate_controller ;;
 
     --deploy-atenet) deploy_atenet ;;
     --delete-atenet) delete_atenet ;;
+    --egress) ;;
 
     --deploy-benchmarks) deploy_benchmarks ;;
     --delete-benchmarks) delete_benchmarks ;;

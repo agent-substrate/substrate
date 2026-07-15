@@ -222,6 +222,7 @@ func (s *FinalizePausedStep) Execute(ctx context.Context, input *PauseInput, sta
 		latestActor.AteomPodName = ""
 		latestActor.AteomPodIp = ""
 		latestActor.WorkerPoolName = ""
+		latestActor.EgressPepAddress = ""
 		updatedActor, err := s.store.UpdateActor(ctx, latestActor, latestActor.GetMetadata().GetVersion())
 		if err != nil {
 			return err

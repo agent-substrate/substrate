@@ -63,6 +63,8 @@ message RunWorkloadRequest {
   // to the local on-disk path atelet fetched it to (content-addressed, like
   // runsc_path). Empty for the gVisor runtime, which uses runsc_path.
   map<string, string> runtime_asset_paths = 7;
+
+  string egress_pep_address = 8;
 }
 
 // WorkloadSpec parallels Pod, but with far fewer configurable fields.
@@ -90,6 +92,12 @@ message HTTPGetAction {
   int32 port = 2;
 }
 
+// TODO: Add an EgressCaptureStatus ack (state enum with UNSPECIFIED=0 +
+// requested/active PEP address) to RunWorkloadResponse/RestoreWorkloadResponse
+// so ate-api persists the PEP the sandbox actually enforces instead of the one
+// it requested. The zero-value enum makes pre-egress binaries detectable.
+// Today a stale ateom image silently ignores egress_pep_address while actor
+// status reports the binding.
 message RunWorkloadResponse {
 }
 
@@ -161,6 +169,8 @@ message RestoreWorkloadRequest {
 
   // What content to restore from the snapshot.
   SnapshotScope scope = 9;
+
+  string egress_pep_address = 10;
 }
 
 message RestoreWorkloadResponse {

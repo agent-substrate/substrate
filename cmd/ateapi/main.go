@@ -70,6 +70,8 @@ var (
 	sessionIDCAPoolFile = pflag.String("session-id-ca-pool", "", "The file that contains the CA pool for signing session JWTs")
 	workerpoolCACerts   = pflag.String("workerpool-ca-certs", "", "The file that contains the CA for verifying workerpool client certificates.")
 
+	defaultEgressPEP = pflag.String("default-egress-pep", "", "The global-default egress PEP address, as <host>:<port>. Used for actors and atespaces that set no ate.dev/use-egress-pep selector. Empty disables the global default (capture off unless a per-actor/atespace selector matches).")
+
 	showVersion     = pflag.Bool("version", false, "Print version and exit.")
 	authMode        = pflag.String("auth-mode", "mtls", "Auth mode for incoming gRPC: mtls|jwt. 'mtls' (default) relies on transport-level mTLS for client identity. 'jwt' additionally requires a Kubernetes ServiceAccount Bearer token on every RPC. Substrate will drop support for JWT auth mode once the Pod Certificates feature is enabled by default in the minimum supported Kubernetes version.")
 	clientJWTCAFile = pflag.String("client-jwt-ca-cert", ateapiauth.DefaultServiceAccountCAFile, "CA cert file used to verify TLS when fetching the OIDC discovery document and JWKS for JWT authentication. Defaults to the in-cluster service account CA.")
@@ -100,6 +102,19 @@ func main() {
 	defer serverboot.ShutdownProvider("MeterProvider", mp.Shutdown)
 
 	loadFlagsFromEnv()
+
+	// A malformed --default-egress-pep degrades to "no global default" rather than
+	// crash-looping the deployment: the flag only affects actors that fall through
+	// to the global tier, and per-actor/atespace selectors keep working. We clear
+	// it so the bad value can't reach ateom and fail every fall-through resume at
+	// connect time; the warning is the operator's signal to fix the flag. Cleared
+	// before logFlagValues so the "Final flag values" line reports the effective
+	// (empty) value, not the ignored one.
+	if err := controlapi.ValidateDefaultEgressPEPAddress(*defaultEgressPEP); err != nil {
+		slog.WarnContext(ctx, "Ignoring invalid --default-egress-pep; global-default egress PEP disabled", "err", err)
+		*defaultEgressPEP = ""
+	}
+
 	logFlagValues(ctx)
 
 	authModeParsed, err := ateapiauth.ParseMode(*authMode)
@@ -151,7 +166,7 @@ func main() {
 	ateFactory.WaitForCacheSync(stopCh)
 
 	dialer := controlapi.NewAteletDialer(workerPodInformer.GetIndexer(), ateletPodInformer.GetIndexer())
-	sm := controlapi.NewService(redisPersistence, workerCache, actorTemplateLister, workerPoolLister, sandboxConfigLister, dialer, clientset)
+	sm := controlapi.NewService(redisPersistence, workerCache, actorTemplateLister, workerPoolLister, sandboxConfigLister, dialer, clientset, *defaultEgressPEP)
 
 	jwtIssuerDiscoveryClient := buildK8sServiceAccountIssuerDiscoveryClient(ctx, *clientJWTCAFile, *clientJWTIssuer)
 	if authModeParsed == ateapiauth.ModeJWT && jwtIssuerDiscoveryClient == nil {
@@ -216,6 +231,7 @@ func loadFlagsFromEnv() {
 		{redisUseIAMAuth, "ATE_API_REDIS_USE_IAM_AUTH"},
 		{redisTLSServerName, "ATE_API_REDIS_TLS_SERVER_NAME"},
 		{redisClientCert, "ATE_API_REDIS_CLIENT_CERT"},
+		{defaultEgressPEP, "ATE_API_DEFAULT_EGRESS_PEP"},
 	}
 	for _, o := range overrides {
 		if *o.flag == "@env" {
@@ -239,6 +255,7 @@ func logFlagValues(ctx context.Context) {
 		slog.String("session-id-ca-pool", *sessionIDCAPoolFile),
 		slog.String("workerpool-ca-certs", *workerpoolCACerts),
 		slog.String("auth-mode", *authMode),
+		slog.String("default-egress-pep", *defaultEgressPEP),
 	)
 }
 

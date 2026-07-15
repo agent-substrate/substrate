@@ -43,13 +43,14 @@ func NewService(
 	sandboxConfigLister listersv1alpha1.SandboxConfigLister,
 	dialer *AteletDialer,
 	kubeClient kubernetes.Interface,
+	defaultEgressPEP string,
 ) *Service {
 	s := &Service{
 		persistence:         persistence,
 		actorTemplateLister: actorTemplateLister,
 		workerPoolLister:    workerPoolLister,
 		dialer:              dialer,
-		actorWorkflow:       NewActorWorkflow(persistence, workerCache, dialer, actorTemplateLister, workerPoolLister, sandboxConfigLister, kubeClient),
+		actorWorkflow:       NewActorWorkflow(persistence, workerCache, dialer, actorTemplateLister, workerPoolLister, sandboxConfigLister, kubeClient, defaultEgressPEP),
 	}
 
 	return s

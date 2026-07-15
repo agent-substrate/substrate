@@ -40,6 +40,24 @@ func (s *Service) UpdateActor(ctx context.Context, req *ateapipb.UpdateActorRequ
 		return nil, fmt.Errorf("while getting actor: %w", err)
 	}
 	actor.WorkerSelector = req.GetWorkerSelector()
+	// Labels are merged, not replaced: an absent/empty map leaves the actor's
+	// labels untouched (so a labels-unaware caller cannot wipe selectors set by
+	// someone else), a key with a non-empty value sets it, and a key with an
+	// empty value deletes it. Proto3 cannot distinguish a nil map from an empty
+	// one on the wire, so delete-by-empty-value is the explicit clear path.
+	for k, v := range req.GetLabels() {
+		if v == "" {
+			delete(actor.Labels, k)
+			continue
+		}
+		if actor.Labels == nil {
+			actor.Labels = map[string]string{}
+		}
+		actor.Labels[k] = v
+	}
+	if len(actor.Labels) == 0 {
+		actor.Labels = nil
+	}
 
 	updated, err := s.persistence.UpdateActor(ctx, actor, actor.GetMetadata().GetVersion())
 	if err != nil {
@@ -65,6 +83,9 @@ func validateUpdateActorRequest(req *ateapipb.UpdateActorRequest) error {
 	if val := req.WorkerSelector; val != nil {
 		errs = append(errs, validateSelector(val, fldPath.Child("worker_selector"))...)
 	}
+
+	errs = append(errs, validateLabels(req.GetLabels(), fldPath.Child("labels"))...)
+	errs = append(errs, validateEgressPEPSelector(req.GetLabels(), fldPath.Child("labels"))...)
 
 	if len(errs) > 0 {
 		return status.Error(codes.InvalidArgument, errs.ToAggregate().Error())

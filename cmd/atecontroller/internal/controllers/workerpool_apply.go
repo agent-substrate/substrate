@@ -44,7 +44,8 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool) *appsv1ac.Deployment
 				WithValueFrom(corev1ac.EnvVarSource().
 					WithFieldRef(corev1ac.ObjectFieldSelector().
 						WithFieldPath("metadata.uid"))),
-		).
+		)
+	containerAC.
 		WithVolumeMounts(corev1ac.VolumeMount().
 			WithName("run-ateom").
 			WithMountPath(ateompath.BasePath))

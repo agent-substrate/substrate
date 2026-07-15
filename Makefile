@@ -57,7 +57,8 @@ build-atenet:
 
 .PHONY: build-demos
 build-demos:
-	$(KO) build --ldflags="$(LDFLAGS)" ./demos/counter
+	GOFLAGS='"-ldflags=$(LDFLAGS)"' \
+	    $(KO) build ./demos/counter ./demos/egress
 
 .PHONY: test
 test:

@@ -20,12 +20,14 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/kubectl-ate/internal/printer"
 	"github.com/agent-substrate/substrate/internal/ateclient"
+	"github.com/agent-substrate/substrate/internal/egress"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/spf13/cobra"
 )
 
 var templateFlag string
 var atespaceFlag string
+var createActorEgressPEPFlag string
 
 var createActorCmd = &cobra.Command{
 	Use:   "actor <actor-name>",
@@ -45,6 +47,11 @@ var createActorCmd = &cobra.Command{
 			return fmt.Errorf("malformed --template: %s (expected <namespace>/<name>)", templateFlag)
 		}
 
+		var labels map[string]string
+		if createActorEgressPEPFlag != "" {
+			labels = map[string]string{egress.LabelUseEgressPEP: createActorEgressPEPFlag}
+		}
+
 		resp, err := apiClient.CreateActor(ctx, &ateapipb.CreateActorRequest{
 			Actor: &ateapipb.Actor{
 				Metadata: &ateapipb.ResourceMetadata{
@@ -53,6 +60,7 @@ var createActorCmd = &cobra.Command{
 				},
 				ActorTemplateNamespace: parts[0],
 				ActorTemplateName:      parts[1],
+				Labels:                 labels,
 			},
 		})
 		if err != nil {
@@ -68,5 +76,6 @@ func init() {
 	_ = createActorCmd.MarkFlagRequired("template")
 	createActorCmd.Flags().StringVarP(&atespaceFlag, "atespace", "a", "", "Atespace to create the actor in (required)")
 	_ = createActorCmd.MarkFlagRequired("atespace")
+	createActorCmd.Flags().StringVar(&createActorEgressPEPFlag, "egress-pep", "", "Egress PEP address for this actor, as <host>:<port>. Sets the ate.dev/use-egress-pep selector (highest precedence: actor > atespace > global default).")
 	createCmd.AddCommand(createActorCmd)
 }

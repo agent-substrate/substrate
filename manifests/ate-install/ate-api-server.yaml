@@ -91,6 +91,11 @@ spec:
           - --session-id-jwt-pool=/run/session-id-jwt-pool/pool.json
           - --session-id-ca-pool=/run/session-id-ca-pool/pool.json
           - --workerpool-ca-certs=/run/workerpool-ca-certs/trust-bundle.pem
+          # Global-default egress PEP address (<host>:<port>). Empty when the
+          # ConfigMap does not set ATE_API_DEFAULT_EGRESS_PEP (non-egress
+          # installs), which leaves egress capture off unless a per-actor/atespace
+          # ate.dev/use-egress-pep selector matches.
+          - --default-egress-pep=@env
         env:
         - name: POD_NAME
           valueFrom:

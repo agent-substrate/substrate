@@ -30,8 +30,10 @@ import (
 	"cloud.google.com/go/compute/metadata"
 	"github.com/agent-substrate/substrate/internal/actorlog"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
+	"github.com/agent-substrate/substrate/internal/ateomegress"
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/contextlogging"
+	"github.com/agent-substrate/substrate/internal/egress"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/readyz"
 	"github.com/agent-substrate/substrate/internal/serverboot"
@@ -164,6 +166,7 @@ type AteomService struct {
 
 	interiorNetNS netns.NsHandle
 	actorLogger   *actorlog.ActorLogger
+	egressCapture *egress.Capture
 }
 
 var _ ateompb.AteomServer = (*AteomService)(nil)
@@ -188,7 +191,7 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	//   * Correct runsc version is downloaded and placed on disk.
 	//   * All OCI bundles are set up, including for "pause" container.
 
-	if err := s.setupActorNetwork(ctx); err != nil {
+	if err := s.setupActorNetwork(ctx, ateomegress.ActorIdentityFromRun(req), req.GetEgressPepAddress()); err != nil {
 		return nil, fmt.Errorf("while setting up actor network: %w", err)
 	}
 	defer func() {
@@ -362,7 +365,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	//   * All OCI bundles are set up, including for "pause" container.
 	//   * Checkpoint downloaded and placed on disk
 
-	if err := s.setupActorNetwork(ctx); err != nil {
+	if err := s.setupActorNetwork(ctx, ateomegress.ActorIdentityFromRestore(req), req.GetEgressPepAddress()); err != nil {
 		return nil, fmt.Errorf("while setting up actor network: %w", err)
 	}
 	defer func() {
@@ -438,7 +441,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	return &ateompb.RestoreWorkloadResponse{}, nil
 }
 
-func (s *AteomService) setupActorNetwork(ctx context.Context) (retErr error) {
+func (s *AteomService) setupActorNetwork(ctx context.Context, identity egress.ActorIdentity, egressPEPAddress string) (retErr error) {
 	// Build a fresh point-to-point network between the worker pod netns and the
 	// gVisor interior netns. The worker side keeps the pod's real eth0, creates
 	// ateom0 as the gateway, and moves only the veth peer into the actor netns.
@@ -506,7 +509,13 @@ func (s *AteomService) setupActorNetwork(ctx context.Context) (retErr error) {
 	if err := enableIPv4Forwarding(); err != nil {
 		return err
 	}
-	if err := installActorNftablesRules(podIP); err != nil {
+	egressCapture, err := ateomegress.StartCaptureIfEnabled(ctx, identity, egressPEPAddress)
+	if err != nil {
+		return err
+	}
+	s.egressCapture = egressCapture
+
+	if err := installActorNftablesRules(podIP, s.egressCapture != nil); err != nil {
 		return err
 	}
 
@@ -590,6 +599,12 @@ func (s *AteomService) cleanupActorNetwork(ctx context.Context) error {
 	if err := removeActorNftablesRules(); err != nil {
 		return err
 	}
+	if s.egressCapture != nil {
+		if err := s.egressCapture.Close(); err != nil {
+			slog.WarnContext(ctx, "Failed to close actor egress capture", "err", err)
+		}
+		s.egressCapture = nil
+	}
 
 	var cleanupErr error
 	if link, err := netlink.LinkByName(hostVethName); err == nil {
@@ -671,7 +686,7 @@ func enableIPv4Forwarding() error {
 	return nil
 }
 
-func installActorNftablesRules(podIP net.IP) error {
+func installActorNftablesRules(podIP net.IP, egressCapture bool) error {
 	// Install a dedicated nftables table for the active actor. Keeping all
 	// rules in an ateom-owned table makes cleanup simple and avoids mutating
 	// Kubernetes or CNI-managed chains directly.
@@ -709,6 +724,13 @@ func installActorNftablesRules(podIP net.IP) error {
 		Hooknum:  nftables.ChainHookPrerouting,
 		Priority: nftables.ChainPriorityNATDest,
 	})
+	if egressCapture {
+		ateomegress.AddCaptureRedirectRules(c, table, prerouting, actorVethIP)
+	}
+	// TODO: Support optional DNS capture for hostname recovery for non-SNI,
+	// non-HTTP, or DNS-policy egress. The current HTTP/HTTPS path derives
+	// authority from TLS SNI or HTTP Host, so redirecting UDP/TCP 53 would
+	// add potential DNS proxy/cache/TTL/search-domain failures
 	// TODO: Support inbound UDP DNAT for actors that expose UDP protocols such
 	// as QUIC.
 	// TODO: Replace the hard-coded HTTP port with the actor's configured

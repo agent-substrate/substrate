@@ -229,6 +229,7 @@ func (s *WorkerPoolSyncer) releaseActorOnDeadWorker(ctx context.Context, namespa
 	actor.AteomPodIp = ""
 	actor.InProgressSnapshot = ""
 	actor.WorkerPoolName = ""
+	actor.EgressPepAddress = ""
 	if _, err := s.persistence.UpdateActor(ctx, actor, actor.GetMetadata().GetVersion()); err != nil && !errors.Is(err, store.ErrPersistenceRetry) {
 		return err
 	}
