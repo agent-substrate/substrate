@@ -218,7 +218,7 @@ func (s *FinalizePausedStep) Execute(ctx context.Context, input *PauseInput, sta
 			localInfo := &ateapipb.LocalSnapshotInfo{
 				SnapshotPrefix: latestActor.InProgressSnapshot,
 			}
-			if nodeName != "" {
+			if latestActor.Status != ateapipb.Actor_STATUS_CRASHED {
 				localInfo.NodeVmsWithLocalSnapshots = []string{nodeName}
 			}
 			latestActor.LatestSnapshotInfo = &ateapipb.SnapshotInfo{
