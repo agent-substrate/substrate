@@ -82,7 +82,7 @@ func prepareOCIDirectory(ctx context.Context, pullCache *memorypullcache.MemoryP
 		return fmt.Errorf("in untar: %w", err)
 	}
 
-	// Bind-mount the per-actor nameentity directory so the workload can read its
+	// Bind-mount the per-actor identity directory so the workload can read its
 	// own ID at IdentityMountPath/ActorIDFileName. The bind target must exist
 	// in the rootfs for the mount to attach.
 	if identityDir != "" {

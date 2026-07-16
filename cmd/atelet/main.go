@@ -647,15 +647,15 @@ func (s *AteomHerder) prepareOCIBundles(
 	spec *ateletpb.WorkloadSpec,
 	targetAteomUid string,
 ) error {
-	// Populate the per-actor nameentity directory that gets bind-mounted into
+	// Populate the per-actor identity directory that gets bind-mounted into
 	// the application containers. Regenerated on every resume, so it carries
 	// the correct per-actor name even when restoring from the golden snapshot.
 	identityDir := ateompath.ActorIdentityDirPath(atespace, actorName)
 	if err := os.MkdirAll(identityDir, 0o755); err != nil {
-		return fmt.Errorf("while creating actor nameentity dir: %w", err)
+		return fmt.Errorf("while creating actor identity dir: %w", err)
 	}
 	if err := writeFileAtomic(filepath.Join(identityDir, ActorIDFileName), []byte(actorName), 0o644); err != nil {
-		return fmt.Errorf("while writing actor nameentity file: %w", err)
+		return fmt.Errorf("while writing actor identity file: %w", err)
 	}
 
 	ddVolumes := make(map[string]bool)
@@ -698,7 +698,7 @@ func (s *AteomHerder) prepareOCIBundles(
 			nil,
 			annotations,
 			ateompath.AteomNetNSPath(targetAteomUid),
-			"", // pause is sandbox infra; it gets no actor nameentity mount.
+			"", // pause is sandbox infra; it gets no actor identity mount.
 			nil,
 		); err != nil {
 			return wrapFileSystemErr("while creating pause OCI bundle", err)
@@ -1044,10 +1044,10 @@ func resetActorDirs(atespace, actorName string) error {
 	// reads it through the gofer.
 	identityDir := ateompath.ActorIdentityDirPath(atespace, actorName)
 	if err := os.RemoveAll(identityDir); err != nil {
-		return wrapFileSystemErr("while deleting actor nameentity dir: %w", err)
+		return wrapFileSystemErr("while deleting actor identity dir: %w", err)
 	}
 	if err := os.MkdirAll(identityDir, 0o755); err != nil {
-		return wrapFileSystemErr("while creating actor nameentity dir: %w", err)
+		return wrapFileSystemErr("while creating actor identity dir: %w", err)
 	}
 
 	durableDirVolumesMountDir := ateompath.DurableDirVolumeMountsDir(atespace, actorName)

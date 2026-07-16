@@ -103,7 +103,7 @@ func TestBuildActorOCISpec_IdentityMount(t *testing.T) {
 		}
 		found = true
 		if m.Source != "/host/actors/atespace:id/identity" {
-			t.Errorf("identity mount source = %q, want the per-actor nameentity dir", m.Source)
+			t.Errorf("identity mount source = %q, want the per-actor identity dir", m.Source)
 		}
 		if m.Type != "bind" {
 			t.Errorf("identity mount type = %q, want bind", m.Type)
