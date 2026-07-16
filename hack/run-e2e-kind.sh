@@ -19,6 +19,11 @@ set -o errexit -o nounset -o pipefail
 ROOT="$(git rev-parse --show-toplevel)"
 cd "${ROOT}"
 
+# Build only for the Kind node's host architecture, not every .ko.yaml platform.
+# shellcheck disable=SC2155 # safe initialization
+goarch=$(go env GOARCH)
+export KO_DEFAULTPLATFORMS="linux/${goarch}"
+
 # Runs the E2E tests against a local Kind cluster.
 #
 # This wraps hack/run-e2e.sh with the same Kind-specific environment that

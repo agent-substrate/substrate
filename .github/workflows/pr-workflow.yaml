@@ -52,12 +52,9 @@ jobs:
       uses: actions/setup-go@v5
       with:
         go-version-file: 'go.mod'
-    - name: Free disk space
-      # The micro-VM guest image/kernel + cloud-hypervisor + kind node image +
-      # control-plane images + snapshots are tight on the ~14GB runner disk.
-      run: |
-        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
-        df -h /
+    - name: Check disk space
+      # Current runners have enough space; deleting preinstalled SDKs costs ~22s.
+      run: df -h /
     - name: Cache micro-VM assets
       id: microvm-assets
       uses: actions/cache@v4
