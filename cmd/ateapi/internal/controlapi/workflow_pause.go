@@ -210,7 +210,7 @@ func (s *FinalizePausedStep) Execute(ctx context.Context, input *PauseInput, sta
 			// so the actor can never be resumed (findFreeWorker would search for a
 			// worker on an unknown node forever). Crash it instead of leaving it
 			// stuck in PAUSED.
-			slog.Warn("Node name not found during finalize pause, crashing actor", "actor", input.ActorName)
+			slog.ErrorContext(ctx, "Node name not found during finalize pause, crashing actor", "actor", input.ActorName)
 			latestActor.Status = ateapipb.Actor_STATUS_CRASHED
 		}
 		// TODO(dberkov) - what if InProgressSnapshot is empty? That shouldn't be possible.
