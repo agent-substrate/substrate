@@ -45,5 +45,6 @@ var deleteAtespaceCmd = &cobra.Command{
 }
 
 func init() {
+	registerAtespaceArgCompletion(deleteAtespaceCmd)
 	deleteCmd.AddCommand(deleteAtespaceCmd)
 }

@@ -54,5 +54,6 @@ func init() {
 	resumeActorCmd.Flags().BoolVarP(&bootFlag, "boot", "", false, "Skip golden snapshot and boot from scratch.")
 	resumeActorCmd.Flags().StringVarP(&resumeAtespaceFlag, "atespace", "a", "", "Atespace the actor lives in")
 	_ = resumeActorCmd.MarkFlagRequired("atespace")
+	registerActorCompletions(resumeActorCmd)
 	resumeCmd.AddCommand(resumeActorCmd)
 }

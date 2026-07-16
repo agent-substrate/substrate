@@ -52,5 +52,6 @@ var getAtespacesCmd = &cobra.Command{
 }
 
 func init() {
+	registerAtespaceArgCompletion(getAtespacesCmd)
 	getCmd.AddCommand(getAtespacesCmd)
 }

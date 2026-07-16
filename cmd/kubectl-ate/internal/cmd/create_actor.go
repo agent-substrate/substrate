@@ -68,5 +68,6 @@ func init() {
 	_ = createActorCmd.MarkFlagRequired("template")
 	createActorCmd.Flags().StringVarP(&atespaceFlag, "atespace", "a", "", "Atespace to create the actor in (required)")
 	_ = createActorCmd.MarkFlagRequired("atespace")
+	registerAtespaceFlagCompletion(createActorCmd)
 	createCmd.AddCommand(createActorCmd)
 }
