@@ -29,17 +29,20 @@ func TestGetCommandArgs(t *testing.T) {
 	}{
 		{name: "actors list", command: getActorsCmd},
 		{name: "actors get", command: getActorsCmd, args: []string{"actor-1"}},
-		{name: "actors reject extra argument", command: getActorsCmd, args: []string{"actor-1", "actor-2"}, wantErr: true},
+		{name: "actors get multiple", command: getActorsCmd, args: []string{"actor-1", "actor-2"}},
 		{name: "atespaces list", command: getAtespacesCmd},
 		{name: "atespaces get", command: getAtespacesCmd, args: []string{"team-a"}},
-		{name: "atespaces reject extra argument", command: getAtespacesCmd, args: []string{"team-a", "team-b"}, wantErr: true},
+		{name: "atespaces get multiple", command: getAtespacesCmd, args: []string{"team-a", "team-b"}},
 		{name: "workers list", command: getWorkersCmd},
 		{name: "workers reject argument", command: getWorkersCmd, args: []string{"worker-1"}, wantErr: true},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			err := test.command.Args(test.command, test.args)
+			var err error
+			if test.command.Args != nil {
+				err = test.command.Args(test.command, test.args)
+			}
 			if (err != nil) != test.wantErr {
 				t.Fatalf("Args(%q) error = %v, wantErr %t", test.args, err, test.wantErr)
 			}
