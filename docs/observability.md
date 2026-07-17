@@ -54,10 +54,10 @@ To stream actor logs in real-time, append the `--follow` (or `-f`) flag. The CLI
 
 ```bash
 $ kubectl ate logs actors test -f
-Actor is currently running on pod ate-demo-counter/counter-deployment-d8f99-m7d96
+Actor is currently running on pod ate-demo-counter/counter-d8f99-m7d96
 {"time":"2026-05-22T21:49:15.255765354Z","count":0,"fshash":"mCY7...","level":"INFO","msg":"Count"}
 {"time":"2026-05-22T21:49:25.263744806Z","count":1,"fshash":"mCY7...","level":"INFO","msg":"Count"}
-Actor is currently running on pod ate-demo-counter/counter-deployment-ab123-x4y5z
+Actor is currently running on pod ate-demo-counter/counter-ab123-x4y5z
 {"time":"2026-05-22T21:50:02.123456789Z","count":2,"fshash":"mCY7...","level":"INFO","msg":"Count"}
 ```
 
@@ -94,7 +94,7 @@ labels.actor_template_name="counter"
 To inspect the physical worker pod's aggregate stream and see all co-located actors multiplexed together (useful for investigating pod-level resource exhaustion or noisy neighbor issues):
 
 ```text
-resource.labels.pod_name="counter-deployment-c995fdf4c-m7d96"
+resource.labels.pod_name="counter-c995fdf4c-m7d96"
 ```
 
 ---

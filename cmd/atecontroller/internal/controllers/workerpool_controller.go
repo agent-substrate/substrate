@@ -79,7 +79,7 @@ func (r *WorkerPoolReconciler) reconcileWorkerPool(ctx context.Context, wp *atev
 	}
 
 	dep := &appsv1.Deployment{}
-	if err := r.Get(ctx, types.NamespacedName{Name: deploymentName(wp.Name), Namespace: wp.Namespace}, dep); err != nil {
+	if err := r.Get(ctx, types.NamespacedName{Name: wp.Name, Namespace: wp.Namespace}, dep); err != nil {
 		if k8errors.IsNotFound(err) {
 			return nil
 		}
@@ -117,8 +117,4 @@ func (r *WorkerPoolReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&atev1alpha1.WorkerPool{}).
 		Owns(&appsv1.Deployment{}).
 		Complete(r)
-}
-
-func deploymentName(wpName string) string {
-	return wpName + "-deployment"
 }

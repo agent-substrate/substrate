@@ -569,7 +569,7 @@ func makeWorkerPool(name, ns string, replicas int32, image string) *atev1alpha1.
 func getDeployment(ctx context.Context, wp *atev1alpha1.WorkerPool) (*appsv1.Deployment, error) {
 	dep := &appsv1.Deployment{}
 	err := k8sClient.Get(ctx, types.NamespacedName{
-		Name:      deploymentName(wp.Name),
+		Name:      wp.Name,
 		Namespace: wp.Namespace,
 	}, dep)
 	return dep, err

@@ -67,7 +67,7 @@
               },
               {
                 "timeSeriesQuery": {
-                  "prometheusQuery": "histogram_quantile(0.99, sum by (le) (rate({\"rpc.server.call.duration_bucket\", top_level_controller_name=\"ate-api-server-deployment\", \"rpc.method\"=\"ateapi.Control/ResumeActor\"}[5m])))",
+                  "prometheusQuery": "histogram_quantile(0.99, sum by (le) (rate({\"rpc.server.call.duration_bucket\", top_level_controller_name=\"ate-api-server\", \"rpc.method\"=\"ateapi.Control/ResumeActor\"}[5m])))",
                   "unitOverride": "s"
                 },
                 "plotType": "LINE",
