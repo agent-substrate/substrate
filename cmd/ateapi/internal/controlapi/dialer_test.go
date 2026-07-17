@@ -21,10 +21,11 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"encoding/asn1"
 	"math/big"
 	"testing"
 	"time"
+
+	"github.com/agent-substrate/substrate/internal/substratex509"
 )
 
 // makeTestCA mints a self-signed CA and returns it along with a pool
@@ -59,7 +60,7 @@ func makeTestCA(t *testing.T) (*x509.Certificate, *ecdsa.PrivateKey, *x509.CertP
 }
 
 // makeLeafCert mints a server leaf certificate signed by the given CA. If
-// podUID is non-empty it is embedded as the oidPodUID extension.
+// podUID is non-empty it is embedded in a PodIdentity extension.
 func makeLeafCert(t *testing.T, ca *x509.Certificate, caKey *ecdsa.PrivateKey, podUID string) *x509.Certificate {
 	t.Helper()
 
@@ -75,12 +76,19 @@ func makeLeafCert(t *testing.T, ca *x509.Certificate, caKey *ecdsa.PrivateKey, p
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 	}
 	if podUID != "" {
-		podUIDExt, err := asn1.Marshal(customExtensionVal{S: podUID})
+		// AddPodIdentityToCertificate requires all fields to be non-empty;
+		// only PodUID matters to these tests.
+		err := substratex509.AddPodIdentityToCertificate(&substratex509.PodIdentity{
+			Namespace:          "ate-system",
+			ServiceAccountName: "atelet",
+			ServiceAccountUID:  "sa-uid",
+			PodName:            "atelet-abc",
+			PodUID:             podUID,
+			NodeName:           "node-1",
+			NodeUID:            "node-uid",
+		}, template)
 		if err != nil {
-			t.Fatalf("marshaling pod UID extension: %v", err)
-		}
-		template.ExtraExtensions = []pkix.Extension{
-			{Id: oidPodUID, Critical: false, Value: podUIDExt},
+			t.Fatalf("adding PodIdentity extension: %v", err)
 		}
 	}
 	der, err := x509.CreateCertificate(rand.Reader, template, ca, &key.PublicKey, caKey)

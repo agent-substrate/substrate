@@ -17,13 +17,13 @@ package controlapi
 import (
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/asn1"
 	"errors"
 	"fmt"
 
 	"os"
 
 	"github.com/agent-substrate/substrate/internal/credbundle"
+	"github.com/agent-substrate/substrate/internal/substratex509"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -33,13 +33,6 @@ import (
 )
 
 var ErrWorkerPodNotFound = errors.New("worker pod not found")
-
-// oidPodUID represents the Pod UID within a certificate extension.
-var oidPodUID = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 11129, 2, 6, 1, 3}
-
-type customExtensionVal struct {
-	S string `asn1:"utf8"`
-}
 
 // AteletDialer handles gRPC connections to Atelet pods.
 type AteletDialer struct {
@@ -165,19 +158,18 @@ func verifyAteletServerCert(roots *x509.CertPool, expectedPodUID string) func(tl
 			return fmt.Errorf("verifying server certificate chain: %w", err)
 		}
 
-		var foundPodUID customExtensionVal
-		for _, ext := range leaf.Extensions {
-			if ext.Id.Equal(oidPodUID) {
-				if _, err := asn1.Unmarshal(ext.Value, &foundPodUID); err != nil {
-					return fmt.Errorf("failed to parse oidPodUID extension: %w", err)
-				}
-			}
+		identity, err := substratex509.PodIdentityFromCertificate(leaf)
+		if err != nil {
+			return fmt.Errorf("failed to parse PodIdentity extension: %w", err)
 		}
-		if foundPodUID.S == "" || expectedPodUID == "" {
-			return fmt.Errorf("found Pod UID == %q, expected podUID == %q", foundPodUID.S, expectedPodUID)
+		if identity == nil {
+			return fmt.Errorf("server certificate has no PodIdentity extension, expected pod UID %q", expectedPodUID)
 		}
-		if foundPodUID.S != expectedPodUID {
-			return fmt.Errorf("pod UID is %q does not match expected %q", foundPodUID.S, expectedPodUID)
+		if identity.PodUID == "" || expectedPodUID == "" {
+			return fmt.Errorf("found pod UID == %q, expected pod UID == %q", identity.PodUID, expectedPodUID)
+		}
+		if identity.PodUID != expectedPodUID {
+			return fmt.Errorf("pod UID %q does not match expected %q", identity.PodUID, expectedPodUID)
 		}
 
 		return nil

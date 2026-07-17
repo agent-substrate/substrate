@@ -19,8 +19,6 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/x509"
-	"crypto/x509/pkix"
-	"encoding/asn1"
 	"encoding/pem"
 	"fmt"
 	"net/url"
@@ -30,6 +28,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/podcertcontroller/internal/podcertificate"
 	"github.com/agent-substrate/substrate/cmd/podcertcontroller/internal/signercontroller"
 	"github.com/agent-substrate/substrate/internal/localca"
+	"github.com/agent-substrate/substrate/internal/substratex509"
 	certsv1beta1 "k8s.io/api/certificates/v1beta1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
@@ -39,9 +38,6 @@ import (
 
 const Name = "podidentity.podcert.ate.dev/identity"
 const CTBPrefix = "podidentity.podcert.ate.dev:identity:"
-
-// oidPodUID represents the Pod UID within a certificate extension.
-var oidPodUID = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 11129, 2, 6, 1, 3}
 
 // atelet's identity, as installed by manifests/ate-install/atelet.yaml. Pods
 // running as atelet serve TLS (e.g. to ate-apiserver), so their certs also
@@ -78,10 +74,6 @@ var _ signercontroller.SignerImpl = (*Impl)(nil)
 
 func (h *Impl) SignerName() string {
 	return Name
-}
-
-type customExtensionVal struct {
-	S string `asn1:"utf8"`
 }
 
 func (h *Impl) DesiredClusterTrustBundles() []*certsv1beta1.ClusterTrustBundle {
@@ -148,10 +140,6 @@ func (h *Impl) MakeCert(ctx context.Context, pcr *certsv1beta1.PodCertificateReq
 
 	parent := h.caPool.CAs[0].RootCertificate
 
-	podUIDExt, err := asn1.Marshal(customExtensionVal{S: string(pod.UID)})
-	if err != nil {
-		return fmt.Errorf("failed to marshal pod UID %s: %w", pod.UID, err)
-	}
 	template := &x509.Certificate{
 		BasicConstraintsValid: true,
 		NotBefore:             notBefore,
@@ -164,13 +152,21 @@ func (h *Impl) MakeCert(ctx context.Context, pcr *certsv1beta1.PodCertificateReq
 		// podidentity CAs).
 		// https://datatracker.ietf.org/doc/html/rfc5280#section-4.2.1.1
 		AuthorityKeyId: parent.SubjectKeyId,
-		ExtraExtensions: []pkix.Extension{
-			{
-				Id:       oidPodUID,
-				Critical: false,
-				Value:    podUIDExt,
-			},
-		},
+	}
+
+	// Fields are sourced from the PCR spec (attested by kube-apiserver) rather
+	// than the Pod object, which lacks the ServiceAccount and Node UIDs.
+	podIdentity := &substratex509.PodIdentity{
+		Namespace:          pcr.ObjectMeta.Namespace,
+		ServiceAccountName: pcr.Spec.ServiceAccountName,
+		ServiceAccountUID:  string(pcr.Spec.ServiceAccountUID),
+		PodName:            pcr.Spec.PodName,
+		PodUID:             string(pcr.Spec.PodUID),
+		NodeName:           string(pcr.Spec.NodeName),
+		NodeUID:            string(pcr.Spec.NodeUID),
+	}
+	if err := substratex509.AddPodIdentityToCertificate(podIdentity, template); err != nil {
+		return fmt.Errorf("while adding pod identity to certificate: %w", err)
 	}
 
 	subjectCertDER, err := x509.CreateCertificate(rand.Reader, template, parent, subjectPublicKey, h.caPool.CAs[0].SigningKey)
