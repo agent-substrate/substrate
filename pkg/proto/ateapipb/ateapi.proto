@@ -62,9 +62,6 @@ service Control {
 
   // Delete an empty Atespace. Rejects (FailedPrecondition) if any actors remain.
   rpc DeleteAtespace(DeleteAtespaceRequest) returns (Atespace) {}
-
-  // Debugging: drop all data from the ate database.
-  rpc DebugClear(DebugClearRequest) returns (DebugClearResponse) {}
 }
 
 message ExternalSnapshotInfo {
@@ -304,6 +301,13 @@ message Assignment {
 message KubeNamespacedObjectRef {
   string namespace = 1;
   string name = 2;
+}
+
+// Debug is the RPC interface for administrative and debugging operations
+// (such as wiping state during development).
+service Debug {
+  // Debugging: drop all data from the ate database.
+  rpc DebugClear(DebugClearRequest) returns (DebugClearResponse) {}
 }
 
 message DebugClearRequest {}
