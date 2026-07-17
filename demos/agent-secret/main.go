@@ -25,6 +25,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -60,27 +61,24 @@ func handleRequest(w http.ResponseWriter, r *http.Request) {
 	log.Printf("DEBUG: Request received. Path=%s Host=%s", r.URL.Path, r.Host)
 
 	// 1. Identify Actor (Robust extraction)
-	actorID := r.Header.Get("X-AgentSet-Session")
-	if actorID == "" {
-		actorID = r.Header.Get("x-agentset-session")
+	actorName := r.Header.Get("X-AgentSet-Session")
+	if actorName == "" {
+		actorName = r.Header.Get("x-agentset-session")
 	}
-	if actorID == "" {
+	var atespace string
+	if actorName == "" {
 		host := r.Host
 		if host == "" {
 			host = r.Header.Get("Host")
 		}
-		// Extract the actor id (first label) from <id>.<atespace>.actors.resources.substrate.ate.dev
-		parts := strings.Split(host, ".")
-		if len(parts) > 1 {
-			actorID = parts[0]
-		}
+		atespace, actorName, _ = resources.ParseActorDNSName(host)
 	}
 
-	if actorID == "" {
-		actorID = "unknown"
+	if actorName == "" {
+		actorName = "unknown"
 	}
 
-	log.Printf("DEBUG: Identified ActorID: [%s]", actorID)
+	log.Printf("DEBUG: Identified ActorName: [%s]", actorName)
 
 	body, _ := io.ReadAll(r.Body)
 	message := string(body)
@@ -90,8 +88,8 @@ func handleRequest(w http.ResponseWriter, r *http.Request) {
 
 	// 1. Respond to user
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Agent Response: [%s] | Identity: %s | Session: %s\n", message, residentSecret, actorID))
-	if actorID == "" {
+	sb.WriteString(fmt.Sprintf("Agent Response: [%s] | Identity: %s | Session: %s\n", message, residentSecret, actorName))
+	if actorName == "" {
 		sb.WriteString("DEBUG: ID Missing. Headers received:\n")
 		for k, v := range r.Header {
 			sb.WriteString(fmt.Sprintf("  %s: %v\n", k, v))
@@ -103,17 +101,17 @@ func handleRequest(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(response))
 
 	// 2. Self-Suspend (Zero-Idle)
-	if actorID != "" && actorID != "localhost" && !strings.Contains(actorID, ":") {
+	if actorName != "" && actorName != "localhost" && !strings.Contains(actorName, ":") {
 		// Use a goroutine to avoid blocking the HTTP response
 		go func() {
 			// We linger for 7 seconds in this demo to make the multiplexing visible in the CLI.
 			time.Sleep(7 * time.Second)
-			suspendSelf(actorID)
+			suspendSelf(atespace, actorName)
 		}()
 	}
 }
 
-func suspendSelf(id string) {
+func suspendSelf(atespace, actorName string) {
 	apiAddr := os.Getenv("ATE_API_ADDR")
 	if apiAddr == "" {
 		apiAddr = "api.ate-system.svc.cluster.local:443"
@@ -129,8 +127,8 @@ func suspendSelf(id string) {
 
 	client := ateapipb.NewControlClient(conn)
 
-	log.Printf("Yielding compute. Requesting self-suspension for actor %s...", id)
-	_, err = client.SuspendActor(context.Background(), &ateapipb.SuspendActorRequest{Actor: &ateapipb.ObjectRef{Name: id}})
+	log.Printf("Yielding compute. Requesting self-suspension for actor %s...", actorName)
+	_, err = client.SuspendActor(context.Background(), &ateapipb.SuspendActorRequest{Actor: &ateapipb.ObjectRef{Atespace: atespace, Name: actorName}})
 	if err != nil {
 		log.Printf("Failed to self-suspend: %v", err)
 	}
