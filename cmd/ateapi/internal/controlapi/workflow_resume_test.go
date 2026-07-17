@@ -16,6 +16,7 @@ package controlapi
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -166,6 +167,50 @@ func TestIsWorkerEligibleForActor(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestNoFreeWorkerError(t *testing.T) {
+	s := &AssignWorkerStep{}
+
+	t.Run("no restriction gives the generic message", func(t *testing.T) {
+		err := s.noFreeWorkerError(nil, "", nil, nil, nil)
+		if status.Code(err) != codes.FailedPrecondition {
+			t.Fatalf("code = %v, want FailedPrecondition", status.Code(err))
+		}
+		if got, want := err.Error(), "no free workers available"; got != "rpc error: code = FailedPrecondition desc = "+want {
+			t.Errorf("message = %q, want to end with %q", got, want)
+		}
+	})
+
+	t.Run("restricted nodes exist but are all busy", func(t *testing.T) {
+		workers := []*ateapipb.Worker{
+			{SandboxClass: "gvisor", NodeName: "node1", Assignment: &ateapipb.Assignment{}},
+			{SandboxClass: "gvisor", NodeName: "node2"}, // free, but not on the restricted node
+		}
+		err := s.noFreeWorkerError(workers, atev1alpha1.SandboxClassGvisor, nil, nil, []string{"node1"})
+		msg := err.Error()
+		if !strings.Contains(msg, "node(s) [node1]") || !strings.Contains(msg, "1 eligible worker(s)") || !strings.Contains(msg, "are busy") || !strings.Contains(msg, "1 free worker(s) on other nodes") {
+			t.Errorf("message = %q, want busy-on-restricted-node diagnostic", msg)
+		}
+	})
+
+	t.Run("restricted node has no eligible workers at all", func(t *testing.T) {
+		workers := []*ateapipb.Worker{
+			{SandboxClass: "gvisor", NodeName: "node2"}, // free, but not on the restricted node
+		}
+		err := s.noFreeWorkerError(workers, atev1alpha1.SandboxClassGvisor, nil, nil, []string{"node1"})
+		msg := err.Error()
+		if !strings.Contains(msg, "node(s) [node1]") || !strings.Contains(msg, "no eligible workers exist") || !strings.Contains(msg, "1 free worker(s) on other nodes") {
+			t.Errorf("message = %q, want removed-node diagnostic", msg)
+		}
+	})
+
+	t.Run("empty-string restriction entries are ignored, falls back to generic message", func(t *testing.T) {
+		err := s.noFreeWorkerError(nil, "", nil, nil, []string{""})
+		if got, want := err.Error(), "no free workers available"; got != "rpc error: code = FailedPrecondition desc = "+want {
+			t.Errorf("message = %q, want to end with %q", got, want)
+		}
+	})
 }
 
 func TestAssignWorkerStep_SkipsWorkerAssignedInOtherAtespace(t *testing.T) {

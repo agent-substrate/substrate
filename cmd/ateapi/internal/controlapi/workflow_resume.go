@@ -21,6 +21,7 @@ import (
 	"log/slog"
 	"math/rand"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
@@ -154,12 +155,13 @@ func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, stat
 
 	// If not, find a free one using randomized shuffling
 	if assignedWorker == nil {
-		pickedWorker, err := s.findFreeWorker(workers, state.ActorTemplate.Spec.SandboxClass, state.ActorTemplate.Spec.WorkerSelector, state.Actor.GetWorkerSelector(), state.Actor.GetLatestSnapshotInfo().GetLocal().GetNodeVmsWithLocalSnapshots())
+		nodeRestrictions := state.Actor.GetLatestSnapshotInfo().GetLocal().GetNodeVmsWithLocalSnapshots()
+		pickedWorker, err := s.findFreeWorker(workers, state.ActorTemplate.Spec.SandboxClass, state.ActorTemplate.Spec.WorkerSelector, state.Actor.GetWorkerSelector(), nodeRestrictions)
 		if err != nil {
 			return err
 		}
 		if pickedWorker == nil {
-			return status.Errorf(codes.FailedPrecondition, "no free workers available")
+			return s.noFreeWorkerError(workers, state.ActorTemplate.Spec.SandboxClass, state.ActorTemplate.Spec.WorkerSelector, state.Actor.GetWorkerSelector(), nodeRestrictions)
 		}
 
 		assignedWorker = pickedWorker
@@ -239,6 +241,60 @@ func (s *AssignWorkerStep) findFreeWorker(
 		return freeWorkers[0], nil
 	}
 	return nil, nil
+}
+
+// noFreeWorkerError builds the FailedPrecondition returned when findFreeWorker
+// finds nothing. When a local-snapshot node restriction was in effect, the
+// generic "no free workers available" reads as cluster-wide capacity
+// exhaustion even though free workers may exist elsewhere and simply cannot
+// restore this actor's local checkpoint. Distinguish that locality conflict,
+// and further distinguish "the restricted nodes are just busy" from "the
+// restricted nodes have no eligible workers at all" (e.g. the node was
+// removed from the cluster), since the latter means the checkpoint may be
+// unreachable rather than merely contended.
+func (s *AssignWorkerStep) noFreeWorkerError(
+	workers []*ateapipb.Worker,
+	templateClass atev1alpha1.SandboxClass,
+	templateSelector *metav1.LabelSelector,
+	actorSelector *ateapipb.Selector,
+	nodeRestrictions []string,
+) error {
+	nodes := make([]string, 0, len(nodeRestrictions))
+	for _, n := range nodeRestrictions {
+		if n != "" {
+			nodes = append(nodes, n)
+		}
+	}
+	if len(nodes) == 0 {
+		return status.Errorf(codes.FailedPrecondition, "no free workers available")
+	}
+	restrictedSet := make(map[string]bool, len(nodes))
+	for _, n := range nodes {
+		restrictedSet[n] = true
+	}
+
+	var eligibleOnRestrictedNodes, freeElsewhere int
+	for _, worker := range workers {
+		eligible, err := isWorkerEligibleForActor(worker, templateClass, templateSelector, actorSelector)
+		if err != nil || !eligible {
+			continue
+		}
+		if restrictedSet[worker.GetNodeName()] {
+			eligibleOnRestrictedNodes++
+		} else if worker.Assignment == nil {
+			freeElsewhere++
+		}
+	}
+
+	nodeList := strings.Join(nodes, ", ")
+	if eligibleOnRestrictedNodes == 0 {
+		return status.Errorf(codes.FailedPrecondition,
+			"actor's local snapshot is on node(s) [%s] but no eligible workers exist on those nodes (the node(s) may have been removed); %d free worker(s) on other nodes cannot restore the local snapshot",
+			nodeList, freeElsewhere)
+	}
+	return status.Errorf(codes.FailedPrecondition,
+		"actor's local snapshot is on node(s) [%s] but all %d eligible worker(s) on those nodes are busy; %d free worker(s) on other nodes cannot restore the local snapshot",
+		nodeList, eligibleOnRestrictedNodes, freeElsewhere)
 }
 
 type CallAteletRestoreStep struct {
