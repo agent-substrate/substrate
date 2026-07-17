@@ -43,6 +43,22 @@ const CTBPrefix = "podidentity.podcert.ate.dev:identity:"
 // oidPodUID represents the Pod UID within a certificate extension.
 var oidPodUID = asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 11129, 2, 6, 1, 3}
 
+// atelet's identity, as installed by manifests/ate-install/atelet.yaml. Pods
+// running as atelet serve TLS (e.g. to ate-apiserver), so their certs also
+// carry the serverAuth EKU.
+const (
+	ateletNamespace      = "ate-system"
+	ateletServiceAccount = "atelet"
+)
+
+func extKeyUsages(namespace, serviceAccount string) []x509.ExtKeyUsage {
+	usages := []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}
+	if namespace == ateletNamespace && serviceAccount == ateletServiceAccount {
+		usages = append(usages, x509.ExtKeyUsageServerAuth)
+	}
+	return usages
+}
+
 type Impl struct {
 	kc     kubernetes.Interface
 	caPool *localca.Pool
@@ -142,7 +158,7 @@ func (h *Impl) MakeCert(ctx context.Context, pcr *certsv1beta1.PodCertificateReq
 		NotAfter:              notAfter,
 		URIs:                  []*url.URL{spiffeURI},
 		KeyUsage:              x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
+		ExtKeyUsage:           extKeyUsages(pcr.ObjectMeta.Namespace, pcr.Spec.ServiceAccountName),
 		// Link the leaf to its issuing CA by key id so verifiers can disambiguate
 		// a multi-CA trust bundle (e.g. valkey trusts both the servicedns and
 		// podidentity CAs).

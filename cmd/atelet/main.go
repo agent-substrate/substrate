@@ -1090,7 +1090,7 @@ func ateletServerTLSConfig(servingBundlePath, clientCAPath string) (*tls.Config,
 		return nil, fmt.Errorf("parse CA bundle from %s", clientCAPath)
 	}
 	return &tls.Config{
-		MinVersion:     tls.VersionTLS12,
+		MinVersion:     tls.VersionTLS13,
 		GetCertificate: credbundle.Loader(servingBundlePath),
 		ClientAuth:     tls.RequireAndVerifyClientCert,
 		ClientCAs:      clientCAs,

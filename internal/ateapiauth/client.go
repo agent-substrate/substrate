@@ -75,7 +75,7 @@ func DialOptions(cfg ClientConfig) ([]grpc.DialOption, error) {
 			return nil, err
 		}
 		tlsCfg := &tls.Config{
-			MinVersion:           tls.VersionTLS12,
+			MinVersion:           tls.VersionTLS13,
 			RootCAs:              pool,
 			ServerName:           cfg.ServerName,
 			GetClientCertificate: credbundle.ClientLoader(cfg.ClientCredBundle),
@@ -93,7 +93,7 @@ func DialOptions(cfg ClientConfig) ([]grpc.DialOption, error) {
 			return nil, err
 		}
 		tlsCfg := &tls.Config{
-			MinVersion: tls.VersionTLS12,
+			MinVersion: tls.VersionTLS13,
 			RootCAs:    pool,
 			ServerName: cfg.ServerName,
 		}

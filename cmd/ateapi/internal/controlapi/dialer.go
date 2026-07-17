@@ -135,7 +135,7 @@ func buildTLSConfig(clientBundlePath, serverCAPath, expectedPodUID string) (*tls
 	}
 
 	tlsConfig := tls.Config{
-		MinVersion:           tls.VersionTLS12,
+		MinVersion:           tls.VersionTLS13,
 		GetClientCertificate: credbundle.ClientLoader(clientBundlePath),
 		// Skip the default verification because the peer is dialed by IP and its
 		// certificate has no DNS/IP SAN.
@@ -172,6 +172,9 @@ func verifyAteletServerCert(roots *x509.CertPool, expectedPodUID string) func(tl
 					return fmt.Errorf("failed to parse oidPodUID extension: %w", err)
 				}
 			}
+		}
+		if foundPodUID.S == "" || expectedPodUID == "" {
+			return fmt.Errorf("found Pod UID == %q, expected podUID == %q", foundPodUID.S, expectedPodUID)
 		}
 		if foundPodUID.S != expectedPodUID {
 			return fmt.Errorf("pod UID is %q does not match expected %q", foundPodUID.S, expectedPodUID)

@@ -34,8 +34,9 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/health"
+	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 func TestDialOptionsRequiresCAFile(t *testing.T) {
@@ -82,8 +83,9 @@ func TestDialOptionsMTLSHandshake(t *testing.T) {
 		Certificates: []tls.Certificate{serverCert},
 		ClientAuth:   tls.RequireAndVerifyClientCert,
 		ClientCAs:    caPool,
-		MinVersion:   tls.VersionTLS12,
+		MinVersion:   tls.VersionTLS13,
 	})))
+	healthpb.RegisterHealthServer(srv, health.NewServer())
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen: %v", err)
@@ -103,32 +105,30 @@ func TestDialOptionsMTLSHandshake(t *testing.T) {
 		if err != nil {
 			t.Fatalf("DialOptions() error = %v", err)
 		}
-		// Unimplemented proves the TLS handshake and HTTP/2 setup succeeded
-		// and the RPC reached the server (which has no services registered).
-		if code := invokeCode(ctx, t, lis.Addr().String(), opts); code != codes.Unimplemented {
-			t.Fatalf("Invoke() code = %v, want %v", code, codes.Unimplemented)
+		if code := healthCheckCode(ctx, t, lis.Addr().String(), opts); code != codes.OK {
+			t.Fatalf("health check code = %v, want %v", code, codes.OK)
 		}
 	})
 
 	t.Run("without client cert is rejected", func(t *testing.T) {
 		opts := []grpc.DialOption{grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{
 			RootCAs:    caPool,
-			MinVersion: tls.VersionTLS12,
+			MinVersion: tls.VersionTLS13,
 		}))}
-		if code := invokeCode(ctx, t, lis.Addr().String(), opts); code == codes.Unimplemented {
-			t.Fatalf("Invoke() code = %v, want handshake failure", code)
+		if code := healthCheckCode(ctx, t, lis.Addr().String(), opts); code == codes.OK {
+			t.Fatalf("health check code = %v, want handshake failure", code)
 		}
 	})
 }
 
-func invokeCode(ctx context.Context, t *testing.T, target string, opts []grpc.DialOption) codes.Code {
+func healthCheckCode(ctx context.Context, t *testing.T, target string, opts []grpc.DialOption) codes.Code {
 	t.Helper()
 	conn, err := grpc.NewClient(target, opts...)
 	if err != nil {
 		t.Fatalf("grpc.NewClient() error = %v", err)
 	}
 	defer conn.Close()
-	err = conn.Invoke(ctx, "/test.NoSuchService/Ping", &emptypb.Empty{}, &emptypb.Empty{})
+	_, err = healthpb.NewHealthClient(conn).Check(ctx, &healthpb.HealthCheckRequest{})
 	return status.Code(err)
 }
 

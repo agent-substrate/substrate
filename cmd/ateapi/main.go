@@ -290,7 +290,7 @@ func connectRedis(ctx context.Context) (*redis.ClusterClient, error) {
 }
 
 func buildRedisTLSConfig(ctx context.Context) (*tls.Config, error) {
-	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12}
+	tlsConfig := &tls.Config{MinVersion: tls.VersionTLS13}
 	if *redisCACerts != "" {
 		ca, err := os.ReadFile(*redisCACerts)
 		if err != nil {
