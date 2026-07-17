@@ -499,6 +499,37 @@ func TestUntar_LaterEntryWins(t *testing.T) {
 	})
 }
 
+// A read-only directory in the image (e.g. ko ships /ko-app as 0555) must still
+// get its child written AND keep the image's mode, so atelet can unpack arbitrary
+// actor images as plain root without CAP_DAC_OVERRIDE. removeAllWritable must
+// then still be able to delete the restored read-only tree. (Meaningful as a
+// non-root test run; as root the dir-permission checks are bypassed.)
+func TestUntar_ReadOnlyDir(t *testing.T) {
+	entries := []tarEntry{
+		{name: "ko-app", typeflag: tar.TypeDir, mode: 0o555},
+		{name: "ko-app/counter", typeflag: tar.TypeReg, mode: 0o755, body: "bin"},
+	}
+	dir, err := runUntar(t, entries)
+	if err != nil {
+		t.Fatalf("untar into read-only dir: %v", err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, "ko-app/counter")); string(got) != "bin" {
+		t.Errorf("ko-app/counter = %q, want %q", got, "bin")
+	}
+	info, err := os.Stat(filepath.Join(dir, "ko-app"))
+	if err != nil {
+		t.Fatalf("stat ko-app: %v", err)
+	}
+	if info.Mode().Perm() != 0o555 {
+		t.Errorf("ko-app mode = %v, want the image's 0555 preserved", info.Mode().Perm())
+	}
+	// atelet must be able to delete the restored read-only tree (this also lets
+	// t.TempDir's cleanup succeed, which plain os.RemoveAll could not on 0555).
+	if err := removeAllWritable(filepath.Join(dir, "ko-app")); err != nil {
+		t.Errorf("removeAllWritable on restored read-only dir: %v", err)
+	}
+}
+
 func TestUntar_PathTraversal(t *testing.T) {
 	tests := []struct {
 		name  string
