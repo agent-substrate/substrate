@@ -24,9 +24,9 @@ import (
 )
 
 var getAtespacesCmd = &cobra.Command{
-	Use:     "atespaces [name]",
+	Use:     "atespaces [name ...]",
 	Aliases: []string{"atespace"},
-	Short:   "List all atespaces or get a specific atespace",
+	Short:   "List all atespaces or get one or more atespaces",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
 		apiClient, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, traceEnabled)
@@ -36,11 +36,15 @@ var getAtespacesCmd = &cobra.Command{
 		defer apiClient.Close()
 
 		if len(args) > 0 {
-			resp, err := apiClient.GetAtespace(ctx, &ateapipb.GetAtespaceRequest{Atespace: &ateapipb.ObjectRef{Name: args[0]}})
-			if err != nil {
-				return fmt.Errorf("failed to get atespace: %w", err)
+			atespaces := make([]*ateapipb.Atespace, 0, len(args))
+			for _, atespaceName := range args {
+				resp, err := apiClient.GetAtespace(ctx, &ateapipb.GetAtespaceRequest{Atespace: &ateapipb.ObjectRef{Name: atespaceName}})
+				if err != nil {
+					return fmt.Errorf("failed to get atespace %q: %w", atespaceName, err)
+				}
+				atespaces = append(atespaces, resp)
 			}
-			return printer.PrintAtespace(resp, outputFmt)
+			return printer.PrintAtespaces(atespaces, outputFmt)
 		}
 
 		resp, err := apiClient.ListAtespaces(ctx, &ateapipb.ListAtespacesRequest{})

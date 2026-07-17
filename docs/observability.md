@@ -7,8 +7,9 @@ This guide explains how Agent Substrate achieves observability across these susp
 ## The Observability Model
 
 To make underlying infrastructure transitions transparent, Agent Substrate establishes a standardized metadata model to identify actors across worker pods:
-* `ate.dev/actor_id`: The unique identifier of the actor (e.g., `my-counter-1` or `test`).
+* `ate.dev/actor_name`: actor name visible to the caller (e.g., `my-counter-1` or `test`).
 * `ate.dev/actor_atespace`: The atespace the actor lives in (e.g., `ate-demo-counter`).
+* `ate.dev/actor_uid`: Server-assigned UID of the actor, unique to the lifetime of an actor.
 * `ate.dev/actor_template_name`: The name of the actor's ActorTemplate (e.g., `counter`).
 * `ate.dev/actor_template_namespace`: The Kubernetes namespace of the actor's ActorTemplate (e.g., `ate-demo-counter`).
 * `ate.dev/container_name`: The name of the container within the actor that produced the log line (e.g., `counter`), so a multi-container actor's logs can be demultiplexed by container.

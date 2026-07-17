@@ -48,7 +48,6 @@ const (
 	Control_GetAtespace_FullMethodName    = "/ateapi.Control/GetAtespace"
 	Control_ListAtespaces_FullMethodName  = "/ateapi.Control/ListAtespaces"
 	Control_DeleteAtespace_FullMethodName = "/ateapi.Control/DeleteAtespace"
-	Control_DebugClear_FullMethodName     = "/ateapi.Control/DebugClear"
 )
 
 // ControlClient is the client API for Control service.
@@ -83,8 +82,6 @@ type ControlClient interface {
 	ListAtespaces(ctx context.Context, in *ListAtespacesRequest, opts ...grpc.CallOption) (*ListAtespacesResponse, error)
 	// Delete an empty Atespace. Rejects (FailedPrecondition) if any actors remain.
 	DeleteAtespace(ctx context.Context, in *DeleteAtespaceRequest, opts ...grpc.CallOption) (*Atespace, error)
-	// Debugging: drop all data from the ate database.
-	DebugClear(ctx context.Context, in *DebugClearRequest, opts ...grpc.CallOption) (*DebugClearResponse, error)
 }
 
 type controlClient struct {
@@ -225,16 +222,6 @@ func (c *controlClient) DeleteAtespace(ctx context.Context, in *DeleteAtespaceRe
 	return out, nil
 }
 
-func (c *controlClient) DebugClear(ctx context.Context, in *DebugClearRequest, opts ...grpc.CallOption) (*DebugClearResponse, error) {
-	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	out := new(DebugClearResponse)
-	err := c.cc.Invoke(ctx, Control_DebugClear_FullMethodName, in, out, cOpts...)
-	if err != nil {
-		return nil, err
-	}
-	return out, nil
-}
-
 // ControlServer is the server API for Control service.
 // All implementations must embed UnimplementedControlServer
 // for forward compatibility.
@@ -267,8 +254,6 @@ type ControlServer interface {
 	ListAtespaces(context.Context, *ListAtespacesRequest) (*ListAtespacesResponse, error)
 	// Delete an empty Atespace. Rejects (FailedPrecondition) if any actors remain.
 	DeleteAtespace(context.Context, *DeleteAtespaceRequest) (*Atespace, error)
-	// Debugging: drop all data from the ate database.
-	DebugClear(context.Context, *DebugClearRequest) (*DebugClearResponse, error)
 	mustEmbedUnimplementedControlServer()
 }
 
@@ -317,9 +302,6 @@ func (UnimplementedControlServer) ListAtespaces(context.Context, *ListAtespacesR
 }
 func (UnimplementedControlServer) DeleteAtespace(context.Context, *DeleteAtespaceRequest) (*Atespace, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeleteAtespace not implemented")
-}
-func (UnimplementedControlServer) DebugClear(context.Context, *DebugClearRequest) (*DebugClearResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "method DebugClear not implemented")
 }
 func (UnimplementedControlServer) mustEmbedUnimplementedControlServer() {}
 func (UnimplementedControlServer) testEmbeddedByValue()                 {}
@@ -576,24 +558,6 @@ func _Control_DeleteAtespace_Handler(srv interface{}, ctx context.Context, dec f
 	return interceptor(ctx, in, info, handler)
 }
 
-func _Control_DebugClear_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
-	in := new(DebugClearRequest)
-	if err := dec(in); err != nil {
-		return nil, err
-	}
-	if interceptor == nil {
-		return srv.(ControlServer).DebugClear(ctx, in)
-	}
-	info := &grpc.UnaryServerInfo{
-		Server:     srv,
-		FullMethod: Control_DebugClear_FullMethodName,
-	}
-	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
-		return srv.(ControlServer).DebugClear(ctx, req.(*DebugClearRequest))
-	}
-	return interceptor(ctx, in, info, handler)
-}
-
 // Control_ServiceDesc is the grpc.ServiceDesc for Control service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -653,9 +617,115 @@ var Control_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "DeleteAtespace",
 			Handler:    _Control_DeleteAtespace_Handler,
 		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "ateapi.proto",
+}
+
+const (
+	Debug_DebugClear_FullMethodName = "/ateapi.Debug/DebugClear"
+)
+
+// DebugClient is the client API for Debug service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// Debug is the RPC interface for administrative and debugging operations
+// (such as wiping state during development).
+type DebugClient interface {
+	// Debugging: drop all data from the ate database.
+	DebugClear(ctx context.Context, in *DebugClearRequest, opts ...grpc.CallOption) (*DebugClearResponse, error)
+}
+
+type debugClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewDebugClient(cc grpc.ClientConnInterface) DebugClient {
+	return &debugClient{cc}
+}
+
+func (c *debugClient) DebugClear(ctx context.Context, in *DebugClearRequest, opts ...grpc.CallOption) (*DebugClearResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DebugClearResponse)
+	err := c.cc.Invoke(ctx, Debug_DebugClear_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// DebugServer is the server API for Debug service.
+// All implementations must embed UnimplementedDebugServer
+// for forward compatibility.
+//
+// Debug is the RPC interface for administrative and debugging operations
+// (such as wiping state during development).
+type DebugServer interface {
+	// Debugging: drop all data from the ate database.
+	DebugClear(context.Context, *DebugClearRequest) (*DebugClearResponse, error)
+	mustEmbedUnimplementedDebugServer()
+}
+
+// UnimplementedDebugServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedDebugServer struct{}
+
+func (UnimplementedDebugServer) DebugClear(context.Context, *DebugClearRequest) (*DebugClearResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DebugClear not implemented")
+}
+func (UnimplementedDebugServer) mustEmbedUnimplementedDebugServer() {}
+func (UnimplementedDebugServer) testEmbeddedByValue()               {}
+
+// UnsafeDebugServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to DebugServer will
+// result in compilation errors.
+type UnsafeDebugServer interface {
+	mustEmbedUnimplementedDebugServer()
+}
+
+func RegisterDebugServer(s grpc.ServiceRegistrar, srv DebugServer) {
+	// If the following call panics, it indicates UnimplementedDebugServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&Debug_ServiceDesc, srv)
+}
+
+func _Debug_DebugClear_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DebugClearRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(DebugServer).DebugClear(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Debug_DebugClear_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(DebugServer).DebugClear(ctx, req.(*DebugClearRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// Debug_ServiceDesc is the grpc.ServiceDesc for Debug service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var Debug_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "ateapi.Debug",
+	HandlerType: (*DebugServer)(nil),
+	Methods: []grpc.MethodDesc{
 		{
 			MethodName: "DebugClear",
-			Handler:    _Control_DebugClear_Handler,
+			Handler:    _Debug_DebugClear_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

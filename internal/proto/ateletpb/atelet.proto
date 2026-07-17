@@ -37,16 +37,17 @@ message RunRequest {
 
   string atespace = 2;
   string actor_name = 3;
+  string actor_uid = 4;
 
-  string actor_template_namespace = 4;
-  string actor_template_name = 5;
+  string actor_template_namespace = 5;
+  string actor_template_name = 6;
 
-  WorkloadSpec spec = 6;
+  WorkloadSpec spec = 7;
 
   // The sandbox binaries to use for booting this actor from scratch. atelet
   // fetches the relevant assets and records them with the actor's on-node state
   // so a later Checkpoint can pin the same version into the snapshot manifest.
-  SandboxAssets sandbox_assets = 7;
+  SandboxAssets sandbox_assets = 8;
 }
 
 // AssetFile is one content-addressed file atelet fetches for a sandbox runtime
@@ -180,25 +181,26 @@ message CheckpointRequest {
 
   string atespace = 2;
   string actor_name = 3;
+  string actor_uid = 4;
 
-  string actor_template_namespace = 4;
-  string actor_template_name = 5;
+  string actor_template_namespace = 5;
+  string actor_template_name = 6;
 
   // Sandbox binary config is not sent on checkpoint: atelet uses the version the
   // actor is currently running (recorded with the actor's on-node state at
   // Run/Restore) and records it into the snapshot manifest.
-  WorkloadSpec spec = 6;
+  WorkloadSpec spec = 7;
 
-  CheckpointType type = 7;
+  CheckpointType type = 8;
 
   // The checkpoint configuration, depending on the type.
   oneof config {
-    LocalCheckpointConfiguration local_config = 8;
-    ExternalCheckpointConfiguration external_config = 9;
+    LocalCheckpointConfiguration local_config = 9;
+    ExternalCheckpointConfiguration external_config = 10;
   }
 
   // What should be included in the checkpoint.
-  SnapshotScope scope = 10;
+  SnapshotScope scope = 11;
 }
 
 message CheckpointResponse {
@@ -209,25 +211,26 @@ message RestoreRequest {
 
   string atespace = 2;
   string actor_name = 3;
+  string actor_uid = 4;
 
-  string actor_template_namespace = 4;
-  string actor_template_name = 5;
+  string actor_template_namespace = 5;
+  string actor_template_name = 6;
 
   // Sandbox binary config is not sent on restore: the snapshot is
   // self-describing. atelet reads the snapshot manifest to recover the pinned
   // sandbox version that created it.
-  WorkloadSpec spec = 6;
+  WorkloadSpec spec = 7;
 
-  CheckpointType type = 7;
+  CheckpointType type = 8;
 
   // The checkpoint configuration, depending on the type.
   oneof config {
-    LocalCheckpointConfiguration local_config = 8;
-    ExternalCheckpointConfiguration external_config = 9;
+    LocalCheckpointConfiguration local_config = 9;
+    ExternalCheckpointConfiguration external_config = 10;
   }
 
   // What content to restore from the checkpoint.
-  SnapshotScope scope = 10;
+  SnapshotScope scope = 11;
 }
 
 message RestoreResponse {

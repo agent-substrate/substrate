@@ -2279,7 +2279,7 @@ const file_ateapi_proto_rawDesc = "" +
 	"session_id\x18\x03 \x01(\tR\tsessionId\x12>\n" +
 	"\x1bcertificate_signing_request\x18\x04 \x01(\fR\x19certificateSigningRequest\"E\n" +
 	"\x10MintCertResponse\x121\n" +
-	"\x14session_certificates\x18\x01 \x03(\fR\x13sessionCertificates2\xd0\a\n" +
+	"\x14session_certificates\x18\x01 \x03(\fR\x13sessionCertificates2\x89\a\n" +
 	"\aControl\x124\n" +
 	"\bGetActor\x12\x17.ateapi.GetActorRequest\x1a\r.ateapi.Actor\"\x00\x12:\n" +
 	"\vCreateActor\x12\x1a.ateapi.CreateActorRequest\x1a\r.ateapi.Actor\"\x00\x12H\n" +
@@ -2295,7 +2295,8 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x0eCreateAtespace\x12\x1d.ateapi.CreateAtespaceRequest\x1a\x10.ateapi.Atespace\"\x00\x12=\n" +
 	"\vGetAtespace\x12\x1a.ateapi.GetAtespaceRequest\x1a\x10.ateapi.Atespace\"\x00\x12N\n" +
 	"\rListAtespaces\x12\x1c.ateapi.ListAtespacesRequest\x1a\x1d.ateapi.ListAtespacesResponse\"\x00\x12C\n" +
-	"\x0eDeleteAtespace\x12\x1d.ateapi.DeleteAtespaceRequest\x1a\x10.ateapi.Atespace\"\x00\x12E\n" +
+	"\x0eDeleteAtespace\x12\x1d.ateapi.DeleteAtespaceRequest\x1a\x10.ateapi.Atespace\"\x002N\n" +
+	"\x05Debug\x12E\n" +
 	"\n" +
 	"DebugClear\x12\x19.ateapi.DebugClearRequest\x1a\x1a.ateapi.DebugClearResponse\"\x002\x8c\x01\n" +
 	"\x0fSessionIdentity\x12:\n" +
@@ -2405,7 +2406,7 @@ var file_ateapi_proto_depIdxs = []int32{
 	10, // 42: ateapi.Control.GetAtespace:input_type -> ateapi.GetAtespaceRequest
 	11, // 43: ateapi.Control.ListAtespaces:input_type -> ateapi.ListAtespacesRequest
 	13, // 44: ateapi.Control.DeleteAtespace:input_type -> ateapi.DeleteAtespaceRequest
-	32, // 45: ateapi.Control.DebugClear:input_type -> ateapi.DebugClearRequest
+	32, // 45: ateapi.Debug.DebugClear:input_type -> ateapi.DebugClearRequest
 	34, // 46: ateapi.SessionIdentity.MintJWT:input_type -> ateapi.MintJWTRequest
 	36, // 47: ateapi.SessionIdentity.MintCert:input_type -> ateapi.MintCertRequest
 	6,  // 48: ateapi.Control.GetActor:output_type -> ateapi.Actor
@@ -2421,7 +2422,7 @@ var file_ateapi_proto_depIdxs = []int32{
 	7,  // 58: ateapi.Control.GetAtespace:output_type -> ateapi.Atespace
 	12, // 59: ateapi.Control.ListAtespaces:output_type -> ateapi.ListAtespacesResponse
 	7,  // 60: ateapi.Control.DeleteAtespace:output_type -> ateapi.Atespace
-	33, // 61: ateapi.Control.DebugClear:output_type -> ateapi.DebugClearResponse
+	33, // 61: ateapi.Debug.DebugClear:output_type -> ateapi.DebugClearResponse
 	35, // 62: ateapi.SessionIdentity.MintJWT:output_type -> ateapi.MintJWTResponse
 	37, // 63: ateapi.SessionIdentity.MintCert:output_type -> ateapi.MintCertResponse
 	48, // [48:64] is the sub-list for method output_type
@@ -2448,7 +2449,7 @@ func file_ateapi_proto_init() {
 			NumEnums:      1,
 			NumMessages:   39,
 			NumExtensions: 0,
-			NumServices:   2,
+			NumServices:   3,
 		},
 		GoTypes:           file_ateapi_proto_goTypes,
 		DependencyIndexes: file_ateapi_proto_depIdxs,

@@ -28,6 +28,7 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/controlapi"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/debugapi"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/k8sjwt"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/sessionidentity"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/ateredis"
@@ -153,6 +154,7 @@ func main() {
 	jwtIssuerDiscoveryClient := buildK8sServiceAccountIssuerDiscoveryClient(ctx, *clientJWTCAFile, *clientJWTIssuer)
 
 	sessionIdentitySrv := sessionidentity.New(*clientJWTIssuer, *clientJWTAudience, *sessionIDJWTPoolFile, *sessionIDCAPoolFile, *workerpoolCACerts, jwtIssuerDiscoveryClient)
+	debugSrv := debugapi.NewService(redisPersistence)
 
 	lisCfg := &net.ListenConfig{}
 	lis, err := lisCfg.Listen(ctx, "tcp", *listenAddr)
@@ -187,6 +189,7 @@ func main() {
 	reflection.Register(mux)
 	ateapipb.RegisterControlServer(mux, sm)
 	ateapipb.RegisterSessionIdentityServer(mux, sessionIdentitySrv)
+	ateapipb.RegisterDebugServer(mux, debugSrv)
 
 	go serverboot.StartMetricsServer(ctx, serverboot.MetricsServerOptions{
 		Addr:         *metricsListenAddr,
