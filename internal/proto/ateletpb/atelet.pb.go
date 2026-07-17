@@ -193,14 +193,14 @@ type RunRequest struct {
 	TargetAteomUid         string                 `protobuf:"bytes,1,opt,name=target_ateom_uid,json=targetAteomUid,proto3" json:"target_ateom_uid,omitempty"`
 	Atespace               string                 `protobuf:"bytes,2,opt,name=atespace,proto3" json:"atespace,omitempty"`
 	ActorName              string                 `protobuf:"bytes,3,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
-	ActorTemplateNamespace string                 `protobuf:"bytes,4,opt,name=actor_template_namespace,json=actorTemplateNamespace,proto3" json:"actor_template_namespace,omitempty"`
-	ActorTemplateName      string                 `protobuf:"bytes,5,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
-	Spec                   *WorkloadSpec          `protobuf:"bytes,6,opt,name=spec,proto3" json:"spec,omitempty"`
+	ActorUid               string                 `protobuf:"bytes,4,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
+	ActorTemplateNamespace string                 `protobuf:"bytes,5,opt,name=actor_template_namespace,json=actorTemplateNamespace,proto3" json:"actor_template_namespace,omitempty"`
+	ActorTemplateName      string                 `protobuf:"bytes,6,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
+	Spec                   *WorkloadSpec          `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
 	// The sandbox binaries to use for booting this actor from scratch. atelet
 	// fetches the relevant assets and records them with the actor's on-node state
 	// so a later Checkpoint can pin the same version into the snapshot manifest.
-	SandboxAssets *SandboxAssets `protobuf:"bytes,7,opt,name=sandbox_assets,json=sandboxAssets,proto3" json:"sandbox_assets,omitempty"`
-	ActorUid      string         `protobuf:"bytes,8,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
+	SandboxAssets *SandboxAssets `protobuf:"bytes,8,opt,name=sandbox_assets,json=sandboxAssets,proto3" json:"sandbox_assets,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -256,6 +256,13 @@ func (x *RunRequest) GetActorName() string {
 	return ""
 }
 
+func (x *RunRequest) GetActorUid() string {
+	if x != nil {
+		return x.ActorUid
+	}
+	return ""
+}
+
 func (x *RunRequest) GetActorTemplateNamespace() string {
 	if x != nil {
 		return x.ActorTemplateNamespace
@@ -282,13 +289,6 @@ func (x *RunRequest) GetSandboxAssets() *SandboxAssets {
 		return x.SandboxAssets
 	}
 	return nil
-}
-
-func (x *RunRequest) GetActorUid() string {
-	if x != nil {
-		return x.ActorUid
-	}
-	return ""
 }
 
 // AssetFile is one content-addressed file atelet fetches for a sandbox runtime
@@ -1058,13 +1058,14 @@ type CheckpointRequest struct {
 	TargetAteomUid         string                 `protobuf:"bytes,1,opt,name=target_ateom_uid,json=targetAteomUid,proto3" json:"target_ateom_uid,omitempty"`
 	Atespace               string                 `protobuf:"bytes,2,opt,name=atespace,proto3" json:"atespace,omitempty"`
 	ActorName              string                 `protobuf:"bytes,3,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
-	ActorTemplateNamespace string                 `protobuf:"bytes,4,opt,name=actor_template_namespace,json=actorTemplateNamespace,proto3" json:"actor_template_namespace,omitempty"`
-	ActorTemplateName      string                 `protobuf:"bytes,5,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
+	ActorUid               string                 `protobuf:"bytes,4,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
+	ActorTemplateNamespace string                 `protobuf:"bytes,5,opt,name=actor_template_namespace,json=actorTemplateNamespace,proto3" json:"actor_template_namespace,omitempty"`
+	ActorTemplateName      string                 `protobuf:"bytes,6,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
 	// Sandbox binary config is not sent on checkpoint: atelet uses the version the
 	// actor is currently running (recorded with the actor's on-node state at
 	// Run/Restore) and records it into the snapshot manifest.
-	Spec *WorkloadSpec  `protobuf:"bytes,6,opt,name=spec,proto3" json:"spec,omitempty"`
-	Type CheckpointType `protobuf:"varint,7,opt,name=type,proto3,enum=atelet.CheckpointType" json:"type,omitempty"`
+	Spec *WorkloadSpec  `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
+	Type CheckpointType `protobuf:"varint,8,opt,name=type,proto3,enum=atelet.CheckpointType" json:"type,omitempty"`
 	// The checkpoint configuration, depending on the type.
 	//
 	// Types that are valid to be assigned to Config:
@@ -1073,8 +1074,7 @@ type CheckpointRequest struct {
 	//	*CheckpointRequest_ExternalConfig
 	Config isCheckpointRequest_Config `protobuf_oneof:"config"`
 	// What should be included in the checkpoint.
-	Scope         SnapshotScope `protobuf:"varint,10,opt,name=scope,proto3,enum=atelet.SnapshotScope" json:"scope,omitempty"`
-	ActorUid      string        `protobuf:"bytes,11,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
+	Scope         SnapshotScope `protobuf:"varint,11,opt,name=scope,proto3,enum=atelet.SnapshotScope" json:"scope,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1126,6 +1126,13 @@ func (x *CheckpointRequest) GetAtespace() string {
 func (x *CheckpointRequest) GetActorName() string {
 	if x != nil {
 		return x.ActorName
+	}
+	return ""
+}
+
+func (x *CheckpointRequest) GetActorUid() string {
+	if x != nil {
+		return x.ActorUid
 	}
 	return ""
 }
@@ -1190,23 +1197,16 @@ func (x *CheckpointRequest) GetScope() SnapshotScope {
 	return SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED
 }
 
-func (x *CheckpointRequest) GetActorUid() string {
-	if x != nil {
-		return x.ActorUid
-	}
-	return ""
-}
-
 type isCheckpointRequest_Config interface {
 	isCheckpointRequest_Config()
 }
 
 type CheckpointRequest_LocalConfig struct {
-	LocalConfig *LocalCheckpointConfiguration `protobuf:"bytes,8,opt,name=local_config,json=localConfig,proto3,oneof"`
+	LocalConfig *LocalCheckpointConfiguration `protobuf:"bytes,9,opt,name=local_config,json=localConfig,proto3,oneof"`
 }
 
 type CheckpointRequest_ExternalConfig struct {
-	ExternalConfig *ExternalCheckpointConfiguration `protobuf:"bytes,9,opt,name=external_config,json=externalConfig,proto3,oneof"`
+	ExternalConfig *ExternalCheckpointConfiguration `protobuf:"bytes,10,opt,name=external_config,json=externalConfig,proto3,oneof"`
 }
 
 func (*CheckpointRequest_LocalConfig) isCheckpointRequest_Config() {}
@@ -1254,13 +1254,14 @@ type RestoreRequest struct {
 	TargetAteomUid         string                 `protobuf:"bytes,1,opt,name=target_ateom_uid,json=targetAteomUid,proto3" json:"target_ateom_uid,omitempty"`
 	Atespace               string                 `protobuf:"bytes,2,opt,name=atespace,proto3" json:"atespace,omitempty"`
 	ActorName              string                 `protobuf:"bytes,3,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
-	ActorTemplateNamespace string                 `protobuf:"bytes,4,opt,name=actor_template_namespace,json=actorTemplateNamespace,proto3" json:"actor_template_namespace,omitempty"`
-	ActorTemplateName      string                 `protobuf:"bytes,5,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
+	ActorUid               string                 `protobuf:"bytes,4,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
+	ActorTemplateNamespace string                 `protobuf:"bytes,5,opt,name=actor_template_namespace,json=actorTemplateNamespace,proto3" json:"actor_template_namespace,omitempty"`
+	ActorTemplateName      string                 `protobuf:"bytes,6,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
 	// Sandbox binary config is not sent on restore: the snapshot is
 	// self-describing. atelet reads the snapshot manifest to recover the pinned
 	// sandbox version that created it.
-	Spec *WorkloadSpec  `protobuf:"bytes,6,opt,name=spec,proto3" json:"spec,omitempty"`
-	Type CheckpointType `protobuf:"varint,7,opt,name=type,proto3,enum=atelet.CheckpointType" json:"type,omitempty"`
+	Spec *WorkloadSpec  `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
+	Type CheckpointType `protobuf:"varint,8,opt,name=type,proto3,enum=atelet.CheckpointType" json:"type,omitempty"`
 	// The checkpoint configuration, depending on the type.
 	//
 	// Types that are valid to be assigned to Config:
@@ -1269,8 +1270,7 @@ type RestoreRequest struct {
 	//	*RestoreRequest_ExternalConfig
 	Config isRestoreRequest_Config `protobuf_oneof:"config"`
 	// What content to restore from the checkpoint.
-	Scope         SnapshotScope `protobuf:"varint,10,opt,name=scope,proto3,enum=atelet.SnapshotScope" json:"scope,omitempty"`
-	ActorUid      string        `protobuf:"bytes,11,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
+	Scope         SnapshotScope `protobuf:"varint,11,opt,name=scope,proto3,enum=atelet.SnapshotScope" json:"scope,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1322,6 +1322,13 @@ func (x *RestoreRequest) GetAtespace() string {
 func (x *RestoreRequest) GetActorName() string {
 	if x != nil {
 		return x.ActorName
+	}
+	return ""
+}
+
+func (x *RestoreRequest) GetActorUid() string {
+	if x != nil {
+		return x.ActorUid
 	}
 	return ""
 }
@@ -1386,23 +1393,16 @@ func (x *RestoreRequest) GetScope() SnapshotScope {
 	return SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED
 }
 
-func (x *RestoreRequest) GetActorUid() string {
-	if x != nil {
-		return x.ActorUid
-	}
-	return ""
-}
-
 type isRestoreRequest_Config interface {
 	isRestoreRequest_Config()
 }
 
 type RestoreRequest_LocalConfig struct {
-	LocalConfig *LocalCheckpointConfiguration `protobuf:"bytes,8,opt,name=local_config,json=localConfig,proto3,oneof"`
+	LocalConfig *LocalCheckpointConfiguration `protobuf:"bytes,9,opt,name=local_config,json=localConfig,proto3,oneof"`
 }
 
 type RestoreRequest_ExternalConfig struct {
-	ExternalConfig *ExternalCheckpointConfiguration `protobuf:"bytes,9,opt,name=external_config,json=externalConfig,proto3,oneof"`
+	ExternalConfig *ExternalCheckpointConfiguration `protobuf:"bytes,10,opt,name=external_config,json=externalConfig,proto3,oneof"`
 }
 
 func (*RestoreRequest_LocalConfig) isRestoreRequest_Config() {}
@@ -1455,12 +1455,12 @@ const file_atelet_proto_rawDesc = "" +
 	"\x10target_ateom_uid\x18\x01 \x01(\tR\x0etargetAteomUid\x12\x1a\n" +
 	"\batespace\x18\x02 \x01(\tR\batespace\x12\x1d\n" +
 	"\n" +
-	"actor_name\x18\x03 \x01(\tR\tactorName\x128\n" +
-	"\x18actor_template_namespace\x18\x04 \x01(\tR\x16actorTemplateNamespace\x12.\n" +
-	"\x13actor_template_name\x18\x05 \x01(\tR\x11actorTemplateName\x12(\n" +
-	"\x04spec\x18\x06 \x01(\v2\x14.atelet.WorkloadSpecR\x04spec\x12<\n" +
-	"\x0esandbox_assets\x18\a \x01(\v2\x15.atelet.SandboxAssetsR\rsandboxAssets\x12\x1b\n" +
-	"\tactor_uid\x18\b \x01(\tR\bactorUid\"5\n" +
+	"actor_name\x18\x03 \x01(\tR\tactorName\x12\x1b\n" +
+	"\tactor_uid\x18\x04 \x01(\tR\bactorUid\x128\n" +
+	"\x18actor_template_namespace\x18\x05 \x01(\tR\x16actorTemplateNamespace\x12.\n" +
+	"\x13actor_template_name\x18\x06 \x01(\tR\x11actorTemplateName\x12(\n" +
+	"\x04spec\x18\a \x01(\v2\x14.atelet.WorkloadSpecR\x04spec\x12<\n" +
+	"\x0esandbox_assets\x18\b \x01(\v2\x15.atelet.SandboxAssetsR\rsandboxAssets\"5\n" +
 	"\tAssetFile\x12\x10\n" +
 	"\x03url\x18\x01 \x01(\tR\x03url\x12\x16\n" +
 	"\x06sha256\x18\x02 \x01(\tR\x06sha256\"\x8e\x01\n" +
@@ -1519,32 +1519,32 @@ const file_atelet_proto_rawDesc = "" +
 	"\x10target_ateom_uid\x18\x01 \x01(\tR\x0etargetAteomUid\x12\x1a\n" +
 	"\batespace\x18\x02 \x01(\tR\batespace\x12\x1d\n" +
 	"\n" +
-	"actor_name\x18\x03 \x01(\tR\tactorName\x128\n" +
-	"\x18actor_template_namespace\x18\x04 \x01(\tR\x16actorTemplateNamespace\x12.\n" +
-	"\x13actor_template_name\x18\x05 \x01(\tR\x11actorTemplateName\x12(\n" +
-	"\x04spec\x18\x06 \x01(\v2\x14.atelet.WorkloadSpecR\x04spec\x12*\n" +
-	"\x04type\x18\a \x01(\x0e2\x16.atelet.CheckpointTypeR\x04type\x12I\n" +
-	"\flocal_config\x18\b \x01(\v2$.atelet.LocalCheckpointConfigurationH\x00R\vlocalConfig\x12R\n" +
-	"\x0fexternal_config\x18\t \x01(\v2'.atelet.ExternalCheckpointConfigurationH\x00R\x0eexternalConfig\x12+\n" +
-	"\x05scope\x18\n" +
-	" \x01(\x0e2\x15.atelet.SnapshotScopeR\x05scope\x12\x1b\n" +
-	"\tactor_uid\x18\v \x01(\tR\bactorUidB\b\n" +
+	"actor_name\x18\x03 \x01(\tR\tactorName\x12\x1b\n" +
+	"\tactor_uid\x18\x04 \x01(\tR\bactorUid\x128\n" +
+	"\x18actor_template_namespace\x18\x05 \x01(\tR\x16actorTemplateNamespace\x12.\n" +
+	"\x13actor_template_name\x18\x06 \x01(\tR\x11actorTemplateName\x12(\n" +
+	"\x04spec\x18\a \x01(\v2\x14.atelet.WorkloadSpecR\x04spec\x12*\n" +
+	"\x04type\x18\b \x01(\x0e2\x16.atelet.CheckpointTypeR\x04type\x12I\n" +
+	"\flocal_config\x18\t \x01(\v2$.atelet.LocalCheckpointConfigurationH\x00R\vlocalConfig\x12R\n" +
+	"\x0fexternal_config\x18\n" +
+	" \x01(\v2'.atelet.ExternalCheckpointConfigurationH\x00R\x0eexternalConfig\x12+\n" +
+	"\x05scope\x18\v \x01(\x0e2\x15.atelet.SnapshotScopeR\x05scopeB\b\n" +
 	"\x06config\"\x14\n" +
 	"\x12CheckpointResponse\"\xa8\x04\n" +
 	"\x0eRestoreRequest\x12(\n" +
 	"\x10target_ateom_uid\x18\x01 \x01(\tR\x0etargetAteomUid\x12\x1a\n" +
 	"\batespace\x18\x02 \x01(\tR\batespace\x12\x1d\n" +
 	"\n" +
-	"actor_name\x18\x03 \x01(\tR\tactorName\x128\n" +
-	"\x18actor_template_namespace\x18\x04 \x01(\tR\x16actorTemplateNamespace\x12.\n" +
-	"\x13actor_template_name\x18\x05 \x01(\tR\x11actorTemplateName\x12(\n" +
-	"\x04spec\x18\x06 \x01(\v2\x14.atelet.WorkloadSpecR\x04spec\x12*\n" +
-	"\x04type\x18\a \x01(\x0e2\x16.atelet.CheckpointTypeR\x04type\x12I\n" +
-	"\flocal_config\x18\b \x01(\v2$.atelet.LocalCheckpointConfigurationH\x00R\vlocalConfig\x12R\n" +
-	"\x0fexternal_config\x18\t \x01(\v2'.atelet.ExternalCheckpointConfigurationH\x00R\x0eexternalConfig\x12+\n" +
-	"\x05scope\x18\n" +
-	" \x01(\x0e2\x15.atelet.SnapshotScopeR\x05scope\x12\x1b\n" +
-	"\tactor_uid\x18\v \x01(\tR\bactorUidB\b\n" +
+	"actor_name\x18\x03 \x01(\tR\tactorName\x12\x1b\n" +
+	"\tactor_uid\x18\x04 \x01(\tR\bactorUid\x128\n" +
+	"\x18actor_template_namespace\x18\x05 \x01(\tR\x16actorTemplateNamespace\x12.\n" +
+	"\x13actor_template_name\x18\x06 \x01(\tR\x11actorTemplateName\x12(\n" +
+	"\x04spec\x18\a \x01(\v2\x14.atelet.WorkloadSpecR\x04spec\x12*\n" +
+	"\x04type\x18\b \x01(\x0e2\x16.atelet.CheckpointTypeR\x04type\x12I\n" +
+	"\flocal_config\x18\t \x01(\v2$.atelet.LocalCheckpointConfigurationH\x00R\vlocalConfig\x12R\n" +
+	"\x0fexternal_config\x18\n" +
+	" \x01(\v2'.atelet.ExternalCheckpointConfigurationH\x00R\x0eexternalConfig\x12+\n" +
+	"\x05scope\x18\v \x01(\x0e2\x15.atelet.SnapshotScopeR\x05scopeB\b\n" +
 	"\x06config\"\x11\n" +
 	"\x0fRestoreResponse*F\n" +
 	"\n" +
