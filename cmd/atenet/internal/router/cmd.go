@@ -19,8 +19,6 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
-
-	"github.com/agent-substrate/substrate/internal/ateapiauth"
 )
 
 func NewRouterCmd() *cobra.Command {
@@ -57,11 +55,11 @@ func NewRouterCmd() *cobra.Command {
 	cmd.Flags().IntVar(&cfg.HttpsPort, "port-https", 8443, "TCP port for HTTPS workload traffic entering through the Envoy Router")
 	cmd.Flags().StringVar(&cfg.EnvoyCertPath, "envoy-cert-path", "", "Path to the Envoy certificate file.")
 	cmd.Flags().StringVar(&cfg.OtlpCollectorAddress, "otlp-collector-address", "", "host:port of the OTLP gRPC collector that Envoy reports tracing spans to (empty disables Envoy tracing)")
-	cmd.Flags().StringVar(&cfg.Auth.AteapiAuthMode, "ateapi-auth", "mtls", "Client auth to ateapi: mtls|jwt. 'mtls' (default) verifies the server cert (--ateapi-ca-file) and presents the pod-projected client certificate (--ateapi-client-cert). 'jwt' verifies the server cert and sends a Bearer SA token.")
 	cmd.Flags().StringVar(&cfg.Auth.AteapiCAFile, "ateapi-ca-file", "", "PEM file with CAs trusted to verify the ateapi server cert. Required.")
-	cmd.Flags().StringVar(&cfg.Auth.AteapiClientCertPath, "ateapi-client-cert", "", "Credential bundle presented as the client certificate when dialing ateapi. Required for mtls.")
+	cmd.Flags().StringVar(&cfg.Auth.AteapiClientCertPath, "ateapi-client-cert", "", "Credential bundle presented as the client certificate when dialing ateapi. Required unless --ateapi-use-token-auth is set, ignored otherwise.")
 	cmd.Flags().StringVar(&cfg.Auth.AteapiServerName, "ateapi-server-name", "", "SNI / hostname expected on the ateapi server cert. Optional.")
-	cmd.Flags().StringVar(&cfg.Auth.AteapiTokenFile, "ateapi-token-file", ateapiauth.DefaultServiceAccountTokenFile, "Projected SA token file used as Bearer credential. Required for jwt.")
+	cmd.Flags().BoolVar(&cfg.Auth.AteapiUseTokenAuth, "ateapi-use-token-auth", false, "Authenticate to ateapi with the Bearer token from --ateapi-token-file instead of the client certificate from --ateapi-client-cert.")
+	cmd.Flags().StringVar(&cfg.Auth.AteapiTokenFile, "ateapi-token-file", "", "Projected SA token file used as Bearer credential. Required with --ateapi-use-token-auth, ignored otherwise.")
 
 	return cmd
 }

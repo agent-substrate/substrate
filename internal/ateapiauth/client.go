@@ -32,30 +32,32 @@ const (
 	DefaultServiceAccountTokenFile = "/var/run/secrets/kubernetes.io/serviceaccount/token"
 )
 
-// ClientConfig configures how to dial the ateapi gRPC server.
-//
-//   - Mode=ModeMTLS: mutual TLS. Validates the server cert against CAFile and
-//     presents the client certificate from ClientCredBundle, re-read on every
-//     handshake so in-place pod-certificate rotations are picked up.
-//   - Mode=ModeJWT: validates the server cert against CAFile, sends a Bearer
-//     token from TokenFile as per-RPC credentials.
+// ClientConfig configures how to dial the ateapi gRPC server. The server
+// cert is always validated against CAFile. UseTokenAuth selects the client
+// credential: a client certificate from ClientCredBundle (mutual TLS,
+// re-read on every handshake so in-place pod-certificate rotations are
+// picked up) by default, or a Bearer token from TokenFile sent as per-RPC
+// credentials. The path not selected is ignored.
 type ClientConfig struct {
-	Mode Mode
+	// UseTokenAuth authenticates with the Bearer token from TokenFile instead
+	// of the client certificate from ClientCredBundle.
+	UseTokenAuth bool
 
 	// CAFile is a PEM file containing CA certs that sign the server cert.
-	// Required in all modes.
+	// Required.
 	CAFile string
 
 	// ServerName overrides SNI / hostname verification. Optional.
 	ServerName string
 
 	// TokenFile is a path to a Kubernetes projected ServiceAccount token used
-	// as a Bearer credential. Required for ModeJWT.
+	// as a Bearer credential. Required when UseTokenAuth is set, ignored
+	// otherwise.
 	TokenFile string
 
 	// ClientCredBundle is a PEM file containing the client certificate chain
-	// and PKCS8 private key presented to the server. Required for ModeMTLS
-	// and ignored for ModeJWT.
+	// and PKCS8 private key presented to the server. Required unless
+	// UseTokenAuth is set, ignored otherwise.
 	ClientCredBundle string
 }
 
@@ -65,46 +67,32 @@ func DialOptions(cfg ClientConfig) ([]grpc.DialOption, error) {
 	if cfg.CAFile == "" {
 		return nil, fmt.Errorf("ateapiauth: CAFile is required")
 	}
-	switch cfg.Mode {
-	case "", ModeMTLS:
-		if cfg.ClientCredBundle == "" {
-			return nil, fmt.Errorf("ateapiauth: mtls mode requires ClientCredBundle")
-		}
-		pool, err := loadCAPool(cfg.CAFile)
-		if err != nil {
-			return nil, err
-		}
-		tlsCfg := &tls.Config{
-			MinVersion:           tls.VersionTLS13,
-			RootCAs:              pool,
-			ServerName:           cfg.ServerName,
-			GetClientCertificate: credbundle.ClientLoader(cfg.ClientCredBundle),
-		}
-		return []grpc.DialOption{
-			grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)),
-		}, nil
-
-	case ModeJWT:
+	if cfg.UseTokenAuth {
 		if cfg.TokenFile == "" {
-			return nil, fmt.Errorf("ateapiauth: jwt mode requires TokenFile")
+			return nil, fmt.Errorf("ateapiauth: token auth requires a token file")
 		}
-		pool, err := loadCAPool(cfg.CAFile)
-		if err != nil {
-			return nil, err
-		}
-		tlsCfg := &tls.Config{
-			MinVersion: tls.VersionTLS13,
-			RootCAs:    pool,
-			ServerName: cfg.ServerName,
-		}
+	} else if cfg.ClientCredBundle == "" {
+		return nil, fmt.Errorf("ateapiauth: a client credential bundle (mTLS) is required unless token auth is enabled")
+	}
+	pool, err := loadCAPool(cfg.CAFile)
+	if err != nil {
+		return nil, err
+	}
+	tlsCfg := &tls.Config{
+		MinVersion: tls.VersionTLS13,
+		RootCAs:    pool,
+		ServerName: cfg.ServerName,
+	}
+	if cfg.UseTokenAuth {
 		return []grpc.DialOption{
 			grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)),
 			grpc.WithPerRPCCredentials(&fileTokenCreds{path: cfg.TokenFile}),
 		}, nil
-
-	default:
-		return nil, fmt.Errorf("ateapiauth: unknown client mode %q", cfg.Mode)
 	}
+	tlsCfg.GetClientCertificate = credbundle.ClientLoader(cfg.ClientCredBundle)
+	return []grpc.DialOption{
+		grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)),
+	}, nil
 }
 
 func loadCAPool(caFile string) (*x509.CertPool, error) {

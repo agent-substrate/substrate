@@ -12,13 +12,11 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 
-// Package ateapiauth adds optional Kubernetes ServiceAccount JWT
-// authentication on top of the ateapi gRPC server, and a matching client
-// dial helper. It does not replace the existing TLS / mTLS path — the
-// server's transport credentials still apply unchanged. Set Mode=ModeJWT
-// on the server to require an `authorization: Bearer <SA token>` header
-// on every RPC; Mode=ModeMTLS (the default) leaves identity to the
-// transport-layer mTLS credentials.
+// Package ateapiauth authenticates clients of the ateapi gRPC server, and
+// provides a matching client dial helper. The server interceptor takes
+// identity from the transport-layer mTLS credentials when the client
+// presented a certificate, and otherwise requires an authorization
+// header `Bearer <JWT Token>`. Requests with no credentials are rejected.
 package ateapiauth
 
 import (
@@ -36,56 +34,25 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// Mode selects whether the JWT interceptor enforces a Bearer token.
-type Mode string
-
-const (
-	ModeMTLS Mode = "mtls"
-	ModeJWT  Mode = "jwt"
-)
-
-// ParseMode parses a flag value into a Mode, defaulting to ModeMTLS on empty.
-// ModeMTLS means identity is established by the transport-layer mTLS
-// credentials; the interceptor performs no app-level checks. ModeJWT
-// additionally requires a Kubernetes SA Bearer token on every RPC.
-func ParseMode(s string) (Mode, error) {
-	switch Mode(s) {
-	case "", ModeMTLS:
-		return ModeMTLS, nil
-	case ModeJWT:
-		return ModeJWT, nil
-	default:
-		return "", fmt.Errorf("unknown auth mode %q (want mtls|jwt)", s)
-	}
-}
-
 func ValidateServerConfig(cfg ServerConfig) error {
-	switch cfg.Mode {
-	case "", ModeMTLS:
-		return nil
-	case ModeJWT:
-		if cfg.VerifyBearerToken == nil {
-			return fmt.Errorf("jwt mode requires bearer token verifier")
-		}
-		return nil
-	default:
-		return fmt.Errorf("unknown auth mode %q", cfg.Mode)
+	if cfg.VerifyBearerToken == nil {
+		return fmt.Errorf("a bearer token verifier is required")
 	}
+	return nil
 }
 
 // ServerConfig configures the server-side auth interceptor.
 type ServerConfig struct {
-	Mode Mode
-
 	// VerifyBearerToken verifies a Bearer token presented by a client and
-	// returns the authenticated principal's ID (e.g. the JWT subject).
-	// Required for ModeJWT and ignored for ModeMTLS.
+	// returns the authenticated principal's ID (e.g. the JWT subject). It
+	// authenticates clients that did not present a certificate identity
+	// (e.g. kubectl-ate, which dials without a client certificate).
 	VerifyBearerToken func(context.Context, string) (string, error)
 }
 
 // UnaryServerInterceptor returns a gRPC unary interceptor enforcing cfg.
 func UnaryServerInterceptor(cfg ServerConfig) grpc.UnaryServerInterceptor {
-	auth := serverAuthenticatorFor(cfg)
+	auth := newChainedAuthenticator(cfg)
 	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 		newCtx, err := auth.authenticate(ctx)
 		if err != nil {
@@ -97,7 +64,7 @@ func UnaryServerInterceptor(cfg ServerConfig) grpc.UnaryServerInterceptor {
 
 // StreamServerInterceptor returns a gRPC stream interceptor enforcing cfg.
 func StreamServerInterceptor(cfg ServerConfig) grpc.StreamServerInterceptor {
-	auth := serverAuthenticatorFor(cfg)
+	auth := newChainedAuthenticator(cfg)
 	return func(srv any, ss grpc.ServerStream, info *grpc.StreamServerInfo, handler grpc.StreamHandler) error {
 		newCtx, err := auth.authenticate(ss.Context())
 		if err != nil {
@@ -114,65 +81,63 @@ type wrappedStream struct {
 
 func (w *wrappedStream) Context() context.Context { return w.ctx }
 
-type serverAuthenticator interface {
-	authenticate(context.Context) (context.Context, error)
-}
-
-func serverAuthenticatorFor(cfg ServerConfig) serverAuthenticator {
-	switch cfg.Mode {
-	case "", ModeMTLS:
-		return mtlsServerAuthenticator{}
-	case ModeJWT:
-		return jwtServerAuthenticator{
+func newChainedAuthenticator(cfg ServerConfig) chainedServerAuthenticator {
+	return chainedServerAuthenticator{
+		jwt: jwtServerAuthenticator{
 			verifyBearerToken: cfg.VerifyBearerToken,
-		}
+		},
 	}
-
-	return invalidServerAuthenticator{mode: cfg.Mode}
 }
 
-type mtlsServerAuthenticator struct{}
+// chainedServerAuthenticator first checks mTLS peer, then checks
+// a bearer token in the header.
+type chainedServerAuthenticator struct {
+	// jwt authenticates clients that did not present a certificate identity
+	// (e.g. kubectl-ate, which dials without a client certificate).
+	jwt jwtServerAuthenticator
+}
 
-func (mtlsServerAuthenticator) authenticate(ctx context.Context) (context.Context, error) {
-	pInfo := principal.PrincipalInfo{
-		ID: "anonymous",
-	}
+func (a chainedServerAuthenticator) authenticate(ctx context.Context) (context.Context, error) {
 	if id, ok := mtlsPeerIdentity(ctx); ok {
-		pInfo = principal.PrincipalInfo{
+		return principal.InjectContext(ctx, principal.PrincipalInfo{
 			ID:   id,
 			Kind: principal.KindMTLS,
-		}
+		}), nil
 	}
-	return principal.InjectContext(ctx, pInfo), nil
+	return a.jwt.authenticate(ctx)
 }
 
 // mtlsPeerIdentity extracts the client identity (the first URI SAN, a SPIFFE
-// ID) from the transport-authenticated peer certificate, if any.
+// ID) from the transport-authenticated peer certificate.
 func mtlsPeerIdentity(ctx context.Context) (string, bool) {
 	p, ok := peer.FromContext(ctx)
 	if !ok || p.AuthInfo == nil {
-		slog.ErrorContext(ctx, "Authentication failed: no peer or auth info in context.")
+		slog.DebugContext(ctx, "No mTLS peer identity: no peer or auth info in context.")
 		return "", false
 	}
 
 	tlsInfo, ok := p.AuthInfo.(credentials.TLSInfo)
 	if !ok {
-		slog.ErrorContext(ctx, "Authentication failed: no TLS info in context.")
+		slog.DebugContext(ctx, "No mTLS peer identity: no TLS info in context.")
 		return "", false
 	}
 
 	if len(tlsInfo.State.PeerCertificates) == 0 {
-		slog.ErrorContext(ctx, "Authentication failed: no peer certificates in TLS info.")
+		slog.DebugContext(ctx, "No mTLS peer identity: no peer certificates in TLS info.")
 		return "", false
 	}
 
 	clientCert := tlsInfo.State.PeerCertificates[0]
 	if len(clientCert.URIs) == 0 {
-		slog.ErrorContext(ctx, "Authentication failed: no URIs in peer certificate.")
+		slog.DebugContext(ctx, "No mTLS peer identity: no URIs in peer certificate.")
 		return "", false
 	}
 
 	id := clientCert.URIs[0].String()
+	if id == "" {
+		slog.DebugContext(ctx, "No mTLS peer identity: client cert URI is empty string")
+		return "", false
+	}
 	slog.InfoContext(ctx, "Authentication successful", slog.String("id", id))
 	return id, true
 }
@@ -194,14 +159,6 @@ func (a jwtServerAuthenticator) authenticate(ctx context.Context) (context.Conte
 		ID:   id,
 		Kind: principal.KindJWT,
 	}), nil
-}
-
-type invalidServerAuthenticator struct {
-	mode Mode
-}
-
-func (a invalidServerAuthenticator) authenticate(context.Context) (context.Context, error) {
-	return nil, status.Errorf(codes.Internal, "invalid auth mode %q", a.mode)
 }
 
 func bearerToken(ctx context.Context) (string, bool) {

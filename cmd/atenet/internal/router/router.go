@@ -158,12 +158,8 @@ func (s *RouterServer) Run(ctx context.Context) error {
 
 	go serverboot.StartMetricsServer(ctx, serverboot.MetricsServerOptions{Addr: s.cfg.MetricsAddr})
 
-	authMode, err := ateapiauth.ParseMode(s.cfg.Auth.AteapiAuthMode)
-	if err != nil {
-		return fmt.Errorf("invalid --ateapi-auth: %w", err)
-	}
 	dialOpts, err := ateapiauth.DialOptions(ateapiauth.ClientConfig{
-		Mode:             authMode,
+		UseTokenAuth:     s.cfg.Auth.AteapiUseTokenAuth,
 		CAFile:           s.cfg.Auth.AteapiCAFile,
 		ServerName:       s.cfg.Auth.AteapiServerName,
 		TokenFile:        s.cfg.Auth.AteapiTokenFile,
@@ -180,7 +176,7 @@ func (s *RouterServer) Run(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to establish grpc channel to ateapi client: %w", err)
 	}
-	slog.InfoContext(ctx, "Connecting to ateapi", slog.String("address", s.cfg.AteapiAddr), slog.String("auth", string(authMode)))
+	slog.InfoContext(ctx, "Connecting to ateapi", slog.String("address", s.cfg.AteapiAddr), slog.Bool("use-api-token-auth", s.cfg.Auth.AteapiUseTokenAuth))
 	s.apiClient = ateapipb.NewControlClient(conn)
 
 	slog.InfoContext(ctx, "Starting substrate router subsystem", slog.Bool("standalone", s.cfg.Standalone))

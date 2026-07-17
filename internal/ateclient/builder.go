@@ -21,7 +21,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"strings"
 	"sync"
 
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -76,7 +75,7 @@ func NewClient(ctx context.Context, kubeconfigPath, k8sContext, endpoint string,
 
 	var cli *Client
 	if endpoint != "" {
-		cli, err = dialDirect(kubeconfigPath, k8sContext, endpoint, traceEnabled)
+		cli, err = dialDirect(ctx, kubeconfigPath, k8sContext, endpoint, traceEnabled)
 	} else {
 		cli, err = dialPortForward(ctx, kubeconfigPath, k8sContext, traceEnabled)
 	}
@@ -90,13 +89,23 @@ func NewClient(ctx context.Context, kubeconfigPath, k8sContext, endpoint string,
 	return cli, nil
 }
 
-func dialDirect(kubeconfigPath, k8sContext, endpoint string, traceEnabled bool) (*Client, error) {
+func dialDirect(ctx context.Context, kubeconfigPath, k8sContext, endpoint string, traceEnabled bool) (*Client, error) {
 	// Always assume TLS to match production behavior
 	creds := credentials.NewTLS(&tls.Config{InsecureSkipVerify: true})
+
+	clientset, err := NewK8sClientset(kubeconfigPath, k8sContext)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create k8s client: %w", err)
+	}
 
 	var opts []grpc.DialOption
 	opts = append(opts, grpc.WithTransportCredentials(creds))
 	opts = append(opts, grpc.WithStatsHandler(otelgrpc.NewClientHandler()))
+	tokenOpt, err := bearerTokenDialOption(ctx, clientset)
+	if err != nil {
+		return nil, err
+	}
+	opts = append(opts, tokenOpt)
 
 	if traceEnabled {
 		opts = append(opts, grpc.WithUnaryInterceptor(newTraceInterceptor()))
@@ -211,12 +220,12 @@ func dialPortForward(ctx context.Context, kubeconfigPath, k8sContext string, tra
 	var opts []grpc.DialOption
 	opts = append(opts, grpc.WithTransportCredentials(transportCreds))
 	opts = append(opts, grpc.WithStatsHandler(otelgrpc.NewClientHandler()))
-	jwtOpts, err := jwtDialOptions(ctx, clientset)
+	tokenOpt, err := bearerTokenDialOption(ctx, clientset)
 	if err != nil {
 		close(stopCh)
 		return nil, err
 	}
-	opts = append(opts, jwtOpts...)
+	opts = append(opts, tokenOpt)
 
 	if traceEnabled {
 		opts = append(opts, grpc.WithUnaryInterceptor(newTraceInterceptor()))
@@ -238,15 +247,9 @@ func dialPortForward(ctx context.Context, kubeconfigPath, k8sContext string, tra
 	}, nil
 }
 
-func jwtDialOptions(ctx context.Context, clientset *kubernetes.Clientset) ([]grpc.DialOption, error) {
-	jwtMode, err := isJWTMode(ctx, clientset)
-	if err != nil {
-		return nil, err
-	}
-	if !jwtMode {
-		return nil, nil
-	}
-
+// bearerTokenDialOption attaches a ServiceAccount token for the ate-client SA
+// as per-RPC credentials.
+func bearerTokenDialOption(ctx context.Context, clientset *kubernetes.Clientset) (grpc.DialOption, error) {
 	expirationSeconds := int64(3600)
 	tokenRequest := &authv1.TokenRequest{
 		Spec: authv1.TokenRequestSpec{
@@ -261,38 +264,7 @@ func jwtDialOptions(ctx context.Context, clientset *kubernetes.Clientset) ([]grp
 	if token.Status.Token == "" {
 		return nil, fmt.Errorf("failed to request ateapi bearer token: token response was empty")
 	}
-	return []grpc.DialOption{grpc.WithPerRPCCredentials(bearerTokenCreds(token.Status.Token))}, nil
-}
-
-func isJWTMode(ctx context.Context, clientset *kubernetes.Clientset) (bool, error) {
-	// TODO: Replace deployment introspection with an explicit client-readable
-	// config file once ateapi auth mode is part of install/runtime config.
-	deployment, err := clientset.AppsV1().Deployments("ate-system").Get(ctx, "ate-api-server", metav1.GetOptions{})
-	if err != nil {
-		return false, fmt.Errorf("failed to get ate-api-server deployment: %w", err)
-	}
-	for _, container := range deployment.Spec.Template.Spec.Containers {
-		if container.Name != "ate-api-server" {
-			continue
-		}
-		return isJWTAuthModeArg(container.Args), nil
-	}
-	return false, fmt.Errorf("failed to find ate-api-server container in deployment")
-}
-
-func isJWTAuthModeArg(args []string) bool {
-	for i, arg := range args {
-		if arg == "--auth-mode=jwt" {
-			return true
-		}
-		if strings.HasPrefix(arg, "--auth-mode=") {
-			return strings.TrimPrefix(arg, "--auth-mode=") == "jwt"
-		}
-		if arg == "--auth-mode" && i+1 < len(args) {
-			return args[i+1] == "jwt"
-		}
-	}
-	return false
+	return grpc.WithPerRPCCredentials(bearerTokenCreds(token.Status.Token)), nil
 }
 
 type bearerTokenCreds string

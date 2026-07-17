@@ -14,27 +14,25 @@
 
 package ateclient
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
-func TestIsJWTAuthModeArg(t *testing.T) {
-	tests := []struct {
-		name string
-		args []string
-		want bool
-	}{
-		{name: "equals jwt", args: []string{"--auth-mode=jwt"}, want: true},
-		{name: "split jwt", args: []string{"--auth-mode", "jwt"}, want: true},
-		{name: "equals mtls", args: []string{"--auth-mode=mtls"}, want: false},
-		{name: "split mtls", args: []string{"--auth-mode", "mtls"}, want: false},
-		{name: "missing value", args: []string{"--auth-mode"}, want: false},
-		{name: "unrelated", args: []string{"--foo=bar"}, want: false},
+func TestBearerTokenCreds(t *testing.T) {
+	md, err := bearerTokenCreds("some-token").GetRequestMetadata(context.Background())
+	if err != nil {
+		t.Fatalf("GetRequestMetadata: %v", err)
+	}
+	if got, want := md["authorization"], "Bearer some-token"; got != want {
+		t.Errorf("authorization=%q want %q", got, want)
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := isJWTAuthModeArg(tt.args); got != tt.want {
-				t.Fatalf("isJWTAuthModeArg(%v) = %v, want %v", tt.args, got, tt.want)
-			}
-		})
+	if _, err := bearerTokenCreds("").GetRequestMetadata(context.Background()); err == nil {
+		t.Error("GetRequestMetadata with empty token: want error, got nil")
+	}
+
+	if !bearerTokenCreds("some-token").RequireTransportSecurity() {
+		t.Error("RequireTransportSecurity() = false, want true")
 	}
 }

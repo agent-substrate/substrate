@@ -48,18 +48,18 @@ KO_DOCKER_REPO="${KO_DOCKER_REPO:-}"
 KUBECTL_CONTEXT="${KUBECTL_CONTEXT:-}"
 BUCKET_NAME="${BUCKET_NAME:-ate-snapshots}"
 ATE_INSTALL_KIND="${ATE_INSTALL_KIND:-false}"
-ATE_API_AUTH_MODE="${ATE_API_AUTH_MODE:-mtls}"
+ATE_ATEAPI_CLIENT_AUTH="${ATE_ATEAPI_CLIENT_AUTH:-cert}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --auth-mode=*) ATE_API_AUTH_MODE="${1#*=}" ;;
-    --auth-mode)
+    --ateapi-client-auth=*) ATE_ATEAPI_CLIENT_AUTH="${1#*=}" ;;
+    --ateapi-client-auth)
       if [[ $# -lt 2 ]]; then
-        echo "Error: --auth-mode requires mtls or jwt" >&2
+        echo "Error: --ateapi-client-auth requires cert or token" >&2
         exit 1
       fi
       shift
-      ATE_API_AUTH_MODE="$1"
+      ATE_ATEAPI_CLIENT_AUTH="$1"
       ;;
     *)
       echo "Error: unknown argument $1" >&2
@@ -69,10 +69,10 @@ while [[ $# -gt 0 ]]; do
   shift
 done
 
-case "${ATE_API_AUTH_MODE}" in
-  mtls|jwt) ;;
+case "${ATE_ATEAPI_CLIENT_AUTH}" in
+  cert|token) ;;
   *)
-    echo "Error: --auth-mode must be mtls or jwt, got '${ATE_API_AUTH_MODE}'" >&2
+    echo "Error: --ateapi-client-auth must be cert or token, got '${ATE_ATEAPI_CLIENT_AUTH}'" >&2
     exit 1
     ;;
 esac
@@ -131,10 +131,10 @@ fi
 log "Deploying the ate control plane (--deploy-ate-system)..."
 if [[ "${ATE_INSTALL_KIND}" == "true" ]]; then
   # install-ate-kind.sh sets NO_DEV_ENV/KO_DOCKER_REPO/ARCH/ATE_INSTALL_KIND itself.
-  KUBECTL_CONTEXT="${KUBECTL_CONTEXT}" hack/install-ate-kind.sh --deploy-ate-system --auth-mode="${ATE_API_AUTH_MODE}"
+  KUBECTL_CONTEXT="${KUBECTL_CONTEXT}" hack/install-ate-kind.sh --deploy-ate-system --ateapi-client-auth="${ATE_ATEAPI_CLIENT_AUTH}"
 else
   # GKE path: pass KO_DOCKER_REPO/BUCKET_NAME/KUBECTL_CONTEXT through the env.
-  KUBECTL_CONTEXT="${KUBECTL_CONTEXT}" hack/install-ate.sh --deploy-ate-system --auth-mode="${ATE_API_AUTH_MODE}"
+  KUBECTL_CONTEXT="${KUBECTL_CONTEXT}" hack/install-ate.sh --deploy-ate-system --ateapi-client-auth="${ATE_ATEAPI_CLIENT_AUTH}"
 fi
 
 # --- 4. apply the demo ------------------------------------------------------

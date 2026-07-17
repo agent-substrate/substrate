@@ -19,12 +19,13 @@ import (
 )
 
 // authConfig holds the router's client-auth settings for dialing ateapi.
-// AteapiCAFile verifies ateapi's serving cert in both modes (the servicedns
-// trust bundle in-cluster); in mtls mode the router additionally presents
-// AteapiClientCertPath (the podidentity credential bundle) as its client
-// cert, in jwt mode it sends a Bearer token from AteapiTokenFile instead.
+// AteapiCAFile always verifies ateapi's serving cert (the servicedns trust
+// bundle in-cluster). By default the router presents AteapiClientCertPath
+// (the podidentity credential bundle) as its client cert; with
+// AteapiUseTokenAuth it sends a Bearer token from AteapiTokenFile instead and
+// the cert path is ignored.
 type authConfig struct {
-	AteapiAuthMode       string
+	AteapiUseTokenAuth   bool
 	AteapiCAFile         string
 	AteapiClientCertPath string
 	AteapiServerName     string

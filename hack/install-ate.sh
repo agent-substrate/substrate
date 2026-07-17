@@ -63,7 +63,7 @@ function usage() {
   echo "  --deploy-ate-system                    Deploy core system (CRDs, atelet, apiserver)"
   echo "  --delete-ate-system                    Delete core system"
   echo "  --delete-all                           Delete core system and all registered demos"
-  echo "  --auth-mode=mtls|jwt                   Select ateapi auth mode for --deploy-ate-system (default: mtls)"
+  echo "  --ateapi-client-auth=cert|token               Select how in-cluster clients authenticate to ateapi for --deploy-ate-system (default: cert; the server always accepts both)"
   echo ""
   echo "Infrastructure components:"
   echo ""
@@ -133,26 +133,26 @@ run_ko() {
   esac
 }
 
-ate_auth_mode() {
-  case "${ATE_API_AUTH_MODE:-mtls}" in
-    mtls|jwt)
-      echo "${ATE_API_AUTH_MODE:-mtls}"
+ateapi_client_auth() {
+  case "${ATE_ATEAPI_CLIENT_AUTH:-cert}" in
+    cert|token)
+      echo "${ATE_ATEAPI_CLIENT_AUTH:-cert}"
       ;;
     *)
-      echo "Error: ATE_API_AUTH_MODE must be mtls or jwt, got '${ATE_API_AUTH_MODE}'" >&2
+      echo "Error: ATE_ATEAPI_CLIENT_AUTH must be cert or token, got '${ATE_ATEAPI_CLIENT_AUTH}'" >&2
       exit 1
       ;;
   esac
 }
 
 render_ate_system_manifests() {
-  local auth_mode=""
-  auth_mode="$(ate_auth_mode)"
+  local client_auth=""
+  client_auth="$(ateapi_client_auth)"
 
-  if [[ "${auth_mode}" == "jwt" ]]; then
-    local overlay="manifests/ate-install/jwt"
+  if [[ "${client_auth}" == "token" ]]; then
+    local overlay="manifests/ate-install/token-client"
     if [[ "${ATE_INSTALL_KIND:-false}" == "true" ]]; then
-      overlay="manifests/ate-install/kind-jwt"
+      overlay="manifests/ate-install/kind-token-client"
     fi
     kubectl kustomize "${overlay}" --load-restrictor LoadRestrictionsNone | run_ko resolve -f -
     return
@@ -551,13 +551,13 @@ BENCHMARK_WORKER_COUNT=1
 prescan_args=("$@")
 for ((i = 0; i < ${#prescan_args[@]}; i++)); do
   case "${prescan_args[i]}" in
-    --auth-mode=*) ATE_API_AUTH_MODE="${prescan_args[i]#*=}" ;;
-    --auth-mode)
+    --ateapi-client-auth=*) ATE_ATEAPI_CLIENT_AUTH="${prescan_args[i]#*=}" ;;
+    --ateapi-client-auth)
       if (( i + 1 >= ${#prescan_args[@]} )); then
-        echo "Error: --auth-mode requires mtls or jwt" >&2
+        echo "Error: --ateapi-client-auth requires cert or token" >&2
         exit 1
       fi
-      ATE_API_AUTH_MODE="${prescan_args[$((i + 1))]}"
+      ATE_ATEAPI_CLIENT_AUTH="${prescan_args[$((i + 1))]}"
       ;;
     --benchmark-worker-count)
       BENCHMARK_WORKER_COUNT="${prescan_args[i+1]:-1}"
@@ -582,14 +582,14 @@ while [[ "$#" -gt 0 ]]; do
   done
 
   case $1 in
-    --auth-mode=*) ATE_API_AUTH_MODE="${1#*=}" ;;
-    --auth-mode)
+    --ateapi-client-auth=*) ATE_ATEAPI_CLIENT_AUTH="${1#*=}" ;;
+    --ateapi-client-auth)
       shift
       if [[ "$#" -eq 0 ]]; then
-        echo "Error: --auth-mode requires mtls or jwt" >&2
+        echo "Error: --ateapi-client-auth requires cert or token" >&2
         exit 1
       fi
-      ATE_API_AUTH_MODE="$1"
+      ATE_ATEAPI_CLIENT_AUTH="$1"
       ;;
 
     --deploy-ate-system) deploy_ate_system ;;

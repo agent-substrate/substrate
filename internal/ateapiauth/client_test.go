@@ -28,6 +28,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -36,16 +37,17 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/health"
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 )
 
 func TestDialOptionsRequiresCAFile(t *testing.T) {
-	for _, mode := range []Mode{ModeMTLS, ModeJWT} {
-		t.Run(string(mode), func(t *testing.T) {
-			_, err := DialOptions(ClientConfig{
-				Mode:      mode,
-				TokenFile: "token",
-			})
+	for name, cfg := range map[string]ClientConfig{
+		"token": {UseTokenAuth: true, TokenFile: "token"},
+		"cert":  {ClientCredBundle: "bundle.pem"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := DialOptions(cfg)
 			if err == nil {
 				t.Fatalf("DialOptions() error = nil, want error")
 			}
@@ -53,20 +55,25 @@ func TestDialOptionsRequiresCAFile(t *testing.T) {
 	}
 }
 
-func TestDialOptionsMTLSRequiresClientCredBundle(t *testing.T) {
-	_, err := DialOptions(ClientConfig{
-		Mode:   ModeMTLS,
-		CAFile: "ca.pem",
-	})
-	if err == nil {
-		t.Fatalf("DialOptions() error = nil, want error for missing ClientCredBundle")
+func TestDialOptionsRequiresModeCredential(t *testing.T) {
+	for name, cfg := range map[string]ClientConfig{
+		"cert mode without bundle":              {CAFile: "ca.pem"},
+		"token mode without token":              {CAFile: "ca.pem", UseTokenAuth: true},
+		"cert path does not satisfy token mode": {CAFile: "ca.pem", UseTokenAuth: true, ClientCredBundle: "bundle.pem"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := DialOptions(cfg)
+			if err == nil {
+				t.Fatalf("DialOptions() error = nil, want error")
+			}
+		})
 	}
 }
 
 // TestDialOptionsMTLSHandshake dials a server that requires and verifies
 // client certificates — the configuration ateapi will move to — and checks
-// that DialOptions in mtls mode completes the handshake, while a
-// certificate-less client is rejected.
+// that DialOptions with a client credential bundle completes the handshake,
+// while a certificate-less client is rejected.
 func TestDialOptionsMTLSHandshake(t *testing.T) {
 	ca := newTestCA(t)
 	dir := t.TempDir()
@@ -97,10 +104,11 @@ func TestDialOptionsMTLSHandshake(t *testing.T) {
 	defer cancel()
 
 	t.Run("with client cert", func(t *testing.T) {
+		// TokenFile is ignored in cert mode (the default).
 		opts, err := DialOptions(ClientConfig{
-			Mode:             ModeMTLS,
 			CAFile:           caFile,
 			ClientCredBundle: clientBundle,
+			TokenFile:        filepath.Join(dir, "does-not-exist-token"),
 		})
 		if err != nil {
 			t.Fatalf("DialOptions() error = %v", err)
@@ -119,6 +127,61 @@ func TestDialOptionsMTLSHandshake(t *testing.T) {
 			t.Fatalf("health check code = %v, want handshake failure", code)
 		}
 	})
+}
+
+// TestDialOptionsTokenSendsBearer dials a server that accepts certless
+// clients — ateapi's current configuration — and checks that DialOptions
+// with a token file attaches the token as an `authorization: Bearer` header
+// on every RPC.
+func TestDialOptionsTokenSendsBearer(t *testing.T) {
+	ca := newTestCA(t)
+	dir := t.TempDir()
+	caFile := filepath.Join(dir, "ca.pem")
+	writeFile(t, caFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: ca.certDER}))
+	tokenFile := filepath.Join(dir, "token")
+	writeFile(t, tokenFile, []byte("test-token\n"))
+
+	gotAuth := make(chan string, 1)
+	srv := grpc.NewServer(
+		grpc.Creds(credentials.NewTLS(&tls.Config{
+			Certificates: []tls.Certificate{ca.issueServerCert(t)},
+			ClientAuth:   tls.VerifyClientCertIfGiven,
+			MinVersion:   tls.VersionTLS13,
+		})),
+		grpc.UnaryInterceptor(func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+			md, _ := metadata.FromIncomingContext(ctx)
+			gotAuth <- strings.Join(md.Get("authorization"), ",")
+			return handler(ctx, req)
+		}),
+	)
+	healthpb.RegisterHealthServer(srv, health.NewServer())
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	go srv.Serve(lis)
+	defer srv.Stop()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// ClientCredBundle stays set (as the base manifests leave it) but is
+	// ignored in token mode — it doesn't even need to exist on disk.
+	opts, err := DialOptions(ClientConfig{
+		CAFile:           caFile,
+		UseTokenAuth:     true,
+		TokenFile:        tokenFile,
+		ClientCredBundle: filepath.Join(dir, "does-not-exist.pem"),
+	})
+	if err != nil {
+		t.Fatalf("DialOptions() error = %v", err)
+	}
+	if code := healthCheckCode(ctx, t, lis.Addr().String(), opts); code != codes.OK {
+		t.Fatalf("health check code = %v, want %v", code, codes.OK)
+	}
+	if got, want := <-gotAuth, "Bearer test-token"; got != want {
+		t.Errorf("authorization header = %q, want %q", got, want)
+	}
 }
 
 func healthCheckCode(ctx context.Context, t *testing.T, target string, opts []grpc.DialOption) codes.Code {

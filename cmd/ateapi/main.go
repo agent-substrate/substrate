@@ -74,7 +74,6 @@ var (
 	ateletCACerts          = pflag.String("atelet-ca-certs", "/run/podidentity.podcert.ate.dev/trust-bundle.pem", "CA bundle used to verify atelet serving certificates.")
 
 	showVersion     = pflag.Bool("version", false, "Print version and exit.")
-	authMode        = pflag.String("auth-mode", "mtls", "Auth mode for incoming gRPC: mtls|jwt. 'mtls' (default) relies on transport-level mTLS for client identity. 'jwt' additionally requires a Kubernetes ServiceAccount Bearer token on every RPC. Substrate will drop support for JWT auth mode once the Pod Certificates feature is enabled by default in the minimum supported Kubernetes version.")
 	clientJWTCAFile = pflag.String("client-jwt-ca-cert", ateapiauth.DefaultServiceAccountCAFile, "CA cert file used to verify TLS when fetching the OIDC discovery document and JWKS for JWT authentication. Defaults to the in-cluster service account CA.")
 )
 
@@ -104,11 +103,6 @@ func main() {
 
 	loadFlagsFromEnv()
 	logFlagValues(ctx)
-
-	authModeParsed, err := ateapiauth.ParseMode(*authMode)
-	if err != nil {
-		serverboot.Fatal(ctx, "Invalid --auth-mode", err)
-	}
 
 	redisClient, err := connectRedis(ctx)
 	if err != nil {
@@ -157,9 +151,6 @@ func main() {
 	sm := controlapi.NewService(redisPersistence, workerCache, actorTemplateLister, workerPoolLister, sandboxConfigLister, ateletDialer, clientset)
 
 	jwtIssuerDiscoveryClient := buildK8sServiceAccountIssuerDiscoveryClient(ctx, *clientJWTCAFile, *clientJWTIssuer)
-	if authModeParsed == ateapiauth.ModeJWT && jwtIssuerDiscoveryClient == nil {
-		serverboot.Fatal(ctx, "JWT auth mode requires a Kubernetes ServiceAccount issuer discovery client", fmt.Errorf("client JWT issuer %q is not usable for discovery", *clientJWTIssuer))
-	}
 
 	sessionIdentitySrv := sessionidentity.New(*clientJWTIssuer, *clientJWTAudience, *sessionIDJWTPoolFile, *sessionIDCAPoolFile, *workerpoolCACerts, jwtIssuerDiscoveryClient)
 
@@ -170,7 +161,6 @@ func main() {
 	}
 
 	authCfg := ateapiauth.ServerConfig{
-		Mode: authModeParsed,
 		VerifyBearerToken: func(ctx context.Context, bearer string) (string, error) {
 			claims, err := k8sjwt.Verify(ctx, jwtIssuerDiscoveryClient, bearer, *clientJWTIssuer, *clientJWTAudience, time.Now())
 			if err != nil {
@@ -244,7 +234,6 @@ func logFlagValues(ctx context.Context) {
 		slog.String("session-id-jwt-pool", *sessionIDJWTPoolFile),
 		slog.String("session-id-ca-pool", *sessionIDCAPoolFile),
 		slog.String("workerpool-ca-certs", *workerpoolCACerts),
-		slog.String("auth-mode", *authMode),
 		slog.String("atelet-client-cred-bundle", *ateletClientCredBundle),
 		slog.String("atelet-ca-certs", *ateletCACerts),
 	)
@@ -372,8 +361,11 @@ func buildServerCreds(ctx context.Context) (credentials.TransportCredentials, er
 	}
 	return credentials.NewTLS(&tls.Config{
 		GetCertificate: credbundle.Loader(*grpcServerCredBundle),
-		ClientAuth:     tls.VerifyClientCertIfGiven,
-		ClientCAs:      clientCAs,
+		// Client certs stay optional at the transport level: certless
+		// clients such as kubectl-ate authenticate with a Bearer token in the
+		// ateapiauth interceptor.
+		ClientAuth: tls.VerifyClientCertIfGiven,
+		ClientCAs:  clientCAs,
 	}), nil
 }
 

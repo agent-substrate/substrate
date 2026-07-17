@@ -12,24 +12,27 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# Overlay: in-cluster clients authenticate to ateapi with a projected
+# ServiceAccount token instead of a client certificate. The server always
+# accepts both.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
 resources:
-  - ../kind
+  - ../ate-api-server.yaml
+  - ../ate-controller.yaml
+  - ../atelet.yaml
+  - ../atenet-dns.yaml
+  - ../atenet-router.yaml
+  - ../valkey.yaml
+  - ../pod-certificate-controller.yaml
 
 patches:
-  - path: ../jwt/patches.yaml
-  - target:
-      group: apps
-      version: v1
-      kind: Deployment
-      name: ate-api-server
-      namespace: ate-system
-    patch: |-
-      - op: add
-        path: /spec/template/spec/containers/0/args/-
-        value: --auth-mode=jwt
+  - path: patches.yaml
+  # --ateapi-use-token-auth switches the client to the projected
+  # ServiceAccount token below. The base manifests' --ateapi-client-cert is
+  # removed by index; the preceding `test` op pins the expected value so the
+  # build fails loudly if the base args are ever reordered.
   - target:
       group: apps
       version: v1
@@ -37,9 +40,14 @@ patches:
       name: ate-controller
       namespace: ate-system
     patch: |-
+      - op: test
+        path: /spec/template/spec/containers/0/args/1
+        value: --ateapi-client-cert=/run/podidentity.podcert.ate.dev/credential-bundle.pem
+      - op: remove
+        path: /spec/template/spec/containers/0/args/1
       - op: add
         path: /spec/template/spec/containers/0/args/-
-        value: --ateapi-auth=jwt
+        value: --ateapi-use-token-auth=true
       - op: add
         path: /spec/template/spec/containers/0/args/-
         value: --ateapi-token-file=/run/ateapi-token/token
@@ -50,9 +58,14 @@ patches:
       name: atenet-router
       namespace: ate-system
     patch: |-
+      - op: test
+        path: /spec/template/spec/containers/0/args/13
+        value: --ateapi-client-cert=/run/podidentity.podcert.ate.dev/credential-bundle.pem
+      - op: remove
+        path: /spec/template/spec/containers/0/args/13
       - op: add
         path: /spec/template/spec/containers/0/args/-
-        value: --ateapi-auth=jwt
+        value: --ateapi-use-token-auth=true
       - op: add
         path: /spec/template/spec/containers/0/args/-
         value: --ateapi-token-file=/run/ateapi-token/token
