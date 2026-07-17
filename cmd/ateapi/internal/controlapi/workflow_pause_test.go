@@ -86,8 +86,10 @@ func TestFinalizePausedStep_WorkerGone(t *testing.T) {
 
 // TestFindFreeWorker_EmptyNodeRestriction shows the root symptom the fix
 // avoids: old code wrote []string{""} into NodeVmsWithLocalSnapshots when the
-// node name was unknown, and findFreeWorker required worker.NodeName == "",
-// which never matches a real worker.
+// node name was unknown, and old findFreeWorker required worker.NodeName ==
+// "", which never matches a real worker, wedging the actor forever.
+// findFreeWorker now ignores empty entries, so actor records poisoned before
+// the pause-finalization fix heal on the next resume instead of staying stuck.
 func TestFindFreeWorker_EmptyNodeRestriction(t *testing.T) {
 	workers := []*ateapipb.Worker{
 		{WorkerNamespace: "default", WorkerPool: "pool1", WorkerPod: "w1", NodeName: "node1"},
@@ -96,13 +98,13 @@ func TestFindFreeWorker_EmptyNodeRestriction(t *testing.T) {
 
 	s := &AssignWorkerStep{}
 
-	// Old behavior: []string{""}, no worker has NodeName == "", returns nil.
+	// Poisoned restriction []string{""} is ignored, any free worker matches.
 	got, err := s.findFreeWorker(workers, "", nil, nil, []string{""})
 	if err != nil {
 		t.Fatalf("findFreeWorker: %v", err)
 	}
-	if got != nil {
-		t.Errorf("expected nil with old buggy input, got %v", got)
+	if got == nil {
+		t.Error("expected a worker with a poisoned empty-string restriction, got nil")
 	}
 
 	// Fixed behavior: nil restrictions, any free worker matches.
@@ -112,5 +114,23 @@ func TestFindFreeWorker_EmptyNodeRestriction(t *testing.T) {
 	}
 	if got == nil {
 		t.Error("expected a worker with nil restrictions, got nil")
+	}
+
+	// A real restriction is still honored: only node2 is a valid target.
+	got, err = s.findFreeWorker(workers, "", nil, nil, []string{"node2"})
+	if err != nil {
+		t.Fatalf("findFreeWorker: %v", err)
+	}
+	if got == nil || got.GetNodeName() != "node2" {
+		t.Errorf("expected worker on node2, got %v", got)
+	}
+
+	// A real restriction with an unrelated node still excludes all workers.
+	got, err = s.findFreeWorker(workers, "", nil, nil, []string{"node3"})
+	if err != nil {
+		t.Fatalf("findFreeWorker: %v", err)
+	}
+	if got != nil {
+		t.Errorf("expected nil, no worker on node3, got %v", got)
 	}
 }

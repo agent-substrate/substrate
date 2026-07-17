@@ -215,6 +215,11 @@ func (s *AssignWorkerStep) findFreeWorker(
 	actorSelector *ateapipb.Selector,
 	nodesRestrictions []string,
 ) (*ateapipb.Worker, error) {
+	// Empty entries come from actor records poisoned before the pause-finalization
+	// fix (unknown node name written as ""), no worker ever has an empty node
+	// name, so treating "" as a real restriction wedges the actor forever.
+	restrictions := slices.DeleteFunc(slices.Clone(nodesRestrictions), func(n string) bool { return n == "" })
+
 	var freeWorkers []*ateapipb.Worker
 	for _, worker := range workers {
 		if worker.Assignment != nil {
@@ -227,7 +232,7 @@ func (s *AssignWorkerStep) findFreeWorker(
 		if !eligible {
 			continue
 		}
-		if len(nodesRestrictions) == 0 || slices.Contains(nodesRestrictions, worker.GetNodeName()) {
+		if len(restrictions) == 0 || slices.Contains(restrictions, worker.GetNodeName()) {
 			freeWorkers = append(freeWorkers, worker)
 		}
 	}
