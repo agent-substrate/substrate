@@ -68,11 +68,9 @@ var (
 	clientJWTAudience    = pflag.String("client-jwt-audience", "", "The expected audience for client JWTs.")
 	sessionIDJWTPoolFile = pflag.String("session-id-jwt-pool", "", "The file that contains the serialized JWT authority pool for signing session JWTs")
 
-	sessionIDCAPoolFile = pflag.String("session-id-ca-pool", "", "The file that contains the CA pool for signing session JWTs")
-	workerpoolCACerts   = pflag.String("workerpool-ca-certs", "", "The file that contains the CA for verifying workerpool client certificates.")
-
-	ateletClientCredBundle = pflag.String("atelet-client-cred-bundle", "/run/podidentity.podcert.ate.dev/credential-bundle.pem", "Credential bundle presented as the client certificate when dialing atelet.")
-	ateletCACerts          = pflag.String("atelet-ca-certs", "/run/podidentity.podcert.ate.dev/trust-bundle.pem", "CA bundle used to verify atelet serving certificates.")
+	sessionIDCAPoolFile    = pflag.String("session-id-ca-pool", "", "The file that contains the CA pool for signing session JWTs")
+	podIdentityCACerts     = pflag.String("pod-identity-ca-certs", "", "The file that contains the pod-identity CA bundle, used both for verifying client certificates presented to the gRPC server and for verifying atelet serving certificates when dialing atelet. If empty, client-cert verification is disabled and atelet dials will fail.")
+	ateletClientCredBundle = pflag.String("atelet-client-cred-bundle", "", "Credential bundle presented as the client certificate when dialing atelet.")
 
 	showVersion     = pflag.Bool("version", false, "Print version and exit.")
 	clientJWTCAFile = pflag.String("client-jwt-ca-cert", ateapiauth.DefaultServiceAccountCAFile, "CA cert file used to verify TLS when fetching the OIDC discovery document and JWKS for JWT authentication. Defaults to the in-cluster service account CA.")
@@ -148,12 +146,12 @@ func main() {
 	ateletPodInformerFactory.WaitForCacheSync(stopCh)
 	ateFactory.WaitForCacheSync(stopCh)
 
-	ateletDialer := controlapi.NewAteletDialer(workerPodInformer.GetIndexer(), ateletPodInformer.GetIndexer(), *ateletClientCredBundle, *ateletCACerts)
+	ateletDialer := controlapi.NewAteletDialer(workerPodInformer.GetIndexer(), ateletPodInformer.GetIndexer(), *ateletClientCredBundle, *podIdentityCACerts)
 	sm := controlapi.NewService(redisPersistence, workerCache, actorTemplateLister, workerPoolLister, sandboxConfigLister, ateletDialer, clientset)
 
 	jwtIssuerDiscoveryClient := buildK8sServiceAccountIssuerDiscoveryClient(ctx, *clientJWTCAFile, *clientJWTIssuer)
 
-	sessionIdentitySrv := sessionidentity.New(*clientJWTIssuer, *clientJWTAudience, *sessionIDJWTPoolFile, *sessionIDCAPoolFile, *workerpoolCACerts, jwtIssuerDiscoveryClient)
+	sessionIdentitySrv := sessionidentity.New(*clientJWTIssuer, *clientJWTAudience, *sessionIDJWTPoolFile, *sessionIDCAPoolFile, *podIdentityCACerts, jwtIssuerDiscoveryClient)
 	debugSrv := debugapi.NewService(redisPersistence)
 
 	lisCfg := &net.ListenConfig{}
@@ -236,9 +234,8 @@ func logFlagValues(ctx context.Context) {
 		slog.String("client-jwt-audience", *clientJWTAudience),
 		slog.String("session-id-jwt-pool", *sessionIDJWTPoolFile),
 		slog.String("session-id-ca-pool", *sessionIDCAPoolFile),
-		slog.String("workerpool-ca-certs", *workerpoolCACerts),
+		slog.String("pod-identity-ca-certs", *podIdentityCACerts),
 		slog.String("atelet-client-cred-bundle", *ateletClientCredBundle),
-		slog.String("atelet-ca-certs", *ateletCACerts),
 	)
 }
 
@@ -345,22 +342,22 @@ func newKubeClients() (*kubernetes.Clientset, versioned.Interface, error) {
 	return clientset, ateClient, nil
 }
 
-// buildServerCreds loads the workerpool CA pool (if configured) and
+// buildServerCreds loads the pod-identity CA pool (if configured) and
 // composes gRPC TransportCredentials over the server bundle + optional
 // client-cert verification.
 func buildServerCreds(ctx context.Context) (credentials.TransportCredentials, error) {
 	var clientCAs *x509.CertPool
-	if *workerpoolCACerts != "" {
+	if *podIdentityCACerts != "" {
 		// TODO: Periodically reload these to handle rotations. Consult with Tina to see how she did it for client-go.
-		ca, err := os.ReadFile(*workerpoolCACerts)
+		ca, err := os.ReadFile(*podIdentityCACerts)
 		if err != nil {
-			return nil, fmt.Errorf("read workerpool CA: %w", err)
+			return nil, fmt.Errorf("read pod-identity CA: %w", err)
 		}
 		clientCAs = x509.NewCertPool()
 		if !clientCAs.AppendCertsFromPEM(ca) {
-			return nil, fmt.Errorf("parse workerpool CA from %s", *workerpoolCACerts)
+			return nil, fmt.Errorf("parse pod-identity CA from %s", *podIdentityCACerts)
 		}
-		slog.InfoContext(ctx, "Using custom CA for workerpool clients", slog.String("path", *workerpoolCACerts))
+		slog.InfoContext(ctx, "Using pod-identity CA for client-cert verification", slog.String("path", *podIdentityCACerts))
 	}
 	return credentials.NewTLS(&tls.Config{
 		GetCertificate: credbundle.Loader(*grpcServerCredBundle),

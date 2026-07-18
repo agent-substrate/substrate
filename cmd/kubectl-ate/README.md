@@ -180,9 +180,9 @@ Logs are streamable only while the actor is bound to a worker (i.e., `STATUS_RUN
 Commands for bootstrapping the Substrate control plane and debugging local environments.
 
 ```bash
-# Generate a new CA pool and push it directly to a Kubernetes Secret
+# Generate a new Session ID CA pool and push it directly to a Kubernetes Secret
 kubectl ate admin make-ca-pool \
-  --name workerpool-ca-certs \
+  --name session-id-ca-pool \
   --secret-namespace ate-system \
   --ca-id "1"
 

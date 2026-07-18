@@ -90,7 +90,8 @@ spec:
           - --client-jwt-audience=api.ate-system.svc
           - --session-id-jwt-pool=/run/session-id-jwt-pool/pool.json
           - --session-id-ca-pool=/run/session-id-ca-pool/pool.json
-          - --workerpool-ca-certs=/run/workerpool-ca-certs/trust-bundle.pem
+          - --atelet-client-cred-bundle=/run/podidentity.podcert.ate.dev/credential-bundle.pem
+          - --pod-identity-ca-certs=/run/podidentity.podcert.ate.dev/trust-bundle.pem
         env:
         - name: POD_NAME
           valueFrom:
@@ -133,9 +134,6 @@ spec:
           readOnly: true
         - name: "session-id-ca-pool"
           mountPath: "/run/session-id-ca-pool"
-          readOnly: true
-        - name: "workerpool-ca-certs"
-          mountPath: "/run/workerpool-ca-certs"
           readOnly: true
         ports:
         - containerPort: 443
@@ -192,15 +190,6 @@ spec:
               items:
               - key: "pool"
                 path: "pool.json"
-      - name: "workerpool-ca-certs"
-        projected:
-          sources:
-          - clusterTrustBundle:
-              signerName: podidentity.podcert.ate.dev/identity
-              labelSelector:
-                matchLabels:
-                  podcert.ate.dev/canarying: live
-              path: trust-bundle.pem
 ---
 # 6. Expose the Session Assigner
 apiVersion: v1
