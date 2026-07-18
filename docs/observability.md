@@ -7,7 +7,7 @@ This guide explains how Agent Substrate achieves observability across these susp
 ## The Observability Model
 
 To make underlying infrastructure transitions transparent, Agent Substrate establishes a standardized metadata model to identify actors across worker pods:
-* `ate.dev/actor_name`: actor name visible to the caller (e.g., `my-counter-1` or `test`).
+* `ate.dev/actor_name`: The name of the actor (e.g., `my-counter-1` or `test`).
 * `ate.dev/actor_atespace`: The atespace the actor lives in (e.g., `ate-demo-counter`).
 * `ate.dev/actor_uid`: Server-assigned UID of the actor, unique to the lifetime of an actor.
 * `ate.dev/actor_template_name`: The name of the actor's ActorTemplate (e.g., `counter`).
@@ -26,7 +26,7 @@ Agent Substrate captures container standard output/error, wraps them into struct
 For quick, on-demand debugging of an active actor, use the Agent Substrate CLI:
 
 ```bash
-kubectl ate logs actors <actor_id> [--follow / -f]
+kubectl ate logs actors <actor-name> [--follow / -f]
 ```
 
 > **Note:** By default, `kubectl ate logs` queries the Kubernetes API of the worker pod where the actor is *currently* running. It is designed for immediate inspection of active actors. To view historical logs across past worker pods and suspension cycles, use a centralized logging backend.
@@ -74,7 +74,7 @@ Because the logging pipeline indexes the core metadata labels, you can query you
 To track the unified, continuous lifecycle of a single actor regardless of how many times it migrated across worker pods or was suspended/resumed:
 
 ```text
-labels.actor_id="test"
+labels.actor_name="test"
 ```
 
 #### 2. Atespace-Centric View
@@ -158,7 +158,7 @@ To visualize traces locally:
    ```bash
    kubectl ate get actor -A --trace
    # or
-   kubectl ate suspend actor <actor-id> -a <atespace> --trace
+   kubectl ate suspend actor <actor-name> -a <atespace> --trace
    ```
 
 4. **Search and Inspect**: Copy the printed Trace ID from the CLI output and paste it into the Jaeger search box (top right), or select `ateapi` or `atelet` under the **Service** dropdown and click **Find Traces** to inspect detailed call stacks, DB transactions, state updates, and worker pod handoffs.

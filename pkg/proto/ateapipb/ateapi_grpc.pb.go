@@ -70,15 +70,15 @@ type ControlClient interface {
 	ResumeActor(ctx context.Context, in *ResumeActorRequest, opts ...grpc.CallOption) (*ResumeActorResponse, error)
 	// Delete an actor. Only suspended actors can be deleted.
 	DeleteActor(ctx context.Context, in *DeleteActorRequest, opts ...grpc.CallOption) (*Actor, error)
-	// List all workers currently reflected in redis.
+	// List Workers.
 	ListWorkers(ctx context.Context, in *ListWorkersRequest, opts ...grpc.CallOption) (*ListWorkersResponse, error)
-	// List all actors currently reflected in redis.
+	// List Actors.
 	ListActors(ctx context.Context, in *ListActorsRequest, opts ...grpc.CallOption) (*ListActorsResponse, error)
 	// Create a new Atespace. Substrate-native, stored in Redis.
 	CreateAtespace(ctx context.Context, in *CreateAtespaceRequest, opts ...grpc.CallOption) (*Atespace, error)
 	// Get an Atespace by name.
 	GetAtespace(ctx context.Context, in *GetAtespaceRequest, opts ...grpc.CallOption) (*Atespace, error)
-	// List all Atespaces.
+	// List Atespaces.
 	ListAtespaces(ctx context.Context, in *ListAtespacesRequest, opts ...grpc.CallOption) (*ListAtespacesResponse, error)
 	// Delete an empty Atespace. Rejects (FailedPrecondition) if any actors remain.
 	DeleteAtespace(ctx context.Context, in *DeleteAtespaceRequest, opts ...grpc.CallOption) (*Atespace, error)
@@ -242,15 +242,15 @@ type ControlServer interface {
 	ResumeActor(context.Context, *ResumeActorRequest) (*ResumeActorResponse, error)
 	// Delete an actor. Only suspended actors can be deleted.
 	DeleteActor(context.Context, *DeleteActorRequest) (*Actor, error)
-	// List all workers currently reflected in redis.
+	// List Workers.
 	ListWorkers(context.Context, *ListWorkersRequest) (*ListWorkersResponse, error)
-	// List all actors currently reflected in redis.
+	// List Actors.
 	ListActors(context.Context, *ListActorsRequest) (*ListActorsResponse, error)
 	// Create a new Atespace. Substrate-native, stored in Redis.
 	CreateAtespace(context.Context, *CreateAtespaceRequest) (*Atespace, error)
 	// Get an Atespace by name.
 	GetAtespace(context.Context, *GetAtespaceRequest) (*Atespace, error)
-	// List all Atespaces.
+	// List Atespaces.
 	ListAtespaces(context.Context, *ListAtespacesRequest) (*ListAtespacesResponse, error)
 	// Delete an empty Atespace. Rejects (FailedPrecondition) if any actors remain.
 	DeleteAtespace(context.Context, *DeleteAtespaceRequest) (*Atespace, error)

@@ -230,7 +230,7 @@ func workerPhase(w *ateapipb.Worker) string {
 	return "Idle"
 }
 
-// listActorNames returns current actor IDs in the namespace via
+// listActorNames returns current actor names in the namespace via
 // ateapi. Replaces the prior kubectl-shellout fallback chain.
 func listActorNames(ctx context.Context) []string {
 	if ateClient == nil {

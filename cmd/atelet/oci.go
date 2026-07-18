@@ -85,7 +85,7 @@ func prepareOCIDirectory(ctx context.Context, pullCache *memorypullcache.MemoryP
 	}
 
 	// Bind-mount the per-actor identity directory so the workload can read its
-	// own ID at IdentityMountPath/ActorIDFileName. The bind target must exist
+	// own name at IdentityMountPath/ActorIDFileName. The bind target must exist
 	// in the rootfs for the mount to attach.
 	if identityDir != "" {
 		if err := createMountPoint(rootPath, IdentityMountPath); err != nil {

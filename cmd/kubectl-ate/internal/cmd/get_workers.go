@@ -36,11 +36,24 @@ var getWorkersCmd = &cobra.Command{
 		}
 		defer apiClient.Close()
 
-		resp, err := apiClient.ListWorkers(ctx, &ateapipb.ListWorkersRequest{})
-		if err != nil {
-			return fmt.Errorf("failed to list workers: %w", err)
+		var allWorkers []*ateapipb.Worker
+		pageToken := ""
+		for {
+			resp, err := apiClient.ListWorkers(ctx, &ateapipb.ListWorkersRequest{
+				PageSize:  1000,
+				PageToken: pageToken,
+			})
+			if err != nil {
+				return fmt.Errorf("failed to list workers: %w", err)
+			}
+			allWorkers = append(allWorkers, resp.GetWorkers()...)
+
+			pageToken = resp.GetNextPageToken()
+			if pageToken == "" {
+				break
+			}
 		}
-		return printer.PrintWorkers(resp.GetWorkers(), outputFmt)
+		return printer.PrintWorkers(allWorkers, outputFmt)
 	},
 }
 

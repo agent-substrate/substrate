@@ -45,10 +45,10 @@ service Control {
   // Delete an actor. Only suspended actors can be deleted.
   rpc DeleteActor(DeleteActorRequest) returns (Actor) {}
 
-  // List all workers currently reflected in redis.
+  // List Workers.
   rpc ListWorkers(ListWorkersRequest) returns (ListWorkersResponse) {}
 
-  // List all actors currently reflected in redis.
+  // List Actors.
   rpc ListActors(ListActorsRequest) returns (ListActorsResponse) {}
 
   // Create a new Atespace. Substrate-native, stored in Redis.
@@ -57,7 +57,7 @@ service Control {
   // Get an Atespace by name.
   rpc GetAtespace(GetAtespaceRequest) returns (Atespace) {}
 
-  // List all Atespaces.
+  // List Atespaces.
   rpc ListAtespaces(ListAtespacesRequest) returns (ListAtespacesResponse) {}
 
   // Delete an empty Atespace. Rejects (FailedPrecondition) if any actors remain.
@@ -181,9 +181,23 @@ message GetAtespaceRequest {
   ObjectRef atespace = 1;
 }
 
-message ListAtespacesRequest {}
+message ListAtespacesRequest {
+  // Requested page size; the server may return fewer, or occasionally
+  // slightly more. If unspecified, defaults to a server-chosen value;
+  // values above 1000 are coerced to 1000.
+  int32 page_size = 1;
+
+  // Pagination token from a previous ListAtespaces response.
+  // Omit or leave empty for the first request.
+  string page_token = 2;
+}
+
 message ListAtespacesResponse {
+  // The page of atespaces. This list may be empty even if there are more results.
   repeated Atespace atespaces = 1;
+
+  // Pagination token for the next page. Empty if this is the last page.
+  string next_page_token = 2;
 }
 
 message DeleteAtespaceRequest {
@@ -246,35 +260,46 @@ message DeleteActorRequest {
   ObjectRef actor = 1;
 }
 
-message ListWorkersRequest {}
-
-message ListWorkersResponse {
-  repeated Worker workers = 1;
-}
-
-// Request to list actors with pagination.
-// This operation provides "soft" guarantees: actors may be missed or duplicated
-// if the system state changes during pagination.
-message ListActorsRequest {
-  // The maximum number of actors to return. The server may enforce a hard limit
-  // (e.g., 1000) regardless of the requested size.
+message ListWorkersRequest {
+  // Requested page size; the server may return fewer, or occasionally
+  // slightly more. If unspecified, defaults to a server-chosen value;
+  // values above 1000 are coerced to 1000.
   int32 page_size = 1;
 
-  // An opaque pagination token obtained from a previous ListActorsResponse.
-  // Empty for the first request.
+  // Pagination token from a previous ListWorkers response.
+  // Omit or leave empty for the first request.
   string page_token = 2;
-
-  // If set, list only actors in this atespace (scoped SCAN actor:<atespace>:*).
-  string atespace = 3;
 }
 
-// Response for a ListActors operation.
+message ListWorkersResponse {
+  // The page of workers. This list may be empty even if there are more results.
+  repeated Worker workers = 1;
+
+  // Pagination token for the next page. Empty if this is the last page.
+  string next_page_token = 2;
+}
+
+// List actors with pagination. Provides "soft" guarantees: actors may be
+// missed or duplicated if the system state changes during pagination.
+message ListActorsRequest {
+  // The atespace to list actors from. Empty lists across all atespaces.
+  string atespace = 1;
+
+  // Requested page size; the server may return fewer, or occasionally
+  // slightly more. If unspecified, defaults to a server-chosen value;
+  // values above 1000 are coerced to 1000.
+  int32 page_size = 2;
+
+  // Pagination token from a previous ListActors response.
+  // Omit or leave empty for the first request.
+  string page_token = 3;
+}
+
 message ListActorsResponse {
   // The page of actors. This list may be empty even if there are more results.
   repeated Actor actors = 1;
 
-  // An opaque token to retrieve the next page of results.
-  // If empty, there are no more results. Clients must loop until this is empty.
+  // Pagination token for the next page. Empty if this is the last page.
   string next_page_token = 2;
 }
 

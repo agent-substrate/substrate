@@ -193,15 +193,15 @@ func (c *RouterClient) Close() {
 	close(c.stopCh)
 }
 
-// Get issues GET path to (atespace, actorID) through the router, setting the
+// Get issues GET path to (atespace, actorName) through the router, setting the
 // actor's mesh Host so the router routes (and resumes) it. The caller must close
 // the body.
-func (c *RouterClient) Get(ctx context.Context, atespace, actorID, path string) (*http.Response, error) {
+func (c *RouterClient) Get(ctx context.Context, atespace, actorName, path string) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
 	if err != nil {
 		return nil, err
 	}
 	// The router routes on the Host/:authority, not a header.
-	req.Host = resources.ActorDNSName(atespace, actorID)
+	req.Host = resources.ActorDNSName(atespace, actorName)
 	return c.http.Do(req)
 }

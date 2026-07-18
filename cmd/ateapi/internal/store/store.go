@@ -68,8 +68,8 @@ type Interface interface {
 	// Fetches an atespace by name. Returns ErrNotFound if missing.
 	GetAtespace(ctx context.Context, name string) (*ateapipb.Atespace, error)
 
-	// Lists all atespaces. Returns nil if none found.
-	ListAtespaces(ctx context.Context) ([]*ateapipb.Atespace, error)
+	// Lists atespaces. Returns a page of atespaces and a next page token.
+	ListAtespaces(ctx context.Context, pageSize int32, pageToken string) ([]*ateapipb.Atespace, string, error)
 
 	// AtespaceExists reports whether the atespace object exists.
 	AtespaceExists(ctx context.Context, name string) (bool, error)
@@ -91,8 +91,8 @@ type Interface interface {
 	// Removes a worker. Idempotent: does nothing if worker is not found.
 	DeleteWorker(ctx context.Context, namespace, pool, pod string) error
 
-	// Lists all known workers. Returns nil if none found.
-	ListWorkers(ctx context.Context) ([]*ateapipb.Worker, error)
+	// Lists workers. Returns a page of workers and a next page token.
+	ListWorkers(ctx context.Context, pageSize int32, pageToken string) ([]*ateapipb.Worker, string, error)
 
 	// WatchWorkers returns an active subscription to track worker state changes.
 	// The watch's Events channel is closed when the caller calls Close, the

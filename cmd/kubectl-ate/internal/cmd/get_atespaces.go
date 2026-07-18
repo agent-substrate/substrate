@@ -47,11 +47,24 @@ var getAtespacesCmd = &cobra.Command{
 			return printer.PrintAtespaces(atespaces, outputFmt)
 		}
 
-		resp, err := apiClient.ListAtespaces(ctx, &ateapipb.ListAtespacesRequest{})
-		if err != nil {
-			return fmt.Errorf("failed to list atespaces: %w", err)
+		var allAtespaces []*ateapipb.Atespace
+		pageToken := ""
+		for {
+			resp, err := apiClient.ListAtespaces(ctx, &ateapipb.ListAtespacesRequest{
+				PageSize:  1000,
+				PageToken: pageToken,
+			})
+			if err != nil {
+				return fmt.Errorf("failed to list atespaces: %w", err)
+			}
+			allAtespaces = append(allAtespaces, resp.GetAtespaces()...)
+
+			pageToken = resp.GetNextPageToken()
+			if pageToken == "" {
+				break
+			}
 		}
-		return printer.PrintAtespaces(resp.GetAtespaces(), outputFmt)
+		return printer.PrintAtespaces(allAtespaces, outputFmt)
 	},
 }
 
