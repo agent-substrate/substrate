@@ -16,9 +16,11 @@ package controlapi
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -26,6 +28,26 @@ import (
 	"google.golang.org/grpc/status"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
+
+func TestSchedulerRecordable(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"success is recorded", nil, true},
+		{"retry conflict is skipped", store.ErrPersistenceRetry, false},
+		{"wrapped retry conflict is skipped", fmt.Errorf("update worker: %w", store.ErrPersistenceRetry), false},
+		{"real error is recorded", status.Error(codes.Internal, "boom"), true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := schedulerRecordable(tt.err); got != tt.want {
+				t.Errorf("schedulerRecordable(%v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
+	}
+}
 
 func TestIsWorkerEligibleForActor(t *testing.T) {
 	tests := []struct {

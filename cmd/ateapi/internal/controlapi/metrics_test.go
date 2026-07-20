@@ -28,15 +28,17 @@ import (
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 )
 
 // newTestInstruments builds Instruments against a local ManualReader-backed
 // provider so tests stay parallel-safe and never touch the global provider.
-func newTestInstruments(t *testing.T, workers func() ([]*ateapipb.Worker, error)) (*Instruments, *sdkmetric.ManualReader) {
+func newTestInstruments(t *testing.T, workers func() ([]*ateapipb.Worker, error), listPools func(labels.Selector) ([]*atev1alpha1.WorkerPool, error)) (*Instruments, *sdkmetric.ManualReader) {
 	t.Helper()
 	reader := sdkmetric.NewManualReader()
 	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
-	inst, err := NewInstruments(mp.Meter("ateapi"), workers)
+	inst, err := NewInstruments(mp.Meter("ateapi"), workers, listPools)
 	if err != nil {
 		t.Fatalf("NewInstruments: %v", err)
 	}
@@ -44,6 +46,8 @@ func newTestInstruments(t *testing.T, workers func() ([]*ateapipb.Worker, error)
 }
 
 func noWorkers() ([]*ateapipb.Worker, error) { return nil, nil }
+
+func noPools(labels.Selector) ([]*atev1alpha1.WorkerPool, error) { return nil, nil }
 
 func collectMetric(t *testing.T, reader *sdkmetric.ManualReader, name string) (metricdata.Metrics, bool) {
 	t.Helper()
@@ -94,7 +98,7 @@ func equalKeys(got, want []string) bool {
 }
 
 func TestLifecycleOpDurationShape(t *testing.T) {
-	inst, reader := newTestInstruments(t, noWorkers)
+	inst, reader := newTestInstruments(t, noWorkers, noPools)
 
 	actor := &ateapipb.Actor{
 		Metadata:               &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "a1"},
@@ -197,7 +201,7 @@ func TestRecordLifecycleOp_OutcomeClassification(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			inst, reader := newTestInstruments(t, noWorkers)
+			inst, reader := newTestInstruments(t, noWorkers, noPools)
 			inst.recordLifecycleOp(context.Background(), tt.op, time.Now(), tt.err, tt.extra...)
 
 			m := mustMetric(t, reader, lifecycleOpDurationMetric)
@@ -265,7 +269,7 @@ func TestSchedulerAssignmentShapeAndOutcomes(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			inst, reader := newTestInstruments(t, noWorkers)
+			inst, reader := newTestInstruments(t, noWorkers, noPools)
 			inst.recordSchedulerAssignment(context.Background(), time.Now(), tt.outcome, tt.pool, tt.err)
 
 			m := mustMetric(t, reader, schedulerAssignmentMetric)
@@ -307,7 +311,7 @@ func TestWorkerCountTally(t *testing.T) {
 			worker("pool-b", "microvm", false),
 		}, nil
 	}
-	_, reader := newTestInstruments(t, workers)
+	_, reader := newTestInstruments(t, workers, noPools)
 
 	m := mustMetric(t, reader, workerpoolWorkersMetric)
 	if m.Unit != "{worker}" {
@@ -350,9 +354,56 @@ func TestWorkerCountSkipsWhenCacheNotReady(t *testing.T) {
 	notReady := func() ([]*ateapipb.Worker, error) {
 		return nil, context.DeadlineExceeded
 	}
-	_, reader := newTestInstruments(t, notReady)
+	_, reader := newTestInstruments(t, notReady, noPools)
 
 	if _, ok := collectMetric(t, reader, workerpoolWorkersMetric); ok {
 		t.Errorf("%s was collected, want no datapoints while cache not ready", workerpoolWorkersMetric)
+	}
+}
+
+func workerPool(name string, class atev1alpha1.SandboxClass) *atev1alpha1.WorkerPool {
+	return &atev1alpha1.WorkerPool{
+		ObjectMeta: metav1.ObjectMeta{Name: name},
+		Spec:       atev1alpha1.WorkerPoolSpec{SandboxClass: class},
+	}
+}
+
+// TestWorkerCountSeedsZeroForKnownPools covers the saturation cases: a pool whose
+// only state has no workers, and a pool with no workers at all, both report 0
+// rather than an absent series. Empty pool class defaults to gvisor.
+func TestWorkerCountSeedsZeroForKnownPools(t *testing.T) {
+	pools := func(labels.Selector) ([]*atev1alpha1.WorkerPool, error) {
+		return []*atev1alpha1.WorkerPool{
+			workerPool("pool-a", ""),
+			workerPool("pool-c", atev1alpha1.SandboxClassMicroVM),
+		}, nil
+	}
+	workers := func() ([]*ateapipb.Worker, error) {
+		return []*ateapipb.Worker{worker("pool-a", "gvisor", true)}, nil
+	}
+	_, reader := newTestInstruments(t, workers, pools)
+
+	sum := mustMetric(t, reader, workerpoolWorkersMetric).Data.(metricdata.Sum[int64])
+	type key struct{ pool, state, class string }
+	got := make(map[key]int64)
+	for _, dp := range sum.DataPoints {
+		pool, _ := dp.Attributes.Value(ateattr.WorkerPoolNameKey)
+		state, _ := dp.Attributes.Value(ateattr.WorkerStateKey)
+		class, _ := dp.Attributes.Value(ateattr.SandboxClassKey)
+		got[key{pool.AsString(), state.AsString(), class.AsString()}] = dp.Value
+	}
+	want := map[key]int64{
+		{"pool-a", ateattr.WorkerStateIdle, "gvisor"}:      0,
+		{"pool-a", ateattr.WorkerStateAssigned, "gvisor"}:  1,
+		{"pool-c", ateattr.WorkerStateIdle, "microvm"}:     0,
+		{"pool-c", ateattr.WorkerStateAssigned, "microvm"}: 0,
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %d series, want %d: %v", len(got), len(want), got)
+	}
+	for k, v := range want {
+		if gv, ok := got[k]; !ok || gv != v {
+			t.Errorf("series %v = %d (present=%v), want %d", k, gv, ok, v)
+		}
 	}
 }

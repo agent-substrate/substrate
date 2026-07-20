@@ -78,7 +78,7 @@ func recordRestorePhase(ctx context.Context, phase string, d time.Duration, tmpl
 		ateattr.ActorTemplateNamespaceKey.String(tmplNamespace),
 		ateattr.ActorTemplateNameKey.String(tmplName),
 		ateattr.SandboxClassKey.String(sandboxClass),
-		ateattr.SnapshotKindKey.String(snapshotKind),
+		ateattr.SnapshotKindKey.String(ateattr.ClampRestoreSnapshotKind(snapshotKind)),
 	))
 }
 

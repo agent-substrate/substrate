@@ -135,6 +135,18 @@ func TestCheckpointDurationShape(t *testing.T) {
 	}
 }
 
+func TestRestorePhaseClampsSnapshotKind(t *testing.T) {
+	reader := newAteletReader(t)
+	recordRestorePhase(context.Background(), ateattr.SnapshotPhaseDownload, time.Second, "ns", "tmpl", "gvisor", "$(unbounded-attacker-value)")
+
+	m := ateletMetric(t, reader, restoreDurationMetric)
+	h := m.Data.(metricdata.Histogram[float64])
+	kind, _ := h.DataPoints[0].Attributes.Value(ateattr.SnapshotKindKey)
+	if kind.AsString() != ateattr.SnapshotKindUnknown {
+		t.Errorf("snapshot.kind = %q, want %q (clamped)", kind.AsString(), ateattr.SnapshotKindUnknown)
+	}
+}
+
 func TestRestorePhaseValues(t *testing.T) {
 	reader := newAteletReader(t)
 	phases := []string{ateattr.SnapshotPhaseDownload, ateattr.SnapshotPhaseOCIUnpack, ateattr.SnapshotPhaseAteomRestore}

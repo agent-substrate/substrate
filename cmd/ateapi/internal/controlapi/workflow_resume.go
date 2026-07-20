@@ -115,6 +115,12 @@ type AssignWorkerStep struct {
 	instruments *Instruments
 }
 
+// schedulerRecordable excludes retried persistence conflicts, which runStep
+// retries transparently and which must not count as an assignment outcome.
+func schedulerRecordable(err error) bool {
+	return !errors.Is(err, store.ErrPersistenceRetry)
+}
+
 func (s *AssignWorkerStep) Name() string { return "AssignWorker" }
 
 func (s *AssignWorkerStep) IsComplete(ctx context.Context, input *ResumeInput, state *ResumeState) (bool, error) {
@@ -127,7 +133,9 @@ func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, stat
 	outcome := ateattr.SchedulerOutcomeError
 	pool := ""
 	defer func() {
-		s.instruments.recordSchedulerAssignment(ctx, start, outcome, pool, err)
+		if schedulerRecordable(err) {
+			s.instruments.recordSchedulerAssignment(ctx, start, outcome, pool, err)
+		}
 	}()
 
 	workers, err := s.workerCache.Workers()

@@ -167,3 +167,22 @@ func TestKeySpellings(t *testing.T) {
 		})
 	}
 }
+
+func TestClampRestoreSnapshotKind(t *testing.T) {
+	tests := []struct {
+		in, want string
+	}{
+		{SnapshotKindGolden, SnapshotKindGolden},
+		{SnapshotKindLatest, SnapshotKindLatest},
+		{SnapshotKindBoot, SnapshotKindUnknown},
+		{"", SnapshotKindUnknown},
+		{"$(rm -rf)", SnapshotKindUnknown},
+	}
+	for _, tt := range tests {
+		t.Run(tt.in, func(t *testing.T) {
+			if got := ClampRestoreSnapshotKind(tt.in); got != tt.want {
+				t.Errorf("ClampRestoreSnapshotKind(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}

@@ -86,10 +86,22 @@ const (
 // Values for SnapshotKindKey. Boot is not a restore, so it appears only on the
 // ateapi lifecycle histogram, never on the atelet restore histogram.
 const (
-	SnapshotKindGolden = "golden"
-	SnapshotKindLatest = "latest"
-	SnapshotKindBoot   = "boot"
+	SnapshotKindGolden  = "golden"
+	SnapshotKindLatest  = "latest"
+	SnapshotKindBoot    = "boot"
+	SnapshotKindUnknown = "unknown"
 )
+
+// ClampRestoreSnapshotKind bounds an untrusted kind before it becomes a metric
+// label, so a caller cannot inflate cardinality.
+func ClampRestoreSnapshotKind(kind string) string {
+	switch kind {
+	case SnapshotKindGolden, SnapshotKindLatest:
+		return kind
+	default:
+		return SnapshotKindUnknown
+	}
+}
 
 // Values for SnapshotPhaseKey: restore phases (download, oci_unpack,
 // ateom_restore) and checkpoint phases (checkpoint, upload) share the key.

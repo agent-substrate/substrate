@@ -131,11 +131,6 @@ func main() {
 		serverboot.Fatal(ctx, "Failed to seed worker cache", err)
 	}
 
-	instruments, err := controlapi.NewInstruments(otel.Meter("ateapi"), workerCache.Workers)
-	if err != nil {
-		serverboot.Fatal(ctx, "Failed to create metric instruments", err)
-	}
-
 	ateFactory := externalversions.NewSharedInformerFactory(ateClient, 0)
 	actorTemplateLister := ateFactory.Api().V1alpha1().ActorTemplates().Lister()
 	workerPoolLister := ateFactory.Api().V1alpha1().WorkerPools().Lister()
@@ -156,6 +151,11 @@ func main() {
 	workerPodInformerFactory.WaitForCacheSync(stopCh)
 	ateletPodInformerFactory.WaitForCacheSync(stopCh)
 	ateFactory.WaitForCacheSync(stopCh)
+
+	instruments, err := controlapi.NewInstruments(otel.Meter("ateapi"), workerCache.Workers, workerPoolLister.List)
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to create metric instruments", err)
+	}
 
 	dialer := controlapi.NewAteletDialer(workerPodInformer.GetIndexer(), ateletPodInformer.GetIndexer())
 	sm := controlapi.NewService(redisPersistence, workerCache, actorTemplateLister, workerPoolLister, sandboxConfigLister, dialer, clientset, instruments)

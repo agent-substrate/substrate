@@ -25,6 +25,7 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 	"google.golang.org/grpc/status"
+	"k8s.io/apimachinery/pkg/labels"
 )
 
 const (
@@ -41,8 +42,9 @@ type Instruments struct {
 }
 
 // NewInstruments builds the instruments from meter and registers the observable
-// worker-count callback against workers (workercache.Cache.Workers in prod).
-func NewInstruments(meter metric.Meter, workers func() ([]*ateapipb.Worker, error)) (*Instruments, error) {
+// worker-count callback against workers (workercache.Cache.Workers in prod) and
+// listPools (a WorkerPool lister's List, for zero-valued series).
+func NewInstruments(meter metric.Meter, workers func() ([]*ateapipb.Worker, error), listPools func(labels.Selector) ([]*atev1alpha1.WorkerPool, error)) (*Instruments, error) {
 	lifecycleOpDuration, err := meter.Float64Histogram(
 		lifecycleOpDurationMetric,
 		metric.WithUnit("s"),
@@ -63,7 +65,7 @@ func NewInstruments(meter metric.Meter, workers func() ([]*ateapipb.Worker, erro
 		return nil, fmt.Errorf("create %s histogram: %w", schedulerAssignmentMetric, err)
 	}
 
-	if err := registerWorkerCount(meter, workers); err != nil {
+	if err := registerWorkerCount(meter, workers, listPools); err != nil {
 		return nil, err
 	}
 
@@ -76,7 +78,7 @@ func NewInstruments(meter metric.Meter, workers func() ([]*ateapipb.Worker, erro
 // registerWorkerCount wires ate.workerpool.workers. Worker counts are spatially
 // summable (over states = pool size, over pools = fleet), which is the
 // UpDownCounter contract; a gauge would be wrong for a value meant to be summed.
-func registerWorkerCount(meter metric.Meter, workers func() ([]*ateapipb.Worker, error)) error {
+func registerWorkerCount(meter metric.Meter, workers func() ([]*ateapipb.Worker, error), listPools func(labels.Selector) ([]*atev1alpha1.WorkerPool, error)) error {
 	counter, err := meter.Int64ObservableUpDownCounter(
 		workerpoolWorkersMetric,
 		metric.WithUnit("{worker}"),
@@ -89,11 +91,25 @@ func registerWorkerCount(meter metric.Meter, workers func() ([]*ateapipb.Worker,
 	_, err = meter.RegisterCallback(func(_ context.Context, o metric.Observer) error {
 		ws, err := workers()
 		if err != nil {
-			// Cache not ready (warmup/reconnect): skip so no zero-valued points.
+			// Worker cache unavailable (warmup/reconnect): skip the whole observation.
 			return nil
 		}
 		type key struct{ pool, state, class string }
-		tally := make(map[key]int64, len(ws))
+		tally := make(map[key]int64)
+		// Seed both states at 0 for every known pool so a saturated or empty pool
+		// reports 0, not an absent series that breaks idle==0 alerts.
+		if listPools != nil {
+			if pools, err := listPools(labels.Everything()); err == nil {
+				for _, p := range pools {
+					class := string(p.Spec.SandboxClass)
+					if class == "" {
+						class = string(atev1alpha1.SandboxClassGvisor)
+					}
+					tally[key{p.Name, ateattr.WorkerStateIdle, class}] = 0
+					tally[key{p.Name, ateattr.WorkerStateAssigned, class}] = 0
+				}
+			}
+		}
 		for _, w := range ws {
 			state := ateattr.WorkerStateIdle
 			if w.GetAssignment() != nil {

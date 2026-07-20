@@ -313,7 +313,7 @@ func setupTest(t *testing.T, ns string) *testContext {
 	dialer := NewAteletDialer(workerInformer.GetIndexer(), ateletInformer.GetIndexer())
 	// Real instruments (against the no-op global meter) so the full-stack flows
 	// exercise the deferred record path, not just the dedicated metric tests.
-	instruments, err := NewInstruments(otel.Meter("ateapi"), wc.Workers)
+	instruments, err := NewInstruments(otel.Meter("ateapi"), wc.Workers, workerPoolLister.List)
 	if err != nil {
 		cancel()
 		mr.Close()
