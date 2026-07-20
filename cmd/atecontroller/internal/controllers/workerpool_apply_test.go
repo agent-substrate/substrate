@@ -310,7 +310,7 @@ func expectedDeploymentApplyConfig(mutatePodSpec func(*corev1ac.PodSpecApplyConf
 		mutatePodSpec(podSpecAC)
 	}
 
-	return appsv1ac.Deployment(deploymentName(wp.Name), wp.Namespace).
+	return appsv1ac.Deployment(wp.Name, wp.Namespace).
 		WithOwnerReferences(metav1ac.OwnerReference().
 			WithAPIVersion(atev1alpha1.GroupVersion.String()).
 			WithKind("WorkerPool").

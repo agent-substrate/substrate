@@ -87,13 +87,13 @@ func runUntar(t *testing.T, entries []tarEntry) (string, error) {
 // With an identity dir, a read-only bind mount appears at IdentityMountPath.
 func TestBuildActorOCISpec_IdentityMount(t *testing.T) {
 	spec := buildActorOCISpec(
-		"atespace", "id",
+		"actor_uid",
 		nil,
 		[]string{"/app"},
 		[]string{"FOO=bar"},
 		map[string]string{"k": "v"},
 		"/run/netns/x",
-		"/host/actors/atespace:id/identity",
+		"/host/actors/actor_uid/identity",
 		nil,
 	)
 	found := false
@@ -102,8 +102,8 @@ func TestBuildActorOCISpec_IdentityMount(t *testing.T) {
 			continue
 		}
 		found = true
-		if m.Source != "/host/actors/atespace:id/identity" {
-			t.Errorf("identity mount source = %q, want the per-actor nameentity dir", m.Source)
+		if m.Source != "/host/actors/actor_uid/identity" {
+			t.Errorf("identity mount source = %q, want the per-actor identity dir", m.Source)
 		}
 		if m.Type != "bind" {
 			t.Errorf("identity mount type = %q, want bind", m.Type)
@@ -167,7 +167,7 @@ func TestMergeActorEnv(t *testing.T) {
 
 // Without an identity dir (the pause container), no identity mount appears.
 func TestBuildActorOCISpec_NoIdentityMountForPause(t *testing.T) {
-	bare := buildActorOCISpec("atespace", "id", nil, []string{"/pause"}, nil, nil, "/run/netns/x", "", nil)
+	bare := buildActorOCISpec("actor_uid", nil, []string{"/pause"}, nil, nil, "/run/netns/x", "", nil)
 	for _, m := range bare.Mounts {
 		if m.Destination == IdentityMountPath {
 			t.Errorf("identity mount must be absent when identityDir is empty")
@@ -178,13 +178,13 @@ func TestBuildActorOCISpec_NoIdentityMountForPause(t *testing.T) {
 // Each durable-dir volume mount becomes a bind mount whose source is the
 // per-actor on-host DurableDirVolumeMountPoint for that volume name.
 func TestBuildActorOCISpec_DurableDirVolumeMounts(t *testing.T) {
-	const atespace, id = "atespace", "id"
+	const actorUID = "actor_uid"
 	durableDirs := []*ateletpb.VolumeMount{
 		{Name: "data", MountPath: "/var/data"},
 		{Name: "cache", MountPath: "/var/cache"},
 	}
 	spec := buildActorOCISpec(
-		atespace, id,
+		actorUID,
 		nil, []string{"/app"}, nil, nil,
 		"/run/netns/x",
 		"",
@@ -192,7 +192,7 @@ func TestBuildActorOCISpec_DurableDirVolumeMounts(t *testing.T) {
 	)
 
 	for _, vm := range durableDirs {
-		wantSrc := ateompath.DurableDirVolumeMountPoint(atespace, id, vm.Name)
+		wantSrc := ateompath.DurableDirVolumeMountPoint(actorUID, vm.Name)
 		found := false
 		for _, m := range spec.Mounts {
 			if m.Destination != vm.MountPath {
@@ -497,6 +497,37 @@ func TestUntar_LaterEntryWins(t *testing.T) {
 			t.Errorf("bin/sh content was overwritten to %q (hardlink was not unlinked)", gotSh)
 		}
 	})
+}
+
+// A read-only directory in the image (e.g. ko ships /ko-app as 0555) must still
+// get its child written AND keep the image's mode, so atelet can unpack arbitrary
+// actor images as plain root without CAP_DAC_OVERRIDE. removeAllWritable must
+// then still be able to delete the restored read-only tree. (Meaningful as a
+// non-root test run; as root the dir-permission checks are bypassed.)
+func TestUntar_ReadOnlyDir(t *testing.T) {
+	entries := []tarEntry{
+		{name: "ko-app", typeflag: tar.TypeDir, mode: 0o555},
+		{name: "ko-app/counter", typeflag: tar.TypeReg, mode: 0o755, body: "bin"},
+	}
+	dir, err := runUntar(t, entries)
+	if err != nil {
+		t.Fatalf("untar into read-only dir: %v", err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(dir, "ko-app/counter")); string(got) != "bin" {
+		t.Errorf("ko-app/counter = %q, want %q", got, "bin")
+	}
+	info, err := os.Stat(filepath.Join(dir, "ko-app"))
+	if err != nil {
+		t.Fatalf("stat ko-app: %v", err)
+	}
+	if info.Mode().Perm() != 0o555 {
+		t.Errorf("ko-app mode = %v, want the image's 0555 preserved", info.Mode().Perm())
+	}
+	// atelet must be able to delete the restored read-only tree (this also lets
+	// t.TempDir's cleanup succeed, which plain os.RemoveAll could not on 0555).
+	if err := removeAllWritable(filepath.Join(dir, "ko-app")); err != nil {
+		t.Errorf("removeAllWritable on restored read-only dir: %v", err)
+	}
 }
 
 func TestUntar_PathTraversal(t *testing.T) {

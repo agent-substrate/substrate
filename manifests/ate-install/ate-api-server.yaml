@@ -17,7 +17,7 @@
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: ate-api-server-role
+  name: ate-api-server
 rules:
 - apiGroups: [""]
   resources: ["pods"]
@@ -45,21 +45,21 @@ metadata:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: ate-api-server-binding
+  name: ate-api-server
 subjects:
 - kind: ServiceAccount
   name: ate-api-server
   namespace: ate-system
 roleRef:
   kind: ClusterRole
-  name: ate-api-server-role
+  name: ate-api-server
   apiGroup: rbac.authorization.k8s.io
 ---
 # 5. Deploy the API Server
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: ate-api-server-deployment
+  name: ate-api-server
   namespace: ate-system
 spec:
   replicas: 1

@@ -22,20 +22,26 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
 const maxPageSize = 1000
 
+// effectivePageSize applies the server-chosen default for an unset page_size
+// and silently coerces oversized values.
+func effectivePageSize(requested int32) int32 {
+	if requested == 0 || requested > maxPageSize {
+		return maxPageSize
+	}
+	return requested
+}
+
 func (s *Service) ListActors(ctx context.Context, req *ateapipb.ListActorsRequest) (*ateapipb.ListActorsResponse, error) {
 	if err := validateListActorsRequest(req); err != nil {
-		return nil, status.Error(codes.InvalidArgument, err.Error())
-	}
-	pageSize := req.GetPageSize()
-	if pageSize == 0 {
-		pageSize = maxPageSize
+		return nil, err
 	}
 
-	actors, nextToken, err := s.persistence.ListActors(ctx, req.GetAtespace(), pageSize, req.GetPageToken())
+	actors, nextToken, err := s.persistence.ListActors(ctx, req.GetAtespace(), effectivePageSize(req.GetPageSize()), req.GetPageToken())
 	if err != nil {
 		return nil, fmt.Errorf("while listing actors in db: %w", err)
 	}
@@ -46,17 +52,22 @@ func (s *Service) ListActors(ctx context.Context, req *ateapipb.ListActorsReques
 }
 
 func validateListActorsRequest(req *ateapipb.ListActorsRequest) error {
-	// An empty atespace is allowed here and means "all atespaces"(used by `kubectl ate get actors -A`).
-	// A non-empty atespace is validated and scopes the listing to that atespace.
-	if req.GetAtespace() != "" && !resources.IsValidResourceName(req.GetAtespace()) {
-		return fmt.Errorf("invalid atespace %q: must be a valid resource name", req.GetAtespace())
+	var fldPath *field.Path
+	var errs field.ErrorList
+
+	// An empty atespace is allowed here and means "all atespaces" (used by
+	// `kubectl ate get actors -A`). A non-empty atespace is validated and
+	// scopes the listing to that atespace.
+	if val, fldPath := req.Atespace, fldPath.Child("atespace"); val != "" {
+		errs = append(errs, resources.ValidateResourceName(val, fldPath)...)
 	}
-	pageSize := req.GetPageSize()
-	if pageSize < 0 {
-		return fmt.Errorf("page_size cannot be negative")
+
+	if val, fldPath := req.PageSize, fldPath.Child("page_size"); val < 0 {
+		errs = append(errs, field.Invalid(fldPath, val, "must be greater than or equal to 0"))
 	}
-	if pageSize > maxPageSize {
-		return fmt.Errorf("page_size %d exceeds maximum page size %d", pageSize, maxPageSize)
+
+	if len(errs) > 0 {
+		return status.Error(codes.InvalidArgument, errs.ToAggregate().Error())
 	}
 	return nil
 }

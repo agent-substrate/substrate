@@ -294,6 +294,7 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 			ActorTemplateNamespace: state.Actor.GetActorTemplateNamespace(),
 			ActorTemplateName:      state.Actor.GetActorTemplateName(),
 			Spec:                   workloadSpec,
+			ActorUid:               state.Actor.GetMetadata().Uid,
 			SnapshotKind:           ateattr.SnapshotKindLatest,
 		}
 		switch d := data.(type) {
@@ -339,6 +340,7 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 				},
 			},
 			Scope:        toAteletSnapshotScope(state.ActorTemplate.Spec.SnapshotsConfig.OnCommit),
+			ActorUid:     state.Actor.GetMetadata().Uid,
 			SnapshotKind: ateattr.SnapshotKindGolden,
 		}
 		_, err = client.Restore(ctx, req)
@@ -363,6 +365,7 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 			ActorTemplateName:      state.Actor.GetActorTemplateName(),
 			SandboxAssets:          sandboxAssets,
 			Spec:                   workloadSpec,
+			ActorUid:               state.Actor.GetMetadata().Uid,
 		}
 		_, err = client.Run(ctx, req)
 		return maybeCrashActor(ctx, s.store, input.Atespace, input.ActorName, err, "while creating workload from spec")

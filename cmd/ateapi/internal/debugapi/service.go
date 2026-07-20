@@ -12,25 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package controlapi
+package debugapi
 
 import (
-	"context"
-	"fmt"
-
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
-func (s *Service) DebugClear(ctx context.Context, req *ateapipb.DebugClearRequest) (*ateapipb.DebugClearResponse, error) {
-	if err := validateDebugClearRequest(req); err != nil {
-		return nil, err
-	}
-	if err := s.persistence.DebugClearAll(ctx); err != nil {
-		return nil, fmt.Errorf("while running DebugClearAll: %w", err)
-	}
-	return &ateapipb.DebugClearResponse{}, nil
+// Service implements ateapipb.DebugServer.
+type Service struct {
+	ateapipb.UnimplementedDebugServer
+	persistence store.Interface
 }
 
-func validateDebugClearRequest(req *ateapipb.DebugClearRequest) error {
-	return nil
+var _ ateapipb.DebugServer = (*Service)(nil)
+
+// NewService creates a new debug service.
+func NewService(persistence store.Interface) *Service {
+	return &Service{
+		persistence: persistence,
+	}
 }

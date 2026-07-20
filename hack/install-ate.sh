@@ -303,7 +303,7 @@ deploy_ate_system() {
   echo "${manifests}" | run_kubectl apply -f -
 
   log_step "Waiting for ATE system components to be ready..."
-  run_kubectl rollout status deployment/ate-api-server-deployment -n ate-system --timeout=120s
+  run_kubectl rollout status deployment/ate-api-server -n ate-system --timeout=120s
   run_kubectl rollout status deployment/ate-controller -n ate-system --timeout=120s
   run_kubectl rollout status deployment/atenet-router -n ate-system --timeout=120s
   run_kubectl rollout status statefulset/valkey-cluster -n ate-system --timeout=120s
@@ -337,7 +337,7 @@ deploy_ate_apiserver() {
   ensure_apiserver_prerequisites
 
   run_ko apply -f manifests/ate-install/ate-api-server.yaml
-  run_kubectl rollout status deployment/ate-api-server-deployment -n ate-system --timeout=120s
+  run_kubectl rollout status deployment/ate-api-server -n ate-system --timeout=120s
 }
 
 deploy_atelet() {
@@ -376,11 +376,11 @@ deploy_atenet() {
 
 # get_actor_status echoes the actor's status enum (e.g. STATUS_SUSPENDED).
 get_actor_status() {
-  local actor_id="$1"
+  local actor_name="$1"
   local atespace="$2"
   local json
 
-  if ! json=$(run_kubectl_ate get actor "${actor_id}" -a "${atespace}" -o json 2>/dev/null); then
+  if ! json=$(run_kubectl_ate get actor "${actor_name}" -a "${atespace}" -o json 2>/dev/null); then
     return 1
   fi
   jq -r '.actors[0].status // empty' <<<"${json}"
@@ -389,14 +389,14 @@ get_actor_status() {
 # prepare_actor_for_delete suspends (or resumes then suspends) until DeleteActor
 # is allowed. Actors must be STATUS_SUSPENDED before deletion.
 prepare_actor_for_delete() {
-  local actor_id="$1"
+  local actor_name="$1"
   local atespace="$2"
   local timeout_secs="${3:-120}"
   local deadline=$((SECONDS + timeout_secs))
   local status
 
   while ((SECONDS < deadline)); do
-    if ! status=$(get_actor_status "${actor_id}" "${atespace}"); then
+    if ! status=$(get_actor_status "${actor_name}" "${atespace}"); then
       return 0
     fi
 
@@ -405,22 +405,22 @@ prepare_actor_for_delete() {
         return 0
         ;;
       STATUS_PAUSED)
-        run_kubectl_ate resume actor "${actor_id}" -a "${atespace}" -o json >/dev/null
+        run_kubectl_ate resume actor "${actor_name}" -a "${atespace}" -o json >/dev/null
         ;;
       STATUS_RUNNING)
-        run_kubectl_ate suspend actor "${actor_id}" -a "${atespace}" -o json >/dev/null
+        run_kubectl_ate suspend actor "${actor_name}" -a "${atespace}" -o json >/dev/null
         ;;
       STATUS_RESUMING | STATUS_SUSPENDING | STATUS_PAUSING)
         ;;
       *)
-        echo "cannot delete actor ${actor_id}: unexpected status ${status}" >&2
+        echo "cannot delete actor ${actor_name}: unexpected status ${status}" >&2
         return 1
         ;;
     esac
     sleep 2
   done
 
-  echo "timed out waiting for actor ${actor_id} to reach STATUS_SUSPENDED" >&2
+  echo "timed out waiting for actor ${actor_name} to reach STATUS_SUSPENDED" >&2
   return 1
 }
 
@@ -440,7 +440,7 @@ delete_demo_actors() {
     return 1
   fi
 
-  if ! run_kubectl get deployment/ate-api-server-deployment -n ate-system >/dev/null 2>&1; then
+  if ! run_kubectl get deployment/ate-api-server -n ate-system >/dev/null 2>&1; then
     log_step "ate-api-server not found; skipping actor cleanup"
     return 0
   fi
@@ -451,21 +451,21 @@ delete_demo_actors() {
     return 0
   fi
 
-  local ns tmpl atespace actor_id
+  local ns tmpl atespace actor_name
   while (($# > 0)); do
     ns="$1"
     tmpl="$2"
     shift 2
 
     log_step "Deleting actors for ${ns}/${tmpl}"
-    while IFS=$'\t' read -r atespace actor_id; do
-      [[ -z "${actor_id}" ]] && continue
-      log_step "  preparing actor ${atespace}/${actor_id} for delete"
-      prepare_actor_for_delete "${actor_id}" "${atespace}"
-      run_kubectl_ate delete actor "${actor_id}" -a "${atespace}"
+    while IFS=$'\t' read -r atespace actor_name; do
+      [[ -z "${actor_name}" ]] && continue
+      log_step "  preparing actor ${atespace}/${actor_name} for delete"
+      prepare_actor_for_delete "${actor_name}" "${atespace}"
+      run_kubectl_ate delete actor "${actor_name}" -a "${atespace}"
     done < <(
       jq -r --arg ns "${ns}" --arg tmpl "${tmpl}" \
-        '.actors[]? | select(.actorTemplateNamespace == $ns and .actorTemplateName == $tmpl) | "\(.atespace)\t\(.actorId)"' \
+        '.actors[]? | select(.actorTemplateNamespace == $ns and .actorTemplateName == $tmpl) | "\(.metadata.atespace)\t\(.metadata.name)"' \
         <<<"${actors_json}"
     )
   done

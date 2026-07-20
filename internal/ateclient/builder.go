@@ -44,9 +44,10 @@ import (
 	"k8s.io/client-go/transport/spdy"
 )
 
-// Client wraps the gRPC ControlClient and ensures the port-forward connection is closed when done.
+// Client wraps the gRPC ControlClient and DebugClient and ensures the port-forward connection is closed when done.
 type Client struct {
 	ateapipb.ControlClient
+	ateapipb.DebugClient
 	conn           *grpc.ClientConn
 	cancel         func()
 	tracerProvider *sdktrace.TracerProvider
@@ -108,6 +109,7 @@ func dialDirect(kubeconfigPath, k8sContext, endpoint string, traceEnabled bool) 
 	}
 	return &Client{
 		ControlClient: ateapipb.NewControlClient(conn),
+		DebugClient:   ateapipb.NewDebugClient(conn),
 		conn:          conn,
 		cancel:        func() {},
 	}, nil
@@ -230,6 +232,7 @@ func dialPortForward(ctx context.Context, kubeconfigPath, k8sContext string, tra
 
 	return &Client{
 		ControlClient: ateapipb.NewControlClient(conn),
+		DebugClient:   ateapipb.NewDebugClient(conn),
 		conn:          conn,
 		cancel: func() {
 			close(stopCh)
@@ -267,7 +270,7 @@ func jwtDialOptions(ctx context.Context, clientset *kubernetes.Clientset) ([]grp
 func isJWTMode(ctx context.Context, clientset *kubernetes.Clientset) (bool, error) {
 	// TODO: Replace deployment introspection with an explicit client-readable
 	// config file once ateapi auth mode is part of install/runtime config.
-	deployment, err := clientset.AppsV1().Deployments("ate-system").Get(ctx, "ate-api-server-deployment", metav1.GetOptions{})
+	deployment, err := clientset.AppsV1().Deployments("ate-system").Get(ctx, "ate-api-server", metav1.GetOptions{})
 	if err != nil {
 		return false, fmt.Errorf("failed to get ate-api-server deployment: %w", err)
 	}

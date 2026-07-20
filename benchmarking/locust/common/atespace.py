@@ -26,7 +26,7 @@ from common import ateapi_pb2
 from common.grpc_tracing import traced_grpc
 
 # Single atespace for all benchmark runs. Actor names within an atespace
-# must be unique, and every user picks an `sb-<uuid>` actor id, so a
+# must be unique, and every user picks an `sb-<uuid>` actor name, so a
 # shared atespace doesn't introduce collisions.
 ATESPACE = "benchmark"
 
@@ -35,7 +35,11 @@ def ensure_atespace(stub, user_class: str, name: str = ATESPACE) -> None:
     with traced_grpc("CreateAtespace", user_class) as metadata:
         try:
             _, metadata.call = stub.CreateAtespace.with_call(
-                ateapi_pb2.CreateAtespaceRequest(name=name),
+                ateapi_pb2.CreateAtespaceRequest(
+                    atespace=ateapi_pb2.Atespace(
+                        metadata=ateapi_pb2.ResourceMetadata(name=name)
+                    )
+                ),
                 metadata=metadata,
             )
         except grpc.RpcError as e:

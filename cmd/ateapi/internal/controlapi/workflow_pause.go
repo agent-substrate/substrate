@@ -142,7 +142,8 @@ func (s *CallAteletPauseStep) Execute(ctx context.Context, input *PauseInput, st
 				SnapshotPrefix: state.Actor.InProgressSnapshot,
 			},
 		},
-		Scope: toAteletSnapshotScope(state.ActorTemplate.Spec.SnapshotsConfig.OnPause),
+		Scope:    toAteletSnapshotScope(state.ActorTemplate.Spec.SnapshotsConfig.OnPause),
+		ActorUid: state.Actor.GetMetadata().Uid,
 	}
 
 	_, err = client.Checkpoint(ctx, req)
@@ -157,8 +158,11 @@ type FinalizePausedStep struct {
 
 func (s *FinalizePausedStep) Name() string { return "FinalizePaused" }
 func (s *FinalizePausedStep) IsComplete(ctx context.Context, input *PauseInput, state *PauseState) (bool, error) {
-	// The workflow is completely done ONLY if the status is PAUSED *and* we've successfully freed the worker.
-	return state.Actor.GetStatus() == ateapipb.Actor_STATUS_PAUSED && state.Actor.GetAteomPodNamespace() == "", nil
+	// The workflow is done once the worker is freed and the actor reached PAUSED,
+	// or CRASHED (node name was lost, so it can never be safely resumed).
+	status := state.Actor.GetStatus()
+	terminal := status == ateapipb.Actor_STATUS_PAUSED || status == ateapipb.Actor_STATUS_CRASHED
+	return terminal && state.Actor.GetAteomPodNamespace() == "", nil
 }
 func (s *FinalizePausedStep) Execute(ctx context.Context, input *PauseInput, state *PauseState) error {
 	latestActor, err := s.store.GetActor(ctx, input.Atespace, input.ActorName)
@@ -202,19 +206,24 @@ func (s *FinalizePausedStep) Execute(ctx context.Context, input *PauseInput, sta
 			return err
 		}
 		latestActor.Status = ateapipb.Actor_STATUS_PAUSED
-		// TODO(dberkov) - what if we still don't know the node name? Maybe move to CRASHED status?
 		if nodeName == "" {
-			slog.Warn("Node name not found during finalize pause", "actor", input.ActorName)
+			// Without a node name we cannot record where the local snapshot lives,
+			// so the actor can never be resumed (findFreeWorker would search for a
+			// worker on an unknown node forever). Crash it instead of leaving it
+			// stuck in PAUSED.
+			slog.ErrorContext(ctx, "Node name not found during finalize pause, crashing actor", "actor", input.ActorName)
+			latestActor.Status = ateapipb.Actor_STATUS_CRASHED
 		}
 		// TODO(dberkov) - what if InProgressSnapshot is empty? That shouldn't be possible.
 		if latestActor.InProgressSnapshot != "" {
+			localInfo := &ateapipb.LocalSnapshotInfo{
+				SnapshotPrefix: latestActor.InProgressSnapshot,
+			}
+			if latestActor.Status != ateapipb.Actor_STATUS_CRASHED {
+				localInfo.NodeVmsWithLocalSnapshots = []string{nodeName}
+			}
 			latestActor.LatestSnapshotInfo = &ateapipb.SnapshotInfo{
-				Data: &ateapipb.SnapshotInfo_Local{
-					Local: &ateapipb.LocalSnapshotInfo{
-						SnapshotPrefix:            latestActor.InProgressSnapshot,
-						NodeVmsWithLocalSnapshots: []string{nodeName},
-					},
-				},
+				Data: &ateapipb.SnapshotInfo_Local{Local: localInfo},
 			}
 			latestActor.InProgressSnapshot = ""
 		}
