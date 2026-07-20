@@ -16,8 +16,11 @@ package controlapi
 
 import (
 	"context"
+	"errors"
 	"testing"
+	"time"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -25,11 +28,15 @@ import (
 
 // stubStep records the order of engine callbacks and returns canned results.
 type stubStep struct {
-	name       string
-	complete   bool
-	prereqErr  error
-	executeErr error
-	calls      *[]string
+	name      string
+	complete  bool
+	prereqErr error
+	// executeErrs is consumed one entry per Execute call; once exhausted,
+	// executeErr is returned (nil by default).
+	executeErrs []error
+	executeErr  error
+	backoff     *wait.Backoff
+	calls       *[]string
 }
 
 func (s *stubStep) Name() string { return s.name }
@@ -43,9 +50,24 @@ func (s *stubStep) CheckPrerequisite(ctx context.Context, params struct{}, wCtx 
 }
 func (s *stubStep) Execute(ctx context.Context, params struct{}, wCtx struct{}) error {
 	*s.calls = append(*s.calls, s.name+".Execute")
+	if len(s.executeErrs) > 0 {
+		err := s.executeErrs[0]
+		s.executeErrs = s.executeErrs[1:]
+		return err
+	}
 	return s.executeErr
 }
-func (s *stubStep) RetryBackoff() *wait.Backoff { return nil }
+func (s *stubStep) RetryBackoff() *wait.Backoff { return s.backoff }
+
+func countCalls(calls []string, want string) int {
+	n := 0
+	for _, c := range calls {
+		if c == want {
+			n++
+		}
+	}
+	return n
+}
 
 func TestRunWorkflow_CheckPrerequisiteOrdering(t *testing.T) {
 	ctx := context.Background()
@@ -101,6 +123,85 @@ func TestRunWorkflow_CheckPrerequisiteOrdering(t *testing.T) {
 			if c == "s1.Execute" || c == "s2.IsComplete" {
 				t.Fatalf("unexpected call %q after failed prerequisite; calls = %v", c, calls)
 			}
+		}
+	})
+}
+
+// TestRunWorkflow_RetryOnPersistenceConflict verifies runStep's retry loop:
+// with a RetryBackoff, Execute is retried on store.ErrPersistenceRetry without
+// re-running IsComplete or CheckPrerequisite; any other error — or a nil
+// backoff — fails the step on the first attempt.
+func TestRunWorkflow_RetryOnPersistenceConflict(t *testing.T) {
+	ctx := context.Background()
+	// Small steps and duration keep retries fast; Steps also bounds the
+	// exhaustion subtest to exactly 3 Execute attempts.
+	backoff := &wait.Backoff{Steps: 3, Duration: time.Millisecond, Factor: 2.0}
+
+	t.Run("retries on persistence conflict then succeeds", func(t *testing.T) {
+		var calls []string
+		steps := []WorkflowStep[struct{}, struct{}]{
+			&stubStep{
+				name:        "s1",
+				executeErrs: []error{store.ErrPersistenceRetry, store.ErrPersistenceRetry},
+				backoff:     backoff,
+				calls:       &calls,
+			},
+		}
+		if err := RunWorkflow(ctx, struct{}{}, struct{}{}, steps); err != nil {
+			t.Fatalf("RunWorkflow: %v", err)
+		}
+		if got := countCalls(calls, "s1.Execute"); got != 3 {
+			t.Errorf("Execute called %d times, want 3; calls = %v", got, calls)
+		}
+		// The retry loop lives inside runStep: the prerequisite must not be
+		// re-validated between attempts.
+		if got := countCalls(calls, "s1.CheckPrerequisite"); got != 1 {
+			t.Errorf("CheckPrerequisite called %d times, want 1; calls = %v", got, calls)
+		}
+		if got := countCalls(calls, "s1.IsComplete"); got != 1 {
+			t.Errorf("IsComplete called %d times, want 1; calls = %v", got, calls)
+		}
+	})
+
+	t.Run("non-retryable error fails without retry", func(t *testing.T) {
+		var calls []string
+		fatal := errors.New("boom")
+		steps := []WorkflowStep[struct{}, struct{}]{
+			&stubStep{name: "s1", executeErrs: []error{fatal}, backoff: backoff, calls: &calls},
+		}
+		err := RunWorkflow(ctx, struct{}{}, struct{}{}, steps)
+		if !errors.Is(err, fatal) {
+			t.Fatalf("RunWorkflow error = %v, want wrapping %v", err, fatal)
+		}
+		if got := countCalls(calls, "s1.Execute"); got != 1 {
+			t.Errorf("Execute called %d times, want 1; calls = %v", got, calls)
+		}
+	})
+
+	t.Run("persistent conflict exhausts backoff", func(t *testing.T) {
+		var calls []string
+		steps := []WorkflowStep[struct{}, struct{}]{
+			&stubStep{name: "s1", executeErr: store.ErrPersistenceRetry, backoff: backoff, calls: &calls},
+		}
+		if err := RunWorkflow(ctx, struct{}{}, struct{}{}, steps); err == nil {
+			t.Fatal("RunWorkflow: expected error after exhausting retries, got nil")
+		}
+		if got := countCalls(calls, "s1.Execute"); got != backoff.Steps {
+			t.Errorf("Execute called %d times, want %d; calls = %v", got, backoff.Steps, calls)
+		}
+	})
+
+	t.Run("nil backoff means no retry", func(t *testing.T) {
+		var calls []string
+		steps := []WorkflowStep[struct{}, struct{}]{
+			&stubStep{name: "s1", executeErrs: []error{store.ErrPersistenceRetry}, calls: &calls},
+		}
+		err := RunWorkflow(ctx, struct{}{}, struct{}{}, steps)
+		if !errors.Is(err, store.ErrPersistenceRetry) {
+			t.Fatalf("RunWorkflow error = %v, want wrapping store.ErrPersistenceRetry", err)
+		}
+		if got := countCalls(calls, "s1.Execute"); got != 1 {
+			t.Errorf("Execute called %d times, want 1; calls = %v", got, calls)
 		}
 	})
 }

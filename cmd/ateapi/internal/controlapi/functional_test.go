@@ -1743,8 +1743,9 @@ func TestUpdateActor_NotFound(t *testing.T) {
 //     worker is claimed, leaving worker-a's actor assignment set and the actor
 //     stuck in RESUMING.
 //  3. Updates the actor's selector to tier=b, making pool-a ineligible.
-//  4. Resumes again; asserts it succeeds onto worker-b, and that worker-a
-//     has been released (actor assignment cleared) rather than left dangling.
+//  4. Resumes again; asserts it fails and the actor is CRASHED, that worker-a
+//     has been released (actor assignment cleared) rather than left dangling,
+//     and that worker-b remains free (the crashed actor must not claim it).
 func TestResumeActor_ReleasesStaleWorkerWhenPoolBecomesIneligible(t *testing.T) {
 	ns := namespaceForTest("ns-resume-release-stale")
 	tc := setupTest(t, ns)
@@ -1813,16 +1814,12 @@ func TestResumeActor_ReleasesStaleWorkerWhenPoolBecomesIneligible(t *testing.T) 
 				t.Errorf("expected worker-a (now-ineligible pool-a) to be released, got actor name=%q", got)
 			}
 		case "pool-b":
-			if wass := w.Assignment; wass == nil {
-				t.Errorf("expected worker-b to be claimed by %q, got nil assignment", name)
-			} else {
-				if wact := wass.Actor; wact == nil {
-					t.Errorf("expected worker-b to be claimed by %q, got nil assignment.actor", name)
-				} else {
-					if got := wact.Name; got != name {
-						t.Errorf("expected worker-b to be claimed by %q, got actor name=%q", name, got)
-					}
+			if wass := w.Assignment; wass != nil {
+				got := "<nil-actor>"
+				if wass.Actor != nil {
+					got = wass.Actor.Name
 				}
+				t.Errorf("expected worker-b to stay free (actor crashed, not migrated), got actor name=%q", got)
 			}
 		}
 	}
