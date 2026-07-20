@@ -28,6 +28,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -273,6 +274,81 @@ func TestVerifyMixedJWKS(t *testing.T) {
 	tok := mintJWT(t, "RS256", "rsa-1", rsaKey, validClaims(ti.issuer()))
 	if _, err := Verify(context.Background(), ti.server.Client(), tok, ti.issuer(), testAudience, time.Now()); err != nil {
 		t.Fatalf("Verify with a mixed RSA+EC JWKS = %v, want nil", err)
+	}
+}
+
+// TestVerifyUnusableJWKSKeySkipped pins the resilient discovery contract: a key the
+// verifier cannot parse (here an unsupported P-192 curve) is skipped rather than
+// failing discovery for the whole issuer, so a token signed by a supported key in
+// the same JWKS still verifies — while a token that references the skipped key is
+// still rejected (skipping is not accepting).
+func TestVerifyUnusableJWKSKeySkipped(t *testing.T) {
+	ti := newTestIssuer(t)
+	rsaKey := testRSAKey(t)
+	ti.addRSA("rsa-1", &rsaKey.PublicKey)
+	ti.jwks.Keys = append(ti.jwks.Keys, jwkT{
+		KeyType: "EC", KeyID: "ec-bad", EllipticCurve: "P-192", EllipticX: "AA", EllipticY: "AA",
+	})
+
+	good := mintJWT(t, "RS256", "rsa-1", rsaKey, validClaims(ti.issuer()))
+	if _, err := Verify(context.Background(), ti.server.Client(), good, ti.issuer(), testAudience, time.Now()); err != nil {
+		t.Fatalf("Verify with an unusable key in the JWKS = %v, want nil (bad key should be skipped)", err)
+	}
+
+	referencesSkipped := mintJWT(t, "RS256", "ec-bad", rsaKey, validClaims(ti.issuer()))
+	if _, err := Verify(context.Background(), ti.server.Client(), referencesSkipped, ti.issuer(), testAudience, time.Now()); err == nil {
+		t.Fatal("Verify accepted a token whose kid names a key that was skipped")
+	}
+}
+
+// TestDiscoverKeysAllUnusable pins that an issuer whose JWKS contains only keys the
+// verifier can't use fails at discovery (naming the cause) rather than returning an
+// empty key set.
+func TestDiscoverKeysAllUnusable(t *testing.T) {
+	ti := newTestIssuer(t)
+	ti.jwks.Keys = append(ti.jwks.Keys, jwkT{
+		KeyType: "EC", KeyID: "ec-bad", EllipticCurve: "P-192", EllipticX: "AA", EllipticY: "AA",
+	})
+	_, err := discoverKeysForIssuer(context.Background(), ti.server.Client(), ti.issuer())
+	if err == nil {
+		t.Fatal("discoverKeysForIssuer returned nil error for an issuer with no usable keys")
+	}
+	if !strings.Contains(err.Error(), "no usable keys") {
+		t.Errorf("error = %q, want it to name the cause (contain %q)", err, "no usable keys")
+	}
+}
+
+// TestDiscoverKeysEmptyJWKS pins the distinct error for an issuer that publishes no
+// keys at all, versus one whose keys are all unusable.
+func TestDiscoverKeysEmptyJWKS(t *testing.T) {
+	ti := newTestIssuer(t) // no keys registered
+	_, err := discoverKeysForIssuer(context.Background(), ti.server.Client(), ti.issuer())
+	if err == nil {
+		t.Fatal("discoverKeysForIssuer returned nil error for an empty JWKS")
+	}
+	if !strings.Contains(err.Error(), "empty JWKS") {
+		t.Errorf("error = %q, want it to mention %q", err, "empty JWKS")
+	}
+}
+
+func TestParseJWKRejects(t *testing.T) {
+	tests := []struct {
+		name string
+		jwk  jwkT
+	}{
+		{"no key ID", jwkT{KeyType: "RSA", KeyID: ""}},
+		{"unknown key type", jwkT{KeyType: "OKP", KeyID: "k"}},
+		{"unsupported EC curve", jwkT{KeyType: "EC", KeyID: "k", EllipticCurve: "P-192", EllipticX: "AA", EllipticY: "AA"}},
+		{"EC missing coordinate", jwkT{KeyType: "EC", KeyID: "k", EllipticCurve: "P-256", EllipticX: "AA"}},
+		{"EC malformed x", jwkT{KeyType: "EC", KeyID: "k", EllipticCurve: "P-256", EllipticX: "!!!", EllipticY: "AA"}},
+		{"RSA malformed n", jwkT{KeyType: "RSA", KeyID: "k", RSAN: "!!!", RSAE: "AQAB"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := parseJWK(tc.jwk); err == nil {
+				t.Errorf("parseJWK(%s) = nil, want error", tc.name)
+			}
+		})
 	}
 }
 
