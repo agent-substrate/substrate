@@ -37,7 +37,7 @@ demo-multi-template_deploy() {
 
   # Wait for both ActorTemplates to be ready before returning.
   log_step "Waiting for multi-template demo to be ready..."
-  run_kubectl rollout status deployment/shared-pool-deployment -n ate-demo-multi-template-pool --timeout=300s
+  run_kubectl rollout status deployment/shared-pool -n ate-demo-multi-template-pool --timeout=300s
   run_kubectl wait --for=condition=Ready actortemplate/counter -n ate-demo-multi-template-counter --timeout=300s
   run_kubectl wait --for=condition=Ready actortemplate/fspersist -n ate-demo-multi-template-fspersist --timeout=300s
 }

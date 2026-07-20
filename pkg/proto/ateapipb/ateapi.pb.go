@@ -757,7 +757,14 @@ func (x *GetAtespaceRequest) GetAtespace() *ObjectRef {
 }
 
 type ListAtespacesRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Requested page size; the server may return fewer, or occasionally
+	// slightly more. If unspecified, defaults to a server-chosen value;
+	// values above 1000 are coerced to 1000.
+	PageSize int32 `protobuf:"varint,1,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`
+	// Pagination token from a previous ListAtespaces response.
+	// Omit or leave empty for the first request.
+	PageToken     string `protobuf:"bytes,2,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -792,9 +799,26 @@ func (*ListAtespacesRequest) Descriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{10}
 }
 
+func (x *ListAtespacesRequest) GetPageSize() int32 {
+	if x != nil {
+		return x.PageSize
+	}
+	return 0
+}
+
+func (x *ListAtespacesRequest) GetPageToken() string {
+	if x != nil {
+		return x.PageToken
+	}
+	return ""
+}
+
 type ListAtespacesResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Atespaces     []*Atespace            `protobuf:"bytes,1,rep,name=atespaces,proto3" json:"atespaces,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The page of atespaces. This list may be empty even if there are more results.
+	Atespaces []*Atespace `protobuf:"bytes,1,rep,name=atespaces,proto3" json:"atespaces,omitempty"`
+	// Pagination token for the next page. Empty if this is the last page.
+	NextPageToken string `protobuf:"bytes,2,opt,name=next_page_token,json=nextPageToken,proto3" json:"next_page_token,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -834,6 +858,13 @@ func (x *ListAtespacesResponse) GetAtespaces() []*Atespace {
 		return x.Atespaces
 	}
 	return nil
+}
+
+func (x *ListAtespacesResponse) GetNextPageToken() string {
+	if x != nil {
+		return x.NextPageToken
+	}
+	return ""
 }
 
 type DeleteAtespaceRequest struct {
@@ -1389,7 +1420,14 @@ func (x *DeleteActorRequest) GetActor() *ObjectRef {
 }
 
 type ListWorkersRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Requested page size; the server may return fewer, or occasionally
+	// slightly more. If unspecified, defaults to a server-chosen value;
+	// values above 1000 are coerced to 1000.
+	PageSize int32 `protobuf:"varint,1,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`
+	// Pagination token from a previous ListWorkers response.
+	// Omit or leave empty for the first request.
+	PageToken     string `protobuf:"bytes,2,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1424,9 +1462,26 @@ func (*ListWorkersRequest) Descriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{24}
 }
 
+func (x *ListWorkersRequest) GetPageSize() int32 {
+	if x != nil {
+		return x.PageSize
+	}
+	return 0
+}
+
+func (x *ListWorkersRequest) GetPageToken() string {
+	if x != nil {
+		return x.PageToken
+	}
+	return ""
+}
+
 type ListWorkersResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Workers       []*Worker              `protobuf:"bytes,1,rep,name=workers,proto3" json:"workers,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The page of workers. This list may be empty even if there are more results.
+	Workers []*Worker `protobuf:"bytes,1,rep,name=workers,proto3" json:"workers,omitempty"`
+	// Pagination token for the next page. Empty if this is the last page.
+	NextPageToken string `protobuf:"bytes,2,opt,name=next_page_token,json=nextPageToken,proto3" json:"next_page_token,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1468,19 +1523,26 @@ func (x *ListWorkersResponse) GetWorkers() []*Worker {
 	return nil
 }
 
-// Request to list actors with pagination.
-// This operation provides "soft" guarantees: actors may be missed or duplicated
-// if the system state changes during pagination.
+func (x *ListWorkersResponse) GetNextPageToken() string {
+	if x != nil {
+		return x.NextPageToken
+	}
+	return ""
+}
+
+// List actors with pagination. Provides "soft" guarantees: actors may be
+// missed or duplicated if the system state changes during pagination.
 type ListActorsRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// The maximum number of actors to return. The server may enforce a hard limit
-	// (e.g., 1000) regardless of the requested size.
-	PageSize int32 `protobuf:"varint,1,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`
-	// An opaque pagination token obtained from a previous ListActorsResponse.
-	// Empty for the first request.
-	PageToken string `protobuf:"bytes,2,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`
-	// If set, list only actors in this atespace (scoped SCAN actor:<atespace>:*).
-	Atespace      string `protobuf:"bytes,3,opt,name=atespace,proto3" json:"atespace,omitempty"`
+	// The atespace to list actors from. Empty lists across all atespaces.
+	Atespace string `protobuf:"bytes,1,opt,name=atespace,proto3" json:"atespace,omitempty"`
+	// Requested page size; the server may return fewer, or occasionally
+	// slightly more. If unspecified, defaults to a server-chosen value;
+	// values above 1000 are coerced to 1000.
+	PageSize int32 `protobuf:"varint,2,opt,name=page_size,json=pageSize,proto3" json:"page_size,omitempty"`
+	// Pagination token from a previous ListActors response.
+	// Omit or leave empty for the first request.
+	PageToken     string `protobuf:"bytes,3,opt,name=page_token,json=pageToken,proto3" json:"page_token,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1515,6 +1577,13 @@ func (*ListActorsRequest) Descriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{26}
 }
 
+func (x *ListActorsRequest) GetAtespace() string {
+	if x != nil {
+		return x.Atespace
+	}
+	return ""
+}
+
 func (x *ListActorsRequest) GetPageSize() int32 {
 	if x != nil {
 		return x.PageSize
@@ -1529,20 +1598,11 @@ func (x *ListActorsRequest) GetPageToken() string {
 	return ""
 }
 
-func (x *ListActorsRequest) GetAtespace() string {
-	if x != nil {
-		return x.Atespace
-	}
-	return ""
-}
-
-// Response for a ListActors operation.
 type ListActorsResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The page of actors. This list may be empty even if there are more results.
 	Actors []*Actor `protobuf:"bytes,1,rep,name=actors,proto3" json:"actors,omitempty"`
-	// An opaque token to retrieve the next page of results.
-	// If empty, there are no more results. Clients must loop until this is empty.
+	// Pagination token for the next page. Empty if this is the last page.
 	NextPageToken string `protobuf:"bytes,2,opt,name=next_page_token,json=nextPageToken,proto3" json:"next_page_token,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -2194,10 +2254,14 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x15CreateAtespaceRequest\x12,\n" +
 	"\batespace\x18\x01 \x01(\v2\x10.ateapi.AtespaceR\batespace\"C\n" +
 	"\x12GetAtespaceRequest\x12-\n" +
-	"\batespace\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\batespace\"\x16\n" +
-	"\x14ListAtespacesRequest\"G\n" +
+	"\batespace\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\batespace\"R\n" +
+	"\x14ListAtespacesRequest\x12\x1b\n" +
+	"\tpage_size\x18\x01 \x01(\x05R\bpageSize\x12\x1d\n" +
+	"\n" +
+	"page_token\x18\x02 \x01(\tR\tpageToken\"o\n" +
 	"\x15ListAtespacesResponse\x12.\n" +
-	"\tatespaces\x18\x01 \x03(\v2\x10.ateapi.AtespaceR\tatespaces\"F\n" +
+	"\tatespaces\x18\x01 \x03(\v2\x10.ateapi.AtespaceR\tatespaces\x12&\n" +
+	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"F\n" +
 	"\x15DeleteAtespaceRequest\x12-\n" +
 	"\batespace\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\batespace\":\n" +
 	"\x0fGetActorRequest\x12'\n" +
@@ -2223,15 +2287,19 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x13ResumeActorResponse\x12#\n" +
 	"\x05actor\x18\x01 \x01(\v2\r.ateapi.ActorR\x05actor\"=\n" +
 	"\x12DeleteActorRequest\x12'\n" +
-	"\x05actor\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\x05actor\"\x14\n" +
-	"\x12ListWorkersRequest\"?\n" +
-	"\x13ListWorkersResponse\x12(\n" +
-	"\aworkers\x18\x01 \x03(\v2\x0e.ateapi.WorkerR\aworkers\"k\n" +
-	"\x11ListActorsRequest\x12\x1b\n" +
+	"\x05actor\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\x05actor\"P\n" +
+	"\x12ListWorkersRequest\x12\x1b\n" +
 	"\tpage_size\x18\x01 \x01(\x05R\bpageSize\x12\x1d\n" +
 	"\n" +
-	"page_token\x18\x02 \x01(\tR\tpageToken\x12\x1a\n" +
-	"\batespace\x18\x03 \x01(\tR\batespace\"c\n" +
+	"page_token\x18\x02 \x01(\tR\tpageToken\"g\n" +
+	"\x13ListWorkersResponse\x12(\n" +
+	"\aworkers\x18\x01 \x03(\v2\x0e.ateapi.WorkerR\aworkers\x12&\n" +
+	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"k\n" +
+	"\x11ListActorsRequest\x12\x1a\n" +
+	"\batespace\x18\x01 \x01(\tR\batespace\x12\x1b\n" +
+	"\tpage_size\x18\x02 \x01(\x05R\bpageSize\x12\x1d\n" +
+	"\n" +
+	"page_token\x18\x03 \x01(\tR\tpageToken\"c\n" +
 	"\x12ListActorsResponse\x12%\n" +
 	"\x06actors\x18\x01 \x03(\v2\r.ateapi.ActorR\x06actors\x12&\n" +
 	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"\xa8\x03\n" +
@@ -2279,7 +2347,7 @@ const file_ateapi_proto_rawDesc = "" +
 	"session_id\x18\x03 \x01(\tR\tsessionId\x12>\n" +
 	"\x1bcertificate_signing_request\x18\x04 \x01(\fR\x19certificateSigningRequest\"E\n" +
 	"\x10MintCertResponse\x121\n" +
-	"\x14session_certificates\x18\x01 \x03(\fR\x13sessionCertificates2\xd0\a\n" +
+	"\x14session_certificates\x18\x01 \x03(\fR\x13sessionCertificates2\x89\a\n" +
 	"\aControl\x124\n" +
 	"\bGetActor\x12\x17.ateapi.GetActorRequest\x1a\r.ateapi.Actor\"\x00\x12:\n" +
 	"\vCreateActor\x12\x1a.ateapi.CreateActorRequest\x1a\r.ateapi.Actor\"\x00\x12H\n" +
@@ -2295,7 +2363,8 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x0eCreateAtespace\x12\x1d.ateapi.CreateAtespaceRequest\x1a\x10.ateapi.Atespace\"\x00\x12=\n" +
 	"\vGetAtespace\x12\x1a.ateapi.GetAtespaceRequest\x1a\x10.ateapi.Atespace\"\x00\x12N\n" +
 	"\rListAtespaces\x12\x1c.ateapi.ListAtespacesRequest\x1a\x1d.ateapi.ListAtespacesResponse\"\x00\x12C\n" +
-	"\x0eDeleteAtespace\x12\x1d.ateapi.DeleteAtespaceRequest\x1a\x10.ateapi.Atespace\"\x00\x12E\n" +
+	"\x0eDeleteAtespace\x12\x1d.ateapi.DeleteAtespaceRequest\x1a\x10.ateapi.Atespace\"\x002N\n" +
+	"\x05Debug\x12E\n" +
 	"\n" +
 	"DebugClear\x12\x19.ateapi.DebugClearRequest\x1a\x1a.ateapi.DebugClearResponse\"\x002\x8c\x01\n" +
 	"\x0fSessionIdentity\x12:\n" +
@@ -2405,7 +2474,7 @@ var file_ateapi_proto_depIdxs = []int32{
 	10, // 42: ateapi.Control.GetAtespace:input_type -> ateapi.GetAtespaceRequest
 	11, // 43: ateapi.Control.ListAtespaces:input_type -> ateapi.ListAtespacesRequest
 	13, // 44: ateapi.Control.DeleteAtespace:input_type -> ateapi.DeleteAtespaceRequest
-	32, // 45: ateapi.Control.DebugClear:input_type -> ateapi.DebugClearRequest
+	32, // 45: ateapi.Debug.DebugClear:input_type -> ateapi.DebugClearRequest
 	34, // 46: ateapi.SessionIdentity.MintJWT:input_type -> ateapi.MintJWTRequest
 	36, // 47: ateapi.SessionIdentity.MintCert:input_type -> ateapi.MintCertRequest
 	6,  // 48: ateapi.Control.GetActor:output_type -> ateapi.Actor
@@ -2421,7 +2490,7 @@ var file_ateapi_proto_depIdxs = []int32{
 	7,  // 58: ateapi.Control.GetAtespace:output_type -> ateapi.Atespace
 	12, // 59: ateapi.Control.ListAtespaces:output_type -> ateapi.ListAtespacesResponse
 	7,  // 60: ateapi.Control.DeleteAtespace:output_type -> ateapi.Atespace
-	33, // 61: ateapi.Control.DebugClear:output_type -> ateapi.DebugClearResponse
+	33, // 61: ateapi.Debug.DebugClear:output_type -> ateapi.DebugClearResponse
 	35, // 62: ateapi.SessionIdentity.MintJWT:output_type -> ateapi.MintJWTResponse
 	37, // 63: ateapi.SessionIdentity.MintCert:output_type -> ateapi.MintCertResponse
 	48, // [48:64] is the sub-list for method output_type
@@ -2448,7 +2517,7 @@ func file_ateapi_proto_init() {
 			NumEnums:      1,
 			NumMessages:   39,
 			NumExtensions: 0,
-			NumServices:   2,
+			NumServices:   3,
 		},
 		GoTypes:           file_ateapi_proto_goTypes,
 		DependencyIndexes: file_ateapi_proto_depIdxs,

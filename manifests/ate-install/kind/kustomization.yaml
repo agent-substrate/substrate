@@ -32,7 +32,7 @@ patches:
       apiVersion: apps/v1
       kind: Deployment
       metadata:
-        name: ate-api-server-deployment
+        name: ate-api-server
         namespace: ate-system
       spec:
         template:
@@ -56,4 +56,3 @@ patches:
               env:
               - name: OTEL_EXPORTER_OTLP_ENDPOINT
                 value: http://opentelemetry-collector.otel-system.svc:4317
-

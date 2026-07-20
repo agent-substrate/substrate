@@ -23,7 +23,7 @@ metadata:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: atelet-role
+  name: atelet
 rules:
 - apiGroups: [""]
   resources: ["pods"]
@@ -33,14 +33,14 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: atelet-binding
+  name: atelet
 subjects:
 - kind: ServiceAccount
   name: atelet
   namespace: ate-system
 roleRef:
   kind: ClusterRole
-  name: atelet-role
+  name: atelet
   apiGroup: rbac.authorization.k8s.io
 ---
 # 4. Create DaemonSet
@@ -69,8 +69,21 @@ spec:
         image: ko://github.com/agent-substrate/substrate/cmd/atelet
         args:
         - --gcp-auth-for-image-pulls=true
+        # atelet does no mounts, netlink, device, or namespace operations (those
+        # live in the ateom worker pod) — it only reads/writes the
+        # /var/lib/ateom-gvisor hostPath as root, so it needs no Linux
+        # capabilities. (Unpacking arbitrary actor images can require writing into
+        # image-defined read-only dirs; the untar in cmd/atelet/oci.go extracts
+        # directories writable then restores the image's modes, and removal makes
+        # them writable again first, so root suffices without CAP_DAC_OVERRIDE.)
+        # runAsUser is pinned explicitly rather than relying on the base image's
+        # default user.
         securityContext:
-          privileged: true
+          runAsUser: 0
+          runAsGroup: 0
+          capabilities:
+            drop:
+            - ALL
         env:
         - name: MY_NODE_NAME
           valueFrom:

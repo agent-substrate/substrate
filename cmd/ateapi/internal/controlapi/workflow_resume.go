@@ -365,6 +365,7 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 			ActorTemplateNamespace: state.Actor.GetActorTemplateNamespace(),
 			ActorTemplateName:      state.Actor.GetActorTemplateName(),
 			Spec:                   workloadSpec,
+			ActorUid:               state.Actor.GetMetadata().Uid,
 		}
 		switch d := data.(type) {
 		case *ateapipb.SnapshotInfo_Local:
@@ -407,7 +408,8 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 					SnapshotUriPrefix: snapshot,
 				},
 			},
-			Scope: toAteletSnapshotScope(state.ActorTemplate.Spec.SnapshotsConfig.OnCommit),
+			Scope:    toAteletSnapshotScope(state.ActorTemplate.Spec.SnapshotsConfig.OnCommit),
+			ActorUid: state.Actor.GetMetadata().Uid,
 		}
 		_, err = client.Restore(ctx, req)
 		return maybeCrashActor(ctx, s.store, input.Atespace, input.ActorName, err, "while creating workload from golden snapshot")
@@ -430,6 +432,7 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 			ActorTemplateName:      state.Actor.GetActorTemplateName(),
 			SandboxAssets:          sandboxAssets,
 			Spec:                   workloadSpec,
+			ActorUid:               state.Actor.GetMetadata().Uid,
 		}
 		_, err = client.Run(ctx, req)
 		return maybeCrashActor(ctx, s.store, input.Atespace, input.ActorName, err, "while creating workload from spec")

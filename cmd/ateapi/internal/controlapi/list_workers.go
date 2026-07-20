@@ -19,22 +19,36 @@ import (
 	"fmt"
 
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
 func (s *Service) ListWorkers(ctx context.Context, req *ateapipb.ListWorkersRequest) (*ateapipb.ListWorkersResponse, error) {
 	if err := validateListWorkersRequest(req); err != nil {
 		return nil, err
 	}
-	workers, err := s.persistence.ListWorkers(ctx)
+
+	workers, nextToken, err := s.persistence.ListWorkers(ctx, effectivePageSize(req.GetPageSize()), req.GetPageToken())
 	if err != nil {
 		return nil, fmt.Errorf("while listing workers in db: %w", err)
 	}
 	return &ateapipb.ListWorkersResponse{
-		Workers: workers,
+		Workers:       workers,
+		NextPageToken: nextToken,
 	}, nil
 }
 
-func validateListWorkersRequest(_ *ateapipb.ListWorkersRequest) error {
-	// No fields to validate for now.
+func validateListWorkersRequest(req *ateapipb.ListWorkersRequest) error {
+	var fldPath *field.Path
+	var errs field.ErrorList
+
+	if val, fldPath := req.PageSize, fldPath.Child("page_size"); val < 0 {
+		errs = append(errs, field.Invalid(fldPath, val, "must be greater than or equal to 0"))
+	}
+
+	if len(errs) > 0 {
+		return status.Error(codes.InvalidArgument, errs.ToAggregate().Error())
+	}
 	return nil
 }

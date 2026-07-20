@@ -21,10 +21,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/memorypullcache"
@@ -54,17 +56,17 @@ const (
 	ActorIDFileName = "actor-id"
 )
 
-func prepareOCIDirectory(ctx context.Context, pullCache *memorypullcache.MemoryPullCache, atespace, actorName, containerName, ref string, args []string, env []string, annotations map[string]string, netns string, identityDir string, durableDirVolumeMounts []*ateletpb.VolumeMount) error {
+func prepareOCIDirectory(ctx context.Context, pullCache *memorypullcache.MemoryPullCache, actorUID, containerName, ref string, args []string, env []string, annotations map[string]string, netns string, identityDir string, durableDirVolumeMounts []*ateletpb.VolumeMount) error {
 	tracer := otel.Tracer("prepareOCIDirectory")
 
 	ctx, span := tracer.Start(ctx, "prepareOCIDirectory")
 	span.SetAttributes(attribute.String("image", ref))
 	defer span.End()
 
-	bundlePath := ateompath.OCIBundlePath(atespace, actorName, containerName)
+	bundlePath := ateompath.OCIBundlePath(actorUID, containerName)
 	rootPath := path.Join(bundlePath, "rootfs")
 
-	if err := os.RemoveAll(rootPath); err != nil {
+	if err := removeAllWritable(rootPath); err != nil {
 		return fmt.Errorf("while clearing rootfs %q: %w", rootPath, err)
 	}
 
@@ -82,8 +84,8 @@ func prepareOCIDirectory(ctx context.Context, pullCache *memorypullcache.MemoryP
 		return fmt.Errorf("in untar: %w", err)
 	}
 
-	// Bind-mount the per-actor nameentity directory so the workload can read its
-	// own ID at IdentityMountPath/ActorIDFileName. The bind target must exist
+	// Bind-mount the per-actor identity directory so the workload can read its
+	// own name at IdentityMountPath/ActorIDFileName. The bind target must exist
 	// in the rootfs for the mount to attach.
 	if identityDir != "" {
 		if err := createMountPoint(rootPath, IdentityMountPath); err != nil {
@@ -91,7 +93,7 @@ func prepareOCIDirectory(ctx context.Context, pullCache *memorypullcache.MemoryP
 		}
 	}
 
-	ociSpec := buildActorOCISpec(atespace, actorName, imageCfg, args, env, annotations, netns, identityDir, durableDirVolumeMounts)
+	ociSpec := buildActorOCISpec(actorUID, imageCfg, args, env, annotations, netns, identityDir, durableDirVolumeMounts)
 	ociSpecBytes, err := json.MarshalIndent(ociSpec, "", "  ")
 	if err != nil {
 		return fmt.Errorf("while marshaling OCI spec: %w", err)
@@ -134,7 +136,7 @@ func mergeActorEnv(imageEnv, templateEnv []string) []string {
 // When identityDir is non-empty it adds a read-only bind mount of that host
 // directory at IdentityMountPath so the actor can read its own ID (see
 // IdentityMountPath for why this is a bind mount rather than env vars).
-func buildActorOCISpec(atespace string, actorName string, imageCfg *v1.Config, args []string, env []string, annotations map[string]string, netns string, identityDir string, durableDirVolumeMounts []*ateletpb.VolumeMount) *specs.Spec {
+func buildActorOCISpec(actorUID string, imageCfg *v1.Config, args []string, env []string, annotations map[string]string, netns string, identityDir string, durableDirVolumeMounts []*ateletpb.VolumeMount) *specs.Spec {
 	var imageEnv []string
 	if imageCfg != nil {
 		imageEnv = imageCfg.Env
@@ -253,7 +255,7 @@ func buildActorOCISpec(atespace string, actorName string, imageCfg *v1.Config, a
 		spec.Mounts = append(spec.Mounts, specs.Mount{
 			Destination: vm.GetMountPath(),
 			Type:        "bind",
-			Source:      ateompath.DurableDirVolumeMountPoint(atespace, actorName, vm.GetName()),
+			Source:      ateompath.DurableDirVolumeMountPoint(actorUID, vm.GetName()),
 		})
 	}
 
@@ -309,6 +311,13 @@ func untar(ctx context.Context, tarData io.Reader, rootPath string) error {
 	}
 	defer root.Close()
 
+	// Directories are created owner-writable during extraction (so their children
+	// can be written even when the image marks them read-only, e.g. ko ships
+	// /ko-app as 0555) and their real modes are restored afterwards. This lets
+	// atelet, running as plain root, unpack arbitrary actor images without
+	// CAP_DAC_OVERRIDE. Keyed by name so a repeated dir entry's last mode wins.
+	dirModes := map[string]os.FileMode{}
+
 	tarReader := tar.NewReader(tarData)
 	for {
 		hdr, err := tarReader.Next()
@@ -360,12 +369,18 @@ func untar(ctx context.Context, tarData io.Reader, rootPath string) error {
 			}
 
 		case tar.TypeDir:
-			err := root.Mkdir(name, mode)
+			// Create owner-writable so children can be written even when the image
+			// marks the dir read-only; the real mode is restored after extraction
+			// (see dirModes / the restore pass below).
+			err := root.Mkdir(name, mode|0o700)
 			if errors.Is(err, os.ErrExist) {
-				// Ignore --- real images produced by ko seem to have directory entries placed multiple times?
+				// OCI layers can repeat a directory entry (real ko images do); the
+				// existing dir is already owner-writable, so let the later entry's
+				// mode win at restore time.
 			} else if err != nil {
 				return fmt.Errorf("while creating directory=%q, mode=%v: %w", name, mode, err)
 			}
+			dirModes[name] = mode
 
 		case tar.TypeSymlink:
 			// OCI image layers may re-define the same path across layers (e.g.
@@ -421,5 +436,39 @@ func untar(ctx context.Context, tarData io.Reader, rootPath string) error {
 
 	}
 
+	// Restore the image's intended directory modes now that every child exists.
+	// Deepest paths first: a child's path is always longer than its parent's, so
+	// length-descending order guarantees a directory is restored before any of its
+	// ancestors — restoring a parent to a non-traversable mode then can't block
+	// restoring its children.
+	dirs := make([]string, 0, len(dirModes))
+	for name := range dirModes {
+		dirs = append(dirs, name)
+	}
+	sort.Slice(dirs, func(i, j int) bool { return len(dirs[i]) > len(dirs[j]) })
+	for _, name := range dirs {
+		if err := root.Chmod(name, dirModes[name]); err != nil {
+			return fmt.Errorf("while restoring mode %v on directory %q: %w", dirModes[name], name, err)
+		}
+	}
+
 	return nil
+}
+
+// removeAllWritable removes path and everything under it, first making every
+// directory owner-writable so its children can be unlinked. atelet runs as plain
+// root (no CAP_DAC_OVERRIDE), so it cannot remove entries inside an image-defined
+// read-only directory (e.g. ko's restored 0555 /ko-app) — os.RemoveAll alone
+// fails there with EACCES. atelet owns these files, so chmod needs no capability.
+func removeAllWritable(path string) error {
+	// Make dirs traversable/writable top-down (WalkDir visits a directory before
+	// reading it, so chmod here lets the walk descend into otherwise-unreadable
+	// dirs). Best-effort: ignore errors and let os.RemoveAll surface real ones.
+	_ = filepath.WalkDir(path, func(p string, d fs.DirEntry, err error) error {
+		if err == nil && d.IsDir() {
+			_ = os.Chmod(p, 0o700)
+		}
+		return nil
+	})
+	return os.RemoveAll(path)
 }
