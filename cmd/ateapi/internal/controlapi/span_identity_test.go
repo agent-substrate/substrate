@@ -64,7 +64,7 @@ func assertSpanStr(t *testing.T, attrs map[attribute.Key]attribute.Value, key at
 	}
 }
 
-func TestSetSpanActorIdentity(t *testing.T) {
+func TestSetSpanActorAttributes(t *testing.T) {
 	t.Parallel()
 	actor := &ateapipb.Actor{
 		Metadata:               &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "a1", Uid: "uid-a1", Version: 3},
@@ -73,30 +73,30 @@ func TestSetSpanActorIdentity(t *testing.T) {
 	}
 
 	attrs := recordRootSpanAttrs(t, func(ctx context.Context) {
-		setSpanActorIdentity(ctx, actor)
+		setSpanActorAttributes(ctx, actor)
 	})
 
 	assertSpanStr(t, attrs, ateattr.AtespaceKey, "team-a")
 	assertSpanStr(t, attrs, ateattr.ActorNameKey, "a1")
 	assertSpanStr(t, attrs, ateattr.ActorUIDKey, "uid-a1")
-	assertSpanStr(t, attrs, ateattr.ActorTemplateNameKey, "tmpl1")
-	assertSpanStr(t, attrs, ateattr.ActorTemplateNamespaceKey, "ns1")
+	assertSpanStr(t, attrs, ateattr.TemplateNameKey, "tmpl1")
+	assertSpanStr(t, attrs, ateattr.TemplateNamespaceKey, "ns1")
 	if v, ok := attrs[ateattr.ActorVersionKey]; !ok || v.Type() != attribute.INT64 || v.AsInt64() != 3 {
 		t.Errorf("%s = %v, want int64 3", ateattr.ActorVersionKey, v.Emit())
 	}
 }
 
-func TestSetSpanActorRefIdentity(t *testing.T) {
+func TestSetSpanActorRefAttributes(t *testing.T) {
 	t.Parallel()
 
 	attrs := recordRootSpanAttrs(t, func(ctx context.Context) {
-		setSpanActorRefIdentity(ctx, "team-a", "a1")
+		setSpanActorRefAttributes(ctx, "team-a", "a1")
 	})
 
 	assertSpanStr(t, attrs, ateattr.AtespaceKey, "team-a")
 	assertSpanStr(t, attrs, ateattr.ActorNameKey, "a1")
 	// The ref-only stamp must not invent uid/template/version (not known pre-resolve).
-	for _, k := range []attribute.Key{ateattr.ActorUIDKey, ateattr.ActorTemplateNameKey, ateattr.ActorTemplateNamespaceKey, ateattr.ActorVersionKey} {
+	for _, k := range []attribute.Key{ateattr.ActorUIDKey, ateattr.TemplateNameKey, ateattr.TemplateNamespaceKey, ateattr.ActorVersionKey} {
 		if _, ok := attrs[k]; ok {
 			t.Errorf("unexpected %s on ref-only stamp", k)
 		}
@@ -104,8 +104,8 @@ func TestSetSpanActorRefIdentity(t *testing.T) {
 }
 
 // A context with no recording span must be a safe no-op, so call sites need no guard.
-func TestSetSpanActorIdentity_NoRecordingSpanIsNoop(t *testing.T) {
+func TestSetSpanActorAttributes_NoRecordingSpanIsNoop(t *testing.T) {
 	t.Parallel()
-	setSpanActorIdentity(context.Background(), &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Name: "a1"}})
-	setSpanActorRefIdentity(context.Background(), "team-a", "a1")
+	setSpanActorAttributes(context.Background(), &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Name: "a1"}})
+	setSpanActorRefAttributes(context.Background(), "team-a", "a1")
 }

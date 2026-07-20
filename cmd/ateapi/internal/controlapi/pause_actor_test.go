@@ -44,7 +44,7 @@ func TestPauseActor_FailedLookupStampsRefIdentityOnly(t *testing.T) {
 
 	assertSpanStr(t, attrs, ateattr.AtespaceKey, testAtespace)
 	assertSpanStr(t, attrs, ateattr.ActorNameKey, testActorID)
-	for _, k := range []attribute.Key{ateattr.ActorUIDKey, ateattr.ActorTemplateNameKey, ateattr.ActorTemplateNamespaceKey, ateattr.ActorVersionKey} {
+	for _, k := range []attribute.Key{ateattr.ActorUIDKey, ateattr.TemplateNameKey, ateattr.TemplateNamespaceKey, ateattr.ActorVersionKey} {
 		if _, ok := attrs[k]; ok {
 			t.Errorf("unexpected %s on failed-pause span", k)
 		}

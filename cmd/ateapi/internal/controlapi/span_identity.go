@@ -23,14 +23,14 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
-// setSpanActorIdentity annotates the RPC's server span (from ctx) with the
+// setSpanActorAttributes annotates the RPC's server span (from ctx) with the
 // actor's full identity. A no-op when ctx carries no recording span.
-func setSpanActorIdentity(ctx context.Context, a *ateapipb.Actor) {
+func setSpanActorAttributes(ctx context.Context, a *ateapipb.Actor) {
 	trace.SpanFromContext(ctx).SetAttributes(ateattr.ActorAttributes(a)...)
 }
 
-// setSpanActorRefIdentity is setSpanActorIdentity for the identity subset known
+// setSpanActorRefAttributes is setSpanActorAttributes for the identity subset known
 // before the Actor record resolves, so a failed lookup still carries who/where.
-func setSpanActorRefIdentity(ctx context.Context, atespace, name string) {
+func setSpanActorRefAttributes(ctx context.Context, atespace, name string) {
 	trace.SpanFromContext(ctx).SetAttributes(ateattr.ActorRefAttributes(atespace, name)...)
 }

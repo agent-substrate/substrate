@@ -46,8 +46,8 @@ func TestCreateActor_StampsFullSpanIdentity(t *testing.T) {
 
 	assertSpanStr(t, attrs, ateattr.AtespaceKey, testAtespace)
 	assertSpanStr(t, attrs, ateattr.ActorNameKey, testActorID)
-	assertSpanStr(t, attrs, ateattr.ActorTemplateNameKey, "tmpl1")
-	assertSpanStr(t, attrs, ateattr.ActorTemplateNamespaceKey, ns)
+	assertSpanStr(t, attrs, ateattr.TemplateNameKey, "tmpl1")
+	assertSpanStr(t, attrs, ateattr.TemplateNamespaceKey, ns)
 	// uid is server-assigned on create, so assert it is present and non-empty
 	// rather than a fixed value.
 	if v, ok := attrs[ateattr.ActorUIDKey]; !ok || v.Type() != attribute.STRING || v.AsString() == "" {

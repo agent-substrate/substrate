@@ -30,13 +30,17 @@ import (
 // ate.actor.name is the atespace-scoped addressable name, ate.actor.uid is the
 // server-assigned globally-unique key. There is deliberately no ate.actor.id
 // (an ambiguous term when both a name and a uid exist).
+// atespace and template are their own top-level namespaces (ate.atespace,
+// ate.template.*) rather than nested under actor: both are first-class resources
+// that also appear in non-actor telemetry, so the keys must mean the same thing
+// regardless of what a span is about.
 const (
-	AtespaceKey               = attribute.Key("ate.atespace")
-	ActorNameKey              = attribute.Key("ate.actor.name")
-	ActorUIDKey               = attribute.Key("ate.actor.uid")
-	ActorTemplateNameKey      = attribute.Key("ate.actor.template.name")
-	ActorTemplateNamespaceKey = attribute.Key("ate.actor.template.namespace")
-	ActorVersionKey           = attribute.Key("ate.actor.version")
+	AtespaceKey          = attribute.Key("ate.atespace")
+	ActorNameKey         = attribute.Key("ate.actor.name")
+	ActorUIDKey          = attribute.Key("ate.actor.uid")
+	TemplateNameKey      = attribute.Key("ate.template.name")
+	TemplateNamespaceKey = attribute.Key("ate.template.namespace")
+	ActorVersionKey      = attribute.Key("ate.actor.version")
 )
 
 // ActorRefAttributes returns the subset knowable before the Actor record
@@ -55,8 +59,8 @@ func ActorAttributes(a *ateapipb.Actor) []attribute.KeyValue {
 		AtespaceKey.String(a.GetMetadata().GetAtespace()),
 		ActorNameKey.String(a.GetMetadata().GetName()),
 		ActorUIDKey.String(a.GetMetadata().GetUid()),
-		ActorTemplateNameKey.String(a.GetActorTemplateName()),
-		ActorTemplateNamespaceKey.String(a.GetActorTemplateNamespace()),
+		TemplateNameKey.String(a.GetActorTemplateName()),
+		TemplateNamespaceKey.String(a.GetActorTemplateNamespace()),
 		ActorVersionKey.Int64(a.GetMetadata().GetVersion()),
 	}
 }
