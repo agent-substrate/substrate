@@ -28,6 +28,7 @@ import (
 // With an identity dir, a read-only bind mount appears at IdentityMountPath.
 func TestBuildActorOCISpec_IdentityMount(t *testing.T) {
 	spec := buildActorOCISpec(
+		nil,
 		"actor_uid",
 		[]string{"/app"},
 		[]string{"FOO=bar"},
@@ -194,7 +195,7 @@ func TestResolveProcessArgs(t *testing.T) {
 
 // Without an identity dir (the pause container), no identity mount appears.
 func TestBuildActorOCISpec_NoIdentityMountForPause(t *testing.T) {
-	bare := buildActorOCISpec("actor_uid", []string{"/pause"}, nil, nil, "/run/netns/x", "", nil, nil)
+	bare := buildActorOCISpec(nil, "actor_uid", []string{"/pause"}, nil, nil, "/run/netns/x", "", nil, nil)
 	for _, m := range bare.Mounts {
 		if m.Destination == IdentityMountPath {
 			t.Errorf("identity mount must be absent when identityDir is empty")
@@ -215,6 +216,7 @@ func TestBuildActorOCISpec_DurableDirVolumeMounts(t *testing.T) {
 		{Name: "cache", Type: ateletpb.VolumeType_VOLUME_TYPE_DURABLE_DIR},
 	}
 	spec := buildActorOCISpec(
+		nil,
 		actorUID,
 		[]string{"/app"}, nil, nil,
 		"/run/netns/x",

@@ -23,19 +23,43 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"testing"
 
 	"github.com/agent-substrate/substrate/internal/ateerrors"
 	"github.com/agent-substrate/substrate/internal/ateompath"
+	"github.com/agent-substrate/substrate/internal/imagecache"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/google/go-cmp/cmp"
+	v1 "github.com/google/go-containerregistry/pkg/v1"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/testing/protocmp"
 )
+
+func newAteomPathMapperForTest(t *testing.T) pathMapper {
+	t.Helper()
+	root := t.TempDir()
+	prefix := ateompath.BasePath + string(os.PathSeparator)
+	paths := pathMapper(func(path string) string {
+		if path == ateompath.BasePath {
+			return root
+		}
+		relative, ok := strings.CutPrefix(path, prefix)
+		if !ok {
+			return path
+		}
+		return filepath.Join(root, relative)
+	})
+	if err := os.MkdirAll(paths.mapPath(ateompath.StaticFilesDir()), 0o700); err != nil {
+		t.Fatalf("creating static files dir: %v", err)
+	}
+	return paths
+}
 
 func TestWriteFileAtomic(t *testing.T) {
 	dir := t.TempDir()
@@ -260,21 +284,19 @@ func TestValidateRestoreRequest(t *testing.T) {
 // prove the ordering, it plants a real file at the exact path an invalid hash
 // resolves to: a correctly-ordered fetchAsset validates first and returns an
 // error, while a regression that stats first would find this file and return it
-// with a nil error, failing the test. StaticFilesDir is redirected to a temp
-// dir so the planted path is writable and isolated.
+// with a nil error, failing the test. The service uses a temp-rooted path
+// layout so the derived static-files path is writable and isolated.
 func TestFetchAssetRejectsBadHash(t *testing.T) {
-	orig := ateompath.StaticFilesDir
-	ateompath.StaticFilesDir = t.TempDir()
-	t.Cleanup(func() { ateompath.StaticFilesDir = orig })
+	paths := newAteomPathMapperForTest(t)
 
 	// Invalid (8 chars, not 64) but separator-free, so it resolves to a normal
-	// filename inside the temp StaticFilesDir.
+	// filename inside the temp static-files directory.
 	const badHash = "deadbeef"
-	if err := os.WriteFile(ateompath.RunSCBinaryPath(badHash), []byte("planted"), 0o755); err != nil {
+	if err := os.WriteFile(paths.mapPath(ateompath.RunSCBinaryPath(badHash)), []byte("planted"), 0o755); err != nil {
 		t.Fatalf("planting cache file: %v", err)
 	}
 
-	s := &AteomHerder{}
+	s := &AteomHerder{paths: paths}
 	_, err := s.fetchAsset(context.Background(), assetEntry{SHA256: badHash})
 	if err == nil {
 		t.Fatal("fetchAsset returned a cache hit for an invalid hash; validation must run before the os.Stat early return")
@@ -304,16 +326,16 @@ func (fakeObjectStorage) PutObject(_ context.Context, _, _ string, _ io.Reader) 
 // TestFetchAssetStreaming covers the streamed download: good asset cached,
 // over-cap rejected, hash mismatch rejected (failures leave no cache file).
 func TestFetchAssetStreaming(t *testing.T) {
-	origDir, origCap := ateompath.StaticFilesDir, maxAssetBytes
-	t.Cleanup(func() { ateompath.StaticFilesDir, maxAssetBytes = origDir, origCap })
+	origCap := maxAssetBytes
+	t.Cleanup(func() { maxAssetBytes = origCap })
 
 	content := []byte("micro-vm kernel bytes")
 	goodHash := fmt.Sprintf("%x", sha256.Sum256(content))
 	const url = "gs://test-bucket/asset"
 
 	t.Run("good asset is cached", func(t *testing.T) {
-		ateompath.StaticFilesDir = t.TempDir()
-		s := &AteomHerder{anonGCSClient: fakeObjectStorage{data: content}}
+		paths := newAteomPathMapperForTest(t)
+		s := &AteomHerder{anonGCSClient: fakeObjectStorage{data: content}, paths: paths}
 		path, err := s.fetchAsset(context.Background(), assetEntry{URL: url, SHA256: goodHash})
 		if err != nil {
 			t.Fatalf("fetchAsset: %v", err)
@@ -328,9 +350,9 @@ func TestFetchAssetStreaming(t *testing.T) {
 	})
 
 	t.Run("over-cap asset rejected, cache not written", func(t *testing.T) {
-		ateompath.StaticFilesDir = t.TempDir()
+		paths := newAteomPathMapperForTest(t)
 		maxAssetBytes = 4 // content is longer than this
-		s := &AteomHerder{anonGCSClient: fakeObjectStorage{data: content}}
+		s := &AteomHerder{anonGCSClient: fakeObjectStorage{data: content}, paths: paths}
 		_, err := s.fetchAsset(context.Background(), assetEntry{URL: url, SHA256: goodHash})
 		if err == nil {
 			t.Fatal("fetchAsset accepted an over-cap asset")
@@ -338,16 +360,16 @@ func TestFetchAssetStreaming(t *testing.T) {
 		if !errors.Is(err, ateerrors.ReasonInvalidSandboxAsset) {
 			t.Errorf("over-cap error not tagged terminal: %v", err)
 		}
-		if _, err := os.Stat(ateompath.RunSCBinaryPath(goodHash)); !errors.Is(err, os.ErrNotExist) {
+		if _, err := os.Stat(paths.mapPath(ateompath.RunSCBinaryPath(goodHash))); !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("over-cap download left a file at the cache path (stat err = %v)", err)
 		}
 	})
 
 	t.Run("hash mismatch rejected, cache not written", func(t *testing.T) {
-		ateompath.StaticFilesDir = t.TempDir()
+		paths := newAteomPathMapperForTest(t)
 		maxAssetBytes = origCap
 		wrongHash := strings.Repeat("a", 64) // valid 64-hex format, wrong value
-		s := &AteomHerder{anonGCSClient: fakeObjectStorage{data: content}}
+		s := &AteomHerder{anonGCSClient: fakeObjectStorage{data: content}, paths: paths}
 		_, err := s.fetchAsset(context.Background(), assetEntry{URL: url, SHA256: wrongHash})
 		if err == nil {
 			t.Fatal("fetchAsset accepted a hash mismatch")
@@ -355,17 +377,17 @@ func TestFetchAssetStreaming(t *testing.T) {
 		if !errors.Is(err, ateerrors.ReasonInvalidSandboxAsset) {
 			t.Errorf("hash-mismatch error not tagged terminal: %v", err)
 		}
-		if _, err := os.Stat(ateompath.RunSCBinaryPath(wrongHash)); !errors.Is(err, os.ErrNotExist) {
+		if _, err := os.Stat(paths.mapPath(ateompath.RunSCBinaryPath(wrongHash))); !errors.Is(err, os.ErrNotExist) {
 			t.Errorf("mismatched download left a file at the cache path (stat err = %v)", err)
 		}
 	})
 
 	t.Run("missing object is terminal", func(t *testing.T) {
-		ateompath.StaticFilesDir = t.TempDir()
+		paths := newAteomPathMapperForTest(t)
 		maxAssetBytes = origCap
 		// The ategcs clients tag a missing object with ReasonFailedGetExternalObject.
 		notFound := fmt.Errorf("%w: no such object", ateerrors.ReasonFailedGetExternalObject)
-		s := &AteomHerder{anonGCSClient: fakeObjectStorage{err: notFound}}
+		s := &AteomHerder{anonGCSClient: fakeObjectStorage{err: notFound}, paths: paths}
 		_, err := s.fetchAsset(context.Background(), assetEntry{URL: url, SHA256: goodHash})
 		if !errors.Is(err, ateerrors.ReasonFailedGetExternalObject) {
 			t.Errorf("missing-object error not tagged terminal: %v", err)
@@ -381,9 +403,9 @@ func TestFetchAssetStreaming(t *testing.T) {
 	})
 
 	t.Run("malformed url is terminal", func(t *testing.T) {
-		ateompath.StaticFilesDir = t.TempDir()
+		paths := newAteomPathMapperForTest(t)
 		maxAssetBytes = origCap
-		s := &AteomHerder{anonGCSClient: fakeObjectStorage{data: content}}
+		s := &AteomHerder{anonGCSClient: fakeObjectStorage{data: content}, paths: paths}
 		// Invalid percent-escape: url.Parse rejects it inside ategcs.Open, which
 		// tags the failure with ReasonInvalidObjectURL.
 		_, err := s.fetchAsset(context.Background(), assetEntry{URL: "gs://bucket/%zz", SHA256: goodHash})
@@ -393,9 +415,9 @@ func TestFetchAssetStreaming(t *testing.T) {
 	})
 
 	t.Run("network error stays untagged (retriable)", func(t *testing.T) {
-		ateompath.StaticFilesDir = t.TempDir()
+		paths := newAteomPathMapperForTest(t)
 		maxAssetBytes = origCap
-		s := &AteomHerder{anonGCSClient: fakeObjectStorage{err: errors.New("connection refused")}}
+		s := &AteomHerder{anonGCSClient: fakeObjectStorage{err: errors.New("connection refused")}, paths: paths}
 		_, err := s.fetchAsset(context.Background(), assetEntry{URL: url, SHA256: goodHash})
 		if err == nil {
 			t.Fatal("fetchAsset accepted a failing open")
@@ -456,6 +478,150 @@ func TestRPCBoundariesReject(t *testing.T) {
 		})
 		wantInvalidArgument(t, "Restore", err)
 	})
+}
+
+type fakeImageEnsurer struct{}
+
+func (fakeImageEnsurer) EnsureImage(context.Context, string) (*imagecache.Image, error) {
+	return &imagecache.Image{Config: v1.Config{}}, nil
+}
+
+type fakeAteomClient struct {
+	runReq        *ateompb.RunWorkloadRequest
+	checkpointReq *ateompb.CheckpointWorkloadRequest
+	restoreReq    *ateompb.RestoreWorkloadRequest
+	paths         pathMapper
+}
+
+func (c *fakeAteomClient) RunWorkload(_ context.Context, req *ateompb.RunWorkloadRequest, _ ...grpc.CallOption) (*ateompb.RunWorkloadResponse, error) {
+	c.runReq = req
+	return &ateompb.RunWorkloadResponse{}, nil
+}
+
+func (c *fakeAteomClient) CheckpointWorkload(_ context.Context, req *ateompb.CheckpointWorkloadRequest, _ ...grpc.CallOption) (*ateompb.CheckpointWorkloadResponse, error) {
+	c.checkpointReq = req
+	const snapshotFile = "checkpoint.img"
+	if err := os.WriteFile(filepath.Join(c.paths.mapPath(ateompath.CheckpointStateDir(req.GetActorUid())), snapshotFile), []byte("snapshot"), 0o600); err != nil {
+		return nil, fmt.Errorf("writing fake checkpoint: %w", err)
+	}
+	return &ateompb.CheckpointWorkloadResponse{SnapshotFiles: []string{snapshotFile}}, nil
+}
+
+func (c *fakeAteomClient) RestoreWorkload(_ context.Context, req *ateompb.RestoreWorkloadRequest, _ ...grpc.CallOption) (*ateompb.RestoreWorkloadResponse, error) {
+	c.restoreReq = req
+	return &ateompb.RestoreWorkloadResponse{}, nil
+}
+
+type fakeAteomDialer struct {
+	client  ateompb.AteomClient
+	targets []string
+}
+
+func (d *fakeAteomDialer) DialAteom(_ context.Context, target string) (ateompb.AteomClient, error) {
+	d.targets = append(d.targets, target)
+	return d.client, nil
+}
+
+// TestRPCBoundariesAccept runs a successful local lifecycle through the public
+// atelet RPC methods. The fake dependencies stop at the image-fetch and ateom
+// client boundaries; filesystem setup, request projection, checkpoint movement,
+// and sandbox record handling all use the production paths.
+func TestRPCBoundariesAccept(t *testing.T) {
+	paths := newAteomPathMapperForTest(t)
+	runscSum := fmt.Sprintf("%x", sha256.Sum256([]byte("fake runsc")))
+	runscPath := paths.mapPath(ateompath.RunSCBinaryPath(runscSum))
+	if err := os.WriteFile(runscPath, []byte("fake runsc"), 0o755); err != nil {
+		t.Fatalf("seeding runsc cache: %v", err)
+	}
+
+	client := &fakeAteomClient{paths: paths}
+	dialer := &fakeAteomDialer{client: client}
+	// GCS clients stay nil: the runsc asset is pre-seeded above, so
+	// ensureSandboxAssets never downloads, and checkpoint/restore use local
+	// snapshots, so no path touches object storage.
+	s := &AteomHerder{ateomDialer: dialer, imageCache: fakeImageEnsurer{}, paths: paths}
+	ctx := context.Background()
+	const snapshotPrefix = "snapshot-1"
+
+	runReq := validRunRequest()
+	runReq.Spec.PauseImage = "pause:test"
+	runReq.Spec.Containers[0].Image = "worker:test"
+	runReq.Spec.Containers[0].Command = []string{"/worker"}
+	runReq.SandboxAssets = &ateletpb.SandboxAssets{
+		SandboxClass: "gvisor",
+		Assets: map[string]*ateletpb.ArchAssets{
+			runtime.GOARCH: {
+				Files: map[string]*ateletpb.AssetFile{
+					"runsc": {Url: "gs://unused/runsc", Sha256: runscSum},
+				},
+			},
+		},
+	}
+
+	t.Run("Run", func(t *testing.T) {
+		if _, err := s.Run(ctx, runReq); err != nil {
+			t.Fatalf("Run: %v", err)
+		}
+		if client.runReq == nil {
+			t.Fatal("Run did not call ateom")
+		}
+		if got := client.runReq.GetRunscPath(); got != runscPath {
+			t.Errorf("runsc path = %q, want %q", got, runscPath)
+		}
+		if got := client.runReq.GetActorUid(); got != runReq.GetActorUid() {
+			t.Errorf("actor UID = %q, want %q", got, runReq.GetActorUid())
+		}
+	})
+
+	checkpointReq := validCheckpointRequest()
+	checkpointReq.Spec = runReq.Spec
+	checkpointReq.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL
+	checkpointReq.Config = &ateletpb.CheckpointRequest_LocalConfig{
+		LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotPrefix: snapshotPrefix},
+	}
+	t.Run("Checkpoint", func(t *testing.T) {
+		if _, err := s.Checkpoint(ctx, checkpointReq); err != nil {
+			t.Fatalf("Checkpoint: %v", err)
+		}
+		if client.checkpointReq == nil {
+			t.Fatal("Checkpoint did not call ateom")
+		}
+		if got := client.checkpointReq.GetRunscPath(); got != runscPath {
+			t.Errorf("runsc path = %q, want %q", got, runscPath)
+		}
+		localSnapshot := filepath.Join(paths.mapPath(ateompath.LocalCheckpointsDir(checkpointReq.GetActorUid())), snapshotPrefix, "checkpoint.img")
+		if got, err := os.ReadFile(localSnapshot); err != nil {
+			t.Errorf("reading local snapshot: %v", err)
+		} else if string(got) != "snapshot" {
+			t.Errorf("local snapshot = %q, want %q", got, "snapshot")
+		}
+	})
+
+	restoreReq := validRestoreRequest()
+	restoreReq.Spec = runReq.Spec
+	restoreReq.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL
+	restoreReq.Config = &ateletpb.RestoreRequest_LocalConfig{
+		LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotPrefix: snapshotPrefix},
+	}
+	t.Run("Restore", func(t *testing.T) {
+		if _, err := s.Restore(ctx, restoreReq); err != nil {
+			t.Fatalf("Restore: %v", err)
+		}
+		if client.restoreReq == nil {
+			t.Fatal("Restore did not call ateom")
+		}
+		if got := client.restoreReq.GetRunscPath(); got != runscPath {
+			t.Errorf("runsc path = %q, want %q", got, runscPath)
+		}
+		if got := client.restoreReq.GetActorUid(); got != restoreReq.GetActorUid() {
+			t.Errorf("actor UID = %q, want %q", got, restoreReq.GetActorUid())
+		}
+	})
+
+	wantTargets := []string{runReq.GetTargetAteomUid(), checkpointReq.GetTargetAteomUid(), restoreReq.GetTargetAteomUid()}
+	if diff := cmp.Diff(wantTargets, dialer.targets); diff != "" {
+		t.Errorf("dial targets mismatch (-want +got):\n%s", diff)
+	}
 }
 
 func TestBuildAteomWorkloadSpecForwardsReadyz(t *testing.T) {

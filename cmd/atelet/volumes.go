@@ -43,7 +43,7 @@ func (s *AteomHerder) mountExternalVolumes(ctx context.Context, actorUID string,
 		if ext == nil {
 			continue
 		}
-		hostPath := ateompath.VolumeHostPath(actorUID, vol.GetName())
+		hostPath := s.paths.mapPath(ateompath.VolumeHostPath(actorUID, vol.GetName()))
 		if err := os.MkdirAll(hostPath, 0o750); err != nil {
 			return fmt.Errorf("failed to create mount point %q: %w", hostPath, err)
 		}
@@ -64,7 +64,7 @@ func (s *AteomHerder) unmountExternalVolumes(ctx context.Context, actorUID strin
 		if ext == nil {
 			continue
 		}
-		hostPath := ateompath.VolumeHostPath(actorUID, vol.GetName())
+		hostPath := s.paths.mapPath(ateompath.VolumeHostPath(actorUID, vol.GetName()))
 		slog.InfoContext(ctx, "Unmounting volume", slog.String("volume_id", ext.GetStorageVolumeId()), slog.String("host_path", hostPath))
 		if err := getVolumePlugin().UnmountVolume(ctx, ext.GetStorageVolumeId(), hostPath); err != nil {
 			slog.ErrorContext(ctx, "failed to unmount volume", slog.String("volume_id", ext.GetStorageVolumeId()), slog.String("host_path", hostPath), slog.Any("error", err))

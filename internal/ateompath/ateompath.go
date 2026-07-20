@@ -19,25 +19,25 @@ import (
 	"path/filepath"
 )
 
-const (
-	// The base path.  This is both the path of the root shared folder on the
-	// host filesystem, and when it is mounted into ateom and atelet containers.
-	BasePath = "/var/lib/ateom-gvisor"
-)
+// BasePath is both the path of the root shared folder on the host filesystem,
+// and where it is mounted into ateom and atelet containers.
+const BasePath = "/var/lib/ateom-gvisor"
 
-var (
-	// StaticFilesDir holds things like downloaded runsc binaries.
-	StaticFilesDir = filepath.Join(BasePath, "static-files")
+// StaticFilesDir holds things like downloaded runsc binaries.
+func StaticFilesDir() string {
+	return filepath.Join(BasePath, "static-files")
+}
 
-	// ImageCacheDir is the node-local OCI image layer cache (see
-	// internal/imagecache). It lives under BasePath so the cached layer
-	// directories are visible at the same path in atelet (which writes them)
-	// and in every ateom pod (which mounts them as overlay lowerdirs).
-	ImageCacheDir = filepath.Join(BasePath, "image-cache")
-)
+// ImageCacheDir is the node-local OCI image layer cache (see
+// internal/imagecache). It lives under BasePath so the cached layer
+// directories are visible at the same path in atelet (which writes them)
+// and in every ateom pod (which mounts them as overlay lowerdirs).
+func ImageCacheDir() string {
+	return filepath.Join(BasePath, "image-cache")
+}
 
 func RunSCBinaryPath(sha256 string) string {
-	return filepath.Join(StaticFilesDir, "runsc-"+sha256)
+	return filepath.Join(StaticFilesDir(), "runsc-"+sha256)
 }
 
 func AteomPath(podUID string) string {

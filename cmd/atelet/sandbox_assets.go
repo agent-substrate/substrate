@@ -93,7 +93,7 @@ func recordFromRequest(sa *ateletpb.SandboxAssets) (*sandboxAssetsRecord, error)
 // the micro-VM runtime has several (kata-shim, cloud-hypervisor, ...). Assets are
 // cached, so re-fetching at Checkpoint/Restore is a no-op once present.
 func (s *AteomHerder) ensureSandboxAssets(ctx context.Context, rec *sandboxAssetsRecord) (map[string]string, error) {
-	if err := os.MkdirAll(ateompath.StaticFilesDir, 0o700); err != nil {
+	if err := os.MkdirAll(s.paths.mapPath(ateompath.StaticFilesDir()), 0o700); err != nil {
 		if isTerminalFileSystemErr(err) {
 			return nil, fmt.Errorf("%w: while creating static files dir: %w", ateerrors.ReasonTerminalFileSystemError, err)
 		}
@@ -122,7 +122,7 @@ func (s *AteomHerder) fetchAsset(ctx context.Context, entry assetEntry) (string,
 		return "", wrapFileSystemErr("while validating asset hash", err)
 	}
 
-	localPath := ateompath.RunSCBinaryPath(entry.SHA256)
+	localPath := s.paths.mapPath(ateompath.RunSCBinaryPath(entry.SHA256))
 	_, err := os.Stat(localPath)
 	if err == nil {
 		return localPath, nil
@@ -206,12 +206,12 @@ func (s *AteomHerder) openAsset(ctx context.Context, url string) (io.ReadCloser,
 // writeSandboxRecord persists the actor's running sandbox assets on-node so a
 // later Checkpoint (whose request no longer carries the sandbox config) can
 // re-fetch the same binaries and pin them into the snapshot manifest.
-func writeSandboxRecord(actorUID string, rec *sandboxAssetsRecord) error {
+func writeSandboxRecord(paths pathMapper, actorUID string, rec *sandboxAssetsRecord) error {
 	data, err := json.Marshal(rec)
 	if err != nil {
 		return wrapFileSystemErr("while marshaling sandbox record", err)
 	}
-	path := ateompath.ActorSandboxAssetsFile(actorUID)
+	path := paths.mapPath(ateompath.ActorSandboxAssetsFile(actorUID))
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return wrapFileSystemErr("while creating actor dir", err)
 	}
@@ -223,8 +223,8 @@ func writeSandboxRecord(actorUID string, rec *sandboxAssetsRecord) error {
 
 // readSandboxRecord loads the actor's on-node sandbox record written at
 // Run/Restore.
-func readSandboxRecord(actorUID string) (*sandboxAssetsRecord, error) {
-	path := ateompath.ActorSandboxAssetsFile(actorUID)
+func readSandboxRecord(paths pathMapper, actorUID string) (*sandboxAssetsRecord, error) {
+	path := paths.mapPath(ateompath.ActorSandboxAssetsFile(actorUID))
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, wrapFileSystemErr("while reading sandbox record", err)
