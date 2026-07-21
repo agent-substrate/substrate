@@ -17,6 +17,7 @@ package controlapi
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
@@ -27,6 +28,17 @@ import (
 )
 
 var ErrWorkerPodNotFound = errors.New("worker pod not found")
+
+var onEvict lru.EvictionFunc = func(key lru.Key, value any) {
+	// Close connection when evicting from cache.
+	conn, ok := value.(*grpc.ClientConn)
+	if ok {
+		err := conn.Close()
+		if err != nil {
+			slog.Debug("Failed to close evicted connection", slog.Any("error", err))
+		}
+	}
+}
 
 // AteletDialer handles gRPC connections to Atelet pods.
 type AteletDialer struct {
@@ -40,13 +52,7 @@ func NewAteletDialer(workerIndexer cache.Indexer, ateletIndexer cache.Indexer) *
 	return &AteletDialer{
 		workerIndexer: workerIndexer,
 		ateletIndexer: ateletIndexer,
-		ateletConns: lru.NewWithEvictionFunc(1024, func(key lru.Key, value any) {
-			// Close connection when evicting from cache.
-			conn, ok := value.(*grpc.ClientConn)
-			if ok {
-				conn.Close()
-			}
-		}),
+		ateletConns:   lru.NewWithEvictionFunc(1024, onEvict),
 	}
 }
 

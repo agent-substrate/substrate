@@ -69,6 +69,17 @@ var (
 	localhostRegistryReplacement = pflag.String("localhost-registry-replacement", "", "The replacement registry endpoint for localhost and/or loopback IP addresses, useful for local development. for example kind-registry:5000")
 
 	showVersion = pflag.Bool("version", false, "Print version and exit.")
+
+	onEvict lru.EvictionFunc = func(key lru.Key, value any) {
+		// Close connection when evicting from cache.
+		conn, ok := value.(*grpc.ClientConn)
+		if ok {
+			err := conn.Close()
+			if err != nil {
+				slog.Debug("Failed to close evicted connection", slog.Any("error", err))
+			}
+		}
+	}
 )
 
 func main() {
@@ -101,15 +112,7 @@ func main() {
 
 	go serverboot.StartMetricsServer(ctx, serverboot.MetricsServerOptions{Addr: *metricsListenAddr})
 
-	ateomDialer := &AteomDialer{
-		conns: lru.NewWithEvictionFunc(256, func(key lru.Key, value any) {
-			// Close connection when evicting from cache.
-			conn, ok := value.(*grpc.ClientConn)
-			if ok {
-				conn.Close()
-			}
-		}),
-	}
+	ateomDialer := &AteomDialer{conns: lru.NewWithEvictionFunc(256, onEvict)}
 
 	var gcpRegistryAuthn authn.Authenticator
 	if *gcpAuthForImagePulls {
