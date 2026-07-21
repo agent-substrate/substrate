@@ -40,7 +40,13 @@ func NewAteletDialer(workerIndexer cache.Indexer, ateletIndexer cache.Indexer) *
 	return &AteletDialer{
 		workerIndexer: workerIndexer,
 		ateletIndexer: ateletIndexer,
-		ateletConns:   lru.New(1024),
+		ateletConns: lru.NewWithEvictionFunc(1024, func(key lru.Key, value any) {
+			// Close connection when evicting from cache.
+			conn, ok := value.(*grpc.ClientConn)
+			if ok {
+				conn.Close()
+			}
+		}),
 	}
 }
 

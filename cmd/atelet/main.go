@@ -102,7 +102,13 @@ func main() {
 	go serverboot.StartMetricsServer(ctx, serverboot.MetricsServerOptions{Addr: *metricsListenAddr})
 
 	ateomDialer := &AteomDialer{
-		conns: lru.New(256),
+		conns: lru.NewWithEvictionFunc(256, func(key lru.Key, value any) {
+			// Close connection when evicting from cache.
+			conn, ok := value.(*grpc.ClientConn)
+			if ok {
+				conn.Close()
+			}
+		}),
 	}
 
 	var gcpRegistryAuthn authn.Authenticator
@@ -806,6 +812,7 @@ func toAteomReadyz(in *ateletpb.Readyz) *ateompb.Readyz {
 	return out
 }
 
+// AteomDialer handles gRPC connections to Ateom pods.
 type AteomDialer struct {
 	conns *lru.Cache
 }
