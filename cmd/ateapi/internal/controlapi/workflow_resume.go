@@ -48,6 +48,7 @@ type ResumeInput struct {
 // ResumeState holds the mutable state loaded and modified during execution.
 type ResumeState struct {
 	Actor         *ateapipb.Actor
+	Worker        *ateapipb.Worker
 	ActorTemplate *atev1alpha1.ActorTemplate
 }
 
@@ -60,6 +61,9 @@ func (s *LoadActorForResumeStep) Name() string { return "LoadActorForResume" }
 func (s *LoadActorForResumeStep) IsComplete(ctx context.Context, input *ResumeInput, state *ResumeState) (bool, error) {
 	// Always run this step to get the latest state from the DB
 	return false, nil
+}
+func (s *LoadActorForResumeStep) CheckPrerequisite(ctx context.Context, input *ResumeInput, state *ResumeState) error {
+	return nil
 }
 func (s *LoadActorForResumeStep) Execute(ctx context.Context, input *ResumeInput, state *ResumeState) error {
 	actor, err := s.store.GetActor(ctx, input.Atespace, input.ActorName)
@@ -77,6 +81,36 @@ func (s *LoadActorForResumeStep) Execute(ctx context.Context, input *ResumeInput
 	}
 	state.ActorTemplate = actorTemplate
 
+	// If the Actor is in Resuming state, it means a previous attempt crashed after AssignWorkerStep.
+	// We don't need to repeat the AssignWorkerStep, load the Worker now.
+	if actor.Status == ateapipb.Actor_STATUS_RESUMING {
+		allPopulated := actor.AteomPodUid != "" && actor.WorkerPoolName != "" && actor.AteomPodName != ""
+		if !allPopulated {
+			slog.ErrorContext(ctx, "expected all of AteomPodUid, WorkerPoolName and AteomPodName to be populated, found",
+				slog.String("AteomPodUid", actor.AteomPodUid),
+				slog.String("WorkerPoolName", actor.WorkerPoolName),
+				slog.String("AteomPodName", actor.AteomPodName))
+
+			// Crash the actor if its worker assignment is corrupted. We should never be in this state.
+			if cerr := crashActor(ctx, s.store, input.Atespace, input.ActorName); cerr != nil {
+				return cerr
+			}
+			return status.Errorf(codes.Aborted, "actor %s crashed", input.ActorName)
+		}
+
+		wk, err := s.store.GetWorker(ctx, actor.AteomPodNamespace, actor.WorkerPoolName, actor.AteomPodName)
+		if err != nil {
+			// Crash the actor if it was assigned to a deleted pod.
+			if errors.Is(err, ErrWorkerPodNotFound) {
+				if cerr := crashActor(ctx, s.store, input.Atespace, input.ActorName); cerr != nil {
+					return cerr
+				}
+				return status.Errorf(codes.Aborted, "actor %s crashed", input.ActorName)
+			}
+			return fmt.Errorf("failed to get already assigned worker for actor %w", err)
+		}
+		state.Worker = wk
+	}
 	return nil
 }
 
@@ -113,21 +147,28 @@ type AssignWorkerStep struct {
 func (s *AssignWorkerStep) Name() string { return "AssignWorker" }
 
 func (s *AssignWorkerStep) IsComplete(ctx context.Context, input *ResumeInput, state *ResumeState) (bool, error) {
-	return state.Actor.GetStatus() == ateapipb.Actor_STATUS_RUNNING, nil
+	// RESUMING means a previous attempt already assigned a worker (loaded by
+	// LoadActorForResumeStep); RUNNING is past this step entirely.
+	return state.Actor.GetStatus() == ateapipb.Actor_STATUS_RESUMING || state.Actor.GetStatus() == ateapipb.Actor_STATUS_RUNNING, nil
 }
+func (s *AssignWorkerStep) CheckPrerequisite(ctx context.Context, input *ResumeInput, state *ResumeState) error {
+	switch state.Actor.GetStatus() {
+	case ateapipb.Actor_STATUS_SUSPENDED, ateapipb.Actor_STATUS_PAUSED:
+		return nil
+	default:
+		return status.Errorf(codes.FailedPrecondition, "AssignWorkerStep prerequisite not met for Actor: %s (got: %v, want %s or %s)", input.ActorName, state.Actor.GetStatus(), ateapipb.Actor_STATUS_SUSPENDED, ateapipb.Actor_STATUS_PAUSED)
+	}
+}
+
 func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, state *ResumeState) error {
 	workers, err := s.workerCache.Workers()
 	if err != nil {
 		return fmt.Errorf("while listing workers: %w", err)
 	}
 
-	var assignedWorker *ateapipb.Worker
-
 	// Check if we already have a worker assigned from a previous failed attempt.
-	// If that worker's pool is no longer eligible (e.g. the actor's
-	// worker_selector was updated after the failed attempt), release it back
-	// to the free pool instead of leaving it claimed forever — nothing else
-	// reclaims a healthy worker whose actor moved on to a different pool.
+	// This can happen if ateapi crashed after updating worker with actor assignment,
+	// but has not yet updated the actor.
 	for _, worker := range workers {
 		if worker.Assignment == nil {
 			continue
@@ -140,20 +181,28 @@ func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, stat
 			return fmt.Errorf("while checking worker eligibility: %w", err)
 		}
 		if eligible {
-			assignedWorker = worker
+			state.Worker = worker
 			break
 		}
 		// Workers() returns pointers directly from the cache so we need to clone before
 		// mutating so that the cache is not corrupted if UpdateWorker fails.
-		release := proto.Clone(worker).(*ateapipb.Worker)
-		release.Assignment = nil
-		if err := s.store.UpdateWorker(ctx, release, release.Version); err != nil {
-			return fmt.Errorf("while releasing stale worker assignment: %w", err)
-		}
+		releaseWorker := proto.Clone(worker).(*ateapipb.Worker)
+		releaseWorker.Assignment = nil
+		// The claimed worker is no longer eligible (e.g. the actor's
+		// worker_selector changed after the failed attempt); release it back
+		// to the free pool — nothing else reclaims a healthy worker whose
+		// actor moved on to a different pool. Best effort in the background.
+		go func(release *ateapipb.Worker) {
+			bgCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			defer cancel()
+			if err := s.store.UpdateWorker(bgCtx, release, release.Version); err != nil {
+				slog.ErrorContext(bgCtx, "Failed to release stale worker assignment",
+					slog.String("worker", release.GetWorkerNamespace()+"/"+release.GetWorkerPod()),
+					slog.Any("err", err))
+			}
+		}(releaseWorker)
 	}
-
-	// If not, find a free one using randomized shuffling
-	if assignedWorker == nil {
+	if state.Worker == nil {
 		pickedWorker, err := s.findFreeWorker(workers, state.ActorTemplate.Spec.SandboxClass, state.ActorTemplate.Spec.WorkerSelector, state.Actor.GetWorkerSelector(), state.Actor.GetLatestSnapshotInfo().GetLocal().GetNodeVmsWithLocalSnapshots())
 		if err != nil {
 			return err
@@ -162,14 +211,14 @@ func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, stat
 			return status.Errorf(codes.FailedPrecondition, "no free workers available")
 		}
 
-		assignedWorker = pickedWorker
+		state.Worker = pickedWorker
 		slog.InfoContext(ctx, "Picked worker", slog.Any("worker", pickedWorker.String()))
 	}
 
 	// Workers() returns pointers directly from the cache so we need to clone before
 	// mutating so that the cache is not corrupted if UpdateWorker fails.
-	assignedWorker = proto.Clone(assignedWorker).(*ateapipb.Worker)
-	assignedWorker.Assignment = &ateapipb.Assignment{
+	state.Worker = proto.Clone(state.Worker).(*ateapipb.Worker)
+	state.Worker.Assignment = &ateapipb.Assignment{
 		ActorTemplate: &ateapipb.KubeNamespacedObjectRef{
 			Namespace: state.Actor.GetActorTemplateNamespace(),
 			Name:      state.Actor.GetActorTemplateName(),
@@ -180,16 +229,16 @@ func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, stat
 		},
 	}
 
-	if err := s.store.UpdateWorker(ctx, assignedWorker, assignedWorker.Version); err != nil {
+	if err := s.store.UpdateWorker(ctx, state.Worker, state.Worker.Version); err != nil {
 		return err
 	}
 
 	state.Actor.Status = ateapipb.Actor_STATUS_RESUMING
-	state.Actor.AteomPodNamespace = assignedWorker.GetWorkerNamespace()
-	state.Actor.AteomPodName = assignedWorker.GetWorkerPod()
-	state.Actor.AteomPodIp = assignedWorker.GetIp()
-	state.Actor.AteomPodUid = assignedWorker.GetWorkerPodUid()
-	state.Actor.WorkerPoolName = assignedWorker.GetWorkerPool()
+	state.Actor.AteomPodNamespace = state.Worker.GetWorkerNamespace()
+	state.Actor.AteomPodName = state.Worker.GetWorkerPod()
+	state.Actor.AteomPodIp = state.Worker.GetIp()
+	state.Actor.AteomPodUid = state.Worker.GetWorkerPodUid()
+	state.Actor.WorkerPoolName = state.Worker.GetWorkerPool()
 
 	updatedActor, err := s.store.UpdateActor(ctx, state.Actor, state.Actor.GetMetadata().GetVersion())
 	if err != nil {
@@ -253,6 +302,46 @@ type CallAteletRestoreStep struct {
 func (s *CallAteletRestoreStep) Name() string { return "CallAteletRestore" }
 func (s *CallAteletRestoreStep) IsComplete(ctx context.Context, input *ResumeInput, state *ResumeState) (bool, error) {
 	return state.Actor.GetStatus() == ateapipb.Actor_STATUS_RUNNING, nil
+}
+func (s *CallAteletRestoreStep) CheckPrerequisite(ctx context.Context, input *ResumeInput, state *ResumeState) error {
+	if state.Actor.GetStatus() != ateapipb.Actor_STATUS_RESUMING {
+		return status.Errorf(codes.FailedPrecondition, "CallAteletRestoreStep prerequisite not met for Actor: %s (got: %v, want %s)", input.ActorName, state.Actor.GetStatus(), ateapipb.Actor_STATUS_RESUMING)
+	}
+	if state.Worker == nil {
+		return status.Errorf(codes.FailedPrecondition, "Assigned worker is nil")
+	}
+	// Verify if the worker is still assigned to the same Actor.
+	assigned := state.Worker.GetAssignment().GetActor()
+	if assigned.GetAtespace() != input.Atespace || assigned.GetName() != input.ActorName {
+		slog.ErrorContext(ctx, "crashing actor because its assigned worker no longer belongs to it",
+			slog.String("worker", state.Worker.GetWorkerPod()),
+			slog.Any("assignment", state.Worker.GetAssignment()))
+		if cerr := crashActor(ctx, s.store, input.Atespace, input.ActorName); cerr != nil {
+			return fmt.Errorf("while crashing actor: %w", cerr)
+		}
+		return status.Errorf(codes.Aborted, "actor %s crashed", input.ActorName)
+	}
+	eligible, err := isWorkerEligibleForActor(state.Worker, state.ActorTemplate.Spec.SandboxClass, state.ActorTemplate.Spec.WorkerSelector, state.Actor.GetWorkerSelector())
+	if err != nil {
+		return fmt.Errorf("while calling isWorkerEligbleForActor :%w", err)
+	}
+	if !eligible {
+		slog.ErrorContext(ctx, "crashing actor because previously assigned worker is not eligible anymore")
+		release := proto.Clone(state.Worker).(*ateapipb.Worker)
+		release.Assignment = nil
+		// If that worker's pool is no longer eligible (e.g. the actor's
+		// worker_selector was updated after the failed attempt), release it back
+		// to the free pool instead of leaving it claimed forever — nothing else
+		// reclaims a healthy worker whose actor moved on to a different pool.
+		if err := s.store.UpdateWorker(ctx, release, release.Version); err != nil {
+			return fmt.Errorf("while releasing stale worker assignment: %w", err)
+		}
+		if cerr := crashActor(ctx, s.store, input.Atespace, input.ActorName); cerr != nil {
+			return fmt.Errorf("while crashing actor: %w", cerr)
+		}
+		return status.Errorf(codes.Aborted, "actor %s crashed", input.ActorName)
+	}
+	return nil
 }
 func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput, state *ResumeState) error {
 	ateletConn, err := s.dialer.DialForWorker(state.Actor.GetAteomPodNamespace(), state.Actor.GetAteomPodName())
@@ -360,6 +449,12 @@ type FinalizeRunningStep struct {
 func (s *FinalizeRunningStep) Name() string { return "FinalizeRunning" }
 func (s *FinalizeRunningStep) IsComplete(ctx context.Context, input *ResumeInput, state *ResumeState) (bool, error) {
 	return state.Actor.GetStatus() == ateapipb.Actor_STATUS_RUNNING, nil
+}
+func (s *FinalizeRunningStep) CheckPrerequisite(ctx context.Context, input *ResumeInput, state *ResumeState) error {
+	if state.Actor.GetStatus() != ateapipb.Actor_STATUS_RESUMING {
+		return status.Errorf(codes.FailedPrecondition, "FinalizeRunningStep prerequisite not met for Actor: %s (got: %v, want %s)", input.ActorName, state.Actor.GetStatus(), ateapipb.Actor_STATUS_RESUMING)
+	}
+	return nil
 }
 func (s *FinalizeRunningStep) Execute(ctx context.Context, input *ResumeInput, state *ResumeState) error {
 	latestActor, err := s.store.GetActor(ctx, input.Atespace, input.ActorName)

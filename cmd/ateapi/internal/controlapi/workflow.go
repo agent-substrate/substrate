@@ -44,6 +44,14 @@ type WorkflowStep[Params any, Context any] interface {
 	// If it returns true, the engine skips Execute() and fast-forwards to the next step.
 	IsComplete(ctx context.Context, params Params, wCtx Context) (bool, error)
 
+	// CheckPrerequisite validates that the current state permits executing this
+	// step (e.g. the actor's status allows this state-machine edge). The engine
+	// calls it only when IsComplete returned false, immediately before Execute,
+	// so completed steps of a retried workflow fast-forward without
+	// re-validation. Return a gRPC status error with
+	// codes.FailedPrecondition to abort the workflow if prereqs are not met.
+	CheckPrerequisite(ctx context.Context, params Params, wCtx Context) error
+
 	// Execute performs the step's business logic and persists any state changes.
 	// If an error is returned, the workflow stops and relies on the client to retry.
 	Execute(ctx context.Context, params Params, wCtx Context) error
@@ -77,6 +85,13 @@ func RunWorkflow[Params any, Context any](ctx context.Context, params Params, wC
 			span.End()
 			// Fast-forward past this step
 			continue
+		}
+
+		if err := step.CheckPrerequisite(ctx, params, wCtx); err != nil {
+			span.RecordError(err)
+			span.SetStatus(codes.Error, err.Error())
+			span.End()
+			return fmt.Errorf("prerequisite not met at step %s: %w", step.Name(), err)
 		}
 
 		err = runStep(ctx, params, wCtx, step)
