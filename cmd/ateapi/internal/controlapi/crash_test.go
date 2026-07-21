@@ -33,13 +33,14 @@ import (
 func seedActor(t *testing.T, ctx context.Context, st store.Interface, atespace, actorName string) {
 	t.Helper()
 	if _, err := st.CreateActor(ctx, &ateapipb.Actor{
-		Metadata:          &ateapipb.ResourceMetadata{Name: actorName, Atespace: atespace},
-		Status:            ateapipb.Actor_STATUS_RUNNING,
-		AteomPodNamespace: "ns",
-		AteomPodName:      "pod",
-		AteomPodIp:        "1.2.3.4",
-		AteomPodUid:       "uid",
-		WorkerPoolName:    "pool",
+		Metadata:           &ateapipb.ResourceMetadata{Name: actorName, Atespace: atespace},
+		Status:             ateapipb.Actor_STATUS_RUNNING,
+		AteomPodNamespace:  "ns",
+		AteomPodName:       "pod",
+		AteomPodIp:         "1.2.3.4",
+		AteomPodUid:        "uid",
+		WorkerPoolName:     "pool",
+		InProgressSnapshot: "gs://snapshots/actor-1/reserved",
 	}); err != nil {
 		t.Fatalf("seed actor: %v", err)
 	}
@@ -54,6 +55,10 @@ func assertCrashed(t *testing.T, ctx context.Context, st store.Interface, atespa
 	}
 	if got.GetStatus() != ateapipb.Actor_STATUS_CRASHED {
 		t.Errorf("status = %v, want %v", got.GetStatus(), ateapipb.Actor_STATUS_CRASHED)
+	}
+	// Keep the snapshot uri for debugging.
+	if got.GetInProgressSnapshot() == "" {
+		t.Error(`InProgressSnapshot = "", want preserved`)
 	}
 }
 

@@ -55,28 +55,29 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 
 	atespace := req.GetAtespace()
 	name := req.GetActorName()
+	actorUID := req.GetActorUid()
 	templateNS := req.GetActorTemplateNamespace()
 	templateName := req.GetActorTemplateName()
-	restoreDir := ateompath.RestoreStateDir(atespace, name)
+	restoreDir := ateompath.RestoreStateDir(actorUID)
 	tStart := time.Now()
 
-	s.actorLogger.EmitLifecycleLog("Actor restoring", atespace, name, templateNS, templateName)
+	s.actorLogger.EmitLifecycleLog("Actor restoring", atespace, name, actorUID, templateNS, templateName)
 
 	rr := s.resolveRuntime(req.GetRuntimeAssetPaths())
-	kata.CleanupSandboxState(ctx, name)
+	kata.CleanupSandboxState(ctx, actorUID)
 
 	// Repoint the snapshot's vsock socket to this actor's VMDir (the disk + kernel
 	// paths are content-addressed/per-actor and already line up on the same node).
-	if err := rewriteSnapshotSocketPaths(restoreDir, name); err != nil {
+	if err := rewriteSnapshotSocketPaths(restoreDir, actorUID); err != nil {
 		return nil, fmt.Errorf("while rewriting snapshot socket paths: %w", err)
 	}
-	srcID := name
+	srcID := actorUID
 	if b, rerr := os.ReadFile(filepath.Join(restoreDir, baseIDFile)); rerr == nil {
 		if v := strings.TrimSpace(string(b)); v != "" {
 			srcID = v
 		}
 	}
-	if err := os.MkdirAll(kata.VMDir(name), 0o700); err != nil {
+	if err := os.MkdirAll(kata.VMDir(actorUID), 0o700); err != nil {
 		return nil, fmt.Errorf("while creating VM dir: %w", err)
 	}
 
@@ -95,11 +96,11 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	if len(containers) > maxActorContainers {
 		return nil, status.Errorf(codes.Unimplemented, "ateom-microvm supports at most %d containers, got %d", maxActorContainers, len(containers))
 	}
-	ctrs, err := s.buildActorContainers(atespace, name, containers)
+	ctrs, err := s.buildActorContainers(actorUID, containers)
 	if err != nil {
 		return nil, err
 	}
-	vfsdCmd, err := s.stageOverlayLowers(ctx, rr, name, ctrs)
+	vfsdCmd, err := s.stageOverlayLowers(ctx, rr, actorUID, ctrs)
 	if err != nil {
 		return nil, err
 	}
@@ -148,7 +149,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 
 	// Relaunch CH and restore with the tap FDs attached (SCM_RIGHTS). CH reopens
 	// /dev/vda (image) + each /dev/vd{b+i} (actor rootfs) from the snapshot config paths.
-	apiSocket := filepath.Join(kata.VMDir(name), "clh-api-restore.sock")
+	apiSocket := filepath.Join(kata.VMDir(actorUID), "clh-api-restore.sock")
 	chCmd, client, err := ch.LaunchVMM(ctx, ch.LaunchVMMOptions{
 		Binary: rr.chBinary, APISocket: apiSocket, Stdout: slogWriter{ctx}, Stderr: slogWriter{ctx},
 	})
@@ -186,22 +187,22 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	// resumes ReadStdout/ReadStderr. The overlay workload's container/exec id is
 	// <name>_ovl (same as the cold run). Best-effort — a failed dial must not fail the
 	// restore (the actor is already running); forwarding is just skipped.
-	vsockPath := kata.VsockSocketPath(name)
+	vsockPath := kata.VsockSocketPath(actorUID)
 	logAC, dialErr := dialAgentRetry(ctx, vsockPath, 15*time.Second)
 	if dialErr != nil {
 		slog.WarnContext(ctx, "post-restore agent dial failed; actor log forwarding disabled for this restore",
-			slog.String("id", name), slog.Any("err", dialErr))
+			slog.String("id", actorUID), slog.Any("err", dialErr))
 	} else {
 		ra.logAgent = logAC
 		for _, c := range containers {
-			s.startActorLogForwarding(logAC, atespace, name, templateNS, templateName, overlayWorkloadID(c.GetName()), c.GetName())
+			s.startActorLogForwarding(logAC, atespace, name, actorUID, templateNS, templateName, overlayWorkloadID(c.GetName()), c.GetName())
 		}
 	}
 
-	s.running[name] = ra
-	s.actorLogger.EmitLifecycleLog("Actor restored", atespace, name, templateNS, templateName)
+	s.running[actorUID] = ra
+	s.actorLogger.EmitLifecycleLog("Actor restored", atespace, name, actorUID, templateNS, templateName)
 	slog.InfoContext(ctx, "Actor restored (overlay rootfs)",
-		slog.String("id", name), slog.Duration("total", time.Since(tStart)))
+		slog.String("id", actorUID), slog.Duration("total", time.Since(tStart)))
 	return &ateompb.RestoreWorkloadResponse{}, nil
 }
 

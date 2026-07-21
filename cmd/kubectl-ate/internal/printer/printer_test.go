@@ -214,7 +214,8 @@ func TestPrintWorkersTo_Table(t *testing.T) {
 					Name:      "template-1",
 				},
 				Actor: &ateapipb.ObjectRef{
-					Name: "id-1",
+					Atespace: "space-1",
+					Name:     "id-1",
 				},
 			},
 		},
@@ -226,7 +227,7 @@ func TestPrintWorkersTo_Table(t *testing.T) {
 	output := buf.String()
 
 	expected := `NAMESPACE   POOL     POD     STATUS     ASSIGNED ACTOR
-default     pool-1   pod-1   ASSIGNED   default/template-1/id-1
+default     pool-1   pod-1   ASSIGNED   default/template-1/space-1/id-1
 `
 	if diff := cmp.Diff(expected, output); diff != "" {
 		t.Errorf("output mismatch (-want +got):\n%s", diff)

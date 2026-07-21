@@ -164,6 +164,11 @@ func (in *Container) DeepCopyInto(out *Container) {
 		*out = make([]string, len(*in))
 		copy(*out, *in)
 	}
+	if in.Args != nil {
+		in, out := &in.Args, &out.Args
+		*out = make([]string, len(*in))
+		copy(*out, *in)
+	}
 	if in.Env != nil {
 		in, out := &in.Env, &out.Env
 		*out = make([]EnvVar, len(*in))

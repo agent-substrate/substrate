@@ -44,7 +44,7 @@ kubectl wait --for=condition=Ready actortemplate/sandbox-template -n ate-demo-sa
 
 ### 2. Create a Sandbox Actor
 
-Actors live in an **atespace**, which must exist before you create actors in it. Create one (e.g., `demo`), then create the sandbox actor with a chosen ID (e.g., `my-sandbox-1`):
+Actors live in an **atespace**, which must exist before you create actors in it. Create one (e.g., `demo`), then create the sandbox actor with a chosen name (e.g., `my-sandbox-1`):
 
 ```bash
 # Install the CLI as a kubectl plugin if not already installed
@@ -76,7 +76,7 @@ Build and run the client REPL:
 ```bash
 go build -o bin/sandbox-client ./demos/sandbox/client
 
-./bin/sandbox-client --ateapi=localhost:8080 --atenet=localhost:8000 --atespace=demo --id=my-sandbox-1
+./bin/sandbox-client --ateapi=localhost:8080 --atenet=localhost:8000 --atespace=demo --name=my-sandbox-1
 ```
 
 Once in the `sandbox>` prompt, you can run commands:
