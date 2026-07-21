@@ -298,6 +298,112 @@ func TestAssignWorkerStep_ReleasesIneligibleStaleWorkerInBackground(t *testing.T
 	}
 }
 
+// TestAssignWorkerStep_RetryAfterConflictPicksFreshWorker verifies Execute is
+// reentrant across runStep's persistence-conflict retries: when a concurrent
+// resume wins the picked worker, the loser's retry must drop the stale pick
+// left in state.Worker and re-select from the cache, instead of re-submitting
+// the same stale version until the backoff is exhausted.
+func TestAssignWorkerStep_RetryAfterConflictPicksFreshWorker(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+
+	contested := &ateapipb.Worker{
+		WorkerNamespace: "worker-ns",
+		WorkerPool:      "pool",
+		WorkerPod:       "contested-pod",
+		SandboxClass:    "gvisor",
+	}
+	fallback := &ateapipb.Worker{
+		WorkerNamespace: "worker-ns",
+		WorkerPool:      "pool",
+		WorkerPod:       "fallback-pod",
+		SandboxClass:    "gvisor",
+	}
+	for _, w := range []*ateapipb.Worker{contested, fallback} {
+		if err := persistence.CreateWorker(ctx, w); err != nil {
+			t.Fatalf("CreateWorker(%s): %v", w.GetWorkerPod(), err)
+		}
+	}
+
+	// Snapshot the contested worker at the version the failed attempt saw.
+	beforeClaim, err := persistence.GetWorker(ctx, "worker-ns", "pool", "contested-pod")
+	if err != nil {
+		t.Fatalf("GetWorker: %v", err)
+	}
+
+	// A concurrent resume of another actor wins the contested worker, bumping
+	// its stored version past the failed attempt's snapshot.
+	claimed := proto.Clone(beforeClaim).(*ateapipb.Worker)
+	claimed.Assignment = &ateapipb.Assignment{
+		Actor: &ateapipb.ObjectRef{Atespace: "team-a", Name: "other"},
+	}
+	if err := persistence.UpdateWorker(ctx, claimed, claimed.GetVersion()); err != nil {
+		t.Fatalf("UpdateWorker (concurrent claim): %v", err)
+	}
+
+	actor, err := persistence.CreateActor(ctx, &ateapipb.Actor{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "id1"},
+		Status:   ateapipb.Actor_STATUS_SUSPENDED,
+	})
+	if err != nil {
+		t.Fatalf("CreateActor: %v", err)
+	}
+
+	cacheCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	wc := workercache.New(persistence, time.Minute)
+	if err := wc.Start(cacheCtx); err != nil {
+		t.Fatalf("workercache.Start: %v", err)
+	}
+
+	// state.Worker is exactly what the conflicted attempt left behind: the
+	// contested worker mutated with our assignment, at the pre-claim version.
+	stale := proto.Clone(beforeClaim).(*ateapipb.Worker)
+	stale.Assignment = &ateapipb.Assignment{
+		Actor: &ateapipb.ObjectRef{Atespace: "team-a", Name: "id1"},
+	}
+	step := &AssignWorkerStep{store: persistence, workerCache: wc}
+	state := &ResumeState{
+		Actor:  actor,
+		Worker: stale,
+		ActorTemplate: &atev1alpha1.ActorTemplate{
+			Spec: atev1alpha1.ActorTemplateSpec{SandboxClass: atev1alpha1.SandboxClassGvisor},
+		},
+	}
+	if err := step.Execute(ctx, &ResumeInput{ActorName: "id1", Atespace: "team-a"}, state); err != nil {
+		t.Fatalf("Execute() on retry = %v, want nil (must re-pick a free worker)", err)
+	}
+	if got := state.Worker.GetWorkerPod(); got != "fallback-pod" {
+		t.Errorf("assigned worker = %q, want %q", got, "fallback-pod")
+	}
+
+	storedContested, err := persistence.GetWorker(ctx, "worker-ns", "pool", "contested-pod")
+	if err != nil {
+		t.Fatalf("GetWorker(contested-pod): %v", err)
+	}
+	if got := storedContested.GetAssignment().GetActor().GetName(); got != "other" {
+		t.Errorf("contested worker assignment = %v, want to remain with actor %q", storedContested.GetAssignment(), "other")
+	}
+	storedFallback, err := persistence.GetWorker(ctx, "worker-ns", "pool", "fallback-pod")
+	if err != nil {
+		t.Fatalf("GetWorker(fallback-pod): %v", err)
+	}
+	if got := storedFallback.GetAssignment().GetActor().GetName(); got != "id1" {
+		t.Errorf("fallback worker assignment = %v, want actor %q", storedFallback.GetAssignment(), "id1")
+	}
+
+	storedActor, err := persistence.GetActor(ctx, "team-a", "id1")
+	if err != nil {
+		t.Fatalf("GetActor: %v", err)
+	}
+	if storedActor.GetStatus() != ateapipb.Actor_STATUS_RESUMING {
+		t.Errorf("stored actor status = %v, want %v", storedActor.GetStatus(), ateapipb.Actor_STATUS_RESUMING)
+	}
+	if got := storedActor.GetAteomPodName(); got != "fallback-pod" {
+		t.Errorf("stored actor AteomPodName = %q, want %q", got, "fallback-pod")
+	}
+}
+
 // TestResumeActorWorkflow_RejectedAndIdempotentPaths covers the two
 // short-circuit paths of the resume workflow: rejection by AssignWorkerStep's
 // CheckPrerequisite and the IsComplete idempotent fast-forward.

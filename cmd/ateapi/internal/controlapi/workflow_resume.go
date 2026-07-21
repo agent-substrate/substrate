@@ -166,6 +166,8 @@ func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, stat
 		return fmt.Errorf("while listing workers: %w", err)
 	}
 
+	var assignedWorker *ateapipb.Worker
+
 	// Check if we already have a worker assigned from a previous failed attempt.
 	// This can happen if ateapi crashed after updating worker with actor assignment,
 	// but has not yet updated the actor.
@@ -181,7 +183,7 @@ func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, stat
 			return fmt.Errorf("while checking worker eligibility: %w", err)
 		}
 		if eligible {
-			state.Worker = worker
+			assignedWorker = worker
 			break
 		}
 		// Workers() returns pointers directly from the cache so we need to clone before
@@ -202,7 +204,7 @@ func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, stat
 			}
 		}(releaseWorker)
 	}
-	if state.Worker == nil {
+	if assignedWorker == nil {
 		pickedWorker, err := s.findFreeWorker(workers, state.ActorTemplate.Spec.SandboxClass, state.ActorTemplate.Spec.WorkerSelector, state.Actor.GetWorkerSelector(), state.Actor.GetLatestSnapshotInfo().GetLocal().GetNodeVmsWithLocalSnapshots())
 		if err != nil {
 			return err
@@ -211,14 +213,14 @@ func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, stat
 			return status.Errorf(codes.FailedPrecondition, "no free workers available")
 		}
 
-		state.Worker = pickedWorker
+		assignedWorker = pickedWorker
 		slog.InfoContext(ctx, "Picked worker", slog.Any("worker", pickedWorker.String()))
 	}
 
 	// Workers() returns pointers directly from the cache so we need to clone before
 	// mutating so that the cache is not corrupted if UpdateWorker fails.
-	state.Worker = proto.Clone(state.Worker).(*ateapipb.Worker)
-	state.Worker.Assignment = &ateapipb.Assignment{
+	assignedWorker = proto.Clone(assignedWorker).(*ateapipb.Worker)
+	assignedWorker.Assignment = &ateapipb.Assignment{
 		ActorTemplate: &ateapipb.KubeNamespacedObjectRef{
 			Namespace: state.Actor.GetActorTemplateNamespace(),
 			Name:      state.Actor.GetActorTemplateName(),
@@ -229,22 +231,23 @@ func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, stat
 		},
 	}
 
-	if err := s.store.UpdateWorker(ctx, state.Worker, state.Worker.Version); err != nil {
+	if err := s.store.UpdateWorker(ctx, assignedWorker, assignedWorker.Version); err != nil {
 		return err
 	}
 
 	state.Actor.Status = ateapipb.Actor_STATUS_RESUMING
-	state.Actor.AteomPodNamespace = state.Worker.GetWorkerNamespace()
-	state.Actor.AteomPodName = state.Worker.GetWorkerPod()
-	state.Actor.AteomPodIp = state.Worker.GetIp()
-	state.Actor.AteomPodUid = state.Worker.GetWorkerPodUid()
-	state.Actor.WorkerPoolName = state.Worker.GetWorkerPool()
+	state.Actor.AteomPodNamespace = assignedWorker.GetWorkerNamespace()
+	state.Actor.AteomPodName = assignedWorker.GetWorkerPod()
+	state.Actor.AteomPodIp = assignedWorker.GetIp()
+	state.Actor.AteomPodUid = assignedWorker.GetWorkerPodUid()
+	state.Actor.WorkerPoolName = assignedWorker.GetWorkerPool()
 
 	updatedActor, err := s.store.UpdateActor(ctx, state.Actor, state.Actor.GetMetadata().GetVersion())
 	if err != nil {
 		return err
 	}
 	state.Actor = updatedActor
+	state.Worker = assignedWorker
 	return nil
 }
 
