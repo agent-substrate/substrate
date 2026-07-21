@@ -52,12 +52,11 @@ func crashActor(ctx context.Context, st store.Interface, atespace, actorName str
 	if err != nil {
 		return fmt.Errorf("while loading actor to crash: %w", err)
 	}
-	// Remember the binding before clearing it; releasing the worker
-	// below still needs it.
-	podNamespace := actor.GetAteomPodNamespace()
-	podName := actor.GetAteomPodName()
-	podUid := actor.GetAteomPodUid()
-	poolName := actor.GetWorkerPoolName()
+
+	var errCollected []error
+	if err := releaseWorker(ctx, st, actor); err != nil {
+		errCollected = append(errCollected, err)
+	}
 
 	actor.Status = ateapipb.Actor_STATUS_CRASHED
 
@@ -69,35 +68,48 @@ func crashActor(ctx context.Context, st store.Interface, atespace, actorName str
 	actor.AteomPodUid = ""
 	actor.WorkerPoolName = ""
 
-	var errCollected []error
 	if _, err := st.UpdateActor(ctx, actor, actor.GetMetadata().GetVersion()); err != nil {
 		errCollected = append(errCollected, fmt.Errorf("while marking actor crashed: %w", err))
 	}
+	return errors.Join(errCollected...)
+}
+
+// releaseWorker clears the worker's assignment if it still points at the given
+// actor. A missing worker or an already-cleared assignment is not an error.
+func releaseWorker(ctx context.Context, st store.Interface, actor *ateapipb.Actor) error {
+	podNamespace := actor.GetAteomPodNamespace()
+	podName := actor.GetAteomPodName()
+	podUid := actor.GetAteomPodUid()
+	poolName := actor.GetWorkerPoolName()
 
 	if podNamespace == "" || podName == "" || poolName == "" {
 		slog.WarnContext(ctx, "Actor's worker assignment is already cleared")
-		return errors.Join(errCollected...)
+		return nil
 	}
 
-	// Free the worker assigned to this actor.
 	worker, err := st.GetWorker(ctx, podNamespace, poolName, podName)
-	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			// No need to release if the worker is not found.
-			slog.WarnContext(ctx, "Worker already gone while crashing actor, skipping release", slog.String("worker", podUid))
-		} else {
-			errCollected = append(errCollected, fmt.Errorf("while getting worker to release: %w", err))
-		}
-		return errors.Join(errCollected...)
+	if errors.Is(err, store.ErrNotFound) {
+		// No need to release if the worker is not found.
+		slog.WarnContext(ctx, "Worker already gone while crashing actor, skipping release", slog.String("worker", podUid))
+		return nil
 	}
+	if err != nil {
+		return fmt.Errorf("while getting worker to release: %w", err)
+	}
+
 	wass := worker.GetAssignment()
 	if wass == nil {
 		slog.WarnContext(ctx, "Worker's assignment is already nil, skipping release", slog.String("worker", podUid))
-	} else if wass.GetActor().GetAtespace() == atespace && wass.GetActor().GetName() == actorName {
-		worker.Assignment = nil
-		if err := st.UpdateWorker(ctx, worker, worker.GetVersion()); err != nil {
-			errCollected = append(errCollected, fmt.Errorf("while releasing worker: %w", err))
-		}
+		return nil
 	}
-	return errors.Join(errCollected...)
+	if wass.GetActor().GetAtespace() != actor.GetMetadata().GetAtespace() || wass.GetActor().GetName() != actor.GetMetadata().GetName() {
+		// Worker is already assigned to a different actor; leave it alone.
+		return nil
+	}
+
+	worker.Assignment = nil
+	if err := st.UpdateWorker(ctx, worker, worker.GetVersion()); err != nil {
+		return fmt.Errorf("while releasing worker: %w", err)
+	}
+	return nil
 }
