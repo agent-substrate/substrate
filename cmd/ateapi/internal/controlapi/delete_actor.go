@@ -36,14 +36,15 @@ func (s *Service) DeleteActor(ctx context.Context, req *ateapipb.DeleteActorRequ
 	var tmpl *ateapipb.Actor
 	defer func() {
 		s.instruments.recordLifecycleOp(ctx, ateattr.OperationDelete, start, err,
-			ateattr.ActorTemplateNameKey.String(tmpl.GetActorTemplateName()),
-			ateattr.ActorTemplateNamespaceKey.String(tmpl.GetActorTemplateNamespace()),
+			ateattr.TemplateNameKey.String(tmpl.GetActorTemplateName()),
+			ateattr.TemplateNamespaceKey.String(tmpl.GetActorTemplateNamespace()),
 		)
 	}()
 
 	if err = validateDeleteActorRequest(req); err != nil {
 		return nil, err
 	}
+	setSpanActorRefAttributes(ctx, req.GetActor().GetAtespace(), req.GetActor().GetName())
 
 	deleted, err = s.persistence.DeleteActor(ctx, req.GetActor().GetAtespace(), req.GetActor().GetName())
 	if err != nil {

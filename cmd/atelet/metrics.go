@@ -75,8 +75,8 @@ func recordRestorePhase(ctx context.Context, phase string, d time.Duration, tmpl
 	}
 	restoreDuration.Record(ctx, d.Seconds(), metric.WithAttributes(
 		ateattr.SnapshotPhaseKey.String(phase),
-		ateattr.ActorTemplateNamespaceKey.String(tmplNamespace),
-		ateattr.ActorTemplateNameKey.String(tmplName),
+		ateattr.TemplateNamespaceKey.String(tmplNamespace),
+		ateattr.TemplateNameKey.String(tmplName),
 		ateattr.SandboxClassKey.String(sandboxClass),
 		ateattr.SnapshotKindKey.String(ateattr.ClampRestoreSnapshotKind(snapshotKind)),
 	))
@@ -91,8 +91,8 @@ func recordCheckpointPhase(ctx context.Context, phase string, d time.Duration, t
 	}
 	checkpointDuration.Record(ctx, d.Seconds(), metric.WithAttributes(
 		ateattr.SnapshotPhaseKey.String(phase),
-		ateattr.ActorTemplateNamespaceKey.String(tmplNamespace),
-		ateattr.ActorTemplateNameKey.String(tmplName),
+		ateattr.TemplateNamespaceKey.String(tmplNamespace),
+		ateattr.TemplateNameKey.String(tmplName),
 		ateattr.SandboxClassKey.String(sandboxClass),
 	))
 }

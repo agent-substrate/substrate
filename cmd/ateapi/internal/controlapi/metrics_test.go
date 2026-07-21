@@ -123,8 +123,8 @@ func TestLifecycleOpDurationShape(t *testing.T) {
 	}
 	wantKeys := []string{
 		string(ateattr.ActorOperationNameKey),
-		string(ateattr.ActorTemplateNameKey),
-		string(ateattr.ActorTemplateNamespaceKey),
+		string(ateattr.TemplateNameKey),
+		string(ateattr.TemplateNamespaceKey),
 		string(ateattr.WorkerPoolNameKey),
 		string(ateattr.SandboxClassKey),
 		string(ateattr.SnapshotKindKey),
@@ -136,8 +136,8 @@ func TestLifecycleOpDurationShape(t *testing.T) {
 
 func TestRecordLifecycleOp_OutcomeClassification(t *testing.T) {
 	baseTmplAttrs := []attribute.KeyValue{
-		ateattr.ActorTemplateNameKey.String("tmpl"),
-		ateattr.ActorTemplateNamespaceKey.String("ns"),
+		ateattr.TemplateNameKey.String("tmpl"),
+		ateattr.TemplateNamespaceKey.String("ns"),
 	}
 	tests := []struct {
 		name          string
@@ -154,8 +154,8 @@ func TestRecordLifecycleOp_OutcomeClassification(t *testing.T) {
 			extra: baseTmplAttrs,
 			wantKeys: []string{
 				string(ateattr.ActorOperationNameKey),
-				string(ateattr.ActorTemplateNameKey),
-				string(ateattr.ActorTemplateNamespaceKey),
+				string(ateattr.TemplateNameKey),
+				string(ateattr.TemplateNamespaceKey),
 			},
 		},
 		{
@@ -165,8 +165,8 @@ func TestRecordLifecycleOp_OutcomeClassification(t *testing.T) {
 			extra: baseTmplAttrs,
 			wantKeys: []string{
 				string(ateattr.ActorOperationNameKey),
-				string(ateattr.ActorTemplateNameKey),
-				string(ateattr.ActorTemplateNamespaceKey),
+				string(ateattr.TemplateNameKey),
+				string(ateattr.TemplateNamespaceKey),
 				string(ateattr.ErrorTypeKey),
 			},
 			wantErrorType: "NotFound",
@@ -178,8 +178,8 @@ func TestRecordLifecycleOp_OutcomeClassification(t *testing.T) {
 			extra: baseTmplAttrs,
 			wantKeys: []string{
 				string(ateattr.ActorOperationNameKey),
-				string(ateattr.ActorTemplateNameKey),
-				string(ateattr.ActorTemplateNamespaceKey),
+				string(ateattr.TemplateNameKey),
+				string(ateattr.TemplateNamespaceKey),
 				string(ateattr.ErrorTypeKey),
 			},
 			wantErrorType: "Aborted",
@@ -191,8 +191,8 @@ func TestRecordLifecycleOp_OutcomeClassification(t *testing.T) {
 			extra: baseTmplAttrs,
 			wantKeys: []string{
 				string(ateattr.ActorOperationNameKey),
-				string(ateattr.ActorTemplateNameKey),
-				string(ateattr.ActorTemplateNamespaceKey),
+				string(ateattr.TemplateNameKey),
+				string(ateattr.TemplateNamespaceKey),
 				string(ateattr.ErrorTypeKey),
 			},
 			wantErrorType: "DataLoss",

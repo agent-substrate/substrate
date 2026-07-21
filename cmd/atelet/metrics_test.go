@@ -97,8 +97,8 @@ func TestRestoreDurationShape(t *testing.T) {
 		t.Fatalf("got %d datapoints, want 1", len(h.DataPoints))
 	}
 	dp := h.DataPoints[0]
-	want := wantKeys(ateattr.SnapshotPhaseKey, ateattr.ActorTemplateNamespaceKey,
-		ateattr.ActorTemplateNameKey, ateattr.SandboxClassKey, ateattr.SnapshotKindKey)
+	want := wantKeys(ateattr.SnapshotPhaseKey, ateattr.TemplateNamespaceKey,
+		ateattr.TemplateNameKey, ateattr.SandboxClassKey, ateattr.SnapshotKindKey)
 	if got := histoAttrKeys(dp.Attributes); !equalStrings(got, want) {
 		t.Errorf("attribute keys = %v, want %v", got, want)
 	}
@@ -125,8 +125,8 @@ func TestCheckpointDurationShape(t *testing.T) {
 	}
 	dp := h.DataPoints[0]
 	// No ate.snapshot.kind on checkpoint.
-	want := wantKeys(ateattr.SnapshotPhaseKey, ateattr.ActorTemplateNamespaceKey,
-		ateattr.ActorTemplateNameKey, ateattr.SandboxClassKey)
+	want := wantKeys(ateattr.SnapshotPhaseKey, ateattr.TemplateNamespaceKey,
+		ateattr.TemplateNameKey, ateattr.SandboxClassKey)
 	if got := histoAttrKeys(dp.Attributes); !equalStrings(got, want) {
 		t.Errorf("attribute keys = %v, want %v", got, want)
 	}

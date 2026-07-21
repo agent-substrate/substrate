@@ -36,8 +36,8 @@ func (s *Service) CreateActor(ctx context.Context, req *ateapipb.CreateActorRequ
 	in := req.GetActor()
 	defer func() {
 		s.instruments.recordLifecycleOp(ctx, ateattr.OperationCreate, start, err,
-			ateattr.ActorTemplateNameKey.String(in.GetActorTemplateName()),
-			ateattr.ActorTemplateNamespaceKey.String(in.GetActorTemplateNamespace()),
+			ateattr.TemplateNameKey.String(in.GetActorTemplateName()),
+			ateattr.TemplateNamespaceKey.String(in.GetActorTemplateNamespace()),
 		)
 	}()
 
@@ -47,6 +47,8 @@ func (s *Service) CreateActor(ctx context.Context, req *ateapipb.CreateActorRequ
 
 	templateNamespace := in.GetActorTemplateNamespace()
 	templateName := in.GetActorTemplateName()
+
+	setSpanActorRefAttributes(ctx, in.GetMetadata().GetAtespace(), in.GetMetadata().GetName())
 
 	_, err = s.actorTemplateLister.ActorTemplates(templateNamespace).Get(templateName)
 	if err != nil {
@@ -86,6 +88,7 @@ func (s *Service) CreateActor(ctx context.Context, req *ateapipb.CreateActorRequ
 		return nil, fmt.Errorf("while recording actor: %w", err)
 	}
 
+	setSpanActorAttributes(ctx, stored)
 	return stored, nil
 }
 

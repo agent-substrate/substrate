@@ -13,10 +13,9 @@
 // limitations under the License.
 
 // Package ateattr is the single source of truth for substrate's ate.* telemetry
-// attributes: the identity keys stamped on spans/logs, and the bounded
-// value sets used as metric labels. Centralizing them keeps a key (and value)
-// meaning the same thing across every signal and binary, and lets an emit site
-// and its test share a constant rather than drift on stringly-typed literals.
+// attributes: the identity keys stamped on spans/logs, and the bounded value
+// sets used as metric labels. Centralizing them keeps a key (and value) meaning
+// the same thing across every signal and binary.
 package ateattr
 
 import (
@@ -25,17 +24,23 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
-// Identity keys. name vs uid mirror the k8s object model ResourceMetadata
-// follows: ate.actor.name is the atespace-scoped addressable name, ate.actor.uid
-// the server-assigned globally-unique key. There is deliberately no ate.actor.id,
-// which is ambiguous when both a name and a uid exist.
+// Dotted ate.* matches the metric-instrument naming (atenet.*, atelet.*), not the
+// ate.dev/ slash form used for k8s labels and stdout log fields.
+// name vs uid mirror the k8s object model that ResourceMetadata follows:
+// ate.actor.name is the atespace-scoped addressable name, ate.actor.uid is the
+// server-assigned globally-unique key. There is deliberately no ate.actor.id
+// (an ambiguous term when both a name and a uid exist).
+// atespace and template are their own top-level namespaces (ate.atespace,
+// ate.template.*) rather than nested under actor: both are first-class resources
+// that also appear in non-actor telemetry, so the keys must mean the same thing
+// regardless of what a span is about.
 const (
-	AtespaceKey               = attribute.Key("ate.atespace")
-	ActorNameKey              = attribute.Key("ate.actor.name")
-	ActorUIDKey               = attribute.Key("ate.actor.uid")
-	ActorTemplateNameKey      = attribute.Key("ate.actor.template.name")
-	ActorTemplateNamespaceKey = attribute.Key("ate.actor.template.namespace")
-	ActorVersionKey           = attribute.Key("ate.actor.version")
+	AtespaceKey          = attribute.Key("ate.atespace")
+	ActorNameKey         = attribute.Key("ate.actor.name")
+	ActorUIDKey          = attribute.Key("ate.actor.uid")
+	TemplateNameKey      = attribute.Key("ate.template.name")
+	TemplateNamespaceKey = attribute.Key("ate.template.namespace")
+	ActorVersionKey      = attribute.Key("ate.actor.version")
 )
 
 // Metric-label keys: the only ate.* attributes allowed on metric datapoints,
@@ -129,8 +134,8 @@ func ActorAttributes(a *ateapipb.Actor) []attribute.KeyValue {
 		AtespaceKey.String(a.GetMetadata().GetAtespace()),
 		ActorNameKey.String(a.GetMetadata().GetName()),
 		ActorUIDKey.String(a.GetMetadata().GetUid()),
-		ActorTemplateNameKey.String(a.GetActorTemplateName()),
-		ActorTemplateNamespaceKey.String(a.GetActorTemplateNamespace()),
+		TemplateNameKey.String(a.GetActorTemplateName()),
+		TemplateNamespaceKey.String(a.GetActorTemplateNamespace()),
 		ActorVersionKey.Int64(a.GetMetadata().GetVersion()),
 	}
 }

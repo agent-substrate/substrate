@@ -153,8 +153,8 @@ func (i *Instruments) recordLifecycleOp(ctx context.Context, op string, start ti
 // well-formed (smaller) attribute set.
 func lifecycleOpAttrs(actor *ateapipb.Actor, template *atev1alpha1.ActorTemplate, snapshotKind string) []attribute.KeyValue {
 	attrs := []attribute.KeyValue{
-		ateattr.ActorTemplateNameKey.String(actor.GetActorTemplateName()),
-		ateattr.ActorTemplateNamespaceKey.String(actor.GetActorTemplateNamespace()),
+		ateattr.TemplateNameKey.String(actor.GetActorTemplateName()),
+		ateattr.TemplateNamespaceKey.String(actor.GetActorTemplateNamespace()),
 	}
 	if pool := actor.GetWorkerPoolName(); pool != "" {
 		attrs = append(attrs, ateattr.WorkerPoolNameKey.String(pool))
