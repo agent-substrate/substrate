@@ -15,6 +15,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/agent-substrate/substrate/cmd/kubectl-ate/internal/printer"
@@ -26,6 +27,7 @@ import (
 var (
 	getActorsAtespaceFlag string
 	getActorsAllAtespaces bool
+	getActorsWatch        bool
 )
 
 var getActorsCmd = &cobra.Command{
@@ -53,15 +55,18 @@ var getActorsCmd = &cobra.Command{
 				return fmt.Errorf("--atespace is required when getting actors")
 			}
 
-			actors := make([]*ateapipb.Actor, 0, len(args))
-			for _, actorName := range args {
-				resp, err := apiClient.GetActor(ctx, &ateapipb.GetActorRequest{Actor: &ateapipb.ObjectRef{Atespace: getActorsAtespaceFlag, Name: actorName}})
-				if err != nil {
-					return fmt.Errorf("failed to get actor %q: %w", actorName, err)
+			fetch := func(ctx context.Context) ([]*ateapipb.Actor, error) {
+				actors := make([]*ateapipb.Actor, 0, len(args))
+				for _, actorName := range args {
+					resp, err := apiClient.GetActor(ctx, &ateapipb.GetActorRequest{Actor: &ateapipb.ObjectRef{Atespace: getActorsAtespaceFlag, Name: actorName}})
+					if err != nil {
+						return nil, fmt.Errorf("failed to get actor %q: %w", actorName, err)
+					}
+					actors = append(actors, resp)
 				}
-				actors = append(actors, resp)
+				return actors, nil
 			}
-			return printer.PrintActors(actors, outputFmt)
+			return printOrWatch(ctx, cmd.OutOrStdout(), getActorsWatch, outputFmt, fetch, printer.PrintActorsTo, actorWatchKey)
 		}
 
 		// Listing requires exactly one of --atespace (one atespace) or -A (all
@@ -74,32 +79,30 @@ var getActorsCmd = &cobra.Command{
 		}
 
 		// 3. Handle List All Actors
-		var allActors []*ateapipb.Actor
-		pageToken := ""
-
-		for {
-			resp, err := apiClient.ListActors(ctx, &ateapipb.ListActorsRequest{
-				PageSize:  1000,
-				PageToken: pageToken,
-				Atespace:  getActorsAtespaceFlag,
+		fetch := func(ctx context.Context) ([]*ateapipb.Actor, error) {
+			return fetchAllPages(ctx, func(ctx context.Context, pageToken string) ([]*ateapipb.Actor, string, error) {
+				resp, err := apiClient.ListActors(ctx, &ateapipb.ListActorsRequest{
+					PageSize:  1000,
+					PageToken: pageToken,
+					Atespace:  getActorsAtespaceFlag,
+				})
+				if err != nil {
+					return nil, "", fmt.Errorf("failed to list actors: %w", err)
+				}
+				return resp.GetActors(), resp.GetNextPageToken(), nil
 			})
-			if err != nil {
-				return fmt.Errorf("failed to list actors: %w", err)
-			}
-			allActors = append(allActors, resp.GetActors()...)
-
-			pageToken = resp.GetNextPageToken()
-			if pageToken == "" {
-				break
-			}
 		}
-
-		return printer.PrintActors(allActors, outputFmt)
+		return printOrWatch(ctx, cmd.OutOrStdout(), getActorsWatch, outputFmt, fetch, printer.PrintActorsTo, actorWatchKey)
 	},
+}
+
+func actorWatchKey(actor *ateapipb.Actor) string {
+	return actor.GetMetadata().GetAtespace() + "/" + actor.GetMetadata().GetName()
 }
 
 func init() {
 	getActorsCmd.Flags().StringVarP(&getActorsAtespaceFlag, "atespace", "a", "", "Atespace to list/get actors in. Required when getting actors; for listing, use this or -A.")
 	getActorsCmd.Flags().BoolVarP(&getActorsAllAtespaces, "all-atespaces", "A", false, "List actors across all atespaces (listing only; mutually exclusive with --atespace)")
+	getActorsCmd.Flags().BoolVarP(&getActorsWatch, "watch", "w", false, "After listing/getting the requested actor(s), watch for changes")
 	getCmd.AddCommand(getActorsCmd)
 }

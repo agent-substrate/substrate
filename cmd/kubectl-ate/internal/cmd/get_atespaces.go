@@ -15,6 +15,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/agent-substrate/substrate/cmd/kubectl-ate/internal/printer"
@@ -22,6 +23,8 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/spf13/cobra"
 )
+
+var getAtespacesWatch bool
 
 var getAtespacesCmd = &cobra.Command{
 	Use:     "atespaces [name ...]",
@@ -36,38 +39,41 @@ var getAtespacesCmd = &cobra.Command{
 		defer apiClient.Close()
 
 		if len(args) > 0 {
-			atespaces := make([]*ateapipb.Atespace, 0, len(args))
-			for _, atespaceName := range args {
-				resp, err := apiClient.GetAtespace(ctx, &ateapipb.GetAtespaceRequest{Atespace: &ateapipb.ObjectRef{Name: atespaceName}})
-				if err != nil {
-					return fmt.Errorf("failed to get atespace %q: %w", atespaceName, err)
+			fetch := func(ctx context.Context) ([]*ateapipb.Atespace, error) {
+				atespaces := make([]*ateapipb.Atespace, 0, len(args))
+				for _, atespaceName := range args {
+					resp, err := apiClient.GetAtespace(ctx, &ateapipb.GetAtespaceRequest{Atespace: &ateapipb.ObjectRef{Name: atespaceName}})
+					if err != nil {
+						return nil, fmt.Errorf("failed to get atespace %q: %w", atespaceName, err)
+					}
+					atespaces = append(atespaces, resp)
 				}
-				atespaces = append(atespaces, resp)
+				return atespaces, nil
 			}
-			return printer.PrintAtespaces(atespaces, outputFmt)
+			return printOrWatch(ctx, cmd.OutOrStdout(), getAtespacesWatch, outputFmt, fetch, printer.PrintAtespacesTo, atespaceWatchKey)
 		}
 
-		var allAtespaces []*ateapipb.Atespace
-		pageToken := ""
-		for {
-			resp, err := apiClient.ListAtespaces(ctx, &ateapipb.ListAtespacesRequest{
-				PageSize:  1000,
-				PageToken: pageToken,
+		fetch := func(ctx context.Context) ([]*ateapipb.Atespace, error) {
+			return fetchAllPages(ctx, func(ctx context.Context, pageToken string) ([]*ateapipb.Atespace, string, error) {
+				resp, err := apiClient.ListAtespaces(ctx, &ateapipb.ListAtespacesRequest{
+					PageSize:  1000,
+					PageToken: pageToken,
+				})
+				if err != nil {
+					return nil, "", fmt.Errorf("failed to list atespaces: %w", err)
+				}
+				return resp.GetAtespaces(), resp.GetNextPageToken(), nil
 			})
-			if err != nil {
-				return fmt.Errorf("failed to list atespaces: %w", err)
-			}
-			allAtespaces = append(allAtespaces, resp.GetAtespaces()...)
-
-			pageToken = resp.GetNextPageToken()
-			if pageToken == "" {
-				break
-			}
 		}
-		return printer.PrintAtespaces(allAtespaces, outputFmt)
+		return printOrWatch(ctx, cmd.OutOrStdout(), getAtespacesWatch, outputFmt, fetch, printer.PrintAtespacesTo, atespaceWatchKey)
 	},
 }
 
+func atespaceWatchKey(atespace *ateapipb.Atespace) string {
+	return atespace.GetMetadata().GetName()
+}
+
 func init() {
+	getAtespacesCmd.Flags().BoolVarP(&getAtespacesWatch, "watch", "w", false, "After listing/getting the requested atespace(s), watch for changes")
 	getCmd.AddCommand(getAtespacesCmd)
 }

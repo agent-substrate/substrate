@@ -83,8 +83,14 @@ kubectl ate get actors -a <atespace>
 # List actors across all atespaces
 kubectl ate get actors -A
 
+# List actors, then print actors again when their state changes
+kubectl ate get actors -A --watch
+
 # Get a specific actor by name and output as raw YAML
 kubectl ate get actor <actor-name> --atespace <atespace> -o yaml
+
+# Get an actor, then watch it for lifecycle changes
+kubectl ate get actor <actor-name> --atespace <atespace> -w
 
 # List all physical workers and see which actors are assigned to them
 kubectl ate get workers
@@ -162,6 +168,9 @@ kubectl ate suspend actor my-actor -a <atespace>
 
 # Delete an actor.
 kubectl ate delete actor my-actor -a <atespace>
+
+# Wait up to 60 seconds for an actor to finish resuming.
+kubectl ate wait actor my-actor -a <atespace> --for=status=running --timeout=60s
 ```
 
 ### Logs

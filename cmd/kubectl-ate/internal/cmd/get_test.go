@@ -49,3 +49,18 @@ func TestGetCommandArgs(t *testing.T) {
 		})
 	}
 }
+
+func TestGetCommandsHaveWatchFlag(t *testing.T) {
+	commands := []*cobra.Command{getActorsCmd, getAtespacesCmd, getWorkersCmd}
+	for _, command := range commands {
+		t.Run(command.Name(), func(t *testing.T) {
+			flag := command.Flags().Lookup("watch")
+			if flag == nil {
+				t.Fatal("--watch flag is not registered")
+			}
+			if flag.Shorthand != "w" {
+				t.Errorf("--watch shorthand = %q, want w", flag.Shorthand)
+			}
+		})
+	}
+}

@@ -15,6 +15,7 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/agent-substrate/substrate/cmd/kubectl-ate/internal/printer"
@@ -22,6 +23,8 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/spf13/cobra"
 )
+
+var getWorkersWatch bool
 
 var getWorkersCmd = &cobra.Command{
 	Use:     "workers",
@@ -36,27 +39,27 @@ var getWorkersCmd = &cobra.Command{
 		}
 		defer apiClient.Close()
 
-		var allWorkers []*ateapipb.Worker
-		pageToken := ""
-		for {
-			resp, err := apiClient.ListWorkers(ctx, &ateapipb.ListWorkersRequest{
-				PageSize:  1000,
-				PageToken: pageToken,
+		fetch := func(ctx context.Context) ([]*ateapipb.Worker, error) {
+			return fetchAllPages(ctx, func(ctx context.Context, pageToken string) ([]*ateapipb.Worker, string, error) {
+				resp, err := apiClient.ListWorkers(ctx, &ateapipb.ListWorkersRequest{
+					PageSize:  1000,
+					PageToken: pageToken,
+				})
+				if err != nil {
+					return nil, "", fmt.Errorf("failed to list workers: %w", err)
+				}
+				return resp.GetWorkers(), resp.GetNextPageToken(), nil
 			})
-			if err != nil {
-				return fmt.Errorf("failed to list workers: %w", err)
-			}
-			allWorkers = append(allWorkers, resp.GetWorkers()...)
-
-			pageToken = resp.GetNextPageToken()
-			if pageToken == "" {
-				break
-			}
 		}
-		return printer.PrintWorkers(allWorkers, outputFmt)
+		return printOrWatch(ctx, cmd.OutOrStdout(), getWorkersWatch, outputFmt, fetch, printer.PrintWorkersTo, workerWatchKey)
 	},
 }
 
+func workerWatchKey(worker *ateapipb.Worker) string {
+	return worker.GetWorkerNamespace() + "/" + worker.GetWorkerPool() + "/" + worker.GetWorkerPod()
+}
+
 func init() {
+	getWorkersCmd.Flags().BoolVarP(&getWorkersWatch, "watch", "w", false, "After listing the requested workers, watch for changes")
 	getCmd.AddCommand(getWorkersCmd)
 }
