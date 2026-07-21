@@ -88,7 +88,7 @@ func TestSyncer_Lifecycle(t *testing.T) {
 	defer cleanup()
 
 	// 1. Verify no workers in Redis initially
-	workers, err := persistence.ListWorkers(context.Background())
+	workers, _, err := persistence.ListWorkers(context.Background(), 1000, "")
 	if err != nil {
 		t.Fatalf("failed to list workers: %v", err)
 	}

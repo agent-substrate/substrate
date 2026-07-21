@@ -48,6 +48,10 @@ const (
 	ReasonFaileSaveSnapshot       Reason = "FAILED_SAVE_SNAPSHOT"
 	ReasonInvalidObjectURL        Reason = "INVALID_OBJECT_URL"
 	ReasonFailedGetExternalObject Reason = "FAILED_GET_EXTERNAL_OBJECT"
+	// ReasonInvalidContainerConfig marks a container whose configuration cannot
+	// produce a runnable process (e.g. the resolved argv is empty because the
+	// image defines no ENTRYPOINT/CMD and the ActorTemplate sets no command/args).
+	ReasonInvalidContainerConfig Reason = "INVALID_CONTAINER_CONFIG"
 )
 
 // MetadataKeyActorCrashed marks (in ErrorInfo.Metadata) a failure that requires

@@ -24,6 +24,7 @@ import (
 	"os"
 	"os/exec"
 
+	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/reaper"
 	"golang.org/x/sys/unix"
 )
 
@@ -49,7 +50,7 @@ func MergeSparseOverlay(ctx context.Context, baseFile, deltaFile, outFile string
 	// outFile := sparse copy of baseFile (preserves holes so it stays sparse).
 	tmp := outFile + ".merge.tmp"
 	_ = os.Remove(tmp)
-	if o, err := exec.CommandContext(ctx, "cp", "--sparse=always", baseFile, tmp).CombinedOutput(); err != nil {
+	if o, err := reaper.RunCombined(exec.CommandContext(ctx, "cp", "--sparse=always", baseFile, tmp)); err != nil {
 		return fmt.Errorf("cp base->tmp: %w: %s", err, o)
 	}
 

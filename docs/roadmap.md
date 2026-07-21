@@ -70,7 +70,7 @@ Below is a collection of finer-grained efforts which we believe align with the a
 
 ### Observability
 
-* Session-Aware Telemetry Correlation: Automated OTLP export where all logs, metrics, and traces are natively tagged with the Substrate Actor ID and worker ID.
+* Session-Aware Telemetry Correlation: Automated OTLP export where all logs, metrics, and traces are natively tagged with the Substrate actor name and worker ID.
 * Prometheus metrics
 
 ### Performance and Reliability

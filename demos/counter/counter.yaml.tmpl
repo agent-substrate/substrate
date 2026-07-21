@@ -42,7 +42,6 @@ spec:
   containers:
   - name: counter
     image: ko://github.com/agent-substrate/substrate/demos/counter
-    command: ["/ko-app/counter"]
     readyz:
       httpGet:
         path: /readyz

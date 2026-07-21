@@ -31,6 +31,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/reaper"
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/third_party/kata/agentpb"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 )
@@ -134,8 +135,8 @@ func ReconstructSharedDirFromImage(ctx context.Context, bundleRootfs, restoreID,
 	dst := filepath.Join(SharedDir(restoreID), cid, "rootfs")
 	// Drop any stale bind first (lazy if busy), then ensure a clean mountpoint. Not
 	// RemoveAll: that would chase a live bind into bundleRootfs.
-	if err := exec.Command("umount", dst).Run(); err != nil {
-		_ = exec.Command("umount", "-l", dst).Run()
+	if err := reaper.Run(exec.Command("umount", dst)); err != nil {
+		_ = reaper.Run(exec.Command("umount", "-l", dst))
 	}
 	if err := os.MkdirAll(dst, 0o755); err != nil {
 		return fmt.Errorf("creating shared dir %q: %w", dst, err)
@@ -143,7 +144,7 @@ func ReconstructSharedDirFromImage(ctx context.Context, bundleRootfs, restoreID,
 	cmd := exec.CommandContext(ctx, "mount", "--bind", bundleRootfs, dst)
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
+	if err := reaper.Run(cmd); err != nil {
 		return fmt.Errorf("bind-mounting image rootfs %q -> %q: %w (%s)", bundleRootfs, dst, err, strings.TrimSpace(stderr.String()))
 	}
 	// Ensure the standard OCI mountpoints exist even for minimal images: the container
@@ -157,7 +158,7 @@ func ReconstructSharedDirFromImage(ctx context.Context, bundleRootfs, restoreID,
 	ro := exec.CommandContext(ctx, "mount", "-o", "remount,bind,ro", dst)
 	var roErr strings.Builder
 	ro.Stderr = &roErr
-	if err := ro.Run(); err != nil {
+	if err := reaper.Run(ro); err != nil {
 		return fmt.Errorf("remounting overlay lower read-only %q: %w (%s)", dst, err, strings.TrimSpace(roErr.String()))
 	}
 	return nil

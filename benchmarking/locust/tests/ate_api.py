@@ -61,14 +61,18 @@ class AteAPIUser(User):
             print(f"Failed to ensure atespace {ATESPACE}: {e}")
 
         # Call CreateActor
-        self.actor_id = str(uuid.uuid4())
-        self.actor_ref = ateapi_pb2.ActorRef(atespace=ATESPACE, name=self.actor_id)
+        self.actor_name = str(uuid.uuid4())
+        self.actor_ref = ateapi_pb2.ObjectRef(atespace=ATESPACE, name=self.actor_name)
         try:
             self.stub.CreateActor(
                 ateapi_pb2.CreateActorRequest(
-                    actor_ref=self.actor_ref,
-                    actor_template_namespace="ate-demo-counter",
-                    actor_template_name="counter"
+                    actor=ateapi_pb2.Actor(
+                        metadata=ateapi_pb2.ResourceMetadata(
+                            atespace=ATESPACE, name=self.actor_name
+                        ),
+                        actor_template_namespace="ate-demo-counter",
+                        actor_template_name="counter",
+                    )
                 )
             )
         except Exception as e:
@@ -78,7 +82,7 @@ class AteAPIUser(User):
         update_user_count(-1, self.__class__.__name__)
         try:
             self.stub.SuspendActor(
-                ateapi_pb2.SuspendActorRequest(actor_ref=self.actor_ref)
+                ateapi_pb2.SuspendActorRequest(actor=self.actor_ref)
             )
         except Exception as e:
             print(f"Failed to suspend actor: {e}")
@@ -89,7 +93,7 @@ class AteAPIUser(User):
         try:
             with traced_grpc("GetActor", self.__class__.__name__) as metadata:
                 _, metadata.call = self.stub.GetActor.with_call(
-                    ateapi_pb2.GetActorRequest(actor_ref=self.actor_ref),
+                    ateapi_pb2.GetActorRequest(actor=self.actor_ref),
                     metadata=metadata,
                 )
         except Exception:
@@ -98,7 +102,7 @@ class AteAPIUser(User):
         try:
             with traced_grpc("ResumeActor", self.__class__.__name__) as metadata:
                 _, metadata.call = self.stub.ResumeActor.with_call(
-                    ateapi_pb2.ResumeActorRequest(actor_ref=self.actor_ref),
+                    ateapi_pb2.ResumeActorRequest(actor=self.actor_ref),
                     metadata=metadata,
                 )
         except Exception:
@@ -107,7 +111,7 @@ class AteAPIUser(User):
         try:
             with traced_grpc("SuspendActor", self.__class__.__name__) as metadata:
                 _, metadata.call = self.stub.SuspendActor.with_call(
-                    ateapi_pb2.SuspendActorRequest(actor_ref=self.actor_ref),
+                    ateapi_pb2.SuspendActorRequest(actor=self.actor_ref),
                     metadata=metadata,
                 )
         except Exception:

@@ -168,6 +168,30 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 				Containers: []*ateletpb.Container{{Name: "main", Image: "main"}},
 			},
 		},
+		{
+			name: "maps command and args",
+			template: &atev1alpha1.ActorTemplate{
+				ObjectMeta: metav1.ObjectMeta{Name: "tmpl1", Namespace: "agent-ns"},
+				Spec: atev1alpha1.ActorTemplateSpec{
+					Containers: []atev1alpha1.Container{
+						{
+							Name:    "main",
+							Image:   "main",
+							Command: []string{"/entrypoint"},
+							Args:    []string{"--foo", "--bar"},
+						},
+					},
+				},
+			},
+			want: &ateletpb.WorkloadSpec{
+				Containers: []*ateletpb.Container{{
+					Name:    "main",
+					Image:   "main",
+					Command: []string{"/entrypoint"},
+					Args:    []string{"--foo", "--bar"},
+				}},
+			},
+		},
 	}
 
 	for _, tt := range tests {
