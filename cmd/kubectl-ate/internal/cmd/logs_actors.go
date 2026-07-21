@@ -136,7 +136,7 @@ func (r *LogsActorRunner) runOneShot(ctx context.Context, actorName string) erro
 	scanner.Buffer(buf, 1024*1024) // Support up to 1MB lines
 	for scanner.Scan() {
 		line := scanner.Text()
-		filterAndDisplayLogLine(line, actorName, r.stdout)
+		filterAndDisplayLogLine(line, r.atespace, actorName, r.stdout)
 	}
 	if err := scanner.Err(); err != nil {
 		return fmt.Errorf("error reading log stream: %w", err)
@@ -213,7 +213,7 @@ func (r *LogsActorRunner) runFollow(ctx context.Context, actorName string) error
 		scanner.Buffer(buf, 1024*1024) // Support up to 1MB lines
 		for scanner.Scan() {
 			line := scanner.Text()
-			logTime, _ := filterAndDisplayLogLine(line, actorName, r.stdout)
+			logTime, _ := filterAndDisplayLogLine(line, r.atespace, actorName, r.stdout)
 			if !logTime.IsZero() {
 				lastSeenTime = logTime
 			}
@@ -306,7 +306,7 @@ func runLogsActor(cmd *cobra.Command, args []string) error {
 	return runner.Run(ctx, actorName)
 }
 
-func filterAndDisplayLogLine(line, targetActorName string, w io.Writer) (time.Time, bool) {
+func filterAndDisplayLogLine(line, targetAtespace, targetActorName string, w io.Writer) (time.Time, bool) {
 	var m map[string]any
 	dec := json.NewDecoder(strings.NewReader(line))
 	dec.UseNumber()
@@ -323,19 +323,23 @@ func filterAndDisplayLogLine(line, targetActorName string, w io.Writer) (time.Ti
 		}
 	}
 
-	var actorName string
+	var atespace, actorName string
 	for _, labelKey := range []string{"logging.googleapis.com/labels", "labels"} {
 		if labelsAny, ok := m[labelKey]; ok {
 			if labels, ok := labelsAny.(map[string]any); ok {
 				if name, ok := labels["ate.dev/actor_name"].(string); ok && name != "" {
 					actorName = name
+					atespace, _ = labels["ate.dev/actor_atespace"].(string)
 					break
 				}
 			}
 		}
 	}
 
-	matched := (actorName != "" && actorName == targetActorName)
+	// Actor names are only unique within an atespace, and a worker pod can host
+	// actors from different atespaces over time, so match on both.
+	matched := (actorName != "" && actorName == targetActorName &&
+		targetAtespace != "" && atespace == targetAtespace)
 
 	if !matched {
 		return logTime, false
