@@ -58,7 +58,6 @@ spec:
   containers:
   - name: counter
     image: ko://github.com/agent-substrate/substrate/demos/counter
-    command: ["/ko-app/counter"]
   workerSelector:
     matchLabels:
       workload: multi-template-shared
@@ -75,7 +74,6 @@ spec:
   containers:
   - name: fspersist
     image: ko://github.com/agent-substrate/substrate/demos/multi-template/fspersist
-    command: ["/ko-app/fspersist"]
   workerSelector:
     matchLabels:
       workload: multi-template-shared

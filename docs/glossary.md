@@ -23,7 +23,7 @@ These are not Kubernetes objects; they live in the control-plane database
 because they change too frequently for etcd.
 
 - **Actor**: a single instance derived from an `ActorTemplate`, identified by a
-  DNS-1123 actor ID. It is the unit that is suspended and resumed, and it moves
+  DNS-1123 name. It is the unit that is suspended and resumed, and it moves
   between workers over its lifetime. An Actor record tracks its lifecycle
   status and snapshot references.
 
@@ -114,5 +114,5 @@ because they change too frequently for etcd.
 ## Networking
 
 - **Uniform DNS Mesh**: every Actor is reachable at a uniform address,
-  `<actor-id>.<atespace>.actors.resources.substrate.ate.dev`, resolved by atenet. Traffic to
+  `<actor-name>.<atespace>.actors.resources.substrate.ate.dev`, resolved by atenet. Traffic to
   that name is routed (and the Actor resumed if needed) automatically.

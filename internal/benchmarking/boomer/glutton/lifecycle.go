@@ -126,10 +126,10 @@ func (r *taskRuntime) iterate() {
 func (r *taskRuntime) startUser(ctx context.Context) (*gluttonUser, error) {
 	u := &gluttonUser{
 		cfg:         r.cfg,
-		actorID:     "sb-" + uuid.NewString(),
+		actorName:   "sb-" + uuid.NewString(),
 		firstResume: true,
 	}
-	u.hostHeader = u.actorID + "." + u.cfg.Atespace + "." + actorDomain
+	u.hostHeader = u.actorName + "." + u.cfg.Atespace + "." + actorDomain
 	bmetrics.UpdateUsers(userClass, 1)
 	if err := u.ensureAtespace(ctx); err != nil {
 		bmetrics.UpdateUsers(userClass, -1)
@@ -169,14 +169,14 @@ func (r *taskRuntime) dynamicWait() time.Duration {
 
 type gluttonUser struct {
 	cfg          *Config
-	actorID      string
+	actorName    string
 	hostHeader   string
 	firstResume  bool
 	actorRunning bool
 }
 
 func (u *gluttonUser) ref() *ateapipb.ObjectRef {
-	return &ateapipb.ObjectRef{Atespace: u.cfg.Atespace, Name: u.actorID}
+	return &ateapipb.ObjectRef{Atespace: u.cfg.Atespace, Name: u.actorName}
 }
 
 // ensureAtespace creates the configured atespace, swallowing AlreadyExists
@@ -206,7 +206,7 @@ func (u *gluttonUser) create(ctx context.Context) error {
 	return u.tracedCall(ctx, "CreateActor", func(callCtx context.Context, tr *metadata.MD) error {
 		_, err := u.cfg.APIStub.CreateActor(callCtx, &ateapipb.CreateActorRequest{
 			Actor: &ateapipb.Actor{
-				Metadata:               &ateapipb.ResourceMetadata{Atespace: u.cfg.Atespace, Name: u.actorID},
+				Metadata:               &ateapipb.ResourceMetadata{Atespace: u.cfg.Atespace, Name: u.actorName},
 				ActorTemplateNamespace: templateNS,
 				ActorTemplateName:      templateName,
 			},

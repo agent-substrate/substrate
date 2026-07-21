@@ -29,9 +29,9 @@ var (
 )
 
 var getActorsCmd = &cobra.Command{
-	Use:     "actors <actor-name>",
+	Use:     "actors <actor-name ...>",
 	Aliases: []string{"actor"},
-	Short:   "List all actors or get a specific actor",
+	Short:   "List all actors or get one or more actors",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
 
@@ -42,21 +42,26 @@ var getActorsCmd = &cobra.Command{
 		}
 		defer apiClient.Close()
 
-		// 2. Handle Get Single Actor
+		// 2. Handle Get Actors
 		if len(args) > 0 {
-			// A single actor is addressed by (atespace, name), so the atespace is
+			// An actor is addressed by (atespace, name), so the atespace is
 			// mandatory and "all atespaces" is meaningless here.
 			if getActorsAllAtespaces {
-				return fmt.Errorf("-A/--all-atespaces cannot be used when getting a specific actor; pass --atespace")
+				return fmt.Errorf("-A/--all-atespaces cannot be used when getting actors; pass --atespace")
 			}
 			if getActorsAtespaceFlag == "" {
-				return fmt.Errorf("--atespace is required when getting a specific actor")
+				return fmt.Errorf("--atespace is required when getting actors")
 			}
-			resp, err := apiClient.GetActor(ctx, &ateapipb.GetActorRequest{Actor: &ateapipb.ObjectRef{Atespace: getActorsAtespaceFlag, Name: args[0]}})
-			if err != nil {
-				return fmt.Errorf("failed to get actor: %w", err)
+
+			actors := make([]*ateapipb.Actor, 0, len(args))
+			for _, actorName := range args {
+				resp, err := apiClient.GetActor(ctx, &ateapipb.GetActorRequest{Actor: &ateapipb.ObjectRef{Atespace: getActorsAtespaceFlag, Name: actorName}})
+				if err != nil {
+					return fmt.Errorf("failed to get actor %q: %w", actorName, err)
+				}
+				actors = append(actors, resp)
 			}
-			return printer.PrintActor(resp, outputFmt)
+			return printer.PrintActors(actors, outputFmt)
 		}
 
 		// Listing requires exactly one of --atespace (one atespace) or -A (all
@@ -94,7 +99,7 @@ var getActorsCmd = &cobra.Command{
 }
 
 func init() {
-	getActorsCmd.Flags().StringVarP(&getActorsAtespaceFlag, "atespace", "a", "", "Atespace to list/get actors in. Required for a single actor; for listing, use this or -A.")
+	getActorsCmd.Flags().StringVarP(&getActorsAtespaceFlag, "atespace", "a", "", "Atespace to list/get actors in. Required when getting actors; for listing, use this or -A.")
 	getActorsCmd.Flags().BoolVarP(&getActorsAllAtespaces, "all-atespaces", "A", false, "List actors across all atespaces (listing only; mutually exclusive with --atespace)")
 	getCmd.AddCommand(getActorsCmd)
 }

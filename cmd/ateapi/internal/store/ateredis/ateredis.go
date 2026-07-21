@@ -49,7 +49,6 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 
@@ -156,35 +155,20 @@ func (s *Persistence) AtespaceExists(ctx context.Context, name string) (bool, er
 	return n > 0, nil
 }
 
-func (s *Persistence) ListAtespaces(ctx context.Context) ([]*ateapipb.Atespace, error) {
+func (s *Persistence) ListAtespaces(ctx context.Context, pageSize int32, pageTokenStr string) ([]*ateapipb.Atespace, string, error) {
 	var result []*ateapipb.Atespace
-	var mu sync.Mutex
-
-	err := s.rdb.ForEachMaster(ctx, func(ctx context.Context, master *redis.Client) error {
-		iter := master.Scan(ctx, 0, "atespace:*", 0).Iterator()
-		for iter.Next(ctx) {
-			key := iter.Val()
-			getCmd := master.Get(ctx, key)
-			if getCmd.Err() != nil {
-				return fmt.Errorf("while getting atespace %q: %w", key, getCmd.Err())
-			}
-			atespace := &ateapipb.Atespace{}
-			if err := protojson.Unmarshal([]byte(getCmd.Val()), atespace); err != nil {
-				return fmt.Errorf("in protojson.Unmarshal: %w", err)
-			}
-			mu.Lock()
-			result = append(result, atespace)
-			mu.Unlock()
+	nextToken, err := s.listPage(ctx, "atespace:*", pageSize, pageTokenStr, func(ctx context.Context, master *redis.Client, keys []string) (int, error) {
+		atespaces, err := fetchProtos(ctx, master, keys, func() *ateapipb.Atespace { return &ateapipb.Atespace{} })
+		if err != nil {
+			return 0, err
 		}
-		if err := iter.Err(); err != nil {
-			return fmt.Errorf("error from iterator: %w", err)
-		}
-		return nil
+		result = append(result, atespaces...)
+		return len(atespaces), nil
 	})
 	if err != nil {
-		return nil, fmt.Errorf("while iterating all redis master: %w", err)
+		return nil, "", err
 	}
-	return result, nil
+	return result, nextToken, nil
 }
 
 // DeleteAtespace deletes an empty atespace. Returns store.ErrNotFound if the
@@ -599,58 +583,34 @@ func (s *Persistence) UpdateActor(ctx context.Context, actor *ateapipb.Actor, ex
 	return dbActor, nil
 }
 
-func (s *Persistence) ListWorkers(ctx context.Context) ([]*ateapipb.Worker, error) {
+func (s *Persistence) ListWorkers(ctx context.Context, pageSize int32, pageTokenStr string) ([]*ateapipb.Worker, string, error) {
 	var result []*ateapipb.Worker
-	var mu sync.Mutex
-
-	// Iterate through every Primary (Master) node in the cluster
-	err := s.rdb.ForEachMaster(ctx, func(ctx context.Context, master *redis.Client) error {
-		iter := master.Scan(ctx, 0, "worker:*", 0).Iterator()
-		for iter.Next(ctx) {
-			workerKey := iter.Val()
-			parts := strings.Split(workerKey, ":")
-			if len(parts) != 4 {
-				return fmt.Errorf("bad key format %q", workerKey)
-			}
-
-			getCmd := master.Get(ctx, workerKey)
-			if getCmd.Err() != nil {
-				return fmt.Errorf("while getting worker %q: %w", workerKey, getCmd.Err())
-			}
-
-			worker := &ateapipb.Worker{}
-			if err := protojson.Unmarshal([]byte(getCmd.Val()), worker); err != nil {
-				return fmt.Errorf("in protojson.Unmarshal: %w", err)
-			}
-
-			mu.Lock()
-			result = append(result, worker)
-			mu.Unlock()
+	nextToken, err := s.listPage(ctx, "worker:*", pageSize, pageTokenStr, func(ctx context.Context, master *redis.Client, keys []string) (int, error) {
+		workers, err := fetchProtos(ctx, master, keys, func() *ateapipb.Worker { return &ateapipb.Worker{} })
+		if err != nil {
+			return 0, err
 		}
-		if err := iter.Err(); err != nil {
-			return fmt.Errorf("error from iterator: %w", err)
-		}
-
-		return nil
+		result = append(result, workers...)
+		return len(workers), nil
 	})
 	if err != nil {
-		return nil, fmt.Errorf("while iterating all redis master: %w", err)
+		return nil, "", err
 	}
-	return result, nil
+	return result, nextToken, nil
 }
 
-type listActorsPageToken struct {
+type pageToken struct {
 	ShardHash string `json:"shard_hash"`
 	Cursor    uint64 `json:"cursor"`
 }
 
-func encodePageToken(token listActorsPageToken) string {
+func encodePageToken(token pageToken) string {
 	b, _ := json.Marshal(token)
 	return base64.StdEncoding.EncodeToString(b)
 }
 
-func decodePageToken(tokenStr string) (listActorsPageToken, error) {
-	var token listActorsPageToken
+func decodePageToken(tokenStr string) (pageToken, error) {
+	var token pageToken
 	if tokenStr == "" {
 		return token, nil
 	}
@@ -671,41 +631,58 @@ func hashShardAddr(addr string) string {
 // across all atespaces (SCAN actor:*); a non-empty atespace restricts the scan to
 // that atespace (SCAN actor:<atespace>:*).
 func (s *Persistence) ListActors(ctx context.Context, atespace string, pageSize int32, pageTokenStr string) ([]*ateapipb.Actor, string, error) {
+	var result []*ateapipb.Actor
+	nextToken, err := s.listPage(ctx, actorScanPattern(atespace), pageSize, pageTokenStr, func(ctx context.Context, master *redis.Client, keys []string) (int, error) {
+		actors, err := fetchProtos(ctx, master, keys, func() *ateapipb.Actor { return &ateapipb.Actor{} })
+		if err != nil {
+			return 0, err
+		}
+		result = append(result, actors...)
+		return len(actors), nil
+	})
+	if err != nil {
+		return nil, "", err
+	}
+	return result, nextToken, nil
+}
+
+// listPage SCANs pattern across the redis masters from the page token, feeding key batches to collect and returns the next-page token.
+func (s *Persistence) listPage(ctx context.Context, pattern string, pageSize int32, pageTokenStr string, collect func(ctx context.Context, master *redis.Client, keys []string) (int, error)) (string, error) {
 	token, err := decodePageToken(pageTokenStr)
 	if err != nil {
-		return nil, "", fmt.Errorf("invalid page token: %w", err)
+		return "", fmt.Errorf("invalid page token: %w", err)
 	}
 
 	masters, err := s.getSortedMasters(ctx)
 	if err != nil {
-		return nil, "", err
+		return "", err
 	}
 
 	startIndex, err := findStartingShard(masters, token.ShardHash)
 	if err != nil {
-		return nil, "", err
+		return "", err
 	}
 
-	var result []*ateapipb.Actor
 	i := startIndex
 	cursor := token.Cursor
+	collected := 0
 
-	for i < len(masters) && len(result) < int(pageSize) {
+	for i < len(masters) && collected < int(pageSize) {
 		master := masters[i]
-		remaining := int(pageSize) - len(result)
+		remaining := int(pageSize) - collected
 
 		var keys []string
-		keys, cursor, err = master.Scan(ctx, cursor, actorScanPattern(atespace), int64(remaining)).Result()
+		keys, cursor, err = master.Scan(ctx, cursor, pattern, int64(remaining)).Result()
 		if err != nil {
-			return nil, "", fmt.Errorf("while scanning shard %s: %w", master.Options().Addr, err)
+			return "", fmt.Errorf("while scanning shard %s: %w", master.Options().Addr, err)
 		}
 
 		if len(keys) > 0 {
-			actors, err := s.fetchActors(ctx, master, keys)
+			n, err := collect(ctx, master, keys)
 			if err != nil {
-				return nil, "", err
+				return "", err
 			}
-			result = append(result, actors...)
+			collected += n
 		}
 
 		if cursor == 0 {
@@ -715,13 +692,13 @@ func (s *Persistence) ListActors(ctx context.Context, atespace string, pageSize 
 
 	var nextToken string
 	if i < len(masters) {
-		nextToken = encodePageToken(listActorsPageToken{
+		nextToken = encodePageToken(pageToken{
 			ShardHash: hashShardAddr(masters[i].Options().Addr),
 			Cursor:    cursor,
 		})
 	}
 
-	return result, nextToken, nil
+	return nextToken, nil
 }
 
 func (s *Persistence) getSortedMasters(ctx context.Context) ([]*redis.Client, error) {
@@ -756,7 +733,8 @@ func findStartingShard(masters []*redis.Client, shardHash string) (int, error) {
 	return 0, fmt.Errorf("topology changed: shard with hash %s not found (aborted)", shardHash)
 }
 
-func (s *Persistence) fetchActors(ctx context.Context, master *redis.Client, keys []string) ([]*ateapipb.Actor, error) {
+// fetchProtos fetches keys into newMsg-created messages.
+func fetchProtos[M proto.Message](ctx context.Context, master *redis.Client, keys []string, newMsg func() M) ([]M, error) {
 	cmds, err := master.Pipelined(ctx, func(pipe redis.Pipeliner) error {
 		for _, key := range keys {
 			pipe.Get(ctx, key)
@@ -767,7 +745,7 @@ func (s *Persistence) fetchActors(ctx context.Context, master *redis.Client, key
 		return nil, fmt.Errorf("while fetching keys in shard %s: %w", master.Options().Addr, err)
 	}
 
-	var actors []*ateapipb.Actor
+	var out []M
 	for _, cmd := range cmds {
 		getCmd, ok := cmd.(*redis.StringCmd)
 		if !ok {
@@ -777,16 +755,16 @@ func (s *Persistence) fetchActors(ctx context.Context, master *redis.Client, key
 			if errors.Is(getCmd.Err(), redis.Nil) {
 				continue
 			}
-			return nil, fmt.Errorf("while getting actor: %w", getCmd.Err())
+			return nil, fmt.Errorf("while getting key: %w", getCmd.Err())
 		}
 
-		actor := &ateapipb.Actor{}
-		if err := protojson.Unmarshal([]byte(getCmd.Val()), actor); err != nil {
+		msg := newMsg()
+		if err := protojson.Unmarshal([]byte(getCmd.Val()), msg); err != nil {
 			return nil, fmt.Errorf("in protojson.Unmarshal: %w", err)
 		}
-		actors = append(actors, actor)
+		out = append(out, msg)
 	}
-	return actors, nil
+	return out, nil
 }
 
 func (s *Persistence) AcquireLock(ctx context.Context, key string, value string, ttl time.Duration) (bool, error) {

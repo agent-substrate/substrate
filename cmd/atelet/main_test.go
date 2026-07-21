@@ -96,6 +96,7 @@ func validRunRequest() *ateletpb.RunRequest {
 		ActorTemplateNamespace: "ate-demo",
 		ActorTemplateName:      "counter",
 		TargetAteomUid:         "422938ba-8860-4983-a25d-d6bcb0a69d4e",
+		ActorUid:               "123e4567-e89b-12d3-a456-426614174000",
 		Spec:                   &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{Name: "worker"}}},
 	}
 }
@@ -107,6 +108,7 @@ func validCheckpointRequest() *ateletpb.CheckpointRequest {
 		ActorTemplateNamespace: "ate-demo",
 		ActorTemplateName:      "counter",
 		TargetAteomUid:         "422938ba-8860-4983-a25d-d6bcb0a69d4e",
+		ActorUid:               "123e4567-e89b-12d3-a456-426614174000",
 		Spec:                   &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{Name: "worker"}}},
 		Type:                   ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
 		Config: &ateletpb.CheckpointRequest_ExternalConfig{
@@ -125,6 +127,7 @@ func validRestoreRequest() *ateletpb.RestoreRequest {
 		ActorTemplateNamespace: "ate-demo",
 		ActorTemplateName:      "counter",
 		TargetAteomUid:         "422938ba-8860-4983-a25d-d6bcb0a69d4e",
+		ActorUid:               "123e4567-e89b-12d3-a456-426614174000",
 		Spec:                   &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{Name: "worker"}}},
 		Type:                   ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
 		Config: &ateletpb.RestoreRequest_ExternalConfig{
@@ -146,6 +149,7 @@ func TestValidateRunRequest(t *testing.T) {
 		{"invalid ateom uid", func(r *ateletpb.RunRequest) { r.TargetAteomUid = "../escape" }, true},
 		{"invalid atespace", func(r *ateletpb.RunRequest) { r.Atespace = "../escape" }, true},
 		{"invalid actor name", func(r *ateletpb.RunRequest) { r.ActorName = "../escape" }, true},
+		{"invalid actor uid", func(r *ateletpb.RunRequest) { r.ActorUid = "../escape" }, true},
 		{"invalid actor template namespace", func(r *ateletpb.RunRequest) { r.ActorTemplateNamespace = "Not_Valid" }, true},
 		{"invalid actor template name", func(r *ateletpb.RunRequest) { r.ActorTemplateName = "Not_Valid" }, true},
 		{"invalid container name", func(r *ateletpb.RunRequest) {
@@ -185,6 +189,7 @@ func TestValidateCheckpointRequest(t *testing.T) {
 		{"invalid ateom uid", makeReq(func(r *ateletpb.CheckpointRequest) { r.TargetAteomUid = "../escape" }), true},
 		{"invalid atespace", makeReq(func(r *ateletpb.CheckpointRequest) { r.Atespace = "../escape" }), true},
 		{"invalid actor name", makeReq(func(r *ateletpb.CheckpointRequest) { r.ActorName = "../escape" }), true},
+		{"invalid actor uid", makeReq(func(r *ateletpb.CheckpointRequest) { r.ActorUid = "../escape" }), true},
 		{"invalid actor template namespace", makeReq(func(r *ateletpb.CheckpointRequest) { r.ActorTemplateNamespace = "Not_Valid" }), true},
 		{"invalid actor template name", makeReq(func(r *ateletpb.CheckpointRequest) { r.ActorTemplateName = "Not_Valid" }), true},
 		{"invalid container name", makeReq(func(r *ateletpb.CheckpointRequest) {
@@ -227,6 +232,7 @@ func TestValidateRestoreRequest(t *testing.T) {
 		{"invalid ateom uid", makeReq(func(r *ateletpb.RestoreRequest) { r.TargetAteomUid = "../escape" }), true},
 		{"invalid atespace", makeReq(func(r *ateletpb.RestoreRequest) { r.Atespace = "../escape" }), true},
 		{"invalid actor name", makeReq(func(r *ateletpb.RestoreRequest) { r.ActorName = "../escape" }), true},
+		{"invalid actor uid", makeReq(func(r *ateletpb.RestoreRequest) { r.ActorUid = "../escape" }), true},
 		{"invalid actor template namespace", makeReq(func(r *ateletpb.RestoreRequest) { r.ActorTemplateNamespace = "Not_Valid" }), true},
 		{"invalid actor template name", makeReq(func(r *ateletpb.RestoreRequest) { r.ActorTemplateName = "Not_Valid" }), true},
 		{"invalid container name", makeReq(func(r *ateletpb.RestoreRequest) {
@@ -415,7 +421,7 @@ func TestRPCBoundariesReject(t *testing.T) {
 	s := &AteomHerder{}
 	ctx := context.Background()
 	badUID := "../escape" // valid actor ref, invalid ateom UID
-	const okAtespace, okID = "ate-demo", "counter-1"
+	const okAtespace, okID, okActorUID = "ate-demo", "counter-1", "123e4567-e89b-12d3-a456-426614174000"
 	okSpec := &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{Name: "worker"}}}
 
 	wantInvalidArgument := func(t *testing.T, rpc string, err error) {
@@ -432,21 +438,21 @@ func TestRPCBoundariesReject(t *testing.T) {
 	t.Run("Run", func(t *testing.T) {
 		_, err := s.Run(ctx, &ateletpb.RunRequest{
 			Atespace: okAtespace, ActorName: okID,
-			TargetAteomUid: badUID, Spec: okSpec,
+			ActorUid: okActorUID, TargetAteomUid: badUID, Spec: okSpec,
 		})
 		wantInvalidArgument(t, "Run", err)
 	})
 	t.Run("Checkpoint", func(t *testing.T) {
 		_, err := s.Checkpoint(ctx, &ateletpb.CheckpointRequest{
 			Atespace: okAtespace, ActorName: okID,
-			TargetAteomUid: badUID, Spec: okSpec,
+			ActorUid: okActorUID, TargetAteomUid: badUID, Spec: okSpec,
 		})
 		wantInvalidArgument(t, "Checkpoint", err)
 	})
 	t.Run("Restore", func(t *testing.T) {
 		_, err := s.Restore(ctx, &ateletpb.RestoreRequest{
 			Atespace: okAtespace, ActorName: okID,
-			TargetAteomUid: badUID, Spec: okSpec,
+			ActorUid: okActorUID, TargetAteomUid: badUID, Spec: okSpec,
 		})
 		wantInvalidArgument(t, "Restore", err)
 	})

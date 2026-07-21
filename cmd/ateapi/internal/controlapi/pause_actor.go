@@ -30,6 +30,7 @@ func (s *Service) PauseActor(ctx context.Context, req *ateapipb.PauseActorReques
 	if err := validatePauseActorRequest(req); err != nil {
 		return nil, err
 	}
+	setSpanActorRefAttributes(ctx, req.GetActor().GetAtespace(), req.GetActor().GetName())
 
 	actor, err := s.actorWorkflow.PauseActor(ctx, req.GetActor().GetAtespace(), req.GetActor().GetName())
 	if err != nil {
@@ -42,6 +43,7 @@ func (s *Service) PauseActor(ctx context.Context, req *ateapipb.PauseActorReques
 		return nil, err
 	}
 
+	setSpanActorAttributes(ctx, actor)
 	return &ateapipb.PauseActorResponse{Actor: actor}, nil
 }
 
