@@ -467,7 +467,7 @@ func TestListWorkers(t *testing.T) {
 		t.Fatalf("failed to create worker2: %v", err)
 	}
 
-	workers, err := s.ListWorkers(ctx)
+	workers, _, err := s.ListWorkers(ctx, 1000, "")
 	if err != nil {
 		t.Fatalf("ListWorkers failed: %v", err)
 	}
@@ -621,13 +621,96 @@ func TestListWorkers_Empty(t *testing.T) {
 	mr, s, ctx := setupTest(t)
 	defer mr.Close()
 
-	workers, err := s.ListWorkers(ctx)
+	workers, _, err := s.ListWorkers(ctx, 1000, "")
 	if err != nil {
 		t.Fatalf("ListWorkers failed: %v", err)
 	}
 
 	if len(workers) != 0 {
 		t.Errorf("expected 0 workers, got %d", len(workers))
+	}
+}
+
+func TestListWorkers_Pagination(t *testing.T) {
+	mr, s, ctx := setupTest(t)
+	defer mr.Close()
+
+	for i := 0; i < 5; i++ {
+		worker := &ateapipb.Worker{
+			WorkerNamespace: "ns1",
+			WorkerPool:      "pool1",
+			WorkerPod:       fmt.Sprintf("pod%d", i),
+		}
+		if err := s.CreateWorker(ctx, worker); err != nil {
+			t.Fatalf("failed to create worker %d: %v", i, err)
+		}
+	}
+
+	var allWorkers []*ateapipb.Worker
+	pageToken := ""
+
+	for {
+		workers, nextToken, err := s.ListWorkers(ctx, 2, pageToken)
+		if err != nil {
+			t.Fatalf("ListWorkers failed: %v", err)
+		}
+
+		allWorkers = append(allWorkers, workers...)
+		pageToken = nextToken
+		if pageToken == "" {
+			break
+		}
+	}
+
+	if len(allWorkers) != 5 {
+		t.Fatalf("expected 5 workers total, got %d", len(allWorkers))
+	}
+
+	seen := make(map[string]bool)
+	for _, w := range allWorkers {
+		if seen[w.GetWorkerPod()] {
+			t.Errorf("duplicate worker found in paginated results: %s", w.GetWorkerPod())
+		}
+		seen[w.GetWorkerPod()] = true
+	}
+}
+
+func TestListAtespaces_Pagination(t *testing.T) {
+	mr, s, ctx := setupTest(t)
+	defer mr.Close()
+
+	for i := 0; i < 5; i++ {
+		if _, err := s.CreateAtespace(ctx, newTestAtespace(fmt.Sprintf("team-%d", i))); err != nil {
+			t.Fatalf("failed to create atespace %d: %v", i, err)
+		}
+	}
+
+	var allAtespaces []*ateapipb.Atespace
+	pageToken := ""
+
+	for {
+		atespaces, nextToken, err := s.ListAtespaces(ctx, 2, pageToken)
+		if err != nil {
+			t.Fatalf("ListAtespaces failed: %v", err)
+		}
+
+		allAtespaces = append(allAtespaces, atespaces...)
+		pageToken = nextToken
+		if pageToken == "" {
+			break
+		}
+	}
+
+	if len(allAtespaces) != 5 {
+		t.Fatalf("expected 5 atespaces total, got %d", len(allAtespaces))
+	}
+
+	seen := make(map[string]bool)
+	for _, a := range allAtespaces {
+		if seen[a.GetMetadata().GetName()] {
+			t.Errorf("duplicate atespace found in paginated results: %s", a.GetMetadata().GetName())
+		}
+		seen[a.GetMetadata().GetName()] = true
 	}
 }
 
@@ -1038,7 +1121,7 @@ func TestListAtespaces(t *testing.T) {
 			t.Fatalf("CreateAtespace(%s) failed: %v", n, err)
 		}
 	}
-	got, err := s.ListAtespaces(ctx)
+	got, _, err := s.ListAtespaces(ctx, 1000, "")
 	if err != nil {
 		t.Fatalf("ListAtespaces failed: %v", err)
 	}
@@ -1060,7 +1143,7 @@ func TestListAtespaces_Empty(t *testing.T) {
 	mr, s, ctx := setupTest(t)
 	defer mr.Close()
 
-	got, err := s.ListAtespaces(ctx)
+	got, _, err := s.ListAtespaces(ctx, 1000, "")
 	if err != nil {
 		t.Fatalf("ListAtespaces failed: %v", err)
 	}
@@ -1314,5 +1397,134 @@ func TestListActors_MultiMaster_Pagination(t *testing.T) {
 			t.Errorf("duplicate actor found in paginated results: %s", a.GetMetadata().GetName())
 		}
 		seen[a.GetMetadata().GetName()] = true
+	}
+}
+
+// newMultiMasterStore returns a Persistence whose master iteration spans
+// numShards independent miniredis instances, plus a per-shard Persistence for
+// seeding data onto a specific shard.
+func newMultiMasterStore(t *testing.T, numShards int) (*Persistence, []*Persistence) {
+	t.Helper()
+	type shard struct {
+		client        *redis.Client
+		clusterClient *redis.ClusterClient
+	}
+	var shards []shard
+	for i := 0; i < numShards; i++ {
+		mr, err := miniredis.Run()
+		if err != nil {
+			t.Fatalf("failed to start miniredis %d: %v", i, err)
+		}
+		t.Cleanup(mr.Close)
+		client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+		clusterClient := redis.NewClusterClient(&redis.ClusterOptions{Addrs: []string{mr.Addr()}})
+		t.Cleanup(func() { client.Close() })
+		t.Cleanup(func() { clusterClient.Close() })
+		shards = append(shards, shard{client: client, clusterClient: clusterClient})
+	}
+	sort.Slice(shards, func(i, j int) bool {
+		return shards[i].client.Options().Addr < shards[j].client.Options().Addr
+	})
+	var clients []*redis.Client
+	var perShard []*Persistence
+	for _, sh := range shards {
+		clients = append(clients, sh.client)
+		perShard = append(perShard, &Persistence{rdb: sh.clusterClient})
+	}
+	fake := &concurrentMasterClient{redisClient: shards[0].clusterClient, masters: clients}
+	return &Persistence{rdb: fake}, perShard
+}
+
+// TestListWorkers_MultiMaster_Pagination mirrors
+// TestListActors_MultiMaster_Pagination for ListWorkers, sweeping page sizes
+// so page boundaries both do and do not align with shard boundaries (the
+// aligned case is the #425 shard-skip regression).
+func TestListWorkers_MultiMaster_Pagination(t *testing.T) {
+	ctx := context.Background()
+	const numShards = 3
+	for _, pageSize := range []int32{1, 2, 3, 4} {
+		t.Run(fmt.Sprintf("pageSize=%d", pageSize), func(t *testing.T) {
+			s, perShard := newMultiMasterStore(t, numShards)
+			for shardIdx, ps := range perShard {
+				for itemIdx := 0; itemIdx < 3; itemIdx++ {
+					worker := &ateapipb.Worker{
+						WorkerNamespace: "ns",
+						WorkerPool:      "pool",
+						WorkerPod:       fmt.Sprintf("pod-shard%d-item%d", shardIdx, itemIdx),
+					}
+					if err := ps.CreateWorker(ctx, worker); err != nil {
+						t.Fatalf("failed to seed worker: %v", err)
+					}
+				}
+			}
+
+			seen := make(map[string]bool)
+			pageToken := ""
+			for {
+				workers, next, err := s.ListWorkers(ctx, pageSize, pageToken)
+				if err != nil {
+					t.Fatalf("ListWorkers: %v", err)
+				}
+				for _, w := range workers {
+					if seen[w.GetWorkerPod()] {
+						t.Errorf("duplicate worker in paginated results: %s", w.GetWorkerPod())
+					}
+					seen[w.GetWorkerPod()] = true
+				}
+				if next == "" {
+					break
+				}
+				pageToken = next
+			}
+			if len(seen) != numShards*3 {
+				t.Fatalf("expected %d workers across %d shards, got %d", numShards*3, numShards, len(seen))
+			}
+		})
+	}
+}
+
+// TestListAtespaces_MultiMaster_Pagination mirrors
+// TestListWorkers_MultiMaster_Pagination for ListAtespaces.
+func TestListAtespaces_MultiMaster_Pagination(t *testing.T) {
+	ctx := context.Background()
+	const numShards = 3
+	for _, pageSize := range []int32{1, 2, 3, 4} {
+		t.Run(fmt.Sprintf("pageSize=%d", pageSize), func(t *testing.T) {
+			s, perShard := newMultiMasterStore(t, numShards)
+			for shardIdx, ps := range perShard {
+				for itemIdx := 0; itemIdx < 3; itemIdx++ {
+					atespace := &ateapipb.Atespace{
+						Metadata: &ateapipb.ResourceMetadata{
+							Name: fmt.Sprintf("space-shard%d-item%d", shardIdx, itemIdx),
+						},
+					}
+					if _, err := ps.CreateAtespace(ctx, atespace); err != nil {
+						t.Fatalf("failed to seed atespace: %v", err)
+					}
+				}
+			}
+
+			seen := make(map[string]bool)
+			pageToken := ""
+			for {
+				atespaces, next, err := s.ListAtespaces(ctx, pageSize, pageToken)
+				if err != nil {
+					t.Fatalf("ListAtespaces: %v", err)
+				}
+				for _, a := range atespaces {
+					if seen[a.GetMetadata().GetName()] {
+						t.Errorf("duplicate atespace in paginated results: %s", a.GetMetadata().GetName())
+					}
+					seen[a.GetMetadata().GetName()] = true
+				}
+				if next == "" {
+					break
+				}
+				pageToken = next
+			}
+			if len(seen) != numShards*3 {
+				t.Fatalf("expected %d atespaces across %d shards, got %d", numShards*3, numShards, len(seen))
+			}
+		})
 	}
 }

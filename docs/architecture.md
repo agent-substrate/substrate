@@ -292,7 +292,7 @@ classDiagram
         }
         class Worker {
             <<record>>
-            actorId
+            actorName
             podIP
         }
     }
@@ -344,9 +344,9 @@ A `WorkerPool` selects a **sandbox class** (`spec.sandboxClass`), and each class
 
 Handles session-aware routing and automatic re-animation.
 
-  * **Uniform DNS Mesh**: Substrate provides a location-transparent actor discovery scheme via a global DNS suffix (`<id>.<atespace>.actors.resources.substrate.ate.dev`).
+  * **Uniform DNS Mesh**: Substrate provides a location-transparent actor discovery scheme via a global DNS suffix (`<actor-name>.<atespace>.actors.resources.substrate.ate.dev`).
 
-  * **Routing**: The `atenet` router (powered by Envoy and an External Processing server) intercepts traffic destined for the mesh. It extracts the actor ID from the `Host` header, queries the Control Plane to determine the actor's current location, and triggers a `ResumeActor` workflow if the session is currently suspended.
+  * **Routing**: The `atenet` router (powered by Envoy and an External Processing server) intercepts traffic destined for the mesh. It extracts the actor name from the `Host` header, queries the Control Plane to determine the actor's current location, and triggers a `ResumeActor` workflow if the session is currently suspended.
 
   * **Latency**: The data plane is optimized for sub-100ms activation by bypassing Kubernetes' eventual consistency and performing atomic physical assignments.
 
@@ -369,7 +369,7 @@ sequenceDiagram
     Client->>DNS: resolve actor DNS name
     DNS-->>Client: router address
     Client->>Router: HTTP request (Host = actor)
-    Router->>API: ResumeActor(actorID)
+    Router->>API: ResumeActor(actorName)
     API->>Atelet: Restore
     Store-->>Atelet: download snapshot
     Atelet->>Ateom: RestoreWorkload
@@ -478,7 +478,7 @@ Agent Substrate is built on a **Defense-in-Depth** model:
 
   * **Request Authorization**: The system currently performs **Identity-Aware
     Routing** by utilizing a uniform DNS routing scheme
-    (`<actor id>.<atespace>.actors.resources.substrate.ate.dev`)
+    (`<actor-name>.<atespace>.actors.resources.substrate.ate.dev`)
     at the gateway to extract and validate actor identifiers from incoming traffic. This
     ensures requests are only routed to recognized, registered actors.
     Pluggable, granular authorization policies are planned for future

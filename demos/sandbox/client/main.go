@@ -60,14 +60,14 @@ func dialAteAPI(endpoint string) (ateapipb.ControlClient, *grpc.ClientConn, erro
 }
 
 func main() {
-	actorID := pflag.String("id", "", "ID of the sandbox actor (required)")
+	actorName := pflag.String("name", "", "Name of the sandbox actor (required)")
 	atespace := pflag.String("atespace", "", "Atespace the actor lives in (required)")
 	ateapiAddr := pflag.String("ateapi", "localhost:8080", "Address of the ateapi gRPC server")
 	atenetAddr := pflag.String("atenet", "localhost:8000", "Address of the atenet HTTP router")
 	pflag.Parse()
 
-	if *actorID == "" {
-		log.Fatal("--id is required")
+	if *actorName == "" {
+		log.Fatal("--name is required")
 	}
 	if *atespace == "" {
 		log.Fatal("--atespace is required")
@@ -93,8 +93,8 @@ func main() {
 	}
 	defer conn.Close()
 
-	log.Printf("Resuming actor %s...", *actorID)
-	_, err = cli.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: &ateapipb.ObjectRef{Atespace: *atespace, Name: *actorID}})
+	log.Printf("Resuming actor %s...", *actorName)
+	_, err = cli.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: &ateapipb.ObjectRef{Atespace: *atespace, Name: *actorName}})
 	if err != nil {
 		log.Fatalf("Failed to resume actor: %v", err)
 	}
@@ -102,9 +102,9 @@ func main() {
 
 	// Ensure we suspend the actor on exit
 	defer func() {
-		log.Printf("Suspending actor %s...", *actorID)
+		log.Printf("Suspending actor %s...", *actorName)
 		suspendCtx := context.Background()
-		_, err := cli.SuspendActor(suspendCtx, &ateapipb.SuspendActorRequest{Actor: &ateapipb.ObjectRef{Atespace: *atespace, Name: *actorID}})
+		_, err := cli.SuspendActor(suspendCtx, &ateapipb.SuspendActorRequest{Actor: &ateapipb.ObjectRef{Atespace: *atespace, Name: *actorName}})
 		if err != nil {
 			log.Printf("Failed to suspend actor: %v", err)
 		} else {
@@ -152,7 +152,7 @@ func main() {
 			}
 
 			// Send command to atenet router
-			output, err := runCommand(ctx, *atenetAddr, *atespace, *actorID, line)
+			output, err := runCommand(ctx, *atenetAddr, *atespace, *actorName, line)
 			if err != nil {
 				fmt.Printf("Error: %v\n", err)
 				continue
@@ -171,7 +171,7 @@ func main() {
 	}
 }
 
-func runCommand(ctx context.Context, atenetAddr, atespace, actorID, command string) (*ProcessResponse, error) {
+func runCommand(ctx context.Context, atenetAddr, atespace, actorName, command string) (*ProcessResponse, error) {
 	url := fmt.Sprintf("http://%s/process", atenetAddr)
 
 	reqBody := ProcessRequest{
@@ -184,7 +184,7 @@ func runCommand(ctx context.Context, atenetAddr, atespace, actorID, command stri
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Host = resources.ActorDNSName(atespace, actorID)
+	req.Host = resources.ActorDNSName(atespace, actorName)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

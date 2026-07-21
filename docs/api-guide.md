@@ -88,7 +88,7 @@ The `ActorTemplate` defines the code, environment, and state-management policies
 
 | Field | Type | Description |
 | :--- | :--- | :--- |
-| `containers` | `[]Container` | **Required.** The workload definition (image, command, env, ports). Each container may also declare an optional `readyz` HTTP probe — see [Container Readiness Probe](#container-readiness-probe-readyz). |
+| `containers` | `[]Container` | **Required.** The workload definition — see [Container Fields](#container-fields) below. Each container may also declare an optional `readyz` HTTP probe — see [Container Readiness Probe](#container-readiness-probe-readyz). |
 | `sandboxClass` | `string` | Optional. The sandbox runtime family this template's actors require: `gvisor` (default) or `microvm`. Only `WorkerPool`s whose `sandboxClass` matches are eligible. |
 | `workerSelector` | `*LabelSelector` | Optional. Gates which `WorkerPool`s actors from this template may use, by matching against each pool's labels. If unset, all pools are eligible (subject to the actor's own `worker_selector`). |
 | `snapshotsConfig` | `SnapshotsConfig` | **Required.** GCS bucket and folder where memory snapshots are stored. |
@@ -101,14 +101,30 @@ Because a snapshot is not restorable across sandbox runtimes, `sandboxClass` is 
 Container environment variables support literal `value` entries and `valueFrom.secretKeyRef`. Secret references are resolved by `ate-api-server` from the `ActorTemplate` namespace when a workload spec is materialized. For the golden actor, the resolved values are captured in the golden snapshot and future actors inherit those values until the golden snapshot is recreated. For an actor that bypasses the golden snapshot and boots from the current template spec, the resolved values are sent to atelet but are not serialized into the public Actor API. Other Kubernetes `valueFrom` sources are not supported yet. Secret changes do not automatically restart actors or invalidate snapshots; rotating a Secret requires an explicit actor or template lifecycle action.
 
 ### Workload Connectivity (Uniform DNS)
-Substrate uses a **Uniform DNS Mesh**: every actor created from a template is automatically reachable through the **Substrate Router** via its atespace and ID:
+Substrate uses a **Uniform DNS Mesh**: every actor created from a template is automatically reachable through the **Substrate Router** via its atespace and name:
 
-**Format:** `<actor-id>.<atespace>.actors.resources.substrate.ate.dev`
+**Format:** `<actor-name>.<atespace>.actors.resources.substrate.ate.dev`
 
 ### Actor Identity
-Substrate bind-mounts a read-only, per-actor identity directory at **`/run/ate`** into each of the actor's containers. An actor can learn its own ID without parsing the `Host` header by reading the file **`/run/ate/actor-id`** inside it, which contains the raw actor ID with no trailing newline. Further identity and configuration data may appear in this directory over time.
+Substrate bind-mounts a read-only, per-actor identity directory at **`/run/ate`** into each of the actor's containers. An actor can learn its own name without parsing the `Host` header by reading the file **`/run/ate/actor-id`** inside it, which contains the raw actor name with no trailing newline. Further identity and configuration data may appear in this directory over time.
 
-Read it fresh rather than caching it at process start. It is delivered as a per-actor bind mount, not an environment variable, precisely so it carries the correct ID after a resume from the golden snapshot — an env var (or a file baked into the image) would be frozen at the *golden* actor's ID, since it lives in the checkpointed process memory, and would therefore be identical for every actor of the template.
+Read it fresh rather than caching it at process start. It is delivered as a per-actor bind mount, not an environment variable, precisely so it carries the correct name after a resume from the golden snapshot — an env var (or a file baked into the image) would be frozen at the *golden* actor's name, since it lives in the checkpointed process memory, and would therefore be identical for every actor of the template.
+
+### Container Fields
+
+Each entry in `containers` describes one process to run in the actor's sandbox.
+
+| Field | Type | Description |
+| :--- | :--- | :--- |
+| `name` | `string` | **Required.** DNS-label-safe container name. |
+| `image` | `string` | **Required.** Must be pinned by digest (`...@sha256:...`) — changing the image invalidates snapshots. |
+| `command` | `[]string` | Optional. Entrypoint array. If unset, the image's `ENTRYPOINT` is used. If set, it replaces **both** the image's `ENTRYPOINT` and `CMD`. |
+| `args` | `[]string` | Optional. Arguments to the entrypoint. If unset, the image's `CMD` is used (unless `command` is set, which discards the image's `CMD`). If set, it replaces the image's `CMD`. |
+| `env` | `[]EnvVar` | Optional. Literal `value` entries or `valueFrom.secretKeyRef`. |
+| `readyz` | `ContainerReadyz` | Optional. HTTP readiness probe — see [Container Readiness Probe](#container-readiness-probe-readyz). |
+| `volumeMounts` | `[]VolumeMount` | Optional. Mounts a `spec.volumes` entry (e.g. `durableDir`) into this container. |
+
+`command` and `args` resolve against the container image's `ENTRYPOINT`/`CMD` the same way [Kubernetes Pod `command`/`args`](https://kubernetes.io/docs/tasks/inject-data-application/define-command-argument-container/) resolve against `ENTRYPOINT`/`CMD`. If the resolved argv is empty — the image sets neither `ENTRYPOINT` nor `CMD`, and the container sets neither `command` nor `args` — `Run`/`Restore` fails.
 
 ### Container Readiness Probe (`readyz`)
 
@@ -145,9 +161,6 @@ spec:
   containers:
   - name: agent
     image: gcr.io/my-project/my-agent:latest
-    command: ["/app/server"]
-    ports:
-    - containerPort: 80
     # Optional: gate Run/Restore on the agent's HTTP readiness endpoint.
     # See "Container Readiness Probe (readyz)" above.
     readyz:
@@ -240,22 +253,20 @@ The Substrate Control Plane (`ate-api-server`) exposes a gRPC interface for mana
 #### `CreateActor`
 Registers a new logical actor in the system.
 *   **Request:** `CreateActorRequest`
-    *   `actor_ref`: `ActorRef` (atespace and actor ID, ID must be a DNS-1123 label).
-    *   `actor_template_namespace`: Namespace of the `ActorTemplate`.
-    *   `actor_template_name`: Name of the `ActorTemplate`.
+    *   `actor`: `Actor` — the actor to create. Its `metadata` carries the atespace and name (name must be a DNS-1123 label); `actor_template_namespace` and `actor_template_name` select the `ActorTemplate`.
 *   **Response:** `CreateActorResponse` containing the initialized `Actor` object.
 
 #### `ResumeActor`
 Activates a suspended actor by restoring it onto a physical worker.
 *   **Request:** `ResumeActorRequest`
-    *   `actor_ref`: `ActorRef` of the actor to resume.
+    *   `actor`: `ObjectRef` of the actor to resume.
     *   `boot`: (Optional) If `true`, bypasses snapshots and performs a cold boot.
 *   **Response:** `ResumeActorResponse` containing the updated `Actor` object (including the physical `worker_ip`).
 
 #### `SuspendActor`
 Hibernate a running actor, capturing its current RAM and disk state into a snapshot.
 *   **Request:** `SuspendActorRequest`
-    *   `actor_ref`: `ActorRef` of the actor to suspend.
+    *   `actor`: `ObjectRef` of the actor to suspend.
 *   **Response:** `SuspendActorResponse` containing the `Actor` object in `STATUS_SUSPENDED`.
 
 #### `DeleteActor`

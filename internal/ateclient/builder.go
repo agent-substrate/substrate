@@ -44,9 +44,10 @@ import (
 	"k8s.io/client-go/transport/spdy"
 )
 
-// Client wraps the gRPC ControlClient and ensures the port-forward connection is closed when done.
+// Client wraps the gRPC ControlClient and DebugClient and ensures the port-forward connection is closed when done.
 type Client struct {
 	ateapipb.ControlClient
+	ateapipb.DebugClient
 	conn           *grpc.ClientConn
 	cancel         func()
 	tracerProvider *sdktrace.TracerProvider
@@ -108,6 +109,7 @@ func dialDirect(kubeconfigPath, k8sContext, endpoint string, traceEnabled bool) 
 	}
 	return &Client{
 		ControlClient: ateapipb.NewControlClient(conn),
+		DebugClient:   ateapipb.NewDebugClient(conn),
 		conn:          conn,
 		cancel:        func() {},
 	}, nil
@@ -230,6 +232,7 @@ func dialPortForward(ctx context.Context, kubeconfigPath, k8sContext string, tra
 
 	return &Client{
 		ControlClient: ateapipb.NewControlClient(conn),
+		DebugClient:   ateapipb.NewDebugClient(conn),
 		conn:          conn,
 		cancel: func() {
 			close(stopCh)
