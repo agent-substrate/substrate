@@ -33,8 +33,10 @@ import (
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/google/go-cmp/cmp"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/testing/protocmp"
+	"k8s.io/utils/lru"
 )
 
 func TestWriteFileAtomic(t *testing.T) {
@@ -252,6 +254,25 @@ func TestValidateRestoreRequest(t *testing.T) {
 				t.Errorf("validateRestoreRequest err = %v, wantErr %v", err, tc.wantErr)
 			}
 		})
+	}
+}
+
+func TestAteomDialerClosesEvictedConn(t *testing.T) {
+	d := &AteomDialer{conns: lru.NewWithEvictionFunc(1, onEvict)}
+
+	first_conn, err := d.DialAteomPod(context.Background(), "pod-1")
+	if err != nil {
+		t.Fatalf("Failed to open connection for pod-1: %v", err)
+	}
+
+	// Should lead to the first connection being evicted, closing the connection.
+	_, err = d.DialAteomPod(context.Background(), "pod-2")
+	if err != nil {
+		t.Fatalf("Failed to open connection for pod-2: %v", err)
+	}
+
+	if state := first_conn.GetState(); state != connectivity.Shutdown {
+		t.Errorf("Expected connection state to be %v, got %v", connectivity.Shutdown, state)
 	}
 }
 
