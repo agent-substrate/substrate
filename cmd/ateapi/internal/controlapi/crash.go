@@ -51,6 +51,8 @@ func crashActor(ctx context.Context, st store.Interface, atespace, actorName str
 		return fmt.Errorf("while loading actor to crash: %w", err)
 	}
 	actor.Status = ateapipb.Actor_STATUS_CRASHED
+	// InProgressSnapshot is kept for debugging; failed workflow
+	// steps must never promote it to LatestSnapshotInfo.
 	// TODO(zoezhao):
 	// 1. If the Actor crashed because the worker is unhealthy,
 	//    free the worker and mark it as unhealthy(or delete it)

@@ -685,6 +685,7 @@ type Container struct {
 	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	Image         string                 `protobuf:"bytes,2,opt,name=image,proto3" json:"image,omitempty"`
 	Command       []string               `protobuf:"bytes,3,rep,name=command,proto3" json:"command,omitempty"`
+	Args          []string               `protobuf:"bytes,7,rep,name=args,proto3" json:"args,omitempty"`
 	Env           []*EnvEntry            `protobuf:"bytes,4,rep,name=env,proto3" json:"env,omitempty"`
 	Readyz        *Readyz                `protobuf:"bytes,5,opt,name=readyz,proto3" json:"readyz,omitempty"`
 	VolumeMounts  []*VolumeMount         `protobuf:"bytes,6,rep,name=volume_mounts,json=volumeMounts,proto3" json:"volume_mounts,omitempty"`
@@ -739,6 +740,13 @@ func (x *Container) GetImage() string {
 func (x *Container) GetCommand() []string {
 	if x != nil {
 		return x.Command
+	}
+	return nil
+}
+
+func (x *Container) GetArgs() []string {
+	if x != nil {
+		return x.Args
 	}
 	return nil
 }
@@ -1494,11 +1502,12 @@ const file_atelet_proto_rawDesc = "" +
 	"\vVolumeMount\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x1d\n" +
 	"\n" +
-	"mount_path\x18\x02 \x01(\tR\tmountPath\"\xd5\x01\n" +
+	"mount_path\x18\x02 \x01(\tR\tmountPath\"\xe9\x01\n" +
 	"\tContainer\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
 	"\x05image\x18\x02 \x01(\tR\x05image\x12\x18\n" +
-	"\acommand\x18\x03 \x03(\tR\acommand\x12\"\n" +
+	"\acommand\x18\x03 \x03(\tR\acommand\x12\x12\n" +
+	"\x04args\x18\a \x03(\tR\x04args\x12\"\n" +
 	"\x03env\x18\x04 \x03(\v2\x10.atelet.EnvEntryR\x03env\x12&\n" +
 	"\x06readyz\x18\x05 \x01(\v2\x0e.atelet.ReadyzR\x06readyz\x128\n" +
 	"\rvolume_mounts\x18\x06 \x03(\v2\x13.atelet.VolumeMountR\fvolumeMounts\"4\n" +

@@ -26,6 +26,7 @@ import (
 	"github.com/redis/go-redis/v9"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"k8s.io/client-go/tools/cache"
 )
 
 // TestSuspendActorWorkflow_RejectedAndIdempotentPaths covers the two
@@ -186,6 +187,80 @@ func newTestPersistence(t *testing.T) store.Interface {
 	rdb := redis.NewClusterClient(&redis.ClusterOptions{Addrs: []string{mr.Addr()}})
 	t.Cleanup(func() { rdb.Close() }) //nolint:errcheck // test cleanup
 	return ateredis.NewPersistence(rdb)
+}
+
+// newDanglingDialer returns a dialer whose informer cache has no pods, so
+// DialForWorker returns ErrWorkerPodNotFound.
+func newDanglingDialer() *AteletDialer {
+	empty := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{
+		byNamespaceAndName: func(obj any) ([]string, error) { return nil, nil },
+	})
+	return NewAteletDialer(empty, empty)
+}
+
+func TestCallAteletSuspendStep_DanglingWorkerDoesNotRecordPhantomSnapshot(t *testing.T) {
+	tests := []struct {
+		name         string
+		prevSnapshot *ateapipb.SnapshotInfo
+	}{
+		{
+			name: "keeps previous snapshot",
+			prevSnapshot: &ateapipb.SnapshotInfo{
+				Data: &ateapipb.SnapshotInfo_External{
+					External: &ateapipb.ExternalSnapshotInfo{SnapshotUriPrefix: "gs://snapshots/actor-1/prev"},
+				},
+			},
+		},
+		{
+			name:         "stays nil without previous snapshot",
+			prevSnapshot: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			persistence := newTestPersistence(t)
+
+			actor := &ateapipb.Actor{
+				Metadata:           &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor-1"},
+				Status:             ateapipb.Actor_STATUS_SUSPENDING,
+				AteomPodNamespace:  "worker-ns",
+				AteomPodName:       "pod-gone",
+				WorkerPoolName:     "pool",
+				InProgressSnapshot: "gs://snapshots/actor-1/never-written",
+				LatestSnapshotInfo: tt.prevSnapshot,
+			}
+			created, err := persistence.CreateActor(ctx, actor)
+			if err != nil {
+				t.Fatalf("CreateActor: %v", err)
+			}
+
+			step := &CallAteletSuspendStep{store: persistence, dialer: newDanglingDialer()}
+			input := &SuspendInput{ActorName: "actor-1", Atespace: "team-a"}
+			if err := step.Execute(ctx, input, &SuspendState{Actor: created}); err == nil {
+				t.Fatal("Execute: want error for dangling worker, got nil")
+			}
+
+			stored, err := persistence.GetActor(ctx, "team-a", "actor-1")
+			if err != nil {
+				t.Fatalf("GetActor: %v", err)
+			}
+			if stored.GetStatus() != ateapipb.Actor_STATUS_CRASHED {
+				t.Errorf("status = %v, want CRASHED", stored.GetStatus())
+			}
+			if got := stored.GetInProgressSnapshot(); got != "gs://snapshots/actor-1/never-written" {
+				t.Errorf("InProgressSnapshot = %q, want preserved for debugging", got)
+			}
+			if tt.prevSnapshot == nil {
+				if stored.GetLatestSnapshotInfo() != nil {
+					t.Errorf("LatestSnapshotInfo = %v, want nil", stored.GetLatestSnapshotInfo())
+				}
+			} else if got, want := stored.GetLatestSnapshotInfo().GetExternal().GetSnapshotUriPrefix(), tt.prevSnapshot.GetExternal().GetSnapshotUriPrefix(); got != want {
+				t.Errorf("LatestSnapshotInfo uri = %q, want %q", got, want)
+			}
+		})
+	}
 }
 
 func TestFinalizeSuspendedStep_ReleasesOnlyOwnWorker(t *testing.T) {
