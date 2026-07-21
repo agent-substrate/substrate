@@ -96,14 +96,14 @@ func releaseWorker(ctx context.Context, st store.Interface, actor *ateapipb.Acto
 	if err != nil {
 		return fmt.Errorf("while getting worker to release: %w", err)
 	}
-
 	wass := worker.GetAssignment()
 	if wass == nil {
 		slog.WarnContext(ctx, "Worker's assignment is already nil, skipping release", slog.String("worker", podUid))
 		return nil
 	}
+	// Only free it if it still belongs to us
 	if wass.GetActor().GetAtespace() != actor.GetMetadata().GetAtespace() || wass.GetActor().GetName() != actor.GetMetadata().GetName() {
-		// Worker is already assigned to a different actor; leave it alone.
+		slog.WarnContext(ctx, "Worker already assigned to another Actor", slog.String("worker", podUid))
 		return nil
 	}
 
