@@ -33,10 +33,11 @@ func (s *Service) CreateActor(ctx context.Context, req *ateapipb.CreateActorRequ
 	if err := validateCreateActorRequest(req); err != nil {
 		return nil, err
 	}
-
 	in := req.GetActor()
 	templateNamespace := in.GetActorTemplateNamespace()
 	templateName := in.GetActorTemplateName()
+
+	setSpanActorRefAttributes(ctx, in.GetMetadata().GetAtespace(), in.GetMetadata().GetName())
 
 	_, err := s.actorTemplateLister.ActorTemplates(templateNamespace).Get(templateName)
 	if err != nil {
@@ -76,6 +77,7 @@ func (s *Service) CreateActor(ctx context.Context, req *ateapipb.CreateActorRequ
 		return nil, fmt.Errorf("while recording actor: %w", err)
 	}
 
+	setSpanActorAttributes(ctx, stored)
 	return stored, nil
 }
 

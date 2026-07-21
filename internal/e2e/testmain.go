@@ -18,6 +18,7 @@ import (
 	"context"
 	goflag "flag"
 	"fmt"
+	"os"
 	"testing"
 
 	"github.com/spf13/pflag"
@@ -41,6 +42,10 @@ func RunTestMain(m *testing.M) int {
 	bindFlags()
 	pflag.CommandLine.AddGoFlagSet(goflag.CommandLine)
 	pflag.Parse()
+	if err := pflag.ParseSkippedFlags(os.Args[1:], goflag.CommandLine); err != nil {
+		fmt.Printf("Failed to parse Go test flags: %v\n", err)
+		return 1
+	}
 
 	if !RunE2E {
 		fmt.Println(Colorf(`

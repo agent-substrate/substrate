@@ -31,6 +31,9 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 )
 
+// relistPageSize is the page size used for the relist.
+const relistPageSize = 1000
+
 // Cache maintains an in-memory snapshot of all workers.
 //
 // TODO: add metrics — at minimum a gauge for worker count, a counter for
@@ -99,9 +102,18 @@ func (c *Cache) sync(ctx context.Context) (*store.WorkerWatch, error) {
 }
 
 func (c *Cache) relist(ctx context.Context) error {
-	workers, err := c.store.ListWorkers(ctx)
-	if err != nil {
-		return fmt.Errorf("ListWorkers: %w", err)
+	var workers []*ateapipb.Worker
+	pageToken := ""
+	for {
+		page, nextToken, err := c.store.ListWorkers(ctx, relistPageSize, pageToken)
+		if err != nil {
+			return fmt.Errorf("ListWorkers: %w", err)
+		}
+		workers = append(workers, page...)
+		if nextToken == "" {
+			break
+		}
+		pageToken = nextToken
 	}
 	newMap := make(map[string]*ateapipb.Worker, len(workers))
 	for _, w := range workers {

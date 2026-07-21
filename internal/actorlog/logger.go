@@ -66,13 +66,14 @@ func NewActorLogger(w io.Writer, isOnGCE bool) *ActorLogger {
 }
 
 // EmitLifecycleLog logs a synthetic actor lifecycle event.
-func (al *ActorLogger) EmitLifecycleLog(msg, atespace, actorName, actorTemplateNamespace, actorTemplateName string) {
+func (al *ActorLogger) EmitLifecycleLog(msg, atespace, actorName, actorUID, actorTemplateNamespace, actorTemplateName string) {
 	envelope := map[string]any{
 		"time":    time.Now().Format(time.RFC3339Nano),
 		"message": msg,
 		al.labelsKey: map[string]string{
 			"ate.dev/actor_atespace":           atespace,
 			"ate.dev/actor_name":               actorName,
+			"ate.dev/actor_uid":                actorUID,
 			"ate.dev/actor_template_namespace": actorTemplateNamespace,
 			"ate.dev/actor_template_name":      actorTemplateName,
 		},
@@ -87,13 +88,13 @@ func (al *ActorLogger) EmitLifecycleLog(msg, atespace, actorName, actorTemplateN
 // through the logger. containerName tags every line with the originating container;
 // callers that multiplex multiple containers should give each its own pipe so the
 // tag is meaningful.
-func (al *ActorLogger) StartJSONLogPipe(atespace, actorName, actorTemplateNamespace, actorTemplateName, containerName string) (io.WriteCloser, error) {
+func (al *ActorLogger) StartJSONLogPipe(atespace, actorName, actorUID, actorTemplateNamespace, actorTemplateName, containerName string) (io.WriteCloser, error) {
 	pr, pw, err := os.Pipe()
 	if err != nil {
 		return nil, err
 	}
 	go func() {
-		al.WrapContainerLogs(pr, atespace, actorName, actorTemplateNamespace, actorTemplateName, containerName)
+		al.WrapContainerLogs(pr, atespace, actorName, actorUID, actorTemplateNamespace, actorTemplateName, containerName)
 		pr.Close()
 	}()
 	return pw, nil
@@ -102,7 +103,7 @@ func (al *ActorLogger) StartJSONLogPipe(atespace, actorName, actorTemplateNamesp
 // WrapContainerLogs reads log lines from r, parses them, and logs them in a unified
 // structured format. containerName is added as the ate.dev/container_name label so
 // multi-container actors can be demultiplexed.
-func (al *ActorLogger) WrapContainerLogs(r io.Reader, atespace, actorName, actorTemplateNamespace, actorTemplateName, containerName string) {
+func (al *ActorLogger) WrapContainerLogs(r io.Reader, atespace, actorName, actorUID, actorTemplateNamespace, actorTemplateName, containerName string) {
 	rdr := bufio.NewReader(r)
 	for {
 		lineBytes, err := rdr.ReadBytes('\n')
@@ -131,6 +132,7 @@ func (al *ActorLogger) WrapContainerLogs(r io.Reader, atespace, actorName, actor
 				labels := map[string]string{
 					"ate.dev/actor_atespace":           atespace,
 					"ate.dev/actor_name":               actorName,
+					"ate.dev/actor_uid":                actorUID,
 					"ate.dev/actor_template_namespace": actorTemplateNamespace,
 					"ate.dev/actor_template_name":      actorTemplateName,
 					"ate.dev/container_name":           containerName,

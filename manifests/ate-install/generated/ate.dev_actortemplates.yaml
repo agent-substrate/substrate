@@ -65,8 +65,26 @@ spec:
                   description: A single application container that you want to run
                     within a WorkerPool.
                   properties:
+                    args:
+                      description: |-
+                        Arguments to the entrypoint. Not executed within a shell. The container
+                        image's CMD is used if this is not provided (unless command is set,
+                        which discards the image's CMD).
+
+                        Unlike Kubernetes, variable references $(VAR_NAME) are NOT expanded.
+                      items:
+                        type: string
+                      maxItems: 64
+                      type: array
+                      x-kubernetes-list-type: atomic
                     command:
-                      description: Entrypoint array. Not executed within a shell.
+                      description: |-
+                        Entrypoint array. Not executed within a shell. The container image's
+                        ENTRYPOINT is used if this is not provided; if it is provided, the
+                        image's ENTRYPOINT and CMD are both ignored and the process argv is
+                        command + args.
+
+                        Unlike Kubernetes, variable references $(VAR_NAME) are NOT expanded.
                       items:
                         type: string
                       maxItems: 64
