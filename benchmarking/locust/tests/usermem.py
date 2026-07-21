@@ -57,18 +57,22 @@ class UserMemUser(User):
             raise StopUser()
 
         # Call CreateActor
-        self.actor_id = f"sb-{uuid.uuid4()}"
-        self.actor_ref = ateapi_pb2.ActorRef(atespace=ATESPACE, name=self.actor_id)
+        self.actor_name = f"sb-{uuid.uuid4()}"
+        self.actor_ref = ateapi_pb2.ObjectRef(atespace=ATESPACE, name=self.actor_name)
         try:
             self.stub.CreateActor(
                 ateapi_pb2.CreateActorRequest(
-                    actor_ref=self.actor_ref,
-                    actor_template_namespace="benchmark-workloads",
-                    actor_template_name=self.template_name
+                    actor=ateapi_pb2.Actor(
+                        metadata=ateapi_pb2.ResourceMetadata(
+                            atespace=ATESPACE, name=self.actor_name
+                        ),
+                        actor_template_namespace="benchmark-workloads",
+                        actor_template_name=self.template_name,
+                    )
                 )
             )
         except Exception as e:
-            logger.error(f"Failed to create actor {self.actor_id}: {e}")
+            logger.error(f"Failed to create actor {self.actor_name}: {e}")
             self.channel.close()
             raise StopUser()
 
@@ -77,18 +81,18 @@ class UserMemUser(User):
         # Suspend first
         try:
             self.stub.SuspendActor(
-                ateapi_pb2.SuspendActorRequest(actor_ref=self.actor_ref)
+                ateapi_pb2.SuspendActorRequest(actor=self.actor_ref)
             )
         except Exception as e:
-            logger.warning(f"Failed to suspend actor {self.actor_id} during teardown: {e}")
+            logger.warning(f"Failed to suspend actor {self.actor_name} during teardown: {e}")
 
         # Delete actor
         try:
             self.stub.DeleteActor(
-                ateapi_pb2.DeleteActorRequest(actor_ref=self.actor_ref)
+                ateapi_pb2.DeleteActorRequest(actor=self.actor_ref)
             )
         except Exception as e:
-            logger.warning(f"Failed to delete actor {self.actor_id}: {e}")
+            logger.warning(f"Failed to delete actor {self.actor_name}: {e}")
 
         self.channel.close()
 
@@ -100,7 +104,7 @@ class UserMemUser(User):
         try:
             with traced_grpc("SuspendActor", self.__class__.__name__) as metadata:
                 _, metadata.call = self.stub.SuspendActor.with_call(
-                    ateapi_pb2.SuspendActorRequest(actor_ref=self.actor_ref),
+                    ateapi_pb2.SuspendActorRequest(actor=self.actor_ref),
                     metadata=metadata,
                 )
         except Exception:
@@ -112,7 +116,7 @@ class UserMemUser(User):
         try:
             with traced_grpc("ResumeActor", self.__class__.__name__) as metadata:
                 _, metadata.call = self.stub.ResumeActor.with_call(
-                    ateapi_pb2.ResumeActorRequest(actor_ref=self.actor_ref),
+                    ateapi_pb2.ResumeActorRequest(actor=self.actor_ref),
                     metadata=metadata,
                 )
         except Exception:

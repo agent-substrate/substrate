@@ -63,7 +63,10 @@ var (
 	fakeAtelet = &FakeAteletServer{}
 )
 
-const testAtespace = "test-atespace"
+const (
+	testAtespace = "test-atespace"
+	testActorID  = "id1"
+)
 
 var (
 	ignoreUID        = protocmp.IgnoreFields(&ateapipb.ResourceMetadata{}, "uid")
@@ -1061,13 +1064,12 @@ func TestListActors_PageSizeValidation(t *testing.T) {
 		t.Errorf("expected InvalidArgument error for negative page_size, got: %v", err)
 	}
 
-	// 2. Page size exceeding maxPageSize (1000)
-	_, err = tc.client.ListActors(context.Background(), &ateapipb.ListActorsRequest{
+	// 2. Page size exceeding maxPageSize (1000) is coerced silently.
+	if _, err := tc.client.ListActors(context.Background(), &ateapipb.ListActorsRequest{
 		Atespace: testAtespace,
 		PageSize: 1001,
-	})
-	if status.Code(err) != codes.InvalidArgument {
-		t.Errorf("expected InvalidArgument error for page_size > 1000, got: %v", err)
+	}); err != nil {
+		t.Errorf("expected page_size > 1000 to be coerced, got error: %v", err)
 	}
 }
 
@@ -1731,17 +1733,19 @@ func TestUpdateActor_NotFound(t *testing.T) {
 // TestResumeActor_ReleasesStaleWorkerWhenPoolBecomesIneligible verifies that
 // a worker claimed by a failed resume attempt is released back to the free
 // pool if, by the next resume attempt, the actor's worker_selector has
-// changed such that the worker's pool is no longer eligible.
+// changed such that the worker's pool is no longer eligible. The actor
+// itself is crashed rather than transparently migrated to another pool.
 // Workflow:
 //  1. Creates pool-a (tier=a) and pool-b (tier=b), and an actor narrowed to
 //     tier=a.
 //  2. Makes the fake atelet fail Run, then resumes: the actor gets assigned
 //     to worker-a (the only eligible pool) and the resume fails after the
-//     worker is claimed, leaving worker-a's actor_id set and the actor
+//     worker is claimed, leaving worker-a's actor assignment set and the actor
 //     stuck in RESUMING.
 //  3. Updates the actor's selector to tier=b, making pool-a ineligible.
-//  4. Resumes again; asserts it succeeds onto worker-b, and that worker-a
-//     has been released (actor_id cleared) rather than left dangling.
+//  4. Resumes again; asserts it fails and the actor is CRASHED, that worker-a
+//     has been released (actor assignment cleared) rather than left dangling,
+//     and that worker-b remains free (the crashed actor must not claim it).
 func TestResumeActor_ReleasesStaleWorkerWhenPoolBecomesIneligible(t *testing.T) {
 	ns := namespaceForTest("ns-resume-release-stale")
 	tc := setupTest(t, ns)
@@ -1780,19 +1784,16 @@ func TestResumeActor_ReleasesStaleWorkerWhenPoolBecomesIneligible(t *testing.T) 
 		t.Fatalf("UpdateActor failed: %v", err)
 	}
 
-	if _, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name}}); err != nil {
-		t.Fatalf("second ResumeActor failed: %v", err)
+	if _, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name}}); err == nil {
+		t.Fatalf("expected second ResumeActor to fail: the assigned worker's pool is no longer eligible")
 	}
 
 	getResp, err := tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name}})
 	if err != nil {
 		t.Fatalf("GetActor failed: %v", err)
 	}
-	if got := getResp.GetWorkerPoolName(); got != "pool-b" {
-		t.Errorf("expected actor to land on pool-b, got worker_pool_name=%q", got)
-	}
-	if got := getResp.GetStatus(); got != ateapipb.Actor_STATUS_RUNNING {
-		t.Errorf("expected actor status RUNNING, got %v", got)
+	if got := getResp.GetStatus(); got != ateapipb.Actor_STATUS_CRASHED {
+		t.Errorf("expected actor status CRASHED, got %v", got)
 	}
 
 	listResp, err := tc.client.ListWorkers(context.Background(), &ateapipb.ListWorkersRequest{})
@@ -1810,19 +1811,15 @@ func TestResumeActor_ReleasesStaleWorkerWhenPoolBecomesIneligible(t *testing.T) 
 				if wass.Actor != nil {
 					got = wass.Actor.Name
 				}
-				t.Errorf("expected worker-a (now-ineligible pool-a) to be released, got actor_id=%q", got)
+				t.Errorf("expected worker-a (now-ineligible pool-a) to be released, got actor name=%q", got)
 			}
 		case "pool-b":
-			if wass := w.Assignment; wass == nil {
-				t.Errorf("expected worker-b to be claimed by %q, got nil assignment", name)
-			} else {
-				if wact := wass.Actor; wact == nil {
-					t.Errorf("expected worker-b to be claimed by %q, got nil assignment.actor", name)
-				} else {
-					if got := wact.Name; got != name {
-						t.Errorf("expected worker-b to be claimed by %q, got actor_id=%q", name, got)
-					}
+			if wass := w.Assignment; wass != nil {
+				got := "<nil-actor>"
+				if wass.Actor != nil {
+					got = wass.Actor.Name
 				}
+				t.Errorf("expected worker-b to stay free (actor crashed, not migrated), got actor name=%q", got)
 			}
 		}
 	}
@@ -2291,6 +2288,64 @@ func TestValidation(t *testing.T) {
 		for _, tt := range tests {
 			t.Run(tt.name, func(t *testing.T) {
 				_, err := tc.client.DeleteActor(context.Background(), tt.req)
+				assertGrpcErrorRegex(t, err, codes.InvalidArgument, tt.wantMsg)
+			})
+		}
+	})
+
+	t.Run("ListActors", func(t *testing.T) {
+		tests := []struct {
+			name    string
+			req     *ateapipb.ListActorsRequest
+			wantMsg string
+		}{{
+			"invalid atespace",
+			&ateapipb.ListActorsRequest{Atespace: "NS1"},
+			"atespace: Invalid value",
+		}, {
+			"negative page_size",
+			&ateapipb.ListActorsRequest{Atespace: "ns1", PageSize: -1},
+			"page_size: Invalid value",
+		}}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				_, err := tc.client.ListActors(context.Background(), tt.req)
+				assertGrpcErrorRegex(t, err, codes.InvalidArgument, tt.wantMsg)
+			})
+		}
+	})
+
+	t.Run("ListWorkers", func(t *testing.T) {
+		tests := []struct {
+			name    string
+			req     *ateapipb.ListWorkersRequest
+			wantMsg string
+		}{{
+			"negative page_size",
+			&ateapipb.ListWorkersRequest{PageSize: -1},
+			"page_size: Invalid value",
+		}}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				_, err := tc.client.ListWorkers(context.Background(), tt.req)
+				assertGrpcErrorRegex(t, err, codes.InvalidArgument, tt.wantMsg)
+			})
+		}
+	})
+
+	t.Run("ListAtespaces", func(t *testing.T) {
+		tests := []struct {
+			name    string
+			req     *ateapipb.ListAtespacesRequest
+			wantMsg string
+		}{{
+			"negative page_size",
+			&ateapipb.ListAtespacesRequest{PageSize: -1},
+			"page_size: Invalid value",
+		}}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				_, err := tc.client.ListAtespaces(context.Background(), tt.req)
 				assertGrpcErrorRegex(t, err, codes.InvalidArgument, tt.wantMsg)
 			})
 		}

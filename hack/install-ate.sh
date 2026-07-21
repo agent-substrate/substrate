@@ -376,11 +376,11 @@ deploy_atenet() {
 
 # get_actor_status echoes the actor's status enum (e.g. STATUS_SUSPENDED).
 get_actor_status() {
-  local actor_id="$1"
+  local actor_name="$1"
   local atespace="$2"
   local json
 
-  if ! json=$(run_kubectl_ate get actor "${actor_id}" -a "${atespace}" -o json 2>/dev/null); then
+  if ! json=$(run_kubectl_ate get actor "${actor_name}" -a "${atespace}" -o json 2>/dev/null); then
     return 1
   fi
   jq -r '.actors[0].status // empty' <<<"${json}"
@@ -389,14 +389,14 @@ get_actor_status() {
 # prepare_actor_for_delete suspends (or resumes then suspends) until DeleteActor
 # is allowed. Actors must be STATUS_SUSPENDED before deletion.
 prepare_actor_for_delete() {
-  local actor_id="$1"
+  local actor_name="$1"
   local atespace="$2"
   local timeout_secs="${3:-120}"
   local deadline=$((SECONDS + timeout_secs))
   local status
 
   while ((SECONDS < deadline)); do
-    if ! status=$(get_actor_status "${actor_id}" "${atespace}"); then
+    if ! status=$(get_actor_status "${actor_name}" "${atespace}"); then
       return 0
     fi
 
@@ -405,22 +405,22 @@ prepare_actor_for_delete() {
         return 0
         ;;
       STATUS_PAUSED)
-        run_kubectl_ate resume actor "${actor_id}" -a "${atespace}" -o json >/dev/null
+        run_kubectl_ate resume actor "${actor_name}" -a "${atespace}" -o json >/dev/null
         ;;
       STATUS_RUNNING)
-        run_kubectl_ate suspend actor "${actor_id}" -a "${atespace}" -o json >/dev/null
+        run_kubectl_ate suspend actor "${actor_name}" -a "${atespace}" -o json >/dev/null
         ;;
       STATUS_RESUMING | STATUS_SUSPENDING | STATUS_PAUSING)
         ;;
       *)
-        echo "cannot delete actor ${actor_id}: unexpected status ${status}" >&2
+        echo "cannot delete actor ${actor_name}: unexpected status ${status}" >&2
         return 1
         ;;
     esac
     sleep 2
   done
 
-  echo "timed out waiting for actor ${actor_id} to reach STATUS_SUSPENDED" >&2
+  echo "timed out waiting for actor ${actor_name} to reach STATUS_SUSPENDED" >&2
   return 1
 }
 
