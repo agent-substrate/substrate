@@ -306,7 +306,7 @@ func verifySignature(algorithm string, selectedKey crypto.PublicKey, toBeSignedB
 	case "ES384":
 		ecdsaKey, ok := selectedKey.(*ecdsa.PublicKey)
 		if !ok || ecdsaKey.Curve != elliptic.P384() {
-			return fmt.Errorf("requested key ID is not an ECDSA P256 key")
+			return fmt.Errorf("requested key ID is not an ECDSA P384 key")
 		}
 		toBeSignedDigest := hashBytes(crypto.SHA384.New(), toBeSignedBytes)
 		if len(signatureBytes) != 2*48 {
@@ -320,7 +320,7 @@ func verifySignature(algorithm string, selectedKey crypto.PublicKey, toBeSignedB
 	case "ES512":
 		ecdsaKey, ok := selectedKey.(*ecdsa.PublicKey)
 		if !ok || ecdsaKey.Curve != elliptic.P521() {
-			return fmt.Errorf("requested key ID is not an ECDSA P256 key")
+			return fmt.Errorf("requested key ID is not an ECDSA P521 key")
 		}
 		toBeSignedDigest := hashBytes(crypto.SHA512.New(), toBeSignedBytes)
 		if len(signatureBytes) != 2*66 {
@@ -342,6 +342,21 @@ func hashBytes(hasher hash.Hash, bytes []byte) []byte {
 	hasher.Write(bytes)
 	hash := hasher.Sum(nil)
 	return hash[:]
+}
+
+// ellipticCurveForJWK maps a JWK "crv" value to its elliptic.Curve. Only the NIST
+// curves that verifySignature supports (ES256/ES384/ES512) are accepted.
+func ellipticCurveForJWK(crv string) (elliptic.Curve, error) {
+	switch crv {
+	case "P-256":
+		return elliptic.P256(), nil
+	case "P-384":
+		return elliptic.P384(), nil
+	case "P-521":
+		return elliptic.P521(), nil
+	default:
+		return nil, fmt.Errorf("unhandled elliptic curve %q", crv)
+	}
 }
 
 type oidcConfigT struct {
@@ -394,10 +409,34 @@ func discoverKeysForIssuer(ctx context.Context, httpClient *http.Client, issuer 
 
 		switch jwk.KeyType {
 		case "EC":
-			switch jwk.EllipticCurve {
-			default:
-				return nil, fmt.Errorf("unhandled elliptic curve %q", jwk.EllipticCurve)
+			curve, err := ellipticCurveForJWK(jwk.EllipticCurve)
+			if err != nil {
+				return nil, err
 			}
+			if jwk.EllipticX == "" || jwk.EllipticY == "" {
+				return nil, fmt.Errorf("EC JWK is missing the x or y coordinate")
+			}
+			xBytes, err := base64.RawURLEncoding.DecodeString(jwk.EllipticX)
+			if err != nil {
+				return nil, fmt.Errorf("while base64-decoding EC x coordinate: %w", err)
+			}
+			yBytes, err := base64.RawURLEncoding.DecodeString(jwk.EllipticY)
+			if err != nil {
+				return nil, fmt.Errorf("while base64-decoding EC y coordinate: %w", err)
+			}
+			x := new(big.Int).SetBytes(xBytes)
+			y := new(big.Int).SetBytes(yBytes)
+			// Reject coordinates outside the field. This is a cheap sanity check; the
+			// authoritative on-curve validation happens in ecdsa.Verify, which returns
+			// false for a public key whose point is not on the curve.
+			p := curve.Params().P
+			if x.Cmp(p) >= 0 || y.Cmp(p) >= 0 {
+				return nil, fmt.Errorf("EC JWK coordinate is out of range for curve %q", jwk.EllipticCurve)
+			}
+			ret = append(ret, &KeyAndID{
+				KeyID:     jwk.KeyID,
+				PublicKey: &ecdsa.PublicKey{Curve: curve, X: x, Y: y},
+			})
 
 		case "RSA":
 			nBytes, err := base64.RawURLEncoding.DecodeString(jwk.RSAN)
