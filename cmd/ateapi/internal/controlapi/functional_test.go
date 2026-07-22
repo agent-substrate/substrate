@@ -2603,6 +2603,47 @@ func TestDeleteActor_NotSuspended(t *testing.T) {
 	assertGrpcError(t, err, codes.FailedPrecondition, "Actor id1 is not suspended (status: STATUS_RUNNING)")
 }
 
+func TestDeleteActor_Crashed(t *testing.T) {
+	ns := namespaceForTest("ns-delete-crashed")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	createTemplate(t, tc, ns)
+
+	_, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+		Metadata:               &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "id1"},
+		ActorTemplateNamespace: ns,
+		ActorTemplateName:      "tmpl1",
+	}})
+	if err != nil {
+		t.Fatalf("CreateActor failed: %v", err)
+	}
+
+	actor, err := tc.persistence.GetActor(context.Background(), testAtespace, "id1")
+	if err != nil {
+		t.Fatalf("GetActor failed: %v", err)
+	}
+	actor.Status = ateapipb.Actor_STATUS_CRASHED
+	if _, err := tc.persistence.UpdateActor(context.Background(), actor, actor.GetMetadata().GetVersion()); err != nil {
+		t.Fatalf("UpdateActor failed: %v", err)
+	}
+
+	deleted, err := tc.client.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "id1"},
+	})
+	if err != nil {
+		t.Fatalf("DeleteActor of crashed actor failed: %v", err)
+	}
+	if got := deleted.GetStatus(); got != ateapipb.Actor_STATUS_CRASHED {
+		t.Errorf("deleted actor status = %v, want %v", got, ateapipb.Actor_STATUS_CRASHED)
+	}
+
+	_, err = tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "id1"},
+	})
+	assertGrpcError(t, err, codes.NotFound, "Actor id1 not found")
+}
+
 func TestDeleteActor_NotFound(t *testing.T) {
 	ns := namespaceForTest("ns-delete-notfound")
 	tc := setupTest(t, ns)

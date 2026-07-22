@@ -112,10 +112,9 @@ run_kubectl_ate() {
 run_ko() {
   # Build up a set of ldflags to pass to ko.
   local ldflags=()
-  mapfile -t ldflags < <(make ldflags)
-  for i in "${!ldflags[@]}"; do
-    ldflags[i]="--ldflags=${ldflags[i]}"
-  done
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    [[ -n "${line}" ]] && ldflags+=("--ldflags=${line}")
+  done < <(make ldflags)
 
   # Only ko subcommands that delegate to kubectl (apply, create, delete, run)
   # accept args after `--`. ko build, resolve, deps, login etc. reject
