@@ -478,11 +478,11 @@ func TestSyncer_AteomTerminated(t *testing.T) {
 	}
 }
 
-// TestCrashActorOnDeadWorker_Crashed covers the actor status write without
+// TestMarkActorCrashed_Crashed covers the actor status write without
 // going through informer events: only a RUNNING actor bound to a vanished
 // worker is crashed. Actors in transition states (SUSPENDING/RESUMING) are
 // owned by each workflow itself.
-func TestCrashActorOnDeadWorker_Crashed(t *testing.T) {
+func TestMarkActorCrashed_Crashed(t *testing.T) {
 	tests := []struct {
 		name       string
 		status     ateapipb.Actor_Status
@@ -537,8 +537,8 @@ func TestCrashActorOnDeadWorker_Crashed(t *testing.T) {
 			}
 
 			syncer := &WorkerPoolSyncer{persistence: persistence}
-			if err := syncer.crashActorOnDeadWorker(ctx, ns, pool, pod); err != nil {
-				t.Fatalf("crashActorOnDeadWorker: %v", err)
+			if err := syncer.markActorCrashed(ctx, ns, pool, pod); err != nil {
+				t.Fatalf("markActorCrashed: %v", err)
 			}
 
 			got, err := persistence.GetActor(ctx, "team-release", actorName)

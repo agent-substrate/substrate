@@ -80,7 +80,7 @@ func (s *WorkerPoolSyncer) Start(ctx context.Context) {
 				return
 			}
 			slog.InfoContext(ctx, "Syncer: removing worker from store", slog.String("worker", pod.Namespace+"/"+pod.Name))
-			if err := s.crashActorOnDeadWorker(ctx, pod.Namespace, pod.Labels[workerPodLabel], pod.Name); err != nil {
+			if err := s.markActorCrashed(ctx, pod.Namespace, pod.Labels[workerPodLabel], pod.Name); err != nil {
 				slog.ErrorContext(ctx, "Failed to crash actor bound to deleted worker", slog.Any("err", err))
 			}
 			err := s.persistence.DeleteWorker(ctx, pod.Namespace, pod.Labels[workerPodLabel], pod.Name)
@@ -112,7 +112,7 @@ func (s *WorkerPoolSyncer) syncWorkerToStore(ctx context.Context, pod *corev1.Po
 
 	if pod.DeletionTimestamp != nil {
 		slog.InfoContext(ctx, "Syncer: removing worker from store (pod deleting)", slog.String("worker", pod.Namespace+"/"+pod.Name))
-		if err := s.crashActorOnDeadWorker(ctx, pod.Namespace, pod.Labels[workerPodLabel], pod.Name); err != nil {
+		if err := s.markActorCrashed(ctx, pod.Namespace, pod.Labels[workerPodLabel], pod.Name); err != nil {
 			slog.ErrorContext(ctx, "Failed to release actor bound to soft-deleting worker", slog.Any("err", err))
 		}
 		err := s.persistence.DeleteWorker(ctx, pod.Namespace, pod.Labels[workerPodLabel], pod.Name)
@@ -231,7 +231,7 @@ func (s *WorkerPoolSyncer) handleTerminatedAteom(ctx context.Context, pod *corev
 		}
 	default:
 		// Crash the actor first, if the ateapi server is restarted. If we deleted the worker first, and ate apiserver restarted, we wouldn't be able to crash the Actor anymore.
-		if err := s.crashActorOnDeadWorker(ctx, pod.Namespace, pool, pod.Name); err != nil {
+		if err := s.markActorCrashed(ctx, pod.Namespace, pool, pod.Name); err != nil {
 			slog.ErrorContext(ctx, "Failed to crash actor bound to crashed worker; keeping pod so the resync retries", slog.Any("err", err))
 			return
 		}
@@ -247,7 +247,7 @@ func (s *WorkerPoolSyncer) handleTerminatedAteom(ctx context.Context, pod *corev
 	}
 }
 
-func (s *WorkerPoolSyncer) crashActorOnDeadWorker(ctx context.Context, namespace, pool, podName string) error {
+func (s *WorkerPoolSyncer) markActorCrashed(ctx context.Context, namespace, pool, podName string) error {
 	worker, err := s.persistence.GetWorker(ctx, namespace, pool, podName)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
