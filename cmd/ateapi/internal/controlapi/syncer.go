@@ -27,6 +27,9 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
 )
 
@@ -34,14 +37,16 @@ import (
 // into the store.
 type WorkerPoolSyncer struct {
 	persistence      store.Interface
+	kubeClient       kubernetes.Interface
 	workerInformer   cache.SharedIndexInformer
 	workerPoolLister listersv1alpha1.WorkerPoolLister
 }
 
 // NewWorkerPoolSyncer creates a new WorkerPoolSyncer.
-func NewWorkerPoolSyncer(persistence store.Interface, workerInformer cache.SharedIndexInformer, workerPoolLister listersv1alpha1.WorkerPoolLister) *WorkerPoolSyncer {
+func NewWorkerPoolSyncer(persistence store.Interface, kubeClient kubernetes.Interface, workerInformer cache.SharedIndexInformer, workerPoolLister listersv1alpha1.WorkerPoolLister) *WorkerPoolSyncer {
 	return &WorkerPoolSyncer{
 		persistence:      persistence,
+		kubeClient:       kubeClient,
 		workerInformer:   workerInformer,
 		workerPoolLister: workerPoolLister,
 	}
@@ -75,8 +80,8 @@ func (s *WorkerPoolSyncer) Start(ctx context.Context) {
 				return
 			}
 			slog.InfoContext(ctx, "Syncer: removing worker from store", slog.String("worker", pod.Namespace+"/"+pod.Name))
-			if err := s.releaseActorOnDeadWorker(ctx, pod.Namespace, pod.Labels[workerPodLabel], pod.Name); err != nil {
-				slog.ErrorContext(ctx, "Failed to release actor bound to deleted worker", slog.Any("err", err))
+			if err := s.crashActorOnDeadWorker(ctx, pod.Namespace, pod.Labels[workerPodLabel], pod.Name); err != nil {
+				slog.ErrorContext(ctx, "Failed to crash actor bound to deleted worker", slog.Any("err", err))
 			}
 			err := s.persistence.DeleteWorker(ctx, pod.Namespace, pod.Labels[workerPodLabel], pod.Name)
 			if err != nil {
@@ -107,13 +112,19 @@ func (s *WorkerPoolSyncer) syncWorkerToStore(ctx context.Context, pod *corev1.Po
 
 	if pod.DeletionTimestamp != nil {
 		slog.InfoContext(ctx, "Syncer: removing worker from store (pod deleting)", slog.String("worker", pod.Namespace+"/"+pod.Name))
-		if err := s.releaseActorOnDeadWorker(ctx, pod.Namespace, pod.Labels[workerPodLabel], pod.Name); err != nil {
+		if err := s.crashActorOnDeadWorker(ctx, pod.Namespace, pod.Labels[workerPodLabel], pod.Name); err != nil {
 			slog.ErrorContext(ctx, "Failed to release actor bound to soft-deleting worker", slog.Any("err", err))
 		}
 		err := s.persistence.DeleteWorker(ctx, pod.Namespace, pod.Labels[workerPodLabel], pod.Name)
 		if err != nil {
 			slog.ErrorContext(ctx, "Failed to delete worker from store during update event (deleting)", slog.Any("err", err))
 		}
+		return
+	}
+
+	// If either the ateom server itself or the actor inside it terminated, crash the actor running on the worker.
+	if ateomTerminated(pod) {
+		s.handleTerminatedAteom(ctx, pod)
 		return
 	}
 
@@ -185,21 +196,41 @@ func isWorkerEligible(pod *corev1.Pod) bool {
 	return pod.Status.PodIP != ""
 }
 
-// releaseActorOnDeadWorker resets the actor bound to a vanishing worker
-// pod back to STATUS_SUSPENDED so the next request reassigns it.
-//
-// UpdateActor uses optimistic version checking. A concurrent SuspendActor
-// or ResumeActor wins; we drop this attempt silently.
-//
-// Best-effort only. The caller always proceeds to DeleteWorker after this
-// returns, so any non-contention failure leaves the actor stranded
-// (STATUS_RUNNING, pointer at a pod that no longer exists). Recovery
-// then needs a manual SuspendActor.
-//
-// The long-term fix is a finalizer-based controller that holds the pod
-// in Terminating state until the actor is gracefully suspended. Tracked
-// in https://github.com/agent-substrate/substrate/issues/23.
-func (s *WorkerPoolSyncer) releaseActorOnDeadWorker(ctx context.Context, namespace, pool, podName string) error {
+const ateomContainerName = "ateom"
+
+func ateomTerminated(pod *corev1.Pod) bool {
+	for i := range pod.Status.ContainerStatuses {
+		cs := &pod.Status.ContainerStatuses[i]
+		if cs.Name != "ateom" {
+			continue
+		}
+		if cs.LastTerminationState.Terminated != nil || cs.State.Terminated != nil {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *WorkerPoolSyncer) handleTerminatedAteom(ctx context.Context, pod *corev1.Pod) {
+	slog.InfoContext(ctx, "Syncer: worker ateom terminated; crashing actor and recycling pod",
+		slog.String("worker", pod.Namespace+"/"+pod.Name))
+	if err := s.crashActorOnDeadWorker(ctx, pod.Namespace, pod.Labels[workerPodLabel], pod.Name); err != nil {
+		slog.ErrorContext(ctx, "Failed to crash actor bound to crashed worker; keeping pod so the resync retries", slog.Any("err", err))
+		return
+	}
+	if err := s.persistence.DeleteWorker(ctx, pod.Namespace, pod.Labels[workerPodLabel], pod.Name); err != nil {
+		slog.ErrorContext(ctx, "Failed to delete crashed worker from store", slog.Any("err", err))
+	}
+	// Deleting the pod, because the actor network may not have been cleaned up from the Ateom Pod's net NS.
+	err := s.kubeClient.CoreV1().Pods(pod.Namespace).Delete(ctx, pod.Name, metav1.DeleteOptions{
+		Preconditions: metav1.NewUIDPreconditions(string(pod.UID)),
+	})
+	if err != nil && !apierrors.IsNotFound(err) {
+		slog.ErrorContext(ctx, "Failed to delete crashed worker pod", slog.Any("err", err))
+	}
+}
+
+func (s *WorkerPoolSyncer) crashActorOnDeadWorker(ctx context.Context, namespace, pool, podName string) error {
 	worker, err := s.persistence.GetWorker(ctx, namespace, pool, podName)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
@@ -210,24 +241,32 @@ func (s *WorkerPoolSyncer) releaseActorOnDeadWorker(ctx context.Context, namespa
 	if worker.Assignment == nil {
 		return nil
 	}
-	actor, err := s.persistence.GetActor(ctx, worker.Assignment.Actor.Atespace, worker.Assignment.Actor.Name)
+	atespace := worker.GetAssignment().GetActor().GetAtespace()
+	actorName := worker.GetAssignment().GetActor().GetName()
+	if atespace == "" || actorName == "" {
+		slog.WarnContext(ctx, "cannot release actor on worker, since either atespace or actor name is empty", slog.String("atespace", atespace), slog.String("actor name", actorName))
+		return nil
+	}
+	actor, err := s.persistence.GetActor(ctx, atespace, actorName)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return nil
 		}
 		return err
 	}
-	// Skip if a concurrent SuspendActor already cleared the pointer.
-	if actor.GetAteomPodNamespace() != namespace || actor.GetAteomPodName() != podName {
+	// Only crash the actor if it's still assigned to the same worker.
+	if actor.GetAteomPodNamespace() == "" || actor.GetAteomPodName() == "" || actor.GetAteomPodUid() == "" {
+		slog.WarnContext(ctx, "cannot release actor on worker", slog.String("ateom pod namesace", actor.GetAteomPodNamespace()), slog.String("ateom name", actor.GetAteomPodName()), slog.String("ateom pod uid", actor.GetAteomPodUid()))
 		return nil
 	}
-	if actor.Status != ateapipb.Actor_STATUS_CRASHED {
-		actor.Status = ateapipb.Actor_STATUS_SUSPENDED
+	if actor.GetAteomPodNamespace() != worker.GetWorkerNamespace() || actor.GetAteomPodName() != worker.GetWorkerPod() || actor.GetAteomPodUid() != worker.GetWorkerPodUid() {
+		return nil
 	}
+	actor.Status = ateapipb.Actor_STATUS_CRASHED
 	actor.AteomPodNamespace = ""
 	actor.AteomPodName = ""
 	actor.AteomPodIp = ""
-	actor.InProgressSnapshot = ""
+	actor.AteomPodUid = ""
 	actor.WorkerPoolName = ""
 	if _, err := s.persistence.UpdateActor(ctx, actor, actor.GetMetadata().GetVersion()); err != nil && !errors.Is(err, store.ErrPersistenceRetry) {
 		return err

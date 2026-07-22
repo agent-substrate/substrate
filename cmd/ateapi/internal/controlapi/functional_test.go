@@ -293,7 +293,7 @@ func setupTest(t *testing.T, ns string) *testContext {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	syncer := NewWorkerPoolSyncer(persistence, workerInformer, workerPoolLister)
+	syncer := NewWorkerPoolSyncer(persistence, k8sClient, workerInformer, workerPoolLister)
 	syncer.Start(ctx)
 
 	workerFactory.Start(ctx.Done())
@@ -2513,29 +2513,34 @@ func TestSuspendActor_DanglingWorker(t *testing.T) {
 
 	deleteWorkerPod(t, tc, ns, "worker-1")
 
-	// 3. Call SuspendActor -> Should succeed (our fix skips missing pod execution)
-	actors, _, _ := tc.persistence.ListActors(context.Background(), testAtespace, maxPageSize, "")
-	t.Logf("Actors in Redis before Suspend: %d", len(actors))
-	for _, a := range actors {
-		t.Logf("  Actor: %s/%s/%s", a.GetActorTemplateNamespace(), a.GetActorTemplateName(), a.GetMetadata().GetName())
+	// 3. The syncer crashes a RUNNING actor whose worker pod vanished.
+	if err := wait.PollUntilContextTimeout(context.Background(), 100*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
+		a, gerr := tc.persistence.GetActor(ctx, testAtespace, name)
+		if gerr != nil {
+			return false, gerr
+		}
+		return a.GetStatus() == ateapipb.Actor_STATUS_CRASHED, nil
+	}); err != nil {
+		t.Fatalf("actor not marked CRASHED after worker deletion: %v", err)
 	}
 
+	// 4. SuspendActor now fails: there is no live state left to snapshot.
 	_, err = tc.client.SuspendActor(context.Background(), &ateapipb.SuspendActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
 	})
-	if err != nil {
-		t.Fatalf("SuspendActor failed: %v", err)
+	if err == nil {
+		t.Fatalf("expected SuspendActor to fail for a crashed actor")
 	}
 
-	// 4. Verify it becomes SUSPENDED in Redis
+	// 5. Verify the crash stuck and the dead worker binding is cleared.
 	getResp, err := tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
 	})
 	if err != nil {
 		t.Fatalf("GetActor failed: %v", err)
 	}
-	if getResp.GetStatus() != ateapipb.Actor_STATUS_SUSPENDED {
-		t.Errorf("expected status SUSPENDED, got %v", getResp.GetStatus())
+	if getResp.GetStatus() != ateapipb.Actor_STATUS_CRASHED {
+		t.Errorf("expected status CRASHED, got %v", getResp.GetStatus())
 	}
 	if getResp.GetAteomPodNamespace() != "" {
 		t.Errorf("expected ateom_pod_namespace to be empty, got %v", getResp.GetAteomPodNamespace())

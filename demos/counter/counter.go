@@ -93,6 +93,18 @@ func main() {
 		w.Write([]byte("ok\n"))
 	})
 
+	// /crash makes the actor exit with status 1 on demand, to exercise
+	// actor crash handling while the actor is actively serving.
+	defaultMux.HandleFunc("/crash", func(w http.ResponseWriter, r *http.Request) {
+		slog.ErrorContext(r.Context(), "Crashing deliberately (/crash requested)")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("crashing\n"))
+		if f, ok := w.(http.Flusher); ok {
+			f.Flush()
+		}
+		os.Exit(1)
+	})
+
 	go func() {
 		slog.InfoContext(ctx, "Starting counter server on port 80")
 		if err := http.ListenAndServe(":80", defaultMux); err != nil {

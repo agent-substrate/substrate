@@ -138,7 +138,7 @@ func main() {
 	workerPodInformerFactory, workerPodInformer := controlapi.WorkerPodInformer(clientset)
 	ateletPodInformerFactory, ateletPodInformer := controlapi.AteletInformer(clientset)
 
-	syncer := controlapi.NewWorkerPoolSyncer(redisPersistence, workerPodInformer, workerPoolLister)
+	syncer := controlapi.NewWorkerPoolSyncer(redisPersistence, clientset, workerPodInformer, workerPoolLister)
 	syncer.Start(ctx)
 
 	stopCh := make(chan struct{})

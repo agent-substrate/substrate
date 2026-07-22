@@ -13,7 +13,7 @@
 # limitations under the License.
 
 
-# Define Permissions (Read-Only for Pods)
+# Define Permissions.
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -21,7 +21,9 @@ metadata:
 rules:
 - apiGroups: [""]
   resources: ["pods"]
-  verbs: ["get", "watch", "list"]
+  # delete is needed by the worker pool syncer
+  # to recycle worker pods whose ateom container terminated.
+  verbs: ["get", "watch", "list", "delete"]
 - apiGroups: ["ate.dev"]
   resources: ["actortemplates", "workerpools", "sandboxconfigs"]
   verbs: ["get", "watch", "list"]
