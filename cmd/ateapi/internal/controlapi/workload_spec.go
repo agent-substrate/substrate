@@ -59,6 +59,7 @@ func workloadSpecFromActorTemplate(actorTemplate *atev1alpha1.ActorTemplate) *at
 			Name:    ctr.Name,
 			Image:   ctr.Image,
 			Command: ctr.Command,
+			Args:    ctr.Args,
 			Readyz:  toAteletReadyz(ctr.Readyz),
 		}
 		for _, mount := range ctr.VolumeMounts {

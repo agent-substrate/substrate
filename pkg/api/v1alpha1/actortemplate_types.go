@@ -92,12 +92,28 @@ type Container struct {
 	// +kubebuilder:validation:XValidation:rule="self.contains('@')",message="All images must be pinned (changing the image invalidates snapshots)"
 	Image string `json:"image,omitempty"`
 
-	// Entrypoint array. Not executed within a shell.
+	// Entrypoint array. Not executed within a shell. The container image's
+	// ENTRYPOINT is used if this is not provided; if it is provided, the
+	// image's ENTRYPOINT and CMD are both ignored and the process argv is
+	// command + args.
+	//
+	// Unlike Kubernetes, variable references $(VAR_NAME) are NOT expanded.
 	//
 	// +optional
 	// +kubebuilder:validation:MaxItems=64
 	// +listType=atomic
 	Command []string `json:"command,omitempty"`
+
+	// Arguments to the entrypoint. Not executed within a shell. The container
+	// image's CMD is used if this is not provided (unless command is set,
+	// which discards the image's CMD).
+	//
+	// Unlike Kubernetes, variable references $(VAR_NAME) are NOT expanded.
+	//
+	// +optional
+	// +kubebuilder:validation:MaxItems=64
+	// +listType=atomic
+	Args []string `json:"args,omitempty"`
 
 	// Environment variables to set in the worker replicas.
 	//

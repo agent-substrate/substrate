@@ -108,6 +108,7 @@ message Container {
   string name = 1;
   string image = 2;
   repeated string command = 3;
+  repeated string args = 7;
   repeated EnvEntry env = 4;
   Readyz readyz = 5;
   repeated VolumeMount volume_mounts = 6;
