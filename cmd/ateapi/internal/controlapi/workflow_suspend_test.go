@@ -195,7 +195,7 @@ func newDanglingDialer() *AteletDialer {
 	empty := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{
 		byNamespaceAndName: func(obj any) ([]string, error) { return nil, nil },
 	})
-	return NewAteletDialer(empty, empty)
+	return NewAteletDialer(empty, empty, "", "")
 }
 
 func TestCallAteletSuspendStep_DanglingWorkerDoesNotRecordPhantomSnapshot(t *testing.T) {
