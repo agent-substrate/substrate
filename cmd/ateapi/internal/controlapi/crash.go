@@ -16,6 +16,7 @@ package controlapi
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 
@@ -44,26 +45,71 @@ func maybeCrashActor(ctx context.Context, st store.Interface, atespace, actorNam
 	return fmt.Errorf("%s: %w", wrapMsg, err)
 }
 
-// crashActor moves the actor to CRASHED state.
+// crashActor moves the actor to CRASHED state and frees the worker it was
+// assigned to, if any, so the worker can host other actors.
 func crashActor(ctx context.Context, st store.Interface, atespace, actorName string) error {
 	actor, err := st.GetActor(ctx, atespace, actorName)
 	if err != nil {
 		return fmt.Errorf("while loading actor to crash: %w", err)
 	}
-	actor.Status = ateapipb.Actor_STATUS_CRASHED
-	// InProgressSnapshot is kept for debugging; failed workflow
-	// steps must never promote it to LatestSnapshotInfo.
-	// TODO(zoezhao):
-	// 1. If the Actor crashed because the worker is unhealthy,
-	//    free the worker and mark it as unhealthy(or delete it)
-	//    to prevent other actors from being scheduled on it.
-	// 2. If the Actor crashed while resuming from a Paused state,
-	//    we must preserve the Actor's assigned node VM in order
-	//    to support `ate actor dump` command.
-	// (https://github.com/agent-substrate/substrate/issues/119)
-	if _, err := st.UpdateActor(ctx, actor, actor.GetMetadata().GetVersion()); err != nil {
-		return fmt.Errorf("while marking actor crashed: %w", err)
+
+	var errCollected []error
+	if err := releaseWorker(ctx, st, actor); err != nil {
+		errCollected = append(errCollected, err)
 	}
 
+	actor.Status = ateapipb.Actor_STATUS_CRASHED
+
+	// InProgressSnapshot is kept for debugging; failed workflow
+	// steps must never promote it to LatestSnapshotInfo.
+	actor.AteomPodNamespace = ""
+	actor.AteomPodName = ""
+	actor.AteomPodIp = ""
+	actor.AteomPodUid = ""
+	actor.WorkerPoolName = ""
+
+	if _, err := st.UpdateActor(ctx, actor, actor.GetMetadata().GetVersion()); err != nil {
+		errCollected = append(errCollected, fmt.Errorf("while marking actor crashed: %w", err))
+	}
+	return errors.Join(errCollected...)
+}
+
+// releaseWorker clears the worker's assignment if it still points at the given
+// actor. A missing worker or an already-cleared assignment is not an error.
+func releaseWorker(ctx context.Context, st store.Interface, actor *ateapipb.Actor) error {
+	podNamespace := actor.GetAteomPodNamespace()
+	podName := actor.GetAteomPodName()
+	podUid := actor.GetAteomPodUid()
+	poolName := actor.GetWorkerPoolName()
+
+	if podNamespace == "" || podName == "" || poolName == "" {
+		slog.WarnContext(ctx, "Actor's worker assignment is already cleared")
+		return nil
+	}
+
+	worker, err := st.GetWorker(ctx, podNamespace, poolName, podName)
+	if errors.Is(err, store.ErrNotFound) {
+		// No need to release if the worker is not found.
+		slog.WarnContext(ctx, "Worker already gone while crashing actor, skipping release", slog.String("worker", podUid))
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("while getting worker to release: %w", err)
+	}
+	wass := worker.GetAssignment()
+	if wass == nil {
+		slog.WarnContext(ctx, "Worker's assignment is already nil, skipping release", slog.String("worker", podUid))
+		return nil
+	}
+	// Only free it if it still belongs to us
+	if wass.GetActor().GetAtespace() != actor.GetMetadata().GetAtespace() || wass.GetActor().GetName() != actor.GetMetadata().GetName() {
+		slog.WarnContext(ctx, "Worker already assigned to another Actor", slog.String("worker", podUid))
+		return nil
+	}
+
+	worker.Assignment = nil
+	if err := st.UpdateWorker(ctx, worker, worker.GetVersion()); err != nil {
+		return fmt.Errorf("while releasing worker: %w", err)
+	}
 	return nil
 }
