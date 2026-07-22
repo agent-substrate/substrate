@@ -34,10 +34,7 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool) *appsv1ac.Deployment
 		WithArgs(
 			"--pod-uid=$(POD_UID)",
 		).
-		WithSecurityContext(corev1ac.SecurityContext().
-			WithPrivileged(true).
-			WithRunAsUser(0).
-			WithRunAsGroup(0)).
+		WithSecurityContext(ateomSecurityContext(wp.Spec.SandboxClass)).
 		WithEnv(
 			corev1ac.EnvVar().
 				WithName("POD_UID").
@@ -80,6 +77,46 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool) *appsv1ac.Deployment
 					"ate.dev/worker-pool": wp.Name,
 				}).
 				WithSpec(podSpecAC)))
+}
+
+// ateomGvisorCapabilities is the capability set an unprivileged gVisor worker
+// needs. runsc's gofer maps a full-range identity in a user namespace
+// (SETUID/SETGID/SETPCAP/SETFCAP), the sandbox pivots root and traces the
+// application (SYS_ADMIN/SYS_CHROOT/SYS_PTRACE), actor networking programs the
+// veth and nftables rules (NET_ADMIN/NET_RAW), and the OCI rootfs is unpacked
+// and device nodes created as root over image-owned trees
+// (DAC_OVERRIDE/FOWNER/CHOWN/MKNOD). This replaces the former privileged worker;
+// the default seccomp and AppArmor profiles are sufficient (no Unconfined).
+var ateomGvisorCapabilities = []corev1.Capability{
+	"NET_ADMIN", "SYS_ADMIN", "SYS_CHROOT", "SYS_PTRACE",
+	"SETUID", "SETGID", "SETPCAP", "DAC_OVERRIDE",
+	"FOWNER", "CHOWN", "MKNOD", "NET_RAW", "SETFCAP",
+}
+
+// ateomSecurityContext returns the ateom container security context for a sandbox
+// class. The gVisor worker runs unprivileged with an explicit capability set; the
+// micro-VM worker stays privileged because kata + cloud-hypervisor needs broad
+// host access (vhost devices, mounts). An empty class defaults to gVisor.
+func ateomSecurityContext(class atev1alpha1.SandboxClass) *corev1ac.SecurityContextApplyConfiguration {
+	sc := corev1ac.SecurityContext().
+		WithRunAsUser(0).
+		WithRunAsGroup(0)
+	if class == atev1alpha1.SandboxClassMicroVM {
+		return sc.WithPrivileged(true)
+	}
+	// runsc mounts and pivots root inside the sandbox, and the worker remounts
+	// /sys/fs/cgroup read-write to nest per-actor cgroups; the default AppArmor
+	// profile denies those mounts (enforced on GKE COS, a no-op on nodes that do
+	// not load AppArmor). A privileged worker got this implicitly; unprivileged
+	// must request it. seccomp stays at the runtime default. Confining runsc with
+	// a tailored AppArmor profile instead of Unconfined is a follow-up.
+	return sc.
+		WithPrivileged(false).
+		WithCapabilities(corev1ac.Capabilities().
+			WithDrop("ALL").
+			WithAdd(ateomGvisorCapabilities...)).
+		WithAppArmorProfile(corev1ac.AppArmorProfile().
+			WithType(corev1.AppArmorProfileTypeUnconfined))
 }
 
 // maybeApplyMicroVMPodShape adds the /dev/kvm device and node placement a

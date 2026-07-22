@@ -261,6 +261,54 @@ func TestMicroVMPodShape(t *testing.T) {
 	}
 }
 
+// TestAteomSecurityContextByClass asserts the gVisor worker runs unprivileged
+// with the explicit capability set while the micro-VM worker stays privileged,
+// and that an empty class defaults to gVisor.
+func TestAteomSecurityContextByClass(t *testing.T) {
+	tests := []struct {
+		name           string
+		class          atev1alpha1.SandboxClass
+		wantPrivileged bool
+		wantCaps       bool
+	}{
+		{"gvisor default", "", false, true},
+		{"gvisor explicit", atev1alpha1.SandboxClassGvisor, false, true},
+		{"microvm", atev1alpha1.SandboxClassMicroVM, true, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sc := ateomSecurityContext(tt.class)
+			if sc.Privileged == nil || *sc.Privileged != tt.wantPrivileged {
+				t.Errorf("Privileged = %v, want %v", sc.Privileged, tt.wantPrivileged)
+			}
+			if sc.RunAsUser == nil || *sc.RunAsUser != 0 || sc.RunAsGroup == nil || *sc.RunAsGroup != 0 {
+				t.Errorf("RunAsUser/Group = %v/%v, want 0/0", sc.RunAsUser, sc.RunAsGroup)
+			}
+			hasCaps := sc.Capabilities != nil && len(sc.Capabilities.Add) > 0
+			if hasCaps != tt.wantCaps {
+				t.Errorf("has capabilities = %v, want %v", hasCaps, tt.wantCaps)
+			}
+			if tt.wantCaps {
+				if len(sc.Capabilities.Drop) != 1 || sc.Capabilities.Drop[0] != "ALL" {
+					t.Errorf("capabilities drop = %v, want [ALL]", sc.Capabilities.Drop)
+				}
+				if diff := cmp.Diff(ateomGvisorCapabilities, sc.Capabilities.Add); diff != "" {
+					t.Errorf("capabilities add mismatch (-want +got):\n%s", diff)
+				}
+			}
+			// The gVisor worker runs AppArmor-unconfined (runsc + cgroup remount
+			// need mount); the privileged micro-VM worker leaves it unset.
+			wantAppArmor := tt.wantCaps
+			hasAppArmor := sc.AppArmorProfile != nil &&
+				sc.AppArmorProfile.Type != nil &&
+				*sc.AppArmorProfile.Type == corev1.AppArmorProfileTypeUnconfined
+			if hasAppArmor != wantAppArmor {
+				t.Errorf("AppArmor Unconfined = %v, want %v", hasAppArmor, wantAppArmor)
+			}
+		})
+	}
+}
+
 func testWorkerPoolApplyConfig(tmpl *atev1alpha1.WorkerPoolPodTemplate) *atev1alpha1.WorkerPool {
 	return &atev1alpha1.WorkerPool{
 		ObjectMeta: metav1.ObjectMeta{Name: "pool", Namespace: "default", UID: "uid"},
@@ -289,9 +337,14 @@ func expectedDeploymentApplyConfig(mutatePodSpec func(*corev1ac.PodSpecApplyConf
 			WithImage(wp.Spec.AteomImage).
 			WithArgs("--pod-uid=$(POD_UID)").
 			WithSecurityContext(corev1ac.SecurityContext().
-				WithPrivileged(true).
 				WithRunAsUser(0).
-				WithRunAsGroup(0)).
+				WithRunAsGroup(0).
+				WithPrivileged(false).
+				WithCapabilities(corev1ac.Capabilities().
+					WithDrop("ALL").
+					WithAdd(ateomGvisorCapabilities...)).
+				WithAppArmorProfile(corev1ac.AppArmorProfile().
+					WithType(corev1.AppArmorProfileTypeUnconfined))).
 			WithEnv(corev1ac.EnvVar().
 				WithName("POD_UID").
 				WithValueFrom(corev1ac.EnvVarSource().
