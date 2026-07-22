@@ -76,14 +76,11 @@ func AddPodIdentityToCertificate(pod *PodIdentity, template *x509.Certificate) e
 func PodIdentityFromCertificate(cert *x509.Certificate) (*PodIdentity, error) {
 	podIdentityCount := 0
 
-	pod := &PodIdentity{}
+	var podIdentityValue []byte
 	for _, ext := range cert.Extensions {
 		if ext.Id.Equal(oidPodIdentity) {
 			podIdentityCount++
-
-			if err := json.Unmarshal(ext.Value, pod); err != nil {
-				return nil, fmt.Errorf("while json-unmarshaling PodIdentity extension: %w", err)
-			}
+			podIdentityValue = ext.Value
 		}
 	}
 
@@ -92,6 +89,11 @@ func PodIdentityFromCertificate(cert *x509.Certificate) (*PodIdentity, error) {
 	}
 	if podIdentityCount > 1 {
 		return nil, fmt.Errorf("certificate contains multiple PodIdentity extensions")
+	}
+
+	pod := &PodIdentity{}
+	if err := json.Unmarshal(podIdentityValue, pod); err != nil {
+		return nil, fmt.Errorf("while json-unmarshaling PodIdentity extension: %w", err)
 	}
 
 	if err := validatePodIdentity(pod); err != nil {
