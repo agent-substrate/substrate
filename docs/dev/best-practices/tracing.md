@@ -29,49 +29,20 @@ Servers have an exporter service that batches spans and pushes them to a remote 
 
 ### For servers
 
-All servers need to initialize an OpenTelemetry exporter and tracer provider.  See `cmd/ateapi/ateapi.go:initTracing()` for an example:
+All servers need to initialize an OpenTelemetry exporter and tracer provider.  See `internal/serverboot.InitTracing()` (used by `cmd/ateapi/main.go`) for an example:
 
 ```go
-func initTracing(ctx context.Context) (*sdktrace.TracerProvider, error) {
-	exporter, err := otlptracegrpc.New(ctx,
-		// GKE managed traces doesn't support validating the TLS certs of the collector
-		otlptracegrpc.WithInsecure(),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create OTLP exporter: %w", err)
-	}
-
-	res, err := resource.New(ctx,
-		resource.WithAttributes(
-			semconv.ServiceName("ateapi"),
-		),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create resource: %w", err)
-	}
-
-	tp := sdktrace.NewTracerProvider(
-		sdktrace.WithBatcher(exporter),
-		sdktrace.WithResource(res),
-		// Only trace on-demand when signaled by the client (e.g. via --trace flag)
-		sdktrace.WithSampler(sdktrace.ParentBased(sdktrace.NeverSample())),
-	)
-	otel.SetTracerProvider(tp)
-	otel.SetTextMapPropagator(propagation.TraceContext{})
-
-	return tp, nil
+tp, err := serverboot.InitTracing(ctx, serverboot.TracingOptions{
+	ServiceName: "ateapi",
+	Sampler:     sdktrace.ParentBased(sdktrace.AlwaysSample()),
+})
+if err != nil {
+	serverboot.Fatal(ctx, "Failed to initialize tracing", err)
 }
+defer serverboot.ShutdownProvider("TracerProvider", tp.Shutdown)
 ```
 
-When calling the `initTracing()` function, be sure to `defer tp.Shutdown(ctx)` after the call to ensure that the tracer provider is properly shut down when the server exits:
-
-```go
-defer func() {
-  if err := tp.Shutdown(ctx); err != nil {
-    slog.Error("Failed to shutdown TracerProvider", slog.Any("err", err))
-  }
-}()
-```
+`InitTracing` registers the OTLP exporter, resource, sampler, and TraceContext propagator. Be sure to defer the shutdown (as above) to ensure that the tracer provider is properly shut down when the server exits.
 
 Note the following important features:
 
