@@ -135,3 +135,54 @@ func TestActorRefAttributes(t *testing.T) {
 		})
 	}
 }
+
+// TestKeySpellings pins the wire spelling of every key. Renaming one silently
+// breaks dashboards, alerts, and the contract between ateapi and atelet, so a
+// drift must fail here rather than in production.
+func TestKeySpellings(t *testing.T) {
+	tests := []struct {
+		key  attribute.Key
+		want string
+	}{
+		{AtespaceKey, "ate.atespace"},
+		{ActorNameKey, "ate.actor.name"},
+		{ActorUIDKey, "ate.actor.uid"},
+		{TemplateNameKey, "ate.template.name"},
+		{TemplateNamespaceKey, "ate.template.namespace"},
+		{ActorVersionKey, "ate.actor.version"},
+		{ActorOperationNameKey, "ate.actor.operation.name"},
+		{WorkerPoolNameKey, "ate.workerpool.name"},
+		{WorkerStateKey, "ate.worker.state"},
+		{SandboxClassKey, "ate.sandbox.class"},
+		{SnapshotKindKey, "ate.snapshot.kind"},
+		{SnapshotPhaseKey, "ate.snapshot.phase"},
+		{SchedulerOutcomeKey, "ate.scheduler.outcome"},
+		{ErrorTypeKey, "error.type"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.want, func(t *testing.T) {
+			if string(tt.key) != tt.want {
+				t.Errorf("key = %q, want %q", string(tt.key), tt.want)
+			}
+		})
+	}
+}
+
+func TestClampRestoreSnapshotKind(t *testing.T) {
+	tests := []struct {
+		in, want string
+	}{
+		{SnapshotKindGolden, SnapshotKindGolden},
+		{SnapshotKindLatest, SnapshotKindLatest},
+		{SnapshotKindBoot, SnapshotKindUnknown},
+		{"", SnapshotKindUnknown},
+		{"$(rm -rf)", SnapshotKindUnknown},
+	}
+	for _, tt := range tests {
+		t.Run(tt.in, func(t *testing.T) {
+			if got := ClampRestoreSnapshotKind(tt.in); got != tt.want {
+				t.Errorf("ClampRestoreSnapshotKind(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
