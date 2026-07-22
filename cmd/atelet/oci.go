@@ -30,6 +30,7 @@ import (
 	"strings"
 
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/memorypullcache"
+	"github.com/agent-substrate/substrate/internal/ateerrors"
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/opencontainers/runtime-spec/specs-go"
@@ -56,7 +57,7 @@ const (
 	ActorIDFileName = "actor-id"
 )
 
-func prepareOCIDirectory(ctx context.Context, pullCache *memorypullcache.MemoryPullCache, actorUID, containerName, ref string, args []string, env []string, annotations map[string]string, netns string, identityDir string, durableDirVolumeMounts []*ateletpb.VolumeMount) error {
+func prepareOCIDirectory(ctx context.Context, pullCache *memorypullcache.MemoryPullCache, actorUID, containerName, ref string, command, args []string, env []string, annotations map[string]string, netns string, identityDir string, durableDirVolumeMounts []*ateletpb.VolumeMount) error {
 	tracer := otel.Tracer("prepareOCIDirectory")
 
 	ctx, span := tracer.Start(ctx, "prepareOCIDirectory")
@@ -80,6 +81,14 @@ func prepareOCIDirectory(ctx context.Context, pullCache *memorypullcache.MemoryP
 	}
 	defer tarData.Close()
 
+	// Argv and env need only the image config, so resolve them before the
+	// untar to fail fast on an invalid container config.
+	resolvedArgs, err := resolveProcessArgs(imageCfg, command, args)
+	if err != nil {
+		return fmt.Errorf("while resolving process args for container %q: %w", containerName, err)
+	}
+	resolvedEnv := resolveActorEnv(imageCfg, env)
+
 	if err := untar(ctx, tarData, rootPath); err != nil {
 		return fmt.Errorf("in untar: %w", err)
 	}
@@ -93,7 +102,7 @@ func prepareOCIDirectory(ctx context.Context, pullCache *memorypullcache.MemoryP
 		}
 	}
 
-	ociSpec := buildActorOCISpec(actorUID, imageCfg, args, env, annotations, netns, identityDir, durableDirVolumeMounts)
+	ociSpec := buildActorOCISpec(actorUID, resolvedArgs, resolvedEnv, annotations, netns, identityDir, durableDirVolumeMounts)
 	ociSpecBytes, err := json.MarshalIndent(ociSpec, "", "  ")
 	if err != nil {
 		return fmt.Errorf("while marshaling OCI spec: %w", err)
@@ -106,10 +115,16 @@ func prepareOCIDirectory(ctx context.Context, pullCache *memorypullcache.MemoryP
 	return nil
 }
 
-// mergeActorEnv merges the ActorTemplate env and the image's ENV, with the template taking precedence.
-// duplicated keys are removed in favor of the following precedence template env > image env.
-// default PATH stands in for an image config with no env
-func mergeActorEnv(imageEnv, templateEnv []string) []string {
+// resolveActorEnv computes the final container environment from the image's ENV
+// and the ActorTemplate env, with the template taking precedence. Duplicate keys
+// are removed in favor of template env > image env, and a default PATH stands in
+// when neither source sets one.
+func resolveActorEnv(imageCfg *v1.Config, templateEnv []string) []string {
+	var imageEnv []string
+	if imageCfg != nil {
+		imageEnv = imageCfg.Env
+	}
+
 	seen := make(map[string]struct{})
 	var out []string
 	add := func(entries ...string) {
@@ -132,17 +147,39 @@ func mergeActorEnv(imageEnv, templateEnv []string) []string {
 	return out
 }
 
-// buildActorOCISpec assembles the OCI runtime spec for an actor container.
+// resolveProcessArgs computes the final process argv for a container,
+// following Kubernetes Pod semantics: setting command overrides both the
+// image's ENTRYPOINT and its CMD (CMD is dropped, not appended), while
+// setting only args overrides just the image's CMD.
+func resolveProcessArgs(imageCfg *v1.Config, command, args []string) ([]string, error) {
+	var entrypoint, cmd []string
+	if imageCfg != nil {
+		entrypoint = imageCfg.Entrypoint
+		cmd = imageCfg.Cmd
+	}
+	if len(command) > 0 {
+		entrypoint = command
+		cmd = nil
+	}
+	if len(args) > 0 {
+		cmd = args
+	}
+
+	argv := make([]string, 0, len(entrypoint)+len(cmd))
+	argv = append(argv, entrypoint...)
+	argv = append(argv, cmd...)
+	if len(argv) == 0 {
+		return nil, fmt.Errorf("%w: no command specified: image defines neither ENTRYPOINT nor CMD and the container sets neither command nor args", ateerrors.ReasonInvalidContainerConfig)
+	}
+	return argv, nil
+}
+
+// buildActorOCISpec assembles the OCI runtime spec for an actor container from
+// already-resolved args and env (see resolveProcessArgs and resolveActorEnv).
 // When identityDir is non-empty it adds a read-only bind mount of that host
 // directory at IdentityMountPath so the actor can read its own ID (see
 // IdentityMountPath for why this is a bind mount rather than env vars).
-func buildActorOCISpec(actorUID string, imageCfg *v1.Config, args []string, env []string, annotations map[string]string, netns string, identityDir string, durableDirVolumeMounts []*ateletpb.VolumeMount) *specs.Spec {
-	var imageEnv []string
-	if imageCfg != nil {
-		imageEnv = imageCfg.Env
-	}
-	envVars := mergeActorEnv(imageEnv, env)
-
+func buildActorOCISpec(actorUID string, args []string, env []string, annotations map[string]string, netns string, identityDir string, durableDirVolumeMounts []*ateletpb.VolumeMount) *specs.Spec {
 	mounts := []specs.Mount{
 		{
 			Destination: "/proc",
@@ -188,7 +225,7 @@ func buildActorOCISpec(actorUID string, imageCfg *v1.Config, args []string, env 
 				GID: 0,
 			},
 			Args: args,
-			Env:  envVars,
+			Env:  env,
 			Cwd:  "/",
 			Capabilities: &specs.LinuxCapabilities{
 				Bounding: []string{

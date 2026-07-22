@@ -200,6 +200,29 @@ func TestActorTemplateValidation(t *testing.T) {
 		wantErr: true,
 		errMsg:  "Too many",
 	}, {
+		name: "valid container Args",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Containers[0].Args = []string{"arg"}
+		},
+		wantErr: false,
+	}, {
+		name: "long container Args",
+		mutate: func(at *ActorTemplate) {
+			for range 64 {
+				at.Spec.Containers[0].Args = append(at.Spec.Containers[0].Args, "x")
+			}
+		},
+		wantErr: false,
+	}, {
+		name: "too-many container Args",
+		mutate: func(at *ActorTemplate) {
+			for range 65 {
+				at.Spec.Containers[0].Args = append(at.Spec.Containers[0].Args, "x")
+			}
+		},
+		wantErr: true,
+		errMsg:  "Too many",
+	}, {
 		name: "valid EnvVar",
 		mutate: func(at *ActorTemplate) {
 			at.Spec.Containers[0].Env = []EnvVar{

@@ -88,7 +88,7 @@ The `ActorTemplate` defines the code, environment, and state-management policies
 
 | Field | Type | Description |
 | :--- | :--- | :--- |
-| `containers` | `[]Container` | **Required.** The workload definition (image, command, env, ports). Each container may also declare an optional `readyz` HTTP probe — see [Container Readiness Probe](#container-readiness-probe-readyz). |
+| `containers` | `[]Container` | **Required.** The workload definition — see [Container Fields](#container-fields) below. Each container may also declare an optional `readyz` HTTP probe — see [Container Readiness Probe](#container-readiness-probe-readyz). |
 | `sandboxClass` | `string` | Optional. The sandbox runtime family this template's actors require: `gvisor` (default) or `microvm`. Only `WorkerPool`s whose `sandboxClass` matches are eligible. |
 | `workerSelector` | `*LabelSelector` | Optional. Gates which `WorkerPool`s actors from this template may use, by matching against each pool's labels. If unset, all pools are eligible (subject to the actor's own `worker_selector`). |
 | `snapshotsConfig` | `SnapshotsConfig` | **Required.** GCS bucket and folder where memory snapshots are stored. |
@@ -109,6 +109,22 @@ Substrate uses a **Uniform DNS Mesh**: every actor created from a template is au
 Substrate bind-mounts a read-only, per-actor identity directory at **`/run/ate`** into each of the actor's containers. An actor can learn its own name without parsing the `Host` header by reading the file **`/run/ate/actor-id`** inside it, which contains the raw actor name with no trailing newline. Further identity and configuration data may appear in this directory over time.
 
 Read it fresh rather than caching it at process start. It is delivered as a per-actor bind mount, not an environment variable, precisely so it carries the correct name after a resume from the golden snapshot — an env var (or a file baked into the image) would be frozen at the *golden* actor's name, since it lives in the checkpointed process memory, and would therefore be identical for every actor of the template.
+
+### Container Fields
+
+Each entry in `containers` describes one process to run in the actor's sandbox.
+
+| Field | Type | Description |
+| :--- | :--- | :--- |
+| `name` | `string` | **Required.** DNS-label-safe container name. |
+| `image` | `string` | **Required.** Must be pinned by digest (`...@sha256:...`) — changing the image invalidates snapshots. |
+| `command` | `[]string` | Optional. Entrypoint array. If unset, the image's `ENTRYPOINT` is used. If set, it replaces **both** the image's `ENTRYPOINT` and `CMD`. |
+| `args` | `[]string` | Optional. Arguments to the entrypoint. If unset, the image's `CMD` is used (unless `command` is set, which discards the image's `CMD`). If set, it replaces the image's `CMD`. |
+| `env` | `[]EnvVar` | Optional. Literal `value` entries or `valueFrom.secretKeyRef`. |
+| `readyz` | `ContainerReadyz` | Optional. HTTP readiness probe — see [Container Readiness Probe](#container-readiness-probe-readyz). |
+| `volumeMounts` | `[]VolumeMount` | Optional. Mounts a `spec.volumes` entry (e.g. `durableDir`) into this container. |
+
+`command` and `args` resolve against the container image's `ENTRYPOINT`/`CMD` the same way [Kubernetes Pod `command`/`args`](https://kubernetes.io/docs/tasks/inject-data-application/define-command-argument-container/) resolve against `ENTRYPOINT`/`CMD`. If the resolved argv is empty — the image sets neither `ENTRYPOINT` nor `CMD`, and the container sets neither `command` nor `args` — `Run`/`Restore` fails.
 
 ### Container Readiness Probe (`readyz`)
 
@@ -144,9 +160,6 @@ spec:
   containers:
   - name: agent
     image: gcr.io/my-project/my-agent:latest
-    command: ["/app/server"]
-    ports:
-    - containerPort: 80
     # Optional: gate Run/Restore on the agent's HTTP readiness endpoint.
     # See "Container Readiness Probe (readyz)" above.
     readyz:

@@ -260,7 +260,7 @@ func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (*atele
 	if err := s.prepareOCIBundles(ctx, actorUID, actorName,
 		req.GetSpec(), req.GetTargetAteomUid(),
 	); err != nil {
-		return nil, err
+		return nil, ateerrors.CrashIfReason(ctx, err, ateerrors.ReasonInvalidContainerConfig)
 	}
 
 	client, err := s.dialAteom(ctx, req.GetTargetAteomUid())
@@ -550,7 +550,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		}
 		t := time.Now()
 		if err := s.prepareOCIBundles(gctx, actorUID, actorName, req.GetSpec(), req.GetTargetAteomUid()); err != nil {
-			return ateerrors.CrashIfReason(ctx, err, ateerrors.ReasonTerminalFileSystemError)
+			return ateerrors.CrashIfReason(ctx, err, ateerrors.ReasonTerminalFileSystemError, ateerrors.ReasonInvalidContainerConfig)
 		}
 		dBundles = time.Since(t)
 		return nil
@@ -716,6 +716,7 @@ func (s *AteomHerder) prepareOCIBundles(
 			spec.GetPauseImage(),
 			[]string{"/pause"},
 			nil,
+			nil,
 			annotations,
 			ateompath.AteomNetNSPath(targetAteomUid),
 			"", // pause is sandbox infra; it gets no actor identity mount.
@@ -747,6 +748,7 @@ func (s *AteomHerder) prepareOCIBundles(
 				ctr.GetName(),
 				ctr.GetImage(),
 				ctr.GetCommand(),
+				ctr.GetArgs(),
 				envs,
 				map[string]string{
 					"io.kubernetes.cri.container-type": "container",
