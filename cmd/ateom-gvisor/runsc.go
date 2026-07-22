@@ -18,11 +18,15 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"os/exec"
+	"path/filepath"
+
+	specs "github.com/opencontainers/runtime-spec/specs-go"
 
 	"github.com/agent-substrate/substrate/internal/ateompath"
 )
@@ -32,11 +36,50 @@ type runsc struct {
 	actorUID string
 }
 
+// ensureContainerCgroupsPath sets the OCI spec's cgroupsPath so runsc creates a
+// per-container cgroup leaf under the worker pod's own cgroup (see
+// setupCgroupDelegation). atelet emits a runtime-agnostic spec with no
+// cgroupsPath; the gVisor ateom fills in its own convention here, mirroring how
+// the micro-VM ateom assigns /ateomchv/<id> in ensureKataCompatibleSpec. The
+// path is colon-free (so runsc uses the cgroupfs driver, not systemd) and
+// absolute, so it resolves under the pod scope in the worker's private cgroup
+// namespace.
+func (r *runsc) ensureContainerCgroupsPath(containerName string) error {
+	specPath := filepath.Join(ateompath.OCIBundlePath(r.actorUID, containerName), "config.json")
+	b, err := os.ReadFile(specPath)
+	if err != nil {
+		return fmt.Errorf("reading %q: %w", specPath, err)
+	}
+	var spec specs.Spec
+	if err := json.Unmarshal(b, &spec); err != nil {
+		return fmt.Errorf("parsing %q: %w", specPath, err)
+	}
+	if spec.Linux == nil {
+		spec.Linux = &specs.Linux{}
+	}
+	if spec.Linux.CgroupsPath != "" {
+		return nil
+	}
+	spec.Linux.CgroupsPath = "/" + containerName
+	out, err := json.MarshalIndent(&spec, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshaling %q: %w", specPath, err)
+	}
+	if err := os.WriteFile(specPath, out, 0o600); err != nil {
+		return fmt.Errorf("writing %q: %w", specPath, err)
+	}
+	return nil
+}
+
 func (r *runsc) cmdCreate(ctx context.Context, out io.Writer, containerName string, additionalArgs []string) error {
 	reapLock.RLock()
 	defer reapLock.RUnlock()
 
 	slog.InfoContext(ctx, "About to run runsc create", slog.String("container", containerName))
+
+	if err := r.ensureContainerCgroupsPath(containerName); err != nil {
+		return fmt.Errorf("while setting cgroups path for %q: %w", containerName, err)
+	}
 
 	args := []string{
 		"-log-format", "json",
@@ -178,6 +221,10 @@ func (r *runsc) cmdRestore(ctx context.Context, out io.Writer, containerName, ch
 	defer reapLock.RUnlock()
 
 	slog.InfoContext(ctx, "About to run runsc restore", slog.String("container", containerName))
+
+	if err := r.ensureContainerCgroupsPath(containerName); err != nil {
+		return fmt.Errorf("while setting cgroups path for %q: %w", containerName, err)
+	}
 
 	cmd := exec.CommandContext(
 		ctx,
