@@ -663,7 +663,24 @@ func enableIPv4Forwarding() error {
 	// the host-side veth and then leave through the pod's eth0. Without this, the
 	// kernel would not route traffic between those interfaces even though both
 	// live in the worker pod network namespace.
-	if err := os.WriteFile("/proc/sys/net/ipv4/ip_forward", []byte("1\n"), 0o644); err != nil {
+	//
+	// Without privileged, the container runtime bind-mounts /proc/sys read-only.
+	// The worker holds CAP_SYS_ADMIN and uses no user namespace, so the ro flag
+	// is not locked: clear it, write the sysctl, restore ro.
+	const path = "/proc/sys/net/ipv4/ip_forward"
+	if b, err := os.ReadFile(path); err == nil && len(b) > 0 && b[0] == '1' {
+		return nil
+	}
+	if err := os.WriteFile(path, []byte("1\n"), 0o644); err == nil {
+		return nil
+	}
+	if err := unix.Mount("none", "/proc/sys", "", unix.MS_BIND|unix.MS_REMOUNT, ""); err != nil {
+		return fmt.Errorf("while remounting /proc/sys read-write to enable IPv4 forwarding: %w", err)
+	}
+	defer func() {
+		_ = unix.Mount("none", "/proc/sys", "", unix.MS_BIND|unix.MS_REMOUNT|unix.MS_RDONLY, "")
+	}()
+	if err := os.WriteFile(path, []byte("1\n"), 0o644); err != nil {
 		return fmt.Errorf("while enabling IPv4 forwarding in worker pod netns: %w", err)
 	}
 	return nil
