@@ -20,17 +20,20 @@ import (
 
 	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/types"
+
+	"github.com/agent-substrate/substrate/internal/resources"
 )
 
 func TestWorkerPoolCreatesNetworkPolicy(t *testing.T) {
+	ctx := t.Context()
 	wp := makeWorkerPool("test-netpolicy-create", "default", 2, "ateom:v1")
-	if err := k8sClient.Create(testCtx, wp); err != nil {
+	if err := k8sClient.Create(ctx, wp); err != nil {
 		t.Fatalf("create WorkerPool: %v", err)
 	}
-	t.Cleanup(func() { k8sClient.Delete(testCtx, wp) }) //nolint:errcheck
+	deleteOnCleanup(t, wp)
 
 	eventually(t, func(ctx context.Context) (bool, error) {
-		npName := npName(wp.Name)
+		npName := resources.NetworkPolicyName(wp.Name)
 		np := &networkingv1.NetworkPolicy{}
 		err := k8sClient.Get(ctx, types.NamespacedName{Name: npName, Namespace: wp.Namespace}, np)
 		if err != nil {
@@ -42,23 +45,24 @@ func TestWorkerPoolCreatesNetworkPolicy(t *testing.T) {
 			return false, nil
 		}
 
+		// Verify metadata label matches the worker pool
+		if np.Labels == nil || np.Labels["ate.dev/worker-pool"] != wp.Name {
+			return false, nil
+		}
+
 		// Verify PodSelector matches the worker pool
 		if np.Spec.PodSelector.MatchLabels == nil || np.Spec.PodSelector.MatchLabels["ate.dev/worker-pool"] != wp.Name {
 			return false, nil
 		}
 
-		// Verify PolicyTypes contains Ingress and Egress
+		// Verify PolicyTypes contains Ingress
 		hasIngress := false
-		hasEgress := false
 		for _, pt := range np.Spec.PolicyTypes {
 			if pt == networkingv1.PolicyTypeIngress {
 				hasIngress = true
 			}
-			if pt == networkingv1.PolicyTypeEgress {
-				hasEgress = true
-			}
 		}
-		if !hasIngress || !hasEgress {
+		if !hasIngress {
 			return false, nil
 		}
 
@@ -71,20 +75,15 @@ func TestWorkerPoolCreatesNetworkPolicy(t *testing.T) {
 			return false, nil
 		}
 		fromPeer := ingressRule.From[0]
-		if fromPeer.NamespaceSelector == nil || fromPeer.NamespaceSelector.MatchLabels["kubernetes.io/metadata.name"] != "ate-system" {
+		if fromPeer.NamespaceSelector == nil || fromPeer.NamespaceSelector.MatchLabels["kubernetes.io/metadata.name"] != ateSystemNamespace {
 			return false, nil
 		}
-		if fromPeer.PodSelector == nil || fromPeer.PodSelector.MatchLabels["app"] != "atenet-router" {
+		if fromPeer.PodSelector == nil || fromPeer.PodSelector.MatchLabels["app"] != atenetRouterAppName {
 			return false, nil
 		}
 
-		// Verify Egress Rules:
-		// For now, we allow all egress.
-		if len(np.Spec.Egress) != 1 {
-			return false, nil
-		}
-		egressRule := np.Spec.Egress[0]
-		if len(egressRule.To) != 0 || len(egressRule.Ports) != 0 {
+		// Verify Egress Rules are unmanaged (empty)
+		if len(np.Spec.Egress) != 0 {
 			return false, nil
 		}
 

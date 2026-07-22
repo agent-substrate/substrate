@@ -16,8 +16,6 @@ package controllers
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 
 	networkingv1 "k8s.io/api/networking/v1"
@@ -29,10 +27,15 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
+	"github.com/agent-substrate/substrate/internal/resources"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 )
 
-const networkPolicyFieldOwner = "ate-networkpolicy"
+const (
+	networkPolicyFieldOwner = "ate-networkpolicy"
+	ateSystemNamespace      = "ate-system"
+	atenetRouterAppName     = "atenet-router"
+)
 
 type NetworkPolicyReconciler struct {
 	client.Client
@@ -84,7 +87,10 @@ func (r *NetworkPolicyReconciler) reconcileImpl(ctx context.Context, wp *atev1al
 }
 
 func buildNetworkPolicyApplyConfig(wp *atev1alpha1.WorkerPool) *networkingv1ac.NetworkPolicyApplyConfiguration {
-	np := networkingv1ac.NetworkPolicy(npName(wp.Name), wp.Namespace).
+	np := networkingv1ac.NetworkPolicy(resources.NetworkPolicyName(wp.Name), wp.Namespace).
+		WithLabels(map[string]string{
+			"ate.dev/worker-pool": wp.Name,
+		}).
 		WithOwnerReferences(metav1ac.OwnerReference().
 			WithAPIVersion(atev1alpha1.GroupVersion.String()).
 			WithKind("WorkerPool").
@@ -98,37 +104,23 @@ func buildNetworkPolicyApplyConfig(wp *atev1alpha1.WorkerPool) *networkingv1ac.N
 		WithSpec(networkingv1ac.NetworkPolicySpec().
 			WithPodSelector(metav1ac.LabelSelector().
 				WithMatchLabels(map[string]string{"ate.dev/worker-pool": wp.Name})).
-			WithPolicyTypes(networkingv1.PolicyTypeIngress, networkingv1.PolicyTypeEgress).
+			WithPolicyTypes(networkingv1.PolicyTypeIngress).
 			WithIngress(
 				networkingv1ac.NetworkPolicyIngressRule().
 					WithFrom(
 						networkingv1ac.NetworkPolicyPeer().
 							WithNamespaceSelector(metav1ac.LabelSelector().
-								WithMatchLabels(map[string]string{"kubernetes.io/metadata.name": "ate-system"})).
+								WithMatchLabels(map[string]string{"kubernetes.io/metadata.name": ateSystemNamespace})).
 							WithPodSelector(metav1ac.LabelSelector().
-								WithMatchLabels(map[string]string{"app": "atenet-router"})),
+								WithMatchLabels(map[string]string{"app": atenetRouterAppName})),
 					),
-			).
-			WithEgress(
-				networkingv1ac.NetworkPolicyEgressRule(),
 			))
 
-	// TODO: don't implement any Egress policy yet.
+	// Egress is left unmanaged by Kubernetes NetworkPolicy for now while waiting for
+	// further progress on Egress API designs and because some egress rules may not be
+	// expressible at the Kubernetes layer.
 
 	return np
-}
-
-func npName(wpName string) string {
-	sum := sha256.Sum256([]byte(wpName))
-	hash := hex.EncodeToString(sum[:])
-	if len(hash) > 5 {
-		hash = hash[:5]
-	}
-	truncated := wpName
-	if len(truncated) > 30 {
-		truncated = truncated[:30]
-	}
-	return fmt.Sprintf("substrate-%s-%s", truncated, hash)
 }
 
 func (r *NetworkPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {

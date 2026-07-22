@@ -102,14 +102,6 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 
-	if err := (&NetworkPolicyReconciler{
-		Client: mgr.GetClient(),
-		Scheme: mgr.GetScheme(),
-	}).SetupWithManager(mgr); err != nil {
-		fmt.Fprintf(os.Stderr, "netpolicy controller setup failed: %v\n", err)
-		os.Exit(1)
-	}
-
 	mgrCtx, mgrCancel := context.WithCancel(context.Background())
 	go func() {
 		_ = mgr.Start(mgrCtx)
