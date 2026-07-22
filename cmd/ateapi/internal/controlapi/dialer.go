@@ -127,6 +127,11 @@ func buildTLSConfig(clientBundlePath, serverCAPath, expectedPodUID string) (*tls
 		return nil, err
 	}
 
+	verify, err := verifyAteletServerCert(roots, expectedPodUID)
+	if err != nil {
+		return nil, err
+	}
+
 	tlsConfig := tls.Config{
 		MinVersion:           tls.VersionTLS13,
 		GetClientCertificate: credbundle.ClientLoader(clientBundlePath),
@@ -134,13 +139,16 @@ func buildTLSConfig(clientBundlePath, serverCAPath, expectedPodUID string) (*tls
 		// certificate has no DNS/IP SAN.
 		InsecureSkipVerify: true,
 		RootCAs:            roots,
-		VerifyConnection:   verifyAteletServerCert(roots, expectedPodUID),
+		VerifyConnection:   verify,
 	}
 
 	return &tlsConfig, nil
 }
 
-func verifyAteletServerCert(roots *x509.CertPool, expectedPodUID string) func(tls.ConnectionState) error {
+func verifyAteletServerCert(roots *x509.CertPool, expectedPodUID string) (func(tls.ConnectionState) error, error) {
+	if expectedPodUID == "" {
+		return nil, fmt.Errorf("expected pod UID must not be empty")
+	}
 	return func(cs tls.ConnectionState) error {
 		if len(cs.PeerCertificates) == 0 {
 			return fmt.Errorf("server presented no certificate")
@@ -165,15 +173,12 @@ func verifyAteletServerCert(roots *x509.CertPool, expectedPodUID string) func(tl
 		if identity == nil {
 			return fmt.Errorf("server certificate has no PodIdentity extension, expected pod UID %q", expectedPodUID)
 		}
-		if identity.PodUID == "" || expectedPodUID == "" {
-			return fmt.Errorf("found pod UID == %q, expected pod UID == %q", identity.PodUID, expectedPodUID)
-		}
 		if identity.PodUID != expectedPodUID {
 			return fmt.Errorf("pod UID %q does not match expected %q", identity.PodUID, expectedPodUID)
 		}
 
 		return nil
-	}
+	}, nil
 }
 
 func caPoolFromFile(path string) (*x509.CertPool, error) {

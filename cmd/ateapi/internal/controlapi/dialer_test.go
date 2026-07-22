@@ -141,8 +141,11 @@ func TestVerifyAteletServerCert(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			verify := verifyAteletServerCert(roots, tc.expectedUID)
-			err := verify(tls.ConnectionState{
+			verify, err := verifyAteletServerCert(roots, tc.expectedUID)
+			if err != nil {
+				t.Fatalf("constructing verifier: %v", err)
+			}
+			err = verify(tls.ConnectionState{
 				PeerCertificates: []*x509.Certificate{tc.leaf},
 			})
 			if gotErr := err != nil; gotErr != tc.wantErr {
@@ -152,9 +155,18 @@ func TestVerifyAteletServerCert(t *testing.T) {
 	}
 
 	t.Run("no peer certificate fails", func(t *testing.T) {
-		verify := verifyAteletServerCert(roots, uid)
+		verify, err := verifyAteletServerCert(roots, uid)
+		if err != nil {
+			t.Fatalf("constructing verifier: %v", err)
+		}
 		if err := verify(tls.ConnectionState{}); err == nil {
 			t.Fatal("verify succeeded, want error")
+		}
+	})
+
+	t.Run("empty expected UID fails at construction", func(t *testing.T) {
+		if _, err := verifyAteletServerCert(roots, ""); err == nil {
+			t.Fatal("verifyAteletServerCert succeeded, want error")
 		}
 	})
 }
