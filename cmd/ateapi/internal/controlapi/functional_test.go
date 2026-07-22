@@ -2446,6 +2446,15 @@ func TestResumeActor_DanglingWorker(t *testing.T) {
 
 	deleteWorkerPod(t, tc, ns, "worker-a")
 
+	// 5. Wait for the syncer to remove worker A from the store. The actor is
+	// RESUMING, not RUNNING, so the syncer leaves it bound to the dead worker.
+	if err := wait.PollUntilContextTimeout(context.Background(), 100*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
+		_, gerr := tc.persistence.GetWorker(ctx, ns, "pool1", "worker-a")
+		return gerr != nil, nil
+	}); err != nil {
+		t.Fatalf("worker-a not removed from store: %v", err)
+	}
+
 	// 6. Create Worker Pod B
 	createWorkerPod(t, tc, ns, "worker-b", "node1", "pool1")
 
@@ -2453,28 +2462,30 @@ func TestResumeActor_DanglingWorker(t *testing.T) {
 	tc.fakeAtelet.FailRestore = nil
 	tc.fakeAtelet.RestoreCalled = false // reset
 
-	// 8. Call ResumeActor again -> Expect success and picking Worker B!
+	// 8. Call ResumeActor again -> Expect failure: the resume workflow refuses
+	// to reassign a RESUMING actor whose recorded worker is gone, even though
+	// a free worker is available.
 	_, err = tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
 	})
-	if err != nil {
-		t.Fatalf("ResumeActor failed on retry: %v", err)
+	if err == nil {
+		t.Fatalf("expected ResumeActor retry to fail for actor bound to a deleted worker")
 	}
 
-	if !tc.fakeAtelet.RestoreCalled {
-		t.Errorf("expected Restore to be called on retry")
+	if tc.fakeAtelet.RestoreCalled {
+		t.Errorf("expected Restore not to be called on retry")
 	}
 
-	// Verify actor state is RUNNING with worker B assigned
+	// Verify the actor is still RESUMING and pinned to the dead worker A.
 	actor, err = tc.persistence.GetActor(context.Background(), testAtespace, name)
 	if err != nil {
 		t.Fatalf("failed to get actor from store: %v", err)
 	}
-	if actor.GetStatus() != ateapipb.Actor_STATUS_RUNNING {
-		t.Errorf("expected status RUNNING, got %v", actor.GetStatus())
+	if actor.GetStatus() != ateapipb.Actor_STATUS_RESUMING {
+		t.Errorf("expected status RESUMING, got %v", actor.GetStatus())
 	}
-	if actor.GetAteomPodName() != "worker-b" {
-		t.Errorf("expected worker-b assigned, got %v", actor.GetAteomPodName())
+	if actor.GetAteomPodName() != "worker-a" {
+		t.Errorf("expected worker-a still assigned, got %v", actor.GetAteomPodName())
 	}
 }
 

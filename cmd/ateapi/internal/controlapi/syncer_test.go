@@ -34,6 +34,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes/fake"
+	k8stesting "k8s.io/client-go/testing"
 )
 
 // testPodUID is the UID shared by the worker pods created in these tests and
@@ -478,9 +479,9 @@ func TestSyncer_AteomTerminated(t *testing.T) {
 }
 
 // TestCrashActorOnDeadWorker_Crashed covers the actor status write without
-// going through informer events: any actor still bound to a worker that
-// vanished lost its live state and must surface as CRASHED, whatever status
-// it was in when the worker died.
+// going through informer events: only a RUNNING actor bound to a vanished
+// worker is crashed. Actors in transition states (SUSPENDING/RESUMING) are
+// owned by each workflow itself.
 func TestCrashActorOnDeadWorker_Crashed(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -495,12 +496,12 @@ func TestCrashActorOnDeadWorker_Crashed(t *testing.T) {
 		{
 			name:       "suspending actor",
 			status:     ateapipb.Actor_STATUS_SUSPENDING,
-			wantStatus: ateapipb.Actor_STATUS_CRASHED,
+			wantStatus: ateapipb.Actor_STATUS_SUSPENDING,
 		},
 		{
 			name:       "resuming actor",
 			status:     ateapipb.Actor_STATUS_RESUMING,
-			wantStatus: ateapipb.Actor_STATUS_CRASHED,
+			wantStatus: ateapipb.Actor_STATUS_RESUMING,
 		},
 	}
 	for i, tc := range tests {
@@ -547,8 +548,14 @@ func TestCrashActorOnDeadWorker_Crashed(t *testing.T) {
 			if got.GetStatus() != tc.wantStatus {
 				t.Errorf("actor status = %v, want %v", got.GetStatus(), tc.wantStatus)
 			}
-			if got.AteomPodName != "" || got.AteomPodNamespace != "" || got.AteomPodIp != "" {
-				t.Errorf("bind fields not cleared: %+v", got)
+			if tc.wantStatus == ateapipb.Actor_STATUS_CRASHED {
+				if got.AteomPodName != "" || got.AteomPodNamespace != "" || got.AteomPodIp != "" {
+					t.Errorf("bind fields not cleared: %+v", got)
+				}
+			} else {
+				if got.AteomPodName != pod || got.AteomPodNamespace != ns || got.AteomPodUid != testPodUID {
+					t.Errorf("bind fields not preserved: %+v", got)
+				}
 			}
 		})
 	}
@@ -603,6 +610,105 @@ func TestHandleTerminatedAteom_ReleaseFailureKeepsPod(t *testing.T) {
 	}
 	if _, err := fakeK8s.CoreV1().Pods(ns).Get(ctx, podName, metav1.GetOptions{}); err != nil {
 		t.Errorf("pod must survive a failed release: %v", err)
+	}
+}
+
+// failingDeleteWorkerStore wraps a store.Interface and fails DeleteWorker, to
+// exercise handleTerminatedAteom's idle-worker failure path.
+type failingDeleteWorkerStore struct {
+	store.Interface
+}
+
+func (f *failingDeleteWorkerStore) DeleteWorker(ctx context.Context, namespace, pool, pod string) error {
+	return errors.New("injected store failure")
+}
+
+// TestHandleTerminatedAteom_IdleWorkerRowDeletedBeforePod verifies that for a
+// worker with no assignment, the store row is deleted before the pod: the row
+// is what findFreeWorker assigns from, so it must leave the assignable pool
+// before the recycle starts, not when the pod deletion propagates back
+// through the informer.
+func TestHandleTerminatedAteom_IdleWorkerRowDeletedBeforePod(t *testing.T) {
+	ctx := context.Background()
+	persistence, cleanup := storetest.SetupTestStore(t)
+	defer cleanup()
+
+	ns, pool, podName := "ns-idle-recycle", "pool1", "worker-idle-recycle"
+	if err := persistence.CreateWorker(ctx, &ateapipb.Worker{
+		WorkerNamespace: ns,
+		WorkerPool:      pool,
+		WorkerPod:       podName,
+		WorkerPodUid:    testPodUID,
+		Ip:              "10.0.0.5",
+	}); err != nil {
+		t.Fatalf("create worker: %v", err)
+	}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      podName,
+			Namespace: ns,
+			UID:       testPodUID,
+			Labels:    map[string]string{workerPodLabel: pool},
+		},
+	}
+	fakeK8s := fake.NewSimpleClientset(pod)
+	rowGoneAtPodDelete := false
+	fakeK8s.PrependReactor("delete", "pods", func(action k8stesting.Action) (bool, runtime.Object, error) {
+		_, gerr := persistence.GetWorker(ctx, ns, pool, podName)
+		rowGoneAtPodDelete = errors.Is(gerr, store.ErrNotFound)
+		return false, nil, nil
+	})
+
+	syncer := &WorkerPoolSyncer{persistence: persistence, kubeClient: fakeK8s}
+	syncer.handleTerminatedAteom(ctx, pod)
+
+	if _, err := persistence.GetWorker(ctx, ns, pool, podName); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("idle worker row must be deleted, got err=%v", err)
+	}
+	if _, err := fakeK8s.CoreV1().Pods(ns).Get(ctx, podName, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
+		t.Errorf("pod must be deleted, got err=%v", err)
+	}
+	if !rowGoneAtPodDelete {
+		t.Errorf("worker row must leave the store before the pod is deleted")
+	}
+}
+
+// TestHandleTerminatedAteom_IdleDeleteWorkerFailureKeepsPod verifies that
+// when deleting the idle worker's row fails, the pod survives so the resync
+// retries the recycle.
+func TestHandleTerminatedAteom_IdleDeleteWorkerFailureKeepsPod(t *testing.T) {
+	ctx := context.Background()
+	persistence, cleanup := storetest.SetupTestStore(t)
+	defer cleanup()
+
+	ns, pool, podName := "ns-idle-fail", "pool1", "worker-idle-fail"
+	if err := persistence.CreateWorker(ctx, &ateapipb.Worker{
+		WorkerNamespace: ns,
+		WorkerPool:      pool,
+		WorkerPod:       podName,
+		WorkerPodUid:    testPodUID,
+		Ip:              "10.0.0.6",
+	}); err != nil {
+		t.Fatalf("create worker: %v", err)
+	}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      podName,
+			Namespace: ns,
+			UID:       testPodUID,
+			Labels:    map[string]string{workerPodLabel: pool},
+		},
+	}
+	fakeK8s := fake.NewSimpleClientset(pod)
+
+	syncer := &WorkerPoolSyncer{persistence: &failingDeleteWorkerStore{persistence}, kubeClient: fakeK8s}
+	syncer.handleTerminatedAteom(ctx, pod)
+
+	if _, err := fakeK8s.CoreV1().Pods(ns).Get(ctx, podName, metav1.GetOptions{}); err != nil {
+		t.Errorf("pod must survive a failed row delete: %v", err)
+	}
+	if _, err := persistence.GetWorker(ctx, ns, pool, podName); err != nil {
+		t.Errorf("worker row must survive in the underlying store: %v", err)
 	}
 }
 
