@@ -29,6 +29,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/tools/portforward"
@@ -526,7 +527,7 @@ func suspendActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj
 	return nil
 }
 
-func createActorTemplateInternal(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, name string, onCommit, onPause v1alpha1.SnapshotScope, modifyContainers func([]v1alpha1.Container) []v1alpha1.Container) (*v1alpha1.ActorTemplate, error) {
+func createActorTemplateInternal(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, name string, onCommit, onPause v1alpha1.SnapshotScope, modifyTemplate func(*v1alpha1.ActorTemplate)) (*v1alpha1.ActorTemplate, error) {
 	env, err := e2e.CheckEnv("BUCKET_NAME", "KO_DOCKER_REPO")
 	if err != nil {
 		t.Fatalf("CheckEnv failed: %v", err)
@@ -576,11 +577,6 @@ func createActorTemplateInternal(ctx context.Context, t *testing.T, clients *e2e
 		t.Fatalf("failed to create WorkerPool: %v", err)
 	}
 
-	containers := existingAt.Spec.Containers
-	if modifyContainers != nil {
-		containers = modifyContainers(containers)
-	}
-
 	// Create ActorTemplate
 	at := &v1alpha1.ActorTemplate{
 		ObjectMeta: metav1.ObjectMeta{
@@ -596,7 +592,7 @@ func createActorTemplateInternal(ctx context.Context, t *testing.T, clients *e2e
 			// "microvm"; the gVisor source leaves it "" — copying keeps both correct.
 			SandboxClass: existingAt.Spec.SandboxClass,
 			PauseImage:   existingAt.Spec.PauseImage,
-			Containers:   containers,
+			Containers:   existingAt.Spec.Containers,
 			SnapshotsConfig: v1alpha1.SnapshotsConfig{
 				Location: "gs://" + env["BUCKET_NAME"] + "/ate-demo-" + name,
 				OnPause:  onPause,
@@ -604,6 +600,9 @@ func createActorTemplateInternal(ctx context.Context, t *testing.T, clients *e2e
 			},
 			Volumes: existingAt.Spec.Volumes,
 		},
+	}
+	if modifyTemplate != nil {
+		modifyTemplate(at)
 	}
 	_, err = clients.SubstrateK8s.ApiV1alpha1().ActorTemplates(nsObj.Name).Create(ctx, at, metav1.CreateOptions{})
 	if err != nil {
@@ -653,16 +652,47 @@ func createActorTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients
 }
 
 func createActorTemplateWithExternalVolume(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, onCommit, onPause v1alpha1.SnapshotScope) (*v1alpha1.ActorTemplate, error) {
-	modify := func(containers []v1alpha1.Container) []v1alpha1.Container {
+	modify := func(at *v1alpha1.ActorTemplate) {
 		var res []v1alpha1.Container
-		for _, c := range containers {
+		for _, c := range at.Spec.Containers {
 			if c.Name == "counter" {
-				// Use external volume for file counter instead of durabledir
-				c.Command = []string{"/ko-app/counter", "--file-counter-directory=/external-data"}
+				c.Command = []string{"/ko-app/counter", "--file-counter-directory=/external-data", "--validate-existing-file-path=/external-data/test.txt"}
+				hasExtMount := false
+				for _, vm := range c.VolumeMounts {
+					if vm.Name == "external-data" {
+						hasExtMount = true
+						break
+					}
+				}
+				if !hasExtMount {
+					c.VolumeMounts = append(c.VolumeMounts, v1alpha1.VolumeMount{
+						Name:      "external-data",
+						MountPath: "/external-data",
+					})
+				}
 			}
 			res = append(res, c)
 		}
-		return res
+		at.Spec.Containers = res
+
+		hasExtVol := false
+		for _, v := range at.Spec.Volumes {
+			if v.Name == "external-data" {
+				hasExtVol = true
+				break
+			}
+		}
+		if !hasExtVol {
+			at.Spec.Volumes = append(at.Spec.Volumes, v1alpha1.Volume{
+				Name: "external-data",
+				VolumeSource: v1alpha1.VolumeSource{
+					ExternalVolumeTemplate: &v1alpha1.ExternalVolumeTemplate{
+						Capacity:         resource.MustParse("1Gi"),
+						StorageClassName: "standard",
+					},
+				},
+			})
+		}
 	}
 	return createActorTemplateInternal(ctx, t, clients, nsObj, "counter-ext-vol", onCommit, onPause, modify)
 }

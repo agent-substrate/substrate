@@ -23,6 +23,12 @@ Use the core installation script to build the image and apply the resolved manif
 ./hack/install-ate.sh --deploy-demo-counter
 ```
 
+To enable validation of reading from an external volume (e.g. `/external-data/test.txt`), run:
+
+```bash
+./hack/install-ate.sh --deploy-demo-counter-with-external-volume
+```
+
 This command will:
 - Build the counter server image using `ko`.
 - Create the `ate-demo-counter` namespace.

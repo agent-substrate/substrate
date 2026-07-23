@@ -18,9 +18,14 @@
 
 ATE_DEMOS+=(demo-counter) # register demo-counter
 
+demo-counter_usage() {
+  echo "  --deploy-demo-counter-with-external-volume    Deploy demo-counter with external volume validation"
+}
+
 demo-counter_cmdline() {
   case "${1}" in
-    --deploy-demo-counter) demo-counter_deploy ;;
+    --deploy-demo-counter) demo-counter_deploy "false" ;;
+    --deploy-demo-counter-with-external-volume) demo-counter_deploy "true" ;;
     --delete-demo-counter) demo-counter_delete ;;
     *)
       return 1
@@ -30,9 +35,24 @@ demo-counter_cmdline() {
 }
 
 demo-counter_deploy() {
-  log_step "demo-counter_deploy"
+  local with_external_volume="${1:-false}"
+  log_step "demo-counter_deploy (with_external_volume=${with_external_volume})"
   ensure_crds
-  sed "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" demos/counter/counter.yaml.tmpl \
+
+  local validate_cmd=("-e" "/\${VALIDATE_EXISTING_FILE_PATH_ARG}/d")
+  local ext_vol_mount_cmd=("-e" "/\${EXTERNAL_VOLUME_MOUNTS}/d")
+  local ext_vol_spec_cmd=("-e" "/\${EXTERNAL_VOLUMES}/d")
+  if [[ "${with_external_volume}" == "true" ]]; then
+    validate_cmd=("-e" "s|\${VALIDATE_EXISTING_FILE_PATH_ARG}|    - --validate-existing-file-path=/external-data/test.txt|g")
+    ext_vol_mount_cmd=("-e" "s|\${EXTERNAL_VOLUME_MOUNTS}|    - name: external-data\n      mountPath: /external-data|g")
+    ext_vol_spec_cmd=("-e" "s|\${EXTERNAL_VOLUMES}|  - name: external-data\n    externalVolumeTemplate:\n      capacity: 1Gi\n      storageClassName: standard|g")
+  fi
+
+  sed -e "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" \
+      "${validate_cmd[@]}" \
+      "${ext_vol_mount_cmd[@]}" \
+      "${ext_vol_spec_cmd[@]}" \
+      demos/counter/counter.yaml.tmpl \
     | run_ko apply -f -
 
   # Wait for the demo to be fully ready before returning. On a cold cluster the
@@ -49,6 +69,10 @@ demo-counter_deploy() {
 demo-counter_delete() {
   log_step "demo-counter_delete"
   delete_demo_actors ate-demo-counter counter
-  sed "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" demos/counter/counter.yaml.tmpl \
+  sed -e "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" \
+      -e "/\${VALIDATE_EXISTING_FILE_PATH_ARG}/d" \
+      -e "/\${EXTERNAL_VOLUME_MOUNTS}/d" \
+      -e "/\${EXTERNAL_VOLUMES}/d" \
+      demos/counter/counter.yaml.tmpl \
     | run_kubectl delete --ignore-not-found -f -
 }
