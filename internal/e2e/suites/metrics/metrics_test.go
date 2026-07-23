@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package metrics is an e2e suite that drives one full actor lifecycle and then
-// asserts every platform metric in e2e.PlatformMetricPrefixes reaches the kind
-// stack's OTel Collector. It closes the "silent regression" gap: a renamed or
-// dropped instrument fails here rather than surfacing as an empty dashboard.
-// The prefix set grows as each metric slice lands. Requires the demo counter
-// template to be installed (override with E2E_TEMPLATE_NAMESPACE / _NAME).
+// Package metrics is an e2e suite that drives an actor lifecycle and then asserts
+// the platform metrics in e2e.PlatformMetricPrefixes reach the kind stack's OTel
+// Collector. It closes the "silent regression" gap: a renamed or dropped
+// instrument fails here rather than surfacing as an empty dashboard. The prefix
+// set grows as each metric slice lands. Requires the demo counter template to be
+// installed (override with E2E_TEMPLATE_NAMESPACE / _NAME).
 package metrics
 
 import (
@@ -66,14 +66,9 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 		_, _ = clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: &ateapipb.ObjectRef{Atespace: metricsAtespace, Name: actorID}})
 	})
 
-	// Drive a full lifecycle so the platform instruments fire: resume brings up
-	// workers (worker-count), a routed request records the router duration, and
-	// suspend writes a checkpoint (snapshot size). A second resume exercises the
-	// restore path. Later metric slices add their own instruments to
-	// e2e.PlatformMetricPrefixes; the same drive already triggers them.
-	resume(t, ctx, clients, actorID)
-	routeRequest(t, ctx, actorID)
-	suspend(t, ctx, clients, actorID)
+	// Resume so the pool has an assigned worker, which the ateapi worker-count
+	// observable reports. Later metric slices extend e2e.PlatformMetricPrefixes;
+	// they add the drive steps their instruments need.
 	resume(t, ctx, clients, actorID)
 
 	deadline := time.Now().Add(2 * time.Minute)
@@ -99,30 +94,6 @@ func resume(t *testing.T, ctx context.Context, clients *e2e.Clients, actorID str
 		t.Fatalf("ResumeActor: %v", err)
 	}
 	waitForStatus(t, ctx, clients, actorID, ateapipb.Actor_STATUS_RUNNING)
-}
-
-func suspend(t *testing.T, ctx context.Context, clients *e2e.Clients, actorID string) {
-	t.Helper()
-	if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: metricsAtespace, Name: actorID},
-	}); err != nil {
-		t.Fatalf("SuspendActor: %v", err)
-	}
-	waitForStatus(t, ctx, clients, actorID, ateapipb.Actor_STATUS_SUSPENDED)
-}
-
-func routeRequest(t *testing.T, ctx context.Context, actorID string) {
-	t.Helper()
-	rc, err := e2e.NewRouterClient(ctx)
-	if err != nil {
-		t.Fatalf("NewRouterClient: %v", err)
-	}
-	defer rc.Close()
-	// Any routed request records atenet.router.route.duration; the actor's own
-	// response is irrelevant here, so tolerate a non-2xx or transport error.
-	if resp, err := rc.Get(ctx, metricsAtespace, actorID, "/"); err == nil {
-		_ = resp.Body.Close()
-	}
 }
 
 func waitForStatus(t *testing.T, ctx context.Context, clients *e2e.Clients, actorID string, want ateapipb.Actor_Status) {

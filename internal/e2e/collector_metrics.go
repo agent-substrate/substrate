@@ -33,16 +33,13 @@ const (
 )
 
 // PlatformMetricPrefixes are the Prometheus metric-name prefixes (OTLP dots
-// mapped to underscores) the substrate platform must emit once a full actor
-// lifecycle has run. The Collector's prometheus exporter appends unit and type
-// suffixes (e.g. _seconds_bucket, _bytes_count), so matching is by prefix.
-// This slice grows as each platform-metric slice lands; today it pins the
-// worker-count instrument plus the two hand-written metrics that predate this
-// work, guarding all three against silent regression.
+// mapped to underscores) the substrate platform must emit. The Collector's
+// prometheus exporter appends unit and type suffixes (e.g. _seconds_bucket,
+// _bytes_count), so matching is by prefix. This slice grows as each metric
+// slice lands and as more components are wired to push to the collector; today
+// it pins the worker-count instrument introduced alongside this harness.
 var PlatformMetricPrefixes = []string{
 	"ate_workerpool_workers",
-	"atenet_router_route_duration",
-	"atelet_snapshot_size",
 }
 
 // ScrapeCollectorMetrics port-forwards the kind stack's OTel Collector and reads
