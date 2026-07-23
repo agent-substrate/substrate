@@ -30,10 +30,10 @@ import (
 
 	"cloud.google.com/go/storage"
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/ategcs"
-	"github.com/agent-substrate/substrate/cmd/atelet/internal/memorypullcache"
 	"github.com/agent-substrate/substrate/internal/ateerrors"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/ateompath"
+	"github.com/agent-substrate/substrate/internal/imagecache"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/resources"
@@ -67,6 +67,7 @@ var (
 
 	gcpAuthForImagePulls         = pflag.Bool("gcp-auth-for-image-pulls", true, "Use GCP application default credentials mechanism.")
 	localhostRegistryReplacement = pflag.String("localhost-registry-replacement", "", "The replacement registry endpoint for localhost and/or loopback IP addresses, useful for local development. for example kind-registry:5000")
+	imageCacheDir                = pflag.String("image-cache-dir", ateompath.ImageCacheDir, "Directory for the node-local OCI image layer cache. Must be on the volume shared with the ateom pods (the cached layers are their overlay lowerdirs), and on a disk sized for both capacity and IOPS: unpack throughput is gated by the volume's IOPS.")
 
 	showVersion = pflag.Bool("version", false, "Print version and exit.")
 )
@@ -113,9 +114,12 @@ func main() {
 		}
 	}
 
-	pullCache, err := memorypullcache.NewMemoryPullCache(ctx, gcpRegistryAuthn, *localhostRegistryReplacement)
+	imageCache, err := imagecache.New(*imageCacheDir,
+		imagecache.WithAuthenticator(gcpRegistryAuthn),
+		imagecache.WithLocalhostRegistryReplacement(*localhostRegistryReplacement),
+	)
 	if err != nil {
-		serverboot.Fatal(ctx, "Failed to create pull cache", err)
+		serverboot.Fatal(ctx, "Failed to open image cache", err)
 	}
 
 	anonGCSClient, err := storage.NewClient(ctx, option.WithoutAuthentication())
@@ -165,7 +169,7 @@ func main() {
 		ateomDialer,
 		wrappedAnonGCS,
 		wrappedGCS,
-		pullCache,
+		imageCache,
 	)
 
 	lis, err := net.Listen("tcp", ":"+strconv.Itoa(*port))
@@ -188,7 +192,7 @@ type AteomHerder struct {
 	ateletpb.UnimplementedAteomHerderServer
 
 	ateomDialer   *AteomDialer
-	pullCache     *memorypullcache.MemoryPullCache
+	imageCache    *imagecache.Store
 	anonGCSClient ategcs.ObjectStorage
 	gcsClient     ategcs.ObjectStorage
 }
@@ -201,11 +205,11 @@ func NewService(
 	ateomDialer *AteomDialer,
 	anonGCSClient ategcs.ObjectStorage,
 	gcsClient ategcs.ObjectStorage,
-	pullCache *memorypullcache.MemoryPullCache,
+	imageCache *imagecache.Store,
 ) *AteomHerder {
 	wms := &AteomHerder{
 		ateomDialer:   ateomDialer,
-		pullCache:     pullCache,
+		imageCache:    imageCache,
 		anonGCSClient: anonGCSClient,
 		gcsClient:     gcsClient,
 	}
@@ -694,7 +698,7 @@ func (s *AteomHerder) prepareOCIBundles(
 
 		if err := prepareOCIDirectory(
 			gCtx,
-			s.pullCache,
+			s.imageCache,
 			actorUID,
 			"pause",
 			spec.GetPauseImage(),
@@ -727,7 +731,7 @@ func (s *AteomHerder) prepareOCIBundles(
 		g.Go(func() error {
 			if err := prepareOCIDirectory(
 				gCtx,
-				s.pullCache,
+				s.imageCache,
 				actorUID,
 				ctr.GetName(),
 				ctr.GetImage(),
@@ -1009,11 +1013,14 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 func resetActorDirs(actorUID string) error {
 	// Explicitly leave runsc logs dir untouched.
 
-	// removeAllWritable, not os.RemoveAll: the bundle holds unpacked actor-image
-	// rootfs whose directories keep the image's (possibly read-only) modes, which
-	// atelet can't remove as plain root without first making them writable.
+	// RemoveAllWritable, not os.RemoveAll: the bundle's upper dir can hold
+	// copied-up actor-image directories keeping the image's (possibly
+	// read-only) modes, which atelet can't remove as plain root without first
+	// making them writable. (The rootfs itself is just an empty mountpoint
+	// here: the overlay is mounted in the ateom pod's mount namespace, not
+	// atelet's, and is detached by ateom at teardown.)
 	bundleDir := ateompath.OCIBundleDir(actorUID)
-	if err := removeAllWritable(bundleDir); err != nil {
+	if err := imagecache.RemoveAllWritable(bundleDir); err != nil {
 		return wrapFileSystemErr("while deleting bundle dir: %w", err)
 	}
 	if err := os.MkdirAll(bundleDir, 0o700); err != nil {
