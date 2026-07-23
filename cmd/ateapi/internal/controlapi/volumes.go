@@ -52,7 +52,7 @@ func (s *Service) createActorVolumes(ctx context.Context, ref *ateapipb.ObjectRe
 			storageVolumeID, err := getVolumePlugin().CreateVolume(ctx, uniqueVolName, vol.ExternalVolumeTemplate.Capacity.String(), vol.ExternalVolumeTemplate.StorageClassName)
 			if err != nil {
 				// TODO: need better system - best effort cleanup of already created volumes
-				s.deleteActorVolumes(ctx, ref, volumes)
+				_ = s.deleteActorVolumes(ctx, ref, volumes)
 				return nil, status.Errorf(codes.Internal, "failed to create volume %q: %v", vol.Name, err)
 			}
 			volumes = append(volumes, &ateapipb.ExternalVolume{
@@ -66,8 +66,9 @@ func (s *Service) createActorVolumes(ctx context.Context, ref *ateapipb.ObjectRe
 	return volumes, nil
 }
 
-// deleteActorVolumes deletes all external volumes in the list on a best-effort basis.
-func (s *Service) deleteActorVolumes(ctx context.Context, ref *ateapipb.ObjectRef, volumes []*ateapipb.ExternalVolume) {
+// deleteActorVolumes deletes all external volumes in the list.
+func (s *Service) deleteActorVolumes(ctx context.Context, ref *ateapipb.ObjectRef, volumes []*ateapipb.ExternalVolume) error {
+	var errs []error
 	for _, vol := range volumes {
 		if err := getVolumePlugin().DeleteVolume(ctx, vol.GetStorageVolumeId()); err != nil {
 			slog.ErrorContext(ctx, "failed to delete volume",
@@ -75,8 +76,10 @@ func (s *Service) deleteActorVolumes(ctx context.Context, ref *ateapipb.ObjectRe
 				slog.String("actor_id", ref.GetName()),
 				slog.String("volume_id", vol.GetStorageVolumeId()),
 				slog.Any("error", err))
+			errs = append(errs, fmt.Errorf("failed to delete volume %q: %w", vol.GetStorageVolumeId(), err))
 		}
 	}
+	return errors.Join(errs...)
 }
 
 // getMountedActorVolumes filters the actor's volumes and returns only those that are declared and mounted in the ActorTemplate.

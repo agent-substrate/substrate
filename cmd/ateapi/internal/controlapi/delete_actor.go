@@ -44,8 +44,10 @@ func (s *Service) DeleteActor(ctx context.Context, req *ateapipb.DeleteActorRequ
 		return nil, fmt.Errorf("while fetching actor: %w", err)
 	}
 
-	// Delete associated volumes (TODO: best effort?)
-	s.deleteActorVolumes(ctx, req.GetActor(), actor.GetActorVolumes())
+	// Delete associated volumes
+	if err := s.deleteActorVolumes(ctx, req.GetActor(), actor.GetActorVolumes()); err != nil {
+		return nil, status.Errorf(codes.Internal, "while deleting actor volumes: %v", err)
+	}
 
 	deleted, err := s.persistence.DeleteActor(ctx, atespace, name)
 	if err != nil {
