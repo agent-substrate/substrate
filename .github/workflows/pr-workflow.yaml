@@ -20,7 +20,7 @@ on:
   schedule:
     # Weekly run on the default branch keeps the micro-VM asset cache warm (GitHub
     # evicts caches idle for 7 days). The push-to-main run populates the cache that
-    # PRs inherit; this refreshes it so PRs keep hitting it (no virtiofsd rebuild).
+    # PRs inherit; this refreshes it so PRs keep hitting it (no asset re-download).
     - cron: '37 4 * * 1'
 jobs:
   run-tests:
@@ -57,21 +57,13 @@ jobs:
       id: microvm-assets
       uses: actions/cache@v4
       with:
-        # Assembling the assets (download kata-static + cloud-hypervisor, build
-        # virtiofsd from source for the overlay rootfs) is the slow part and is fully
-        # pinned by assemble.sh, so key the cache on its hash. The push-to-main run
-        # populates the default-branch cache PRs inherit; the weekly schedule refreshes
-        # it. run-microvm-demo-kind.sh skips assembling when these are present.
+        # Assembling the assets (download kata-static + cloud-hypervisor + the
+        # prebuilt virtiofsd — all downloads on amd64) is fully pinned by assemble.sh,
+        # so key the cache on its hash. The push-to-main run populates the
+        # default-branch cache PRs inherit; the weekly schedule refreshes it.
+        # run-microvm-demo-kind.sh skips assembling when these are present.
         path: bin/microvm-assets/amd64
         key: microvm-assets-amd64-${{ hashFiles('hack/microvm-assets/assemble.sh') }}
-    - name: Install micro-VM asset build deps
-      # Only needed when (re)assembling (cache miss): building virtiofsd from source.
-      if: steps.microvm-assets.outputs.cache-hit != 'true'
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y --no-install-recommends libcap-ng-dev libseccomp-dev pkg-config
-        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-        echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
     - name: Enable KVM
       # Grant the runner access to /dev/kvm so create-kind-cluster.sh mounts it into
       # the node and labels it for the micro-VM sandbox class.

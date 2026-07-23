@@ -114,11 +114,12 @@ fi
 # is used as-is — no override). Only ko apply/create/delete/run accept args after
 # `--`; thread --context there (mirrors the run_ko helper in hack/install-ate.sh).
 log "Applying the counter-microvm demo manifest..."
-# virtiofsd is built from source (pinned commit in assemble.sh), so its binary bytes
-# are not reproducible across toolchains/arches and its sha can't be a fixed pin in the
+# The arm64 virtiofsd is built from source (release tag in assemble.sh), so its binary
+# bytes are not reproducible across toolchains and its sha can't be a fixed pin in the
 # manifest. Compute it from the freshly-staged binary and inject it, so the deployed
 # SandboxConfig always matches whatever was staged. The downloaded assets
-# (cloud-hypervisor/kernel/rootfs/config) keep their committed, reproducible per-arch shas.
+# (cloud-hypervisor/kernel/rootfs/config, plus virtiofsd on amd64 where upstream
+# publishes a prebuilt) keep their committed, reproducible per-arch shas.
 VIRTIOFSD_SHA256="$(sha256sum "${OUT}/virtiofsd" | awk '{print $1}')"
 sed -e "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" \
     -e "s|\${VIRTIOFSD_SHA256}|${VIRTIOFSD_SHA256}|g" \
