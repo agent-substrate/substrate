@@ -309,6 +309,33 @@ func TestAteomSecurityContextByClass(t *testing.T) {
 	}
 }
 
+// TestTerminationGracePeriodSeconds asserts the pod's grace period is the pool's
+// explicit setting when present, and the 300s default otherwise.
+func TestTerminationGracePeriodSeconds(t *testing.T) {
+	override := int32(120)
+	tests := []struct {
+		name string
+		set  *int32
+		want int64
+	}{
+		{name: "default when unset", set: nil, want: int64(defaultTerminationGracePeriodSeconds)},
+		{name: "explicit override honored", set: &override, want: 120},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			wp := testWorkerPoolApplyConfig(nil)
+			wp.Spec.TerminationGracePeriodSeconds = tt.set
+			ps := buildDeploymentApplyConfig(wp).Spec.Template.Spec
+			if ps.TerminationGracePeriodSeconds == nil {
+				t.Fatalf("TerminationGracePeriodSeconds not set")
+			}
+			if *ps.TerminationGracePeriodSeconds != tt.want {
+				t.Errorf("TerminationGracePeriodSeconds = %d, want %d", *ps.TerminationGracePeriodSeconds, tt.want)
+			}
+		})
+	}
+}
+
 func testWorkerPoolApplyConfig(tmpl *atev1alpha1.WorkerPoolPodTemplate) *atev1alpha1.WorkerPool {
 	return &atev1alpha1.WorkerPool{
 		ObjectMeta: metav1.ObjectMeta{Name: "pool", Namespace: "default", UID: "uid"},
@@ -360,6 +387,7 @@ func expectedDeploymentApplyConfig(mutatePodSpec func(*corev1ac.PodSpecApplyConf
 	podSpecAC.Tolerations = []corev1ac.TolerationApplyConfiguration{}
 	podSpecAC.WithPriorityClassName("")
 	podSpecAC.WithAffinity(corev1ac.Affinity())
+	podSpecAC.WithTerminationGracePeriodSeconds(int64(defaultTerminationGracePeriodSeconds))
 	if mutatePodSpec != nil {
 		mutatePodSpec(podSpecAC)
 	}

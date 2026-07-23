@@ -225,6 +225,15 @@ func ValidateWorker(worker *ateapipb.Worker, fldPath *field.Path) field.ErrorLis
 		}
 	}
 
+	// state is server-managed; accept any defined enum value (the unset/zero
+	// STATE_UNSPECIFIED is tolerated for backward compatibility), reject unknowns.
+	if val, fldPath := worker.State, fldPath.Child("state"); ateapipb.Worker_State_name[int32(val)] == "" {
+		errs = append(errs, field.NotSupported(fldPath, val, []string{
+			ateapipb.Worker_STATE_ACTIVE.String(),
+			ateapipb.Worker_STATE_DRAINING.String(),
+		}))
+	}
+
 	return errs
 }
 

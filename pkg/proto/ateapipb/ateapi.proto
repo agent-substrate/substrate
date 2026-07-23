@@ -338,6 +338,12 @@ message Worker {
   string node_name = 8;
   string sandbox_class = 9;
   map<string, string> labels = 10;
+  enum State {
+    STATE_UNSPECIFIED = 0;
+    STATE_ACTIVE = 1;
+    STATE_DRAINING = 2;
+  }
+  State state = 11;
 }
 
 message Assignment {

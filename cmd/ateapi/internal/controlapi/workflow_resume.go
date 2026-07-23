@@ -109,6 +109,15 @@ func (s *LoadActorForResumeStep) Execute(ctx context.Context, input *ResumeInput
 			}
 			return fmt.Errorf("failed to get already assigned worker for actor %w", err)
 		}
+		if wk.GetState() == ateapipb.Worker_STATE_DRAINING {
+			slog.InfoContext(ctx, "Assigned worker is draining; crashing actor",
+				slog.String("actor", input.ActorName),
+				slog.String("worker", wk.GetWorkerNamespace()+"/"+wk.GetWorkerPod()))
+			if cerr := crashActor(ctx, s.store, input.Atespace, input.ActorName); cerr != nil {
+				return cerr
+			}
+			return status.Errorf(codes.Aborted, "actor %s crashed", input.ActorName)
+		}
 		state.Worker = wk
 	}
 	return nil
@@ -182,7 +191,7 @@ func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, stat
 		if err != nil {
 			return fmt.Errorf("while checking worker eligibility: %w", err)
 		}
-		if eligible {
+		if eligible && worker.GetState() != ateapipb.Worker_STATE_DRAINING {
 			assignedWorker = worker
 			break
 		}
@@ -319,7 +328,7 @@ func (s *AssignWorkerStep) findFreeWorker(
 		if err != nil {
 			return nil, err
 		}
-		if !eligible {
+		if !eligible || worker.GetState() == ateapipb.Worker_STATE_DRAINING {
 			continue
 		}
 		if len(nodesRestrictions) == 0 || slices.Contains(nodesRestrictions, worker.GetNodeName()) {

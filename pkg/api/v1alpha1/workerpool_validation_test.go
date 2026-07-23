@@ -99,6 +99,21 @@ func TestWorkerPoolValidation(t *testing.T) {
 		},
 		wantErr: true,
 		errMsg:  "spec.template.tolerations: Too many",
+	}, {
+		name: "valid termination grace period override",
+		mutate: func(wp *WorkerPool) {
+			v := int32(600)
+			wp.Spec.TerminationGracePeriodSeconds = &v
+		},
+		wantErr: false,
+	}, {
+		name: "termination grace period below minimum",
+		mutate: func(wp *WorkerPool) {
+			v := int32(0)
+			wp.Spec.TerminationGracePeriodSeconds = &v
+		},
+		wantErr: true,
+		errMsg:  "spec.terminationGracePeriodSeconds",
 	}}
 
 	for _, tt := range tests {

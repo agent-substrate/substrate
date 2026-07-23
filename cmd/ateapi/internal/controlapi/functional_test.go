@@ -657,7 +657,9 @@ func createWorkerPod(t *testing.T, tc *testContext, ns string, name string, node
 
 func deleteWorkerPod(t *testing.T, tc *testContext, ns string, name string) {
 	t.Helper()
-	err := tc.k8sClient.CoreV1().Pods(ns).Delete(context.Background(), name, metav1.DeleteOptions{})
+	err := tc.k8sClient.CoreV1().Pods(ns).Delete(context.Background(), name, metav1.DeleteOptions{
+		GracePeriodSeconds: ptr.To[int64](0),
+	})
 	if err != nil {
 		t.Fatalf("failed to delete worker pod %s: %v", name, err)
 	}
@@ -1117,6 +1119,7 @@ func TestListWorkers(t *testing.T) {
 			Version:         1,
 			SandboxClass:    "gvisor",
 			Labels:          map[string]string{"foo": "bar"},
+			State:           ateapipb.Worker_STATE_ACTIVE,
 		},
 	}
 
@@ -1219,6 +1222,7 @@ func TestResumeActor(t *testing.T) {
 		NodeName:     "node1",
 		SandboxClass: "gvisor",
 		Labels:       map[string]string{poolLabelKey: ns},
+		State:        ateapipb.Worker_STATE_ACTIVE,
 	}
 
 	if diff := cmp.Diff(wantWorker, actorWorker, protocmp.Transform(), protocmp.IgnoreFields(&ateapipb.Worker{}, "version"), protocmp.IgnoreFields(&ateapipb.Worker{}, "worker_pod_uid")); diff != "" {
@@ -1827,6 +1831,117 @@ func TestResumeActor_ReleasesStaleWorkerWhenPoolBecomesIneligible(t *testing.T) 
 					got = wass.Actor.Name
 				}
 				t.Errorf("expected worker-b to stay free (actor crashed, not migrated), got actor name=%q", got)
+			}
+		}
+	}
+}
+
+// TestResumeActor_ReleasesDrainingWorkerFromPriorAttempt exercises the reuse-loop
+// change in AssignWorkerStep.Execute: a worker still assigned to the actor from a
+// previous (failed) attempt that has since entered DRAINING must not be reused —
+// it is released and the actor is crashed.
+func TestResumeActor_CrashesIfAssignedWorkerIsDraining(t *testing.T) {
+	ns := namespaceForTest("ns-resume-release-draining")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	// createTemplate sets up pool1 (labeled pool=<ns>) + tmpl1 (selecting it) with
+	// a golden snapshot, so resume drives Restore. Two workers share the pool.
+	createTemplate(t, tc, ns)
+	createWorkerPod(t, tc, ns, "worker-a", "node1", "pool1")
+	createWorkerPod(t, tc, ns, "worker-b", "node1", "pool1")
+
+	id := "id1"
+	if _, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{
+		Actor: &ateapipb.Actor{
+			Metadata: &ateapipb.ResourceMetadata{
+				Atespace: testAtespace,
+				Name:     id,
+			},
+			ActorTemplateNamespace: ns,
+			ActorTemplateName:      "tmpl1",
+		},
+	}); err != nil {
+		t.Fatalf("CreateActor failed: %v", err)
+	}
+
+	// First resume fails after a worker is assigned, leaving the actor bound to
+	// that worker from a prior attempt.
+	tc.fakeAtelet.FailRestore = fmt.Errorf("mock atelet failure")
+	if _, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: id}}); err == nil {
+		t.Fatalf("expected first ResumeActor to fail")
+	}
+	tc.fakeAtelet.FailRestore = nil
+
+	// Learn which worker got assigned (findFreeWorker shuffles), then mark it
+	// DRAINING as the syncer would when its pod enters Terminating.
+	getResp, err := tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: id}})
+	if err != nil {
+		t.Fatalf("GetActor failed: %v", err)
+	}
+	assignedPod := getResp.GetAteomPodName()
+	if assignedPod == "" {
+		t.Fatalf("expected actor to be bound to a worker after the failed attempt")
+	}
+
+	assigned, err := tc.persistence.GetWorker(context.Background(), ns, "pool1", assignedPod)
+	if err != nil {
+		t.Fatalf("GetWorker(%s) failed: %v", assignedPod, err)
+	}
+	assigned.State = ateapipb.Worker_STATE_DRAINING
+	if err := tc.persistence.UpdateWorker(context.Background(), assigned, assigned.GetVersion()); err != nil {
+		t.Fatalf("marking worker %s draining failed: %v", assignedPod, err)
+	}
+
+	// Wait until the DRAINING state is observable, which also gives the store
+	// watch time to propagate it into the scheduler's worker cache.
+	if err := wait.PollUntilContextTimeout(context.Background(), 100*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
+		resp, err := tc.client.ListWorkers(ctx, &ateapipb.ListWorkersRequest{})
+		if err != nil {
+			return false, nil
+		}
+		for _, w := range resp.GetWorkers() {
+			if w.GetWorkerNamespace() == ns && w.GetWorkerPod() == assignedPod {
+				return w.GetState() == ateapipb.Worker_STATE_DRAINING, nil
+			}
+		}
+		return false, nil
+	}); err != nil {
+		t.Fatalf("worker %s did not reach DRAINING: %v", assignedPod, err)
+	}
+
+	// Second resume must fail and crash the actor because its worker is draining.
+	_, err = tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: id}})
+	if err == nil {
+		t.Fatalf("expected second ResumeActor to fail")
+	}
+	if status.Code(err) != codes.Aborted || !strings.Contains(err.Error(), "crashed") {
+		t.Errorf("expected Aborted/crashed error, got %v", err)
+	}
+
+	getResp, err = tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: id}})
+	if err != nil {
+		t.Fatalf("GetActor failed: %v", err)
+	}
+	if got := getResp.GetStatus(); got != ateapipb.Actor_STATUS_CRASHED {
+		t.Errorf("expected actor status CRASHED, got %v", got)
+	}
+	if got := getResp.GetAteomPodName(); got != "" {
+		t.Errorf("expected actor pod name to be empty, got %q", got)
+	}
+
+	// The draining worker must have been released.
+	listResp, err := tc.client.ListWorkers(context.Background(), &ateapipb.ListWorkersRequest{})
+	if err != nil {
+		t.Fatalf("ListWorkers failed: %v", err)
+	}
+	for _, w := range listResp.GetWorkers() {
+		if w.GetWorkerNamespace() != ns {
+			continue
+		}
+		if w.GetWorkerPod() == assignedPod {
+			if w.GetAssignment() != nil {
+				t.Errorf("expected draining worker %q to be released, still assigned to %q", assignedPod, w.GetAssignment().GetActor().GetName())
 			}
 		}
 	}
@@ -2460,28 +2575,27 @@ func TestResumeActor_DanglingWorker(t *testing.T) {
 	tc.fakeAtelet.FailRestore = nil
 	tc.fakeAtelet.RestoreCalled = false // reset
 
-	// 8. Call ResumeActor again -> Expect success and picking Worker B!
+	// 8. Call ResumeActor again -> Expect it to fail because it is already CRASHED by background syncer.
 	_, err = tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
 	})
-	if err != nil {
-		t.Fatalf("ResumeActor failed on retry: %v", err)
+	if err == nil {
+		t.Fatalf("expected ResumeActor to fail because worker is gone")
+	}
+	if status.Code(err) != codes.FailedPrecondition || !strings.Contains(err.Error(), "STATUS_CRASHED") {
+		t.Errorf("expected FailedPrecondition/STATUS_CRASHED error, got %v", err)
 	}
 
-	if !tc.fakeAtelet.RestoreCalled {
-		t.Errorf("expected Restore to be called on retry")
-	}
-
-	// Verify actor state is RUNNING with worker B assigned
+	// Verify actor state is CRASHED and worker assignment is empty
 	actor, err = tc.persistence.GetActor(context.Background(), testAtespace, name)
 	if err != nil {
 		t.Fatalf("failed to get actor from store: %v", err)
 	}
-	if actor.GetStatus() != ateapipb.Actor_STATUS_RUNNING {
-		t.Errorf("expected status RUNNING, got %v", actor.GetStatus())
+	if actor.GetStatus() != ateapipb.Actor_STATUS_CRASHED {
+		t.Errorf("expected status CRASHED, got %v", actor.GetStatus())
 	}
-	if actor.GetAteomPodName() != "worker-b" {
-		t.Errorf("expected worker-b assigned, got %v", actor.GetAteomPodName())
+	if actor.GetAteomPodName() != "" {
+		t.Errorf("expected worker to be unassigned, got %v", actor.GetAteomPodName())
 	}
 }
 
@@ -2515,29 +2629,26 @@ func TestSuspendActor_DanglingWorker(t *testing.T) {
 
 	deleteWorkerPod(t, tc, ns, "worker-1")
 
-	// 3. Call SuspendActor -> Should succeed (our fix skips missing pod execution)
-	actors, _, _ := tc.persistence.ListActors(context.Background(), testAtespace, maxPageSize, "")
-	t.Logf("Actors in Redis before Suspend: %d", len(actors))
-	for _, a := range actors {
-		t.Logf("  Actor: %s/%s/%s", a.GetActorTemplateNamespace(), a.GetActorTemplateName(), a.GetMetadata().GetName())
-	}
-
+	// 3. Call SuspendActor -> Expect it to fail because it is already CRASHED by background syncer
 	_, err = tc.client.SuspendActor(context.Background(), &ateapipb.SuspendActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
 	})
-	if err != nil {
-		t.Fatalf("SuspendActor failed: %v", err)
+	if err == nil {
+		t.Fatalf("expected SuspendActor to fail because worker is gone")
+	}
+	if status.Code(err) != codes.FailedPrecondition || !strings.Contains(err.Error(), "STATUS_CRASHED") {
+		t.Errorf("expected FailedPrecondition error, got %v", err)
 	}
 
-	// 4. Verify it becomes SUSPENDED in Redis
+	// 4. Verify it becomes CRASHED in Redis
 	getResp, err := tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
 	})
 	if err != nil {
 		t.Fatalf("GetActor failed: %v", err)
 	}
-	if getResp.GetStatus() != ateapipb.Actor_STATUS_SUSPENDED {
-		t.Errorf("expected status SUSPENDED, got %v", getResp.GetStatus())
+	if getResp.GetStatus() != ateapipb.Actor_STATUS_CRASHED {
+		t.Errorf("expected status CRASHED, got %v", getResp.GetStatus())
 	}
 	if getResp.GetAteomPodNamespace() != "" {
 		t.Errorf("expected ateom_pod_namespace to be empty, got %v", getResp.GetAteomPodNamespace())

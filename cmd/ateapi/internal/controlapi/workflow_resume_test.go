@@ -688,3 +688,36 @@ func TestCallAteletRestoreStep_CheckPrerequisite_WorkerOwnership(t *testing.T) {
 		})
 	}
 }
+
+// TestFindFreeWorker_SkipsDraining verifies the scheduler never routes a new
+// actor to a worker whose pod is being evicted (STATE_DRAINING).
+func TestFindFreeWorker_SkipsDraining(t *testing.T) {
+	worker := func(podName string, state ateapipb.Worker_State) *ateapipb.Worker {
+		return &ateapipb.Worker{
+			WorkerNamespace: "ns", WorkerPool: "pool1", WorkerPod: podName, State: state,
+			SandboxClass: "gvisor",
+		}
+	}
+	step := &AssignWorkerStep{}
+
+	// The only free worker is draining: nothing selectable.
+	got, err := step.findFreeWorker([]*ateapipb.Worker{worker("draining", ateapipb.Worker_STATE_DRAINING)}, "gvisor", nil, nil, nil)
+	if err != nil {
+		t.Fatalf("findFreeWorker failed: %v", err)
+	}
+	if got != nil {
+		t.Errorf("expected no worker when only candidate is draining, got %q", got.GetWorkerPod())
+	}
+
+	// A draining worker alongside a healthy one: the healthy one is picked.
+	got, err = step.findFreeWorker([]*ateapipb.Worker{
+		worker("draining", ateapipb.Worker_STATE_DRAINING),
+		worker("active", ateapipb.Worker_STATE_ACTIVE),
+	}, "gvisor", nil, nil, nil)
+	if err != nil {
+		t.Fatalf("findFreeWorker failed: %v", err)
+	}
+	if got == nil || got.GetWorkerPod() != "active" {
+		t.Fatalf("expected active worker to be selected, got %v", got)
+	}
+}
