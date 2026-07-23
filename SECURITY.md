@@ -37,6 +37,9 @@ Please include:
 
 ## What Counts as a Vulnerability
 
+See the [threat model](docs/threat-model.md) for the trust boundaries and
+assumptions this section is based on.
+
 Agent Substrate multiplexes many actors onto a smaller pool of shared
 workers, so its most important security boundaries are between actors and
 between actors and the platform. Reports in these classes are the most
