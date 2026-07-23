@@ -51,17 +51,16 @@ func RegisterWorkerCount(meter metric.Meter, workers func() ([]*ateapipb.Worker,
 		type key struct{ pool, state, class string }
 		tally := make(map[key]int64)
 		// Seed both states at 0 for every known pool so a saturated or empty pool
-		// reports 0, not an absent series that breaks idle==0 alerts.
-		if listPools != nil {
-			if pools, err := listPools(labels.Everything()); err == nil {
-				for _, p := range pools {
-					class := string(p.Spec.SandboxClass)
-					if class == "" {
-						class = string(atev1alpha1.SandboxClassGvisor)
-					}
-					tally[key{p.Name, ateattr.WorkerStateIdle, class}] = 0
-					tally[key{p.Name, ateattr.WorkerStateAssigned, class}] = 0
+		// reports 0, not an absent series that breaks idle==0 alerts. A failed
+		// list just means no seeding this cycle, not a broken observation.
+		if pools, err := listPools(labels.Everything()); err == nil {
+			for _, p := range pools {
+				class := string(p.Spec.SandboxClass)
+				if class == "" {
+					class = string(atev1alpha1.SandboxClassGvisor)
 				}
+				tally[key{p.Name, ateattr.WorkerStateIdle, class}] = 0
+				tally[key{p.Name, ateattr.WorkerStateAssigned, class}] = 0
 			}
 		}
 		for _, w := range ws {
