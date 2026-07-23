@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package ateattr projects an Actor onto substrate's ate.* span attributes.
-// Identity is a span-level subject attribute (the producer is the substrate
-// component, the actor is the subject), so it belongs on spans rather than the
-// resource, and uses substrate's own ate.* namespace rather than service.*.
+// Package ateattr is the single source of truth for substrate's ate.* telemetry
+// attributes: the identity keys stamped on spans/logs, and the bounded value
+// sets used as metric labels. Centralizing them keeps a key (and value) meaning
+// the same thing across every signal and binary.
 package ateattr
 
 import (
@@ -41,6 +41,24 @@ const (
 	TemplateNameKey      = attribute.Key("ate.template.name")
 	TemplateNamespaceKey = attribute.Key("ate.template.namespace")
 	ActorVersionKey      = attribute.Key("ate.actor.version")
+)
+
+// Metric-label keys: the only ate.* attributes allowed on metric datapoints,
+// each with a small bounded value set. High-cardinality identity (actor
+// name/uid, atespace) is absent by design; it belongs on spans and logs.
+// WorkerStateKey stays worker-rooted rather than nesting under the pool so it
+// can grow siblings.
+const (
+	WorkerPoolNameKey = attribute.Key("ate.workerpool.name")
+	WorkerStateKey    = attribute.Key("ate.worker.state")
+	SandboxClassKey   = attribute.Key("ate.sandbox.class")
+)
+
+// Values for WorkerStateKey. Only idle and assigned are representable today;
+// starting and unhealthy workers are not modeled in the cache.
+const (
+	WorkerStateIdle     = "idle"
+	WorkerStateAssigned = "assigned"
 )
 
 // ActorRefAttributes returns the subset knowable before the Actor record

@@ -21,6 +21,7 @@ import (
 	"sort"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/alicebob/miniredis/v2"
@@ -38,13 +39,14 @@ func setupTest(t *testing.T) (*miniredis.Miniredis, *Persistence, context.Contex
 	if err != nil {
 		t.Fatalf("failed to start miniredis: %v", err)
 	}
+	t.Cleanup(mr.Close)
 	// Miniredis runs as a single node, but ClusterClient can work with it
 	// if we don't use cluster-specific commands that miniredis doesn't support.
 	// Miniredis supports most standard commands.
 	rdb := redis.NewClusterClient(&redis.ClusterOptions{
 		Addrs: []string{mr.Addr()},
 	})
-	return mr, &Persistence{rdb: rdb}, context.Background()
+	return mr, NewPersistence(rdb), t.Context()
 }
 
 // testAtespace is the atespace used by tests that create a single actor. Actors
@@ -61,8 +63,7 @@ var (
 )
 
 func TestGetActor_NotFound(t *testing.T) {
-	mr, s, ctx := setupTest(t)
-	defer mr.Close()
+	_, s, ctx := setupTest(t)
 
 	_, err := s.GetActor(ctx, testAtespace, "non-existent")
 	if !errors.Is(err, store.ErrNotFound) {
@@ -71,8 +72,7 @@ func TestGetActor_NotFound(t *testing.T) {
 }
 
 func TestCreateActor_Success(t *testing.T) {
-	mr, s, ctx := setupTest(t)
-	defer mr.Close()
+	_, s, ctx := setupTest(t)
 
 	actor := &ateapipb.Actor{
 		Metadata:               &ateapipb.ResourceMetadata{Name: "session-1", Atespace: testAtespace},
@@ -120,8 +120,7 @@ func TestCreateActor_Success(t *testing.T) {
 }
 
 func TestCreateActor_AlreadyExists(t *testing.T) {
-	mr, s, ctx := setupTest(t)
-	defer mr.Close()
+	_, s, ctx := setupTest(t)
 
 	actor := &ateapipb.Actor{
 		Metadata:               &ateapipb.ResourceMetadata{Name: "session-1", Atespace: testAtespace},
@@ -142,8 +141,7 @@ func TestCreateActor_AlreadyExists(t *testing.T) {
 }
 
 func TestUpdateActor_Success(t *testing.T) {
-	mr, s, ctx := setupTest(t)
-	defer mr.Close()
+	_, s, ctx := setupTest(t)
 
 	actor := &ateapipb.Actor{
 		Metadata:               &ateapipb.ResourceMetadata{Name: "session-1", Atespace: testAtespace},
@@ -195,8 +193,7 @@ func TestUpdateActor_Success(t *testing.T) {
 }
 
 func TestUpdateActor_Conflict(t *testing.T) {
-	mr, s, ctx := setupTest(t)
-	defer mr.Close()
+	_, s, ctx := setupTest(t)
 
 	actor := &ateapipb.Actor{
 		Metadata:               &ateapipb.ResourceMetadata{Name: "session-1", Atespace: testAtespace},
@@ -238,8 +235,7 @@ func TestUpdateActor_Conflict(t *testing.T) {
 }
 
 func TestGetWorker_NotFound(t *testing.T) {
-	mr, s, ctx := setupTest(t)
-	defer mr.Close()
+	_, s, ctx := setupTest(t)
 
 	_, err := s.GetWorker(ctx, "default", "pool-1", "non-existent")
 	if !errors.Is(err, store.ErrNotFound) {
@@ -248,8 +244,7 @@ func TestGetWorker_NotFound(t *testing.T) {
 }
 
 func TestCreateWorker_Success(t *testing.T) {
-	mr, s, ctx := setupTest(t)
-	defer mr.Close()
+	_, s, ctx := setupTest(t)
 
 	watch, err := s.WatchWorkers(ctx)
 	if err != nil {
@@ -291,8 +286,7 @@ func TestCreateWorker_Success(t *testing.T) {
 }
 
 func TestUpdateWorker_Success(t *testing.T) {
-	mr, s, ctx := setupTest(t)
-	defer mr.Close()
+	_, s, ctx := setupTest(t)
 
 	worker := &ateapipb.Worker{
 		WorkerNamespace: "default",
@@ -348,8 +342,7 @@ func TestUpdateWorker_Success(t *testing.T) {
 }
 
 func TestDeleteWorker(t *testing.T) {
-	mr, s, ctx := setupTest(t)
-	defer mr.Close()
+	_, s, ctx := setupTest(t)
 
 	worker := &ateapipb.Worker{
 		WorkerNamespace: "default",
@@ -400,8 +393,7 @@ func TestDeleteActor(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mr, s, ctx := setupTest(t)
-			defer mr.Close()
+			_, s, ctx := setupTest(t)
 
 			actor := &ateapipb.Actor{
 				Metadata:               &ateapipb.ResourceMetadata{Name: "session-1", Atespace: testAtespace},
@@ -437,8 +429,7 @@ func TestDeleteActor(t *testing.T) {
 }
 
 func TestDeleteActor_NotFound(t *testing.T) {
-	mr, s, ctx := setupTest(t)
-	defer mr.Close()
+	_, s, ctx := setupTest(t)
 
 	_, err := s.DeleteActor(ctx, testAtespace, "non-existent")
 	if !errors.Is(err, store.ErrNotFound) {
@@ -447,8 +438,7 @@ func TestDeleteActor_NotFound(t *testing.T) {
 }
 
 func TestListWorkers(t *testing.T) {
-	mr, s, ctx := setupTest(t)
-	defer mr.Close()
+	_, s, ctx := setupTest(t)
 
 	worker1 := &ateapipb.Worker{
 		WorkerNamespace: "ns1",
@@ -492,8 +482,7 @@ func TestListWorkers(t *testing.T) {
 }
 
 func TestListActors(t *testing.T) {
-	mr, s, ctx := setupTest(t)
-	defer mr.Close()
+	_, s, ctx := setupTest(t)
 
 	actor1 := &ateapipb.Actor{
 
@@ -555,8 +544,7 @@ func TestListActors(t *testing.T) {
 }
 
 func TestUpdateWorker_Conflict(t *testing.T) {
-	mr, s, ctx := setupTest(t)
-	defer mr.Close()
+	_, s, ctx := setupTest(t)
 
 	worker := &ateapipb.Worker{
 		WorkerNamespace: "default",
@@ -597,8 +585,7 @@ func TestUpdateWorker_Conflict(t *testing.T) {
 }
 
 func TestCreateWorker_AlreadyExists(t *testing.T) {
-	mr, s, ctx := setupTest(t)
-	defer mr.Close()
+	_, s, ctx := setupTest(t)
 
 	worker := &ateapipb.Worker{
 		WorkerNamespace: "default",
@@ -618,8 +605,7 @@ func TestCreateWorker_AlreadyExists(t *testing.T) {
 }
 
 func TestListWorkers_Empty(t *testing.T) {
-	mr, s, ctx := setupTest(t)
-	defer mr.Close()
+	_, s, ctx := setupTest(t)
 
 	workers, _, err := s.ListWorkers(ctx, 1000, "")
 	if err != nil {
@@ -632,8 +618,7 @@ func TestListWorkers_Empty(t *testing.T) {
 }
 
 func TestListWorkers_Pagination(t *testing.T) {
-	mr, s, ctx := setupTest(t)
-	defer mr.Close()
+	_, s, ctx := setupTest(t)
 
 	for i := 0; i < 5; i++ {
 		worker := &ateapipb.Worker{
@@ -676,8 +661,7 @@ func TestListWorkers_Pagination(t *testing.T) {
 }
 
 func TestListAtespaces_Pagination(t *testing.T) {
-	mr, s, ctx := setupTest(t)
-	defer mr.Close()
+	_, s, ctx := setupTest(t)
 
 	for i := 0; i < 5; i++ {
 		if _, err := s.CreateAtespace(ctx, newTestAtespace(fmt.Sprintf("team-%d", i))); err != nil {
@@ -715,8 +699,7 @@ func TestListAtespaces_Pagination(t *testing.T) {
 }
 
 func TestListActors_Empty(t *testing.T) {
-	mr, s, ctx := setupTest(t)
-	defer mr.Close()
+	_, s, ctx := setupTest(t)
 
 	actors, _, err := s.ListActors(ctx, "", 1000, "")
 	if err != nil {
@@ -729,8 +712,7 @@ func TestListActors_Empty(t *testing.T) {
 }
 
 func TestListActors_Pagination(t *testing.T) {
-	mr, s, ctx := setupTest(t)
-	defer mr.Close()
+	_, s, ctx := setupTest(t)
 
 	for i := 0; i < 5; i++ {
 		actor := &ateapipb.Actor{
@@ -775,158 +757,343 @@ func TestListActors_Pagination(t *testing.T) {
 
 func TestAcquireLock_Success(t *testing.T) {
 	mr, s, ctx := setupTest(t)
-	defer mr.Close()
 
 	key := "test-lock"
-	value := "token-1"
-	wrongValue := "token-2"
-	newValue := "token-3"
-	ttl := 10 * time.Second
 
-	// 1. Acquire lock
-	acquired, err := s.AcquireLock(ctx, key, value, ttl)
+	lock, err := s.AcquireLock(ctx, key)
 	if err != nil {
 		t.Fatalf("AcquireLock failed: %v", err)
 	}
-	if !acquired {
-		t.Errorf("expected lock to be acquired")
-	}
+	defer lock.Close()
 
-	// 2. Try to release with WRONG value
-	err = s.ReleaseLock(ctx, key, wrongValue)
-	if err != nil {
-		t.Fatalf("ReleaseLock failed: %v", err)
-	}
-
-	// Verify it is STILL THERE by trying to acquire it again
-	acquired, err = s.AcquireLock(ctx, key, newValue, ttl)
-	if err != nil {
-		t.Fatalf("AcquireLock failed: %v", err)
-	}
-	if acquired {
-		t.Errorf("expected lock to still be held by token-1, but token-3 successfully acquired it!")
-	}
-
-	// 3. Try to release with CORRECT value
-	err = s.ReleaseLock(ctx, key, value)
-	if err != nil {
-		t.Fatalf("ReleaseLock failed: %v", err)
-	}
-
-	// Verify it is GONE by trying to acquire it again!
-	acquired, err = s.AcquireLock(ctx, key, newValue, ttl)
-	if err != nil {
-		t.Fatalf("AcquireLock failed: %v", err)
-	}
-	if !acquired {
-		t.Errorf("expected lock to be free, but it could not be acquired!")
+	if !mr.Exists(key) {
+		t.Errorf("expected lock key to exist after AcquireLock")
 	}
 }
 
 func TestAcquireLock_Conflict(t *testing.T) {
-	mr, s, ctx := setupTest(t)
-	defer mr.Close()
+	_, s, ctx := setupTest(t)
 
 	key := "test-lock"
-	value1 := "token-1"
-	value2 := "token-2"
-	ttl := 10 * time.Second
 
-	acquired, err := s.AcquireLock(ctx, key, value1, ttl)
+	lock, err := s.AcquireLock(ctx, key)
 	if err != nil {
 		t.Fatalf("first AcquireLock failed: %v", err)
 	}
-	if !acquired {
-		t.Fatalf("expected first lock to be acquired")
-	}
+	defer lock.Close()
 
-	acquired, err = s.AcquireLock(ctx, key, value2, ttl)
-	if err != nil {
-		t.Fatalf("second AcquireLock failed: %v", err)
-	}
-	if acquired {
-		t.Errorf("expected second lock to fail (conflict)")
+	_, err = s.AcquireLock(ctx, key)
+	if !errors.Is(err, store.ErrLockConflict) {
+		t.Errorf("second AcquireLock error = %v, want ErrLockConflict", err)
 	}
 }
 
-func TestReleaseLock_Success(t *testing.T) {
+func TestLock_Close_ReleasesLockImmediately(t *testing.T) {
 	mr, s, ctx := setupTest(t)
-	defer mr.Close()
 
 	key := "test-lock"
-	value := "token-1"
-	ttl := 10 * time.Second
 
-	s.AcquireLock(ctx, key, value, ttl)
-
-	err := s.ReleaseLock(ctx, key, value)
+	lock, err := s.AcquireLock(ctx, key)
 	if err != nil {
-		t.Fatalf("ReleaseLock failed: %v", err)
+		t.Fatalf("AcquireLock failed: %v", err)
 	}
 
-	// Verify it's gone
+	lock.Close()
+
+	// Close should release the key immediately rather than making the next
+	// caller wait out the rest of the TTL.
 	if mr.Exists(key) {
-		t.Errorf("expected lock to be deleted")
+		t.Errorf("expected lock to be deleted after Close")
+	}
+
+	next, err := s.AcquireLock(ctx, key)
+	if err != nil {
+		t.Fatalf("AcquireLock after Close failed: %v", err)
+	}
+	next.Close()
+}
+
+func TestLock_Close_CancelsContext(t *testing.T) {
+	_, s, ctx := setupTest(t)
+
+	lock, err := s.AcquireLock(ctx, "test-lock")
+	if err != nil {
+		t.Fatalf("AcquireLock failed: %v", err)
+	}
+
+	lock.Close()
+
+	select {
+	case <-lock.Context().Done():
+	case <-time.After(time.Second):
+		t.Fatal("expected lock.Context() to be cancelled after Close")
 	}
 }
 
-func TestReleaseLock_Unsafe(t *testing.T) {
-	mr, s, ctx := setupTest(t)
-	defer mr.Close()
+func TestLock_Close_ReleasesEvenAfterParentContextCancelled(t *testing.T) {
+	mr, s, _ := setupTest(t)
 
 	key := "test-lock"
-	value1 := "token-1"
-	value2 := "token-2"
-	value3 := "token-3"
-	ttl := 10 * time.Second
+	parentCtx, parentCancel := context.WithCancel(context.Background())
 
-	s.AcquireLock(ctx, key, value1, ttl)
-
-	// Try to release with WRONG token
-	err := s.ReleaseLock(ctx, key, value2)
-	if err != nil {
-		t.Fatalf("ReleaseLock failed: %v", err)
-	}
-
-	// Verify it is STILL THERE by trying to acquire it again!
-	acquired, err := s.AcquireLock(ctx, key, value3, ttl)
+	lock, err := s.AcquireLock(parentCtx, key)
 	if err != nil {
 		t.Fatalf("AcquireLock failed: %v", err)
 	}
-	if acquired {
-		t.Errorf("expected lock to still be held by token-1, but token-3 successfully acquired it!")
+
+	// Simulate the caller's own context dying independently of Close, e.g. an
+	// upstream RPC deadline. The renewal loop should stop as a result.
+	parentCancel()
+
+	select {
+	case <-lock.Context().Done():
+	case <-time.After(time.Second):
+		t.Fatal("expected lock.Context() to be cancelled once the parent context is cancelled")
+	}
+
+	// A real caller's `defer lock.Close()` still runs after this. Close must
+	// still release the key even though the context it was acquired with is
+	// already dead, since it releases via context.Background() internally.
+	lock.Close()
+
+	if mr.Exists(key) {
+		t.Errorf("expected Close to release the lock even though the parent context was already cancelled")
 	}
 }
 
-func TestAcquireLock_TTLExpiration(t *testing.T) {
-	mr, s, ctx := setupTest(t)
-	defer mr.Close()
+func TestAcquireLock_ExpiresAndIsReacquirableAfterHolderCrashes(t *testing.T) {
+	mr, s, _ := setupTest(t)
 
 	key := "test-lock"
-	value1 := "token-1"
-	value2 := "token-2"
-	ttl := 5 * time.Second
+	ttl := 300 * time.Millisecond
+	s.lockTTL = ttl
 
-	// 1. Acquire lock
-	acquired, err := s.AcquireLock(ctx, key, value1, ttl)
+	parentCtx, parentCancel := context.WithCancel(context.Background())
+	lock, err := s.AcquireLock(parentCtx, key)
 	if err != nil {
 		t.Fatalf("AcquireLock failed: %v", err)
 	}
-	if !acquired {
-		t.Fatalf("expected lock to be acquired")
+
+	// Simulate a hard crash: the holder disappears without ever calling
+	// Close (e.g. the process is killed), so the key is never explicitly
+	// released and is left to expire on its own TTL. Canceling the parent
+	// context stops the renewal loop the same way process death would,
+	// without releasing the key the way Close does.
+	parentCancel()
+	select {
+	case <-lock.Context().Done():
+	case <-time.After(time.Second):
+		t.Fatal("expected lock.Context() to be cancelled once the parent context is cancelled")
 	}
 
-	// 2. Fast-forward time past TTL
-	mr.FastForward(6 * time.Second)
+	if !mr.Exists(key) {
+		t.Fatal("expected the key to still exist right after the crash; only Close deletes it")
+	}
+	if _, err := s.AcquireLock(context.Background(), key); !errors.Is(err, store.ErrLockConflict) {
+		t.Errorf("AcquireLock before TTL expiry: err = %v, want ErrLockConflict", err)
+	}
 
-	// 3. Try to acquire again with different token
-	acquired, err = s.AcquireLock(ctx, key, value2, ttl)
+	// Simulate real time passing with no renewer left alive, until the key's
+	// actual Redis TTL elapses. miniredis's TTLs are purely virtual --
+	// stored durations decremented only by FastForward, never by wall-clock
+	// time -- so a real time.Sleep here would not expire the key at all.
+	mr.FastForward(ttl + time.Second)
+
+	if mr.Exists(key) {
+		t.Fatal("expected the key to have expired in Redis once its TTL elapsed")
+	}
+
+	newOwner, err := s.AcquireLock(context.Background(), key)
+	if err != nil {
+		t.Fatalf("AcquireLock after crash + TTL expiry failed: %v", err)
+	}
+	defer newOwner.Close()
+}
+
+func TestLock_Close_DoesNotStealALockReacquiredAfterLeaseLoss(t *testing.T) {
+	mr, s, ctx := setupTest(t)
+
+	key := "test-lock"
+	ttl := 300 * time.Millisecond
+	s.lockTTL = ttl
+
+	lock, err := s.AcquireLock(ctx, key)
 	if err != nil {
 		t.Fatalf("AcquireLock failed: %v", err)
 	}
-	if !acquired {
-		t.Errorf("expected lock to be acquired by token-2 after TTL expiration")
+
+	// Lose the lease out from under the renewal loop.
+	mr.Del(key)
+	select {
+	case <-lock.Context().Done():
+	case <-time.After(time.Second):
+		t.Fatal("expected lock.Context() to be cancelled once the lease is lost")
 	}
+
+	// A different holder acquires the same key once it's free.
+	newOwner, err := s.AcquireLock(ctx, key)
+	if err != nil {
+		t.Fatalf("AcquireLock by new owner failed: %v", err)
+	}
+	defer newOwner.Close()
+
+	// The original Lock no longer owns the key; Close must be a safe no-op
+	// rather than deleting the new owner's lock out from under it.
+	lock.Close()
+
+	if !mr.Exists(key) {
+		t.Errorf("expected the new owner's lock to survive the old Lock's Close, but the key was deleted")
+	}
+}
+
+func TestLock_Close_Idempotent(t *testing.T) {
+	_, s, ctx := setupTest(t)
+
+	lock, err := s.AcquireLock(ctx, "test-lock")
+	if err != nil {
+		t.Fatalf("AcquireLock failed: %v", err)
+	}
+
+	lock.Close()
+	lock.Close() // must not panic or double-release.
+}
+
+func TestRenewDeadlineFractionLeavesRetryHeadroom(t *testing.T) {
+	const minRetries = 2
+
+	intervalFraction := 1.0 / renewIntervalDivisor
+	retryPeriodFraction := 1.0 / renewRetryPeriodDivisor
+	floor := intervalFraction + minRetries*retryPeriodFraction
+
+	if renewDeadlineFraction <= floor {
+		t.Fatalf("renewDeadlineFraction (%v) must exceed intervalFraction + %d*retryPeriodFraction (%v) to leave room for %d retries; "+
+			"at or below intervalFraction (%v) alone, the very first renewal attempt would already find the deadline elapsed",
+			renewDeadlineFraction, minRetries, floor, minRetries, intervalFraction)
+	}
+}
+
+func TestAcquireLock_RenewsUntilClosed(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		mock := &mockRedisClient{SetNXFunc: acquires, EvalShaFunc: renews}
+		s := &Persistence{rdb: mock, lockTTL: defaultLockTTL}
+
+		lock, err := s.AcquireLock(t.Context(), "test-lock")
+		if err != nil {
+			t.Fatalf("AcquireLock failed: %v", err)
+		}
+		defer lock.Close()
+
+		time.Sleep(3 * defaultLockTTL)
+		synctest.Wait()
+
+		if err := lock.Context().Err(); err != nil {
+			t.Errorf("lock.Context().Err() = %v, want nil (lease still held)", err)
+		}
+	})
+}
+
+func TestLock_ContextCancelled_OnLeaseLost(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		mock := &mockRedisClient{SetNXFunc: acquires, EvalShaFunc: leaseLost}
+		s := &Persistence{rdb: mock, lockTTL: defaultLockTTL}
+
+		lock, err := s.AcquireLock(t.Context(), "test-lock")
+		if err != nil {
+			t.Fatalf("AcquireLock failed: %v", err)
+		}
+		defer lock.Close()
+
+		time.Sleep(defaultLockTTL)
+		synctest.Wait()
+
+		if err := lock.Context().Err(); err == nil {
+			t.Error("expected lock.Context() to be cancelled once renewal detects the lease is lost")
+		}
+	})
+}
+
+func TestAcquireLock_RenewalRecoversFromTransientError(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		// Clears with margin to spare before the renew deadline, after a
+		// couple of retryPeriod-spaced attempts.
+		renewDeadline := time.Duration(float64(defaultLockTTL) * renewDeadlineFraction)
+		retryPeriod := defaultLockTTL / renewRetryPeriodDivisor
+		errorClearsAt := time.Now().Add(renewDeadline - 2*retryPeriod)
+
+		mock := &mockRedisClient{SetNXFunc: acquires, EvalShaFunc: failsUntil(errorClearsAt, errors.New("connection refused"))}
+		s := &Persistence{rdb: mock, lockTTL: defaultLockTTL}
+
+		lock, err := s.AcquireLock(t.Context(), "test-lock")
+		if err != nil {
+			t.Fatalf("AcquireLock failed: %v", err)
+		}
+		defer lock.Close()
+
+		time.Sleep(2 * defaultLockTTL)
+		synctest.Wait()
+
+		if err := lock.Context().Err(); err != nil {
+			t.Errorf("lock.Context().Err() = %v, want nil (renewal should have recovered from the transient error)", err)
+		}
+	})
+}
+
+func TestAcquireLock_RenewalGivesUpOncePersistentErrorOutlastsTTL(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		mock := &mockRedisClient{SetNXFunc: acquires, EvalShaFunc: failsWith(errors.New("connection refused"))}
+		s := &Persistence{rdb: mock, lockTTL: defaultLockTTL}
+
+		lock, err := s.AcquireLock(t.Context(), "test-lock")
+		if err != nil {
+			t.Fatalf("AcquireLock failed: %v", err)
+		}
+		defer lock.Close()
+
+		time.Sleep(defaultLockTTL) // past the renew deadline (renewDeadlineFraction * defaultLockTTL)
+		synctest.Wait()
+
+		if err := lock.Context().Err(); err == nil {
+			t.Error("expected lock.Context() to be cancelled once the persistent error outlasts the renew deadline")
+		}
+	})
+}
+
+func TestAcquireLock_RenewalGivesUpWhenRedisHangsUntilDeadline(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		mock := &mockRedisClient{SetNXFunc: acquires, EvalShaFunc: hangs}
+		s := &Persistence{rdb: mock, lockTTL: defaultLockTTL}
+
+		lock, err := s.AcquireLock(t.Context(), "test-lock")
+		if err != nil {
+			t.Fatalf("AcquireLock failed: %v", err)
+		}
+
+		time.Sleep(defaultLockTTL)
+		synctest.Wait()
+
+		if err := lock.Context().Err(); err == nil {
+			t.Error("expected lock.Context() to be cancelled once every renewal attempt hangs past the renew deadline")
+		}
+	})
+}
+
+func TestAcquireLock_RenewalGivesUpAfterMixOfFastFailuresThenHang(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		mock := &mockRedisClient{SetNXFunc: acquires, EvalShaFunc: failsNTimesThenHangs(2, errors.New("connection refused"))}
+		s := &Persistence{rdb: mock, lockTTL: defaultLockTTL}
+
+		lock, err := s.AcquireLock(t.Context(), "test-lock")
+		if err != nil {
+			t.Fatalf("AcquireLock failed: %v", err)
+		}
+
+		time.Sleep(defaultLockTTL)
+		synctest.Wait()
+
+		if err := lock.Context().Err(); err == nil {
+			t.Error("expected lock.Context() to be cancelled once the renew deadline elapses, whether attempts fail fast or hang")
+		}
+	})
 }
 
 func receiveEvent(t *testing.T, ch <-chan store.WorkerEvent) store.WorkerEvent {
@@ -943,36 +1110,8 @@ func receiveEvent(t *testing.T, ch <-chan store.WorkerEvent) store.WorkerEvent {
 	}
 }
 
-func TestAcquireLock_NonReentry(t *testing.T) {
-	mr, s, ctx := setupTest(t)
-	defer mr.Close()
-
-	key := "test-lock"
-	value := "token-1"
-	ttl := 10 * time.Second
-
-	// 1. Acquire lock first time
-	acquired, err := s.AcquireLock(ctx, key, value, ttl)
-	if err != nil {
-		t.Fatalf("first AcquireLock failed: %v", err)
-	}
-	if !acquired {
-		t.Fatalf("expected first lock to be acquired")
-	}
-
-	// 2. Try to acquire lock again with SAME token
-	acquired, err = s.AcquireLock(ctx, key, value, ttl)
-	if err != nil {
-		t.Fatalf("second AcquireLock failed: %v", err)
-	}
-	if acquired {
-		t.Errorf("expected second lock acquisition to fail (non-reentrant)")
-	}
-}
-
 func TestListActors_ScopedByAtespace(t *testing.T) {
-	mr, s, ctx := setupTest(t)
-	defer mr.Close()
+	_, s, ctx := setupTest(t)
 
 	mkActor := func(atespace, name string) *ateapipb.Actor {
 		return &ateapipb.Actor{
@@ -1043,8 +1182,7 @@ func newTestAtespace(name string) *ateapipb.Atespace {
 }
 
 func TestCreateAtespace_Success(t *testing.T) {
-	mr, s, ctx := setupTest(t)
-	defer mr.Close()
+	_, s, ctx := setupTest(t)
 
 	want := newTestAtespace("team-a")
 	created, err := s.CreateAtespace(ctx, want)
@@ -1076,8 +1214,7 @@ func TestCreateAtespace_Success(t *testing.T) {
 }
 
 func TestCreateAtespace_AlreadyExists(t *testing.T) {
-	mr, s, ctx := setupTest(t)
-	defer mr.Close()
+	_, s, ctx := setupTest(t)
 
 	if _, err := s.CreateAtespace(ctx, newTestAtespace("team-a")); err != nil {
 		t.Fatalf("first CreateAtespace failed: %v", err)
@@ -1088,8 +1225,7 @@ func TestCreateAtespace_AlreadyExists(t *testing.T) {
 }
 
 func TestGetAtespace_NotFound(t *testing.T) {
-	mr, s, ctx := setupTest(t)
-	defer mr.Close()
+	_, s, ctx := setupTest(t)
 
 	if _, err := s.GetAtespace(ctx, "nope"); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("expected ErrNotFound, got %v", err)
@@ -1097,8 +1233,7 @@ func TestGetAtespace_NotFound(t *testing.T) {
 }
 
 func TestAtespaceExists(t *testing.T) {
-	mr, s, ctx := setupTest(t)
-	defer mr.Close()
+	_, s, ctx := setupTest(t)
 
 	if ok, err := s.AtespaceExists(ctx, "team-a"); err != nil || ok {
 		t.Fatalf("AtespaceExists before create = (%v, %v), want (false, nil)", ok, err)
@@ -1112,8 +1247,7 @@ func TestAtespaceExists(t *testing.T) {
 }
 
 func TestListAtespaces(t *testing.T) {
-	mr, s, ctx := setupTest(t)
-	defer mr.Close()
+	_, s, ctx := setupTest(t)
 
 	names := []string{"team-a", "team-b", "team-c"}
 	for _, n := range names {
@@ -1140,8 +1274,7 @@ func TestListAtespaces(t *testing.T) {
 }
 
 func TestListAtespaces_Empty(t *testing.T) {
-	mr, s, ctx := setupTest(t)
-	defer mr.Close()
+	_, s, ctx := setupTest(t)
 
 	got, _, err := s.ListAtespaces(ctx, 1000, "")
 	if err != nil {
@@ -1153,8 +1286,7 @@ func TestListAtespaces_Empty(t *testing.T) {
 }
 
 func TestDeleteAtespace_Empty(t *testing.T) {
-	mr, s, ctx := setupTest(t)
-	defer mr.Close()
+	_, s, ctx := setupTest(t)
 
 	if _, err := s.CreateAtespace(ctx, newTestAtespace("team-a")); err != nil {
 		t.Fatalf("CreateAtespace failed: %v", err)
@@ -1173,8 +1305,7 @@ func TestDeleteAtespace_Empty(t *testing.T) {
 }
 
 func TestDeleteAtespace_NotFound(t *testing.T) {
-	mr, s, ctx := setupTest(t)
-	defer mr.Close()
+	_, s, ctx := setupTest(t)
 
 	if _, err := s.DeleteAtespace(ctx, "nope"); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("expected ErrNotFound, got %v", err)
@@ -1182,8 +1313,7 @@ func TestDeleteAtespace_NotFound(t *testing.T) {
 }
 
 func TestDeleteAtespace_NonEmpty_Rejected(t *testing.T) {
-	mr, s, ctx := setupTest(t)
-	defer mr.Close()
+	_, s, ctx := setupTest(t)
 
 	if _, err := s.CreateAtespace(ctx, newTestAtespace("team-a")); err != nil {
 		t.Fatalf("CreateAtespace failed: %v", err)
@@ -1201,8 +1331,7 @@ func TestDeleteAtespace_NonEmpty_Rejected(t *testing.T) {
 }
 
 func TestDeleteAtespace_EmptyAfterActorsRemoved(t *testing.T) {
-	mr, s, ctx := setupTest(t)
-	defer mr.Close()
+	_, s, ctx := setupTest(t)
 
 	if _, err := s.CreateAtespace(ctx, newTestAtespace("team-a")); err != nil {
 		t.Fatalf("CreateAtespace failed: %v", err)
@@ -1222,8 +1351,7 @@ func TestDeleteAtespace_EmptyAfterActorsRemoved(t *testing.T) {
 }
 
 func TestDeleteAtespace_EmptyWhileOtherAtespaceNonEmpty(t *testing.T) {
-	mr, s, ctx := setupTest(t)
-	defer mr.Close()
+	_, s, ctx := setupTest(t)
 
 	if _, err := s.CreateAtespace(ctx, newTestAtespace("team-a")); err != nil {
 		t.Fatalf("CreateAtespace(team-a) failed: %v", err)
@@ -1330,7 +1458,6 @@ func TestListActors_MultiMaster_Pagination(t *testing.T) {
 		if err != nil {
 			t.Fatalf("failed to start miniredis %d: %v", i, err)
 		}
-		defer mr.Close()
 
 		client := redis.NewClient(&redis.Options{Addr: mr.Addr()})
 		clusterClient := redis.NewClusterClient(&redis.ClusterOptions{Addrs: []string{mr.Addr()}})
@@ -1526,5 +1653,103 @@ func TestListAtespaces_MultiMaster_Pagination(t *testing.T) {
 				t.Fatalf("expected %d atespaces across %d shards, got %d", numShards*3, numShards, len(seen))
 			}
 		})
+	}
+}
+
+type setNXFunc func(ctx context.Context, key string, value interface{}, ttl time.Duration) *redis.BoolCmd
+
+type evalFunc func(ctx context.Context, sha1 string, keys []string, args ...interface{}) *redis.Cmd
+
+type mockRedisClient struct {
+	redisClient
+
+	SetNXFunc   setNXFunc
+	EvalShaFunc evalFunc
+}
+
+func (m *mockRedisClient) SetNX(ctx context.Context, key string, value interface{}, ttl time.Duration) *redis.BoolCmd {
+	return m.SetNXFunc(ctx, key, value, ttl)
+}
+
+func (m *mockRedisClient) EvalSha(ctx context.Context, sha1 string, keys []string, args ...interface{}) *redis.Cmd {
+	return m.EvalShaFunc(ctx, sha1, keys, args...)
+}
+
+// intCmd and errCmd build the two possible shapes of a script-eval result:
+// intCmd for the CAS script's 1 (applied) / 0 (not owned) return value, and
+// errCmd for a failed call.
+func intCmd(ctx context.Context, v int64) *redis.Cmd {
+	cmd := redis.NewCmd(ctx)
+	cmd.SetVal(v)
+	return cmd
+}
+
+func errCmd(ctx context.Context, err error) *redis.Cmd {
+	cmd := redis.NewCmd(ctx)
+	cmd.SetErr(err)
+	return cmd
+}
+
+// acquires is a setNXFunc reporting the lock was acquired.
+func acquires(ctx context.Context, key string, value interface{}, ttl time.Duration) *redis.BoolCmd {
+	cmd := redis.NewBoolCmd(ctx)
+	cmd.SetVal(true)
+	return cmd
+}
+
+// renews is an evalFunc reporting a successful renewal.
+func renews(ctx context.Context, sha1 string, keys []string, args ...interface{}) *redis.Cmd {
+	return intCmd(ctx, 1)
+}
+
+// leaseLost is an evalFunc reporting that the CAS check found we no longer
+// own the key (someone else took over, or it was deleted) -- Mode 6: an
+// authoritative "you don't hold this anymore," not a retryable failure.
+func leaseLost(ctx context.Context, sha1 string, keys []string, args ...interface{}) *redis.Cmd {
+	return intCmd(ctx, 0)
+}
+
+// failsWith returns an evalFunc that always fails fast with err.
+func failsWith(err error) evalFunc {
+	return func(ctx context.Context, sha1 string, keys []string, args ...interface{}) *redis.Cmd {
+		return errCmd(ctx, err)
+	}
+}
+
+// hangs is an evalFunc that blocks until ctx is done, simulating an
+// unresponsive Redis.
+func hangs(ctx context.Context, sha1 string, keys []string, args ...interface{}) *redis.Cmd {
+	<-ctx.Done()
+	return errCmd(ctx, ctx.Err())
+}
+
+// failsUntil returns an evalFunc that fails fast with err until t, then
+// reports a successful renewal.
+func failsUntil(t time.Time, err error) evalFunc {
+	return func(ctx context.Context, sha1 string, keys []string, args ...interface{}) *redis.Cmd {
+		if time.Now().Before(t) {
+			return errCmd(ctx, err)
+		}
+		return intCmd(ctx, 1)
+	}
+}
+
+// failsNTimesThenHangs returns an evalFunc that fails fast with err for its
+// first n calls, then hangs (as hangs does) on every call after that.
+func failsNTimesThenHangs(n int, err error) evalFunc {
+	var mu sync.Mutex
+	left := n
+	return func(ctx context.Context, sha1 string, keys []string, args ...interface{}) *redis.Cmd {
+		mu.Lock()
+		fail := left > 0
+		if fail {
+			left--
+		}
+		mu.Unlock()
+
+		if fail {
+			return errCmd(ctx, err)
+		}
+		return hangs(ctx, sha1, keys, args...)
 	}
 }

@@ -75,7 +75,8 @@ type redisClient interface {
 
 // Persistence is a service that stores information about applications in Redis.
 type Persistence struct {
-	rdb redisClient
+	rdb     redisClient
+	lockTTL time.Duration
 }
 
 var _ store.Interface = (*Persistence)(nil)
@@ -83,7 +84,8 @@ var _ store.Interface = (*Persistence)(nil)
 // NewPersistence creates a new Persistence.
 func NewPersistence(redisClient *redis.ClusterClient) *Persistence {
 	return &Persistence{
-		rdb: redisClient,
+		rdb:     redisClient,
+		lockTTL: defaultLockTTL,
 	}
 }
 
@@ -767,24 +769,153 @@ func fetchProtos[M proto.Message](ctx context.Context, master *redis.Client, key
 	return out, nil
 }
 
-func (s *Persistence) AcquireLock(ctx context.Context, key string, value string, ttl time.Duration) (bool, error) {
+// lockRenewScript extends key's TTL only if it is still owned by ARGV[1],
+// atomically. Returns 1 if renewed, 0 if the lock was lost (expired and
+// possibly reacquired by someone else, or otherwise deleted).
+var lockRenewScript = redis.NewScript(`
+	if redis.call("get", KEYS[1]) == ARGV[1] then
+		return redis.call("pexpire", KEYS[1], ARGV[2])
+	else
+		return 0
+	end
+`)
+
+// lockReleaseScript deletes key only if it is still owned by ARGV[1],
+// atomically, so a caller can never release a lock it no longer holds.
+var lockReleaseScript = redis.NewScript(`
+	if redis.call("get", KEYS[1]) == ARGV[1] then
+		return redis.call("del", KEYS[1])
+	else
+		return 0
+	end
+`)
+
+// defaultLockTTL is how long a lock may go unrenewed before another client
+// can reclaim it.
+const defaultLockTTL = 30 * time.Second
+
+func (s *Persistence) AcquireLock(ctx context.Context, key string) (*store.Lock, error) {
+	ttl := s.lockTTL
+	value := uuid.New().String()
+
 	ok, err := s.rdb.SetNX(ctx, key, value, ttl).Result()
 	if err != nil {
-		return false, fmt.Errorf("while acquiring lock for %q: %w", key, err)
+		return nil, fmt.Errorf("while acquiring lock for %q: %w", key, err)
 	}
-	return ok, nil
+	if !ok {
+		return nil, store.ErrLockConflict
+	}
+
+	// leaseCtx is cancelled either by Close, or by the renewal loop below if it
+	// ever stops without Close having been called (i.e. the lease was lost).
+	leaseCtx, cancel := context.WithCancel(ctx)
+	renewalDone := make(chan struct{})
+
+	go func() {
+		defer close(renewalDone)
+		defer cancel()
+		s.renewLockLoop(leaseCtx, key, value, ttl)
+	}()
+
+	closeFn := func() {
+		cancel()
+		<-renewalDone // wait for the renewal loop to stop before releasing.
+
+		releaseCtx, releaseCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer releaseCancel()
+		if err := s.releaseLock(releaseCtx, key, value); err != nil {
+			slog.WarnContext(releaseCtx, "failed to release lock, relying on TTL to reclaim it", "key", key, "error", err)
+		}
+	}
+
+	return store.NewLock(leaseCtx, closeFn), nil
 }
 
-func (s *Persistence) ReleaseLock(ctx context.Context, key string, value string) error {
-	var luaRelease = redis.NewScript(`
-		if redis.call("get", KEYS[1]) == ARGV[1] then
-			return redis.call("del", KEYS[1])
-		else
-			return 0
-		end
-	`)
+const (
+	// renewIntervalDivisor and renewRetryPeriodDivisor set the renewal loop's
+	// steady-state cadence and in-failure retry spacing as fractions of ttl:
+	// interval = ttl/renewIntervalDivisor, retryPeriod = ttl/renewRetryPeriodDivisor.
+	renewIntervalDivisor    = 3
+	renewRetryPeriodDivisor = 10
+	// renewDeadlineFraction bounds how much of the lock's TTL the renewal loop
+	// may spend retrying after its last successful renewal before conceding the
+	// lease as lost.
+	renewDeadlineFraction = 2.0 / 3.0
+)
 
-	_, err := luaRelease.Run(ctx, s.rdb, []string{key}, value).Result()
+func (s *Persistence) renewLockLoop(ctx context.Context, key, value string, ttl time.Duration) {
+	interval := ttl / renewIntervalDivisor
+	renewDeadline := time.Duration(float64(ttl) * renewDeadlineFraction)
+
+	lastRenewed := time.Now()
+	timer := time.NewTimer(interval)
+	defer timer.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+			renewCtx, cancel := context.WithDeadline(ctx, lastRenewed.Add(renewDeadline))
+			renewed := s.tryRenewLock(renewCtx, key, value, ttl)
+			cancel()
+			if !renewed {
+				return
+			}
+			lastRenewed = time.Now()
+			timer.Reset(interval)
+		}
+	}
+}
+
+func (s *Persistence) tryRenewLock(ctx context.Context, key, value string, ttl time.Duration) bool {
+	retryPeriod := ttl / renewRetryPeriodDivisor
+
+	retry := time.NewTimer(0) // first attempt fires immediately.
+	defer retry.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				slog.WarnContext(ctx, "failed to renew lock and its renew deadline has elapsed, treating lease as lost", "key", key)
+			}
+			return false
+
+		case <-retry.C:
+			renewed, err := s.renewLock(ctx, key, value, ttl)
+
+			if ctx.Err() != nil {
+				return false // deadline elapsed or Close raced with this attempt.
+			}
+
+			switch {
+			case err == nil && renewed:
+				return true
+
+			case err == nil && !renewed:
+				slog.WarnContext(ctx, "lock renewal found lease no longer owned", "key", key)
+				return false
+
+			default:
+				slog.WarnContext(ctx, "failed to renew lock, retrying before its renew deadline elapses", "key", key, "error", err)
+				retry.Reset(retryPeriod)
+			}
+		}
+	}
+}
+
+func (s *Persistence) renewLock(ctx context.Context, key, value string, ttl time.Duration) (bool, error) {
+	res, err := lockRenewScript.Run(ctx, s.rdb, []string{key}, value, ttl.Milliseconds()).Result()
+	if err != nil {
+		return false, fmt.Errorf("while renewing lock for %q: %w", key, err)
+	}
+	renewed, _ := res.(int64)
+	return renewed == 1, nil
+}
+
+func (s *Persistence) releaseLock(ctx context.Context, key, value string) error {
+	_, err := lockReleaseScript.Run(ctx, s.rdb, []string{key}, value).Result()
 	if err != nil {
 		return fmt.Errorf("while releasing lock for %q with value %q: %w", key, value, err)
 	}

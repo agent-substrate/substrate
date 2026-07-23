@@ -71,6 +71,15 @@ func ServerUnaryInterceptor(ctx context.Context, req any, info *grpc.UnaryServer
 	return resp, err
 }
 
+// MaxDeadlineUnaryInterceptor returns an interceptor that caps the request context at maxDeadline.
+func MaxDeadlineUnaryInterceptor(maxDeadline time.Duration) grpc.UnaryServerInterceptor {
+	return func(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
+		ctx, cancel := context.WithTimeout(ctx, maxDeadline)
+		defer cancel()
+		return handler(ctx, req)
+	}
+}
+
 // InternalServerUnaryInterceptor is for internal services to return full gRPC errors with specific error codes and debugging details.
 func InternalServerUnaryInterceptor(ctx context.Context, req any, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (any, error) {
 	startTime := time.Now()

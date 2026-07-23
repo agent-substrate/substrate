@@ -135,3 +135,30 @@ func TestActorRefAttributes(t *testing.T) {
 		})
 	}
 }
+
+// TestKeySpellings pins the wire spelling of every key. Renaming one silently
+// breaks dashboards, alerts, and the contract between ateapi and atelet, so a
+// drift must fail here rather than in production.
+func TestKeySpellings(t *testing.T) {
+	tests := []struct {
+		key  attribute.Key
+		want string
+	}{
+		{AtespaceKey, "ate.atespace"},
+		{ActorNameKey, "ate.actor.name"},
+		{ActorUIDKey, "ate.actor.uid"},
+		{TemplateNameKey, "ate.template.name"},
+		{TemplateNamespaceKey, "ate.template.namespace"},
+		{ActorVersionKey, "ate.actor.version"},
+		{WorkerPoolNameKey, "ate.workerpool.name"},
+		{WorkerStateKey, "ate.worker.state"},
+		{SandboxClassKey, "ate.sandbox.class"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.want, func(t *testing.T) {
+			if string(tt.key) != tt.want {
+				t.Errorf("key = %q, want %q", string(tt.key), tt.want)
+			}
+		})
+	}
+}
