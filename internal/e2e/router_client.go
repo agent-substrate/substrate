@@ -17,19 +17,14 @@ package e2e
 import (
 	"context"
 	"fmt"
-	"io"
 	"net/http"
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/ateclient"
 	"github.com/agent-substrate/substrate/internal/resources"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/tools/portforward"
-	"k8s.io/client-go/transport/spdy"
 )
 
 const (
@@ -44,7 +39,7 @@ const (
 type RouterClient struct {
 	baseURL string
 	http    *http.Client
-	stopCh  chan struct{}
+	stop    func()
 }
 
 // NewRouterClient establishes a port-forward to the atenet router. Call Close
@@ -59,30 +54,9 @@ func NewRouterClient(ctx context.Context) (*RouterClient, error) {
 		return nil, fmt.Errorf("creating k8s client: %w", err)
 	}
 
-	// Resolve the router Service to one of its backing pods.
-	svc, err := clientset.CoreV1().Services(routerNamespace).Get(ctx, routerService, metav1.GetOptions{})
+	targetPod, svc, err := firstReadyPodForService(ctx, clientset, routerNamespace, routerService)
 	if err != nil {
-		return nil, fmt.Errorf("getting %s service: %w", routerService, err)
-	}
-	// A headless/selectorless Service would make SelectorFromSet match every
-	// pod in the namespace; refuse rather than forward to an arbitrary pod.
-	if len(svc.Spec.Selector) == 0 {
-		return nil, fmt.Errorf("service %s has no selector", routerService)
-	}
-	selector := labels.SelectorFromSet(svc.Spec.Selector).String()
-	pods, err := clientset.CoreV1().Pods(routerNamespace).List(ctx, metav1.ListOptions{LabelSelector: selector})
-	if err != nil {
-		return nil, fmt.Errorf("listing %s pods: %w", routerService, err)
-	}
-	var targetPod *corev1.Pod
-	for i := range pods.Items {
-		if isPodReady(&pods.Items[i]) {
-			targetPod = &pods.Items[i]
-			break
-		}
-	}
-	if targetPod == nil {
-		return nil, fmt.Errorf("no ready %s pods in %s", routerService, routerNamespace)
+		return nil, err
 	}
 
 	// Port-forward targets a pod's container port, so resolve the Service's
@@ -93,51 +67,15 @@ func NewRouterClient(ctx context.Context) (*RouterClient, error) {
 		return nil, err
 	}
 
-	req := clientset.CoreV1().RESTClient().Post().
-		Resource("pods").
-		Namespace(routerNamespace).
-		Name(targetPod.Name).
-		SubResource("portforward")
-
-	transport, upgrader, err := spdy.RoundTripperFor(config)
+	localPort, stop, err := podPortForward(ctx, config, clientset, routerNamespace, targetPod.Name, targetPort)
 	if err != nil {
-		return nil, fmt.Errorf("creating SPDY transport: %w", err)
-	}
-	dialer := spdy.NewDialer(upgrader, &http.Client{Transport: transport}, http.MethodPost, req.URL())
-
-	stopCh := make(chan struct{})
-	readyCh := make(chan struct{})
-	// Port 0 asks the OS for a random available local port.
-	fw, err := portforward.New(dialer, []string{fmt.Sprintf("0:%d", targetPort)}, stopCh, readyCh, io.Discard, io.Discard)
-	if err != nil {
-		return nil, fmt.Errorf("creating port forwarder: %w", err)
-	}
-
-	errCh := make(chan error, 1)
-	go func() {
-		if err := fw.ForwardPorts(); err != nil {
-			errCh <- err
-		}
-	}()
-	select {
-	case <-readyCh:
-	case err := <-errCh:
-		return nil, fmt.Errorf("port forwarding: %w", err)
-	case <-ctx.Done():
-		close(stopCh)
-		return nil, ctx.Err()
-	}
-
-	ports, err := fw.GetPorts()
-	if err != nil || len(ports) == 0 {
-		close(stopCh)
-		return nil, fmt.Errorf("getting forwarded ports: %w", err)
+		return nil, err
 	}
 
 	return &RouterClient{
-		baseURL: fmt.Sprintf("http://127.0.0.1:%d", ports[0].Local),
+		baseURL: fmt.Sprintf("http://127.0.0.1:%d", localPort),
 		http:    &http.Client{Timeout: 30 * time.Second},
-		stopCh:  stopCh,
+		stop:    stop,
 	}, nil
 }
 
@@ -190,7 +128,7 @@ func resolveHTTPTargetPort(svc *corev1.Service, pod *corev1.Pod) (int32, error) 
 
 // Close stops the port-forward tunnel.
 func (c *RouterClient) Close() {
-	close(c.stopCh)
+	c.stop()
 }
 
 // Get issues GET path to (atespace, actorName) through the router, setting the

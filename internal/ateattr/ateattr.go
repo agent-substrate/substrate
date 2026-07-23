@@ -46,31 +46,12 @@ const (
 // Metric-label keys: the only ate.* attributes allowed on metric datapoints,
 // each with a small bounded value set. High-cardinality identity (actor
 // name/uid, atespace) is absent by design; it belongs on spans and logs.
-// ActorOperationNameKey follows the registry's *.operation.name pattern
-// (db.operation.name, gen_ai.operation.name). WorkerStateKey stays worker-rooted
-// rather than nesting under the pool so it can grow siblings.
+// WorkerStateKey stays worker-rooted rather than nesting under the pool so it
+// can grow siblings.
 const (
-	ActorOperationNameKey = attribute.Key("ate.actor.operation.name")
-	WorkerPoolNameKey     = attribute.Key("ate.workerpool.name")
-	WorkerStateKey        = attribute.Key("ate.worker.state")
-	SandboxClassKey       = attribute.Key("ate.sandbox.class")
-	SnapshotKindKey       = attribute.Key("ate.snapshot.kind")
-	SnapshotPhaseKey      = attribute.Key("ate.snapshot.phase")
-	SchedulerOutcomeKey   = attribute.Key("ate.scheduler.outcome")
-)
-
-// ErrorTypeKey is the OTel registry attribute, reused verbatim (not aliased into
-// ate.*): failures are reported on the same instrument via this key, its absence
-// meaning success, never as a parallel _failures counter.
-const ErrorTypeKey = attribute.Key("error.type")
-
-// Values for ActorOperationNameKey.
-const (
-	OperationCreate  = "create"
-	OperationResume  = "resume"
-	OperationSuspend = "suspend"
-	OperationPause   = "pause"
-	OperationDelete  = "delete"
+	WorkerPoolNameKey = attribute.Key("ate.workerpool.name")
+	WorkerStateKey    = attribute.Key("ate.worker.state")
+	SandboxClassKey   = attribute.Key("ate.sandbox.class")
 )
 
 // Values for WorkerStateKey. Only idle and assigned are representable today;
@@ -78,44 +59,6 @@ const (
 const (
 	WorkerStateIdle     = "idle"
 	WorkerStateAssigned = "assigned"
-)
-
-// Values for SchedulerOutcomeKey. NoFreeWorker is a capacity signal, not an
-// error, so it is a distinct outcome rather than an error.type value.
-const (
-	SchedulerOutcomeAssigned     = "assigned"
-	SchedulerOutcomeNoFreeWorker = "no_free_worker"
-	SchedulerOutcomeError        = "error"
-)
-
-// Values for SnapshotKindKey. Boot is not a restore, so it appears only on the
-// ateapi lifecycle histogram, never on the atelet restore histogram.
-const (
-	SnapshotKindGolden  = "golden"
-	SnapshotKindLatest  = "latest"
-	SnapshotKindBoot    = "boot"
-	SnapshotKindUnknown = "unknown"
-)
-
-// ClampRestoreSnapshotKind bounds an untrusted kind before it becomes a metric
-// label, so a caller cannot inflate cardinality.
-func ClampRestoreSnapshotKind(kind string) string {
-	switch kind {
-	case SnapshotKindGolden, SnapshotKindLatest:
-		return kind
-	default:
-		return SnapshotKindUnknown
-	}
-}
-
-// Values for SnapshotPhaseKey: restore phases (download, oci_unpack,
-// ateom_restore) and checkpoint phases (checkpoint, upload) share the key.
-const (
-	SnapshotPhaseDownload     = "download"
-	SnapshotPhaseOCIUnpack    = "oci_unpack"
-	SnapshotPhaseAteomRestore = "ateom_restore"
-	SnapshotPhaseCheckpoint   = "checkpoint"
-	SnapshotPhaseUpload       = "upload"
 )
 
 // ActorRefAttributes returns the subset knowable before the Actor record
