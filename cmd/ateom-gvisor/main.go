@@ -789,6 +789,11 @@ func inPrivateCgroupNamespace() (bool, error) {
 // only ever lists processes that are not already in a child cgroup, and the list
 // shrinks as we drain it, so loop until the source is empty.
 func moveProcs(ctx context.Context, srcProcs, dstProcs string) error {
+	// One pass moves everything it saw, but a process can fork between the read
+	// and the writes, so re-read until the source reads empty. 100 is an
+	// arbitrary generous bound (one or two passes suffice in practice) so a
+	// process that can never be moved fails startup with a clear error instead
+	// of looping forever.
 	for range 100 {
 		b, err := os.ReadFile(srcProcs)
 		if err != nil {
