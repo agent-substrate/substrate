@@ -27,6 +27,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/ch"
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/kata"
 	"github.com/agent-substrate/substrate/internal/ateompath"
+	"github.com/agent-substrate/substrate/internal/imagecache"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 )
 
@@ -207,4 +208,11 @@ func (s *AteomService) teardownActor(ctx context.Context, id string, ra *running
 	// Sweep any leftover per-sandbox host-side state + orphaned per-sandbox
 	// processes. This is ateom's own cleanup (process kill + unmount + rm).
 	kata.CleanupSandboxState(ctx, id)
+
+	// Detach the bundle rootfs overlays composed in buildActorContainers, so
+	// atelet's bundle wipe doesn't strand live mounts in this namespace.
+	// Best-effort like the rest of teardown.
+	if err := imagecache.UnmountAllUnder(ateompath.OCIBundleDir(id)); err != nil {
+		slog.WarnContext(ctx, "Failed to unmount bundle rootfs overlays", slog.String("actorUID", id), slog.Any("err", err))
+	}
 }

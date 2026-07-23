@@ -47,6 +47,24 @@ duplicating work that is already in flight.
 extensive review. We are not trying to be discouraging, but we need to make
 sure that we are focused on the most important work.
 
+### Sizing PRs for review
+
+We optimize PRs for easy review — large PRs get broken
+down, small PRs get merged.
+
+* **Large PRs**: split huge changes into a series of smaller PRs, each a
+  logically distinct feature. When the intermediate steps are not useful
+  on their own, keep the change as one PR split into commits at logical
+  break points, and preserve those commits on merge.
+* **Small and bulk PRs**: if you find a typo, review the whole file and
+  fix everything in one pass rather than sending the single edit. Group
+  related typo, doc, and single-line cleanup fixes into one PR rather
+  than opening several small ones for the same area. Maintainers may ask
+  you to consolidate fragmented PRs into one, or close them in favor of a
+  combined submission.
+
+As a rough scale: S is under 30 changed lines, M under 100, L under 500, XL under 1000. Most PRs should be L or smaller; XL and above are candidates for breaking down.
+
 ### Code Reviews
 
 All submissions, including submissions by project members, require review. We

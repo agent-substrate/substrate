@@ -50,3 +50,6 @@ Thumbs.db
 
 # Local worktrees
 /.worktrees/
+
+# Stray local build outputs (go build ./tools/... without -o)
+/validate-image-cache

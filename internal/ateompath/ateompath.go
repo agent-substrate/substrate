@@ -28,6 +28,12 @@ const (
 var (
 	// StaticFilesDir holds things like downloaded runsc binaries.
 	StaticFilesDir = filepath.Join(BasePath, "static-files")
+
+	// ImageCacheDir is the node-local OCI image layer cache (see
+	// internal/imagecache). It lives under BasePath so the cached layer
+	// directories are visible at the same path in atelet (which writes them)
+	// and in every ateom pod (which mounts them as overlay lowerdirs).
+	ImageCacheDir = filepath.Join(BasePath, "image-cache")
 )
 
 func RunSCBinaryPath(sha256 string) string {
