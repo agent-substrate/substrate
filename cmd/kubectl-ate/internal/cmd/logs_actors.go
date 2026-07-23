@@ -53,6 +53,7 @@ func init() {
 	logsActorsCmd.Flags().BoolVarP(&followLogs, "follow", "f", false, "Specify if the logs should be streamed.")
 	logsActorsCmd.Flags().StringVarP(&logsAtespaceFlag, "atespace", "a", "", "Atespace the actor lives in")
 	_ = logsActorsCmd.MarkFlagRequired("atespace")
+	registerActorCompletions(logsActorsCmd)
 	logsCmd.AddCommand(logsActorsCmd)
 }
 

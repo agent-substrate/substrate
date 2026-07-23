@@ -51,5 +51,6 @@ var suspendActorCmd = &cobra.Command{
 func init() {
 	suspendActorCmd.Flags().StringVarP(&suspendAtespaceFlag, "atespace", "a", "", "Atespace the actor lives in")
 	_ = suspendActorCmd.MarkFlagRequired("atespace")
+	registerActorCompletions(suspendActorCmd)
 	suspendCmd.AddCommand(suspendActorCmd)
 }
