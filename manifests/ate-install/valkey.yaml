@@ -30,8 +30,11 @@ data:
     tls-key-file /run/servicedns.podcert.ate.dev/credential-bundle.pem
     tls-ca-cert-file /etc/valkey-ca/ca.crt
     tls-auth-clients yes
-    # Reload the cert every 12h.
-    tls-auto-reload-interval 43200
+
+    # Reload every 10 minutes. 
+    # The interval should be less than the 30m headroom (notAfter - beginRefreshAt) 
+    # set by cmd/podcertcontroller/internal/servicednssigner/servicednssigner.go.
+    tls-auto-reload-interval 600
 
     # Enable cluster mode
     cluster-enabled yes

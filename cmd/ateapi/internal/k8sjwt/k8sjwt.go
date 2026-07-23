@@ -402,71 +402,103 @@ func discoverKeysForIssuer(ctx context.Context, httpClient *http.Client, issuer 
 	slog.InfoContext(ctx, "Fetched JWK set", slog.Any("jwkSet", jwkSet))
 
 	var ret []*KeyAndID
+	skipped := 0
 	for _, jwk := range jwkSet.Keys {
-		if jwk.KeyID == "" {
-			return nil, fmt.Errorf("JWKs endpoint returned key without key ID")
+		key, err := parseJWK(jwk)
+		if err != nil {
+			// Skip an unusable key instead of failing the whole issuer; it's safe because
+			// keys are selected by kid and the signature is still verified, so a skipped
+			// key can't be abused. Debug, not Warn: unsupported key types are a normal
+			// config and discovery runs on every Verify (no cache yet), so Warn would spam.
+			slog.DebugContext(ctx, "Skipping unusable JWK from issuer",
+				slog.String("kid", jwk.KeyID), slog.String("kty", jwk.KeyType), slog.Any("err", err))
+			skipped++
+			continue
 		}
+		ret = append(ret, key)
+	}
 
-		switch jwk.KeyType {
-		case "EC":
-			curve, err := ellipticCurveForJWK(jwk.EllipticCurve)
-			if err != nil {
-				return nil, err
-			}
-			if jwk.EllipticX == "" || jwk.EllipticY == "" {
-				return nil, fmt.Errorf("EC JWK is missing the x or y coordinate")
-			}
-			xBytes, err := base64.RawURLEncoding.DecodeString(jwk.EllipticX)
-			if err != nil {
-				return nil, fmt.Errorf("while base64-decoding EC x coordinate: %w", err)
-			}
-			yBytes, err := base64.RawURLEncoding.DecodeString(jwk.EllipticY)
-			if err != nil {
-				return nil, fmt.Errorf("while base64-decoding EC y coordinate: %w", err)
-			}
-			x := new(big.Int).SetBytes(xBytes)
-			y := new(big.Int).SetBytes(yBytes)
-			// Reject coordinates outside the field. This is a cheap sanity check; the
-			// authoritative on-curve validation happens in ecdsa.Verify, which returns
-			// false for a public key whose point is not on the curve.
-			p := curve.Params().P
-			if x.Cmp(p) >= 0 || y.Cmp(p) >= 0 {
-				return nil, fmt.Errorf("EC JWK coordinate is out of range for curve %q", jwk.EllipticCurve)
-			}
-			ret = append(ret, &KeyAndID{
-				KeyID:     jwk.KeyID,
-				PublicKey: &ecdsa.PublicKey{Curve: curve, X: x, Y: y},
-			})
-
-		case "RSA":
-			nBytes, err := base64.RawURLEncoding.DecodeString(jwk.RSAN)
-			if err != nil {
-				return nil, fmt.Errorf("while base64-decoding n: %w", err)
-			}
-			n := &big.Int{}
-			n.SetBytes(nBytes)
-
-			eBytes, err := base64.RawURLEncoding.DecodeString(jwk.RSAE)
-			if err != nil {
-				return nil, fmt.Errorf("while base64-decoding e: %w", err)
-			}
-			e := &big.Int{}
-			e.SetBytes(eBytes)
-
-			ret = append(ret, &KeyAndID{
-				KeyID: jwk.KeyID,
-				PublicKey: &rsa.PublicKey{
-					N: n,
-					E: int(e.Int64()),
-				},
-			})
-
-		default:
-			return nil, fmt.Errorf("unhandled key type %q", jwk.KeyType)
+	// None usable: fail here (reasons logged above) rather than return an empty set
+	// that fails later as a vaguer "unknown key ID".
+	if len(ret) == 0 {
+		if len(jwkSet.Keys) == 0 {
+			return nil, fmt.Errorf("issuer %q published an empty JWKS", issuer)
 		}
+		return nil, fmt.Errorf("no usable keys in JWKS for issuer %q (%d skipped)", issuer, skipped)
+	}
+
+	if skipped > 0 {
+		slog.DebugContext(ctx, "Skipped unusable JWKs from issuer",
+			slog.String("issuer", issuer), slog.Int("skipped", skipped), slog.Int("usable", len(ret)))
 	}
 
 	return ret, nil
+}
+
+// parseJWK converts a single JWK into a verification key, returning an error for a key
+// the verifier cannot use (missing key ID, unsupported key type or curve, or malformed
+// parameters).
+func parseJWK(jwk jwkT) (*KeyAndID, error) {
+	if jwk.KeyID == "" {
+		return nil, fmt.Errorf("JWK has no key ID")
+	}
+	switch jwk.KeyType {
+	case "EC":
+		curve, err := ellipticCurveForJWK(jwk.EllipticCurve)
+		if err != nil {
+			return nil, err
+		}
+		if jwk.EllipticX == "" || jwk.EllipticY == "" {
+			return nil, fmt.Errorf("EC JWK is missing the x or y coordinate")
+		}
+		xBytes, err := base64.RawURLEncoding.DecodeString(jwk.EllipticX)
+		if err != nil {
+			return nil, fmt.Errorf("while base64-decoding EC x coordinate: %w", err)
+		}
+		yBytes, err := base64.RawURLEncoding.DecodeString(jwk.EllipticY)
+		if err != nil {
+			return nil, fmt.Errorf("while base64-decoding EC y coordinate: %w", err)
+		}
+		x := new(big.Int).SetBytes(xBytes)
+		y := new(big.Int).SetBytes(yBytes)
+		// Reject coordinates outside the field. This is a cheap sanity check; the
+		// authoritative on-curve validation happens in ecdsa.Verify, which returns
+		// false for a public key whose point is not on the curve.
+		p := curve.Params().P
+		if x.Cmp(p) >= 0 || y.Cmp(p) >= 0 {
+			return nil, fmt.Errorf("EC JWK coordinate is out of range for curve %q", jwk.EllipticCurve)
+		}
+		return &KeyAndID{
+			KeyID:     jwk.KeyID,
+			PublicKey: &ecdsa.PublicKey{Curve: curve, X: x, Y: y},
+		}, nil
+
+	case "RSA":
+		nBytes, err := base64.RawURLEncoding.DecodeString(jwk.RSAN)
+		if err != nil {
+			return nil, fmt.Errorf("while base64-decoding n: %w", err)
+		}
+		n := &big.Int{}
+		n.SetBytes(nBytes)
+
+		eBytes, err := base64.RawURLEncoding.DecodeString(jwk.RSAE)
+		if err != nil {
+			return nil, fmt.Errorf("while base64-decoding e: %w", err)
+		}
+		e := &big.Int{}
+		e.SetBytes(eBytes)
+
+		return &KeyAndID{
+			KeyID: jwk.KeyID,
+			PublicKey: &rsa.PublicKey{
+				N: n,
+				E: int(e.Int64()),
+			},
+		}, nil
+
+	default:
+		return nil, fmt.Errorf("unhandled key type %q", jwk.KeyType)
+	}
 }
 
 func fetchJSON[T any](httpClient *http.Client, url string) (T, error) {
