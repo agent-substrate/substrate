@@ -58,7 +58,7 @@ The YAML manifest for your server should include the `OTEL_EXPORTER_OTLP_ENDPOIN
         - name: ateapi
           image: ko://github.com/agent-substrate/substrate/cmd/ateapi
           ports:
-            - "443:443"
+            - containerPort: 443
           env:
             # Tracing related environment variables
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
