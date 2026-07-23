@@ -40,8 +40,6 @@ func newWorkerCountReader(t *testing.T, workers func() ([]*ateapipb.Worker, erro
 	return reader
 }
 
-func noWorkers() ([]*ateapipb.Worker, error) { return nil, nil }
-
 func noPools(labels.Selector) ([]*atev1alpha1.WorkerPool, error) { return nil, nil }
 
 func collectMetric(t *testing.T, reader *sdkmetric.ManualReader, name string) (metricdata.Metrics, bool) {
