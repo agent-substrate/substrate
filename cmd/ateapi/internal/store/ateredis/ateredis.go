@@ -416,7 +416,7 @@ func (s *Persistence) UpdateWorker(ctx context.Context, worker *ateapipb.Worker,
 		currentVal, err := tx.Get(ctx, dbKey).Bytes()
 		if err != nil {
 			if errors.Is(err, redis.Nil) {
-				return fmt.Errorf("worker does not exist")
+				return store.ErrNotFound
 			}
 			return fmt.Errorf("while getting worker: %w", err)
 		}
@@ -455,6 +455,9 @@ func (s *Persistence) UpdateWorker(ctx context.Context, worker *ateapipb.Worker,
 		return err
 	}, dbKey)
 	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return store.ErrNotFound
+		}
 		if errors.Is(err, store.ErrPersistenceRetry) || errors.Is(err, redis.TxFailedErr) {
 			return store.ErrPersistenceRetry
 		}
@@ -531,7 +534,7 @@ func (s *Persistence) UpdateActor(ctx context.Context, actor *ateapipb.Actor, ex
 		currentVal, err := tx.Get(ctx, dbKey).Bytes()
 		if err != nil {
 			if errors.Is(err, redis.Nil) {
-				return fmt.Errorf("actor does not exist")
+				return store.ErrNotFound
 			}
 			return fmt.Errorf("while getting actor: %w", err)
 		}
@@ -572,6 +575,9 @@ func (s *Persistence) UpdateActor(ctx context.Context, actor *ateapipb.Actor, ex
 	}, dbKey)
 
 	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, store.ErrNotFound
+		}
 		if errors.Is(err, store.ErrPersistenceRetry) || errors.Is(err, redis.TxFailedErr) {
 			return nil, store.ErrPersistenceRetry
 		}

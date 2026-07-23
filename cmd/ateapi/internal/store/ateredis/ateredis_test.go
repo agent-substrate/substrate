@@ -237,6 +237,34 @@ func TestUpdateActor_Conflict(t *testing.T) {
 	}
 }
 
+func TestUpdateActor_NotFound(t *testing.T) {
+	mr, s, ctx := setupTest(t)
+	defer mr.Close()
+
+	actor := &ateapipb.Actor{
+		Metadata: &ateapipb.ResourceMetadata{Name: "non-existent", Atespace: testAtespace},
+	}
+	_, err := s.UpdateActor(ctx, actor, 1)
+	if !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("expected store.ErrNotFound, got %v", err)
+	}
+}
+
+func TestUpdateWorker_NotFound(t *testing.T) {
+	mr, s, ctx := setupTest(t)
+	defer mr.Close()
+
+	worker := &ateapipb.Worker{
+		WorkerNamespace: "default",
+		WorkerPool:      "pool-1",
+		WorkerPod:       "non-existent",
+	}
+	err := s.UpdateWorker(ctx, worker, 1)
+	if !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("expected store.ErrNotFound, got %v", err)
+	}
+}
+
 func TestGetWorker_NotFound(t *testing.T) {
 	mr, s, ctx := setupTest(t)
 	defer mr.Close()
