@@ -30,6 +30,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/kata"
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/third_party/kata/agentpb"
 	"github.com/agent-substrate/substrate/internal/ateompath"
+	"github.com/agent-substrate/substrate/internal/imagecache"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/readyz"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
@@ -227,6 +228,11 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 			if cleanupErr := s.cleanupActorNetwork(ctx); cleanupErr != nil {
 				slog.WarnContext(ctx, "Failed to clean up actor network after Run failure", slog.Any("err", cleanupErr))
 			}
+			// Detach any bundle rootfs overlays mounted by buildActorContainers
+			// before the failure, mirroring teardownActor's cleanup.
+			if err := imagecache.UnmountAllUnder(ateompath.OCIBundleDir(actorUID)); err != nil {
+				slog.WarnContext(ctx, "Failed to unmount bundle rootfs overlays after Run failure", slog.Any("err", err))
+			}
 		}
 	}()
 
@@ -382,6 +388,15 @@ func (s *AteomService) buildActorContainers(actorUID string, containers []*ateom
 		spec, err := ensureKataCompatibleSpec(bundle, actorUID, netnsPath)
 		if err != nil {
 			return nil, fmt.Errorf("while preparing kata OCI spec for %q: %w", cn, err)
+		}
+		// Compose the bundle rootfs from the node's cached image layers (an
+		// overlay mounted in this pod's namespace; no-op for bundles without an
+		// overlay spec). Everything downstream — the resolv.conf write below,
+		// the bind into virtiofsd's shared dir, the read-only remount — then
+		// sees the composed tree, with host-side writes landing in the bundle's
+		// private upper. The guest still builds its own tmpfs upper on top.
+		if err := imagecache.SetupBundleRootfs(bundle); err != nil {
+			return nil, fmt.Errorf("while composing rootfs for %q: %w", cn, err)
 		}
 		bundleRootfs := filepath.Join(bundle, "rootfs")
 		// Write cluster DNS into the lower before it's served over virtio-fs: ateom
