@@ -19,11 +19,13 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
-
-	"os"
+	"slices"
 
 	"github.com/agent-substrate/substrate/internal/credbundle"
 	"github.com/agent-substrate/substrate/internal/substratex509"
+	"github.com/spiffe/go-spiffe/v2/bundle/x509bundle"
+	"github.com/spiffe/go-spiffe/v2/spiffeid"
+	"github.com/spiffe/go-spiffe/v2/svid/x509svid"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -33,6 +35,14 @@ import (
 )
 
 var ErrWorkerPodNotFound = errors.New("worker pod not found")
+
+// The SPIFFE identity that atelet serving certs carry, as minted by the
+// podidentity signer (cmd/podcertcontroller/internal/podidentitysigner).
+// The namespace part is ateletNamespace, declared in informer.go.
+const (
+	trustDomainName = "cluster.local"
+	ateletSA        = "atelet"
+)
 
 // AteletDialer handles gRPC connections to Atelet pods.
 type AteletDialer struct {
@@ -122,14 +132,22 @@ func (d *AteletDialer) DialForWorker(workerPodNamespace, workerPodName string) (
 }
 
 func buildTLSConfig(clientBundlePath, serverCAPath, expectedPodUID string) (*tls.Config, error) {
-	roots, err := caPoolFromFile(serverCAPath)
+	trustDomain, err := spiffeid.TrustDomainFromString(trustDomainName)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("while parsing trust domain %q: %w", trustDomainName, err)
+	}
+	bundle, err := x509bundle.Load(trustDomain, serverCAPath)
+	if err != nil {
+		return nil, fmt.Errorf("while loading CA bundle from %s: %w", serverCAPath, err)
+	}
+	expectedID, err := spiffeid.FromSegments(trustDomain, "ns", ateletNamespace, "sa", ateletSA)
+	if err != nil {
+		return nil, fmt.Errorf("while building expected atelet SPIFFE ID: %w", err)
 	}
 
-	verify, err := verifyAteletServerCert(roots, expectedPodUID)
+	verify, err := verifyAteletServerCert(bundle, expectedID, expectedPodUID)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("while creating atelet server cert verifier: %w", err)
 	}
 
 	tlsConfig := tls.Config{
@@ -138,14 +156,13 @@ func buildTLSConfig(clientBundlePath, serverCAPath, expectedPodUID string) (*tls
 		// Skip the default verification because the peer is dialed by IP and its
 		// certificate has no DNS/IP SAN.
 		InsecureSkipVerify: true,
-		RootCAs:            roots,
 		VerifyConnection:   verify,
 	}
 
 	return &tlsConfig, nil
 }
 
-func verifyAteletServerCert(roots *x509.CertPool, expectedPodUID string) (func(tls.ConnectionState) error, error) {
+func verifyAteletServerCert(bundle *x509bundle.Bundle, expectedID spiffeid.ID, expectedPodUID string) (func(tls.ConnectionState) error, error) {
 	if expectedPodUID == "" {
 		return nil, fmt.Errorf("expected pod UID must not be empty")
 	}
@@ -153,17 +170,17 @@ func verifyAteletServerCert(roots *x509.CertPool, expectedPodUID string) (func(t
 		if len(cs.PeerCertificates) == 0 {
 			return fmt.Errorf("server presented no certificate")
 		}
-		leaf := cs.PeerCertificates[0]
-		intermediates := x509.NewCertPool()
-		for _, c := range cs.PeerCertificates[1:] {
-			intermediates.AddCert(c)
-		}
-		if _, err := leaf.Verify(x509.VerifyOptions{
-			Roots:         roots,
-			Intermediates: intermediates,
-			KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		}); err != nil {
+		id, _, err := x509svid.Verify(cs.PeerCertificates, bundle)
+		if err != nil {
 			return fmt.Errorf("verifying server certificate chain: %w", err)
+		}
+		if id != expectedID {
+			return fmt.Errorf("server SPIFFE ID %q does not match expected %q", id, expectedID)
+		}
+
+		leaf := cs.PeerCertificates[0]
+		if !slices.Contains(leaf.ExtKeyUsage, x509.ExtKeyUsageServerAuth) {
+			return fmt.Errorf("server certificate lacks the serverAuth extended key usage")
 		}
 
 		identity, err := substratex509.PodIdentityFromCertificate(leaf)
@@ -179,16 +196,4 @@ func verifyAteletServerCert(roots *x509.CertPool, expectedPodUID string) (func(t
 
 		return nil
 	}, nil
-}
-
-func caPoolFromFile(path string) (*x509.CertPool, error) {
-	caBytes, err := os.ReadFile(path)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read CA bundle from %s: %w", path, err)
-	}
-	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM(caBytes) {
-		return nil, fmt.Errorf("failed to parse CA bundle from %s", path)
-	}
-	return pool, nil
 }
