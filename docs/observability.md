@@ -191,3 +191,97 @@ Dashboard definitions live in [`tools/setup-gcp/dashboards/`](../tools/setup-gcp
 ```sh
 go run ./tools/setup-gcp create dashboards   # also part of: bootstrap
 ```
+
+---
+
+## 6. Actor Application Telemetry (Best Practices)
+
+Everything above describes telemetry emitted by Substrate itself. This section is for **actor authors** whose application code emits its own OpenTelemetry metrics and spans.
+
+An actor is not an ordinary long-lived process. It is checkpointed, its containers are destroyed, and it is later restored — possibly onto a different worker pod, possibly much later. OpenTelemetry's push exporters buffer signals in memory and flush them on a timer (`PeriodicReader` for metrics, `BatchSpanProcessor` for spans), so whether that buffer survives a suspension depends on how the actor is configured and on whether the actor gets a chance to flush.
+
+### What happens to buffered telemetry on suspend
+
+Substrate deletes the sandbox containers at the end of every checkpoint, so the workload process always stops. What differs between snapshot scopes is whether its memory was saved first.
+
+| `snapshotsConfig.onPause` | Process memory | Buffered metrics & spans |
+|---|---|---|
+| `Full` (default) | Captured in the snapshot | Preserved across the suspension; exported after resume |
+| `Data` | Excluded — only DurableDir volumes are captured | **Lost.** The process is killed with the buffer still in RAM |
+
+The workload gets no warning before this happens: there is no `SIGTERM` and no pre-suspend callback (see [Known gaps](#known-gaps)). Under `onPause: Data`, anything sitting in a reader accumulator or span queue at checkpoint time is gone.
+
+### What happens on resume
+
+Under `onPause: Full` the buffer survives, but the suspension skews delivery in four ways worth designing around:
+
+* **Exports fire immediately at resume.** gVisor's `CLOCK_MONOTONIC` includes time spent suspended, so an export ticker that had 30s left when the actor was checkpointed is already overdue when the actor is restored an hour later. It fires on the first scheduling opportunity rather than waiting out the remaining interval.
+* **Metric timestamps are rewritten to resume time.** The SDK stamps a data point when the reader *collects* it, not when your code recorded it. A counter incremented before the suspension is exported with the current wall clock, so backends accept it — but it is attributed to the resume rather than to when the work happened, and under delta temporality the reported interval silently spans the entire suspension.
+* **Span timestamps are not rewritten.** A span carries the wall-clock start and end times from when it actually ran. After a long suspension those are genuinely old, and tracing backends drop spans that fall outside their ingestion window.
+* **The OTLP connection does not survive the move.** Restoring onto a new worker pod leaves the exporter's TCP connection dead. gRPC reconnects, but a half-open connection can stall until the TCP timeout — long enough to fail the very export that fires at resume.
+
+### Recommendations
+
+**1. Flush before self-suspending.** An actor that calls `SuspendActor` on itself (the "Zero-Idle" pattern in [`demos/agent-secret`](../demos/agent-secret/README.md)) is the only party that knows a checkpoint is coming. Flush there:
+
+```go
+func suspendSelf(ctx context.Context, atespace, actorName string) {
+	// Substrate gives the workload no pre-suspend notification, so this is
+	// the last point at which buffered telemetry can still be delivered.
+	flushCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := meterProvider.ForceFlush(flushCtx); err != nil {
+		log.Printf("metric flush before suspend failed: %v", err)
+	}
+	if err := tracerProvider.ForceFlush(flushCtx); err != nil {
+		log.Printf("span flush before suspend failed: %v", err)
+	}
+
+	// ... SuspendActor call ...
+}
+```
+
+**2. Keep `onPause: Full` if you use in-memory exporters.** This is the default for both `onPause` and `onCommit`. Switching to `Data` trades all un-exported telemetry for a smaller, faster snapshot; only opt in if your actor persists what it cares about to a DurableDir volume.
+
+**3. Shorten *both* export intervals.** These are separate knobs — setting one does nothing for the other. Bring them below the actor's typical active window so most signals leave the process before it is suspended:
+
+```go
+// Metrics: PeriodicReader export timer. Default 60s.
+reader := sdkmetric.NewPeriodicReader(metricExporter,
+	sdkmetric.WithInterval(10*time.Second),
+)
+
+// Traces: BatchSpanProcessor timer, unaffected by WithInterval. Default 5s.
+tracerProvider := sdktrace.NewTracerProvider(
+	sdktrace.WithBatcher(spanExporter,
+		sdktrace.WithBatchTimeout(5*time.Second),
+	),
+)
+```
+
+**4. Configure keepalives on the OTLP connection.** This lets gRPC notice a connection broken by a pod migration instead of stalling the first post-resume export:
+
+```go
+conn, err := grpc.NewClient(collectorAddr,
+	grpc.WithTransportCredentials(creds),
+	grpc.WithKeepaliveParams(keepalive.ClientParameters{
+		Time:                60 * time.Second,
+		Timeout:             10 * time.Second,
+		PermitWithoutStream: true,
+	}),
+)
+```
+
+> **Note:** Keep `Time` at or above the collector's `keepalive.enforcement_policy.min_time`. Pinging more often than the server permits earns a `GOAWAY` with `ENHANCE_YOUR_CALM` and tears down the connection you were trying to protect.
+
+**5. Persist high-value events to a DurableDir volume under `onPause: Data`.** Because the process is killed without warning, disk is the only thing that survives — and only what was already written when the checkpoint was taken. Append events synchronously as they occur, then replay and export them on startup. Note that this is application-level work; the OpenTelemetry Go SDK ships no file-backed exporter or replay mechanism.
+
+### Known gaps
+
+The recommendations above are workarounds. Full telemetry continuity needs system-level support that does not exist yet:
+
+| Gap | Consequence | Tracking |
+|---|---|---|
+| No `PreSuspend` / `PostResume` lifecycle hook | An actor can only flush if it initiates its own suspension; externally driven pauses give it no opportunity | [#450](https://github.com/agent-substrate/substrate/issues/450) |
+| No `SIGTERM` before the workload is killed | A signal handler that calls `ForceFlush` never runs. Worker pod eviction loses the buffer outright | [#23](https://github.com/agent-substrate/substrate/issues/23) |
+| No telemetry continuity contract across snapshot scopes | Discussion of the end-to-end design | [#503](https://github.com/agent-substrate/substrate/issues/503) |
