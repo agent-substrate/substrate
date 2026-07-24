@@ -4,8 +4,7 @@ NOTE: Much of this architecture is aspirational, and is not yet implemented!
 
 ## Overview
 
-Agent Substrate is a high density runtime environment for large scale agent deployments with ability to multiplex thousands of agents on a compute unit. Agent substrate control plane provides a full agent lifecycle for agent sandboxes delivering sub-second agent resume/suspend operations. It is designed to support a variety of sandbox technologies including Micro VMs and gVisor enabling consistent lifecycle operations for all sandbox types.  
-
+Agent Substrate delivers a performant, high density runtime environment for large scale agent deployments. The agent substrate control plane provides full lifecycle management for agent sandboxes, delivering sub-second agent resume/suspend operations, and allows heavy multiplexing of agents onto the same computer infrastructure. It supports multiple sandbox technologies including microVMs and gVisor, enabling consistent lifecycle operations for all sandbox types.
 
 At its core, Agent Substrate maps a larger set of “actors” (applications such
 as agents) onto a smaller set of ready “workers”, relying on
@@ -53,7 +52,7 @@ latency.
 ### A Focused Control Plane
 
 Agent Substrate includes a small, focused control-plane component which
-is focused on high scale, QPS and low latency suspend/resume operations for actors (Agent Sandboxes). It relies on the Kubernetes control plane for infrastructure and worker (Pods) provisioning which are low frequency operations that align well to the Kubernetes strength in infrastructure lifecycle management and workload resource isolation.
+focuses on high scale, QPS and low-latency suspend/resume operations for actors (Agent Sandboxes). It relies on the Kubernetes control plane for infrastructure and worker (Pods) provisioning which are low-frequency operations that align well with Kubernetes' strength in the infrastructure lifecycle management and workload resource isolation.
 
 ### Agent-Aware Routing
 
@@ -170,7 +169,7 @@ clusters. Agent Substrate leverages Kubernetes for infrastructure provisioning a
    state (PersistentVolumes), but it is not designed for millions of volumes,
    with widely varying amounts of data, being attached and detached at high
    Speed.
-Using a specialized Agent Substrate control plane for Actors and Actor to worker mappings enables to achieve high scale and low latency suspend/resume operations while relying on the Kubernetes control plane for infrastructure and worker (Pods) provisioning operations that align well with the Kubernetes strength in infrastructure lifecycle management and workload resource isolation.
+Using a specialized Agent Substrate control plane for Actor allows us to achieve high scale and low latency control. We still rely on Kubernetes for infrastructure provisioning, such as worker pods, and workload isolation, which is what Kubernetes excels at.
 
 ## High-Level Design
 

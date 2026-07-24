@@ -7,13 +7,13 @@ eligible for the [Google Open Source Software Vulnerability Rewards Program](htt
 
 ## What is Agent Substrate?
 
-Agent Substrate delivers a performant high density runtime environment for large scale agent deployments with ability to multiplex thousands of agents on a compute unit. Agent substrate control plane provides a full agent lifecycle for agent sandboxes delivering sub-second agent resume/suspend operations. It is designed to support a variety of sandbox technologies including Micro VMs and gVisor enabling consistent lifecycle operations for all sandbox types.  
+Agent Substrate delivers a performant, high density runtime environment for large scale agent deployments. The agent substrate control plane provides full lifecycle management for agent sandboxes, delivering sub-second agent resume/suspend operations, and allows heavy multiplexing of agents onto the same computer infrastructure. It supports multiple sandbox technologies including microVMs and gVisor, enabling consistent lifecycle operations for all sandbox types.
 
 At its core, Agent Substrate maps a larger set of “actors” (applications such as agents) onto a smaller set of ready “workers”, relying on the fact that agent-like applications tend to be idle most of the time to achieve heavy multiplexing.  It provides functionality to manage an actor’s lifecycle (e.g. create/destroy, suspend/resume), to assign actors to workers in real time, and to route incoming traffic to them.
 
 Agent Substrate is intended to be a low-opinion system.  The workloads it manages don't have to be literal AI agents, but those are the best example of the kind of applications it is designed for.  It is not an SDK for building agents, but rather a system for running them at scale.
 
-Agent Substrate leverages Kubernetes for infrastructure provisioning and worker lifecycle management (Kubernetes Pods). It builds on top of Kubernetes features like Pods and Pod autoscaling, while Agent Substrate provides agent-specific scheduling and control to achieve lower latency. Using Kubernetes as the underlying system enables consistent infrastructure management across all workloads types that are required for end to end agentic deployments and allows holistic infrastructure optimizations for RL scenarios that span agentic, inference and training cycles.
+Agent Substrate leverages Kubernetes for the infrastructure provisioning and worker lifecycle management (Kubernetes Pods). It builds on top of Kubernetes features like Pods and Pod autoscaling, while Agent Substrate provides agent-specific scheduling and control to achieve lower latency. Using Kubernetes as the underlying system enables consistent infrastructure management across all workloads types that are required for end to end agentic deployments and allows holistic infrastructure optimizations for RL scenarios that span agentic, inference and training cycles.
 
 
 ## Demo
