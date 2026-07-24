@@ -43,6 +43,21 @@ func addAuthorityMutation(auth string, mut *extproc.HeaderMutation) {
 	)
 }
 
+// addOriginalDstMutation sets the header the ORIGINAL_DST cluster reads to pick
+// the upstream address (the worker atunnel IP:443). Unlike an :authority
+// rewrite it leaves the request Host intact, so atunnel still sees the actor
+// DNS name and can authorize the active actor.
+func addOriginalDstMutation(dst string, mut *extproc.HeaderMutation) {
+	mut.SetHeaders = append(mut.SetHeaders,
+		&corev3.HeaderValueOption{
+			Header: &corev3.HeaderValue{
+				Key:      OriginalDstHeader,
+				RawValue: []byte(dst),
+			},
+		},
+	)
+}
+
 func immediateResponse(statusCode envoy_type.StatusCode, message string) *extproc.ProcessingResponse {
 	return &extproc.ProcessingResponse{
 		Response: &extproc.ProcessingResponse_ImmediateResponse{

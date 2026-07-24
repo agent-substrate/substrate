@@ -38,13 +38,9 @@ import (
 	routev3 "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
 	tracev3 "github.com/envoyproxy/go-control-plane/envoy/config/trace/v3"
 	streamaccesslogv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/access_loggers/stream/v3"
-	dfpclusterv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/clusters/dynamic_forward_proxy/v3"
-	dfpcommonv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/common/dynamic_forward_proxy/v3"
-	dfpv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/dynamic_forward_proxy/v3"
 	extprocv3filter "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/ext_proc/v3"
 	routerv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/router/v3"
 	hcmv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
-	getaddrinfov3 "github.com/envoyproxy/go-control-plane/envoy/extensions/network/dns_resolver/getaddrinfo/v3"
 	tlsv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/transport_sockets/tls/v3"
 	httpv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/upstreams/http/v3"
 	clustergrpc "github.com/envoyproxy/go-control-plane/envoy/service/cluster/v3"
@@ -52,6 +48,7 @@ import (
 	endpointgrpc "github.com/envoyproxy/go-control-plane/envoy/service/endpoint/v3"
 	listenergrpc "github.com/envoyproxy/go-control-plane/envoy/service/listener/v3"
 	routegrpc "github.com/envoyproxy/go-control-plane/envoy/service/route/v3"
+	matcherv3 "github.com/envoyproxy/go-control-plane/envoy/type/matcher/v3"
 	typev3 "github.com/envoyproxy/go-control-plane/envoy/type/v3"
 	"github.com/envoyproxy/go-control-plane/pkg/cache/types"
 	cachev3 "github.com/envoyproxy/go-control-plane/pkg/cache/v3"
@@ -66,6 +63,13 @@ const (
 	RouteName            = "substrate_routes"
 	ClusterName          = "ate-cluster"
 	OtlpClusterName      = "otel_collector_cluster"
+	// OriginalDstClusterName routes actor traffic to the worker's atunnel
+	// ingress by the IP:port the ext_proc puts in OriginalDstHeader, while the
+	// request :authority stays the actor DNS name so atunnel can identify the
+	// active actor. This replaces the plain pod-IP:80 DFP path from main.
+	OriginalDstClusterName = "actor_original_dst"
+	// OriginalDstHeader carries the resolved worker atunnel address (IP:443).
+	OriginalDstHeader = "x-ate-original-dst"
 )
 
 // XdsServer implements an aggregated discovery service server for dynamic Envoy router nodes.
@@ -84,6 +88,19 @@ type XdsServer struct {
 	certPath    string
 	certContent string
 	keyContent  string
+
+	// Upstream (actor-facing) mTLS. When upstreamClientCertPath is set, the
+	// ORIGINAL_DST actor cluster dials the actor's in-worker atunnel ingress
+	// server over mTLS: it presents this podidentity credential bundle as the
+	// client cert and validates the atunnel server against upstreamTrustPath.
+	upstreamClientCertPath string
+	upstreamTrustPath      string
+	// upstreamSpiffePrefix, when set, makes the upstream validator accept the
+	// atunnel server cert by matching its SPIFFE URI SAN against this prefix
+	// (trust-domain match) instead of the actor's ephemeral pod IP. The atunnel
+	// cert carries only a spiffe:// URI SAN, so without this Envoy's default
+	// SAN check against the dialed IP fails ("verify SAN list").
+	upstreamSpiffePrefix string
 
 	otlpHost string
 	otlpPort uint32
@@ -118,6 +135,19 @@ func (x *XdsServer) SetTlsConfig(httpsPort int, certPath string, certContent str
 	x.certPath = certPath
 	x.certContent = certContent
 	x.keyContent = keyContent
+}
+
+// SetUpstreamTls configures actor-facing mTLS on the ORIGINAL_DST actor
+// cluster. clientCertPath is the router's podidentity credential bundle
+// (cert+key concatenated) presented to the actor's atunnel ingress server;
+// trustPath is the CA bundle used to validate that server. Empty clientCertPath
+// leaves the upstream as plaintext (legacy pod-IP:80 behaviour).
+func (x *XdsServer) SetUpstreamTls(clientCertPath, trustPath, spiffePrefix string) {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	x.upstreamClientCertPath = clientCertPath
+	x.upstreamTrustPath = trustPath
+	x.upstreamSpiffePrefix = spiffePrefix
 }
 
 // SetOtlpCollector enables Envoy-side tracing pointed at the OTLP gRPC
@@ -155,7 +185,7 @@ func (x *XdsServer) UpdateSnapshot() error {
 	// Clusters
 	clusters := []types.Resource{
 		x.buildCluster(),
-		x.buildDynamicForwardProxyCluster(),
+		x.buildOriginalDstCluster(),
 	}
 	if x.otlpHost != "" {
 		clusters = append(clusters, x.buildOtlpCollectorCluster())
@@ -271,18 +301,6 @@ func (x *XdsServer) buildCluster() *clusterv3.Cluster {
 	}
 }
 
-func buildDnsCacheConfig() *dfpcommonv3.DnsCacheConfig {
-	resolverConfigAny, _ := anypb.New(&getaddrinfov3.GetAddrInfoDnsResolverConfig{})
-	return &dfpcommonv3.DnsCacheConfig{
-		Name:            "dynamic_forward_proxy_cache_config",
-		DnsLookupFamily: clusterv3.Cluster_V4_ONLY,
-		TypedDnsResolverConfig: &corev3.TypedExtensionConfig{
-			Name:        "envoy.network.dns_resolver.getaddrinfo",
-			TypedConfig: resolverConfigAny,
-		},
-	}
-}
-
 // buildOtlpCollectorCluster builds a STRICT_DNS HTTP/2 cluster that
 // targets the OTLP gRPC collector. Required when HCM tracing is enabled
 // so Envoy has somewhere to ship spans.
@@ -333,25 +351,104 @@ func (x *XdsServer) buildOtlpCollectorCluster() *clusterv3.Cluster {
 	}
 }
 
-func (x *XdsServer) buildDynamicForwardProxyCluster() *clusterv3.Cluster {
-	dfpClusterConfig := &dfpclusterv3.ClusterConfig{
-		ClusterImplementationSpecifier: &dfpclusterv3.ClusterConfig_DnsCacheConfig{
-			DnsCacheConfig: buildDnsCacheConfig(),
-		},
+// buildUpstreamTransportSocket returns the actor-facing mTLS transport socket
+// for the ORIGINAL_DST actor cluster, or nil when upstream mTLS is not
+// configured. The router presents its podidentity credential bundle as the
+// client cert and validates the atunnel ingress server against the trust
+// bundle. Validation is by the SPIFFE URI SAN prefix (see upstreamSpiffePrefix)
+// rather than the dialed pod IP.
+func (x *XdsServer) buildUpstreamTransportSocket() *corev3.TransportSocket {
+	if x.upstreamClientCertPath == "" {
+		return nil
 	}
 
-	clusterConfigAny, _ := anypb.New(dfpClusterConfig)
-
-	return &clusterv3.Cluster{
-		Name:     "dynamic_forward_proxy_cluster",
-		LbPolicy: clusterv3.Cluster_CLUSTER_PROVIDED,
-		ClusterDiscoveryType: &clusterv3.Cluster_ClusterType{
-			ClusterType: &clusterv3.Cluster_CustomClusterType{
-				Name:        "envoy.clusters.dynamic_forward_proxy",
-				TypedConfig: clusterConfigAny,
+	commonTls := &tlsv3.CommonTlsContext{
+		TlsCertificates: []*tlsv3.TlsCertificate{
+			{
+				CertificateChain: &corev3.DataSource{
+					Specifier: &corev3.DataSource_Filename{Filename: x.upstreamClientCertPath},
+				},
+				PrivateKey: &corev3.DataSource{
+					Specifier: &corev3.DataSource_Filename{Filename: x.upstreamClientCertPath},
+				},
 			},
 		},
 	}
+	if x.upstreamTrustPath != "" {
+		validationCtx := &tlsv3.CertificateValidationContext{
+			TrustedCa: &corev3.DataSource{
+				Specifier: &corev3.DataSource_Filename{Filename: x.upstreamTrustPath},
+			},
+		}
+		// Validate the atunnel server by its SPIFFE URI SAN (trust-domain
+		// prefix) rather than the dialed pod IP. Without this, Envoy checks the
+		// cert SAN against the ephemeral pod IP, which the SPIFFE-only cert
+		// never matches.
+		if x.upstreamSpiffePrefix != "" {
+			validationCtx.MatchTypedSubjectAltNames = []*tlsv3.SubjectAltNameMatcher{
+				{
+					SanType: tlsv3.SubjectAltNameMatcher_URI,
+					Matcher: &matcherv3.StringMatcher{
+						MatchPattern: &matcherv3.StringMatcher_Prefix{Prefix: x.upstreamSpiffePrefix},
+					},
+				},
+			}
+		}
+		commonTls.ValidationContextType = &tlsv3.CommonTlsContext_ValidationContext{
+			ValidationContext: validationCtx,
+		}
+	}
+
+	upstreamTls := &tlsv3.UpstreamTlsContext{CommonTlsContext: commonTls}
+	upstreamTlsAny, _ := anypb.New(upstreamTls)
+	return &corev3.TransportSocket{
+		Name: "envoy.transport_sockets.tls",
+		ConfigType: &corev3.TransportSocket_TypedConfig{
+			TypedConfig: upstreamTlsAny,
+		},
+	}
+}
+
+// buildOriginalDstCluster dials the exact worker atunnel address supplied by
+// the ext_proc in OriginalDstHeader. Unlike the dynamic_forward_proxy cluster,
+// it does not derive the destination from :authority, so the request keeps the
+// actor DNS name as its Host for atunnel to authorize. mTLS to atunnel is
+// applied via the shared upstream transport socket (SPIFFE URI validation).
+func (x *XdsServer) buildOriginalDstCluster() *clusterv3.Cluster {
+	cluster := &clusterv3.Cluster{
+		Name:           OriginalDstClusterName,
+		ConnectTimeout: durationpb.New(5 * time.Second),
+		ClusterDiscoveryType: &clusterv3.Cluster_Type{
+			Type: clusterv3.Cluster_ORIGINAL_DST,
+		},
+		LbPolicy: clusterv3.Cluster_CLUSTER_PROVIDED,
+		LbConfig: &clusterv3.Cluster_OriginalDstLbConfig_{
+			OriginalDstLbConfig: &clusterv3.Cluster_OriginalDstLbConfig{
+				UseHttpHeader:  true,
+				HttpHeaderName: OriginalDstHeader,
+			},
+		},
+	}
+
+	if ts := x.buildUpstreamTransportSocket(); ts != nil {
+		cluster.TransportSocket = ts
+		// The atunnel ingress server terminates TLS and reverse-proxies to the
+		// actor over HTTP/1.1.
+		httpOpts, _ := anypb.New(&httpv3.HttpProtocolOptions{
+			UpstreamProtocolOptions: &httpv3.HttpProtocolOptions_ExplicitHttpConfig_{
+				ExplicitHttpConfig: &httpv3.HttpProtocolOptions_ExplicitHttpConfig{
+					ProtocolConfig: &httpv3.HttpProtocolOptions_ExplicitHttpConfig_HttpProtocolOptions{
+						HttpProtocolOptions: &corev3.Http1ProtocolOptions{},
+					},
+				},
+			},
+		})
+		cluster.TypedExtensionProtocolOptions = map[string]*anypb.Any{
+			"envoy.extensions.upstreams.http.v3.HttpProtocolOptions": httpOpts,
+		}
+	}
+
+	return cluster
 }
 
 func (x *XdsServer) buildRoutes() *routev3.RouteConfiguration {
@@ -371,7 +468,7 @@ func (x *XdsServer) buildRoutes() *routev3.RouteConfiguration {
 						Action: &routev3.Route_Route{
 							Route: &routev3.RouteAction{
 								ClusterSpecifier: &routev3.RouteAction_Cluster{
-									Cluster: "dynamic_forward_proxy_cluster",
+									Cluster: OriginalDstClusterName,
 								},
 								Timeout: durationpb.New(10 * time.Second),
 							},
@@ -408,12 +505,6 @@ func (x *XdsServer) buildHcm(statPrefix string) *anypb.Any {
 		},
 	})
 
-	dfpFilterConfig, _ := anypb.New(&dfpv3.FilterConfig{
-		ImplementationSpecifier: &dfpv3.FilterConfig_DnsCacheConfig{
-			DnsCacheConfig: buildDnsCacheConfig(),
-		},
-	})
-
 	routerAny, _ := anypb.New(&routerv3.Router{})
 
 	accessLogConfig, _ := anypb.New(&streamaccesslogv3.StdoutAccessLog{})
@@ -435,12 +526,6 @@ func (x *XdsServer) buildHcm(statPrefix string) *anypb.Any {
 				Name: "envoy.filters.http.ext_proc",
 				ConfigType: &hcmv3.HttpFilter_TypedConfig{
 					TypedConfig: extProcConfig,
-				},
-			},
-			{
-				Name: "envoy.filters.http.dynamic_forward_proxy",
-				ConfigType: &hcmv3.HttpFilter_TypedConfig{
-					TypedConfig: dfpFilterConfig,
 				},
 			},
 			{

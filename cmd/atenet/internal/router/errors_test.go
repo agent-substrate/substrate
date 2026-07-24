@@ -82,7 +82,7 @@ func TestInvalidHostErr(t *testing.T) {
 func TestMapResumeError(t *testing.T) {
 	t.Parallel()
 
-	const actorName = "ctr6"
+	const actorID = "ctr6"
 
 	tests := []struct {
 		name     string
@@ -150,7 +150,7 @@ func TestMapResumeError(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := mapResumeError(actorName, tc.err)
+			got := mapResumeError(actorID, tc.err)
 			if got == nil {
 				t.Fatal("mapResumeError returned nil")
 			}

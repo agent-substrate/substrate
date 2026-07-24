@@ -92,7 +92,13 @@ func (s *ExtProcServer) Process(stream extprocv3.ExternalProcessor_ProcessServer
 		switch reqType := req.Request.(type) {
 		case *extprocv3.ProcessingRequest_RequestHeaders:
 			start := time.Now()
-			hResponse, rqm, target, tmplNs, tmplName, err := s.handleRequestHeaders(stream.Context(), reqType.RequestHeaders)
+			// One ext_proc server handles both directions: actor egress
+			// CONNECTs (identity validation) and ingress requests (routing).
+			handle := s.handleRequestHeaders
+			if isEgressRequest(reqType.RequestHeaders) {
+				handle = s.handleEgressRequestHeaders
+			}
+			hResponse, rqm, target, tmplNs, tmplName, err := handle(stream.Context(), reqType.RequestHeaders)
 			elapsed := time.Since(start)
 			if err != nil {
 				slog.ErrorContext(stream.Context(), "Error during ext_proc RequestHeaders processing", slog.String("err", err.Error()))
@@ -142,16 +148,16 @@ func (s *ExtProcServer) handleRequestHeaders(
 	ctx, span := otel.Tracer(routerServiceName).Start(ctx, "ExtProc.RequestHeaders")
 	defer span.End()
 
-	atespace, actorName, err := parseActorRef(metadata.host)
+	atespace, actorID, err := parseActorRef(metadata.host)
 	if err != nil {
 		// Host is invalid, respond with 404.
 		return nil, metadata, "", "", "", invalidHostErr(metadata.host, err)
 	}
 
-	slog.InfoContext(ctx, "ResumeActor", slog.String("atespace", atespace), slog.String("actor", actorName))
-	actor, err := s.resumer.ResumeActor(ctx, atespace, actorName)
+	slog.InfoContext(ctx, "ResumeActor", slog.String("atespace", atespace), slog.String("actorID", actorID))
+	actor, err := s.resumer.ResumeActor(ctx, atespace, actorID)
 	if err != nil {
-		return nil, metadata, "", "", "", mapResumeError(actorName, err)
+		return nil, metadata, "", "", "", mapResumeError(actorID, err)
 	}
 
 	// Actor template identity, used as low-cardinality route-latency metric
@@ -162,23 +168,30 @@ func (s *ExtProcServer) handleRequestHeaders(
 	workerIP := actor.GetAteomPodIp()
 	slog.InfoContext(ctx, "ResumeActor result",
 		slog.String("atespace", atespace),
-		slog.String("actor", actorName),
+		slog.String("actorID", actorID),
 		slog.String("status", actor.GetStatus().String()),
 		slog.String("workerIP", workerIP))
 
 	if ip := net.ParseIP(workerIP); ip == nil {
 		return nil, metadata, "", tmplNs, tmplName, newReqError(envoy_type.StatusCode_InternalServerError,
-			"actor %q routing failed", actorName)
+			"actor %q routing failed", actorID)
 	}
 
+	// The actor is reached through the in-worker atunnel ingress server, which
+	// listens on :443 (mTLS) and forwards to the actor's :80. The worker no
+	// longer DNATs pod-IP:80 to the actor, so the router dials :443 and the DFP
+	// cluster's upstream TLS context presents the router's podidentity client
+	// cert (see buildDynamicForwardProxyCluster).
 	// TODO(bowei) -- handle more than port 80 on the actor.
-	targetAddr := net.JoinHostPort(workerIP, "80")
+	targetAddr := net.JoinHostPort(workerIP, "443")
 
-	slog.InfoContext(ctx, "Route ok", slog.String("actor", actorName), slog.String("targetAddr", targetAddr))
+	slog.InfoContext(ctx, "Route ok", slog.String("actorID", actorID), slog.String("targetAddr", targetAddr))
 
-	// Route by rewriting the :authority header.
+	// Route by telling the ORIGINAL_DST cluster which worker atunnel address to
+	// dial, without touching :authority — atunnel authorizes the actor by the
+	// original Host (actor DNS name).
 	mutation := &extprocv3.HeaderMutation{}
-	addAuthorityMutation(targetAddr, mutation)
+	addOriginalDstMutation(targetAddr, mutation)
 
 	return &extprocv3.HeadersResponse{
 		Response: &extprocv3.CommonResponse{

@@ -76,12 +76,15 @@ func TestXdsServer_UpdateSnapshot(t *testing.T) {
 		}
 	}
 
-	if raw, exists := clustersMap["dynamic_forward_proxy_cluster"]; !exists {
-		t.Error("'dynamic_forward_proxy_cluster' is missing from clusters")
+	if raw, exists := clustersMap[OriginalDstClusterName]; !exists {
+		t.Errorf("'%s' is missing from clusters", OriginalDstClusterName)
 	} else {
 		c := raw.(*clusterv3.Cluster)
-		if c.GetName() != "dynamic_forward_proxy_cluster" {
-			t.Errorf("Expected 'dynamic_forward_proxy_cluster', got %s", c.GetName())
+		if c.GetName() != OriginalDstClusterName {
+			t.Errorf("Expected '%s', got %s", OriginalDstClusterName, c.GetName())
+		}
+		if c.GetType() != clusterv3.Cluster_ORIGINAL_DST {
+			t.Errorf("Expected ORIGINAL_DST cluster, got %s", c.GetType())
 		}
 	}
 
