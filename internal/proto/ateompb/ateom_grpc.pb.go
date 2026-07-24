@@ -42,30 +42,37 @@ const (
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// Ateom is the interface to control a single gVisor (or, in the future microVM)
-// guest inside a worker pod.
+// Ateom is the interface used by atelet to control one sandbox guest inside a
+// worker pod. Ateom serves gRPC on a per-worker Unix domain socket in the
+// filesystem shared with atelet. Before calling an RPC, atelet prepares the OCI
+// bundles, checkpoint files, and content-addressed runtime assets on that
+// shared filesystem; the request carries their local paths. Calls for a given
+// ateom must not overlap.
 //
 // Each ateom server has two main states, "available" and "executing".
 //
-// When the ateom is "available", the substrate control plane is free to either
-// boot a new workload (using RunWorkload), or restore an existing workload from
-// a checkpoint (using RestoreWorkload).  These calls move the ateom into
-// "executing" state.
+// When the ateom is "available", atelet can either boot a new workload (using
+// RunWorkload), or restore an existing workload from a checkpoint (using
+// RestoreWorkload). These calls move the ateom into "executing" state.
 //
-// When the ateom is "executing", the substrate control plane can checkpoint the
-// running workload (with CheckpointWorkload).  This moves the ateom back to
-// "free" state.
+// When the ateom is "executing", atelet can checkpoint the running workload
+// (with CheckpointWorkload). This moves the ateom back to "available" state.
 type AteomClient interface {
-	// RunWorkload tells ateom to begin running a new workload (one or more
-	// containers, potentially with shared filesystems).
+	// RunWorkload requires an available ateom. It creates and starts the sandbox
+	// root plus all application containers from atelet-prepared OCI bundles,
+	// waits for configured readiness checks, and leaves the ateom executing.
 	RunWorkload(ctx context.Context, in *RunWorkloadRequest, opts ...grpc.CallOption) (*RunWorkloadResponse, error)
-	// CheckpointWorkload tells ateom to save the current state of the running
-	// workload to object storage, and then completely reset itself to a blank
-	// state (back to "available" state.)
+	// CheckpointWorkload requires an executing ateom. It writes either the full
+	// sandbox state or the requested durable-directory data to the shared
+	// checkpoint directory, tears down the sandbox, and returns the relative
+	// names of the files for atelet to persist. On success the ateom is
+	// available again.
 	CheckpointWorkload(ctx context.Context, in *CheckpointWorkloadRequest, opts ...grpc.CallOption) (*CheckpointWorkloadResponse, error)
-	// RestoreWorkload restores a workload from checkpoint that was previously
-	// written by CheckpointWorkload.  Ateom will handle downloading the correct
-	// gVisor / runsc version to match the checkpoint.
+	// RestoreWorkload requires an available ateom. It restores from checkpoint
+	// files and matching runtime assets that atelet placed on the shared
+	// filesystem, waits for configured readiness checks, and leaves the ateom
+	// executing. A full snapshot restores process state; a data-only snapshot
+	// starts new processes with the durable-directory data restored.
 	RestoreWorkload(ctx context.Context, in *RestoreWorkloadRequest, opts ...grpc.CallOption) (*RestoreWorkloadResponse, error)
 }
 
@@ -111,30 +118,37 @@ func (c *ateomClient) RestoreWorkload(ctx context.Context, in *RestoreWorkloadRe
 // All implementations must embed UnimplementedAteomServer
 // for forward compatibility.
 //
-// Ateom is the interface to control a single gVisor (or, in the future microVM)
-// guest inside a worker pod.
+// Ateom is the interface used by atelet to control one sandbox guest inside a
+// worker pod. Ateom serves gRPC on a per-worker Unix domain socket in the
+// filesystem shared with atelet. Before calling an RPC, atelet prepares the OCI
+// bundles, checkpoint files, and content-addressed runtime assets on that
+// shared filesystem; the request carries their local paths. Calls for a given
+// ateom must not overlap.
 //
 // Each ateom server has two main states, "available" and "executing".
 //
-// When the ateom is "available", the substrate control plane is free to either
-// boot a new workload (using RunWorkload), or restore an existing workload from
-// a checkpoint (using RestoreWorkload).  These calls move the ateom into
-// "executing" state.
+// When the ateom is "available", atelet can either boot a new workload (using
+// RunWorkload), or restore an existing workload from a checkpoint (using
+// RestoreWorkload). These calls move the ateom into "executing" state.
 //
-// When the ateom is "executing", the substrate control plane can checkpoint the
-// running workload (with CheckpointWorkload).  This moves the ateom back to
-// "free" state.
+// When the ateom is "executing", atelet can checkpoint the running workload
+// (with CheckpointWorkload). This moves the ateom back to "available" state.
 type AteomServer interface {
-	// RunWorkload tells ateom to begin running a new workload (one or more
-	// containers, potentially with shared filesystems).
+	// RunWorkload requires an available ateom. It creates and starts the sandbox
+	// root plus all application containers from atelet-prepared OCI bundles,
+	// waits for configured readiness checks, and leaves the ateom executing.
 	RunWorkload(context.Context, *RunWorkloadRequest) (*RunWorkloadResponse, error)
-	// CheckpointWorkload tells ateom to save the current state of the running
-	// workload to object storage, and then completely reset itself to a blank
-	// state (back to "available" state.)
+	// CheckpointWorkload requires an executing ateom. It writes either the full
+	// sandbox state or the requested durable-directory data to the shared
+	// checkpoint directory, tears down the sandbox, and returns the relative
+	// names of the files for atelet to persist. On success the ateom is
+	// available again.
 	CheckpointWorkload(context.Context, *CheckpointWorkloadRequest) (*CheckpointWorkloadResponse, error)
-	// RestoreWorkload restores a workload from checkpoint that was previously
-	// written by CheckpointWorkload.  Ateom will handle downloading the correct
-	// gVisor / runsc version to match the checkpoint.
+	// RestoreWorkload requires an available ateom. It restores from checkpoint
+	// files and matching runtime assets that atelet placed on the shared
+	// filesystem, waits for configured readiness checks, and leaves the ateom
+	// executing. A full snapshot restores process state; a data-only snapshot
+	// starts new processes with the durable-directory data restored.
 	RestoreWorkload(context.Context, *RestoreWorkloadRequest) (*RestoreWorkloadResponse, error)
 	mustEmbedUnimplementedAteomServer()
 }

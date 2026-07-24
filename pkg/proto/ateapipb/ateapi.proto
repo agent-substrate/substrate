@@ -27,22 +27,40 @@ service Control {
   // Get an Actor.
   rpc GetActor(GetActorRequest) returns (Actor) {}
 
-  // Create a new Actor deriving from a given ActorTemplate.
+  // Create a new Actor deriving from a given ActorTemplate. The referenced
+  // Atespace and ActorTemplate must already exist, and the Actor's
+  // (atespace, name) identity must be unused. The server initializes the Actor
+  // in SUSPENDED state without assigning a Worker.
   rpc CreateActor(CreateActorRequest) returns (Actor) {}
 
   // Update mutable fields on an existing Actor.
   rpc UpdateActor(UpdateActorRequest) returns (UpdateActorResponse) {}
 
-  // Suspend a given actor to a new snapshot.
+  // Idempotently transition a RUNNING Actor through SUSPENDING to SUSPENDED.
+  // The configured on-commit state is checkpointed to external storage, the
+  // Worker is released, and the returned Actor references the new snapshot.
+  // A retry continues an interrupted SUSPENDING workflow; an already fully
+  // SUSPENDED Actor is returned unchanged.
   rpc SuspendActor(SuspendActorRequest) returns (SuspendActorResponse) {}
 
-  // Pause a given actor and keep its snapshots on node VM.
+  // Idempotently transition a RUNNING Actor through PAUSING to PAUSED. The
+  // configured on-pause state is checkpointed on the node VM, the Worker is
+  // released, and the returned Actor records which node holds the snapshot.
+  // A retry continues an interrupted PAUSING workflow; an already fully PAUSED
+  // Actor is returned unchanged.
   rpc PauseActor(PauseActorRequest) returns (PauseActorResponse) {}
 
-  // Resume an actor from its latest snapshot.
+  // Idempotently transition a SUSPENDED or PAUSED Actor through RESUMING to
+  // RUNNING. The server claims an eligible Worker and restores the Actor's
+  // latest snapshot. If the Actor has no snapshot, it restores the
+  // ActorTemplate's golden snapshot unless boot is true; otherwise it boots
+  // from the ActorTemplate spec. The call returns after configured readiness
+  // checks pass. A retry continues an interrupted RESUMING workflow; an
+  // already RUNNING Actor is returned unchanged.
   rpc ResumeActor(ResumeActorRequest) returns (ResumeActorResponse) {}
 
-  // Delete an actor. Only suspended actors can be deleted.
+  // Delete a SUSPENDED or CRASHED Actor and return its final record. Deletion
+  // removes the control-plane record; it does not remove snapshot files.
   rpc DeleteActor(DeleteActorRequest) returns (Actor) {}
 
   // List Workers.
@@ -121,14 +139,45 @@ message Actor {
   string actor_template_namespace = 2;
   string actor_template_name = 3;
 
+  // Status describes the Actor's control-plane lifecycle state. The normal
+  // successful transitions are:
+  //
+  //   CreateActor:                         -> SUSPENDED
+  //   ResumeActor:  SUSPENDED or PAUSED    -> RESUMING  -> RUNNING
+  //   SuspendActor: RUNNING                -> SUSPENDING -> SUSPENDED
+  //   PauseActor:   RUNNING                -> PAUSING    -> PAUSED
+  //   DeleteActor:  SUSPENDED or CRASHED   -> deleted
+  //
+  // An unrecoverable activation or checkpoint failure can move an Actor to
+  // CRASHED. Transitional states are persisted so a retry of the same RPC can
+  // continue an interrupted workflow.
   enum Status {
+    // Invalid or unknown lifecycle state.
     STATUS_UNSPECIFIED = 0;
+
+    // A Worker is assigned and the workload is being booted or restored.
     STATUS_RESUMING = 1;
+
+    // The workload is executing on its assigned Worker.
     STATUS_RUNNING = 2;
+
+    // The workload is being checkpointed to external storage.
     STATUS_SUSPENDING = 3;
+
+    // The Actor has no assigned Worker and is eligible for ResumeActor or
+    // DeleteActor. A newly created Actor starts in this state without its own
+    // snapshot.
     STATUS_SUSPENDED = 4;
+
+    // The workload is being checkpointed to node-local storage.
     STATUS_PAUSING = 5;
+
+    // The Actor has no assigned Worker and its latest snapshot remains on one
+    // or more recorded node VMs.
     STATUS_PAUSED = 6;
+
+    // The workload or its lifecycle workflow failed irrecoverably. Its Worker
+    // has been released; the Actor can be inspected or deleted.
     STATUS_CRASHED = 7;
   }
   Status status = 4;

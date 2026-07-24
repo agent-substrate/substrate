@@ -27,11 +27,23 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateompath"
 )
 
+// runsc drives one actor's gVisor sandbox with the exact runtime binary chosen
+// by atelet. SandboxConfig pins each architecture's runsc asset by URL and
+// SHA-256. Atelet verifies the digest, caches the binary at a content-addressed
+// path, and passes that path to ateom. Checkpoint manifests retain the same
+// asset pin so a restore uses the runsc version that created the checkpoint.
+//
+// All containers for an actor share a runsc root directory. The "pause"
+// container is the sandbox root; application containers join that sandbox.
 type runsc struct {
 	path     string
 	actorUID string
 }
 
+// cmdCreate creates a stopped container from the OCI bundle prepared by
+// atelet. Creating "pause" creates the sandbox; subsequent application
+// containers join it. additionalArgs carries restore-specific create flags,
+// such as the data-only filesystem image.
 func (r *runsc) cmdCreate(ctx context.Context, out io.Writer, containerName string, additionalArgs []string) error {
 	reapLock.RLock()
 	defer reapLock.RUnlock()
@@ -70,6 +82,8 @@ func (r *runsc) cmdCreate(ctx context.Context, out io.Writer, containerName stri
 	return nil
 }
 
+// cmdStart starts a container previously created by cmdCreate. Connected
+// sockets are allowed to survive a later full checkpoint.
 func (r *runsc) cmdStart(ctx context.Context, out io.Writer, containerName string) error {
 	reapLock.RLock()
 	defer reapLock.RUnlock()
@@ -102,6 +116,9 @@ func (r *runsc) cmdStart(ctx context.Context, out io.Writer, containerName strin
 	return nil
 }
 
+// cmdCheckpoint writes a full process, sentry, and filesystem checkpoint for
+// the shared sandbox. Callers invoke it only for the root "pause" container;
+// that captures every container in the sandbox.
 func (r *runsc) cmdCheckpoint(ctx context.Context, containerName, checkpointPath string) error {
 	reapLock.RLock()
 	defer reapLock.RUnlock()
@@ -132,6 +149,9 @@ func (r *runsc) cmdCheckpoint(ctx context.Context, containerName, checkpointPath
 	return nil
 }
 
+// cmdFsCheckpoint writes a data-only checkpoint of the listed durable
+// directories. It deliberately excludes process state and other rootfs
+// changes, so restore will cold-start the containers around the saved data.
 func (r *runsc) cmdFsCheckpoint(ctx context.Context, containerName, checkpointPath string, durableDirMounts []string) error {
 	reapLock.RLock()
 	defer reapLock.RUnlock()
@@ -171,8 +191,10 @@ func (r *runsc) cmdFsCheckpoint(ctx context.Context, containerName, checkpointPa
 	return nil
 }
 
-// We take a checkpoint only of the root container of the sandbox, but we need
-// to call restore on each container, using the same checkpoint.
+// cmdRestore restores one container from a full sandbox checkpoint and leaves
+// it running in the background. Although cmdCheckpoint runs only against the
+// root container, restore must be called for the root and every application
+// container using the same checkpoint.
 func (r *runsc) cmdRestore(ctx context.Context, out io.Writer, containerName, checkpointPath string) error {
 	reapLock.RLock()
 	defer reapLock.RUnlock()
@@ -207,6 +229,8 @@ func (r *runsc) cmdRestore(ctx context.Context, out io.Writer, containerName, ch
 	return nil
 }
 
+// cmdDelete forcibly removes a container after its sandbox has been
+// checkpointed. Ateom deletes application containers before the root.
 func (r *runsc) cmdDelete(ctx context.Context, containerName string) error {
 	reapLock.RLock()
 	defer reapLock.RUnlock()
@@ -236,6 +260,9 @@ func (r *runsc) cmdDelete(ctx context.Context, containerName string) error {
 	return nil
 }
 
+// cmdState asks runsc to reconcile and report container state before deletion.
+// This mirrors containerd's cleanup sequence and avoids intermittent failures
+// from deleting immediately after checkpoint.
 func (r *runsc) cmdState(ctx context.Context, containerName string) error {
 	reapLock.RLock()
 	defer reapLock.RUnlock()
