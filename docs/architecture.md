@@ -338,7 +338,7 @@ A `WorkerPool` selects a **sandbox class** (`spec.sandboxClass`), and each class
 
   * **gVisor** (`ateom-gvisor`, the default): Runs the workload under `runsc` for kernel-level sandboxing. Suspend and resume leverage gVisor's native checkpoint/restore of the sandboxed process tree.
 
-  * **micro-VM** (`ateom-microvm`): Runs the workload inside a [Kata Containers](https://katacontainers.io/) guest on the [Cloud Hypervisor](https://www.cloudhypervisor.org/) VMM. Suspend and resume capture a memory-only VM snapshot and restore it on-demand using `userfaultfd` memory demand-paging, with container rootfs writes captured in guest RAM via a `tmpfs` overlay.
+  * **micro-VM** (`ateom-microvm`): Runs the workload inside a [Kata Containers](https://katacontainers.io/) guest on the [Cloud Hypervisor](https://www.cloudhypervisor.org/) VMM. Suspend and resume capture a memory-only VM snapshot and restore it on-demand using `userfaultfd` memory demand-paging, with container rootfs writes captured in guest RAM via a `tmpfs` overlay. `DurableDir` volumes are host-backed instead, served over a second (writable) virtio-fs share and shipped in snapshots as a tar, so a `Data`-scope snapshot can capture them without any guest memory.
 
 ### Networking Stack (`atenet` + Envoy)
 

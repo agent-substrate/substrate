@@ -76,19 +76,18 @@ because they change too frequently for etcd.
 - **DurableDir volume**: a directory mounted into one or more containers
   whose contents are preserved by the [`Data` snapshot scope](#snapshots)
   and therefore survive across Suspend/Resume independently of process
-  memory or other rootfs writes. A single `ActorTemplate` may declare
-  multiple `DurableDir` volumes, and the same volume may be mounted into
-  multiple containers (potentially at different paths). This is the
-  per-Actor application-data surface.
+  memory or other rootfs writes. An `ActorTemplate` may declare one
+  `DurableDir` volume, and it may be mounted into multiple containers
+  (potentially at different paths). This is the per-Actor
+  application-data surface.
 
 ## Snapshots
 
 - **Snapshot scope**: what an `ActorTemplate`'s `SnapshotsConfig` includes
   in a given snapshot. Two scopes exist today:
   - **`Full`**: process memory plus the rootfs delta on top of the OCI
-    image (which also includes any attached `DurableDir` volumes,
-    since they live inside rootfs). Used to capture everything needed
-    to resume hot.
+    image, and any attached `DurableDir` volumes. Used to capture
+    everything needed to resume hot.
   - **`Data`**: only the contents of attached volumes that support
     snapshots — currently `DurableDir` volumes. Process memory and the
     rest of rootfs are discarded; on Resume the Actor cold-boots from
