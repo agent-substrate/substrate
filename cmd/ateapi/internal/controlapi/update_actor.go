@@ -32,6 +32,7 @@ func (s *Service) UpdateActor(ctx context.Context, req *ateapipb.UpdateActorRequ
 		return nil, toGRPCStatusError(errs)
 	}
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
+	setSpanActorRefAttributes(ctx, actorRef)
 
 	actor, err := s.persistence.GetActor(ctx, actorRef)
 	if err != nil {
@@ -50,6 +51,7 @@ func (s *Service) UpdateActor(ctx context.Context, req *ateapipb.UpdateActorRequ
 		return nil, fmt.Errorf("while updating actor: %w", err)
 	}
 
+	setSpanActorAttributes(ctx, updated)
 	return &ateapipb.UpdateActorResponse{Actor: updated}, nil
 }
 
