@@ -190,8 +190,9 @@ untar backend later without restructuring.
   the real `mknod`/xattr materialization and a full mount → write-isolation
   → unmount round trip (the write-isolation assertion — actor writes land in
   the bundle upper, never in the shared pool — is the key safety property).
-  CI runs the package twice: once unprivileged, once under `sudo` so the
-  root-gated tests execute (see `.github/workflows/pr-workflow.yaml`).
+  The root-gated ones self-skip via `roottest.Require`; CI (and
+  `hack/run-root-tests.sh` locally) reruns the package under `sudo` so they
+  execute.
 - `tools/validate-image-cache` batch-validates that arbitrary registry
   images can be pulled, parsed, and unpacked by the store half — useful for
   sweeping large image corpora before relying on them in production.

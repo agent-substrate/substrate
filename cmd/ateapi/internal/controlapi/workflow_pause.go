@@ -120,7 +120,7 @@ func (s *CallAteletPauseStep) CheckPrerequisite(ctx context.Context, input *Paus
 	}
 	if state.Actor.GetAteomPodNamespace() == "" || state.Actor.GetAteomPodName() == "" {
 		if err := crashActor(ctx, s.store, state.Actor.GetMetadata().GetAtespace(), state.Actor.GetMetadata().GetName()); err != nil {
-			slog.Error("Failed to crash actor", slog.String("err", err.Error()))
+			slog.ErrorContext(ctx, "Failed to crash actor", slog.String("err", err.Error()))
 		}
 		return status.Errorf(codes.FailedPrecondition, "CallAteletPauseStep prerequisite not met for Actor: %s. AteomPodNamespace: %s, GetAteomPodName %s", input.ActorName, state.Actor.GetAteomPodNamespace(), state.Actor.GetAteomPodName())
 	}
@@ -131,8 +131,11 @@ func (s *CallAteletPauseStep) Execute(ctx context.Context, input *PauseInput, st
 	ateletConn, err := s.dialer.DialForWorker(state.Actor.GetAteomPodNamespace(), state.Actor.GetAteomPodName())
 	if err != nil {
 		if errors.Is(err, ErrWorkerPodNotFound) {
-			slog.Warn("Skipping pause for dangling worker pod", "namespace", state.Actor.GetAteomPodNamespace(), "pod", state.Actor.GetAteomPodName())
-			return nil
+			slog.ErrorContext(ctx, "Worker pod gone before checkpoint, crashing actor", "namespace", state.Actor.GetAteomPodNamespace(), "pod", state.Actor.GetAteomPodName(), "in_progress_snapshot", state.Actor.GetInProgressSnapshot())
+			if err := crashActor(ctx, s.store, state.Actor.GetMetadata().GetAtespace(), state.Actor.GetMetadata().GetName()); err != nil {
+				slog.ErrorContext(ctx, "Failed to crash actor", slog.String("err", err.Error()))
+			}
+			return fmt.Errorf("actor is CRASHED because its worker pod is gone and no snapshot was written")
 		}
 		return fmt.Errorf("while getting atelet conn for worker pod: %w", err)
 	}

@@ -101,7 +101,7 @@ func (s *LoadActorForResumeStep) Execute(ctx context.Context, input *ResumeInput
 		wk, err := s.store.GetWorker(ctx, actor.AteomPodNamespace, actor.WorkerPoolName, actor.AteomPodName)
 		if err != nil {
 			// Crash the actor if it was assigned to a deleted pod.
-			if errors.Is(err, ErrWorkerPodNotFound) {
+			if errors.Is(err, store.ErrNotFound) {
 				if cerr := crashActor(ctx, s.store, input.Atespace, input.ActorName); cerr != nil {
 					return cerr
 				}
@@ -195,7 +195,7 @@ func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, stat
 		// to the free pool — nothing else reclaims a healthy worker whose
 		// actor moved on to a different pool. Best effort in the background.
 		go func(release *ateapipb.Worker) {
-			bgCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			if err := s.store.UpdateWorker(bgCtx, release, release.Version); err != nil {
 				slog.ErrorContext(bgCtx, "Failed to release stale worker assignment",

@@ -74,6 +74,19 @@ for this purpose.
 All code changes should be accompanied by tests. We will not merge code that
 does not have tests, and we will not merge code that causes tests to fail.
 
+### Root-gated tests
+
+Tests that need root (overlay mounts, mknod, `trusted.*` xattrs, ...) call
+`roottest.Require(t, ...)` from [internal/roottest](internal/roottest) as
+their first statement. They skip in a plain `go test ./...`; CI reruns every
+package whose tests import that package under `sudo`. To run them locally:
+
+```sh
+hack/run-root-tests.sh
+```
+
+New privileged tests only need the `roottest.Require` call — no CI changes.
+
 ### Copyright Headers
 
 Every file containing source code must include copyright and license
