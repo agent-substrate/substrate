@@ -15,23 +15,16 @@
 package main
 
 import (
-	"archive/tar"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
-	"io/fs"
-	"log/slog"
 	"os"
 	"path"
-	"path/filepath"
-	"sort"
 	"strings"
 
-	"github.com/agent-substrate/substrate/cmd/atelet/internal/memorypullcache"
 	"github.com/agent-substrate/substrate/internal/ateerrors"
 	"github.com/agent-substrate/substrate/internal/ateompath"
+	"github.com/agent-substrate/substrate/internal/imagecache"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"go.opentelemetry.io/otel"
@@ -57,7 +50,7 @@ const (
 	ActorIDFileName = "actor-id"
 )
 
-func prepareOCIDirectory(ctx context.Context, pullCache *memorypullcache.MemoryPullCache, actorUID, containerName, ref string, command, args []string, env []string, annotations map[string]string, netns string, identityDir string, durableDirVolumeMounts []*ateletpb.VolumeMount) error {
+func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, actorUID, containerName, ref string, command, args []string, env []string, annotations map[string]string, netns string, identityDir string, durableDirVolumeMounts []*ateletpb.VolumeMount) error {
 	tracer := otel.Tracer("prepareOCIDirectory")
 
 	ctx, span := tracer.Start(ctx, "prepareOCIDirectory")
@@ -65,41 +58,51 @@ func prepareOCIDirectory(ctx context.Context, pullCache *memorypullcache.MemoryP
 	defer span.End()
 
 	bundlePath := ateompath.OCIBundlePath(actorUID, containerName)
-	rootPath := path.Join(bundlePath, "rootfs")
 
-	if err := removeAllWritable(rootPath); err != nil {
-		return fmt.Errorf("while clearing rootfs %q: %w", rootPath, err)
+	// Clear any previous bundle contents (belt and suspenders: resetActorDirs
+	// already wiped the bundle dir on the Run/Restore path).
+	if err := imagecache.RemoveAllWritable(bundlePath); err != nil {
+		return fmt.Errorf("while clearing bundle %q: %w", bundlePath, err)
 	}
 
-	if err := os.MkdirAll(rootPath, 0o700); err != nil {
-		return fmt.Errorf("in os.MkdirAll for container bundle dir: %w", err)
+	// The bundle's rootfs is composed by ateom as an overlay mount just before
+	// the workload runs: the cached image layers are the read-only lowerdirs,
+	// and the bundle-local upper/work hold this actor's private writes (wiped
+	// between runs, preserving the pristine-rootfs-per-run contract the old
+	// full re-untar provided). atelet only prepares the (empty) directories —
+	// it deliberately runs with no capabilities, so it cannot mount.
+	for _, d := range []string{"rootfs", "upper", "work"} {
+		if err := os.MkdirAll(path.Join(bundlePath, d), 0o700); err != nil {
+			return fmt.Errorf("in os.MkdirAll for container bundle dir: %w", err)
+		}
 	}
 
-	tarData, imageCfg, err := pullCache.Fetch(ctx, ref)
+	img, err := imageCache.EnsureImage(ctx, ref)
 	if err != nil {
-		return fmt.Errorf("in pullCache.Fetch: %w", err)
+		return fmt.Errorf("in imageCache.EnsureImage: %w", err)
 	}
-	defer tarData.Close()
 
-	// Argv and env need only the image config, so resolve them before the
-	// untar to fail fast on an invalid container config.
-	resolvedArgs, err := resolveProcessArgs(imageCfg, command, args)
+	// Argv and env need only the image config; resolve them before writing
+	// any spec so an invalid container config fails fast.
+	resolvedArgs, err := resolveProcessArgs(&img.Config, command, args)
 	if err != nil {
 		return fmt.Errorf("while resolving process args for container %q: %w", containerName, err)
 	}
-	resolvedEnv := resolveActorEnv(imageCfg, env)
+	resolvedEnv := resolveActorEnv(&img.Config, env)
 
-	if err := untar(ctx, tarData, rootPath); err != nil {
-		return fmt.Errorf("in untar: %w", err)
-	}
-
-	// Bind-mount the per-actor identity directory so the workload can read its
-	// own name at IdentityMountPath/ActorIDFileName. The bind target must exist
-	// in the rootfs for the mount to attach.
+	// The identity bind target must exist in the rootfs for the mount to
+	// attach; ateom creates it through the mounted overlay (it lands in the
+	// actor's upper) so the workload can read its own name at
+	// IdentityMountPath/ActorIDFileName.
+	var extraDirs []string
 	if identityDir != "" {
-		if err := createMountPoint(rootPath, IdentityMountPath); err != nil {
-			return fmt.Errorf("while creating identity mount point: %w", err)
-		}
+		extraDirs = append(extraDirs, IdentityMountPath)
+	}
+	if err := imagecache.WriteSpec(bundlePath, &imagecache.OverlaySpec{
+		Layers:    img.LayerDirs,
+		ExtraDirs: extraDirs,
+	}); err != nil {
+		return fmt.Errorf("while writing overlay spec: %w", err)
 	}
 
 	ociSpec := buildActorOCISpec(actorUID, resolvedArgs, resolvedEnv, annotations, netns, identityDir, durableDirVolumeMounts)
@@ -297,215 +300,4 @@ func buildActorOCISpec(actorUID string, args []string, env []string, annotations
 	}
 
 	return spec
-}
-
-// createMountPoint creates the directory mountPath (an absolute in-rootfs
-// path) to serve as a bind-mount target. It uses os.Root so the operation is
-// confined to rootPath: a symlink planted by the image cannot redirect the
-// write outside the extracted rootfs (same protection untar relies on).
-func createMountPoint(rootPath, mountPath string) error {
-	root, err := os.OpenRoot(rootPath)
-	if err != nil {
-		return fmt.Errorf("opening rootfs %q: %w", rootPath, err)
-	}
-	defer root.Close()
-
-	rel := strings.TrimPrefix(mountPath, "/")
-	if err := root.MkdirAll(rel, 0o755); err != nil {
-		return fmt.Errorf("creating mount dir %q: %w", rel, err)
-	}
-	return nil
-}
-
-func validateTarName(name string) (cleaned string, skip bool, err error) {
-	if name == "" {
-		return "", true, nil
-	}
-	cleaned = filepath.Clean(name)
-	if cleaned == "." {
-		return "", true, nil
-	}
-	cleaned = strings.TrimPrefix(cleaned, "/")
-	if cleaned == "" || cleaned == "." {
-		return "", true, nil
-	}
-	if !filepath.IsLocal(cleaned) {
-		return "", false, fmt.Errorf("not a local path: %q", name)
-	}
-	return cleaned, false, nil
-}
-
-func untar(ctx context.Context, tarData io.Reader, rootPath string) error {
-	tracer := otel.Tracer("ateom-gvisor")
-	ctx, span := tracer.Start(ctx, "untar")
-	defer span.End()
-
-	// os.Root confines file operations to rootPath: ".." components and
-	// out-of-tree symlinks are refused by the kernel.
-	root, err := os.OpenRoot(rootPath)
-	if err != nil {
-		return fmt.Errorf("while opening rootfs %q as os.Root: %w", rootPath, err)
-	}
-	defer root.Close()
-
-	// Directories are created owner-writable during extraction (so their children
-	// can be written even when the image marks them read-only, e.g. ko ships
-	// /ko-app as 0555) and their real modes are restored afterwards. This lets
-	// atelet, running as plain root, unpack arbitrary actor images without
-	// CAP_DAC_OVERRIDE. Keyed by name so a repeated dir entry's last mode wins.
-	dirModes := map[string]os.FileMode{}
-
-	tarReader := tar.NewReader(tarData)
-	for {
-		hdr, err := tarReader.Next()
-		if errors.Is(err, io.EOF) {
-			break
-		} else if err != nil {
-			return fmt.Errorf("in tarReader.Next: %w", err)
-		}
-
-		name, skip, err := validateTarName(hdr.Name)
-		if err != nil {
-			return fmt.Errorf("invalid tar entry: %w", err)
-		}
-		if skip {
-			continue
-		}
-
-		mode := hdr.FileInfo().Mode().Perm()
-
-		switch hdr.Typeflag {
-		case tar.TypeReg: // Regular file
-			// Same "later entry wins" handling: if any entry exists at the target path,
-			// remove it first. This ensures that:
-			// 1. If it's a symlink, we don't write through it (security vulnerability / incorrectness).
-			// 2. If it's a hardlink, we unlink it instead of truncating the shared inode.
-			// 3. If it's a directory, we recursively remove it so we can write the file.
-			if _, err := root.Lstat(name); err == nil {
-				if err := root.RemoveAll(name); err != nil {
-					return fmt.Errorf("while replacing existing path at %q before regular file: %w", name, err)
-				}
-			} else if !errors.Is(err, os.ErrNotExist) {
-				return fmt.Errorf("while checking existing path at %q before regular file: %w", name, err)
-			}
-
-			// Stream directly from tarReader to target file to avoid buffering in memory.
-			outFile, err := root.OpenFile(name, os.O_CREATE|os.O_RDWR|os.O_TRUNC, mode)
-			if err != nil {
-				return fmt.Errorf("while creating file %q: %w", name, err)
-			}
-
-			_, err = io.Copy(outFile, tarReader)
-			closeErr := outFile.Close()
-
-			if err != nil {
-				return fmt.Errorf("while writing contents of %q from tar stream: %w", name, err)
-			}
-			if closeErr != nil {
-				return fmt.Errorf("while closing file %q: %w", name, closeErr)
-			}
-
-		case tar.TypeDir:
-			// Create owner-writable so children can be written even when the image
-			// marks the dir read-only; the real mode is restored after extraction
-			// (see dirModes / the restore pass below).
-			err := root.Mkdir(name, mode|0o700)
-			if errors.Is(err, os.ErrExist) {
-				// OCI layers can repeat a directory entry (real ko images do); the
-				// existing dir is already owner-writable, so let the later entry's
-				// mode win at restore time.
-			} else if err != nil {
-				return fmt.Errorf("while creating directory=%q, mode=%v: %w", name, mode, err)
-			}
-			dirModes[name] = mode
-
-		case tar.TypeSymlink:
-			// OCI image layers may re-define the same path across layers (e.g.
-			// an earlier layer creates /var/run as a directory and a later
-			// layer re-declares it as a symlink to /run). Standard tar-extract
-			// semantics are "later entry wins": replace any existing entry.
-			if existing, err := root.Lstat(name); err == nil {
-				// If it's already the same symlink, skip the unlink+symlink pair.
-				if existing.Mode()&os.ModeSymlink != 0 {
-					if cur, rerr := root.Readlink(name); rerr == nil && cur == hdr.Linkname {
-						continue
-					}
-				}
-				// Root.RemoveAll removes the symlink entry itself; it does NOT
-				// traverse and remove the directory the symlink points to.
-				// That's the desired semantic here — replace this path's
-				// entry without touching whatever the prior symlink targeted.
-				if err := root.RemoveAll(name); err != nil {
-					return fmt.Errorf("while replacing existing path at %q before symlink: %w", name, err)
-				}
-			} else if !errors.Is(err, os.ErrNotExist) {
-				return fmt.Errorf("while checking existing path at %q before symlink: %w", name, err)
-			}
-			if err := root.Symlink(hdr.Linkname, name); err != nil {
-				return fmt.Errorf("while creating symlink src=%q target=%q: %w", name, hdr.Linkname, err)
-			}
-
-		case tar.TypeLink:
-			linkname, linkSkip, err := validateTarName(hdr.Linkname)
-			if err != nil {
-				return fmt.Errorf("invalid hardlink target for %q: %w", name, err)
-			}
-			if linkSkip {
-				return fmt.Errorf("invalid hardlink target for %q: empty", name)
-			}
-			// Same "later entry wins" handling as TypeSymlink: replace existing entry.
-			if _, err := root.Lstat(name); err == nil {
-				if err := root.RemoveAll(name); err != nil {
-					return fmt.Errorf("while replacing existing path at %q before hardlink: %w", name, err)
-				}
-			} else if !errors.Is(err, os.ErrNotExist) {
-				return fmt.Errorf("while checking existing path at %q before hardlink: %w", name, err)
-			}
-			if err := root.Link(linkname, name); err != nil {
-				return fmt.Errorf("while creating hardlink src=%q target=%q: %w", name, linkname, err)
-			}
-
-		default:
-			tfStr := string([]byte{hdr.Typeflag})
-			slog.ErrorContext(ctx, "Unhandled tar entry typeflag", slog.String("typeflag", tfStr), slog.Any("hdr", hdr))
-			return fmt.Errorf("unhandled tar entry typeflag %q", tfStr)
-		}
-
-	}
-
-	// Restore the image's intended directory modes now that every child exists.
-	// Deepest paths first: a child's path is always longer than its parent's, so
-	// length-descending order guarantees a directory is restored before any of its
-	// ancestors — restoring a parent to a non-traversable mode then can't block
-	// restoring its children.
-	dirs := make([]string, 0, len(dirModes))
-	for name := range dirModes {
-		dirs = append(dirs, name)
-	}
-	sort.Slice(dirs, func(i, j int) bool { return len(dirs[i]) > len(dirs[j]) })
-	for _, name := range dirs {
-		if err := root.Chmod(name, dirModes[name]); err != nil {
-			return fmt.Errorf("while restoring mode %v on directory %q: %w", dirModes[name], name, err)
-		}
-	}
-
-	return nil
-}
-
-// removeAllWritable removes path and everything under it, first making every
-// directory owner-writable so its children can be unlinked. atelet runs as plain
-// root (no CAP_DAC_OVERRIDE), so it cannot remove entries inside an image-defined
-// read-only directory (e.g. ko's restored 0555 /ko-app) — os.RemoveAll alone
-// fails there with EACCES. atelet owns these files, so chmod needs no capability.
-func removeAllWritable(path string) error {
-	// Make dirs traversable/writable top-down (WalkDir visits a directory before
-	// reading it, so chmod here lets the walk descend into otherwise-unreadable
-	// dirs). Best-effort: ignore errors and let os.RemoveAll surface real ones.
-	_ = filepath.WalkDir(path, func(p string, d fs.DirEntry, err error) error {
-		if err == nil && d.IsDir() {
-			_ = os.Chmod(p, 0o700)
-		}
-		return nil
-	})
-	return os.RemoveAll(path)
 }

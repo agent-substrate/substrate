@@ -58,9 +58,7 @@ func main() {
 }
 
 func handleRequest(w http.ResponseWriter, r *http.Request) {
-	log.Printf("DEBUG: Request received. Path=%s Host=%s", r.URL.Path, r.Host)
-
-	// 1. Identify Actor (Robust extraction)
+	// 1. Identify Actor
 	actorName := r.Header.Get("X-AgentSet-Session")
 	if actorName == "" {
 		actorName = r.Header.Get("x-agentset-session")
@@ -78,29 +76,21 @@ func handleRequest(w http.ResponseWriter, r *http.Request) {
 		actorName = "unknown"
 	}
 
-	log.Printf("DEBUG: Identified ActorName: [%s]", actorName)
-
 	body, _ := io.ReadAll(r.Body)
 	message := string(body)
 	if message == "" {
 		message = "Status Check"
 	}
 
-	// 1. Respond to user
+	// 2. Respond
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("Agent Response: [%s] | Identity: %s | Session: %s\n", message, residentSecret, actorName))
-	if actorName == "" {
-		sb.WriteString("DEBUG: ID Missing. Headers received:\n")
-		for k, v := range r.Header {
-			sb.WriteString(fmt.Sprintf("  %s: %v\n", k, v))
-		}
-	}
 	response := sb.String()
 	w.Header().Set("Content-Type", "text/plain")
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(response))
 
-	// 2. Self-Suspend (Zero-Idle)
+	// 3. Self-Suspend (Zero-Idle)
 	if actorName != "" && actorName != "localhost" && !strings.Contains(actorName, ":") {
 		// Use a goroutine to avoid blocking the HTTP response
 		go func() {
