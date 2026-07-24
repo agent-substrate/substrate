@@ -17,6 +17,7 @@ package ateclient
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"io"
 	"net/http"
@@ -41,6 +42,16 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/tools/portforward"
 	"k8s.io/client-go/transport/spdy"
+)
+
+const (
+	apiServerName = "api.ate-system.svc"
+
+	// serviceDNSSignerName and liveBundleSelector mirror the
+	// clusterTrustBundle projected-volume sources that in-cluster clients
+	// mount to verify ateapi's serving cert.
+	serviceDNSSignerName = "servicedns.podcert.ate.dev/identity"
+	liveBundleSelector   = "podcert.ate.dev/canarying=live"
 )
 
 // Client wraps the gRPC ControlClient and DebugClient and ensures the port-forward connection is closed when done.
@@ -91,16 +102,20 @@ func NewClient(ctx context.Context, kubeconfigPath, k8sContext, endpoint string,
 }
 
 func dialDirect(ctx context.Context, kubeconfigPath, k8sContext, endpoint string, traceEnabled bool) (*Client, error) {
-	// Always assume TLS to match production behavior
-	creds := credentials.NewTLS(&tls.Config{InsecureSkipVerify: true})
-
 	clientset, err := NewK8sClientset(kubeconfigPath, k8sContext)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create k8s client: %w", err)
 	}
 
+	// Verify the server before attaching the bearer token below: the token
+	// must never be sent over an unauthenticated channel.
+	tlsCfg, err := serverTLSConfig(ctx, clientset)
+	if err != nil {
+		return nil, err
+	}
+
 	var opts []grpc.DialOption
-	opts = append(opts, grpc.WithTransportCredentials(creds))
+	opts = append(opts, grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)))
 	opts = append(opts, grpc.WithStatsHandler(otelgrpc.NewClientHandler()))
 	tokenOpt, err := bearerTokenDialOption(ctx, clientset)
 	if err != nil {
@@ -215,12 +230,14 @@ func dialPortForward(ctx context.Context, kubeconfigPath, k8sContext string, tra
 	localPort := forwardedPorts[0].Local
 	localEndpoint := fmt.Sprintf("127.0.0.1:%d", localPort)
 
-	// The ate-api-server uses TLS with pod certificates, so we need InsecureSkipVerify
-	// to talk to it over localhost.
-	transportCreds := credentials.NewTLS(&tls.Config{InsecureSkipVerify: true})
+	tlsCfg, err := serverTLSConfig(ctx, clientset)
+	if err != nil {
+		close(stopCh)
+		return nil, err
+	}
 
 	var opts []grpc.DialOption
-	opts = append(opts, grpc.WithTransportCredentials(transportCreds))
+	opts = append(opts, grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)))
 	opts = append(opts, grpc.WithStatsHandler(otelgrpc.NewClientHandler()))
 	tokenOpt, err := bearerTokenDialOption(ctx, clientset)
 	if err != nil {
@@ -250,13 +267,43 @@ func dialPortForward(ctx context.Context, kubeconfigPath, k8sContext string, tra
 	}, nil
 }
 
+func serverTLSConfig(ctx context.Context, clientset kubernetes.Interface) (*tls.Config, error) {
+	ctbs, err := clientset.CertificatesV1beta1().ClusterTrustBundles().List(ctx, metav1.ListOptions{
+		LabelSelector: liveBundleSelector,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list ClusterTrustBundles: %w", err)
+	}
+
+	pool := x509.NewCertPool()
+	found := false
+	for _, ctb := range ctbs.Items {
+		if ctb.Spec.SignerName != serviceDNSSignerName {
+			continue
+		}
+		if !pool.AppendCertsFromPEM([]byte(ctb.Spec.TrustBundle)) {
+			return nil, fmt.Errorf("ClusterTrustBundle %q contains no valid certificates", ctb.ObjectMeta.Name)
+		}
+		found = true
+	}
+	if !found {
+		return nil, fmt.Errorf("no live ClusterTrustBundle found for signer %q", serviceDNSSignerName)
+	}
+
+	return &tls.Config{
+		MinVersion: tls.VersionTLS13,
+		RootCAs:    pool,
+		ServerName: apiServerName,
+	}, nil
+}
+
 // bearerTokenDialOption attaches a ServiceAccount token for the ate-client SA
 // as per-RPC credentials.
 func bearerTokenDialOption(ctx context.Context, clientset *kubernetes.Clientset) (grpc.DialOption, error) {
 	expirationSeconds := int64(3600)
 	tokenRequest := &authv1.TokenRequest{
 		Spec: authv1.TokenRequestSpec{
-			Audiences:         []string{"api.ate-system.svc"},
+			Audiences:         []string{apiServerName},
 			ExpirationSeconds: &expirationSeconds,
 		},
 	}
