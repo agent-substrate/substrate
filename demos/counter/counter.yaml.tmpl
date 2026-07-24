@@ -54,7 +54,7 @@ spec:
       workload: counter
   snapshotsConfig:
     onPause: Full
-    onCommit: Data
+    onCommit: Full
     location: gs://${BUCKET_NAME}/ate-demo-counter/
   volumes:
   - name: data
