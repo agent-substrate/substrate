@@ -109,27 +109,17 @@ func (rh *routerHealth) check(ctx context.Context) {
 	wg.Add(3)
 	go func() {
 		defer wg.Done()
-		envoyResult = runComponentHealthCheck(ctx, rh.checkEnvoy)
+		envoyResult = runComponentHealthCheck(ctx, "Envoy health check failed", rh.checkEnvoy)
 	}()
 	go func() {
 		defer wg.Done()
-		k8sResult = runComponentHealthCheck(ctx, rh.checkK8s)
+		k8sResult = runComponentHealthCheck(ctx, "Kubernetes API health check failed", rh.checkK8s)
 	}()
 	go func() {
 		defer wg.Done()
-		ateResult = runComponentHealthCheck(ctx, rh.checkAteAPI)
+		ateResult = runComponentHealthCheck(ctx, "ATE API gRPC health check failed", rh.checkAteAPI)
 	}()
 	wg.Wait()
-
-	if !envoyResult.healthy {
-		slog.ErrorContext(ctx, "Envoy health check failed", slog.String("msg", envoyResult.message))
-	}
-	if !k8sResult.healthy {
-		slog.ErrorContext(ctx, "Kubernetes API health check failed", slog.String("msg", k8sResult.message))
-	}
-	if !ateResult.healthy {
-		slog.ErrorContext(ctx, "ATE API gRPC health check failed", slog.String("msg", ateResult.message))
-	}
 
 	rh.mu.Lock()
 	defer rh.mu.Unlock()
@@ -138,8 +128,15 @@ func (rh *routerHealth) check(ctx context.Context) {
 	updateComponentHealth(&rh.report.AteAPI, ateResult.healthy, ateResult.message, ateResult.checkedAt)
 }
 
-func runComponentHealthCheck(ctx context.Context, check func(context.Context) (bool, string)) componentHealthCheckResult {
+func runComponentHealthCheck(
+	ctx context.Context,
+	failureMessage string,
+	check func(context.Context) (bool, string),
+) componentHealthCheckResult {
 	healthy, message := check(ctx)
+	if !healthy {
+		slog.ErrorContext(ctx, failureMessage, slog.String("msg", message))
+	}
 	return componentHealthCheckResult{
 		healthy:   healthy,
 		message:   message,
