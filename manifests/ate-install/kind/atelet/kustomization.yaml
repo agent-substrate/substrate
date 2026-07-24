@@ -33,6 +33,8 @@ patches:
               args:
               - --gcp-auth-for-image-pulls=false
               - --localhost-registry-replacement=kind-registry:5000
+              # POC: turn on pluggable actor egress cluster-wide.
+              - --egress-gateway-address=ateway-egress.ate-system.svc:443
               env:
               - name: OTEL_EXPORTER_OTLP_ENDPOINT
                 value: http://opentelemetry-collector.otel-system.svc:4317

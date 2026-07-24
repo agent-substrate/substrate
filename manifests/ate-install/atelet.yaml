@@ -69,6 +69,10 @@ spec:
         image: ko://github.com/agent-substrate/substrate/cmd/atelet
         args:
         - --gcp-auth-for-image-pulls=true
+        # POC: turn on pluggable actor egress cluster-wide. Actor TCP egress is
+        # transparently redirected (nftables) into atunnel, which wraps it in
+        # mTLS + HTTP CONNECT to the Envoy egress gateway.
+        - --egress-gateway-address=ateway-egress.ate-system.svc:443
         # atelet does no mounts, netlink, device, or namespace operations (those
         # live in the ateom worker pod) — it only reads/writes the
         # /var/lib/ateom-gvisor hostPath as root, so it needs no Linux

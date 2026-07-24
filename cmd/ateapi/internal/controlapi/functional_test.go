@@ -1154,12 +1154,22 @@ func TestResumeActor(t *testing.T) {
 	if !tc.fakeAtelet.RestoreCalled {
 		t.Errorf("expected Restore to be called")
 	}
+	restoreReq := tc.fakeAtelet.lastRestoreRequest()
+	if restoreReq == nil || restoreReq.GetActorVersion() < 1 {
+		t.Fatalf("Restore actor_version = %v, want a positive version", restoreReq)
+	}
+	if restoreReq.EgressGatewayAddress != nil {
+		t.Fatalf("Restore egress_gateway_address = %q, want absent until the Actor egress API is available", restoreReq.GetEgressGatewayAddress())
+	}
 
 	getResp, err := tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
 	})
 	if err != nil {
 		t.Fatalf("GetActor failed: %v", err)
+	}
+	if restoreReq.GetActorVersion() >= getResp.GetMetadata().GetVersion() {
+		t.Errorf("Restore actor_version = %d, final Actor version = %d; want the assignment version to precede finalization", restoreReq.GetActorVersion(), getResp.GetMetadata().GetVersion())
 	}
 	want := &ateapipb.Actor{
 		Metadata:               &ateapipb.ResourceMetadata{Name: name, Atespace: testAtespace},

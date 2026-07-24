@@ -38,6 +38,8 @@ message RunRequest {
   string atespace = 2;
   string actor_name = 3;
   string actor_uid = 4;
+  // Actor resource version observed by ate-api when assigning this worker.
+  int64 actor_version = 9;
 
   string actor_template_namespace = 5;
   string actor_template_name = 6;
@@ -48,6 +50,10 @@ message RunRequest {
   // fetches the relevant assets and records them with the actor's on-node state
   // so a later Checkpoint can pin the same version into the snapshot manifest.
   SandboxAssets sandbox_assets = 8;
+
+  // Remote egress gateway selected for this activation. When absent, actor
+  // traffic uses direct egress instead of being redirected through atunnel.
+  optional string egress_gateway_address = 10;
 }
 
 // AssetFile is one content-addressed file atelet fetches for a sandbox runtime
@@ -212,6 +218,8 @@ message RestoreRequest {
   string atespace = 2;
   string actor_name = 3;
   string actor_uid = 4;
+  // Actor resource version observed by ate-api when assigning this worker.
+  int64 actor_version = 12;
 
   string actor_template_namespace = 5;
   string actor_template_name = 6;
@@ -231,6 +239,10 @@ message RestoreRequest {
 
   // What content to restore from the checkpoint.
   SnapshotScope scope = 11;
+
+  // Remote egress gateway selected for this activation. When absent, actor
+  // traffic uses direct egress instead of being redirected through atunnel.
+  optional string egress_gateway_address = 23;
 }
 
 message RestoreResponse {

@@ -52,6 +52,9 @@ import (
 func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.RestoreWorkloadRequest) (resp *ateompb.RestoreWorkloadResponse, retErr error) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
+	if err := s.deactivateActorNetworking(ctx); err != nil {
+		return nil, err
+	}
 
 	atespace := req.GetAtespace()
 	name := req.GetActorName()
@@ -113,7 +116,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 
 	// Networking: rebuild the per-activation veth + tap; the snapshot's virtio-net
 	// is fd-backed, so CH needs fresh tap FDs (net_fds) on restore.
-	if err := s.setupActorNetwork(ctx); err != nil {
+	if err := s.setupActorNetwork(ctx, req.GetEgressGatewayAddress() != ""); err != nil {
 		return nil, fmt.Errorf("while setting up actor network: %w", err)
 	}
 	defer func() {
@@ -199,6 +202,9 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 		}
 	}
 
+	if err := s.activateActorNetworking(atespace, name, req.GetActorVersion(), req.GetEgressGatewayAddress()); err != nil {
+		return nil, err
+	}
 	s.running[actorUID] = ra
 	s.actorLogger.EmitLifecycleLog("Actor restored", atespace, name, actorUID, templateNS, templateName)
 	slog.InfoContext(ctx, "Actor restored (overlay rootfs)",

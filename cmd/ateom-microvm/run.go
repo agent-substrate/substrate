@@ -187,6 +187,9 @@ func writeGuestResolvConf(rootfs string) error {
 func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkloadRequest) (resp *ateompb.RunWorkloadResponse, retErr error) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
+	if err := s.deactivateActorNetworking(ctx); err != nil {
+		return nil, err
+	}
 
 	atespace := req.GetAtespace()
 	name := req.GetActorName()
@@ -219,7 +222,7 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 
 	// Networking (host side): per-activation veth into the interior netns. The
 	// tap + TC mirror is built below (after the VM exists) so its FDs are fresh.
-	if err := s.setupActorNetwork(ctx); err != nil {
+	if err := s.setupActorNetwork(ctx, req.GetEgressGatewayAddress() != ""); err != nil {
 		return nil, fmt.Errorf("while setting up actor network: %w", err)
 	}
 	defer func() {
@@ -352,6 +355,9 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	}
 
 	ra := &runningActor{chCmd: chCmd, vfsdCmd: vfsdCmd, apiSocket: apiSocket, baseID: actorUID, logAgent: ac}
+	if err := s.activateActorNetworking(atespace, name, req.GetActorVersion(), req.GetEgressGatewayAddress()); err != nil {
+		return nil, err
+	}
 	s.running[actorUID] = ra
 
 	// Forward each container's stdout/stderr into the pod logs. The overlay workload's

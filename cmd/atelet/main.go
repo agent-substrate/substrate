@@ -68,8 +68,34 @@ var (
 	gcpAuthForImagePulls         = pflag.Bool("gcp-auth-for-image-pulls", true, "Use GCP application default credentials mechanism.")
 	localhostRegistryReplacement = pflag.String("localhost-registry-replacement", "", "The replacement registry endpoint for localhost and/or loopback IP addresses, useful for local development. for example kind-registry:5000")
 
+	// egressGatewayAddress turns on pluggable actor egress cluster-wide (POC).
+	// When set, actors whose Run/Restore request does not already carry an egress
+	// gateway address have this address injected, causing ateom to redirect actor
+	// TCP egress through atunnel to the egress gateway. Empty keeps egress off.
+	egressGatewayAddress = pflag.String("egress-gateway-address", "", "Address (host:port) of the egress gateway. When set, actor TCP egress is transparently tunneled through atunnel to this gateway. Empty disables egress.")
+
 	showVersion = pflag.Bool("version", false, "Print version and exit.")
 )
+
+// egressAddrRequest is satisfied by the atelet Run/Restore request protos, both
+// of which carry an optional egress gateway address.
+type egressAddrRequest interface {
+	GetEgressGatewayAddress() string
+}
+
+// effectiveEgressGatewayAddress prefers the per-request address (reserved for a
+// future per-actor egress API) and otherwise falls back to the cluster-wide
+// atelet flag.
+func effectiveEgressGatewayAddress(req egressAddrRequest) *string {
+	addr := req.GetEgressGatewayAddress()
+	if addr == "" {
+		addr = *egressGatewayAddress
+	}
+	if addr == "" {
+		return nil
+	}
+	return &addr
+}
 
 func main() {
 	pflag.Parse()
@@ -259,6 +285,8 @@ func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (*atele
 		ActorName:              actorName,
 		ActorTemplateNamespace: req.GetActorTemplateNamespace(),
 		ActorTemplateName:      req.GetActorTemplateName(),
+		ActorVersion:           req.GetActorVersion(),
+		EgressGatewayAddress:   effectiveEgressGatewayAddress(req),
 		RunscPath:              runscPathFor(assetPaths),
 		RuntimeAssetPaths:      assetPaths,
 		Spec:                   buildAteomWorkloadSpec(req.GetSpec()),
@@ -556,6 +584,8 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		ActorName:              actorName,
 		ActorTemplateNamespace: req.GetActorTemplateNamespace(),
 		ActorTemplateName:      req.GetActorTemplateName(),
+		ActorVersion:           req.GetActorVersion(),
+		EgressGatewayAddress:   effectiveEgressGatewayAddress(req),
 		RunscPath:              runscPathFor(assetPaths),
 		RuntimeAssetPaths:      assetPaths,
 		Spec:                   buildAteomWorkloadSpec(req.GetSpec()),
@@ -840,6 +870,9 @@ func (d *AteomDialer) DialAteomPod(ctx context.Context, podUID string) (*grpc.Cl
 // internal/resources so other components can apply them at their boundaries.
 func validateRunRequest(req *ateletpb.RunRequest) error {
 	var errs field.ErrorList
+	if req.GetActorVersion() < 1 {
+		errs = append(errs, field.Invalid(field.NewPath("actor_version"), req.GetActorVersion(), "must be positive"))
+	}
 	errs = append(errs, resources.ValidateResourceName(req.GetAtespace(), field.NewPath("atespace"))...)
 	errs = append(errs, resources.ValidateResourceName(req.GetActorName(), field.NewPath("actor_name"))...)
 	errs = append(errs, resources.ValidateResourceName(req.GetActorUid(), field.NewPath("actor_uid"))...)
@@ -910,6 +943,9 @@ func validateCheckpointRequest(req *ateletpb.CheckpointRequest) error {
 
 func validateRestoreRequest(req *ateletpb.RestoreRequest) error {
 	var errs field.ErrorList
+	if req.GetActorVersion() < 1 {
+		errs = append(errs, field.Invalid(field.NewPath("actor_version"), req.GetActorVersion(), "must be positive"))
+	}
 	errs = append(errs, resources.ValidateResourceName(req.GetAtespace(), field.NewPath("atespace"))...)
 	errs = append(errs, resources.ValidateResourceName(req.GetActorName(), field.NewPath("actor_name"))...)
 	errs = append(errs, resources.ValidateResourceName(req.GetActorUid(), field.NewPath("actor_uid"))...)

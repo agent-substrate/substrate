@@ -20,8 +20,8 @@ package main
 // point-to-point veth pair per activation, with the worker side (ateom0,
 // 169.254.17.1/30) staying in the pod netns next to the pod's real eth0, and
 // the peer moved into the interior netns, renamed eth0, and given the stable
-// actor address 169.254.17.2/30. nftables rules in the pod netns masquerade
-// actor egress behind the pod IP and DNAT inbound pod-IP:80 to the actor.
+// actor address 169.254.17.2/30. nftables rules in the pod netns redirect actor
+// TCP egress to atunnel and masquerade DNS/UDP.
 //
 // kata consumes the interior netns exactly like a CNI-provisioned container
 // netns: its tcfilter network model builds a tap cross-connected to eth0 (the
@@ -120,18 +120,13 @@ func mustParseIP(s string) net.IP {
 // pod netns and the kata interior netns (see the package comment). Idempotent
 // via cleanup-before-setup; also sweeps stale kata taps out of the interior
 // netns so the sandbox always builds on a clean slate.
-func (s *AteomService) setupActorNetwork(ctx context.Context) (retErr error) {
+func (s *AteomService) setupActorNetwork(ctx context.Context, redirectEgress bool) (retErr error) {
 	s.cleanupActorNetworkOrExit(ctx, "Failed to clean up stale actor network before setup")
 	defer func() {
 		if retErr != nil {
 			s.cleanupActorNetworkOrExit(ctx, "Failed to clean up partially configured actor network")
 		}
 	}()
-
-	podIP, err := podIPv4()
-	if err != nil {
-		return fmt.Errorf("while resolving pod IPv4 address: %w", err)
-	}
 
 	// Sweep leftover links (kata taps from torn-down runs, restore taps) from
 	// the persistent interior netns before the new veth peer arrives.
@@ -190,7 +185,11 @@ func (s *AteomService) setupActorNetwork(ctx context.Context) (retErr error) {
 	if err := enableIPv4Forwarding(); err != nil {
 		return err
 	}
-	if err := installActorNftablesRules(podIP); err != nil {
+	egressPort := uint16(0)
+	if redirectEgress {
+		egressPort = s.atunnelEgressPort
+	}
+	if err := installActorNftablesRules(egressPort); err != nil {
 		return err
 	}
 
@@ -287,28 +286,6 @@ func (s *AteomService) cleanupActorNetworkOrExit(ctx context.Context, msg string
 	}
 }
 
-// podIPv4 resolves the worker pod IPv4 address from the pod namespace's real
-// eth0 (which stays in the pod namespace in the veth model).
-func podIPv4() (net.IP, error) {
-	eth0Link, err := netlink.LinkByName("eth0")
-	if err != nil {
-		return nil, fmt.Errorf("while getting pod eth0: %w", err)
-	}
-	addrs, err := netlink.AddrList(eth0Link, netlink.FAMILY_V4)
-	if err != nil {
-		return nil, fmt.Errorf("while listing pod eth0 addresses: %w", err)
-	}
-	for _, addr := range addrs {
-		if addr.IP == nil {
-			continue
-		}
-		if ip := addr.IP.To4(); ip != nil {
-			return ip, nil
-		}
-	}
-	return nil, fmt.Errorf("pod eth0 has no IPv4 address")
-}
-
 func parseAddr(cidr string) (*netlink.Addr, error) {
 	addr, err := netlink.ParseAddr(cidr)
 	if err != nil {
@@ -333,12 +310,16 @@ func enableIPv4Forwarding() error {
 	return nil
 }
 
-func installActorNftablesRules(podIP net.IP) error {
+func installActorNftablesRules(egressPort uint16) error {
 	// Dedicated ateom-owned IPv4 table (cheap cleanup, no CNI chain mutation):
-	//   * postrouting: masquerade actor egress (169.254.17.2) behind the pod IP.
-	//   * prerouting: DNAT pod-IP:80/tcp to the actor veth IP.
+	//   * prerouting: redirect actor TCP to atunnel, preserving SO_ORIGINAL_DST.
+	//   * postrouting: masquerade traffic not handled by the TCP tunnel, notably
+	//     DNS over UDP.
 	//   * forward: accept forwarded packets between the actor veth and pod eth0.
-	// Mirrors cmd/ateom-gvisor (same compatibility-bridge caveats and TODOs).
+	// Mirrors cmd/ateom-gvisor.
+	//
+	// TODO: Restrict the compatibility masquerade to DNS traffic sent to the
+	// configured cluster resolver and drop all other non-tunneled actor egress.
 	if err := removeActorNftablesRules(); err != nil {
 		return err
 	}
@@ -357,28 +338,9 @@ func installActorNftablesRules(podIP net.IP) error {
 		Hooknum:  nftables.ChainHookPrerouting,
 		Priority: nftables.ChainPriorityNATDest,
 	})
-	preroutingExprs := append(ipDestinationEqual(podIP.String()), tcpDestinationPortEqual(80)...)
-	preroutingExprs = append(preroutingExprs,
-		&expr.Immediate{
-			Register: 1,
-			Data:     net.ParseIP(actorVethIP).To4(),
-		},
-		&expr.Immediate{
-			Register: 2,
-			Data:     binaryutil.BigEndian.PutUint16(80),
-		},
-		&expr.NAT{
-			Type:        expr.NATTypeDestNAT,
-			Family:      unix.NFPROTO_IPV4,
-			RegAddrMin:  1,
-			RegProtoMin: 2,
-		},
-	)
-	c.AddRule(&nftables.Rule{
-		Table: table,
-		Chain: prerouting,
-		Exprs: preroutingExprs,
-	})
+	if redirectRule := actorEgressRedirectRule(table, prerouting, egressPort); redirectRule != nil {
+		c.AddRule(redirectRule)
+	}
 
 	postrouting := c.AddChain(&nftables.Chain{
 		Name:     "postrouting",
@@ -439,10 +401,6 @@ func ipSourceEqual(ip string) []expr.Any {
 	return ipPayloadEqual(12, ip)
 }
 
-func ipDestinationEqual(ip string) []expr.Any {
-	return ipPayloadEqual(16, ip)
-}
-
 func ipPayloadEqual(offset uint32, ip string) []expr.Any {
 	return []expr.Any{
 		&expr.Payload{
@@ -459,7 +417,7 @@ func ipPayloadEqual(offset uint32, ip string) []expr.Any {
 	}
 }
 
-func tcpDestinationPortEqual(port uint16) []expr.Any {
+func tcpProtocol() []expr.Any {
 	return []expr.Any{
 		&expr.Meta{Key: expr.MetaKeyL4PROTO, Register: 1},
 		&expr.Cmp{
@@ -467,18 +425,22 @@ func tcpDestinationPortEqual(port uint16) []expr.Any {
 			Register: 1,
 			Data:     []byte{unix.IPPROTO_TCP},
 		},
-		&expr.Payload{
-			DestRegister: 1,
-			Base:         expr.PayloadBaseTransportHeader,
-			Offset:       2,
-			Len:          2,
-		},
-		&expr.Cmp{
-			Op:       expr.CmpOpEq,
+	}
+}
+
+func actorEgressRedirectRule(table *nftables.Table, chain *nftables.Chain, port uint16) *nftables.Rule {
+	if port == 0 {
+		return nil
+	}
+	exprs := append(ipSourceEqual(actorVethIP), tcpProtocol()...)
+	exprs = append(exprs,
+		&expr.Immediate{
 			Register: 1,
 			Data:     binaryutil.BigEndian.PutUint16(port),
 		},
-	}
+		&expr.Redir{RegisterProtoMin: 1},
+	)
+	return &nftables.Rule{Table: table, Chain: chain, Exprs: exprs}
 }
 
 // createNetNSWithoutSwitching creates a named netns and returns its handle,

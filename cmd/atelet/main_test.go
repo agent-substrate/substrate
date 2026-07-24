@@ -97,6 +97,7 @@ func validRunRequest() *ateletpb.RunRequest {
 		ActorTemplateName:      "counter",
 		TargetAteomUid:         "422938ba-8860-4983-a25d-d6bcb0a69d4e",
 		ActorUid:               "123e4567-e89b-12d3-a456-426614174000",
+		ActorVersion:           7,
 		Spec:                   &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{Name: "worker"}}},
 	}
 }
@@ -128,6 +129,7 @@ func validRestoreRequest() *ateletpb.RestoreRequest {
 		ActorTemplateName:      "counter",
 		TargetAteomUid:         "422938ba-8860-4983-a25d-d6bcb0a69d4e",
 		ActorUid:               "123e4567-e89b-12d3-a456-426614174000",
+		ActorVersion:           7,
 		Spec:                   &ateletpb.WorkloadSpec{Containers: []*ateletpb.Container{{Name: "worker"}}},
 		Type:                   ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
 		Config: &ateletpb.RestoreRequest_ExternalConfig{
@@ -152,6 +154,7 @@ func TestValidateRunRequest(t *testing.T) {
 		{"invalid actor uid", func(r *ateletpb.RunRequest) { r.ActorUid = "../escape" }, true},
 		{"invalid actor template namespace", func(r *ateletpb.RunRequest) { r.ActorTemplateNamespace = "Not_Valid" }, true},
 		{"invalid actor template name", func(r *ateletpb.RunRequest) { r.ActorTemplateName = "Not_Valid" }, true},
+		{"invalid actor version", func(r *ateletpb.RunRequest) { r.ActorVersion = 0 }, true},
 		{"invalid container name", func(r *ateletpb.RunRequest) {
 			r.Spec.Containers = []*ateletpb.Container{{Name: "../escape"}}
 		}, true},
@@ -235,6 +238,7 @@ func TestValidateRestoreRequest(t *testing.T) {
 		{"invalid actor uid", makeReq(func(r *ateletpb.RestoreRequest) { r.ActorUid = "../escape" }), true},
 		{"invalid actor template namespace", makeReq(func(r *ateletpb.RestoreRequest) { r.ActorTemplateNamespace = "Not_Valid" }), true},
 		{"invalid actor template name", makeReq(func(r *ateletpb.RestoreRequest) { r.ActorTemplateName = "Not_Valid" }), true},
+		{"invalid actor version", makeReq(func(r *ateletpb.RestoreRequest) { r.ActorVersion = 0 }), true},
 		{"invalid container name", makeReq(func(r *ateletpb.RestoreRequest) {
 			r.Spec.Containers = []*ateletpb.Container{{Name: "../escape"}}
 		}), true},
