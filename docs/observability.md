@@ -112,12 +112,17 @@ Agent Substrate emits foundational OpenTelemetry system and server metrics to mo
 | `rpc.server.call.duration` | ateapi & atelet (gRPC servers, via `otelgrpc`) | histogram | per-method gRPC latency, request rate, and errors (labels `rpc.method`, `rpc.response.status_code`) |
 | `atenet.router.route.duration` | atenet-router | histogram | Substrate E2E — Envoy receiving a request to Envoy forwarding it to the resolved worker, excluding actor compute and the response (labels `ate.template.namespace`, `ate.template.name`, `ate.router.outcome`, `ate.router.resume`) |
 | `atelet.snapshot.size` | atelet | histogram | uncompressed size in bytes of each gVisor snapshot image written during checkpoint (labels `kind`, `actor_template_namespace`, `actor_template_name`) |
+| `ate.workerpool.workers` | ateapi | up/down counter | live worker count per pool, split by state (`idle`/`assigned`) and sandbox class to provide fleet capacity and saturation at a glance |
+| `ate.actor.lifecycle.operation.duration` | ateapi | histogram | how long each actor operation (create/resume/suspend/pause/delete) takes and whether it failed (`error.type` present = failure, absent = success); labeled by operation, template, pool, sandbox class, and snapshot kind on resume |
+| `ate.scheduler.assignment.duration` | ateapi | histogram | time it takes for an actor to be assigned to a worker, with the outcome (`assigned` / `no_free_worker` / `error`) to catch scheduling latency and capacity starvation problems |
 
 The table lists the OpenTelemetry instrument names. How a name appears in a query depends on the backend (Cloud Monitoring (GMP) / Kind collector).
 
 For `atenet.router.route.duration`:
 * `ate.router.outcome` categorizes the route attempt result: `ok`, `cancelled`, `timeout`, `no_capacity`, `lock_conflict`, `not_found`, `unavailable`, `rate_limited`, or `resume_error`.
 * `ate.router.resume` indicates the singleflight execution state of actor resumption: `none` (actor already running), `triggered` (initiated cold activation), or `joined` (parked on in-flight activation).
+
+The `ate.*` control-plane metrics all have the same bounded labels (operation, outcome, pool, sandbox class, snapshot kind) so they aggregate cleanly, and they deliberately keep high-cardinality actor identity (name/uid/atespace) outside of metrics. These live on logs and traces instead.
 
 ### Local Metrics with Prometheus (Kind Cluster)
 
