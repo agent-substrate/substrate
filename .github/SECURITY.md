@@ -86,7 +86,9 @@ valuable, listed roughly from most to least severe:
 - The demo applications under `demos/`; they are examples, not production
   code.
 - Known limitations listed in [docs/roadmap.md](../docs/roadmap.md) and
-  [AGENTS.md](../AGENTS.md).
+  [AGENTS.md](../AGENTS.md), at the time of your report. These are living
+  docs and can lag reality; if you're unsure whether a listed limitation is
+  still accurate, report it anyway and let a maintainer make the call.
 
 ### What usually does not qualify
 
