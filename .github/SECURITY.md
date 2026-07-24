@@ -4,6 +4,17 @@ Agent Substrate is in a pre-release (preview) state. This policy is
 intentionally minimal for that stage and will be revisited as part of the
 General Availability (GA) milestone, see [Road to GA](#road-to-ga) below.
 
+In particular, all of the following currently apply:
+
+- Reports can be made exclusively via GitHub advisories.
+- Maintainers triage and fix advisories on a best-effort basis.
+- There is no bug bounty.
+- There is no security mailing list for announcements.
+- There are no SLOs on fix timeline.
+- There are no embargos.
+- Though we do wait to publish advisories until fixes have been merged,
+  details may appear in PRs prior to publishing.
+
 ## Reporting a Vulnerability
 
 **Do not open a public GitHub issue or pull request for security
@@ -12,7 +23,7 @@ vulnerabilities.**
 Use [GitHub Private Vulnerability Reporting](https://github.com/agent-substrate/substrate/security/advisories/new)
 to report privately. This is the only supported reporting channel; there is
 no security mailing list at this stage. There is no bug bounty, and this
-project is [not eligible](README.md) for the
+project is [not eligible](../README.md) for the
 [Google Open Source Software Vulnerability Rewards Program](https://bughunters.google.com/open-source-security).
 
 Please include:
@@ -37,8 +48,11 @@ Please include:
 
 ## What Counts as a Vulnerability
 
-See the [threat model](docs/threat-model.md) for the trust boundaries and
+See the [threat model](../docs/threat-model.md) for the trust boundaries and
 assumptions this section is based on.
+
+In scope: the Agent Substrate control plane (`ateapi`), node supervisor
+(`atelet`, `ateom`), networking stack (`atenet`), and CLI (`kubectl-ate`).
 
 Agent Substrate multiplexes many actors onto a smaller pool of shared
 workers, so its most important security boundaries are between actors and
@@ -50,15 +64,29 @@ valuable, listed roughly from most to least severe:
   across atespace boundaries.
 - **Snapshot integrity and confidentiality**: reading another actor's
   suspend/resume snapshot, or resuming an actor from a tampered snapshot.
-- **Routing and identity**: traffic intended for one actor delivered to
-  another, or forging session identity (for example session JWTs).
-- **Control-plane authentication bypass**: reaching `ateapi` RPCs without
-  valid credentials (mTLS or JWT auth modes), or misusing workerpool client
-  certificates.
-- **Actor-to-platform escalation**: an actor influencing `atelet`, `ateom`,
-  or the control plane beyond its own lifecycle.
+- **Routing**: traffic intended for one actor delivered to another.
+- **Identity**: forging session identity (for example session JWTs).
+- **Control-plane authentication and authorization bypass**: reaching
+  `ateapi` RPCs without valid credentials (mTLS or JWT auth modes),
+  misusing workerpool client certificates, or acting beyond what valid
+  credentials are authorized to do.
+- **Actor-to-platform escalation**: an actor compromising `atelet`, `ateom`,
+  or the control plane, whether while the actor is still actively running
+  or beyond its own lifecycle.
+- **Node lateral movement**: using a compromised worker node to reach other
+  nodes, atespaces, or the control plane.
 - **Network isolation bypass**: an actor sending or receiving traffic that
   `atenet` policy was meant to prevent.
+
+### Out of scope
+
+- The underlying Kubernetes cluster or cloud infrastructure.
+- The sandbox runtimes (gVisor, Kata Containers); report those to their
+  respective projects.
+- The demo applications under `demos/`; they are examples, not production
+  code.
+- Known limitations listed in [docs/roadmap.md](../docs/roadmap.md) and
+  [AGENTS.md](../AGENTS.md).
 
 ### What usually does not qualify
 
@@ -69,7 +97,7 @@ valuable, listed roughly from most to least severe:
   exploitable path through Agent Substrate (see
   [Dependencies](#dependencies)).
 - Sandbox escapes contained entirely within gVisor or Kata Containers;
-  report those upstream (see [Scope](#scope)).
+  report those upstream (see [Out of scope](#out-of-scope)).
 
 If you are unsure whether something qualifies, report it privately anyway.
 
@@ -94,8 +122,8 @@ published; we prefer to disclose as soon as a fix is available.
 
 ## Good-Faith Research
 
-We will not pursue legal action against research conducted in good faith and
-in line with this policy. Good faith means:
+We expect security research against Agent Substrate to be done in good
+faith, meaning:
 
 - Test only against clusters and deployments you own or are authorized to
   test.
@@ -120,27 +148,13 @@ bumping the dependency is enough.
 There are no stable releases yet. Security fixes are applied to `main` only;
 there are no release branches and no backports.
 
-## Scope
-
-In scope: the Agent Substrate control plane (`ateapi`), node supervisor
-(`atelet`, `ateom`), networking stack (`atenet`), and CLI (`kubectl-ate`).
-
-Out of scope:
-
-- The underlying Kubernetes cluster or cloud infrastructure.
-- The sandbox runtimes (gVisor, Kata Containers); report those to their
-  respective projects.
-- The demo applications under `demos/`; they are examples, not production
-  code.
-- Known limitations listed in [docs/roadmap.md](docs/roadmap.md) and
-  [AGENTS.md](AGENTS.md).
-
 ## Disclosure
 
 After a fix is merged, we publish a
 [GitHub Security Advisory](https://github.com/agent-substrate/substrate/security/advisories)
 describing the vulnerability and the fix, and request a CVE through GitHub
-when warranted. Timing is coordinated with the reporter.
+when warranted. We publish as soon as the fix is verified on `main`; there
+is no coordinated embargo or pre-disclosure period at this stage.
 
 Reporters are credited in the advisory unless they prefer to remain
 anonymous.
