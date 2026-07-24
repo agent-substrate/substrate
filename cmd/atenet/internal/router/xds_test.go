@@ -24,6 +24,7 @@ import (
 	clusterv3 "github.com/envoyproxy/go-control-plane/envoy/config/cluster/v3"
 	listenerv3 "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
 	routev3 "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
+	tlsv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/transport_sockets/tls/v3"
 	cachev3 "github.com/envoyproxy/go-control-plane/pkg/cache/v3"
 	resourcev3 "github.com/envoyproxy/go-control-plane/pkg/resource/v3"
 )
@@ -139,9 +140,11 @@ func TestXdsServer_UpdateSnapshot(t *testing.T) {
 }
 
 func TestXdsServer_UpdateSnapshot_WithHttps(t *testing.T) {
+	const certPath = "/run/servicedns.podcert.ate.dev/credential-bundle.pem"
+
 	server := NewXdsServer(18000)
 	server.SetConfig(8085, 50053, "127.0.0.1")
-	server.SetTlsConfig(8443, "")
+	server.SetTlsConfig(8443, certPath)
 
 	err := server.UpdateSnapshot()
 	if err != nil {
@@ -172,12 +175,105 @@ func TestXdsServer_UpdateSnapshot_WithHttps(t *testing.T) {
 			t.Errorf("Expected port 8443, got %d", sa.GetPortValue())
 		}
 
-		// Verify TLS config
+		// Verify the TLS config references the serving cert via SDS rather
+		// than embedding it: inline filename DataSources are read only once
+		// at listener creation, so rotations would never be picked up.
 		fc := l.GetFilterChains()[0]
 		ts := fc.GetTransportSocket()
 		if ts.GetName() != "envoy.transport_sockets.tls" {
 			t.Errorf("Expected transport socket 'envoy.transport_sockets.tls', got '%s'", ts.GetName())
 		}
+		dtc := &tlsv3.DownstreamTlsContext{}
+		if err := ts.GetTypedConfig().UnmarshalTo(dtc); err != nil {
+			t.Fatalf("Failed to unmarshal DownstreamTlsContext: %v", err)
+		}
+		if got := dtc.GetCommonTlsContext().GetTlsCertificates(); len(got) != 0 {
+			t.Errorf("Expected no inline TlsCertificates, got %d", len(got))
+		}
+		sds := dtc.GetCommonTlsContext().GetTlsCertificateSdsSecretConfigs()
+		if len(sds) != 1 {
+			t.Fatalf("Expected 1 SDS secret config, got %d", len(sds))
+		}
+		if sds[0].GetName() != HTTPSCertSecretName {
+			t.Errorf("Expected SDS secret name '%s', got '%s'", HTTPSCertSecretName, sds[0].GetName())
+		}
+		if sds[0].GetSdsConfig().GetAds() == nil {
+			t.Error("Expected SDS config to use the ADS config source")
+		}
+	}
+
+	// Verify the Secret resource carries the cert by filename with a watched
+	// directory, so Envoy re-reads the files when kubelet rotates the
+	// projected volume.
+	secretsMap := snap.GetResources(resourcev3.SecretType)
+	if len(secretsMap) != 1 {
+		t.Fatalf("Expected 1 secret definition, got %d", len(secretsMap))
+	}
+	raw, exists := secretsMap[HTTPSCertSecretName]
+	if !exists {
+		t.Fatalf("Secret '%s' is missing from snapshot secrets", HTTPSCertSecretName)
+	}
+	secret := raw.(*tlsv3.Secret)
+	tlsCert := secret.GetTlsCertificate()
+	if got := tlsCert.GetCertificateChain().GetFilename(); got != certPath {
+		t.Errorf("Expected certificate chain filename '%s', got '%s'", certPath, got)
+	}
+	if got := tlsCert.GetPrivateKey().GetFilename(); got != certPath {
+		t.Errorf("Expected private key filename '%s', got '%s'", certPath, got)
+	}
+	if got, want := tlsCert.GetWatchedDirectory().GetPath(), "/run/servicedns.podcert.ate.dev"; got != want {
+		t.Errorf("Expected watched directory '%s', got '%s'", want, got)
+	}
+}
+
+func TestXdsServer_UpdateSnapshot_HttpsWithoutCertPath(t *testing.T) {
+	server := NewXdsServer(18000)
+	server.SetConfig(8085, 50053, "127.0.0.1")
+	// This is the default flag combination: --port-https set, no
+	// --envoy-cert-path. An SDS secret with an empty filename would be
+	// NACKed by Envoy, so the HTTPS listener must be skipped entirely.
+	server.SetTlsConfig(8443, "")
+
+	if err := server.UpdateSnapshot(); err != nil {
+		t.Fatalf("UpdateSnapshot failed: %v", err)
+	}
+
+	res, err := server.snapshot.GetSnapshot(NodeID)
+	if err != nil {
+		t.Fatalf("Failed to get snapshot: %v", err)
+	}
+	snap, ok := res.(*cachev3.Snapshot)
+	if !ok {
+		t.Fatalf("Snapshot doesn't conform to type *cachev3.Snapshot, got %T", res)
+	}
+
+	listenersMap := snap.GetResources(resourcev3.ListenerType)
+	if _, exists := listenersMap[IngressHTTPSListener]; exists {
+		t.Error("HTTPS listener must not be built without a cert path")
+	}
+	if len(listenersMap) != 1 {
+		t.Errorf("Expected only the HTTP listener without a cert path, got %d listeners", len(listenersMap))
+	}
+	if got := snap.GetResources(resourcev3.SecretType); len(got) != 0 {
+		t.Errorf("Expected no secrets without a cert path, got %d", len(got))
+	}
+}
+
+func TestXdsServer_UpdateSnapshot_NoHttps_NoSecrets(t *testing.T) {
+	server := NewXdsServer(18000)
+	server.SetConfig(8085, 50053, "127.0.0.1")
+
+	if err := server.UpdateSnapshot(); err != nil {
+		t.Fatalf("UpdateSnapshot failed: %v", err)
+	}
+
+	res, err := server.snapshot.GetSnapshot(NodeID)
+	if err != nil {
+		t.Fatalf("Failed to get snapshot: %v", err)
+	}
+	snap := res.(*cachev3.Snapshot)
+	if got := snap.GetResources(resourcev3.SecretType); len(got) != 0 {
+		t.Errorf("Expected no secrets without TLS config, got %d", len(got))
 	}
 }
 
