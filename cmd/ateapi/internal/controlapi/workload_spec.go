@@ -128,9 +128,8 @@ func appendExternalVolumes(workloadSpec *ateletpb.WorkloadSpec, template *atev1a
 
 			var storageVolID string
 			var volType string
-			expectedID := actorVolumeID(&ateapipb.ObjectRef{Atespace: actor.GetMetadata().GetAtespace(), Name: actor.GetMetadata().GetName()}, vol.Name)
 			for _, dbVol := range actor.GetActorVolumes() {
-				if dbVol.GetActorVolumeId() == expectedID {
+				if dbVol.GetVolumeName() == vol.Name {
 					storageVolID = dbVol.GetStorageVolumeId()
 					volType = dbVol.GetVolumeType()
 					break

@@ -115,19 +115,24 @@ message ResourceMetadata {
 }
 
 message ExternalVolume {
-  // actor_id + the volume name specified in the actor template.
-  string actor_volume_id = 1;
+  // Name of the volume specified in the actor template.
+  string volume_name = 1;
 
-  // The volume_id returned from the storage system.
+  // The globally unique volume_id returned from the storage system.
+  // This will be initially empty during volume creation
   string storage_volume_id = 2;
 
   // Internal volume plugin name or CSI driver name.
   string volume_type = 3;
 
   enum Status {
-    PROVISIONING = 0;
-    CREATED = 1;
-    DELETING = 2;
+    STATUS_UNKNOWN = 0;
+    // Volume being created in the storage system.
+    CREATING = 1;
+    // Volume successfully created in the storage system.
+    CREATED = 2;
+    // Volume being deleted from the storage system.
+    DELETING = 3;
   }
   Status status = 4;
 }
@@ -148,6 +153,7 @@ message Actor {
     STATUS_PAUSING = 5;
     STATUS_PAUSED = 6;
     STATUS_CRASHED = 7;
+    STATUS_DELETING = 8;
   }
   Status status = 4;
 
@@ -175,7 +181,7 @@ message Actor {
 
   // Volumes attached to the actor. These volumes only live as long as the actor.
   // They are deleted when the actor is deleted.
-  repeated ExternalVolume actor_volumes = 16;
+  repeated ExternalVolume actor_volumes = 13;
 }
 
 // Atespace is the isolation boundary an Actor is created into. Global-scoped:

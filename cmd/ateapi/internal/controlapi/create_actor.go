@@ -59,15 +59,9 @@ func (s *Service) CreateActor(ctx context.Context, req *ateapipb.CreateActorRequ
 		return nil, status.Errorf(codes.FailedPrecondition, "Atespace %s not found", atespace)
 	}
 
-	actorRef := &ateapipb.ObjectRef{
-		Atespace: atespace,
-		Name:     name,
-	}
-
-	volumes, err := s.createActorVolumes(ctx, actorRef, template)
-	if err != nil {
-		return nil, err
-	}
+	// Assuming CreateActor() will not become idempotent so we won't override volume state
+	// if the actor already exists.
+	initVols := initialActorVolumes(template)
 
 	actor := &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{
@@ -78,12 +72,10 @@ func (s *Service) CreateActor(ctx context.Context, req *ateapipb.CreateActorRequ
 		ActorTemplateNamespace: templateNamespace,
 		ActorTemplateName:      templateName,
 		WorkerSelector:         in.GetWorkerSelector(),
-		ActorVolumes:           volumes,
+		ActorVolumes:           initVols,
 	}
 	stored, err := s.persistence.CreateActor(ctx, actor)
 	if err != nil {
-		// Cleanup created volumes if DB write fails
-		_ = s.deleteActorVolumes(ctx, actorRef, volumes)
 		if errors.Is(err, store.ErrAlreadyExists) {
 			return nil, status.Errorf(codes.AlreadyExists, "Actor %s already exists", name)
 		}

@@ -124,6 +124,54 @@ func (s *LoadActorForResumeStep) Execute(ctx context.Context, input *ResumeInput
 
 func (s *LoadActorForResumeStep) RetryBackoff() *wait.Backoff { return nil }
 
+// CreateVolumesStep provisions any initial actor volumes that are in CREATING state.
+type CreateVolumesStep struct {
+	store store.Interface
+}
+
+func (s *CreateVolumesStep) Name() string { return "CreateVolumes" }
+
+func (s *CreateVolumesStep) IsComplete(ctx context.Context, input *ResumeInput, state *ResumeState) (bool, error) {
+	for _, vol := range state.Actor.GetActorVolumes() {
+		if vol.GetStatus() == ateapipb.ExternalVolume_CREATING {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func (s *CreateVolumesStep) CheckPrerequisite(ctx context.Context, input *ResumeInput, state *ResumeState) error {
+	if state.Actor == nil {
+		return fmt.Errorf("actor is required for CreateVolumesStep")
+	}
+	if state.ActorTemplate == nil {
+		return fmt.Errorf("actorTemplate is required for CreateVolumesStep")
+	}
+	return nil
+}
+
+func (s *CreateVolumesStep) Execute(ctx context.Context, input *ResumeInput, state *ResumeState) error {
+	volumes, err := createActorVolumes(ctx, state.Actor.GetMetadata().GetUid(), state.ActorTemplate, state.Actor.GetActorVolumes())
+	state.Actor.ActorVolumes = volumes
+	if err != nil {
+		// Even if volume creation failed, we still want to persist any updated volume state.
+		if updated, updateErr := s.store.UpdateActor(ctx, state.Actor, state.Actor.GetMetadata().GetVersion()); updateErr != nil {
+			slog.ErrorContext(ctx, "failed to update actor volumes on volume creation failure in resume", slog.Any("error", updateErr))
+		} else {
+			state.Actor = updated
+		}
+		return err
+	}
+	updated, updateErr := s.store.UpdateActor(ctx, state.Actor, state.Actor.GetMetadata().GetVersion())
+	if updateErr != nil {
+		return fmt.Errorf("while updating actor after volume creation: %w", updateErr)
+	}
+	state.Actor = updated
+	return nil
+}
+
+func (s *CreateVolumesStep) RetryBackoff() *wait.Backoff { return nil }
+
 type AssignWorkerStep struct {
 	store       store.Interface
 	workerCache *workercache.Cache

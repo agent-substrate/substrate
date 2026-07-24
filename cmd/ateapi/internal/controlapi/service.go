@@ -51,6 +51,5 @@ func NewService(
 		dialer:              dialer,
 		actorWorkflow:       NewActorWorkflow(persistence, workerCache, dialer, actorTemplateLister, workerPoolLister, sandboxConfigLister, kubeClient),
 	}
-
 	return s
 }

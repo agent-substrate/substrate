@@ -32,6 +32,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/envtestbins"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
+	"github.com/agent-substrate/substrate/internal/volume"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/client/clientset/versioned"
 	"github.com/agent-substrate/substrate/pkg/client/informers/externalversions"
@@ -51,6 +52,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -433,6 +435,21 @@ func createAtespace(t *testing.T, tc *testContext, name string) {
 const poolLabelKey = "pool"
 
 func createTemplateWithContainers(t *testing.T, tc *testContext, ns string, containers []atev1alpha1.Container) {
+	createTemplateWithContainersAndVolumes(t, tc, ns, containers, nil)
+}
+
+func createTemplateWithVolumes(t *testing.T, tc *testContext, ns string, volumes []atev1alpha1.Volume, mounts []atev1alpha1.VolumeMount) {
+	createTemplateWithContainersAndVolumes(t, tc, ns, []atev1alpha1.Container{
+		{
+			Name:         "main",
+			Image:        "main@sha256:abc",
+			Command:      []string{"/main"},
+			VolumeMounts: mounts,
+		},
+	}, volumes)
+}
+
+func createTemplateWithContainersAndVolumes(t *testing.T, tc *testContext, ns string, containers []atev1alpha1.Container, volumes []atev1alpha1.Volume) {
 	t.Helper()
 
 	// Sandbox binaries now live on a (cluster-scoped) SandboxConfig resolved via
@@ -452,6 +469,7 @@ func createTemplateWithContainers(t *testing.T, tc *testContext, ns string, cont
 				Location: "gs://fake-fake-fake",
 			},
 			Containers: containers,
+			Volumes:    volumes,
 			WorkerSelector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{poolLabelKey: ns},
 			},
@@ -761,6 +779,484 @@ func TestCreateActor_Success(t *testing.T) {
 
 	if diff := cmp.Diff(want, createResp, protocmp.Transform(), ignoreUID, ignoreTimestamps); diff != "" {
 		t.Errorf("CreateActor response mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestCreateActor_WithExternalVolumes(t *testing.T) {
+	ns := namespaceForTest("ns-create-ext-vols")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	volumes := []atev1alpha1.Volume{
+		{
+			Name: "ext-vol-1",
+			VolumeSource: atev1alpha1.VolumeSource{
+				ExternalVolumeTemplate: &atev1alpha1.ExternalVolumeTemplate{
+					StorageClassName: "standard",
+					Capacity:         resource.MustParse("10Gi"),
+				},
+			},
+		},
+	}
+	mounts := []atev1alpha1.VolumeMount{
+		{
+			Name:      "ext-vol-1",
+			MountPath: "/data",
+		},
+	}
+	createTemplateWithVolumes(t, tc, ns, volumes, mounts)
+
+	createResp, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{
+		Actor: &ateapipb.Actor{
+			Metadata:               &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "vol-actor-1"},
+			ActorTemplateNamespace: ns,
+			ActorTemplateName:      "tmpl1",
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateActor failed: %v", err)
+	}
+
+	if len(createResp.GetActorVolumes()) != 1 {
+		t.Fatalf("expected 1 volume in CreateActor response, got %d", len(createResp.GetActorVolumes()))
+	}
+	vol := createResp.GetActorVolumes()[0]
+	if vol.GetVolumeName() != "ext-vol-1" {
+		t.Errorf("volume name = %q, want %q", vol.GetVolumeName(), "ext-vol-1")
+	}
+	if vol.GetStatus() != ateapipb.ExternalVolume_CREATING {
+		t.Errorf("volume status = %v, want %v", vol.GetStatus(), ateapipb.ExternalVolume_CREATING)
+	}
+	if vol.GetStorageVolumeId() != "" {
+		t.Errorf("expected empty storageVolumeId before resume, got %q", vol.GetStorageVolumeId())
+	}
+
+	// Verify GetActor returns the same external volume state
+	getResp, err := tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "vol-actor-1"},
+	})
+	if err != nil {
+		t.Fatalf("GetActor failed: %v", err)
+	}
+	if len(getResp.GetActorVolumes()) != 1 {
+		t.Fatalf("expected 1 volume in GetActor response, got %d", len(getResp.GetActorVolumes()))
+	}
+	if getResp.GetActorVolumes()[0].GetStatus() != ateapipb.ExternalVolume_CREATING {
+		t.Errorf("GetActor status = %v, want %v", getResp.GetActorVolumes()[0].GetStatus(), ateapipb.ExternalVolume_CREATING)
+	}
+}
+
+func TestActorLifecycle_WithExternalVolumes(t *testing.T) {
+	ns := namespaceForTest("ns-lifecycle-ext-vols")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	volumes := []atev1alpha1.Volume{
+		{
+			Name: "data-vol",
+			VolumeSource: atev1alpha1.VolumeSource{
+				ExternalVolumeTemplate: &atev1alpha1.ExternalVolumeTemplate{
+					StorageClassName: "fast",
+					Capacity:         resource.MustParse("20Gi"),
+				},
+			},
+		},
+	}
+	mounts := []atev1alpha1.VolumeMount{
+		{
+			Name:      "data-vol",
+			MountPath: "/mnt/data",
+		},
+	}
+	createTemplateWithVolumes(t, tc, ns, volumes, mounts)
+	createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+
+	// 1. CreateActor
+	createResp, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{
+		Actor: &ateapipb.Actor{
+			Metadata:               &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "actor-vol-lc"},
+			ActorTemplateNamespace: ns,
+			ActorTemplateName:      "tmpl1",
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateActor failed: %v", err)
+	}
+	if createResp.GetStatus() != ateapipb.Actor_STATUS_SUSPENDED {
+		t.Fatalf("expected initial status STATUS_SUSPENDED, got %v", createResp.GetStatus())
+	}
+	if len(createResp.GetActorVolumes()) != 1 || createResp.GetActorVolumes()[0].GetStatus() != ateapipb.ExternalVolume_CREATING {
+		t.Fatalf("expected 1 creating volume after CreateActor, got %v", createResp.GetActorVolumes())
+	}
+
+	// 2. ResumeActor
+	resumeResp, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "actor-vol-lc"},
+	})
+	if err != nil {
+		t.Fatalf("ResumeActor failed: %v", err)
+	}
+	if resumeResp.GetActor().GetStatus() != ateapipb.Actor_STATUS_RUNNING {
+		t.Fatalf("expected status STATUS_RUNNING after resume, got %v", resumeResp.GetActor().GetStatus())
+	}
+	if len(resumeResp.GetActor().GetActorVolumes()) != 1 || resumeResp.GetActor().GetActorVolumes()[0].GetStatus() != ateapipb.ExternalVolume_CREATED {
+		t.Fatalf("expected 1 created volume after ResumeActor, got %v", resumeResp.GetActor().GetActorVolumes())
+	}
+	if resumeResp.GetActor().GetActorVolumes()[0].GetStorageVolumeId() == "" {
+		t.Fatalf("expected non-empty storageVolumeId after ResumeActor")
+	}
+
+	// 3. PauseActor
+	pauseResp, err := tc.client.PauseActor(context.Background(), &ateapipb.PauseActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "actor-vol-lc"},
+	})
+	if err != nil {
+		t.Fatalf("PauseActor failed: %v", err)
+	}
+	if pauseResp.GetActor().GetStatus() != ateapipb.Actor_STATUS_PAUSED {
+		t.Fatalf("expected status STATUS_PAUSED after pause, got %v", pauseResp.GetActor().GetStatus())
+	}
+
+	// 4. ResumeActor from paused
+	resumeResp2, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "actor-vol-lc"},
+	})
+	if err != nil {
+		t.Fatalf("ResumeActor from paused failed: %v", err)
+	}
+	if resumeResp2.GetActor().GetStatus() != ateapipb.Actor_STATUS_RUNNING {
+		t.Fatalf("expected status STATUS_RUNNING after second resume, got %v", resumeResp2.GetActor().GetStatus())
+	}
+
+	// 5. SuspendActor
+	suspendResp, err := tc.client.SuspendActor(context.Background(), &ateapipb.SuspendActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "actor-vol-lc"},
+	})
+	if err != nil {
+		t.Fatalf("SuspendActor failed: %v", err)
+	}
+	if suspendResp.GetActor().GetStatus() != ateapipb.Actor_STATUS_SUSPENDED {
+		t.Fatalf("expected status STATUS_SUSPENDED after suspend, got %v", suspendResp.GetActor().GetStatus())
+	}
+
+	// 6. DeleteActor
+	deleteResp, err := tc.client.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "actor-vol-lc"},
+	})
+	if err != nil {
+		t.Fatalf("DeleteActor failed: %v", err)
+	}
+	if deleteResp.GetMetadata().GetName() != "actor-vol-lc" {
+		t.Errorf("deleted actor name = %q, want %q", deleteResp.GetMetadata().GetName(), "actor-vol-lc")
+	}
+
+	// Confirm GetActor returns NotFound after deletion
+	_, err = tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "actor-vol-lc"},
+	})
+	if status.Code(err) != codes.NotFound {
+		t.Errorf("GetActor after delete err = %v, want NotFound", err)
+	}
+}
+
+type partialFailVolumePlugin struct {
+	volume.VolumePluginControlPlane
+	deleted []string
+}
+
+func (f *partialFailVolumePlugin) CreateVolume(ctx context.Context, name, capacity, storageClass string) (string, error) {
+	if strings.HasSuffix(name, "fail-vol2") {
+		return "", fmt.Errorf("simulated volume creation failure")
+	}
+	return "storage-" + name, nil
+}
+
+func (f *partialFailVolumePlugin) AttachVolume(ctx context.Context, volumeID, node string) error {
+	return nil
+}
+
+func (f *partialFailVolumePlugin) DetachVolume(ctx context.Context, volumeID, node string) error {
+	return nil
+}
+
+func (f *partialFailVolumePlugin) DeleteVolume(ctx context.Context, volumeID string) error {
+	f.deleted = append(f.deleted, volumeID)
+	return nil
+}
+
+// TestResumeActor_VolumeCreationFailure tests that when volume provisioning fails during ResumeActor,
+// successfully created volumes are saved, the actor remains in STATUS_SUSPENDED,
+// and that calling DeleteActor on the suspended actor cleans up all partially created volumes.
+func TestResumeActor_VolumeCreationFailure(t *testing.T) {
+	ns := namespaceForTest("ns-resume-vol-fail")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	volumes := []atev1alpha1.Volume{
+		{
+			Name: "succ-vol1",
+			VolumeSource: atev1alpha1.VolumeSource{
+				ExternalVolumeTemplate: &atev1alpha1.ExternalVolumeTemplate{
+					StorageClassName: "standard",
+					Capacity:         resource.MustParse("10Gi"),
+				},
+			},
+		},
+		{
+			Name: "fail-vol2",
+			VolumeSource: atev1alpha1.VolumeSource{
+				ExternalVolumeTemplate: &atev1alpha1.ExternalVolumeTemplate{
+					StorageClassName: "standard",
+					Capacity:         resource.MustParse("10Gi"),
+				},
+			},
+		},
+	}
+	mounts := []atev1alpha1.VolumeMount{
+		{Name: "succ-vol1", MountPath: "/mnt/vol1"},
+		{Name: "fail-vol2", MountPath: "/mnt/vol2"},
+	}
+	createTemplateWithVolumes(t, tc, ns, volumes, mounts)
+
+	// Inject a custom partial-failing VolumePlugin into global scope
+	// TODO this doesn't support parallelism of test cases
+	plugin := &partialFailVolumePlugin{}
+	oldGlobalPlugin := globalVolumePlugin
+	globalVolumePlugin = plugin
+	defer func() {
+		globalVolumePlugin = oldGlobalPlugin
+	}()
+
+	// Call CreateActor RPC directly
+	_, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{
+		Actor: &ateapipb.Actor{
+			Metadata:               &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "fail-actor"},
+			ActorTemplateNamespace: ns,
+			ActorTemplateName:      "tmpl1",
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected CreateActor to succeed, got: %v", err)
+	}
+
+	// Call ResumeActor RPC, which should trigger volume provisioning and fail on fail-vol2
+	_, err = tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "fail-actor"},
+	})
+	if err == nil {
+		t.Fatalf("expected ResumeActor to fail due to volume creation error, but it succeeded")
+	}
+
+	// Verify GetActor returns the actor in STATUS_SUSPENDED status
+	getResp, err := tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "fail-actor"},
+	})
+	if err != nil {
+		t.Fatalf("GetActor failed: %v", err)
+	}
+	if getResp.GetStatus() != ateapipb.Actor_STATUS_SUSPENDED {
+		t.Errorf("actor status = %v, want %v", getResp.GetStatus(), ateapipb.Actor_STATUS_SUSPENDED)
+	}
+
+	actorUID := getResp.GetMetadata().GetUid()
+	if actorUID == "" {
+		t.Fatalf("expected non-empty UID on actor")
+	}
+
+	// Verify that succ-vol1 was updated to CREATED with a storageVolumeId, and fail-vol2 is still CREATING
+	if len(getResp.GetActorVolumes()) != 2 {
+		t.Fatalf("expected 2 volumes on actor, got %d", len(getResp.GetActorVolumes()))
+	}
+	volsByName := make(map[string]*ateapipb.ExternalVolume)
+	for _, v := range getResp.GetActorVolumes() {
+		volsByName[v.GetVolumeName()] = v
+	}
+	if v1, ok := volsByName["succ-vol1"]; !ok || v1.GetStatus() != ateapipb.ExternalVolume_CREATED || v1.GetStorageVolumeId() == "" {
+		t.Errorf("succ-vol1 unexpected state: %v", v1)
+	}
+	if v2, ok := volsByName["fail-vol2"]; !ok || v2.GetStatus() != ateapipb.ExternalVolume_CREATING {
+		t.Errorf("fail-vol2 unexpected state: %v", v2)
+	}
+
+	// Call DeleteActor on the actor in STATUS_SUSPENDED
+	_, err = tc.client.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "fail-actor"},
+	})
+	if err != nil {
+		t.Fatalf("DeleteActor failed: %v", err)
+	}
+
+	// Verify both volumes were deleted (succ-vol1 via storageID, fail-vol2 via fallback actorVolumeID)
+	wantDeleted := []string{
+		"storage-substrate-" + actorUID + "-succ-vol1",
+		"substrate-" + actorUID + "-fail-vol2",
+	}
+	if diff := cmp.Diff(wantDeleted, plugin.deleted); diff != "" {
+		t.Errorf("deleted volume IDs mismatch (-want +got):\n%s", diff)
+	}
+
+	// Confirm GetActor returns NotFound after deletion
+	_, err = tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "fail-actor"},
+	})
+	if status.Code(err) != codes.NotFound {
+		t.Errorf("GetActor after DeleteActor err = %v, want NotFound", err)
+	}
+}
+
+type retrySuccessVolumePlugin struct {
+	volume.VolumePluginControlPlane
+	mu       sync.Mutex
+	attempts int
+	deleted  []string
+}
+
+func (r *retrySuccessVolumePlugin) CreateVolume(ctx context.Context, name, capacity, storageClass string) (string, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if strings.HasSuffix(name, "retry-vol2") {
+		r.attempts++
+		if r.attempts == 1 {
+			return "", fmt.Errorf("simulated temporary volume creation failure")
+		}
+	}
+	return "storage-" + name, nil
+}
+
+func (r *retrySuccessVolumePlugin) AttachVolume(ctx context.Context, volumeID, node string) error {
+	return nil
+}
+
+func (r *retrySuccessVolumePlugin) DetachVolume(ctx context.Context, volumeID, node string) error {
+	return nil
+}
+
+func (r *retrySuccessVolumePlugin) DeleteVolume(ctx context.Context, volumeID string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.deleted = append(r.deleted, volumeID)
+	return nil
+}
+
+// TestResumeActor_VolumeCreationRetrySuccess tests that when volume provisioning fails on the first ResumeActor call,
+// a subsequent call to ResumeActor retries provisioning only the pending volumes and succeeds.
+func TestResumeActor_VolumeCreationRetrySuccess(t *testing.T) {
+	ns := namespaceForTest("ns-resume-vol-retry")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	volumes := []atev1alpha1.Volume{
+		{
+			Name: "succ-vol1",
+			VolumeSource: atev1alpha1.VolumeSource{
+				ExternalVolumeTemplate: &atev1alpha1.ExternalVolumeTemplate{
+					StorageClassName: "standard",
+					Capacity:         resource.MustParse("10Gi"),
+				},
+			},
+		},
+		{
+			Name: "retry-vol2",
+			VolumeSource: atev1alpha1.VolumeSource{
+				ExternalVolumeTemplate: &atev1alpha1.ExternalVolumeTemplate{
+					StorageClassName: "standard",
+					Capacity:         resource.MustParse("10Gi"),
+				},
+			},
+		},
+	}
+	retryMounts := []atev1alpha1.VolumeMount{
+		{Name: "succ-vol1", MountPath: "/mnt/vol1"},
+		{Name: "retry-vol2", MountPath: "/mnt/vol2"},
+	}
+	createTemplateWithVolumes(t, tc, ns, volumes, retryMounts)
+	createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+
+	plugin := &retrySuccessVolumePlugin{}
+	oldGlobalPlugin := globalVolumePlugin
+	globalVolumePlugin = plugin
+	defer func() {
+		globalVolumePlugin = oldGlobalPlugin
+	}()
+
+	// Call CreateActor RPC directly
+	_, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{
+		Actor: &ateapipb.Actor{
+			Metadata:               &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "retry-actor"},
+			ActorTemplateNamespace: ns,
+			ActorTemplateName:      "tmpl1",
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected CreateActor to succeed, got: %v", err)
+	}
+
+	// First call to ResumeActor RPC, which should fail on retry-vol2 (attempt 1)
+	_, err = tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "retry-actor"},
+	})
+	if err == nil {
+		t.Fatalf("expected first ResumeActor to fail due to temporary volume creation error, but it succeeded")
+	}
+
+	// Verify GetActor returns the actor in STATUS_SUSPENDED status with succ-vol1 created and retry-vol2 creating
+	getResp, err := tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "retry-actor"},
+	})
+	if err != nil {
+		t.Fatalf("GetActor after first resume failed: %v", err)
+	}
+	if getResp.GetStatus() != ateapipb.Actor_STATUS_SUSPENDED {
+		t.Errorf("actor status after first resume = %v, want %v", getResp.GetStatus(), ateapipb.Actor_STATUS_SUSPENDED)
+	}
+
+	volsByName := make(map[string]*ateapipb.ExternalVolume)
+	for _, v := range getResp.GetActorVolumes() {
+		volsByName[v.GetVolumeName()] = v
+	}
+	if v1, ok := volsByName["succ-vol1"]; !ok || v1.GetStatus() != ateapipb.ExternalVolume_CREATED || v1.GetStorageVolumeId() == "" {
+		t.Errorf("succ-vol1 unexpected state after first resume: %v", v1)
+	}
+	if v2, ok := volsByName["retry-vol2"]; !ok || v2.GetStatus() != ateapipb.ExternalVolume_CREATING {
+		t.Errorf("retry-vol2 unexpected state after first resume: %v", v2)
+	}
+
+	// Second call to ResumeActor RPC, which should succeed on retry-vol2 (attempt 2)
+	_, err = tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "retry-actor"},
+	})
+	if err != nil {
+		t.Fatalf("expected second ResumeActor to succeed, got: %v", err)
+	}
+
+	// Verify GetActor returns the actor in STATUS_RUNNING status with both volumes CREATED
+	getResp, err = tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "retry-actor"},
+	})
+	if err != nil {
+		t.Fatalf("GetActor after second resume failed: %v", err)
+	}
+	if getResp.GetStatus() != ateapipb.Actor_STATUS_RUNNING {
+		t.Errorf("actor status after second resume = %v, want %v", getResp.GetStatus(), ateapipb.Actor_STATUS_RUNNING)
+	}
+	for _, v := range getResp.GetActorVolumes() {
+		if v.GetStatus() != ateapipb.ExternalVolume_CREATED || v.GetStorageVolumeId() == "" {
+			t.Errorf("volume %s unexpected state after second resume: %v", v.GetVolumeName(), v)
+		}
+	}
+
+	// Clean up by suspending and deleting the actor
+	_, err = tc.client.SuspendActor(context.Background(), &ateapipb.SuspendActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "retry-actor"},
+	})
+	if err != nil {
+		t.Fatalf("SuspendActor failed: %v", err)
+	}
+	_, err = tc.client.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "retry-actor"},
+	})
+	if err != nil {
+		t.Fatalf("DeleteActor failed: %v", err)
 	}
 }
 
@@ -2328,7 +2824,7 @@ func TestDeleteActor_NotSuspended(t *testing.T) {
 	_, err = tc.client.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "id1"},
 	})
-	assertGrpcError(t, err, codes.FailedPrecondition, "Actor test-atespace/id1 is not suspended (status: STATUS_RUNNING)")
+	assertGrpcError(t, err, codes.FailedPrecondition, "Actor test-atespace/id1 is not in a deletable status (status: STATUS_RUNNING)")
 }
 
 func TestDeleteActor_Crashed(t *testing.T) {
@@ -2362,8 +2858,8 @@ func TestDeleteActor_Crashed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DeleteActor of crashed actor failed: %v", err)
 	}
-	if got := deleted.GetStatus(); got != ateapipb.Actor_STATUS_CRASHED {
-		t.Errorf("deleted actor status = %v, want %v", got, ateapipb.Actor_STATUS_CRASHED)
+	if got := deleted.GetStatus(); got != ateapipb.Actor_STATUS_DELETING {
+		t.Errorf("deleted actor status = %v, want %v", got, ateapipb.Actor_STATUS_DELETING)
 	}
 
 	_, err = tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{

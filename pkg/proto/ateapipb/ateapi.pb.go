@@ -41,22 +41,28 @@ const (
 type ExternalVolume_Status int32
 
 const (
-	ExternalVolume_PROVISIONING ExternalVolume_Status = 0
-	ExternalVolume_CREATED      ExternalVolume_Status = 1
-	ExternalVolume_DELETING     ExternalVolume_Status = 2
+	ExternalVolume_STATUS_UNKNOWN ExternalVolume_Status = 0
+	// Volume being created in the storage system.
+	ExternalVolume_CREATING ExternalVolume_Status = 1
+	// Volume successfully created in the storage system.
+	ExternalVolume_CREATED ExternalVolume_Status = 2
+	// Volume being deleted from the storage system.
+	ExternalVolume_DELETING ExternalVolume_Status = 3
 )
 
 // Enum value maps for ExternalVolume_Status.
 var (
 	ExternalVolume_Status_name = map[int32]string{
-		0: "PROVISIONING",
-		1: "CREATED",
-		2: "DELETING",
+		0: "STATUS_UNKNOWN",
+		1: "CREATING",
+		2: "CREATED",
+		3: "DELETING",
 	}
 	ExternalVolume_Status_value = map[string]int32{
-		"PROVISIONING": 0,
-		"CREATED":      1,
-		"DELETING":     2,
+		"STATUS_UNKNOWN": 0,
+		"CREATING":       1,
+		"CREATED":        2,
+		"DELETING":       3,
 	}
 )
 
@@ -98,6 +104,7 @@ const (
 	Actor_STATUS_PAUSING     Actor_Status = 5
 	Actor_STATUS_PAUSED      Actor_Status = 6
 	Actor_STATUS_CRASHED     Actor_Status = 7
+	Actor_STATUS_DELETING    Actor_Status = 8
 )
 
 // Enum value maps for Actor_Status.
@@ -111,6 +118,7 @@ var (
 		5: "STATUS_PAUSING",
 		6: "STATUS_PAUSED",
 		7: "STATUS_CRASHED",
+		8: "STATUS_DELETING",
 	}
 	Actor_Status_value = map[string]int32{
 		"STATUS_UNSPECIFIED": 0,
@@ -121,6 +129,7 @@ var (
 		"STATUS_PAUSING":     5,
 		"STATUS_PAUSED":      6,
 		"STATUS_CRASHED":     7,
+		"STATUS_DELETING":    8,
 	}
 )
 
@@ -521,9 +530,10 @@ func (x *ResourceMetadata) GetUpdateTime() *timestamppb.Timestamp {
 
 type ExternalVolume struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// actor_id + the volume name specified in the actor template.
-	ActorVolumeId string `protobuf:"bytes,1,opt,name=actor_volume_id,json=actorVolumeId,proto3" json:"actor_volume_id,omitempty"`
-	// The volume_id returned from the storage system.
+	// Name of the volume specified in the actor template.
+	VolumeName string `protobuf:"bytes,1,opt,name=volume_name,json=volumeName,proto3" json:"volume_name,omitempty"`
+	// The globally unique volume_id returned from the storage system.
+	// This will be initially empty during volume creation
 	StorageVolumeId string `protobuf:"bytes,2,opt,name=storage_volume_id,json=storageVolumeId,proto3" json:"storage_volume_id,omitempty"`
 	// Internal volume plugin name or CSI driver name.
 	VolumeType    string                `protobuf:"bytes,3,opt,name=volume_type,json=volumeType,proto3" json:"volume_type,omitempty"`
@@ -562,9 +572,9 @@ func (*ExternalVolume) Descriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{5}
 }
 
-func (x *ExternalVolume) GetActorVolumeId() string {
+func (x *ExternalVolume) GetVolumeName() string {
 	if x != nil {
-		return x.ActorVolumeId
+		return x.VolumeName
 	}
 	return ""
 }
@@ -587,7 +597,7 @@ func (x *ExternalVolume) GetStatus() ExternalVolume_Status {
 	if x != nil {
 		return x.Status
 	}
-	return ExternalVolume_PROVISIONING
+	return ExternalVolume_STATUS_UNKNOWN
 }
 
 type Actor struct {
@@ -617,7 +627,7 @@ type Actor struct {
 	WorkerPoolName string `protobuf:"bytes,12,opt,name=worker_pool_name,json=workerPoolName,proto3" json:"worker_pool_name,omitempty"`
 	// Volumes attached to the actor. These volumes only live as long as the actor.
 	// They are deleted when the actor is deleted.
-	ActorVolumes  []*ExternalVolume `protobuf:"bytes,16,rep,name=actor_volumes,json=actorVolumes,proto3" json:"actor_volumes,omitempty"`
+	ActorVolumes  []*ExternalVolume `protobuf:"bytes,13,rep,name=actor_volumes,json=actorVolumes,proto3" json:"actor_volumes,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2408,17 +2418,19 @@ const file_ateapi_proto_rawDesc = "" +
 	"\vcreate_time\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"createTime\x12;\n" +
 	"\vupdate_time\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
-	"updateTime\"\xf3\x01\n" +
-	"\x0eExternalVolume\x12&\n" +
-	"\x0factor_volume_id\x18\x01 \x01(\tR\ractorVolumeId\x12*\n" +
+	"updateTime\"\xfc\x01\n" +
+	"\x0eExternalVolume\x12\x1f\n" +
+	"\vvolume_name\x18\x01 \x01(\tR\n" +
+	"volumeName\x12*\n" +
 	"\x11storage_volume_id\x18\x02 \x01(\tR\x0fstorageVolumeId\x12\x1f\n" +
 	"\vvolume_type\x18\x03 \x01(\tR\n" +
 	"volumeType\x125\n" +
-	"\x06status\x18\x04 \x01(\x0e2\x1d.ateapi.ExternalVolume.StatusR\x06status\"5\n" +
-	"\x06Status\x12\x10\n" +
-	"\fPROVISIONING\x10\x00\x12\v\n" +
-	"\aCREATED\x10\x01\x12\f\n" +
-	"\bDELETING\x10\x02\"\xc1\x06\n" +
+	"\x06status\x18\x04 \x01(\x0e2\x1d.ateapi.ExternalVolume.StatusR\x06status\"E\n" +
+	"\x06Status\x12\x12\n" +
+	"\x0eSTATUS_UNKNOWN\x10\x00\x12\f\n" +
+	"\bCREATING\x10\x01\x12\v\n" +
+	"\aCREATED\x10\x02\x12\f\n" +
+	"\bDELETING\x10\x03\"\xd6\x06\n" +
 	"\x05Actor\x124\n" +
 	"\bmetadata\x18\x01 \x01(\v2\x18.ateapi.ResourceMetadataR\bmetadata\x128\n" +
 	"\x18actor_template_namespace\x18\x02 \x01(\tR\x16actorTemplateNamespace\x12.\n" +
@@ -2434,7 +2446,7 @@ const file_ateapi_proto_rawDesc = "" +
 	" \x01(\v2\x14.ateapi.SnapshotInfoR\x12latestSnapshotInfo\x129\n" +
 	"\x0fworker_selector\x18\v \x01(\v2\x10.ateapi.SelectorR\x0eworkerSelector\x12(\n" +
 	"\x10worker_pool_name\x18\f \x01(\tR\x0eworkerPoolName\x12;\n" +
-	"\ractor_volumes\x18\x10 \x03(\v2\x16.ateapi.ExternalVolumeR\factorVolumes\"\xb1\x01\n" +
+	"\ractor_volumes\x18\r \x03(\v2\x16.ateapi.ExternalVolumeR\factorVolumes\"\xc6\x01\n" +
 	"\x06Status\x12\x16\n" +
 	"\x12STATUS_UNSPECIFIED\x10\x00\x12\x13\n" +
 	"\x0fSTATUS_RESUMING\x10\x01\x12\x12\n" +
@@ -2443,7 +2455,8 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x10STATUS_SUSPENDED\x10\x04\x12\x12\n" +
 	"\x0eSTATUS_PAUSING\x10\x05\x12\x11\n" +
 	"\rSTATUS_PAUSED\x10\x06\x12\x12\n" +
-	"\x0eSTATUS_CRASHED\x10\a\"@\n" +
+	"\x0eSTATUS_CRASHED\x10\a\x12\x13\n" +
+	"\x0fSTATUS_DELETING\x10\b\"@\n" +
 	"\bAtespace\x124\n" +
 	"\bmetadata\x18\x01 \x01(\v2\x18.ateapi.ResourceMetadataR\bmetadata\";\n" +
 	"\tObjectRef\x12\x1a\n" +
