@@ -48,6 +48,12 @@ type RouterHealthReport struct {
 	AteAPI ComponentHealth `json:"ate_api"`
 }
 
+type componentHealthCheckResult struct {
+	healthy   bool
+	message   string
+	checkedAt time.Time
+}
+
 // routerHealth periodically checks the dependent services of router to track health
 // status of this component.
 type routerHealth struct {
@@ -95,31 +101,50 @@ func (rh *routerHealth) Start(ctx context.Context) {
 func (rh *routerHealth) check(ctx context.Context) {
 	slog.InfoContext(ctx, "Checking health")
 
-	// Run network checks without holding the report mutex, so status requests
-	// can continue serving the last completed report while a dependency is slow.
-	envoyHealthy, envoyMsg := rh.checkEnvoy(ctx)
-	envoyCheckedAt := time.Now()
-	if !envoyHealthy {
-		slog.ErrorContext(ctx, "Envoy health check failed", slog.String("msg", envoyMsg))
-	}
+	// Run network checks concurrently and without holding the report mutex, so
+	// the cycle is bounded by the slowest dependency and status requests can
+	// continue serving the last completed report.
+	var envoyResult, k8sResult, ateResult componentHealthCheckResult
+	var wg sync.WaitGroup
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		envoyResult = runComponentHealthCheck(ctx, rh.checkEnvoy)
+	}()
+	go func() {
+		defer wg.Done()
+		k8sResult = runComponentHealthCheck(ctx, rh.checkK8s)
+	}()
+	go func() {
+		defer wg.Done()
+		ateResult = runComponentHealthCheck(ctx, rh.checkAteAPI)
+	}()
+	wg.Wait()
 
-	k8sHealthy, k8sMsg := rh.checkK8s(ctx)
-	k8sCheckedAt := time.Now()
-	if !k8sHealthy {
-		slog.ErrorContext(ctx, "Kubernetes API health check failed", slog.String("msg", k8sMsg))
+	if !envoyResult.healthy {
+		slog.ErrorContext(ctx, "Envoy health check failed", slog.String("msg", envoyResult.message))
 	}
-
-	ateHealthy, ateMsg := rh.checkAteAPI(ctx)
-	ateCheckedAt := time.Now()
-	if !ateHealthy {
-		slog.ErrorContext(ctx, "ATE API gRPC health check failed", slog.String("msg", ateMsg))
+	if !k8sResult.healthy {
+		slog.ErrorContext(ctx, "Kubernetes API health check failed", slog.String("msg", k8sResult.message))
+	}
+	if !ateResult.healthy {
+		slog.ErrorContext(ctx, "ATE API gRPC health check failed", slog.String("msg", ateResult.message))
 	}
 
 	rh.mu.Lock()
 	defer rh.mu.Unlock()
-	updateComponentHealth(&rh.report.Envoy, envoyHealthy, envoyMsg, envoyCheckedAt)
-	updateComponentHealth(&rh.report.K8sAPI, k8sHealthy, k8sMsg, k8sCheckedAt)
-	updateComponentHealth(&rh.report.AteAPI, ateHealthy, ateMsg, ateCheckedAt)
+	updateComponentHealth(&rh.report.Envoy, envoyResult.healthy, envoyResult.message, envoyResult.checkedAt)
+	updateComponentHealth(&rh.report.K8sAPI, k8sResult.healthy, k8sResult.message, k8sResult.checkedAt)
+	updateComponentHealth(&rh.report.AteAPI, ateResult.healthy, ateResult.message, ateResult.checkedAt)
+}
+
+func runComponentHealthCheck(ctx context.Context, check func(context.Context) (bool, string)) componentHealthCheckResult {
+	healthy, message := check(ctx)
+	return componentHealthCheckResult{
+		healthy:   healthy,
+		message:   message,
+		checkedAt: time.Now(),
+	}
 }
 
 func updateComponentHealth(health *ComponentHealth, healthy bool, msg string, checkedAt time.Time) {

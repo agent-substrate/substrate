@@ -24,6 +24,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"google.golang.org/grpc"
 	"k8s.io/client-go/kubernetes"
 	kubernetesfake "k8s.io/client-go/kubernetes/fake"
 	"k8s.io/client-go/rest"
@@ -33,6 +35,19 @@ type healthRoundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f healthRoundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
+}
+
+type healthControlClient struct {
+	ateapipb.ControlClient
+	listActorsFn func(context.Context, *ateapipb.ListActorsRequest, ...grpc.CallOption) (*ateapipb.ListActorsResponse, error)
+}
+
+func (c *healthControlClient) ListActors(
+	ctx context.Context,
+	req *ateapipb.ListActorsRequest,
+	opts ...grpc.CallOption,
+) (*ateapipb.ListActorsResponse, error) {
+	return c.listActorsFn(ctx, req, opts...)
 }
 
 func newHealthTestClientset(t *testing.T, server *httptest.Server) kubernetes.Interface {
@@ -162,6 +177,79 @@ func TestHealthCheckDoesNotBlockReportOrStatusz(t *testing.T) {
 	}
 	if report.AteAPI.Healthy || report.AteAPI.FailureCount != 1 || report.AteAPI.LastFailure.IsZero() {
 		t.Errorf("ATE API health = %+v, want one failed check", report.AteAPI)
+	}
+}
+
+func TestHealthChecksRunConcurrently(t *testing.T) {
+	started := make(chan string, 3)
+	release := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseChecks := func() { releaseOnce.Do(func() { close(release) }) }
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		started <- "k8s"
+		select {
+		case <-release:
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"gitVersion":"v1.36.1"}`)
+		case <-req.Context().Done():
+		}
+	}))
+	defer server.Close()
+
+	apiClient := &healthControlClient{
+		listActorsFn: func(ctx context.Context, _ *ateapipb.ListActorsRequest, _ ...grpc.CallOption) (*ateapipb.ListActorsResponse, error) {
+			started <- "ateapi"
+			select {
+			case <-release:
+				return &ateapipb.ListActorsResponse{}, nil
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		},
+	}
+	rh := newRouterHealth(time.Second, newHealthTestClientset(t, server), apiClient, RouterConfig{})
+	rh.envoyClient = &http.Client{Transport: healthRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		started <- "envoy"
+		<-release
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Body:       io.NopCloser(strings.NewReader("LIVE")),
+		}, nil
+	})}
+
+	checkDone := make(chan struct{})
+	go func() {
+		rh.check(context.Background())
+		close(checkDone)
+	}()
+	defer func() {
+		releaseChecks()
+		<-checkDone
+	}()
+
+	seen := make(map[string]bool, 3)
+	timer := time.NewTimer(time.Second)
+	defer timer.Stop()
+	for len(seen) < 3 {
+		select {
+		case dependency := <-started:
+			seen[dependency] = true
+		case <-timer.C:
+			t.Fatalf("started health checks = %v, want envoy, k8s, and ateapi before any check finishes", seen)
+		}
+	}
+
+	releaseChecks()
+	select {
+	case <-checkDone:
+	case <-time.After(time.Second):
+		t.Fatal("health check did not finish after dependencies were released")
+	}
+
+	report := rh.Report()
+	if !report.Envoy.Healthy || !report.K8sAPI.Healthy || !report.AteAPI.Healthy {
+		t.Errorf("health report = %+v, want all dependencies healthy", report)
 	}
 }
 
