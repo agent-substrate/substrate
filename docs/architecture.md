@@ -340,13 +340,22 @@ A `WorkerPool` selects a **sandbox class** (`spec.sandboxClass`), and each class
 
   * **micro-VM** (`ateom-microvm`): Runs the workload inside a [Kata Containers](https://katacontainers.io/) guest on the [Cloud Hypervisor](https://www.cloudhypervisor.org/) VMM. Suspend and resume capture a memory-only VM snapshot and restore it on-demand using `userfaultfd` memory demand-paging, with container rootfs writes captured in guest RAM via a `tmpfs` overlay.
 
-### Networking Stack (`atenet` + Envoy)
+### Networking Stack (`atenet` DNS + `ateway` + `atunnel`)
 
 Handles session-aware routing and automatic re-animation.
 
   * **Uniform DNS Mesh**: Substrate provides a location-transparent actor discovery scheme via a global DNS suffix (`<actor-name>.<atespace>.actors.resources.substrate.ate.dev`).
 
-  * **Routing**: The `atenet` router (powered by Envoy and an External Processing server) intercepts traffic destined for the mesh. It extracts the actor name from the `Host` header, queries the Control Plane to determine the actor's current location, and triggers a `ResumeActor` workflow if the session is currently suspended.
+  * **Ingress Routing**: `atenet-router` runs Envoy with an `ext_proc` external
+    processor and accepts HTTP traffic for the Actor DNS suffix. The ext_proc
+    extracts the Actor name and Atespace from the `Host` header and calls the
+    Control Plane to resume the Actor and resolve its current worker assignment.
+
+  * **Worker Tunnel**: After resolving the assignment, `atenet-router` opens an
+    authenticated TLS tunnel to the worker's `atunnel` listener on port 443.
+    `atunnel`, hosted by `ateom`, forwards the request to the active Actor over
+    its private veth interface. Worker pod port 80 is not a direct Actor ingress
+    path.
 
   * **Latency**: The data plane is optimized for sub-100ms activation by bypassing Kubernetes' eventual consistency and performing atomic physical assignments.
 
@@ -360,26 +369,29 @@ suspended (UML sequence diagram):
 sequenceDiagram
     actor Client
     participant DNS as atenet DNS
-    participant Router as atenet router
+    participant Gateway as atenet-router
     participant API as ate-api-server
     participant Atelet as atelet
-    participant Ateom as ateom
+    participant Tunnel as ateom / atunnel
+    participant Actor
     participant Store as snapshot storage
 
     Client->>DNS: resolve actor DNS name
-    DNS-->>Client: router address
-    Client->>Router: HTTP request (Host = actor)
-    Router->>API: ResumeActor(actorName)
+    DNS-->>Client: ingress gateway address
+    Client->>Gateway: HTTP request (Host = actor)
+    Gateway->>API: ResumeActor(atespace, actor name)
     API->>Atelet: Restore
     Store-->>Atelet: download snapshot
-    Atelet->>Ateom: RestoreWorkload
-    Note over Ateom: runsc restore
-    Ateom-->>Atelet: ready
+    Atelet->>Tunnel: RestoreWorkload
+    Note over Tunnel: restore sandbox and activate Actor network
+    Tunnel-->>Atelet: ready
     Atelet-->>API: worker pod IP
-    API-->>Router: worker pod IP
-    Router->>Ateom: proxy request to worker pod
-    Ateom-->>Router: response
-    Router-->>Client: response
+    API-->>Gateway: worker assignment
+    Gateway->>Tunnel: mTLS tunnel to worker port 443
+    Tunnel->>Actor: forward request to Actor port
+    Actor-->>Tunnel: response
+    Tunnel-->>Gateway: response
+    Gateway-->>Client: response
     Note over API,Store: later: an explicit SuspendActor checkpoints back to storage and frees the worker
 ```
 
@@ -423,8 +435,9 @@ Triggered by an inbound request at the Gateway or an explicit API call.
   4. **Status**: Status transitions to `STATUS_RUNNING`. The actor now has an
      active Worker IP.
 
-  5. **Response**: The Control Plane returns the worker IP to the Gateway,
-     which forwards the original request.
+  5. **Response**: The Control Plane returns the worker assignment to the
+     Gateway. The Gateway opens an authenticated tunnel to `atunnel` on that
+     worker, which forwards the original request to the active Actor.
 
 ### Phase 3: Hibernation (`SuspendActor`)
 

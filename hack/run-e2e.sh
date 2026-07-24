@@ -15,6 +15,7 @@
 # limitations under the License.
 
 set -o errexit -o nounset -o pipefail
+set -x
 
 ROOT="$(git rev-parse --show-toplevel)"
 cd "${ROOT}"

@@ -50,7 +50,7 @@ Each subdirectory of `cmd/` corresponds to one compiled binary:
 | `cmd/ateapi`         | Control-plane API server (gRPC)                       |
 | `cmd/atecontroller`  | Kubernetes controller for WorkerPool/ActorTemplate    |
 | `cmd/atelet`         | Node supervisor (DaemonSet)                           |
-| `cmd/atenet`         | Network proxy / Envoy external-processing server      |
+| `cmd/atenet`         | Actor DNS controller                                   |
 | `cmd/ateom-gvisor`   | In-pod gVisor container image entry point             |
 | `cmd/ateom-microvm`  | In-pod kata + cloud-hypervisor micro-VM container image entry point |
 | `cmd/kubectl-ate`    | `kubectl` plugin for interacting with Substrate       |

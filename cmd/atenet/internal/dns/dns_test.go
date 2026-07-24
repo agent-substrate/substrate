@@ -44,7 +44,7 @@ func TestReconcile(t *testing.T) {
 	_ = corev1.AddToScheme(scheme)
 
 	// 1. Create mock services
-	routerSvc := &corev1.Service{
+	ingressSvc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "atenet-router",
 			Namespace: "ate-system",
@@ -89,7 +89,7 @@ func TestReconcile(t *testing.T) {
 
 	client := fake.NewClientBuilder().
 		WithScheme(scheme).
-		WithObjects(routerSvc, dnsSvc, kubeDNSCM).
+		WithObjects(ingressSvc, dnsSvc, kubeDNSCM).
 		Build()
 
 	reloader := &mockConfigReloader{}
@@ -149,7 +149,7 @@ func TestReconcileKubeDNSNotFound(t *testing.T) {
 	scheme := runtime.NewScheme()
 	_ = corev1.AddToScheme(scheme)
 
-	routerSvc := &corev1.Service{
+	ingressSvc := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "atenet-router",
 			Namespace: "ate-system",
@@ -172,7 +172,7 @@ func TestReconcileKubeDNSNotFound(t *testing.T) {
 	// Set up local Corefile on disk
 	tempDir := t.TempDir()
 	corefilePath := filepath.Join(tempDir, "Corefile")
-	initialCorefile := `answer "{{ .Name }} 60 IN A <router service address>"`
+	initialCorefile := `answer "{{ .Name }} 60 IN A <ingress service address>"`
 	if err := os.WriteFile(corefilePath, []byte(initialCorefile), 0644); err != nil {
 		t.Fatalf("failed to write initial Corefile: %v", err)
 	}
@@ -181,7 +181,7 @@ func TestReconcileKubeDNSNotFound(t *testing.T) {
 
 	client := fake.NewClientBuilder().
 		WithScheme(scheme).
-		WithObjects(routerSvc, dnsSvc).
+		WithObjects(ingressSvc, dnsSvc).
 		Build()
 
 	controller := &Controller{

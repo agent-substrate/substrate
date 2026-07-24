@@ -23,13 +23,13 @@ import (
 
 func TestMakeCoreFile(t *testing.T) {
 	tests := []struct {
-		name     string
-		routerIP string
-		expected []string
+		name      string
+		ingressIP string
+		expected  []string
 	}{
 		{
-			name:     "standard local IP",
-			routerIP: "10.240.0.10",
+			name:      "standard local IP",
+			ingressIP: "10.240.0.10",
 			expected: []string{
 				"actors.resources.substrate.ate.dev:53 {",
 				"log",
@@ -43,8 +43,8 @@ func TestMakeCoreFile(t *testing.T) {
 			},
 		},
 		{
-			name:     "different IP",
-			routerIP: "192.168.1.1",
+			name:      "different IP",
+			ingressIP: "192.168.1.1",
 			expected: []string{
 				"actors.resources.substrate.ate.dev:53 {",
 				`answer "{{ .Name }} 60 IN A 192.168.1.1"`,
@@ -54,10 +54,10 @@ func TestMakeCoreFile(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := makeCoreFile(tc.routerIP)
+			got := makeCoreFile(tc.ingressIP)
 			for _, exp := range tc.expected {
 				if !strings.Contains(got, exp) {
-					t.Errorf("makeCoreFile(%q) missing expected substring %q\nGot:\n%s", tc.routerIP, exp, got)
+					t.Errorf("makeCoreFile(%q) missing expected substring %q\nGot:\n%s", tc.ingressIP, exp, got)
 				}
 			}
 		})

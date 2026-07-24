@@ -45,7 +45,7 @@ func buildTemplate() string {
 	// Escape the suffix's dots so they match literally; the final \. matches the FQDN's trailing dot.
 	escapedSuffix := strings.ReplaceAll(resources.ActorDNSSuffix, ".", `\.`)
 	directives = append(directives, fmt.Sprintf(`  match "^%s\.%s\.%s\.$"`, resources.ResourceNameRegexPattern, resources.ResourceNameRegexPattern, escapedSuffix))
-	// Note the %s -- this will be filled with the router IP.
+	// Note the %s -- this will be filled with the ingress gateway IP.
 	directives = append(directives, `  answer "{{ .Name }} 60 IN A %s"`)
 	directives = append(directives, "}")
 
@@ -59,6 +59,6 @@ func buildTemplate() string {
 	return b.String()
 }
 
-func makeCoreFile(routerIP string) string {
-	return fmt.Sprintf(corefileTemplate, routerIP)
+func makeCoreFile(ingressIP string) string {
+	return fmt.Sprintf(corefileTemplate, ingressIP)
 }
