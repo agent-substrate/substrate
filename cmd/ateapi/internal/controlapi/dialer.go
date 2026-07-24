@@ -166,6 +166,9 @@ func verifyAteletServerCert(bundle *x509bundle.Bundle, expectedID spiffeid.ID, e
 	if expectedPodUID == "" {
 		return nil, fmt.Errorf("expected pod UID must not be empty")
 	}
+	if expectedID.IsZero() {
+		return nil, fmt.Errorf("expected pod spiffe ID must not be empty")
+	}
 	return func(cs tls.ConnectionState) error {
 		if len(cs.PeerCertificates) == 0 {
 			return fmt.Errorf("server presented no certificate")
