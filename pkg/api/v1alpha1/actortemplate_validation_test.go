@@ -23,6 +23,7 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/envtestbins"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -636,6 +637,96 @@ func TestActorTemplateValidation(t *testing.T) {
 		},
 		wantErr: false,
 	}, {
+		name: "Volumes: 1 ExternalVolumeTemplate mount is valid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Volumes = []Volume{
+				{
+					Name: "vol1",
+					VolumeSource: VolumeSource{
+						ExternalVolumeTemplate: &ExternalVolumeTemplate{
+							Capacity:         resource.MustParse("10Gi"),
+							StorageClassName: "standard",
+						},
+					},
+				},
+			}
+			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
+				{Name: "vol1", MountPath: "/mnt/data"},
+			}
+		},
+		wantErr: false,
+	}, {
+		name: "Volumes: multiple ExternalVolumeTemplate mounts are valid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Volumes = []Volume{
+				{
+					Name: "vol1",
+					VolumeSource: VolumeSource{
+						ExternalVolumeTemplate: &ExternalVolumeTemplate{
+							Capacity:         resource.MustParse("10Gi"),
+							StorageClassName: "standard",
+						},
+					},
+				},
+				{
+					Name: "vol2",
+					VolumeSource: VolumeSource{
+						ExternalVolumeTemplate: &ExternalVolumeTemplate{
+							Capacity:         resource.MustParse("20Gi"),
+							StorageClassName: "pd-ssd",
+						},
+					},
+				},
+			}
+			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
+				{Name: "vol1", MountPath: "/mnt/vol1"},
+				{Name: "vol2", MountPath: "/mnt/vol2"},
+			}
+		},
+		wantErr: false,
+	}, {
+		name: "Volumes: 1 DurableDir and 1 ExternalVolumeTemplate on same ActorTemplate is valid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Volumes = []Volume{
+				{Name: "home", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
+				{
+					Name: "ext",
+					VolumeSource: VolumeSource{
+						ExternalVolumeTemplate: &ExternalVolumeTemplate{
+							Capacity:         resource.MustParse("10Gi"),
+							StorageClassName: "standard",
+						},
+					},
+				},
+			}
+			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
+				{Name: "home", MountPath: "/home"},
+				{Name: "ext", MountPath: "/mnt/ext"},
+			}
+		},
+		wantErr: false,
+	}, {
+		name: "Volumes: VolumeSource with both DurableDir and ExternalVolumeTemplate set is invalid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Volumes = []Volume{
+				{
+					Name: "vol1",
+					VolumeSource: VolumeSource{
+						DurableDir: &DurableDirVolumeSource{},
+						ExternalVolumeTemplate: &ExternalVolumeTemplate{
+							Capacity:         resource.MustParse("10Gi"),
+							StorageClassName: "standard",
+						},
+					},
+				},
+			}
+			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
+				{Name: "vol1", MountPath: "/mnt/data"},
+			}
+		},
+		wantErr: true,
+		errMsg:  "exactly one of the fields in [durableDir externalVolumeTemplate] must be set",
+	}, {
 		name: "Volumes: VolumeSource with no source set is invalid",
 		mutate: func(at *ActorTemplate) {
 			at.Spec.Volumes = []Volume{
@@ -643,7 +734,7 @@ func TestActorTemplateValidation(t *testing.T) {
 			}
 		},
 		wantErr: true,
-		errMsg:  "exactly one of the fields in [durableDir] must be set",
+		errMsg:  "exactly one of the fields in [durableDir externalVolumeTemplate] must be set",
 	}, {
 		name: "Volumes: VolumeSource with no source set is invalid (mixed with a valid DurableDir volume)",
 		mutate: func(at *ActorTemplate) {
@@ -657,7 +748,7 @@ func TestActorTemplateValidation(t *testing.T) {
 			}
 		},
 		wantErr: true,
-		errMsg:  "exactly one of the fields in [durableDir] must be set",
+		errMsg:  "exactly one of the fields in [durableDir externalVolumeTemplate] must be set",
 	}, {
 		name: "Volumes: DurableDir MountPath with nested absolute path is valid",
 		mutate: func(at *ActorTemplate) {
@@ -928,6 +1019,47 @@ func TestActorTemplateValidation(t *testing.T) {
 			}
 			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
 				{Name: "vol1", MountPath: "/home/user"},
+			}
+		},
+		wantErr: false,
+	}, {
+		name: "Volumes: ExternalVolumeTemplate volume with SandboxClass microvm is invalid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.SandboxClass = SandboxClassMicroVM
+			at.Spec.Volumes = []Volume{
+				{
+					Name: "vol1",
+					VolumeSource: VolumeSource{
+						ExternalVolumeTemplate: &ExternalVolumeTemplate{
+							Capacity:         resource.MustParse("10Gi"),
+							StorageClassName: "standard",
+						},
+					},
+				},
+			}
+			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
+				{Name: "vol1", MountPath: "/mnt/data"},
+			}
+		},
+		wantErr: true,
+		errMsg:  "ExternalVolumes are not supported when sandboxClass is 'microvm'",
+	}, {
+		name: "Volumes: ExternalVolumeTemplate volume with SandboxClass gvisor is valid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.SandboxClass = SandboxClassGvisor
+			at.Spec.Volumes = []Volume{
+				{
+					Name: "vol1",
+					VolumeSource: VolumeSource{
+						ExternalVolumeTemplate: &ExternalVolumeTemplate{
+							Capacity:         resource.MustParse("10Gi"),
+							StorageClassName: "standard",
+						},
+					},
+				},
+			}
+			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
+				{Name: "vol1", MountPath: "/mnt/data"},
 			}
 		},
 		wantErr: false,

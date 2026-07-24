@@ -24,6 +24,8 @@ import (
 	"testing"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/agent-substrate/substrate/internal/roottest"
 )
 
 // writeLayer builds a layer dir (fs/ tree + whiteouts.json) as the store's
@@ -59,9 +61,7 @@ func writeLayer(t *testing.T, dir string, files map[string]string, wh *whiteoutS
 // xattrs (trusted.*, CAP_SYS_ADMIN); only root has those in a plain test
 // environment. Runs in privileged CI / root shells, skips elsewhere.
 func TestFinalizeLayer_MaterializesWhiteouts(t *testing.T) {
-	if os.Geteuid() != 0 {
-		t.Skip("needs root (CAP_MKNOD + CAP_SYS_ADMIN for trusted.* xattrs)")
-	}
+	roottest.Require(t, "CAP_MKNOD + CAP_SYS_ADMIN for trusted.* xattrs")
 	dir := t.TempDir()
 	writeLayer(t, dir,
 		map[string]string{"kept.txt": "kept"},
@@ -173,9 +173,7 @@ func TestSetupBundleRootfs_ZeroLayers(t *testing.T) {
 // after compose the merged view must show 0700 — copied up into the
 // bundle's upper, with the shared layer trees untouched. Needs root.
 func TestSetupBundleRootfs_ImplicitDirMetadataRepair(t *testing.T) {
-	if os.Geteuid() != 0 {
-		t.Skip("needs root (mount/unmount)")
-	}
+	roottest.Require(t, "mount/unmount")
 	base := t.TempDir()
 	writeLayer(t, base, map[string]string{"secret/keep.txt": "k"}, nil)
 	if err := os.Chmod(filepath.Join(base, layerFSDirName, "secret"), 0o700); err != nil {
@@ -211,9 +209,7 @@ func TestSetupBundleRootfs_ImplicitDirMetadataRepair(t *testing.T) {
 
 // Full overlay mount + UnmountAllUnder round trip; needs CAP_SYS_ADMIN.
 func TestSetupBundleRootfs_MountAndUnmount(t *testing.T) {
-	if os.Geteuid() != 0 {
-		t.Skip("needs root (mount/unmount)")
-	}
+	roottest.Require(t, "mount/unmount")
 	layer := t.TempDir()
 	writeLayer(t, layer, map[string]string{"from-layer.txt": "hello"}, nil)
 
@@ -256,9 +252,7 @@ func TestSetupBundleRootfs_MountAndUnmount(t *testing.T) {
 // to fail with a bare EINVAL. The fsconfig lowerdir+ path has no aggregate
 // limit. Needs CAP_SYS_ADMIN.
 func TestSetupBundleRootfs_ManyLayers(t *testing.T) {
-	if os.Geteuid() != 0 {
-		t.Skip("needs root (mount/unmount)")
-	}
+	roottest.Require(t, "mount/unmount")
 	// Digest-length dir names so each path matches production length (~114
 	// bytes); 64 of them comfortably exceed the page that motivated this.
 	pool := filepath.Join(t.TempDir(), "sha256")

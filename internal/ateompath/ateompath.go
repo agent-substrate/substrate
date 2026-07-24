@@ -190,3 +190,17 @@ func PIDFilePath(actorUID, containerName string) string {
 		containerName+".pid",
 	)
 }
+
+func VolumesDir(actorUID string) string {
+	return filepath.Join(
+		ActorPath(actorUID),
+		"volumes",
+	)
+}
+
+func VolumeHostPath(actorUID, volumeName string) string {
+	return filepath.Join(
+		VolumesDir(actorUID),
+		volumeName,
+	)
+}

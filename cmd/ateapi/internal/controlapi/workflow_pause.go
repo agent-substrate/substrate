@@ -120,7 +120,7 @@ func (s *CallAteletPauseStep) CheckPrerequisite(ctx context.Context, input *Paus
 	}
 	if state.Actor.GetAteomPodNamespace() == "" || state.Actor.GetAteomPodName() == "" {
 		if err := crashActor(ctx, s.store, state.Actor.GetMetadata().GetAtespace(), state.Actor.GetMetadata().GetName()); err != nil {
-			slog.Error("Failed to crash actor", slog.String("err", err.Error()))
+			slog.ErrorContext(ctx, "Failed to crash actor", slog.String("err", err.Error()))
 		}
 		return status.Errorf(codes.FailedPrecondition, "CallAteletPauseStep prerequisite not met for Actor: %s. AteomPodNamespace: %s, GetAteomPodName %s", input.ActorName, state.Actor.GetAteomPodNamespace(), state.Actor.GetAteomPodName())
 	}
@@ -131,14 +131,20 @@ func (s *CallAteletPauseStep) Execute(ctx context.Context, input *PauseInput, st
 	ateletConn, err := s.dialer.DialForWorker(state.Actor.GetAteomPodNamespace(), state.Actor.GetAteomPodName())
 	if err != nil {
 		if errors.Is(err, ErrWorkerPodNotFound) {
-			slog.Warn("Skipping pause for dangling worker pod", "namespace", state.Actor.GetAteomPodNamespace(), "pod", state.Actor.GetAteomPodName())
-			return nil
+			slog.ErrorContext(ctx, "Worker pod gone before checkpoint, crashing actor", "namespace", state.Actor.GetAteomPodNamespace(), "pod", state.Actor.GetAteomPodName(), "in_progress_snapshot", state.Actor.GetInProgressSnapshot())
+			if err := crashActor(ctx, s.store, state.Actor.GetMetadata().GetAtespace(), state.Actor.GetMetadata().GetName()); err != nil {
+				slog.ErrorContext(ctx, "Failed to crash actor", slog.String("err", err.Error()))
+			}
+			return fmt.Errorf("actor is CRASHED because its worker pod is gone and no snapshot was written")
 		}
 		return fmt.Errorf("while getting atelet conn for worker pod: %w", err)
 	}
 	client := ateletpb.NewAteomHerderClient(ateletConn)
 
-	workloadSpec := workloadSpecFromActorTemplate(state.ActorTemplate)
+	workloadSpec, err := workloadSpecFromActorTemplate(state.ActorTemplate, state.Actor)
+	if err != nil {
+		return err
+	}
 
 	// Checkpoint does not carry the sandbox config: atelet uses the version the
 	// actor is currently running (recorded on-node at Run/Restore) and pins it
@@ -165,6 +171,29 @@ func (s *CallAteletPauseStep) Execute(ctx context.Context, input *PauseInput, st
 }
 
 func (s *CallAteletPauseStep) RetryBackoff() *wait.Backoff { return nil }
+
+// TODO: There is no difference between suspend and pause for now, but we could optimize
+// pause by not detaching. We would need to make sure Resume is idempotent.
+type DetachVolumesForPauseStep struct {
+	store store.Interface
+}
+
+func (s *DetachVolumesForPauseStep) Name() string { return "DetachVolumesForPause" }
+
+func (s *DetachVolumesForPauseStep) IsComplete(ctx context.Context, input *PauseInput, state *PauseState) (bool, error) {
+	// TODO replace with a proper check on the volumes.
+	return state.Actor.GetStatus() == ateapipb.Actor_STATUS_PAUSED && state.Actor.GetAteomPodNamespace() == "", nil
+}
+
+func (s *DetachVolumesForPauseStep) CheckPrerequisite(ctx context.Context, input *PauseInput, state *PauseState) error {
+	return nil
+}
+
+func (s *DetachVolumesForPauseStep) Execute(ctx context.Context, input *PauseInput, state *PauseState) error {
+	return detachActorVolumes(ctx, s.store, state.Actor, state.ActorTemplate, "pause")
+}
+
+func (s *DetachVolumesForPauseStep) RetryBackoff() *wait.Backoff { return nil }
 
 type FinalizePausedStep struct {
 	store store.Interface

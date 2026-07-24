@@ -16,6 +16,7 @@ package router
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -26,8 +27,11 @@ import (
 
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
+	"k8s.io/apimachinery/pkg/version"
 	"k8s.io/client-go/kubernetes"
 )
+
+const dependencyHealthCheckTimeout = 500 * time.Millisecond
 
 type ComponentHealth struct {
 	Healthy      bool      `json:"healthy"`
@@ -42,6 +46,12 @@ type RouterHealthReport struct {
 	Envoy  ComponentHealth `json:"envoy"`
 	K8sAPI ComponentHealth `json:"k8s_api"`
 	AteAPI ComponentHealth `json:"ate_api"`
+}
+
+type componentHealthCheckResult struct {
+	healthy   bool
+	message   string
+	checkedAt time.Time
 }
 
 // routerHealth periodically checks the dependent services of router to track health
@@ -89,65 +99,65 @@ func (rh *routerHealth) Start(ctx context.Context) {
 }
 
 func (rh *routerHealth) check(ctx context.Context) {
-	rh.mu.Lock()
-	defer rh.mu.Unlock()
-
 	slog.InfoContext(ctx, "Checking health")
 
-	// 1. Check Envoy
-	{
-		healthy, msg := rh.checkEnvoy(ctx)
-		if healthy {
-			rh.report.Envoy.Healthy = true
-			rh.report.Envoy.Message = msg
-			rh.report.Envoy.LastSuccess = time.Now()
-			rh.report.Envoy.SuccessCount++
-		} else {
-			rh.report.Envoy.Healthy = false
-			rh.report.Envoy.Message = msg
-			rh.report.Envoy.LastFailure = time.Now()
-			rh.report.Envoy.FailureCount++
-			slog.ErrorContext(ctx, "Envoy health check failed", slog.String("msg", msg))
-		}
-	}
+	// Run network checks concurrently and without holding the report mutex, so
+	// the cycle is bounded by the slowest dependency and status requests can
+	// continue serving the last completed report.
+	var envoyResult, k8sResult, ateResult componentHealthCheckResult
+	var wg sync.WaitGroup
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		envoyResult = runComponentHealthCheck(ctx, "Envoy health check failed", rh.checkEnvoy)
+	}()
+	go func() {
+		defer wg.Done()
+		k8sResult = runComponentHealthCheck(ctx, "Kubernetes API health check failed", rh.checkK8s)
+	}()
+	go func() {
+		defer wg.Done()
+		ateResult = runComponentHealthCheck(ctx, "ATE API gRPC health check failed", rh.checkAteAPI)
+	}()
+	wg.Wait()
 
-	// 2. Check Kubernetes API
-	{
-		healthy, msg := rh.checkK8s()
-		if healthy {
-			rh.report.K8sAPI.Healthy = true
-			rh.report.K8sAPI.Message = msg
-			rh.report.K8sAPI.LastSuccess = time.Now()
-			rh.report.K8sAPI.SuccessCount++
-		} else {
-			rh.report.K8sAPI.Healthy = false
-			rh.report.K8sAPI.Message = msg
-			rh.report.K8sAPI.LastFailure = time.Now()
-			rh.report.K8sAPI.FailureCount++
-			slog.ErrorContext(ctx, "Kubernetes API health check failed", slog.String("msg", msg))
-		}
-	}
+	rh.mu.Lock()
+	defer rh.mu.Unlock()
+	updateComponentHealth(&rh.report.Envoy, envoyResult.healthy, envoyResult.message, envoyResult.checkedAt)
+	updateComponentHealth(&rh.report.K8sAPI, k8sResult.healthy, k8sResult.message, k8sResult.checkedAt)
+	updateComponentHealth(&rh.report.AteAPI, ateResult.healthy, ateResult.message, ateResult.checkedAt)
+}
 
-	// 3. Check ATE API gRPC
-	{
-		healthy, msg := rh.checkAteAPI(ctx)
-		if healthy {
-			rh.report.AteAPI.Healthy = true
-			rh.report.AteAPI.Message = msg
-			rh.report.AteAPI.LastSuccess = time.Now()
-			rh.report.AteAPI.SuccessCount++
-		} else {
-			rh.report.AteAPI.Healthy = false
-			rh.report.AteAPI.Message = msg
-			rh.report.AteAPI.LastFailure = time.Now()
-			rh.report.AteAPI.FailureCount++
-			slog.ErrorContext(ctx, "ATE API gRPC health check failed", slog.String("msg", msg))
-		}
+func runComponentHealthCheck(
+	ctx context.Context,
+	failureMessage string,
+	check func(context.Context) (bool, string),
+) componentHealthCheckResult {
+	healthy, message := check(ctx)
+	if !healthy {
+		slog.ErrorContext(ctx, failureMessage, slog.String("msg", message))
+	}
+	return componentHealthCheckResult{
+		healthy:   healthy,
+		message:   message,
+		checkedAt: time.Now(),
+	}
+}
+
+func updateComponentHealth(health *ComponentHealth, healthy bool, msg string, checkedAt time.Time) {
+	health.Healthy = healthy
+	health.Message = msg
+	if healthy {
+		health.LastSuccess = checkedAt
+		health.SuccessCount++
+	} else {
+		health.LastFailure = checkedAt
+		health.FailureCount++
 	}
 }
 
 func (rh *routerHealth) checkEnvoy(ctx context.Context) (bool, string) {
-	timeoutCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	timeoutCtx, cancel := context.WithTimeout(ctx, dependencyHealthCheckTimeout)
 	defer cancel()
 
 	req, err := http.NewRequestWithContext(timeoutCtx, "GET", "http://127.0.0.1:9901/ready", nil)
@@ -178,14 +188,25 @@ func (rh *routerHealth) checkEnvoy(ctx context.Context) (bool, string) {
 	return true, "LIVE"
 }
 
-func (rh *routerHealth) checkK8s() (bool, string) {
+func (rh *routerHealth) checkK8s(ctx context.Context) (bool, string) {
 	if rh.clientset == nil {
 		return true, "Skipped (standalone/file store)"
 	}
 
-	ver, err := rh.clientset.Discovery().ServerVersion()
+	timeoutCtx, cancel := context.WithTimeout(ctx, dependencyHealthCheckTimeout)
+	defer cancel()
+
+	restClient := rh.clientset.Discovery().RESTClient()
+	if restClient == nil {
+		return false, "Kubernetes discovery REST client is unavailable"
+	}
+	body, err := restClient.Get().AbsPath("/version").Do(timeoutCtx).Raw()
 	if err != nil {
 		return false, err.Error()
+	}
+	ver := &version.Info{}
+	if err := json.Unmarshal(body, ver); err != nil {
+		return false, fmt.Sprintf("decoding Kubernetes version: %v", err)
 	}
 
 	return true, fmt.Sprintf("Version: %s", ver.GitVersion)
@@ -196,7 +217,7 @@ func (rh *routerHealth) checkAteAPI(ctx context.Context) (bool, string) {
 		return false, "No client"
 	}
 
-	timeoutCtx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	timeoutCtx, cancel := context.WithTimeout(ctx, dependencyHealthCheckTimeout)
 	defer cancel()
 
 	_, err := rh.apiClient.ListActors(timeoutCtx, &ateapipb.ListActorsRequest{PageSize: 1})

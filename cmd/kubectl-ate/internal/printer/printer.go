@@ -139,6 +139,94 @@ func PrintWorkersTo(out io.Writer, workers []*ateapipb.Worker, format string) er
 	}
 }
 
+// WorkerTopItem represents real-time hardware resource utilization for a worker pod.
+type WorkerTopItem struct {
+	Pod           string `json:"pod" yaml:"pod"`
+	Pool          string `json:"pool" yaml:"pool"`
+	Status        string `json:"status" yaml:"status"`
+	AssignedActor string `json:"assignedActor" yaml:"assignedActor"`
+	CPU           string `json:"cpu" yaml:"cpu"`
+	Memory        string `json:"memory" yaml:"memory"`
+	Namespace     string `json:"namespace,omitempty" yaml:"namespace,omitempty"`
+}
+
+// WorkerTopList wraps worker top items for JSON/YAML output.
+type WorkerTopList struct {
+	Workers []*WorkerTopItem `json:"workers" yaml:"workers"`
+}
+
+func sortWorkerTopItems(items []*WorkerTopItem) {
+	slices.SortFunc(items, func(a, b *WorkerTopItem) int {
+		if c := cmp.Compare(a.Namespace, b.Namespace); c != 0 {
+			return c
+		}
+		if c := cmp.Compare(a.Pool, b.Pool); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.Pod, b.Pod)
+	})
+}
+
+// PrintWorkerTop prints a slice of worker top items to stdout in the requested format.
+func PrintWorkerTop(items []*WorkerTopItem, format string) error {
+	return PrintWorkerTopTo(os.Stdout, items, format)
+}
+
+// PrintWorkerTopTo prints a slice of worker top items to the provided writer.
+func PrintWorkerTopTo(out io.Writer, items []*WorkerTopItem, format string) error {
+	sortWorkerTopItems(items)
+	switch format {
+	case "json":
+		return PrintWorkerTopJSON(out, items)
+	case "yaml":
+		return PrintWorkerTopYAML(out, items)
+	case "table":
+		return PrintWorkerTopTable(out, items)
+	default:
+		return fmt.Errorf("unsupported format %q", format)
+	}
+}
+
+// PrintWorkerTopTable prints worker top items as a formatted table.
+func PrintWorkerTopTable(out io.Writer, items []*WorkerTopItem) error {
+	w := tabwriter.NewWriter(out, 0, 0, 3, ' ', 0)
+	fmt.Fprintln(w, "NAME\tPOOL\tSTATUS\tASSIGNED ACTOR\tCPU(CORES)\tMEMORY(bytes)")
+	for _, item := range items {
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
+			item.Pod, item.Pool, item.Status, item.AssignedActor, item.CPU, item.Memory)
+	}
+	return w.Flush()
+}
+
+// PrintWorkerTopJSON prints worker top items as JSON.
+func PrintWorkerTopJSON(out io.Writer, items []*WorkerTopItem) error {
+	list := &WorkerTopList{Workers: items}
+	b, err := json.MarshalIndent(list, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal json: %w", err)
+	}
+	if _, err := out.Write(b); err != nil {
+		return err
+	}
+	_, err = out.Write([]byte{'\n'})
+	return err
+}
+
+// PrintWorkerTopYAML prints worker top items as YAML.
+func PrintWorkerTopYAML(out io.Writer, items []*WorkerTopItem) error {
+	list := &WorkerTopList{Workers: items}
+	b, err := json.Marshal(list)
+	if err != nil {
+		return fmt.Errorf("failed to marshal json for yaml: %w", err)
+	}
+	yb, err := yaml.JSONToYAML(b)
+	if err != nil {
+		return err
+	}
+	_, err = out.Write(yb)
+	return err
+}
+
 // PrintActor prints a single actor in the requested format.
 func PrintActor(actor *ateapipb.Actor, format string) error {
 	return PrintActors([]*ateapipb.Actor{actor}, format)

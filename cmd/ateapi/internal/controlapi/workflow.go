@@ -18,13 +18,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	"github.com/google/uuid"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/codes"
 	grpcCodes "google.golang.org/grpc/codes"
@@ -171,17 +169,16 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, atespace, name string, 
 	}
 	state := &ResumeState{}
 
-	// Acquire lock and get the timeout context for the workflow
-	// Lock TTL is 30 seconds, with 2 seconds padding for workflow timeout
-	ctx, releaseLock, err := w.acquireActorLock(ctx, atespace, name, 30*time.Second, 2*time.Second)
+	ctx, lock, err := w.acquireActorLock(ctx, atespace, name)
 	if err != nil {
 		return nil, err
 	}
-	defer releaseLock()
+	defer lock.Close()
 
 	steps := []WorkflowStep[*ResumeInput, *ResumeState]{
 		&LoadActorForResumeStep{store: w.store, actorTemplateLister: w.actorTemplateLister},
 		&AssignWorkerStep{store: w.store, workerCache: w.workerCache},
+		&AttachVolumesStep{store: w.store},
 		&CallAteletRestoreStep{store: w.store, dialer: w.dialer, kubeClient: w.kubeClient, secretCache: w.secretCache, workerPoolLister: w.workerPoolLister, sandboxConfigLister: w.sandboxConfigLister},
 		&FinalizeRunningStep{store: w.store},
 	}
@@ -201,18 +198,17 @@ func (w *ActorWorkflow) SuspendActor(ctx context.Context, atespace, name string)
 	}
 	state := &SuspendState{}
 
-	// Acquire lock and get the timeout context for the workflow
-	// Lock TTL is 30 seconds, with 2 seconds padding for workflow timeout
-	ctx, releaseLock, err := w.acquireActorLock(ctx, atespace, name, 30*time.Second, 2*time.Second)
+	ctx, lock, err := w.acquireActorLock(ctx, atespace, name)
 	if err != nil {
 		return nil, err
 	}
-	defer releaseLock()
+	defer lock.Close()
 
 	steps := []WorkflowStep[*SuspendInput, *SuspendState]{
 		&LoadActorForSuspendStep{store: w.store, actorTemplateLister: w.actorTemplateLister},
 		&MarkSuspendingStep{store: w.store},
 		&CallAteletSuspendStep{store: w.store, dialer: w.dialer},
+		&DetachVolumesStep{store: w.store},
 		&FinalizeSuspendedStep{store: w.store},
 	}
 
@@ -231,18 +227,17 @@ func (w *ActorWorkflow) PauseActor(ctx context.Context, atespace, name string) (
 	}
 	state := &PauseState{}
 
-	// Acquire lock and get the timeout context for the workflow
-	// Lock TTL is 30 seconds, with 2 seconds padding for workflow timeout
-	ctx, releaseLock, err := w.acquireActorLock(ctx, atespace, name, 30*time.Second, 2*time.Second)
+	ctx, lock, err := w.acquireActorLock(ctx, atespace, name)
 	if err != nil {
 		return nil, err
 	}
-	defer releaseLock()
+	defer lock.Close()
 
 	steps := []WorkflowStep[*PauseInput, *PauseState]{
 		&LoadActorForPauseStep{store: w.store, actorTemplateLister: w.actorTemplateLister},
 		&MarkPausingStep{store: w.store},
 		&CallAteletPauseStep{store: w.store, dialer: w.dialer},
+		&DetachVolumesForPauseStep{store: w.store},
 		&FinalizePausedStep{store: w.store},
 	}
 
@@ -253,27 +248,16 @@ func (w *ActorWorkflow) PauseActor(ctx context.Context, atespace, name string) (
 	return state.Actor, nil
 }
 
-func (w *ActorWorkflow) acquireActorLock(ctx context.Context, atespace, name string, ttl time.Duration, padding time.Duration) (context.Context, func(), error) {
+func (w *ActorWorkflow) acquireActorLock(ctx context.Context, atespace, name string) (context.Context, *store.Lock, error) {
 	lockKey := "lock:actor:" + atespace + ":" + name
-	lockValue := uuid.New().String()
 
-	// Create a child context for the workflow that expires BEFORE the lock
-	workflowTimeout := ttl - padding
-	workflowCtx, cancel := context.WithTimeout(ctx, workflowTimeout)
-
-	acquired, err := w.store.AcquireLock(workflowCtx, lockKey, lockValue, ttl)
+	lock, err := w.store.AcquireLock(ctx, lockKey)
 	if err != nil {
-		cancel()
+		if errors.Is(err, store.ErrLockConflict) {
+			return nil, nil, status.Error(grpcCodes.Aborted, "another operation is in progress for this actor")
+		}
 		return nil, nil, fmt.Errorf("while acquiring lock: %w", err)
 	}
-	if !acquired {
-		cancel()
-		return nil, nil, status.Error(grpcCodes.Aborted, "another operation is in progress for this actor")
-	}
 
-	return workflowCtx, func() {
-		cancel()
-		// Use context.Background() to ensure the lock is released even if the workflow context was canceled.
-		w.store.ReleaseLock(context.Background(), lockKey, lockValue) //nolint:errcheck // best-effort release; the lock TTL is the safety net.
-	}, nil
+	return lock.Context(), lock, nil
 }

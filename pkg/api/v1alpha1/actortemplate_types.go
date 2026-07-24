@@ -15,6 +15,7 @@
 package v1alpha1
 
 import (
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -34,17 +35,33 @@ const (
 type DurableDirVolumeSource struct {
 }
 
+// Represents an external volume dynamically provisioned for each actor.
+type ExternalVolumeTemplate struct {
+	// capacity specifies the size of the volume to create.
+	// +required
+	Capacity resource.Quantity `json:"capacity"`
+	// storageClassName refers to the StorageClass to create the volume from.
+	// +required
+	StorageClassName string `json:"storageClassName"`
+}
+
 // Represents the source of a volume to mount.
 // Exactly one of its members must be specified.
 //
 // When adding a new source type, list it in the ExactlyOneOf marker below.
 //
-// +kubebuilder:validation:ExactlyOneOf={durableDir}
+// +kubebuilder:validation:ExactlyOneOf={durableDir,externalVolumeTemplate}
 type VolumeSource struct {
 	// durableDir represents a durable directory on rootfs that persists across
 	// resumes and participates in snapshots.
 	// +optional
-	DurableDir *DurableDirVolumeSource `json:"durableDir,omitempty" protobuf:"bytes,2,opt,name=durableDir"`
+	DurableDir *DurableDirVolumeSource `json:"durableDir,omitempty"`
+
+	// externalVolumeTemplate represents an external volume dynamically provisioned
+	// for each actor. The volume only lives as long as the actor and is deleted
+	// when the actor is deleted.
+	// +optional
+	ExternalVolumeTemplate *ExternalVolumeTemplate `json:"externalVolumeTemplate,omitempty"`
 }
 
 type Volume struct {
@@ -53,10 +70,10 @@ type Volume struct {
 	// +required
 	// +kubebuilder:validation:MaxLength=63
 	// +kubebuilder:validation:XValidation:rule="!format.dns1123Label().validate(self).hasValue()",message="Name must be a valid DNS label"
-	Name string `json:"name" protobuf:"bytes,1,opt,name=name"`
+	Name string `json:"name"`
 
 	// volumeSource represents the location and type of the mounted volume.
-	VolumeSource `json:",inline" protobuf:"bytes,2,opt,name=volumeSource"`
+	VolumeSource `json:",inline"`
 }
 
 // VolumeMount describes a mounting of a Volume within a actor.
@@ -66,7 +83,7 @@ type VolumeMount struct {
 	// +required
 	// +kubebuilder:validation:MaxLength=63
 	// +kubebuilder:validation:XValidation:rule="!format.dns1123Label().validate(self).hasValue()",message="Name must be a valid DNS label"
-	Name string `json:"name" protobuf:"bytes,1,opt,name=name"`
+	Name string `json:"name"`
 	// Path within the actor at which the volume should be mounted. Must be a
 	// clean absolute Unix path: must start with '/', not be '/', and contain
 	// no ':', '..', '.', '//', trailing '/', or control characters.
@@ -74,7 +91,7 @@ type VolumeMount struct {
 	// +required
 	// +kubebuilder:validation:MaxLength=4096
 	// +kubebuilder:validation:XValidation:rule="self.startsWith('/') && size(self) > 1 && !self.endsWith('/') && !self.contains('//') && !self.contains(':') && !self.matches('[\\x00-\\x1f\\x7f]') && !self.matches('(^|/)[.][.]?(/|$)')",message="MountPath must be a clean absolute Unix path: must start with '/', not be '/', and contain no ':', '..', '.', '//', trailing '/', or control characters"
-	MountPath string `json:"mountPath" protobuf:"bytes,3,opt,name=mountPath"`
+	MountPath string `json:"mountPath"`
 }
 
 // A single application container that you want to run within a WorkerPool.
@@ -280,6 +297,7 @@ type SnapshotsConfig struct {
 // +kubebuilder:validation:XValidation:rule="!has(self.volumes) || self.volumes.filter(v, has(v.durableDir)).size() <= 1",message="At most one DurableDir-typed volume is supported per ActorTemplate"
 // +kubebuilder:validation:XValidation:rule="!has(self.containers) || self.containers.all(c, !has(c.volumeMounts) || c.volumeMounts.filter(vm, has(self.volumes) && self.volumes.exists(v, v.name == vm.name && has(v.durableDir))).size() <= 1)",message="A container may mount at most one DurableDir-typed volume"
 // +kubebuilder:validation:XValidation:rule="!has(self.sandboxClass) || self.sandboxClass != 'microvm' || !has(self.volumes) || !self.volumes.exists(v, has(v.durableDir))",message="DurableDir volumes are not supported when sandboxClass is 'microvm'"
+// +kubebuilder:validation:XValidation:rule="!has(self.sandboxClass) || self.sandboxClass != 'microvm' || !has(self.volumes) || !self.volumes.exists(v, has(v.externalVolumeTemplate))",message="ExternalVolumes are not supported when sandboxClass is 'microvm'"
 type ActorTemplateSpec struct {
 	// PauseImage is the container to use as the root sandbox container.
 	//

@@ -84,9 +84,15 @@ message WorkloadSpec {
 enum VolumeType {
   VOLUME_TYPE_UNSPECIFIED = 0;
   VOLUME_TYPE_DURABLE_DIR = 1;
+  VOLUME_TYPE_EXTERNAL = 2;
 }
 
 message DurableDirVolume {
+}
+
+message ExternalVolumeSource {
+  string storage_volume_id = 1;
+  string volume_type = 2;
 }
 
 message Volume {
@@ -96,6 +102,7 @@ message Volume {
 
   oneof source {
     DurableDirVolume durable_dir = 3;
+    ExternalVolumeSource external = 4;
   }
 }
 

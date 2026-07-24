@@ -219,6 +219,77 @@ func TestServerUnaryInterceptorEmitsElapsedTrailer(t *testing.T) {
 	}
 }
 
+func TestMaxDeadlineUnaryInterceptor_MaxDeadlineIsEnforced(t *testing.T) {
+	const ceiling = 50 * time.Millisecond
+
+	tests := []struct {
+		name      string
+		callerCtx func() (context.Context, context.CancelFunc)
+	}{
+		{
+			name: "no caller deadline",
+			callerCtx: func() (context.Context, context.CancelFunc) {
+				return context.WithCancel(context.Background())
+			},
+		},
+		{
+			name: "caller deadline longer than ceiling",
+			callerCtx: func() (context.Context, context.CancelFunc) {
+				return context.WithTimeout(context.Background(), time.Hour)
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			interceptor := MaxDeadlineUnaryInterceptor(ceiling)
+
+			callerCtx, cancel := tt.callerCtx()
+			defer cancel()
+
+			handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+				gotDeadline, ok := ctx.Deadline()
+				if !ok {
+					t.Fatalf("expected the ceiling deadline to be present")
+				}
+				if until := time.Until(gotDeadline); until > ceiling {
+					t.Errorf("time until deadline = %v, want at most the %v ceiling", until, ceiling)
+				}
+				<-ctx.Done()
+				return nil, ctx.Err()
+			}
+
+			_, err := interceptor(callerCtx, "request", &grpc.UnaryServerInfo{FullMethod: "/test.Service/Method"}, handler)
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Errorf("err = %v, want context.DeadlineExceeded (should not have waited out the caller's own deadline)", err)
+			}
+		})
+	}
+}
+
+func TestMaxDeadlineUnaryInterceptor_ShorterDeadlineIsPreserved(t *testing.T) {
+	interceptor := MaxDeadlineUnaryInterceptor(time.Hour)
+
+	callerCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	callerDeadline, _ := callerCtx.Deadline()
+
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		gotDeadline, ok := ctx.Deadline()
+		if !ok {
+			t.Fatalf("expected the caller's shorter deadline to be preserved")
+		}
+		if !gotDeadline.Equal(callerDeadline) {
+			t.Errorf("deadline = %v, want caller's deadline %v (a ceiling above the caller's own deadline must not override it)", gotDeadline, callerDeadline)
+		}
+		return "response", nil
+	}
+
+	if _, err := interceptor(callerCtx, "request", &grpc.UnaryServerInfo{FullMethod: "/test.Service/Method"}, handler); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestServerUnaryInterceptorRedactsEnvFromProtoRequestLogs(t *testing.T) {
 	var log bytes.Buffer
 	origLogger := slog.Default()

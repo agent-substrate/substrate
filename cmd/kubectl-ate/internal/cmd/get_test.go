@@ -35,6 +35,8 @@ func TestGetCommandArgs(t *testing.T) {
 		{name: "atespaces get multiple", command: getAtespacesCmd, args: []string{"team-a", "team-b"}},
 		{name: "workers list", command: getWorkersCmd},
 		{name: "workers reject argument", command: getWorkersCmd, args: []string{"worker-1"}, wantErr: true},
+		{name: "top workers list", command: topWorkersCmd},
+		{name: "top workers reject argument", command: topWorkersCmd, args: []string{"worker-1"}, wantErr: true},
 	}
 
 	for _, test := range tests {

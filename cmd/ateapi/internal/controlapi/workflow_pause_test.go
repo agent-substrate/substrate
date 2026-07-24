@@ -238,6 +238,71 @@ func TestPauseSteps_CheckPrerequisite(t *testing.T) {
 	}
 }
 
+func TestCallAteletPauseStep_DanglingWorkerDoesNotRecordPhantomSnapshot(t *testing.T) {
+	tests := []struct {
+		name         string
+		prevSnapshot *ateapipb.SnapshotInfo
+	}{
+		{
+			name: "keeps previous snapshot",
+			prevSnapshot: &ateapipb.SnapshotInfo{
+				Data: &ateapipb.SnapshotInfo_External{
+					External: &ateapipb.ExternalSnapshotInfo{SnapshotUriPrefix: "gs://snapshots/actor-1/prev"},
+				},
+			},
+		},
+		{
+			name:         "stays nil without previous snapshot",
+			prevSnapshot: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			persistence := newTestPersistence(t)
+
+			actor := &ateapipb.Actor{
+				Metadata:           &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor-1"},
+				Status:             ateapipb.Actor_STATUS_PAUSING,
+				AteomPodNamespace:  "worker-ns",
+				AteomPodName:       "pod-gone",
+				WorkerPoolName:     "pool",
+				InProgressSnapshot: "actor-1-never-written",
+				LatestSnapshotInfo: tt.prevSnapshot,
+			}
+			created, err := persistence.CreateActor(ctx, actor)
+			if err != nil {
+				t.Fatalf("CreateActor: %v", err)
+			}
+
+			step := &CallAteletPauseStep{store: persistence, dialer: newDanglingDialer()}
+			input := &PauseInput{ActorName: "actor-1", Atespace: "team-a"}
+			if err := step.Execute(ctx, input, &PauseState{Actor: created}); err == nil {
+				t.Fatal("Execute: want error for dangling worker, got nil")
+			}
+
+			stored, err := persistence.GetActor(ctx, "team-a", "actor-1")
+			if err != nil {
+				t.Fatalf("GetActor: %v", err)
+			}
+			if stored.GetStatus() != ateapipb.Actor_STATUS_CRASHED {
+				t.Errorf("status = %v, want CRASHED", stored.GetStatus())
+			}
+			if got := stored.GetInProgressSnapshot(); got != "actor-1-never-written" {
+				t.Errorf("InProgressSnapshot = %q, want preserved for debugging", got)
+			}
+			if tt.prevSnapshot == nil {
+				if stored.GetLatestSnapshotInfo() != nil {
+					t.Errorf("LatestSnapshotInfo = %v, want nil", stored.GetLatestSnapshotInfo())
+				}
+			} else if got, want := stored.GetLatestSnapshotInfo().GetExternal().GetSnapshotUriPrefix(), tt.prevSnapshot.GetExternal().GetSnapshotUriPrefix(); got != want {
+				t.Errorf("LatestSnapshotInfo uri = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
 // TestPauseActor_CrashesWhenPausingActorMissingWorkerPod verifies that a
 // PAUSING actor with no worker pod recorded is moved to CRASHED by
 // CallAteletPauseStep's prerequisite check and the pause fails with

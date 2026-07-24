@@ -22,6 +22,7 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	corev1 "k8s.io/api/core/v1"
@@ -35,7 +36,7 @@ const envSecretCacheTTL = 30 * time.Second
 // workloadSpecFromActorTemplate builds a WorkloadSpec without resolving
 // container env vars. Use this when downstream consumers (e.g. checkpoint
 // requests) don't need env entries materialized.
-func workloadSpecFromActorTemplate(actorTemplate *atev1alpha1.ActorTemplate) *ateletpb.WorkloadSpec {
+func workloadSpecFromActorTemplate(actorTemplate *atev1alpha1.ActorTemplate, actor *ateapipb.Actor) (*ateletpb.WorkloadSpec, error) {
 	workloadSpec := &ateletpb.WorkloadSpec{
 		PauseImage: actorTemplate.Spec.PauseImage,
 	}
@@ -52,6 +53,12 @@ func workloadSpecFromActorTemplate(actorTemplate *atev1alpha1.ActorTemplate) *at
 				},
 			})
 		}
+	}
+
+	// TODO: order may be important for nested mounts. Also need to think about
+	// nested mount support in general.
+	if err := appendExternalVolumes(workloadSpec, actorTemplate, actor); err != nil {
+		return nil, err
 	}
 
 	for _, ctr := range actorTemplate.Spec.Containers {
@@ -71,14 +78,17 @@ func workloadSpecFromActorTemplate(actorTemplate *atev1alpha1.ActorTemplate) *at
 		workloadSpec.Containers = append(workloadSpec.Containers, ateletCtr)
 	}
 
-	return workloadSpec
+	return workloadSpec, nil
 }
 
 // workloadSpecFromActorTemplateWithEnv builds a WorkloadSpec and resolves each
 // container's env vars against the cluster. kubeClient must be non-nil;
 // secretCache is optional and, when supplied, deduplicates Secret reads.
-func workloadSpecFromActorTemplateWithEnv(ctx context.Context, kubeClient kubernetes.Interface, secretCache *envSecretCache, actorTemplate *atev1alpha1.ActorTemplate) (*ateletpb.WorkloadSpec, error) {
-	workloadSpec := workloadSpecFromActorTemplate(actorTemplate)
+func workloadSpecFromActorTemplateWithEnv(ctx context.Context, kubeClient kubernetes.Interface, secretCache *envSecretCache, actorTemplate *atev1alpha1.ActorTemplate, actor *ateapipb.Actor) (*ateletpb.WorkloadSpec, error) {
+	workloadSpec, err := workloadSpecFromActorTemplate(actorTemplate, actor)
+	if err != nil {
+		return nil, err
+	}
 
 	resolver := envResolver{
 		kubeClient: kubeClient,
@@ -99,6 +109,60 @@ func workloadSpecFromActorTemplateWithEnv(ctx context.Context, kubeClient kubern
 	}
 
 	return workloadSpec, nil
+}
+
+// appendExternalVolumes maps template external volumes to resolved actor volumes and appends them to workloadSpec
+// if they are referenced in container volumeMounts.
+func appendExternalVolumes(workloadSpec *ateletpb.WorkloadSpec, template *atev1alpha1.ActorTemplate, actor *ateapipb.Actor) error {
+	if template == nil {
+		return nil
+	}
+	for _, vol := range template.Spec.Volumes {
+		if vol.ExternalVolumeTemplate != nil {
+			if !isVolumeMounted(vol.Name, template) {
+				continue
+			}
+			if actor == nil {
+				return fmt.Errorf("actor is required when externalVolumeTemplate is present")
+			}
+
+			var storageVolID string
+			var volType string
+			expectedID := actorVolumeID(&ateapipb.ObjectRef{Atespace: actor.GetMetadata().GetAtespace(), Name: actor.GetMetadata().GetName()}, vol.Name)
+			for _, dbVol := range actor.GetActorVolumes() {
+				if dbVol.GetActorVolumeId() == expectedID {
+					storageVolID = dbVol.GetStorageVolumeId()
+					volType = dbVol.GetVolumeType()
+					break
+				}
+			}
+			if storageVolID == "" {
+				return fmt.Errorf("volume %s not found for actor %s", vol.Name, actor.GetMetadata().GetName())
+			}
+			workloadSpec.Volumes = append(workloadSpec.Volumes, &ateletpb.Volume{
+				Name: vol.Name,
+				Type: ateletpb.VolumeType_VOLUME_TYPE_EXTERNAL,
+				Source: &ateletpb.Volume_External{
+					External: &ateletpb.ExternalVolumeSource{
+						StorageVolumeId: storageVolID,
+						VolumeType:      volType,
+					},
+				},
+			})
+		}
+	}
+	return nil
+}
+
+func isVolumeMounted(volumeName string, template *atev1alpha1.ActorTemplate) bool {
+	for _, ctr := range template.Spec.Containers {
+		for _, mount := range ctr.VolumeMounts {
+			if mount.Name == volumeName {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // toAteletReadyz projects the CRD readyz field onto the ateletpb wire type.

@@ -42,6 +42,9 @@ spec:
   containers:
   - name: counter
     image: ko://github.com/agent-substrate/substrate/demos/counter
+    command:
+    - /ko-app/counter
+${VALIDATE_EXISTING_FILE_PATH_ARG}
     readyz:
       httpGet:
         path: /readyz
@@ -49,6 +52,7 @@ spec:
     volumeMounts:
     - name: data
       mountPath: /home/counter
+${EXTERNAL_VOLUME_MOUNTS}
   workerSelector:
     matchLabels:
       workload: counter
@@ -59,3 +63,4 @@ spec:
   volumes:
   - name: data
     durableDir: {}
+${EXTERNAL_VOLUMES}

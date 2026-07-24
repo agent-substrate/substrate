@@ -54,6 +54,9 @@ import (
 	"k8s.io/client-go/rest"
 )
 
+// maxRPCDeadline is the max deadline for all RPC methods exposed by this server.
+const maxRPCDeadline = 10 * time.Minute
+
 var (
 	listenAddr           = pflag.String("grpc-listen-addr", ":443", "Address and port the gRPC server should listen on.")
 	metricsListenAddr    = pflag.String("metrics-listen-addr", ":9090", "Address and port the prometheus metrics server should listen on.")
@@ -183,6 +186,7 @@ func main() {
 		grpc.StatsHandler(otelgrpc.NewServerHandler()),
 		grpc.ChainUnaryInterceptor(
 			ateapiauth.UnaryServerInterceptor(authCfg),
+			ateinterceptors.MaxDeadlineUnaryInterceptor(maxRPCDeadline),
 			ateinterceptors.ServerUnaryInterceptor,
 		),
 		grpc.ChainStreamInterceptor(

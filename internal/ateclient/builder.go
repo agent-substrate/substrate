@@ -42,6 +42,7 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/client-go/tools/portforward"
 	"k8s.io/client-go/transport/spdy"
+	metricsv1beta1 "k8s.io/metrics/pkg/client/clientset/versioned"
 )
 
 const (
@@ -376,4 +377,13 @@ func NewK8sClientset(kubeconfigPath, k8sContext string) (*kubernetes.Clientset, 
 		return nil, err
 	}
 	return kubernetes.NewForConfig(config)
+}
+
+// NewMetricsClientset creates a new Kubernetes Metrics Clientset using the provided kubeconfig path and context.
+func NewMetricsClientset(kubeconfigPath, k8sContext string) (*metricsv1beta1.Clientset, error) {
+	config, err := LoadConfig(kubeconfigPath, k8sContext)
+	if err != nil {
+		return nil, err
+	}
+	return metricsv1beta1.NewForConfig(config)
 }

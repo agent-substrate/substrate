@@ -101,7 +101,7 @@ func (s *LoadActorForResumeStep) Execute(ctx context.Context, input *ResumeInput
 		wk, err := s.store.GetWorker(ctx, actor.AteomPodNamespace, actor.WorkerPoolName, actor.AteomPodName)
 		if err != nil {
 			// Crash the actor if it was assigned to a deleted pod.
-			if errors.Is(err, ErrWorkerPodNotFound) {
+			if errors.Is(err, store.ErrNotFound) {
 				if cerr := crashActor(ctx, s.store, input.Atespace, input.ActorName); cerr != nil {
 					return cerr
 				}
@@ -195,7 +195,7 @@ func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, stat
 		// to the free pool — nothing else reclaims a healthy worker whose
 		// actor moved on to a different pool. Best effort in the background.
 		go func(release *ateapipb.Worker) {
-			bgCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+			bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			if err := s.store.UpdateWorker(bgCtx, release, release.Version); err != nil {
 				slog.ErrorContext(bgCtx, "Failed to release stale worker assignment",
@@ -259,6 +259,49 @@ func (s *AssignWorkerStep) RetryBackoff() *wait.Backoff {
 		Jitter:   1.0,
 	}
 }
+
+type AttachVolumesStep struct {
+	store store.Interface
+}
+
+func (s *AttachVolumesStep) Name() string { return "AttachVolumes" }
+
+func (s *AttachVolumesStep) IsComplete(ctx context.Context, input *ResumeInput, state *ResumeState) (bool, error) {
+	// TODO replace with a proper check on the volumes.
+	return state.Actor.GetStatus() == ateapipb.Actor_STATUS_RUNNING, nil
+}
+
+func (s *AttachVolumesStep) CheckPrerequisite(ctx context.Context, input *ResumeInput, state *ResumeState) error {
+	return nil
+}
+
+func (s *AttachVolumesStep) Execute(ctx context.Context, input *ResumeInput, state *ResumeState) error {
+	if state.Actor.GetAteomPodNamespace() == "" {
+		return fmt.Errorf("actor has no assigned worker pod")
+	}
+
+	worker, err := s.store.GetWorker(ctx, state.Actor.GetAteomPodNamespace(), state.Actor.GetWorkerPoolName(), state.Actor.GetAteomPodName())
+	if err != nil {
+		return fmt.Errorf("failed to get worker for volume attachment: %w", err)
+	}
+
+	node := worker.GetNodeName()
+	if node == "" {
+		return fmt.Errorf("assigned worker has no node name")
+	}
+
+	ref := &ateapipb.ObjectRef{Atespace: state.Actor.GetMetadata().GetAtespace(), Name: state.Actor.GetMetadata().GetName()}
+	for _, vol := range getMountedActorVolumes(ctx, ref, state.Actor.GetActorVolumes(), state.ActorTemplate) {
+		slog.InfoContext(ctx, "Attaching volume to node", slog.String("volume_id", vol.GetStorageVolumeId()), slog.String("node", node))
+		err := getVolumePlugin().AttachVolume(ctx, vol.GetStorageVolumeId(), node)
+		if err != nil {
+			return fmt.Errorf("failed to attach volume %q to node %q: %w", vol.GetStorageVolumeId(), node, err)
+		}
+	}
+	return nil
+}
+
+func (s *AttachVolumesStep) RetryBackoff() *wait.Backoff { return nil }
 
 func (s *AssignWorkerStep) findFreeWorker(
 	workers []*ateapipb.Worker,
@@ -353,7 +396,7 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 	}
 	client := ateletpb.NewAteomHerderClient(ateletConn)
 
-	workloadSpec, err := workloadSpecFromActorTemplateWithEnv(ctx, s.kubeClient, s.secretCache, state.ActorTemplate)
+	workloadSpec, err := workloadSpecFromActorTemplateWithEnv(ctx, s.kubeClient, s.secretCache, state.ActorTemplate, state.Actor)
 	if err != nil {
 		return err
 	}
