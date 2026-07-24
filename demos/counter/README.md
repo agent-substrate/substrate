@@ -6,9 +6,9 @@ It deploys a simple Go HTTP server (`counter.go`) that increments a counter on e
 
 ## Prerequisites
 
-- A k8s cluster with Agent Substrate installed (`./hack/install-ate.sh --deploy-ate-system`).
-- `ko` installed for building images.
-- A GCS bucket for storing snapshots (configured via `BUCKET_NAME` env var).
+- [Go](https://go.dev/doc/install), [`kubectl`](https://kubernetes.io/docs/tasks/tools/), and [`docker`](https://www.docker.com/) installed, plus `ko` for building images.
+- **Local (kind):** a cluster created with `./hack/create-kind-cluster.sh` and Agent Substrate installed via `./hack/install-ate-kind.sh --deploy-ate-system`. Snapshots are stored in the in-cluster rustfs; no GCS bucket or GCP account is needed. See [Quickstart (Development)](../../README.md#quickstart-development) in the main README.
+- **GKE:** Agent Substrate installed via `./hack/install-ate.sh --deploy-ate-system`, and a GCS bucket for storing snapshots (configured via the `BUCKET_NAME` env var).
 
 ## How to Run on Agent Substrate
 
@@ -20,6 +20,10 @@ It deploys a simple Go HTTP server (`counter.go`) that increments a counter on e
 Use the core installation script to build the image and apply the resolved manifests to your cluster:
 
 ```bash
+# local kind cluster:
+./hack/install-ate-kind.sh --deploy-demo-counter
+
+# existing/GKE cluster:
 ./hack/install-ate.sh --deploy-demo-counter
 ```
 
