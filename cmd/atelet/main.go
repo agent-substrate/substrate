@@ -191,10 +191,11 @@ func main() {
 type AteomHerder struct {
 	ateletpb.UnimplementedAteomHerderServer
 
-	ateomDialer   *AteomDialer
-	imageCache    *imagecache.Store
-	anonGCSClient ategcs.ObjectStorage
-	gcsClient     ategcs.ObjectStorage
+	ateomDialer     *AteomDialer
+	imageCache      *imagecache.Store
+	anonGCSClient   ategcs.ObjectStorage
+	gcsClient       ategcs.ObjectStorage
+	actorOperations actorOperationLocks
 }
 
 var _ ateletpb.AteomHerderServer = (*AteomHerder)(nil)
@@ -229,6 +230,12 @@ func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (*atele
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
+	operation, err := s.beginActorOperation(actorUID)
+	if err != nil {
+		return nil, err
+	}
+	defer operation.end()
+
 	assetPaths, err := s.ensureSandboxAssets(ctx, sandboxRec)
 	if err != nil {
 		return nil, err
@@ -255,6 +262,9 @@ func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (*atele
 	if err != nil {
 		return nil, err
 	}
+	if err := operation.releaseFiles(); err != nil {
+		return nil, fmt.Errorf("while releasing actor file lock before ateom RunWorkload: %w", err)
+	}
 
 	// Tell ateom to start the workload. gVisor uses RunscPath; the micro-VM
 	// runtime uses the full RuntimeAssetPaths set.
@@ -267,6 +277,7 @@ func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (*atele
 		RuntimeAssetPaths:      assetPaths,
 		Spec:                   buildAteomWorkloadSpec(req.GetSpec()),
 		ActorUid:               actorUID,
+		OperationId:            operation.id,
 	}); err != nil {
 		return nil, fmt.Errorf("while calling ateom.RunWorkload: %w", err)
 	}
@@ -317,6 +328,12 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 
 	actorUID, atespace, actorName := req.GetActorUid(), req.GetAtespace(), req.GetActorName()
 
+	operation, err := s.beginActorOperation(actorUID)
+	if err != nil {
+		return nil, err
+	}
+	defer operation.end()
+
 	// Checkpoint requests no longer carry the sandbox config; recover the
 	// version this actor was started with from the on-node record and re-fetch
 	// it (a cache hit) so ateom can drive runsc, and so we can pin it into the
@@ -336,6 +353,9 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 	if err != nil {
 		return nil, err
 	}
+	if err := operation.releaseFiles(); err != nil {
+		return nil, fmt.Errorf("while releasing actor file lock before ateom CheckpointWorkload: %w", err)
+	}
 
 	// Tell ateom to take the checkpoint and delete containers. ateom reports the
 	// exact files it wrote so we ship precisely that set (gVisor's image files,
@@ -350,11 +370,15 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 		Spec:                   buildAteomWorkloadSpec(req.GetSpec()),
 		Scope:                  toAteomSnapshotScope(req.GetScope()),
 		ActorUid:               actorUID,
+		OperationId:            operation.id,
 	})
 	if err != nil {
 		// TODO: Ateom should classify checkpoint failures, and set "should-crash"
 		// in the metadata if the error is not retriable.
 		return nil, fmt.Errorf("while calling ateom.CheckpointWorkload: %w", err)
+	}
+	if err := operation.reacquireFiles(ctx); err != nil {
+		return nil, err
 	}
 	sandboxRec.SnapshotFiles = resp.GetSnapshotFiles()
 	if len(sandboxRec.SnapshotFiles) == 0 {
@@ -462,6 +486,12 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 
 	actorUID, atespace, actorName := req.GetActorUid(), req.GetAtespace(), req.GetActorName()
 
+	operation, err := s.beginActorOperation(actorUID)
+	if err != nil {
+		return nil, err
+	}
+	defer operation.end()
+
 	// Not crashing the actor, because terminal errors here indicate problems with atelet,
 	// node or the disk itself.
 	if err := resetActorDirs(actorUID); err != nil {
@@ -551,6 +581,9 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	if err != nil {
 		return nil, err
 	}
+	if err := operation.releaseFiles(); err != nil {
+		return nil, fmt.Errorf("while releasing actor file lock before ateom RestoreWorkload: %w", err)
+	}
 
 	// Tell ateom to do runsc create + runsc restore for pause container and
 	// all application containers.
@@ -565,11 +598,15 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		Spec:                   buildAteomWorkloadSpec(req.GetSpec()),
 		Scope:                  toAteomSnapshotScope(req.GetScope()),
 		ActorUid:               req.GetActorUid(),
+		OperationId:            operation.id,
 	}); err != nil {
 		// TODO: classify the errors returned by Ateom and crash the actor if needed.
 		return nil, fmt.Errorf("while calling ateom.RestoreWorkload: %w", err)
 	}
 	dAteom = time.Since(tAteom)
+	if err := operation.reacquireFiles(ctx); err != nil {
+		return nil, err
+	}
 
 	// Record the (manifest-pinned) sandbox binaries on-node so a subsequent
 	// Checkpoint of this restored actor can re-pin the same version.
