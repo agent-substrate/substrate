@@ -58,17 +58,35 @@ const (
 type ControlClient interface {
 	// Get an Actor.
 	GetActor(ctx context.Context, in *GetActorRequest, opts ...grpc.CallOption) (*Actor, error)
-	// Create a new Actor deriving from a given ActorTemplate.
+	// Create a new Actor deriving from a given ActorTemplate. The referenced
+	// Atespace and ActorTemplate must already exist, and the Actor's
+	// (atespace, name) identity must be unused. The server initializes the Actor
+	// in SUSPENDED state without assigning a Worker.
 	CreateActor(ctx context.Context, in *CreateActorRequest, opts ...grpc.CallOption) (*Actor, error)
 	// Update mutable fields on an existing Actor.
 	UpdateActor(ctx context.Context, in *UpdateActorRequest, opts ...grpc.CallOption) (*UpdateActorResponse, error)
-	// Suspend a given actor to a new snapshot.
+	// Idempotently transition a RUNNING Actor through SUSPENDING to SUSPENDED.
+	// The configured on-commit state is checkpointed to external storage, the
+	// Worker is released, and the returned Actor references the new snapshot.
+	// A retry continues an interrupted SUSPENDING workflow; an already fully
+	// SUSPENDED Actor is returned unchanged.
 	SuspendActor(ctx context.Context, in *SuspendActorRequest, opts ...grpc.CallOption) (*SuspendActorResponse, error)
-	// Pause a given actor and keep its snapshots on node VM.
+	// Idempotently transition a RUNNING Actor through PAUSING to PAUSED. The
+	// configured on-pause state is checkpointed on the node VM, the Worker is
+	// released, and the returned Actor records which node holds the snapshot.
+	// A retry continues an interrupted PAUSING workflow; an already fully PAUSED
+	// Actor is returned unchanged.
 	PauseActor(ctx context.Context, in *PauseActorRequest, opts ...grpc.CallOption) (*PauseActorResponse, error)
-	// Resume an actor from its latest snapshot.
+	// Idempotently transition a SUSPENDED or PAUSED Actor through RESUMING to
+	// RUNNING. The server claims an eligible Worker and restores the Actor's
+	// latest snapshot. If the Actor has no snapshot, it restores the
+	// ActorTemplate's golden snapshot unless boot is true; otherwise it boots
+	// from the ActorTemplate spec. The call returns after configured readiness
+	// checks pass. A retry continues an interrupted RESUMING workflow; an
+	// already RUNNING Actor is returned unchanged.
 	ResumeActor(ctx context.Context, in *ResumeActorRequest, opts ...grpc.CallOption) (*ResumeActorResponse, error)
-	// Delete an actor. Only suspended actors can be deleted.
+	// Delete a SUSPENDED or CRASHED Actor and return its final record. Deletion
+	// removes the control-plane record; it does not remove snapshot files.
 	DeleteActor(ctx context.Context, in *DeleteActorRequest, opts ...grpc.CallOption) (*Actor, error)
 	// List Workers.
 	ListWorkers(ctx context.Context, in *ListWorkersRequest, opts ...grpc.CallOption) (*ListWorkersResponse, error)
@@ -230,17 +248,35 @@ func (c *controlClient) DeleteAtespace(ctx context.Context, in *DeleteAtespaceRe
 type ControlServer interface {
 	// Get an Actor.
 	GetActor(context.Context, *GetActorRequest) (*Actor, error)
-	// Create a new Actor deriving from a given ActorTemplate.
+	// Create a new Actor deriving from a given ActorTemplate. The referenced
+	// Atespace and ActorTemplate must already exist, and the Actor's
+	// (atespace, name) identity must be unused. The server initializes the Actor
+	// in SUSPENDED state without assigning a Worker.
 	CreateActor(context.Context, *CreateActorRequest) (*Actor, error)
 	// Update mutable fields on an existing Actor.
 	UpdateActor(context.Context, *UpdateActorRequest) (*UpdateActorResponse, error)
-	// Suspend a given actor to a new snapshot.
+	// Idempotently transition a RUNNING Actor through SUSPENDING to SUSPENDED.
+	// The configured on-commit state is checkpointed to external storage, the
+	// Worker is released, and the returned Actor references the new snapshot.
+	// A retry continues an interrupted SUSPENDING workflow; an already fully
+	// SUSPENDED Actor is returned unchanged.
 	SuspendActor(context.Context, *SuspendActorRequest) (*SuspendActorResponse, error)
-	// Pause a given actor and keep its snapshots on node VM.
+	// Idempotently transition a RUNNING Actor through PAUSING to PAUSED. The
+	// configured on-pause state is checkpointed on the node VM, the Worker is
+	// released, and the returned Actor records which node holds the snapshot.
+	// A retry continues an interrupted PAUSING workflow; an already fully PAUSED
+	// Actor is returned unchanged.
 	PauseActor(context.Context, *PauseActorRequest) (*PauseActorResponse, error)
-	// Resume an actor from its latest snapshot.
+	// Idempotently transition a SUSPENDED or PAUSED Actor through RESUMING to
+	// RUNNING. The server claims an eligible Worker and restores the Actor's
+	// latest snapshot. If the Actor has no snapshot, it restores the
+	// ActorTemplate's golden snapshot unless boot is true; otherwise it boots
+	// from the ActorTemplate spec. The call returns after configured readiness
+	// checks pass. A retry continues an interrupted RESUMING workflow; an
+	// already RUNNING Actor is returned unchanged.
 	ResumeActor(context.Context, *ResumeActorRequest) (*ResumeActorResponse, error)
-	// Delete an actor. Only suspended actors can be deleted.
+	// Delete a SUSPENDED or CRASHED Actor and return its final record. Deletion
+	// removes the control-plane record; it does not remove snapshot files.
 	DeleteActor(context.Context, *DeleteActorRequest) (*Actor, error)
 	// List Workers.
 	ListWorkers(context.Context, *ListWorkersRequest) (*ListWorkersResponse, error)

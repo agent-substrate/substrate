@@ -38,17 +38,41 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
+// Status describes the Actor's control-plane lifecycle state. The normal
+// successful transitions are:
+//
+//	CreateActor:                         -> SUSPENDED
+//	ResumeActor:  SUSPENDED or PAUSED    -> RESUMING  -> RUNNING
+//	SuspendActor: RUNNING                -> SUSPENDING -> SUSPENDED
+//	PauseActor:   RUNNING                -> PAUSING    -> PAUSED
+//	DeleteActor:  SUSPENDED or CRASHED   -> deleted
+//
+// An unrecoverable activation or checkpoint failure can move an Actor to
+// CRASHED. Transitional states are persisted so a retry of the same RPC can
+// continue an interrupted workflow.
 type Actor_Status int32
 
 const (
+	// Invalid or unknown lifecycle state.
 	Actor_STATUS_UNSPECIFIED Actor_Status = 0
-	Actor_STATUS_RESUMING    Actor_Status = 1
-	Actor_STATUS_RUNNING     Actor_Status = 2
-	Actor_STATUS_SUSPENDING  Actor_Status = 3
-	Actor_STATUS_SUSPENDED   Actor_Status = 4
-	Actor_STATUS_PAUSING     Actor_Status = 5
-	Actor_STATUS_PAUSED      Actor_Status = 6
-	Actor_STATUS_CRASHED     Actor_Status = 7
+	// A Worker is assigned and the workload is being booted or restored.
+	Actor_STATUS_RESUMING Actor_Status = 1
+	// The workload is executing on its assigned Worker.
+	Actor_STATUS_RUNNING Actor_Status = 2
+	// The workload is being checkpointed to external storage.
+	Actor_STATUS_SUSPENDING Actor_Status = 3
+	// The Actor has no assigned Worker and is eligible for ResumeActor or
+	// DeleteActor. A newly created Actor starts in this state without its own
+	// snapshot.
+	Actor_STATUS_SUSPENDED Actor_Status = 4
+	// The workload is being checkpointed to node-local storage.
+	Actor_STATUS_PAUSING Actor_Status = 5
+	// The Actor has no assigned Worker and its latest snapshot remains on one
+	// or more recorded node VMs.
+	Actor_STATUS_PAUSED Actor_Status = 6
+	// The workload or its lifecycle workflow failed irrecoverably. Its Worker
+	// has been released; the Actor can be inspected or deleted.
+	Actor_STATUS_CRASHED Actor_Status = 7
 )
 
 // Enum value maps for Actor_Status.
