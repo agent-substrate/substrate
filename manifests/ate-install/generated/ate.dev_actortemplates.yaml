@@ -433,9 +433,6 @@ spec:
               rule: '!has(self.volumes) || self.volumes.all(v, has(self.containers)
                 && self.containers.exists(c, has(c.volumeMounts) && c.volumeMounts.exists(vm,
                 vm.name == v.name)))'
-            - message: DurableDir volumes are not supported when sandboxClass is 'microvm'
-              rule: '!has(self.sandboxClass) || self.sandboxClass != ''microvm'' ||
-                !has(self.volumes) || !self.volumes.exists(v, has(v.durableDir))'
             - message: ExternalVolumes are not supported when sandboxClass is 'microvm'
               rule: '!has(self.sandboxClass) || self.sandboxClass != ''microvm'' ||
                 !has(self.volumes) || !self.volumes.exists(v, has(v.externalVolumeTemplate))'

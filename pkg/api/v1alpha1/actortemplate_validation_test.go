@@ -998,7 +998,7 @@ func TestActorTemplateValidation(t *testing.T) {
 		wantErr: true,
 		errMsg:  "Name must be a valid DNS label",
 	}, {
-		name: "Volumes: DurableDir volume with SandboxClass microvm is invalid",
+		name: "Volumes: DurableDir volume with SandboxClass microvm is valid",
 		mutate: func(at *ActorTemplate) {
 			at.Spec.SandboxClass = SandboxClassMicroVM
 			at.Spec.Volumes = []Volume{
@@ -1008,8 +1008,7 @@ func TestActorTemplateValidation(t *testing.T) {
 				{Name: "vol1", MountPath: "/home/user"},
 			}
 		},
-		wantErr: true,
-		errMsg:  "DurableDir volumes are not supported when sandboxClass is 'microvm'",
+		wantErr: false,
 	}, {
 		name: "Volumes: DurableDir volume with SandboxClass gvisor is valid",
 		mutate: func(at *ActorTemplate) {
