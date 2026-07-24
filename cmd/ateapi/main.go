@@ -24,7 +24,9 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/controlapi"
@@ -76,6 +78,9 @@ var (
 	podIdentityCACerts     = pflag.String("pod-identity-ca-certs", "", "The file that contains the pod-identity CA bundle, used both for verifying client certificates presented to the gRPC server and for verifying atelet serving certificates when dialing atelet. If empty, client-cert verification is disabled and atelet dials will fail.")
 	ateletClientCredBundle = pflag.String("atelet-client-cred-bundle", "", "Credential bundle presented as the client certificate when dialing atelet.")
 
+	drainDelay   = pflag.Duration("drain-delay", 13*time.Second, "How long to keep accepting new work after SIGTERM, before starting the gRPC drain.")
+	drainTimeout = pflag.Duration("drain-timeout", 15*time.Second, "Deadline for the graceful gRPC drain on shutdown. In-flight RPCs still running past it are forcefully cancelled.")
+
 	showVersion     = pflag.Bool("version", false, "Print version and exit.")
 	clientJWTCAFile = pflag.String("client-jwt-ca-cert", ateapiauth.DefaultServiceAccountCAFile, "CA cert file used to verify TLS when fetching the OIDC discovery document and JWKS for JWT authentication. Defaults to the in-cluster service account CA.")
 )
@@ -88,6 +93,12 @@ func main() {
 	}
 	ctx := context.Background()
 	serverboot.InitLogger()
+
+	// Kept separate from ctx so that in-progress work (clients, informers) is
+	// not cancelled the moment SIGTERM arrives. The drainOnShutdown
+	// function drives the shutdown process.
+	shutdownCtx, stopSignals := signal.NotifyContext(ctx, syscall.SIGTERM, os.Interrupt)
+	defer stopSignals()
 
 	tp, err := serverboot.InitTracing(ctx, serverboot.TracingOptions{
 		ServiceName: "ateapi",
@@ -198,14 +209,45 @@ func main() {
 	ateapipb.RegisterSessionIdentityServer(mux, sessionIdentitySrv)
 	ateapipb.RegisterDebugServer(mux, debugSrv)
 
+	readiness := &serverboot.Readiness{}
 	go serverboot.StartMetricsServer(ctx, serverboot.MetricsServerOptions{
-		Addr:         *metricsListenAddr,
-		EnableReadyz: true,
+		Addr:          *metricsListenAddr,
+		Readiness:     readiness,
+		EnableHealthz: true,
 	})
+
+	drainDone := drainOnShutdown(shutdownCtx, mux, readiness)
 
 	if err := mux.Serve(lis); err != nil {
 		serverboot.Fatal(ctx, "Failed to serve", err)
 	}
+	<-drainDone
+	slog.InfoContext(ctx, "Shutdown complete")
+}
+
+func drainOnShutdown(ctx context.Context, srv *grpc.Server, readiness *serverboot.Readiness) <-chan struct{} {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		<-ctx.Done()
+		slog.InfoContext(ctx, "Shutdown signal received; draining")
+		readiness.MarkNotReady()
+		time.Sleep(*drainDelay)
+		slog.InfoContext(ctx, "Starting gRPC drain")
+		drainComplete := make(chan struct{})
+		go func() {
+			srv.GracefulStop()
+			close(drainComplete)
+		}()
+		select {
+		case <-drainComplete:
+			slog.InfoContext(ctx, "Drain completed within deadline")
+		case <-time.After(*drainTimeout):
+			slog.WarnContext(ctx, "Drain deadline exceeded; forcing stop")
+			srv.Stop()
+		}
+	}()
+	return done
 }
 
 // loadFlagsFromEnv resolves any flag whose value is the sentinel `@env`
@@ -245,6 +287,8 @@ func logFlagValues(ctx context.Context) {
 		slog.String("session-id-ca-pool", *sessionIDCAPoolFile),
 		slog.String("pod-identity-ca-certs", *podIdentityCACerts),
 		slog.String("atelet-client-cred-bundle", *ateletClientCredBundle),
+		slog.Duration("drain-delay", *drainDelay),
+		slog.Duration("drain-timeout", *drainTimeout),
 	)
 }
 

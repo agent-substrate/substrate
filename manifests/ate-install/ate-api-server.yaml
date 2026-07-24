@@ -75,6 +75,10 @@ spec:
         prometheus.io/port: "9090"
     spec:
       serviceAccountName: ate-api-server
+      # Budget for the full shutdown sequence: --drain-delay (sized to cover
+      # the readinessProbe below reaching NotReady, plus propagation) +
+      # --drain-timeout.
+      terminationGracePeriodSeconds: 40
       containers:
       - name: ate-api-server
         image: ko://github.com/agent-substrate/substrate/cmd/ateapi
@@ -92,6 +96,9 @@ spec:
           - --session-id-ca-pool=/run/session-id-ca-pool/pool.json
           - --atelet-client-cred-bundle=/run/podidentity.podcert.ate.dev/credential-bundle.pem
           - --pod-identity-ca-certs=/run/podidentity.podcert.ate.dev/trust-bundle.pem
+          # Graceful shutdown knobs. The sum must fit within terminationGracePeriodSeconds.
+          - --drain-delay=13s
+          - --drain-timeout=15s
         env:
         - name: POD_NAME
           valueFrom:
@@ -145,6 +152,16 @@ spec:
             port: 9090
           initialDelaySeconds: 5
           periodSeconds: 2
+          failureThreshold: 3
+        # /healthz stays 200 while a terminating pod drains; /readyz
+        # turns 503, so liveness and readiness diverge correctly during
+        # shutdown.
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 9090
+          initialDelaySeconds: 10
+          periodSeconds: 10
       volumes:
       - name: "servicedns"
         projected:

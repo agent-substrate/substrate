@@ -108,8 +108,8 @@ func main() {
 	}
 
 	go serverboot.StartMetricsServer(ctx, serverboot.MetricsServerOptions{
-		Addr:         *metricsListenAddr,
-		EnableReadyz: true,
+		Addr:      *metricsListenAddr,
+		Readiness: &serverboot.Readiness{},
 	})
 
 	slog.InfoContext(ctx, "glutton starting",
