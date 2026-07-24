@@ -399,3 +399,114 @@ func TestPrintAtespacesTo_Invalid(t *testing.T) {
 		t.Errorf("expected error for invalid format, got nil")
 	}
 }
+
+func TestPrintWorkerTopTo_Table(t *testing.T) {
+	var buf bytes.Buffer
+	items := []*WorkerTopItem{
+		{
+			Pod:           "counter-worker-pool-7b9f8-x123",
+			Pool:          "counter",
+			Status:        "ASSIGNED",
+			AssignedActor: "default/counter-template/ate-demo-counter/my-counter-1",
+			CPU:           "342m",
+			Memory:        "412Mi",
+			Namespace:     "ate-demo-counter",
+		},
+		{
+			Pod:           "counter-worker-pool-7b9f8-y456",
+			Pool:          "counter",
+			Status:        "FREE",
+			AssignedActor: "<none>",
+			CPU:           "2m",
+			Memory:        "64Mi",
+			Namespace:     "ate-demo-counter",
+		},
+	}
+
+	if err := PrintWorkerTopTo(&buf, items, "table"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	output := buf.String()
+
+	expected := `NAME                             POOL      STATUS     ASSIGNED ACTOR                                           CPU(CORES)   MEMORY(bytes)
+counter-worker-pool-7b9f8-x123   counter   ASSIGNED   default/counter-template/ate-demo-counter/my-counter-1   342m         412Mi
+counter-worker-pool-7b9f8-y456   counter   FREE       <none>                                                   2m           64Mi
+`
+	if diff := cmp.Diff(expected, output); diff != "" {
+		t.Errorf("output mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestPrintWorkerTopTo_JSON(t *testing.T) {
+	var buf bytes.Buffer
+	items := []*WorkerTopItem{
+		{
+			Pod:           "worker-1",
+			Pool:          "pool-1",
+			Status:        "ASSIGNED",
+			AssignedActor: "default/template-1/space-1/actor-1",
+			CPU:           "100m",
+			Memory:        "128Mi",
+		},
+	}
+
+	if err := PrintWorkerTopTo(&buf, items, "json"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	output := buf.String()
+
+	expected := `{
+  "workers": [
+    {
+      "pod": "worker-1",
+      "pool": "pool-1",
+      "status": "ASSIGNED",
+      "assignedActor": "default/template-1/space-1/actor-1",
+      "cpu": "100m",
+      "memory": "128Mi"
+    }
+  ]
+}
+`
+	if diff := cmp.Diff(expected, output); diff != "" {
+		t.Errorf("output mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestPrintWorkerTopTo_YAML(t *testing.T) {
+	var buf bytes.Buffer
+	items := []*WorkerTopItem{
+		{
+			Pod:           "worker-1",
+			Pool:          "pool-1",
+			Status:        "ASSIGNED",
+			AssignedActor: "default/template-1/space-1/actor-1",
+			CPU:           "100m",
+			Memory:        "128Mi",
+		},
+	}
+
+	if err := PrintWorkerTopTo(&buf, items, "yaml"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	output := buf.String()
+
+	expected := `workers:
+- assignedActor: default/template-1/space-1/actor-1
+  cpu: 100m
+  memory: 128Mi
+  pod: worker-1
+  pool: pool-1
+  status: ASSIGNED
+`
+	if diff := cmp.Diff(expected, output); diff != "" {
+		t.Errorf("output mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestPrintWorkerTopTo_Invalid(t *testing.T) {
+	var buf bytes.Buffer
+	if err := PrintWorkerTopTo(&buf, nil, "invalid"); err == nil {
+		t.Errorf("expected error for invalid format, got nil")
+	}
+}
