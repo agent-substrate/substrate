@@ -4,21 +4,18 @@ NOTE: Much of this architecture is aspirational, and is not yet implemented!
 
 ## Overview
 
-Agent Substrate is a system built on top of Kubernetes which manages agent-like
-workloads to achieve high workload density and scale.  It builds on top of
-Kubernetes, but takes the Kubernetes control-plane out of the critical path to
-achieve lower latency. Kubernetes provides the infrastructure provisioning and
-management, while Agent Substrate provides agent-specific scheduling and
-control.
+Agent Substrate is a high density runtime environment for large scale agent deployments with ability to multiplex thousands of agents on a compute unit. Agent substrate control plane provides a full agent lifecycle for agent sandboxes delivering sub-second agent resume/suspend operations. It is designed to support a variety of sandbox technologies including Micro VMs and gVisor enabling consistent lifecycle operations for all sandbox types.  
+
+
+At its core, Agent Substrate maps a larger set of “actors” (applications such
+as agents) onto a smaller set of ready “workers”, relying on
+the fact that agent-like applications tend to be idle most of the time to
+achieve heavy multiplexing.  It provides functionality to manage an actor’s
+lifecycle (e.g. create/destroy, suspend/resume), to assign actors to workers in real
+time, and to route incoming traffic to them.
+
 
 ## Problem Statement
-
-Kubernetes is the industry standard platform for running modern workloads.  It
-is built to support a wide array of workloads, and it can scale to very large
-clusters.  Kubernetes is designed to handle tens- or hundreds-of-thousands of
-relatively long-running workloads, but running agents at scale presents new
-challenges.
-
 Agents and "agent-like" workloads are generally very bursty, spending most of
 their time waiting for input or events, then handling those events, then going
 back to waiting.  The time they spend actually doing work is often very short,
@@ -26,28 +23,7 @@ and the time they spend waiting can be unbounded.  Because they often run
 untrusted logic, they are often run in sandboxes, which means they are usually
 single-tenant instances, and there are a great many of them.
 
-Running these on Kubernetes presents a number of challenges:
-  * Idle Pods still consume resources.  While Kubernetes is very scalable,
-    compute capacity is finite and has real costs.  Whether we're talking about
-    CPU time, memory space, or just the number of Pods per node, agent-like
-    workloads are terrible for efficiency.
-  * The Kubernetes API server is not designed to handle millions of resources.
-    It excels at reconciling resources asynchronously across many controllers,
-    but it is not so good at storing very large numbers of discrete resources,
-    or for handling a huge volume of write traffic.
-  * Scheduling a workload on Kubernetes requires several asynchronous processes
-    to converge, plus several network hops, plus image pulling and other steps,
-    which can add up.  Getting a Pod running in a couple of seconds is great
-    when that Pod will run for hours or days, but for a workload that will run
-    for milliseconds to low-digit seconds, that latency is unacceptable.
-  * State management is difficult.  Kubernetes provides an API for managing
-    state (PersistentVolumes), but it is not designed for millions of volumes,
-    with widely varying amounts of data, being attached and detached at high
-    speed.
-
 ## Core Concepts and Approaches
-
-Standard Kubernetes Pods are simply too heavy for many agentic workloads.
 
 ### Terminology: "Actor"
 
@@ -56,20 +32,13 @@ Often we simply say "agents", but it's important to clarify that "agent-like"
 workloads are not necessarily literally AI agents.  In most of the docs we
 instead use the term "actor" to refer to an instance of an agent-like workload.
 
-### Decoupling the Actor Lifecycle from Pods
-
-The obvious way to solve the problem of many idle Pods consuming resources is
-to not have idle Pods - we need to get rid of them when they are idle, and
-bring them back when they are needed.  Suspend and resume is not a concept in
-Kubernetes (yet!), but even if it was, the obvious way to implement it would
-still run through the Kubernetes API server and scheduling subsystem, which is
-(for now) too slow for our needs.
+### Decoupling the Actor Lifecycle from Workers (Kubernetes Pods)
 
 Since many agents run untrusted code, we need to run them in sandboxes of some
-sort.  There are a number of sandboxing technologies available, notably
+sort. Agent Substrate is designed to support multiple sandbox technologies with
 [gVisor](http://gvisor.dev) and micro-VMs such as
-[Kata Containers](https://katacontainers.io/) are both popular options.  Both
-of those happen to support some notion of suspend and resume.
+[Kata Containers](https://katacontainers.io/) being popular options. Both
+of those happen to support a notion of suspend and resume which is core for the Agent Substrate functionality.
 
 Agent Substrate starts with suspend and resume.  When an actor is idle, we
 suspend it, which frees up the resources it was consuming.  When an event comes
@@ -83,12 +52,8 @@ latency.
 
 ### A Focused Control Plane
 
-That doesn't solve the problem of the Kubernetes API server not being ready to
-handle millions of resources.  Unfortunately, there is no magic solution to
-that.  Instead of storing every actor, whether active or idle, as a Kubernetes
-object, Agent Substrate includes a small, focused control-plane component which
-is focused on high scale and QPS.  It does not need the generality of the
-Kubernetes API, which should allow it to be more effective for this use-case.
+Agent Substrate includes a small, focused control-plane component which
+is focused on high scale, QPS and low latency suspend/resume operations for actors (Agent Sandboxes). It relies on the Kubernetes control plane for infrastructure and worker (Pods) provisioning which are low frequency operations that align well to the Kubernetes strength in infrastructure lifecycle management and workload resource isolation.
 
 ### Agent-Aware Routing
 
@@ -180,6 +145,32 @@ There are a few different personas that interact with the system:
      of Agent Substrate, or they might be higher-level systems that are using
      Agent Substrate as a building block. They should not need to be aware that
      they are using Kubernetes at all.
+
+## Relationship to Kubernetes
+
+Kubernetes is the industry standard platform for running modern workloads.  It
+is built to support a wide array of workloads, and it can scale to very large
+clusters. Agent Substrate leverages Kubernetes for infrastructure provisioning and worker lifecycle management (Kubernetes Pods). It builds on top of Kubernetes features like Pods and Pod autoscaling, while Agent Substrate provides agent-specific scheduling and control to achieve lower latency. Using Kubernetes as the underlying system enables consistent infrastructure management across all workloads types that are required for end to end agentic deployments and allows holistic infrastructure optimizations for RL scenarios that span agentic, inference and training cycles.
+
+### Why do we need a specialized control plane for Agent Substrate?
+ * Idle Pods still consume resources.  While Kubernetes is very scalable,
+   compute capacity is finite and has real costs.  Whether we're talking about
+   CPU time, memory space, or just the number of Pods per node, agent-like
+   workloads are terrible for efficiency.
+ * The Kubernetes API server is not designed to handle millions of resources.
+   It excels at reconciling resources asynchronously across many controllers,
+   but it is not so good at storing very large numbers of discrete resources,
+   or for handling a huge volume of write traffic.
+ * Scheduling a workload on Kubernetes requires several asynchronous processes
+   to converge, plus several network hops, plus image pulling and other steps,
+   which can add up.  Getting a Pod running in a couple of seconds is great
+   when that Pod will run for hours or days, but for a workload that will run
+   for milliseconds to low-digit seconds, that latency is unacceptable.
+ * State management is difficult.  Kubernetes provides an API for managing
+   state (PersistentVolumes), but it is not designed for millions of volumes,
+   with widely varying amounts of data, being attached and detached at high
+   Speed.
+Using a specialized Agent Substrate control plane for Actors and Actor to worker mappings enables to achieve high scale and low latency suspend/resume operations while relying on the Kubernetes control plane for infrastructure and worker (Pods) provisioning operations that align well with the Kubernetes strength in infrastructure lifecycle management and workload resource isolation.
 
 ## High-Level Design
 
