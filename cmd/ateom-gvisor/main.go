@@ -182,6 +182,12 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	s.lock.Lock()
 	defer s.lock.Unlock()
 
+	operation, err := acquireActorOperation(ctx, req.GetActorUid(), req.GetOperationId())
+	if err != nil {
+		return nil, err
+	}
+	defer releaseActorOperation(ctx, operation)
+
 	s.actorLogger.EmitLifecycleLog("Actor starting", req.GetAtespace(), req.GetActorName(), req.GetActorUid(), req.GetActorTemplateNamespace(), req.GetActorTemplateName())
 
 	// Contract with atelet:
@@ -259,6 +265,12 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.CheckpointWorkloadRequest) (*ateompb.CheckpointWorkloadResponse, error) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
+
+	operation, err := acquireActorOperation(ctx, req.GetActorUid(), req.GetOperationId())
+	if err != nil {
+		return nil, err
+	}
+	defer releaseActorOperation(ctx, operation)
 
 	s.actorLogger.EmitLifecycleLog("Actor checkpointing", req.GetAtespace(), req.GetActorName(), req.GetActorUid(), req.GetActorTemplateNamespace(), req.GetActorTemplateName())
 
@@ -382,6 +394,12 @@ func (r *runsc) cleanupContainersAfterCheckpoint(ctx context.Context, containers
 func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.RestoreWorkloadRequest) (resp *ateompb.RestoreWorkloadResponse, retErr error) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
+
+	operation, err := acquireActorOperation(ctx, req.GetActorUid(), req.GetOperationId())
+	if err != nil {
+		return nil, err
+	}
+	defer releaseActorOperation(ctx, operation)
 
 	s.actorLogger.EmitLifecycleLog("Actor restoring", req.GetAtespace(), req.GetActorName(), req.GetActorUid(), req.GetActorTemplateNamespace(), req.GetActorTemplateName())
 

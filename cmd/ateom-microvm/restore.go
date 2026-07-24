@@ -54,6 +54,12 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	s.lock.Lock()
 	defer s.lock.Unlock()
 
+	operation, err := acquireActorOperation(ctx, req.GetActorUid(), req.GetOperationId())
+	if err != nil {
+		return nil, err
+	}
+	defer releaseActorOperation(ctx, operation)
+
 	atespace := req.GetAtespace()
 	name := req.GetActorName()
 	actorUID := req.GetActorUid()

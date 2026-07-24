@@ -64,6 +64,11 @@ message RunWorkloadRequest {
   // to the local on-disk path atelet fetched it to (content-addressed, like
   // runsc_path). Empty for the gVisor runtime, which uses runsc_path.
   map<string, string> runtime_asset_paths = 8;
+
+  // operation_id identifies the atelet operation that prepared the actor's
+  // node-local files. Ateom rejects a stale request if a newer operation has
+  // replaced those files before this RPC starts.
+  string operation_id = 9;
 }
 
 // WorkloadSpec parallels Pod, but with far fewer configurable fields.
@@ -134,6 +139,10 @@ message CheckpointWorkloadRequest {
 
   // What content to include in the checkpoint.
   SnapshotScope scope = 10;
+
+  // operation_id identifies the atelet operation that owns the actor's
+  // node-local files.
+  string operation_id = 11;
 }
 
 message CheckpointWorkloadResponse {
@@ -164,6 +173,10 @@ message RestoreWorkloadRequest {
 
   // What content to restore from the snapshot.
   SnapshotScope scope = 10;
+
+  // operation_id identifies the atelet operation that prepared the actor's
+  // node-local files.
+  string operation_id = 11;
 }
 
 message RestoreWorkloadResponse {
