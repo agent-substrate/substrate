@@ -33,13 +33,17 @@ VERSION_PKG := github.com/agent-substrate/substrate/internal/version
 LDFLAGS := -X=$(VERSION_PKG).Version=$(VERSION)
 
 .PHONY: all
-all: build
+all: build ## Build all images and kubectl-ate.
+
+.PHONY: help
+help: ## Show available make targets.
+	@awk 'BEGIN {FS = ":.*##[ \t]*"; printf "Usage:\n  make <target>\n\nTargets:\n"} /^[a-zA-Z0-9_-]+:.*##/ {printf "  %-18s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
 .PHONY: build
-build: build-images build-atectl
+build: build-images build-atectl ## Build images and kubectl-ate.
 
 .PHONY: build-images
-build-images:
+build-images: ## Build container images.
 	$(KO) build \
 	    --ldflags="$(LDFLAGS)" \
 	    ./cmd/ateapi \
@@ -48,51 +52,51 @@ build-images:
 	    ./cmd/atenet
 
 .PHONY: build-atectl
-build-atectl:
+build-atectl: ## Build kubectl-ate.
 	$(GO) build -ldflags "$(LDFLAGS)" -o $(ATECTL) ./cmd/kubectl-ate
 
 .PHONY: build-atenet
-build-atenet:
+build-atenet: ## Build atenet.
 	$(GO) build -ldflags "$(LDFLAGS)" -o $(BINDIR)/atenet ./cmd/atenet
 
 .PHONY: build-demos
-build-demos:
+build-demos: ## Build demo images.
 	$(KO) build --ldflags="$(LDFLAGS)" ./demos/counter
 
 .PHONY: test
-test:
+test: ## Run unit tests.
 	$(GO) test ./...
 
 .PHONY: e2e
-e2e: build build-demos
+e2e: build build-demos ## Run end-to-end tests.
 	hack/run-e2e.sh
 
 .PHONY: fmt verify-fmt
 
 # Prints the Go ldflags (used for scripts to do version stamping).
-ldflags:
+ldflags: ## Print Go linker flags.
 	@for flag in $(LDFLAGS); do \
 		echo $$flag; \
 	done
 
 # Formats all Go files in the project
-fmt:
+fmt: ## Format all Go files.
 	@./hack/update/gofmt.sh
 
 # Fails if any Go files are not formatted properly
-verify-fmt:
+verify-fmt: ## Verify Go formatting.
 	@./hack/verify/gofmt.sh
 
 .PHONY: lint
 
 # Runs golangci-lint and fails on any reported issues.
-lint:
+lint: ## Run golangci-lint.
 	@./hack/verify/golangci-lint.sh
 
 .PHONY: verify
-verify: test
+verify: test ## Run tests and all verification checks.
 	bash hack/verify-all.sh
 
 .PHONY: clean
-clean:
+clean: ## Remove build artifacts.
 	rm -rf $(BINDIR)
