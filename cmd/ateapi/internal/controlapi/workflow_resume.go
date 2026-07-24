@@ -24,6 +24,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/scheduling"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
+	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
@@ -52,6 +53,7 @@ type ResumeState struct {
 	WasRunning       bool
 	SnapshotLocation string
 	SnapshotScope    ateapipb.SnapshotContentScope
+	SnapshotKind     string
 	// GoldenSnapshotLocation is the storage location of the ActorTemplate's
 	// golden snapshot. Populated only when the template's onResume
 	// configuration selects the golden snapshot as the boot source for the
@@ -116,6 +118,7 @@ func (s *LoadActorForResumeStep) Execute(ctx context.Context, input *ResumeInput
 		}
 		state.SnapshotLocation = location
 		state.SnapshotScope = snapshot.GetContentScope()
+		state.SnapshotKind = ateattr.SnapshotKindLatest
 	} else if actorTemplate.Status.GoldenSnapshot != "" && !input.Boot {
 		snapshot, location, err := s.store.GetActorSnapshot(ctx, resources.GoldenActorAtespace, actorTemplate.Status.GoldenSnapshot)
 		if errors.Is(err, store.ErrNotFound) {
@@ -129,6 +132,7 @@ func (s *LoadActorForResumeStep) Execute(ctx context.Context, input *ResumeInput
 		}
 		state.SnapshotLocation = location
 		state.SnapshotScope = snapshot.GetContentScope()
+		state.SnapshotKind = ateattr.SnapshotKindGolden
 	}
 
 	// The template's onResume configuration selects the boot source for the
@@ -260,6 +264,7 @@ type AssignWorkerStep struct {
 	store       store.Interface
 	workerCache *workercache.Cache
 	scheduler   scheduling.Scheduler
+	instruments *Instruments
 }
 
 func (s *AssignWorkerStep) Name() string { return "AssignWorker" }
@@ -278,7 +283,23 @@ func (s *AssignWorkerStep) CheckPrerequisite(ctx context.Context, input *ResumeI
 	}
 }
 
-func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, state *ResumeState) error {
+// schedulerRecordable excludes retried version conflicts: runStep re-runs Execute
+// transparently on store.ErrVersionConflict, so counting those attempts would
+// inflate the error rate and double-count the eventual success.
+func schedulerRecordable(err error) bool {
+	return !errors.Is(err, store.ErrVersionConflict)
+}
+
+func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, state *ResumeState) (err error) {
+	start := time.Now()
+	outcome := ateattr.SchedulerOutcomeError
+	pool := ""
+	defer func() {
+		if schedulerRecordable(err) {
+			s.instruments.recordSchedulerAssignment(ctx, start, outcome, pool, err)
+		}
+	}()
+
 	workers, err := s.workerCache.Workers()
 	if err != nil {
 		return fmt.Errorf("while listing workers: %w", err)
@@ -327,6 +348,7 @@ func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, stat
 		pickedWorker, err := s.scheduler.Schedule(ctx, constraints)
 		if err != nil {
 			if errors.Is(err, scheduling.ErrNoCapacity) {
+				outcome = ateattr.SchedulerOutcomeNoFreeWorker
 				return status.Errorf(codes.FailedPrecondition, "no free workers available")
 			}
 			return err
@@ -380,6 +402,8 @@ func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, stat
 	}
 	state.Actor = updatedActor
 	state.Worker = assignedWorker
+	pool = assignedWorker.GetWorkerPool()
+	outcome = ateattr.SchedulerOutcomeAssigned
 	return nil
 }
 
@@ -519,6 +543,7 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 
 	if local := state.Actor.GetLocalSnapshotInfo(); local != nil {
 		slog.InfoContext(ctx, "Actor has snapshot; Restoring from snapshot")
+		state.SnapshotKind = ateattr.SnapshotKindLatest
 
 		req := &ateletpb.RestoreRequest{
 			TargetAteomUid:         state.Actor.GetAteomPodUid(),
@@ -579,6 +604,7 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 		return maybeCrashActor(ctx, s.store, input.ActorRef, err, "while restoring durable snapshot")
 	} else {
 		slog.InfoContext(ctx, "Actor has no snapshot; ActorTemplate has no golden snapshot; Booting from ActorTemplate spec")
+		state.SnapshotKind = ateattr.SnapshotKindBoot
 
 		// Booting from scratch: resolve the sandbox binaries from the pool's
 		// SandboxConfig and send them so atelet can fetch and record them.

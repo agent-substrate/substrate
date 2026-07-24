@@ -170,8 +170,13 @@ func main() {
 		serverboot.Fatal(ctx, "Failed to register worker-count metric", err)
 	}
 
+	instruments, err := controlapi.NewInstruments(otel.Meter("ateapi"))
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to create metric instruments", err)
+	}
+
 	ateletDialer := controlapi.NewAteletDialer(workerPodInformer.GetIndexer(), ateletPodInformer.GetIndexer(), *ateletClientCredBundle, *podIdentityCACerts)
-	sm := controlapi.NewService(redisPersistence, workerCache, actorTemplateLister, workerPoolLister, sandboxConfigLister, ateletDialer, clientset)
+	sm := controlapi.NewService(redisPersistence, workerCache, actorTemplateLister, workerPoolLister, sandboxConfigLister, ateletDialer, clientset, instruments)
 
 	jwtIssuerDiscoveryClient := buildK8sServiceAccountIssuerDiscoveryClient(ctx, *clientJWTCAFile, *clientJWTIssuer)
 

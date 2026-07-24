@@ -17,6 +17,7 @@ package controlapi
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -36,6 +37,29 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/cache"
 )
+
+// TestSchedulerRecordable guards the retry-dedup rule: runStep re-runs Execute on
+// store.ErrVersionConflict, and those attempts (raw or wrapped) must not be
+// recorded, while the terminal success or real error must be.
+func TestSchedulerRecordable(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{name: "success is recorded", err: nil, want: true},
+		{name: "version conflict is skipped", err: store.ErrVersionConflict, want: false},
+		{name: "wrapped version conflict is skipped", err: fmt.Errorf("update worker: %w", store.ErrVersionConflict), want: false},
+		{name: "real error is recorded", err: status.Error(codes.Internal, "boom"), want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := schedulerRecordable(tt.err); got != tt.want {
+				t.Errorf("schedulerRecordable(%v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
+	}
+}
 
 func TestAssignWorkerStep_SkipsWorkerAssignedInOtherAtespace(t *testing.T) {
 	ctx := context.Background()

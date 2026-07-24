@@ -16,24 +16,38 @@ package controlapi
 
 import (
 	"context"
+	"time"
 
+	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
-func (s *Service) DeleteActor(ctx context.Context, req *ateapipb.DeleteActorRequest) (*ateapipb.Actor, error) {
+func (s *Service) DeleteActor(ctx context.Context, req *ateapipb.DeleteActorRequest) (deleted *ateapipb.Actor, err error) {
+	start := time.Now()
+	// The request only names the actor, so tmpl (for the metric's template dims)
+	// is filled from whichever record we manage to load.
+	var tmpl *ateapipb.Actor
+	defer func() {
+		s.instruments.recordLifecycleOp(ctx, ateattr.OperationDelete, start, err,
+			ateattr.TemplateNameKey.String(tmpl.GetActorTemplateName()),
+			ateattr.TemplateNamespaceKey.String(tmpl.GetActorTemplateNamespace()),
+		)
+	}()
+
 	if errs := validateDeleteActorRequest(req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
 	setSpanActorRefAttributes(ctx, actorRef)
 
-	deleted, err := s.actorWorkflow.DeleteActor(ctx, req.GetActor().GetAtespace(), req.GetActor().GetName())
+	deleted, err = s.actorWorkflow.DeleteActor(ctx, req.GetActor().GetAtespace(), req.GetActor().GetName())
 	if err != nil {
 		return nil, err
 	}
 
+	tmpl = deleted
 	return deleted, nil
 }
 
