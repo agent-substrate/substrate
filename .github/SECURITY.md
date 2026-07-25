@@ -116,8 +116,8 @@ What to expect at this stage:
 - Fixes are best effort and land on `main`. All valid reports will be
   patched by GA.
 - There is no embargo process and no pre-disclosure notification to
-  downstream users or vendors. Details stay in the private advisory until a
-  fix is merged.
+  downstream users or vendors. Though we do wait to publish advisories until
+  fixes have been merged, some details may appear in PRs prior to publishing.
 
 We ask reporters to keep vulnerability details private until an advisory is
 published; we prefer to disclose as soon as a fix is available.
