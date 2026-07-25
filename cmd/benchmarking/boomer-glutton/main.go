@@ -36,7 +36,7 @@ import (
 
 func main() {
 	var (
-		apiEndpoint   = flag.String("api-endpoint", "api.ate-system.svc.cluster.local:443", "ateapi gRPC endpoint host:port.")
+		apiEndpoint   = flag.String("api-endpoint", "dns:///api.ate-system.svc.cluster.local:443", "ateapi gRPC dial target.")
 		routerURL     = flag.String("router-url", "http://atenet-router.ate-system.svc.cluster.local", "atenet HTTP router base URL (no trailing slash).")
 		atespace      = flag.String("atespace", "benchmark", "Atespace every actor this worker creates lives in. Ensured (CreateAtespace, AlreadyExists is ok) at startup.")
 		promAddr      = flag.String("prometheus-addr", ":8001", "Address for the Prometheus /metrics endpoint.")

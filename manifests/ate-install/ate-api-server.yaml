@@ -215,7 +215,9 @@ metadata:
   name: api
   namespace: ate-system
 spec:
-  type: ClusterIP
+  # ClientIP: None (headless) makes DNS return one A record per ready pod so
+  # gRPC clients can load balance client-side.
+  clusterIP: None
   selector:
     app: ate-api-server
   ports:
