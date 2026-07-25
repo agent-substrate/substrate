@@ -30,6 +30,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -40,9 +41,14 @@ func b64url(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }
 
 // testIssuer serves the OIDC discovery document and a JWKS built from the keys
 // registered on it, standing in for a Kubernetes API server's OIDC endpoints.
+// fetches counts discovery-document requests, so caching tests can assert how
+// often keys were actually (re)fetched.
 type testIssuer struct {
-	server *httptest.Server
-	jwks   jwkSetT
+	server  *httptest.Server
+	fetches atomic.Int64
+
+	mu   sync.Mutex // guards jwks: caching tests mutate it while a fetch may be serving
+	jwks jwkSetT
 }
 
 func newTestIssuer(t *testing.T) *testIssuer {
@@ -50,9 +56,12 @@ func newTestIssuer(t *testing.T) *testIssuer {
 	ti := &testIssuer{}
 	mux := http.NewServeMux()
 	mux.HandleFunc("/.well-known/openid-configuration", func(w http.ResponseWriter, _ *http.Request) {
+		ti.fetches.Add(1)
 		writeJSON(t, w, oidcConfigT{JWKSURI: ti.server.URL + "/jwks"})
 	})
 	mux.HandleFunc("/jwks", func(w http.ResponseWriter, _ *http.Request) {
+		ti.mu.Lock()
+		defer ti.mu.Unlock()
 		writeJSON(t, w, ti.jwks)
 	})
 	ti.server = httptest.NewServer(mux)
@@ -63,12 +72,23 @@ func newTestIssuer(t *testing.T) *testIssuer {
 func (ti *testIssuer) issuer() string { return ti.server.URL }
 
 func (ti *testIssuer) addRSA(kid string, pub *rsa.PublicKey) {
+	ti.mu.Lock()
+	defer ti.mu.Unlock()
 	ti.jwks.Keys = append(ti.jwks.Keys, jwkT{
 		KeyType: "RSA",
 		KeyID:   kid,
 		RSAN:    b64url(pub.N.Bytes()),
 		RSAE:    b64url(big.NewInt(int64(pub.E)).Bytes()),
 	})
+}
+
+// setRSA replaces the entire JWKS with the single given key, simulating a
+// rotation that revokes every previously served key.
+func (ti *testIssuer) setRSA(kid string, pub *rsa.PublicKey) {
+	ti.mu.Lock()
+	ti.jwks = jwkSetT{}
+	ti.mu.Unlock()
+	ti.addRSA(kid, pub)
 }
 
 func (ti *testIssuer) addEC(t *testing.T, kid, crv string, pub *ecdsa.PublicKey) {
@@ -82,6 +102,8 @@ func (ti *testIssuer) addEC(t *testing.T, kid, crv string, pub *ecdsa.PublicKey)
 	}
 	raw := ecdhPub.Bytes()
 	size := (pub.Curve.Params().BitSize + 7) / 8
+	ti.mu.Lock()
+	defer ti.mu.Unlock()
 	ti.jwks.Keys = append(ti.jwks.Keys, jwkT{
 		KeyType:       "EC",
 		KeyID:         kid,
@@ -360,5 +382,146 @@ func TestEllipticCurveForJWK(t *testing.T) {
 	}
 	if _, err := ellipticCurveForJWK("P-192"); err == nil {
 		t.Error("ellipticCurveForJWK(P-192) = nil, want error")
+	}
+}
+
+func TestCachedVerifier_CachesKeysAcrossRequests(t *testing.T) {
+	ti := newTestIssuer(t)
+	key := testRSAKey(t)
+	ti.addRSA("kid-a", &key.PublicKey)
+	now := time.Now()
+
+	v := NewCachedVerifier(nil)
+	jwt := mintJWT(t, "RS256", "kid-a", key, validClaims(ti.issuer()))
+	for i := range 5 {
+		if _, err := v.Verify(context.Background(), jwt, ti.issuer(), testAudience, now); err != nil {
+			t.Fatalf("Verify #%d: %v", i, err)
+		}
+	}
+	if got := ti.fetches.Load(); got != 1 {
+		t.Errorf("issuer fetched %d times for 5 verifications, want 1", got)
+	}
+}
+
+func TestCachedVerifier_RefetchesOnKeyRotation(t *testing.T) {
+	ti := newTestIssuer(t)
+	key := testRSAKey(t)
+	ti.addRSA("kid-a", &key.PublicKey)
+	now := time.Now()
+
+	v := NewCachedVerifier(nil)
+	jwt := mintJWT(t, "RS256", "kid-a", key, validClaims(ti.issuer()))
+	if _, err := v.Verify(context.Background(), jwt, ti.issuer(), testAudience, now); err != nil {
+		t.Fatalf("Verify with old key: %v", err)
+	}
+
+	// Rotate: the JWKS gains kid-b and new tokens are signed with it. The
+	// unknown keyID triggers exactly one refetch once the throttle allows.
+	ti.addRSA("kid-b", &key.PublicKey)
+	later := now.Add(keyRefetchInterval + time.Second)
+	jwt = mintJWT(t, "RS256", "kid-b", key, validClaims(ti.issuer()))
+	if _, err := v.Verify(context.Background(), jwt, ti.issuer(), testAudience, later); err != nil {
+		t.Fatalf("Verify with rotated key: %v", err)
+	}
+	if got := ti.fetches.Load(); got != 2 {
+		t.Errorf("issuer fetched %d times, want 2 (initial + rotation)", got)
+	}
+}
+
+func TestCachedVerifier_UnknownKeyIDRefetchIsThrottled(t *testing.T) {
+	ti := newTestIssuer(t)
+	key := testRSAKey(t)
+	ti.addRSA("kid-a", &key.PublicKey)
+	now := time.Now()
+
+	v := NewCachedVerifier(nil)
+	jwt := mintJWT(t, "RS256", "kid-a", key, validClaims(ti.issuer()))
+	if _, err := v.Verify(context.Background(), jwt, ti.issuer(), testAudience, now); err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+
+	// A burst of tokens with a bogus keyID must not cause a fetch per
+	// request: within the throttle window they fail without refetching.
+	bogus := mintJWT(t, "RS256", "no-such-kid", key, validClaims(ti.issuer()))
+	for range 5 {
+		soon := now.Add(time.Second)
+		if _, err := v.Verify(context.Background(), bogus, ti.issuer(), testAudience, soon); err == nil {
+			t.Fatal("Verify with bogus keyID unexpectedly succeeded")
+		}
+	}
+	if got := ti.fetches.Load(); got != 1 {
+		t.Errorf("issuer fetched %d times during bogus-kid burst, want 1", got)
+	}
+
+	// Once the window passes, one refetch happens (and still fails).
+	later := now.Add(keyRefetchInterval + time.Second)
+	if _, err := v.Verify(context.Background(), bogus, ti.issuer(), testAudience, later); err == nil {
+		t.Fatal("Verify with bogus keyID unexpectedly succeeded")
+	}
+	if got := ti.fetches.Load(); got != 2 {
+		t.Errorf("issuer fetched %d times after throttle window, want 2", got)
+	}
+}
+
+func TestCachedVerifier_BackgroundRefreshDropsRevokedKeys(t *testing.T) {
+	ti := newTestIssuer(t)
+	key := testRSAKey(t)
+	ti.addRSA("kid-a", &key.PublicKey)
+	now := time.Now()
+
+	v := NewCachedVerifier(nil)
+	jwt := mintJWT(t, "RS256", "kid-a", key, validClaims(ti.issuer()))
+	if _, err := v.Verify(context.Background(), jwt, ti.issuer(), testAudience, now); err != nil {
+		t.Fatalf("Verify: %v", err)
+	}
+
+	// Revoke kid-a: the issuer's JWKS now only contains kid-b. Tokens signed
+	// with kid-a still hit the cache, so nothing refetches until keyMaxAge.
+	ti.setRSA("kid-b", &key.PublicKey)
+
+	// Within keyMaxAge the revoked key keeps verifying from cache, and no
+	// refresh is triggered.
+	if _, err := v.Verify(context.Background(), jwt, ti.issuer(), testAudience, now.Add(time.Minute)); err != nil {
+		t.Fatalf("Verify within keyMaxAge: %v", err)
+	}
+	if got := ti.fetches.Load(); got != 1 {
+		t.Fatalf("issuer fetched %d times within keyMaxAge, want 1", got)
+	}
+
+	// Past keyMaxAge, a hit still succeeds (stale-while-revalidate) but kicks
+	// off a background refresh.
+	stale := now.Add(keyMaxAge + time.Second)
+	if _, err := v.Verify(context.Background(), jwt, ti.issuer(), testAudience, stale); err != nil {
+		t.Fatalf("Verify at expiry (should serve stale): %v", err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for ti.fetches.Load() < 2 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := ti.fetches.Load(); got != 2 {
+		t.Fatalf("issuer fetched %d times after keyMaxAge, want 2 (background refresh)", got)
+	}
+
+	// The refresh may still be applying the new key set; poll until the
+	// revoked key stops verifying.
+	rejected := false
+	for time.Now().Before(deadline) {
+		if _, err := v.Verify(context.Background(), jwt, ti.issuer(), testAudience, stale.Add(time.Second)); err != nil {
+			rejected = true
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !rejected {
+		t.Fatal("token signed by revoked key still verifies after background refresh")
+	}
+
+	// The replacement key verifies from the refreshed cache with no extra fetch.
+	fresh := mintJWT(t, "RS256", "kid-b", key, validClaims(ti.issuer()))
+	if _, err := v.Verify(context.Background(), fresh, ti.issuer(), testAudience, stale.Add(time.Second)); err != nil {
+		t.Fatalf("Verify with rotated key after refresh: %v", err)
+	}
+	if got := ti.fetches.Load(); got != 2 {
+		t.Errorf("issuer fetched %d times, want 2 (new key served from refreshed cache)", got)
 	}
 }
