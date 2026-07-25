@@ -62,7 +62,12 @@ metadata:
   name: ate-api-server
   namespace: ate-system
 spec:
-  replicas: 1
+  replicas: 2
+  strategy:
+    # Update replicas one at a time, create a new one first, then delete the old one.
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
   selector:
     matchLabels:
       app: ate-api-server
@@ -74,6 +79,7 @@ spec:
         prometheus.io/scrape: "true"
         prometheus.io/port: "9090"
     spec:
+      # TODO: Add topologySpreadConstraints to spread replicas across nodes and zones.
       serviceAccountName: ate-api-server
       # Budget for the full shutdown sequence: --drain-delay (sized to cover
       # the readinessProbe below reaching NotReady, plus propagation) +
@@ -208,6 +214,19 @@ spec:
               - key: "pool"
                 path: "pool.json"
 ---
+# Allow voluntary disruptions (node drains, cluster upgrades) to take
+# at most one API server pod at a time, at any replica count.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: ate-api-server
+  namespace: ate-system
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: ate-api-server
+---
 # 6. Expose the Session Assigner
 apiVersion: v1
 kind: Service
@@ -215,8 +234,8 @@ metadata:
   name: api
   namespace: ate-system
 spec:
-  # ClientIP: None (headless) makes DNS return one A record per ready pod so
-  # gRPC clients can load balance client-side.
+  # Headless (i.e. `clusterIP: None`) services make DNS return one A record per
+  # ready pod so gRPC clients can load balance client-side.
   clusterIP: None
   selector:
     app: ate-api-server

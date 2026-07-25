@@ -155,6 +155,8 @@ func dialPortForward(ctx context.Context, kubeconfigPath, k8sContext string, tra
 		return nil, fmt.Errorf("failed to create k8s client: %w", err)
 	}
 
+	// TODO: Should we special-case a LoadBalancer "api" Service and dial its
+	// address directly instead of port-forwarding?
 	localPort, stopForward, err := portforward.ServicePortForward(ctx, config, clientset, "ate-system", "api", 443)
 	if err != nil {
 		return nil, err
