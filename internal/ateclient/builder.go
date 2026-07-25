@@ -19,7 +19,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
-	"io"
+	"net"
 	"net/http"
 	"os"
 	"sync"
@@ -40,7 +40,6 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
-	"k8s.io/client-go/tools/portforward"
 	"k8s.io/client-go/transport/spdy"
 	metricsv1beta1 "k8s.io/metrics/pkg/client/clientset/versioned"
 )
@@ -190,59 +189,22 @@ func dialPortForward(ctx context.Context, kubeconfigPath, k8sContext string, tra
 		return nil, fmt.Errorf("failed to create SPDY transport: %w", err)
 	}
 
-	dialer := spdy.NewDialer(upgrader, &http.Client{Transport: transport}, http.MethodPost, req.URL())
-
-	stopCh := make(chan struct{})
-	readyCh := make(chan struct{})
-
-	ports := []string{"0:443"} // Port 0 asks OS for a random available local port
-
-	fw, err := portforward.New(dialer, ports, stopCh, readyCh, io.Discard, io.Discard)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create port forwarder: %w", err)
-	}
-
-	errCh := make(chan error, 1)
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		if err := fw.ForwardPorts(); err != nil {
-			errCh <- fmt.Errorf("port forwarding failed: %w", err)
-		}
-	}()
-
-	// Wait for the tunnel to be ready, an error, or context cancellation
-	select {
-	case <-readyCh:
-		// Tunnel is ready!
-	case err := <-errCh:
-		return nil, err
-	case <-ctx.Done():
-		return nil, ctx.Err()
-	}
-
-	forwardedPorts, err := fw.GetPorts()
-	if err != nil || len(forwardedPorts) == 0 {
-		close(stopCh)
-		return nil, fmt.Errorf("failed to get forwarded ports: %w", err)
-	}
-
-	localPort := forwardedPorts[0].Local
-	localEndpoint := fmt.Sprintf("127.0.0.1:%d", localPort)
+	dialer := newSPDYPortForwardDialer(upgrader, &http.Client{Transport: transport}, http.MethodPost, req.URL())
 
 	tlsCfg, err := serverTLSConfig(ctx, clientset)
 	if err != nil {
-		close(stopCh)
 		return nil, err
 	}
 
 	var opts []grpc.DialOption
 	opts = append(opts, grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)))
 	opts = append(opts, grpc.WithStatsHandler(otelgrpc.NewClientHandler()))
+	opts = append(opts, grpc.WithAuthority(apiServerName))
+	opts = append(opts, grpc.WithContextDialer(func(ctx context.Context, _ string) (net.Conn, error) {
+		return dialPodPort(ctx, dialer, 443)
+	}))
 	tokenOpt, err := bearerTokenDialOption(ctx, clientset)
 	if err != nil {
-		close(stopCh)
 		return nil, err
 	}
 	opts = append(opts, tokenOpt)
@@ -251,9 +213,8 @@ func dialPortForward(ctx context.Context, kubeconfigPath, k8sContext string, tra
 		opts = append(opts, grpc.WithUnaryInterceptor(newTraceInterceptor()))
 	}
 
-	conn, err := grpc.NewClient(localEndpoint, opts...)
+	conn, err := grpc.NewClient("passthrough:///"+apiServerName+":443", opts...)
 	if err != nil {
-		close(stopCh)
 		return nil, fmt.Errorf("failed to dial gRPC over tunnel: %w", err)
 	}
 
@@ -261,10 +222,7 @@ func dialPortForward(ctx context.Context, kubeconfigPath, k8sContext string, tra
 		ControlClient: ateapipb.NewControlClient(conn),
 		DebugClient:   ateapipb.NewDebugClient(conn),
 		conn:          conn,
-		cancel: func() {
-			close(stopCh)
-			wg.Wait()
-		},
+		cancel:        func() {},
 	}, nil
 }
 
