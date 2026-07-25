@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/volume"
@@ -29,8 +30,12 @@ import (
 )
 
 var (
-	globalVolumePlugin = volume.NewMockVolumePlugin()
+	globalVolumePlugin volume.VolumePluginControlPlane = volume.NewMockVolumePlugin()
 )
+
+// volumeCleanupTimeout bounds the best-effort deletion of volumes created for
+// an actor that failed to come up.
+const volumeCleanupTimeout = 30 * time.Second
 
 // TODO: Replace with actual volume plugin search
 func getVolumePlugin() volume.VolumePluginControlPlane {
@@ -52,7 +57,7 @@ func (s *Service) createActorVolumes(ctx context.Context, ref *ateapipb.ObjectRe
 			storageVolumeID, err := getVolumePlugin().CreateVolume(ctx, uniqueVolName, vol.ExternalVolumeTemplate.Capacity.String(), vol.ExternalVolumeTemplate.StorageClassName)
 			if err != nil {
 				// TODO: need better system - best effort cleanup of already created volumes
-				_ = s.deleteActorVolumes(ctx, ref, volumes)
+				s.cleanupActorVolumes(ctx, ref, volumes)
 				return nil, status.Errorf(codes.Internal, "failed to create volume %q: %v", vol.Name, err)
 			}
 			volumes = append(volumes, &ateapipb.ExternalVolume{
@@ -64,6 +69,16 @@ func (s *Service) createActorVolumes(ctx context.Context, ref *ateapipb.ObjectRe
 		}
 	}
 	return volumes, nil
+}
+
+// cleanupActorVolumes deletes, on a best-effort basis, volumes created for an
+// actor that failed to come up. It runs on a fresh timeout detached from ctx,
+// because a canceled or expired ctx is itself a common reason for that failure:
+// reusing it would make every delete fail immediately and leak the volumes.
+func (s *Service) cleanupActorVolumes(ctx context.Context, ref *ateapipb.ObjectRef, volumes []*ateapipb.ExternalVolume) {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), volumeCleanupTimeout)
+	defer cancel()
+	_ = s.deleteActorVolumes(cleanupCtx, ref, volumes)
 }
 
 // deleteActorVolumes deletes all external volumes in the list.

@@ -83,7 +83,7 @@ func (s *Service) CreateActor(ctx context.Context, req *ateapipb.CreateActorRequ
 	stored, err := s.persistence.CreateActor(ctx, actor)
 	if err != nil {
 		// Cleanup created volumes if DB write fails
-		_ = s.deleteActorVolumes(ctx, actorRef, volumes)
+		s.cleanupActorVolumes(ctx, actorRef, volumes)
 		if errors.Is(err, store.ErrAlreadyExists) {
 			return nil, status.Errorf(codes.AlreadyExists, "Actor %s already exists", name)
 		}
