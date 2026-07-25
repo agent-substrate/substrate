@@ -29,6 +29,7 @@ var (
 	endpoint     string
 	outputFmt    string
 	traceEnabled bool
+	verbose      bool
 )
 
 var rootCmd = &cobra.Command{
@@ -41,6 +42,7 @@ var rootCmd = &cobra.Command{
 		if outputFmt != "table" && outputFmt != "json" && outputFmt != "yaml" {
 			return fmt.Errorf("invalid output format %q. Must be one of: table, json, yaml", outputFmt)
 		}
+		configureClientLogging(cmd.ErrOrStderr(), verbose)
 		return nil
 	},
 }
@@ -58,4 +60,5 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&endpoint, "endpoint", "", "Manual override for the gRPC target (e.g., localhost:8080). If omitted, automatically port-forwards.")
 	rootCmd.PersistentFlags().StringVarP(&outputFmt, "output", "o", "table", "Output format. One of: table|json|yaml")
 	rootCmd.PersistentFlags().BoolVar(&traceEnabled, "trace", false, "Enable tracing for the request")
+	rootCmd.PersistentFlags().BoolVar(&verbose, "verbose", false, "Print internal Kubernetes client diagnostics that are otherwise suppressed")
 }
