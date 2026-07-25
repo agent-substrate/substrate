@@ -12,7 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package e2e
+// Package portforward tunnels to the pods behind a Service. The
+// Kubernetes port-forward API is pod-scoped, so "forwarding to a
+// Service" means resolving its selector to one ready pod and its port
+// mapping to a container port, then forwarding to that pod.
+// This is the same thing kubectl does for `port-forward svc/<service-name>`.
+package portforward
 
 import (
 	"context"
@@ -23,15 +28,31 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/portforward"
 	"k8s.io/client-go/transport/spdy"
 )
 
-// firstReadyPodForService returns a ready pod backing service, plus the Service
-// itself (callers need its port mapping). It refuses a selectorless Service
-// rather than forward to an arbitrary pod in the namespace.
+// ServicePortForward forwards a random local port to servicePort of the
+// named Service. It picks a ready backing pod, resolves servicePort to
+// the pod's container port (including named targetPorts), and tunnels
+// to that pod. It returns the chosen local port and a stop func the
+// caller must invoke to tear the tunnel down. The tunnel is pinned to
+// the picked pod; it does not fail over if that pod later dies.
+func ServicePortForward(ctx context.Context, config *rest.Config, clientset kubernetes.Interface, namespace, service string, servicePort int32) (int, func(), error) {
+	pod, svc, err := firstReadyPodForService(ctx, clientset, namespace, service)
+	if err != nil {
+		return 0, nil, err
+	}
+	targetPort, err := resolveTargetPort(svc, pod, servicePort)
+	if err != nil {
+		return 0, nil, err
+	}
+	return podPortForward(ctx, config, clientset, namespace, pod.Name, targetPort)
+}
+
 func firstReadyPodForService(ctx context.Context, clientset kubernetes.Interface, namespace, service string) (*corev1.Pod, *corev1.Service, error) {
 	svc, err := clientset.CoreV1().Services(namespace).Get(ctx, service, metav1.GetOptions{})
 	if err != nil {
@@ -46,16 +67,43 @@ func firstReadyPodForService(ctx context.Context, clientset kubernetes.Interface
 		return nil, nil, fmt.Errorf("listing %s pods: %w", service, err)
 	}
 	for i := range pods.Items {
-		if isPodReady(&pods.Items[i]) {
+		if IsPodReady(&pods.Items[i]) {
 			return &pods.Items[i], svc, nil
 		}
 	}
 	return nil, nil, fmt.Errorf("no ready %s pods in %s", service, namespace)
 }
 
-// podPortForward forwards a random local port to targetPort on the pod (local
-// port 0 asks the OS for a free one), returning the chosen local port and a stop
-// func the caller must invoke to tear the tunnel down.
+func resolveTargetPort(svc *corev1.Service, pod *corev1.Pod, servicePort int32) (int32, error) {
+	for _, sp := range svc.Spec.Ports {
+		if sp.Port != servicePort {
+			continue
+		}
+		var port int32
+		switch sp.TargetPort.Type {
+		case intstr.Int:
+			port = sp.TargetPort.IntVal
+			if port == 0 {
+				// targetPort defaults to port when omitted.
+				port = sp.Port
+			}
+		case intstr.String:
+			for _, c := range pod.Spec.Containers {
+				for _, cp := range c.Ports {
+					if cp.Name == sp.TargetPort.StrVal {
+						port = cp.ContainerPort
+					}
+				}
+			}
+			if port == 0 {
+				return 0, fmt.Errorf("named targetPort %q not found on pod %s", sp.TargetPort.StrVal, pod.Name)
+			}
+		}
+		return port, nil
+	}
+	return 0, fmt.Errorf("service %s has no port %d", svc.Name, servicePort)
+}
+
 func podPortForward(ctx context.Context, config *rest.Config, clientset kubernetes.Interface, namespace, podName string, targetPort int32) (int, func(), error) {
 	req := clientset.CoreV1().RESTClient().Post().
 		Resource("pods").
@@ -97,4 +145,16 @@ func podPortForward(ctx context.Context, config *rest.Config, clientset kubernet
 		return 0, nil, fmt.Errorf("getting forwarded ports: %w", err)
 	}
 	return int(ports[0].Local), func() { close(stopCh) }, nil
+}
+
+func IsPodReady(pod *corev1.Pod) bool {
+	if pod.Status.Phase != corev1.PodRunning || pod.DeletionTimestamp != nil {
+		return false
+	}
+	for _, c := range pod.Status.Conditions {
+		if c.Type == corev1.PodReady {
+			return c.Status == corev1.ConditionTrue
+		}
+	}
+	return false
 }
