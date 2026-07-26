@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/scheduling"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
@@ -130,6 +131,7 @@ func runStep[Params any, Context any](ctx context.Context, params Params, wCtx C
 type ActorWorkflow struct {
 	store               store.Interface
 	workerCache         *workercache.Cache
+	scheduler           scheduling.Scheduler
 	dialer              *AteletDialer
 	actorTemplateLister listersv1alpha1.ActorTemplateLister
 	workerPoolLister    listersv1alpha1.WorkerPoolLister
@@ -151,6 +153,7 @@ func NewActorWorkflow(
 	return &ActorWorkflow{
 		store:               store,
 		workerCache:         workerCache,
+		scheduler:           scheduling.New(workerCache),
 		dialer:              dialer,
 		actorTemplateLister: actorTemplateLister,
 		workerPoolLister:    workerPoolLister,
@@ -177,9 +180,9 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, atespace, name string, 
 
 	steps := []WorkflowStep[*ResumeInput, *ResumeState]{
 		&LoadActorForResumeStep{store: w.store, actorTemplateLister: w.actorTemplateLister},
-		&AssignWorkerStep{store: w.store, workerCache: w.workerCache},
+		&AssignWorkerStep{store: w.store, workerCache: w.workerCache, scheduler: w.scheduler},
 		&AttachVolumesStep{store: w.store},
-		&CallAteletRestoreStep{store: w.store, dialer: w.dialer, kubeClient: w.kubeClient, secretCache: w.secretCache, workerPoolLister: w.workerPoolLister, sandboxConfigLister: w.sandboxConfigLister},
+		&CallAteletRestoreStep{store: w.store, dialer: w.dialer, kubeClient: w.kubeClient, secretCache: w.secretCache, workerPoolLister: w.workerPoolLister, sandboxConfigLister: w.sandboxConfigLister, scheduler: w.scheduler},
 		&FinalizeRunningStep{store: w.store},
 	}
 

@@ -19,10 +19,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"math/rand"
-	"slices"
 	"time"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/scheduling"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
@@ -116,32 +115,10 @@ func (s *LoadActorForResumeStep) Execute(ctx context.Context, input *ResumeInput
 
 func (s *LoadActorForResumeStep) RetryBackoff() *wait.Backoff { return nil }
 
-func isWorkerEligibleForActor(worker *ateapipb.Worker, templateClass atev1alpha1.SandboxClass, templateSelector *metav1.LabelSelector, actorSelector *ateapipb.Selector) (bool, error) {
-	// Snapshots are not portable across sandbox classes, so the worker's class
-	// must match the template's. Both classes are populated by the CRD default
-	// (gvisor), so we compare them directly.
-	if worker.GetSandboxClass() != string(templateClass) {
-		return false, nil
-	}
-
-	templateSel := labels.Everything()
-	if templateSelector != nil {
-		sel, err := metav1.LabelSelectorAsSelector(templateSelector)
-		if err != nil {
-			return false, fmt.Errorf("invalid template worker selector: %w", err)
-		}
-		templateSel = sel
-	}
-
-	actorSel := labels.SelectorFromSet(labels.Set(actorSelector.GetMatchLabels()))
-
-	set := labels.Set(worker.GetLabels())
-	return templateSel.Matches(set) && actorSel.Matches(set), nil
-}
-
 type AssignWorkerStep struct {
 	store       store.Interface
 	workerCache *workercache.Cache
+	scheduler   scheduling.Scheduler
 }
 
 func (s *AssignWorkerStep) Name() string { return "AssignWorker" }
@@ -166,6 +143,11 @@ func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, stat
 		return fmt.Errorf("while listing workers: %w", err)
 	}
 
+	constraints, err := schedulingConstraints(state.Actor, state.ActorTemplate)
+	if err != nil {
+		return err
+	}
+
 	var assignedWorker *ateapipb.Worker
 
 	// Check if we already have a worker assigned from a previous failed attempt.
@@ -178,11 +160,7 @@ func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, stat
 		if worker.Assignment.Actor.Atespace != input.Atespace || worker.Assignment.Actor.Name != input.ActorName {
 			continue
 		}
-		eligible, err := isWorkerEligibleForActor(worker, state.ActorTemplate.Spec.SandboxClass, state.ActorTemplate.Spec.WorkerSelector, state.Actor.GetWorkerSelector())
-		if err != nil {
-			return fmt.Errorf("while checking worker eligibility: %w", err)
-		}
-		if eligible {
+		if s.scheduler.Applies(worker, constraints) {
 			assignedWorker = worker
 			break
 		}
@@ -205,12 +183,12 @@ func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, stat
 		}(releaseWorker)
 	}
 	if assignedWorker == nil {
-		pickedWorker, err := s.findFreeWorker(workers, state.ActorTemplate.Spec.SandboxClass, state.ActorTemplate.Spec.WorkerSelector, state.Actor.GetWorkerSelector(), state.Actor.GetLatestSnapshotInfo().GetLocal().GetNodeVmsWithLocalSnapshots())
+		pickedWorker, err := s.scheduler.Schedule(ctx, constraints)
 		if err != nil {
+			if errors.Is(err, scheduling.ErrNoCapacity) {
+				return status.Errorf(codes.FailedPrecondition, "no free workers available")
+			}
 			return err
-		}
-		if pickedWorker == nil {
-			return status.Errorf(codes.FailedPrecondition, "no free workers available")
 		}
 
 		assignedWorker = pickedWorker
@@ -249,6 +227,22 @@ func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, stat
 	state.Actor = updatedActor
 	state.Worker = assignedWorker
 	return nil
+}
+
+func schedulingConstraints(actor *ateapipb.Actor, tmpl *atev1alpha1.ActorTemplate) (scheduling.Constraints, error) {
+	c := scheduling.Constraints{
+		SandboxClass:  string(tmpl.Spec.SandboxClass),
+		ActorSelector: labels.SelectorFromSet(labels.Set(actor.GetWorkerSelector().GetMatchLabels())),
+		RequiredNodes: actor.GetLatestSnapshotInfo().GetLocal().GetNodeVmsWithLocalSnapshots(),
+	}
+	if tmpl.Spec.WorkerSelector != nil {
+		sel, err := metav1.LabelSelectorAsSelector(tmpl.Spec.WorkerSelector)
+		if err != nil {
+			return scheduling.Constraints{}, fmt.Errorf("invalid template worker selector: %w", err)
+		}
+		c.TemplateSelector = sel
+	}
+	return c, nil
 }
 
 func (s *AssignWorkerStep) RetryBackoff() *wait.Backoff {
@@ -303,39 +297,6 @@ func (s *AttachVolumesStep) Execute(ctx context.Context, input *ResumeInput, sta
 
 func (s *AttachVolumesStep) RetryBackoff() *wait.Backoff { return nil }
 
-func (s *AssignWorkerStep) findFreeWorker(
-	workers []*ateapipb.Worker,
-	templateClass atev1alpha1.SandboxClass,
-	templateSelector *metav1.LabelSelector,
-	actorSelector *ateapipb.Selector,
-	nodesRestrictions []string,
-) (*ateapipb.Worker, error) {
-	var freeWorkers []*ateapipb.Worker
-	for _, worker := range workers {
-		if worker.Assignment != nil {
-			continue
-		}
-		eligible, err := isWorkerEligibleForActor(worker, templateClass, templateSelector, actorSelector)
-		if err != nil {
-			return nil, err
-		}
-		if !eligible {
-			continue
-		}
-		if len(nodesRestrictions) == 0 || slices.Contains(nodesRestrictions, worker.GetNodeName()) {
-			freeWorkers = append(freeWorkers, worker)
-		}
-	}
-
-	if len(freeWorkers) > 0 {
-		rand.Shuffle(len(freeWorkers), func(i, j int) {
-			freeWorkers[i], freeWorkers[j] = freeWorkers[j], freeWorkers[i]
-		})
-		return freeWorkers[0], nil
-	}
-	return nil, nil
-}
-
 type CallAteletRestoreStep struct {
 	store               store.Interface
 	dialer              *AteletDialer
@@ -343,6 +304,7 @@ type CallAteletRestoreStep struct {
 	secretCache         *envSecretCache
 	workerPoolLister    listersv1alpha1.WorkerPoolLister
 	sandboxConfigLister listersv1alpha1.SandboxConfigLister
+	scheduler           scheduling.Scheduler
 }
 
 func (s *CallAteletRestoreStep) Name() string { return "CallAteletRestore" }
@@ -367,11 +329,11 @@ func (s *CallAteletRestoreStep) CheckPrerequisite(ctx context.Context, input *Re
 		}
 		return status.Errorf(codes.Aborted, "actor %s crashed", input.ActorName)
 	}
-	eligible, err := isWorkerEligibleForActor(state.Worker, state.ActorTemplate.Spec.SandboxClass, state.ActorTemplate.Spec.WorkerSelector, state.Actor.GetWorkerSelector())
+	constraints, err := schedulingConstraints(state.Actor, state.ActorTemplate)
 	if err != nil {
-		return fmt.Errorf("while calling isWorkerEligbleForActor :%w", err)
+		return err
 	}
-	if !eligible {
+	if !s.scheduler.Applies(state.Worker, constraints) {
 		slog.ErrorContext(ctx, "crashing actor because previously assigned worker is not eligible anymore")
 		release := proto.Clone(state.Worker).(*ateapipb.Worker)
 		release.Assignment = nil

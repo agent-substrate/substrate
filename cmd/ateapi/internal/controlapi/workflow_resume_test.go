@@ -19,6 +19,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/scheduling"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
@@ -26,149 +27,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
-
-func TestIsWorkerEligibleForActor(t *testing.T) {
-	tests := []struct {
-		name             string
-		worker           *ateapipb.Worker
-		templateClass    atev1alpha1.SandboxClass
-		templateSelector *metav1.LabelSelector
-		actorSelector    *ateapipb.Selector
-		wantEligible     bool
-	}{
-		{
-			name: "both nil matches everything",
-			worker: &ateapipb.Worker{
-				SandboxClass: "gvisor",
-				Labels:       map[string]string{"foo": "bar"},
-			},
-			templateClass:    atev1alpha1.SandboxClassGvisor,
-			templateSelector: nil,
-			actorSelector:    nil,
-			wantEligible:     true,
-		},
-		{
-			name: "template selector only match",
-			worker: &ateapipb.Worker{
-				SandboxClass: "gvisor",
-				Labels:       map[string]string{"workload": "code-sandbox"},
-			},
-			templateClass: atev1alpha1.SandboxClassGvisor,
-			templateSelector: &metav1.LabelSelector{
-				MatchLabels: map[string]string{"workload": "code-sandbox"},
-			},
-			actorSelector: nil,
-			wantEligible:  true,
-		},
-		{
-			name: "template selector only no match",
-			worker: &ateapipb.Worker{
-				SandboxClass: "gvisor",
-				Labels:       map[string]string{"workload": "browser-agent"},
-			},
-			templateClass: atev1alpha1.SandboxClassGvisor,
-			templateSelector: &metav1.LabelSelector{
-				MatchLabels: map[string]string{"workload": "code-sandbox"},
-			},
-			actorSelector: nil,
-			wantEligible:  false,
-		},
-		{
-			name: "actor selector only match",
-			worker: &ateapipb.Worker{
-				SandboxClass: "gvisor",
-				Labels:       map[string]string{"tier": "paid"},
-			},
-			templateClass:    atev1alpha1.SandboxClassGvisor,
-			templateSelector: nil,
-			actorSelector: &ateapipb.Selector{
-				MatchLabels: map[string]string{"tier": "paid"},
-			},
-			wantEligible: true,
-		},
-		{
-			name: "actor selector only no match",
-			worker: &ateapipb.Worker{
-				SandboxClass: "gvisor",
-				Labels:       map[string]string{"tier": "free"},
-			},
-			templateClass:    atev1alpha1.SandboxClassGvisor,
-			templateSelector: nil,
-			actorSelector: &ateapipb.Selector{
-				MatchLabels: map[string]string{"tier": "paid"},
-			},
-			wantEligible: false,
-		},
-		{
-			name: "AND of two selectors match",
-			worker: &ateapipb.Worker{
-				SandboxClass: "gvisor",
-				Labels:       map[string]string{"workload": "code-sandbox", "tier": "paid"},
-			},
-			templateClass: atev1alpha1.SandboxClassGvisor,
-			templateSelector: &metav1.LabelSelector{
-				MatchLabels: map[string]string{"workload": "code-sandbox"},
-			},
-			actorSelector: &ateapipb.Selector{
-				MatchLabels: map[string]string{"tier": "paid"},
-			},
-			wantEligible: true,
-		},
-		{
-			name: "AND of two selectors one fails",
-			worker: &ateapipb.Worker{
-				SandboxClass: "gvisor",
-				Labels:       map[string]string{"workload": "code-sandbox", "tier": "free"},
-			},
-			templateClass: atev1alpha1.SandboxClassGvisor,
-			templateSelector: &metav1.LabelSelector{
-				MatchLabels: map[string]string{"workload": "code-sandbox"},
-			},
-			actorSelector: &ateapipb.Selector{
-				MatchLabels: map[string]string{"tier": "paid"},
-			},
-			wantEligible: false,
-		},
-		{
-			name: "microvm template matches only microvm worker",
-			worker: &ateapipb.Worker{
-				SandboxClass: "microvm",
-			},
-			templateClass: atev1alpha1.SandboxClassMicroVM,
-			wantEligible:  true,
-		},
-		{
-			name: "microvm template excludes gvisor worker",
-			worker: &ateapipb.Worker{
-				SandboxClass: "gvisor",
-			},
-			templateClass: atev1alpha1.SandboxClassMicroVM,
-			wantEligible:  false,
-		},
-		{
-			name: "gvisor template excludes microvm worker",
-			worker: &ateapipb.Worker{
-				SandboxClass: "microvm",
-			},
-			templateClass: atev1alpha1.SandboxClassGvisor,
-			wantEligible:  false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := isWorkerEligibleForActor(tt.worker, tt.templateClass, tt.templateSelector, tt.actorSelector)
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if got != tt.wantEligible {
-				t.Errorf("got eligible=%t, want %t", got, tt.wantEligible)
-			}
-		})
-	}
-}
 
 func TestAssignWorkerStep_SkipsWorkerAssignedInOtherAtespace(t *testing.T) {
 	ctx := context.Background()
@@ -196,7 +55,7 @@ func TestAssignWorkerStep_SkipsWorkerAssignedInOtherAtespace(t *testing.T) {
 		t.Fatalf("workercache.Start: %v", err)
 	}
 
-	step := &AssignWorkerStep{store: persistence, workerCache: wc}
+	step := &AssignWorkerStep{store: persistence, workerCache: wc, scheduler: scheduling.New(wc)}
 	state := &ResumeState{
 		Actor: &ateapipb.Actor{
 			Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "shared"},
@@ -265,7 +124,7 @@ func TestAssignWorkerStep_ReleasesIneligibleStaleWorkerInBackground(t *testing.T
 		t.Fatalf("workercache.Start: %v", err)
 	}
 
-	step := &AssignWorkerStep{store: persistence, workerCache: wc}
+	step := &AssignWorkerStep{store: persistence, workerCache: wc, scheduler: scheduling.New(wc)}
 	state := &ResumeState{
 		Actor: actor,
 		ActorTemplate: &atev1alpha1.ActorTemplate{
@@ -362,7 +221,7 @@ func TestAssignWorkerStep_RetryAfterConflictPicksFreshWorker(t *testing.T) {
 	stale.Assignment = &ateapipb.Assignment{
 		Actor: &ateapipb.ObjectRef{Atespace: "team-a", Name: "id1"},
 	}
-	step := &AssignWorkerStep{store: persistence, workerCache: wc}
+	step := &AssignWorkerStep{store: persistence, workerCache: wc, scheduler: scheduling.New(wc)}
 	state := &ResumeState{
 		Actor:  actor,
 		Worker: stale,
@@ -504,7 +363,7 @@ func TestResumeSteps_CheckPrerequisite(t *testing.T) {
 			// The restore call is allowed only from RESUMING (RUNNING is
 			// fast-forwarded by IsComplete).
 			name: "CallAteletRestoreStep",
-			step: &CallAteletRestoreStep{},
+			step: &CallAteletRestoreStep{scheduler: scheduling.New(nil)},
 			allowed: map[ateapipb.Actor_Status]bool{
 				ateapipb.Actor_STATUS_RESUMING: true,
 			},
@@ -653,7 +512,7 @@ func TestCallAteletRestoreStep_CheckPrerequisite_WorkerOwnership(t *testing.T) {
 
 			seedWorkflowActor(t, ctx, persistence, "team-a", "shared", "ns", "tmpl1", ateapipb.Actor_STATUS_RESUMING)
 
-			step := &CallAteletRestoreStep{store: persistence}
+			step := &CallAteletRestoreStep{store: persistence, scheduler: scheduling.New(nil)}
 			state := &ResumeState{
 				Actor: &ateapipb.Actor{
 					Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "shared"},

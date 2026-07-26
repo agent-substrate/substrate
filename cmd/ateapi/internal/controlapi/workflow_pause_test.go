@@ -28,9 +28,9 @@ import (
 // disappears from the DB during pause finalization, so the node it ran on is
 // unknown.
 //
-// Old behavior: NodeVmsWithLocalSnapshots = []string{""}, which made
-// findFreeWorker search for a worker with node name "", never found, a
-// permanent "no free workers available" on resume.
+// Old behavior: NodeVmsWithLocalSnapshots = []string{""}, which made the
+// scheduler's node restriction search for a worker with node name "", never
+// found, a permanent "no free workers available" on resume.
 //
 // Current behavior: NodeVmsWithLocalSnapshots is left nil, and the actor is
 // crashed instead of left PAUSED, since a local snapshot with an unknown node
@@ -72,7 +72,7 @@ func TestFinalizePausedStep_WorkerGone(t *testing.T) {
 	}
 	for _, n := range got.GetLatestSnapshotInfo().GetLocal().GetNodeVmsWithLocalSnapshots() {
 		if n == "" {
-			t.Errorf("BUG: empty string in NodeVmsWithLocalSnapshots, findFreeWorker would never match")
+			t.Errorf("BUG: empty string in NodeVmsWithLocalSnapshots, the scheduler's node restriction would never match a real worker")
 		}
 	}
 
@@ -83,37 +83,6 @@ func TestFinalizePausedStep_WorkerGone(t *testing.T) {
 	}
 	if !done {
 		t.Error("IsComplete = false, want true once the actor is CRASHED and the worker is freed")
-	}
-}
-
-// TestFindFreeWorker_EmptyNodeRestriction shows the root symptom the fix
-// avoids: old code wrote []string{""} into NodeVmsWithLocalSnapshots when the
-// node name was unknown, and findFreeWorker required worker.NodeName == "",
-// which never matches a real worker.
-func TestFindFreeWorker_EmptyNodeRestriction(t *testing.T) {
-	workers := []*ateapipb.Worker{
-		{WorkerNamespace: "default", WorkerPool: "pool1", WorkerPod: "w1", NodeName: "node1"},
-		{WorkerNamespace: "default", WorkerPool: "pool1", WorkerPod: "w2", NodeName: "node2"},
-	}
-
-	s := &AssignWorkerStep{}
-
-	// Old behavior: []string{""}, no worker has NodeName == "", returns nil.
-	got, err := s.findFreeWorker(workers, "", nil, nil, []string{""})
-	if err != nil {
-		t.Fatalf("findFreeWorker: %v", err)
-	}
-	if got != nil {
-		t.Errorf("expected nil with old buggy input, got %v", got)
-	}
-
-	// Fixed behavior: nil restrictions, any free worker matches.
-	got, err = s.findFreeWorker(workers, "", nil, nil, nil)
-	if err != nil {
-		t.Fatalf("findFreeWorker: %v", err)
-	}
-	if got == nil {
-		t.Error("expected a worker with nil restrictions, got nil")
 	}
 }
 
