@@ -16,7 +16,6 @@ package router
 
 import (
 	"context"
-	"errors"
 	"math"
 	"time"
 
@@ -60,10 +59,10 @@ func resumeBackoff(interval time.Duration, factor, jitter float64) wait.Backoff 
 // It wraps the last retryable error, so the HTTP boundary still maps the
 // underlying gRPC status faithfully (503 with the capacity message), while the
 // parking metrics can report budget exhaustion as its own outcome.
-type budgetExhaustedError struct{ cause error }
+type budgetExhaustedError struct{ lastErr error }
 
-func (e *budgetExhaustedError) Error() string { return e.cause.Error() }
-func (e *budgetExhaustedError) Unwrap() error { return e.cause }
+func (e *budgetExhaustedError) Error() string { return e.lastErr.Error() }
+func (e *budgetExhaustedError) Unwrap() error { return e.lastErr }
 
 // ActorResumer coordinates safe, deduplicated resumption of actors.
 type ActorResumer struct {
@@ -167,13 +166,20 @@ func (r *ActorResumer) ResumeActor(ctx context.Context, actorRef resources.Actor
 		})
 
 		if err != nil {
-			// If the budget elapsed (DeadlineExceeded) while we were still retrying a
-			// transient error, surface that underlying error rather than the generic
-			// wait error so the HTTP boundary maps it faithfully (e.g. 503 "no free
+			// If the budget elapsed while we were still retrying a transient error,
+			// surface that underlying error rather than the generic wait/deadline
+			// error so the HTTP boundary maps it faithfully (e.g. 503 "no free
 			// workers available") instead of a misleading timeout. The wrapper marks
 			// the exhaustion explicitly for the parking wait-duration metric.
-			if lastRetryErr != nil && (errors.Is(err, context.DeadlineExceeded) || wait.Interrupted(err)) {
-				return nil, &budgetExhaustedError{cause: lastRetryErr}
+			//
+			// Gate on bgCtx itself, not on errors.Is(err, context.DeadlineExceeded):
+			// when the deadline lands during an in-flight ResumeActor RPC, gRPC
+			// surfaces a *status* error with code DeadlineExceeded that does not
+			// match the context sentinel, which would misreport budget exhaustion
+			// as a 504. bgCtx is this loop's only deadline source, so checking it
+			// covers both landing spots (mid-RPC and between retries).
+			if lastRetryErr != nil && (bgCtx.Err() != nil || wait.Interrupted(err)) {
+				return nil, &budgetExhaustedError{lastErr: lastRetryErr}
 			}
 			return nil, err
 		}

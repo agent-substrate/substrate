@@ -244,6 +244,42 @@ func TestActorResumer_Parking(t *testing.T) {
 		}
 	})
 
+	t.Run("BudgetExpiryDuringInFlightRPC", func(t *testing.T) {
+		var mu sync.Mutex
+		var calls int
+		mock := &resumerMockClient{
+			resumeFn: func(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
+				mu.Lock()
+				calls++
+				n := calls
+				mu.Unlock()
+				if n == 1 {
+					// First attempt: transient saturation, remembered as the
+					// last retryable error.
+					return nil, status.Error(codes.FailedPrecondition, "no free workers available")
+				}
+				// Later attempt: block until the park budget cancels the RPC,
+				// then return what a real gRPC client returns — a *status*
+				// error with code DeadlineExceeded that does NOT satisfy
+				// errors.Is(err, context.DeadlineExceeded).
+				<-ctx.Done()
+				return nil, status.FromContextError(ctx.Err()).Err()
+			},
+		}
+
+		resumer := NewActorResumer(mock, withParking(parkingConfig{maxParked: 1, budget: 300 * time.Millisecond}))
+		_, err := resumer.ResumeActor(context.Background(), testAtespace, testActorName)
+		// The deadline landed mid-RPC; the client must still see the capacity
+		// error (503 "no free workers available"), not a generic timeout (504).
+		if got := status.Code(err); got != codes.FailedPrecondition {
+			t.Errorf("expected FailedPrecondition when the budget lands mid-RPC, got %v (err=%v)", got, err)
+		}
+		var budget *budgetExhaustedError
+		if !errors.As(err, &budget) {
+			t.Errorf("expected the error to be marked as budget exhaustion, got %T (%v)", err, err)
+		}
+	})
+
 	t.Run("DisabledFailsFastOnCapacityError", func(t *testing.T) {
 		var mu sync.Mutex
 		var calls int

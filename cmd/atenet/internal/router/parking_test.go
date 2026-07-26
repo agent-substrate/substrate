@@ -138,7 +138,7 @@ func TestParkOutcomeFor(t *testing.T) {
 		want parkOutcome
 	}{
 		{"nil is served", nil, parkOutcomeServed},
-		{"budget exhaustion is explicit", &budgetExhaustedError{cause: errOther}, parkOutcomeBudgetExhausted},
+		{"budget exhaustion is explicit", &budgetExhaustedError{lastErr: errOther}, parkOutcomeBudgetExhausted},
 		{"canceled", context.Canceled, parkOutcomeCanceled},
 		{"deadline is timeout", context.DeadlineExceeded, parkOutcomeTimeout},
 		{"other is error", errOther, parkOutcomeError},
