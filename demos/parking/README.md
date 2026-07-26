@@ -60,8 +60,8 @@ kubectl port-forward -n ate-system svc/atenet-router 8000:80
 
 ## How to Use
 
-Parking is **on by default** (`--parking-max-wait=30s`,
-`--parking-max-parked=2048`), so the cluster you just deployed already parks.
+Parking is **on by default** (`--parked-request-budget=5s`,
+`--parked-request-max=2048`), so the cluster you just deployed already parks.
 
 ### A. Watch a 503 become a served request
 
@@ -84,7 +84,7 @@ curl -s -w '\n-> HTTP %{http_code} in %{time_total}s\n' \
 ```
 
 While that is hanging, in a **second terminal** free a worker by suspending p1
-(within the 30s park budget):
+(within the 5s park budget):
 
 ```bash
 kubectl ate suspend actor p1 --atespace parking
@@ -120,7 +120,7 @@ non-zero `active`):
 ```bash
 kubectl -n ate-system port-forward deployment/atenet-router 4040:4040
 curl -s 'http://localhost:4040/statusz?format=json' | jq .parking
-# { "enabled": true, "active": 3, "max_parked": 2048, "max_wait": "30s" }
+# { "enabled": true, "active": 3, "max_parked": 2048, "max_wait": "5s" }
 ```
 
 The parking metrics are also exported on the router's metrics endpoint
@@ -135,7 +135,7 @@ container's args:
 
 ```bash
 kubectl -n ate-system patch deployment atenet-router --type=json \
-  -p='[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--parking-max-parked=0"}]'
+  -p='[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--parked-request-max=0"}]'
 kubectl -n ate-system rollout status deployment/atenet-router
 ```
 
@@ -154,8 +154,8 @@ kubectl -n ate-system rollout undo deployment/atenet-router
 ```
 
 > [!TIP]
-> You can tune parking instead of disabling it: add `--parking-max-wait=10s` or
-> `--parking-max-parked=512` to the same args list.
+> You can tune parking instead of disabling it: add `--parked-request-budget=10s` or
+> `--parked-request-max=512` to the same args list.
 
 ## How to Uninstall
 

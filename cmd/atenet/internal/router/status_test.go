@@ -163,8 +163,8 @@ func TestStatuszEndpoint(t *testing.T) {
 	if !dashboard.Parking.Enabled {
 		t.Errorf("expected parking reported as enabled in status JSON")
 	}
-	if dashboard.Parking.MaxParked != defaultParkingMaxParked {
-		t.Errorf("expected parking max_parked %d, got %d", defaultParkingMaxParked, dashboard.Parking.MaxParked)
+	if dashboard.Parking.MaxParked != defaultParkedRequestMax {
+		t.Errorf("expected parking max_parked %d, got %d", defaultParkedRequestMax, dashboard.Parking.MaxParked)
 	}
 }
 

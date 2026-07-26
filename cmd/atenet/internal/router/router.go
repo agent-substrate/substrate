@@ -189,10 +189,26 @@ func (s *RouterServer) Run(ctx context.Context) error {
 	if err := xdsSrv.SetOtlpCollector(s.cfg.OtlpCollectorAddress); err != nil {
 		return fmt.Errorf("configure OTLP collector: %w", err)
 	}
-	if s.cfg.ParkingMaxParked > 0 && s.cfg.ParkingMaxWait > 0 {
+
+	// Resolve the parking configuration once so every consumer — the resumer's
+	// retry loop and the Envoy ext_proc timeout below — sees the same effective
+	// values (a non-positive budget falls back to the default rather than
+	// leaving Envoy on its short parking-off timeout).
+	parkCfg := parkingConfig{
+		budget:        s.cfg.ParkedRequestBudget,
+		maxParked:     s.cfg.ParkedRequestMax,
+		retryInterval: s.cfg.ParkedRequestRetryInterval,
+		retryFactor:   s.cfg.ParkedRequestRetryFactor,
+		retryJitter:   s.cfg.ParkedRequestRetryJitter,
+	}
+	if err := parkCfg.validate(); err != nil {
+		return fmt.Errorf("invalid parking configuration: %w", err)
+	}
+	parkCfg = parkCfg.normalized()
+	if parkCfg.enabled() {
 		// Envoy must keep a parked request open at least as long as the router
 		// will hold it; add a margin so the router surfaces its own 503 first.
-		xdsSrv.SetExtProcMessageTimeout(s.cfg.ParkingMaxWait + 5*time.Second)
+		xdsSrv.SetExtProcMessageTimeout(parkCfg.budget + 5*time.Second)
 	}
 
 	xdsSrv.SetTlsConfig(s.cfg.HttpsPort, s.cfg.EnvoyCertPath)
@@ -204,10 +220,6 @@ func (s *RouterServer) Run(ctx context.Context) error {
 		parkMetrics, err := newParkingMetrics()
 		if err != nil {
 			return fmt.Errorf("failed to create parking metrics: %w", err)
-		}
-		parkCfg := parkingConfig{
-			maxWait:   s.cfg.ParkingMaxWait,
-			maxParked: s.cfg.ParkingMaxParked,
 		}
 		s.extprocSrv = NewExtProcServer(s.cfg.ExtprocPort, s.apiClient, routeDuration, parkCfg, parkMetrics)
 	}

@@ -22,7 +22,7 @@ import (
 )
 
 func TestParkingLot_CapacityAndRelease(t *testing.T) {
-	lot := newParkingLot(parkingConfig{maxWait: time.Second, maxParked: 2}, nil)
+	lot := newParkingLot(parkingConfig{budget: time.Second, maxParked: 2}, nil)
 	ctx := context.Background()
 
 	r1, ok := lot.enter(ctx)
@@ -60,7 +60,7 @@ func TestParkingLot_CapacityAndRelease(t *testing.T) {
 }
 
 func TestParkingLot_ReleaseIsIdempotent(t *testing.T) {
-	lot := newParkingLot(parkingConfig{maxWait: time.Second, maxParked: 1}, nil)
+	lot := newParkingLot(parkingConfig{budget: time.Second, maxParked: 1}, nil)
 
 	release, ok := lot.enter(context.Background())
 	if !ok {
@@ -96,7 +96,7 @@ func TestParkingLot_DisabledAlwaysAdmits(t *testing.T) {
 func TestParkingLot_ConcurrentEntryRespectsCapacity(t *testing.T) {
 	const capacity = 8
 	const goroutines = 100
-	lot := newParkingLot(parkingConfig{maxWait: time.Second, maxParked: capacity}, nil)
+	lot := newParkingLot(parkingConfig{budget: time.Second, maxParked: capacity}, nil)
 
 	var admitted int64
 	var mu sync.Mutex

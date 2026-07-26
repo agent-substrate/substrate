@@ -31,32 +31,27 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 )
 
-// legacyResumeBudget is the total time the resumer spends retrying a resume when
-// request parking is disabled. It preserves the historical fail-fast-on-capacity
-// behavior (only concurrent-update conflicts are retried).
-const legacyResumeBudget = 15 * time.Second
+// failFastResumeBudget is the total time the resumer spends retrying a resume
+// when request parking is disabled. In that mode only concurrent-update
+// conflicts are retried; capacity errors fail immediately.
+const failFastResumeBudget = 15 * time.Second
 
-// Retry cadence between resume attempts: a gentle exponential backoff.
-const (
-	resumeBackoffBase   = 500 * time.Millisecond
-	resumeBackoffFactor = 1.1
-	resumeBackoffJitter = 0.1
-)
-
-// resumeBackoff is the backoff between resume attempts while a request is parked.
+// resumeBackoff builds the backoff between resume attempts while a request is
+// parked, from the configured retry parameters.
 //
 // It intentionally sets NO Cap. wait.Backoff's delay() zeroes Steps the moment
 // the delay reaches Cap, which would end retries long before the parking budget
-// (a Cap of 2s stops the loop in ~7 steps / ~5s regardless of the budget). A
-// gentle Factor keeps the gap small on its own — from 500ms it only grows to
-// ~3.5s over a 30s budget — while Steps is set high so the budget context passed
-// to ExponentialBackoffWithContext, not the step count, bounds the wait.
-func resumeBackoff() wait.Backoff {
+// (a Cap of 2s stops the loop in ~7 steps regardless of the budget). A gentle
+// Factor keeps the gap small on its own — from 100ms at the default 1.1 the gap
+// only grows to ~0.5s over a 5s budget — while Steps is set high so the budget
+// context passed to ExponentialBackoffWithContext, not the step count, bounds
+// the wait.
+func resumeBackoff(interval time.Duration, factor, jitter float64) wait.Backoff {
 	return wait.Backoff{
 		Steps:    math.MaxInt32,
-		Duration: resumeBackoffBase,
-		Factor:   resumeBackoffFactor,
-		Jitter:   resumeBackoffJitter,
+		Duration: interval,
+		Factor:   factor,
+		Jitter:   jitter,
 	}
 }
 
@@ -82,28 +77,34 @@ type ActorResumer struct {
 	// budget bounds the total time a single resume operation retries before the
 	// underlying error is returned.
 	budget time.Duration
+	// backoff paces the retries within the budget.
+	backoff wait.Backoff
 }
 
 // resumerOption configures an ActorResumer.
 type resumerOption func(*ActorResumer)
 
-// withParking configures parking behavior. When enabled, FailedPrecondition
-// ("no free workers available") becomes retryable and the resume is retried for
-// up to maxWait; a non-positive maxWait keeps the default budget. When disabled,
-// the resumer preserves its legacy fail-fast-on-capacity behavior.
-func withParking(enabled bool, maxWait time.Duration) resumerOption {
+// withParking configures parking behavior from cfg. When parking is enabled,
+// FailedPrecondition ("no free workers available") becomes retryable and the
+// resume is retried, at cfg's retry cadence, for up to cfg's budget. When
+// disabled, the resumer applies fail-fast-on-capacity behavior.
+func withParking(cfg parkingConfig) resumerOption {
+	cfg = cfg.normalized()
 	return func(r *ActorResumer) {
-		r.parkEnabled = enabled
-		if maxWait > 0 {
-			r.budget = maxWait
+		r.parkEnabled = cfg.enabled()
+		if r.parkEnabled {
+			r.budget = cfg.budget
 		}
+		r.backoff = resumeBackoff(cfg.retryInterval, cfg.retryFactor, cfg.retryJitter)
 	}
 }
 
 func NewActorResumer(apiClient ateapipb.ControlClient, opts ...resumerOption) *ActorResumer {
 	r := &ActorResumer{
 		apiClient: apiClient,
-		budget:    legacyResumeBudget,
+		budget:    failFastResumeBudget,
+		backoff: resumeBackoff(defaultParkedRequestRetryInterval,
+			defaultParkedRequestRetryFactor, defaultParkedRequestRetryJitter),
 	}
 	for _, opt := range opts {
 		opt(r)
@@ -144,7 +145,7 @@ func (r *ActorResumer) ResumeActor(ctx context.Context, actorRef resources.Actor
 		bgCtx, bgCancel := context.WithTimeout(context.Background(), r.budget)
 		defer bgCancel()
 
-		backoff := resumeBackoff()
+		backoff := r.backoff
 
 		var resumeResp *ateapipb.ResumeActorResponse
 		var lastRetryErr error

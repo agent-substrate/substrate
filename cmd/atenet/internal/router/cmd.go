@@ -60,8 +60,11 @@ func NewRouterCmd() *cobra.Command {
 	cmd.Flags().StringVar(&cfg.Auth.AteapiServerName, "ateapi-server-name", "", "SNI / hostname expected on the ateapi server cert. Optional.")
 	cmd.Flags().BoolVar(&cfg.Auth.AteapiUseTokenAuth, "ateapi-use-token-auth", false, "Authenticate to ateapi with the Bearer token from --ateapi-token-file instead of the client certificate from --ateapi-client-cert.")
 	cmd.Flags().StringVar(&cfg.Auth.AteapiTokenFile, "ateapi-token-file", "", "Projected SA token file used as Bearer credential. Required with --ateapi-use-token-auth, ignored otherwise.")
-	cmd.Flags().DurationVar(&cfg.ParkingMaxWait, "parking-max-wait", defaultParkingMaxWait, "Maximum time a request may be parked (held and retried) waiting for its actor to become routable")
-	cmd.Flags().IntVar(&cfg.ParkingMaxParked, "parking-max-parked", defaultParkingMaxParked, "Maximum number of requests that may be parked simultaneously; excess requests are shed with 503. 0 disables parking (requests fail fast on worker-pool saturation)")
+	cmd.Flags().DurationVar(&cfg.ParkedRequestBudget, "parked-request-budget", defaultParkedRequestBudget, "Maximum time a request may be parked (held and retried) waiting for its actor to become routable")
+	cmd.Flags().IntVar(&cfg.ParkedRequestMax, "parked-request-max", defaultParkedRequestMax, "Maximum number of requests that may be parked simultaneously; excess requests are shed with 503. 0 disables parking (requests fail fast on worker-pool saturation)")
+	cmd.Flags().DurationVar(&cfg.ParkedRequestRetryInterval, "parked-request-retry-interval", defaultParkedRequestRetryInterval, "Delay before a parked request's first resume retry")
+	cmd.Flags().Float64Var(&cfg.ParkedRequestRetryFactor, "parked-request-retry-factor", defaultParkedRequestRetryFactor, "Multiplier applied to the retry delay after each attempt; must be >= 1")
+	cmd.Flags().Float64Var(&cfg.ParkedRequestRetryJitter, "parked-request-retry-jitter", defaultParkedRequestRetryJitter, "Random fraction in [0, 1) added to each retry delay to de-synchronize parked requests")
 
 	return cmd
 }

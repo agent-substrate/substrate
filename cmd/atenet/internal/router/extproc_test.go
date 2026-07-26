@@ -271,7 +271,7 @@ func TestExtProc_ParkingLotFull(t *testing.T) {
 
 	// A 1-slot lot with the slot already occupied deterministically simulates a
 	// full lot without needing a concurrent in-flight request.
-	s := NewExtProcServer(50051, clientMock, nil, parkingConfig{maxWait: time.Second, maxParked: 1}, nil)
+	s := NewExtProcServer(50051, clientMock, nil, parkingConfig{budget: time.Second, maxParked: 1}, nil)
 	occupy, ok := s.parking.enter(context.Background())
 	if !ok {
 		t.Fatal("priming enter should be admitted")

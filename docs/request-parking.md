@@ -33,16 +33,16 @@ user-visible error.
 With parking enabled (the default), the router treats `FailedPrecondition` from
 `ResumeActor` as a **retryable** condition (alongside the existing `Aborted`
 concurrent-resume conflict). The request is *parked*: the resumer keeps retrying
-with capped exponential backoff until either
+with exponential backoff until either
 
 - the resume succeeds (the actor is `RUNNING` and has a worker IP) — the request
   is then routed normally; or
-- the **park budget** (`--parking-max-wait`, default `30s`) elapses — the
+- the **park budget** (`--parked-request-budget`, default `5s`) elapses — the
   underlying capacity error is returned, surfacing as `503 "actor <id>
   unavailable: no free workers available"`.
 
 To bound resource use and provide backpressure, the router admits requests to a
-**parking lot** of fixed capacity (`--parking-max-parked`, default `2048`). Each
+**parking lot** of fixed capacity (`--parked-request-max`, default `2048`). Each
 in-flight resume occupies one slot. When the lot is full, further requests are
 shed immediately with `503 "actor <id> unavailable: router at capacity"` rather
 than queueing without bound.
@@ -56,7 +56,7 @@ control-plane RPC.
 
 Only transient capacity (`FailedPrecondition`) and concurrency (`Aborted`)
 conditions are parked. Errors that will not resolve by waiting are returned
-immediately, preserving prior semantics:
+immediately (fail fast):
 
 | Resume result                         | Behavior                          |
 | ------------------------------------- | --------------------------------- |
@@ -68,17 +68,22 @@ immediately, preserving prior semantics:
 | `DeadlineExceeded`                    | Fail fast → `504`                 |
 | `PermissionDenied` / `Unauthenticated`| Fail fast → `403` / `401`         |
 
-When parking is **disabled** (`--parking-max-parked=0`), the router preserves
-its legacy fail-fast behavior: `FailedPrecondition` fails fast, there is no
-admission cap, and only `Aborted` (concurrent-resume) conflicts are retried,
-within the historical `15s` budget.
+When parking is **disabled** (`--parked-request-max=0`), the router fails fast:
+`FailedPrecondition` is returned immediately, there is no admission cap, and
+only `Aborted` (concurrent-resume) conflicts are retried, within a `15s` budget.
 
 ## Configuration
 
-| Flag                   | Default | Meaning                                                            |
-| ---------------------- | ------- | ------------------------------------------------------------------ |
-| `--parking-max-wait`   | `30s`   | Max time a single request may stay parked awaiting resume.         |
-| `--parking-max-parked` | `2048`  | Max concurrent parked/in-flight resume requests; excess shed (503). `0` disables parking. |
+| Flag                             | Default | Meaning                                                            |
+| -------------------------------- | ------- | ------------------------------------------------------------------ |
+| `--parked-request-budget`         | `5s`    | Max time a single request may stay parked awaiting resume.         |
+| `--parked-request-max`            | `2048`  | Max concurrent parked/in-flight resume requests; excess shed (503). `0` disables parking. |
+| `--parked-request-retry-interval` | `100ms` | Delay before a parked request's first resume retry.                |
+| `--parked-request-retry-factor`   | `1.1`   | Multiplier applied to the retry delay after each attempt (>= 1).   |
+| `--parked-request-retry-jitter`   | `0.1`   | Random fraction in `[0, 1)` added per retry to de-synchronize parked requests. |
+
+The retry backoff deliberately has no cap and no attempt limit: the budget alone
+bounds the wait.
 
 ## Observability
 
@@ -86,10 +91,19 @@ within the historical `15s` budget.
 
 - `atenet.router.parking.active` — up/down counter: requests currently parked.
 - `atenet.router.parking.wait.duration` — histogram (seconds) of time spent
-  parked, labeled `outcome` ∈ {`served`, `budget_exhausted`, `timeout`,
-  `canceled`, `error`}. `budget_exhausted` means the full park budget elapsed
-  while the pool stayed saturated — the signal that capacity, not a fault, is
-  the bottleneck.
+  parked. Recorded **exactly once per admitted request**, at the moment its
+  resume attempt completes; never recorded for shed requests (those only
+  increment `parking.rejected`) nor when parking is disabled. The `outcome`
+  label says how the park ended:
+
+  | `outcome`          | When it is set                                                              |
+  | ------------------ | --------------------------------------------------------------------------- |
+  | `served`           | The resume succeeded and the request was routed to its worker.              |
+  | `budget_exhausted` | The park budget elapsed while the resume was still blocked on a retryable condition (pool saturated, or a concurrent operation holding the actor) — the signal that capacity, not a fault, is the bottleneck. |
+  | `canceled`         | The client disconnected while parked (request context canceled).            |
+  | `timeout`          | The request's own deadline expired while parked (distinct from the park budget). |
+  | `error`            | The resume failed with a non-retryable error (`NotFound`, `Unavailable`, ...). |
+
 - `atenet.router.parking.rejected` — counter: requests shed because the lot was
   full.
 

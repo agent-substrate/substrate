@@ -197,7 +197,7 @@ func TestActorResumer_Parking(t *testing.T) {
 			},
 		}
 
-		resumer := NewActorResumer(mock, withParking(true, 5*time.Second))
+		resumer := NewActorResumer(mock, withParking(parkingConfig{maxParked: 1, budget: 5 * time.Second}))
 		actor, err := resumer.ResumeActor(context.Background(), testAtespace, testActorName)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -224,9 +224,9 @@ func TestActorResumer_Parking(t *testing.T) {
 			},
 		}
 
-		// Budget large enough for a few ~500ms-spaced retries before it elapses;
+		// Budget large enough for a few ~100ms-spaced retries before it elapses;
 		// the pool never frees up.
-		resumer := NewActorResumer(mock, withParking(true, 1500*time.Millisecond))
+		resumer := NewActorResumer(mock, withParking(parkingConfig{maxParked: 1, budget: 1500 * time.Millisecond}))
 		_, err := resumer.ResumeActor(context.Background(), testAtespace, testActorName)
 		// The client must see the meaningful capacity error, not a generic
 		// timeout: status.Code must unwrap through the budget-exhaustion marker.
@@ -256,7 +256,7 @@ func TestActorResumer_Parking(t *testing.T) {
 			},
 		}
 
-		// Default constructor => parking disabled => legacy fail-fast.
+		// Default constructor => parking disabled => fail-fast.
 		resumer := NewActorResumer(mock)
 		_, err := resumer.ResumeActor(context.Background(), testAtespace, testActorName)
 		if got := status.Code(err); got != codes.FailedPrecondition {
@@ -275,7 +275,7 @@ func TestResumeBackoffHasNoCap(t *testing.T) {
 	// Steps the moment the delay reaches Cap, which would end parking retries far
 	// short of the budget (a 2s Cap stops the loop in ~7 steps / ~5s). The budget
 	// context — not the step count or a cap — must bound how long a request parks.
-	b := resumeBackoff()
+	b := resumeBackoff(defaultParkedRequestRetryInterval, defaultParkedRequestRetryFactor, defaultParkedRequestRetryJitter)
 	if b.Cap != 0 {
 		t.Errorf("resume backoff must not set Cap (it would stop retries at the cap); got %v", b.Cap)
 	}

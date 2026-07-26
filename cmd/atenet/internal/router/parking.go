@@ -17,15 +17,23 @@ package router
 import (
 	"context"
 	"errors"
+	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 )
 
 // Default request-parking parameters. See parkingConfig for the meaning of each
-// field; these are also the flag defaults wired up in NewCmd.
+// field; these are also the flag defaults wired up in NewRouterCmd.
 const (
-	defaultParkingMaxWait   = 30 * time.Second
-	defaultParkingMaxParked = 2048
+	defaultParkedRequestBudget = 5 * time.Second
+	defaultParkedRequestMax    = 2048
+
+	// Retry cadence between resume attempts while a request is parked: a gentle
+	// exponential backoff.
+	defaultParkedRequestRetryInterval = 100 * time.Millisecond
+	defaultParkedRequestRetryFactor   = 1.1
+	defaultParkedRequestRetryJitter   = 0.1
 )
 
 // parkOutcome is the terminal disposition of a parked request. It is recorded
@@ -47,26 +55,66 @@ const (
 // control plane before routing. If the worker pool is momentarily saturated the
 // control plane returns FailedPrecondition ("no free workers available"). With
 // parking enabled the router holds ("parks") such a request and keeps retrying
-// the resume until the actor becomes routable or maxWait elapses, instead of
+// the resume until the actor becomes routable or budget elapses, instead of
 // failing the request immediately. maxParked bounds how many requests may be
 // parked at once so the router sheds load rather than queueing without bound;
 // a non-positive maxParked disables parking entirely.
+//
+// retryInterval/retryFactor/retryJitter shape the backoff between resume
+// attempts while a request is parked. The backoff deliberately has no cap and
+// no step limit: the budget alone bounds the wait.
 type parkingConfig struct {
-	maxWait   time.Duration
+	budget    time.Duration
 	maxParked int
+
+	retryInterval time.Duration
+	retryFactor   float64
+	retryJitter   float64
 }
 
 // enabled reports whether request parking is active. Parking has no separate
-// on/off switch: setting maxParked to 0 disables it, preserving the legacy
-// fail-fast behavior (no admission cap, no retry on pool saturation).
+// on/off switch: setting maxParked to 0 disables it, applying a fail-fast
+// behavior (no admission cap, no retry on pool saturation).
 func (c parkingConfig) enabled() bool { return c.maxParked > 0 }
 
+// normalized returns the config with non-positive budget and retry parameters
+// replaced by their defaults, so every consumer (the resumer's retry loop and
+// the Envoy ext_proc timeout) sees the same effective values.
+func (c parkingConfig) normalized() parkingConfig {
+	if c.budget <= 0 {
+		c.budget = defaultParkedRequestBudget
+	}
+	if c.retryInterval <= 0 {
+		c.retryInterval = defaultParkedRequestRetryInterval
+	}
+	if c.retryFactor == 0 {
+		c.retryFactor = defaultParkedRequestRetryFactor
+	}
+	return c
+}
+
+// validate rejects retry parameters that would make parking misbehave rather
+// than merely differ: a factor below 1 shrinks delays toward zero and turns
+// the parked retry loop into a hot loop against the control plane.
+func (c parkingConfig) validate() error {
+	if c.retryFactor != 0 && c.retryFactor < 1.0 {
+		return fmt.Errorf("parked-request retry factor must be >= 1.0, got %v", c.retryFactor)
+	}
+	if c.retryJitter < 0 || c.retryJitter >= 1 {
+		return fmt.Errorf("parked-request retry jitter must be in [0, 1), got %v", c.retryJitter)
+	}
+	return nil
+}
+
 // defaultParkingConfig returns the built-in parking configuration (matching the
-// NewCmd flag defaults).
+// NewRouterCmd flag defaults).
 func defaultParkingConfig() parkingConfig {
 	return parkingConfig{
-		maxWait:   defaultParkingMaxWait,
-		maxParked: defaultParkingMaxParked,
+		budget:        defaultParkedRequestBudget,
+		maxParked:     defaultParkedRequestMax,
+		retryInterval: defaultParkedRequestRetryInterval,
+		retryFactor:   defaultParkedRequestRetryFactor,
+		retryJitter:   defaultParkedRequestRetryJitter,
 	}
 }
 
@@ -76,7 +124,7 @@ func defaultParkingConfig() parkingConfig {
 // router applies backpressure instead of accumulating waiters without bound.
 //
 // With parking disabled (maxParked <= 0) enter always admits and performs no
-// accounting, preserving the router's legacy behavior.
+// accounting, applying the router's fail-fast behavior.
 type parkingLot struct {
 	cfg     parkingConfig
 	metrics *parkingMetrics
@@ -116,7 +164,14 @@ func (l *parkingLot) enter(ctx context.Context) (release func(outcome parkOutcom
 	return func(outcome parkOutcome) {
 		once.Do(func() {
 			l.mu.Lock()
-			l.active--
+			// The counter cannot go negative today (a release only exists after a
+			// successful enter, and it is Once-guarded), so a violation means an
+			// accounting bug elsewhere: clamp, but say so loudly.
+			if l.active > 0 {
+				l.active--
+			} else {
+				slog.Error("parking lot slot released more times than acquired")
+			}
 			l.mu.Unlock()
 			l.metrics.addActive(ctx, -1)
 			l.metrics.recordWait(ctx, time.Since(start), outcome)
@@ -137,7 +192,7 @@ func (l *parkingLot) status() ParkingStatus {
 		Enabled:   l.cfg.enabled(),
 		Active:    l.activeCount(),
 		MaxParked: l.cfg.maxParked,
-		MaxWait:   l.cfg.maxWait.String(),
+		MaxWait:   l.cfg.budget.String(),
 	}
 }
 
