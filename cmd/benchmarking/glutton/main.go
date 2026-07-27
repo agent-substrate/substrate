@@ -136,6 +136,11 @@ func main() {
 		// (re-exposable as additional routes if/when needed).
 		mux := http.NewServeMux()
 		mux.HandleFunc("/ping", httpPingHandler(svc))
+		// ateom blocks RestoreWorkload until this returns 200, so ResumeActor
+		// cannot report success before /ping is reachable.
+		mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		})
 		// otelhttp at the mux level + per-handler span follows
 		// docs/dev/best-practices/tracing.md: extract incoming context,
 		// then name the span after the operation in each handler.

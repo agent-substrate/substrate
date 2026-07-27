@@ -70,6 +70,11 @@ spec:
     - "--metrics-listen-addr=:9090"
     - "--data-dir=/tmp/glutton"
     - "--mode=http"
+    # Hold ResumeActor open until port 80 actually answers.
+    readyz:
+      httpGet:
+        path: /readyz
+        port: 80
   workerSelector:
     matchLabels:
       workload: benchmark-ateom
