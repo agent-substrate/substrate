@@ -77,11 +77,8 @@ func newRequestMetadata(headers []*corev3.HeaderValue) *requestMetadata {
 // negotiated, from the attributes Envoy attaches to the ProcessingRequest. It is
 // "" for a plaintext connection.
 //
-// The connection's own TLS state decides whether ingress was encrypted, rather
-// than request.scheme, because Envoy derives :scheme from x-forwarded-proto and
-// preserves a caller-supplied one unless configured as an edge proxy — reading
-// the scheme would let a caller pick which actor port this routes to. Nothing on
-// the wire can influence connection state.
+// Whether ingress was encrypted is read from connection state so that nothing
+// the caller sends can influence which actor port the request is routed to.
 //
 // An absent attribute also yields "", which is read as plaintext — the safe
 // direction, since it cannot turn a plaintext request into an upstream TLS one.

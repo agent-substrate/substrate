@@ -176,8 +176,9 @@ func (s *ExtProcServer) handleRequestHeaders(
 			"actor %q routing failed", actorName)
 	}
 
-	// Actors serve plaintext on 80. A request that arrived over TLS is
-	// re-originated as TLS to 443, so the actor sees the scheme the client used.
+	// Actors serve plaintext on 80. A request whose downstream connection was
+	// TLS is re-originated as TLS to 443, so the actor is reached over the same
+	// transport the client used.
 	// TODO(bowei) -- handle actor ports beyond this fixed 80/443 pair.
 	targetAddr := net.JoinHostPort(workerIP, actorPortForIngress(tlsIngress))
 

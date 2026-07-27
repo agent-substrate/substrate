@@ -467,9 +467,7 @@ func (x *XdsServer) buildHcm(statPrefix, routeName string) *anypb.Any {
 			AllowAllRouting: &wrapperspb.BoolValue{Value: true},
 		},
 		// The downstream connection's TLS version tells ext_proc which port to
-		// route the actor on. Unlike the request scheme it is connection state,
-		// so it is not derivable from anything the caller sends. See
-		// requestTLSVersion.
+		// route the actor on. See requestTLSVersion.
 		RequestAttributes: []string{tlsVersionAttribute},
 		// Explicitly configure the message timeout to avoid the 200ms default
 		MessageTimeout: durationpb.New(5 * time.Second),
