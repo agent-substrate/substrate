@@ -26,14 +26,10 @@ import (
 
 func (s *Service) DeleteActor(ctx context.Context, req *ateapipb.DeleteActorRequest) (deleted *ateapipb.Actor, err error) {
 	start := time.Now()
-	// The request only names the actor, so tmpl (for the metric's template dims)
-	// is filled from whichever record we manage to load.
-	var tmpl *ateapipb.Actor
+	// No template dims here: a delete request names only the actor, and the
+	// template is unknown on the paths that return before the record loads.
 	defer func() {
-		s.instruments.recordLifecycleOp(ctx, ateattr.OperationDelete, start, err,
-			ateattr.TemplateNameKey.String(tmpl.GetActorTemplateName()),
-			ateattr.TemplateNamespaceKey.String(tmpl.GetActorTemplateNamespace()),
-		)
+		s.instruments.recordLifecycleOp(ctx, ateattr.OperationDelete, start, err)
 	}()
 
 	if errs := validateDeleteActorRequest(req); len(errs) > 0 {
@@ -47,7 +43,6 @@ func (s *Service) DeleteActor(ctx context.Context, req *ateapipb.DeleteActorRequ
 		return nil, err
 	}
 
-	tmpl = deleted
 	return deleted, nil
 }
 
