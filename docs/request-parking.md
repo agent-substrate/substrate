@@ -54,6 +54,15 @@ Concurrent requests for the *same* actor are de-duplicated by the resumer's
 park on its result, so a hot actor consumes N parking slots but only one
 control-plane RPC.
 
+**The park budget is per-flight, not per-request.** The budget clock starts
+when a flight's first caller begins the resume; every later request for the
+same actor joins that flight and shares its remaining budget and outcome. A
+request that joins late may therefore see `budget_exhausted` after waiting far
+less than a full budget itself — the accepted cost of collapsing a hot actor's
+requests into one control-plane call. (`parking.wait.duration` records each
+request's *own* parked time, so sub-budget `budget_exhausted` samples are
+expected under sustained saturation.)
+
 ### What is *not* parked
 
 Only transient conditions — capacity (`FailedPrecondition`), concurrency
@@ -79,7 +88,7 @@ within a `15s` budget.
 
 | Flag                             | Default | Meaning                                                            |
 | -------------------------------- | ------- | ------------------------------------------------------------------ |
-| `--parked-request-budget`         | `5s`    | Max time a single request may stay parked awaiting resume.         |
+| `--parked-request-budget`         | `5s`    | Park budget per resume *flight*; requests de-duplicated onto an in-flight resume share its remaining budget (see Behavior). |
 | `--parked-request-max`            | `2048`  | Max concurrent parked/in-flight resume requests; excess shed (503). `0` disables parking. |
 | `--parked-request-retry-interval` | `100ms` | Delay before a parked request's first resume retry.                |
 | `--parked-request-retry-factor`   | `1.1`   | Multiplier applied to the retry delay after each attempt (>= 1).   |

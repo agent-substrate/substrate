@@ -143,6 +143,12 @@ func (r *ActorResumer) ResumeActor(ctx context.Context, actorRef resources.Actor
 		// We detach the context from the first caller using a fixed background budget.
 		// This guarantees that if Caller 1 disconnects or times out, the underlying
 		// resume operation continues running for Caller 2 and Caller 3 without failing.
+		//
+		// The budget is therefore per-FLIGHT, not per-caller: its clock starts with
+		// the first caller, and later callers de-duplicated onto this flight share
+		// its remaining budget and outcome. A late joiner can see budget_exhausted
+		// after waiting far less than a full budget itself — the accepted cost of
+		// one control-plane RPC per hot actor (see docs/request-parking.md).
 		bgCtx, bgCancel := context.WithTimeout(context.Background(), r.budget)
 		defer bgCancel()
 
