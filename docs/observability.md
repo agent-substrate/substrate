@@ -196,6 +196,8 @@ go run ./tools/setup-gcp create dashboards   # also part of: bootstrap
 
 ## 6. Actor Application Telemetry (Best Practices)
 
+> **Interim guidance.** Substrate does not yet provide a pre-suspend hook ([#450](https://github.com/agent-substrate/substrate/issues/450)) or a graceful termination contract ([#23](https://github.com/agent-substrate/substrate/issues/23)). The recommendations below are what actor authors can do without them, and will be revised once those land. Treat them as workarounds, not as a stable contract.
+
 Everything above describes telemetry emitted by Substrate itself. This section is for **actor authors** whose application code emits its own OpenTelemetry metrics and spans.
 
 An actor is not an ordinary long-lived process. It is checkpointed, its containers are destroyed, and it is later restored — possibly onto a different worker pod, possibly much later. OpenTelemetry's push exporters buffer signals in memory and flush them on a timer (`PeriodicReader` for metrics, `BatchSpanProcessor` for spans), so whether that buffer survives a suspension depends on how the actor is configured and on whether the actor gets a chance to flush.
