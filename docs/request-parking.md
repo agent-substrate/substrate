@@ -30,10 +30,12 @@ user-visible error.
 
 ## Behavior
 
-With parking enabled (the default), the router treats `FailedPrecondition` from
-`ResumeActor` as a **retryable** condition (alongside the existing `Aborted`
-concurrent-resume conflict). The request is *parked*: the resumer keeps retrying
-with exponential backoff until either
+With parking enabled (the default), the router treats `FailedPrecondition` and
+`Unavailable` from `ResumeActor` as **retryable** conditions (alongside the
+existing `Aborted` concurrent-resume conflict) — a parked request rides out
+transient pool saturation and control-plane blips (e.g. an ateapi rolling
+restart) alike. The request is *parked*: the resumer keeps retrying with
+exponential backoff until either
 
 - the resume succeeds (the actor is `RUNNING` and has a worker IP) — the request
   is then routed normally; or
@@ -54,23 +56,24 @@ control-plane RPC.
 
 ### What is *not* parked
 
-Only transient capacity (`FailedPrecondition`) and concurrency (`Aborted`)
-conditions are parked. Errors that will not resolve by waiting are returned
-immediately (fail fast):
+Only transient conditions — capacity (`FailedPrecondition`), concurrency
+(`Aborted`), and control-plane unavailability (`Unavailable`) — are parked.
+Errors that will not resolve by waiting are returned immediately (fail fast):
 
-| Resume result                         | Behavior                          |
-| ------------------------------------- | --------------------------------- |
-| `OK`                                  | Route to worker                   |
-| `Aborted` (concurrent resume)         | Retry (always)                    |
-| `FailedPrecondition` (no free worker) | **Park & retry** (when enabled)   |
-| `NotFound`                            | Fail fast → `404`                 |
-| `Unavailable`                         | Fail fast → `503`                 |
-| `DeadlineExceeded`                    | Fail fast → `504`                 |
-| `PermissionDenied` / `Unauthenticated`| Fail fast → `403` / `401`         |
+| Resume result                          | Behavior                          |
+| -------------------------------------- | --------------------------------- |
+| `OK`                                   | Route to worker                   |
+| `Aborted` (concurrent resume)          | Retry (always)                    |
+| `FailedPrecondition` (no free worker)  | **Park & retry** (when enabled)   |
+| `Unavailable` (control-plane blip)     | **Park & retry** (when enabled)   |
+| `NotFound`                             | Fail fast → `404`                 |
+| `DeadlineExceeded`                     | Fail fast → `504`                 |
+| `PermissionDenied` / `Unauthenticated` | Fail fast → `403` / `401`         |
 
 When parking is **disabled** (`--parked-request-max=0`), the router fails fast:
-`FailedPrecondition` is returned immediately, there is no admission cap, and
-only `Aborted` (concurrent-resume) conflicts are retried, within a `15s` budget.
+`FailedPrecondition` and `Unavailable` are returned immediately, there is no
+admission cap, and only `Aborted` (concurrent-resume) conflicts are retried,
+within a `15s` budget.
 
 ## Configuration
 
@@ -99,7 +102,7 @@ bounds the wait.
   | `outcome`          | When it is set                                                              |
   | ------------------ | --------------------------------------------------------------------------- |
   | `served`           | The resume succeeded and the request was routed to its worker.              |
-  | `budget_exhausted` | The park budget elapsed while the resume was still blocked on a retryable condition (pool saturated, or a concurrent operation holding the actor) — the signal that capacity, not a fault, is the bottleneck. |
+  | `budget_exhausted` | The park budget elapsed while the resume was still blocked on a retryable condition (pool saturated, a concurrent operation holding the actor, or the control plane unavailable) — the signal that capacity, not a fault, is the bottleneck. |
   | `canceled`         | The client disconnected while parked (request context canceled).            |
   | `timeout`          | The request's own deadline expired while parked (distinct from the park budget). |
   | `error`            | The resume failed with a non-retryable error (`NotFound`, `Unavailable`, ...). |

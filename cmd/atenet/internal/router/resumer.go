@@ -114,15 +114,17 @@ func NewActorResumer(apiClient ateapipb.ControlClient, opts ...resumerOption) *A
 // retryable reports whether err warrants another resume attempt while the
 // request remains parked. A concurrent-resume conflict (Aborted) is always
 // retried. Transient pool saturation (FailedPrecondition, "no free workers
-// available") is retried only when parking is enabled, turning a momentary
-// shortage into a bounded wait instead of an immediate failure. All other codes
-// (NotFound, Unavailable, DeadlineExceeded, ...) are returned to the caller so
-// the HTTP boundary can map them with full fidelity.
+// available") and transient control-plane unavailability (Unavailable, e.g. an
+// ateapi rolling restart) are retried only when parking is enabled, turning a
+// momentary condition into a bounded wait instead of an immediate failure — a
+// parked request should ride out a blip, not fail on it with budget remaining.
+// All other codes (NotFound, DeadlineExceeded, PermissionDenied, ...) are
+// returned to the caller so the HTTP boundary can map them with full fidelity.
 func (r *ActorResumer) retryable(err error) bool {
 	switch status.Code(err) {
 	case codes.Aborted:
 		return true
-	case codes.FailedPrecondition:
+	case codes.FailedPrecondition, codes.Unavailable:
 		return r.parkEnabled
 	default:
 		return false

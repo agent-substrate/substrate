@@ -244,6 +244,64 @@ func TestActorResumer_Parking(t *testing.T) {
 		}
 	})
 
+	t.Run("ParksThroughUnavailableBlip", func(t *testing.T) {
+		var mu sync.Mutex
+		var calls int
+		mock := &resumerMockClient{
+			resumeFn: func(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
+				mu.Lock()
+				calls++
+				n := calls
+				mu.Unlock()
+				if n < 3 {
+					// Control plane momentarily unreachable (e.g. rolling restart).
+					return nil, status.Error(codes.Unavailable, "connection refused")
+				}
+				return &ateapipb.ResumeActorResponse{
+					Actor: &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Name: testActorName}, Status: ateapipb.Actor_STATUS_RUNNING, AteomPodIp: expectedIP},
+				}, nil
+			},
+		}
+
+		resumer := NewActorResumer(mock, withParking(parkingConfig{maxParked: 1, budget: 5 * time.Second}))
+		actor, err := resumer.ResumeActor(context.Background(), testAtespace, testActorName)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if actor.GetAteomPodIp() != expectedIP {
+			t.Errorf("expected IP %q, got %q", expectedIP, actor.GetAteomPodIp())
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if calls != 3 {
+			t.Errorf("expected 3 resume attempts (parked through 2 Unavailable blips), got %d", calls)
+		}
+	})
+
+	t.Run("DisabledFailsFastOnUnavailable", func(t *testing.T) {
+		var mu sync.Mutex
+		var calls int
+		mock := &resumerMockClient{
+			resumeFn: func(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
+				mu.Lock()
+				calls++
+				mu.Unlock()
+				return nil, status.Error(codes.Unavailable, "connection refused")
+			},
+		}
+
+		resumer := NewActorResumer(mock)
+		_, err := resumer.ResumeActor(context.Background(), testAtespace, testActorName)
+		if got := status.Code(err); got != codes.Unavailable {
+			t.Errorf("expected Unavailable, got %v (err=%v)", got, err)
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		if calls != 1 {
+			t.Errorf("expected exactly 1 resume attempt when parking disabled, got %d", calls)
+		}
+	})
+
 	t.Run("BudgetExpiryDuringInFlightRPC", func(t *testing.T) {
 		var mu sync.Mutex
 		var calls int
