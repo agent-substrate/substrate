@@ -49,8 +49,17 @@ type routerConfig struct {
 	HealthInterval time.Duration
 	HttpsPort      int
 	EnvoyCertPath  string
-	LogLevel       string
-	MetricsAddr    string
+	// UpstreamCredentialBundlePath is the router's podidentity credential bundle
+	// (cert+key) presented as the client cert when dialing the actor's atunnel
+	// ingress server over mTLS. UpstreamTrustBundlePath is the CA bundle used to
+	// validate that server. Empty UpstreamCredentialBundlePath disables upstream mTLS.
+	UpstreamCredentialBundlePath string
+	UpstreamTrustBundlePath      string
+	// UpstreamSpiffePrefix validates the actor's atunnel server cert by its
+	// SPIFFE URI SAN prefix (trust domain) instead of the dialed pod IP.
+	UpstreamSpiffePrefix string
+	LogLevel             string
+	MetricsAddr          string
 	// OtlpCollectorAddress is the OTLP gRPC collector that Envoy reports
 	// tracing spans to, as host:port or an http:// URL. It defaults to
 	// OTEL_EXPORTER_OTLP_ENDPOINT — Envoy gets its whole configuration over

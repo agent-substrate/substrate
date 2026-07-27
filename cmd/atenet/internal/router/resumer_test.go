@@ -54,7 +54,6 @@ func TestActorResumer_ResumeActor(t *testing.T) {
 				resumeCalled++
 				return &ateapipb.ResumeActorResponse{
 					Actor: &ateapipb.Actor{
-						Metadata:   &ateapipb.ResourceMetadata{Name: testActorName},
 						Status:     ateapipb.Actor_STATUS_RUNNING,
 						AteomPodIp: expectedIP,
 					},
@@ -85,7 +84,6 @@ func TestActorResumer_ResumeActor(t *testing.T) {
 				}
 				return &ateapipb.ResumeActorResponse{
 					Actor: &ateapipb.Actor{
-						Metadata:   &ateapipb.ResourceMetadata{Name: testActorName},
 						Status:     ateapipb.Actor_STATUS_RUNNING,
 						AteomPodIp: expectedIP,
 					},
@@ -132,7 +130,6 @@ func TestActorResumer_ResumeActor(t *testing.T) {
 				time.Sleep(20 * time.Millisecond)
 				return &ateapipb.ResumeActorResponse{
 					Actor: &ateapipb.Actor{
-						Metadata:   &ateapipb.ResourceMetadata{Name: testActorName},
 						Status:     ateapipb.Actor_STATUS_RUNNING,
 						AteomPodIp: expectedIP,
 					},
