@@ -306,6 +306,88 @@ func TestActorResumer_Parking(t *testing.T) {
 	})
 }
 
+// TestActorResumer_CallerCancelDoesNotAbortFlight pins the detached-context
+// contract from both sides: a caller that disconnects while parked gets
+// context.Canceled (classified as the `canceled` outcome) WITHOUT aborting the
+// shared in-flight resume, which keeps running and serves a later caller from
+// the same single RPC.
+func TestActorResumer_CallerCancelDoesNotAbortFlight(t *testing.T) {
+	const testActorName = "actor-cancel"
+	const testAtespace = "team-a"
+	const expectedIP = "10.0.0.88"
+
+	var mu sync.Mutex
+	var calls int
+	started := make(chan struct{})
+	proceed := make(chan struct{})
+	mock := &resumerMockClient{
+		resumeFn: func(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
+			mu.Lock()
+			calls++
+			n := calls
+			mu.Unlock()
+			if n == 1 {
+				close(started)
+			}
+			// Hold the flight open until the test releases it.
+			<-proceed
+			return &ateapipb.ResumeActorResponse{
+				Actor: &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Name: testActorName}, Status: ateapipb.Actor_STATUS_RUNNING, AteomPodIp: expectedIP},
+			}, nil
+		},
+	}
+
+	resumer := NewActorResumer(mock, withParking(parkingConfig{maxParked: 2, budget: 5 * time.Second}))
+
+	// Caller 1 starts the flight, then disconnects while parked.
+	ctx1, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := resumer.ResumeActor(ctx1, testAtespace, testActorName)
+		errCh <- err
+	}()
+	<-started
+	cancel()
+
+	err := <-errCh
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("disconnected caller: expected context.Canceled, got %v", err)
+	}
+	if got := parkOutcomeFor(err); got != parkOutcomeCanceled {
+		t.Errorf("disconnected caller outcome = %q, want %q", got, parkOutcomeCanceled)
+	}
+
+	// Caller 2 arrives after caller 1 left; the flight is still in its first
+	// RPC, so it must join that flight rather than start a new one.
+	type result struct {
+		actor *ateapipb.Actor
+		err   error
+	}
+	resCh := make(chan result, 1)
+	go func() {
+		a, rerr := resumer.ResumeActor(context.Background(), testAtespace, testActorName)
+		resCh <- result{a, rerr}
+	}()
+	// Give caller 2 a moment to join before releasing the flight, so the
+	// call-count assertion proves it shared the first RPC (same timing style
+	// as SingleflightDeduplication above).
+	time.Sleep(100 * time.Millisecond)
+	close(proceed)
+
+	res := <-resCh
+	if res.err != nil {
+		t.Fatalf("second caller: unexpected error: %v", res.err)
+	}
+	if res.actor.GetAteomPodIp() != expectedIP {
+		t.Errorf("second caller IP = %q, want %q", res.actor.GetAteomPodIp(), expectedIP)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if calls != 1 {
+		t.Errorf("expected the canceled caller's flight to be shared (1 RPC), got %d", calls)
+	}
+}
+
 func TestResumeBackoffHasNoCap(t *testing.T) {
 	// Regression: the resume backoff must NOT set wait.Backoff.Cap. delay() zeroes
 	// Steps the moment the delay reaches Cap, which would end parking retries far
