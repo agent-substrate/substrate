@@ -247,6 +247,9 @@ github.com/cncf/xds/go/xds/data/orca/v3
 github.com/cncf/xds/go/xds/service/orca/v3
 github.com/cncf/xds/go/xds/type/matcher/v3
 github.com/cncf/xds/go/xds/type/v3
+# github.com/container-storage-interface/spec v1.12.0
+## explicit; go 1.23.0
+github.com/container-storage-interface/spec/lib/go/csi
 # github.com/containerd/log v0.1.0
 ## explicit; go 1.20
 github.com/containerd/log
