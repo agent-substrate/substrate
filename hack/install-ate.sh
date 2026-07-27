@@ -40,6 +40,7 @@ ATE_DEMOS=()
 
 # Include demos.
 source "${ROOT}"/hack/install-demo-counter.sh
+source "${ROOT}"/hack/install-demo-egress.sh
 source "${ROOT}"/hack/install-demo-sandbox.sh
 source "${ROOT}"/hack/install-demo-claude-code-multiplex.sh
 source "${ROOT}"/hack/install-demo-multi-template.sh
@@ -446,7 +447,7 @@ deploy_ate_system() {
   run_kubectl rollout status deployment/ate-api-server -n ate-system --timeout=120s
   run_kubectl rollout status deployment/ate-controller -n ate-system --timeout=120s
   run_kubectl rollout status deployment/atenet-router -n ate-system --timeout=120s
-  run_kubectl rollout status deployment/ateway-egress -n ate-system --timeout=120s
+  run_kubectl rollout status deployment/atenet-egress -n ate-system --timeout=120s
   run_kubectl rollout status statefulset/valkey-cluster -n ate-system --timeout=120s
   run_kubectl rollout status daemonset/atelet -n ate-system --timeout=120s
 }
@@ -521,15 +522,10 @@ deploy_atenet() {
   router_manifest="$(render_atenet_router_manifest)"
   echo "${router_manifest}" | run_kubectl apply -f -
 
-  run_ko apply -f manifests/ate-install/ateway-egress.yaml
+  run_ko apply -f manifests/ate-install/atenet-egress.yaml
   run_ko apply -f manifests/ate-install/atenet-dns.yaml
   run_kubectl rollout status deployment/atenet-router -n ate-system --timeout=120s
-  run_kubectl rollout status deployment/ateway-egress -n ate-system --timeout=120s
-  # SEE(lior): this branch also added a `deployment/atenet-dns` wait here, which
-  # main has since fixed to `deployment/dns` (the Deployment in atenet-dns.yaml
-  # is named "dns"; every other resource in that file is "atenet-dns", so the
-  # old name was NotFound on every successful deploy). Dropped this branch's
-  # duplicate in favour of main's corrected line.
+  run_kubectl rollout status deployment/atenet-egress -n ate-system --timeout=120s
   run_kubectl rollout status deployment/dns -n ate-system --timeout=120s
 }
 
@@ -648,7 +644,7 @@ delete_atenet() {
   run_kubectl delete --ignore-not-found -f manifests/ate-install/atenet-router.yaml
   run_kubectl delete --ignore-not-found \
     -f manifests/ate-install/components/agentgateway/configmap.yaml
-  run_kubectl delete --ignore-not-found -f manifests/ate-install/ateway-egress.yaml
+  run_kubectl delete --ignore-not-found -f manifests/ate-install/atenet-egress.yaml
   run_kubectl delete --ignore-not-found -f manifests/ate-install/atenet-dns.yaml
 }
 

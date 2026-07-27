@@ -45,9 +45,9 @@ import (
 )
 
 // connectRequest builds a RequestHeaders ProcessingRequest for an egress
-// CONNECT, optionally attributed to a listener. filterKey is the ext_proc
+// CONNECT, optionally attributed to a filter chain. filterKey is the ext_proc
 // filter name Envoy keys the attributes map by.
-func connectRequest(filterKey, listener string) *extprocv3.ProcessingRequest {
+func connectRequest(filterKey, chain string) *extprocv3.ProcessingRequest {
 	req := &extprocv3.ProcessingRequest{
 		Request: &extprocv3.ProcessingRequest_RequestHeaders{
 			RequestHeaders: &extprocv3.HttpHeaders{
@@ -60,11 +60,11 @@ func connectRequest(filterKey, listener string) *extprocv3.ProcessingRequest {
 			},
 		},
 	}
-	if listener != "" {
+	if chain != "" {
 		req.Attributes = map[string]*structpb.Struct{
 			filterKey: {
 				Fields: map[string]*structpb.Value{
-					ListenerNameAttribute: structpb.NewStringValue(listener),
+					FilterChainNameAttribute: structpb.NewStringValue(chain),
 				},
 			},
 		}
@@ -76,19 +76,19 @@ func TestIsEgressRequest(t *testing.T) {
 	tests := []struct {
 		name      string
 		filterKey string
-		listener  string
+		chain     string
 		want      bool
 	}{
 		{
-			name:      "egress listener",
+			name:      "egress filter chain",
 			filterKey: "envoy.filters.http.ext_proc",
-			listener:  EgressListenerName,
+			chain:     EgressFilterChainName,
 			want:      true,
 		},
 		{
-			name:      "egress listener under a renamed filter",
+			name:      "egress filter chain under a renamed filter",
 			filterKey: "some.custom.ext_proc.name",
-			listener:  EgressListenerName,
+			chain:     EgressFilterChainName,
 			want:      true,
 		},
 		{
@@ -98,33 +98,33 @@ func TestIsEgressRequest(t *testing.T) {
 			// exists and is running.
 			name:      "CONNECT on the ingress HTTP listener",
 			filterKey: "envoy.filters.http.ext_proc",
-			listener:  IngressHTTPListener,
+			chain:     IngressHTTPListener,
 			want:      false,
 		},
 		{
 			name:      "CONNECT on the ingress HTTPS listener",
 			filterKey: "envoy.filters.http.ext_proc",
-			listener:  IngressHTTPSListener,
+			chain:     IngressHTTPSListener,
 			want:      false,
 		},
 		{
 			// A listener that never requested the attribute falls back to
 			// ingress, the fail-safe direction.
-			name:     "no attributes at all",
-			listener: "",
-			want:     false,
+			name:  "no attributes at all",
+			chain: "",
+			want:  false,
 		},
 		{
-			name:      "unrecognised listener",
+			name:      "unrecognised filter chain",
 			filterKey: "envoy.filters.http.ext_proc",
-			listener:  "some-other-listener",
+			chain:     "some-other-chain",
 			want:      false,
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := isEgressRequest(connectRequest(tc.filterKey, tc.listener)); got != tc.want {
+			if got := isEgressRequest(connectRequest(tc.filterKey, tc.chain)); got != tc.want {
 				t.Errorf("isEgressRequest() = %v, want %v", got, tc.want)
 			}
 		})
@@ -132,17 +132,17 @@ func TestIsEgressRequest(t *testing.T) {
 }
 
 // A request the client dresses up to look like egress must not be enough: only
-// the Envoy-asserted listener name selects the egress handler.
+// the Envoy-asserted filter chain name selects the egress handler.
 func TestIsEgressRequestIgnoresClientSuppliedAttributeHeader(t *testing.T) {
 	req := connectRequest("envoy.filters.http.ext_proc", IngressHTTPListener)
 	rh := req.GetRequestHeaders().GetHeaders()
 	rh.Headers = append(rh.Headers,
-		&corev3.HeaderValue{Key: ListenerNameAttribute, RawValue: []byte(EgressListenerName)},
-		&corev3.HeaderValue{Key: "x-envoy-listener-name", RawValue: []byte(EgressListenerName)},
+		&corev3.HeaderValue{Key: FilterChainNameAttribute, RawValue: []byte(EgressFilterChainName)},
+		&corev3.HeaderValue{Key: "x-envoy-filter-chain-name", RawValue: []byte(EgressFilterChainName)},
 	)
 
 	if isEgressRequest(req) {
-		t.Error("isEgressRequest() = true for a client-forged listener header, want false")
+		t.Error("isEgressRequest() = true for a client-forged filter chain header, want false")
 	}
 }
 
@@ -290,7 +290,7 @@ func xfccHeaderDER(chain ...[]byte) string {
 	for _, der := range chain {
 		_ = pem.Encode(&buf, &pem.Block{Type: "CERTIFICATE", Bytes: der})
 	}
-	return fmt.Sprintf(`By=spiffe://cluster.local/ns/ate-system/sa/ateway-egress;Hash=abc123;Chain="%s"`,
+	return fmt.Sprintf(`By=spiffe://cluster.local/ns/ate-system/sa/atenet-egress;Hash=abc123;Chain="%s"`,
 		url.PathEscape(buf.String()))
 }
 
@@ -539,7 +539,7 @@ func TestHandleEgressRequestHeadersRejectsBadCertificates(t *testing.T) {
 		{
 			name: "XFCC without a Chain value",
 			xfcc: func(*testing.T) string {
-				return `By=spiffe://cluster.local/ns/ate-system/sa/ateway-egress;Hash=abc123`
+				return `By=spiffe://cluster.local/ns/ate-system/sa/atenet-egress;Hash=abc123`
 			},
 			want: envoy_type.StatusCode_Forbidden,
 		},

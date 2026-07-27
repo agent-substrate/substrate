@@ -100,14 +100,6 @@ func (s *ExtProcServer) Process(stream extprocv3.ExternalProcessor_ProcessServer
 			// the accepting listener, not by anything in the request itself
 			// (see isEgressRequest).
 			//
-			// SEE(lior): main grew a ResumeOutcome return on
-			// handleRequestHeaders while this branch was out. Rather than
-			// splitting the dispatch into two separately-typed call sites, the
-			// egress handler was widened to the same signature and returns
-			// ResumeOutcomeNone — egress requires an already-RUNNING actor and
-			// never resumes one, so "none" is accurate, and it keeps the
-			// route-duration metric's resume label a closed set (no new empty
-			// value) across both directions.
 			handle := s.handleRequestHeaders
 			if isEgressRequest(req) {
 				handle = s.handleEgressRequestHeaders

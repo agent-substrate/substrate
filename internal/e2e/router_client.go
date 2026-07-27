@@ -15,8 +15,10 @@
 package e2e
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 
@@ -31,7 +33,7 @@ const (
 	routerService   = "atenet-router"
 )
 
-// RouterClient sends HTTP requests to actors through the atenet router, the
+// RouterClient sends HTTP requests to actors through the ingress atenet-router, the
 // same way real traffic arrives (so the request is routed and, if needed, the
 // actor is resumed). It port-forwards the router Service, mirroring the
 // approach in internal/ateclient.
@@ -41,7 +43,7 @@ type RouterClient struct {
 	stop    func()
 }
 
-// NewRouterClient establishes a port-forward to the atenet router. Call Close
+// NewRouterClient establishes a port-forward to the ingress atenet-router. Call Close
 // to tear it down.
 func NewRouterClient(ctx context.Context) (*RouterClient, error) {
 	config, err := ateclient.LoadConfig(KubeConfig, KubeContext)
@@ -73,9 +75,22 @@ func (c *RouterClient) Close() {
 // Get issues GET path to actor through the router, setting the actor's mesh Host
 // so the router routes (and resumes) it. The caller must close the body.
 func (c *RouterClient) Get(ctx context.Context, actorRef resources.ActorRef, path string) (*http.Response, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+path, nil)
+	return c.request(ctx, http.MethodGet, actorRef, path, nil)
+}
+
+// PostJSON issues a POST with a JSON body to an Actor through the router. The
+// caller must close the response body.
+func (c *RouterClient) PostJSON(ctx context.Context, actorRef resources.ActorRef, path string, body []byte) (*http.Response, error) {
+	return c.request(ctx, http.MethodPost, actorRef, path, bytes.NewReader(body))
+}
+
+func (c *RouterClient) request(ctx context.Context, method string, actorRef resources.ActorRef, path string, body io.Reader) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, method, c.baseURL+path, body)
 	if err != nil {
 		return nil, err
+	}
+	if method == http.MethodPost {
+		req.Header.Set("Content-Type", "application/json")
 	}
 	// The router routes on the Host/:authority, not a header.
 	req.Host = actorRef.DNSName()

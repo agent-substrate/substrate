@@ -112,7 +112,7 @@ spec:
           #
           # SEE(lior): this flag lived on atelet on the pre-rebase branch; PR 708
           # moved egress-gateway configuration to ateapi, so it is set here now.
-          - --egress-gateway-address=ateway-egress.ate-system.svc:443
+          - --egress-gateway-address=atenet-egress.ate-system.svc:443
           # Graceful shutdown knobs. The sum must fit within terminationGracePeriodSeconds.
           - --drain-delay=13s
           - --drain-timeout=15s

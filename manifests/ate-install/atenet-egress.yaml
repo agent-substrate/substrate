@@ -27,7 +27,7 @@
 apiVersion: v1
 kind: ServiceAccount
 metadata:
-  name: ateway-egress
+  name: atenet-egress
   namespace: ate-system
 ---
 # RBAC for the co-located ext_proc sidecar (atenet router), which watches
@@ -35,7 +35,7 @@ metadata:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: ateway-egress
+  name: atenet-egress
 rules:
 - apiGroups:
   - "ate.dev"
@@ -49,20 +49,20 @@ rules:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: ateway-egress
+  name: atenet-egress
 subjects:
 - kind: ServiceAccount
-  name: ateway-egress
+  name: atenet-egress
   namespace: ate-system
 roleRef:
   kind: ClusterRole
-  name: ateway-egress
+  name: atenet-egress
   apiGroup: rbac.authorization.k8s.io
 ---
 apiVersion: v1
 kind: ConfigMap
 metadata:
-  name: ateway-egress
+  name: atenet-egress
   namespace: ate-system
 data:
   envoy.yaml: |
@@ -75,7 +75,11 @@ data:
         address:
           socket_address: { address: 0.0.0.0, port_value: 443 }
         filter_chains:
-        - transport_socket:
+        # Named so ext_proc can read it back as xds.filter_chain_name. Must
+        # match EgressFilterChainName in
+        # cmd/atenet/internal/router/extproc_egress.go.
+        - name: egress
+          transport_socket:
             name: envoy.transport_sockets.tls
             typed_config:
               "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
@@ -130,10 +134,13 @@ data:
                       # certificate, not from request headers. The actor sends no
                       # identity headers any more, and logging attacker-controlled
                       # ones would have made this log lie about who egressed.
-                      # peer= is the leaf subject (CN carries the actor); the
-                      # atespace/UID live in the ActorIdentity extension, which
-                      # Envoy cannot format — the ext_proc handler logs those.
-                      inline_string: "[egress] authority=%REQ(:AUTHORITY)% peer=%DOWNSTREAM_PEER_SUBJECT% peer_san=%DOWNSTREAM_PEER_URI_SAN% peer_serial=%DOWNSTREAM_PEER_SERIAL% code=%RESPONSE_CODE% flags=%RESPONSE_FLAGS% up_bytes=%BYTES_RECEIVED% down_bytes=%BYTES_SENT%\n"
+                      # peer_san= is the actor's SPIFFE URI SAN,
+                      # spiffe://substrate-actor.local/atespace/<atespace>/actor/<name>
+                      # — the only actor-identifying field Envoy can format
+                      # (ateapi mints these with an empty Subject, and the UID
+                      # lives in the ActorIdentity extension Envoy cannot read).
+                      # The ext_proc sidecar logs atespace/actor/UID separately.
+                      inline_string: "[egress] authority=%REQ(:AUTHORITY)% peer_san=%DOWNSTREAM_PEER_URI_SAN% peer_serial=%DOWNSTREAM_PEER_SERIAL% code=%RESPONSE_CODE% flags=%RESPONSE_FLAGS% up_bytes=%BYTES_RECEIVED% down_bytes=%BYTES_SENT%\n"
               route_config:
                 name: connect_route
                 virtual_hosts:
@@ -163,13 +170,14 @@ data:
                   failure_mode_allow: false
                   # How the ext_proc server tells egress from ingress. It applies
                   # opposite trust models to the two directions, and dispatches on
-                  # this Envoy-asserted listener name so that no client can select
-                  # the egress path by crafting a request. The value must match
-                  # EgressListenerName in cmd/atenet/internal/router/extproc_egress.go;
-                  # renaming the listener above without updating it fails closed
-                  # (egress requests take the ingress path and 404).
+                  # this Envoy-asserted filter chain name so that no client can
+                  # select the egress path by crafting a request. The value must
+                  # match EgressFilterChainName in
+                  # cmd/atenet/internal/router/extproc_egress.go; renaming the
+                  # filter chain above without updating it fails closed (egress
+                  # requests take the ingress path and 404).
                   request_attributes:
-                  - xds.listener_name
+                  - xds.filter_chain_name
                   processing_mode:
                     request_header_mode: SEND
                     response_header_mode: SKIP
@@ -224,21 +232,21 @@ data:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: ateway-egress
+  name: atenet-egress
   namespace: ate-system
   labels:
-    app: ateway-egress
+    app: atenet-egress
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app: ateway-egress
+      app: atenet-egress
   template:
     metadata:
       labels:
-        app: ateway-egress
+        app: atenet-egress
     spec:
-      serviceAccountName: ateway-egress
+      serviceAccountName: atenet-egress
       securityContext:
         # Allow the non-root envoy user to bind :443.
         sysctls:
@@ -258,9 +266,9 @@ spec:
         - -c
         - /etc/envoy/envoy.yaml
         - --service-node
-        - ateway-egress
+        - atenet-egress
         - --service-cluster
-        - ateway-egress
+        - atenet-egress
         ports:
         - name: https
           containerPort: 443
@@ -302,8 +310,9 @@ spec:
         - --namespace=ate-system
         - --port-extproc=50051
         - --extproc-address=127.0.0.1
-        - --ateapi-address=api.ate-system.svc:443
-        - --ateapi-auth=mtls
+        - --ateapi-address=dns:///api.ate-system.svc:443
+        - --ateapi-ca-file=/run/servicedns.podcert.ate.dev/trust-bundle.pem
+        - --ateapi-client-cert=/run/podidentity.podcert.ate.dev/credential-bundle.pem
         # Same bundle Envoy validates the handshake against. The handler
         # re-verifies the chain in Go and reads the ActorIdentity extension out
         # of it; without this flag the router has no actor-identity roots and
@@ -327,13 +336,22 @@ spec:
             port: extproc
           periodSeconds: 10
         volumeMounts:
+        # Trust bundle used to verify ateapi's servicedns serving cert.
+        - name: servicedns
+          mountPath: /run/servicedns.podcert.ate.dev
+          readOnly: true
+        # ext-proc's own client identity presented to ateapi.
+        - name: podidentity
+          mountPath: /run/podidentity.podcert.ate.dev
+          readOnly: true
+        # Actor-identity CA roots, for --actor-identity-ca-file above.
         - name: actor-id-ca-certs
           mountPath: /run/actor-id-ca-certs
           readOnly: true
       volumes:
       - name: config
         configMap:
-          name: ateway-egress
+          name: atenet-egress
       - name: servicedns
         projected:
           sources:
@@ -380,12 +398,12 @@ spec:
 apiVersion: v1
 kind: Service
 metadata:
-  name: ateway-egress
+  name: atenet-egress
   namespace: ate-system
 spec:
   type: ClusterIP
   selector:
-    app: ateway-egress
+    app: atenet-egress
   ports:
   - name: https
     port: 443

@@ -36,19 +36,29 @@ import (
 )
 
 const (
-	// EgressListenerName is the Envoy listener that terminates actor egress
-	// CONNECTs. It must stay in sync with the listener name in
-	// manifests/ate-install/ateway-egress.yaml.
-	EgressListenerName = "egress"
-	// ListenerNameAttribute is the CEL attribute carrying the name of the
-	// listener that accepted the request. The egress Envoy asks for it via
+	// EgressFilterChainName is the Envoy filter chain that terminates actor
+	// egress CONNECTs. It must stay in sync with the filter chain name in
+	// manifests/ate-install/atenet-egress.yaml.
+	EgressFilterChainName = "egress"
+	// FilterChainNameAttribute is the CEL attribute carrying the name of the
+	// filter chain that accepted the request. The egress Envoy asks for it via
 	// request_attributes on its ext_proc filter.
-	ListenerNameAttribute = "xds.listener_name"
+	//
+	// SEE(lior): this was xds.listener_name, which reads more naturally but
+	// which Envoy 1.34 cannot parse: it logs "error parsing cel expression
+	// xds.listener_name" at trace level, then sends the ProcessingRequest with
+	// an empty attributes map rather than failing config load. Because an
+	// absent attribute means "ingress" (the fail-safe direction), every egress
+	// CONNECT silently took the ingress path and 404'd on the actor DNS name
+	// parse. xds.filter_chain_name parses on the same Envoy build and is
+	// equally Envoy-asserted, so the trust model is unchanged.
+	FilterChainNameAttribute = "xds.filter_chain_name"
 
 	// forwardedClientCertHeader is the header Envoy fills in with details of
-	// the mTLS peer, including the PEM chain it validated. The egress listener
-	// sets forward_client_cert_details: SANITIZE_SET, so whatever a client
-	// sends under this name is discarded and replaced by Envoy's own value.
+	// the mTLS peer, including the PEM chain it validated. The egress filter
+	// chain sets forward_client_cert_details: SANITIZE_SET, so whatever a
+	// client sends under this name is discarded and replaced by Envoy's own
+	// value.
 	//
 	// This is the only channel that can carry a whole certificate to ext_proc:
 	// the CEL request attributes Envoy exposes (subject, SANs, SHA-256 digest)
@@ -61,31 +71,31 @@ const (
 )
 
 // isEgressRequest reports whether an ext_proc RequestHeaders callback arrived on
-// the egress gateway's listener rather than on an ingress listener. This lets
-// one ext_proc server handle both directions off the same stream.
+// the egress gateway's filter chain rather than on an ingress one. This lets one
+// ext_proc server handle both directions off the same stream.
 //
-// Dispatch is by listener, not by :method, because the two handlers apply
+// Dispatch is by filter chain, not by :method, because the two handlers apply
 // opposite trust models: on egress the actor identity comes from a client
 // certificate Envoy validated, while on ingress every request header is
 // unauthenticated client input. Keying on :method would let any external client
 // sending CONNECT select the egress handler and use its denial messages as an
-// actor-existence and status oracle. Envoy asserts the listener name; the
+// actor-existence and status oracle. Envoy asserts the filter chain name; the
 // request cannot influence it.
 //
 // An unrecognized or absent attribute means ingress, the fail-safe direction: an
 // egress request misrouted to the ingress handler fails to parse as an actor DNS
 // name and 404s, whereas the reverse leaks control-plane state.
 func isEgressRequest(req *extprocv3.ProcessingRequest) bool {
-	return listenerName(req) == EgressListenerName
+	return filterChainName(req) == EgressFilterChainName
 }
 
-// listenerName returns the xds.listener_name attribute Envoy attached to the
-// request, or "" when the listener did not request the attribute. The
+// filterChainName returns the xds.filter_chain_name attribute Envoy attached to
+// the request, or "" when the listener did not request the attribute. The
 // attributes map is keyed by the ext_proc filter's name within the HCM chain,
 // which we do not want to hardcode here, so scan every entry.
-func listenerName(req *extprocv3.ProcessingRequest) string {
+func filterChainName(req *extprocv3.ProcessingRequest) string {
 	for _, attrs := range req.GetAttributes() {
-		if v, ok := attrs.GetFields()[ListenerNameAttribute]; ok {
+		if v, ok := attrs.GetFields()[FilterChainNameAttribute]; ok {
 			return v.GetStringValue()
 		}
 	}
@@ -106,19 +116,19 @@ func listenerName(req *extprocv3.ProcessingRequest) string {
 // with a single branch. The (target, tmplNs, tmplName) results are unused for
 // egress and returned empty.
 //
-// SEE(lior): the trailing ResumeOutcome exists only to match
-// handleRequestHeaders after main added it. Egress never resumes an actor — it
-// requires one already RUNNING — so every path returns ResumeOutcomeNone.
+// The trailing ResumeOutcome exists only to match handleRequestHeaders.
+// Egress never resumes an actor — it requires one already RUNNING -
+// so every path returns ResumeOutcomeNone.
 func (s *ExtProcServer) handleEgressRequestHeaders(
 	ctx context.Context,
 	reqHeaders *extprocv3.HttpHeaders,
 ) (*extprocv3.HeadersResponse, *requestMetadata, string, string, string, ResumeOutcome, error) {
 	metadata := newRequestMetadata(reqHeaders.Headers.GetHeaders())
 
-	// Dispatch is by listener, so reaching here means the egress listener
-	// accepted the request. That listener only routes CONNECT (its sole route
-	// is a connect_matcher), so anything else is a config drift rather than a
-	// client the gateway should tunnel for.
+	// Dispatch is by filter chain, so reaching here means the egress chain
+	// accepted the request. That chain only routes CONNECT (its sole route is a
+	// connect_matcher), so anything else is config drift rather than a client
+	// the gateway should tunnel for.
 	if !strings.EqualFold(metadata.method, "CONNECT") {
 		return nil, metadata, "", "", "", ResumeOutcomeNone, newReqError(envoy_type.StatusCode_MethodNotAllowed,
 			"egress denied: expected CONNECT, got %q", metadata.method)
