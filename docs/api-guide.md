@@ -78,6 +78,13 @@ spec:
         memory: 2Gi
 ```
 
+### Status (`WorkerPoolStatus`)
+
+| Field | Type | Description |
+| :--- | :--- | :--- |
+| `replicas` | `int32` | Total number of worker pods, mirrored from the managed Deployment. |
+| `selector` | `string` | Label selector for the worker pods. |
+
 ---
 
 ## 2. ActorTemplate: The Workload Blueprint

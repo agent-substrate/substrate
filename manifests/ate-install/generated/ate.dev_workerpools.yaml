@@ -424,6 +424,9 @@ spec:
                 format: int32
                 minimum: 0
                 type: integer
+              selector:
+                description: Selector is the label selector for the worker pods.
+                type: string
             type: object
         required:
         - spec
@@ -432,6 +435,7 @@ spec:
     storage: true
     subresources:
       scale:
+        labelSelectorPath: .status.selector
         specReplicasPath: .spec.replicas
         statusReplicasPath: .status.replicas
       status: {}
