@@ -191,7 +191,7 @@ func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, stat
 		if err != nil {
 			return fmt.Errorf("while checking worker eligibility: %w", err)
 		}
-		if eligible && worker.GetState() != ateapipb.Worker_STATE_DRAINING {
+		if eligible && worker.GetState() == ateapipb.Worker_STATE_ACTIVE {
 			assignedWorker = worker
 			break
 		}
