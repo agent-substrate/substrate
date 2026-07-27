@@ -79,6 +79,12 @@ const (
 // otherwise Envoy abandons a parked request (500) long before the router does.
 const defaultExtProcMessageTimeout = 5 * time.Second
 
+// defaultExtProcMaxRequests is the circuit-breaker max_requests set on the
+// ext_proc cluster: defaultParkedRequestMax plus equal fast-path headroom, so a
+// full parking lot cannot starve the millisecond-scale header exchanges of
+// requests to already-running actors. See buildCluster.
+const defaultExtProcMaxRequests = 2048
+
 // XdsServer implements an aggregated discovery service server for dynamic Envoy router nodes.
 type XdsServer struct {
 	xdsPort      int
@@ -100,6 +106,12 @@ type XdsServer struct {
 	// extProcMessageTimeout bounds how long Envoy waits for the router's ext_proc
 	// response. Must be >= the parking budget so parked requests aren't cut short.
 	extProcMessageTimeout time.Duration
+
+	// extProcMaxRequests is the circuit-breaker max_requests on the ext_proc
+	// cluster — the hard ceiling on concurrent requests held open against the
+	// router's processing server, parked requests included. Must be >= the
+	// parking lot size (enforced at startup in Run).
+	extProcMaxRequests uint32
 }
 
 func NewXdsServer(xdsPort int) *XdsServer {
@@ -114,6 +126,7 @@ func NewXdsServer(xdsPort int) *XdsServer {
 		extprocAddr:           "127.0.0.1",
 		ingressPort:           8080,
 		extProcMessageTimeout: defaultExtProcMessageTimeout,
+		extProcMaxRequests:    defaultExtProcMaxRequests,
 	}
 }
 
@@ -134,6 +147,17 @@ func (x *XdsServer) SetExtProcMessageTimeout(d time.Duration) {
 	defer x.mu.Unlock()
 	if d > 0 {
 		x.extProcMessageTimeout = d
+	}
+}
+
+// SetExtProcMaxRequests sets the circuit-breaker max_requests on the ext_proc
+// cluster. Size it to the parking lot plus fast-path headroom (validated in
+// Run()); a non-positive value leaves the default unchanged.
+func (x *XdsServer) SetExtProcMaxRequests(n int) {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	if n > 0 {
+		x.extProcMaxRequests = uint32(n)
 	}
 }
 
@@ -248,17 +272,6 @@ func (x *XdsServer) Serve(ctx context.Context, lis net.Listener) error {
 	}
 }
 
-// buildCluster builds the ext_proc cluster Envoy uses to reach the router's
-// processing server.
-//
-// It sets no explicit circuit_breakers, so Envoy's defaults apply — notably
-// max_requests = 1024 concurrent requests against this cluster. Each PARKED
-// request holds one ext_proc stream, i.e. one active request here, which makes
-// that circuit breaker the true upper bound on concurrent parked requests:
-// defaultParkedRequestMax (parking.go) is deliberately sized to it. If
-// --parked-request-max is ever raised beyond 1024, add an explicit
-// circuit_breakers.max_requests >= that value here, or the overflow is
-// rejected by Envoy itself (503s that bypass the lot and parking.rejected).
 func (x *XdsServer) buildCluster() *clusterv3.Cluster {
 	h2Opts, _ := anypb.New(&httpv3.HttpProtocolOptions{
 		UpstreamProtocolOptions: &httpv3.HttpProtocolOptions_ExplicitHttpConfig_{
@@ -275,6 +288,12 @@ func (x *XdsServer) buildCluster() *clusterv3.Cluster {
 			Type: clusterv3.Cluster_STATIC,
 		},
 		LbPolicy: clusterv3.Cluster_ROUND_ROBIN,
+		CircuitBreakers: &clusterv3.CircuitBreakers{
+			Thresholds: []*clusterv3.CircuitBreakers_Thresholds{{
+				Priority:    corev3.RoutingPriority_DEFAULT,
+				MaxRequests: wrapperspb.UInt32(x.extProcMaxRequests),
+			}},
+		},
 		LoadAssignment: &endpointv3.ClusterLoadAssignment{
 			ClusterName: ClusterName,
 			Endpoints: []*endpointv3.LocalityLbEndpoints{

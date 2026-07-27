@@ -28,14 +28,12 @@ import (
 const (
 	defaultParkedRequestBudget = 5 * time.Second
 
-	// defaultParkedRequestMax is sized to Envoy's default per-cluster circuit
-	// breaker (max_requests = 1024): each parked request holds one ext_proc
-	// stream, i.e. one active request against the ext_proc cluster, and that
-	// cluster (buildCluster in xds.go) sets no explicit circuit_breakers. A lot
-	// larger than the circuit breaker is unreachable — Envoy rejects the
-	// overflow itself with 503s that never reach the lot (and so never count in
-	// parking.rejected). Raise --parked-request-max beyond 1024 only together
-	// with an explicit circuit_breakers.max_requests on the ext_proc cluster.
+	// defaultParkedRequestMax is sized together with the ext_proc cluster's
+	// circuit breaker (--extproc-max-requests, default 2048): each parked
+	// request holds one ext_proc stream, i.e. one active request against that
+	// cluster, for its entire wait. Startup validation keeps the breaker >= the
+	// lot, and the default pair (1024 lot / 2048 breaker) leaves equal headroom
+	// for the fast path. See buildCluster in xds.go.
 	defaultParkedRequestMax = 1024
 
 	// Retry cadence between resume attempts while a request is parked: a gentle

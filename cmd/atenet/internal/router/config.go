@@ -15,6 +15,7 @@
 package router
 
 import (
+	"fmt"
 	"time"
 )
 
@@ -64,4 +65,23 @@ type routerConfig struct {
 	ParkedRequestRetryInterval time.Duration
 	ParkedRequestRetryFactor   float64
 	ParkedRequestRetryJitter   float64
+
+	// ExtProcMaxRequests is the circuit-breaker max_requests Envoy applies to
+	// the ext_proc cluster. Every parked request holds one slot for its entire
+	// wait, so this must be >= ParkedRequestMax (validated at startup); the
+	// excess is fast-path headroom for requests to already-running actors.
+	ExtProcMaxRequests int
+}
+
+// validate rejects flag combinations that would make the router misbehave
+// rather than merely differ.
+func (c routerConfig) validate() error {
+	if c.ExtProcMaxRequests <= 0 {
+		return fmt.Errorf("--extproc-max-requests must be positive, got %d", c.ExtProcMaxRequests)
+	}
+	if c.ParkedRequestMax > 0 && c.ExtProcMaxRequests < c.ParkedRequestMax {
+		return fmt.Errorf("--extproc-max-requests (%d) must be >= --parked-request-max (%d): a circuit breaker below the parking lot silently truncates it with Envoy-generated 503s",
+			c.ExtProcMaxRequests, c.ParkedRequestMax)
+	}
+	return nil
 }

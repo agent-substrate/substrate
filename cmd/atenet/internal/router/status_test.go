@@ -59,14 +59,15 @@ func TestStatuszEndpoint(t *testing.T) {
 	caPath, clientCertPath := writeTestTLSMaterial(t)
 
 	cfg := routerConfig{
-		Standalone:    true,
-		Namespace:     "default",
-		StatusPort:    httpPort,
-		HttpPort:      8080,
-		XdsPort:       18000,
-		ExtprocPort:   50051,
-		TemplatesFile: tmpFile.Name(),
-		MetricsAddr:   "127.0.0.1:0",
+		Standalone:         true,
+		Namespace:          "default",
+		StatusPort:         httpPort,
+		HttpPort:           8080,
+		XdsPort:            18000,
+		ExtprocPort:        50051,
+		ExtProcMaxRequests: defaultExtProcMaxRequests,
+		TemplatesFile:      tmpFile.Name(),
+		MetricsAddr:        "127.0.0.1:0",
 		Auth: authConfig{
 			AteapiCAFile:         caPath,
 			AteapiClientCertPath: clientCertPath,

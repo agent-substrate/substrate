@@ -49,14 +49,17 @@ in-flight resume occupies one slot. When the lot is full, further requests are
 shed immediately with `503 "actor <id> unavailable: router at capacity"` rather
 than queueing without bound.
 
-The default lot size is deliberately equal to Envoy's default per-cluster
-circuit breaker (`max_requests = 1024`) on the ext_proc cluster: every parked
-request holds one ext_proc stream, i.e. one active request against that
-cluster, so the circuit breaker is the true upper bound on concurrent parked
-requests. Raising `--parked-request-max` beyond `1024` requires an explicit
-`circuit_breakers.max_requests` on the ext_proc cluster to match — otherwise
-the overflow is rejected by Envoy itself, with 503s that never reach the lot
-(and never count in `parking.rejected`).
+Every parked request holds one ext_proc stream — one active request against
+Envoy's ext_proc cluster — for its entire wait, while ordinary requests hold
+one only for a millisecond-scale header exchange. The cluster's circuit breaker
+is therefore the hard ceiling on concurrent parked requests, and the router
+sets it explicitly from `--extproc-max-requests` (default `2048`). Startup
+validation enforces `--extproc-max-requests >= --parked-request-max`; the
+excess is **fast-path headroom**, so a saturated lot cannot starve requests to
+already-running actors (the default pair is a `1024` lot with `1024` of
+headroom). A breaker below the lot would silently truncate it — Envoy would
+reject the overflow itself, with 503s that never reach the lot and never count
+in `parking.rejected`.
 
 Concurrent requests for the *same* actor are de-duplicated by the resumer's
 `singleflight` group: they share a single in-flight `ResumeActor` call and all
@@ -98,10 +101,11 @@ within a `15s` budget.
 | Flag                             | Default | Meaning                                                            |
 | -------------------------------- | ------- | ------------------------------------------------------------------ |
 | `--parked-request-budget`         | `5s`    | Park budget per resume *flight*; requests de-duplicated onto an in-flight resume share its remaining budget (see Behavior). |
-| `--parked-request-max`            | `1024`  | Max concurrent parked/in-flight resume requests; excess shed (503). `0` disables parking. Sized to Envoy's ext_proc circuit breaker (see above). |
+| `--parked-request-max`            | `1024`  | Max concurrent parked/in-flight resume requests; excess shed (503). `0` disables parking. |
 | `--parked-request-retry-interval` | `100ms` | Delay before a parked request's first resume retry.                |
 | `--parked-request-retry-factor`   | `1.1`   | Multiplier applied to the retry delay after each attempt (>= 1).   |
 | `--parked-request-retry-jitter`   | `0.1`   | Random fraction in `[0, 1)` added per retry to de-synchronize parked requests. |
+| `--extproc-max-requests`          | `2048`  | Envoy circuit-breaker `max_requests` for the ext_proc cluster. Must be `>= --parked-request-max` (enforced at startup); the excess is fast-path headroom (see Behavior). |
 
 The retry backoff deliberately has no cap and no attempt limit: the budget alone
 bounds the wait.

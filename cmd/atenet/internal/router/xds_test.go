@@ -259,3 +259,34 @@ func TestDynamicForwardProxyCluster_DisablesConnectionReuse(t *testing.T) {
 		t.Errorf("Expected max_requests_per_connection 1, got %d", got)
 	}
 }
+
+func TestXdsServer_ExtProcCircuitBreaker(t *testing.T) {
+	t.Run("DefaultCoversLotPlusHeadroom", func(t *testing.T) {
+		x := NewXdsServer(0)
+		got := x.buildCluster().GetCircuitBreakers().GetThresholds()[0].GetMaxRequests().GetValue()
+		if got != uint32(defaultExtProcMaxRequests) {
+			t.Errorf("default max_requests = %d, want %d", got, defaultExtProcMaxRequests)
+		}
+		if got < uint32(defaultParkedRequestMax) {
+			t.Errorf("default breaker (%d) below the default lot (%d): a full lot would be truncated by Envoy", got, defaultParkedRequestMax)
+		}
+	})
+
+	t.Run("SetterOverrides", func(t *testing.T) {
+		x := NewXdsServer(0)
+		x.SetExtProcMaxRequests(4096)
+		got := x.buildCluster().GetCircuitBreakers().GetThresholds()[0].GetMaxRequests().GetValue()
+		if got != 4096 {
+			t.Errorf("max_requests after SetExtProcMaxRequests(4096) = %d, want 4096", got)
+		}
+	})
+
+	t.Run("NonPositiveKeepsDefault", func(t *testing.T) {
+		x := NewXdsServer(0)
+		x.SetExtProcMaxRequests(0)
+		got := x.buildCluster().GetCircuitBreakers().GetThresholds()[0].GetMaxRequests().GetValue()
+		if got != uint32(defaultExtProcMaxRequests) {
+			t.Errorf("max_requests after SetExtProcMaxRequests(0) = %d, want default %d", got, defaultExtProcMaxRequests)
+		}
+	})
+}
