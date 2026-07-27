@@ -15,6 +15,7 @@
 package router
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -114,6 +115,36 @@ func TestMapResumeError(t *testing.T) {
 			err:      status.Error(codes.DeadlineExceeded, "context deadline exceeded"),
 			wantCode: envoy_type.StatusCode_GatewayTimeout,
 			wantBody: `actor team-a/ctr6 request timed out`,
+		},
+		{
+			name:     "Aborted maps to 503 and preserves desc",
+			err:      status.Error(codes.Aborted, "another operation is in progress for this actor"),
+			wantCode: envoy_type.StatusCode_ServiceUnavailable,
+			wantBody: `actor "ctr6" unavailable: another operation is in progress for this actor`,
+		},
+		{
+			name:     "budget exhausted on Aborted-only maps to 503, not 500",
+			err:      &budgetExhaustedError{lastErr: status.Error(codes.Aborted, "concurrent update conflict, please retry")},
+			wantCode: envoy_type.StatusCode_ServiceUnavailable,
+			wantBody: `actor "ctr6" unavailable: concurrent update conflict, please retry`,
+		},
+		{
+			name:     "budget exhausted on capacity keeps a clean body through the wrapper",
+			err:      &budgetExhaustedError{lastErr: status.Error(codes.FailedPrecondition, "no free workers available")},
+			wantCode: envoy_type.StatusCode_ServiceUnavailable,
+			wantBody: `actor "ctr6" unavailable: no free workers available`,
+		},
+		{
+			name:     "bare context.Canceled maps to 408 client-gone, not 500",
+			err:      context.Canceled,
+			wantCode: envoy_type.StatusCode_RequestTimeout,
+			wantBody: `request for actor "ctr6" canceled by client`,
+		},
+		{
+			name:     "bare context.DeadlineExceeded maps to 504, not 500",
+			err:      context.DeadlineExceeded,
+			wantCode: envoy_type.StatusCode_GatewayTimeout,
+			wantBody: `actor "ctr6" request timed out`,
 		},
 		{
 			name:     "PermissionDenied maps to 403",
