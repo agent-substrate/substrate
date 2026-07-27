@@ -21,7 +21,8 @@ package main
 // 169.254.17.1/30) staying in the pod netns next to the pod's real eth0, and
 // the peer moved into the interior netns, renamed eth0, and given the stable
 // actor address 169.254.17.2/30. nftables rules in the pod netns masquerade
-// actor egress behind the pod IP and DNAT inbound pod-IP:80 to the actor.
+// actor egress behind the pod IP and DNAT the actor's inbound pod-IP ports to
+// the actor.
 //
 // kata consumes the interior netns exactly like a CNI-provisioned container
 // netns: its tcfilter network model builds a tap cross-connected to eth0 (the
@@ -81,6 +82,11 @@ const (
 	// needs the connected (scope-link) route to it so the gateway is reachable.
 	actorVethSubnet = "169.254.17.0/30"
 )
+
+// actorInboundPorts are the TCP ports DNATed from the worker pod IP to the
+// actor. 80 carries plaintext ingress; 443 carries ingress the router
+// re-originated as TLS.
+var actorInboundPorts = []uint16{80, 443}
 
 // Parsed forms of the fixed network constants above, cooked once at package init
 // (a malformed constant is a programmer error, so these panic). Callers use them
@@ -336,7 +342,8 @@ func enableIPv4Forwarding() error {
 func installActorNftablesRules(podIP net.IP) error {
 	// Dedicated ateom-owned IPv4 table (cheap cleanup, no CNI chain mutation):
 	//   * postrouting: masquerade actor egress (169.254.17.2) behind the pod IP.
-	//   * prerouting: DNAT pod-IP:80/tcp to the actor veth IP.
+	//   * prerouting: DNAT each actor inbound port on the pod IP to the same
+	//     port on the actor veth IP.
 	//   * forward: accept forwarded packets between the actor veth and pod eth0.
 	// Mirrors cmd/ateom-gvisor (same compatibility-bridge caveats and TODOs).
 	if err := removeActorNftablesRules(); err != nil {
@@ -357,28 +364,34 @@ func installActorNftablesRules(podIP net.IP) error {
 		Hooknum:  nftables.ChainHookPrerouting,
 		Priority: nftables.ChainPriorityNATDest,
 	})
-	preroutingExprs := append(ipDestinationEqual(podIP.String()), tcpDestinationPortEqual(80)...)
-	preroutingExprs = append(preroutingExprs,
-		&expr.Immediate{
-			Register: 1,
-			Data:     net.ParseIP(actorVethIP).To4(),
-		},
-		&expr.Immediate{
-			Register: 2,
-			Data:     binaryutil.BigEndian.PutUint16(80),
-		},
-		&expr.NAT{
-			Type:        expr.NATTypeDestNAT,
-			Family:      unix.NFPROTO_IPV4,
-			RegAddrMin:  1,
-			RegProtoMin: 2,
-		},
-	)
-	c.AddRule(&nftables.Rule{
-		Table: table,
-		Chain: prerouting,
-		Exprs: preroutingExprs,
-	})
+	// TODO: Support inbound UDP DNAT for actors that expose UDP protocols such
+	// as QUIC.
+	// TODO: Replace this fixed port pair with the actor's configured inbound
+	// ports, either by keeping one rule per port or by matching a set.
+	for _, port := range actorInboundPorts {
+		preroutingExprs := append(ipDestinationEqual(podIP.String()), tcpDestinationPortEqual(port)...)
+		preroutingExprs = append(preroutingExprs,
+			&expr.Immediate{
+				Register: 1,
+				Data:     net.ParseIP(actorVethIP).To4(),
+			},
+			&expr.Immediate{
+				Register: 2,
+				Data:     binaryutil.BigEndian.PutUint16(port),
+			},
+			&expr.NAT{
+				Type:        expr.NATTypeDestNAT,
+				Family:      unix.NFPROTO_IPV4,
+				RegAddrMin:  1,
+				RegProtoMin: 2,
+			},
+		)
+		c.AddRule(&nftables.Rule{
+			Table: table,
+			Chain: prerouting,
+			Exprs: preroutingExprs,
+		})
+	}
 
 	postrouting := c.AddChain(&nftables.Chain{
 		Name:     "postrouting",

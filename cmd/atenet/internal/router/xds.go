@@ -64,8 +64,18 @@ const (
 	IngressHTTPListener  = "ingress_http_listener"
 	IngressHTTPSListener = "ingress_https_listener"
 	RouteName            = "substrate_routes"
+	RouteNameHTTPS       = "substrate_routes_https"
 	ClusterName          = "ate-cluster"
 	OtlpClusterName      = "otel_collector_cluster"
+	DFPClusterName       = "dynamic_forward_proxy_cluster"
+	DFPTLSClusterName    = "dynamic_forward_proxy_tls_cluster"
+
+	// SNIHeader carries the actor's mesh DNS name for the upstream TLS
+	// handshake. ext_proc rewrites :authority to a bare pod IP, which would
+	// make Envoy's auto-SNI derive the SNI from an IP literal, so the TLS
+	// cluster reads the SNI from this header instead (see
+	// UpstreamHttpProtocolOptions.override_auto_sni_header).
+	SNIHeader = "x-substrate-sni"
 )
 
 // XdsServer implements an aggregated discovery service server for dynamic Envoy router nodes.
@@ -151,7 +161,7 @@ func (x *XdsServer) UpdateSnapshot() error {
 	// Clusters
 	clusters := []types.Resource{
 		x.buildCluster(),
-		x.buildDynamicForwardProxyCluster(),
+		x.buildDynamicForwardProxyCluster(DFPClusterName, false),
 	}
 	if x.otlpHost != "" {
 		clusters = append(clusters, x.buildOtlpCollectorCluster())
@@ -159,14 +169,21 @@ func (x *XdsServer) UpdateSnapshot() error {
 
 	// Routes
 	routes := []types.Resource{
-		x.buildRoutes(),
+		x.buildRoutes(RouteName, DFPClusterName),
 	}
 
 	// Listeners
 	listeners := []types.Resource{
 		x.buildListener(),
 	}
+
+	// The HTTPS ingress gets its own cluster and route configuration so that
+	// TLS is re-originated upstream only for traffic that arrived over TLS.
+	// All three resources are gated together to keep the snapshot internally
+	// consistent (no dangling RDS or CDS reference).
 	if x.httpsPort > 0 {
+		clusters = append(clusters, x.buildDynamicForwardProxyCluster(DFPTLSClusterName, true))
+		routes = append(routes, x.buildRoutes(RouteNameHTTPS, DFPTLSClusterName))
 		listeners = append(listeners, x.buildHttpsListener())
 	}
 
@@ -329,17 +346,32 @@ func (x *XdsServer) buildOtlpCollectorCluster() *clusterv3.Cluster {
 	}
 }
 
-func (x *XdsServer) buildDynamicForwardProxyCluster() *clusterv3.Cluster {
+// buildDynamicForwardProxyCluster builds a dynamic forward proxy cluster that
+// takes its upstream address from the (ext_proc-rewritten) :authority. With
+// useTLS the connection to the actor is re-originated as TLS, for traffic that
+// arrived on the router's HTTPS listener.
+//
+// All dynamic forward proxy resources share one DNS cache, which Envoy keys by
+// the cache config's name — the configs must stay byte-identical, so both
+// clusters and the DFP filter use buildDnsCacheConfig unmodified.
+func (x *XdsServer) buildDynamicForwardProxyCluster(name string, useTLS bool) *clusterv3.Cluster {
 	dfpClusterConfig := &dfpclusterv3.ClusterConfig{
 		ClusterImplementationSpecifier: &dfpclusterv3.ClusterConfig_DnsCacheConfig{
 			DnsCacheConfig: buildDnsCacheConfig(),
 		},
+		// A dynamic forward proxy cluster with a TLS transport socket demands
+		// both auto_sni and auto_san_validation, and rejects the whole CDS
+		// update otherwise. SAN validation is meaningless here because the
+		// upstream context below carries no validation context at all, so the
+		// requirement has to be waived explicitly. Removing this waiver is part
+		// of the same change that adds a trusted_ca.
+		AllowInsecureClusterOptions: useTLS,
 	}
 
 	clusterConfigAny, _ := anypb.New(dfpClusterConfig)
 
-	return &clusterv3.Cluster{
-		Name:     "dynamic_forward_proxy_cluster",
+	cluster := &clusterv3.Cluster{
+		Name:     name,
 		LbPolicy: clusterv3.Cluster_CLUSTER_PROVIDED,
 		ClusterDiscoveryType: &clusterv3.Cluster_ClusterType{
 			ClusterType: &clusterv3.Cluster_CustomClusterType{
@@ -348,11 +380,53 @@ func (x *XdsServer) buildDynamicForwardProxyCluster() *clusterv3.Cluster {
 			},
 		},
 	}
+
+	if !useTLS {
+		return cluster
+	}
+
+	// The actor's certificate is deliberately not verified: actors have no
+	// platform-issued identity yet, so they serve certs they mint themselves.
+	// This buys encryption in transit, not upstream authentication. The SNI
+	// below is still set correctly, so enabling verification later is a matter
+	// of adding a validation context here.
+	tlsAny, _ := anypb.New(&tlsv3.UpstreamTlsContext{
+		CommonTlsContext: &tlsv3.CommonTlsContext{
+			AlpnProtocols: []string{"http/1.1"},
+		},
+	})
+	cluster.TransportSocket = &corev3.TransportSocket{
+		Name: "envoy.transport_sockets.tls",
+		ConfigType: &corev3.TransportSocket_TypedConfig{
+			TypedConfig: tlsAny,
+		},
+	}
+
+	// ExplicitHttpConfig pins HTTP/1.1, matching the protocol Envoy would pick
+	// implicitly for the plaintext cluster; it is required because
+	// UpstreamHttpProtocolOptions can only be carried inside HttpProtocolOptions,
+	// whose upstream_protocol_options oneof must be set.
+	protoOpts, _ := anypb.New(&httpv3.HttpProtocolOptions{
+		UpstreamProtocolOptions: &httpv3.HttpProtocolOptions_ExplicitHttpConfig_{
+			ExplicitHttpConfig: &httpv3.HttpProtocolOptions_ExplicitHttpConfig{
+				ProtocolConfig: &httpv3.HttpProtocolOptions_ExplicitHttpConfig_HttpProtocolOptions{},
+			},
+		},
+		UpstreamHttpProtocolOptions: &corev3.UpstreamHttpProtocolOptions{
+			AutoSni:               true,
+			OverrideAutoSniHeader: SNIHeader,
+		},
+	})
+	cluster.TypedExtensionProtocolOptions = map[string]*anypb.Any{
+		"envoy.extensions.upstreams.http.v3.HttpProtocolOptions": protoOpts,
+	}
+
+	return cluster
 }
 
-func (x *XdsServer) buildRoutes() *routev3.RouteConfiguration {
+func (x *XdsServer) buildRoutes(routeName, clusterName string) *routev3.RouteConfiguration {
 	return &routev3.RouteConfiguration{
-		Name: RouteName,
+		Name: routeName,
 		VirtualHosts: []*routev3.VirtualHost{
 			{
 				Name:    "local_service",
@@ -367,7 +441,7 @@ func (x *XdsServer) buildRoutes() *routev3.RouteConfiguration {
 						Action: &routev3.Route_Route{
 							Route: &routev3.RouteAction{
 								ClusterSpecifier: &routev3.RouteAction_Cluster{
-									Cluster: "dynamic_forward_proxy_cluster",
+									Cluster: clusterName,
 								},
 								Timeout: durationpb.New(10 * time.Second),
 							},
@@ -379,7 +453,7 @@ func (x *XdsServer) buildRoutes() *routev3.RouteConfiguration {
 	}
 }
 
-func (x *XdsServer) buildHcm(statPrefix string) *anypb.Any {
+func (x *XdsServer) buildHcm(statPrefix, routeName string) *anypb.Any {
 	extProcConfig, _ := anypb.New(&extprocv3filter.ExternalProcessor{
 		GrpcService: &corev3.GrpcService{
 			TargetSpecifier: &corev3.GrpcService_EnvoyGrpc_{
@@ -392,6 +466,11 @@ func (x *XdsServer) buildHcm(statPrefix string) *anypb.Any {
 		MutationRules: &mutationrulesv3.HeaderMutationRules{
 			AllowAllRouting: &wrapperspb.BoolValue{Value: true},
 		},
+		// The downstream connection's TLS version tells ext_proc which port to
+		// route the actor on. Unlike the request scheme it is connection state,
+		// so it is not derivable from anything the caller sends. See
+		// requestTLSVersion.
+		RequestAttributes: []string{tlsVersionAttribute},
 		// Explicitly configure the message timeout to avoid the 200ms default
 		MessageTimeout: durationpb.New(5 * time.Second),
 		ProcessingMode: &extprocv3filter.ProcessingMode{
@@ -448,7 +527,7 @@ func (x *XdsServer) buildHcm(statPrefix string) *anypb.Any {
 		},
 		RouteSpecifier: &hcmv3.HttpConnectionManager_Rds{
 			Rds: &hcmv3.Rds{
-				RouteConfigName: RouteName,
+				RouteConfigName: routeName,
 				ConfigSource: &corev3.ConfigSource{
 					ResourceApiVersion: corev3.ApiVersion_V3,
 					ConfigSourceSpecifier: &corev3.ConfigSource_Ads{
@@ -497,7 +576,7 @@ func (x *XdsServer) buildTracing() *hcmv3.HttpConnectionManager_Tracing {
 }
 
 func (x *XdsServer) buildListener() *listenerv3.Listener {
-	hcm := x.buildHcm("ingress_http")
+	hcm := x.buildHcm("ingress_http", RouteName)
 
 	return &listenerv3.Listener{
 		Name: IngressHTTPListener,
@@ -527,7 +606,7 @@ func (x *XdsServer) buildListener() *listenerv3.Listener {
 }
 
 func (x *XdsServer) buildHttpsListener() *listenerv3.Listener {
-	hcm := x.buildHcm("ingress_https")
+	hcm := x.buildHcm("ingress_https", RouteNameHTTPS)
 
 	tlsConfig := &tlsv3.DownstreamTlsContext{
 		CommonTlsContext: &tlsv3.CommonTlsContext{

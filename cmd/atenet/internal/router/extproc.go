@@ -31,7 +31,9 @@ import (
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/propagation"
 	"google.golang.org/grpc"
+	"google.golang.org/protobuf/types/known/structpb"
 
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
@@ -92,7 +94,7 @@ func (s *ExtProcServer) Process(stream extprocv3.ExternalProcessor_ProcessServer
 		switch reqType := req.Request.(type) {
 		case *extprocv3.ProcessingRequest_RequestHeaders:
 			start := time.Now()
-			hResponse, rqm, target, tmplNs, tmplName, err := s.handleRequestHeaders(stream.Context(), reqType.RequestHeaders)
+			hResponse, rqm, target, tmplNs, tmplName, err := s.handleRequestHeaders(stream.Context(), reqType.RequestHeaders, req.GetAttributes())
 			elapsed := time.Since(start)
 			if err != nil {
 				slog.ErrorContext(stream.Context(), "Error during ext_proc RequestHeaders processing", slog.String("err", err.Error()))
@@ -130,9 +132,12 @@ func (s *ExtProcServer) Process(stream extprocv3.ExternalProcessor_ProcessServer
 func (s *ExtProcServer) handleRequestHeaders(
 	ctx context.Context,
 	reqHeaders *extprocv3.HttpHeaders,
+	attrs map[string]*structpb.Struct,
 ) (*extprocv3.HeadersResponse, *requestMetadata, string, string, string, error) {
 	metadata := newRequestMetadata(reqHeaders.Headers.GetHeaders())
-	slog.InfoContext(ctx, "Request", slog.String("host", metadata.host))
+	tlsVersion := requestTLSVersion(attrs)
+	tlsIngress := tlsVersion != ""
+	slog.InfoContext(ctx, "Request", slog.String("host", metadata.host), slog.String("tlsVersion", tlsVersion))
 
 	// Envoy doesn't propagate trace context into the ext_proc gRPC
 	// stream's metadata — the per-request traceparent arrives in the
@@ -171,14 +176,21 @@ func (s *ExtProcServer) handleRequestHeaders(
 			"actor %q routing failed", actorName)
 	}
 
-	// TODO(bowei) -- handle more than port 80 on the actor.
-	targetAddr := net.JoinHostPort(workerIP, "80")
+	// Actors serve plaintext on 80. A request that arrived over TLS is
+	// re-originated as TLS to 443, so the actor sees the scheme the client used.
+	// TODO(bowei) -- handle actor ports beyond this fixed 80/443 pair.
+	targetAddr := net.JoinHostPort(workerIP, actorPortForIngress(tlsIngress))
 
 	slog.InfoContext(ctx, "Route ok", slog.String("actor", actorName), slog.String("targetAddr", targetAddr))
 
 	// Route by rewriting the :authority header.
 	mutation := &extprocv3.HeaderMutation{}
 	addAuthorityMutation(targetAddr, mutation)
+	if tlsIngress {
+		// :authority is now a bare pod IP, so the upstream TLS handshake takes
+		// its SNI from this header instead (see SNIHeader).
+		addSniMutation(resources.ActorDNSName(atespace, actorName), mutation)
+	}
 
 	return &extprocv3.HeadersResponse{
 		Response: &extprocv3.CommonResponse{

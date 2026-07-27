@@ -43,6 +43,22 @@ func addAuthorityMutation(auth string, mut *extproc.HeaderMutation) {
 	)
 }
 
+// addSniMutation sets the SNI the upstream TLS handshake should use.
+// OVERWRITE_IF_EXISTS_OR_ADD is required rather than the default append action:
+// a caller that sends its own SNIHeader would otherwise have its value retained
+// alongside ours, letting it influence the upstream handshake.
+func addSniMutation(sni string, mut *extproc.HeaderMutation) {
+	mut.SetHeaders = append(mut.SetHeaders,
+		&corev3.HeaderValueOption{
+			Header: &corev3.HeaderValue{
+				Key:      SNIHeader,
+				RawValue: []byte(sni),
+			},
+			AppendAction: corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
+		},
+	)
+}
+
 func immediateResponse(statusCode envoy_type.StatusCode, message string) *extproc.ProcessingResponse {
 	return &extproc.ProcessingResponse{
 		Response: &extproc.ProcessingResponse_ImmediateResponse{

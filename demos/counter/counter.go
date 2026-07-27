@@ -18,12 +18,18 @@ package main
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/base64"
 	"fmt"
 	"io"
 	"log/slog"
+	"math/big"
 	"net"
 	"net/http"
 	"os"
@@ -114,6 +120,8 @@ func main() {
 		}
 	}()
 
+	go serveTLS(ctx, defaultMux)
+
 	// Write some random data to a file in the root filesystem, to test
 	// filesystem checkpoint/restore.
 	if err := writeRandomFile(); err != nil {
@@ -134,6 +142,64 @@ func main() {
 		slog.InfoContext(ctx, "Count", slog.Int("count", count), slog.String("fshash", hashRandomFile()))
 		count++
 	}
+}
+
+// serveTLS mirrors the plaintext handlers on port 443 behind a self-signed
+// certificate, so the actor can be reached over the router's HTTPS ingress
+// (which re-originates TLS to 443 rather than forwarding cleartext to 80).
+//
+// The certificate is minted here rather than provisioned by the platform:
+// actors have no platform-issued identity, and the router deliberately does not
+// verify what the actor presents. Each handshake logs the SNI the router
+// offered, which is what makes the upstream TLS wiring observable end to end.
+func serveTLS(ctx context.Context, mux *http.ServeMux) {
+	cert, err := selfSignedCert()
+	if err != nil {
+		slog.ErrorContext(ctx, "Error generating TLS certificate", slog.Any("err", err))
+		return
+	}
+
+	srv := &http.Server{
+		Addr:    ":443",
+		Handler: mux,
+		TLSConfig: &tls.Config{
+			GetCertificate: func(hello *tls.ClientHelloInfo) (*tls.Certificate, error) {
+				slog.InfoContext(ctx, "TLS handshake", slog.String("sni", hello.ServerName))
+				return cert, nil
+			},
+		},
+	}
+
+	slog.InfoContext(ctx, "Starting counter TLS server on port 443")
+	// Both arguments are empty because the certificate is served from
+	// TLSConfig.GetCertificate rather than read from disk.
+	if err := srv.ListenAndServeTLS("", ""); err != nil {
+		slog.ErrorContext(ctx, "Error starting TLS server", slog.Any("err", err))
+	}
+}
+
+// selfSignedCert mints a throwaway certificate covering any actor mesh DNS
+// name. Nothing verifies it, so the SANs only matter for legibility when
+// inspecting the handshake.
+func selfSignedCert() (*tls.Certificate, error) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return nil, fmt.Errorf("while generating key: %w", err)
+	}
+
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "counter"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(365 * 24 * time.Hour),
+		DNSNames:     []string{"*.actors.resources.substrate.ate.dev"},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		return nil, fmt.Errorf("while creating certificate: %w", err)
+	}
+
+	return &tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}, nil
 }
 
 func writeRandomFile() error {

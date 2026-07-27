@@ -31,6 +31,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 type mockClient struct {
@@ -69,7 +70,7 @@ func TestHandleRequestHeadersDoesNotLogSensitiveData(t *testing.T) {
 		},
 	}
 
-	_, metadata, target, _, _, err := s.handleRequestHeaders(context.Background(), reqHeaders)
+	_, metadata, target, _, _, err := s.handleRequestHeaders(context.Background(), reqHeaders, nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -90,18 +91,44 @@ func TestHandleRequestHeadersDoesNotLogSensitiveData(t *testing.T) {
 	}
 }
 
+// tlsAttrs builds the attributes Envoy attaches to a ProcessingRequest when the
+// downstream TLS version is requested. An empty version yields no attributes at
+// all, which is what Envoy sends for a plaintext connection.
+func tlsAttrs(version string) map[string]*structpb.Struct {
+	if version == "" {
+		return nil
+	}
+	return map[string]*structpb.Struct{
+		extProcFilterName: {
+			Fields: map[string]*structpb.Value{
+				tlsVersionAttribute: structpb.NewStringValue(version),
+			},
+		},
+	}
+}
+
 func TestExtProcHeadersEvaluation(t *testing.T) {
 	const testUUID = "123e4567-e89b-12d3-a456-426614174000"
 
 	tests := []struct {
-		name           string
-		authority      string
+		name      string
+		authority string
+		// tlsVersion is the value of the connection.tls_version attribute Envoy
+		// reports; "" stands for the attribute being absent altogether, which is
+		// what a plaintext connection produces.
+		tlsVersion string
+		// extraHeaders are merged into the request on top of the base set, to
+		// check that caller-supplied headers cannot influence routing.
+		extraHeaders   map[string]string
 		resumeResp     *ateapipb.ResumeActorResponse
 		resumeErr      error
 		expectErr      bool
 		expectedErrStr string
 		expectedStatus envoy_type.StatusCode
 		expectedTarget string
+		// expectedSNI is the value expected in SNIHeader; "" means the header
+		// must not be set at all.
+		expectedSNI string
 	}{
 		{
 			name:           "invalid host returns 404 identifying the host",
@@ -163,14 +190,52 @@ func TestExtProcHeadersEvaluation(t *testing.T) {
 			expectedStatus: envoy_type.StatusCode_InternalServerError,
 		},
 		{
-			name:      "Successful resume",
-			authority: testUUID + ".team-a.actors.resources.substrate.ate.dev",
+			name:       "Successful resume",
+			authority:  testUUID + ".team-a.actors.resources.substrate.ate.dev",
+			tlsVersion: "",
 			resumeResp: &ateapipb.ResumeActorResponse{
 				Actor: &ateapipb.Actor{
 					AteomPodIp: "10.0.0.52",
 				},
 			},
 			expectErr:      false,
+			expectedTarget: "10.0.0.52:80",
+		},
+		{
+			name:       "https ingress is re-originated to port 443 with the actor mesh name as SNI",
+			authority:  testUUID + ".team-a.actors.resources.substrate.ate.dev",
+			tlsVersion: "TLSv1.3",
+			resumeResp: &ateapipb.ResumeActorResponse{
+				Actor: &ateapipb.Actor{
+					AteomPodIp: "10.0.0.52",
+				},
+			},
+			expectedTarget: "10.0.0.52:443",
+			expectedSNI:    testUUID + ".team-a.actors.resources.substrate.ate.dev",
+		},
+		{
+			name:      "a missing tls version attribute falls back to plaintext",
+			authority: testUUID + ".team-a.actors.resources.substrate.ate.dev",
+			resumeResp: &ateapipb.ResumeActorResponse{
+				Actor: &ateapipb.Actor{
+					AteomPodIp: "10.0.0.52",
+				},
+			},
+			expectedTarget: "10.0.0.52:80",
+		},
+		{
+			name:       "caller-supplied proto and SNI headers cannot upgrade a plaintext request",
+			authority:  testUUID + ".team-a.actors.resources.substrate.ate.dev",
+			tlsVersion: "",
+			extraHeaders: map[string]string{
+				"x-forwarded-proto": "https",
+				SNIHeader:           "evil.example",
+			},
+			resumeResp: &ateapipb.ResumeActorResponse{
+				Actor: &ateapipb.Actor{
+					AteomPodIp: "10.0.0.52",
+				},
+			},
 			expectedTarget: "10.0.0.52:80",
 		},
 	}
@@ -191,17 +256,19 @@ func TestExtProcHeadersEvaluation(t *testing.T) {
 
 			s := NewExtProcServer(50051, clientMock, nil)
 
+			headers := []*corev3.HeaderValue{
+				{Key: ":path", Value: "/v1/actors/invoke"},
+				{Key: ":authority", Value: tc.authority},
+				{Key: ":method", Value: "POST"},
+			}
+			for k, v := range tc.extraHeaders {
+				headers = append(headers, &corev3.HeaderValue{Key: k, Value: v})
+			}
 			reqHeaders := &extprocv3.HttpHeaders{
-				Headers: &corev3.HeaderMap{
-					Headers: []*corev3.HeaderValue{
-						{Key: ":path", Value: "/v1/actors/invoke"},
-						{Key: ":authority", Value: tc.authority},
-						{Key: ":method", Value: "POST"},
-					},
-				},
+				Headers: &corev3.HeaderMap{Headers: headers},
 			}
 
-			res, metadata, target, _, _, err := s.handleRequestHeaders(context.Background(), reqHeaders)
+			res, metadata, target, _, _, err := s.handleRequestHeaders(context.Background(), reqHeaders, tlsAttrs(tc.tlsVersion))
 			if tc.expectErr {
 				if err == nil {
 					t.Fatalf("expected error but got nil")
@@ -230,17 +297,44 @@ func TestExtProcHeadersEvaluation(t *testing.T) {
 			}
 
 			mutation := res.Response.GetHeaderMutation()
-			if len(mutation.GetSetHeaders()) != 1 {
-				t.Fatalf("expected exactly one Header option set, found: %v", mutation.GetSetHeaders())
+			set := map[string]*corev3.HeaderValueOption{}
+			for _, h := range mutation.GetSetHeaders() {
+				set[strings.ToLower(h.GetHeader().GetKey())] = h
 			}
 
-			headerOption := mutation.GetSetHeaders()[0]
-			if strings.ToLower(headerOption.Header.Key) != ":authority" {
-				t.Errorf("invalid resulting dynamic parameter key: %s", headerOption.Header.Key)
+			wantHeaders := 1
+			if tc.expectedSNI != "" {
+				wantHeaders = 2
+			}
+			if len(set) != wantHeaders {
+				t.Fatalf("expected %d Header options set, found: %v", wantHeaders, mutation.GetSetHeaders())
 			}
 
-			if string(headerOption.Header.RawValue) != tc.expectedTarget {
-				t.Errorf("invalid destination mapping found: %s, expected: %s", headerOption.Header.RawValue, tc.expectedTarget)
+			authority, ok := set[":authority"]
+			if !ok {
+				t.Fatalf("no :authority mutation found in: %v", mutation.GetSetHeaders())
+			}
+			if got := string(authority.GetHeader().GetRawValue()); got != tc.expectedTarget {
+				t.Errorf("invalid destination mapping found: %s, expected: %s", got, tc.expectedTarget)
+			}
+
+			sni, ok := set[SNIHeader]
+			if tc.expectedSNI == "" {
+				if ok {
+					t.Errorf("plaintext request must not set %s, got %q", SNIHeader, sni.GetHeader().GetRawValue())
+				}
+			} else {
+				if !ok {
+					t.Fatalf("no %s mutation found in: %v", SNIHeader, mutation.GetSetHeaders())
+				}
+				if got := string(sni.GetHeader().GetRawValue()); got != tc.expectedSNI {
+					t.Errorf("SNI = %q, want %q", got, tc.expectedSNI)
+				}
+				// Anything but an overwrite would keep a caller-supplied value
+				// alongside ours, letting it reach the upstream handshake.
+				if got := sni.GetAppendAction(); got != corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD {
+					t.Errorf("SNI append action = %v, want OVERWRITE_IF_EXISTS_OR_ADD", got)
+				}
 			}
 
 			// Confirm that query logs recorded metric trace details
