@@ -61,7 +61,7 @@ kubectl port-forward -n ate-system svc/atenet-router 8000:80
 ## How to Use
 
 Parking is **on by default** (`--parked-request-budget=5s`,
-`--parked-request-max=2048`), so the cluster you just deployed already parks.
+`--parked-request-max=1024`), so the cluster you just deployed already parks.
 
 ### A. Watch a 503 become a served request
 
@@ -120,7 +120,7 @@ non-zero `active`):
 ```bash
 kubectl -n ate-system port-forward deployment/atenet-router 4040:4040
 curl -s 'http://localhost:4040/statusz?format=json' | jq .parking
-# { "enabled": true, "active": 3, "max_parked": 2048, "max_wait": "5s" }
+# { "enabled": true, "active": 3, "max_parked": 1024, "max_wait": "5s" }
 ```
 
 The parking metrics are also exported on the router's metrics endpoint

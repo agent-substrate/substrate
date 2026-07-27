@@ -44,10 +44,19 @@ exponential backoff until either
   unavailable: no free workers available"`.
 
 To bound resource use and provide backpressure, the router admits requests to a
-**parking lot** of fixed capacity (`--parked-request-max`, default `2048`). Each
+**parking lot** of fixed capacity (`--parked-request-max`, default `1024`). Each
 in-flight resume occupies one slot. When the lot is full, further requests are
 shed immediately with `503 "actor <id> unavailable: router at capacity"` rather
 than queueing without bound.
+
+The default lot size is deliberately equal to Envoy's default per-cluster
+circuit breaker (`max_requests = 1024`) on the ext_proc cluster: every parked
+request holds one ext_proc stream, i.e. one active request against that
+cluster, so the circuit breaker is the true upper bound on concurrent parked
+requests. Raising `--parked-request-max` beyond `1024` requires an explicit
+`circuit_breakers.max_requests` on the ext_proc cluster to match — otherwise
+the overflow is rejected by Envoy itself, with 503s that never reach the lot
+(and never count in `parking.rejected`).
 
 Concurrent requests for the *same* actor are de-duplicated by the resumer's
 `singleflight` group: they share a single in-flight `ResumeActor` call and all
@@ -89,7 +98,7 @@ within a `15s` budget.
 | Flag                             | Default | Meaning                                                            |
 | -------------------------------- | ------- | ------------------------------------------------------------------ |
 | `--parked-request-budget`         | `5s`    | Park budget per resume *flight*; requests de-duplicated onto an in-flight resume share its remaining budget (see Behavior). |
-| `--parked-request-max`            | `2048`  | Max concurrent parked/in-flight resume requests; excess shed (503). `0` disables parking. |
+| `--parked-request-max`            | `1024`  | Max concurrent parked/in-flight resume requests; excess shed (503). `0` disables parking. Sized to Envoy's ext_proc circuit breaker (see above). |
 | `--parked-request-retry-interval` | `100ms` | Delay before a parked request's first resume retry.                |
 | `--parked-request-retry-factor`   | `1.1`   | Multiplier applied to the retry delay after each attempt (>= 1).   |
 | `--parked-request-retry-jitter`   | `0.1`   | Random fraction in `[0, 1)` added per retry to de-synchronize parked requests. |
@@ -114,7 +123,7 @@ bounds the wait.
   | `budget_exhausted` | The park budget elapsed while the resume was still blocked on a retryable condition (pool saturated, a concurrent operation holding the actor, or the control plane unavailable) — the signal that capacity, not a fault, is the bottleneck. |
   | `canceled`         | The client disconnected while parked (request context canceled).            |
   | `timeout`          | The request's own deadline expired while parked (distinct from the park budget). |
-  | `error`            | The resume failed with a non-retryable error (`NotFound`, `Unavailable`, ...). |
+  | `error`            | The resume failed with a non-retryable error (`NotFound`, `PermissionDenied`, ...). |
 
 - `atenet.router.parking.rejected` — counter: requests shed because the lot was
   full.
