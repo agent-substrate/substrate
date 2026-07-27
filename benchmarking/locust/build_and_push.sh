@@ -31,10 +31,17 @@ fi
 
 IMAGE="us-docker.pkg.dev/${PROJECT_ID}/gcr.io/ate-images/locust-test:latest"
 
-echo "Building Docker image: $IMAGE"
+# Target platform must match the cluster's nodes, not the build host. Without
+# this, an arm64 workstation (Apple Silicon) pushes an arm64 image, the push
+# succeeds, and the failure only surfaces two steps later when the kubelet on an
+# amd64 node reports "no match for platform in manifest". Override for arm64
+# node pools (T2A, Axion).
+PLATFORM="${LOCUST_IMAGE_PLATFORM:-linux/amd64}"
+
+echo "Building Docker image: $IMAGE (platform: $PLATFORM)"
 # Build context is the monorepo root because the Dockerfile compiles the
 # boomer-glutton Go binary alongside the Python install (see Dockerfile).
-docker build -t "$IMAGE" -f benchmarking/locust/Dockerfile .
+docker build --platform "$PLATFORM" -t "$IMAGE" -f benchmarking/locust/Dockerfile .
 
 echo "Pushing Docker image..."
 docker push "$IMAGE"
