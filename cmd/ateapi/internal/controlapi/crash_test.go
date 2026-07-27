@@ -23,6 +23,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/internal/ateerrors"
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -30,10 +31,10 @@ import (
 
 // seedActor stores a running actor with all worker-binding fields populated, so
 // tests can assert they are cleared when the actor crashes.
-func seedActor(t *testing.T, ctx context.Context, st store.Interface, atespace, actorName string) {
+func seedActor(t *testing.T, ctx context.Context, st store.Interface, actorRef resources.ActorRef) {
 	t.Helper()
 	if _, err := st.CreateActor(ctx, &ateapipb.Actor{
-		Metadata:           &ateapipb.ResourceMetadata{Name: actorName, Atespace: atespace},
+		Metadata:           &ateapipb.ResourceMetadata{Name: actorRef.Name, Atespace: actorRef.Atespace},
 		Status:             ateapipb.Actor_STATUS_RUNNING,
 		AteomPodNamespace:  "ns",
 		AteomPodName:       "pod",
@@ -47,17 +48,17 @@ func seedActor(t *testing.T, ctx context.Context, st store.Interface, atespace, 
 }
 
 // seedWorker registers the worker referenced by seedActor's binding fields,
-// assigned to the given actor in atespace (unassigned if assignedActor is "").
-func seedWorker(t *testing.T, ctx context.Context, st store.Interface, atespace, assignedActor string) {
+// assigned to the given actor (unassigned if assigned is the zero ActorRef).
+func seedWorker(t *testing.T, ctx context.Context, st store.Interface, actorRef resources.ActorRef) {
 	t.Helper()
 	worker := &ateapipb.Worker{
 		WorkerNamespace: "ns",
 		WorkerPool:      "pool",
 		WorkerPod:       "pod",
 	}
-	if assignedActor != "" {
+	if actorRef != (resources.ActorRef{}) {
 		worker.Assignment = &ateapipb.Assignment{
-			Actor: &ateapipb.ObjectRef{Atespace: atespace, Name: assignedActor},
+			Actor: actorRef.ToObjectRef(),
 		}
 	}
 	if err := st.CreateWorker(ctx, worker); err != nil {
@@ -67,10 +68,10 @@ func seedWorker(t *testing.T, ctx context.Context, st store.Interface, atespace,
 
 // seedUnboundActor stores a running actor whose worker-binding fields were
 // already cleared, e.g. by a prior release.
-func seedUnboundActor(t *testing.T, ctx context.Context, st store.Interface, atespace, actorName string) {
+func seedUnboundActor(t *testing.T, ctx context.Context, st store.Interface, actorRef resources.ActorRef) {
 	t.Helper()
 	if _, err := st.CreateActor(ctx, &ateapipb.Actor{
-		Metadata:           &ateapipb.ResourceMetadata{Name: actorName, Atespace: atespace},
+		Metadata:           &ateapipb.ResourceMetadata{Name: actorRef.Name, Atespace: actorRef.Atespace},
 		Status:             ateapipb.Actor_STATUS_RUNNING,
 		InProgressSnapshot: "gs://snapshots/actor-1/reserved",
 	}); err != nil {
@@ -80,11 +81,11 @@ func seedUnboundActor(t *testing.T, ctx context.Context, st store.Interface, ate
 
 // assertCrashed reloads the actor and verifies it is CRASHED with its worker
 // binding cleared.
-func assertCrashed(t *testing.T, ctx context.Context, st store.Interface, atespace, actorName string) {
+func assertCrashed(t *testing.T, ctx context.Context, st store.Interface, actorRef resources.ActorRef) {
 	t.Helper()
-	got, err := st.GetActor(ctx, atespace, actorName)
+	got, err := st.GetActor(ctx, actorRef)
 	if err != nil {
-		t.Fatalf("GetActor(%q, %q) = %v, want nil", atespace, actorName, err)
+		t.Fatalf("GetActor(%v) = %v, want nil", actorRef, err)
 	}
 	if got.GetStatus() != ateapipb.Actor_STATUS_CRASHED {
 		t.Errorf("status = %v, want %v", got.GetStatus(), ateapipb.Actor_STATUS_CRASHED)
@@ -107,10 +108,7 @@ func assertCrashed(t *testing.T, ctx context.Context, st store.Interface, atespa
 }
 
 func TestCrashActor(t *testing.T) {
-	const (
-		atespace  = "team-a"
-		actorName = "actor-1"
-	)
+	actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
 
 	tests := []struct {
 		name string
@@ -127,20 +125,20 @@ func TestCrashActor(t *testing.T) {
 				if err != nil {
 					t.Fatalf("crashActor() = %v, want nil", err)
 				}
-				assertCrashed(t, ctx, st, atespace, actorName)
+				assertCrashed(t, ctx, st, actorRef)
 			},
 		},
 		{
 			name: "releases worker assigned to crashed actor",
 			seed: true,
 			setup: func(t *testing.T, ctx context.Context, st store.Interface) {
-				seedWorker(t, ctx, st, atespace, actorName)
+				seedWorker(t, ctx, st, actorRef)
 			},
 			check: func(t *testing.T, ctx context.Context, st store.Interface, err error) {
 				if err != nil {
 					t.Fatalf("crashActor() = %v, want nil", err)
 				}
-				assertCrashed(t, ctx, st, atespace, actorName)
+				assertCrashed(t, ctx, st, actorRef)
 				worker, gerr := st.GetWorker(ctx, "ns", "pool", "pod")
 				if gerr != nil {
 					t.Fatalf("GetWorker() = %v, want nil", gerr)
@@ -154,13 +152,13 @@ func TestCrashActor(t *testing.T) {
 			name: "keeps worker assigned to another actor",
 			seed: true,
 			setup: func(t *testing.T, ctx context.Context, st store.Interface) {
-				seedWorker(t, ctx, st, atespace, "actor-2")
+				seedWorker(t, ctx, st, resources.ActorRef{Atespace: actorRef.Atespace, Name: "actor-2"})
 			},
 			check: func(t *testing.T, ctx context.Context, st store.Interface, err error) {
 				if err != nil {
 					t.Fatalf("crashActor() = %v, want nil", err)
 				}
-				assertCrashed(t, ctx, st, atespace, actorName)
+				assertCrashed(t, ctx, st, actorRef)
 				worker, gerr := st.GetWorker(ctx, "ns", "pool", "pod")
 				if gerr != nil {
 					t.Fatalf("GetWorker() = %v, want nil", gerr)
@@ -174,14 +172,14 @@ func TestCrashActor(t *testing.T) {
 			name: "skips release for actor with no worker binding",
 			seed: false,
 			setup: func(t *testing.T, ctx context.Context, st store.Interface) {
-				seedUnboundActor(t, ctx, st, atespace, actorName)
-				seedWorker(t, ctx, st, atespace, actorName)
+				seedUnboundActor(t, ctx, st, actorRef)
+				seedWorker(t, ctx, st, actorRef)
 			},
 			check: func(t *testing.T, ctx context.Context, st store.Interface, err error) {
 				if err != nil {
 					t.Fatalf("crashActor() = %v, want nil", err)
 				}
-				assertCrashed(t, ctx, st, atespace, actorName)
+				assertCrashed(t, ctx, st, actorRef)
 				// Without a binding the worker cannot be looked up, so its
 				// assignment must be left untouched even though it names
 				// the crashed actor.
@@ -218,24 +216,21 @@ func TestCrashActor(t *testing.T) {
 			defer cleanup()
 
 			if tt.seed {
-				seedActor(t, ctx, st, atespace, actorName)
+				seedActor(t, ctx, st, actorRef)
 			}
 			if tt.setup != nil {
 				tt.setup(t, ctx, st)
 			}
 
-			err := crashActor(ctx, st, atespace, actorName)
+			err := crashActor(ctx, st, actorRef)
 			tt.check(t, ctx, st, err)
 		})
 	}
 }
 
 func TestMaybeCrashActor(t *testing.T) {
-	const (
-		atespace  = "team-a"
-		actorName = "actor-1"
-		wrapMsg   = "calling atelet"
-	)
+	const wrapMsg = "calling atelet"
+	actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
 
 	crashErr := ateerrors.NewGRPCError(context.Background(), codes.NotFound, ateerrors.ReasonTerminalFileSystemError, ateerrors.ActorCrashedMetadata(), errors.New("boom"))
 	// A structured error carrying a reason but no actorCrashed directive must be
@@ -271,7 +266,7 @@ func TestMaybeCrashActor(t *testing.T) {
 				if got := status.Code(err); got != codes.DataLoss {
 					t.Errorf("status code = %v, want %v", got, codes.DataLoss)
 				}
-				assertCrashed(t, ctx, st, atespace, actorName)
+				assertCrashed(t, ctx, st, actorRef)
 			},
 		},
 		{
@@ -305,7 +300,7 @@ func TestMaybeCrashActor(t *testing.T) {
 					t.Errorf("maybeCrashActor() error = %q, want prefix %q", err, wrapMsg)
 				}
 				// The actor must not have been crashed.
-				got, gerr := st.GetActor(ctx, atespace, actorName)
+				got, gerr := st.GetActor(ctx, actorRef)
 				if gerr != nil {
 					t.Fatalf("GetActor() = %v, want nil", gerr)
 				}
@@ -329,7 +324,7 @@ func TestMaybeCrashActor(t *testing.T) {
 					t.Errorf("maybeCrashActor() error = %q, want prefix %q", err, wrapMsg)
 				}
 				// The actor must not have been crashed.
-				got, gerr := st.GetActor(ctx, atespace, actorName)
+				got, gerr := st.GetActor(ctx, actorRef)
 				if gerr != nil {
 					t.Fatalf("GetActor() = %v, want nil", gerr)
 				}
@@ -347,10 +342,10 @@ func TestMaybeCrashActor(t *testing.T) {
 			defer cleanup()
 
 			if tt.seed {
-				seedActor(t, ctx, st, atespace, actorName)
+				seedActor(t, ctx, st, actorRef)
 			}
 
-			err := maybeCrashActor(ctx, st, atespace, actorName, tt.err, wrapMsg)
+			err := maybeCrashActor(ctx, st, actorRef, tt.err, wrapMsg)
 			tt.check(t, ctx, st, err)
 		})
 	}

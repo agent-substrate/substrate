@@ -25,6 +25,7 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
+	"github.com/agent-substrate/substrate/internal/resources"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -35,8 +36,7 @@ import (
 
 // SuspendInput holds the immutable parameters requested by the client.
 type SuspendInput struct {
-	ActorName string
-	Atespace  string
+	ActorRef resources.ActorRef
 }
 
 // SuspendState holds the mutable state loaded and modified during execution.
@@ -59,7 +59,7 @@ func (s *LoadActorForSuspendStep) CheckPrerequisite(ctx context.Context, input *
 	return nil
 }
 func (s *LoadActorForSuspendStep) Execute(ctx context.Context, input *SuspendInput, state *SuspendState) error {
-	actor, err := s.store.GetActor(ctx, input.Atespace, input.ActorName)
+	actor, err := s.store.GetActor(ctx, input.ActorRef)
 	if err != nil {
 		return err
 	}
@@ -87,14 +87,14 @@ func (s *MarkSuspendingStep) IsComplete(ctx context.Context, input *SuspendInput
 }
 func (s *MarkSuspendingStep) CheckPrerequisite(ctx context.Context, input *SuspendInput, state *SuspendState) error {
 	if state.Actor.GetStatus() != ateapipb.Actor_STATUS_RUNNING {
-		return status.Errorf(codes.FailedPrecondition, "MarkSuspendingStep prerequisite not met for Actor: %s (got: %v, want %s)", input.ActorName, state.Actor.GetStatus(), ateapipb.Actor_STATUS_RUNNING)
+		return status.Errorf(codes.FailedPrecondition, "MarkSuspendingStep prerequisite not met for Actor: %s (got: %v, want %s)", input.ActorRef.Name, state.Actor.GetStatus(), ateapipb.Actor_STATUS_RUNNING)
 	}
 	return nil
 }
 func (s *MarkSuspendingStep) Execute(ctx context.Context, input *SuspendInput, state *SuspendState) error {
 	state.Actor.Status = ateapipb.Actor_STATUS_SUSPENDING
 	snapshotID := time.Now().Format(time.RFC3339) + "-" + rand.Text()
-	state.Actor.InProgressSnapshot = strings.TrimSuffix(state.ActorTemplate.Spec.SnapshotsConfig.Location, "/") + "/" + input.ActorName + "/" + snapshotID
+	state.Actor.InProgressSnapshot = strings.TrimSuffix(state.ActorTemplate.Spec.SnapshotsConfig.Location, "/") + "/" + input.ActorRef.Name + "/" + snapshotID
 	updatedActor, err := s.store.UpdateActor(ctx, state.Actor, state.Actor.GetMetadata().GetVersion())
 	if err != nil {
 		return err
@@ -117,10 +117,10 @@ func (s *CallAteletSuspendStep) IsComplete(ctx context.Context, input *SuspendIn
 }
 func (s *CallAteletSuspendStep) CheckPrerequisite(ctx context.Context, input *SuspendInput, state *SuspendState) error {
 	if state.Actor.GetStatus() != ateapipb.Actor_STATUS_SUSPENDING {
-		return status.Errorf(codes.FailedPrecondition, "CallAteletSuspendStep prerequisite not met for Actor: %s (got: %v, want %s)", input.ActorName, state.Actor.GetStatus(), ateapipb.Actor_STATUS_SUSPENDING)
+		return status.Errorf(codes.FailedPrecondition, "CallAteletSuspendStep prerequisite not met for Actor: %s (got: %v, want %s)", input.ActorRef.Name, state.Actor.GetStatus(), ateapipb.Actor_STATUS_SUSPENDING)
 	}
 	if state.Actor.GetAteomPodNamespace() == "" || state.Actor.GetAteomPodName() == "" {
-		if err := crashActor(ctx, s.store, state.Actor.GetMetadata().GetAtespace(), state.Actor.GetMetadata().GetName()); err != nil {
+		if err := crashActor(ctx, s.store, input.ActorRef); err != nil {
 			slog.ErrorContext(ctx, "Failed to crash actor", slog.String("err", err.Error()))
 		}
 		return fmt.Errorf("actor is CRASHED because it was in SUSPENDING state but has no active worker")
@@ -132,7 +132,7 @@ func (s *CallAteletSuspendStep) Execute(ctx context.Context, input *SuspendInput
 	if err != nil {
 		if errors.Is(err, ErrWorkerPodNotFound) {
 			slog.ErrorContext(ctx, "Worker pod gone before checkpoint, crashing actor", "namespace", state.Actor.GetAteomPodNamespace(), "pod", state.Actor.GetAteomPodName(), "in_progress_snapshot", state.Actor.GetInProgressSnapshot())
-			if err := crashActor(ctx, s.store, state.Actor.GetMetadata().GetAtespace(), state.Actor.GetMetadata().GetName()); err != nil {
+			if err := crashActor(ctx, s.store, input.ActorRef); err != nil {
 				slog.ErrorContext(ctx, "Failed to crash actor", slog.String("err", err.Error()))
 			}
 			return fmt.Errorf("actor is CRASHED because its worker pod is gone and no snapshot was written")
@@ -167,7 +167,7 @@ func (s *CallAteletSuspendStep) Execute(ctx context.Context, input *SuspendInput
 	}
 
 	_, err = client.Checkpoint(ctx, req)
-	return maybeCrashActor(ctx, s.store, input.Atespace, input.ActorName, err, "while checkpointing workload")
+	return maybeCrashActor(ctx, s.store, input.ActorRef, err, "while checkpointing workload")
 }
 
 func (s *CallAteletSuspendStep) RetryBackoff() *wait.Backoff { return nil }
@@ -203,12 +203,12 @@ func (s *FinalizeSuspendedStep) IsComplete(ctx context.Context, input *SuspendIn
 }
 func (s *FinalizeSuspendedStep) CheckPrerequisite(ctx context.Context, input *SuspendInput, state *SuspendState) error {
 	if state.Actor.GetStatus() != ateapipb.Actor_STATUS_SUSPENDING {
-		return status.Errorf(codes.FailedPrecondition, "FinalizeSuspendedStep prerequisite not met for Actor: %s (got: %v, want %s)", input.ActorName, state.Actor.GetStatus(), ateapipb.Actor_STATUS_SUSPENDING)
+		return status.Errorf(codes.FailedPrecondition, "FinalizeSuspendedStep prerequisite not met for Actor: %s (got: %v, want %s)", input.ActorRef.Name, state.Actor.GetStatus(), ateapipb.Actor_STATUS_SUSPENDING)
 	}
 	return nil
 }
 func (s *FinalizeSuspendedStep) Execute(ctx context.Context, input *SuspendInput, state *SuspendState) error {
-	latestActor, err := s.store.GetActor(ctx, input.Atespace, input.ActorName)
+	latestActor, err := s.store.GetActor(ctx, input.ActorRef)
 	if err != nil {
 		return err
 	}
@@ -229,7 +229,7 @@ func (s *FinalizeSuspendedStep) Execute(ctx context.Context, input *SuspendInput
 		} else {
 			// Only free it if it still belongs to us
 			if wass := worker.Assignment; wass != nil {
-				if wass.Actor.Atespace == input.Atespace && wass.Actor.Name == input.ActorName {
+				if resources.ActorRefFromObjectRef(wass.Actor) == input.ActorRef {
 					worker.Assignment = nil
 					err = s.store.UpdateWorker(ctx, worker, worker.Version)
 					if err != nil {
@@ -240,7 +240,7 @@ func (s *FinalizeSuspendedStep) Execute(ctx context.Context, input *SuspendInput
 		}
 
 		// 2. Safely clear ActiveWorker now that the worker object in DB is freed
-		latestActor, err = s.store.GetActor(ctx, input.Atespace, input.ActorName)
+		latestActor, err = s.store.GetActor(ctx, input.ActorRef)
 		if err != nil {
 			return err
 		}

@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -33,146 +34,131 @@ import (
 
 func TestFilterAndDisplayLogLine(t *testing.T) {
 	tests := []struct {
-		name            string
-		line            string
-		targetAtespace  string
-		targetActorName string
-		wantMatched     bool
-		wantTime        string
-		wantOutput      string
+		name        string
+		line        string
+		target      resources.ActorRef
+		wantMatched bool
+		wantTime    string
+		wantOutput  string
 	}{
 		{
-			name:            "matching actor, JSON log with RFC3339Nano",
-			line:            `{"time":"2026-05-16T01:03:38.602878302Z","level":"info","msg":"Count","logging.googleapis.com/labels":{"ate.dev/actor_atespace":"space-1","ate.dev/actor_name":"act-1"}}`,
-			targetAtespace:  "space-1",
-			targetActorName: "act-1",
-			wantMatched:     true,
-			wantTime:        "2026-05-16T01:03:38.602878302Z",
-			wantOutput:      `{"time":"2026-05-16T01:03:38.602878302Z","level":"info","msg":"Count"}`,
+			name:        "matching actor, JSON log with RFC3339Nano",
+			line:        `{"time":"2026-05-16T01:03:38.602878302Z","level":"info","msg":"Count","logging.googleapis.com/labels":{"ate.dev/actor_atespace":"space-1","ate.dev/actor_name":"act-1"}}`,
+			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
+			wantMatched: true,
+			wantTime:    "2026-05-16T01:03:38.602878302Z",
+			wantOutput:  `{"time":"2026-05-16T01:03:38.602878302Z","level":"info","msg":"Count"}`,
 		},
 		{
-			name:            "matching actor, plain text log",
-			line:            `{"time":"2026-05-16T01:03:38Z","message":"Hello","logging.googleapis.com/labels":{"ate.dev/actor_atespace":"space-1","ate.dev/actor_name":"act-1"}}`,
-			targetAtespace:  "space-1",
-			targetActorName: "act-1",
-			wantMatched:     true,
-			wantTime:        "2026-05-16T01:03:38Z",
-			wantOutput:      `{"time":"2026-05-16T01:03:38Z","message":"Hello"}`,
+			name:        "matching actor, plain text log",
+			line:        `{"time":"2026-05-16T01:03:38Z","message":"Hello","logging.googleapis.com/labels":{"ate.dev/actor_atespace":"space-1","ate.dev/actor_name":"act-1"}}`,
+			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
+			wantMatched: true,
+			wantTime:    "2026-05-16T01:03:38Z",
+			wantOutput:  `{"time":"2026-05-16T01:03:38Z","message":"Hello"}`,
 		},
 		{
-			name:            "matching actor, JSON log with no timestamp fallback",
-			line:            `{"level":"error","msg":"Failed","logging.googleapis.com/labels":{"ate.dev/actor_atespace":"space-1","ate.dev/actor_name":"act-1"}}`,
-			targetAtespace:  "space-1",
-			targetActorName: "act-1",
-			wantMatched:     true,
-			wantTime:        "",
-			wantOutput:      `{"level":"error","msg":"Failed"}`,
+			name:        "matching actor, JSON log with no timestamp fallback",
+			line:        `{"level":"error","msg":"Failed","logging.googleapis.com/labels":{"ate.dev/actor_atespace":"space-1","ate.dev/actor_name":"act-1"}}`,
+			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
+			wantMatched: true,
+			wantTime:    "",
+			wantOutput:  `{"level":"error","msg":"Failed"}`,
 		},
 		{
-			name:            "matching actor, fallback to standard labels key",
-			line:            `{"time":"2026-05-16T01:03:38.602878302Z","level":"info","msg":"Count","labels":{"ate.dev/actor_atespace":"space-1","ate.dev/actor_name":"act-1"}}`,
-			targetAtespace:  "space-1",
-			targetActorName: "act-1",
-			wantMatched:     true,
-			wantTime:        "2026-05-16T01:03:38.602878302Z",
-			wantOutput:      `{"time":"2026-05-16T01:03:38.602878302Z","level":"info","msg":"Count"}`,
+			name:        "matching actor, fallback to standard labels key",
+			line:        `{"time":"2026-05-16T01:03:38.602878302Z","level":"info","msg":"Count","labels":{"ate.dev/actor_atespace":"space-1","ate.dev/actor_name":"act-1"}}`,
+			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
+			wantMatched: true,
+			wantTime:    "2026-05-16T01:03:38.602878302Z",
+			wantOutput:  `{"time":"2026-05-16T01:03:38.602878302Z","level":"info","msg":"Count"}`,
 		},
 		{
-			name:            "non-matching actor",
-			line:            `{"time":"2026-05-16T01:03:38Z","message":"Hello world","logging.googleapis.com/labels":{"ate.dev/actor_atespace":"space-1","ate.dev/actor_name":"act-2"}}`,
-			targetAtespace:  "space-1",
-			targetActorName: "act-1",
-			wantMatched:     false,
-			wantTime:        "2026-05-16T01:03:38Z",
-			wantOutput:      "",
+			name:        "non-matching actor",
+			line:        `{"time":"2026-05-16T01:03:38Z","message":"Hello world","logging.googleapis.com/labels":{"ate.dev/actor_atespace":"space-1","ate.dev/actor_name":"act-2"}}`,
+			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
+			wantMatched: false,
+			wantTime:    "2026-05-16T01:03:38Z",
+			wantOutput:  "",
 		},
 		{
-			name:            "same actor name in a different atespace",
-			line:            `{"time":"2026-05-16T01:03:38Z","message":"Hello world","logging.googleapis.com/labels":{"ate.dev/actor_atespace":"space-2","ate.dev/actor_name":"act-1"}}`,
-			targetAtespace:  "space-1",
-			targetActorName: "act-1",
-			wantMatched:     false,
-			wantTime:        "2026-05-16T01:03:38Z",
-			wantOutput:      "",
+			name:        "same actor name in a different atespace",
+			line:        `{"time":"2026-05-16T01:03:38Z","message":"Hello world","logging.googleapis.com/labels":{"ate.dev/actor_atespace":"space-2","ate.dev/actor_name":"act-1"}}`,
+			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
+			wantMatched: false,
+			wantTime:    "2026-05-16T01:03:38Z",
+			wantOutput:  "",
 		},
 		{
-			name:            "matching actor name without atespace label",
-			line:            `{"time":"2026-05-16T01:03:38Z","message":"Hello world","logging.googleapis.com/labels":{"ate.dev/actor_name":"act-1"}}`,
-			targetAtespace:  "space-1",
-			targetActorName: "act-1",
-			wantMatched:     false,
-			wantTime:        "2026-05-16T01:03:38Z",
-			wantOutput:      "",
+			name:        "matching actor name without atespace label",
+			line:        `{"time":"2026-05-16T01:03:38Z","message":"Hello world","logging.googleapis.com/labels":{"ate.dev/actor_name":"act-1"}}`,
+			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
+			wantMatched: false,
+			wantTime:    "2026-05-16T01:03:38Z",
+			wantOutput:  "",
 		},
 		{
-			name:            "empty target atespace does not match empty atespace label",
-			line:            `{"time":"2026-05-16T01:03:38Z","message":"Hello world","logging.googleapis.com/labels":{"ate.dev/actor_atespace":"","ate.dev/actor_name":"act-1"}}`,
-			targetAtespace:  "",
-			targetActorName: "act-1",
-			wantMatched:     false,
-			wantTime:        "2026-05-16T01:03:38Z",
-			wantOutput:      "",
+			name:        "empty target atespace does not match empty atespace label",
+			line:        `{"time":"2026-05-16T01:03:38Z","message":"Hello world","logging.googleapis.com/labels":{"ate.dev/actor_atespace":"","ate.dev/actor_name":"act-1"}}`,
+			target:      resources.ActorRef{Atespace: "", Name: "act-1"},
+			wantMatched: false,
+			wantTime:    "2026-05-16T01:03:38Z",
+			wantOutput:  "",
 		},
 		{
-			name:            "empty target actor name does not match empty name label",
-			line:            `{"time":"2026-05-16T01:03:38Z","message":"Hello world","logging.googleapis.com/labels":{"ate.dev/actor_atespace":"space-1","ate.dev/actor_name":""}}`,
-			targetAtespace:  "space-1",
-			targetActorName: "",
-			wantMatched:     false,
-			wantTime:        "2026-05-16T01:03:38Z",
-			wantOutput:      "",
+			name:        "empty target actor name does not match empty name label",
+			line:        `{"time":"2026-05-16T01:03:38Z","message":"Hello world","logging.googleapis.com/labels":{"ate.dev/actor_atespace":"space-1","ate.dev/actor_name":""}}`,
+			target:      resources.ActorRef{Atespace: "space-1", Name: ""},
+			wantMatched: false,
+			wantTime:    "2026-05-16T01:03:38Z",
+			wantOutput:  "",
 		},
 		{
-			name:            "invalid json line",
-			line:            "not a json line",
-			targetAtespace:  "space-1",
-			targetActorName: "act-1",
-			wantMatched:     false,
-			wantTime:        "",
-			wantOutput:      "",
+			name:        "invalid json line",
+			line:        "not a json line",
+			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
+			wantMatched: false,
+			wantTime:    "",
+			wantOutput:  "",
 		},
 		{
-			name:            "matching actor, flat JSON log",
-			line:            `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"Hello","traceID":"abc-123","err":"timeout","logging.googleapis.com/labels":{"ate.dev/actor_atespace":"space-1","ate.dev/actor_name":"act-1"}}`,
-			targetAtespace:  "space-1",
-			targetActorName: "act-1",
-			wantMatched:     true,
-			wantTime:        "2026-05-16T01:03:38Z",
-			wantOutput:      `{"time":"2026-05-16T01:03:38Z","err":"timeout","level":"info","msg":"Hello","traceID":"abc-123"}`,
+			name:        "matching actor, flat JSON log",
+			line:        `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"Hello","traceID":"abc-123","err":"timeout","logging.googleapis.com/labels":{"ate.dev/actor_atespace":"space-1","ate.dev/actor_name":"act-1"}}`,
+			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
+			wantMatched: true,
+			wantTime:    "2026-05-16T01:03:38Z",
+			wantOutput:  `{"time":"2026-05-16T01:03:38Z","err":"timeout","level":"info","msg":"Hello","traceID":"abc-123"}`,
 		},
 		{
-			name:            "matching actor, severity and message keys",
-			line:            `{"time":"2026-05-16T01:03:38Z","severity":"error","message":"Disk full","custom_tag":"alert","logging.googleapis.com/labels":{"ate.dev/actor_atespace":"space-1","ate.dev/actor_name":"act-1"}}`,
-			targetAtespace:  "space-1",
-			targetActorName: "act-1",
-			wantMatched:     true,
-			wantTime:        "2026-05-16T01:03:38Z",
-			wantOutput:      `{"time":"2026-05-16T01:03:38Z","custom_tag":"alert","message":"Disk full","severity":"error"}`,
+			name:        "matching actor, severity and message keys",
+			line:        `{"time":"2026-05-16T01:03:38Z","severity":"error","message":"Disk full","custom_tag":"alert","logging.googleapis.com/labels":{"ate.dev/actor_atespace":"space-1","ate.dev/actor_name":"act-1"}}`,
+			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
+			wantMatched: true,
+			wantTime:    "2026-05-16T01:03:38Z",
+			wantOutput:  `{"time":"2026-05-16T01:03:38Z","custom_tag":"alert","message":"Disk full","severity":"error"}`,
 		},
 		{
-			name:            "matching actor, 2-field structured log without time",
-			line:            `{"message":"login failed","code":401,"logging.googleapis.com/labels":{"ate.dev/actor_atespace":"space-1","ate.dev/actor_name":"act-1"}}`,
-			targetAtespace:  "space-1",
-			targetActorName: "act-1",
-			wantMatched:     true,
-			wantTime:        "",
-			wantOutput:      `{"code":401,"message":"login failed"}`,
+			name:        "matching actor, 2-field structured log without time",
+			line:        `{"message":"login failed","code":401,"logging.googleapis.com/labels":{"ate.dev/actor_atespace":"space-1","ate.dev/actor_name":"act-1"}}`,
+			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
+			wantMatched: true,
+			wantTime:    "",
+			wantOutput:  `{"code":401,"message":"login failed"}`,
 		},
 		{
-			name:            "matching actor, JSON log with custom application labels",
-			line:            `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"Hello","logging.googleapis.com/labels":{"ate.dev/actor_atespace":"space-1","ate.dev/actor_name":"act-1","app":"my-app"}}`,
-			targetAtespace:  "space-1",
-			targetActorName: "act-1",
-			wantMatched:     true,
-			wantTime:        "2026-05-16T01:03:38Z",
-			wantOutput:      `{"time":"2026-05-16T01:03:38Z","level":"info","logging.googleapis.com/labels":{"app":"my-app"},"msg":"Hello"}`,
+			name:        "matching actor, JSON log with custom application labels",
+			line:        `{"time":"2026-05-16T01:03:38Z","level":"info","msg":"Hello","logging.googleapis.com/labels":{"ate.dev/actor_atespace":"space-1","ate.dev/actor_name":"act-1","app":"my-app"}}`,
+			target:      resources.ActorRef{Atespace: "space-1", Name: "act-1"},
+			wantMatched: true,
+			wantTime:    "2026-05-16T01:03:38Z",
+			wantOutput:  `{"time":"2026-05-16T01:03:38Z","level":"info","logging.googleapis.com/labels":{"app":"my-app"},"msg":"Hello"}`,
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			var buf bytes.Buffer
-			logTime, matched := filterAndDisplayLogLine(tc.line, tc.targetAtespace, tc.targetActorName, &buf)
+			logTime, matched := filterAndDisplayLogLine(tc.line, tc.target, &buf)
 
 			if matched != tc.wantMatched {
 				t.Errorf("got matched = %v, want %v", matched, tc.wantMatched)
@@ -262,14 +248,14 @@ func TestLogsActorRunner_Run_OneShotSuccess(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	runner := &LogsActorRunner{
 		apiClient: mockAPI,
-		atespace:  "space-1",
+		actorRef:  resources.ActorRef{Atespace: "space-1", Name: actorName},
 		streamer:  mockStreamer,
 		stdout:    &stdout,
 		stderr:    &stderr,
 		follow:    false,
 	}
 
-	err := runner.Run(context.Background(), actorName)
+	err := runner.Run(context.Background())
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -306,14 +292,14 @@ func TestLogsActorRunner_Run_OneShot_ActorNotRunning(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	runner := &LogsActorRunner{
 		apiClient: mockAPI,
-		atespace:  "space-1",
+		actorRef:  resources.ActorRef{Atespace: "space-1", Name: actorName},
 		streamer:  mockStreamer,
 		stdout:    &stdout,
 		stderr:    &stderr,
 		follow:    false,
 	}
 
-	err := runner.Run(context.Background(), actorName)
+	err := runner.Run(context.Background())
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -391,7 +377,7 @@ func TestLogsActorRunner_Run_Follow_SuspendedToRunning(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	runner := &LogsActorRunner{
 		apiClient:         mockAPI,
-		atespace:          "space-1",
+		actorRef:          resources.ActorRef{Atespace: "space-1", Name: actorName},
 		streamer:          mockStreamer,
 		stdout:            &stdout,
 		stderr:            &stderr,
@@ -401,7 +387,7 @@ func TestLogsActorRunner_Run_Follow_SuspendedToRunning(t *testing.T) {
 		tickerInterval:    1 * time.Millisecond,
 	}
 
-	err := runner.Run(ctx, actorName)
+	err := runner.Run(ctx)
 	if err != nil && err != context.Canceled {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -441,7 +427,7 @@ func TestLogsActorRunner_Run_Follow_NotFoundActor(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	runner := &LogsActorRunner{
 		apiClient:         mockAPI,
-		atespace:          "space-1",
+		actorRef:          resources.ActorRef{Atespace: "space-1", Name: actorName},
 		streamer:          mockStreamer,
 		stdout:            &stdout,
 		stderr:            &stderr,
@@ -451,7 +437,7 @@ func TestLogsActorRunner_Run_Follow_NotFoundActor(t *testing.T) {
 		tickerInterval:    1 * time.Millisecond,
 	}
 
-	err := runner.Run(context.Background(), actorName)
+	err := runner.Run(context.Background())
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -548,7 +534,7 @@ func TestLogsActorRunner_Run_Follow_ActorMigration(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	runner := &LogsActorRunner{
 		apiClient:         mockAPI,
-		atespace:          "space-1",
+		actorRef:          resources.ActorRef{Atespace: "space-1", Name: actorName},
 		streamer:          mockStreamer,
 		stdout:            &stdout,
 		stderr:            &stderr,
@@ -558,7 +544,7 @@ func TestLogsActorRunner_Run_Follow_ActorMigration(t *testing.T) {
 		tickerInterval:    1 * time.Millisecond,
 	}
 
-	err := runner.Run(ctx, actorName)
+	err := runner.Run(ctx)
 	if err != nil && err != context.Canceled {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -661,7 +647,7 @@ func TestLogsActorRunner_Run_Follow_ActorSuspendedMidStream(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	runner := &LogsActorRunner{
 		apiClient:         mockAPI,
-		atespace:          "space-1",
+		actorRef:          resources.ActorRef{Atespace: "space-1", Name: actorName},
 		streamer:          mockStreamer,
 		stdout:            &stdout,
 		stderr:            &stderr,
@@ -671,7 +657,7 @@ func TestLogsActorRunner_Run_Follow_ActorSuspendedMidStream(t *testing.T) {
 		tickerInterval:    1 * time.Millisecond,
 	}
 
-	err := runner.Run(ctx, actorName)
+	err := runner.Run(ctx)
 	if err != nil && err != context.Canceled {
 		t.Fatalf("unexpected error: %v", err)
 	}

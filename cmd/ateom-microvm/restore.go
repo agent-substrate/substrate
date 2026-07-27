@@ -33,6 +33,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/imagecache"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/readyz"
+	"github.com/agent-substrate/substrate/internal/resources"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -52,8 +53,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	defer s.lock.Unlock()
 
 	p := actorBootParams{
-		atespace:     req.GetAtespace(),
-		actorName:    req.GetActorName(),
+		actorRef:     resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()},
 		actorUID:     req.GetActorUid(),
 		templateNS:   req.GetActorTemplateNamespace(),
 		templateName: req.GetActorTemplateName(),
@@ -64,7 +64,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	durableDir := ateompath.DurableDirVolumeMountsDir(p.actorUID)
 	tStart := time.Now()
 
-	s.actorLogger.EmitLifecycleLog("Actor restoring", p.atespace, p.actorName, p.actorUID, p.templateNS, p.templateName)
+	s.actorLogger.EmitLifecycleLog("Actor restoring", p.actorRef, p.actorUID, p.templateNS, p.templateName)
 
 	// Restore the durable-dir volumes before anything can observe them: for Full
 	// that means before the share's virtiofsd starts, for Data before the workload
@@ -94,7 +94,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 		return nil, status.Errorf(codes.InvalidArgument, "unsupported snapshot scope: %v", scope)
 	}
 
-	s.actorLogger.EmitLifecycleLog("Actor restored", p.atespace, p.actorName, p.actorUID, p.templateNS, p.templateName)
+	s.actorLogger.EmitLifecycleLog("Actor restored", p.actorRef, p.actorUID, p.templateNS, p.templateName)
 	return &ateompb.RestoreWorkloadResponse{}, nil
 }
 
@@ -111,7 +111,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 // config — comes back from the memory snapshot. Durable-dir volumes are host-backed
 // instead, and the caller has already restored them from the snapshot's tar.
 func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, restoreDir string, tStart time.Time) (retErr error) {
-	atespace, name, actorUID := p.atespace, p.actorName, p.actorUID
+	actorUID := p.actorUID
 	templateNS, templateName := p.templateNS, p.templateName
 
 	rr := s.resolveRuntime(p.assetPaths)
@@ -271,7 +271,7 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 	} else {
 		ra.logAgent = logAC
 		for _, c := range containers {
-			s.startActorLogForwarding(logAC, atespace, name, actorUID, templateNS, templateName, overlayWorkloadID(c.GetName()), c.GetName())
+			s.startActorLogForwarding(logAC, p.actorRef, actorUID, templateNS, templateName, overlayWorkloadID(c.GetName()), c.GetName())
 		}
 	}
 

@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -40,10 +41,10 @@ func TestFinalizePausedStep_WorkerGone(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	const atespace, actorName = "team-a", "actor-1"
+	actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
 
 	actor := &ateapipb.Actor{
-		Metadata:           &ateapipb.ResourceMetadata{Atespace: atespace, Name: actorName},
+		Metadata:           &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
 		Status:             ateapipb.Actor_STATUS_PAUSING,
 		AteomPodNamespace:  "default",
 		AteomPodName:       "worker-pod-1",
@@ -56,13 +57,13 @@ func TestFinalizePausedStep_WorkerGone(t *testing.T) {
 	// Intentionally NOT creating the worker in store, simulates worker already gone.
 
 	step := &FinalizePausedStep{store: st}
-	input := &PauseInput{Atespace: atespace, ActorName: actorName}
+	input := &PauseInput{ActorRef: actorRef}
 	state := &PauseState{}
 	if err := step.Execute(ctx, input, state); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
 
-	got, err := st.GetActor(ctx, atespace, actorName)
+	got, err := st.GetActor(ctx, actorRef)
 	if err != nil {
 		t.Fatalf("GetActor: %v", err)
 	}
@@ -121,9 +122,9 @@ func TestPauseActorWorkflow_RejectedAndIdempotentPaths(t *testing.T) {
 			defer cleanup()
 			w := newTestActorWorkflow(t, st, "ns", "tmpl1")
 
-			seedWorkflowActor(t, ctx, st, "team-a", "id1", "ns", "tmpl1", tc.seedStatus)
+			seedWorkflowActor(t, ctx, st, resources.ActorRef{Atespace: "team-a", Name: "id1"}, "ns", "tmpl1", tc.seedStatus)
 
-			actor, err := w.PauseActor(ctx, "team-a", "id1")
+			actor, err := w.PauseActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"})
 			if tc.wantErr {
 				if got := status.Code(err); got != codes.FailedPrecondition {
 					t.Fatalf("status.Code(err) = %v, want %v (err: %v)", got, codes.FailedPrecondition, err)
@@ -137,7 +138,7 @@ func TestPauseActorWorkflow_RejectedAndIdempotentPaths(t *testing.T) {
 				}
 			}
 
-			got, err := st.GetActor(ctx, "team-a", "id1")
+			got, err := st.GetActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"})
 			if err != nil {
 				t.Fatalf("GetActor failed: %v", err)
 			}
@@ -200,7 +201,7 @@ func TestPauseSteps_CheckPrerequisite(t *testing.T) {
 				// Worker pod fields are populated so CallAteletPauseStep's
 				// missing-worker crash branch is not taken; this test only
 				// verifies status gating.
-				err := tc.step.CheckPrerequisite(ctx, &PauseInput{ActorName: "id1"}, &PauseState{Actor: &ateapipb.Actor{Status: st, AteomPodNamespace: "ns", AteomPodName: "worker-1"}})
+				err := tc.step.CheckPrerequisite(ctx, &PauseInput{ActorRef: resources.ActorRef{Name: "id1"}}, &PauseState{Actor: &ateapipb.Actor{Status: st, AteomPodNamespace: "ns", AteomPodName: "worker-1"}})
 				assertPrerequisiteResult(t, st, err, tc.allowed == nil || tc.allowed[st])
 			}
 		})
@@ -246,12 +247,12 @@ func TestCallAteletPauseStep_DanglingWorkerDoesNotRecordPhantomSnapshot(t *testi
 			}
 
 			step := &CallAteletPauseStep{store: persistence, dialer: newDanglingDialer()}
-			input := &PauseInput{ActorName: "actor-1", Atespace: "team-a"}
+			input := &PauseInput{ActorRef: resources.ActorRef{Atespace: "team-a", Name: "actor-1"}}
 			if err := step.Execute(ctx, input, &PauseState{Actor: created}); err == nil {
 				t.Fatal("Execute: want error for dangling worker, got nil")
 			}
 
-			stored, err := persistence.GetActor(ctx, "team-a", "actor-1")
+			stored, err := persistence.GetActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"})
 			if err != nil {
 				t.Fatalf("GetActor: %v", err)
 			}
@@ -282,14 +283,14 @@ func TestPauseActor_CrashesWhenPausingActorMissingWorkerPod(t *testing.T) {
 	defer cleanup()
 	w := newTestActorWorkflow(t, st, "ns", "tmpl1")
 
-	seedWorkflowActor(t, ctx, st, "team-a", "id1", "ns", "tmpl1", ateapipb.Actor_STATUS_PAUSING)
+	seedWorkflowActor(t, ctx, st, resources.ActorRef{Atespace: "team-a", Name: "id1"}, "ns", "tmpl1", ateapipb.Actor_STATUS_PAUSING)
 
-	_, err := w.PauseActor(ctx, "team-a", "id1")
+	_, err := w.PauseActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"})
 	if got := status.Code(err); got != codes.FailedPrecondition {
 		t.Fatalf("status.Code(err) = %v, want %v (err: %v)", got, codes.FailedPrecondition, err)
 	}
 
-	got, err := st.GetActor(ctx, "team-a", "id1")
+	got, err := st.GetActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"})
 	if err != nil {
 		t.Fatalf("GetActor failed: %v", err)
 	}

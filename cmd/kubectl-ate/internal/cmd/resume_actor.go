@@ -19,6 +19,7 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/kubectl-ate/internal/printer"
 	"github.com/agent-substrate/substrate/internal/ateclient"
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/spf13/cobra"
 )
@@ -38,8 +39,9 @@ var resumeActorCmd = &cobra.Command{
 		}
 		defer apiClient.Close()
 
+		actorRef := resources.ActorRef{Atespace: resumeAtespaceFlag, Name: args[0]}
 		resp, err := apiClient.ResumeActor(ctx, &ateapipb.ResumeActorRequest{
-			Actor: &ateapipb.ObjectRef{Atespace: resumeAtespaceFlag, Name: args[0]},
+			Actor: actorRef.ToObjectRef(),
 			Boot:  bootFlag,
 		})
 		if err != nil {

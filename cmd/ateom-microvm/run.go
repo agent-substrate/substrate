@@ -33,6 +33,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/imagecache"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/readyz"
+	"github.com/agent-substrate/substrate/internal/resources"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"golang.org/x/sys/unix"
 	"google.golang.org/grpc/codes"
@@ -198,8 +199,7 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	defer s.lock.Unlock()
 
 	p := actorBootParams{
-		atespace:     req.GetAtespace(),
-		actorName:    req.GetActorName(),
+		actorRef:     resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()},
 		actorUID:     req.GetActorUid(),
 		templateNS:   req.GetActorTemplateNamespace(),
 		templateName: req.GetActorTemplateName(),
@@ -207,11 +207,11 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 		assetPaths:   req.GetRuntimeAssetPaths(),
 	}
 
-	s.actorLogger.EmitLifecycleLog("Actor starting", p.atespace, p.actorName, p.actorUID, p.templateNS, p.templateName)
+	s.actorLogger.EmitLifecycleLog("Actor starting", p.actorRef, p.actorUID, p.templateNS, p.templateName)
 	if err := s.coldBootActor(ctx, p); err != nil {
 		return nil, err
 	}
-	s.actorLogger.EmitLifecycleLog("Actor started", p.atespace, p.actorName, p.actorUID, p.templateNS, p.templateName)
+	s.actorLogger.EmitLifecycleLog("Actor started", p.actorRef, p.actorUID, p.templateNS, p.templateName)
 	slog.InfoContext(ctx, "Actor started (overlay rootfs)", slog.String("id", p.actorUID))
 	return &ateompb.RunWorkloadResponse{}, nil
 }
@@ -220,8 +220,7 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 // request, or from a Restore request whose snapshot scope covers only the
 // durable-dir volumes (the workload itself cold-starts).
 type actorBootParams struct {
-	atespace     string
-	actorName    string
+	actorRef     resources.ActorRef
 	actorUID     string
 	templateNS   string
 	templateName string
@@ -233,7 +232,7 @@ type actorBootParams struct {
 // containers, registering the result in s.running. The caller holds s.lock and
 // owns the lifecycle logging.
 func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (retErr error) {
-	atespace, name, actorUID := p.atespace, p.actorName, p.actorUID
+	actorUID := p.actorUID
 	templateNS, templateName := p.templateNS, p.templateName
 
 	// All of the actor's containers share the one micro-VM (which is the pod
@@ -423,7 +422,7 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 	// that and tag with the display container name. The goroutines read over ac for the
 	// actor's lifetime and exit (io.EOF) when teardownActor closes ac.
 	for _, c := range ctrs {
-		s.startActorLogForwarding(ac, atespace, name, actorUID, templateNS, templateName, overlayWorkloadID(c.name), c.name)
+		s.startActorLogForwarding(ac, p.actorRef, actorUID, templateNS, templateName, overlayWorkloadID(c.name), c.name)
 	}
 
 	return nil
@@ -652,9 +651,9 @@ func startOverlayContainer(ctx context.Context, ac *kata.AgentClient, vsockPath 
 // ending WrapContainerLogs. This keeps the agent connection (which ttrpc allows
 // concurrent Calls on) alive for forwarding while guaranteeing no goroutine outlives
 // the connection.
-func (s *AteomService) startActorLogForwarding(ac *kata.AgentClient, atespace, actorName, actorUID, actorTemplateNamespace, actorTemplateName, streamID, containerName string) {
-	go s.actorLogger.WrapContainerLogs(kata.NewStdioReader(context.Background(), ac, streamID, streamID, false), atespace, actorName, actorUID, actorTemplateNamespace, actorTemplateName, containerName)
-	go s.actorLogger.WrapContainerLogs(kata.NewStdioReader(context.Background(), ac, streamID, streamID, true), atespace, actorName, actorUID, actorTemplateNamespace, actorTemplateName, containerName)
+func (s *AteomService) startActorLogForwarding(ac *kata.AgentClient, actorRef resources.ActorRef, actorUID, actorTemplateNamespace, actorTemplateName, streamID, containerName string) {
+	go s.actorLogger.WrapContainerLogs(kata.NewStdioReader(context.Background(), ac, streamID, streamID, false), actorRef, actorUID, actorTemplateNamespace, actorTemplateName, containerName)
+	go s.actorLogger.WrapContainerLogs(kata.NewStdioReader(context.Background(), ac, streamID, streamID, true), actorRef, actorUID, actorTemplateNamespace, actorTemplateName, containerName)
 }
 
 // dialAgentRetry polls DialAgent until the kata-agent answers the hybrid-vsock

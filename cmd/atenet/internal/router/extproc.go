@@ -142,16 +142,16 @@ func (s *ExtProcServer) handleRequestHeaders(
 	ctx, span := otel.Tracer(routerServiceName).Start(ctx, "ExtProc.RequestHeaders")
 	defer span.End()
 
-	atespace, actorName, err := parseActorRef(metadata.host)
+	actorRef, err := parseActorRef(metadata.host)
 	if err != nil {
 		// Host is invalid, respond with 404.
 		return nil, metadata, "", "", "", invalidHostErr(metadata.host, err)
 	}
 
-	slog.InfoContext(ctx, "ResumeActor", slog.String("atespace", atespace), slog.String("actor", actorName))
-	actor, err := s.resumer.ResumeActor(ctx, atespace, actorName)
+	slog.InfoContext(ctx, "ResumeActor", slog.Any("actor", actorRef))
+	actor, err := s.resumer.ResumeActor(ctx, actorRef)
 	if err != nil {
-		return nil, metadata, "", "", "", mapResumeError(actorName, err)
+		return nil, metadata, "", "", "", mapResumeError(actorRef.Name, err)
 	}
 
 	// Actor template identity, used as low-cardinality route-latency metric
@@ -161,20 +161,19 @@ func (s *ExtProcServer) handleRequestHeaders(
 
 	workerIP := actor.GetAteomPodIp()
 	slog.InfoContext(ctx, "ResumeActor result",
-		slog.String("atespace", atespace),
-		slog.String("actor", actorName),
+		slog.Any("actor", actorRef),
 		slog.String("status", actor.GetStatus().String()),
 		slog.String("workerIP", workerIP))
 
 	if ip := net.ParseIP(workerIP); ip == nil {
 		return nil, metadata, "", tmplNs, tmplName, newReqError(envoy_type.StatusCode_InternalServerError,
-			"actor %q routing failed", actorName)
+			"actor %q routing failed", actorRef.Name)
 	}
 
 	// TODO(bowei) -- handle more than port 80 on the actor.
 	targetAddr := net.JoinHostPort(workerIP, "80")
 
-	slog.InfoContext(ctx, "Route ok", slog.String("actor", actorName), slog.String("targetAddr", targetAddr))
+	slog.InfoContext(ctx, "Route ok", slog.Any("actor", actorRef), slog.String("targetAddr", targetAddr))
 
 	// Route by rewriting the :authority header.
 	mutation := &extprocv3.HeaderMutation{}

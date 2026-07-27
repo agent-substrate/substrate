@@ -18,6 +18,7 @@ import (
 	"reflect"
 	"testing"
 
+	"github.com/agent-substrate/substrate/internal/resources"
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 )
 
@@ -121,39 +122,34 @@ func TestExtractMetadata(t *testing.T) {
 
 func TestParseActorRef(t *testing.T) {
 	tests := []struct {
-		name         string
-		host         string
-		wantAtespace string
-		wantID       string
-		wantErr      bool
+		name    string
+		host    string
+		want    resources.ActorRef
+		wantErr bool
 	}{
 		{
-			name:         "valid host without port",
-			host:         "my-actor.team-a.actors.resources.substrate.ate.dev",
-			wantAtespace: "team-a",
-			wantID:       "my-actor",
-			wantErr:      false,
+			name:    "valid host without port",
+			host:    "my-actor.team-a.actors.resources.substrate.ate.dev",
+			want:    resources.ActorRef{Atespace: "team-a", Name: "my-actor"},
+			wantErr: false,
 		},
 		{
-			name:         "valid host with port",
-			host:         "my-actor.team-a.actors.resources.substrate.ate.dev:8443",
-			wantAtespace: "team-a",
-			wantID:       "my-actor",
-			wantErr:      false,
+			name:    "valid host with port",
+			host:    "my-actor.team-a.actors.resources.substrate.ate.dev:8443",
+			want:    resources.ActorRef{Atespace: "team-a", Name: "my-actor"},
+			wantErr: false,
 		},
 		{
-			name:         "valid host with trailing dot",
-			host:         "my-actor.team-a.actors.resources.substrate.ate.dev.",
-			wantAtespace: "team-a",
-			wantID:       "my-actor",
-			wantErr:      false,
+			name:    "valid host with trailing dot",
+			host:    "my-actor.team-a.actors.resources.substrate.ate.dev.",
+			want:    resources.ActorRef{Atespace: "team-a", Name: "my-actor"},
+			wantErr: false,
 		},
 		{
-			name:         "valid host with trailing dot and port",
-			host:         "my-actor.team-a.actors.resources.substrate.ate.dev.:8080",
-			wantAtespace: "team-a",
-			wantID:       "my-actor",
-			wantErr:      false,
+			name:    "valid host with trailing dot and port",
+			host:    "my-actor.team-a.actors.resources.substrate.ate.dev.:8080",
+			want:    resources.ActorRef{Atespace: "team-a", Name: "my-actor"},
+			wantErr: false,
 		},
 		{
 			name:    "missing atespace label",
@@ -174,13 +170,13 @@ func TestParseActorRef(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			gotAtespace, gotID, err := parseActorRef(tc.host)
+			got, err := parseActorRef(tc.host)
 			if (err != nil) != tc.wantErr {
 				t.Errorf("parseActorRef(%q) error = %v, wantErr %v", tc.host, err, tc.wantErr)
 				return
 			}
-			if gotAtespace != tc.wantAtespace || gotID != tc.wantID {
-				t.Errorf("parseActorRef(%q) = (%q, %q), want (%q, %q)", tc.host, gotAtespace, gotID, tc.wantAtespace, tc.wantID)
+			if got != tc.want {
+				t.Errorf("parseActorRef(%q) = %+v, want %+v", tc.host, got, tc.want)
 			}
 		})
 	}

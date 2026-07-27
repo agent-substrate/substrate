@@ -31,11 +31,12 @@ func (s *Service) UpdateActor(ctx context.Context, req *ateapipb.UpdateActorRequ
 	if err := validateUpdateActorRequest(req); err != nil {
 		return nil, err
 	}
+	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
 
-	actor, err := s.persistence.GetActor(ctx, req.GetActor().GetAtespace(), req.GetActor().GetName())
+	actor, err := s.persistence.GetActor(ctx, actorRef)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, status.Errorf(codes.NotFound, "Actor %s not found", req.GetActor().GetName())
+			return nil, status.Errorf(codes.NotFound, "Actor %s not found", actorRef.Name)
 		}
 		return nil, fmt.Errorf("while getting actor: %w", err)
 	}

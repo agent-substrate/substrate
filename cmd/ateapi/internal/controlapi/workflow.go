@@ -22,6 +22,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/scheduling"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
+	"github.com/agent-substrate/substrate/internal/resources"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/otel"
@@ -164,15 +165,14 @@ func NewActorWorkflow(
 }
 
 // ResumeActor executes the workflow to resume a suspended actor. Idempotent.
-func (w *ActorWorkflow) ResumeActor(ctx context.Context, atespace, name string, boot bool) (*ateapipb.Actor, error) {
+func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.ActorRef, boot bool) (*ateapipb.Actor, error) {
 	input := &ResumeInput{
-		ActorName: name,
-		Atespace:  atespace,
-		Boot:      boot,
+		ActorRef: actorRef,
+		Boot:     boot,
 	}
 	state := &ResumeState{}
 
-	ctx, lock, err := w.acquireActorLock(ctx, atespace, name)
+	ctx, lock, err := w.acquireActorLock(ctx, actorRef)
 	if err != nil {
 		return nil, err
 	}
@@ -194,14 +194,13 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, atespace, name string, 
 }
 
 // SuspendActor executes the workflow to suspend a running actor. Idempotent.
-func (w *ActorWorkflow) SuspendActor(ctx context.Context, atespace, name string) (*ateapipb.Actor, error) {
+func (w *ActorWorkflow) SuspendActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error) {
 	input := &SuspendInput{
-		ActorName: name,
-		Atespace:  atespace,
+		ActorRef: actorRef,
 	}
 	state := &SuspendState{}
 
-	ctx, lock, err := w.acquireActorLock(ctx, atespace, name)
+	ctx, lock, err := w.acquireActorLock(ctx, actorRef)
 	if err != nil {
 		return nil, err
 	}
@@ -223,14 +222,13 @@ func (w *ActorWorkflow) SuspendActor(ctx context.Context, atespace, name string)
 }
 
 // PauseActor executes the workflow to pause a running actor. Idempotent.
-func (w *ActorWorkflow) PauseActor(ctx context.Context, atespace, name string) (*ateapipb.Actor, error) {
+func (w *ActorWorkflow) PauseActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error) {
 	input := &PauseInput{
-		ActorName: name,
-		Atespace:  atespace,
+		ActorRef: actorRef,
 	}
 	state := &PauseState{}
 
-	ctx, lock, err := w.acquireActorLock(ctx, atespace, name)
+	ctx, lock, err := w.acquireActorLock(ctx, actorRef)
 	if err != nil {
 		return nil, err
 	}
@@ -251,8 +249,8 @@ func (w *ActorWorkflow) PauseActor(ctx context.Context, atespace, name string) (
 	return state.Actor, nil
 }
 
-func (w *ActorWorkflow) acquireActorLock(ctx context.Context, atespace, name string) (context.Context, *store.Lock, error) {
-	lockKey := "lock:actor:" + atespace + ":" + name
+func (w *ActorWorkflow) acquireActorLock(ctx context.Context, actorRef resources.ActorRef) (context.Context, *store.Lock, error) {
+	lockKey := "lock:actor:" + actorRef.Atespace + ":" + actorRef.Name
 
 	lock, err := w.store.AcquireLock(ctx, lockKey)
 	if err != nil {

@@ -22,6 +22,7 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/ateerrors"
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -29,26 +30,26 @@ import (
 
 // maybeCrashActor inspects err returned by an atelet RPC, it crashes
 // the actor if the err carries the actorCrashed=true metadata directive.
-func maybeCrashActor(ctx context.Context, st store.Interface, atespace, actorName string, err error, wrapMsg string) error {
+func maybeCrashActor(ctx context.Context, st store.Interface, actorRef resources.ActorRef, err error, wrapMsg string) error {
 	if err == nil {
 		return nil
 	}
 
 	if ateerrors.ActorCrashRequested(err) {
 		slog.ErrorContext(ctx, "Setting Actor to crashed due to error", slog.Any("error", err))
-		if cerr := crashActor(ctx, st, atespace, actorName); cerr != nil {
+		if cerr := crashActor(ctx, st, actorRef); cerr != nil {
 			slog.ErrorContext(ctx, "Failed to crash actor", slog.Any("cerr", cerr))
 			return cerr
 		}
-		return status.Errorf(codes.DataLoss, "actor %s crashed", actorName)
+		return status.Errorf(codes.DataLoss, "actor %s crashed", actorRef.Name)
 	}
 	return fmt.Errorf("%s: %w", wrapMsg, err)
 }
 
 // crashActor moves the actor to CRASHED state and frees the worker it was
 // assigned to, if any, so the worker can host other actors.
-func crashActor(ctx context.Context, st store.Interface, atespace, actorName string) error {
-	actor, err := st.GetActor(ctx, atespace, actorName)
+func crashActor(ctx context.Context, st store.Interface, actorRef resources.ActorRef) error {
+	actor, err := st.GetActor(ctx, actorRef)
 	if err != nil {
 		return fmt.Errorf("while loading actor to crash: %w", err)
 	}
@@ -102,7 +103,7 @@ func releaseWorker(ctx context.Context, st store.Interface, actor *ateapipb.Acto
 		return nil
 	}
 	// Only free it if it still belongs to us
-	if wass.GetActor().GetAtespace() != actor.GetMetadata().GetAtespace() || wass.GetActor().GetName() != actor.GetMetadata().GetName() {
+	if resources.ActorRefFromObjectRef(wass.GetActor()) != resources.ActorRefFromActor(actor) {
 		slog.WarnContext(ctx, "Worker already assigned to another Actor", slog.String("worker", podUid))
 		return nil
 	}

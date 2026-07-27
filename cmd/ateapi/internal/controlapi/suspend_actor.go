@@ -30,15 +30,16 @@ func (s *Service) SuspendActor(ctx context.Context, req *ateapipb.SuspendActorRe
 	if err := validateSuspendActorRequest(req); err != nil {
 		return nil, err
 	}
-	setSpanActorRefAttributes(ctx, req.GetActor().GetAtespace(), req.GetActor().GetName())
+	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
+	setSpanActorRefAttributes(ctx, actorRef)
 
-	actor, err := s.actorWorkflow.SuspendActor(ctx, req.GetActor().GetAtespace(), req.GetActor().GetName())
+	actor, err := s.actorWorkflow.SuspendActor(ctx, actorRef)
 	if err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {
 			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
 		}
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, status.Errorf(codes.NotFound, "Actor %s not found", req.GetActor().GetName())
+			return nil, status.Errorf(codes.NotFound, "Actor %s not found", actorRef.Name)
 		}
 		return nil, err
 	}

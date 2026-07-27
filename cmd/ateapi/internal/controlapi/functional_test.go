@@ -31,6 +31,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/envtestbins"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
+	"github.com/agent-substrate/substrate/internal/resources"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/client/clientset/versioned"
 	"github.com/agent-substrate/substrate/pkg/client/informers/externalversions"
@@ -1473,7 +1474,7 @@ func TestResumeActor_Reentrancy(t *testing.T) {
 	}
 
 	// Verify actor state is RESUMING in Redis!
-	actor, err := tc.persistence.GetActor(context.Background(), testAtespace, name)
+	actor, err := tc.persistence.GetActor(context.Background(), resources.ActorRef{Atespace: testAtespace, Name: name})
 	if err != nil {
 		t.Fatalf("failed to get actor from store: %v", err)
 	}
@@ -1497,7 +1498,7 @@ func TestResumeActor_Reentrancy(t *testing.T) {
 	}
 
 	// Verify actor state is RUNNING!
-	actor, err = tc.persistence.GetActor(context.Background(), testAtespace, name)
+	actor, err = tc.persistence.GetActor(context.Background(), resources.ActorRef{Atespace: testAtespace, Name: name})
 	if err != nil {
 		t.Fatalf("failed to get actor from store: %v", err)
 	}
@@ -2473,7 +2474,7 @@ func TestResumeActor_DanglingWorker(t *testing.T) {
 	}
 
 	// Verify actor state is RUNNING with worker B assigned
-	actor, err = tc.persistence.GetActor(context.Background(), testAtespace, name)
+	actor, err = tc.persistence.GetActor(context.Background(), resources.ActorRef{Atespace: testAtespace, Name: name})
 	if err != nil {
 		t.Fatalf("failed to get actor from store: %v", err)
 	}
@@ -2626,7 +2627,7 @@ func TestDeleteActor_Crashed(t *testing.T) {
 		t.Fatalf("CreateActor failed: %v", err)
 	}
 
-	actor, err := tc.persistence.GetActor(context.Background(), testAtespace, "id1")
+	actor, err := tc.persistence.GetActor(context.Background(), resources.ActorRef{Atespace: testAtespace, Name: "id1"})
 	if err != nil {
 		t.Fatalf("GetActor failed: %v", err)
 	}

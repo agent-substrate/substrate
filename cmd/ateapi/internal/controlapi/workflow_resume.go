@@ -25,6 +25,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
+	"github.com/agent-substrate/substrate/internal/resources"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -39,9 +40,8 @@ import (
 
 // ResumeInput holds the immutable parameters requested by the client.
 type ResumeInput struct {
-	ActorName string
-	Atespace  string
-	Boot      bool
+	ActorRef resources.ActorRef
+	Boot     bool
 }
 
 // ResumeState holds the mutable state loaded and modified during execution.
@@ -65,10 +65,10 @@ func (s *LoadActorForResumeStep) CheckPrerequisite(ctx context.Context, input *R
 	return nil
 }
 func (s *LoadActorForResumeStep) Execute(ctx context.Context, input *ResumeInput, state *ResumeState) error {
-	actor, err := s.store.GetActor(ctx, input.Atespace, input.ActorName)
+	actor, err := s.store.GetActor(ctx, input.ActorRef)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return status.Errorf(codes.NotFound, "Actor %s not found", input.ActorName)
+			return status.Errorf(codes.NotFound, "Actor %s not found", input.ActorRef.Name)
 		}
 		return fmt.Errorf("while getting actor from DB: %w", err)
 	}
@@ -91,20 +91,20 @@ func (s *LoadActorForResumeStep) Execute(ctx context.Context, input *ResumeInput
 				slog.String("AteomPodName", actor.AteomPodName))
 
 			// Crash the actor if its worker assignment is corrupted. We should never be in this state.
-			if cerr := crashActor(ctx, s.store, input.Atespace, input.ActorName); cerr != nil {
+			if cerr := crashActor(ctx, s.store, input.ActorRef); cerr != nil {
 				return cerr
 			}
-			return status.Errorf(codes.Aborted, "actor %s crashed", input.ActorName)
+			return status.Errorf(codes.Aborted, "actor %s crashed", input.ActorRef.Name)
 		}
 
 		wk, err := s.store.GetWorker(ctx, actor.AteomPodNamespace, actor.WorkerPoolName, actor.AteomPodName)
 		if err != nil {
 			// Crash the actor if it was assigned to a deleted pod.
 			if errors.Is(err, store.ErrNotFound) {
-				if cerr := crashActor(ctx, s.store, input.Atespace, input.ActorName); cerr != nil {
+				if cerr := crashActor(ctx, s.store, input.ActorRef); cerr != nil {
 					return cerr
 				}
-				return status.Errorf(codes.Aborted, "actor %s crashed", input.ActorName)
+				return status.Errorf(codes.Aborted, "actor %s crashed", input.ActorRef.Name)
 			}
 			return fmt.Errorf("failed to get already assigned worker for actor %w", err)
 		}
@@ -133,7 +133,7 @@ func (s *AssignWorkerStep) CheckPrerequisite(ctx context.Context, input *ResumeI
 	case ateapipb.Actor_STATUS_SUSPENDED, ateapipb.Actor_STATUS_PAUSED:
 		return nil
 	default:
-		return status.Errorf(codes.FailedPrecondition, "AssignWorkerStep prerequisite not met for Actor: %s (got: %v, want %s or %s)", input.ActorName, state.Actor.GetStatus(), ateapipb.Actor_STATUS_SUSPENDED, ateapipb.Actor_STATUS_PAUSED)
+		return status.Errorf(codes.FailedPrecondition, "AssignWorkerStep prerequisite not met for Actor: %s (got: %v, want %s or %s)", input.ActorRef.Name, state.Actor.GetStatus(), ateapipb.Actor_STATUS_SUSPENDED, ateapipb.Actor_STATUS_PAUSED)
 	}
 }
 
@@ -157,7 +157,7 @@ func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, stat
 		if worker.Assignment == nil {
 			continue
 		}
-		if worker.Assignment.Actor.Atespace != input.Atespace || worker.Assignment.Actor.Name != input.ActorName {
+		if resources.ActorRefFromObjectRef(worker.Assignment.Actor) != input.ActorRef {
 			continue
 		}
 		if s.scheduler.Applies(worker, constraints) {
@@ -203,10 +203,7 @@ func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, stat
 			Namespace: state.Actor.GetActorTemplateNamespace(),
 			Name:      state.Actor.GetActorTemplateName(),
 		},
-		Actor: &ateapipb.ObjectRef{
-			Name:     input.ActorName,
-			Atespace: state.Actor.GetMetadata().GetAtespace(),
-		},
+		Actor: input.ActorRef.ToObjectRef(),
 	}
 
 	if err := s.store.UpdateWorker(ctx, assignedWorker, assignedWorker.Version); err != nil {
@@ -226,18 +223,18 @@ func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, stat
 			return err
 		}
 		// refresh the version of actor to avoid always failure in rest retries.
-		fresh, gerr := s.store.GetActor(ctx, input.Atespace, input.ActorName)
+		fresh, gerr := s.store.GetActor(ctx, input.ActorRef)
 		if gerr != nil {
 			slog.WarnContext(ctx, "Failed to refresh actor after assignment conflict", slog.Any("err", gerr))
 			return err
 		}
 		switch fresh.GetStatus() {
 		case ateapipb.Actor_STATUS_SUSPENDED, ateapipb.Actor_STATUS_PAUSED:
-			slog.InfoContext(ctx, "Retrying assignment due to actor version conflict", slog.String("actor", input.Atespace+"/"+input.ActorName))
+			slog.InfoContext(ctx, "Retrying assignment due to actor version conflict", slog.Any("actor", input.ActorRef))
 			state.Actor = fresh
 			return err
 		default:
-			return status.Errorf(codes.Aborted, "actor %s is %s and can no longer be resumed", input.ActorName, fresh.GetStatus())
+			return status.Errorf(codes.Aborted, "actor %s is %s and can no longer be resumed", input.ActorRef.Name, fresh.GetStatus())
 		}
 	}
 	state.Actor = updatedActor
@@ -329,21 +326,21 @@ func (s *CallAteletRestoreStep) IsComplete(ctx context.Context, input *ResumeInp
 }
 func (s *CallAteletRestoreStep) CheckPrerequisite(ctx context.Context, input *ResumeInput, state *ResumeState) error {
 	if state.Actor.GetStatus() != ateapipb.Actor_STATUS_RESUMING {
-		return status.Errorf(codes.FailedPrecondition, "CallAteletRestoreStep prerequisite not met for Actor: %s (got: %v, want %s)", input.ActorName, state.Actor.GetStatus(), ateapipb.Actor_STATUS_RESUMING)
+		return status.Errorf(codes.FailedPrecondition, "CallAteletRestoreStep prerequisite not met for Actor: %s (got: %v, want %s)", input.ActorRef.Name, state.Actor.GetStatus(), ateapipb.Actor_STATUS_RESUMING)
 	}
 	if state.Worker == nil {
 		return status.Errorf(codes.FailedPrecondition, "Assigned worker is nil")
 	}
 	// Verify if the worker is still assigned to the same Actor.
 	assigned := state.Worker.GetAssignment().GetActor()
-	if assigned.GetAtespace() != input.Atespace || assigned.GetName() != input.ActorName {
+	if resources.ActorRefFromObjectRef(assigned) != input.ActorRef {
 		slog.ErrorContext(ctx, "crashing actor because its assigned worker no longer belongs to it",
 			slog.String("worker", state.Worker.GetWorkerPod()),
 			slog.Any("assignment", state.Worker.GetAssignment()))
-		if cerr := crashActor(ctx, s.store, input.Atespace, input.ActorName); cerr != nil {
+		if cerr := crashActor(ctx, s.store, input.ActorRef); cerr != nil {
 			return fmt.Errorf("while crashing actor: %w", cerr)
 		}
-		return status.Errorf(codes.Aborted, "actor %s crashed", input.ActorName)
+		return status.Errorf(codes.Aborted, "actor %s crashed", input.ActorRef.Name)
 	}
 	constraints, err := schedulingConstraints(state.Actor, state.ActorTemplate)
 	if err != nil {
@@ -360,10 +357,10 @@ func (s *CallAteletRestoreStep) CheckPrerequisite(ctx context.Context, input *Re
 		if err := s.store.UpdateWorker(ctx, release, release.Version); err != nil {
 			return fmt.Errorf("while releasing stale worker assignment: %w", err)
 		}
-		if cerr := crashActor(ctx, s.store, input.Atespace, input.ActorName); cerr != nil {
+		if cerr := crashActor(ctx, s.store, input.ActorRef); cerr != nil {
 			return fmt.Errorf("while crashing actor: %w", cerr)
 		}
-		return status.Errorf(codes.Aborted, "actor %s crashed", input.ActorName)
+		return status.Errorf(codes.Aborted, "actor %s crashed", input.ActorRef.Name)
 	}
 	return nil
 }
@@ -413,7 +410,7 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 		}
 
 		_, err = client.Restore(ctx, req)
-		return maybeCrashActor(ctx, s.store, input.Atespace, input.ActorName, err, "while restoring workload")
+		return maybeCrashActor(ctx, s.store, input.ActorRef, err, "while restoring workload")
 	} else if state.ActorTemplate.Status.GoldenSnapshot != "" && !input.Boot {
 		slog.InfoContext(ctx, "Actor has no snapshot; ActorTemplate has golden snapshot; Restoring from golden snapshot")
 
@@ -436,7 +433,7 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 			ActorUid: state.Actor.GetMetadata().Uid,
 		}
 		_, err = client.Restore(ctx, req)
-		return maybeCrashActor(ctx, s.store, input.Atespace, input.ActorName, err, "while creating workload from golden snapshot")
+		return maybeCrashActor(ctx, s.store, input.ActorRef, err, "while creating workload from golden snapshot")
 	} else {
 		slog.InfoContext(ctx, "Actor has no snapshot; ActorTemplate has no golden snapshot; Booting from ActorTemplate spec")
 
@@ -459,7 +456,7 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 			ActorUid:               state.Actor.GetMetadata().Uid,
 		}
 		_, err = client.Run(ctx, req)
-		return maybeCrashActor(ctx, s.store, input.Atespace, input.ActorName, err, "while creating workload from spec")
+		return maybeCrashActor(ctx, s.store, input.ActorRef, err, "while creating workload from spec")
 	}
 	// Unreachable
 }
@@ -476,12 +473,12 @@ func (s *FinalizeRunningStep) IsComplete(ctx context.Context, input *ResumeInput
 }
 func (s *FinalizeRunningStep) CheckPrerequisite(ctx context.Context, input *ResumeInput, state *ResumeState) error {
 	if state.Actor.GetStatus() != ateapipb.Actor_STATUS_RESUMING {
-		return status.Errorf(codes.FailedPrecondition, "FinalizeRunningStep prerequisite not met for Actor: %s (got: %v, want %s)", input.ActorName, state.Actor.GetStatus(), ateapipb.Actor_STATUS_RESUMING)
+		return status.Errorf(codes.FailedPrecondition, "FinalizeRunningStep prerequisite not met for Actor: %s (got: %v, want %s)", input.ActorRef.Name, state.Actor.GetStatus(), ateapipb.Actor_STATUS_RESUMING)
 	}
 	return nil
 }
 func (s *FinalizeRunningStep) Execute(ctx context.Context, input *ResumeInput, state *ResumeState) error {
-	latestActor, err := s.store.GetActor(ctx, input.Atespace, input.ActorName)
+	latestActor, err := s.store.GetActor(ctx, input.ActorRef)
 	if err != nil {
 		return err
 	}

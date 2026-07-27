@@ -25,6 +25,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
+	"github.com/agent-substrate/substrate/internal/resources"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
@@ -67,7 +68,7 @@ func TestAssignWorkerStep_SkipsWorkerAssignedInOtherAtespace(t *testing.T) {
 			Spec: atev1alpha1.ActorTemplateSpec{SandboxClass: atev1alpha1.SandboxClassGvisor},
 		},
 	}
-	err := step.Execute(ctx, &ResumeInput{ActorName: "shared", Atespace: "team-a"}, state)
+	err := step.Execute(ctx, &ResumeInput{ActorRef: resources.ActorRef{Atespace: "team-a", Name: "shared"}}, state)
 	if status.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("Execute() error = %v, want FailedPrecondition (no free workers)", err)
 	}
@@ -134,7 +135,7 @@ func TestAssignWorkerStep_ReleasesIneligibleStaleWorkerInBackground(t *testing.T
 			Spec: atev1alpha1.ActorTemplateSpec{SandboxClass: atev1alpha1.SandboxClassGvisor},
 		},
 	}
-	if err := step.Execute(ctx, &ResumeInput{ActorName: "id1", Atespace: "team-a"}, state); err != nil {
+	if err := step.Execute(ctx, &ResumeInput{ActorRef: resources.ActorRef{Atespace: "team-a", Name: "id1"}}, state); err != nil {
 		t.Fatalf("Execute() error = %v, want nil (release must not fail the resume)", err)
 	}
 
@@ -232,7 +233,7 @@ func TestAssignWorkerStep_RetryAfterConflictPicksFreshWorker(t *testing.T) {
 			Spec: atev1alpha1.ActorTemplateSpec{SandboxClass: atev1alpha1.SandboxClassGvisor},
 		},
 	}
-	if err := step.Execute(ctx, &ResumeInput{ActorName: "id1", Atespace: "team-a"}, state); err != nil {
+	if err := step.Execute(ctx, &ResumeInput{ActorRef: resources.ActorRef{Atespace: "team-a", Name: "id1"}}, state); err != nil {
 		t.Fatalf("Execute() on retry = %v, want nil (must re-pick a free worker)", err)
 	}
 	if got := state.Worker.GetWorkerPod(); got != "fallback-pod" {
@@ -254,7 +255,7 @@ func TestAssignWorkerStep_RetryAfterConflictPicksFreshWorker(t *testing.T) {
 		t.Errorf("fallback worker assignment = %v, want actor %q", storedFallback.GetAssignment(), "id1")
 	}
 
-	storedActor, err := persistence.GetActor(ctx, "team-a", "id1")
+	storedActor, err := persistence.GetActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"})
 	if err != nil {
 		t.Fatalf("GetActor: %v", err)
 	}
@@ -433,7 +434,7 @@ func TestResumeActorWorkflow_RejectedAndIdempotentPaths(t *testing.T) {
 			defer cleanup()
 			w := newTestActorWorkflow(t, st, "ns", "tmpl1")
 
-			seedWorkflowActor(t, ctx, st, "team-a", "id1", "ns", "tmpl1", tc.seedStatus, func(a *ateapipb.Actor) {
+			seedWorkflowActor(t, ctx, st, resources.ActorRef{Atespace: "team-a", Name: "id1"}, "ns", "tmpl1", tc.seedStatus, func(a *ateapipb.Actor) {
 				a.AteomPodNamespace = "wns"
 				a.AteomPodName = "wpod"
 				a.AteomPodIp = "1.2.3.4"
@@ -441,7 +442,7 @@ func TestResumeActorWorkflow_RejectedAndIdempotentPaths(t *testing.T) {
 				a.WorkerPoolName = "pool1"
 			})
 
-			actor, err := w.ResumeActor(ctx, "team-a", "id1", false)
+			actor, err := w.ResumeActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, false)
 			if tc.wantErr {
 				if got := status.Code(err); got != codes.FailedPrecondition {
 					t.Fatalf("status.Code(err) = %v, want %v (err: %v)", got, codes.FailedPrecondition, err)
@@ -455,7 +456,7 @@ func TestResumeActorWorkflow_RejectedAndIdempotentPaths(t *testing.T) {
 				}
 			}
 
-			got, err := st.GetActor(ctx, "team-a", "id1")
+			got, err := st.GetActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"})
 			if err != nil {
 				t.Fatalf("GetActor failed: %v", err)
 			}
@@ -527,7 +528,7 @@ func TestResumeSteps_CheckPrerequisite(t *testing.T) {
 					},
 					ActorTemplate: &atev1alpha1.ActorTemplate{Spec: atev1alpha1.ActorTemplateSpec{SandboxClass: atev1alpha1.SandboxClassGvisor}},
 				}
-				err := tc.step.CheckPrerequisite(ctx, &ResumeInput{ActorName: "id1"}, state)
+				err := tc.step.CheckPrerequisite(ctx, &ResumeInput{ActorRef: resources.ActorRef{Name: "id1"}}, state)
 				assertPrerequisiteResult(t, st, err, tc.allowed == nil || tc.allowed[st])
 			}
 		})
@@ -543,16 +544,16 @@ func TestResumeActor_CrashesOnCorruptWorkerAssignment(t *testing.T) {
 	defer cleanup()
 	w := newTestActorWorkflow(t, st, "ns", "tmpl1")
 
-	seedWorkflowActor(t, ctx, st, "team-a", "id1", "ns", "tmpl1", ateapipb.Actor_STATUS_RESUMING, func(a *ateapipb.Actor) {
+	seedWorkflowActor(t, ctx, st, resources.ActorRef{Atespace: "team-a", Name: "id1"}, "ns", "tmpl1", ateapipb.Actor_STATUS_RESUMING, func(a *ateapipb.Actor) {
 		a.AteomPodName = "worker-1" // AteomPodUid and WorkerPoolName left empty
 	})
 
-	_, err := w.ResumeActor(ctx, "team-a", "id1", false)
+	_, err := w.ResumeActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, false)
 	if got := status.Code(err); got != codes.Aborted {
 		t.Fatalf("status.Code(err) = %v, want %v (err: %v)", got, codes.Aborted, err)
 	}
 
-	got, err := st.GetActor(ctx, "team-a", "id1")
+	got, err := st.GetActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"})
 	if err != nil {
 		t.Fatalf("GetActor failed: %v", err)
 	}
@@ -644,7 +645,7 @@ func TestCallAteletRestoreStep_CheckPrerequisite_WorkerOwnership(t *testing.T) {
 				t.Fatalf("GetWorker: %v", err)
 			}
 
-			seedWorkflowActor(t, ctx, persistence, "team-a", "shared", "ns", "tmpl1", ateapipb.Actor_STATUS_RESUMING)
+			seedWorkflowActor(t, ctx, persistence, resources.ActorRef{Atespace: "team-a", Name: "shared"}, "ns", "tmpl1", ateapipb.Actor_STATUS_RESUMING)
 
 			step := &CallAteletRestoreStep{store: persistence, scheduler: scheduling.New(nil)}
 			state := &ResumeState{
@@ -655,12 +656,12 @@ func TestCallAteletRestoreStep_CheckPrerequisite_WorkerOwnership(t *testing.T) {
 				Worker:        seeded,
 				ActorTemplate: &atev1alpha1.ActorTemplate{Spec: atev1alpha1.ActorTemplateSpec{SandboxClass: atev1alpha1.SandboxClassGvisor}},
 			}
-			err = step.CheckPrerequisite(ctx, &ResumeInput{Atespace: "team-a", ActorName: "shared"}, state)
+			err = step.CheckPrerequisite(ctx, &ResumeInput{ActorRef: resources.ActorRef{Atespace: "team-a", Name: "shared"}}, state)
 			if got := status.Code(err); got != tt.wantCode {
 				t.Fatalf("status.Code(err) = %v, want %v (err: %v)", got, tt.wantCode, err)
 			}
 
-			actor, err := persistence.GetActor(ctx, "team-a", "shared")
+			actor, err := persistence.GetActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "shared"})
 			if err != nil {
 				t.Fatalf("GetActor: %v", err)
 			}

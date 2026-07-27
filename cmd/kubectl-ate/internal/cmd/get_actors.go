@@ -19,6 +19,7 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/kubectl-ate/internal/printer"
 	"github.com/agent-substrate/substrate/internal/ateclient"
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/spf13/cobra"
 )
@@ -55,7 +56,8 @@ var getActorsCmd = &cobra.Command{
 
 			actors := make([]*ateapipb.Actor, 0, len(args))
 			for _, actorName := range args {
-				resp, err := apiClient.GetActor(ctx, &ateapipb.GetActorRequest{Actor: &ateapipb.ObjectRef{Atespace: getActorsAtespaceFlag, Name: actorName}})
+				actorRef := resources.ActorRef{Atespace: getActorsAtespaceFlag, Name: actorName}
+				resp, err := apiClient.GetActor(ctx, &ateapipb.GetActorRequest{Actor: actorRef.ToObjectRef()})
 				if err != nil {
 					return fmt.Errorf("failed to get actor %q: %w", actorName, err)
 				}

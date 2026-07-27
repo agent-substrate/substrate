@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/internal/resources"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -47,10 +48,10 @@ func newTestActorWorkflow(t *testing.T, st store.Interface, tmplNamespace, tmplN
 // seedWorkflowActor stores an actor with the given status, bound to the given
 // template (pass the same tmplNamespace/tmplName as newTestActorWorkflow).
 // opts mutate the actor before it is stored.
-func seedWorkflowActor(t *testing.T, ctx context.Context, st store.Interface, atespace, id, tmplNamespace, tmplName string, actorStatus ateapipb.Actor_Status, opts ...func(*ateapipb.Actor)) {
+func seedWorkflowActor(t *testing.T, ctx context.Context, st store.Interface, actorRef resources.ActorRef, tmplNamespace, tmplName string, actorStatus ateapipb.Actor_Status, opts ...func(*ateapipb.Actor)) {
 	t.Helper()
 	actor := &ateapipb.Actor{
-		Metadata:               &ateapipb.ResourceMetadata{Name: id, Atespace: atespace},
+		Metadata:               &ateapipb.ResourceMetadata{Name: actorRef.Name, Atespace: actorRef.Atespace},
 		Status:                 actorStatus,
 		ActorTemplateNamespace: tmplNamespace,
 		ActorTemplateName:      tmplName,

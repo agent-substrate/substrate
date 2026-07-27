@@ -21,6 +21,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/ateredis"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
@@ -66,9 +67,9 @@ func TestSuspendActorWorkflow_RejectedAndIdempotentPaths(t *testing.T) {
 			defer cleanup()
 			w := newTestActorWorkflow(t, st, "ns", "tmpl1")
 
-			seedWorkflowActor(t, ctx, st, "team-a", "id1", "ns", "tmpl1", tc.seedStatus)
+			seedWorkflowActor(t, ctx, st, resources.ActorRef{Atespace: "team-a", Name: "id1"}, "ns", "tmpl1", tc.seedStatus)
 
-			actor, err := w.SuspendActor(ctx, "team-a", "id1")
+			actor, err := w.SuspendActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"})
 			if tc.wantErr {
 				if got := status.Code(err); got != codes.FailedPrecondition {
 					t.Fatalf("status.Code(err) = %v, want %v (err: %v)", got, codes.FailedPrecondition, err)
@@ -82,7 +83,7 @@ func TestSuspendActorWorkflow_RejectedAndIdempotentPaths(t *testing.T) {
 				}
 			}
 
-			got, err := st.GetActor(ctx, "team-a", "id1")
+			got, err := st.GetActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"})
 			if err != nil {
 				t.Fatalf("GetActor failed: %v", err)
 			}
@@ -145,7 +146,7 @@ func TestSuspendSteps_CheckPrerequisite(t *testing.T) {
 				// Worker pod fields are populated so CallAteletSuspendStep's
 				// missing-worker crash branch is not taken; this test only
 				// verifies status gating.
-				err := tc.step.CheckPrerequisite(ctx, &SuspendInput{ActorName: "id1"}, &SuspendState{Actor: &ateapipb.Actor{Status: st, AteomPodNamespace: "ns", AteomPodName: "worker-1"}})
+				err := tc.step.CheckPrerequisite(ctx, &SuspendInput{ActorRef: resources.ActorRef{Name: "id1"}}, &SuspendState{Actor: &ateapipb.Actor{Status: st, AteomPodNamespace: "ns", AteomPodName: "worker-1"}})
 				assertPrerequisiteResult(t, st, err, tc.allowed == nil || tc.allowed[st])
 			}
 		})
@@ -161,13 +162,13 @@ func TestSuspendActor_CrashesWhenSuspendingActorMissingWorkerPod(t *testing.T) {
 	defer cleanup()
 	w := newTestActorWorkflow(t, st, "ns", "tmpl1")
 
-	seedWorkflowActor(t, ctx, st, "team-a", "id1", "ns", "tmpl1", ateapipb.Actor_STATUS_SUSPENDING)
+	seedWorkflowActor(t, ctx, st, resources.ActorRef{Atespace: "team-a", Name: "id1"}, "ns", "tmpl1", ateapipb.Actor_STATUS_SUSPENDING)
 
-	if _, err := w.SuspendActor(ctx, "team-a", "id1"); err == nil {
+	if _, err := w.SuspendActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}); err == nil {
 		t.Fatal("SuspendActor succeeded, want error for SUSPENDING actor with no worker pod")
 	}
 
-	got, err := st.GetActor(ctx, "team-a", "id1")
+	got, err := st.GetActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"})
 	if err != nil {
 		t.Fatalf("GetActor failed: %v", err)
 	}
@@ -237,12 +238,12 @@ func TestCallAteletSuspendStep_DanglingWorkerDoesNotRecordPhantomSnapshot(t *tes
 			}
 
 			step := &CallAteletSuspendStep{store: persistence, dialer: newDanglingDialer()}
-			input := &SuspendInput{ActorName: "actor-1", Atespace: "team-a"}
+			input := &SuspendInput{ActorRef: resources.ActorRef{Atespace: "team-a", Name: "actor-1"}}
 			if err := step.Execute(ctx, input, &SuspendState{Actor: created}); err == nil {
 				t.Fatal("Execute: want error for dangling worker, got nil")
 			}
 
-			stored, err := persistence.GetActor(ctx, "team-a", "actor-1")
+			stored, err := persistence.GetActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"})
 			if err != nil {
 				t.Fatalf("GetActor: %v", err)
 			}
@@ -311,7 +312,7 @@ func TestFinalizeSuspendedStep_ReleasesOnlyOwnWorker(t *testing.T) {
 			}
 
 			step := &FinalizeSuspendedStep{store: persistence}
-			input := &SuspendInput{ActorName: "shared", Atespace: "team-a"}
+			input := &SuspendInput{ActorRef: resources.ActorRef{Atespace: "team-a", Name: "shared"}}
 			if err := step.Execute(ctx, input, &SuspendState{}); err != nil {
 				t.Fatalf("Execute: %v", err)
 			}

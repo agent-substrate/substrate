@@ -24,6 +24,7 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
+	"github.com/agent-substrate/substrate/internal/resources"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	atefake "github.com/agent-substrate/substrate/pkg/client/clientset/versioned/fake"
 	"github.com/agent-substrate/substrate/pkg/client/informers/externalversions"
@@ -271,7 +272,7 @@ func TestSyncer_DeleteBoundWorker_ClearsActor(t *testing.T) {
 	}
 	var got *ateapipb.Actor
 	if err := wait.PollUntilContextTimeout(ctx, 50*time.Millisecond, 2*time.Second, true, func(c context.Context) (bool, error) {
-		a, gerr := persistence.GetActor(c, "team-orphan", actorName)
+		a, gerr := persistence.GetActor(c, resources.ActorRef{Atespace: "team-orphan", Name: actorName})
 		if gerr != nil {
 			return false, gerr
 		}

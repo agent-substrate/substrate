@@ -31,15 +31,13 @@ func (s *Service) DeleteActor(ctx context.Context, req *ateapipb.DeleteActorRequ
 	if err := validateDeleteActorRequest(req); err != nil {
 		return nil, err
 	}
-	setSpanActorRefAttributes(ctx, req.GetActor().GetAtespace(), req.GetActor().GetName())
+	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
+	setSpanActorRefAttributes(ctx, actorRef)
 
-	atespace := req.GetActor().GetAtespace()
-	name := req.GetActor().GetName()
-
-	actor, err := s.persistence.GetActor(ctx, atespace, name)
+	actor, err := s.persistence.GetActor(ctx, actorRef)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, status.Errorf(codes.NotFound, "Actor %s not found", name)
+			return nil, status.Errorf(codes.NotFound, "Actor %s not found", actorRef.Name)
 		}
 		return nil, fmt.Errorf("while fetching actor: %w", err)
 	}
@@ -49,17 +47,17 @@ func (s *Service) DeleteActor(ctx context.Context, req *ateapipb.DeleteActorRequ
 		return nil, status.Errorf(codes.Internal, "while deleting actor volumes: %v", err)
 	}
 
-	deleted, err := s.persistence.DeleteActor(ctx, atespace, name)
+	deleted, err := s.persistence.DeleteActor(ctx, actorRef)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, status.Errorf(codes.NotFound, "Actor %s not found", req.GetActor().GetName())
+			return nil, status.Errorf(codes.NotFound, "Actor %s not found", actorRef.Name)
 		}
 		if errors.Is(err, store.ErrFailedPrecondition) {
-			current, getErr := s.persistence.GetActor(ctx, req.GetActor().GetAtespace(), req.GetActor().GetName())
+			current, getErr := s.persistence.GetActor(ctx, actorRef)
 			if getErr == nil {
-				return nil, status.Errorf(codes.FailedPrecondition, "Actor %s is not suspended (status: %v)", req.GetActor().GetName(), current.GetStatus())
+				return nil, status.Errorf(codes.FailedPrecondition, "Actor %s is not suspended (status: %v)", actorRef.Name, current.GetStatus())
 			}
-			return nil, status.Errorf(codes.FailedPrecondition, "Actor %s is not suspended", req.GetActor().GetName())
+			return nil, status.Errorf(codes.FailedPrecondition, "Actor %s is not suspended", actorRef.Name)
 		}
 		if errors.Is(err, store.ErrVersionConflict) {
 			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
