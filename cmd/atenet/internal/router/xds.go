@@ -66,6 +66,12 @@ const (
 	RouteName            = "substrate_routes"
 	ClusterName          = "ate-cluster"
 	OtlpClusterName      = "otel_collector_cluster"
+
+	// httpProtocolOptionsName is the well-known extension key Envoy looks for in
+	// a cluster's typed_extension_protocol_options. It must match the message's
+	// full proto type name exactly; a typo is silently ignored rather than
+	// rejected, so the options simply never take effect.
+	httpProtocolOptionsName = "envoy.extensions.upstreams.http.v3.HttpProtocolOptions"
 )
 
 // XdsServer implements an aggregated discovery service server for dynamic Envoy router nodes.
@@ -262,7 +268,7 @@ func (x *XdsServer) buildCluster() *clusterv3.Cluster {
 			},
 		},
 		TypedExtensionProtocolOptions: map[string]*anypb.Any{
-			"envoy.extensions.upstreams.http.v3.HttpProtocolOptions": h2Opts,
+			httpProtocolOptionsName: h2Opts,
 		},
 	}
 }
@@ -324,7 +330,7 @@ func (x *XdsServer) buildOtlpCollectorCluster() *clusterv3.Cluster {
 			},
 		},
 		TypedExtensionProtocolOptions: map[string]*anypb.Any{
-			"envoy.extensions.upstreams.http.v3.HttpProtocolOptions": h2Opts,
+			httpProtocolOptionsName: h2Opts,
 		},
 	}
 }
@@ -334,9 +340,31 @@ func (x *XdsServer) buildDynamicForwardProxyCluster() *clusterv3.Cluster {
 		ClusterImplementationSpecifier: &dfpclusterv3.ClusterConfig_DnsCacheConfig{
 			DnsCacheConfig: buildDnsCacheConfig(),
 		},
+		// A DFP cluster rejects HttpProtocolOptions unless auto_sni and
+		// auto_san_validation are on or this is set. This cluster has no
+		// transport socket — plaintext to worker pod IPs, with an IP literal for
+		// the authority — so there is no certificate to validate against.
+		AllowInsecureClusterOptions: true,
 	}
 
 	clusterConfigAny, _ := anypb.New(dfpClusterConfig)
+
+	// One request per connection. Envoy pools by destination address, which
+	// assumes an address means one stable server. A worker pod's IP is stable
+	// but the actor sandbox behind port 80 is destroyed on every Suspend and a
+	// different actor takes the slot, so a pooled connection can belong to an
+	// actor that is already gone and the request 503s.
+	httpOpts, _ := anypb.New(&httpv3.HttpProtocolOptions{
+		CommonHttpProtocolOptions: &corev3.HttpProtocolOptions{
+			MaxRequestsPerConnection: wrapperspb.UInt32(1),
+		},
+		UpstreamProtocolOptions: &httpv3.HttpProtocolOptions_ExplicitHttpConfig_{
+			ExplicitHttpConfig: &httpv3.HttpProtocolOptions_ExplicitHttpConfig{
+				// HTTP/1.1 upstream, matching what actors serve on port 80.
+				ProtocolConfig: &httpv3.HttpProtocolOptions_ExplicitHttpConfig_HttpProtocolOptions{},
+			},
+		},
+	})
 
 	return &clusterv3.Cluster{
 		Name:     "dynamic_forward_proxy_cluster",
@@ -346,6 +374,9 @@ func (x *XdsServer) buildDynamicForwardProxyCluster() *clusterv3.Cluster {
 				Name:        "envoy.clusters.dynamic_forward_proxy",
 				TypedConfig: clusterConfigAny,
 			},
+		},
+		TypedExtensionProtocolOptions: map[string]*anypb.Any{
+			httpProtocolOptionsName: httpOpts,
 		},
 	}
 }
