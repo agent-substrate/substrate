@@ -391,7 +391,10 @@ deploy_atenet() {
   run_ko apply -f manifests/ate-install/atenet-router.yaml
   run_ko apply -f manifests/ate-install/atenet-dns.yaml
   run_kubectl rollout status deployment/atenet-router -n ate-system --timeout=120s
-  run_kubectl rollout status deployment/atenet-dns -n ate-system --timeout=120s
+  # The Deployment in atenet-dns.yaml is named "dns"; every other resource in
+  # that file is "atenet-dns". Waiting on the filename rather than the actual
+  # Deployment made this step fail with NotFound on every successful deploy.
+  run_kubectl rollout status deployment/dns -n ate-system --timeout=120s
 }
 
 # get_actor_status echoes the actor's status enum (e.g. STATUS_SUSPENDED).
