@@ -67,8 +67,17 @@ type routerConfig struct {
 	// UpstreamSpiffePrefix validates the actor's atunnel server cert by its
 	// SPIFFE URI SAN prefix (trust domain) instead of the dialed pod IP.
 	UpstreamSpiffePrefix string
-	LogLevel             string
-	MetricsAddr          string
+
+	// ActorIdentityCAFile is the PEM trust bundle for the actor-identity CA,
+	// used by the egress gateway's ext_proc sidecar to verify the actor client
+	// certificates atunnel presents on egress CONNECTs. Only that deployment
+	// sets it; empty leaves egress authentication unconfigured, which makes
+	// every egress CONNECT fail closed and is correct for an ingress-only
+	// router (it never sees the egress listener).
+	ActorIdentityCAFile string
+
+	LogLevel    string
+	MetricsAddr string
 	// OtlpCollectorAddress is the OTLP gRPC collector that Envoy reports
 	// tracing spans to, as host:port or an http:// URL. It defaults to
 	// OTEL_EXPORTER_OTLP_ENDPOINT — Envoy gets its whole configuration over

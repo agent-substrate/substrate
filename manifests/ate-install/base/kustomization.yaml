@@ -23,6 +23,7 @@ resources:
   - ../ate-controller.yaml
   - ../atelet.yaml
   - ../atenet-dns.yaml
+  - ../ateway-egress.yaml
   - ../atenet-router.yaml
   - ../valkey.yaml
   - ../pod-certificate-controller.yaml

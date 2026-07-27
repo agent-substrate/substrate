@@ -16,6 +16,7 @@ package router
 
 import (
 	"context"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -215,7 +216,21 @@ func (s *RouterServer) Run(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("failed to create parking metrics: %w", err)
 		}
-		s.extprocSrv = NewExtProcServer(s.cfg.ExtprocPort, s.apiClient, routeDuration, parkCfg, parkMetrics, s.cfg.atenetRouter().routeViaAuthority())
+		// Load the actor-identity CA up front so a missing or unusable bundle
+		// fails startup, rather than turning into a 503 on the first actor
+		// egress attempt. An unset flag is the ingress-only case and is fine.
+		var actorIdentityRoots *x509.CertPool
+		if s.cfg.ActorIdentityCAFile != "" {
+			pemBytes, err := os.ReadFile(s.cfg.ActorIdentityCAFile)
+			if err != nil {
+				return fmt.Errorf("reading --actor-identity-ca-file: %w", err)
+			}
+			actorIdentityRoots, err = loadActorIdentityRoots(pemBytes)
+			if err != nil {
+				return fmt.Errorf("loading --actor-identity-ca-file %q: %w", s.cfg.ActorIdentityCAFile, err)
+			}
+		}
+		s.extprocSrv = NewExtProcServer(s.cfg.ExtprocPort, s.apiClient, routeDuration, parkCfg, parkMetrics, s.cfg.atenetRouter().routeViaAuthority(), actorIdentityRoots)
 	}
 	s.health = newRouterHealth(s.cfg.HealthInterval, s.clientset, s.apiClient, s.cfg)
 

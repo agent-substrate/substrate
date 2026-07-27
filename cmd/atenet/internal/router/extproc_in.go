@@ -28,12 +28,14 @@ type requestMetadata struct {
 	headers map[string]string
 	path    string
 	host    string
+	method  string
 }
 
 func newRequestMetadata(headers []*corev3.HeaderValue) *requestMetadata {
 	headersMap := make(map[string]string)
 	var path string
 	var host string
+	var method string
 
 	for _, h := range headers {
 		k := strings.ToLower(h.Key)
@@ -49,12 +51,16 @@ func newRequestMetadata(headers []*corev3.HeaderValue) *requestMetadata {
 		if k == authorityHeader || k == "host" {
 			host = val
 		}
+		if k == ":method" {
+			method = val
+		}
 	}
 
 	return &requestMetadata{
 		headers: headersMap,
 		path:    path,
 		host:    host,
+		method:  method,
 	}
 }
 

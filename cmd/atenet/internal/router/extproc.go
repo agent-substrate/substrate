@@ -16,6 +16,7 @@ package router
 
 import (
 	"context"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
@@ -47,17 +48,23 @@ type ExtProcServer struct {
 	routeDuration     metric.Float64Histogram
 	parking           *parkingLot
 	routeViaAuthority bool
+	// actorIdentityRoots are the actor-identity CA certificates the egress
+	// handler verifies actor client certificates against. Only the ext_proc
+	// sidecar of the egress gateway sets it; nil makes every egress CONNECT
+	// fail closed and is the correct state for an ingress-only router.
+	actorIdentityRoots *x509.CertPool
 }
 
-func NewExtProcServer(port int, apiClient ateapipb.ControlClient, routeDuration metric.Float64Histogram, parkCfg ParkedRequestConfig, parkMetrics *parkingMetrics, routeViaAuthority bool) *ExtProcServer {
+func NewExtProcServer(port int, apiClient ateapipb.ControlClient, routeDuration metric.Float64Histogram, parkCfg ParkedRequestConfig, parkMetrics *parkingMetrics, routeViaAuthority bool, actorIdentityRoots *x509.CertPool) *ExtProcServer {
 	return &ExtProcServer{
-		port:              port,
-		apiClient:         apiClient,
-		recorder:          NewQueryRecorder(100),
-		resumer:           NewActorResumer(apiClient, withParking(parkCfg)),
-		routeDuration:     routeDuration,
-		parking:           newParkingLot(parkCfg, parkMetrics),
-		routeViaAuthority: routeViaAuthority,
+		port:               port,
+		apiClient:          apiClient,
+		recorder:           NewQueryRecorder(100),
+		resumer:            NewActorResumer(apiClient, withParking(parkCfg)),
+		routeDuration:      routeDuration,
+		parking:            newParkingLot(parkCfg, parkMetrics),
+		routeViaAuthority:  routeViaAuthority,
+		actorIdentityRoots: actorIdentityRoots,
 	}
 }
 
@@ -88,7 +95,24 @@ func (s *ExtProcServer) Process(stream extprocv3.ExternalProcessor_ProcessServer
 		switch reqType := req.Request.(type) {
 		case *extprocv3.ProcessingRequest_RequestHeaders:
 			start := time.Now()
-			hResponse, rqm, target, tmplNs, tmplName, resumeOutcome, err := s.handleRequestHeaders(stream.Context(), reqType.RequestHeaders)
+			// One ext_proc server handles both directions: actor egress
+			// CONNECT requests and ingress requests. Which one is decided by
+			// the accepting listener, not by anything in the request itself
+			// (see isEgressRequest).
+			//
+			// SEE(lior): main grew a ResumeOutcome return on
+			// handleRequestHeaders while this branch was out. Rather than
+			// splitting the dispatch into two separately-typed call sites, the
+			// egress handler was widened to the same signature and returns
+			// ResumeOutcomeNone — egress requires an already-RUNNING actor and
+			// never resumes one, so "none" is accurate, and it keeps the
+			// route-duration metric's resume label a closed set (no new empty
+			// value) across both directions.
+			handle := s.handleRequestHeaders
+			if isEgressRequest(req) {
+				handle = s.handleEgressRequestHeaders
+			}
+			hResponse, rqm, target, tmplNs, tmplName, resumeOutcome, err := handle(stream.Context(), reqType.RequestHeaders)
 			elapsed := time.Since(start)
 			outcomeStr := classifyOutcome(err)
 			resumeStr := string(resumeOutcome)

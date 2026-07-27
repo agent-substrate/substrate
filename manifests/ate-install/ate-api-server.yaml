@@ -104,6 +104,15 @@ spec:
           - --actor-id-ca-pool=/run/actor-id-ca-pool/pool.json
           - --atelet-client-cred-bundle=/run/podidentity.podcert.ate.dev/credential-bundle.pem
           - --pod-identity-ca-certs=/run/podidentity.podcert.ate.dev/trust-bundle.pem
+          # ONLY UNTIL THE EGRESS API IS DECIDED, FOR POC: turn on pluggable actor
+          # egress cluster-wide. ateapi stamps this address onto every atelet
+          # Run/Restore, ateom hands it to atunnel, and actor TCP egress is
+          # transparently redirected (nftables) into atunnel, which wraps it in
+          # mTLS + HTTP CONNECT to the egress gateway.
+          #
+          # SEE(lior): this flag lived on atelet on the pre-rebase branch; PR 708
+          # moved egress-gateway configuration to ateapi, so it is set here now.
+          - --egress-gateway-address=ateway-egress.ate-system.svc:443
           # Graceful shutdown knobs. The sum must fit within terminationGracePeriodSeconds.
           - --drain-delay=13s
           - --drain-timeout=15s

@@ -59,7 +59,7 @@ func TestHandleRequestHeadersDoesNotLogSensitiveData(t *testing.T) {
 		resumeFn: func(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
 			return &ateapipb.ResumeActorResponse{Actor: &ateapipb.Actor{WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIp: "10.0.0.52"}}}, nil
 		},
-	}, nil, ParkedRequestConfig{}, nil, false)
+	}, nil, ParkedRequestConfig{}, nil, false, nil)
 
 	reqHeaders := &extprocv3.HttpHeaders{
 		Headers: &corev3.HeaderMap{
@@ -196,7 +196,7 @@ func TestExtProcHeadersEvaluation(t *testing.T) {
 			// Parking disabled: these cases assert fail-fast mapping of resume
 			// errors (e.g. FailedPrecondition -> immediate 503). Parking behavior
 			// is covered separately in TestExtProc_ParkingLotFull and resumer_test.go.
-			s := NewExtProcServer(50051, clientMock, nil, ParkedRequestConfig{}, nil, false)
+			s := NewExtProcServer(50051, clientMock, nil, ParkedRequestConfig{}, nil, false, nil)
 
 			reqHeaders := &extprocv3.HttpHeaders{
 				Headers: &corev3.HeaderMap{
@@ -277,7 +277,7 @@ func TestExtProc_ParkingLotFull(t *testing.T) {
 
 	// A 1-slot lot with the slot already occupied deterministically simulates a
 	// full lot without needing a concurrent in-flight request.
-	s := NewExtProcServer(50051, clientMock, nil, ParkedRequestConfig{Budget: time.Second, Max: 1}, nil, false)
+	s := NewExtProcServer(50051, clientMock, nil, ParkedRequestConfig{Budget: time.Second, Max: 1}, nil, false, nil)
 	release, ok := s.parking.enter(context.Background())
 	if !ok {
 		t.Fatal("priming enter should be admitted")
@@ -396,7 +396,7 @@ func TestRecordRouteDuration_Attributes(t *testing.T) {
 		t.Fatalf("failed to create histogram: %v", err)
 	}
 
-	s := NewExtProcServer(50051, nil, h, ParkedRequestConfig{}, nil, false)
+	s := NewExtProcServer(50051, nil, h, ParkedRequestConfig{}, nil, false, nil)
 	s.recordRouteDuration(context.Background(), 10*time.Millisecond, "team-a-ns", "tmpl-a", classifyOutcome(nil), string(ResumeOutcomeTriggered))
 
 	var rm metricdata.ResourceMetrics
