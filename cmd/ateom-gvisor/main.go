@@ -18,9 +18,11 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
+	"net/url"
 	"os"
 	"sort"
 	"strings"
@@ -31,6 +33,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/ateomnet"
 	"github.com/agent-substrate/substrate/internal/ateompath"
+	"github.com/agent-substrate/substrate/internal/atunnel"
 	"github.com/agent-substrate/substrate/internal/contextlogging"
 	"github.com/agent-substrate/substrate/internal/imagecache"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
@@ -51,10 +54,21 @@ import (
 var (
 	podUID = pflag.String("pod-uid", "", "The UID of the current pod")
 
+	atunnelListenAddress       = pflag.String("atunnel-listen-address", "0.0.0.0:443", "Address for actor ingress HTTPS")
+	atunnelCredentialBundle    = pflag.String("atunnel-credential-bundle", "/run/podidentity.podcert.ate.dev/credential-bundle.pem", "PEM credential bundle for actor ingress HTTPS")
+	atunnelTrustBundle         = pflag.String("atunnel-trust-bundle", "/run/podidentity.podcert.ate.dev/trust-bundle.pem", "PEM trust bundle for actor ingress clients")
+	atunnelClientIdentity      = pflag.String("atunnel-client-identity", "spiffe://cluster.local/ns/ate-system/sa/atenet-router", "SPIFFE identity allowed to call actor ingress HTTPS")
+	atunnelEgressListenAddress = pflag.String("atunnel-egress-listen-address", "0.0.0.0:15001", "Address for transparently intercepted actor egress TCP")
+	atunnelEgressTrustBundle   = pflag.String("atunnel-egress-trust-bundle", "/run/servicedns.podcert.ate.dev/trust-bundle.pem", "PEM trust bundle for the egress gateway")
+
 	showVersion = pflag.Bool("version", false, "Print version and exit.")
 
 	reapLock sync.RWMutex
 )
+
+// actorHTTPUpstream is the in-sandbox HTTP endpoint atunnel proxies actor
+// ingress to.
+const actorHTTPUpstream = "http://" + ateomnet.ActorVethIP + ":80"
 
 func main() {
 	pflag.Parse()
@@ -137,7 +151,16 @@ func do(ctx context.Context) error {
 	}
 
 	actorLogger := actorlog.NewActorLogger(syncedWriter, metadata.OnGCE())
-	ateomService := NewService(interiorNetNS, actorLogger)
+	upstream, err := url.Parse(actorHTTPUpstream)
+	if err != nil {
+		return fmt.Errorf("while parsing atunnel upstream: %w", err)
+	}
+	atunnelServer, atunnelEgress, atunnelEgressPort, err := runAtunnel(ctx, upstream)
+	if err != nil {
+		return err
+	}
+
+	ateomService := NewService(interiorNetNS, actorLogger, atunnelServer, atunnelEgress, atunnelEgressPort, *atunnelCredentialBundle, *atunnelEgressTrustBundle)
 
 	svr := grpc.NewServer(
 		grpc.StatsHandler(otelgrpc.NewServerHandler()),
@@ -154,6 +177,50 @@ func do(ctx context.Context) error {
 	return nil
 }
 
+func runAtunnel(ctx context.Context, upstream *url.URL) (*atunnel.Server, *atunnel.Egress, uint16, error) {
+	atunnelServer, err := atunnel.NewServer(atunnel.Config{
+		CredentialBundlePath: *atunnelCredentialBundle,
+		TrustBundlePath:      *atunnelTrustBundle,
+		AllowedClientID:      *atunnelClientIdentity,
+		Upstream:             upstream,
+	})
+	if err != nil {
+		return nil, nil, 0, fmt.Errorf("while configuring atunnel: %w", err)
+	}
+	atunnelListener, err := net.Listen("tcp", *atunnelListenAddress)
+	if err != nil {
+		return nil, nil, 0, fmt.Errorf("while opening atunnel listener: %w", err)
+	}
+	go func() {
+		if err := atunnelServer.Serve(ctx, atunnelListener); err != nil {
+			serverboot.Fatal(ctx, "Failed to serve actor ingress", err)
+		}
+	}()
+	slog.InfoContext(ctx, "atunnel serving", slog.String("address", *atunnelListenAddress))
+
+	atunnelEgress, err := atunnel.NewEgress(atunnel.TCPOriginalDestination)
+	if err != nil {
+		return nil, nil, 0, fmt.Errorf("while configuring atunnel egress: %w", err)
+	}
+	egressListener, err := net.Listen("tcp", *atunnelEgressListenAddress)
+	if err != nil {
+		return nil, nil, 0, fmt.Errorf("while opening atunnel egress listener: %w", err)
+	}
+	egressTCPAddr, ok := egressListener.Addr().(*net.TCPAddr)
+	if !ok || egressTCPAddr.Port < 1 || egressTCPAddr.Port > 65535 {
+		_ = egressListener.Close()
+		return nil, nil, 0, fmt.Errorf("atunnel egress listener has invalid address %q", egressListener.Addr())
+	}
+	atunnelEgressPort := uint16(egressTCPAddr.Port)
+	go func() {
+		if err := atunnelEgress.Serve(ctx, egressListener); err != nil {
+			serverboot.Fatal(ctx, "Failed to serve actor egress", err)
+		}
+	}()
+	slog.InfoContext(ctx, "atunnel egress serving", slog.String("address", *atunnelEgressListenAddress))
+	return atunnelServer, atunnelEgress, atunnelEgressPort, nil
+}
+
 // AteomService is a service for shepherding single microvm.
 type AteomService struct {
 	ateompb.UnimplementedAteomServer
@@ -164,22 +231,36 @@ type AteomService struct {
 
 	interiorNetNS netns.NsHandle
 	actorLogger   *actorlog.ActorLogger
+	atunnel       *atunnel.Server
+	atunnelEgress *atunnel.Egress
+	// atunnelEgressPort is zero when tunneled egress is disabled. Otherwise,
+	// actor TCP connections are transparently redirected to this local port.
+	atunnelEgressPort        uint16
+	atunnelCredentialBundle  string
+	atunnelEgressTrustBundle string
 }
 
 var _ ateompb.AteomServer = (*AteomService)(nil)
 
 // NewService creates a new AteomService.
-func NewService(interiorNetNS netns.NsHandle, actorLogger *actorlog.ActorLogger) *AteomService {
-	svc := &AteomService{
-		interiorNetNS: interiorNetNS,
-		actorLogger:   actorLogger,
+func NewService(interiorNetNS netns.NsHandle, actorLogger *actorlog.ActorLogger, atunnelServer *atunnel.Server, atunnelEgress *atunnel.Egress, atunnelEgressPort uint16, credentialBundle, egressTrustBundle string) *AteomService {
+	return &AteomService{
+		interiorNetNS:            interiorNetNS,
+		actorLogger:              actorLogger,
+		atunnel:                  atunnelServer,
+		atunnelEgress:            atunnelEgress,
+		atunnelEgressPort:        atunnelEgressPort,
+		atunnelCredentialBundle:  credentialBundle,
+		atunnelEgressTrustBundle: egressTrustBundle,
 	}
-	return svc
 }
 
 func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkloadRequest) (resp *ateompb.RunWorkloadResponse, retErr error) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
+	if err := s.deactivateActorNetworking(ctx); err != nil {
+		return nil, err
+	}
 
 	actorRef := resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()}
 	s.actorLogger.EmitLifecycleLog("Actor starting", actorRef, req.GetActorUid(), req.GetActorTemplateNamespace(), req.GetActorTemplateName())
@@ -189,7 +270,11 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	//   * Correct runsc version is downloaded and placed on disk.
 	//   * All OCI bundles are set up, including for "pause" container.
 
-	if err := ateomnet.SetupActorNetwork(ctx, ateomnet.NetworkConfig{InteriorNetNS: s.interiorNetNS, DumpNetInfo: true}); err != nil {
+	if err := ateomnet.SetupActorNetwork(ctx, ateomnet.NetworkConfig{
+		InteriorNetNS:      s.interiorNetNS,
+		DumpNetInfo:        true,
+		EgressRedirectPort: s.egressRedirectPort(req.GetEgressGatewayAddress() != ""),
+	}); err != nil {
 		return nil, fmt.Errorf("while setting up actor network: %w", err)
 	}
 	defer func() {
@@ -251,6 +336,9 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	if err := readyz.WaitAll(ctx, req.GetSpec().GetContainers(), ateomnet.ActorVethIP); err != nil {
 		return nil, fmt.Errorf("while waiting for container readyz: %w", err)
 	}
+	if err := s.activateActorNetworking(req.GetAtespace(), req.GetActorName(), req.GetActorVersion(), req.GetEgressGatewayAddress()); err != nil {
+		return nil, err
+	}
 
 	s.actorLogger.EmitLifecycleLog("Actor started", actorRef, req.GetActorUid(), req.GetActorTemplateNamespace(), req.GetActorTemplateName())
 
@@ -260,6 +348,9 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.CheckpointWorkloadRequest) (*ateompb.CheckpointWorkloadResponse, error) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
+	if err := s.deactivateActorNetworking(ctx); err != nil {
+		return nil, err
+	}
 
 	actorRef := resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()}
 	s.actorLogger.EmitLifecycleLog("Actor checkpointing", actorRef, req.GetActorUid(), req.GetActorTemplateNamespace(), req.GetActorTemplateName())
@@ -387,6 +478,9 @@ func (r *runsc) cleanupContainersAfterCheckpoint(ctx context.Context, containers
 func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.RestoreWorkloadRequest) (resp *ateompb.RestoreWorkloadResponse, retErr error) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
+	if err := s.deactivateActorNetworking(ctx); err != nil {
+		return nil, err
+	}
 
 	actorRef := resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()}
 	s.actorLogger.EmitLifecycleLog("Actor restoring", actorRef, req.GetActorUid(), req.GetActorTemplateNamespace(), req.GetActorTemplateName())
@@ -397,7 +491,11 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	//   * All OCI bundles are set up, including for "pause" container.
 	//   * Checkpoint downloaded and placed on disk
 
-	if err := ateomnet.SetupActorNetwork(ctx, ateomnet.NetworkConfig{InteriorNetNS: s.interiorNetNS, DumpNetInfo: true}); err != nil {
+	if err := ateomnet.SetupActorNetwork(ctx, ateomnet.NetworkConfig{
+		InteriorNetNS:      s.interiorNetNS,
+		DumpNetInfo:        true,
+		EgressRedirectPort: s.egressRedirectPort(req.GetEgressGatewayAddress() != ""),
+	}); err != nil {
 		return nil, fmt.Errorf("while setting up actor network: %w", err)
 	}
 	defer func() {
@@ -483,10 +581,72 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	if err := readyz.WaitAll(ctx, req.GetSpec().GetContainers(), ateomnet.ActorVethIP); err != nil {
 		return nil, fmt.Errorf("while waiting for container readyz: %w", err)
 	}
+	if err := s.activateActorNetworking(req.GetAtespace(), req.GetActorName(), req.GetActorVersion(), req.GetEgressGatewayAddress()); err != nil {
+		return nil, err
+	}
 
 	s.actorLogger.EmitLifecycleLog("Actor restored", actorRef, req.GetActorUid(), req.GetActorTemplateNamespace(), req.GetActorTemplateName())
 
 	return &ateompb.RestoreWorkloadResponse{}, nil
+}
+
+func (s *AteomService) activateActorNetworking(atespace, actorName string, actorVersion int64, egressGatewayAddress string) error {
+	var egressClient atunnel.EgressDialer
+	if s.atunnelEgress != nil && egressGatewayAddress != "" {
+		serverName, _, err := net.SplitHostPort(egressGatewayAddress)
+		if err != nil {
+			return fmt.Errorf("invalid egress gateway address %q: %w", egressGatewayAddress, err)
+		}
+		egressClient, err = atunnel.NewClient(atunnel.ClientConfig{
+			GatewayAddress:       egressGatewayAddress,
+			ServerName:           serverName,
+			CredentialBundlePath: s.atunnelCredentialBundle,
+			TrustBundlePath:      s.atunnelEgressTrustBundle,
+		})
+		if err != nil {
+			return fmt.Errorf("while configuring actor egress client: %w", err)
+		}
+	}
+	if s.atunnel != nil {
+		if err := s.atunnel.Activate(atespace, actorName); err != nil {
+			return fmt.Errorf("while activating actor ingress: %w", err)
+		}
+	}
+	if egressClient != nil {
+		if err := s.atunnelEgress.Activate(egressClient, atespace, actorName, actorVersion, ""); err != nil {
+			if s.atunnel != nil {
+				_ = s.atunnel.Deactivate(context.Background())
+			}
+			return fmt.Errorf("while activating actor egress: %w", err)
+		}
+	}
+	return nil
+}
+
+func (s *AteomService) deactivateActorNetworking(ctx context.Context) error {
+	// Stop admitting traffic and drain active streams before the Actor network
+	// is torn down. Attempt both directions even if one fails to deactivate.
+	var err error
+	if s.atunnel != nil {
+		err = errors.Join(err, s.atunnel.Deactivate(ctx))
+	}
+	if s.atunnelEgress != nil {
+		err = errors.Join(err, s.atunnelEgress.Deactivate(ctx))
+	}
+	if err != nil {
+		return fmt.Errorf("while deactivating actor networking: %w", err)
+	}
+	return nil
+}
+
+// egressRedirectPort returns the local atunnel egress listener port when the
+// activation arms tunneled egress, and zero otherwise, which leaves the
+// prerouting redirect uninstalled and actor egress on the masquerade path.
+func (s *AteomService) egressRedirectPort(redirectEgress bool) uint16 {
+	if !redirectEgress {
+		return 0
+	}
+	return s.atunnelEgressPort
 }
 
 // setupCgroupDelegation prepares the worker pod's cgroup so runsc can create a

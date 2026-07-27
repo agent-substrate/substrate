@@ -231,7 +231,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.reject(w)
 		return
 	}
-	atespace, actorName, err := resources.ParseActorDNSName(host)
+	actorRef, err := resources.ParseActorDNSName(host)
 	if err != nil {
 		s.reject(w)
 		return
@@ -239,7 +239,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	s.mu.Lock()
 	active := s.active
-	if active == nil || active.atespace != atespace || active.actorName != actorName {
+	if active == nil || active.atespace != actorRef.Atespace || active.actorName != actorRef.Name {
 		s.mu.Unlock()
 		s.reject(w)
 		return

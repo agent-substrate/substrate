@@ -200,6 +200,9 @@ func writeGuestResolvConf(rootfs string) error {
 func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkloadRequest) (*ateompb.RunWorkloadResponse, error) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
+	if err := s.deactivateActorNetworking(ctx); err != nil {
+		return nil, err
+	}
 
 	p := actorBootParams{
 		actorRef:     resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()},
@@ -208,6 +211,9 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 		templateName: req.GetActorTemplateName(),
 		containers:   req.GetSpec().GetContainers(),
 		assetPaths:   req.GetRuntimeAssetPaths(),
+
+		actorVersion:         req.GetActorVersion(),
+		egressGatewayAddress: req.GetEgressGatewayAddress(),
 	}
 
 	s.actorLogger.EmitLifecycleLog("Actor starting", p.actorRef, p.actorUID, p.templateNS, p.templateName)
@@ -229,6 +235,12 @@ type actorBootParams struct {
 	templateName string
 	containers   []*ateompb.Container
 	assetPaths   map[string]string
+	// actorVersion is the Actor resource version ate-api observed when it
+	// assigned this worker; atunnel asserts it to the egress gateway.
+	actorVersion int64
+	// egressGatewayAddress is empty unless an egress gateway is configured, in
+	// which case actor TCP egress is redirected to atunnel's local listener.
+	egressGatewayAddress string
 }
 
 // coldBootAttempts is how many times a cold boot is tried when the micro-VM
@@ -293,6 +305,7 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 		InteriorNetNS:      s.interiorNetNS,
 		HostVethHWAddr:     hostVethHWAddr,
 		SweepInteriorLinks: true,
+		EgressRedirectPort: s.egressRedirectPort(p.egressGatewayAddress != ""),
 	}); err != nil {
 		return fmt.Errorf("while setting up actor network: %w", err)
 	}
@@ -446,6 +459,9 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 	}
 
 	ra := &runningActor{chCmd: chCmd, vfsdCmd: vfsdCmd, durableVfsdCmd: durableVfsdCmd, apiSocket: apiSocket, baseID: actorUID, logAgent: ac}
+	if err := s.activateActorNetworking(p.actorRef.Atespace, p.actorRef.Name, p.actorVersion, p.egressGatewayAddress); err != nil {
+		return err
+	}
 	s.running[actorUID] = ra
 
 	// Forward each container's stdout/stderr into the pod logs. The overlay workload's

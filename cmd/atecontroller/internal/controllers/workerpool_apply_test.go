@@ -485,15 +485,57 @@ func expectedDeploymentApplyConfig(mutatePodSpec func(*corev1ac.PodSpecApplyConf
 		WithSecurityContext(corev1ac.PodSecurityContext().
 			WithRunAsUser(0).
 			WithRunAsGroup(0)).
-		WithVolumes(corev1ac.Volume().
-			WithName("run-ateom").
-			WithHostPath(corev1ac.HostPathVolumeSource().
-				WithPath(ateompath.BasePath).
-				WithType(corev1.HostPathDirectoryOrCreate))).
+		WithVolumes(
+			corev1ac.Volume().
+				WithName("run-ateom").
+				WithHostPath(corev1ac.HostPathVolumeSource().
+					WithPath(ateompath.BasePath).
+					WithType(corev1.HostPathDirectoryOrCreate)),
+			corev1ac.Volume().
+				WithName(atunnelIdentityVolume).
+				WithProjected(corev1ac.ProjectedVolumeSource().
+					WithSources(
+						corev1ac.VolumeProjection().
+							WithPodCertificate(corev1ac.PodCertificateProjection().
+								WithSignerName("podidentity.podcert.ate.dev/identity").
+								WithKeyType("ECDSAP256").
+								WithCredentialBundlePath("credential-bundle.pem")),
+						corev1ac.VolumeProjection().
+							WithClusterTrustBundle(corev1ac.ClusterTrustBundleProjection().
+								WithSignerName("podidentity.podcert.ate.dev/identity").
+								WithLabelSelector(metav1ac.LabelSelector().
+									WithMatchLabels(map[string]string{"podcert.ate.dev/canarying": "live"})).
+								WithPath("trust-bundle.pem")),
+					),
+				),
+			corev1ac.Volume().
+				WithName(atunnelEgressTrustVolume).
+				WithProjected(corev1ac.ProjectedVolumeSource().
+					WithSources(
+						corev1ac.VolumeProjection().
+							WithClusterTrustBundle(corev1ac.ClusterTrustBundleProjection().
+								WithSignerName("servicedns.podcert.ate.dev/identity").
+								WithLabelSelector(metav1ac.LabelSelector().
+									WithMatchLabels(map[string]string{"podcert.ate.dev/canarying": "live"})).
+								WithPath("trust-bundle.pem")),
+					),
+				),
+		).
 		WithContainers(corev1ac.Container().
 			WithName("ateom").
 			WithImage(wp.Spec.AteomImage).
-			WithArgs("--pod-uid=$(POD_UID)").
+			WithArgs(
+				"--pod-uid=$(POD_UID)",
+				"--atunnel-listen-address=0.0.0.0:443",
+				"--atunnel-credential-bundle="+atunnelIdentityMountPath+"/credential-bundle.pem",
+				"--atunnel-trust-bundle="+atunnelIdentityMountPath+"/trust-bundle.pem",
+				"--atunnel-egress-listen-address=0.0.0.0:15001",
+				"--atunnel-egress-trust-bundle="+atunnelEgressTrustMountPath+"/trust-bundle.pem",
+			).
+			WithPorts(corev1ac.ContainerPort().
+				WithName("https").
+				WithContainerPort(443).
+				WithProtocol(corev1.ProtocolTCP)).
 			WithSecurityContext(corev1ac.SecurityContext().
 				WithRunAsUser(0).
 				WithRunAsGroup(0).
@@ -508,10 +550,20 @@ func expectedDeploymentApplyConfig(mutatePodSpec func(*corev1ac.PodSpecApplyConf
 				WithValueFrom(corev1ac.EnvVarSource().
 					WithFieldRef(corev1ac.ObjectFieldSelector().
 						WithFieldPath("metadata.uid")))).
-			WithVolumeMounts(corev1ac.VolumeMount().
-				WithName("run-ateom").
-				WithMountPath(ateompath.BasePath).
-				WithMountPropagation(corev1.MountPropagationHostToContainer)).
+			WithVolumeMounts(
+				corev1ac.VolumeMount().
+					WithName("run-ateom").
+					WithMountPath(ateompath.BasePath).
+					WithMountPropagation(corev1.MountPropagationHostToContainer),
+				corev1ac.VolumeMount().
+					WithName(atunnelIdentityVolume).
+					WithMountPath(atunnelIdentityMountPath).
+					WithReadOnly(true),
+				corev1ac.VolumeMount().
+					WithName(atunnelEgressTrustVolume).
+					WithMountPath(atunnelEgressTrustMountPath).
+					WithReadOnly(true),
+			).
 			WithResources(corev1ac.ResourceRequirements()))
 
 	podSpecAC.NodeSelector = map[string]string{}
