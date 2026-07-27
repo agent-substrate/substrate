@@ -136,6 +136,18 @@ func main() {
 		// (re-exposable as additional routes if/when needed).
 		mux := http.NewServeMux()
 		mux.HandleFunc("/ping", httpPingHandler(svc))
+		// Readiness gate for the actor lifecycle. ateom blocks RestoreWorkload
+		// on this returning 200 (internal/readyz), so ResumeActor does not
+		// report success until the socket the router forwards to is genuinely
+		// serving. Without it a ping can beat the listener and get
+		// ECONNREFUSED, which the router turns into a 503.
+		//
+		// It must live on this listener rather than the metrics port: the
+		// metrics server starts independently, so a 200 there would say
+		// nothing about whether /ping is reachable yet.
+		mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		})
 		// otelhttp at the mux level + per-handler span follows
 		// docs/dev/best-practices/tracing.md: extract incoming context,
 		// then name the span after the operation in each handler.

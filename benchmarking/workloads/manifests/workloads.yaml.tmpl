@@ -70,6 +70,15 @@ spec:
     - "--metrics-listen-addr=:9090"
     - "--data-dir=/tmp/glutton"
     - "--mode=http"
+    # Hold ResumeActor open until port 80 actually answers. Starting the
+    # process is not the same as it accepting connections, and without this
+    # gate a ping can arrive in the gap and be refused. Probing port 80 rather
+    # than the metrics port is deliberate: it is the port the router forwards
+    # to.
+    readyz:
+      httpGet:
+        path: /readyz
+        port: 80
   workerSelector:
     matchLabels:
       workload: benchmark-ateom
