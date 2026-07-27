@@ -62,7 +62,7 @@ func crashActor(ctx context.Context, st store.Interface, actorRef resources.Acto
 	actor.Status = ateapipb.Actor_STATUS_CRASHED
 
 	// InProgressSnapshot is kept for debugging; failed workflow
-	// steps must never promote it to LatestSnapshotInfo.
+	// steps must never promote it to an ActorSnapshot.
 	actor.AteomPodNamespace = ""
 	actor.AteomPodName = ""
 	actor.AteomPodIp = ""

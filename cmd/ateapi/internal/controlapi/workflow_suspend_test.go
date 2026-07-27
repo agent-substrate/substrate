@@ -87,7 +87,7 @@ func TestSuspendActorWorkflow_RejectedAndIdempotentPaths(t *testing.T) {
 		{
 			// Suspending a SUSPENDED actor succeeds idempotently via
 			// IsComplete fast-forward without calling atelet.
-			name:       "already suspended succeeds",
+			name:       "newly created suspended succeeds",
 			seedStatus: ateapipb.Actor_STATUS_SUSPENDED,
 			wantStatus: ateapipb.Actor_STATUS_SUSPENDED,
 		},
@@ -234,15 +234,11 @@ func newDanglingDialer() *AteletDialer {
 func TestCallAteletSuspendStep_DanglingWorkerDoesNotRecordPhantomSnapshot(t *testing.T) {
 	tests := []struct {
 		name         string
-		prevSnapshot *ateapipb.SnapshotInfo
+		prevSnapshot *ateapipb.ObjectRef
 	}{
 		{
-			name: "keeps previous snapshot",
-			prevSnapshot: &ateapipb.SnapshotInfo{
-				Data: &ateapipb.SnapshotInfo_External{
-					External: &ateapipb.ExternalSnapshotInfo{SnapshotUriPrefix: "gs://snapshots/actor-1/prev"},
-				},
-			},
+			name:         "keeps previous snapshot",
+			prevSnapshot: &ateapipb.ObjectRef{Atespace: "team-a", Name: "prev"},
 		},
 		{
 			name:         "stays nil without previous snapshot",
@@ -262,7 +258,7 @@ func TestCallAteletSuspendStep_DanglingWorkerDoesNotRecordPhantomSnapshot(t *tes
 				AteomPodName:       "pod-gone",
 				WorkerPoolName:     "pool",
 				InProgressSnapshot: "gs://snapshots/actor-1/never-written",
-				LatestSnapshotInfo: tt.prevSnapshot,
+				LatestSnapshot:     tt.prevSnapshot,
 			}
 			created, err := persistence.CreateActor(ctx, actor)
 			if err != nil {
@@ -286,11 +282,11 @@ func TestCallAteletSuspendStep_DanglingWorkerDoesNotRecordPhantomSnapshot(t *tes
 				t.Errorf("InProgressSnapshot = %q, want preserved for debugging", got)
 			}
 			if tt.prevSnapshot == nil {
-				if stored.GetLatestSnapshotInfo() != nil {
-					t.Errorf("LatestSnapshotInfo = %v, want nil", stored.GetLatestSnapshotInfo())
+				if stored.GetLatestSnapshot() != nil {
+					t.Errorf("LatestSnapshot = %v, want nil", stored.GetLatestSnapshot())
 				}
-			} else if got, want := stored.GetLatestSnapshotInfo().GetExternal().GetSnapshotUriPrefix(), tt.prevSnapshot.GetExternal().GetSnapshotUriPrefix(); got != want {
-				t.Errorf("LatestSnapshotInfo uri = %q, want %q", got, want)
+			} else if got, want := stored.GetLatestSnapshot().GetName(), tt.prevSnapshot.GetName(); got != want {
+				t.Errorf("LatestSnapshot name = %q, want %q", got, want)
 			}
 		})
 	}
@@ -337,7 +333,7 @@ func TestFinalizeSuspendedStep_ReleasesOnlyOwnWorker(t *testing.T) {
 				AteomPodNamespace:  "worker-ns",
 				AteomPodName:       "pod-1",
 				WorkerPoolName:     "pool",
-				InProgressSnapshot: "gs://snapshots/shared/1",
+				InProgressSnapshot: "snapshot-1",
 			}
 			if _, err := persistence.CreateActor(ctx, actor); err != nil {
 				t.Fatalf("CreateActor: %v", err)
@@ -345,7 +341,8 @@ func TestFinalizeSuspendedStep_ReleasesOnlyOwnWorker(t *testing.T) {
 
 			step := &FinalizeSuspendedStep{store: persistence}
 			input := &SuspendInput{ActorRef: resources.ActorRef{Atespace: "team-a", Name: "shared"}}
-			if err := step.Execute(ctx, input, &SuspendState{}); err != nil {
+			state := &SuspendState{ActorTemplate: &atev1alpha1.ActorTemplate{Spec: atev1alpha1.ActorTemplateSpec{SnapshotsConfig: atev1alpha1.SnapshotsConfig{Location: "gs://snapshots"}}}}
+			if err := step.Execute(ctx, input, state); err != nil {
 				t.Fatalf("Execute: %v", err)
 			}
 

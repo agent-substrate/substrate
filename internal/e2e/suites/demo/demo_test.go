@@ -82,6 +82,119 @@ func TestActorLifecycle(t *testing.T) {
 	}
 }
 
+func TestActorSnapshotLifecycle(t *testing.T) {
+	ctx := context.Background()
+	clients := e2e.GetClients()
+	nsObj := e2e.CreateNamespace(t)
+
+	_, _ = clients.SubstrateAPI.CreateAtespace(ctx, &ateapipb.CreateAtespaceRequest{
+		Atespace: &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: demoAtespace}},
+	})
+	at, err := createActorTemplate(ctx, t, clients, nsObj, v1alpha1.SnapshotScopeFull, v1alpha1.SnapshotScopeFull)
+	if err != nil {
+		t.Fatalf("failed to initialize ActorTemplate: %v", err)
+	}
+
+	sourceName := "snapshot-source-" + nsObj.Name
+	cloneName := "snapshot-clone-" + nsObj.Name
+	for _, name := range []string{sourceName, cloneName} {
+		name := name
+		t.Cleanup(func() {
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cancel()
+			_, _ = clients.SubstrateAPI.SuspendActor(cleanupCtx, &ateapipb.SuspendActorRequest{Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: name}})
+			_, _ = clients.SubstrateAPI.DeleteActor(cleanupCtx, &ateapipb.DeleteActorRequest{Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: name}})
+		})
+	}
+
+	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+		Metadata:               &ateapipb.ResourceMetadata{Atespace: demoAtespace, Name: sourceName},
+		ActorTemplateNamespace: nsObj.Name,
+		ActorTemplateName:      at.Name,
+	}}); err != nil {
+		t.Fatalf("failed to create source Actor: %v", err)
+	}
+	if _, err := clients.SubstrateAPI.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: sourceName}}); err != nil {
+		t.Fatalf("failed to resume source Actor: %v", err)
+	}
+	waitForActorStatus(ctx, t, clients, sourceName, ateapipb.Actor_STATUS_RUNNING)
+	response, err := callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: sourceName})
+	if err != nil {
+		t.Fatalf("failed to call source Actor: %v", err)
+	}
+	validateCounterResponse(t, response, "source", 1, 1)
+
+	suspended, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: sourceName}})
+	if err != nil {
+		t.Fatalf("failed to suspend source Actor: %v", err)
+	}
+	snapshot := suspended.GetActor().GetLatestSnapshot()
+	if snapshot.GetName() == "" {
+		t.Fatal("suspended Actor has no latest snapshot")
+	}
+	snapshotRef := &ateapipb.ActorSnapshotRef{Reference: &ateapipb.ActorSnapshotRef_Snapshot{Snapshot: snapshot}}
+	if _, err := clients.SubstrateAPI.GetActorSnapshot(ctx, &ateapipb.GetActorSnapshotRequest{Snapshot: snapshotRef}); err != nil {
+		t.Fatalf("failed to get ActorSnapshot: %v", err)
+	}
+	listed, err := clients.SubstrateAPI.ListActorSnapshots(ctx, &ateapipb.ListActorSnapshotsRequest{Atespace: demoAtespace})
+	if err != nil {
+		t.Fatalf("failed to list ActorSnapshots: %v", err)
+	}
+	found := false
+	for _, candidate := range listed.GetSnapshots() {
+		if candidate.GetMetadata().GetName() == snapshot.GetName() {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("snapshot %q missing from ListActorSnapshots", snapshot.GetName())
+	}
+
+	tagRef := &ateapipb.ObjectRef{Atespace: demoAtespace, Name: "e2e-" + nsObj.Name}
+	t.Cleanup(func() {
+		_, _ = clients.SubstrateAPI.DeleteActorSnapshotTag(context.Background(), &ateapipb.DeleteActorSnapshotTagRequest{Tag: tagRef})
+	})
+	if _, err := clients.SubstrateAPI.TagActorSnapshot(ctx, &ateapipb.TagActorSnapshotRequest{
+		Snapshot: snapshotRef,
+		Tag: &ateapipb.ActorSnapshotTag{
+			Metadata: &ateapipb.ResourceMetadata{Atespace: tagRef.GetAtespace(), Name: tagRef.GetName()},
+			Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
+		},
+	}); err != nil {
+		t.Fatalf("failed to tag ActorSnapshot: %v", err)
+	}
+	if _, err := clients.SubstrateAPI.UpdateActorSnapshotTag(ctx, &ateapipb.UpdateActorSnapshotTagRequest{
+		Tag: tagRef, Scope: ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED,
+	}); err != nil {
+		t.Fatalf("failed to publish ActorSnapshot tag: %v", err)
+	}
+
+	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{
+		Actor: &ateapipb.Actor{
+			Metadata:               &ateapipb.ResourceMetadata{Atespace: demoAtespace, Name: cloneName},
+			ActorTemplateNamespace: nsObj.Name,
+			ActorTemplateName:      at.Name,
+		},
+		SourceSnapshot: &ateapipb.ActorSnapshotRef{Reference: &ateapipb.ActorSnapshotRef_Tag{Tag: tagRef}},
+	}); err != nil {
+		t.Fatalf("failed to create Actor from snapshot tag: %v", err)
+	}
+	if _, err := clients.SubstrateAPI.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: cloneName}}); err != nil {
+		t.Fatalf("failed to resume cloned Actor: %v", err)
+	}
+	waitForActorStatus(ctx, t, clients, cloneName, ateapipb.Actor_STATUS_RUNNING)
+	response, err = callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: cloneName})
+	if err != nil {
+		t.Fatalf("failed to call cloned Actor: %v", err)
+	}
+	validateCounterResponse(t, response, "clone", 2, 2)
+
+	if _, err := clients.SubstrateAPI.DeleteActorSnapshotTag(ctx, &ateapipb.DeleteActorSnapshotTagRequest{Tag: tagRef}); err != nil {
+		t.Fatalf("failed to delete ActorSnapshot tag: %v", err)
+	}
+}
+
 func TestDurableDirLifecycle(t *testing.T) {
 	tests := []struct {
 		name string

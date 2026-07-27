@@ -71,7 +71,7 @@ func TestFinalizePausedStep_WorkerGone(t *testing.T) {
 	if got.GetStatus() != ateapipb.Actor_STATUS_CRASHED {
 		t.Errorf("status = %v, want CRASHED (node name unknown, cannot resume safely)", got.GetStatus())
 	}
-	for _, n := range got.GetLatestSnapshotInfo().GetLocal().GetNodeVmsWithLocalSnapshots() {
+	for _, n := range got.GetLocalSnapshotInfo().GetNodeVmsWithLocalSnapshots() {
 		if n == "" {
 			t.Errorf("BUG: empty string in NodeVmsWithLocalSnapshots, the scheduler's node restriction would never match a real worker")
 		}
@@ -211,15 +211,11 @@ func TestPauseSteps_CheckPrerequisite(t *testing.T) {
 func TestCallAteletPauseStep_DanglingWorkerDoesNotRecordPhantomSnapshot(t *testing.T) {
 	tests := []struct {
 		name         string
-		prevSnapshot *ateapipb.SnapshotInfo
+		prevSnapshot *ateapipb.ObjectRef
 	}{
 		{
-			name: "keeps previous snapshot",
-			prevSnapshot: &ateapipb.SnapshotInfo{
-				Data: &ateapipb.SnapshotInfo_External{
-					External: &ateapipb.ExternalSnapshotInfo{SnapshotUriPrefix: "gs://snapshots/actor-1/prev"},
-				},
-			},
+			name:         "keeps previous snapshot",
+			prevSnapshot: &ateapipb.ObjectRef{Atespace: "team-a", Name: "prev"},
 		},
 		{
 			name:         "stays nil without previous snapshot",
@@ -239,7 +235,7 @@ func TestCallAteletPauseStep_DanglingWorkerDoesNotRecordPhantomSnapshot(t *testi
 				AteomPodName:       "pod-gone",
 				WorkerPoolName:     "pool",
 				InProgressSnapshot: "actor-1-never-written",
-				LatestSnapshotInfo: tt.prevSnapshot,
+				LatestSnapshot:     tt.prevSnapshot,
 			}
 			created, err := persistence.CreateActor(ctx, actor)
 			if err != nil {
@@ -263,11 +259,11 @@ func TestCallAteletPauseStep_DanglingWorkerDoesNotRecordPhantomSnapshot(t *testi
 				t.Errorf("InProgressSnapshot = %q, want preserved for debugging", got)
 			}
 			if tt.prevSnapshot == nil {
-				if stored.GetLatestSnapshotInfo() != nil {
-					t.Errorf("LatestSnapshotInfo = %v, want nil", stored.GetLatestSnapshotInfo())
+				if stored.GetLatestSnapshot() != nil {
+					t.Errorf("LatestSnapshot = %v, want nil", stored.GetLatestSnapshot())
 				}
-			} else if got, want := stored.GetLatestSnapshotInfo().GetExternal().GetSnapshotUriPrefix(), tt.prevSnapshot.GetExternal().GetSnapshotUriPrefix(); got != want {
-				t.Errorf("LatestSnapshotInfo uri = %q, want %q", got, want)
+			} else if got, want := stored.GetLatestSnapshot().GetName(), tt.prevSnapshot.GetName(); got != want {
+				t.Errorf("LatestSnapshot name = %q, want %q", got, want)
 			}
 		})
 	}

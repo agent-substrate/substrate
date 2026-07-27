@@ -43,6 +43,25 @@ service Control {
   // Delete an actor. Only suspended actors can be deleted.
   rpc DeleteActor(DeleteActorRequest) returns (Actor) {}
 
+  // Get an ActorSnapshot.
+  rpc GetActorSnapshot(GetActorSnapshotRequest) returns (ActorSnapshot) {}
+
+  // List ActorSnapshots.
+  rpc ListActorSnapshots(ListActorSnapshotsRequest)
+      returns (ListActorSnapshotsResponse) {}
+
+  // Add an Atespace-owned, stable name for an ActorSnapshot.
+  rpc TagActorSnapshot(TagActorSnapshotRequest) returns (ActorSnapshotTag) {}
+
+  // Publish or unpublish an ActorSnapshot tag without changing its address.
+  rpc UpdateActorSnapshotTag(UpdateActorSnapshotTagRequest)
+      returns (ActorSnapshotTag) {}
+
+  // Delete an ActorSnapshot tag. The snapshot becomes garbage-collectable when
+  // its final tag is deleted.
+  rpc DeleteActorSnapshotTag(DeleteActorSnapshotTagRequest)
+      returns (ActorSnapshotTag) {}
+
   // List Workers.
   rpc ListWorkers(ListWorkersRequest) returns (ListWorkersResponse) {}
 
@@ -58,12 +77,9 @@ service Control {
   // List Atespaces.
   rpc ListAtespaces(ListAtespacesRequest) returns (ListAtespacesResponse) {}
 
-  // Delete an empty Atespace. Rejects (FailedPrecondition) if any actors remain.
+  // Delete an empty Atespace. Rejects (FailedPrecondition) if any Actors or
+  // ActorSnapshotTags remain.
   rpc DeleteAtespace(DeleteAtespaceRequest) returns (Atespace) {}
-}
-
-message ExternalSnapshotInfo {
-  string snapshot_uri_prefix = 1;
 }
 
 message LocalSnapshotInfo {
@@ -72,14 +88,21 @@ message LocalSnapshotInfo {
   repeated string node_vms_with_local_snapshots = 2;
 }
 
-message SnapshotInfo {
-  oneof data {
-    ExternalSnapshotInfo external = 2;
-    LocalSnapshotInfo local = 3;
-  }
+enum SnapshotContentScope {
+  // Defaults to FULL for compatibility with existing snapshot configuration.
+  SNAPSHOT_CONTENT_SCOPE_UNSPECIFIED = 0;
+  // Captures process memory, root filesystem changes, and durable data.
+  SNAPSHOT_CONTENT_SCOPE_FULL = 1;
+  // Captures durable data without process memory or root filesystem changes.
+  SNAPSHOT_CONTENT_SCOPE_DATA = 2;
+}
 
-  reserved 1;
-  reserved "type";
+enum ActorSnapshotTagScope {
+  // May initialize Actors only in the tag's owning Atespace.
+  ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE = 0;
+  // Published for use by Actors in any Atespace. The tag remains addressed
+  // through its owning Atespace.
+  ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED = 1;
 }
 
 // Selector matches worker pools by label.
@@ -161,7 +184,8 @@ message Actor {
 
   string in_progress_snapshot = 8;
   string ateom_pod_uid = 9;
-  SnapshotInfo latest_snapshot_info = 10;
+  reserved 10;
+  reserved "latest_snapshot_info";
 
   // worker_selector is the per-actor placement constraint. The scheduler
   // evaluates the AND of this selector and the template's workerSelector to
@@ -177,9 +201,40 @@ message Actor {
   // reference on the ActorTemplate.
   string worker_pool_name = 12;
 
+  // The latest durable snapshot created for this Actor.
+  ObjectRef latest_snapshot = 14;
+
+  // Node-local state used only while the Actor is paused.
+  LocalSnapshotInfo local_snapshot_info = 15;
+
+  // Actor version captured when the current durable snapshot began.
+  int64 in_progress_snapshot_source_actor_version = 16;
+
   // Volumes attached to the actor. These volumes only live as long as the actor.
   // They are deleted when the actor is deleted.
   repeated ExternalVolume actor_volumes = 13;
+}
+
+// ActorSnapshot is an independently addressable durable Actor snapshot. Its
+// contents are immutable. Its physical storage location is private to
+// Substrate.
+message ActorSnapshot {
+  ResourceMetadata metadata = 1;
+  ObjectRef source_actor = 2;
+  string source_actor_uid = 3;
+  int64 source_actor_version = 4;
+  string actor_template_namespace = 5;
+  string actor_template_name = 6;
+  string actor_template_uid = 7;
+  SnapshotContentScope content_scope = 8;
+}
+
+// ActorSnapshotTag is an immutable, Atespace-owned alias and retention pin.
+// Its owning Atespace cannot be deleted until the tag is removed.
+message ActorSnapshotTag {
+  ResourceMetadata metadata = 1;
+  ObjectRef snapshot = 2;
+  ActorSnapshotTagScope scope = 3;
 }
 
 // Atespace is the isolation boundary an Actor is created into. Global-scoped:
@@ -196,6 +251,15 @@ message ObjectRef {
   // The name of the resource. Required. Unique within an atespace, or globally
   // unique if the resource is global-scoped.
   string name = 2;
+}
+
+// ActorSnapshotRef addresses a snapshot by its canonical identity or by an
+// Atespace-owned tag. Tag addresses remain stable when tags are published.
+message ActorSnapshotRef {
+  oneof reference {
+    ObjectRef snapshot = 1;
+    ObjectRef tag = 2;
+  }
 }
 
 message CreateAtespaceRequest {
@@ -238,6 +302,9 @@ message GetActorRequest {
 message CreateActorRequest {
   // The actor to create.
   Actor actor = 1;
+
+  // Optional durable snapshot used to initialize the Actor.
+  ActorSnapshotRef source_snapshot = 2;
 }
 
 // Request to update mutable fields on an existing Actor.
@@ -284,6 +351,35 @@ message ResumeActorResponse {
 
 message DeleteActorRequest {
   ObjectRef actor = 1;
+}
+
+message GetActorSnapshotRequest {
+  ActorSnapshotRef snapshot = 1;
+}
+
+message ListActorSnapshotsRequest {
+  string atespace = 1;
+  int32 page_size = 2;
+  string page_token = 3;
+}
+
+message ListActorSnapshotsResponse {
+  repeated ActorSnapshot snapshots = 1;
+  string next_page_token = 2;
+}
+
+message TagActorSnapshotRequest {
+  ActorSnapshotRef snapshot = 1;
+  ActorSnapshotTag tag = 2;
+}
+
+message UpdateActorSnapshotTagRequest {
+  ObjectRef tag = 1;
+  ActorSnapshotTagScope scope = 2;
+}
+
+message DeleteActorSnapshotTagRequest {
+  ObjectRef tag = 1;
 }
 
 message ListWorkersRequest {

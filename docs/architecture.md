@@ -418,7 +418,7 @@ Triggered by an inbound request at the Gateway or an explicit API call.
   2. **Assignment**: The Control Plane claims a warm worker from the
      `WorkerPool`.
 
-  3. **Hydration**: The `atelet` supervisor coordinates with the `ateom` process inside the worker pod to restore the `GoldenSnapshot` (for first-run) or the `LatestSnapshotInfo` (for recurring runs) into the sandbox.
+  3. **Hydration**: The `atelet` supervisor coordinates with the `ateom` process inside the worker pod to restore the ActorTemplate's golden `ActorSnapshot` (for first-run) or the Actor's latest `ActorSnapshot` (for recurring runs) into the sandbox.
 
   4. **Status**: Status transitions to `STATUS_RUNNING`. The actor now has an
      active Worker IP.
@@ -437,7 +437,13 @@ Triggered by an explicit `SuspendActor` call.
   3. **Reclaim**: The physical worker is wiped and returned to the `WorkerPool`.
 
   4. **Status**: Status transitions back to `STATUS_SUSPENDED`, now pointing to
-     the `LatestSnapshotInfo` for future resumptions.
+     an immutable `ActorSnapshot` resource and references it for future resumptions.
+
+Snapshots may be given tags owned and addressed by an Atespace. The same tag
+name may exist in different Atespaces. A tag is an immutable alias and retention
+pin: publishing it permits reuse from other Atespaces without changing its
+`atespace/name` address. Deleting the owning Atespace deletes all of its tags,
+including published tags, but leaves snapshot cleanup to garbage collection.
 
 ### Phase 4: Deletion
 

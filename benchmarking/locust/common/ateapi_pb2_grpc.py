@@ -19,7 +19,7 @@ import warnings
 
 from . import ateapi_pb2 as ateapi__pb2
 
-GRPC_GENERATED_VERSION = '1.81.1'
+GRPC_GENERATED_VERSION = '1.82.1'
 GRPC_VERSION = grpc.__version__
 _version_not_supported = False
 
@@ -83,6 +83,31 @@ class ControlStub:
                 '/ateapi.Control/DeleteActor',
                 request_serializer=ateapi__pb2.DeleteActorRequest.SerializeToString,
                 response_deserializer=ateapi__pb2.Actor.FromString,
+                _registered_method=True)
+        self.GetActorSnapshot = channel.unary_unary(
+                '/ateapi.Control/GetActorSnapshot',
+                request_serializer=ateapi__pb2.GetActorSnapshotRequest.SerializeToString,
+                response_deserializer=ateapi__pb2.ActorSnapshot.FromString,
+                _registered_method=True)
+        self.ListActorSnapshots = channel.unary_unary(
+                '/ateapi.Control/ListActorSnapshots',
+                request_serializer=ateapi__pb2.ListActorSnapshotsRequest.SerializeToString,
+                response_deserializer=ateapi__pb2.ListActorSnapshotsResponse.FromString,
+                _registered_method=True)
+        self.TagActorSnapshot = channel.unary_unary(
+                '/ateapi.Control/TagActorSnapshot',
+                request_serializer=ateapi__pb2.TagActorSnapshotRequest.SerializeToString,
+                response_deserializer=ateapi__pb2.ActorSnapshotTag.FromString,
+                _registered_method=True)
+        self.UpdateActorSnapshotTag = channel.unary_unary(
+                '/ateapi.Control/UpdateActorSnapshotTag',
+                request_serializer=ateapi__pb2.UpdateActorSnapshotTagRequest.SerializeToString,
+                response_deserializer=ateapi__pb2.ActorSnapshotTag.FromString,
+                _registered_method=True)
+        self.DeleteActorSnapshotTag = channel.unary_unary(
+                '/ateapi.Control/DeleteActorSnapshotTag',
+                request_serializer=ateapi__pb2.DeleteActorSnapshotTagRequest.SerializeToString,
+                response_deserializer=ateapi__pb2.ActorSnapshotTag.FromString,
                 _registered_method=True)
         self.ListWorkers = channel.unary_unary(
                 '/ateapi.Control/ListWorkers',
@@ -169,6 +194,42 @@ class ControlServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def GetActorSnapshot(self, request, context):
+        """Get an ActorSnapshot.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ListActorSnapshots(self, request, context):
+        """List ActorSnapshots.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def TagActorSnapshot(self, request, context):
+        """Add an Atespace-owned, stable name for an ActorSnapshot.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def UpdateActorSnapshotTag(self, request, context):
+        """Publish or unpublish an ActorSnapshot tag without changing its address.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def DeleteActorSnapshotTag(self, request, context):
+        """Delete an ActorSnapshot tag. The snapshot becomes garbage-collectable when
+        its final tag is deleted.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
     def ListWorkers(self, request, context):
         """List Workers.
         """
@@ -205,7 +266,8 @@ class ControlServicer:
         raise NotImplementedError('Method not implemented!')
 
     def DeleteAtespace(self, request, context):
-        """Delete an empty Atespace. Rejects (FailedPrecondition) if any actors remain.
+        """Delete an empty Atespace. Rejects (FailedPrecondition) if any Actors or
+        ActorSnapshotTags remain.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -248,6 +310,31 @@ def add_ControlServicer_to_server(servicer, server):
                     servicer.DeleteActor,
                     request_deserializer=ateapi__pb2.DeleteActorRequest.FromString,
                     response_serializer=ateapi__pb2.Actor.SerializeToString,
+            ),
+            'GetActorSnapshot': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetActorSnapshot,
+                    request_deserializer=ateapi__pb2.GetActorSnapshotRequest.FromString,
+                    response_serializer=ateapi__pb2.ActorSnapshot.SerializeToString,
+            ),
+            'ListActorSnapshots': grpc.unary_unary_rpc_method_handler(
+                    servicer.ListActorSnapshots,
+                    request_deserializer=ateapi__pb2.ListActorSnapshotsRequest.FromString,
+                    response_serializer=ateapi__pb2.ListActorSnapshotsResponse.SerializeToString,
+            ),
+            'TagActorSnapshot': grpc.unary_unary_rpc_method_handler(
+                    servicer.TagActorSnapshot,
+                    request_deserializer=ateapi__pb2.TagActorSnapshotRequest.FromString,
+                    response_serializer=ateapi__pb2.ActorSnapshotTag.SerializeToString,
+            ),
+            'UpdateActorSnapshotTag': grpc.unary_unary_rpc_method_handler(
+                    servicer.UpdateActorSnapshotTag,
+                    request_deserializer=ateapi__pb2.UpdateActorSnapshotTagRequest.FromString,
+                    response_serializer=ateapi__pb2.ActorSnapshotTag.SerializeToString,
+            ),
+            'DeleteActorSnapshotTag': grpc.unary_unary_rpc_method_handler(
+                    servicer.DeleteActorSnapshotTag,
+                    request_deserializer=ateapi__pb2.DeleteActorSnapshotTagRequest.FromString,
+                    response_serializer=ateapi__pb2.ActorSnapshotTag.SerializeToString,
             ),
             'ListWorkers': grpc.unary_unary_rpc_method_handler(
                     servicer.ListWorkers,
@@ -470,6 +557,141 @@ class Control:
             '/ateapi.Control/DeleteActor',
             ateapi__pb2.DeleteActorRequest.SerializeToString,
             ateapi__pb2.Actor.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetActorSnapshot(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/ateapi.Control/GetActorSnapshot',
+            ateapi__pb2.GetActorSnapshotRequest.SerializeToString,
+            ateapi__pb2.ActorSnapshot.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ListActorSnapshots(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/ateapi.Control/ListActorSnapshots',
+            ateapi__pb2.ListActorSnapshotsRequest.SerializeToString,
+            ateapi__pb2.ListActorSnapshotsResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def TagActorSnapshot(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/ateapi.Control/TagActorSnapshot',
+            ateapi__pb2.TagActorSnapshotRequest.SerializeToString,
+            ateapi__pb2.ActorSnapshotTag.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def UpdateActorSnapshotTag(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/ateapi.Control/UpdateActorSnapshotTag',
+            ateapi__pb2.UpdateActorSnapshotTagRequest.SerializeToString,
+            ateapi__pb2.ActorSnapshotTag.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def DeleteActorSnapshotTag(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/ateapi.Control/DeleteActorSnapshotTag',
+            ateapi__pb2.DeleteActorSnapshotTagRequest.SerializeToString,
+            ateapi__pb2.ActorSnapshotTag.FromString,
             options,
             channel_credentials,
             insecure,

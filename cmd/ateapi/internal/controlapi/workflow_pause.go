@@ -272,9 +272,7 @@ func (s *FinalizePausedStep) Execute(ctx context.Context, input *PauseInput, sta
 			if latestActor.Status != ateapipb.Actor_STATUS_CRASHED {
 				localInfo.NodeVmsWithLocalSnapshots = []string{nodeName}
 			}
-			latestActor.LatestSnapshotInfo = &ateapipb.SnapshotInfo{
-				Data: &ateapipb.SnapshotInfo_Local{Local: localInfo},
-			}
+			latestActor.LocalSnapshotInfo = localInfo
 			latestActor.InProgressSnapshot = ""
 		}
 		latestActor.AteomPodNamespace = ""

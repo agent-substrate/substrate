@@ -46,9 +46,11 @@ type ResumeInput struct {
 
 // ResumeState holds the mutable state loaded and modified during execution.
 type ResumeState struct {
-	Actor         *ateapipb.Actor
-	Worker        *ateapipb.Worker
-	ActorTemplate *atev1alpha1.ActorTemplate
+	Actor            *ateapipb.Actor
+	Worker           *ateapipb.Worker
+	ActorTemplate    *atev1alpha1.ActorTemplate
+	SnapshotLocation string
+	SnapshotScope    ateapipb.SnapshotContentScope
 }
 
 type LoadActorForResumeStep struct {
@@ -79,6 +81,27 @@ func (s *LoadActorForResumeStep) Execute(ctx context.Context, input *ResumeInput
 		return fmt.Errorf("while getting ActorTemplate: %w", err)
 	}
 	state.ActorTemplate = actorTemplate
+	if ref := actor.GetLatestSnapshot(); ref != nil {
+		snapshot, location, err := s.store.GetActorSnapshot(ctx, ref.GetAtespace(), ref.GetName())
+		if errors.Is(err, store.ErrNotFound) {
+			return status.Error(codes.DataLoss, "ActorSnapshot data is missing")
+		}
+		if err != nil {
+			return fmt.Errorf("while getting ActorSnapshot: %w", err)
+		}
+		state.SnapshotLocation = location
+		state.SnapshotScope = snapshot.GetContentScope()
+	} else if actorTemplate.Status.GoldenSnapshot != "" && !input.Boot {
+		snapshot, location, err := s.store.GetActorSnapshot(ctx, resources.GoldenActorAtespace, actorTemplate.Status.GoldenSnapshot)
+		if errors.Is(err, store.ErrNotFound) {
+			return status.Error(codes.DataLoss, "ActorTemplate golden snapshot data is missing")
+		}
+		if err != nil {
+			return fmt.Errorf("while getting golden ActorSnapshot: %w", err)
+		}
+		state.SnapshotLocation = location
+		state.SnapshotScope = snapshot.GetContentScope()
+	}
 
 	// If the Actor is in Resuming state, it means a previous attempt crashed after AssignWorkerStep.
 	// We don't need to repeat the AssignWorkerStep, load the Worker now.
@@ -303,7 +326,7 @@ func schedulingConstraints(actor *ateapipb.Actor, tmpl *atev1alpha1.ActorTemplat
 	c := scheduling.Constraints{
 		SandboxClass:  string(tmpl.Spec.SandboxClass),
 		ActorSelector: labels.SelectorFromSet(labels.Set(actor.GetWorkerSelector().GetMatchLabels())),
-		RequiredNodes: actor.GetLatestSnapshotInfo().GetLocal().GetNodeVmsWithLocalSnapshots(),
+		RequiredNodes: actor.GetLocalSnapshotInfo().GetNodeVmsWithLocalSnapshots(),
 	}
 	if tmpl.Spec.WorkerSelector != nil {
 		sel, err := metav1.LabelSelectorAsSelector(tmpl.Spec.WorkerSelector)
@@ -433,7 +456,7 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 		return err
 	}
 
-	if data := state.Actor.GetLatestSnapshotInfo().GetData(); data != nil {
+	if local := state.Actor.GetLocalSnapshotInfo(); local != nil {
 		slog.InfoContext(ctx, "Actor has snapshot; Restoring from snapshot")
 
 		req := &ateletpb.RestoreRequest{
@@ -445,33 +468,16 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 			Spec:                   workloadSpec,
 			ActorUid:               state.Actor.GetMetadata().Uid,
 		}
-		switch d := data.(type) {
-		case *ateapipb.SnapshotInfo_Local:
-			req.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL
-			req.Config = &ateletpb.RestoreRequest_LocalConfig{
-				LocalConfig: &ateletpb.LocalCheckpointConfiguration{
-					SnapshotPrefix: d.Local.GetSnapshotPrefix(),
-				},
-			}
-			req.Scope = toAteletSnapshotScope(state.ActorTemplate.Spec.SnapshotsConfig.OnPause)
-		case *ateapipb.SnapshotInfo_External:
-			req.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL
-			req.Config = &ateletpb.RestoreRequest_ExternalConfig{
-				ExternalConfig: &ateletpb.ExternalCheckpointConfiguration{
-					SnapshotUriPrefix: d.External.GetSnapshotUriPrefix(),
-				},
-			}
-			req.Scope = toAteletSnapshotScope(state.ActorTemplate.Spec.SnapshotsConfig.OnCommit)
-		default:
-			return fmt.Errorf("unsupported snapshot type: %T", data)
+		req.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL
+		req.Config = &ateletpb.RestoreRequest_LocalConfig{
+			LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotPrefix: local.GetSnapshotPrefix()},
 		}
+		req.Scope = toAteletSnapshotScope(state.ActorTemplate.Spec.SnapshotsConfig.OnPause)
 
 		_, err = client.Restore(ctx, req)
 		return maybeCrashActor(ctx, s.store, input.ActorRef, err, "while restoring workload")
-	} else if state.ActorTemplate.Status.GoldenSnapshot != "" && !input.Boot {
-		slog.InfoContext(ctx, "Actor has no snapshot; ActorTemplate has golden snapshot; Restoring from golden snapshot")
-
-		snapshot := state.ActorTemplate.Status.GoldenSnapshot
+	} else if state.SnapshotLocation != "" {
+		slog.InfoContext(ctx, "Actor has durable snapshot; Restoring from snapshot")
 
 		req := &ateletpb.RestoreRequest{
 			TargetAteomUid:         state.Actor.GetAteomPodUid(),
@@ -483,14 +489,14 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 			Type:                   ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
 			Config: &ateletpb.RestoreRequest_ExternalConfig{
 				ExternalConfig: &ateletpb.ExternalCheckpointConfiguration{
-					SnapshotUriPrefix: snapshot,
+					SnapshotUriPrefix: state.SnapshotLocation,
 				},
 			},
-			Scope:    toAteletSnapshotScope(state.ActorTemplate.Spec.SnapshotsConfig.OnCommit),
+			Scope:    actorSnapshotContentScopeToAtelet(state.SnapshotScope),
 			ActorUid: state.Actor.GetMetadata().Uid,
 		}
 		_, err = client.Restore(ctx, req)
-		return maybeCrashActor(ctx, s.store, input.ActorRef, err, "while creating workload from golden snapshot")
+		return maybeCrashActor(ctx, s.store, input.ActorRef, err, "while restoring durable snapshot")
 	} else {
 		slog.InfoContext(ctx, "Actor has no snapshot; ActorTemplate has no golden snapshot; Booting from ActorTemplate spec")
 
