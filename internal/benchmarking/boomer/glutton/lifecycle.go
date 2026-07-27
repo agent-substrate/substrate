@@ -100,6 +100,15 @@ type taskRuntime struct {
 // (the analog of locust's per-user on_start); subsequent calls run a
 // resume/ping/suspend cycle.
 func (r *taskRuntime) iterate() {
+	// Pace every iteration, including the ones that bail out early. Boomer
+	// re-enters iterate immediately when it returns, so a wait on the success
+	// path only means a failing VU spins as fast as a gRPC round trip allows.
+	// That matters most exactly when things are already going wrong: run more
+	// VUs than there are workers and every starved VU hammers ResumeActor at
+	// full rate, which inflates the reported request counts and piles load onto
+	// the ateapi that the healthy VUs are also waiting on.
+	defer func() { time.Sleep(r.dynamicWait()) }()
+
 	gid := goroutineID()
 	val, loaded := r.users.Load(gid)
 	if !loaded {
@@ -119,8 +128,6 @@ func (r *taskRuntime) iterate() {
 	}
 	user.ping(ctx)
 	user.suspend(ctx)
-
-	time.Sleep(r.dynamicWait())
 }
 
 func (r *taskRuntime) startUser(ctx context.Context) (*gluttonUser, error) {
