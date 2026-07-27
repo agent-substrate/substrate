@@ -304,7 +304,7 @@ func TestLogsActorRunner_Run_OneShot_ActorNotRunning(t *testing.T) {
 		t.Fatal("expected error, got nil")
 	}
 
-	wantErrMsg := "actor act-123 is not currently running on any worker pod"
+	wantErrMsg := "actor space-1/act-123 is not currently running on any worker pod"
 	if !strings.Contains(err.Error(), wantErrMsg) {
 		t.Errorf("unexpected error message: %v (expected substring %q)", err, wantErrMsg)
 	}
@@ -442,7 +442,7 @@ func TestLogsActorRunner_Run_Follow_NotFoundActor(t *testing.T) {
 		t.Fatal("expected error, got nil")
 	}
 
-	wantErrMsg := "actor act-notfound not found"
+	wantErrMsg := "actor space-1/act-notfound not found"
 	if !strings.Contains(err.Error(), wantErrMsg) {
 		t.Errorf("unexpected error: %v (expected %q)", err, wantErrMsg)
 	}

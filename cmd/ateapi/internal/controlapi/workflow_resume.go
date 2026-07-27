@@ -68,7 +68,7 @@ func (s *LoadActorForResumeStep) Execute(ctx context.Context, input *ResumeInput
 	actor, err := s.store.GetActor(ctx, input.ActorRef)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return status.Errorf(codes.NotFound, "Actor %s not found", input.ActorRef.Name)
+			return status.Errorf(codes.NotFound, "Actor %s not found", input.ActorRef)
 		}
 		return fmt.Errorf("while getting actor from DB: %w", err)
 	}
@@ -94,7 +94,7 @@ func (s *LoadActorForResumeStep) Execute(ctx context.Context, input *ResumeInput
 			if cerr := crashActor(ctx, s.store, input.ActorRef); cerr != nil {
 				return cerr
 			}
-			return status.Errorf(codes.Aborted, "actor %s crashed", input.ActorRef.Name)
+			return status.Errorf(codes.Aborted, "actor %s crashed", input.ActorRef)
 		}
 
 		wk, err := s.store.GetWorker(ctx, actor.AteomPodNamespace, actor.WorkerPoolName, actor.AteomPodName)
@@ -104,7 +104,7 @@ func (s *LoadActorForResumeStep) Execute(ctx context.Context, input *ResumeInput
 				if cerr := crashActor(ctx, s.store, input.ActorRef); cerr != nil {
 					return cerr
 				}
-				return status.Errorf(codes.Aborted, "actor %s crashed", input.ActorRef.Name)
+				return status.Errorf(codes.Aborted, "actor %s crashed", input.ActorRef)
 			}
 			return fmt.Errorf("failed to get already assigned worker for actor %w", err)
 		}
@@ -133,7 +133,7 @@ func (s *AssignWorkerStep) CheckPrerequisite(ctx context.Context, input *ResumeI
 	case ateapipb.Actor_STATUS_SUSPENDED, ateapipb.Actor_STATUS_PAUSED:
 		return nil
 	default:
-		return status.Errorf(codes.FailedPrecondition, "AssignWorkerStep prerequisite not met for Actor: %s (got: %v, want %s or %s)", input.ActorRef.Name, state.Actor.GetStatus(), ateapipb.Actor_STATUS_SUSPENDED, ateapipb.Actor_STATUS_PAUSED)
+		return status.Errorf(codes.FailedPrecondition, "AssignWorkerStep prerequisite not met for Actor: %s (got: %v, want %s or %s)", input.ActorRef, state.Actor.GetStatus(), ateapipb.Actor_STATUS_SUSPENDED, ateapipb.Actor_STATUS_PAUSED)
 	}
 }
 
@@ -234,7 +234,7 @@ func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, stat
 			state.Actor = fresh
 			return err
 		default:
-			return status.Errorf(codes.Aborted, "actor %s is %s and can no longer be resumed", input.ActorRef.Name, fresh.GetStatus())
+			return status.Errorf(codes.Aborted, "actor %s is %s and can no longer be resumed", input.ActorRef, fresh.GetStatus())
 		}
 	}
 	state.Actor = updatedActor
@@ -326,7 +326,7 @@ func (s *CallAteletRestoreStep) IsComplete(ctx context.Context, input *ResumeInp
 }
 func (s *CallAteletRestoreStep) CheckPrerequisite(ctx context.Context, input *ResumeInput, state *ResumeState) error {
 	if state.Actor.GetStatus() != ateapipb.Actor_STATUS_RESUMING {
-		return status.Errorf(codes.FailedPrecondition, "CallAteletRestoreStep prerequisite not met for Actor: %s (got: %v, want %s)", input.ActorRef.Name, state.Actor.GetStatus(), ateapipb.Actor_STATUS_RESUMING)
+		return status.Errorf(codes.FailedPrecondition, "CallAteletRestoreStep prerequisite not met for Actor: %s (got: %v, want %s)", input.ActorRef, state.Actor.GetStatus(), ateapipb.Actor_STATUS_RESUMING)
 	}
 	if state.Worker == nil {
 		return status.Errorf(codes.FailedPrecondition, "Assigned worker is nil")
@@ -340,7 +340,7 @@ func (s *CallAteletRestoreStep) CheckPrerequisite(ctx context.Context, input *Re
 		if cerr := crashActor(ctx, s.store, input.ActorRef); cerr != nil {
 			return fmt.Errorf("while crashing actor: %w", cerr)
 		}
-		return status.Errorf(codes.Aborted, "actor %s crashed", input.ActorRef.Name)
+		return status.Errorf(codes.Aborted, "actor %s crashed", input.ActorRef)
 	}
 	constraints, err := schedulingConstraints(state.Actor, state.ActorTemplate)
 	if err != nil {
@@ -360,7 +360,7 @@ func (s *CallAteletRestoreStep) CheckPrerequisite(ctx context.Context, input *Re
 		if cerr := crashActor(ctx, s.store, input.ActorRef); cerr != nil {
 			return fmt.Errorf("while crashing actor: %w", cerr)
 		}
-		return status.Errorf(codes.Aborted, "actor %s crashed", input.ActorRef.Name)
+		return status.Errorf(codes.Aborted, "actor %s crashed", input.ActorRef)
 	}
 	return nil
 }
@@ -473,7 +473,7 @@ func (s *FinalizeRunningStep) IsComplete(ctx context.Context, input *ResumeInput
 }
 func (s *FinalizeRunningStep) CheckPrerequisite(ctx context.Context, input *ResumeInput, state *ResumeState) error {
 	if state.Actor.GetStatus() != ateapipb.Actor_STATUS_RESUMING {
-		return status.Errorf(codes.FailedPrecondition, "FinalizeRunningStep prerequisite not met for Actor: %s (got: %v, want %s)", input.ActorRef.Name, state.Actor.GetStatus(), ateapipb.Actor_STATUS_RESUMING)
+		return status.Errorf(codes.FailedPrecondition, "FinalizeRunningStep prerequisite not met for Actor: %s (got: %v, want %s)", input.ActorRef, state.Actor.GetStatus(), ateapipb.Actor_STATUS_RESUMING)
 	}
 	return nil
 }

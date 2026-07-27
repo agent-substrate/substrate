@@ -37,7 +37,7 @@ func (s *Service) DeleteActor(ctx context.Context, req *ateapipb.DeleteActorRequ
 	actor, err := s.persistence.GetActor(ctx, actorRef)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, status.Errorf(codes.NotFound, "Actor %s not found", actorRef.Name)
+			return nil, status.Errorf(codes.NotFound, "Actor %s not found", actorRef)
 		}
 		return nil, fmt.Errorf("while fetching actor: %w", err)
 	}
@@ -50,14 +50,14 @@ func (s *Service) DeleteActor(ctx context.Context, req *ateapipb.DeleteActorRequ
 	deleted, err := s.persistence.DeleteActor(ctx, actorRef)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, status.Errorf(codes.NotFound, "Actor %s not found", actorRef.Name)
+			return nil, status.Errorf(codes.NotFound, "Actor %s not found", actorRef)
 		}
 		if errors.Is(err, store.ErrFailedPrecondition) {
 			current, getErr := s.persistence.GetActor(ctx, actorRef)
 			if getErr == nil {
-				return nil, status.Errorf(codes.FailedPrecondition, "Actor %s is not suspended (status: %v)", actorRef.Name, current.GetStatus())
+				return nil, status.Errorf(codes.FailedPrecondition, "Actor %s is not suspended (status: %v)", actorRef, current.GetStatus())
 			}
-			return nil, status.Errorf(codes.FailedPrecondition, "Actor %s is not suspended", actorRef.Name)
+			return nil, status.Errorf(codes.FailedPrecondition, "Actor %s is not suspended", actorRef)
 		}
 		if errors.Is(err, store.ErrVersionConflict) {
 			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")

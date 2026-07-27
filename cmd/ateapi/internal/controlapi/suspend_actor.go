@@ -39,7 +39,7 @@ func (s *Service) SuspendActor(ctx context.Context, req *ateapipb.SuspendActorRe
 			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
 		}
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, status.Errorf(codes.NotFound, "Actor %s not found", actorRef.Name)
+			return nil, status.Errorf(codes.NotFound, "Actor %s not found", actorRef)
 		}
 		return nil, err
 	}

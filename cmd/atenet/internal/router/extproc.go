@@ -151,7 +151,7 @@ func (s *ExtProcServer) handleRequestHeaders(
 	slog.InfoContext(ctx, "ResumeActor", slog.Any("actor", actorRef))
 	actor, err := s.resumer.ResumeActor(ctx, actorRef)
 	if err != nil {
-		return nil, metadata, "", "", "", mapResumeError(actorRef.Name, err)
+		return nil, metadata, "", "", "", mapResumeError(actorRef, err)
 	}
 
 	// Actor template identity, used as low-cardinality route-latency metric
@@ -167,7 +167,7 @@ func (s *ExtProcServer) handleRequestHeaders(
 
 	if ip := net.ParseIP(workerIP); ip == nil {
 		return nil, metadata, "", tmplNs, tmplName, newReqError(envoy_type.StatusCode_InternalServerError,
-			"actor %q routing failed", actorRef.Name)
+			"actor %s routing failed", actorRef)
 	}
 
 	// TODO(bowei) -- handle more than port 80 on the actor.

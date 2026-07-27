@@ -41,7 +41,7 @@ func maybeCrashActor(ctx context.Context, st store.Interface, actorRef resources
 			slog.ErrorContext(ctx, "Failed to crash actor", slog.Any("cerr", cerr))
 			return cerr
 		}
-		return status.Errorf(codes.DataLoss, "actor %s crashed", actorRef.Name)
+		return status.Errorf(codes.DataLoss, "actor %s crashed", actorRef)
 	}
 	return fmt.Errorf("%s: %w", wrapMsg, err)
 }

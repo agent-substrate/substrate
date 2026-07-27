@@ -844,7 +844,7 @@ func TestGetActor_NotFound(t *testing.T) {
 	_, err := tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "non-existent"},
 	})
-	assertGrpcError(t, err, codes.NotFound, "Actor non-existent not found")
+	assertGrpcError(t, err, codes.NotFound, "Actor test-atespace/non-existent not found")
 }
 
 // TestListActors tests that all created actors can be listed.
@@ -958,7 +958,7 @@ func TestListActors_ByAtespace(t *testing.T) {
 		t.Errorf("GetActor(id1, team-a) failed: %v", err)
 	}
 	_, err = tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "id1"}})
-	assertGrpcError(t, err, codes.NotFound, "Actor id1 not found")
+	assertGrpcError(t, err, codes.NotFound, "Actor test-atespace/id1 not found")
 }
 
 // TestListActors_AllAtespaces verifies that an empty atespace lists actors across
@@ -1735,7 +1735,7 @@ func TestUpdateActor_NotFound(t *testing.T) {
 	defer tc.cleanup()
 
 	_, err := tc.client.UpdateActor(context.Background(), &ateapipb.UpdateActorRequest{Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "does-not-exist"}})
-	assertGrpcError(t, err, codes.NotFound, "Actor does-not-exist not found")
+	assertGrpcError(t, err, codes.NotFound, "Actor test-atespace/does-not-exist not found")
 }
 
 // TestResumeActor_ReleasesStaleWorkerWhenPoolBecomesIneligible verifies that
@@ -2578,7 +2578,7 @@ func TestDeleteActor_Success(t *testing.T) {
 	_, err = tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "id1"},
 	})
-	assertGrpcError(t, err, codes.NotFound, "Actor id1 not found")
+	assertGrpcError(t, err, codes.NotFound, "Actor test-atespace/id1 not found")
 }
 
 func TestDeleteActor_NotSuspended(t *testing.T) {
@@ -2608,7 +2608,7 @@ func TestDeleteActor_NotSuspended(t *testing.T) {
 	_, err = tc.client.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "id1"},
 	})
-	assertGrpcError(t, err, codes.FailedPrecondition, "Actor id1 is not suspended (status: STATUS_RUNNING)")
+	assertGrpcError(t, err, codes.FailedPrecondition, "Actor test-atespace/id1 is not suspended (status: STATUS_RUNNING)")
 }
 
 func TestDeleteActor_Crashed(t *testing.T) {
@@ -2649,7 +2649,7 @@ func TestDeleteActor_Crashed(t *testing.T) {
 	_, err = tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "id1"},
 	})
-	assertGrpcError(t, err, codes.NotFound, "Actor id1 not found")
+	assertGrpcError(t, err, codes.NotFound, "Actor test-atespace/id1 not found")
 }
 
 func TestDeleteActor_NotFound(t *testing.T) {
@@ -2660,7 +2660,7 @@ func TestDeleteActor_NotFound(t *testing.T) {
 	_, err := tc.client.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "non-existent"},
 	})
-	assertGrpcError(t, err, codes.NotFound, "Actor non-existent not found")
+	assertGrpcError(t, err, codes.NotFound, "Actor test-atespace/non-existent not found")
 }
 
 func assertGrpcErrorRegex(t *testing.T, err error, wantCode codes.Code, wantMsg string) {

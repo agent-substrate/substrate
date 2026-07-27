@@ -34,7 +34,7 @@ func (s *Service) GetActor(ctx context.Context, req *ateapipb.GetActorRequest) (
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
 	actor, err := s.persistence.GetActor(ctx, actorRef)
 	if errors.Is(err, store.ErrNotFound) {
-		return nil, status.Errorf(codes.NotFound, "Actor %s not found", actorRef.Name)
+		return nil, status.Errorf(codes.NotFound, "Actor %s not found", actorRef)
 	} else if err != nil {
 		return nil, fmt.Errorf("while getting actor from DB: %w", err)
 	}

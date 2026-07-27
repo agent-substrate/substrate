@@ -350,7 +350,7 @@ func TestAssignWorkerStep_ConflictRefreshesActor(t *testing.T) {
 
 			var injected *ateapipb.Actor
 			st := &conflictInjectingStore{Interface: persistence, inject: func() {
-				fresh, err := persistence.GetActor(ctx, "team-a", "id1")
+				fresh, err := persistence.GetActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"})
 				if err != nil {
 					t.Errorf("inject GetActor: %v", err)
 					return
@@ -369,7 +369,7 @@ func TestAssignWorkerStep_ConflictRefreshesActor(t *testing.T) {
 					Spec: atev1alpha1.ActorTemplateSpec{SandboxClass: atev1alpha1.SandboxClassGvisor},
 				},
 			}
-			err := step.Execute(ctx, &ResumeInput{ActorName: "id1", Atespace: "team-a"}, state)
+			err := step.Execute(ctx, &ResumeInput{ActorRef: resources.ActorRef{Atespace: "team-a", Name: "id1"}}, state)
 
 			if tc.wantRetry {
 				if !errors.Is(err, store.ErrVersionConflict) {
@@ -387,7 +387,7 @@ func TestAssignWorkerStep_ConflictRefreshesActor(t *testing.T) {
 				}
 			}
 
-			stored, err := persistence.GetActor(ctx, "team-a", "id1")
+			stored, err := persistence.GetActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"})
 			if err != nil {
 				t.Fatalf("GetActor: %v", err)
 			}

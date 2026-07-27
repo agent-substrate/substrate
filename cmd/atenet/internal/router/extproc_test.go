@@ -115,7 +115,7 @@ func TestExtProcHeadersEvaluation(t *testing.T) {
 			authority:      testUUID + ".team-a.actors.resources.substrate.ate.dev",
 			resumeErr:      errors.New("resume failed with sensitive detail"),
 			expectErr:      true,
-			expectedErrStr: `error resuming actor "123e4567-e89b-12d3-a456-426614174000"`,
+			expectedErrStr: `error resuming actor team-a/123e4567-e89b-12d3-a456-426614174000`,
 			expectedStatus: envoy_type.StatusCode_InternalServerError,
 		},
 		{
@@ -123,7 +123,7 @@ func TestExtProcHeadersEvaluation(t *testing.T) {
 			authority:      testUUID + ".team-a.actors.resources.substrate.ate.dev",
 			resumeErr:      status.Error(codes.FailedPrecondition, "no free workers available"),
 			expectErr:      true,
-			expectedErrStr: `actor "123e4567-e89b-12d3-a456-426614174000" unavailable: no free workers available`,
+			expectedErrStr: `actor team-a/123e4567-e89b-12d3-a456-426614174000 unavailable: no free workers available`,
 			expectedStatus: envoy_type.StatusCode_ServiceUnavailable,
 		},
 		{
@@ -131,7 +131,7 @@ func TestExtProcHeadersEvaluation(t *testing.T) {
 			authority:      testUUID + ".team-a.actors.resources.substrate.ate.dev",
 			resumeErr:      status.Error(codes.NotFound, "actor missing"),
 			expectErr:      true,
-			expectedErrStr: `actor "123e4567-e89b-12d3-a456-426614174000" not found`,
+			expectedErrStr: `actor team-a/123e4567-e89b-12d3-a456-426614174000 not found`,
 			expectedStatus: envoy_type.StatusCode_NotFound,
 		},
 		{
@@ -139,7 +139,7 @@ func TestExtProcHeadersEvaluation(t *testing.T) {
 			authority:      testUUID + ".team-a.actors.resources.substrate.ate.dev",
 			resumeErr:      status.Error(codes.Unavailable, "control-plane down"),
 			expectErr:      true,
-			expectedErrStr: `actor "123e4567-e89b-12d3-a456-426614174000" unavailable`,
+			expectedErrStr: `actor team-a/123e4567-e89b-12d3-a456-426614174000 unavailable`,
 			expectedStatus: envoy_type.StatusCode_ServiceUnavailable,
 		},
 		{
@@ -147,7 +147,7 @@ func TestExtProcHeadersEvaluation(t *testing.T) {
 			authority:      testUUID + ".team-a.actors.resources.substrate.ate.dev",
 			resumeErr:      status.Error(codes.DeadlineExceeded, "deadline"),
 			expectErr:      true,
-			expectedErrStr: `actor "123e4567-e89b-12d3-a456-426614174000" request timed out`,
+			expectedErrStr: `actor team-a/123e4567-e89b-12d3-a456-426614174000 request timed out`,
 			expectedStatus: envoy_type.StatusCode_GatewayTimeout,
 		},
 		{
@@ -159,7 +159,7 @@ func TestExtProcHeadersEvaluation(t *testing.T) {
 				},
 			},
 			expectErr:      true,
-			expectedErrStr: `actor "123e4567-e89b-12d3-a456-426614174000" routing failed`,
+			expectedErrStr: `actor team-a/123e4567-e89b-12d3-a456-426614174000 routing failed`,
 			expectedStatus: envoy_type.StatusCode_InternalServerError,
 		},
 		{
