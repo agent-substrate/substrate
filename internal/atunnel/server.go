@@ -62,11 +62,10 @@ type Server struct {
 }
 
 type activation struct {
-	atespace  string
-	actorName string
-	ctx       context.Context
-	cancel    context.CancelFunc
-	wg        sync.WaitGroup
+	ref    resources.ActorRef
+	ctx    context.Context
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
 }
 
 // NewServer creates a Server and validates its TLS material.
@@ -177,14 +176,13 @@ func (s *Server) Activate(atespace, actorName string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.active != nil {
-		return fmt.Errorf("atunnel: actor %s/%s is already active", s.active.atespace, s.active.actorName)
+		return fmt.Errorf("atunnel: actor %s is already active", s.active.ref)
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s.active = &activation{
-		atespace:  atespace,
-		actorName: actorName,
-		ctx:       ctx,
-		cancel:    cancel,
+		ref:    resources.ActorRef{Atespace: atespace, Name: actorName},
+		ctx:    ctx,
+		cancel: cancel,
 	}
 	return nil
 }
@@ -231,7 +229,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		s.reject(w)
 		return
 	}
-	actorRef, err := resources.ParseActorDNSName(host)
+	ref, err := resources.ParseActorDNSName(host)
 	if err != nil {
 		s.reject(w)
 		return
@@ -239,7 +237,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	s.mu.Lock()
 	active := s.active
-	if active == nil || active.atespace != actorRef.Atespace || active.actorName != actorRef.Name {
+	if active == nil || active.ref != ref {
 		s.mu.Unlock()
 		s.reject(w)
 		return
