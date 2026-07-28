@@ -26,7 +26,7 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
-func TestInitialActorVolumes_CreatingState(t *testing.T) {
+func TestInitialActorVolumes_PendingState(t *testing.T) {
 	tmpl := &atev1alpha1.ActorTemplate{
 		Spec: atev1alpha1.ActorTemplateSpec{
 			Volumes: []atev1alpha1.Volume{
@@ -63,12 +63,12 @@ func TestInitialActorVolumes_CreatingState(t *testing.T) {
 		{
 			VolumeName: "data-vol-1",
 			VolumeType: "mock",
-			Status:     ateapipb.ExternalVolume_CREATING,
+			Status:     ateapipb.ExternalVolume_PENDING,
 		},
 		{
 			VolumeName: "data-vol-2",
 			VolumeType: "mock",
-			Status:     ateapipb.ExternalVolume_CREATING,
+			Status:     ateapipb.ExternalVolume_PENDING,
 		},
 	}
 
@@ -141,7 +141,7 @@ func TestCreateActorVolumes(t *testing.T) {
 				{
 					VolumeName: "vol1",
 					VolumeType: "mock",
-					Status:     ateapipb.ExternalVolume_CREATING,
+					Status:     ateapipb.ExternalVolume_PENDING,
 				},
 				{
 					VolumeName: "vol2",
@@ -149,7 +149,7 @@ func TestCreateActorVolumes(t *testing.T) {
 				},
 				{
 					VolumeName: "vol3",
-					Status:     ateapipb.ExternalVolume_CREATING,
+					Status:     ateapipb.ExternalVolume_PENDING,
 				},
 			},
 			wantErr: true,
@@ -166,7 +166,7 @@ func TestCreateActorVolumes(t *testing.T) {
 				},
 				{
 					VolumeName: "vol3",
-					Status:     ateapipb.ExternalVolume_CREATING,
+					Status:     ateapipb.ExternalVolume_PENDING,
 				},
 			},
 		},
@@ -216,14 +216,14 @@ func TestCreateActorVolumes(t *testing.T) {
 			inputVolumes: []*ateapipb.ExternalVolume{
 				{
 					VolumeName: "missing-vol",
-					Status:     ateapipb.ExternalVolume_CREATING,
+					Status:     ateapipb.ExternalVolume_PENDING,
 				},
 			},
 			wantErr: true,
 			wantRes: []*ateapipb.ExternalVolume{
 				{
 					VolumeName: "missing-vol",
-					Status:     ateapipb.ExternalVolume_CREATING,
+					Status:     ateapipb.ExternalVolume_PENDING,
 				},
 			},
 		},

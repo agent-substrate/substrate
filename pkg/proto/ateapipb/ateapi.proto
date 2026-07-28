@@ -127,8 +127,8 @@ message ExternalVolume {
 
   enum Status {
     STATUS_UNKNOWN = 0;
-    // Volume being created in the storage system.
-    CREATING = 1;
+    // Volume creation pending in the storage system.
+    PENDING = 1;
     // Volume successfully created in the storage system.
     CREATED = 2;
     // Volume being deleted from the storage system.

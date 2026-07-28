@@ -124,7 +124,7 @@ func (s *LoadActorForResumeStep) Execute(ctx context.Context, input *ResumeInput
 
 func (s *LoadActorForResumeStep) RetryBackoff() *wait.Backoff { return nil }
 
-// CreateVolumesStep provisions any initial actor volumes that are in CREATING state.
+// CreateVolumesStep provisions any initial actor volumes that are in PENDING state.
 type CreateVolumesStep struct {
 	store store.Interface
 }
@@ -133,7 +133,7 @@ func (s *CreateVolumesStep) Name() string { return "CreateVolumes" }
 
 func (s *CreateVolumesStep) IsComplete(ctx context.Context, input *ResumeInput, state *ResumeState) (bool, error) {
 	for _, vol := range state.Actor.GetActorVolumes() {
-		if vol.GetStatus() == ateapipb.ExternalVolume_CREATING {
+		if vol.GetStatus() == ateapipb.ExternalVolume_PENDING {
 			return false, nil
 		}
 	}

@@ -42,8 +42,8 @@ type ExternalVolume_Status int32
 
 const (
 	ExternalVolume_STATUS_UNKNOWN ExternalVolume_Status = 0
-	// Volume being created in the storage system.
-	ExternalVolume_CREATING ExternalVolume_Status = 1
+	// Volume creation pending in the storage system.
+	ExternalVolume_PENDING ExternalVolume_Status = 1
 	// Volume successfully created in the storage system.
 	ExternalVolume_CREATED ExternalVolume_Status = 2
 	// Volume being deleted from the storage system.
@@ -54,13 +54,13 @@ const (
 var (
 	ExternalVolume_Status_name = map[int32]string{
 		0: "STATUS_UNKNOWN",
-		1: "CREATING",
+		1: "PENDING",
 		2: "CREATED",
 		3: "DELETING",
 	}
 	ExternalVolume_Status_value = map[string]int32{
 		"STATUS_UNKNOWN": 0,
-		"CREATING":       1,
+		"PENDING":        1,
 		"CREATED":        2,
 		"DELETING":       3,
 	}
@@ -2418,17 +2418,17 @@ const file_ateapi_proto_rawDesc = "" +
 	"\vcreate_time\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"createTime\x12;\n" +
 	"\vupdate_time\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
-	"updateTime\"\xfc\x01\n" +
+	"updateTime\"\xfb\x01\n" +
 	"\x0eExternalVolume\x12\x1f\n" +
 	"\vvolume_name\x18\x01 \x01(\tR\n" +
 	"volumeName\x12*\n" +
 	"\x11storage_volume_id\x18\x02 \x01(\tR\x0fstorageVolumeId\x12\x1f\n" +
 	"\vvolume_type\x18\x03 \x01(\tR\n" +
 	"volumeType\x125\n" +
-	"\x06status\x18\x04 \x01(\x0e2\x1d.ateapi.ExternalVolume.StatusR\x06status\"E\n" +
+	"\x06status\x18\x04 \x01(\x0e2\x1d.ateapi.ExternalVolume.StatusR\x06status\"D\n" +
 	"\x06Status\x12\x12\n" +
-	"\x0eSTATUS_UNKNOWN\x10\x00\x12\f\n" +
-	"\bCREATING\x10\x01\x12\v\n" +
+	"\x0eSTATUS_UNKNOWN\x10\x00\x12\v\n" +
+	"\aPENDING\x10\x01\x12\v\n" +
 	"\aCREATED\x10\x02\x12\f\n" +
 	"\bDELETING\x10\x03\"\xd6\x06\n" +
 	"\x05Actor\x124\n" +

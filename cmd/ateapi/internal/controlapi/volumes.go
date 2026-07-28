@@ -37,7 +37,7 @@ func getVolumePlugin() volume.VolumePluginControlPlane {
 	return globalVolumePlugin
 }
 
-// initialActorVolumes constructs initial volume objects in CREATING state before volume creation.
+// initialActorVolumes constructs initial volume objects in PENDING state before volume creation.
 func initialActorVolumes(template *atev1alpha1.ActorTemplate) []*ateapipb.ExternalVolume {
 	var volumes []*ateapipb.ExternalVolume
 	for _, vol := range template.Spec.Volumes {
@@ -45,7 +45,7 @@ func initialActorVolumes(template *atev1alpha1.ActorTemplate) []*ateapipb.Extern
 			volumes = append(volumes, &ateapipb.ExternalVolume{
 				VolumeName: vol.Name,
 				VolumeType: "mock", // TODO fix when we support multiple plugins
-				Status:     ateapipb.ExternalVolume_CREATING,
+				Status:     ateapipb.ExternalVolume_PENDING,
 			})
 		}
 	}
@@ -83,7 +83,7 @@ func createActorVolumes(ctx context.Context, actorUID string, template *atev1alp
 		}
 
 		switch vol.GetStatus() {
-		case ateapipb.ExternalVolume_CREATING:
+		case ateapipb.ExternalVolume_PENDING:
 			// proceed with volume creation
 		case ateapipb.ExternalVolume_CREATED:
 			resultVolumes = append(resultVolumes, vol)

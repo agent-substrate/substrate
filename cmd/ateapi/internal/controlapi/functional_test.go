@@ -824,8 +824,8 @@ func TestCreateActor_WithExternalVolumes(t *testing.T) {
 	if vol.GetVolumeName() != "ext-vol-1" {
 		t.Errorf("volume name = %q, want %q", vol.GetVolumeName(), "ext-vol-1")
 	}
-	if vol.GetStatus() != ateapipb.ExternalVolume_CREATING {
-		t.Errorf("volume status = %v, want %v", vol.GetStatus(), ateapipb.ExternalVolume_CREATING)
+	if vol.GetStatus() != ateapipb.ExternalVolume_PENDING {
+		t.Errorf("volume status = %v, want %v", vol.GetStatus(), ateapipb.ExternalVolume_PENDING)
 	}
 	if vol.GetStorageVolumeId() != "" {
 		t.Errorf("expected empty storageVolumeId before resume, got %q", vol.GetStorageVolumeId())
@@ -841,8 +841,8 @@ func TestCreateActor_WithExternalVolumes(t *testing.T) {
 	if len(getResp.GetActorVolumes()) != 1 {
 		t.Fatalf("expected 1 volume in GetActor response, got %d", len(getResp.GetActorVolumes()))
 	}
-	if getResp.GetActorVolumes()[0].GetStatus() != ateapipb.ExternalVolume_CREATING {
-		t.Errorf("GetActor status = %v, want %v", getResp.GetActorVolumes()[0].GetStatus(), ateapipb.ExternalVolume_CREATING)
+	if getResp.GetActorVolumes()[0].GetStatus() != ateapipb.ExternalVolume_PENDING {
+		t.Errorf("GetActor status = %v, want %v", getResp.GetActorVolumes()[0].GetStatus(), ateapipb.ExternalVolume_PENDING)
 	}
 }
 
@@ -885,8 +885,8 @@ func TestActorLifecycle_WithExternalVolumes(t *testing.T) {
 	if createResp.GetStatus() != ateapipb.Actor_STATUS_SUSPENDED {
 		t.Fatalf("expected initial status STATUS_SUSPENDED, got %v", createResp.GetStatus())
 	}
-	if len(createResp.GetActorVolumes()) != 1 || createResp.GetActorVolumes()[0].GetStatus() != ateapipb.ExternalVolume_CREATING {
-		t.Fatalf("expected 1 creating volume after CreateActor, got %v", createResp.GetActorVolumes())
+	if len(createResp.GetActorVolumes()) != 1 || createResp.GetActorVolumes()[0].GetStatus() != ateapipb.ExternalVolume_PENDING {
+		t.Fatalf("expected 1 pending volume after CreateActor, got %v", createResp.GetActorVolumes())
 	}
 
 	// 2. ResumeActor
@@ -1063,7 +1063,7 @@ func TestResumeActor_VolumeCreationFailure(t *testing.T) {
 		t.Fatalf("expected non-empty UID on actor")
 	}
 
-	// Verify that succ-vol1 was updated to CREATED with a storageVolumeId, and fail-vol2 is still CREATING
+	// Verify that succ-vol1 was updated to CREATED with a storageVolumeId, and fail-vol2 is still PENDING
 	if len(getResp.GetActorVolumes()) != 2 {
 		t.Fatalf("expected 2 volumes on actor, got %d", len(getResp.GetActorVolumes()))
 	}
@@ -1074,7 +1074,7 @@ func TestResumeActor_VolumeCreationFailure(t *testing.T) {
 	if v1, ok := volsByName["succ-vol1"]; !ok || v1.GetStatus() != ateapipb.ExternalVolume_CREATED || v1.GetStorageVolumeId() == "" {
 		t.Errorf("succ-vol1 unexpected state: %v", v1)
 	}
-	if v2, ok := volsByName["fail-vol2"]; !ok || v2.GetStatus() != ateapipb.ExternalVolume_CREATING {
+	if v2, ok := volsByName["fail-vol2"]; !ok || v2.GetStatus() != ateapipb.ExternalVolume_PENDING {
 		t.Errorf("fail-vol2 unexpected state: %v", v2)
 	}
 
@@ -1199,7 +1199,7 @@ func TestResumeActor_VolumeCreationRetrySuccess(t *testing.T) {
 		t.Fatalf("expected first ResumeActor to fail due to temporary volume creation error, but it succeeded")
 	}
 
-	// Verify GetActor returns the actor in STATUS_SUSPENDED status with succ-vol1 created and retry-vol2 creating
+	// Verify GetActor returns the actor in STATUS_SUSPENDED status with succ-vol1 created and retry-vol2 pending
 	getResp, err := tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "retry-actor"},
 	})
@@ -1217,7 +1217,7 @@ func TestResumeActor_VolumeCreationRetrySuccess(t *testing.T) {
 	if v1, ok := volsByName["succ-vol1"]; !ok || v1.GetStatus() != ateapipb.ExternalVolume_CREATED || v1.GetStorageVolumeId() == "" {
 		t.Errorf("succ-vol1 unexpected state after first resume: %v", v1)
 	}
-	if v2, ok := volsByName["retry-vol2"]; !ok || v2.GetStatus() != ateapipb.ExternalVolume_CREATING {
+	if v2, ok := volsByName["retry-vol2"]; !ok || v2.GetStatus() != ateapipb.ExternalVolume_PENDING {
 		t.Errorf("retry-vol2 unexpected state after first resume: %v", v2)
 	}
 
