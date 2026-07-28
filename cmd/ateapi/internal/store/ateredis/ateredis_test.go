@@ -229,8 +229,8 @@ func TestUpdateActor_Conflict(t *testing.T) {
 	// Try to update instance 2 (which has stale version)
 	actor2.Status = ateapipb.Actor_STATUS_SUSPENDED
 	_, err = s.UpdateActor(ctx, actor2, actor2.GetMetadata().GetVersion())
-	if !errors.Is(err, store.ErrPersistenceRetry) {
-		t.Errorf("expected ErrPersistenceRetry, got %v", err)
+	if !errors.Is(err, store.ErrVersionConflict) {
+		t.Errorf("expected ErrVersionConflict, got %v", err)
 	}
 }
 
@@ -607,8 +607,8 @@ func TestUpdateWorker_Conflict(t *testing.T) {
 	// Try to update instance 2
 	worker2.Assignment = &ateapipb.Assignment{Actor: &ateapipb.ObjectRef{Name: "session-2"}}
 	err = s.UpdateWorker(ctx, worker2, worker2.Version)
-	if !errors.Is(err, store.ErrPersistenceRetry) {
-		t.Errorf("expected ErrPersistenceRetry, got %v", err)
+	if !errors.Is(err, store.ErrVersionConflict) {
+		t.Errorf("expected ErrVersionConflict, got %v", err)
 	}
 }
 

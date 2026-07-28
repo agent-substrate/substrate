@@ -34,7 +34,7 @@ func (s *Service) PauseActor(ctx context.Context, req *ateapipb.PauseActorReques
 
 	actor, err := s.actorWorkflow.PauseActor(ctx, req.GetActor().GetAtespace(), req.GetActor().GetName())
 	if err != nil {
-		if errors.Is(err, store.ErrPersistenceRetry) {
+		if errors.Is(err, store.ErrVersionConflict) {
 			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
 		}
 		if errors.Is(err, store.ErrNotFound) {

@@ -316,14 +316,14 @@ func seedAssignFixture(t *testing.T, ctx context.Context, persistence store.Inte
 
 // TestAssignWorkerStep_ConflictRefreshesActor verifies the actor write's
 // conflict handling within a single Execute: a concurrent spec write leaves
-// ErrPersistenceRetry with state.Actor refreshed.
+// ErrVersionConflict with state.Actor refreshed.
 func TestAssignWorkerStep_ConflictRefreshesActor(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name string
 		// mutate is the racing concurrent write applied to the fresh actor.
 		mutate func(fresh *ateapipb.Actor)
-		// wantRetry means Execute surfaces ErrPersistenceRetry with
+		// wantRetry means Execute surfaces ErrVersionConflict with
 		// state.Actor refreshed to the injected write; otherwise Aborted.
 		wantRetry bool
 		// wantStoredStatus is the persisted status after Execute.
@@ -377,8 +377,8 @@ func TestAssignWorkerStep_ConflictRefreshesActor(t *testing.T) {
 			err := step.Execute(ctx, &ResumeInput{ActorName: "id1", Atespace: "team-a"}, state)
 
 			if tc.wantRetry {
-				if !errors.Is(err, store.ErrPersistenceRetry) {
-					t.Fatalf("Execute: %v, want ErrPersistenceRetry", err)
+				if !errors.Is(err, store.ErrVersionConflict) {
+					t.Fatalf("Execute: %v, want ErrVersionConflict", err)
 				}
 				if got := state.Actor.GetMetadata().GetVersion(); got != injected.GetMetadata().GetVersion() {
 					t.Errorf("state.Actor version = %d, want %d (refreshed for the retry)", got, injected.GetMetadata().GetVersion())

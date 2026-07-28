@@ -128,7 +128,7 @@ func TestRunWorkflow_CheckPrerequisiteOrdering(t *testing.T) {
 }
 
 // TestRunWorkflow_RetryOnPersistenceConflict verifies runStep's retry loop:
-// with a RetryBackoff, Execute is retried on store.ErrPersistenceRetry without
+// with a RetryBackoff, Execute is retried on store.ErrVersionConflict without
 // re-running IsComplete or CheckPrerequisite; any other error — or a nil
 // backoff — fails the step on the first attempt.
 func TestRunWorkflow_RetryOnPersistenceConflict(t *testing.T) {
@@ -142,7 +142,7 @@ func TestRunWorkflow_RetryOnPersistenceConflict(t *testing.T) {
 		steps := []WorkflowStep[struct{}, struct{}]{
 			&stubStep{
 				name:        "s1",
-				executeErrs: []error{store.ErrPersistenceRetry, store.ErrPersistenceRetry},
+				executeErrs: []error{store.ErrVersionConflict, store.ErrVersionConflict},
 				backoff:     backoff,
 				calls:       &calls,
 			},
@@ -181,7 +181,7 @@ func TestRunWorkflow_RetryOnPersistenceConflict(t *testing.T) {
 	t.Run("persistent conflict exhausts backoff", func(t *testing.T) {
 		var calls []string
 		steps := []WorkflowStep[struct{}, struct{}]{
-			&stubStep{name: "s1", executeErr: store.ErrPersistenceRetry, backoff: backoff, calls: &calls},
+			&stubStep{name: "s1", executeErr: store.ErrVersionConflict, backoff: backoff, calls: &calls},
 		}
 		if err := RunWorkflow(ctx, struct{}{}, struct{}{}, steps); err == nil {
 			t.Fatal("RunWorkflow: expected error after exhausting retries, got nil")
@@ -194,11 +194,11 @@ func TestRunWorkflow_RetryOnPersistenceConflict(t *testing.T) {
 	t.Run("nil backoff means no retry", func(t *testing.T) {
 		var calls []string
 		steps := []WorkflowStep[struct{}, struct{}]{
-			&stubStep{name: "s1", executeErrs: []error{store.ErrPersistenceRetry}, calls: &calls},
+			&stubStep{name: "s1", executeErrs: []error{store.ErrVersionConflict}, calls: &calls},
 		}
 		err := RunWorkflow(ctx, struct{}{}, struct{}{}, steps)
-		if !errors.Is(err, store.ErrPersistenceRetry) {
-			t.Fatalf("RunWorkflow error = %v, want wrapping store.ErrPersistenceRetry", err)
+		if !errors.Is(err, store.ErrVersionConflict) {
+			t.Fatalf("RunWorkflow error = %v, want wrapping store.ErrVersionConflict", err)
 		}
 		if got := countCalls(calls, "s1.Execute"); got != 1 {
 			t.Errorf("Execute called %d times, want 1; calls = %v", got, calls)

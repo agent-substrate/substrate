@@ -231,7 +231,7 @@ func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, stat
 
 	updatedActor, err := s.store.UpdateActor(ctx, state.Actor, state.Actor.GetMetadata().GetVersion())
 	if err != nil {
-		if !errors.Is(err, store.ErrPersistenceRetry) {
+		if !errors.Is(err, store.ErrVersionConflict) {
 			return err
 		}
 		// refresh the version of actor to avoid always failure in rest retries.

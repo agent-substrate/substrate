@@ -56,7 +56,7 @@ type WorkflowStep[Params any, Context any] interface {
 	Execute(ctx context.Context, params Params, wCtx Context) error
 
 	// RetryBackoff returns an optional backoff configuration for this step.
-	// If non-nil, the workflow orchestrator automatically retries Execute() on persistence conflicts.
+	// If non-nil, the workflow orchestrator automatically retries Execute() on version conflicts.
 	RetryBackoff() *wait.Backoff
 }
 
@@ -120,7 +120,7 @@ func runStep[Params any, Context any](ctx context.Context, params Params, wCtx C
 		if execErr == nil {
 			return true, nil
 		}
-		if errors.Is(execErr, store.ErrPersistenceRetry) {
+		if errors.Is(execErr, store.ErrVersionConflict) {
 			return false, nil // retryable
 		}
 		return false, execErr // fatal
