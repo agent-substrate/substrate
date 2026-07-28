@@ -1,0 +1,63 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ate-manual-test-multi
+---
+apiVersion: ate.dev/v1alpha1
+kind: WorkerPool
+metadata:
+  name: sandbox-pool
+  namespace: ate-manual-test-multi
+  labels:
+    workload: sandbox
+spec:
+  replicas: 1
+  ateomImage: ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor
+---
+apiVersion: ate.dev/v1alpha1
+kind: ActorTemplate
+metadata:
+  name: sandbox-template
+  namespace: ate-manual-test-multi
+spec:
+  workerSelector:
+    matchLabels:
+      workload: sandbox
+  pauseImage: "registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4"
+  containers:
+  - name: sandbox
+    image: ko://github.com/agent-substrate/substrate/demos/sandbox
+    command: ["/ko-app/sandbox"]
+    env:
+    - name: PORT
+      value: "80"
+    volumeMounts:
+    - name: vol-hostpath
+      mountPath: /hostpath-data
+    - name: vol-nfs
+      mountPath: /nfs-data
+  snapshotsConfig:
+    location: gs://ate-snapshots/ate-manual-test-multi/
+  volumes:
+  - name: vol-hostpath
+    externalVolumeTemplate:
+      capacity: 1Gi
+      storageClassName: csi-hostpath-sc
+  - name: vol-nfs
+    externalVolumeTemplate:
+      capacity: 1Gi
+      storageClassName: csi-nfs-sc

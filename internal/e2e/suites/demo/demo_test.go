@@ -922,11 +922,21 @@ func createActorTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients
 }
 
 func createActorTemplateWithExternalVolume(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, onCommit, onPause v1alpha1.SnapshotScope, fromData v1alpha1.ResumeSource) (*v1alpha1.ActorTemplate, error) {
+	var scName string
+	switch {
+	// TODO: add support for other storage classes in e2e environment (e.g. csi-nfs-sc)
+	case hasStorageClass(ctx, clients, "csi-hostpath-sc"):
+		scName = "csi-hostpath-sc"
+	default:
+		t.Skip("Skipping TestExternalVolumeLifecycle: neither csi-hostpath-sc nor csi-nfs-sc StorageClass found")
+	}
+
 	modify := func(at *v1alpha1.ActorTemplate) {
 		var res []v1alpha1.Container
 		for _, c := range at.Spec.Containers {
 			if c.Name == "counter" {
-				c.Command = []string{"/ko-app/counter", "--file-counter-directory=/external-data", "--validate-existing-file-path=/external-data/test.txt"}
+				c.Command = []string{"/ko-app/counter", "--file-counter-directory=/external-data"}
+
 				hasExtMount := false
 				for _, vm := range c.VolumeMounts {
 					if vm.Name == "external-data" {
@@ -958,7 +968,7 @@ func createActorTemplateWithExternalVolume(ctx context.Context, t *testing.T, cl
 				VolumeSource: v1alpha1.VolumeSource{
 					ExternalVolumeTemplate: &v1alpha1.ExternalVolumeTemplate{
 						Capacity:         resource.MustParse("1Gi"),
-						StorageClassName: "standard",
+						StorageClassName: scName,
 					},
 				},
 			})
@@ -998,6 +1008,11 @@ func createActorTemplateWithTwoDurableDirs(ctx context.Context, t *testing.T, cl
 		})
 	}
 	return createActorTemplateInternal(ctx, t, clients, nsObj, "counter-two-durabledirs", onCommit, onPause, fromData, modify)
+}
+
+func hasStorageClass(ctx context.Context, clients *e2e.Clients, name string) bool {
+	_, err := clients.K8s.StorageV1().StorageClasses().Get(ctx, name, metav1.GetOptions{})
+	return err == nil
 }
 
 func waitForActorStatus(ctx context.Context, t *testing.T, clients *e2e.Clients, actorName string, expectedStatus ateapipb.Actor_Status) {

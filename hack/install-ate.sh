@@ -62,6 +62,7 @@ function usage() {
   echo "Overall infrastructure (all infrastructure components):"
   echo ""
   echo "  --deploy-ate-system                    Deploy core system (CRDs, atelet, apiserver)"
+  echo "  --setup-csi                            Setup CSI hostpath and NFS drivers (Kind only)"
   echo "  --delete-ate-system                    Delete core system"
   echo "  --delete-all                           Delete core system and all registered demos"
   echo "  --ateapi-client-auth=cert|token        Select how in-cluster clients authenticate to ateapi for --deploy-ate-system (default: cert; the server always accepts both)"
@@ -339,11 +340,25 @@ deploy_crds() {
   run_ko apply -f manifests/ate-install/generated
 }
 
+setup_csi() {
+  log_step "setup_csi"
+  "${ROOT}/hack/setup-csi-hostpath-kind.sh"
+  "${ROOT}/hack/setup-csi-nfs-kind.sh"
+}
+
 deploy_ate_system() {
   log_step "deploy_ate_system"
   # Not ensure_crds: its existence check skips upgrades, stranding stale CRD
   # schemas and RBAC (role.yaml has no other apply path).
   deploy_crds
+
+  if [[ "${SETUP_CSI:-false}" == "true" ]]; then
+    if [[ "${ATE_INSTALL_KIND:-false}" == "true" ]]; then
+      setup_csi
+    else
+      echo "Warning: CSI setup is only supported for Kind local installations. Skipping."
+    fi
+  fi
 
   # Enforce per-class SandboxConfig asset requirements (applied before any
   # SandboxConfig so the defaults below are validated too).
@@ -625,6 +640,7 @@ done
 # flag they configure (e.g. --benchmark-worker-count before/after
 # --deploy-benchmarks). The dispatch loop below also accepts these flags but
 # treats them as no-ops since the value is already captured here.
+SETUP_CSI=false
 BENCHMARK_WORKER_COUNT=1
 prescan_args=("$@")
 for ((i = 0; i < ${#prescan_args[@]}; i++)); do
@@ -650,6 +666,9 @@ for ((i = 0; i < ${#prescan_args[@]}; i++)); do
       ;;
     --benchmark-worker-count=*)
       BENCHMARK_WORKER_COUNT="${prescan_args[i]#*=}"
+      ;;
+    --setup-csi)
+      SETUP_CSI=true
       ;;
   esac
 done
@@ -689,6 +708,14 @@ while [[ "$#" -gt 0 ]]; do
       ;;
 
     --deploy-ate-system) deploy_ate_system ;;
+    --setup-csi)
+      if [[ "${ATE_INSTALL_KIND:-false}" == "true" ]]; then
+        ensure_crds
+        setup_csi
+      else
+        echo "Warning: CSI setup is only supported for Kind local installations. Skipping."
+      fi
+      ;;
     --delete-ate-system) delete_ate_system ;;
     --delete-all) delete_all ;;
 
