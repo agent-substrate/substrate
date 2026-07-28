@@ -177,6 +177,7 @@ func TestActorResumer_Parking(t *testing.T) {
 	const testActorName = "actor-park"
 	const testAtespace = "team-a"
 	const expectedIP = "10.0.0.77"
+	testActorRef := resources.ActorRef{Atespace: testAtespace, Name: testActorName}
 
 	t.Run("ParksThenSucceedsOnCapacityError", func(t *testing.T) {
 		var mu sync.Mutex
@@ -198,7 +199,7 @@ func TestActorResumer_Parking(t *testing.T) {
 		}
 
 		resumer := NewActorResumer(mock, withParking(ParkedRequestConfig{Max: 1, Budget: 5 * time.Second}))
-		actor, err := resumer.ResumeActor(context.Background(), testAtespace, testActorName)
+		actor, err := resumer.ResumeActor(context.Background(), testActorRef)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -227,7 +228,7 @@ func TestActorResumer_Parking(t *testing.T) {
 		// Budget large enough for a few ~100ms-spaced retries before it elapses;
 		// the pool never frees up.
 		resumer := NewActorResumer(mock, withParking(ParkedRequestConfig{Max: 1, Budget: 1500 * time.Millisecond}))
-		_, err := resumer.ResumeActor(context.Background(), testAtespace, testActorName)
+		_, err := resumer.ResumeActor(context.Background(), testActorRef)
 		// The client must see the meaningful capacity error, not a generic
 		// timeout: status.Code must unwrap through the budget-exhaustion marker.
 		if got := status.Code(err); got != codes.FailedPrecondition {
@@ -264,7 +265,7 @@ func TestActorResumer_Parking(t *testing.T) {
 		}
 
 		resumer := NewActorResumer(mock, withParking(ParkedRequestConfig{Max: 1, Budget: 5 * time.Second}))
-		actor, err := resumer.ResumeActor(context.Background(), testAtespace, testActorName)
+		actor, err := resumer.ResumeActor(context.Background(), testActorRef)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -291,7 +292,7 @@ func TestActorResumer_Parking(t *testing.T) {
 		}
 
 		resumer := NewActorResumer(mock)
-		_, err := resumer.ResumeActor(context.Background(), testAtespace, testActorName)
+		_, err := resumer.ResumeActor(context.Background(), testActorRef)
 		if got := status.Code(err); got != codes.Unavailable {
 			t.Errorf("expected Unavailable, got %v (err=%v)", got, err)
 		}
@@ -326,7 +327,7 @@ func TestActorResumer_Parking(t *testing.T) {
 		}
 
 		resumer := NewActorResumer(mock, withParking(ParkedRequestConfig{Max: 1, Budget: 300 * time.Millisecond}))
-		_, err := resumer.ResumeActor(context.Background(), testAtespace, testActorName)
+		_, err := resumer.ResumeActor(context.Background(), testActorRef)
 		// The deadline landed mid-RPC; the client must still see the capacity
 		// error (503 "no free workers available"), not a generic timeout (504).
 		if got := status.Code(err); got != codes.FailedPrecondition {
@@ -352,7 +353,7 @@ func TestActorResumer_Parking(t *testing.T) {
 
 		// Default constructor => parking disabled => fail-fast.
 		resumer := NewActorResumer(mock)
-		_, err := resumer.ResumeActor(context.Background(), testAtespace, testActorName)
+		_, err := resumer.ResumeActor(context.Background(), testActorRef)
 		if got := status.Code(err); got != codes.FailedPrecondition {
 			t.Errorf("expected FailedPrecondition, got %v (err=%v)", got, err)
 		}
@@ -373,6 +374,7 @@ func TestActorResumer_CallerCancelDoesNotAbortFlight(t *testing.T) {
 	const testActorName = "actor-cancel"
 	const testAtespace = "team-a"
 	const expectedIP = "10.0.0.88"
+	testActorRef := resources.ActorRef{Atespace: testAtespace, Name: testActorName}
 
 	var mu sync.Mutex
 	var calls int
@@ -401,7 +403,7 @@ func TestActorResumer_CallerCancelDoesNotAbortFlight(t *testing.T) {
 	ctx1, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
 	go func() {
-		_, err := resumer.ResumeActor(ctx1, testAtespace, testActorName)
+		_, err := resumer.ResumeActor(ctx1, testActorRef)
 		errCh <- err
 	}()
 	<-started
@@ -423,7 +425,7 @@ func TestActorResumer_CallerCancelDoesNotAbortFlight(t *testing.T) {
 	}
 	resCh := make(chan result, 1)
 	go func() {
-		a, rerr := resumer.ResumeActor(context.Background(), testAtespace, testActorName)
+		a, rerr := resumer.ResumeActor(context.Background(), testActorRef)
 		resCh <- result{a, rerr}
 	}()
 	// Give caller 2 a moment to join before releasing the flight, so the
