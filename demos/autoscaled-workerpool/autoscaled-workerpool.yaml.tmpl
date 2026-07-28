@@ -1,0 +1,73 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# This demo demonstrates autoscaling an Agent Substrate WorkerPool using a
+# HorizontalPodAutoscaler (HPA) and an External Metric (ate_workerpool_workers).
+# The pool runs capacity for the "counter" workload; the HPA scales the pool
+# dynamically based on the number of assigned workers.
+#
+# See hpa-workerpool-autoscaling.md for the design and math details.
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ate-demo-autoscaled-workerpool
+
+---
+
+apiVersion: ate.dev/v1alpha1
+kind: WorkerPool
+metadata:
+  name: counter
+  namespace: ate-demo-autoscaled-workerpool
+  labels:
+    workload: counter-autoscaled
+spec:
+  replicas: 5
+  ateomImage: ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor
+
+---
+
+apiVersion: ate.dev/v1alpha1
+kind: ActorTemplate
+metadata:
+  name: counter
+  namespace: ate-demo-autoscaled-workerpool
+spec:
+  pauseImage: "registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4"
+  containers:
+  - name: counter
+    image: ko://github.com/agent-substrate/substrate/demos/counter
+    command:
+    - /ko-app/counter
+${VALIDATE_EXISTING_FILE_PATH_ARG}
+    readyz:
+      httpGet:
+        path: /readyz
+        port: 80
+    volumeMounts:
+    - name: data
+      mountPath: /home/counter
+${EXTERNAL_VOLUME_MOUNTS}
+  workerSelector:
+    matchLabels:
+      workload: counter-autoscaled
+  snapshotsConfig:
+    onPause: Full
+    onCommit: Data
+    location: gs://${BUCKET_NAME}/ate-demo-autoscaled-workerpool/
+  volumes:
+  - name: data
+    durableDir: {}
+${EXTERNAL_VOLUMES}
