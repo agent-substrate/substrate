@@ -91,6 +91,9 @@ spec:
         args:
         - --ateapi-ca-file=/run/servicedns-ca/trust-bundle.pem
         - --ateapi-client-cert=/run/podidentity.podcert.ate.dev/credential-bundle.pem
+        env:
+        - name: OTEL_EXPORTER_OTLP_ENDPOINT
+          value: http://opentelemetry-collector.gke-managed-otel.svc.cluster.local:4317
         ports:
         - name: metrics
           containerPort: 8080

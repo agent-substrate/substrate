@@ -201,7 +201,7 @@ func TestBuildDeploymentApplyConfig(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := buildDeploymentApplyConfig(tt.wp)
+			got := buildDeploymentApplyConfig(tt.wp, "")
 			if diff := cmp.Diff(tt.want, got); diff != "" {
 				t.Fatalf("buildDeploymentApplyConfig() mismatch (-want +got):\n%s", diff)
 			}
@@ -226,7 +226,7 @@ func TestMicroVMPodShape(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			wp := testWorkerPoolApplyConfig(nil)
 			wp.Spec.SandboxClass = tt.class
-			ps := buildDeploymentApplyConfig(wp).Spec.Template.Spec
+			ps := buildDeploymentApplyConfig(wp, "").Spec.Template.Spec
 
 			hasVol := false
 			for _, v := range ps.Volumes {
@@ -307,6 +307,78 @@ func TestAteomSecurityContextByClass(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestBuildDeploymentApplyConfigOTelEndpoint asserts the OTLP endpoint and the
+// pod-scoped resource identity are set on the ateom container only when an endpoint
+// is configured, and that the $(POD_*) refs precede OTEL_RESOURCE_ATTRIBUTES.
+func TestBuildDeploymentApplyConfigOTelEndpoint(t *testing.T) {
+	const endpoint = "http://collector.otel-system.svc:4317"
+	tests := []struct {
+		name          string
+		endpoint      string
+		wantTelemetry bool
+	}{
+		{"endpoint empty", "", false},
+		{"endpoint set", endpoint, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := buildDeploymentApplyConfig(testWorkerPoolApplyConfig(nil), tt.endpoint).
+				Spec.Template.Spec.Containers[0]
+			env := envByName(c.Env)
+
+			if _, ok := env["POD_UID"]; !ok {
+				t.Error("POD_UID must always be set")
+			}
+
+			if !tt.wantTelemetry {
+				for _, k := range []string{"OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_RESOURCE_ATTRIBUTES", "POD_NAME", "POD_NAMESPACE"} {
+					if _, ok := env[k]; ok {
+						t.Errorf("%s must be absent without an OTLP endpoint", k)
+					}
+				}
+				return
+			}
+
+			if got := env["OTEL_EXPORTER_OTLP_ENDPOINT"].value; got != endpoint {
+				t.Errorf("OTEL_EXPORTER_OTLP_ENDPOINT = %q, want %q", got, endpoint)
+			}
+			if got := env["OTEL_RESOURCE_ATTRIBUTES"].value; got != ateomOTelResourceAttributes {
+				t.Errorf("OTEL_RESOURCE_ATTRIBUTES = %q, want %q", got, ateomOTelResourceAttributes)
+			}
+			raIdx := env["OTEL_RESOURCE_ATTRIBUTES"].index
+			for _, ref := range []string{"POD_UID", "POD_NAME", "POD_NAMESPACE"} {
+				if _, ok := env[ref]; !ok {
+					t.Errorf("%s must be set for OTEL_RESOURCE_ATTRIBUTES substitution", ref)
+					continue
+				}
+				if env[ref].index > raIdx {
+					t.Errorf("%s (index %d) must precede OTEL_RESOURCE_ATTRIBUTES (index %d)", ref, env[ref].index, raIdx)
+				}
+			}
+		})
+	}
+}
+
+type envInfo struct {
+	index int
+	value string
+}
+
+func envByName(env []corev1ac.EnvVarApplyConfiguration) map[string]envInfo {
+	m := make(map[string]envInfo, len(env))
+	for i, e := range env {
+		if e.Name == nil {
+			continue
+		}
+		info := envInfo{index: i}
+		if e.Value != nil {
+			info.value = *e.Value
+		}
+		m[*e.Name] = info
+	}
+	return m
 }
 
 func testWorkerPoolApplyConfig(tmpl *atev1alpha1.WorkerPoolPodTemplate) *atev1alpha1.WorkerPool {

@@ -81,14 +81,21 @@ func do(ctx context.Context) error {
 	serverboot.InitLoggerWithWriter(logWriter)
 	slog.InfoContext(ctx, "ateom-microvm booting", slog.String("version", version.String()))
 
+	const serviceName = "ateom-microvm"
 	tp, err := serverboot.InitTracing(ctx, serverboot.TracingOptions{
-		ServiceName: "ateom-microvm",
+		ServiceName: serviceName,
 		Sampler:     sdktrace.ParentBased(sdktrace.NeverSample()),
 	})
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to initialize tracing", err)
 	}
 	defer serverboot.ShutdownProvider("TracerProvider", tp.Shutdown)
+
+	mp, err := serverboot.InitMetricsPushOnly(ctx, serviceName)
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to initialize metrics", err)
+	}
+	defer serverboot.ShutdownProvider("MeterProvider", mp.Shutdown)
 
 	// Create ateom dir.
 	ateomDir := ateompath.AteomPath(*podUID)
