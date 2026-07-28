@@ -328,7 +328,7 @@ func (s *AssignWorkerStep) findFreeWorker(
 		if err != nil {
 			return nil, err
 		}
-		if !eligible || worker.GetState() == ateapipb.Worker_STATE_DRAINING {
+		if !eligible || worker.GetState() != ateapipb.Worker_STATE_ACTIVE {
 			continue
 		}
 		if len(nodesRestrictions) == 0 || slices.Contains(nodesRestrictions, worker.GetNodeName()) {

@@ -276,7 +276,8 @@ func (s *WorkerPoolSyncer) reconcileOrphanedWorkers(ctx context.Context) {
 // pod pointers are cleared.
 //
 // UpdateActor uses optimistic version checking. A concurrent SuspendActor
-// or ResumeActor wins; we drop this attempt silently.
+// or ResumeActor wins; we fail this attempt so it can be retried with the
+// updated state.
 func (s *WorkerPoolSyncer) releaseActorOnDeadWorker(ctx context.Context, namespace, pool, podName string) error {
 	worker, err := s.persistence.GetWorker(ctx, namespace, pool, podName)
 	if err != nil {
