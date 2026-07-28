@@ -46,7 +46,7 @@ type ExtProcServer struct {
 	parking       *parkingLot
 }
 
-func NewExtProcServer(port int, apiClient ateapipb.ControlClient, routeDuration metric.Float64Histogram, parkCfg parkingConfig, parkMetrics *parkingMetrics) *ExtProcServer {
+func NewExtProcServer(port int, apiClient ateapipb.ControlClient, routeDuration metric.Float64Histogram, parkCfg ParkedRequestConfig, parkMetrics *parkingMetrics) *ExtProcServer {
 	return &ExtProcServer{
 		port:          port,
 		apiClient:     apiClient,

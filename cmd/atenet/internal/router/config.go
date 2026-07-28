@@ -57,14 +57,10 @@ type routerConfig struct {
 
 	Auth authConfig
 
-	// Request parking: hold and retry requests whose actor cannot be served
-	// immediately due to transient worker-pool saturation, instead of failing
-	// fast. A non-positive ParkedRequestMax disables parking. See parkingConfig.
-	ParkedRequestBudget        time.Duration
-	ParkedRequestMax           int
-	ParkedRequestRetryInterval time.Duration
-	ParkedRequestRetryFactor   float64
-	ParkedRequestRetryJitter   float64
+	// ParkedRequest configures request parking: hold and retry requests whose
+	// actor cannot be served immediately due to transient worker-pool
+	// saturation, instead of failing fast. A non-positive Max disables parking.
+	ParkedRequest ParkedRequestConfig
 
 	// ExtProcMaxRequests is the circuit-breaker max_requests Envoy applies to
 	// the ext_proc cluster. Every parked request holds one slot for its entire
@@ -76,12 +72,15 @@ type routerConfig struct {
 // validate rejects flag combinations that would make the router misbehave
 // rather than merely differ.
 func (c routerConfig) validate() error {
+	if err := c.ParkedRequest.validate(); err != nil {
+		return err
+	}
 	if c.ExtProcMaxRequests <= 0 {
 		return fmt.Errorf("--extproc-max-requests must be positive, got %d", c.ExtProcMaxRequests)
 	}
-	if c.ParkedRequestMax > 0 && c.ExtProcMaxRequests < c.ParkedRequestMax {
+	if c.ParkedRequest.Max > 0 && c.ExtProcMaxRequests < c.ParkedRequest.Max {
 		return fmt.Errorf("--extproc-max-requests (%d) must be >= --parked-request-max (%d): a circuit breaker below the parking lot silently truncates it with Envoy-generated 503s",
-			c.ExtProcMaxRequests, c.ParkedRequestMax)
+			c.ExtProcMaxRequests, c.ParkedRequest.Max)
 	}
 	return nil
 }

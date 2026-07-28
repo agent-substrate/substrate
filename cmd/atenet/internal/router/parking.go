@@ -23,7 +23,7 @@ import (
 	"time"
 )
 
-// Default request-parking parameters. See parkingConfig for the meaning of each
+// Default request-parking parameters. See ParkedRequestConfig for the meaning of each
 // field; these are also the flag defaults wired up in NewRouterCmd.
 const (
 	defaultParkedRequestBudget = 5 * time.Second
@@ -56,46 +56,48 @@ const (
 	parkOutcomeError           parkOutcome = "error"            // resume failed
 )
 
-// parkingConfig controls how the router parks resume-gated requests.
+// ParkedRequestConfig groups every parked-request knob — the flags share the
+// parked-request prefix, and the fields travel together through the router
+// config, the parking lot, and the resumer.
 //
 // When a request targets a suspended actor, the router resumes it via the
 // control plane before routing. If the worker pool is momentarily saturated the
 // control plane returns FailedPrecondition ("no free workers available"). With
 // parking enabled the router holds ("parks") such a request and keeps retrying
-// the resume until the actor becomes routable or budget elapses, instead of
-// failing the request immediately. maxParked bounds how many requests may be
-// parked at once so the router sheds load rather than queueing without bound;
-// a non-positive maxParked disables parking entirely.
+// the resume until the actor becomes routable or Budget elapses, instead of
+// failing the request immediately. Max bounds how many requests may be parked
+// at once so the router sheds load rather than queueing without bound; a
+// non-positive Max disables parking entirely.
 //
-// retryInterval/retryFactor/retryJitter shape the backoff between resume
+// RetryInterval/RetryFactor/RetryJitter shape the backoff between resume
 // attempts while a request is parked. The backoff deliberately has no cap and
 // no step limit: the budget alone bounds the wait.
-type parkingConfig struct {
-	budget    time.Duration
-	maxParked int
+type ParkedRequestConfig struct {
+	Budget time.Duration
+	Max    int
 
-	retryInterval time.Duration
-	retryFactor   float64
-	retryJitter   float64
+	RetryInterval time.Duration
+	RetryFactor   float64
+	RetryJitter   float64
 }
 
 // enabled reports whether request parking is active. Parking has no separate
-// on/off switch: setting maxParked to 0 disables it, applying a fail-fast
-// behavior (no admission cap, no retry on pool saturation).
-func (c parkingConfig) enabled() bool { return c.maxParked > 0 }
+// on/off switch: setting Max to 0 disables it, applying a fail-fast behavior
+// (no admission cap, no retry on pool saturation).
+func (c ParkedRequestConfig) enabled() bool { return c.Max > 0 }
 
 // normalized returns the config with non-positive budget and retry parameters
 // replaced by their defaults, so every consumer (the resumer's retry loop and
 // the Envoy ext_proc timeout) sees the same effective values.
-func (c parkingConfig) normalized() parkingConfig {
-	if c.budget <= 0 {
-		c.budget = defaultParkedRequestBudget
+func (c ParkedRequestConfig) normalized() ParkedRequestConfig {
+	if c.Budget <= 0 {
+		c.Budget = defaultParkedRequestBudget
 	}
-	if c.retryInterval <= 0 {
-		c.retryInterval = defaultParkedRequestRetryInterval
+	if c.RetryInterval <= 0 {
+		c.RetryInterval = defaultParkedRequestRetryInterval
 	}
-	if c.retryFactor == 0 {
-		c.retryFactor = defaultParkedRequestRetryFactor
+	if c.RetryFactor == 0 {
+		c.RetryFactor = defaultParkedRequestRetryFactor
 	}
 	return c
 }
@@ -103,25 +105,25 @@ func (c parkingConfig) normalized() parkingConfig {
 // validate rejects retry parameters that would make parking misbehave rather
 // than merely differ: a factor below 1 shrinks delays toward zero and turns
 // the parked retry loop into a hot loop against the control plane.
-func (c parkingConfig) validate() error {
-	if c.retryFactor != 0 && c.retryFactor < 1.0 {
-		return fmt.Errorf("parked-request retry factor must be >= 1.0, got %v", c.retryFactor)
+func (c ParkedRequestConfig) validate() error {
+	if c.RetryFactor != 0 && c.RetryFactor < 1.0 {
+		return fmt.Errorf("parked-request retry factor must be >= 1.0, got %v", c.RetryFactor)
 	}
-	if c.retryJitter < 0 || c.retryJitter >= 1 {
-		return fmt.Errorf("parked-request retry jitter must be in [0, 1), got %v", c.retryJitter)
+	if c.RetryJitter < 0 || c.RetryJitter >= 1 {
+		return fmt.Errorf("parked-request retry jitter must be in [0, 1), got %v", c.RetryJitter)
 	}
 	return nil
 }
 
-// defaultParkingConfig returns the built-in parking configuration (matching the
-// NewRouterCmd flag defaults).
-func defaultParkingConfig() parkingConfig {
-	return parkingConfig{
-		budget:        defaultParkedRequestBudget,
-		maxParked:     defaultParkedRequestMax,
-		retryInterval: defaultParkedRequestRetryInterval,
-		retryFactor:   defaultParkedRequestRetryFactor,
-		retryJitter:   defaultParkedRequestRetryJitter,
+// defaultParkedRequestConfig returns the built-in parking configuration
+// (matching the NewRouterCmd flag defaults).
+func defaultParkedRequestConfig() ParkedRequestConfig {
+	return ParkedRequestConfig{
+		Budget:        defaultParkedRequestBudget,
+		Max:           defaultParkedRequestMax,
+		RetryInterval: defaultParkedRequestRetryInterval,
+		RetryFactor:   defaultParkedRequestRetryFactor,
+		RetryJitter:   defaultParkedRequestRetryJitter,
 	}
 }
 
@@ -130,17 +132,17 @@ func defaultParkingConfig() parkingConfig {
 // attempt; when the lot is full further requests are shed immediately so the
 // router applies backpressure instead of accumulating waiters without bound.
 //
-// With parking disabled (maxParked <= 0) enter always admits and performs no
+// With parking disabled (Max <= 0) enter always admits and performs no
 // accounting, applying the router's fail-fast behavior.
 type parkingLot struct {
-	cfg     parkingConfig
+	cfg     ParkedRequestConfig
 	metrics *parkingMetrics
 
 	mu     sync.Mutex
 	active int // current number of occupied slots; guarded by mu
 }
 
-func newParkingLot(cfg parkingConfig, m *parkingMetrics) *parkingLot {
+func newParkingLot(cfg ParkedRequestConfig, m *parkingMetrics) *parkingLot {
 	return &parkingLot{cfg: cfg, metrics: m}
 }
 
@@ -156,7 +158,7 @@ func (l *parkingLot) enter(ctx context.Context) (release func(outcome parkOutcom
 	}
 
 	l.mu.Lock()
-	if l.active >= l.cfg.maxParked {
+	if l.active >= l.cfg.Max {
 		l.mu.Unlock()
 		l.metrics.recordRejected(ctx)
 		return nil, false
@@ -198,8 +200,8 @@ func (l *parkingLot) status() ParkingStatus {
 	return ParkingStatus{
 		Enabled:   l.cfg.enabled(),
 		Active:    l.activeCount(),
-		MaxParked: l.cfg.maxParked,
-		MaxWait:   l.cfg.budget.String(),
+		MaxParked: l.cfg.Max,
+		MaxWait:   l.cfg.Budget.String(),
 	}
 }
 

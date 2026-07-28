@@ -87,14 +87,14 @@ type resumerOption func(*ActorResumer)
 // FailedPrecondition ("no free workers available") becomes retryable and the
 // resume is retried, at cfg's retry cadence, for up to cfg's budget. When
 // disabled, the resumer applies fail-fast-on-capacity behavior.
-func withParking(cfg parkingConfig) resumerOption {
+func withParking(cfg ParkedRequestConfig) resumerOption {
 	cfg = cfg.normalized()
 	return func(r *ActorResumer) {
 		r.parkEnabled = cfg.enabled()
 		if r.parkEnabled {
-			r.budget = cfg.budget
+			r.budget = cfg.Budget
 		}
-		r.backoff = resumeBackoff(cfg.retryInterval, cfg.retryFactor, cfg.retryJitter)
+		r.backoff = resumeBackoff(cfg.RetryInterval, cfg.RetryFactor, cfg.RetryJitter)
 	}
 }
 

@@ -27,25 +27,25 @@ func TestRouterConfigValidate(t *testing.T) {
 	}{
 		{
 			name: "defaults are valid",
-			cfg:  routerConfig{ExtProcMaxRequests: defaultExtProcMaxRequests, ParkedRequestMax: defaultParkedRequestMax},
+			cfg:  routerConfig{ExtProcMaxRequests: defaultExtProcMaxRequests, ParkedRequest: ParkedRequestConfig{Max: defaultParkedRequestMax}},
 		},
 		{
 			name:    "zero extproc-max-requests rejected",
-			cfg:     routerConfig{ExtProcMaxRequests: 0, ParkedRequestMax: 0},
+			cfg:     routerConfig{ExtProcMaxRequests: 0, ParkedRequest: ParkedRequestConfig{Max: 0}},
 			wantErr: "must be positive",
 		},
 		{
 			name:    "breaker below the lot rejected",
-			cfg:     routerConfig{ExtProcMaxRequests: 512, ParkedRequestMax: 1024},
+			cfg:     routerConfig{ExtProcMaxRequests: 512, ParkedRequest: ParkedRequestConfig{Max: 1024}},
 			wantErr: "must be >= --parked-request-max",
 		},
 		{
 			name: "breaker equal to the lot accepted",
-			cfg:  routerConfig{ExtProcMaxRequests: 1024, ParkedRequestMax: 1024},
+			cfg:  routerConfig{ExtProcMaxRequests: 1024, ParkedRequest: ParkedRequestConfig{Max: 1024}},
 		},
 		{
 			name: "parking disabled ignores the relation",
-			cfg:  routerConfig{ExtProcMaxRequests: 8, ParkedRequestMax: 0},
+			cfg:  routerConfig{ExtProcMaxRequests: 8, ParkedRequest: ParkedRequestConfig{Max: 0}},
 		},
 	}
 	for _, tc := range tests {

@@ -55,7 +55,7 @@ func TestHandleRequestHeadersDoesNotLogSensitiveData(t *testing.T) {
 		resumeFn: func(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
 			return &ateapipb.ResumeActorResponse{Actor: &ateapipb.Actor{AteomPodIp: "10.0.0.52"}}, nil
 		},
-	}, nil, parkingConfig{}, nil)
+	}, nil, ParkedRequestConfig{}, nil)
 
 	reqHeaders := &extprocv3.HttpHeaders{
 		Headers: &corev3.HeaderMap{
@@ -192,7 +192,7 @@ func TestExtProcHeadersEvaluation(t *testing.T) {
 			// Parking disabled: these cases assert fail-fast mapping of resume
 			// errors (e.g. FailedPrecondition -> immediate 503). Parking behavior
 			// is covered separately in TestExtProc_ParkingLotFull and resumer_test.go.
-			s := NewExtProcServer(50051, clientMock, nil, parkingConfig{}, nil)
+			s := NewExtProcServer(50051, clientMock, nil, ParkedRequestConfig{}, nil)
 
 			reqHeaders := &extprocv3.HttpHeaders{
 				Headers: &corev3.HeaderMap{
@@ -271,12 +271,12 @@ func TestExtProc_ParkingLotFull(t *testing.T) {
 
 	// A 1-slot lot with the slot already occupied deterministically simulates a
 	// full lot without needing a concurrent in-flight request.
-	s := NewExtProcServer(50051, clientMock, nil, parkingConfig{budget: time.Second, maxParked: 1}, nil)
-	occupy, ok := s.parking.enter(context.Background())
+	s := NewExtProcServer(50051, clientMock, nil, ParkedRequestConfig{Budget: time.Second, Max: 1}, nil)
+	release, ok := s.parking.enter(context.Background())
 	if !ok {
 		t.Fatal("priming enter should be admitted")
 	}
-	defer occupy(parkOutcomeServed)
+	defer release(parkOutcomeServed)
 
 	reqHeaders := &extprocv3.HttpHeaders{
 		Headers: &corev3.HeaderMap{

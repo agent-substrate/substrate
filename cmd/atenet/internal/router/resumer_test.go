@@ -197,7 +197,7 @@ func TestActorResumer_Parking(t *testing.T) {
 			},
 		}
 
-		resumer := NewActorResumer(mock, withParking(parkingConfig{maxParked: 1, budget: 5 * time.Second}))
+		resumer := NewActorResumer(mock, withParking(ParkedRequestConfig{Max: 1, Budget: 5 * time.Second}))
 		actor, err := resumer.ResumeActor(context.Background(), testAtespace, testActorName)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -226,7 +226,7 @@ func TestActorResumer_Parking(t *testing.T) {
 
 		// Budget large enough for a few ~100ms-spaced retries before it elapses;
 		// the pool never frees up.
-		resumer := NewActorResumer(mock, withParking(parkingConfig{maxParked: 1, budget: 1500 * time.Millisecond}))
+		resumer := NewActorResumer(mock, withParking(ParkedRequestConfig{Max: 1, Budget: 1500 * time.Millisecond}))
 		_, err := resumer.ResumeActor(context.Background(), testAtespace, testActorName)
 		// The client must see the meaningful capacity error, not a generic
 		// timeout: status.Code must unwrap through the budget-exhaustion marker.
@@ -263,7 +263,7 @@ func TestActorResumer_Parking(t *testing.T) {
 			},
 		}
 
-		resumer := NewActorResumer(mock, withParking(parkingConfig{maxParked: 1, budget: 5 * time.Second}))
+		resumer := NewActorResumer(mock, withParking(ParkedRequestConfig{Max: 1, Budget: 5 * time.Second}))
 		actor, err := resumer.ResumeActor(context.Background(), testAtespace, testActorName)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -325,7 +325,7 @@ func TestActorResumer_Parking(t *testing.T) {
 			},
 		}
 
-		resumer := NewActorResumer(mock, withParking(parkingConfig{maxParked: 1, budget: 300 * time.Millisecond}))
+		resumer := NewActorResumer(mock, withParking(ParkedRequestConfig{Max: 1, Budget: 300 * time.Millisecond}))
 		_, err := resumer.ResumeActor(context.Background(), testAtespace, testActorName)
 		// The deadline landed mid-RPC; the client must still see the capacity
 		// error (503 "no free workers available"), not a generic timeout (504).
@@ -395,7 +395,7 @@ func TestActorResumer_CallerCancelDoesNotAbortFlight(t *testing.T) {
 		},
 	}
 
-	resumer := NewActorResumer(mock, withParking(parkingConfig{maxParked: 2, budget: 5 * time.Second}))
+	resumer := NewActorResumer(mock, withParking(ParkedRequestConfig{Max: 2, Budget: 5 * time.Second}))
 
 	// Caller 1 starts the flight, then disconnects while parked.
 	ctx1, cancel := context.WithCancel(context.Background())
