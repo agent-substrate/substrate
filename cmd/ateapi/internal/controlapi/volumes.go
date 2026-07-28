@@ -116,7 +116,7 @@ func createActorVolumes(ctx context.Context, actorUID string, template *atev1alp
 }
 
 // deleteActorVolumes deletes all external volumes in the list.
-func (s *Service) deleteActorVolumes(ctx context.Context, actorUID string, volumes []*ateapipb.ExternalVolume) error {
+func deleteActorVolumes(ctx context.Context, actorUID string, volumes []*ateapipb.ExternalVolume) error {
 	if actorUID == "" {
 		return errors.New("actorUID is required")
 	}

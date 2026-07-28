@@ -156,7 +156,7 @@ func TestCreateActorVolumes(t *testing.T) {
 			wantRes: []*ateapipb.ExternalVolume{
 				{
 					VolumeName:      "vol1",
-					StorageVolumeId: "mock-vol-1",
+					StorageVolumeId: "mock-vol-substrate-actor-uid-123-vol1",
 					VolumeType:      "mock",
 					Status:          ateapipb.ExternalVolume_CREATED,
 				},
@@ -289,9 +289,7 @@ func TestDeleteActorVolumes(t *testing.T) {
 			oldGlobalPlugin := globalVolumePlugin
 			globalVolumePlugin = plugin
 			defer func() { globalVolumePlugin = oldGlobalPlugin }()
-			svc := &Service{}
-
-			err := svc.deleteActorVolumes(ctx, tt.actorUID, tt.volumes)
+			err := deleteActorVolumes(ctx, tt.actorUID, tt.volumes)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("deleteActorVolumes() error = %v, wantErr %v", err, tt.wantErr)
 			}

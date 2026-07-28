@@ -16,10 +16,7 @@ package controlapi
 
 import (
 	"context"
-	"errors"
-	"fmt"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
@@ -34,56 +31,9 @@ func (s *Service) DeleteActor(ctx context.Context, req *ateapipb.DeleteActorRequ
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
 	setSpanActorRefAttributes(ctx, actorRef)
 
-	actor, err := s.persistence.GetActor(ctx, actorRef)
+	deleted, err := s.actorWorkflow.DeleteActor(ctx, req.GetActor().GetAtespace(), req.GetActor().GetName())
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, status.Errorf(codes.NotFound, "Actor %s not found", actorRef)
-		}
-		return nil, fmt.Errorf("while fetching actor: %w", err)
-	}
-
-	if actor.GetStatus() != ateapipb.Actor_STATUS_SUSPENDED &&
-		actor.GetStatus() != ateapipb.Actor_STATUS_CRASHED &&
-		actor.GetStatus() != ateapipb.Actor_STATUS_DELETING {
-		return nil, status.Errorf(codes.FailedPrecondition, "Actor %s is not in a deletable status (status: %v)", name, actor.GetStatus())
-	}
-
-	if actor.GetStatus() != ateapipb.Actor_STATUS_DELETING {
-		actor.Status = ateapipb.Actor_STATUS_DELETING
-		for _, vol := range actor.GetActorVolumes() {
-			vol.Status = ateapipb.ExternalVolume_DELETING
-		}
-		updated, err := s.persistence.UpdateActor(ctx, actor, actor.GetMetadata().GetVersion())
-		if err != nil {
-			if errors.Is(err, store.ErrPersistenceRetry) {
-				return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
-			}
-			return nil, fmt.Errorf("while setting actor status to DELETING: %w", err)
-		}
-		actor = updated
-	}
-
-	// Delete associated volumes
-	if err := s.deleteActorVolumes(ctx, actor.GetMetadata().GetUid(), actor.GetActorVolumes()); err != nil {
-		return nil, status.Errorf(codes.Internal, "while deleting actor volumes: %v", err)
-	}
-
-	deleted, err := s.persistence.DeleteActor(ctx, actorRef)
-	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, status.Errorf(codes.NotFound, "Actor %s not found", actorRef)
-		}
-		if errors.Is(err, store.ErrFailedPrecondition) {
-			current, getErr := s.persistence.GetActor(ctx, actorRef)
-			if getErr == nil {
-				return nil, status.Errorf(codes.FailedPrecondition, "Actor %s is not in a deletable status (status: %v)", actorRef, current.GetStatus())
-			}
-			return nil, status.Errorf(codes.FailedPrecondition, "Actor %s is not in a deletable status", actorRef)
-		}
-		if errors.Is(err, store.ErrVersionConflict) {
-			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
-		}
-		return nil, fmt.Errorf("while deleting actor from DB: %w", err)
+		return nil, err
 	}
 
 	return deleted, nil
