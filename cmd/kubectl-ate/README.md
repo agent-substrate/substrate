@@ -64,6 +64,7 @@ These flags can be appended to any command:
 | Flag | Short | Description | Default |
 |---|---|---|---|
 | `--kubeconfig` | | Path to your kubeconfig file | `~/.kube/config` |
+| `--context` | | Name of the kubeconfig context to use | current context |
 | `--endpoint` | | Manual gRPC endpoint override (e.g., `localhost:8080`) | |
 | `--output` | `-o` | Output format (`table`, `json`, `yaml`) | `table` |
 | `--trace` | | Enable on-demand tracing for the request | `false` |
@@ -169,9 +170,13 @@ kubectl ate delete actor my-actor -a <atespace>
 `kubectl ate logs` requires a resource-type subcommand; running `kubectl ate logs <actor-name>` on its own prints help. The only supported resource type is `actors`:
 
 ```bash
-# Stream logs for an actor (follows by default; aggregated across worker
-# reassignments so the same actor is queryable as it teleports between pods).
-kubectl ate logs actors my-actor
+# Print the logs an actor has produced on its current worker.
+# -a/--atespace is required, since an actor is addressed by (atespace, name).
+kubectl ate logs actors my-actor -a <atespace>
+
+# Follow the logs with -f. The stream is aggregated across worker
+# reassignments, so the same actor stays queryable as it teleports between pods.
+kubectl ate logs actors my-actor -a <atespace> -f
 ```
 
 Logs are streamable only while the actor is bound to a worker (i.e., `STATUS_RUNNING`). For history across worker migrations, route through a centralized log backend (Cloud Logging, Loki, etc.); see `docs/observability.md`.
