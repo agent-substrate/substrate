@@ -89,7 +89,7 @@ func (c *certCache) get() (*tls.Certificate, error) {
 
 	fi, err := os.Stat(c.path)
 	if err != nil {
-		return nil, fmt.Errorf("while examining credential bundle: %w", err)
+		return nil, fmt.Errorf("while getting file info for credential bundle %q: %w", c.path, err)
 	}
 	if c.cert != nil && os.SameFile(c.fi, fi) && fi.ModTime().Equal(c.fi.ModTime()) && fi.Size() == c.fi.Size() {
 		return c.cert, nil
