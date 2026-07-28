@@ -31,7 +31,10 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync"
 	"time"
+
+	"golang.org/x/sync/singleflight"
 )
 
 // KeyAndID wraps a crypto.PublicKey along with the key ID that will identify it during
@@ -115,6 +118,167 @@ var (
 	defaultHTTPClient = &http.Client{Timeout: 10 * time.Second}
 )
 
+// keyRefetchInterval is the minimum time between key fetches for a single
+// issuer. The keyID that triggers a refetch comes from an unverified token,
+// so without this floor a client could force an OIDC discovery round-trip per
+// request just by minting tokens with bogus keyIDs.
+const keyRefetchInterval = 10 * time.Second
+
+// keyMaxAge is how long cached keys are used before a background refresh.
+// Unknown-keyID refetches only pick up keys ADDED to the issuer's JWKS;
+// without a periodic refresh, a key REMOVED from the JWKS (revoked) would be
+// trusted until process restart, because tokens signed by it keep hitting the
+// cache. keyMaxAge bounds that exposure. Refreshes are asynchronous: requests
+// are served from the current cache while the fetch runs, so this adds no
+// latency to any request.
+const keyMaxAge = 5 * time.Minute
+
+// CachedVerifier verifies Kubernetes JWTs, caching each issuer's verification
+// keys in memory. Keys are fetched on first use, refetched synchronously when
+// a JWT presents an unknown keyID (i.e. on key rotation, rate-limited to one
+// fetch per issuer per keyRefetchInterval), and refreshed in the background
+// once cached keys are older than keyMaxAge (so revoked keys age out).
+type CachedVerifier struct {
+	httpClient *http.Client
+
+	// flight coalesces concurrent key fetches for the same issuer.
+	flight singleflight.Group
+
+	mu sync.Mutex
+	// issuers holds one entry per issuer that has been used for verification.
+	// Its size is bounded by the number of distinct trusted issuers the
+	// process is configured with (in practice one): Verify rejects tokens
+	// whose issuer differs from expectedIssuer before consulting the cache,
+	// so unverified traffic cannot create entries.
+	issuers map[string]*issuerKeys
+}
+
+type issuerKeys struct {
+	keys      []*KeyAndID
+	lastFetch time.Time
+	// refreshing is true while a background max-age refresh is in flight,
+	// so cache hits don't spawn one goroutine each until it completes.
+	refreshing bool
+}
+
+// NewCachedVerifier creates a CachedVerifier. httpClient is used for OIDC
+// discovery and JWKS fetches; nil uses a default client with a whole-request
+// timeout.
+func NewCachedVerifier(httpClient *http.Client) *CachedVerifier {
+	return &CachedVerifier{
+		httpClient: httpClient,
+		issuers:    make(map[string]*issuerKeys),
+	}
+}
+
+// keyForIssuer returns the issuer's verification key with the given keyID,
+// (re)fetching the issuer's keys if the keyID is not already cached.
+func (v *CachedVerifier) keyForIssuer(ctx context.Context, issuer, keyID string, now time.Time) (crypto.PublicKey, error) {
+	// Can't defer Unlock(): the lock must be dropped before the network fetch
+	// below and re-taken afterwards, so it is managed manually at each return.
+	v.mu.Lock()
+	state, ok := v.issuers[issuer]
+	if !ok {
+		state = &issuerKeys{}
+		v.issuers[issuer] = state
+	}
+	if key := findKey(state.keys, keyID); key != nil {
+		// Serve from cache, but refresh in the background once the keys pass
+		// keyMaxAge so removed (revoked) keys age out; see keyMaxAge.
+		startRefresh := now.Sub(state.lastFetch) > keyMaxAge && !state.refreshing
+		if startRefresh {
+			state.refreshing = true
+		}
+		v.mu.Unlock()
+		if startRefresh {
+			go v.refreshIssuerKeys(issuer, state, now)
+		}
+		return key.PublicKey, nil
+	}
+	lastFetch := state.lastFetch
+	v.mu.Unlock()
+	if !lastFetch.IsZero() && now.Sub(lastFetch) < keyRefetchInterval {
+		return nil, fmt.Errorf("keyID %q not found in cache, refetch throttled, last fetch was at %v", keyID, lastFetch)
+	}
+
+	_, err, _ := v.flight.Do(issuer, func() (any, error) {
+		keys, err := discoverKeysForIssuer(ctx, v.httpClient, issuer)
+		v.mu.Lock()
+		defer v.mu.Unlock()
+		// Whether or not the fetch succeeded, don't try again for another
+		// interval, so a failing issuer isn't hammered.
+		state.lastFetch = now
+		if err != nil {
+			return nil, err
+		}
+		state.keys = keys
+		return nil, nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("while discovering keys from issuer for keyID %q: %w", keyID, err)
+	}
+
+	v.mu.Lock()
+	key := findKey(state.keys, keyID)
+	v.mu.Unlock()
+	if key == nil {
+		return nil, fmt.Errorf("unknown keyID %q", keyID)
+	}
+	return key.PublicKey, nil
+}
+
+// refreshIssuerKeys refetches an issuer's keys, replacing the cached set on
+// success and keeping the previous keys on failure (a transient discovery
+// outage must not take down verification). Runs off the request path; the
+// caller must have set state.refreshing under the lock.
+func (v *CachedVerifier) refreshIssuerKeys(issuer string, state *issuerKeys, now time.Time) {
+	_, err, _ := v.flight.Do(issuer, func() (any, error) {
+		// context.Background(): this outlives the request that noticed the
+		// stale keys; the HTTP client's own timeout bounds the fetch.
+		keys, err := discoverKeysForIssuer(context.Background(), v.httpClient, issuer)
+		v.mu.Lock()
+		defer v.mu.Unlock()
+		// Whether or not the fetch succeeded, don't try again for another
+		// interval, so a failing issuer isn't hammered.
+		state.lastFetch = now
+		if err != nil {
+			return nil, err
+		}
+		state.keys = keys
+		return nil, nil
+	})
+	// Reset refreshing outside the closure: flight.Do coalesces with the
+	// unknown-keyID fetch path, so our closure may never run — the flag must
+	// clear whenever the shared flight completes.
+	v.mu.Lock()
+	state.refreshing = false
+	v.mu.Unlock()
+	if err != nil {
+		slog.Warn("Background refresh of issuer keys failed; keeping previous keys",
+			slog.String("issuer", issuer), slog.Any("err", err))
+	}
+}
+
+func findKey(keys []*KeyAndID, keyID string) *KeyAndID {
+	i := slices.IndexFunc(keys, func(k *KeyAndID) bool {
+		return k.KeyID == keyID
+	})
+	if i == -1 {
+		return nil
+	}
+	return keys[i]
+}
+
+// Verify is a convenience wrapper that performs a one-shot verification with
+// no key caching: every call refetches the issuer's keys. Hot paths should
+// share a CachedVerifier instead.
+//
+// httpClient is used for OIDC discovery and JWKS fetches; nil uses a default
+// client with a whole-request timeout.
+func Verify(ctx context.Context, httpClient *http.Client, jwt string, expectedIssuer, expectedAudience string, now time.Time) (*KubernetesClaims, error) {
+	return NewCachedVerifier(httpClient).Verify(ctx, jwt, expectedIssuer, expectedAudience, now)
+}
+
 // Verify verifies and extracts claims from a Kubernetes JWT.
 //
 // For bound service account tokens, this function performs cryptographic verification of the JWT,
@@ -122,10 +286,7 @@ var (
 // the object binding claims. If needed for your use case, you will need check the object bindings
 // by connecting to the cluster and seeing if the object(s) the bindings name still exist within the
 // cluster.
-//
-// httpClient is used for OIDC discovery and JWKS fetches; nil uses a default
-// client with a whole-request timeout.
-func Verify(ctx context.Context, httpClient *http.Client, jwt string, expectedIssuer, expectedAudience string, now time.Time) (*KubernetesClaims, error) {
+func (v *CachedVerifier) Verify(ctx context.Context, jwt string, expectedIssuer, expectedAudience string, now time.Time) (*KubernetesClaims, error) {
 	segments := strings.Split(jwt, ".")
 	if len(segments) != 3 {
 		return nil, fmt.Errorf("malformed JWT")
@@ -174,23 +335,14 @@ func Verify(ctx context.Context, httpClient *http.Client, jwt string, expectedIs
 		return nil, fmt.Errorf("unexpected issuer %q", rawClaims.Issuer)
 	}
 
-	// TODO: Cache keys, and only fetch new keys if the JWT's key ID is not in the cache.
-	keys, err := discoverKeysForIssuer(ctx, httpClient, rawClaims.Issuer)
-	if err != nil {
-		return nil, fmt.Errorf("while discovering keys from issuer: %w", err)
-	}
-
-	// Find the key we should use for verification based on the key ID in the JWT header.
+	// Find the key we should use for verification based on the keyID in the JWT header.
 	if header.KeyID == "" {
 		return nil, fmt.Errorf("key ID is required")
 	}
-	selectedKeyIndex := slices.IndexFunc(keys, func(k *KeyAndID) bool {
-		return k.KeyID == header.KeyID
-	})
-	if selectedKeyIndex == -1 {
-		return nil, fmt.Errorf("unknown key ID %q", header.KeyID)
+	selectedKey, err := v.keyForIssuer(ctx, rawClaims.Issuer, header.KeyID, now)
+	if err != nil {
+		return nil, err
 	}
-	selectedKey := keys[selectedKeyIndex].PublicKey
 
 	// Warning: don't ever refer to the payload data (except "iss") above this point. We need to
 	// ensure that we _never_ consider the contents of the payload when deciding how to perform

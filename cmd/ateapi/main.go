@@ -171,7 +171,11 @@ func main() {
 
 	jwtIssuerDiscoveryClient := buildK8sServiceAccountIssuerDiscoveryClient(ctx, *clientJWTCAFile, *clientJWTIssuer)
 
-	sessionIdentitySrv := sessionidentity.New(*clientJWTIssuer, *clientJWTAudience, *sessionIDJWTPoolFile, *sessionIDCAPoolFile, *podIdentityCACerts, jwtIssuerDiscoveryClient)
+	// One verifier shared by the auth interceptor and the session-identity
+	// service, so they share the issuer's cached verification keys.
+	jwtVerifier := k8sjwt.NewCachedVerifier(jwtIssuerDiscoveryClient)
+
+	sessionIdentitySrv := sessionidentity.New(*clientJWTIssuer, *clientJWTAudience, *sessionIDJWTPoolFile, *sessionIDCAPoolFile, *podIdentityCACerts, jwtVerifier)
 	debugSrv := debugapi.NewService(redisPersistence)
 
 	lisCfg := &net.ListenConfig{}
@@ -182,7 +186,7 @@ func main() {
 
 	authCfg := ateapiauth.ServerConfig{
 		VerifyBearerToken: func(ctx context.Context, bearer string) (string, error) {
-			claims, err := k8sjwt.Verify(ctx, jwtIssuerDiscoveryClient, bearer, *clientJWTIssuer, *clientJWTAudience, time.Now())
+			claims, err := jwtVerifier.Verify(ctx, bearer, *clientJWTIssuer, *clientJWTAudience, time.Now())
 			if err != nil {
 				return "", err
 			}
