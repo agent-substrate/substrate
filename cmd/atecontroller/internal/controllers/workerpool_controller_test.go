@@ -157,13 +157,9 @@ func TestWorkerPoolReplicasUpdate(t *testing.T) {
 		return err == nil, nil
 	})
 
-	if err := k8sClient.Get(testCtx, types.NamespacedName{Name: wp.Name, Namespace: wp.Namespace}, wp); err != nil {
-		t.Fatalf("re-fetch WorkerPool: %v", err)
-	}
-	wp.Spec.Replicas = 5
-	if err := k8sClient.Update(testCtx, wp); err != nil {
-		t.Fatalf("update WorkerPool replicas: %v", err)
-	}
+	updateWorkerPoolSpec(t, wp, "update WorkerPool replicas", func(current *atev1alpha1.WorkerPool) {
+		current.Spec.Replicas = 5
+	})
 
 	eventually(t, func(ctx context.Context) (bool, error) {
 		dep, err := getDeployment(ctx, wp)
@@ -188,13 +184,9 @@ func TestWorkerPoolImageUpdate(t *testing.T) {
 		return err == nil, nil
 	})
 
-	if err := k8sClient.Get(testCtx, types.NamespacedName{Name: wp.Name, Namespace: wp.Namespace}, wp); err != nil {
-		t.Fatalf("re-fetch WorkerPool: %v", err)
-	}
-	wp.Spec.AteomImage = "ateom:v2"
-	if err := k8sClient.Update(testCtx, wp); err != nil {
-		t.Fatalf("update WorkerPool image: %v", err)
-	}
+	updateWorkerPoolSpec(t, wp, "update WorkerPool image", func(current *atev1alpha1.WorkerPool) {
+		current.Spec.AteomImage = "ateom:v2"
+	})
 
 	eventually(t, func(ctx context.Context) (bool, error) {
 		dep, err := getDeployment(ctx, wp)
@@ -449,13 +441,9 @@ func TestWorkerPoolPodTemplateClear(t *testing.T) {
 		return err == nil && dep.Spec.Template.Spec.NodeSelector["workload"] == "substrate", nil
 	})
 
-	if err := k8sClient.Get(testCtx, types.NamespacedName{Name: wp.Name, Namespace: wp.Namespace}, wp); err != nil {
-		t.Fatalf("re-fetch WorkerPool: %v", err)
-	}
-	wp.Spec.Template.NodeSelector = nil
-	if err := k8sClient.Update(testCtx, wp); err != nil {
-		t.Fatalf("clear WorkerPool nodeSelector: %v", err)
-	}
+	updateWorkerPoolSpec(t, wp, "clear WorkerPool nodeSelector", func(current *atev1alpha1.WorkerPool) {
+		current.Spec.Template.NodeSelector = nil
+	})
 
 	eventually(t, func(ctx context.Context) (bool, error) {
 		dep, err := getDeployment(ctx, wp)
@@ -491,13 +479,9 @@ func TestWorkerPoolPodTemplateClearAll(t *testing.T) {
 			container.Resources.Requests.Cpu().String() == "500m", nil
 	})
 
-	if err := k8sClient.Get(testCtx, types.NamespacedName{Name: wp.Name, Namespace: wp.Namespace}, wp); err != nil {
-		t.Fatalf("re-fetch WorkerPool: %v", err)
-	}
-	wp.Spec.Template = nil
-	if err := k8sClient.Update(testCtx, wp); err != nil {
-		t.Fatalf("clear WorkerPool template: %v", err)
-	}
+	updateWorkerPoolSpec(t, wp, "clear WorkerPool template", func(current *atev1alpha1.WorkerPool) {
+		current.Spec.Template = nil
+	})
 
 	eventually(t, func(ctx context.Context) (bool, error) {
 		dep, err := getDeployment(ctx, wp)
@@ -612,6 +596,21 @@ func updateDeploymentStatus(t *testing.T, wp *atev1alpha1.WorkerPool, action str
 	updateDeployment(t, wp, action, mutate, func(dep *appsv1.Deployment) error {
 		return k8sClient.Status().Update(testCtx, dep)
 	})
+}
+
+func updateWorkerPoolSpec(t *testing.T, wp *atev1alpha1.WorkerPool, action string, mutate func(*atev1alpha1.WorkerPool)) {
+	t.Helper()
+	err := retry.RetryOnConflict(retry.DefaultBackoff, func() error {
+		current := &atev1alpha1.WorkerPool{}
+		if err := k8sClient.Get(testCtx, types.NamespacedName{Name: wp.Name, Namespace: wp.Namespace}, current); err != nil {
+			return err
+		}
+		mutate(current)
+		return k8sClient.Update(testCtx, current)
+	})
+	if err != nil {
+		t.Fatalf("%s: %v", action, err)
+	}
 }
 
 // eventually polls condition every 100ms until it returns true or 15s elapses.
