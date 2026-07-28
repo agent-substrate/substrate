@@ -123,6 +123,9 @@ func InitTracing(ctx context.Context, opts TracingOptions) (*sdktrace.TracerProv
 // reader (exposed via StartMetricsServer's /metrics handler) and an
 // OTLP periodic reader.
 func InitMetrics(ctx context.Context, serviceName string) (*sdkmetric.MeterProvider, error) {
+	if serviceName == "" {
+		return nil, fmt.Errorf("serviceName is required")
+	}
 	promExporter, err := prometheus.New()
 	if err != nil {
 		return nil, fmt.Errorf("create Prometheus metric exporter: %w", err)

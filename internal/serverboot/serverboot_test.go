@@ -144,6 +144,12 @@ func TestInitMetricsPushOnlyRequiresServiceName(t *testing.T) {
 	}
 }
 
+func TestInitMetricsRequiresServiceName(t *testing.T) {
+	if _, err := InitMetrics(context.Background(), ""); err == nil {
+		t.Error("InitMetrics(\"\") must return an error")
+	}
+}
+
 func getCode(t *testing.T, mux *http.ServeMux, path string) int {
 	t.Helper()
 	rec := httptest.NewRecorder()
