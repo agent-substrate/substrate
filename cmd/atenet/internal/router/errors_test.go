@@ -224,3 +224,24 @@ func TestMapResumeError_IsReqError(t *testing.T) {
 		t.Fatalf("errors.As(*reqError) = false, want true; err type = %T", err)
 	}
 }
+
+// TestImmediateResponseHeaderEncoding pins the RawValue encoding: Envoy drops
+// plain Value in ext_proc header mutations, so a Value-encoded header reaches
+// the client with an empty value (found live — content-type on every immediate
+// response had been arriving empty).
+func TestImmediateResponseHeaderEncoding(t *testing.T) {
+	t.Parallel()
+
+	resp := immediateResponse(envoy_type.StatusCode_ServiceUnavailable, "body")
+	set := resp.GetImmediateResponse().GetHeaders().GetSetHeaders()
+	if len(set) != 1 {
+		t.Fatalf("SetHeaders count = %d, want 1", len(set))
+	}
+	h := set[0].GetHeader()
+	if h.GetKey() != "content-type" || string(h.GetRawValue()) != "text/plain" {
+		t.Errorf("header = %q:%q (RawValue), want content-type:text/plain", h.GetKey(), h.GetRawValue())
+	}
+	if h.GetValue() != "" {
+		t.Errorf("header uses Value (%q); must use RawValue only", h.GetValue())
+	}
+}
