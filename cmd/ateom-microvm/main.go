@@ -36,6 +36,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/reaper"
 	"github.com/agent-substrate/substrate/internal/actorlog"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
+	"github.com/agent-substrate/substrate/internal/ateomnet"
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/serverboot"
@@ -128,7 +129,7 @@ func do(ctx context.Context) error {
 
 	// Networking: create a named interior netns; each activation builds a fresh
 	// veth pair into it (see net.go) and points kata at it.
-	interiorNetNS, err := createNetNSWithoutSwitching(ateompath.AteomNetNSName(*podUID))
+	interiorNetNS, err := ateomnet.CreateNetNSWithoutSwitching(ateompath.AteomNetNSName(*podUID))
 	if err != nil {
 		return fmt.Errorf("while creating interior netns: %w", err)
 	}
