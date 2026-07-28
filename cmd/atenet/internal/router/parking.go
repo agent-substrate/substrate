@@ -29,9 +29,9 @@ const (
 	defaultParkedRequestBudget = 5 * time.Second
 
 	// defaultParkedRequestMax is sized together with the ext_proc cluster's
-	// circuit breaker (--extproc-max-requests, default 2048): each parked
+	// circuit breaker (--extproc-max-requests, derived as twice the lot by default): each parked
 	// request holds one ext_proc stream, i.e. one active request against that
-	// cluster, for its entire wait. Startup validation keeps the breaker >= the
+	// cluster, for its entire wait. Startup validation keeps an explicit breaker >= the
 	// lot, and the default pair (1024 lot / 2048 breaker) leaves equal headroom
 	// for the fast path. See buildCluster in xds.go.
 	defaultParkedRequestMax = 1024

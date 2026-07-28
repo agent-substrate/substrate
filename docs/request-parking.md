@@ -52,14 +52,14 @@ than queueing without bound.
 Every parked request holds one ext_proc stream — one active request against
 Envoy's ext_proc cluster — for its entire wait, while ordinary requests hold
 one only for a millisecond-scale header exchange. The cluster's circuit breaker
-is therefore the hard ceiling on concurrent parked requests, and the router
-sets it explicitly from `--extproc-max-requests` (default `2048`). Startup
-validation enforces `--extproc-max-requests >= --parked-request-max`; the
-excess is **fast-path headroom**, so a saturated lot cannot starve requests to
-already-running actors (the default pair is a `1024` lot with `1024` of
-headroom). A breaker below the lot would silently truncate it — Envoy would
-reject the overflow itself, with 503s that never reach the lot and never count
-in `parking.rejected`.
+is therefore the hard ceiling on concurrent parked requests. By default the
+router **derives** it as twice `--parked-request-max` (minimum `1024`), so the
+lot always fits and an equal share of **fast-path headroom** remains — a
+saturated lot cannot starve requests to already-running actors, at any lot
+size. `--extproc-max-requests` overrides the derivation; explicit values are
+validated `>= --parked-request-max` at startup, because a breaker below the lot
+would silently truncate it — Envoy would reject the overflow itself, with 503s
+that never reach the lot and never count in `parking.rejected`.
 
 Concurrent requests for the *same* actor are de-duplicated by the resumer's
 `singleflight` group: they share a single in-flight `ResumeActor` call and all
@@ -105,7 +105,7 @@ within a `15s` budget.
 | `--parked-request-retry-interval` | `100ms` | Delay before a parked request's first resume retry.                |
 | `--parked-request-retry-factor`   | `1.1`   | Multiplier applied to the retry delay after each attempt (>= 1).   |
 | `--parked-request-retry-jitter`   | `0.1`   | Random fraction in `[0, 1)` added per retry to de-synchronize parked requests. |
-| `--extproc-max-requests`          | `2048`  | Envoy circuit-breaker `max_requests` for the ext_proc cluster. Must be `>= --parked-request-max` (enforced at startup); the excess is fast-path headroom (see Behavior). |
+| `--extproc-max-requests`          | `0` (auto) | Envoy circuit-breaker `max_requests` for the ext_proc cluster. `0` derives twice `--parked-request-max` (min `1024`); explicit values must be `>= --parked-request-max` (enforced at startup). The excess is fast-path headroom (see Behavior). |
 
 The retry backoff deliberately has no cap and no attempt limit: the budget alone
 bounds the wait.

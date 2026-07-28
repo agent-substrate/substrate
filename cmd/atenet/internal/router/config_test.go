@@ -26,21 +26,21 @@ func TestRouterConfigValidate(t *testing.T) {
 		wantErr string // substring; empty means valid
 	}{
 		{
-			name: "defaults are valid",
-			cfg:  routerConfig{ExtProcMaxRequests: defaultExtProcMaxRequests, ParkedRequest: ParkedRequestConfig{Max: defaultParkedRequestMax}},
+			name: "defaults are valid (auto breaker)",
+			cfg:  routerConfig{ExtProcMaxRequests: 0, ParkedRequest: ParkedRequestConfig{Max: defaultParkedRequestMax}},
 		},
 		{
-			name:    "zero extproc-max-requests rejected",
-			cfg:     routerConfig{ExtProcMaxRequests: 0, ParkedRequest: ParkedRequestConfig{Max: 0}},
-			wantErr: "must be positive",
+			name:    "negative extproc-max-requests rejected",
+			cfg:     routerConfig{ExtProcMaxRequests: -1, ParkedRequest: ParkedRequestConfig{Max: 0}},
+			wantErr: "must not be negative",
 		},
 		{
-			name:    "breaker below the lot rejected",
+			name:    "explicit breaker below the lot rejected",
 			cfg:     routerConfig{ExtProcMaxRequests: 512, ParkedRequest: ParkedRequestConfig{Max: 1024}},
 			wantErr: "must be >= --parked-request-max",
 		},
 		{
-			name: "breaker equal to the lot accepted",
+			name: "explicit breaker equal to the lot accepted",
 			cfg:  routerConfig{ExtProcMaxRequests: 1024, ParkedRequest: ParkedRequestConfig{Max: 1024}},
 		},
 		{
@@ -59,6 +59,27 @@ func TestRouterConfigValidate(t *testing.T) {
 			}
 			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 				t.Fatalf("expected error containing %q, got %v", tc.wantErr, err)
+			}
+		})
+	}
+}
+
+func TestRouterConfigExtProcMaxRequests(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  routerConfig
+		want int
+	}{
+		{"auto derives twice the default lot", routerConfig{ExtProcMaxRequests: 0, ParkedRequest: ParkedRequestConfig{Max: defaultParkedRequestMax}}, 2 * defaultParkedRequestMax},
+		{"auto scales with a larger lot", routerConfig{ExtProcMaxRequests: 0, ParkedRequest: ParkedRequestConfig{Max: 4096}}, 8192},
+		{"auto floors at Envoy's default when the lot is small", routerConfig{ExtProcMaxRequests: 0, ParkedRequest: ParkedRequestConfig{Max: 10}}, extProcMaxRequestsFloor},
+		{"auto floors when parking is disabled", routerConfig{ExtProcMaxRequests: 0, ParkedRequest: ParkedRequestConfig{Max: 0}}, extProcMaxRequestsFloor},
+		{"explicit value wins over derivation", routerConfig{ExtProcMaxRequests: 1500, ParkedRequest: ParkedRequestConfig{Max: 1024}}, 1500},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.cfg.extProcMaxRequests(); got != tc.want {
+				t.Errorf("extProcMaxRequests() = %d, want %d", got, tc.want)
 			}
 		})
 	}

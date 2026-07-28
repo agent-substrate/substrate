@@ -200,7 +200,7 @@ func (s *RouterServer) Run(ctx context.Context) error {
 		return fmt.Errorf("configure OTLP collector: %w", err)
 	}
 
-	xdsSrv.SetExtProcMaxRequests(s.cfg.ExtProcMaxRequests)
+	xdsSrv.SetExtProcMaxRequests(s.cfg.extProcMaxRequests())
 	if parkCfg.enabled() {
 		// Envoy must keep a parked request open at least as long as the router
 		// will hold it; add a margin so the router surfaces its own 503 first.

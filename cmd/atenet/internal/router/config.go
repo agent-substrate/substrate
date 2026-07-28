@@ -64,9 +64,30 @@ type routerConfig struct {
 
 	// ExtProcMaxRequests is the circuit-breaker max_requests Envoy applies to
 	// the ext_proc cluster. Every parked request holds one slot for its entire
-	// wait, so this must be >= ParkedRequestMax (validated at startup); the
+	// wait, so this must be >= ParkedRequest.Max (validated at startup); the
 	// excess is fast-path headroom for requests to already-running actors.
+	// 0 derives it from the parking lot — see extProcMaxRequests.
 	ExtProcMaxRequests int
+}
+
+// extProcMaxRequestsFloor is the minimum derived circuit breaker — Envoy's own
+// default max_requests — so a small (or disabled) parking lot still leaves
+// ordinary fast-path capacity.
+const extProcMaxRequestsFloor = 1024
+
+// extProcMaxRequests resolves the effective ext_proc circuit breaker: an
+// explicit positive flag wins; 0 derives twice the parking lot, giving
+// fast-path headroom equal to the lot itself, floored at
+// extProcMaxRequestsFloor.
+func (c routerConfig) extProcMaxRequests() int {
+	if c.ExtProcMaxRequests > 0 {
+		return c.ExtProcMaxRequests
+	}
+	derived := 2 * c.ParkedRequest.Max
+	if derived < extProcMaxRequestsFloor {
+		derived = extProcMaxRequestsFloor
+	}
+	return derived
 }
 
 // validate rejects flag combinations that would make the router misbehave
@@ -75,10 +96,10 @@ func (c routerConfig) validate() error {
 	if err := c.ParkedRequest.validate(); err != nil {
 		return err
 	}
-	if c.ExtProcMaxRequests <= 0 {
-		return fmt.Errorf("--extproc-max-requests must be positive, got %d", c.ExtProcMaxRequests)
+	if c.ExtProcMaxRequests < 0 {
+		return fmt.Errorf("--extproc-max-requests must not be negative, got %d (0 derives it from --parked-request-max)", c.ExtProcMaxRequests)
 	}
-	if c.ParkedRequest.Max > 0 && c.ExtProcMaxRequests < c.ParkedRequest.Max {
+	if c.ExtProcMaxRequests > 0 && c.ParkedRequest.Max > 0 && c.ExtProcMaxRequests < c.ParkedRequest.Max {
 		return fmt.Errorf("--extproc-max-requests (%d) must be >= --parked-request-max (%d): a circuit breaker below the parking lot silently truncates it with Envoy-generated 503s",
 			c.ExtProcMaxRequests, c.ParkedRequest.Max)
 	}

@@ -65,7 +65,7 @@ func NewRouterCmd() *cobra.Command {
 	cmd.Flags().DurationVar(&cfg.ParkedRequest.RetryInterval, "parked-request-retry-interval", defaultParkedRequestRetryInterval, "Delay before a parked request's first resume retry")
 	cmd.Flags().Float64Var(&cfg.ParkedRequest.RetryFactor, "parked-request-retry-factor", defaultParkedRequestRetryFactor, "Multiplier applied to the retry delay after each attempt; must be >= 1")
 	cmd.Flags().Float64Var(&cfg.ParkedRequest.RetryJitter, "parked-request-retry-jitter", defaultParkedRequestRetryJitter, "Random fraction in [0, 1) added to each retry delay to de-synchronize parked requests")
-	cmd.Flags().IntVar(&cfg.ExtProcMaxRequests, "extproc-max-requests", defaultExtProcMaxRequests, "Circuit-breaker max_requests for Envoy's ext_proc cluster; every parked request holds one slot for its full wait, so this must be >= --parked-request-max (the excess is fast-path headroom)")
+	cmd.Flags().IntVar(&cfg.ExtProcMaxRequests, "extproc-max-requests", 0, "Circuit-breaker max_requests for Envoy's ext_proc cluster; 0 (the default) derives it as twice --parked-request-max (minimum 1024). Explicit values must be >= --parked-request-max: every parked request holds one slot for its full wait, and the excess is fast-path headroom")
 
 	return cmd
 }
