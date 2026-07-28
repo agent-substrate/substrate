@@ -21,6 +21,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	k8errors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -98,7 +99,15 @@ func (r *WorkerPoolReconciler) applyDeployment(ctx context.Context, wp *atev1alp
 }
 
 func (r *WorkerPoolReconciler) syncStatus(ctx context.Context, wp *atev1alpha1.WorkerPool, dep *appsv1.Deployment) error {
-	want := atev1alpha1.WorkerPoolStatus{Replicas: dep.Status.Replicas}
+	selector, err := metav1.LabelSelectorAsSelector(dep.Spec.Selector)
+	if err != nil {
+		return fmt.Errorf("failed to convert Deployment selector: %w", err)
+	}
+
+	want := atev1alpha1.WorkerPoolStatus{
+		Replicas: dep.Status.Replicas,
+		Selector: selector.String(),
+	}
 	if equality.Semantic.DeepEqual(wp.Status, want) {
 		return nil
 	}

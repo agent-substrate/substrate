@@ -24,6 +24,8 @@ import (
 	clusterv3 "github.com/envoyproxy/go-control-plane/envoy/config/cluster/v3"
 	listenerv3 "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
 	routev3 "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
+	dfpclusterv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/clusters/dynamic_forward_proxy/v3"
+	httpv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/upstreams/http/v3"
 	cachev3 "github.com/envoyproxy/go-control-plane/pkg/cache/v3"
 	resourcev3 "github.com/envoyproxy/go-control-plane/pkg/resource/v3"
 )
@@ -208,5 +210,52 @@ func TestXdsServer_Serve_Shutdown(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Error("Timeout exceeded waiting for Serve to finish graceful closure")
+	}
+}
+
+// TestDynamicForwardProxyCluster_EnvoyAcceptsHttpProtocolOptions guards a
+// coupling that is invisible on the Go side but fatal at runtime.
+//
+// Envoy refuses a dynamic_forward_proxy cluster that carries
+// HttpProtocolOptions unless the cluster config either turns on both auto_sni
+// and auto_san_validation or sets allow_insecure_cluster_options. A snapshot
+// that breaks the rule is a perfectly well-formed proto and passes
+// Consistent(), so nothing here fails: the only symptom is Envoy NACKing every
+// CDS push and the cluster silently missing from its config dump, which reads
+// as "all actor traffic 503s" rather than as a config error.
+func TestDynamicForwardProxyCluster_EnvoyAcceptsHttpProtocolOptions(t *testing.T) {
+	cluster := NewXdsServer(18000).buildDynamicForwardProxyCluster()
+
+	var clusterConfig dfpclusterv3.ClusterConfig
+	if err := cluster.GetClusterType().GetTypedConfig().UnmarshalTo(&clusterConfig); err != nil {
+		t.Fatalf("Failed to unmarshal dynamic forward proxy cluster config: %v", err)
+	}
+
+	if !clusterConfig.GetAllowInsecureClusterOptions() {
+		t.Errorf("Cluster carries %s but neither allows insecure cluster options nor "+
+			"enables auto_sni and auto_san_validation; Envoy will reject every CDS push",
+			httpProtocolOptionsName)
+	}
+}
+
+// TestDynamicForwardProxyCluster_DisablesConnectionReuse pins the fix for the
+// 503 storm seen under actor churn. Worker pod IPs are stable while the actor
+// sandbox behind them is destroyed on every Suspend, so a pooled connection
+// outlives the actor that owned it.
+func TestDynamicForwardProxyCluster_DisablesConnectionReuse(t *testing.T) {
+	cluster := NewXdsServer(18000).buildDynamicForwardProxyCluster()
+
+	raw, ok := cluster.GetTypedExtensionProtocolOptions()[httpProtocolOptionsName]
+	if !ok {
+		t.Fatalf("Cluster is missing %s", httpProtocolOptionsName)
+	}
+
+	var opts httpv3.HttpProtocolOptions
+	if err := raw.UnmarshalTo(&opts); err != nil {
+		t.Fatalf("Failed to unmarshal HttpProtocolOptions: %v", err)
+	}
+
+	if got := opts.GetCommonHttpProtocolOptions().GetMaxRequestsPerConnection().GetValue(); got != 1 {
+		t.Errorf("Expected max_requests_per_connection 1, got %d", got)
 	}
 }
