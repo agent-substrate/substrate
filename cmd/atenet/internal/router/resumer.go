@@ -18,9 +18,10 @@ import (
 	"context"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/ateattr"
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/sync/singleflight"
 	"google.golang.org/grpc/codes"
@@ -41,17 +42,13 @@ func NewActorResumer(apiClient ateapipb.ControlClient) *ActorResumer {
 }
 
 // ResumeActor ensures the requested actor is running. It deduplicates concurrent
-// requests within the process and retries when needed. The actor is addressed by
-// (atespace, actorName) since an actor name is only unique within its atespace.
-func (r *ActorResumer) ResumeActor(ctx context.Context, atespace, actorName string) (*ateapipb.Actor, error) {
+// requests within the process and retries when needed.
+func (r *ActorResumer) ResumeActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error) {
 	ctx, span := otel.Tracer(routerServiceName).Start(ctx, "ResumeActor",
-		trace.WithAttributes(
-			attribute.String("atespace", atespace),
-			attribute.String("actor", actorName),
-		))
+		trace.WithAttributes(ateattr.ActorRefAttributes(actorRef)...))
 	defer span.End()
 
-	ch := r.flight.DoChan(atespace+"/"+actorName, func() (interface{}, error) {
+	ch := r.flight.DoChan(actorRef.String(), func() (interface{}, error) {
 		// We detach the context from the first caller using a fixed background timeout.
 		// This guarantees that if Caller 1 disconnects or times out, the underlying
 		// resume operation continues running for Caller 2 and Caller 3 without failing.
@@ -70,7 +67,7 @@ func (r *ActorResumer) ResumeActor(ctx context.Context, atespace, actorName stri
 		err := wait.ExponentialBackoffWithContext(bgCtx, backoff, func(ctx context.Context) (bool, error) {
 			var err error
 			resumeResp, err = r.apiClient.ResumeActor(ctx, &ateapipb.ResumeActorRequest{
-				Actor: &ateapipb.ObjectRef{Atespace: atespace, Name: actorName},
+				Actor: actorRef.ToObjectRef(),
 			})
 			if err == nil {
 				return true, nil

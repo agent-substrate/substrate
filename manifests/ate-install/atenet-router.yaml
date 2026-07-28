@@ -137,7 +137,7 @@ spec:
         - "--otlp-collector-address=opentelemetry-collector.gke-managed-otel.svc.cluster.local:4317"
         # Client auth to ateapi (mtls): verify the serving cert against the
         # servicedns trust bundle and present the podidentity client cert.
-        - "--ateapi-address=api.ate-system.svc:443"
+        - "--ateapi-address=dns:///api.ate-system.svc:443"
         - "--ateapi-ca-file=/run/servicedns-ca/trust-bundle.pem"
         - "--ateapi-client-cert=/run/podidentity.podcert.ate.dev/credential-bundle.pem"
         env:

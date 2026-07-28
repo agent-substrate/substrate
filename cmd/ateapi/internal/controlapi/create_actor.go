@@ -37,7 +37,7 @@ func (s *Service) CreateActor(ctx context.Context, req *ateapipb.CreateActorRequ
 	templateNamespace := in.GetActorTemplateNamespace()
 	templateName := in.GetActorTemplateName()
 
-	setSpanActorRefAttributes(ctx, in.GetMetadata().GetAtespace(), in.GetMetadata().GetName())
+	setSpanActorRefAttributes(ctx, resources.ActorRefFromActor(in))
 
 	template, err := s.actorTemplateLister.ActorTemplates(templateNamespace).Get(templateName)
 	if err != nil {

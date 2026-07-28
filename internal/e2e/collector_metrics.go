@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/ateclient"
+	"github.com/agent-substrate/substrate/internal/portforward"
 	"k8s.io/client-go/kubernetes"
 )
 
@@ -54,11 +55,7 @@ func ScrapeCollectorMetrics(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("creating k8s client: %w", err)
 	}
 
-	pod, _, err := firstReadyPodForService(ctx, clientset, collectorNamespace, collectorService)
-	if err != nil {
-		return "", err
-	}
-	localPort, stop, err := podPortForward(ctx, config, clientset, collectorNamespace, pod.Name, collectorPromPort)
+	localPort, stop, err := portforward.ServicePortForward(ctx, config, clientset, collectorNamespace, collectorService, collectorPromPort)
 	if err != nil {
 		return "", err
 	}

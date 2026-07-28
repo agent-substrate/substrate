@@ -51,6 +51,7 @@ import (
 	"golang.org/x/oauth2/google"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/reflection"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -195,6 +196,19 @@ func main() {
 	mux := grpc.NewServer(
 		grpc.Creds(serverCreds),
 		grpc.StatsHandler(otelgrpc.NewServerHandler()),
+		// Bounds every connection's lifetime so round_robin clients
+		// periodically re-resolve DNS and pick up replicas added since they
+		// last connected - without this, an existing connection never
+		// notices new replicas on its own (see https://github.com/grpc/grpc/issues/12295).
+		//
+		// TODO: Replace with a resolver that watches Endpoints/EndpointSlices
+		// directly and pushes address updates, instead of relying on forced
+		// reconnects to trigger DNS re-resolution. See
+		// https://github.com/sercand/kuberesolver.
+		grpc.KeepaliveParams(keepalive.ServerParameters{
+			MaxConnectionAge:      1 * time.Minute,
+			MaxConnectionAgeGrace: maxRPCDeadline + time.Minute,
+		}),
 		grpc.ChainUnaryInterceptor(
 			ateapiauth.UnaryServerInterceptor(authCfg),
 			ateinterceptors.MaxDeadlineUnaryInterceptor(maxRPCDeadline),

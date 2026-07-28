@@ -20,6 +20,7 @@ import (
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/agent-substrate/substrate/internal/ateattr"
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
@@ -31,6 +32,6 @@ func setSpanActorAttributes(ctx context.Context, a *ateapipb.Actor) {
 
 // setSpanActorRefAttributes is setSpanActorAttributes for the identity subset known
 // before the Actor record resolves, so a failed lookup still carries who/where.
-func setSpanActorRefAttributes(ctx context.Context, atespace, name string) {
-	trace.SpanFromContext(ctx).SetAttributes(ateattr.ActorRefAttributes(atespace, name)...)
+func setSpanActorRefAttributes(ctx context.Context, actorRef resources.ActorRef) {
+	trace.SpanFromContext(ctx).SetAttributes(ateattr.ActorRefAttributes(actorRef)...)
 }

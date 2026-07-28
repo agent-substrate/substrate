@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package e2e
+package portforward
 
 import (
 	"testing"
@@ -22,7 +22,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
-func TestResolveHTTPTargetPort(t *testing.T) {
+func TestResolveTargetPort(t *testing.T) {
 	pod := &corev1.Pod{
 		Spec: corev1.PodSpec{
 			Containers: []corev1.Container{{
@@ -59,12 +59,12 @@ func TestResolveHTTPTargetPort(t *testing.T) {
 		{"named target port", svc(corev1.ServicePort{Port: 80, TargetPort: intstr.FromString("http")}), pod, 8080, false},
 		{"named target not found", svc(corev1.ServicePort{Port: 80, TargetPort: intstr.FromString("nope")}), pod, 0, true},
 		{"named target resolves to zero", svc(corev1.ServicePort{Port: 80, TargetPort: intstr.FromString("http")}), zeroPortPod, 0, true},
-		{"unset target port", svc(corev1.ServicePort{Port: 80}), pod, 0, true},
-		{"no port 80", svc(corev1.ServicePort{Port: 443, TargetPort: intstr.FromInt(8443)}), pod, 0, true},
+		{"unset target port defaults to port", svc(corev1.ServicePort{Port: 80}), pod, 80, false},
+		{"no matching service port", svc(corev1.ServicePort{Port: 443, TargetPort: intstr.FromInt(8443)}), pod, 0, true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := resolveHTTPTargetPort(tc.svc, tc.pod)
+			got, err := resolveTargetPort(tc.svc, tc.pod, 80)
 			if (err != nil) != tc.wantErr {
 				t.Fatalf("err = %v, wantErr %v", err, tc.wantErr)
 			}
@@ -101,8 +101,8 @@ func TestIsPodReady(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := isPodReady(tc.pod); got != tc.want {
-				t.Errorf("isPodReady = %v, want %v", got, tc.want)
+			if got := IsPodReady(tc.pod); got != tc.want {
+				t.Errorf("IsPodReady = %v, want %v", got, tc.want)
 			}
 		})
 	}

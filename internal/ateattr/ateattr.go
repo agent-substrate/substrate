@@ -21,6 +21,7 @@ package ateattr
 import (
 	"go.opentelemetry.io/otel/attribute"
 
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
@@ -64,10 +65,10 @@ const (
 // ActorRefAttributes returns the subset knowable before the Actor record
 // resolves: only the (atespace, name) the request addresses. The uid and version
 // are server-assigned and unknown until the record loads, so they are omitted.
-func ActorRefAttributes(atespace, name string) []attribute.KeyValue {
+func ActorRefAttributes(actorRef resources.ActorRef) []attribute.KeyValue {
 	return []attribute.KeyValue{
-		AtespaceKey.String(atespace),
-		ActorNameKey.String(name),
+		AtespaceKey.String(actorRef.Atespace),
+		ActorNameKey.String(actorRef.Name),
 	}
 }
 

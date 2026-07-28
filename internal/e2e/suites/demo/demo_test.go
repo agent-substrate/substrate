@@ -223,7 +223,7 @@ func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(
 	}
 	waitForActorStatus(ctx, t, clients, actorID, ateapipb.Actor_STATUS_RUNNING)
 
-	resp, err := callActor(t, demoAtespace, actorID)
+	resp, err := callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: actorID})
 	if err != nil {
 		t.Fatalf("failed to call actor: %v", err)
 	}
@@ -249,7 +249,7 @@ func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(
 	}
 	waitForActorStatus(ctx, t, clients, actorID, ateapipb.Actor_STATUS_RUNNING)
 
-	resp, err = callActor(t, demoAtespace, actorID)
+	resp, err = callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: actorID})
 	if err != nil {
 		t.Fatalf("failed to call actor again: %v", err)
 	}
@@ -275,7 +275,7 @@ func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(
 	}
 	waitForActorStatus(ctx, t, clients, actorID, ateapipb.Actor_STATUS_RUNNING)
 
-	resp, err = callActor(t, demoAtespace, actorID)
+	resp, err = callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: actorID})
 	if err != nil {
 		t.Fatalf("failed to call actor again: %v", err)
 	}
@@ -371,7 +371,7 @@ func pauseActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *
 	}
 	waitForActorStatus(ctx, t, clients, actorName, ateapipb.Actor_STATUS_RUNNING)
 
-	resp, err := callActor(t, demoAtespace, actorName)
+	resp, err := callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: actorName})
 	if err != nil {
 		t.Fatalf("failed to call actor: %v", err)
 	}
@@ -396,7 +396,7 @@ func pauseActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *
 	}
 	waitForActorStatus(ctx, t, clients, actorName, ateapipb.Actor_STATUS_RUNNING)
 
-	resp, err = callActor(t, demoAtespace, actorName)
+	resp, err = callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: actorName})
 	if err != nil {
 		t.Fatalf("failed to call actor again: %v", err)
 	}
@@ -451,7 +451,7 @@ func suspendActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj
 	}
 	waitForActorStatus(ctx, t, clients, actorName, ateapipb.Actor_STATUS_RUNNING)
 
-	resp, err := callActor(t, demoAtespace, actorName)
+	resp, err := callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: actorName})
 	if err != nil {
 		t.Fatalf("failed to call actor: %v", err)
 	}
@@ -475,7 +475,7 @@ func suspendActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj
 	}
 	waitForActorStatus(ctx, t, clients, actorName, ateapipb.Actor_STATUS_RUNNING)
 
-	resp, err = callActor(t, demoAtespace, actorName)
+	resp, err = callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: actorName})
 	if err != nil {
 		t.Fatalf("failed to call actor again: %v", err)
 	}
@@ -697,13 +697,13 @@ func waitForActorStatus(ctx context.Context, t *testing.T, clients *e2e.Clients,
 	t.Fatalf("timed out waiting for actor %q to reach status %v", actorName, expectedStatus)
 }
 
-func callActor(t *testing.T, atespace, actorName string) (string, error) {
+func callActor(t *testing.T, actorRef resources.ActorRef) (string, error) {
 	t.Helper()
 
 	deadline := time.Now().Add(30 * time.Second)
 	var lastErr error
 	for time.Now().Before(deadline) {
-		resp, err := callActorOnce(t, atespace, actorName)
+		resp, err := callActorOnce(t, actorRef)
 		if err == nil {
 			return resp, nil
 		}
@@ -714,7 +714,7 @@ func callActor(t *testing.T, atespace, actorName string) (string, error) {
 	return "", fmt.Errorf("timed out waiting for actor response: %w", lastErr)
 }
 
-func callActorOnce(t *testing.T, atespace, actorName string) (string, error) {
+func callActorOnce(t *testing.T, actorRef resources.ActorRef) (string, error) {
 	t.Helper()
 	clients := e2e.GetClients()
 
@@ -785,7 +785,7 @@ func callActorOnce(t *testing.T, atespace, actorName string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to create request: %w", err)
 	}
-	reqHttp.Host = resources.ActorDNSName(atespace, actorName)
+	reqHttp.Host = actorRef.DNSName()
 
 	httpClient := &http.Client{Timeout: 15 * time.Second}
 	resp, err := httpClient.Do(reqHttp)

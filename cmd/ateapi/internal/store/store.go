@@ -20,6 +20,7 @@ import (
 	"errors"
 	"sync"
 
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
@@ -42,8 +43,8 @@ var (
 
 // Interface defines the contract for the persistence layer storing actor state.
 type Interface interface {
-	// Fetches an actor by (atespace, name). Returns ErrNotFound if missing.
-	GetActor(ctx context.Context, atespace, name string) (*ateapipb.Actor, error)
+	// Fetches an actor by reference. Returns ErrNotFound if missing.
+	GetActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error)
 
 	// Stores a new actor in suspended state and returns the stored resource with
 	// server-assigned metadata (uid, version, timestamps). The input is not
@@ -57,7 +58,7 @@ type Interface interface {
 
 	// Removes an actor and returns the deleted resource. Returns ErrNotFound if
 	// missing, or ErrFailedPrecondition if not suspended.
-	DeleteActor(ctx context.Context, atespace, name string) (*ateapipb.Actor, error)
+	DeleteActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error)
 
 	// Lists actors in the given atespace (scoped scan), or across ALL atespaces if atespace is
 	// empty. Returns a page of actors and a next page token.

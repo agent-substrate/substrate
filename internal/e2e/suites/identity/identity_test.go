@@ -26,6 +26,7 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/e2e"
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -182,7 +183,7 @@ func createAndResumeActor(t *testing.T, ctx context.Context, clients *e2e.Client
 
 func whoami(t *testing.T, ctx context.Context, rc *e2e.RouterClient, id string) whoamiResponse {
 	t.Helper()
-	resp, err := rc.Get(ctx, probeNamespace, id, "/whoami")
+	resp, err := rc.Get(ctx, resources.ActorRef{Atespace: probeNamespace, Name: id}, "/whoami")
 	if err != nil {
 		t.Fatalf("GET /whoami for %q: %v", id, err)
 	}

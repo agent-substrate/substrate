@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -43,6 +44,8 @@ func TestActorResumer_ResumeActor(t *testing.T) {
 	const testAtespace = "team-a"
 	const expectedIP = "10.0.0.52"
 
+	testActorRef := resources.ActorRef{Atespace: testAtespace, Name: testActorName}
+
 	t.Run("SuspendedResumedSuccessfully", func(t *testing.T) {
 		var resumeCalled int
 		mock := &resumerMockClient{
@@ -59,7 +62,7 @@ func TestActorResumer_ResumeActor(t *testing.T) {
 		}
 
 		resumer := NewActorResumer(mock)
-		actor, err := resumer.ResumeActor(context.Background(), testAtespace, testActorName)
+		actor, err := resumer.ResumeActor(context.Background(), testActorRef)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -90,7 +93,7 @@ func TestActorResumer_ResumeActor(t *testing.T) {
 		}
 
 		resumer := NewActorResumer(mock)
-		actor, err := resumer.ResumeActor(context.Background(), testAtespace, testActorName)
+		actor, err := resumer.ResumeActor(context.Background(), testActorRef)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -110,7 +113,7 @@ func TestActorResumer_ResumeActor(t *testing.T) {
 		}
 
 		resumer := NewActorResumer(mock)
-		_, err := resumer.ResumeActor(context.Background(), testAtespace, testActorName)
+		_, err := resumer.ResumeActor(context.Background(), testActorRef)
 		if got := status.Code(err); got != codes.NotFound {
 			t.Errorf("expected gRPC code NotFound, got %v (err=%v)", got, err)
 		}
@@ -147,7 +150,7 @@ func TestActorResumer_ResumeActor(t *testing.T) {
 		for i := 0; i < concurrentRequests; i++ {
 			go func(idx int) {
 				defer wg.Done()
-				results[idx], errs[idx] = resumer.ResumeActor(context.Background(), testAtespace, testActorName)
+				results[idx], errs[idx] = resumer.ResumeActor(context.Background(), testActorRef)
 			}(i)
 		}
 		wg.Wait()

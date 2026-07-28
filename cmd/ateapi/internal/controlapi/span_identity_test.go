@@ -23,6 +23,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
 	"github.com/agent-substrate/substrate/internal/ateattr"
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
@@ -90,7 +91,7 @@ func TestSetSpanActorRefAttributes(t *testing.T) {
 	t.Parallel()
 
 	attrs := recordRootSpanAttrs(t, func(ctx context.Context) {
-		setSpanActorRefAttributes(ctx, "team-a", "a1")
+		setSpanActorRefAttributes(ctx, resources.ActorRef{Atespace: "team-a", Name: "a1"})
 	})
 
 	assertSpanStr(t, attrs, ateattr.AtespaceKey, "team-a")
@@ -107,5 +108,5 @@ func TestSetSpanActorRefAttributes(t *testing.T) {
 func TestSetSpanActorAttributes_NoRecordingSpanIsNoop(t *testing.T) {
 	t.Parallel()
 	setSpanActorAttributes(context.Background(), &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Name: "a1"}})
-	setSpanActorRefAttributes(context.Background(), "team-a", "a1")
+	setSpanActorRefAttributes(context.Background(), resources.ActorRef{Atespace: "team-a", Name: "a1"})
 }

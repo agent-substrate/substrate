@@ -31,6 +31,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/envtestbins"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
+	"github.com/agent-substrate/substrate/internal/resources"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/client/clientset/versioned"
 	"github.com/agent-substrate/substrate/pkg/client/informers/externalversions"
@@ -377,6 +378,7 @@ func setupTest(t *testing.T, ns string) *testContext {
 		conn.Close()
 		grpcServer.Stop()
 		cancel()
+		rdb.Close()
 		mr.Close()
 	}
 
@@ -845,7 +847,7 @@ func TestGetActor_NotFound(t *testing.T) {
 	_, err := tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "non-existent"},
 	})
-	assertGrpcError(t, err, codes.NotFound, "Actor non-existent not found")
+	assertGrpcError(t, err, codes.NotFound, "Actor test-atespace/non-existent not found")
 }
 
 // TestListActors tests that all created actors can be listed.
@@ -959,7 +961,7 @@ func TestListActors_ByAtespace(t *testing.T) {
 		t.Errorf("GetActor(id1, team-a) failed: %v", err)
 	}
 	_, err = tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "id1"}})
-	assertGrpcError(t, err, codes.NotFound, "Actor id1 not found")
+	assertGrpcError(t, err, codes.NotFound, "Actor test-atespace/id1 not found")
 }
 
 // TestListActors_AllAtespaces verifies that an empty atespace lists actors across
@@ -1477,7 +1479,7 @@ func TestResumeActor_Reentrancy(t *testing.T) {
 	}
 
 	// Verify actor state is RESUMING in Redis!
-	actor, err := tc.persistence.GetActor(context.Background(), testAtespace, name)
+	actor, err := tc.persistence.GetActor(context.Background(), resources.ActorRef{Atespace: testAtespace, Name: name})
 	if err != nil {
 		t.Fatalf("failed to get actor from store: %v", err)
 	}
@@ -1501,7 +1503,7 @@ func TestResumeActor_Reentrancy(t *testing.T) {
 	}
 
 	// Verify actor state is RUNNING!
-	actor, err = tc.persistence.GetActor(context.Background(), testAtespace, name)
+	actor, err = tc.persistence.GetActor(context.Background(), resources.ActorRef{Atespace: testAtespace, Name: name})
 	if err != nil {
 		t.Fatalf("failed to get actor from store: %v", err)
 	}
@@ -1738,7 +1740,7 @@ func TestUpdateActor_NotFound(t *testing.T) {
 	defer tc.cleanup()
 
 	_, err := tc.client.UpdateActor(context.Background(), &ateapipb.UpdateActorRequest{Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "does-not-exist"}})
-	assertGrpcError(t, err, codes.NotFound, "Actor does-not-exist not found")
+	assertGrpcError(t, err, codes.NotFound, "Actor test-atespace/does-not-exist not found")
 }
 
 // TestResumeActor_ReleasesStaleWorkerWhenPoolBecomesIneligible verifies that
@@ -2587,7 +2589,7 @@ func TestResumeActor_DanglingWorker(t *testing.T) {
 	}
 
 	// Verify actor state is CRASHED and worker assignment is empty
-	actor, err = tc.persistence.GetActor(context.Background(), testAtespace, name)
+	actor, err = tc.persistence.GetActor(context.Background(), resources.ActorRef{Atespace: testAtespace, Name: name})
 	if err != nil {
 		t.Fatalf("failed to get actor from store: %v", err)
 	}
@@ -2688,7 +2690,7 @@ func TestDeleteActor_Success(t *testing.T) {
 	_, err = tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "id1"},
 	})
-	assertGrpcError(t, err, codes.NotFound, "Actor id1 not found")
+	assertGrpcError(t, err, codes.NotFound, "Actor test-atespace/id1 not found")
 }
 
 func TestDeleteActor_NotSuspended(t *testing.T) {
@@ -2718,7 +2720,7 @@ func TestDeleteActor_NotSuspended(t *testing.T) {
 	_, err = tc.client.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "id1"},
 	})
-	assertGrpcError(t, err, codes.FailedPrecondition, "Actor id1 is not suspended (status: STATUS_RUNNING)")
+	assertGrpcError(t, err, codes.FailedPrecondition, "Actor test-atespace/id1 is not suspended (status: STATUS_RUNNING)")
 }
 
 func TestDeleteActor_Crashed(t *testing.T) {
@@ -2737,7 +2739,7 @@ func TestDeleteActor_Crashed(t *testing.T) {
 		t.Fatalf("CreateActor failed: %v", err)
 	}
 
-	actor, err := tc.persistence.GetActor(context.Background(), testAtespace, "id1")
+	actor, err := tc.persistence.GetActor(context.Background(), resources.ActorRef{Atespace: testAtespace, Name: "id1"})
 	if err != nil {
 		t.Fatalf("GetActor failed: %v", err)
 	}
@@ -2759,7 +2761,7 @@ func TestDeleteActor_Crashed(t *testing.T) {
 	_, err = tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "id1"},
 	})
-	assertGrpcError(t, err, codes.NotFound, "Actor id1 not found")
+	assertGrpcError(t, err, codes.NotFound, "Actor test-atespace/id1 not found")
 }
 
 func TestDeleteActor_NotFound(t *testing.T) {
@@ -2770,7 +2772,7 @@ func TestDeleteActor_NotFound(t *testing.T) {
 	_, err := tc.client.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "non-existent"},
 	})
-	assertGrpcError(t, err, codes.NotFound, "Actor non-existent not found")
+	assertGrpcError(t, err, codes.NotFound, "Actor test-atespace/non-existent not found")
 }
 
 func assertGrpcErrorRegex(t *testing.T, err error, wantCode codes.Code, wantMsg string) {
