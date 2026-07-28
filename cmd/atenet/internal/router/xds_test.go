@@ -59,7 +59,7 @@ func extProcConfig(t *testing.T, l *listenerv3.Listener) *extprocv3filter.Extern
 }
 
 // assertRequestsTLSVersion checks that ext_proc is sent the downstream TLS
-// version. Envoy silently drops attribute names it does not recognise, and an
+// version. Envoy silently drops attribute names it does not recognize, and an
 // undelivered attribute reads as plaintext — which strands the HTTPS ingress on
 // the actor's port 80 with no error anywhere in the control plane.
 func assertRequestsTLSVersion(t *testing.T, l *listenerv3.Listener) {
