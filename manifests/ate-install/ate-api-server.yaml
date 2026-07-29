@@ -98,8 +98,8 @@ spec:
           - --redis-client-cert=@env
           - --client-jwt-issuer=@env
           - --client-jwt-audience=api.ate-system.svc
-          - --session-id-jwt-pool=/run/session-id-jwt-pool/pool.json
-          - --session-id-ca-pool=/run/session-id-ca-pool/pool.json
+          - --actor-id-jwt-pool=/run/actor-id-jwt-pool/pool.json
+          - --actor-id-ca-pool=/run/actor-id-ca-pool/pool.json
           - --atelet-client-cred-bundle=/run/podidentity.podcert.ate.dev/credential-bundle.pem
           - --pod-identity-ca-certs=/run/podidentity.podcert.ate.dev/trust-bundle.pem
           # Graceful shutdown knobs. The sum must fit within terminationGracePeriodSeconds.
@@ -139,14 +139,14 @@ spec:
         # serving certificate.
         - name: "podidentity"
           mountPath: "/run/podidentity.podcert.ate.dev"
-        - name: "session-id-jwt-pool"
-          mountPath: "/run/session-id-jwt-pool"
+        - name: "actor-id-jwt-pool"
+          mountPath: "/run/actor-id-jwt-pool"
         # Note: See README.md for how to generate this secret.
         - name: "valkey-ca-certs"
           mountPath: "/etc/valkey-ca"
           readOnly: true
-        - name: "session-id-ca-pool"
-          mountPath: "/run/session-id-ca-pool"
+        - name: "actor-id-ca-pool"
+          mountPath: "/run/actor-id-ca-pool"
           readOnly: true
         ports:
         - containerPort: 443
@@ -189,11 +189,11 @@ spec:
                 matchLabels:
                   podcert.ate.dev/canarying: live
               path: trust-bundle.pem
-      - name: "session-id-jwt-pool"
+      - name: "actor-id-jwt-pool"
         projected:
           sources:
           - secret:
-              name: "session-id-jwt-pool"
+              name: "actor-id-jwt-pool"
               items:
               - key: "pool"
                 path: "pool.json"
@@ -205,11 +205,11 @@ spec:
               items:
               - key: "ca.crt"
                 path: "ca.crt"
-      - name: "session-id-ca-pool"
+      - name: "actor-id-ca-pool"
         projected:
           sources:
           - secret:
-              name: "session-id-ca-pool"
+              name: "actor-id-ca-pool"
               items:
               - key: "pool"
                 path: "pool.json"
@@ -227,7 +227,7 @@ spec:
     matchLabels:
       app: ate-api-server
 ---
-# 6. Expose the Session Assigner
+# 6. Expose the Actor Assigner
 apiVersion: v1
 kind: Service
 metadata:

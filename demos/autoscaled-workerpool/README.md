@@ -126,7 +126,7 @@ done
 kubectl port-forward -n ate-system svc/atenet-router 8000:80 &
 ```
 
-In a separate terminal, send requests in a retry loop across all hosts to activate the actors and keep sessions active while the pool scales up:
+In a separate terminal, send requests in a retry loop across all hosts to activate the actors and keep them active while the pool scales up:
 
 ```sh
 for attempt in {1..10}; do

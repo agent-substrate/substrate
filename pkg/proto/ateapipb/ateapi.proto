@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// TODO: Here and everywhere, s/Session/Actor to align with the glossary.
-
 syntax = "proto3";
 
 package ateapi;
@@ -367,12 +365,12 @@ message DebugClearRequest {}
 
 message DebugClearResponse {}
 
-// SessionIdentity allows substrate workloads to exchange their
+// ActorIdentity allows substrate workloads to exchange their
 // infrastructure-level credentials (k8s service account token, etc.) for a
-// substrate session-level credential.  A given substrate session might migrate
+// substrate actor-level credential.  A given substrate actor might migrate
 // between many different physical workers over the course of its lifecycle,
-// whereas the session credential's identity will be stable for the life of the
-// session.
+// whereas the actor credential's identity will be stable for the life of the
+// actor.
 //
 // This service requires authentication. You can authenticate with a Kubernetes
 // service account token in an `Authorization: Bearer` header, or you can
@@ -381,16 +379,16 @@ message DebugClearResponse {}
 // upstream, but we will provide a polyfill based on Pod Certificates).
 //
 // The broker will check that the service credentials you authenticated with
-// belong to a Pod that is currently mapped to the requested session in the
-// session database.
-service SessionIdentity {
-  // Request a Session Identity JWT.
+// belong to a Pod that is currently mapped to the requested actor in the
+// actor database.
+service ActorIdentity {
+  // Request an Actor Identity JWT.
   //
   // To call this RPC, you must be authenticated as the Kubernetes Pod that is
-  // currently running the requested session.
+  // currently running the requested actor.
   rpc MintJWT(MintJWTRequest) returns (MintJWTResponse);
 
-  // Request a Session Identity Certificate. To call this RPC, you must have
+  // Request an Actor Identity Certificate. To call this RPC, you must have
   // authenticated with a client certificate, not a bearer token.
   rpc MintCert(MintCertRequest) returns (MintCertResponse);
 }
@@ -400,11 +398,11 @@ message MintJWTRequest {
 
   string app_id = 2;
   string user_id = 3;
-  string session_id = 4;
+  string actor_id = 4;
 }
 
 message MintJWTResponse {
-  // Session JWT.  An OIDC Discovery-compatible JWT
+  // Actor JWT.  An OIDC Discovery-compatible JWT
   //
   // Claims:
   //
@@ -412,7 +410,7 @@ message MintJWTResponse {
   //   discovery documents.
   // * sub: Subject - a string expressing the identity carried in the
   // credential. Format
-  //   `app/${appid}/user/${userid}/session/${sessionid}`.
+  //   `app/${appid}/user/${userid}/actor/${actorid}`.
   // * aud: Audience - a string identifying the service this token will be used
   //   to authenticate to.
   // * nbf: Not Before - a numeric unix timestamp
@@ -421,14 +419,14 @@ message MintJWTResponse {
   // * `ate.dev`: Ate/Substrate Extension - JSON object
   //   * appID: (string) The Substrate App ID
   //   * userID: (string) The Substrate User ID
-  //   * sessionID: (string) The Substrate Session ID
-  string session_jwt = 1;
+  //   * actorID: (string) The Substrate Actor ID
+  string actor_jwt = 1;
 }
 
 message MintCertRequest {
   string app_id = 1;
   string user_id = 2;
-  string session_id = 3;
+  string actor_id = 3;
 
   // Request contains DER encoded bytes of a x509 certificate signing request.
   // The signer will ignore the contents of the CSR except to extract the
@@ -440,5 +438,5 @@ message MintCertResponse {
   // Response contains a list of DER encoded certificates. The first entry is the
   // leaf certificate, and any remaining entries are intermediates in
   // leaf-to-root order.
-  repeated bytes session_certificates = 1;
+  repeated bytes actor_certificates = 1;
 }

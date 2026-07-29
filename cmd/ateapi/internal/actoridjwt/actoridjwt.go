@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package sessionidjwt
+package actoridjwt
 
 import (
 	"crypto"
@@ -42,9 +42,9 @@ type Claims struct {
 }
 
 type SubstrateClaims struct {
-	AppID     string
-	UserID    string
-	SessionID string
+	AppID   string
+	UserID  string
+	ActorID string
 }
 
 type wireHeader struct {
@@ -68,9 +68,9 @@ type WireClaims struct {
 }
 
 type WireSubstrateClaims struct {
-	AppID     string `json:"appID,omitempty"`
-	UserID    string `json:"userID,omitempty"`
-	SessionID string `json:"sessionID,omitempty"`
+	AppID   string `json:"appID,omitempty"`
+	UserID  string `json:"userID,omitempty"`
+	ActorID string `json:"actorID,omitempty"`
 }
 
 func ClaimsToWire(claims *Claims) (*WireClaims, error) {
@@ -90,7 +90,7 @@ func ClaimsToWire(claims *Claims) (*WireClaims, error) {
 		Substrate: WireSubstrateClaims{
 			claims.Substrate.AppID,
 			claims.Substrate.UserID,
-			claims.Substrate.SessionID,
+			claims.Substrate.ActorID,
 		},
 	}
 

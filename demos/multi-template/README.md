@@ -60,7 +60,7 @@ kubectl port-forward -n ate-system svc/atenet-router 8000:80
 
 ## How to Use
 
-When you send an HTTP request through the router, Substrate automatically detects the session, activates (resumes) the actor onto an available worker pod, and proxies the traffic.
+When you send an HTTP request through the router, Substrate automatically detects the actor, activates (resumes) the actor onto an available worker pod, and proxies the traffic.
 
 ```bash
 # counter binary

@@ -722,13 +722,13 @@ class Debug:
             _registered_method=True)
 
 
-class SessionIdentityStub:
-    """SessionIdentity allows substrate workloads to exchange their
+class ActorIdentityStub:
+    """ActorIdentity allows substrate workloads to exchange their
     infrastructure-level credentials (k8s service account token, etc.) for a
-    substrate session-level credential.  A given substrate session might migrate
+    substrate actor-level credential.  A given substrate actor might migrate
     between many different physical workers over the course of its lifecycle,
-    whereas the session credential's identity will be stable for the life of the
-    session.
+    whereas the actor credential's identity will be stable for the life of the
+    actor.
 
     This service requires authentication. You can authenticate with a Kubernetes
     service account token in an `Authorization: Bearer` header, or you can
@@ -737,8 +737,8 @@ class SessionIdentityStub:
     upstream, but we will provide a polyfill based on Pod Certificates).
 
     The broker will check that the service credentials you authenticated with
-    belong to a Pod that is currently mapped to the requested session in the
-    session database.
+    belong to a Pod that is currently mapped to the requested actor in the
+    actor database.
     """
 
     def __init__(self, channel):
@@ -748,24 +748,24 @@ class SessionIdentityStub:
             channel: A grpc.Channel.
         """
         self.MintJWT = channel.unary_unary(
-                '/ateapi.SessionIdentity/MintJWT',
+                '/ateapi.ActorIdentity/MintJWT',
                 request_serializer=ateapi__pb2.MintJWTRequest.SerializeToString,
                 response_deserializer=ateapi__pb2.MintJWTResponse.FromString,
                 _registered_method=True)
         self.MintCert = channel.unary_unary(
-                '/ateapi.SessionIdentity/MintCert',
+                '/ateapi.ActorIdentity/MintCert',
                 request_serializer=ateapi__pb2.MintCertRequest.SerializeToString,
                 response_deserializer=ateapi__pb2.MintCertResponse.FromString,
                 _registered_method=True)
 
 
-class SessionIdentityServicer:
-    """SessionIdentity allows substrate workloads to exchange their
+class ActorIdentityServicer:
+    """ActorIdentity allows substrate workloads to exchange their
     infrastructure-level credentials (k8s service account token, etc.) for a
-    substrate session-level credential.  A given substrate session might migrate
+    substrate actor-level credential.  A given substrate actor might migrate
     between many different physical workers over the course of its lifecycle,
-    whereas the session credential's identity will be stable for the life of the
-    session.
+    whereas the actor credential's identity will be stable for the life of the
+    actor.
 
     This service requires authentication. You can authenticate with a Kubernetes
     service account token in an `Authorization: Bearer` header, or you can
@@ -774,22 +774,22 @@ class SessionIdentityServicer:
     upstream, but we will provide a polyfill based on Pod Certificates).
 
     The broker will check that the service credentials you authenticated with
-    belong to a Pod that is currently mapped to the requested session in the
-    session database.
+    belong to a Pod that is currently mapped to the requested actor in the
+    actor database.
     """
 
     def MintJWT(self, request, context):
-        """Request a Session Identity JWT.
+        """Request an Actor Identity JWT.
 
         To call this RPC, you must be authenticated as the Kubernetes Pod that is
-        currently running the requested session.
+        currently running the requested actor.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
     def MintCert(self, request, context):
-        """Request a Session Identity Certificate. To call this RPC, you must have
+        """Request an Actor Identity Certificate. To call this RPC, you must have
         authenticated with a client certificate, not a bearer token.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
@@ -797,7 +797,7 @@ class SessionIdentityServicer:
         raise NotImplementedError('Method not implemented!')
 
 
-def add_SessionIdentityServicer_to_server(servicer, server):
+def add_ActorIdentityServicer_to_server(servicer, server):
     rpc_method_handlers = {
             'MintJWT': grpc.unary_unary_rpc_method_handler(
                     servicer.MintJWT,
@@ -811,19 +811,19 @@ def add_SessionIdentityServicer_to_server(servicer, server):
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
-            'ateapi.SessionIdentity', rpc_method_handlers)
+            'ateapi.ActorIdentity', rpc_method_handlers)
     server.add_generic_rpc_handlers((generic_handler,))
-    server.add_registered_method_handlers('ateapi.SessionIdentity', rpc_method_handlers)
+    server.add_registered_method_handlers('ateapi.ActorIdentity', rpc_method_handlers)
 
 
  # This class is part of an EXPERIMENTAL API.
-class SessionIdentity:
-    """SessionIdentity allows substrate workloads to exchange their
+class ActorIdentity:
+    """ActorIdentity allows substrate workloads to exchange their
     infrastructure-level credentials (k8s service account token, etc.) for a
-    substrate session-level credential.  A given substrate session might migrate
+    substrate actor-level credential.  A given substrate actor might migrate
     between many different physical workers over the course of its lifecycle,
-    whereas the session credential's identity will be stable for the life of the
-    session.
+    whereas the actor credential's identity will be stable for the life of the
+    actor.
 
     This service requires authentication. You can authenticate with a Kubernetes
     service account token in an `Authorization: Bearer` header, or you can
@@ -832,8 +832,8 @@ class SessionIdentity:
     upstream, but we will provide a polyfill based on Pod Certificates).
 
     The broker will check that the service credentials you authenticated with
-    belong to a Pod that is currently mapped to the requested session in the
-    session database.
+    belong to a Pod that is currently mapped to the requested actor in the
+    actor database.
     """
 
     @staticmethod
@@ -850,7 +850,7 @@ class SessionIdentity:
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/ateapi.SessionIdentity/MintJWT',
+            '/ateapi.ActorIdentity/MintJWT',
             ateapi__pb2.MintJWTRequest.SerializeToString,
             ateapi__pb2.MintJWTResponse.FromString,
             options,
@@ -877,7 +877,7 @@ class SessionIdentity:
         return grpc.experimental.unary_unary(
             request,
             target,
-            '/ateapi.SessionIdentity/MintCert',
+            '/ateapi.ActorIdentity/MintCert',
             ateapi__pb2.MintCertRequest.SerializeToString,
             ateapi__pb2.MintCertResponse.FromString,
             options,
