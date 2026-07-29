@@ -454,8 +454,14 @@ func TestResumeActorWorkflow_RejectedAndIdempotentPaths(t *testing.T) {
 				if actor.GetStatus() != tc.wantStatus {
 					t.Errorf("returned status = %v, want %v", actor.GetStatus(), tc.wantStatus)
 				}
-				if tc.seedStatus == ateapipb.Actor_STATUS_RUNNING && resumed {
-					t.Errorf("expected resumed = false for already running actor, got true")
+				if tc.seedStatus == ateapipb.Actor_STATUS_RUNNING {
+					if resumed {
+						t.Errorf("expected resumed = false for already running actor, got true")
+					}
+				} else {
+					if !resumed {
+						t.Errorf("expected resumed = true for cold activation, got false")
+					}
 				}
 			}
 

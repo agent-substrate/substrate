@@ -27,6 +27,7 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/e2e"
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
@@ -70,6 +71,18 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 	// observable reports. Later metric slices extend e2e.PlatformMetricPrefixes;
 	// they add the drive steps their instruments need.
 	resume(t, ctx, clients, actorID)
+
+	// Drive request through the router so Envoy ext_proc emits atenet_router_route_duration.
+	rClient, err := e2e.NewRouterClient(ctx)
+	if err != nil {
+		t.Fatalf("NewRouterClient: %v", err)
+	}
+	defer rClient.Close()
+	resp, err := rClient.Get(ctx, resources.ActorRef{Atespace: metricsAtespace, Name: actorID}, "/")
+	if err != nil {
+		t.Fatalf("rClient.Get: %v", err)
+	}
+	_ = resp.Body.Close()
 
 	deadline := time.Now().Add(2 * time.Minute)
 	var missing []string

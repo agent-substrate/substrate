@@ -23,11 +23,11 @@ import (
 	"net"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/ateattr"
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 	envoy_type "github.com/envoyproxy/go-control-plane/envoy/type/v3"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/propagation"
 	"google.golang.org/grpc"
@@ -208,10 +208,10 @@ func (s *ExtProcServer) recordRouteDuration(ctx context.Context, d time.Duration
 		return
 	}
 	s.routeDuration.Record(ctx, d.Seconds(), metric.WithAttributes(
-		attribute.String("actor_template_namespace", tmplNs),
-		attribute.String("actor_template_name", tmplName),
-		attribute.String("outcome", outcome),
-		attribute.String("resume", resume),
+		ateattr.TemplateNamespaceKey.String(tmplNs),
+		ateattr.TemplateNameKey.String(tmplName),
+		ateattr.RouterOutcomeKey.String(outcome),
+		ateattr.RouterResumeKey.String(resume),
 	))
 }
 
@@ -232,6 +232,10 @@ func classifyOutcome(err error) string {
 		return "lock_conflict"
 	case codes.NotFound:
 		return "not_found"
+	case codes.Unavailable:
+		return "unavailable"
+	case codes.ResourceExhausted:
+		return "rate_limited"
 	}
 	var re *reqError
 	if errors.As(err, &re) {
@@ -242,6 +246,8 @@ func classifyOutcome(err error) string {
 			return "no_capacity"
 		case envoy_type.StatusCode_GatewayTimeout:
 			return "timeout"
+		case envoy_type.StatusCode_TooManyRequests:
+			return "rate_limited"
 		}
 	}
 	return "resume_error"

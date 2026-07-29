@@ -69,17 +69,19 @@ func (e *budgetExhaustedError) Unwrap() error { return e.lastErr }
 type ResumeOutcome string
 
 const (
-	// ResumeOutcomeNone indicates the actor was already running (steady-state warm route).
-	ResumeOutcomeNone ResumeOutcome = "none"
-	// ResumeOutcomeTriggered indicates this request won the singleflight lock and initiated cold activation.
-	ResumeOutcomeTriggered ResumeOutcome = "triggered"
-	// ResumeOutcomeJoined indicates this request parked on an in-flight singleflight resume.
-	ResumeOutcomeJoined ResumeOutcome = "joined"
+	ResumeOutcomeNone      ResumeOutcome = ateattr.RouterResumeNone
+	ResumeOutcomeTriggered ResumeOutcome = ateattr.RouterResumeTriggered
+	ResumeOutcomeJoined    ResumeOutcome = ateattr.RouterResumeJoined
 )
 
 type resumeCallResult struct {
-	actor    *ateapipb.Actor
-	resumed  bool
+	actor *ateapipb.Actor
+	// resumed is true if ResumeActor call executed a cold activation
+	// false if the actor was already running
+	resumed bool
+	// leaderID is the unique request ID (reqID) of the leader that initiated
+	// the singleflight execution. It helps disambiguates the leader caller
+	// (ResumeOutcomeTriggered) from joiner callers (ResumeOutcomeJoined).
 	leaderID uint64
 	err      error
 }
@@ -98,7 +100,10 @@ type ActorResumer struct {
 	budget time.Duration
 	// backoff paces the retries within the budget.
 	backoff wait.Backoff
-	nextID  uint64
+	// nextID is a counter assigned to each incoming ResumeActor call.
+	// Used as a unique ID to identify requests (reqID) and disambiguate the
+	// leader vs joiners for singleflight outcome classification.
+	nextID uint64
 }
 
 // resumerOption configures an ActorResumer.
@@ -190,8 +195,8 @@ func (r *ActorResumer) ResumeActor(ctx context.Context, actorRef resources.Actor
 			}
 
 			if r.retryable(err) {
-				lastRetryErr = err
-				return false, nil
+				lastRetryErr = err // remember it in case the budget elapses
+				return false, nil  // park: retry until the budget elapses
 			}
 			return false, err
 		})
@@ -224,6 +229,8 @@ func (r *ActorResumer) ResumeActor(ctx context.Context, actorRef resources.Actor
 
 	select {
 	case <-ctx.Done():
+		// The caller's request context was canceled before the singleflight resume completed.
+		// Return early with ResumeOutcomeNone ("none")
 		return nil, ResumeOutcomeNone, ctx.Err()
 	case res := <-ch:
 		callRes, _ := res.Val.(*resumeCallResult)
@@ -233,10 +240,17 @@ func (r *ActorResumer) ResumeActor(ctx context.Context, actorRef resources.Actor
 			}
 			return nil, ResumeOutcomeNone, status.Error(codes.Internal, "resume call returned nil result")
 		}
+
+		// On error, return ResumeOutcomeNone ("none") so the failure is tagged
+		// under the 'outcome' label rather than misreported as an activation.
 		if callRes.err != nil {
 			return nil, ResumeOutcomeNone, callRes.err
 		}
 
+		// Disambiguate singleflight resume outcome:
+		// - ResumeOutcomeNone ("none"): resumed == false, actor was already active/running.
+		// - ResumeOutcomeTriggered ("triggered"): Cold activation leader (resumed == true, caller's reqID == leaderID).
+		// - ResumeOutcomeJoined ("joined"): Cold activation joiner (resumed == true, caller's reqID != leaderID).
 		outcome := ResumeOutcomeNone
 		if callRes.resumed {
 			if callRes.leaderID == reqID {

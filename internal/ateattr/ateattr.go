@@ -50,9 +50,22 @@ const (
 // WorkerStateKey stays worker-rooted rather than nesting under the pool so it
 // can grow siblings.
 const (
-	WorkerPoolNameKey = attribute.Key("ate.workerpool.name")
-	WorkerStateKey    = attribute.Key("ate.worker.state")
-	SandboxClassKey   = attribute.Key("ate.sandbox.class")
+	WorkerPoolNamespaceKey = attribute.Key("ate.workerpool.namespace")
+	WorkerPoolNameKey      = attribute.Key("ate.workerpool.name")
+	WorkerStateKey         = attribute.Key("ate.worker.state")
+	SandboxClassKey        = attribute.Key("ate.sandbox.class")
+	RouterResumeKey        = attribute.Key("ate.router.resume")
+	RouterOutcomeKey       = attribute.Key("ate.router.outcome")
+)
+
+// Values for RouterResumeKey.
+const (
+	// RouterResumeNone indicates the actor was already running (steady-state route).
+	RouterResumeNone = "none"
+	// RouterResumeTriggered indicates this request won the singleflight lock and initiated cold activation.
+	RouterResumeTriggered = "triggered"
+	// RouterResumeJoined indicates this request parked on an in-flight singleflight resume.
+	RouterResumeJoined = "joined"
 )
 
 // Values for WorkerStateKey. Only idle and assigned are representable today;

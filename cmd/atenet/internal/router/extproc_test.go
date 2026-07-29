@@ -28,6 +28,9 @@ import (
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 	envoy_type "github.com/envoyproxy/go-control-plane/envoy/type/v3"
+	"go.opentelemetry.io/otel/attribute"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -342,6 +345,16 @@ func TestClassifyOutcome(t *testing.T) {
 			expected: "not_found",
 		},
 		{
+			name:     "Unavailable gRPC code maps to unavailable",
+			err:      status.Error(codes.Unavailable, "control-plane down"),
+			expected: "unavailable",
+		},
+		{
+			name:     "ResourceExhausted gRPC code maps to rate_limited",
+			err:      status.Error(codes.ResourceExhausted, "rate limit exceeded"),
+			expected: "rate_limited",
+		},
+		{
 			name:     "StatusCode_NotFound reqError maps to not_found",
 			err:      newReqError(envoy_type.StatusCode_NotFound, "missing"),
 			expected: "not_found",
@@ -350,6 +363,11 @@ func TestClassifyOutcome(t *testing.T) {
 			name:     "StatusCode_ServiceUnavailable reqError maps to no_capacity",
 			err:      newReqError(envoy_type.StatusCode_ServiceUnavailable, "no free workers"),
 			expected: "no_capacity",
+		},
+		{
+			name:     "StatusCode_TooManyRequests reqError maps to rate_limited",
+			err:      newReqError(envoy_type.StatusCode_TooManyRequests, "rate limited"),
+			expected: "rate_limited",
 		},
 		{
 			name:     "Unknown error maps to resume_error",
@@ -364,5 +382,39 @@ func TestClassifyOutcome(t *testing.T) {
 				t.Errorf("classifyOutcome(%v) = %q, want %q", tc.err, got, tc.expected)
 			}
 		})
+	}
+}
+
+func TestRecordRouteDuration_Attributes(t *testing.T) {
+	reader := sdkmetric.NewManualReader()
+	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	h, err := mp.Meter("atenet-router").Float64Histogram(routeDurationMetricName)
+	if err != nil {
+		t.Fatalf("failed to create histogram: %v", err)
+	}
+
+	s := NewExtProcServer(50051, nil, h, ParkedRequestConfig{}, nil)
+	s.recordRouteDuration(context.Background(), 10*time.Millisecond, "team-a-ns", "tmpl-a", classifyOutcome(nil), string(ResumeOutcomeTriggered))
+
+	var rm metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &rm); err != nil {
+		t.Fatalf("Collect failed: %v", err)
+	}
+
+	dp := rm.ScopeMetrics[0].Metrics[0].Data.(metricdata.Histogram[float64]).DataPoints[0]
+	wantAttrs := map[string]string{
+		"ate.template.namespace": "team-a-ns",
+		"ate.template.name":      "tmpl-a",
+		"ate.router.outcome":     "ok",
+		"ate.router.resume":      "triggered",
+	}
+
+	for k, want := range wantAttrs {
+		val, exists := dp.Attributes.Value(attribute.Key(k))
+		if !exists {
+			t.Errorf("missing metric attribute %q", k)
+		} else if val.AsString() != want {
+			t.Errorf("attribute %q = %q, want %q", k, val.AsString(), want)
+		}
 	}
 }
