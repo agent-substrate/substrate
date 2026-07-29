@@ -170,14 +170,14 @@ class ControlServicer:
         raise NotImplementedError('Method not implemented!')
 
     def ListWorkers(self, request, context):
-        """List all workers currently reflected in redis.
+        """List Workers.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
     def ListActors(self, request, context):
-        """List all actors currently reflected in redis.
+        """List Actors.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -198,7 +198,7 @@ class ControlServicer:
         raise NotImplementedError('Method not implemented!')
 
     def ListAtespaces(self, request, context):
-        """List all Atespaces.
+        """List Atespaces.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
