@@ -442,7 +442,7 @@ func TestResumeActorWorkflow_RejectedAndIdempotentPaths(t *testing.T) {
 				a.WorkerPoolName = "pool1"
 			})
 
-			actor, err := w.ResumeActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, false)
+			actor, resumed, err := w.ResumeActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, false)
 			if tc.wantErr {
 				if got := status.Code(err); got != codes.FailedPrecondition {
 					t.Fatalf("status.Code(err) = %v, want %v (err: %v)", got, codes.FailedPrecondition, err)
@@ -453,6 +453,9 @@ func TestResumeActorWorkflow_RejectedAndIdempotentPaths(t *testing.T) {
 				}
 				if actor.GetStatus() != tc.wantStatus {
 					t.Errorf("returned status = %v, want %v", actor.GetStatus(), tc.wantStatus)
+				}
+				if tc.seedStatus == ateapipb.Actor_STATUS_RUNNING && resumed {
+					t.Errorf("expected resumed = false for already running actor, got true")
 				}
 			}
 
@@ -548,7 +551,7 @@ func TestResumeActor_CrashesOnCorruptWorkerAssignment(t *testing.T) {
 		a.AteomPodName = "worker-1" // AteomPodUid and WorkerPoolName left empty
 	})
 
-	_, err := w.ResumeActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, false)
+	_, _, err := w.ResumeActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, false)
 	if got := status.Code(err); got != codes.Aborted {
 		t.Fatalf("status.Code(err) = %v, want %v (err: %v)", got, codes.Aborted, err)
 	}

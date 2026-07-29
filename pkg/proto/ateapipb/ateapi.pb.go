@@ -1464,6 +1464,7 @@ func (x *ResumeActorRequest) GetBoot() bool {
 type ResumeActorResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Actor         *Actor                 `protobuf:"bytes,1,opt,name=actor,proto3" json:"actor,omitempty"`
+	Resumed       bool                   `protobuf:"varint,2,opt,name=resumed,proto3" json:"resumed,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1503,6 +1504,13 @@ func (x *ResumeActorResponse) GetActor() *Actor {
 		return x.Actor
 	}
 	return nil
+}
+
+func (x *ResumeActorResponse) GetResumed() bool {
+	if x != nil {
+		return x.Resumed
+	}
+	return false
 }
 
 type DeleteActorRequest struct {

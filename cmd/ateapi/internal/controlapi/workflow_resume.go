@@ -49,6 +49,7 @@ type ResumeState struct {
 	Actor         *ateapipb.Actor
 	Worker        *ateapipb.Worker
 	ActorTemplate *atev1alpha1.ActorTemplate
+	WasRunning    bool
 }
 
 type LoadActorForResumeStep struct {
@@ -73,6 +74,7 @@ func (s *LoadActorForResumeStep) Execute(ctx context.Context, input *ResumeInput
 		return fmt.Errorf("while getting actor from DB: %w", err)
 	}
 	state.Actor = actor
+	state.WasRunning = (actor.GetStatus() == ateapipb.Actor_STATUS_RUNNING)
 
 	actorTemplate, err := s.actorTemplateLister.ActorTemplates(actor.GetActorTemplateNamespace()).Get(actor.GetActorTemplateName())
 	if err != nil {
