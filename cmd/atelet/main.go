@@ -84,7 +84,7 @@ var (
 
 	grpcServerCredBundle = pflag.String("grpc-server-cred-bundle", "/run/podidentity.podcert.ate.dev/credential-bundle.pem", "Credential bundle atelet presents as its gRPC serving certificate.")
 	clientCACerts        = pflag.String("client-ca-certs", "/run/podidentity.podcert.ate.dev/trust-bundle.pem", "CA bundle used to verify gRPC client certificates.")
-	ateapiAddress        = pflag.String("ateapi-address", "dns:///api.ate-system.svc:443", "ateapi gRPC target used by the credential broker.")
+	ateapiAddress        = pflag.String("ateapi-address", "k8s:///api.ate-system.svc:443", "ateapi gRPC target used by the credential broker.")
 	ateapiCAFile         = pflag.String("ateapi-ca-file", "/run/servicedns.podcert.ate.dev/trust-bundle.pem", "CA bundle used to verify ateapi.")
 	ateapiServerName     = pflag.String("ateapi-server-name", "api.ate-system.svc", "DNS name expected on the ateapi certificate.")
 
@@ -213,7 +213,7 @@ func main() {
 	}
 
 	volPlugins := make(map[string]volume.VolumePluginWorkerPlane)
-	_, ateClient, err := newKubeClients()
+	k8sClient, ateClient, err := newKubeClients()
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to create Kubernetes clients", err)
 	}
@@ -239,6 +239,7 @@ func main() {
 		csiDriverConfigLister,
 	)
 	dialOpts, err := ateapiauth.DialOptions(ateapiauth.ClientConfig{
+		K8sClient:        k8sClient,
 		CAFile:           *ateapiCAFile,
 		ServerName:       *ateapiServerName,
 		ClientCredBundle: *grpcServerCredBundle,

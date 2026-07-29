@@ -46,6 +46,31 @@ roleRef:
   name: atelet
   apiGroup: rbac.authorization.k8s.io
 ---
+# 4. Namespaced Role for EndpointSlices
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: atelet-endpointslices
+  namespace: ate-system
+rules:
+- apiGroups: ["discovery.k8s.io"]
+  resources: ["endpointslices"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: atelet-endpointslices
+  namespace: ate-system
+subjects:
+- kind: ServiceAccount
+  name: atelet
+  namespace: ate-system
+roleRef:
+  kind: Role
+  name: atelet-endpointslices
+  apiGroup: rbac.authorization.k8s.io
+---
 # 4. Create DaemonSet
 apiVersion: apps/v1
 kind: DaemonSet

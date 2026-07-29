@@ -179,6 +179,7 @@ func (s *RouterServer) Run(ctx context.Context) error {
 	})
 
 	dialOpts, err := ateapiauth.DialOptions(ateapiauth.ClientConfig{
+		K8sClient:        s.clientset,
 		UseTokenAuth:     s.cfg.Auth.AteapiUseTokenAuth,
 		CAFile:           s.cfg.Auth.AteapiCAFile,
 		ServerName:       s.cfg.Auth.AteapiServerName,
