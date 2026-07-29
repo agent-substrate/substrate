@@ -69,7 +69,7 @@ func TestHandleRequestHeadersDoesNotLogSensitiveData(t *testing.T) {
 		},
 	}
 
-	_, metadata, target, _, _, err := s.handleRequestHeaders(context.Background(), reqHeaders)
+	_, metadata, target, _, _, _, err := s.handleRequestHeaders(context.Background(), reqHeaders)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -204,7 +204,7 @@ func TestExtProcHeadersEvaluation(t *testing.T) {
 				},
 			}
 
-			res, metadata, target, _, _, err := s.handleRequestHeaders(context.Background(), reqHeaders)
+			res, metadata, target, _, _, _, err := s.handleRequestHeaders(context.Background(), reqHeaders)
 			if tc.expectErr {
 				if err == nil {
 					t.Fatalf("expected error but got nil")
@@ -286,7 +286,7 @@ func TestExtProc_ParkingLotFull(t *testing.T) {
 		},
 	}
 
-	_, _, _, _, _, err := s.handleRequestHeaders(context.Background(), reqHeaders)
+	_, _, _, _, _, _, err := s.handleRequestHeaders(context.Background(), reqHeaders)
 	if err == nil {
 		t.Fatal("expected error when parking lot is full")
 	}
@@ -302,5 +302,67 @@ func TestExtProc_ParkingLotFull(t *testing.T) {
 	}
 	if resumeCalled {
 		t.Error("resume must not be attempted for a shed request")
+	}
+}
+
+func TestClassifyOutcome(t *testing.T) {
+	tests := []struct {
+		name     string
+		err      error
+		expected string
+	}{
+		{
+			name:     "nil error maps to ok",
+			err:      nil,
+			expected: "ok",
+		},
+		{
+			name:     "context Canceled maps to cancelled",
+			err:      context.Canceled,
+			expected: "cancelled",
+		},
+		{
+			name:     "context DeadlineExceeded maps to timeout",
+			err:      context.DeadlineExceeded,
+			expected: "timeout",
+		},
+		{
+			name:     "FailedPrecondition gRPC code maps to no_capacity",
+			err:      status.Error(codes.FailedPrecondition, "capacity full"),
+			expected: "no_capacity",
+		},
+		{
+			name:     "Aborted gRPC code maps to lock_conflict",
+			err:      status.Error(codes.Aborted, "lock conflict"),
+			expected: "lock_conflict",
+		},
+		{
+			name:     "NotFound gRPC code maps to not_found",
+			err:      status.Error(codes.NotFound, "missing"),
+			expected: "not_found",
+		},
+		{
+			name:     "StatusCode_NotFound reqError maps to not_found",
+			err:      newReqError(envoy_type.StatusCode_NotFound, "missing"),
+			expected: "not_found",
+		},
+		{
+			name:     "StatusCode_ServiceUnavailable reqError maps to no_capacity",
+			err:      newReqError(envoy_type.StatusCode_ServiceUnavailable, "no free workers"),
+			expected: "no_capacity",
+		},
+		{
+			name:     "Unknown error maps to resume_error",
+			err:      errors.New("internal storage glitch"),
+			expected: "resume_error",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := classifyOutcome(tc.err); got != tc.expected {
+				t.Errorf("classifyOutcome(%v) = %q, want %q", tc.err, got, tc.expected)
+			}
+		})
 	}
 }
