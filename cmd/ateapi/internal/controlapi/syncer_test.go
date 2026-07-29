@@ -412,6 +412,45 @@ func TestSyncer_SoftDelete_MarksDraining(t *testing.T) {
 	}
 }
 
+// TestSyncer_SoftDelete_NoPodIP pins the draining mark for a Terminating pod
+// reporting no IP, the shape a pod takes once its sandbox is torn down. It
+// fails if the isWorkerEligible gate moves back ahead of the deletion check.
+func TestSyncer_SoftDelete_NoPodIP(t *testing.T) {
+	ctx := context.Background()
+	persistence, cleanup := storetest.SetupTestStore(t)
+	defer cleanup()
+	s := &WorkerPoolSyncer{persistence: persistence}
+
+	ns, pool, pod := "ns-drain-noip", "pool1", "worker-drain-noip"
+	if err := persistence.CreateWorker(ctx, &ateapipb.Worker{
+		WorkerNamespace: ns, WorkerPool: pool, WorkerPod: pod, Ip: "10.0.0.3",
+		WorkerPodUid: "08675309-4a65-6e6e-7973-6e756d626572", NodeName: "node1",
+		State: ateapipb.Worker_STATE_ACTIVE,
+	}); err != nil {
+		t.Fatalf("create worker: %v", err)
+	}
+
+	deleting := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              pod,
+			Namespace:         ns,
+			Labels:            map[string]string{workerPodLabel: pool},
+			DeletionTimestamp: &metav1.Time{Time: time.Unix(1, 0)},
+		},
+		// Same object as the draining test above, minus the pod IP.
+		Status: corev1.PodStatus{},
+	}
+	s.syncWorkerToStore(ctx, deleting)
+
+	w, err := persistence.GetWorker(ctx, ns, pool, pod)
+	if err != nil {
+		t.Fatalf("get worker: %v", err)
+	}
+	if w.GetState() != ateapipb.Worker_STATE_DRAINING {
+		t.Errorf("worker state = %v, want DRAINING", w.GetState())
+	}
+}
+
 // TestMarkWorkerDraining verifies markWorkerDraining's return contract: it returns
 // nil when the operation is already complete (the worker record is gone, or is
 // already draining) and nil after a successful ACTIVE->DRAINING transition, which

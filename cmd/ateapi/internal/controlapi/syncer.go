@@ -108,10 +108,10 @@ func (s *WorkerPoolSyncer) Start(ctx context.Context) {
 }
 
 func (s *WorkerPoolSyncer) syncWorkerToStore(ctx context.Context, pod *corev1.Pod) {
-	if !isWorkerEligible(pod) {
-		return
-	}
-
+	// Checked before eligibility: draining works off the stored record by name and
+	// never reads the pod IP, while a Terminating pod can legitimately report no
+	// IP once its sandbox is torn down. Gating on the IP first would drop the
+	// transition and leave the worker schedulable for as long as the pod lingers.
 	if pod.DeletionTimestamp != nil {
 		// The pod has entered Terminating: mark the worker DRAINING so the
 		// scheduler stops routing new actors to it. We deliberately do NOT touch
@@ -121,6 +121,10 @@ func (s *WorkerPoolSyncer) syncWorkerToStore(ctx context.Context, pod *corev1.Po
 		if err := s.markWorkerDraining(ctx, pod.Namespace, pod.Labels[workerPodLabel], pod.Name); err != nil {
 			slog.ErrorContext(ctx, "Failed to mark worker draining", slog.String("worker", pod.Namespace+"/"+pod.Name), slog.Any("err", err))
 		}
+		return
+	}
+
+	if !isWorkerEligible(pod) {
 		return
 	}
 
