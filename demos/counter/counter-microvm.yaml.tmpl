@@ -121,8 +121,17 @@ spec:
       httpGet:
         path: /readyz
         port: 80
+    # The counter writes its file counter here. With the durableDir volume below
+    # it lands on a host-backed virtio-fs share instead of the guest-RAM rootfs
+    # upper, so it survives a Data-scope snapshot (which keeps no guest memory).
+    volumeMounts:
+    - name: data
+      mountPath: /home/counter
   workerSelector:
     matchLabels:
       workload: counter-microvm
   snapshotsConfig:
     location: gs://${BUCKET_NAME}/ate-demo-counter-microvm/
+  volumes:
+  - name: data
+    durableDir: {}

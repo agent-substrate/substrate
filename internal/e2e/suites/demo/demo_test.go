@@ -83,10 +83,6 @@ func TestActorLifecycle(t *testing.T) {
 }
 
 func TestDurableDirLifecycle(t *testing.T) {
-	if isMicroVMEnvironment() {
-		t.Skip("Skipping TestDurableDirLifecycle for microVM environment")
-	}
-
 	tests := []struct {
 		name string
 		tc   actorLifecycleTestCase
@@ -380,11 +376,7 @@ func pauseActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *
 		t.Fatalf("failed to call actor: %v", err)
 	}
 
-	if isMicroVMEnvironment() {
-		validateCounterResponse(t, resp, "after creation", 1, -1)
-	} else {
-		validateCounterResponse(t, resp, "after creation", 1, 1)
-	}
+	validateCounterResponse(t, resp, "after creation", 1, 1)
 
 	// Pausing the actor
 	t.Logf("Pausing Actor %q...", actorName)
@@ -408,11 +400,7 @@ func pauseActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *
 	if err != nil {
 		t.Fatalf("failed to call actor again: %v", err)
 	}
-	if isMicroVMEnvironment() {
-		validateCounterResponse(t, resp, "after pause", 2, -1)
-	} else {
-		validateCounterResponse(t, resp, "after pause", 2, 2)
-	}
+	validateCounterResponse(t, resp, "after pause", 2, 2)
 
 	// Suspending the actor before deletion
 	t.Logf("Suspending Actor %q before deletion...", actorName)
@@ -467,11 +455,7 @@ func suspendActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj
 	if err != nil {
 		t.Fatalf("failed to call actor: %v", err)
 	}
-	if isMicroVMEnvironment() {
-		validateCounterResponse(t, resp, "after creation", 1, -1)
-	} else {
-		validateCounterResponse(t, resp, "after creation", 1, 1)
-	}
+	validateCounterResponse(t, resp, "after creation", 1, 1)
 
 	// Suspending the actor
 	t.Logf("Suspending Actor %q...", actorName)
@@ -495,11 +479,7 @@ func suspendActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj
 	if err != nil {
 		t.Fatalf("failed to call actor again: %v", err)
 	}
-	if isMicroVMEnvironment() {
-		validateCounterResponse(t, resp, "after suspend", 2, -1)
-	} else {
-		validateCounterResponse(t, resp, "after suspend", 2, 2)
-	}
+	validateCounterResponse(t, resp, "after suspend", 2, 2)
 
 	// Suspending the actor before deletion
 	t.Logf("Suspending Actor %q before deletion...", actorName)
@@ -826,7 +806,9 @@ func callActorOnce(t *testing.T, atespace, actorName string) (string, error) {
 	return string(body), nil
 }
 
+// isMicroVMEnvironment reports whether the suite is running against the
+// micro-VM demo template, which does not support every volume type yet (see
+// TestExternalVolumeLifecycle).
 func isMicroVMEnvironment() bool {
-	// TODO(BenTheElder) remove it once https://github.com/agent-substrate/substrate/pull/313 is merged.
 	return os.Getenv("E2E_TEMPLATE_NAMESPACE") == "ate-demo-counter-microvm"
 }

@@ -21,9 +21,8 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/ateclient"
+	"github.com/agent-substrate/substrate/internal/portforward"
 	"github.com/agent-substrate/substrate/internal/resources"
-	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes"
 )
 
@@ -54,20 +53,7 @@ func NewRouterClient(ctx context.Context) (*RouterClient, error) {
 		return nil, fmt.Errorf("creating k8s client: %w", err)
 	}
 
-	targetPod, svc, err := firstReadyPodForService(ctx, clientset, routerNamespace, routerService)
-	if err != nil {
-		return nil, err
-	}
-
-	// Port-forward targets a pod's container port, so resolve the Service's
-	// HTTP port (80) to its backing targetPort (kubectl does this for us when
-	// forwarding a Service, but we forward the pod directly).
-	targetPort, err := resolveHTTPTargetPort(svc, targetPod)
-	if err != nil {
-		return nil, err
-	}
-
-	localPort, stop, err := podPortForward(ctx, config, clientset, routerNamespace, targetPod.Name, targetPort)
+	localPort, stop, err := portforward.ServicePortForward(ctx, config, clientset, routerNamespace, routerService, 80)
 	if err != nil {
 		return nil, err
 	}
@@ -77,53 +63,6 @@ func NewRouterClient(ctx context.Context) (*RouterClient, error) {
 		http:    &http.Client{Timeout: 30 * time.Second},
 		stop:    stop,
 	}, nil
-}
-
-// isPodReady reports whether the pod is Running, not terminating, and has
-// passed its readiness probe — i.e. actually serving, the same bar the Service
-// uses to select endpoints.
-func isPodReady(pod *corev1.Pod) bool {
-	if pod.Status.Phase != corev1.PodRunning || pod.DeletionTimestamp != nil {
-		return false
-	}
-	for _, c := range pod.Status.Conditions {
-		if c.Type == corev1.PodReady {
-			return c.Status == corev1.ConditionTrue
-		}
-	}
-	return false
-}
-
-// resolveHTTPTargetPort maps the router Service's HTTP port (80) to the
-// container port it targets on the given pod, resolving named targetPorts.
-func resolveHTTPTargetPort(svc *corev1.Service, pod *corev1.Pod) (int32, error) {
-	for _, sp := range svc.Spec.Ports {
-		if sp.Port != 80 {
-			continue
-		}
-		var port int32
-		switch sp.TargetPort.Type {
-		case intstr.Int:
-			port = sp.TargetPort.IntVal
-		case intstr.String:
-			for _, c := range pod.Spec.Containers {
-				for _, cp := range c.Ports {
-					if cp.Name == sp.TargetPort.StrVal {
-						port = cp.ContainerPort
-					}
-				}
-			}
-			if port == 0 {
-				return 0, fmt.Errorf("named targetPort %q not found on pod %s", sp.TargetPort.StrVal, pod.Name)
-			}
-		}
-		// Guard against an unset/zero targetPort, which would forward to nothing.
-		if port <= 0 {
-			return 0, fmt.Errorf("service %s port 80 has no usable targetPort", svc.Name)
-		}
-		return port, nil
-	}
-	return 0, fmt.Errorf("service %s has no port 80", svc.Name)
 }
 
 // Close stops the port-forward tunnel.

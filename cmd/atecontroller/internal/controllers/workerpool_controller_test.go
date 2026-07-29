@@ -297,7 +297,8 @@ func TestDeletedDeploymentRecreated(t *testing.T) {
 }
 
 // TestStatusReplicasPropagation verifies that the controller syncs the
-// Deployment's status.replicas into WorkerPool.status.replicas.
+// Deployment's status.replicas into WorkerPool.status.replicas, and publishes
+// the Deployment's pod selector as WorkerPool.status.selector.
 func TestStatusReplicasPropagation(t *testing.T) {
 	wp := makeWorkerPool("test-status", "default", 3, "ateom:v1")
 	if err := k8sClient.Create(testCtx, wp); err != nil {
@@ -318,6 +319,9 @@ func TestStatusReplicasPropagation(t *testing.T) {
 	eventually(t, func(ctx context.Context) (bool, error) {
 		current := &atev1alpha1.WorkerPool{}
 		if err := k8sClient.Get(ctx, types.NamespacedName{Name: wp.Name, Namespace: wp.Namespace}, current); err != nil {
+			return false, nil
+		}
+		if current.Status.Selector != "ate.dev/worker-pool="+wp.Name {
 			return false, nil
 		}
 		return current.Status.Replicas == 3, nil

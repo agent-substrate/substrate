@@ -29,3 +29,9 @@ func VMDir(id string) string { return filepath.Join(vcVMDir, id) }
 // VsockSocketPath is the hybrid-vsock socket the CH snapshot's vsock device
 // references; CH recreates the listener here on restore.
 func VsockSocketPath(id string) string { return filepath.Join(VMDir(id), "clh.sock") }
+
+// DurableVirtiofsdSocketPath is the vhost-user-fs socket for the actor's writable
+// durable-dir share, served by a second virtiofsd alongside the RO lower's.
+func DurableVirtiofsdSocketPath(id string) string {
+	return filepath.Join(VMDir(id), "virtiofsd-durable.sock")
+}

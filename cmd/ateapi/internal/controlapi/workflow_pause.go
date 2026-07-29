@@ -258,7 +258,7 @@ func (s *FinalizePausedStep) Execute(ctx context.Context, input *PauseInput, sta
 		latestActor.Status = ateapipb.Actor_STATUS_PAUSED
 		if nodeName == "" {
 			// Without a node name we cannot record where the local snapshot lives,
-			// so the actor can never be resumed (findFreeWorker would search for a
+			// so the actor can never be resumed (the scheduler would search for a
 			// worker on an unknown node forever). Crash it instead of leaving it
 			// stuck in PAUSED.
 			slog.ErrorContext(ctx, "Node name not found during finalize pause, crashing actor", "actor", input.ActorName)

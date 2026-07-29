@@ -16,6 +16,8 @@ package serverboot
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"go.opentelemetry.io/otel/sdk/resource"
@@ -58,4 +60,56 @@ func TestNewResourceEnvWins(t *testing.T) {
 	if got := attrs[string(semconv.ServiceInstanceIDKey)]; got != "fixed-id" {
 		t.Errorf("service.instance.id = %q, want fixed-id (OTEL_RESOURCE_ATTRIBUTES must win)", got)
 	}
+}
+
+func TestReadyzDrainsWhileHealthzStaysUp(t *testing.T) {
+	readiness := &Readiness{}
+	mux := metricsMux(MetricsServerOptions{
+		Readiness:     readiness,
+		EnableHealthz: true,
+	})
+
+	if got := getCode(t, mux, "/readyz"); got != http.StatusOK {
+		t.Errorf("/readyz before drain = %d, want %d", got, http.StatusOK)
+	}
+	if got := getCode(t, mux, "/healthz"); got != http.StatusOK {
+		t.Errorf("/healthz before drain = %d, want %d", got, http.StatusOK)
+	}
+
+	readiness.MarkNotReady()
+
+	if got := getCode(t, mux, "/readyz"); got != http.StatusServiceUnavailable {
+		t.Errorf("/readyz during drain = %d, want %d", got, http.StatusServiceUnavailable)
+	}
+	if got := getCode(t, mux, "/healthz"); got != http.StatusOK {
+		t.Errorf("/healthz during drain = %d, want %d (liveness must not fail while draining)", got, http.StatusOK)
+	}
+}
+
+func TestReadyzStaticWithZeroValueReadiness(t *testing.T) {
+	mux := metricsMux(MetricsServerOptions{Readiness: &Readiness{}})
+	if got := getCode(t, mux, "/readyz"); got != http.StatusOK {
+		t.Errorf("/readyz with zero-value Readiness = %d, want %d", got, http.StatusOK)
+	}
+}
+
+func TestReadyzAbsentWithoutReadiness(t *testing.T) {
+	mux := metricsMux(MetricsServerOptions{})
+	if got := getCode(t, mux, "/readyz"); got != http.StatusNotFound {
+		t.Errorf("/readyz with nil Readiness = %d, want %d", got, http.StatusNotFound)
+	}
+}
+
+func TestHealthzAbsentUnlessEnabled(t *testing.T) {
+	mux := metricsMux(MetricsServerOptions{Readiness: &Readiness{}})
+	if got := getCode(t, mux, "/healthz"); got != http.StatusNotFound {
+		t.Errorf("/healthz without EnableHealthz = %d, want %d", got, http.StatusNotFound)
+	}
+}
+
+func getCode(t *testing.T, mux *http.ServeMux, path string) int {
+	t.Helper()
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+	return rec.Code
 }

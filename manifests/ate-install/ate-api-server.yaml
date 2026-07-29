@@ -62,7 +62,12 @@ metadata:
   name: ate-api-server
   namespace: ate-system
 spec:
-  replicas: 1
+  replicas: 2
+  strategy:
+    # Update replicas one at a time, create a new one first, then delete the old one.
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
   selector:
     matchLabels:
       app: ate-api-server
@@ -74,7 +79,12 @@ spec:
         prometheus.io/scrape: "true"
         prometheus.io/port: "9090"
     spec:
+      # TODO: Add topologySpreadConstraints to spread replicas across nodes and zones.
       serviceAccountName: ate-api-server
+      # Budget for the full shutdown sequence: --drain-delay (sized to cover
+      # the readinessProbe below reaching NotReady, plus propagation) +
+      # --drain-timeout.
+      terminationGracePeriodSeconds: 40
       containers:
       - name: ate-api-server
         image: ko://github.com/agent-substrate/substrate/cmd/ateapi
@@ -92,6 +102,9 @@ spec:
           - --session-id-ca-pool=/run/session-id-ca-pool/pool.json
           - --atelet-client-cred-bundle=/run/podidentity.podcert.ate.dev/credential-bundle.pem
           - --pod-identity-ca-certs=/run/podidentity.podcert.ate.dev/trust-bundle.pem
+          # Graceful shutdown knobs. The sum must fit within terminationGracePeriodSeconds.
+          - --drain-delay=13s
+          - --drain-timeout=15s
         env:
         - name: POD_NAME
           valueFrom:
@@ -145,6 +158,16 @@ spec:
             port: 9090
           initialDelaySeconds: 5
           periodSeconds: 2
+          failureThreshold: 3
+        # /healthz stays 200 while a terminating pod drains; /readyz
+        # turns 503, so liveness and readiness diverge correctly during
+        # shutdown.
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 9090
+          initialDelaySeconds: 10
+          periodSeconds: 10
       volumes:
       - name: "servicedns"
         projected:
@@ -191,6 +214,19 @@ spec:
               - key: "pool"
                 path: "pool.json"
 ---
+# Allow voluntary disruptions (node drains, cluster upgrades) to take
+# at most one API server pod at a time, at any replica count.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: ate-api-server
+  namespace: ate-system
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: ate-api-server
+---
 # 6. Expose the Session Assigner
 apiVersion: v1
 kind: Service
@@ -198,7 +234,9 @@ metadata:
   name: api
   namespace: ate-system
 spec:
-  type: ClusterIP
+  # Headless (i.e. `clusterIP: None`) services make DNS return one A record per
+  # ready pod so gRPC clients can load balance client-side.
+  clusterIP: None
   selector:
     app: ate-api-server
   ports:

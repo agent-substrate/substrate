@@ -998,7 +998,7 @@ func TestActorTemplateValidation(t *testing.T) {
 		wantErr: true,
 		errMsg:  "Name must be a valid DNS label",
 	}, {
-		name: "Volumes: DurableDir volume with SandboxClass microvm is invalid",
+		name: "Volumes: DurableDir volume with SandboxClass microvm is valid",
 		mutate: func(at *ActorTemplate) {
 			at.Spec.SandboxClass = SandboxClassMicroVM
 			at.Spec.Volumes = []Volume{
@@ -1008,8 +1008,7 @@ func TestActorTemplateValidation(t *testing.T) {
 				{Name: "vol1", MountPath: "/home/user"},
 			}
 		},
-		wantErr: true,
-		errMsg:  "DurableDir volumes are not supported when sandboxClass is 'microvm'",
+		wantErr: false,
 	}, {
 		name: "Volumes: DurableDir volume with SandboxClass gvisor is valid",
 		mutate: func(at *ActorTemplate) {
@@ -1069,6 +1068,44 @@ func TestActorTemplateValidation(t *testing.T) {
 			at.Spec.SandboxClass = SandboxClassMicroVM
 		},
 		wantErr: false,
+	}, {
+		name: "Volumes: volume without volumeMount is invalid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Volumes = []Volume{
+				{Name: "vol1", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
+			}
+		},
+		wantErr: true,
+		errMsg:  "All volumes defined in spec.volumes must be mounted by at least one container",
+	}, {
+		name: "Volumes: multiple volumes with one unmounted is invalid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Volumes = []Volume{
+				{
+					Name: "vol1",
+					VolumeSource: VolumeSource{
+						ExternalVolumeTemplate: &ExternalVolumeTemplate{
+							Capacity:         resource.MustParse("10Gi"),
+							StorageClassName: "standard",
+						},
+					},
+				},
+				{
+					Name: "vol2",
+					VolumeSource: VolumeSource{
+						ExternalVolumeTemplate: &ExternalVolumeTemplate{
+							Capacity:         resource.MustParse("20Gi"),
+							StorageClassName: "pd-ssd",
+						},
+					},
+				},
+			}
+			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
+				{Name: "vol1", MountPath: "/mnt/vol1"},
+			}
+		},
+		wantErr: true,
+		errMsg:  "All volumes defined in spec.volumes must be mounted by at least one container",
 	}}
 
 	for _, tt := range tests {

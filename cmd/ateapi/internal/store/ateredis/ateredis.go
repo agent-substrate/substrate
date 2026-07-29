@@ -429,7 +429,7 @@ func (s *Persistence) UpdateWorker(ctx context.Context, worker *ateapipb.Worker,
 		}
 
 		if currentWorker.GetVersion() != expectedVersion {
-			return store.ErrPersistenceRetry
+			return store.ErrVersionConflict
 		}
 		dbWorker.Version = currentWorker.GetVersion() + 1
 		if currentWorker.GetWorkerNamespace() != dbWorker.GetWorkerNamespace() {
@@ -460,8 +460,8 @@ func (s *Persistence) UpdateWorker(ctx context.Context, worker *ateapipb.Worker,
 		if errors.Is(err, store.ErrNotFound) {
 			return store.ErrNotFound
 		}
-		if errors.Is(err, store.ErrPersistenceRetry) || errors.Is(err, redis.TxFailedErr) {
-			return store.ErrPersistenceRetry
+		if errors.Is(err, store.ErrVersionConflict) || errors.Is(err, redis.TxFailedErr) {
+			return store.ErrVersionConflict
 		}
 		return fmt.Errorf("while executing update worker transaction: %w", err)
 	}
@@ -517,7 +517,7 @@ func (s *Persistence) DeleteActor(ctx context.Context, atespace, name string) (*
 
 	if err != nil {
 		if errors.Is(err, redis.TxFailedErr) {
-			return nil, store.ErrPersistenceRetry
+			return nil, store.ErrVersionConflict
 		}
 		return nil, err
 	}
@@ -547,7 +547,7 @@ func (s *Persistence) UpdateActor(ctx context.Context, actor *ateapipb.Actor, ex
 		}
 
 		if currentActor.GetMetadata().GetVersion() != expectedVersion {
-			return store.ErrPersistenceRetry
+			return store.ErrVersionConflict
 		}
 		if currentActor.GetMetadata().GetName() != dbActor.GetMetadata().GetName() {
 			return fmt.Errorf("name is immutable")
@@ -580,8 +580,8 @@ func (s *Persistence) UpdateActor(ctx context.Context, actor *ateapipb.Actor, ex
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, store.ErrNotFound
 		}
-		if errors.Is(err, store.ErrPersistenceRetry) || errors.Is(err, redis.TxFailedErr) {
-			return nil, store.ErrPersistenceRetry
+		if errors.Is(err, store.ErrVersionConflict) || errors.Is(err, redis.TxFailedErr) {
+			return nil, store.ErrVersionConflict
 		}
 		return nil, fmt.Errorf("while executing update actor transaction: %w", err)
 	}

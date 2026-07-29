@@ -73,6 +73,9 @@ spec:
         - name: servicedns-ca
           mountPath: /run/servicedns-ca
           readOnly: true
+        - name: podidentity
+          mountPath: /run/podidentity.podcert.ate.dev
+          readOnly: true
         resources:
           requests:
             cpu: "500m"
@@ -98,6 +101,9 @@ spec:
         volumeMounts:
         - name: servicedns-ca
           mountPath: /run/servicedns-ca
+          readOnly: true
+        - name: podidentity
+          mountPath: /run/podidentity.podcert.ate.dev
           readOnly: true
         resources:
           requests:
@@ -125,6 +131,13 @@ spec:
         - name: boomer-prom
           containerPort: 8001
           protocol: TCP
+        volumeMounts:
+        - name: servicedns-ca
+          mountPath: /run/servicedns-ca
+          readOnly: true
+        - name: podidentity
+          mountPath: /run/podidentity.podcert.ate.dev
+          readOnly: true
         resources:
           requests:
             cpu: "500m"
@@ -140,6 +153,19 @@ spec:
                 matchLabels:
                   podcert.ate.dev/canarying: live
               path: ca.crt
+      # The benchmark's own client identity, presented to ateapi. Its
+      # interceptor rejects calls carrying no credential, taking identity from
+      # an mTLS client cert or, failing that, a Bearer token. Use the cert:
+      # that is what the base install gives ate-controller and atenet-router
+      # (the token path is the opt-in ATE_ATEAPI_CLIENT_AUTH=token overlay),
+      # and it yields a SPIFFE ID rather than an opaque JWT subject.
+      - name: podidentity
+        projected:
+          sources:
+          - podCertificate:
+              signerName: podidentity.podcert.ate.dev/identity
+              keyType: ECDSAP256
+              credentialBundlePath: credential-bundle.pem
 ---
 apiVersion: v1
 kind: Service

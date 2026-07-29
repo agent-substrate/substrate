@@ -46,7 +46,21 @@ const (
 	// guestSharedDir is where the agent mounts the kataShared tag in the guest;
 	// per-container rootfs then lives at <guestSharedDir>/<cid>/rootfs.
 	guestSharedDir = "/run/kata-containers/shared/containers/"
+
+	// DurableFsTag is the virtio-fs tag for the actor's WRITABLE durable-dir
+	// share, served by a second virtiofsd (the kataShared share stays read-only).
+	DurableFsTag = "ateDurable"
+	// guestDurableDir is where the agent mounts DurableFsTag in the guest; each
+	// volume's contents live at <guestDurableDir>/<volumeName> and are bind-mounted
+	// from there into the containers that declare the volume.
+	guestDurableDir = "/run/ateom-durable"
 )
+
+// GuestDurableVolumeDir is the in-guest path holding one durable volume's
+// contents, i.e. the bind source for that volume's container mount points.
+func GuestDurableVolumeDir(volumeName string) string {
+	return guestDurableDir + "/" + volumeName
+}
 
 // SharedDir is the host directory virtiofsd serves into the guest as the RO base.
 // Its layout (<cid>/rootfs) is what find-paths re-opens by path on restore.
@@ -74,7 +88,32 @@ type VirtiofsdOptions struct {
 	Binary     string // virtiofsd executable; defaults to "virtiofsd"
 	SocketPath string // vhost-user socket CH connects to (VirtiofsdSocketPath)
 	SharedDir  string // directory to serve (SharedDir(id))
-	Log        io.Writer
+	// Cache is virtiofsd's --cache mode. Empty defaults to "always", which is
+	// only correct for a strictly read-only share (see virtiofsdArgs).
+	Cache string
+	Log   io.Writer
+}
+
+// virtiofsdArgs builds the virtiofsd command line for o.
+func virtiofsdArgs(o VirtiofsdOptions) []string {
+	cache := o.Cache
+	if cache == "" {
+		// The overlay RO lower is served strictly read-only (the carrier remounts it
+		// ro and the guest's overlayfs lowerdir is immutable), so aggressively cache
+		// it in the guest for read performance — there is no host<>guest write churn
+		// to invalidate. A WRITABLE share (the durable-dir volumes) must instead pass
+		// Cache: "auto", because cache=always would serve stale data once the host
+		// side changes underneath the guest (e.g. contents restored from a snapshot).
+		cache = "always"
+	}
+	return []string{
+		"--socket-path=" + o.SocketPath,
+		"--shared-dir=" + o.SharedDir,
+		"--cache=" + cache,
+		"--thread-pool-size=1",
+		"--announce-submounts",
+		"--migration-mode", "find-paths",
+	}
 }
 
 // StartVirtiofsd launches virtiofsd in find-paths migration mode serving o.SharedDir
@@ -86,22 +125,7 @@ func StartVirtiofsd(ctx context.Context, o VirtiofsdOptions) (*exec.Cmd, error) 
 		bin = "virtiofsd"
 	}
 	_ = os.Remove(o.SocketPath)
-	cmd := exec.Command(bin,
-		"--socket-path="+o.SocketPath,
-		"--shared-dir="+o.SharedDir,
-		// The shared dir is served strictly read-only (the overlay's RO lower; the
-		// carrier remounts it ro and the guest's overlayfs lowerdir is immutable), so
-		// aggressively cache it in the guest for read performance — there is no
-		// host<>guest write churn to invalidate.
-		// TODO: cache=always serves stale data for any writable virtio-fs mount. If we
-		// later need one (e.g. projected volumes), prefer keeping this mount fully
-		// read-only and writing such volumes via a separate mechanism (e.g. a writer
-		// that execs into the sandbox) rather than dropping back to cache=auto/none.
-		"--cache=always",
-		"--thread-pool-size=1",
-		"--announce-submounts",
-		"--migration-mode", "find-paths",
-	)
+	cmd := exec.Command(bin, virtiofsdArgs(o)...)
 	cmd.Stdout = o.Log
 	cmd.Stderr = o.Log
 	if err := cmd.Start(); err != nil {
@@ -166,16 +190,28 @@ func ReconstructSharedDirFromImage(ctx context.Context, bundleRootfs, restoreID,
 
 // CreateSandboxForActor creates the guest sandbox with the kataShared virtio-fs mount
 // (the RO base backing every container's rootfs). Mirrors kata startSandbox.
-func (a *AgentClient) CreateSandboxForActor(ctx context.Context, sandboxID, hostname string) error {
+//
+// withDurableShare additionally mounts the writable durable-dir share, whose
+// per-volume subdirectories the containers bind-mount at their declared paths.
+func (a *AgentClient) CreateSandboxForActor(ctx context.Context, sandboxID, hostname string, withDurableShare bool) error {
+	storages := []*agentpb.Storage{{
+		Driver:     virtioFSDriver,
+		Source:     FsTag,
+		Fstype:     typeVirtioFS,
+		MountPoint: guestSharedDir,
+	}}
+	if withDurableShare {
+		storages = append(storages, &agentpb.Storage{
+			Driver:     virtioFSDriver,
+			Source:     DurableFsTag,
+			Fstype:     typeVirtioFS,
+			MountPoint: guestDurableDir,
+		})
+	}
 	return a.CreateSandbox(ctx, &agentpb.CreateSandboxRequest{
 		Hostname:  hostname,
 		SandboxId: sandboxID,
-		Storages: []*agentpb.Storage{{
-			Driver:     virtioFSDriver,
-			Source:     FsTag,
-			Fstype:     typeVirtioFS,
-			MountPoint: guestSharedDir,
-		}},
+		Storages:  storages,
 	})
 }
 
