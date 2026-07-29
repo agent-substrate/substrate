@@ -34,6 +34,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/kata"
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/third_party/kata/agentpb"
 	"github.com/agent-substrate/substrate/internal/ateompath"
+	"github.com/agent-substrate/substrate/internal/ateomstats"
 	"github.com/agent-substrate/substrate/internal/imagecache"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/readyz"
@@ -54,6 +55,14 @@ type runningActor struct {
 	// propagated). CheckpointWorkload writes it back into the next snapshot's
 	// base-id file so the chain survives suspend->resume->suspend.
 	baseID string
+
+	// activeActor is the actor from the Run/Restore request that started this
+	// micro-VM, retained so GetWorkloadStats can attribute its samples. The rest
+	// of this struct is about owning processes; this field is the one piece of
+	// the original request the service has to remember. Named to match the gVisor
+	// ateom's AteomService.activeActor, which holds the same thing for the one
+	// actor that ateom serves.
+	activeActor ateomstats.ActorAttribution
 
 	// ateom owns this CH process (booted at Run or relaunched at Restore).
 	chCmd *exec.Cmd
@@ -236,6 +245,17 @@ type actorBootParams struct {
 	assetPaths   map[string]string
 	// egressGateway is nil unless actor TCP should be redirected through atunnel.
 	egressGateway *ateompb.EgressGateway
+}
+
+// actorAttribution regroups the actor fields that arrived on the Run/Restore
+// request, for retention on the resulting runningActor.
+func (p actorBootParams) actorAttribution() ateomstats.ActorAttribution {
+	return ateomstats.ActorAttribution{
+		Ref:               p.actorRef,
+		UID:               p.actorUID,
+		TemplateNamespace: p.templateNS,
+		TemplateName:      p.templateName,
+	}
 }
 
 // coldBootAttempts is how many times a cold boot is tried when the micro-VM
@@ -462,7 +482,7 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 		return fmt.Errorf("while waiting for container readyz: %w", err)
 	}
 
-	ra := &runningActor{chCmd: chCmd, vfsdCmd: vfsdCmd, durableVfsdCmd: durableVfsdCmd, apiSocket: apiSocket, baseID: actorUID, logAgent: ac}
+	ra := &runningActor{chCmd: chCmd, vfsdCmd: vfsdCmd, durableVfsdCmd: durableVfsdCmd, apiSocket: apiSocket, baseID: actorUID, logAgent: ac, activeActor: p.actorAttribution()}
 	if err := s.activateActorNetworking(p.actorRef.Atespace, p.actorRef.Name, egress); err != nil {
 		return err
 	}

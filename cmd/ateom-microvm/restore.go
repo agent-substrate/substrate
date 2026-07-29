@@ -287,6 +287,7 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 	ra := &runningActor{
 		chCmd: chCmd, vfsdCmd: vfsdCmd, durableVfsdCmd: durableVfsdCmd,
 		apiSocket: apiSocket, baseID: srcID, restoreSourceDir: restoreDir,
+		activeActor: p.actorAttribution(),
 	}
 
 	// Re-attach stdout/stderr forwarding for each container: the restored guest's

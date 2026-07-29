@@ -45,6 +45,15 @@ service Ateom {
   // written by CheckpointWorkload.  Ateom will handle downloading the correct
   // gVisor / runsc version to match the checkpoint.
   rpc RestoreWorkload(RestoreWorkloadRequest) returns (RestoreWorkloadResponse) {}
+
+  // GetWorkloadStats returns a point-in-time resource-usage sample for the
+  // workload this ateom is currently executing.
+  //
+  // It is a pure read: unlike the three calls above it does not move the ateom
+  // between "available" and "executing", so it is safe to call on a timer for
+  // the whole lifetime of a workload. Returns FAILED_PRECONDITION when the
+  // ateom is "available" (nothing to measure).
+  rpc GetWorkloadStats(GetWorkloadStatsRequest) returns (GetWorkloadStatsResponse) {}
 }
 
 message RunWorkloadRequest {
@@ -209,4 +218,69 @@ message RestoreWorkloadRequest {
 }
 
 message RestoreWorkloadResponse {
+}
+
+message GetWorkloadStatsRequest {
+  // The actor the caller believes is executing here. A worker can be recycled
+  // between the caller's view of the world and this call, so ateom rejects a
+  // mismatch with FAILED_PRECONDITION rather than reporting a different
+  // actor's numbers under the requested actor's identity.
+  string actor_uid = 1;
+}
+
+// SandboxClass is the sandbox runtime family that produced a sample. Mirrors
+// the ate.dev/v1alpha1 SandboxClass the WorkerPool and ActorTemplate are
+// configured with; an ateom binary only ever reports its own.
+enum SandboxClass {
+  SANDBOX_CLASS_UNSPECIFIED = 0;
+  // gVisor / runsc (cmd/ateom-gvisor).
+  SANDBOX_CLASS_GVISOR = 1;
+  // Micro-VM (cmd/ateom-microvm).
+  SANDBOX_CLASS_MICROVM = 2;
+}
+
+// StatsSource is how a sample's measurements were obtained. The two are not
+// measured the same way and should not be compared against each other as though
+// they were.
+enum StatsSource {
+  // No measurement was taken.
+  STATS_SOURCE_UNSPECIFIED = 0;
+  // Read from the sandbox's cgroup on the host.
+  STATS_SOURCE_CGROUP = 1;
+  // Read from inside the guest, over the guest agent's vsock connection.
+  STATS_SOURCE_GUEST_AGENT = 2;
+}
+
+// GetWorkloadStatsResponse is one resource-usage sample for the executing
+// workload. The unit of measurement is the SANDBOX, which today equals the
+// actor; per-container attribution needs the gVisor sentry's own accounting and
+// is not reported here.
+message GetWorkloadStatsResponse {
+  // Identity of the measured actor, retained by ateom from the
+  // RunWorkloadRequest / RestoreWorkloadRequest that started it. Echoed back so
+  // the caller can attribute the sample without holding its own mapping from
+  // worker to actor.
+  string atespace = 1;
+  string actor_name = 2;
+  string actor_uid = 3;
+  string actor_template_namespace = 4;
+  string actor_template_name = 5;
+
+  // The sandbox runtime family that produced this sample.
+  SandboxClass sandbox_class = 6;
+
+  // How the measurements below were obtained.
+  StatsSource source = 7;
+
+  // Measurements. All four are zero when source is STATS_SOURCE_UNSPECIFIED,
+  // which means "not measured" rather than "measured as zero".
+  uint64 memory_current_bytes = 8;
+  uint64 memory_peak_bytes = 9;
+  uint64 memory_working_set_bytes = 10;
+  // Cumulative CPU time within the current epoch. A restore starts a new epoch:
+  // the sandbox is recreated, so this restarts at zero and callers computing
+  // deltas must treat a decrease as a reset rather than emit a negative value.
+  uint64 cpu_usage_usec = 11;
+
+  int64 observed_at_unix_nano = 12;
 }

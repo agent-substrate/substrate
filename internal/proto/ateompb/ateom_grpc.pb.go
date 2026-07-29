@@ -36,6 +36,7 @@ const (
 	Ateom_RunWorkload_FullMethodName        = "/ateom.Ateom/RunWorkload"
 	Ateom_CheckpointWorkload_FullMethodName = "/ateom.Ateom/CheckpointWorkload"
 	Ateom_RestoreWorkload_FullMethodName    = "/ateom.Ateom/RestoreWorkload"
+	Ateom_GetWorkloadStats_FullMethodName   = "/ateom.Ateom/GetWorkloadStats"
 )
 
 // AteomClient is the client API for Ateom service.
@@ -67,6 +68,14 @@ type AteomClient interface {
 	// written by CheckpointWorkload.  Ateom will handle downloading the correct
 	// gVisor / runsc version to match the checkpoint.
 	RestoreWorkload(ctx context.Context, in *RestoreWorkloadRequest, opts ...grpc.CallOption) (*RestoreWorkloadResponse, error)
+	// GetWorkloadStats returns a point-in-time resource-usage sample for the
+	// workload this ateom is currently executing.
+	//
+	// It is a pure read: unlike the three calls above it does not move the ateom
+	// between "available" and "executing", so it is safe to call on a timer for
+	// the whole lifetime of a workload. Returns FAILED_PRECONDITION when the
+	// ateom is "available" (nothing to measure).
+	GetWorkloadStats(ctx context.Context, in *GetWorkloadStatsRequest, opts ...grpc.CallOption) (*GetWorkloadStatsResponse, error)
 }
 
 type ateomClient struct {
@@ -107,6 +116,16 @@ func (c *ateomClient) RestoreWorkload(ctx context.Context, in *RestoreWorkloadRe
 	return out, nil
 }
 
+func (c *ateomClient) GetWorkloadStats(ctx context.Context, in *GetWorkloadStatsRequest, opts ...grpc.CallOption) (*GetWorkloadStatsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetWorkloadStatsResponse)
+	err := c.cc.Invoke(ctx, Ateom_GetWorkloadStats_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AteomServer is the server API for Ateom service.
 // All implementations must embed UnimplementedAteomServer
 // for forward compatibility.
@@ -136,6 +155,14 @@ type AteomServer interface {
 	// written by CheckpointWorkload.  Ateom will handle downloading the correct
 	// gVisor / runsc version to match the checkpoint.
 	RestoreWorkload(context.Context, *RestoreWorkloadRequest) (*RestoreWorkloadResponse, error)
+	// GetWorkloadStats returns a point-in-time resource-usage sample for the
+	// workload this ateom is currently executing.
+	//
+	// It is a pure read: unlike the three calls above it does not move the ateom
+	// between "available" and "executing", so it is safe to call on a timer for
+	// the whole lifetime of a workload. Returns FAILED_PRECONDITION when the
+	// ateom is "available" (nothing to measure).
+	GetWorkloadStats(context.Context, *GetWorkloadStatsRequest) (*GetWorkloadStatsResponse, error)
 	mustEmbedUnimplementedAteomServer()
 }
 
@@ -154,6 +181,9 @@ func (UnimplementedAteomServer) CheckpointWorkload(context.Context, *CheckpointW
 }
 func (UnimplementedAteomServer) RestoreWorkload(context.Context, *RestoreWorkloadRequest) (*RestoreWorkloadResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RestoreWorkload not implemented")
+}
+func (UnimplementedAteomServer) GetWorkloadStats(context.Context, *GetWorkloadStatsRequest) (*GetWorkloadStatsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetWorkloadStats not implemented")
 }
 func (UnimplementedAteomServer) mustEmbedUnimplementedAteomServer() {}
 func (UnimplementedAteomServer) testEmbeddedByValue()               {}
@@ -230,6 +260,24 @@ func _Ateom_RestoreWorkload_Handler(srv interface{}, ctx context.Context, dec fu
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Ateom_GetWorkloadStats_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetWorkloadStatsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AteomServer).GetWorkloadStats(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Ateom_GetWorkloadStats_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AteomServer).GetWorkloadStats(ctx, req.(*GetWorkloadStatsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // Ateom_ServiceDesc is the grpc.ServiceDesc for Ateom service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -248,6 +296,10 @@ var Ateom_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RestoreWorkload",
 			Handler:    _Ateom_RestoreWorkload_Handler,
+		},
+		{
+			MethodName: "GetWorkloadStats",
+			Handler:    _Ateom_GetWorkloadStats_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
