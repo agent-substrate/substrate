@@ -133,6 +133,10 @@ To explore metrics locally:
 
 > **Note:** Storage is ephemeral (`emptyDir`), so metrics are lost when the Prometheus pod restarts.
 
+### Cloud Metrics with Google Managed Prometheus (GKE Cluster)
+
+For Google Cloud (GKE) deployments with Google Managed Prometheus (GMP), `PodMonitoring` resources are located in [`manifests/ate-install/monitoring/`](../manifests/ate-install/monitoring/) and applied automatically by `./hack/install-ate.sh --deploy-ate-system`.
+
 > **Roadmap Note (Actor-Level Metrics):** A comprehensive metrics roadmap is under active development to support both system operators and workload analysis. Planned OpenTelemetry instrumentation focuses on control plane latency, state snapshot performance, fleet utilization density, and enriching metrics with standardized actor labels for seamless aggregation across pod transitions.
 
 ---

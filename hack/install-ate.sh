@@ -162,7 +162,7 @@ render_ate_system_manifests() {
     kubectl kustomize manifests/ate-install/kind --load-restrictor LoadRestrictionsNone | run_ko resolve -f -
   else
     # Build everything resolved with base manifests for GKE
-    run_ko resolve -f manifests/ate-install
+    run_ko resolve -f manifests/ate-install -f manifests/ate-install/monitoring
   fi
 }
 
@@ -357,6 +357,9 @@ deploy_ate_apiserver() {
   ensure_apiserver_prerequisites
 
   run_ko apply -f manifests/ate-install/ate-api-server.yaml
+  if [[ "${ATE_INSTALL_KIND:-false}" == "false" ]]; then
+    run_kubectl apply -f manifests/ate-install/monitoring/ate-api-server.yaml
+  fi
   run_kubectl rollout status deployment/ate-api-server -n ate-system --timeout=120s
 }
 
@@ -390,6 +393,9 @@ deploy_atenet() {
 
   run_ko apply -f manifests/ate-install/atenet-router.yaml
   run_ko apply -f manifests/ate-install/atenet-dns.yaml
+  if [[ "${ATE_INSTALL_KIND:-false}" == "false" ]]; then
+    run_kubectl apply -f manifests/ate-install/monitoring/atenet-router.yaml
+  fi
   run_kubectl rollout status deployment/atenet-router -n ate-system --timeout=120s
   # The Deployment in atenet-dns.yaml is named "dns"; every other resource in
   # that file is "atenet-dns". Waiting on the filename rather than the actual
@@ -500,7 +506,7 @@ delete_ate_system() {
     kubectl kustomize manifests/ate-install/kind --load-restrictor LoadRestrictionsNone \
       | run_kubectl delete --ignore-not-found -f -
   else
-    run_kubectl delete --ignore-not-found -f manifests/ate-install
+    run_kubectl delete --ignore-not-found -f manifests/ate-install -f manifests/ate-install/monitoring
   fi
   run_kubectl delete --ignore-not-found -f manifests/ate-install/generated
 }
@@ -508,6 +514,9 @@ delete_ate_system() {
 delete_atenet() {
   log_step "delete_atenet"
   run_kubectl delete --ignore-not-found -f manifests/ate-install/atenet-router.yaml
+  if [[ "${ATE_INSTALL_KIND:-false}" == "false" ]]; then
+    run_kubectl delete --ignore-not-found -f manifests/ate-install/monitoring/atenet-router.yaml
+  fi
 }
 
 deploy_benchmarks() {

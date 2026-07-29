@@ -18,6 +18,8 @@ Dashboards are created/updated (idempotently) by setup:
 go run ./tools/setup-gcp create dashboards   # also part of: bootstrap
 ```
 
+Google Managed Prometheus (`PodMonitoring`) manifests for ATE metrics scraping are located in [`manifests/ate-install/monitoring/`](../../../manifests/ate-install/monitoring/) (`atenet-router.yaml` and `ate-api-server.yaml`). These are applied automatically when deploying Agent Substrate on GKE (`./hack/install-ate.sh --deploy-ate-system`).
+
 Or apply any single file by hand:
 
 ```sh
