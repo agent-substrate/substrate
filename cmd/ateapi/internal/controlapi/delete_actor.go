@@ -28,8 +28,8 @@ import (
 )
 
 func (s *Service) DeleteActor(ctx context.Context, req *ateapipb.DeleteActorRequest) (*ateapipb.Actor, error) {
-	if err := validateDeleteActorRequest(req); err != nil {
-		return nil, err
+	if errs := validateDeleteActorRequest(req); len(errs) > 0 {
+		return nil, toGRPCStatusError(errs)
 	}
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
 	setSpanActorRefAttributes(ctx, actorRef)
@@ -68,7 +68,7 @@ func (s *Service) DeleteActor(ctx context.Context, req *ateapipb.DeleteActorRequ
 	return deleted, nil
 }
 
-func validateDeleteActorRequest(req *ateapipb.DeleteActorRequest) error {
+func validateDeleteActorRequest(req *ateapipb.DeleteActorRequest) field.ErrorList {
 	var fldPath *field.Path
 	var errs field.ErrorList
 
@@ -78,8 +78,5 @@ func validateDeleteActorRequest(req *ateapipb.DeleteActorRequest) error {
 		errs = append(errs, resources.ValidateObjectRef(val, fldPath)...)
 	}
 
-	if len(errs) > 0 {
-		return status.Error(codes.InvalidArgument, errs.ToAggregate().Error())
-	}
-	return nil
+	return errs
 }

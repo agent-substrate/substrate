@@ -27,8 +27,8 @@ import (
 )
 
 func (s *Service) SuspendActor(ctx context.Context, req *ateapipb.SuspendActorRequest) (*ateapipb.SuspendActorResponse, error) {
-	if err := validateSuspendActorRequest(req); err != nil {
-		return nil, err
+	if errs := validateSuspendActorRequest(req); len(errs) > 0 {
+		return nil, toGRPCStatusError(errs)
 	}
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
 	setSpanActorRefAttributes(ctx, actorRef)
@@ -48,7 +48,7 @@ func (s *Service) SuspendActor(ctx context.Context, req *ateapipb.SuspendActorRe
 	return &ateapipb.SuspendActorResponse{Actor: actor}, nil
 }
 
-func validateSuspendActorRequest(req *ateapipb.SuspendActorRequest) error {
+func validateSuspendActorRequest(req *ateapipb.SuspendActorRequest) field.ErrorList {
 	var fldPath *field.Path
 	var errs field.ErrorList
 
@@ -58,8 +58,5 @@ func validateSuspendActorRequest(req *ateapipb.SuspendActorRequest) error {
 		errs = append(errs, resources.ValidateObjectRef(val, fldPath)...)
 	}
 
-	if len(errs) > 0 {
-		return status.Error(codes.InvalidArgument, errs.ToAggregate().Error())
-	}
-	return nil
+	return errs
 }

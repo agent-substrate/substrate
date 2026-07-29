@@ -12,28 +12,36 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package debugapi
+package controlapi
 
 import (
-	"context"
-	"fmt"
+	"testing"
 
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
-func (s *Service) DebugClear(ctx context.Context, req *ateapipb.DebugClearRequest) (*ateapipb.DebugClearResponse, error) {
-	if errs := validateDebugClearRequest(req); len(errs) > 0 {
-		return nil, status.Error(codes.InvalidArgument, errs.ToAggregate().Error())
+func TestValidateListAtespacesRequest(t *testing.T) {
+	tests := []struct {
+		name string
+		req  *ateapipb.ListAtespacesRequest
+		want field.ErrorList
+	}{{
+		"valid, no page_size",
+		&ateapipb.ListAtespacesRequest{},
+		nil,
+	}, {
+		"valid, positive page_size",
+		&ateapipb.ListAtespacesRequest{PageSize: 10},
+		nil,
+	}, {
+		"negative page_size",
+		&ateapipb.ListAtespacesRequest{PageSize: -1},
+		field.ErrorList{field.Invalid(field.NewPath("page_size"), int32(-1), "")},
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertValidateErr(t, validateListAtespacesRequest(tt.req), tt.want)
+		})
 	}
-	if err := s.persistence.DebugClearAll(ctx); err != nil {
-		return nil, fmt.Errorf("while running DebugClearAll: %w", err)
-	}
-	return &ateapipb.DebugClearResponse{}, nil
-}
-
-func validateDebugClearRequest(req *ateapipb.DebugClearRequest) field.ErrorList {
-	return nil
 }

@@ -19,14 +19,12 @@ import (
 	"fmt"
 
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
 func (s *Service) ListAtespaces(ctx context.Context, req *ateapipb.ListAtespacesRequest) (*ateapipb.ListAtespacesResponse, error) {
-	if err := validateListAtespacesRequest(req); err != nil {
-		return nil, err
+	if errs := validateListAtespacesRequest(req); len(errs) > 0 {
+		return nil, toGRPCStatusError(errs)
 	}
 
 	atespaces, nextToken, err := s.persistence.ListAtespaces(ctx, effectivePageSize(req.GetPageSize()), req.GetPageToken())
@@ -39,7 +37,7 @@ func (s *Service) ListAtespaces(ctx context.Context, req *ateapipb.ListAtespaces
 	}, nil
 }
 
-func validateListAtespacesRequest(req *ateapipb.ListAtespacesRequest) error {
+func validateListAtespacesRequest(req *ateapipb.ListAtespacesRequest) field.ErrorList {
 	var fldPath *field.Path
 	var errs field.ErrorList
 
@@ -47,8 +45,5 @@ func validateListAtespacesRequest(req *ateapipb.ListAtespacesRequest) error {
 		errs = append(errs, field.Invalid(fldPath, val, "must be greater than or equal to 0"))
 	}
 
-	if len(errs) > 0 {
-		return status.Error(codes.InvalidArgument, errs.ToAggregate().Error())
-	}
-	return nil
+	return errs
 }

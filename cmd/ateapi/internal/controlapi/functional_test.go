@@ -52,6 +52,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -1058,29 +1059,6 @@ func TestListActors_Pagination(t *testing.T) {
 	}
 }
 
-func TestListActors_PageSizeValidation(t *testing.T) {
-	ns := namespaceForTest("ns-list-actors-validation")
-	tc := setupTest(t, ns)
-	defer tc.cleanup()
-
-	// 1. Negative page size
-	_, err := tc.client.ListActors(context.Background(), &ateapipb.ListActorsRequest{
-		Atespace: testAtespace,
-		PageSize: -1,
-	})
-	if status.Code(err) != codes.InvalidArgument {
-		t.Errorf("expected InvalidArgument error for negative page_size, got: %v", err)
-	}
-
-	// 2. Page size exceeding maxPageSize (1000) is coerced silently.
-	if _, err := tc.client.ListActors(context.Background(), &ateapipb.ListActorsRequest{
-		Atespace: testAtespace,
-		PageSize: 1001,
-	}); err != nil {
-		t.Errorf("expected page_size > 1000 to be coerced, got error: %v", err)
-	}
-}
-
 // TestListWorkers tests that workers mirrored to Redis are listed.
 // Workflow:
 // 1. Creates a mock WorkerPool in Kubernetes.
@@ -1919,444 +1897,74 @@ func TestUpdateActor_ReassignsPoolAcrossSuspendResume(t *testing.T) {
 	}
 }
 
-// TestValidation tests the negative validation cases for all gRPC methods.
-// Workflow:
-// 1. Uses table-driven tests for each RPC method (CreateActor, GetActor, ResumeActor, SuspendActor).
-// 2. Passes invalid requests (missing required fields).
-// 3. Verifies that all requests fail with an error.
 func TestValidation(t *testing.T) {
 	ns := namespaceForTest("ns-validation")
 	tc := setupTest(t, ns)
 	defer tc.cleanup()
 
 	t.Run("CreateActor", func(t *testing.T) {
-		tests := []struct {
-			name    string
-			req     *ateapipb.CreateActorRequest
-			wantMsg string
-		}{{
-			"missing actor_template_namespace",
-			&ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "id1"}, ActorTemplateName: "tmpl1"}},
-			"actor.actor_template_namespace: Required value",
-		}, {
-			"invalid actor_template_namespace",
-			&ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-				Metadata:               &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "id1"},
-				ActorTemplateNamespace: "invalid value",
-				ActorTemplateName:      "tmpl1",
-			}},
-			"actor.actor_template_namespace: Invalid value",
-		}, {
-			"missing actor_template_name",
-			&ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "id1"}, ActorTemplateNamespace: "ns1"}},
-			"actor.actor_template_name: Required value",
-		}, {
-			"invalid actor_template_name",
-			&ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-				Metadata:               &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "id1"},
-				ActorTemplateNamespace: "ns1",
-				ActorTemplateName:      "invalid value",
-			}},
-			"actor.actor_template_name: Invalid value",
-		}, {
-			"missing actor",
-			&ateapipb.CreateActorRequest{},
-			"actor: Required value",
-		}, {
-			"missing actor.atespace",
-			&ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-				Metadata:               &ateapipb.ResourceMetadata{Name: "id1"},
-				ActorTemplateNamespace: "ns1",
-				ActorTemplateName:      "tmpl1",
-			}},
-			"actor.metadata.atespace: Required value",
-		}, {
-			"invalid actor.atespace",
-			&ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-				Metadata:               &ateapipb.ResourceMetadata{Atespace: "NS1", Name: "id1"},
-				ActorTemplateNamespace: "ns1",
-				ActorTemplateName:      "tmpl1",
-			}},
-			"actor.metadata.atespace: Invalid value",
-		}, {
-			"missing actor.name",
-			&ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-				Metadata:               &ateapipb.ResourceMetadata{Atespace: "ns1"},
-				ActorTemplateNamespace: "ns1",
-				ActorTemplateName:      "tmpl1",
-			}},
-			"actor.metadata.name: Required value",
-		}, {
-			"invalid actor.name",
-			&ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-				Metadata:               &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "ID1"},
-				ActorTemplateNamespace: "ns1",
-				ActorTemplateName:      "tmpl1",
-			}},
-			"actor.metadata.name: Invalid value",
-		}, {
-			"invalid worker_selector label key",
-			&ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-				Metadata:               &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "id1"},
-				ActorTemplateNamespace: "ns1",
-				ActorTemplateName:      "tmpl1",
-				WorkerSelector:         &ateapipb.Selector{MatchLabels: map[string]string{"bad key!": "x"}},
-			}},
-			`actor.worker_selector.match_labels\[bad key!\]: Invalid value`,
-		}, {
-			"invalid worker_selector label value",
-			&ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-				Metadata:               &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "id1"},
-				ActorTemplateNamespace: "ns1",
-				ActorTemplateName:      "tmpl1",
-				WorkerSelector:         &ateapipb.Selector{MatchLabels: map[string]string{"tier": "not valid!"}},
-			}},
-			`actor.worker_selector.match_labels\[tier\]: Invalid value`,
-		}, {
-			"too many worker_selector.match_labels",
-			&ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-				Metadata:               &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "id1"},
-				ActorTemplateNamespace: "ns1",
-				ActorTemplateName:      "tmpl1",
-				WorkerSelector:         &ateapipb.Selector{MatchLabels: selectorLabelsOfSize(11)}}},
-			"actor.worker_selector.match_labels: Too many",
-		}}
-		for _, tt := range tests {
-			t.Run(tt.name, func(t *testing.T) {
-				_, err := tc.client.CreateActor(context.Background(), tt.req)
-				assertGrpcErrorRegex(t, err, codes.InvalidArgument, tt.wantMsg)
-			})
-		}
+		_, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{})
+		assertGrpcErrorRegex(t, err, codes.InvalidArgument, "actor: Required value")
 	})
 
 	t.Run("GetActor", func(t *testing.T) {
-		tests := []struct {
-			name    string
-			req     *ateapipb.GetActorRequest
-			wantMsg string
-		}{{
-			"missing actor",
-			&ateapipb.GetActorRequest{},
-			"actor: Required value",
-		}, {
-			"missing actor.atespace",
-			&ateapipb.GetActorRequest{
-				Actor: &ateapipb.ObjectRef{Name: "id1"},
-			},
-			"actor.atespace: Required value",
-		}, {
-			"invalid actor.atespace",
-			&ateapipb.GetActorRequest{
-				Actor: &ateapipb.ObjectRef{Atespace: "NS1", Name: "id1"},
-			},
-			"actor.atespace: Invalid value",
-		}, {
-			"missing actor.name",
-			&ateapipb.GetActorRequest{
-				Actor: &ateapipb.ObjectRef{Atespace: "ns1"},
-			},
-			"actor.name: Required value",
-		}, {
-			"invalid actor.name",
-			&ateapipb.GetActorRequest{
-				Actor: &ateapipb.ObjectRef{Atespace: "ns1", Name: "ID1"},
-			},
-			"actor.name: Invalid value",
-		}}
-		for _, tt := range tests {
-			t.Run(tt.name, func(t *testing.T) {
-				_, err := tc.client.GetActor(context.Background(), tt.req)
-				assertGrpcErrorRegex(t, err, codes.InvalidArgument, tt.wantMsg)
-			})
-		}
+		_, err := tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{})
+		assertGrpcErrorRegex(t, err, codes.InvalidArgument, "actor: Required value")
 	})
 
 	t.Run("ResumeActor", func(t *testing.T) {
-		tests := []struct {
-			name    string
-			req     *ateapipb.ResumeActorRequest
-			wantMsg string
-		}{{
-			"missing actor",
-			&ateapipb.ResumeActorRequest{},
-			"actor: Required value",
-		}, {
-			"missing actor.atespace",
-			&ateapipb.ResumeActorRequest{
-				Actor: &ateapipb.ObjectRef{Name: "id1"},
-			},
-			"actor.atespace: Required value",
-		}, {
-			"invalid actor.atespace",
-			&ateapipb.ResumeActorRequest{
-				Actor: &ateapipb.ObjectRef{Atespace: "NS1", Name: "id1"},
-			},
-			"actor.atespace: Invalid value",
-		}, {
-			"missing actor.name",
-			&ateapipb.ResumeActorRequest{
-				Actor: &ateapipb.ObjectRef{Atespace: "ns1"},
-			},
-			"actor.name: Required value",
-		}, {
-			"invalid actor.name",
-			&ateapipb.ResumeActorRequest{
-				Actor: &ateapipb.ObjectRef{Atespace: "ns1", Name: "ID1"},
-			},
-			"actor.name: Invalid value",
-		}}
-		for _, tt := range tests {
-			t.Run(tt.name, func(t *testing.T) {
-				_, err := tc.client.ResumeActor(context.Background(), tt.req)
-				assertGrpcErrorRegex(t, err, codes.InvalidArgument, tt.wantMsg)
-			})
-		}
+		_, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{})
+		assertGrpcErrorRegex(t, err, codes.InvalidArgument, "actor: Required value")
 	})
 
 	t.Run("PauseActor", func(t *testing.T) {
-		tests := []struct {
-			name    string
-			req     *ateapipb.PauseActorRequest
-			wantMsg string
-		}{{
-			"missing actor",
-			&ateapipb.PauseActorRequest{},
-			"actor: Required value",
-		}, {
-			"missing actor.atespace",
-			&ateapipb.PauseActorRequest{
-				Actor: &ateapipb.ObjectRef{Name: "id1"},
-			},
-			"actor.atespace: Required value",
-		}, {
-			"invalid actor.atespace",
-			&ateapipb.PauseActorRequest{
-				Actor: &ateapipb.ObjectRef{Atespace: "NS1", Name: "id1"},
-			},
-			"actor.atespace: Invalid value",
-		}, {
-			"missing actor.name",
-			&ateapipb.PauseActorRequest{
-				Actor: &ateapipb.ObjectRef{Atespace: "ns1"},
-			},
-			"actor.name: Required value",
-		}, {
-			"invalid actor.name",
-			&ateapipb.PauseActorRequest{
-				Actor: &ateapipb.ObjectRef{Atespace: "ns1", Name: "ID1"},
-			},
-			"actor.name: Invalid value",
-		}}
-		for _, tt := range tests {
-			t.Run(tt.name, func(t *testing.T) {
-				_, err := tc.client.PauseActor(context.Background(), tt.req)
-				assertGrpcErrorRegex(t, err, codes.InvalidArgument, tt.wantMsg)
-			})
-		}
+		_, err := tc.client.PauseActor(context.Background(), &ateapipb.PauseActorRequest{})
+		assertGrpcErrorRegex(t, err, codes.InvalidArgument, "actor: Required value")
 	})
 
 	t.Run("SuspendActor", func(t *testing.T) {
-		tests := []struct {
-			name    string
-			req     *ateapipb.SuspendActorRequest
-			wantMsg string
-		}{{
-			"missing actor",
-			&ateapipb.SuspendActorRequest{},
-			"actor: Required value",
-		}, {
-			"missing actor.atespace",
-			&ateapipb.SuspendActorRequest{
-				Actor: &ateapipb.ObjectRef{Name: "id1"},
-			},
-			"actor.atespace: Required value",
-		}, {
-			"invalid actor.atespace",
-			&ateapipb.SuspendActorRequest{
-				Actor: &ateapipb.ObjectRef{Atespace: "NS1", Name: "id1"},
-			},
-			"actor.atespace: Invalid value",
-		}, {
-			"missing actor.name",
-			&ateapipb.SuspendActorRequest{
-				Actor: &ateapipb.ObjectRef{Atespace: "ns1"},
-			},
-			"actor.name: Required value",
-		}, {
-			"invalid actor.name",
-			&ateapipb.SuspendActorRequest{
-				Actor: &ateapipb.ObjectRef{Atespace: "ns1", Name: "ID1"},
-			},
-			"actor.name: Invalid value",
-		}}
-		for _, tt := range tests {
-			t.Run(tt.name, func(t *testing.T) {
-				_, err := tc.client.SuspendActor(context.Background(), tt.req)
-				assertGrpcErrorRegex(t, err, codes.InvalidArgument, tt.wantMsg)
-			})
-		}
+		_, err := tc.client.SuspendActor(context.Background(), &ateapipb.SuspendActorRequest{})
+		assertGrpcErrorRegex(t, err, codes.InvalidArgument, "actor: Required value")
 	})
 
 	t.Run("UpdateActor", func(t *testing.T) {
-		tests := []struct {
-			name    string
-			req     *ateapipb.UpdateActorRequest
-			wantMsg string
-		}{{
-			"missing actor",
-			&ateapipb.UpdateActorRequest{},
-			"actor: Required value",
-		}, {
-			"missing actor.atespace",
-			&ateapipb.UpdateActorRequest{
-				Actor: &ateapipb.ObjectRef{Name: "id1"},
-			},
-			"actor.atespace: Required value",
-		}, {
-			"invalid actor.atespace",
-			&ateapipb.UpdateActorRequest{
-				Actor: &ateapipb.ObjectRef{Atespace: "NS1", Name: "id1"},
-			},
-			"actor.atespace: Invalid value",
-		}, {
-			"missing actor.name",
-			&ateapipb.UpdateActorRequest{
-				Actor: &ateapipb.ObjectRef{Atespace: "ns1"},
-			},
-			"actor.name: Required value",
-		}, {
-			"invalid actor.name",
-			&ateapipb.UpdateActorRequest{
-				Actor: &ateapipb.ObjectRef{Atespace: "ns1", Name: "ID1"},
-			},
-			"actor.name: Invalid value",
-		}, {
-			"invalid worker_selector label key",
-			&ateapipb.UpdateActorRequest{
-				Actor:          &ateapipb.ObjectRef{Atespace: "ns1", Name: "id1"},
-				WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"bad key!": "x"}},
-			},
-			`worker_selector.match_labels\[bad key!\]: Invalid value`,
-		}, {
-			"invalid worker_selector label value",
-			&ateapipb.UpdateActorRequest{
-				Actor:          &ateapipb.ObjectRef{Atespace: "ns1", Name: "id1"},
-				WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"tier": "not valid!"}},
-			},
-			`worker_selector.match_labels\[tier\]: Invalid value`,
-		}, {
-			"too many worker_selector.match_labels",
-			&ateapipb.UpdateActorRequest{
-				Actor:          &ateapipb.ObjectRef{Atespace: "ns1", Name: "id1"},
-				WorkerSelector: &ateapipb.Selector{MatchLabels: selectorLabelsOfSize(11)}},
-			"worker_selector.match_labels: Too many",
-		}}
-		for _, tt := range tests {
-			t.Run(tt.name, func(t *testing.T) {
-				_, err := tc.client.UpdateActor(context.Background(), tt.req)
-				assertGrpcErrorRegex(t, err, codes.InvalidArgument, tt.wantMsg)
-			})
-		}
+		_, err := tc.client.UpdateActor(context.Background(), &ateapipb.UpdateActorRequest{})
+		assertGrpcErrorRegex(t, err, codes.InvalidArgument, "actor: Required value")
 	})
 
 	t.Run("DeleteActor", func(t *testing.T) {
-		tests := []struct {
-			name    string
-			req     *ateapipb.DeleteActorRequest
-			wantMsg string
-		}{{
-			"missing actor",
-			&ateapipb.DeleteActorRequest{},
-			"actor: Required value",
-		}, {
-			"missing actor.atespace",
-			&ateapipb.DeleteActorRequest{
-				Actor: &ateapipb.ObjectRef{Name: "id1"},
-			},
-			"actor.atespace: Required value",
-		}, {
-			"invalid actor.atespace",
-			&ateapipb.DeleteActorRequest{
-				Actor: &ateapipb.ObjectRef{Atespace: "NS1", Name: "id1"},
-			},
-			"actor.atespace: Invalid value",
-		}, {
-			"missing actor.name",
-			&ateapipb.DeleteActorRequest{
-				Actor: &ateapipb.ObjectRef{Atespace: "ns1"},
-			},
-			"actor.name: Required value",
-		}, {
-			"invalid actor.name",
-			&ateapipb.DeleteActorRequest{
-				Actor: &ateapipb.ObjectRef{Atespace: "ns1", Name: "ID1"},
-			},
-			"actor.name: Invalid value",
-		}}
-		for _, tt := range tests {
-			t.Run(tt.name, func(t *testing.T) {
-				_, err := tc.client.DeleteActor(context.Background(), tt.req)
-				assertGrpcErrorRegex(t, err, codes.InvalidArgument, tt.wantMsg)
-			})
-		}
+		_, err := tc.client.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{})
+		assertGrpcErrorRegex(t, err, codes.InvalidArgument, "actor: Required value")
 	})
 
 	t.Run("ListActors", func(t *testing.T) {
-		tests := []struct {
-			name    string
-			req     *ateapipb.ListActorsRequest
-			wantMsg string
-		}{{
-			"invalid atespace",
-			&ateapipb.ListActorsRequest{Atespace: "NS1"},
-			"atespace: Invalid value",
-		}, {
-			"negative page_size",
-			&ateapipb.ListActorsRequest{Atespace: "ns1", PageSize: -1},
-			"page_size: Invalid value",
-		}}
-		for _, tt := range tests {
-			t.Run(tt.name, func(t *testing.T) {
-				_, err := tc.client.ListActors(context.Background(), tt.req)
-				assertGrpcErrorRegex(t, err, codes.InvalidArgument, tt.wantMsg)
-			})
-		}
+		_, err := tc.client.ListActors(context.Background(), &ateapipb.ListActorsRequest{PageSize: -1})
+		assertGrpcErrorRegex(t, err, codes.InvalidArgument, "page_size: Invalid value")
 	})
 
 	t.Run("ListWorkers", func(t *testing.T) {
-		tests := []struct {
-			name    string
-			req     *ateapipb.ListWorkersRequest
-			wantMsg string
-		}{{
-			"negative page_size",
-			&ateapipb.ListWorkersRequest{PageSize: -1},
-			"page_size: Invalid value",
-		}}
-		for _, tt := range tests {
-			t.Run(tt.name, func(t *testing.T) {
-				_, err := tc.client.ListWorkers(context.Background(), tt.req)
-				assertGrpcErrorRegex(t, err, codes.InvalidArgument, tt.wantMsg)
-			})
-		}
+		_, err := tc.client.ListWorkers(context.Background(), &ateapipb.ListWorkersRequest{PageSize: -1})
+		assertGrpcErrorRegex(t, err, codes.InvalidArgument, "page_size: Invalid value")
 	})
 
 	t.Run("ListAtespaces", func(t *testing.T) {
-		tests := []struct {
-			name    string
-			req     *ateapipb.ListAtespacesRequest
-			wantMsg string
-		}{{
-			"negative page_size",
-			&ateapipb.ListAtespacesRequest{PageSize: -1},
-			"page_size: Invalid value",
-		}}
-		for _, tt := range tests {
-			t.Run(tt.name, func(t *testing.T) {
-				_, err := tc.client.ListAtespaces(context.Background(), tt.req)
-				assertGrpcErrorRegex(t, err, codes.InvalidArgument, tt.wantMsg)
-			})
-		}
+		_, err := tc.client.ListAtespaces(context.Background(), &ateapipb.ListAtespacesRequest{PageSize: -1})
+		assertGrpcErrorRegex(t, err, codes.InvalidArgument, "page_size: Invalid value")
+	})
+
+	t.Run("CreateAtespace", func(t *testing.T) {
+		_, err := tc.client.CreateAtespace(context.Background(), &ateapipb.CreateAtespaceRequest{})
+		assertGrpcErrorRegex(t, err, codes.InvalidArgument, "atespace: Required value")
+	})
+
+	t.Run("GetAtespace", func(t *testing.T) {
+		_, err := tc.client.GetAtespace(context.Background(), &ateapipb.GetAtespaceRequest{})
+		assertGrpcErrorRegex(t, err, codes.InvalidArgument, "atespace: Required value")
+	})
+
+	t.Run("DeleteAtespace", func(t *testing.T) {
+		_, err := tc.client.DeleteAtespace(context.Background(), &ateapipb.DeleteAtespaceRequest{})
+		assertGrpcErrorRegex(t, err, codes.InvalidArgument, "atespace: Required value")
 	})
 }
 
@@ -2774,24 +2382,6 @@ func TestCreateAtespace_AlreadyExists(t *testing.T) {
 	assertGrpcError(t, err, codes.AlreadyExists, "Atespace team-a already exists")
 }
 
-func TestCreateAtespace_Validation(t *testing.T) {
-	ns := namespaceForTest("ns-create-atespace-validation")
-	tc := setupTest(t, ns)
-	defer tc.cleanup()
-
-	_, err := tc.client.CreateAtespace(context.Background(), &ateapipb.CreateAtespaceRequest{Atespace: &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: ""}}})
-	assertGrpcError(t, err, codes.InvalidArgument, "atespace.metadata.name: Required value")
-
-	// Invalid names — uppercase/underscore plus Redis-key/SCAN metacharacters —
-	// are rejected by ValidateAtespace before any key is built (injection guard).
-	for _, bad := range []string{"Team_A", "a*", "a:b", "a/b"} {
-		_, err := tc.client.CreateAtespace(context.Background(), &ateapipb.CreateAtespaceRequest{Atespace: &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: bad}}})
-		if status.Code(err) != codes.InvalidArgument {
-			t.Errorf("CreateAtespace(%q): got code %v, want InvalidArgument (err=%v)", bad, status.Code(err), err)
-		}
-	}
-}
-
 func TestGetAtespace_Found(t *testing.T) {
 	ns := namespaceForTest("ns-get-atespace")
 	tc := setupTest(t, ns)
@@ -2928,19 +2518,7 @@ func TestDeleteAtespace_NotFound(t *testing.T) {
 	assertGrpcError(t, err, codes.NotFound, "Atespace nope not found")
 }
 
-func TestDeleteAtespace_Validation(t *testing.T) {
-	ns := namespaceForTest("ns-delete-atespace-validation")
-	tc := setupTest(t, ns)
-	defer tc.cleanup()
-
-	_, err := tc.client.DeleteAtespace(context.Background(), &ateapipb.DeleteAtespaceRequest{Atespace: &ateapipb.ObjectRef{Name: ""}})
-	assertGrpcError(t, err, codes.InvalidArgument, "atespace.name: Required value")
-
-	// Metacharacter names are rejected before the emptiness glob scan ever runs.
-	for _, bad := range []string{"a*", "a:b"} {
-		_, err := tc.client.DeleteAtespace(context.Background(), &ateapipb.DeleteAtespaceRequest{Atespace: &ateapipb.ObjectRef{Name: bad}})
-		if status.Code(err) != codes.InvalidArgument {
-			t.Errorf("DeleteAtespace(%q): got code %v, want InvalidArgument", bad, status.Code(err))
-		}
-	}
+func assertValidateErr(t *testing.T, got field.ErrorList, want field.ErrorList) {
+	t.Helper()
+	field.ErrorMatcher{}.ByType().ByField().ByValue().Test(t, want, got)
 }

@@ -30,8 +30,8 @@ import (
 )
 
 func (s *Service) CreateActor(ctx context.Context, req *ateapipb.CreateActorRequest) (*ateapipb.Actor, error) {
-	if err := validateCreateActorRequest(req); err != nil {
-		return nil, err
+	if errs := validateCreateActorRequest(req); len(errs) > 0 {
+		return nil, toGRPCStatusError(errs)
 	}
 	in := req.GetActor()
 	templateNamespace := in.GetActorTemplateNamespace()
@@ -94,7 +94,7 @@ func (s *Service) CreateActor(ctx context.Context, req *ateapipb.CreateActorRequ
 	return stored, nil
 }
 
-func validateCreateActorRequest(req *ateapipb.CreateActorRequest) error {
+func validateCreateActorRequest(req *ateapipb.CreateActorRequest) field.ErrorList {
 	var fldPath *field.Path
 	var errs field.ErrorList
 
@@ -102,7 +102,7 @@ func validateCreateActorRequest(req *ateapipb.CreateActorRequest) error {
 	actorPath := fldPath.Child("actor")
 	if actor == nil {
 		errs = append(errs, field.Required(actorPath, ""))
-		return status.Error(codes.InvalidArgument, errs.ToAggregate().Error())
+		return errs
 	}
 
 	metaPath := actorPath.Child("metadata")
@@ -136,10 +136,7 @@ func validateCreateActorRequest(req *ateapipb.CreateActorRequest) error {
 		errs = append(errs, validateSelector(val, actorPath.Child("worker_selector"))...)
 	}
 
-	if len(errs) > 0 {
-		return status.Error(codes.InvalidArgument, errs.ToAggregate().Error())
-	}
-	return nil
+	return errs
 }
 
 func validateSelector(sel *ateapipb.Selector, fldPath *field.Path) field.ErrorList {

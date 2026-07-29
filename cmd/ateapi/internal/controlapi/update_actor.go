@@ -28,8 +28,8 @@ import (
 )
 
 func (s *Service) UpdateActor(ctx context.Context, req *ateapipb.UpdateActorRequest) (*ateapipb.UpdateActorResponse, error) {
-	if err := validateUpdateActorRequest(req); err != nil {
-		return nil, err
+	if errs := validateUpdateActorRequest(req); len(errs) > 0 {
+		return nil, toGRPCStatusError(errs)
 	}
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
 
@@ -53,7 +53,7 @@ func (s *Service) UpdateActor(ctx context.Context, req *ateapipb.UpdateActorRequ
 	return &ateapipb.UpdateActorResponse{Actor: updated}, nil
 }
 
-func validateUpdateActorRequest(req *ateapipb.UpdateActorRequest) error {
+func validateUpdateActorRequest(req *ateapipb.UpdateActorRequest) field.ErrorList {
 	var fldPath *field.Path
 	var errs field.ErrorList
 
@@ -67,8 +67,5 @@ func validateUpdateActorRequest(req *ateapipb.UpdateActorRequest) error {
 		errs = append(errs, validateSelector(val, fldPath.Child("worker_selector"))...)
 	}
 
-	if len(errs) > 0 {
-		return status.Error(codes.InvalidArgument, errs.ToAggregate().Error())
-	}
-	return nil
+	return errs
 }

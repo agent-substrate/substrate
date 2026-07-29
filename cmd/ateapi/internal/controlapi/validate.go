@@ -12,28 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package debugapi
+package controlapi
 
 import (
-	"context"
-	"fmt"
-
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
-func (s *Service) DebugClear(ctx context.Context, req *ateapipb.DebugClearRequest) (*ateapipb.DebugClearResponse, error) {
-	if errs := validateDebugClearRequest(req); len(errs) > 0 {
-		return nil, status.Error(codes.InvalidArgument, errs.ToAggregate().Error())
-	}
-	if err := s.persistence.DebugClearAll(ctx); err != nil {
-		return nil, fmt.Errorf("while running DebugClearAll: %w", err)
-	}
-	return &ateapipb.DebugClearResponse{}, nil
-}
-
-func validateDebugClearRequest(req *ateapipb.DebugClearRequest) field.ErrorList {
-	return nil
+func toGRPCStatusError(errs field.ErrorList) error {
+	return status.Error(codes.InvalidArgument, errs.ToAggregate().Error())
 }
