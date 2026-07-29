@@ -107,6 +107,20 @@ func MissingPlatformMetrics(scrape string, prefixes []string) []string {
 	return missing
 }
 
+// CollectorHasService reports whether any named service has pushed telemetry to
+// the collector. Its prometheus exporter surfaces each pushed resource as a
+// target_info series and stamps the service.name as the job label, so a service
+// that has exported anything shows up under either.
+func CollectorHasService(scrape string, services ...string) bool {
+	for _, svc := range services {
+		if strings.Contains(scrape, `service_name="`+svc+`"`) ||
+			strings.Contains(scrape, `job="`+svc+`"`) {
+			return true
+		}
+	}
+	return false
+}
+
 // metricNameFromLine extracts the metric name from one exposition line, handling
 // the "# HELP name ...", "# TYPE name type", and "name{labels} value" forms.
 // It returns "" for blank lines and other comments.

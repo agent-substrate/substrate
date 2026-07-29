@@ -18,8 +18,11 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.opentelemetry.io/otel/sdk/resource"
 	semconv "go.opentelemetry.io/otel/semconv/v1.21.0"
 )
@@ -104,6 +107,46 @@ func TestHealthzAbsentUnlessEnabled(t *testing.T) {
 	mux := metricsMux(MetricsServerOptions{Readiness: &Readiness{}})
 	if got := getCode(t, mux, "/healthz"); got != http.StatusNotFound {
 		t.Errorf("/healthz without EnableHealthz = %d, want %d", got, http.StatusNotFound)
+	}
+}
+
+func TestInitMetricsPushOnlyHasNoPrometheusSurface(t *testing.T) {
+	mp, err := InitMetricsPushOnly(context.Background(), "test-pushonly")
+	if err != nil {
+		t.Fatalf("InitMetricsPushOnly: %v", err)
+	}
+	// Bound shutdown: the periodic reader would otherwise block flushing to the
+	// unreachable default OTLP endpoint until the export timeout.
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_ = mp.Shutdown(ctx)
+	})
+
+	ctr, err := mp.Meter("test").Int64Counter("ate.test.pushonly.count")
+	if err != nil {
+		t.Fatalf("create counter: %v", err)
+	}
+	ctr.Add(context.Background(), 1)
+
+	// A push-only provider registers no Prometheus reader, so what it records must
+	// not surface on the default registry StartMetricsServer's /metrics serves.
+	rec := httptest.NewRecorder()
+	promhttp.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	if strings.Contains(rec.Body.String(), "ate_test_pushonly") {
+		t.Error("push-only MeterProvider must not expose a Prometheus pull surface")
+	}
+}
+
+func TestInitMetricsPushOnlyRequiresServiceName(t *testing.T) {
+	if _, err := InitMetricsPushOnly(context.Background(), ""); err == nil {
+		t.Error("InitMetricsPushOnly(\"\") must return an error")
+	}
+}
+
+func TestInitMetricsRequiresServiceName(t *testing.T) {
+	if _, err := InitMetrics(context.Background(), ""); err == nil {
+		t.Error("InitMetrics(\"\") must return an error")
 	}
 }
 

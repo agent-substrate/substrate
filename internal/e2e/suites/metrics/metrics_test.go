@@ -73,17 +73,20 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 
 	deadline := time.Now().Add(2 * time.Minute)
 	var missing []string
+	var ateomSeen bool
 	for time.Now().Before(deadline) {
 		scrape, err := e2e.ScrapeCollectorMetrics(ctx)
 		if err != nil {
 			t.Fatalf("ScrapeCollectorMetrics: %v", err)
 		}
-		if missing = e2e.MissingPlatformMetrics(scrape, e2e.PlatformMetricPrefixes); len(missing) == 0 {
+		missing = e2e.MissingPlatformMetrics(scrape, e2e.PlatformMetricPrefixes)
+		ateomSeen = e2e.CollectorHasService(scrape, "ateom-gvisor", "ateom-microvm")
+		if len(missing) == 0 && ateomSeen {
 			return
 		}
 		time.Sleep(3 * time.Second)
 	}
-	t.Fatalf("platform metrics never reached the collector: missing %v", missing)
+	t.Fatalf("platform telemetry never reached the collector: missing metrics %v, ateom pushed=%v", missing, ateomSeen)
 }
 
 func resume(t *testing.T, ctx context.Context, clients *e2e.Clients, actorID string) {

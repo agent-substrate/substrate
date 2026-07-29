@@ -13,6 +13,10 @@ Router has several responsibilities:
 * Runs an xDS server for the Envoy deployment that defines the Cluster information for the ATEs.
   * the xDS configuration will configure Envoy to send traffic to ext_proc
 * Watches the ActorTemplates to get out the definitions for how to route the session IDs.
+* Parks requests whose actor cannot be served immediately due to transient
+  worker-pool saturation, retrying the resume until the actor is routable or a
+  bounded wait elapses, instead of failing fast. See
+  [docs/request-parking.md](../../../../../docs/request-parking.md).
 
 ## status page
 

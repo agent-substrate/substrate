@@ -15,6 +15,7 @@
 package router
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -116,6 +117,36 @@ func TestMapResumeError(t *testing.T) {
 			wantBody: `actor team-a/ctr6 request timed out`,
 		},
 		{
+			name:     "Aborted maps to 503 and preserves desc",
+			err:      status.Error(codes.Aborted, "another operation is in progress for this actor"),
+			wantCode: envoy_type.StatusCode_ServiceUnavailable,
+			wantBody: `actor team-a/ctr6 unavailable: another operation is in progress for this actor`,
+		},
+		{
+			name:     "budget exhausted on Aborted-only maps to 503, not 500",
+			err:      &budgetExhaustedError{lastErr: status.Error(codes.Aborted, "concurrent update conflict, please retry")},
+			wantCode: envoy_type.StatusCode_ServiceUnavailable,
+			wantBody: `actor team-a/ctr6 unavailable: concurrent update conflict, please retry`,
+		},
+		{
+			name:     "budget exhausted on capacity keeps a clean body through the wrapper",
+			err:      &budgetExhaustedError{lastErr: status.Error(codes.FailedPrecondition, "no free workers available")},
+			wantCode: envoy_type.StatusCode_ServiceUnavailable,
+			wantBody: `actor team-a/ctr6 unavailable: no free workers available`,
+		},
+		{
+			name:     "bare context.Canceled maps to 408 client-gone, not 500",
+			err:      context.Canceled,
+			wantCode: envoy_type.StatusCode_RequestTimeout,
+			wantBody: `request for actor team-a/ctr6 canceled by client`,
+		},
+		{
+			name:     "bare context.DeadlineExceeded maps to 504, not 500",
+			err:      context.DeadlineExceeded,
+			wantCode: envoy_type.StatusCode_GatewayTimeout,
+			wantBody: `actor team-a/ctr6 request timed out`,
+		},
+		{
 			name:     "PermissionDenied maps to 403",
 			err:      status.Error(codes.PermissionDenied, "denied"),
 			wantCode: envoy_type.StatusCode_Forbidden,
@@ -191,5 +222,26 @@ func TestMapResumeError_IsReqError(t *testing.T) {
 	var reqErr *reqError
 	if !errors.As(err, &reqErr) {
 		t.Fatalf("errors.As(*reqError) = false, want true; err type = %T", err)
+	}
+}
+
+// TestImmediateResponseHeaderEncoding pins the RawValue encoding: Envoy drops
+// plain Value in ext_proc header mutations, so a Value-encoded header reaches
+// the client with an empty value (found live — content-type on every immediate
+// response had been arriving empty).
+func TestImmediateResponseHeaderEncoding(t *testing.T) {
+	t.Parallel()
+
+	resp := immediateResponse(envoy_type.StatusCode_ServiceUnavailable, "body")
+	set := resp.GetImmediateResponse().GetHeaders().GetSetHeaders()
+	if len(set) != 1 {
+		t.Fatalf("SetHeaders count = %d, want 1", len(set))
+	}
+	h := set[0].GetHeader()
+	if h.GetKey() != "content-type" || string(h.GetRawValue()) != "text/plain" {
+		t.Errorf("header = %q:%q (RawValue), want content-type:text/plain", h.GetKey(), h.GetRawValue())
+	}
+	if h.GetValue() != "" {
+		t.Errorf("header uses Value (%q); must use RawValue only", h.GetValue())
 	}
 }

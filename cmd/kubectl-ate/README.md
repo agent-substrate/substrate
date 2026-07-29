@@ -89,6 +89,12 @@ kubectl ate get actor <actor-name> --atespace <atespace> -o yaml
 
 # List all physical workers and see which actors are assigned to them
 kubectl ate get workers
+
+# Filter workers by Kubernetes namespace, assigned-actor atespace, or
+# worker pool labels (same flags as `top workers`)
+kubectl ate get workers -n <namespace>
+kubectl ate get workers -a <atespace>
+kubectl ate get workers -l <label-selector>
 ```
 
 > **Note:** `get actors` requires either `--atespace <name>` / `-a <name>` (one atespace) or `-A`/`--all-atespaces` (all atespaces) — there is no default atespace. Getting a single actor always requires `--atespace`/`-a`, since an actor is addressed by `(atespace, name)`. `-a` (lower-case) scopes to one atespace; `-A` (upper-case) spans all.

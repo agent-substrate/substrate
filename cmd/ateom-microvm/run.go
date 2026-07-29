@@ -26,6 +26,8 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/ateomnet"
+
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/ch"
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/kata"
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/third_party/kata/agentpb"
@@ -258,12 +260,16 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 
 	// Networking (host side): per-activation veth into the interior netns. The
 	// tap + TC mirror is built below (after the VM exists) so its FDs are fresh.
-	if err := s.setupActorNetwork(ctx); err != nil {
+	if err := ateomnet.SetupActorNetwork(ctx, ateomnet.NetworkConfig{
+		InteriorNetNS:      s.interiorNetNS,
+		HostVethHWAddr:     hostVethHWAddr,
+		SweepInteriorLinks: true,
+	}); err != nil {
 		return fmt.Errorf("while setting up actor network: %w", err)
 	}
 	defer func() {
 		if retErr != nil {
-			if cleanupErr := s.cleanupActorNetwork(ctx); cleanupErr != nil {
+			if cleanupErr := ateomnet.CleanupActorNetwork(ctx, s.interiorNetNS); cleanupErr != nil {
 				slog.WarnContext(ctx, "Failed to clean up actor network after Run failure", slog.Any("err", cleanupErr))
 			}
 			// Detach any bundle rootfs overlays mounted by buildActorContainers
@@ -410,7 +416,7 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 	}
 
 	// Block until every readyz-enabled container reports 200.
-	if err := readyz.WaitAll(ctx, containers, actorVethIP); err != nil {
+	if err := readyz.WaitAll(ctx, containers, ateomnet.ActorVethIP); err != nil {
 		return fmt.Errorf("while waiting for container readyz: %w", err)
 	}
 
@@ -698,25 +704,25 @@ func tailString(s string, n int) string {
 // neighbor entry stays valid).
 func (s *AteomService) configureGuestNetwork(ctx context.Context, ac *kata.AgentClient, mtu uint64) error {
 	if err := ac.UpdateInterface(ctx, &agentpb.Interface{
-		Device: actorVethName,
-		Name:   actorVethName,
+		Device: ateomnet.ActorVethName,
+		Name:   ateomnet.ActorVethName,
 		HwAddr: actorGuestMAC,
 		Mtu:    mtu,
 		IPAddresses: []*agentpb.IPAddress{
-			{Family: agentpb.IPFamily_v4, Address: actorVethIP, Mask: "30"},
+			{Family: agentpb.IPFamily_v4, Address: ateomnet.ActorVethIP, Mask: "30"},
 		},
 	}); err != nil {
 		return err
 	}
 	if err := ac.UpdateRoutes(ctx, []*agentpb.Route{
-		{Dest: actorVethSubnet, Device: actorVethName, Scope: uint32(unix.RT_SCOPE_LINK), Family: agentpb.IPFamily_v4},
-		{Dest: "", Gateway: actorVethGateway, Device: actorVethName, Family: agentpb.IPFamily_v4},
+		{Dest: ateomnet.ActorVethSubnet, Device: ateomnet.ActorVethName, Scope: uint32(unix.RT_SCOPE_LINK), Family: agentpb.IPFamily_v4},
+		{Dest: "", Gateway: ateomnet.ActorVethGateway, Device: ateomnet.ActorVethName, Family: agentpb.IPFamily_v4},
 	}); err != nil {
 		return err
 	}
 	return ac.AddARPNeighbors(ctx, []*agentpb.ARPNeighbor{{
-		ToIPAddress: &agentpb.IPAddress{Family: agentpb.IPFamily_v4, Address: actorVethGateway},
-		Device:      actorVethName,
+		ToIPAddress: &agentpb.IPAddress{Family: agentpb.IPFamily_v4, Address: ateomnet.ActorVethGateway},
+		Device:      ateomnet.ActorVethName,
 		Lladdr:      hostVethMAC,
 		State:       0x80, // NUD_PERMANENT
 	}})

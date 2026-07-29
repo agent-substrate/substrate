@@ -25,6 +25,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
@@ -125,6 +126,16 @@ func (s *RouterServer) Run(ctx context.Context) error {
 		cancel()
 	}()
 
+	// Validate the configuration before doing any other work, so a bad flag
+	// combination fails fast — no tracing, metrics, or connections are set up
+	// for a router that is about to refuse to start. The parking config is
+	// resolved once here so every consumer — the resumer's retry loop and the
+	// Envoy ext_proc timeout — sees the same effective values.
+	if err := s.cfg.validate(); err != nil {
+		return fmt.Errorf("invalid router configuration: %w", err)
+	}
+	parkCfg := s.cfg.ParkedRequest.normalized()
+
 	var level slog.Level
 	switch strings.ToLower(s.cfg.LogLevel) {
 	case "debug":
@@ -189,13 +200,24 @@ func (s *RouterServer) Run(ctx context.Context) error {
 		return fmt.Errorf("configure OTLP collector: %w", err)
 	}
 
+	xdsSrv.SetExtProcMaxRequests(s.cfg.extProcMaxRequests())
+	if parkCfg.enabled() {
+		// Envoy must keep a parked request open at least as long as the router
+		// will hold it; add a margin so the router surfaces its own 503 first.
+		xdsSrv.SetExtProcMessageTimeout(parkCfg.Budget + 5*time.Second)
+	}
+
 	xdsSrv.SetTlsConfig(s.cfg.HttpsPort, s.cfg.EnvoyCertPath)
 	if s.extprocSrv == nil {
 		routeDuration, err := newRouteDurationHistogram()
 		if err != nil {
 			return fmt.Errorf("failed to create route-duration histogram: %w", err)
 		}
-		s.extprocSrv = NewExtProcServer(s.cfg.ExtprocPort, s.apiClient, routeDuration)
+		parkMetrics, err := newParkingMetrics()
+		if err != nil {
+			return fmt.Errorf("failed to create parking metrics: %w", err)
+		}
+		s.extprocSrv = NewExtProcServer(s.cfg.ExtprocPort, s.apiClient, routeDuration, parkCfg, parkMetrics)
 	}
 	ctrl := NewController(s.k8sClient, s.clientset, s.cfg, xdsSrv, s.extprocSrv)
 

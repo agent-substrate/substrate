@@ -54,9 +54,11 @@ func immediateResponse(statusCode envoy_type.StatusCode, message string) *extpro
 				Headers: &extproc.HeaderMutation{
 					SetHeaders: []*corev3.HeaderValueOption{
 						{
+							// Using RawValues instead of Value: newer versions of Envoy
+							// drop Value and use RawValue
 							Header: &corev3.HeaderValue{
-								Key:   "content-type",
-								Value: "text/plain",
+								Key:      "content-type",
+								RawValue: []byte("text/plain"),
 							},
 						},
 					},

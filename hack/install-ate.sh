@@ -43,6 +43,7 @@ source "${ROOT}"/hack/install-demo-counter.sh
 source "${ROOT}"/hack/install-demo-sandbox.sh
 source "${ROOT}"/hack/install-demo-claude-code-multiplex.sh
 source "${ROOT}"/hack/install-demo-multi-template.sh
+source "${ROOT}"/hack/install-demo-parking.sh
 
 # ANSI color codes for prettier output
 COLOR_CYAN='\033[1;36m'

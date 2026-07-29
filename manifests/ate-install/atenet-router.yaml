@@ -239,3 +239,7 @@ spec:
     port: 443
     targetPort: 8443
     protocol: TCP
+  - name: status
+    port: 4040
+    targetPort: status
+    protocol: TCP

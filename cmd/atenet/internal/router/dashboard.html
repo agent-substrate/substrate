@@ -275,6 +275,26 @@
             </div>
 
             <div class="card">
+                <div class="card-title">Request Parking</div>
+                <div class="metadata-item">
+                    <span class="label">Status</span>
+                    {{ if .Parking.Enabled }}
+                    <span class="value badge" style="background: rgba(16, 185, 129, 0.1); color: #10b981;">Enabled</span>
+                    {{ else }}
+                    <span class="value badge" style="background: rgba(148, 163, 184, 0.1); color: var(--text-secondary);">Disabled</span>
+                    {{ end }}
+                </div>
+                <div class="metadata-item">
+                    <span class="label">Currently Parked</span>
+                    <span class="value">{{ .Parking.Active }} / {{ .Parking.MaxParked }}</span>
+                </div>
+                <div class="metadata-item">
+                    <span class="label">Max Wait</span>
+                    <span class="value">{{ .Parking.MaxWait }}</span>
+                </div>
+            </div>
+
+            <div class="card">
                 <div class="card-title">System Component Health Checks</div>
 
                 <div class="metadata-item">
