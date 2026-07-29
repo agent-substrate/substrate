@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -38,9 +39,17 @@ import (
 
 // setupSyncerTest sets up a real store with fake Redis and a fake K8s client with informer.
 func setupSyncerTest(t *testing.T, ctx context.Context, initPools ...*atev1alpha1.WorkerPool) (store.Interface, *fake.Clientset, *atefake.Clientset, func()) {
+	return setupSyncerTestWithStore(t, ctx, nil, initPools...)
+}
+
+func setupSyncerTestWithStore(t *testing.T, ctx context.Context, wrapStore func(store.Interface) store.Interface, initPools ...*atev1alpha1.WorkerPool) (store.Interface, *fake.Clientset, *atefake.Clientset, func()) {
 	t.Helper()
 
 	persistence, cleanup := storetest.SetupTestStore(t)
+	if wrapStore != nil {
+		persistence = wrapStore(persistence)
+	}
+
 
 	fakeK8s := fake.NewSimpleClientset()
 	workerFactory, workerInformer := WorkerPodInformer(fakeK8s)
@@ -361,3 +370,143 @@ func TestSyncer_OmittedFields(t *testing.T) {
 		t.Fatalf("Worker state check failed: %v", err)
 	}
 }
+
+type conflictStore struct {
+	store.Interface
+	conflictTriggered atomic.Bool
+	onUpdate          func(ctx context.Context, worker *ateapipb.Worker)
+}
+
+func (c *conflictStore) UpdateWorker(ctx context.Context, worker *ateapipb.Worker, expectedVersion int64) error {
+	if c.onUpdate != nil && c.conflictTriggered.CompareAndSwap(false, true) {
+		c.onUpdate(ctx, worker)
+	}
+	return c.Interface.UpdateWorker(ctx, worker, expectedVersion)
+}
+
+func TestSyncer_UpdateWorker_RetryOnVersionConflict(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	ns := "ns-syncer-conflict"
+	podName := "worker-unit-conflict"
+	poolName := "pool-conflict"
+
+	pool := &atev1alpha1.WorkerPool{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      poolName,
+			Namespace: ns,
+			Labels:    map[string]string{"foo": "bar"},
+		},
+		Spec: atev1alpha1.WorkerPoolSpec{
+			SandboxClass: "gvisor",
+		},
+	}
+
+	var cs *conflictStore
+	persistence, fakeK8s, fakeAte, cleanup := setupSyncerTestWithStore(t, ctx, func(s store.Interface) store.Interface {
+		cs = &conflictStore{Interface: s}
+		return cs
+	}, pool)
+	defer cleanup()
+
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      podName,
+			Namespace: ns,
+			UID:       "11111111-2222-3333-4444-555555555555",
+			Labels: map[string]string{
+				workerPodLabel: poolName,
+			},
+		},
+		Spec: corev1.PodSpec{
+			NodeName:   "node1",
+			Containers: []corev1.Container{{Name: "main", Image: "nginx"}},
+		},
+		Status: corev1.PodStatus{
+			Phase:  corev1.PodRunning,
+			PodIP:  "10.0.0.1",
+			PodIPs: []corev1.PodIP{{IP: "10.0.0.1"}},
+		},
+	}
+
+	_, err := fakeK8s.CoreV1().Pods(ns).Create(context.Background(), pod, metav1.CreateOptions{})
+	if err != nil {
+		t.Fatalf("failed to create pod: %v", err)
+	}
+
+	err = wait.PollUntilContextTimeout(context.Background(), 100*time.Millisecond, 2*time.Second, true, func(ctx context.Context) (bool, error) {
+		w, err := persistence.GetWorker(ctx, ns, poolName, podName)
+		if err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				return false, nil
+			}
+			return false, err
+		}
+		return w.Ip == "10.0.0.1", nil
+	})
+	if err != nil {
+		t.Fatalf("Worker state check failed: %v", err)
+	}
+
+	// Update the pool SandboxClass in K8s (a mutable worker field).
+	updatedPool, err := fakeAte.ApiV1alpha1().WorkerPools(ns).Get(context.Background(), poolName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("failed to get pool: %v", err)
+	}
+	updatedPool.Spec.SandboxClass = "microvm"
+	if _, err := fakeAte.ApiV1alpha1().WorkerPools(ns).Update(context.Background(), updatedPool, metav1.UpdateOptions{}); err != nil {
+		t.Fatalf("failed to update pool: %v", err)
+	}
+
+	// Wait until the WorkerPool informer cache reflects the updated SandboxClass before triggering the pod update.
+	err = wait.PollUntilContextTimeout(context.Background(), 50*time.Millisecond, 2*time.Second, true, func(ctx context.Context) (bool, error) {
+		p, err := fakeAte.ApiV1alpha1().WorkerPools(ns).Get(ctx, poolName, metav1.GetOptions{})
+		if err != nil {
+			return false, nil
+		}
+		return p.Spec.SandboxClass == "microvm", nil
+	})
+	if err != nil {
+		t.Fatalf("pool informer cache failed to update: %v", err)
+	}
+
+	// Configure conflictStore to inject a concurrent version bump in Redis when syncWorkerToStore calls UpdateWorker.
+	cs.onUpdate = func(c context.Context, w *ateapipb.Worker) {
+		if cw, err := cs.Interface.GetWorker(c, ns, poolName, podName); err == nil {
+			cw.NodeName = "node2"
+			_ = cs.Interface.UpdateWorker(c, cw, cw.Version)
+		}
+	}
+
+	// Touch the pod ONCE in K8s so WorkerPoolSyncer triggers syncWorkerToStore. It will attempt an update
+	// with its cached/old worker version and encounter ErrVersionConflict (injected by conflictStore),
+	// requiring it to retry by fetching the latest version from Redis.
+	updatedPod, err := fakeK8s.CoreV1().Pods(ns).Get(context.Background(), podName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("failed to get pod: %v", err)
+	}
+	if updatedPod.Annotations == nil {
+		updatedPod.Annotations = make(map[string]string)
+	}
+	updatedPod.Annotations["trigger"] = "update"
+	if _, err := fakeK8s.CoreV1().Pods(ns).Update(context.Background(), updatedPod, metav1.UpdateOptions{}); err != nil {
+		t.Fatalf("failed to update pod: %v", err)
+	}
+
+	// Verify that the worker in Redis eventually gets updated to the new SandboxClass despite the version conflict.
+	err = wait.PollUntilContextTimeout(context.Background(), 100*time.Millisecond, 2*time.Second, true, func(ctx context.Context) (bool, error) {
+		w, err := persistence.GetWorker(ctx, ns, poolName, podName)
+		if err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				return false, nil
+			}
+			return false, err
+		}
+		return w.SandboxClass == "microvm" && w.NodeName == "node2", nil
+	})
+	if err != nil {
+		t.Fatalf("Worker failed to update SandboxClass after version conflict: %v", err)
+	}
+}
+
