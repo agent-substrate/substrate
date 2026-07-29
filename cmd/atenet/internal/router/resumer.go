@@ -17,6 +17,7 @@ package router
 import (
 	"context"
 	"math"
+	"sync/atomic"
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/ateattr"
@@ -64,6 +65,25 @@ type budgetExhaustedError struct{ lastErr error }
 func (e *budgetExhaustedError) Error() string { return e.lastErr.Error() }
 func (e *budgetExhaustedError) Unwrap() error { return e.lastErr }
 
+// ResumeOutcome indicates the singleflight execution state of an actor resumption request.
+type ResumeOutcome string
+
+const (
+	// ResumeOutcomeNone indicates the actor was already running (steady-state warm route).
+	ResumeOutcomeNone ResumeOutcome = "none"
+	// ResumeOutcomeTriggered indicates this request won the singleflight lock and initiated cold activation.
+	ResumeOutcomeTriggered ResumeOutcome = "triggered"
+	// ResumeOutcomeJoined indicates this request parked on an in-flight singleflight resume.
+	ResumeOutcomeJoined ResumeOutcome = "joined"
+)
+
+type resumeCallResult struct {
+	actor    *ateapipb.Actor
+	resumed  bool
+	leaderID uint64
+	err      error
+}
+
 // ActorResumer coordinates safe, deduplicated resumption of actors.
 type ActorResumer struct {
 	apiClient ateapipb.ControlClient
@@ -78,6 +98,7 @@ type ActorResumer struct {
 	budget time.Duration
 	// backoff paces the retries within the budget.
 	backoff wait.Backoff
+	nextID  uint64
 }
 
 // resumerOption configures an ActorResumer.
@@ -134,10 +155,12 @@ func (r *ActorResumer) retryable(err error) bool {
 // ResumeActor ensures the requested actor is running. It deduplicates concurrent
 // requests within the process and, when parking is enabled, holds the request
 // while retrying transient failures until the budget elapses.
-func (r *ActorResumer) ResumeActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error) {
+func (r *ActorResumer) ResumeActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, ResumeOutcome, error) {
 	ctx, span := otel.Tracer(routerServiceName).Start(ctx, "ResumeActor",
 		trace.WithAttributes(ateattr.ActorRefAttributes(actorRef)...))
 	defer span.End()
+
+	reqID := atomic.AddUint64(&r.nextID, 1)
 
 	ch := r.flight.DoChan(actorRef.String(), func() (interface{}, error) {
 		// We detach the context from the first caller using a fixed background budget.
@@ -167,8 +190,8 @@ func (r *ActorResumer) ResumeActor(ctx context.Context, actorRef resources.Actor
 			}
 
 			if r.retryable(err) {
-				lastRetryErr = err // remember it in case the budget elapses
-				return false, nil  // park: retry until the budget elapses
+				lastRetryErr = err
+				return false, nil
 			}
 			return false, err
 		})
@@ -187,21 +210,42 @@ func (r *ActorResumer) ResumeActor(ctx context.Context, actorRef resources.Actor
 			// as a 504. bgCtx is this loop's only deadline source, so checking it
 			// covers both landing spots (mid-RPC and between retries).
 			if lastRetryErr != nil && (bgCtx.Err() != nil || wait.Interrupted(err)) {
-				return nil, &budgetExhaustedError{lastErr: lastRetryErr}
+				return &resumeCallResult{leaderID: reqID, err: &budgetExhaustedError{lastErr: lastRetryErr}}, nil
 			}
-			return nil, err
+			return &resumeCallResult{leaderID: reqID, err: err}, nil
 		}
 
-		return resumeResp.GetActor(), nil
+		return &resumeCallResult{
+			actor:    resumeResp.GetActor(),
+			resumed:  resumeResp.GetResumed(),
+			leaderID: reqID,
+		}, nil
 	})
 
 	select {
 	case <-ctx.Done():
-		return nil, ctx.Err()
+		return nil, ResumeOutcomeNone, ctx.Err()
 	case res := <-ch:
-		if res.Err != nil {
-			return nil, res.Err
+		callRes, _ := res.Val.(*resumeCallResult)
+		if callRes == nil {
+			if res.Err != nil {
+				return nil, ResumeOutcomeNone, res.Err
+			}
+			return nil, ResumeOutcomeNone, status.Error(codes.Internal, "resume call returned nil result")
 		}
-		return res.Val.(*ateapipb.Actor), nil
+		if callRes.err != nil {
+			return nil, ResumeOutcomeNone, callRes.err
+		}
+
+		outcome := ResumeOutcomeNone
+		if callRes.resumed {
+			if callRes.leaderID == reqID {
+				outcome = ResumeOutcomeTriggered
+			} else {
+				outcome = ResumeOutcomeJoined
+			}
+		}
+
+		return callRes.actor, outcome, nil
 	}
 }
