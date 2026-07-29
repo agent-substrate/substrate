@@ -41,28 +41,28 @@ const (
 type ExternalVolume_Status int32
 
 const (
-	ExternalVolume_STATUS_UNKNOWN ExternalVolume_Status = 0
+	ExternalVolume_STATUS_UNSPECIFIED ExternalVolume_Status = 0
 	// Volume creation pending in the storage system.
-	ExternalVolume_PENDING ExternalVolume_Status = 1
+	ExternalVolume_STATUS_PENDING ExternalVolume_Status = 1
 	// Volume successfully created in the storage system.
-	ExternalVolume_CREATED ExternalVolume_Status = 2
+	ExternalVolume_STATUS_CREATED ExternalVolume_Status = 2
 	// Volume being deleted from the storage system.
-	ExternalVolume_DELETING ExternalVolume_Status = 3
+	ExternalVolume_STATUS_DELETING ExternalVolume_Status = 3
 )
 
 // Enum value maps for ExternalVolume_Status.
 var (
 	ExternalVolume_Status_name = map[int32]string{
-		0: "STATUS_UNKNOWN",
-		1: "PENDING",
-		2: "CREATED",
-		3: "DELETING",
+		0: "STATUS_UNSPECIFIED",
+		1: "STATUS_PENDING",
+		2: "STATUS_CREATED",
+		3: "STATUS_DELETING",
 	}
 	ExternalVolume_Status_value = map[string]int32{
-		"STATUS_UNKNOWN": 0,
-		"PENDING":        1,
-		"CREATED":        2,
-		"DELETING":       3,
+		"STATUS_UNSPECIFIED": 0,
+		"STATUS_PENDING":     1,
+		"STATUS_CREATED":     2,
+		"STATUS_DELETING":    3,
 	}
 )
 
@@ -597,7 +597,7 @@ func (x *ExternalVolume) GetStatus() ExternalVolume_Status {
 	if x != nil {
 		return x.Status
 	}
-	return ExternalVolume_STATUS_UNKNOWN
+	return ExternalVolume_STATUS_UNSPECIFIED
 }
 
 type Actor struct {
@@ -2418,19 +2418,19 @@ const file_ateapi_proto_rawDesc = "" +
 	"\vcreate_time\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"createTime\x12;\n" +
 	"\vupdate_time\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
-	"updateTime\"\xfb\x01\n" +
+	"updateTime\"\x94\x02\n" +
 	"\x0eExternalVolume\x12\x1f\n" +
 	"\vvolume_name\x18\x01 \x01(\tR\n" +
 	"volumeName\x12*\n" +
 	"\x11storage_volume_id\x18\x02 \x01(\tR\x0fstorageVolumeId\x12\x1f\n" +
 	"\vvolume_type\x18\x03 \x01(\tR\n" +
 	"volumeType\x125\n" +
-	"\x06status\x18\x04 \x01(\x0e2\x1d.ateapi.ExternalVolume.StatusR\x06status\"D\n" +
-	"\x06Status\x12\x12\n" +
-	"\x0eSTATUS_UNKNOWN\x10\x00\x12\v\n" +
-	"\aPENDING\x10\x01\x12\v\n" +
-	"\aCREATED\x10\x02\x12\f\n" +
-	"\bDELETING\x10\x03\"\xd6\x06\n" +
+	"\x06status\x18\x04 \x01(\x0e2\x1d.ateapi.ExternalVolume.StatusR\x06status\"]\n" +
+	"\x06Status\x12\x16\n" +
+	"\x12STATUS_UNSPECIFIED\x10\x00\x12\x12\n" +
+	"\x0eSTATUS_PENDING\x10\x01\x12\x12\n" +
+	"\x0eSTATUS_CREATED\x10\x02\x12\x13\n" +
+	"\x0fSTATUS_DELETING\x10\x03\"\xd6\x06\n" +
 	"\x05Actor\x124\n" +
 	"\bmetadata\x18\x01 \x01(\v2\x18.ateapi.ResourceMetadataR\bmetadata\x128\n" +
 	"\x18actor_template_namespace\x18\x02 \x01(\tR\x16actorTemplateNamespace\x12.\n" +

@@ -133,7 +133,7 @@ func (s *CreateVolumesStep) Name() string { return "CreateVolumes" }
 
 func (s *CreateVolumesStep) IsComplete(ctx context.Context, input *ResumeInput, state *ResumeState) (bool, error) {
 	for _, vol := range state.Actor.GetActorVolumes() {
-		if vol.GetStatus() == ateapipb.ExternalVolume_PENDING {
+		if vol.GetStatus() == ateapipb.ExternalVolume_STATUS_PENDING {
 			return false, nil
 		}
 	}

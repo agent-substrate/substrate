@@ -72,7 +72,7 @@ func (s *Service) CreateActor(ctx context.Context, req *ateapipb.CreateActorRequ
 		ActorTemplateNamespace: templateNamespace,
 		ActorTemplateName:      templateName,
 		WorkerSelector:         in.GetWorkerSelector(),
-		ActorVolumes:           initVols,
+		ActorVolumes:           initVols, // TODO: validate external volume fields
 	}
 	stored, err := s.persistence.CreateActor(ctx, actor)
 	if err != nil {

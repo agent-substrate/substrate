@@ -45,7 +45,7 @@ func initialActorVolumes(template *atev1alpha1.ActorTemplate) []*ateapipb.Extern
 			volumes = append(volumes, &ateapipb.ExternalVolume{
 				VolumeName: vol.Name,
 				VolumeType: "mock", // TODO fix when we support multiple plugins
-				Status:     ateapipb.ExternalVolume_PENDING,
+				Status:     ateapipb.ExternalVolume_STATUS_PENDING,
 			})
 		}
 	}
@@ -83,12 +83,12 @@ func createActorVolumes(ctx context.Context, actorUID string, template *atev1alp
 		}
 
 		switch vol.GetStatus() {
-		case ateapipb.ExternalVolume_PENDING:
+		case ateapipb.ExternalVolume_STATUS_PENDING:
 			// proceed with volume creation
-		case ateapipb.ExternalVolume_CREATED:
+		case ateapipb.ExternalVolume_STATUS_CREATED:
 			resultVolumes = append(resultVolumes, vol)
 			continue
-		case ateapipb.ExternalVolume_DELETING:
+		case ateapipb.ExternalVolume_STATUS_DELETING:
 			return resultVolumes, status.Errorf(codes.FailedPrecondition, "cannot create volume %q in DELETING status", volName)
 		default:
 			return resultVolumes, status.Errorf(codes.Internal, "unexpected status %s for volume %q", vol.GetStatus(), volName)
@@ -109,7 +109,7 @@ func createActorVolumes(ctx context.Context, actorUID string, template *atev1alp
 			VolumeName:      volName,
 			StorageVolumeId: storageVolumeID,
 			VolumeType:      vol.GetVolumeType(),
-			Status:          ateapipb.ExternalVolume_CREATED,
+			Status:          ateapipb.ExternalVolume_STATUS_CREATED,
 		})
 	}
 	return resultVolumes, nil

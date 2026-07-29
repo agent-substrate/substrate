@@ -126,13 +126,13 @@ message ExternalVolume {
   string volume_type = 3;
 
   enum Status {
-    STATUS_UNKNOWN = 0;
+    STATUS_UNSPECIFIED = 0;
     // Volume creation pending in the storage system.
-    PENDING = 1;
+    STATUS_PENDING = 1;
     // Volume successfully created in the storage system.
-    CREATED = 2;
+    STATUS_CREATED = 2;
     // Volume being deleted from the storage system.
-    DELETING = 3;
+    STATUS_DELETING = 3;
   }
   Status status = 4;
 }

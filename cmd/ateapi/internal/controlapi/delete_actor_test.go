@@ -182,8 +182,8 @@ func TestDeleteActor_MultipleVolumeDeletionFailures(t *testing.T) {
 		ActorTemplateNamespace: ns,
 		ActorTemplateName:      "tmpl1",
 		ActorVolumes: []*ateapipb.ExternalVolume{
-			{VolumeName: "vol1", StorageVolumeId: "storage-vol-1", Status: ateapipb.ExternalVolume_CREATED},
-			{VolumeName: "vol2", StorageVolumeId: "storage-vol-2", Status: ateapipb.ExternalVolume_CREATED},
+			{VolumeName: "vol1", StorageVolumeId: "storage-vol-1", Status: ateapipb.ExternalVolume_STATUS_CREATED},
+			{VolumeName: "vol2", StorageVolumeId: "storage-vol-2", Status: ateapipb.ExternalVolume_STATUS_CREATED},
 		},
 	}
 	if _, err := tc.persistence.CreateActor(context.Background(), actor); err != nil {

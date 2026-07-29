@@ -83,7 +83,7 @@ func (s *MarkDeletingStep) CheckPrerequisite(ctx context.Context, input *DeleteI
 func (s *MarkDeletingStep) Execute(ctx context.Context, input *DeleteInput, state *DeleteState) error {
 	state.Actor.Status = ateapipb.Actor_STATUS_DELETING
 	for _, vol := range state.Actor.GetActorVolumes() {
-		vol.Status = ateapipb.ExternalVolume_DELETING
+		vol.Status = ateapipb.ExternalVolume_STATUS_DELETING
 	}
 	updated, err := s.store.UpdateActor(ctx, state.Actor, state.Actor.GetMetadata().GetVersion())
 	if err != nil {

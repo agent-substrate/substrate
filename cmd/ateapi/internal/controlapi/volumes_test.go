@@ -63,12 +63,12 @@ func TestInitialActorVolumes_PendingState(t *testing.T) {
 		{
 			VolumeName: "data-vol-1",
 			VolumeType: "mock",
-			Status:     ateapipb.ExternalVolume_PENDING,
+			Status:     ateapipb.ExternalVolume_STATUS_PENDING,
 		},
 		{
 			VolumeName: "data-vol-2",
 			VolumeType: "mock",
-			Status:     ateapipb.ExternalVolume_PENDING,
+			Status:     ateapipb.ExternalVolume_STATUS_PENDING,
 		},
 	}
 
@@ -141,15 +141,15 @@ func TestCreateActorVolumes(t *testing.T) {
 				{
 					VolumeName: "vol1",
 					VolumeType: "mock",
-					Status:     ateapipb.ExternalVolume_PENDING,
+					Status:     ateapipb.ExternalVolume_STATUS_PENDING,
 				},
 				{
 					VolumeName: "vol2",
-					Status:     ateapipb.ExternalVolume_DELETING,
+					Status:     ateapipb.ExternalVolume_STATUS_DELETING,
 				},
 				{
 					VolumeName: "vol3",
-					Status:     ateapipb.ExternalVolume_PENDING,
+					Status:     ateapipb.ExternalVolume_STATUS_PENDING,
 				},
 			},
 			wantErr: true,
@@ -158,15 +158,15 @@ func TestCreateActorVolumes(t *testing.T) {
 					VolumeName:      "vol1",
 					StorageVolumeId: "mock-vol-substrate-actor-uid-123-vol1",
 					VolumeType:      "mock",
-					Status:          ateapipb.ExternalVolume_CREATED,
+					Status:          ateapipb.ExternalVolume_STATUS_CREATED,
 				},
 				{
 					VolumeName: "vol2",
-					Status:     ateapipb.ExternalVolume_DELETING,
+					Status:     ateapipb.ExternalVolume_STATUS_DELETING,
 				},
 				{
 					VolumeName: "vol3",
-					Status:     ateapipb.ExternalVolume_PENDING,
+					Status:     ateapipb.ExternalVolume_STATUS_PENDING,
 				},
 			},
 		},
@@ -177,7 +177,7 @@ func TestCreateActorVolumes(t *testing.T) {
 				{
 					VolumeName:      "data-vol",
 					StorageVolumeId: "existing-vol-id",
-					Status:          ateapipb.ExternalVolume_CREATED,
+					Status:          ateapipb.ExternalVolume_STATUS_CREATED,
 				},
 			},
 			wantErr: false,
@@ -185,24 +185,24 @@ func TestCreateActorVolumes(t *testing.T) {
 				{
 					VolumeName:      "data-vol",
 					StorageVolumeId: "existing-vol-id",
-					Status:          ateapipb.ExternalVolume_CREATED,
+					Status:          ateapipb.ExternalVolume_STATUS_CREATED,
 				},
 			},
 		},
 		{
-			name: "unknown volume status returns error",
+			name: "unspecified volume status returns error",
 			tmpl: standardTmpl,
 			inputVolumes: []*ateapipb.ExternalVolume{
 				{
 					VolumeName: "data-vol",
-					Status:     ateapipb.ExternalVolume_STATUS_UNKNOWN,
+					Status:     ateapipb.ExternalVolume_STATUS_UNSPECIFIED,
 				},
 			},
 			wantErr: true,
 			wantRes: []*ateapipb.ExternalVolume{
 				{
 					VolumeName: "data-vol",
-					Status:     ateapipb.ExternalVolume_STATUS_UNKNOWN,
+					Status:     ateapipb.ExternalVolume_STATUS_UNSPECIFIED,
 				},
 			},
 		},
@@ -216,14 +216,14 @@ func TestCreateActorVolumes(t *testing.T) {
 			inputVolumes: []*ateapipb.ExternalVolume{
 				{
 					VolumeName: "missing-vol",
-					Status:     ateapipb.ExternalVolume_PENDING,
+					Status:     ateapipb.ExternalVolume_STATUS_PENDING,
 				},
 			},
 			wantErr: true,
 			wantRes: []*ateapipb.ExternalVolume{
 				{
 					VolumeName: "missing-vol",
-					Status:     ateapipb.ExternalVolume_PENDING,
+					Status:     ateapipb.ExternalVolume_STATUS_PENDING,
 				},
 			},
 		},
@@ -276,7 +276,7 @@ func TestDeleteActorVolumes(t *testing.T) {
 			name:     "falls back to actorVolumeID when storage volume ID is empty regardless of status",
 			actorUID: "uid-abc",
 			volumes: []*ateapipb.ExternalVolume{
-				{VolumeName: "vol1", StorageVolumeId: "", Status: ateapipb.ExternalVolume_CREATED},
+				{VolumeName: "vol1", StorageVolumeId: "", Status: ateapipb.ExternalVolume_STATUS_CREATED},
 			},
 			wantDeleted: []string{"substrate-uid-abc-vol1"},
 			wantErr:     false,
