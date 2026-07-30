@@ -1,0 +1,929 @@
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+// Package atepg is an experimental ate storage backend built on PostgreSQL.
+// See docs/postgres-store.md for an implementation overview.
+//
+// Each table holds native SQL columns for fields SQL must operate on
+// (primary keys, versions, timestamps, pagination, update/delete
+// preconditions) plus the complete protobuf message, binary-encoded, in a
+// BYTEA column. TLS is configured entirely through the connection string
+// passed to Connect (standard libpq sslmode/sslrootcert/sslcert/sslkey
+// parameters); no bespoke TLS plumbing is needed.
+package atepg
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
+	"time"
+
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/internal/resources"
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
+)
+
+// Persistence is a service that stores ate state in PostgreSQL.
+type Persistence struct {
+	pool    *pgxpool.Pool
+	lockTTL time.Duration
+}
+
+var _ store.Interface = (*Persistence)(nil)
+
+// Connect opens a pgxpool against dsn, verifies connectivity, and applies the
+// embedded schema. Startup fails if the database cannot be reached.
+func Connect(ctx context.Context, dsn string) (*Persistence, error) {
+	pool, err := pgxpool.New(ctx, dsn)
+	if err != nil {
+		return nil, fmt.Errorf("opening PostgreSQL pool: %w", err)
+	}
+	if err := pool.Ping(ctx); err != nil {
+		pool.Close()
+		return nil, fmt.Errorf("pinging PostgreSQL: %w", err)
+	}
+	p, err := NewPersistence(ctx, pool)
+	if err != nil {
+		pool.Close()
+		return nil, err
+	}
+	return p, nil
+}
+
+// NewPersistence wraps an already-open pool, applying the idempotent schema.
+// Callers that already hold a pool (e.g. tests using
+// testcontainers) use this directly instead of Connect.
+func NewPersistence(ctx context.Context, pool *pgxpool.Pool) (*Persistence, error) {
+	if err := applySchema(ctx, pool); err != nil {
+		return nil, err
+	}
+	return &Persistence{pool: pool, lockTTL: defaultLockTTL}, nil
+}
+
+// querier is satisfied by both *pgxpool.Pool and pgx.Tx, letting read helpers
+// run either directly against the pool or inside an in-flight transaction.
+type querier interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+}
+
+func newCreateMetadata(atespace, name string) *ateapipb.ResourceMetadata {
+	now := timestamppb.Now()
+	return &ateapipb.ResourceMetadata{
+		Atespace:   atespace,
+		Name:       name,
+		Uid:        uuid.NewString(),
+		Version:    1,
+		CreateTime: now,
+		UpdateTime: now,
+	}
+}
+
+func newUpdateMetadata(current *ateapipb.ResourceMetadata) *ateapipb.ResourceMetadata {
+	metadata := proto.Clone(current).(*ateapipb.ResourceMetadata)
+	metadata.Version++
+	metadata.UpdateTime = timestamppb.Now()
+	return metadata
+}
+
+func isUniqueViolation(err error) bool { return pgErrCode(err) == "23505" }
+
+// isForeignKeyViolation matches both the insert/update-side violation
+// (23503, foreign_key_violation) and the delete-side violation PostgreSQL 18
+// split out into its own code (23001, restrict_violation, for ON DELETE
+// RESTRICT); older PostgreSQL versions report 23503 for both cases.
+func isForeignKeyViolation(err error) bool {
+	switch pgErrCode(err) {
+	case "23503", "23001":
+		return true
+	default:
+		return false
+	}
+}
+
+func pgErrCode(err error) string {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr.Code
+	}
+	return ""
+}
+
+// --- Atespaces ---
+
+func (p *Persistence) CreateAtespace(ctx context.Context, atespace *ateapipb.Atespace) (*ateapipb.Atespace, error) {
+	name := atespace.GetMetadata().GetName()
+
+	dbAtespace := proto.Clone(atespace).(*ateapipb.Atespace)
+	dbAtespace.Metadata = newCreateMetadata("", name)
+
+	protoBytes, err := proto.Marshal(dbAtespace)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling atespace: %w", err)
+	}
+
+	meta := dbAtespace.GetMetadata()
+	_, err = p.pool.Exec(ctx, `
+		INSERT INTO atespaces (name, uid, version, create_time, update_time, proto)
+		VALUES ($1, $2, $3, $4, $5, $6)`,
+		name, meta.GetUid(), meta.GetVersion(), meta.GetCreateTime().AsTime(), meta.GetUpdateTime().AsTime(), protoBytes)
+	if err != nil {
+		if isUniqueViolation(err) {
+			return nil, store.ErrAlreadyExists
+		}
+		return nil, fmt.Errorf("inserting atespace %q: %w", name, err)
+	}
+	return dbAtespace, nil
+}
+
+func getAtespaceRow(ctx context.Context, q querier, name string) (*ateapipb.Atespace, error) {
+	var protoBytes []byte
+	err := q.QueryRow(ctx, `SELECT proto FROM atespaces WHERE name = $1`, name).Scan(&protoBytes)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, store.ErrNotFound
+		}
+		return nil, fmt.Errorf("getting atespace %q: %w", name, err)
+	}
+	out := &ateapipb.Atespace{}
+	if err := proto.Unmarshal(protoBytes, out); err != nil {
+		return nil, fmt.Errorf("unmarshaling atespace: %w", err)
+	}
+	return out, nil
+}
+
+func (p *Persistence) GetAtespace(ctx context.Context, name string) (*ateapipb.Atespace, error) {
+	return getAtespaceRow(ctx, p.pool, name)
+}
+
+func (p *Persistence) AtespaceExists(ctx context.Context, name string) (bool, error) {
+	var exists bool
+	if err := p.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM atespaces WHERE name = $1)`, name).Scan(&exists); err != nil {
+		return false, fmt.Errorf("checking atespace existence: %w", err)
+	}
+	return exists, nil
+}
+
+func (p *Persistence) ListAtespaces(ctx context.Context, pageSize int32, pageTokenStr string) ([]*ateapipb.Atespace, string, error) {
+	token, err := decodePageToken(pageTokenStr, kindAtespace, "", 1)
+	if err != nil {
+		return nil, "", err
+	}
+	var last *string
+	if len(token.Last) > 0 {
+		last = &token.Last[0]
+	}
+
+	rows, err := p.pool.Query(ctx, `
+		SELECT name, proto FROM atespaces
+		WHERE $1::text IS NULL OR name > $1
+		ORDER BY name
+		LIMIT $2`, last, int64(pageSize)+1)
+	if err != nil {
+		return nil, "", fmt.Errorf("listing atespaces: %w", err)
+	}
+	defer rows.Close()
+
+	var names []string
+	var result []*ateapipb.Atespace
+	for rows.Next() {
+		var name string
+		var protoBytes []byte
+		if err := rows.Scan(&name, &protoBytes); err != nil {
+			return nil, "", fmt.Errorf("scanning atespace row: %w", err)
+		}
+		a := &ateapipb.Atespace{}
+		if err := proto.Unmarshal(protoBytes, a); err != nil {
+			return nil, "", fmt.Errorf("unmarshaling atespace: %w", err)
+		}
+		result = append(result, a)
+		names = append(names, name)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, "", fmt.Errorf("listing atespaces: %w", err)
+	}
+
+	var nextToken string
+	if len(result) > int(pageSize) {
+		result = result[:pageSize]
+		nextToken = encodePageToken(kindAtespace, "", []string{names[pageSize-1]})
+	}
+	return result, nextToken, nil
+}
+
+func (p *Persistence) DeleteAtespace(ctx context.Context, name string) (*ateapipb.Atespace, error) {
+	var protoBytes []byte
+	err := p.pool.QueryRow(ctx, `DELETE FROM atespaces WHERE name = $1 RETURNING proto`, name).Scan(&protoBytes)
+	if err != nil {
+		if isForeignKeyViolation(err) {
+			return nil, store.ErrFailedPrecondition
+		}
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, store.ErrNotFound
+		}
+		return nil, fmt.Errorf("deleting atespace %q: %w", name, err)
+	}
+	out := &ateapipb.Atespace{}
+	if err := proto.Unmarshal(protoBytes, out); err != nil {
+		return nil, fmt.Errorf("unmarshaling deleted atespace: %w", err)
+	}
+	return out, nil
+}
+
+// --- Actors ---
+
+func (p *Persistence) CreateActor(ctx context.Context, actor *ateapipb.Actor) (*ateapipb.Actor, error) {
+	atespace := actor.GetMetadata().GetAtespace()
+	name := actor.GetMetadata().GetName()
+
+	dbActor := proto.Clone(actor).(*ateapipb.Actor)
+	dbActor.Metadata = newCreateMetadata(atespace, name)
+
+	protoBytes, err := proto.Marshal(dbActor)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling actor: %w", err)
+	}
+
+	meta := dbActor.GetMetadata()
+	_, err = p.pool.Exec(ctx, `
+		INSERT INTO actors (atespace, name, uid, version, status, actor_template_namespace, actor_template_name, create_time, update_time, proto)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+		atespace, name, meta.GetUid(), meta.GetVersion(), int32(dbActor.GetStatus()),
+		dbActor.GetActorTemplateNamespace(), dbActor.GetActorTemplateName(),
+		meta.GetCreateTime().AsTime(), meta.GetUpdateTime().AsTime(), protoBytes)
+	if err != nil {
+		if isUniqueViolation(err) {
+			return nil, store.ErrAlreadyExists
+		}
+		if isForeignKeyViolation(err) {
+			// The atespace referenced by this actor doesn't exist (or was
+			// deleted concurrently with the control API's own pre-check).
+			return nil, store.ErrFailedPrecondition
+		}
+		return nil, fmt.Errorf("inserting actor %s/%s: %w", atespace, name, err)
+	}
+	return dbActor, nil
+}
+
+func getActorRow(ctx context.Context, q querier, atespace, name string) (*ateapipb.Actor, error) {
+	var protoBytes []byte
+	err := q.QueryRow(ctx, `SELECT proto FROM actors WHERE atespace = $1 AND name = $2`, atespace, name).Scan(&protoBytes)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, store.ErrNotFound
+		}
+		return nil, fmt.Errorf("getting actor %s/%s: %w", atespace, name, err)
+	}
+	out := &ateapipb.Actor{}
+	if err := proto.Unmarshal(protoBytes, out); err != nil {
+		return nil, fmt.Errorf("unmarshaling actor: %w", err)
+	}
+	return out, nil
+}
+
+func (p *Persistence) GetActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error) {
+	return getActorRow(ctx, p.pool, actorRef.Atespace, actorRef.Name)
+}
+
+func (p *Persistence) UpdateActor(ctx context.Context, actor *ateapipb.Actor, expectedVersion int64) (*ateapipb.Actor, error) {
+	atespace := actor.GetMetadata().GetAtespace()
+	name := actor.GetMetadata().GetName()
+
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("beginning actor update: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op once committed
+
+	current, err := getActorRow(ctx, tx, atespace, name)
+	if err != nil {
+		return nil, err
+	}
+	if current.GetMetadata().GetVersion() != expectedVersion {
+		return nil, store.ErrVersionConflict
+	}
+	if current.GetActorTemplateNamespace() != actor.GetActorTemplateNamespace() {
+		return nil, fmt.Errorf("actor_template_namespace is immutable")
+	}
+	if current.GetActorTemplateName() != actor.GetActorTemplateName() {
+		return nil, fmt.Errorf("actor_template_name is immutable")
+	}
+
+	dbActor := proto.Clone(actor).(*ateapipb.Actor)
+	// UID, identity, create time, and current version are server-owned. Derive
+	// the new metadata from the stored resource rather than trusting fields
+	// supplied by the caller.
+	dbActor.Metadata = newUpdateMetadata(current.GetMetadata())
+
+	protoBytes, err := proto.Marshal(dbActor)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling actor: %w", err)
+	}
+
+	var returnedProto []byte
+	err = tx.QueryRow(ctx, `
+		UPDATE actors
+		SET version = $1, status = $2, update_time = $3, proto = $4
+		WHERE atespace = $5 AND name = $6 AND version = $7
+		RETURNING proto`,
+		dbActor.GetMetadata().GetVersion(), int32(dbActor.GetStatus()), dbActor.GetMetadata().GetUpdateTime().AsTime(), protoBytes,
+		atespace, name, expectedVersion,
+	).Scan(&returnedProto)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return nil, fmt.Errorf("updating actor %s/%s: %w", atespace, name, err)
+	}
+	if errors.Is(err, pgx.ErrNoRows) {
+		// A concurrent update or delete won after the point read.
+		if _, getErr := getActorRow(ctx, tx, atespace, name); getErr != nil {
+			return nil, getErr
+		}
+		return nil, store.ErrVersionConflict
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("committing actor update: %w", err)
+	}
+	return dbActor, nil
+}
+
+func (p *Persistence) DeleteActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error) {
+	atespace, name := actorRef.Atespace, actorRef.Name
+	var protoBytes []byte
+	err := p.pool.QueryRow(ctx, `
+		DELETE FROM actors
+		WHERE atespace = $1 AND name = $2 AND status IN ($3, $4)
+		RETURNING proto`,
+		atespace, name, int32(ateapipb.Actor_STATUS_SUSPENDED), int32(ateapipb.Actor_STATUS_CRASHED),
+	).Scan(&protoBytes)
+	if err == nil {
+		out := &ateapipb.Actor{}
+		if err := proto.Unmarshal(protoBytes, out); err != nil {
+			return nil, fmt.Errorf("unmarshaling deleted actor: %w", err)
+		}
+		return out, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return nil, fmt.Errorf("deleting actor %s/%s: %w", atespace, name, err)
+	}
+
+	// No row matched; distinguish missing from a status that forbids deletion.
+	if _, getErr := getActorRow(ctx, p.pool, atespace, name); getErr != nil {
+		return nil, getErr
+	}
+	return nil, store.ErrFailedPrecondition
+}
+
+func (p *Persistence) ListActors(ctx context.Context, atespace string, pageSize int32, pageTokenStr string) ([]*ateapipb.Actor, string, error) {
+	if atespace != "" {
+		return p.listActorsScoped(ctx, atespace, pageSize, pageTokenStr)
+	}
+	return p.listActorsGlobal(ctx, pageSize, pageTokenStr)
+}
+
+func (p *Persistence) listActorsScoped(ctx context.Context, atespace string, pageSize int32, pageTokenStr string) ([]*ateapipb.Actor, string, error) {
+	token, err := decodePageToken(pageTokenStr, kindActor, atespace, 1)
+	if err != nil {
+		return nil, "", err
+	}
+	var last *string
+	if len(token.Last) > 0 {
+		last = &token.Last[0]
+	}
+
+	rows, err := p.pool.Query(ctx, `
+		SELECT name, proto FROM actors
+		WHERE atespace = $1 AND ($2::text IS NULL OR name > $2)
+		ORDER BY name
+		LIMIT $3`, atespace, last, int64(pageSize)+1)
+	if err != nil {
+		return nil, "", fmt.Errorf("listing actors in %q: %w", atespace, err)
+	}
+	defer rows.Close()
+
+	var names []string
+	var result []*ateapipb.Actor
+	for rows.Next() {
+		var name string
+		var protoBytes []byte
+		if err := rows.Scan(&name, &protoBytes); err != nil {
+			return nil, "", fmt.Errorf("scanning actor row: %w", err)
+		}
+		a := &ateapipb.Actor{}
+		if err := proto.Unmarshal(protoBytes, a); err != nil {
+			return nil, "", fmt.Errorf("unmarshaling actor: %w", err)
+		}
+		result = append(result, a)
+		names = append(names, name)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, "", fmt.Errorf("listing actors in %q: %w", atespace, err)
+	}
+
+	var nextToken string
+	if len(result) > int(pageSize) {
+		result = result[:pageSize]
+		nextToken = encodePageToken(kindActor, atespace, []string{names[pageSize-1]})
+	}
+	return result, nextToken, nil
+}
+
+func (p *Persistence) listActorsGlobal(ctx context.Context, pageSize int32, pageTokenStr string) ([]*ateapipb.Actor, string, error) {
+	token, err := decodePageToken(pageTokenStr, kindActor, "", 2)
+	if err != nil {
+		return nil, "", err
+	}
+	var lastAtespace, lastName *string
+	if len(token.Last) == 2 {
+		lastAtespace, lastName = &token.Last[0], &token.Last[1]
+	}
+
+	rows, err := p.pool.Query(ctx, `
+		SELECT atespace, name, proto FROM actors
+		WHERE $1::text IS NULL OR (atespace, name) > ($1, $2)
+		ORDER BY atespace, name
+		LIMIT $3`, lastAtespace, lastName, int64(pageSize)+1)
+	if err != nil {
+		return nil, "", fmt.Errorf("listing actors: %w", err)
+	}
+	defer rows.Close()
+
+	type key struct{ atespace, name string }
+	var keys []key
+	var result []*ateapipb.Actor
+	for rows.Next() {
+		var k key
+		var protoBytes []byte
+		if err := rows.Scan(&k.atespace, &k.name, &protoBytes); err != nil {
+			return nil, "", fmt.Errorf("scanning actor row: %w", err)
+		}
+		a := &ateapipb.Actor{}
+		if err := proto.Unmarshal(protoBytes, a); err != nil {
+			return nil, "", fmt.Errorf("unmarshaling actor: %w", err)
+		}
+		result = append(result, a)
+		keys = append(keys, k)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, "", fmt.Errorf("listing actors: %w", err)
+	}
+
+	var nextToken string
+	if len(result) > int(pageSize) {
+		result = result[:pageSize]
+		last := keys[pageSize-1]
+		nextToken = encodePageToken(kindActor, "", []string{last.atespace, last.name})
+	}
+	return result, nextToken, nil
+}
+
+// --- Workers ---
+
+const (
+	// workerChangeChannel is the fixed LISTEN/NOTIFY channel for worker changes.
+	workerChangeChannel = "worker_changes"
+	// maxNotifyPayloadBytes reflects PostgreSQL's NOTIFY payload size limit.
+	// Writes fail rather than silently omit a notification if exceeded.
+	maxNotifyPayloadBytes = 8000
+)
+
+type workerEventEnvelope struct {
+	Type   int    `json:"t"`
+	Worker string `json:"w"` // protojson-encoded Worker
+}
+
+func marshalWorkerEvent(eventType store.WorkerEventType, worker *ateapipb.Worker) ([]byte, error) {
+	workerJSON, err := protojson.Marshal(worker)
+	if err != nil {
+		return nil, fmt.Errorf("in protojson.Marshal: %w", err)
+	}
+	msg, err := json.Marshal(workerEventEnvelope{Type: int(eventType), Worker: string(workerJSON)})
+	if err != nil {
+		return nil, fmt.Errorf("in json.Marshal: %w", err)
+	}
+	return msg, nil
+}
+
+func unmarshalWorkerEvent(payload string) (store.WorkerEvent, error) {
+	var env workerEventEnvelope
+	if err := json.Unmarshal([]byte(payload), &env); err != nil {
+		return store.WorkerEvent{}, fmt.Errorf("in json.Unmarshal: %w", err)
+	}
+	worker := &ateapipb.Worker{}
+	if err := protojson.Unmarshal([]byte(env.Worker), worker); err != nil {
+		return store.WorkerEvent{}, fmt.Errorf("in protojson.Unmarshal: %w", err)
+	}
+	return store.WorkerEvent{Type: store.WorkerEventType(env.Type), Worker: worker}, nil
+}
+
+// writeAndNotify runs fn inside a transaction, then--only if fn reports a
+// change worth notifying--calls pg_notify in the same transaction so
+// delivery happens if and only if the transaction commits.
+func (p *Persistence) writeAndNotify(ctx context.Context, eventType store.WorkerEventType, worker *ateapipb.Worker, fn func(ctx context.Context, tx pgx.Tx) (notify bool, err error)) error {
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("beginning transaction: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op once committed
+
+	notify, err := fn(ctx, tx)
+	if err != nil {
+		return err
+	}
+
+	if notify {
+		payload, err := marshalWorkerEvent(eventType, worker)
+		if err != nil {
+			return fmt.Errorf("marshaling worker event: %w", err)
+		}
+		if len(payload) > maxNotifyPayloadBytes {
+			return fmt.Errorf("worker event payload of %d bytes exceeds PostgreSQL NOTIFY limit of %d bytes", len(payload), maxNotifyPayloadBytes)
+		}
+		if _, err := tx.Exec(ctx, `SELECT pg_notify($1, $2)`, workerChangeChannel, string(payload)); err != nil {
+			return fmt.Errorf("notifying worker change: %w", err)
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("committing transaction: %w", err)
+	}
+	return nil
+}
+
+func (p *Persistence) CreateWorker(ctx context.Context, worker *ateapipb.Worker) error {
+	dbWorker := proto.Clone(worker).(*ateapipb.Worker)
+	dbWorker.Version = 1
+
+	protoBytes, err := proto.Marshal(dbWorker)
+	if err != nil {
+		return fmt.Errorf("marshaling worker: %w", err)
+	}
+
+	err = p.writeAndNotify(ctx, store.WorkerEventCreated, dbWorker, func(ctx context.Context, tx pgx.Tx) (bool, error) {
+		_, err := tx.Exec(ctx, `
+			INSERT INTO workers (worker_namespace, worker_pool, worker_pod, ip, version, proto)
+			VALUES ($1, $2, $3, $4, $5, $6)`,
+			dbWorker.GetWorkerNamespace(), dbWorker.GetWorkerPool(), dbWorker.GetWorkerPod(), dbWorker.GetIp(), dbWorker.GetVersion(), protoBytes)
+		if err != nil {
+			return false, err
+		}
+		return true, nil
+	})
+	if err != nil {
+		if isUniqueViolation(err) {
+			return store.ErrAlreadyExists
+		}
+		return fmt.Errorf("creating worker: %w", err)
+	}
+	return nil
+}
+
+func getWorkerRow(ctx context.Context, q querier, namespace, poolName, pod string) (*ateapipb.Worker, error) {
+	var protoBytes []byte
+	err := q.QueryRow(ctx, `SELECT proto FROM workers WHERE worker_namespace = $1 AND worker_pool = $2 AND worker_pod = $3`,
+		namespace, poolName, pod).Scan(&protoBytes)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, store.ErrNotFound
+		}
+		return nil, fmt.Errorf("getting worker %s/%s/%s: %w", namespace, poolName, pod, err)
+	}
+	out := &ateapipb.Worker{}
+	if err := proto.Unmarshal(protoBytes, out); err != nil {
+		return nil, fmt.Errorf("unmarshaling worker: %w", err)
+	}
+	return out, nil
+}
+
+func (p *Persistence) GetWorker(ctx context.Context, namespace, poolName, pod string) (*ateapipb.Worker, error) {
+	return getWorkerRow(ctx, p.pool, namespace, poolName, pod)
+}
+
+func (p *Persistence) UpdateWorker(ctx context.Context, worker *ateapipb.Worker, expectedVersion int64) error {
+	namespace, poolName, pod := worker.GetWorkerNamespace(), worker.GetWorkerPool(), worker.GetWorkerPod()
+
+	dbWorker := proto.Clone(worker).(*ateapipb.Worker)
+	dbWorker.Version = expectedVersion + 1
+
+	protoBytes, err := proto.Marshal(dbWorker)
+	if err != nil {
+		return fmt.Errorf("marshaling worker: %w", err)
+	}
+
+	return p.writeAndNotify(ctx, store.WorkerEventUpdated, dbWorker, func(ctx context.Context, tx pgx.Tx) (bool, error) {
+		var returned []byte
+		err := tx.QueryRow(ctx, `
+			UPDATE workers
+			SET version = $1, proto = $2
+			WHERE worker_namespace = $3 AND worker_pool = $4 AND worker_pod = $5
+			  AND version = $6 AND ip = $7
+			RETURNING proto`,
+			dbWorker.GetVersion(), protoBytes, namespace, poolName, pod, expectedVersion, dbWorker.GetIp(),
+		).Scan(&returned)
+		if err == nil {
+			return true, nil
+		}
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return false, fmt.Errorf("updating worker %s/%s/%s: %w", namespace, poolName, pod, err)
+		}
+
+		current, getErr := getWorkerRow(ctx, tx, namespace, poolName, pod)
+		if getErr != nil {
+			return false, getErr
+		}
+		if current.GetVersion() != expectedVersion {
+			return false, store.ErrVersionConflict
+		}
+		if current.GetIp() != dbWorker.GetIp() {
+			return false, fmt.Errorf("ip is immutable")
+		}
+		return false, fmt.Errorf("update worker %s/%s/%s: no row matched but current state is otherwise consistent", namespace, poolName, pod)
+	})
+}
+
+func (p *Persistence) DeleteWorker(ctx context.Context, namespace, poolName, pod string) error {
+	deletedEvent := &ateapipb.Worker{WorkerNamespace: namespace, WorkerPod: pod}
+	return p.writeAndNotify(ctx, store.WorkerEventDeleted, deletedEvent, func(ctx context.Context, tx pgx.Tx) (bool, error) {
+		var protoBytes []byte
+		err := tx.QueryRow(ctx, `
+			DELETE FROM workers
+			WHERE worker_namespace = $1 AND worker_pool = $2 AND worker_pod = $3
+			RETURNING proto`, namespace, poolName, pod).Scan(&protoBytes)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				// Idempotent: nothing existed, so nothing to notify either.
+				return false, nil
+			}
+			return false, fmt.Errorf("deleting worker %s/%s/%s: %w", namespace, poolName, pod, err)
+		}
+		return true, nil
+	})
+}
+
+func (p *Persistence) ListWorkers(ctx context.Context, pageSize int32, pageTokenStr string) ([]*ateapipb.Worker, string, error) {
+	token, err := decodePageToken(pageTokenStr, kindWorker, "", 3)
+	if err != nil {
+		return nil, "", err
+	}
+	var lastNS, lastPool, lastPod *string
+	if len(token.Last) == 3 {
+		lastNS, lastPool, lastPod = &token.Last[0], &token.Last[1], &token.Last[2]
+	}
+
+	rows, err := p.pool.Query(ctx, `
+		SELECT worker_namespace, worker_pool, worker_pod, proto FROM workers
+		WHERE $1::text IS NULL OR (worker_namespace, worker_pool, worker_pod) > ($1, $2, $3)
+		ORDER BY worker_namespace, worker_pool, worker_pod
+		LIMIT $4`, lastNS, lastPool, lastPod, int64(pageSize)+1)
+	if err != nil {
+		return nil, "", fmt.Errorf("listing workers: %w", err)
+	}
+	defer rows.Close()
+
+	type key struct{ namespace, pool, pod string }
+	var keys []key
+	var result []*ateapipb.Worker
+	for rows.Next() {
+		var k key
+		var protoBytes []byte
+		if err := rows.Scan(&k.namespace, &k.pool, &k.pod, &protoBytes); err != nil {
+			return nil, "", fmt.Errorf("scanning worker row: %w", err)
+		}
+		w := &ateapipb.Worker{}
+		if err := proto.Unmarshal(protoBytes, w); err != nil {
+			return nil, "", fmt.Errorf("unmarshaling worker: %w", err)
+		}
+		result = append(result, w)
+		keys = append(keys, k)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, "", fmt.Errorf("listing workers: %w", err)
+	}
+
+	var nextToken string
+	if len(result) > int(pageSize) {
+		result = result[:pageSize]
+		last := keys[pageSize-1]
+		nextToken = encodePageToken(kindWorker, "", []string{last.namespace, last.pool, last.pod})
+	}
+	return result, nextToken, nil
+}
+
+// WatchWorkers acquires a dedicated connection (hijacked out of the pool, so
+// it's never handed back for unrelated queries), LISTENs on the fixed
+// worker-change channel, and forwards decoded notifications until the
+// context is cancelled or the caller closes the watch.
+func (p *Persistence) WatchWorkers(ctx context.Context) (*store.WorkerWatch, error) {
+	watchCtx, cancel := context.WithCancel(ctx)
+
+	poolConn, err := p.pool.Acquire(watchCtx)
+	if err != nil {
+		cancel()
+		return nil, fmt.Errorf("acquiring watch connection: %w", err)
+	}
+	conn := poolConn.Hijack()
+
+	if _, err := conn.Exec(watchCtx, "LISTEN "+workerChangeChannel); err != nil {
+		conn.Close(watchCtx) //nolint:errcheck
+		cancel()
+		return nil, fmt.Errorf("listening for worker changes: %w", err)
+	}
+
+	ch := make(chan store.WorkerEvent, 128)
+	go func() {
+		defer close(ch)
+		defer conn.Close(context.Background()) //nolint:errcheck
+		for {
+			notification, err := conn.WaitForNotification(watchCtx)
+			if err != nil {
+				// Context cancelled (caller closed the watch) or the
+				// connection was lost. Either way, the caller must
+				// re-subscribe; matches ateredis's WatchWorkers contract.
+				return
+			}
+			event, err := unmarshalWorkerEvent(notification.Payload)
+			if err != nil {
+				slog.ErrorContext(ctx, "worker event unmarshal failed", slog.Any("err", err))
+				continue
+			}
+			select {
+			case ch <- event:
+			case <-watchCtx.Done():
+				return
+			}
+		}
+	}()
+	return store.NewWorkerWatch(ch, cancel), nil
+}
+
+// --- Workflow locks ---
+
+// defaultLockTTL is how long a lock may go unrenewed before another client
+// can reclaim it.
+const defaultLockTTL = 30 * time.Second
+
+func (p *Persistence) AcquireLock(ctx context.Context, key string) (*store.Lock, error) {
+	ttl := p.lockTTL
+	token := uuid.NewString()
+
+	acquired, err := p.acquireLease(ctx, key, token, ttl)
+	if err != nil {
+		return nil, err
+	}
+	if !acquired {
+		return nil, store.ErrLockConflict
+	}
+
+	leaseCtx, cancel := context.WithCancel(ctx)
+	renewalDone := make(chan struct{})
+	go func() {
+		defer close(renewalDone)
+		defer cancel()
+		p.renewLockLoop(leaseCtx, key, token, ttl)
+	}()
+
+	closeFn := func() {
+		cancel()
+		<-renewalDone
+
+		releaseCtx, releaseCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer releaseCancel()
+		if err := p.releaseLease(releaseCtx, key, token); err != nil {
+			slog.WarnContext(releaseCtx, "failed to release PostgreSQL lock, relying on TTL to reclaim it", "key", key, "error", err)
+		}
+	}
+	return store.NewLock(leaseCtx, closeFn), nil
+}
+
+func (p *Persistence) acquireLease(ctx context.Context, key, token string, ttl time.Duration) (bool, error) {
+	var returnedKey string
+	err := p.pool.QueryRow(ctx, `
+		INSERT INTO leases (key, token, expires_at)
+		VALUES ($1, $2, clock_timestamp() + make_interval(secs => $3))
+		ON CONFLICT (key) DO UPDATE
+		SET token = EXCLUDED.token,
+		    expires_at = EXCLUDED.expires_at
+		WHERE leases.expires_at <= clock_timestamp()
+		RETURNING key`, key, token, ttl.Seconds()).Scan(&returnedKey)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, nil
+		}
+		return false, fmt.Errorf("acquiring lock for %q: %w", key, err)
+	}
+	return true, nil
+}
+
+const (
+	renewIntervalDivisor    = 3
+	renewRetryPeriodDivisor = 10
+	renewDeadlineFraction   = 2.0 / 3.0
+)
+
+func (p *Persistence) renewLockLoop(ctx context.Context, key, token string, ttl time.Duration) {
+	interval := ttl / renewIntervalDivisor
+	renewDeadline := time.Duration(float64(ttl) * renewDeadlineFraction)
+
+	lastRenewed := time.Now()
+	timer := time.NewTimer(interval)
+	defer timer.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+			renewCtx, cancel := context.WithDeadline(ctx, lastRenewed.Add(renewDeadline))
+			renewed := p.tryRenewLease(renewCtx, key, token, ttl)
+			cancel()
+			if !renewed {
+				return
+			}
+			lastRenewed = time.Now()
+			timer.Reset(interval)
+		}
+	}
+}
+
+func (p *Persistence) tryRenewLease(ctx context.Context, key, token string, ttl time.Duration) bool {
+	retryPeriod := ttl / renewRetryPeriodDivisor
+	retry := time.NewTimer(0)
+	defer retry.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				slog.WarnContext(ctx, "failed to renew PostgreSQL lock before its deadline", "key", key)
+			}
+			return false
+		case <-retry.C:
+			renewed, err := p.renewLease(ctx, key, token, ttl)
+			if ctx.Err() != nil {
+				return false
+			}
+			switch {
+			case err == nil && renewed:
+				return true
+			case err == nil:
+				slog.WarnContext(ctx, "PostgreSQL lock renewal found lease no longer owned", "key", key)
+				return false
+			default:
+				slog.WarnContext(ctx, "failed to renew PostgreSQL lock, retrying", "key", key, "error", err)
+				retry.Reset(retryPeriod)
+			}
+		}
+	}
+}
+
+func (p *Persistence) renewLease(ctx context.Context, key, token string, ttl time.Duration) (bool, error) {
+	var returnedKey string
+	err := p.pool.QueryRow(ctx, `
+		UPDATE leases
+		SET expires_at = clock_timestamp() + make_interval(secs => $3)
+		WHERE key = $1 AND token = $2 AND expires_at > clock_timestamp()
+		RETURNING key`, key, token, ttl.Seconds()).Scan(&returnedKey)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, nil
+		}
+		return false, fmt.Errorf("renewing lock for %q: %w", key, err)
+	}
+	return true, nil
+}
+
+func (p *Persistence) releaseLease(ctx context.Context, key, token string) error {
+	if _, err := p.pool.Exec(ctx, `DELETE FROM leases WHERE key = $1 AND token = $2`, key, token); err != nil {
+		return fmt.Errorf("releasing lock for %q: %w", key, err)
+	}
+	return nil
+}
+
+// --- Debug ---
+
+func (p *Persistence) DebugClearAll(ctx context.Context) error {
+	if _, err := p.pool.Exec(ctx, `TRUNCATE atespaces, actors, workers, leases`); err != nil {
+		return fmt.Errorf("truncating tables: %w", err)
+	}
+	return nil
+}

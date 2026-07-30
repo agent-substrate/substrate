@@ -15,9 +15,11 @@
 package main
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -198,4 +200,30 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
+}
+
+func TestConnectStoreRejectsUnknownBackend(t *testing.T) {
+	oldBackend := *storeBackend
+	t.Cleanup(func() { *storeBackend = oldBackend })
+	*storeBackend = "unknown"
+
+	_, err := connectStore(context.Background())
+	if err == nil || !strings.Contains(err.Error(), `unknown --store-backend "unknown"`) {
+		t.Fatalf("connectStore() error = %v, want unknown-backend error", err)
+	}
+}
+
+func TestConnectStoreRequiresPostgresConnectionString(t *testing.T) {
+	oldBackend, oldDSN := *storeBackend, *postgresConnectionString
+	t.Cleanup(func() {
+		*storeBackend = oldBackend
+		*postgresConnectionString = oldDSN
+	})
+	*storeBackend = "postgres"
+	*postgresConnectionString = ""
+
+	_, err := connectStore(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "requires --postgres-connection-string") {
+		t.Fatalf("connectStore() error = %v, want missing-connection-string error", err)
+	}
 }

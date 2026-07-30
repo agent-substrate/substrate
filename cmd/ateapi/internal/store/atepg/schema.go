@@ -1,0 +1,90 @@
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package atepg
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/jackc/pgx/v5/pgxpool"
+)
+
+// schema is atepg's idempotent embedded schema. A production migration
+// mechanism and restricted database roles are deferred (see
+// docs/postgres-store.md).
+const schema = `
+CREATE TABLE IF NOT EXISTS atespaces (
+    name         text PRIMARY KEY,
+    uid          uuid NOT NULL UNIQUE,
+    version      bigint NOT NULL,
+    create_time  timestamptz NOT NULL,
+    update_time  timestamptz NOT NULL,
+    proto        bytea NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS actors (
+    atespace                     text NOT NULL
+        REFERENCES atespaces(name) ON DELETE RESTRICT,
+    name                         text NOT NULL,
+    uid                          uuid NOT NULL UNIQUE,
+    version                      bigint NOT NULL,
+    status                       integer NOT NULL,
+    actor_template_namespace     text NOT NULL,
+    actor_template_name          text NOT NULL,
+    create_time                  timestamptz NOT NULL,
+    update_time                  timestamptz NOT NULL,
+    proto                        bytea NOT NULL,
+    PRIMARY KEY (atespace, name)
+);
+
+CREATE TABLE IF NOT EXISTS workers (
+    worker_namespace  text NOT NULL,
+    worker_pool       text NOT NULL,
+    worker_pod        text NOT NULL,
+    ip                text NOT NULL,
+    version           bigint NOT NULL,
+    proto             bytea NOT NULL,
+    PRIMARY KEY (worker_namespace, worker_pool, worker_pod)
+);
+
+CREATE TABLE IF NOT EXISTS leases (
+    key         text PRIMARY KEY,
+    token       text NOT NULL,
+    expires_at  timestamptz NOT NULL
+);
+`
+
+// applySchema idempotently creates atepg's tables.
+func applySchema(ctx context.Context, pool *pgxpool.Pool) error {
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("beginning atepg schema transaction: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op once committed
+
+	// Multiple ateapi replicas can start against an empty database together.
+	// PostgreSQL's IF NOT EXISTS does not eliminate every concurrent-DDL race,
+	// so serialize schema application with a transaction-scoped advisory lock.
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('agent-substrate-atepg-schema'))`); err != nil {
+		return fmt.Errorf("locking atepg schema: %w", err)
+	}
+	if _, err := tx.Exec(ctx, schema); err != nil {
+		return fmt.Errorf("applying atepg schema: %w", err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("committing atepg schema: %w", err)
+	}
+	return nil
+}

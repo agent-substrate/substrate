@@ -33,6 +33,8 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/controlapi"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/debugapi"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/k8sjwt"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/atepg"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/ateredis"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
 	"github.com/agent-substrate/substrate/internal/ateapiauth"
@@ -71,6 +73,9 @@ var (
 	redisUseIAMAuth     = pflag.String("redis-use-iam-auth", "true", "Whether to use Google IAM authentication for Redis/Valkey.")
 	redisTLSServerName  = pflag.String("redis-tls-server-name", "", "The ServerName to use for Redis TLS hostname verification.")
 	redisClientCert     = pflag.String("redis-client-cert", "", "The file containing client TLS certificate/key credential bundle for Redis/Valkey.")
+
+	storeBackend             = pflag.String("store-backend", "redis", "The persistence backend to use: redis|postgres. Experimental; see docs/postgres-store.md.")
+	postgresConnectionString = pflag.String("postgres-connection-string", "", "PostgreSQL connection string (libpq DSN or URI), used when --store-backend=postgres. TLS is configured entirely through this string's sslmode/sslrootcert/sslcert/sslkey parameters.")
 
 	clientJWTIssuer      = pflag.String("client-jwt-issuer", "", "The expected issuer URL for client JWTs.")
 	clientJWTAudience    = pflag.String("client-jwt-audience", "", "The expected audience for client JWTs.")
@@ -125,9 +130,9 @@ func main() {
 	loadFlagsFromEnv()
 	logFlagValues(ctx)
 
-	redisClient, err := connectRedis(ctx)
+	persistence, err := connectStore(ctx)
 	if err != nil {
-		serverboot.Fatal(ctx, "Failed to set up Redis/Valkey", err)
+		serverboot.Fatal(ctx, "Failed to set up persistence backend", err)
 	}
 
 	clientset, ateClient, err := newKubeClients()
@@ -140,9 +145,7 @@ func main() {
 		serverboot.Fatal(ctx, "Failed to build server credentials", err)
 	}
 
-	redisPersistence := ateredis.NewPersistence(redisClient)
-
-	workerCache := workercache.New(redisPersistence, 5*time.Minute)
+	workerCache := workercache.New(persistence, 5*time.Minute)
 	if err := workerCache.Start(ctx); err != nil {
 		serverboot.Fatal(ctx, "Failed to seed worker cache", err)
 	}
@@ -158,7 +161,7 @@ func main() {
 	scInformerFactory := informers.NewSharedInformerFactory(clientset, 0)
 	storageClassLister := scInformerFactory.Storage().V1().StorageClasses().Lister()
 
-	syncer := controlapi.NewWorkerPoolSyncer(redisPersistence, workerPodInformer, workerPoolLister)
+	syncer := controlapi.NewWorkerPoolSyncer(persistence, workerPodInformer, workerPoolLister)
 	syncer.Start(ctx)
 
 	stopCh := make(chan struct{})
@@ -187,12 +190,12 @@ func main() {
 
 	volPlugins := make(map[string]volume.VolumePluginControlPlane)
 	ateletDialer := controlapi.NewAteletDialer(workerPodInformer.GetIndexer(), ateletPodInformer.GetIndexer(), *ateletClientCredBundle, *podIdentityCACerts)
-	sm := controlapi.NewService(redisPersistence, workerCache, actorTemplateLister, workerPoolLister, sandboxConfigLister, csiDriverConfigLister, storageClassLister, ateletDialer, instruments, *egressGatewayAddress, volPlugins)
+	sm := controlapi.NewService(persistence, workerCache, actorTemplateLister, workerPoolLister, sandboxConfigLister, csiDriverConfigLister, storageClassLister, ateletDialer, instruments, *egressGatewayAddress, volPlugins)
 
 	jwtIssuerDiscoveryClient := buildK8sServiceAccountIssuerDiscoveryClient(ctx, *clientJWTCAFile, *clientJWTIssuer)
 
-	actorIdentitySrv := actoridentity.New(*clientJWTIssuer, *clientJWTAudience, *actorIDJWTPoolFile, *actorIDCAPoolFile, *podIdentityCACerts, jwtIssuerDiscoveryClient, redisPersistence, workerCache)
-	debugSrv := debugapi.NewService(redisPersistence)
+	actorIdentitySrv := actoridentity.New(*clientJWTIssuer, *clientJWTAudience, *actorIDJWTPoolFile, *actorIDCAPoolFile, *podIdentityCACerts, jwtIssuerDiscoveryClient, persistence, workerCache)
+	debugSrv := debugapi.NewService(persistence)
 
 	lisCfg := &net.ListenConfig{}
 	lis, err := lisCfg.Listen(ctx, "tcp", *listenAddr)
@@ -292,6 +295,8 @@ func loadFlagsFromEnv() {
 		{redisUseIAMAuth, "ATE_API_REDIS_USE_IAM_AUTH"},
 		{redisTLSServerName, "ATE_API_REDIS_TLS_SERVER_NAME"},
 		{redisClientCert, "ATE_API_REDIS_CLIENT_CERT"},
+		{storeBackend, "ATE_API_STORE_BACKEND"},
+		{postgresConnectionString, "ATE_API_POSTGRES_CONNECTION_STRING"},
 	}
 	for _, o := range overrides {
 		if *o.flag == "@env" {
@@ -309,6 +314,7 @@ func logFlagValues(ctx context.Context) {
 		slog.String("redis-use-iam-auth", *redisUseIAMAuth),
 		slog.String("redis-tls-server-name", *redisTLSServerName),
 		slog.String("redis-client-cert", *redisClientCert),
+		slog.String("store-backend", *storeBackend),
 		slog.String("client-jwt-issuer", *clientJWTIssuer),
 		slog.String("client-jwt-audience", *clientJWTAudience),
 		slog.String("actor-id-jwt-pool", *actorIDJWTPoolFile),
@@ -318,6 +324,31 @@ func logFlagValues(ctx context.Context) {
 		slog.Duration("drain-delay", *drainDelay),
 		slog.Duration("drain-timeout", *drainTimeout),
 	)
+}
+
+// connectStore builds the store.Interface for the selected --store-backend.
+// Startup fails if the selected backend's configuration is missing or the
+// database can't be reached.
+func connectStore(ctx context.Context) (store.Interface, error) {
+	switch *storeBackend {
+	case "redis":
+		redisClient, err := connectRedis(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("setting up Redis/Valkey: %w", err)
+		}
+		return ateredis.NewPersistence(redisClient), nil
+	case "postgres":
+		if *postgresConnectionString == "" {
+			return nil, fmt.Errorf("--store-backend=postgres requires --postgres-connection-string")
+		}
+		persistence, err := atepg.Connect(ctx, *postgresConnectionString)
+		if err != nil {
+			return nil, fmt.Errorf("setting up PostgreSQL: %w", err)
+		}
+		return persistence, nil
+	default:
+		return nil, fmt.Errorf("unknown --store-backend %q (want redis|postgres)", *storeBackend)
+	}
 }
 
 // connectRedis builds the Redis/Valkey TLS config, plumbs IAM auth if
