@@ -2,9 +2,8 @@
 
 Router has several responsibilities:
 
-* (Optional) manages a Deployment of Envoy to function as a router for ATE requests.
-  * This is optional to enable testing the router component in a standalone mode without managing the Kubernetes objects.
-  * Envoy will be configured to send traffic to via xDS served by the Router.
+* Configures the Envoy sidecar declared in
+  `manifests/ate-install/atenet-router.yaml` via xDS.
 * ext_proc server for the Envoy. To make the deployment and debugging easier, we will run this component together
   with the router, but this will be split later into its own component.
   * ext_proc will call into the ATE gRPC API to get the set of relevant backends (specific the worker IP) and

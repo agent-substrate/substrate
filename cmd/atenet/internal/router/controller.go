@@ -18,49 +18,23 @@ import (
 	"context"
 	"log/slog"
 	"time"
-
-	"k8s.io/client-go/kubernetes"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 // Controller monitors ActorTemplates and coordinates configuration updates
 // for the Envoy xDS and external processing servers.
 type Controller struct {
-	k8sClient  client.Client
-	clientset  kubernetes.Interface
-	cfg        routerConfig
-	xdsSrv     *XdsServer
-	extprocSrv *ExtProcServer
+	xdsSrv *XdsServer
 
-	atStore     atStore
-	envoyRunner *envoyrunner
+	atStore atStore
 }
 
 func NewController(
-	k8sClient client.Client,
-	clientset kubernetes.Interface,
-	cfg routerConfig,
+	store atStore,
 	xdsSrv *XdsServer,
-	extprocSrv *ExtProcServer,
 ) *Controller {
-	xdsSrv.SetConfig(cfg.HttpPort, cfg.ExtprocPort, cfg.ExtprocAddr)
-
-	var store atStore
-	if cfg.TemplatesFile != "" {
-		store = newFileATStore(cfg.TemplatesFile)
-	} else {
-		store = newk8sATStore(k8sClient)
-	}
-
 	return &Controller{
-		k8sClient:  k8sClient,
-		clientset:  clientset,
-		cfg:        cfg,
-		xdsSrv:     xdsSrv,
-		extprocSrv: extprocSrv,
-
-		atStore:     store,
-		envoyRunner: newEnvoyRunner(k8sClient, cfg),
+		xdsSrv:  xdsSrv,
+		atStore: store,
 	}
 }
 
@@ -95,15 +69,6 @@ func (c *Controller) reconcile(ctx context.Context) error {
 	if err := c.xdsSrv.UpdateSnapshot(); err != nil {
 		slog.ErrorContext(ctx, "xDS Configuration generation problem", slog.String("err", err.Error()))
 		return err
-	}
-
-	if !c.cfg.Standalone && c.cfg.TemplatesFile == "" {
-		// Reconcile Envoy router Deployment and Kubernetes cluster entities
-		err := c.envoyRunner.reconcile(ctx)
-		if err != nil {
-			slog.ErrorContext(ctx, "Error during Envoy router reconciliation", slog.String("err", err.Error()))
-			return err
-		}
 	}
 
 	return nil

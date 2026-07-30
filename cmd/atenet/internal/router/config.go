@@ -35,7 +35,6 @@ type authConfig struct {
 
 // routerConfig holds deployment setup and endpoint options for the router node instance.
 type routerConfig struct {
-	Standalone     bool
 	Namespace      string
 	Kubeconfig     string
 	AteapiAddr     string
@@ -43,7 +42,6 @@ type routerConfig struct {
 	XdsPort        int
 	ExtprocPort    int
 	ExtprocAddr    string
-	EnvoyImage     string
 	TemplatesFile  string
 	StatusPort     int
 	HealthInterval time.Duration

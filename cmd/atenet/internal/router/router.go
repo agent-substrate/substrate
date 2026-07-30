@@ -190,7 +190,7 @@ func (s *RouterServer) Run(ctx context.Context) error {
 	slog.InfoContext(ctx, "Connecting to ateapi", slog.String("address", s.cfg.AteapiAddr), slog.Bool("use-api-token-auth", s.cfg.Auth.AteapiUseTokenAuth))
 	s.apiClient = ateapipb.NewControlClient(conn)
 
-	slog.InfoContext(ctx, "Starting substrate router subsystem", slog.Bool("standalone", s.cfg.Standalone))
+	slog.InfoContext(ctx, "Starting substrate router subsystem")
 
 	g, ctx := errgroup.WithContext(ctx)
 
@@ -219,7 +219,7 @@ func (s *RouterServer) Run(ctx context.Context) error {
 		}
 		s.extprocSrv = NewExtProcServer(s.cfg.ExtprocPort, s.apiClient, routeDuration, parkCfg, parkMetrics)
 	}
-	ctrl := NewController(s.k8sClient, s.clientset, s.cfg, xdsSrv, s.extprocSrv)
+	ctrl := NewController(s.atStore, xdsSrv)
 
 	s.health = newRouterHealth(s.cfg.HealthInterval, s.clientset, s.apiClient, s.cfg)
 

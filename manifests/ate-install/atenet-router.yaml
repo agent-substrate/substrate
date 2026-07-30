@@ -125,7 +125,6 @@ spec:
         image: ko://github.com/agent-substrate/substrate/cmd/atenet
         args:
         - "router"
-        - "--standalone"
         - "--namespace=ate-system"
         - "--port-http=8080"
         - "--port-xds=18000"
