@@ -89,7 +89,7 @@ spec:
         args:
           - "--grpc-server-cred-bundle=/run/servicedns.podcert.ate.dev/credential-bundle.pem"
           - --redis-cluster-address=@env
-          - --redis-ca-certs=/etc/valkey-ca/ca.crt
+          - --redis-ca-certs=/run/servicedns.podcert.ate.dev/trust-bundle.pem
           - --redis-use-iam-auth=@env
           - --redis-tls-server-name=@env
           - --redis-client-cert=@env
@@ -143,16 +143,12 @@ spec:
         - name: "servicedns"
           mountPath: "/run/servicedns.podcert.ate.dev"
         # podidentity: the apiserver's client identity (SPIFFE) when it dials
-        # valkey and atelet, plus the trust bundle for verifying atelet's
-        # serving certificate.
+        # the selected store and atelet, plus the trust bundle for verifying
+        # atelet's serving certificate.
         - name: "podidentity"
           mountPath: "/run/podidentity.podcert.ate.dev"
         - name: "actor-id-jwt-pool"
           mountPath: "/run/actor-id-jwt-pool"
-        # Note: See README.md for how to generate this secret.
-        - name: "valkey-ca-certs"
-          mountPath: "/etc/valkey-ca"
-          readOnly: true
         - name: "actor-id-ca-pool"
           mountPath: "/run/actor-id-ca-pool"
           readOnly: true
@@ -184,6 +180,12 @@ spec:
               signerName: servicedns.podcert.ate.dev/identity
               keyType: ECDSAP256
               credentialBundlePath: credential-bundle.pem
+          - clusterTrustBundle:
+              signerName: servicedns.podcert.ate.dev/identity
+              labelSelector:
+                matchLabels:
+                  podcert.ate.dev/canarying: live
+              path: trust-bundle.pem
       - name: "podidentity"
         projected:
           sources:
@@ -205,14 +207,6 @@ spec:
               items:
               - key: "pool"
                 path: "pool.json"
-      - name: "valkey-ca-certs"
-        projected:
-          sources:
-          - secret:
-              name: "valkey-ca-certs"
-              items:
-              - key: "ca.crt"
-                path: "ca.crt"
       - name: "actor-id-ca-pool"
         projected:
           sources:
