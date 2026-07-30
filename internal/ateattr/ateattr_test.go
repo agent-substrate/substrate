@@ -152,6 +152,8 @@ func TestKeySpellings(t *testing.T) {
 		{WorkerPoolNameKey, "ate.workerpool.name"},
 		{WorkerStateKey, "ate.worker.state"},
 		{SandboxClassKey, "ate.sandbox.class"},
+		{OperationNameKey, "operation.name"},
+		{FailureReasonKey, "ate.failure.reason"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.want, func(t *testing.T) {
@@ -159,5 +161,74 @@ func TestKeySpellings(t *testing.T) {
 				t.Errorf("key = %q, want %q", string(tt.key), tt.want)
 			}
 		})
+	}
+}
+
+func TestActorMetricAttributes(t *testing.T) {
+	actor := &ateapipb.Actor{
+		ActorTemplateNamespace: "default",
+		ActorTemplateName:      "counter-template",
+		WorkerPoolName:         "default-pool",
+	}
+
+	t.Run("explicit operation and reason", func(t *testing.T) {
+		got := toMap(ActorMetricAttributes(actor, "gvisor", OperationNameResume, ReasonCorruptedAssignment))
+		want := map[attribute.Key]any{
+			TemplateNamespaceKey: "default",
+			TemplateNameKey:      "counter-template",
+			WorkerPoolNameKey:    "default-pool",
+			SandboxClassKey:      "gvisor",
+			OperationNameKey:     OperationNameResume,
+			FailureReasonKey:     ReasonCorruptedAssignment,
+		}
+
+		assertAttrs(t, got, want)
+	})
+
+	t.Run("default unknown values", func(t *testing.T) {
+		got := toMap(ActorMetricAttributes(actor, "gvisor", "", ""))
+		want := map[attribute.Key]any{
+			TemplateNamespaceKey: "default",
+			TemplateNameKey:      "counter-template",
+			WorkerPoolNameKey:    "default-pool",
+			SandboxClassKey:      "gvisor",
+			OperationNameKey:     OperationNameUnknown,
+			FailureReasonKey:     ReasonUnknown,
+		}
+
+		assertAttrs(t, got, want)
+	})
+
+	t.Run("out of range operation name is normalized to unknown", func(t *testing.T) {
+		got := toMap(ActorMetricAttributes(actor, "gvisor", "invalid_op", ""))
+		want := map[attribute.Key]any{
+			TemplateNamespaceKey: "default",
+			TemplateNameKey:      "counter-template",
+			WorkerPoolNameKey:    "default-pool",
+			SandboxClassKey:      "gvisor",
+			OperationNameKey:     OperationNameUnknown,
+			FailureReasonKey:     ReasonUnknown,
+		}
+
+		assertAttrs(t, got, want)
+	})
+}
+
+func TestNormalizeOperationName(t *testing.T) {
+	tests := []struct {
+		op   string
+		want string
+	}{
+		{OperationNameResume, OperationNameResume},
+		{OperationNameSuspend, OperationNameSuspend},
+		{OperationNamePause, OperationNamePause},
+		{"", OperationNameUnknown},
+		{"invalid", OperationNameUnknown},
+		{"crash", OperationNameUnknown},
+	}
+	for _, tt := range tests {
+		if got := NormalizeOperationName(tt.op); got != tt.want {
+			t.Errorf("NormalizeOperationName(%q) = %q, want %q", tt.op, got, tt.want)
+		}
 	}
 }

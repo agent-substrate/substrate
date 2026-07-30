@@ -56,7 +56,19 @@ const (
 	WorkerPoolNameKey      = attribute.Key("ate.workerpool.name")
 	WorkerStateKey         = attribute.Key("ate.worker.state")
 	SandboxClassKey        = attribute.Key("ate.sandbox.class")
+	OperationNameKey       = attribute.Key("operation.name")
+	FailureReasonKey       = attribute.Key("ate.failure.reason")
+	ReasonKey              = FailureReasonKey
 )
+
+// Control-plane failure reasons for ate.actor.crashes metric.
+const (
+	ReasonCorruptedAssignment = "corrupted_assignment"
+	ReasonWorkerReassigned    = "worker_reassigned"
+	ReasonWorkerPodGone       = "worker_pod_gone"
+	ReasonUnknown             = "unknown"
+)
+
 
 // Values for WorkerStateKey. Only idle and assigned are representable today;
 // starting and unhealthy workers are not modeled in the cache.
@@ -64,6 +76,25 @@ const (
 	WorkerStateIdle     = "idle"
 	WorkerStateAssigned = "assigned"
 )
+
+// Values for OperationNameKey representing actor lifecycle operations.
+const (
+	OperationNameResume  = "resume"
+	OperationNameSuspend = "suspend"
+	OperationNamePause   = "pause"
+	OperationNameUnknown = "unknown"
+)
+
+// NormalizeOperationName ensures op is one of the bounded lifecycle operations
+// {resume, suspend, pause, unknown}. Any other value maps to OperationNameUnknown.
+func NormalizeOperationName(op string) string {
+	switch op {
+	case OperationNameResume, OperationNameSuspend, OperationNamePause:
+		return op
+	default:
+		return OperationNameUnknown
+	}
+}
 
 // ActorRefAttributes returns the subset knowable before the Actor record
 // resolves: only the (atespace, name) the request addresses. The uid and version
@@ -84,5 +115,28 @@ func ActorAttributes(a *ateapipb.Actor) []attribute.KeyValue {
 		TemplateNameKey.String(a.GetActorTemplateName()),
 		TemplateNamespaceKey.String(a.GetActorTemplateNamespace()),
 		ActorVersionKey.Int64(a.GetMetadata().GetVersion()),
+	}
+}
+
+// ActorMetricAttributes returns the metric labels for an Actor.
+// High-cardinality attributes (atespace, actor name, actor uid) are omitted.
+func ActorMetricAttributes(a *ateapipb.Actor, sandboxClass, operationName, reason string) []attribute.KeyValue {
+	if a == nil {
+		return nil
+	}
+
+	// Default values for unknown/unset attributes.
+	if reason == "" {
+		reason = ReasonUnknown
+	}
+	operationName = NormalizeOperationName(operationName)
+
+	return []attribute.KeyValue{
+		TemplateNamespaceKey.String(a.GetActorTemplateNamespace()),
+		TemplateNameKey.String(a.GetActorTemplateName()),
+		WorkerPoolNameKey.String(a.GetWorkerPoolName()),
+		SandboxClassKey.String(sandboxClass),
+		OperationNameKey.String(operationName),
+		FailureReasonKey.String(reason),
 	}
 }
