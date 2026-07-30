@@ -67,21 +67,38 @@ func mustMetric(t *testing.T, reader *sdkmetric.ManualReader, name string) metri
 	return m
 }
 
-func worker(pool, class string, assigned bool) *ateapipb.Worker {
-	w := &ateapipb.Worker{WorkerPool: pool, SandboxClass: class}
+func worker(namespace, pool, class string, assigned bool) *ateapipb.Worker {
+	w := &ateapipb.Worker{WorkerNamespace: namespace, WorkerPool: pool, SandboxClass: class}
 	if assigned {
 		w.Assignment = &ateapipb.Assignment{}
 	}
 	return w
 }
 
+type series struct{ namespace, pool, state, class string }
+
+func seriesCounts(sum metricdata.Sum[int64]) map[series]int64 {
+	got := make(map[series]int64)
+	for _, dp := range sum.DataPoints {
+		namespace, _ := dp.Attributes.Value(ateattr.WorkerPoolNamespaceKey)
+		pool, _ := dp.Attributes.Value(ateattr.WorkerPoolNameKey)
+		state, _ := dp.Attributes.Value(ateattr.WorkerStateKey)
+		class, _ := dp.Attributes.Value(ateattr.SandboxClassKey)
+		got[series{namespace.AsString(), pool.AsString(), state.AsString(), class.AsString()}] = dp.Value
+	}
+	return got
+}
+
+// TestWorkerCountTally covers the tally, including two pools that share a name in
+// different namespaces: a WorkerPool is namespaced, so those must stay two series.
 func TestWorkerCountTally(t *testing.T) {
 	workers := func() ([]*ateapipb.Worker, error) {
 		return []*ateapipb.Worker{
-			worker("pool-a", "gvisor", false),
-			worker("pool-a", "gvisor", false),
-			worker("pool-a", "gvisor", true),
-			worker("pool-b", "microvm", false),
+			worker("ns-1", "pool-a", "gvisor", false),
+			worker("ns-1", "pool-a", "gvisor", false),
+			worker("ns-1", "pool-a", "gvisor", true),
+			worker("ns-1", "pool-b", "microvm", false),
+			worker("ns-2", "pool-a", "gvisor", false),
 		}, nil
 	}
 	reader := newWorkerCountReader(t, workers, noPools)
@@ -98,18 +115,12 @@ func TestWorkerCountTally(t *testing.T) {
 		t.Errorf("IsMonotonic = true, want false (updowncounter, not counter)")
 	}
 
-	type key struct{ pool, state, class string }
-	got := make(map[key]int64)
-	for _, dp := range sum.DataPoints {
-		pool, _ := dp.Attributes.Value(ateattr.WorkerPoolNameKey)
-		state, _ := dp.Attributes.Value(ateattr.WorkerStateKey)
-		class, _ := dp.Attributes.Value(ateattr.SandboxClassKey)
-		got[key{pool.AsString(), state.AsString(), class.AsString()}] = dp.Value
-	}
-	want := map[key]int64{
-		{"pool-a", ateattr.WorkerStateIdle, "gvisor"}:     2,
-		{"pool-a", ateattr.WorkerStateAssigned, "gvisor"}: 1,
-		{"pool-b", ateattr.WorkerStateIdle, "microvm"}:    1,
+	got := seriesCounts(sum)
+	want := map[series]int64{
+		{"ns-1", "pool-a", ateattr.WorkerStateIdle, "gvisor"}:     2,
+		{"ns-1", "pool-a", ateattr.WorkerStateAssigned, "gvisor"}: 1,
+		{"ns-1", "pool-b", ateattr.WorkerStateIdle, "microvm"}:    1,
+		{"ns-2", "pool-a", ateattr.WorkerStateIdle, "gvisor"}:     1,
 	}
 	if len(got) != len(want) {
 		t.Fatalf("got %d series, want %d: %v", len(got), len(want), got)
@@ -134,9 +145,9 @@ func TestWorkerCountSkipsWhenCacheNotReady(t *testing.T) {
 	}
 }
 
-func workerPool(name string, class atev1alpha1.SandboxClass) *atev1alpha1.WorkerPool {
+func workerPool(namespace, name string, class atev1alpha1.SandboxClass) *atev1alpha1.WorkerPool {
 	return &atev1alpha1.WorkerPool{
-		ObjectMeta: metav1.ObjectMeta{Name: name},
+		ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: name},
 		Spec:       atev1alpha1.WorkerPoolSpec{SandboxClass: class},
 	}
 }
@@ -147,29 +158,22 @@ func workerPool(name string, class atev1alpha1.SandboxClass) *atev1alpha1.Worker
 func TestWorkerCountSeedsZeroForKnownPools(t *testing.T) {
 	pools := func(labels.Selector) ([]*atev1alpha1.WorkerPool, error) {
 		return []*atev1alpha1.WorkerPool{
-			workerPool("pool-a", ""),
-			workerPool("pool-c", atev1alpha1.SandboxClassMicroVM),
+			workerPool("ns-1", "pool-a", ""),
+			workerPool("ns-2", "pool-a", atev1alpha1.SandboxClassMicroVM),
 		}, nil
 	}
 	workers := func() ([]*ateapipb.Worker, error) {
-		return []*ateapipb.Worker{worker("pool-a", "gvisor", true)}, nil
+		return []*ateapipb.Worker{worker("ns-1", "pool-a", "gvisor", true)}, nil
 	}
 	reader := newWorkerCountReader(t, workers, pools)
 
 	sum := mustMetric(t, reader, workerpoolWorkersMetric).Data.(metricdata.Sum[int64])
-	type key struct{ pool, state, class string }
-	got := make(map[key]int64)
-	for _, dp := range sum.DataPoints {
-		pool, _ := dp.Attributes.Value(ateattr.WorkerPoolNameKey)
-		state, _ := dp.Attributes.Value(ateattr.WorkerStateKey)
-		class, _ := dp.Attributes.Value(ateattr.SandboxClassKey)
-		got[key{pool.AsString(), state.AsString(), class.AsString()}] = dp.Value
-	}
-	want := map[key]int64{
-		{"pool-a", ateattr.WorkerStateIdle, "gvisor"}:      0,
-		{"pool-a", ateattr.WorkerStateAssigned, "gvisor"}:  1,
-		{"pool-c", ateattr.WorkerStateIdle, "microvm"}:     0,
-		{"pool-c", ateattr.WorkerStateAssigned, "microvm"}: 0,
+	got := seriesCounts(sum)
+	want := map[series]int64{
+		{"ns-1", "pool-a", ateattr.WorkerStateIdle, "gvisor"}:      0,
+		{"ns-1", "pool-a", ateattr.WorkerStateAssigned, "gvisor"}:  1,
+		{"ns-2", "pool-a", ateattr.WorkerStateIdle, "microvm"}:     0,
+		{"ns-2", "pool-a", ateattr.WorkerStateAssigned, "microvm"}: 0,
 	}
 	if len(got) != len(want) {
 		t.Fatalf("got %d series, want %d: %v", len(got), len(want), got)

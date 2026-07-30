@@ -52,8 +52,9 @@ The example HPA uses an **External** metric with target type **AverageValue**:
 desiredReplicas = ceil( metricValue / target.averageValue )
 ```
 
-where `metricValue = max(ate_workerpool_workers{name=<pool>, state=assigned})`:
-the pool's assigned-worker count.
+where `metricValue = max(ate_workerpool_workers{namespace=<ns>, name=<pool>, state=assigned})`:
+the pool's assigned-worker count. WorkerPool names are only unique within a
+namespace, so the selector must pin both.
 
 `averageValue` is the target **assigned-workers-per-replica**:
 
@@ -98,7 +99,7 @@ Confirm that `prometheus-adapter` is serving the external metric:
 kubectl get apiservice v1beta1.external.metrics.k8s.io          # Available=True
 
 # 2. The external metric resolves for the counter pool
-kubectl get --raw "/apis/external.metrics.k8s.io/v1beta1/namespaces/ate-demo-autoscaled-workerpool/ate_workerpool_workers?labelSelector=ate_worker_state%3Dassigned,ate_workerpool_name%3Dcounter"
+kubectl get --raw "/apis/external.metrics.k8s.io/v1beta1/namespaces/ate-demo-autoscaled-workerpool/ate_workerpool_workers?labelSelector=ate_worker_state%3Dassigned,ate_workerpool_namespace%3Date-demo-autoscaled-workerpool,ate_workerpool_name%3Dcounter"
 ```
 
 ## How to Use
