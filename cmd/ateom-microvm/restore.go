@@ -87,7 +87,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 		// A Data snapshot holds no guest state, so this is a cold boot that
 		// happens to start with the volumes already populated. readyz gating comes
 		// with the cold-boot path, so the actor is serving when we return.
-		if err := s.coldBootActor(ctx, p); err != nil {
+		if err := s.coldBootActorRetrying(ctx, p); err != nil {
 			return nil, err
 		}
 		slog.InfoContext(ctx, "Actor restored (durable-dir volumes, cold boot)",

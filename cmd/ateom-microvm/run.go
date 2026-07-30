@@ -18,7 +18,9 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -210,7 +212,7 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	}
 
 	s.actorLogger.EmitLifecycleLog("Actor starting", p.actorRef, p.actorUID, p.templateNS, p.templateName)
-	if err := s.coldBootActor(ctx, p); err != nil {
+	if err := s.coldBootActorRetrying(ctx, p); err != nil {
 		return nil, err
 	}
 	s.actorLogger.EmitLifecycleLog("Actor started", p.actorRef, p.actorUID, p.templateNS, p.templateName)
@@ -228,6 +230,34 @@ type actorBootParams struct {
 	templateName string
 	containers   []*ateompb.Container
 	assetPaths   map[string]string
+}
+
+// coldBootAttempts is how many times a cold boot is tried when the micro-VM
+// stops before the kata-agent answers. Two: one retry covers a transient guest
+// death (a contended host makes the guest's boot pathologically slow, and a
+// boot that stalls long enough is torn down guest-side), and beyond that the
+// fault is not transient and the caller should hear about it.
+const coldBootAttempts = 2
+
+// coldBootActorRetrying cold-boots the actor, retrying if the micro-VM stopped
+// before the kata-agent answered.
+//
+// Retrying is safe there and nowhere else: a guest that never reached its agent
+// ran none of the actor's containers, so the attempt has no observable effect,
+// and coldBootActor's failure path tears the whole thing down (VMM, virtiofsds,
+// network, bundle mounts) before returning. It is also the only recovery — the
+// dead VM does not come back, so the alternative is failing the actor's resume.
+// Every retry is logged alongside the guest's boot diagnostics, so a guest that
+// dies at boot is never silent.
+func (s *AteomService) coldBootActorRetrying(ctx context.Context, p actorBootParams) error {
+	for attempt := 1; ; attempt++ {
+		err := s.coldBootActor(ctx, p)
+		if err == nil || attempt >= coldBootAttempts || !errors.Is(err, errGuestStopped) {
+			return err
+		}
+		slog.WarnContext(ctx, "Micro-VM stopped before the kata-agent answered; retrying cold boot",
+			slog.String("id", p.actorUID), slog.Int("attempt", attempt), slog.Any("err", err))
+	}
 }
 
 // coldBootActor boots the actor's micro-VM from scratch and starts its
@@ -395,9 +425,7 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 	}
 	ac, err := dialAgentRetry(ctx, vsockPath, 60*time.Second)
 	if err != nil {
-		if b, rerr := os.ReadFile(serialLog); rerr == nil {
-			slog.ErrorContext(ctx, "agent dial failed; guest serial tail", slog.String("serial", tailString(string(b), 3000)))
-		}
+		logGuestBootDiagnostics(ctx, actorUID, serialLog)
 		return fmt.Errorf("while dialing kata-agent: %w", err)
 	}
 	// The agent client must stay open past this RPC: the stdout/stderr forwarding
@@ -489,7 +517,7 @@ func (s *AteomService) stageOverlayLowers(ctx context.Context, rr resolvedRuntim
 			return nil, fmt.Errorf("while staging overlay lower for %q: %w", c.name, err)
 		}
 	}
-	vfsdLog, _ := os.OpenFile(filepath.Join(kata.VMDir(id), "virtiofsd.log"), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	vfsdLog, _ := os.OpenFile(virtiofsdLogPath(id), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	vfsdCmd, err := kata.StartVirtiofsd(ctx, kata.VirtiofsdOptions{
 		Binary:     rr.virtiofsd,
 		SocketPath: kata.VirtiofsdSocketPath(id),
@@ -662,12 +690,23 @@ func (s *AteomService) startActorLogForwarding(ac *kata.AgentClient, actorRef re
 	go s.actorLogger.WrapContainerLogs(kata.NewStdioReader(context.Background(), ac, streamID, streamID, true), actorRef, actorUID, actorTemplateNamespace, actorTemplateName, containerName)
 }
 
+// errGuestStopped reports that the micro-VM stopped before the kata-agent
+// answered. Callers that can start over (a cold boot has no observable side
+// effects until the agent runs the containers) retry on it.
+var errGuestStopped = errors.New("micro-VM stopped before the kata-agent answered")
+
 // dialAgentRetry polls DialAgent until the kata-agent answers the hybrid-vsock
 // CONNECT (the socket file exists at boot, but the agent only listens once the
 // guest reaches kata-containers.target) or the overall timeout elapses. Each
 // attempt is capped at 5s (usually it fails fast with connection-refused while
 // the agent isn't listening yet; the cap only bounds a rare hung dial), then
 // waits 500ms before retrying — so steady-state polling is ~every 500ms, not 5s.
+//
+// A dial that fails with ENOENT ends the poll immediately as errGuestStopped:
+// callers wait for the socket to appear before dialing, and cloud-hypervisor
+// unlinks it when the VM stops (virtio-vsock device shutdown), so a socket that
+// has gone missing means the guest died. Polling on would only spend the rest
+// of the timeout to report a bare "no such file or directory".
 func dialAgentRetry(ctx context.Context, vsockPath string, timeout time.Duration) (*kata.AgentClient, error) {
 	deadline := time.Now().Add(timeout)
 	var lastErr error
@@ -677,6 +716,9 @@ func dialAgentRetry(ctx context.Context, vsockPath string, timeout time.Duration
 		cancel()
 		if err == nil {
 			return ac, nil
+		}
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, fmt.Errorf("%w (cloud-hypervisor removed %q): %w", errGuestStopped, vsockPath, err)
 		}
 		lastErr = err
 		if time.Now().After(deadline) {
@@ -689,6 +731,29 @@ func dialAgentRetry(ctx context.Context, vsockPath string, timeout time.Duration
 		}
 	}
 }
+
+// logGuestBootDiagnostics dumps what the host recorded about a guest that never
+// reached the kata-agent: the console tail, where a guest-side panic or an early
+// power-off shows up, and each virtiofsd's log — cloud-hypervisor stops the VM
+// when a vhost-user backend dies, and that leaves the console silent.
+func logGuestBootDiagnostics(ctx context.Context, actorUID, serialLog string) {
+	for _, l := range []struct{ name, path string }{
+		{"serial", serialLog},
+		{"virtiofsd", virtiofsdLogPath(actorUID)},
+		{"virtiofsd-durable", durableVirtiofsdLogPath(actorUID)},
+	} {
+		b, err := os.ReadFile(l.path)
+		if err != nil || len(b) == 0 {
+			continue
+		}
+		slog.ErrorContext(ctx, "agent dial failed; guest boot diagnostics",
+			slog.String("log", l.name), slog.String("tail", tailString(string(b), 3000)))
+	}
+}
+
+// virtiofsdLogPath is where the overlay RO lower's virtiofsd logs, under the
+// actor's VM dir alongside the sockets and the guest console.
+func virtiofsdLogPath(id string) string { return filepath.Join(kata.VMDir(id), "virtiofsd.log") }
 
 // tailString returns the last n bytes of s (for logging a serial-console tail).
 func tailString(s string, n int) string {

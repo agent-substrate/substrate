@@ -137,6 +137,12 @@ func workloadSpec(c actorContainer, durableVolume string) *specs.Spec {
 	return &spec
 }
 
+// durableVirtiofsdLogPath is where the durable-dir share's virtiofsd logs,
+// beside the overlay lower's (see virtiofsdLogPath) under the actor's VM dir.
+func durableVirtiofsdLogPath(id string) string {
+	return filepath.Join(kata.VMDir(id), "virtiofsd-durable.log")
+}
+
 // stageDurableShare starts the virtiofsd serving the actor's durable-dir volumes.
 //
 // It serves ateompath.DurableDirVolumeMountsDir directly — no bind into the
@@ -151,7 +157,7 @@ func (s *AteomService) stageDurableShare(ctx context.Context, rr resolvedRuntime
 	if _, err := os.Stat(shared); err != nil {
 		return nil, fmt.Errorf("while checking durable-dir volumes dir %q: %w", shared, err)
 	}
-	log, _ := os.OpenFile(filepath.Join(kata.VMDir(actorUID), "virtiofsd-durable.log"), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	log, _ := os.OpenFile(durableVirtiofsdLogPath(actorUID), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	cmd, err := kata.StartVirtiofsd(ctx, kata.VirtiofsdOptions{
 		Binary:     rr.virtiofsd,
 		SocketPath: kata.DurableVirtiofsdSocketPath(actorUID),
