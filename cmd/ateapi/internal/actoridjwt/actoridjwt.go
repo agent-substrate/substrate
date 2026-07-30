@@ -44,6 +44,7 @@ type Claims struct {
 type SubstrateClaims struct {
 	Atespace  string
 	ActorName string
+	ActorUid  string
 }
 
 type wireHeader struct {

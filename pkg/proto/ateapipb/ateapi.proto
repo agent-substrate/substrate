@@ -514,11 +514,10 @@ message MintJWTRequest {
 
   string atespace = 2;
   string actor_name = 3;
-  // TODO(liorlieberman): Decide whether we also need actor_uid or
-  // actor_version to pin the credential to a specific incarnation of the
-  // actor. If so, it takes field number 4.
+  string actor_uid = 4;
 }
 
+//TODO (lior) check why k8s do ":" and not "/" as a seprator for the Subject format
 message MintJWTResponse {
   // Actor JWT.  An OIDC Discovery-compatible JWT
   //
@@ -543,9 +542,7 @@ message MintJWTResponse {
 message MintCertRequest {
   string atespace = 1;
   string actor_name = 2;
-  // TODO(liorlieberman): Decide whether we also need actor_uid or
-  // actor_version to pin the credential to a specific incarnation of the
-  // actor. If so, it takes field number 3.
+  string actor_uid = 3;
 
   // Request contains DER encoded bytes of a x509 certificate signing request.
   // The signer will ignore the contents of the CSR except to extract the
