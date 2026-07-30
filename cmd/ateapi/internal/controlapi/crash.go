@@ -21,6 +21,7 @@ import (
 	"log/slog"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/ateerrors"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -28,16 +29,32 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// maybeCrashActor inspects err returned by an atelet RPC, it crashes
-// the actor if the err carries the actorCrashed=true metadata directive.
-func maybeCrashActor(ctx context.Context, st store.Interface, actorRef resources.ActorRef, err error, wrapMsg string) error {
+// maybeCrashActor inspects err returned by an atelet RPC and crashes the actor
+// if err carries the actorCrashed=true metadata directive.
+//
+// opNames is variadic (...string) to provide backward compatibility for generic callers
+// where the operation context is not explicitly supplied. If provided, opNames[0] is
+// normalized against the bounded operations {resume, suspend, pause, unknown}.
+func maybeCrashActor(ctx context.Context, st store.Interface, actorRef resources.ActorRef, err error, wrapMsg string, opNames ...string) error {
 	if err == nil {
 		return nil
 	}
 
 	if ateerrors.ActorCrashRequested(err) {
 		slog.ErrorContext(ctx, "Setting Actor to crashed due to error", slog.Any("error", err))
-		if cerr := crashActor(ctx, st, actorRef); cerr != nil {
+		// Extract AIP-193 ErrorInfo reason enum from the RPC error detail. If unclassified
+		// or unlisted, default to ateattr.ReasonUnknown to protect metric low-cardinality.
+		reason := ateerrors.ExtractReason(err)
+		if reason == "" {
+			reason = ateattr.ReasonUnknown
+		}
+
+		opName := ateattr.OperationNameUnknown
+		if len(opNames) > 0 {
+			opName = ateattr.NormalizeOperationName(opNames[0])
+		}
+
+		if cerr := crashActor(ctx, st, actorRef, opName, reason); cerr != nil {
 			slog.ErrorContext(ctx, "Failed to crash actor", slog.Any("cerr", cerr))
 			return cerr
 		}
@@ -48,11 +65,36 @@ func maybeCrashActor(ctx context.Context, st store.Interface, actorRef resources
 
 // crashActor moves the actor to CRASHED state and frees the worker it was
 // assigned to, if any, so the worker can host other actors.
-func crashActor(ctx context.Context, st store.Interface, actorRef resources.ActorRef) error {
+//
+// args is variadic to support optional telemetry metadata:
+//   - 0 args: defaults opName and reason to OperationNameUnknown and ReasonUnknown
+//   - 1 arg:  (reason)
+//   - 2 args: (opName, reason)
+func crashActor(ctx context.Context, st store.Interface, actorRef resources.ActorRef, args ...string) error {
 	actor, err := st.GetActor(ctx, actorRef)
 	if err != nil {
 		return fmt.Errorf("while loading actor to crash: %w", err)
 	}
+
+	opName := ateattr.OperationNameUnknown
+	reason := ateattr.ReasonUnknown
+
+	if len(args) == 1 {
+		reason = args[0]
+	} else if len(args) >= 2 {
+		opName = args[0]
+		reason = args[1]
+	}
+
+	opName = ateattr.NormalizeOperationName(opName)
+
+	var sandboxClass string
+	if actor.AteomPodNamespace != "" && actor.WorkerPoolName != "" && actor.AteomPodName != "" {
+		if worker, werr := st.GetWorker(ctx, actor.AteomPodNamespace, actor.WorkerPoolName, actor.AteomPodName); werr == nil && worker != nil {
+			sandboxClass = worker.GetSandboxClass()
+		}
+	}
+	recordActorCrash(ctx, actor, sandboxClass, opName, reason)
 
 	var errCollected []error
 	if err := releaseWorker(ctx, st, actor); err != nil {

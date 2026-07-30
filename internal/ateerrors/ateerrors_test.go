@@ -287,3 +287,19 @@ func TestActorCrashRequested(t *testing.T) {
 		})
 	}
 }
+
+func TestExtractReason_EnforcesAllowedEnumValuesOnly(t *testing.T) {
+	t.Run("valid enum reason returned", func(t *testing.T) {
+		err := NewGRPCError(context.Background(), codes.DataLoss, ReasonFaileSaveSnapshot, nil, errors.New("boom"))
+		if got := ExtractReason(err); got != "FAILED_SAVE_SNAPSHOT" {
+			t.Errorf("ExtractReason(%v) = %q, want %q", err, got, "FAILED_SAVE_SNAPSHOT")
+		}
+	})
+
+	t.Run("unlisted dynamic reason rejected to prevent metric high cardinality", func(t *testing.T) {
+		err := NewGRPCError(context.Background(), codes.DataLoss, Reason("UNLISTED_DYNAMIC_ERROR_STRING"), nil, errors.New("boom"))
+		if got := ExtractReason(err); got != "" {
+			t.Errorf("ExtractReason(%v) = %q, want %q (empty string)", err, got, "")
+		}
+	})
+}

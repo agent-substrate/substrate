@@ -22,9 +22,12 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
+	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/ateerrors"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -349,4 +352,69 @@ func TestMaybeCrashActor(t *testing.T) {
 			tt.check(t, ctx, st, err)
 		})
 	}
+}
+
+func TestCrashActor_Metrics(t *testing.T) {
+	reader := sdkmetric.NewManualReader()
+	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	if err := RegisterActorCrashes(mp.Meter("ateapi")); err != nil {
+		t.Fatalf("RegisterActorCrashes: %v", err)
+	}
+
+	ctx := context.Background()
+	st, cleanup := storetest.SetupTestStore(t)
+	defer cleanup()
+
+	actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-crash-test"}
+	actor := &ateapipb.Actor{
+		Metadata: &ateapipb.ResourceMetadata{
+			Atespace: actorRef.Atespace,
+			Name:     actorRef.Name,
+			Uid:      "uid-123",
+		},
+		ActorTemplateNamespace: "demo-ns",
+		ActorTemplateName:      "counter-template",
+		WorkerPoolName:         "pool-1",
+		Status:                 ateapipb.Actor_STATUS_RUNNING,
+	}
+	if _, err := st.CreateActor(ctx, actor); err != nil {
+		t.Fatalf("CreateActor: %v", err)
+	}
+
+	if err := crashActor(ctx, st, actorRef, ateattr.OperationNameResume, ateattr.ReasonCorruptedAssignment); err != nil {
+		t.Fatalf("crashActor: %v", err)
+	}
+
+	assertCrashMetricDatapoint(t, reader, ateattr.OperationNameResume, ateattr.ReasonCorruptedAssignment, 1)
+}
+
+func assertCrashMetricDatapoint(t *testing.T, reader *sdkmetric.ManualReader, wantOpName, wantReason string, wantValue int64) {
+	t.Helper()
+	var rm metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &rm); err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			if m.Name != "ate.actor.crashes" {
+				continue
+			}
+			sum, ok := m.Data.(metricdata.Sum[int64])
+			if !ok {
+				continue
+			}
+			for _, dp := range sum.DataPoints {
+				op, hasOp := dp.Attributes.Value(ateattr.OperationNameKey)
+				r, hasReason := dp.Attributes.Value(ateattr.FailureReasonKey)
+				if hasOp && op.AsString() == wantOpName && hasReason && r.AsString() == wantReason {
+					if dp.Value != wantValue {
+						t.Errorf("metric value for op %q reason %q = %d, want %d", wantOpName, wantReason, dp.Value, wantValue)
+					}
+					return
+				}
+			}
+		}
+	}
+	t.Errorf("did not find ate.actor.crashes metric with operation.name = %q and ate.failure.reason = %q", wantOpName, wantReason)
 }

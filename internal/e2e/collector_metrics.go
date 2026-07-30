@@ -41,6 +41,7 @@ const (
 // it pins the worker-count instrument introduced alongside this harness.
 var PlatformMetricPrefixes = []string{
 	"ate_workerpool_workers",
+	"ate_actor_crashes",
 }
 
 // ScrapeCollectorMetrics port-forwards the kind stack's OTel Collector and reads

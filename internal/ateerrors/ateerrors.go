@@ -21,6 +21,7 @@ import (
 	"log/slog"
 	"slices"
 
+	"github.com/agent-substrate/substrate/internal/ateattr"
 	epb "google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -126,4 +127,49 @@ func ActorCrashRequested(err error) bool {
 		}
 	}
 	return false
+}
+
+// IsValidReason reports whether a string matches a known ateerrors.Reason enum or control-plane cause.
+func IsValidReason(s string) bool {
+	switch Reason(s) {
+	case ReasonTerminalFileSystemError,
+		ReasonInvalidSandboxAsset,
+		ReasonInvalidCheckpointResult,
+		ReasonFaileSaveSnapshot,
+		ReasonInvalidObjectURL,
+		ReasonFailedGetExternalObject,
+		ReasonInvalidContainerConfig:
+		return true
+	}
+	switch s {
+	case ateattr.ReasonCorruptedAssignment,
+		ateattr.ReasonWorkerReassigned,
+		ateattr.ReasonWorkerPodGone,
+		ateattr.ReasonUnknown:
+		return true
+	}
+	return false
+}
+
+// ExtractReason returns the validated enum reason string from an error's AIP-193 ErrorInfo detail
+// or wrapped ateerrors.Reason, or empty string if unclassified.
+func ExtractReason(err error) string {
+	if err == nil {
+		return ""
+	}
+	var r Reason
+	if errors.As(err, &r) && IsValidReason(string(r)) {
+		return string(r)
+	}
+	st, ok := status.FromError(err)
+	if ok {
+		for _, d := range st.Details() {
+			if info, ok := d.(*epb.ErrorInfo); ok {
+				if rStr := info.GetReason(); rStr != "" && IsValidReason(rStr) {
+					return rStr
+				}
+			}
+		}
+	}
+	return ""
 }

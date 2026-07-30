@@ -25,7 +25,34 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 )
 
-const workerpoolWorkersMetric = "ate.workerpool.workers"
+const (
+	workerpoolWorkersMetric = "ate.workerpool.workers"
+	actorCrashesMetric      = "ate.actor.crashes"
+)
+
+var actorCrashesCounter metric.Int64Counter
+
+// RegisterActorCrashes initializes the ate.actor.crashes counter instrument.
+func RegisterActorCrashes(meter metric.Meter) error {
+	counter, err := meter.Int64Counter(
+		actorCrashesMetric,
+		metric.WithUnit("{actor}"),
+		metric.WithDescription("Total number of actors that transitioned to STATUS_CRASHED."),
+	)
+	if err != nil {
+		return fmt.Errorf("create %s counter: %w", actorCrashesMetric, err)
+	}
+	actorCrashesCounter = counter
+	return nil
+}
+
+// recordActorCrash records a crash event on ate.actor.crashes with low-cardinality attributes.
+func recordActorCrash(ctx context.Context, actor *ateapipb.Actor, sandboxClass, opName, reason string) {
+	if actorCrashesCounter == nil || actor == nil {
+		return
+	}
+	actorCrashesCounter.Add(ctx, 1, metric.WithAttributes(ateattr.ActorMetricAttributes(actor, sandboxClass, opName, reason)...))
+}
 
 // RegisterWorkerCount wires the ate.workerpool.workers observable against workers
 // (workercache.Cache.Workers in prod) and listPools (a WorkerPool lister's List,
