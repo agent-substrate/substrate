@@ -16,12 +16,14 @@ package controlapi
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/ateredis"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/internal/resources"
+	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
@@ -29,6 +31,36 @@ import (
 	"google.golang.org/grpc/status"
 	"k8s.io/client-go/tools/cache"
 )
+
+func TestMarkSuspendingStep_SnapshotLocation(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+	actor, err := persistence.CreateActor(ctx, &ateapipb.Actor{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor-1"},
+		Status:   ateapipb.Actor_STATUS_RUNNING,
+	})
+	if err != nil {
+		t.Fatalf("CreateActor: %v", err)
+	}
+	state := &SuspendState{
+		Actor: actor,
+		ActorTemplate: &atev1alpha1.ActorTemplate{Spec: atev1alpha1.ActorTemplateSpec{
+			SnapshotsConfig: atev1alpha1.SnapshotsConfig{Location: "gs://bucket/root/"},
+		}},
+	}
+	if err := (&MarkSuspendingStep{store: persistence}).Execute(ctx, &SuspendInput{ActorRef: resources.ActorRef{Atespace: "team-a", Name: "actor-1"}}, state); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	const prefix = "gs://bucket/root/snapshots/"
+	snapshotID, ok := strings.CutPrefix(state.Actor.GetInProgressSnapshot(), prefix)
+	if !ok {
+		t.Fatalf("snapshot location = %q, want prefix %q", state.Actor.GetInProgressSnapshot(), prefix)
+	}
+	if snapshotID == "" {
+		t.Fatal("snapshot ID is empty")
+	}
+}
 
 // TestSuspendActorWorkflow_RejectedAndIdempotentPaths covers the two
 // short-circuit paths of the suspend workflow: rejection by

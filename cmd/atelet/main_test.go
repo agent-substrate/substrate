@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -36,6 +37,25 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/testing/protocmp"
 )
+
+func TestSnapshotManifestActorMetadata(t *testing.T) {
+	rec := sandboxAssetsRecord{
+		Atespace:               "team-a",
+		ActorName:              "actor-1",
+		ActorUID:               "actor-uid",
+		ActorTemplateNamespace: "templates",
+		ActorTemplateName:      "agent",
+	}
+	got, err := json.Marshal(rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"atespace":"team-a"`, `"actorName":"actor-1"`, `"actorUid":"actor-uid"`, `"actorTemplateNamespace":"templates"`, `"actorTemplateName":"agent"`} {
+		if !bytes.Contains(got, []byte(want)) {
+			t.Errorf("manifest %s missing %s", got, want)
+		}
+	}
+}
 
 func TestWriteFileAtomic(t *testing.T) {
 	dir := t.TempDir()

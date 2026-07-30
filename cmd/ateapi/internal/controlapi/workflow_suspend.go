@@ -94,7 +94,7 @@ func (s *MarkSuspendingStep) CheckPrerequisite(ctx context.Context, input *Suspe
 func (s *MarkSuspendingStep) Execute(ctx context.Context, input *SuspendInput, state *SuspendState) error {
 	state.Actor.Status = ateapipb.Actor_STATUS_SUSPENDING
 	snapshotID := time.Now().Format(time.RFC3339) + "-" + rand.Text()
-	state.Actor.InProgressSnapshot = strings.TrimSuffix(state.ActorTemplate.Spec.SnapshotsConfig.Location, "/") + "/" + input.ActorRef.Name + "/" + snapshotID
+	state.Actor.InProgressSnapshot = strings.TrimSuffix(state.ActorTemplate.Spec.SnapshotsConfig.Location, "/") + "/snapshots/" + snapshotID
 	updatedActor, err := s.store.UpdateActor(ctx, state.Actor, state.Actor.GetMetadata().GetVersion())
 	if err != nil {
 		return err

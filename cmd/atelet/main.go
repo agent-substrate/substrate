@@ -389,6 +389,11 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 	if len(sandboxRec.SnapshotFiles) == 0 {
 		return nil, ateerrors.NewGRPCError(ctx, codes.DataLoss, ateerrors.ReasonInvalidCheckpointResult, ateerrors.ActorCrashedMetadata(), errors.New("ateom reported no snapshot files for checkpoint"))
 	}
+	sandboxRec.Atespace = req.GetAtespace()
+	sandboxRec.ActorName = req.GetActorName()
+	sandboxRec.ActorUID = req.GetActorUid()
+	sandboxRec.ActorTemplateNamespace = req.GetActorTemplateNamespace()
+	sandboxRec.ActorTemplateName = req.GetActorTemplateName()
 
 	switch req.GetType() {
 	case ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL:
@@ -442,8 +447,7 @@ func (s *AteomHerder) moveLocalCheckpoint(ctx context.Context, req *ateletpb.Che
 		}
 	}
 
-	// Pin the sandbox binaries + snapshot file list into a manifest beside the
-	// images so a later Restore is self-describing.
+	// Write the self-describing snapshot manifest beside the images.
 	manifest, err := json.Marshal(rec)
 	if err != nil {
 		return fmt.Errorf("while marshaling snapshot manifest: %w", err)
@@ -475,8 +479,7 @@ func (s *AteomHerder) uploadExternalCheckpoint(ctx context.Context, req *ateletp
 		return err
 	}
 
-	// Pin the sandbox binaries + snapshot file list into a manifest beside the
-	// images, written last, so a Restore on any node is self-describing.
+	// Write the self-describing snapshot manifest last.
 	manifest, err := json.Marshal(rec)
 	if err != nil {
 		return fmt.Errorf("while marshaling snapshot manifest: %w", err)

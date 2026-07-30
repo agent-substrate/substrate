@@ -1553,7 +1553,7 @@ func TestSuspendActor(t *testing.T) {
 		LatestSnapshotInfo: &ateapipb.SnapshotInfo{
 			Data: &ateapipb.SnapshotInfo_External{
 				External: &ateapipb.ExternalSnapshotInfo{
-					SnapshotUriPrefix: fmt.Sprintf("gs://fake-fake-fake/%s/", name),
+					SnapshotUriPrefix: "gs://fake-fake-fake/snapshots/",
 				},
 			},
 		},
