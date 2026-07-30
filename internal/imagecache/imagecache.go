@@ -56,7 +56,9 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/go-containerregistry/pkg/authn"
@@ -74,6 +76,10 @@ const (
 	layerFSDirName           = "fs"
 	layerWhiteoutsFileName   = "whiteouts.json"
 	layerFinalizedMarkerName = "finalized"
+	// layerSizeFileName holds the layer's byte count, recorded at unpack so
+	// sizing the pool never walks a tree. Absent for layers unpacked by
+	// older atelets (backfilled lazily, see layerSize).
+	layerSizeFileName = "size"
 
 	// layerPullConcurrency bounds concurrent layer download+unpack streams per
 	// image pull. Memory use is O(stream buffers) per slot, independent of
@@ -100,6 +106,11 @@ type Store struct {
 
 	imageSF singleflight.Group
 	layerSF singleflight.Group
+
+	// hitMu makes the hit path's record read + last-use touch atomic with
+	// respect to eviction (#463 Phase 2), which will hold it exclusive
+	// around record removal. No exclusive holder yet, so effectively free.
+	hitMu sync.RWMutex
 }
 
 // Option configures a Store.
@@ -256,9 +267,17 @@ func (s *Store) EnsureImage(ctx context.Context, ref string) (*Image, error) {
 		digest = desc.Digest
 	}
 
-	if img, err := s.cachedImage(digest); err != nil {
+	s.hitMu.RLock()
+	img, err := s.cachedImage(digest)
+	if err == nil && img != nil {
+		// Record last-use for eviction's LRU ordering (#463 Phase 2).
+		s.touchRecord(digest)
+	}
+	s.hitMu.RUnlock()
+	if err != nil {
 		return nil, err
-	} else if img != nil {
+	}
+	if img != nil {
 		slog.InfoContext(ctx, "Image cache hit", slog.String("ref", ref), slog.String("digest", digest.String()))
 		return img, nil
 	}
@@ -430,9 +449,18 @@ func (s *Store) unpackLayerToPool(ctx context.Context, diffID v1.Hash, layer v1.
 	}
 	defer root.Close()
 
-	wh, err := unpackLayer(ctx, rc, root)
+	// The uncompressed tar stream is the recorded size: an optimistic
+	// estimate (tar framing vs. block rounding), cheap to capture here.
+	cr := &countingReader{r: rc}
+	wh, err := unpackLayer(ctx, cr, root)
 	if err != nil {
 		return err
+	}
+	// Non-fatal: a missing size file is recovered by layerSize's backfill,
+	// so a metadata write must not discard a successful unpack.
+	if err := os.WriteFile(filepath.Join(tmp, layerSizeFileName), []byte(strconv.FormatInt(cr.n, 10)+"\n"), 0o600); err != nil {
+		slog.WarnContext(ctx, "Failed to record layer size; will backfill lazily",
+			slog.String("diffid", diffID.String()), slog.Any("err", err))
 	}
 
 	whBytes, err := json.Marshal(wh)
