@@ -30,6 +30,15 @@ func TestRouterConfigValidate(t *testing.T) {
 			cfg:  routerConfig{ExtProcMaxRequests: 0, ParkedRequest: ParkedRequestConfig{Max: defaultParkedRequestMax}},
 		},
 		{
+			name: "agentgateway is valid",
+			cfg:  routerConfig{AnetRouter: anetRouterAgentgateway, ParkedRequest: ParkedRequestConfig{Max: defaultParkedRequestMax}},
+		},
+		{
+			name:    "unknown router rejected",
+			cfg:     routerConfig{AnetRouter: "blah"},
+			wantErr: "--anetrouter must be",
+		},
+		{
 			name:    "negative extproc-max-requests rejected",
 			cfg:     routerConfig{ExtProcMaxRequests: -1, ParkedRequest: ParkedRequestConfig{Max: 0}},
 			wantErr: "must not be negative",

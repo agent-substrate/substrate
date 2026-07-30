@@ -39,6 +39,11 @@ const (
 	// StaleAssignmentHeader distinguishes an atunnel routing rejection from a
 	// 421 returned by the actor application itself.
 	StaleAssignmentHeader = "X-Ate-Assignment-Stale"
+	// OriginalHostHeader carries the actor authority across router dataplanes
+	// that must use :authority to select the worker as their dynamic backend.
+	// atunnel only accepts mTLS-authenticated router clients, and the router's
+	// ext_proc server overwrites this header before every request.
+	OriginalHostHeader = "X-Ate-Original-Host"
 )
 
 // Config configures an ingress Server.
@@ -229,7 +234,11 @@ func (s *Server) closeIdleUpstreamConnections() {
 
 // ServeHTTP validates the actor hostname on every request before proxying it.
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	host, err := requestHostname(r.Host)
+	actorHost := r.Header.Get(OriginalHostHeader)
+	if actorHost == "" {
+		actorHost = r.Host
+	}
+	host, err := requestHostname(actorHost)
 	if err != nil {
 		s.reject(w)
 		return
@@ -257,6 +266,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		stop()
 		cancel()
 	}()
+
+	// Do not expose the router-only routing header to actor code. Restore Host
+	// so dataplanes that route dynamically on worker IP still give the actor its
+	// stable mesh hostname.
+	r.Header.Del(OriginalHostHeader)
+	r.Host = actorHost
 
 	// ReverseProxy changes the URL destination but intentionally retains Host,
 	// allowing the actor application to observe its stable mesh hostname.

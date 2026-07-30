@@ -42,6 +42,7 @@ func NewRouterCmd() *cobra.Command {
 	cmd.Flags().StringVar(&cfg.LogLevel, "log-level", "info", "Log level: debug, info, warn, error")
 	cmd.Flags().StringVar(&cfg.MetricsAddr, "metrics-listen-addr", ":9090", "Address and port the prometheus metrics server should listen on.")
 	cmd.Flags().BoolVar(&cfg.Standalone, "standalone", false, "Run in standalone mode, bypassing creation of managed deployment and services in Kubernetes cluster")
+	cmd.Flags().StringVar(&cfg.AnetRouter, "anetrouter", anetRouterEnvoy, "Router dataplane: envoy or agentgateway")
 	cmd.Flags().StringVar(&cfg.Namespace, "namespace", "default", "Target operations namespace")
 	cmd.Flags().StringVar(&cfg.Kubeconfig, "kubeconfig", "", "Absolute path to the kubeconfig configuration file")
 	cmd.Flags().StringVar(&cfg.AteapiAddr, "ateapi-address", "dns:///api.ate-system.svc:443", "gRPC dial target for the cluster ateapi Control instance.")

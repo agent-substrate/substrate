@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/atunnel"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
@@ -58,7 +59,7 @@ func TestHandleRequestHeadersDoesNotLogSensitiveData(t *testing.T) {
 		resumeFn: func(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
 			return &ateapipb.ResumeActorResponse{Actor: &ateapipb.Actor{AteomPodIp: "10.0.0.52"}}, nil
 		},
-	}, nil, ParkedRequestConfig{}, nil)
+	}, nil, ParkedRequestConfig{}, nil, false)
 
 	reqHeaders := &extprocv3.HttpHeaders{
 		Headers: &corev3.HeaderMap{
@@ -195,7 +196,7 @@ func TestExtProcHeadersEvaluation(t *testing.T) {
 			// Parking disabled: these cases assert fail-fast mapping of resume
 			// errors (e.g. FailedPrecondition -> immediate 503). Parking behavior
 			// is covered separately in TestExtProc_ParkingLotFull and resumer_test.go.
-			s := NewExtProcServer(50051, clientMock, nil, ParkedRequestConfig{}, nil)
+			s := NewExtProcServer(50051, clientMock, nil, ParkedRequestConfig{}, nil, false)
 
 			reqHeaders := &extprocv3.HttpHeaders{
 				Headers: &corev3.HeaderMap{
@@ -236,17 +237,19 @@ func TestExtProcHeadersEvaluation(t *testing.T) {
 			}
 
 			mutation := res.Response.GetHeaderMutation()
-			if len(mutation.GetSetHeaders()) != 1 {
-				t.Fatalf("expected exactly one Header option set, found: %v", mutation.GetSetHeaders())
+			if len(mutation.GetSetHeaders()) != 2 {
+				t.Fatalf("expected exactly two header options, found: %v", mutation.GetSetHeaders())
 			}
 
-			headerOption := mutation.GetSetHeaders()[0]
-			if strings.ToLower(headerOption.Header.Key) != OriginalDstHeader {
-				t.Errorf("invalid resulting dynamic parameter key: %s", headerOption.Header.Key)
+			gotMutations := map[string]string{}
+			for _, headerOption := range mutation.GetSetHeaders() {
+				gotMutations[strings.ToLower(headerOption.Header.Key)] = string(headerOption.Header.RawValue)
 			}
-
-			if string(headerOption.Header.RawValue) != tc.expectedTarget {
-				t.Errorf("invalid destination mapping found: %s, expected: %s", headerOption.Header.RawValue, tc.expectedTarget)
+			if got := gotMutations[OriginalDstHeader]; got != tc.expectedTarget {
+				t.Errorf("destination mutation = %q, want %q", got, tc.expectedTarget)
+			}
+			if got := gotMutations[strings.ToLower(atunnel.OriginalHostHeader)]; got != tc.authority {
+				t.Errorf("original host mutation = %q, want %q", got, tc.authority)
 			}
 
 			// Confirm that query logs recorded metric trace details
@@ -274,7 +277,7 @@ func TestExtProc_ParkingLotFull(t *testing.T) {
 
 	// A 1-slot lot with the slot already occupied deterministically simulates a
 	// full lot without needing a concurrent in-flight request.
-	s := NewExtProcServer(50051, clientMock, nil, ParkedRequestConfig{Budget: time.Second, Max: 1}, nil)
+	s := NewExtProcServer(50051, clientMock, nil, ParkedRequestConfig{Budget: time.Second, Max: 1}, nil, false)
 	release, ok := s.parking.enter(context.Background())
 	if !ok {
 		t.Fatal("priming enter should be admitted")
@@ -393,7 +396,7 @@ func TestRecordRouteDuration_Attributes(t *testing.T) {
 		t.Fatalf("failed to create histogram: %v", err)
 	}
 
-	s := NewExtProcServer(50051, nil, h, ParkedRequestConfig{}, nil)
+	s := NewExtProcServer(50051, nil, h, ParkedRequestConfig{}, nil, false)
 	s.recordRouteDuration(context.Background(), 10*time.Millisecond, "team-a-ns", "tmpl-a", classifyOutcome(nil), string(ResumeOutcomeTriggered))
 
 	var rm metricdata.ResourceMetrics
@@ -416,5 +419,27 @@ func TestRecordRouteDuration_Attributes(t *testing.T) {
 		} else if val.AsString() != want {
 			t.Errorf("attribute %q = %q, want %q", k, val.AsString(), want)
 		}
+	}
+}
+
+func TestAddRoutingMutationsViaAuthority(t *testing.T) {
+	mutation := &extprocv3.HeaderMutation{}
+	addRoutingMutations("10.0.0.52:443", "actor-1.team-a.actors.resources.substrate.ate.dev", true, mutation)
+
+	got := map[string]string{}
+	for _, option := range mutation.GetSetHeaders() {
+		if option.GetAppendAction() != corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD {
+			t.Errorf("mutation %q append action = %v, want overwrite", option.GetHeader().GetKey(), option.GetAppendAction())
+		}
+		got[strings.ToLower(option.GetHeader().GetKey())] = string(option.GetHeader().GetRawValue())
+	}
+	if got[OriginalDstHeader] != "10.0.0.52:443" {
+		t.Errorf("%s = %q", OriginalDstHeader, got[OriginalDstHeader])
+	}
+	if got[strings.ToLower(atunnel.OriginalHostHeader)] != "actor-1.team-a.actors.resources.substrate.ate.dev" {
+		t.Errorf("%s = %q", atunnel.OriginalHostHeader, got[strings.ToLower(atunnel.OriginalHostHeader)])
+	}
+	if got[":authority"] != "10.0.0.52:443" {
+		t.Errorf(":authority = %q", got[":authority"])
 	}
 }

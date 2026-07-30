@@ -59,13 +59,57 @@ func newHealthTestClientset(t *testing.T, server *httptest.Server) kubernetes.In
 	return clientset
 }
 
-func setHealthyEnvoyClient(rh *routerHealth) {
-	rh.envoyClient = &http.Client{Transport: healthRoundTripFunc(func(*http.Request) (*http.Response, error) {
+func setHealthyDataplaneClient(rh *routerHealth) {
+	rh.dataplaneClient = &http.Client{Transport: healthRoundTripFunc(func(*http.Request) (*http.Response, error) {
 		return &http.Response{
 			StatusCode: http.StatusOK,
 			Body:       io.NopCloser(strings.NewReader("LIVE")),
 		}, nil
 	})}
+}
+
+func TestCheckDataplane(t *testing.T) {
+	tests := []struct {
+		name        string
+		anetRouter  string
+		wantURL     string
+		response    string
+		wantMessage string
+	}{
+		{
+			name:        "envoy",
+			anetRouter:  anetRouterEnvoy,
+			wantURL:     "http://127.0.0.1:9901/ready",
+			response:    "LIVE",
+			wantMessage: "LIVE",
+		},
+		{
+			name:        "agentgateway",
+			anetRouter:  anetRouterAgentgateway,
+			wantURL:     "http://127.0.0.1:15021/healthz/ready",
+			response:    "ready\n",
+			wantMessage: "ready",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			rh := newRouterHealth(time.Second, nil, nil, routerConfig{AnetRouter: tc.anetRouter})
+			rh.dataplaneClient = &http.Client{Transport: healthRoundTripFunc(func(req *http.Request) (*http.Response, error) {
+				if req.URL.String() != tc.wantURL {
+					t.Errorf("health URL = %q, want %q", req.URL.String(), tc.wantURL)
+				}
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(strings.NewReader(tc.response)),
+				}, nil
+			})}
+
+			healthy, message := rh.checkDataplane(context.Background())
+			if !healthy || message != tc.wantMessage {
+				t.Errorf("checkDataplane() = (%v, %q), want (true, %q)", healthy, message, tc.wantMessage)
+			}
+		})
+	}
 }
 
 func TestCheckK8sTimesOut(t *testing.T) {
@@ -120,7 +164,7 @@ func TestHealthCheckDoesNotBlockReportOrStatusz(t *testing.T) {
 	defer server.Close()
 
 	rh := newRouterHealth(time.Second, newHealthTestClientset(t, server), nil, routerConfig{})
-	setHealthyEnvoyClient(rh)
+	setHealthyDataplaneClient(rh)
 	checkDone := make(chan struct{})
 	go func() {
 		rh.check(context.Background())
@@ -166,8 +210,8 @@ func TestHealthCheckDoesNotBlockReportOrStatusz(t *testing.T) {
 	}
 
 	report := rh.Report()
-	if !report.Envoy.Healthy || report.Envoy.SuccessCount != 1 || report.Envoy.LastSuccess.IsZero() {
-		t.Errorf("Envoy health = %+v, want one successful check", report.Envoy)
+	if !report.Dataplane.Healthy || report.Dataplane.SuccessCount != 1 || report.Dataplane.LastSuccess.IsZero() {
+		t.Errorf("dataplane health = %+v, want one successful check", report.Dataplane)
 	}
 	if !report.K8sAPI.Healthy || report.K8sAPI.SuccessCount != 1 || report.K8sAPI.LastSuccess.IsZero() {
 		t.Errorf("Kubernetes health = %+v, want one successful check", report.K8sAPI)
@@ -209,8 +253,8 @@ func TestHealthChecksRunConcurrently(t *testing.T) {
 		},
 	}
 	rh := newRouterHealth(time.Second, newHealthTestClientset(t, server), apiClient, routerConfig{})
-	rh.envoyClient = &http.Client{Transport: healthRoundTripFunc(func(*http.Request) (*http.Response, error) {
-		started <- "envoy"
+	rh.dataplaneClient = &http.Client{Transport: healthRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		started <- "dataplane"
 		<-release
 		return &http.Response{
 			StatusCode: http.StatusOK,
@@ -236,7 +280,7 @@ func TestHealthChecksRunConcurrently(t *testing.T) {
 		case dependency := <-started:
 			seen[dependency] = true
 		case <-timer.C:
-			t.Fatalf("started health checks = %v, want envoy, k8s, and ateapi before any check finishes", seen)
+			t.Fatalf("started health checks = %v, want dataplane, k8s, and ateapi before any check finishes", seen)
 		}
 	}
 
@@ -248,7 +292,7 @@ func TestHealthChecksRunConcurrently(t *testing.T) {
 	}
 
 	report := rh.Report()
-	if !report.Envoy.Healthy || !report.K8sAPI.Healthy || !report.AteAPI.Healthy {
+	if !report.Dataplane.Healthy || !report.K8sAPI.Healthy || !report.AteAPI.Healthy {
 		t.Errorf("health report = %+v, want all dependencies healthy", report)
 	}
 }
@@ -262,7 +306,7 @@ func TestHealthStartStopsWhenK8sCheckIsCanceled(t *testing.T) {
 	defer server.Close()
 
 	rh := newRouterHealth(time.Hour, newHealthTestClientset(t, server), nil, routerConfig{})
-	setHealthyEnvoyClient(rh)
+	setHealthyDataplaneClient(rh)
 	ctx, cancel := context.WithCancel(context.Background())
 	startDone := make(chan struct{})
 	go func() {

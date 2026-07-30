@@ -43,9 +43,9 @@ type ComponentHealth struct {
 }
 
 type RouterHealthReport struct {
-	Envoy  ComponentHealth `json:"envoy"`
-	K8sAPI ComponentHealth `json:"k8s_api"`
-	AteAPI ComponentHealth `json:"ate_api"`
+	Dataplane ComponentHealth `json:"dataplane"`
+	K8sAPI    ComponentHealth `json:"k8s_api"`
+	AteAPI    ComponentHealth `json:"ate_api"`
 }
 
 type componentHealthCheckResult struct {
@@ -61,11 +61,11 @@ type routerHealth struct {
 
 	report RouterHealthReport
 
-	interval    time.Duration
-	clientset   kubernetes.Interface
-	apiClient   ateapipb.ControlClient
-	cfg         routerConfig
-	envoyClient *http.Client
+	interval        time.Duration
+	clientset       kubernetes.Interface
+	apiClient       ateapipb.ControlClient
+	cfg             routerConfig
+	dataplaneClient *http.Client
 }
 
 func newRouterHealth(interval time.Duration, clientset kubernetes.Interface, apiClient ateapipb.ControlClient, cfg routerConfig) *routerHealth {
@@ -73,11 +73,11 @@ func newRouterHealth(interval time.Duration, clientset kubernetes.Interface, api
 		interval = time.Second
 	}
 	return &routerHealth{
-		interval:    interval,
-		clientset:   clientset,
-		apiClient:   apiClient,
-		cfg:         cfg,
-		envoyClient: &http.Client{Transport: otelhttp.NewTransport(http.DefaultTransport)},
+		interval:        interval,
+		clientset:       clientset,
+		apiClient:       apiClient,
+		cfg:             cfg,
+		dataplaneClient: &http.Client{Transport: otelhttp.NewTransport(http.DefaultTransport)},
 	}
 }
 
@@ -104,12 +104,12 @@ func (rh *routerHealth) check(ctx context.Context) {
 	// Run network checks concurrently and without holding the report mutex, so
 	// the cycle is bounded by the slowest dependency and status requests can
 	// continue serving the last completed report.
-	var envoyResult, k8sResult, ateResult componentHealthCheckResult
+	var dataplaneResult, k8sResult, ateResult componentHealthCheckResult
 	var wg sync.WaitGroup
 	wg.Add(3)
 	go func() {
 		defer wg.Done()
-		envoyResult = runComponentHealthCheck(ctx, "Envoy health check failed", rh.checkEnvoy)
+		dataplaneResult = runComponentHealthCheck(ctx, "Router dataplane health check failed", rh.checkDataplane)
 	}()
 	go func() {
 		defer wg.Done()
@@ -123,7 +123,7 @@ func (rh *routerHealth) check(ctx context.Context) {
 
 	rh.mu.Lock()
 	defer rh.mu.Unlock()
-	updateComponentHealth(&rh.report.Envoy, envoyResult.healthy, envoyResult.message, envoyResult.checkedAt)
+	updateComponentHealth(&rh.report.Dataplane, dataplaneResult.healthy, dataplaneResult.message, dataplaneResult.checkedAt)
 	updateComponentHealth(&rh.report.K8sAPI, k8sResult.healthy, k8sResult.message, k8sResult.checkedAt)
 	updateComponentHealth(&rh.report.AteAPI, ateResult.healthy, ateResult.message, ateResult.checkedAt)
 }
@@ -156,16 +156,22 @@ func updateComponentHealth(health *ComponentHealth, healthy bool, msg string, ch
 	}
 }
 
-func (rh *routerHealth) checkEnvoy(ctx context.Context) (bool, string) {
+func (rh *routerHealth) checkDataplane(ctx context.Context) (bool, string) {
 	timeoutCtx, cancel := context.WithTimeout(ctx, dependencyHealthCheckTimeout)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(timeoutCtx, "GET", "http://127.0.0.1:9901/ready", nil)
+	url := "http://127.0.0.1:9901/ready"
+	expectedBody := "LIVE"
+	if !rh.cfg.usesEnvoy() {
+		url = "http://127.0.0.1:15021/healthz/ready"
+		expectedBody = "ready"
+	}
+	req, err := http.NewRequestWithContext(timeoutCtx, "GET", url, nil)
 	if err != nil {
 		return false, err.Error()
 	}
 
-	resp, err := rh.envoyClient.Do(req)
+	resp, err := rh.dataplaneClient.Do(req)
 	if err != nil {
 		return false, err.Error()
 	}
@@ -181,11 +187,11 @@ func (rh *routerHealth) checkEnvoy(ctx context.Context) (bool, string) {
 	}
 
 	bodyStr := strings.TrimSpace(string(bodyBytes))
-	if bodyStr != "LIVE" {
-		return false, fmt.Sprintf("expected LIVE but got %q", bodyStr)
+	if bodyStr != expectedBody {
+		return false, fmt.Sprintf("expected %s but got %q", expectedBody, bodyStr)
 	}
 
-	return true, "LIVE"
+	return true, expectedBody
 }
 
 func (rh *routerHealth) checkK8s(ctx context.Context) (bool, string) {

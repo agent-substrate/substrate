@@ -15,6 +15,7 @@
 package router
 
 import (
+	"github.com/agent-substrate/substrate/internal/atunnel"
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	extproc "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 	envoy_type "github.com/envoyproxy/go-control-plane/envoy/type/v3"
@@ -51,6 +52,31 @@ func addOriginalDstMutation(dst string, mut *extproc.HeaderMutation) {
 			},
 		},
 	)
+}
+
+// addRoutingMutations overwrites all routing metadata derived from the
+// control-plane result. Envoy dials OriginalDstHeader while preserving
+// :authority. Agentgateway v1.4.1's static dynamic backend instead dials the
+// request :authority, so that mode rewrites it to the worker atunnel address.
+// OriginalHostHeader lets atunnel restore and authorize the actor authority.
+func addRoutingMutations(dst, actorHost string, routeViaAuthority bool, mut *extproc.HeaderMutation) {
+	addOriginalDstMutation(dst, mut)
+	mut.SetHeaders = append(mut.SetHeaders, &corev3.HeaderValueOption{
+		AppendAction: corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
+		Header: &corev3.HeaderValue{
+			Key:      atunnel.OriginalHostHeader,
+			RawValue: []byte(actorHost),
+		},
+	})
+	if routeViaAuthority {
+		mut.SetHeaders = append(mut.SetHeaders, &corev3.HeaderValueOption{
+			AppendAction: corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
+			Header: &corev3.HeaderValue{
+				Key:      ":authority",
+				RawValue: []byte(dst),
+			},
+		})
+	}
 }
 
 func immediateResponse(statusCode envoy_type.StatusCode, message string) *extproc.ProcessingResponse {

@@ -64,7 +64,8 @@ function usage() {
   echo "  --deploy-ate-system                    Deploy core system (CRDs, atelet, apiserver)"
   echo "  --delete-ate-system                    Delete core system"
   echo "  --delete-all                           Delete core system and all registered demos"
-  echo "  --ateapi-client-auth=cert|token               Select how in-cluster clients authenticate to ateapi for --deploy-ate-system (default: cert; the server always accepts both)"
+  echo "  --ateapi-client-auth=cert|token        Select how in-cluster clients authenticate to ateapi for --deploy-ate-system (default: cert; the server always accepts both)"
+  echo "  --anetrouter=envoy|agentgateway        Select the atenet router dataplane (default: envoy)"
   echo ""
   echo "Infrastructure components:"
   echo ""
@@ -145,9 +146,38 @@ ateapi_client_auth() {
   esac
 }
 
+anet_router() {
+  case "${ATE_ANETROUTER:-envoy}" in
+    envoy|agentgateway)
+      echo "${ATE_ANETROUTER:-envoy}"
+      ;;
+    *)
+      echo "Error: --anetrouter must be envoy or agentgateway, got '${ATE_ANETROUTER}'" >&2
+      exit 1
+      ;;
+  esac
+}
+
 render_ate_system_manifests() {
   local client_auth=""
+  local router=""
   client_auth="$(ateapi_client_auth)"
+  router="$(anet_router)"
+
+  if [[ "${router}" == "agentgateway" ]]; then
+    local overlay="manifests/ate-install/agentgateway"
+    if [[ "${client_auth}" == "token" ]]; then
+      overlay="manifests/ate-install/agentgateway-token-client"
+    fi
+    if [[ "${ATE_INSTALL_KIND:-false}" == "true" ]]; then
+      overlay="manifests/ate-install/kind-agentgateway"
+      if [[ "${client_auth}" == "token" ]]; then
+        overlay="manifests/ate-install/kind-agentgateway-token-client"
+      fi
+    fi
+    kubectl kustomize "${overlay}" --load-restrictor LoadRestrictionsNone | run_ko resolve -f -
+    return
+  fi
 
   if [[ "${client_auth}" == "token" ]]; then
     local overlay="manifests/ate-install/token-client"
@@ -164,6 +194,15 @@ render_ate_system_manifests() {
   else
     # Build everything resolved with base manifests for GKE
     run_ko resolve -f manifests/ate-install
+  fi
+}
+
+render_atenet_router_manifest() {
+  if [[ "$(anet_router)" == "agentgateway" ]]; then
+    kubectl kustomize manifests/ate-install/agentgateway-router \
+      --load-restrictor LoadRestrictionsNone | run_ko resolve -f -
+  else
+    run_ko resolve -f manifests/ate-install/atenet-router.yaml
   fi
 }
 
@@ -389,7 +428,10 @@ deploy_atenet() {
   run_kubectl apply -f manifests/ate-install/ate-system-namespace.yaml \
     && run_kubectl wait --for=jsonpath='{.status.phase}'=Active namespace/ate-system --timeout=60s
 
-  run_ko apply -f manifests/ate-install/atenet-router.yaml
+  local router_manifest=""
+  router_manifest="$(render_atenet_router_manifest)"
+  echo "${router_manifest}" | run_kubectl apply -f -
+
   run_ko apply -f manifests/ate-install/atenet-dns.yaml
   run_kubectl rollout status deployment/atenet-router -n ate-system --timeout=120s
   # The Deployment in atenet-dns.yaml is named "dns"; every other resource in
@@ -503,12 +545,16 @@ delete_ate_system() {
   else
     run_kubectl delete --ignore-not-found -f manifests/ate-install
   fi
+  run_kubectl delete --ignore-not-found \
+    -f manifests/ate-install/components/agentgateway/configmap.yaml
   run_kubectl delete --ignore-not-found -f manifests/ate-install/generated
 }
 
 delete_atenet() {
   log_step "delete_atenet"
   run_kubectl delete --ignore-not-found -f manifests/ate-install/atenet-router.yaml
+  run_kubectl delete --ignore-not-found \
+    -f manifests/ate-install/components/agentgateway/configmap.yaml
 }
 
 deploy_benchmarks() {
@@ -562,6 +608,14 @@ for ((i = 0; i < ${#prescan_args[@]}; i++)); do
       fi
       ATE_ATEAPI_CLIENT_AUTH="${prescan_args[$((i + 1))]}"
       ;;
+    --anetrouter=*) ATE_ANETROUTER="${prescan_args[i]#*=}" ;;
+    --anetrouter)
+      if (( i + 1 >= ${#prescan_args[@]} )); then
+        echo "Error: --anetrouter requires envoy or agentgateway" >&2
+        exit 1
+      fi
+      ATE_ANETROUTER="${prescan_args[$((i + 1))]}"
+      ;;
     --benchmark-worker-count)
       BENCHMARK_WORKER_COUNT="${prescan_args[i+1]:-1}"
       ;;
@@ -570,6 +624,7 @@ for ((i = 0; i < ${#prescan_args[@]}; i++)); do
       ;;
   esac
 done
+anet_router >/dev/null
 
 while [[ "$#" -gt 0 ]]; do
   # Run ${demo}_cmdline if it exists. If it returns 0, then we successfully
@@ -593,6 +648,15 @@ while [[ "$#" -gt 0 ]]; do
         exit 1
       fi
       ATE_ATEAPI_CLIENT_AUTH="$1"
+      ;;
+    --anetrouter=*) ATE_ANETROUTER="${1#*=}" ;;
+    --anetrouter)
+      shift
+      if [[ "$#" -eq 0 ]]; then
+        echo "Error: --anetrouter requires envoy or agentgateway" >&2
+        exit 1
+      fi
+      ATE_ANETROUTER="$1"
       ;;
 
     --deploy-ate-system) deploy_ate_system ;;

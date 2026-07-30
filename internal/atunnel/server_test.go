@@ -55,23 +55,28 @@ func TestServeHTTP(t *testing.T) {
 	}
 
 	tests := []struct {
-		name       string
-		host       string
-		wantStatus int
+		name         string
+		host         string
+		originalHost string
+		wantStatus   int
 	}{
-		{"active actor", "actor-1.team-a.actors.resources.substrate.ate.dev", http.StatusNoContent},
-		{"active actor with port", "actor-1.team-a.actors.resources.substrate.ate.dev:443", http.StatusNoContent},
-		{"DNS case insensitive", "ACTOR-1.TEAM-A.ACTORS.RESOURCES.SUBSTRATE.ATE.DEV", http.StatusNoContent},
-		{"wrong actor", "actor-2.team-a.actors.resources.substrate.ate.dev", http.StatusMisdirectedRequest},
-		{"wrong atespace", "actor-1.team-b.actors.resources.substrate.ate.dev", http.StatusMisdirectedRequest},
-		{"suffix confusion", "actor-1.team-a.actors.resources.substrate.ate.dev.example.com", http.StatusMisdirectedRequest},
-		{"malformed port", "actor-1.team-a.actors.resources.substrate.ate.dev:nope", http.StatusMisdirectedRequest},
-		{"empty", "", http.StatusMisdirectedRequest},
+		{name: "active actor", host: "actor-1.team-a.actors.resources.substrate.ate.dev", wantStatus: http.StatusNoContent},
+		{name: "active actor with port", host: "actor-1.team-a.actors.resources.substrate.ate.dev:443", wantStatus: http.StatusNoContent},
+		{name: "DNS case insensitive", host: "ACTOR-1.TEAM-A.ACTORS.RESOURCES.SUBSTRATE.ATE.DEV", wantStatus: http.StatusNoContent},
+		{name: "router original host", host: "10.0.0.52:443", originalHost: "actor-1.team-a.actors.resources.substrate.ate.dev", wantStatus: http.StatusNoContent},
+		{name: "wrong actor", host: "actor-2.team-a.actors.resources.substrate.ate.dev", wantStatus: http.StatusMisdirectedRequest},
+		{name: "wrong atespace", host: "actor-1.team-b.actors.resources.substrate.ate.dev", wantStatus: http.StatusMisdirectedRequest},
+		{name: "suffix confusion", host: "actor-1.team-a.actors.resources.substrate.ate.dev.example.com", wantStatus: http.StatusMisdirectedRequest},
+		{name: "malformed port", host: "actor-1.team-a.actors.resources.substrate.ate.dev:nope", wantStatus: http.StatusMisdirectedRequest},
+		{name: "empty", wantStatus: http.StatusMisdirectedRequest},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			req := httptest.NewRequest(http.MethodGet, "https://worker/hello", nil)
 			req.Host = tt.host
+			if tt.originalHost != "" {
+				req.Header.Set(OriginalHostHeader, tt.originalHost)
+			}
 			rec := httptest.NewRecorder()
 			s.ServeHTTP(rec, req)
 			if rec.Code != tt.wantStatus {
@@ -83,7 +88,7 @@ func TestServeHTTP(t *testing.T) {
 		})
 	}
 
-	for range 3 {
+	for range 4 {
 		if got := <-upstreamHost; got != "actor-1.team-a.actors.resources.substrate.ate.dev" && got != "actor-1.team-a.actors.resources.substrate.ate.dev:443" && got != "ACTOR-1.TEAM-A.ACTORS.RESOURCES.SUBSTRATE.ATE.DEV" {
 			t.Errorf("upstream Host = %q", got)
 		}

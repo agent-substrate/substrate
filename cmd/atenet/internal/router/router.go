@@ -181,23 +181,12 @@ func (s *RouterServer) Run(ctx context.Context) error {
 	slog.InfoContext(ctx, "Connecting to ateapi", slog.String("address", s.cfg.AteapiAddr), slog.Bool("use-api-token-auth", s.cfg.Auth.AteapiUseTokenAuth))
 	s.apiClient = ateapipb.NewControlClient(conn)
 
-	slog.InfoContext(ctx, "Starting substrate router subsystem", slog.Bool("standalone", s.cfg.Standalone))
+	slog.InfoContext(ctx, "Starting substrate router subsystem",
+		slog.Bool("standalone", s.cfg.Standalone),
+		slog.String("anetrouter", s.cfg.anetRouter()))
 
 	g, ctx := errgroup.WithContext(ctx)
 
-	xdsSrv := NewXdsServer(s.cfg.XdsPort)
-	xdsSrv.SetConfig(s.cfg.HttpPort, s.cfg.ExtprocPort, s.cfg.ExtprocAddr)
-	setOtlpCollector(ctx, xdsSrv, s.cfg.OtlpCollectorAddress)
-
-	xdsSrv.SetExtProcMaxRequests(s.cfg.extProcMaxRequests())
-	if parkCfg.enabled() {
-		// Envoy must keep a parked request open at least as long as the router
-		// will hold it; add a margin so the router surfaces its own 503 first.
-		xdsSrv.SetExtProcMessageTimeout(parkCfg.Budget + 5*time.Second)
-	}
-
-	xdsSrv.SetTlsConfig(s.cfg.HttpsPort, s.cfg.EnvoyCertPath)
-	xdsSrv.SetUpstreamTls(s.cfg.UpstreamCredentialBundlePath, s.cfg.UpstreamTrustBundlePath, s.cfg.UpstreamSpiffePrefix)
 	if s.extprocSrv == nil {
 		routeDuration, err := newRouteDurationHistogram()
 		if err != nil {
@@ -207,35 +196,48 @@ func (s *RouterServer) Run(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("failed to create parking metrics: %w", err)
 		}
-		s.extprocSrv = NewExtProcServer(s.cfg.ExtprocPort, s.apiClient, routeDuration, parkCfg, parkMetrics)
+		s.extprocSrv = NewExtProcServer(s.cfg.ExtprocPort, s.apiClient, routeDuration, parkCfg, parkMetrics, !s.cfg.usesEnvoy())
 	}
-	ctrl := NewController(s.k8sClient, s.clientset, s.cfg, xdsSrv, s.extprocSrv)
-
 	s.health = newRouterHealth(s.cfg.HealthInterval, s.clientset, s.apiClient, s.cfg)
 
-	// Start Controller / Watcher
-	g.Go(func() error {
-		slog.InfoContext(ctx, "Starting ActorTemplate controller")
-		return ctrl.Start(ctx)
-	})
+	if s.cfg.usesEnvoy() {
+		xdsSrv := NewXdsServer(s.cfg.XdsPort)
+		xdsSrv.SetConfig(s.cfg.HttpPort, s.cfg.ExtprocPort, s.cfg.ExtprocAddr)
+		setOtlpCollector(ctx, xdsSrv, s.cfg.OtlpCollectorAddress)
+
+		xdsSrv.SetExtProcMaxRequests(s.cfg.extProcMaxRequests())
+		if parkCfg.enabled() {
+			// Envoy must keep a parked request open at least as long as the router
+			// will hold it; add a margin so the router surfaces its own 503 first.
+			xdsSrv.SetExtProcMessageTimeout(parkCfg.Budget + 5*time.Second)
+		}
+
+		xdsSrv.SetTlsConfig(s.cfg.HttpsPort, s.cfg.EnvoyCertPath)
+		xdsSrv.SetUpstreamTls(s.cfg.UpstreamCredentialBundlePath, s.cfg.UpstreamTrustBundlePath, s.cfg.UpstreamSpiffePrefix)
+		ctrl := NewController(s.k8sClient, s.clientset, s.cfg, xdsSrv, s.extprocSrv)
+
+		// Envoy receives all routing configuration from the local xDS server.
+		g.Go(func() error {
+			slog.InfoContext(ctx, "Starting ActorTemplate controller")
+			return ctrl.Start(ctx)
+		})
+		g.Go(func() error {
+			slog.InfoContext(ctx, "Starting Envoy xDS Server", slog.Int("port", s.cfg.XdsPort))
+			lis, err := net.Listen("tcp", fmt.Sprintf(":%d", s.cfg.XdsPort))
+			if err != nil {
+				return fmt.Errorf("failed to listen on port %d: %w", s.cfg.XdsPort, err)
+			}
+			defer lis.Close()
+
+			return xdsSrv.Serve(ctx, lis)
+		})
+	}
 
 	// Start periodic service checking logic
 	g.Go(func() error {
 		slog.InfoContext(ctx, "Starting periodic health checker", slog.Duration("interval", s.cfg.HealthInterval))
 		s.health.Start(ctx)
 		return nil
-	})
-
-	// Start xDS Server
-	g.Go(func() error {
-		slog.InfoContext(ctx, "Starting Envoy xDS Server", slog.Int("port", s.cfg.XdsPort))
-		lis, err := net.Listen("tcp", fmt.Sprintf(":%d", s.cfg.XdsPort))
-		if err != nil {
-			return fmt.Errorf("failed to listen on port %d: %w", s.cfg.XdsPort, err)
-		}
-		defer lis.Close()
-
-		return xdsSrv.Serve(ctx, lis)
 	})
 
 	// Start ExtProc Server
