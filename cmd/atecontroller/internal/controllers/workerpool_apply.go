@@ -59,6 +59,7 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otelEndpoint string)
 	applyWorkerPoolPodTemplate(podSpecAC, containerAC, wp.Spec.Template)
 	maybeApplyMicroVMPodShape(podSpecAC, containerAC, wp.Spec.SandboxClass)
 	podSpecAC.WithContainers(containerAC)
+	podSpecAC.WithTerminationGracePeriodSeconds(int64(workerTerminationGracePeriodSeconds(wp)))
 
 	return appsv1ac.Deployment(wp.Name, wp.Namespace).
 		WithOwnerReferences(metav1ac.OwnerReference().
@@ -143,6 +144,19 @@ func ateomSecurityContext(class atev1alpha1.SandboxClass) *corev1ac.SecurityCont
 			WithAdd(ateomGvisorCapabilities...)).
 		WithAppArmorProfile(corev1ac.AppArmorProfile().
 			WithType(corev1.AppArmorProfileTypeUnconfined))
+}
+
+// defaultTerminationGracePeriodSeconds is the fallback pod termination grace
+// period for worker pods (5 minutes), used when a WorkerPool does not set
+// spec.terminationGracePeriodSeconds. It matches the CRD default and gives
+// actors ample time to trap SIGTERM and save state before SIGKILL.
+const defaultTerminationGracePeriodSeconds int32 = 300
+
+func workerTerminationGracePeriodSeconds(wp *atev1alpha1.WorkerPool) int32 {
+	if wp.Spec.TerminationGracePeriodSeconds != nil {
+		return *wp.Spec.TerminationGracePeriodSeconds
+	}
+	return defaultTerminationGracePeriodSeconds
 }
 
 // maybeApplyMicroVMPodShape adds the /dev/kvm device and node placement a

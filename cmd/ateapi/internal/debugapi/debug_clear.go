@@ -19,11 +19,14 @@ import (
 	"fmt"
 
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
 func (s *Service) DebugClear(ctx context.Context, req *ateapipb.DebugClearRequest) (*ateapipb.DebugClearResponse, error) {
-	if err := validateDebugClearRequest(req); err != nil {
-		return nil, err
+	if errs := validateDebugClearRequest(req); len(errs) > 0 {
+		return nil, status.Error(codes.InvalidArgument, errs.ToAggregate().Error())
 	}
 	if err := s.persistence.DebugClearAll(ctx); err != nil {
 		return nil, fmt.Errorf("while running DebugClearAll: %w", err)
@@ -31,6 +34,6 @@ func (s *Service) DebugClear(ctx context.Context, req *ateapipb.DebugClearReques
 	return &ateapipb.DebugClearResponse{}, nil
 }
 
-func validateDebugClearRequest(req *ateapipb.DebugClearRequest) error {
+func validateDebugClearRequest(req *ateapipb.DebugClearRequest) field.ErrorList {
 	return nil
 }

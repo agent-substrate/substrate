@@ -180,6 +180,7 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 
 	steps := []WorkflowStep[*ResumeInput, *ResumeState]{
 		&LoadActorForResumeStep{store: w.store, actorTemplateLister: w.actorTemplateLister},
+		&CreateVolumesStep{store: w.store},
 		&AssignWorkerStep{store: w.store, workerCache: w.workerCache, scheduler: w.scheduler},
 		&AttachVolumesStep{store: w.store},
 		&CallAteletRestoreStep{store: w.store, dialer: w.dialer, kubeClient: w.kubeClient, secretCache: w.secretCache, workerPoolLister: w.workerPoolLister, sandboxConfigLister: w.sandboxConfigLister, scheduler: w.scheduler},
@@ -247,6 +248,34 @@ func (w *ActorWorkflow) PauseActor(ctx context.Context, actorRef resources.Actor
 	}
 
 	return state.Actor, nil
+}
+
+// DeleteActor executes the workflow to delete an actor. Idempotent.
+func (w *ActorWorkflow) DeleteActor(ctx context.Context, atespace, name string) (*ateapipb.Actor, error) {
+	actorRef := resources.ActorRef{Atespace: atespace, Name: name}
+	input := &DeleteInput{
+		ActorRef: actorRef,
+	}
+	state := &DeleteState{}
+
+	ctx, lock, err := w.acquireActorLock(ctx, actorRef)
+	if err != nil {
+		return nil, err
+	}
+	defer lock.Close()
+
+	steps := []WorkflowStep[*DeleteInput, *DeleteState]{
+		&LoadActorForDeleteStep{store: w.store},
+		&MarkDeletingStep{store: w.store},
+		&DeleteVolumesStep{store: w.store},
+		&FinalizeDeletedStep{store: w.store},
+	}
+
+	if err := RunWorkflow(ctx, input, state, steps); err != nil {
+		return nil, err
+	}
+
+	return state.DeletedActor, nil
 }
 
 func (w *ActorWorkflow) acquireActorLock(ctx context.Context, actorRef resources.ActorRef) (context.Context, *store.Lock, error) {

@@ -89,6 +89,12 @@ kubectl ate get actor <actor-name> --atespace <atespace> -o yaml
 
 # List all physical workers and see which actors are assigned to them
 kubectl ate get workers
+
+# Filter workers by Kubernetes namespace, assigned-actor atespace, or
+# worker pool labels (same flags as `top workers`)
+kubectl ate get workers -n <namespace>
+kubectl ate get workers -a <atespace>
+kubectl ate get workers -l <label-selector>
 ```
 
 > **Note:** `get actors` requires either `--atespace <name>` / `-a <name>` (one atespace) or `-A`/`--all-atespaces` (all atespaces) — there is no default atespace. Getting a single actor always requires `--atespace`/`-a`, since an actor is addressed by `(atespace, name)`. `-a` (lower-case) scopes to one atespace; `-A` (upper-case) spans all.
@@ -185,15 +191,15 @@ Logs are streamable only while the actor is bound to a worker (i.e., `STATUS_RUN
 Commands for bootstrapping the Substrate control plane and debugging local environments.
 
 ```bash
-# Generate a new Session ID CA pool and push it directly to a Kubernetes Secret
+# Generate a new Actor ID CA pool and push it directly to a Kubernetes Secret
 kubectl ate admin make-ca-pool \
-  --name session-id-ca-pool \
+  --name actor-id-ca-pool \
   --secret-namespace ate-system \
   --ca-id "1"
 
 # Generate a new JWT authority pool and push it to a Kubernetes Secret
 kubectl ate admin make-jwt-pool \
-  --name session-id-jwt-pool \
+  --name actor-id-jwt-pool \
   --secret-namespace ate-system \
   --key-id "1"
 

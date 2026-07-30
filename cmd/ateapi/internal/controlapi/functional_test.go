@@ -32,6 +32,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/envtestbins"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
+	"github.com/agent-substrate/substrate/internal/volume"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/client/clientset/versioned"
 	"github.com/agent-substrate/substrate/pkg/client/informers/externalversions"
@@ -51,7 +52,9 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -378,6 +381,7 @@ func setupTest(t *testing.T, ns string) *testContext {
 		conn.Close()
 		grpcServer.Stop()
 		cancel()
+		rdb.Close()
 		mr.Close()
 	}
 
@@ -431,6 +435,21 @@ func createAtespace(t *testing.T, tc *testContext, name string) {
 const poolLabelKey = "pool"
 
 func createTemplateWithContainers(t *testing.T, tc *testContext, ns string, containers []atev1alpha1.Container) {
+	createTemplateWithContainersAndVolumes(t, tc, ns, containers, nil)
+}
+
+func createTemplateWithVolumes(t *testing.T, tc *testContext, ns string, volumes []atev1alpha1.Volume, mounts []atev1alpha1.VolumeMount) {
+	createTemplateWithContainersAndVolumes(t, tc, ns, []atev1alpha1.Container{
+		{
+			Name:         "main",
+			Image:        "main@sha256:abc",
+			Command:      []string{"/main"},
+			VolumeMounts: mounts,
+		},
+	}, volumes)
+}
+
+func createTemplateWithContainersAndVolumes(t *testing.T, tc *testContext, ns string, containers []atev1alpha1.Container, volumes []atev1alpha1.Volume) {
 	t.Helper()
 
 	// Sandbox binaries now live on a (cluster-scoped) SandboxConfig resolved via
@@ -450,6 +469,7 @@ func createTemplateWithContainers(t *testing.T, tc *testContext, ns string, cont
 				Location: "gs://fake-fake-fake",
 			},
 			Containers: containers,
+			Volumes:    volumes,
 			WorkerSelector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{poolLabelKey: ns},
 			},
@@ -658,7 +678,9 @@ func createWorkerPod(t *testing.T, tc *testContext, ns string, name string, node
 
 func deleteWorkerPod(t *testing.T, tc *testContext, ns string, name string) {
 	t.Helper()
-	err := tc.k8sClient.CoreV1().Pods(ns).Delete(context.Background(), name, metav1.DeleteOptions{})
+	err := tc.k8sClient.CoreV1().Pods(ns).Delete(context.Background(), name, metav1.DeleteOptions{
+		GracePeriodSeconds: ptr.To[int64](0),
+	})
 	if err != nil {
 		t.Fatalf("failed to delete worker pod %s: %v", name, err)
 	}
@@ -757,6 +779,484 @@ func TestCreateActor_Success(t *testing.T) {
 
 	if diff := cmp.Diff(want, createResp, protocmp.Transform(), ignoreUID, ignoreTimestamps); diff != "" {
 		t.Errorf("CreateActor response mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestCreateActor_WithExternalVolumes(t *testing.T) {
+	ns := namespaceForTest("ns-create-ext-vols")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	volumes := []atev1alpha1.Volume{
+		{
+			Name: "ext-vol-1",
+			VolumeSource: atev1alpha1.VolumeSource{
+				ExternalVolumeTemplate: &atev1alpha1.ExternalVolumeTemplate{
+					StorageClassName: "standard",
+					Capacity:         resource.MustParse("10Gi"),
+				},
+			},
+		},
+	}
+	mounts := []atev1alpha1.VolumeMount{
+		{
+			Name:      "ext-vol-1",
+			MountPath: "/data",
+		},
+	}
+	createTemplateWithVolumes(t, tc, ns, volumes, mounts)
+
+	createResp, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{
+		Actor: &ateapipb.Actor{
+			Metadata:               &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "vol-actor-1"},
+			ActorTemplateNamespace: ns,
+			ActorTemplateName:      "tmpl1",
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateActor failed: %v", err)
+	}
+
+	if len(createResp.GetActorVolumes()) != 1 {
+		t.Fatalf("expected 1 volume in CreateActor response, got %d", len(createResp.GetActorVolumes()))
+	}
+	vol := createResp.GetActorVolumes()[0]
+	if vol.GetVolumeName() != "ext-vol-1" {
+		t.Errorf("volume name = %q, want %q", vol.GetVolumeName(), "ext-vol-1")
+	}
+	if vol.GetStatus() != ateapipb.ExternalVolume_STATUS_PENDING {
+		t.Errorf("volume status = %v, want %v", vol.GetStatus(), ateapipb.ExternalVolume_STATUS_PENDING)
+	}
+	if vol.GetStorageVolumeId() != "" {
+		t.Errorf("expected empty storageVolumeId before resume, got %q", vol.GetStorageVolumeId())
+	}
+
+	// Verify GetActor returns the same external volume state
+	getResp, err := tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "vol-actor-1"},
+	})
+	if err != nil {
+		t.Fatalf("GetActor failed: %v", err)
+	}
+	if len(getResp.GetActorVolumes()) != 1 {
+		t.Fatalf("expected 1 volume in GetActor response, got %d", len(getResp.GetActorVolumes()))
+	}
+	if getResp.GetActorVolumes()[0].GetStatus() != ateapipb.ExternalVolume_STATUS_PENDING {
+		t.Errorf("GetActor status = %v, want %v", getResp.GetActorVolumes()[0].GetStatus(), ateapipb.ExternalVolume_STATUS_PENDING)
+	}
+}
+
+func TestActorLifecycle_WithExternalVolumes(t *testing.T) {
+	ns := namespaceForTest("ns-lifecycle-ext-vols")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	volumes := []atev1alpha1.Volume{
+		{
+			Name: "data-vol",
+			VolumeSource: atev1alpha1.VolumeSource{
+				ExternalVolumeTemplate: &atev1alpha1.ExternalVolumeTemplate{
+					StorageClassName: "fast",
+					Capacity:         resource.MustParse("20Gi"),
+				},
+			},
+		},
+	}
+	mounts := []atev1alpha1.VolumeMount{
+		{
+			Name:      "data-vol",
+			MountPath: "/mnt/data",
+		},
+	}
+	createTemplateWithVolumes(t, tc, ns, volumes, mounts)
+	createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+
+	// 1. CreateActor
+	createResp, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{
+		Actor: &ateapipb.Actor{
+			Metadata:               &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "actor-vol-lc"},
+			ActorTemplateNamespace: ns,
+			ActorTemplateName:      "tmpl1",
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateActor failed: %v", err)
+	}
+	if createResp.GetStatus() != ateapipb.Actor_STATUS_SUSPENDED {
+		t.Fatalf("expected initial status STATUS_SUSPENDED, got %v", createResp.GetStatus())
+	}
+	if len(createResp.GetActorVolumes()) != 1 || createResp.GetActorVolumes()[0].GetStatus() != ateapipb.ExternalVolume_STATUS_PENDING {
+		t.Fatalf("expected 1 pending volume after CreateActor, got %v", createResp.GetActorVolumes())
+	}
+
+	// 2. ResumeActor
+	resumeResp, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "actor-vol-lc"},
+	})
+	if err != nil {
+		t.Fatalf("ResumeActor failed: %v", err)
+	}
+	if resumeResp.GetActor().GetStatus() != ateapipb.Actor_STATUS_RUNNING {
+		t.Fatalf("expected status STATUS_RUNNING after resume, got %v", resumeResp.GetActor().GetStatus())
+	}
+	if len(resumeResp.GetActor().GetActorVolumes()) != 1 || resumeResp.GetActor().GetActorVolumes()[0].GetStatus() != ateapipb.ExternalVolume_STATUS_CREATED {
+		t.Fatalf("expected 1 created volume after ResumeActor, got %v", resumeResp.GetActor().GetActorVolumes())
+	}
+	if resumeResp.GetActor().GetActorVolumes()[0].GetStorageVolumeId() == "" {
+		t.Fatalf("expected non-empty storageVolumeId after ResumeActor")
+	}
+
+	// 3. PauseActor
+	pauseResp, err := tc.client.PauseActor(context.Background(), &ateapipb.PauseActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "actor-vol-lc"},
+	})
+	if err != nil {
+		t.Fatalf("PauseActor failed: %v", err)
+	}
+	if pauseResp.GetActor().GetStatus() != ateapipb.Actor_STATUS_PAUSED {
+		t.Fatalf("expected status STATUS_PAUSED after pause, got %v", pauseResp.GetActor().GetStatus())
+	}
+
+	// 4. ResumeActor from paused
+	resumeResp2, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "actor-vol-lc"},
+	})
+	if err != nil {
+		t.Fatalf("ResumeActor from paused failed: %v", err)
+	}
+	if resumeResp2.GetActor().GetStatus() != ateapipb.Actor_STATUS_RUNNING {
+		t.Fatalf("expected status STATUS_RUNNING after second resume, got %v", resumeResp2.GetActor().GetStatus())
+	}
+
+	// 5. SuspendActor
+	suspendResp, err := tc.client.SuspendActor(context.Background(), &ateapipb.SuspendActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "actor-vol-lc"},
+	})
+	if err != nil {
+		t.Fatalf("SuspendActor failed: %v", err)
+	}
+	if suspendResp.GetActor().GetStatus() != ateapipb.Actor_STATUS_SUSPENDED {
+		t.Fatalf("expected status STATUS_SUSPENDED after suspend, got %v", suspendResp.GetActor().GetStatus())
+	}
+
+	// 6. DeleteActor
+	deleteResp, err := tc.client.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "actor-vol-lc"},
+	})
+	if err != nil {
+		t.Fatalf("DeleteActor failed: %v", err)
+	}
+	if deleteResp.GetMetadata().GetName() != "actor-vol-lc" {
+		t.Errorf("deleted actor name = %q, want %q", deleteResp.GetMetadata().GetName(), "actor-vol-lc")
+	}
+
+	// Confirm GetActor returns NotFound after deletion
+	_, err = tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "actor-vol-lc"},
+	})
+	if status.Code(err) != codes.NotFound {
+		t.Errorf("GetActor after delete err = %v, want NotFound", err)
+	}
+}
+
+type partialFailVolumePlugin struct {
+	volume.VolumePluginControlPlane
+	deleted []string
+}
+
+func (f *partialFailVolumePlugin) CreateVolume(ctx context.Context, name, capacity, storageClass string) (string, error) {
+	if strings.HasSuffix(name, "fail-vol2") {
+		return "", fmt.Errorf("simulated volume creation failure")
+	}
+	return "storage-" + name, nil
+}
+
+func (f *partialFailVolumePlugin) AttachVolume(ctx context.Context, volumeID, node string) error {
+	return nil
+}
+
+func (f *partialFailVolumePlugin) DetachVolume(ctx context.Context, volumeID, node string) error {
+	return nil
+}
+
+func (f *partialFailVolumePlugin) DeleteVolume(ctx context.Context, volumeID string) error {
+	f.deleted = append(f.deleted, volumeID)
+	return nil
+}
+
+// TestResumeActor_VolumeCreationFailure tests that when volume provisioning fails during ResumeActor,
+// successfully created volumes are saved, the actor remains in STATUS_SUSPENDED,
+// and that calling DeleteActor on the suspended actor cleans up all partially created volumes.
+func TestResumeActor_VolumeCreationFailure(t *testing.T) {
+	ns := namespaceForTest("ns-resume-vol-fail")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	volumes := []atev1alpha1.Volume{
+		{
+			Name: "succ-vol1",
+			VolumeSource: atev1alpha1.VolumeSource{
+				ExternalVolumeTemplate: &atev1alpha1.ExternalVolumeTemplate{
+					StorageClassName: "standard",
+					Capacity:         resource.MustParse("10Gi"),
+				},
+			},
+		},
+		{
+			Name: "fail-vol2",
+			VolumeSource: atev1alpha1.VolumeSource{
+				ExternalVolumeTemplate: &atev1alpha1.ExternalVolumeTemplate{
+					StorageClassName: "standard",
+					Capacity:         resource.MustParse("10Gi"),
+				},
+			},
+		},
+	}
+	mounts := []atev1alpha1.VolumeMount{
+		{Name: "succ-vol1", MountPath: "/mnt/vol1"},
+		{Name: "fail-vol2", MountPath: "/mnt/vol2"},
+	}
+	createTemplateWithVolumes(t, tc, ns, volumes, mounts)
+
+	// Inject a custom partial-failing VolumePlugin into global scope
+	// TODO this doesn't support parallelism of test cases
+	plugin := &partialFailVolumePlugin{}
+	oldGlobalPlugin := globalVolumePlugin
+	globalVolumePlugin = plugin
+	defer func() {
+		globalVolumePlugin = oldGlobalPlugin
+	}()
+
+	// Call CreateActor RPC directly
+	_, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{
+		Actor: &ateapipb.Actor{
+			Metadata:               &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "fail-actor"},
+			ActorTemplateNamespace: ns,
+			ActorTemplateName:      "tmpl1",
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected CreateActor to succeed, got: %v", err)
+	}
+
+	// Call ResumeActor RPC, which should trigger volume provisioning and fail on fail-vol2
+	_, err = tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "fail-actor"},
+	})
+	if err == nil {
+		t.Fatalf("expected ResumeActor to fail due to volume creation error, but it succeeded")
+	}
+
+	// Verify GetActor returns the actor in STATUS_SUSPENDED status
+	getResp, err := tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "fail-actor"},
+	})
+	if err != nil {
+		t.Fatalf("GetActor failed: %v", err)
+	}
+	if getResp.GetStatus() != ateapipb.Actor_STATUS_SUSPENDED {
+		t.Errorf("actor status = %v, want %v", getResp.GetStatus(), ateapipb.Actor_STATUS_SUSPENDED)
+	}
+
+	actorUID := getResp.GetMetadata().GetUid()
+	if actorUID == "" {
+		t.Fatalf("expected non-empty UID on actor")
+	}
+
+	// Verify that succ-vol1 was updated to CREATED with a storageVolumeId, and fail-vol2 is still PENDING
+	if len(getResp.GetActorVolumes()) != 2 {
+		t.Fatalf("expected 2 volumes on actor, got %d", len(getResp.GetActorVolumes()))
+	}
+	volsByName := make(map[string]*ateapipb.ExternalVolume)
+	for _, v := range getResp.GetActorVolumes() {
+		volsByName[v.GetVolumeName()] = v
+	}
+	if v1, ok := volsByName["succ-vol1"]; !ok || v1.GetStatus() != ateapipb.ExternalVolume_STATUS_CREATED || v1.GetStorageVolumeId() == "" {
+		t.Errorf("succ-vol1 unexpected state: %v", v1)
+	}
+	if v2, ok := volsByName["fail-vol2"]; !ok || v2.GetStatus() != ateapipb.ExternalVolume_STATUS_PENDING {
+		t.Errorf("fail-vol2 unexpected state: %v", v2)
+	}
+
+	// Call DeleteActor on the actor in STATUS_SUSPENDED
+	_, err = tc.client.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "fail-actor"},
+	})
+	if err != nil {
+		t.Fatalf("DeleteActor failed: %v", err)
+	}
+
+	// Verify both volumes were deleted (succ-vol1 via storageID, fail-vol2 via fallback actorVolumeID)
+	wantDeleted := []string{
+		"storage-substrate-" + actorUID + "-succ-vol1",
+		"substrate-" + actorUID + "-fail-vol2",
+	}
+	if diff := cmp.Diff(wantDeleted, plugin.deleted); diff != "" {
+		t.Errorf("deleted volume IDs mismatch (-want +got):\n%s", diff)
+	}
+
+	// Confirm GetActor returns NotFound after deletion
+	_, err = tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "fail-actor"},
+	})
+	if status.Code(err) != codes.NotFound {
+		t.Errorf("GetActor after DeleteActor err = %v, want NotFound", err)
+	}
+}
+
+type retrySuccessVolumePlugin struct {
+	volume.VolumePluginControlPlane
+	mu       sync.Mutex
+	attempts int
+	deleted  []string
+}
+
+func (r *retrySuccessVolumePlugin) CreateVolume(ctx context.Context, name, capacity, storageClass string) (string, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if strings.HasSuffix(name, "retry-vol2") {
+		r.attempts++
+		if r.attempts == 1 {
+			return "", fmt.Errorf("simulated temporary volume creation failure")
+		}
+	}
+	return "storage-" + name, nil
+}
+
+func (r *retrySuccessVolumePlugin) AttachVolume(ctx context.Context, volumeID, node string) error {
+	return nil
+}
+
+func (r *retrySuccessVolumePlugin) DetachVolume(ctx context.Context, volumeID, node string) error {
+	return nil
+}
+
+func (r *retrySuccessVolumePlugin) DeleteVolume(ctx context.Context, volumeID string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.deleted = append(r.deleted, volumeID)
+	return nil
+}
+
+// TestResumeActor_VolumeCreationRetrySuccess tests that when volume provisioning fails on the first ResumeActor call,
+// a subsequent call to ResumeActor retries provisioning only the pending volumes and succeeds.
+func TestResumeActor_VolumeCreationRetrySuccess(t *testing.T) {
+	ns := namespaceForTest("ns-resume-vol-retry")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	volumes := []atev1alpha1.Volume{
+		{
+			Name: "succ-vol1",
+			VolumeSource: atev1alpha1.VolumeSource{
+				ExternalVolumeTemplate: &atev1alpha1.ExternalVolumeTemplate{
+					StorageClassName: "standard",
+					Capacity:         resource.MustParse("10Gi"),
+				},
+			},
+		},
+		{
+			Name: "retry-vol2",
+			VolumeSource: atev1alpha1.VolumeSource{
+				ExternalVolumeTemplate: &atev1alpha1.ExternalVolumeTemplate{
+					StorageClassName: "standard",
+					Capacity:         resource.MustParse("10Gi"),
+				},
+			},
+		},
+	}
+	retryMounts := []atev1alpha1.VolumeMount{
+		{Name: "succ-vol1", MountPath: "/mnt/vol1"},
+		{Name: "retry-vol2", MountPath: "/mnt/vol2"},
+	}
+	createTemplateWithVolumes(t, tc, ns, volumes, retryMounts)
+	createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+
+	plugin := &retrySuccessVolumePlugin{}
+	oldGlobalPlugin := globalVolumePlugin
+	globalVolumePlugin = plugin
+	defer func() {
+		globalVolumePlugin = oldGlobalPlugin
+	}()
+
+	// Call CreateActor RPC directly
+	_, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{
+		Actor: &ateapipb.Actor{
+			Metadata:               &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "retry-actor"},
+			ActorTemplateNamespace: ns,
+			ActorTemplateName:      "tmpl1",
+		},
+	})
+	if err != nil {
+		t.Fatalf("expected CreateActor to succeed, got: %v", err)
+	}
+
+	// First call to ResumeActor RPC, which should fail on retry-vol2 (attempt 1)
+	_, err = tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "retry-actor"},
+	})
+	if err == nil {
+		t.Fatalf("expected first ResumeActor to fail due to temporary volume creation error, but it succeeded")
+	}
+
+	// Verify GetActor returns the actor in STATUS_SUSPENDED status with succ-vol1 created and retry-vol2 pending
+	getResp, err := tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "retry-actor"},
+	})
+	if err != nil {
+		t.Fatalf("GetActor after first resume failed: %v", err)
+	}
+	if getResp.GetStatus() != ateapipb.Actor_STATUS_SUSPENDED {
+		t.Errorf("actor status after first resume = %v, want %v", getResp.GetStatus(), ateapipb.Actor_STATUS_SUSPENDED)
+	}
+
+	volsByName := make(map[string]*ateapipb.ExternalVolume)
+	for _, v := range getResp.GetActorVolumes() {
+		volsByName[v.GetVolumeName()] = v
+	}
+	if v1, ok := volsByName["succ-vol1"]; !ok || v1.GetStatus() != ateapipb.ExternalVolume_STATUS_CREATED || v1.GetStorageVolumeId() == "" {
+		t.Errorf("succ-vol1 unexpected state after first resume: %v", v1)
+	}
+	if v2, ok := volsByName["retry-vol2"]; !ok || v2.GetStatus() != ateapipb.ExternalVolume_STATUS_PENDING {
+		t.Errorf("retry-vol2 unexpected state after first resume: %v", v2)
+	}
+
+	// Second call to ResumeActor RPC, which should succeed on retry-vol2 (attempt 2)
+	_, err = tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "retry-actor"},
+	})
+	if err != nil {
+		t.Fatalf("expected second ResumeActor to succeed, got: %v", err)
+	}
+
+	// Verify GetActor returns the actor in STATUS_RUNNING status with both volumes CREATED
+	getResp, err = tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "retry-actor"},
+	})
+	if err != nil {
+		t.Fatalf("GetActor after second resume failed: %v", err)
+	}
+	if getResp.GetStatus() != ateapipb.Actor_STATUS_RUNNING {
+		t.Errorf("actor status after second resume = %v, want %v", getResp.GetStatus(), ateapipb.Actor_STATUS_RUNNING)
+	}
+	for _, v := range getResp.GetActorVolumes() {
+		if v.GetStatus() != ateapipb.ExternalVolume_STATUS_CREATED || v.GetStorageVolumeId() == "" {
+			t.Errorf("volume %s unexpected state after second resume: %v", v.GetVolumeName(), v)
+		}
+	}
+
+	// Clean up by suspending and deleting the actor
+	_, err = tc.client.SuspendActor(context.Background(), &ateapipb.SuspendActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "retry-actor"},
+	})
+	if err != nil {
+		t.Fatalf("SuspendActor failed: %v", err)
+	}
+	_, err = tc.client.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "retry-actor"},
+	})
+	if err != nil {
+		t.Fatalf("DeleteActor failed: %v", err)
 	}
 }
 
@@ -1058,29 +1558,6 @@ func TestListActors_Pagination(t *testing.T) {
 	}
 }
 
-func TestListActors_PageSizeValidation(t *testing.T) {
-	ns := namespaceForTest("ns-list-actors-validation")
-	tc := setupTest(t, ns)
-	defer tc.cleanup()
-
-	// 1. Negative page size
-	_, err := tc.client.ListActors(context.Background(), &ateapipb.ListActorsRequest{
-		Atespace: testAtespace,
-		PageSize: -1,
-	})
-	if status.Code(err) != codes.InvalidArgument {
-		t.Errorf("expected InvalidArgument error for negative page_size, got: %v", err)
-	}
-
-	// 2. Page size exceeding maxPageSize (1000) is coerced silently.
-	if _, err := tc.client.ListActors(context.Background(), &ateapipb.ListActorsRequest{
-		Atespace: testAtespace,
-		PageSize: 1001,
-	}); err != nil {
-		t.Errorf("expected page_size > 1000 to be coerced, got error: %v", err)
-	}
-}
-
 // TestListWorkers tests that workers mirrored to Redis are listed.
 // Workflow:
 // 1. Creates a mock WorkerPool in Kubernetes.
@@ -1118,6 +1595,7 @@ func TestListWorkers(t *testing.T) {
 			Version:         1,
 			SandboxClass:    "gvisor",
 			Labels:          map[string]string{"foo": "bar"},
+			State:           ateapipb.Worker_STATE_ACTIVE,
 		},
 	}
 
@@ -1220,6 +1698,7 @@ func TestResumeActor(t *testing.T) {
 		NodeName:     "node1",
 		SandboxClass: "gvisor",
 		Labels:       map[string]string{poolLabelKey: ns},
+		State:        ateapipb.Worker_STATE_ACTIVE,
 	}
 
 	if diff := cmp.Diff(wantWorker, actorWorker, protocmp.Transform(), protocmp.IgnoreFields(&ateapipb.Worker{}, "version"), protocmp.IgnoreFields(&ateapipb.Worker{}, "worker_pod_uid")); diff != "" {
@@ -1833,6 +2312,117 @@ func TestResumeActor_ReleasesStaleWorkerWhenPoolBecomesIneligible(t *testing.T) 
 	}
 }
 
+// TestResumeActor_ReleasesDrainingWorkerFromPriorAttempt exercises the reuse-loop
+// change in AssignWorkerStep.Execute: a worker still assigned to the actor from a
+// previous (failed) attempt that has since entered DRAINING must not be reused —
+// it is released and the actor is crashed.
+func TestResumeActor_CrashesIfAssignedWorkerIsDraining(t *testing.T) {
+	ns := namespaceForTest("ns-resume-release-draining")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	// createTemplate sets up pool1 (labeled pool=<ns>) + tmpl1 (selecting it) with
+	// a golden snapshot, so resume drives Restore. Two workers share the pool.
+	createTemplate(t, tc, ns)
+	createWorkerPod(t, tc, ns, "worker-a", "node1", "pool1")
+	createWorkerPod(t, tc, ns, "worker-b", "node1", "pool1")
+
+	id := "id1"
+	if _, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{
+		Actor: &ateapipb.Actor{
+			Metadata: &ateapipb.ResourceMetadata{
+				Atespace: testAtespace,
+				Name:     id,
+			},
+			ActorTemplateNamespace: ns,
+			ActorTemplateName:      "tmpl1",
+		},
+	}); err != nil {
+		t.Fatalf("CreateActor failed: %v", err)
+	}
+
+	// First resume fails after a worker is assigned, leaving the actor bound to
+	// that worker from a prior attempt.
+	tc.fakeAtelet.FailRestore = fmt.Errorf("mock atelet failure")
+	if _, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: id}}); err == nil {
+		t.Fatalf("expected first ResumeActor to fail")
+	}
+	tc.fakeAtelet.FailRestore = nil
+
+	// Learn which worker got assigned (findFreeWorker shuffles), then mark it
+	// DRAINING as the syncer would when its pod enters Terminating.
+	getResp, err := tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: id}})
+	if err != nil {
+		t.Fatalf("GetActor failed: %v", err)
+	}
+	assignedPod := getResp.GetAteomPodName()
+	if assignedPod == "" {
+		t.Fatalf("expected actor to be bound to a worker after the failed attempt")
+	}
+
+	assigned, err := tc.persistence.GetWorker(context.Background(), ns, "pool1", assignedPod)
+	if err != nil {
+		t.Fatalf("GetWorker(%s) failed: %v", assignedPod, err)
+	}
+	assigned.State = ateapipb.Worker_STATE_DRAINING
+	if err := tc.persistence.UpdateWorker(context.Background(), assigned, assigned.GetVersion()); err != nil {
+		t.Fatalf("marking worker %s draining failed: %v", assignedPod, err)
+	}
+
+	// Wait until the DRAINING state is observable, which also gives the store
+	// watch time to propagate it into the scheduler's worker cache.
+	if err := wait.PollUntilContextTimeout(context.Background(), 100*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
+		resp, err := tc.client.ListWorkers(ctx, &ateapipb.ListWorkersRequest{})
+		if err != nil {
+			return false, nil
+		}
+		for _, w := range resp.GetWorkers() {
+			if w.GetWorkerNamespace() == ns && w.GetWorkerPod() == assignedPod {
+				return w.GetState() == ateapipb.Worker_STATE_DRAINING, nil
+			}
+		}
+		return false, nil
+	}); err != nil {
+		t.Fatalf("worker %s did not reach DRAINING: %v", assignedPod, err)
+	}
+
+	// Second resume must fail and crash the actor because its worker is draining.
+	_, err = tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: id}})
+	if err == nil {
+		t.Fatalf("expected second ResumeActor to fail")
+	}
+	if status.Code(err) != codes.Aborted || !strings.Contains(err.Error(), "crashed") {
+		t.Errorf("expected Aborted/crashed error, got %v", err)
+	}
+
+	getResp, err = tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: id}})
+	if err != nil {
+		t.Fatalf("GetActor failed: %v", err)
+	}
+	if got := getResp.GetStatus(); got != ateapipb.Actor_STATUS_CRASHED {
+		t.Errorf("expected actor status CRASHED, got %v", got)
+	}
+	if got := getResp.GetAteomPodName(); got != "" {
+		t.Errorf("expected actor pod name to be empty, got %q", got)
+	}
+
+	// The draining worker must have been released.
+	listResp, err := tc.client.ListWorkers(context.Background(), &ateapipb.ListWorkersRequest{})
+	if err != nil {
+		t.Fatalf("ListWorkers failed: %v", err)
+	}
+	for _, w := range listResp.GetWorkers() {
+		if w.GetWorkerNamespace() != ns {
+			continue
+		}
+		if w.GetWorkerPod() == assignedPod {
+			if w.GetAssignment() != nil {
+				t.Errorf("expected draining worker %q to be released, still assigned to %q", assignedPod, w.GetAssignment().GetActor().GetName())
+			}
+		}
+	}
+}
+
 // TestUpdateActor_ReassignsPoolAcrossSuspendResume verifies that updating an
 // actor's worker_selector moves it onto a different eligible pool not just
 // on the next fresh resume, but also across a full suspend/resume cycle of
@@ -1919,444 +2509,74 @@ func TestUpdateActor_ReassignsPoolAcrossSuspendResume(t *testing.T) {
 	}
 }
 
-// TestValidation tests the negative validation cases for all gRPC methods.
-// Workflow:
-// 1. Uses table-driven tests for each RPC method (CreateActor, GetActor, ResumeActor, SuspendActor).
-// 2. Passes invalid requests (missing required fields).
-// 3. Verifies that all requests fail with an error.
 func TestValidation(t *testing.T) {
 	ns := namespaceForTest("ns-validation")
 	tc := setupTest(t, ns)
 	defer tc.cleanup()
 
 	t.Run("CreateActor", func(t *testing.T) {
-		tests := []struct {
-			name    string
-			req     *ateapipb.CreateActorRequest
-			wantMsg string
-		}{{
-			"missing actor_template_namespace",
-			&ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "id1"}, ActorTemplateName: "tmpl1"}},
-			"actor.actor_template_namespace: Required value",
-		}, {
-			"invalid actor_template_namespace",
-			&ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-				Metadata:               &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "id1"},
-				ActorTemplateNamespace: "invalid value",
-				ActorTemplateName:      "tmpl1",
-			}},
-			"actor.actor_template_namespace: Invalid value",
-		}, {
-			"missing actor_template_name",
-			&ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "id1"}, ActorTemplateNamespace: "ns1"}},
-			"actor.actor_template_name: Required value",
-		}, {
-			"invalid actor_template_name",
-			&ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-				Metadata:               &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "id1"},
-				ActorTemplateNamespace: "ns1",
-				ActorTemplateName:      "invalid value",
-			}},
-			"actor.actor_template_name: Invalid value",
-		}, {
-			"missing actor",
-			&ateapipb.CreateActorRequest{},
-			"actor: Required value",
-		}, {
-			"missing actor.atespace",
-			&ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-				Metadata:               &ateapipb.ResourceMetadata{Name: "id1"},
-				ActorTemplateNamespace: "ns1",
-				ActorTemplateName:      "tmpl1",
-			}},
-			"actor.metadata.atespace: Required value",
-		}, {
-			"invalid actor.atespace",
-			&ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-				Metadata:               &ateapipb.ResourceMetadata{Atespace: "NS1", Name: "id1"},
-				ActorTemplateNamespace: "ns1",
-				ActorTemplateName:      "tmpl1",
-			}},
-			"actor.metadata.atespace: Invalid value",
-		}, {
-			"missing actor.name",
-			&ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-				Metadata:               &ateapipb.ResourceMetadata{Atespace: "ns1"},
-				ActorTemplateNamespace: "ns1",
-				ActorTemplateName:      "tmpl1",
-			}},
-			"actor.metadata.name: Required value",
-		}, {
-			"invalid actor.name",
-			&ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-				Metadata:               &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "ID1"},
-				ActorTemplateNamespace: "ns1",
-				ActorTemplateName:      "tmpl1",
-			}},
-			"actor.metadata.name: Invalid value",
-		}, {
-			"invalid worker_selector label key",
-			&ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-				Metadata:               &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "id1"},
-				ActorTemplateNamespace: "ns1",
-				ActorTemplateName:      "tmpl1",
-				WorkerSelector:         &ateapipb.Selector{MatchLabels: map[string]string{"bad key!": "x"}},
-			}},
-			`actor.worker_selector.match_labels\[bad key!\]: Invalid value`,
-		}, {
-			"invalid worker_selector label value",
-			&ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-				Metadata:               &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "id1"},
-				ActorTemplateNamespace: "ns1",
-				ActorTemplateName:      "tmpl1",
-				WorkerSelector:         &ateapipb.Selector{MatchLabels: map[string]string{"tier": "not valid!"}},
-			}},
-			`actor.worker_selector.match_labels\[tier\]: Invalid value`,
-		}, {
-			"too many worker_selector.match_labels",
-			&ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-				Metadata:               &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "id1"},
-				ActorTemplateNamespace: "ns1",
-				ActorTemplateName:      "tmpl1",
-				WorkerSelector:         &ateapipb.Selector{MatchLabels: selectorLabelsOfSize(11)}}},
-			"actor.worker_selector.match_labels: Too many",
-		}}
-		for _, tt := range tests {
-			t.Run(tt.name, func(t *testing.T) {
-				_, err := tc.client.CreateActor(context.Background(), tt.req)
-				assertGrpcErrorRegex(t, err, codes.InvalidArgument, tt.wantMsg)
-			})
-		}
+		_, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{})
+		assertGrpcErrorRegex(t, err, codes.InvalidArgument, "actor: Required value")
 	})
 
 	t.Run("GetActor", func(t *testing.T) {
-		tests := []struct {
-			name    string
-			req     *ateapipb.GetActorRequest
-			wantMsg string
-		}{{
-			"missing actor",
-			&ateapipb.GetActorRequest{},
-			"actor: Required value",
-		}, {
-			"missing actor.atespace",
-			&ateapipb.GetActorRequest{
-				Actor: &ateapipb.ObjectRef{Name: "id1"},
-			},
-			"actor.atespace: Required value",
-		}, {
-			"invalid actor.atespace",
-			&ateapipb.GetActorRequest{
-				Actor: &ateapipb.ObjectRef{Atespace: "NS1", Name: "id1"},
-			},
-			"actor.atespace: Invalid value",
-		}, {
-			"missing actor.name",
-			&ateapipb.GetActorRequest{
-				Actor: &ateapipb.ObjectRef{Atespace: "ns1"},
-			},
-			"actor.name: Required value",
-		}, {
-			"invalid actor.name",
-			&ateapipb.GetActorRequest{
-				Actor: &ateapipb.ObjectRef{Atespace: "ns1", Name: "ID1"},
-			},
-			"actor.name: Invalid value",
-		}}
-		for _, tt := range tests {
-			t.Run(tt.name, func(t *testing.T) {
-				_, err := tc.client.GetActor(context.Background(), tt.req)
-				assertGrpcErrorRegex(t, err, codes.InvalidArgument, tt.wantMsg)
-			})
-		}
+		_, err := tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{})
+		assertGrpcErrorRegex(t, err, codes.InvalidArgument, "actor: Required value")
 	})
 
 	t.Run("ResumeActor", func(t *testing.T) {
-		tests := []struct {
-			name    string
-			req     *ateapipb.ResumeActorRequest
-			wantMsg string
-		}{{
-			"missing actor",
-			&ateapipb.ResumeActorRequest{},
-			"actor: Required value",
-		}, {
-			"missing actor.atespace",
-			&ateapipb.ResumeActorRequest{
-				Actor: &ateapipb.ObjectRef{Name: "id1"},
-			},
-			"actor.atespace: Required value",
-		}, {
-			"invalid actor.atespace",
-			&ateapipb.ResumeActorRequest{
-				Actor: &ateapipb.ObjectRef{Atespace: "NS1", Name: "id1"},
-			},
-			"actor.atespace: Invalid value",
-		}, {
-			"missing actor.name",
-			&ateapipb.ResumeActorRequest{
-				Actor: &ateapipb.ObjectRef{Atespace: "ns1"},
-			},
-			"actor.name: Required value",
-		}, {
-			"invalid actor.name",
-			&ateapipb.ResumeActorRequest{
-				Actor: &ateapipb.ObjectRef{Atespace: "ns1", Name: "ID1"},
-			},
-			"actor.name: Invalid value",
-		}}
-		for _, tt := range tests {
-			t.Run(tt.name, func(t *testing.T) {
-				_, err := tc.client.ResumeActor(context.Background(), tt.req)
-				assertGrpcErrorRegex(t, err, codes.InvalidArgument, tt.wantMsg)
-			})
-		}
+		_, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{})
+		assertGrpcErrorRegex(t, err, codes.InvalidArgument, "actor: Required value")
 	})
 
 	t.Run("PauseActor", func(t *testing.T) {
-		tests := []struct {
-			name    string
-			req     *ateapipb.PauseActorRequest
-			wantMsg string
-		}{{
-			"missing actor",
-			&ateapipb.PauseActorRequest{},
-			"actor: Required value",
-		}, {
-			"missing actor.atespace",
-			&ateapipb.PauseActorRequest{
-				Actor: &ateapipb.ObjectRef{Name: "id1"},
-			},
-			"actor.atespace: Required value",
-		}, {
-			"invalid actor.atespace",
-			&ateapipb.PauseActorRequest{
-				Actor: &ateapipb.ObjectRef{Atespace: "NS1", Name: "id1"},
-			},
-			"actor.atespace: Invalid value",
-		}, {
-			"missing actor.name",
-			&ateapipb.PauseActorRequest{
-				Actor: &ateapipb.ObjectRef{Atespace: "ns1"},
-			},
-			"actor.name: Required value",
-		}, {
-			"invalid actor.name",
-			&ateapipb.PauseActorRequest{
-				Actor: &ateapipb.ObjectRef{Atespace: "ns1", Name: "ID1"},
-			},
-			"actor.name: Invalid value",
-		}}
-		for _, tt := range tests {
-			t.Run(tt.name, func(t *testing.T) {
-				_, err := tc.client.PauseActor(context.Background(), tt.req)
-				assertGrpcErrorRegex(t, err, codes.InvalidArgument, tt.wantMsg)
-			})
-		}
+		_, err := tc.client.PauseActor(context.Background(), &ateapipb.PauseActorRequest{})
+		assertGrpcErrorRegex(t, err, codes.InvalidArgument, "actor: Required value")
 	})
 
 	t.Run("SuspendActor", func(t *testing.T) {
-		tests := []struct {
-			name    string
-			req     *ateapipb.SuspendActorRequest
-			wantMsg string
-		}{{
-			"missing actor",
-			&ateapipb.SuspendActorRequest{},
-			"actor: Required value",
-		}, {
-			"missing actor.atespace",
-			&ateapipb.SuspendActorRequest{
-				Actor: &ateapipb.ObjectRef{Name: "id1"},
-			},
-			"actor.atespace: Required value",
-		}, {
-			"invalid actor.atespace",
-			&ateapipb.SuspendActorRequest{
-				Actor: &ateapipb.ObjectRef{Atespace: "NS1", Name: "id1"},
-			},
-			"actor.atespace: Invalid value",
-		}, {
-			"missing actor.name",
-			&ateapipb.SuspendActorRequest{
-				Actor: &ateapipb.ObjectRef{Atespace: "ns1"},
-			},
-			"actor.name: Required value",
-		}, {
-			"invalid actor.name",
-			&ateapipb.SuspendActorRequest{
-				Actor: &ateapipb.ObjectRef{Atespace: "ns1", Name: "ID1"},
-			},
-			"actor.name: Invalid value",
-		}}
-		for _, tt := range tests {
-			t.Run(tt.name, func(t *testing.T) {
-				_, err := tc.client.SuspendActor(context.Background(), tt.req)
-				assertGrpcErrorRegex(t, err, codes.InvalidArgument, tt.wantMsg)
-			})
-		}
+		_, err := tc.client.SuspendActor(context.Background(), &ateapipb.SuspendActorRequest{})
+		assertGrpcErrorRegex(t, err, codes.InvalidArgument, "actor: Required value")
 	})
 
 	t.Run("UpdateActor", func(t *testing.T) {
-		tests := []struct {
-			name    string
-			req     *ateapipb.UpdateActorRequest
-			wantMsg string
-		}{{
-			"missing actor",
-			&ateapipb.UpdateActorRequest{},
-			"actor: Required value",
-		}, {
-			"missing actor.atespace",
-			&ateapipb.UpdateActorRequest{
-				Actor: &ateapipb.ObjectRef{Name: "id1"},
-			},
-			"actor.atespace: Required value",
-		}, {
-			"invalid actor.atespace",
-			&ateapipb.UpdateActorRequest{
-				Actor: &ateapipb.ObjectRef{Atespace: "NS1", Name: "id1"},
-			},
-			"actor.atespace: Invalid value",
-		}, {
-			"missing actor.name",
-			&ateapipb.UpdateActorRequest{
-				Actor: &ateapipb.ObjectRef{Atespace: "ns1"},
-			},
-			"actor.name: Required value",
-		}, {
-			"invalid actor.name",
-			&ateapipb.UpdateActorRequest{
-				Actor: &ateapipb.ObjectRef{Atespace: "ns1", Name: "ID1"},
-			},
-			"actor.name: Invalid value",
-		}, {
-			"invalid worker_selector label key",
-			&ateapipb.UpdateActorRequest{
-				Actor:          &ateapipb.ObjectRef{Atespace: "ns1", Name: "id1"},
-				WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"bad key!": "x"}},
-			},
-			`worker_selector.match_labels\[bad key!\]: Invalid value`,
-		}, {
-			"invalid worker_selector label value",
-			&ateapipb.UpdateActorRequest{
-				Actor:          &ateapipb.ObjectRef{Atespace: "ns1", Name: "id1"},
-				WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"tier": "not valid!"}},
-			},
-			`worker_selector.match_labels\[tier\]: Invalid value`,
-		}, {
-			"too many worker_selector.match_labels",
-			&ateapipb.UpdateActorRequest{
-				Actor:          &ateapipb.ObjectRef{Atespace: "ns1", Name: "id1"},
-				WorkerSelector: &ateapipb.Selector{MatchLabels: selectorLabelsOfSize(11)}},
-			"worker_selector.match_labels: Too many",
-		}}
-		for _, tt := range tests {
-			t.Run(tt.name, func(t *testing.T) {
-				_, err := tc.client.UpdateActor(context.Background(), tt.req)
-				assertGrpcErrorRegex(t, err, codes.InvalidArgument, tt.wantMsg)
-			})
-		}
+		_, err := tc.client.UpdateActor(context.Background(), &ateapipb.UpdateActorRequest{})
+		assertGrpcErrorRegex(t, err, codes.InvalidArgument, "actor: Required value")
 	})
 
 	t.Run("DeleteActor", func(t *testing.T) {
-		tests := []struct {
-			name    string
-			req     *ateapipb.DeleteActorRequest
-			wantMsg string
-		}{{
-			"missing actor",
-			&ateapipb.DeleteActorRequest{},
-			"actor: Required value",
-		}, {
-			"missing actor.atespace",
-			&ateapipb.DeleteActorRequest{
-				Actor: &ateapipb.ObjectRef{Name: "id1"},
-			},
-			"actor.atespace: Required value",
-		}, {
-			"invalid actor.atespace",
-			&ateapipb.DeleteActorRequest{
-				Actor: &ateapipb.ObjectRef{Atespace: "NS1", Name: "id1"},
-			},
-			"actor.atespace: Invalid value",
-		}, {
-			"missing actor.name",
-			&ateapipb.DeleteActorRequest{
-				Actor: &ateapipb.ObjectRef{Atespace: "ns1"},
-			},
-			"actor.name: Required value",
-		}, {
-			"invalid actor.name",
-			&ateapipb.DeleteActorRequest{
-				Actor: &ateapipb.ObjectRef{Atespace: "ns1", Name: "ID1"},
-			},
-			"actor.name: Invalid value",
-		}}
-		for _, tt := range tests {
-			t.Run(tt.name, func(t *testing.T) {
-				_, err := tc.client.DeleteActor(context.Background(), tt.req)
-				assertGrpcErrorRegex(t, err, codes.InvalidArgument, tt.wantMsg)
-			})
-		}
+		_, err := tc.client.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{})
+		assertGrpcErrorRegex(t, err, codes.InvalidArgument, "actor: Required value")
 	})
 
 	t.Run("ListActors", func(t *testing.T) {
-		tests := []struct {
-			name    string
-			req     *ateapipb.ListActorsRequest
-			wantMsg string
-		}{{
-			"invalid atespace",
-			&ateapipb.ListActorsRequest{Atespace: "NS1"},
-			"atespace: Invalid value",
-		}, {
-			"negative page_size",
-			&ateapipb.ListActorsRequest{Atespace: "ns1", PageSize: -1},
-			"page_size: Invalid value",
-		}}
-		for _, tt := range tests {
-			t.Run(tt.name, func(t *testing.T) {
-				_, err := tc.client.ListActors(context.Background(), tt.req)
-				assertGrpcErrorRegex(t, err, codes.InvalidArgument, tt.wantMsg)
-			})
-		}
+		_, err := tc.client.ListActors(context.Background(), &ateapipb.ListActorsRequest{PageSize: -1})
+		assertGrpcErrorRegex(t, err, codes.InvalidArgument, "page_size: Invalid value")
 	})
 
 	t.Run("ListWorkers", func(t *testing.T) {
-		tests := []struct {
-			name    string
-			req     *ateapipb.ListWorkersRequest
-			wantMsg string
-		}{{
-			"negative page_size",
-			&ateapipb.ListWorkersRequest{PageSize: -1},
-			"page_size: Invalid value",
-		}}
-		for _, tt := range tests {
-			t.Run(tt.name, func(t *testing.T) {
-				_, err := tc.client.ListWorkers(context.Background(), tt.req)
-				assertGrpcErrorRegex(t, err, codes.InvalidArgument, tt.wantMsg)
-			})
-		}
+		_, err := tc.client.ListWorkers(context.Background(), &ateapipb.ListWorkersRequest{PageSize: -1})
+		assertGrpcErrorRegex(t, err, codes.InvalidArgument, "page_size: Invalid value")
 	})
 
 	t.Run("ListAtespaces", func(t *testing.T) {
-		tests := []struct {
-			name    string
-			req     *ateapipb.ListAtespacesRequest
-			wantMsg string
-		}{{
-			"negative page_size",
-			&ateapipb.ListAtespacesRequest{PageSize: -1},
-			"page_size: Invalid value",
-		}}
-		for _, tt := range tests {
-			t.Run(tt.name, func(t *testing.T) {
-				_, err := tc.client.ListAtespaces(context.Background(), tt.req)
-				assertGrpcErrorRegex(t, err, codes.InvalidArgument, tt.wantMsg)
-			})
-		}
+		_, err := tc.client.ListAtespaces(context.Background(), &ateapipb.ListAtespacesRequest{PageSize: -1})
+		assertGrpcErrorRegex(t, err, codes.InvalidArgument, "page_size: Invalid value")
+	})
+
+	t.Run("CreateAtespace", func(t *testing.T) {
+		_, err := tc.client.CreateAtespace(context.Background(), &ateapipb.CreateAtespaceRequest{})
+		assertGrpcErrorRegex(t, err, codes.InvalidArgument, "atespace: Required value")
+	})
+
+	t.Run("GetAtespace", func(t *testing.T) {
+		_, err := tc.client.GetAtespace(context.Background(), &ateapipb.GetAtespaceRequest{})
+		assertGrpcErrorRegex(t, err, codes.InvalidArgument, "atespace: Required value")
+	})
+
+	t.Run("DeleteAtespace", func(t *testing.T) {
+		_, err := tc.client.DeleteAtespace(context.Background(), &ateapipb.DeleteAtespaceRequest{})
+		assertGrpcErrorRegex(t, err, codes.InvalidArgument, "atespace: Required value")
 	})
 }
 
@@ -2461,28 +2681,27 @@ func TestResumeActor_DanglingWorker(t *testing.T) {
 	tc.fakeAtelet.FailRestore = nil
 	tc.fakeAtelet.RestoreCalled = false // reset
 
-	// 8. Call ResumeActor again -> Expect success and picking Worker B!
+	// 8. Call ResumeActor again -> Expect it to fail because it is already CRASHED by background syncer.
 	_, err = tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
 	})
-	if err != nil {
-		t.Fatalf("ResumeActor failed on retry: %v", err)
+	if err == nil {
+		t.Fatalf("expected ResumeActor to fail because worker is gone")
+	}
+	if status.Code(err) != codes.FailedPrecondition || !strings.Contains(err.Error(), "STATUS_CRASHED") {
+		t.Errorf("expected FailedPrecondition/STATUS_CRASHED error, got %v", err)
 	}
 
-	if !tc.fakeAtelet.RestoreCalled {
-		t.Errorf("expected Restore to be called on retry")
-	}
-
-	// Verify actor state is RUNNING with worker B assigned
+	// Verify actor state is CRASHED and worker assignment is empty
 	actor, err = tc.persistence.GetActor(context.Background(), resources.ActorRef{Atespace: testAtespace, Name: name})
 	if err != nil {
 		t.Fatalf("failed to get actor from store: %v", err)
 	}
-	if actor.GetStatus() != ateapipb.Actor_STATUS_RUNNING {
-		t.Errorf("expected status RUNNING, got %v", actor.GetStatus())
+	if actor.GetStatus() != ateapipb.Actor_STATUS_CRASHED {
+		t.Errorf("expected status CRASHED, got %v", actor.GetStatus())
 	}
-	if actor.GetAteomPodName() != "worker-b" {
-		t.Errorf("expected worker-b assigned, got %v", actor.GetAteomPodName())
+	if actor.GetAteomPodName() != "" {
+		t.Errorf("expected worker to be unassigned, got %v", actor.GetAteomPodName())
 	}
 }
 
@@ -2516,29 +2735,26 @@ func TestSuspendActor_DanglingWorker(t *testing.T) {
 
 	deleteWorkerPod(t, tc, ns, "worker-1")
 
-	// 3. Call SuspendActor -> Should succeed (our fix skips missing pod execution)
-	actors, _, _ := tc.persistence.ListActors(context.Background(), testAtespace, maxPageSize, "")
-	t.Logf("Actors in Redis before Suspend: %d", len(actors))
-	for _, a := range actors {
-		t.Logf("  Actor: %s/%s/%s", a.GetActorTemplateNamespace(), a.GetActorTemplateName(), a.GetMetadata().GetName())
-	}
-
+	// 3. Call SuspendActor -> Expect it to fail because it is already CRASHED by background syncer
 	_, err = tc.client.SuspendActor(context.Background(), &ateapipb.SuspendActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
 	})
-	if err != nil {
-		t.Fatalf("SuspendActor failed: %v", err)
+	if err == nil {
+		t.Fatalf("expected SuspendActor to fail because worker is gone")
+	}
+	if status.Code(err) != codes.FailedPrecondition || !strings.Contains(err.Error(), "STATUS_CRASHED") {
+		t.Errorf("expected FailedPrecondition error, got %v", err)
 	}
 
-	// 4. Verify it becomes SUSPENDED in Redis
+	// 4. Verify it becomes CRASHED in Redis
 	getResp, err := tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
 	})
 	if err != nil {
 		t.Fatalf("GetActor failed: %v", err)
 	}
-	if getResp.GetStatus() != ateapipb.Actor_STATUS_SUSPENDED {
-		t.Errorf("expected status SUSPENDED, got %v", getResp.GetStatus())
+	if getResp.GetStatus() != ateapipb.Actor_STATUS_CRASHED {
+		t.Errorf("expected status CRASHED, got %v", getResp.GetStatus())
 	}
 	if getResp.GetAteomPodNamespace() != "" {
 		t.Errorf("expected ateom_pod_namespace to be empty, got %v", getResp.GetAteomPodNamespace())
@@ -2608,7 +2824,7 @@ func TestDeleteActor_NotSuspended(t *testing.T) {
 	_, err = tc.client.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "id1"},
 	})
-	assertGrpcError(t, err, codes.FailedPrecondition, "Actor test-atespace/id1 is not suspended (status: STATUS_RUNNING)")
+	assertGrpcError(t, err, codes.FailedPrecondition, "Actor test-atespace/id1 is not in a deletable status (status: STATUS_RUNNING)")
 }
 
 func TestDeleteActor_Crashed(t *testing.T) {
@@ -2642,8 +2858,8 @@ func TestDeleteActor_Crashed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DeleteActor of crashed actor failed: %v", err)
 	}
-	if got := deleted.GetStatus(); got != ateapipb.Actor_STATUS_CRASHED {
-		t.Errorf("deleted actor status = %v, want %v", got, ateapipb.Actor_STATUS_CRASHED)
+	if got := deleted.GetStatus(); got != ateapipb.Actor_STATUS_DELETING {
+		t.Errorf("deleted actor status = %v, want %v", got, ateapipb.Actor_STATUS_DELETING)
 	}
 
 	_, err = tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{
@@ -2772,24 +2988,6 @@ func TestCreateAtespace_AlreadyExists(t *testing.T) {
 	}
 	_, err := tc.client.CreateAtespace(context.Background(), &ateapipb.CreateAtespaceRequest{Atespace: &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: "team-a"}}})
 	assertGrpcError(t, err, codes.AlreadyExists, "Atespace team-a already exists")
-}
-
-func TestCreateAtespace_Validation(t *testing.T) {
-	ns := namespaceForTest("ns-create-atespace-validation")
-	tc := setupTest(t, ns)
-	defer tc.cleanup()
-
-	_, err := tc.client.CreateAtespace(context.Background(), &ateapipb.CreateAtespaceRequest{Atespace: &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: ""}}})
-	assertGrpcError(t, err, codes.InvalidArgument, "atespace.metadata.name: Required value")
-
-	// Invalid names — uppercase/underscore plus Redis-key/SCAN metacharacters —
-	// are rejected by ValidateAtespace before any key is built (injection guard).
-	for _, bad := range []string{"Team_A", "a*", "a:b", "a/b"} {
-		_, err := tc.client.CreateAtespace(context.Background(), &ateapipb.CreateAtespaceRequest{Atespace: &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: bad}}})
-		if status.Code(err) != codes.InvalidArgument {
-			t.Errorf("CreateAtespace(%q): got code %v, want InvalidArgument (err=%v)", bad, status.Code(err), err)
-		}
-	}
 }
 
 func TestGetAtespace_Found(t *testing.T) {
@@ -2928,19 +3126,7 @@ func TestDeleteAtespace_NotFound(t *testing.T) {
 	assertGrpcError(t, err, codes.NotFound, "Atespace nope not found")
 }
 
-func TestDeleteAtespace_Validation(t *testing.T) {
-	ns := namespaceForTest("ns-delete-atespace-validation")
-	tc := setupTest(t, ns)
-	defer tc.cleanup()
-
-	_, err := tc.client.DeleteAtespace(context.Background(), &ateapipb.DeleteAtespaceRequest{Atespace: &ateapipb.ObjectRef{Name: ""}})
-	assertGrpcError(t, err, codes.InvalidArgument, "atespace.name: Required value")
-
-	// Metacharacter names are rejected before the emptiness glob scan ever runs.
-	for _, bad := range []string{"a*", "a:b"} {
-		_, err := tc.client.DeleteAtespace(context.Background(), &ateapipb.DeleteAtespaceRequest{Atespace: &ateapipb.ObjectRef{Name: bad}})
-		if status.Code(err) != codes.InvalidArgument {
-			t.Errorf("DeleteAtespace(%q): got code %v, want InvalidArgument", bad, status.Code(err))
-		}
-	}
+func assertValidateErr(t *testing.T, got field.ErrorList, want field.ErrorList) {
+	t.Helper()
+	field.ErrorMatcher{}.ByType().ByField().ByValue().Test(t, want, got)
 }

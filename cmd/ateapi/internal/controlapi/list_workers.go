@@ -19,14 +19,12 @@ import (
 	"fmt"
 
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
 func (s *Service) ListWorkers(ctx context.Context, req *ateapipb.ListWorkersRequest) (*ateapipb.ListWorkersResponse, error) {
-	if err := validateListWorkersRequest(req); err != nil {
-		return nil, err
+	if errs := validateListWorkersRequest(req); len(errs) > 0 {
+		return nil, toGRPCStatusError(errs)
 	}
 
 	workers, nextToken, err := s.persistence.ListWorkers(ctx, effectivePageSize(req.GetPageSize()), req.GetPageToken())
@@ -39,7 +37,7 @@ func (s *Service) ListWorkers(ctx context.Context, req *ateapipb.ListWorkersRequ
 	}, nil
 }
 
-func validateListWorkersRequest(req *ateapipb.ListWorkersRequest) error {
+func validateListWorkersRequest(req *ateapipb.ListWorkersRequest) field.ErrorList {
 	var fldPath *field.Path
 	var errs field.ErrorList
 
@@ -47,8 +45,5 @@ func validateListWorkersRequest(req *ateapipb.ListWorkersRequest) error {
 		errs = append(errs, field.Invalid(fldPath, val, "must be greater than or equal to 0"))
 	}
 
-	if len(errs) > 0 {
-		return status.Error(codes.InvalidArgument, errs.ToAggregate().Error())
-	}
-	return nil
+	return errs
 }

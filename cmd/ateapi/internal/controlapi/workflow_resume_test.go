@@ -44,6 +44,7 @@ func TestAssignWorkerStep_SkipsWorkerAssignedInOtherAtespace(t *testing.T) {
 		WorkerPool:      "pool",
 		WorkerPod:       "pod-1",
 		SandboxClass:    "gvisor",
+		State:           ateapipb.Worker_STATE_ACTIVE,
 		Assignment: &ateapipb.Assignment{
 			Actor: &ateapipb.ObjectRef{Atespace: "team-b", Name: "shared"},
 		},
@@ -97,6 +98,7 @@ func TestAssignWorkerStep_ReleasesIneligibleStaleWorkerInBackground(t *testing.T
 		WorkerPool:      "pool-a",
 		WorkerPod:       "stale-pod",
 		SandboxClass:    "microvm",
+		State:           ateapipb.Worker_STATE_ACTIVE,
 		Assignment: &ateapipb.Assignment{
 			Actor: &ateapipb.ObjectRef{Atespace: "team-a", Name: "id1"},
 		},
@@ -106,6 +108,7 @@ func TestAssignWorkerStep_ReleasesIneligibleStaleWorkerInBackground(t *testing.T
 		WorkerPool:      "pool-b",
 		WorkerPod:       "free-pod",
 		SandboxClass:    "gvisor",
+		State:           ateapipb.Worker_STATE_ACTIVE,
 	}
 	for _, w := range []*ateapipb.Worker{stale, free} {
 		if err := persistence.CreateWorker(ctx, w); err != nil {
@@ -175,12 +178,14 @@ func TestAssignWorkerStep_RetryAfterConflictPicksFreshWorker(t *testing.T) {
 		WorkerPool:      "pool",
 		WorkerPod:       "contested-pod",
 		SandboxClass:    "gvisor",
+		State:           ateapipb.Worker_STATE_ACTIVE,
 	}
 	fallback := &ateapipb.Worker{
 		WorkerNamespace: "worker-ns",
 		WorkerPool:      "pool",
 		WorkerPod:       "fallback-pod",
 		SandboxClass:    "gvisor",
+		State:           ateapipb.Worker_STATE_ACTIVE,
 	}
 	for _, w := range []*ateapipb.Worker{contested, fallback} {
 		if err := persistence.CreateWorker(ctx, w); err != nil {
@@ -290,6 +295,7 @@ func seedAssignFixture(t *testing.T, ctx context.Context, persistence store.Inte
 		WorkerPool:      "pool",
 		WorkerPod:       "pod-1",
 		SandboxClass:    "gvisor",
+		State:           ateapipb.Worker_STATE_ACTIVE,
 	}); err != nil {
 		t.Fatalf("CreateWorker: %v", err)
 	}
@@ -533,6 +539,7 @@ func TestResumeSteps_CheckPrerequisite(t *testing.T) {
 					Actor: &ateapipb.Actor{Status: st},
 					Worker: &ateapipb.Worker{
 						SandboxClass: string(atev1alpha1.SandboxClassGvisor),
+						State:        ateapipb.Worker_STATE_ACTIVE,
 						Assignment:   &ateapipb.Assignment{Actor: &ateapipb.ObjectRef{Name: "id1"}},
 					},
 					ActorTemplate: &atev1alpha1.ActorTemplate{Spec: atev1alpha1.ActorTemplateSpec{SandboxClass: atev1alpha1.SandboxClassGvisor}},
@@ -643,6 +650,7 @@ func TestCallAteletRestoreStep_CheckPrerequisite_WorkerOwnership(t *testing.T) {
 				WorkerPool:      "pool",
 				WorkerPod:       "pod-1",
 				SandboxClass:    tt.sandboxClass,
+				State:           ateapipb.Worker_STATE_ACTIVE,
 				Assignment:      tt.assignment,
 			}); err != nil {
 				t.Fatalf("CreateWorker: %v", err)

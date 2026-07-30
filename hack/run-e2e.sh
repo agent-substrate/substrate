@@ -103,5 +103,5 @@ if [[ -n "${KUBECTL_CONTEXT:-}" ]]; then
     extra_e2e_args+=("--kube-context" "${KUBECTL_CONTEXT}")
 fi
 
-exec go test -v "$target_path" "${go_test_args[@]}" -args --e2e "${extra_e2e_args[@]}" "${e2e_args[@]}"
+exec go test -v "$target_path" ${go_test_args[@]+"${go_test_args[@]}"} -args --e2e ${extra_e2e_args[@]+"${extra_e2e_args[@]}"} ${e2e_args[@]+"${e2e_args[@]}"}
 

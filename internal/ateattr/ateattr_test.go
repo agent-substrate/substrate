@@ -148,6 +148,7 @@ func TestKeySpellings(t *testing.T) {
 		{TemplateNameKey, "ate.template.name"},
 		{TemplateNamespaceKey, "ate.template.namespace"},
 		{ActorVersionKey, "ate.actor.version"},
+		{WorkerPoolNamespaceKey, "ate.workerpool.namespace"},
 		{WorkerPoolNameKey, "ate.workerpool.name"},
 		{WorkerStateKey, "ate.worker.state"},
 		{SandboxClassKey, "ate.sandbox.class"},

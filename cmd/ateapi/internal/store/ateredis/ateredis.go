@@ -504,8 +504,7 @@ func (s *Persistence) DeleteActor(ctx context.Context, actorRef resources.ActorR
 			return fmt.Errorf("in protojson.Unmarshal: %w", err)
 		}
 
-		if currentActor.GetStatus() != ateapipb.Actor_STATUS_SUSPENDED &&
-			currentActor.GetStatus() != ateapipb.Actor_STATUS_CRASHED {
+		if currentActor.GetStatus() != ateapipb.Actor_STATUS_DELETING {
 			return store.ErrFailedPrecondition
 		}
 

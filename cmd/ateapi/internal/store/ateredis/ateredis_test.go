@@ -76,7 +76,7 @@ func TestCreateActor_Success(t *testing.T) {
 	_, s, ctx := setupTest(t)
 
 	actor := &ateapipb.Actor{
-		Metadata:               &ateapipb.ResourceMetadata{Name: "session-1", Atespace: testAtespace},
+		Metadata:               &ateapipb.ResourceMetadata{Name: "actor-1", Atespace: testAtespace},
 		ActorTemplateNamespace: "default",
 		ActorTemplateName:      "test-template",
 		Status:                 ateapipb.Actor_STATUS_SUSPENDED,
@@ -124,7 +124,7 @@ func TestCreateActor_AlreadyExists(t *testing.T) {
 	_, s, ctx := setupTest(t)
 
 	actor := &ateapipb.Actor{
-		Metadata:               &ateapipb.ResourceMetadata{Name: "session-1", Atespace: testAtespace},
+		Metadata:               &ateapipb.ResourceMetadata{Name: "actor-1", Atespace: testAtespace},
 		ActorTemplateNamespace: "default",
 		ActorTemplateName:      "test-template",
 		Status:                 ateapipb.Actor_STATUS_SUSPENDED,
@@ -145,7 +145,7 @@ func TestUpdateActor_Success(t *testing.T) {
 	_, s, ctx := setupTest(t)
 
 	actor := &ateapipb.Actor{
-		Metadata:               &ateapipb.ResourceMetadata{Name: "session-1", Atespace: testAtespace},
+		Metadata:               &ateapipb.ResourceMetadata{Name: "actor-1", Atespace: testAtespace},
 		ActorTemplateNamespace: "default",
 		ActorTemplateName:      "test-template",
 		Status:                 ateapipb.Actor_STATUS_SUSPENDED,
@@ -197,7 +197,7 @@ func TestUpdateActor_Conflict(t *testing.T) {
 	_, s, ctx := setupTest(t)
 
 	actor := &ateapipb.Actor{
-		Metadata:               &ateapipb.ResourceMetadata{Name: "session-1", Atespace: testAtespace},
+		Metadata:               &ateapipb.ResourceMetadata{Name: "actor-1", Atespace: testAtespace},
 		ActorTemplateNamespace: "default",
 		ActorTemplateName:      "test-template",
 		Status:                 ateapipb.Actor_STATUS_SUSPENDED,
@@ -339,7 +339,7 @@ func TestUpdateWorker_Success(t *testing.T) {
 			Name:      "test-template",
 		},
 		Actor: &ateapipb.ObjectRef{
-			Name: "session-1",
+			Name: "actor-1",
 		},
 	}
 
@@ -414,8 +414,9 @@ func TestDeleteActor(t *testing.T) {
 		status  ateapipb.Actor_Status
 		wantErr error
 	}{
-		{name: "suspended", status: ateapipb.Actor_STATUS_SUSPENDED},
-		{name: "crashed", status: ateapipb.Actor_STATUS_CRASHED},
+		{name: "suspended", status: ateapipb.Actor_STATUS_SUSPENDED, wantErr: store.ErrFailedPrecondition},
+		{name: "crashed", status: ateapipb.Actor_STATUS_CRASHED, wantErr: store.ErrFailedPrecondition},
+		{name: "deleting", status: ateapipb.Actor_STATUS_DELETING},
 		{name: "running", status: ateapipb.Actor_STATUS_RUNNING, wantErr: store.ErrFailedPrecondition},
 		{name: "paused", status: ateapipb.Actor_STATUS_PAUSED, wantErr: store.ErrFailedPrecondition},
 	}
@@ -425,7 +426,7 @@ func TestDeleteActor(t *testing.T) {
 			_, s, ctx := setupTest(t)
 
 			actor := &ateapipb.Actor{
-				Metadata:               &ateapipb.ResourceMetadata{Name: "session-1", Atespace: testAtespace},
+				Metadata:               &ateapipb.ResourceMetadata{Name: "actor-1", Atespace: testAtespace},
 				ActorTemplateNamespace: "default",
 				ActorTemplateName:      "test-template",
 				Status:                 tt.status,
@@ -435,7 +436,7 @@ func TestDeleteActor(t *testing.T) {
 				t.Fatalf("CreateActor failed: %v", err)
 			}
 
-			deleted, err := s.DeleteActor(ctx, resources.ActorRef{Atespace: testAtespace, Name: "session-1"})
+			deleted, err := s.DeleteActor(ctx, resources.ActorRef{Atespace: testAtespace, Name: "actor-1"})
 			if tt.wantErr != nil {
 				if !errors.Is(err, tt.wantErr) {
 					t.Errorf("DeleteActor: expected %v, got %v", tt.wantErr, err)
@@ -446,11 +447,11 @@ func TestDeleteActor(t *testing.T) {
 				t.Fatalf("DeleteActor failed: %v", err)
 			}
 			// DeleteActor returns the deleted resource.
-			if got := deleted.GetMetadata().GetName(); got != "session-1" {
-				t.Errorf("deleted actor name = %q, want session-1", got)
+			if got := deleted.GetMetadata().GetName(); got != "actor-1" {
+				t.Errorf("deleted actor name = %q, want actor-1", got)
 			}
 
-			if _, err := s.GetActor(ctx, resources.ActorRef{Atespace: testAtespace, Name: "session-1"}); !errors.Is(err, store.ErrNotFound) {
+			if _, err := s.GetActor(ctx, resources.ActorRef{Atespace: testAtespace, Name: "actor-1"}); !errors.Is(err, store.ErrNotFound) {
 				t.Errorf("expected ErrNotFound after delete, got %v", err)
 			}
 		})
@@ -599,14 +600,14 @@ func TestUpdateWorker_Conflict(t *testing.T) {
 	}
 
 	// Update instance 1
-	worker1.Assignment = &ateapipb.Assignment{Actor: &ateapipb.ObjectRef{Name: "session-1"}}
+	worker1.Assignment = &ateapipb.Assignment{Actor: &ateapipb.ObjectRef{Name: "actor-1"}}
 	err = s.UpdateWorker(ctx, worker1, worker1.Version)
 	if err != nil {
 		t.Fatalf("UpdateWorker failed: %v", err)
 	}
 
 	// Try to update instance 2
-	worker2.Assignment = &ateapipb.Assignment{Actor: &ateapipb.ObjectRef{Name: "session-2"}}
+	worker2.Assignment = &ateapipb.Assignment{Actor: &ateapipb.ObjectRef{Name: "actor-2"}}
 	err = s.UpdateWorker(ctx, worker2, worker2.Version)
 	if !errors.Is(err, store.ErrVersionConflict) {
 		t.Errorf("expected ErrVersionConflict, got %v", err)
@@ -1365,7 +1366,7 @@ func TestDeleteAtespace_EmptyAfterActorsRemoved(t *testing.T) {
 	if _, err := s.CreateAtespace(ctx, newTestAtespace("team-a")); err != nil {
 		t.Fatalf("CreateAtespace failed: %v", err)
 	}
-	if _, err := s.CreateActor(ctx, &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Name: "id1", Atespace: "team-a"}, Status: ateapipb.Actor_STATUS_SUSPENDED}); err != nil {
+	if _, err := s.CreateActor(ctx, &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Name: "id1", Atespace: "team-a"}, Status: ateapipb.Actor_STATUS_DELETING}); err != nil {
 		t.Fatalf("CreateActor failed: %v", err)
 	}
 	if _, err := s.DeleteAtespace(ctx, "team-a"); !errors.Is(err, store.ErrFailedPrecondition) {

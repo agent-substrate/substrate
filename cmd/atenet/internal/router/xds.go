@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"time"
@@ -52,6 +53,7 @@ import (
 	endpointgrpc "github.com/envoyproxy/go-control-plane/envoy/service/endpoint/v3"
 	listenergrpc "github.com/envoyproxy/go-control-plane/envoy/service/listener/v3"
 	routegrpc "github.com/envoyproxy/go-control-plane/envoy/service/route/v3"
+	secretgrpc "github.com/envoyproxy/go-control-plane/envoy/service/secret/v3"
 	typev3 "github.com/envoyproxy/go-control-plane/envoy/type/v3"
 	"github.com/envoyproxy/go-control-plane/pkg/cache/types"
 	cachev3 "github.com/envoyproxy/go-control-plane/pkg/cache/v3"
@@ -66,6 +68,7 @@ const (
 	RouteName            = "substrate_routes"
 	ClusterName          = "ate-cluster"
 	OtlpClusterName      = "otel_collector_cluster"
+	HTTPSCertSecretName  = "https_serving_cert"
 
 	// httpProtocolOptionsName is the well-known extension key Envoy looks for in
 	// a cluster's typed_extension_protocol_options. It must match the message's
@@ -164,6 +167,9 @@ func (x *XdsServer) SetExtProcMaxRequests(n int) {
 func (x *XdsServer) SetTlsConfig(httpsPort int, certPath string) {
 	x.mu.Lock()
 	defer x.mu.Unlock()
+	if httpsPort > 0 && certPath == "" {
+		slog.Warn("HTTPS port configured without a certificate path; the HTTPS listener will not be served", slog.Int("port", httpsPort))
+	}
 	x.httpsPort = httpsPort
 	x.certPath = certPath
 }
@@ -218,8 +224,10 @@ func (x *XdsServer) UpdateSnapshot() error {
 	listeners := []types.Resource{
 		x.buildListener(),
 	}
-	if x.httpsPort > 0 {
+	var secrets []types.Resource
+	if x.httpsPort > 0 && x.certPath != "" {
 		listeners = append(listeners, x.buildHttpsListener())
+		secrets = append(secrets, x.buildTlsSecret())
 	}
 
 	// Snapshot
@@ -227,6 +235,7 @@ func (x *XdsServer) UpdateSnapshot() error {
 		resourcev3.ClusterType:  clusters,
 		resourcev3.RouteType:    routes,
 		resourcev3.ListenerType: listeners,
+		resourcev3.SecretType:   secrets,
 	})
 
 	if err != nil {
@@ -255,6 +264,7 @@ func (x *XdsServer) Serve(ctx context.Context, lis net.Listener) error {
 	endpointgrpc.RegisterEndpointDiscoveryServiceServer(grpcServer, x.srv)
 	listenergrpc.RegisterListenerDiscoveryServiceServer(grpcServer, x.srv)
 	routegrpc.RegisterRouteDiscoveryServiceServer(grpcServer, x.srv)
+	secretgrpc.RegisterSecretDiscoveryServiceServer(grpcServer, x.srv)
 
 	errChan := make(chan error, 1)
 	go func() {
@@ -616,8 +626,16 @@ func (x *XdsServer) buildHttpsListener() *listenerv3.Listener {
 
 	tlsConfig := &tlsv3.DownstreamTlsContext{
 		CommonTlsContext: &tlsv3.CommonTlsContext{
-			TlsCertificates: []*tlsv3.TlsCertificate{
-				x.buildTlsCertificate(),
+			TlsCertificateSdsSecretConfigs: []*tlsv3.SdsSecretConfig{
+				{
+					Name: HTTPSCertSecretName,
+					SdsConfig: &corev3.ConfigSource{
+						ConfigSourceSpecifier: &corev3.ConfigSource_Ads{
+							Ads: &corev3.AggregatedConfigSource{},
+						},
+						ResourceApiVersion: corev3.ApiVersion_V3,
+					},
+				},
 			},
 		},
 	}
@@ -656,16 +674,29 @@ func (x *XdsServer) buildHttpsListener() *listenerv3.Listener {
 	}
 }
 
-func (x *XdsServer) buildTlsCertificate() *tlsv3.TlsCertificate {
-	return &tlsv3.TlsCertificate{
-		CertificateChain: &corev3.DataSource{
-			Specifier: &corev3.DataSource_Filename{
-				Filename: x.certPath,
-			},
-		},
-		PrivateKey: &corev3.DataSource{
-			Specifier: &corev3.DataSource_Filename{
-				Filename: x.certPath, // Assuming combined file
+func (x *XdsServer) buildTlsSecret() *tlsv3.Secret {
+	return &tlsv3.Secret{
+		Name: HTTPSCertSecretName,
+		Type: &tlsv3.Secret_TlsCertificate{
+			TlsCertificate: &tlsv3.TlsCertificate{
+				// The pod certificate is projected as a single PEM bundle
+				// holding both the cert chain and the private key, so both
+				// DataSources point at the same file.
+				CertificateChain: &corev3.DataSource{
+					Specifier: &corev3.DataSource_Filename{
+						Filename: x.certPath,
+					},
+				},
+				PrivateKey: &corev3.DataSource{
+					Specifier: &corev3.DataSource_Filename{
+						Filename: x.certPath,
+					},
+				},
+				// By specifying WatchedDirectory, we tell envoy to watch changes to the mounted pod certificate file.
+				// See documentation in https://pkg.go.dev/github.com/envoyproxy/go-control-plane/envoy/extensions/transport_sockets/tls/v3#:~:text=This%20only%20applies%20when%20a%20%E2%80%9CTlsCertificate%E2%80%9C%20is%20delivered%20by%20SDS
+				WatchedDirectory: &corev3.WatchedDirectory{
+					Path: filepath.Dir(x.certPath),
+				},
 			},
 		},
 	}

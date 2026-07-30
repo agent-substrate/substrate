@@ -17,10 +17,23 @@ For how the pieces fit together, see the [Architecture](architecture.md) and
   pods. It is reconciled into a Kubernetes `Deployment` by the
   [atecontroller](#components).
 
+- **SandboxConfig**: a cluster-scoped resource holding the sandbox binaries for
+  one runtime family (the gVisor `runsc` binary, or a micro-VM
+  kernel/firmware/config). A `WorkerPool` resolves its binaries from the config
+  it names, or from the cluster default for its class, so one config pins the
+  runtime version for many templates.
+
 ## Records (dynamic state, in the control-plane store)
 
 These are not Kubernetes objects; they live in the control-plane database
 because they change too frequently for etcd.
+
+- **Atespace**: the isolation boundary an Actor belongs to, and the first half
+  of its identity: an Actor is addressed by `(atespace, name)`, so the same
+  name can exist in two atespaces. Atespaces are global-scoped, not Kubernetes
+  namespaces, and are distinct from the namespace an `ActorTemplate` lives in.
+  One must exist before any Actor can be created in it, and it can only be
+  deleted once empty.
 
 - **Actor**: a single instance derived from an `ActorTemplate`, identified by a
   DNS-1123 name. It is the unit that is suspended and resumed, and it moves

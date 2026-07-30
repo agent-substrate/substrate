@@ -516,7 +516,7 @@ func TestAppendExternalVolumes(t *testing.T) {
 		},
 		ActorVolumes: []*ateapipb.ExternalVolume{
 			{
-				ActorVolumeId:   "space-abc-actor-123-vol-1",
+				VolumeName:      "vol-1",
 				StorageVolumeId: "vol-gce-pd-123",
 				VolumeType:      "pd-standard",
 			},

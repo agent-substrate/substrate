@@ -31,7 +31,10 @@ cd "${ROOT}"
 # that contains requirements.txt; its venv lives at <dir>/venv. Discovered
 # dynamically from tracked/untracked (but not ignored) requirements.txt files,
 # excluding vendored trees and the LICENSES/ directory.
-mapfile -t PROJECTS < <(
+PROJECTS=()
+while IFS= read -r line || [[ -n "${line}" ]]; do
+  [[ -n "${line}" ]] && PROJECTS+=("${line}")
+done < <(
   git ls-files \
     -cmo \
     --exclude-standard \
@@ -94,7 +97,7 @@ check_project() {
 }
 
 fail=0
-for proj in "${PROJECTS[@]}"; do
+for proj in ${PROJECTS[@]+"${PROJECTS[@]}"}; do
   if ! check_project "${proj}"; then
     echo "ERROR: ${proj} contains disallowed Python license(s)" >&2
     fail=1

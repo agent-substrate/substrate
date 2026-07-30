@@ -30,8 +30,8 @@ import (
 )
 
 func (s *Service) CreateActor(ctx context.Context, req *ateapipb.CreateActorRequest) (*ateapipb.Actor, error) {
-	if err := validateCreateActorRequest(req); err != nil {
-		return nil, err
+	if errs := validateCreateActorRequest(req); len(errs) > 0 {
+		return nil, toGRPCStatusError(errs)
 	}
 	in := req.GetActor()
 	templateNamespace := in.GetActorTemplateNamespace()
@@ -59,15 +59,9 @@ func (s *Service) CreateActor(ctx context.Context, req *ateapipb.CreateActorRequ
 		return nil, status.Errorf(codes.FailedPrecondition, "Atespace %s not found", atespace)
 	}
 
-	actorRef := &ateapipb.ObjectRef{
-		Atespace: atespace,
-		Name:     name,
-	}
-
-	volumes, err := s.createActorVolumes(ctx, actorRef, template)
-	if err != nil {
-		return nil, err
-	}
+	// Assuming CreateActor() will not become idempotent so we won't override volume state
+	// if the actor already exists.
+	initVols := initialActorVolumes(template)
 
 	actor := &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{
@@ -78,12 +72,10 @@ func (s *Service) CreateActor(ctx context.Context, req *ateapipb.CreateActorRequ
 		ActorTemplateNamespace: templateNamespace,
 		ActorTemplateName:      templateName,
 		WorkerSelector:         in.GetWorkerSelector(),
-		ActorVolumes:           volumes,
+		ActorVolumes:           initVols, // TODO: validate external volume fields
 	}
 	stored, err := s.persistence.CreateActor(ctx, actor)
 	if err != nil {
-		// Cleanup created volumes if DB write fails
-		_ = s.deleteActorVolumes(ctx, actorRef, volumes)
 		if errors.Is(err, store.ErrAlreadyExists) {
 			return nil, status.Errorf(codes.AlreadyExists, "Actor %s already exists", name)
 		}
@@ -94,7 +86,7 @@ func (s *Service) CreateActor(ctx context.Context, req *ateapipb.CreateActorRequ
 	return stored, nil
 }
 
-func validateCreateActorRequest(req *ateapipb.CreateActorRequest) error {
+func validateCreateActorRequest(req *ateapipb.CreateActorRequest) field.ErrorList {
 	var fldPath *field.Path
 	var errs field.ErrorList
 
@@ -102,7 +94,7 @@ func validateCreateActorRequest(req *ateapipb.CreateActorRequest) error {
 	actorPath := fldPath.Child("actor")
 	if actor == nil {
 		errs = append(errs, field.Required(actorPath, ""))
-		return status.Error(codes.InvalidArgument, errs.ToAggregate().Error())
+		return errs
 	}
 
 	metaPath := actorPath.Child("metadata")
@@ -136,10 +128,7 @@ func validateCreateActorRequest(req *ateapipb.CreateActorRequest) error {
 		errs = append(errs, validateSelector(val, actorPath.Child("worker_selector"))...)
 	}
 
-	if len(errs) > 0 {
-		return status.Error(codes.InvalidArgument, errs.ToAggregate().Error())
-	}
-	return nil
+	return errs
 }
 
 func validateSelector(sel *ateapipb.Selector, fldPath *field.Path) field.ErrorList {

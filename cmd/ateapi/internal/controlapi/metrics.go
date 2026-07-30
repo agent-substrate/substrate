@@ -36,7 +36,7 @@ func RegisterWorkerCount(meter metric.Meter, workers func() ([]*ateapipb.Worker,
 	counter, err := meter.Int64ObservableUpDownCounter(
 		workerpoolWorkersMetric,
 		metric.WithUnit("{worker}"),
-		metric.WithDescription("Number of workers by pool, worker state, and sandbox class."),
+		metric.WithDescription("Number of workers by pool namespace, pool, worker state, and sandbox class."),
 	)
 	if err != nil {
 		return fmt.Errorf("create %s updowncounter: %w", workerpoolWorkersMetric, err)
@@ -48,7 +48,7 @@ func RegisterWorkerCount(meter metric.Meter, workers func() ([]*ateapipb.Worker,
 			// Worker cache unavailable (warmup/reconnect): skip the whole observation.
 			return nil
 		}
-		type key struct{ pool, state, class string }
+		type key struct{ namespace, pool, state, class string }
 		tally := make(map[key]int64)
 		// Seed both states at 0 for every known pool so a saturated or empty pool
 		// reports 0, not an absent series that breaks idle==0 alerts. A failed
@@ -59,8 +59,8 @@ func RegisterWorkerCount(meter metric.Meter, workers func() ([]*ateapipb.Worker,
 				if class == "" {
 					class = string(atev1alpha1.SandboxClassGvisor)
 				}
-				tally[key{p.Name, ateattr.WorkerStateIdle, class}] = 0
-				tally[key{p.Name, ateattr.WorkerStateAssigned, class}] = 0
+				tally[key{p.Namespace, p.Name, ateattr.WorkerStateIdle, class}] = 0
+				tally[key{p.Namespace, p.Name, ateattr.WorkerStateAssigned, class}] = 0
 			}
 		}
 		for _, w := range ws {
@@ -68,10 +68,11 @@ func RegisterWorkerCount(meter metric.Meter, workers func() ([]*ateapipb.Worker,
 			if w.GetAssignment() != nil {
 				state = ateattr.WorkerStateAssigned
 			}
-			tally[key{w.GetWorkerPool(), state, w.GetSandboxClass()}]++
+			tally[key{w.GetWorkerNamespace(), w.GetWorkerPool(), state, w.GetSandboxClass()}]++
 		}
 		for k, n := range tally {
 			o.ObserveInt64(counter, n, metric.WithAttributes(
+				ateattr.WorkerPoolNamespaceKey.String(k.namespace),
 				ateattr.WorkerPoolNameKey.String(k.pool),
 				ateattr.WorkerStateKey.String(k.state),
 				ateattr.SandboxClassKey.String(k.class),

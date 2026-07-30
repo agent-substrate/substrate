@@ -95,6 +95,29 @@ func TestSchedule(t *testing.T) {
 			constraints: Constraints{SandboxClass: "gvisor"},
 		},
 		{
+			name: "draining workers never scheduled",
+			fleet: fleet{
+				worker("w-draining", "gvisor", "node-a", tierTwo, withState(ateapipb.Worker_STATE_DRAINING)),
+			},
+			constraints: Constraints{SandboxClass: "gvisor"},
+		},
+		{
+			name: "unspecified workers never scheduled",
+			fleet: fleet{
+				worker("w-unspecified", "gvisor", "node-a", tierTwo, withState(ateapipb.Worker_STATE_UNSPECIFIED)),
+			},
+			constraints: Constraints{SandboxClass: "gvisor"},
+		},
+		{
+			name: "picks active worker over draining one",
+			fleet: fleet{
+				worker("w-draining", "gvisor", "node-a", tierTwo, withState(ateapipb.Worker_STATE_DRAINING)),
+				worker("w-active", "gvisor", "node-a", tierTwo),
+			},
+			constraints: Constraints{SandboxClass: "gvisor"},
+			wantPod:     "w-active",
+		},
+		{
 			name:        "empty fleet",
 			fleet:       fleet{},
 			constraints: Constraints{SandboxClass: "gvisor"},
@@ -186,6 +209,18 @@ func TestApplies(t *testing.T) {
 				ActorSelector:    workloadSel},
 			want: false,
 		},
+		{
+			name:        "skips draining worker",
+			worker:      worker("w", "gvisor", "node-a", nil, withState(ateapipb.Worker_STATE_DRAINING)),
+			constraints: Constraints{SandboxClass: "gvisor"},
+			want:        false,
+		},
+		{
+			name:        "skips unspecified worker",
+			worker:      worker("w", "gvisor", "node-a", nil, withState(ateapipb.Worker_STATE_UNSPECIFIED)),
+			constraints: Constraints{SandboxClass: "gvisor"},
+			want:        false,
+		},
 	}
 
 	for _, tc := range tests {
@@ -207,12 +242,19 @@ func worker(pod, class, node string, lbls map[string]string, opts ...func(*ateap
 		WorkerPod:    pod,
 		SandboxClass: class,
 		NodeName:     node,
+		State:        ateapipb.Worker_STATE_ACTIVE,
 		Labels:       lbls,
 	}
 	for _, opt := range opts {
 		opt(w)
 	}
 	return w
+}
+
+func withState(state ateapipb.Worker_State) func(*ateapipb.Worker) {
+	return func(w *ateapipb.Worker) {
+		w.State = state
+	}
 }
 
 func assigned(atespace, name string) func(*ateapipb.Worker) {

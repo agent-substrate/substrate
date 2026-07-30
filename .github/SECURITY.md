@@ -65,7 +65,7 @@ valuable, listed roughly from most to least severe:
 - **Snapshot integrity and confidentiality**: reading another actor's
   suspend/resume snapshot, or resuming an actor from a tampered snapshot.
 - **Routing**: traffic intended for one actor delivered to another.
-- **Identity**: forging session identity (for example session JWTs).
+- **Identity**: forging actor identity (for example actor JWTs).
 - **Control-plane authentication and authorization bypass**: reaching
   `ateapi` RPCs without valid credentials (mTLS or JWT auth modes),
   misusing workerpool client certificates, or acting beyond what valid

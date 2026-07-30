@@ -28,8 +28,8 @@ import (
 )
 
 func (s *Service) GetAtespace(ctx context.Context, req *ateapipb.GetAtespaceRequest) (*ateapipb.Atespace, error) {
-	if err := validateGetAtespaceRequest(req); err != nil {
-		return nil, err
+	if errs := validateGetAtespaceRequest(req); len(errs) > 0 {
+		return nil, toGRPCStatusError(errs)
 	}
 
 	name := req.GetAtespace().GetName()
@@ -43,7 +43,7 @@ func (s *Service) GetAtespace(ctx context.Context, req *ateapipb.GetAtespaceRequ
 	return atespace, nil
 }
 
-func validateGetAtespaceRequest(req *ateapipb.GetAtespaceRequest) error {
+func validateGetAtespaceRequest(req *ateapipb.GetAtespaceRequest) field.ErrorList {
 	var fldPath *field.Path
 	var errs field.ErrorList
 
@@ -53,8 +53,5 @@ func validateGetAtespaceRequest(req *ateapipb.GetAtespaceRequest) error {
 		errs = append(errs, resources.ValidateGlobalObjectRef(val, fldPath)...)
 	}
 
-	if len(errs) > 0 {
-		return status.Error(codes.InvalidArgument, errs.ToAggregate().Error())
-	}
-	return nil
+	return errs
 }

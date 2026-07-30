@@ -16,16 +16,33 @@ package router
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
+	"math/big"
 	"net"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
+
 	clusterv3 "github.com/envoyproxy/go-control-plane/envoy/config/cluster/v3"
+	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	listenerv3 "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
 	routev3 "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
 	dfpclusterv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/clusters/dynamic_forward_proxy/v3"
+	tlsv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/transport_sockets/tls/v3"
 	httpv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/upstreams/http/v3"
+	discoverygrpc "github.com/envoyproxy/go-control-plane/envoy/service/discovery/v3"
+	secretgrpc "github.com/envoyproxy/go-control-plane/envoy/service/secret/v3"
 	cachev3 "github.com/envoyproxy/go-control-plane/pkg/cache/v3"
 	resourcev3 "github.com/envoyproxy/go-control-plane/pkg/resource/v3"
 )
@@ -141,9 +158,11 @@ func TestXdsServer_UpdateSnapshot(t *testing.T) {
 }
 
 func TestXdsServer_UpdateSnapshot_WithHttps(t *testing.T) {
+	const certPath = "/run/servicedns.podcert.ate.dev/credential-bundle.pem"
+
 	server := NewXdsServer(18000)
 	server.SetConfig(8085, 50053, "127.0.0.1")
-	server.SetTlsConfig(8443, "")
+	server.SetTlsConfig(8443, certPath)
 
 	err := server.UpdateSnapshot()
 	if err != nil {
@@ -174,12 +193,105 @@ func TestXdsServer_UpdateSnapshot_WithHttps(t *testing.T) {
 			t.Errorf("Expected port 8443, got %d", sa.GetPortValue())
 		}
 
-		// Verify TLS config
+		// Verify the TLS config references the serving cert via SDS rather
+		// than embedding it: inline filename DataSources are read only once
+		// at listener creation, so rotations would never be picked up.
 		fc := l.GetFilterChains()[0]
 		ts := fc.GetTransportSocket()
 		if ts.GetName() != "envoy.transport_sockets.tls" {
 			t.Errorf("Expected transport socket 'envoy.transport_sockets.tls', got '%s'", ts.GetName())
 		}
+		dtc := &tlsv3.DownstreamTlsContext{}
+		if err := ts.GetTypedConfig().UnmarshalTo(dtc); err != nil {
+			t.Fatalf("Failed to unmarshal DownstreamTlsContext: %v", err)
+		}
+		if got := dtc.GetCommonTlsContext().GetTlsCertificates(); len(got) != 0 {
+			t.Errorf("Expected no inline TlsCertificates, got %d", len(got))
+		}
+		sds := dtc.GetCommonTlsContext().GetTlsCertificateSdsSecretConfigs()
+		if len(sds) != 1 {
+			t.Fatalf("Expected 1 SDS secret config, got %d", len(sds))
+		}
+		if sds[0].GetName() != HTTPSCertSecretName {
+			t.Errorf("Expected SDS secret name '%s', got '%s'", HTTPSCertSecretName, sds[0].GetName())
+		}
+		if sds[0].GetSdsConfig().GetAds() == nil {
+			t.Error("Expected SDS config to use the ADS config source")
+		}
+	}
+
+	// Verify the Secret resource carries the cert by filename with a watched
+	// directory, so Envoy re-reads the files when kubelet rotates the
+	// projected volume.
+	secretsMap := snap.GetResources(resourcev3.SecretType)
+	if len(secretsMap) != 1 {
+		t.Fatalf("Expected 1 secret definition, got %d", len(secretsMap))
+	}
+	raw, exists := secretsMap[HTTPSCertSecretName]
+	if !exists {
+		t.Fatalf("Secret '%s' is missing from snapshot secrets", HTTPSCertSecretName)
+	}
+	secret := raw.(*tlsv3.Secret)
+	tlsCert := secret.GetTlsCertificate()
+	if got := tlsCert.GetCertificateChain().GetFilename(); got != certPath {
+		t.Errorf("Expected certificate chain filename '%s', got '%s'", certPath, got)
+	}
+	if got := tlsCert.GetPrivateKey().GetFilename(); got != certPath {
+		t.Errorf("Expected private key filename '%s', got '%s'", certPath, got)
+	}
+	if got, want := tlsCert.GetWatchedDirectory().GetPath(), "/run/servicedns.podcert.ate.dev"; got != want {
+		t.Errorf("Expected watched directory '%s', got '%s'", want, got)
+	}
+}
+
+func TestXdsServer_UpdateSnapshot_HttpsWithoutCertPath(t *testing.T) {
+	server := NewXdsServer(18000)
+	server.SetConfig(8085, 50053, "127.0.0.1")
+	// This is the default flag combination: --port-https set, no
+	// --envoy-cert-path. An SDS secret with an empty filename would be
+	// NACKed by Envoy, so the HTTPS listener must be skipped entirely.
+	server.SetTlsConfig(8443, "")
+
+	if err := server.UpdateSnapshot(); err != nil {
+		t.Fatalf("UpdateSnapshot failed: %v", err)
+	}
+
+	res, err := server.snapshot.GetSnapshot(NodeID)
+	if err != nil {
+		t.Fatalf("Failed to get snapshot: %v", err)
+	}
+	snap, ok := res.(*cachev3.Snapshot)
+	if !ok {
+		t.Fatalf("Snapshot doesn't conform to type *cachev3.Snapshot, got %T", res)
+	}
+
+	listenersMap := snap.GetResources(resourcev3.ListenerType)
+	if _, exists := listenersMap[IngressHTTPSListener]; exists {
+		t.Error("HTTPS listener must not be built without a cert path")
+	}
+	if len(listenersMap) != 1 {
+		t.Errorf("Expected only the HTTP listener without a cert path, got %d listeners", len(listenersMap))
+	}
+	if got := snap.GetResources(resourcev3.SecretType); len(got) != 0 {
+		t.Errorf("Expected no secrets without a cert path, got %d", len(got))
+	}
+}
+
+func TestXdsServer_UpdateSnapshot_NoHttps_NoSecrets(t *testing.T) {
+	server := NewXdsServer(18000)
+	server.SetConfig(8085, 50053, "127.0.0.1")
+
+	if err := server.UpdateSnapshot(); err != nil {
+		t.Fatalf("UpdateSnapshot failed: %v", err)
+	}
+
+	res, err := server.snapshot.GetSnapshot(NodeID)
+	if err != nil {
+		t.Fatalf("Failed to get snapshot: %v", err)
+	}
+	snap := res.(*cachev3.Snapshot)
+	if got := snap.GetResources(resourcev3.SecretType); len(got) != 0 {
+		t.Errorf("Expected no secrets without TLS config, got %d", len(got))
 	}
 }
 
@@ -210,6 +322,213 @@ func TestXdsServer_Serve_Shutdown(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Error("Timeout exceeded waiting for Serve to finish graceful closure")
+	}
+}
+
+// TestXdsServer_ServesSecretOverSds fetches the serving cert secret over a
+// real SDS stream, as Envoy would, covering the SDS registration in Serve.
+func TestXdsServer_ServesSecretOverSds(t *testing.T) {
+	const certPath = "/run/servicedns.podcert.ate.dev/credential-bundle.pem"
+
+	server := NewXdsServer(18000)
+	server.SetConfig(8085, 50053, "127.0.0.1")
+	server.SetTlsConfig(8443, certPath)
+
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Failed to create tcp listener: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go server.Serve(ctx, lis)
+
+	conn, err := grpc.NewClient(lis.Addr().String(), grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		t.Fatalf("Failed to dial xDS server: %v", err)
+	}
+	t.Cleanup(func() { conn.Close() })
+
+	streamCtx, streamCancel := context.WithTimeout(ctx, 10*time.Second)
+	t.Cleanup(streamCancel)
+	stream, err := secretgrpc.NewSecretDiscoveryServiceClient(conn).StreamSecrets(streamCtx)
+	if err != nil {
+		t.Fatalf("Failed to open SDS stream: %v", err)
+	}
+	if err := stream.Send(&discoverygrpc.DiscoveryRequest{
+		Node:          &corev3.Node{Id: NodeID},
+		TypeUrl:       resourcev3.SecretType,
+		ResourceNames: []string{HTTPSCertSecretName},
+	}); err != nil {
+		t.Fatalf("Failed to send SDS discovery request: %v", err)
+	}
+	resp, err := stream.Recv()
+	if err != nil {
+		t.Fatalf("Failed to receive SDS discovery response: %v", err)
+	}
+
+	resources := resp.GetResources()
+	if len(resources) != 1 {
+		t.Fatalf("Expected 1 secret resource over SDS, got %d", len(resources))
+	}
+
+	secret := &tlsv3.Secret{}
+	if err := resources[0].UnmarshalTo(secret); err != nil {
+		t.Fatalf("Failed to unmarshal SDS resource into Secret: %v", err)
+	}
+	if secret.GetName() != HTTPSCertSecretName {
+		t.Errorf("Expected secret name '%s', got '%s'", HTTPSCertSecretName, secret.GetName())
+	}
+	tlsCert := secret.GetTlsCertificate()
+	if got := tlsCert.GetCertificateChain().GetFilename(); got != certPath {
+		t.Errorf("Expected certificate chain filename '%s', got '%s'", certPath, got)
+	}
+	if got := tlsCert.GetPrivateKey().GetFilename(); got != certPath {
+		t.Errorf("Expected private key filename '%s', got '%s'", certPath, got)
+	}
+	if got, want := tlsCert.GetWatchedDirectory().GetPath(), filepath.Dir(certPath); got != want {
+		t.Errorf("Expected watched directory '%s', got '%s'", want, got)
+	}
+}
+
+// Symlink names used by kubelet's AtomicWriter in projected volumes.
+const (
+	dataDirName    = "..data"
+	newDataDirName = "..data_tmp"
+)
+
+// TestTlsSecret_ProjectedVolumeRotation checks the reload contract the
+// secret relies on: a kubelet podCertificate rotation swaps the ..data
+// symlink directly inside WatchedDirectory (the move Envoy watches for),
+// after which the cert filename resolves to the new bundle. Envoy's actual
+// reload behavior is out of unit-test reach and belongs to e2e.
+func TestTlsSecret_ProjectedVolumeRotation(t *testing.T) {
+	dir := t.TempDir()
+	certA := "serving-cert-a"
+	certB := "serving-cert-b"
+	certPath := filepath.Join(dir, "credential-bundle.pem")
+	bundleA := makeServingBundle(t, certA)
+	bundleB := makeServingBundle(t, certB)
+
+	const tsDirA = "..2026_07_25_00_00_00.0000000001"
+	const tsDirB = "..2026_07_25_00_00_00.0000000002"
+	writeProjectedVolume(t, dir, tsDirA, bundleA)
+
+	server := NewXdsServer(18000)
+	server.SetTlsConfig(8443, certPath)
+	tlsCert := server.buildTlsSecret().GetTlsCertificate()
+
+	chainPath := tlsCert.GetCertificateChain().GetFilename()
+	if got := readServingCN(t, chainPath); got != certA {
+		t.Fatalf("Expected initial bundle to serve %q, got %q", certA, got)
+	}
+
+	swapPath := filepath.Join(tlsCert.GetWatchedDirectory().GetPath(), dataDirName)
+	before, err := os.Readlink(swapPath)
+	if err != nil {
+		t.Fatalf("The rotation symlink is not a direct child of WatchedDirectory: %v", err)
+	}
+
+	rotateProjectedVolume(t, dir, tsDirB, tsDirA, bundleB)
+
+	after, err := os.Readlink(swapPath)
+	if err != nil {
+		t.Fatalf("The rotation symlink left WatchedDirectory after rotation: %v", err)
+	}
+	if after == before {
+		t.Fatalf("Rotation did not retarget the %s symlink (still %q); an in-place write would not trigger Envoy's reload", dataDirName, after)
+	}
+	if got := readServingCN(t, chainPath); got != certB {
+		t.Fatalf("Expected rotated bundle to serve %q, got %q", certB, got)
+	}
+}
+
+// makeServingBundle returns a podCertificate-style PEM bundle: a PKCS8
+// private key followed by a self-signed serving cert with the given CN.
+func makeServingBundle(t *testing.T, cn string) []byte {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: cn},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("create serving certificate: %v", err)
+	}
+	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatalf("marshal PKCS8 key: %v", err)
+	}
+	return append(
+		pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}),
+		pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})...,
+	)
+}
+
+// readServingCN loads the bundle as a key pair (the same file for cert and
+// key, as Envoy does) and returns the leaf's common name.
+func readServingCN(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read bundle %s: %v", path, err)
+	}
+	pair, err := tls.X509KeyPair(data, data)
+	if err != nil {
+		t.Fatalf("load bundle %s as key pair: %v", path, err)
+	}
+	leaf, err := x509.ParseCertificate(pair.Certificate[0])
+	if err != nil {
+		t.Fatalf("parse leaf certificate from %s: %v", path, err)
+	}
+	return leaf.Subject.CommonName
+}
+
+// writeProjectedVolume lays dir out like a kubelet projected volume:
+// payload in a timestamped dir, reached through the ..data symlink.
+func writeProjectedVolume(t *testing.T, dir, tsDir string, bundle []byte) {
+	t.Helper()
+	if err := os.Mkdir(filepath.Join(dir, tsDir), 0o755); err != nil {
+		t.Fatalf("create payload dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, tsDir, "credential-bundle.pem"), bundle, 0o600); err != nil {
+		t.Fatalf("write bundle payload: %v", err)
+	}
+	if err := os.Symlink(tsDir, filepath.Join(dir, dataDirName)); err != nil {
+		t.Fatalf("create ..data symlink: %v", err)
+	}
+	if err := os.Symlink(filepath.Join(dataDirName, "credential-bundle.pem"), filepath.Join(dir, "credential-bundle.pem")); err != nil {
+		t.Fatalf("create bundle symlink: %v", err)
+	}
+}
+
+// rotateProjectedVolume swaps in a new payload the way kubelet's
+// AtomicWriter does: rename a ..data_tmp symlink over ..data.
+// https://github.com/kubernetes/kubernetes/blob/24a5b063a5f2b8d6c2d1d9279758109a7b75d4ad/pkg/volume/util/atomic_writer.go#L114-L119
+func rotateProjectedVolume(t *testing.T, dir, newTsDir, oldTsDir string, bundle []byte) {
+	t.Helper()
+	if err := os.Mkdir(filepath.Join(dir, newTsDir), 0o755); err != nil {
+		t.Fatalf("create new payload dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, newTsDir, "credential-bundle.pem"), bundle, 0o600); err != nil {
+		t.Fatalf("write new bundle payload: %v", err)
+	}
+	if err := os.Symlink(newTsDir, filepath.Join(dir, newDataDirName)); err != nil {
+		t.Fatalf("create ..data_tmp symlink: %v", err)
+	}
+	if err := os.Rename(filepath.Join(dir, newDataDirName), filepath.Join(dir, dataDirName)); err != nil {
+		t.Fatalf("swap ..data symlink: %v", err)
+	}
+	if err := os.RemoveAll(filepath.Join(dir, oldTsDir)); err != nil {
+		t.Fatalf("remove old payload dir: %v", err)
 	}
 }
 
