@@ -71,6 +71,9 @@ spec:
         - name: servicedns-ca
           mountPath: /run/servicedns-ca
           readOnly: true
+        - name: podidentity
+          mountPath: /run/podidentity.podcert.ate.dev
+          readOnly: true
         resources:
           requests:
             cpu: "500m"
@@ -85,3 +88,10 @@ spec:
                 matchLabels:
                   podcert.ate.dev/canarying: live
               path: ca.crt
+      - name: podidentity
+        projected:
+          sources:
+          - podCertificate:
+              signerName: podidentity.podcert.ate.dev/identity
+              keyType: ECDSAP256
+              credentialBundlePath: credential-bundle.pem

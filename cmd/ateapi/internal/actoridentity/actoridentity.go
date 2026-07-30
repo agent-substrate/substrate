@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package sessionidentity
+package actoridentity
 
 import (
 	"context"
@@ -28,8 +28,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/actoridjwt"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/k8sjwt"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/sessionidjwt"
 	"github.com/agent-substrate/substrate/internal/localca"
 	"github.com/agent-substrate/substrate/internal/localjwtauthority"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -40,31 +40,31 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// Server implements ateapipb.SessionIdentityServer
+// Server implements ateapipb.ActorIdentityServer
 type Server struct {
-	ateapipb.UnimplementedSessionIdentityServer
+	ateapipb.UnimplementedActorIdentityServer
 
 	clientJWTIssuer   string
 	clientJWTAudience string
 
 	// TODO: Cache the signing keys in memory, so we don't read from a file every time.
-	sessionIDJWTPoolFile string
-	sessionIDCAPoolFile  string
+	actorIDJWTPoolFile string
+	actorIDCAPoolFile  string
 
 	workerCACerts string
 	httpClient    *http.Client
 }
 
-var _ ateapipb.SessionIdentityServer = (*Server)(nil)
+var _ ateapipb.ActorIdentityServer = (*Server)(nil)
 
-func New(clientJWTIssuer, clientJWTAudience, sessionIDJWTPoolFile, sessionIDCAPoolFile, workerCACerts string, httpClient *http.Client) *Server {
+func New(clientJWTIssuer, clientJWTAudience, actorIDJWTPoolFile, actorIDCAPoolFile, workerCACerts string, httpClient *http.Client) *Server {
 	return &Server{
-		clientJWTIssuer:      clientJWTIssuer,
-		clientJWTAudience:    clientJWTAudience,
-		sessionIDJWTPoolFile: sessionIDJWTPoolFile,
-		sessionIDCAPoolFile:  sessionIDCAPoolFile,
-		workerCACerts:        workerCACerts,
-		httpClient:           httpClient,
+		clientJWTIssuer:    clientJWTIssuer,
+		clientJWTAudience:  clientJWTAudience,
+		actorIDJWTPoolFile: actorIDJWTPoolFile,
+		actorIDCAPoolFile:  actorIDCAPoolFile,
+		workerCACerts:      workerCACerts,
+		httpClient:         httpClient,
 	}
 }
 
@@ -91,10 +91,10 @@ func (s *Server) MintJWT(ctx context.Context, req *ateapipb.MintJWTRequest) (*at
 
 	// TODO: Extract K8s identity from incoming JWT
 
-	// TODO: Cross-check requested session and user claims against the session database.
+	// TODO: Cross-check requested actor and user claims against the actor database.
 
 	// TODO: Cache signing keys in memory, so we don't read from disk every time.
-	signingPoolBytes, err := os.ReadFile(s.sessionIDJWTPoolFile)
+	signingPoolBytes, err := os.ReadFile(s.actorIDJWTPoolFile)
 	if err != nil {
 		return nil, fmt.Errorf("while reading signing pool bytes: %w", err)
 	}
@@ -109,35 +109,35 @@ func (s *Server) MintJWT(ctx context.Context, req *ateapipb.MintJWTRequest) (*at
 		return nil, fmt.Errorf("at least one audience must be requested")
 	}
 
-	sessionClaims := &sessionidjwt.Claims{
-		Issuer:     "https://broker.agentic-substrate-session-id-broker.svc", // TODO: This needs to be globally unique.
-		Subject:    fmt.Sprintf("apps/%s/users/%s/sessions/%s", req.GetAppId(), req.GetUserId(), req.GetSessionId()),
+	actorClaims := &actoridjwt.Claims{
+		Issuer:     "https://broker.agentic-substrate-actor-id-broker.svc", // TODO: This needs to be globally unique.
+		Subject:    fmt.Sprintf("apps/%s/users/%s/actors/%s", req.GetAppId(), req.GetUserId(), req.GetActorId()),
 		Audiences:  req.GetAudience(),
 		Expiration: time.Now().Add(15 * time.Minute),
 		NotBefore:  time.Now().Add(-5 * time.Minute),
 		IssuedAt:   time.Now(),
 		JTI:        rand.Text(),
 
-		Substrate: sessionidjwt.SubstrateClaims{
-			AppID:     req.GetAppId(),
-			UserID:    req.GetUserId(),
-			SessionID: req.GetSessionId(),
+		Substrate: actoridjwt.SubstrateClaims{
+			AppID:   req.GetAppId(),
+			UserID:  req.GetUserId(),
+			ActorID: req.GetActorId(),
 		},
 	}
 
-	sessionWireClaims, err := sessionidjwt.ClaimsToWire(sessionClaims)
+	actorWireClaims, err := actoridjwt.ClaimsToWire(actorClaims)
 	if err != nil {
-		return nil, fmt.Errorf("while making session JWT claims: %w", err)
+		return nil, fmt.Errorf("while making actor JWT claims: %w", err)
 	}
 
 	// Assume the first authority is the one to use for signing.
-	sessionJWT, err := sessionidjwt.Sign(sessionWireClaims, signingPool.Authorities[0].SigningKey, signingPool.Authorities[0].Algorithm, signingPool.Authorities[0].ID)
+	actorJWT, err := actoridjwt.Sign(actorWireClaims, signingPool.Authorities[0].SigningKey, signingPool.Authorities[0].Algorithm, signingPool.Authorities[0].ID)
 	if err != nil {
-		return nil, fmt.Errorf("while signing session JWT: %w", err)
+		return nil, fmt.Errorf("while signing actor JWT: %w", err)
 	}
 
 	return &ateapipb.MintJWTResponse{
-		SessionJwt: sessionJWT,
+		ActorJwt: actorJWT,
 	}, nil
 }
 
@@ -156,25 +156,25 @@ func (s *Server) MintCert(ctx context.Context, req *ateapipb.MintCertRequest) (*
 		return nil, status.Errorf(codes.Unauthenticated, "could not verify peer certificate")
 	}
 
-	// TODO: How to verify pod cert <-> session mapping?
+	// TODO: How to verify pod cert <-> actor mapping?
 	appID := req.GetAppId()
 	userID := req.GetUserId()
-	sessionID := req.GetSessionId()
+	actorID := req.GetActorId()
 
-	if appID == "" || userID == "" || sessionID == "" {
-		return nil, status.Errorf(codes.InvalidArgument, "app_id, user_id, and session_id are required")
+	if appID == "" || userID == "" || actorID == "" {
+		return nil, status.Errorf(codes.InvalidArgument, "app_id, user_id, and actor_id are required")
 	}
 
 	// Load the CA pool for signing
-	poolBytes, err := os.ReadFile(s.sessionIDCAPoolFile)
+	poolBytes, err := os.ReadFile(s.actorIDCAPoolFile)
 	if err != nil {
-		slog.ErrorContext(ctx, "Failed to read session CA pool file", slog.Any("err", err))
-		return nil, status.Errorf(codes.Internal, "Failed to load session CA")
+		slog.ErrorContext(ctx, "Failed to read actor CA pool file", slog.Any("err", err))
+		return nil, status.Errorf(codes.Internal, "Failed to load actor CA")
 	}
 	caPool, err := localca.Unmarshal(poolBytes)
 	if err != nil || len(caPool.CAs) == 0 {
-		slog.ErrorContext(ctx, "Failed to load session CA", slog.Any("err", err))
-		return nil, status.Errorf(codes.Internal, "Failed to load session CA")
+		slog.ErrorContext(ctx, "Failed to load actor CA", slog.Any("err", err))
+		return nil, status.Errorf(codes.Internal, "Failed to load actor CA")
 	}
 
 	// Parse the CSR
@@ -190,8 +190,8 @@ func (s *Server) MintCert(ctx context.Context, req *ateapipb.MintCertRequest) (*
 
 	spiffeURI := &url.URL{
 		Scheme: "spiffe",
-		Host:   "substrate-session.local",
-		Path:   path.Join("app", appID, "user", userID, "session", sessionID),
+		Host:   "substrate-actor.local",
+		Path:   path.Join("app", appID, "user", userID, "actor", actorID),
 	}
 	template := &x509.Certificate{
 		URIs:                  []*url.URL{spiffeURI},
@@ -206,7 +206,7 @@ func (s *Server) MintCert(ctx context.Context, req *ateapipb.MintCertRequest) (*
 		},
 	}
 
-	// Sign and return the session cert.
+	// Sign and return the actor cert.
 	ca := caPool.CAs[0]
 	derBytes, err := x509.CreateCertificate(rand.Reader, template, ca.RootCertificate, csr.PublicKey, ca.SigningKey)
 	if err != nil {
@@ -220,6 +220,6 @@ func (s *Server) MintCert(ctx context.Context, req *ateapipb.MintCertRequest) (*
 	}
 
 	return &ateapipb.MintCertResponse{
-		SessionCertificates: certificates,
+		ActorCertificates: certificates,
 	}, nil
 }

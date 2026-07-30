@@ -29,10 +29,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/actoridentity"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/controlapi"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/debugapi"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/k8sjwt"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/sessionidentity"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/ateredis"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
 	"github.com/agent-substrate/substrate/internal/ateapiauth"
@@ -71,11 +71,11 @@ var (
 	redisTLSServerName  = pflag.String("redis-tls-server-name", "", "The ServerName to use for Redis TLS hostname verification.")
 	redisClientCert     = pflag.String("redis-client-cert", "", "The file containing client TLS certificate/key credential bundle for Redis/Valkey.")
 
-	clientJWTIssuer      = pflag.String("client-jwt-issuer", "", "The expected issuer URL for client JWTs.")
-	clientJWTAudience    = pflag.String("client-jwt-audience", "", "The expected audience for client JWTs.")
-	sessionIDJWTPoolFile = pflag.String("session-id-jwt-pool", "", "The file that contains the serialized JWT authority pool for signing session JWTs")
+	clientJWTIssuer    = pflag.String("client-jwt-issuer", "", "The expected issuer URL for client JWTs.")
+	clientJWTAudience  = pflag.String("client-jwt-audience", "", "The expected audience for client JWTs.")
+	actorIDJWTPoolFile = pflag.String("actor-id-jwt-pool", "", "The file that contains the serialized JWT authority pool for signing actor JWTs")
 
-	sessionIDCAPoolFile    = pflag.String("session-id-ca-pool", "", "The file that contains the CA pool for signing session JWTs")
+	actorIDCAPoolFile      = pflag.String("actor-id-ca-pool", "", "The file that contains the CA pool for signing actor JWTs")
 	podIdentityCACerts     = pflag.String("pod-identity-ca-certs", "", "The file that contains the pod-identity CA bundle, used both for verifying client certificates presented to the gRPC server and for verifying atelet serving certificates when dialing atelet. If empty, client-cert verification is disabled and atelet dials will fail.")
 	ateletClientCredBundle = pflag.String("atelet-client-cred-bundle", "", "Credential bundle presented as the client certificate when dialing atelet.")
 
@@ -171,7 +171,7 @@ func main() {
 
 	jwtIssuerDiscoveryClient := buildK8sServiceAccountIssuerDiscoveryClient(ctx, *clientJWTCAFile, *clientJWTIssuer)
 
-	sessionIdentitySrv := sessionidentity.New(*clientJWTIssuer, *clientJWTAudience, *sessionIDJWTPoolFile, *sessionIDCAPoolFile, *podIdentityCACerts, jwtIssuerDiscoveryClient)
+	actorIdentitySrv := actoridentity.New(*clientJWTIssuer, *clientJWTAudience, *actorIDJWTPoolFile, *actorIDCAPoolFile, *podIdentityCACerts, jwtIssuerDiscoveryClient)
 	debugSrv := debugapi.NewService(redisPersistence)
 
 	lisCfg := &net.ListenConfig{}
@@ -220,7 +220,7 @@ func main() {
 	)
 	reflection.Register(mux)
 	ateapipb.RegisterControlServer(mux, sm)
-	ateapipb.RegisterSessionIdentityServer(mux, sessionIdentitySrv)
+	ateapipb.RegisterActorIdentityServer(mux, actorIdentitySrv)
 	ateapipb.RegisterDebugServer(mux, debugSrv)
 
 	readiness := &serverboot.Readiness{}
@@ -297,8 +297,8 @@ func logFlagValues(ctx context.Context) {
 		slog.String("redis-client-cert", *redisClientCert),
 		slog.String("client-jwt-issuer", *clientJWTIssuer),
 		slog.String("client-jwt-audience", *clientJWTAudience),
-		slog.String("session-id-jwt-pool", *sessionIDJWTPoolFile),
-		slog.String("session-id-ca-pool", *sessionIDCAPoolFile),
+		slog.String("actor-id-jwt-pool", *actorIDJWTPoolFile),
+		slog.String("actor-id-ca-pool", *actorIDCAPoolFile),
 		slog.String("pod-identity-ca-certs", *podIdentityCACerts),
 		slog.String("atelet-client-cred-bundle", *ateletClientCredBundle),
 		slog.Duration("drain-delay", *drainDelay),

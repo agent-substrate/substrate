@@ -34,11 +34,11 @@ agents, but rather a system for running them at scale.
 
 [![Agent Substrate Demo](https://img.youtube.com/vi/ZEzkCFJkzjY/hq1.jpg)](https://www.youtube.com/watch?v=ZEzkCFJkzjY)
 
-*Watch the Agent Substrate cluster multiplex ~250 stateful actor sessions across just 8 physical pods.*
+*Watch the Agent Substrate cluster multiplex ~250 stateful actors across just 8 physical pods.*
 
 This demo highlights the core developer experience and "Agentic Infrastructure" capabilities of Substrate:
 
-1.  **Instant Session Teleport:** High-performance suspend and resume of actors onto any available worker in the pool with sub-second activation.
+1.  **Instant Actor Teleport:** High-performance suspend and resume of actors onto any available worker in the pool with sub-second activation.
 2.  **State Persistence:** Persistent working memory (volatile RAM) and filesystem state preserved perfectly across hibernation cycles via full-state snapshots.
 3.  **Agent Swarm Multiplexing:** Demonstrates 30x+ oversubscription by "juggling" a large registry of stateful actors onto a small pool of shared physical pods.
 
@@ -50,7 +50,7 @@ For more videos and walkthroughs, visit our YouTube channel: **[agent-substrate]
 
 Agent Substrate is designed to be **framework and agent harness agnostic**. Because it manages standard OCI containers at the kernel level (via gVisor), it can host agents built on any stack.
 
-*   **Agent Development Kit (ADK):** Native support for ADK-compatible session identity and persistent working memory.
+*   **Agent Development Kit (ADK):** Native support for ADK-compatible actor identity and persistent working memory.
 *   **LangChain:** Ideal execution environment for long-running, stateful LangChain agents and sandboxed tool-calling.
 *   **Claude Code & CodeX:** Support for high-density, stateful coding environments that preserve terminal and filesystem state across sessions.
 *   **Model Context Protocol (MCP):** Deploy secure, sandboxed MCP servers as Substrate Actors to provide durable tools for any LLM.

@@ -76,7 +76,7 @@ func TestCreateActor_Success(t *testing.T) {
 	_, s, ctx := setupTest(t)
 
 	actor := &ateapipb.Actor{
-		Metadata:               &ateapipb.ResourceMetadata{Name: "session-1", Atespace: testAtespace},
+		Metadata:               &ateapipb.ResourceMetadata{Name: "actor-1", Atespace: testAtespace},
 		ActorTemplateNamespace: "default",
 		ActorTemplateName:      "test-template",
 		Status:                 ateapipb.Actor_STATUS_SUSPENDED,
@@ -124,7 +124,7 @@ func TestCreateActor_AlreadyExists(t *testing.T) {
 	_, s, ctx := setupTest(t)
 
 	actor := &ateapipb.Actor{
-		Metadata:               &ateapipb.ResourceMetadata{Name: "session-1", Atespace: testAtespace},
+		Metadata:               &ateapipb.ResourceMetadata{Name: "actor-1", Atespace: testAtespace},
 		ActorTemplateNamespace: "default",
 		ActorTemplateName:      "test-template",
 		Status:                 ateapipb.Actor_STATUS_SUSPENDED,
@@ -145,7 +145,7 @@ func TestUpdateActor_Success(t *testing.T) {
 	_, s, ctx := setupTest(t)
 
 	actor := &ateapipb.Actor{
-		Metadata:               &ateapipb.ResourceMetadata{Name: "session-1", Atespace: testAtespace},
+		Metadata:               &ateapipb.ResourceMetadata{Name: "actor-1", Atespace: testAtespace},
 		ActorTemplateNamespace: "default",
 		ActorTemplateName:      "test-template",
 		Status:                 ateapipb.Actor_STATUS_SUSPENDED,
@@ -197,7 +197,7 @@ func TestUpdateActor_Conflict(t *testing.T) {
 	_, s, ctx := setupTest(t)
 
 	actor := &ateapipb.Actor{
-		Metadata:               &ateapipb.ResourceMetadata{Name: "session-1", Atespace: testAtespace},
+		Metadata:               &ateapipb.ResourceMetadata{Name: "actor-1", Atespace: testAtespace},
 		ActorTemplateNamespace: "default",
 		ActorTemplateName:      "test-template",
 		Status:                 ateapipb.Actor_STATUS_SUSPENDED,
@@ -339,7 +339,7 @@ func TestUpdateWorker_Success(t *testing.T) {
 			Name:      "test-template",
 		},
 		Actor: &ateapipb.ObjectRef{
-			Name: "session-1",
+			Name: "actor-1",
 		},
 	}
 
@@ -425,7 +425,7 @@ func TestDeleteActor(t *testing.T) {
 			_, s, ctx := setupTest(t)
 
 			actor := &ateapipb.Actor{
-				Metadata:               &ateapipb.ResourceMetadata{Name: "session-1", Atespace: testAtespace},
+				Metadata:               &ateapipb.ResourceMetadata{Name: "actor-1", Atespace: testAtespace},
 				ActorTemplateNamespace: "default",
 				ActorTemplateName:      "test-template",
 				Status:                 tt.status,
@@ -435,7 +435,7 @@ func TestDeleteActor(t *testing.T) {
 				t.Fatalf("CreateActor failed: %v", err)
 			}
 
-			deleted, err := s.DeleteActor(ctx, resources.ActorRef{Atespace: testAtespace, Name: "session-1"})
+			deleted, err := s.DeleteActor(ctx, resources.ActorRef{Atespace: testAtespace, Name: "actor-1"})
 			if tt.wantErr != nil {
 				if !errors.Is(err, tt.wantErr) {
 					t.Errorf("DeleteActor: expected %v, got %v", tt.wantErr, err)
@@ -446,11 +446,11 @@ func TestDeleteActor(t *testing.T) {
 				t.Fatalf("DeleteActor failed: %v", err)
 			}
 			// DeleteActor returns the deleted resource.
-			if got := deleted.GetMetadata().GetName(); got != "session-1" {
-				t.Errorf("deleted actor name = %q, want session-1", got)
+			if got := deleted.GetMetadata().GetName(); got != "actor-1" {
+				t.Errorf("deleted actor name = %q, want actor-1", got)
 			}
 
-			if _, err := s.GetActor(ctx, resources.ActorRef{Atespace: testAtespace, Name: "session-1"}); !errors.Is(err, store.ErrNotFound) {
+			if _, err := s.GetActor(ctx, resources.ActorRef{Atespace: testAtespace, Name: "actor-1"}); !errors.Is(err, store.ErrNotFound) {
 				t.Errorf("expected ErrNotFound after delete, got %v", err)
 			}
 		})
@@ -599,14 +599,14 @@ func TestUpdateWorker_Conflict(t *testing.T) {
 	}
 
 	// Update instance 1
-	worker1.Assignment = &ateapipb.Assignment{Actor: &ateapipb.ObjectRef{Name: "session-1"}}
+	worker1.Assignment = &ateapipb.Assignment{Actor: &ateapipb.ObjectRef{Name: "actor-1"}}
 	err = s.UpdateWorker(ctx, worker1, worker1.Version)
 	if err != nil {
 		t.Fatalf("UpdateWorker failed: %v", err)
 	}
 
 	// Try to update instance 2
-	worker2.Assignment = &ateapipb.Assignment{Actor: &ateapipb.ObjectRef{Name: "session-2"}}
+	worker2.Assignment = &ateapipb.Assignment{Actor: &ateapipb.ObjectRef{Name: "actor-2"}}
 	err = s.UpdateWorker(ctx, worker2, worker2.Version)
 	if !errors.Is(err, store.ErrVersionConflict) {
 		t.Errorf("expected ErrVersionConflict, got %v", err)
