@@ -93,6 +93,8 @@ spec:
           - --redis-use-iam-auth=@env
           - --redis-tls-server-name=@env
           - --redis-client-cert=@env
+          - --store-backend=@env
+          - --postgres-connection-string=@env
           - --client-jwt-issuer=@env
           - --client-jwt-audience=api.ate-system.svc
           - --actor-id-jwt-pool=/run/actor-id-jwt-pool/pool.json

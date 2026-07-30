@@ -74,8 +74,8 @@ var (
 	redisTLSServerName  = pflag.String("redis-tls-server-name", "", "The ServerName to use for Redis TLS hostname verification.")
 	redisClientCert     = pflag.String("redis-client-cert", "", "The file containing client TLS certificate/key credential bundle for Redis/Valkey.")
 
-	storeBackend             = pflag.String("store-backend", "redis", "The persistence backend to use: redis|postgres. Experimental; see docs/postgres-store.md.")
-	postgresConnectionString = pflag.String("postgres-connection-string", "", "PostgreSQL connection string (libpq DSN or URI), used when --store-backend=postgres. TLS is configured entirely through this string's sslmode/sslrootcert/sslcert/sslkey parameters.")
+	storeBackend             = pflag.String("store-backend", "redis", "The persistence backend to use: redis|postgres.")
+	postgresConnectionString = pflag.String("postgres-connection-string", "", "PostgreSQL connection string (libpq DSN or URI), used when --store-backend=postgres.")
 
 	clientJWTIssuer      = pflag.String("client-jwt-issuer", "", "The expected issuer URL for client JWTs.")
 	clientJWTAudience    = pflag.String("client-jwt-audience", "", "The expected audience for client JWTs.")

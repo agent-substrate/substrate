@@ -85,6 +85,12 @@ function usage() {
   echo "  --create-valkey-ca-certs-secret        Create Valkey CA certs secret"
   echo "  --create-api-server-env-vars           Create ate-api-server env vars"
   echo ""
+  echo "PostgreSQL store;"
+  echo "opt-in only -- --deploy-ate-system does not deploy or require this):"
+  echo ""
+  echo "  --create-postgres-ca-certs-secret      Create PostgreSQL CA certs secret"
+  echo "  --deploy-postgres                      Deploy the single-replica PostgreSQL StatefulSet"
+  echo ""
   echo "Benchmarks (see benchmarking/README.md for details and customization):"
   echo ""
   echo "  --deploy-benchmarks                    Deploy workloads + locust load test stack"
@@ -266,6 +272,50 @@ create_valkey_ca_certs_secret() {
     | run_kubectl apply -f -
 }
 
+create_postgres_ca_certs_secret() {
+  log_step "create_postgres_ca_certs_secret"
+  # PostgreSQL presents a service-DNS certificate and verifies the ateapi
+  # pod-identity client certificate, so its trust file needs both roots.
+  local servicedns_root=""
+  servicedns_root=$(ca_pool_root_pem service-dns-ca-pool)
+  local podidentity_root=""
+  podidentity_root=$(ca_pool_root_pem pod-identity-ca-pool)
+  if [[ -z "${servicedns_root}" || -z "${podidentity_root}" ]]; then
+    echo "error: failed to extract a CA root for postgres-ca-certs" >&2
+    return 1
+  fi
+  local ca_certs=""
+  ca_certs=$(printf '%s\n%s\n' "${servicedns_root}" "${podidentity_root}")
+
+  run_kubectl create secret generic postgres-ca-certs \
+    --from-literal=ca.crt="${ca_certs}" \
+    -n ate-system \
+    --dry-run=client -o yaml \
+    | run_kubectl apply -f -
+}
+
+# deploy_postgres deploys the experimental single-replica PostgreSQL
+# StatefulSet. It remains separate from --deploy-ate-system.
+deploy_postgres() {
+  log_step "deploy_postgres"
+  run_kubectl apply -f manifests/ate-install/ate-system-namespace.yaml \
+    && run_kubectl wait --for=jsonpath='{.status.phase}'=Active namespace/ate-system --timeout=60s
+  run_kubectl get secret -n podcertificate-controller-system service-dns-ca-pool >/dev/null 2>&1 \
+    || create_podcertificate_controller_cas
+  run_kubectl get secret -n podcertificate-controller-system pod-identity-ca-pool >/dev/null 2>&1 \
+    || create_podcertificate_controller_cas
+  # The StatefulSet's projected serving certificate is issued by this
+  # controller. Applying it here makes --deploy-postgres usable on a fresh
+  # cluster as well as after --deploy-ate-system.
+  run_ko apply -f manifests/ate-install/pod-certificate-controller.yaml
+  run_kubectl rollout status deployment/podcertificate-controller \
+    -n podcertificate-controller-system --timeout=120s
+  run_kubectl get secret -n ate-system postgres-ca-certs >/dev/null 2>&1 \
+    || create_postgres_ca_certs_secret
+  run_kubectl apply -f manifests/ate-install/postgres.yaml
+  run_kubectl rollout status statefulset/postgres -n ate-system --timeout=120s
+}
+
 create_jwt_authority_pool_secret() {
   log_step "create_jwt_authority_pool_secret"
   run_kubectl_ate admin make-jwt-pool \
@@ -355,6 +405,8 @@ create_api_server_env_vars() {
     --from-literal=ATE_API_REDIS_TLS_SERVER_NAME="${tls_server_name}" \
     --from-literal=ATE_API_REDIS_CLIENT_CERT="${client_cert}" \
     --from-literal=ATE_API_K8SJWT_ISSUER="${jwt_issuer}" \
+    --from-literal=ATE_API_STORE_BACKEND="${ATE_API_STORE_BACKEND:-redis}" \
+    --from-literal=ATE_API_POSTGRES_CONNECTION_STRING="${ATE_API_POSTGRES_CONNECTION_STRING:-}" \
     --dry-run=client -o yaml \
     | run_kubectl apply -f -
 }
@@ -809,6 +861,8 @@ while [[ "$#" -gt 0 ]]; do
     --create-podcertificate-controller-cas) create_podcertificate_controller_cas ;;
     --create-valkey-ca-certs-secret) create_valkey_ca_certs_secret ;;
     --create-api-server-env-vars) create_api_server_env_vars ;;
+    --create-postgres-ca-certs-secret) create_postgres_ca_certs_secret ;;
+    --deploy-postgres) deploy_postgres ;;
 
     *)
       # Invalid option, should usage and exit with an error.

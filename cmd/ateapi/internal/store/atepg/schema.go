@@ -21,9 +21,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// schema is atepg's idempotent embedded schema. A production migration
-// mechanism and restricted database roles are deferred (see
-// docs/postgres-store.md).
+// schema is atepg's idempotent embedded schema.
 const schema = `
 CREATE TABLE IF NOT EXISTS atespaces (
     name         text PRIMARY KEY,

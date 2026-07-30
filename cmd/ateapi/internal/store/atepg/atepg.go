@@ -12,8 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package atepg is an experimental ate storage backend built on PostgreSQL.
-// See docs/postgres-store.md for an implementation overview.
+// Package atepg is an ate storage backend built on PostgreSQL.
 //
 // Each table holds native SQL columns for fields SQL must operate on
 // (primary keys, versions, timestamps, pagination, update/delete
