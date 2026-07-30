@@ -223,7 +223,7 @@ We provide several sample applications demonstrating Agent Substrate's capabilit
 * `cmd/atecontroller`: A Kubernetes controller that reconciles WorkerPool and ActorTemplate custom resources.
 * `cmd/atenet`: A combined networking controller providing DNS, Envoy routing, and proxy sidecars.
 * `cmd/ateom-gvisor`: An interior-pod helper running inside sandboxed worker pods to execute `runsc` checkpoint and restore commands.
-* `cmd/ateom-microvm`: The micro-VM peer of `ateom-gvisor`, running actors as cloud-hypervisor VMs through the Kata guest model.
+* `cmd/ateom-microvm`: The micro-VM peer of `ateom-gvisor`, running actors as cloud-hypervisor VMs.
 * `cmd/podcertcontroller`: A "polyfill" that provides Pod Certificate signers that
   will eventually ship in upstream Kubernetes (with different names).
 * `cmd/kubectl-ate`: A CLI tool for managing Agent Substrate resources. See its [README](cmd/kubectl-ate/README.md).
