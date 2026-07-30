@@ -111,7 +111,7 @@ func (s *Server) MintJWT(ctx context.Context, req *ateapipb.MintJWTRequest) (*at
 
 	actorClaims := &actoridjwt.Claims{
 		Issuer:     "https://broker.agentic-substrate-actor-id-broker.svc", // TODO: This needs to be globally unique.
-		Subject:    fmt.Sprintf("apps/%s/users/%s/actors/%s", req.GetAppId(), req.GetUserId(), req.GetActorId()),
+		Subject:    fmt.Sprintf("atespaces/%s/actors/%s", req.GetAtespace(), req.GetActorName()),
 		Audiences:  req.GetAudience(),
 		Expiration: time.Now().Add(15 * time.Minute),
 		NotBefore:  time.Now().Add(-5 * time.Minute),
@@ -119,9 +119,8 @@ func (s *Server) MintJWT(ctx context.Context, req *ateapipb.MintJWTRequest) (*at
 		JTI:        rand.Text(),
 
 		Substrate: actoridjwt.SubstrateClaims{
-			AppID:   req.GetAppId(),
-			UserID:  req.GetUserId(),
-			ActorID: req.GetActorId(),
+			Atespace:  req.GetAtespace(),
+			ActorName: req.GetActorName(),
 		},
 	}
 
@@ -157,12 +156,11 @@ func (s *Server) MintCert(ctx context.Context, req *ateapipb.MintCertRequest) (*
 	}
 
 	// TODO: How to verify pod cert <-> actor mapping?
-	appID := req.GetAppId()
-	userID := req.GetUserId()
-	actorID := req.GetActorId()
+	atespace := req.GetAtespace()
+	actorName := req.GetActorName()
 
-	if appID == "" || userID == "" || actorID == "" {
-		return nil, status.Errorf(codes.InvalidArgument, "app_id, user_id, and actor_id are required")
+	if atespace == "" || actorName == "" {
+		return nil, status.Errorf(codes.InvalidArgument, "atespace and actor_name are required")
 	}
 
 	// Load the CA pool for signing
@@ -191,7 +189,7 @@ func (s *Server) MintCert(ctx context.Context, req *ateapipb.MintCertRequest) (*
 	spiffeURI := &url.URL{
 		Scheme: "spiffe",
 		Host:   "substrate-actor.local",
-		Path:   path.Join("app", appID, "user", userID, "actor", actorID),
+		Path:   path.Join("atespace", atespace, "actor", actorName),
 	}
 	template := &x509.Certificate{
 		URIs:                  []*url.URL{spiffeURI},

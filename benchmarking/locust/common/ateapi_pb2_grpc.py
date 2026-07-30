@@ -1011,8 +1011,18 @@ class ActorIdentityServicer:
         raise NotImplementedError('Method not implemented!')
 
     def MintCert(self, request, context):
-        """Request an Actor Identity Certificate. To call this RPC, you must have
-        authenticated with a client certificate, not a bearer token.
+        """Request an Actor Identity Certificate for an actor.
+
+        Actors do not call this RPC themselves. The atelet hosting the actor calls
+        it on the actor's behalf, authenticating with its own client certificate
+        rather than a bearer token.
+
+        Authorization is decided on that client certificate: it must identify the
+        atelet running on the same node as the worker Pod that currently hosts the
+        requested actor, and the actor must still be running. Any other caller is
+        rejected with PERMISSION_DENIED.
+
+        The certificate in the response is the actor's identity, not the atelet's.
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
