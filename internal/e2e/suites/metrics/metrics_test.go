@@ -23,6 +23,7 @@ package metrics
 import (
 	"context"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -54,6 +55,10 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 		Atespace: &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: metricsAtespace}},
 	})
 
+	// Clean up any leftover probe actor from a previous run before creating.
+	_, _ = clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: &ateapipb.ObjectRef{Atespace: metricsAtespace, Name: actorID}})
+	_, _ = clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: &ateapipb.ObjectRef{Atespace: metricsAtespace, Name: actorID}})
+
 	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
 		Metadata:               &ateapipb.ResourceMetadata{Atespace: metricsAtespace, Name: actorID},
 		ActorTemplateNamespace: tmplNS,
@@ -71,6 +76,9 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 	// they add the drive steps their instruments need.
 	resume(t, ctx, clients, actorID)
 
+	// Trigger an actor crash to verify ate_actor_crashes counter emission.
+	triggerActorCrash(t, ctx, clients, actorID)
+
 	deadline := time.Now().Add(2 * time.Minute)
 	var missing []string
 	var ateomSeen bool
@@ -82,11 +90,40 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 		missing = e2e.MissingPlatformMetrics(scrape, e2e.PlatformMetricPrefixes)
 		ateomSeen = e2e.CollectorHasService(scrape, "ateom-gvisor", "ateom-microvm")
 		if len(missing) == 0 && ateomSeen {
+			// Verify ate_actor_crashes metric carries low-cardinality labels: operation_name and ate_failure_reason.
+			if !strings.Contains(scrape, `operation_name=`) {
+				t.Fatalf("ate_actor_crashes metric missing required operation_name label in collector scrape output:\n%s", scrape)
+			}
+			if !strings.Contains(scrape, `ate_failure_reason=`) {
+				t.Fatalf("ate_actor_crashes metric missing required ate_failure_reason label in collector scrape output:\n%s", scrape)
+			}
 			return
 		}
 		time.Sleep(3 * time.Second)
+
 	}
 	t.Fatalf("platform telemetry never reached the collector: missing metrics %v, ateom pushed=%v", missing, ateomSeen)
+}
+
+func triggerActorCrash(t *testing.T, ctx context.Context, clients *e2e.Clients, actorID string) {
+	t.Helper()
+
+	// Update the running actor's worker selector to an ineligible label.
+	if _, err := clients.SubstrateAPI.UpdateActor(ctx, &ateapipb.UpdateActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: metricsAtespace, Name: actorID},
+		WorkerSelector: &ateapipb.Selector{
+			MatchLabels: map[string]string{"nonexistent-label": "true"},
+		},
+	}); err != nil {
+		t.Fatalf("UpdateActor failed: %v", err)
+	}
+
+	// Invoke ResumeActor while the actor has an assigned worker. VerifyAssignedWorkerStep
+	// detects the assigned worker is no longer eligible for the updated selector,
+	// crashes the actor via workflow_resume.go, and emits the ate_actor_crashes counter.
+	_, _ = clients.SubstrateAPI.ResumeActor(ctx, &ateapipb.ResumeActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: metricsAtespace, Name: actorID},
+	})
 }
 
 func resume(t *testing.T, ctx context.Context, clients *e2e.Clients, actorID string) {

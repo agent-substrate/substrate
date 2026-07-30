@@ -21,6 +21,7 @@ import (
 	"maps"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/resources"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -308,6 +309,9 @@ func (s *WorkerPoolSyncer) releaseActorOnDeadWorker(ctx context.Context, namespa
 	if actor.Status == ateapipb.Actor_STATUS_SUSPENDED {
 		return nil
 	}
+
+	// Record crash counter metric when syncer crashes an actor due to a dead worker pod.
+	recordActorCrash(ctx, actor, worker.GetSandboxClass(), ateattr.OperationNameUnknown, ateattr.ReasonWorkerPodGone)
 
 	actor.Status = ateapipb.Actor_STATUS_CRASHED
 	actor.AteomPodNamespace = ""

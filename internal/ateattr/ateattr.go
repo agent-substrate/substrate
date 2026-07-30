@@ -63,12 +63,11 @@ const (
 
 // Control-plane failure reasons for ate.actor.crashes metric.
 const (
-	ReasonCorruptedAssignment = "corrupted_assignment"
-	ReasonWorkerReassigned    = "worker_reassigned"
-	ReasonWorkerPodGone       = "worker_pod_gone"
-	ReasonUnknown             = "unknown"
+	ReasonCorruptedAssignment = "CORRUPTED_ASSIGNMENT"
+	ReasonWorkerReassigned    = "WORKER_REASSIGNED"
+	ReasonWorkerPodGone       = "WORKER_POD_GONE"
+	ReasonUnknown             = "UNKNOWN"
 )
-
 
 // Values for WorkerStateKey. Only idle and assigned are representable today;
 // starting and unhealthy workers are not modeled in the cache.

@@ -110,6 +110,7 @@ Agent Substrate emits foundational OpenTelemetry system and server metrics to mo
 | Metric | Emitted by | Type | Measures |
 |--------|------------|------|----------|
 | `rpc.server.call.duration` | ateapi & atelet (gRPC servers, via `otelgrpc`) | histogram | per-method gRPC latency, request rate, and errors (labels `rpc.method`, `rpc.response.status_code`) |
+| `ate.actor.crashes` | ateapi | counter | Total number of actors that transitioned to `STATUS_CRASHED` (labels `operation_name`, `ate.failure.reason`, `ate.template.namespace`, `ate.template.name`, `ate.workerpool.name`, `ate.sandbox.class`) |
 | `atenet.router.route.duration` | atenet-router | histogram | Substrate E2E — Envoy receiving a request to Envoy forwarding it to the resolved worker, excluding actor compute and the response |
 | `atelet.snapshot.size` | atelet | histogram | uncompressed size in bytes of each gVisor snapshot image written during checkpoint (labels `kind`, `actor_template_namespace`, `actor_template_name`) |
 
