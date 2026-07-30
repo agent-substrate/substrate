@@ -49,6 +49,7 @@ func setupTest(t *testing.T) (*miniredis.Miniredis, *Persistence, context.Contex
 	rdb := redis.NewClusterClient(&redis.ClusterOptions{
 		Addrs: []string{mr.Addr()},
 	})
+	t.Cleanup(func() { rdb.Close() })
 	return mr, NewPersistence(rdb), t.Context()
 }
 
