@@ -37,6 +37,11 @@ const OverlaySpecFileName = "rootfs-overlay.json"
 // bundle path by the consumer rather than trusted from the file.
 type OverlaySpec struct {
 	Version int `json:"version"`
+	// ImageDigest is the manifest digest the bundle's image ref resolved to
+	// ("sha256:<hex>"). The cache GC's root-set scan uses it to protect the
+	// image while the bundle exists; consumers ignore it. Optional: older
+	// specs lack it.
+	ImageDigest string `json:"imageDigest,omitempty"`
 	// Layers are the cached layer directories (each holding its tree under
 	// fs/), bottom-most layer first — the order the image manifest lists
 	// them. Consumers reverse this into overlayfs's top-first lowerdir.
@@ -49,14 +54,35 @@ type OverlaySpec struct {
 }
 
 // WriteSpec writes spec into the bundle at bundlePath.
+//
+// The write is atomic (temp file + rename): the cache GC's root-set scan
+// reads these files concurrently, and a torn spec would under-report the
+// layers an actor is using — failing toward deletion.
 func WriteSpec(bundlePath string, spec *OverlaySpec) error {
 	spec.Version = 1
 	b, err := json.MarshalIndent(spec, "", "  ")
 	if err != nil {
 		return fmt.Errorf("while encoding overlay spec: %w", err)
 	}
-	if err := os.WriteFile(filepath.Join(bundlePath, OverlaySpecFileName), b, 0o600); err != nil {
+	path := filepath.Join(bundlePath, OverlaySpecFileName)
+	tmp, err := os.CreateTemp(bundlePath, "."+OverlaySpecFileName+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("while creating overlay spec temp file: %w", err)
+	}
+	defer os.Remove(tmp.Name()) // no-op once the rename succeeds
+	if _, err := tmp.Write(b); err != nil {
+		tmp.Close()
 		return fmt.Errorf("while writing overlay spec: %w", err)
+	}
+	if err := tmp.Chmod(0o600); err != nil {
+		tmp.Close()
+		return fmt.Errorf("while setting overlay spec mode: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("while closing overlay spec: %w", err)
+	}
+	if err := os.Rename(tmp.Name(), path); err != nil {
+		return fmt.Errorf("while moving overlay spec into place: %w", err)
 	}
 	return nil
 }
