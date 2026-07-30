@@ -14,11 +14,10 @@
 
 package imagecache
 
-// Size accounting and last-use recording: the data foundations for
-// eviction (Phase 2 of
-// https://github.com/agent-substrate/substrate/issues/463). Both facts
-// live in the filesystem — a per-layer "size" file and the image record's
-// mtime — so they survive atelet restarts without in-memory state.
+// Size accounting and last-use recording: the data foundations for cache
+// eviction. Both facts live in the filesystem — a per-layer "size" file
+// and the image record's mtime — so they survive atelet restarts without
+// in-memory state.
 
 import (
 	"errors"

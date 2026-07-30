@@ -108,8 +108,8 @@ type Store struct {
 	layerSF singleflight.Group
 
 	// hitMu makes the hit path's record read + last-use touch atomic with
-	// respect to eviction (#463 Phase 2), which will hold it exclusive
-	// around record removal. No exclusive holder yet, so effectively free.
+	// respect to eviction, which will hold it exclusive around record
+	// removal. No exclusive holder yet, so effectively free.
 	hitMu sync.RWMutex
 }
 
@@ -270,7 +270,7 @@ func (s *Store) EnsureImage(ctx context.Context, ref string) (*Image, error) {
 	s.hitMu.RLock()
 	img, err := s.cachedImage(digest)
 	if err == nil && img != nil {
-		// Record last-use for eviction's LRU ordering (#463 Phase 2).
+		// Record last-use for eviction's LRU ordering.
 		s.touchRecord(digest)
 	}
 	s.hitMu.RUnlock()
