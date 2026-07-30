@@ -53,6 +53,7 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
@@ -89,8 +90,11 @@ func NewPersistence(redisClient *redis.ClusterClient) *Persistence {
 	}
 }
 
-func actorDBKey(atespace, name string) string {
-	return "actor:" + atespace + ":" + name
+// actorDBKey returns the Redis key an actor is stored under. The encoding is
+// "actor:<atespace>:<name>" and must not change: existing databases hold keys
+// in this form.
+func actorDBKey(actorRef resources.ActorRef) string {
+	return "actor:" + actorRef.Atespace + ":" + actorRef.Name
 }
 
 // actorScanPattern returns the SCAN match pattern for listing actors. An empty
@@ -312,8 +316,8 @@ func (s *Persistence) DebugClearAll(ctx context.Context) error {
 	return err
 }
 
-func (s *Persistence) GetActor(ctx context.Context, atespace, name string) (*ateapipb.Actor, error) {
-	dbKey := actorDBKey(atespace, name)
+func (s *Persistence) GetActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error) {
+	dbKey := actorDBKey(actorRef)
 
 	dbActorBytes, err := s.rdb.Get(ctx, dbKey).Bytes()
 	if err != nil {
@@ -328,7 +332,7 @@ func (s *Persistence) GetActor(ctx context.Context, atespace, name string) (*ate
 		return nil, fmt.Errorf("while unmarshaling actor: %w", err)
 	}
 
-	if actor.GetMetadata().GetName() != name || actor.GetMetadata().GetAtespace() != atespace {
+	if resources.ActorRefFromActor(actor) != actorRef {
 		return nil, fmt.Errorf("(impossible) mismatch between stored name/atespace and key")
 	}
 
@@ -336,7 +340,7 @@ func (s *Persistence) GetActor(ctx context.Context, atespace, name string) (*ate
 }
 
 func (s *Persistence) CreateActor(ctx context.Context, actor *ateapipb.Actor) (*ateapipb.Actor, error) {
-	dbKey := actorDBKey(actor.GetMetadata().GetAtespace(), actor.GetMetadata().GetName())
+	dbKey := actorDBKey(resources.ActorRefFromActor(actor))
 
 	// Clone so we don't stomp the caller's copy, then attach fresh server-owned
 	// metadata carrying the caller-specified identity.
@@ -429,7 +433,7 @@ func (s *Persistence) UpdateWorker(ctx context.Context, worker *ateapipb.Worker,
 		}
 
 		if currentWorker.GetVersion() != expectedVersion {
-			return store.ErrPersistenceRetry
+			return store.ErrVersionConflict
 		}
 		dbWorker.Version = currentWorker.GetVersion() + 1
 		if currentWorker.GetWorkerNamespace() != dbWorker.GetWorkerNamespace() {
@@ -460,8 +464,8 @@ func (s *Persistence) UpdateWorker(ctx context.Context, worker *ateapipb.Worker,
 		if errors.Is(err, store.ErrNotFound) {
 			return store.ErrNotFound
 		}
-		if errors.Is(err, store.ErrPersistenceRetry) || errors.Is(err, redis.TxFailedErr) {
-			return store.ErrPersistenceRetry
+		if errors.Is(err, store.ErrVersionConflict) || errors.Is(err, redis.TxFailedErr) {
+			return store.ErrVersionConflict
 		}
 		return fmt.Errorf("while executing update worker transaction: %w", err)
 	}
@@ -483,8 +487,8 @@ func (s *Persistence) DeleteWorker(ctx context.Context, namespace, pool, pod str
 	return nil
 }
 
-func (s *Persistence) DeleteActor(ctx context.Context, atespace, name string) (*ateapipb.Actor, error) {
-	dbKey := actorDBKey(atespace, name)
+func (s *Persistence) DeleteActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error) {
+	dbKey := actorDBKey(actorRef)
 	var deleted *ateapipb.Actor
 	err := s.rdb.Watch(ctx, func(tx *redis.Tx) error {
 		currentVal, err := tx.Get(ctx, dbKey).Bytes()
@@ -517,7 +521,7 @@ func (s *Persistence) DeleteActor(ctx context.Context, atespace, name string) (*
 
 	if err != nil {
 		if errors.Is(err, redis.TxFailedErr) {
-			return nil, store.ErrPersistenceRetry
+			return nil, store.ErrVersionConflict
 		}
 		return nil, err
 	}
@@ -526,7 +530,7 @@ func (s *Persistence) DeleteActor(ctx context.Context, atespace, name string) (*
 }
 
 func (s *Persistence) UpdateActor(ctx context.Context, actor *ateapipb.Actor, expectedVersion int64) (*ateapipb.Actor, error) {
-	dbKey := actorDBKey(actor.GetMetadata().GetAtespace(), actor.GetMetadata().GetName())
+	dbKey := actorDBKey(resources.ActorRefFromActor(actor))
 
 	// Clone because we will update the version field, and we don't want to
 	// stomp the caller's copy.
@@ -547,7 +551,7 @@ func (s *Persistence) UpdateActor(ctx context.Context, actor *ateapipb.Actor, ex
 		}
 
 		if currentActor.GetMetadata().GetVersion() != expectedVersion {
-			return store.ErrPersistenceRetry
+			return store.ErrVersionConflict
 		}
 		if currentActor.GetMetadata().GetName() != dbActor.GetMetadata().GetName() {
 			return fmt.Errorf("name is immutable")
@@ -580,8 +584,8 @@ func (s *Persistence) UpdateActor(ctx context.Context, actor *ateapipb.Actor, ex
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, store.ErrNotFound
 		}
-		if errors.Is(err, store.ErrPersistenceRetry) || errors.Is(err, redis.TxFailedErr) {
-			return nil, store.ErrPersistenceRetry
+		if errors.Is(err, store.ErrVersionConflict) || errors.Is(err, redis.TxFailedErr) {
+			return nil, store.ErrVersionConflict
 		}
 		return nil, fmt.Errorf("while executing update actor transaction: %w", err)
 	}

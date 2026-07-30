@@ -473,6 +473,56 @@ func TestValidateWorker(t *testing.T) {
 			NodeName:        "NODE_NAME",
 		},
 		wantMsg: "node_name: Invalid value",
+	}, {
+		name: "valid active worker state",
+		worker: &ateapipb.Worker{
+			WorkerNamespace: "ns-1",
+			WorkerPool:      "pool-1",
+			WorkerPod:       "pod-1",
+			Ip:              "10.0.0.1",
+			WorkerPodUid:    "123e4567-e89b-12d3-a456-426614174000",
+			NodeName:        "node-1.example.com",
+			State:           ateapipb.Worker_STATE_ACTIVE,
+		},
+		wantMsg: "",
+	}, {
+		name: "valid draining worker state",
+		worker: &ateapipb.Worker{
+			WorkerNamespace: "ns-1",
+			WorkerPool:      "pool-1",
+			WorkerPod:       "pod-1",
+			Ip:              "10.0.0.1",
+			WorkerPodUid:    "123e4567-e89b-12d3-a456-426614174000",
+			NodeName:        "node-1.example.com",
+			State:           ateapipb.Worker_STATE_DRAINING,
+		},
+		wantMsg: "",
+	}, {
+		// The zero value (STATE_UNSPECIFIED) is tolerated for backward
+		// compatibility with worker records written before the state field existed.
+		name: "unset worker state is tolerated",
+		worker: &ateapipb.Worker{
+			WorkerNamespace: "ns-1",
+			WorkerPool:      "pool-1",
+			WorkerPod:       "pod-1",
+			Ip:              "10.0.0.1",
+			WorkerPodUid:    "123e4567-e89b-12d3-a456-426614174000",
+			NodeName:        "node-1.example.com",
+			State:           ateapipb.Worker_STATE_UNSPECIFIED,
+		},
+		wantMsg: "",
+	}, {
+		name: "invalid worker state",
+		worker: &ateapipb.Worker{
+			WorkerNamespace: "ns-1",
+			WorkerPool:      "pool-1",
+			WorkerPod:       "pod-1",
+			Ip:              "10.0.0.1",
+			WorkerPodUid:    "123e4567-e89b-12d3-a456-426614174000",
+			NodeName:        "node-1.example.com",
+			State:           ateapipb.Worker_State(99),
+		},
+		wantMsg: "state: Unsupported value",
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -31,6 +31,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/envtestbins"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
+	"github.com/agent-substrate/substrate/internal/resources"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/client/clientset/versioned"
 	"github.com/agent-substrate/substrate/pkg/client/informers/externalversions"
@@ -51,6 +52,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -377,6 +379,7 @@ func setupTest(t *testing.T, ns string) *testContext {
 		conn.Close()
 		grpcServer.Stop()
 		cancel()
+		rdb.Close()
 		mr.Close()
 	}
 
@@ -657,7 +660,9 @@ func createWorkerPod(t *testing.T, tc *testContext, ns string, name string, node
 
 func deleteWorkerPod(t *testing.T, tc *testContext, ns string, name string) {
 	t.Helper()
-	err := tc.k8sClient.CoreV1().Pods(ns).Delete(context.Background(), name, metav1.DeleteOptions{})
+	err := tc.k8sClient.CoreV1().Pods(ns).Delete(context.Background(), name, metav1.DeleteOptions{
+		GracePeriodSeconds: ptr.To[int64](0),
+	})
 	if err != nil {
 		t.Fatalf("failed to delete worker pod %s: %v", name, err)
 	}
@@ -843,7 +848,7 @@ func TestGetActor_NotFound(t *testing.T) {
 	_, err := tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "non-existent"},
 	})
-	assertGrpcError(t, err, codes.NotFound, "Actor non-existent not found")
+	assertGrpcError(t, err, codes.NotFound, "Actor test-atespace/non-existent not found")
 }
 
 // TestListActors tests that all created actors can be listed.
@@ -957,7 +962,7 @@ func TestListActors_ByAtespace(t *testing.T) {
 		t.Errorf("GetActor(id1, team-a) failed: %v", err)
 	}
 	_, err = tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "id1"}})
-	assertGrpcError(t, err, codes.NotFound, "Actor id1 not found")
+	assertGrpcError(t, err, codes.NotFound, "Actor test-atespace/id1 not found")
 }
 
 // TestListActors_AllAtespaces verifies that an empty atespace lists actors across
@@ -1057,29 +1062,6 @@ func TestListActors_Pagination(t *testing.T) {
 	}
 }
 
-func TestListActors_PageSizeValidation(t *testing.T) {
-	ns := namespaceForTest("ns-list-actors-validation")
-	tc := setupTest(t, ns)
-	defer tc.cleanup()
-
-	// 1. Negative page size
-	_, err := tc.client.ListActors(context.Background(), &ateapipb.ListActorsRequest{
-		Atespace: testAtespace,
-		PageSize: -1,
-	})
-	if status.Code(err) != codes.InvalidArgument {
-		t.Errorf("expected InvalidArgument error for negative page_size, got: %v", err)
-	}
-
-	// 2. Page size exceeding maxPageSize (1000) is coerced silently.
-	if _, err := tc.client.ListActors(context.Background(), &ateapipb.ListActorsRequest{
-		Atespace: testAtespace,
-		PageSize: 1001,
-	}); err != nil {
-		t.Errorf("expected page_size > 1000 to be coerced, got error: %v", err)
-	}
-}
-
 // TestListWorkers tests that workers mirrored to Redis are listed.
 // Workflow:
 // 1. Creates a mock WorkerPool in Kubernetes.
@@ -1117,6 +1099,7 @@ func TestListWorkers(t *testing.T) {
 			Version:         1,
 			SandboxClass:    "gvisor",
 			Labels:          map[string]string{"foo": "bar"},
+			State:           ateapipb.Worker_STATE_ACTIVE,
 		},
 	}
 
@@ -1219,6 +1202,7 @@ func TestResumeActor(t *testing.T) {
 		NodeName:     "node1",
 		SandboxClass: "gvisor",
 		Labels:       map[string]string{poolLabelKey: ns},
+		State:        ateapipb.Worker_STATE_ACTIVE,
 	}
 
 	if diff := cmp.Diff(wantWorker, actorWorker, protocmp.Transform(), protocmp.IgnoreFields(&ateapipb.Worker{}, "version"), protocmp.IgnoreFields(&ateapipb.Worker{}, "worker_pod_uid")); diff != "" {
@@ -1473,7 +1457,7 @@ func TestResumeActor_Reentrancy(t *testing.T) {
 	}
 
 	// Verify actor state is RESUMING in Redis!
-	actor, err := tc.persistence.GetActor(context.Background(), testAtespace, name)
+	actor, err := tc.persistence.GetActor(context.Background(), resources.ActorRef{Atespace: testAtespace, Name: name})
 	if err != nil {
 		t.Fatalf("failed to get actor from store: %v", err)
 	}
@@ -1497,7 +1481,7 @@ func TestResumeActor_Reentrancy(t *testing.T) {
 	}
 
 	// Verify actor state is RUNNING!
-	actor, err = tc.persistence.GetActor(context.Background(), testAtespace, name)
+	actor, err = tc.persistence.GetActor(context.Background(), resources.ActorRef{Atespace: testAtespace, Name: name})
 	if err != nil {
 		t.Fatalf("failed to get actor from store: %v", err)
 	}
@@ -1734,7 +1718,7 @@ func TestUpdateActor_NotFound(t *testing.T) {
 	defer tc.cleanup()
 
 	_, err := tc.client.UpdateActor(context.Background(), &ateapipb.UpdateActorRequest{Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "does-not-exist"}})
-	assertGrpcError(t, err, codes.NotFound, "Actor does-not-exist not found")
+	assertGrpcError(t, err, codes.NotFound, "Actor test-atespace/does-not-exist not found")
 }
 
 // TestResumeActor_ReleasesStaleWorkerWhenPoolBecomesIneligible verifies that
@@ -1832,6 +1816,117 @@ func TestResumeActor_ReleasesStaleWorkerWhenPoolBecomesIneligible(t *testing.T) 
 	}
 }
 
+// TestResumeActor_ReleasesDrainingWorkerFromPriorAttempt exercises the reuse-loop
+// change in AssignWorkerStep.Execute: a worker still assigned to the actor from a
+// previous (failed) attempt that has since entered DRAINING must not be reused —
+// it is released and the actor is crashed.
+func TestResumeActor_CrashesIfAssignedWorkerIsDraining(t *testing.T) {
+	ns := namespaceForTest("ns-resume-release-draining")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	// createTemplate sets up pool1 (labeled pool=<ns>) + tmpl1 (selecting it) with
+	// a golden snapshot, so resume drives Restore. Two workers share the pool.
+	createTemplate(t, tc, ns)
+	createWorkerPod(t, tc, ns, "worker-a", "node1", "pool1")
+	createWorkerPod(t, tc, ns, "worker-b", "node1", "pool1")
+
+	id := "id1"
+	if _, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{
+		Actor: &ateapipb.Actor{
+			Metadata: &ateapipb.ResourceMetadata{
+				Atespace: testAtespace,
+				Name:     id,
+			},
+			ActorTemplateNamespace: ns,
+			ActorTemplateName:      "tmpl1",
+		},
+	}); err != nil {
+		t.Fatalf("CreateActor failed: %v", err)
+	}
+
+	// First resume fails after a worker is assigned, leaving the actor bound to
+	// that worker from a prior attempt.
+	tc.fakeAtelet.FailRestore = fmt.Errorf("mock atelet failure")
+	if _, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: id}}); err == nil {
+		t.Fatalf("expected first ResumeActor to fail")
+	}
+	tc.fakeAtelet.FailRestore = nil
+
+	// Learn which worker got assigned (findFreeWorker shuffles), then mark it
+	// DRAINING as the syncer would when its pod enters Terminating.
+	getResp, err := tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: id}})
+	if err != nil {
+		t.Fatalf("GetActor failed: %v", err)
+	}
+	assignedPod := getResp.GetAteomPodName()
+	if assignedPod == "" {
+		t.Fatalf("expected actor to be bound to a worker after the failed attempt")
+	}
+
+	assigned, err := tc.persistence.GetWorker(context.Background(), ns, "pool1", assignedPod)
+	if err != nil {
+		t.Fatalf("GetWorker(%s) failed: %v", assignedPod, err)
+	}
+	assigned.State = ateapipb.Worker_STATE_DRAINING
+	if err := tc.persistence.UpdateWorker(context.Background(), assigned, assigned.GetVersion()); err != nil {
+		t.Fatalf("marking worker %s draining failed: %v", assignedPod, err)
+	}
+
+	// Wait until the DRAINING state is observable, which also gives the store
+	// watch time to propagate it into the scheduler's worker cache.
+	if err := wait.PollUntilContextTimeout(context.Background(), 100*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
+		resp, err := tc.client.ListWorkers(ctx, &ateapipb.ListWorkersRequest{})
+		if err != nil {
+			return false, nil
+		}
+		for _, w := range resp.GetWorkers() {
+			if w.GetWorkerNamespace() == ns && w.GetWorkerPod() == assignedPod {
+				return w.GetState() == ateapipb.Worker_STATE_DRAINING, nil
+			}
+		}
+		return false, nil
+	}); err != nil {
+		t.Fatalf("worker %s did not reach DRAINING: %v", assignedPod, err)
+	}
+
+	// Second resume must fail and crash the actor because its worker is draining.
+	_, err = tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: id}})
+	if err == nil {
+		t.Fatalf("expected second ResumeActor to fail")
+	}
+	if status.Code(err) != codes.Aborted || !strings.Contains(err.Error(), "crashed") {
+		t.Errorf("expected Aborted/crashed error, got %v", err)
+	}
+
+	getResp, err = tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: id}})
+	if err != nil {
+		t.Fatalf("GetActor failed: %v", err)
+	}
+	if got := getResp.GetStatus(); got != ateapipb.Actor_STATUS_CRASHED {
+		t.Errorf("expected actor status CRASHED, got %v", got)
+	}
+	if got := getResp.GetAteomPodName(); got != "" {
+		t.Errorf("expected actor pod name to be empty, got %q", got)
+	}
+
+	// The draining worker must have been released.
+	listResp, err := tc.client.ListWorkers(context.Background(), &ateapipb.ListWorkersRequest{})
+	if err != nil {
+		t.Fatalf("ListWorkers failed: %v", err)
+	}
+	for _, w := range listResp.GetWorkers() {
+		if w.GetWorkerNamespace() != ns {
+			continue
+		}
+		if w.GetWorkerPod() == assignedPod {
+			if w.GetAssignment() != nil {
+				t.Errorf("expected draining worker %q to be released, still assigned to %q", assignedPod, w.GetAssignment().GetActor().GetName())
+			}
+		}
+	}
+}
+
 // TestUpdateActor_ReassignsPoolAcrossSuspendResume verifies that updating an
 // actor's worker_selector moves it onto a different eligible pool not just
 // on the next fresh resume, but also across a full suspend/resume cycle of
@@ -1918,444 +2013,74 @@ func TestUpdateActor_ReassignsPoolAcrossSuspendResume(t *testing.T) {
 	}
 }
 
-// TestValidation tests the negative validation cases for all gRPC methods.
-// Workflow:
-// 1. Uses table-driven tests for each RPC method (CreateActor, GetActor, ResumeActor, SuspendActor).
-// 2. Passes invalid requests (missing required fields).
-// 3. Verifies that all requests fail with an error.
 func TestValidation(t *testing.T) {
 	ns := namespaceForTest("ns-validation")
 	tc := setupTest(t, ns)
 	defer tc.cleanup()
 
 	t.Run("CreateActor", func(t *testing.T) {
-		tests := []struct {
-			name    string
-			req     *ateapipb.CreateActorRequest
-			wantMsg string
-		}{{
-			"missing actor_template_namespace",
-			&ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "id1"}, ActorTemplateName: "tmpl1"}},
-			"actor.actor_template_namespace: Required value",
-		}, {
-			"invalid actor_template_namespace",
-			&ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-				Metadata:               &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "id1"},
-				ActorTemplateNamespace: "invalid value",
-				ActorTemplateName:      "tmpl1",
-			}},
-			"actor.actor_template_namespace: Invalid value",
-		}, {
-			"missing actor_template_name",
-			&ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "id1"}, ActorTemplateNamespace: "ns1"}},
-			"actor.actor_template_name: Required value",
-		}, {
-			"invalid actor_template_name",
-			&ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-				Metadata:               &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "id1"},
-				ActorTemplateNamespace: "ns1",
-				ActorTemplateName:      "invalid value",
-			}},
-			"actor.actor_template_name: Invalid value",
-		}, {
-			"missing actor",
-			&ateapipb.CreateActorRequest{},
-			"actor: Required value",
-		}, {
-			"missing actor.atespace",
-			&ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-				Metadata:               &ateapipb.ResourceMetadata{Name: "id1"},
-				ActorTemplateNamespace: "ns1",
-				ActorTemplateName:      "tmpl1",
-			}},
-			"actor.metadata.atespace: Required value",
-		}, {
-			"invalid actor.atespace",
-			&ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-				Metadata:               &ateapipb.ResourceMetadata{Atespace: "NS1", Name: "id1"},
-				ActorTemplateNamespace: "ns1",
-				ActorTemplateName:      "tmpl1",
-			}},
-			"actor.metadata.atespace: Invalid value",
-		}, {
-			"missing actor.name",
-			&ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-				Metadata:               &ateapipb.ResourceMetadata{Atespace: "ns1"},
-				ActorTemplateNamespace: "ns1",
-				ActorTemplateName:      "tmpl1",
-			}},
-			"actor.metadata.name: Required value",
-		}, {
-			"invalid actor.name",
-			&ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-				Metadata:               &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "ID1"},
-				ActorTemplateNamespace: "ns1",
-				ActorTemplateName:      "tmpl1",
-			}},
-			"actor.metadata.name: Invalid value",
-		}, {
-			"invalid worker_selector label key",
-			&ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-				Metadata:               &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "id1"},
-				ActorTemplateNamespace: "ns1",
-				ActorTemplateName:      "tmpl1",
-				WorkerSelector:         &ateapipb.Selector{MatchLabels: map[string]string{"bad key!": "x"}},
-			}},
-			`actor.worker_selector.match_labels\[bad key!\]: Invalid value`,
-		}, {
-			"invalid worker_selector label value",
-			&ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-				Metadata:               &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "id1"},
-				ActorTemplateNamespace: "ns1",
-				ActorTemplateName:      "tmpl1",
-				WorkerSelector:         &ateapipb.Selector{MatchLabels: map[string]string{"tier": "not valid!"}},
-			}},
-			`actor.worker_selector.match_labels\[tier\]: Invalid value`,
-		}, {
-			"too many worker_selector.match_labels",
-			&ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
-				Metadata:               &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "id1"},
-				ActorTemplateNamespace: "ns1",
-				ActorTemplateName:      "tmpl1",
-				WorkerSelector:         &ateapipb.Selector{MatchLabels: selectorLabelsOfSize(11)}}},
-			"actor.worker_selector.match_labels: Too many",
-		}}
-		for _, tt := range tests {
-			t.Run(tt.name, func(t *testing.T) {
-				_, err := tc.client.CreateActor(context.Background(), tt.req)
-				assertGrpcErrorRegex(t, err, codes.InvalidArgument, tt.wantMsg)
-			})
-		}
+		_, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{})
+		assertGrpcErrorRegex(t, err, codes.InvalidArgument, "actor: Required value")
 	})
 
 	t.Run("GetActor", func(t *testing.T) {
-		tests := []struct {
-			name    string
-			req     *ateapipb.GetActorRequest
-			wantMsg string
-		}{{
-			"missing actor",
-			&ateapipb.GetActorRequest{},
-			"actor: Required value",
-		}, {
-			"missing actor.atespace",
-			&ateapipb.GetActorRequest{
-				Actor: &ateapipb.ObjectRef{Name: "id1"},
-			},
-			"actor.atespace: Required value",
-		}, {
-			"invalid actor.atespace",
-			&ateapipb.GetActorRequest{
-				Actor: &ateapipb.ObjectRef{Atespace: "NS1", Name: "id1"},
-			},
-			"actor.atespace: Invalid value",
-		}, {
-			"missing actor.name",
-			&ateapipb.GetActorRequest{
-				Actor: &ateapipb.ObjectRef{Atespace: "ns1"},
-			},
-			"actor.name: Required value",
-		}, {
-			"invalid actor.name",
-			&ateapipb.GetActorRequest{
-				Actor: &ateapipb.ObjectRef{Atespace: "ns1", Name: "ID1"},
-			},
-			"actor.name: Invalid value",
-		}}
-		for _, tt := range tests {
-			t.Run(tt.name, func(t *testing.T) {
-				_, err := tc.client.GetActor(context.Background(), tt.req)
-				assertGrpcErrorRegex(t, err, codes.InvalidArgument, tt.wantMsg)
-			})
-		}
+		_, err := tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{})
+		assertGrpcErrorRegex(t, err, codes.InvalidArgument, "actor: Required value")
 	})
 
 	t.Run("ResumeActor", func(t *testing.T) {
-		tests := []struct {
-			name    string
-			req     *ateapipb.ResumeActorRequest
-			wantMsg string
-		}{{
-			"missing actor",
-			&ateapipb.ResumeActorRequest{},
-			"actor: Required value",
-		}, {
-			"missing actor.atespace",
-			&ateapipb.ResumeActorRequest{
-				Actor: &ateapipb.ObjectRef{Name: "id1"},
-			},
-			"actor.atespace: Required value",
-		}, {
-			"invalid actor.atespace",
-			&ateapipb.ResumeActorRequest{
-				Actor: &ateapipb.ObjectRef{Atespace: "NS1", Name: "id1"},
-			},
-			"actor.atespace: Invalid value",
-		}, {
-			"missing actor.name",
-			&ateapipb.ResumeActorRequest{
-				Actor: &ateapipb.ObjectRef{Atespace: "ns1"},
-			},
-			"actor.name: Required value",
-		}, {
-			"invalid actor.name",
-			&ateapipb.ResumeActorRequest{
-				Actor: &ateapipb.ObjectRef{Atespace: "ns1", Name: "ID1"},
-			},
-			"actor.name: Invalid value",
-		}}
-		for _, tt := range tests {
-			t.Run(tt.name, func(t *testing.T) {
-				_, err := tc.client.ResumeActor(context.Background(), tt.req)
-				assertGrpcErrorRegex(t, err, codes.InvalidArgument, tt.wantMsg)
-			})
-		}
+		_, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{})
+		assertGrpcErrorRegex(t, err, codes.InvalidArgument, "actor: Required value")
 	})
 
 	t.Run("PauseActor", func(t *testing.T) {
-		tests := []struct {
-			name    string
-			req     *ateapipb.PauseActorRequest
-			wantMsg string
-		}{{
-			"missing actor",
-			&ateapipb.PauseActorRequest{},
-			"actor: Required value",
-		}, {
-			"missing actor.atespace",
-			&ateapipb.PauseActorRequest{
-				Actor: &ateapipb.ObjectRef{Name: "id1"},
-			},
-			"actor.atespace: Required value",
-		}, {
-			"invalid actor.atespace",
-			&ateapipb.PauseActorRequest{
-				Actor: &ateapipb.ObjectRef{Atespace: "NS1", Name: "id1"},
-			},
-			"actor.atespace: Invalid value",
-		}, {
-			"missing actor.name",
-			&ateapipb.PauseActorRequest{
-				Actor: &ateapipb.ObjectRef{Atespace: "ns1"},
-			},
-			"actor.name: Required value",
-		}, {
-			"invalid actor.name",
-			&ateapipb.PauseActorRequest{
-				Actor: &ateapipb.ObjectRef{Atespace: "ns1", Name: "ID1"},
-			},
-			"actor.name: Invalid value",
-		}}
-		for _, tt := range tests {
-			t.Run(tt.name, func(t *testing.T) {
-				_, err := tc.client.PauseActor(context.Background(), tt.req)
-				assertGrpcErrorRegex(t, err, codes.InvalidArgument, tt.wantMsg)
-			})
-		}
+		_, err := tc.client.PauseActor(context.Background(), &ateapipb.PauseActorRequest{})
+		assertGrpcErrorRegex(t, err, codes.InvalidArgument, "actor: Required value")
 	})
 
 	t.Run("SuspendActor", func(t *testing.T) {
-		tests := []struct {
-			name    string
-			req     *ateapipb.SuspendActorRequest
-			wantMsg string
-		}{{
-			"missing actor",
-			&ateapipb.SuspendActorRequest{},
-			"actor: Required value",
-		}, {
-			"missing actor.atespace",
-			&ateapipb.SuspendActorRequest{
-				Actor: &ateapipb.ObjectRef{Name: "id1"},
-			},
-			"actor.atespace: Required value",
-		}, {
-			"invalid actor.atespace",
-			&ateapipb.SuspendActorRequest{
-				Actor: &ateapipb.ObjectRef{Atespace: "NS1", Name: "id1"},
-			},
-			"actor.atespace: Invalid value",
-		}, {
-			"missing actor.name",
-			&ateapipb.SuspendActorRequest{
-				Actor: &ateapipb.ObjectRef{Atespace: "ns1"},
-			},
-			"actor.name: Required value",
-		}, {
-			"invalid actor.name",
-			&ateapipb.SuspendActorRequest{
-				Actor: &ateapipb.ObjectRef{Atespace: "ns1", Name: "ID1"},
-			},
-			"actor.name: Invalid value",
-		}}
-		for _, tt := range tests {
-			t.Run(tt.name, func(t *testing.T) {
-				_, err := tc.client.SuspendActor(context.Background(), tt.req)
-				assertGrpcErrorRegex(t, err, codes.InvalidArgument, tt.wantMsg)
-			})
-		}
+		_, err := tc.client.SuspendActor(context.Background(), &ateapipb.SuspendActorRequest{})
+		assertGrpcErrorRegex(t, err, codes.InvalidArgument, "actor: Required value")
 	})
 
 	t.Run("UpdateActor", func(t *testing.T) {
-		tests := []struct {
-			name    string
-			req     *ateapipb.UpdateActorRequest
-			wantMsg string
-		}{{
-			"missing actor",
-			&ateapipb.UpdateActorRequest{},
-			"actor: Required value",
-		}, {
-			"missing actor.atespace",
-			&ateapipb.UpdateActorRequest{
-				Actor: &ateapipb.ObjectRef{Name: "id1"},
-			},
-			"actor.atespace: Required value",
-		}, {
-			"invalid actor.atespace",
-			&ateapipb.UpdateActorRequest{
-				Actor: &ateapipb.ObjectRef{Atespace: "NS1", Name: "id1"},
-			},
-			"actor.atespace: Invalid value",
-		}, {
-			"missing actor.name",
-			&ateapipb.UpdateActorRequest{
-				Actor: &ateapipb.ObjectRef{Atespace: "ns1"},
-			},
-			"actor.name: Required value",
-		}, {
-			"invalid actor.name",
-			&ateapipb.UpdateActorRequest{
-				Actor: &ateapipb.ObjectRef{Atespace: "ns1", Name: "ID1"},
-			},
-			"actor.name: Invalid value",
-		}, {
-			"invalid worker_selector label key",
-			&ateapipb.UpdateActorRequest{
-				Actor:          &ateapipb.ObjectRef{Atespace: "ns1", Name: "id1"},
-				WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"bad key!": "x"}},
-			},
-			`worker_selector.match_labels\[bad key!\]: Invalid value`,
-		}, {
-			"invalid worker_selector label value",
-			&ateapipb.UpdateActorRequest{
-				Actor:          &ateapipb.ObjectRef{Atespace: "ns1", Name: "id1"},
-				WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"tier": "not valid!"}},
-			},
-			`worker_selector.match_labels\[tier\]: Invalid value`,
-		}, {
-			"too many worker_selector.match_labels",
-			&ateapipb.UpdateActorRequest{
-				Actor:          &ateapipb.ObjectRef{Atespace: "ns1", Name: "id1"},
-				WorkerSelector: &ateapipb.Selector{MatchLabels: selectorLabelsOfSize(11)}},
-			"worker_selector.match_labels: Too many",
-		}}
-		for _, tt := range tests {
-			t.Run(tt.name, func(t *testing.T) {
-				_, err := tc.client.UpdateActor(context.Background(), tt.req)
-				assertGrpcErrorRegex(t, err, codes.InvalidArgument, tt.wantMsg)
-			})
-		}
+		_, err := tc.client.UpdateActor(context.Background(), &ateapipb.UpdateActorRequest{})
+		assertGrpcErrorRegex(t, err, codes.InvalidArgument, "actor: Required value")
 	})
 
 	t.Run("DeleteActor", func(t *testing.T) {
-		tests := []struct {
-			name    string
-			req     *ateapipb.DeleteActorRequest
-			wantMsg string
-		}{{
-			"missing actor",
-			&ateapipb.DeleteActorRequest{},
-			"actor: Required value",
-		}, {
-			"missing actor.atespace",
-			&ateapipb.DeleteActorRequest{
-				Actor: &ateapipb.ObjectRef{Name: "id1"},
-			},
-			"actor.atespace: Required value",
-		}, {
-			"invalid actor.atespace",
-			&ateapipb.DeleteActorRequest{
-				Actor: &ateapipb.ObjectRef{Atespace: "NS1", Name: "id1"},
-			},
-			"actor.atespace: Invalid value",
-		}, {
-			"missing actor.name",
-			&ateapipb.DeleteActorRequest{
-				Actor: &ateapipb.ObjectRef{Atespace: "ns1"},
-			},
-			"actor.name: Required value",
-		}, {
-			"invalid actor.name",
-			&ateapipb.DeleteActorRequest{
-				Actor: &ateapipb.ObjectRef{Atespace: "ns1", Name: "ID1"},
-			},
-			"actor.name: Invalid value",
-		}}
-		for _, tt := range tests {
-			t.Run(tt.name, func(t *testing.T) {
-				_, err := tc.client.DeleteActor(context.Background(), tt.req)
-				assertGrpcErrorRegex(t, err, codes.InvalidArgument, tt.wantMsg)
-			})
-		}
+		_, err := tc.client.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{})
+		assertGrpcErrorRegex(t, err, codes.InvalidArgument, "actor: Required value")
 	})
 
 	t.Run("ListActors", func(t *testing.T) {
-		tests := []struct {
-			name    string
-			req     *ateapipb.ListActorsRequest
-			wantMsg string
-		}{{
-			"invalid atespace",
-			&ateapipb.ListActorsRequest{Atespace: "NS1"},
-			"atespace: Invalid value",
-		}, {
-			"negative page_size",
-			&ateapipb.ListActorsRequest{Atespace: "ns1", PageSize: -1},
-			"page_size: Invalid value",
-		}}
-		for _, tt := range tests {
-			t.Run(tt.name, func(t *testing.T) {
-				_, err := tc.client.ListActors(context.Background(), tt.req)
-				assertGrpcErrorRegex(t, err, codes.InvalidArgument, tt.wantMsg)
-			})
-		}
+		_, err := tc.client.ListActors(context.Background(), &ateapipb.ListActorsRequest{PageSize: -1})
+		assertGrpcErrorRegex(t, err, codes.InvalidArgument, "page_size: Invalid value")
 	})
 
 	t.Run("ListWorkers", func(t *testing.T) {
-		tests := []struct {
-			name    string
-			req     *ateapipb.ListWorkersRequest
-			wantMsg string
-		}{{
-			"negative page_size",
-			&ateapipb.ListWorkersRequest{PageSize: -1},
-			"page_size: Invalid value",
-		}}
-		for _, tt := range tests {
-			t.Run(tt.name, func(t *testing.T) {
-				_, err := tc.client.ListWorkers(context.Background(), tt.req)
-				assertGrpcErrorRegex(t, err, codes.InvalidArgument, tt.wantMsg)
-			})
-		}
+		_, err := tc.client.ListWorkers(context.Background(), &ateapipb.ListWorkersRequest{PageSize: -1})
+		assertGrpcErrorRegex(t, err, codes.InvalidArgument, "page_size: Invalid value")
 	})
 
 	t.Run("ListAtespaces", func(t *testing.T) {
-		tests := []struct {
-			name    string
-			req     *ateapipb.ListAtespacesRequest
-			wantMsg string
-		}{{
-			"negative page_size",
-			&ateapipb.ListAtespacesRequest{PageSize: -1},
-			"page_size: Invalid value",
-		}}
-		for _, tt := range tests {
-			t.Run(tt.name, func(t *testing.T) {
-				_, err := tc.client.ListAtespaces(context.Background(), tt.req)
-				assertGrpcErrorRegex(t, err, codes.InvalidArgument, tt.wantMsg)
-			})
-		}
+		_, err := tc.client.ListAtespaces(context.Background(), &ateapipb.ListAtespacesRequest{PageSize: -1})
+		assertGrpcErrorRegex(t, err, codes.InvalidArgument, "page_size: Invalid value")
+	})
+
+	t.Run("CreateAtespace", func(t *testing.T) {
+		_, err := tc.client.CreateAtespace(context.Background(), &ateapipb.CreateAtespaceRequest{})
+		assertGrpcErrorRegex(t, err, codes.InvalidArgument, "atespace: Required value")
+	})
+
+	t.Run("GetAtespace", func(t *testing.T) {
+		_, err := tc.client.GetAtespace(context.Background(), &ateapipb.GetAtespaceRequest{})
+		assertGrpcErrorRegex(t, err, codes.InvalidArgument, "atespace: Required value")
+	})
+
+	t.Run("DeleteAtespace", func(t *testing.T) {
+		_, err := tc.client.DeleteAtespace(context.Background(), &ateapipb.DeleteAtespaceRequest{})
+		assertGrpcErrorRegex(t, err, codes.InvalidArgument, "atespace: Required value")
 	})
 }
 
@@ -2460,28 +2185,27 @@ func TestResumeActor_DanglingWorker(t *testing.T) {
 	tc.fakeAtelet.FailRestore = nil
 	tc.fakeAtelet.RestoreCalled = false // reset
 
-	// 8. Call ResumeActor again -> Expect success and picking Worker B!
+	// 8. Call ResumeActor again -> Expect it to fail because it is already CRASHED by background syncer.
 	_, err = tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
 	})
-	if err != nil {
-		t.Fatalf("ResumeActor failed on retry: %v", err)
+	if err == nil {
+		t.Fatalf("expected ResumeActor to fail because worker is gone")
+	}
+	if status.Code(err) != codes.FailedPrecondition || !strings.Contains(err.Error(), "STATUS_CRASHED") {
+		t.Errorf("expected FailedPrecondition/STATUS_CRASHED error, got %v", err)
 	}
 
-	if !tc.fakeAtelet.RestoreCalled {
-		t.Errorf("expected Restore to be called on retry")
-	}
-
-	// Verify actor state is RUNNING with worker B assigned
-	actor, err = tc.persistence.GetActor(context.Background(), testAtespace, name)
+	// Verify actor state is CRASHED and worker assignment is empty
+	actor, err = tc.persistence.GetActor(context.Background(), resources.ActorRef{Atespace: testAtespace, Name: name})
 	if err != nil {
 		t.Fatalf("failed to get actor from store: %v", err)
 	}
-	if actor.GetStatus() != ateapipb.Actor_STATUS_RUNNING {
-		t.Errorf("expected status RUNNING, got %v", actor.GetStatus())
+	if actor.GetStatus() != ateapipb.Actor_STATUS_CRASHED {
+		t.Errorf("expected status CRASHED, got %v", actor.GetStatus())
 	}
-	if actor.GetAteomPodName() != "worker-b" {
-		t.Errorf("expected worker-b assigned, got %v", actor.GetAteomPodName())
+	if actor.GetAteomPodName() != "" {
+		t.Errorf("expected worker to be unassigned, got %v", actor.GetAteomPodName())
 	}
 }
 
@@ -2515,29 +2239,26 @@ func TestSuspendActor_DanglingWorker(t *testing.T) {
 
 	deleteWorkerPod(t, tc, ns, "worker-1")
 
-	// 3. Call SuspendActor -> Should succeed (our fix skips missing pod execution)
-	actors, _, _ := tc.persistence.ListActors(context.Background(), testAtespace, maxPageSize, "")
-	t.Logf("Actors in Redis before Suspend: %d", len(actors))
-	for _, a := range actors {
-		t.Logf("  Actor: %s/%s/%s", a.GetActorTemplateNamespace(), a.GetActorTemplateName(), a.GetMetadata().GetName())
-	}
-
+	// 3. Call SuspendActor -> Expect it to fail because it is already CRASHED by background syncer
 	_, err = tc.client.SuspendActor(context.Background(), &ateapipb.SuspendActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
 	})
-	if err != nil {
-		t.Fatalf("SuspendActor failed: %v", err)
+	if err == nil {
+		t.Fatalf("expected SuspendActor to fail because worker is gone")
+	}
+	if status.Code(err) != codes.FailedPrecondition || !strings.Contains(err.Error(), "STATUS_CRASHED") {
+		t.Errorf("expected FailedPrecondition error, got %v", err)
 	}
 
-	// 4. Verify it becomes SUSPENDED in Redis
+	// 4. Verify it becomes CRASHED in Redis
 	getResp, err := tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
 	})
 	if err != nil {
 		t.Fatalf("GetActor failed: %v", err)
 	}
-	if getResp.GetStatus() != ateapipb.Actor_STATUS_SUSPENDED {
-		t.Errorf("expected status SUSPENDED, got %v", getResp.GetStatus())
+	if getResp.GetStatus() != ateapipb.Actor_STATUS_CRASHED {
+		t.Errorf("expected status CRASHED, got %v", getResp.GetStatus())
 	}
 	if getResp.GetAteomPodNamespace() != "" {
 		t.Errorf("expected ateom_pod_namespace to be empty, got %v", getResp.GetAteomPodNamespace())
@@ -2577,7 +2298,7 @@ func TestDeleteActor_Success(t *testing.T) {
 	_, err = tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "id1"},
 	})
-	assertGrpcError(t, err, codes.NotFound, "Actor id1 not found")
+	assertGrpcError(t, err, codes.NotFound, "Actor test-atespace/id1 not found")
 }
 
 func TestDeleteActor_NotSuspended(t *testing.T) {
@@ -2607,7 +2328,7 @@ func TestDeleteActor_NotSuspended(t *testing.T) {
 	_, err = tc.client.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "id1"},
 	})
-	assertGrpcError(t, err, codes.FailedPrecondition, "Actor id1 is not suspended (status: STATUS_RUNNING)")
+	assertGrpcError(t, err, codes.FailedPrecondition, "Actor test-atespace/id1 is not suspended (status: STATUS_RUNNING)")
 }
 
 func TestDeleteActor_Crashed(t *testing.T) {
@@ -2626,7 +2347,7 @@ func TestDeleteActor_Crashed(t *testing.T) {
 		t.Fatalf("CreateActor failed: %v", err)
 	}
 
-	actor, err := tc.persistence.GetActor(context.Background(), testAtespace, "id1")
+	actor, err := tc.persistence.GetActor(context.Background(), resources.ActorRef{Atespace: testAtespace, Name: "id1"})
 	if err != nil {
 		t.Fatalf("GetActor failed: %v", err)
 	}
@@ -2648,7 +2369,7 @@ func TestDeleteActor_Crashed(t *testing.T) {
 	_, err = tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "id1"},
 	})
-	assertGrpcError(t, err, codes.NotFound, "Actor id1 not found")
+	assertGrpcError(t, err, codes.NotFound, "Actor test-atespace/id1 not found")
 }
 
 func TestDeleteActor_NotFound(t *testing.T) {
@@ -2659,7 +2380,7 @@ func TestDeleteActor_NotFound(t *testing.T) {
 	_, err := tc.client.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "non-existent"},
 	})
-	assertGrpcError(t, err, codes.NotFound, "Actor non-existent not found")
+	assertGrpcError(t, err, codes.NotFound, "Actor test-atespace/non-existent not found")
 }
 
 func assertGrpcErrorRegex(t *testing.T, err error, wantCode codes.Code, wantMsg string) {
@@ -2771,24 +2492,6 @@ func TestCreateAtespace_AlreadyExists(t *testing.T) {
 	}
 	_, err := tc.client.CreateAtespace(context.Background(), &ateapipb.CreateAtespaceRequest{Atespace: &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: "team-a"}}})
 	assertGrpcError(t, err, codes.AlreadyExists, "Atespace team-a already exists")
-}
-
-func TestCreateAtespace_Validation(t *testing.T) {
-	ns := namespaceForTest("ns-create-atespace-validation")
-	tc := setupTest(t, ns)
-	defer tc.cleanup()
-
-	_, err := tc.client.CreateAtespace(context.Background(), &ateapipb.CreateAtespaceRequest{Atespace: &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: ""}}})
-	assertGrpcError(t, err, codes.InvalidArgument, "atespace.metadata.name: Required value")
-
-	// Invalid names — uppercase/underscore plus Redis-key/SCAN metacharacters —
-	// are rejected by ValidateAtespace before any key is built (injection guard).
-	for _, bad := range []string{"Team_A", "a*", "a:b", "a/b"} {
-		_, err := tc.client.CreateAtespace(context.Background(), &ateapipb.CreateAtespaceRequest{Atespace: &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: bad}}})
-		if status.Code(err) != codes.InvalidArgument {
-			t.Errorf("CreateAtespace(%q): got code %v, want InvalidArgument (err=%v)", bad, status.Code(err), err)
-		}
-	}
 }
 
 func TestGetAtespace_Found(t *testing.T) {
@@ -2927,19 +2630,7 @@ func TestDeleteAtespace_NotFound(t *testing.T) {
 	assertGrpcError(t, err, codes.NotFound, "Atespace nope not found")
 }
 
-func TestDeleteAtespace_Validation(t *testing.T) {
-	ns := namespaceForTest("ns-delete-atespace-validation")
-	tc := setupTest(t, ns)
-	defer tc.cleanup()
-
-	_, err := tc.client.DeleteAtespace(context.Background(), &ateapipb.DeleteAtespaceRequest{Atespace: &ateapipb.ObjectRef{Name: ""}})
-	assertGrpcError(t, err, codes.InvalidArgument, "atespace.name: Required value")
-
-	// Metacharacter names are rejected before the emptiness glob scan ever runs.
-	for _, bad := range []string{"a*", "a:b"} {
-		_, err := tc.client.DeleteAtespace(context.Background(), &ateapipb.DeleteAtespaceRequest{Atespace: &ateapipb.ObjectRef{Name: bad}})
-		if status.Code(err) != codes.InvalidArgument {
-			t.Errorf("DeleteAtespace(%q): got code %v, want InvalidArgument", bad, status.Code(err))
-		}
-	}
+func assertValidateErr(t *testing.T, got field.ErrorList, want field.ErrorList) {
+	t.Helper()
+	field.ErrorMatcher{}.ByType().ByField().ByValue().Test(t, want, got)
 }

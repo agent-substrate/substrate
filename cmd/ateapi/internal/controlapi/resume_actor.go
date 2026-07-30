@@ -27,18 +27,19 @@ import (
 )
 
 func (s *Service) ResumeActor(ctx context.Context, req *ateapipb.ResumeActorRequest) (*ateapipb.ResumeActorResponse, error) {
-	if err := validateResumeActorRequest(req); err != nil {
-		return nil, err
+	if errs := validateResumeActorRequest(req); len(errs) > 0 {
+		return nil, toGRPCStatusError(errs)
 	}
-	setSpanActorRefAttributes(ctx, req.GetActor().GetAtespace(), req.GetActor().GetName())
+	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
+	setSpanActorRefAttributes(ctx, actorRef)
 
-	actor, err := s.actorWorkflow.ResumeActor(ctx, req.GetActor().GetAtespace(), req.GetActor().GetName(), req.GetBoot())
+	actor, err := s.actorWorkflow.ResumeActor(ctx, actorRef, req.GetBoot())
 	if err != nil {
-		if errors.Is(err, store.ErrPersistenceRetry) {
+		if errors.Is(err, store.ErrVersionConflict) {
 			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
 		}
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, status.Errorf(codes.NotFound, "Actor %s not found", req.GetActor().GetName())
+			return nil, status.Errorf(codes.NotFound, "Actor %s not found", actorRef)
 		}
 		return nil, err
 	}
@@ -47,7 +48,7 @@ func (s *Service) ResumeActor(ctx context.Context, req *ateapipb.ResumeActorRequ
 	return &ateapipb.ResumeActorResponse{Actor: actor}, nil
 }
 
-func validateResumeActorRequest(req *ateapipb.ResumeActorRequest) error {
+func validateResumeActorRequest(req *ateapipb.ResumeActorRequest) field.ErrorList {
 	var fldPath *field.Path
 	var errs field.ErrorList
 
@@ -57,8 +58,5 @@ func validateResumeActorRequest(req *ateapipb.ResumeActorRequest) error {
 		errs = append(errs, resources.ValidateObjectRef(val, fldPath)...)
 	}
 
-	if len(errs) > 0 {
-		return status.Error(codes.InvalidArgument, errs.ToAggregate().Error())
-	}
-	return nil
+	return errs
 }

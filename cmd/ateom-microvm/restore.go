@@ -27,12 +27,15 @@ import (
 	"strings"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/ateomnet"
+
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/ch"
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/kata"
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/imagecache"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/readyz"
+	"github.com/agent-substrate/substrate/internal/resources"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -52,8 +55,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	defer s.lock.Unlock()
 
 	p := actorBootParams{
-		atespace:     req.GetAtespace(),
-		actorName:    req.GetActorName(),
+		actorRef:     resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()},
 		actorUID:     req.GetActorUid(),
 		templateNS:   req.GetActorTemplateNamespace(),
 		templateName: req.GetActorTemplateName(),
@@ -64,7 +66,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	durableDir := ateompath.DurableDirVolumeMountsDir(p.actorUID)
 	tStart := time.Now()
 
-	s.actorLogger.EmitLifecycleLog("Actor restoring", p.atespace, p.actorName, p.actorUID, p.templateNS, p.templateName)
+	s.actorLogger.EmitLifecycleLog("Actor restoring", p.actorRef, p.actorUID, p.templateNS, p.templateName)
 
 	// Restore the durable-dir volumes before anything can observe them: for Full
 	// that means before the share's virtiofsd starts, for Data before the workload
@@ -94,7 +96,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 		return nil, status.Errorf(codes.InvalidArgument, "unsupported snapshot scope: %v", scope)
 	}
 
-	s.actorLogger.EmitLifecycleLog("Actor restored", p.atespace, p.actorName, p.actorUID, p.templateNS, p.templateName)
+	s.actorLogger.EmitLifecycleLog("Actor restored", p.actorRef, p.actorUID, p.templateNS, p.templateName)
 	return &ateompb.RestoreWorkloadResponse{}, nil
 }
 
@@ -111,7 +113,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 // config — comes back from the memory snapshot. Durable-dir volumes are host-backed
 // instead, and the caller has already restored them from the snapshot's tar.
 func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, restoreDir string, tStart time.Time) (retErr error) {
-	atespace, name, actorUID := p.atespace, p.actorName, p.actorUID
+	actorUID := p.actorUID
 	templateNS, templateName := p.templateNS, p.templateName
 
 	rr := s.resolveRuntime(p.assetPaths)
@@ -181,12 +183,16 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 
 	// Networking: rebuild the per-activation veth + tap; the snapshot's virtio-net
 	// is fd-backed, so CH needs fresh tap FDs (net_fds) on restore.
-	if err := s.setupActorNetwork(ctx); err != nil {
+	if err := ateomnet.SetupActorNetwork(ctx, ateomnet.NetworkConfig{
+		InteriorNetNS:      s.interiorNetNS,
+		HostVethHWAddr:     hostVethHWAddr,
+		SweepInteriorLinks: true,
+	}); err != nil {
 		return fmt.Errorf("while setting up actor network: %w", err)
 	}
 	defer func() {
 		if retErr != nil {
-			if cleanupErr := s.cleanupActorNetwork(ctx); cleanupErr != nil {
+			if cleanupErr := ateomnet.CleanupActorNetwork(ctx, s.interiorNetNS); cleanupErr != nil {
 				slog.WarnContext(ctx, "Failed to clean up actor network after Restore failure", slog.Any("err", cleanupErr))
 			}
 			// Detach any bundle rootfs overlays mounted by buildActorContainers
@@ -249,7 +255,7 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 	}
 
 	// Block until every readyz-enabled container reports 200.
-	if err := readyz.WaitAll(ctx, containers, actorVethIP); err != nil {
+	if err := readyz.WaitAll(ctx, containers, ateomnet.ActorVethIP); err != nil {
 		return fmt.Errorf("while waiting for container readyz: %w", err)
 	}
 
@@ -271,7 +277,7 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 	} else {
 		ra.logAgent = logAC
 		for _, c := range containers {
-			s.startActorLogForwarding(logAC, atespace, name, actorUID, templateNS, templateName, overlayWorkloadID(c.GetName()), c.GetName())
+			s.startActorLogForwarding(logAC, p.actorRef, actorUID, templateNS, templateName, overlayWorkloadID(c.GetName()), c.GetName())
 		}
 	}
 

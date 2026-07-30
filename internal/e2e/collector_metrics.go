@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/ateclient"
+	"github.com/agent-substrate/substrate/internal/portforward"
 	"k8s.io/client-go/kubernetes"
 )
 
@@ -54,11 +55,7 @@ func ScrapeCollectorMetrics(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("creating k8s client: %w", err)
 	}
 
-	pod, _, err := firstReadyPodForService(ctx, clientset, collectorNamespace, collectorService)
-	if err != nil {
-		return "", err
-	}
-	localPort, stop, err := podPortForward(ctx, config, clientset, collectorNamespace, pod.Name, collectorPromPort)
+	localPort, stop, err := portforward.ServicePortForward(ctx, config, clientset, collectorNamespace, collectorService, collectorPromPort)
 	if err != nil {
 		return "", err
 	}
@@ -108,6 +105,20 @@ func MissingPlatformMetrics(scrape string, prefixes []string) []string {
 		}
 	}
 	return missing
+}
+
+// CollectorHasService reports whether any named service has pushed telemetry to
+// the collector. Its prometheus exporter surfaces each pushed resource as a
+// target_info series and stamps the service.name as the job label, so a service
+// that has exported anything shows up under either.
+func CollectorHasService(scrape string, services ...string) bool {
+	for _, svc := range services {
+		if strings.Contains(scrape, `service_name="`+svc+`"`) ||
+			strings.Contains(scrape, `job="`+svc+`"`) {
+			return true
+		}
+	}
+	return false
 }
 
 // metricNameFromLine extracts the metric name from one exposition line, handling

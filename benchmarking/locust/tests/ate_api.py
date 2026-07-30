@@ -19,6 +19,7 @@ import uuid
 import grpc
 from common import ateapi_pb2
 from common import ateapi_pb2_grpc
+from common.ateapi_channel import ateapi_channel
 from common.atespace import ATESPACE, ensure_atespace
 from common.grpc_tracing import traced_grpc
 from common.metrics import init_metrics, update_user_count
@@ -48,11 +49,7 @@ class AteAPIUser(User):
 
         # Setup gRPC
         # Strip protocol prefix if present
-        target = self.host.replace("http://", "").replace("https://", "")
-        with open("/run/servicedns-ca/ca.crt", "rb") as f:
-            ca_cert = f.read()
-        options = [('grpc.ssl_target_name_override', 'api.ate-system.svc')]
-        self.channel = grpc.secure_channel(target, grpc.ssl_channel_credentials(root_certificates=ca_cert), options=options)
+        self.channel = ateapi_channel(self.host)
         self.stub = ateapi_pb2_grpc.ControlStub(self.channel)
 
         try:

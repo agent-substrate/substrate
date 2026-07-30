@@ -86,6 +86,17 @@ type WorkerPoolSpec struct {
 	// SandboxClass is used.
 	// +optional
 	SandboxConfigName string `json:"sandboxConfigName,omitempty"`
+
+	// TerminationGracePeriodSeconds is the termination grace period applied to
+	// this pool's worker pods. On eviction, ateom traps SIGTERM and forwards it
+	// to the actor so it can save state and exit cleanly before the kubelet
+	// sends SIGKILL. Tune this to the maximum time your actors need to shut
+	// down gracefully. Defaults to 300 (5 minutes).
+	//
+	// +optional
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:default=300
+	TerminationGracePeriodSeconds *int32 `json:"terminationGracePeriodSeconds,omitempty"`
 }
 
 type WorkerPoolStatus struct {
@@ -93,6 +104,10 @@ type WorkerPoolStatus struct {
 	// +kubebuilder:validation:Minimum=0
 	// +optional
 	Replicas int32 `json:"replicas"`
+
+	// Selector is the label selector for the worker pods.
+	// +optional
+	Selector string `json:"selector,omitempty"`
 }
 
 // WorkerPool is the Schema for the workerpools API
@@ -101,7 +116,7 @@ type WorkerPoolStatus struct {
 // +kubebuilder:object:root=true
 // +kubebuilder:resource:scope=Namespaced,shortName=workerpool
 // +kubebuilder:subresource:status
-// +kubebuilder:subresource:scale:specpath=.spec.replicas,statuspath=.status.replicas
+// +kubebuilder:subresource:scale:specpath=.spec.replicas,statuspath=.status.replicas,selectorpath=.status.selector
 // +kubebuilder:printcolumn:name="Desired",type=integer,JSONPath=`.spec.replicas`
 // +kubebuilder:printcolumn:name="Replicas",type=integer,JSONPath=`.status.replicas`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`

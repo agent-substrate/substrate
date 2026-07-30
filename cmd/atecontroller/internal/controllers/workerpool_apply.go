@@ -24,10 +24,15 @@ import (
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 )
 
+// ateomOTelResourceAttributes mirrors atelet.yaml; service.instance.id is the pod
+// uid so each worker pod is a distinct telemetry source.
+const ateomOTelResourceAttributes = "k8s.namespace.name=$(POD_NAMESPACE),k8s.pod.name=$(POD_NAME),k8s.pod.uid=$(POD_UID),service.instance.id=$(POD_UID)"
+
 // buildDeploymentApplyConfig constructs the SSA apply configuration for the
 // Deployment managed by a WorkerPool. Only fields owned by this controller
-// are declared here.
-func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool) *appsv1ac.DeploymentApplyConfiguration {
+// are declared here. otelEndpoint, when non-empty, is propagated to the ateom
+// container so it pushes telemetry to that collector.
+func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otelEndpoint string) *appsv1ac.DeploymentApplyConfiguration {
 	containerAC := corev1ac.Container().
 		WithName("ateom").
 		WithImage(wp.Spec.AteomImage).
@@ -35,13 +40,7 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool) *appsv1ac.Deployment
 			"--pod-uid=$(POD_UID)",
 		).
 		WithSecurityContext(ateomSecurityContext(wp.Spec.SandboxClass)).
-		WithEnv(
-			corev1ac.EnvVar().
-				WithName("POD_UID").
-				WithValueFrom(corev1ac.EnvVarSource().
-					WithFieldRef(corev1ac.ObjectFieldSelector().
-						WithFieldPath("metadata.uid"))),
-		).
+		WithEnv(ateomContainerEnv(otelEndpoint)...).
 		WithVolumeMounts(corev1ac.VolumeMount().
 			WithName("run-ateom").
 			WithMountPath(ateompath.BasePath).
@@ -60,6 +59,7 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool) *appsv1ac.Deployment
 	applyWorkerPoolPodTemplate(podSpecAC, containerAC, wp.Spec.Template)
 	maybeApplyMicroVMPodShape(podSpecAC, containerAC, wp.Spec.SandboxClass)
 	podSpecAC.WithContainers(containerAC)
+	podSpecAC.WithTerminationGracePeriodSeconds(int64(workerTerminationGracePeriodSeconds(wp)))
 
 	return appsv1ac.Deployment(wp.Name, wp.Namespace).
 		WithOwnerReferences(metav1ac.OwnerReference().
@@ -78,6 +78,32 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool) *appsv1ac.Deployment
 					"ate.dev/worker-pool": wp.Name,
 				}).
 				WithSpec(podSpecAC)))
+}
+
+// ateomContainerEnv adds the OTLP endpoint and resource identity only when
+// telemetry is configured. POD_* refs precede OTEL_RESOURCE_ATTRIBUTES so its
+// $(POD_*) substitutions resolve.
+func ateomContainerEnv(otelEndpoint string) []*corev1ac.EnvVarApplyConfiguration {
+	envs := []*corev1ac.EnvVarApplyConfiguration{
+		fieldRefEnv("POD_UID", "metadata.uid"),
+	}
+	if otelEndpoint == "" {
+		return envs
+	}
+	return append(envs,
+		fieldRefEnv("POD_NAME", "metadata.name"),
+		fieldRefEnv("POD_NAMESPACE", "metadata.namespace"),
+		corev1ac.EnvVar().WithName("OTEL_EXPORTER_OTLP_ENDPOINT").WithValue(otelEndpoint),
+		corev1ac.EnvVar().WithName("OTEL_RESOURCE_ATTRIBUTES").WithValue(ateomOTelResourceAttributes),
+	)
+}
+
+func fieldRefEnv(name, fieldPath string) *corev1ac.EnvVarApplyConfiguration {
+	return corev1ac.EnvVar().
+		WithName(name).
+		WithValueFrom(corev1ac.EnvVarSource().
+			WithFieldRef(corev1ac.ObjectFieldSelector().
+				WithFieldPath(fieldPath)))
 }
 
 // ateomGvisorCapabilities is the capability set an unprivileged gVisor worker
@@ -118,6 +144,19 @@ func ateomSecurityContext(class atev1alpha1.SandboxClass) *corev1ac.SecurityCont
 			WithAdd(ateomGvisorCapabilities...)).
 		WithAppArmorProfile(corev1ac.AppArmorProfile().
 			WithType(corev1.AppArmorProfileTypeUnconfined))
+}
+
+// defaultTerminationGracePeriodSeconds is the fallback pod termination grace
+// period for worker pods (5 minutes), used when a WorkerPool does not set
+// spec.terminationGracePeriodSeconds. It matches the CRD default and gives
+// actors ample time to trap SIGTERM and save state before SIGKILL.
+const defaultTerminationGracePeriodSeconds int32 = 300
+
+func workerTerminationGracePeriodSeconds(wp *atev1alpha1.WorkerPool) int32 {
+	if wp.Spec.TerminationGracePeriodSeconds != nil {
+		return *wp.Spec.TerminationGracePeriodSeconds
+	}
+	return defaultTerminationGracePeriodSeconds
 }
 
 // maybeApplyMicroVMPodShape adds the /dev/kvm device and node placement a

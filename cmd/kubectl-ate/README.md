@@ -64,6 +64,7 @@ These flags can be appended to any command:
 | Flag | Short | Description | Default |
 |---|---|---|---|
 | `--kubeconfig` | | Path to your kubeconfig file | `~/.kube/config` |
+| `--context` | | Name of the kubeconfig context to use | current context |
 | `--endpoint` | | Manual gRPC endpoint override (e.g., `localhost:8080`) | |
 | `--output` | `-o` | Output format (`table`, `json`, `yaml`) | `table` |
 | `--trace` | | Enable on-demand tracing for the request | `false` |
@@ -88,6 +89,12 @@ kubectl ate get actor <actor-name> --atespace <atespace> -o yaml
 
 # List all physical workers and see which actors are assigned to them
 kubectl ate get workers
+
+# Filter workers by Kubernetes namespace, assigned-actor atespace, or
+# worker pool labels (same flags as `top workers`)
+kubectl ate get workers -n <namespace>
+kubectl ate get workers -a <atespace>
+kubectl ate get workers -l <label-selector>
 ```
 
 > **Note:** `get actors` requires either `--atespace <name>` / `-a <name>` (one atespace) or `-A`/`--all-atespaces` (all atespaces) — there is no default atespace. Getting a single actor always requires `--atespace`/`-a`, since an actor is addressed by `(atespace, name)`. `-a` (lower-case) scopes to one atespace; `-A` (upper-case) spans all.
@@ -169,9 +176,13 @@ kubectl ate delete actor my-actor -a <atespace>
 `kubectl ate logs` requires a resource-type subcommand; running `kubectl ate logs <actor-name>` on its own prints help. The only supported resource type is `actors`:
 
 ```bash
-# Stream logs for an actor (follows by default; aggregated across worker
-# reassignments so the same actor is queryable as it teleports between pods).
-kubectl ate logs actors my-actor
+# Print the logs an actor has produced on its current worker.
+# -a/--atespace is required, since an actor is addressed by (atespace, name).
+kubectl ate logs actors my-actor -a <atespace>
+
+# Follow the logs with -f. The stream is aggregated across worker
+# reassignments, so the same actor stays queryable as it teleports between pods.
+kubectl ate logs actors my-actor -a <atespace> -f
 ```
 
 Logs are streamable only while the actor is bound to a worker (i.e., `STATUS_RUNNING`). For history across worker migrations, route through a centralized log backend (Cloud Logging, Loki, etc.); see `docs/observability.md`.
@@ -180,15 +191,15 @@ Logs are streamable only while the actor is bound to a worker (i.e., `STATUS_RUN
 Commands for bootstrapping the Substrate control plane and debugging local environments.
 
 ```bash
-# Generate a new Session ID CA pool and push it directly to a Kubernetes Secret
+# Generate a new Actor ID CA pool and push it directly to a Kubernetes Secret
 kubectl ate admin make-ca-pool \
-  --name session-id-ca-pool \
+  --name actor-id-ca-pool \
   --secret-namespace ate-system \
   --ca-id "1"
 
 # Generate a new JWT authority pool and push it to a Kubernetes Secret
 kubectl ate admin make-jwt-pool \
-  --name session-id-jwt-pool \
+  --name actor-id-jwt-pool \
   --secret-namespace ate-system \
   --key-id "1"
 

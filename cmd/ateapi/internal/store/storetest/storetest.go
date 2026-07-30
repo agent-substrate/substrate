@@ -40,6 +40,7 @@ func SetupTestStore(t *testing.T) (store.Interface, func()) {
 	persistence := ateredis.NewPersistence(rdb)
 
 	cleanup := func() {
+		rdb.Close()
 		mr.Close()
 	}
 

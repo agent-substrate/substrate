@@ -27,18 +27,19 @@ import (
 )
 
 func (s *Service) SuspendActor(ctx context.Context, req *ateapipb.SuspendActorRequest) (*ateapipb.SuspendActorResponse, error) {
-	if err := validateSuspendActorRequest(req); err != nil {
-		return nil, err
+	if errs := validateSuspendActorRequest(req); len(errs) > 0 {
+		return nil, toGRPCStatusError(errs)
 	}
-	setSpanActorRefAttributes(ctx, req.GetActor().GetAtespace(), req.GetActor().GetName())
+	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
+	setSpanActorRefAttributes(ctx, actorRef)
 
-	actor, err := s.actorWorkflow.SuspendActor(ctx, req.GetActor().GetAtespace(), req.GetActor().GetName())
+	actor, err := s.actorWorkflow.SuspendActor(ctx, actorRef)
 	if err != nil {
-		if errors.Is(err, store.ErrPersistenceRetry) {
+		if errors.Is(err, store.ErrVersionConflict) {
 			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
 		}
 		if errors.Is(err, store.ErrNotFound) {
-			return nil, status.Errorf(codes.NotFound, "Actor %s not found", req.GetActor().GetName())
+			return nil, status.Errorf(codes.NotFound, "Actor %s not found", actorRef)
 		}
 		return nil, err
 	}
@@ -47,7 +48,7 @@ func (s *Service) SuspendActor(ctx context.Context, req *ateapipb.SuspendActorRe
 	return &ateapipb.SuspendActorResponse{Actor: actor}, nil
 }
 
-func validateSuspendActorRequest(req *ateapipb.SuspendActorRequest) error {
+func validateSuspendActorRequest(req *ateapipb.SuspendActorRequest) field.ErrorList {
 	var fldPath *field.Path
 	var errs field.ErrorList
 
@@ -57,8 +58,5 @@ func validateSuspendActorRequest(req *ateapipb.SuspendActorRequest) error {
 		errs = append(errs, resources.ValidateObjectRef(val, fldPath)...)
 	}
 
-	if len(errs) > 0 {
-		return status.Error(codes.InvalidArgument, errs.ToAggregate().Error())
-	}
-	return nil
+	return errs
 }

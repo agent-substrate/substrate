@@ -22,13 +22,10 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/kubectl-ate/internal/printer"
 	"github.com/agent-substrate/substrate/internal/ateclient"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/spf13/cobra"
-	"google.golang.org/grpc"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/labels"
 	metricsv1beta1 "k8s.io/metrics/pkg/apis/metrics/v1beta1"
 	metricsclient "k8s.io/metrics/pkg/client/clientset/versioned"
 )
@@ -52,11 +49,6 @@ func init() {
 	topWorkersCmd.Flags().StringVarP(&topWorkerAtespaceFlag, "atespace", "a", "", "Filter worker pods hosting actors in a specific atespace")
 	topWorkersCmd.Flags().StringVarP(&topWorkerSelectorFlag, "selector", "l", "", "Filter by worker pool labels")
 	topCmd.AddCommand(topWorkersCmd)
-}
-
-// WorkerLister abstracts ListWorkers RPC calls.
-type WorkerLister interface {
-	ListWorkers(ctx context.Context, req *ateapipb.ListWorkersRequest, opts ...grpc.CallOption) (*ateapipb.ListWorkersResponse, error)
 }
 
 // PodMetricsLister abstracts fetching Kubernetes pod metrics.
@@ -88,49 +80,13 @@ type TopWorkersRunner struct {
 }
 
 func (r *TopWorkersRunner) Run(ctx context.Context) error {
-	var allWorkers []*ateapipb.Worker
-	pageToken := ""
-	for {
-		resp, err := r.workerLister.ListWorkers(ctx, &ateapipb.ListWorkersRequest{
-			PageSize:  1000,
-			PageToken: pageToken,
-		})
-		if err != nil {
-			return fmt.Errorf("failed to list workers: %w", err)
-		}
-		allWorkers = append(allWorkers, resp.GetWorkers()...)
-		pageToken = resp.GetNextPageToken()
-		if pageToken == "" {
-			break
-		}
+	allWorkers, err := listAllWorkers(ctx, r.workerLister)
+	if err != nil {
+		return err
 	}
-
-	var labelSel labels.Selector
-	if r.selector != "" {
-		var err error
-		labelSel, err = labels.Parse(r.selector)
-		if err != nil {
-			return fmt.Errorf("invalid label selector %q: %w", r.selector, err)
-		}
-	}
-
-	var filtered []*ateapipb.Worker
-	for _, w := range allWorkers {
-		if r.namespace != "" && w.GetWorkerNamespace() != r.namespace {
-			continue
-		}
-		if r.atespace != "" {
-			wass := w.GetAssignment()
-			if wass == nil || wass.GetActor() == nil || wass.GetActor().GetAtespace() != r.atespace {
-				continue
-			}
-		}
-		if labelSel != nil {
-			if !labelSel.Matches(labels.Set(w.GetLabels())) {
-				continue
-			}
-		}
-		filtered = append(filtered, w)
+	filtered, err := filterWorkers(allWorkers, r.namespace, r.atespace, r.selector)
+	if err != nil {
+		return err
 	}
 
 	metricsMap := make(map[string]metricsv1beta1.PodMetrics)

@@ -42,8 +42,9 @@ ATE_DEMOS=()
 source "${ROOT}"/hack/install-demo-counter.sh
 source "${ROOT}"/hack/install-demo-sandbox.sh
 source "${ROOT}"/hack/install-demo-claude-code-multiplex.sh
-source "${ROOT}"/hack/install-demo-agent-secret.sh
 source "${ROOT}"/hack/install-demo-multi-template.sh
+source "${ROOT}"/hack/install-demo-parking.sh
+source "${ROOT}"/hack/install-demo-autoscaled-workerpool.sh
 
 # ANSI color codes for prettier output
 COLOR_CYAN='\033[1;36m'
@@ -75,7 +76,7 @@ function usage() {
   echo "called automatically by --deploy-ate-system):"
   echo ""
   echo "  --create-jwt-authority-pool-secret     Create JWT authority pool secret"
-  echo "  --create-session-id-ca-pool-secret     Create session ID CA pool secret"
+  echo "  --create-actor-id-ca-pool-secret       Create actor ID CA pool secret"
   echo "  --create-podcertificate-controller-cas Create podcertificate controller CAs"
   echo "  --create-valkey-ca-certs-secret        Create Valkey CA certs secret"
   echo "  --create-api-server-env-vars           Create ate-api-server env vars"
@@ -208,15 +209,15 @@ create_jwt_authority_pool_secret() {
   log_step "create_jwt_authority_pool_secret"
   run_kubectl_ate admin make-jwt-pool \
     --key-id="1" \
-    --name="session-id-jwt-pool" \
+    --name="actor-id-jwt-pool" \
     --secret-namespace=ate-system
 }
 
-create_session_id_ca_pool_secret() {
-  log_step "create_session_id_ca_pool_secret"
+create_actor_id_ca_pool_secret() {
+  log_step "create_actor_id_ca_pool_secret"
   run_kubectl_ate admin make-ca-pool \
     --ca-id="1" \
-    --name="session-id-ca-pool" \
+    --name="actor-id-ca-pool" \
     --secret-namespace=ate-system
 }
 
@@ -333,10 +334,10 @@ deploy_ate_system() {
 # Ensure secrets and configmaps required by ate-apiserver
 ensure_apiserver_prerequisites() {
   log_step "ensure_apiserver_prerequisites"
-  run_kubectl get secret -n ate-system session-id-jwt-pool >/dev/null 2>&1 \
+  run_kubectl get secret -n ate-system actor-id-jwt-pool >/dev/null 2>&1 \
     || create_jwt_authority_pool_secret
-  run_kubectl get secret -n ate-system session-id-ca-pool >/dev/null 2>&1 \
-    || create_session_id_ca_pool_secret
+  run_kubectl get secret -n ate-system actor-id-ca-pool >/dev/null 2>&1 \
+    || create_actor_id_ca_pool_secret
   run_kubectl get secret -n podcertificate-controller-system service-dns-ca-pool >/dev/null 2>&1 \
     || create_podcertificate_controller_cas
   run_kubectl get secret -n ate-system valkey-ca-certs >/dev/null 2>&1 \
@@ -391,7 +392,10 @@ deploy_atenet() {
   run_ko apply -f manifests/ate-install/atenet-router.yaml
   run_ko apply -f manifests/ate-install/atenet-dns.yaml
   run_kubectl rollout status deployment/atenet-router -n ate-system --timeout=120s
-  run_kubectl rollout status deployment/atenet-dns -n ate-system --timeout=120s
+  # The Deployment in atenet-dns.yaml is named "dns"; every other resource in
+  # that file is "atenet-dns". Waiting on the filename rather than the actual
+  # Deployment made this step fail with NotFound on every successful deploy.
+  run_kubectl rollout status deployment/dns -n ate-system --timeout=120s
 }
 
 # get_actor_status echoes the actor's status enum (e.g. STATUS_SUSPENDED).
@@ -609,7 +613,7 @@ while [[ "$#" -gt 0 ]]; do
     --benchmark-worker-count=*) ;;
 
     --create-jwt-authority-pool-secret) create_jwt_authority_pool_secret ;;
-    --create-session-id-ca-pool-secret) create_session_id_ca_pool_secret ;;
+    --create-actor-id-ca-pool-secret) create_actor_id_ca_pool_secret ;;
     --create-podcertificate-controller-cas) create_podcertificate_controller_cas ;;
     --create-valkey-ca-certs-secret) create_valkey_ca_certs_secret ;;
     --create-api-server-env-vars) create_api_server_env_vars ;;

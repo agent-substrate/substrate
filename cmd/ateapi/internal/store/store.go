@@ -20,6 +20,7 @@ import (
 	"errors"
 	"sync"
 
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
@@ -30,8 +31,8 @@ var (
 	// ErrAlreadyExists indicates that the object already exists in the DB.
 	ErrAlreadyExists = errors.New("persistence: already exists")
 
-	// ErrPersistenceRetry is the error returned when the persistence layer needs to retry.
-	ErrPersistenceRetry = errors.New("persistence: retry status")
+	// ErrVersionConflict indicates an update's expected version did not match the stored one.
+	ErrVersionConflict = errors.New("persistence: version conflict")
 
 	// ErrFailedPrecondition indicates the object is not in the required state for the operation.
 	ErrFailedPrecondition = errors.New("persistence: failed precondition")
@@ -42,8 +43,8 @@ var (
 
 // Interface defines the contract for the persistence layer storing actor state.
 type Interface interface {
-	// Fetches an actor by (atespace, name). Returns ErrNotFound if missing.
-	GetActor(ctx context.Context, atespace, name string) (*ateapipb.Actor, error)
+	// Fetches an actor by reference. Returns ErrNotFound if missing.
+	GetActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error)
 
 	// Stores a new actor in suspended state and returns the stored resource with
 	// server-assigned metadata (uid, version, timestamps). The input is not
@@ -52,12 +53,12 @@ type Interface interface {
 
 	// Updates actor state with optimistic concurrency check and returns the stored
 	// resource with advanced metadata (version, update_time). The input is not
-	// mutated. Returns ErrNotFound if missing, or ErrPersistenceRetry on version mismatch.
+	// mutated. Returns ErrNotFound if missing, or ErrVersionConflict on version mismatch.
 	UpdateActor(ctx context.Context, actor *ateapipb.Actor, expectedVersion int64) (*ateapipb.Actor, error)
 
 	// Removes an actor and returns the deleted resource. Returns ErrNotFound if
 	// missing, or ErrFailedPrecondition if not suspended.
-	DeleteActor(ctx context.Context, atespace, name string) (*ateapipb.Actor, error)
+	DeleteActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error)
 
 	// Lists actors in the given atespace (scoped scan), or across ALL atespaces if atespace is
 	// empty. Returns a page of actors and a next page token.
@@ -88,7 +89,7 @@ type Interface interface {
 	// Registers a new idle worker. Returns ErrAlreadyExists if already registered.
 	CreateWorker(ctx context.Context, worker *ateapipb.Worker) error
 
-	// Updates worker state with optimistic concurrency check. Returns ErrNotFound if missing, or ErrPersistenceRetry on version mismatch.
+	// Updates worker state with optimistic concurrency check. Returns ErrNotFound if missing, or ErrVersionConflict on version mismatch.
 	UpdateWorker(ctx context.Context, worker *ateapipb.Worker, expectedVersion int64) error
 
 	// Removes a worker. Idempotent: does nothing if worker is not found.

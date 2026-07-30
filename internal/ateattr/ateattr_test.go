@@ -19,6 +19,7 @@ import (
 
 	"go.opentelemetry.io/otel/attribute"
 
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
@@ -104,24 +105,21 @@ func TestActorAttributes(t *testing.T) {
 
 func TestActorRefAttributes(t *testing.T) {
 	tests := []struct {
-		name      string
-		atespace  string
-		actorName string
-		want      map[attribute.Key]any
+		name     string
+		actorRef resources.ActorRef
+		want     map[attribute.Key]any
 	}{
 		{
-			name:      "atespace and actor name only",
-			atespace:  "team-a",
-			actorName: "support-agent-42",
+			name:     "atespace and actor name only",
+			actorRef: resources.ActorRef{Atespace: "team-a", Name: "support-agent-42"},
 			want: map[attribute.Key]any{
 				AtespaceKey:  "team-a",
 				ActorNameKey: "support-agent-42",
 			},
 		},
 		{
-			name:      "empty values still produce both keys",
-			atespace:  "",
-			actorName: "",
+			name:     "zero ref still produces both keys",
+			actorRef: resources.ActorRef{},
 			want: map[attribute.Key]any{
 				AtespaceKey:  "",
 				ActorNameKey: "",
@@ -131,7 +129,7 @@ func TestActorRefAttributes(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assertAttrs(t, toMap(ActorRefAttributes(tt.atespace, tt.actorName)), tt.want)
+			assertAttrs(t, toMap(ActorRefAttributes(tt.actorRef)), tt.want)
 		})
 	}
 }

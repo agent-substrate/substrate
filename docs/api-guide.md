@@ -78,6 +78,13 @@ spec:
         memory: 2Gi
 ```
 
+### Status (`WorkerPoolStatus`)
+
+| Field | Type | Description |
+| :--- | :--- | :--- |
+| `replicas` | `int32` | Total number of worker pods, mirrored from the managed Deployment. |
+| `selector` | `string` | Label selector for the worker pods. |
+
 ---
 
 ## 2. ActorTemplate: The Workload Blueprint
@@ -287,11 +294,11 @@ Query the physical resource pool.
 
 ---
 
-## 7. Advanced: Session Identity
+## 7. Advanced: Actor Identity Credentials
 
-Workloads can exchange their ephemeral Kubernetes credentials for stable **Session Identity** credentials that persist even as the process migrates between different physical workers.
+Workloads can exchange their ephemeral Kubernetes credentials for stable **Actor Identity** credentials that persist even as the process migrates between different physical workers. This is distinct from the `/run/ate/actor-id` bind mount described under [Actor Identity](#actor-identity), which only tells an actor its own name.
 
-### Service: `ateapi.SessionIdentity`
+### Service: `ateapi.ActorIdentity`
 *   **`MintJWT`:** Generates an OIDC-compatible JWT identifying the Substrate Actor.
 *   **`MintCert`:** Signs a Certificate Signing Request (CSR) to provide an mTLS identity for the actor.
 
@@ -302,7 +309,7 @@ Workloads can exchange their ephemeral Kubernetes credentials for stable **Sessi
 Agent Substrate is designed to be the foundational execution layer for any agentic framework.
 
 ### Agent Development Kit (ADK)
-Substrate provides native support for ADK-compatible identities. Workloads can use the `SessionIdentity` service to mint JWTs that align with ADK's security model, ensuring seamless integration with ADK-managed tools and memory.
+Substrate provides native support for ADK-compatible identities. Workloads can use the `ActorIdentity` service to mint JWTs that align with ADK's security model, ensuring seamless integration with ADK-managed tools and memory.
 
 ### LangChain
 Substrate is an ideal runtime for stateful LangChain agents. By defining a LangChain agent as an `ActorTemplate`, you can preserve the agent's internal "thought process" and conversation history in memory across hibernations, while sandboxing its tool execution for security.

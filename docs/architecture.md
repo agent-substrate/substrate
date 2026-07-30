@@ -342,11 +342,11 @@ A `WorkerPool` selects a **sandbox class** (`spec.sandboxClass`), and each class
 
 ### Networking Stack (`atenet` + Envoy)
 
-Handles session-aware routing and automatic re-animation.
+Handles actor-aware routing and automatic re-animation.
 
   * **Uniform DNS Mesh**: Substrate provides a location-transparent actor discovery scheme via a global DNS suffix (`<actor-name>.<atespace>.actors.resources.substrate.ate.dev`).
 
-  * **Routing**: The `atenet` router (powered by Envoy and an External Processing server) intercepts traffic destined for the mesh. It extracts the actor name from the `Host` header, queries the Control Plane to determine the actor's current location, and triggers a `ResumeActor` workflow if the session is currently suspended.
+  * **Routing**: The `atenet` router (powered by Envoy and an External Processing server) intercepts traffic destined for the mesh. It extracts the actor name from the `Host` header, queries the Control Plane to determine the actor's current location, and triggers a `ResumeActor` workflow if the actor is currently suspended.
 
   * **Latency**: The data plane is optimized for sub-100ms activation by bypassing Kubernetes' eventual consistency and performing atomic physical assignments.
 

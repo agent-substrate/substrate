@@ -74,13 +74,14 @@ func (s *WorkerPoolSyncer) Start(ctx context.Context) {
 				slog.ErrorContext(ctx, "Unknown object type in delete handler", slog.Any("obj", obj))
 				return
 			}
-			slog.InfoContext(ctx, "Syncer: removing worker from store", slog.String("worker", pod.Namespace+"/"+pod.Name))
-			if err := s.releaseActorOnDeadWorker(ctx, pod.Namespace, pod.Labels[workerPodLabel], pod.Name); err != nil {
-				slog.ErrorContext(ctx, "Failed to release actor bound to deleted worker", slog.Any("err", err))
-			}
-			err := s.persistence.DeleteWorker(ctx, pod.Namespace, pod.Labels[workerPodLabel], pod.Name)
-			if err != nil {
-				slog.ErrorContext(ctx, "Failed to delete worker from store during delete event", slog.Any("err", err))
+			slog.InfoContext(ctx, "Syncer: removing worker from store (pod deleted)", slog.String("worker", pod.Namespace+"/"+pod.Name))
+			// TODO: make this more robust. Informer event handlers cannot signal failure and
+			// the informer never retries them, so a cleanup that fails here is not retried
+			// until the next startup reconcile. The canonical fix is a rate-limited workqueue:
+			// enqueue the worker key and run this from a worker goroutine that requeues with
+			// backoff on error.
+			if err := s.reconcileDeadWorker(ctx, pod.Namespace, pod.Labels[workerPodLabel], pod.Name); err != nil {
+				slog.ErrorContext(ctx, "Failed to reconcile deleted worker", slog.String("worker", pod.Namespace+"/"+pod.Name), slog.Any("err", err))
 			}
 		},
 	})
@@ -97,6 +98,12 @@ func (s *WorkerPoolSyncer) Start(ctx context.Context) {
 			pod := obj.(*corev1.Pod)
 			s.syncWorkerToStore(ctx, pod)
 		}
+
+		// Reconcile the other direction: clean up stored workers whose pods no
+		// longer exist. This recovers delete events missed while ate-api-server
+		// was down — neither the watch relist nor the resync period can replay a
+		// delete across a process restart, because the informer cache starts empty.
+		s.reconcileOrphanedWorkers(ctx)
 	}()
 }
 
@@ -106,13 +113,13 @@ func (s *WorkerPoolSyncer) syncWorkerToStore(ctx context.Context, pod *corev1.Po
 	}
 
 	if pod.DeletionTimestamp != nil {
-		slog.InfoContext(ctx, "Syncer: removing worker from store (pod deleting)", slog.String("worker", pod.Namespace+"/"+pod.Name))
-		if err := s.releaseActorOnDeadWorker(ctx, pod.Namespace, pod.Labels[workerPodLabel], pod.Name); err != nil {
-			slog.ErrorContext(ctx, "Failed to release actor bound to soft-deleting worker", slog.Any("err", err))
-		}
-		err := s.persistence.DeleteWorker(ctx, pod.Namespace, pod.Labels[workerPodLabel], pod.Name)
-		if err != nil {
-			slog.ErrorContext(ctx, "Failed to delete worker from store during update event (deleting)", slog.Any("err", err))
+		// The pod has entered Terminating: mark the worker DRAINING so the
+		// scheduler stops routing new actors to it. We deliberately do NOT touch
+		// the bound actor here — inside the pod ateom has received SIGTERM and is
+		// gracefully shutting the actor down. Actor cleanup happens on the Pod
+		// Deleted event.
+		if err := s.markWorkerDraining(ctx, pod.Namespace, pod.Labels[workerPodLabel], pod.Name); err != nil {
+			slog.ErrorContext(ctx, "Failed to mark worker draining", slog.String("worker", pod.Namespace+"/"+pod.Name), slog.Any("err", err))
 		}
 		return
 	}
@@ -137,6 +144,7 @@ func (s *WorkerPoolSyncer) syncWorkerToStore(ctx context.Context, pod *corev1.Po
 				NodeName:        pod.Spec.NodeName,
 				SandboxClass:    string(pool.Spec.SandboxClass),
 				Labels:          pool.GetLabels(),
+				State:           ateapipb.Worker_STATE_ACTIVE,
 			}
 			// TODO(thockin): for now this is the only place Workers are
 			// created.  If/when this becomes a regular API, validation should
@@ -185,20 +193,91 @@ func isWorkerEligible(pod *corev1.Pod) bool {
 	return pod.Status.PodIP != ""
 }
 
-// releaseActorOnDeadWorker resets the actor bound to a vanishing worker
-// pod back to STATUS_SUSPENDED so the next request reassigns it.
+// markWorkerDraining transitions a worker to STATE_DRAINING so the scheduler
+// stops routing new actors to it while its pod is Terminating. Best-effort: if
+// the worker is already gone or already draining, or a concurrent update wins,
+// there is nothing more to do — the Pod Deleted event will clean up the record.
+func (s *WorkerPoolSyncer) markWorkerDraining(ctx context.Context, namespace, pool, podName string) error {
+	worker, err := s.persistence.GetWorker(ctx, namespace, pool, podName)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil
+		}
+		return err
+	}
+	if worker.GetState() == ateapipb.Worker_STATE_DRAINING {
+		return nil
+	}
+	slog.InfoContext(ctx, "Syncer: marking worker draining (pod deleting)", slog.String("worker", namespace+"/"+podName))
+	worker.State = ateapipb.Worker_STATE_DRAINING
+	return s.persistence.UpdateWorker(ctx, worker, worker.GetVersion())
+}
+
+// reconcileDeadWorker cleans up a worker whose pod is gone. It releases the
+// bound actor first and only deletes the worker record if that succeeds:
+// deleting the record is what erases the actor->pod pointer, so on a release
+// failure we intentionally leave the record in place (and return the error) so a
+// later reconcile can retry. Returns nil once the actor is released and the
+// worker record deleted.
+func (s *WorkerPoolSyncer) reconcileDeadWorker(ctx context.Context, namespace, pool, podName string) error {
+	if err := s.releaseActorOnDeadWorker(ctx, namespace, pool, podName); err != nil {
+		return err
+	}
+	return s.persistence.DeleteWorker(ctx, namespace, pool, podName)
+}
+
+// reconcileOrphanedWorkers cleans up stored worker records whose pods no longer
+// exist. It runs once after the informer cache has synced, when the indexer is a
+// fresh, authoritative snapshot of the live worker pods, so a worker missing
+// from the indexer (or present under a different pod UID, i.e. name reuse) is
+// stale.
+func (s *WorkerPoolSyncer) reconcileOrphanedWorkers(ctx context.Context) {
+	var workers []*ateapipb.Worker
+	var pageToken string
+	for {
+		wPage, nextToken, err := s.persistence.ListWorkers(ctx, 1000, pageToken)
+		if err != nil {
+			slog.ErrorContext(ctx, "Syncer: failed to list workers for orphan reconcile", slog.Any("err", err))
+			return
+		}
+		workers = append(workers, wPage...)
+		if nextToken == "" {
+			break
+		}
+		pageToken = nextToken
+	}
+	indexer := s.workerInformer.GetIndexer()
+	for _, w := range workers {
+		key := w.GetWorkerNamespace() + "/" + w.GetWorkerPod()
+		obj, exists, err := indexer.GetByKey(key)
+		if err != nil {
+			slog.ErrorContext(ctx, "Syncer: indexer lookup failed during orphan reconcile", slog.String("worker", key), slog.Any("err", err))
+			continue
+		}
+		// The pod is still live only if it is present under the same UID the
+		// worker recorded; a different UID means the name was reused by a new pod
+		// and this record belongs to a dead incarnation.
+		if exists {
+			if pod, ok := obj.(*corev1.Pod); ok && string(pod.UID) == w.GetWorkerPodUid() {
+				continue
+			}
+		}
+		slog.InfoContext(ctx, "Syncer: reconciling orphaned worker (pod gone)", slog.String("worker", key))
+		if err := s.reconcileDeadWorker(ctx, w.GetWorkerNamespace(), w.GetWorkerPool(), w.GetWorkerPod()); err != nil {
+			slog.ErrorContext(ctx, "Syncer: failed to reconcile orphaned worker", slog.String("worker", key), slog.Any("err", err))
+		}
+	}
+}
+
+// releaseActorOnDeadWorker resets the actor bound to a vanishing worker pod. An
+// actor that already reached STATUS_SUSPENDED (it saved its state cleanly during
+// graceful termination) is left untouched and remains resumable. An actor that
+// was still running when the pod disappeared is moved to STATUS_CRASHED and its
+// pod pointers are cleared.
 //
 // UpdateActor uses optimistic version checking. A concurrent SuspendActor
-// or ResumeActor wins; we drop this attempt silently.
-//
-// Best-effort only. The caller always proceeds to DeleteWorker after this
-// returns, so any non-contention failure leaves the actor stranded
-// (STATUS_RUNNING, pointer at a pod that no longer exists). Recovery
-// then needs a manual SuspendActor.
-//
-// The long-term fix is a finalizer-based controller that holds the pod
-// in Terminating state until the actor is gracefully suspended. Tracked
-// in https://github.com/agent-substrate/substrate/issues/23.
+// or ResumeActor wins; we fail this attempt so it can be retried with the
+// updated state.
 func (s *WorkerPoolSyncer) releaseActorOnDeadWorker(ctx context.Context, namespace, pool, podName string) error {
 	worker, err := s.persistence.GetWorker(ctx, namespace, pool, podName)
 	if err != nil {
@@ -210,7 +289,7 @@ func (s *WorkerPoolSyncer) releaseActorOnDeadWorker(ctx context.Context, namespa
 	if worker.Assignment == nil {
 		return nil
 	}
-	actor, err := s.persistence.GetActor(ctx, worker.Assignment.Actor.Atespace, worker.Assignment.Actor.Name)
+	actor, err := s.persistence.GetActor(ctx, resources.ActorRefFromObjectRef(worker.Assignment.Actor))
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return nil
@@ -221,16 +300,18 @@ func (s *WorkerPoolSyncer) releaseActorOnDeadWorker(ctx context.Context, namespa
 	if actor.GetAteomPodNamespace() != namespace || actor.GetAteomPodName() != podName {
 		return nil
 	}
-	if actor.Status != ateapipb.Actor_STATUS_CRASHED {
-		actor.Status = ateapipb.Actor_STATUS_SUSPENDED
+	// If the actor is suspended, it's already been released.
+	if actor.Status == ateapipb.Actor_STATUS_SUSPENDED {
+		return nil
 	}
+
+	actor.Status = ateapipb.Actor_STATUS_CRASHED
 	actor.AteomPodNamespace = ""
 	actor.AteomPodName = ""
 	actor.AteomPodIp = ""
 	actor.InProgressSnapshot = ""
 	actor.WorkerPoolName = ""
-	if _, err := s.persistence.UpdateActor(ctx, actor, actor.GetMetadata().GetVersion()); err != nil && !errors.Is(err, store.ErrPersistenceRetry) {
-		return err
-	}
-	return nil
+
+	_, err = s.persistence.UpdateActor(ctx, actor, actor.GetMetadata().GetVersion())
+	return err
 }

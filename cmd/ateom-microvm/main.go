@@ -36,6 +36,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/reaper"
 	"github.com/agent-substrate/substrate/internal/actorlog"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
+	"github.com/agent-substrate/substrate/internal/ateomnet"
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/serverboot"
@@ -81,14 +82,21 @@ func do(ctx context.Context) error {
 	serverboot.InitLoggerWithWriter(logWriter)
 	slog.InfoContext(ctx, "ateom-microvm booting", slog.String("version", version.String()))
 
+	const serviceName = "ateom-microvm"
 	tp, err := serverboot.InitTracing(ctx, serverboot.TracingOptions{
-		ServiceName: "ateom-microvm",
+		ServiceName: serviceName,
 		Sampler:     sdktrace.ParentBased(sdktrace.NeverSample()),
 	})
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to initialize tracing", err)
 	}
 	defer serverboot.ShutdownProvider("TracerProvider", tp.Shutdown)
+
+	mp, err := serverboot.InitMetricsPushOnly(ctx, serviceName)
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to initialize metrics", err)
+	}
+	defer serverboot.ShutdownProvider("MeterProvider", mp.Shutdown)
 
 	// Create ateom dir.
 	ateomDir := ateompath.AteomPath(*podUID)
@@ -128,7 +136,7 @@ func do(ctx context.Context) error {
 
 	// Networking: create a named interior netns; each activation builds a fresh
 	// veth pair into it (see net.go) and points kata at it.
-	interiorNetNS, err := createNetNSWithoutSwitching(ateompath.AteomNetNSName(*podUID))
+	interiorNetNS, err := ateomnet.CreateNetNSWithoutSwitching(ateompath.AteomNetNSName(*podUID))
 	if err != nil {
 		return fmt.Errorf("while creating interior netns: %w", err)
 	}

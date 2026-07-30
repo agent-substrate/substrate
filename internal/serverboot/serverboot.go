@@ -13,9 +13,9 @@
 // limitations under the License.
 
 // Package serverboot collects the startup boilerplate shared by the
-// long-running substrate server binaries (ateapi, atelet, ateom-gvisor):
-// slog wiring, OTel tracer + meter providers, a Prometheus + /readyz
-// HTTP surface, and a couple of small helpers for startup fail-fast.
+// long-running substrate server binaries (ateapi, atelet, ateom-gvisor,
+// ateom-microvm): slog wiring, OTel tracer + meter providers, a Prometheus +
+// /readyz HTTP surface, and a couple of small helpers for startup fail-fast.
 package serverboot
 
 import (
@@ -130,6 +130,20 @@ func InitMetrics(ctx context.Context, serviceName string) (*sdkmetric.MeterProvi
 	if err != nil {
 		return nil, fmt.Errorf("create Prometheus metric exporter: %w", err)
 	}
+	return newMeterProvider(ctx, serviceName, promExporter)
+}
+
+// InitMetricsPushOnly is InitMetrics without the Prometheus reader, for binaries
+// that run no metrics HTTP server (ateom): a pull reader would collect into a
+// registry nothing serves.
+func InitMetricsPushOnly(ctx context.Context, serviceName string) (*sdkmetric.MeterProvider, error) {
+	return newMeterProvider(ctx, serviceName)
+}
+
+func newMeterProvider(ctx context.Context, serviceName string, extraReaders ...sdkmetric.Reader) (*sdkmetric.MeterProvider, error) {
+	if serviceName == "" {
+		return nil, fmt.Errorf("serviceName is required")
+	}
 	otlpExporter, err := otlpmetricgrpc.New(ctx, otlpmetricgrpc.WithInsecure())
 	if err != nil {
 		return nil, fmt.Errorf("create OTLP metric exporter: %w", err)
@@ -138,11 +152,14 @@ func InitMetrics(ctx context.Context, serviceName string) (*sdkmetric.MeterProvi
 	if err != nil {
 		return nil, fmt.Errorf("create metric resource: %w", err)
 	}
-	mp := sdkmetric.NewMeterProvider(
-		sdkmetric.WithReader(promExporter),
-		sdkmetric.WithReader(sdkmetric.NewPeriodicReader(otlpExporter)),
+	opts := []sdkmetric.Option{
 		sdkmetric.WithResource(res),
-	)
+		sdkmetric.WithReader(sdkmetric.NewPeriodicReader(otlpExporter)),
+	}
+	for _, r := range extraReaders {
+		opts = append(opts, sdkmetric.WithReader(r))
+	}
+	mp := sdkmetric.NewMeterProvider(opts...)
 	otel.SetMeterProvider(mp)
 	return mp, nil
 }

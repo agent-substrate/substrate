@@ -223,7 +223,7 @@ func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(
 	}
 	waitForActorStatus(ctx, t, clients, actorID, ateapipb.Actor_STATUS_RUNNING)
 
-	resp, err := callActor(t, demoAtespace, actorID)
+	resp, err := callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: actorID})
 	if err != nil {
 		t.Fatalf("failed to call actor: %v", err)
 	}
@@ -249,7 +249,7 @@ func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(
 	}
 	waitForActorStatus(ctx, t, clients, actorID, ateapipb.Actor_STATUS_RUNNING)
 
-	resp, err = callActor(t, demoAtespace, actorID)
+	resp, err = callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: actorID})
 	if err != nil {
 		t.Fatalf("failed to call actor again: %v", err)
 	}
@@ -275,7 +275,7 @@ func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(
 	}
 	waitForActorStatus(ctx, t, clients, actorID, ateapipb.Actor_STATUS_RUNNING)
 
-	resp, err = callActor(t, demoAtespace, actorID)
+	resp, err = callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: actorID})
 	if err != nil {
 		t.Fatalf("failed to call actor again: %v", err)
 	}
@@ -371,7 +371,7 @@ func pauseActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *
 	}
 	waitForActorStatus(ctx, t, clients, actorName, ateapipb.Actor_STATUS_RUNNING)
 
-	resp, err := callActor(t, demoAtespace, actorName)
+	resp, err := callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: actorName})
 	if err != nil {
 		t.Fatalf("failed to call actor: %v", err)
 	}
@@ -396,7 +396,7 @@ func pauseActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *
 	}
 	waitForActorStatus(ctx, t, clients, actorName, ateapipb.Actor_STATUS_RUNNING)
 
-	resp, err = callActor(t, demoAtespace, actorName)
+	resp, err = callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: actorName})
 	if err != nil {
 		t.Fatalf("failed to call actor again: %v", err)
 	}
@@ -451,7 +451,7 @@ func suspendActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj
 	}
 	waitForActorStatus(ctx, t, clients, actorName, ateapipb.Actor_STATUS_RUNNING)
 
-	resp, err := callActor(t, demoAtespace, actorName)
+	resp, err := callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: actorName})
 	if err != nil {
 		t.Fatalf("failed to call actor: %v", err)
 	}
@@ -475,7 +475,7 @@ func suspendActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj
 	}
 	waitForActorStatus(ctx, t, clients, actorName, ateapipb.Actor_STATUS_RUNNING)
 
-	resp, err = callActor(t, demoAtespace, actorName)
+	resp, err = callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: actorName})
 	if err != nil {
 		t.Fatalf("failed to call actor again: %v", err)
 	}
@@ -697,13 +697,13 @@ func waitForActorStatus(ctx context.Context, t *testing.T, clients *e2e.Clients,
 	t.Fatalf("timed out waiting for actor %q to reach status %v", actorName, expectedStatus)
 }
 
-func callActor(t *testing.T, atespace, actorName string) (string, error) {
+func callActor(t *testing.T, actorRef resources.ActorRef) (string, error) {
 	t.Helper()
 
 	deadline := time.Now().Add(30 * time.Second)
 	var lastErr error
 	for time.Now().Before(deadline) {
-		resp, err := callActorOnce(t, atespace, actorName)
+		resp, err := callActorOnce(t, actorRef)
 		if err == nil {
 			return resp, nil
 		}
@@ -714,7 +714,7 @@ func callActor(t *testing.T, atespace, actorName string) (string, error) {
 	return "", fmt.Errorf("timed out waiting for actor response: %w", lastErr)
 }
 
-func callActorOnce(t *testing.T, atespace, actorName string) (string, error) {
+func callActorOnce(t *testing.T, actorRef resources.ActorRef) (string, error) {
 	t.Helper()
 	clients := e2e.GetClients()
 
@@ -785,7 +785,7 @@ func callActorOnce(t *testing.T, atespace, actorName string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("failed to create request: %w", err)
 	}
-	reqHttp.Host = resources.ActorDNSName(atespace, actorName)
+	reqHttp.Host = actorRef.DNSName()
 
 	httpClient := &http.Client{Timeout: 15 * time.Second}
 	resp, err := httpClient.Do(reqHttp)
@@ -811,4 +811,117 @@ func callActorOnce(t *testing.T, atespace, actorName string) (string, error) {
 // TestExternalVolumeLifecycle).
 func isMicroVMEnvironment() bool {
 	return os.Getenv("E2E_TEMPLATE_NAMESPACE") == "ate-demo-counter-microvm"
+}
+
+func TestWorkerPodDeletion(t *testing.T) {
+	// Create namespace
+	nsObj := e2e.CreateNamespace(t)
+
+	ctx := context.Background()
+	clients := e2e.GetClients()
+
+	// CreateActor requires the atespace to exist first.
+	_, _ = clients.SubstrateAPI.CreateAtespace(ctx, &ateapipb.CreateAtespaceRequest{Atespace: &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: demoAtespace}}})
+
+	// Create actor template.
+	at, err := createActorTemplate(ctx, t, clients, nsObj, v1alpha1.SnapshotScopeFull, v1alpha1.SnapshotScopeFull)
+	if err != nil {
+		t.Fatalf("failed to initialize ActorTemplate: %v", err)
+	}
+
+	actorName := "crash-actor-" + nsObj.Name
+
+	// Creating an actor
+	t.Logf("Creating Actor %q...", actorName)
+	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+		Metadata:               &ateapipb.ResourceMetadata{Atespace: demoAtespace, Name: actorName},
+		ActorTemplateNamespace: nsObj.Name,
+		ActorTemplateName:      at.Name,
+	}}); err != nil {
+		t.Fatalf("failed to create Actor: %v", err)
+	}
+	defer func() {
+		clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{
+			Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorName},
+		})
+	}()
+
+	waitForActorStatus(ctx, t, clients, actorName, ateapipb.Actor_STATUS_SUSPENDED)
+
+	// Resuming the actor
+	t.Logf("Resuming Actor %q...", actorName)
+	if _, err := clients.SubstrateAPI.ResumeActor(ctx, &ateapipb.ResumeActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorName},
+	}); err != nil {
+		t.Fatalf("failed to resume Actor: %v", err)
+	}
+	waitForActorStatus(ctx, t, clients, actorName, ateapipb.Actor_STATUS_RUNNING)
+
+	// Get actor to find the pod details
+	actor, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorName},
+	})
+	if err != nil {
+		t.Fatalf("failed to get Actor: %v", err)
+	}
+
+	podName := actor.GetAteomPodName()
+	podNamespace := actor.GetAteomPodNamespace()
+	if podName == "" || podNamespace == "" {
+		t.Fatalf("actor is running but pod details are missing: podName=%q, podNamespace=%q", podName, podNamespace)
+	}
+
+	// Verify worker is in ListWorkers
+	t.Logf("Verifying worker for pod %s/%s is listed...", podNamespace, podName)
+	foundWorker := false
+	workersResp, err := clients.SubstrateAPI.ListWorkers(ctx, &ateapipb.ListWorkersRequest{})
+	if err != nil {
+		t.Fatalf("failed to list workers: %v", err)
+	}
+	for _, w := range workersResp.GetWorkers() {
+		if w.GetWorkerNamespace() == podNamespace && w.GetWorkerPod() == podName {
+			foundWorker = true
+			break
+		}
+	}
+	if !foundWorker {
+		t.Fatalf("worker for pod %s/%s was not found in ListWorkers response: %v", podNamespace, podName, workersResp.GetWorkers())
+	}
+
+	// Delete the worker pod
+	t.Logf("Deleting worker pod %s/%s...", podNamespace, podName)
+	err = clients.K8s.CoreV1().Pods(podNamespace).Delete(ctx, podName, metav1.DeleteOptions{})
+	if err != nil {
+		t.Fatalf("failed to delete pod %s/%s: %v", podNamespace, podName, err)
+	}
+
+	// Wait for the actor to be marked as CRASHED
+	t.Logf("Waiting for actor %q to transition to CRASHED...", actorName)
+	waitForActorStatus(ctx, t, clients, actorName, ateapipb.Actor_STATUS_CRASHED)
+
+	// Verify the worker is cleaned up (deleted) from store
+	t.Logf("Verifying worker for pod %s/%s is removed from store...", podNamespace, podName)
+	deadline := time.Now().Add(30 * time.Second)
+	var lastWorkers []*ateapipb.Worker
+	for time.Now().Before(deadline) {
+		workersResp, err = clients.SubstrateAPI.ListWorkers(ctx, &ateapipb.ListWorkersRequest{})
+		if err != nil {
+			t.Fatalf("failed to list workers: %v", err)
+		}
+		lastWorkers = workersResp.GetWorkers()
+		stillExists := false
+		for _, w := range lastWorkers {
+			if w.GetWorkerNamespace() == podNamespace && w.GetWorkerPod() == podName {
+				stillExists = true
+				break
+			}
+		}
+		if !stillExists {
+			t.Logf("Worker for pod %s/%s successfully removed.", podNamespace, podName)
+			return
+		}
+		time.Sleep(1 * time.Second)
+	}
+
+	t.Errorf("worker for pod %s/%s was not cleaned up within 30s. Current workers: %v", podNamespace, podName, lastWorkers)
 }

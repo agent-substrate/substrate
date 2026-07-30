@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"path/filepath"
 	"strconv"
 	"sync"
 	"time"
@@ -52,6 +53,7 @@ import (
 	endpointgrpc "github.com/envoyproxy/go-control-plane/envoy/service/endpoint/v3"
 	listenergrpc "github.com/envoyproxy/go-control-plane/envoy/service/listener/v3"
 	routegrpc "github.com/envoyproxy/go-control-plane/envoy/service/route/v3"
+	secretgrpc "github.com/envoyproxy/go-control-plane/envoy/service/secret/v3"
 	typev3 "github.com/envoyproxy/go-control-plane/envoy/type/v3"
 	"github.com/envoyproxy/go-control-plane/pkg/cache/types"
 	cachev3 "github.com/envoyproxy/go-control-plane/pkg/cache/v3"
@@ -66,7 +68,25 @@ const (
 	RouteName            = "substrate_routes"
 	ClusterName          = "ate-cluster"
 	OtlpClusterName      = "otel_collector_cluster"
+	HTTPSCertSecretName  = "https_serving_cert"
+
+	// httpProtocolOptionsName is the well-known extension key Envoy looks for in
+	// a cluster's typed_extension_protocol_options. It must match the message's
+	// full proto type name exactly; a typo is silently ignored rather than
+	// rejected, so the options simply never take effect.
+	httpProtocolOptionsName = "envoy.extensions.upstreams.http.v3.HttpProtocolOptions"
 )
+
+// defaultExtProcMessageTimeout is Envoy's per-message ext_proc response timeout
+// when request parking is off. With parking on it must cover the park budget,
+// otherwise Envoy abandons a parked request (500) long before the router does.
+const defaultExtProcMessageTimeout = 5 * time.Second
+
+// defaultExtProcMaxRequests is the circuit-breaker max_requests set on the
+// ext_proc cluster: defaultParkedRequestMax plus equal fast-path headroom, so a
+// full parking lot cannot starve the millisecond-scale header exchanges of
+// requests to already-running actors. See buildCluster.
+const defaultExtProcMaxRequests = 2048
 
 // XdsServer implements an aggregated discovery service server for dynamic Envoy router nodes.
 type XdsServer struct {
@@ -85,6 +105,16 @@ type XdsServer struct {
 
 	otlpHost string
 	otlpPort uint32
+
+	// extProcMessageTimeout bounds how long Envoy waits for the router's ext_proc
+	// response. Must be >= the parking budget so parked requests aren't cut short.
+	extProcMessageTimeout time.Duration
+
+	// extProcMaxRequests is the circuit-breaker max_requests on the ext_proc
+	// cluster — the hard ceiling on concurrent requests held open against the
+	// router's processing server, parked requests included. Must be >= the
+	// parking lot size (enforced at startup in Run).
+	extProcMaxRequests uint32
 }
 
 func NewXdsServer(xdsPort int) *XdsServer {
@@ -92,12 +122,14 @@ func NewXdsServer(xdsPort int) *XdsServer {
 	srv := serverv3.NewServer(context.Background(), cache, nil)
 
 	return &XdsServer{
-		xdsPort:     xdsPort,
-		snapshot:    cache,
-		srv:         srv,
-		extprocPort: 50051, // matches default extproc port
-		extprocAddr: "127.0.0.1",
-		ingressPort: 8080,
+		xdsPort:               xdsPort,
+		snapshot:              cache,
+		srv:                   srv,
+		extprocPort:           50051, // matches default extproc port
+		extprocAddr:           "127.0.0.1",
+		ingressPort:           8080,
+		extProcMessageTimeout: defaultExtProcMessageTimeout,
+		extProcMaxRequests:    defaultExtProcMaxRequests,
 	}
 }
 
@@ -109,9 +141,35 @@ func (x *XdsServer) SetConfig(ingressPort int, extprocPort int, extprocAddr stri
 	x.extprocAddr = extprocAddr
 }
 
+// SetExtProcMessageTimeout sets how long Envoy waits for the router's ext_proc
+// response. Call with (parking budget + margin) when parking is enabled so
+// Envoy keeps a parked request open until the router itself decides. A
+// non-positive value leaves the default unchanged.
+func (x *XdsServer) SetExtProcMessageTimeout(d time.Duration) {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	if d > 0 {
+		x.extProcMessageTimeout = d
+	}
+}
+
+// SetExtProcMaxRequests sets the circuit-breaker max_requests on the ext_proc
+// cluster. Size it to the parking lot plus fast-path headroom (validated in
+// Run()); a non-positive value leaves the default unchanged.
+func (x *XdsServer) SetExtProcMaxRequests(n int) {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	if n > 0 {
+		x.extProcMaxRequests = uint32(n)
+	}
+}
+
 func (x *XdsServer) SetTlsConfig(httpsPort int, certPath string) {
 	x.mu.Lock()
 	defer x.mu.Unlock()
+	if httpsPort > 0 && certPath == "" {
+		slog.Warn("HTTPS port configured without a certificate path; the HTTPS listener will not be served", slog.Int("port", httpsPort))
+	}
 	x.httpsPort = httpsPort
 	x.certPath = certPath
 }
@@ -166,8 +224,10 @@ func (x *XdsServer) UpdateSnapshot() error {
 	listeners := []types.Resource{
 		x.buildListener(),
 	}
-	if x.httpsPort > 0 {
+	var secrets []types.Resource
+	if x.httpsPort > 0 && x.certPath != "" {
 		listeners = append(listeners, x.buildHttpsListener())
+		secrets = append(secrets, x.buildTlsSecret())
 	}
 
 	// Snapshot
@@ -175,6 +235,7 @@ func (x *XdsServer) UpdateSnapshot() error {
 		resourcev3.ClusterType:  clusters,
 		resourcev3.RouteType:    routes,
 		resourcev3.ListenerType: listeners,
+		resourcev3.SecretType:   secrets,
 	})
 
 	if err != nil {
@@ -203,6 +264,7 @@ func (x *XdsServer) Serve(ctx context.Context, lis net.Listener) error {
 	endpointgrpc.RegisterEndpointDiscoveryServiceServer(grpcServer, x.srv)
 	listenergrpc.RegisterListenerDiscoveryServiceServer(grpcServer, x.srv)
 	routegrpc.RegisterRouteDiscoveryServiceServer(grpcServer, x.srv)
+	secretgrpc.RegisterSecretDiscoveryServiceServer(grpcServer, x.srv)
 
 	errChan := make(chan error, 1)
 	go func() {
@@ -236,6 +298,12 @@ func (x *XdsServer) buildCluster() *clusterv3.Cluster {
 			Type: clusterv3.Cluster_STATIC,
 		},
 		LbPolicy: clusterv3.Cluster_ROUND_ROBIN,
+		CircuitBreakers: &clusterv3.CircuitBreakers{
+			Thresholds: []*clusterv3.CircuitBreakers_Thresholds{{
+				Priority:    corev3.RoutingPriority_DEFAULT,
+				MaxRequests: wrapperspb.UInt32(x.extProcMaxRequests),
+			}},
+		},
 		LoadAssignment: &endpointv3.ClusterLoadAssignment{
 			ClusterName: ClusterName,
 			Endpoints: []*endpointv3.LocalityLbEndpoints{
@@ -262,7 +330,7 @@ func (x *XdsServer) buildCluster() *clusterv3.Cluster {
 			},
 		},
 		TypedExtensionProtocolOptions: map[string]*anypb.Any{
-			"envoy.extensions.upstreams.http.v3.HttpProtocolOptions": h2Opts,
+			httpProtocolOptionsName: h2Opts,
 		},
 	}
 }
@@ -324,7 +392,7 @@ func (x *XdsServer) buildOtlpCollectorCluster() *clusterv3.Cluster {
 			},
 		},
 		TypedExtensionProtocolOptions: map[string]*anypb.Any{
-			"envoy.extensions.upstreams.http.v3.HttpProtocolOptions": h2Opts,
+			httpProtocolOptionsName: h2Opts,
 		},
 	}
 }
@@ -334,9 +402,31 @@ func (x *XdsServer) buildDynamicForwardProxyCluster() *clusterv3.Cluster {
 		ClusterImplementationSpecifier: &dfpclusterv3.ClusterConfig_DnsCacheConfig{
 			DnsCacheConfig: buildDnsCacheConfig(),
 		},
+		// A DFP cluster rejects HttpProtocolOptions unless auto_sni and
+		// auto_san_validation are on or this is set. This cluster has no
+		// transport socket — plaintext to worker pod IPs, with an IP literal for
+		// the authority — so there is no certificate to validate against.
+		AllowInsecureClusterOptions: true,
 	}
 
 	clusterConfigAny, _ := anypb.New(dfpClusterConfig)
+
+	// One request per connection. Envoy pools by destination address, which
+	// assumes an address means one stable server. A worker pod's IP is stable
+	// but the actor sandbox behind port 80 is destroyed on every Suspend and a
+	// different actor takes the slot, so a pooled connection can belong to an
+	// actor that is already gone and the request 503s.
+	httpOpts, _ := anypb.New(&httpv3.HttpProtocolOptions{
+		CommonHttpProtocolOptions: &corev3.HttpProtocolOptions{
+			MaxRequestsPerConnection: wrapperspb.UInt32(1),
+		},
+		UpstreamProtocolOptions: &httpv3.HttpProtocolOptions_ExplicitHttpConfig_{
+			ExplicitHttpConfig: &httpv3.HttpProtocolOptions_ExplicitHttpConfig{
+				// HTTP/1.1 upstream, matching what actors serve on port 80.
+				ProtocolConfig: &httpv3.HttpProtocolOptions_ExplicitHttpConfig_HttpProtocolOptions{},
+			},
+		},
+	})
 
 	return &clusterv3.Cluster{
 		Name:     "dynamic_forward_proxy_cluster",
@@ -346,6 +436,9 @@ func (x *XdsServer) buildDynamicForwardProxyCluster() *clusterv3.Cluster {
 				Name:        "envoy.clusters.dynamic_forward_proxy",
 				TypedConfig: clusterConfigAny,
 			},
+		},
+		TypedExtensionProtocolOptions: map[string]*anypb.Any{
+			httpProtocolOptionsName: httpOpts,
 		},
 	}
 }
@@ -387,13 +480,15 @@ func (x *XdsServer) buildHcm(statPrefix string) *anypb.Any {
 					ClusterName: ClusterName,
 				},
 			},
-			Timeout: durationpb.New(5 * time.Second),
+			Timeout: durationpb.New(x.extProcMessageTimeout),
 		},
 		MutationRules: &mutationrulesv3.HeaderMutationRules{
 			AllowAllRouting: &wrapperspb.BoolValue{Value: true},
 		},
-		// Explicitly configure the message timeout to avoid the 200ms default
-		MessageTimeout: durationpb.New(5 * time.Second),
+		// Bound how long Envoy waits for the router's ext_proc response. Must
+		// cover the parking budget (see SetExtProcMessageTimeout): a parked
+		// request is held open here until the router itself resolves or sheds it.
+		MessageTimeout: durationpb.New(x.extProcMessageTimeout),
 		ProcessingMode: &extprocv3filter.ProcessingMode{
 			RequestHeaderMode:   extprocv3filter.ProcessingMode_SEND,
 			ResponseHeaderMode:  extprocv3filter.ProcessingMode_SKIP,
@@ -531,8 +626,16 @@ func (x *XdsServer) buildHttpsListener() *listenerv3.Listener {
 
 	tlsConfig := &tlsv3.DownstreamTlsContext{
 		CommonTlsContext: &tlsv3.CommonTlsContext{
-			TlsCertificates: []*tlsv3.TlsCertificate{
-				x.buildTlsCertificate(),
+			TlsCertificateSdsSecretConfigs: []*tlsv3.SdsSecretConfig{
+				{
+					Name: HTTPSCertSecretName,
+					SdsConfig: &corev3.ConfigSource{
+						ConfigSourceSpecifier: &corev3.ConfigSource_Ads{
+							Ads: &corev3.AggregatedConfigSource{},
+						},
+						ResourceApiVersion: corev3.ApiVersion_V3,
+					},
+				},
 			},
 		},
 	}
@@ -571,16 +674,29 @@ func (x *XdsServer) buildHttpsListener() *listenerv3.Listener {
 	}
 }
 
-func (x *XdsServer) buildTlsCertificate() *tlsv3.TlsCertificate {
-	return &tlsv3.TlsCertificate{
-		CertificateChain: &corev3.DataSource{
-			Specifier: &corev3.DataSource_Filename{
-				Filename: x.certPath,
-			},
-		},
-		PrivateKey: &corev3.DataSource{
-			Specifier: &corev3.DataSource_Filename{
-				Filename: x.certPath, // Assuming combined file
+func (x *XdsServer) buildTlsSecret() *tlsv3.Secret {
+	return &tlsv3.Secret{
+		Name: HTTPSCertSecretName,
+		Type: &tlsv3.Secret_TlsCertificate{
+			TlsCertificate: &tlsv3.TlsCertificate{
+				// The pod certificate is projected as a single PEM bundle
+				// holding both the cert chain and the private key, so both
+				// DataSources point at the same file.
+				CertificateChain: &corev3.DataSource{
+					Specifier: &corev3.DataSource_Filename{
+						Filename: x.certPath,
+					},
+				},
+				PrivateKey: &corev3.DataSource{
+					Specifier: &corev3.DataSource_Filename{
+						Filename: x.certPath,
+					},
+				},
+				// By specifying WatchedDirectory, we tell envoy to watch changes to the mounted pod certificate file.
+				// See documentation in https://pkg.go.dev/github.com/envoyproxy/go-control-plane/envoy/extensions/transport_sockets/tls/v3#:~:text=This%20only%20applies%20when%20a%20%E2%80%9CTlsCertificate%E2%80%9C%20is%20delivered%20by%20SDS
+				WatchedDirectory: &corev3.WatchedDirectory{
+					Path: filepath.Dir(x.certPath),
+				},
 			},
 		},
 	}

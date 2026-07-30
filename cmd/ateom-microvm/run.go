@@ -26,6 +26,8 @@ import (
 	"runtime"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/ateomnet"
+
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/ch"
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/kata"
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/third_party/kata/agentpb"
@@ -33,6 +35,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/imagecache"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/readyz"
+	"github.com/agent-substrate/substrate/internal/resources"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"golang.org/x/sys/unix"
 	"google.golang.org/grpc/codes"
@@ -198,8 +201,7 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	defer s.lock.Unlock()
 
 	p := actorBootParams{
-		atespace:     req.GetAtespace(),
-		actorName:    req.GetActorName(),
+		actorRef:     resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()},
 		actorUID:     req.GetActorUid(),
 		templateNS:   req.GetActorTemplateNamespace(),
 		templateName: req.GetActorTemplateName(),
@@ -207,11 +209,11 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 		assetPaths:   req.GetRuntimeAssetPaths(),
 	}
 
-	s.actorLogger.EmitLifecycleLog("Actor starting", p.atespace, p.actorName, p.actorUID, p.templateNS, p.templateName)
+	s.actorLogger.EmitLifecycleLog("Actor starting", p.actorRef, p.actorUID, p.templateNS, p.templateName)
 	if err := s.coldBootActor(ctx, p); err != nil {
 		return nil, err
 	}
-	s.actorLogger.EmitLifecycleLog("Actor started", p.atespace, p.actorName, p.actorUID, p.templateNS, p.templateName)
+	s.actorLogger.EmitLifecycleLog("Actor started", p.actorRef, p.actorUID, p.templateNS, p.templateName)
 	slog.InfoContext(ctx, "Actor started (overlay rootfs)", slog.String("id", p.actorUID))
 	return &ateompb.RunWorkloadResponse{}, nil
 }
@@ -220,8 +222,7 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 // request, or from a Restore request whose snapshot scope covers only the
 // durable-dir volumes (the workload itself cold-starts).
 type actorBootParams struct {
-	atespace     string
-	actorName    string
+	actorRef     resources.ActorRef
 	actorUID     string
 	templateNS   string
 	templateName string
@@ -233,7 +234,7 @@ type actorBootParams struct {
 // containers, registering the result in s.running. The caller holds s.lock and
 // owns the lifecycle logging.
 func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (retErr error) {
-	atespace, name, actorUID := p.atespace, p.actorName, p.actorUID
+	actorUID := p.actorUID
 	templateNS, templateName := p.templateNS, p.templateName
 
 	// All of the actor's containers share the one micro-VM (which is the pod
@@ -259,12 +260,16 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 
 	// Networking (host side): per-activation veth into the interior netns. The
 	// tap + TC mirror is built below (after the VM exists) so its FDs are fresh.
-	if err := s.setupActorNetwork(ctx); err != nil {
+	if err := ateomnet.SetupActorNetwork(ctx, ateomnet.NetworkConfig{
+		InteriorNetNS:      s.interiorNetNS,
+		HostVethHWAddr:     hostVethHWAddr,
+		SweepInteriorLinks: true,
+	}); err != nil {
 		return fmt.Errorf("while setting up actor network: %w", err)
 	}
 	defer func() {
 		if retErr != nil {
-			if cleanupErr := s.cleanupActorNetwork(ctx); cleanupErr != nil {
+			if cleanupErr := ateomnet.CleanupActorNetwork(ctx, s.interiorNetNS); cleanupErr != nil {
 				slog.WarnContext(ctx, "Failed to clean up actor network after Run failure", slog.Any("err", cleanupErr))
 			}
 			// Detach any bundle rootfs overlays mounted by buildActorContainers
@@ -411,7 +416,7 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 	}
 
 	// Block until every readyz-enabled container reports 200.
-	if err := readyz.WaitAll(ctx, containers, actorVethIP); err != nil {
+	if err := readyz.WaitAll(ctx, containers, ateomnet.ActorVethIP); err != nil {
 		return fmt.Errorf("while waiting for container readyz: %w", err)
 	}
 
@@ -423,7 +428,7 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 	// that and tag with the display container name. The goroutines read over ac for the
 	// actor's lifetime and exit (io.EOF) when teardownActor closes ac.
 	for _, c := range ctrs {
-		s.startActorLogForwarding(ac, atespace, name, actorUID, templateNS, templateName, overlayWorkloadID(c.name), c.name)
+		s.startActorLogForwarding(ac, p.actorRef, actorUID, templateNS, templateName, overlayWorkloadID(c.name), c.name)
 	}
 
 	return nil
@@ -652,9 +657,9 @@ func startOverlayContainer(ctx context.Context, ac *kata.AgentClient, vsockPath 
 // ending WrapContainerLogs. This keeps the agent connection (which ttrpc allows
 // concurrent Calls on) alive for forwarding while guaranteeing no goroutine outlives
 // the connection.
-func (s *AteomService) startActorLogForwarding(ac *kata.AgentClient, atespace, actorName, actorUID, actorTemplateNamespace, actorTemplateName, streamID, containerName string) {
-	go s.actorLogger.WrapContainerLogs(kata.NewStdioReader(context.Background(), ac, streamID, streamID, false), atespace, actorName, actorUID, actorTemplateNamespace, actorTemplateName, containerName)
-	go s.actorLogger.WrapContainerLogs(kata.NewStdioReader(context.Background(), ac, streamID, streamID, true), atespace, actorName, actorUID, actorTemplateNamespace, actorTemplateName, containerName)
+func (s *AteomService) startActorLogForwarding(ac *kata.AgentClient, actorRef resources.ActorRef, actorUID, actorTemplateNamespace, actorTemplateName, streamID, containerName string) {
+	go s.actorLogger.WrapContainerLogs(kata.NewStdioReader(context.Background(), ac, streamID, streamID, false), actorRef, actorUID, actorTemplateNamespace, actorTemplateName, containerName)
+	go s.actorLogger.WrapContainerLogs(kata.NewStdioReader(context.Background(), ac, streamID, streamID, true), actorRef, actorUID, actorTemplateNamespace, actorTemplateName, containerName)
 }
 
 // dialAgentRetry polls DialAgent until the kata-agent answers the hybrid-vsock
@@ -699,25 +704,25 @@ func tailString(s string, n int) string {
 // neighbor entry stays valid).
 func (s *AteomService) configureGuestNetwork(ctx context.Context, ac *kata.AgentClient, mtu uint64) error {
 	if err := ac.UpdateInterface(ctx, &agentpb.Interface{
-		Device: actorVethName,
-		Name:   actorVethName,
+		Device: ateomnet.ActorVethName,
+		Name:   ateomnet.ActorVethName,
 		HwAddr: actorGuestMAC,
 		Mtu:    mtu,
 		IPAddresses: []*agentpb.IPAddress{
-			{Family: agentpb.IPFamily_v4, Address: actorVethIP, Mask: "30"},
+			{Family: agentpb.IPFamily_v4, Address: ateomnet.ActorVethIP, Mask: "30"},
 		},
 	}); err != nil {
 		return err
 	}
 	if err := ac.UpdateRoutes(ctx, []*agentpb.Route{
-		{Dest: actorVethSubnet, Device: actorVethName, Scope: uint32(unix.RT_SCOPE_LINK), Family: agentpb.IPFamily_v4},
-		{Dest: "", Gateway: actorVethGateway, Device: actorVethName, Family: agentpb.IPFamily_v4},
+		{Dest: ateomnet.ActorVethSubnet, Device: ateomnet.ActorVethName, Scope: uint32(unix.RT_SCOPE_LINK), Family: agentpb.IPFamily_v4},
+		{Dest: "", Gateway: ateomnet.ActorVethGateway, Device: ateomnet.ActorVethName, Family: agentpb.IPFamily_v4},
 	}); err != nil {
 		return err
 	}
 	return ac.AddARPNeighbors(ctx, []*agentpb.ARPNeighbor{{
-		ToIPAddress: &agentpb.IPAddress{Family: agentpb.IPFamily_v4, Address: actorVethGateway},
-		Device:      actorVethName,
+		ToIPAddress: &agentpb.IPAddress{Family: agentpb.IPFamily_v4, Address: ateomnet.ActorVethGateway},
+		Device:      ateomnet.ActorVethName,
 		Lladdr:      hostVethMAC,
 		State:       0x80, // NUD_PERMANENT
 	}})

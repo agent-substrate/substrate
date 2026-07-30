@@ -34,15 +34,15 @@ agents, but rather a system for running them at scale.
 
 [![Agent Substrate Demo](https://img.youtube.com/vi/ZEzkCFJkzjY/hq1.jpg)](https://www.youtube.com/watch?v=ZEzkCFJkzjY)
 
-*Watch the Agent Substrate cluster multiplex ~250 stateful actor sessions across just 8 physical pods.*
+*Watch the Agent Substrate cluster multiplex ~250 stateful actors across just 8 physical pods.*
 
 This demo highlights the core developer experience and "Agentic Infrastructure" capabilities of Substrate:
 
-1.  **Instant Session Teleport:** High-performance suspend and resume of actors onto any available worker in the pool with sub-second activation.
+1.  **Instant Actor Teleport:** High-performance suspend and resume of actors onto any available worker in the pool with sub-second activation.
 2.  **State Persistence:** Persistent working memory (volatile RAM) and filesystem state preserved perfectly across hibernation cycles via full-state snapshots.
 3.  **Agent Swarm Multiplexing:** Demonstrates 30x+ oversubscription by "juggling" a large registry of stateful actors onto a small pool of shared physical pods.
 
-To reproduce this demo in your own cluster, please refer to the detailed walkthroughs in the **[Counter Demo](demos/counter/README.md)** and **[Secret Agent Demo](demos/agent-secret/README.md)**.
+To reproduce this demo in your own cluster, please refer to the detailed walkthrough in the **[Counter Demo](demos/counter/README.md)**.
 
 For more videos and walkthroughs, visit our YouTube channel: **[agent-substrate](https://www.youtube.com/channel/UCN9PPqlTtVxlcpbQ-NWpfZQ)**.
 
@@ -50,7 +50,7 @@ For more videos and walkthroughs, visit our YouTube channel: **[agent-substrate]
 
 Agent Substrate is designed to be **framework and agent harness agnostic**. Because it manages standard OCI containers at the kernel level (via gVisor), it can host agents built on any stack.
 
-*   **Agent Development Kit (ADK):** Native support for ADK-compatible session identity and persistent working memory.
+*   **Agent Development Kit (ADK):** Native support for ADK-compatible actor identity and persistent working memory.
 *   **LangChain:** Ideal execution environment for long-running, stateful LangChain agents and sandboxed tool-calling.
 *   **Claude Code & CodeX:** Support for high-density, stateful coding environments that preserve terminal and filesystem state across sessions.
 *   **Model Context Protocol (MCP):** Deploy secure, sandboxed MCP servers as Substrate Actors to provide durable tools for any LLM.
@@ -199,7 +199,6 @@ We provide several sample applications demonstrating Agent Substrate's capabilit
 1. **[Counter Demo](demos/counter/README.md)**: A stateful Go HTTP server demonstrating state preservation across suspends/resumes, and dynamic CRD routing.
 2. **[Sandbox Demo (Antigravity)](demos/sandbox/README.md)**: A secure, sandboxed execution environment (running Alpine Linux) that allows arbitrary shell execution while preserving filesystem state across sessions.
 3. **[Claude Code Multiplex](demos/claude-code-multiplex/README.md)**: Demonstrates oversubscribing physical hardware by multiplexing multiple Claude Code agents onto a limited pool of workers.
-4. **[Secret Agent](demos/agent-secret/README.md)**: Highlights Substrate's "Zero-Idle" self-suspension and re-animation of volatile process memory.
 
 ### Documentation & Guides
 * [API Configuration Guide](docs/api-guide.md): Detailed reference for configuring WorkerPools, ActorTemplates, Secrets, and Volumes.
