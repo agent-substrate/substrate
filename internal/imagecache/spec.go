@@ -55,9 +55,10 @@ type OverlaySpec struct {
 
 // WriteSpec writes spec into the bundle at bundlePath.
 //
-// The write is atomic (temp file + rename): the cache GC's root-set scan
-// reads these files concurrently, and a torn spec would under-report the
-// layers an actor is using — failing toward deletion.
+// The write is atomic (temp file + rename): concurrent readers — notably
+// the cache GC's root-set scan — must never see a partial spec, which
+// could parse with layers missing and leave them eligible for eviction
+// while the actor is using them.
 func WriteSpec(bundlePath string, spec *OverlaySpec) error {
 	spec.Version = 1
 	b, err := json.MarshalIndent(spec, "", "  ")
