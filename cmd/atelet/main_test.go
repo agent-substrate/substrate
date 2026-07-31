@@ -18,6 +18,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -36,6 +37,25 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/testing/protocmp"
 )
+
+func TestSnapshotManifestActorMetadata(t *testing.T) {
+	rec := sandboxAssetsRecord{
+		Atespace:               "team-a",
+		ActorName:              "actor-1",
+		ActorUID:               "actor-uid",
+		ActorTemplateNamespace: "templates",
+		ActorTemplateName:      "agent",
+	}
+	got, err := json.Marshal(rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"atespace":"team-a"`, `"actorName":"actor-1"`, `"actorUid":"actor-uid"`, `"actorTemplateNamespace":"templates"`, `"actorTemplateName":"agent"`} {
+		if !bytes.Contains(got, []byte(want)) {
+			t.Errorf("manifest %s missing %s", got, want)
+		}
+	}
+}
 
 func TestWriteFileAtomic(t *testing.T) {
 	dir := t.TempDir()
@@ -84,6 +104,63 @@ func TestWriteFileAtomic(t *testing.T) {
 			t.Errorf("leftover files in identity dir: %v", names)
 		}
 	})
+}
+
+func TestCopyFile(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	want := []byte("checkpoint pages")
+	if err := os.WriteFile(src, want, 0o600); err != nil {
+		t.Fatalf("seeding src: %v", err)
+	}
+
+	dst := filepath.Join(dir, "dst")
+	n, err := copyFile(src, dst)
+	if err != nil {
+		t.Fatalf("copyFile: %v", err)
+	}
+	if n != int64(len(want)) {
+		t.Errorf("copied %d bytes, want %d", n, len(want))
+	}
+	got, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatalf("reading dst: %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Errorf("dst content = %q, want %q", got, want)
+	}
+
+	if _, err := copyFile(dir, filepath.Join(dir, "dst2")); err == nil {
+		t.Error("copyFile(directory, ...) succeeded, want error")
+	}
+}
+
+type failingCloseFile struct{ *os.File }
+
+func (f failingCloseFile) Close() error {
+	_ = f.File.Close()
+	return errors.New("deferred flush failed")
+}
+
+func TestCopyFile_CloseError(t *testing.T) {
+	orig := createDestFile
+	createDestFile = func(name string) (io.WriteCloser, error) {
+		f, err := os.Create(name)
+		if err != nil {
+			return nil, err
+		}
+		return failingCloseFile{f}, nil
+	}
+	t.Cleanup(func() { createDestFile = orig })
+
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	if err := os.WriteFile(src, []byte("checkpoint pages"), 0o600); err != nil {
+		t.Fatalf("seeding src: %v", err)
+	}
+	if _, err := copyFile(src, filepath.Join(dir, "dst")); err == nil {
+		t.Error("copyFile with failing destination Close = nil, want error")
+	}
 }
 
 // validRunRequest, validCheckpointRequest, and validRestoreRequest build
@@ -483,6 +560,59 @@ func TestBuildAteomWorkloadSpecForwardsReadyz(t *testing.T) {
 				},
 			},
 			{Name: "without-probe"},
+		},
+	}
+	got := buildAteomWorkloadSpec(in)
+	if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
+		t.Errorf("buildAteomWorkloadSpec mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestBuildAteomWorkloadSpecForwardsDurableDirMounts(t *testing.T) {
+	in := &ateletpb.WorkloadSpec{
+		Volumes: []*ateletpb.Volume{
+			{Name: "data", Type: ateletpb.VolumeType_VOLUME_TYPE_DURABLE_DIR},
+			{Name: "cache", Type: ateletpb.VolumeType_VOLUME_TYPE_DURABLE_DIR},
+			{Name: "scratch", Type: ateletpb.VolumeType_VOLUME_TYPE_EXTERNAL},
+		},
+		Containers: []*ateletpb.Container{
+			{
+				Name: "main",
+				VolumeMounts: []*ateletpb.VolumeMount{
+					{Name: "data", MountPath: "/home/counter"},
+					{Name: "cache", MountPath: "/var/cache"},
+					// Only durable-dir volumes cross to ateom; other volume
+					// types are mounted by atelet itself.
+					{Name: "scratch", MountPath: "/scratch"},
+				},
+			},
+			{
+				Name: "sidecar",
+				VolumeMounts: []*ateletpb.VolumeMount{
+					{Name: "data", MountPath: "/shared"},
+				},
+			},
+			{Name: "no-volumes"},
+		},
+	}
+	// ateom needs the volume NAME as well as the path: the name selects the
+	// per-volume directory on the host, and an actor may have several.
+	want := &ateompb.WorkloadSpec{
+		Containers: []*ateompb.Container{
+			{
+				Name: "main",
+				DurableDirVolumeMounts: []*ateompb.DurableDirVolumeMount{
+					{VolumeName: "data", MountPath: "/home/counter"},
+					{VolumeName: "cache", MountPath: "/var/cache"},
+				},
+			},
+			{
+				Name: "sidecar",
+				DurableDirVolumeMounts: []*ateompb.DurableDirVolumeMount{
+					{VolumeName: "data", MountPath: "/shared"},
+				},
+			},
+			{Name: "no-volumes"},
 		},
 	}
 	got := buildAteomWorkloadSpec(in)

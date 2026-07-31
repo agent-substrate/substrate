@@ -64,6 +64,27 @@ type Interface interface {
 	// empty. Returns a page of actors and a next page token.
 	ListActors(ctx context.Context, atespace string, pageSize int32, pageToken string) ([]*ateapipb.Actor, string, error)
 
+	// Creates an immutable ActorSnapshot and stores its private physical location.
+	CreateActorSnapshot(ctx context.Context, snapshot *ateapipb.ActorSnapshot, location string) (*ateapipb.ActorSnapshot, error)
+
+	// Fetches an ActorSnapshot and its private physical location.
+	GetActorSnapshot(ctx context.Context, atespace, name string) (*ateapipb.ActorSnapshot, string, error)
+
+	// Resolves an Atespace-owned tag to an ActorSnapshot in constant time.
+	GetActorSnapshotByTag(ctx context.Context, atespace, name string) (*ateapipb.ActorSnapshot, string, *ateapipb.ActorSnapshotTag, error)
+
+	// Lists ActorSnapshots in one atespace, or all atespaces when empty.
+	ListActorSnapshots(ctx context.Context, atespace string, pageSize int32, pageToken string) ([]*ateapipb.ActorSnapshot, string, error)
+
+	// Adds an immutable Atespace-owned tag to an ActorSnapshot.
+	TagActorSnapshot(ctx context.Context, atespace, name string, tag *ateapipb.ActorSnapshotTag) (*ateapipb.ActorSnapshotTag, error)
+
+	// Updates a tag's reuse scope.
+	UpdateActorSnapshotTag(ctx context.Context, atespace, name string, scope ateapipb.ActorSnapshotTagScope) (*ateapipb.ActorSnapshotTag, error)
+
+	// Deletes and returns a tag.
+	DeleteActorSnapshotTag(ctx context.Context, atespace, name string) (*ateapipb.ActorSnapshotTag, error)
+
 	// Stores a new atespace and returns the stored resource with server-assigned
 	// metadata (uid, version, timestamps). The input is not mutated. Returns
 	// ErrAlreadyExists if the name is taken.

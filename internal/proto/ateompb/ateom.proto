@@ -74,7 +74,24 @@ message WorkloadSpec {
 message Container {
   string name = 1;
   Readyz readyz = 2;
-  repeated string durable_dir_volumes = 3;
+
+  // Field 3 was durable_dir_volumes: the mount paths alone, which only worked
+  // while an actor was limited to a single durable-dir volume.
+  reserved 3;
+  reserved "durable_dir_volumes";
+
+  // durable_dir_volume_mounts are the durable-dir volumes this container
+  // mounts, if any.
+  repeated DurableDirVolumeMount durable_dir_volume_mounts = 4;
+}
+
+// DurableDirVolumeMount is one durable-dir volume mounted into a container.
+message DurableDirVolumeMount {
+  // volume_name is the name the ActorTemplate gave the volume. It selects the
+  // per-volume directory atelet prepared for the actor on the host.
+  string volume_name = 1;
+  // mount_path is where the container sees the volume.
+  string mount_path = 2;
 }
 
 // Readyz describes how to check that a container is ready to serve.

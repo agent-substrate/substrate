@@ -338,7 +338,7 @@ A `WorkerPool` selects a **sandbox class** (`spec.sandboxClass`), and each class
 
   * **gVisor** (`ateom-gvisor`, the default): Runs the workload under `runsc` for kernel-level sandboxing. Suspend and resume leverage gVisor's native checkpoint/restore of the sandboxed process tree.
 
-  * **micro-VM** (`ateom-microvm`): Runs the workload inside a [Kata Containers](https://katacontainers.io/) guest on the [Cloud Hypervisor](https://www.cloudhypervisor.org/) VMM. Suspend and resume capture a memory-only VM snapshot and restore it on-demand using `userfaultfd` memory demand-paging, with container rootfs writes captured in guest RAM via a `tmpfs` overlay. `DurableDir` volumes are host-backed instead, served over a second (writable) virtio-fs share and shipped in snapshots as a tar, so a `Data`-scope snapshot can capture them without any guest memory.
+  * **micro-VM** (`ateom-microvm`): Runs the workload inside a [Kata Containers](https://katacontainers.io/) guest on the [Cloud Hypervisor](https://www.cloudhypervisor.org/) VMM. Suspend and resume capture a memory-only VM snapshot and restore it on-demand using `userfaultfd` memory demand-paging, with container rootfs writes captured in guest RAM via a `tmpfs` overlay. `DurableDir` volumes are host-backed instead, served over a second (writable) virtio-fs share and shipped in snapshots as a tar, so a `Data`-scope snapshot can capture them without any guest memory. Each volume is a subdirectory of that one share, so an actor can have several at no extra cost in devices — which is why the micro-VM class lifts the single-`DurableDir` limit that still applies to gVisor.
 
 ### Networking Stack (`atenet` + Envoy)
 
@@ -418,7 +418,7 @@ Triggered by an inbound request at the Gateway or an explicit API call.
   2. **Assignment**: The Control Plane claims a warm worker from the
      `WorkerPool`.
 
-  3. **Hydration**: The `atelet` supervisor coordinates with the `ateom` process inside the worker pod to restore the `GoldenSnapshot` (for first-run) or the `LatestSnapshotInfo` (for recurring runs) into the sandbox.
+  3. **Hydration**: The `atelet` supervisor coordinates with the `ateom` process inside the worker pod to restore the ActorTemplate's golden `ActorSnapshot` (for first-run) or the Actor's latest `ActorSnapshot` (for recurring runs) into the sandbox.
 
   4. **Status**: Status transitions to `STATUS_RUNNING`. The actor now has an
      active Worker IP.
@@ -437,7 +437,13 @@ Triggered by an explicit `SuspendActor` call.
   3. **Reclaim**: The physical worker is wiped and returned to the `WorkerPool`.
 
   4. **Status**: Status transitions back to `STATUS_SUSPENDED`, now pointing to
-     the `LatestSnapshotInfo` for future resumptions.
+     an immutable `ActorSnapshot` resource and references it for future resumptions.
+
+Snapshots may be given tags owned and addressed by an Atespace. The same tag
+name may exist in different Atespaces. A tag is an immutable alias and retention
+pin: publishing it permits reuse from other Atespaces without changing its
+`atespace/name` address. Deleting the owning Atespace deletes all of its tags,
+including published tags, but leaves snapshot cleanup to garbage collection.
 
 ### Phase 4: Deletion
 

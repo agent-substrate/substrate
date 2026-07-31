@@ -89,10 +89,15 @@ because they change too frequently for etcd.
 - **DurableDir volume**: a directory mounted into one or more containers
   whose contents are preserved by the [`Data` snapshot scope](#snapshots)
   and therefore survive across Suspend/Resume independently of process
-  memory or other rootfs writes. An `ActorTemplate` may declare one
-  `DurableDir` volume, and it may be mounted into multiple containers
-  (potentially at different paths). This is the per-Actor
+  memory or other rootfs writes. A volume may be mounted into multiple
+  containers, potentially at different paths. This is the per-Actor
   application-data surface.
+
+  How many an `ActorTemplate` may declare depends on its `sandboxClass`:
+  a `microvm` template may declare several (they are subdirectories of one
+  virtio-fs share, so they cost nothing extra per volume), while a `gvisor`
+  template is limited to one until gVisor can accept more than a single
+  durable mount.
 
 ## Snapshots
 

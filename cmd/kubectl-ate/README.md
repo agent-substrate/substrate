@@ -142,7 +142,7 @@ kubectl ate get atespace <atespace>
 kubectl ate delete atespace <atespace>
 ```
 
-> **Note:** `create actor … -a <atespace>` requires the atespace to already exist, otherwise it fails with `FailedPrecondition`. `delete atespace` only removes an **empty** atespace; delete its actors first (cascade delete is not yet supported).
+> **Note:** `create actor … -a <atespace>` requires the atespace to already exist, otherwise it fails with `FailedPrecondition`. `delete atespace` only removes an **empty** atespace; delete its actors and snapshot tags first (cascade delete is not yet supported).
 
 #### `kubectl ate get atespace` output columns
 
@@ -169,6 +169,27 @@ kubectl ate suspend actor my-actor -a <atespace>
 
 # Delete an actor.
 kubectl ate delete actor my-actor -a <atespace>
+```
+
+### Actor Snapshots
+
+Suspending an actor creates a durable snapshot. Tags give snapshots stable,
+Atespace-owned names; published tags may be used from other Atespaces.
+
+```bash
+# List snapshots, or resolve one canonical snapshot or tag.
+kubectl ate get snapshots -a <atespace>
+kubectl ate get snapshot <snapshot-name> -a <atespace>
+kubectl ate get snapshot <tag-name> -a <atespace> --tag
+
+# Tag a snapshot, then publish or unpublish the tag.
+kubectl ate create snapshot-tag <tag-name> -a <atespace> --snapshot <snapshot-name>
+kubectl ate update snapshot-tag <tag-name> -a <atespace> --scope published
+kubectl ate update snapshot-tag <tag-name> -a <atespace> --scope atespace
+
+# Create an actor from a tag and remove the tag when it is no longer needed.
+kubectl ate create actor <actor-name> -a <atespace> --template <namespace/name> --snapshot-tag <tag-atespace/tag-name>
+kubectl ate delete snapshot-tag <tag-name> -a <atespace>
 ```
 
 ### Logs

@@ -27,15 +27,18 @@ package main
 //
 // ateom exposes that host directory to the guest over a SECOND virtiofsd — the
 // kataShared share stays strictly read-only (it is the overlay lower, served
-// with cache=always), so writable volumes get their own share, mounted at
-// kata.GuestDurableVolumeDir(volume) and bind-mounted from there into each
-// container that declares the volume.
+// with cache=always), so writable volumes get their own share. Each volume is a
+// subdirectory of the one share, at kata.GuestDurableVolumeDir(volume),
+// bind-mounted from there into every container that declares it. An actor may
+// have any number of them: they cost a subdirectory each, not a device, so
+// nothing here scales with the volume count (gVisor is the runtime that caps
+// this at one, via the ActorTemplate CEL rules).
 //
-// Snapshots carry the contents as a tar of the whole per-actor directory, so the
-// volume names round-trip without ateom having to learn them from the wire (the
-// ateom protocol carries mount paths only). virtiofsd serves the share
-// write-through (no --writeback), so once the guest is paused every completed
-// guest write is already visible on the host and the tar is complete.
+// Snapshots carry the contents as a tar of the whole per-actor directory, so
+// every volume rides along and the layout is reproduced verbatim on restore.
+// virtiofsd serves the share write-through (no --writeback), so once the guest
+// is paused every completed guest write is already visible on the host and the
+// tar is complete.
 
 import (
 	"context"
@@ -49,8 +52,6 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 // durableTarFile is the snapshot file holding the tar of the actor's durable-dir
@@ -61,80 +62,47 @@ const durableTarFile = "durable-dir.tar"
 // hasDurableVolumes reports whether any container mounts a durable-dir volume.
 func hasDurableVolumes(containers []*ateompb.Container) bool {
 	for _, c := range containers {
-		if len(c.GetDurableDirVolumes()) > 0 {
+		if len(c.GetDurableDirVolumeMounts()) > 0 {
 			return true
 		}
 	}
 	return false
 }
 
-// resolveDurableVolumeName returns the name of the actor's durable-dir volume,
-// read from the directory atelet created for it (dir is
-// ateompath.DurableDirVolumeMountsDir for the actor).
-//
-// The ateom protocol carries only the guest mount paths, not volume names, so
-// the name comes from the host layout: the directory holds exactly one
-// subdirectory per volume. The ActorTemplate API allows at most one durable-dir
-// volume per template, so anything other than exactly one directory means ateom
-// and atelet disagree about the actor — fail rather than guess.
-//
-// That makes this the one place ateom depends on atelet's on-disk layout, and
-// the first thing to change if more than one durable-dir volume is ever
-// supported: ateompb.Container would need to carry each mount's volume name
-// alongside its path, and this lookup would go away.
-func resolveDurableVolumeName(dir string) (string, error) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return "", fmt.Errorf("while reading durable-dir volumes dir %q: %w", dir, err)
-	}
-	var names []string
-	for _, e := range entries {
-		if e.IsDir() {
-			names = append(names, e.Name())
-		}
-	}
-	switch len(names) {
-	case 1:
-		return names[0], nil
-	case 0:
-		return "", status.Errorf(codes.FailedPrecondition,
-			"actor declares durable-dir volume mounts but %q holds no volume directory", dir)
-	default:
-		return "", status.Errorf(codes.Unimplemented,
-			"ateom-microvm supports at most one durable-dir volume, found %d in %q", len(names), dir)
-	}
-}
-
-// durableMounts returns the OCI mounts that expose one durable volume at each of
-// a container's declared mount paths. The source is the volume's directory inside
-// the guest's durable share, which the agent mounts at sandbox creation.
-func durableMounts(volumeName string, mountPaths []string) []specs.Mount {
-	src := kata.GuestDurableVolumeDir(volumeName)
-	mounts := make([]specs.Mount, 0, len(mountPaths))
-	for _, p := range mountPaths {
-		mounts = append(mounts, specs.Mount{
-			Destination: p,
-			Source:      src,
+// durableMounts returns the OCI mounts that expose a container's durable-dir
+// volumes at the paths it declared. Each source is that volume's directory
+// inside the guest's durable share, which the agent mounts at sandbox creation.
+func durableMounts(mounts []*ateompb.DurableDirVolumeMount) []specs.Mount {
+	out := make([]specs.Mount, 0, len(mounts))
+	for _, m := range mounts {
+		out = append(out, specs.Mount{
+			Destination: m.GetMountPath(),
+			Source:      kata.GuestDurableVolumeDir(m.GetVolumeName()),
 			Type:        "bind",
 			Options:     []string{"rbind", "rw"},
 		})
 	}
-	return mounts
+	return out
 }
 
-// workloadSpec returns the OCI spec to start a container's overlay workload with:
-// the prepared spec, plus the durable-dir binds when the actor has a volume and
-// this container mounts it.
+// workloadSpec returns the OCI spec to start a container's overlay workload
+// with: the prepared spec, plus a bind for each durable-dir volume it mounts.
 //
 // The spec is copied rather than mutated so the bundle's on-disk config.json and
 // the carrier's view stay as prepared — only the workload sees the binds.
-func workloadSpec(c actorContainer, durableVolume string) *specs.Spec {
-	if durableVolume == "" || len(c.durableMountPaths) == 0 {
+func workloadSpec(c actorContainer) *specs.Spec {
+	if len(c.durableMounts) == 0 {
 		return c.spec
 	}
 	spec := *c.spec
-	spec.Mounts = append(append([]specs.Mount(nil), c.spec.Mounts...), durableMounts(durableVolume, c.durableMountPaths)...)
+	spec.Mounts = append(append([]specs.Mount(nil), c.spec.Mounts...), durableMounts(c.durableMounts)...)
 	return &spec
+}
+
+// durableVirtiofsdLogPath is where the durable-dir share's virtiofsd logs,
+// beside the overlay lower's (see virtiofsdLogPath) under the actor's VM dir.
+func durableVirtiofsdLogPath(id string) string {
+	return filepath.Join(kata.VMDir(id), "virtiofsd-durable.log")
 }
 
 // stageDurableShare starts the virtiofsd serving the actor's durable-dir volumes.
@@ -151,7 +119,7 @@ func (s *AteomService) stageDurableShare(ctx context.Context, rr resolvedRuntime
 	if _, err := os.Stat(shared); err != nil {
 		return nil, fmt.Errorf("while checking durable-dir volumes dir %q: %w", shared, err)
 	}
-	log, _ := os.OpenFile(filepath.Join(kata.VMDir(actorUID), "virtiofsd-durable.log"), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	log, _ := os.OpenFile(durableVirtiofsdLogPath(actorUID), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	cmd, err := kata.StartVirtiofsd(ctx, kata.VirtiofsdOptions{
 		Binary:     rr.virtiofsd,
 		SocketPath: kata.DurableVirtiofsdSocketPath(actorUID),

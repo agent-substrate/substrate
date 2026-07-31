@@ -33,19 +33,24 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	Control_GetActor_FullMethodName       = "/ateapi.Control/GetActor"
-	Control_CreateActor_FullMethodName    = "/ateapi.Control/CreateActor"
-	Control_UpdateActor_FullMethodName    = "/ateapi.Control/UpdateActor"
-	Control_SuspendActor_FullMethodName   = "/ateapi.Control/SuspendActor"
-	Control_PauseActor_FullMethodName     = "/ateapi.Control/PauseActor"
-	Control_ResumeActor_FullMethodName    = "/ateapi.Control/ResumeActor"
-	Control_DeleteActor_FullMethodName    = "/ateapi.Control/DeleteActor"
-	Control_ListWorkers_FullMethodName    = "/ateapi.Control/ListWorkers"
-	Control_ListActors_FullMethodName     = "/ateapi.Control/ListActors"
-	Control_CreateAtespace_FullMethodName = "/ateapi.Control/CreateAtespace"
-	Control_GetAtespace_FullMethodName    = "/ateapi.Control/GetAtespace"
-	Control_ListAtespaces_FullMethodName  = "/ateapi.Control/ListAtespaces"
-	Control_DeleteAtespace_FullMethodName = "/ateapi.Control/DeleteAtespace"
+	Control_GetActor_FullMethodName               = "/ateapi.Control/GetActor"
+	Control_CreateActor_FullMethodName            = "/ateapi.Control/CreateActor"
+	Control_UpdateActor_FullMethodName            = "/ateapi.Control/UpdateActor"
+	Control_SuspendActor_FullMethodName           = "/ateapi.Control/SuspendActor"
+	Control_PauseActor_FullMethodName             = "/ateapi.Control/PauseActor"
+	Control_ResumeActor_FullMethodName            = "/ateapi.Control/ResumeActor"
+	Control_DeleteActor_FullMethodName            = "/ateapi.Control/DeleteActor"
+	Control_GetActorSnapshot_FullMethodName       = "/ateapi.Control/GetActorSnapshot"
+	Control_ListActorSnapshots_FullMethodName     = "/ateapi.Control/ListActorSnapshots"
+	Control_TagActorSnapshot_FullMethodName       = "/ateapi.Control/TagActorSnapshot"
+	Control_UpdateActorSnapshotTag_FullMethodName = "/ateapi.Control/UpdateActorSnapshotTag"
+	Control_DeleteActorSnapshotTag_FullMethodName = "/ateapi.Control/DeleteActorSnapshotTag"
+	Control_ListWorkers_FullMethodName            = "/ateapi.Control/ListWorkers"
+	Control_ListActors_FullMethodName             = "/ateapi.Control/ListActors"
+	Control_CreateAtespace_FullMethodName         = "/ateapi.Control/CreateAtespace"
+	Control_GetAtespace_FullMethodName            = "/ateapi.Control/GetAtespace"
+	Control_ListAtespaces_FullMethodName          = "/ateapi.Control/ListAtespaces"
+	Control_DeleteAtespace_FullMethodName         = "/ateapi.Control/DeleteAtespace"
 )
 
 // ControlClient is the client API for Control service.
@@ -68,6 +73,17 @@ type ControlClient interface {
 	ResumeActor(ctx context.Context, in *ResumeActorRequest, opts ...grpc.CallOption) (*ResumeActorResponse, error)
 	// Delete an actor. Only suspended actors can be deleted.
 	DeleteActor(ctx context.Context, in *DeleteActorRequest, opts ...grpc.CallOption) (*Actor, error)
+	// Get an ActorSnapshot.
+	GetActorSnapshot(ctx context.Context, in *GetActorSnapshotRequest, opts ...grpc.CallOption) (*ActorSnapshot, error)
+	// List ActorSnapshots.
+	ListActorSnapshots(ctx context.Context, in *ListActorSnapshotsRequest, opts ...grpc.CallOption) (*ListActorSnapshotsResponse, error)
+	// Add an Atespace-owned, stable name for an ActorSnapshot.
+	TagActorSnapshot(ctx context.Context, in *TagActorSnapshotRequest, opts ...grpc.CallOption) (*ActorSnapshotTag, error)
+	// Publish or unpublish an ActorSnapshot tag without changing its address.
+	UpdateActorSnapshotTag(ctx context.Context, in *UpdateActorSnapshotTagRequest, opts ...grpc.CallOption) (*ActorSnapshotTag, error)
+	// Delete an ActorSnapshot tag. The snapshot becomes garbage-collectable when
+	// its final tag is deleted.
+	DeleteActorSnapshotTag(ctx context.Context, in *DeleteActorSnapshotTagRequest, opts ...grpc.CallOption) (*ActorSnapshotTag, error)
 	// List Workers.
 	ListWorkers(ctx context.Context, in *ListWorkersRequest, opts ...grpc.CallOption) (*ListWorkersResponse, error)
 	// List Actors.
@@ -78,7 +94,8 @@ type ControlClient interface {
 	GetAtespace(ctx context.Context, in *GetAtespaceRequest, opts ...grpc.CallOption) (*Atespace, error)
 	// List Atespaces.
 	ListAtespaces(ctx context.Context, in *ListAtespacesRequest, opts ...grpc.CallOption) (*ListAtespacesResponse, error)
-	// Delete an empty Atespace. Rejects (FailedPrecondition) if any actors remain.
+	// Delete an empty Atespace. Rejects (FailedPrecondition) if any Actors or
+	// ActorSnapshotTags remain.
 	DeleteAtespace(ctx context.Context, in *DeleteAtespaceRequest, opts ...grpc.CallOption) (*Atespace, error)
 }
 
@@ -154,6 +171,56 @@ func (c *controlClient) DeleteActor(ctx context.Context, in *DeleteActorRequest,
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(Actor)
 	err := c.cc.Invoke(ctx, Control_DeleteActor_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) GetActorSnapshot(ctx context.Context, in *GetActorSnapshotRequest, opts ...grpc.CallOption) (*ActorSnapshot, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ActorSnapshot)
+	err := c.cc.Invoke(ctx, Control_GetActorSnapshot_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) ListActorSnapshots(ctx context.Context, in *ListActorSnapshotsRequest, opts ...grpc.CallOption) (*ListActorSnapshotsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListActorSnapshotsResponse)
+	err := c.cc.Invoke(ctx, Control_ListActorSnapshots_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) TagActorSnapshot(ctx context.Context, in *TagActorSnapshotRequest, opts ...grpc.CallOption) (*ActorSnapshotTag, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ActorSnapshotTag)
+	err := c.cc.Invoke(ctx, Control_TagActorSnapshot_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) UpdateActorSnapshotTag(ctx context.Context, in *UpdateActorSnapshotTagRequest, opts ...grpc.CallOption) (*ActorSnapshotTag, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ActorSnapshotTag)
+	err := c.cc.Invoke(ctx, Control_UpdateActorSnapshotTag_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *controlClient) DeleteActorSnapshotTag(ctx context.Context, in *DeleteActorSnapshotTagRequest, opts ...grpc.CallOption) (*ActorSnapshotTag, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ActorSnapshotTag)
+	err := c.cc.Invoke(ctx, Control_DeleteActorSnapshotTag_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -240,6 +307,17 @@ type ControlServer interface {
 	ResumeActor(context.Context, *ResumeActorRequest) (*ResumeActorResponse, error)
 	// Delete an actor. Only suspended actors can be deleted.
 	DeleteActor(context.Context, *DeleteActorRequest) (*Actor, error)
+	// Get an ActorSnapshot.
+	GetActorSnapshot(context.Context, *GetActorSnapshotRequest) (*ActorSnapshot, error)
+	// List ActorSnapshots.
+	ListActorSnapshots(context.Context, *ListActorSnapshotsRequest) (*ListActorSnapshotsResponse, error)
+	// Add an Atespace-owned, stable name for an ActorSnapshot.
+	TagActorSnapshot(context.Context, *TagActorSnapshotRequest) (*ActorSnapshotTag, error)
+	// Publish or unpublish an ActorSnapshot tag without changing its address.
+	UpdateActorSnapshotTag(context.Context, *UpdateActorSnapshotTagRequest) (*ActorSnapshotTag, error)
+	// Delete an ActorSnapshot tag. The snapshot becomes garbage-collectable when
+	// its final tag is deleted.
+	DeleteActorSnapshotTag(context.Context, *DeleteActorSnapshotTagRequest) (*ActorSnapshotTag, error)
 	// List Workers.
 	ListWorkers(context.Context, *ListWorkersRequest) (*ListWorkersResponse, error)
 	// List Actors.
@@ -250,7 +328,8 @@ type ControlServer interface {
 	GetAtespace(context.Context, *GetAtespaceRequest) (*Atespace, error)
 	// List Atespaces.
 	ListAtespaces(context.Context, *ListAtespacesRequest) (*ListAtespacesResponse, error)
-	// Delete an empty Atespace. Rejects (FailedPrecondition) if any actors remain.
+	// Delete an empty Atespace. Rejects (FailedPrecondition) if any Actors or
+	// ActorSnapshotTags remain.
 	DeleteAtespace(context.Context, *DeleteAtespaceRequest) (*Atespace, error)
 	mustEmbedUnimplementedControlServer()
 }
@@ -282,6 +361,21 @@ func (UnimplementedControlServer) ResumeActor(context.Context, *ResumeActorReque
 }
 func (UnimplementedControlServer) DeleteActor(context.Context, *DeleteActorRequest) (*Actor, error) {
 	return nil, status.Error(codes.Unimplemented, "method DeleteActor not implemented")
+}
+func (UnimplementedControlServer) GetActorSnapshot(context.Context, *GetActorSnapshotRequest) (*ActorSnapshot, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetActorSnapshot not implemented")
+}
+func (UnimplementedControlServer) ListActorSnapshots(context.Context, *ListActorSnapshotsRequest) (*ListActorSnapshotsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListActorSnapshots not implemented")
+}
+func (UnimplementedControlServer) TagActorSnapshot(context.Context, *TagActorSnapshotRequest) (*ActorSnapshotTag, error) {
+	return nil, status.Error(codes.Unimplemented, "method TagActorSnapshot not implemented")
+}
+func (UnimplementedControlServer) UpdateActorSnapshotTag(context.Context, *UpdateActorSnapshotTagRequest) (*ActorSnapshotTag, error) {
+	return nil, status.Error(codes.Unimplemented, "method UpdateActorSnapshotTag not implemented")
+}
+func (UnimplementedControlServer) DeleteActorSnapshotTag(context.Context, *DeleteActorSnapshotTagRequest) (*ActorSnapshotTag, error) {
+	return nil, status.Error(codes.Unimplemented, "method DeleteActorSnapshotTag not implemented")
 }
 func (UnimplementedControlServer) ListWorkers(context.Context, *ListWorkersRequest) (*ListWorkersResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListWorkers not implemented")
@@ -448,6 +542,96 @@ func _Control_DeleteActor_Handler(srv interface{}, ctx context.Context, dec func
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Control_GetActorSnapshot_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetActorSnapshotRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).GetActorSnapshot(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_GetActorSnapshot_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).GetActorSnapshot(ctx, req.(*GetActorSnapshotRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_ListActorSnapshots_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListActorSnapshotsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).ListActorSnapshots(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_ListActorSnapshots_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).ListActorSnapshots(ctx, req.(*ListActorSnapshotsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_TagActorSnapshot_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(TagActorSnapshotRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).TagActorSnapshot(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_TagActorSnapshot_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).TagActorSnapshot(ctx, req.(*TagActorSnapshotRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_UpdateActorSnapshotTag_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UpdateActorSnapshotTagRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).UpdateActorSnapshotTag(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_UpdateActorSnapshotTag_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).UpdateActorSnapshotTag(ctx, req.(*UpdateActorSnapshotTagRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _Control_DeleteActorSnapshotTag_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteActorSnapshotTagRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).DeleteActorSnapshotTag(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_DeleteActorSnapshotTag_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).DeleteActorSnapshotTag(ctx, req.(*DeleteActorSnapshotTagRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _Control_ListWorkers_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ListWorkersRequest)
 	if err := dec(in); err != nil {
@@ -590,6 +774,26 @@ var Control_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "DeleteActor",
 			Handler:    _Control_DeleteActor_Handler,
+		},
+		{
+			MethodName: "GetActorSnapshot",
+			Handler:    _Control_GetActorSnapshot_Handler,
+		},
+		{
+			MethodName: "ListActorSnapshots",
+			Handler:    _Control_ListActorSnapshots_Handler,
+		},
+		{
+			MethodName: "TagActorSnapshot",
+			Handler:    _Control_TagActorSnapshot_Handler,
+		},
+		{
+			MethodName: "UpdateActorSnapshotTag",
+			Handler:    _Control_UpdateActorSnapshotTag_Handler,
+		},
+		{
+			MethodName: "DeleteActorSnapshotTag",
+			Handler:    _Control_DeleteActorSnapshotTag_Handler,
 		},
 		{
 			MethodName: "ListWorkers",

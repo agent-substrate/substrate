@@ -43,7 +43,6 @@ func (s *Service) SuspendActor(ctx context.Context, req *ateapipb.SuspendActorRe
 		}
 		return nil, err
 	}
-
 	setSpanActorAttributes(ctx, actor)
 	return &ateapipb.SuspendActorResponse{Actor: actor}, nil
 }
@@ -57,6 +56,5 @@ func validateSuspendActorRequest(req *ateapipb.SuspendActorRequest) field.ErrorL
 	} else {
 		errs = append(errs, resources.ValidateObjectRef(val, fldPath)...)
 	}
-
 	return errs
 }

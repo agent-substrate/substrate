@@ -36,9 +36,8 @@ import (
 )
 
 // sandboxManifestName is the object/file name of the per-snapshot manifest that
-// records which sandbox binaries created a snapshot. It is written next to the
-// checkpoint images (in the external object store, or the local checkpoint dir)
-// so a Restore — possibly on another node — is self-describing.
+// records the actor identity, snapshot files, and sandbox binaries. It is written
+// next to the checkpoint images so a snapshot is self-describing.
 const sandboxManifestName = "manifest.json"
 
 // maxAssetBytes guards disk against an unbounded download URL; a var so tests can lower it.
@@ -59,6 +58,13 @@ type assetEntry struct {
 type sandboxAssetsRecord struct {
 	SandboxClass string                `json:"sandboxClass"`
 	Assets       map[string]assetEntry `json:"assets"`
+	// Actor identity makes a flat snapshot self-identifying if control-plane
+	// persistence is unavailable.
+	Atespace               string `json:"atespace,omitempty"`
+	ActorName              string `json:"actorName,omitempty"`
+	ActorUID               string `json:"actorUid,omitempty"`
+	ActorTemplateNamespace string `json:"actorTemplateNamespace,omitempty"`
+	ActorTemplateName      string `json:"actorTemplateName,omitempty"`
 	// SnapshotFiles are the (relative) names of the files ateom wrote into the
 	// checkpoint directory, as reported by CheckpointWorkloadResponse. Recorded
 	// in the snapshot manifest so Restore ships/downloads exactly this set

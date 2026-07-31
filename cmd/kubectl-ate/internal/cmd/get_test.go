@@ -17,6 +17,7 @@ package cmd
 import (
 	"testing"
 
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/spf13/cobra"
 )
 
@@ -49,5 +50,21 @@ func TestGetCommandArgs(t *testing.T) {
 				t.Fatalf("Args(%q) error = %v, wantErr %t", test.args, err, test.wantErr)
 			}
 		})
+	}
+}
+
+func TestParseActorSnapshotFlags(t *testing.T) {
+	if got, err := parseActorSnapshotTagScope("published"); err != nil || got != ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED {
+		t.Fatalf("parseActorSnapshotTagScope(published) = (%v, %v)", got, err)
+	}
+	if _, err := parseActorSnapshotTagScope("global"); err == nil {
+		t.Fatal("parseActorSnapshotTagScope(global) succeeded")
+	}
+	ref, err := parseNamespacedName("team-a/before-upgrade")
+	if err != nil || ref.GetAtespace() != "team-a" || ref.GetName() != "before-upgrade" {
+		t.Fatalf("parseNamespacedName = (%v, %v)", ref, err)
+	}
+	if _, err := parseNamespacedName("before-upgrade"); err == nil {
+		t.Fatal("parseNamespacedName without atespace succeeded")
 	}
 }

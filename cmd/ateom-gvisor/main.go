@@ -285,7 +285,9 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA:
 		var ddv []string
 		for _, ctr := range req.GetSpec().GetContainers() {
-			ddv = append(ddv, ctr.GetDurableDirVolumes()...)
+			for _, m := range ctr.GetDurableDirVolumeMounts() {
+				ddv = append(ddv, m.GetMountPath())
+			}
 		}
 		if len(ddv) == 0 {
 			return nil, fmt.Errorf("no durable-dir volumes found for DATA snapshot")
