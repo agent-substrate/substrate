@@ -196,9 +196,7 @@ func (s *RouterServer) Run(ctx context.Context) error {
 
 	xdsSrv := NewXdsServer(s.cfg.XdsPort)
 	xdsSrv.SetConfig(s.cfg.HttpPort, s.cfg.ExtprocPort, s.cfg.ExtprocAddr)
-	if err := xdsSrv.SetOtlpCollector(s.cfg.OtlpCollectorAddress); err != nil {
-		return fmt.Errorf("configure OTLP collector: %w", err)
-	}
+	setOtlpCollector(ctx, xdsSrv, s.cfg.OtlpCollectorAddress)
 
 	xdsSrv.SetExtProcMaxRequests(s.cfg.extProcMaxRequests())
 	if parkCfg.enabled() {
@@ -286,4 +284,22 @@ func (s *RouterServer) Run(ctx context.Context) error {
 	}
 
 	return g.Wait()
+}
+
+// setOtlpCollector points Envoy's tracer at the configured collector, and
+// gives up on Envoy-side tracing if the address is one Envoy cannot use.
+//
+// It never fails the router. The address defaults to
+// OTEL_EXPORTER_OTLP_ENDPOINT, which the router's own exporter reads too and
+// which legitimately carries forms Envoy's plaintext tracer cluster cannot
+// reach — an https collector, most of all. Refusing to start would take the
+// xDS control plane for every Envoy in the mesh down over a tracing endpoint
+// that works fine for its other reader. Losing Envoy's spans is the smaller
+// failure, so take it and say so loudly.
+func setOtlpCollector(ctx context.Context, xdsSrv *XdsServer, addr string) {
+	if err := xdsSrv.SetOtlpCollector(addr); err != nil {
+		slog.WarnContext(ctx, "Envoy-side tracing disabled: the OTLP collector address is not one Envoy can use. The router's own spans are unaffected; set --otlp-collector-address to point Envoy at a plaintext collector",
+			slog.String("address", addr), slog.Any("err", err))
+		xdsSrv.DisableOtlpCollector()
+	}
 }

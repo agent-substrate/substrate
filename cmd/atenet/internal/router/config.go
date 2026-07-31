@@ -51,8 +51,14 @@ type routerConfig struct {
 	EnvoyCertPath  string
 	LogLevel       string
 	MetricsAddr    string
-	// OtlpCollectorAddress is the host:port of the OTLP gRPC collector that
-	// Envoy reports tracing spans to. Empty disables Envoy-side tracing.
+	// OtlpCollectorAddress is the OTLP gRPC collector that Envoy reports
+	// tracing spans to, as host:port or an http:// URL. It defaults to
+	// OTEL_EXPORTER_OTLP_ENDPOINT — Envoy gets its whole configuration over
+	// xDS and never reads the router's environment, so the router has to relay
+	// the address on its behalf. Empty disables Envoy-side tracing; the
+	// router's own exporter still reads the env var directly. An address Envoy
+	// cannot use disables Envoy-side tracing rather than failing startup — see
+	// setOtlpCollector.
 	OtlpCollectorAddress string
 
 	Auth authConfig

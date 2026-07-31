@@ -84,3 +84,61 @@ func TestRouterConfigExtProcMaxRequests(t *testing.T) {
 		})
 	}
 }
+
+func TestSetOtlpCollector(t *testing.T) {
+	// No collector address may keep the router from starting. The address
+	// defaults to OTEL_EXPORTER_OTLP_ENDPOINT, which also feeds the router's
+	// own exporter and where https is perfectly valid; the router is the xDS
+	// control plane for every Envoy in the mesh, so dropping Envoy's spans is
+	// always the cheaper failure. setOtlpCollector returns nothing precisely so
+	// this cannot regress into a startup error.
+	tests := []struct {
+		name     string
+		addr     string
+		wantHost string
+		wantPort uint32
+	}{
+		{
+			name:     "usable address is applied",
+			addr:     "http://collector.otel-system.svc:4317",
+			wantHost: "collector.otel-system.svc",
+			wantPort: 4317,
+		},
+		{name: "https disables Envoy tracing", addr: "https://collector.otel-system.svc:4317"},
+		{name: "unknown scheme disables Envoy tracing", addr: "grpc://collector.otel-system.svc:4317"},
+		{name: "hostless URL disables Envoy tracing", addr: "http://:4317"},
+		{name: "non-numeric port disables Envoy tracing", addr: "collector.otel-system.svc:grpc"},
+		{name: "empty disables Envoy tracing", addr: ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			x := NewXdsServer(0)
+			setOtlpCollector(t.Context(), x, tc.addr)
+
+			if x.otlpHost != tc.wantHost || x.otlpPort != tc.wantPort {
+				t.Errorf("collector = %q:%d, want %q:%d", x.otlpHost, x.otlpPort, tc.wantHost, tc.wantPort)
+			}
+			// The router comes up either way, so what actually differs is
+			// whether Envoy is told to trace at all.
+			if gotTracing := x.buildTracing() != nil; gotTracing != (tc.wantHost != "") {
+				t.Errorf("buildTracing() non-nil = %v, want %v", gotTracing, tc.wantHost != "")
+			}
+		})
+	}
+}
+
+func TestSetOtlpCollectorClearsPreviousCollector(t *testing.T) {
+	// A rejected address must not leave a stale collector configured: Envoy
+	// would keep shipping spans to an endpoint the operator has since
+	// repointed.
+	x := NewXdsServer(0)
+	setOtlpCollector(t.Context(), x, "http://collector.otel-system.svc:4317")
+	setOtlpCollector(t.Context(), x, "https://collector.otel-system.svc:4317")
+
+	if x.otlpHost != "" || x.otlpPort != 0 {
+		t.Errorf("collector after rejected address = %q:%d, want disabled", x.otlpHost, x.otlpPort)
+	}
+	if tr := x.buildTracing(); tr != nil {
+		t.Errorf("buildTracing() = %v, want nil after a rejected address", tr)
+	}
+}
