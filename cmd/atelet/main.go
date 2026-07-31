@@ -647,6 +647,8 @@ func (s *AteomHerder) copyLocalCheckpoint(ctx context.Context, snapshotPrefix st
 	return nil
 }
 
+var createDestFile = func(name string) (io.WriteCloser, error) { return os.Create(name) }
+
 func copyFile(src, dst string) (int64, error) {
 	sourceFileStat, err := os.Stat(src)
 	if err != nil {
@@ -663,13 +665,12 @@ func copyFile(src, dst string) (int64, error) {
 	}
 	defer source.Close()
 
-	destination, err := os.Create(dst)
+	destination, err := createDestFile(dst)
 	if err != nil {
 		return 0, err
 	}
-	defer destination.Close()
 	nBytes, err := io.Copy(destination, source)
-	return nBytes, err
+	return nBytes, errors.Join(err, destination.Close())
 }
 
 func (s *AteomHerder) downloadExternalCheckpoint(ctx context.Context, snapshotUriPrefix string, dstDir string, files []string) error {
@@ -729,7 +730,12 @@ func (s *AteomHerder) prepareOCIBundles(
 			"io.kubernetes.cri.container-type": "sandbox",
 			"io.kubernetes.cri.container-name": "pause",
 		}
-		// add annotation for every durable-dir volume
+		// Declare the durable-dir volume to gVisor. The annotation key holds a
+		// single mount ("durabledir"), so this can express exactly ONE volume —
+		// a second would silently overwrite the first. The ActorTemplate CEL
+		// rules are what keep that from happening: they cap gVisor templates at
+		// one durable-dir volume (micro-VM templates, which ignore these
+		// annotations entirely, may declare any number).
 		// TODO(dberkov) needs to revisit this logic once gVisor supports multiple durable-dir volumes.
 		for _, vol := range spec.GetVolumes() {
 			if vol.GetType() == ateletpb.VolumeType_VOLUME_TYPE_DURABLE_DIR {
@@ -817,16 +823,19 @@ func buildAteomWorkloadSpec(spec *ateletpb.WorkloadSpec) *ateompb.WorkloadSpec {
 
 	out := &ateompb.WorkloadSpec{}
 	for _, ctr := range spec.GetContainers() {
-		var ddMountPaths []string
+		var ddMounts []*ateompb.DurableDirVolumeMount
 		for _, vm := range ctr.GetVolumeMounts() {
 			if ddVolumes[vm.GetName()] {
-				ddMountPaths = append(ddMountPaths, vm.GetMountPath())
+				ddMounts = append(ddMounts, &ateompb.DurableDirVolumeMount{
+					VolumeName: vm.GetName(),
+					MountPath:  vm.GetMountPath(),
+				})
 			}
 		}
 		out.Containers = append(out.Containers, &ateompb.Container{
-			Name:              ctr.GetName(),
-			DurableDirVolumes: ddMountPaths,
-			Readyz:            toAteomReadyz(ctr.GetReadyz()),
+			Name:                   ctr.GetName(),
+			DurableDirVolumeMounts: ddMounts,
+			Readyz:                 toAteomReadyz(ctr.GetReadyz()),
 		})
 	}
 	return out

@@ -520,26 +520,14 @@ func TestListActors(t *testing.T) {
 		ActorTemplateNamespace: "ns1",
 		ActorTemplateName:      "tmpl1",
 		Status:                 ateapipb.Actor_STATUS_SUSPENDED,
-		LatestSnapshotInfo: &ateapipb.SnapshotInfo{
-			Data: &ateapipb.SnapshotInfo_External{
-				External: &ateapipb.ExternalSnapshotInfo{
-					SnapshotUriPrefix: "gs://b1/f1",
-				},
-			},
-		},
+		LatestSnapshot:         &ateapipb.ObjectRef{Atespace: testAtespace, Name: "snapshot-1"},
 	}
 	actor2 := &ateapipb.Actor{
 		Metadata:               &ateapipb.ResourceMetadata{Name: "id2", Atespace: testAtespace},
 		ActorTemplateNamespace: "ns1",
 		ActorTemplateName:      "tmpl1",
 		Status:                 ateapipb.Actor_STATUS_SUSPENDED,
-		LatestSnapshotInfo: &ateapipb.SnapshotInfo{
-			Data: &ateapipb.SnapshotInfo_External{
-				External: &ateapipb.ExternalSnapshotInfo{
-					SnapshotUriPrefix: "gs://b1/f2",
-				},
-			},
-		},
+		LatestSnapshot:         &ateapipb.ObjectRef{Atespace: testAtespace, Name: "snapshot-2"},
 	}
 
 	if _, err := s.CreateActor(ctx, actor1); err != nil {
@@ -570,6 +558,79 @@ func TestListActors(t *testing.T) {
 	}
 	if !found1 || !found2 {
 		t.Errorf("did not find all actors: found1=%t, found2=%t", found1, found2)
+	}
+}
+
+func TestActorSnapshotLifecycle(t *testing.T) {
+	_, s, ctx := setupTest(t)
+	snapshot := &ateapipb.ActorSnapshot{
+		Metadata:           &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "snapshot-1"},
+		SourceActor:        &ateapipb.ObjectRef{Atespace: testAtespace, Name: "actor-1"},
+		SourceActorUid:     "actor-uid",
+		SourceActorVersion: 7,
+		ContentScope:       ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
+	}
+	created, err := s.CreateActorSnapshot(ctx, snapshot, "gs://private/snapshot-1")
+	if err != nil {
+		t.Fatalf("CreateActorSnapshot: %v", err)
+	}
+	got, location, err := s.GetActorSnapshot(ctx, testAtespace, "snapshot-1")
+	if err != nil {
+		t.Fatalf("GetActorSnapshot: %v", err)
+	}
+	if !proto.Equal(created, got) || location != "gs://private/snapshot-1" {
+		t.Fatalf("GetActorSnapshot = (%v, %q), want (%v, private location)", got, location, created)
+	}
+	tag := &ateapipb.ActorSnapshotTag{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "before-upgrade"},
+		Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
+	}
+	tagged, err := s.TagActorSnapshot(ctx, testAtespace, "snapshot-1", tag)
+	if err != nil || tagged.GetSnapshot().GetName() != "snapshot-1" {
+		t.Fatalf("TagActorSnapshot = (%v, %v), want stable tag", tagged, err)
+	}
+	byTag, _, resolvedTag, err := s.GetActorSnapshotByTag(ctx, testAtespace, "before-upgrade")
+	if err != nil || !proto.Equal(created, byTag) || !proto.Equal(tagged, resolvedTag) {
+		t.Fatalf("GetActorSnapshotByTag = (%v, %v, %v), want tagged snapshot", byTag, resolvedTag, err)
+	}
+	if _, err := s.CreateActorSnapshot(ctx, &ateapipb.ActorSnapshot{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: "other", Name: "snapshot-2"},
+	}, "gs://private/snapshot-2"); err != nil {
+		t.Fatalf("CreateActorSnapshot second snapshot: %v", err)
+	}
+	otherTag := &ateapipb.ActorSnapshotTag{Metadata: &ateapipb.ResourceMetadata{Atespace: "other", Name: "before-upgrade"}, Scope: ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE}
+	if _, err := s.TagActorSnapshot(ctx, "other", "snapshot-2", otherTag); err != nil {
+		t.Fatalf("same tag name in another Atespace: %v", err)
+	}
+	if _, err := s.TagActorSnapshot(ctx, "other", "snapshot-2", tag); !errors.Is(err, store.ErrAlreadyExists) {
+		t.Fatalf("duplicate Atespace tag error = %v, want ErrAlreadyExists", err)
+	}
+	differentScope := proto.Clone(tag).(*ateapipb.ActorSnapshotTag)
+	differentScope.Scope = ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED
+	if _, err := s.TagActorSnapshot(ctx, testAtespace, "snapshot-1", differentScope); !errors.Is(err, store.ErrAlreadyExists) {
+		t.Fatalf("re-tag with different scope error = %v, want ErrAlreadyExists", err)
+	}
+	tagged, err = s.UpdateActorSnapshotTag(ctx, testAtespace, "before-upgrade", ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED)
+	if err != nil || tagged.GetScope() != ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED {
+		t.Fatalf("UpdateActorSnapshotTag = (%v, %v), want published", tagged, err)
+	}
+	if byTag, _, resolvedTag, err = s.GetActorSnapshotByTag(ctx, testAtespace, "before-upgrade"); err != nil || byTag.GetMetadata().GetUid() != created.GetMetadata().GetUid() || resolvedTag.GetScope() != ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED {
+		t.Fatalf("tag after publication = (%v, %v, %v), want same address and snapshot", byTag, resolvedTag, err)
+	}
+	listed, _, err := s.ListActorSnapshots(ctx, testAtespace, 10, "")
+	if err != nil || len(listed) != 1 {
+		t.Fatalf("ListActorSnapshots = (%v, %v), want one", listed, err)
+	}
+
+	deleted, err := s.DeleteActorSnapshotTag(ctx, testAtespace, "before-upgrade")
+	if err != nil || deleted.GetMetadata().GetName() != "before-upgrade" {
+		t.Fatalf("DeleteActorSnapshotTag = (%v, %v)", deleted, err)
+	}
+	if _, _, _, err := s.GetActorSnapshotByTag(ctx, testAtespace, "before-upgrade"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("deleted tag lookup = %v, want ErrNotFound", err)
+	}
+	if got, _, err := s.GetActorSnapshot(ctx, testAtespace, "snapshot-1"); err != nil || got.GetMetadata().GetUid() != created.GetMetadata().GetUid() {
+		t.Fatalf("snapshot after tag deletion = (%v, %v), want retained metadata", got, err)
 	}
 }
 
@@ -1331,6 +1392,34 @@ func TestDeleteAtespace_Empty(t *testing.T) {
 	}
 	if _, err := s.GetAtespace(ctx, "team-a"); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("after delete, GetAtespace = %v, want ErrNotFound", err)
+	}
+}
+
+func TestDeleteAtespace_WithTags_Rejected(t *testing.T) {
+	_, s, ctx := setupTest(t)
+
+	if _, err := s.CreateAtespace(ctx, newTestAtespace("team-a")); err != nil {
+		t.Fatalf("CreateAtespace: %v", err)
+	}
+	if _, err := s.CreateActorSnapshot(ctx, &ateapipb.ActorSnapshot{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "snapshot-1"},
+	}, "gs://private/snapshot-1"); err != nil {
+		t.Fatalf("CreateActorSnapshot: %v", err)
+	}
+	if _, err := s.TagActorSnapshot(ctx, "team-a", "snapshot-1", &ateapipb.ActorSnapshotTag{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "keep-me"},
+		Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED,
+	}); err != nil {
+		t.Fatalf("TagActorSnapshot: %v", err)
+	}
+	if _, err := s.DeleteAtespace(ctx, "team-a"); !errors.Is(err, store.ErrFailedPrecondition) {
+		t.Fatalf("DeleteAtespace = %v, want ErrFailedPrecondition", err)
+	}
+	if _, _, _, err := s.GetActorSnapshotByTag(ctx, "team-a", "keep-me"); err != nil {
+		t.Fatalf("GetActorSnapshotByTag after rejected deletion: %v", err)
+	}
+	if _, err := s.GetAtespace(ctx, "team-a"); err != nil {
+		t.Fatalf("GetAtespace after rejected deletion: %v", err)
 	}
 }
 

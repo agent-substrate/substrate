@@ -82,6 +82,119 @@ func TestActorLifecycle(t *testing.T) {
 	}
 }
 
+func TestActorSnapshotLifecycle(t *testing.T) {
+	ctx := context.Background()
+	clients := e2e.GetClients()
+	nsObj := e2e.CreateNamespace(t)
+
+	_, _ = clients.SubstrateAPI.CreateAtespace(ctx, &ateapipb.CreateAtespaceRequest{
+		Atespace: &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: demoAtespace}},
+	})
+	at, err := createActorTemplate(ctx, t, clients, nsObj, v1alpha1.SnapshotScopeFull, v1alpha1.SnapshotScopeFull)
+	if err != nil {
+		t.Fatalf("failed to initialize ActorTemplate: %v", err)
+	}
+
+	sourceName := "snapshot-source-" + nsObj.Name
+	cloneName := "snapshot-clone-" + nsObj.Name
+	for _, name := range []string{sourceName, cloneName} {
+		name := name
+		t.Cleanup(func() {
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+			defer cancel()
+			_, _ = clients.SubstrateAPI.SuspendActor(cleanupCtx, &ateapipb.SuspendActorRequest{Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: name}})
+			_, _ = clients.SubstrateAPI.DeleteActor(cleanupCtx, &ateapipb.DeleteActorRequest{Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: name}})
+		})
+	}
+
+	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+		Metadata:               &ateapipb.ResourceMetadata{Atespace: demoAtespace, Name: sourceName},
+		ActorTemplateNamespace: nsObj.Name,
+		ActorTemplateName:      at.Name,
+	}}); err != nil {
+		t.Fatalf("failed to create source Actor: %v", err)
+	}
+	if _, err := clients.SubstrateAPI.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: sourceName}}); err != nil {
+		t.Fatalf("failed to resume source Actor: %v", err)
+	}
+	waitForActorStatus(ctx, t, clients, sourceName, ateapipb.Actor_STATUS_RUNNING)
+	response, err := callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: sourceName})
+	if err != nil {
+		t.Fatalf("failed to call source Actor: %v", err)
+	}
+	validateCounterResponse(t, response, "source", 1, 1)
+
+	suspended, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: sourceName}})
+	if err != nil {
+		t.Fatalf("failed to suspend source Actor: %v", err)
+	}
+	snapshot := suspended.GetActor().GetLatestSnapshot()
+	if snapshot.GetName() == "" {
+		t.Fatal("suspended Actor has no latest snapshot")
+	}
+	snapshotRef := &ateapipb.ActorSnapshotRef{Reference: &ateapipb.ActorSnapshotRef_Snapshot{Snapshot: snapshot}}
+	if _, err := clients.SubstrateAPI.GetActorSnapshot(ctx, &ateapipb.GetActorSnapshotRequest{Snapshot: snapshotRef}); err != nil {
+		t.Fatalf("failed to get ActorSnapshot: %v", err)
+	}
+	listed, err := clients.SubstrateAPI.ListActorSnapshots(ctx, &ateapipb.ListActorSnapshotsRequest{Atespace: demoAtespace})
+	if err != nil {
+		t.Fatalf("failed to list ActorSnapshots: %v", err)
+	}
+	found := false
+	for _, candidate := range listed.GetSnapshots() {
+		if candidate.GetMetadata().GetName() == snapshot.GetName() {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("snapshot %q missing from ListActorSnapshots", snapshot.GetName())
+	}
+
+	tagRef := &ateapipb.ObjectRef{Atespace: demoAtespace, Name: "e2e-" + nsObj.Name}
+	t.Cleanup(func() {
+		_, _ = clients.SubstrateAPI.DeleteActorSnapshotTag(context.Background(), &ateapipb.DeleteActorSnapshotTagRequest{Tag: tagRef})
+	})
+	if _, err := clients.SubstrateAPI.TagActorSnapshot(ctx, &ateapipb.TagActorSnapshotRequest{
+		Snapshot: snapshotRef,
+		Tag: &ateapipb.ActorSnapshotTag{
+			Metadata: &ateapipb.ResourceMetadata{Atespace: tagRef.GetAtespace(), Name: tagRef.GetName()},
+			Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
+		},
+	}); err != nil {
+		t.Fatalf("failed to tag ActorSnapshot: %v", err)
+	}
+	if _, err := clients.SubstrateAPI.UpdateActorSnapshotTag(ctx, &ateapipb.UpdateActorSnapshotTagRequest{
+		Tag: tagRef, Scope: ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED,
+	}); err != nil {
+		t.Fatalf("failed to publish ActorSnapshot tag: %v", err)
+	}
+
+	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{
+		Actor: &ateapipb.Actor{
+			Metadata:               &ateapipb.ResourceMetadata{Atespace: demoAtespace, Name: cloneName},
+			ActorTemplateNamespace: nsObj.Name,
+			ActorTemplateName:      at.Name,
+		},
+		SourceSnapshot: &ateapipb.ActorSnapshotRef{Reference: &ateapipb.ActorSnapshotRef_Tag{Tag: tagRef}},
+	}); err != nil {
+		t.Fatalf("failed to create Actor from snapshot tag: %v", err)
+	}
+	if _, err := clients.SubstrateAPI.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: cloneName}}); err != nil {
+		t.Fatalf("failed to resume cloned Actor: %v", err)
+	}
+	waitForActorStatus(ctx, t, clients, cloneName, ateapipb.Actor_STATUS_RUNNING)
+	response, err = callActor(t, resources.ActorRef{Atespace: demoAtespace, Name: cloneName})
+	if err != nil {
+		t.Fatalf("failed to call cloned Actor: %v", err)
+	}
+	validateCounterResponse(t, response, "clone", 2, 2)
+
+	if _, err := clients.SubstrateAPI.DeleteActorSnapshotTag(ctx, &ateapipb.DeleteActorSnapshotTagRequest{Tag: tagRef}); err != nil {
+		t.Fatalf("failed to delete ActorSnapshot tag: %v", err)
+	}
+}
+
 func TestDurableDirLifecycle(t *testing.T) {
 	tests := []struct {
 		name string
@@ -126,6 +239,53 @@ func TestDurableDirLifecycle(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			runActorLifecycleTestCase(t, "durabledir-lifecycle", createActorTemplate, test.tc)
+		})
+	}
+}
+
+// TestMultipleDurableDirLifecycle covers an Actor with TWO durable-dir volumes:
+// both must survive pause/resume and suspend/resume independently. Only the
+// micro-VM runtime supports more than one — gVisor templates are still capped at
+// one by the ActorTemplate CEL rules, so the template would be rejected there.
+func TestMultipleDurableDirLifecycle(t *testing.T) {
+	if !isMicroVMEnvironment() {
+		t.Skip("Skipping TestMultipleDurableDirLifecycle: multiple DurableDir volumes are micro-VM only")
+	}
+
+	tests := []struct {
+		name string
+		tc   actorLifecycleTestCase
+	}{
+		{
+			name: "onCommit:Full, onPause:Full",
+			tc: actorLifecycleTestCase{
+				onCommit:               v1alpha1.SnapshotScopeFull,
+				onPause:                v1alpha1.SnapshotScopeFull,
+				wantMemoryAfterPause:   2,
+				wantFileAfterPause:     2,
+				wantMemoryAfterSuspend: 3,
+				wantFileAfterSuspend:   3,
+				checkSecondFileCounter: true,
+			},
+		},
+		{
+			name: "onCommit:Data, onPause:Data",
+			tc: actorLifecycleTestCase{
+				onCommit:               v1alpha1.SnapshotScopeData,
+				onPause:                v1alpha1.SnapshotScopeData,
+				wantMemoryAfterPause:   1,
+				wantFileAfterPause:     2,
+				wantMemoryAfterSuspend: 1,
+				wantFileAfterSuspend:   3,
+				checkSecondFileCounter: true,
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			runActorLifecycleTestCase(t, "multi-durabledir-lifecycle", createActorTemplateWithTwoDurableDirs, test.tc)
 		})
 	}
 }
@@ -175,6 +335,12 @@ type actorLifecycleTestCase struct {
 	wantFileAfterPause     int
 	wantMemoryAfterSuspend int
 	wantFileAfterSuspend   int
+
+	// checkSecondFileCounter also asserts the counter kept in a SECOND durable
+	// volume. Both volumes are written on every request, so it must track the
+	// first counter exactly — if one volume were dropped or restored into the
+	// wrong place, they would diverge.
+	checkSecondFileCounter bool
 }
 
 func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(context.Context, *testing.T, *e2e.Clients, *e2e.Namespace, v1alpha1.SnapshotScope, v1alpha1.SnapshotScope) (*v1alpha1.ActorTemplate, error), tc actorLifecycleTestCase) {
@@ -228,6 +394,9 @@ func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(
 		t.Fatalf("failed to call actor: %v", err)
 	}
 	validateCounterResponse(t, resp, "after creation", 1, 1)
+	if tc.checkSecondFileCounter {
+		validateSecondFileCounter(t, resp, "after creation", 1)
+	}
 
 	//
 	// Pausing the actor
@@ -254,6 +423,9 @@ func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(
 		t.Fatalf("failed to call actor again: %v", err)
 	}
 	validateCounterResponse(t, resp, "after pause", tc.wantMemoryAfterPause, tc.wantFileAfterPause)
+	if tc.checkSecondFileCounter {
+		validateSecondFileCounter(t, resp, "after pause", tc.wantFileAfterPause)
+	}
 
 	//
 	// Suspending the actor
@@ -280,6 +452,19 @@ func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(
 		t.Fatalf("failed to call actor again: %v", err)
 	}
 	validateCounterResponse(t, resp, "after suspend", tc.wantMemoryAfterSuspend, tc.wantFileAfterSuspend)
+	if tc.checkSecondFileCounter {
+		validateSecondFileCounter(t, resp, "after suspend", tc.wantFileAfterSuspend)
+	}
+}
+
+// validateSecondFileCounter checks the counter the workload keeps in its second
+// durable-dir volume (see createActorTemplateWithTwoDurableDirs).
+func validateSecondFileCounter(t *testing.T, resp string, stage string, want int) {
+	t.Helper()
+	const prefix = "preserved second file counter: "
+	if !strings.Contains(resp, prefix+fmt.Sprintf("%d", want)) {
+		t.Errorf("[%s] expected second file count %d, got response: %s", stage, want, resp)
+	}
 }
 
 func validateCounterResponse(t *testing.T, resp string, stage string, wantMemory, wantFile int) {
@@ -675,6 +860,39 @@ func createActorTemplateWithExternalVolume(ctx context.Context, t *testing.T, cl
 		}
 	}
 	return createActorTemplateInternal(ctx, t, clients, nsObj, "counter-ext-vol", onCommit, onPause, modify)
+}
+
+// secondDurableDirVolume is the extra durable-dir volume (and where the counter
+// container mounts it) added by createActorTemplateWithTwoDurableDirs.
+const (
+	secondDurableDirVolume    = "data2"
+	secondDurableDirMountPath = "/home/counter2"
+)
+
+// createActorTemplateWithTwoDurableDirs builds a template with a SECOND
+// durable-dir volume alongside the one the demo already declares, and points the
+// counter's second file counter at it, so both volumes are written on every
+// request. Only the micro-VM runtime accepts this: gVisor templates are still
+// capped at one durable-dir volume by the ActorTemplate CEL rules.
+func createActorTemplateWithTwoDurableDirs(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, onCommit, onPause v1alpha1.SnapshotScope) (*v1alpha1.ActorTemplate, error) {
+	modify := func(at *v1alpha1.ActorTemplate) {
+		for i, c := range at.Spec.Containers {
+			if c.Name != "counter" {
+				continue
+			}
+			c.Command = []string{"/ko-app/counter", "--second-file-counter-directory=" + secondDurableDirMountPath}
+			c.VolumeMounts = append(c.VolumeMounts, v1alpha1.VolumeMount{
+				Name:      secondDurableDirVolume,
+				MountPath: secondDurableDirMountPath,
+			})
+			at.Spec.Containers[i] = c
+		}
+		at.Spec.Volumes = append(at.Spec.Volumes, v1alpha1.Volume{
+			Name:         secondDurableDirVolume,
+			VolumeSource: v1alpha1.VolumeSource{DurableDir: &v1alpha1.DurableDirVolumeSource{}},
+		})
+	}
+	return createActorTemplateInternal(ctx, t, clients, nsObj, "counter-two-durabledirs", onCommit, onPause, modify)
 }
 
 func waitForActorStatus(ctx context.Context, t *testing.T, clients *e2e.Clients, actorName string, expectedStatus ateapipb.Actor_Status) {

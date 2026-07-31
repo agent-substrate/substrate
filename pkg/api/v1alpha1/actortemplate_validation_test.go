@@ -572,7 +572,7 @@ func TestActorTemplateValidation(t *testing.T) {
 		},
 		wantErr: false,
 	}, {
-		name: "Volumes: 2 DurableDir volumes in template is invalid",
+		name: "Volumes: 2 DurableDir volumes in template is invalid for gvisor",
 		mutate: func(at *ActorTemplate) {
 			at.Spec.Volumes = []Volume{
 				{Name: "vol1", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
@@ -584,9 +584,9 @@ func TestActorTemplateValidation(t *testing.T) {
 			}
 		},
 		wantErr: true,
-		errMsg:  "At most one DurableDir-typed volume is supported per ActorTemplate",
+		errMsg:  "Only one DurableDir-typed volume is supported when sandboxClass is 'gvisor'",
 	}, {
-		name: "Volumes: 2 DurableDir volumes spread across containers is invalid",
+		name: "Volumes: 2 DurableDir volumes spread across containers is invalid for gvisor",
 		mutate: func(at *ActorTemplate) {
 			at.Spec.Volumes = []Volume{
 				{Name: "vol1", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
@@ -604,9 +604,9 @@ func TestActorTemplateValidation(t *testing.T) {
 			}
 		},
 		wantErr: true,
-		errMsg:  "At most one DurableDir-typed volume is supported per ActorTemplate",
+		errMsg:  "Only one DurableDir-typed volume is supported when sandboxClass is 'gvisor'",
 	}, {
-		name: "Volumes: same DurableDir volume mounted twice in one container is invalid",
+		name: "Volumes: same DurableDir volume mounted twice in one container is invalid for gvisor",
 		mutate: func(at *ActorTemplate) {
 			at.Spec.Volumes = []Volume{
 				{Name: "vol1", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
@@ -617,7 +617,7 @@ func TestActorTemplateValidation(t *testing.T) {
 			}
 		},
 		wantErr: true,
-		errMsg:  "A container may mount at most one DurableDir-typed volume",
+		errMsg:  "A container may mount only one DurableDir-typed volume when sandboxClass is 'gvisor'",
 	}, {
 		name: "Volumes: same DurableDir volume mounted across two containers is valid",
 		mutate: func(at *ActorTemplate) {
@@ -1006,6 +1006,53 @@ func TestActorTemplateValidation(t *testing.T) {
 			}
 			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
 				{Name: "vol1", MountPath: "/home/user"},
+			}
+		},
+		wantErr: false,
+	}, {
+		name: "Volumes: 2 DurableDir volumes with SandboxClass microvm is valid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.SandboxClass = SandboxClassMicroVM
+			at.Spec.Volumes = []Volume{
+				{Name: "vol1", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
+				{Name: "vol2", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
+			}
+			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
+				{Name: "vol1", MountPath: "/home1"},
+				{Name: "vol2", MountPath: "/home2"},
+			}
+		},
+		wantErr: false,
+	}, {
+		name: "Volumes: 2 DurableDir volumes spread across containers with SandboxClass microvm is valid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.SandboxClass = SandboxClassMicroVM
+			at.Spec.Volumes = []Volume{
+				{Name: "vol1", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
+				{Name: "vol2", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
+			}
+			at.Spec.Containers = append(at.Spec.Containers, Container{
+				Name:  "sidecar",
+				Image: "busybox@sha256:326e0e090a9a4057e62a1b94236e7a2df2f2f76722f67232e0e47854e4df9c53",
+				VolumeMounts: []VolumeMount{
+					{Name: "vol2", MountPath: "/home2"},
+				},
+			})
+			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
+				{Name: "vol1", MountPath: "/home1"},
+			}
+		},
+		wantErr: false,
+	}, {
+		name: "Volumes: same DurableDir volume mounted twice in one container with SandboxClass microvm is valid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.SandboxClass = SandboxClassMicroVM
+			at.Spec.Volumes = []Volume{
+				{Name: "vol1", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
+			}
+			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
+				{Name: "vol1", MountPath: "/home1"},
+				{Name: "vol1", MountPath: "/home2"},
 			}
 		},
 		wantErr: false,

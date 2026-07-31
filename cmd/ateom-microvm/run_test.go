@@ -1,0 +1,96 @@
+//go:build linux
+
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+package main
+
+import (
+	"context"
+	"errors"
+	"net"
+	"path/filepath"
+	"testing"
+	"time"
+)
+
+// A vsock socket that has gone missing means cloud-hypervisor stopped the VM
+// (it unlinks the socket in the vsock device's shutdown), so the poll must give
+// up at once instead of spending the whole timeout on a guest that is gone.
+func TestDialAgentRetryGuestStopped(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "clh.sock")
+
+	start := time.Now()
+	_, err := dialAgentRetry(t.Context(), missing, 30*time.Second)
+	elapsed := time.Since(start)
+
+	if !errors.Is(err, errGuestStopped) {
+		t.Errorf("dialAgentRetry(%q) error = %v, want it to wrap errGuestStopped", missing, err)
+	}
+	if elapsed > 5*time.Second {
+		t.Errorf("dialAgentRetry(%q) took %v; want it to give up immediately, not poll for the full timeout", missing, elapsed)
+	}
+}
+
+// The socket exists but nothing answers yet: that is every dial until the guest
+// reaches kata-containers.target, so it must keep polling to the timeout.
+func TestDialAgentRetryNotListeningYet(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "clh.sock")
+	l, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatalf("failed to create test socket: %v", err)
+	}
+	// Leave the socket file behind, as cloud-hypervisor does while the VM runs:
+	// connecting is then refused, which is what an unanswered CONNECT looks like.
+	l.(*net.UnixListener).SetUnlinkOnClose(false)
+	if err := l.Close(); err != nil {
+		t.Fatalf("failed to close test listener: %v", err)
+	}
+
+	const timeout = 700 * time.Millisecond
+	start := time.Now()
+	_, err = dialAgentRetry(t.Context(), path, timeout)
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatalf("dialAgentRetry(%q) succeeded, want an error", path)
+	}
+	if errors.Is(err, errGuestStopped) {
+		t.Errorf("dialAgentRetry(%q) error = %v, want a plain dial error (the guest is still running)", path, err)
+	}
+	if elapsed < timeout {
+		t.Errorf("dialAgentRetry(%q) gave up after %v, want it to keep polling for at least %v", path, elapsed, timeout)
+	}
+}
+
+// A canceled context ends the poll with the context's error, so a caller that
+// gives up on the restore is not left waiting out the timeout.
+func TestDialAgentRetryContextCanceled(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "clh.sock")
+	l, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatalf("failed to create test socket: %v", err)
+	}
+	l.(*net.UnixListener).SetUnlinkOnClose(false)
+	if err := l.Close(); err != nil {
+		t.Fatalf("failed to close test listener: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+
+	if _, err := dialAgentRetry(ctx, path, time.Minute); !errors.Is(err, context.Canceled) {
+		t.Errorf("dialAgentRetry(%q) error = %v, want context.Canceled", path, err)
+	}
+}

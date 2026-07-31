@@ -62,6 +62,7 @@ func incrementFileCounter(filePath string) int {
 
 func main() {
 	fileCounterDirectory := pflag.String("file-counter-directory", "/home/counter", "Directory for file counter")
+	secondFileCounterDirectory := pflag.String("second-file-counter-directory", "", "Directory for a second file counter; empty disables it. Used to exercise an Actor with more than one durable volume")
 	validateExistingFilePath := pflag.String("validate-existing-file-path", "", "Path to existing file to validate reading")
 	pflag.Parse()
 	ctx := context.Background()
@@ -87,7 +88,15 @@ func main() {
 			fileContentStr = fmt.Sprintf(" | file content: %s", string(fileContent))
 		}
 
-		response := fmt.Sprintf("hello from: %s | preserved memory count: %d | preserved file counter: %d%s\n", currentIP, memoryCounter, fileCounter, fileContentStr)
+		// A second counter in another directory, so an Actor with more than one
+		// durable volume can show each of them persisting independently.
+		secondFileCounterStr := ""
+		if *secondFileCounterDirectory != "" {
+			secondFileCounter := incrementFileCounter(filepath.Join(*secondFileCounterDirectory, "a.txt"))
+			secondFileCounterStr = fmt.Sprintf(" | preserved second file counter: %d", secondFileCounter)
+		}
+
+		response := fmt.Sprintf("hello from: %s | preserved memory count: %d | preserved file counter: %d%s%s\n", currentIP, memoryCounter, fileCounter, secondFileCounterStr, fileContentStr)
 		slog.InfoContext(ctx, "Handled request", slog.String("response", response))
 
 		w.WriteHeader(http.StatusOK)

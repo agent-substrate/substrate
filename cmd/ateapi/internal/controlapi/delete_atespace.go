@@ -33,7 +33,15 @@ func (s *Service) DeleteAtespace(ctx context.Context, req *ateapipb.DeleteAtespa
 	}
 
 	name := req.GetAtespace().GetName()
-	deleted, err := s.persistence.DeleteAtespace(ctx, name)
+	lock, err := s.persistence.AcquireLock(ctx, "lock:atespace:"+name)
+	if errors.Is(err, store.ErrLockConflict) {
+		return nil, status.Error(codes.Aborted, "another operation is using this Atespace")
+	}
+	if err != nil {
+		return nil, fmt.Errorf("while locking Atespace: %w", err)
+	}
+	defer lock.Close()
+	deleted, err := s.persistence.DeleteAtespace(lock.Context(), name)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, status.Errorf(codes.NotFound, "Atespace %s not found", name)

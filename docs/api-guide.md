@@ -100,6 +100,7 @@ The `ActorTemplate` defines the code, environment, and state-management policies
 | `workerSelector` | `*LabelSelector` | Optional. Gates which `WorkerPool`s actors from this template may use, by matching against each pool's labels. If unset, all pools are eligible (subject to the actor's own `worker_selector`). |
 | `snapshotsConfig` | `SnapshotsConfig` | **Required.** GCS bucket and folder where memory snapshots are stored. |
 | `pauseImage` | `string` | **Required.** The image used for the sandbox root (e.g. `gcr.io/gke-release/pause`). |
+| `volumes` | `[]Volume` | Optional. Volumes the containers may mount, each either a `durableDir` or an `externalVolumeTemplate`. Every declared volume must be mounted by at least one container. A `microvm` template may declare several `durableDir` volumes; a `gvisor` template is limited to one, and `externalVolumeTemplate` is `gvisor`-only. |
 
 The sandbox binaries (e.g. the gVisor `runsc` binary) are **no longer configured on the `ActorTemplate`**. They are resolved from the referenced `WorkerPool`'s [`SandboxConfig`](#3-sandboxconfig-sandbox-binaries) — by name (`workerPool.spec.sandboxConfigName`) or, by default, the cluster default `SandboxConfig` for the pool's `sandboxClass`.
 
