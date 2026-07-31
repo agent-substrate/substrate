@@ -116,7 +116,12 @@ func NewServer(cfg Config) (*Server, error) {
 			return loadCredentialBundle(s.credentialBundlePath)
 		},
 		ClientAuth: tls.RequireAndVerifyClientCert,
-		ClientCAs:  clientCAs,
+		// TODO(liorlieberman): reload the trust bundle per connection via
+		// GetConfigForClient, mirroring GetCertificate above. kubelet keeps the
+		// projected ClusterTrustBundle in sync with the signer, but this pool is
+		// frozen at process start, so after a CA rotation a long-lived worker
+		// rejects the router until its pod restarts.
+		ClientCAs: clientCAs,
 		VerifyConnection: func(cs tls.ConnectionState) error {
 			if len(cs.PeerCertificates) == 0 {
 				return fmt.Errorf("atunnel: client certificate is required")
