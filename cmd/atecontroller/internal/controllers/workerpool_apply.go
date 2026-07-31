@@ -28,11 +28,28 @@ import (
 // uid so each worker pod is a distinct telemetry source.
 const ateomOTelResourceAttributes = "k8s.namespace.name=$(POD_NAMESPACE),k8s.pod.name=$(POD_NAME),k8s.pod.uid=$(POD_UID),service.instance.id=$(POD_UID)"
 
+// ateomOTelSettings is the telemetry configuration propagated to ateom worker
+// pods. A zero value leaves the pods without telemetry env.
+type ateomOTelSettings struct {
+	// Endpoint is the OTLP collector address. Empty disables ateom telemetry
+	// entirely, so the other fields are ignored.
+	Endpoint string
+	// MetricExportInterval overrides the SDK's 60s PeriodicReader interval. It is
+	// the raw OTEL_METRIC_EXPORT_INTERVAL value, i.e. whole milliseconds; the SDK
+	// falls back to its default when it does not parse. Empty keeps the default.
+	//
+	// ateom registers no instruments of its own, so its only telemetry is
+	// otelgrpc's rpc.server.* and it stays invisible to the collector until the
+	// first export tick fires. Shortening the interval is what keeps that
+	// startup gap inside an e2e budget; production leaves it unset.
+	MetricExportInterval string
+}
+
 // buildDeploymentApplyConfig constructs the SSA apply configuration for the
 // Deployment managed by a WorkerPool. Only fields owned by this controller
-// are declared here. otelEndpoint, when non-empty, is propagated to the ateom
-// container so it pushes telemetry to that collector.
-func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otelEndpoint string) *appsv1ac.DeploymentApplyConfiguration {
+// are declared here. otel, when it carries an endpoint, is propagated to the
+// ateom container so it pushes telemetry to that collector.
+func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otel ateomOTelSettings) *appsv1ac.DeploymentApplyConfiguration {
 	containerAC := corev1ac.Container().
 		WithName("ateom").
 		WithImage(wp.Spec.AteomImage).
@@ -40,7 +57,7 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otelEndpoint string)
 			"--pod-uid=$(POD_UID)",
 		).
 		WithSecurityContext(ateomSecurityContext(wp.Spec.SandboxClass)).
-		WithEnv(ateomContainerEnv(otelEndpoint)...).
+		WithEnv(ateomContainerEnv(otel)...).
 		WithVolumeMounts(corev1ac.VolumeMount().
 			WithName("run-ateom").
 			WithMountPath(ateompath.BasePath).
@@ -83,19 +100,25 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otelEndpoint string)
 // ateomContainerEnv adds the OTLP endpoint and resource identity only when
 // telemetry is configured. POD_* refs precede OTEL_RESOURCE_ATTRIBUTES so its
 // $(POD_*) substitutions resolve.
-func ateomContainerEnv(otelEndpoint string) []*corev1ac.EnvVarApplyConfiguration {
+func ateomContainerEnv(otel ateomOTelSettings) []*corev1ac.EnvVarApplyConfiguration {
 	envs := []*corev1ac.EnvVarApplyConfiguration{
 		fieldRefEnv("POD_UID", "metadata.uid"),
 	}
-	if otelEndpoint == "" {
+	if otel.Endpoint == "" {
 		return envs
 	}
-	return append(envs,
+	envs = append(envs,
 		fieldRefEnv("POD_NAME", "metadata.name"),
 		fieldRefEnv("POD_NAMESPACE", "metadata.namespace"),
-		corev1ac.EnvVar().WithName("OTEL_EXPORTER_OTLP_ENDPOINT").WithValue(otelEndpoint),
+		corev1ac.EnvVar().WithName("OTEL_EXPORTER_OTLP_ENDPOINT").WithValue(otel.Endpoint),
 		corev1ac.EnvVar().WithName("OTEL_RESOURCE_ATTRIBUTES").WithValue(ateomOTelResourceAttributes),
 	)
+	if otel.MetricExportInterval != "" {
+		envs = append(envs, corev1ac.EnvVar().
+			WithName("OTEL_METRIC_EXPORT_INTERVAL").
+			WithValue(otel.MetricExportInterval))
+	}
+	return envs
 }
 
 func fieldRefEnv(name, fieldPath string) *corev1ac.EnvVarApplyConfiguration {

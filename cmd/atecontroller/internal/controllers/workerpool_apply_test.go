@@ -201,7 +201,7 @@ func TestBuildDeploymentApplyConfig(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := buildDeploymentApplyConfig(tt.wp, "")
+			got := buildDeploymentApplyConfig(tt.wp, ateomOTelSettings{})
 			if diff := cmp.Diff(tt.want, got); diff != "" {
 				t.Fatalf("buildDeploymentApplyConfig() mismatch (-want +got):\n%s", diff)
 			}
@@ -226,7 +226,7 @@ func TestMicroVMPodShape(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			wp := testWorkerPoolApplyConfig(nil)
 			wp.Spec.SandboxClass = tt.class
-			ps := buildDeploymentApplyConfig(wp, "").Spec.Template.Spec
+			ps := buildDeploymentApplyConfig(wp, ateomOTelSettings{}).Spec.Template.Spec
 
 			hasVol := false
 			for _, v := range ps.Volumes {
@@ -325,7 +325,7 @@ func TestTerminationGracePeriodSeconds(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			wp := testWorkerPoolApplyConfig(nil)
 			wp.Spec.TerminationGracePeriodSeconds = tt.set
-			ps := buildDeploymentApplyConfig(wp, "").Spec.Template.Spec
+			ps := buildDeploymentApplyConfig(wp, ateomOTelSettings{}).Spec.Template.Spec
 			if ps.TerminationGracePeriodSeconds == nil {
 				t.Fatalf("TerminationGracePeriodSeconds not set")
 			}
@@ -351,7 +351,7 @@ func TestBuildDeploymentApplyConfigOTelEndpoint(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			c := buildDeploymentApplyConfig(testWorkerPoolApplyConfig(nil), tt.endpoint).
+			c := buildDeploymentApplyConfig(testWorkerPoolApplyConfig(nil), ateomOTelSettings{Endpoint: tt.endpoint}).
 				Spec.Template.Spec.Containers[0]
 			env := envByName(c.Env)
 
@@ -360,7 +360,7 @@ func TestBuildDeploymentApplyConfigOTelEndpoint(t *testing.T) {
 			}
 
 			if !tt.wantTelemetry {
-				for _, k := range []string{"OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_RESOURCE_ATTRIBUTES", "POD_NAME", "POD_NAMESPACE"} {
+				for _, k := range []string{"OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_RESOURCE_ATTRIBUTES", "OTEL_METRIC_EXPORT_INTERVAL", "POD_NAME", "POD_NAMESPACE"} {
 					if _, ok := env[k]; ok {
 						t.Errorf("%s must be absent without an OTLP endpoint", k)
 					}
@@ -383,6 +383,37 @@ func TestBuildDeploymentApplyConfigOTelEndpoint(t *testing.T) {
 				if env[ref].index > raIdx {
 					t.Errorf("%s (index %d) must precede OTEL_RESOURCE_ATTRIBUTES (index %d)", ref, env[ref].index, raIdx)
 				}
+			}
+		})
+	}
+}
+
+// TestBuildDeploymentApplyConfigMetricExportInterval asserts the export interval
+// reaches the ateom container only when both it and an endpoint are set. ateom is
+// invisible to the collector until its first export tick, so the kind stack
+// shortens the SDK's 60s default to keep that gap inside the e2e budget.
+func TestBuildDeploymentApplyConfigMetricExportInterval(t *testing.T) {
+	const endpoint = "http://collector.otel-system.svc:4317"
+	tests := []struct {
+		name    string
+		otel    ateomOTelSettings
+		want    string
+		wantSet bool
+	}{
+		{"unset keeps SDK default", ateomOTelSettings{Endpoint: endpoint}, "", false},
+		{"set with endpoint", ateomOTelSettings{Endpoint: endpoint, MetricExportInterval: "10000"}, "10000", true},
+		{"ignored without endpoint", ateomOTelSettings{MetricExportInterval: "10000"}, "", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := buildDeploymentApplyConfig(testWorkerPoolApplyConfig(nil), tt.otel).
+				Spec.Template.Spec.Containers[0]
+			got, ok := envByName(c.Env)["OTEL_METRIC_EXPORT_INTERVAL"]
+			if ok != tt.wantSet {
+				t.Fatalf("OTEL_METRIC_EXPORT_INTERVAL present = %v, want %v", ok, tt.wantSet)
+			}
+			if ok && got.value != tt.want {
+				t.Errorf("OTEL_METRIC_EXPORT_INTERVAL = %q, want %q", got.value, tt.want)
 			}
 		})
 	}

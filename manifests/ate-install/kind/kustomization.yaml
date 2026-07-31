@@ -27,6 +27,13 @@ resources:
   - ./otel-collector.yaml
   - ./prometheus.yaml
 
+# OTEL_METRIC_EXPORT_INTERVAL shortens the OTel SDK's 60s metric export tick to
+# 10s. A component is invisible to the collector until its first tick, and the
+# metrics e2e suite asserts against the collector's scrape on a bounded deadline,
+# so the default leaves too little headroom on a loaded runner. On ate-controller
+# it does double duty: the controller also propagates it to the ateom worker pods
+# it creates, which have no other way to receive it. Kind only; production keeps
+# the SDK default.
 patches:
   - patch: |-
       apiVersion: apps/v1
@@ -42,6 +49,8 @@ patches:
               env:
               - name: OTEL_EXPORTER_OTLP_ENDPOINT
                 value: http://opentelemetry-collector.otel-system.svc:4317
+              - name: OTEL_METRIC_EXPORT_INTERVAL
+                value: "10000"
   - patch: |-
       apiVersion: apps/v1
       kind: DaemonSet
@@ -56,6 +65,8 @@ patches:
               env:
               - name: OTEL_EXPORTER_OTLP_ENDPOINT
                 value: http://opentelemetry-collector.otel-system.svc:4317
+              - name: OTEL_METRIC_EXPORT_INTERVAL
+                value: "10000"
   - patch: |-
       apiVersion: apps/v1
       kind: Deployment
@@ -70,3 +81,5 @@ patches:
               env:
               - name: OTEL_EXPORTER_OTLP_ENDPOINT
                 value: http://opentelemetry-collector.otel-system.svc:4317
+              - name: OTEL_METRIC_EXPORT_INTERVAL
+                value: "10000"
