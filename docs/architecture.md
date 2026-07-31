@@ -373,7 +373,7 @@ sequenceDiagram
     participant API as ate-api-server
     participant Atelet as atelet
     participant Tunnel as ateom / atunnel
-    participant Actor
+    participant A as Actor
     participant Store as snapshot storage
 
     Client->>DNS: resolve actor DNS name
@@ -388,8 +388,8 @@ sequenceDiagram
     Atelet-->>API: worker pod IP
     API-->>Gateway: worker assignment
     Gateway->>Tunnel: mTLS tunnel to worker port 443
-    Tunnel->>Actor: forward request to Actor port
-    Actor-->>Tunnel: response
+    Tunnel->>A: forward request to Actor port
+    A-->>Tunnel: response
     Tunnel-->>Gateway: response
     Gateway-->>Client: response
     Note over API,Store: later: an explicit SuspendActor checkpoints back to storage and frees the worker
