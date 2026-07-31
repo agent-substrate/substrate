@@ -360,7 +360,7 @@ func TestBuildDeploymentApplyConfigOTelEndpoint(t *testing.T) {
 			}
 
 			if !tt.wantTelemetry {
-				for _, k := range []string{"OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_RESOURCE_ATTRIBUTES", "OTEL_METRIC_EXPORT_INTERVAL", "POD_NAME", "POD_NAMESPACE"} {
+				for _, k := range []string{"OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_RESOURCE_ATTRIBUTES", "OTEL_METRIC_EXPORT_INTERVAL", "OTEL_METRIC_EXPORT_TIMEOUT", "POD_NAME", "POD_NAMESPACE"} {
 					if _, ok := env[k]; ok {
 						t.Errorf("%s must be absent without an OTLP endpoint", k)
 					}
@@ -388,32 +388,60 @@ func TestBuildDeploymentApplyConfigOTelEndpoint(t *testing.T) {
 	}
 }
 
-// TestBuildDeploymentApplyConfigMetricExportInterval asserts the export interval
-// reaches the ateom container only when both it and an endpoint are set. ateom is
-// invisible to the collector until its first export tick, so the kind stack
-// shortens the SDK's 60s default to keep that gap inside the e2e budget.
-func TestBuildDeploymentApplyConfigMetricExportInterval(t *testing.T) {
+// TestBuildDeploymentApplyConfigMetricExportTuning asserts the export interval and
+// per-export timeout reach the ateom container only when each is set alongside an
+// endpoint. ateom is invisible to the collector until its first successful export
+// tick, so the kind stack shortens the SDK's 60s interval to keep that gap inside
+// the e2e budget, and its 30s timeout so a failing tick cannot swallow three
+// shortened intervals.
+func TestBuildDeploymentApplyConfigMetricExportTuning(t *testing.T) {
 	const endpoint = "http://collector.otel-system.svc:4317"
 	tests := []struct {
-		name    string
-		otel    ateomOTelSettings
-		want    string
-		wantSet bool
+		name string
+		otel ateomOTelSettings
+		want map[string]string // env name -> value; absent key means must not be set
 	}{
-		{"unset keeps SDK default", ateomOTelSettings{Endpoint: endpoint}, "", false},
-		{"set with endpoint", ateomOTelSettings{Endpoint: endpoint, MetricExportInterval: "10000"}, "10000", true},
-		{"ignored without endpoint", ateomOTelSettings{MetricExportInterval: "10000"}, "", false},
+		{
+			name: "unset keeps SDK defaults",
+			otel: ateomOTelSettings{Endpoint: endpoint},
+			want: nil,
+		},
+		{
+			name: "both set with endpoint",
+			otel: ateomOTelSettings{Endpoint: endpoint, MetricExportInterval: "10000", MetricExportTimeout: "10000"},
+			want: map[string]string{"OTEL_METRIC_EXPORT_INTERVAL": "10000", "OTEL_METRIC_EXPORT_TIMEOUT": "10000"},
+		},
+		{
+			name: "interval alone",
+			otel: ateomOTelSettings{Endpoint: endpoint, MetricExportInterval: "10000"},
+			want: map[string]string{"OTEL_METRIC_EXPORT_INTERVAL": "10000"},
+		},
+		{
+			name: "timeout alone",
+			otel: ateomOTelSettings{Endpoint: endpoint, MetricExportTimeout: "10000"},
+			want: map[string]string{"OTEL_METRIC_EXPORT_TIMEOUT": "10000"},
+		},
+		{
+			name: "ignored without endpoint",
+			otel: ateomOTelSettings{MetricExportInterval: "10000", MetricExportTimeout: "10000"},
+			want: nil,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			c := buildDeploymentApplyConfig(testWorkerPoolApplyConfig(nil), tt.otel).
 				Spec.Template.Spec.Containers[0]
-			got, ok := envByName(c.Env)["OTEL_METRIC_EXPORT_INTERVAL"]
-			if ok != tt.wantSet {
-				t.Fatalf("OTEL_METRIC_EXPORT_INTERVAL present = %v, want %v", ok, tt.wantSet)
-			}
-			if ok && got.value != tt.want {
-				t.Errorf("OTEL_METRIC_EXPORT_INTERVAL = %q, want %q", got.value, tt.want)
+			env := envByName(c.Env)
+			for _, k := range []string{"OTEL_METRIC_EXPORT_INTERVAL", "OTEL_METRIC_EXPORT_TIMEOUT"} {
+				got, ok := env[k]
+				want, wantSet := tt.want[k]
+				if ok != wantSet {
+					t.Errorf("%s present = %v, want %v", k, ok, wantSet)
+					continue
+				}
+				if ok && got.value != want {
+					t.Errorf("%s = %q, want %q", k, got.value, want)
+				}
 			}
 		})
 	}

@@ -43,6 +43,9 @@ type ateomOTelSettings struct {
 	// first export tick fires. Shortening the interval is what keeps that
 	// startup gap inside an e2e budget; production leaves it unset.
 	MetricExportInterval string
+	// MetricExportTimeout overrides the SDK's  per-export timeout, in the same
+	// whole-millisecond form as MetricExportInterval. Empty keeps the default.
+	MetricExportTimeout string
 }
 
 // buildDeploymentApplyConfig constructs the SSA apply configuration for the
@@ -117,6 +120,11 @@ func ateomContainerEnv(otel ateomOTelSettings) []*corev1ac.EnvVarApplyConfigurat
 		envs = append(envs, corev1ac.EnvVar().
 			WithName("OTEL_METRIC_EXPORT_INTERVAL").
 			WithValue(otel.MetricExportInterval))
+	}
+	if otel.MetricExportTimeout != "" {
+		envs = append(envs, corev1ac.EnvVar().
+			WithName("OTEL_METRIC_EXPORT_TIMEOUT").
+			WithValue(otel.MetricExportTimeout))
 	}
 	return envs
 }
