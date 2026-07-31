@@ -120,13 +120,16 @@ spec:
               fieldPath: metadata.uid
         - name: OTEL_RESOURCE_ATTRIBUTES
           value: k8s.namespace.name=$(POD_NAMESPACE),k8s.pod.name=$(POD_NAME),k8s.pod.uid=$(POD_UID),service.instance.id=$(POD_UID)
-        - name: OTEL_EXPORTER_OTLP_ENDPOINT
-          value: http://opentelemetry-collector.gke-managed-otel.svc.cluster.local:4317
+        # OTLP exporter settings are shared by every control plane component;
+        # see manifests/ate-install/ate-otel-config.yaml. Listed first so the
+        # per-developer ConfigMap below can still override a key.
+        envFrom:
+        - configMapRef:
+            name: ate-otel-config
         # Inject env vars from a ConfigMap created by each developer.  This lets
         # each developer customize their own redis address, etc, without having
         # to edit this manifest, which can remain constant across all
         # developers.
-        envFrom:
         - configMapRef:
             name: ate-api-server-envvars
             optional: true
