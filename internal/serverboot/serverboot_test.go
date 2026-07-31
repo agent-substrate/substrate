@@ -162,10 +162,21 @@ func getCode(t *testing.T, mux *http.ServeMux, path string) int {
 func TestSetLogLevel(t *testing.T) {
 	t.Cleanup(func() { logLevel.Set(slog.LevelInfo) })
 
+	// The untouched default must be exactly info: every existing deployment
+	// relies on this for "no behavior change without the flag".
+	if got := logLevel.Level(); got != slog.LevelInfo {
+		t.Fatalf("default log level = %v, want %v", got, slog.LevelInfo)
+	}
+
 	var buf bytes.Buffer
 	InitLoggerWithWriter(&buf)
 	t.Cleanup(InitLogger)
 
+	slog.Info("visible at default level")
+	if !strings.Contains(buf.String(), "visible at default level") {
+		t.Errorf("info line not emitted at default level: %s", buf.String())
+	}
+	buf.Reset()
 	slog.Debug("hidden at default level")
 	if buf.Len() != 0 {
 		t.Errorf("debug line emitted at default level: %s", buf.String())
@@ -191,5 +202,13 @@ func TestSetLogLevel(t *testing.T) {
 
 	if err := SetLogLevel("verbose"); err == nil {
 		t.Error("SetLogLevel accepted an invalid level")
+	}
+
+	// Empty means unset: no error, level unchanged.
+	if err := SetLogLevel(""); err != nil {
+		t.Errorf("SetLogLevel(\"\") = %v, want nil", err)
+	}
+	if got := logLevel.Level(); got != slog.LevelWarn {
+		t.Errorf("SetLogLevel(\"\") changed the level to %v", got)
 	}
 }

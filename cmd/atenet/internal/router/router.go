@@ -23,7 +23,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
@@ -136,18 +135,10 @@ func (s *RouterServer) Run(ctx context.Context) error {
 	}
 	parkCfg := s.cfg.ParkedRequest.normalized()
 
-	var level slog.Level
-	switch strings.ToLower(s.cfg.LogLevel) {
-	case "debug":
-		level = slog.LevelDebug
-	case "warn":
-		level = slog.LevelWarn
-	case "error":
-		level = slog.LevelError
-	default:
-		level = slog.LevelInfo
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: serverboot.LogLevel()})))
+	if err := serverboot.SetLogLevel(s.cfg.LogLevel); err != nil {
+		return err
 	}
-	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level})))
 
 	// Tracing must be initialized before constructing the ateapi gRPC client
 	// below, because otelgrpc.NewClientHandler captures the global

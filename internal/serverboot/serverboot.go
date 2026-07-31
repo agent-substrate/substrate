@@ -60,8 +60,13 @@ func InitLoggerWithWriter(w io.Writer) {
 var logLevel slog.LevelVar
 
 // SetLogLevel sets the minimum level of the serverboot loggers from a flag
-// value: "debug", "info", "warn", or "error" (case-insensitive).
+// value: "debug", "info", "warn", or "error" (case-insensitive). Empty
+// means unset and leaves the current level unchanged, so configs that
+// never populate the field keep the default.
 func SetLogLevel(level string) error {
+	if level == "" {
+		return nil
+	}
 	if err := logLevel.UnmarshalText([]byte(level)); err != nil {
 		return fmt.Errorf("invalid log level %q (want debug, info, warn, or error): %w", level, err)
 	}
@@ -69,8 +74,9 @@ func SetLogLevel(level string) error {
 }
 
 // LogLevel exposes the level behind the serverboot loggers, for binaries
-// that build their own handler but should still honor --log-level.
-func LogLevel() *slog.LevelVar { return &logLevel }
+// that build their own handler but should still honor --log-level. A
+// Leveler (not the LevelVar) so SetLogLevel stays the only mutation path.
+func LogLevel() slog.Leveler { return &logLevel }
 
 // serviceInstanceID is generated once so the tracer and meter resources share it.
 var serviceInstanceID = uuid.NewString()
