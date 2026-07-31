@@ -201,7 +201,7 @@ func TestBuildDeploymentApplyConfig(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := buildDeploymentApplyConfig(tt.wp, "")
+			got := buildDeploymentApplyConfig(tt.wp, AteomOTelConfig{})
 			if diff := cmp.Diff(tt.want, got); diff != "" {
 				t.Fatalf("buildDeploymentApplyConfig() mismatch (-want +got):\n%s", diff)
 			}
@@ -226,7 +226,7 @@ func TestMicroVMPodShape(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			wp := testWorkerPoolApplyConfig(nil)
 			wp.Spec.SandboxClass = tt.class
-			ps := buildDeploymentApplyConfig(wp, "").Spec.Template.Spec
+			ps := buildDeploymentApplyConfig(wp, AteomOTelConfig{}).Spec.Template.Spec
 
 			hasVol := false
 			for _, v := range ps.Volumes {
@@ -325,7 +325,7 @@ func TestTerminationGracePeriodSeconds(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			wp := testWorkerPoolApplyConfig(nil)
 			wp.Spec.TerminationGracePeriodSeconds = tt.set
-			ps := buildDeploymentApplyConfig(wp, "").Spec.Template.Spec
+			ps := buildDeploymentApplyConfig(wp, AteomOTelConfig{}).Spec.Template.Spec
 			if ps.TerminationGracePeriodSeconds == nil {
 				t.Fatalf("TerminationGracePeriodSeconds not set")
 			}
@@ -336,22 +336,39 @@ func TestTerminationGracePeriodSeconds(t *testing.T) {
 	}
 }
 
-// TestBuildDeploymentApplyConfigOTelEndpoint asserts the OTLP endpoint and the
-// pod-scoped resource identity are set on the ateom container only when an endpoint
-// is configured, and that the $(POD_*) refs precede OTEL_RESOURCE_ATTRIBUTES.
+// TestBuildDeploymentApplyConfigOTelEndpoint asserts the OTLP endpoint, the
+// pod-scoped resource identity, and the metric export tuning are set on the
+// ateom container only when an endpoint is configured, and that the $(POD_*)
+// refs precede OTEL_RESOURCE_ATTRIBUTES.
 func TestBuildDeploymentApplyConfigOTelEndpoint(t *testing.T) {
-	const endpoint = "http://collector.otel-system.svc:4317"
+	const (
+		endpoint = "http://collector.otel-system.svc:4317"
+		interval = "10000"
+		timeout  = "5000"
+	)
 	tests := []struct {
 		name          string
-		endpoint      string
+		otel          AteomOTelConfig
 		wantTelemetry bool
+		wantInterval  string
+		wantTimeout   string
 	}{
-		{"endpoint empty", "", false},
-		{"endpoint set", endpoint, true},
+		{name: "endpoint empty", otel: AteomOTelConfig{}},
+		// Export tuning without an endpoint configures a push that goes
+		// nowhere; nothing may be injected.
+		{name: "tuning without endpoint", otel: AteomOTelConfig{MetricExportInterval: interval, MetricExportTimeout: timeout}},
+		{name: "endpoint set", otel: AteomOTelConfig{Endpoint: endpoint}, wantTelemetry: true},
+		{
+			name:          "endpoint with export tuning",
+			otel:          AteomOTelConfig{Endpoint: endpoint, MetricExportInterval: interval, MetricExportTimeout: timeout},
+			wantTelemetry: true,
+			wantInterval:  interval,
+			wantTimeout:   timeout,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			c := buildDeploymentApplyConfig(testWorkerPoolApplyConfig(nil), tt.endpoint).
+			c := buildDeploymentApplyConfig(testWorkerPoolApplyConfig(nil), tt.otel).
 				Spec.Template.Spec.Containers[0]
 			env := envByName(c.Env)
 
@@ -360,7 +377,11 @@ func TestBuildDeploymentApplyConfigOTelEndpoint(t *testing.T) {
 			}
 
 			if !tt.wantTelemetry {
-				for _, k := range []string{"OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_RESOURCE_ATTRIBUTES", "POD_NAME", "POD_NAMESPACE"} {
+				for _, k := range []string{
+					"OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_RESOURCE_ATTRIBUTES",
+					"OTEL_METRIC_EXPORT_INTERVAL", "OTEL_METRIC_EXPORT_TIMEOUT",
+					"POD_NAME", "POD_NAMESPACE",
+				} {
 					if _, ok := env[k]; ok {
 						t.Errorf("%s must be absent without an OTLP endpoint", k)
 					}
@@ -373,6 +394,21 @@ func TestBuildDeploymentApplyConfigOTelEndpoint(t *testing.T) {
 			}
 			if got := env["OTEL_RESOURCE_ATTRIBUTES"].value; got != ateomOTelResourceAttributes {
 				t.Errorf("OTEL_RESOURCE_ATTRIBUTES = %q, want %q", got, ateomOTelResourceAttributes)
+			}
+			for k, want := range map[string]string{
+				"OTEL_METRIC_EXPORT_INTERVAL": tt.wantInterval,
+				"OTEL_METRIC_EXPORT_TIMEOUT":  tt.wantTimeout,
+			} {
+				got, ok := env[k]
+				if want == "" {
+					if ok {
+						t.Errorf("%s must be absent when not configured", k)
+					}
+					continue
+				}
+				if got.value != want {
+					t.Errorf("%s = %q, want %q", k, got.value, want)
+				}
 			}
 			raIdx := env["OTEL_RESOURCE_ATTRIBUTES"].index
 			for _, ref := range []string{"POD_UID", "POD_NAME", "POD_NAMESPACE"} {

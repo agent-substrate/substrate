@@ -27,6 +27,9 @@ resources:
   - ./otel-collector.yaml
   - ./prometheus.yaml
 
+# OTEL_METRIC_EXPORT_INTERVAL/TIMEOUT (ms) shorten the default 60s/30s push
+# cadence so metrics land inside e2e assertion windows; ate-controller mirrors
+# them into the ateom worker pods it creates.
 patches:
   - patch: |-
       apiVersion: apps/v1
@@ -42,6 +45,10 @@ patches:
               env:
               - name: OTEL_EXPORTER_OTLP_ENDPOINT
                 value: http://opentelemetry-collector.otel-system.svc:4317
+              - name: OTEL_METRIC_EXPORT_INTERVAL
+                value: "10000"
+              - name: OTEL_METRIC_EXPORT_TIMEOUT
+                value: "10000"
   - patch: |-
       apiVersion: apps/v1
       kind: DaemonSet
@@ -56,6 +63,10 @@ patches:
               env:
               - name: OTEL_EXPORTER_OTLP_ENDPOINT
                 value: http://opentelemetry-collector.otel-system.svc:4317
+              - name: OTEL_METRIC_EXPORT_INTERVAL
+                value: "10000"
+              - name: OTEL_METRIC_EXPORT_TIMEOUT
+                value: "10000"
   - patch: |-
       apiVersion: apps/v1
       kind: Deployment
@@ -70,3 +81,7 @@ patches:
               env:
               - name: OTEL_EXPORTER_OTLP_ENDPOINT
                 value: http://opentelemetry-collector.otel-system.svc:4317
+              - name: OTEL_METRIC_EXPORT_INTERVAL
+                value: "10000"
+              - name: OTEL_METRIC_EXPORT_TIMEOUT
+                value: "10000"
