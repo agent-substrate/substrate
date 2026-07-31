@@ -145,8 +145,8 @@ func TestSpecImageDigestCompat(t *testing.T) {
 	if err != nil || spec == nil {
 		t.Fatalf("ReadSpec: %v, %v", spec, err)
 	}
-	if spec.ImageDigest == "" {
-		t.Error("ImageDigest lost in round trip")
+	if want := "sha256:" + strings.Repeat("ef", 32); spec.ImageDigest != want {
+		t.Errorf("ImageDigest = %q, want %q", spec.ImageDigest, want)
 	}
 
 	// A spec written by an older atelet (no imageDigest) still parses.

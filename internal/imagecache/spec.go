@@ -38,9 +38,11 @@ const OverlaySpecFileName = "rootfs-overlay.json"
 type OverlaySpec struct {
 	Version int `json:"version"`
 	// ImageDigest is the manifest digest the bundle's image ref resolved to
-	// ("sha256:<hex>"). The cache GC's root-set scan uses it to protect the
-	// image while the bundle exists; consumers ignore it. Optional: older
-	// specs lack it.
+	// ("sha256:<hex>"). For a multi-arch ref this is the index digest; the
+	// cache may hold a twin record under the platform-child digest, and GC
+	// must treat the pair as one image. The GC's root-set scan uses it to
+	// protect the image while the bundle exists; consumers ignore it.
+	// Optional: older specs lack it.
 	ImageDigest string `json:"imageDigest,omitempty"`
 	// Layers are the cached layer directories (each holding its tree under
 	// fs/), bottom-most layer first — the order the image manifest lists
