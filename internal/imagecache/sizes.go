@@ -71,7 +71,9 @@ func (s *Store) layerSize(layerDir string) (int64, error) {
 
 	var total int64
 	fsRoot := filepath.Join(layerDir, layerFSDirName)
-	err = filepath.WalkDir(fsRoot, func(p string, d fs.DirEntry, err error) error {
+	// The callback swallows every error (skip-and-under-count contract),
+	// so WalkDir cannot return one.
+	_ = filepath.WalkDir(fsRoot, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			// Images legitimately ship unreadable dirs (0111, 0000) and
 			// atelet lacks CAP_DAC_READ_SEARCH, so skip and under-count
@@ -88,9 +90,6 @@ func (s *Store) layerSize(layerDir string) (int64, error) {
 		}
 		return nil
 	})
-	if err != nil {
-		return 0, fmt.Errorf("while backfilling size of %q: %w", layerDir, err)
-	}
 	// Preserve the dir mtime (the eviction age signal) across the write.
 	if fi, statErr := os.Stat(layerDir); statErr == nil {
 		if err := os.WriteFile(filepath.Join(layerDir, layerSizeFileName), []byte(strconv.FormatInt(total, 10)+"\n"), 0o600); err == nil {

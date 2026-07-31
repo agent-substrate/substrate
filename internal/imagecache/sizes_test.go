@@ -90,6 +90,21 @@ func TestLayerSizeRecordedAndBackfilled(t *testing.T) {
 		t.Errorf("backfill changed the layer dir mtime (the eviction age signal): %v -> %v", before.ModTime(), after.ModTime())
 	}
 
+	// Corrupt size file: healed the same way as a missing one.
+	if err := os.WriteFile(sizePath, []byte("not-a-number\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	repaired, err := store.layerSize(img.LayerDirs[0])
+	if err != nil {
+		t.Fatalf("layerSize on corrupt size file: %v", err)
+	}
+	if repaired < 4096 {
+		t.Errorf("layerSize = %d, want >= 4096: corrupt file not healed by backfill", repaired)
+	}
+	if b, _ := os.ReadFile(sizePath); strings.TrimSpace(string(b)) == "not-a-number" {
+		t.Error("backfill did not overwrite the corrupt size file")
+	}
+
 	if total, err := store.CacheSize(); err != nil || total < refilled {
 		t.Errorf("CacheSize() = %d, %v; want >= %d", total, err, refilled)
 	}

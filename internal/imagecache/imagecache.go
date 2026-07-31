@@ -78,7 +78,10 @@ const (
 	layerFinalizedMarkerName = "finalized"
 	// layerSizeFileName holds the layer's byte count, recorded at unpack so
 	// sizing the pool never walks a tree. Absent for layers unpacked by
-	// older atelets (backfilled lazily, see layerSize).
+	// older atelets (backfilled lazily, see layerSize). An estimate: the
+	// value is the tar-stream length when written at unpack, or the summed
+	// file sizes when backfilled, so it may differ from disk usage and
+	// across nodes.
 	layerSizeFileName = "size"
 
 	// layerPullConcurrency bounds concurrent layer download+unpack streams per
