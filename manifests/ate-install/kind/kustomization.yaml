@@ -41,6 +41,13 @@ resources:
 # the ateom worker pods it creates, which have no other way to receive them.
 # Kind only; production keeps the SDK defaults.
 patches:
+  - target:
+      kind: Deployment
+      name: ate-api-server
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/args/-
+        value: --snapshot-gc-interval=5s
   - patch: |-
       apiVersion: apps/v1
       kind: Deployment

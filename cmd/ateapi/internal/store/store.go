@@ -76,6 +76,16 @@ type Interface interface {
 	// Lists ActorSnapshots in one atespace, or all atespaces when empty.
 	ListActorSnapshots(ctx context.Context, atespace string, pageSize int32, pageToken string) ([]*ateapipb.ActorSnapshot, string, error)
 
+	// Marks or unmarks an ActorSnapshot for garbage collection. References may
+	// not be added while a snapshot is marked.
+	SetActorSnapshotDeleting(ctx context.Context, atespace, name string, deleting bool) error
+
+	// Reports whether an ActorSnapshot is marked for garbage collection.
+	ActorSnapshotDeleting(ctx context.Context, atespace, name string) (bool, error)
+
+	// Deletes metadata for an ActorSnapshot already marked for garbage collection.
+	DeleteActorSnapshot(ctx context.Context, atespace, name string) error
+
 	// Adds an immutable Atespace-owned tag to an ActorSnapshot.
 	TagActorSnapshot(ctx context.Context, atespace, name string, tag *ateapipb.ActorSnapshotTag) (*ateapipb.ActorSnapshotTag, error)
 
@@ -84,6 +94,9 @@ type Interface interface {
 
 	// Deletes and returns a tag.
 	DeleteActorSnapshotTag(ctx context.Context, atespace, name string) (*ateapipb.ActorSnapshotTag, error)
+
+	// Lists ActorSnapshotTags in one atespace, or all atespaces when empty.
+	ListActorSnapshotTags(ctx context.Context, atespace string, pageSize int32, pageToken string) ([]*ateapipb.ActorSnapshotTag, string, error)
 
 	// Stores a new atespace and returns the stored resource with server-assigned
 	// metadata (uid, version, timestamps). The input is not mutated. Returns

@@ -621,6 +621,10 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 	if err != nil || len(listed) != 1 {
 		t.Fatalf("ListActorSnapshots = (%v, %v), want one", listed, err)
 	}
+	tags, _, err := s.ListActorSnapshotTags(ctx, "", 10, "")
+	if err != nil || len(tags) != 2 {
+		t.Fatalf("ListActorSnapshotTags = (%v, %v), want two", tags, err)
+	}
 
 	deleted, err := s.DeleteActorSnapshotTag(ctx, testAtespace, "before-upgrade")
 	if err != nil || deleted.GetMetadata().GetName() != "before-upgrade" {
@@ -631,6 +635,21 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 	}
 	if got, _, err := s.GetActorSnapshot(ctx, testAtespace, "snapshot-1"); err != nil || got.GetMetadata().GetUid() != created.GetMetadata().GetUid() {
 		t.Fatalf("snapshot after tag deletion = (%v, %v), want retained metadata", got, err)
+	}
+	if err := s.DeleteActorSnapshot(ctx, testAtespace, "snapshot-1"); !errors.Is(err, store.ErrFailedPrecondition) {
+		t.Fatalf("DeleteActorSnapshot before mark = %v, want ErrFailedPrecondition", err)
+	}
+	if err := s.SetActorSnapshotDeleting(ctx, testAtespace, "snapshot-1", true); err != nil {
+		t.Fatalf("SetActorSnapshotDeleting: %v", err)
+	}
+	if deleting, err := s.ActorSnapshotDeleting(ctx, testAtespace, "snapshot-1"); err != nil || !deleting {
+		t.Fatalf("ActorSnapshotDeleting = (%v, %v), want true", deleting, err)
+	}
+	if err := s.DeleteActorSnapshot(ctx, testAtespace, "snapshot-1"); err != nil {
+		t.Fatalf("DeleteActorSnapshot: %v", err)
+	}
+	if _, _, err := s.GetActorSnapshot(ctx, testAtespace, "snapshot-1"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("GetActorSnapshot after deletion = %v, want ErrNotFound", err)
 	}
 }
 

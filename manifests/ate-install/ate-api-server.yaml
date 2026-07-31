@@ -41,6 +41,30 @@ metadata:
   name: ate-api-server
   namespace: ate-system
 ---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ateapi-snapshot-gc-leader-election
+  namespace: ate-system
+rules:
+- apiGroups: ["coordination.k8s.io"]
+  resources: ["leases"]
+  verbs: ["get", "create", "update"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: ateapi-snapshot-gc-leader-election
+  namespace: ate-system
+subjects:
+- kind: ServiceAccount
+  name: ate-api-server
+  namespace: ate-system
+roleRef:
+  kind: Role
+  name: ateapi-snapshot-gc-leader-election
+  apiGroup: rbac.authorization.k8s.io
+---
 # 4. Bind Identity to Permissions
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

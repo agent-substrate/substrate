@@ -34,7 +34,10 @@ import (
 	"k8s.io/utils/lru"
 )
 
-var ErrWorkerPodNotFound = errors.New("worker pod not found")
+var (
+	ErrWorkerPodNotFound = errors.New("worker pod not found")
+	ErrAteletPodNotFound = errors.New("ready atelet pod not found")
+)
 
 // The SPIFFE identity that atelet serving certs carry, as minted by the
 // podidentity signer (cmd/podcertcontroller/internal/podidentitysigner).
@@ -100,7 +103,38 @@ func (d *AteletDialer) DialForWorker(workerPodNamespace, workerPodName string) (
 		return nil, fmt.Errorf("found %d atelet pods on node %q, expected 1", len(matchingAtelets), selectedWorker.Spec.NodeName)
 	}
 
-	selectedAtelet := matchingAtelets[0].(*corev1.Pod)
+	return d.dialAtelet(matchingAtelets[0].(*corev1.Pod))
+}
+
+// DialAny returns a connection to a ready atelet. Snapshot deletion is not
+// node-affine, so choosing the first pod by name is sufficient and deterministic.
+func (d *AteletDialer) DialAny() (*grpc.ClientConn, error) {
+	var selected *corev1.Pod
+	for _, item := range d.ateletIndexer.List() {
+		pod := item.(*corev1.Pod)
+		if !podReady(pod) || len(pod.Status.PodIPs) == 0 {
+			continue
+		}
+		if selected == nil || pod.Namespace+"/"+pod.Name < selected.Namespace+"/"+selected.Name {
+			selected = pod
+		}
+	}
+	if selected == nil {
+		return nil, ErrAteletPodNotFound
+	}
+	return d.dialAtelet(selected)
+}
+
+func podReady(pod *corev1.Pod) bool {
+	for _, condition := range pod.Status.Conditions {
+		if condition.Type == corev1.PodReady {
+			return condition.Status == corev1.ConditionTrue
+		}
+	}
+	return false
+}
+
+func (d *AteletDialer) dialAtelet(selectedAtelet *corev1.Pod) (*grpc.ClientConn, error) {
 	ateletKey := string(selectedAtelet.ObjectMeta.UID)
 
 	ateletConnAny, ok := d.ateletConns.Get(ateletKey)

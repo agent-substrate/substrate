@@ -29,9 +29,21 @@ import (
 	"github.com/agent-substrate/substrate/internal/substratex509"
 	"github.com/spiffe/go-spiffe/v2/bundle/x509bundle"
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
+	corev1 "k8s.io/api/core/v1"
 )
 
 const testAteletSPIFFEID = "spiffe://cluster.local/ns/ate-system/sa/atelet"
+
+func TestPodReady(t *testing.T) {
+	pod := &corev1.Pod{Status: corev1.PodStatus{Conditions: []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}}}}
+	if !podReady(pod) {
+		t.Fatal("podReady = false, want true")
+	}
+	pod.Status.Conditions[0].Status = corev1.ConditionFalse
+	if podReady(pod) {
+		t.Fatal("podReady = true, want false")
+	}
+}
 
 // makeTestCA mints a self-signed CA and returns it along with an X.509 bundle
 // containing it as the sole authority for the cluster.local trust domain.

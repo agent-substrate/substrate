@@ -289,6 +289,26 @@ func TestValidateCheckpointRequest(t *testing.T) {
 	}
 }
 
+func TestValidateDeleteExternalSnapshotRequest(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		prefix  string
+		wantErr bool
+	}{
+		{"valid", "gs://bucket/snapshots/id", false},
+		{"empty", "", true},
+		{"bucket root", "gs://bucket", true},
+		{"relative", "snapshots/id", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateDeleteExternalSnapshotRequest(&ateletpb.DeleteExternalSnapshotRequest{SnapshotUriPrefix: tc.prefix})
+			if (err != nil) != tc.wantErr {
+				t.Errorf("validateDeleteExternalSnapshotRequest() error = %v, wantErr %v", err, tc.wantErr)
+			}
+		})
+	}
+}
+
 func TestValidateRestoreRequest(t *testing.T) {
 	makeReq := func(opts ...func(*ateletpb.RestoreRequest)) *ateletpb.RestoreRequest {
 		r := validRestoreRequest()
@@ -377,6 +397,7 @@ func (f fakeObjectStorage) GetObject(_ context.Context, _, _ string) (io.ReadClo
 }
 
 func (fakeObjectStorage) PutObject(_ context.Context, _, _ string, _ io.Reader) error { return nil }
+func (fakeObjectStorage) DeletePrefix(_ context.Context, _, _ string) error           { return nil }
 
 // TestFetchAssetStreaming covers the streamed download: good asset cached,
 // over-cap rejected, hash mismatch rejected (failures leave no cache file).

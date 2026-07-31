@@ -264,6 +264,30 @@ const (
 	SnapshotScopeData SnapshotScope = "Data"
 )
 
+// SnapshotRetentionPolicy controls automatic retention of untagged snapshots
+// produced by a live Actor. A snapshot is retained while either threshold
+// applies; references from Actors and tags always retain it.
+type SnapshotRetentionPolicy struct {
+	// MinimumCount is the minimum number of newest snapshots to retain per
+	// live Actor, including its latest snapshot. Zero disables count-based
+	// retention.
+	//
+	// +optional
+	// +kubebuilder:default=3
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=1000000
+	MinimumCount *int32 `json:"minimumCount,omitempty"`
+
+	// MinimumAgeSeconds is the minimum age a snapshot must reach before it is
+	// eligible for collection. Zero disables age-based retention.
+	//
+	// +optional
+	// +kubebuilder:default=86400
+	// +kubebuilder:validation:Minimum=0
+	// +kubebuilder:validation:Maximum=2147483647
+	MinimumAgeSeconds *int32 `json:"minimumAgeSeconds,omitempty"`
+}
+
 // +kubebuilder:validation:XValidation:rule="(has(self.onPause) ? self.onPause : 'Full') == 'Full' || (has(self.onCommit) ? self.onCommit : 'Full') == (has(self.onPause) ? self.onPause : 'Full')",message="onCommit must be a subset of onPause"
 type SnapshotsConfig struct {
 	// Location to store snapshots in.
@@ -290,6 +314,14 @@ type SnapshotsConfig struct {
 	// +optional
 	// +kubebuilder:default=Full
 	OnCommit SnapshotScope `json:"onCommit,omitempty"`
+
+	// RetentionPolicy controls automatic retention of untagged snapshots.
+	// If omitted, the newest three snapshots and snapshots younger than 24
+	// hours are retained for each live Actor.
+	//
+	// +optional
+	// +kubebuilder:default:={minimumCount:3,minimumAgeSeconds:86400}
+	RetentionPolicy *SnapshotRetentionPolicy `json:"retentionPolicy,omitempty"`
 }
 
 // ActorTemplateSpec defined desired spec of an actor.

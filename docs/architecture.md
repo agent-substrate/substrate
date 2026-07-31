@@ -449,7 +449,9 @@ including published tags, but leaves snapshot cleanup to garbage collection.
 
 Actors in `STATUS_SUSPENDED` status can be deleted from the Control Plane.
 After deletion, the state of the actor (i.e., memory+disk snapshots) is garbage
-collected. The garbage collection process is not implemented yet.
+collected. While an Actor exists, its latest snapshot, tagged snapshots, and
+snapshots covered by the ActorTemplate's minimum-count or minimum-age retention
+threshold are retained. Deleting the Actor removes those policy protections.
 
 ## State Management & Persistence
 

@@ -22,6 +22,7 @@ import (
 
 	"cloud.google.com/go/storage"
 	"github.com/agent-substrate/substrate/internal/ateerrors"
+	"google.golang.org/api/iterator"
 )
 
 type gcsClient struct {
@@ -63,4 +64,20 @@ func (g *gcsClient) PutObject(ctx context.Context, bucket, object string, reader
 		return fmt.Errorf("while putting GCS object: %w", err)
 	}
 	return nil
+}
+
+func (g *gcsClient) DeletePrefix(ctx context.Context, bucket, prefix string) error {
+	objects := g.client.Bucket(bucket).Objects(ctx, &storage.Query{Prefix: prefix})
+	for {
+		attrs, err := objects.Next()
+		if errors.Is(err, iterator.Done) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if err := g.client.Bucket(bucket).Object(attrs.Name).Delete(ctx); err != nil && !errors.Is(err, storage.ErrObjectNotExist) {
+			return err
+		}
+	}
 }

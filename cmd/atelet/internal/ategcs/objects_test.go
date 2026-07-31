@@ -21,6 +21,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 )
@@ -45,6 +46,32 @@ func (s *memStore) GetObject(_ context.Context, bucket, object string) (io.ReadC
 		return nil, fmt.Errorf("object %q/%q not found", bucket, object)
 	}
 	return io.NopCloser(bytes.NewReader(b)), nil
+}
+
+func (s *memStore) DeletePrefix(_ context.Context, bucket, prefix string) error {
+	for key := range s.m {
+		if strings.HasPrefix(key, bucket+"/"+prefix) {
+			delete(s.m, key)
+		}
+	}
+	return nil
+}
+
+func TestDeletePrefix(t *testing.T) {
+	store := newMemStore()
+	store.m["bucket/snapshots/abc/manifest.json"] = []byte("manifest")
+	store.m["bucket/snapshots/abc/pages.zstd"] = []byte("pages")
+	store.m["bucket/snapshots/abc2/manifest.json"] = []byte("sibling")
+
+	if err := DeletePrefix(context.Background(), store, "gs://bucket/snapshots/abc"); err != nil {
+		t.Fatalf("DeletePrefix: %v", err)
+	}
+	if len(store.m) != 1 || string(store.m["bucket/snapshots/abc2/manifest.json"]) != "sibling" {
+		t.Fatalf("remaining objects = %v, want only sibling prefix", store.m)
+	}
+	if err := DeletePrefix(context.Background(), store, "gs://bucket"); err == nil {
+		t.Fatal("DeletePrefix bucket root succeeded, want error")
+	}
 }
 
 // streamingMemStore is a memStore that advertises streaming PutObject support, so

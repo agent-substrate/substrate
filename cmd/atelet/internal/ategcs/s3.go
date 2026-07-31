@@ -56,3 +56,22 @@ func (s *s3Client) PutObject(ctx context.Context, bucket, object string, reader 
 	})
 	return err
 }
+
+func (s *s3Client) DeletePrefix(ctx context.Context, bucket, prefix string) error {
+	pages := s3.NewListObjectsV2Paginator(s.client, &s3.ListObjectsV2Input{
+		Bucket: aws.String(bucket),
+		Prefix: aws.String(prefix),
+	})
+	for pages.HasMorePages() {
+		page, err := pages.NextPage(ctx)
+		if err != nil {
+			return err
+		}
+		for _, object := range page.Contents {
+			if _, err := s.client.DeleteObject(ctx, &s3.DeleteObjectInput{Bucket: aws.String(bucket), Key: object.Key}); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}

@@ -30,7 +30,18 @@ service AteomHerder {
 
   // Restore restores a workload from checkpoint onto an ateom.
   rpc Restore(RestoreRequest) returns (RestoreResponse) {}
+
+  // DeleteExternalSnapshot deletes every object below an exact snapshot URI
+  // prefix. The operation is idempotent.
+  rpc DeleteExternalSnapshot(DeleteExternalSnapshotRequest)
+      returns (DeleteExternalSnapshotResponse) {}
 }
+
+message DeleteExternalSnapshotRequest {
+  string snapshot_uri_prefix = 1;
+}
+
+message DeleteExternalSnapshotResponse {}
 
 message RunRequest {
   string target_ateom_uid = 1;

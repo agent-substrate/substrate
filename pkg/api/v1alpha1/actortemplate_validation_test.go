@@ -561,6 +561,29 @@ func TestActorTemplateValidation(t *testing.T) {
 		wantErr: true,
 		errMsg:  "Unsupported value",
 	}, {
+		name: "SnapshotsConfig: retention thresholds may be disabled",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.SnapshotsConfig.RetentionPolicy = &SnapshotRetentionPolicy{
+				MinimumCount:      ptr.To[int32](0),
+				MinimumAgeSeconds: ptr.To[int32](0),
+			}
+		},
+		wantErr: false,
+	}, {
+		name: "SnapshotsConfig: negative retention count",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.SnapshotsConfig.RetentionPolicy = &SnapshotRetentionPolicy{MinimumCount: ptr.To[int32](-1)}
+		},
+		wantErr: true,
+		errMsg:  "should be greater than or equal to 0",
+	}, {
+		name: "SnapshotsConfig: negative retention age",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.SnapshotsConfig.RetentionPolicy = &SnapshotRetentionPolicy{MinimumAgeSeconds: ptr.To[int32](-1)}
+		},
+		wantErr: true,
+		errMsg:  "should be greater than or equal to 0",
+	}, {
 		name: "Volumes: 1 DurableDir mount is valid",
 		mutate: func(at *ActorTemplate) {
 			at.Spec.Volumes = []Volume{
@@ -1177,7 +1200,7 @@ func TestActorTemplateValidation(t *testing.T) {
 	}
 }
 
-func TestActorTemplateReadyzPathDefault(t *testing.T) {
+func TestActorTemplateDefaults(t *testing.T) {
 	ctx := t.Context()
 
 	at := &ActorTemplate{
@@ -1209,6 +1232,10 @@ func TestActorTemplateReadyzPathDefault(t *testing.T) {
 	}
 	if want, gotPath := "/readyz", got.Spec.Containers[0].Readyz.HTTPGet.Path; gotPath != want {
 		t.Errorf("Readyz.HTTPGet.Path = %q, want %q (CRD default)", gotPath, want)
+	}
+	policy := got.Spec.SnapshotsConfig.RetentionPolicy
+	if policy == nil || policy.MinimumCount == nil || *policy.MinimumCount != 3 || policy.MinimumAgeSeconds == nil || *policy.MinimumAgeSeconds != 86400 {
+		t.Errorf("SnapshotsConfig.RetentionPolicy = %#v, want count 3 and age 86400 (CRD defaults)", policy)
 	}
 }
 

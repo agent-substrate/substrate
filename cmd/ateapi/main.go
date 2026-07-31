@@ -82,6 +82,9 @@ var (
 	drainDelay   = pflag.Duration("drain-delay", 13*time.Second, "How long to keep accepting new work after SIGTERM, before starting the gRPC drain.")
 	drainTimeout = pflag.Duration("drain-timeout", 15*time.Second, "Deadline for the graceful gRPC drain on shutdown. In-flight RPCs still running past it are forcefully cancelled.")
 
+	snapshotGCInterval    = pflag.Duration("snapshot-gc-interval", 10*time.Minute, "How often the elected ateapi replica garbage collects ActorSnapshots; zero disables collection.")
+	snapshotGCConcurrency = pflag.Int("snapshot-gc-concurrency", 4, "Maximum concurrent ActorSnapshot storage deletions.")
+
 	showVersion     = pflag.Bool("version", false, "Print version and exit.")
 	clientJWTCAFile = pflag.String("client-jwt-ca-cert", ateapiauth.DefaultServiceAccountCAFile, "CA cert file used to verify TLS when fetching the OIDC discovery document and JWKS for JWT authentication. Defaults to the in-cluster service account CA.")
 )
@@ -168,6 +171,27 @@ func main() {
 
 	ateletDialer := controlapi.NewAteletDialer(workerPodInformer.GetIndexer(), ateletPodInformer.GetIndexer(), *ateletClientCredBundle, *podIdentityCACerts)
 	sm := controlapi.NewService(redisPersistence, workerCache, actorTemplateLister, workerPoolLister, sandboxConfigLister, ateletDialer, clientset)
+	if *snapshotGCInterval > 0 {
+		identity := os.Getenv("POD_UID")
+		if identity == "" {
+			identity, err = os.Hostname()
+			if err != nil {
+				serverboot.Fatal(ctx, "Failed to determine ActorSnapshot GC leader identity", err)
+			}
+		}
+		leaseNamespace := os.Getenv("POD_NAMESPACE")
+		if leaseNamespace == "" {
+			leaseNamespace = "ate-system"
+		}
+		gc := controlapi.NewSnapshotGC(redisPersistence, actorTemplateLister, ateletDialer, *snapshotGCConcurrency)
+		go func() {
+			if err := runSnapshotGCLeaderElection(shutdownCtx, clientset, leaseNamespace, identity, func(leaderCtx context.Context) {
+				gc.Run(leaderCtx, *snapshotGCInterval)
+			}); err != nil && shutdownCtx.Err() == nil {
+				slog.ErrorContext(ctx, "ActorSnapshot GC leader election stopped", "err", err)
+			}
+		}()
+	}
 
 	jwtIssuerDiscoveryClient := buildK8sServiceAccountIssuerDiscoveryClient(ctx, *clientJWTCAFile, *clientJWTIssuer)
 
@@ -303,6 +327,8 @@ func logFlagValues(ctx context.Context) {
 		slog.String("atelet-client-cred-bundle", *ateletClientCredBundle),
 		slog.Duration("drain-delay", *drainDelay),
 		slog.Duration("drain-timeout", *drainTimeout),
+		slog.Duration("snapshot-gc-interval", *snapshotGCInterval),
+		slog.Int("snapshot-gc-concurrency", *snapshotGCConcurrency),
 	)
 }
 

@@ -123,12 +123,16 @@ func actorSnapshotTagDBKey(atespace, name string) string {
 }
 
 func actorSnapshotTagScanPattern(atespace string) string {
+	if atespace == "" {
+		return "actor-snapshot-tag:*"
+	}
 	return "actor-snapshot-tag:" + atespace + ":*"
 }
 
 type dbActorSnapshot struct {
 	Snapshot json.RawMessage `json:"snapshot"`
 	Location string          `json:"location"`
+	Deleting bool            `json:"deleting,omitempty"`
 }
 
 func marshalActorSnapshot(snapshot *ateapipb.ActorSnapshot, location string) ([]byte, error) {
@@ -140,15 +144,20 @@ func marshalActorSnapshot(snapshot *ateapipb.ActorSnapshot, location string) ([]
 }
 
 func unmarshalActorSnapshot(b []byte) (*ateapipb.ActorSnapshot, string, error) {
+	snapshot, record, err := unmarshalActorSnapshotRecord(b)
+	return snapshot, record.Location, err
+}
+
+func unmarshalActorSnapshotRecord(b []byte) (*ateapipb.ActorSnapshot, dbActorSnapshot, error) {
 	var record dbActorSnapshot
 	if err := json.Unmarshal(b, &record); err != nil {
-		return nil, "", err
+		return nil, record, err
 	}
 	snapshot := &ateapipb.ActorSnapshot{}
 	if err := protojson.Unmarshal(record.Snapshot, snapshot); err != nil {
-		return nil, "", err
+		return nil, record, err
 	}
-	return snapshot, record.Location, nil
+	return snapshot, record, nil
 }
 
 func atespaceDBKey(name string) string {
@@ -521,6 +530,66 @@ func (s *Persistence) ListActorSnapshots(ctx context.Context, atespace string, p
 	return result, nextToken, nil
 }
 
+func (s *Persistence) SetActorSnapshotDeleting(ctx context.Context, atespace, name string, deleting bool) error {
+	dbKey := actorSnapshotDBKey(atespace, name)
+	b, err := s.rdb.Get(ctx, dbKey).Bytes()
+	if errors.Is(err, redis.Nil) {
+		return store.ErrNotFound
+	}
+	if err != nil {
+		return fmt.Errorf("while getting actor snapshot key %q: %w", dbKey, err)
+	}
+	var record dbActorSnapshot
+	if err := json.Unmarshal(b, &record); err != nil {
+		return fmt.Errorf("while unmarshaling actor snapshot record: %w", err)
+	}
+	if record.Deleting == deleting {
+		return nil
+	}
+	record.Deleting = deleting
+	b, err = json.Marshal(record)
+	if err != nil {
+		return fmt.Errorf("while marshaling actor snapshot record: %w", err)
+	}
+	if err := s.rdb.Set(ctx, dbKey, b, 0).Err(); err != nil {
+		return fmt.Errorf("while updating actor snapshot key %q: %w", dbKey, err)
+	}
+	return nil
+}
+
+func (s *Persistence) ActorSnapshotDeleting(ctx context.Context, atespace, name string) (bool, error) {
+	dbKey := actorSnapshotDBKey(atespace, name)
+	b, err := s.rdb.Get(ctx, dbKey).Bytes()
+	if errors.Is(err, redis.Nil) {
+		return false, store.ErrNotFound
+	}
+	if err != nil {
+		return false, fmt.Errorf("while getting actor snapshot key %q: %w", dbKey, err)
+	}
+	var record dbActorSnapshot
+	if err := json.Unmarshal(b, &record); err != nil {
+		return false, fmt.Errorf("while unmarshaling actor snapshot record: %w", err)
+	}
+	return record.Deleting, nil
+}
+
+func (s *Persistence) DeleteActorSnapshot(ctx context.Context, atespace, name string) error {
+	dbKey := actorSnapshotDBKey(atespace, name)
+	deleting, err := s.ActorSnapshotDeleting(ctx, atespace, name)
+	if err != nil {
+		return err
+	}
+	if !deleting {
+		return store.ErrFailedPrecondition
+	}
+	if n, err := s.rdb.Del(ctx, dbKey).Result(); err != nil {
+		return fmt.Errorf("while deleting actor snapshot key %q: %w", dbKey, err)
+	} else if n == 0 {
+		return store.ErrNotFound
+	}
+	return nil
+}
+
 func (s *Persistence) TagActorSnapshot(ctx context.Context, atespace, name string, tag *ateapipb.ActorSnapshotTag) (*ateapipb.ActorSnapshotTag, error) {
 	if _, _, err := s.GetActorSnapshot(ctx, atespace, name); err != nil {
 		return nil, err
@@ -586,6 +655,22 @@ func (s *Persistence) DeleteActorSnapshotTag(ctx context.Context, atespace, name
 		return nil, store.ErrNotFound
 	}
 	return tag, nil
+}
+
+func (s *Persistence) ListActorSnapshotTags(ctx context.Context, atespace string, pageSize int32, pageTokenStr string) ([]*ateapipb.ActorSnapshotTag, string, error) {
+	var result []*ateapipb.ActorSnapshotTag
+	nextToken, err := s.listPage(ctx, actorSnapshotTagScanPattern(atespace), pageSize, pageTokenStr, func(ctx context.Context, master *redis.Client, keys []string) (int, error) {
+		tags, err := fetchProtos(ctx, master, keys, func() *ateapipb.ActorSnapshotTag { return &ateapipb.ActorSnapshotTag{} })
+		if err != nil {
+			return 0, err
+		}
+		result = append(result, tags...)
+		return len(tags), nil
+	})
+	if err != nil {
+		return nil, "", err
+	}
+	return result, nextToken, nil
 }
 
 func (s *Persistence) CreateWorker(ctx context.Context, worker *ateapipb.Worker) error {

@@ -198,6 +198,15 @@ func (s *Service) lockActorSnapshot(ctx context.Context, ref *ateapipb.ActorSnap
 		}
 		return nil, nil, nil, nil, status.Error(codes.Aborted, "ActorSnapshot reference changed, please retry")
 	}
+	deleting, err := s.persistence.ActorSnapshotDeleting(lock.Context(), lockedCanonical.GetAtespace(), lockedCanonical.GetName())
+	if err != nil {
+		lock.Close()
+		return nil, nil, nil, nil, fmt.Errorf("while checking ActorSnapshot deletion: %w", err)
+	}
+	if deleting {
+		lock.Close()
+		return nil, nil, nil, nil, status.Error(codes.FailedPrecondition, "ActorSnapshot is being garbage collected")
+	}
 	return lock, snapshot, lockedCanonical, tag, nil
 }
 

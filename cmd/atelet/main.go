@@ -24,6 +24,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -418,6 +419,19 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 	}
 
 	return &ateletpb.CheckpointResponse{}, nil
+}
+
+func (s *AteomHerder) DeleteExternalSnapshot(ctx context.Context, req *ateletpb.DeleteExternalSnapshotRequest) (*ateletpb.DeleteExternalSnapshotResponse, error) {
+	if err := validateDeleteExternalSnapshotRequest(req); err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+	if s.gcsClient == nil {
+		return nil, status.Error(codes.FailedPrecondition, "object storage is not configured")
+	}
+	if err := ategcs.DeletePrefix(ctx, s.gcsClient, req.GetSnapshotUriPrefix()); err != nil {
+		return nil, fmt.Errorf("while deleting external snapshot: %w", err)
+	}
+	return &ateletpb.DeleteExternalSnapshotResponse{}, nil
 }
 
 func toAteomSnapshotScope(scope ateletpb.SnapshotScope) ateompb.SnapshotScope {
@@ -958,6 +972,21 @@ func validateCheckpointRequest(req *ateletpb.CheckpointRequest) error {
 		}
 	default:
 		return fmt.Errorf("invalid checkpoint type: %v", req.GetType())
+	}
+	return nil
+}
+
+func validateDeleteExternalSnapshotRequest(req *ateletpb.DeleteExternalSnapshotRequest) error {
+	prefix := req.GetSnapshotUriPrefix()
+	if err := resources.ValidateSnapshotURIPrefix(prefix); err != nil {
+		return err
+	}
+	parsed, err := url.Parse(prefix)
+	if err != nil {
+		return err
+	}
+	if strings.Trim(parsed.Path, "/") == "" {
+		return fmt.Errorf("snapshot URI prefix must include a path")
 	}
 	return nil
 }

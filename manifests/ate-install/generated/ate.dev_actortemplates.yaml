@@ -306,6 +306,35 @@ spec:
                     - Full
                     - Data
                     type: string
+                  retentionPolicy:
+                    default:
+                      minimumAgeSeconds: 86400
+                      minimumCount: 3
+                    description: |-
+                      RetentionPolicy controls automatic retention of untagged snapshots.
+                      If omitted, the newest three snapshots and snapshots younger than 24
+                      hours are retained for each live Actor.
+                    properties:
+                      minimumAgeSeconds:
+                        default: 86400
+                        description: |-
+                          MinimumAgeSeconds is the minimum age a snapshot must reach before it is
+                          eligible for collection. Zero disables age-based retention.
+                        format: int32
+                        maximum: 2147483647
+                        minimum: 0
+                        type: integer
+                      minimumCount:
+                        default: 3
+                        description: |-
+                          MinimumCount is the minimum number of newest snapshots to retain per
+                          live Actor, including its latest snapshot. Zero disables count-based
+                          retention.
+                        format: int32
+                        maximum: 1000000
+                        minimum: 0
+                        type: integer
+                    type: object
                 required:
                 - location
                 type: object

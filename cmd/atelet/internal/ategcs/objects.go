@@ -37,6 +37,24 @@ var tracer = otel.Tracer("ategcs")
 type ObjectStorage interface {
 	GetObject(ctx context.Context, bucket, object string) (io.ReadCloser, error)
 	PutObject(ctx context.Context, bucket, object string, reader io.Reader) error
+	DeletePrefix(ctx context.Context, bucket, prefix string) error
+}
+
+// DeletePrefix deletes every object below gsURL. A trailing slash is forced so
+// deleting snapshot "abc" cannot also delete sibling "abc2".
+func DeletePrefix(ctx context.Context, client ObjectStorage, gsURL string) error {
+	bucket, object, err := parseGCSURL(gsURL)
+	if err != nil {
+		return fmt.Errorf("%w: while parsing url: %w", ateerrors.ReasonInvalidObjectURL, err)
+	}
+	object = strings.TrimSuffix(object, "/")
+	if bucket == "" || object == "" {
+		return fmt.Errorf("%w: snapshot prefix must include a bucket and path", ateerrors.ReasonInvalidObjectURL)
+	}
+	if err := client.DeletePrefix(ctx, bucket, object+"/"); err != nil {
+		return fmt.Errorf("while deleting object prefix bucket=%q prefix=%q: %w", bucket, object+"/", err)
+	}
+	return nil
 }
 
 func FetchFromGCS(ctx context.Context, client ObjectStorage, gsURL string) ([]byte, error) {
