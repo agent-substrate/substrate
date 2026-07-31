@@ -135,7 +135,7 @@ func (s *RouterServer) Run(ctx context.Context) error {
 	}
 	parkCfg := s.cfg.ParkedRequest.normalized()
 
-	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: serverboot.LogLevel()})))
+	serverboot.InitLogger()
 	if err := serverboot.SetLogLevel(s.cfg.LogLevel); err != nil {
 		return err
 	}

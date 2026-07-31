@@ -49,7 +49,7 @@ func NewDnsCmd() *cobra.Command {
 			ctx, cancel := context.WithCancel(cmd.Context())
 			defer cancel()
 
-			slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: serverboot.LogLevel()})))
+			serverboot.InitLogger()
 			if err := serverboot.SetLogLevel(cfg.LogLevel); err != nil {
 				return err
 			}
