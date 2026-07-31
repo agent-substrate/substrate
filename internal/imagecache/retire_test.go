@@ -27,6 +27,16 @@ import (
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 )
 
+// The retire/reuse interlock depends on retireLayer and ensureLayer using
+// the same singleflight key; pin the key format to diffID.String()'s.
+func TestLayerFlightKeyMatchesDiffIDString(t *testing.T) {
+	hex := strings.Repeat("ab", 32)
+	want := v1.Hash{Algorithm: "sha256", Hex: hex}.String()
+	if got := layerFlightKey(hex); got != want {
+		t.Errorf("layerFlightKey = %q, want %q", got, want)
+	}
+}
+
 func TestRetireLayerStatuses(t *testing.T) {
 	store := newTestStore(t)
 	hex := strings.Repeat("ab", 32)

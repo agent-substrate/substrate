@@ -213,7 +213,7 @@ func (s *Store) sweepTempDirs() error {
 		p := filepath.Join(s.layersDir(), e.Name())
 		slog.Info("Image cache sweeping orphaned layer dir", slog.String("dir", e.Name()))
 		if err := RemoveAllWritable(p); err != nil {
-			return fmt.Errorf("while sweeping orphaned layer temp dir %q: %w", p, err)
+			return fmt.Errorf("while sweeping orphaned layer dir %q: %w", p, err)
 		}
 		swept++
 	}
@@ -394,14 +394,16 @@ func (s *Store) pull(ctx context.Context, parsedRef name.Reference, digest v1.Ha
 // collapsing concurrent requests for the same layer across images.
 func (s *Store) ensureLayer(ctx context.Context, diffID v1.Hash, layer v1.Layer) (string, error) {
 	dir := s.layerDir(diffID)
-	_, err, _ := s.layerSF.Do(diffID.String(), func() (any, error) {
+	_, err, _ := s.layerSF.Do(layerFlightKey(diffID.Hex), func() (any, error) {
 		if _, err := os.Stat(filepath.Join(dir, layerFSDirName)); err == nil {
 			// Refresh the dir mtime inside the flight: retireLayer re-checks
 			// the mtime in this same flight, so a layer reused here can
 			// never be renamed away between this stat and the image record
 			// that will re-reference it.
 			now := time.Now()
-			_ = os.Chtimes(dir, now, now)
+			if err := os.Chtimes(dir, now, now); err != nil {
+				slog.WarnContext(ctx, "Failed to refresh layer mtime on reuse", slog.String("diffid", diffID.String()), slog.Any("err", err))
+			}
 			return nil, nil
 		}
 		return nil, s.unpackLayerToPool(ctx, diffID, layer)

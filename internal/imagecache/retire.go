@@ -29,8 +29,6 @@ import (
 	"os"
 	"path/filepath"
 	"time"
-
-	v1 "github.com/google/go-containerregistry/pkg/v1"
 )
 
 // retiredPrefix marks a layer dir that eviction has renamed aside and that
@@ -57,6 +55,10 @@ const (
 	// caller removes the renamed dir afterwards.
 	retireRetired
 )
+
+// layerFlightKey is the singleflight key shared by ensureLayer and
+// retireLayer; the retire/reuse interlock depends on both using it.
+func layerFlightKey(hex string) string { return "sha256:" + hex }
 
 // isLayerDirName reports whether name is a well-formed sha256 layer
 // directory name. Callers enumerate directories and read hexes out of
@@ -105,7 +107,9 @@ func (s *Store) retireLayer(hex string, cutoff time.Time) (string, retireStatus,
 
 	var retired string
 	status := retireGone
-	_, err, _ = s.layerSF.Do(v1.Hash{Algorithm: "sha256", Hex: hex}.String(), func() (any, error) {
+	ran := false
+	_, err, _ = s.layerSF.Do(layerFlightKey(hex), func() (any, error) {
+		ran = true
 		fi, err := os.Stat(dir)
 		if errors.Is(err, os.ErrNotExist) {
 			status = retireGone
@@ -130,6 +134,12 @@ func (s *Store) retireLayer(hex string, cutoff time.Time) (string, retireStatus,
 		status = retireRetired
 		return nil, nil
 	})
+	if !ran {
+		// Our closure never executed: Do joined a flight already in progress
+		// (an ensureLayer reuse or another retire), so status/retired are
+		// stale zero values. Concurrent activity on the layer is a veto.
+		return "", retireVetoed, nil
+	}
 	if err != nil {
 		return "", status, err
 	}
