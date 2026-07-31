@@ -258,12 +258,6 @@ func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *
 	if err := s.mountExternalVolumes(ctx, actorUID, req.GetSpec().GetVolumes()); err != nil {
 		return nil, err
 	}
-	defer func() {
-		if err != nil {
-			// TODO cleanup orphaned volumes
-			_ = s.unmountExternalVolumes(ctx, actorUID, req.GetSpec().GetVolumes())
-		}
-	}()
 
 	// Record the sandbox binaries this actor is running so a later Checkpoint
 	// (whose request no longer carries the sandbox config) can re-fetch the same
@@ -409,8 +403,9 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 		return nil, fmt.Errorf("unexpected checkpoint type: %v", req.GetType())
 	}
 
-	// TODO cleanup orphaned volumes
-	_ = s.unmountExternalVolumes(ctx, actorUID, req.GetSpec().GetVolumes())
+	if err := s.unmountExternalVolumes(ctx, actorUID, req.GetSpec().GetVolumes()); err != nil {
+		return nil, ateerrors.NewGRPCError(ctx, codes.DataLoss, ateerrors.ReasonTerminalFileSystemError, ateerrors.ActorCrashedMetadata(), fmt.Errorf("while unmounting external volumes: %w", err))
+	}
 
 	// Note: we do not crash the actor if resetting the directory fails.
 	if err := resetActorDirs(actorUID); err != nil {
@@ -507,12 +502,6 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	if err := s.mountExternalVolumes(ctx, actorUID, req.GetSpec().GetVolumes()); err != nil {
 		return nil, err
 	}
-	defer func() {
-		if err != nil {
-			// TODO cleanup orphaned mounts
-			_ = s.unmountExternalVolumes(ctx, actorUID, req.GetSpec().GetVolumes())
-		}
-	}()
 
 	checkpointDir := ateompath.RestoreStateDir(actorUID)
 
