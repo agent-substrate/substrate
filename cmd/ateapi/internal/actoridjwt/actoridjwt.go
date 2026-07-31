@@ -70,6 +70,7 @@ type WireClaims struct {
 type WireSubstrateClaims struct {
 	Atespace  string `json:"atespace,omitempty"`
 	ActorName string `json:"actorName,omitempty"`
+	ActorUid  string `json:"actorUid,omitempty"`
 }
 
 func ClaimsToWire(claims *Claims) (*WireClaims, error) {

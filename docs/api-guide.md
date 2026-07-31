@@ -305,9 +305,9 @@ Workloads can exchange their ephemeral Kubernetes credentials for stable **Actor
 
 Both RPCs identify the actor the same way the rest of the API does, by `atespace` and `actor_name`.
 
-#### Who may call `MintCert`
+#### Who may call `MintCert` and `MintJWT`
 
-`MintCert` is not callable by actors directly. It must be called over mTLS with a
+`MintCert` and `MintJWT` are not callable by actors directly. They must be called over mTLS with a
 Pod Certificate, and the broker only signs a CSR when all of the following hold:
 
 1.  The client certificate identifies the **`atelet`** service account

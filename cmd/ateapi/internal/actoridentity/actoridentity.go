@@ -241,10 +241,6 @@ func (s *Server) MintCert(ctx context.Context, req *ateapipb.MintCertRequest) (*
 		},
 	}
 
-	// The SPIFFE URI above names the actor, but only as an opaque path. The
-	// ActorIdentity extension carries the same identity in a structured form,
-	// including the UID, so a relying party can tell one incarnation of an
-	// actor from another.
 	if err := substratex509.AddActorIdentityToCertificate(&substratex509.ActorIdentity{
 		Atespace:  atespace,
 		ActorName: actorName,
