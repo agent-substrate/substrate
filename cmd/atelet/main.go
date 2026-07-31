@@ -76,7 +76,8 @@ var (
 	localhostRegistryReplacement = pflag.String("localhost-registry-replacement", "", "The replacement registry endpoint for localhost and/or loopback IP addresses, useful for local development. for example kind-registry:5000")
 	imageCacheDir                = pflag.String("image-cache-dir", ateompath.ImageCacheDir, "Directory for the node-local OCI image layer cache. Must be on the volume shared with the ateom pods (the cached layers are their overlay lowerdirs), and on a disk sized for both capacity and IOPS: unpack throughput is gated by the volume's IOPS.")
 
-	showVersion = pflag.Bool("version", false, "Print version and exit.")
+	showVersion  = pflag.Bool("version", false, "Print version and exit.")
+	logLevelFlag = pflag.String("log-level", "info", "Minimum log level: debug, info, warn, or error.")
 )
 
 func main() {
@@ -87,6 +88,9 @@ func main() {
 	}
 	ctx := context.Background()
 	serverboot.InitLogger()
+	if err := serverboot.SetLogLevel(*logLevelFlag); err != nil {
+		serverboot.Fatal(ctx, "Invalid --log-level", err)
+	}
 
 	tp, err := serverboot.InitTracing(ctx, serverboot.TracingOptions{
 		ServiceName: "atelet",

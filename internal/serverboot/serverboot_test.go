@@ -15,7 +15,9 @@
 package serverboot
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -155,4 +157,39 @@ func getCode(t *testing.T, mux *http.ServeMux, path string) int {
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
 	return rec.Code
+}
+
+func TestSetLogLevel(t *testing.T) {
+	t.Cleanup(func() { logLevel.Set(slog.LevelInfo) })
+
+	var buf bytes.Buffer
+	InitLoggerWithWriter(&buf)
+	t.Cleanup(InitLogger)
+
+	slog.Debug("hidden at default level")
+	if buf.Len() != 0 {
+		t.Errorf("debug line emitted at default level: %s", buf.String())
+	}
+
+	if err := SetLogLevel("debug"); err != nil {
+		t.Fatalf("SetLogLevel(debug): %v", err)
+	}
+	slog.Debug("visible at debug")
+	if !strings.Contains(buf.String(), "visible at debug") {
+		t.Errorf("debug line not emitted after SetLogLevel(debug): %s", buf.String())
+	}
+
+	// Case-insensitive, and dynamic: raising the level silences info.
+	if err := SetLogLevel("WARN"); err != nil {
+		t.Fatalf("SetLogLevel(WARN): %v", err)
+	}
+	buf.Reset()
+	slog.Info("hidden at warn")
+	if buf.Len() != 0 {
+		t.Errorf("info line emitted at warn level: %s", buf.String())
+	}
+
+	if err := SetLogLevel("verbose"); err == nil {
+		t.Error("SetLogLevel accepted an invalid level")
+	}
 }

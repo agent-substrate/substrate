@@ -62,7 +62,8 @@ var (
 	atunnelEgressListenAddress = pflag.String("atunnel-egress-listen-address", "0.0.0.0:15001", "Address for transparently intercepted actor egress TCP")
 	atunnelEgressTrustBundle   = pflag.String("atunnel-egress-trust-bundle", "/run/servicedns.podcert.ate.dev/trust-bundle.pem", "PEM trust bundle for the egress gateway")
 
-	showVersion = pflag.Bool("version", false, "Print version and exit.")
+	showVersion  = pflag.Bool("version", false, "Print version and exit.")
+	logLevelFlag = pflag.String("log-level", "info", "Minimum log level: debug, info, warn, or error.")
 
 	reapLock sync.RWMutex
 )
@@ -91,8 +92,11 @@ func do(ctx context.Context) error {
 	defer cancel()
 
 	syncedWriter := actorlog.NewSyncedWriter(os.Stdout)
-	logger := slog.New(contextlogging.NewHandler(slog.NewJSONHandler(syncedWriter, nil)))
+	logger := slog.New(contextlogging.NewHandler(slog.NewJSONHandler(syncedWriter, &slog.HandlerOptions{Level: serverboot.LogLevel()})))
 	slog.SetDefault(logger)
+	if err := serverboot.SetLogLevel(*logLevelFlag); err != nil {
+		return err
+	}
 
 	slog.InfoContext(ctx, "ateom booting")
 

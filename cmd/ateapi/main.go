@@ -83,6 +83,7 @@ var (
 	drainTimeout = pflag.Duration("drain-timeout", 15*time.Second, "Deadline for the graceful gRPC drain on shutdown. In-flight RPCs still running past it are forcefully cancelled.")
 
 	showVersion     = pflag.Bool("version", false, "Print version and exit.")
+	logLevelFlag    = pflag.String("log-level", "info", "Minimum log level: debug, info, warn, or error.")
 	clientJWTCAFile = pflag.String("client-jwt-ca-cert", ateapiauth.DefaultServiceAccountCAFile, "CA cert file used to verify TLS when fetching the OIDC discovery document and JWKS for JWT authentication. Defaults to the in-cluster service account CA.")
 )
 
@@ -94,6 +95,9 @@ func main() {
 	}
 	ctx := context.Background()
 	serverboot.InitLogger()
+	if err := serverboot.SetLogLevel(*logLevelFlag); err != nil {
+		serverboot.Fatal(ctx, "Invalid --log-level", err)
+	}
 
 	// Kept separate from ctx so that in-progress work (clients, informers) is
 	// not cancelled the moment SIGTERM arrives. The drainOnShutdown
