@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -31,6 +32,10 @@ import (
 type resumerMockClient struct {
 	ateapipb.ControlClient
 	resumeFn func(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error)
+	// status is what GetActor reports; the resumer probes it to decide whether
+	// a worker is already assigned. The zero value (STATUS_UNSPECIFIED) means
+	// unassigned.
+	status ateapipb.Actor_Status
 }
 
 func (m *resumerMockClient) ResumeActor(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
@@ -38,6 +43,13 @@ func (m *resumerMockClient) ResumeActor(ctx context.Context, in *ateapipb.Resume
 		return m.resumeFn(ctx, in, opts...)
 	}
 	return nil, status.Error(codes.Unimplemented, "unimplemented")
+}
+
+func (m *resumerMockClient) GetActor(ctx context.Context, in *ateapipb.GetActorRequest, opts ...grpc.CallOption) (*ateapipb.Actor, error) {
+	return &ateapipb.Actor{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: in.GetActor().GetAtespace(), Name: in.GetActor().GetName()},
+		Status:   m.status,
+	}, nil
 }
 
 func TestActorResumer_ResumeActor(t *testing.T) {
@@ -367,13 +379,15 @@ func TestActorResumer_Parking(t *testing.T) {
 					// last retryable error.
 					return nil, status.Error(codes.FailedPrecondition, "no free workers available")
 				}
-				// Later attempt: block until the park budget cancels the RPC,
-				// then return what a real gRPC client returns — a *status*
-				// error with code DeadlineExceeded that does NOT satisfy
+				// Later attempt: block until the budget cuts the RPC, then
+				// return what a real gRPC client returns — a *status* error
+				// that does NOT satisfy errors.Is(err, context.Canceled) or
 				// errors.Is(err, context.DeadlineExceeded).
 				<-ctx.Done()
 				return nil, status.FromContextError(ctx.Err()).Err()
 			},
+			// No worker assigned, so no grace: the attempt is cut at the budget.
+			status: ateapipb.Actor_STATUS_SUSPENDED,
 		}
 
 		resumer := NewActorResumer(mock, withParking(ParkedRequestConfig{Max: 1, Budget: 300 * time.Millisecond}))
@@ -411,6 +425,137 @@ func TestActorResumer_Parking(t *testing.T) {
 		defer mu.Unlock()
 		if calls != 1 {
 			t.Errorf("expected exactly 1 resume attempt when parking disabled, got %d", calls)
+		}
+	})
+}
+
+// TestActorResumer_AttemptGrace covers the grace granted to a resume attempt
+// still in flight when the parking budget elapses — and the probe that decides
+// whether it is warranted. Canceling an attempt after a worker has been
+// assigned strands that worker in RESUMING and starves the pool the caller is
+// waiting on, while under node contention the snapshot restore overshoots the
+// budget by a few hundred milliseconds routinely; with no worker assigned there
+// is nothing to protect, and the request fails on its budget as before.
+func TestActorResumer_AttemptGrace(t *testing.T) {
+	const testActorName = "actor-grace"
+	const expectedIP = "10.0.0.99"
+	testActorRef := resources.ActorRef{Atespace: "team-a", Name: testActorName}
+
+	const budget = 300 * time.Millisecond
+	const grace = 2 * time.Second
+
+	// overshoot returns a ResumeActor stub whose first attempt reports a
+	// saturated pool and whose second runs past the budget, landing only if it
+	// is not cancelled first.
+	overshoot := func(lands bool) func(context.Context, *ateapipb.ResumeActorRequest, ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
+		var calls atomic.Int32
+		return func(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
+			if calls.Add(1) == 1 {
+				return nil, status.Error(codes.FailedPrecondition, "no free workers available")
+			}
+			wait := budget
+			if !lands {
+				wait = time.Hour // never completes on its own
+			}
+			select {
+			case <-time.After(wait):
+			case <-ctx.Done():
+				return nil, status.FromContextError(ctx.Err()).Err()
+			}
+			return &ateapipb.ResumeActorResponse{
+				Actor:   &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Name: testActorName}, Status: ateapipb.Actor_STATUS_RUNNING, AteomPodIp: expectedIP},
+				Resumed: true,
+			}, nil
+		}
+	}
+
+	newResumer := func(mock *resumerMockClient) *ActorResumer {
+		// The production grace (resumeAttemptGrace) is seconds long by design.
+		r := NewActorResumer(mock, withParking(ParkedRequestConfig{Max: 1, Budget: budget}))
+		r.grace = grace
+		return r
+	}
+
+	t.Run("AssignedWorkerLandsWithinGrace", func(t *testing.T) {
+		// A worker was assigned, so the overshooting restore is worth waiting
+		// for rather than throwing away.
+		mock := &resumerMockClient{resumeFn: overshoot(true), status: ateapipb.Actor_STATUS_RESUMING}
+
+		start := time.Now()
+		actor, _, err := newResumer(mock).ResumeActor(context.Background(), testActorRef)
+		elapsed := time.Since(start)
+		if err != nil {
+			t.Fatalf("expected the overshooting resume to be served, got %v", err)
+		}
+		if actor.GetAteomPodIp() != expectedIP {
+			t.Errorf("expected IP %q, got %q", expectedIP, actor.GetAteomPodIp())
+		}
+		if elapsed < budget {
+			t.Errorf("expected the resume to land after the budget, took only %v", elapsed)
+		}
+		if elapsed >= budget+grace {
+			t.Errorf("expected the resume to land inside the grace, took %v", elapsed)
+		}
+	})
+
+	t.Run("UnassignedActorFailsAtBudget", func(t *testing.T) {
+		// Same overshooting attempt, but the actor never left SUSPENDED: no
+		// worker to strand, nothing to wait for.
+		mock := &resumerMockClient{resumeFn: overshoot(true), status: ateapipb.Actor_STATUS_SUSPENDED}
+
+		start := time.Now()
+		_, _, err := newResumer(mock).ResumeActor(context.Background(), testActorRef)
+		elapsed := time.Since(start)
+		if got := status.Code(err); got != codes.FailedPrecondition {
+			t.Errorf("expected the capacity error, got %v (err=%v)", got, err)
+		}
+		var exhausted *budgetExhaustedError
+		if !errors.As(err, &exhausted) {
+			t.Errorf("expected budget exhaustion, got %T (%v)", err, err)
+		}
+		if elapsed >= budget+grace {
+			t.Errorf("expected the attempt to be cut at the budget, took %v", elapsed)
+		}
+	})
+
+	t.Run("GraceIsBounded", func(t *testing.T) {
+		// A worker is assigned but the resume never lands: the grace, not the
+		// control plane, has to end the wait.
+		mock := &resumerMockClient{resumeFn: overshoot(false), status: ateapipb.Actor_STATUS_RESUMING}
+
+		start := time.Now()
+		_, _, err := newResumer(mock).ResumeActor(context.Background(), testActorRef)
+		elapsed := time.Since(start)
+		if got := status.Code(err); got != codes.FailedPrecondition {
+			t.Errorf("expected the capacity error after the grace, got %v (err=%v)", got, err)
+		}
+		if elapsed < budget+grace {
+			t.Errorf("expected the full grace to be granted, took only %v", elapsed)
+		}
+		if elapsed >= budget+2*grace {
+			t.Errorf("expected the grace to bound the wait, took %v", elapsed)
+		}
+	})
+
+	t.Run("GraceDoesNotExtendRetries", func(t *testing.T) {
+		// A stale RESUMING (left by some earlier abandoned attempt) must not
+		// buy extra retries: with the pool refusing instantly there is no
+		// attempt in flight at the budget, so exhaustion lands on time.
+		mock := &resumerMockClient{
+			resumeFn: func(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
+				return nil, status.Error(codes.FailedPrecondition, "no free workers available")
+			},
+			status: ateapipb.Actor_STATUS_RESUMING,
+		}
+
+		start := time.Now()
+		_, _, err := newResumer(mock).ResumeActor(context.Background(), testActorRef)
+		elapsed := time.Since(start)
+		if got := status.Code(err); got != codes.FailedPrecondition {
+			t.Errorf("expected the capacity error, got %v (err=%v)", got, err)
+		}
+		if elapsed >= budget+grace {
+			t.Errorf("expected exhaustion at the budget, took %v", elapsed)
 		}
 	})
 }

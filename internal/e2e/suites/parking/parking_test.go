@@ -46,6 +46,14 @@ const parkingAtespace = "parking-e2e"
 // not an Envoy timeout — produced the verdict.
 const routerParkBudget = 5 * time.Second
 
+// The grace the deployed router grants a resume attempt that is in flight with a
+// worker already assigned when the budget elapses (resumeAttemptGrace in the
+// router package). It is the difference between the budget and the router's true
+// worst-case hold, so the "served" window has to allow for it: on a contended
+// node the snapshot restore regularly runs past the budget, and the grace is
+// what turns that into a 200 instead of a 503.
+const routerAttemptGrace = 3 * time.Second
+
 func TestRequestParking(t *testing.T) {
 	ctx := context.Background()
 	clients := e2e.GetClients()
@@ -116,8 +124,8 @@ func TestRequestParking(t *testing.T) {
 		if !strings.Contains(res.body, "hello from") {
 			t.Errorf("parked request body = %q, want the counter greeting", res.body)
 		}
-		if elapsed >= routerParkBudget+2*time.Second {
-			t.Errorf("parked request served after %v, want inside the %v budget window", elapsed, routerParkBudget)
+		if elapsed >= routerParkBudget+routerAttemptGrace+2*time.Second {
+			t.Errorf("parked request served after %v, want inside the %v budget (+%v grace) window", elapsed, routerParkBudget, routerAttemptGrace)
 		}
 		t.Logf("parked request served after %v", elapsed)
 
@@ -150,7 +158,9 @@ func TestRequestParking(t *testing.T) {
 		}
 		// Lower bound proves the request parked (fail-fast would answer in
 		// milliseconds); upper bound proves the router's own verdict landed
-		// before Envoy's ext_proc timeout (budget+5s) could.
+		// before Envoy's ext_proc timeout (budget+grace+2s) could. No grace
+		// applies here: actor A never gets a worker assigned, so the probe at
+		// budget expiry finds nothing worth waiting for.
 		if elapsed < routerParkBudget-time.Second {
 			t.Errorf("503 after %v: too fast, the request did not park for the budget", elapsed)
 		}

@@ -36,6 +36,26 @@ import (
 // conflicts are retried; capacity errors fail immediately.
 const failFastResumeBudget = 15 * time.Second
 
+// resumeAttemptGrace is the extra time a resume attempt still in flight at the
+// budget gets to land, but only if a worker is already assigned to the actor
+// (see workerAssigned). Retries always stop at the budget; the grace covers the
+// one attempt underway, never another round.
+//
+// Canceling an assigned attempt is the case worth avoiding: it does not
+// release the worker, so the pool the request was waiting on stays starved,
+// and a restore that was about to succeed is discarded. Under node contention
+// those overshoot the budget by a few hundred milliseconds routinely. With no
+// worker assigned there is nothing to lose, so the request fails on its budget.
+//
+// budget+grace is the router's worst-case hold on a parked request, which the
+// ext_proc message timeout must cover; see extProcMessageTimeoutFor.
+const resumeAttemptGrace = 3 * time.Second
+
+// resumeProbeTimeout bounds the single GetActor that decides whether a worker
+// is assigned. It is spent inside the grace, not on top of it, so a slow
+// control plane cannot stretch the hold past budget+grace.
+const resumeProbeTimeout = 1 * time.Second
+
 // resumeBackoff builds the backoff between resume attempts while a request is
 // parked, from the configured retry parameters.
 //
@@ -98,6 +118,11 @@ type ActorResumer struct {
 	// budget bounds the total time a single resume operation retries before the
 	// underlying error is returned.
 	budget time.Duration
+	// grace is the extra time a resume attempt already in flight when the
+	// budget elapses is allowed, if a worker has been assigned to the actor by
+	// then. Zero — the fail-fast behavior applied when parking is off — cuts it
+	// at the budget and skips the probe entirely.
+	grace time.Duration
 	// backoff paces the retries within the budget.
 	backoff wait.Backoff
 	// nextID is a counter assigned to each incoming ResumeActor call.
@@ -119,6 +144,7 @@ func withParking(cfg ParkedRequestConfig) resumerOption {
 		r.parkEnabled = cfg.enabled()
 		if r.parkEnabled {
 			r.budget = cfg.Budget
+			r.grace = resumeAttemptGrace
 		}
 		r.backoff = resumeBackoff(cfg.RetryInterval, cfg.RetryFactor, cfg.RetryJitter)
 	}
@@ -157,6 +183,28 @@ func (r *ActorResumer) retryable(err error) bool {
 	}
 }
 
+// workerAssigned reports whether the control plane has already bound a worker
+// to the actor, i.e. whether a resume in flight is past the point where
+// abandoning it would strand that worker. RESUMING is written durably by the
+// assignment step, before the snapshot restore begins; RUNNING is the same
+// answer after it. A probe that fails or times out counts as unassigned, which
+// cancels the attempt exactly as it would without the grace.
+func (r *ActorResumer) workerAssigned(actorRef resources.ActorRef) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), resumeProbeTimeout)
+	defer cancel()
+
+	actor, err := r.apiClient.GetActor(ctx, &ateapipb.GetActorRequest{Actor: actorRef.ToObjectRef()})
+	if err != nil {
+		return false
+	}
+	switch actor.GetStatus() {
+	case ateapipb.Actor_STATUS_RESUMING, ateapipb.Actor_STATUS_RUNNING:
+		return true
+	default:
+		return false
+	}
+}
+
 // ResumeActor ensures the requested actor is running. It deduplicates concurrent
 // requests within the process and, when parking is enabled, holds the request
 // while retrying transient failures until the budget elapses.
@@ -185,9 +233,35 @@ func (r *ActorResumer) ResumeActor(ctx context.Context, actorRef resources.Actor
 		var resumeResp *ateapipb.ResumeActorResponse
 		var lastRetryErr error
 
-		err := wait.ExponentialBackoffWithContext(bgCtx, backoff, func(ctx context.Context) (bool, error) {
+		// bgCtx bounds the retry loop; attemptCtx bounds the RPCs. They part
+		// company only when the budget elapses with an attempt still running:
+		// if a worker is by then assigned to the actor, that attempt gets the
+		// grace to land instead of being cancelled (see resumeAttemptGrace).
+		// With the grace disabled the two coincide, and the budget cuts the RPC
+		// exactly as it did before.
+		attemptCtx := bgCtx
+		if r.grace > 0 {
+			var cancelAttempt context.CancelFunc
+			attemptCtx, cancelAttempt = context.WithCancel(context.Background())
+			defer cancelAttempt()
+
+			stopWatchdog := context.AfterFunc(bgCtx, func() {
+				graceExpiry := time.After(r.grace) // started before the probe, so the probe is spent inside the grace
+				if !r.workerAssigned(actorRef) {
+					cancelAttempt()
+					return
+				}
+				<-graceExpiry
+				cancelAttempt()
+			})
+			// Deferred last, so it runs first on the way out: the flight's own
+			// teardown of bgCtx must not be mistaken for a budget expiry.
+			defer stopWatchdog()
+		}
+
+		err := wait.ExponentialBackoffWithContext(bgCtx, backoff, func(context.Context) (bool, error) {
 			var err error
-			resumeResp, err = r.apiClient.ResumeActor(ctx, &ateapipb.ResumeActorRequest{
+			resumeResp, err = r.apiClient.ResumeActor(attemptCtx, &ateapipb.ResumeActorRequest{
 				Actor: actorRef.ToObjectRef(),
 			})
 			if err == nil {
@@ -212,8 +286,10 @@ func (r *ActorResumer) ResumeActor(ctx context.Context, actorRef resources.Actor
 			// when the deadline lands during an in-flight ResumeActor RPC, gRPC
 			// surfaces a *status* error with code DeadlineExceeded that does not
 			// match the context sentinel, which would misreport budget exhaustion
-			// as a 504. bgCtx is this loop's only deadline source, so checking it
-			// covers both landing spots (mid-RPC and between retries).
+			// as a 504. Every way this loop can run out of time — between
+			// retries, mid-RPC, or when the grace cuts an attempt that never
+			// landed — happens at or after bgCtx's own deadline, so checking
+			// bgCtx covers all of them.
 			if lastRetryErr != nil && (bgCtx.Err() != nil || wait.Interrupted(err)) {
 				return &resumeCallResult{leaderID: reqID, err: &budgetExhaustedError{lastErr: lastRetryErr}}, nil
 			}

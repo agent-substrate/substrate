@@ -43,6 +43,22 @@ const (
 	defaultParkedRequestRetryJitter   = 0.1
 )
 
+// extProcMessageTimeoutMargin is how much longer Envoy waits on the ext_proc
+// stream than the router can possibly hold a parked request. Without a margin
+// the two deadlines race, and an Envoy win replaces the router's meaningful 503
+// ("no free workers available") with a generic gateway error.
+const extProcMessageTimeoutMargin = 2 * time.Second
+
+// extProcMessageTimeoutFor returns the ext_proc message timeout that covers the
+// router's worst-case hold on a parked request: the parking budget, plus the
+// grace an attempt already in flight when the budget elapses may get (see
+// resumeAttemptGrace), plus the margin above. The resumer's hold and Envoy's
+// patience must move together — raising one without the other reintroduces the
+// race the margin exists to prevent.
+func extProcMessageTimeoutFor(cfg ParkedRequestConfig) time.Duration {
+	return cfg.normalized().Budget + resumeAttemptGrace + extProcMessageTimeoutMargin
+}
+
 // parkOutcome is the terminal disposition of a parked request. It is recorded
 // as the `outcome` label on the parking.wait.duration histogram.
 type parkOutcome string

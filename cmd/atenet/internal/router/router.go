@@ -25,7 +25,6 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
-	"time"
 
 	"github.com/spf13/cobra"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
@@ -200,9 +199,7 @@ func (s *RouterServer) Run(ctx context.Context) error {
 
 	xdsSrv.SetExtProcMaxRequests(s.cfg.extProcMaxRequests())
 	if parkCfg.enabled() {
-		// Envoy must keep a parked request open at least as long as the router
-		// will hold it; add a margin so the router surfaces its own 503 first.
-		xdsSrv.SetExtProcMessageTimeout(parkCfg.Budget + 5*time.Second)
+		xdsSrv.SetExtProcMessageTimeout(extProcMessageTimeoutFor(parkCfg))
 	}
 
 	xdsSrv.SetTlsConfig(s.cfg.HttpsPort, s.cfg.EnvoyCertPath)

@@ -43,6 +43,29 @@ exponential backoff until either
   underlying capacity error is returned, surfacing as `503 "actor <id>
   unavailable: no free workers available"`.
 
+**An attempt with a worker already assigned gets a grace.** When the budget
+elapses with a resume still in flight, the router issues one `GetActor`. If the
+actor is `RESUMING` or `RUNNING` — a worker is assigned — that attempt gets a
+bounded **grace** (3s) to land instead of being cancelled. Anything else fails
+on the budget exactly as before. Either way the retry loop stops at the budget:
+the grace covers the one attempt underway, never another round.
+
+The distinction is what makes the wait worth it. The control plane durably marks
+an actor `RESUMING` once it has bound a worker to it, *before* the expensive
+part — the snapshot restore — begins. A cancellation after that point releases
+nothing: the actor is left `RESUMING` with the worker still assigned, so the
+undersized pool that made the request park stays starved for every request
+behind it, and a resume that was about to succeed is discarded. Under node
+contention the restore overshoots the budget by a few hundred milliseconds
+routinely, and the grace is what turns those into a `200` rather than a `503`
+plus a stranded worker. With no worker assigned there is nothing to protect and
+nothing to wait for.
+
+The worst-case hold on a parked request is therefore `budget + 3s` (the probe is
+spent inside the grace, not on top of it), which Envoy's ext_proc message
+timeout is sized to cover: `budget + 3s + 2s` margin, so the router's own 503
+surfaces first.
+
 To bound resource use and provide backpressure, the router admits requests to a
 **parking lot** of fixed capacity (`--parked-request-max`, default `1024`). Each
 in-flight resume occupies one slot. When the lot is full, further requests are
