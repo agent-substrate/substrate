@@ -278,18 +278,26 @@ func (s *FinalizePausedStep) Execute(ctx context.Context, input *PauseInput, sta
 			latestActor.LocalSnapshotInfo = localInfo
 			latestActor.InProgressSnapshot = ""
 		}
+		sandboxClass := ""
+		if worker != nil {
+			sandboxClass = worker.GetSandboxClass()
+		}
+		// Snapshot crash attributes before pod and pool pointers are cleared below.
+		crashAttrs := ateattr.ActorMetricAttributes(latestActor, sandboxClass, ateattr.OperationNamePause, ateattr.ReasonCorruptedAssignment)
+
 		latestActor.AteomPodNamespace = ""
 		latestActor.AteomPodName = ""
 		latestActor.AteomPodIp = ""
 		latestActor.WorkerPoolName = ""
 		updatedActor, err := s.store.UpdateActor(ctx, latestActor, latestActor.GetMetadata().GetVersion())
 		if err == nil && updatedActor.GetStatus() == ateapipb.Actor_STATUS_CRASHED && !wasAlreadyCrashed {
-			recordActorCrash(ctx, updatedActor, "", ateattr.OperationNamePause, ateattr.ReasonCorruptedAssignment)
+			recordActorCrash(ctx, crashAttrs)
 		}
 		if err != nil {
 			return err
 		}
 		latestActor = updatedActor
+
 	}
 
 	state.Actor = latestActor

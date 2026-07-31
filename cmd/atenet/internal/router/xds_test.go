@@ -609,3 +609,89 @@ func TestXdsServer_ExtProcCircuitBreaker(t *testing.T) {
 		}
 	})
 }
+
+func TestXdsServer_SetOtlpCollector(t *testing.T) {
+	// --otlp-collector-address defaults to OTEL_EXPORTER_OTLP_ENDPOINT, so the
+	// URL forms that variable carries have to reduce to the bare host and port
+	// an xDS SocketAddress accepts.
+	tests := []struct {
+		name     string
+		addr     string
+		wantHost string
+		wantPort uint32
+	}{
+		{"HostPort", "collector.otel-system.svc:4317", "collector.otel-system.svc", 4317},
+		{"HostOnlyDefaultsPort", "collector.otel-system.svc", "collector.otel-system.svc", 4317},
+		{"HttpURL", "http://collector.otel-system.svc:4317", "collector.otel-system.svc", 4317},
+		{"HttpURLNoPort", "http://collector.otel-system.svc", "collector.otel-system.svc", 4317},
+		{"HttpURLTrailingSlash", "http://collector.otel-system.svc:4317/", "collector.otel-system.svc", 4317},
+		{"HttpURLWithPath", "http://collector.otel-system.svc:4317/v1/traces", "collector.otel-system.svc", 4317},
+		{"NonDefaultPort", "http://collector.otel-system.svc:14317", "collector.otel-system.svc", 14317},
+		{"IPv6", "[::1]:4317", "::1", 4317},
+		{"IPv6URL", "http://[::1]:4317", "::1", 4317},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			x := NewXdsServer(0)
+			if err := x.SetOtlpCollector(tc.addr); err != nil {
+				t.Fatalf("SetOtlpCollector(%q) failed: %v", tc.addr, err)
+			}
+			if x.otlpHost != tc.wantHost || x.otlpPort != tc.wantPort {
+				t.Errorf("SetOtlpCollector(%q) = %q:%d, want %q:%d", tc.addr, x.otlpHost, x.otlpPort, tc.wantHost, tc.wantPort)
+			}
+
+			// The address only matters insofar as it reaches Envoy: it must
+			// land in the tracer cluster's socket address, unaltered.
+			sock := x.buildOtlpCollectorCluster().GetLoadAssignment().GetEndpoints()[0].GetLbEndpoints()[0].GetEndpoint().GetAddress().GetSocketAddress()
+			if sock.GetAddress() != tc.wantHost || sock.GetPortValue() != tc.wantPort {
+				t.Errorf("tracer cluster endpoint = %q:%d, want %q:%d", sock.GetAddress(), sock.GetPortValue(), tc.wantHost, tc.wantPort)
+			}
+		})
+	}
+}
+
+func TestXdsServer_SetOtlpCollector_Rejects(t *testing.T) {
+	// An endpoint Envoy cannot use has to be reported rather than silently
+	// accepted: https downgraded to the plaintext tracer cluster would leak
+	// spans, and a garbage port would yield a cluster that never connects.
+	// Reporting it is as far as this layer goes — setOtlpCollector turns the
+	// error into a warning and runs without Envoy tracing, never a startup
+	// failure. See TestSetOtlpCollector.
+	for _, tc := range []struct {
+		name string
+		addr string
+	}{
+		{"Https", "https://collector.otel-system.svc:4317"},
+		{"UnknownScheme", "grpc://collector.otel-system.svc:4317"},
+		{"NoHost", "http://:4317"},
+		{"NonNumericPort", "collector.otel-system.svc:grpc"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := NewXdsServer(0).SetOtlpCollector(tc.addr); err == nil {
+				t.Errorf("SetOtlpCollector(%q) succeeded, want error", tc.addr)
+			}
+		})
+	}
+}
+
+func TestXdsServer_SetOtlpCollector_EmptyDisablesTracing(t *testing.T) {
+	// Empty has to stay a working off switch: the router's own spans keep
+	// flowing via OTEL_EXPORTER_OTLP_ENDPOINT, but Envoy emits none.
+	x := NewXdsServer(0)
+	if err := x.SetOtlpCollector(""); err != nil {
+		t.Fatalf("SetOtlpCollector(\"\") failed: %v", err)
+	}
+	if tr := x.buildTracing(); tr != nil {
+		t.Errorf("buildTracing() = %v, want nil when no collector is configured", tr)
+	}
+	if err := x.UpdateSnapshot(); err != nil {
+		t.Fatalf("UpdateSnapshot failed: %v", err)
+	}
+	res, err := x.snapshot.GetSnapshot(NodeID)
+	if err != nil {
+		t.Fatalf("GetSnapshot failed: %v", err)
+	}
+	if _, ok := res.GetResources(resourcev3.ClusterType)[OtlpClusterName]; ok {
+		t.Errorf("snapshot contains cluster %q, want it omitted when tracing is disabled", OtlpClusterName)
+	}
+}

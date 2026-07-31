@@ -21,6 +21,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 	"k8s.io/apimachinery/pkg/labels"
 )
@@ -36,8 +37,8 @@ var actorCrashesCounter metric.Int64Counter
 func RegisterActorCrashes(meter metric.Meter) error {
 	counter, err := meter.Int64Counter(
 		actorCrashesMetric,
-		metric.WithUnit("{actor}"),
-		metric.WithDescription("Total number of actors that transitioned to STATUS_CRASHED."),
+		metric.WithUnit("{crash}"),
+		metric.WithDescription("Number of times actors transitioned to STATUS_CRASHED with failure reasons."),
 	)
 	if err != nil {
 		return fmt.Errorf("create %s counter: %w", actorCrashesMetric, err)
@@ -47,11 +48,11 @@ func RegisterActorCrashes(meter metric.Meter) error {
 }
 
 // recordActorCrash records a crash event on ate.actor.crashes with low-cardinality attributes.
-func recordActorCrash(ctx context.Context, actor *ateapipb.Actor, sandboxClass, opName, reason string) {
-	if actorCrashesCounter == nil || actor == nil {
+func recordActorCrash(ctx context.Context, attrs []attribute.KeyValue) {
+	if actorCrashesCounter == nil || len(attrs) == 0 {
 		return
 	}
-	actorCrashesCounter.Add(ctx, 1, metric.WithAttributes(ateattr.ActorMetricAttributes(actor, sandboxClass, opName, reason)...))
+	actorCrashesCounter.Add(ctx, 1, metric.WithAttributes(attrs...))
 }
 
 // RegisterWorkerCount wires the ate.workerpool.workers observable against workers

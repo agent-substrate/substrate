@@ -165,7 +165,7 @@ func NewActorWorkflow(
 }
 
 // ResumeActor executes the workflow to resume a suspended actor. Idempotent.
-func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.ActorRef, boot bool) (*ateapipb.Actor, error) {
+func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.ActorRef, boot bool) (*ateapipb.Actor, bool, error) {
 	input := &ResumeInput{
 		ActorRef: actorRef,
 		Boot:     boot,
@@ -174,7 +174,7 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 
 	ctx, lock, err := w.acquireActorLock(ctx, actorRef)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	defer lock.Close()
 
@@ -188,10 +188,10 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 	}
 
 	if err := RunWorkflow(ctx, input, state, steps); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
-	return state.Actor, nil
+	return state.Actor, !state.WasRunning, nil
 }
 
 // SuspendActor executes the workflow to suspend a running actor. Idempotent.

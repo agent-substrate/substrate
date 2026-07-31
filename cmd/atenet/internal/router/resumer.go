@@ -17,6 +17,7 @@ package router
 import (
 	"context"
 	"math"
+	"sync/atomic"
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/ateattr"
@@ -64,6 +65,27 @@ type budgetExhaustedError struct{ lastErr error }
 func (e *budgetExhaustedError) Error() string { return e.lastErr.Error() }
 func (e *budgetExhaustedError) Unwrap() error { return e.lastErr }
 
+// ResumeOutcome indicates the singleflight execution state of an actor resumption request.
+type ResumeOutcome string
+
+const (
+	ResumeOutcomeNone      ResumeOutcome = ateattr.RouterResumeNone
+	ResumeOutcomeTriggered ResumeOutcome = ateattr.RouterResumeTriggered
+	ResumeOutcomeJoined    ResumeOutcome = ateattr.RouterResumeJoined
+)
+
+type resumeCallResult struct {
+	actor *ateapipb.Actor
+	// resumed is true if ResumeActor call executed a cold activation
+	// false if the actor was already running
+	resumed bool
+	// leaderID is the unique request ID (reqID) of the leader that initiated
+	// the singleflight execution. It helps disambiguates the leader caller
+	// (ResumeOutcomeTriggered) from joiner callers (ResumeOutcomeJoined).
+	leaderID uint64
+	err      error
+}
+
 // ActorResumer coordinates safe, deduplicated resumption of actors.
 type ActorResumer struct {
 	apiClient ateapipb.ControlClient
@@ -78,6 +100,10 @@ type ActorResumer struct {
 	budget time.Duration
 	// backoff paces the retries within the budget.
 	backoff wait.Backoff
+	// nextID is a counter assigned to each incoming ResumeActor call.
+	// Used as a unique ID to identify requests (reqID) and disambiguate the
+	// leader vs joiners for singleflight outcome classification.
+	nextID uint64
 }
 
 // resumerOption configures an ActorResumer.
@@ -134,10 +160,12 @@ func (r *ActorResumer) retryable(err error) bool {
 // ResumeActor ensures the requested actor is running. It deduplicates concurrent
 // requests within the process and, when parking is enabled, holds the request
 // while retrying transient failures until the budget elapses.
-func (r *ActorResumer) ResumeActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error) {
+func (r *ActorResumer) ResumeActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, ResumeOutcome, error) {
 	ctx, span := otel.Tracer(routerServiceName).Start(ctx, "ResumeActor",
 		trace.WithAttributes(ateattr.ActorRefAttributes(actorRef)...))
 	defer span.End()
+
+	reqID := atomic.AddUint64(&r.nextID, 1)
 
 	ch := r.flight.DoChan(actorRef.String(), func() (interface{}, error) {
 		// We detach the context from the first caller using a fixed background budget.
@@ -187,21 +215,51 @@ func (r *ActorResumer) ResumeActor(ctx context.Context, actorRef resources.Actor
 			// as a 504. bgCtx is this loop's only deadline source, so checking it
 			// covers both landing spots (mid-RPC and between retries).
 			if lastRetryErr != nil && (bgCtx.Err() != nil || wait.Interrupted(err)) {
-				return nil, &budgetExhaustedError{lastErr: lastRetryErr}
+				return &resumeCallResult{leaderID: reqID, err: &budgetExhaustedError{lastErr: lastRetryErr}}, nil
 			}
-			return nil, err
+			return &resumeCallResult{leaderID: reqID, err: err}, nil
 		}
 
-		return resumeResp.GetActor(), nil
+		return &resumeCallResult{
+			actor:    resumeResp.GetActor(),
+			resumed:  resumeResp.GetResumed(),
+			leaderID: reqID,
+		}, nil
 	})
 
 	select {
 	case <-ctx.Done():
-		return nil, ctx.Err()
+		// The caller's request context was canceled before the singleflight resume completed.
+		// Return early with ResumeOutcomeNone ("none")
+		return nil, ResumeOutcomeNone, ctx.Err()
 	case res := <-ch:
-		if res.Err != nil {
-			return nil, res.Err
+		callRes, _ := res.Val.(*resumeCallResult)
+		if callRes == nil {
+			if res.Err != nil {
+				return nil, ResumeOutcomeNone, res.Err
+			}
+			return nil, ResumeOutcomeNone, status.Error(codes.Internal, "resume call returned nil result")
 		}
-		return res.Val.(*ateapipb.Actor), nil
+
+		// On error, return ResumeOutcomeNone ("none") so the failure is tagged
+		// under the 'outcome' label rather than misreported as an activation.
+		if callRes.err != nil {
+			return nil, ResumeOutcomeNone, callRes.err
+		}
+
+		// Disambiguate singleflight resume outcome:
+		// - ResumeOutcomeNone ("none"): resumed == false, actor was already active/running.
+		// - ResumeOutcomeTriggered ("triggered"): Cold activation leader (resumed == true, caller's reqID == leaderID).
+		// - ResumeOutcomeJoined ("joined"): Cold activation joiner (resumed == true, caller's reqID != leaderID).
+		outcome := ResumeOutcomeNone
+		if callRes.resumed {
+			if callRes.leaderID == reqID {
+				outcome = ResumeOutcomeTriggered
+			} else {
+				outcome = ResumeOutcomeJoined
+			}
+		}
+
+		return callRes.actor, outcome, nil
 	}
 }

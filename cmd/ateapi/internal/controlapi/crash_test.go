@@ -349,7 +349,8 @@ func TestMaybeCrashActor(t *testing.T) {
 				seedActor(t, ctx, st, actorRef)
 			}
 
-			err := maybeCrashActor(ctx, st, actorRef, tt.err, wrapMsg)
+			err := maybeCrashActor(ctx, st, actorRef, tt.err, wrapMsg, ateattr.OperationNameUnknown)
+
 			tt.check(t, ctx, st, err)
 		})
 	}
@@ -367,6 +368,19 @@ func TestCrashActor_Metrics(t *testing.T) {
 	defer cleanup()
 
 	actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-crash-test"}
+	worker := &ateapipb.Worker{
+		WorkerNamespace: "demo-ns",
+		WorkerPool:      "pool-1",
+		WorkerPod:       "pod-1",
+		SandboxClass:    "gvisor",
+		Assignment: &ateapipb.Assignment{
+			Actor: &ateapipb.ObjectRef{Atespace: actorRef.Atespace, Name: actorRef.Name},
+		},
+	}
+	if err := st.CreateWorker(ctx, worker); err != nil {
+		t.Fatalf("CreateWorker: %v", err)
+	}
+
 	actor := &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{
 			Atespace: actorRef.Atespace,
@@ -376,6 +390,9 @@ func TestCrashActor_Metrics(t *testing.T) {
 		ActorTemplateNamespace: "demo-ns",
 		ActorTemplateName:      "counter-template",
 		WorkerPoolName:         "pool-1",
+		AteomPodNamespace:      "demo-ns",
+		AteomPodName:           "pod-1",
+		AteomPodUid:            "pod-uid-1",
 		Status:                 ateapipb.Actor_STATUS_RUNNING,
 	}
 	if _, err := st.CreateActor(ctx, actor); err != nil {
@@ -386,10 +403,10 @@ func TestCrashActor_Metrics(t *testing.T) {
 		t.Fatalf("crashActor: %v", err)
 	}
 
-	assertCrashMetricDatapoint(t, reader, ateattr.OperationNameResume, ateattr.ReasonCorruptedAssignment, 1)
+	assertCrashMetricDatapoint(t, reader, ateattr.OperationNameResume, ateattr.ReasonCorruptedAssignment, "demo-ns", "counter-template", "pool-1", "gvisor", 1)
 }
 
-func assertCrashMetricDatapoint(t *testing.T, reader *sdkmetric.ManualReader, wantOpName, wantReason string, wantValue int64) {
+func assertCrashMetricDatapoint(t *testing.T, reader *sdkmetric.ManualReader, wantOpName, wantReason, wantTmplNS, wantTmplName, wantWorkerPool, wantSandboxClass string, wantValue int64) {
 	t.Helper()
 	var rm metricdata.ResourceMetrics
 	if err := reader.Collect(context.Background(), &rm); err != nil {
@@ -406,16 +423,27 @@ func assertCrashMetricDatapoint(t *testing.T, reader *sdkmetric.ManualReader, wa
 				continue
 			}
 			for _, dp := range sum.DataPoints {
-				op, hasOp := dp.Attributes.Value(ateattr.OperationNameKey)
-				r, hasReason := dp.Attributes.Value(ateattr.FailureReasonKey)
-				if hasOp && op.AsString() == wantOpName && hasReason && r.AsString() == wantReason {
+				op, _ := dp.Attributes.Value(ateattr.OperationNameKey)
+				r, _ := dp.Attributes.Value(ateattr.FailureReasonKey)
+				tNS, _ := dp.Attributes.Value(ateattr.TemplateNamespaceKey)
+				tName, _ := dp.Attributes.Value(ateattr.TemplateNameKey)
+				wp, _ := dp.Attributes.Value(ateattr.WorkerPoolNameKey)
+				sc, _ := dp.Attributes.Value(ateattr.SandboxClassKey)
+
+				if op.AsString() == wantOpName &&
+					r.AsString() == wantReason &&
+					tNS.AsString() == wantTmplNS &&
+					tName.AsString() == wantTmplName &&
+					wp.AsString() == wantWorkerPool &&
+					sc.AsString() == wantSandboxClass {
 					if dp.Value != wantValue {
-						t.Errorf("metric value for op %q reason %q = %d, want %d", wantOpName, wantReason, dp.Value, wantValue)
+						t.Errorf("metric value = %d, want %d", dp.Value, wantValue)
 					}
 					return
 				}
 			}
 		}
 	}
-	t.Errorf("did not find ate.actor.crashes metric with operation.name = %q and ate.failure.reason = %q", wantOpName, wantReason)
+	t.Errorf("did not find ate.actor.crashes metric with attrs: opName=%q, reason=%q, tmplNS=%q, tmplName=%q, workerPool=%q, sandboxClass=%q",
+		wantOpName, wantReason, wantTmplNS, wantTmplName, wantWorkerPool, wantSandboxClass)
 }

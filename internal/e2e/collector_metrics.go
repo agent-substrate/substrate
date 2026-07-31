@@ -42,6 +42,7 @@ const (
 var PlatformMetricPrefixes = []string{
 	"ate_workerpool_workers",
 	"ate_actor_crashes",
+	"atenet_router_route_duration",
 }
 
 // ScrapeCollectorMetrics port-forwards the kind stack's OTel Collector and reads
@@ -109,13 +110,13 @@ func MissingPlatformMetrics(scrape string, prefixes []string) []string {
 }
 
 // CollectorHasService reports whether any named service has pushed telemetry to
-// the collector. Its prometheus exporter surfaces each pushed resource as a
-// target_info series and stamps the service.name as the job label, so a service
-// that has exported anything shows up under either.
+// the collector. Its prometheus exporter maps each pushed resource's service.name
+// onto the job label, so a service that has exported at least one data point
+// shows up there. Note the exporter never emits a service_name label, and a
+// resource whose instruments have recorded nothing yet produces no series at all.
 func CollectorHasService(scrape string, services ...string) bool {
 	for _, svc := range services {
-		if strings.Contains(scrape, `service_name="`+svc+`"`) ||
-			strings.Contains(scrape, `job="`+svc+`"`) {
+		if strings.Contains(scrape, `job="`+svc+`"`) {
 			return true
 		}
 	}

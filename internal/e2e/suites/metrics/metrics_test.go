@@ -32,6 +32,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/ateerrors"
 	"github.com/agent-substrate/substrate/internal/e2e"
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -77,12 +78,25 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 	// they add the drive steps their instruments need.
 	resume(t, ctx, clients, actorID)
 
+	// Drive request through the router so Envoy ext_proc emits atenet_router_route_duration.
+	rClient, err := e2e.NewRouterClient(ctx)
+	if err != nil {
+		t.Fatalf("NewRouterClient: %v", err)
+	}
+	defer rClient.Close()
+	resp, err := rClient.Get(ctx, resources.ActorRef{Atespace: metricsAtespace, Name: actorID}, "/")
+	if err != nil {
+		t.Fatalf("rClient.Get: %v", err)
+	}
+	_ = resp.Body.Close()
+
 	// Trigger an actor crash to verify ate_actor_crashes counter emission.
 	triggerActorCrash(t, ctx, clients, actorID)
 
 	deadline := time.Now().Add(2 * time.Minute)
 	var missing []string
 	var ateomSeen bool
+	var lastLabelErr error
 	for time.Now().Before(deadline) {
 		scrape, err := e2e.ScrapeCollectorMetrics(ctx)
 		if err != nil {
@@ -91,26 +105,62 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 		missing = e2e.MissingPlatformMetrics(scrape, e2e.PlatformMetricPrefixes)
 		ateomSeen = e2e.CollectorHasService(scrape, "ateom-gvisor", "ateom-microvm")
 		if len(missing) == 0 && ateomSeen {
-			// Verify ate_actor_crashes metric carries valid low-cardinality label values using ateattr and ateerrors.
-			hasCrashMetricWithValidLabels := false
+			// Verify ate_actor_crashes metric carries valid, non-empty low-cardinality labels for all attributes.
+			foundCrashLine := false
 			for _, line := range strings.Split(scrape, "\n") {
-				if strings.HasPrefix(line, "ate_actor_crashes") && strings.Contains(line, `ate_operation_name=`) && strings.Contains(line, `ate_failure_reason=`) {
+				if strings.HasPrefix(line, "ate_actor_crashes") {
+					foundCrashLine = true
 					opVal := extractPrometheusLabelValue(line, "ate_operation_name")
 					reasonVal := extractPrometheusLabelValue(line, "ate_failure_reason")
-					if ateattr.NormalizeOperationName(opVal) == opVal && ateerrors.IsValidReason(reasonVal) {
-						hasCrashMetricWithValidLabels = true
-						break
+					tmplNSVal := extractPrometheusLabelValue(line, "ate_template_namespace")
+					tmplNameVal := extractPrometheusLabelValue(line, "ate_template_name")
+					workerPoolVal := extractPrometheusLabelValue(line, "ate_workerpool_name")
+					sandboxVal := extractPrometheusLabelValue(line, "ate_sandbox_class")
+
+					var errs []string
+					if opVal == "" {
+						errs = append(errs, "ate_operation_name label is missing or empty")
+					} else if ateattr.NormalizeOperationName(opVal) != opVal {
+						errs = append(errs, fmt.Sprintf("ate_operation_name %q is invalid (must be one of {resume, suspend, pause, unknown})", opVal))
 					}
+
+					if reasonVal == "" {
+						errs = append(errs, "ate_failure_reason label is missing or empty")
+					} else if !ateerrors.IsValidReason(reasonVal) {
+						errs = append(errs, fmt.Sprintf("ate_failure_reason %q is invalid (must be a registered ateerrors reason enum like CORRUPTED_ASSIGNMENT, WORKER_POD_GONE, WORKER_REASSIGNED, UNKNOWN)", reasonVal))
+					}
+
+					if tmplNSVal == "" {
+						errs = append(errs, "ate_template_namespace label is missing or empty")
+					}
+					if tmplNameVal == "" {
+						errs = append(errs, "ate_template_name label is missing or empty")
+					}
+					if workerPoolVal == "" {
+						errs = append(errs, "ate_workerpool_name label is missing or empty")
+					}
+					if sandboxVal == "" {
+						errs = append(errs, "ate_sandbox_class label is missing or empty")
+					}
+
+					if len(errs) == 0 {
+						return
+					}
+					lastLabelErr = fmt.Errorf("scraped metric line %q failed label validation:\n  - %s\n  (Extracted labels: op=%q, reason=%q, tmplNS=%q, tmplName=%q, workerPool=%q, sandboxClass=%q)",
+						line, strings.Join(errs, "\n  - "), opVal, reasonVal, tmplNSVal, tmplNameVal, workerPoolVal, sandboxVal)
 				}
 			}
-			if !hasCrashMetricWithValidLabels {
-				t.Fatalf("ate_actor_crashes metric missing valid ate_operation_name and ate_failure_reason labels in collector scrape output:\n%s", scrape)
+			if !foundCrashLine {
+				lastLabelErr = fmt.Errorf("ate_actor_crashes metric line not found in collector scrape output")
 			}
-			return
 		}
+
 		time.Sleep(3 * time.Second)
 	}
 
+	if lastLabelErr != nil {
+		t.Fatalf("platform telemetry validation failed: missing metrics %v, ateom pushed=%v, error detail: %v", missing, ateomSeen, lastLabelErr)
+	}
 	t.Fatalf("platform telemetry never reached the collector: missing metrics %v, ateom pushed=%v", missing, ateomSeen)
 }
 

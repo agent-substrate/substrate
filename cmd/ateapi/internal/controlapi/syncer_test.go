@@ -24,11 +24,14 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
+	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/resources"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	atefake "github.com/agent-substrate/substrate/pkg/client/clientset/versioned/fake"
 	"github.com/agent-substrate/substrate/pkg/client/informers/externalversions"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -635,19 +638,27 @@ func TestSyncer_ReconcileOrphanedWorkers(t *testing.T) {
 func TestReleaseActorOnDeadWorker_StatusTransitions(t *testing.T) {
 	ns, pool, pod, ip := "ns-status", "pool1", "worker-status", "10.0.0.3"
 	tests := []struct {
-		name  string
-		start ateapipb.Actor_Status
-		want  ateapipb.Actor_Status
+		name       string
+		start      ateapipb.Actor_Status
+		wantStatus ateapipb.Actor_Status
+		wantOp     string
+		wantMetric bool
 	}{
-		{name: "running becomes crashed", start: ateapipb.Actor_STATUS_RUNNING, want: ateapipb.Actor_STATUS_CRASHED},
-		{name: "resuming becomes crashed", start: ateapipb.Actor_STATUS_RESUMING, want: ateapipb.Actor_STATUS_CRASHED},
-		{name: "suspending becomes crashed", start: ateapipb.Actor_STATUS_SUSPENDING, want: ateapipb.Actor_STATUS_CRASHED},
-		{name: "pausing becomes crashed", start: ateapipb.Actor_STATUS_PAUSING, want: ateapipb.Actor_STATUS_CRASHED},
-		{name: "suspended stays suspended", start: ateapipb.Actor_STATUS_SUSPENDED, want: ateapipb.Actor_STATUS_SUSPENDED},
+		{name: "running becomes crashed", start: ateapipb.Actor_STATUS_RUNNING, wantStatus: ateapipb.Actor_STATUS_CRASHED, wantOp: ateattr.OperationNameUnknown, wantMetric: true},
+		{name: "resuming becomes crashed", start: ateapipb.Actor_STATUS_RESUMING, wantStatus: ateapipb.Actor_STATUS_CRASHED, wantOp: ateattr.OperationNameResume, wantMetric: true},
+		{name: "suspending becomes crashed", start: ateapipb.Actor_STATUS_SUSPENDING, wantStatus: ateapipb.Actor_STATUS_CRASHED, wantOp: ateattr.OperationNameSuspend, wantMetric: true},
+		{name: "pausing becomes crashed", start: ateapipb.Actor_STATUS_PAUSING, wantStatus: ateapipb.Actor_STATUS_CRASHED, wantOp: ateattr.OperationNamePause, wantMetric: true},
+		{name: "suspended stays suspended", start: ateapipb.Actor_STATUS_SUSPENDED, wantStatus: ateapipb.Actor_STATUS_SUSPENDED, wantMetric: false},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			reader := sdkmetric.NewManualReader()
+			mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+			if err := RegisterActorCrashes(mp.Meter("ateapi")); err != nil {
+				t.Fatalf("RegisterActorCrashes: %v", err)
+			}
+
 			ctx := context.Background()
 			persistence, cleanup := storetest.SetupTestStore(t)
 			defer cleanup()
@@ -656,6 +667,7 @@ func TestReleaseActorOnDeadWorker_StatusTransitions(t *testing.T) {
 			atespace, actorID := "team-status", "actor-status"
 			if _, err := persistence.CreateActor(ctx, &ateapipb.Actor{
 				Metadata: &ateapipb.ResourceMetadata{Name: actorID, Atespace: atespace}, ActorTemplateNamespace: ns, ActorTemplateName: "tmpl",
+				WorkerPoolName:    pool,
 				Status:            tc.start,
 				AteomPodNamespace: ns, AteomPodName: pod, AteomPodIp: ip, AteomPodUid: "uid",
 			}); err != nil {
@@ -664,7 +676,8 @@ func TestReleaseActorOnDeadWorker_StatusTransitions(t *testing.T) {
 			if err := persistence.CreateWorker(ctx, &ateapipb.Worker{
 				WorkerNamespace: ns, WorkerPool: pool, WorkerPod: pod, Ip: ip,
 				WorkerPodUid: "08675309-4a65-6e6e-7973-6e756d626572", NodeName: "node1",
-				State: ateapipb.Worker_STATE_ACTIVE,
+				SandboxClass: "gvisor",
+				State:        ateapipb.Worker_STATE_ACTIVE,
 				Assignment: &ateapipb.Assignment{
 					ActorTemplate: &ateapipb.KubeNamespacedObjectRef{Namespace: ns, Name: "tmpl"},
 					Actor:         &ateapipb.ObjectRef{Name: actorID, Atespace: atespace},
@@ -681,12 +694,17 @@ func TestReleaseActorOnDeadWorker_StatusTransitions(t *testing.T) {
 			if err != nil {
 				t.Fatalf("get actor: %v", err)
 			}
-			if got.GetStatus() != tc.want {
-				t.Errorf("actor status = %v, want %v", got.GetStatus(), tc.want)
+			if got.GetStatus() != tc.wantStatus {
+				t.Errorf("actor status = %v, want %v", got.GetStatus(), tc.wantStatus)
 			}
-			if tc.want == ateapipb.Actor_STATUS_CRASHED && got.GetAteomPodUid() != "" {
+			if tc.wantStatus == ateapipb.Actor_STATUS_CRASHED && got.GetAteomPodUid() != "" {
 				t.Errorf("crashed actor AteomPodUid = %q, want cleared", got.GetAteomPodUid())
+			}
+
+			if tc.wantMetric {
+				assertCrashMetricDatapoint(t, reader, tc.wantOp, ateattr.ReasonWorkerPodGone, ns, "tmpl", pool, "gvisor", 1)
 			}
 		})
 	}
+
 }

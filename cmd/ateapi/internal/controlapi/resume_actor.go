@@ -33,7 +33,7 @@ func (s *Service) ResumeActor(ctx context.Context, req *ateapipb.ResumeActorRequ
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
 	setSpanActorRefAttributes(ctx, actorRef)
 
-	actor, err := s.actorWorkflow.ResumeActor(ctx, actorRef, req.GetBoot())
+	actor, resumed, err := s.actorWorkflow.ResumeActor(ctx, actorRef, req.GetBoot())
 	if err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {
 			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
@@ -45,7 +45,7 @@ func (s *Service) ResumeActor(ctx context.Context, req *ateapipb.ResumeActorRequ
 	}
 
 	setSpanActorAttributes(ctx, actor)
-	return &ateapipb.ResumeActorResponse{Actor: actor}, nil
+	return &ateapipb.ResumeActorResponse{Actor: actor, Resumed: resumed}, nil
 }
 
 func validateResumeActorRequest(req *ateapipb.ResumeActorRequest) field.ErrorList {

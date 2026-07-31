@@ -58,20 +58,48 @@ func TestActorResumer_ResumeActor(t *testing.T) {
 						Status:     ateapipb.Actor_STATUS_RUNNING,
 						AteomPodIp: expectedIP,
 					},
+					Resumed: true,
 				}, nil
 			},
 		}
 
 		resumer := NewActorResumer(mock)
-		actor, err := resumer.ResumeActor(context.Background(), testActorRef)
+		actor, outcome, err := resumer.ResumeActor(context.Background(), testActorRef)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		if actor.GetAteomPodIp() != expectedIP {
 			t.Errorf("expected IP %q, got %q", expectedIP, actor.GetAteomPodIp())
 		}
+		if outcome != ResumeOutcomeTriggered {
+			t.Errorf("expected outcome %q, got %q", ResumeOutcomeTriggered, outcome)
+		}
 		if resumeCalled != 1 {
 			t.Errorf("expected ResumeActor called 1 time, got %d", resumeCalled)
+		}
+	})
+
+	t.Run("WarmRouting_Disambiguation", func(t *testing.T) {
+		mock := &resumerMockClient{
+			resumeFn: func(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
+				return &ateapipb.ResumeActorResponse{
+					Actor: &ateapipb.Actor{
+						Metadata:   &ateapipb.ResourceMetadata{Name: testActorName},
+						Status:     ateapipb.Actor_STATUS_RUNNING,
+						AteomPodIp: expectedIP,
+					},
+					Resumed: false,
+				}, nil
+			},
+		}
+
+		resumer := NewActorResumer(mock)
+		_, outcome, err := resumer.ResumeActor(context.Background(), testActorRef)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if outcome != ResumeOutcomeNone {
+			t.Errorf("expected outcome %q for warm routing, got %q", ResumeOutcomeNone, outcome)
 		}
 	})
 
@@ -89,17 +117,21 @@ func TestActorResumer_ResumeActor(t *testing.T) {
 						Status:     ateapipb.Actor_STATUS_RUNNING,
 						AteomPodIp: expectedIP,
 					},
+					Resumed: true,
 				}, nil
 			},
 		}
 
 		resumer := NewActorResumer(mock)
-		actor, err := resumer.ResumeActor(context.Background(), testActorRef)
+		actor, outcome, err := resumer.ResumeActor(context.Background(), testActorRef)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		if actor.GetAteomPodIp() != expectedIP {
 			t.Errorf("expected IP %q, got %q", expectedIP, actor.GetAteomPodIp())
+		}
+		if outcome != ResumeOutcomeTriggered {
+			t.Errorf("expected outcome %q, got %q", ResumeOutcomeTriggered, outcome)
 		}
 		if resumeCalled != 3 {
 			t.Errorf("expected ResumeActor called 3 times, got %d", resumeCalled)
@@ -114,13 +146,16 @@ func TestActorResumer_ResumeActor(t *testing.T) {
 		}
 
 		resumer := NewActorResumer(mock)
-		_, err := resumer.ResumeActor(context.Background(), testActorRef)
+		_, outcome, err := resumer.ResumeActor(context.Background(), testActorRef)
 		if got := status.Code(err); got != codes.NotFound {
 			t.Errorf("expected gRPC code NotFound, got %v (err=%v)", got, err)
 		}
+		if outcome != ResumeOutcomeNone {
+			t.Errorf("expected outcome %q on error, got %q", ResumeOutcomeNone, outcome)
+		}
 	})
 
-	t.Run("SingleflightDeduplication", func(t *testing.T) {
+	t.Run("SingleflightDeduplication_Disambiguation", func(t *testing.T) {
 		var resumeCalled int
 		var mu sync.Mutex
 
@@ -136,6 +171,7 @@ func TestActorResumer_ResumeActor(t *testing.T) {
 						Status:     ateapipb.Actor_STATUS_RUNNING,
 						AteomPodIp: expectedIP,
 					},
+					Resumed: true,
 				}, nil
 			},
 		}
@@ -145,17 +181,19 @@ func TestActorResumer_ResumeActor(t *testing.T) {
 		var wg sync.WaitGroup
 		const concurrentRequests = 10
 		results := make([]*ateapipb.Actor, concurrentRequests)
+		outcomes := make([]ResumeOutcome, concurrentRequests)
 		errs := make([]error, concurrentRequests)
 
 		wg.Add(concurrentRequests)
 		for i := 0; i < concurrentRequests; i++ {
 			go func(idx int) {
 				defer wg.Done()
-				results[idx], errs[idx] = resumer.ResumeActor(context.Background(), testActorRef)
+				results[idx], outcomes[idx], errs[idx] = resumer.ResumeActor(context.Background(), testActorRef)
 			}(i)
 		}
 		wg.Wait()
 
+		var triggeredCount, joinedCount int
 		for i := 0; i < concurrentRequests; i++ {
 			if errs[i] != nil {
 				t.Fatalf("request %d failed: %v", i, errs[i])
@@ -163,6 +201,21 @@ func TestActorResumer_ResumeActor(t *testing.T) {
 			if results[i].GetAteomPodIp() != expectedIP {
 				t.Errorf("request %d expected IP %q, got %q", i, expectedIP, results[i].GetAteomPodIp())
 			}
+			switch outcomes[i] {
+			case ResumeOutcomeTriggered:
+				triggeredCount++
+			case ResumeOutcomeJoined:
+				joinedCount++
+			default:
+				t.Errorf("unexpected outcome for request %d: %q", i, outcomes[i])
+			}
+		}
+
+		if triggeredCount != 1 {
+			t.Errorf("expected exactly 1 request to have outcome 'triggered', got %d", triggeredCount)
+		}
+		if joinedCount != concurrentRequests-1 {
+			t.Errorf("expected %d requests to have outcome 'joined', got %d", concurrentRequests-1, joinedCount)
 		}
 
 		mu.Lock()
@@ -199,7 +252,7 @@ func TestActorResumer_Parking(t *testing.T) {
 		}
 
 		resumer := NewActorResumer(mock, withParking(ParkedRequestConfig{Max: 1, Budget: 5 * time.Second}))
-		actor, err := resumer.ResumeActor(context.Background(), testActorRef)
+		actor, _, err := resumer.ResumeActor(context.Background(), testActorRef)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -228,7 +281,7 @@ func TestActorResumer_Parking(t *testing.T) {
 		// Budget large enough for a few ~100ms-spaced retries before it elapses;
 		// the pool never frees up.
 		resumer := NewActorResumer(mock, withParking(ParkedRequestConfig{Max: 1, Budget: 1500 * time.Millisecond}))
-		_, err := resumer.ResumeActor(context.Background(), testActorRef)
+		_, _, err := resumer.ResumeActor(context.Background(), testActorRef)
 		// The client must see the meaningful capacity error, not a generic
 		// timeout: status.Code must unwrap through the budget-exhaustion marker.
 		if got := status.Code(err); got != codes.FailedPrecondition {
@@ -265,7 +318,7 @@ func TestActorResumer_Parking(t *testing.T) {
 		}
 
 		resumer := NewActorResumer(mock, withParking(ParkedRequestConfig{Max: 1, Budget: 5 * time.Second}))
-		actor, err := resumer.ResumeActor(context.Background(), testActorRef)
+		actor, _, err := resumer.ResumeActor(context.Background(), testActorRef)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -292,7 +345,7 @@ func TestActorResumer_Parking(t *testing.T) {
 		}
 
 		resumer := NewActorResumer(mock)
-		_, err := resumer.ResumeActor(context.Background(), testActorRef)
+		_, _, err := resumer.ResumeActor(context.Background(), testActorRef)
 		if got := status.Code(err); got != codes.Unavailable {
 			t.Errorf("expected Unavailable, got %v (err=%v)", got, err)
 		}
@@ -327,7 +380,7 @@ func TestActorResumer_Parking(t *testing.T) {
 		}
 
 		resumer := NewActorResumer(mock, withParking(ParkedRequestConfig{Max: 1, Budget: 300 * time.Millisecond}))
-		_, err := resumer.ResumeActor(context.Background(), testActorRef)
+		_, _, err := resumer.ResumeActor(context.Background(), testActorRef)
 		// The deadline landed mid-RPC; the client must still see the capacity
 		// error (503 "no free workers available"), not a generic timeout (504).
 		if got := status.Code(err); got != codes.FailedPrecondition {
@@ -353,7 +406,7 @@ func TestActorResumer_Parking(t *testing.T) {
 
 		// Default constructor => parking disabled => fail-fast.
 		resumer := NewActorResumer(mock)
-		_, err := resumer.ResumeActor(context.Background(), testActorRef)
+		_, _, err := resumer.ResumeActor(context.Background(), testActorRef)
 		if got := status.Code(err); got != codes.FailedPrecondition {
 			t.Errorf("expected FailedPrecondition, got %v (err=%v)", got, err)
 		}
@@ -403,7 +456,7 @@ func TestActorResumer_CallerCancelDoesNotAbortFlight(t *testing.T) {
 	ctx1, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
 	go func() {
-		_, err := resumer.ResumeActor(ctx1, testActorRef)
+		_, _, err := resumer.ResumeActor(ctx1, testActorRef)
 		errCh <- err
 	}()
 	<-started
@@ -425,7 +478,7 @@ func TestActorResumer_CallerCancelDoesNotAbortFlight(t *testing.T) {
 	}
 	resCh := make(chan result, 1)
 	go func() {
-		a, rerr := resumer.ResumeActor(context.Background(), testActorRef)
+		a, _, rerr := resumer.ResumeActor(context.Background(), testActorRef)
 		resCh <- result{a, rerr}
 	}()
 	// Give caller 2 a moment to join before releasing the flight, so the

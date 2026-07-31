@@ -321,6 +321,9 @@ func (s *WorkerPoolSyncer) releaseActorOnDeadWorker(ctx context.Context, namespa
 
 	wasAlreadyCrashed := actor.GetStatus() == ateapipb.Actor_STATUS_CRASHED
 
+	// Snapshot crash attributes before pod and pool pointers are cleared on actor.
+	crashAttrs := ateattr.ActorMetricAttributes(actor, worker.GetSandboxClass(), opName, ateattr.ReasonWorkerPodGone)
+
 	actor.Status = ateapipb.Actor_STATUS_CRASHED
 	actor.AteomPodNamespace = ""
 	actor.AteomPodName = ""
@@ -329,9 +332,10 @@ func (s *WorkerPoolSyncer) releaseActorOnDeadWorker(ctx context.Context, namespa
 	actor.InProgressSnapshot = ""
 	actor.WorkerPoolName = ""
 
-	updatedActor, err := s.persistence.UpdateActor(ctx, actor, actor.GetMetadata().GetVersion())
+	_, err = s.persistence.UpdateActor(ctx, actor, actor.GetMetadata().GetVersion())
+
 	if err == nil && !wasAlreadyCrashed {
-		recordActorCrash(ctx, updatedActor, worker.GetSandboxClass(), opName, ateattr.ReasonWorkerPodGone)
+		recordActorCrash(ctx, crashAttrs)
 	}
 	return err
 

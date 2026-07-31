@@ -31,11 +31,7 @@ import (
 
 // maybeCrashActor inspects err returned by an atelet RPC and crashes the actor
 // if err carries the actorCrashed=true metadata directive.
-//
-// opNames is variadic (...string) to provide backward compatibility for generic callers
-// where the operation context is not explicitly supplied. If provided, opNames[0] is
-// normalized against the bounded operations {resume, suspend, pause, unknown}.
-func maybeCrashActor(ctx context.Context, st store.Interface, actorRef resources.ActorRef, err error, wrapMsg string, opNames ...string) error {
+func maybeCrashActor(ctx context.Context, st store.Interface, actorRef resources.ActorRef, err error, wrapMsg, opName string) error {
 	if err == nil {
 		return nil
 	}
@@ -45,14 +41,6 @@ func maybeCrashActor(ctx context.Context, st store.Interface, actorRef resources
 		// Extract AIP-193 ErrorInfo reason enum from the RPC error detail. If unclassified
 		// or unlisted, default to ateattr.ReasonUnknown to protect metric low-cardinality.
 		reason := ateerrors.ExtractReason(err)
-		if reason == "" {
-			reason = ateattr.ReasonUnknown
-		}
-
-		opName := ateattr.OperationNameUnknown
-		if len(opNames) > 0 {
-			opName = ateattr.NormalizeOperationName(opNames[0])
-		}
 
 		if cerr := crashActor(ctx, st, actorRef, opName, reason); cerr != nil {
 			slog.ErrorContext(ctx, "Failed to crash actor", slog.Any("cerr", cerr))
@@ -83,6 +71,10 @@ func crashActor(ctx context.Context, st store.Interface, actorRef resources.Acto
 		errCollected = append(errCollected, err)
 	}
 
+	// Snapshot crash attributes before pod and pool pointers are cleared below;
+	// the counter itself is emitted only after the transition commits.
+	crashAttrs := ateattr.ActorMetricAttributes(actor, sandboxClass, opName, reason)
+
 	actor.Status = ateapipb.Actor_STATUS_CRASHED
 
 	// InProgressSnapshot is kept for debugging; failed workflow
@@ -93,7 +85,7 @@ func crashActor(ctx context.Context, st store.Interface, actorRef resources.Acto
 	actor.AteomPodUid = ""
 	actor.WorkerPoolName = ""
 
-	updatedActor, err := st.UpdateActor(ctx, actor, actor.GetMetadata().GetVersion())
+	_, err = st.UpdateActor(ctx, actor, actor.GetMetadata().GetVersion())
 	if err != nil {
 		errCollected = append(errCollected, fmt.Errorf("while marking actor crashed: %w", err))
 		return errors.Join(errCollected...)
@@ -101,7 +93,7 @@ func crashActor(ctx context.Context, st store.Interface, actorRef resources.Acto
 
 	// Increment metric only after a successful UpdateActor, and only if the actor was not already crashed.
 	if !wasAlreadyCrashed {
-		recordActorCrash(ctx, updatedActor, sandboxClass, opName, reason)
+		recordActorCrash(ctx, crashAttrs)
 	}
 
 	return errors.Join(errCollected...)

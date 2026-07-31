@@ -19,8 +19,10 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/url"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -174,29 +176,91 @@ func (x *XdsServer) SetTlsConfig(httpsPort int, certPath string) {
 	x.certPath = certPath
 }
 
+// otlpDefaultPort is the OTLP/gRPC default port, used when the collector
+// endpoint names no port.
+const otlpDefaultPort = "4317"
+
 // SetOtlpCollector enables Envoy-side tracing pointed at the OTLP gRPC
-// collector at host:port. addr empty disables tracing. port defaults to
-// 4317 if omitted.
+// collector. addr empty disables tracing. See normalizeOtlpCollector for the
+// accepted forms.
 func (x *XdsServer) SetOtlpCollector(addr string) error {
-	x.mu.Lock()
-	defer x.mu.Unlock()
 	if addr == "" {
-		x.otlpHost = ""
-		x.otlpPort = 0
+		x.DisableOtlpCollector()
 		return nil
 	}
-	host, portStr, err := net.SplitHostPort(addr)
+	// normalizeOtlpCollector reads nothing off x, so it runs unlocked.
+	host, port, err := normalizeOtlpCollector(addr)
 	if err != nil {
-		host = addr
-		portStr = "4317"
+		return err
+	}
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	x.otlpHost = host
+	x.otlpPort = port
+	return nil
+}
+
+// DisableOtlpCollector turns Envoy-side tracing off. The router's own exporter
+// is independent of this and keeps reporting spans.
+func (x *XdsServer) DisableOtlpCollector() {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	x.otlpHost = ""
+	x.otlpPort = 0
+}
+
+// normalizeOtlpCollector resolves a collector endpoint to the bare host and
+// numeric port an xDS SocketAddress requires (buildOtlpCollectorCluster).
+//
+// It accepts both a bare "host:port" and the URL form carried by
+// OTEL_EXPORTER_OTLP_ENDPOINT, which is where --otlp-collector-address gets
+// its default: Envoy's tracer reaches the collector through a named cluster,
+// and a cluster endpoint has no room for a scheme or a path. Port defaults to
+// otlpDefaultPort when omitted.
+//
+// https is rejected rather than downgraded — the tracer cluster carries no
+// UpstreamTlsContext, so honoring it would mean shipping spans in plaintext to
+// an endpoint that asked for TLS. Rejection here only means "Envoy cannot use
+// this", not that the router should stop: the same endpoint is usable by the
+// router's own exporter, so the caller warns and runs without Envoy-side
+// tracing (see setOtlpCollector).
+func normalizeOtlpCollector(addr string) (string, uint32, error) {
+	hostport := addr
+	if strings.Contains(addr, "://") {
+		u, err := url.Parse(addr)
+		if err != nil {
+			return "", 0, fmt.Errorf("parse OTLP collector endpoint %q: %w", addr, err)
+		}
+		switch u.Scheme {
+		case "http":
+		case "https":
+			return "", 0, fmt.Errorf("OTLP collector endpoint %q uses https, which Envoy-side tracing does not support: the tracer cluster is plaintext h2c. Point --otlp-collector-address at an http:// endpoint, or pass it empty to disable Envoy-side tracing", addr)
+		default:
+			return "", 0, fmt.Errorf("OTLP collector endpoint %q has unsupported scheme %q, want http", addr, u.Scheme)
+		}
+		if p := strings.Trim(u.Path, "/"); p != "" {
+			// Envoy's OpenTelemetry tracer derives the gRPC method itself, so a
+			// path here cannot be honored. Warn instead of failing: the OTLP
+			// spec lets the signal-agnostic env var carry one.
+			slog.Warn("Ignoring path in OTLP collector endpoint; Envoy-side tracing addresses the collector by host and port only",
+				slog.String("endpoint", addr), slog.String("path", u.Path))
+		}
+		hostport = u.Host
+	}
+
+	host, portStr, err := net.SplitHostPort(hostport)
+	if err != nil {
+		host = strings.Trim(hostport, "[]")
+		portStr = otlpDefaultPort
+	}
+	if host == "" {
+		return "", 0, fmt.Errorf("OTLP collector endpoint %q names no host", addr)
 	}
 	port, err := strconv.ParseUint(portStr, 10, 32)
 	if err != nil {
-		return fmt.Errorf("parse OTLP collector port from %q: %w", addr, err)
+		return "", 0, fmt.Errorf("parse OTLP collector port from %q: %w", addr, err)
 	}
-	x.otlpHost = host
-	x.otlpPort = uint32(port)
-	return nil
+	return host, uint32(port), nil
 }
 
 func (x *XdsServer) UpdateSnapshot() error {
