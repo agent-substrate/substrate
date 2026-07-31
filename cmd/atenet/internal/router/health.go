@@ -160,9 +160,12 @@ func (rh *routerHealth) checkDataplane(ctx context.Context) (bool, string) {
 	timeoutCtx, cancel := context.WithTimeout(ctx, dependencyHealthCheckTimeout)
 	defer cancel()
 
-	url := "http://127.0.0.1:9901/ready"
-	expectedBody := "LIVE"
-	if !rh.cfg.usesEnvoy() {
+	var url, expectedBody string
+	switch rh.cfg.atenetRouter() {
+	case atenetRouterEnvoy:
+		url = "http://127.0.0.1:9901/ready"
+		expectedBody = "LIVE"
+	case atenetRouterAgentgateway:
 		url = "http://127.0.0.1:15021/healthz/ready"
 		expectedBody = "ready"
 	}

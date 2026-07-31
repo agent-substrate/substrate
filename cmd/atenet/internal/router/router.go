@@ -183,7 +183,7 @@ func (s *RouterServer) Run(ctx context.Context) error {
 
 	slog.InfoContext(ctx, "Starting substrate router subsystem",
 		slog.Bool("standalone", s.cfg.Standalone),
-		slog.String("anetrouter", s.cfg.anetRouter()))
+		slog.String("atenet_router", string(s.cfg.atenetRouter())))
 
 	g, ctx := errgroup.WithContext(ctx)
 
@@ -196,11 +196,13 @@ func (s *RouterServer) Run(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("failed to create parking metrics: %w", err)
 		}
-		s.extprocSrv = NewExtProcServer(s.cfg.ExtprocPort, s.apiClient, routeDuration, parkCfg, parkMetrics, !s.cfg.usesEnvoy())
+		routeViaAuthority := s.cfg.atenetRouter() == atenetRouterAgentgateway
+		s.extprocSrv = NewExtProcServer(s.cfg.ExtprocPort, s.apiClient, routeDuration, parkCfg, parkMetrics, routeViaAuthority)
 	}
 	s.health = newRouterHealth(s.cfg.HealthInterval, s.clientset, s.apiClient, s.cfg)
 
-	if s.cfg.usesEnvoy() {
+	switch s.cfg.atenetRouter() {
+	case atenetRouterEnvoy:
 		xdsSrv := NewXdsServer(s.cfg.XdsPort)
 		xdsSrv.SetConfig(s.cfg.HttpPort, s.cfg.ExtprocPort, s.cfg.ExtprocAddr)
 		setOtlpCollector(ctx, xdsSrv, s.cfg.OtlpCollectorAddress)
@@ -231,6 +233,8 @@ func (s *RouterServer) Run(ctx context.Context) error {
 
 			return xdsSrv.Serve(ctx, lis)
 		})
+	case atenetRouterAgentgateway:
+		// Agentgateway receives all routing configuration from its static file.
 	}
 
 	// Start periodic service checking logic

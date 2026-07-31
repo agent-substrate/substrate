@@ -2,10 +2,10 @@
 
 Router has several responsibilities:
 
-* Serves Envoy xDS configuration when `--anetrouter=envoy` (the default).
+* Serves Envoy xDS configuration when `--atenet-router=envoy` (the default).
   Unless `--standalone` is set, it also manages the Envoy Deployment and
   Services in Kubernetes.
-  With `--anetrouter=agentgateway`, the sidecar uses a static ConfigMap and
+  With `--atenet-router=agentgateway`, the sidecar uses a static ConfigMap and
   atenet does not start an xDS server.
 * ext_proc server for the proxy. To make the deployment and debugging easier, we will run this component together
   with the router, but this will be split later into its own component.

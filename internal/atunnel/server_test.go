@@ -35,7 +35,7 @@ import (
 )
 
 func TestServeHTTP(t *testing.T) {
-	upstreamHost := make(chan string, 3)
+	upstreamHost := make(chan string, 4)
 	upstreamURL, err := url.Parse("http://actor.internal:80")
 	if err != nil {
 		t.Fatal(err)

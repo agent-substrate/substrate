@@ -50,7 +50,7 @@ patches:
         path: /spec/template/spec/containers/0/ports/0
       - op: add
         path: /spec/template/spec/containers/0/args/-
-        value: --anetrouter=agentgateway
+        value: --atenet-router=agentgateway
       - op: replace
         path: /spec/template/spec/containers/1
         value:

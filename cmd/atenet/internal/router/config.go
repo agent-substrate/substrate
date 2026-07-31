@@ -19,9 +19,11 @@ import (
 	"time"
 )
 
+type atenetRouter string
+
 const (
-	anetRouterEnvoy        = "envoy"
-	anetRouterAgentgateway = "agentgateway"
+	atenetRouterEnvoy        atenetRouter = "envoy"
+	atenetRouterAgentgateway atenetRouter = "agentgateway"
 )
 
 // authConfig holds the router's client-auth settings for dialing ateapi.
@@ -41,7 +43,7 @@ type authConfig struct {
 // routerConfig holds deployment setup and endpoint options for the router node instance.
 type routerConfig struct {
 	Standalone     bool
-	AnetRouter     string
+	AtenetRouter   string
 	Namespace      string
 	Kubeconfig     string
 	AteapiAddr     string
@@ -92,15 +94,11 @@ type routerConfig struct {
 	ExtProcMaxRequests int
 }
 
-func (c routerConfig) anetRouter() string {
-	if c.AnetRouter == "" {
-		return anetRouterEnvoy
+func (c routerConfig) atenetRouter() atenetRouter {
+	if c.AtenetRouter == "" {
+		return atenetRouterEnvoy
 	}
-	return c.AnetRouter
-}
-
-func (c routerConfig) usesEnvoy() bool {
-	return c.anetRouter() == anetRouterEnvoy
+	return atenetRouter(c.AtenetRouter)
 }
 
 // extProcMaxRequestsFloor is the minimum derived circuit breaker — Envoy's own
@@ -126,15 +124,15 @@ func (c routerConfig) extProcMaxRequests() int {
 // validate rejects flag combinations that would make the router misbehave
 // rather than merely differ.
 func (c routerConfig) validate() error {
-	switch c.anetRouter() {
-	case anetRouterEnvoy, anetRouterAgentgateway:
+	switch c.atenetRouter() {
+	case atenetRouterEnvoy, atenetRouterAgentgateway:
 	default:
-		return fmt.Errorf("--anetrouter must be %q or %q, got %q", anetRouterEnvoy, anetRouterAgentgateway, c.AnetRouter)
+		return fmt.Errorf("--atenet-router must be %q or %q, got %q", atenetRouterEnvoy, atenetRouterAgentgateway, c.AtenetRouter)
 	}
 	if err := c.ParkedRequest.validate(); err != nil {
 		return err
 	}
-	if !c.usesEnvoy() {
+	if c.atenetRouter() == atenetRouterAgentgateway {
 		return nil
 	}
 	if c.ExtProcMaxRequests < 0 {

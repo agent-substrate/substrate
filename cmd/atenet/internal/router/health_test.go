@@ -71,21 +71,21 @@ func setHealthyDataplaneClient(rh *routerHealth) {
 func TestCheckDataplane(t *testing.T) {
 	tests := []struct {
 		name        string
-		anetRouter  string
+		router      atenetRouter
 		wantURL     string
 		response    string
 		wantMessage string
 	}{
 		{
 			name:        "envoy",
-			anetRouter:  anetRouterEnvoy,
+			router:      atenetRouterEnvoy,
 			wantURL:     "http://127.0.0.1:9901/ready",
 			response:    "LIVE",
 			wantMessage: "LIVE",
 		},
 		{
 			name:        "agentgateway",
-			anetRouter:  anetRouterAgentgateway,
+			router:      atenetRouterAgentgateway,
 			wantURL:     "http://127.0.0.1:15021/healthz/ready",
 			response:    "ready\n",
 			wantMessage: "ready",
@@ -93,7 +93,7 @@ func TestCheckDataplane(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			rh := newRouterHealth(time.Second, nil, nil, routerConfig{AnetRouter: tc.anetRouter})
+			rh := newRouterHealth(time.Second, nil, nil, routerConfig{AtenetRouter: string(tc.router)})
 			rh.dataplaneClient = &http.Client{Transport: healthRoundTripFunc(func(req *http.Request) (*http.Response, error) {
 				if req.URL.String() != tc.wantURL {
 					t.Errorf("health URL = %q, want %q", req.URL.String(), tc.wantURL)
