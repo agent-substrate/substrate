@@ -136,7 +136,8 @@ func (s *LoadActorForResumeStep) Execute(ctx context.Context, input *ResumeInput
 			slog.InfoContext(ctx, "Assigned worker is draining; crashing actor",
 				slog.String("actor", input.ActorRef.String()),
 				slog.String("worker", wk.GetWorkerNamespace()+"/"+wk.GetWorkerPod()))
-			if cerr := crashActor(ctx, s.store, input.ActorRef); cerr != nil {
+			if cerr := crashActor(ctx, s.store, input.ActorRef, ateattr.OperationNameResume, ateattr.ReasonWorkerReassigned); cerr != nil {
+
 				return cerr
 			}
 			return status.Errorf(codes.Aborted, "actor %s crashed", input.ActorRef.String())

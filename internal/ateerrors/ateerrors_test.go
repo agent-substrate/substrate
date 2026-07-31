@@ -303,3 +303,19 @@ func TestExtractReason_EnforcesAllowedEnumValuesOnly(t *testing.T) {
 		}
 	})
 }
+
+func TestAllReasonsRegistered(t *testing.T) {
+	if len(AllReasons) == 0 {
+		t.Fatal("AllReasons slice is empty")
+	}
+
+	for _, r := range AllReasons {
+		if !IsValidReason(string(r)) {
+			t.Errorf("IsValidReason(%q) = false, want true", r)
+		}
+		err := NewGRPCError(context.Background(), codes.DataLoss, r, nil, errors.New("boom"))
+		if got := ExtractReason(err); got != string(r) {
+			t.Errorf("ExtractReason for %q = %q, want %q", r, got, r)
+		}
+	}
+}

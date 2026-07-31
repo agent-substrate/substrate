@@ -309,9 +309,17 @@ func (s *WorkerPoolSyncer) releaseActorOnDeadWorker(ctx context.Context, namespa
 	if actor.Status == ateapipb.Actor_STATUS_SUSPENDED {
 		return nil
 	}
+	opName := ateattr.OperationNameUnknown
+	switch actor.Status {
+	case ateapipb.Actor_STATUS_RESUMING:
+		opName = ateattr.OperationNameResume
+	case ateapipb.Actor_STATUS_SUSPENDING:
+		opName = ateattr.OperationNameSuspend
+	case ateapipb.Actor_STATUS_PAUSING:
+		opName = ateattr.OperationNamePause
+	}
 
-	// Record crash counter metric when syncer crashes an actor due to a dead worker pod.
-	recordActorCrash(ctx, actor, worker.GetSandboxClass(), ateattr.OperationNameUnknown, ateattr.ReasonWorkerPodGone)
+	wasAlreadyCrashed := actor.GetStatus() == ateapipb.Actor_STATUS_CRASHED
 
 	actor.Status = ateapipb.Actor_STATUS_CRASHED
 	actor.AteomPodNamespace = ""
@@ -321,6 +329,10 @@ func (s *WorkerPoolSyncer) releaseActorOnDeadWorker(ctx context.Context, namespa
 	actor.InProgressSnapshot = ""
 	actor.WorkerPoolName = ""
 
-	_, err = s.persistence.UpdateActor(ctx, actor, actor.GetMetadata().GetVersion())
+	updatedActor, err := s.persistence.UpdateActor(ctx, actor, actor.GetMetadata().GetVersion())
+	if err == nil && !wasAlreadyCrashed {
+		recordActorCrash(ctx, updatedActor, worker.GetSandboxClass(), opName, ateattr.ReasonWorkerPodGone)
+	}
 	return err
+
 }

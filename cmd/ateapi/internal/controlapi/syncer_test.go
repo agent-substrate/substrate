@@ -640,8 +640,12 @@ func TestReleaseActorOnDeadWorker_StatusTransitions(t *testing.T) {
 		want  ateapipb.Actor_Status
 	}{
 		{name: "running becomes crashed", start: ateapipb.Actor_STATUS_RUNNING, want: ateapipb.Actor_STATUS_CRASHED},
+		{name: "resuming becomes crashed", start: ateapipb.Actor_STATUS_RESUMING, want: ateapipb.Actor_STATUS_CRASHED},
+		{name: "suspending becomes crashed", start: ateapipb.Actor_STATUS_SUSPENDING, want: ateapipb.Actor_STATUS_CRASHED},
+		{name: "pausing becomes crashed", start: ateapipb.Actor_STATUS_PAUSING, want: ateapipb.Actor_STATUS_CRASHED},
 		{name: "suspended stays suspended", start: ateapipb.Actor_STATUS_SUSPENDED, want: ateapipb.Actor_STATUS_SUSPENDED},
 	}
+
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()

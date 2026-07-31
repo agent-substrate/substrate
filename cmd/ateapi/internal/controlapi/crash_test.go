@@ -225,7 +225,8 @@ func TestCrashActor(t *testing.T) {
 				tt.setup(t, ctx, st)
 			}
 
-			err := crashActor(ctx, st, actorRef)
+			err := crashActor(ctx, st, actorRef, ateattr.OperationNameUnknown, ateattr.ReasonUnknown)
+
 			tt.check(t, ctx, st, err)
 		})
 	}

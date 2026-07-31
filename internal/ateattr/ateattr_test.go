@@ -152,7 +152,8 @@ func TestKeySpellings(t *testing.T) {
 		{WorkerPoolNameKey, "ate.workerpool.name"},
 		{WorkerStateKey, "ate.worker.state"},
 		{SandboxClassKey, "ate.sandbox.class"},
-		{OperationNameKey, "operation.name"},
+		{OperationNameKey, "ate.operation.name"},
+
 		{FailureReasonKey, "ate.failure.reason"},
 	}
 	for _, tt := range tests {

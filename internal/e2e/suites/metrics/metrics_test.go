@@ -22,13 +22,18 @@ package metrics
 
 import (
 	"context"
+	"fmt"
 	"os"
+
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/ateattr"
+	"github.com/agent-substrate/substrate/internal/ateerrors"
 	"github.com/agent-substrate/substrate/internal/e2e"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 const metricsAtespace = "ate-metrics-e2e"
@@ -48,16 +53,12 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 	ctx := context.Background()
 	clients := e2e.GetClients()
 	tmplNS, tmplName := templateRef()
-	actorID := "metrics-probe"
+	actorID := fmt.Sprintf("metrics-probe-%d", time.Now().UnixNano())
 
 	// CreateActor requires the atespace to exist first; ignore AlreadyExists.
 	_, _ = clients.SubstrateAPI.CreateAtespace(ctx, &ateapipb.CreateAtespaceRequest{
 		Atespace: &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: metricsAtespace}},
 	})
-
-	// Clean up any leftover probe actor from a previous run before creating.
-	_, _ = clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: &ateapipb.ObjectRef{Atespace: metricsAtespace, Name: actorID}})
-	_, _ = clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: &ateapipb.ObjectRef{Atespace: metricsAtespace, Name: actorID}})
 
 	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
 		Metadata:               &ateapipb.ResourceMetadata{Atespace: metricsAtespace, Name: actorID},
@@ -90,40 +91,54 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 		missing = e2e.MissingPlatformMetrics(scrape, e2e.PlatformMetricPrefixes)
 		ateomSeen = e2e.CollectorHasService(scrape, "ateom-gvisor", "ateom-microvm")
 		if len(missing) == 0 && ateomSeen {
-			// Verify ate_actor_crashes metric carries low-cardinality labels: operation_name and ate_failure_reason.
-			if !strings.Contains(scrape, `operation_name=`) {
-				t.Fatalf("ate_actor_crashes metric missing required operation_name label in collector scrape output:\n%s", scrape)
+			// Verify ate_actor_crashes metric carries valid low-cardinality label values using ateattr and ateerrors.
+			hasCrashMetricWithValidLabels := false
+			for _, line := range strings.Split(scrape, "\n") {
+				if strings.HasPrefix(line, "ate_actor_crashes") && strings.Contains(line, `ate_operation_name=`) && strings.Contains(line, `ate_failure_reason=`) {
+					opVal := extractPrometheusLabelValue(line, "ate_operation_name")
+					reasonVal := extractPrometheusLabelValue(line, "ate_failure_reason")
+					if ateattr.NormalizeOperationName(opVal) == opVal && ateerrors.IsValidReason(reasonVal) {
+						hasCrashMetricWithValidLabels = true
+						break
+					}
+				}
 			}
-			if !strings.Contains(scrape, `ate_failure_reason=`) {
-				t.Fatalf("ate_actor_crashes metric missing required ate_failure_reason label in collector scrape output:\n%s", scrape)
+			if !hasCrashMetricWithValidLabels {
+				t.Fatalf("ate_actor_crashes metric missing valid ate_operation_name and ate_failure_reason labels in collector scrape output:\n%s", scrape)
 			}
 			return
 		}
 		time.Sleep(3 * time.Second)
-
 	}
+
 	t.Fatalf("platform telemetry never reached the collector: missing metrics %v, ateom pushed=%v", missing, ateomSeen)
 }
 
 func triggerActorCrash(t *testing.T, ctx context.Context, clients *e2e.Clients, actorID string) {
 	t.Helper()
 
-	// Update the running actor's worker selector to an ineligible label.
-	if _, err := clients.SubstrateAPI.UpdateActor(ctx, &ateapipb.UpdateActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: metricsAtespace, Name: actorID},
-		WorkerSelector: &ateapipb.Selector{
-			MatchLabels: map[string]string{"nonexistent-label": "true"},
-		},
-	}); err != nil {
-		t.Fatalf("UpdateActor failed: %v", err)
-	}
-
-	// Invoke ResumeActor while the actor has an assigned worker. VerifyAssignedWorkerStep
-	// detects the assigned worker is no longer eligible for the updated selector,
-	// crashes the actor via workflow_resume.go, and emits the ate_actor_crashes counter.
-	_, _ = clients.SubstrateAPI.ResumeActor(ctx, &ateapipb.ResumeActorRequest{
+	// Get running actor to find its assigned worker pod.
+	actor, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: metricsAtespace, Name: actorID},
 	})
+	if err != nil {
+		t.Fatalf("GetActor failed: %v", err)
+	}
+
+	// Delete the assigned worker pod directly.
+	// The WorkerPoolSyncer will detect the pod is gone, crash the actor via syncer.go,
+	// and emit the ate_actor_crashes counter.
+	if podName := actor.GetAteomPodName(); podName != "" {
+		podNS := actor.GetAteomPodNamespace()
+		if err := clients.K8s.CoreV1().Pods(podNS).Delete(ctx, podName, metav1.DeleteOptions{}); err != nil {
+
+			t.Fatalf("Delete worker pod failed: %v", err)
+		}
+	} else {
+		t.Fatalf("Actor %s has no assigned worker pod to delete", actorID)
+	}
+
+	waitForStatus(t, ctx, clients, actorID, ateapipb.Actor_STATUS_CRASHED)
 }
 
 func resume(t *testing.T, ctx context.Context, clients *e2e.Clients, actorID string) {
@@ -149,4 +164,18 @@ func waitForStatus(t *testing.T, ctx context.Context, clients *e2e.Clients, acto
 		time.Sleep(2 * time.Second)
 	}
 	t.Fatalf("actor %q never reached %v", actorID, want)
+}
+
+func extractPrometheusLabelValue(line, labelName string) string {
+	key := labelName + `="`
+	idx := strings.Index(line, key)
+	if idx == -1 {
+		return ""
+	}
+	start := idx + len(key)
+	end := strings.IndexByte(line[start:], '"')
+	if end == -1 {
+		return ""
+	}
+	return line[start : start+end]
 }

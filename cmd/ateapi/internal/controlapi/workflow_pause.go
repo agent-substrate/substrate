@@ -257,6 +257,7 @@ func (s *FinalizePausedStep) Execute(ctx context.Context, input *PauseInput, sta
 		if err != nil {
 			return err
 		}
+		wasAlreadyCrashed := latestActor.GetStatus() == ateapipb.Actor_STATUS_CRASHED
 		latestActor.Status = ateapipb.Actor_STATUS_PAUSED
 		if nodeName == "" {
 			// Without a node name we cannot record where the local snapshot lives,
@@ -264,7 +265,6 @@ func (s *FinalizePausedStep) Execute(ctx context.Context, input *PauseInput, sta
 			// worker on an unknown node forever). Crash it instead of leaving it
 			// stuck in PAUSED.
 			slog.ErrorContext(ctx, "Node name not found during finalize pause, crashing actor", slog.Any("actor", input.ActorRef))
-			recordActorCrash(ctx, latestActor, "", ateattr.OperationNamePause, ateattr.ReasonCorruptedAssignment)
 			latestActor.Status = ateapipb.Actor_STATUS_CRASHED
 		}
 		// TODO(dberkov) - what if InProgressSnapshot is empty? That shouldn't be possible.
@@ -283,6 +283,9 @@ func (s *FinalizePausedStep) Execute(ctx context.Context, input *PauseInput, sta
 		latestActor.AteomPodIp = ""
 		latestActor.WorkerPoolName = ""
 		updatedActor, err := s.store.UpdateActor(ctx, latestActor, latestActor.GetMetadata().GetVersion())
+		if err == nil && updatedActor.GetStatus() == ateapipb.Actor_STATUS_CRASHED && !wasAlreadyCrashed {
+			recordActorCrash(ctx, updatedActor, "", ateattr.OperationNamePause, ateattr.ReasonCorruptedAssignment)
+		}
 		if err != nil {
 			return err
 		}

@@ -21,7 +21,9 @@ package ateattr
 import (
 	"go.opentelemetry.io/otel/attribute"
 
+	"github.com/agent-substrate/substrate/internal/ateerrors"
 	"github.com/agent-substrate/substrate/internal/resources"
+
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
@@ -56,17 +58,16 @@ const (
 	WorkerPoolNameKey      = attribute.Key("ate.workerpool.name")
 	WorkerStateKey         = attribute.Key("ate.worker.state")
 	SandboxClassKey        = attribute.Key("ate.sandbox.class")
-	OperationNameKey       = attribute.Key("operation.name")
+	OperationNameKey       = attribute.Key("ate.operation.name")
 	FailureReasonKey       = attribute.Key("ate.failure.reason")
-	ReasonKey              = FailureReasonKey
 )
 
 // Control-plane failure reasons for ate.actor.crashes metric.
 const (
-	ReasonCorruptedAssignment = "CORRUPTED_ASSIGNMENT"
-	ReasonWorkerReassigned    = "WORKER_REASSIGNED"
-	ReasonWorkerPodGone       = "WORKER_POD_GONE"
-	ReasonUnknown             = "UNKNOWN"
+	ReasonCorruptedAssignment = string(ateerrors.ReasonCorruptedAssignment)
+	ReasonWorkerReassigned    = string(ateerrors.ReasonWorkerReassigned)
+	ReasonWorkerPodGone       = string(ateerrors.ReasonWorkerPodGone)
+	ReasonUnknown             = string(ateerrors.ReasonUnknown)
 )
 
 // Values for WorkerStateKey. Only idle and assigned are representable today;
