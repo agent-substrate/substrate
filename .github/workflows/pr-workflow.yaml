@@ -22,6 +22,10 @@ on:
     # evicts caches idle for 7 days). The push-to-main run populates the cache that
     # PRs inherit; this refreshes it so PRs keep hitting it (no asset re-download).
     - cron: '37 4 * * 1'
+# Nothing here writes to the repository: the jobs check the tree out, build it,
+# and run it in a throwaway cluster.
+permissions:
+  contents: read
 jobs:
   run-tests:
     runs-on: ubuntu-latest
