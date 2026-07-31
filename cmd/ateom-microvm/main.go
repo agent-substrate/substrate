@@ -67,6 +67,10 @@ var (
 	atunnelEgressTrustBundle   = flag.String("atunnel-egress-trust-bundle", "/run/servicedns.podcert.ate.dev/trust-bundle.pem", "PEM trust bundle for the egress gateway")
 )
 
+const (
+	actorHTTPUpstream = "http://169.254.17.2:80"
+)
+
 func main() {
 	flag.Parse()
 	if *showVersion {
@@ -156,7 +160,7 @@ func do(ctx context.Context) error {
 	// logWriter with the runtime logger so the two streams to os.Stdout are
 	// serialized through one SyncedWriter and never interleave-corrupt lines.
 	actorLogger := actorlog.NewActorLogger(logWriter, metadata.OnGCE())
-	upstream, err := url.Parse("http://169.254.17.2:80")
+	upstream, err := url.Parse(actorHTTPUpstream)
 	if err != nil {
 		return fmt.Errorf("while parsing atunnel upstream: %w", err)
 	}

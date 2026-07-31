@@ -37,7 +37,6 @@ import (
 
 func TestClientDialContext(t *testing.T) {
 	ca := newTestCA(t)
-	client := newTestClient(t, ca)
 	request := make(chan *http.Request, 1)
 	gatewayAddress := serveTestConnectGateway(t, ca, func(conn net.Conn, req *http.Request) {
 		request <- req
@@ -54,7 +53,7 @@ func TestClientDialContext(t *testing.T) {
 			t.Errorf("tunneled payload = %q, want ping", payload)
 		}
 	})
-	client.gatewayAddress = gatewayAddress
+	client := newTestClient(t, ca, WithDialer(dialFixedAddress(gatewayAddress)))
 
 	conn, err := client.DialContext(context.Background(), "192.0.2.10:443", EgressMetadata{
 		Atespace:     "team-a",
@@ -101,11 +100,11 @@ func TestClientDialContext(t *testing.T) {
 
 func TestClientDialContextRejected(t *testing.T) {
 	ca := newTestCA(t)
-	client := newTestClient(t, ca)
-	client.gatewayAddress = serveTestConnectGateway(t, ca, func(conn net.Conn, _ *http.Request) {
+	gatewayAddress := serveTestConnectGateway(t, ca, func(conn net.Conn, _ *http.Request) {
 		body := "denied by policy"
 		_, _ = fmt.Fprintf(conn, "HTTP/1.1 403 Forbidden\r\nContent-Length: %d\r\n\r\n%s", len(body), body)
 	})
+	client := newTestClient(t, ca, WithDialer(dialFixedAddress(gatewayAddress)))
 
 	_, err := client.DialContext(context.Background(), "192.0.2.10:443", EgressMetadata{
 		Atespace:     "team-a",
@@ -160,7 +159,15 @@ func TestClientDialContextValidatesInput(t *testing.T) {
 	}
 }
 
-func newTestClient(t *testing.T, ca *testCA) *Client {
+// dialFixedAddress ignores the requested address and connects to address, so
+// tests can point a client at a listener on an ephemeral port.
+func dialFixedAddress(address string) DialFunc {
+	return func(ctx context.Context, network, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, network, address)
+	}
+}
+
+func newTestClient(t *testing.T, ca *testCA, opts ...ClientOption) *Client {
 	t.Helper()
 	dir := t.TempDir()
 	bundlePath := filepath.Join(dir, "client.pem")
@@ -177,7 +184,7 @@ func newTestClient(t *testing.T, ca *testCA) *Client {
 		ServerName:           "egress.test",
 		CredentialBundlePath: bundlePath,
 		TrustBundlePath:      trustPath,
-	})
+	}, opts...)
 	if err != nil {
 		t.Fatal(err)
 	}

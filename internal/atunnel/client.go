@@ -37,21 +37,36 @@ const (
 	// for policy decisions.
 	ActorAtespaceHeader = "X-Ate-Atespace"
 	// ActorNameHeader identifies the actor that opened an egress tunnel.
-	ActorNameHeader = "X-Ate-Actor"
+	ActorNameHeader = "X-Ate-Actor-Name"
 	// ActorVersionHeader is the Actor resource version observed when the worker
 	// was assigned. Gateways use it as a lower bound on cached Actor metadata.
 	ActorVersionHeader = "X-Ate-Actor-Version"
 )
 
+// TODO(liorlieberman): support/use CONNECT on Ingress as well.
 // ClientConfig configures an egress CONNECT client.
 type ClientConfig struct {
 	GatewayAddress       string
 	ServerName           string
 	CredentialBundlePath string
 	TrustBundlePath      string
+}
 
-	// DialContext is injectable for tests. When nil, a net.Dialer is used.
-	DialContext func(context.Context, string, string) (net.Conn, error)
+// DialFunc dials a network address. It matches net.Dialer.DialContext.
+type DialFunc func(ctx context.Context, network, address string) (net.Conn, error)
+
+// ClientOption customizes a Client beyond its configuration. Production
+// callers need none of these.
+type ClientOption func(*Client)
+
+// WithDialer overrides how the client reaches the egress gateway. It exists so
+// tests can substitute a transport; by default a net.Dialer is used.
+func WithDialer(dial DialFunc) ClientOption {
+	return func(c *Client) {
+		if dial != nil {
+			c.dialContext = dial
+		}
+	}
 }
 
 // EgressMetadata is attached to an egress CONNECT request. BearerToken is
@@ -67,13 +82,14 @@ type EgressMetadata struct {
 type Client struct {
 	gatewayAddress string
 	tlsConfig      *tls.Config
-	dialContext    func(context.Context, string, string) (net.Conn, error)
+	dialContext    DialFunc
 }
 
+// Client implements EgressDialer.
 var _ EgressDialer = (*Client)(nil)
 
 // NewClient creates an egress CONNECT client and validates its TLS material.
-func NewClient(cfg ClientConfig) (*Client, error) {
+func NewClient(cfg ClientConfig, opts ...ClientOption) (*Client, error) {
 	if _, _, err := net.SplitHostPort(cfg.GatewayAddress); err != nil {
 		return nil, fmt.Errorf("atunnel: invalid egress gateway address %q: %w", cfg.GatewayAddress, err)
 	}
@@ -98,14 +114,10 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 		return nil, fmt.Errorf("atunnel: trust bundle %q contains no certificates", cfg.TrustBundlePath)
 	}
 
-	dialContext := cfg.DialContext
-	if dialContext == nil {
-		dialContext = (&net.Dialer{}).DialContext
-	}
 	credentialBundlePath := cfg.CredentialBundlePath
-	return &Client{
+	client := &Client{
 		gatewayAddress: cfg.GatewayAddress,
-		dialContext:    dialContext,
+		dialContext:    (&net.Dialer{}).DialContext,
 		tlsConfig: &tls.Config{
 			MinVersion: tls.VersionTLS12,
 			RootCAs:    rootCAs,
@@ -114,7 +126,11 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 				return loadCredentialBundle(credentialBundlePath)
 			},
 		},
-	}, nil
+	}
+	for _, opt := range opts {
+		opt(client)
+	}
+	return client, nil
 }
 
 // DialContext opens a CONNECT tunnel to destination. destination becomes the

@@ -1016,7 +1016,7 @@ func file_ateom_proto_init() {
 		return
 	}
 	file_ateom_proto_msgTypes[0].OneofWrappers = []any{}
-	file_ateom_proto_msgTypes[8].OneofWrappers = []any{}
+	file_ateom_proto_msgTypes[9].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{

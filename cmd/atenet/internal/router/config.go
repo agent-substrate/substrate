@@ -49,6 +49,7 @@ type routerConfig struct {
 	HealthInterval time.Duration
 	HttpsPort      int
 	EnvoyCertPath  string
+
 	// UpstreamCredentialBundlePath is the router's podidentity credential bundle
 	// (cert+key) presented as the client cert when dialing the actor's atunnel
 	// ingress server over mTLS. UpstreamTrustBundlePath is the CA bundle used to

@@ -54,6 +54,7 @@ import (
 var (
 	podUID = pflag.String("pod-uid", "", "The UID of the current pod")
 
+	// TODO(liorlieberman) have a sub package for all atunnel releated things like that
 	atunnelListenAddress       = pflag.String("atunnel-listen-address", "0.0.0.0:443", "Address for actor ingress HTTPS")
 	atunnelCredentialBundle    = pflag.String("atunnel-credential-bundle", "/run/podidentity.podcert.ate.dev/credential-bundle.pem", "PEM credential bundle for actor ingress HTTPS")
 	atunnelTrustBundle         = pflag.String("atunnel-trust-bundle", "/run/podidentity.podcert.ate.dev/trust-bundle.pem", "PEM trust bundle for actor ingress clients")
