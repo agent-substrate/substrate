@@ -192,23 +192,33 @@ func (s *Store) recordPath(digest v1.Hash) string {
 	return filepath.Join(s.root, "manifests", digest.Algorithm, digest.Hex+".json")
 }
 
-// sweepTempDirs removes unpack temp dirs and manifest-record temp files
-// orphaned by a crash. A layer dir without the temp prefix and a record
-// without a leading dot are always complete (both are moved into place with
-// a single rename), so this is the only recovery the pool needs.
+// sweepTempDirs removes unpack temp dirs, retired layer dirs, and
+// manifest-record temp files orphaned by a crash. A layer dir without the
+// temp/retired prefix and a record without a leading dot are always
+// complete (both are moved into place with a single rename), so this is
+// the only recovery the pool needs.
 func (s *Store) sweepTempDirs() error {
 	entries, err := os.ReadDir(s.layersDir())
 	if err != nil {
 		return fmt.Errorf("while listing layer pool: %w", err)
 	}
+	swept := 0
 	for _, e := range entries {
-		if !strings.HasPrefix(e.Name(), ".tmp-") {
+		// ".tmp-": an unpack in flight at crash. ".rm-": a layer retirement
+		// renamed aside but not yet removed. Either way, unreferenced
+		// garbage.
+		if !strings.HasPrefix(e.Name(), ".tmp-") && !strings.HasPrefix(e.Name(), retiredPrefix) {
 			continue
 		}
 		p := filepath.Join(s.layersDir(), e.Name())
+		slog.Info("Image cache sweeping orphaned layer dir", slog.String("dir", e.Name()))
 		if err := RemoveAllWritable(p); err != nil {
 			return fmt.Errorf("while sweeping orphaned layer temp dir %q: %w", p, err)
 		}
+		swept++
+	}
+	if swept > 0 {
+		slog.Info("Image cache startup sweep removed orphaned layer dirs", slog.Int("count", swept))
 	}
 
 	// writeRecord's temp files are ".<hex>.json.tmp-<rand>"; finished records
@@ -386,6 +396,12 @@ func (s *Store) ensureLayer(ctx context.Context, diffID v1.Hash, layer v1.Layer)
 	dir := s.layerDir(diffID)
 	_, err, _ := s.layerSF.Do(diffID.String(), func() (any, error) {
 		if _, err := os.Stat(filepath.Join(dir, layerFSDirName)); err == nil {
+			// Refresh the dir mtime inside the flight: retireLayer re-checks
+			// the mtime in this same flight, so a layer reused here can
+			// never be renamed away between this stat and the image record
+			// that will re-reference it.
+			now := time.Now()
+			_ = os.Chtimes(dir, now, now)
 			return nil, nil
 		}
 		return nil, s.unpackLayerToPool(ctx, diffID, layer)
