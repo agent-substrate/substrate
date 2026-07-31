@@ -72,7 +72,7 @@ func addRoutingMutations(dst, actorHost string, routeViaAuthority bool, mut *ext
 		mut.SetHeaders = append(mut.SetHeaders, &corev3.HeaderValueOption{
 			AppendAction: corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
 			Header: &corev3.HeaderValue{
-				Key:      ":authority",
+				Key:      authorityHeader,
 				RawValue: []byte(dst),
 			},
 		})

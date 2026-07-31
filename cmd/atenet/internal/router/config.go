@@ -132,9 +132,7 @@ func (c routerConfig) validate() error {
 	if err := c.ParkedRequest.validate(); err != nil {
 		return err
 	}
-	if c.atenetRouter() == atenetRouterAgentgateway {
-		return nil
-	}
+
 	if c.ExtProcMaxRequests < 0 {
 		return fmt.Errorf("--extproc-max-requests must not be negative, got %d (0 derives it from --parked-request-max)", c.ExtProcMaxRequests)
 	}

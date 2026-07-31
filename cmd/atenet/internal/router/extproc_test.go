@@ -439,7 +439,7 @@ func TestAddRoutingMutationsViaAuthority(t *testing.T) {
 	if got[strings.ToLower(atunnel.OriginalHostHeader)] != "actor-1.team-a.actors.resources.substrate.ate.dev" {
 		t.Errorf("%s = %q", atunnel.OriginalHostHeader, got[strings.ToLower(atunnel.OriginalHostHeader)])
 	}
-	if got[":authority"] != "10.0.0.52:443" {
-		t.Errorf(":authority = %q", got[":authority"])
+	if got[authorityHeader] != "10.0.0.52:443" {
+		t.Errorf("%s = %q", authorityHeader, got[authorityHeader])
 	}
 }

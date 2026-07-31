@@ -26,6 +26,12 @@ data:
       backend:
         poolMaxSize: 0
 
+    frontendPolicies:
+      tracing:
+        host: $AGENTGATEWAY_OTLP_ADDRESS
+        protocol: grpc
+        randomSampling: true
+
     gateways:
       http:
         port: 8080

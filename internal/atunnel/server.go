@@ -269,12 +269,12 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Do not expose the router-only routing header to actor code. Restore Host
 	// so dataplanes that route dynamically on worker IP still give the actor its
-	// stable mesh hostname.
+	// stable actor DNS name.
 	r.Header.Del(OriginalHostHeader)
 	r.Host = actorHost
 
 	// ReverseProxy changes the URL destination but intentionally retains Host,
-	// allowing the actor application to observe its stable mesh hostname.
+	// allowing the actor application to observe its stable actor DNS name.
 	s.proxy.ServeHTTP(w, r.WithContext(requestCtx))
 }
 

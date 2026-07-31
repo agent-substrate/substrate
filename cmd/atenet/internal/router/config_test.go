@@ -26,11 +26,15 @@ func TestRouterConfigValidate(t *testing.T) {
 		wantErr string // substring; empty means valid
 	}{
 		{
-			name: "defaults are valid (auto breaker)",
+			name: "atenet-router defaults to envoy",
 			cfg:  routerConfig{ExtProcMaxRequests: 0, ParkedRequest: ParkedRequestConfig{Max: defaultParkedRequestMax}},
 		},
 		{
-			name: "agentgateway is valid",
+			name: "atenet-router set to envoy is valid",
+			cfg:  routerConfig{AtenetRouter: string(atenetRouterEnvoy), ParkedRequest: ParkedRequestConfig{Max: defaultParkedRequestMax}},
+		},
+		{
+			name: "atenet-router set to agentgateway is valid",
 			cfg:  routerConfig{AtenetRouter: string(atenetRouterAgentgateway), ParkedRequest: ParkedRequestConfig{Max: defaultParkedRequestMax}},
 		},
 		{
@@ -68,6 +72,25 @@ func TestRouterConfigValidate(t *testing.T) {
 			}
 			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 				t.Fatalf("expected error containing %q, got %v", tc.wantErr, err)
+			}
+		})
+	}
+}
+
+func TestRouterConfigAtenetRouter(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  routerConfig
+		want atenetRouter
+	}{
+		{name: "default", cfg: routerConfig{}, want: atenetRouterEnvoy},
+		{name: "explicit envoy", cfg: routerConfig{AtenetRouter: string(atenetRouterEnvoy)}, want: atenetRouterEnvoy},
+		{name: "agentgateway", cfg: routerConfig{AtenetRouter: string(atenetRouterAgentgateway)}, want: atenetRouterAgentgateway},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.cfg.atenetRouter(); got != tc.want {
+				t.Fatalf("atenetRouter() = %q, want %q", got, tc.want)
 			}
 		})
 	}

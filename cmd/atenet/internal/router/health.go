@@ -160,16 +160,8 @@ func (rh *routerHealth) checkDataplane(ctx context.Context) (bool, string) {
 	timeoutCtx, cancel := context.WithTimeout(ctx, dependencyHealthCheckTimeout)
 	defer cancel()
 
-	var url, expectedBody string
-	switch rh.cfg.atenetRouter() {
-	case atenetRouterEnvoy:
-		url = "http://127.0.0.1:9901/ready"
-		expectedBody = "LIVE"
-	case atenetRouterAgentgateway:
-		url = "http://127.0.0.1:15021/healthz/ready"
-		expectedBody = "ready"
-	}
-	req, err := http.NewRequestWithContext(timeoutCtx, "GET", url, nil)
+	check := rh.cfg.atenetRouter().healthCheck()
+	req, err := http.NewRequestWithContext(timeoutCtx, "GET", check.url, nil)
 	if err != nil {
 		return false, err.Error()
 	}
@@ -190,11 +182,11 @@ func (rh *routerHealth) checkDataplane(ctx context.Context) (bool, string) {
 	}
 
 	bodyStr := strings.TrimSpace(string(bodyBytes))
-	if bodyStr != expectedBody {
-		return false, fmt.Sprintf("expected %s but got %q", expectedBody, bodyStr)
+	if bodyStr != check.expectedBody {
+		return false, fmt.Sprintf("expected %s but got %q", check.expectedBody, bodyStr)
 	}
 
-	return true, expectedBody
+	return true, check.expectedBody
 }
 
 func (rh *routerHealth) checkK8s(ctx context.Context) (bool, string) {

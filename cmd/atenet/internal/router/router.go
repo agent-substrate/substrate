@@ -24,7 +24,6 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"github.com/spf13/cobra"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
@@ -196,45 +195,12 @@ func (s *RouterServer) Run(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("failed to create parking metrics: %w", err)
 		}
-		routeViaAuthority := s.cfg.atenetRouter() == atenetRouterAgentgateway
-		s.extprocSrv = NewExtProcServer(s.cfg.ExtprocPort, s.apiClient, routeDuration, parkCfg, parkMetrics, routeViaAuthority)
+		s.extprocSrv = NewExtProcServer(s.cfg.ExtprocPort, s.apiClient, routeDuration, parkCfg, parkMetrics, s.cfg.atenetRouter().routeViaAuthority())
 	}
 	s.health = newRouterHealth(s.cfg.HealthInterval, s.clientset, s.apiClient, s.cfg)
 
-	switch s.cfg.atenetRouter() {
-	case atenetRouterEnvoy:
-		xdsSrv := NewXdsServer(s.cfg.XdsPort)
-		xdsSrv.SetConfig(s.cfg.HttpPort, s.cfg.ExtprocPort, s.cfg.ExtprocAddr)
-		setOtlpCollector(ctx, xdsSrv, s.cfg.OtlpCollectorAddress)
-
-		xdsSrv.SetExtProcMaxRequests(s.cfg.extProcMaxRequests())
-		if parkCfg.enabled() {
-			// Envoy must keep a parked request open at least as long as the router
-			// will hold it; add a margin so the router surfaces its own 503 first.
-			xdsSrv.SetExtProcMessageTimeout(parkCfg.Budget + 5*time.Second)
-		}
-
-		xdsSrv.SetTlsConfig(s.cfg.HttpsPort, s.cfg.EnvoyCertPath)
-		xdsSrv.SetUpstreamTls(s.cfg.UpstreamCredentialBundlePath, s.cfg.UpstreamTrustBundlePath, s.cfg.UpstreamSpiffePrefix)
-		ctrl := NewController(s.k8sClient, s.clientset, s.cfg, xdsSrv, s.extprocSrv)
-
-		// Envoy receives all routing configuration from the local xDS server.
-		g.Go(func() error {
-			slog.InfoContext(ctx, "Starting ActorTemplate controller")
-			return ctrl.Start(ctx)
-		})
-		g.Go(func() error {
-			slog.InfoContext(ctx, "Starting Envoy xDS Server", slog.Int("port", s.cfg.XdsPort))
-			lis, err := net.Listen("tcp", fmt.Sprintf(":%d", s.cfg.XdsPort))
-			if err != nil {
-				return fmt.Errorf("failed to listen on port %d: %w", s.cfg.XdsPort, err)
-			}
-			defer lis.Close()
-
-			return xdsSrv.Serve(ctx, lis)
-		})
-	case atenetRouterAgentgateway:
-		// Agentgateway receives all routing configuration from its static file.
+	if err := s.startDataplane(ctx, g, parkCfg); err != nil {
+		return err
 	}
 
 	// Start periodic service checking logic
