@@ -195,6 +195,10 @@ func New(root string, opts ...Option) (*Store, error) {
 
 // SweepEntries returns a registration function for the Sweeper that cleans up
 // temp dirs and manifest files left behind by a crash in the cache at root.
+// ".tmp-*": an unpack in flight at crash. ".rm-*": a layer retirement renamed
+// aside but not yet removed. ".*": writeRecord's temp files are
+// ".<hex>.json.tmp-<rand>"; finished records are "<hex>.json", so a leading
+// dot alone identifies an interrupted manifest write.
 func SweepEntries(root string) func(*startupsweep.Sweeper) {
 	return func(s *startupsweep.Sweeper) {
 		s.Register("image cache orphaned layer dirs", layersDirPath(root), ".tmp-*", RemoveAllWritable)
@@ -216,7 +220,6 @@ func (s *Store) layerDir(diffID v1.Hash) string {
 func (s *Store) recordPath(digest v1.Hash) string {
 	return filepath.Join(s.root, "manifests", digest.Algorithm, digest.Hex+".json")
 }
-
 
 // EnsureImage makes ref's image available in the pool and returns its config
 // and ordered layer directories. Digest refs hit the cache with no network
