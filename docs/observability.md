@@ -111,6 +111,7 @@ Agent Substrate emits foundational OpenTelemetry system and server metrics to mo
 |--------|------------|------|----------|
 | `rpc.server.call.duration` | ateapi & atelet (gRPC servers, via `otelgrpc`) | histogram | per-method gRPC latency, request rate, and errors (labels `rpc.method`, `rpc.response.status_code`) |
 | `atenet.router.route.duration` | atenet-router | histogram | Substrate E2E — Envoy receiving a request to Envoy forwarding it to the resolved worker, excluding actor compute and the response (labels `ate.template.namespace`, `ate.template.name`, `ate.router.outcome`, `ate.router.resume`) |
+| `ate.scheduler.eligible_workers` | ateapi | histogram | number of eligible unassigned workers available during scheduling given the constraint filters (labels `ate.workerpool.namespace`, `ate.workerpool.name`, `ate.sandbox.class`, `ate.scheduling.constraint`) |
 | `atelet.snapshot.size` | atelet | histogram | uncompressed size in bytes of each gVisor snapshot image written during checkpoint (labels `kind`, `actor_template_namespace`, `actor_template_name`) |
 
 The table lists the OpenTelemetry instrument names. How a name appears in a query depends on the backend (Cloud Monitoring (GMP) / Kind collector).
@@ -118,6 +119,11 @@ The table lists the OpenTelemetry instrument names. How a name appears in a quer
 For `atenet.router.route.duration`:
 * `ate.router.outcome` categorizes the route attempt result: `ok`, `cancelled`, `timeout`, `no_capacity`, `lock_conflict`, `not_found`, `unavailable`, `rate_limited`, or `resume_error`.
 * `ate.router.resume` indicates the singleflight execution state of actor resumption: `none` (actor already running), `triggered` (initiated cold activation), or `joined` (parked on in-flight activation).
+
+For `ate.scheduler.eligible_workers`:
+* `ate.scheduling.constraint` categorizes the scheduling request constraint type: `none` (unconstrained), `selector` (actor or template label selectors specified), or `required_nodes` (pinned to specific node VMs).
+
+The `ate.*` control-plane metric labels are either fixed value sets (operation, outcome, state, class, kind) or scoped to the deployment catalog (template and pool names are operator-created, never derived from request payloads), and the label set varies per operation: resume carries the most dimensions, delete only the operation and error type. `ate.sandbox.class` is derived from the template (each template has exactly one class), so it adds no extra series next to the template labels; it exists so dashboards can aggregate by class without enumerating template names. High-cardinality actor identity (name/uid/atespace) stays off metrics entirely and lives on logs and traces instead.
 
 ### Local Metrics with Prometheus (Kind Cluster)
 

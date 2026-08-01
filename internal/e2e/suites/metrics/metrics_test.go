@@ -22,10 +22,13 @@ package metrics
 
 import (
 	"context"
+	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/e2e"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -48,7 +51,7 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 	ctx := context.Background()
 	clients := e2e.GetClients()
 	tmplNS, tmplName := templateRef()
-	actorID := "metrics-probe"
+	actorID := fmt.Sprintf("metrics-probe-%d", time.Now().UnixNano())
 
 	// CreateActor requires the atespace to exist first; ignore AlreadyExists.
 	_, _ = clients.SubstrateAPI.CreateAtespace(ctx, &ateapipb.CreateAtespaceRequest{
@@ -87,6 +90,7 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 	deadline := time.Now().Add(2 * time.Minute)
 	var missing []string
 	var ateomSeen bool
+	var lastLabelErr error
 	for time.Now().Before(deadline) {
 		scrape, err := e2e.ScrapeCollectorMetrics(ctx)
 		if err != nil {
@@ -95,9 +99,77 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 		missing = e2e.MissingPlatformMetrics(scrape, e2e.PlatformMetricPrefixes)
 		ateomSeen = e2e.CollectorHasService(scrape, "ateom-gvisor", "ateom-microvm")
 		if len(missing) == 0 && ateomSeen {
-			return
+			var errs []string
+
+			// Verify ate_scheduler_eligible_workers metric carries valid attributes:
+			// - Full labels (namespace, pool, class, constraint) for per-pool candidate lines.
+			// - Necessary base labels (class, constraint) for edge cases when no worker pools match.
+			foundEligibleLine := false
+			foundFullPoolLine := false
+			for _, line := range strings.Split(scrape, "\n") {
+				if strings.HasPrefix(line, "ate_scheduler_eligible_workers") {
+					foundEligibleLine = true
+					nsVal := extractPrometheusLabelValue(line, "ate_workerpool_namespace")
+					poolVal := extractPrometheusLabelValue(line, "ate_workerpool_name")
+					classVal := extractPrometheusLabelValue(line, "ate_sandbox_class")
+					constraintVal := extractPrometheusLabelValue(line, "ate_scheduling_constraint")
+
+					var lineErrs []string
+					if classVal == "" {
+						lineErrs = append(lineErrs, "ate_sandbox_class label is missing or empty")
+					}
+					if constraintVal == "" {
+						lineErrs = append(lineErrs, "ate_scheduling_constraint label is missing or empty")
+					} else if constraintVal != ateattr.ConstraintNone && constraintVal != ateattr.ConstraintRequiredNodes && constraintVal != ateattr.ConstraintSelector {
+						lineErrs = append(lineErrs, fmt.Sprintf("ate_scheduling_constraint %q is invalid (must be one of {%s, %s, %s})",
+							constraintVal, ateattr.ConstraintNone, ateattr.ConstraintRequiredNodes, ateattr.ConstraintSelector))
+					}
+
+					// Determine line type for error reporting.
+					isPerPoolLine := poolVal != "" || nsVal != ""
+					caseType := "[NORMAL CASE: Per-Pool Candidates Expected]"
+					if !isPerPoolLine {
+						caseType = "[EDGE CASE: No Worker Pools Matched Constraints]"
+					}
+
+					// If the line has pool or namespace labels, verify both are non-empty (full per-pool line).
+					if isPerPoolLine {
+						if nsVal == "" {
+							lineErrs = append(lineErrs, "ate_workerpool_namespace label is missing or empty")
+						}
+						if poolVal == "" {
+							lineErrs = append(lineErrs, "ate_workerpool_name label is missing or empty")
+						}
+						if len(lineErrs) == 0 {
+							foundFullPoolLine = true
+						}
+					}
+
+					if len(lineErrs) > 0 {
+						errs = append(errs, fmt.Sprintf("%s line %q failed label validation:\n  - %s\n  (Extracted labels: ate_workerpool_namespace=%q, ate_workerpool_name=%q, ate_sandbox_class=%q, ate_scheduling_constraint=%q)",
+							caseType, line, strings.Join(lineErrs, "\n  - "), nsVal, poolVal, classVal, constraintVal))
+					}
+				}
+			}
+			if !foundEligibleLine {
+				errs = append(errs, "ate_scheduler_eligible_workers metric line not found in collector scrape output")
+			} else if !foundFullPoolLine {
+				errs = append(errs, "ate_scheduler_eligible_workers [NORMAL CASE] per-pool candidates was not found in collector scrape output; only edge-case 0-count histogram was present")
+			}
+
+			if len(errs) == 0 {
+				return
+			}
+
+			lastLabelErr = fmt.Errorf("platform metrics label validation failed:\n  - %s", strings.Join(errs, "\n  - "))
+			time.Sleep(2 * time.Second)
+			continue
 		}
 		time.Sleep(3 * time.Second)
+	}
+
+	if lastLabelErr != nil {
+		t.Fatalf("platform telemetry validation failed: missing metrics %v, ateom pushed=%v, detail: %v", missing, ateomSeen, lastLabelErr)
 	}
 	t.Fatalf("platform telemetry never reached the collector: missing metrics %v, ateom pushed=%v", missing, ateomSeen)
 }
@@ -125,4 +197,18 @@ func waitForStatus(t *testing.T, ctx context.Context, clients *e2e.Clients, acto
 		time.Sleep(2 * time.Second)
 	}
 	t.Fatalf("actor %q never reached %v", actorID, want)
+}
+
+func extractPrometheusLabelValue(line, labelName string) string {
+	key := labelName + `="`
+	idx := strings.Index(line, key)
+	if idx == -1 {
+		return ""
+	}
+	start := idx + len(key)
+	end := strings.IndexByte(line[start:], '"')
+	if end == -1 {
+		return ""
+	}
+	return line[start : start+end]
 }

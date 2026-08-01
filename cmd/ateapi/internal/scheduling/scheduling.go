@@ -71,9 +71,9 @@ type WorkerSource interface {
 type scheduler struct {
 	source WorkerSource
 	// intn returns a uniformly distributed random value in [0,n).
-	// Defaults to the global math/rand source.
+	// Defaults to the global math/rand source
 	intn func(n int) int
-	// eligibleWorkers records the number of eligible workers available during scheduling.
+	// Records the number of eligible workers available during scheduling.
 	eligibleWorkers metric.Int64Histogram
 }
 
@@ -92,16 +92,16 @@ func WithMeter(meter metric.Meter) Option {
 		if meter == nil {
 			return
 		}
-		h, err := meter.Int64Histogram(
+		hist, err := meter.Int64Histogram(
 			eligibleWorkersMetric,
 			metric.WithUnit("{worker}"),
-			metric.WithDescription("Number of eligible workers available during scheduling."),
+			metric.WithDescription("Number of eligible workers available during scheduling given the constraint filters."),
 		)
 		if err != nil {
 			slog.Error("Failed to create ate.scheduler.eligible_workers histogram", "error", err)
 			return
 		}
-		s.eligibleWorkers = h
+		s.eligibleWorkers = hist
 	}
 }
 
@@ -140,7 +140,7 @@ func (s *scheduler) Schedule(ctx context.Context, constraints Constraints) (*ate
 	return candidates[s.intn(len(candidates))], nil
 }
 
-// recordEligibleWorkers records candidate worker counts grouped by WorkerPool namespace, WorkerPool name,
+// Records candidate worker counts grouped by WorkerPool namespace, WorkerPool name,
 // SandboxClass, and SchedulingConstraint, and records histogram datapoints.
 func (s *scheduler) recordEligibleWorkers(ctx context.Context, allWorkers []*ateapipb.Worker, candidates []*ateapipb.Worker, constraints Constraints) {
 	if s.eligibleWorkers == nil {
@@ -213,11 +213,6 @@ func classifyConstraint(c Constraints) string {
 	return ateattr.ConstraintNone
 }
 
-// Applies evaluates whether a single worker satisfies all requested scheduling constraints:
-// 1. SandboxClass match (hard requirement for snapshot compatibility).
-// 2. Active worker state (draining/unspecified workers are excluded).
-// 3. Template and Actor label selectors match worker labels.
-// 4. Node VM locality constraints (if required for local snapshot restoration).
 func (s *scheduler) Applies(worker *ateapipb.Worker, constraints Constraints) bool {
 	if worker.GetSandboxClass() != constraints.SandboxClass {
 		return false

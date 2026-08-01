@@ -42,6 +42,7 @@ const (
 var PlatformMetricPrefixes = []string{
 	"ate_workerpool_workers",
 	"atenet_router_route_duration",
+	"ate_scheduler_eligible_workers",
 }
 
 // ScrapeCollectorMetrics port-forwards the kind stack's OTel Collector and reads
