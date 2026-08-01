@@ -33,6 +33,7 @@ import (
 	"cloud.google.com/go/storage"
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/ategcs"
 	"github.com/agent-substrate/substrate/internal/ateerrors"
+	"github.com/agent-substrate/substrate/internal/startupsweep"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/credbundle"
@@ -120,6 +121,11 @@ func main() {
 			serverboot.Fatal(ctx, "Failed to create GCP registry authenticator", err)
 		}
 	}
+
+	sweeper := startupsweep.New()
+	sweeper.Add(ategcs.SweepEntries())
+	sweeper.Add(imagecache.SweepEntries(*imageCacheDir))
+	sweeper.Sweep(ctx)
 
 	imageCache, err := imagecache.New(*imageCacheDir,
 		imagecache.WithAuthenticator(gcpRegistryAuthn),

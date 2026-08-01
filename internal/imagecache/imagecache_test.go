@@ -27,6 +27,7 @@ import (
 	"slices"
 	"testing"
 
+	"github.com/agent-substrate/substrate/internal/startupsweep"
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/google/go-containerregistry/pkg/registry"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
@@ -227,9 +228,12 @@ func TestNew_RecoveryAndVersioning(t *testing.T) {
 	if err := os.WriteFile(record, []byte("{}"), 0o600); err != nil {
 		t.Fatalf("planting record: %v", err)
 	}
+	sw := startupsweep.New()
+	sw.Add(SweepEntries(root))
 	if _, err := New(root); err != nil {
 		t.Fatalf("New(recovery): %v", err)
 	}
+	sw.Sweep(context.Background())
 	if _, err := os.Stat(orphan); !os.IsNotExist(err) {
 		t.Errorf("orphaned temp dir survived recovery")
 	}

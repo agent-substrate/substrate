@@ -28,11 +28,16 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/ateerrors"
+	"github.com/agent-substrate/substrate/internal/startupsweep"
 	"github.com/klauspost/compress/zstd"
 	"go.opentelemetry.io/otel"
 )
 
 var tracer = otel.Tracer("ategcs")
+
+// uploadTempFilePrefix is the filename prefix used by sendBufferedZstd when
+// creating staging files in os.TempDir().
+const uploadTempFilePrefix = "substrate-upload-compress-"
 
 type ObjectStorage interface {
 	GetObject(ctx context.Context, bucket, object string) (io.ReadCloser, error)
@@ -184,7 +189,7 @@ func sendZstd(ctx context.Context, client ObjectStorage, gsURL string, content i
 // Used for backends (S3/rustfs) whose PutObject needs a seekable body to sign and
 // set Content-Length; the streaming counterpart is sendStreamingZstd.
 func sendBufferedZstd(ctx context.Context, client ObjectStorage, bucket, object string, content io.Reader, tStart time.Time) error {
-	tmpFile, err := os.CreateTemp("", "substrate-upload-compress-")
+	tmpFile, err := os.CreateTemp("", uploadTempFilePrefix)
 	if err != nil {
 		return fmt.Errorf("while creating temp compress file: %w", err)
 	}
@@ -294,6 +299,14 @@ func FetchLocalFileFromGCSWithZstd(ctx context.Context, client ObjectStorage, gs
 	}
 
 	return nil
+}
+
+// SweepEntries returns a registration function for the Sweeper that cleans up
+// upload staging files left behind by a crash.
+func SweepEntries() func(*startupsweep.Sweeper) {
+	return func(s *startupsweep.Sweeper) {
+		s.Register("GCS upload temp files", os.TempDir(), uploadTempFilePrefix+"*", os.Remove)
+	}
 }
 
 func fetchFromGCSWithZstd(ctx context.Context, client ObjectStorage, gsURL string, out io.Writer) (err error) {
