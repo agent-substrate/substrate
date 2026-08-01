@@ -52,12 +52,20 @@ const (
 // WorkerPoolNamespaceKey pairs with WorkerPoolNameKey: a WorkerPool is
 // namespaced, so the name alone does not identify one.
 const (
-	WorkerPoolNamespaceKey = attribute.Key("ate.workerpool.namespace")
-	WorkerPoolNameKey      = attribute.Key("ate.workerpool.name")
-	WorkerStateKey         = attribute.Key("ate.worker.state")
-	SandboxClassKey        = attribute.Key("ate.sandbox.class")
-	RouterResumeKey        = attribute.Key("ate.router.resume")
-	RouterOutcomeKey       = attribute.Key("ate.router.outcome")
+	WorkerPoolNamespaceKey  = attribute.Key("ate.workerpool.namespace")
+	WorkerPoolNameKey       = attribute.Key("ate.workerpool.name")
+	WorkerStateKey          = attribute.Key("ate.worker.state")
+	SandboxClassKey         = attribute.Key("ate.sandbox.class")
+	SchedulingConstraintKey = attribute.Key("ate.scheduling.constraint")
+	RouterResumeKey         = attribute.Key("ate.router.resume")
+	RouterOutcomeKey        = attribute.Key("ate.router.outcome")
+)
+
+// Values for SchedulingConstraintKey.
+const (
+	ConstraintNone          = "none"
+	ConstraintRequiredNodes = "required_nodes"
+	ConstraintSelector      = "selector"
 )
 
 // Values for RouterResumeKey.

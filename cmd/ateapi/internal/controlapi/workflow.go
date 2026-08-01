@@ -154,7 +154,7 @@ func NewActorWorkflow(
 	return &ActorWorkflow{
 		store:               store,
 		workerCache:         workerCache,
-		scheduler:           scheduling.New(workerCache),
+		scheduler:           scheduling.New(workerCache, scheduling.WithMeter(otel.Meter("ateapi"))),
 		dialer:              dialer,
 		actorTemplateLister: actorTemplateLister,
 		workerPoolLister:    workerPoolLister,
