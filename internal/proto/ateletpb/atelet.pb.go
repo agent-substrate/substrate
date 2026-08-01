@@ -148,6 +148,12 @@ const (
 	// (currently DurableDir-typed volumes). Memory and the rest of rootfs are
 	// excluded.
 	SnapshotScope_SNAPSHOT_SCOPE_DATA SnapshotScope = 2
+	// Restore-only: restore the ActorTemplate's golden snapshot's guest state
+	// (memory + full filesystem delta) combined with the snapshot's durable
+	// data. Never valid for Checkpoint — snapshots only ever capture FULL or
+	// DATA; whether a Data snapshot restores cold or on the golden is decided
+	// by the control plane from the template's dataResumePolicy.
+	SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN SnapshotScope = 3
 )
 
 // Enum value maps for SnapshotScope.
@@ -156,11 +162,13 @@ var (
 		0: "SNAPSHOT_SCOPE_UNSPECIFIED",
 		1: "SNAPSHOT_SCOPE_FULL",
 		2: "SNAPSHOT_SCOPE_DATA",
+		3: "SNAPSHOT_SCOPE_DATA_ON_GOLDEN",
 	}
 	SnapshotScope_value = map[string]int32{
-		"SNAPSHOT_SCOPE_UNSPECIFIED": 0,
-		"SNAPSHOT_SCOPE_FULL":        1,
-		"SNAPSHOT_SCOPE_DATA":        2,
+		"SNAPSHOT_SCOPE_UNSPECIFIED":    0,
+		"SNAPSHOT_SCOPE_FULL":           1,
+		"SNAPSHOT_SCOPE_DATA":           2,
+		"SNAPSHOT_SCOPE_DATA_ON_GOLDEN": 3,
 	}
 )
 
@@ -1349,9 +1357,16 @@ type RestoreRequest struct {
 	//	*RestoreRequest_ExternalConfig
 	Config isRestoreRequest_Config `protobuf_oneof:"config"`
 	// What content to restore from the checkpoint.
-	Scope         SnapshotScope `protobuf:"varint,11,opt,name=scope,proto3,enum=atelet.SnapshotScope" json:"scope,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Scope SnapshotScope `protobuf:"varint,11,opt,name=scope,proto3,enum=atelet.SnapshotScope" json:"scope,omitempty"`
+	// The object storage URI prefix of the ActorTemplate's golden snapshot.
+	// Set only when scope is SNAPSHOT_SCOPE_DATA_ON_GOLDEN: restore combines
+	// the golden snapshot (memory + full fs delta) with the durable data in
+	// the snapshot referenced by `config`. A top-level field rather than part
+	// of the `config` oneof: the actor's snapshot may be local (a pause
+	// checkpoint) while the golden snapshot is always external.
+	GoldenSnapshotUriPrefix string `protobuf:"bytes,12,opt,name=golden_snapshot_uri_prefix,json=goldenSnapshotUriPrefix,proto3" json:"golden_snapshot_uri_prefix,omitempty"`
+	unknownFields           protoimpl.UnknownFields
+	sizeCache               protoimpl.SizeCache
 }
 
 func (x *RestoreRequest) Reset() {
@@ -1470,6 +1485,13 @@ func (x *RestoreRequest) GetScope() SnapshotScope {
 		return x.Scope
 	}
 	return SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED
+}
+
+func (x *RestoreRequest) GetGoldenSnapshotUriPrefix() string {
+	if x != nil {
+		return x.GoldenSnapshotUriPrefix
+	}
+	return ""
 }
 
 type isRestoreRequest_Config interface {
@@ -1615,7 +1637,7 @@ const file_atelet_proto_rawDesc = "" +
 	" \x01(\v2'.atelet.ExternalCheckpointConfigurationH\x00R\x0eexternalConfig\x12+\n" +
 	"\x05scope\x18\v \x01(\x0e2\x15.atelet.SnapshotScopeR\x05scopeB\b\n" +
 	"\x06config\"\x14\n" +
-	"\x12CheckpointResponse\"\xa8\x04\n" +
+	"\x12CheckpointResponse\"\xe5\x04\n" +
 	"\x0eRestoreRequest\x12(\n" +
 	"\x10target_ateom_uid\x18\x01 \x01(\tR\x0etargetAteomUid\x12\x1a\n" +
 	"\batespace\x18\x02 \x01(\tR\batespace\x12\x1d\n" +
@@ -1629,7 +1651,8 @@ const file_atelet_proto_rawDesc = "" +
 	"\flocal_config\x18\t \x01(\v2$.atelet.LocalCheckpointConfigurationH\x00R\vlocalConfig\x12R\n" +
 	"\x0fexternal_config\x18\n" +
 	" \x01(\v2'.atelet.ExternalCheckpointConfigurationH\x00R\x0eexternalConfig\x12+\n" +
-	"\x05scope\x18\v \x01(\x0e2\x15.atelet.SnapshotScopeR\x05scopeB\b\n" +
+	"\x05scope\x18\v \x01(\x0e2\x15.atelet.SnapshotScopeR\x05scope\x12;\n" +
+	"\x1agolden_snapshot_uri_prefix\x18\f \x01(\tR\x17goldenSnapshotUriPrefixB\b\n" +
 	"\x06config\"\x11\n" +
 	"\x0fRestoreResponse*`\n" +
 	"\n" +
@@ -1640,11 +1663,12 @@ const file_atelet_proto_rawDesc = "" +
 	"\x0eCheckpointType\x12\x1f\n" +
 	"\x1bCHECKPOINT_TYPE_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15CHECKPOINT_TYPE_LOCAL\x10\x01\x12\x1c\n" +
-	"\x18CHECKPOINT_TYPE_EXTERNAL\x10\x02*a\n" +
+	"\x18CHECKPOINT_TYPE_EXTERNAL\x10\x02*\x84\x01\n" +
 	"\rSnapshotScope\x12\x1e\n" +
 	"\x1aSNAPSHOT_SCOPE_UNSPECIFIED\x10\x00\x12\x17\n" +
 	"\x13SNAPSHOT_SCOPE_FULL\x10\x01\x12\x17\n" +
-	"\x13SNAPSHOT_SCOPE_DATA\x10\x022\xc4\x01\n" +
+	"\x13SNAPSHOT_SCOPE_DATA\x10\x02\x12!\n" +
+	"\x1dSNAPSHOT_SCOPE_DATA_ON_GOLDEN\x10\x032\xc4\x01\n" +
 	"\vAteomHerder\x120\n" +
 	"\x03Run\x12\x12.atelet.RunRequest\x1a\x13.atelet.RunResponse\"\x00\x12E\n" +
 	"\n" +

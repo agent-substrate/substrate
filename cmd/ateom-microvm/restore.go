@@ -75,6 +75,13 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 
 	s.actorLogger.EmitLifecycleLog("Actor restoring", p.actorRef, p.actorUID, p.templateNS, p.templateName)
 
+	// Reject before mutating the durable-dir volumes: the combining of the
+	// golden snapshot's guest state with the actor's data is not implemented
+	// yet, so nothing should observe a half-restored actor.
+	if req.GetScope() == ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN {
+		return nil, status.Error(codes.Unimplemented, "DataOnGolden snapshot restore is not implemented yet")
+	}
+
 	// Restore the durable-dir volumes before anything can observe them: for Full
 	// that means before the share's virtiofsd starts, for Data before the workload
 	// cold-starts. The snapshot must carry them — the actor declares the volume, and

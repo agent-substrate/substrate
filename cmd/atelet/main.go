@@ -424,6 +424,8 @@ func toAteomSnapshotScope(scope ateletpb.SnapshotScope) ateompb.SnapshotScope {
 	switch scope {
 	case ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA:
 		return ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA
+	case ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN:
+		return ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
 	default:
 		return ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL
 	}
@@ -604,6 +606,9 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		Spec:                   buildAteomWorkloadSpec(req.GetSpec()),
 		Scope:                  toAteomSnapshotScope(req.GetScope()),
 		ActorUid:               req.GetActorUid(),
+		// Plumbing only for now: the golden snapshot is not downloaded here;
+		// combining it with the actor's data is up to the runtime.
+		GoldenSnapshotUriPrefix: req.GetGoldenSnapshotUriPrefix(),
 	}); err != nil {
 		// TODO: classify the errors returned by Ateom and crash the actor if needed.
 		return nil, fmt.Errorf("while calling ateom.RestoreWorkload: %w", err)
@@ -952,6 +957,13 @@ func validateCheckpointRequest(req *ateletpb.CheckpointRequest) error {
 	default:
 		return fmt.Errorf("invalid checkpoint type: %v", req.GetType())
 	}
+
+	// DATA_ON_GOLDEN is a restore-time operation (combine the golden
+	// snapshot's guest state with the actor's data): checkpoints only ever
+	// capture FULL or DATA.
+	if req.GetScope() == ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN {
+		return fmt.Errorf("snapshot scope %s is restore-only; checkpoints capture %s or %s", req.GetScope(), ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL, ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA)
+	}
 	return nil
 }
 
@@ -997,13 +1009,25 @@ func validateRestoreRequest(req *ateletpb.RestoreRequest) error {
 	default:
 		return fmt.Errorf("invalid checkpoint type: %v", req.GetType())
 	}
+
+	// A DATA_ON_GOLDEN restore needs both halves: the actor's data snapshot
+	// (local pause checkpoint or external commit) and the golden snapshot,
+	// which is always external.
+	if req.GetScope() == ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN {
+		if err := resources.ValidateSnapshotURIPrefix(req.GetGoldenSnapshotUriPrefix()); err != nil {
+			return fmt.Errorf("invalid golden_snapshot_uri_prefix: %w", err)
+		}
+	} else if req.GetGoldenSnapshotUriPrefix() != "" {
+		return fmt.Errorf("golden_snapshot_uri_prefix is only valid with snapshot scope %s", ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN)
+	}
 	return nil
 }
 
 func validateSnapshotScope(scope ateletpb.SnapshotScope) error {
 	switch scope {
 	case ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
-		ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA:
+		ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA,
+		ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN:
 		return nil
 	case ateletpb.SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED:
 		return fmt.Errorf("snapshot scope must be non-zero")

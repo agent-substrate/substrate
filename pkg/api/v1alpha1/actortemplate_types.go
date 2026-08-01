@@ -264,6 +264,26 @@ const (
 	SnapshotScopeData SnapshotScope = "Data"
 )
 
+// DataResumePolicy defines how an actor boots when a resume can only use the
+// data part of a snapshot: a Data-scope snapshot (from onPause or onCommit),
+// or — once template versioning lands — a Full snapshot invalidated by a new
+// OCI image, from which only the durable data is salvaged. Full snapshots
+// that are still valid always restore from their own content and ignore this
+// policy.
+// +kubebuilder:validation:Enum=ColdBoot;OnGolden
+type DataResumePolicy string
+
+const (
+	// ColdBoot starts the actor's containers afresh from the OCI image, with
+	// the durable-dir volumes pre-populated from the snapshot.
+	DataResumePolicyColdBoot DataResumePolicy = "ColdBoot"
+	// OnGolden restores the ActorTemplate's golden snapshot (guest memory +
+	// filesystem delta) and serves the snapshot's durable data to it, so the
+	// actor resumes with the golden's warm state over its own data. Requires
+	// sandboxClass "microvm".
+	DataResumePolicyOnGolden DataResumePolicy = "OnGolden"
+)
+
 // +kubebuilder:validation:XValidation:rule="(has(self.onPause) ? self.onPause : 'Full') == 'Full' || (has(self.onCommit) ? self.onCommit : 'Full') == (has(self.onPause) ? self.onPause : 'Full')",message="onCommit must be a subset of onPause"
 type SnapshotsConfig struct {
 	// Location to store snapshots in.
@@ -290,6 +310,14 @@ type SnapshotsConfig struct {
 	// +optional
 	// +kubebuilder:default=Full
 	OnCommit SnapshotScope `json:"onCommit,omitempty"`
+
+	// DataResumePolicy specifies how the actor boots when a resume can only
+	// use the data part of a snapshot (see DataResumePolicy). "OnGolden"
+	// requires sandboxClass "microvm". Defaults to "ColdBoot".
+	//
+	// +optional
+	// +kubebuilder:default=ColdBoot
+	DataResumePolicy DataResumePolicy `json:"dataResumePolicy,omitempty"`
 }
 
 // ActorTemplateSpec defined desired spec of an actor.
@@ -298,6 +326,7 @@ type SnapshotsConfig struct {
 // +kubebuilder:validation:XValidation:rule="(has(self.sandboxClass) && self.sandboxClass == 'microvm') || !has(self.containers) || self.containers.all(c, !has(c.volumeMounts) || c.volumeMounts.filter(vm, has(self.volumes) && self.volumes.exists(v, v.name == vm.name && has(v.durableDir))).size() <= 1)",message="A container may mount only one DurableDir-typed volume when sandboxClass is 'gvisor'"
 // +kubebuilder:validation:XValidation:rule="!has(self.volumes) || self.volumes.all(v, has(self.containers) && self.containers.exists(c, has(c.volumeMounts) && c.volumeMounts.exists(vm, vm.name == v.name)))",message="All volumes defined in spec.volumes must be mounted by at least one container"
 // +kubebuilder:validation:XValidation:rule="!has(self.sandboxClass) || self.sandboxClass != 'microvm' || !has(self.volumes) || !self.volumes.exists(v, has(v.externalVolumeTemplate))",message="ExternalVolumes are not supported when sandboxClass is 'microvm'"
+// +kubebuilder:validation:XValidation:rule="(has(self.sandboxClass) && self.sandboxClass == 'microvm') || (has(self.snapshotsConfig.dataResumePolicy) ? self.snapshotsConfig.dataResumePolicy : 'ColdBoot') != 'OnGolden'",message="OnGolden data resume policy is not supported when sandboxClass is 'gvisor'"
 type ActorTemplateSpec struct {
 	// PauseImage is the container to use as the root sandbox container.
 	//

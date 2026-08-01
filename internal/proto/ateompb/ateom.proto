@@ -127,6 +127,12 @@ enum SnapshotScope {
   // (currently DurableDir-typed volumes). Memory and the rest of rootfs are
   // excluded.
   SNAPSHOT_SCOPE_DATA = 2;
+  // Restore-only: restore the ActorTemplate's golden snapshot's guest state
+  // (memory + full filesystem delta) combined with the snapshot's durable
+  // data. Never valid for CheckpointWorkload — snapshots only ever capture
+  // FULL or DATA; the control plane selects this scope at restore per the
+  // template's dataResumePolicy.
+  SNAPSHOT_SCOPE_DATA_ON_GOLDEN = 3;
 }
 
 message CheckpointWorkloadRequest {
@@ -193,6 +199,11 @@ message RestoreWorkloadRequest {
   // Remote egress gateway selected for this activation. When absent, actor
   // traffic uses direct egress instead of being redirected through atunnel.
   optional string egress_gateway_address = 12;
+
+  // The object storage URI prefix of the ActorTemplate's golden snapshot.
+  // Set only when scope is SNAPSHOT_SCOPE_DATA_ON_GOLDEN. Mirrors the
+  // snapshot_uri_prefix contract (field 8).
+  string golden_snapshot_uri_prefix = 13;
 }
 
 message RestoreWorkloadResponse {

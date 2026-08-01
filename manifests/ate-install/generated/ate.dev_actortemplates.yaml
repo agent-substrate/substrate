@@ -279,6 +279,16 @@ spec:
               snapshotsConfig:
                 description: Snapshots configuration for the actor.
                 properties:
+                  dataResumePolicy:
+                    default: ColdBoot
+                    description: |-
+                      DataResumePolicy specifies how the actor boots when a resume can only
+                      use the data part of a snapshot (see DataResumePolicy). "OnGolden"
+                      requires sandboxClass "microvm". Defaults to "ColdBoot".
+                    enum:
+                    - ColdBoot
+                    - OnGolden
+                    type: string
                   location:
                     description: Location to store snapshots in.
                     minLength: 1
@@ -440,6 +450,11 @@ spec:
             - message: ExternalVolumes are not supported when sandboxClass is 'microvm'
               rule: '!has(self.sandboxClass) || self.sandboxClass != ''microvm'' ||
                 !has(self.volumes) || !self.volumes.exists(v, has(v.externalVolumeTemplate))'
+            - message: OnGolden data resume policy is not supported when sandboxClass
+                is 'gvisor'
+              rule: '(has(self.sandboxClass) && self.sandboxClass == ''microvm'')
+                || (has(self.snapshotsConfig.dataResumePolicy) ? self.snapshotsConfig.dataResumePolicy
+                : ''ColdBoot'') != ''OnGolden'''
           status:
             description: status is the observed state of ActorTemplate
             properties:

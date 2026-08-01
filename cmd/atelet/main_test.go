@@ -279,6 +279,9 @@ func TestValidateCheckpointRequest(t *testing.T) {
 		{"unspecified snapshot type", makeReq(func(r *ateletpb.CheckpointRequest) { r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_UNSPECIFIED }), true},
 		{"unspecified snapshot scope", makeReq(func(r *ateletpb.CheckpointRequest) { r.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED }), true},
 		{"invalid snapshot scope", makeReq(func(r *ateletpb.CheckpointRequest) { r.Scope = ateletpb.SnapshotScope(23) }), true},
+		// DATA_ON_GOLDEN is a restore-only scope: checkpoints only ever
+		// capture FULL or DATA, so a checkpoint carrying it is a bug upstream.
+		{"data-on-golden scope is restore-only", makeReq(func(r *ateletpb.CheckpointRequest) { r.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN }), true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -322,6 +325,29 @@ func TestValidateRestoreRequest(t *testing.T) {
 		{"unspecified snapshot type", makeReq(func(r *ateletpb.RestoreRequest) { r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_UNSPECIFIED }), true},
 		{"unspecified snapshot scope", makeReq(func(r *ateletpb.RestoreRequest) { r.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED }), true},
 		{"invalid snapshot scope", makeReq(func(r *ateletpb.RestoreRequest) { r.Scope = ateletpb.SnapshotScope(23) }), true},
+		{"data-on-golden with golden uri", makeReq(func(r *ateletpb.RestoreRequest) {
+			r.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
+			r.GoldenSnapshotUriPrefix = "gs://bucket/ate-golden/snapshots/1/"
+		}), false},
+		{"data-on-golden without golden uri", makeReq(func(r *ateletpb.RestoreRequest) {
+			r.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
+		}), true},
+		{"data-on-golden with bucketless golden uri", makeReq(func(r *ateletpb.RestoreRequest) {
+			r.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
+			r.GoldenSnapshotUriPrefix = "relative/path"
+		}), true},
+		// A pause (local) checkpoint may combine with the golden snapshot:
+		// the golden URI is a top-level field precisely so LOCAL restores
+		// can carry it.
+		{"data-on-golden with local checkpoint type", makeReq(func(r *ateletpb.RestoreRequest) {
+			r.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
+			r.GoldenSnapshotUriPrefix = "gs://bucket/ate-golden/snapshots/1/"
+			r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL
+			r.Config = &ateletpb.RestoreRequest_LocalConfig{LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotPrefix: "prefix"}}
+		}), false},
+		{"golden uri with non-data-on-golden scope", makeReq(func(r *ateletpb.RestoreRequest) {
+			r.GoldenSnapshotUriPrefix = "gs://bucket/ate-golden/snapshots/1/"
+		}), true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -329,6 +355,24 @@ func TestValidateRestoreRequest(t *testing.T) {
 				t.Errorf("validateRestoreRequest err = %v, wantErr %v", err, tc.wantErr)
 			}
 		})
+	}
+}
+
+// Every valid atelet scope must map to its ateom counterpart; in particular
+// DATA_ON_GOLDEN must never silently degrade to FULL.
+func TestToAteomSnapshotScope(t *testing.T) {
+	tests := []struct {
+		in   ateletpb.SnapshotScope
+		want ateompb.SnapshotScope
+	}{
+		{ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL, ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL},
+		{ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA, ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA},
+		{ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN, ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN},
+	}
+	for _, tc := range tests {
+		if got := toAteomSnapshotScope(tc.in); got != tc.want {
+			t.Errorf("toAteomSnapshotScope(%v) = %v, want %v", tc.in, got, tc.want)
+		}
 	}
 }
 

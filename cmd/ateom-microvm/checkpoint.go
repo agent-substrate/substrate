@@ -77,7 +77,9 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	// suspended mid-flight for a call that could never have succeeded.
 	//
 	// Durable-dir volumes are host-backed, so they are captured the same way
-	// under either scope — and are the ONLY thing a Data-scope snapshot captures.
+	// under either scope — and are the ONLY thing a Data-scope snapshot
+	// captures. DATA_ON_GOLDEN is restore-only (a DataOnGolden commit arrives
+	// here as plain DATA) and lands in the default rejection.
 	durable := hasDurableVolumes(req.GetSpec().GetContainers())
 	scope := req.GetScope()
 	switch scope {
@@ -120,8 +122,10 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 
 	// Only a Full snapshot captures the guest. A Data snapshot deliberately
 	// captures no VM state — no memory image, and no base-id, since nothing will
-	// reattach to the frozen virtio-fs lower: the actor cold-boots from the OCI
-	// image and gets its durable-dir volumes back from the tar below.
+	// reattach to the frozen virtio-fs lower: at restore the actor cold-boots
+	// from the OCI image (or, under an OnGolden data resume policy, is combined
+	// with the golden snapshot's guest state) and gets its durable-dir volumes
+	// back from the tar below.
 	var dSnapshot time.Duration
 	if scope == ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL {
 		var err error
