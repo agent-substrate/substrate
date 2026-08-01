@@ -2773,7 +2773,8 @@ func (x *MintJWTRequest) GetActorUid() string {
 	return ""
 }
 
-// TODO (lior) check why k8s do ":" and not "/" as a seprator for the Subject format
+// TODO: check why k8s do ":" and not "/" as a seprator for the Subject format
+// TODO: whats the right format for the subject? kubernetes follow "system:serviceaccount:<namespace>:<name>".
 type MintJWTResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Actor JWT.  An OIDC Discovery-compatible JWT
@@ -2786,7 +2787,7 @@ type MintJWTResponse struct {
 	//
 	// credential. Format
 	//
-	//	`atespaces/${atespace}/actors/${actorname}`.
+	//	`atespaces:${atespace}:actors:${actorname}`.
 	//   - aud: Audience - a string identifying the service this token will be used
 	//     to authenticate to.
 	//   - nbf: Not Before - a numeric unix timestamp

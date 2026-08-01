@@ -517,7 +517,8 @@ message MintJWTRequest {
   string actor_uid = 4;
 }
 
-//TODO (lior) check why k8s do ":" and not "/" as a seprator for the Subject format
+// TODO: check why k8s do ":" and not "/" as a seprator for the Subject format
+// TODO: whats the right format for the subject? kubernetes follow "system:serviceaccount:<namespace>:<name>".
 message MintJWTResponse {
   // Actor JWT.  An OIDC Discovery-compatible JWT
   //
@@ -527,7 +528,7 @@ message MintJWTResponse {
   //   discovery documents.
   // * sub: Subject - a string expressing the identity carried in the
   // credential. Format
-  //   `atespaces/${atespace}/actors/${actorname}`.
+  //   `atespaces:${atespace}:actors:${actorname}`.
   // * aud: Audience - a string identifying the service this token will be used
   //   to authenticate to.
   // * nbf: Not Before - a numeric unix timestamp

@@ -173,6 +173,9 @@ type actorFixture struct {
 	// assignedTo overrides the actor the worker claims to be hosting. The zero
 	// value means the worker is assigned to the seeded actor.
 	assignedTo resources.ActorRef
+	// unassigned seeds the worker with no assignment at all, as pause, suspend
+	// and crash leave it once they have released it.
+	unassigned bool
 	// noPlacement seeds the actor with none of its worker fields set.
 	noPlacement bool
 	// noWorker skips seeding the worker record entirely.
@@ -214,6 +217,9 @@ func seedActor(t *testing.T, ctx context.Context, st store.Interface, f actorFix
 		NodeName:        f.workerNode,
 		State:           ateapipb.Worker_STATE_ACTIVE,
 		Assignment:      &ateapipb.Assignment{Actor: assigned.ToObjectRef()},
+	}
+	if f.unassigned {
+		worker.Assignment = nil
 	}
 	if err := st.CreateWorker(ctx, worker); err != nil {
 		t.Fatalf("seed worker: %v", err)
@@ -318,13 +324,21 @@ func TestMintCertAuthorization(t *testing.T) {
 			},
 			wantCode: codes.PermissionDenied,
 		},
-		"running actor has no placement": {
+		"actor has no placement": {
 			fixture: actorFixture{
 				status:      ateapipb.Actor_STATUS_RUNNING,
 				noPlacement: true,
 				noWorker:    true,
 			},
 			wantCode: codes.FailedPrecondition,
+		},
+		"worker has been released": {
+			fixture: actorFixture{
+				status:     ateapipb.Actor_STATUS_RUNNING,
+				workerNode: testNode,
+				unassigned: true,
+			},
+			wantCode: codes.PermissionDenied,
 		},
 		"atespace is empty": {
 			fixture:  runningOnNode(testNode),
@@ -458,7 +472,7 @@ func TestMintCertEmbedsActorIdentity(t *testing.T) {
 }
 
 // TestMintCertActorUID checks how the caller-supplied actor_uid is treated: it
-// is honoured when it agrees with the store, ignored when absent, and refused
+// is honored when it agrees with the store, ignored when absent, and refused
 // when it names some other incarnation of the actor. In no case does it decide
 // what goes into the certificate — that always comes from the store.
 func TestMintCertActorUID(t *testing.T) {
@@ -502,15 +516,26 @@ func TestMintCertActorUID(t *testing.T) {
 	}
 }
 
-// TestMintCertRejectsNonRunningActors checks that a credential can only be
-// minted while the actor is actually running, for every non-running status the
-// proto defines. Enumerating the enum rather than listing statuses means a
-// status added later is covered without editing this test.
-func TestMintCertRejectsNonRunningActors(t *testing.T) {
+// TestMintCertActorStatus pins down that the actor's status does not gate
+// minting: an actor still assigned to a worker on the caller's node gets a
+// credential whatever status it carries, except while it is being deleted.
+//
+// STATUS_RESUMING is the case that matters in practice. atelet mints while
+// serving the Run/Restore RPC that ateapi issues before marking the actor
+// RUNNING, so gating on RUNNING would make every resume unsatisfiable.
+//
+// The terminal statuses below are seeded with a worker assignment that the
+// control plane would already have cleared, so they are not reachable in a
+// healthy system; they are exercised to record that the assignment, not the
+// status, is what the decision rests on. Enumerating the enum rather than
+// listing statuses means a status added later is covered without editing this
+// test.
+func TestMintCertActorStatus(t *testing.T) {
 	for value, name := range ateapipb.Actor_Status_name {
 		actorStatus := ateapipb.Actor_Status(value)
-		if actorStatus == ateapipb.Actor_STATUS_RUNNING {
-			continue
+		wantCode := codes.OK
+		if actorStatus == ateapipb.Actor_STATUS_DELETING {
+			wantCode = codes.FailedPrecondition
 		}
 		t.Run(name, func(t *testing.T) {
 			ctx := context.Background()
@@ -525,8 +550,43 @@ func TestMintCertRejectsNonRunningActors(t *testing.T) {
 				ActorName:                 testActorName,
 				CertificateSigningRequest: newCSR(t),
 			})
-			if got := status.Code(err); got != codes.FailedPrecondition {
-				t.Errorf("MintCert() code = %v (err = %v), want %v", got, err, codes.FailedPrecondition)
+			if got := status.Code(err); got != wantCode {
+				t.Errorf("MintCert() code = %v (err = %v), want %v", got, err, wantCode)
+			}
+		})
+	}
+}
+
+// TestMintCertDeniesUnassignedActorWhateverItsStatus checks that the placement
+// checks — not the status — are what stops a departed actor. A RUNNING actor
+// whose worker has been released is refused just as a SUSPENDED one is.
+func TestMintCertDeniesUnassignedActorWhateverItsStatus(t *testing.T) {
+	for name, actorStatus := range map[string]ateapipb.Actor_Status{
+		"Running":   ateapipb.Actor_STATUS_RUNNING,
+		"Suspended": ateapipb.Actor_STATUS_SUSPENDED,
+	} {
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+			st, cleanup := storetest.SetupTestStore(t)
+			defer cleanup()
+
+			// The worker still exists on the caller's node but has been released,
+			// which is what pause, suspend and crash all do before writing the
+			// terminal status.
+			seedActor(t, ctx, st, actorFixture{
+				status:     actorStatus,
+				workerNode: testNode,
+				unassigned: true,
+			})
+			srv := newTestServer(t, st)
+
+			_, err := srv.MintCert(ctxWithCert(ateletCertOn(t, testNode)), &ateapipb.MintCertRequest{
+				Atespace:                  testAtespace,
+				ActorName:                 testActorName,
+				CertificateSigningRequest: newCSR(t),
+			})
+			if got := status.Code(err); got != codes.PermissionDenied {
+				t.Errorf("MintCert() code = %v (err = %v), want %v", got, err, codes.PermissionDenied)
 			}
 		})
 	}

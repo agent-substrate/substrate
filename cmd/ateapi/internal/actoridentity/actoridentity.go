@@ -133,8 +133,9 @@ func (s *Server) MintJWT(ctx context.Context, req *ateapipb.MintJWTRequest) (*at
 
 	actorClaims := &actoridjwt.Claims{
 		// TODO: This is currently API but it has to be a globally unique, oidc-compliant and accsible DNS name
-		Issuer:     "https://api.ate-system.svc",
-		Subject:    fmt.Sprintf("atespaces/%s/actors/%s", req.GetAtespace(), req.GetActorName()),
+		Issuer: "https://api.ate-system.svc",
+		// TODO: this format is very likely going to change.
+		Subject:    fmt.Sprintf("atespaces:%s:actors:%s", req.GetAtespace(), req.GetActorName()),
 		Audiences:  req.GetAudience(),
 		Expiration: time.Now().Add(15 * time.Minute),
 		NotBefore:  time.Now().Add(-5 * time.Minute),
@@ -185,7 +186,7 @@ func (s *Server) MintCert(ctx context.Context, req *ateapipb.MintCertRequest) (*
 
 	// The UID is taken from the actor database rather than from the request:
 	// req.actor_uid is caller-supplied and unverified, and the certificate must
-	// name the incarnation of the actor that is actually running. A request
+	// name the incarnation of the actor that is actually placed. A request
 	// that names a different incarnation is refused rather than silently
 	// upgraded, since the caller is asking for a credential it would not be
 	// able to use.
@@ -195,7 +196,7 @@ func (s *Server) MintCert(ctx context.Context, req *ateapipb.MintCertRequest) (*
 		return nil, status.Errorf(codes.Internal, "actor has no UID")
 	}
 	if reqUID := req.GetActorUid(); reqUID != "" && reqUID != actorUID {
-		slog.WarnContext(ctx, "MintCert denied: requested actor UID does not match the running actor",
+		slog.WarnContext(ctx, "MintCert denied: requested actor UID does not match the placed actor",
 			slog.Any("actor", actorRef), slog.String("requestedUID", reqUID))
 		return nil, status.Errorf(codes.PermissionDenied, "caller is not permitted to mint certificates for this actor")
 	}
@@ -327,10 +328,11 @@ func authenticateAtelet(ctx context.Context) (*ateletCaller, error) {
 // authorizeActor reports whether caller may mint a credential for actorRef,
 // returning the actor record the decision was made against.
 //
-// The rule is that the actor must currently be running on a worker pod that
-// lives on the caller's own node. An atelet is therefore confined to the
-// actors it is actually hosting, and an actor that has been suspended, paused
-// or migrated elsewhere can no longer have credentials minted for it.
+// The rule is that the actor must be placed on a worker pod that lives on the
+// caller's own node, and that worker must still agree it is hosting the actor.
+// An atelet is therefore confined to the actors it is actually hosting, and an
+// actor that has been suspended, paused or migrated elsewhere can no longer
+// have credentials minted for it.
 func (s *Server) authorizeActor(ctx context.Context, caller *ateletCaller, actorRef resources.ActorRef) (*ateapipb.Actor, error) {
 	// Denials are deliberately indistinguishable from each other: a caller that
 	// is not entitled to an actor should not be able to use this RPC to learn
@@ -350,17 +352,17 @@ func (s *Server) authorizeActor(ctx context.Context, caller *ateletCaller, actor
 		return nil, status.Errorf(codes.Internal, "failed to look up actor")
 	}
 
-	// TODO(lior) not sure about this check - depends on when that mintCert rpc will be called
-	// Taahir: likely fine to remove as long as we check the actor is asscoaiated with the node
-	if actor.GetStatus() != ateapipb.Actor_STATUS_RUNNING {
-		slog.WarnContext(ctx, "MintCert refused: actor is not running",
-			slog.Any("actor", actorRef), slog.String("status", actor.GetStatus().String()))
-		return nil, status.Errorf(codes.FailedPrecondition, "actor is not running")
+	// Deletion is only entered from SUSPENDED or CRASHED, both of which
+	// have already released the worker, so the assignment check below would
+	// reject this too. It is kept because minting for better visbility and logging.
+	if actor.GetStatus() == ateapipb.Actor_STATUS_DELETING {
+		slog.WarnContext(ctx, "MintCert refused: actor is being deleted", slog.Any("actor", actorRef))
+		return nil, status.Errorf(codes.FailedPrecondition, "actor is being deleted")
 	}
 
-	// A RUNNING actor always carries its placement. Missing placement is a
-	// control-plane bug rather than a client error, so it is not folded into
-	// deny().
+	// An actor placed on a worker always carries its placement fields. Missing
+	// placement is a control-plane bug rather than a client error, so it is not
+	// folded into deny().
 	podNamespace, podName, pool := actor.GetAteomPodNamespace(), actor.GetAteomPodName(), actor.GetWorkerPoolName()
 	if podNamespace == "" || podName == "" || pool == "" {
 		slog.ErrorContext(ctx, "MintCert: running actor has incomplete placement",

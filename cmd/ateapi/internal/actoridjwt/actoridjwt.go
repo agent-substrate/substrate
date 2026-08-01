@@ -90,6 +90,7 @@ func ClaimsToWire(claims *Claims) (*WireClaims, error) {
 		Substrate: WireSubstrateClaims{
 			Atespace:  claims.Substrate.Atespace,
 			ActorName: claims.Substrate.ActorName,
+			ActorUid:  claims.Substrate.ActorUid,
 		},
 	}
 
