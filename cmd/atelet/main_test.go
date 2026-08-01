@@ -33,6 +33,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/google/go-cmp/cmp"
+	"github.com/klauspost/compress/zstd"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/testing/protocmp"
@@ -691,5 +692,123 @@ func TestIsTerminalFileErr(t *testing.T) {
 				t.Errorf("isTerminalFileSystemErr(%v) = %v, want %v", tt.err, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestGoldenOnlyFiles verifies the DataOnGolden combine rule: the actor's own
+// snapshot files shadow same-named golden files (the durable-dir tar), and the
+// golden snapshot supplies the rest.
+func TestGoldenOnlyFiles(t *testing.T) {
+	tests := []struct {
+		name        string
+		actorFiles  []string
+		goldenFiles []string
+		want        []string
+	}{
+		{
+			name:        "durable tar shadowed, guest files kept",
+			actorFiles:  []string{"durable-dir.tar"},
+			goldenFiles: []string{"config.json", "state.json", "memory-ranges", "base-id", "durable-dir.tar"},
+			want:        []string{"config.json", "state.json", "memory-ranges", "base-id"},
+		},
+		{
+			name:        "golden without durable tar is kept whole",
+			actorFiles:  []string{"durable-dir.tar"},
+			goldenFiles: []string{"config.json", "state.json"},
+			want:        []string{"config.json", "state.json"},
+		},
+		{
+			name:        "no actor files keeps everything",
+			actorFiles:  nil,
+			goldenFiles: []string{"config.json"},
+			want:        []string{"config.json"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := goldenOnlyFiles(tc.actorFiles, tc.goldenFiles)
+			if diff := cmp.Diff(tc.want, got); diff != "" {
+				t.Errorf("goldenOnlyFiles diff (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+// mapObjectStorage serves per-object bytes so multi-object downloads can be
+// tested; the key is "<bucket>/<object>".
+type mapObjectStorage struct {
+	objects map[string][]byte
+}
+
+func (m mapObjectStorage) GetObject(_ context.Context, bucket, object string) (io.ReadCloser, error) {
+	data, ok := m.objects[bucket+"/"+object]
+	if !ok {
+		return nil, fmt.Errorf("object %s/%s not found", bucket, object)
+	}
+	return io.NopCloser(bytes.NewReader(data)), nil
+}
+
+func (mapObjectStorage) PutObject(_ context.Context, _, _ string, _ io.Reader) error { return nil }
+
+// TestDownloadCombinedCheckpoint verifies a DataOnGolden restore stages one
+// folder holding the actor snapshot's durable-dir tar and the golden
+// snapshot's remaining files — and that the golden's own durable-dir tar is
+// the one that loses the name collision.
+func TestDownloadCombinedCheckpoint(t *testing.T) {
+	zstdBytes := func(t *testing.T, s string) []byte {
+		t.Helper()
+		var buf bytes.Buffer
+		zw, err := zstd.NewWriter(&buf)
+		if err != nil {
+			t.Fatalf("zstd.NewWriter: %v", err)
+		}
+		if _, err := zw.Write([]byte(s)); err != nil {
+			t.Fatalf("zstd write: %v", err)
+		}
+		if err := zw.Close(); err != nil {
+			t.Fatalf("zstd close: %v", err)
+		}
+		return buf.Bytes()
+	}
+
+	store := mapObjectStorage{objects: map[string][]byte{
+		"bucket/actors/1/snapshots/2/durable-dir.tar.zstd":   zstdBytes(t, "actor durable data"),
+		"bucket/ate-golden/snapshots/1/config.json.zstd":     zstdBytes(t, "golden config"),
+		"bucket/ate-golden/snapshots/1/memory-ranges.zstd":   zstdBytes(t, "golden memory"),
+		"bucket/ate-golden/snapshots/1/durable-dir.tar.zstd": zstdBytes(t, "golden durable data (must not be downloaded)"),
+	}}
+	s := &AteomHerder{gcsClient: store}
+
+	dstDir := t.TempDir()
+	err := s.downloadCombinedCheckpoint(context.Background(),
+		"gs://bucket/actors/1/snapshots/2/",
+		"gs://bucket/ate-golden/snapshots/1/",
+		dstDir,
+		[]string{"durable-dir.tar"},
+		[]string{"config.json", "memory-ranges", "durable-dir.tar"})
+	if err != nil {
+		t.Fatalf("downloadCombinedCheckpoint: %v", err)
+	}
+
+	want := map[string]string{
+		"durable-dir.tar": "actor durable data",
+		"config.json":     "golden config",
+		"memory-ranges":   "golden memory",
+	}
+	entries, err := os.ReadDir(dstDir)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	if len(entries) != len(want) {
+		t.Errorf("staged %d files, want %d", len(entries), len(want))
+	}
+	for name, content := range want {
+		got, err := os.ReadFile(filepath.Join(dstDir, name))
+		if err != nil {
+			t.Fatalf("ReadFile(%s): %v", name, err)
+		}
+		if string(got) != content {
+			t.Errorf("%s content = %q, want %q", name, got, content)
+		}
 	}
 }

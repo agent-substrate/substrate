@@ -131,6 +131,11 @@ spec:
     matchLabels:
       workload: counter-microvm
   snapshotsConfig:
+    onPause: Full
+    onCommit: Data
+    # A Data commit resumes by combining the durable data with the golden
+    # snapshot's guest state (memory + fs delta) instead of cold-booting.
+    dataResumePolicy: OnGolden
     location: gs://${BUCKET_NAME}/ate-demo-counter-microvm/
   volumes:
   - name: data
