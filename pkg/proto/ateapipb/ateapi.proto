@@ -696,6 +696,7 @@ message GetActorRequest {
 // Request to create a new Actor.
 message CreateActorRequest {
   // The actor to create.
+  // +k8s:required
   Actor actor = 1;
 }
 

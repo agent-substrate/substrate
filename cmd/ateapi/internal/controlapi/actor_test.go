@@ -166,7 +166,7 @@ func TestValidateCreateActorRequest(t *testing.T) {
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assertValidateErr(t, validateCreateActorRequest(tt.req), tt.want)
+			assertValidateErr(t, validateCreateActorRequest(context.Background(), tt.req), tt.want)
 		})
 	}
 }
