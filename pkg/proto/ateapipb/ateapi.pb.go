@@ -642,20 +642,38 @@ type ResourceMetadata struct {
 	// Atespaced resources should add +k8s:subfield(atespace)=+k8s:required
 	// Non-atespaced resources should add +k8s:subfield(atespace)=+k8s:forbidden
 	// +k8s:optional
+	// +k8s:format=k8s-short-name
 	Atespace string `protobuf:"bytes,1,opt,name=atespace,proto3" json:"atespace,omitempty"`
 	// name is the resource's name, unique within its atespace (or globally, for
 	// global-scoped resources). Caller-specified at creation and immutable thereafter.
 	//
 	// +k8s:required
+	// +k8s:format=k8s-short-name
 	Name string `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	// uid is a server-assigned, globally unique identifier for this resource.
 	// Immutable throughout the lifecycle of the resource.
+	//
+	// This field is ignored during create operations and used as precondition
+	// for update operations.
+	//
+	// +k8s:optional # optional on input, always specified on output
+	// +k8s:format=k8s-uuid
 	Uid string `protobuf:"bytes,3,opt,name=uid,proto3" json:"uid,omitempty"`
 	// version is increased on every mutation.
+	//
+	// This field is ignored during create operations and used as precondition
+	// for update operations.
+	//
+	// +k8s:optional # optional on input, always specified on output
+	// +k8s:minimum=1
 	Version int64 `protobuf:"varint,4,opt,name=version,proto3" json:"version,omitempty"`
 	// create_time is the time the resource was created.
+	//
+	// This field is ignored on input.
 	CreateTime *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=create_time,json=createTime,proto3" json:"create_time,omitempty"`
 	// update_time is the time the resource was last updated.
+	//
+	// This field is ignored on input.
 	UpdateTime    *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=update_time,json=updateTime,proto3" json:"update_time,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
