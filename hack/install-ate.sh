@@ -396,8 +396,32 @@ deploy_ate_apiserver() {
 
   ensure_apiserver_prerequisites
 
-  run_ko apply -f manifests/ate-install/ate-api-server.yaml
+  component_manifests ate-api-server | run_ko resolve -f - | run_kubectl apply -f -
   run_kubectl rollout status deployment/ate-api-server -n ate-system --timeout=120s
+}
+
+# Kind overlay vs base manifests is decided ONLY here; hack/verify/kind-overlays.sh
+# sources this to assert kind deploys can't bypass the overlay and silently
+# revert its env patches (e.g. pointing OTel exports at the GKE-only collector).
+component_manifests() {
+  local component="$1"
+  if [[ "${ATE_INSTALL_KIND:-false}" == "true" ]]; then
+    kubectl kustomize "manifests/ate-install/kind/${component}" --load-restrictor LoadRestrictionsNone
+    return
+  fi
+  case "${component}" in
+    atenet)
+      cat manifests/ate-install/atenet-router.yaml
+      printf '\n---\n'
+      cat manifests/ate-install/atenet-dns.yaml
+      ;;
+    ate-api-server) cat manifests/ate-install/ate-api-server.yaml ;;
+    atelet) cat manifests/ate-install/atelet.yaml ;;
+    *)
+      echo "component_manifests: unknown component ${component}" >&2
+      return 1
+      ;;
+  esac
 }
 
 deploy_atelet() {
@@ -408,15 +432,7 @@ deploy_atelet() {
   run_kubectl apply -f manifests/ate-install/ate-system-namespace.yaml \
     && run_kubectl wait --for=jsonpath='{.status.phase}'=Active namespace/ate-system --timeout=60s
 
-  local manifest=""
-  if [[ "${ATE_INSTALL_KIND:-false}" == "true" ]]; then
-    # Use Kustomize to build and resolve the atelet DaemonSet patch
-    manifest=$(kubectl kustomize manifests/ate-install/kind/atelet --load-restrictor LoadRestrictionsNone | run_ko resolve -f -)
-  else
-    # Use base manifest for GKE
-    manifest=$(run_ko resolve -f manifests/ate-install/atelet.yaml)
-  fi
-  echo "${manifest}" | run_kubectl apply -f -
+  component_manifests atelet | run_ko resolve -f - | run_kubectl apply -f -
   run_kubectl rollout status daemonset/atelet -n ate-system --timeout=120s
 }
 
@@ -428,11 +444,15 @@ deploy_atenet() {
   run_kubectl apply -f manifests/ate-install/ate-system-namespace.yaml \
     && run_kubectl wait --for=jsonpath='{.status.phase}'=Active namespace/ate-system --timeout=60s
 
-  local router_manifest=""
-  router_manifest="$(render_atenet_router_manifest)"
-  echo "${router_manifest}" | run_kubectl apply -f -
+  if [[ "$(atenet_router)" == "agentgateway" ]]; then
+    local router_manifest=""
+    router_manifest="$(render_atenet_router_manifest)"
+    echo "${router_manifest}" | run_kubectl apply -f -
 
-  run_ko apply -f manifests/ate-install/atenet-dns.yaml
+    run_ko apply -f manifests/ate-install/atenet-dns.yaml
+  else
+    component_manifests atenet | run_ko resolve -f - | run_kubectl apply -f -
+  fi
   run_kubectl rollout status deployment/atenet-router -n ate-system --timeout=120s
   # The Deployment in atenet-dns.yaml is named "dns"; every other resource in
   # that file is "atenet-dns". Waiting on the filename rather than the actual
@@ -576,6 +596,11 @@ delete_all() {
   done
   delete_ate_system
 }
+
+# Library mode: let hack/verify/kind-overlays.sh source the functions without dispatching.
+if [[ -n "${ATE_INSTALL_LIB_ONLY:-}" ]]; then
+  return 0
+fi
 
 if [ "$#" -eq 0 ]; then
   usage

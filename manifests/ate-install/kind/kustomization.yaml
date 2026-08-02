@@ -16,17 +16,20 @@ apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
 resources:
-  - ../ate-api-server.yaml
+  - ./ate-api-server
   - ../ate-controller.yaml
   - ./atelet
-  - ../atenet-dns.yaml
-  - ../atenet-router.yaml
+  - ./atenet
   - ../valkey.yaml
   - ../pod-certificate-controller.yaml
   - rustfs.yaml
   - ./otel-collector.yaml
   - ./prometheus.yaml
 
+# Per-component kind settings live in the ./<component> overlays above — the same
+# renders the --deploy-<component> flags apply, so a partial deploy cannot drift
+# from this full render.
+#
 # OTEL_METRIC_EXPORT_INTERVAL shortens the OTel SDK's 60s metric export tick to
 # 10s. A component is invisible to the collector until its first tick, and the
 # metrics e2e suite asserts against the collector's scrape on a bounded deadline,
@@ -37,46 +40,11 @@ resources:
 # blip or slow DNS drops a component back to roughly one attempt per 30s, undoing
 # the shorter interval. Matching it to the interval keeps every tick an attempt.
 #
-# On ate-controller both do double duty: the controller also propagates them to
-# the ateom worker pods it creates, which have no other way to receive them.
+# ate-controller has no per-component deploy flag, so its patch stays here. On
+# it both variables do double duty: the controller also propagates them to the
+# ateom worker pods it creates, which have no other way to receive them.
 # Kind only; production keeps the SDK defaults.
 patches:
-  - patch: |-
-      apiVersion: apps/v1
-      kind: Deployment
-      metadata:
-        name: ate-api-server
-        namespace: ate-system
-      spec:
-        template:
-          spec:
-            containers:
-            - name: ate-api-server
-              env:
-              - name: OTEL_EXPORTER_OTLP_ENDPOINT
-                value: http://opentelemetry-collector.otel-system.svc:4317
-              - name: OTEL_METRIC_EXPORT_INTERVAL
-                value: "10000"
-              - name: OTEL_METRIC_EXPORT_TIMEOUT
-                value: "10000"
-  - patch: |-
-      apiVersion: apps/v1
-      kind: DaemonSet
-      metadata:
-        name: atelet
-        namespace: ate-system
-      spec:
-        template:
-          spec:
-            containers:
-            - name: atelet
-              env:
-              - name: OTEL_EXPORTER_OTLP_ENDPOINT
-                value: http://opentelemetry-collector.otel-system.svc:4317
-              - name: OTEL_METRIC_EXPORT_INTERVAL
-                value: "10000"
-              - name: OTEL_METRIC_EXPORT_TIMEOUT
-                value: "10000"
   - patch: |-
       apiVersion: apps/v1
       kind: Deployment
@@ -95,17 +63,3 @@ patches:
                 value: "10000"
               - name: OTEL_METRIC_EXPORT_TIMEOUT
                 value: "10000"
-  - patch: |-
-      apiVersion: apps/v1
-      kind: Deployment
-      metadata:
-        name: atenet-router
-        namespace: ate-system
-      spec:
-        template:
-          spec:
-            containers:
-            - name: atenet-router
-              env:
-              - name: OTEL_EXPORTER_OTLP_ENDPOINT
-                value: http://opentelemetry-collector.otel-system.svc:4317

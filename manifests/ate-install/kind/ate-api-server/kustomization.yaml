@@ -12,32 +12,25 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
 resources:
-  - ../../atelet.yaml
+  - ../../ate-api-server.yaml
 
 patches:
   - patch: |-
       apiVersion: apps/v1
-      kind: DaemonSet
+      kind: Deployment
       metadata:
-        name: atelet
+        name: ate-api-server
         namespace: ate-system
       spec:
         template:
           spec:
             containers:
-            - name: atelet
-              args:
-              - --gcp-auth-for-image-pulls=false
-              - --localhost-registry-replacement=kind-registry:5000
-              - --grpc-server-cred-bundle=/run/podidentity.podcert.ate.dev/credential-bundle.pem
-              - --client-ca-certs=/run/podidentity.podcert.ate.dev/trust-bundle.pem
-              # Kind clusters are dev/CI: run atelet at debug so e2e suites can
-              # assert on per-item log lines. Production installs default to info.
-              - --log-level=debug
+            - name: ate-api-server
               env:
               - name: OTEL_EXPORTER_OTLP_ENDPOINT
                 value: http://opentelemetry-collector.otel-system.svc:4317
@@ -45,16 +38,3 @@ patches:
                 value: "10000"
               - name: OTEL_METRIC_EXPORT_TIMEOUT
                 value: "10000"
-              - name: ATE_STORAGE_BACKEND
-                value: s3
-              - name: AWS_REGION
-                value: us-east-1
-              - name: AWS_ENDPOINT_URL
-                value: http://rustfs.ate-system.svc:9000
-              - name: AWS_S3_USE_PATH_STYLE
-                value: "true"
-              # TODO: use a secret / identity management
-              - name: AWS_ACCESS_KEY_ID
-                value: rustfsadmin
-              - name: AWS_SECRET_ACCESS_KEY
-                value: rustfsadmin
