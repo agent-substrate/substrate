@@ -31,7 +31,10 @@ import (
 	"k8s.io/client-go/kubernetes"
 )
 
-const dependencyHealthCheckTimeout = 500 * time.Millisecond
+const (
+	dependencyHealthCheckTimeout = 500 * time.Millisecond
+	componentUnhealthyThreshold  = 3
+)
 
 type ComponentHealth struct {
 	Healthy      bool      `json:"healthy"`
@@ -40,6 +43,8 @@ type ComponentHealth struct {
 	LastFailure  time.Time `json:"last_failure,omitempty"`
 	SuccessCount int64     `json:"success_count"`
 	FailureCount int64     `json:"failure_count"`
+
+	consecutiveFailures int
 }
 
 type RouterHealthReport struct {
@@ -145,12 +150,17 @@ func runComponentHealthCheck(
 }
 
 func updateComponentHealth(health *ComponentHealth, healthy bool, msg string, checkedAt time.Time) {
-	health.Healthy = healthy
 	health.Message = msg
 	if healthy {
+		health.consecutiveFailures = 0
+		health.Healthy = true
 		health.LastSuccess = checkedAt
 		health.SuccessCount++
 	} else {
+		health.consecutiveFailures++
+		if health.consecutiveFailures >= componentUnhealthyThreshold {
+			health.Healthy = false
+		}
 		health.LastFailure = checkedAt
 		health.FailureCount++
 	}
