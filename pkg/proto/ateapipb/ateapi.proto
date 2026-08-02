@@ -226,7 +226,9 @@ message ExternalVolume {
 
 message Actor {
   // Common resource metadata: atespace, name, uid, version, timestamps.
-  // +k8s:opaqueType
+  //
+  // +k8s:required
+  // +k8s:subfield(atespace)=+k8s:required
   ResourceMetadata metadata = 1;
 
   // TODO: delete both fields once we start using actor_template_version below.
@@ -747,6 +749,7 @@ message GetActorRequest {
 // Request to create a new Actor.
 message CreateActorRequest {
   // The actor to create.
+  //
   // +k8s:required
   Actor actor = 1;
 }
@@ -760,6 +763,8 @@ message UpdateActorRequest {
   // update.
   // actor.metadata.version and actor.metadata.uid are optional preconditions and
   // zero values skip the check.
+  //
+  // +k8s:opaqueType
   Actor actor = 1;
 
   // The set of fields to update. Required.
