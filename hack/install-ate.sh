@@ -327,7 +327,9 @@ deploy_crds() {
 
 deploy_ate_system() {
   log_step "deploy_ate_system"
-  ensure_crds
+  # Not ensure_crds: its existence check skips upgrades, stranding stale CRD
+  # schemas and RBAC (role.yaml has no other apply path).
+  deploy_crds
 
   # Enforce per-class SandboxConfig asset requirements (applied before any
   # SandboxConfig so the defaults below are validated too).
