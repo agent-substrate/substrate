@@ -120,7 +120,11 @@ metadata:
   labels:
     app: atenet-router
 spec:
-  replicas: 1
+  replicas: 2
+  strategy:
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
   selector:
     matchLabels:
       app: atenet-router
@@ -140,6 +144,13 @@ spec:
       # sum must fit within terminationGracePeriodSeconds, or the kubelet
       # SIGKILLs mid-drain.
       terminationGracePeriodSeconds: 60
+      topologySpreadConstraints:
+      - maxSkew: 1
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: ScheduleAnyway
+        labelSelector:
+          matchLabels:
+            app: atenet-router
       containers:
       - name: atenet-router
         image: ko://github.com/agent-substrate/substrate/cmd/atenet
@@ -266,6 +277,11 @@ spec:
           containerPort: 8444
         - name: admin
           containerPort: 9901
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 9901
+          periodSeconds: 5
         volumeMounts:
         - name: envoy-config
           mountPath: /etc/envoy
@@ -354,3 +370,14 @@ spec:
     port: 4040
     targetPort: status
     protocol: TCP
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: atenet-router
+  namespace: ate-system
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: atenet-router
