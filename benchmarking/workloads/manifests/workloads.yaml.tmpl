@@ -28,7 +28,9 @@ metadata:
     workload: benchmark-ateom
 spec:
   replicas: ${WORKER_COUNT}
-  ateomImage: ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor
+  sandboxClass: ${SANDBOX_CLASS}
+  sandboxConfigName: ${SANDBOX_CONFIG_NAME}
+  ateomImage: ko://github.com/agent-substrate/substrate/cmd/ateom-${SANDBOX_CLASS}
 
 ---
 
@@ -38,6 +40,8 @@ metadata:
   name: sleep
   namespace: benchmark-workloads
 spec:
+  # Must match the WorkerPool's sandboxClass so snapshots stay within a class.
+  sandboxClass: ${SANDBOX_CLASS}
   pauseImage: "gcr.io/gke-release/pause@sha256:bcbd57ba5653580ec647b16d8163cdd1112df3609129b01f912a8032e48265da"
   containers:
   - name: sleep
@@ -57,6 +61,7 @@ metadata:
   name: glutton
   namespace: benchmark-workloads
 spec:
+  sandboxClass: ${SANDBOX_CLASS}
   pauseImage: "gcr.io/gke-release/pause@sha256:bcbd57ba5653580ec647b16d8163cdd1112df3609129b01f912a8032e48265da"
   containers:
   - name: glutton
