@@ -35,7 +35,7 @@ import (
 )
 
 func (s *Service) CreateActor(ctx context.Context, req *ateapipb.CreateActorRequest) (created *ateapipb.Actor, err error) {
-	if errs := validateCreateActorRequest(req); len(errs) > 0 {
+	if errs := validateCreateActorRequest(ctx, req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
 	start := time.Now()
@@ -161,14 +161,14 @@ func (s *Service) resolveSnapshotSource(ctx context.Context, actorAtespace strin
 	}, nil
 }
 
-func validateCreateActorRequest(req *ateapipb.CreateActorRequest) field.ErrorList {
+func validateCreateActorRequest(ctx context.Context, req *ateapipb.CreateActorRequest) field.ErrorList {
 	var fldPath *field.Path
-	var errs field.ErrorList
+	errs := req.Validate(ctx) // TODO: move to caller when all manual validation is removed.
 
 	actor := req.GetActor()
 	actorPath := fldPath.Child("actor")
 	if actor == nil {
-		errs = append(errs, field.Required(actorPath, ""))
+		// handled by DV
 		return errs
 	}
 
