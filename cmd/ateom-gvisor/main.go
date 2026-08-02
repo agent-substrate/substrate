@@ -124,9 +124,13 @@ func do(ctx context.Context) error {
 	}
 
 	// Prepare the pod cgroup so runsc can create per-actor-container leaves under
-	// it with real accounting, instead of ignoring cgroups entirely.
+	// it with real accounting.
 	if err := setupCgroupDelegation(ctx); err != nil {
 		return fmt.Errorf("while setting up cgroup delegation: %w", err)
+	}
+
+	if gpuPresent() {
+		slog.InfoContext(ctx, "GPU detected; enabling runsc nvproxy for all sandboxes")
 	}
 
 	// TODO: Consider whether we want to fork, so that we have an "init" process
@@ -349,6 +353,9 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 			return nil, fmt.Errorf("while composing %q rootfs: %w", ac.GetName(), err)
 		}
 		containersToDelete = append(containersToDelete, ac.GetName())
+		if err := maybeInjectGPU(ctx, req.GetActorUid(), ac.GetName()); err != nil {
+			return nil, fmt.Errorf("while injecting GPU for %q: %w", ac.GetName(), err)
+		}
 		if err := rcmd.cmdCreate(ctx, pw, ac.GetName(), nil); err != nil {
 			return nil, fmt.Errorf("while creating %q application container: %w", ac.GetName(), err)
 		}
@@ -593,6 +600,9 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 		defer pw.Close()
 		if err := imagecache.SetupBundleRootfs(ateompath.OCIBundlePath(req.GetActorUid(), ac.GetName())); err != nil {
 			return nil, fmt.Errorf("while composing %q rootfs: %w", ac.GetName(), err)
+		}
+		if err := maybeInjectGPU(ctx, req.GetActorUid(), ac.GetName()); err != nil {
+			return nil, fmt.Errorf("while injecting GPU for %q: %w", ac.GetName(), err)
 		}
 		switch req.GetScope() {
 		case ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA:
