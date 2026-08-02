@@ -33,7 +33,6 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 
-	authv1 "k8s.io/api/authentication/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -226,37 +225,6 @@ func serverTLSConfig(ctx context.Context, clientset kubernetes.Interface) (*tls.
 		ServerName: apiServerName,
 	}, nil
 }
-
-// bearerTokenDialOption attaches a ServiceAccount token for the ate-client SA
-// as per-RPC credentials.
-func bearerTokenDialOption(ctx context.Context, clientset *kubernetes.Clientset) (grpc.DialOption, error) {
-	expirationSeconds := int64(3600)
-	tokenRequest := &authv1.TokenRequest{
-		Spec: authv1.TokenRequestSpec{
-			Audiences:         []string{apiServerName},
-			ExpirationSeconds: &expirationSeconds,
-		},
-	}
-	token, err := clientset.CoreV1().ServiceAccounts("ate-system").CreateToken(ctx, "ate-client", tokenRequest, metav1.CreateOptions{})
-	if err != nil {
-		return nil, fmt.Errorf("failed to request ateapi bearer token: %w", err)
-	}
-	if token.Status.Token == "" {
-		return nil, fmt.Errorf("failed to request ateapi bearer token: token response was empty")
-	}
-	return grpc.WithPerRPCCredentials(bearerTokenCreds(token.Status.Token)), nil
-}
-
-type bearerTokenCreds string
-
-func (c bearerTokenCreds) GetRequestMetadata(_ context.Context, _ ...string) (map[string]string, error) {
-	if c == "" {
-		return nil, fmt.Errorf("bearer token is empty")
-	}
-	return map[string]string{"authorization": "Bearer " + string(c)}, nil
-}
-
-func (c bearerTokenCreds) RequireTransportSecurity() bool { return true }
 
 func initTracing(ctx context.Context, enabled bool) (*sdktrace.TracerProvider, error) {
 	res, err := resource.New(ctx,
