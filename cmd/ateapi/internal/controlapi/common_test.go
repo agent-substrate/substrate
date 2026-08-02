@@ -44,5 +44,5 @@ func selectorLabelsOfSize(n int) map[string]string {
 
 func assertValidateErr(t *testing.T, got field.ErrorList, want field.ErrorList) {
 	t.Helper()
-	field.ErrorMatcher{}.ByType().ByField().ByValue().Test(t, want, got)
+	field.ErrorMatcher{}.ByType().ByField().ByOrigin().Test(t, want, got)
 }
