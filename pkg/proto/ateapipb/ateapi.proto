@@ -151,10 +151,16 @@ message Selector {
 message ResourceMetadata {
   // atespace is the namespace the resource belongs to. Empty for global-scoped
   // resources. Caller-specified at creation and immutable thereafter.
+  //
+  // Atespaced resources should add +k8s:subfield(atespace)=+k8s:required
+  // Non-atespaced resources should add +k8s:subfield(atespace)=+k8s:forbidden
+  // +k8s:optional
   string atespace = 1;
 
   // name is the resource's name, unique within its atespace (or globally, for
   // global-scoped resources). Caller-specified at creation and immutable thereafter.
+  //
+  // +k8s:required
   string name = 2;
 
   // uid is a server-assigned, globally unique identifier for this resource.
@@ -199,6 +205,7 @@ message ExternalVolume {
 
 message Actor {
   // Common resource metadata: atespace, name, uid, version, timestamps.
+  // +k8s:opaqueType
   ResourceMetadata metadata = 1;
 
   // TODO: delete both fields once we start using actor_template below.
@@ -310,6 +317,7 @@ message WorkerAssignment {
 // ActorSnapshot is an independently addressable durable Actor snapshot. Its
 // contents are immutable.
 message ActorSnapshot {
+  // +k8s:opaqueType
   ResourceMetadata metadata = 1;
   ActorSnapshotStatus status = 2;
 }
@@ -331,6 +339,7 @@ message ActorSnapshotStatus {
 // Its owning Atespace cannot be deleted until the tag is removed.
 message ActorSnapshotTag {
   // Common resource metadata: name, uid, version, timestamps.
+  // +k8s:opaqueType
   ResourceMetadata metadata = 1;
   ObjectRef snapshot = 2;
   ActorSnapshotTagScope scope = 3;
@@ -340,6 +349,7 @@ message ActorSnapshotTag {
 // metadata.atespace is always empty; the atespace's identity is metadata.name.
 message Atespace {
   // Common resource metadata: name, uid, version, timestamps.
+  // +k8s:opaqueType
   ResourceMetadata metadata = 1;
 }
 
@@ -362,6 +372,7 @@ enum SandboxClass {
 
 message ActorTemplate {
   // Common resource metadata: atespace, name, uid, version, timestamps.
+  // +k8s:opaqueType
   ResourceMetadata metadata = 1;
 
   // worker_selector restricts which worker pools actors from this template
@@ -870,6 +881,7 @@ message ListActorsResponse {
 message Worker {
   // Output-only: name, uid, version and timestamps are all server-assigned.
   // uid and version are echoed back on UpdateWorker as preconditions.
+  // +k8s:opaqueType
   ResourceMetadata metadata = 1;
 
   // Kubernetes coordinates. Immutable, set at creation.

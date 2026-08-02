@@ -639,9 +639,15 @@ type ResourceMetadata struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// atespace is the namespace the resource belongs to. Empty for global-scoped
 	// resources. Caller-specified at creation and immutable thereafter.
+	//
+	// Atespaced resources should add +k8s:subfield(atespace)=+k8s:required
+	// Non-atespaced resources should add +k8s:subfield(atespace)=+k8s:forbidden
+	// +k8s:optional
 	Atespace string `protobuf:"bytes,1,opt,name=atespace,proto3" json:"atespace,omitempty"`
 	// name is the resource's name, unique within its atespace (or globally, for
 	// global-scoped resources). Caller-specified at creation and immutable thereafter.
+	//
+	// +k8s:required
 	Name string `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	// uid is a server-assigned, globally unique identifier for this resource.
 	// Immutable throughout the lifecycle of the resource.
@@ -813,6 +819,7 @@ func (x *ExternalVolume) GetVolumeContext() map[string]string {
 type Actor struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Common resource metadata: atespace, name, uid, version, timestamps.
+	// +k8s:opaqueType
 	Metadata *ResourceMetadata `protobuf:"bytes,1,opt,name=metadata,proto3" json:"metadata,omitempty"`
 	// TODO: delete both fields once we start using actor_template below.
 	ActorTemplateNamespace string `protobuf:"bytes,2,opt,name=actor_template_namespace,json=actorTemplateNamespace,proto3" json:"actor_template_namespace,omitempty"`
@@ -1192,9 +1199,10 @@ func (x *WorkerAssignment) GetWorkerPodIp() string {
 // ActorSnapshot is an independently addressable durable Actor snapshot. Its
 // contents are immutable.
 type ActorSnapshot struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Metadata      *ResourceMetadata      `protobuf:"bytes,1,opt,name=metadata,proto3" json:"metadata,omitempty"`
-	Status        *ActorSnapshotStatus   `protobuf:"bytes,2,opt,name=status,proto3" json:"status,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// +k8s:opaqueType
+	Metadata      *ResourceMetadata    `protobuf:"bytes,1,opt,name=metadata,proto3" json:"metadata,omitempty"`
+	Status        *ActorSnapshotStatus `protobuf:"bytes,2,opt,name=status,proto3" json:"status,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1357,6 +1365,7 @@ func (x *ActorSnapshotStatus) GetActorTemplate() *ObjectRef {
 type ActorSnapshotTag struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Common resource metadata: name, uid, version, timestamps.
+	// +k8s:opaqueType
 	Metadata      *ResourceMetadata     `protobuf:"bytes,1,opt,name=metadata,proto3" json:"metadata,omitempty"`
 	Snapshot      *ObjectRef            `protobuf:"bytes,2,opt,name=snapshot,proto3" json:"snapshot,omitempty"`
 	Scope         ActorSnapshotTagScope `protobuf:"varint,3,opt,name=scope,proto3,enum=ateapi.ActorSnapshotTagScope" json:"scope,omitempty"`
@@ -1420,6 +1429,7 @@ func (x *ActorSnapshotTag) GetScope() ActorSnapshotTagScope {
 type Atespace struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Common resource metadata: name, uid, version, timestamps.
+	// +k8s:opaqueType
 	Metadata      *ResourceMetadata `protobuf:"bytes,1,opt,name=metadata,proto3" json:"metadata,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1521,6 +1531,7 @@ func (x *ObjectRef) GetName() string {
 type ActorTemplate struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Common resource metadata: atespace, name, uid, version, timestamps.
+	// +k8s:opaqueType
 	Metadata *ResourceMetadata `protobuf:"bytes,1,opt,name=metadata,proto3" json:"metadata,omitempty"`
 	// worker_selector restricts which worker pools actors from this template
 	// may use.
@@ -4505,6 +4516,7 @@ type Worker struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Output-only: name, uid, version and timestamps are all server-assigned.
 	// uid and version are echoed back on UpdateWorker as preconditions.
+	// +k8s:opaqueType
 	Metadata *ResourceMetadata `protobuf:"bytes,1,opt,name=metadata,proto3" json:"metadata,omitempty"`
 	// Kubernetes coordinates. Immutable, set at creation.
 	WorkerNamespace string `protobuf:"bytes,2,opt,name=worker_namespace,json=workerNamespace,proto3" json:"worker_namespace,omitempty"`
