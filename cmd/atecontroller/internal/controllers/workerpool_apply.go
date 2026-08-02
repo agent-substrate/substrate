@@ -15,6 +15,8 @@
 package controllers
 
 import (
+	"os"
+
 	corev1 "k8s.io/api/core/v1"
 	appsv1ac "k8s.io/client-go/applyconfigurations/apps/v1"
 	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
@@ -145,6 +147,7 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otel ateomOTelSettin
 
 	applyWorkerPoolPodTemplate(podSpecAC, containerAC, wp.Spec.Template)
 	maybeApplyMicroVMPodShape(podSpecAC, containerAC, wp.Spec.SandboxClass)
+	maybeApplyGPUPodShape(podSpecAC, containerAC, wp.Spec.Template, wp.Spec.SandboxClass)
 	podSpecAC.WithContainers(containerAC)
 	podSpecAC.WithTerminationGracePeriodSeconds(workerTerminationGracePeriodSeconds)
 
@@ -221,7 +224,8 @@ func fieldRefEnv(name, fieldPath string) *corev1ac.EnvVarApplyConfiguration {
 // veth and nftables rules (NET_ADMIN/NET_RAW), and the OCI rootfs is unpacked
 // and device nodes created as root over image-owned trees
 // (DAC_OVERRIDE/FOWNER/CHOWN/MKNOD). This replaces the former privileged worker;
-// the default seccomp and AppArmor profiles are sufficient (no Unconfined).
+// seccomp stays at the runtime default, but AppArmor must be Unconfined (see
+// ateomSecurityContext) since runsc's own mounts trip the default profile.
 var ateomGvisorCapabilities = []corev1.Capability{
 	"NET_ADMIN", "SYS_ADMIN", "SYS_CHROOT", "SYS_PTRACE",
 	"SETUID", "SETGID", "SETPCAP", "DAC_OVERRIDE",
@@ -299,6 +303,92 @@ func maybeApplyMicroVMPodShape(
 		WithOperator(corev1.TolerationOpEqual).
 		WithValue(string(atev1alpha1.SandboxClassMicroVM)).
 		WithEffect(corev1.TaintEffectNoSchedule))
+}
+
+// nvidiaToolkitContainerPath is where the host toolkit is mounted inside the
+// worker; ateom-gvisor's toolkitDir must match this. It sits outside
+// /usr/local/nvidia because the GPU device plugin mounts that tree into the
+// container read-only, and a mount cannot create its own mountpoint there, so
+// mounting under it only works when the toolkit happens to live inside the
+// directory the plugin mounts.
+const nvidiaToolkitContainerPath = "/opt/nvidia-toolkit"
+
+// defaultNvidiaToolkitHostPath is where gpu-operator installs the toolkit
+// (toolkit.installDir defaults to /usr/local/nvidia). It is deliberately not the
+// container path above: the two are independent, since where the node keeps the
+// toolkit says nothing about where we can mount it.
+const defaultNvidiaToolkitHostPath = "/usr/local/nvidia/toolkit"
+
+// nvidiaDriverRootEnv names the directory the GPU device plugin mounts the driver
+// into a pod at. ateom derives the driver library and binary paths from it, both of
+// which nvidia-ctk needs to generate a CDI spec. Only set it when the cluster's
+// device plugin does not use the /usr/local/nvidia convention; the controller
+// forwards its own value onto GPU worker pods.
+const nvidiaDriverRootEnv = "ATE_NVIDIA_DRIVER_ROOT"
+
+// nvidiaToolkitHostPath is where the NVIDIA container toolkit lives on the node.
+// It is platform-specific: gpu-operator and EKS install it at
+// /usr/local/nvidia/toolkit, while GKE keeps NVIDIA assets under
+// /home/kubernetes/bin/nvidia, so it is overridable via the
+// ATE_NVIDIA_TOOLKIT_HOST_PATH env var on the controller. We mount it read-only
+// so nvidia-ctk / nvidia-cdi-hook match whatever toolkit/driver the cluster runs.
+var nvidiaToolkitHostPath = envOrDefault("ATE_NVIDIA_TOOLKIT_HOST_PATH", defaultNvidiaToolkitHostPath)
+
+func envOrDefault(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
+}
+
+// maybeApplyGPUPodShape shapes a gVisor worker pod that requests a GPU so ateom
+// can inject the GPU into actors via CDI. It mounts the host NVIDIA toolkit
+// (version-matched to the node) read-only, for the glibc-based ateom image to run
+// directly. The pod keeps the same security posture as any other gVisor worker.
+// No-op for non-GPU pools and non-gVisor classes; an empty class defaults to
+// gVisor (WorkerPoolSpec kubebuilder default).
+func maybeApplyGPUPodShape(
+	podSpecAC *corev1ac.PodSpecApplyConfiguration,
+	containerAC *corev1ac.ContainerApplyConfiguration,
+	tmpl *atev1alpha1.WorkerPoolPodTemplate,
+	sandboxClass atev1alpha1.SandboxClass,
+) {
+	if sandboxClass != atev1alpha1.SandboxClassGvisor && sandboxClass != "" {
+		return
+	}
+	if !templateRequestsGPU(tmpl) {
+		return
+	}
+	// Mount the host NVIDIA toolkit (version-matched to the node) read-only.
+	containerAC.WithVolumeMounts(corev1ac.VolumeMount().
+		WithName("nvidia-toolkit").
+		WithMountPath(nvidiaToolkitContainerPath).
+		WithReadOnly(true))
+	podSpecAC.WithVolumes(corev1ac.Volume().
+		WithName("nvidia-toolkit").
+		WithHostPath(corev1ac.HostPathVolumeSource().
+			WithPath(nvidiaToolkitHostPath).
+			WithType(corev1.HostPathDirectory)))
+	// Only propagated when set, so a default deployment adds no env to worker pods.
+	if root := os.Getenv(nvidiaDriverRootEnv); root != "" {
+		containerAC.WithEnv(corev1ac.EnvVar().WithName(nvidiaDriverRootEnv).WithValue(root))
+	}
+}
+
+// templateRequestsGPU reports whether the pool template requests one or more
+// nvidia.com/gpu devices (limits or requests).
+func templateRequestsGPU(tmpl *atev1alpha1.WorkerPoolPodTemplate) bool {
+	if tmpl == nil || tmpl.Resources == nil {
+		return false
+	}
+	const gpu = corev1.ResourceName("nvidia.com/gpu")
+	if q, ok := tmpl.Resources.Limits[gpu]; ok && !q.IsZero() {
+		return true
+	}
+	if q, ok := tmpl.Resources.Requests[gpu]; ok && !q.IsZero() {
+		return true
+	}
+	return false
 }
 
 func applyWorkerPoolPodTemplate(
