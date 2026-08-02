@@ -49,7 +49,7 @@ func TestActorLifecycle(t *testing.T) {
 	_, _ = clients.SubstrateAPI.CreateAtespace(ctx, &ateapipb.CreateAtespaceRequest{Atespace: &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: demoAtespace}}})
 
 	// Create actor template.
-	at, err := createActorTemplate(ctx, t, clients, nsObj, v1alpha1.SnapshotScopeFull, v1alpha1.SnapshotScopeFull, v1alpha1.DataResumePolicyColdBoot)
+	at, err := createActorTemplate(ctx, t, clients, nsObj, v1alpha1.SnapshotScopeFull, v1alpha1.SnapshotScopeFull, v1alpha1.ResumeSourceColdBoot)
 	if err != nil {
 		t.Fatalf("failed to initialize ActorTemplate: %v", err)
 	}
@@ -90,7 +90,7 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 	_, _ = clients.SubstrateAPI.CreateAtespace(ctx, &ateapipb.CreateAtespaceRequest{
 		Atespace: &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: demoAtespace}},
 	})
-	at, err := createActorTemplate(ctx, t, clients, nsObj, v1alpha1.SnapshotScopeFull, v1alpha1.SnapshotScopeFull, v1alpha1.DataResumePolicyColdBoot)
+	at, err := createActorTemplate(ctx, t, clients, nsObj, v1alpha1.SnapshotScopeFull, v1alpha1.SnapshotScopeFull, v1alpha1.ResumeSourceColdBoot)
 	if err != nil {
 		t.Fatalf("failed to initialize ActorTemplate: %v", err)
 	}
@@ -236,16 +236,16 @@ func TestDurableDirLifecycle(t *testing.T) {
 		{
 			// OnGolden data resume: the suspend captures only the durable data
 			// (the snapshot records plain Data content); the resume combines it
-			// with the template's golden snapshot per dataResumePolicy. The
+			// with the template's golden snapshot per onResume.fromData. The
 			// golden guest was never called, so its restored memory counter is
 			// 0 — the counter expectations match ColdBoot, while the file
 			// counter proves the durable data came from the ACTOR's snapshot
 			// (the golden's own durable tar would read 0).
-			name: "onCommit:Data, onPause:Full, dataResumePolicy:OnGolden",
+			name: "onCommit:Data, onPause:Full, onResume.fromData:Golden",
 			tc: actorLifecycleTestCase{
 				onCommit:                 v1alpha1.SnapshotScopeData,
 				onPause:                  v1alpha1.SnapshotScopeFull,
-				dataResumePolicy:         v1alpha1.DataResumePolicyOnGolden,
+				fromData:                 v1alpha1.ResumeSourceGolden,
 				wantMemoryAfterPause:     2,
 				wantFileAfterPause:       2,
 				wantMemoryAfterSuspend:   1,
@@ -258,11 +258,11 @@ func TestDurableDirLifecycle(t *testing.T) {
 			// The policy also governs the PAUSE path: a Data pause snapshot
 			// resumes by combining the local durable data with the golden
 			// snapshot (local checkpoint + external golden).
-			name: "onCommit:Data, onPause:Data, dataResumePolicy:OnGolden",
+			name: "onCommit:Data, onPause:Data, onResume.fromData:Golden",
 			tc: actorLifecycleTestCase{
 				onCommit:                 v1alpha1.SnapshotScopeData,
 				onPause:                  v1alpha1.SnapshotScopeData,
-				dataResumePolicy:         v1alpha1.DataResumePolicyOnGolden,
+				fromData:                 v1alpha1.ResumeSourceGolden,
 				wantMemoryAfterPause:     1,
 				wantFileAfterPause:       2,
 				wantMemoryAfterSuspend:   1,
@@ -276,7 +276,7 @@ func TestDurableDirLifecycle(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			if test.tc.microVMOnly && !isMicroVMEnvironment() {
-				t.Skipf("Skipping %s: the data resume policy is micro-VM only", test.name)
+				t.Skipf("Skipping %s: the Golden resume source is micro-VM only", test.name)
 			}
 			t.Parallel()
 			runActorLifecycleTestCase(t, "durabledir-lifecycle", createActorTemplate, test.tc)
@@ -326,11 +326,11 @@ func TestMultipleDurableDirLifecycle(t *testing.T) {
 			// second counter tracks the first exactly, so a volume restored from
 			// the golden's tar instead of the actor's would make them diverge
 			// (or read 0 — the golden guest was never called).
-			name: "onCommit:Data, onPause:Full, dataResumePolicy:OnGolden",
+			name: "onCommit:Data, onPause:Full, onResume.fromData:Golden",
 			tc: actorLifecycleTestCase{
 				onCommit:                 v1alpha1.SnapshotScopeData,
 				onPause:                  v1alpha1.SnapshotScopeFull,
-				dataResumePolicy:         v1alpha1.DataResumePolicyOnGolden,
+				fromData:                 v1alpha1.ResumeSourceGolden,
 				wantMemoryAfterPause:     2,
 				wantFileAfterPause:       2,
 				wantMemoryAfterSuspend:   1,
@@ -390,7 +390,7 @@ func TestExternalVolumeLifecycle(t *testing.T) {
 type actorLifecycleTestCase struct {
 	onCommit               v1alpha1.SnapshotScope
 	onPause                v1alpha1.SnapshotScope
-	dataResumePolicy       v1alpha1.DataResumePolicy
+	fromData               v1alpha1.ResumeSource
 	wantMemoryAfterPause   int
 	wantFileAfterPause     int
 	wantMemoryAfterSuspend int
@@ -405,15 +405,15 @@ type actorLifecycleTestCase struct {
 	// wantSnapshotContentScope, when set, asserts the content scope recorded
 	// on the ActorSnapshot the suspend produced — always plain Data or Full:
 	// the golden-combine is a restore-time behavior derived from the
-	// template's dataResumePolicy, never part of the snapshot record.
+	// template's onResume.fromData source, never part of the snapshot record.
 	wantSnapshotContentScope ateapipb.SnapshotContentScope
 
-	// microVMOnly skips the case outside the micro-VM environment (e.g. the
-	// OnGolden policy is rejected by the CRD CEL rules on gVisor).
+	// microVMOnly skips the case outside the micro-VM environment (e.g.
+	// fromData: Golden is rejected by the CRD CEL rules on gVisor).
 	microVMOnly bool
 }
 
-func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(context.Context, *testing.T, *e2e.Clients, *e2e.Namespace, v1alpha1.SnapshotScope, v1alpha1.SnapshotScope, v1alpha1.DataResumePolicy) (*v1alpha1.ActorTemplate, error), tc actorLifecycleTestCase) {
+func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(context.Context, *testing.T, *e2e.Clients, *e2e.Namespace, v1alpha1.SnapshotScope, v1alpha1.SnapshotScope, v1alpha1.ResumeSource) (*v1alpha1.ActorTemplate, error), tc actorLifecycleTestCase) {
 	// Create namespace
 	nsObj := e2e.CreateNamespace(t)
 
@@ -424,7 +424,7 @@ func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(
 	_, _ = clients.SubstrateAPI.CreateAtespace(ctx, &ateapipb.CreateAtespaceRequest{Atespace: &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: demoAtespace}}})
 
 	// Create actor template.
-	at, err := createTemplate(ctx, t, clients, nsObj, tc.onCommit, tc.onPause, tc.dataResumePolicy)
+	at, err := createTemplate(ctx, t, clients, nsObj, tc.onCommit, tc.onPause, tc.fromData)
 	if err != nil {
 		t.Fatalf("failed to initialize ActorTemplate: %v", err)
 	}
@@ -791,7 +791,7 @@ func suspendActor(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj
 	return nil
 }
 
-func createActorTemplateInternal(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, name string, onCommit, onPause v1alpha1.SnapshotScope, dataResumePolicy v1alpha1.DataResumePolicy, modifyTemplate func(*v1alpha1.ActorTemplate)) (*v1alpha1.ActorTemplate, error) {
+func createActorTemplateInternal(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, name string, onCommit, onPause v1alpha1.SnapshotScope, fromData v1alpha1.ResumeSource, modifyTemplate func(*v1alpha1.ActorTemplate)) (*v1alpha1.ActorTemplate, error) {
 	env, err := e2e.CheckEnv("BUCKET_NAME", "KO_DOCKER_REPO")
 	if err != nil {
 		t.Fatalf("CheckEnv failed: %v", err)
@@ -858,10 +858,10 @@ func createActorTemplateInternal(ctx context.Context, t *testing.T, clients *e2e
 			PauseImage:   existingAt.Spec.PauseImage,
 			Containers:   existingAt.Spec.Containers,
 			SnapshotsConfig: v1alpha1.SnapshotsConfig{
-				Location:         "gs://" + env["BUCKET_NAME"] + "/ate-demo-" + name,
-				OnPause:          onPause,
-				OnCommit:         onCommit,
-				DataResumePolicy: dataResumePolicy,
+				Location: "gs://" + env["BUCKET_NAME"] + "/ate-demo-" + name,
+				OnPause:  onPause,
+				OnCommit: onCommit,
+				OnResume: v1alpha1.OnResumeConfig{FromData: fromData},
 			},
 			Volumes: existingAt.Spec.Volumes,
 		},
@@ -912,11 +912,11 @@ func createActorTemplateInternal(ctx context.Context, t *testing.T, clients *e2e
 	return at, nil
 }
 
-func createActorTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, onCommit, onPause v1alpha1.SnapshotScope, dataResumePolicy v1alpha1.DataResumePolicy) (*v1alpha1.ActorTemplate, error) {
-	return createActorTemplateInternal(ctx, t, clients, nsObj, "counter", onCommit, onPause, dataResumePolicy, nil)
+func createActorTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, onCommit, onPause v1alpha1.SnapshotScope, fromData v1alpha1.ResumeSource) (*v1alpha1.ActorTemplate, error) {
+	return createActorTemplateInternal(ctx, t, clients, nsObj, "counter", onCommit, onPause, fromData, nil)
 }
 
-func createActorTemplateWithExternalVolume(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, onCommit, onPause v1alpha1.SnapshotScope, dataResumePolicy v1alpha1.DataResumePolicy) (*v1alpha1.ActorTemplate, error) {
+func createActorTemplateWithExternalVolume(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, onCommit, onPause v1alpha1.SnapshotScope, fromData v1alpha1.ResumeSource) (*v1alpha1.ActorTemplate, error) {
 	modify := func(at *v1alpha1.ActorTemplate) {
 		var res []v1alpha1.Container
 		for _, c := range at.Spec.Containers {
@@ -959,7 +959,7 @@ func createActorTemplateWithExternalVolume(ctx context.Context, t *testing.T, cl
 			})
 		}
 	}
-	return createActorTemplateInternal(ctx, t, clients, nsObj, "counter-ext-vol", onCommit, onPause, dataResumePolicy, modify)
+	return createActorTemplateInternal(ctx, t, clients, nsObj, "counter-ext-vol", onCommit, onPause, fromData, modify)
 }
 
 // secondDurableDirVolume is the extra durable-dir volume (and where the counter
@@ -974,7 +974,7 @@ const (
 // counter's second file counter at it, so both volumes are written on every
 // request. Only the micro-VM runtime accepts this: gVisor templates are still
 // capped at one durable-dir volume by the ActorTemplate CEL rules.
-func createActorTemplateWithTwoDurableDirs(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, onCommit, onPause v1alpha1.SnapshotScope, dataResumePolicy v1alpha1.DataResumePolicy) (*v1alpha1.ActorTemplate, error) {
+func createActorTemplateWithTwoDurableDirs(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, onCommit, onPause v1alpha1.SnapshotScope, fromData v1alpha1.ResumeSource) (*v1alpha1.ActorTemplate, error) {
 	modify := func(at *v1alpha1.ActorTemplate) {
 		for i, c := range at.Spec.Containers {
 			if c.Name != "counter" {
@@ -992,7 +992,7 @@ func createActorTemplateWithTwoDurableDirs(ctx context.Context, t *testing.T, cl
 			VolumeSource: v1alpha1.VolumeSource{DurableDir: &v1alpha1.DurableDirVolumeSource{}},
 		})
 	}
-	return createActorTemplateInternal(ctx, t, clients, nsObj, "counter-two-durabledirs", onCommit, onPause, dataResumePolicy, modify)
+	return createActorTemplateInternal(ctx, t, clients, nsObj, "counter-two-durabledirs", onCommit, onPause, fromData, modify)
 }
 
 func waitForActorStatus(ctx context.Context, t *testing.T, clients *e2e.Clients, actorName string, expectedStatus ateapipb.Actor_Status) {
@@ -1142,7 +1142,7 @@ func TestWorkerPodDeletion(t *testing.T) {
 	_, _ = clients.SubstrateAPI.CreateAtespace(ctx, &ateapipb.CreateAtespaceRequest{Atespace: &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: demoAtespace}}})
 
 	// Create actor template.
-	at, err := createActorTemplate(ctx, t, clients, nsObj, v1alpha1.SnapshotScopeFull, v1alpha1.SnapshotScopeFull, v1alpha1.DataResumePolicyColdBoot)
+	at, err := createActorTemplate(ctx, t, clients, nsObj, v1alpha1.SnapshotScopeFull, v1alpha1.SnapshotScopeFull, v1alpha1.ResumeSourceColdBoot)
 	if err != nil {
 		t.Fatalf("failed to initialize ActorTemplate: %v", err)
 	}

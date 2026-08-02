@@ -561,44 +561,44 @@ func TestActorTemplateValidation(t *testing.T) {
 		wantErr: true,
 		errMsg:  "Unsupported value",
 	}, {
-		name: "SnapshotsConfig: DataResumePolicy=OnGolden, microvm",
+		name: "SnapshotsConfig: onResume.fromData=Golden, microvm",
 		mutate: func(at *ActorTemplate) {
 			at.Spec.SandboxClass = SandboxClassMicroVM
 			at.Spec.SnapshotsConfig.OnCommit = SnapshotScopeData
-			at.Spec.SnapshotsConfig.DataResumePolicy = DataResumePolicyOnGolden
+			at.Spec.SnapshotsConfig.OnResume = OnResumeConfig{FromData: ResumeSourceGolden}
 		},
 		wantErr: false,
 	}, {
-		name: "SnapshotsConfig: DataResumePolicy=ColdBoot, gvisor",
+		name: "SnapshotsConfig: onResume.fromData=ColdBoot, gvisor",
 		mutate: func(at *ActorTemplate) {
-			at.Spec.SnapshotsConfig.DataResumePolicy = DataResumePolicyColdBoot
+			at.Spec.SnapshotsConfig.OnResume = OnResumeConfig{FromData: ResumeSourceColdBoot}
 		},
 		wantErr: false,
 	}, {
-		name: "SnapshotsConfig: DataResumePolicy invalid enum value",
+		name: "SnapshotsConfig: onResume.fromData invalid enum value",
 		mutate: func(at *ActorTemplate) {
 			at.Spec.SandboxClass = SandboxClassMicroVM
-			at.Spec.SnapshotsConfig.DataResumePolicy = DataResumePolicy("bogus")
+			at.Spec.SnapshotsConfig.OnResume = OnResumeConfig{FromData: ResumeSource("bogus")}
 		},
 		wantErr: true,
 		errMsg:  "Unsupported value",
 	}, {
-		name: "SnapshotsConfig: DataResumePolicy=OnGolden, explicit gvisor (invalid)",
+		name: "SnapshotsConfig: onResume.fromData=Golden, explicit gvisor (invalid)",
 		mutate: func(at *ActorTemplate) {
 			at.Spec.SandboxClass = SandboxClassGvisor
 			at.Spec.SnapshotsConfig.OnCommit = SnapshotScopeData
-			at.Spec.SnapshotsConfig.DataResumePolicy = DataResumePolicyOnGolden
+			at.Spec.SnapshotsConfig.OnResume = OnResumeConfig{FromData: ResumeSourceGolden}
 		},
 		wantErr: true,
-		errMsg:  "OnGolden data resume policy is not supported when sandboxClass is 'gvisor'",
+		errMsg:  "onResume.fromData: Golden is not supported when sandboxClass is 'gvisor'",
 	}, {
-		name: "SnapshotsConfig: DataResumePolicy=OnGolden, SandboxClass unset (defaults to gvisor, invalid)",
+		name: "SnapshotsConfig: onResume.fromData=Golden, SandboxClass unset (defaults to gvisor, invalid)",
 		mutate: func(at *ActorTemplate) {
 			at.Spec.SnapshotsConfig.OnCommit = SnapshotScopeData
-			at.Spec.SnapshotsConfig.DataResumePolicy = DataResumePolicyOnGolden
+			at.Spec.SnapshotsConfig.OnResume = OnResumeConfig{FromData: ResumeSourceGolden}
 		},
 		wantErr: true,
-		errMsg:  "OnGolden data resume policy is not supported when sandboxClass is 'gvisor'",
+		errMsg:  "onResume.fromData: Golden is not supported when sandboxClass is 'gvisor'",
 	}, {
 		name: "Volumes: 1 DurableDir mount is valid",
 		mutate: func(at *ActorTemplate) {

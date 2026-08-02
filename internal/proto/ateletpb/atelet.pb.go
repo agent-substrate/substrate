@@ -151,8 +151,9 @@ const (
 	// Restore-only: restore the ActorTemplate's golden snapshot's guest state
 	// (memory + full filesystem delta) combined with the snapshot's durable
 	// data. Never valid for Checkpoint — snapshots only ever capture FULL or
-	// DATA; whether a Data snapshot restores cold or on the golden is decided
-	// by the control plane from the template's dataResumePolicy.
+	// DATA; whether a snapshot restores from its own content or on the golden
+	// is decided by the control plane from the template's onResume
+	// configuration.
 	SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN SnapshotScope = 3
 )
 

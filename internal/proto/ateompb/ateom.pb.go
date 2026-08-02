@@ -51,7 +51,7 @@ const (
 	// (memory + full filesystem delta) combined with the snapshot's durable
 	// data. Never valid for CheckpointWorkload — snapshots only ever capture
 	// FULL or DATA; the control plane selects this scope at restore per the
-	// template's dataResumePolicy.
+	// template's onResume configuration.
 	SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN SnapshotScope = 3
 )
 

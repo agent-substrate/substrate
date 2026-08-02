@@ -44,9 +44,6 @@ const (
 	// Captures process memory, root filesystem changes, and durable data.
 	SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL SnapshotContentScope = 1
 	// Captures durable data without process memory or root filesystem changes.
-	// How a Data snapshot is brought back (cold boot vs combined with the
-	// ActorTemplate's golden snapshot) is not recorded here: it is a
-	// restore-time behavior driven by the template's dataResumePolicy.
 	SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA SnapshotContentScope = 2
 )
 

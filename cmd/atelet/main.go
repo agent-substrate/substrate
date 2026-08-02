@@ -570,7 +570,11 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	}
 
 	// The record whose pinned binaries run the restored workload: the golden's
-	// for a DATA_ON_GOLDEN restore, the snapshot's own otherwise.
+	// for a DATA_ON_GOLDEN restore, the snapshot's own otherwise. The golden's
+	// set wins because the guest state being resumed is the golden snapshot's
+	// memory image, and a memory image must be resumed by the exact binary
+	// versions that produced it; the actor's snapshot contributes only durable
+	// data (a plain tar), which no binary version reads back.
 	runtimeRec := sandboxRec
 	if goldenRec != nil {
 		runtimeRec = goldenRec
@@ -589,7 +593,10 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		t := time.Now()
 		switch req.GetType() {
 		case ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL:
-			if goldenRec != nil {
+			if req.GetScope() == ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN {
+				if goldenRec == nil {
+					return fmt.Errorf("no golden snapshot record for a %s restore", req.GetScope())
+				}
 				if err := s.downloadCombinedCheckpoint(gctx, req.GetExternalConfig().GetSnapshotUriPrefix(), req.GetGoldenSnapshotUriPrefix(), checkpointDir, sandboxRec.SnapshotFiles, goldenRec.SnapshotFiles); err != nil {
 					return ateerrors.CrashIfReason(ctx, err, ateerrors.ReasonFailedGetExternalObject, ateerrors.ReasonInvalidObjectURL, ateerrors.ReasonTerminalFileSystemError)
 				}
@@ -597,6 +604,10 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 				return ateerrors.CrashIfReason(ctx, err, ateerrors.ReasonFailedGetExternalObject, ateerrors.ReasonInvalidObjectURL, ateerrors.ReasonTerminalFileSystemError)
 			}
 		case ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL:
+			combineWithGolden := req.GetScope() == ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
+			if combineWithGolden && goldenRec == nil {
+				return fmt.Errorf("no golden snapshot record for a %s restore", req.GetScope())
+			}
 			// A local (pause) checkpoint may still combine with the golden
 			// snapshot: the actor's files come from the local checkpoint dir,
 			// the golden's from object storage, concurrently.
@@ -607,7 +618,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 				}
 				return nil
 			})
-			if goldenRec != nil {
+			if combineWithGolden {
 				gLocal.Go(func() error {
 					if err := s.downloadExternalCheckpoint(gLocalCtx, req.GetGoldenSnapshotUriPrefix(), checkpointDir, goldenOnlyFiles(sandboxRec.SnapshotFiles, goldenRec.SnapshotFiles)); err != nil {
 						return ateerrors.CrashIfReason(ctx, err, ateerrors.ReasonFailedGetExternalObject, ateerrors.ReasonInvalidObjectURL, ateerrors.ReasonTerminalFileSystemError)

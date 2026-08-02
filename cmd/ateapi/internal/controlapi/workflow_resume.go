@@ -53,9 +53,10 @@ type ResumeState struct {
 	SnapshotLocation string
 	SnapshotScope    ateapipb.SnapshotContentScope
 	// GoldenSnapshotLocation is the storage location of the ActorTemplate's
-	// golden snapshot. Populated only for an OnGolden data resume (the
-	// template's dataResumePolicy is OnGolden and the pending restore is
-	// data-only): restore combines the golden snapshot with the actor's data.
+	// golden snapshot. Populated only when the template's onResume
+	// configuration selects the golden snapshot as the boot source for the
+	// pending restore: restore then combines the golden snapshot with the
+	// actor's data.
 	GoldenSnapshotLocation string
 }
 
@@ -130,14 +131,15 @@ func (s *LoadActorForResumeStep) Execute(ctx context.Context, input *ResumeInput
 		state.SnapshotScope = snapshot.GetContentScope()
 	}
 
-	// A data-only restore honors the template's dataResumePolicy: under
-	// OnGolden, resolve the golden snapshot's location so the restore can
-	// combine the golden's guest state with the actor's data. The pending
+	// The template's onResume configuration selects the boot source for the
+	// pending restore. When it names the golden snapshot, resolve the golden
+	// snapshot's location so the restore can combine the golden's guest
+	// state with the actor's data. The pending
 	// restore is data-only when the actor is paused with a Data pause scope
 	// (the local snapshot takes precedence at restore), or when its durable
 	// snapshot holds Data. Valid Full snapshots restore from their own
 	// content and ignore the policy.
-	if actorTemplate.Spec.SnapshotsConfig.DataResumePolicy == atev1alpha1.DataResumePolicyOnGolden {
+	if actorTemplate.Spec.SnapshotsConfig.OnResume.FromData == atev1alpha1.ResumeSourceGolden {
 		dataOnly := false
 		if actor.GetLocalSnapshotInfo() != nil {
 			dataOnly = actorTemplate.Spec.SnapshotsConfig.OnPause == atev1alpha1.SnapshotScopeData
@@ -146,7 +148,7 @@ func (s *LoadActorForResumeStep) Execute(ctx context.Context, input *ResumeInput
 		}
 		if dataOnly {
 			if actorTemplate.Status.GoldenSnapshot == "" {
-				return status.Error(codes.FailedPrecondition, "an OnGolden data resume requires the ActorTemplate golden snapshot, which is not available")
+				return status.Error(codes.FailedPrecondition, "a Golden data resume requires the ActorTemplate golden snapshot, which is not available")
 			}
 			goldenSnapshot, goldenLocation, err := s.store.GetActorSnapshot(ctx, resources.GoldenActorAtespace, actorTemplate.Status.GoldenSnapshot)
 			if errors.Is(err, store.ErrNotFound) {
@@ -532,11 +534,11 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 			LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotPrefix: local.GetSnapshotPrefix()},
 		}
 		// The wire scope describes the restore OPERATION. When the template's
-		// dataResumePolicy is OnGolden, LoadActorForResume resolved the golden
-		// location, and the data-only pause snapshot restores as
-		// DATA_ON_GOLDEN — atelet combines the golden snapshot's guest state
-		// with the actor's data. Otherwise the scope mirrors what the pause
-		// captured.
+		// onResume configuration selected the golden snapshot as the boot
+		// source, LoadActorForResume resolved the golden location, and the
+		// pause snapshot restores as DATA_ON_GOLDEN — atelet combines the
+		// golden snapshot's guest state with the actor's data. Otherwise the
+		// scope mirrors what the pause captured.
 		req.Scope = toAteletSnapshotScope(state.ActorTemplate.Spec.SnapshotsConfig.OnPause)
 		if state.GoldenSnapshotLocation != "" {
 			req.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
@@ -548,9 +550,9 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 	} else if state.SnapshotLocation != "" {
 		slog.InfoContext(ctx, "Actor has durable snapshot; Restoring from snapshot")
 
-		// Same wire-scope derivation as the local branch above: a Data
-		// snapshot restores as DATA_ON_GOLDEN when the golden location was
-		// resolved per the template's dataResumePolicy.
+		// Same wire-scope derivation as the local branch above: the snapshot
+		// restores as DATA_ON_GOLDEN when the golden location was resolved
+		// per the template's onResume configuration.
 		scope := actorSnapshotContentScopeToAtelet(state.SnapshotScope)
 		if state.GoldenSnapshotLocation != "" {
 			scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
@@ -569,7 +571,7 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 				},
 			},
 			Scope: scope,
-			// Empty unless this is an OnGolden data resume.
+			// Empty unless this is a Golden data resume.
 			GoldenSnapshotUriPrefix: state.GoldenSnapshotLocation,
 			ActorUid:                state.Actor.GetMetadata().Uid,
 		}

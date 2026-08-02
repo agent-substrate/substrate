@@ -705,7 +705,7 @@ func TestCallAteletRestoreStep_CheckPrerequisite_WorkerOwnership(t *testing.T) {
 }
 
 // TestLoadActorForResumeStep_OnGoldenDataResume verifies the golden-location
-// plumbing: when the template's dataResumePolicy is OnGolden, a pending
+// plumbing: when the template's onResume.fromData is Golden, a pending
 // data-only restore (a Data durable snapshot, or a paused actor whose
 // onPause is Data) additionally resolves the template's golden snapshot
 // location into the resume state, and the resume fails early when the golden
@@ -715,8 +715,8 @@ func TestLoadActorForResumeStep_OnGoldenDataResume(t *testing.T) {
 	actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
 
 	tests := []struct {
-		name   string
-		policy atev1alpha1.DataResumePolicy
+		name     string
+		fromData atev1alpha1.ResumeSource
 		// paused seeds the actor with LocalSnapshotInfo (a pause checkpoint)
 		// instead of a durable snapshot; onPause is the template's pause
 		// scope, contentScope the durable snapshot's recorded content.
@@ -735,7 +735,7 @@ func TestLoadActorForResumeStep_OnGoldenDataResume(t *testing.T) {
 	}{
 		{
 			name:           "resolves golden location for Data durable snapshot",
-			policy:         atev1alpha1.DataResumePolicyOnGolden,
+			fromData:       atev1alpha1.ResumeSourceGolden,
 			contentScope:   ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
 			goldenSnapshot: "golden-1",
 			seedGolden:     true,
@@ -745,7 +745,7 @@ func TestLoadActorForResumeStep_OnGoldenDataResume(t *testing.T) {
 		},
 		{
 			name:           "resolves golden location for paused actor with Data onPause",
-			policy:         atev1alpha1.DataResumePolicyOnGolden,
+			fromData:       atev1alpha1.ResumeSourceGolden,
 			paused:         true,
 			onPause:        atev1alpha1.SnapshotScopeData,
 			goldenSnapshot: "golden-1",
@@ -758,7 +758,7 @@ func TestLoadActorForResumeStep_OnGoldenDataResume(t *testing.T) {
 			// A Full pause snapshot restores from its own content; the policy
 			// only governs data-only restores.
 			name:           "leaves golden location empty for paused actor with Full onPause",
-			policy:         atev1alpha1.DataResumePolicyOnGolden,
+			fromData:       atev1alpha1.ResumeSourceGolden,
 			paused:         true,
 			onPause:        atev1alpha1.SnapshotScopeFull,
 			goldenSnapshot: "golden-1",
@@ -769,7 +769,7 @@ func TestLoadActorForResumeStep_OnGoldenDataResume(t *testing.T) {
 		},
 		{
 			name:           "fails when golden snapshot is not Full",
-			policy:         atev1alpha1.DataResumePolicyOnGolden,
+			fromData:       atev1alpha1.ResumeSourceGolden,
 			contentScope:   ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
 			goldenSnapshot: "golden-1",
 			seedGolden:     true,
@@ -778,22 +778,22 @@ func TestLoadActorForResumeStep_OnGoldenDataResume(t *testing.T) {
 		},
 		{
 			name:         "fails when template has no golden snapshot",
-			policy:       atev1alpha1.DataResumePolicyOnGolden,
+			fromData:     atev1alpha1.ResumeSourceGolden,
 			contentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
 			wantCode:     codes.FailedPrecondition,
 		},
 		{
 			name:           "fails when golden snapshot data is missing",
-			policy:         atev1alpha1.DataResumePolicyOnGolden,
+			fromData:       atev1alpha1.ResumeSourceGolden,
 			contentScope:   ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
 			goldenSnapshot: "golden-1",
 			wantCode:       codes.DataLoss,
 		},
 		{
 			// A Full snapshot restores from its own content even under
-			// OnGolden (e.g. taken before the template switched policy).
+			// Golden fromData (e.g. taken before the template switched).
 			name:           "leaves golden location empty for Full snapshot",
-			policy:         atev1alpha1.DataResumePolicyOnGolden,
+			fromData:       atev1alpha1.ResumeSourceGolden,
 			contentScope:   ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
 			goldenSnapshot: "golden-1",
 			seedGolden:     true,
@@ -802,8 +802,8 @@ func TestLoadActorForResumeStep_OnGoldenDataResume(t *testing.T) {
 			wantGoldenLoc:  "",
 		},
 		{
-			name:           "leaves golden location empty under ColdBoot policy",
-			policy:         atev1alpha1.DataResumePolicyColdBoot,
+			name:           "leaves golden location empty under ColdBoot fromData",
+			fromData:       atev1alpha1.ResumeSourceColdBoot,
 			contentScope:   ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
 			goldenSnapshot: "golden-1",
 			seedGolden:     true,
@@ -856,8 +856,8 @@ func TestLoadActorForResumeStep_OnGoldenDataResume(t *testing.T) {
 				ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "tmpl1"},
 				Spec: atev1alpha1.ActorTemplateSpec{
 					SnapshotsConfig: atev1alpha1.SnapshotsConfig{
-						OnPause:          tt.onPause,
-						DataResumePolicy: tt.policy,
+						OnPause:  tt.onPause,
+						OnResume: atev1alpha1.OnResumeConfig{FromData: tt.fromData},
 					},
 				},
 				Status: atev1alpha1.ActorTemplateStatus{GoldenSnapshot: tt.goldenSnapshot},
