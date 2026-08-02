@@ -828,12 +828,8 @@ func TestCreateActor_Success(t *testing.T) {
 
 	createResp, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{
-			Atespace:   testAtespace,
-			Name:       "id1",
-			Uid:        "caller-supplied-uid",
-			Version:    999,
-			CreateTime: timestamppb.New(time.Unix(1, 0)),
-			UpdateTime: timestamppb.New(time.Unix(1, 0)),
+			Atespace: testAtespace,
+			Name:     "id1",
 		},
 		ActorTemplateNamespace: ns,
 		ActorTemplateName:      "tmpl1",
