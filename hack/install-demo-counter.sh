@@ -48,10 +48,18 @@ demo-counter_deploy() {
     ext_vol_spec_cmd=("-e" "s|\${EXTERNAL_VOLUMES}|  - name: external-data\n    externalVolumeTemplate:\n      capacity: 1Gi\n      storageClassName: standard|g")
   fi
 
+  # On by default; OUTBOUND_PROBE_URL="" disables (e.g. air-gapped clusters).
+  local probe_url="${OUTBOUND_PROBE_URL-https://www.google.com/generate_204}"
+  local probe_cmd=("-e" "/\${OUTBOUND_PROBE_URL_ARG}/d")
+  if [[ -n "${probe_url}" ]]; then
+    probe_cmd=("-e" "s|\${OUTBOUND_PROBE_URL_ARG}|    - --outbound-probe-url=${probe_url}|g")
+  fi
+
   sed -e "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" \
       "${validate_cmd[@]}" \
       "${ext_vol_mount_cmd[@]}" \
       "${ext_vol_spec_cmd[@]}" \
+      "${probe_cmd[@]}" \
       demos/counter/counter.yaml.tmpl \
     | run_ko apply -f -
 
@@ -71,6 +79,7 @@ demo-counter_delete() {
   delete_demo_actors ate-demo-counter counter
   sed -e "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" \
       -e "/\${VALIDATE_EXISTING_FILE_PATH_ARG}/d" \
+      -e "/\${OUTBOUND_PROBE_URL_ARG}/d" \
       -e "/\${EXTERNAL_VOLUME_MOUNTS}/d" \
       -e "/\${EXTERNAL_VOLUMES}/d" \
       demos/counter/counter.yaml.tmpl \

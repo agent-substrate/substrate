@@ -65,6 +65,7 @@ spec:
     # from the primary port 80 every other assertion in this demo uses.
     - --extra-port=9090
 ${VALIDATE_EXISTING_FILE_PATH_ARG}
+${OUTBOUND_PROBE_URL_ARG}
     readyz:
       httpGet:
         path: /readyz

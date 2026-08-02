@@ -38,6 +38,9 @@
 #   OUT              asset dir (default: $PWD/bin/microvm-assets/$ARCH, gitignored).
 #   ATE_INSTALL_KIND "true" for the kind path (stage assets to rustfs + install-ate-kind.sh);
 #                    default false uploads assets to GCS + uses install-ate.sh.
+#   OUTBOUND_PROBE_URL
+#                    URL the counter probes every tick (default: google generate_204);
+#                    set to "" to disable, e.g. on air-gapped clusters.
 
 set -o errexit -o nounset -o pipefail
 
@@ -120,7 +123,14 @@ hack/install-microvm-deps.sh --install
 # is used as-is — no override). Only ko apply/create/delete/run accept args after
 # `--`; thread --context there (mirrors the run_ko helper in hack/install-ate.sh).
 log "Applying the counter-microvm demo manifest..."
+# On by default; OUTBOUND_PROBE_URL="" disables (e.g. air-gapped clusters).
+probe_url="${OUTBOUND_PROBE_URL-https://www.google.com/generate_204}"
+probe_cmd=("-e" "/\${OUTBOUND_PROBE_URL_ARG}/d")
+if [[ -n "${probe_url}" ]]; then
+  probe_cmd=("-e" "s|\${OUTBOUND_PROBE_URL_ARG}|    - --outbound-probe-url=${probe_url}|g")
+fi
 sed -e "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" \
+    "${probe_cmd[@]}" \
     demos/counter/counter-microvm.yaml.tmpl \
   | ./hack/run-tool.sh ko apply -f - ${KUBECTL_CONTEXT:+-- --context="${KUBECTL_CONTEXT}"}
 

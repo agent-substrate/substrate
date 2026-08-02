@@ -35,6 +35,22 @@ This command will:
 - Create the `WorkerPool` and `ActorTemplate`.
 - Wait until the template is ready.
 
+#### Outbound connectivity probe
+
+By default the counter fetches `https://www.google.com/generate_204` every 10
+seconds and logs the result, showing that the actor's egress path keeps working
+across suspends and resumes. Override or disable the target at deploy time:
+
+```bash
+# Probe a custom URL
+OUTBOUND_PROBE_URL=http://example.com/health ./hack/install-ate.sh --deploy-demo-counter
+
+# Disable the probe (e.g. air-gapped clusters)
+OUTBOUND_PROBE_URL="" ./hack/install-ate.sh --deploy-demo-counter
+```
+
+The same variable works for the micro-VM variant (`./hack/run-microvm-demo.sh`).
+
 ### 2. Create a Counter Actor
 
 Actors live in an **atespace**, which must exist before you create actors in it. Create one (e.g., `demo`), then create the counter actor with a chosen ID (e.g., `my-counter-1`):

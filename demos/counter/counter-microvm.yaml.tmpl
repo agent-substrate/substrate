@@ -73,6 +73,9 @@ spec:
   containers:
   - name: counter
     image: ko://github.com/agent-substrate/substrate/demos/counter
+    command:
+    - /ko-app/counter
+${OUTBOUND_PROBE_URL_ARG}
     readyz:
       httpGet:
         path: /readyz

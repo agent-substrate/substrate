@@ -69,6 +69,7 @@ func main() {
 	secondFileCounterDirectory := pflag.String("second-file-counter-directory", "", "Directory for a second file counter; empty disables it. Used to exercise an Actor with more than one durable volume")
 	validateExistingFilePath := pflag.String("validate-existing-file-path", "", "Path to existing file to validate reading")
 	extraPort := pflag.Int("extra-port", 0, "Additional port to listen on, for exercising atenet-router's arbitrary-port ingress support; 0 disables it")
+	outboundProbeURL := pflag.String("outbound-probe-url", "", "URL fetched on every count tick to demonstrate outbound connectivity (e.g. https://www.google.com/generate_204); empty disables it")
 	pflag.Parse()
 	ctx := context.Background()
 
@@ -192,11 +193,34 @@ func main() {
 	slog.InfoContext(ctx, "Count", slog.Int("count", count), slog.String("fshash", hashRandomFile()))
 	count++
 
+	probeClient := &http.Client{Transport: &http.Transport{DisableKeepAlives: true}}
 	for range time.Tick(10 * time.Second) {
-		// TODO: Test outbound connectivity by pinging google.com
+		logOutboundProbe(ctx, probeClient, *outboundProbeURL)
 		slog.InfoContext(ctx, "Count", slog.Int("count", count), slog.String("fshash", hashRandomFile()))
 		count++
 	}
+}
+
+// A reachable server counts as connectivity, whatever its status code.
+func logOutboundProbe(ctx context.Context, client *http.Client, url string) {
+	if url == "" {
+		return
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	start := time.Now()
+	req, err := http.NewRequestWithContext(probeCtx, http.MethodGet, url, nil)
+	if err != nil {
+		slog.ErrorContext(ctx, "Outbound probe failed", slog.String("url", url), slog.Any("err", err))
+		return
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		slog.ErrorContext(ctx, "Outbound probe failed", slog.String("url", url), slog.Any("err", err))
+		return
+	}
+	resp.Body.Close()
+	slog.InfoContext(ctx, "Outbound probe succeeded", slog.String("url", url), slog.Int("status", resp.StatusCode), slog.Duration("elapsed", time.Since(start)))
 }
 
 func writeRandomFile() error {
