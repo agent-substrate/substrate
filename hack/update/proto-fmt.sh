@@ -37,6 +37,8 @@ files=(
         ':(glob)**/*.proto' \
         ':!:vendor/*' \
         ':!:**/vendor/*' \
+        ':!:third_party/*' \
+        ':!:**/third_party/*' \
         ':!:LICENSES/*' \
         | sort \
         | uniq)

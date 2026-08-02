@@ -37,6 +37,8 @@ dirs=(
         ':(glob)**/*.go' \
         ':!:vendor/*' \
         ':!:**/vendor/*' \
+        ':!:third_party/*' \
+        ':!:**/third_party/*' \
         ':!:LICENSES/*' \
         | while read -r FILE; do dirname "${FILE}"; done \
         | sort \
