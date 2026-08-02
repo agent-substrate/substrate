@@ -29,6 +29,67 @@ import (
 	field "k8s.io/apimachinery/pkg/util/validation/field"
 )
 
+// Validate_Actor validates an instance of Actor according
+// to declarative validation rules in the API schema.
+func Validate_Actor(
+	ctx context.Context, op operation.Operation, fldPath *field.Path,
+	obj, oldObj *Actor) (errs field.ErrorList) {
+
+	{ // field Actor.Metadata
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *ResourceMetadata,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if equality.Semantic.DeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.RequiredPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				errs = append(errs, e...)
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			func() { // cohort = "atespace"
+				earlyReturn := false
+				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
+					func(o *ResourceMetadata) *string { return &o.Atespace }, validate.DirectEqual, validate.RequiredValue).MarkShortCircuit(); len(e) != 0 {
+					errs = append(errs, e...)
+					earlyReturn = true
+				}
+				if e := validate.Subfield(ctx, op, fldPath, obj, oldObj, "atespace",
+					func(o *ResourceMetadata) *string { return &o.Atespace }, validate.DirectEqual, validate.OptionalValue).MarkShortCircuit(); len(e) != 0 {
+					earlyReturn = true
+				}
+				if earlyReturn {
+					return // do not proceed
+				}
+			}()
+			// call the type's validation function
+			errs = append(errs, Validate_ResourceMetadata(ctx, op, fldPath, obj, oldObj)...)
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *Actor) *ResourceMetadata {
+				return oldObj.Metadata
+			})
+		errs = append(errs, fn(fldPath.Child("metadata"), obj.Metadata, oldVal, oldObj != nil)...)
+	}
+
+	// field Actor.ActorTemplateNamespace has no validation
+	// field Actor.ActorTemplateName has no validation
+	// field Actor.ActorTemplate has no validation
+	// field Actor.WorkerSelector has no validation
+	// field Actor.SourceSnapshotTag has no validation
+	// field Actor.Status has no validation
+	return errs
+}
+
 // Validate_CreateActorRequest validates an instance of CreateActorRequest according
 // to declarative validation rules in the API schema.
 func Validate_CreateActorRequest(
@@ -55,6 +116,8 @@ func Validate_CreateActorRequest(
 			if earlyReturn {
 				return // do not proceed
 			}
+			// call the type's validation function
+			errs = append(errs, Validate_Actor(ctx, op, fldPath, obj, oldObj)...)
 			return
 		}
 		oldVal := safe.Field(oldObj,

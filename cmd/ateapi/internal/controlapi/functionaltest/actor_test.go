@@ -38,7 +38,6 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/testing/protocmp"
-	"google.golang.org/protobuf/types/known/timestamppb"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -58,12 +57,8 @@ func TestCreateActor_Success(t *testing.T) {
 
 	createResp, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{
-			Atespace:   testAtespace,
-			Name:       "id1",
-			Uid:        "caller-supplied-uid",
-			Version:    999,
-			CreateTime: timestamppb.New(time.Unix(1, 0)),
-			UpdateTime: timestamppb.New(time.Unix(1, 0)),
+			Atespace: testAtespace,
+			Name:     "id1",
 		},
 		ActorTemplateNamespace: ns,
 		ActorTemplateName:      "tmpl1",

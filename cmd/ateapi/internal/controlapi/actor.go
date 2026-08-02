@@ -168,18 +168,6 @@ func validateCreateActorRequest(ctx context.Context, req *ateapipb.CreateActorRe
 
 	errs = append(errs, validateNoUnknownFields(actor, actorPath)...)
 
-	metaPath := actorPath.Child("metadata")
-	if val, p := actor.GetMetadata().GetAtespace(), metaPath.Child("atespace"); val == "" {
-		errs = append(errs, field.Required(p, ""))
-	} else {
-		errs = append(errs, resources.ValidateResourceName(val, p)...)
-	}
-	if val, p := actor.GetMetadata().GetName(), metaPath.Child("name"); val == "" {
-		errs = append(errs, field.Required(p, ""))
-	} else {
-		errs = append(errs, resources.ValidateResourceName(val, p)...)
-	}
-
 	if val, p := actor.GetActorTemplateNamespace(), actorPath.Child("actor_template_namespace"); val == "" {
 		errs = append(errs, field.Required(p, ""))
 	} else {
