@@ -35,8 +35,11 @@ import (
 
 var tracer = otel.Tracer("ategcs")
 
-// uploadTempFilePrefix is the filename prefix used by sendBufferedZstd when
-// creating staging files in os.TempDir().
+// uploadTempFilePrefix is the filename prefix for staging files created by
+// sendBufferedZstd in os.TempDir(). S3/rustfs requires a seekable body with a
+// known Content-Length, so the compressed payload is buffered to a temp file
+// before upload. If atelet crashes mid-upload these files are never removed;
+// SweepEntries registers them for cleanup at next startup.
 const uploadTempFilePrefix = "substrate-upload-compress-"
 
 type ObjectStorage interface {
