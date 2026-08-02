@@ -16,6 +16,7 @@ package router
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
 	"log/slog"
 	"net"
@@ -152,6 +153,7 @@ type XdsServer struct {
 	snapshot     cachev3.SnapshotCache
 	srv          serverv3.Server
 	versionCount int64
+	versionEpoch string
 
 	mu sync.Mutex
 
@@ -204,6 +206,7 @@ func NewXdsServer(xdsPort int) *XdsServer {
 		xdsPort:               xdsPort,
 		snapshot:              cache,
 		srv:                   srv,
+		versionEpoch:          strconv.FormatInt(time.Now().Unix(), 10) + "-" + rand.Text()[:8],
 		extprocPort:           50051, // matches default extproc port
 		extprocAddr:           "127.0.0.1",
 		ingressPort:           8080,
@@ -408,7 +411,7 @@ func (x *XdsServer) UpdateSnapshot() error {
 	defer x.mu.Unlock()
 
 	x.versionCount++
-	ver := strconv.FormatInt(x.versionCount, 10)
+	ver := x.versionEpoch + "-" + strconv.FormatInt(x.versionCount, 10)
 
 	// connectEnabled is true when either CONNECT listener (plaintext or TLS) is
 	// configured; the main_internal cluster/listener only exist to serve them.
