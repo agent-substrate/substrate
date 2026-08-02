@@ -89,13 +89,9 @@ func NewServer(cfg Config) (*Server, error) {
 	if _, err := loadCredentialBundle(cfg.CredentialBundlePath); err != nil {
 		return nil, err
 	}
-	trustPEM, err := os.ReadFile(cfg.TrustBundlePath)
+	clientCAs, err := loadTrustBundle(cfg.TrustBundlePath)
 	if err != nil {
-		return nil, fmt.Errorf("atunnel: reading trust bundle: %w", err)
-	}
-	clientCAs := x509.NewCertPool()
-	if !clientCAs.AppendCertsFromPEM(trustPEM) {
-		return nil, fmt.Errorf("atunnel: trust bundle %q contains no certificates", cfg.TrustBundlePath)
+		return nil, err
 	}
 
 	proxy := httputil.NewSingleHostReverseProxy(cfg.Upstream)
@@ -115,13 +111,18 @@ func NewServer(cfg Config) (*Server, error) {
 		GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
 			return loadCredentialBundle(s.credentialBundlePath)
 		},
+		GetConfigForClient: func(*tls.ClientHelloInfo) (*tls.Config, error) {
+			clientCAs, err := loadTrustBundle(cfg.TrustBundlePath)
+			if err != nil {
+				return nil, err
+			}
+			config := s.tlsConfig.Clone()
+			config.GetConfigForClient = nil
+			config.ClientCAs = clientCAs
+			return config, nil
+		},
 		ClientAuth: tls.RequireAndVerifyClientCert,
-		// TODO(liorlieberman): reload the trust bundle per connection via
-		// GetConfigForClient, mirroring GetCertificate above. kubelet keeps the
-		// projected ClusterTrustBundle in sync with the signer, but this pool is
-		// frozen at process start, so after a CA rotation a long-lived worker
-		// rejects the router until its pod restarts.
-		ClientCAs: clientCAs,
+		ClientCAs:  clientCAs,
 		VerifyConnection: func(cs tls.ConnectionState) error {
 			if len(cs.PeerCertificates) == 0 {
 				return fmt.Errorf("atunnel: client certificate is required")
@@ -147,6 +148,18 @@ func loadCredentialBundle(path string) (*tls.Certificate, error) {
 		return nil, fmt.Errorf("atunnel: parsing credential bundle: %w", err)
 	}
 	return &cert, nil
+}
+
+func loadTrustBundle(path string) (*x509.CertPool, error) {
+	trustPEM, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("atunnel: reading trust bundle: %w", err)
+	}
+	clientCAs := x509.NewCertPool()
+	if !clientCAs.AppendCertsFromPEM(trustPEM) {
+		return nil, fmt.Errorf("atunnel: trust bundle %q contains no certificates", path)
+	}
+	return clientCAs, nil
 }
 
 // Serve serves HTTPS on lis until ctx is canceled or the server fails.

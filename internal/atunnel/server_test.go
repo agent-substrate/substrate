@@ -227,6 +227,57 @@ func TestMutualTLSClientIdentity(t *testing.T) {
 	}
 }
 
+func TestMutualTLSReloadsClientTrustBundle(t *testing.T) {
+	dir := t.TempDir()
+	firstCA := newTestCA(t)
+	secondCA := newTestCA(t)
+	bundlePath := filepath.Join(dir, "server.pem")
+	trustPath := filepath.Join(dir, "trust.pem")
+	writeCredentialBundle(t, bundlePath, firstCA.issue(t, "", []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}))
+	if err := os.WriteFile(trustPath, firstCA.certPEM, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	upstream, err := url.Parse("http://actor.internal:80")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := NewServer(Config{
+		CredentialBundlePath: bundlePath,
+		TrustBundlePath:      trustPath,
+		AllowedClientID:      "spiffe://cluster.local/ns/ate-system/sa/atenet-router",
+		Upstream:             upstream,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	clientID := "spiffe://cluster.local/ns/ate-system/sa/atenet-router"
+	firstClient := firstCA.issue(t, clientID, []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth})
+	secondClient := secondCA.issue(t, clientID, []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth})
+	assertHandshake := func(name string, cert tls.Certificate, wantErr bool) {
+		t.Helper()
+		t.Run(name, func(t *testing.T) {
+			serverErr, clientErr := tlsHandshake(s.tlsConfig, &tls.Config{
+				MinVersion:         tls.VersionTLS12,
+				InsecureSkipVerify: true, // Test only the server's client authentication here.
+				Certificates:       []tls.Certificate{cert},
+			})
+			gotErr := serverErr != nil || clientErr != nil
+			if gotErr != wantErr {
+				t.Fatalf("server error = %v, client error = %v, want error %v", serverErr, clientErr, wantErr)
+			}
+		})
+	}
+
+	assertHandshake("original CA before rotation", firstClient, false)
+	assertHandshake("new CA before rotation", secondClient, true)
+	if err := os.WriteFile(trustPath, secondCA.certPEM, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	assertHandshake("original CA after rotation", firstClient, true)
+	assertHandshake("new CA after rotation", secondClient, false)
+}
+
 func TestDeactivateCancelsInflightRequest(t *testing.T) {
 	upstream, err := url.Parse("http://actor.internal:80")
 	if err != nil {
