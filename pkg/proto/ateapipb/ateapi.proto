@@ -154,10 +154,16 @@ message Selector {
 message ResourceMetadata {
   // atespace is the namespace the resource belongs to. Empty for global-scoped
   // resources. Caller-specified at creation and immutable thereafter.
+  //
+  // Atespaced resources should add +k8s:subfield(atespace)=+k8s:required
+  // Non-atespaced resources should add +k8s:subfield(atespace)=+k8s:forbidden
+  // +k8s:optional
   string atespace = 1;
 
   // name is the resource's name, unique within its atespace (or globally, for
   // global-scoped resources). Caller-specified at creation and immutable thereafter.
+  //
+  // +k8s:required
   string name = 2;
 
   // uid is a server-assigned, globally unique identifier for this resource.
@@ -202,6 +208,7 @@ message ExternalVolume {
 
 message Actor {
   // Common resource metadata: atespace, name, uid, version, timestamps.
+  // +k8s:opaqueType
   ResourceMetadata metadata = 1;
 
   // TODO: delete both fields once we start using actor_template_version below.
@@ -277,6 +284,7 @@ message WorkerAssignment {
 // ActorSnapshot is an independently addressable durable Actor snapshot. Its
 // contents are immutable.
 message ActorSnapshot {
+  // +k8s:opaqueType
   ResourceMetadata metadata = 1;
   ObjectRef source_actor = 2;
   string source_actor_uid = 3;
@@ -293,6 +301,7 @@ message ActorSnapshot {
 // ActorSnapshotTag is an immutable, Atespace-owned alias and retention pin.
 // Its owning Atespace cannot be deleted until the tag is removed.
 message ActorSnapshotTag {
+  // +k8s:opaqueType
   ResourceMetadata metadata = 1;
   ObjectRef snapshot = 2;
   ActorSnapshotTagScope scope = 3;
@@ -302,6 +311,7 @@ message ActorSnapshotTag {
 // metadata.atespace is always empty; the atespace's identity is metadata.name.
 message Atespace {
   // Common resource metadata: name, uid, version, timestamps.
+  // +k8s:opaqueType
   ResourceMetadata metadata = 1;
 }
 
@@ -342,6 +352,7 @@ enum SandboxClass {
 // ActorTemplateVersion to be used when creating Actors.
 message ActorTemplate {
   // Common resource metadata: atespace, name, uid, version, timestamps.
+  // +k8s:opaqueType
   ResourceMetadata metadata = 1;
 
   // default_version_on_create names the ActorTemplateVersion used by
@@ -360,6 +371,7 @@ message ActorTemplate {
 // ActorTemplateVersion is Atespaced.
 message ActorTemplateVersion {
   // Common resource metadata: atespace, name, uid, version, timestamps.
+  // +k8s:opaqueType
   ResourceMetadata metadata = 1;
 
   // actor_template is the parent ActorTemplate. Required at creation and
