@@ -12,7 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package ateapipb
+// Kubernetes codegen tools required this to be in doc.go, no other name will
+// work.
 
-//go:generate bash -c "../../../hack/protoc.sh --plugin=protoc-gen-go=$(bash ../../../hack/run-tool.sh --print-bin-path protoc-gen-go) --plugin=protoc-gen-go-grpc=$(bash ../../../hack/run-tool.sh --print-bin-path protoc-gen-go-grpc) --go_out=paths=source_relative:. --go-grpc_out=paths=source_relative:. ateapi.proto"
-//go:generate bash -c "../../../hack/run-tool.sh validation-gen --go-header-file=../../../hack/boilerplate/go.txt --output-file=zz_generated.validation.go ."
+// +k8s:validation-gen=TypesWithSuffix=Request
+// +k8s:validation-gen-scheme-registry=nil
+
+package ateapipb
