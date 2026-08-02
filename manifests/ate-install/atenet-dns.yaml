@@ -79,7 +79,11 @@ metadata:
   labels:
     app: dns
 spec:
-  replicas: 1
+  replicas: 2
+  strategy:
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
   selector:
     matchLabels:
       app: dns
@@ -89,6 +93,13 @@ spec:
         app: dns
     spec:
       serviceAccountName: atenet-dns
+      topologySpreadConstraints:
+      - maxSkew: 1
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: ScheduleAnyway
+        labelSelector:
+          matchLabels:
+            app: dns
       shareProcessNamespace: true
       initContainers:
       - name: init-dns
@@ -112,6 +123,10 @@ spec:
       containers:
       - name: coredns
         image: coredns/coredns:1.11.1
+        lifecycle:
+          preStop:
+            sleep:
+              seconds: 5
         imagePullPolicy: IfNotPresent
         args: [ "-conf", "/etc/coredns/Corefile" ]
         volumeMounts:
@@ -176,3 +191,14 @@ spec:
   - name: dns-tcp
     port: 53
     protocol: TCP
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: dns
+  namespace: ate-system
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: dns
