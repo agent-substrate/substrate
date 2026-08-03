@@ -95,6 +95,12 @@ const defaultExtProcMessageTimeout = 5 * time.Second
 // requests to already-running actors. See buildCluster.
 const defaultExtProcMaxRequests = 2048
 
+// defaultRouteTimeout is Envoy's end-to-end route timeout for workload traffic:
+// the ceiling on a single request from the ingress listener to the actor's
+// response. It bounds the actor's own handling time, not the resume that
+// precedes it — parking and the ext_proc timeout cover that part.
+const defaultRouteTimeout = 10 * time.Second
+
 // XdsServer implements an aggregated discovery service server for dynamic Envoy router nodes.
 type XdsServer struct {
 	xdsPort      int
@@ -139,6 +145,11 @@ type XdsServer struct {
 	// router's processing server, parked requests included. Must be >= the
 	// parking lot size (enforced at startup in Run).
 	extProcMaxRequests uint32
+
+	// routeTimeout is Envoy's end-to-end timeout on the workload route. Actors
+	// that hold a request open for a long turn — an LLM streaming a response,
+	// say — need this above the default or Envoy cuts the turn off with a 504.
+	routeTimeout time.Duration
 }
 
 func NewXdsServer(xdsPort int) *XdsServer {
@@ -154,6 +165,7 @@ func NewXdsServer(xdsPort int) *XdsServer {
 		ingressPort:           8080,
 		extProcMessageTimeout: defaultExtProcMessageTimeout,
 		extProcMaxRequests:    defaultExtProcMaxRequests,
+		routeTimeout:          defaultRouteTimeout,
 	}
 }
 
@@ -185,6 +197,19 @@ func (x *XdsServer) SetExtProcMaxRequests(n int) {
 	defer x.mu.Unlock()
 	if n > 0 {
 		x.extProcMaxRequests = uint32(n)
+	}
+}
+
+// SetRouteTimeout sets Envoy's end-to-end timeout on the workload route. Raise
+// it for actors whose turns legitimately run long — a harness relaying an LLM
+// completion holds the request open for the whole generation, and at the
+// default the client sees a 504 mid-turn. A non-positive value leaves the
+// default unchanged.
+func (x *XdsServer) SetRouteTimeout(d time.Duration) {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	if d > 0 {
+		x.routeTimeout = d
 	}
 }
 
@@ -612,7 +637,7 @@ func (x *XdsServer) buildRoutes() *routev3.RouteConfiguration {
 								ClusterSpecifier: &routev3.RouteAction_Cluster{
 									Cluster: OriginalDstClusterName,
 								},
-								Timeout: durationpb.New(10 * time.Second),
+								Timeout: durationpb.New(x.routeTimeout),
 							},
 						},
 					},

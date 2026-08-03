@@ -62,6 +62,7 @@ func (s *RouterServer) startEnvoyDataplane(ctx context.Context, g *errgroup.Grou
 	setOtlpCollector(ctx, xdsSrv, s.cfg.OtlpCollectorAddress)
 	xdsSrv.SetTraceRootSamplingPercent(traceRootSamplingPercent)
 
+	xdsSrv.SetRouteTimeout(s.cfg.RouteTimeout)
 	xdsSrv.SetExtProcMaxRequests(s.cfg.extProcMaxRequests())
 	if parkCfg.enabled() {
 		// Envoy must keep a parked request open at least as long as the router

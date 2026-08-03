@@ -81,6 +81,13 @@ type routerConfig struct {
 
 	Auth authConfig
 
+	// RouteTimeout is Envoy's end-to-end timeout on the workload route: the
+	// ceiling on one request from the ingress listener to the actor's response.
+	// It bounds the actor's own handling time, not the resume that precedes it
+	// — parking and the ext_proc timeout cover that. A non-positive value
+	// leaves Envoy on defaultRouteTimeout.
+	RouteTimeout time.Duration
+
 	// ParkedRequest configures request parking: hold and retry requests whose
 	// actor cannot be served immediately due to transient worker-pool
 	// saturation, instead of failing fast. A non-positive Max disables parking.

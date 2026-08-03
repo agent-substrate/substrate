@@ -139,6 +139,11 @@ spec:
         - "--ateapi-address=dns:///api.ate-system.svc:443"
         - "--ateapi-ca-file=/run/servicedns-ca/trust-bundle.pem"
         - "--ateapi-client-cert=/run/podidentity.podcert.ate.dev/credential-bundle.pem"
+        # Envoy's end-to-end timeout on the workload route. Raise it for actors
+        # whose turns legitimately run long — a harness relaying an LLM
+        # completion holds the request open for the whole generation, and at the
+        # 10s default the client gets a 504 mid-turn.
+        # - "--route-timeout=5m"
         env:
         - name: POD_NAME
           valueFrom:

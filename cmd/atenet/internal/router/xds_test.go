@@ -564,6 +564,56 @@ func TestXdsServer_ExtProcCircuitBreaker(t *testing.T) {
 	})
 }
 
+func TestXdsServer_RouteTimeout(t *testing.T) {
+	// routeTimeout digs the timeout out of the one workload route buildRoutes
+	// emits, which is where Envoy actually reads it.
+	//
+	// It pins the route to OriginalDstClusterName rather than trusting position:
+	// that is the cluster carrying actor traffic to the worker's atunnel ingress.
+	// A change that moves actor traffic onto some other route would otherwise
+	// leave this passing while the timeout governs a route nothing uses.
+	routeTimeout := func(t *testing.T, x *XdsServer) time.Duration {
+		t.Helper()
+		hosts := x.buildRoutes().GetVirtualHosts()
+		if len(hosts) != 1 || len(hosts[0].GetRoutes()) != 1 {
+			t.Fatalf("buildRoutes() = %d virtual hosts, want exactly 1 with 1 route", len(hosts))
+		}
+		action := hosts[0].GetRoutes()[0].GetRoute()
+		if got := action.GetCluster(); got != OriginalDstClusterName {
+			t.Fatalf("workload route targets cluster %q, want %q", got, OriginalDstClusterName)
+		}
+		return action.GetTimeout().AsDuration()
+	}
+
+	t.Run("Default", func(t *testing.T) {
+		if got := routeTimeout(t, NewXdsServer(0)); got != defaultRouteTimeout {
+			t.Errorf("default route timeout = %v, want %v", got, defaultRouteTimeout)
+		}
+	})
+
+	t.Run("SetterOverrides", func(t *testing.T) {
+		x := NewXdsServer(0)
+		x.SetRouteTimeout(5 * time.Minute)
+		if got := routeTimeout(t, x); got != 5*time.Minute {
+			t.Errorf("route timeout after SetRouteTimeout(5m) = %v, want 5m", got)
+		}
+	})
+
+	// A zero value is what an operator who never passes --route-timeout would
+	// produce if the flag default were dropped. Envoy reads a zero route
+	// timeout as "no timeout at all", so the setter must ignore it rather than
+	// silently turning every stuck actor into a held-open request.
+	t.Run("NonPositiveKeepsDefault", func(t *testing.T) {
+		for _, d := range []time.Duration{0, -time.Second} {
+			x := NewXdsServer(0)
+			x.SetRouteTimeout(d)
+			if got := routeTimeout(t, x); got != defaultRouteTimeout {
+				t.Errorf("route timeout after SetRouteTimeout(%v) = %v, want default %v", d, got, defaultRouteTimeout)
+			}
+		}
+	})
+}
+
 func TestXdsServer_SetOtlpCollector(t *testing.T) {
 	// --otlp-collector-address defaults to OTEL_EXPORTER_OTLP_ENDPOINT, so the
 	// URL forms that variable carries have to reduce to the bare host and port
