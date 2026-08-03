@@ -152,7 +152,7 @@ const (
 	ActorState_ACTOR_STATE_PAUSING     ActorState = 5
 	ActorState_ACTOR_STATE_PAUSED      ActorState = 6
 	ActorState_ACTOR_STATE_CRASHED     ActorState = 7
-	ActorState_ACTOR_STATE_DELETING    ActorState = 8
+	ActorState_ACTOR_STATE_DELETING    ActorState = 8 // Keep this in sync with ActorStatus.state's maximum.
 )
 
 // Enum value maps for ActorState.
@@ -854,10 +854,11 @@ type Actor struct {
 	// The tag specified by the caller at CreateActor to seed this Actor from an
 	// ActorSnapshot. Unset if the Actor was not created from a snapshot. Set
 	// once at creation and immutable afterward.
-	SourceSnapshotTag *ObjectRef   `protobuf:"bytes,6,opt,name=source_snapshot_tag,json=sourceSnapshotTag,proto3" json:"source_snapshot_tag,omitempty"`
-	Status            *ActorStatus `protobuf:"bytes,7,opt,name=status,proto3" json:"status,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	SourceSnapshotTag *ObjectRef `protobuf:"bytes,6,opt,name=source_snapshot_tag,json=sourceSnapshotTag,proto3" json:"source_snapshot_tag,omitempty"`
+	// +k8s:optional
+	Status        *ActorStatus `protobuf:"bytes,7,opt,name=status,proto3" json:"status,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *Actor) Reset() {
@@ -941,7 +942,12 @@ func (x *Actor) GetStatus() *ActorStatus {
 
 type ActorStatus struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	State ActorState             `protobuf:"varint,1,opt,name=state,proto3,enum=ateapi.ActorState" json:"state,omitempty"`
+	// state is the Actor's current lifecycle state.
+	//
+	// +k8s:optional
+	// +k8s:minimum=1
+	// +k8s:maximum=8 # keep this in sync with the ActorState enum
+	State ActorState `protobuf:"varint,1,opt,name=state,proto3,enum=ateapi.ActorState" json:"state,omitempty"`
 	// worker_assignment points at the worker currently hosting this Actor.
 	// Unset whenever the Actor has no worker (SUSPENDED, PAUSED, CRASHED).
 	WorkerAssignment       *WorkerAssignment `protobuf:"bytes,2,opt,name=worker_assignment,json=workerAssignment,proto3" json:"worker_assignment,omitempty"`

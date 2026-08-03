@@ -70,6 +70,9 @@ func TestValidateCreateActorRequest(t *testing.T) {
 			Metadata:               &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "id1"},
 			ActorTemplateNamespace: "ns1",
 			ActorTemplateName:      "tmpl1",
+			Status: &ateapipb.ActorStatus{
+				State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
+			},
 		}
 		if mutate != nil {
 			mutate(a)
@@ -133,6 +136,22 @@ func TestValidateCreateActorRequest(t *testing.T) {
 		"invalid actor_template_name",
 		validActor(func(a *ateapipb.Actor) { a.ActorTemplateName = "invalid value" }),
 		field.ErrorList{field.Invalid(field.NewPath("actor", "actor_template_name"), nil, "")},
+	}, {
+		"unspecified actor.status",
+		validActor(func(a *ateapipb.Actor) { a.Status = nil }),
+		nil,
+	}, {
+		"unspecified actor.status.state",
+		validActor(func(a *ateapipb.Actor) { a.Status.State = 0 }),
+		nil,
+	}, {
+		"negative actor.status.state",
+		validActor(func(a *ateapipb.Actor) { a.Status.State = -1 }),
+		field.ErrorList{field.Invalid(field.NewPath("actor", "status", "state"), nil, "").WithOrigin("minimum")},
+	}, {
+		"invalid actor.status.state",
+		validActor(func(a *ateapipb.Actor) { a.Status.State = 1234567890 }),
+		field.ErrorList{field.Invalid(field.NewPath("actor", "status", "state"), nil, "").WithOrigin("maximum")},
 	}, {
 		"worker_selector with nil match_labels",
 		validActor(func(a *ateapipb.Actor) { a.WorkerSelector = &ateapipb.Selector{} }),

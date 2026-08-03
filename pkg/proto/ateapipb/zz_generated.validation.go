@@ -86,7 +86,88 @@ func Validate_Actor(
 	// field Actor.ActorTemplate has no validation
 	// field Actor.WorkerSelector has no validation
 	// field Actor.SourceSnapshotTag has no validation
-	// field Actor.Status has no validation
+
+	{ // field Actor.Status
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *ActorStatus,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if equality.Semantic.DeepEqual(obj, oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalPointer(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			// call the type's validation function
+			errs = append(errs, Validate_ActorStatus(ctx, op, fldPath, obj, oldObj)...)
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *Actor) *ActorStatus {
+				return oldObj.Status
+			})
+		errs = append(errs, fn(fldPath.Child("status"), obj.Status, oldVal, oldObj != nil)...)
+	}
+
+	return errs
+}
+
+// Validate_ActorStatus validates an instance of ActorStatus according
+// to declarative validation rules in the API schema.
+func Validate_ActorStatus(
+	ctx context.Context, op operation.Operation, fldPath *field.Path,
+	obj, oldObj *ActorStatus) (errs field.ErrorList) {
+
+	{ // field ActorStatus.State
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *ActorState,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			if e := validate.Maximum(ctx, op, fldPath, obj, oldObj, 8); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			if e := validate.Minimum(ctx, op, fldPath, obj, oldObj, 1); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *ActorStatus) *ActorState {
+				return &oldObj.State
+			})
+		errs = append(errs, fn(fldPath.Child("state"), &obj.State, oldVal, oldObj != nil)...)
+	}
+
+	// field ActorStatus.WorkerAssignment has no validation
+	// field ActorStatus.InProgressSnapshotName has no validation
+	// field ActorStatus.LatestSnapshot has no validation
+	// field ActorStatus.LocalSnapshotInfo has no validation
+	// field ActorStatus.InProgressSnapshotSourceActorVersion has no validation
+	// field ActorStatus.ActorVolumes has no validation
+	// field ActorStatus.InProgressLocalSnapshotName has no validation
+	// field ActorStatus.SourceSnapshot has no validation
 	return errs
 }
 

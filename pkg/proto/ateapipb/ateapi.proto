@@ -246,6 +246,7 @@ message Actor {
   // once at creation and immutable afterward.
   ObjectRef source_snapshot_tag = 6;
 
+  // +k8s:optional
   ActorStatus status = 7;
 }
 
@@ -259,9 +260,15 @@ enum ActorState {
   ACTOR_STATE_PAUSED = 6;
   ACTOR_STATE_CRASHED = 7;
   ACTOR_STATE_DELETING = 8;
+  // Keep this in sync with ActorStatus.state's maximum.
 }
 
 message ActorStatus {
+  // state is the Actor's current lifecycle state.
+  //
+  // +k8s:optional
+  // +k8s:minimum=1
+  // +k8s:maximum=8 # keep this in sync with the ActorState enum
   ActorState state = 1;
 
   // worker_assignment points at the worker currently hosting this Actor.
