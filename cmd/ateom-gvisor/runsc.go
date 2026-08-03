@@ -17,6 +17,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -25,6 +26,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
 
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 
@@ -113,15 +115,94 @@ func (r *runsc) cmdCreate(ctx context.Context, out io.Writer, containerName stri
 	return nil
 }
 
+// allowConnectedOnSaveFlag lets runsc checkpoint a sandbox whose network
+// connections are still established, so an actor keeps them across
+// suspend/resume.
+//
+// It was introduced in runsc release-20260622.0. Builds older than that reject
+// it on `runsc start` with "flag provided but not defined", which fails every
+// actor start, so it is probed for below.
+//
+// There is no equivalent on those older builds. They have only
+// -net-disconnect-ok, which defaults to true and *drops* open connections on
+// save, and neither -allow-live-tcp-migration nor a working
+// -save-restore-netstack (deprecated and inert on current builds, and about
+// netstack save/restore generally rather than connection preservation). So
+// dropping the flag is not a fallback path: it silently gives up connection
+// preservation, which is why the probe below warns loudly when it has to.
+const allowConnectedOnSaveFlag = "allow-connected-on-save"
+
+// minRunscVersionForAllowConnectedOnSave is the first runsc release that
+// defines allowConnectedOnSaveFlag. Named here for the operator-facing warning;
+// the probe reads the binary rather than trusting a version string.
+const minRunscVersionForAllowConnectedOnSave = "release-20260622.0"
+
+// runscFlagSupport memoizes capability probes keyed by runsc binary path.
+// Probing shells out, and cmdStart runs on every container start.
+var runscFlagSupport sync.Map // map[string]bool
+
+// supportsAllowConnectedOnSave reports whether the runsc binary at path defines
+// -allow-connected-on-save, probing it once per path so that a build which does
+// not define it starts actors instead of failing them.
+//
+// A false result is a degraded mode, not a supported configuration: actors will
+// lose established connections on suspend. It is reported at Error once per
+// binary rather than swallowed, and upgrading runsc is the actual fix.
+func supportsAllowConnectedOnSave(ctx context.Context, path string) bool {
+	if v, ok := runscFlagSupport.Load(path); ok {
+		return v.(bool)
+	}
+	supported := probeAllowConnectedOnSave(ctx, path)
+	if !supported {
+		slog.ErrorContext(ctx, "runsc does not support -"+allowConnectedOnSaveFlag+
+			"; actors on this build will lose established network connections across suspend/resume. Upgrade runsc to "+
+			minRunscVersionForAllowConnectedOnSave+" or later.",
+			slog.String("runsc", path),
+			slog.String("minVersion", minRunscVersionForAllowConnectedOnSave))
+	}
+	runscFlagSupport.Store(path, supported)
+	return supported
+}
+
+// probeAllowConnectedOnSave shells out to `runsc flags` and looks for the flag
+// in the listing. A probe that cannot run at all assumes the flag is present:
+// that reproduces the pre-probe behavior, so a build that does define the flag
+// keeps it, and one that does not fails `runsc start` with runsc's own error
+// rather than being silently downgraded on the strength of a failed probe.
+//
+// It must be `runsc flags`, not `runsc help start`: -allow-connected-on-save is
+// a top-level flag, and the per-subcommand usage that `help start` prints lists
+// only -h and -help even on builds that define it. Probing `help start` would
+// therefore report "unsupported" on every build and silently stop passing the
+// flag where it does work.
+func probeAllowConnectedOnSave(ctx context.Context, path string) bool {
+	cmd := exec.CommandContext(ctx, path, "flags")
+	// Usage goes to stdout on some builds and stderr on others; capture both.
+	var usage bytes.Buffer
+	cmd.Stdout = &usage
+	cmd.Stderr = &usage
+
+	if err := cmd.Run(); err != nil {
+		slog.WarnContext(ctx, "Could not probe runsc for -"+allowConnectedOnSaveFlag+"; assuming it is supported",
+			slog.String("runsc", path),
+			slog.Any("error", err))
+		return true
+	}
+
+	supported := bytes.Contains(usage.Bytes(), []byte(allowConnectedOnSaveFlag))
+	slog.InfoContext(ctx, "Probed runsc for -"+allowConnectedOnSaveFlag,
+		slog.String("runsc", path),
+		slog.Bool("supported", supported))
+	return supported
+}
+
 func (r *runsc) cmdStart(ctx context.Context, out io.Writer, containerName string) error {
 	reapLock.RLock()
 	defer reapLock.RUnlock()
 
 	slog.InfoContext(ctx, "About to run runsc start", slog.String("container", containerName))
 
-	cmd := exec.CommandContext(
-		ctx,
-		r.path,
+	args := []string{
 		"-log-format", "json",
 		"--alsologtostderr",
 		// "-debug",
@@ -129,11 +210,16 @@ func (r *runsc) cmdStart(ctx context.Context, out io.Writer, containerName strin
 		// "-debug-to-user-log",
 		// "-log-packets",
 		// "-strace",
-		"-allow-connected-on-save",
+	}
+	if supportsAllowConnectedOnSave(ctx, r.path) {
+		args = append(args, "-"+allowConnectedOnSaveFlag)
+	}
+	args = append(args,
 		"-root", ateompath.RunSCStateDir(r.actorUID),
 		"start",
 		containerName, // Name of the container
 	)
+	cmd := exec.CommandContext(ctx, r.path, args...)
 	cmd.Stdout = out
 	cmd.Stderr = out
 
