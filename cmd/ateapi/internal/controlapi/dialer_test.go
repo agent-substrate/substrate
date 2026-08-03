@@ -22,6 +22,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"errors"
+	"fmt"
 	"math/big"
 	"net/url"
 	"testing"
@@ -30,9 +31,11 @@ import (
 	"github.com/agent-substrate/substrate/internal/substratex509"
 	"github.com/spiffe/go-spiffe/v2/bundle/x509bundle"
 	"github.com/spiffe/go-spiffe/v2/spiffeid"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -427,4 +430,130 @@ func TestDialForAteletOnNode(t *testing.T) {
 			t.Errorf("evicted conn state = %v, want %v (closed on eviction)", got, connectivity.Shutdown)
 		}
 	})
+}
+
+func newDialerTestIndexers(t *testing.T, workers, atelets []*corev1.Pod) (cache.Indexer, cache.Indexer) {
+	t.Helper()
+
+	workerIndexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{
+		byNamespaceAndName: func(obj any) ([]string, error) {
+			pod := obj.(*corev1.Pod)
+			return []string{pod.ObjectMeta.Namespace + "/" + pod.ObjectMeta.Name}, nil
+		},
+	})
+	for _, pod := range workers {
+		if err := workerIndexer.Add(pod); err != nil {
+			t.Fatalf("adding worker pod: %v", err)
+		}
+	}
+
+	ateletIndexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{
+		byNode: func(obj any) ([]string, error) {
+			pod := obj.(*corev1.Pod)
+			return []string{pod.Spec.NodeName}, nil
+		},
+	})
+	for _, pod := range atelets {
+		if err := ateletIndexer.Add(pod); err != nil {
+			t.Fatalf("adding atelet pod: %v", err)
+		}
+	}
+
+	return workerIndexer, ateletIndexer
+}
+
+func dialerTestWorkerPod() *corev1.Pod {
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "default", Name: "worker-1", UID: "worker-uid"},
+		Spec:       corev1.PodSpec{NodeName: "node-1"},
+	}
+}
+
+func dialerTestAteletPod(name string, ips []corev1.PodIP) *corev1.Pod {
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Namespace: ateletNamespace, Name: name, UID: types.UID(name + "-uid")},
+		Spec:       corev1.PodSpec{NodeName: "node-1"},
+		Status:     corev1.PodStatus{PodIPs: ips},
+	}
+}
+
+// The router parks and retries only FailedPrecondition, Aborted, and
+// Unavailable (docs/request-parking.md). Transient atelet churn during node
+// upgrades must therefore surface as Unavailable, not the interceptor's
+// Internal default — even after the workflow engine wraps the error.
+func assertUnavailableThroughWrapping(t *testing.T, err error) {
+	t.Helper()
+
+	if err == nil {
+		t.Fatal("DialForWorker returned nil error")
+	}
+	wrapped := fmt.Errorf("workflow failed at step CallAteletSuspend: %w", err)
+	var statusErr interface{ GRPCStatus() *status.Status }
+	if !errors.As(wrapped, &statusErr) {
+		t.Fatalf("error %v carries no gRPC status; the server interceptor will default it to Internal", wrapped)
+	}
+	if code := statusErr.GRPCStatus().Code(); code != codes.Unavailable {
+		t.Fatalf("error code = %v, want %v", code, codes.Unavailable)
+	}
+}
+
+func TestDialForWorkerNoAteletOnNodeIsUnavailable(t *testing.T) {
+	workerIndexer, ateletIndexer := newDialerTestIndexers(t, []*corev1.Pod{dialerTestWorkerPod()}, nil)
+	dialer := NewAteletDialer(workerIndexer, ateletIndexer, "", "")
+
+	_, err := dialer.DialForWorker("default", "worker-1")
+	assertUnavailableThroughWrapping(t, err)
+}
+
+func TestDialForWorkerAteletWithoutIPsIsUnavailable(t *testing.T) {
+	workerIndexer, ateletIndexer := newDialerTestIndexers(t,
+		[]*corev1.Pod{dialerTestWorkerPod()},
+		[]*corev1.Pod{dialerTestAteletPod("atelet-1", nil)})
+	dialer := NewAteletDialer(workerIndexer, ateletIndexer, "", "")
+
+	_, err := dialer.DialForWorker("default", "worker-1")
+	assertUnavailableThroughWrapping(t, err)
+}
+
+func TestDialForWorkerMultipleAteletsOnNodeIsUnavailable(t *testing.T) {
+	workerIndexer, ateletIndexer := newDialerTestIndexers(t,
+		[]*corev1.Pod{dialerTestWorkerPod()},
+		[]*corev1.Pod{
+			dialerTestAteletPod("atelet-old", []corev1.PodIP{{IP: "10.0.0.1"}}),
+			dialerTestAteletPod("atelet-new", []corev1.PodIP{{IP: "10.0.0.2"}}),
+		})
+	dialer := NewAteletDialer(workerIndexer, ateletIndexer, "", "")
+
+	_, err := dialer.DialForWorker("default", "worker-1")
+	assertUnavailableThroughWrapping(t, err)
+}
+
+func TestDialForWorkerWorkerPodNotFoundKeepsSentinel(t *testing.T) {
+	workerIndexer, ateletIndexer := newDialerTestIndexers(t, nil, nil)
+	dialer := NewAteletDialer(workerIndexer, ateletIndexer, "", "")
+
+	_, err := dialer.DialForWorker("default", "worker-1")
+	if !errors.Is(err, ErrWorkerPodNotFound) {
+		t.Fatalf("error = %v, want ErrWorkerPodNotFound", err)
+	}
+	var statusErr interface{ GRPCStatus() *status.Status }
+	if errors.As(err, &statusErr) && statusErr.GRPCStatus().Code() == codes.Unavailable {
+		t.Fatal("ErrWorkerPodNotFound became Unavailable; call sites crash the actor on this sentinel and must keep fail-fast semantics")
+	}
+}
+
+func TestDialForWorkerSucceedsWithHealthyAtelet(t *testing.T) {
+	workerIndexer, ateletIndexer := newDialerTestIndexers(t,
+		[]*corev1.Pod{dialerTestWorkerPod()},
+		[]*corev1.Pod{dialerTestAteletPod("atelet-1", []corev1.PodIP{{IP: "10.0.0.1"}})})
+	dialer := NewAteletDialer(workerIndexer, ateletIndexer, "", "")
+	dialer.dialCredentials = func(string) (credentials.TransportCredentials, error) {
+		return insecure.NewCredentials(), nil
+	}
+
+	conn, err := dialer.DialForWorker("default", "worker-1")
+	if err != nil {
+		t.Fatalf("DialForWorker: %v", err)
+	}
+	defer conn.Close()
 }
