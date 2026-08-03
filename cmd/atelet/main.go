@@ -951,6 +951,7 @@ func toAteomReadyz(in *ateletpb.Readyz) *ateompb.Readyz {
 			Port: hg.GetPort(),
 		}
 	}
+	out.TimeoutSeconds = in.GetTimeoutSeconds()
 	return out
 }
 

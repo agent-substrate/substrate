@@ -588,7 +588,8 @@ func TestBuildAteomWorkloadSpecForwardsReadyz(t *testing.T) {
 				Name:  "with-probe",
 				Image: "main",
 				Readyz: &ateletpb.Readyz{
-					HttpGet: &ateletpb.HTTPGetAction{Path: "/health", Port: 8080},
+					HttpGet:        &ateletpb.HTTPGetAction{Path: "/health", Port: 8080},
+					TimeoutSeconds: 45,
 				},
 			},
 			{
@@ -601,7 +602,8 @@ func TestBuildAteomWorkloadSpecForwardsReadyz(t *testing.T) {
 			{
 				Name: "with-probe",
 				Readyz: &ateompb.Readyz{
-					HttpGet: &ateompb.HTTPGetAction{Path: "/health", Port: 8080},
+					HttpGet:        &ateompb.HTTPGetAction{Path: "/health", Port: 8080},
+					TimeoutSeconds: 45,
 				},
 			},
 			{Name: "without-probe"},

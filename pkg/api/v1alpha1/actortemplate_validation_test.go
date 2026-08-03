@@ -492,6 +492,55 @@ func TestActorTemplateValidation(t *testing.T) {
 		wantErr: true,
 		errMsg:  "should match",
 	}, {
+		name: "Readyz TimeoutSeconds unset falls back to the ateom default",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Containers[0].Readyz = &ContainerReadyz{
+				HTTPGet: &HTTPGetAction{Port: 80},
+			}
+		},
+		wantErr: false,
+	}, {
+		name: "valid Readyz TimeoutSeconds",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Containers[0].Readyz = &ContainerReadyz{
+				HTTPGet:        &HTTPGetAction{Port: 80},
+				TimeoutSeconds: ptr.To(int32(300)),
+			}
+		},
+		wantErr: false,
+	}, {
+		// A zero deadline could never be met, so it is rejected rather
+		// than silently read as "unset".
+		name: "Readyz TimeoutSeconds zero",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Containers[0].Readyz = &ContainerReadyz{
+				HTTPGet:        &HTTPGetAction{Port: 80},
+				TimeoutSeconds: ptr.To(int32(0)),
+			}
+		},
+		wantErr: true,
+		errMsg:  "should be greater than or equal to 1",
+	}, {
+		name: "Readyz TimeoutSeconds negative",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Containers[0].Readyz = &ContainerReadyz{
+				HTTPGet:        &HTTPGetAction{Port: 80},
+				TimeoutSeconds: ptr.To(int32(-1)),
+			}
+		},
+		wantErr: true,
+		errMsg:  "should be greater than or equal to 1",
+	}, {
+		name: "Readyz TimeoutSeconds above the maximum",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Containers[0].Readyz = &ContainerReadyz{
+				HTTPGet:        &HTTPGetAction{Port: 80},
+				TimeoutSeconds: ptr.To(int32(3601)),
+			}
+		},
+		wantErr: true,
+		errMsg:  "should be less than or equal to 3600",
+	}, {
 		name: "valid SandboxClass microvm",
 		mutate: func(at *ActorTemplate) {
 			at.Spec.SandboxClass = SandboxClassMicroVM

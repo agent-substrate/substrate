@@ -200,6 +200,24 @@ spec:
                           required:
                           - port
                           type: object
+                        timeoutSeconds:
+                          description: |-
+                            TimeoutSeconds is how long to keep polling HTTPGet before giving up.
+                            Exceeding it fails the actor start rather than proceeding with a
+                            container that never reported ready.
+
+                            How long a workload takes to become ready is a property of that workload,
+                            which is why this is set per template rather than cluster-wide: a heavy
+                            runtime that needs minutes should not force every other template to wait
+                            as long before its failures surface.
+
+                            Unset means the ateom's default of 30s. Zero is not a meaningful setting
+                            here — unlike a warmup delay, a zero deadline could never be met — so it
+                            is rejected in favor of the default.
+                          format: int32
+                          maximum: 3600
+                          minimum: 1
+                          type: integer
                       required:
                       - httpGet
                       type: object

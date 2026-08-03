@@ -178,6 +178,9 @@ func toAteletReadyz(in *atev1alpha1.ContainerReadyz) *ateletpb.Readyz {
 			Port: in.HTTPGet.Port,
 		}
 	}
+	if in.TimeoutSeconds != nil {
+		out.TimeoutSeconds = *in.TimeoutSeconds
+	}
 	return out
 }
 

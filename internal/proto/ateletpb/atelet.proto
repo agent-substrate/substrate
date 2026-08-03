@@ -130,6 +130,9 @@ message EnvEntry {
 // Only HTTP is supported today.
 message Readyz {
   HTTPGetAction http_get = 1;
+  // How long to keep polling before giving up and failing the actor start.
+  // Zero means the ateom's default.
+  int32 timeout_seconds = 2;
 }
 
 // HTTPGetAction performs an HTTP GET against the container.

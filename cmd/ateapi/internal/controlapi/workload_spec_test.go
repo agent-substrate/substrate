@@ -358,7 +358,17 @@ func TestWorkloadSpecFromActorTemplatePropagatesReadyz(t *testing.T) {
 					Name:  "with-probe",
 					Image: "main",
 					Readyz: &atev1alpha1.ContainerReadyz{
-						HTTPGet: &atev1alpha1.HTTPGetAction{Path: "/health", Port: 8080},
+						HTTPGet:        &atev1alpha1.HTTPGetAction{Path: "/health", Port: 8080},
+						TimeoutSeconds: ptr.To(int32(45)),
+					},
+				},
+				{
+					// An unset timeout stays zero on the wire, which the ateom
+					// reads as "use the default".
+					Name:  "probe-without-timeout",
+					Image: "slow",
+					Readyz: &atev1alpha1.ContainerReadyz{
+						HTTPGet: &atev1alpha1.HTTPGetAction{Port: 9090},
 					},
 				},
 				{
@@ -378,7 +388,15 @@ func TestWorkloadSpecFromActorTemplatePropagatesReadyz(t *testing.T) {
 				Name:  "with-probe",
 				Image: "main",
 				Readyz: &ateletpb.Readyz{
-					HttpGet: &ateletpb.HTTPGetAction{Path: "/health", Port: 8080},
+					HttpGet:        &ateletpb.HTTPGetAction{Path: "/health", Port: 8080},
+					TimeoutSeconds: 45,
+				},
+			},
+			{
+				Name:  "probe-without-timeout",
+				Image: "slow",
+				Readyz: &ateletpb.Readyz{
+					HttpGet: &ateletpb.HTTPGetAction{Port: 9090},
 				},
 			},
 			{

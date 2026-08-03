@@ -387,10 +387,13 @@ func (x *DurableDirVolumeMount) GetMountPath() string {
 // Readyz describes how to check that a container is ready to serve.
 // Only HTTP is supported today.
 type Readyz struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	HttpGet       *HTTPGetAction         `protobuf:"bytes,1,opt,name=http_get,json=httpGet,proto3" json:"http_get,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	HttpGet *HTTPGetAction         `protobuf:"bytes,1,opt,name=http_get,json=httpGet,proto3" json:"http_get,omitempty"`
+	// How long to keep polling before giving up and failing the actor start.
+	// Zero means the ateom's default.
+	TimeoutSeconds int32 `protobuf:"varint,2,opt,name=timeout_seconds,json=timeoutSeconds,proto3" json:"timeout_seconds,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *Readyz) Reset() {
@@ -428,6 +431,13 @@ func (x *Readyz) GetHttpGet() *HTTPGetAction {
 		return x.HttpGet
 	}
 	return nil
+}
+
+func (x *Readyz) GetTimeoutSeconds() int32 {
+	if x != nil {
+		return x.TimeoutSeconds
+	}
+	return 0
 }
 
 // HTTPGetAction performs an HTTP GET against the container.
@@ -916,9 +926,10 @@ const file_ateom_proto_rawDesc = "" +
 	"\vvolume_name\x18\x01 \x01(\tR\n" +
 	"volumeName\x12\x1d\n" +
 	"\n" +
-	"mount_path\x18\x02 \x01(\tR\tmountPath\"9\n" +
+	"mount_path\x18\x02 \x01(\tR\tmountPath\"b\n" +
 	"\x06Readyz\x12/\n" +
-	"\bhttp_get\x18\x01 \x01(\v2\x14.ateom.HTTPGetActionR\ahttpGet\"7\n" +
+	"\bhttp_get\x18\x01 \x01(\v2\x14.ateom.HTTPGetActionR\ahttpGet\x12'\n" +
+	"\x0ftimeout_seconds\x18\x02 \x01(\x05R\x0etimeoutSeconds\"7\n" +
 	"\rHTTPGetAction\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12\x12\n" +
 	"\x04port\x18\x02 \x01(\x05R\x04port\"\x15\n" +

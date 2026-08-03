@@ -158,6 +158,24 @@ type ContainerReadyz struct {
 	//
 	// +required
 	HTTPGet *HTTPGetAction `json:"httpGet"`
+
+	// TimeoutSeconds is how long to keep polling HTTPGet before giving up.
+	// Exceeding it fails the actor start rather than proceeding with a
+	// container that never reported ready.
+	//
+	// How long a workload takes to become ready is a property of that workload,
+	// which is why this is set per template rather than cluster-wide: a heavy
+	// runtime that needs minutes should not force every other template to wait
+	// as long before its failures surface.
+	//
+	// Unset means the ateom's default of 30s. Zero is not a meaningful setting
+	// here — unlike a warmup delay, a zero deadline could never be met — so it
+	// is rejected in favor of the default.
+	//
+	// +optional
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=3600
+	TimeoutSeconds *int32 `json:"timeoutSeconds,omitempty"`
 }
 
 // HTTPGetAction describes an HTTP GET request to perform against the
