@@ -360,7 +360,7 @@ const (
 	Actor_STATUS_PAUSING     Actor_Status = 5
 	Actor_STATUS_PAUSED      Actor_Status = 6
 	Actor_STATUS_CRASHED     Actor_Status = 7
-	Actor_STATUS_DELETING    Actor_Status = 8
+	Actor_STATUS_DELETING    Actor_Status = 8 // Keep this in sync with the Status field's maximum.
 )
 
 // Enum value maps for Actor_Status.
@@ -841,10 +841,16 @@ type Actor struct {
 	// +k8s:subfield(atespace)=+k8s:required
 	Metadata *ResourceMetadata `protobuf:"bytes,1,opt,name=metadata,proto3" json:"metadata,omitempty"`
 	// TODO: delete both fields once we start using actor_template_version below.
-	ActorTemplateNamespace string       `protobuf:"bytes,2,opt,name=actor_template_namespace,json=actorTemplateNamespace,proto3" json:"actor_template_namespace,omitempty"`
-	ActorTemplateName      string       `protobuf:"bytes,3,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
-	ActorTemplateVersion   *ObjectRef   `protobuf:"bytes,13,opt,name=actor_template_version,json=actorTemplateVersion,proto3" json:"actor_template_version,omitempty"`
-	Status                 Actor_Status `protobuf:"varint,4,opt,name=status,proto3,enum=ateapi.Actor_Status" json:"status,omitempty"`
+	ActorTemplateNamespace string     `protobuf:"bytes,2,opt,name=actor_template_namespace,json=actorTemplateNamespace,proto3" json:"actor_template_namespace,omitempty"`
+	ActorTemplateName      string     `protobuf:"bytes,3,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
+	ActorTemplateVersion   *ObjectRef `protobuf:"bytes,13,opt,name=actor_template_version,json=actorTemplateVersion,proto3" json:"actor_template_version,omitempty"`
+	// status is the actor's current lifecycle state, set by the system.
+	// User-provided values are ignored.
+	//
+	// +k8s:optional
+	// +k8s:minimum=1
+	// +k8s:maximum=8 # keep this in sync with the Status enum above
+	Status Actor_Status `protobuf:"varint,4,opt,name=status,proto3,enum=ateapi.Actor_Status" json:"status,omitempty"`
 	// worker_assignment points at the worker currently hosting this Actor.
 	// Unset whenever the Actor has no worker (SUSPENDED, PAUSED, CRASHED).
 	WorkerAssignment       *WorkerAssignment `protobuf:"bytes,5,opt,name=worker_assignment,json=workerAssignment,proto3" json:"worker_assignment,omitempty"`

@@ -135,6 +135,22 @@ func TestValidateCreateActorRequest(t *testing.T) {
 		validActor(func(a *ateapipb.Actor) { a.ActorTemplateName = "invalid value" }),
 		field.ErrorList{field.Invalid(field.NewPath("actor", "actor_template_name"), nil, "")},
 	}, {
+		"unspecified actor.status",
+		validActor(func(a *ateapipb.Actor) { a.Status = 0 }),
+		nil,
+	}, {
+		"negative actor.status",
+		validActor(func(a *ateapipb.Actor) { a.Status = -1 }),
+		field.ErrorList{field.Invalid(field.NewPath("actor", "status"), nil, "").WithOrigin("minimum")},
+	}, {
+		"valid actor.status",
+		validActor(func(a *ateapipb.Actor) { a.Status = ateapipb.Actor_STATUS_RUNNING }),
+		nil,
+	}, {
+		"invalid actor.status",
+		validActor(func(a *ateapipb.Actor) { a.Status = 1234567890 }),
+		field.ErrorList{field.Invalid(field.NewPath("actor", "status"), nil, "").WithOrigin("maximum")},
+	}, {
 		"worker_selector with nil match_labels",
 		validActor(func(a *ateapipb.Actor) { a.WorkerSelector = &ateapipb.Selector{} }),
 		nil,

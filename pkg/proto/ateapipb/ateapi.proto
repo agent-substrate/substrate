@@ -247,7 +247,14 @@ message Actor {
     STATUS_PAUSED = 6;
     STATUS_CRASHED = 7;
     STATUS_DELETING = 8;
+    // Keep this in sync with the Status field's maximum.
   }
+  // status is the actor's current lifecycle state, set by the system.
+  // User-provided values are ignored.
+  //
+  // +k8s:optional
+  // +k8s:minimum=1
+  // +k8s:maximum=8 # keep this in sync with the Status enum above
   Status status = 4;
 
   // worker_assignment points at the worker currently hosting this Actor.

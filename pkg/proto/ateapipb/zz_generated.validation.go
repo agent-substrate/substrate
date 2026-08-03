@@ -84,7 +84,41 @@ func Validate_Actor(
 	// field Actor.ActorTemplateNamespace has no validation
 	// field Actor.ActorTemplateName has no validation
 	// field Actor.ActorTemplateVersion has no validation
-	// field Actor.Status has no validation
+
+	{ // field Actor.Status
+		fn := func(
+			fldPath *field.Path,
+			obj, oldObj *Actor_Status,
+			oldValueCorrelated bool) (errs field.ErrorList) {
+			// don't revalidate unchanged data
+			if oldValueCorrelated && op.Type == operation.Update {
+				if obj == oldObj || (obj != nil && oldObj != nil && *obj == *oldObj) {
+					return nil
+				}
+			}
+			// call field-attached validations
+			earlyReturn := false
+			if e := validate.OptionalValue(ctx, op, fldPath, obj, oldObj).MarkShortCircuit(); len(e) != 0 {
+				earlyReturn = true
+			}
+			if earlyReturn {
+				return // do not proceed
+			}
+			if e := validate.Maximum(ctx, op, fldPath, obj, oldObj, 8); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			if e := validate.Minimum(ctx, op, fldPath, obj, oldObj, 1); len(e) != 0 {
+				errs = append(errs, e...)
+			}
+			return
+		}
+		oldVal := safe.Field(oldObj,
+			func(oldObj *Actor) *Actor_Status {
+				return &oldObj.Status
+			})
+		errs = append(errs, fn(fldPath.Child("status"), &obj.Status, oldVal, oldObj != nil)...)
+	}
+
 	// field Actor.WorkerAssignment has no validation
 	// field Actor.InProgressSnapshotName has no validation
 	// field Actor.WorkerSelector has no validation
