@@ -55,6 +55,10 @@ duplicating work that is already in flight.
 extensive review. We are not trying to be discouraging, but we need to make
 sure that we are focused on the most important work.
 
+If you are building something that runs *on* Substrate rather than changing
+Substrate itself, see [Integration
+Repositories](docs/integration-repos.md) for where that code should live.
+
 ### Sizing PRs for review
 
 We optimize PRs for easy review — large PRs get broken
