@@ -51,7 +51,6 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
-	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/api/option"
 	"google.golang.org/grpc"
@@ -94,7 +93,7 @@ func main() {
 
 	tp, err := serverboot.InitTracing(ctx, serverboot.TracingOptions{
 		ServiceName: "atelet",
-		Sampler:     sdktrace.ParentBased(sdktrace.NeverSample()),
+		Sampling:    serverboot.ResolveTraceSampling(ctx, serverboot.ParentRatioSampling(serverboot.ControlPlaneTraceRatio)),
 	})
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to initialize tracing", err)

@@ -46,7 +46,6 @@ import (
 	"github.com/agent-substrate/substrate/internal/version"
 	"github.com/vishvananda/netns"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
-	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"golang.org/x/sys/unix"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
@@ -103,7 +102,7 @@ func do(ctx context.Context) error {
 	const serviceName = "ateom-microvm"
 	tp, err := serverboot.InitTracing(ctx, serverboot.TracingOptions{
 		ServiceName: serviceName,
-		Sampler:     sdktrace.ParentBased(sdktrace.NeverSample()),
+		Sampling:    serverboot.ResolveTraceSampling(ctx, serverboot.ParentRatioSampling(serverboot.ControlPlaneTraceRatio)),
 	})
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to initialize tracing", err)

@@ -47,7 +47,6 @@ import (
 	"github.com/spf13/pflag"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.opentelemetry.io/otel"
-	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"golang.org/x/oauth2/google"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -107,7 +106,7 @@ func main() {
 
 	tp, err := serverboot.InitTracing(ctx, serverboot.TracingOptions{
 		ServiceName: "ateapi",
-		Sampler:     sdktrace.ParentBased(sdktrace.AlwaysSample()),
+		Sampling:    serverboot.ResolveTraceSampling(ctx, serverboot.ParentRatioSampling(serverboot.ControlPlaneTraceRatio)),
 	})
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to initialize tracing", err)

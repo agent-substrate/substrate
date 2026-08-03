@@ -145,7 +145,7 @@ To explore metrics locally:
 
 Distributed tracing tracks the end-to-end flow of requests as they pass through the Agent Substrate gateway, router, worker pods, and external services.
 
-Currently, Agent Substrate supports on-demand request tracing. When initiated by a client (e.g., via the `--trace` flag), Agent Substrate leverages OpenTelemetry (OTel) for context propagation across the call stack. Each traced request generates a unique trace hash/ID, which you can use to inspect the detailed request lifecycle and span hierarchy inside Google Cloud Trace or Jaeger.
+Agent Substrate samples traces by default. Each component roots parentless requests at a per-component ratio (10% on the control plane components, 1% at the atenet router), overridable per component through the standard `OTEL_TRACES_SAMPLER` / `OTEL_TRACES_SAMPLER_ARG` environment variables. Every component uses a parent based sampler, so a client can also force a request to be traced end to end (e.g. via the `--trace` flag). Agent Substrate leverages OpenTelemetry (OTel) for context propagation across the call stack. Each traced request generates a unique trace hash/ID, which you can use to inspect the detailed request lifecycle and span hierarchy inside Google Cloud Trace or Jaeger. See the per-component defaults table in [Tracing Best Practices](dev/best-practices/tracing.md).
 
 ### Local Tracing with Jaeger (Kind Cluster)
 
@@ -167,6 +167,7 @@ To visualize traces locally:
    # or
    kubectl ate suspend actor <actor-name> -a <atespace> --trace
    ```
+   The kind overlay pins `ateapi` to `parentbased_always_on`, so API calls show up even without `--trace`; the flag additionally prints the trace ID and forces sampling on every hop.
 
 4. **Search and Inspect**: Copy the printed Trace ID from the CLI output and paste it into the Jaeger search box (top right), or select `ateapi` or `atelet` under the **Service** dropdown and click **Find Traces** to inspect detailed call stacks, DB transactions, state updates, and worker pod handoffs.
 
@@ -185,7 +186,7 @@ Telemetry is emitted the same way everywhere; only the backend differs between a
 | Traces | Jaeger UI | Google Cloud Trace |
 | Dashboards | Not supported | Google Cloud Monitoring (see [Dashboards](#5-dashboards)) |
 
-> In Kind only `ateapi` and `atelet` are pointed at the in-cluster collector; `atenet-router` still targets the GKE collector endpoint, so `atenet.router.route.duration` is emitted but not collected locally.
+> In Kind, `ateapi`, `atelet`, `ate-controller`, and `atenet-router` are pointed at the in-cluster collector, and the controller propagates the endpoint to the ateom worker pods it creates, so all component telemetry lands locally.
 
 ---
 

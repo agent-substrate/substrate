@@ -40,6 +40,10 @@ resources:
 # On ate-controller both do double duty: the controller also propagates them to
 # the ateom worker pods it creates, which have no other way to receive them.
 # Kind only; production keeps the SDK defaults.
+#
+# OTEL_TRACES_SAMPLER pins ate-api-server to parentbased_always_on so every API
+# call it roots is traced; the other components keep their binary defaults and
+# follow its sampled flag via their ParentBased samplers.
 patches:
   - patch: |-
       apiVersion: apps/v1
@@ -59,6 +63,8 @@ patches:
                 value: "10000"
               - name: OTEL_METRIC_EXPORT_TIMEOUT
                 value: "10000"
+              - name: OTEL_TRACES_SAMPLER
+                value: parentbased_always_on
   - patch: |-
       apiVersion: apps/v1
       kind: DaemonSet

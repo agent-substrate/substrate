@@ -46,6 +46,12 @@ type ateomOTelSettings struct {
 	// MetricExportTimeout overrides the SDK's  per-export timeout, in the same
 	// whole-millisecond form as MetricExportInterval. Empty keeps the default.
 	MetricExportTimeout string
+	// TracesSampler and TracesSamplerArg are the raw OTEL_TRACES_SAMPLER and
+	// OTEL_TRACES_SAMPLER_ARG values, passed through untouched: ateom's own
+	// serverboot resolution validates them. Empty sampler keeps the worker's
+	// default and drops the arg, which is dead config on its own.
+	TracesSampler    string
+	TracesSamplerArg string
 }
 
 const (
@@ -182,6 +188,16 @@ func ateomContainerEnv(otel ateomOTelSettings) []*corev1ac.EnvVarApplyConfigurat
 		envs = append(envs, corev1ac.EnvVar().
 			WithName("OTEL_METRIC_EXPORT_TIMEOUT").
 			WithValue(otel.MetricExportTimeout))
+	}
+	if otel.TracesSampler != "" {
+		envs = append(envs, corev1ac.EnvVar().
+			WithName("OTEL_TRACES_SAMPLER").
+			WithValue(otel.TracesSampler))
+		if otel.TracesSamplerArg != "" {
+			envs = append(envs, corev1ac.EnvVar().
+				WithName("OTEL_TRACES_SAMPLER_ARG").
+				WithValue(otel.TracesSamplerArg))
+		}
 	}
 	return envs
 }

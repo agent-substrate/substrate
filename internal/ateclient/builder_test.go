@@ -32,6 +32,16 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 )
 
+func TestInitTracingDisabledReturnsNoProvider(t *testing.T) {
+	tp, err := initTracing(context.Background(), false)
+	if err != nil {
+		t.Fatalf("initTracing(disabled): %v", err)
+	}
+	if tp != nil {
+		t.Error("initTracing(disabled) returned a provider; want nil so no traceparent is injected")
+	}
+}
+
 func TestBearerTokenCreds(t *testing.T) {
 	md, err := bearerTokenCreds("some-token").GetRequestMetadata(context.Background())
 	if err != nil {

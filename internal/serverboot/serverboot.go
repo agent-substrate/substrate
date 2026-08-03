@@ -107,9 +107,10 @@ func newResource(ctx context.Context, serviceName string) (*resource.Resource, e
 type TracingOptions struct {
 	// ServiceName is required; populates resource.semconv ServiceName.
 	ServiceName string
-	// Sampler is required. ateapi typically uses ParentBased(AlwaysSample);
-	// atelet/ateom-gvisor use ParentBased(NeverSample).
-	Sampler sdktrace.Sampler
+	// Sampling is required. Build it with ResolveTraceSampling so
+	// OTEL_TRACES_SAMPLER / OTEL_TRACES_SAMPLER_ARG override the component
+	// default.
+	Sampling TraceSampling
 }
 
 // InitTracing registers a global TracerProvider with the given options
@@ -118,14 +119,24 @@ func InitTracing(ctx context.Context, opts TracingOptions) (*sdktrace.TracerProv
 	if opts.ServiceName == "" {
 		return nil, fmt.Errorf("TracingOptions.ServiceName is required")
 	}
+	if opts.Sampling.sampler == nil {
+		return nil, fmt.Errorf("TracingOptions.Sampling is required")
+	}
 	res, err := newResource(ctx, opts.ServiceName)
 	if err != nil {
 		return nil, fmt.Errorf("create tracer resource: %w", err)
 	}
 
+	// The SDK's default handler writes to stderr, bypassing the JSON logs.
+	// Registered before NewTracerProvider so its env parsing complaints land
+	// in slog too.
+	otel.SetErrorHandler(otel.ErrorHandlerFunc(func(err error) {
+		slog.Warn("OpenTelemetry SDK error", slog.Any("err", err))
+	}))
+
 	tpOpts := []sdktrace.TracerProviderOption{
 		sdktrace.WithResource(res),
-		sdktrace.WithSampler(opts.Sampler),
+		sdktrace.WithSampler(opts.Sampling.Sampler()),
 	}
 	exporter, err := otlptracegrpc.New(ctx,
 		// GKE managed traces doesn't support validating the TLS certs of the collector.
@@ -139,6 +150,7 @@ func InitTracing(ctx context.Context, opts TracingOptions) (*sdktrace.TracerProv
 	tp := sdktrace.NewTracerProvider(tpOpts...)
 	otel.SetTracerProvider(tp)
 	otel.SetTextMapPropagator(propagation.TraceContext{})
+	slog.InfoContext(ctx, "Tracing initialized", slog.String("sampler", opts.Sampling.Sampler().Description()))
 	return tp, nil
 }
 

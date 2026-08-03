@@ -28,7 +28,6 @@ import (
 	"github.com/spf13/cobra"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
-	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -44,6 +43,10 @@ import (
 	v1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
+
+// dataPlaneTraceRatio is the default root sampling fraction for parentless
+// data plane requests; OTEL_TRACES_SAMPLER / OTEL_TRACES_SAMPLER_ARG override it.
+const dataPlaneTraceRatio = 0.01
 
 var (
 	scheme = runtime.NewScheme()
@@ -141,10 +144,12 @@ func (s *RouterServer) Run(ctx context.Context) error {
 
 	// Tracing must be initialized before constructing the ateapi gRPC client
 	// below, because otelgrpc.NewClientHandler captures the global
-	// TracerProvider at construction time.
+	// TracerProvider at construction time. Resolved once so the router's SDK
+	// sampler and Envoy's RandomSampling percent cannot drift.
+	sampling := serverboot.ResolveTraceSampling(ctx, serverboot.ParentRatioSampling(dataPlaneTraceRatio))
 	tp, err := serverboot.InitTracing(ctx, serverboot.TracingOptions{
 		ServiceName: routerServiceName,
-		Sampler:     sdktrace.ParentBased(sdktrace.NeverSample()),
+		Sampling:    sampling,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to initialize tracing: %w", err)
@@ -199,7 +204,7 @@ func (s *RouterServer) Run(ctx context.Context) error {
 	}
 	s.health = newRouterHealth(s.cfg.HealthInterval, s.clientset, s.apiClient, s.cfg)
 
-	if err := s.startDataplane(ctx, g, parkCfg); err != nil {
+	if err := s.startDataplane(ctx, g, parkCfg, sampling.RootSamplingPercent()); err != nil {
 		return err
 	}
 
