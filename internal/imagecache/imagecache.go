@@ -340,8 +340,14 @@ func (s *Store) cachedImage(digest v1.Hash) (*Image, error) {
 }
 
 // pull fetches the image (by its resolved digest, so what is unpacked is
-// exactly what was recorded), unpacks every missing layer into the pool, and
-// writes the image record.
+// exactly what was recorded), writes the image record, and then unpacks
+// every missing layer into the pool.
+//
+// The record comes first so that every layer is referenced — and thereby
+// safe from eviction — before it can exist on disk. A record therefore
+// means "known image, possibly partially present", which readers already
+// handle: cachedImage verifies every layer and re-pulls what is missing,
+// so an interrupted pull's record is just resumable progress.
 func (s *Store) pull(ctx context.Context, parsedRef name.Reference, digest v1.Hash) (*Image, error) {
 	// Re-check under the flight lock: a racing EnsureImage may have completed
 	// the pull between our cache miss and winning the singleflight slot.
@@ -368,8 +374,33 @@ func (s *Store) pull(ctx context.Context, parsedRef name.Reference, digest v1.Ha
 		return nil, fmt.Errorf("while listing image layers: %w", err)
 	}
 
-	layerDirs := make([]string, len(layers))
+	if len(cfgFile.RootFS.DiffIDs) != len(layers) {
+		return nil, fmt.Errorf("image %s config lists %d diffIDs but manifest has %d layers", digest, len(cfgFile.RootFS.DiffIDs), len(layers))
+	}
 	diffIDs := make([]string, len(layers))
+	for i, d := range cfgFile.RootFS.DiffIDs {
+		diffIDs[i] = d.String()
+	}
+
+	// The full diffID list is known from the config before any unpack; make
+	// every layer of this pull referenced before it can exist.
+	rec := imageRecord{Version: 1, Config: cfgFile.Config, DiffIDs: diffIDs}
+	if err := s.writeRecord(digest, rec); err != nil {
+		return nil, err
+	}
+	// For a multi-arch ref the requested digest is the index digest, but the
+	// layers unpacked belong to the per-platform child manifest. Record the
+	// image under the child digest too, so refs pinned either way hit.
+	var actualDigest *v1.Hash
+	if actual, err := img.Digest(); err == nil && actual != digest {
+		actualDigest = &actual
+		if err := s.writeRecord(actual, rec); err != nil {
+			slog.WarnContext(ctx, "Failed to record image under platform manifest digest",
+				slog.String("digest", actual.String()), slog.Any("err", err))
+		}
+	}
+
+	layerDirs := make([]string, len(layers))
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(layerPullConcurrency)
 	for i, layer := range layers {
@@ -378,11 +409,21 @@ func (s *Store) pull(ctx context.Context, parsedRef name.Reference, digest v1.Ha
 			if err != nil {
 				return fmt.Errorf("while reading layer diffID: %w", err)
 			}
+			if diffID.String() != diffIDs[i] {
+				// The record must reference exactly what lands on disk.
+				return fmt.Errorf("layer %d diffID %s does not match config rootfs diffID %s", i, diffID, diffIDs[i])
+			}
 			dir, err := s.ensureLayer(gctx, diffID, layer)
 			if err != nil {
 				return fmt.Errorf("while unpacking layer %s: %w", diffID, err)
 			}
-			layerDirs[i], diffIDs[i] = dir, diffID.String()
+			layerDirs[i] = dir
+			// Each completed layer refreshes the record's mtime: a pull
+			// making progress stays fresh indefinitely; a wedged one ages
+			// into ordinary LRU eviction. The twin is not touched — the
+			// primary keeps the layers referenced, and the final rewrite
+			// recreates the twin if it ages out mid-pull.
+			s.touchRecord(digest)
 			return nil
 		})
 	}
@@ -390,17 +431,26 @@ func (s *Store) pull(ctx context.Context, parsedRef name.Reference, digest v1.Ha
 		return nil, err
 	}
 
-	rec := imageRecord{Version: 1, Config: cfgFile.Config, DiffIDs: diffIDs}
+	// Rewrite the record: eviction may legitimately remove it mid-pull
+	// (no progress for min-age reads as wedged), and success must never
+	// leave the just-unpacked layers unreferenced.
 	if err := s.writeRecord(digest, rec); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("while rewriting image record after unpack: %w", err)
 	}
-	// For a multi-arch ref the requested digest is the index digest, but the
-	// layers unpacked belong to the per-platform child manifest. Record the
-	// image under the child digest too, so refs pinned either way hit.
-	if actual, err := img.Digest(); err == nil && actual != digest {
-		if err := s.writeRecord(actual, rec); err != nil {
-			slog.WarnContext(ctx, "Failed to record image under platform manifest digest",
-				slog.String("digest", actual.String()), slog.Any("err", err))
+	if actualDigest != nil {
+		if err := s.writeRecord(*actualDigest, rec); err != nil {
+			slog.WarnContext(ctx, "Failed to rewrite platform manifest record after unpack",
+				slog.String("digest", actualDigest.String()), slog.Any("err", err))
+		}
+	}
+
+	// Never return LayerDirs that are not on disk right now: a vanished
+	// dir fails the pull into a clean RPC retry instead of a bundle spec
+	// naming a missing lowerdir. Ordered after the rewrite so even this
+	// failure path leaves the surviving layers referenced.
+	for _, dir := range layerDirs {
+		if _, err := os.Stat(filepath.Join(dir, layerFSDirName)); err != nil {
+			return nil, fmt.Errorf("layer dir vanished during pull (evicted?): %w", err)
 		}
 	}
 
