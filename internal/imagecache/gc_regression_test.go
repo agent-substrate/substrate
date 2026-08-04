@@ -14,16 +14,10 @@
 
 package imagecache
 
-// Regression tests pinning the eviction engine's load-bearing
-// dispositions:
-//
-//   - orphans (layers no record references) are crash debris, reclaimed at
-//     startup and never by the periodic pass;
-//   - a mid-pull layer is protected by the pre-written record's refcount
-//     plus the record's progress-touched freshness;
-//   - a record whose deletion would strand a kept layer is restored;
-//   - a partial record enumeration skips the startup scan entirely rather
-//     than sweeping on bad refcounts.
+// Eviction tests for damaged and in-between pool states — crash debris,
+// interrupted or wedged pulls, unreadable records — where the required
+// behavior is failing toward retention. Mainline eviction behavior is
+// covered in gc_test.go.
 
 import (
 	"archive/tar"
