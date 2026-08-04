@@ -15,9 +15,11 @@
 package imagecache
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -36,6 +38,7 @@ func TestOverlaySpecRoundTrip(t *testing.T) {
 	}
 	if out == nil {
 		t.Fatalf("ReadSpec returned nil for a bundle with a spec")
+		return // unreachable; makes the non-nil-ness explicit to static analysis
 	}
 	if !slices.Equal(out.Layers, in.Layers) {
 		t.Errorf("Layers = %v, want %v", out.Layers, in.Layers)
@@ -130,4 +133,51 @@ func TestCreateExtraDirs(t *testing.T) {
 			t.Errorf("expected error for a parent-traversal extra dir, got nil")
 		}
 	})
+}
+
+func TestSpecImageDigestCompat(t *testing.T) {
+	dir := t.TempDir()
+	// Round trip with the new field.
+	if err := WriteSpec(dir, &OverlaySpec{ImageDigest: "sha256:" + strings.Repeat("ef", 32), Layers: []string{"/pool/layers/sha256/aa"}}); err != nil {
+		t.Fatalf("WriteSpec: %v", err)
+	}
+	spec, err := ReadSpec(dir)
+	if err != nil || spec == nil {
+		t.Fatalf("ReadSpec: %v, %v", spec, err)
+	}
+	if want := "sha256:" + strings.Repeat("ef", 32); spec.ImageDigest != want {
+		t.Errorf("ImageDigest = %q, want %q", spec.ImageDigest, want)
+	}
+
+	// A spec written by an older atelet (no imageDigest) still parses.
+	old, err := json.Marshal(map[string]any{"version": 1, "layers": []string{"/pool/layers/sha256/bb"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, OverlaySpecFileName), old, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	spec, err = ReadSpec(dir)
+	if err != nil || spec == nil {
+		t.Fatalf("ReadSpec(old): %v, %v", spec, err)
+	}
+	if spec.ImageDigest != "" {
+		t.Errorf("old spec ImageDigest = %q, want empty", spec.ImageDigest)
+	}
+}
+
+func TestWriteSpecLeavesNoTempFiles(t *testing.T) {
+	dir := t.TempDir()
+	if err := WriteSpec(dir, &OverlaySpec{Layers: []string{"/pool/layers/sha256/aa"}}); err != nil {
+		t.Fatalf("WriteSpec: %v", err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if e.Name() != OverlaySpecFileName {
+			t.Errorf("unexpected file left in bundle: %q", e.Name())
+		}
+	}
 }

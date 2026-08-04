@@ -187,14 +187,22 @@ func (s *ExtProcServer) handleRequestHeaders(
 			"actor %s routing failed", actorRef)
 	}
 
+	// The actor is reached through the in-worker atunnel ingress server, which
+	// listens on :443 (mTLS) and forwards to the actor's :80. The worker no
+	// longer DNATs pod-IP:80 to the actor, so the router dials :443 and the
+	// ORIGINAL_DST cluster's upstream TLS context presents the router's
+	// podidentity client cert (see buildOriginalDstCluster and
+	// buildUpstreamTransportSocket).
 	// TODO(bowei) -- handle more than port 80 on the actor.
-	targetAddr := net.JoinHostPort(workerIP, "80")
+	targetAddr := net.JoinHostPort(workerIP, "443")
 
 	slog.InfoContext(ctx, "Route ok", slog.Any("actor", actorRef), slog.String("targetAddr", targetAddr))
 
-	// Route by rewriting the :authority header.
+	// Route by telling the ORIGINAL_DST cluster which worker atunnel address to
+	// dial, without touching :authority — atunnel authorizes the actor by the
+	// original Host (actor DNS name).
 	mutation := &extprocv3.HeaderMutation{}
-	addAuthorityMutation(targetAddr, mutation)
+	addOriginalDstMutation(targetAddr, mutation)
 
 	return &extprocv3.HeadersResponse{
 		Response: &extprocv3.CommonResponse{

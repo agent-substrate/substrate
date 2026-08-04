@@ -54,6 +54,10 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	s.lock.Lock()
 	defer s.lock.Unlock()
 
+	if err := s.deactivateActorNetworking(ctx); err != nil {
+		return nil, err
+	}
+
 	p := actorBootParams{
 		actorRef:     resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()},
 		actorUID:     req.GetActorUid(),
@@ -61,6 +65,9 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 		templateName: req.GetActorTemplateName(),
 		containers:   req.GetSpec().GetContainers(),
 		assetPaths:   req.GetRuntimeAssetPaths(),
+
+		actorVersion:         req.GetActorVersion(),
+		egressGatewayAddress: req.GetEgressGatewayAddress(),
 	}
 	restoreDir := ateompath.RestoreStateDir(p.actorUID)
 	durableDir := ateompath.DurableDirVolumeMountsDir(p.actorUID)
@@ -187,6 +194,7 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 		InteriorNetNS:      s.interiorNetNS,
 		HostVethHWAddr:     hostVethHWAddr,
 		SweepInteriorLinks: true,
+		EgressRedirectPort: s.egressRedirectPort(p.egressGatewayAddress != ""),
 	}); err != nil {
 		return fmt.Errorf("while setting up actor network: %w", err)
 	}
@@ -281,6 +289,9 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 		}
 	}
 
+	if err := s.activateActorNetworking(p.actorRef.Atespace, p.actorRef.Name, p.actorVersion, p.egressGatewayAddress); err != nil {
+		return err
+	}
 	s.running[actorUID] = ra
 	slog.InfoContext(ctx, "Actor restored (overlay rootfs)",
 		slog.String("id", actorUID), slog.Duration("total", time.Since(tStart)))

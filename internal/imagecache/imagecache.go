@@ -56,7 +56,9 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/go-containerregistry/pkg/authn"
@@ -74,6 +76,13 @@ const (
 	layerFSDirName           = "fs"
 	layerWhiteoutsFileName   = "whiteouts.json"
 	layerFinalizedMarkerName = "finalized"
+	// layerSizeFileName holds the layer's byte count, recorded at unpack so
+	// sizing the pool never walks a tree. Absent for layers unpacked by
+	// older atelets (backfilled lazily, see layerSize). An estimate: the
+	// value is the tar-stream length when written at unpack, or the summed
+	// file sizes when backfilled, so it may differ from disk usage and
+	// across nodes.
+	layerSizeFileName = "size"
 
 	// layerPullConcurrency bounds concurrent layer download+unpack streams per
 	// image pull. Memory use is O(stream buffers) per slot, independent of
@@ -100,6 +109,11 @@ type Store struct {
 
 	imageSF singleflight.Group
 	layerSF singleflight.Group
+
+	// hitMu makes the hit path's record read + last-use touch atomic with
+	// respect to eviction, which will hold it exclusive around record
+	// removal. No exclusive holder yet, so effectively free.
+	hitMu sync.RWMutex
 }
 
 // Option configures a Store.
@@ -192,23 +206,33 @@ func (s *Store) recordPath(digest v1.Hash) string {
 	return filepath.Join(s.root, "manifests", digest.Algorithm, digest.Hex+".json")
 }
 
-// sweepTempDirs removes unpack temp dirs and manifest-record temp files
-// orphaned by a crash. A layer dir without the temp prefix and a record
-// without a leading dot are always complete (both are moved into place with
-// a single rename), so this is the only recovery the pool needs.
+// sweepTempDirs removes unpack temp dirs, retired layer dirs, and
+// manifest-record temp files orphaned by a crash. A layer dir without the
+// temp/retired prefix and a record without a leading dot are always
+// complete (both are moved into place with a single rename), so this is
+// the only recovery the pool needs.
 func (s *Store) sweepTempDirs() error {
 	entries, err := os.ReadDir(s.layersDir())
 	if err != nil {
 		return fmt.Errorf("while listing layer pool: %w", err)
 	}
+	swept := 0
 	for _, e := range entries {
-		if !strings.HasPrefix(e.Name(), ".tmp-") {
+		// ".tmp-": an unpack in flight at crash. ".rm-": a layer retirement
+		// renamed aside but not yet removed. Either way, unreferenced
+		// garbage.
+		if !strings.HasPrefix(e.Name(), ".tmp-") && !strings.HasPrefix(e.Name(), retiredPrefix) {
 			continue
 		}
 		p := filepath.Join(s.layersDir(), e.Name())
+		slog.Info("Image cache sweeping orphaned layer dir", slog.String("dir", e.Name()))
 		if err := RemoveAllWritable(p); err != nil {
-			return fmt.Errorf("while sweeping orphaned layer temp dir %q: %w", p, err)
+			return fmt.Errorf("while sweeping orphaned layer dir %q: %w", p, err)
 		}
+		swept++
+	}
+	if swept > 0 {
+		slog.Info("Image cache startup sweep removed orphaned layer dirs", slog.Int("count", swept))
 	}
 
 	// writeRecord's temp files are ".<hex>.json.tmp-<rand>"; finished records
@@ -256,9 +280,17 @@ func (s *Store) EnsureImage(ctx context.Context, ref string) (*Image, error) {
 		digest = desc.Digest
 	}
 
-	if img, err := s.cachedImage(digest); err != nil {
+	s.hitMu.RLock()
+	img, err := s.cachedImage(digest)
+	if err == nil && img != nil {
+		// Record last-use for eviction's LRU ordering.
+		s.touchRecord(digest)
+	}
+	s.hitMu.RUnlock()
+	if err != nil {
 		return nil, err
-	} else if img != nil {
+	}
+	if img != nil {
 		slog.InfoContext(ctx, "Image cache hit", slog.String("ref", ref), slog.String("digest", digest.String()))
 		return img, nil
 	}
@@ -384,8 +416,16 @@ func (s *Store) pull(ctx context.Context, parsedRef name.Reference, digest v1.Ha
 // collapsing concurrent requests for the same layer across images.
 func (s *Store) ensureLayer(ctx context.Context, diffID v1.Hash, layer v1.Layer) (string, error) {
 	dir := s.layerDir(diffID)
-	_, err, _ := s.layerSF.Do(diffID.String(), func() (any, error) {
+	_, err, _ := s.layerSF.Do(layerFlightKey(diffID.Hex), func() (any, error) {
 		if _, err := os.Stat(filepath.Join(dir, layerFSDirName)); err == nil {
+			// Refresh the dir mtime inside the flight: retireLayer re-checks
+			// the mtime in this same flight, so a layer reused here can
+			// never be renamed away between this stat and the image record
+			// that will re-reference it.
+			now := time.Now()
+			if err := os.Chtimes(dir, now, now); err != nil {
+				slog.WarnContext(ctx, "Failed to refresh layer mtime on reuse", slog.String("diffid", diffID.String()), slog.Any("err", err))
+			}
 			return nil, nil
 		}
 		return nil, s.unpackLayerToPool(ctx, diffID, layer)
@@ -430,9 +470,18 @@ func (s *Store) unpackLayerToPool(ctx context.Context, diffID v1.Hash, layer v1.
 	}
 	defer root.Close()
 
-	wh, err := unpackLayer(ctx, rc, root)
+	// The uncompressed tar stream is the recorded size: an optimistic
+	// estimate (tar framing vs. block rounding), cheap to capture here.
+	cr := &countingReader{r: rc}
+	wh, err := unpackLayer(ctx, cr, root)
 	if err != nil {
 		return err
+	}
+	// Non-fatal: a missing size file is recovered by layerSize's backfill,
+	// so a metadata write must not discard a successful unpack.
+	if err := os.WriteFile(filepath.Join(tmp, layerSizeFileName), []byte(strconv.FormatInt(cr.n, 10)+"\n"), 0o600); err != nil {
+		slog.WarnContext(ctx, "Failed to record layer size; will backfill lazily",
+			slog.String("diffid", diffID.String()), slog.Any("err", err))
 	}
 
 	whBytes, err := json.Marshal(wh)

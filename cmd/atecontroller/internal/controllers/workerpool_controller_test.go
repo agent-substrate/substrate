@@ -146,8 +146,10 @@ func TestWorkerPoolCreatesDeployment(t *testing.T) {
 		if len(dep.OwnerReferences) == 0 || dep.OwnerReferences[0].Name != wp.Name {
 			return false, nil
 		}
-		return len(dep.Spec.Template.Spec.Volumes) == 1 &&
-			dep.Spec.Template.Spec.Volumes[0].Name == "run-ateom", nil
+		return len(dep.Spec.Template.Spec.Volumes) == 3 &&
+			dep.Spec.Template.Spec.Volumes[0].Name == "run-ateom" &&
+			dep.Spec.Template.Spec.Volumes[1].Name == atunnelIdentityVolume &&
+			dep.Spec.Template.Spec.Volumes[2].Name == atunnelEgressTrustVolume, nil
 	})
 }
 

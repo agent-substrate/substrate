@@ -9,8 +9,6 @@ This is built as a single binary for convenience in the prototyping.
 
 ## Cluster deployment
 
-![atenet diagram](atenet-diagram.png)
-
 ### router
 
 (Note: this deployment model combines Envoy dataplane with the router. This will
@@ -22,6 +20,9 @@ likely be split in the future for better scalability.)
   * atenet router
 * Service will expose:
   * Envoy port 80 and 443.
+* Upstream: Envoy's `ORIGINAL_DST` actor cluster dials the actor's in-worker
+  `atunnel` ingress server on the worker pod's port 443 over mTLS, using the
+  address `atenet router`'s ext_proc resolved into `x-ate-original-dst`.
 
 RBAC permissions:
 * read, list on ActorTemplate

@@ -51,6 +51,8 @@ message RunWorkloadRequest {
   string atespace = 1;
   string actor_name = 2;
   string actor_uid = 3;
+  // Actor resource version observed by ate-api when assigning this worker.
+  int64 actor_version = 9;
 
   string actor_template_namespace = 4;
   string actor_template_name = 5;
@@ -64,6 +66,10 @@ message RunWorkloadRequest {
   // to the local on-disk path atelet fetched it to (content-addressed, like
   // runsc_path). Empty for the gVisor runtime, which uses runsc_path.
   map<string, string> runtime_asset_paths = 8;
+
+  // Remote egress gateway selected for this activation. When absent, actor
+  // traffic uses direct egress instead of being redirected through atunnel.
+  optional string egress_gateway_address = 10;
 }
 
 // WorkloadSpec parallels Pod, but with far fewer configurable fields.
@@ -164,6 +170,8 @@ message RestoreWorkloadRequest {
   string atespace = 1;
   string actor_name = 2;
   string actor_uid = 3;
+  // Actor resource version observed by ate-api when assigning this worker.
+  int64 actor_version = 11;
 
   string actor_template_namespace = 4;
   string actor_template_name = 5;
@@ -181,6 +189,10 @@ message RestoreWorkloadRequest {
 
   // What content to restore from the snapshot.
   SnapshotScope scope = 10;
+
+  // Remote egress gateway selected for this activation. When absent, actor
+  // traffic uses direct egress instead of being redirected through atunnel.
+  optional string egress_gateway_address = 12;
 }
 
 message RestoreWorkloadResponse {

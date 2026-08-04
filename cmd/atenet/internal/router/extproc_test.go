@@ -174,7 +174,7 @@ func TestExtProcHeadersEvaluation(t *testing.T) {
 				},
 			},
 			expectErr:      false,
-			expectedTarget: "10.0.0.52:80",
+			expectedTarget: "10.0.0.52:443",
 		},
 	}
 
@@ -241,7 +241,7 @@ func TestExtProcHeadersEvaluation(t *testing.T) {
 			}
 
 			headerOption := mutation.GetSetHeaders()[0]
-			if strings.ToLower(headerOption.Header.Key) != ":authority" {
+			if strings.ToLower(headerOption.Header.Key) != OriginalDstHeader {
 				t.Errorf("invalid resulting dynamic parameter key: %s", headerOption.Header.Key)
 			}
 

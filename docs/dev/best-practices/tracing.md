@@ -65,6 +65,8 @@ The YAML manifest for your server should include the `OTEL_EXPORTER_OTLP_ENDPOIN
               value: "http://opentelemetry-collector.gke-managed-otel.svc.cluster.local:4317"
 ```
 
+For how to deploy that collector — the GKE managed option, a self-managed DaemonSet, and the constraints on what endpoints Substrate can talk to — see [OpenTelemetry Collector Best Practices](otel-collector.md).
+
 #### gRPC Servers
 When implementing a gRPC server, you should include the following middleware to handle tracing:
 
