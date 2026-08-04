@@ -121,7 +121,7 @@ func (s *CallAteletPauseStep) CheckPrerequisite(ctx context.Context, input *Paus
 	}
 	if state.Actor.GetAteomPodNamespace() == "" || state.Actor.GetAteomPodName() == "" {
 		// Missing active worker pod reference in PAUSING state indicates corrupted store state.
-		if err := crashActor(ctx, s.store, input.ActorRef, ateattr.OperationNamePause, ateattr.ReasonCorruptedAssignment); err != nil {
+		if err := crashActor(ctx, s.store, input.ActorRef, ateattr.OperationPause, ateattr.ReasonCorruptedAssignment); err != nil {
 			slog.ErrorContext(ctx, "Failed to crash actor", slog.String("err", err.Error()))
 		}
 		return status.Errorf(codes.FailedPrecondition, "CallAteletPauseStep prerequisite not met for Actor: %s. AteomPodNamespace: %s, GetAteomPodName %s", input.ActorRef, state.Actor.GetAteomPodNamespace(), state.Actor.GetAteomPodName())
@@ -134,7 +134,7 @@ func (s *CallAteletPauseStep) Execute(ctx context.Context, input *PauseInput, st
 	if err != nil {
 		if errors.Is(err, ErrWorkerPodNotFound) {
 			slog.ErrorContext(ctx, "Worker pod gone before checkpoint, crashing actor", "namespace", state.Actor.GetAteomPodNamespace(), "pod", state.Actor.GetAteomPodName(), "in_progress_snapshot", state.Actor.GetInProgressSnapshot())
-			if err := crashActor(ctx, s.store, input.ActorRef, ateattr.OperationNamePause, ateattr.ReasonWorkerPodGone); err != nil {
+			if err := crashActor(ctx, s.store, input.ActorRef, ateattr.OperationPause, ateattr.ReasonWorkerPodGone); err != nil {
 				slog.ErrorContext(ctx, "Failed to crash actor", slog.String("err", err.Error()))
 			}
 			return fmt.Errorf("actor is CRASHED because its worker pod is gone and no snapshot was written")
@@ -169,7 +169,7 @@ func (s *CallAteletPauseStep) Execute(ctx context.Context, input *PauseInput, st
 	}
 
 	_, err = client.Checkpoint(ctx, req)
-	return maybeCrashActor(ctx, s.store, input.ActorRef, err, "while checkpointing workload", ateattr.OperationNamePause)
+	return maybeCrashActor(ctx, s.store, input.ActorRef, err, "while checkpointing workload", ateattr.OperationPause)
 }
 
 func (s *CallAteletPauseStep) RetryBackoff() *wait.Backoff { return nil }
@@ -192,7 +192,7 @@ func (s *DetachVolumesForPauseStep) CheckPrerequisite(ctx context.Context, input
 }
 
 func (s *DetachVolumesForPauseStep) Execute(ctx context.Context, input *PauseInput, state *PauseState) error {
-	return detachActorVolumes(ctx, s.store, state.Actor, state.ActorTemplate, ateattr.OperationNamePause)
+	return detachActorVolumes(ctx, s.store, state.Actor, state.ActorTemplate, ateattr.OperationPause)
 }
 
 func (s *DetachVolumesForPauseStep) RetryBackoff() *wait.Backoff { return nil }
@@ -283,7 +283,7 @@ func (s *FinalizePausedStep) Execute(ctx context.Context, input *PauseInput, sta
 			sandboxClass = worker.GetSandboxClass()
 		}
 		// Snapshot crash attributes before pod and pool pointers are cleared below.
-		crashAttrs := ateattr.ActorMetricAttributes(latestActor, sandboxClass, ateattr.OperationNamePause, ateattr.ReasonCorruptedAssignment)
+		crashAttrs := ateattr.ActorMetricAttributes(latestActor, sandboxClass, ateattr.OperationPause, ateattr.ReasonCorruptedAssignment)
 
 		latestActor.AteomPodNamespace = ""
 		latestActor.AteomPodName = ""

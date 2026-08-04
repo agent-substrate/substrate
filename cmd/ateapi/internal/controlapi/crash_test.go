@@ -225,7 +225,7 @@ func TestCrashActor(t *testing.T) {
 				tt.setup(t, ctx, st)
 			}
 
-			err := crashActor(ctx, st, actorRef, ateattr.OperationNameUnknown, ateattr.ReasonUnknown)
+			err := crashActor(ctx, st, actorRef, ateattr.OperationUnknown, ateattr.ReasonUnknown)
 
 			tt.check(t, ctx, st, err)
 		})
@@ -349,7 +349,7 @@ func TestMaybeCrashActor(t *testing.T) {
 				seedActor(t, ctx, st, actorRef)
 			}
 
-			err := maybeCrashActor(ctx, st, actorRef, tt.err, wrapMsg, ateattr.OperationNameUnknown)
+			err := maybeCrashActor(ctx, st, actorRef, tt.err, wrapMsg, ateattr.OperationUnknown)
 
 			tt.check(t, ctx, st, err)
 		})
@@ -359,7 +359,8 @@ func TestMaybeCrashActor(t *testing.T) {
 func TestCrashActor_Metrics(t *testing.T) {
 	reader := sdkmetric.NewManualReader()
 	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
-	if err := RegisterActorCrashes(mp.Meter("ateapi")); err != nil {
+	meter := mp.Meter("test")
+	if err := RegisterActorCrashes(meter); err != nil {
 		t.Fatalf("RegisterActorCrashes: %v", err)
 	}
 
@@ -367,7 +368,7 @@ func TestCrashActor_Metrics(t *testing.T) {
 	st, cleanup := storetest.SetupTestStore(t)
 	defer cleanup()
 
-	actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-crash-test"}
+	actorRef := resources.ActorRef{Atespace: "demo-ns", Name: "counter-actor"}
 	worker := &ateapipb.Worker{
 		WorkerNamespace: "demo-ns",
 		WorkerPool:      "pool-1",
@@ -383,9 +384,9 @@ func TestCrashActor_Metrics(t *testing.T) {
 
 	actor := &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{
-			Atespace: actorRef.Atespace,
-			Name:     actorRef.Name,
-			Uid:      "uid-123",
+			Atespace: "demo-ns",
+			Name:     "counter-actor",
+			Uid:      "actor-uid-1",
 		},
 		ActorTemplateNamespace: "demo-ns",
 		ActorTemplateName:      "counter-template",
@@ -399,11 +400,11 @@ func TestCrashActor_Metrics(t *testing.T) {
 		t.Fatalf("CreateActor: %v", err)
 	}
 
-	if err := crashActor(ctx, st, actorRef, ateattr.OperationNameResume, ateattr.ReasonCorruptedAssignment); err != nil {
+	if err := crashActor(ctx, st, actorRef, ateattr.OperationResume, ateattr.ReasonCorruptedAssignment); err != nil {
 		t.Fatalf("crashActor: %v", err)
 	}
 
-	assertCrashMetricDatapoint(t, reader, ateattr.OperationNameResume, ateattr.ReasonCorruptedAssignment, "demo-ns", "counter-template", "pool-1", "gvisor", 1)
+	assertCrashMetricDatapoint(t, reader, ateattr.OperationResume, ateattr.ReasonCorruptedAssignment, "demo-ns", "counter-template", "pool-1", "gvisor", 1)
 }
 
 func assertCrashMetricDatapoint(t *testing.T, reader *sdkmetric.ManualReader, wantOpName, wantReason, wantTmplNS, wantTmplName, wantWorkerPool, wantSandboxClass string, wantValue int64) {

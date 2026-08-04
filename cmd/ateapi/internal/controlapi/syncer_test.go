@@ -644,10 +644,10 @@ func TestReleaseActorOnDeadWorker_StatusTransitions(t *testing.T) {
 		wantOp     string
 		wantMetric bool
 	}{
-		{name: "running becomes crashed", start: ateapipb.Actor_STATUS_RUNNING, wantStatus: ateapipb.Actor_STATUS_CRASHED, wantOp: ateattr.OperationNameUnknown, wantMetric: true},
-		{name: "resuming becomes crashed", start: ateapipb.Actor_STATUS_RESUMING, wantStatus: ateapipb.Actor_STATUS_CRASHED, wantOp: ateattr.OperationNameResume, wantMetric: true},
-		{name: "suspending becomes crashed", start: ateapipb.Actor_STATUS_SUSPENDING, wantStatus: ateapipb.Actor_STATUS_CRASHED, wantOp: ateattr.OperationNameSuspend, wantMetric: true},
-		{name: "pausing becomes crashed", start: ateapipb.Actor_STATUS_PAUSING, wantStatus: ateapipb.Actor_STATUS_CRASHED, wantOp: ateattr.OperationNamePause, wantMetric: true},
+		{name: "running becomes crashed", start: ateapipb.Actor_STATUS_RUNNING, wantStatus: ateapipb.Actor_STATUS_CRASHED, wantOp: ateattr.OperationUnknown, wantMetric: true},
+		{name: "resuming becomes crashed", start: ateapipb.Actor_STATUS_RESUMING, wantStatus: ateapipb.Actor_STATUS_CRASHED, wantOp: ateattr.OperationResume, wantMetric: true},
+		{name: "suspending becomes crashed", start: ateapipb.Actor_STATUS_SUSPENDING, wantStatus: ateapipb.Actor_STATUS_CRASHED, wantOp: ateattr.OperationSuspend, wantMetric: true},
+		{name: "pausing becomes crashed", start: ateapipb.Actor_STATUS_PAUSING, wantStatus: ateapipb.Actor_STATUS_CRASHED, wantOp: ateattr.OperationPause, wantMetric: true},
 		{name: "suspended stays suspended", start: ateapipb.Actor_STATUS_SUSPENDED, wantStatus: ateapipb.Actor_STATUS_SUSPENDED, wantMetric: false},
 	}
 

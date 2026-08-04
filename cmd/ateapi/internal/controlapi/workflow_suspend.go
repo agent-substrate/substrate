@@ -128,7 +128,7 @@ func (s *CallAteletSuspendStep) CheckPrerequisite(ctx context.Context, input *Su
 	}
 	if state.Actor.GetAteomPodNamespace() == "" || state.Actor.GetAteomPodName() == "" {
 		// Missing active worker pod reference in SUSPENDING state indicates corrupted store state.
-		if err := crashActor(ctx, s.store, input.ActorRef, ateattr.OperationNameSuspend, ateattr.ReasonCorruptedAssignment); err != nil {
+		if err := crashActor(ctx, s.store, input.ActorRef, ateattr.OperationSuspend, ateattr.ReasonCorruptedAssignment); err != nil {
 			slog.ErrorContext(ctx, "Failed to crash actor", slog.String("err", err.Error()))
 		}
 		return fmt.Errorf("actor is CRASHED because it was in SUSPENDING state but has no active worker")
@@ -140,7 +140,7 @@ func (s *CallAteletSuspendStep) Execute(ctx context.Context, input *SuspendInput
 	if err != nil {
 		if errors.Is(err, ErrWorkerPodNotFound) {
 			slog.ErrorContext(ctx, "Worker pod gone before checkpoint, crashing actor", "namespace", state.Actor.GetAteomPodNamespace(), "pod", state.Actor.GetAteomPodName(), "in_progress_snapshot", state.Actor.GetInProgressSnapshot())
-			if err := crashActor(ctx, s.store, input.ActorRef, ateattr.OperationNameSuspend, ateattr.ReasonWorkerPodGone); err != nil {
+			if err := crashActor(ctx, s.store, input.ActorRef, ateattr.OperationSuspend, ateattr.ReasonWorkerPodGone); err != nil {
 				slog.ErrorContext(ctx, "Failed to crash actor", slog.String("err", err.Error()))
 			}
 			return fmt.Errorf("actor is CRASHED because its worker pod is gone and no snapshot was written")
@@ -175,7 +175,7 @@ func (s *CallAteletSuspendStep) Execute(ctx context.Context, input *SuspendInput
 	}
 
 	_, err = client.Checkpoint(ctx, req)
-	return maybeCrashActor(ctx, s.store, input.ActorRef, err, "while checkpointing workload", ateattr.OperationNameSuspend)
+	return maybeCrashActor(ctx, s.store, input.ActorRef, err, "while checkpointing workload", ateattr.OperationSuspend)
 }
 
 func (s *CallAteletSuspendStep) RetryBackoff() *wait.Backoff { return nil }
@@ -196,7 +196,7 @@ func (s *DetachVolumesStep) CheckPrerequisite(ctx context.Context, input *Suspen
 }
 
 func (s *DetachVolumesStep) Execute(ctx context.Context, input *SuspendInput, state *SuspendState) error {
-	return detachActorVolumes(ctx, s.store, state.Actor, state.ActorTemplate, ateattr.OperationNameSuspend)
+	return detachActorVolumes(ctx, s.store, state.Actor, state.ActorTemplate, ateattr.OperationSuspend)
 }
 
 func (s *DetachVolumesStep) RetryBackoff() *wait.Backoff { return nil }

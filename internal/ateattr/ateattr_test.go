@@ -173,13 +173,13 @@ func TestActorMetricAttributes(t *testing.T) {
 	}
 
 	t.Run("explicit operation and reason", func(t *testing.T) {
-		got := toMap(ActorMetricAttributes(actor, "gvisor", OperationNameResume, ReasonCorruptedAssignment))
+		got := toMap(ActorMetricAttributes(actor, "gvisor", OperationResume, ReasonCorruptedAssignment))
 		want := map[attribute.Key]any{
 			TemplateNamespaceKey: "default",
 			TemplateNameKey:      "counter-template",
 			WorkerPoolNameKey:    "default-pool",
 			SandboxClassKey:      "gvisor",
-			OperationNameKey:     OperationNameResume,
+			OperationNameKey:     OperationResume,
 			FailureReasonKey:     ReasonCorruptedAssignment,
 		}
 
@@ -193,7 +193,7 @@ func TestActorMetricAttributes(t *testing.T) {
 			TemplateNameKey:      "counter-template",
 			WorkerPoolNameKey:    "default-pool",
 			SandboxClassKey:      "gvisor",
-			OperationNameKey:     OperationNameUnknown,
+			OperationNameKey:     OperationUnknown,
 			FailureReasonKey:     ReasonUnknown,
 		}
 
@@ -207,7 +207,7 @@ func TestActorMetricAttributes(t *testing.T) {
 			TemplateNameKey:      "counter-template",
 			WorkerPoolNameKey:    "default-pool",
 			SandboxClassKey:      "gvisor",
-			OperationNameKey:     OperationNameUnknown,
+			OperationNameKey:     OperationUnknown,
 			FailureReasonKey:     ReasonUnknown,
 		}
 
@@ -220,12 +220,14 @@ func TestNormalizeOperationName(t *testing.T) {
 		op   string
 		want string
 	}{
-		{OperationNameResume, OperationNameResume},
-		{OperationNameSuspend, OperationNameSuspend},
-		{OperationNamePause, OperationNamePause},
-		{"", OperationNameUnknown},
-		{"invalid", OperationNameUnknown},
-		{"crash", OperationNameUnknown},
+		{OperationCreate, OperationCreate},
+		{OperationResume, OperationResume},
+		{OperationSuspend, OperationSuspend},
+		{OperationPause, OperationPause},
+		{OperationDelete, OperationDelete},
+		{"", OperationUnknown},
+		{"invalid", OperationUnknown},
+		{"crash", OperationUnknown},
 	}
 	for _, tt := range tests {
 		if got := NormalizeOperationName(tt.op); got != tt.want {
@@ -233,3 +235,5 @@ func TestNormalizeOperationName(t *testing.T) {
 		}
 	}
 }
+
+

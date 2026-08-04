@@ -117,7 +117,7 @@ func (s *LoadActorForResumeStep) Execute(ctx context.Context, input *ResumeInput
 				slog.String("AteomPodName", actor.AteomPodName))
 
 			// Crash the actor if its worker assignment is corrupted. We should never be in this state.
-			if cerr := crashActor(ctx, s.store, input.ActorRef, ateattr.OperationNameResume, ateattr.ReasonCorruptedAssignment); cerr != nil {
+			if cerr := crashActor(ctx, s.store, input.ActorRef, ateattr.OperationResume, ateattr.ReasonCorruptedAssignment); cerr != nil {
 				return cerr
 			}
 			return status.Errorf(codes.Aborted, "actor %s crashed", input.ActorRef)
@@ -127,7 +127,7 @@ func (s *LoadActorForResumeStep) Execute(ctx context.Context, input *ResumeInput
 		if err != nil {
 			// Crash the actor if it was assigned to a deleted pod.
 			if errors.Is(err, store.ErrNotFound) {
-				if cerr := crashActor(ctx, s.store, input.ActorRef, ateattr.OperationNameResume, ateattr.ReasonWorkerPodGone); cerr != nil {
+				if cerr := crashActor(ctx, s.store, input.ActorRef, ateattr.OperationResume, ateattr.ReasonWorkerPodGone); cerr != nil {
 					return cerr
 				}
 				return status.Errorf(codes.Aborted, "actor %s crashed", input.ActorRef)
@@ -138,7 +138,7 @@ func (s *LoadActorForResumeStep) Execute(ctx context.Context, input *ResumeInput
 			slog.InfoContext(ctx, "Assigned worker is draining; crashing actor",
 				slog.String("actor", input.ActorRef.String()),
 				slog.String("worker", wk.GetWorkerNamespace()+"/"+wk.GetWorkerPod()))
-			if cerr := crashActor(ctx, s.store, input.ActorRef, ateattr.OperationNameResume, ateattr.ReasonWorkerReassigned); cerr != nil {
+			if cerr := crashActor(ctx, s.store, input.ActorRef, ateattr.OperationResume, ateattr.ReasonWorkerReassigned); cerr != nil {
 
 				return cerr
 			}
@@ -421,7 +421,7 @@ func (s *CallAteletRestoreStep) CheckPrerequisite(ctx context.Context, input *Re
 		slog.ErrorContext(ctx, "crashing actor because its assigned worker no longer belongs to it",
 			slog.String("worker", state.Worker.GetWorkerPod()),
 			slog.Any("assignment", state.Worker.GetAssignment()))
-		if cerr := crashActor(ctx, s.store, input.ActorRef, ateattr.OperationNameResume, ateattr.ReasonWorkerReassigned); cerr != nil {
+		if cerr := crashActor(ctx, s.store, input.ActorRef, ateattr.OperationResume, ateattr.ReasonWorkerReassigned); cerr != nil {
 			return fmt.Errorf("while crashing actor: %w", cerr)
 		}
 		return status.Errorf(codes.Aborted, "actor %s crashed", input.ActorRef)
@@ -441,7 +441,7 @@ func (s *CallAteletRestoreStep) CheckPrerequisite(ctx context.Context, input *Re
 		if err := s.store.UpdateWorker(ctx, release, release.Version); err != nil {
 			return fmt.Errorf("while releasing stale worker assignment: %w", err)
 		}
-		if cerr := crashActor(ctx, s.store, input.ActorRef, ateattr.OperationNameResume, ateattr.ReasonCorruptedAssignment); cerr != nil {
+		if cerr := crashActor(ctx, s.store, input.ActorRef, ateattr.OperationResume, ateattr.ReasonCorruptedAssignment); cerr != nil {
 			return fmt.Errorf("while crashing actor: %w", cerr)
 		}
 		return status.Errorf(codes.Aborted, "actor %s crashed", input.ActorRef)
@@ -479,7 +479,7 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 		req.Scope = toAteletSnapshotScope(state.ActorTemplate.Spec.SnapshotsConfig.OnPause)
 
 		_, err = client.Restore(ctx, req)
-		return maybeCrashActor(ctx, s.store, input.ActorRef, err, "while restoring workload", ateattr.OperationNameResume)
+		return maybeCrashActor(ctx, s.store, input.ActorRef, err, "while restoring workload", ateattr.OperationResume)
 	} else if state.SnapshotLocation != "" {
 		slog.InfoContext(ctx, "Actor has durable snapshot; Restoring from snapshot")
 
@@ -500,7 +500,7 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 			ActorUid: state.Actor.GetMetadata().Uid,
 		}
 		_, err = client.Restore(ctx, req)
-		return maybeCrashActor(ctx, s.store, input.ActorRef, err, "while restoring durable snapshot", ateattr.OperationNameResume)
+		return maybeCrashActor(ctx, s.store, input.ActorRef, err, "while restoring durable snapshot", ateattr.OperationResume)
 
 	} else {
 		slog.InfoContext(ctx, "Actor has no snapshot; ActorTemplate has no golden snapshot; Booting from ActorTemplate spec")
@@ -524,7 +524,7 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 			ActorUid:               state.Actor.GetMetadata().Uid,
 		}
 		_, err = client.Run(ctx, req)
-		return maybeCrashActor(ctx, s.store, input.ActorRef, err, "while creating workload from spec", ateattr.OperationNameResume)
+		return maybeCrashActor(ctx, s.store, input.ActorRef, err, "while creating workload from spec", ateattr.OperationResume)
 	}
 	// Unreachable
 }

@@ -19,6 +19,8 @@
 package ateattr
 
 import (
+	"slices"
+
 	"go.opentelemetry.io/otel/attribute"
 
 	"github.com/agent-substrate/substrate/internal/ateerrors"
@@ -91,21 +93,30 @@ const (
 
 // Values for OperationNameKey representing actor lifecycle operations.
 const (
-	OperationNameResume  = "resume"
-	OperationNameSuspend = "suspend"
-	OperationNamePause   = "pause"
-	OperationNameUnknown = "unknown"
+	OperationCreate  = "create"
+	OperationResume  = "resume"
+	OperationSuspend = "suspend"
+	OperationPause   = "pause"
+	OperationDelete  = "delete"
+	OperationUnknown = "unknown"
 )
 
-// NormalizeOperationName ensures op is one of the bounded lifecycle operations
-// {resume, suspend, pause, unknown}. Any other value maps to OperationNameUnknown.
+// AllOperations lists all registered bounded actor lifecycle operations.
+var AllOperations = []string{
+	OperationCreate,
+	OperationResume,
+	OperationSuspend,
+	OperationPause,
+	OperationDelete,
+}
+
+// NormalizeOperationName ensures op is one of the bounded lifecycle operations.
+// Any unlisted or empty operation maps to OperationUnknown.
 func NormalizeOperationName(op string) string {
-	switch op {
-	case OperationNameResume, OperationNameSuspend, OperationNamePause:
+	if slices.Contains(AllOperations, op) {
 		return op
-	default:
-		return OperationNameUnknown
 	}
+	return OperationUnknown
 }
 
 // ActorRefAttributes returns the subset knowable before the Actor record

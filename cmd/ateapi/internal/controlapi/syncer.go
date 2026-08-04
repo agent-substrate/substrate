@@ -309,14 +309,14 @@ func (s *WorkerPoolSyncer) releaseActorOnDeadWorker(ctx context.Context, namespa
 	if actor.Status == ateapipb.Actor_STATUS_SUSPENDED {
 		return nil
 	}
-	opName := ateattr.OperationNameUnknown
-	switch actor.Status {
+	opName := ateattr.OperationUnknown
+	switch actor.GetStatus() {
 	case ateapipb.Actor_STATUS_RESUMING:
-		opName = ateattr.OperationNameResume
+		opName = ateattr.OperationResume
 	case ateapipb.Actor_STATUS_SUSPENDING:
-		opName = ateattr.OperationNameSuspend
+		opName = ateattr.OperationSuspend
 	case ateapipb.Actor_STATUS_PAUSING:
-		opName = ateattr.OperationNamePause
+		opName = ateattr.OperationPause
 	}
 
 	wasAlreadyCrashed := actor.GetStatus() == ateapipb.Actor_STATUS_CRASHED
