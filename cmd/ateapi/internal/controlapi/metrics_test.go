@@ -279,28 +279,32 @@ func TestSchedulerAssignmentShapeAndOutcomes(t *testing.T) {
 		name          string
 		outcome       string
 		pool          string
+		class         string
 		err           error
 		wantKeys      []attribute.Key
 		wantErrorType string
 	}{
 		{
-			name:     "assigned stamps pool, no error.type",
+			name:     "assigned stamps pool and class, no error.type",
 			outcome:  ateattr.SchedulerOutcomeAssigned,
 			pool:     "pool-a",
+			class:    "gvisor",
 			err:      nil,
-			wantKeys: []attribute.Key{ateattr.SchedulerOutcomeKey, ateattr.WorkerPoolNameKey},
+			wantKeys: []attribute.Key{ateattr.SchedulerOutcomeKey, ateattr.WorkerPoolNameKey, ateattr.SandboxClassKey},
 		},
 		{
-			name:     "no_free_worker carries neither pool nor error.type",
+			name:     "no_free_worker carries class but neither pool nor error.type",
 			outcome:  ateattr.SchedulerOutcomeNoFreeWorker,
 			pool:     "",
+			class:    "gvisor",
 			err:      status.Error(codes.FailedPrecondition, "no free workers available"),
-			wantKeys: []attribute.Key{ateattr.SchedulerOutcomeKey},
+			wantKeys: []attribute.Key{ateattr.SchedulerOutcomeKey, ateattr.SandboxClassKey},
 		},
 		{
-			name:          "error carries error.type, no pool",
+			name:          "error carries error.type, no pool, class omitted when unknown",
 			outcome:       ateattr.SchedulerOutcomeError,
 			pool:          "",
+			class:         "",
 			err:           status.Error(codes.Internal, "boom"),
 			wantKeys:      []attribute.Key{ateattr.SchedulerOutcomeKey, ateattr.ErrorTypeKey},
 			wantErrorType: "Internal",
@@ -309,7 +313,7 @@ func TestSchedulerAssignmentShapeAndOutcomes(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			inst, reader := newTestInstruments(t)
-			inst.recordSchedulerAssignment(context.Background(), time.Now(), tt.outcome, tt.pool, tt.err)
+			inst.recordSchedulerAssignment(context.Background(), time.Now(), tt.outcome, tt.pool, tt.class, tt.err)
 
 			dp := singleHistogramDP(t, reader, schedulerAssignmentMetric)
 			assertAttrKeys(t, dp, tt.wantKeys...)

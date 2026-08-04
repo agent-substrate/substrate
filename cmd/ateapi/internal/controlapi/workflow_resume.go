@@ -118,7 +118,6 @@ func (s *LoadActorForResumeStep) Execute(ctx context.Context, input *ResumeInput
 		}
 		state.SnapshotLocation = location
 		state.SnapshotScope = snapshot.GetContentScope()
-		state.SnapshotKind = ateattr.SnapshotKindLatest
 	} else if actorTemplate.Status.GoldenSnapshot != "" && !input.Boot {
 		snapshot, location, err := s.store.GetActorSnapshot(ctx, resources.GoldenActorAtespace, actorTemplate.Status.GoldenSnapshot)
 		if errors.Is(err, store.ErrNotFound) {
@@ -132,7 +131,6 @@ func (s *LoadActorForResumeStep) Execute(ctx context.Context, input *ResumeInput
 		}
 		state.SnapshotLocation = location
 		state.SnapshotScope = snapshot.GetContentScope()
-		state.SnapshotKind = ateattr.SnapshotKindGolden
 	}
 
 	// The template's onResume configuration selects the boot source for the
@@ -294,9 +292,13 @@ func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, stat
 	start := time.Now()
 	outcome := ateattr.SchedulerOutcomeError
 	pool := ""
+	class := ""
+	if state.ActorTemplate != nil {
+		class = string(state.ActorTemplate.Spec.SandboxClass)
+	}
 	defer func() {
 		if schedulerRecordable(err) {
-			s.instruments.recordSchedulerAssignment(ctx, start, outcome, pool, err)
+			s.instruments.recordSchedulerAssignment(ctx, start, outcome, pool, class, err)
 		}
 	}()
 
@@ -543,7 +545,7 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 
 	if local := state.Actor.GetLocalSnapshotInfo(); local != nil {
 		slog.InfoContext(ctx, "Actor has snapshot; Restoring from snapshot")
-		state.SnapshotKind = ateattr.SnapshotKindLatest
+		state.SnapshotKind = ateattr.SnapshotKindLocal
 
 		req := &ateletpb.RestoreRequest{
 			TargetAteomUid:         state.Actor.GetAteomPodUid(),
@@ -574,6 +576,12 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 		return maybeCrashActor(ctx, s.store, input.ActorRef, err, "while restoring workload")
 	} else if state.SnapshotLocation != "" {
 		slog.InfoContext(ctx, "Actor has durable snapshot; Restoring from snapshot")
+		// Mirrors LoadActorForResume's source resolution: the durable location
+		// is the actor's own snapshot when one exists, the golden otherwise.
+		state.SnapshotKind = ateattr.SnapshotKindGolden
+		if state.Actor.GetLatestSnapshot() != nil {
+			state.SnapshotKind = ateattr.SnapshotKindLatest
+		}
 
 		// Same wire-scope derivation as the local branch above: the snapshot
 		// restores as DATA_ON_GOLDEN when the golden location was resolved

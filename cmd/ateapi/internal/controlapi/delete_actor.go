@@ -21,6 +21,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.opentelemetry.io/otel/attribute"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
@@ -29,9 +30,17 @@ func (s *Service) DeleteActor(ctx context.Context, req *ateapipb.DeleteActorRequ
 		return nil, toGRPCStatusError(errs)
 	}
 	start := time.Now()
-	// No template dims: a delete request names only the actor.
+	// Template dims only once the record resolved: the request names only the
+	// actor, so failures before the load carry none.
 	defer func() {
-		s.instruments.recordLifecycleOp(ctx, ateattr.OperationDelete, start, err)
+		var attrs []attribute.KeyValue
+		if deleted != nil {
+			attrs = append(attrs,
+				ateattr.TemplateNameKey.String(deleted.GetActorTemplateName()),
+				ateattr.TemplateNamespaceKey.String(deleted.GetActorTemplateNamespace()),
+			)
+		}
+		s.instruments.recordLifecycleOp(ctx, ateattr.OperationDelete, start, err, attrs...)
 	}()
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
 	setSpanActorRefAttributes(ctx, actorRef)

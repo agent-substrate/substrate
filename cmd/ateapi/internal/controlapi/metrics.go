@@ -103,8 +103,8 @@ type Instruments struct {
 }
 
 // NewInstruments builds the two histograms against meter. Assignment buckets are
-// an order of magnitude finer than lifecycle's: it is a sub-second in-memory pick,
-// not a multi-second restore.
+// finer than lifecycle's (a cache pick plus a few store writes, not a
+// multi-second restore) but reach 5s so store latency spikes stay measurable.
 func NewInstruments(meter metric.Meter) (*Instruments, error) {
 	lifecycleOpDuration, err := meter.Float64Histogram(
 		lifecycleOpDurationMetric,
@@ -120,7 +120,7 @@ func NewInstruments(meter metric.Meter) (*Instruments, error) {
 		schedulerAssignmentMetric,
 		metric.WithUnit("s"),
 		metric.WithDescription("Duration of the scheduler's worker-assignment step during actor resume."),
-		metric.WithExplicitBucketBoundaries(0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1),
+		metric.WithExplicitBucketBoundaries(0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("create %s histogram: %w", schedulerAssignmentMetric, err)
@@ -170,17 +170,22 @@ func lifecycleOpAttrs(actor *ateapipb.Actor, template *atev1alpha1.ActorTemplate
 	return attrs
 }
 
-// recordSchedulerAssignment records one assignment attempt. pool is stamped only
+// recordSchedulerAssignment records one assignment attempt. pool is set only
 // when a worker was assigned and error.type only for the Error outcome, so
-// no_free_worker (a capacity signal, not a failure) carries neither.
-func (i *Instruments) recordSchedulerAssignment(ctx context.Context, start time.Time, outcome, pool string, err error) {
+// no_free_worker (a capacity signal, not a failure) carries neither. class is
+// set on every outcome it is known for, so no_free_worker names the capacity
+// that ran out and stays comparable with assigned.
+func (i *Instruments) recordSchedulerAssignment(ctx context.Context, start time.Time, outcome, pool, class string, err error) {
 	if i == nil || i.schedulerAssignmentDuration == nil {
 		return
 	}
-	attrs := make([]attribute.KeyValue, 0, 3)
+	attrs := make([]attribute.KeyValue, 0, 4)
 	attrs = append(attrs, ateattr.SchedulerOutcomeKey.String(outcome))
 	if pool != "" {
 		attrs = append(attrs, ateattr.WorkerPoolNameKey.String(pool))
+	}
+	if class != "" {
+		attrs = append(attrs, ateattr.SandboxClassKey.String(class))
 	}
 	if outcome == ateattr.SchedulerOutcomeError && err != nil {
 		attrs = append(attrs, ateattr.ErrorTypeKey.String(status.Code(err).String()))

@@ -187,6 +187,7 @@ func TestMetricLabelValues(t *testing.T) {
 		{SchedulerOutcomeError, "error"},
 		{SnapshotKindGolden, "golden"},
 		{SnapshotKindLatest, "latest"},
+		{SnapshotKindLocal, "local"},
 		{SnapshotKindBoot, "boot"},
 	}
 	for _, tt := range tests {

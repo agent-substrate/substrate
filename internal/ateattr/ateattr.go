@@ -105,13 +105,14 @@ const (
 	SchedulerOutcomeError        = "error"
 )
 
-// Values for SnapshotKindKey, stamped by ateapi from its own resume branching, so
-// the label is bounded at the producer: Latest restores the actor's most recent
-// snapshot, Golden restores the template's golden image, Boot is a from-scratch
-// start (not a restore).
+// Values for SnapshotKindKey, set by ateapi from its own resume branching, so
+// the label is bounded at the producer: Local restores an in-node snapshot,
+// Latest pulls the actor's durable snapshot from object storage, Golden pulls the
+// template's golden image, Boot is a from-scratch start (not a restore).
 const (
 	SnapshotKindGolden = "golden"
 	SnapshotKindLatest = "latest"
+	SnapshotKindLocal  = "local"
 	SnapshotKindBoot   = "boot"
 )
 
