@@ -30,7 +30,9 @@ data:
       tracing:
         host: $AGENTGATEWAY_OTLP_ADDRESS
         protocol: grpc
-        randomSampling: true
+        # Matches the router's dataPlaneTraceRatio; static config, so a router
+        # OTEL_TRACES_SAMPLER override must adjust it in step.
+        randomSampling: 0.01
 
     gateways:
       http:

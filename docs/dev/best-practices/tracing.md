@@ -66,6 +66,8 @@ All defaults are `ParentBased`, so a request that arrives already sampled stays 
 
 An invalid sampler name or ratio arg keeps the component default and logs a warning. This deliberately diverges from the OTel SDK's own env handling, which falls back to 100% sampling on invalid input.
 
+In agentgateway mode the data plane root fraction lives in the agentgateway ConfigMap (`randomSampling`, same 0.01 default). Unlike Envoy's `RandomSampling`, it is static config that env overrides on the router do not reach, so adjust both together.
+
 These are head sampling ratios that bound what leaves the process. Keep decisions based on request outcome (errors, latency) belong in a collector pipeline, not in substrate binaries.
 
 ### Disabling tracing (perf/load tests)
