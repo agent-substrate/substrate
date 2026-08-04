@@ -64,7 +64,7 @@ Samplers are resolved with `serverboot.ResolveTraceSampling`, which applies the 
 
 All defaults are `ParentBased`, so a request that arrives already sampled stays sampled on every hop, and one that arrives explicitly unsampled stays unsampled. Only parentless requests are subject to the ratio, at whichever component roots the trace.
 
-An invalid sampler name or ratio arg keeps the component default and logs a warning. This deliberately diverges from the OTel SDK's own env handling, which falls back to 100% sampling on invalid input.
+An invalid sampler name, or a missing or unparsable ratio arg, keeps the component default and logs a warning. This deliberately diverges from the OTel SDK's own env handling, which falls back to 100% sampling on invalid input and reads a missing arg as ratio 1.0.
 
 In agentgateway mode the data plane root fraction lives in the agentgateway ConfigMap (`randomSampling`, same 0.01 default). Unlike Envoy's `RandomSampling`, it is static config that env overrides on the router do not reach, so adjust both together.
 

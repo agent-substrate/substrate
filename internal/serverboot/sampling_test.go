@@ -119,12 +119,24 @@ func TestResolveTraceSampling(t *testing.T) {
 			wantPercent: 50,
 		},
 		{
-			name:        "ratio without arg is the spec's 1.0",
+			name:        "ratio without arg keeps default",
 			sampler:     "parentbased_traceidratio",
 			samplerSet:  true,
 			def:         def,
-			want:        sdktrace.ParentBased(sdktrace.TraceIDRatioBased(1)),
-			wantPercent: 100,
+			want:        def.Sampler(),
+			wantPercent: testDefaultRatio * 100,
+			wantErr:     true,
+		},
+		{
+			name:        "ratio with empty arg keeps default",
+			sampler:     "traceidratio",
+			samplerSet:  true,
+			arg:         "  ",
+			argSet:      true,
+			def:         def,
+			want:        def.Sampler(),
+			wantPercent: testDefaultRatio * 100,
+			wantErr:     true,
 		},
 		{
 			name:        "unknown sampler keeps default",
@@ -200,6 +212,17 @@ func TestResolveTraceSamplingReadsEnv(t *testing.T) {
 	got = ResolveTraceSampling(context.Background(), def)
 	if got.Sampler().Description() != def.Sampler().Description() {
 		t.Errorf("sampler = %s, want the default %s", got.Sampler().Description(), def.Sampler().Description())
+	}
+}
+
+func TestResolveTraceSamplingZeroValueDefault(t *testing.T) {
+	t.Setenv("OTEL_TRACES_SAMPLER", "not_a_sampler")
+	got := ResolveTraceSampling(context.Background(), TraceSampling{})
+	if got.Sampler() != nil {
+		t.Errorf("Sampler() = %v, want nil from a zero-value default", got.Sampler())
+	}
+	if got.RootSamplingPercent() != 0 {
+		t.Errorf("RootSamplingPercent() = %v, want 0", got.RootSamplingPercent())
 	}
 }
 

@@ -67,6 +67,7 @@ func ParentNeverSampling() TraceSampling {
 // top of the component default. serverboot resolves the env itself because an
 // explicit WithSampler silences the SDK's env handling, and the SDK falls open
 // to 100% sampling on invalid values where this keeps the default and logs.
+// That includes a ratio sampler without an arg, which the spec reads as 1.0.
 func ResolveTraceSampling(ctx context.Context, def TraceSampling) TraceSampling {
 	name, nameSet := os.LookupEnv(tracesSamplerEnv)
 	arg, argSet := os.LookupEnv(tracesSamplerArgEnv)
@@ -75,15 +76,17 @@ func ResolveTraceSampling(ctx context.Context, def TraceSampling) TraceSampling 
 		slog.WarnContext(ctx, "Invalid trace sampler environment, keeping the component default",
 			slog.String("sampler", name),
 			slog.String("arg", arg),
-			slog.String("default", def.sampler.Description()),
+			slog.String("default", def.description()),
 			slog.Any("err", err))
-		return resolved
-	}
-	if isRatioSampler(name) && strings.TrimSpace(arg) == "" {
-		slog.WarnContext(ctx, "Trace sampler ratio arg is unset, the OTel spec default is 1.0 (sample everything)",
-			slog.String("sampler", name))
 	}
 	return resolved
+}
+
+func (s TraceSampling) description() string {
+	if s.sampler == nil {
+		return "<unset>"
+	}
+	return s.sampler.Description()
 }
 
 func isRatioSampler(name string) bool {
@@ -107,9 +110,13 @@ func resolveTraceSampling(name string, nameSet bool, arg string, argSet bool, de
 		return def, nil
 	}
 
-	ratio := 1.0
-	if isRatioSampler(name) && argSet && strings.TrimSpace(arg) != "" {
-		parsed, err := strconv.ParseFloat(strings.TrimSpace(arg), 64)
+	var ratio float64
+	if isRatioSampler(name) {
+		trimmed := strings.TrimSpace(arg)
+		if !argSet || trimmed == "" {
+			return def, fmt.Errorf("%s %q requires %s to be a ratio in [0, 1]", tracesSamplerEnv, name, tracesSamplerArgEnv)
+		}
+		parsed, err := strconv.ParseFloat(trimmed, 64)
 		if err != nil {
 			return def, fmt.Errorf("parse %s %q: %w", tracesSamplerArgEnv, arg, err)
 		}
