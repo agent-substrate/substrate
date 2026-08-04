@@ -2543,6 +2543,7 @@ type Assignment struct {
 	state         protoimpl.MessageState   `protogen:"open.v1"`
 	ActorTemplate *KubeNamespacedObjectRef `protobuf:"bytes,1,opt,name=actor_template,json=actorTemplate,proto3" json:"actor_template,omitempty"`
 	Actor         *ObjectRef               `protobuf:"bytes,2,opt,name=actor,proto3" json:"actor,omitempty"`
+	ActorUid      string                   `protobuf:"bytes,3,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2589,6 +2590,13 @@ func (x *Assignment) GetActor() *ObjectRef {
 		return x.Actor
 	}
 	return nil
+}
+
+func (x *Assignment) GetActorUid() string {
+	if x != nil {
+		return x.ActorUid
+	}
+	return ""
 }
 
 type KubeNamespacedObjectRef struct {
@@ -3147,11 +3155,12 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x05State\x12\x15\n" +
 	"\x11STATE_UNSPECIFIED\x10\x00\x12\x10\n" +
 	"\fSTATE_ACTIVE\x10\x01\x12\x12\n" +
-	"\x0eSTATE_DRAINING\x10\x02\"}\n" +
+	"\x0eSTATE_DRAINING\x10\x02\"\x9a\x01\n" +
 	"\n" +
 	"Assignment\x12F\n" +
 	"\x0eactor_template\x18\x01 \x01(\v2\x1f.ateapi.KubeNamespacedObjectRefR\ractorTemplate\x12'\n" +
-	"\x05actor\x18\x02 \x01(\v2\x11.ateapi.ObjectRefR\x05actor\"K\n" +
+	"\x05actor\x18\x02 \x01(\v2\x11.ateapi.ObjectRefR\x05actor\x12\x1b\n" +
+	"\tactor_uid\x18\x03 \x01(\tR\bactorUid\"K\n" +
 	"\x17KubeNamespacedObjectRef\x12\x1c\n" +
 	"\tnamespace\x18\x01 \x01(\tR\tnamespace\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\"\x13\n" +
