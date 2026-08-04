@@ -2708,9 +2708,9 @@ func (*DebugClearResponse) Descriptor() ([]byte, []int) {
 type MintJWTRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Audience      []string               `protobuf:"bytes,1,rep,name=audience,proto3" json:"audience,omitempty"`
-	AppId         string                 `protobuf:"bytes,2,opt,name=app_id,json=appId,proto3" json:"app_id,omitempty"`
-	UserId        string                 `protobuf:"bytes,3,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
-	ActorId       string                 `protobuf:"bytes,4,opt,name=actor_id,json=actorId,proto3" json:"actor_id,omitempty"`
+	Atespace      string                 `protobuf:"bytes,2,opt,name=atespace,proto3" json:"atespace,omitempty"`
+	ActorName     string                 `protobuf:"bytes,3,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
+	ActorUid      string                 `protobuf:"bytes,4,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2752,27 +2752,29 @@ func (x *MintJWTRequest) GetAudience() []string {
 	return nil
 }
 
-func (x *MintJWTRequest) GetAppId() string {
+func (x *MintJWTRequest) GetAtespace() string {
 	if x != nil {
-		return x.AppId
+		return x.Atespace
 	}
 	return ""
 }
 
-func (x *MintJWTRequest) GetUserId() string {
+func (x *MintJWTRequest) GetActorName() string {
 	if x != nil {
-		return x.UserId
+		return x.ActorName
 	}
 	return ""
 }
 
-func (x *MintJWTRequest) GetActorId() string {
+func (x *MintJWTRequest) GetActorUid() string {
 	if x != nil {
-		return x.ActorId
+		return x.ActorUid
 	}
 	return ""
 }
 
+// TODO: check why k8s do ":" and not "/" as a seprator for the Subject format
+// TODO: whats the right format for the subject? kubernetes follow "system:serviceaccount:<namespace>:<name>".
 type MintJWTResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Actor JWT.  An OIDC Discovery-compatible JWT
@@ -2785,16 +2787,15 @@ type MintJWTResponse struct {
 	//
 	// credential. Format
 	//
-	//	`app/${appid}/user/${userid}/actor/${actorid}`.
+	//	`atespaces:${atespace}:actors:${actorname}`.
 	//   - aud: Audience - a string identifying the service this token will be used
 	//     to authenticate to.
 	//   - nbf: Not Before - a numeric unix timestamp
 	//   - exp: Expiration - a numeric unix timestamp
 	//   - iat: Issued At - a numeric unix timestamp
 	//   - `ate.dev`: Ate/Substrate Extension - JSON object
-	//   - appID: (string) The Substrate App ID
-	//   - userID: (string) The Substrate User ID
-	//   - actorID: (string) The Substrate Actor ID
+	//   - atespace: (string) The atespace the actor belongs to
+	//   - actorName: (string) The actor's name, unique within its atespace
 	ActorJwt      string `protobuf:"bytes,1,opt,name=actor_jwt,json=actorJwt,proto3" json:"actor_jwt,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -2838,10 +2839,10 @@ func (x *MintJWTResponse) GetActorJwt() string {
 }
 
 type MintCertRequest struct {
-	state   protoimpl.MessageState `protogen:"open.v1"`
-	AppId   string                 `protobuf:"bytes,1,opt,name=app_id,json=appId,proto3" json:"app_id,omitempty"`
-	UserId  string                 `protobuf:"bytes,2,opt,name=user_id,json=userId,proto3" json:"user_id,omitempty"`
-	ActorId string                 `protobuf:"bytes,3,opt,name=actor_id,json=actorId,proto3" json:"actor_id,omitempty"`
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	Atespace  string                 `protobuf:"bytes,1,opt,name=atespace,proto3" json:"atespace,omitempty"`
+	ActorName string                 `protobuf:"bytes,2,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
+	ActorUid  string                 `protobuf:"bytes,3,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
 	// Request contains DER encoded bytes of a x509 certificate signing request.
 	// The signer will ignore the contents of the CSR except to extract the
 	// subject public key.
@@ -2880,23 +2881,23 @@ func (*MintCertRequest) Descriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{43}
 }
 
-func (x *MintCertRequest) GetAppId() string {
+func (x *MintCertRequest) GetAtespace() string {
 	if x != nil {
-		return x.AppId
+		return x.Atespace
 	}
 	return ""
 }
 
-func (x *MintCertRequest) GetUserId() string {
+func (x *MintCertRequest) GetActorName() string {
 	if x != nil {
-		return x.UserId
+		return x.ActorName
 	}
 	return ""
 }
 
-func (x *MintCertRequest) GetActorId() string {
+func (x *MintCertRequest) GetActorUid() string {
 	if x != nil {
-		return x.ActorId
+		return x.ActorUid
 	}
 	return ""
 }
@@ -3143,18 +3144,20 @@ const file_ateapi_proto_rawDesc = "" +
 	"\tnamespace\x18\x01 \x01(\tR\tnamespace\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\"\x13\n" +
 	"\x11DebugClearRequest\"\x14\n" +
-	"\x12DebugClearResponse\"w\n" +
+	"\x12DebugClearResponse\"\x84\x01\n" +
 	"\x0eMintJWTRequest\x12\x1a\n" +
-	"\baudience\x18\x01 \x03(\tR\baudience\x12\x15\n" +
-	"\x06app_id\x18\x02 \x01(\tR\x05appId\x12\x17\n" +
-	"\auser_id\x18\x03 \x01(\tR\x06userId\x12\x19\n" +
-	"\bactor_id\x18\x04 \x01(\tR\aactorId\".\n" +
+	"\baudience\x18\x01 \x03(\tR\baudience\x12\x1a\n" +
+	"\batespace\x18\x02 \x01(\tR\batespace\x12\x1d\n" +
+	"\n" +
+	"actor_name\x18\x03 \x01(\tR\tactorName\x12\x1b\n" +
+	"\tactor_uid\x18\x04 \x01(\tR\bactorUid\".\n" +
 	"\x0fMintJWTResponse\x12\x1b\n" +
-	"\tactor_jwt\x18\x01 \x01(\tR\bactorJwt\"\x9c\x01\n" +
-	"\x0fMintCertRequest\x12\x15\n" +
-	"\x06app_id\x18\x01 \x01(\tR\x05appId\x12\x17\n" +
-	"\auser_id\x18\x02 \x01(\tR\x06userId\x12\x19\n" +
-	"\bactor_id\x18\x03 \x01(\tR\aactorId\x12>\n" +
+	"\tactor_jwt\x18\x01 \x01(\tR\bactorJwt\"\xa9\x01\n" +
+	"\x0fMintCertRequest\x12\x1a\n" +
+	"\batespace\x18\x01 \x01(\tR\batespace\x12\x1d\n" +
+	"\n" +
+	"actor_name\x18\x02 \x01(\tR\tactorName\x12\x1b\n" +
+	"\tactor_uid\x18\x03 \x01(\tR\bactorUid\x12>\n" +
 	"\x1bcertificate_signing_request\x18\x04 \x01(\fR\x19certificateSigningRequest\"A\n" +
 	"\x10MintCertResponse\x12-\n" +
 	"\x12actor_certificates\x18\x01 \x03(\fR\x11actorCertificates*\x80\x01\n" +

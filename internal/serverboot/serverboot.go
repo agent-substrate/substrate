@@ -52,8 +52,31 @@ func InitLogger() {
 // one synchronized writer between the runtime logger and a separate writer (e.g.
 // ateom's actor-log forwarder) so their lines don't interleave.
 func InitLoggerWithWriter(w io.Writer) {
-	slog.SetDefault(slog.New(contextlogging.NewHandler(slog.NewJSONHandler(w, nil))))
+	slog.SetDefault(slog.New(contextlogging.NewHandler(slog.NewJSONHandler(w, &slog.HandlerOptions{Level: &logLevel}))))
 }
+
+// logLevel is the dynamic minimum level behind the serverboot loggers.
+// A LevelVar so SetLogLevel works before or after InitLogger.
+var logLevel slog.LevelVar
+
+// SetLogLevel sets the minimum level of the serverboot loggers from a flag
+// value: "debug", "info", "warn", or "error" (case-insensitive). Empty
+// means unset and leaves the current level unchanged, so configs that
+// never populate the field keep the default.
+func SetLogLevel(level string) error {
+	if level == "" {
+		return nil
+	}
+	if err := logLevel.UnmarshalText([]byte(level)); err != nil {
+		return fmt.Errorf("invalid log level %q (want debug, info, warn, or error): %w", level, err)
+	}
+	return nil
+}
+
+// LogLevel exposes the level behind the serverboot loggers, for binaries
+// that build their own handler but should still honor --log-level. A
+// Leveler (not the LevelVar) so SetLogLevel stays the only mutation path.
+func LogLevel() slog.Leveler { return &logLevel }
 
 // serviceInstanceID is generated once so the tracer and meter resources share it.
 var serviceInstanceID = uuid.NewString()
@@ -84,9 +107,10 @@ func newResource(ctx context.Context, serviceName string) (*resource.Resource, e
 type TracingOptions struct {
 	// ServiceName is required; populates resource.semconv ServiceName.
 	ServiceName string
-	// Sampler is required. ateapi typically uses ParentBased(AlwaysSample);
-	// atelet/ateom-gvisor use ParentBased(NeverSample).
-	Sampler sdktrace.Sampler
+	// Sampling is required. Build it with ResolveTraceSampling so
+	// OTEL_TRACES_SAMPLER / OTEL_TRACES_SAMPLER_ARG override the component
+	// default.
+	Sampling TraceSampling
 }
 
 // InitTracing registers a global TracerProvider with the given options
@@ -95,14 +119,24 @@ func InitTracing(ctx context.Context, opts TracingOptions) (*sdktrace.TracerProv
 	if opts.ServiceName == "" {
 		return nil, fmt.Errorf("TracingOptions.ServiceName is required")
 	}
+	if opts.Sampling.sampler == nil {
+		return nil, fmt.Errorf("TracingOptions.Sampling is required")
+	}
 	res, err := newResource(ctx, opts.ServiceName)
 	if err != nil {
 		return nil, fmt.Errorf("create tracer resource: %w", err)
 	}
 
+	// The SDK's default handler writes to stderr, bypassing the JSON logs.
+	// Registered before NewTracerProvider so its env parsing complaints land
+	// in slog too.
+	otel.SetErrorHandler(otel.ErrorHandlerFunc(func(err error) {
+		slog.Warn("OpenTelemetry SDK error", slog.Any("err", err))
+	}))
+
 	tpOpts := []sdktrace.TracerProviderOption{
 		sdktrace.WithResource(res),
-		sdktrace.WithSampler(opts.Sampler),
+		sdktrace.WithSampler(opts.Sampling.Sampler()),
 	}
 	exporter, err := otlptracegrpc.New(ctx,
 		// GKE managed traces doesn't support validating the TLS certs of the collector.
@@ -116,6 +150,7 @@ func InitTracing(ctx context.Context, opts TracingOptions) (*sdktrace.TracerProv
 	tp := sdktrace.NewTracerProvider(tpOpts...)
 	otel.SetTracerProvider(tp)
 	otel.SetTextMapPropagator(propagation.TraceContext{})
+	slog.InfoContext(ctx, "Tracing initialized", slog.String("sampler", opts.Sampling.Sampler().Description()))
 	return tp, nil
 }
 

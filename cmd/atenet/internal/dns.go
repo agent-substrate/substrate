@@ -20,10 +20,10 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/spf13/cobra"
 	"k8s.io/client-go/tools/clientcmd"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -49,18 +49,10 @@ func NewDnsCmd() *cobra.Command {
 			ctx, cancel := context.WithCancel(cmd.Context())
 			defer cancel()
 
-			var level slog.Level
-			switch strings.ToLower(cfg.LogLevel) {
-			case "debug":
-				level = slog.LevelDebug
-			case "warn":
-				level = slog.LevelWarn
-			case "error":
-				level = slog.LevelError
-			default:
-				level = slog.LevelInfo
+			serverboot.InitLogger()
+			if err := serverboot.SetLogLevel(cfg.LogLevel); err != nil {
+				return err
 			}
-			slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level})))
 
 			sigChan := make(chan os.Signal, 1)
 			signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)

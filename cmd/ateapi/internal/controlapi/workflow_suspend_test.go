@@ -356,3 +356,32 @@ func TestFinalizeSuspendedStep_ReleasesOnlyOwnWorker(t *testing.T) {
 		})
 	}
 }
+
+// TestCommitSnapshotScope verifies golden actors always commit Full — the
+// golden snapshot is the base an OnGolden data resume combines into, so the
+// template's onCommit must not thin it down to a data-only capture.
+func TestCommitSnapshotScope(t *testing.T) {
+	tmpl := func(onCommit atev1alpha1.SnapshotScope) *atev1alpha1.ActorTemplate {
+		return &atev1alpha1.ActorTemplate{Spec: atev1alpha1.ActorTemplateSpec{
+			SnapshotsConfig: atev1alpha1.SnapshotsConfig{OnCommit: onCommit},
+		}}
+	}
+	tests := []struct {
+		name     string
+		atespace string
+		onCommit atev1alpha1.SnapshotScope
+		want     atev1alpha1.SnapshotScope
+	}{
+		{"golden actor ignores Data onCommit", resources.GoldenActorAtespace, atev1alpha1.SnapshotScopeData, atev1alpha1.SnapshotScopeFull},
+		{"golden actor keeps Full onCommit", resources.GoldenActorAtespace, atev1alpha1.SnapshotScopeFull, atev1alpha1.SnapshotScopeFull},
+		{"regular actor uses Data onCommit", "team-a", atev1alpha1.SnapshotScopeData, atev1alpha1.SnapshotScopeData},
+		{"regular actor uses Full onCommit", "team-a", atev1alpha1.SnapshotScopeFull, atev1alpha1.SnapshotScopeFull},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := commitSnapshotScope(tc.atespace, tmpl(tc.onCommit)); got != tc.want {
+				t.Errorf("commitSnapshotScope(%q, onCommit=%s) = %s, want %s", tc.atespace, tc.onCommit, got, tc.want)
+			}
+		})
+	}
+}

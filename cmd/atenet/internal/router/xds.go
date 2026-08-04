@@ -126,6 +126,10 @@ type XdsServer struct {
 	otlpHost string
 	otlpPort uint32
 
+	// traceRootSamplingPercent mirrors the router's resolved sampling policy
+	// into Envoy's RandomSampling. Zero until Run sets it.
+	traceRootSamplingPercent float64
+
 	// extProcMessageTimeout bounds how long Envoy waits for the router's ext_proc
 	// response. Must be >= the parking budget so parked requests aren't cut short.
 	extProcMessageTimeout time.Duration
@@ -238,6 +242,15 @@ func (x *XdsServer) DisableOtlpCollector() {
 	defer x.mu.Unlock()
 	x.otlpHost = ""
 	x.otlpPort = 0
+}
+
+// SetTraceRootSamplingPercent sets the RandomSampling percent Envoy applies to
+// requests arriving without a traceparent. Derived from the router's resolved
+// OTel sampling policy so the two root decisions cannot drift.
+func (x *XdsServer) SetTraceRootSamplingPercent(p float64) {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	x.traceRootSamplingPercent = p
 }
 
 // normalizeOtlpCollector resolves a collector endpoint to the bare host and
@@ -685,12 +698,10 @@ func (x *XdsServer) buildHcm(statPrefix string) *anypb.Any {
 // configured OTLP gRPC collector. Returns nil when no collector is set,
 // in which case Envoy emits no spans on its own.
 //
-// `RandomSampling: 100%` makes Envoy ALWAYS sample requests that arrive
-// with no parent traceparent. We rely on upstream clients (locust, etc.)
-// to gate sampling: requests without a sampled parent are still tagged
-// `sampled` here but downstream services in this repo use
-// `ParentBased(NeverSample)` so unsampled-by-client requests stay
-// unsampled overall.
+// RandomSampling is the root decision for requests arriving without a
+// traceparent. Requests already sampled by the caller (kubectl-ate --trace,
+// load generators) are continued regardless of the percent, and downstream
+// ParentBased samplers keep the decision end to end.
 func (x *XdsServer) buildTracing() *hcmv3.HttpConnectionManager_Tracing {
 	if x.otlpHost == "" {
 		return nil
@@ -706,7 +717,7 @@ func (x *XdsServer) buildTracing() *hcmv3.HttpConnectionManager_Tracing {
 		ServiceName: "atenet-router-envoy",
 	})
 	return &hcmv3.HttpConnectionManager_Tracing{
-		RandomSampling: &typev3.Percent{Value: 100},
+		RandomSampling: &typev3.Percent{Value: x.traceRootSamplingPercent},
 		Provider: &tracev3.Tracing_Http{
 			Name: "envoy.tracers.opentelemetry",
 			ConfigType: &tracev3.Tracing_Http_TypedConfig{

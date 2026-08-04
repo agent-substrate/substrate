@@ -47,6 +47,10 @@ import (
 //     (restoreFullScope).
 //   - DATA: there is no guest to resume — re-materialize the durable-dir volumes and
 //     cold-boot the actor, which starts its containers afresh from the OCI image.
+//   - DATA_ON_GOLDEN: atelet staged a combined set into RestoreStateDir — the
+//     guest files (memory + VM state) from the template's golden snapshot plus
+//     the durable-dir tar from the actor's own snapshot — so this restores
+//     exactly like FULL: the golden guest resumes over the actor's data.
 //
 // Contract with atelet: the snapshot's files have been downloaded to RestoreStateDir,
 // and the durable-dir volume directories re-created (empty).
@@ -86,7 +90,12 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	}
 
 	switch scope := req.GetScope(); scope {
-	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL:
+	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
+		ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN:
+		// DATA_ON_GOLDEN: the restore dir holds the golden snapshot's guest
+		// files, and the untar above re-materialized the ACTOR's durable-dir
+		// data, so resuming the golden guest picks up the actor's data through
+		// the durable virtio-fs share.
 		if err := s.restoreFullScope(ctx, p, restoreDir, tStart); err != nil {
 			return nil, err
 		}

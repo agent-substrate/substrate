@@ -111,6 +111,18 @@ func (s *MarkSuspendingStep) Execute(ctx context.Context, input *SuspendInput, s
 
 func (s *MarkSuspendingStep) RetryBackoff() *wait.Backoff { return nil }
 
+// commitSnapshotScope returns the scope a commit (suspend) snapshot is taken
+// with. Golden actors always commit Full regardless of the template's
+// onCommit: the golden snapshot is the base an OnGolden data resume is
+// combined with at restore, so it must carry the guest memory and filesystem
+// — a data-only golden would leave nothing to restore the guest from.
+func commitSnapshotScope(atespace string, tmpl *atev1alpha1.ActorTemplate) atev1alpha1.SnapshotScope {
+	if atespace == resources.GoldenActorAtespace {
+		return atev1alpha1.SnapshotScopeFull
+	}
+	return tmpl.Spec.SnapshotsConfig.OnCommit
+}
+
 type CallAteletSuspendStep struct {
 	store  store.Interface
 	dialer *AteletDialer
@@ -168,7 +180,7 @@ func (s *CallAteletSuspendStep) Execute(ctx context.Context, input *SuspendInput
 				SnapshotUriPrefix: state.Actor.GetInProgressSnapshot(),
 			},
 		},
-		Scope:    toAteletSnapshotScope(state.ActorTemplate.Spec.SnapshotsConfig.OnCommit),
+		Scope:    toAteletSnapshotScope(commitSnapshotScope(state.Actor.GetMetadata().GetAtespace(), state.ActorTemplate)),
 		ActorUid: state.Actor.GetMetadata().Uid,
 	}
 
@@ -263,7 +275,7 @@ func (s *FinalizeSuspendedStep) Execute(ctx context.Context, input *SuspendInput
 				ActorTemplateNamespace: latestActor.GetActorTemplateNamespace(),
 				ActorTemplateName:      latestActor.GetActorTemplateName(),
 				ActorTemplateUid:       string(state.ActorTemplate.GetUID()),
-				ContentScope:           toActorSnapshotContentScope(state.ActorTemplate.Spec.SnapshotsConfig.OnCommit),
+				ContentScope:           toActorSnapshotContentScope(commitSnapshotScope(input.ActorRef.Atespace, state.ActorTemplate)),
 			}
 			if _, err := s.store.CreateActorSnapshot(ctx, snapshot, location); err != nil && !errors.Is(err, store.ErrAlreadyExists) {
 				return err

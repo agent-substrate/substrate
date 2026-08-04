@@ -134,4 +134,3 @@ bounds the wait.
 
 **Status page** (`/statusz`): a "Request Parking" card shows whether parking is
 enabled, the current vs. maximum parked count, and the max wait.
-

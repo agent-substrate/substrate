@@ -17,15 +17,22 @@ package controlapi
 import (
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
+	"google.golang.org/grpc/status"
 	"k8s.io/apimachinery/pkg/labels"
 )
 
-const workerpoolWorkersMetric = "ate.workerpool.workers"
+const (
+	workerpoolWorkersMetric   = "ate.workerpool.workers"
+	lifecycleOpDurationMetric = "ate.actor.lifecycle.operation.duration"
+	schedulerAssignmentMetric = "ate.scheduler.assignment.duration"
+)
 
 // RegisterWorkerCount wires the ate.workerpool.workers observable against workers
 // (workercache.Cache.Workers in prod) and listPools (a WorkerPool lister's List,
@@ -84,4 +91,104 @@ func RegisterWorkerCount(meter metric.Meter, workers func() ([]*ateapipb.Worker,
 		return fmt.Errorf("register %s callback: %w", workerpoolWorkersMetric, err)
 	}
 	return nil
+}
+
+// Instruments holds ateapi's actor-lifecycle and scheduler duration histograms.
+// A nil *Instruments is a valid no-op, so call sites need no guard. Worker-count
+// is registered separately (RegisterWorkerCount): a callback-driven observable,
+// not a synchronous instrument.
+type Instruments struct {
+	lifecycleOpDuration         metric.Float64Histogram
+	schedulerAssignmentDuration metric.Float64Histogram
+}
+
+// NewInstruments builds the two histograms against meter. Assignment buckets are
+// finer than lifecycle's (a cache pick plus a few store writes, not a
+// multi-second restore) but reach 5s so store latency spikes stay measurable.
+func NewInstruments(meter metric.Meter) (*Instruments, error) {
+	lifecycleOpDuration, err := meter.Float64Histogram(
+		lifecycleOpDurationMetric,
+		metric.WithUnit("s"),
+		metric.WithDescription("Duration of an actor lifecycle operation (create, resume, suspend, pause, delete) handled by ateapi."),
+		metric.WithExplicitBucketBoundaries(0.005, 0.01, 0.025, 0.05, 0.075, 0.1, 0.15, 0.25, 0.5, 1, 2.5, 5, 10, 30),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create %s histogram: %w", lifecycleOpDurationMetric, err)
+	}
+
+	schedulerAssignmentDuration, err := meter.Float64Histogram(
+		schedulerAssignmentMetric,
+		metric.WithUnit("s"),
+		metric.WithDescription("Duration of the scheduler's worker-assignment step during actor resume."),
+		metric.WithExplicitBucketBoundaries(0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create %s histogram: %w", schedulerAssignmentMetric, err)
+	}
+
+	return &Instruments{
+		lifecycleOpDuration:         lifecycleOpDuration,
+		schedulerAssignmentDuration: schedulerAssignmentDuration,
+	}, nil
+}
+
+// recordLifecycleOp records op's duration. A non-nil err is classified onto
+// error.type via its gRPC status code; error.type's absence marks success, so
+// there is no parallel failure counter. extraAttrs carries the per-operation
+// dimensions (template, pool, class, snapshot kind).
+func (i *Instruments) recordLifecycleOp(ctx context.Context, op string, start time.Time, err error, extraAttrs ...attribute.KeyValue) {
+	if i == nil || i.lifecycleOpDuration == nil {
+		return
+	}
+	attrs := make([]attribute.KeyValue, 0, len(extraAttrs)+2)
+	attrs = append(attrs, ateattr.ActorOperationNameKey.String(op))
+	attrs = append(attrs, extraAttrs...)
+	if err != nil {
+		attrs = append(attrs, ateattr.ErrorTypeKey.String(status.Code(err).String()))
+	}
+	i.lifecycleOpDuration.Record(ctx, time.Since(start).Seconds(), metric.WithAttributes(attrs...))
+}
+
+// lifecycleOpAttrs builds the resume/suspend/pause dimensions from workflow
+// state. Nil-safe, and omits the pool and snapshot-kind labels until they are
+// known so a failure before the assign/restore steps never emits an empty-string
+// series. snapshotKind is empty for suspend/pause, which do not restore.
+func lifecycleOpAttrs(actor *ateapipb.Actor, template *atev1alpha1.ActorTemplate, snapshotKind string) []attribute.KeyValue {
+	attrs := []attribute.KeyValue{
+		ateattr.TemplateNameKey.String(actor.GetActorTemplateName()),
+		ateattr.TemplateNamespaceKey.String(actor.GetActorTemplateNamespace()),
+	}
+	if pool := actor.GetWorkerPoolName(); pool != "" {
+		attrs = append(attrs, ateattr.WorkerPoolNameKey.String(pool))
+	}
+	if template != nil {
+		attrs = append(attrs, ateattr.SandboxClassKey.String(string(template.Spec.SandboxClass)))
+	}
+	if snapshotKind != "" {
+		attrs = append(attrs, ateattr.SnapshotKindKey.String(snapshotKind))
+	}
+	return attrs
+}
+
+// recordSchedulerAssignment records one assignment attempt. pool is set only
+// when a worker was assigned and error.type only for the Error outcome, so
+// no_free_worker (a capacity signal, not a failure) carries neither. class is
+// set on every outcome it is known for, so no_free_worker names the capacity
+// that ran out and stays comparable with assigned.
+func (i *Instruments) recordSchedulerAssignment(ctx context.Context, start time.Time, outcome, pool, class string, err error) {
+	if i == nil || i.schedulerAssignmentDuration == nil {
+		return
+	}
+	attrs := make([]attribute.KeyValue, 0, 4)
+	attrs = append(attrs, ateattr.SchedulerOutcomeKey.String(outcome))
+	if pool != "" {
+		attrs = append(attrs, ateattr.WorkerPoolNameKey.String(pool))
+	}
+	if class != "" {
+		attrs = append(attrs, ateattr.SandboxClassKey.String(class))
+	}
+	if outcome == ateattr.SchedulerOutcomeError && err != nil {
+		attrs = append(attrs, ateattr.ErrorTypeKey.String(status.Code(err).String()))
+	}
+	i.schedulerAssignmentDuration.Record(ctx, time.Since(start).Seconds(), metric.WithAttributes(attrs...))
 }

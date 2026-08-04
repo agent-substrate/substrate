@@ -148,15 +148,52 @@ func TestKeySpellings(t *testing.T) {
 		{TemplateNameKey, "ate.template.name"},
 		{TemplateNamespaceKey, "ate.template.namespace"},
 		{ActorVersionKey, "ate.actor.version"},
+		{ActorOperationNameKey, "ate.actor.operation.name"},
 		{WorkerPoolNamespaceKey, "ate.workerpool.namespace"},
 		{WorkerPoolNameKey, "ate.workerpool.name"},
 		{WorkerStateKey, "ate.worker.state"},
 		{SandboxClassKey, "ate.sandbox.class"},
+		{SnapshotKindKey, "ate.snapshot.kind"},
+		{SchedulerOutcomeKey, "ate.scheduler.outcome"},
+		{ErrorTypeKey, "error.type"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.want, func(t *testing.T) {
 			if string(tt.key) != tt.want {
 				t.Errorf("key = %q, want %q", string(tt.key), tt.want)
+			}
+		})
+	}
+}
+
+// TestMetricLabelValues pins the wire value of every bounded metric-label
+// constant. These are the exact strings dashboards and alerts group by, so a
+// typo or rename must fail here rather than silently fork a time series in
+// production.
+func TestMetricLabelValues(t *testing.T) {
+	tests := []struct {
+		got  string
+		want string
+	}{
+		{WorkerStateIdle, "idle"},
+		{WorkerStateAssigned, "assigned"},
+		{OperationCreate, "create"},
+		{OperationResume, "resume"},
+		{OperationSuspend, "suspend"},
+		{OperationPause, "pause"},
+		{OperationDelete, "delete"},
+		{SchedulerOutcomeAssigned, "assigned"},
+		{SchedulerOutcomeNoFreeWorker, "no_free_worker"},
+		{SchedulerOutcomeError, "error"},
+		{SnapshotKindGolden, "golden"},
+		{SnapshotKindLatest, "latest"},
+		{SnapshotKindLocal, "local"},
+		{SnapshotKindBoot, "boot"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.want, func(t *testing.T) {
+			if tt.got != tt.want {
+				t.Errorf("value = %q, want %q", tt.got, tt.want)
 			}
 		})
 	}

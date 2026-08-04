@@ -26,7 +26,12 @@ fi
 
 OUT_DIR="benchmarking/locust/common"
 
-VENV_DIR="benchmarking/locust/venv"
+# Codegen has its own venv and requirements, separate from the load test's
+# runtime ones: the only thing needed to compile a .proto is grpcio-tools, and
+# installing the runtime list here would drag in locust, the opentelemetry
+# exporters and google-cloud-storage for nothing.
+CODEGEN_DIR="benchmarking/locust/codegen"
+VENV_DIR="${CODEGEN_DIR}/venv"
 if [ ! -d "$VENV_DIR" ]; then
   echo "Creating virtual environment in $VENV_DIR..."
   python3 -m venv "$VENV_DIR"
@@ -63,8 +68,13 @@ generate_proto() {
 
   # protoc emits `import foo_pb2 as foo__pb2`, which doesn't resolve under our
   # `common` package; rewrite to a relative import.
+  #
+  # Written through a temp file rather than `sed -i`, whose spelling differs
+  # between GNU sed (`-i`) and the BSD sed on macOS (`-i ''`).
   if [ -f "${grpc_file}" ]; then
-    sed -i "s/^import ${proto_base}_pb2 as ${proto_base}__pb2/from . import ${proto_base}_pb2 as ${proto_base}__pb2/" "${grpc_file}"
+    sed "s/^import ${proto_base}_pb2 as ${proto_base}__pb2/from . import ${proto_base}_pb2 as ${proto_base}__pb2/" \
+      "${grpc_file}" > "${grpc_file}.tmp"
+    mv "${grpc_file}.tmp" "${grpc_file}"
   fi
 }
 
@@ -74,9 +84,13 @@ generate_proto() {
 (
   echo "Activating virtual environment..."
   source "$VENV_DIR/bin/activate"
-  echo "Installing dependencies from benchmarking/locust/requirements.txt..."
+  echo "Installing dependencies from ${CODEGEN_DIR}/requirements.txt..."
   pip install --upgrade pip
-  pip install -r benchmarking/locust/requirements.txt
+  # The requirement is pinned, so an existing venv already holding that exact
+  # version is left alone and a venv holding any other version is corrected.
+  # (An unpinned requirement would instead be satisfied by whatever is already
+  # installed, which is how the generated files came to drift.)
+  pip install -r "${CODEGEN_DIR}/requirements.txt"
 
   generate_proto "pkg/proto/ateapipb" "ateapi"
   generate_proto "internal/proto/glutton" "glutton"

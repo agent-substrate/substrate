@@ -130,6 +130,9 @@ message EnvEntry {
 // Only HTTP is supported today.
 message Readyz {
   HTTPGetAction http_get = 1;
+  // How long to keep polling before giving up and failing the actor start.
+  // Zero means the ateom's default.
+  int32 timeout_seconds = 2;
 }
 
 // HTTPGetAction performs an HTTP GET against the container.
@@ -182,6 +185,13 @@ enum SnapshotScope {
   // (currently DurableDir-typed volumes). Memory and the rest of rootfs are
   // excluded.
   SNAPSHOT_SCOPE_DATA = 2;
+  // Restore-only: restore the ActorTemplate's golden snapshot's guest state
+  // (memory + full filesystem delta) combined with the snapshot's durable
+  // data. Never valid for Checkpoint — snapshots only ever capture FULL or
+  // DATA; whether a snapshot restores from its own content or on the golden
+  // is decided by the control plane from the template's onResume
+  // configuration.
+  SNAPSHOT_SCOPE_DATA_ON_GOLDEN = 3;
 }
 
 message CheckpointRequest {
@@ -239,6 +249,14 @@ message RestoreRequest {
 
   // What content to restore from the checkpoint.
   SnapshotScope scope = 11;
+
+  // The object storage URI prefix of the ActorTemplate's golden snapshot.
+  // Set only when scope is SNAPSHOT_SCOPE_DATA_ON_GOLDEN: restore combines
+  // the golden snapshot (memory + full fs delta) with the durable data in
+  // the snapshot referenced by `config`. A top-level field rather than part
+  // of the `config` oneof: the actor's snapshot may be local (a pause
+  // checkpoint) while the golden snapshot is always external.
+  string golden_snapshot_uri_prefix = 12;
 }
 
 message RestoreResponse {

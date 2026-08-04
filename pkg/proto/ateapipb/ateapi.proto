@@ -494,19 +494,31 @@ service ActorIdentity {
   // currently running the requested actor.
   rpc MintJWT(MintJWTRequest) returns (MintJWTResponse);
 
-  // Request an Actor Identity Certificate. To call this RPC, you must have
-  // authenticated with a client certificate, not a bearer token.
+  // Request an Actor Identity Certificate for an actor.
+  //
+  // Actors do not call this RPC themselves. The atelet hosting the actor calls
+  // it on the actor's behalf, authenticating with its own client certificate
+  // rather than a bearer token.
+  //
+  // Authorization is decided on that client certificate: it must identify the
+  // atelet running on the same node as the worker Pod that currently hosts the
+  // requested actor, and the actor must still be running. Any other caller is
+  // rejected with PERMISSION_DENIED.
+  //
+  // The certificate in the response is the actor's identity, not the atelet's.
   rpc MintCert(MintCertRequest) returns (MintCertResponse);
 }
 
 message MintJWTRequest {
   repeated string audience = 1;
 
-  string app_id = 2;
-  string user_id = 3;
-  string actor_id = 4;
+  string atespace = 2;
+  string actor_name = 3;
+  string actor_uid = 4;
 }
 
+// TODO: check why k8s do ":" and not "/" as a seprator for the Subject format
+// TODO: whats the right format for the subject? kubernetes follow "system:serviceaccount:<namespace>:<name>".
 message MintJWTResponse {
   // Actor JWT.  An OIDC Discovery-compatible JWT
   //
@@ -516,23 +528,22 @@ message MintJWTResponse {
   //   discovery documents.
   // * sub: Subject - a string expressing the identity carried in the
   // credential. Format
-  //   `app/${appid}/user/${userid}/actor/${actorid}`.
+  //   `atespaces:${atespace}:actors:${actorname}`.
   // * aud: Audience - a string identifying the service this token will be used
   //   to authenticate to.
   // * nbf: Not Before - a numeric unix timestamp
   // * exp: Expiration - a numeric unix timestamp
   // * iat: Issued At - a numeric unix timestamp
   // * `ate.dev`: Ate/Substrate Extension - JSON object
-  //   * appID: (string) The Substrate App ID
-  //   * userID: (string) The Substrate User ID
-  //   * actorID: (string) The Substrate Actor ID
+  //   * atespace: (string) The atespace the actor belongs to
+  //   * actorName: (string) The actor's name, unique within its atespace
   string actor_jwt = 1;
 }
 
 message MintCertRequest {
-  string app_id = 1;
-  string user_id = 2;
-  string actor_id = 3;
+  string atespace = 1;
+  string actor_name = 2;
+  string actor_uid = 3;
 
   // Request contains DER encoded bytes of a x509 certificate signing request.
   // The signer will ignore the contents of the CSR except to extract the
