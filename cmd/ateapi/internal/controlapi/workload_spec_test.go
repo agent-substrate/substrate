@@ -359,14 +359,14 @@ func TestWorkloadSpecFromActorTemplatePropagatesReadyz(t *testing.T) {
 					Image: "main",
 					Readyz: &atev1alpha1.ContainerReadyz{
 						HTTPGet:        &atev1alpha1.HTTPGetAction{Path: "/health", Port: 8080},
-						TimeoutSeconds: ptr.To(int32(45)),
+						TimeoutSeconds: 45,
 					},
 				},
 				{
-					// The CRD defaults TimeoutSeconds, so a nil one only reaches
-					// the conversion from an in-process template like this. It
-					// must not panic, and stays zero on the wire, which the ateom
-					// reads as the same default.
+					// Templates from the API server always carry a timeout,
+					// since the CRD defaults it. This is the in-process shape,
+					// which stays zero on the wire — the same default again,
+					// this time resolved by the ateom.
 					Name:  "probe-without-timeout",
 					Image: "slow",
 					Readyz: &atev1alpha1.ContainerReadyz{
