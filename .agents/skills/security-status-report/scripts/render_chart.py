@@ -16,10 +16,13 @@ import sys
 import json
 import os
 
-# Set backend to non-interactive before importing pyplot
-import matplotlib
-matplotlib.use('Agg')
-import matplotlib.pyplot as plt
+try:
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+except ImportError:
+    print("Error: 'matplotlib' is required to render the chart. Please install it using 'pip install matplotlib'.", file=sys.stderr)
+    sys.exit(1)
 
 def render_chart(final_report_path, output_png_path):
     with open(final_report_path, 'r') as f:
@@ -29,12 +32,12 @@ def render_chart(final_report_path, output_png_path):
     def sort_key(item):
         tid = item.get("threat_id", "")
         if tid.startswith("T-") and tid[2:].isdigit():
-            return int(tid[2:])
-        return tid
+            return (0, int(tid[2:]), "")
+        return (1, 0, tid)
 
     sorted_data = sorted(data, key=sort_key)
 
-    threat_ids = [item.get("threat_id", f"T-{i+1:02d}") for i, item in enumerate(sorted_data)]
+    threat_ids = [item.get("threat_id", f"UNKNOWN-{i+1:02d}") for i, item in enumerate(sorted_data)]
     
     scores = []
     colors = []
@@ -42,7 +45,7 @@ def render_chart(final_report_path, output_png_path):
 
     for item in sorted_data:
         raw_score = item.get("quality", 0.0)
-        is_error = "error" in item or raw_score in ("Error", "Timeout/Missing")
+        is_error = "error" in item
         errors.append(is_error)
 
         try:
@@ -79,7 +82,9 @@ def render_chart(final_report_path, output_png_path):
     ax.grid(axis='y', linestyle='--', alpha=0.5)
 
     plt.tight_layout()
-    os.makedirs(os.path.dirname(output_png_path), exist_ok=True)
+    output_dir = os.path.dirname(output_png_path)
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
     plt.savefig(output_png_path, dpi=150)
     plt.close()
     print(f"Chart rendered successfully to {output_png_path}")

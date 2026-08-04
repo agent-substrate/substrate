@@ -116,7 +116,7 @@
     "priority": "Critical",
     "threat": "Malicious actor gains access to the underlying node or other actors via container breakout (Linux local privilege escalation)",
     "mitigating_invariants": "Actors are always sandboxed using a hardened sandbox solution like gvisor or microvm. Traditional containers are not a secure sandbox.",
-    "suggested_concrete_mitigations": "Use Gvisor for strong container isolation. Run sentry in a user namespace and pivot\\_root to limit broader file system access if the gvisor boundary is broken. Use Seccomp for sentry/gofer as well. Limit capabilities granted to directfs/sentry Any sidecar containers running alongside actors or warmpool pods should be as low privileged as possible. Sandbox lifecycle must be controlled from outside the sandbox",
+    "suggested_concrete_mitigations": "Use Gvisor for strong container isolation. Run sentry in a user namespace and pivot_root to limit broader file system access if the gvisor boundary is broken. Use Seccomp for sentry/gofer as well. Limit capabilities granted to directfs/sentry Any sidecar containers running alongside actors or warmpool pods should be as low privileged as possible. Sandbox lifecycle must be controlled from outside the sandbox",
     "notes": ""
   },
   {
@@ -141,7 +141,7 @@
     "threat": "Malicious actor gains access to the underlying node or other actors via filesystem",
     "mitigating_invariants": "Filesystem access is limited to the actor's local fs and remote filesystems the actor is directly, explicitly authorized to access.",
     "suggested_concrete_mitigations": "Ensure that actor access to the filesystem is protected by, for example, mapping each actor to a unique Linux uid and using filesystem permissions, or by using user namespaces to isolate actor filesystem access on the same host.  Ensure that actor management APIs and filesystem setup protects against traversal via symlinks, mount trickery, etc.",
-    "notes": "Possible vectors: Arbitrary file read vuln in fs implementation. Symlink traversal vulns. Vuln in OCI image unpacking. Path traversal attacks in mount configuration. Shared directories only gated via filesystem permissions \\+ workers running as root or privileged."
+    "notes": "Possible vectors: Arbitrary file read vuln in fs implementation. Symlink traversal vulns. Vuln in OCI image unpacking. Path traversal attacks in mount configuration. Shared directories only gated via filesystem permissions + workers running as root or privileged."
   },
   {
     "threat_id": "T-19",
@@ -292,7 +292,7 @@
     "priority": "High",
     "threat": "Compromised node accesses filesystem storage for actors on other nodes.",
     "mitigating_invariants": "Node access to network filesystems must be scoped to actors actively scheduled to the node.",
-    "suggested_concrete_mitigations": "TBD \\- depends on network filesystem implementation and what it supports.",
+    "suggested_concrete_mitigations": "TBD - depends on network filesystem implementation and what it supports.",
     "notes": ""
   },
   {

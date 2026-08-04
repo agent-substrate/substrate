@@ -21,6 +21,10 @@ def compile_report(threats_json_path, results_dir, output_path):
         threats = json.load(f)
         
     final_report = []
+    succeeded_count = 0
+    failed_ids = []
+    total_quality = 0.0
+
     for t in threats:
         threat_id = t.get("threat_id", "unknown")
         result_file = os.path.join(results_dir, f"{threat_id}.json")
@@ -29,17 +33,68 @@ def compile_report(threats_json_path, results_dir, output_path):
             try:
                 with open(result_file, 'r') as rf:
                     res = json.load(rf)
-                t.update(res)
+
+                # Check threat_id matching
+                if res.get("threat_id") and res.get("threat_id") != threat_id:
+                    t["error"] = f"Mismatched threat_id in result file: expected {threat_id}, got {res.get('threat_id')}"
+                else:
+                    # Validate quality score presence, type, and range
+                    if "quality" not in res:
+                        t["error"] = "Result JSON missing 'quality' score"
+                    else:
+                        try:
+                            score = float(res["quality"])
+                            if not (0.0 <= score <= 1.0):
+                                t["error"] = f"Quality score out of bounds [0.0, 1.0]: {res['quality']}"
+                            else:
+                                t["quality"] = score
+                        except (ValueError, TypeError):
+                            t["error"] = f"Invalid non-numeric quality score: {res['quality']}"
+
+                    # Copy strengths and weaknesses if no quality error
+                    if "error" not in t:
+                        if "strengths" in res:
+                            t["strengths"] = str(res["strengths"])
+                        if "weaknesses" in res:
+                            t["weaknesses"] = str(res["weaknesses"])
+
+                        # Validate and normalize citations schema
+                        if "citations" in res:
+                            c = res["citations"]
+                            if isinstance(c, list):
+                                t["citations"] = [str(item) for item in c]
+                            elif isinstance(c, str):
+                                t["citations"] = [c]
+                            else:
+                                t["citations"] = []
             except Exception as e:
-                t.update({"error": f"Failed to parse agent JSON: {e}"})
+                t["error"] = f"Failed to parse agent JSON: {e}"
         else:
-            t.update({"error": "The evaluation sub-agent timed out or failed to produce a valid JSON."})
+            t["error"] = "The evaluation sub-agent timed out or failed to produce a valid JSON."
+
+        if "error" in t:
+            failed_ids.append(threat_id)
+        else:
+            succeeded_count += 1
+            total_quality += t.get("quality", 0.0)
+
         final_report.append(t)
             
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    output_dir = os.path.dirname(output_path)
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
     with open(output_path, 'w') as f:
         json.dump(final_report, f, indent=2)
+
+    total_count = len(final_report)
     print(f"Report compiled successfully to {output_path}")
+    print(f"Summary: {total_count} total threats | {succeeded_count} succeeded | {len(failed_ids)} failed")
+
+    if failed_ids:
+        print(f"Warning: The following {len(failed_ids)} threat(s) failed evaluation: {', '.join(failed_ids)}", file=sys.stderr)
 
 if __name__ == '__main__':
+    if len(sys.argv) < 4:
+        print(f"Usage: {sys.argv[0]} <threats_json_path> <results_dir> <output_path>", file=sys.stderr)
+        sys.exit(1)
     compile_report(sys.argv[1], sys.argv[2], sys.argv[3])

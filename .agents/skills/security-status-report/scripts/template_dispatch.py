@@ -56,7 +56,10 @@ def generate_dispatch_payload(output_path):
             "Workspace": "inherit"
         })
 
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+
+    output_dir = os.path.dirname(output_path)
+    if output_dir:
+        os.makedirs(output_dir, exist_ok=True)
     with open(output_path, 'w') as f:
         json.dump(subagents, f, indent=2)
     print(f"Dispatch payload written successfully to {output_path}")

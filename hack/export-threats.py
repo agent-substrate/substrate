@@ -17,6 +17,12 @@ import os
 import sys
 import json
 import argparse
+import re
+
+def unescape_md(text):
+    if not text:
+        return text
+    return re.sub(r'\\(.)', r'\1', text)
 
 def extract(md_path):
     with open(md_path, 'r') as f:
@@ -31,9 +37,10 @@ def extract(md_path):
             in_table = False
             continue
             
-        cells = [c.strip() for c in line.split('|')[1:-1]]
+        line_escaped = line.replace('\\|', '\x00PIPE\x00')
+        cells = [c.strip().replace('\x00PIPE\x00', '\\|') for c in line_escaped.split('|')[1:-1]]
         if not in_table:
-            lower_cells = [c.lower() for c in cells]
+            lower_cells = [unescape_md(c.lower()) for c in cells]
             if 'threat' in lower_cells:
                 in_table = True
                 headers = {}
@@ -50,24 +57,34 @@ def extract(md_path):
             continue
             
         if in_table and 'threat' in headers and len(cells) > headers['threat']:
-            threat = cells[headers['threat']]
+            threat = unescape_md(cells[headers['threat']])
             if threat: 
                 t_obj = {}
                 if 'threat_id' in headers and len(cells) > headers['threat_id']:
-                    t_obj['threat_id'] = cells[headers['threat_id']]
+                    t_obj['threat_id'] = unescape_md(cells[headers['threat_id']])
                 if 'priority' in headers and len(cells) > headers['priority']:
-                    t_obj['priority'] = cells[headers['priority']]
+                    t_obj['priority'] = unescape_md(cells[headers['priority']])
                 
                 t_obj['threat'] = threat
                 
                 if 'mitigating_invariants' in headers and len(cells) > headers['mitigating_invariants']:
-                    t_obj['mitigating_invariants'] = cells[headers['mitigating_invariants']]
+                    t_obj['mitigating_invariants'] = unescape_md(cells[headers['mitigating_invariants']])
                 if 'suggested_concrete_mitigations' in headers and len(cells) > headers['suggested_concrete_mitigations']:
-                    t_obj['suggested_concrete_mitigations'] = cells[headers['suggested_concrete_mitigations']]
+                    t_obj['suggested_concrete_mitigations'] = unescape_md(cells[headers['suggested_concrete_mitigations']])
                 if 'notes' in headers and len(cells) > headers['notes']:
-                    t_obj['notes'] = cells[headers['notes']]
+                    t_obj['notes'] = unescape_md(cells[headers['notes']])
                     
                 threats.append(t_obj)
+
+    seen_ids = set()
+    for t in threats:
+        tid = t.get("threat_id")
+        if not tid or not re.match(r"^T-\d+$", tid):
+            raise ValueError(f"Invalid threat_id format '{tid}': must match 'T-NN' (e.g. T-01)")
+        if tid in seen_ids:
+            raise ValueError(f"Duplicate threat_id found in Markdown table: {tid}")
+        seen_ids.add(tid)
+
     return threats
 
 def main():
