@@ -168,11 +168,13 @@ type ContainerReadyz struct {
 	// runtime that needs minutes should not force every other template to wait
 	// as long before its failures surface.
 	//
-	// Unset means the ateom's default of 30s. Zero is not a meaningful setting
-	// here — unlike a warmup delay, a zero deadline could never be met — so it
-	// is rejected in favor of the default.
+	// Unset defaults to 30s, applied by the API server so the effective value is
+	// visible in the stored object rather than only in the ateom. Zero is not a
+	// meaningful setting here — unlike a warmup delay, a zero deadline could
+	// never be met — so it is rejected rather than read as "unset".
 	//
 	// +optional
+	// +kubebuilder:default=30
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:validation:Maximum=3600
 	TimeoutSeconds *int32 `json:"timeoutSeconds,omitempty"`

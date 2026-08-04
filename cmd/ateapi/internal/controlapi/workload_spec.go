@@ -29,6 +29,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/utils/ptr"
 )
 
 const envSecretCacheTTL = 30 * time.Second
@@ -178,9 +179,10 @@ func toAteletReadyz(in *atev1alpha1.ContainerReadyz) *ateletpb.Readyz {
 			Port: in.HTTPGet.Port,
 		}
 	}
-	if in.TimeoutSeconds != nil {
-		out.TimeoutSeconds = *in.TimeoutSeconds
-	}
+	// The CRD defaults TimeoutSeconds to 30, so this is nil only for a template
+	// built in process rather than read from the API server. Zero on the wire
+	// means the ateom's default, which is the same 30s.
+	out.TimeoutSeconds = ptr.Deref(in.TimeoutSeconds, 0)
 	return out
 }
 

@@ -363,8 +363,10 @@ func TestWorkloadSpecFromActorTemplatePropagatesReadyz(t *testing.T) {
 					},
 				},
 				{
-					// An unset timeout stays zero on the wire, which the ateom
-					// reads as "use the default".
+					// The CRD defaults TimeoutSeconds, so a nil one only reaches
+					// the conversion from an in-process template like this. It
+					// must not panic, and stays zero on the wire, which the ateom
+					// reads as the same default.
 					Name:  "probe-without-timeout",
 					Image: "slow",
 					Readyz: &atev1alpha1.ContainerReadyz{

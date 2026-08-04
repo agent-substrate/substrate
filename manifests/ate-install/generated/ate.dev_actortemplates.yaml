@@ -201,6 +201,7 @@ spec:
                           - port
                           type: object
                         timeoutSeconds:
+                          default: 30
                           description: |-
                             TimeoutSeconds is how long to keep polling HTTPGet before giving up.
                             Exceeding it fails the actor start rather than proceeding with a
@@ -211,9 +212,10 @@ spec:
                             runtime that needs minutes should not force every other template to wait
                             as long before its failures surface.
 
-                            Unset means the ateom's default of 30s. Zero is not a meaningful setting
-                            here — unlike a warmup delay, a zero deadline could never be met — so it
-                            is rejected in favor of the default.
+                            Unset defaults to 30s, applied by the API server so the effective value is
+                            visible in the stored object rather than only in the ateom. Zero is not a
+                            meaningful setting here — unlike a warmup delay, a zero deadline could
+                            never be met — so it is rejected rather than read as "unset".
                           format: int32
                           maximum: 3600
                           minimum: 1

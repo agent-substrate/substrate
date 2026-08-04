@@ -492,7 +492,7 @@ func TestActorTemplateValidation(t *testing.T) {
 		wantErr: true,
 		errMsg:  "should match",
 	}, {
-		name: "Readyz TimeoutSeconds unset falls back to the ateom default",
+		name: "Readyz TimeoutSeconds unset is defaulted by the API server",
 		mutate: func(at *ActorTemplate) {
 			at.Spec.Containers[0].Readyz = &ContainerReadyz{
 				HTTPGet: &HTTPGetAction{Port: 80},
@@ -1265,7 +1265,11 @@ func TestActorTemplateValidation(t *testing.T) {
 	}
 }
 
-func TestActorTemplateReadyzPathDefault(t *testing.T) {
+// TestActorTemplateReadyzDefaults asserts that a probe declaring only a port
+// reads back with the omitted fields populated, so a template author can see
+// the effective readiness settings on the stored object rather than having to
+// know what the ateom would have substituted.
+func TestActorTemplateReadyzDefaults(t *testing.T) {
 	ctx := t.Context()
 
 	at := &ActorTemplate{
@@ -1295,8 +1299,14 @@ func TestActorTemplateReadyzPathDefault(t *testing.T) {
 	if err := k8sClient.Get(ctx, client.ObjectKeyFromObject(at), got); err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	if want, gotPath := "/readyz", got.Spec.Containers[0].Readyz.HTTPGet.Path; gotPath != want {
+	gotReadyz := got.Spec.Containers[0].Readyz
+	if want, gotPath := "/readyz", gotReadyz.HTTPGet.Path; gotPath != want {
 		t.Errorf("Readyz.HTTPGet.Path = %q, want %q (CRD default)", gotPath, want)
+	}
+	if gotReadyz.TimeoutSeconds == nil {
+		t.Errorf("Readyz.TimeoutSeconds = nil, want 30 (CRD default)")
+	} else if want := int32(30); *gotReadyz.TimeoutSeconds != want {
+		t.Errorf("Readyz.TimeoutSeconds = %d, want %d (CRD default)", *gotReadyz.TimeoutSeconds, want)
 	}
 }
 
