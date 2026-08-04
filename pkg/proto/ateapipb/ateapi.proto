@@ -16,6 +16,7 @@ syntax = "proto3";
 
 package ateapi;
 
+import "google/protobuf/field_mask.proto";
 import "google/protobuf/timestamp.proto";
 
 option go_package = "github.com/agent-substrate/substrate/pkg/proto/ateapipb";
@@ -29,7 +30,7 @@ service Control {
   rpc CreateActor(CreateActorRequest) returns (Actor) {}
 
   // Update mutable fields on an existing Actor.
-  rpc UpdateActor(UpdateActorRequest) returns (UpdateActorResponse) {}
+  rpc UpdateActor(UpdateActorRequest) returns (Actor) {}
 
   // Suspend a given actor to a new snapshot.
   rpc SuspendActor(SuspendActorRequest) returns (SuspendActorResponse) {}
@@ -47,20 +48,17 @@ service Control {
   rpc GetActorSnapshot(GetActorSnapshotRequest) returns (ActorSnapshot) {}
 
   // List ActorSnapshots.
-  rpc ListActorSnapshots(ListActorSnapshotsRequest)
-      returns (ListActorSnapshotsResponse) {}
+  rpc ListActorSnapshots(ListActorSnapshotsRequest) returns (ListActorSnapshotsResponse) {}
 
   // Add an Atespace-owned, stable name for an ActorSnapshot.
   rpc TagActorSnapshot(TagActorSnapshotRequest) returns (ActorSnapshotTag) {}
 
   // Publish or unpublish an ActorSnapshot tag without changing its address.
-  rpc UpdateActorSnapshotTag(UpdateActorSnapshotTagRequest)
-      returns (ActorSnapshotTag) {}
+  rpc UpdateActorSnapshotTag(UpdateActorSnapshotTagRequest) returns (ActorSnapshotTag) {}
 
   // Delete an ActorSnapshot tag. The snapshot becomes garbage-collectable when
   // its final tag is deleted.
-  rpc DeleteActorSnapshotTag(DeleteActorSnapshotTagRequest)
-      returns (ActorSnapshotTag) {}
+  rpc DeleteActorSnapshotTag(DeleteActorSnapshotTagRequest) returns (ActorSnapshotTag) {}
 
   // List Workers.
   rpc ListWorkers(ListWorkersRequest) returns (ListWorkersResponse) {}
@@ -318,15 +316,18 @@ message CreateActorRequest {
 // May be called regardless of the actor's current status.
 // Changes take effect on the next ResumeActor call.
 message UpdateActorRequest {
-  ObjectRef actor = 1;
-
-  // worker_selector replaces the actor's current placement constraint.
-  // Takes effect on the next ResumeActor call.
-  Selector worker_selector = 2;
-}
-
-message UpdateActorResponse {
+  // The actor to update.
+  // actor.metadata.atespace and actor.metadata.name identify which resource to
+  // update.
+  // actor.metadata.version and actor.metadata.uid are optional preconditions and
+  // zero values skip the check.
   Actor actor = 1;
+
+  // The set of fields to update. Required.
+  //
+  // Only the following fields are supported:
+  //   - worker_selector
+  google.protobuf.FieldMask update_mask = 2;
 }
 
 message SuspendActorRequest {
