@@ -84,6 +84,9 @@ const (
 	// across nodes.
 	layerSizeFileName = "size"
 
+	// defaultMinAge is the default eviction minimum age (see WithMinAge).
+	defaultMinAge = 2 * time.Minute
+
 	// layerPullConcurrency bounds concurrent layer download+unpack streams per
 	// image pull. Memory use is O(stream buffers) per slot, independent of
 	// layer size.
@@ -107,12 +110,30 @@ type Store struct {
 	// nodes it validates for.
 	platform *v1.Platform
 
+	// actorsDir is scanned by InUse for bundle overlay specs; empty disables
+	// the scan (the root set is then empty).
+	actorsDir string
+
+	// minAge vetoes eviction of any layer or image record younger than this,
+	// covering the window between a pull (or cache-hit stat) and the bundle
+	// spec write / ateom mount that roots it.
+	minAge time.Duration
+
 	imageSF singleflight.Group
 	layerSF singleflight.Group
 
-	// hitMu makes the hit path's record read + last-use touch atomic with
-	// respect to eviction, which will hold it exclusive around record
-	// removal. No exclusive holder yet, so effectively free.
+	// evictMu serializes EvictUnused passes (concurrent passes would fight
+	// over the same candidates for no benefit).
+	evictMu sync.Mutex
+
+	// hitMu closes the last hit-vs-evict window: the cache-hit path holds it
+	// shared across its record read, layer stats, and last-use touch, and
+	// eviction holds it exclusive across each victim's final veto re-check
+	// and record removal. Either the hit's touch lands first (the re-check
+	// sees a fresh mtime and skips the image, layers included) or the
+	// removal lands first (the hit sees no record and falls into the pull
+	// path, which is fully serialized by the layer singleflight). Uncontended
+	// except during an eviction pass.
 	hitMu sync.RWMutex
 }
 
@@ -135,6 +156,20 @@ func WithLocalhostRegistryReplacement(replacement string) Option {
 // WithPlatform overrides the pull platform (default: linux/GOARCH).
 func WithPlatform(p v1.Platform) Option {
 	return func(s *Store) { s.platform = &p }
+}
+
+// WithActorsDir points the eviction root-set scan at the node's actors
+// directory (the per-actor state dirs under ateompath.BasePath). Each
+// <actorsDir>/<actorUID>/bundles/<container>/rootfs-overlay.json roots its
+// image and layers against eviction. Empty disables the scan.
+func WithActorsDir(dir string) Option {
+	return func(s *Store) { s.actorsDir = dir }
+}
+
+// WithMinAge overrides the eviction minimum age (default 2m): layers and
+// image records younger than this are never evicted.
+func WithMinAge(d time.Duration) Option {
+	return func(s *Store) { s.minAge = d }
 }
 
 // Image describes one cached, ready-to-compose image.
@@ -162,7 +197,7 @@ type imageRecord struct {
 // startup recovery: verifying the layout version and sweeping temp dirs left
 // by unpacks that were in flight when a previous atelet died.
 func New(root string, opts ...Option) (*Store, error) {
-	s := &Store{root: root}
+	s := &Store{root: root, minAge: defaultMinAge}
 	for _, o := range opts {
 		o(s)
 	}
@@ -191,6 +226,12 @@ func New(root string, opts ...Option) (*Store, error) {
 
 	if err := s.sweepTempDirs(); err != nil {
 		return nil, err
+	}
+	// Startup-only orphan recovery (see RecoverOrphans for why it must not
+	// run during normal operation). Failure is logged inside, never fatal:
+	// a corrupt record must not keep atelet from serving actors.
+	if _, err := s.RecoverOrphans(context.Background()); err != nil {
+		slog.Warn("Image cache startup orphan recovery incomplete", slog.Any("err", err))
 	}
 	return s, nil
 }
@@ -283,7 +324,10 @@ func (s *Store) EnsureImage(ctx context.Context, ref string) (*Image, error) {
 	s.hitMu.RLock()
 	img, err := s.cachedImage(digest)
 	if err == nil && img != nil {
-		// Record last-use for eviction's LRU ordering.
+		// Record last-use for eviction's LRU ordering. Refreshing the mtime
+		// also renews the min-age veto, so an image in active use cannot age
+		// into eviction between this stat and the ateom's mount (see hitMu
+		// for why this ordering is airtight, not just probabilistic).
 		s.touchRecord(digest)
 	}
 	s.hitMu.RUnlock()
