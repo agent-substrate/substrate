@@ -461,6 +461,7 @@ message Worker {
 message Assignment {
   KubeNamespacedObjectRef actor_template = 1;
   ObjectRef actor = 2;
+  string actor_uid = 3;
 }
 
 message KubeNamespacedObjectRef {

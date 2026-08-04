@@ -266,9 +266,10 @@ func TestValidateWorker(t *testing.T) {
 					Name:      "actor-template",
 				},
 				Actor: &ateapipb.ObjectRef{
-					Name:     "actor-id",
-					Atespace: "actor-atespace",
+					Atespace: "actor-ns",
+					Name:     "actor",
 				},
+				ActorUid: "actor-uid",
 			},
 			Ip:           "10.0.0.1",
 			WorkerPodUid: "123e4567-e89b-12d3-a456-426614174000",
@@ -283,9 +284,10 @@ func TestValidateWorker(t *testing.T) {
 			WorkerPod:       "pod-1",
 			Assignment: &ateapipb.Assignment{
 				Actor: &ateapipb.ObjectRef{
-					Name:     "actor-id",
-					Atespace: "actor-atespace",
+					Atespace: "actor-ns",
+					Name:     "actor",
 				},
+				ActorUid: "actor-uid",
 			},
 			Ip:           "10.0.0.1",
 			WorkerPodUid: "123e4567-e89b-12d3-a456-426614174000",
@@ -303,9 +305,10 @@ func TestValidateWorker(t *testing.T) {
 					Name: "actor-template",
 				},
 				Actor: &ateapipb.ObjectRef{
-					Name:     "actor-id",
-					Atespace: "actor-atespace",
+					Atespace: "actor-ns",
+					Name:     "actor",
 				},
+				ActorUid: "actor-uid",
 			},
 			Ip:           "10.0.0.1",
 			WorkerPodUid: "123e4567-e89b-12d3-a456-426614174000",
@@ -323,9 +326,10 @@ func TestValidateWorker(t *testing.T) {
 					Namespace: "actor-ns",
 				},
 				Actor: &ateapipb.ObjectRef{
-					Name:     "actor-id",
-					Atespace: "actor-atespace",
+					Atespace: "actor-ns",
+					Name:     "actor",
 				},
+				ActorUid: "actor-uid",
 			},
 			Ip:           "10.0.0.1",
 			WorkerPodUid: "123e4567-e89b-12d3-a456-426614174000",
@@ -343,6 +347,7 @@ func TestValidateWorker(t *testing.T) {
 					Name:      "actor-template",
 					Namespace: "actor-ns",
 				},
+				ActorUid: "actor-uid",
 			},
 			Ip:           "10.0.0.1",
 			WorkerPodUid: "123e4567-e89b-12d3-a456-426614174000",
@@ -361,8 +366,9 @@ func TestValidateWorker(t *testing.T) {
 					Namespace: "actor-ns",
 				},
 				Actor: &ateapipb.ObjectRef{
-					Atespace: "actor-atespace",
+					Atespace: "actor-ns",
 				},
+				ActorUid: "actor-uid",
 			},
 			Ip:           "10.0.0.1",
 			WorkerPodUid: "123e4567-e89b-12d3-a456-426614174000",
@@ -381,14 +387,36 @@ func TestValidateWorker(t *testing.T) {
 					Namespace: "actor-ns",
 				},
 				Actor: &ateapipb.ObjectRef{
-					Name: "actor-id",
+					Name: "actor",
 				},
+				ActorUid: "actor-uid",
 			},
 			Ip:           "10.0.0.1",
 			WorkerPodUid: "123e4567-e89b-12d3-a456-426614174000",
 			NodeName:     "node-1.example.com",
 		},
 		wantMsg: "worker.assignment.actor.atespace: Required value",
+	}, {
+		name: "partially assigned worker, missing actor_uid",
+		worker: &ateapipb.Worker{
+			WorkerNamespace: "ns-1",
+			WorkerPool:      "pool-1",
+			WorkerPod:       "pod-1",
+			Assignment: &ateapipb.Assignment{
+				ActorTemplate: &ateapipb.KubeNamespacedObjectRef{
+					Name:      "actor-template",
+					Namespace: "actor-ns",
+				},
+				Actor: &ateapipb.ObjectRef{
+					Atespace: "actor-ns",
+					Name:     "actor",
+				},
+			},
+			Ip:           "10.0.0.1",
+			WorkerPodUid: "123e4567-e89b-12d3-a456-426614174000",
+			NodeName:     "node-1.example.com",
+		},
+		wantMsg: "worker.assignment.actor_uid: Required value",
 	}, {
 		name: "missing worker_namespace",
 		worker: &ateapipb.Worker{

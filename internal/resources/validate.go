@@ -263,17 +263,11 @@ func ValidateAssignment(assignment *ateapipb.Assignment, fldPath *field.Path) fi
 	if val, fldPath := assignment.Actor, fldPath.Child("actor"); val == nil {
 		errs = append(errs, field.Required(fldPath, ""))
 	} else {
-		if val, fldPath := assignment.Actor.Name, fldPath.Child("name"); val == "" {
-			errs = append(errs, field.Required(fldPath, ""))
-		} else {
-			errs = append(errs, ValidateResourceName(val, fldPath)...)
-		}
+		errs = append(errs, ValidateObjectRef(val, fldPath)...)
+	}
 
-		if val, fldPath := assignment.Actor.Atespace, fldPath.Child("atespace"); val == "" {
-			errs = append(errs, field.Required(fldPath, ""))
-		} else {
-			errs = append(errs, ValidateResourceName(val, fldPath)...)
-		}
+	if val, fldPath := assignment.ActorUid, fldPath.Child("actor_uid"); val == "" {
+		errs = append(errs, field.Required(fldPath, ""))
 	}
 
 	return errs
