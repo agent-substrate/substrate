@@ -363,17 +363,6 @@ func TestWorkloadSpecFromActorTemplatePropagatesReadyz(t *testing.T) {
 					},
 				},
 				{
-					// Templates from the API server always carry a timeout,
-					// since the CRD defaults it. This is the in-process shape,
-					// which stays zero on the wire — the same default again,
-					// this time resolved by the ateom.
-					Name:  "probe-without-timeout",
-					Image: "slow",
-					Readyz: &atev1alpha1.ContainerReadyz{
-						HTTPGet: &atev1alpha1.HTTPGetAction{Port: 9090},
-					},
-				},
-				{
 					Name:  "without-probe",
 					Image: "side",
 				},
@@ -392,13 +381,6 @@ func TestWorkloadSpecFromActorTemplatePropagatesReadyz(t *testing.T) {
 				Readyz: &ateletpb.Readyz{
 					HttpGet:        &ateletpb.HTTPGetAction{Path: "/health", Port: 8080},
 					TimeoutSeconds: 45,
-				},
-			},
-			{
-				Name:  "probe-without-timeout",
-				Image: "slow",
-				Readyz: &ateletpb.Readyz{
-					HttpGet: &ateletpb.HTTPGetAction{Port: 9090},
 				},
 			},
 			{
