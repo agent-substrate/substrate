@@ -229,6 +229,114 @@ func TestEvictUnusedRootSet(t *testing.T) {
 	}
 }
 
+// An unreadable record must gate the whole pass: its refcounts are
+// invisible, so a layer it shares with a readable candidate would hit
+// zero and be retired while the unreadable record still names it.
+func TestEvictUnusedSkipsPassOnUnreadableRecord(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("chmod 0000 does not block reads for root")
+	}
+	_, host := newTestRegistry(t)
+	shared := layerFromEntries(t, []tarEntry{
+		{name: "shared", typeflag: tar.TypeReg, mode: 0o644, body: strings.Repeat("s", 2048)},
+	})
+	onlyA := layerFromEntries(t, []tarEntry{
+		{name: "a", typeflag: tar.TypeReg, mode: 0o644, body: strings.Repeat("a", 2048)},
+	})
+	onlyB := layerFromEntries(t, []tarEntry{
+		{name: "b", typeflag: tar.TypeReg, mode: 0o644, body: strings.Repeat("b", 2048)},
+	})
+	refA := host + "/test/unreadable-a:latest"
+	refB := host + "/test/unreadable-b:latest"
+	pushImage(t, refA, v1.Config{}, shared, onlyA)
+	pushImage(t, refB, v1.Config{}, shared, onlyB)
+
+	store := newTestStore(t)
+	imgA := mustEnsure(t, store, refA)
+	imgB := mustEnsure(t, store, refB)
+	backdateStore(t, store, 3*time.Hour)
+
+	if err := os.Chmod(store.recordPath(imgA.Digest), 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(store.recordPath(imgA.Digest), 0o600) })
+
+	stats, err := store.EvictUnused(context.Background(), math.MaxInt64, false)
+	if err == nil {
+		t.Fatal("EvictUnused returned no error on an unreadable record")
+	}
+	if stats.EvictedImages != 0 || stats.EvictedLayers != 0 || stats.FreedBytes != 0 {
+		t.Errorf("gated pass still evicted: %+v", stats)
+	}
+	// B and the shared layer survive: evicting B on partial refcounts would
+	// have retired the shared layer out from under A.
+	if _, err := os.Stat(store.recordPath(imgB.Digest)); err != nil {
+		t.Errorf("record B evicted during a gated pass: %v", err)
+	}
+	if _, err := os.Stat(imgB.LayerDirs[0]); err != nil {
+		t.Errorf("shared layer retired while an unreadable record references it: %v", err)
+	}
+}
+
+// An undecodable record contributes no refcounts, so evicting it would
+// strand its layers as orphans until restart. It must survive the pass
+// (which its presence gates entirely) and be surfaced in the error.
+func TestEvictUnusedLeavesUndecodableRecord(t *testing.T) {
+	store := newTestStore(t)
+	layer := filepath.Join(store.layersDir(), strings.Repeat("cc", 32))
+	if err := os.MkdirAll(filepath.Join(layer, layerFSDirName), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	badPath := store.recordPath(v1.Hash{Algorithm: "sha256", Hex: strings.Repeat("dd", 32)})
+	if err := os.WriteFile(badPath, []byte("{not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	backdateStore(t, store, 3*time.Hour)
+
+	if _, err := store.EvictUnused(context.Background(), math.MaxInt64, false); err == nil {
+		t.Fatal("EvictUnused returned no error on an undecodable record")
+	}
+	if _, err := os.Stat(badPath); err != nil {
+		t.Errorf("undecodable record was evicted (its unknown layers would be stranded): %v", err)
+	}
+	if _, err := os.Stat(layer); err != nil {
+		t.Errorf("layer removed during a gated pass: %v", err)
+	}
+}
+
+// Dry-run must not write anything — including the size-file backfill for
+// layers unpacked before sizes were recorded, the exact population a
+// dry-run soak on upgraded nodes exists to observe.
+func TestEvictUnusedDryRunDoesNotBackfillSizes(t *testing.T) {
+	_, host := newTestRegistry(t)
+	ref := host + "/test/nobackfill:latest"
+	pushImage(t, ref, v1.Config{}, layerFromEntries(t, []tarEntry{
+		{name: "f", typeflag: tar.TypeReg, mode: 0o644, body: strings.Repeat("n", 1024)},
+	}))
+
+	store := newTestStore(t)
+	img := mustEnsure(t, store, ref)
+	sizePath := filepath.Join(img.LayerDirs[0], layerSizeFileName)
+	if err := os.Remove(sizePath); err != nil {
+		t.Fatal(err)
+	}
+	backdateStore(t, store, 3*time.Hour)
+
+	stats, err := store.EvictUnused(context.Background(), math.MaxInt64, true)
+	if err != nil {
+		t.Fatalf("EvictUnused(dry): %v", err)
+	}
+	if stats.FreedBytes <= 0 {
+		t.Errorf("FreedBytes = %d, want > 0 (walked size despite missing size file)", stats.FreedBytes)
+	}
+	if _, err := os.Stat(sizePath); !os.IsNotExist(err) {
+		t.Error("dry run wrote a size file into the layer pool")
+	}
+	if _, err := os.Stat(img.LayerDirs[0]); err != nil {
+		t.Errorf("dry run deleted the layer: %v", err)
+	}
+}
+
 func TestEvictUnusedDryRun(t *testing.T) {
 	_, host := newTestRegistry(t)
 	ref := host + "/test/dryrun:latest"

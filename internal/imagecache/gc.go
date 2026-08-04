@@ -222,7 +222,10 @@ type evictionCandidate struct {
 //
 // Failed deletions are skipped, not fatal: the error return aggregates
 // them, but the pass continues to the next candidate (each retries next
-// pass). Concurrent passes are serialized.
+// pass). Concurrent passes are serialized. If the record enumeration is
+// incomplete (an unreadable or undecodable record), the pass is skipped
+// entirely: refcounts from partial data would retire layers the unread
+// records still reference.
 func (s *Store) EvictUnused(ctx context.Context, targetBytes int64, dryRun bool) (EvictStats, error) {
 	var stats EvictStats
 	s.evictMu.Lock()
@@ -231,8 +234,16 @@ func (s *Store) EvictUnused(ctx context.Context, targetBytes int64, dryRun bool)
 	roots := s.InUse()
 	cutoff := time.Now().Add(-s.minAge)
 
-	candidates, refcount, _, listErr := s.listEviction(roots, cutoff, &stats)
-	// listErr is deferred, not fatal: evict what was listed, report at the end.
+	candidates, refcount, complete, listErr := s.listEviction(roots, cutoff, &stats)
+	if !complete {
+		// A layer shared with an unread record would hit refcount zero and
+		// be retired while that record still names it. Fail the whole pass
+		// toward retention; the error names the records to repair or
+		// delete, and every later pass retries.
+		slog.ErrorContext(ctx, "Image cache eviction pass skipped: image records could not be fully enumerated",
+			slog.Any("err", listErr))
+		return stats, listErr
+	}
 	stats.Candidates = len(candidates)
 
 	slog.InfoContext(ctx, "Image cache eviction pass",
@@ -244,9 +255,6 @@ func (s *Store) EvictUnused(ctx context.Context, targetBytes int64, dryRun bool)
 		slog.Duration("min_age", s.minAge))
 
 	var errs []error
-	if listErr != nil {
-		errs = append(errs, listErr)
-	}
 	dbg := slog.Default().Enabled(ctx, slog.LevelDebug) // see InUse
 	var retired []string                                // renamed-aside dirs awaiting RemoveAll
 
@@ -529,7 +537,9 @@ func (s *Store) sweepOrphanLayers(ctx context.Context, roots RootSet, refcount m
 }
 
 // dryRunRetire reports what retireLayer would do, without renaming:
-// the same pre-flight checks, plus the size credit.
+// the same pre-flight checks, plus the size credit. Sizing is read-only —
+// even the size-file backfill would break dry-run's mutate-nothing
+// contract.
 func (s *Store) dryRunRetire(hex string, cutoff time.Time) (int64, retireStatus) {
 	dir := filepath.Join(s.layersDir(), hex)
 	fi, err := os.Stat(dir)
@@ -539,7 +549,7 @@ func (s *Store) dryRunRetire(hex string, cutoff time.Time) (int64, retireStatus)
 	if fi.ModTime().After(cutoff) {
 		return 0, retireVetoed
 	}
-	size, err := s.layerSize(dir)
+	size, err := s.layerSizeReadOnly(dir)
 	if err != nil {
 		size = 0
 	}
@@ -552,9 +562,11 @@ func (s *Store) dryRunRetire(hex string, cutoff time.Time) (int64, retireStatus)
 // vetoes into stats.
 //
 // The returned complete flag reports whether every record was read and
-// decoded. Refcounts from a partial listing understate references, which
-// is safe for the record-driven pass (it only ever skips work) but fatal
-// for the orphan sweep, which would read "no references" as "garbage".
+// decoded. Refcounts from a partial listing understate references — a
+// layer shared with an unread record looks unreferenced, so it would be
+// retired (record-driven pass) or swept (orphan scan) while that record
+// still names it. Both callers therefore gate on the flag and do nothing
+// with a partial listing.
 func (s *Store) listEviction(roots RootSet, cutoff time.Time, stats *EvictStats) (cands []evictionCandidate, refcount map[string]int, complete bool, err error) {
 	refcount = map[string]int{}
 	entries, err := os.ReadDir(s.manifestsDir())
@@ -582,11 +594,13 @@ func (s *Store) listEviction(roots RootSet, cutoff time.Time, stats *EvictStats)
 		}
 		var rec imageRecord
 		if err := json.Unmarshal(b, &rec); err != nil {
+			// An undecodable record contributes no refcounts, so evicting it
+			// would strand its (unknown) layers as orphans until the next
+			// restart. Never a candidate: leave it in place and fail the
+			// enumeration — the error names the file for the operator.
 			complete = false
-			// An undecodable record can't produce refcounts; deleting it is
-			// safe (layers it referenced become orphans, collected next pass)
-			// but do so only via the normal candidate path so vetoes apply.
 			errs = append(errs, fmt.Errorf("while decoding image record %s: %w", digest, err))
+			continue
 		}
 
 		// Dedupe diffIDs per record (images may list a layer twice) so the
@@ -642,7 +656,11 @@ func (s *Store) listEviction(roots RootSet, cutoff time.Time, stats *EvictStats)
 // one of its layers: without the record the kept layer is unreachable by
 // the runtime pass. The rewrite bumps the record's mtime, so min-age keeps
 // it off the next pass's candidate list — the retry happens once the kept
-// layer is itself old enough to go.
+// layer is itself old enough to go. The cost is the record's true last-use:
+// a cold restored image now sorts as freshly used and can outlive genuinely
+// warmer images until it re-ages. Accepted — preserving the old mtime
+// instead would make the same doomed candidate churn through
+// delete-and-restore on every pass until its kept layer ages out.
 func (s *Store) restoreRecord(digest v1.Hash, raw []byte) error {
 	path := s.recordPath(digest)
 	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
