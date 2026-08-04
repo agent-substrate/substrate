@@ -171,14 +171,13 @@ func toAteletReadyz(in *atev1alpha1.ContainerReadyz) *ateletpb.Readyz {
 	if in == nil {
 		return nil
 	}
-	out := &ateletpb.Readyz{}
+	out := &ateletpb.Readyz{TimeoutSeconds: in.TimeoutSeconds}
 	if in.HTTPGet != nil {
 		out.HttpGet = &ateletpb.HTTPGetAction{
 			Path: in.HTTPGet.Path,
 			Port: in.HTTPGet.Port,
 		}
 	}
-	out.TimeoutSeconds = in.TimeoutSeconds
 	return out
 }
 
