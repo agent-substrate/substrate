@@ -51,9 +51,7 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"golang.org/x/sys/unix"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/reflection"
-	"google.golang.org/grpc/status"
 )
 
 var (
@@ -279,10 +277,14 @@ type AteomService struct {
 	// exactly what atomic.Pointer is for.
 	//
 	// The type makes a lock-free read possible; it does not make one happen.
-	// GetWorkloadStats must not take lock at all, including around whatever it
-	// does with the value. A regression test pins that once there is a handler
-	// with a body to pin.
+	// GetWorkloadStats must not take lock at all, including around the cgroup
+	// read it does with the value. TestGetWorkloadStatsDoesNotTakeLock pins that.
 	activeActor atomic.Pointer[ateomstats.ActorAttribution]
+
+	// cgroupRoot is where the sandbox's cgroup v2 leaves live: the worker pod's
+	// own cgroup scope, which setupCgroupDelegation prepares. A field rather
+	// than a constant so tests can point GetWorkloadStats at a fixture tree.
+	cgroupRoot string
 }
 
 var _ ateompb.AteomServer = (*AteomService)(nil)
@@ -298,6 +300,7 @@ func NewService(interiorNetNS netns.NsHandle, actorLogger *actorlog.ActorLogger,
 		workerCredentialBundlePath:   workerCredentialBundlePath,
 		podIdentityTrustBundlePath:   podIdentityTrustBundlePath,
 		egressGatewayTrustBundlePath: egressGatewayTrustBundlePath,
+		cgroupRoot:                   defaultCgroupRoot,
 	}
 }
 
@@ -514,16 +517,6 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	s.actorLogger.EmitLifecycleLog("Actor checkpointed", actorRef, req.GetActorUid(), req.GetActorTemplateNamespace(), req.GetActorTemplateName())
 
 	return &ateompb.CheckpointWorkloadResponse{SnapshotFiles: snapshotFiles}, nil
-}
-
-// GetWorkloadStats implements ateompb.Ateom/GetWorkloadStats.
-//
-// The attribution half is wired up here; the measurement half is not. Reading the
-// sandbox's cgroup (/sys/fs/cgroup/pause) lands in the follow-up to
-// https://github.com/agent-substrate/substrate/issues/594, at which point this
-// stops returning Unimplemented.
-func (s *AteomService) GetWorkloadStats(ctx context.Context, req *ateompb.GetWorkloadStatsRequest) (*ateompb.GetWorkloadStatsResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "GetWorkloadStats is not implemented yet")
 }
 
 // listSnapshotFiles returns the (relative) names of regular files directly under

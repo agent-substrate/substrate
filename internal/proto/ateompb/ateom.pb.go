@@ -1099,12 +1099,28 @@ type GetWorkloadStatsResponse struct {
 	Source StatsSource `protobuf:"varint,7,opt,name=source,proto3,enum=ateom.StatsSource" json:"source,omitempty"`
 	// Measurements. All four are zero when source is STATS_SOURCE_UNSPECIFIED,
 	// which means "not measured" rather than "measured as zero".
-	MemoryCurrentBytes    uint64 `protobuf:"varint,8,opt,name=memory_current_bytes,json=memoryCurrentBytes,proto3" json:"memory_current_bytes,omitempty"`
-	MemoryPeakBytes       uint64 `protobuf:"varint,9,opt,name=memory_peak_bytes,json=memoryPeakBytes,proto3" json:"memory_peak_bytes,omitempty"`
+	//
+	// Two of them accumulate -- memory_peak_bytes and cpu_usage_usec -- and both
+	// are scoped to the current EPOCH rather than to the actor's lifetime. An
+	// epoch begins wherever the accounting behind the sample begins, which is not
+	// the same event for every source: STATS_SOURCE_CGROUP reads a sandbox cgroup
+	// that a restore recreates, so both restart at zero there, while
+	// STATS_SOURCE_GUEST_AGENT reads counters the guest kernel keeps in its own
+	// RAM, which a restored guest brings back with it. A caller that wants a
+	// lifetime figure has to accumulate one itself, and must read a decrease as a
+	// new epoch rather than emit a negative delta -- but not the converse. An
+	// epoch can also begin at a value above the last one reported, so no
+	// comparison of consecutive samples detects every boundary.
+	MemoryCurrentBytes uint64 `protobuf:"varint,8,opt,name=memory_current_bytes,json=memoryCurrentBytes,proto3" json:"memory_current_bytes,omitempty"`
+	// High-water mark of memory_current_bytes within the current epoch. Also zero
+	// when the runtime cannot report a peak at all: the cgroup source reads
+	// memory.peak, which only exists on Linux 5.19 and later.
+	MemoryPeakBytes uint64 `protobuf:"varint,9,opt,name=memory_peak_bytes,json=memoryPeakBytes,proto3" json:"memory_peak_bytes,omitempty"`
+	// memory_current_bytes less the reclaimable page cache, floored at zero. This
+	// is the figure to compare against a memory limit; memory_current_bytes
+	// drifts upward with cache the kernel would drop for free under pressure.
 	MemoryWorkingSetBytes uint64 `protobuf:"varint,10,opt,name=memory_working_set_bytes,json=memoryWorkingSetBytes,proto3" json:"memory_working_set_bytes,omitempty"`
-	// Cumulative CPU time within the current epoch. A restore starts a new epoch:
-	// the sandbox is recreated, so this restarts at zero and callers computing
-	// deltas must treat a decrease as a reset rather than emit a negative value.
+	// Cumulative CPU time within the current epoch.
 	CpuUsageUsec       uint64 `protobuf:"varint,11,opt,name=cpu_usage_usec,json=cpuUsageUsec,proto3" json:"cpu_usage_usec,omitempty"`
 	ObservedAtUnixNano int64  `protobuf:"varint,12,opt,name=observed_at_unix_nano,json=observedAtUnixNano,proto3" json:"observed_at_unix_nano,omitempty"`
 	unknownFields      protoimpl.UnknownFields
