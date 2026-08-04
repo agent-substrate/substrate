@@ -223,6 +223,10 @@ spec:
         sha256: "1ba2366ae2efceba166046f51a4104f9261c9cb72c6db8f5b3fe2dc57dea86b9"
 ```
 
+### Running a locally-built runsc
+
+Because the binary is fetched at runtime rather than baked into the worker image, testing an unreleased runsc is a matter of staging the binary into the cluster's object store and pointing a `SandboxConfig` at its URL + `sha256`. See [`hack/gvisor-hack/`](../hack/gvisor-hack/) for scripts that do this and leave `gvisor-default` untouched. Note that snapshots are version-locked to the runsc that wrote them, so a custom build cannot restore checkpoints taken with the released one.
+
 ### Micro-VM SandboxConfig
 
 A `microvm` `SandboxConfig` supplies the [Kata Containers](https://katacontainers.io/) + [Cloud Hypervisor](https://www.cloudhypervisor.org/) toolchain instead of `runsc`. Each architecture must define the full asset set — `kata-shim`, `cloud-hypervisor`, `virtiofsd`, `kata-kernel`, `kata-image`, and `kata-config` — which a `ValidatingAdmissionPolicy` enforces at apply time. Worker pods for a micro-VM pool require `/dev/kvm` and nested-virtualization-capable nodes labeled `ate.dev/sandboxClass=microvm` (the controller adds the device mount and node placement automatically).

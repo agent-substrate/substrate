@@ -18,6 +18,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -192,5 +193,96 @@ func TestSandboxConfigValidation(t *testing.T) {
 				t.Errorf("Create() error = %q, want it to contain %q", err.Error(), tt.errMsg)
 			}
 		})
+	}
+}
+
+// hackTemplatePath is the SandboxConfig template hack/gvisor-hack/deploy.sh
+// renders to point a cluster at a locally-built gVisor runtime.
+const hackTemplatePath = "../../../hack/gvisor-hack/sandboxconfig.yaml.tmpl"
+
+// hackDeployScriptPath is the script that renders hackTemplatePath.
+const hackDeployScriptPath = "../../../hack/gvisor-hack/deploy.sh"
+
+// hackTemplateValues is what the test substitutes for each placeholder, standing
+// in for the values deploy.sh computes at run time.
+var hackTemplateValues = map[string]string{
+	"NAME":         "gvisor-hack-rendered",
+	"DEFAULT":      "false",
+	"ARCH":         "amd64",
+	"RUNSC_URL":    "gs://ate-snapshots/gvisor-hack/runsc-" + validSHA256,
+	"RUNSC_SHA256": validSHA256,
+}
+
+// TestGvisorHackTemplate renders the hack/gvisor-hack SandboxConfig template and
+// applies it to a real API server carrying the shipped CRD and
+// ValidatingAdmissionPolicy. The dev workflow's whole premise is that the
+// rendered object is accepted, so a schema or policy change that invalidates the
+// template should fail here rather than in someone's kind cluster. It also
+// checks that the template and its renderer agree on the placeholder set: a
+// placeholder deploy.sh does not substitute would reach the API server as a
+// literal "${...}".
+func TestGvisorHackTemplate(t *testing.T) {
+	ctx := t.Context()
+	applyVAP(t, ctx)
+
+	raw, err := os.ReadFile(hackTemplatePath)
+	if err != nil {
+		t.Fatalf("read template: %v", err)
+	}
+	script, err := os.ReadFile(hackDeployScriptPath)
+	if err != nil {
+		t.Fatalf("read deploy script: %v", err)
+	}
+
+	rendered := string(raw)
+	placeholders := regexp.MustCompile(`\$\{([A-Z0-9_]+)\}`).FindAllStringSubmatch(rendered, -1)
+	if len(placeholders) == 0 {
+		t.Fatal("template has no placeholders; it is no longer rendered by deploy.sh")
+	}
+	for _, m := range placeholders {
+		name := m[1]
+		value, ok := hackTemplateValues[name]
+		if !ok {
+			t.Fatalf("template placeholder %s has no value in this test; add one", m[0])
+		}
+		// deploy.sh renders with `sed -e "s|\${NAME}|...|g"`, so its source must
+		// mention each placeholder it is expected to substitute.
+		if !strings.Contains(string(script), `s|\`+m[0]+`|`) {
+			t.Errorf("deploy.sh has no sed expression for template placeholder %s", m[0])
+		}
+		rendered = strings.ReplaceAll(rendered, m[0], value)
+	}
+	if strings.Contains(rendered, "${") {
+		t.Fatalf("rendered template still contains a placeholder:\n%s", rendered)
+	}
+
+	obj := map[string]any{}
+	if err := yaml.Unmarshal([]byte(rendered), &obj); err != nil {
+		t.Fatalf("decode rendered template: %v", err)
+	}
+	u := &unstructured.Unstructured{Object: obj}
+	if err := k8sClient.Create(ctx, u); err != nil {
+		t.Fatalf("Create() rendered template: %v", err)
+	}
+	t.Cleanup(func() { _ = k8sClient.Delete(ctx, u) })
+
+	// Round-trip through the typed API to confirm the template produces the asset
+	// shape the gVisor backend looks up (atelet reads assets[GOARCH]["runsc"]).
+	sc := &SandboxConfig{}
+	if err := k8sClient.Get(ctx, client.ObjectKey{Name: hackTemplateValues["NAME"]}, sc); err != nil {
+		t.Fatalf("Get() rendered SandboxConfig: %v", err)
+	}
+	if sc.Spec.SandboxClass != SandboxClassGvisor {
+		t.Errorf("sandboxClass = %q, want %q", sc.Spec.SandboxClass, SandboxClassGvisor)
+	}
+	if sc.Spec.Default {
+		t.Error("default = true; the template must not claim the cluster default unless MAKE_DEFAULT is set")
+	}
+	asset, ok := sc.Spec.Assets[hackTemplateValues["ARCH"]]["runsc"]
+	if !ok {
+		t.Fatalf("no runsc asset for arch %q; got assets %v", hackTemplateValues["ARCH"], sc.Spec.Assets)
+	}
+	if asset.SHA256 != validSHA256 || asset.URL != hackTemplateValues["RUNSC_URL"] {
+		t.Errorf("runsc asset = %+v, want url %q sha256 %q", asset, hackTemplateValues["RUNSC_URL"], validSHA256)
 	}
 }
