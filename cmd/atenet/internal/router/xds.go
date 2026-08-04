@@ -101,6 +101,19 @@ const defaultExtProcMaxRequests = 2048
 // precedes it — parking and the ext_proc timeout cover that part.
 const defaultRouteTimeout = 10 * time.Second
 
+// envoyDefaultStreamIdleTimeout is the stream idle timeout Envoy applies when
+// the HTTP connection manager does not set one. We never set it, so this is
+// what governs today.
+//
+// It is a distinct limit from the route timeout: the route timeout bounds the
+// upstream response time, while this bounds how long the stream may go with no
+// encode/decode event at all. A turn that produces no bytes while the actor
+// thinks — a non-streaming completion, or a request parked across a resume —
+// is idle by this measure even though it is progressing, so without an
+// override a route timeout above five minutes would never be reached. See
+// routeIdleTimeout.
+const envoyDefaultStreamIdleTimeout = 5 * time.Minute
+
 // XdsServer implements an aggregated discovery service server for dynamic Envoy router nodes.
 type XdsServer struct {
 	xdsPort      int
@@ -211,6 +224,25 @@ func (x *XdsServer) SetRouteTimeout(d time.Duration) {
 	if d > 0 {
 		x.routeTimeout = d
 	}
+}
+
+// routeIdleTimeout resolves the route-level idle timeout that accompanies the
+// route timeout. Caller must hold x.mu.
+//
+// Raising --route-timeout on its own would not work: the stream a long turn
+// runs on is idle for the whole turn whenever the actor sends nothing until it
+// is done, and Envoy would reset it at the five-minute stream idle default
+// before the requested timeout was ever reached. The idle timer must therefore
+// never be the limit that bites first.
+//
+// Taking the larger of the two keeps the operator's ceiling honest without
+// making the idle timer stricter than it already is: below five minutes the
+// route timeout fires first anyway, so this leaves today's behavior alone.
+func (x *XdsServer) routeIdleTimeout() time.Duration {
+	if x.routeTimeout > envoyDefaultStreamIdleTimeout {
+		return x.routeTimeout
+	}
+	return envoyDefaultStreamIdleTimeout
 }
 
 func (x *XdsServer) SetTlsConfig(httpsPort int, certPath string) {
@@ -637,7 +669,8 @@ func (x *XdsServer) buildRoutes() *routev3.RouteConfiguration {
 								ClusterSpecifier: &routev3.RouteAction_Cluster{
 									Cluster: OriginalDstClusterName,
 								},
-								Timeout: durationpb.New(x.routeTimeout),
+								Timeout:     durationpb.New(x.routeTimeout),
+								IdleTimeout: durationpb.New(x.routeIdleTimeout()),
 							},
 						},
 					},
