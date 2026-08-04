@@ -416,6 +416,12 @@ spec:
             - ateomImage
             - replicas
             type: object
+            x-kubernetes-validations:
+            - message: nvidia.com/gpu is only supported when sandboxClass is 'gvisor'
+              rule: '!has(self.sandboxClass) || self.sandboxClass == ''gvisor'' ||
+                !has(self.template) || !has(self.template.resources) || !((has(self.template.resources.limits)
+                && ''nvidia.com/gpu'' in self.template.resources.limits) || (has(self.template.resources.requests)
+                && ''nvidia.com/gpu'' in self.template.resources.requests))'
           status:
             description: status is the observed state of WorkerPool
             properties:
