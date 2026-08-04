@@ -19,19 +19,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"math/rand"
 	"slices"
 
-	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 	"k8s.io/apimachinery/pkg/labels"
 )
-
-// metric identifier for tracking eligible worker counts.
-const eligibleWorkersMetric = "ate.scheduler.eligible_workers"
 
 // Constraints describes what a worker must satisfy to host an actor.
 type Constraints struct {
@@ -86,25 +80,6 @@ func WithIntn(intn func(n int) int) Option {
 	return func(s *scheduler) { s.intn = intn }
 }
 
-// WithMeter configures the meter used to create telemetry instruments for the scheduler.
-func WithMeter(meter metric.Meter) Option {
-	return func(s *scheduler) {
-		if meter == nil {
-			return
-		}
-		hist, err := meter.Int64Histogram(
-			eligibleWorkersMetric,
-			metric.WithUnit("{worker}"),
-			metric.WithDescription("Number of eligible workers available during scheduling given the constraint filters."),
-		)
-		if err != nil {
-			slog.Error("Failed to create ate.scheduler.eligible_workers histogram", "error", err)
-			return
-		}
-		s.eligibleWorkers = hist
-	}
-}
-
 // New returns a Scheduler placing onto workers reported by source.
 func New(source WorkerSource, opts ...Option) Scheduler {
 	s := &scheduler{source: source, intn: rand.Intn}
@@ -114,8 +89,7 @@ func New(source WorkerSource, opts ...Option) Scheduler {
 	return s
 }
 
-// Schedule filters the current worker fleet to find unassigned candidates matching the given constraints,
-// records the ate.scheduler.eligible_workers metric, and picks a random candidate if available.
+// Schedule filters the current worker fleet to find unassigned candidates matching the given constraints.
 func (s *scheduler) Schedule(ctx context.Context, constraints Constraints) (*ateapipb.Worker, error) {
 	workers, err := s.source.Workers()
 	if err != nil {
@@ -123,94 +97,26 @@ func (s *scheduler) Schedule(ctx context.Context, constraints Constraints) (*ate
 	}
 
 	// Filter for candidate workers that are unassigned and meet all scheduling constraints
+	matching := make([]*ateapipb.Worker, 0, len(workers))
 	var candidates []*ateapipb.Worker
 	for _, worker := range workers {
-		if worker.GetAssignment() == nil && s.Applies(worker, constraints) {
+		if !s.Applies(worker, constraints) {
+			continue
+		}
+		matching = append(matching, worker)
+		if worker.GetAssignment() == nil {
 			candidates = append(candidates, worker)
 		}
 	}
 
 	// Record telemetry on the number of eligible workers per pool/namespace before returning
-	s.recordEligibleWorkers(ctx, workers, candidates, constraints)
+	s.recordEligibleWorkers(ctx, matching, constraints)
 
 	if len(candidates) == 0 {
 		return nil, ErrNoCapacity
 	}
 
 	return candidates[s.intn(len(candidates))], nil
-}
-
-// Records candidate worker counts grouped by WorkerPool namespace, WorkerPool name,
-// SandboxClass, and SchedulingConstraint, and records histogram datapoints.
-func (s *scheduler) recordEligibleWorkers(ctx context.Context, allWorkers []*ateapipb.Worker, candidates []*ateapipb.Worker, constraints Constraints) {
-	if s.eligibleWorkers == nil {
-		return
-	}
-
-	constraintStr := classifyConstraint(constraints)
-
-	type key struct {
-		namespace    string
-		pool         string
-		sandboxClass string
-		constraint   string
-	}
-	eligibleByPool := make(map[key]int64)
-
-	// Seed key counts at 0 for all worker pools matching constraints,
-	// ensures saturated pools report 0 eligible workers rather than missing series.
-	for _, w := range allWorkers {
-		if s.Applies(w, constraints) {
-			eligibleByPool[key{
-				namespace:    w.GetWorkerNamespace(),
-				pool:         w.GetWorkerPool(),
-				sandboxClass: w.GetSandboxClass(),
-				constraint:   constraintStr,
-			}] = 0
-		}
-	}
-
-	// Records unassigned/eligible candidate workers for each pool
-	for _, w := range candidates {
-		eligibleByPool[key{
-			namespace:    w.GetWorkerNamespace(),
-			pool:         w.GetWorkerPool(),
-			sandboxClass: w.GetSandboxClass(),
-			constraint:   constraintStr,
-		}]++
-	}
-
-	// Handle when no worker pools match constraints
-	if len(eligibleByPool) == 0 {
-		attrs := []attribute.KeyValue{
-			ateattr.SchedulingConstraintKey.String(constraintStr),
-		}
-		if constraints.SandboxClass != "" {
-			attrs = append(attrs, ateattr.SandboxClassKey.String(constraints.SandboxClass))
-		}
-		s.eligibleWorkers.Record(ctx, 0, metric.WithAttributes(attrs...))
-		return
-	}
-
-	// Emit histogram observation for each worker pool key using standard ateattr keys
-	for k, count := range eligibleByPool {
-		s.eligibleWorkers.Record(ctx, count, metric.WithAttributes(
-			ateattr.WorkerPoolNamespaceKey.String(k.namespace),
-			ateattr.WorkerPoolNameKey.String(k.pool),
-			ateattr.SandboxClassKey.String(k.sandboxClass),
-			ateattr.SchedulingConstraintKey.String(k.constraint),
-		))
-	}
-}
-
-func classifyConstraint(c Constraints) string {
-	if len(c.RequiredNodes) > 0 {
-		return ateattr.ConstraintRequiredNodes
-	}
-	if (c.TemplateSelector != nil && !c.TemplateSelector.Empty()) || (c.ActorSelector != nil && !c.ActorSelector.Empty()) {
-		return ateattr.ConstraintSelector
-	}
-	return ateattr.ConstraintNone
 }
 
 func (s *scheduler) Applies(worker *ateapipb.Worker, constraints Constraints) bool {

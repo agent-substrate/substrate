@@ -109,10 +109,10 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 			for _, line := range strings.Split(scrape, "\n") {
 				if strings.HasPrefix(line, "ate_scheduler_eligible_workers") {
 					foundEligibleLine = true
-					nsVal := extractPrometheusLabelValue(line, "ate_workerpool_namespace")
-					poolVal := extractPrometheusLabelValue(line, "ate_workerpool_name")
-					classVal := extractPrometheusLabelValue(line, "ate_sandbox_class")
-					constraintVal := extractPrometheusLabelValue(line, "ate_scheduling_constraint")
+					nsVal := extractLabelValue(line, "ate_workerpool_namespace")
+					poolVal := extractLabelValue(line, "ate_workerpool_name")
+					classVal := extractLabelValue(line, "ate_sandbox_class")
+					constraintVal := extractLabelValue(line, "ate_scheduling_constraint")
 
 					var lineErrs []string
 					if classVal == "" {
@@ -199,7 +199,7 @@ func waitForStatus(t *testing.T, ctx context.Context, clients *e2e.Clients, acto
 	t.Fatalf("actor %q never reached %v", actorID, want)
 }
 
-func extractPrometheusLabelValue(line, labelName string) string {
+func extractLabelValue(line, labelName string) string {
 	key := labelName + `="`
 	idx := strings.Index(line, key)
 	if idx == -1 {
