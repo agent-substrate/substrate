@@ -44,11 +44,13 @@ func TestFinalizePausedStep_WorkerGone(t *testing.T) {
 	actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
 
 	actor := &ateapipb.Actor{
-		Metadata:           &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
-		Status:             ateapipb.Actor_STATUS_PAUSING,
-		AteomPodNamespace:  "default",
-		AteomPodName:       "worker-pod-1",
-		WorkerPoolName:     "pool1",
+		Metadata: &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+		Status:   ateapipb.Actor_STATUS_PAUSING,
+		WorkerAssignment: &ateapipb.WorkerAssignment{
+			WorkerNamespace: "default",
+			WorkerPool:      "pool1",
+			WorkerPod:       "worker-pod-1",
+		},
 		InProgressSnapshot: "snap-prefix",
 	}
 	if _, err := st.CreateActor(ctx, actor); err != nil {
@@ -198,10 +200,10 @@ func TestPauseSteps_CheckPrerequisite(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
 			for _, st := range allActorStatuses {
-				// Worker pod fields are populated so CallAteletPauseStep's
+				// The worker assignment is populated so CallAteletPauseStep's
 				// missing-worker crash branch is not taken; this test only
 				// verifies status gating.
-				err := tc.step.CheckPrerequisite(ctx, &PauseInput{ActorRef: resources.ActorRef{Name: "id1"}}, &PauseState{Actor: &ateapipb.Actor{Status: st, AteomPodNamespace: "ns", AteomPodName: "worker-1"}})
+				err := tc.step.CheckPrerequisite(ctx, &PauseInput{ActorRef: resources.ActorRef{Name: "id1"}}, &PauseState{Actor: &ateapipb.Actor{Status: st, WorkerAssignment: &ateapipb.WorkerAssignment{WorkerNamespace: "ns", WorkerPool: "pool", WorkerPod: "worker-1"}}})
 				assertPrerequisiteResult(t, st, err, tc.allowed == nil || tc.allowed[st])
 			}
 		})
@@ -229,11 +231,13 @@ func TestCallAteletPauseStep_DanglingWorkerDoesNotRecordPhantomSnapshot(t *testi
 			persistence := newTestPersistence(t)
 
 			actor := &ateapipb.Actor{
-				Metadata:           &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor-1"},
-				Status:             ateapipb.Actor_STATUS_PAUSING,
-				AteomPodNamespace:  "worker-ns",
-				AteomPodName:       "pod-gone",
-				WorkerPoolName:     "pool",
+				Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor-1"},
+				Status:   ateapipb.Actor_STATUS_PAUSING,
+				WorkerAssignment: &ateapipb.WorkerAssignment{
+					WorkerNamespace: "worker-ns",
+					WorkerPool:      "pool",
+					WorkerPod:       "pod-gone",
+				},
 				InProgressSnapshot: "actor-1-never-written",
 				LatestSnapshot:     tt.prevSnapshot,
 			}

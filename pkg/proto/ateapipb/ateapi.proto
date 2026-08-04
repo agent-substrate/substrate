@@ -178,41 +178,48 @@ message Actor {
   }
   Status status = 4;
 
-  string ateom_pod_namespace = 5;
-  string ateom_pod_name = 6;
-  string ateom_pod_ip = 7;
+  // worker_assignment points at the worker currently hosting this Actor.
+  // Unset whenever the Actor has no worker (SUSPENDED, PAUSED, CRASHED).
+  WorkerAssignment worker_assignment = 5;
 
-  string in_progress_snapshot = 8;
-  string ateom_pod_uid = 9;
-  reserved 10;
-  reserved "latest_snapshot_info";
+  string in_progress_snapshot = 6;
 
   // worker_selector is the per-actor placement constraint. The scheduler
   // evaluates the AND of this selector and the template's workerSelector to
   // find eligible pools. Set at CreateActor; may be updated at any time via
   // UpdateActor. Changes take effect on the next ResumeActor call.
-  Selector worker_selector = 11;
-
-  // worker_pool_name is the name of the WorkerPool that owns the currently
-  // assigned worker, in the same namespace as ateom_pod_namespace (pool and
-  // pod namespaces always match). Set by the scheduler at assignment time
-  // and cleared when the worker is freed. Needed to release the worker on
-  // suspend/pause since eligibility is no longer a single fixed pool
-  // reference on the ActorTemplate.
-  string worker_pool_name = 12;
+  Selector worker_selector = 7;
 
   // The latest durable snapshot created for this Actor.
-  ObjectRef latest_snapshot = 14;
+  ObjectRef latest_snapshot = 8;
 
   // Node-local state used only while the Actor is paused.
-  LocalSnapshotInfo local_snapshot_info = 15;
+  LocalSnapshotInfo local_snapshot_info = 9;
 
   // Actor version captured when the current durable snapshot began.
-  int64 in_progress_snapshot_source_actor_version = 16;
+  int64 in_progress_snapshot_source_actor_version = 10;
 
   // Volumes attached to the actor. These volumes only live as long as the actor.
   // They are deleted when the actor is deleted.
-  repeated ExternalVolume actor_volumes = 13;
+  repeated ExternalVolume actor_volumes = 11;
+}
+
+// WorkerAssignment identifies the Worker currently hosting an Actor.
+message WorkerAssignment {
+  // worker_namespace is the Kubernetes namespace of the WorkerPool and worker Pod.
+  string worker_namespace = 1;
+
+  // worker_pool is the name of the WorkerPool the worker belongs to.
+  string worker_pool = 2;
+
+  // worker_pod is the name of the Kubernetes pod hosting the Actor.
+  string worker_pod = 3;
+
+  // worker_pod_uid is the Kubernetes UID of worker_pod.
+  string worker_pod_uid = 4;
+
+  // worker_pod_ip is the IP of worker_pod.
+  string worker_pod_ip = 5;
 }
 
 // ActorSnapshot is an independently addressable durable Actor snapshot. Its

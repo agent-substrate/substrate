@@ -169,21 +169,18 @@ func (s *LoadActorForResumeStep) Execute(ctx context.Context, input *ResumeInput
 	// If the Actor is in Resuming state, it means a previous attempt crashed after AssignWorkerStep.
 	// We don't need to repeat the AssignWorkerStep, load the Worker now.
 	if actor.Status == ateapipb.Actor_STATUS_RESUMING {
-		allPopulated := actor.AteomPodUid != "" && actor.WorkerPoolName != "" && actor.AteomPodName != ""
-		if !allPopulated {
-			slog.ErrorContext(ctx, "expected all of AteomPodUid, WorkerPoolName and AteomPodName to be populated, found",
-				slog.String("AteomPodUid", actor.AteomPodUid),
-				slog.String("WorkerPoolName", actor.WorkerPoolName),
-				slog.String("AteomPodName", actor.AteomPodName))
+		assignment := actor.GetWorkerAssignment()
+		if assignment == nil {
+			slog.ErrorContext(ctx, "expected a worker assignment on a RESUMING actor, found none")
 
-			// Crash the actor if its worker assignment is corrupted. We should never be in this state.
+			// Crash the actor if its worker assignment is missing. We should never be in this state.
 			if cerr := crashActor(ctx, s.store, input.ActorRef); cerr != nil {
 				return cerr
 			}
 			return status.Errorf(codes.Aborted, "actor %s crashed", input.ActorRef)
 		}
 
-		wk, err := s.store.GetWorker(ctx, actor.AteomPodNamespace, actor.WorkerPoolName, actor.AteomPodName)
+		wk, err := s.store.GetWorker(ctx, assignment.GetWorkerNamespace(), assignment.GetWorkerPool(), assignment.GetWorkerPod())
 		if err != nil {
 			// Crash the actor if it was assigned to a deleted pod.
 			if errors.Is(err, store.ErrNotFound) {
@@ -376,11 +373,7 @@ func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, stat
 	}
 
 	state.Actor.Status = ateapipb.Actor_STATUS_RESUMING
-	state.Actor.AteomPodNamespace = assignedWorker.GetWorkerNamespace()
-	state.Actor.AteomPodName = assignedWorker.GetWorkerPod()
-	state.Actor.AteomPodIp = assignedWorker.GetIp()
-	state.Actor.AteomPodUid = assignedWorker.GetWorkerPodUid()
-	state.Actor.WorkerPoolName = assignedWorker.GetWorkerPool()
+	state.Actor.WorkerAssignment = workerAssignmentFrom(assignedWorker)
 
 	updatedActor, err := s.store.UpdateActor(ctx, state.Actor, state.Actor.GetMetadata().GetVersion())
 	if err != nil {
@@ -407,6 +400,16 @@ func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, stat
 	pool = assignedWorker.GetWorkerPool()
 	outcome = ateattr.SchedulerOutcomeAssigned
 	return nil
+}
+
+func workerAssignmentFrom(w *ateapipb.Worker) *ateapipb.WorkerAssignment {
+	return &ateapipb.WorkerAssignment{
+		WorkerNamespace: w.GetWorkerNamespace(),
+		WorkerPool:      w.GetWorkerPool(),
+		WorkerPod:       w.GetWorkerPod(),
+		WorkerPodUid:    w.GetWorkerPodUid(),
+		WorkerPodIp:     w.GetIp(),
+	}
 }
 
 func schedulingConstraints(actor *ateapipb.Actor, tmpl *atev1alpha1.ActorTemplate) (scheduling.Constraints, error) {
@@ -450,11 +453,12 @@ func (s *AttachVolumesStep) CheckPrerequisite(ctx context.Context, input *Resume
 }
 
 func (s *AttachVolumesStep) Execute(ctx context.Context, input *ResumeInput, state *ResumeState) error {
-	if state.Actor.GetAteomPodNamespace() == "" {
+	assignment := state.Actor.GetWorkerAssignment()
+	if assignment == nil {
 		return fmt.Errorf("actor has no assigned worker pod")
 	}
 
-	worker, err := s.store.GetWorker(ctx, state.Actor.GetAteomPodNamespace(), state.Actor.GetWorkerPoolName(), state.Actor.GetAteomPodName())
+	worker, err := s.store.GetWorker(ctx, assignment.GetWorkerNamespace(), assignment.GetWorkerPool(), assignment.GetWorkerPod())
 	if err != nil {
 		return fmt.Errorf("failed to get worker for volume attachment: %w", err)
 	}
@@ -532,7 +536,8 @@ func (s *CallAteletRestoreStep) CheckPrerequisite(ctx context.Context, input *Re
 	return nil
 }
 func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput, state *ResumeState) error {
-	ateletConn, err := s.dialer.DialForWorker(state.Actor.GetAteomPodNamespace(), state.Actor.GetAteomPodName())
+	assignment := state.Actor.GetWorkerAssignment()
+	ateletConn, err := s.dialer.DialForWorker(assignment.GetWorkerNamespace(), assignment.GetWorkerPod())
 	if err != nil {
 		return err
 	}
@@ -548,7 +553,7 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 		state.SnapshotKind = ateattr.SnapshotKindLocal
 
 		req := &ateletpb.RestoreRequest{
-			TargetAteomUid:         state.Actor.GetAteomPodUid(),
+			TargetAteomUid:         assignment.GetWorkerPodUid(),
 			Atespace:               state.Actor.GetMetadata().GetAtespace(),
 			ActorName:              state.Actor.GetMetadata().GetName(),
 			ActorTemplateNamespace: state.Actor.GetActorTemplateNamespace(),
@@ -591,7 +596,7 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 			scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
 		}
 		req := &ateletpb.RestoreRequest{
-			TargetAteomUid:         state.Actor.GetAteomPodUid(),
+			TargetAteomUid:         assignment.GetWorkerPodUid(),
 			Atespace:               state.Actor.GetMetadata().GetAtespace(),
 			ActorName:              state.Actor.GetMetadata().GetName(),
 			ActorTemplateNamespace: state.Actor.GetActorTemplateNamespace(),
@@ -617,13 +622,13 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 		// Booting from scratch: resolve the sandbox binaries from the pool's
 		// SandboxConfig and send them so atelet can fetch and record them.
 		// (Restores above are self-describing via the snapshot manifest.)
-		sandboxAssets, err := resolveSandboxAssets(s.workerPoolLister, s.sandboxConfigLister, state.Actor.GetAteomPodNamespace(), state.Actor.GetWorkerPoolName())
+		sandboxAssets, err := resolveSandboxAssets(s.workerPoolLister, s.sandboxConfigLister, assignment.GetWorkerNamespace(), assignment.GetWorkerPool())
 		if err != nil {
 			return fmt.Errorf("while resolving sandbox assets: %w", err)
 		}
 
 		req := &ateletpb.RunRequest{
-			TargetAteomUid:         state.Actor.GetAteomPodUid(),
+			TargetAteomUid:         assignment.GetWorkerPodUid(),
 			Atespace:               state.Actor.GetMetadata().GetAtespace(),
 			ActorName:              state.Actor.GetMetadata().GetName(),
 			ActorTemplateNamespace: state.Actor.GetActorTemplateNamespace(),

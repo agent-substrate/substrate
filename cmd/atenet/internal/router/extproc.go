@@ -178,7 +178,7 @@ func (s *ExtProcServer) handleRequestHeaders(
 	tmplNs := actor.GetActorTemplateNamespace()
 	tmplName := actor.GetActorTemplateName()
 
-	workerIP := actor.GetAteomPodIp()
+	workerIP := actor.GetWorkerAssignment().GetWorkerPodIp()
 	slog.InfoContext(ctx, "ResumeActor result",
 		slog.Any("actor", actorRef),
 		slog.String("status", actor.GetStatus().String()),

@@ -118,20 +118,21 @@ func (s *CallAteletPauseStep) CheckPrerequisite(ctx context.Context, input *Paus
 	if state.Actor.GetStatus() != ateapipb.Actor_STATUS_PAUSING {
 		return status.Errorf(codes.FailedPrecondition, "CallAteletPauseStep prerequisite not met for Actor: %s (got: %v, want %s)", input.ActorRef, state.Actor.GetStatus(), ateapipb.Actor_STATUS_PAUSING)
 	}
-	if state.Actor.GetAteomPodNamespace() == "" || state.Actor.GetAteomPodName() == "" {
+	if state.Actor.GetWorkerAssignment() == nil {
 		if err := crashActor(ctx, s.store, input.ActorRef); err != nil {
 			slog.ErrorContext(ctx, "Failed to crash actor", slog.String("err", err.Error()))
 		}
-		return status.Errorf(codes.FailedPrecondition, "CallAteletPauseStep prerequisite not met for Actor: %s. AteomPodNamespace: %s, GetAteomPodName %s", input.ActorRef, state.Actor.GetAteomPodNamespace(), state.Actor.GetAteomPodName())
+		return status.Errorf(codes.FailedPrecondition, "CallAteletPauseStep prerequisite not met for Actor: %s. No worker assignment", input.ActorRef)
 	}
 	return nil
 }
 
 func (s *CallAteletPauseStep) Execute(ctx context.Context, input *PauseInput, state *PauseState) error {
-	ateletConn, err := s.dialer.DialForWorker(state.Actor.GetAteomPodNamespace(), state.Actor.GetAteomPodName())
+	assignment := state.Actor.GetWorkerAssignment()
+	ateletConn, err := s.dialer.DialForWorker(assignment.GetWorkerNamespace(), assignment.GetWorkerPod())
 	if err != nil {
 		if errors.Is(err, ErrWorkerPodNotFound) {
-			slog.ErrorContext(ctx, "Worker pod gone before checkpoint, crashing actor", "namespace", state.Actor.GetAteomPodNamespace(), "pod", state.Actor.GetAteomPodName(), "in_progress_snapshot", state.Actor.GetInProgressSnapshot())
+			slog.ErrorContext(ctx, "Worker pod gone before checkpoint, crashing actor", "namespace", assignment.GetWorkerNamespace(), "pod", assignment.GetWorkerPod(), "in_progress_snapshot", state.Actor.GetInProgressSnapshot())
 			if err := crashActor(ctx, s.store, input.ActorRef); err != nil {
 				slog.ErrorContext(ctx, "Failed to crash actor", slog.String("err", err.Error()))
 			}
@@ -150,7 +151,7 @@ func (s *CallAteletPauseStep) Execute(ctx context.Context, input *PauseInput, st
 	// actor is currently running (recorded on-node at Run/Restore) and pins it
 	// into the snapshot manifest.
 	req := &ateletpb.CheckpointRequest{
-		TargetAteomUid:         state.Actor.GetAteomPodUid(),
+		TargetAteomUid:         assignment.GetWorkerPodUid(),
 		Atespace:               state.Actor.GetMetadata().GetAtespace(),
 		ActorName:              state.Actor.GetMetadata().GetName(),
 		ActorTemplateNamespace: state.Actor.GetActorTemplateNamespace(),
@@ -182,7 +183,7 @@ func (s *DetachVolumesForPauseStep) Name() string { return "DetachVolumesForPaus
 
 func (s *DetachVolumesForPauseStep) IsComplete(ctx context.Context, input *PauseInput, state *PauseState) (bool, error) {
 	// TODO replace with a proper check on the volumes.
-	return state.Actor.GetStatus() == ateapipb.Actor_STATUS_PAUSED && state.Actor.GetAteomPodNamespace() == "", nil
+	return state.Actor.GetStatus() == ateapipb.Actor_STATUS_PAUSED && state.Actor.GetWorkerAssignment() == nil, nil
 }
 
 func (s *DetachVolumesForPauseStep) CheckPrerequisite(ctx context.Context, input *PauseInput, state *PauseState) error {
@@ -205,7 +206,7 @@ func (s *FinalizePausedStep) IsComplete(ctx context.Context, input *PauseInput, 
 	// or CRASHED (node name was lost, so it can never be safely resumed).
 	status := state.Actor.GetStatus()
 	terminal := status == ateapipb.Actor_STATUS_PAUSED || status == ateapipb.Actor_STATUS_CRASHED
-	return terminal && state.Actor.GetAteomPodNamespace() == "", nil
+	return terminal && state.Actor.GetWorkerAssignment() == nil, nil
 }
 
 func (s *FinalizePausedStep) CheckPrerequisite(ctx context.Context, input *PauseInput, state *PauseState) error {
@@ -221,19 +222,14 @@ func (s *FinalizePausedStep) Execute(ctx context.Context, input *PauseInput, sta
 	}
 
 	// 1. Free the worker (if it hasn't been freed yet)
-	if latestActor.GetAteomPodNamespace() != "" {
-		workerNs := latestActor.GetAteomPodNamespace()
-		workerPod := latestActor.GetAteomPodName()
-
-		workerPool := latestActor.GetWorkerPoolName()
-
-		worker, err := s.store.GetWorker(ctx, workerNs, workerPool, workerPod)
+	if assignment := latestActor.GetWorkerAssignment(); assignment != nil {
+		worker, err := s.store.GetWorker(ctx, assignment.GetWorkerNamespace(), assignment.GetWorkerPool(), assignment.GetWorkerPod())
 		nodeName := ""
 		if err != nil {
 			if !errors.Is(err, store.ErrNotFound) {
 				return fmt.Errorf("while getting worker for release: %w", err)
 			}
-			slog.Warn("Worker already gone during finalize pause, skipping release", "worker", workerPod)
+			slog.Warn("Worker already gone during finalize pause, skipping release", "worker", assignment.GetWorkerPod())
 		} else {
 			// TODO(dberkov) - what if worker does not belong to this actor?
 			nodeName = worker.GetNodeName()
@@ -250,7 +246,7 @@ func (s *FinalizePausedStep) Execute(ctx context.Context, input *PauseInput, sta
 			}
 		}
 
-		// 2. Safely clear ActiveWorker now that the worker object in DB is freed
+		// 2. Clear the actor's assignment, now that the worker is freed
 		latestActor, err = s.store.GetActor(ctx, input.ActorRef)
 		if err != nil {
 			return err
@@ -275,10 +271,7 @@ func (s *FinalizePausedStep) Execute(ctx context.Context, input *PauseInput, sta
 			latestActor.LocalSnapshotInfo = localInfo
 			latestActor.InProgressSnapshot = ""
 		}
-		latestActor.AteomPodNamespace = ""
-		latestActor.AteomPodName = ""
-		latestActor.AteomPodIp = ""
-		latestActor.WorkerPoolName = ""
+		latestActor.WorkerAssignment = nil
 		updatedActor, err := s.store.UpdateActor(ctx, latestActor, latestActor.GetMetadata().GetVersion())
 		if err != nil {
 			return err

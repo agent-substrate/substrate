@@ -269,7 +269,7 @@ Activates a suspended actor by restoring it onto a physical worker.
 *   **Request:** `ResumeActorRequest`
     *   `actor`: `ObjectRef` of the actor to resume.
     *   `boot`: (Optional) If `true`, bypasses snapshots and performs a cold boot.
-*   **Response:** `ResumeActorResponse` containing the updated `Actor` object (including the physical `ateom_pod_ip`).
+*   **Response:** `ResumeActorResponse` containing the updated `Actor` object (including the physical worker placement in `worker_assignment`).
 
 #### `SuspendActor`
 Hibernate a running actor, capturing its current RAM and disk state into a snapshot.

@@ -761,9 +761,6 @@ func TestCreateActor_Success(t *testing.T) {
 		ActorTemplateName:      "tmpl1",
 		WorkerSelector:         &ateapipb.Selector{MatchLabels: map[string]string{"tier": "free"}},
 		Status:                 ateapipb.Actor_STATUS_RUNNING,
-		AteomPodNamespace:      "caller-ns",
-		AteomPodName:           "caller-pod",
-		WorkerPoolName:         "caller-pool",
 	}})
 	if err != nil {
 		t.Fatalf("CreateActor failed: %v", err)
@@ -1672,12 +1669,14 @@ func TestResumeActor(t *testing.T) {
 		ActorTemplateNamespace: ns,
 		ActorTemplateName:      "tmpl1",
 		Status:                 ateapipb.Actor_STATUS_RUNNING,
-		AteomPodNamespace:      ns,
-		AteomPodName:           "worker-1",
-		AteomPodIp:             "127.0.0.1",
-		WorkerPoolName:         "pool1",
+		WorkerAssignment: &ateapipb.WorkerAssignment{
+			WorkerNamespace: ns,
+			WorkerPool:      "pool1",
+			WorkerPod:       "worker-1",
+			WorkerPodIp:     "127.0.0.1",
+		},
 	}
-	if diff := cmp.Diff(want, getResp, protocmp.Transform(), ignoreUID, ignoreVersion, ignoreTimestamps, protocmp.IgnoreFields(&ateapipb.Actor{}, "ateom_pod_uid")); diff != "" {
+	if diff := cmp.Diff(want, getResp, protocmp.Transform(), ignoreUID, ignoreVersion, ignoreTimestamps, protocmp.IgnoreFields(&ateapipb.WorkerAssignment{}, "worker_pod_uid")); diff != "" {
 		t.Errorf("GetActor response mismatch (-want +got):\n%s", diff)
 	}
 
@@ -1874,11 +1873,11 @@ func TestResumeActor_MultiPoolSelector(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetActor failed: %v", err)
 	}
-	if got := getResp.GetAteomPodName(); got != "worker-b" {
+	if got := getResp.GetWorkerAssignment().GetWorkerPod(); got != "worker-b" {
 		t.Errorf("expected actor to be assigned to worker-b (pool-b, matching narrowed selector), got %q", got)
 	}
-	if got := getResp.GetWorkerPoolName(); got != "pool-b" {
-		t.Errorf("expected actor's worker_pool_name to be pool-b, got %q", got)
+	if got := getResp.GetWorkerAssignment().GetWorkerPool(); got != "pool-b" {
+		t.Errorf("expected actor's worker_assignment.worker_pool to be pool-b, got %q", got)
 	}
 }
 
@@ -1924,8 +1923,8 @@ func TestResumeActor_RequiresBothSelectorsToMatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetActor failed: %v", err)
 	}
-	if got := getResp.GetWorkerPoolName(); got != "pool-both" {
-		t.Errorf("expected actor to be assigned to pool-both (the only pool matching both selectors), got worker_pool_name=%q", got)
+	if got := getResp.GetWorkerAssignment().GetWorkerPool(); got != "pool-both" {
+		t.Errorf("expected actor to be assigned to pool-both (the only pool matching both selectors), got worker_assignment.worker_pool=%q", got)
 	}
 }
 
@@ -2180,7 +2179,7 @@ func TestSuspendActor(t *testing.T) {
 		ignoreUID,
 		ignoreVersion,
 		ignoreTimestamps,
-		protocmp.IgnoreFields(&ateapipb.Actor{}, "ateom_pod_uid", "latest_snapshot"),
+		protocmp.IgnoreFields(&ateapipb.Actor{}, "latest_snapshot"),
 	); diff != "" {
 		t.Errorf("GetActor response mismatch (-want +got):\n%s", diff)
 	}
@@ -2272,7 +2271,6 @@ func TestPauseActor(t *testing.T) {
 		ignoreUID,
 		ignoreVersion,
 		ignoreTimestamps,
-		protocmp.IgnoreFields(&ateapipb.Actor{}, "ateom_pod_uid"),
 		protocmp.FilterField(&ateapipb.LocalSnapshotInfo{}, "snapshot_prefix", cmp.Comparer(func(x, y string) bool {
 			return strings.HasPrefix(y, x)
 		})),
@@ -2483,7 +2481,7 @@ func TestResumeActor_CrashesIfAssignedWorkerIsDraining(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetActor failed: %v", err)
 	}
-	assignedPod := getResp.GetAteomPodName()
+	assignedPod := getResp.GetWorkerAssignment().GetWorkerPod()
 	if assignedPod == "" {
 		t.Fatalf("expected actor to be bound to a worker after the failed attempt")
 	}
@@ -2530,7 +2528,7 @@ func TestResumeActor_CrashesIfAssignedWorkerIsDraining(t *testing.T) {
 	if got := getResp.GetStatus(); got != ateapipb.Actor_STATUS_CRASHED {
 		t.Errorf("expected actor status CRASHED, got %v", got)
 	}
-	if got := getResp.GetAteomPodName(); got != "" {
+	if got := getResp.GetWorkerAssignment().GetWorkerPod(); got != "" {
 		t.Errorf("expected actor pod name to be empty, got %q", got)
 	}
 
@@ -2599,11 +2597,11 @@ func TestUpdateActor_ReassignsPoolAcrossSuspendResume(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetActor failed: %v", err)
 	}
-	if got := getResp.GetWorkerPoolName(); got != "pool-a" {
-		t.Fatalf("expected actor to first resume onto pool-a, got worker_pool_name=%q", got)
+	if got := getResp.GetWorkerAssignment().GetWorkerPool(); got != "pool-a" {
+		t.Fatalf("expected actor to first resume onto pool-a, got worker_assignment.worker_pool=%q", got)
 	}
-	if got := getResp.GetAteomPodName(); got != "worker-a" {
-		t.Fatalf("expected actor to first resume onto worker-a, got ateom_pod_name=%q", got)
+	if got := getResp.GetWorkerAssignment().GetWorkerPod(); got != "worker-a" {
+		t.Fatalf("expected actor to first resume onto worker-a, got worker_assignment.worker_pod=%q", got)
 	}
 
 	if _, err := tc.client.UpdateActor(context.Background(), &ateapipb.UpdateActorRequest{
@@ -2626,11 +2624,11 @@ func TestUpdateActor_ReassignsPoolAcrossSuspendResume(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetActor failed: %v", err)
 	}
-	if got := getResp.GetWorkerPoolName(); got != "pool-b" {
-		t.Errorf("expected actor to resume onto pool-b after selector update, got worker_pool_name=%q", got)
+	if got := getResp.GetWorkerAssignment().GetWorkerPool(); got != "pool-b" {
+		t.Errorf("expected actor to resume onto pool-b after selector update, got worker_assignment.worker_pool=%q", got)
 	}
-	if got := getResp.GetAteomPodName(); got != "worker-b" {
-		t.Errorf("expected actor to resume onto worker-b after selector update, got ateom_pod_name=%q", got)
+	if got := getResp.GetWorkerAssignment().GetWorkerPod(); got != "worker-b" {
+		t.Errorf("expected actor to resume onto worker-b after selector update, got worker_assignment.worker_pod=%q", got)
 	}
 	if got := getResp.GetStatus(); got != ateapipb.Actor_STATUS_RUNNING {
 		t.Errorf("expected actor status RUNNING after second resume, got %v", got)
@@ -2796,8 +2794,8 @@ func TestResumeActor_DanglingWorker(t *testing.T) {
 	if actor.GetStatus() != ateapipb.Actor_STATUS_RESUMING {
 		t.Fatalf("expected status RESUMING, got %v", actor.GetStatus())
 	}
-	if actor.GetAteomPodName() != "worker-a" {
-		t.Fatalf("expected worker-a assigned, got %v", actor.GetAteomPodName())
+	if actor.GetWorkerAssignment().GetWorkerPod() != "worker-a" {
+		t.Fatalf("expected worker-a assigned, got %v", actor.GetWorkerAssignment().GetWorkerPod())
 	}
 
 	deleteWorkerPod(t, tc, ns, "worker-a")
@@ -2828,8 +2826,8 @@ func TestResumeActor_DanglingWorker(t *testing.T) {
 	if actor.GetStatus() != ateapipb.Actor_STATUS_CRASHED {
 		t.Errorf("expected status CRASHED, got %v", actor.GetStatus())
 	}
-	if actor.GetAteomPodName() != "" {
-		t.Errorf("expected worker to be unassigned, got %v", actor.GetAteomPodName())
+	if actor.GetWorkerAssignment().GetWorkerPod() != "" {
+		t.Errorf("expected worker to be unassigned, got %v", actor.GetWorkerAssignment().GetWorkerPod())
 	}
 }
 
@@ -2884,8 +2882,8 @@ func TestSuspendActor_DanglingWorker(t *testing.T) {
 	if getResp.GetStatus() != ateapipb.Actor_STATUS_CRASHED {
 		t.Errorf("expected status CRASHED, got %v", getResp.GetStatus())
 	}
-	if getResp.GetAteomPodNamespace() != "" {
-		t.Errorf("expected ateom_pod_namespace to be empty, got %v", getResp.GetAteomPodNamespace())
+	if getResp.GetWorkerAssignment() != nil {
+		t.Errorf("expected worker_assignment to be cleared, got %v", getResp.GetWorkerAssignment())
 	}
 }
 

@@ -158,7 +158,7 @@ func lifecycleOpAttrs(actor *ateapipb.Actor, template *atev1alpha1.ActorTemplate
 		ateattr.TemplateNameKey.String(actor.GetActorTemplateName()),
 		ateattr.TemplateNamespaceKey.String(actor.GetActorTemplateNamespace()),
 	}
-	if pool := actor.GetWorkerPoolName(); pool != "" {
+	if pool := actor.GetWorkerAssignment().GetWorkerPool(); pool != "" {
 		attrs = append(attrs, ateattr.WorkerPoolNameKey.String(pool))
 	}
 	if template != nil {

@@ -245,8 +245,10 @@ func TestSyncer_DeleteBoundWorker_ClearsActor(t *testing.T) {
 	actorName := "actor-orphan"
 	if _, err := persistence.CreateActor(ctx, &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{Name: actorName, Atespace: "team-orphan"}, ActorTemplateNamespace: ns, ActorTemplateName: "tmpl",
-		Status:            ateapipb.Actor_STATUS_RUNNING,
-		AteomPodNamespace: ns, AteomPodName: pod, AteomPodIp: ip,
+		Status: ateapipb.Actor_STATUS_RUNNING,
+		WorkerAssignment: &ateapipb.WorkerAssignment{
+			WorkerNamespace: ns, WorkerPool: pool, WorkerPod: pod, WorkerPodIp: ip,
+		},
 		InProgressSnapshot: "gs://snapshots/partial",
 		LatestSnapshot:     &ateapipb.ObjectRef{Atespace: "team-orphan", Name: "last"},
 	}); err != nil {
@@ -283,7 +285,7 @@ func TestSyncer_DeleteBoundWorker_ClearsActor(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("actor not reset to CRASHED: %v", err)
 	}
-	if got.AteomPodName != "" || got.AteomPodNamespace != "" || got.AteomPodIp != "" || got.InProgressSnapshot != "" {
+	if got.GetWorkerAssignment() != nil || got.InProgressSnapshot != "" {
 		t.Errorf("bind fields not cleared: %+v", got)
 	}
 	if got.GetLatestSnapshot().GetName() == "" {
@@ -513,7 +515,10 @@ func TestReconcileDeadWorker(t *testing.T) {
 	atespace, actorID := "team-rdw", "actor-rdw"
 	if _, err := persistence.CreateActor(ctx, &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{Name: actorID, Atespace: atespace}, ActorTemplateNamespace: ns, ActorTemplateName: "tmpl",
-		Status: ateapipb.Actor_STATUS_RUNNING, AteomPodNamespace: ns, AteomPodName: pod, AteomPodIp: "10.0.0.5",
+		Status: ateapipb.Actor_STATUS_RUNNING,
+		WorkerAssignment: &ateapipb.WorkerAssignment{
+			WorkerNamespace: ns, WorkerPool: pool, WorkerPod: pod, WorkerPodIp: "10.0.0.5",
+		},
 	}); err != nil {
 		t.Fatalf("create actor: %v", err)
 	}
@@ -592,8 +597,10 @@ func TestSyncer_ReconcileOrphanedWorkers(t *testing.T) {
 	atespace, actorID := "team-recon", "actor-recon"
 	if _, err := persistence.CreateActor(ctx, &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{Name: actorID, Atespace: atespace}, ActorTemplateNamespace: ns, ActorTemplateName: "tmpl",
-		Status:            ateapipb.Actor_STATUS_RUNNING,
-		AteomPodNamespace: ns, AteomPodName: "worker-orphan", AteomPodIp: "10.0.0.10",
+		Status: ateapipb.Actor_STATUS_RUNNING,
+		WorkerAssignment: &ateapipb.WorkerAssignment{
+			WorkerNamespace: ns, WorkerPool: pool, WorkerPod: "worker-orphan", WorkerPodIp: "10.0.0.10",
+		},
 	}); err != nil {
 		t.Fatalf("create actor: %v", err)
 	}
@@ -624,7 +631,7 @@ func TestSyncer_ReconcileOrphanedWorkers(t *testing.T) {
 	if got.GetStatus() != ateapipb.Actor_STATUS_CRASHED {
 		t.Errorf("orphaned actor status = %v, want CRASHED", got.GetStatus())
 	}
-	if got.GetAteomPodName() != "" || got.GetAteomPodNamespace() != "" {
+	if got.GetWorkerAssignment() != nil {
 		t.Errorf("orphaned actor pod pointer not cleared: %+v", got)
 	}
 }
@@ -652,8 +659,10 @@ func TestReleaseActorOnDeadWorker_StatusTransitions(t *testing.T) {
 			atespace, actorID := "team-status", "actor-status"
 			if _, err := persistence.CreateActor(ctx, &ateapipb.Actor{
 				Metadata: &ateapipb.ResourceMetadata{Name: actorID, Atespace: atespace}, ActorTemplateNamespace: ns, ActorTemplateName: "tmpl",
-				Status:            tc.start,
-				AteomPodNamespace: ns, AteomPodName: pod, AteomPodIp: ip, AteomPodUid: "uid",
+				Status: tc.start,
+				WorkerAssignment: &ateapipb.WorkerAssignment{
+					WorkerNamespace: ns, WorkerPool: pool, WorkerPod: pod, WorkerPodIp: ip, WorkerPodUid: "uid",
+				},
 			}); err != nil {
 				t.Fatalf("create actor: %v", err)
 			}
@@ -680,8 +689,8 @@ func TestReleaseActorOnDeadWorker_StatusTransitions(t *testing.T) {
 			if got.GetStatus() != tc.want {
 				t.Errorf("actor status = %v, want %v", got.GetStatus(), tc.want)
 			}
-			if tc.want == ateapipb.Actor_STATUS_CRASHED && got.GetAteomPodUid() != "" {
-				t.Errorf("crashed actor AteomPodUid = %q, want cleared", got.GetAteomPodUid())
+			if tc.want == ateapipb.Actor_STATUS_CRASHED && got.GetWorkerAssignment() != nil {
+				t.Errorf("crashed actor WorkerAssignment = %v, want cleared", got.GetWorkerAssignment())
 			}
 		})
 	}
