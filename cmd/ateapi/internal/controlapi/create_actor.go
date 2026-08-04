@@ -32,18 +32,19 @@ import (
 )
 
 func (s *Service) CreateActor(ctx context.Context, req *ateapipb.CreateActorRequest) (created *ateapipb.Actor, err error) {
+	if errs := validateCreateActorRequest(req); len(errs) > 0 {
+		return nil, toGRPCStatusError(errs)
+	}
 	start := time.Now()
 	in := req.GetActor()
+	// Recorded only after validation, so every operation uniformly measures a
+	// validated request; malformed ones stay visible in rpc.server.call.duration.
 	defer func() {
 		s.instruments.recordLifecycleOp(ctx, ateattr.OperationCreate, start, err,
 			ateattr.TemplateNameKey.String(in.GetActorTemplateName()),
 			ateattr.TemplateNamespaceKey.String(in.GetActorTemplateNamespace()),
 		)
 	}()
-
-	if errs := validateCreateActorRequest(req); len(errs) > 0 {
-		return nil, toGRPCStatusError(errs)
-	}
 	var sourceSnapshot *ateapipb.ActorSnapshot
 	var sourceSnapshotRef *ateapipb.ObjectRef
 	if ref := req.GetSourceSnapshot(); ref != nil {

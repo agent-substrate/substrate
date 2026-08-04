@@ -178,9 +178,14 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 	}
 	state := &ResumeState{}
 
-	// Recorded before the lock so lock contention still counts as an attempt; the
-	// incoming ctx stays valid where acquireActorLock returns nil on failure.
+	// Recorded before the lock so lock contention still counts as an attempt.
+	// Clean already-running no-ops are skipped: the router resumes per routed
+	// request, and recording those would sample at router QPS and bury
+	// cold-resume latency.
 	defer func() {
+		if err == nil && state.WasRunning {
+			return
+		}
 		w.instruments.recordLifecycleOp(ctx, ateattr.OperationResume, start, err,
 			lifecycleOpAttrs(state.Actor, state.ActorTemplate, state.SnapshotKind)...)
 	}()

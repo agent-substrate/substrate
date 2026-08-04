@@ -25,16 +25,14 @@ import (
 )
 
 func (s *Service) DeleteActor(ctx context.Context, req *ateapipb.DeleteActorRequest) (deleted *ateapipb.Actor, err error) {
-	start := time.Now()
-	// No template dims here: a delete request names only the actor, and the
-	// template is unknown on the paths that return before the record loads.
-	defer func() {
-		s.instruments.recordLifecycleOp(ctx, ateattr.OperationDelete, start, err)
-	}()
-
 	if errs := validateDeleteActorRequest(req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
+	start := time.Now()
+	// No template dims: a delete request names only the actor.
+	defer func() {
+		s.instruments.recordLifecycleOp(ctx, ateattr.OperationDelete, start, err)
+	}()
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
 	setSpanActorRefAttributes(ctx, actorRef)
 

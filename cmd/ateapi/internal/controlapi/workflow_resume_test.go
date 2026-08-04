@@ -579,6 +579,50 @@ func TestResumeSteps_CheckPrerequisite(t *testing.T) {
 	}
 }
 
+// TestResumeActor_MetricSkipsAlreadyRunningNoop guards the recording rule: the
+// router resumes per routed request, so a clean already-running no-op must not
+// be recorded, while failures must be.
+func TestResumeActor_MetricSkipsAlreadyRunningNoop(t *testing.T) {
+	tests := []struct {
+		name       string
+		seedStatus ateapipb.Actor_Status
+		wantRecord bool
+	}{
+		{name: "already running no-op is skipped", seedStatus: ateapipb.Actor_STATUS_RUNNING, wantRecord: false},
+		{name: "failed resume is recorded", seedStatus: ateapipb.Actor_STATUS_CRASHED, wantRecord: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+			st, cleanup := storetest.SetupTestStore(t)
+			defer cleanup()
+			w := newTestActorWorkflow(t, st, "ns", "tmpl1")
+			inst, reader := newTestInstruments(t)
+			w.instruments = inst
+
+			seedWorkflowActor(t, ctx, st, resources.ActorRef{Atespace: "team-a", Name: "id1"}, "ns", "tmpl1", tt.seedStatus, func(a *ateapipb.Actor) {
+				a.AteomPodNamespace = "wns"
+				a.AteomPodName = "wpod"
+				a.AteomPodUid = "uid"
+				a.WorkerPoolName = "pool1"
+			})
+
+			_, _, err := w.ResumeActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, false)
+			if tt.wantRecord && err == nil {
+				t.Fatal("expected resume to fail, got nil error")
+			}
+			if !tt.wantRecord && err != nil {
+				t.Fatalf("ResumeActor failed: %v", err)
+			}
+
+			_, recorded := collectMetric(t, reader, lifecycleOpDurationMetric)
+			if recorded != tt.wantRecord {
+				t.Errorf("lifecycle datapoint recorded = %v, want %v", recorded, tt.wantRecord)
+			}
+		})
+	}
+}
+
 // TestResumeActor_CrashesOnCorruptWorkerAssignment verifies that a RESUMING
 // actor with only some of its worker assignment fields populated is moved to
 // CRASHED by LoadActorForResumeStep and the resume fails with Aborted.
