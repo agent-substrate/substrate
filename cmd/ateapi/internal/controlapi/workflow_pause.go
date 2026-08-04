@@ -233,12 +233,11 @@ func (s *FinalizePausedStep) Execute(ctx context.Context, input *PauseInput, sta
 			}
 			slog.Warn("Worker already gone during finalize pause, skipping release", "worker", assignment.GetWorkerPod())
 		} else {
-			// TODO(dberkov) - what if worker does not belong to this actor?
 			nodeName = worker.GetNodeName()
 			// Only free it if it still belongs to us
 
 			if wass := worker.Assignment; wass != nil {
-				if resources.ActorRefFromObjectRef(wass.Actor) == input.ActorRef {
+				if wass.GetActorUid() == latestActor.GetMetadata().GetUid() {
 					worker.Assignment = nil
 					err = s.store.UpdateWorker(ctx, worker, worker.Version)
 					if err != nil {

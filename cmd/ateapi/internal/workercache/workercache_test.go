@@ -92,7 +92,10 @@ func TestCache_UpdatedEvent_NewerVersionApplied(t *testing.T) {
 	}
 
 	updated := makeWorker("ns", "pod1", 2)
-	updated.Assignment = &ateapipb.Assignment{Actor: &ateapipb.ObjectRef{Name: "actor-1"}}
+	updated.Assignment = &ateapipb.Assignment{
+		Actor:    &ateapipb.ObjectRef{Atespace: "team-a", Name: "actor-1"},
+		ActorUid: "actor-1-uid",
+	}
 	fs.send(store.WorkerEvent{Type: store.WorkerEventUpdated, Worker: updated})
 
 	eventually(t, func() bool {
@@ -101,7 +104,7 @@ func TestCache_UpdatedEvent_NewerVersionApplied(t *testing.T) {
 			return false
 		}
 		wass := workers[0].Assignment
-		return wass.Actor.Name == "actor-1"
+		return wass.Actor.Name == "actor-1" && wass.ActorUid == "actor-1-uid"
 	}, 2*time.Second)
 
 	got, _ := c.Workers()
@@ -122,7 +125,10 @@ func TestCache_UpdatedEvent_OlderVersionIgnored(t *testing.T) {
 
 	// Send a stale update followed by a sentinel we can detect.
 	stale := makeWorker("ns", "pod1", 3)
-	stale.Assignment = &ateapipb.Assignment{Actor: &ateapipb.ObjectRef{Name: "stale-actor"}}
+	stale.Assignment = &ateapipb.Assignment{
+		Actor:    &ateapipb.ObjectRef{Atespace: "team-a", Name: "stale-actor"},
+		ActorUid: "stale-actor-uid",
+	}
 	fs.send(store.WorkerEvent{Type: store.WorkerEventUpdated, Worker: stale})
 
 	sentinel := makeWorker("ns", "pod2", 1)

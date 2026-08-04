@@ -123,7 +123,7 @@ func releaseWorker(ctx context.Context, st store.Interface, actor *ateapipb.Acto
 		return sandboxClass, nil
 	}
 	// Only free it if it still belongs to us
-	if resources.ActorRefFromObjectRef(wass.GetActor()) != resources.ActorRefFromActor(actor) {
+	if wass.GetActorUid() != actor.GetMetadata().GetUid() {
 		slog.WarnContext(ctx, "Worker already assigned to another Actor", slog.String("worker", podUid))
 		return sandboxClass, nil
 	}

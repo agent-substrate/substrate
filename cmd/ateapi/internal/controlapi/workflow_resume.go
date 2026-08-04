@@ -319,7 +319,7 @@ func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, stat
 		if worker.Assignment == nil {
 			continue
 		}
-		if resources.ActorRefFromObjectRef(worker.Assignment.Actor) != input.ActorRef {
+		if worker.Assignment.GetActorUid() != state.Actor.GetMetadata().GetUid() {
 			continue
 		}
 		if s.scheduler.Applies(worker, constraints) {
@@ -366,7 +366,11 @@ func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, stat
 			Namespace: state.Actor.GetActorTemplateNamespace(),
 			Name:      state.Actor.GetActorTemplateName(),
 		},
-		Actor: input.ActorRef.ToObjectRef(),
+		Actor: &ateapipb.ObjectRef{
+			Atespace: state.Actor.GetMetadata().GetAtespace(),
+			Name:     state.Actor.GetMetadata().GetName(),
+		},
+		ActorUid: state.Actor.GetMetadata().GetUid(),
 	}
 
 	if err := s.store.UpdateWorker(ctx, assignedWorker, assignedWorker.Version); err != nil {
@@ -504,8 +508,8 @@ func (s *CallAteletRestoreStep) CheckPrerequisite(ctx context.Context, input *Re
 		return status.Errorf(codes.FailedPrecondition, "Assigned worker is nil")
 	}
 	// Verify if the worker is still assigned to the same Actor.
-	assigned := state.Worker.GetAssignment().GetActor()
-	if resources.ActorRefFromObjectRef(assigned) != input.ActorRef {
+	assignedActorUID := state.Worker.GetAssignment().GetActorUid()
+	if assignedActorUID != state.Actor.GetMetadata().GetUid() {
 		slog.ErrorContext(ctx, "crashing actor because its assigned worker no longer belongs to it",
 			slog.String("worker", state.Worker.GetWorkerPod()),
 			slog.Any("assignment", state.Worker.GetAssignment()))

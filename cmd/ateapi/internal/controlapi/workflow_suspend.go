@@ -247,7 +247,7 @@ func (s *FinalizeSuspendedStep) Execute(ctx context.Context, input *SuspendInput
 		} else {
 			// Only free it if it still belongs to us
 			if wass := worker.Assignment; wass != nil {
-				if resources.ActorRefFromObjectRef(wass.Actor) == input.ActorRef {
+				if wass.GetActorUid() == latestActor.GetMetadata().GetUid() {
 					worker.Assignment = nil
 					err = s.store.UpdateWorker(ctx, worker, worker.Version)
 					if err != nil {

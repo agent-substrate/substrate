@@ -298,6 +298,7 @@ func TestFinalizeSuspendedStep_ReleasesOnlyOwnWorker(t *testing.T) {
 	tests := []struct {
 		name               string
 		assignmentAtespace string
+		mismatchedUID      bool
 		wantReleased       bool
 	}{
 		{
@@ -310,24 +311,18 @@ func TestFinalizeSuspendedStep_ReleasesOnlyOwnWorker(t *testing.T) {
 			assignmentAtespace: "team-b",
 			wantReleased:       false,
 		},
+		{
+			name:               "keeps worker assigned to previous incarnation of same actor",
+			assignmentAtespace: "team-a",
+			mismatchedUID:      true,
+			wantReleased:       false,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
 			persistence := newTestPersistence(t)
-
-			worker := &ateapipb.Worker{
-				WorkerNamespace: "worker-ns",
-				WorkerPool:      "pool",
-				WorkerPod:       "pod-1",
-				Assignment: &ateapipb.Assignment{
-					Actor: &ateapipb.ObjectRef{Atespace: tt.assignmentAtespace, Name: "shared"},
-				},
-			}
-			if err := persistence.CreateWorker(ctx, worker); err != nil {
-				t.Fatalf("CreateWorker: %v", err)
-			}
 
 			actor := &ateapipb.Actor{
 				Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "shared"},
@@ -339,8 +334,26 @@ func TestFinalizeSuspendedStep_ReleasesOnlyOwnWorker(t *testing.T) {
 				},
 				InProgressSnapshot: "snapshot-1",
 			}
-			if _, err := persistence.CreateActor(ctx, actor); err != nil {
+			created, err := persistence.CreateActor(ctx, actor)
+			if err != nil {
 				t.Fatalf("CreateActor: %v", err)
+			}
+
+			uid := created.GetMetadata().GetUid()
+			if tt.assignmentAtespace != "team-a" || tt.mismatchedUID {
+				uid = "other-actor-uid-b"
+			}
+			worker := &ateapipb.Worker{
+				WorkerNamespace: "worker-ns",
+				WorkerPool:      "pool",
+				WorkerPod:       "pod-1",
+				Assignment: &ateapipb.Assignment{
+					Actor:    &ateapipb.ObjectRef{Atespace: tt.assignmentAtespace, Name: "shared"},
+					ActorUid: uid,
+				},
+			}
+			if err := persistence.CreateWorker(ctx, worker); err != nil {
+				t.Fatalf("CreateWorker: %v", err)
 			}
 
 			step := &FinalizeSuspendedStep{store: persistence}

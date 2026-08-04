@@ -384,9 +384,9 @@ func (s *Server) authorizeActor(ctx context.Context, caller *ateletCaller, actor
 	}
 
 	// The worker must still agree that it is hosting this actor.
-	if assigned := worker.GetAssignment().GetActor(); resources.ActorRefFromObjectRef(assigned) != actorRef {
+	if assignedActorUID := worker.GetAssignment().GetActorUid(); assignedActorUID != actor.GetMetadata().GetUid() {
 		return nil, deny("worker is no longer assigned to the actor",
-			slog.String("workerAssignment", assigned.GetAtespace()+"/"+assigned.GetName()))
+			slog.String("assignedActorUID", assignedActorUID))
 	}
 
 	return actor, nil

@@ -180,6 +180,8 @@ type actorFixture struct {
 	noPlacement bool
 	// noWorker skips seeding the worker record entirely.
 	noWorker bool
+	// mismatchedUID simulates a worker assigned to an actor with the same name/atespace but a different UID.
+	mismatchedUID bool
 }
 
 // seedActor writes an actor, and normally its hosting worker, into st.
@@ -201,7 +203,8 @@ func seedActor(t *testing.T, ctx context.Context, st store.Interface, f actorFix
 			WorkerPodUid:    "worker-uid",
 		}
 	}
-	if _, err := st.CreateActor(ctx, actor); err != nil {
+	created, err := st.CreateActor(ctx, actor)
+	if err != nil {
 		t.Fatalf("seed actor: %v", err)
 	}
 
@@ -212,6 +215,10 @@ func seedActor(t *testing.T, ctx context.Context, st store.Interface, f actorFix
 	if assigned == (resources.ActorRef{}) {
 		assigned = actorRef
 	}
+	assignedActorUID := created.GetMetadata().GetUid()
+	if f.mismatchedUID || assigned != actorRef {
+		assignedActorUID = "other-actor-uid"
+	}
 	worker := &ateapipb.Worker{
 		WorkerNamespace: testPodNS,
 		WorkerPool:      testPool,
@@ -219,7 +226,10 @@ func seedActor(t *testing.T, ctx context.Context, st store.Interface, f actorFix
 		WorkerPodUid:    "worker-uid",
 		NodeName:        f.workerNode,
 		State:           ateapipb.Worker_STATE_ACTIVE,
-		Assignment:      &ateapipb.Assignment{Actor: assigned.ToObjectRef()},
+		Assignment: &ateapipb.Assignment{
+			Actor:    assigned.ToObjectRef(),
+			ActorUid: assignedActorUID,
+		},
 	}
 	if f.unassigned {
 		worker.Assignment = nil
@@ -316,6 +326,14 @@ func TestMintCertAuthorization(t *testing.T) {
 				status:     ateapipb.Actor_STATUS_RUNNING,
 				workerNode: testNode,
 				assignedTo: resources.ActorRef{Atespace: testAtespace, Name: "someone-else"},
+			},
+			wantCode: codes.PermissionDenied,
+		},
+		"worker is assigned to an actor with same name and atespace but different UID": {
+			fixture: actorFixture{
+				status:        ateapipb.Actor_STATUS_RUNNING,
+				workerNode:    testNode,
+				mismatchedUID: true,
 			},
 			wantCode: codes.PermissionDenied,
 		},

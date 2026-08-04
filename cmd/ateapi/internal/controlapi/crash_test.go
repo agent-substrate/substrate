@@ -62,8 +62,17 @@ func seedWorker(t *testing.T, ctx context.Context, st store.Interface, actorRef 
 		WorkerPod:       "pod",
 	}
 	if actorRef != (resources.ActorRef{}) {
-		worker.Assignment = &ateapipb.Assignment{
-			Actor: actorRef.ToObjectRef(),
+		actor, err := st.GetActor(ctx, actorRef)
+		if err != nil {
+			worker.Assignment = &ateapipb.Assignment{
+				Actor:    &ateapipb.ObjectRef{Atespace: actorRef.Atespace, Name: actorRef.Name},
+				ActorUid: "synthetic-" + actorRef.Name,
+			}
+		} else {
+			worker.Assignment = &ateapipb.Assignment{
+				Actor:    &ateapipb.ObjectRef{Atespace: actor.GetMetadata().GetAtespace(), Name: actor.GetMetadata().GetName()},
+				ActorUid: actor.GetMetadata().GetUid(),
+			}
 		}
 	}
 	if err := st.CreateWorker(ctx, worker); err != nil {
@@ -161,7 +170,45 @@ func TestCrashActor(t *testing.T) {
 					t.Fatalf("GetWorker() = %v, want nil", gerr)
 				}
 				if got := worker.GetAssignment().GetActor().GetName(); got != "actor-2" {
-					t.Errorf("worker assigned actor = %q, want %q", got, "actor-2")
+					t.Errorf("worker assigned actor name = %q, want %q", got, "actor-2")
+				}
+				if got := worker.GetAssignment().GetActorUid(); got != "synthetic-actor-2" {
+					t.Errorf("worker assigned actor uid = %q, want %q", got, "synthetic-actor-2")
+				}
+			},
+		},
+		{
+			name: "keeps worker assigned to previous incarnation of same actor",
+			seed: true,
+			setup: func(t *testing.T, ctx context.Context, st store.Interface) {
+				// Create a worker assigned to the same actorRef, but with a stale UID
+				worker := &ateapipb.Worker{
+					WorkerNamespace: "ns",
+					WorkerPool:      "pool",
+					WorkerPod:       "pod",
+					Assignment: &ateapipb.Assignment{
+						Actor:    &ateapipb.ObjectRef{Atespace: actorRef.Atespace, Name: actorRef.Name},
+						ActorUid: "stale-incarnation-uid",
+					},
+				}
+				if err := st.CreateWorker(ctx, worker); err != nil {
+					t.Fatalf("CreateWorker: %v", err)
+				}
+			},
+			check: func(t *testing.T, ctx context.Context, st store.Interface, err error) {
+				if err != nil {
+					t.Fatalf("crashActor() = %v, want nil", err)
+				}
+				assertCrashed(t, ctx, st, actorRef)
+				worker, gerr := st.GetWorker(ctx, "ns", "pool", "pod")
+				if gerr != nil {
+					t.Fatalf("GetWorker() = %v, want nil", gerr)
+				}
+				if got := worker.GetAssignment().GetActor().GetName(); got != actorRef.Name {
+					t.Errorf("worker assigned actor name = %q, want %q", got, actorRef.Name)
+				}
+				if got := worker.GetAssignment().GetActorUid(); got != "stale-incarnation-uid" {
+					t.Errorf("worker assigned actor uid = %q, want %q", got, "stale-incarnation-uid")
 				}
 			},
 		},

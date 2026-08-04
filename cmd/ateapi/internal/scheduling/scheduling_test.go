@@ -260,7 +260,8 @@ func withState(state ateapipb.Worker_State) func(*ateapipb.Worker) {
 func assigned(atespace, name string) func(*ateapipb.Worker) {
 	return func(w *ateapipb.Worker) {
 		w.Assignment = &ateapipb.Assignment{
-			Actor: &ateapipb.ObjectRef{Atespace: atespace, Name: name},
+			Actor:    &ateapipb.ObjectRef{Atespace: atespace, Name: name},
+			ActorUid: atespace + "/" + name,
 		}
 	}
 }

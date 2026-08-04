@@ -341,6 +341,7 @@ func TestUpdateWorker_Success(t *testing.T) {
 		Actor: &ateapipb.ObjectRef{
 			Name: "actor-1",
 		},
+		ActorUid: "actor-1-uid",
 	}
 
 	if err := s.UpdateWorker(ctx, worker, 1); err != nil {
@@ -691,14 +692,20 @@ func TestUpdateWorker_Conflict(t *testing.T) {
 	}
 
 	// Update instance 1
-	worker1.Assignment = &ateapipb.Assignment{Actor: &ateapipb.ObjectRef{Name: "actor-1"}}
+	worker1.Assignment = &ateapipb.Assignment{
+		Actor:    &ateapipb.ObjectRef{Atespace: "team-a", Name: "actor-1"},
+		ActorUid: "actor-1-uid",
+	}
 	err = s.UpdateWorker(ctx, worker1, worker1.Version)
 	if err != nil {
 		t.Fatalf("UpdateWorker failed: %v", err)
 	}
 
 	// Try to update instance 2
-	worker2.Assignment = &ateapipb.Assignment{Actor: &ateapipb.ObjectRef{Name: "actor-2"}}
+	worker2.Assignment = &ateapipb.Assignment{
+		Actor:    &ateapipb.ObjectRef{Atespace: "team-a", Name: "actor-2"},
+		ActorUid: "actor-2-uid",
+	}
 	err = s.UpdateWorker(ctx, worker2, worker2.Version)
 	if !errors.Is(err, store.ErrVersionConflict) {
 		t.Errorf("expected ErrVersionConflict, got %v", err)

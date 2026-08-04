@@ -1710,6 +1710,7 @@ func TestResumeActor(t *testing.T) {
 				Name:     name,
 				Atespace: testAtespace,
 			},
+			ActorUid: getResp.GetMetadata().GetUid(),
 		},
 		Ip:           "127.0.0.1",
 		NodeName:     "node1",
