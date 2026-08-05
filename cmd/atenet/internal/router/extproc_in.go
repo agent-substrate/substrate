@@ -22,6 +22,8 @@ import (
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 )
 
+const authorityHeader = ":authority"
+
 type requestMetadata struct {
 	headers map[string]string
 	path    string
@@ -44,7 +46,7 @@ func newRequestMetadata(headers []*corev3.HeaderValue) *requestMetadata {
 		if k == ":path" {
 			path = val
 		}
-		if k == ":authority" || k == "host" {
+		if k == authorityHeader || k == "host" {
 			host = val
 		}
 	}

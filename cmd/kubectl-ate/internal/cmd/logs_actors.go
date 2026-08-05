@@ -115,8 +115,8 @@ func (r *LogsActorRunner) runOneShot(ctx context.Context) error {
 		return fmt.Errorf("failed to get actor: %w", err)
 	}
 
-	podName := actor.GetAteomPodName()
-	namespace := actor.GetAteomPodNamespace()
+	podName := actor.GetWorkerAssignment().GetWorkerPod()
+	namespace := actor.GetWorkerAssignment().GetWorkerNamespace()
 
 	if podName == "" || namespace == "" || actor.GetStatus() != ateapipb.Actor_STATUS_RUNNING {
 		return fmt.Errorf("actor %s is not currently running on any worker pod", r.actorRef)
@@ -169,8 +169,8 @@ func (r *LogsActorRunner) runFollow(ctx context.Context) error {
 			}
 		}
 
-		podName := actor.GetAteomPodName()
-		namespace := actor.GetAteomPodNamespace()
+		podName := actor.GetWorkerAssignment().GetWorkerPod()
+		namespace := actor.GetWorkerAssignment().GetWorkerNamespace()
 
 		if podName == "" || namespace == "" || actor.GetStatus() != ateapipb.Actor_STATUS_RUNNING {
 			select {
@@ -265,7 +265,7 @@ func (r *LogsActorRunner) startMigrationMonitor(
 				resp, err := r.apiClient.GetActor(ctx, &ateapipb.GetActorRequest{Actor: r.actorRef.ToObjectRef()})
 				if err == nil {
 					act := resp
-					if act.GetStatus() != ateapipb.Actor_STATUS_RUNNING || act.GetAteomPodName() != currentPod {
+					if act.GetStatus() != ateapipb.Actor_STATUS_RUNNING || act.GetWorkerAssignment().GetWorkerPod() != currentPod {
 						// Actor suspended or migrated! Cancel stream context to reconnect.
 						cancel()
 						return

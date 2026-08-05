@@ -965,8 +965,18 @@ type ActorIdentityClient interface {
 	// To call this RPC, you must be authenticated as the Kubernetes Pod that is
 	// currently running the requested actor.
 	MintJWT(ctx context.Context, in *MintJWTRequest, opts ...grpc.CallOption) (*MintJWTResponse, error)
-	// Request an Actor Identity Certificate. To call this RPC, you must have
-	// authenticated with a client certificate, not a bearer token.
+	// Request an Actor Identity Certificate for an actor.
+	//
+	// Actors do not call this RPC themselves. The atelet hosting the actor calls
+	// it on the actor's behalf, authenticating with its own client certificate
+	// rather than a bearer token.
+	//
+	// Authorization is decided on that client certificate: it must identify the
+	// atelet running on the same node as the worker Pod that currently hosts the
+	// requested actor, and the actor must still be running. Any other caller is
+	// rejected with PERMISSION_DENIED.
+	//
+	// The certificate in the response is the actor's identity, not the atelet's.
 	MintCert(ctx context.Context, in *MintCertRequest, opts ...grpc.CallOption) (*MintCertResponse, error)
 }
 
@@ -1024,8 +1034,18 @@ type ActorIdentityServer interface {
 	// To call this RPC, you must be authenticated as the Kubernetes Pod that is
 	// currently running the requested actor.
 	MintJWT(context.Context, *MintJWTRequest) (*MintJWTResponse, error)
-	// Request an Actor Identity Certificate. To call this RPC, you must have
-	// authenticated with a client certificate, not a bearer token.
+	// Request an Actor Identity Certificate for an actor.
+	//
+	// Actors do not call this RPC themselves. The atelet hosting the actor calls
+	// it on the actor's behalf, authenticating with its own client certificate
+	// rather than a bearer token.
+	//
+	// Authorization is decided on that client certificate: it must identify the
+	// atelet running on the same node as the worker Pod that currently hosts the
+	// requested actor, and the actor must still be running. Any other caller is
+	// rejected with PERMISSION_DENIED.
+	//
+	// The certificate in the response is the actor's identity, not the atelet's.
 	MintCert(context.Context, *MintCertRequest) (*MintCertResponse, error)
 	mustEmbedUnimplementedActorIdentityServer()
 }

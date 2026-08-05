@@ -47,15 +47,19 @@ const (
 // Metric-label keys: the only ate.* attributes allowed on metric datapoints,
 // each with a small bounded value set. High-cardinality identity (actor
 // name/uid, atespace) is absent by design; it belongs on spans and logs.
-// WorkerStateKey stays worker-rooted rather than nesting under the pool so it
-// can grow siblings.
+// ActorOperationNameKey follows the registry's *.operation.name pattern
+// (db.operation.name, gen_ai.operation.name). WorkerStateKey stays worker-rooted
+// rather than nesting under the pool so it can grow siblings.
 // WorkerPoolNamespaceKey pairs with WorkerPoolNameKey: a WorkerPool is
 // namespaced, so the name alone does not identify one.
 const (
+	ActorOperationNameKey  = attribute.Key("ate.actor.operation.name")
 	WorkerPoolNamespaceKey = attribute.Key("ate.workerpool.namespace")
 	WorkerPoolNameKey      = attribute.Key("ate.workerpool.name")
 	WorkerStateKey         = attribute.Key("ate.worker.state")
 	SandboxClassKey        = attribute.Key("ate.sandbox.class")
+	SnapshotKindKey        = attribute.Key("ate.snapshot.kind")
+	SchedulerOutcomeKey    = attribute.Key("ate.scheduler.outcome")
 	RouterResumeKey        = attribute.Key("ate.router.resume")
 	RouterOutcomeKey       = attribute.Key("ate.router.outcome")
 )
@@ -70,11 +74,46 @@ const (
 	RouterResumeJoined = "joined"
 )
 
+// ErrorTypeKey is the OTel registry attribute, reused verbatim (not aliased into
+// ate.*): failures are reported on the same instrument via this key, its absence
+// meaning success, never as a parallel _failures counter.
+const ErrorTypeKey = attribute.Key("error.type")
+
 // Values for WorkerStateKey. Only idle and assigned are representable today;
 // starting and unhealthy workers are not modeled in the cache.
 const (
 	WorkerStateIdle     = "idle"
 	WorkerStateAssigned = "assigned"
+)
+
+// Values for ActorOperationNameKey: the five actor lifecycle operations ateapi
+// serves.
+const (
+	OperationCreate  = "create"
+	OperationResume  = "resume"
+	OperationSuspend = "suspend"
+	OperationPause   = "pause"
+	OperationDelete  = "delete"
+)
+
+// Values for SchedulerOutcomeKey. NoFreeWorker is a capacity signal, not a
+// failure, so it is a distinct outcome rather than an error.type value; only the
+// Error outcome carries an error.type.
+const (
+	SchedulerOutcomeAssigned     = "assigned"
+	SchedulerOutcomeNoFreeWorker = "no_free_worker"
+	SchedulerOutcomeError        = "error"
+)
+
+// Values for SnapshotKindKey, set by ateapi from its own resume branching, so
+// the label is bounded at the producer: Local restores an in-node snapshot,
+// Latest pulls the actor's durable snapshot from object storage, Golden pulls the
+// template's golden image, Boot is a from-scratch start (not a restore).
+const (
+	SnapshotKindGolden = "golden"
+	SnapshotKindLatest = "latest"
+	SnapshotKindLocal  = "local"
+	SnapshotKindBoot   = "boot"
 )
 
 // ActorRefAttributes returns the subset knowable before the Actor record

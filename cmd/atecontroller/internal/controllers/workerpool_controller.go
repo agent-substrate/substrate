@@ -43,6 +43,12 @@ type WorkerPoolReconciler struct {
 	// OTelMetricExportTimeout is the OTEL_METRIC_EXPORT_TIMEOUT propagated to
 	// ateom pods. Empty keeps the SDK's default.
 	OTelMetricExportTimeout string
+	// OTelTracesSampler is the OTEL_TRACES_SAMPLER propagated to ateom pods.
+	// Empty keeps the ateom binary's default.
+	OTelTracesSampler string
+	// OTelTracesSamplerArg is the OTEL_TRACES_SAMPLER_ARG propagated to ateom
+	// pods. Ignored unless OTelTracesSampler is set.
+	OTelTracesSamplerArg string
 }
 
 //+kubebuilder:rbac:groups=ate.dev,resources=workerpools,verbs=get;list;watch;create;update;patch;delete
@@ -102,6 +108,8 @@ func (r *WorkerPoolReconciler) applyDeployment(ctx context.Context, wp *atev1alp
 		Endpoint:             r.OTelEndpoint,
 		MetricExportInterval: r.OTelMetricExportInterval,
 		MetricExportTimeout:  r.OTelMetricExportTimeout,
+		TracesSampler:        r.OTelTracesSampler,
+		TracesSamplerArg:     r.OTelTracesSamplerArg,
 	})
 	if err := r.Apply(ctx, depAC, client.FieldOwner(workerPoolFieldOwner), client.ForceOwnership); err != nil {
 		return fmt.Errorf("failed to apply Deployment: %w", err)

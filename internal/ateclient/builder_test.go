@@ -32,6 +32,16 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 )
 
+func TestInitTracingDisabledReturnsNoProvider(t *testing.T) {
+	tp, err := initTracing(context.Background(), false)
+	if err != nil {
+		t.Fatalf("initTracing(disabled): %v", err)
+	}
+	if tp != nil {
+		t.Error("initTracing(disabled) returned a provider; want nil so no traceparent is injected")
+	}
+}
+
 // testCAPEM generates a self-signed CA and returns its PEM encoding.
 func testCAPEM(t *testing.T, cn string) []byte {
 	t.Helper()

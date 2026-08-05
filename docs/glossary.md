@@ -108,19 +108,40 @@ because they change too frequently for etcd.
     everything needed to resume hot.
   - **`Data`**: only the contents of attached volumes that support
     snapshots — currently `DurableDir` volumes. Process memory and the
-    rest of rootfs are discarded; on Resume the Actor cold-boots from
-    the OCI image with `DurableDir` contents restored. Used to persist
-    application data cheaply without the cost of a full memory image.
+    rest of rootfs are discarded. Used to persist application data
+    cheaply without the cost of a full memory image. How the Actor comes
+    back on Resume is governed by the
+    [Resume sources](#snapshots) (`onResume.fromData`): cold-boot by
+    default, or combined with the [Golden Snapshot](#snapshots).
 
-  Configured per-trigger via `onPause` and `onCommit`: `onPause` selects
-  what is captured during a [Pause](#lifecycle) (kept on the node), and
+  Scopes describe only what a snapshot *captures*. They are configured
+  per-trigger via `onPause` and `onCommit`: `onPause` selects what is
+  captured during a [Pause](#lifecycle) (kept on the node), and
   `onCommit` selects what is captured during a [Suspend](#lifecycle)
-  (uploaded to snapshot storage). `onCommit` must be a subset of `onPause`.
+  (uploaded to snapshot storage). `onCommit` must be a subset of
+  `onPause`.
+
+- **Resume sources**: an `ActorTemplate`'s `onResume` block selects, per
+  snapshot situation, what supplies the guest state on Resume. Each field
+  names what is being resumed *from*; the value names the boot source.
+  `onResume.fromData` applies when the Resume uses a `Data`-scope snapshot
+  (from either trigger):
+  - **`ColdBoot`** (default): start the containers afresh from the OCI image
+    with the `DurableDir` contents restored.
+  - **`Golden`**: restore the template's [Golden Snapshot](#snapshots)
+    (process memory + rootfs delta) and serve the Actor's `DurableDir` data
+    to it, so the Actor resumes with the golden's warm state over its own
+    data. Currently `microvm`-only.
+
+  A still-valid `Full` snapshot always restores from its own content and is
+  not configurable here.
 
 - **Golden Snapshot**: the initial checkpoint captured once, when an
   `ActorTemplate` is created, from a temporary "golden" boot of the workload.
   By default an Actor of that template is first restored from this shared
-  snapshot.
+  snapshot. It is always a `Full` capture, and under `onResume.fromData:
+  Golden` (see [Resume sources](#snapshots)) it also supplies the guest state
+  that an Actor's `Data` snapshot is combined with on Resume.
 
 - **Last Snapshot**: the most recent per-Actor snapshot, written on Suspend and
   used to restore that specific Actor on the next Resume.

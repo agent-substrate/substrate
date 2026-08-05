@@ -30,11 +30,12 @@ type Service struct {
 	actorTemplateLister listersv1alpha1.ActorTemplateLister
 	workerPoolLister    listersv1alpha1.WorkerPoolLister
 	actorWorkflow       *ActorWorkflow
+	instruments         *Instruments
 }
 
 var _ ateapipb.ControlServer = (*Service)(nil)
 
-// NewService creates a service.
+// NewService creates a service. instruments may be nil; the record helpers no-op.
 func NewService(
 	persistence store.Interface,
 	workerCache *workercache.Cache,
@@ -43,13 +44,15 @@ func NewService(
 	sandboxConfigLister listersv1alpha1.SandboxConfigLister,
 	dialer *AteletDialer,
 	kubeClient kubernetes.Interface,
+	instruments *Instruments,
 ) *Service {
 	s := &Service{
 		persistence:         persistence,
 		actorTemplateLister: actorTemplateLister,
 		workerPoolLister:    workerPoolLister,
 		dialer:              dialer,
-		actorWorkflow:       NewActorWorkflow(persistence, workerCache, dialer, actorTemplateLister, workerPoolLister, sandboxConfigLister, kubeClient),
+		actorWorkflow:       NewActorWorkflow(persistence, workerCache, dialer, actorTemplateLister, workerPoolLister, sandboxConfigLister, kubeClient, instruments),
+		instruments:         instruments,
 	}
 	return s
 }

@@ -40,22 +40,24 @@ import (
 // ExtProcServer implements the Envoy external processing gRPC server
 // to dynamically manage actor activations based on request traffic.
 type ExtProcServer struct {
-	port          int
-	apiClient     ateapipb.ControlClient
-	recorder      *QueryRecorder
-	resumer       *ActorResumer
-	routeDuration metric.Float64Histogram
-	parking       *parkingLot
+	port              int
+	apiClient         ateapipb.ControlClient
+	recorder          *QueryRecorder
+	resumer           *ActorResumer
+	routeDuration     metric.Float64Histogram
+	parking           *parkingLot
+	routeViaAuthority bool
 }
 
-func NewExtProcServer(port int, apiClient ateapipb.ControlClient, routeDuration metric.Float64Histogram, parkCfg ParkedRequestConfig, parkMetrics *parkingMetrics) *ExtProcServer {
+func NewExtProcServer(port int, apiClient ateapipb.ControlClient, routeDuration metric.Float64Histogram, parkCfg ParkedRequestConfig, parkMetrics *parkingMetrics, routeViaAuthority bool) *ExtProcServer {
 	return &ExtProcServer{
-		port:          port,
-		apiClient:     apiClient,
-		recorder:      NewQueryRecorder(100),
-		resumer:       NewActorResumer(apiClient, withParking(parkCfg)),
-		routeDuration: routeDuration,
-		parking:       newParkingLot(parkCfg, parkMetrics),
+		port:              port,
+		apiClient:         apiClient,
+		recorder:          NewQueryRecorder(100),
+		resumer:           NewActorResumer(apiClient, withParking(parkCfg)),
+		routeDuration:     routeDuration,
+		parking:           newParkingLot(parkCfg, parkMetrics),
+		routeViaAuthority: routeViaAuthority,
 	}
 }
 
@@ -176,7 +178,7 @@ func (s *ExtProcServer) handleRequestHeaders(
 	tmplNs := actor.GetActorTemplateNamespace()
 	tmplName := actor.GetActorTemplateName()
 
-	workerIP := actor.GetAteomPodIp()
+	workerIP := actor.GetWorkerAssignment().GetWorkerPodIp()
 	slog.InfoContext(ctx, "ResumeActor result",
 		slog.Any("actor", actorRef),
 		slog.String("status", actor.GetStatus().String()),
@@ -202,7 +204,7 @@ func (s *ExtProcServer) handleRequestHeaders(
 	// dial, without touching :authority — atunnel authorizes the actor by the
 	// original Host (actor DNS name).
 	mutation := &extprocv3.HeaderMutation{}
-	addOriginalDstMutation(targetAddr, mutation)
+	addRoutingMutations(targetAddr, metadata.host, s.routeViaAuthority, mutation)
 
 	return &extprocv3.HeadersResponse{
 		Response: &extprocv3.CommonResponse{

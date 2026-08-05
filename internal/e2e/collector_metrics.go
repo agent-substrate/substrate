@@ -37,10 +37,11 @@ const (
 // mapped to underscores) the substrate platform must emit. The Collector's
 // prometheus exporter appends unit and type suffixes (e.g. _seconds_bucket,
 // _bytes_count), so matching is by prefix. This slice grows as each metric
-// slice lands and as more components are wired to push to the collector; today
-// it pins the worker-count instrument introduced alongside this harness.
+// slice lands and as more components are wired to push to the collector.
 var PlatformMetricPrefixes = []string{
 	"ate_workerpool_workers",
+	"ate_actor_lifecycle_operation_duration",
+	"ate_scheduler_assignment_duration",
 	"atenet_router_route_duration",
 }
 

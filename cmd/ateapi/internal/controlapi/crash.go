@@ -63,11 +63,7 @@ func crashActor(ctx context.Context, st store.Interface, actorRef resources.Acto
 
 	// InProgressSnapshot is kept for debugging; failed workflow
 	// steps must never promote it to an ActorSnapshot.
-	actor.AteomPodNamespace = ""
-	actor.AteomPodName = ""
-	actor.AteomPodIp = ""
-	actor.AteomPodUid = ""
-	actor.WorkerPoolName = ""
+	actor.WorkerAssignment = nil
 
 	if _, err := st.UpdateActor(ctx, actor, actor.GetMetadata().GetVersion()); err != nil {
 		errCollected = append(errCollected, fmt.Errorf("while marking actor crashed: %w", err))
@@ -78,17 +74,14 @@ func crashActor(ctx context.Context, st store.Interface, actorRef resources.Acto
 // releaseWorker clears the worker's assignment if it still points at the given
 // actor. A missing worker or an already-cleared assignment is not an error.
 func releaseWorker(ctx context.Context, st store.Interface, actor *ateapipb.Actor) error {
-	podNamespace := actor.GetAteomPodNamespace()
-	podName := actor.GetAteomPodName()
-	podUid := actor.GetAteomPodUid()
-	poolName := actor.GetWorkerPoolName()
-
-	if podNamespace == "" || podName == "" || poolName == "" {
+	assignment := actor.GetWorkerAssignment()
+	if assignment == nil {
 		slog.WarnContext(ctx, "Actor's worker assignment is already cleared")
 		return nil
 	}
+	podUid := assignment.GetWorkerPodUid()
 
-	worker, err := st.GetWorker(ctx, podNamespace, poolName, podName)
+	worker, err := st.GetWorker(ctx, assignment.GetWorkerNamespace(), assignment.GetWorkerPool(), assignment.GetWorkerPod())
 	if errors.Is(err, store.ErrNotFound) {
 		// No need to release if the worker is not found.
 		slog.WarnContext(ctx, "Worker already gone while crashing actor, skipping release", slog.String("worker", podUid))

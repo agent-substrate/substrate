@@ -447,6 +447,63 @@ func TestBuildDeploymentApplyConfigMetricExportTuning(t *testing.T) {
 	}
 }
 
+// TestBuildDeploymentApplyConfigTracesSamplerPropagation asserts the sampler
+// env pair reaches the ateom container only alongside an endpoint, and the arg
+// only alongside a sampler: an arg without a sampler name is dead config the
+// SDK ignores.
+func TestBuildDeploymentApplyConfigTracesSamplerPropagation(t *testing.T) {
+	const endpoint = "http://collector.otel-system.svc:4317"
+	tests := []struct {
+		name string
+		otel ateomOTelSettings
+		want map[string]string // value by env name; absent key means must not be set
+	}{
+		{
+			name: "unset keeps binary default",
+			otel: ateomOTelSettings{Endpoint: endpoint},
+			want: nil,
+		},
+		{
+			name: "sampler and arg with endpoint",
+			otel: ateomOTelSettings{Endpoint: endpoint, TracesSampler: "parentbased_traceidratio", TracesSamplerArg: "0.25"},
+			want: map[string]string{"OTEL_TRACES_SAMPLER": "parentbased_traceidratio", "OTEL_TRACES_SAMPLER_ARG": "0.25"},
+		},
+		{
+			name: "sampler alone",
+			otel: ateomOTelSettings{Endpoint: endpoint, TracesSampler: "parentbased_always_on"},
+			want: map[string]string{"OTEL_TRACES_SAMPLER": "parentbased_always_on"},
+		},
+		{
+			name: "arg alone stays unset",
+			otel: ateomOTelSettings{Endpoint: endpoint, TracesSamplerArg: "0.25"},
+			want: nil,
+		},
+		{
+			name: "ignored without endpoint",
+			otel: ateomOTelSettings{TracesSampler: "parentbased_traceidratio", TracesSamplerArg: "0.25"},
+			want: nil,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := buildDeploymentApplyConfig(testWorkerPoolApplyConfig(nil), tt.otel).
+				Spec.Template.Spec.Containers[0]
+			env := envByName(c.Env)
+			for _, k := range []string{"OTEL_TRACES_SAMPLER", "OTEL_TRACES_SAMPLER_ARG"} {
+				got, ok := env[k]
+				want, wantSet := tt.want[k]
+				if ok != wantSet {
+					t.Errorf("%s present = %v, want %v", k, ok, wantSet)
+					continue
+				}
+				if ok && got.value != want {
+					t.Errorf("%s = %q, want %q", k, got.value, want)
+				}
+			}
+		})
+	}
+}
+
 type envInfo struct {
 	index int
 	value string

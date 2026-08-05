@@ -269,7 +269,7 @@ Activates a suspended actor by restoring it onto a physical worker.
 *   **Request:** `ResumeActorRequest`
     *   `actor`: `ObjectRef` of the actor to resume.
     *   `boot`: (Optional) If `true`, bypasses snapshots and performs a cold boot.
-*   **Response:** `ResumeActorResponse` containing the updated `Actor` object (including the physical `ateom_pod_ip`).
+*   **Response:** `ResumeActorResponse` containing the updated `Actor` object (including the physical worker placement in `worker_assignment`).
 
 #### `SuspendActor`
 Hibernate a running actor, capturing its current RAM and disk state into a snapshot.
@@ -302,6 +302,29 @@ Workloads can exchange their ephemeral Kubernetes credentials for stable **Actor
 ### Service: `ateapi.ActorIdentity`
 *   **`MintJWT`:** Generates an OIDC-compatible JWT identifying the Substrate Actor.
 *   **`MintCert`:** Signs a Certificate Signing Request (CSR) to provide an mTLS identity for the actor.
+
+Both RPCs identify the actor the same way the rest of the API does, by `atespace` and `actor_name`.
+
+#### Who may call `MintCert` and `MintJWT`
+
+`MintCert` and `MintJWT` are not callable by actors directly. They must be called over mTLS with a
+Pod Certificate, and the broker only signs a CSR when all of the following hold:
+
+1.  The client certificate identifies the **`atelet`** service account
+    (`spiffe://cluster.local/ns/ate-system/sa/atelet`) and carries a Pod Identity
+    extension, which pins the calling atelet to a node.
+2.  The requested actor is **currently running**, per the actor database.
+3.  The worker Pod hosting that actor is on the **same node** as the calling
+    atelet, and is still assigned to that actor.
+
+An atelet is therefore confined to minting credentials for the actors it is
+actually hosting. Callers that fail any of these checks receive
+`PERMISSION_DENIED` with no detail, so the RPC cannot be used to discover
+whether an actor exists or where it is running. An actor that exists but is
+suspended, paused, or crashed yields `FAILED_PRECONDITION`.
+
+The minted leaf certificate carries the SPIFFE URI
+`spiffe://substrate-actor.local/atespace/${atespace}/actor/${actor_name}`.
 
 ---
 

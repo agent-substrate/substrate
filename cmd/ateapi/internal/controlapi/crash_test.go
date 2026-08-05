@@ -34,13 +34,15 @@ import (
 func seedActor(t *testing.T, ctx context.Context, st store.Interface, actorRef resources.ActorRef) {
 	t.Helper()
 	if _, err := st.CreateActor(ctx, &ateapipb.Actor{
-		Metadata:           &ateapipb.ResourceMetadata{Name: actorRef.Name, Atespace: actorRef.Atespace},
-		Status:             ateapipb.Actor_STATUS_RUNNING,
-		AteomPodNamespace:  "ns",
-		AteomPodName:       "pod",
-		AteomPodIp:         "1.2.3.4",
-		AteomPodUid:        "uid",
-		WorkerPoolName:     "pool",
+		Metadata: &ateapipb.ResourceMetadata{Name: actorRef.Name, Atespace: actorRef.Atespace},
+		Status:   ateapipb.Actor_STATUS_RUNNING,
+		WorkerAssignment: &ateapipb.WorkerAssignment{
+			WorkerNamespace: "ns",
+			WorkerPool:      "pool",
+			WorkerPod:       "pod",
+			WorkerPodUid:    "uid",
+			WorkerPodIp:     "1.2.3.4",
+		},
 		InProgressSnapshot: "gs://snapshots/actor-1/reserved",
 	}); err != nil {
 		t.Fatalf("seed actor: %v", err)
@@ -94,16 +96,8 @@ func assertCrashed(t *testing.T, ctx context.Context, st store.Interface, actorR
 	if got.GetInProgressSnapshot() == "" {
 		t.Error(`InProgressSnapshot = "", want preserved`)
 	}
-	for field, val := range map[string]string{
-		"AteomPodNamespace": got.GetAteomPodNamespace(),
-		"AteomPodName":      got.GetAteomPodName(),
-		"AteomPodIp":        got.GetAteomPodIp(),
-		"AteomPodUid":       got.GetAteomPodUid(),
-		"WorkerPoolName":    got.GetWorkerPoolName(),
-	} {
-		if val != "" {
-			t.Errorf("%s = %q, want cleared", field, val)
-		}
+	if got.GetWorkerAssignment() != nil {
+		t.Errorf("WorkerAssignment = %v, want cleared", got.GetWorkerAssignment())
 	}
 }
 
