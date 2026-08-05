@@ -90,7 +90,9 @@ func NewClient(ctx context.Context, kubeconfigPath, k8sContext, endpoint string,
 	}
 
 	if err != nil {
-		_ = tp.Shutdown(ctx)
+		if tp != nil {
+			_ = tp.Shutdown(ctx)
+		}
 		return nil, err
 	}
 
@@ -258,7 +260,15 @@ func (c bearerTokenCreds) GetRequestMetadata(_ context.Context, _ ...string) (ma
 
 func (c bearerTokenCreds) RequireTransportSecurity() bool { return true }
 
+// initTracing returns (nil, nil) when tracing is disabled: the OTel globals
+// stay noop so no traceparent is injected, the server roots the trace, and the
+// server side sampling ratio applies. A NeverSample provider here would
+// instead pin every ParentBased sampler downstream to not sampled.
 func initTracing(ctx context.Context, enabled bool) (*sdktrace.TracerProvider, error) {
+	if !enabled {
+		return nil, nil
+	}
+
 	res, err := resource.New(ctx,
 		resource.WithSchemaURL(semconv.SchemaURL),
 		resource.WithAttributes(
@@ -269,14 +279,9 @@ func initTracing(ctx context.Context, enabled bool) (*sdktrace.TracerProvider, e
 		return nil, fmt.Errorf("failed to create resource: %w", err)
 	}
 
-	sampler := sdktrace.NeverSample()
-	if enabled {
-		sampler = sdktrace.AlwaysSample()
-	}
-
 	tp := sdktrace.NewTracerProvider(
 		sdktrace.WithResource(res),
-		sdktrace.WithSampler(sampler),
+		sdktrace.WithSampler(sdktrace.AlwaysSample()),
 	)
 	otel.SetTracerProvider(tp)
 	otel.SetTextMapPropagator(propagation.TraceContext{})

@@ -46,18 +46,18 @@ import (
 	"github.com/agent-substrate/substrate/internal/version"
 	"github.com/vishvananda/netns"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
-	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"golang.org/x/sys/unix"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
 )
 
 var (
-	podUID      = flag.String("pod-uid", "", "The UID of the current pod")
-	chBinary    = flag.String("cloud-hypervisor-binary", "cloud-hypervisor", "Path to the cloud-hypervisor binary (used to relaunch on restore).")
-	kataConfig  = flag.String("kata-config", "", "Path to a kata configuration.toml (passed to the shim as KATA_CONF_FILE). Empty uses kata's default. atelet generates one pointing at runtime-fetched assets.")
-	kataDebug   = flag.Bool("kata-debug", false, "Verbose kata-agent debugging: raise the guest agent log level and forward the guest console (incl. agent logs) into the pod logs.")
-	showVersion = flag.Bool("version", false, "Print version and exit.")
+	podUID       = flag.String("pod-uid", "", "The UID of the current pod")
+	chBinary     = flag.String("cloud-hypervisor-binary", "cloud-hypervisor", "Path to the cloud-hypervisor binary (used to relaunch on restore).")
+	kataConfig   = flag.String("kata-config", "", "Path to a kata configuration.toml (passed to the shim as KATA_CONF_FILE). Empty uses kata's default. atelet generates one pointing at runtime-fetched assets.")
+	kataDebug    = flag.Bool("kata-debug", false, "Verbose kata-agent debugging: raise the guest agent log level and forward the guest console (incl. agent logs) into the pod logs.")
+	showVersion  = flag.Bool("version", false, "Print version and exit.")
+	logLevelFlag = flag.String("log-level", "info", "Minimum log level: debug, info, warn, or error.")
 
 	atunnelListenAddress       = flag.String("atunnel-listen-address", "0.0.0.0:443", "Address for actor ingress HTTPS")
 	atunnelCredentialBundle    = flag.String("atunnel-credential-bundle", "/run/podidentity.podcert.ate.dev/credential-bundle.pem", "PEM credential bundle for actor ingress HTTPS")
@@ -94,12 +94,15 @@ func do(ctx context.Context) error {
 	// interleave-corrupt each other's lines.
 	logWriter := actorlog.NewSyncedWriter(os.Stdout)
 	serverboot.InitLoggerWithWriter(logWriter)
+	if err := serverboot.SetLogLevel(*logLevelFlag); err != nil {
+		return err
+	}
 	slog.InfoContext(ctx, "ateom-microvm booting", slog.String("version", version.String()))
 
 	const serviceName = "ateom-microvm"
 	tp, err := serverboot.InitTracing(ctx, serverboot.TracingOptions{
 		ServiceName: serviceName,
-		Sampler:     sdktrace.ParentBased(sdktrace.NeverSample()),
+		Sampling:    serverboot.ResolveTraceSampling(ctx, serverboot.ParentRatioSampling(serverboot.ControlPlaneTraceRatio)),
 	})
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to initialize tracing", err)

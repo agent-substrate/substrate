@@ -302,7 +302,8 @@ func (s *WorkerPoolSyncer) releaseActorOnDeadWorker(ctx context.Context, namespa
 		return err
 	}
 	// Skip if a concurrent SuspendActor already cleared the pointer.
-	if actor.GetAteomPodNamespace() != namespace || actor.GetAteomPodName() != podName {
+	assignment := actor.GetWorkerAssignment()
+	if assignment.GetWorkerNamespace() != namespace || assignment.GetWorkerPod() != podName {
 		return nil
 	}
 	// If the actor is suspended, it's already been released.
@@ -325,12 +326,8 @@ func (s *WorkerPoolSyncer) releaseActorOnDeadWorker(ctx context.Context, namespa
 	crashAttrs := ateattr.ActorMetricAttributes(actor, worker.GetSandboxClass(), opName, ateattr.ReasonWorkerPodGone)
 
 	actor.Status = ateapipb.Actor_STATUS_CRASHED
-	actor.AteomPodNamespace = ""
-	actor.AteomPodName = ""
-	actor.AteomPodIp = ""
-	actor.AteomPodUid = ""
+	actor.WorkerAssignment = nil
 	actor.InProgressSnapshot = ""
-	actor.WorkerPoolName = ""
 
 	_, err = s.persistence.UpdateActor(ctx, actor, actor.GetMetadata().GetVersion())
 

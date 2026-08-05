@@ -649,3 +649,67 @@ func TestXdsServer_SetOtlpCollector_EmptyDisablesTracing(t *testing.T) {
 		t.Errorf("snapshot contains cluster %q, want it omitted when tracing is disabled", OtlpClusterName)
 	}
 }
+
+func TestXdsServer_BuildTracingRandomSamplingFromPolicy(t *testing.T) {
+	const collectorAddr = "collector.otel-system.svc:4317"
+
+	tests := []struct {
+		name        string
+		collector   string
+		percent     float64
+		setPercent  bool
+		wantTracing bool
+		wantPercent float64
+	}{
+		{
+			name:        "percent mirrors the resolved policy",
+			collector:   collectorAddr,
+			percent:     1,
+			setPercent:  true,
+			wantTracing: true,
+			wantPercent: 1,
+		},
+		{
+			name:        "full sampling",
+			collector:   collectorAddr,
+			percent:     100,
+			setPercent:  true,
+			wantTracing: true,
+			wantPercent: 100,
+		},
+		{
+			// A caller that never threads in a policy must fail toward no
+			// root sampling, not toward 100%.
+			name:        "setter never called defaults to zero",
+			collector:   collectorAddr,
+			wantTracing: true,
+			wantPercent: 0,
+		},
+		{
+			name:       "no collector yields no tracing block",
+			percent:    100,
+			setPercent: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			x := NewXdsServer(0)
+			if err := x.SetOtlpCollector(tt.collector); err != nil {
+				t.Fatalf("SetOtlpCollector(%q) failed: %v", tt.collector, err)
+			}
+			if tt.setPercent {
+				x.SetTraceRootSamplingPercent(tt.percent)
+			}
+			tr := x.buildTracing()
+			if (tr != nil) != tt.wantTracing {
+				t.Fatalf("buildTracing() = %v, want tracing block: %v", tr, tt.wantTracing)
+			}
+			if !tt.wantTracing {
+				return
+			}
+			if got := tr.GetRandomSampling().GetValue(); got != tt.wantPercent {
+				t.Errorf("RandomSampling = %v, want %v", got, tt.wantPercent)
+			}
+		})
+	}
+}

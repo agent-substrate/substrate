@@ -47,6 +47,12 @@ const (
 	// (currently DurableDir-typed volumes). Memory and the rest of rootfs are
 	// excluded.
 	SnapshotScope_SNAPSHOT_SCOPE_DATA SnapshotScope = 2
+	// Restore-only: restore the ActorTemplate's golden snapshot's guest state
+	// (memory + full filesystem delta) combined with the snapshot's durable
+	// data. Never valid for CheckpointWorkload — snapshots only ever capture
+	// FULL or DATA; the control plane selects this scope at restore per the
+	// template's onResume configuration.
+	SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN SnapshotScope = 3
 )
 
 // Enum value maps for SnapshotScope.
@@ -55,11 +61,13 @@ var (
 		0: "SNAPSHOT_SCOPE_UNSPECIFIED",
 		1: "SNAPSHOT_SCOPE_FULL",
 		2: "SNAPSHOT_SCOPE_DATA",
+		3: "SNAPSHOT_SCOPE_DATA_ON_GOLDEN",
 	}
 	SnapshotScope_value = map[string]int32{
-		"SNAPSHOT_SCOPE_UNSPECIFIED": 0,
-		"SNAPSHOT_SCOPE_FULL":        1,
-		"SNAPSHOT_SCOPE_DATA":        2,
+		"SNAPSHOT_SCOPE_UNSPECIFIED":    0,
+		"SNAPSHOT_SCOPE_FULL":           1,
+		"SNAPSHOT_SCOPE_DATA":           2,
+		"SNAPSHOT_SCOPE_DATA_ON_GOLDEN": 3,
 	}
 )
 
@@ -379,10 +387,13 @@ func (x *DurableDirVolumeMount) GetMountPath() string {
 // Readyz describes how to check that a container is ready to serve.
 // Only HTTP is supported today.
 type Readyz struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	HttpGet       *HTTPGetAction         `protobuf:"bytes,1,opt,name=http_get,json=httpGet,proto3" json:"http_get,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	HttpGet *HTTPGetAction         `protobuf:"bytes,1,opt,name=http_get,json=httpGet,proto3" json:"http_get,omitempty"`
+	// How long to keep polling before giving up and failing the actor start.
+	// Zero means the ateom's default.
+	TimeoutSeconds int32 `protobuf:"varint,2,opt,name=timeout_seconds,json=timeoutSeconds,proto3" json:"timeout_seconds,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *Readyz) Reset() {
@@ -420,6 +431,13 @@ func (x *Readyz) GetHttpGet() *HTTPGetAction {
 		return x.HttpGet
 	}
 	return nil
+}
+
+func (x *Readyz) GetTimeoutSeconds() int32 {
+	if x != nil {
+		return x.TimeoutSeconds
+	}
+	return 0
 }
 
 // HTTPGetAction performs an HTTP GET against the container.
@@ -708,8 +726,12 @@ type RestoreWorkloadRequest struct {
 	// Remote egress gateway selected for this activation. When absent, actor
 	// traffic uses direct egress instead of being redirected through atunnel.
 	EgressGatewayAddress *string `protobuf:"bytes,12,opt,name=egress_gateway_address,json=egressGatewayAddress,proto3,oneof" json:"egress_gateway_address,omitempty"`
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
+	// The object storage URI prefix of the ActorTemplate's golden snapshot.
+	// Set only when scope is SNAPSHOT_SCOPE_DATA_ON_GOLDEN. Mirrors the
+	// snapshot_uri_prefix contract (field 8).
+	GoldenSnapshotUriPrefix string `protobuf:"bytes,13,opt,name=golden_snapshot_uri_prefix,json=goldenSnapshotUriPrefix,proto3" json:"golden_snapshot_uri_prefix,omitempty"`
+	unknownFields           protoimpl.UnknownFields
+	sizeCache               protoimpl.SizeCache
 }
 
 func (x *RestoreWorkloadRequest) Reset() {
@@ -826,6 +848,13 @@ func (x *RestoreWorkloadRequest) GetEgressGatewayAddress() string {
 	return ""
 }
 
+func (x *RestoreWorkloadRequest) GetGoldenSnapshotUriPrefix() string {
+	if x != nil {
+		return x.GoldenSnapshotUriPrefix
+	}
+	return ""
+}
+
 type RestoreWorkloadResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -897,9 +926,10 @@ const file_ateom_proto_rawDesc = "" +
 	"\vvolume_name\x18\x01 \x01(\tR\n" +
 	"volumeName\x12\x1d\n" +
 	"\n" +
-	"mount_path\x18\x02 \x01(\tR\tmountPath\"9\n" +
+	"mount_path\x18\x02 \x01(\tR\tmountPath\"b\n" +
 	"\x06Readyz\x12/\n" +
-	"\bhttp_get\x18\x01 \x01(\v2\x14.ateom.HTTPGetActionR\ahttpGet\"7\n" +
+	"\bhttp_get\x18\x01 \x01(\v2\x14.ateom.HTTPGetActionR\ahttpGet\x12'\n" +
+	"\x0ftimeout_seconds\x18\x02 \x01(\x05R\x0etimeoutSeconds\"7\n" +
 	"\rHTTPGetAction\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12\x12\n" +
 	"\x04port\x18\x02 \x01(\x05R\x04port\"\x15\n" +
@@ -922,7 +952,7 @@ const file_ateom_proto_rawDesc = "" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"C\n" +
 	"\x1aCheckpointWorkloadResponse\x12%\n" +
-	"\x0esnapshot_files\x18\x01 \x03(\tR\rsnapshotFiles\"\xa5\x05\n" +
+	"\x0esnapshot_files\x18\x01 \x03(\tR\rsnapshotFiles\"\xe2\x05\n" +
 	"\x16RestoreWorkloadRequest\x12\x1a\n" +
 	"\batespace\x18\x01 \x01(\tR\batespace\x12\x1d\n" +
 	"\n" +
@@ -938,16 +968,18 @@ const file_ateom_proto_rawDesc = "" +
 	"\x13runtime_asset_paths\x18\t \x03(\v24.ateom.RestoreWorkloadRequest.RuntimeAssetPathsEntryR\x11runtimeAssetPaths\x12*\n" +
 	"\x05scope\x18\n" +
 	" \x01(\x0e2\x14.ateom.SnapshotScopeR\x05scope\x129\n" +
-	"\x16egress_gateway_address\x18\f \x01(\tH\x00R\x14egressGatewayAddress\x88\x01\x01\x1aD\n" +
+	"\x16egress_gateway_address\x18\f \x01(\tH\x00R\x14egressGatewayAddress\x88\x01\x01\x12;\n" +
+	"\x1agolden_snapshot_uri_prefix\x18\r \x01(\tR\x17goldenSnapshotUriPrefix\x1aD\n" +
 	"\x16RuntimeAssetPathsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01B\x19\n" +
 	"\x17_egress_gateway_address\"\x19\n" +
-	"\x17RestoreWorkloadResponse*a\n" +
+	"\x17RestoreWorkloadResponse*\x84\x01\n" +
 	"\rSnapshotScope\x12\x1e\n" +
 	"\x1aSNAPSHOT_SCOPE_UNSPECIFIED\x10\x00\x12\x17\n" +
 	"\x13SNAPSHOT_SCOPE_FULL\x10\x01\x12\x17\n" +
-	"\x13SNAPSHOT_SCOPE_DATA\x10\x022\x80\x02\n" +
+	"\x13SNAPSHOT_SCOPE_DATA\x10\x02\x12!\n" +
+	"\x1dSNAPSHOT_SCOPE_DATA_ON_GOLDEN\x10\x032\x80\x02\n" +
 	"\x05Ateom\x12F\n" +
 	"\vRunWorkload\x12\x19.ateom.RunWorkloadRequest\x1a\x1a.ateom.RunWorkloadResponse\"\x00\x12[\n" +
 	"\x12CheckpointWorkload\x12 .ateom.CheckpointWorkloadRequest\x1a!.ateom.CheckpointWorkloadResponse\"\x00\x12R\n" +

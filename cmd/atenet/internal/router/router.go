@@ -23,14 +23,11 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
-	"time"
 
 	"github.com/spf13/cobra"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
-	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/grpc"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -46,6 +43,10 @@ import (
 	v1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
+
+// dataPlaneTraceRatio is the default root sampling fraction for parentless
+// data plane requests; OTEL_TRACES_SAMPLER / OTEL_TRACES_SAMPLER_ARG override it.
+const dataPlaneTraceRatio = 0.01
 
 var (
 	scheme = runtime.NewScheme()
@@ -136,25 +137,19 @@ func (s *RouterServer) Run(ctx context.Context) error {
 	}
 	parkCfg := s.cfg.ParkedRequest.normalized()
 
-	var level slog.Level
-	switch strings.ToLower(s.cfg.LogLevel) {
-	case "debug":
-		level = slog.LevelDebug
-	case "warn":
-		level = slog.LevelWarn
-	case "error":
-		level = slog.LevelError
-	default:
-		level = slog.LevelInfo
+	serverboot.InitLogger()
+	if err := serverboot.SetLogLevel(s.cfg.LogLevel); err != nil {
+		return err
 	}
-	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: level})))
 
 	// Tracing must be initialized before constructing the ateapi gRPC client
 	// below, because otelgrpc.NewClientHandler captures the global
-	// TracerProvider at construction time.
+	// TracerProvider at construction time. Resolved once so the router's SDK
+	// sampler and Envoy's RandomSampling percent cannot drift.
+	sampling := serverboot.ResolveTraceSampling(ctx, serverboot.ParentRatioSampling(dataPlaneTraceRatio))
 	tp, err := serverboot.InitTracing(ctx, serverboot.TracingOptions{
 		ServiceName: routerServiceName,
-		Sampler:     sdktrace.ParentBased(sdktrace.NeverSample()),
+		Sampling:    sampling,
 	})
 	if err != nil {
 		return fmt.Errorf("failed to initialize tracing: %w", err)
@@ -190,23 +185,12 @@ func (s *RouterServer) Run(ctx context.Context) error {
 	slog.InfoContext(ctx, "Connecting to ateapi", slog.String("address", s.cfg.AteapiAddr), slog.Bool("use-api-token-auth", s.cfg.Auth.AteapiUseTokenAuth))
 	s.apiClient = ateapipb.NewControlClient(conn)
 
-	slog.InfoContext(ctx, "Starting substrate router subsystem", slog.Bool("standalone", s.cfg.Standalone))
+	slog.InfoContext(ctx, "Starting substrate router subsystem",
+		slog.Bool("standalone", s.cfg.Standalone),
+		slog.String("atenet_router", string(s.cfg.atenetRouter())))
 
 	g, ctx := errgroup.WithContext(ctx)
 
-	xdsSrv := NewXdsServer(s.cfg.XdsPort)
-	xdsSrv.SetConfig(s.cfg.HttpPort, s.cfg.ExtprocPort, s.cfg.ExtprocAddr)
-	setOtlpCollector(ctx, xdsSrv, s.cfg.OtlpCollectorAddress)
-
-	xdsSrv.SetExtProcMaxRequests(s.cfg.extProcMaxRequests())
-	if parkCfg.enabled() {
-		// Envoy must keep a parked request open at least as long as the router
-		// will hold it; add a margin so the router surfaces its own 503 first.
-		xdsSrv.SetExtProcMessageTimeout(parkCfg.Budget + 5*time.Second)
-	}
-
-	xdsSrv.SetTlsConfig(s.cfg.HttpsPort, s.cfg.EnvoyCertPath)
-	xdsSrv.SetUpstreamTls(s.cfg.UpstreamCredentialBundlePath, s.cfg.UpstreamTrustBundlePath, s.cfg.UpstreamSpiffePrefix)
 	if s.extprocSrv == nil {
 		routeDuration, err := newRouteDurationHistogram()
 		if err != nil {
@@ -216,35 +200,19 @@ func (s *RouterServer) Run(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("failed to create parking metrics: %w", err)
 		}
-		s.extprocSrv = NewExtProcServer(s.cfg.ExtprocPort, s.apiClient, routeDuration, parkCfg, parkMetrics)
+		s.extprocSrv = NewExtProcServer(s.cfg.ExtprocPort, s.apiClient, routeDuration, parkCfg, parkMetrics, s.cfg.atenetRouter().routeViaAuthority())
 	}
-	ctrl := NewController(s.k8sClient, s.clientset, s.cfg, xdsSrv, s.extprocSrv)
-
 	s.health = newRouterHealth(s.cfg.HealthInterval, s.clientset, s.apiClient, s.cfg)
 
-	// Start Controller / Watcher
-	g.Go(func() error {
-		slog.InfoContext(ctx, "Starting ActorTemplate controller")
-		return ctrl.Start(ctx)
-	})
+	if err := s.startDataplane(ctx, g, parkCfg, sampling.RootSamplingPercent()); err != nil {
+		return err
+	}
 
 	// Start periodic service checking logic
 	g.Go(func() error {
 		slog.InfoContext(ctx, "Starting periodic health checker", slog.Duration("interval", s.cfg.HealthInterval))
 		s.health.Start(ctx)
 		return nil
-	})
-
-	// Start xDS Server
-	g.Go(func() error {
-		slog.InfoContext(ctx, "Starting Envoy xDS Server", slog.Int("port", s.cfg.XdsPort))
-		lis, err := net.Listen("tcp", fmt.Sprintf(":%d", s.cfg.XdsPort))
-		if err != nil {
-			return fmt.Errorf("failed to listen on port %d: %w", s.cfg.XdsPort, err)
-		}
-		defer lis.Close()
-
-		return xdsSrv.Serve(ctx, lis)
 	})
 
 	// Start ExtProc Server

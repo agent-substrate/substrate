@@ -42,9 +42,9 @@ type Claims struct {
 }
 
 type SubstrateClaims struct {
-	AppID   string
-	UserID  string
-	ActorID string
+	Atespace  string
+	ActorName string
+	ActorUid  string
 }
 
 type wireHeader struct {
@@ -68,9 +68,9 @@ type WireClaims struct {
 }
 
 type WireSubstrateClaims struct {
-	AppID   string `json:"appID,omitempty"`
-	UserID  string `json:"userID,omitempty"`
-	ActorID string `json:"actorID,omitempty"`
+	Atespace  string `json:"atespace,omitempty"`
+	ActorName string `json:"actorName,omitempty"`
+	ActorUid  string `json:"actorUid,omitempty"`
 }
 
 func ClaimsToWire(claims *Claims) (*WireClaims, error) {
@@ -88,9 +88,9 @@ func ClaimsToWire(claims *Claims) (*WireClaims, error) {
 		IssuedAt:   float64(claims.IssuedAt.Unix()),
 		JTI:        claims.JTI,
 		Substrate: WireSubstrateClaims{
-			claims.Substrate.AppID,
-			claims.Substrate.UserID,
-			claims.Substrate.ActorID,
+			Atespace:  claims.Substrate.Atespace,
+			ActorName: claims.Substrate.ActorName,
+			ActorUid:  claims.Substrate.ActorUid,
 		},
 	}
 

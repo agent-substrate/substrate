@@ -19,6 +19,13 @@ import (
 	"time"
 )
 
+type atenetRouter string
+
+const (
+	atenetRouterEnvoy        atenetRouter = "envoy"
+	atenetRouterAgentgateway atenetRouter = "agentgateway"
+)
+
 // authConfig holds the router's client-auth settings for dialing ateapi.
 // AteapiCAFile always verifies ateapi's serving cert (the servicedns trust
 // bundle in-cluster). By default the router presents AteapiClientCertPath
@@ -36,6 +43,7 @@ type authConfig struct {
 // routerConfig holds deployment setup and endpoint options for the router node instance.
 type routerConfig struct {
 	Standalone     bool
+	AtenetRouter   string
 	Namespace      string
 	Kubeconfig     string
 	AteapiAddr     string
@@ -86,6 +94,13 @@ type routerConfig struct {
 	ExtProcMaxRequests int
 }
 
+func (c routerConfig) atenetRouter() atenetRouter {
+	if c.AtenetRouter == "" {
+		return atenetRouterEnvoy
+	}
+	return atenetRouter(c.AtenetRouter)
+}
+
 // extProcMaxRequestsFloor is the minimum derived circuit breaker — Envoy's own
 // default max_requests — so a small (or disabled) parking lot still leaves
 // ordinary fast-path capacity.
@@ -109,9 +124,15 @@ func (c routerConfig) extProcMaxRequests() int {
 // validate rejects flag combinations that would make the router misbehave
 // rather than merely differ.
 func (c routerConfig) validate() error {
+	switch c.atenetRouter() {
+	case atenetRouterEnvoy, atenetRouterAgentgateway:
+	default:
+		return fmt.Errorf("--atenet-router must be %q or %q, got %q", atenetRouterEnvoy, atenetRouterAgentgateway, c.AtenetRouter)
+	}
 	if err := c.ParkedRequest.validate(); err != nil {
 		return err
 	}
+
 	if c.ExtProcMaxRequests < 0 {
 		return fmt.Errorf("--extproc-max-requests must not be negative, got %d (0 derives it from --parked-request-max)", c.ExtProcMaxRequests)
 	}

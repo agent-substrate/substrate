@@ -47,7 +47,6 @@ import (
 	"github.com/spf13/pflag"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.opentelemetry.io/otel"
-	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"golang.org/x/oauth2/google"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
@@ -83,6 +82,7 @@ var (
 	drainTimeout = pflag.Duration("drain-timeout", 15*time.Second, "Deadline for the graceful gRPC drain on shutdown. In-flight RPCs still running past it are forcefully cancelled.")
 
 	showVersion     = pflag.Bool("version", false, "Print version and exit.")
+	logLevelFlag    = pflag.String("log-level", "info", "Minimum log level: debug, info, warn, or error.")
 	clientJWTCAFile = pflag.String("client-jwt-ca-cert", ateapiauth.DefaultServiceAccountCAFile, "CA cert file used to verify TLS when fetching the OIDC discovery document and JWKS for JWT authentication. Defaults to the in-cluster service account CA.")
 )
 
@@ -94,6 +94,9 @@ func main() {
 	}
 	ctx := context.Background()
 	serverboot.InitLogger()
+	if err := serverboot.SetLogLevel(*logLevelFlag); err != nil {
+		serverboot.Fatal(ctx, "Invalid --log-level", err)
+	}
 
 	// Kept separate from ctx so that in-progress work (clients, informers) is
 	// not cancelled the moment SIGTERM arrives. The drainOnShutdown
@@ -103,7 +106,7 @@ func main() {
 
 	tp, err := serverboot.InitTracing(ctx, serverboot.TracingOptions{
 		ServiceName: "ateapi",
-		Sampler:     sdktrace.ParentBased(sdktrace.AlwaysSample()),
+		Sampling:    serverboot.ResolveTraceSampling(ctx, serverboot.ParentRatioSampling(serverboot.ControlPlaneTraceRatio)),
 	})
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to initialize tracing", err)
@@ -169,12 +172,17 @@ func main() {
 		serverboot.Fatal(ctx, "Failed to register actor-crashes metric", err)
 	}
 
+	instruments, err := controlapi.NewInstruments(otel.Meter("ateapi"))
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to create metric instruments", err)
+	}
+
 	ateletDialer := controlapi.NewAteletDialer(workerPodInformer.GetIndexer(), ateletPodInformer.GetIndexer(), *ateletClientCredBundle, *podIdentityCACerts)
-	sm := controlapi.NewService(redisPersistence, workerCache, actorTemplateLister, workerPoolLister, sandboxConfigLister, ateletDialer, clientset)
+	sm := controlapi.NewService(redisPersistence, workerCache, actorTemplateLister, workerPoolLister, sandboxConfigLister, ateletDialer, clientset, instruments)
 
 	jwtIssuerDiscoveryClient := buildK8sServiceAccountIssuerDiscoveryClient(ctx, *clientJWTCAFile, *clientJWTIssuer)
 
-	actorIdentitySrv := actoridentity.New(*clientJWTIssuer, *clientJWTAudience, *actorIDJWTPoolFile, *actorIDCAPoolFile, *podIdentityCACerts, jwtIssuerDiscoveryClient)
+	actorIdentitySrv := actoridentity.New(*clientJWTIssuer, *clientJWTAudience, *actorIDJWTPoolFile, *actorIDCAPoolFile, *podIdentityCACerts, jwtIssuerDiscoveryClient, redisPersistence)
 	debugSrv := debugapi.NewService(redisPersistence)
 
 	lisCfg := &net.ListenConfig{}

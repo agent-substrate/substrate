@@ -148,12 +148,14 @@ func TestKeySpellings(t *testing.T) {
 		{TemplateNameKey, "ate.template.name"},
 		{TemplateNamespaceKey, "ate.template.namespace"},
 		{ActorVersionKey, "ate.actor.version"},
+		{ActorOperationNameKey, "ate.actor.operation.name"},
 		{WorkerPoolNamespaceKey, "ate.workerpool.namespace"},
 		{WorkerPoolNameKey, "ate.workerpool.name"},
 		{WorkerStateKey, "ate.worker.state"},
 		{SandboxClassKey, "ate.sandbox.class"},
-		{OperationNameKey, "ate.operation.name"},
-
+		{SnapshotKindKey, "ate.snapshot.kind"},
+		{SchedulerOutcomeKey, "ate.scheduler.outcome"},
+		{ErrorTypeKey, "error.type"},
 		{FailureReasonKey, "ate.failure.reason"},
 	}
 	for _, tt := range tests {
@@ -165,22 +167,61 @@ func TestKeySpellings(t *testing.T) {
 	}
 }
 
+// TestMetricLabelValues pins the wire value of every bounded metric-label
+// constant. These are the exact strings dashboards and alerts group by, so a
+// typo or rename must fail here rather than silently fork a time series in
+// production.
+func TestMetricLabelValues(t *testing.T) {
+	tests := []struct {
+		got  string
+		want string
+	}{
+		{WorkerStateIdle, "idle"},
+		{WorkerStateAssigned, "assigned"},
+
+		{OperationCreate, "create"},
+		{OperationResume, "resume"},
+		{OperationSuspend, "suspend"},
+		{OperationPause, "pause"},
+		{OperationDelete, "delete"},
+		{OperationUnknown, "unknown"},
+
+		{SchedulerOutcomeAssigned, "assigned"},
+		{SchedulerOutcomeNoFreeWorker, "no_free_worker"},
+		{SchedulerOutcomeError, "error"},
+
+		{SnapshotKindGolden, "golden"},
+		{SnapshotKindLatest, "latest"},
+		{SnapshotKindLocal, "local"},
+		{SnapshotKindBoot, "boot"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.want, func(t *testing.T) {
+			if tt.got != tt.want {
+				t.Errorf("got %q, want %q", tt.got, tt.want)
+			}
+		})
+	}
+}
+
 func TestActorMetricAttributes(t *testing.T) {
 	actor := &ateapipb.Actor{
 		ActorTemplateNamespace: "default",
 		ActorTemplateName:      "counter-template",
-		WorkerPoolName:         "default-pool",
+		WorkerAssignment: &ateapipb.WorkerAssignment{
+			WorkerPool: "default-pool",
+		},
 	}
 
 	t.Run("explicit operation and reason", func(t *testing.T) {
 		got := toMap(ActorMetricAttributes(actor, "gvisor", OperationResume, ReasonCorruptedAssignment))
 		want := map[attribute.Key]any{
-			TemplateNamespaceKey: "default",
-			TemplateNameKey:      "counter-template",
-			WorkerPoolNameKey:    "default-pool",
-			SandboxClassKey:      "gvisor",
-			OperationNameKey:     OperationResume,
-			FailureReasonKey:     ReasonCorruptedAssignment,
+			TemplateNamespaceKey:  "default",
+			TemplateNameKey:       "counter-template",
+			WorkerPoolNameKey:     "default-pool",
+			SandboxClassKey:       "gvisor",
+			ActorOperationNameKey: OperationResume,
+			FailureReasonKey:      ReasonCorruptedAssignment,
 		}
 
 		assertAttrs(t, got, want)
@@ -189,12 +230,12 @@ func TestActorMetricAttributes(t *testing.T) {
 	t.Run("default unknown values", func(t *testing.T) {
 		got := toMap(ActorMetricAttributes(actor, "gvisor", "", ""))
 		want := map[attribute.Key]any{
-			TemplateNamespaceKey: "default",
-			TemplateNameKey:      "counter-template",
-			WorkerPoolNameKey:    "default-pool",
-			SandboxClassKey:      "gvisor",
-			OperationNameKey:     OperationUnknown,
-			FailureReasonKey:     ReasonUnknown,
+			TemplateNamespaceKey:  "default",
+			TemplateNameKey:       "counter-template",
+			WorkerPoolNameKey:     "default-pool",
+			SandboxClassKey:       "gvisor",
+			ActorOperationNameKey: OperationUnknown,
+			FailureReasonKey:      ReasonUnknown,
 		}
 
 		assertAttrs(t, got, want)
@@ -203,12 +244,12 @@ func TestActorMetricAttributes(t *testing.T) {
 	t.Run("out of range operation name is normalized to unknown", func(t *testing.T) {
 		got := toMap(ActorMetricAttributes(actor, "gvisor", "invalid_op", ""))
 		want := map[attribute.Key]any{
-			TemplateNamespaceKey: "default",
-			TemplateNameKey:      "counter-template",
-			WorkerPoolNameKey:    "default-pool",
-			SandboxClassKey:      "gvisor",
-			OperationNameKey:     OperationUnknown,
-			FailureReasonKey:     ReasonUnknown,
+			TemplateNamespaceKey:  "default",
+			TemplateNameKey:       "counter-template",
+			WorkerPoolNameKey:     "default-pool",
+			SandboxClassKey:       "gvisor",
+			ActorOperationNameKey: OperationUnknown,
+			FailureReasonKey:      ReasonUnknown,
 		}
 
 		assertAttrs(t, got, want)
@@ -235,5 +276,3 @@ func TestNormalizeOperationName(t *testing.T) {
 		}
 	}
 }
-
-

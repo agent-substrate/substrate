@@ -53,6 +53,30 @@ type ResumeState struct {
 	WasRunning       bool
 	SnapshotLocation string
 	SnapshotScope    ateapipb.SnapshotContentScope
+	SnapshotKind     string
+	// GoldenSnapshotLocation is the storage location of the ActorTemplate's
+	// golden snapshot. Populated only when the template's onResume
+	// configuration selects the golden snapshot as the boot source for the
+	// pending restore: restore then combines the golden snapshot with the
+	// actor's data.
+	GoldenSnapshotLocation string
+}
+
+// validateGoldenSnapshotScope rejects a golden snapshot that does not carry
+// the guest state (memory + fs delta) a restore needs. Golden actors always
+// commit Full (commitSnapshotScope), so this only trips on golden snapshots
+// taken before that rule existed — surface a clear error instead of shipping
+// a restore request atelet would reject (or that would boot an empty guest).
+func validateGoldenSnapshotScope(snapshot *ateapipb.ActorSnapshot) error {
+	switch snapshot.GetContentScope() {
+	case ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_UNSPECIFIED,
+		ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL:
+		return nil
+	default:
+		return status.Errorf(codes.FailedPrecondition,
+			"ActorTemplate golden snapshot %q was taken with scope %s, not Full; regenerate the golden snapshot",
+			snapshot.GetMetadata().GetName(), snapshot.GetContentScope())
+	}
 }
 
 type LoadActorForResumeStep struct {
@@ -102,28 +126,61 @@ func (s *LoadActorForResumeStep) Execute(ctx context.Context, input *ResumeInput
 		if err != nil {
 			return fmt.Errorf("while getting golden ActorSnapshot: %w", err)
 		}
+		if err := validateGoldenSnapshotScope(snapshot); err != nil {
+			return err
+		}
 		state.SnapshotLocation = location
 		state.SnapshotScope = snapshot.GetContentScope()
+	}
+
+	// The template's onResume configuration selects the boot source for the
+	// pending restore. When it names the golden snapshot, resolve the golden
+	// snapshot's location so the restore can combine the golden's guest
+	// state with the actor's data. The pending
+	// restore is data-only when the actor is paused with a Data pause scope
+	// (the local snapshot takes precedence at restore), or when its durable
+	// snapshot holds Data. Valid Full snapshots restore from their own
+	// content and ignore the policy.
+	if actorTemplate.Spec.SnapshotsConfig.OnResume.FromData == atev1alpha1.ResumeSourceGolden {
+		dataOnly := false
+		if actor.GetLocalSnapshotInfo() != nil {
+			dataOnly = actorTemplate.Spec.SnapshotsConfig.OnPause == atev1alpha1.SnapshotScopeData
+		} else if actor.GetLatestSnapshot() != nil {
+			dataOnly = state.SnapshotScope == ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA
+		}
+		if dataOnly {
+			if actorTemplate.Status.GoldenSnapshot == "" {
+				return status.Error(codes.FailedPrecondition, "a Golden data resume requires the ActorTemplate golden snapshot, which is not available")
+			}
+			goldenSnapshot, goldenLocation, err := s.store.GetActorSnapshot(ctx, resources.GoldenActorAtespace, actorTemplate.Status.GoldenSnapshot)
+			if errors.Is(err, store.ErrNotFound) {
+				return status.Error(codes.DataLoss, "ActorTemplate golden snapshot data is missing")
+			}
+			if err != nil {
+				return fmt.Errorf("while getting golden ActorSnapshot: %w", err)
+			}
+			if err := validateGoldenSnapshotScope(goldenSnapshot); err != nil {
+				return err
+			}
+			state.GoldenSnapshotLocation = goldenLocation
+		}
 	}
 
 	// If the Actor is in Resuming state, it means a previous attempt crashed after AssignWorkerStep.
 	// We don't need to repeat the AssignWorkerStep, load the Worker now.
 	if actor.Status == ateapipb.Actor_STATUS_RESUMING {
-		allPopulated := actor.AteomPodUid != "" && actor.WorkerPoolName != "" && actor.AteomPodName != ""
-		if !allPopulated {
-			slog.ErrorContext(ctx, "expected all of AteomPodUid, WorkerPoolName and AteomPodName to be populated, found",
-				slog.String("AteomPodUid", actor.AteomPodUid),
-				slog.String("WorkerPoolName", actor.WorkerPoolName),
-				slog.String("AteomPodName", actor.AteomPodName))
+		assignment := actor.GetWorkerAssignment()
+		if assignment == nil {
+			slog.ErrorContext(ctx, "expected a worker assignment on a RESUMING actor, found none")
 
-			// Crash the actor if its worker assignment is corrupted. We should never be in this state.
+			// Crash the actor if its worker assignment is missing. We should never be in this state.
 			if cerr := crashActor(ctx, s.store, input.ActorRef, ateattr.OperationResume, ateattr.ReasonCorruptedAssignment); cerr != nil {
 				return cerr
 			}
 			return status.Errorf(codes.Aborted, "actor %s crashed", input.ActorRef)
 		}
 
-		wk, err := s.store.GetWorker(ctx, actor.AteomPodNamespace, actor.WorkerPoolName, actor.AteomPodName)
+		wk, err := s.store.GetWorker(ctx, assignment.GetWorkerNamespace(), assignment.GetWorkerPool(), assignment.GetWorkerPod())
 		if err != nil {
 			// Crash the actor if it was assigned to a deleted pod.
 			if errors.Is(err, store.ErrNotFound) {
@@ -203,6 +260,7 @@ type AssignWorkerStep struct {
 	store       store.Interface
 	workerCache *workercache.Cache
 	scheduler   scheduling.Scheduler
+	instruments *Instruments
 }
 
 func (s *AssignWorkerStep) Name() string { return "AssignWorker" }
@@ -221,7 +279,27 @@ func (s *AssignWorkerStep) CheckPrerequisite(ctx context.Context, input *ResumeI
 	}
 }
 
-func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, state *ResumeState) error {
+// schedulerRecordable excludes retried version conflicts: runStep re-runs Execute
+// transparently on store.ErrVersionConflict, so counting those attempts would
+// inflate the error rate and double-count the eventual success.
+func schedulerRecordable(err error) bool {
+	return !errors.Is(err, store.ErrVersionConflict)
+}
+
+func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, state *ResumeState) (err error) {
+	start := time.Now()
+	outcome := ateattr.SchedulerOutcomeError
+	pool := ""
+	class := ""
+	if state.ActorTemplate != nil {
+		class = string(state.ActorTemplate.Spec.SandboxClass)
+	}
+	defer func() {
+		if schedulerRecordable(err) {
+			s.instruments.recordSchedulerAssignment(ctx, start, outcome, pool, class, err)
+		}
+	}()
+
 	workers, err := s.workerCache.Workers()
 	if err != nil {
 		return fmt.Errorf("while listing workers: %w", err)
@@ -270,6 +348,7 @@ func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, stat
 		pickedWorker, err := s.scheduler.Schedule(ctx, constraints)
 		if err != nil {
 			if errors.Is(err, scheduling.ErrNoCapacity) {
+				outcome = ateattr.SchedulerOutcomeNoFreeWorker
 				return status.Errorf(codes.FailedPrecondition, "no free workers available")
 			}
 			return err
@@ -295,11 +374,7 @@ func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, stat
 	}
 
 	state.Actor.Status = ateapipb.Actor_STATUS_RESUMING
-	state.Actor.AteomPodNamespace = assignedWorker.GetWorkerNamespace()
-	state.Actor.AteomPodName = assignedWorker.GetWorkerPod()
-	state.Actor.AteomPodIp = assignedWorker.GetIp()
-	state.Actor.AteomPodUid = assignedWorker.GetWorkerPodUid()
-	state.Actor.WorkerPoolName = assignedWorker.GetWorkerPool()
+	state.Actor.WorkerAssignment = workerAssignmentFrom(assignedWorker)
 
 	updatedActor, err := s.store.UpdateActor(ctx, state.Actor, state.Actor.GetMetadata().GetVersion())
 	if err != nil {
@@ -323,7 +398,19 @@ func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, stat
 	}
 	state.Actor = updatedActor
 	state.Worker = assignedWorker
+	pool = assignedWorker.GetWorkerPool()
+	outcome = ateattr.SchedulerOutcomeAssigned
 	return nil
+}
+
+func workerAssignmentFrom(w *ateapipb.Worker) *ateapipb.WorkerAssignment {
+	return &ateapipb.WorkerAssignment{
+		WorkerNamespace: w.GetWorkerNamespace(),
+		WorkerPool:      w.GetWorkerPool(),
+		WorkerPod:       w.GetWorkerPod(),
+		WorkerPodUid:    w.GetWorkerPodUid(),
+		WorkerPodIp:     w.GetIp(),
+	}
 }
 
 func schedulingConstraints(actor *ateapipb.Actor, tmpl *atev1alpha1.ActorTemplate) (scheduling.Constraints, error) {
@@ -367,11 +454,12 @@ func (s *AttachVolumesStep) CheckPrerequisite(ctx context.Context, input *Resume
 }
 
 func (s *AttachVolumesStep) Execute(ctx context.Context, input *ResumeInput, state *ResumeState) error {
-	if state.Actor.GetAteomPodNamespace() == "" {
+	assignment := state.Actor.GetWorkerAssignment()
+	if assignment == nil {
 		return fmt.Errorf("actor has no assigned worker pod")
 	}
 
-	worker, err := s.store.GetWorker(ctx, state.Actor.GetAteomPodNamespace(), state.Actor.GetWorkerPoolName(), state.Actor.GetAteomPodName())
+	worker, err := s.store.GetWorker(ctx, assignment.GetWorkerNamespace(), assignment.GetWorkerPool(), assignment.GetWorkerPod())
 	if err != nil {
 		return fmt.Errorf("failed to get worker for volume attachment: %w", err)
 	}
@@ -449,7 +537,8 @@ func (s *CallAteletRestoreStep) CheckPrerequisite(ctx context.Context, input *Re
 	return nil
 }
 func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput, state *ResumeState) error {
-	ateletConn, err := s.dialer.DialForWorker(state.Actor.GetAteomPodNamespace(), state.Actor.GetAteomPodName())
+	assignment := state.Actor.GetWorkerAssignment()
+	ateletConn, err := s.dialer.DialForWorker(assignment.GetWorkerNamespace(), assignment.GetWorkerPod())
 	if err != nil {
 		return err
 	}
@@ -462,9 +551,10 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 
 	if local := state.Actor.GetLocalSnapshotInfo(); local != nil {
 		slog.InfoContext(ctx, "Actor has snapshot; Restoring from snapshot")
+		state.SnapshotKind = ateattr.SnapshotKindLocal
 
 		req := &ateletpb.RestoreRequest{
-			TargetAteomUid:         state.Actor.GetAteomPodUid(),
+			TargetAteomUid:         assignment.GetWorkerPodUid(),
 			Atespace:               state.Actor.GetMetadata().GetAtespace(),
 			ActorName:              state.Actor.GetMetadata().GetName(),
 			ActorTemplateNamespace: state.Actor.GetActorTemplateNamespace(),
@@ -476,15 +566,38 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 		req.Config = &ateletpb.RestoreRequest_LocalConfig{
 			LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotPrefix: local.GetSnapshotPrefix()},
 		}
+		// The wire scope describes the restore OPERATION. When the template's
+		// onResume configuration selected the golden snapshot as the boot
+		// source, LoadActorForResume resolved the golden location, and the
+		// pause snapshot restores as DATA_ON_GOLDEN — atelet combines the
+		// golden snapshot's guest state with the actor's data. Otherwise the
+		// scope mirrors what the pause captured.
 		req.Scope = toAteletSnapshotScope(state.ActorTemplate.Spec.SnapshotsConfig.OnPause)
+		if state.GoldenSnapshotLocation != "" {
+			req.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
+			req.GoldenSnapshotUriPrefix = state.GoldenSnapshotLocation
+		}
 
 		_, err = client.Restore(ctx, req)
 		return maybeCrashActor(ctx, s.store, input.ActorRef, err, "while restoring workload", ateattr.OperationResume)
 	} else if state.SnapshotLocation != "" {
 		slog.InfoContext(ctx, "Actor has durable snapshot; Restoring from snapshot")
+		// Mirrors LoadActorForResume's source resolution: the durable location
+		// is the actor's own snapshot when one exists, the golden otherwise.
+		state.SnapshotKind = ateattr.SnapshotKindGolden
+		if state.Actor.GetLatestSnapshot() != nil {
+			state.SnapshotKind = ateattr.SnapshotKindLatest
+		}
 
+		// Same wire-scope derivation as the local branch above: the snapshot
+		// restores as DATA_ON_GOLDEN when the golden location was resolved
+		// per the template's onResume configuration.
+		scope := actorSnapshotContentScopeToAtelet(state.SnapshotScope)
+		if state.GoldenSnapshotLocation != "" {
+			scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
+		}
 		req := &ateletpb.RestoreRequest{
-			TargetAteomUid:         state.Actor.GetAteomPodUid(),
+			TargetAteomUid:         assignment.GetWorkerPodUid(),
 			Atespace:               state.Actor.GetMetadata().GetAtespace(),
 			ActorName:              state.Actor.GetMetadata().GetName(),
 			ActorTemplateNamespace: state.Actor.GetActorTemplateNamespace(),
@@ -496,25 +609,28 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 					SnapshotUriPrefix: state.SnapshotLocation,
 				},
 			},
-			Scope:    actorSnapshotContentScopeToAtelet(state.SnapshotScope),
-			ActorUid: state.Actor.GetMetadata().Uid,
+			Scope: scope,
+			// Empty unless this is a Golden data resume.
+			GoldenSnapshotUriPrefix: state.GoldenSnapshotLocation,
+			ActorUid:                state.Actor.GetMetadata().Uid,
 		}
 		_, err = client.Restore(ctx, req)
 		return maybeCrashActor(ctx, s.store, input.ActorRef, err, "while restoring durable snapshot", ateattr.OperationResume)
 
 	} else {
 		slog.InfoContext(ctx, "Actor has no snapshot; ActorTemplate has no golden snapshot; Booting from ActorTemplate spec")
+		state.SnapshotKind = ateattr.SnapshotKindBoot
 
 		// Booting from scratch: resolve the sandbox binaries from the pool's
 		// SandboxConfig and send them so atelet can fetch and record them.
 		// (Restores above are self-describing via the snapshot manifest.)
-		sandboxAssets, err := resolveSandboxAssets(s.workerPoolLister, s.sandboxConfigLister, state.Actor.GetAteomPodNamespace(), state.Actor.GetWorkerPoolName())
+		sandboxAssets, err := resolveSandboxAssets(s.workerPoolLister, s.sandboxConfigLister, assignment.GetWorkerNamespace(), assignment.GetWorkerPool())
 		if err != nil {
 			return fmt.Errorf("while resolving sandbox assets: %w", err)
 		}
 
 		req := &ateletpb.RunRequest{
-			TargetAteomUid:         state.Actor.GetAteomPodUid(),
+			TargetAteomUid:         assignment.GetWorkerPodUid(),
 			Atespace:               state.Actor.GetMetadata().GetAtespace(),
 			ActorName:              state.Actor.GetMetadata().GetName(),
 			ActorTemplateNamespace: state.Actor.GetActorTemplateNamespace(),

@@ -37,13 +37,15 @@ import (
 func seedActor(t *testing.T, ctx context.Context, st store.Interface, actorRef resources.ActorRef) {
 	t.Helper()
 	if _, err := st.CreateActor(ctx, &ateapipb.Actor{
-		Metadata:           &ateapipb.ResourceMetadata{Name: actorRef.Name, Atespace: actorRef.Atespace},
-		Status:             ateapipb.Actor_STATUS_RUNNING,
-		AteomPodNamespace:  "ns",
-		AteomPodName:       "pod",
-		AteomPodIp:         "1.2.3.4",
-		AteomPodUid:        "uid",
-		WorkerPoolName:     "pool",
+		Metadata: &ateapipb.ResourceMetadata{Name: actorRef.Name, Atespace: actorRef.Atespace},
+		Status:   ateapipb.Actor_STATUS_RUNNING,
+		WorkerAssignment: &ateapipb.WorkerAssignment{
+			WorkerNamespace: "ns",
+			WorkerPool:      "pool",
+			WorkerPod:       "pod",
+			WorkerPodUid:    "uid",
+			WorkerPodIp:     "1.2.3.4",
+		},
 		InProgressSnapshot: "gs://snapshots/actor-1/reserved",
 	}); err != nil {
 		t.Fatalf("seed actor: %v", err)
@@ -97,16 +99,8 @@ func assertCrashed(t *testing.T, ctx context.Context, st store.Interface, actorR
 	if got.GetInProgressSnapshot() == "" {
 		t.Error(`InProgressSnapshot = "", want preserved`)
 	}
-	for field, val := range map[string]string{
-		"AteomPodNamespace": got.GetAteomPodNamespace(),
-		"AteomPodName":      got.GetAteomPodName(),
-		"AteomPodIp":        got.GetAteomPodIp(),
-		"AteomPodUid":       got.GetAteomPodUid(),
-		"WorkerPoolName":    got.GetWorkerPoolName(),
-	} {
-		if val != "" {
-			t.Errorf("%s = %q, want cleared", field, val)
-		}
+	if got.GetWorkerAssignment() != nil {
+		t.Errorf("WorkerAssignment = %v, want cleared", got.GetWorkerAssignment())
 	}
 }
 
@@ -390,11 +384,13 @@ func TestCrashActor_Metrics(t *testing.T) {
 		},
 		ActorTemplateNamespace: "demo-ns",
 		ActorTemplateName:      "counter-template",
-		WorkerPoolName:         "pool-1",
-		AteomPodNamespace:      "demo-ns",
-		AteomPodName:           "pod-1",
-		AteomPodUid:            "pod-uid-1",
-		Status:                 ateapipb.Actor_STATUS_RUNNING,
+		WorkerAssignment: &ateapipb.WorkerAssignment{
+			WorkerNamespace: "demo-ns",
+			WorkerPool:      "pool-1",
+			WorkerPod:       "pod-1",
+			WorkerPodUid:    "pod-uid-1",
+		},
+		Status: ateapipb.Actor_STATUS_RUNNING,
 	}
 	if _, err := st.CreateActor(ctx, actor); err != nil {
 		t.Fatalf("CreateActor: %v", err)
@@ -424,7 +420,7 @@ func assertCrashMetricDatapoint(t *testing.T, reader *sdkmetric.ManualReader, wa
 				continue
 			}
 			for _, dp := range sum.DataPoints {
-				op, _ := dp.Attributes.Value(ateattr.OperationNameKey)
+				op, _ := dp.Attributes.Value(ateattr.ActorOperationNameKey)
 				r, _ := dp.Attributes.Value(ateattr.FailureReasonKey)
 				tNS, _ := dp.Attributes.Value(ateattr.TemplateNamespaceKey)
 				tName, _ := dp.Attributes.Value(ateattr.TemplateNameKey)

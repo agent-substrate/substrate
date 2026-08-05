@@ -77,14 +77,15 @@ func PrintActorsTo(out io.Writer, actors []*ateapipb.Actor, format string) error
 			template := actor.GetActorTemplateNamespace() + "/" + actor.GetActorTemplateName()
 			status := actor.GetStatus().String()
 
+			assignment := actor.GetWorkerAssignment()
 			worker := "<none>"
-			if actor.GetAteomPodNamespace() != "" {
-				worker = actor.GetAteomPodNamespace() + "/" + actor.GetAteomPodName()
+			if assignment != nil {
+				worker = assignment.GetWorkerNamespace() + "/" + assignment.GetWorkerPod()
 			}
 
 			version := actor.GetMetadata().GetVersion()
 			age := formatAge(actor.GetMetadata().GetCreateTime())
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%d\t%s\n", atespace, name, template, status, worker, actor.GetAteomPodIp(), version, age)
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%d\t%s\n", atespace, name, template, status, worker, assignment.GetWorkerPodIp(), version, age)
 		}
 		return w.Flush()
 	default:

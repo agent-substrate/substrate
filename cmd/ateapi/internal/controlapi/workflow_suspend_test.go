@@ -178,7 +178,7 @@ func TestSuspendSteps_CheckPrerequisite(t *testing.T) {
 				// Worker pod fields are populated so CallAteletSuspendStep's
 				// missing-worker crash branch is not taken; this test only
 				// verifies status gating.
-				err := tc.step.CheckPrerequisite(ctx, &SuspendInput{ActorRef: resources.ActorRef{Name: "id1"}}, &SuspendState{Actor: &ateapipb.Actor{Status: st, AteomPodNamespace: "ns", AteomPodName: "worker-1"}})
+				err := tc.step.CheckPrerequisite(ctx, &SuspendInput{ActorRef: resources.ActorRef{Name: "id1"}}, &SuspendState{Actor: &ateapipb.Actor{Status: st, WorkerAssignment: &ateapipb.WorkerAssignment{WorkerNamespace: "ns", WorkerPool: "pool", WorkerPod: "worker-1"}}})
 				assertPrerequisiteResult(t, st, err, tc.allowed == nil || tc.allowed[st])
 			}
 		})
@@ -252,11 +252,13 @@ func TestCallAteletSuspendStep_DanglingWorkerDoesNotRecordPhantomSnapshot(t *tes
 			persistence := newTestPersistence(t)
 
 			actor := &ateapipb.Actor{
-				Metadata:           &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor-1"},
-				Status:             ateapipb.Actor_STATUS_SUSPENDING,
-				AteomPodNamespace:  "worker-ns",
-				AteomPodName:       "pod-gone",
-				WorkerPoolName:     "pool",
+				Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor-1"},
+				Status:   ateapipb.Actor_STATUS_SUSPENDING,
+				WorkerAssignment: &ateapipb.WorkerAssignment{
+					WorkerNamespace: "worker-ns",
+					WorkerPool:      "pool",
+					WorkerPod:       "pod-gone",
+				},
 				InProgressSnapshot: "gs://snapshots/actor-1/never-written",
 				LatestSnapshot:     tt.prevSnapshot,
 			}
@@ -328,11 +330,13 @@ func TestFinalizeSuspendedStep_ReleasesOnlyOwnWorker(t *testing.T) {
 			}
 
 			actor := &ateapipb.Actor{
-				Metadata:           &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "shared"},
-				Status:             ateapipb.Actor_STATUS_SUSPENDING,
-				AteomPodNamespace:  "worker-ns",
-				AteomPodName:       "pod-1",
-				WorkerPoolName:     "pool",
+				Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "shared"},
+				Status:   ateapipb.Actor_STATUS_SUSPENDING,
+				WorkerAssignment: &ateapipb.WorkerAssignment{
+					WorkerNamespace: "worker-ns",
+					WorkerPool:      "pool",
+					WorkerPod:       "pod-1",
+				},
 				InProgressSnapshot: "snapshot-1",
 			}
 			if _, err := persistence.CreateActor(ctx, actor); err != nil {
@@ -352,6 +356,35 @@ func TestFinalizeSuspendedStep_ReleasesOnlyOwnWorker(t *testing.T) {
 			}
 			if released := stored.GetAssignment() == nil; released != tt.wantReleased {
 				t.Errorf("worker released = %t, want %t (assignment: %v)", released, tt.wantReleased, stored.GetAssignment())
+			}
+		})
+	}
+}
+
+// TestCommitSnapshotScope verifies golden actors always commit Full — the
+// golden snapshot is the base an OnGolden data resume combines into, so the
+// template's onCommit must not thin it down to a data-only capture.
+func TestCommitSnapshotScope(t *testing.T) {
+	tmpl := func(onCommit atev1alpha1.SnapshotScope) *atev1alpha1.ActorTemplate {
+		return &atev1alpha1.ActorTemplate{Spec: atev1alpha1.ActorTemplateSpec{
+			SnapshotsConfig: atev1alpha1.SnapshotsConfig{OnCommit: onCommit},
+		}}
+	}
+	tests := []struct {
+		name     string
+		atespace string
+		onCommit atev1alpha1.SnapshotScope
+		want     atev1alpha1.SnapshotScope
+	}{
+		{"golden actor ignores Data onCommit", resources.GoldenActorAtespace, atev1alpha1.SnapshotScopeData, atev1alpha1.SnapshotScopeFull},
+		{"golden actor keeps Full onCommit", resources.GoldenActorAtespace, atev1alpha1.SnapshotScopeFull, atev1alpha1.SnapshotScopeFull},
+		{"regular actor uses Data onCommit", "team-a", atev1alpha1.SnapshotScopeData, atev1alpha1.SnapshotScopeData},
+		{"regular actor uses Full onCommit", "team-a", atev1alpha1.SnapshotScopeFull, atev1alpha1.SnapshotScopeFull},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := commitSnapshotScope(tc.atespace, tmpl(tc.onCommit)); got != tc.want {
+				t.Errorf("commitSnapshotScope(%q, onCommit=%s) = %s, want %s", tc.atespace, tc.onCommit, got, tc.want)
 			}
 		})
 	}

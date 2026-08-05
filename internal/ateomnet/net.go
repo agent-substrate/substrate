@@ -394,6 +394,8 @@ func CreateNetNSWithoutSwitching(name string) (netns.NsHandle, error) {
 	if err != nil {
 		return -1, fmt.Errorf("while getting current netns: %w", err)
 	}
+	// Registered before the restoring defer below since deferred calls are LIFO.
+	defer curNetNS.Close()
 	defer func() {
 		if err := netns.Set(curNetNS); err != nil {
 			// Better to blow up the program than continue execution with
@@ -419,6 +421,8 @@ func NetNSDo(ctx context.Context, targetNS netns.NsHandle, do func(context.Conte
 	if err != nil {
 		return fmt.Errorf("while getting current netns: %w", err)
 	}
+	// Registered before the restoring defer below since deferred calls are LIFO.
+	defer curNetNS.Close()
 	defer func() {
 		if err := netns.Set(curNetNS); err != nil {
 			// Better to blow up the program than continue execution with

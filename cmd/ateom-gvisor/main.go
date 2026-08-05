@@ -45,7 +45,6 @@ import (
 	"github.com/spf13/pflag"
 	"github.com/vishvananda/netns"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
-	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"golang.org/x/sys/unix"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
@@ -62,7 +61,8 @@ var (
 	atunnelEgressListenAddress = pflag.String("atunnel-egress-listen-address", "0.0.0.0:15001", "Address for transparently intercepted actor egress TCP")
 	atunnelEgressTrustBundle   = pflag.String("atunnel-egress-trust-bundle", "/run/servicedns.podcert.ate.dev/trust-bundle.pem", "PEM trust bundle for the egress gateway")
 
-	showVersion = pflag.Bool("version", false, "Print version and exit.")
+	showVersion  = pflag.Bool("version", false, "Print version and exit.")
+	logLevelFlag = pflag.String("log-level", "info", "Minimum log level: debug, info, warn, or error.")
 
 	reapLock sync.RWMutex
 )
@@ -91,15 +91,18 @@ func do(ctx context.Context) error {
 	defer cancel()
 
 	syncedWriter := actorlog.NewSyncedWriter(os.Stdout)
-	logger := slog.New(contextlogging.NewHandler(slog.NewJSONHandler(syncedWriter, nil)))
+	logger := slog.New(contextlogging.NewHandler(slog.NewJSONHandler(syncedWriter, &slog.HandlerOptions{Level: serverboot.LogLevel()})))
 	slog.SetDefault(logger)
+	if err := serverboot.SetLogLevel(*logLevelFlag); err != nil {
+		return err
+	}
 
 	slog.InfoContext(ctx, "ateom booting")
 
 	const serviceName = "ateom-gvisor"
 	tp, err := serverboot.InitTracing(ctx, serverboot.TracingOptions{
 		ServiceName: serviceName,
-		Sampler:     sdktrace.ParentBased(sdktrace.NeverSample()),
+		Sampling:    serverboot.ResolveTraceSampling(ctx, serverboot.ParentRatioSampling(serverboot.ControlPlaneTraceRatio)),
 	})
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to initialize tracing", err)

@@ -69,9 +69,11 @@ func TestPrintActorsTo_Table(t *testing.T) {
 			ActorTemplateNamespace: "default",
 			ActorTemplateName:      "template-1",
 			Status:                 ateapipb.Actor_STATUS_RUNNING,
-			AteomPodNamespace:      "worker-ns",
-			AteomPodName:           "pod-1",
-			AteomPodIp:             "1.2.3.4",
+			WorkerAssignment: &ateapipb.WorkerAssignment{
+				WorkerNamespace: "worker-ns",
+				WorkerPod:       "pod-1",
+				WorkerPodIp:     "1.2.3.4",
+			},
 		},
 	}
 
