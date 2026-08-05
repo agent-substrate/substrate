@@ -225,7 +225,7 @@ spec:
 
 ### Running a locally-built runsc
 
-Because the binary is fetched at runtime rather than baked into the worker image, testing an unreleased runsc is a matter of staging the binary into the cluster's object store and pointing a `SandboxConfig` at its URL + `sha256`. See [`hack/gvisor-hack/`](../hack/gvisor-hack/) for scripts that do this and leave `gvisor-default` untouched. Note that snapshots are version-locked to the runsc that wrote them, so a custom build cannot restore checkpoints taken with the released one.
+Because the binary is fetched at runtime rather than baked into the worker image, testing an unreleased runsc is a matter of staging the binary into the cluster's object store and pointing a `SandboxConfig` at its URL + `sha256`. See [`hack/gvisor-hack/`](../hack/gvisor-hack/) for scripts that do this. By default they add a separate named config and leave `gvisor-default` untouched; opting in to `MAKE_DEFAULT` instead clears `spec.default` on the incumbent so the new config becomes the cluster default. Note that snapshots are version-locked to the runsc that wrote them, so a custom build cannot restore checkpoints taken with the released one.
 
 ### Micro-VM SandboxConfig
 

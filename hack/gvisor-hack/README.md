@@ -9,10 +9,11 @@ So integrating an unreleased runsc — one with a feature you're developing — 
 just: stage the binary somewhere the cluster can read, and point a
 `SandboxConfig` at it.
 
-The helpers here do exactly that. The committed default
+The helpers here do exactly that. By default the committed
 (`manifests/ate-install/sandboxconfig-gvisor.yaml`, `SandboxConfig/gvisor-default`)
-is left untouched; you get a second, named config that individual WorkerPools
-opt into.
+config is left untouched: you get a second, named config that individual
+WorkerPools opt into. `MAKE_DEFAULT=true` is the one path that does modify it,
+clearing its `spec.default` so the new config takes over cluster-wide.
 
 | File | Purpose |
 | --- | --- |
@@ -113,6 +114,11 @@ demotes the incumbent default first — **two** `SandboxConfig`s of the same cla
 with `spec.default: true` is an error, and every actor launch fails to resolve
 its assets until one is demoted.
 
+Zero defaults is the same kind of error, so the script does not risk trading one
+for the other: it validates the new config with a server-side dry run *before*
+demoting anything, and if the real apply still fails it restores the config it
+demoted (telling you exactly what to run if even that fails).
+
 Assets are resolved when an actor starts, so **actors already running keep the
 runsc they booted with**. Create a new actor, or suspend/resume an existing one,
 to pick up the change.
@@ -186,8 +192,26 @@ kubectl -n ate-demo-counter patch workerpool counter --type=json \
 kubectl delete sandboxconfig gvisor-hack
 ```
 
-If you used `MAKE_DEFAULT=true`, restore the shipped default as well:
+If you used `MAKE_DEFAULT=true`, restore the shipped default as well — the
+script names the configs it demoted in its closing output:
 
 ```sh
 kubectl patch sandboxconfig gvisor-default --type=merge -p '{"spec":{"default":true}}'
 ```
+
+### If the script failed partway
+
+It rolls back its own demotion — on a failed apply and on Ctrl-C — so an
+interrupted run should leave the default where it found it. A `kill -9` is the
+one case nothing can cover. If even the rollback failed, the script says so and prints the
+exact patch to run — until you do, the cluster has **no** default gvisor
+`SandboxConfig` and every actor launch fails to resolve its assets. Check with:
+
+```sh
+kubectl get sandboxconfigs -o custom-columns=NAME:.metadata.name,CLASS:.spec.sandboxClass,DEFAULT:.spec.default
+```
+
+Exactly one gvisor row should read `true`. If none does, patch the one you want
+back; if two do, clear `spec.default` on all but one. A failure before the
+apply (a rejected dry run, a failed upload) changes nothing and needs no
+cleanup, though a staged object may be left behind in the bucket.
