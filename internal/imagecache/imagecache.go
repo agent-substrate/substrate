@@ -126,14 +126,10 @@ type Store struct {
 	// over the same candidates for no benefit).
 	evictMu sync.Mutex
 
-	// hitMu closes the last hit-vs-evict window: the cache-hit path
-	// (cachedImageHit) holds it shared across its record read, layer stats,
-	// and last-use touch, and eviction (removeStaleRecord) holds it
-	// exclusive across each victim's final veto re-check and record removal. Either the hit's touch lands first (the re-check
-	// sees a fresh mtime and skips the image, layers included) or the
-	// removal lands first (the hit sees no record and falls into the pull
-	// path, which is fully serialized by the layer singleflight). Uncontended
-	// except during an eviction pass.
+	// hitMu closes the hit-vs-evict window: held shared by the hit path
+	// (cachedImageHit), exclusive by eviction's record removal
+	// (removeStaleRecord), so a hit's last-use touch and eviction's final
+	// re-check can never interleave. Uncontended except during a pass.
 	hitMu sync.RWMutex
 }
 

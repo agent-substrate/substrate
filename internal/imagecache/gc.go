@@ -282,7 +282,7 @@ func (s *Store) EvictUnused(ctx context.Context, targetBytes int64, dryRun bool)
 			slog.Int("layers", len(cand.diffIDs)),
 			slog.Bool("dry_run", dryRun))
 
-		kept, candRetired, retireErrs := s.retireCandidateLayers(ctx, cand, refcount, roots, cutoff, dryRun, &stats)
+		kept, candRetired, retireErrs := s.retireCandidateLayers(ctx, cand, refcount, roots, cutoff, dryRun, dbg, &stats)
 		errs = append(errs, retireErrs...)
 		retired = append(retired, candRetired...)
 		if kept {
@@ -347,8 +347,7 @@ func (s *Store) removeStaleRecord(cand evictionCandidate, cutoff time.Time, dryR
 // layer must stay (still referenced, rooted, fresh, or failed to retire).
 // The caller must then restore the record: a kept layer with no record is
 // unreachable until the next restart.
-func (s *Store) retireCandidateLayers(ctx context.Context, cand evictionCandidate, refcount map[string]int, roots RootSet, cutoff time.Time, dryRun bool, stats *EvictStats) (kept bool, retired []string, errs []error) {
-	dbg := slog.Default().Enabled(ctx, slog.LevelDebug) // see InUse
+func (s *Store) retireCandidateLayers(ctx context.Context, cand evictionCandidate, refcount map[string]int, roots RootSet, cutoff time.Time, dryRun, dbg bool, stats *EvictStats) (kept bool, retired []string, errs []error) {
 	for _, hex := range cand.diffIDs {
 		refcount[hex]--
 		if refcount[hex] > 0 {
