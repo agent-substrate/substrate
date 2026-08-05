@@ -1,0 +1,84 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Reference demo for actor telemetry continuity across suspend/resume (#503).
+#
+# The ActorTemplate deliberately uses onPause: Data. In that mode Substrate
+# excludes process memory (RAM) from the snapshot and kills the container
+# process on pause, so any OpenTelemetry metrics/spans still buffered in the
+# SDK's in-memory queues (PeriodicReader accumulators, BatchSpanProcessor ring
+# buffer) are lost. The demo workload's --idle-flush ForceFlushes both
+# providers before the idle suspension arrives, which is the mitigation an
+# actor author can apply today (before the PreSuspend hook, #450, exists).
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ate-demo-actor-telemetry
+
+---
+
+apiVersion: ate.dev/v1alpha1
+kind: WorkerPool
+metadata:
+  name: actor-telemetry
+  namespace: ate-demo-actor-telemetry
+  labels:
+    workload: actor-telemetry
+spec:
+  replicas: 5
+  ateomImage: ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor
+
+---
+
+apiVersion: ate.dev/v1alpha1
+kind: ActorTemplate
+metadata:
+  name: actor-telemetry
+  namespace: ate-demo-actor-telemetry
+spec:
+  pauseImage: "registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4"
+  containers:
+  - name: actor-telemetry
+    image: ko://github.com/agent-substrate/substrate/demos/actor-telemetry
+    env:
+    # The actor must be told where the OTLP collector is; the SDK default is
+    # localhost:4317, which inside the actor's gVisor netns has nothing
+    # listening, so telemetry would be flushed into the void. This mirrors the
+    # endpoint the ate-system components use on Kind (see
+    # manifests/ate-install/kind/kustomization.yaml).
+    - name: OTEL_EXPORTER_OTLP_ENDPOINT
+      value: http://opentelemetry-collector.otel-system.svc:4317
+    # Delta aggregation temporality. Actors restore from the golden snapshot, so
+    # a cumulative counter carries the golden actor's accumulated value and the
+    # collector's reset detection cannot see restarts, inflating/merging series
+    # (#761). Delta is the recommended preference for Lambda-like
+    # suspend/resume workloads: each export carries only the increment since the
+    # last one, so restores do not double-count.
+    - name: OTEL_EXPORTER_OTLP_METRICS_TEMPORALITY_PREFERENCE
+      value: delta
+    readyz:
+      httpGet:
+        path: /readyz
+        port: 80
+  workerSelector:
+    matchLabels:
+      workload: actor-telemetry
+  snapshotsConfig:
+    # onPause: Data drops RAM on pause -- this is the mode that loses buffered
+    # in-memory telemetry (#503 Issue 1, HIGH). The workload mitigates it by
+    # flushing before it goes idle. Switch to Full to snapshot RAM instead.
+    onPause: Data
+    onCommit: Data
+    location: gs://${BUCKET_NAME}/ate-demo-actor-telemetry/
