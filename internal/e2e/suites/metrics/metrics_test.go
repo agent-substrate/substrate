@@ -24,7 +24,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-
 	"strings"
 	"testing"
 	"time"
@@ -95,7 +94,7 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 
 	deadline := time.Now().Add(2 * time.Minute)
 	var missing []string
-	var ateomSeen bool
+	var ateomSeen, controllerSeen bool
 	var lastLabelErr error
 	for time.Now().Before(deadline) {
 		scrape, err := e2e.ScrapeCollectorMetrics(ctx)
@@ -104,7 +103,13 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 		}
 		missing = e2e.MissingPlatformMetrics(scrape, e2e.PlatformMetricPrefixes)
 		ateomSeen = e2e.CollectorHasService(scrape, "ateom-gvisor", "ateom-microvm")
-		if len(missing) == 0 && ateomSeen {
+		// atecontroller bridges controller-runtime's Prometheus registry onto its OTLP
+		// reader, so the reconcile families are what prove the bridge, not just that
+		// some series arrived. Substring, not prefix: the collector's Prometheus
+		// exporter may re-suffix a name that already ends in _total.
+		controllerSeen = e2e.CollectorHasService(scrape, "atecontroller") &&
+			strings.Contains(scrape, "controller_runtime_")
+		if len(missing) == 0 && ateomSeen && controllerSeen {
 			// Verify ate_actor_crashes metric carries valid, non-empty low-cardinality labels for all attributes.
 			foundCrashLine := false
 			for _, line := range strings.Split(scrape, "\n") {
@@ -159,9 +164,11 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 	}
 
 	if lastLabelErr != nil {
-		t.Fatalf("platform telemetry validation failed: missing metrics %v, ateom pushed=%v, error detail: %v", missing, ateomSeen, lastLabelErr)
+		t.Fatalf("platform telemetry validation failed: missing metrics %v, ateom pushed=%v, atecontroller pushed=%v, error detail: %v",
+			missing, ateomSeen, controllerSeen, lastLabelErr)
 	}
-	t.Fatalf("platform telemetry never reached the collector: missing metrics %v, ateom pushed=%v", missing, ateomSeen)
+	t.Fatalf("platform telemetry never reached the collector: missing metrics %v, ateom pushed=%v, atecontroller pushed=%v",
+		missing, ateomSeen, controllerSeen)
 }
 
 func triggerActorCrash(t *testing.T, ctx context.Context, clients *e2e.Clients, actorID string) {

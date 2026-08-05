@@ -14,20 +14,26 @@
 package main
 
 import (
+	"context"
+	"log/slog"
 	"os"
 
 	"github.com/agent-substrate/substrate/cmd/atecontroller/internal/controllers"
 	"github.com/agent-substrate/substrate/internal/ateapiauth"
+	"github.com/agent-substrate/substrate/internal/serverboot"
 	clientv1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"github.com/go-logr/logr"
 	"github.com/spf13/pflag"
+	prombridge "go.opentelemetry.io/contrib/bridges/prometheus"
+	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
-	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
@@ -38,6 +44,8 @@ var (
 	setupLog = ctrl.Log.WithName("setup")
 
 	ateAPIConnSpec = pflag.String("ateapi-conn-spec", "dns:///api.ate-system.svc:443", "")
+
+	logLevelFlag = pflag.String("log-level", "info", "Minimum log level: debug, info, warn, or error.")
 
 	otelEndpoint = pflag.String("otel-exporter-otlp-endpoint", os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"),
 		"OTLP endpoint set on ateom worker pods so they push telemetry. Defaults to the controller's own OTEL_EXPORTER_OTLP_ENDPOINT.")
@@ -66,9 +74,45 @@ func init() {
 	utilruntime.Must(clientv1alpha1.AddToScheme(scheme)) // Register our CRD
 }
 
+const serviceName = "atecontroller"
+
+// logr verbosity V(n) maps to slog level -n, so V(1) stays below Info until
+// --log-level=debug. logr carries no context, so these records have no trace IDs.
+func newControllerRuntimeLogger(h slog.Handler) logr.Logger {
+	return logr.FromSlogHandler(h)
+}
+
 func main() {
 	pflag.Parse()
-	ctrl.SetLogger(zap.New(zap.UseDevMode(true)))
+
+	ctx := context.Background()
+	serverboot.InitLogger()
+	if err := serverboot.SetLogLevel(*logLevelFlag); err != nil {
+		serverboot.Fatal(ctx, "Invalid --log-level", err)
+	}
+	ctrl.SetLogger(newControllerRuntimeLogger(slog.Default().Handler()))
+
+	// Both providers must be registered before the ateapi client below:
+	// otelgrpc.NewClientHandler captures the global tracer and meter providers at
+	// construction, so a later init leaves it bound to the no-op ones.
+	tp, err := serverboot.InitTracing(ctx, serverboot.TracingOptions{
+		ServiceName: serviceName,
+		Sampling:    serverboot.ResolveTraceSampling(ctx, serverboot.ParentRatioSampling(serverboot.ControlPlaneTraceRatio)),
+	})
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to initialize tracing", err)
+	}
+	defer serverboot.ShutdownProvider("TracerProvider", tp.Shutdown)
+
+	// controller-runtime records reconcile, workqueue, and runtime metrics into its
+	// own Prometheus registry, which the manager serves on a port nothing scrapes.
+	// Bridging it as a Producer puts them on the OTLP path instead.
+	mp, err := serverboot.InitMetricsPushOnly(ctx, serviceName,
+		prombridge.NewMetricProducer(prombridge.WithGatherer(ctrlmetrics.Registry)))
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to initialize metrics", err)
+	}
+	defer serverboot.ShutdownProvider("MeterProvider", mp.Shutdown)
 
 	dialOpts, err := ateapiauth.DialOptions(ateapiauth.ClientConfig{
 		UseTokenAuth:     *ateapiTokenAuth,
@@ -81,6 +125,7 @@ func main() {
 		setupLog.Error(err, "building ateapi dial options")
 		os.Exit(1)
 	}
+	dialOpts = append(dialOpts, grpc.WithStatsHandler(otelgrpc.NewClientHandler()))
 
 	ateapiConn, err := grpc.NewClient(*ateAPIConnSpec, dialOpts...)
 	if err != nil {
