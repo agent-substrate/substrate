@@ -41,9 +41,11 @@ const (
 // certificate — the same client auth the base install gives ate-controller
 // and atenet-router. ClientCredBundle re-reads the bundle on every handshake,
 // so rotations are picked up without a restart.
-func DialControl(endpoint string) (*grpc.ClientConn, ateapipb.ControlClient, error) {
+func DialControl(endpoint string, useTokenAuth bool) (*grpc.ClientConn, ateapipb.ControlClient, error) {
 	dialOpts, err := ateapiauth.DialOptions(ateapiauth.ClientConfig{
+		UseTokenAuth:     useTokenAuth,
 		CAFile:           ateapiCAFile,
+		TokenFile:        "/run/ateapi-token/token",
 		ClientCredBundle: ateapiCredBundle,
 		ServerName:       ateapiServerName,
 	})
