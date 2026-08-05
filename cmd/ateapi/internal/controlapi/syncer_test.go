@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"strconv"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -740,6 +741,145 @@ func TestSyncer_ReconcileOrphanedWorkers(t *testing.T) {
 	}
 	if got.GetWorkerAssignment() != nil {
 		t.Errorf("orphaned actor pod pointer not cleared: %+v", got)
+	}
+}
+
+// flakyListWorkersStore wraps a store and fails the first failsLeft ListWorkers
+// calls, then delegates, simulating a transient store error.
+type flakyListWorkersStore struct {
+	store.Interface
+	failsLeft int
+}
+
+func (f *flakyListWorkersStore) ListWorkers(ctx context.Context, opts store.ListOptions) (store.ListResponse[*ateapipb.Worker], error) {
+	if f.failsLeft > 0 {
+		f.failsLeft--
+		return store.ListResponse[*ateapipb.Worker]{}, errors.New("transient store error")
+	}
+	return f.Interface.ListWorkers(ctx, opts)
+}
+
+// A transient store error mid-scan must not abandon the startup enqueue of
+// stored workers: enqueueStoredWorkers retries the worker list so a blip does
+// not skip workers (leaving ghost records) until the next restart. The per-key
+// workqueue retries reconciles, but not this initial scan.
+func TestSyncer_EnqueueStoredWorkers_RetriesTransientListError(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	// Shrink the retry backoff so the test's single retry is fast.
+	prev := storedWorkerListBackoff
+	storedWorkerListBackoff = time.Millisecond
+	defer func() { storedWorkerListBackoff = prev }()
+
+	persistence, cleanup := storetest.SetupTestStore(t)
+	defer cleanup()
+
+	ns, pool := "ns-enq-retry", "pool1"
+	if err := persistence.CreateWorker(ctx, &ateapipb.Worker{
+		WorkerNamespace: ns, WorkerPool: pool, WorkerPod: "worker-1", Ip: "10.0.0.10",
+		WorkerPodUid: "22222222-2222-2222-2222-222222222222", NodeName: "node1",
+		State: ateapipb.Worker_STATE_ACTIVE,
+	}); err != nil {
+		t.Fatalf("create worker: %v", err)
+	}
+
+	// The store errors on the first ListWorkers call; enqueue must retry rather
+	// than abandon the scan and skip the worker.
+	flaky := &flakyListWorkersStore{Interface: persistence, failsLeft: 1}
+	s := NewWorkerPoolSyncer(flaky, nil, nil)
+
+	s.enqueueStoredWorkers(ctx)
+
+	if flaky.failsLeft != 0 {
+		t.Errorf("flaky store failsLeft = %d, want 0 (ListWorkers should have been retried)", flaky.failsLeft)
+	}
+	if got := s.queue.Len(); got != 1 {
+		t.Errorf("queue length = %d, want 1 (the worker must be enqueued after the retry)", got)
+	}
+}
+
+// listWorkersPageWithRetry must stop retrying and return once the context is
+// cancelled, rather than spinning forever, when the store stays unavailable.
+func TestSyncer_ListWorkersPageWithRetry_StopsOnContextCancel(t *testing.T) {
+	prev := storedWorkerListBackoff
+	storedWorkerListBackoff = time.Millisecond
+	defer func() { storedWorkerListBackoff = prev }()
+
+	persistence, cleanup := storetest.SetupTestStore(t)
+	defer cleanup()
+
+	// Fails far more times than the test allows, so only ctx cancellation ends
+	// the loop.
+	flaky := &flakyListWorkersStore{Interface: persistence, failsLeft: 1 << 30}
+	s := NewWorkerPoolSyncer(flaky, nil, nil)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	_, err := s.listWorkersPageWithRetry(ctx, "")
+	if err == nil {
+		t.Fatal("listWorkersPageWithRetry() = nil error, want a context error")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Errorf("listWorkersPageWithRetry() error = %v, want it to wrap context.DeadlineExceeded", err)
+	}
+}
+
+// pagedListWorkersStore serves workers in fixed pages keyed by a numeric page
+// token, and fails the page at failOnPage exactly once before serving it, to
+// exercise per-page streaming plus retry of a late page.
+type pagedListWorkersStore struct {
+	store.Interface
+	pages      [][]*ateapipb.Worker
+	failOnPage int
+	failed     bool
+}
+
+func (p *pagedListWorkersStore) ListWorkers(_ context.Context, opts store.ListOptions) (store.ListResponse[*ateapipb.Worker], error) {
+	idx := 0
+	if opts.PageToken != "" {
+		var err error
+		if idx, err = strconv.Atoi(opts.PageToken); err != nil {
+			return store.ListResponse[*ateapipb.Worker]{}, err
+		}
+	}
+	if idx == p.failOnPage && !p.failed {
+		p.failed = true
+		return store.ListResponse[*ateapipb.Worker]{}, errors.New("transient store error on page")
+	}
+	resp := store.ListResponse[*ateapipb.Worker]{Items: p.pages[idx]}
+	if idx+1 < len(p.pages) {
+		resp.NextPageToken = strconv.Itoa(idx + 1)
+	}
+	return resp, nil
+}
+
+// enqueueStoredWorkers streams pages: a transient error on a later page must
+// retry just that page (the earlier pages stay enqueued) and the scan must
+// still enumerate every worker across all pages.
+func TestSyncer_EnqueueStoredWorkers_StreamsPagesAndRetriesLatePage(t *testing.T) {
+	prev := storedWorkerListBackoff
+	storedWorkerListBackoff = time.Millisecond
+	defer func() { storedWorkerListBackoff = prev }()
+
+	paged := &pagedListWorkersStore{
+		pages: [][]*ateapipb.Worker{
+			{{WorkerNamespace: "ns", WorkerPool: "p", WorkerPod: "w0"}},
+			{{WorkerNamespace: "ns", WorkerPool: "p", WorkerPod: "w1"}},
+			{{WorkerNamespace: "ns", WorkerPool: "p", WorkerPod: "w2"}},
+		},
+		failOnPage: 1, // second page fails once before succeeding
+	}
+	s := NewWorkerPoolSyncer(paged, nil, nil)
+
+	s.enqueueStoredWorkers(context.Background())
+
+	if !paged.failed {
+		t.Error("expected the injected page-2 failure to be exercised")
+	}
+	if got := s.queue.Len(); got != 3 {
+		t.Errorf("queue length = %d, want 3 (every worker across all pages must be enqueued despite the transient page error)", got)
 	}
 }
 
