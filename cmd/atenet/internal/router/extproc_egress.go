@@ -44,14 +44,11 @@ const (
 	// filter chain that accepted the request. The egress Envoy asks for it via
 	// request_attributes on its ext_proc filter.
 	//
-	// SEE(lior): this was xds.listener_name, which reads more naturally but
-	// which Envoy 1.34 cannot parse: it logs "error parsing cel expression
-	// xds.listener_name" at trace level, then sends the ProcessingRequest with
-	// an empty attributes map rather than failing config load. Because an
-	// absent attribute means "ingress" (the fail-safe direction), every egress
-	// CONNECT silently took the ingress path and 404'd on the actor DNS name
-	// parse. xds.filter_chain_name parses on the same Envoy build and is
-	// equally Envoy-asserted, so the trust model is unchanged.
+	// Do not "improve" this to xds.listener_name: Envoy 1.34 cannot parse that
+	// one, and rather than failing config load it logs "error parsing cel
+	// expression" at trace level and sends an empty attributes map. An absent
+	// attribute means "ingress" here, so every egress CONNECT would silently
+	// take the ingress path and 404 on the actor DNS name parse.
 	FilterChainNameAttribute = "xds.filter_chain_name"
 
 	// forwardedClientCertHeader is the header Envoy fills in with details of
