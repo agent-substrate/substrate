@@ -285,13 +285,13 @@ def teardown_substrate() -> None:
 
 def install_microvm_deps() -> None:
     """Stage kata/cloud-hypervisor assets and apply the cluster-wide
-    microvm-default SandboxConfig. Required before a microvm WorkerPool can
+    microvm SandboxConfig. Required before a microvm WorkerPool can
     schedule; must run after deploy_substrate() (which installs the CRDs)."""
     run(["hack/install-microvm-deps.sh", "--install"])
 
 
 def teardown_microvm_deps() -> None:
-    """Remove the microvm-default SandboxConfig. Must run before
+    """Remove the microvm SandboxConfig. Must run before
     teardown_substrate(), which deletes the SandboxConfig CRD (and would
     prevent this from succeeding via kubectl)."""
     run_no_check(["hack/install-microvm-deps.sh", "--delete"])
@@ -438,7 +438,7 @@ def main() -> None:
             try:
                 deploy_substrate()
                 # install-microvm-deps needs the CRDs from deploy_substrate;
-                # deploy_workloads needs the microvm-default SandboxConfig.
+                # deploy_workloads needs the microvm SandboxConfig.
                 if sandbox_class == "microvm":
                     install_microvm_deps()
                 deploy_workloads(test.get("workerCount", 1), sandbox_class)

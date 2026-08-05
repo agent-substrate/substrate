@@ -21,9 +21,9 @@
 # Composes:
 #   1. hack/install-ate.sh --deploy-ate-system  (control plane)
 #   2. hack/install-microvm-deps.sh --install   (asset build/stage + cluster-wide
-#                                                microvm-default SandboxConfig)
+#                                                microvm SandboxConfig)
 #   3. Apply the counter-microvm demo manifest (namespace + WorkerPool +
-#      ActorTemplate; resolves to microvm-default via sandboxClass=microvm).
+#      ActorTemplate).
 #
 # Like the other hack scripts, this sources .ate-dev-env.sh for the cluster /
 # registry / bucket settings unless NO_DEV_ENV is set.
