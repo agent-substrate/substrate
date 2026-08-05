@@ -554,7 +554,7 @@ func (s *Persistence) TagActorSnapshot(ctx context.Context, atespace, name strin
 	return dbTag, nil
 }
 
-func (s *Persistence) UpdateActorSnapshotTag(ctx context.Context, atespace, name string, scope ateapipb.ActorSnapshotTagScope) (*ateapipb.ActorSnapshotTag, error) {
+func (s *Persistence) UpdateActorSnapshotTag(ctx context.Context, atespace, name string, scope ateapipb.ActorSnapshotTagScope, expectedVersion int64) (*ateapipb.ActorSnapshotTag, error) {
 	tagKey := actorSnapshotTagDBKey(atespace, name)
 	var updated *ateapipb.ActorSnapshotTag
 	err := s.rdb.Watch(ctx, func(tx *redis.Tx) error {
@@ -568,6 +568,9 @@ func (s *Persistence) UpdateActorSnapshotTag(ctx context.Context, atespace, name
 		tag := &ateapipb.ActorSnapshotTag{}
 		if err := protojson.Unmarshal(b, tag); err != nil {
 			return fmt.Errorf("while unmarshaling actor snapshot tag %s/%s: %w", atespace, name, err)
+		}
+		if tag.GetMetadata().GetVersion() != expectedVersion {
+			return store.ErrVersionConflict
 		}
 		if _, _, err := s.GetActorSnapshot(ctx, tag.GetSnapshot().GetAtespace(), tag.GetSnapshot().GetName()); err != nil {
 			return err

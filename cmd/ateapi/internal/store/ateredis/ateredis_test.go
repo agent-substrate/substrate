@@ -50,12 +50,6 @@ func setupTest(t *testing.T) (*miniredis.Miniredis, *Persistence, context.Contex
 	return mr, NewPersistence(rdb), t.Context()
 }
 
-type watchConflictRedisClient struct{ redisClient }
-
-func (c *watchConflictRedisClient) Watch(context.Context, func(*redis.Tx) error, ...string) error {
-	return redis.TxFailedErr
-}
-
 // testAtespace is the atespace used by tests that create a single actor. Actors
 // are atespace-scoped, so a real atespace must always be part of their identity.
 const testAtespace = "test-atespace"
@@ -616,7 +610,7 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 	if _, err := s.TagActorSnapshot(ctx, testAtespace, "snapshot-1", differentScope); !errors.Is(err, store.ErrAlreadyExists) {
 		t.Fatalf("re-tag with different scope error = %v, want ErrAlreadyExists", err)
 	}
-	tagged, err = s.UpdateActorSnapshotTag(ctx, testAtespace, "before-upgrade", ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED)
+	tagged, err = s.UpdateActorSnapshotTag(ctx, testAtespace, "before-upgrade", ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED, tagged.GetMetadata().GetVersion())
 	if err != nil || tagged.GetScope() != ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED {
 		t.Fatalf("UpdateActorSnapshotTag = (%v, %v), want published", tagged, err)
 	}
@@ -652,9 +646,19 @@ func TestUpdateActorSnapshotTag_Conflict(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	s.rdb = &watchConflictRedisClient{redisClient: s.rdb}
+	_, _, tag1, err := s.GetActorSnapshotByTag(ctx, testAtespace, "tag-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, tag2, err := s.GetActorSnapshotByTag(ctx, testAtespace, "tag-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.UpdateActorSnapshotTag(ctx, testAtespace, "tag-1", ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED, tag1.GetMetadata().GetVersion()); err != nil {
+		t.Fatal(err)
+	}
 
-	_, err := s.UpdateActorSnapshotTag(ctx, testAtespace, "tag-1", ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED)
+	_, err = s.UpdateActorSnapshotTag(ctx, testAtespace, "tag-1", ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE, tag2.GetMetadata().GetVersion())
 	if !errors.Is(err, store.ErrVersionConflict) {
 		t.Fatalf("UpdateActorSnapshotTag error = %v, want ErrVersionConflict", err)
 	}

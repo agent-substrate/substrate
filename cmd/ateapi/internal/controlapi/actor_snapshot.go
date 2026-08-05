@@ -107,7 +107,14 @@ func (s *Service) UpdateActorSnapshotTag(ctx context.Context, req *ateapipb.Upda
 	if err := validateActorSnapshotTagScope(req.GetScope()); err != nil {
 		return nil, err
 	}
-	tag, err := s.persistence.UpdateActorSnapshotTag(ctx, req.GetTag().GetAtespace(), req.GetTag().GetName(), req.GetScope())
+	_, _, current, err := s.persistence.GetActorSnapshotByTag(ctx, req.GetTag().GetAtespace(), req.GetTag().GetName())
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, status.Errorf(codes.NotFound, "ActorSnapshot tag %s/%s not found", req.GetTag().GetAtespace(), req.GetTag().GetName())
+	}
+	if err != nil {
+		return nil, fmt.Errorf("while getting actor snapshot tag: %w", err)
+	}
+	tag, err := s.persistence.UpdateActorSnapshotTag(ctx, req.GetTag().GetAtespace(), req.GetTag().GetName(), req.GetScope(), current.GetMetadata().GetVersion())
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, status.Errorf(codes.NotFound, "ActorSnapshot tag %s/%s not found", req.GetTag().GetAtespace(), req.GetTag().GetName())
 	}
