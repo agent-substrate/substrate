@@ -110,7 +110,7 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 			for _, line := range strings.Split(scrape, "\n") {
 				if strings.HasPrefix(line, "ate_actor_crashes") {
 					foundCrashLine = true
-					opVal := extractPrometheusLabelValue(line, "ate_operation_name")
+					opVal := extractPrometheusLabelValue(line, "ate_actor_operation_name")
 					reasonVal := extractPrometheusLabelValue(line, "ate_failure_reason")
 					tmplNSVal := extractPrometheusLabelValue(line, "ate_template_namespace")
 					tmplNameVal := extractPrometheusLabelValue(line, "ate_template_name")
@@ -119,9 +119,9 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 
 					var errs []string
 					if opVal == "" {
-						errs = append(errs, "ate_operation_name label is missing or empty")
+						errs = append(errs, "ate_actor_operation_name label is missing or empty")
 					} else if ateattr.NormalizeOperationName(opVal) != opVal {
-						errs = append(errs, fmt.Sprintf("ate_operation_name %q is invalid (must be one of {resume, suspend, pause, unknown})", opVal))
+						errs = append(errs, fmt.Sprintf("ate_actor_operation_name %q is invalid (must be one of {create, resume, suspend, pause, delete, unknown})", opVal))
 					}
 
 					if reasonVal == "" {
@@ -178,10 +178,10 @@ func triggerActorCrash(t *testing.T, ctx context.Context, clients *e2e.Clients, 
 	// Delete the assigned worker pod directly.
 	// The WorkerPoolSyncer will detect the pod is gone, crash the actor via syncer.go,
 	// and emit the ate_actor_crashes counter.
-	if podName := actor.GetAteomPodName(); podName != "" {
-		podNS := actor.GetAteomPodNamespace()
+	if ass := actor.GetWorkerAssignment(); ass != nil && ass.GetWorkerPod() != "" {
+		podName := ass.GetWorkerPod()
+		podNS := ass.GetWorkerNamespace()
 		if err := clients.K8s.CoreV1().Pods(podNS).Delete(ctx, podName, metav1.DeleteOptions{}); err != nil {
-
 			t.Fatalf("Delete worker pod failed: %v", err)
 		}
 	} else {

@@ -110,7 +110,7 @@ Agent Substrate emits foundational OpenTelemetry system and server metrics to mo
 | Metric | Emitted by | Type | Measures |
 |--------|------------|------|----------|
 | `rpc.server.call.duration` | ateapi & atelet (gRPC servers, via `otelgrpc`) | histogram | per-method gRPC latency, request rate, and errors (labels `rpc.method`, `rpc.response.status_code`) |
-| `ate.actor.crashes` | ateapi | counter | Number of times actors transitioned to `STATUS_CRASHED` with failure reasons (labels `ate.operation.name`, `ate.failure.reason`, `ate.template.namespace`, `ate.template.name`, `ate.workerpool.name`, `ate.sandbox.class`) |
+| `ate.actor.crashes` | ateapi | counter | Number of times actors transitioned to `STATUS_CRASHED` with failure reasons (labels `ate.actor.operation.name`, `ate.failure.reason`, `ate.template.namespace`, `ate.template.name`, `ate.workerpool.name`, `ate.sandbox.class`) |
 | `atenet.router.route.duration` | atenet-router | histogram | Substrate E2E — Envoy receiving a request to Envoy forwarding it to the resolved worker, excluding actor compute and the response (labels `ate.template.namespace`, `ate.template.name`, `ate.router.outcome`, `ate.router.resume`) |
 | `atelet.snapshot.size` | atelet | histogram | uncompressed size in bytes of each gVisor snapshot image written during checkpoint (labels `kind`, `actor_template_namespace`, `actor_template_name`) |
 | `ate.workerpool.workers` | ateapi | up/down counter | live worker count per pool, split by state (`idle`/`assigned`) and sandbox class to provide fleet capacity and saturation at a glance |
