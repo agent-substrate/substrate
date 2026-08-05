@@ -27,19 +27,22 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/spf13/pflag"
 )
 
 var (
-	requestCount uint64
-	ready        atomic.Bool
-	fileMutex    sync.Mutex
+	requestCount             uint64
+	ready                    atomic.Bool
+	fileMutex                sync.Mutex
+	sigtermSleepDurationSecs = 15
 )
 
 func incrementFileCounter(filePath string) int {
@@ -66,6 +69,16 @@ func main() {
 	validateExistingFilePath := pflag.String("validate-existing-file-path", "", "Path to existing file to validate reading")
 	pflag.Parse()
 	ctx := context.Background()
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGTERM)
+	go func() {
+		sig := <-sigCh
+		slog.InfoContext(ctx, "Received signal, waiting before exiting", slog.String("signal", sig.String()), slog.Int("sleep_secs", sigtermSleepDurationSecs))
+		time.Sleep(time.Duration(sigtermSleepDurationSecs) * time.Second)
+		slog.InfoContext(ctx, "Exiting now")
+		os.Exit(0)
+	}()
 
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
 
@@ -113,6 +126,24 @@ func main() {
 		}
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("ok\n"))
+	})
+
+	defaultMux.HandleFunc("/set-sigterm-sleep", func(w http.ResponseWriter, r *http.Request) {
+		durationStr := r.URL.Query().Get("duration")
+		if durationStr == "" {
+			http.Error(w, "missing duration parameter", http.StatusBadRequest)
+			return
+		}
+		d, err := strconv.Atoi(durationStr)
+		if err != nil || d < 0 {
+			http.Error(w, "invalid duration parameter", http.StatusBadRequest)
+			return
+		}
+		sigtermSleepDurationSecs = d
+		response := fmt.Sprintf("SIGTERM sleep duration set to %d seconds\n", d)
+		slog.InfoContext(r.Context(), "Updated SIGTERM sleep duration", slog.Int("duration_secs", d))
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(response))
 	})
 
 	go func() {
