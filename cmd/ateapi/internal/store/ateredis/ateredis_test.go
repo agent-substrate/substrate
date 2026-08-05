@@ -50,6 +50,12 @@ func setupTest(t *testing.T) (*miniredis.Miniredis, *Persistence, context.Contex
 	return mr, NewPersistence(rdb), t.Context()
 }
 
+type watchConflictRedisClient struct{ redisClient }
+
+func (c *watchConflictRedisClient) Watch(context.Context, func(*redis.Tx) error, ...string) error {
+	return redis.TxFailedErr
+}
+
 // testAtespace is the atespace used by tests that create a single actor. Actors
 // are atespace-scoped, so a real atespace must always be part of their identity.
 const testAtespace = "test-atespace"
@@ -631,6 +637,26 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 	}
 	if got, _, err := s.GetActorSnapshot(ctx, testAtespace, "snapshot-1"); err != nil || got.GetMetadata().GetUid() != created.GetMetadata().GetUid() {
 		t.Fatalf("snapshot after tag deletion = (%v, %v), want retained metadata", got, err)
+	}
+}
+
+func TestUpdateActorSnapshotTag_Conflict(t *testing.T) {
+	_, s, ctx := setupTest(t)
+	if _, err := s.CreateActorSnapshot(ctx, &ateapipb.ActorSnapshot{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "snapshot-1"},
+	}, "gs://private/snapshot-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.TagActorSnapshot(ctx, testAtespace, "snapshot-1", &ateapipb.ActorSnapshotTag{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "tag-1"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	s.rdb = &watchConflictRedisClient{redisClient: s.rdb}
+
+	_, err := s.UpdateActorSnapshotTag(ctx, testAtespace, "tag-1", ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED)
+	if !errors.Is(err, store.ErrVersionConflict) {
+		t.Fatalf("UpdateActorSnapshotTag error = %v, want ErrVersionConflict", err)
 	}
 }
 
