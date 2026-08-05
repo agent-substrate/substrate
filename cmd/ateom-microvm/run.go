@@ -56,14 +56,6 @@ type runningActor struct {
 	// base-id file so the chain survives suspend->resume->suspend.
 	baseID string
 
-	// activeActor is the actor from the Run/Restore request that started this
-	// micro-VM, retained so GetWorkloadStats can attribute its samples. The rest
-	// of this struct is about owning processes; this field is the one piece of
-	// the original request the service has to remember. Named to match the gVisor
-	// ateom's AteomService.activeActor, which holds the same thing for the one
-	// actor that ateom serves.
-	activeActor ateomstats.ActorAttribution
-
 	// ateom owns this CH process (booted at Run or relaunched at Restore).
 	chCmd *exec.Cmd
 	// vfsdCmd is the virtiofsd serving the overlay RO lower (the CH fs device
@@ -206,7 +198,7 @@ func writeGuestResolvConf(rootfs string) error {
 //   - The runtime assets (guest kernel, guest OS image, cloud-hypervisor, virtiofsd,
 //     base kata config) are on disk and passed as runtime asset paths.
 //   - The OCI bundle (config.json + populated rootfs/) is prepared per container.
-func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkloadRequest) (*ateompb.RunWorkloadResponse, error) {
+func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkloadRequest) (resp *ateompb.RunWorkloadResponse, retErr error) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 	if err := s.deactivateActorNetworking(ctx); err != nil {
@@ -225,6 +217,21 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	}
 
 	s.actorLogger.EmitLifecycleLog("Actor starting", p.actorRef, p.actorUID, p.templateNS, p.templateName)
+
+	// Retain the attribution before the boot rather than after it, so a sample
+	// taken against a workload that dies mid-boot is still attributable. A cold
+	// boot can take a while and can be retried, and an actor that never reaches
+	// readyz is one whose usage is worth reporting rather than the one case that
+	// reports nothing. The defer drops it again if the boot fails outright.
+	// Matches ateom-gvisor's RunWorkload.
+	attribution := p.actorAttribution()
+	s.activeActor = &attribution
+	defer func() {
+		if retErr != nil {
+			s.activeActor = nil
+		}
+	}()
+
 	if err := s.coldBootActorRetrying(ctx, p); err != nil {
 		return nil, err
 	}
@@ -248,7 +255,7 @@ type actorBootParams struct {
 }
 
 // actorAttribution regroups the actor fields that arrived on the Run/Restore
-// request, for retention on the resulting runningActor.
+// request, for retention in AteomService.activeActor.
 func (p actorBootParams) actorAttribution() ateomstats.ActorAttribution {
 	return ateomstats.ActorAttribution{
 		Ref:               p.actorRef,
@@ -482,7 +489,7 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 		return fmt.Errorf("while waiting for container readyz: %w", err)
 	}
 
-	ra := &runningActor{chCmd: chCmd, vfsdCmd: vfsdCmd, durableVfsdCmd: durableVfsdCmd, apiSocket: apiSocket, baseID: actorUID, logAgent: ac, activeActor: p.actorAttribution()}
+	ra := &runningActor{chCmd: chCmd, vfsdCmd: vfsdCmd, durableVfsdCmd: durableVfsdCmd, apiSocket: apiSocket, baseID: actorUID, logAgent: ac}
 	if err := s.activateActorNetworking(p.actorRef.Atespace, p.actorRef.Name, egress); err != nil {
 		return err
 	}

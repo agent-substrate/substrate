@@ -27,7 +27,7 @@ import (
 
 // GetWorkloadStats implements ateompb.Ateom/GetWorkloadStats.
 //
-// The attribution half is wired up (see runningActor.activeActor); the measurement
+// The attribution half is wired up (see AteomService.activeActor); the measurement
 // half is not. The micro-VM read goes to the guest agent's StatsContainer
 // rather than the host cgroup — guest RAM is a fixed allocation, so the host
 // cgroup barely moves with the workload — and lands in the follow-up to

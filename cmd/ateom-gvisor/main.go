@@ -256,9 +256,9 @@ type AteomService struct {
 
 	// activeActor is the actor whose workload this ateom is currently running,
 	// or nil when it is "available". An ateom serves one actor at a time, so a
-	// single slot is enough (the micro-VM ateom holds the same field on each
-	// entry of its s.running map). Guarded by lock, like every other RPC-visible
-	// field.
+	// single slot is enough (the micro-VM ateom holds the same field, set and
+	// cleared at the same points). Guarded by lock, like every other
+	// RPC-visible field.
 	//
 	// Set by RunWorkload / RestoreWorkload and cleared by CheckpointWorkload, so
 	// it tracks exactly the available/executing state machine described on the

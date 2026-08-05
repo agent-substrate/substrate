@@ -51,8 +51,17 @@ service Ateom {
   //
   // It is a pure read: unlike the three calls above it does not move the ateom
   // between "available" and "executing", so it is safe to call on a timer for
-  // the whole lifetime of a workload. Returns FAILED_PRECONDITION when the
-  // ateom is "available" (nothing to measure).
+  // the whole lifetime of a workload.
+  //
+  // Returns FAILED_PRECONDITION when there is no sample to give. That covers
+  // more than the "available" state: an ateom becomes "executing" when it
+  // accepts the actor, but the sandbox it will measure does not exist yet, and
+  // a poll landing in the boot gets FAILED_PRECONDITION as well. The two are
+  // deliberately the same code, because a caller polling on a timer does the
+  // same thing either way -- skip this sample and take the next one. Read it as
+  // "no numbers right now", not as "the actor is gone"; the actor's identity is
+  // retained from the moment the ateom accepts it, so a workload that dies
+  // during boot is still attributable once a runtime can measure it.
   rpc GetWorkloadStats(GetWorkloadStatsRequest) returns (GetWorkloadStatsResponse) {}
 }
 

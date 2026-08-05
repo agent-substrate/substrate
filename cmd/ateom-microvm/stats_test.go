@@ -30,7 +30,7 @@ import (
 )
 
 // TestActorBootParamsAttribution pins the mapping from actorBootParams onto the
-// attribution a runningActor retains. The three loose fields are the ones most
+// attribution the service retains. The three loose fields are the ones most
 // likely to get crossed, since actorBootParams names them differently than
 // ActorAttribution does; the distinct placeholders below make a swap visible.
 func TestActorBootParamsAttribution(t *testing.T) {
@@ -100,6 +100,14 @@ func TestActorBootParamsAttributionMatchesRequest(t *testing.T) {
 // TestGetWorkloadStatsUnimplemented pins the stub's advertised contract. The
 // guest agent read replaces this body; until then a caller that gets any other code
 // back would be reading numbers that are not there.
+//
+// The retention this stub will eventually read — s.activeActor, set by
+// RunWorkload / RestoreWorkload and cleared by CheckpointWorkload — has no unit
+// test, for the same reason as on the gVisor side: those three RPCs reach for
+// netlink, cloud-hypervisor, and the worker pod's netns within a few lines of
+// entry and cannot be driven from `go test`. Its mapping is covered above and
+// in internal/ateomstats; the transitions are verified end to end once
+// GetWorkloadStats returns real data.
 func TestGetWorkloadStatsUnimplemented(t *testing.T) {
 	s := &AteomService{}
 
@@ -109,5 +117,16 @@ func TestGetWorkloadStatsUnimplemented(t *testing.T) {
 	}
 	if got := status.Code(err); got != codes.Unimplemented {
 		t.Errorf("GetWorkloadStats() error code = %v, want %v (err: %v)", got, codes.Unimplemented, err)
+	}
+}
+
+// TestAteomServiceStartsAvailable checks that a freshly constructed service
+// retains no attribution, mirroring the gVisor ateom's test of the same name.
+// GetWorkloadStats's FAILED_PRECONDITION-when-available behavior is built on
+// this: a non-nil zero value here would make an idle ateom report an empty
+// actor's usage instead of refusing.
+func TestAteomServiceStartsAvailable(t *testing.T) {
+	if s := (&AteomService{}); s.activeActor != nil {
+		t.Errorf("new AteomService.activeActor = %v, want nil", s.activeActor)
 	}
 }

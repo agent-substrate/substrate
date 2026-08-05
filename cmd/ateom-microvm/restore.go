@@ -54,7 +54,7 @@ import (
 //
 // Contract with atelet: the snapshot's files have been downloaded to RestoreStateDir,
 // and the durable-dir volume directories re-created (empty).
-func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.RestoreWorkloadRequest) (*ateompb.RestoreWorkloadResponse, error) {
+func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.RestoreWorkloadRequest) (resp *ateompb.RestoreWorkloadResponse, retErr error) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 
@@ -77,6 +77,18 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	tStart := time.Now()
 
 	s.actorLogger.EmitLifecycleLog("Actor restoring", p.actorRef, p.actorUID, p.templateNS, p.templateName)
+
+	// Same as RunWorkload: retain before the restore, drop again if it fails. A
+	// Full-scope resume reaches "executing" in a different way than a cold boot
+	// does, but the window between accepting the actor and serving it is the same
+	// window, and a poll landing in it should name the actor either way.
+	attribution := p.actorAttribution()
+	s.activeActor = &attribution
+	defer func() {
+		if retErr != nil {
+			s.activeActor = nil
+		}
+	}()
 
 	// Restore the durable-dir volumes before anything can observe them: for Full
 	// that means before the share's virtiofsd starts, for Data before the workload
@@ -287,7 +299,6 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 	ra := &runningActor{
 		chCmd: chCmd, vfsdCmd: vfsdCmd, durableVfsdCmd: durableVfsdCmd,
 		apiSocket: apiSocket, baseID: srcID, restoreSourceDir: restoreDir,
-		activeActor: p.actorAttribution(),
 	}
 
 	// Re-attach stdout/stderr forwarding for each container: the restored guest's

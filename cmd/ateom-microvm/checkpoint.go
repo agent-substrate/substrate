@@ -158,6 +158,19 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	dTeardown := time.Since(tTeardown)
 	delete(s.running, actorUID)
 
+	// The guest is gone as of the teardown above, so the ateom is back to
+	// "available": there is nothing left to measure, and holding the attribution
+	// would let a later GetWorkloadStats report a checkpointed actor as though it
+	// were still running.
+	//
+	// Nothing above this point clears it, unlike the gVisor ateom, which clears
+	// as soon as its checkpoint call has taken the sandbox down. Here the guest
+	// is only paused until this teardown, so a checkpoint that failed earlier has
+	// left it present, and reporting its usage is then the honest answer. This is
+	// the same point at which the running entry goes away, which is what keeps
+	// the two views of "is an actor here" from disagreeing.
+	s.activeActor = nil
+
 	// Tear down the per-activation actor network.
 	if err := ateomnet.CleanupActorNetwork(ctx, s.interiorNetNS); err != nil {
 		slog.WarnContext(ctx, "Failed to clean up actor network after checkpoint", slog.Any("err", err))
