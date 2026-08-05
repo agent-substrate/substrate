@@ -295,8 +295,8 @@ func TestAssignWorkerStep_RetryAfterConflictPicksFreshWorker(t *testing.T) {
 	if storedActor.GetStatus() != ateapipb.Actor_STATUS_RESUMING {
 		t.Errorf("stored actor status = %v, want %v", storedActor.GetStatus(), ateapipb.Actor_STATUS_RESUMING)
 	}
-	if got := storedActor.GetAteomPodName(); got != "fallback-pod" {
-		t.Errorf("stored actor AteomPodName = %q, want %q", got, "fallback-pod")
+	if got := storedActor.GetWorkerAssignment().GetWorkerPod(); got != "fallback-pod" {
+		t.Errorf("stored actor WorkerAssignment.WorkerPod = %q, want %q", got, "fallback-pod")
 	}
 }
 
@@ -469,11 +469,13 @@ func TestResumeActorWorkflow_RejectedAndIdempotentPaths(t *testing.T) {
 			w := newTestActorWorkflow(t, st, "ns", "tmpl1")
 
 			seedWorkflowActor(t, ctx, st, resources.ActorRef{Atespace: "team-a", Name: "id1"}, "ns", "tmpl1", tc.seedStatus, func(a *ateapipb.Actor) {
-				a.AteomPodNamespace = "wns"
-				a.AteomPodName = "wpod"
-				a.AteomPodIp = "1.2.3.4"
-				a.AteomPodUid = "uid"
-				a.WorkerPoolName = "pool1"
+				a.WorkerAssignment = &ateapipb.WorkerAssignment{
+					WorkerNamespace: "wns",
+					WorkerPool:      "pool1",
+					WorkerPod:       "wpod",
+					WorkerPodUid:    "uid",
+					WorkerPodIp:     "1.2.3.4",
+				}
 			})
 
 			actor, resumed, err := w.ResumeActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, false)
@@ -601,10 +603,12 @@ func TestResumeActor_MetricSkipsAlreadyRunningNoop(t *testing.T) {
 			w.instruments = inst
 
 			seedWorkflowActor(t, ctx, st, resources.ActorRef{Atespace: "team-a", Name: "id1"}, "ns", "tmpl1", tt.seedStatus, func(a *ateapipb.Actor) {
-				a.AteomPodNamespace = "wns"
-				a.AteomPodName = "wpod"
-				a.AteomPodUid = "uid"
-				a.WorkerPoolName = "pool1"
+				a.WorkerAssignment = &ateapipb.WorkerAssignment{
+					WorkerNamespace: "wns",
+					WorkerPool:      "pool1",
+					WorkerPod:       "wpod",
+					WorkerPodUid:    "uid",
+				}
 			})
 
 			_, _, err := w.ResumeActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, false)
@@ -623,17 +627,19 @@ func TestResumeActor_MetricSkipsAlreadyRunningNoop(t *testing.T) {
 	}
 }
 
-// TestResumeActor_CrashesOnCorruptWorkerAssignment verifies that a RESUMING
-// actor with only some of its worker assignment fields populated is moved to
-// CRASHED by LoadActorForResumeStep and the resume fails with Aborted.
-func TestResumeActor_CrashesOnCorruptWorkerAssignment(t *testing.T) {
+// TestResumeActor_CrashesOnMissingWorkerAssignment verifies that a RESUMING
+// actor with no worker assignment is moved to CRASHED by
+// LoadActorForResumeStep and the resume fails with Aborted. A RESUMING actor
+// always has a worker assigned, so reaching this state means the record is
+// corrupt and the actor cannot be recovered.
+func TestResumeActor_CrashesOnMissingWorkerAssignment(t *testing.T) {
 	ctx := context.Background()
 	st, cleanup := storetest.SetupTestStore(t)
 	defer cleanup()
 	w := newTestActorWorkflow(t, st, "ns", "tmpl1")
 
 	seedWorkflowActor(t, ctx, st, resources.ActorRef{Atespace: "team-a", Name: "id1"}, "ns", "tmpl1", ateapipb.Actor_STATUS_RESUMING, func(a *ateapipb.Actor) {
-		a.AteomPodName = "worker-1" // AteomPodUid and WorkerPoolName left empty
+		a.WorkerAssignment = nil // RESUMING without a worker: corrupt record
 	})
 
 	_, _, err := w.ResumeActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, false)

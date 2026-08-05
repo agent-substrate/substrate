@@ -176,7 +176,7 @@ type actorFixture struct {
 	// unassigned seeds the worker with no assignment at all, as pause, suspend
 	// and crash leave it once they have released it.
 	unassigned bool
-	// noPlacement seeds the actor with none of its worker fields set.
+	// noPlacement seeds the actor with no worker assignment.
 	noPlacement bool
 	// noWorker skips seeding the worker record entirely.
 	noWorker bool
@@ -194,9 +194,12 @@ func seedActor(t *testing.T, ctx context.Context, st store.Interface, f actorFix
 		ActorTemplateName:      "counter",
 	}
 	if !f.noPlacement {
-		actor.AteomPodNamespace = testPodNS
-		actor.AteomPodName = testWorkerPod
-		actor.WorkerPoolName = testPool
+		actor.WorkerAssignment = &ateapipb.WorkerAssignment{
+			WorkerNamespace: testPodNS,
+			WorkerPool:      testPool,
+			WorkerPod:       testWorkerPod,
+			WorkerPodUid:    "worker-uid",
+		}
 	}
 	if _, err := st.CreateActor(ctx, actor); err != nil {
 		t.Fatalf("seed actor: %v", err)

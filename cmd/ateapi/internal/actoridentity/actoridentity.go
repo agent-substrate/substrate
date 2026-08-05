@@ -363,15 +363,14 @@ func (s *Server) authorizeActor(ctx context.Context, caller *ateletCaller, actor
 	// An actor placed on a worker always carries its placement fields. Missing
 	// placement is a control-plane bug rather than a client error, so it is not
 	// folded into deny().
-	podNamespace, podName, pool := actor.GetAteomPodNamespace(), actor.GetAteomPodName(), actor.GetWorkerPoolName()
-	if podNamespace == "" || podName == "" || pool == "" {
-		slog.ErrorContext(ctx, "MintCert: running actor has incomplete placement",
-			slog.Any("actor", actorRef), slog.String("podNamespace", podNamespace),
-			slog.String("podName", podName), slog.String("workerPool", pool))
+	assignment := actor.GetWorkerAssignment()
+	if assignment == nil {
+		slog.ErrorContext(ctx, "MintCert: running actor has no worker assignment", slog.Any("actor", actorRef))
 		return nil, status.Errorf(codes.FailedPrecondition, "actor has no worker assigned")
 	}
+	podNamespace, podName := assignment.GetWorkerNamespace(), assignment.GetWorkerPod()
 
-	worker, err := s.store.GetWorker(ctx, podNamespace, pool, podName)
+	worker, err := s.store.GetWorker(ctx, podNamespace, assignment.GetWorkerPool(), podName)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, deny("worker hosting the actor not found", slog.String("workerPod", podNamespace+"/"+podName))

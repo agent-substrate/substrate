@@ -40,6 +40,7 @@ const (
 // slice lands and as more components are wired to push to the collector.
 var PlatformMetricPrefixes = []string{
 	"ate_workerpool_workers",
+	"ate_actor_crashes",
 	"ate_actor_lifecycle_operation_duration",
 	"ate_scheduler_assignment_duration",
 	"atenet_router_route_duration",

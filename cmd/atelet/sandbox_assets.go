@@ -262,6 +262,11 @@ func isTerminalFileSystemErr(err error) bool {
 		syscall.ENAMETOOLONG,
 		syscall.ELOOP,
 		syscall.EROFS,
+		// A full disk or exhausted quota cannot heal on this node without
+		// operator action; retrying locally just wedges the actor. Marking it
+		// terminal crashes the actor so it can be rescheduled elsewhere.
+		syscall.ENOSPC,
+		syscall.EDQUOT,
 	}
 	for _, target := range terminalFileErrs {
 		if errors.Is(err, target) {

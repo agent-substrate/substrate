@@ -681,7 +681,10 @@ func TestIsTerminalFileErr(t *testing.T) {
 		{"name too long", syscall.ENAMETOOLONG, true},
 		{"symlink loop", syscall.ELOOP, true},
 		{"read-only filesystem", syscall.EROFS, true},
+		{"no space left on device", syscall.ENOSPC, true},
+		{"disk quota exceeded", syscall.EDQUOT, true},
 		{"wrapped not exist", fmt.Errorf("while reading: %w", os.ErrNotExist), true},
+		{"path error no space", &os.PathError{Op: "write", Path: "/var/lib/atelet/x", Err: syscall.ENOSPC}, true},
 		{"too many open files", syscall.EMFILE, false},
 		{"stale nfs handle", syscall.ESTALE, false},
 		{"try again", syscall.EAGAIN, false},
@@ -731,6 +734,31 @@ func TestGoldenOnlyFiles(t *testing.T) {
 			got := goldenOnlyFiles(tc.actorFiles, tc.goldenFiles)
 			if diff := cmp.Diff(tc.want, got); diff != "" {
 				t.Errorf("goldenOnlyFiles diff (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestWrapFileSystemErrAttachesTerminalReason(t *testing.T) {
+	tests := []struct {
+		name         string
+		err          error
+		wantTerminal bool
+	}{
+		{"no space left on device", &os.PathError{Op: "write", Path: "/x", Err: syscall.ENOSPC}, true},
+		{"disk quota exceeded", syscall.EDQUOT, true},
+		{"not exist", os.ErrNotExist, true},
+		{"io error", syscall.EIO, false},
+		{"try again", syscall.EAGAIN, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			wrapped := wrapFileSystemErr("while writing asset", tt.err)
+			if got := errors.Is(wrapped, ateerrors.ReasonTerminalFileSystemError); got != tt.wantTerminal {
+				t.Errorf("errors.Is(wrapFileSystemErr(%v), ReasonTerminalFileSystemError) = %v, want %v", tt.err, got, tt.wantTerminal)
+			}
+			if !errors.Is(wrapped, tt.err) {
+				t.Errorf("wrapFileSystemErr(%v) lost the original error: %v", tt.err, wrapped)
 			}
 		})
 	}

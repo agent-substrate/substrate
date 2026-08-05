@@ -29,9 +29,11 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/internal/ateattr"
+	"github.com/agent-substrate/substrate/internal/ateerrors"
 	"github.com/agent-substrate/substrate/internal/e2e"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 const metricsAtespace = "ate-metrics-e2e"
@@ -86,6 +88,9 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 		t.Fatalf("rClient.Get: %v", err)
 	}
 	_ = resp.Body.Close()
+
+	// Trigger an actor crash to verify ate_actor_crashes counter emission.
+	triggerActorCrash(t, ctx, clients, actorID)
 
 	deadline := time.Now().Add(2 * time.Minute)
 	var missing []string
@@ -157,6 +162,54 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 				errs = append(errs, "ate_scheduler_eligible_workers [NORMAL CASE] per-pool candidates was not found in collector scrape output; only edge-case 0-count histogram was present")
 			}
 
+			// Verify ate_actor_crashes metric carries valid, non-empty low-cardinality labels for all attributes.
+			foundCrashLine := false
+			for _, line := range strings.Split(scrape, "\n") {
+				if strings.HasPrefix(line, "ate_actor_crashes") {
+					foundCrashLine = true
+					opVal := extractLabelValue(line, "ate_actor_operation_name")
+					reasonVal := extractLabelValue(line, "ate_failure_reason")
+					tmplNSVal := extractLabelValue(line, "ate_template_namespace")
+					tmplNameVal := extractLabelValue(line, "ate_template_name")
+					workerPoolVal := extractLabelValue(line, "ate_workerpool_name")
+					sandboxVal := extractLabelValue(line, "ate_sandbox_class")
+
+					var crashErrs []string
+					if opVal == "" {
+						crashErrs = append(crashErrs, "ate_actor_operation_name label is missing or empty")
+					} else if ateattr.NormalizeOperationName(opVal) != opVal {
+						crashErrs = append(crashErrs, fmt.Sprintf("ate_actor_operation_name %q is invalid (must be one of {create, resume, suspend, pause, delete, unknown})", opVal))
+					}
+
+					if reasonVal == "" {
+						crashErrs = append(crashErrs, "ate_failure_reason label is missing or empty")
+					} else if !ateerrors.IsValidReason(reasonVal) {
+						crashErrs = append(crashErrs, fmt.Sprintf("ate_failure_reason %q is invalid (must be a registered ateerrors reason enum like CORRUPTED_ASSIGNMENT, WORKER_POD_GONE, WORKER_REASSIGNED, UNKNOWN)", reasonVal))
+					}
+
+					if tmplNSVal == "" {
+						crashErrs = append(crashErrs, "ate_template_namespace label is missing or empty")
+					}
+					if tmplNameVal == "" {
+						crashErrs = append(crashErrs, "ate_template_name label is missing or empty")
+					}
+					if workerPoolVal == "" {
+						crashErrs = append(crashErrs, "ate_workerpool_name label is missing or empty")
+					}
+					if sandboxVal == "" {
+						crashErrs = append(crashErrs, "ate_sandbox_class label is missing or empty")
+					}
+
+					if len(crashErrs) > 0 {
+						errs = append(errs, fmt.Sprintf("ate_actor_crashes line %q failed label validation:\n  - %s\n  (Extracted labels: op=%q, reason=%q, tmplNS=%q, tmplName=%q, workerPool=%q, sandboxClass=%q)",
+							line, strings.Join(crashErrs, "\n  - "), opVal, reasonVal, tmplNSVal, tmplNameVal, workerPoolVal, sandboxVal))
+					}
+				}
+			}
+			if !foundCrashLine {
+				errs = append(errs, "ate_actor_crashes metric line not found in collector scrape output")
+			}
+
 			if len(errs) == 0 {
 				return
 			}
@@ -165,6 +218,7 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 			time.Sleep(2 * time.Second)
 			continue
 		}
+
 		time.Sleep(3 * time.Second)
 	}
 
@@ -172,6 +226,33 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 		t.Fatalf("platform telemetry validation failed: missing metrics %v, ateom pushed=%v, detail: %v", missing, ateomSeen, lastLabelErr)
 	}
 	t.Fatalf("platform telemetry never reached the collector: missing metrics %v, ateom pushed=%v", missing, ateomSeen)
+}
+
+func triggerActorCrash(t *testing.T, ctx context.Context, clients *e2e.Clients, actorID string) {
+	t.Helper()
+
+	// Get running actor to find its assigned worker pod.
+	actor, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: metricsAtespace, Name: actorID},
+	})
+	if err != nil {
+		t.Fatalf("GetActor failed: %v", err)
+	}
+
+	// Delete the assigned worker pod directly.
+	// The WorkerPoolSyncer will detect the pod is gone, crash the actor via syncer.go,
+	// and emit the ate_actor_crashes counter.
+	if ass := actor.GetWorkerAssignment(); ass != nil && ass.GetWorkerPod() != "" {
+		podName := ass.GetWorkerPod()
+		podNS := ass.GetWorkerNamespace()
+		if err := clients.K8s.CoreV1().Pods(podNS).Delete(ctx, podName, metav1.DeleteOptions{}); err != nil {
+			t.Fatalf("Delete worker pod failed: %v", err)
+		}
+	} else {
+		t.Fatalf("Actor %s has no assigned worker pod to delete", actorID)
+	}
+
+	waitForStatus(t, ctx, clients, actorID, ateapipb.Actor_STATUS_CRASHED)
 }
 
 func resume(t *testing.T, ctx context.Context, clients *e2e.Clients, actorID string) {

@@ -1183,8 +1183,8 @@ func TestWorkerPodDeletion(t *testing.T) {
 		t.Fatalf("failed to get Actor: %v", err)
 	}
 
-	podName := actor.GetAteomPodName()
-	podNamespace := actor.GetAteomPodNamespace()
+	podName := actor.GetWorkerAssignment().GetWorkerPod()
+	podNamespace := actor.GetWorkerAssignment().GetWorkerNamespace()
 	if podName == "" || podNamespace == "" {
 		t.Fatalf("actor is running but pod details are missing: podName=%q, podNamespace=%q", podName, podNamespace)
 	}

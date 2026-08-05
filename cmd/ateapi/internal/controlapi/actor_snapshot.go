@@ -107,23 +107,19 @@ func (s *Service) UpdateActorSnapshotTag(ctx context.Context, req *ateapipb.Upda
 	if err := validateActorSnapshotTagScope(req.GetScope()); err != nil {
 		return nil, err
 	}
-	ref := &ateapipb.ActorSnapshotRef{Reference: &ateapipb.ActorSnapshotRef_Tag{Tag: req.GetTag()}}
-	lock, _, _, _, err := s.lockActorSnapshot(ctx, ref)
-	if err != nil {
-		return nil, err
-	}
-	defer lock.Close()
-	atespaceLock, err := s.persistence.AcquireLock(lock.Context(), "lock:atespace:"+req.GetTag().GetAtespace())
-	if errors.Is(err, store.ErrLockConflict) {
-		return nil, status.Error(codes.Aborted, "another operation is using this Atespace")
-	}
-	if err != nil {
-		return nil, fmt.Errorf("while locking tag Atespace: %w", err)
-	}
-	defer atespaceLock.Close()
-	tag, err := s.persistence.UpdateActorSnapshotTag(atespaceLock.Context(), req.GetTag().GetAtespace(), req.GetTag().GetName(), req.GetScope())
+	_, _, current, err := s.persistence.GetActorSnapshotByTag(ctx, req.GetTag().GetAtespace(), req.GetTag().GetName())
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, status.Errorf(codes.NotFound, "ActorSnapshot tag %s/%s not found", req.GetTag().GetAtespace(), req.GetTag().GetName())
+	}
+	if err != nil {
+		return nil, fmt.Errorf("while getting actor snapshot tag: %w", err)
+	}
+	tag, err := s.persistence.UpdateActorSnapshotTag(ctx, req.GetTag().GetAtespace(), req.GetTag().GetName(), req.GetScope(), current.GetMetadata().GetVersion())
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, status.Errorf(codes.NotFound, "ActorSnapshot tag %s/%s not found", req.GetTag().GetAtespace(), req.GetTag().GetName())
+	}
+	if errors.Is(err, store.ErrVersionConflict) {
+		return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
 	}
 	if err != nil {
 		return nil, fmt.Errorf("while updating actor snapshot tag: %w", err)

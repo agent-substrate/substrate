@@ -27,9 +27,9 @@ import (
 // Metric identifier for tracking eligible worker counts.
 const eligibleWorkersMetric = "ate.scheduler.eligible_workers"
 
-// RegisterEligibleWorkers registers the ate.scheduler.eligible_workers histogram instrument against meter.
+// newEligibleWorkers creates the ate.scheduler.eligible_workers histogram instrument against meter.
 // Returns (nil, nil) if meter is nil. If registration fails, an error is returned.
-func RegisterEligibleWorkers(meter metric.Meter) (metric.Int64Histogram, error) {
+func newEligibleWorkers(meter metric.Meter) (metric.Int64Histogram, error) {
 	if meter == nil {
 		return nil, nil
 	}
@@ -49,7 +49,7 @@ func RegisterEligibleWorkers(meter metric.Meter) (metric.Int64Histogram, error) 
 // If meter is nil, the option is a no-op. If instrument creation fails, an error is explicitly logged.
 func WithMeter(meter metric.Meter) Option {
 	return func(s *scheduler) {
-		hist, err := RegisterEligibleWorkers(meter)
+		hist, err := newEligibleWorkers(meter)
 		if err != nil {
 			slog.Error("Failed to register ate.scheduler.eligible_workers histogram", "metric", eligibleWorkersMetric, "error", err)
 			return

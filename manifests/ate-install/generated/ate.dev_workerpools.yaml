@@ -412,17 +412,6 @@ spec:
                     type: array
                     x-kubernetes-list-type: atomic
                 type: object
-              terminationGracePeriodSeconds:
-                default: 300
-                description: |-
-                  TerminationGracePeriodSeconds is the termination grace period applied to
-                  this pool's worker pods. On eviction, ateom traps SIGTERM and forwards it
-                  to the actor so it can save state and exit cleanly before the kubelet
-                  sends SIGKILL. Tune this to the maximum time your actors need to shut
-                  down gracefully. Defaults to 300 (5 minutes).
-                format: int32
-                minimum: 1
-                type: integer
             required:
             - ateomImage
             - replicas

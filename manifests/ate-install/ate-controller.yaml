@@ -91,9 +91,12 @@ spec:
         args:
         - --ateapi-ca-file=/run/servicedns-ca/trust-bundle.pem
         - --ateapi-client-cert=/run/podidentity.podcert.ate.dev/credential-bundle.pem
-        env:
-        - name: OTEL_EXPORTER_OTLP_ENDPOINT
-          value: http://opentelemetry-collector.gke-managed-otel.svc.cluster.local:4317
+        # OTLP exporter settings are shared by every control plane component;
+        # see manifests/ate-install/ate-otel-config.yaml. The controller also
+        # propagates these to the ateom worker pods it creates.
+        envFrom:
+        - configMapRef:
+            name: ate-otel-config
         ports:
         - name: metrics
           containerPort: 8080

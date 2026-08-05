@@ -15,6 +15,12 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
+# ate-otel-config.yaml replaces the base ../ate-otel-config.yaml (same ConfigMap
+# name) so every component's `envFrom` resolves to the in-cluster collector
+# instead of the GKE one. It is listed here rather than in ./atelet because that
+# overlay is also built standalone; listing it in both would be a duplicate
+# resource. hack/install-ate.sh applies the ConfigMap directly for the targeted
+# single-component redeploys.
 resources:
   - ../ate-api-server.yaml
   - ../ate-controller.yaml
@@ -23,27 +29,17 @@ resources:
   - ../atenet-router.yaml
   - ../valkey.yaml
   - ../pod-certificate-controller.yaml
+  - ate-otel-config.yaml
   - rustfs.yaml
   - ./otel-collector.yaml
   - ./prometheus.yaml
 
-# OTEL_METRIC_EXPORT_INTERVAL shortens the OTel SDK's 60s metric export tick to
-# 10s. A component is invisible to the collector until its first tick, and the
-# metrics e2e suite asserts against the collector's scrape on a bounded deadline,
-# so the default leaves too little headroom on a loaded runner.
-#
-# OTEL_METRIC_EXPORT_TIMEOUT bounds a tick that fails rather than one that
-# succeeds, and its 30s default swallows three shortened intervals: a collector
-# blip or slow DNS drops a component back to roughly one attempt per 30s, undoing
-# the shorter interval. Matching it to the interval keeps every tick an attempt.
-#
-# On ate-controller both do double duty: the controller also propagates them to
-# the ateom worker pods it creates, which have no other way to receive them.
-# Kind only; production keeps the SDK defaults.
-#
 # OTEL_TRACES_SAMPLER pins ate-api-server to parentbased_always_on so every API
 # call it roots is traced; the other components keep their binary defaults and
-# follow its sampled flag via their ParentBased samplers.
+# follow its sampled flag via their ParentBased samplers. It stays an inline
+# patch rather than a key in ate-otel-config.yaml because that ConfigMap is
+# shared by every component via envFrom -- putting always_on there would pin the
+# router and the control plane to 100% too, undoing their per-component ratios.
 patches:
   - patch: |-
       apiVersion: apps/v1
@@ -57,61 +53,5 @@ patches:
             containers:
             - name: ate-api-server
               env:
-              - name: OTEL_EXPORTER_OTLP_ENDPOINT
-                value: http://opentelemetry-collector.otel-system.svc:4317
-              - name: OTEL_METRIC_EXPORT_INTERVAL
-                value: "10000"
-              - name: OTEL_METRIC_EXPORT_TIMEOUT
-                value: "10000"
               - name: OTEL_TRACES_SAMPLER
                 value: parentbased_always_on
-  - patch: |-
-      apiVersion: apps/v1
-      kind: DaemonSet
-      metadata:
-        name: atelet
-        namespace: ate-system
-      spec:
-        template:
-          spec:
-            containers:
-            - name: atelet
-              env:
-              - name: OTEL_EXPORTER_OTLP_ENDPOINT
-                value: http://opentelemetry-collector.otel-system.svc:4317
-              - name: OTEL_METRIC_EXPORT_INTERVAL
-                value: "10000"
-              - name: OTEL_METRIC_EXPORT_TIMEOUT
-                value: "10000"
-  - patch: |-
-      apiVersion: apps/v1
-      kind: Deployment
-      metadata:
-        name: ate-controller
-        namespace: ate-system
-      spec:
-        template:
-          spec:
-            containers:
-            - name: ate-controller
-              env:
-              - name: OTEL_EXPORTER_OTLP_ENDPOINT
-                value: http://opentelemetry-collector.otel-system.svc:4317
-              - name: OTEL_METRIC_EXPORT_INTERVAL
-                value: "10000"
-              - name: OTEL_METRIC_EXPORT_TIMEOUT
-                value: "10000"
-  - patch: |-
-      apiVersion: apps/v1
-      kind: Deployment
-      metadata:
-        name: atenet-router
-        namespace: ate-system
-      spec:
-        template:
-          spec:
-            containers:
-            - name: atenet-router
-              env:
-              - name: OTEL_EXPORTER_OTLP_ENDPOINT
-                value: http://opentelemetry-collector.otel-system.svc:4317
