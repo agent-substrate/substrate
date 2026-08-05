@@ -40,9 +40,10 @@ import (
 // BrokerCertificateSource owns atunnel's actor private key and obtains the
 // matching short-lived certificate from the node-local atelet.
 type BrokerCertificateSource struct {
-	socketPath string
-	tlsConfig  *tls.Config
-	privateKey *ecdsa.PrivateKey
+	socketPath       string
+	expectedActorUID string
+	tlsConfig        *tls.Config
+	privateKey       *ecdsa.PrivateKey
 
 	mu          sync.RWMutex
 	certificate *tls.Certificate
@@ -57,14 +58,17 @@ type BrokerConfig struct {
 	CredentialBundlePath string
 	// TrustBundlePath verifies atelet's Pod certificate.
 	TrustBundlePath string
+	// ExpectedActorUID prevents a mint started for an old activation from
+	// receiving the newly assigned actor's certificate.
+	ExpectedActorUID string
 }
 
 // NewBrokerCertificateSource creates one actor key for this activation. The key
 // is reused across renewals and never leaves atunnel; only its CSR crosses the
 // credential broker socket.
 func NewBrokerCertificateSource(cfg BrokerConfig) (*BrokerCertificateSource, error) {
-	if cfg.SocketPath == "" || cfg.CredentialBundlePath == "" || cfg.TrustBundlePath == "" {
-		return nil, fmt.Errorf("atunnel: credential broker socket, credentials, and trust bundle are required")
+	if cfg.SocketPath == "" || cfg.CredentialBundlePath == "" || cfg.TrustBundlePath == "" || cfg.ExpectedActorUID == "" {
+		return nil, fmt.Errorf("atunnel: credential broker socket, credentials, trust bundle, and expected actor UID are required")
 	}
 	localCert, err := credbundle.Parse(cfg.CredentialBundlePath)
 	if err != nil {
@@ -117,7 +121,7 @@ func NewBrokerCertificateSource(cfg BrokerConfig) (*BrokerCertificateSource, err
 		},
 	}
 
-	return &BrokerCertificateSource{socketPath: cfg.SocketPath, tlsConfig: tlsConfig, privateKey: privateKey}, nil
+	return &BrokerCertificateSource{socketPath: cfg.SocketPath, expectedActorUID: cfg.ExpectedActorUID, tlsConfig: tlsConfig, privateKey: privateKey}, nil
 }
 
 // Mint requests and installs a fresh certificate for the source's existing
@@ -139,7 +143,10 @@ func (s *BrokerCertificateSource) Mint(ctx context.Context) (time.Time, error) {
 		return time.Time{}, err
 	}
 	defer conn.Close()
-	resp, err := ateletpb.NewCredentialBrokerClient(conn).MintActorCertificate(ctx, &ateletpb.MintActorCertificateRequest{CertificateSigningRequest: csr})
+	resp, err := ateletpb.NewCredentialBrokerClient(conn).MintActorCertificate(ctx, &ateletpb.MintActorCertificateRequest{
+		CertificateSigningRequest: csr,
+		ExpectedActorUid:          s.expectedActorUID,
+	})
 	if err != nil {
 		return time.Time{}, fmt.Errorf("atunnel: mint actor certificate: %w", err)
 	}

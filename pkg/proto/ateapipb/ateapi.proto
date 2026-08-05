@@ -63,9 +63,6 @@ service Control {
   // List Workers.
   rpc ListWorkers(ListWorkersRequest) returns (ListWorkersResponse) {}
 
-  // Get a Worker by its Kubernetes Pod identity.
-  rpc GetWorker(GetWorkerRequest) returns (Worker) {}
-
   // List Actors.
   rpc ListActors(ListActorsRequest) returns (ListActorsResponse) {}
 
@@ -428,11 +425,6 @@ message ListWorkersResponse {
   string next_page_token = 2;
 }
 
-message GetWorkerRequest {
-  string worker_namespace = 1;
-  string worker_pod = 2;
-}
-
 // List actors with pagination. Provides "soft" guarantees: actors may be
 // missed or duplicated if the system state changes during pagination.
 message ListActorsRequest {
@@ -519,10 +511,9 @@ service ActorIdentity {
   // it on the actor's behalf, authenticating with its own client certificate
   // rather than a bearer token.
   //
-  // Authorization is decided on that client certificate: it must identify the
-  // atelet running on the same node as the worker Pod that currently hosts the
-  // requested actor, and the actor must still be running. Any other caller is
-  // rejected with PERMISSION_DENIED.
+  // Authorization is decided on that client certificate and the worker
+  // identity attested by atelet. Ateapi resolves the worker's current actor and
+  // verifies their reciprocal assignment before signing.
   //
   // The certificate in the response is the actor's identity, not the atelet's.
   rpc MintCert(MintCertRequest) returns (MintCertResponse);
@@ -560,19 +551,21 @@ message MintJWTResponse {
 }
 
 message MintCertRequest {
-  string atespace = 1;
-  string actor_name = 2;
-  string actor_uid = 3;
+  // Worker identity authenticated by the node-local atelet. Ateapi resolves
+  // the worker's current actor assignment rather than trusting actor metadata
+  // from the caller.
+  string worker_namespace = 1;
+  string worker_pod = 2;
+  string worker_pod_uid = 3;
 
   // Request contains DER encoded bytes of a x509 certificate signing request.
   // The signer will ignore the contents of the CSR except to extract the
   // subject public key.
   bytes certificate_signing_request = 4;
 
-  // Exact worker Pod requesting the certificate. This value is attested by the
-  // authenticated atelet. Ateapi still verifies that the worker is on that
-  // atelet's node and is currently assigned to the actor before signing.
-  string worker_pod_uid = 5;
+  // Actor incarnation expected by the activation. This is only a stale-request
+  // guard: ateapi derives the actor and its identity from the worker assignment.
+  string expected_actor_uid = 5;
 
   ActorCertificatePurpose purpose = 6;
 }

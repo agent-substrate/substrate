@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math/rand/v2"
 	"net"
 	"sync"
 	"time"
@@ -131,7 +132,13 @@ func (e *Egress) renew(active *egressActivation, expiresAt time.Time) {
 	// Schedule from the credential's remaining lifetime: renew at 90%, then
 	// keep retrying after expiry so egress can recover without reactivation.
 	delay := renewAfter(expiresAt)
+	expired := false
 	for waitForRenewal(active.ctx, delay) {
+		if !expiresAt.After(time.Now()) && !expired {
+			slog.WarnContext(active.ctx, "Atunnel actor certificate expired; blocking new egress connections",
+				slog.Time("expiredAt", expiresAt))
+			expired = true
+		}
 		nextExpiry, err := active.certificateSource.Mint(active.ctx)
 		if err != nil {
 			delay = retryAfter(expiresAt)
@@ -151,6 +158,11 @@ func (e *Egress) renew(active *egressActivation, expiresAt time.Time) {
 		}
 		active.expiresAt = nextExpiry
 		e.mu.Unlock()
+		if expired {
+			slog.InfoContext(active.ctx, "Atunnel actor certificate renewed; allowing new egress connections",
+				slog.Time("expiresAt", nextExpiry))
+			expired = false
+		}
 		expiresAt = nextExpiry
 		delay = renewAfter(expiresAt)
 	}
@@ -164,7 +176,7 @@ func renewAfter(expiresAt time.Time) time.Duration {
 func retryAfter(expiresAt time.Time) time.Duration {
 	remaining := time.Until(expiresAt)
 	if remaining <= 0 {
-		return 30 * time.Second
+		return 25*time.Second + rand.N(10*time.Second)
 	}
 	return min(30*time.Second, max(time.Second, remaining/10), remaining)
 }

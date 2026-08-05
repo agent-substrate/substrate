@@ -33,22 +33,6 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-type brokerControlClient struct {
-	ateapipb.ControlClient
-	worker *ateapipb.Worker
-	actor  *ateapipb.Actor
-	get    *ateapipb.GetWorkerRequest
-}
-
-func (c *brokerControlClient) GetWorker(_ context.Context, req *ateapipb.GetWorkerRequest, _ ...grpc.CallOption) (*ateapipb.Worker, error) {
-	c.get = req
-	return c.worker, nil
-}
-
-func (c *brokerControlClient) GetActor(context.Context, *ateapipb.GetActorRequest, ...grpc.CallOption) (*ateapipb.Actor, error) {
-	return c.actor, nil
-}
-
 type brokerIdentityClient struct {
 	ateapipb.ActorIdentityClient
 	request *ateapipb.MintCertRequest
@@ -59,46 +43,23 @@ func (c *brokerIdentityClient) MintCert(_ context.Context, req *ateapipb.MintCer
 	return &ateapipb.MintCertResponse{ActorCertificates: [][]byte{{1, 2, 3}}}, nil
 }
 
-func TestCredentialBrokerDerivesActorFromWorkerCertificate(t *testing.T) {
-	control := &brokerControlClient{
-		worker: &ateapipb.Worker{
-			WorkerNamespace: "workers",
-			WorkerPod:       "worker",
-			WorkerPodUid:    "worker-uid",
-			Assignment:      &ateapipb.Assignment{Actor: &ateapipb.ObjectRef{Atespace: "team", Name: "actor"}},
-		},
-		actor: &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Atespace: "team", Name: "actor", Uid: "actor-uid"}},
-	}
+func TestCredentialBrokerForwardsAuthenticatedWorkerIdentity(t *testing.T) {
 	identity := &brokerIdentityClient{}
-	broker := &credentialBroker{control: control, actorIdentityClient: identity}
+	broker := &credentialBroker{actorIdentityClient: identity}
 	csr := []byte{4, 5, 6}
-	resp, err := broker.MintActorCertificate(workerContext(t, "worker-uid"), &ateletpb.MintActorCertificateRequest{CertificateSigningRequest: csr})
+	resp, err := broker.MintActorCertificate(workerContext(t, "worker-uid"), &ateletpb.MintActorCertificateRequest{
+		CertificateSigningRequest: csr,
+		ExpectedActorUid:          "actor-uid",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !proto.Equal(resp, &ateletpb.MintActorCertificateResponse{ActorCertificates: [][]byte{{1, 2, 3}}}) {
 		t.Fatalf("response = %+v", resp)
 	}
-	if want := (&ateapipb.GetWorkerRequest{WorkerNamespace: "workers", WorkerPod: "worker"}); !proto.Equal(control.get, want) {
-		t.Fatalf("GetWorker request = %+v, want %+v", control.get, want)
-	}
-	want := &ateapipb.MintCertRequest{Atespace: "team", ActorName: "actor", ActorUid: "actor-uid", WorkerPodUid: "worker-uid", CertificateSigningRequest: csr, Purpose: ateapipb.ActorCertificatePurpose_ACTOR_CERTIFICATE_PURPOSE_ATUNNEL}
+	want := &ateapipb.MintCertRequest{WorkerNamespace: "workers", WorkerPod: "worker", WorkerPodUid: "worker-uid", ExpectedActorUid: "actor-uid", CertificateSigningRequest: csr, Purpose: ateapipb.ActorCertificatePurpose_ACTOR_CERTIFICATE_PURPOSE_ATUNNEL}
 	if !proto.Equal(identity.request, want) {
 		t.Fatalf("MintCert request = %+v, want %+v", identity.request, want)
-	}
-}
-
-func TestCredentialBrokerRejectsUnknownWorker(t *testing.T) {
-	broker := &credentialBroker{control: &brokerControlClient{}}
-	if _, err := broker.MintActorCertificate(workerContext(t, "unknown-worker"), &ateletpb.MintActorCertificateRequest{}); err == nil {
-		t.Fatal("unknown worker was accepted")
-	}
-}
-
-func TestCredentialBrokerRejectsReplacementWorker(t *testing.T) {
-	broker := &credentialBroker{control: &brokerControlClient{worker: &ateapipb.Worker{WorkerPodUid: "replacement-uid"}}}
-	if _, err := broker.MintActorCertificate(workerContext(t, "old-uid"), &ateletpb.MintActorCertificateRequest{}); err == nil {
-		t.Fatal("replacement worker was accepted")
 	}
 }
 

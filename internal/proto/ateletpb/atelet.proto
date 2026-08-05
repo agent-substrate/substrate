@@ -27,6 +27,10 @@ message MintActorCertificateRequest {
   // DER-encoded PKCS #10 certificate signing request. Atunnel retains the
   // corresponding private key.
   bytes certificate_signing_request = 1;
+
+  // Actor incarnation this activation expects. Ateapi resolves the actor from
+  // the authenticated worker and rejects the request if its UID differs.
+  string expected_actor_uid = 2;
 }
 
 message MintActorCertificateResponse {

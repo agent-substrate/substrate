@@ -90,6 +90,9 @@ type credentialBrokerStub struct {
 }
 
 func (s *credentialBrokerStub) MintActorCertificate(_ context.Context, req *ateletpb.MintActorCertificateRequest) (*ateletpb.MintActorCertificateResponse, error) {
+	if req.GetExpectedActorUid() != "actor-uid" {
+		return nil, status.Error(codes.FailedPrecondition, "unexpected actor UID")
+	}
 	csr, err := x509.ParseCertificateRequest(req.GetCertificateSigningRequest())
 	if err != nil || csr.CheckSignature() != nil {
 		return nil, status.Error(codes.InvalidArgument, "invalid CSR")
@@ -162,6 +165,7 @@ func newTestBrokerCertificateSource(t *testing.T, ateletIdentity *substratex509.
 		SocketPath:           socketPath,
 		CredentialBundlePath: credentialPath,
 		TrustBundlePath:      trustPath,
+		ExpectedActorUID:     "actor-uid",
 	})
 	if err != nil {
 		t.Fatal(err)

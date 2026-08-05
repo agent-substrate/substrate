@@ -320,7 +320,7 @@ type actorEgress struct {
 	expiresAt         time.Time
 }
 
-func (s *AteomService) prepareActorEgress(ctx context.Context, gateway *ateompb.EgressGateway) (*actorEgress, error) {
+func (s *AteomService) prepareActorEgress(ctx context.Context, actorUID string, gateway *ateompb.EgressGateway) (*actorEgress, error) {
 	if gateway == nil {
 		return nil, nil
 	}
@@ -335,6 +335,7 @@ func (s *AteomService) prepareActorEgress(ctx context.Context, gateway *ateompb.
 		SocketPath:           ateompath.CredentialBrokerSocket,
 		CredentialBundlePath: s.workerCredentialBundlePath,
 		TrustBundlePath:      s.podIdentityTrustBundlePath,
+		ExpectedActorUID:     actorUID,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("while configuring actor certificate broker: %w", err)

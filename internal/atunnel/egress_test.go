@@ -147,8 +147,10 @@ func TestEgressRenewsBeforeExpiry(t *testing.T) {
 }
 
 func TestEgressRetriesRenewalAfterExpiry(t *testing.T) {
-	if got := retryAfter(time.Now().Add(-time.Second)); got != 30*time.Second {
-		t.Fatalf("retryAfter(expired) = %v, want 30s", got)
+	for range 100 {
+		if got := retryAfter(time.Now().Add(-time.Second)); got < 25*time.Second || got >= 35*time.Second {
+			t.Fatalf("retryAfter(expired) = %v, want [25s, 35s)", got)
+		}
 	}
 }
 

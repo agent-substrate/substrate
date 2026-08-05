@@ -293,7 +293,7 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 		return fmt.Errorf("ateom-microvm requires %q and %q asset paths", assetKernel, assetImage)
 	}
 	rr := s.resolveRuntime(paths)
-	egress, err := s.prepareActorEgress(ctx, p.egressGateway)
+	egress, err := s.prepareActorEgress(ctx, p.actorUID, p.egressGateway)
 	if err != nil {
 		return err
 	}

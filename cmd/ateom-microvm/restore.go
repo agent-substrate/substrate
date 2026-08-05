@@ -132,7 +132,7 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 	templateNS, templateName := p.templateNS, p.templateName
 
 	rr := s.resolveRuntime(p.assetPaths)
-	egress, err := s.prepareActorEgress(ctx, p.egressGateway)
+	egress, err := s.prepareActorEgress(ctx, p.actorUID, p.egressGateway)
 	if err != nil {
 		return err
 	}

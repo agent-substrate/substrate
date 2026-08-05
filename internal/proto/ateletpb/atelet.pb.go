@@ -205,8 +205,11 @@ type MintActorCertificateRequest struct {
 	// DER-encoded PKCS #10 certificate signing request. Atunnel retains the
 	// corresponding private key.
 	CertificateSigningRequest []byte `protobuf:"bytes,1,opt,name=certificate_signing_request,json=certificateSigningRequest,proto3" json:"certificate_signing_request,omitempty"`
-	unknownFields             protoimpl.UnknownFields
-	sizeCache                 protoimpl.SizeCache
+	// Actor incarnation this activation expects. Ateapi resolves the actor from
+	// the authenticated worker and rejects the request if its UID differs.
+	ExpectedActorUid string `protobuf:"bytes,2,opt,name=expected_actor_uid,json=expectedActorUid,proto3" json:"expected_actor_uid,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *MintActorCertificateRequest) Reset() {
@@ -244,6 +247,13 @@ func (x *MintActorCertificateRequest) GetCertificateSigningRequest() []byte {
 		return x.CertificateSigningRequest
 	}
 	return nil
+}
+
+func (x *MintActorCertificateRequest) GetExpectedActorUid() string {
+	if x != nil {
+		return x.ExpectedActorUid
+	}
+	return ""
 }
 
 type MintActorCertificateResponse struct {
@@ -1717,9 +1727,10 @@ var File_atelet_proto protoreflect.FileDescriptor
 
 const file_atelet_proto_rawDesc = "" +
 	"\n" +
-	"\fatelet.proto\x12\x06atelet\"]\n" +
+	"\fatelet.proto\x12\x06atelet\"\x8b\x01\n" +
 	"\x1bMintActorCertificateRequest\x12>\n" +
-	"\x1bcertificate_signing_request\x18\x01 \x01(\fR\x19certificateSigningRequest\"M\n" +
+	"\x1bcertificate_signing_request\x18\x01 \x01(\fR\x19certificateSigningRequest\x12,\n" +
+	"\x12expected_actor_uid\x18\x02 \x01(\tR\x10expectedActorUid\"M\n" +
 	"\x1cMintActorCertificateResponse\x12-\n" +
 	"\x12actor_certificates\x18\x01 \x03(\fR\x11actorCertificates\"\x9e\x03\n" +
 	"\n" +

@@ -30,47 +30,26 @@ import (
 
 type credentialBroker struct {
 	ateletpb.UnimplementedCredentialBrokerServer
-	// control resolves the authenticated worker Pod to its current assignment.
-	control ateapipb.ControlClient
-	// actorIdentityClient revalidates that assignment and signs the actor certificate.
+	// actorIdentityClient resolves the authenticated worker's current assignment
+	// and signs its actor certificate.
 	actorIdentityClient ateapipb.ActorIdentityClient
 }
 
 func (b *credentialBroker) MintActorCertificate(ctx context.Context, req *ateletpb.MintActorCertificateRequest) (*ateletpb.MintActorCertificateResponse, error) {
 	// TODO: Before release, require the egress PEP to reject actor certificates
 	// whose ActorIdentity purpose is not atunnel.
-	// The request deliberately carries no actor identity. The authenticated Pod
-	// identity is the only input used to select a worker and its current assignment.
+	// Worker identity comes only from the mTLS certificate. The expected actor
+	// UID is a stale-activation guard; ateapi derives the actor authoritatively.
 	workerIdentity, err := authenticatedWorkerIdentity(ctx)
 	if err != nil {
 		return nil, err
 	}
-	assigned, err := b.control.GetWorker(ctx, &ateapipb.GetWorkerRequest{
-		WorkerNamespace: workerIdentity.Namespace,
-		WorkerPod:       workerIdentity.PodName,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("get worker: %w", err)
-	}
-	if assigned.GetWorkerPodUid() != workerIdentity.PodUID {
-		return nil, status.Error(codes.PermissionDenied, "worker Pod UID does not match")
-	}
-	actorRef := assigned.GetAssignment().GetActor()
-	if actorRef.GetAtespace() == "" || actorRef.GetName() == "" {
-		return nil, status.Error(codes.PermissionDenied, "worker has no actor assignment")
-	}
-	actor, err := b.control.GetActor(ctx, &ateapipb.GetActorRequest{Actor: actorRef})
-	if err != nil {
-		return nil, fmt.Errorf("get assigned actor: %w", err)
-	}
-	// MintCert revalidates this assignment in ateapi. That second check closes
-	// the race where the worker is reassigned after GetWorker returns.
 	resp, err := b.actorIdentityClient.MintCert(ctx, &ateapipb.MintCertRequest{
-		Atespace:                  actor.GetMetadata().GetAtespace(),
-		ActorName:                 actor.GetMetadata().GetName(),
-		ActorUid:                  actor.GetMetadata().GetUid(),
-		CertificateSigningRequest: req.GetCertificateSigningRequest(),
+		WorkerNamespace:           workerIdentity.Namespace,
+		WorkerPod:                 workerIdentity.PodName,
 		WorkerPodUid:              workerIdentity.PodUID,
+		ExpectedActorUid:          req.GetExpectedActorUid(),
+		CertificateSigningRequest: req.GetCertificateSigningRequest(),
 		Purpose:                   ateapipb.ActorCertificatePurpose_ACTOR_CERTIFICATE_PURPOSE_ATUNNEL,
 	})
 	if err != nil {

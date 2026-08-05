@@ -183,7 +183,7 @@ func main() {
 
 	jwtIssuerDiscoveryClient := buildK8sServiceAccountIssuerDiscoveryClient(ctx, *clientJWTCAFile, *clientJWTIssuer)
 
-	actorIdentitySrv := actoridentity.New(*clientJWTIssuer, *clientJWTAudience, *actorIDJWTPoolFile, *actorIDCAPoolFile, *podIdentityCACerts, jwtIssuerDiscoveryClient, redisPersistence)
+	actorIdentitySrv := actoridentity.New(*clientJWTIssuer, *clientJWTAudience, *actorIDJWTPoolFile, *actorIDCAPoolFile, *podIdentityCACerts, jwtIssuerDiscoveryClient, redisPersistence, workerCache)
 	debugSrv := debugapi.NewService(redisPersistence)
 
 	lisCfg := &net.ListenConfig{}
