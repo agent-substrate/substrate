@@ -126,10 +126,10 @@ type Store struct {
 	// over the same candidates for no benefit).
 	evictMu sync.Mutex
 
-	// hitMu closes the last hit-vs-evict window: the cache-hit path holds it
-	// shared across its record read, layer stats, and last-use touch, and
-	// eviction holds it exclusive across each victim's final veto re-check
-	// and record removal. Either the hit's touch lands first (the re-check
+	// hitMu closes the last hit-vs-evict window: the cache-hit path
+	// (cachedImageHit) holds it shared across its record read, layer stats,
+	// and last-use touch, and eviction (removeStaleRecord) holds it
+	// exclusive across each victim's final veto re-check and record removal. Either the hit's touch lands first (the re-check
 	// sees a fresh mtime and skips the image, layers included) or the
 	// removal lands first (the hit sees no record and falls into the pull
 	// path, which is fully serialized by the layer singleflight). Uncontended
@@ -321,16 +321,7 @@ func (s *Store) EnsureImage(ctx context.Context, ref string) (*Image, error) {
 		digest = desc.Digest
 	}
 
-	s.hitMu.RLock()
-	img, err := s.cachedImage(digest)
-	if err == nil && img != nil {
-		// Record last-use for eviction's LRU ordering. Refreshing the mtime
-		// also renews the min-age veto, so an image in active use cannot age
-		// into eviction between this stat and the ateom's mount (see hitMu
-		// for why this ordering is airtight, not just probabilistic).
-		s.touchRecord(digest)
-	}
-	s.hitMu.RUnlock()
+	img, err := s.cachedImageHit(digest)
 	if err != nil {
 		return nil, err
 	}
@@ -351,6 +342,22 @@ func (s *Store) EnsureImage(ctx context.Context, ref string) (*Image, error) {
 		return nil, err
 	}
 	return v.(*Image), nil
+}
+
+// cachedImageHit is the hit side of the hitMu contract: it verifies the
+// cached image and records last-use for eviction's LRU ordering, atomic
+// with respect to eviction's record removal (removeStaleRecord holds
+// hitMu exclusive). Refreshing the mtime also renews the min-age veto, so
+// an image in active use cannot age into eviction between this stat and
+// the ateom's mount.
+func (s *Store) cachedImageHit(digest v1.Hash) (*Image, error) {
+	s.hitMu.RLock()
+	defer s.hitMu.RUnlock()
+	img, err := s.cachedImage(digest)
+	if err == nil && img != nil {
+		s.touchRecord(digest)
+	}
+	return img, err
 }
 
 // cachedImage returns the cached image for digest, or nil if the record or
