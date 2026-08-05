@@ -86,17 +86,6 @@ type WorkerPoolSpec struct {
 	// SandboxClass is used.
 	// +optional
 	SandboxConfigName string `json:"sandboxConfigName,omitempty"`
-
-	// TerminationGracePeriodSeconds is the termination grace period applied to
-	// this pool's worker pods. On eviction, ateom traps SIGTERM and forwards it
-	// to the actor so it can save state and exit cleanly before the kubelet
-	// sends SIGKILL. Tune this to the maximum time your actors need to shut
-	// down gracefully. Defaults to 300 (5 minutes).
-	//
-	// +optional
-	// +kubebuilder:validation:Minimum=1
-	// +kubebuilder:default=300
-	TerminationGracePeriodSeconds *int32 `json:"terminationGracePeriodSeconds,omitempty"`
 }
 
 type WorkerPoolStatus struct {
