@@ -65,10 +65,17 @@ func crashActor(ctx context.Context, st store.Interface, actorRef resources.Acto
 		reason = ateattr.ReasonUnknown
 	}
 
-	var errCollected []error
+	// Release the worker before moving the actor to the terminal CRASHED state.
+	// If the release fails we must not clear the actor's worker assignment or
+	// mark it CRASHED: doing so would strand the still-assigned worker with no
+	// actor referencing it, so nothing would ever retry the release and the
+	// worker slot would be consumed until its pod dies. Returning the error
+	// instead leaves the actor (and its assignment) intact so the caller retries
+	// crashActor, which re-attempts the release. releaseWorker is idempotent, so
+	// a retry after a release that already succeeded is a no-op.
 	sandboxClass, err := releaseWorker(ctx, st, actor)
 	if err != nil {
-		errCollected = append(errCollected, err)
+		return fmt.Errorf("while releasing worker to crash actor: %w", err)
 	}
 
 	// Snapshot crash attributes before pod and pool pointers are cleared below;
@@ -85,8 +92,7 @@ func crashActor(ctx context.Context, st store.Interface, actorRef resources.Acto
 		return nil
 	}))
 	if err != nil {
-		errCollected = append(errCollected, fmt.Errorf("while marking actor crashed: %w", err))
-		return errors.Join(errCollected...)
+		return fmt.Errorf("while marking actor crashed: %w", err)
 	}
 
 	// Increment metric only after a successful UpdateActor, and only if the actor was not already crashed.
@@ -94,7 +100,7 @@ func crashActor(ctx context.Context, st store.Interface, actorRef resources.Acto
 		recordActorCrash(ctx, crashAttrs)
 	}
 
-	return errors.Join(errCollected...)
+	return nil
 }
 
 // releaseWorker clears the worker's assignment if it still points at the given
