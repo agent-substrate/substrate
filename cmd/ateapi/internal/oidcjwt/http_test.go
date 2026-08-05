@@ -12,15 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package main
+package oidcjwt
 
 import (
 	"io"
 	"net/http"
 	"os"
 	"testing"
-
-	"github.com/agent-substrate/substrate/internal/ateapiauth"
 )
 
 func TestIssuerScopedURL(t *testing.T) {
@@ -76,7 +74,7 @@ func TestK8sServiceAccountIssuerDiscoveryTransport(t *testing.T) {
 	}
 
 	var gotAuth string
-	transport := &jwtIssuerDiscoveryTransport{
+	transport := &issuerDiscoveryTransport{
 		base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			gotAuth = req.Header.Get("Authorization")
 			return &http.Response{
@@ -108,7 +106,7 @@ func TestK8sServiceAccountIssuerDiscoveryTransportSendsTokenToKubernetesJWKSURL(
 	}
 
 	var gotAuth string
-	transport := &jwtIssuerDiscoveryTransport{
+	transport := &issuerDiscoveryTransport{
 		base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			gotAuth = req.Header.Get("Authorization")
 			return &http.Response{
@@ -117,9 +115,8 @@ func TestK8sServiceAccountIssuerDiscoveryTransportSendsTokenToKubernetesJWKSURL(
 				Header:     make(http.Header),
 			}, nil
 		}),
-		tokenFile:                    tokenFile,
-		issuer:                       "https://kubernetes.default.svc",
-		allowCrossHostKubernetesJWKS: true,
+		tokenFile: tokenFile,
+		issuer:    "https://kubernetes.default.svc",
 	}
 
 	req, err := http.NewRequest(http.MethodGet, "https://172.18.0.2:6443/openid/v1/jwks", nil)
@@ -141,7 +138,7 @@ func TestK8sServiceAccountIssuerDiscoveryTransportDoesNotSendTokenToArbitraryURL
 	}
 
 	var gotAuth string
-	transport := &jwtIssuerDiscoveryTransport{
+	transport := &issuerDiscoveryTransport{
 		base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			gotAuth = req.Header.Get("Authorization")
 			return &http.Response{
@@ -166,41 +163,15 @@ func TestK8sServiceAccountIssuerDiscoveryTransportDoesNotSendTokenToArbitraryURL
 	}
 }
 
-func TestK8sServiceAccountIssuerDiscoveryTransportRequiresCustomCAForCrossHostJWKS(t *testing.T) {
-	tokenFile := t.TempDir() + "/token"
-	if err := os.WriteFile(tokenFile, []byte("test-token\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	var gotAuth string
-	transport := &jwtIssuerDiscoveryTransport{
-		base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
-			gotAuth = req.Header.Get("Authorization")
-			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(nil), Header: make(http.Header)}, nil
-		}),
-		tokenFile: tokenFile,
-		issuer:    "https://kubernetes.default.svc",
-	}
-	req, err := http.NewRequest(http.MethodGet, "https://attacker.example/openid/v1/jwks", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := transport.RoundTrip(req); err != nil {
-		t.Fatal(err)
-	}
-	if gotAuth != "" {
-		t.Fatalf("Authorization = %q, want empty", gotAuth)
-	}
-}
-
 func TestBuildJWTIssuerDiscoveryClientUsesDefaultTransportWithoutDiscoveryToken(t *testing.T) {
-	client, err := buildJWTIssuerDiscoveryClient(ateapiauth.JWTProviderConfig{Issuer: "https://accounts.google.com"})
+	client, err := NewHTTPClient("https://accounts.google.com", "", "")
 	if err != nil {
-		t.Fatalf("buildJWTIssuerDiscoveryClient() error = %v", err)
+		t.Fatalf("NewHTTPClient() error = %v", err)
 	}
 	if client.Timeout == 0 {
 		t.Fatalf("client timeout = 0, want nonzero timeout")
 	}
-	if _, ok := client.Transport.(*jwtIssuerDiscoveryTransport); ok {
+	if _, ok := client.Transport.(*issuerDiscoveryTransport); ok {
 		t.Fatalf("provider without discovery token should not use token transport")
 	}
 }

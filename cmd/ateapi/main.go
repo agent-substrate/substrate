@@ -21,18 +21,15 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
-	"net/http"
-	"net/url"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/actoridentity"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/controlapi"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/debugapi"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/k8sjwt"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/oidcjwt"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/ateredis"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
 	"github.com/agent-substrate/substrate/internal/ateapiauth"
@@ -441,11 +438,11 @@ func buildJWTProviders(ctx context.Context, cfg *ateapiauth.AuthenticationConfig
 	var serverCfg ateapiauth.ServerConfig
 	var actorIdentityIssuer string
 	for _, providerCfg := range cfg.JWTProviders {
-		httpClient, err := buildJWTIssuerDiscoveryClient(providerCfg)
+		httpClient, err := oidcjwt.NewHTTPClient(providerCfg.Issuer, providerCfg.CertificateAuthorityFile, providerCfg.DiscoveryTokenFile)
 		if err != nil {
 			return ateapiauth.ServerConfig{}, "", fmt.Errorf("initialize JWT provider %q: %w", providerCfg.Name, err)
 		}
-		verifier := k8sjwt.NewVerifier(providerCfg.Issuer, providerCfg.Audiences, httpClient)
+		verifier := oidcjwt.NewVerifier(providerCfg.Issuer, providerCfg.Audiences, httpClient)
 		serverCfg.JWTProviders = append(serverCfg.JWTProviders, ateapiauth.JWTProvider{
 			Name:   providerCfg.Name,
 			Issuer: providerCfg.Issuer,
@@ -463,90 +460,4 @@ func buildJWTProviders(ctx context.Context, cfg *ateapiauth.AuthenticationConfig
 		slog.InfoContext(ctx, "Configured JWT provider", slog.String("name", providerCfg.Name), slog.String("issuer", providerCfg.Issuer))
 	}
 	return serverCfg, actorIdentityIssuer, nil
-}
-
-func buildJWTIssuerDiscoveryClient(cfg ateapiauth.JWTProviderConfig) (*http.Client, error) {
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	if cfg.CertificateAuthorityFile != "" {
-		ca, err := os.ReadFile(cfg.CertificateAuthorityFile)
-		if err != nil {
-			return nil, fmt.Errorf("read certificate authority file: %w", err)
-		}
-		pool := x509.NewCertPool()
-		if !pool.AppendCertsFromPEM(ca) {
-			return nil, fmt.Errorf("certificate authority file %q contains no certificates", cfg.CertificateAuthorityFile)
-		}
-		transport.TLSClientConfig = &tls.Config{RootCAs: pool}
-	}
-	var roundTripper http.RoundTripper = transport
-	if cfg.DiscoveryTokenFile != "" {
-		roundTripper = &jwtIssuerDiscoveryTransport{
-			base:                         transport,
-			tokenFile:                    cfg.DiscoveryTokenFile,
-			issuer:                       cfg.Issuer,
-			allowCrossHostKubernetesJWKS: cfg.CertificateAuthorityFile != "",
-		}
-	}
-	return &http.Client{Timeout: 10 * time.Second, Transport: roundTripper}, nil
-}
-
-// jwtIssuerDiscoveryTransport injects a bearer token only when fetching OIDC
-// documents within the configured issuer.
-// Kubernetes' discovered jwks_uri can point at the API server's routable host
-// instead of the issuer host (for example, Kind advertises the node IP), so the
-// standard Kubernetes JWKS path is also allowed.
-// Reads the token file fresh on each request so token rotation is handled
-// automatically.
-type jwtIssuerDiscoveryTransport struct {
-	base                         http.RoundTripper
-	tokenFile                    string
-	issuer                       string
-	allowCrossHostKubernetesJWKS bool
-}
-
-func (t *jwtIssuerDiscoveryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	if issuerScopedURL(req.URL.String(), t.issuer) || (t.allowCrossHostKubernetesJWKS && isKubernetesJWKSURL(req.URL.String())) {
-		token, err := os.ReadFile(t.tokenFile)
-		if err != nil {
-			return nil, fmt.Errorf("read discovery token file: %w", err)
-		}
-		trimmed := strings.TrimSpace(string(token))
-		if trimmed == "" {
-			return nil, fmt.Errorf("discovery token file %q is empty", t.tokenFile)
-		}
-		req = req.Clone(req.Context())
-		req.Header.Set("Authorization", "Bearer "+trimmed)
-	}
-	return t.base.RoundTrip(req)
-}
-
-func issuerScopedURL(rawURL, issuer string) bool {
-	u, err := url.Parse(rawURL)
-	if err != nil {
-		return false
-	}
-	issuerURL, err := url.Parse(issuer)
-	if err != nil {
-		return false
-	}
-	if !strings.EqualFold(u.Scheme, issuerURL.Scheme) || !strings.EqualFold(u.Host, issuerURL.Host) {
-		return false
-	}
-	issuerPath := strings.TrimRight(issuerURL.EscapedPath(), "/")
-	if issuerPath == "" {
-		issuerPath = "/"
-	}
-	requestPath := u.EscapedPath()
-	if issuerPath == "/" {
-		return strings.HasPrefix(requestPath, "/")
-	}
-	return requestPath == issuerPath || strings.HasPrefix(requestPath, issuerPath+"/")
-}
-
-func isKubernetesJWKSURL(rawURL string) bool {
-	u, err := url.Parse(rawURL)
-	if err != nil {
-		return false
-	}
-	return strings.EqualFold(u.Scheme, "https") && u.EscapedPath() == "/openid/v1/jwks"
 }

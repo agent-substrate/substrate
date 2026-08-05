@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package k8sjwt verifies OIDC JWTs, including Kubernetes ServiceAccount claims.
-package k8sjwt
+// Package oidcjwt verifies JWTs using OIDC discovery.
+package oidcjwt
 
 import (
 	"context"

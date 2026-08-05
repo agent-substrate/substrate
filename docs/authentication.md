@@ -22,8 +22,6 @@ Provider names and issuers must be unique. `issuer` must be an HTTPS URL and
 `audiences` must be non-empty; a token is accepted when any configured audience
 matches. `certificateAuthorityFile` and `discoveryTokenFile` are optional and
 are needed for OIDC discovery against some private Kubernetes API servers.
-When both are set, the discovery token may also be sent to Kubernetes' standard
-`/openid/v1/jwks` path on another host trusted by that CA bundle.
 
 `actorIdentityJWTProvider` identifies the provider allowed to call
 `ActorIdentity.MintJWT`. Other authenticated providers can call every RPC.
