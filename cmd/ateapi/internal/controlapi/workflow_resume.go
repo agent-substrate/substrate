@@ -490,13 +490,14 @@ func (s *AttachVolumesStep) Execute(ctx context.Context, input *ResumeInput, sta
 func (s *AttachVolumesStep) RetryBackoff() *wait.Backoff { return nil }
 
 type CallAteletRestoreStep struct {
-	store               store.Interface
-	dialer              *AteletDialer
-	kubeClient          kubernetes.Interface
-	secretCache         *envSecretCache
-	workerPoolLister    listersv1alpha1.WorkerPoolLister
-	sandboxConfigLister listersv1alpha1.SandboxConfigLister
-	scheduler           scheduling.Scheduler
+	store                store.Interface
+	dialer               *AteletDialer
+	kubeClient           kubernetes.Interface
+	secretCache          *envSecretCache
+	workerPoolLister     listersv1alpha1.WorkerPoolLister
+	sandboxConfigLister  listersv1alpha1.SandboxConfigLister
+	scheduler            scheduling.Scheduler
+	egressGatewayAddress string
 }
 
 func (s *CallAteletRestoreStep) Name() string { return "CallAteletRestore" }
@@ -555,6 +556,7 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 	if err != nil {
 		return err
 	}
+	egressGateway := s.egressGateway()
 
 	if local := state.Actor.GetLocalSnapshotInfo(); local != nil {
 		slog.InfoContext(ctx, "Actor has snapshot; Restoring from snapshot")
@@ -568,6 +570,7 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 			ActorTemplateName:      state.Actor.GetActorTemplateName(),
 			Spec:                   workloadSpec,
 			ActorUid:               state.Actor.GetMetadata().Uid,
+			EgressGateway:          egressGateway,
 		}
 		req.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL
 		req.Config = &ateletpb.RestoreRequest_LocalConfig{
@@ -622,6 +625,7 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 			// Empty unless this is a Golden data resume.
 			GoldenSnapshotUriPrefix: state.GoldenSnapshotLocation,
 			ActorUid:                state.Actor.GetMetadata().Uid,
+			EgressGateway:           egressGateway,
 		}
 		_, err = client.Restore(ctx, req)
 		return maybeCrashActor(ctx, s.store, input.ActorRef, err, "while restoring durable snapshot", ateattr.OperationResume)
@@ -647,6 +651,7 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 			SandboxAssets:          sandboxAssets,
 			Spec:                   workloadSpec,
 			ActorUid:               state.Actor.GetMetadata().Uid,
+			EgressGateway:          egressGateway,
 		}
 		_, err = client.Run(ctx, req)
 		return maybeCrashActor(ctx, s.store, input.ActorRef, err, "while creating workload from spec", ateattr.OperationResume)
@@ -655,6 +660,13 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 }
 
 func (s *CallAteletRestoreStep) RetryBackoff() *wait.Backoff { return nil }
+
+func (s *CallAteletRestoreStep) egressGateway() *ateletpb.EgressGateway {
+	if s.egressGatewayAddress == "" {
+		return nil
+	}
+	return &ateletpb.EgressGateway{Address: s.egressGatewayAddress}
+}
 
 type FinalizeRunningStep struct {
 	store store.Interface

@@ -36,6 +36,9 @@ func TestCache_NotReadyBeforeStart(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error from Workers before Start, got nil")
 	}
+	if _, err := c.Worker("ns", "pod"); err == nil {
+		t.Fatal("expected error from Worker before Start, got nil")
+	}
 }
 
 func TestCache_SyncsOnStart(t *testing.T) {
@@ -55,6 +58,24 @@ func TestCache_SyncsOnStart(t *testing.T) {
 	}
 	if diff := cmp.Diff([]*ateapipb.Worker{w1, w2}, got, protocmp.Transform(), workerSortOpt); diff != "" {
 		t.Errorf("workers mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestCache_Worker(t *testing.T) {
+	want := makeWorker("ns", "pod", 1)
+	c := workercache.New(newFakeStore(want), time.Hour)
+	if err := c.Start(t.Context()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	got, err := c.Worker("ns", "pod")
+	if err != nil {
+		t.Fatalf("Worker: %v", err)
+	}
+	if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
+		t.Errorf("worker mismatch (-want +got):\n%s", diff)
+	}
+	if _, err := c.Worker("ns", "missing"); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("missing Worker error = %v, want store.ErrNotFound", err)
 	}
 }
 

@@ -690,6 +690,17 @@ func TestBuildAteomWorkloadSpecForwardsDurableDirMounts(t *testing.T) {
 	}
 }
 
+func TestToAteomEgressGateway(t *testing.T) {
+	if got := toAteomEgressGateway(nil); got != nil {
+		t.Fatalf("toAteomEgressGateway(nil) = %v, want nil", got)
+	}
+	want := &ateompb.EgressGateway{Address: "egress.example:443"}
+	got := toAteomEgressGateway(&ateletpb.EgressGateway{Address: want.Address})
+	if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
+		t.Errorf("toAteomEgressGateway mismatch (-want +got):\n%s", diff)
+	}
+}
+
 func TestIsTerminalFileErr(t *testing.T) {
 	tests := []struct {
 		name string

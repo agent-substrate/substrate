@@ -34,6 +34,7 @@ import (
 
 	"cloud.google.com/go/storage"
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/ategcs"
+	"github.com/agent-substrate/substrate/internal/ateapiauth"
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/ateerrors"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
@@ -44,7 +45,9 @@ import (
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/serverboot"
+	"github.com/agent-substrate/substrate/internal/substratex509"
 	"github.com/agent-substrate/substrate/internal/version"
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/google/go-containerregistry/pkg/authn"
@@ -73,6 +76,9 @@ var (
 
 	grpcServerCredBundle = pflag.String("grpc-server-cred-bundle", "/run/podidentity.podcert.ate.dev/credential-bundle.pem", "Credential bundle atelet presents as its gRPC serving certificate.")
 	clientCACerts        = pflag.String("client-ca-certs", "/run/podidentity.podcert.ate.dev/trust-bundle.pem", "CA bundle used to verify gRPC client certificates.")
+	ateapiAddress        = pflag.String("ateapi-address", "dns:///api.ate-system.svc:443", "ateapi gRPC target used by the credential broker.")
+	ateapiCAFile         = pflag.String("ateapi-ca-file", "/run/servicedns.podcert.ate.dev/trust-bundle.pem", "CA bundle used to verify ateapi.")
+	ateapiServerName     = pflag.String("ateapi-server-name", "api.ate-system.svc", "DNS name expected on the ateapi certificate.")
 
 	gcpAuthForImagePulls         = pflag.Bool("gcp-auth-for-image-pulls", true, "Use GCP application default credentials mechanism.")
 	localhostRegistryReplacement = pflag.String("localhost-registry-replacement", "", "The replacement registry endpoint for localhost and/or loopback IP addresses, useful for local development. for example kind-registry:5000")
@@ -206,6 +212,19 @@ func main() {
 		imageCache,
 		instruments,
 	)
+	dialOpts, err := ateapiauth.DialOptions(ateapiauth.ClientConfig{
+		CAFile:           *ateapiCAFile,
+		ServerName:       *ateapiServerName,
+		ClientCredBundle: *grpcServerCredBundle,
+	})
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to build ateapi client credentials", err)
+	}
+	ateapiConn, err := grpc.NewClient(*ateapiAddress, dialOpts...)
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to create ateapi client", err)
+	}
+	defer ateapiConn.Close()
 
 	lis, err := net.Listen("tcp", ":"+strconv.Itoa(*port))
 	if err != nil {
@@ -216,6 +235,40 @@ func main() {
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to build server TLS config", err)
 	}
+	ateletCert, err := credbundle.Parse(*grpcServerCredBundle)
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to load atelet Pod identity", err)
+	}
+	ateletIdentity, err := substratex509.PodIdentityFromCertificate(ateletCert.Leaf)
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to load atelet Pod identity", err)
+	}
+	if ateletIdentity == nil {
+		serverboot.Fatal(ctx, "Failed to load atelet Pod identity", fmt.Errorf("credential bundle has no Pod identity"))
+	}
+	brokerTLS := tlsCfg.Clone()
+	brokerTLS.VerifyConnection = verifyClientOnSameNode(ateletIdentity)
+	if err := os.Remove(ateompath.CredentialBrokerSocket); err != nil && !errors.Is(err, os.ErrNotExist) {
+		serverboot.Fatal(ctx, "Failed to remove stale credential broker socket", err)
+	}
+	brokerLis, err := net.Listen("unix", ateompath.CredentialBrokerSocket)
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to listen for credential broker", err)
+	}
+	defer brokerLis.Close()
+	if err := os.Chmod(ateompath.CredentialBrokerSocket, 0o600); err != nil {
+		serverboot.Fatal(ctx, "Failed to restrict credential broker socket", err)
+	}
+	brokerServer := grpc.NewServer(grpc.Creds(credentials.NewTLS(brokerTLS)))
+	ateletpb.RegisterCredentialBrokerServer(brokerServer, &credentialBroker{
+		control:             ateapipb.NewControlClient(ateapiConn),
+		actorIdentityClient: ateapipb.NewActorIdentityClient(ateapiConn),
+	})
+	go func() {
+		if err := brokerServer.Serve(brokerLis); err != nil {
+			serverboot.Fatal(ctx, "Failed to serve credential broker", err)
+		}
+	}()
 
 	svr := grpc.NewServer(
 		grpc.Creds(credentials.NewTLS(tlsCfg)),
@@ -355,6 +408,7 @@ func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *
 		RuntimeAssetPaths:      assetPaths,
 		Spec:                   buildAteomWorkloadSpec(req.GetSpec()),
 		ActorUid:               actorUID,
+		EgressGateway:          toAteomEgressGateway(req.GetEgressGateway()),
 	}); err != nil {
 		return nil, fmt.Errorf("while calling ateom.RunWorkload: %w", err)
 	}
@@ -829,6 +883,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		Spec:                   buildAteomWorkloadSpec(req.GetSpec()),
 		Scope:                  toAteomSnapshotScope(req.GetScope()),
 		ActorUid:               req.GetActorUid(),
+		EgressGateway:          toAteomEgressGateway(req.GetEgressGateway()),
 		// Informational: for DATA_ON_GOLDEN the golden snapshot's files are
 		// already staged into the restore dir by the combined download above;
 		// ateom restores from the shared dir and never fetches this URI.
@@ -1094,6 +1149,13 @@ func buildAteomWorkloadSpec(spec *ateletpb.WorkloadSpec) *ateompb.WorkloadSpec {
 		})
 	}
 	return out
+}
+
+func toAteomEgressGateway(gateway *ateletpb.EgressGateway) *ateompb.EgressGateway {
+	if gateway == nil {
+		return nil
+	}
+	return &ateompb.EgressGateway{Address: gateway.GetAddress()}
 }
 
 // toAteomReadyz converts an ateletpb readyz probe into the ateompb wire

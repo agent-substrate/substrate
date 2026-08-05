@@ -46,6 +46,7 @@ const (
 	Control_UpdateActorSnapshotTag_FullMethodName = "/ateapi.Control/UpdateActorSnapshotTag"
 	Control_DeleteActorSnapshotTag_FullMethodName = "/ateapi.Control/DeleteActorSnapshotTag"
 	Control_ListWorkers_FullMethodName            = "/ateapi.Control/ListWorkers"
+	Control_GetWorker_FullMethodName              = "/ateapi.Control/GetWorker"
 	Control_ListActors_FullMethodName             = "/ateapi.Control/ListActors"
 	Control_CreateAtespace_FullMethodName         = "/ateapi.Control/CreateAtespace"
 	Control_GetAtespace_FullMethodName            = "/ateapi.Control/GetAtespace"
@@ -86,6 +87,8 @@ type ControlClient interface {
 	DeleteActorSnapshotTag(ctx context.Context, in *DeleteActorSnapshotTagRequest, opts ...grpc.CallOption) (*ActorSnapshotTag, error)
 	// List Workers.
 	ListWorkers(ctx context.Context, in *ListWorkersRequest, opts ...grpc.CallOption) (*ListWorkersResponse, error)
+	// Get a Worker by its Kubernetes Pod identity.
+	GetWorker(ctx context.Context, in *GetWorkerRequest, opts ...grpc.CallOption) (*Worker, error)
 	// List Actors.
 	ListActors(ctx context.Context, in *ListActorsRequest, opts ...grpc.CallOption) (*ListActorsResponse, error)
 	// Create a new Atespace. Substrate-native, stored in Redis.
@@ -237,6 +240,16 @@ func (c *controlClient) ListWorkers(ctx context.Context, in *ListWorkersRequest,
 	return out, nil
 }
 
+func (c *controlClient) GetWorker(ctx context.Context, in *GetWorkerRequest, opts ...grpc.CallOption) (*Worker, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(Worker)
+	err := c.cc.Invoke(ctx, Control_GetWorker_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *controlClient) ListActors(ctx context.Context, in *ListActorsRequest, opts ...grpc.CallOption) (*ListActorsResponse, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ListActorsResponse)
@@ -320,6 +333,8 @@ type ControlServer interface {
 	DeleteActorSnapshotTag(context.Context, *DeleteActorSnapshotTagRequest) (*ActorSnapshotTag, error)
 	// List Workers.
 	ListWorkers(context.Context, *ListWorkersRequest) (*ListWorkersResponse, error)
+	// Get a Worker by its Kubernetes Pod identity.
+	GetWorker(context.Context, *GetWorkerRequest) (*Worker, error)
 	// List Actors.
 	ListActors(context.Context, *ListActorsRequest) (*ListActorsResponse, error)
 	// Create a new Atespace. Substrate-native, stored in Redis.
@@ -379,6 +394,9 @@ func (UnimplementedControlServer) DeleteActorSnapshotTag(context.Context, *Delet
 }
 func (UnimplementedControlServer) ListWorkers(context.Context, *ListWorkersRequest) (*ListWorkersResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListWorkers not implemented")
+}
+func (UnimplementedControlServer) GetWorker(context.Context, *GetWorkerRequest) (*Worker, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetWorker not implemented")
 }
 func (UnimplementedControlServer) ListActors(context.Context, *ListActorsRequest) (*ListActorsResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ListActors not implemented")
@@ -650,6 +668,24 @@ func _Control_ListWorkers_Handler(srv interface{}, ctx context.Context, dec func
 	return interceptor(ctx, in, info, handler)
 }
 
+func _Control_GetWorker_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetWorkerRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(ControlServer).GetWorker(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: Control_GetWorker_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(ControlServer).GetWorker(ctx, req.(*GetWorkerRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _Control_ListActors_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ListActorsRequest)
 	if err := dec(in); err != nil {
@@ -800,6 +836,10 @@ var Control_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _Control_ListWorkers_Handler,
 		},
 		{
+			MethodName: "GetWorker",
+			Handler:    _Control_GetWorker_Handler,
+		},
+		{
 			MethodName: "ListActors",
 			Handler:    _Control_ListActors_Handler,
 		},
@@ -945,20 +985,10 @@ const (
 //
 // ActorIdentity allows substrate workloads to exchange their
 // infrastructure-level credentials (k8s service account token, etc.) for a
-// substrate actor-level credential.  A given substrate actor might migrate
+// substrate actor-level credential. A given substrate actor might migrate
 // between many different physical workers over the course of its lifecycle,
 // whereas the actor credential's identity will be stable for the life of the
 // actor.
-//
-// This service requires authentication. You can authenticate with a Kubernetes
-// service account token in an `Authorization: Bearer` header, or you can
-// authenticate with a Kubernetes service account certificate as an mTLS
-// certificate. (Kubernetes service account certificates do not currently exist
-// upstream, but we will provide a polyfill based on Pod Certificates).
-//
-// The broker will check that the service credentials you authenticated with
-// belong to a Pod that is currently mapped to the requested actor in the
-// actor database.
 type ActorIdentityClient interface {
 	// Request an Actor Identity JWT.
 	//
@@ -1014,20 +1044,10 @@ func (c *actorIdentityClient) MintCert(ctx context.Context, in *MintCertRequest,
 //
 // ActorIdentity allows substrate workloads to exchange their
 // infrastructure-level credentials (k8s service account token, etc.) for a
-// substrate actor-level credential.  A given substrate actor might migrate
+// substrate actor-level credential. A given substrate actor might migrate
 // between many different physical workers over the course of its lifecycle,
 // whereas the actor credential's identity will be stable for the life of the
 // actor.
-//
-// This service requires authentication. You can authenticate with a Kubernetes
-// service account token in an `Authorization: Bearer` header, or you can
-// authenticate with a Kubernetes service account certificate as an mTLS
-// certificate. (Kubernetes service account certificates do not currently exist
-// upstream, but we will provide a polyfill based on Pod Certificates).
-//
-// The broker will check that the service credentials you authenticated with
-// belong to a Pod that is currently mapped to the requested actor in the
-// actor database.
 type ActorIdentityServer interface {
 	// Request an Actor Identity JWT.
 	//

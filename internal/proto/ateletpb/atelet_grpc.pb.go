@@ -33,6 +33,112 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
+	CredentialBroker_MintActorCertificate_FullMethodName = "/atelet.CredentialBroker/MintActorCertificate"
+)
+
+// CredentialBrokerClient is the client API for CredentialBroker service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// CredentialBroker gives an authenticated worker its current actor credential.
+type CredentialBrokerClient interface {
+	MintActorCertificate(ctx context.Context, in *MintActorCertificateRequest, opts ...grpc.CallOption) (*MintActorCertificateResponse, error)
+}
+
+type credentialBrokerClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewCredentialBrokerClient(cc grpc.ClientConnInterface) CredentialBrokerClient {
+	return &credentialBrokerClient{cc}
+}
+
+func (c *credentialBrokerClient) MintActorCertificate(ctx context.Context, in *MintActorCertificateRequest, opts ...grpc.CallOption) (*MintActorCertificateResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(MintActorCertificateResponse)
+	err := c.cc.Invoke(ctx, CredentialBroker_MintActorCertificate_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// CredentialBrokerServer is the server API for CredentialBroker service.
+// All implementations must embed UnimplementedCredentialBrokerServer
+// for forward compatibility.
+//
+// CredentialBroker gives an authenticated worker its current actor credential.
+type CredentialBrokerServer interface {
+	MintActorCertificate(context.Context, *MintActorCertificateRequest) (*MintActorCertificateResponse, error)
+	mustEmbedUnimplementedCredentialBrokerServer()
+}
+
+// UnimplementedCredentialBrokerServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedCredentialBrokerServer struct{}
+
+func (UnimplementedCredentialBrokerServer) MintActorCertificate(context.Context, *MintActorCertificateRequest) (*MintActorCertificateResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method MintActorCertificate not implemented")
+}
+func (UnimplementedCredentialBrokerServer) mustEmbedUnimplementedCredentialBrokerServer() {}
+func (UnimplementedCredentialBrokerServer) testEmbeddedByValue()                          {}
+
+// UnsafeCredentialBrokerServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to CredentialBrokerServer will
+// result in compilation errors.
+type UnsafeCredentialBrokerServer interface {
+	mustEmbedUnimplementedCredentialBrokerServer()
+}
+
+func RegisterCredentialBrokerServer(s grpc.ServiceRegistrar, srv CredentialBrokerServer) {
+	// If the following call panics, it indicates UnimplementedCredentialBrokerServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&CredentialBroker_ServiceDesc, srv)
+}
+
+func _CredentialBroker_MintActorCertificate_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(MintActorCertificateRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(CredentialBrokerServer).MintActorCertificate(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: CredentialBroker_MintActorCertificate_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(CredentialBrokerServer).MintActorCertificate(ctx, req.(*MintActorCertificateRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+// CredentialBroker_ServiceDesc is the grpc.ServiceDesc for CredentialBroker service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var CredentialBroker_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "atelet.CredentialBroker",
+	HandlerType: (*CredentialBrokerServer)(nil),
+	Methods: []grpc.MethodDesc{
+		{
+			MethodName: "MintActorCertificate",
+			Handler:    _CredentialBroker_MintActorCertificate_Handler,
+		},
+	},
+	Streams:  []grpc.StreamDesc{},
+	Metadata: "atelet.proto",
+}
+
+const (
 	AteomHerder_Run_FullMethodName        = "/atelet.AteomHerder/Run"
 	AteomHerder_Checkpoint_FullMethodName = "/atelet.AteomHerder/Checkpoint"
 	AteomHerder_Restore_FullMethodName    = "/atelet.AteomHerder/Restore"

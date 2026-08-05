@@ -260,9 +260,10 @@ func TestMintCertAuthorization(t *testing.T) {
 
 		fixture actorFixture
 
-		// atespace and actorName override the request fields when non-nil.
-		atespace  *string
-		actorName *string
+		// Request fields override their defaults when non-nil.
+		atespace     *string
+		actorName    *string
+		workerPodUID *string
 
 		wantCode codes.Code
 	}{
@@ -320,6 +321,11 @@ func TestMintCertAuthorization(t *testing.T) {
 		"actor is hosted on a different node": {
 			fixture:  runningOnNode(testOtherNode),
 			wantCode: codes.PermissionDenied,
+		},
+		"worker Pod UID does not match": {
+			fixture:      runningOnNode(testNode),
+			workerPodUID: ptr("sibling-worker-uid"),
+			wantCode:     codes.PermissionDenied,
 		},
 		"worker is assigned to a different actor": {
 			fixture: actorFixture{
@@ -397,10 +403,16 @@ func TestMintCertAuthorization(t *testing.T) {
 				actorName = *tc.actorName
 			}
 
+			workerPodUID := "worker-uid"
+			if tc.workerPodUID != nil {
+				workerPodUID = *tc.workerPodUID
+			}
 			resp, err := srv.MintCert(ctxWithCert(callerCert), &ateapipb.MintCertRequest{
 				Atespace:                  atespace,
 				ActorName:                 actorName,
 				CertificateSigningRequest: newCSR(t),
+				WorkerPodUid:              workerPodUID,
+				Purpose:                   ateapipb.ActorCertificatePurpose_ACTOR_CERTIFICATE_PURPOSE_ATUNNEL,
 			})
 			if got := status.Code(err); got != tc.wantCode {
 				t.Fatalf("MintCert() code = %v (err = %v), want %v", got, err, tc.wantCode)
@@ -422,6 +434,21 @@ func TestMintCertAuthorization(t *testing.T) {
 			want := "spiffe://substrate-actor.local/atespace/" + testAtespace + "/actor/" + testActorName
 			if len(leaf.URIs) != 1 || leaf.URIs[0].String() != want {
 				t.Errorf("minted SPIFFE URI = %v, want %q", leaf.URIs, want)
+			}
+		})
+	}
+}
+
+func TestMintCertRejectsUnsupportedPurpose(t *testing.T) {
+	server := newTestServer(t, nil)
+	for name, purpose := range map[string]ateapipb.ActorCertificatePurpose{
+		"unspecified": ateapipb.ActorCertificatePurpose_ACTOR_CERTIFICATE_PURPOSE_UNSPECIFIED,
+		"unknown":     ateapipb.ActorCertificatePurpose(99),
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := server.MintCert(ctxWithCert(ateletCertOn(t, testNode)), &ateapipb.MintCertRequest{Purpose: purpose})
+			if got := status.Code(err); got != codes.InvalidArgument {
+				t.Fatalf("MintCert() code = %v (err = %v), want %v", got, err, codes.InvalidArgument)
 			}
 		})
 	}
@@ -469,6 +496,8 @@ func TestMintCertEmbedsActorIdentity(t *testing.T) {
 			Atespace:                  testAtespace,
 			ActorName:                 testActorName,
 			CertificateSigningRequest: newCSR(t),
+			WorkerPodUid:              "worker-uid",
+			Purpose:                   ateapipb.ActorCertificatePurpose_ACTOR_CERTIFICATE_PURPOSE_ATUNNEL,
 		}
 	})
 	if err != nil {
@@ -486,6 +515,7 @@ func TestMintCertEmbedsActorIdentity(t *testing.T) {
 		Atespace:  testAtespace,
 		ActorName: testActorName,
 		ActorUid:  actorUID,
+		Purpose:   substratex509.ActorIdentityPurposeAtunnel,
 	}
 	if *got != *want {
 		t.Errorf("ActorIdentity = %+v, want %+v", got, want)
@@ -514,6 +544,8 @@ func TestMintCertActorUID(t *testing.T) {
 					ActorName:                 testActorName,
 					ActorUid:                  tc.requestUID(actorUID),
 					CertificateSigningRequest: newCSR(t),
+					WorkerPodUid:              "worker-uid",
+					Purpose:                   ateapipb.ActorCertificatePurpose_ACTOR_CERTIFICATE_PURPOSE_ATUNNEL,
 				}
 			})
 			if got := status.Code(err); got != tc.wantCode {
@@ -570,6 +602,8 @@ func TestMintCertActorStatus(t *testing.T) {
 				Atespace:                  testAtespace,
 				ActorName:                 testActorName,
 				CertificateSigningRequest: newCSR(t),
+				WorkerPodUid:              "worker-uid",
+				Purpose:                   ateapipb.ActorCertificatePurpose_ACTOR_CERTIFICATE_PURPOSE_ATUNNEL,
 			})
 			if got := status.Code(err); got != wantCode {
 				t.Errorf("MintCert() code = %v (err = %v), want %v", got, err, wantCode)
@@ -605,6 +639,8 @@ func TestMintCertDeniesUnassignedActorWhateverItsStatus(t *testing.T) {
 				Atespace:                  testAtespace,
 				ActorName:                 testActorName,
 				CertificateSigningRequest: newCSR(t),
+				WorkerPodUid:              "worker-uid",
+				Purpose:                   ateapipb.ActorCertificatePurpose_ACTOR_CERTIFICATE_PURPOSE_ATUNNEL,
 			})
 			if got := status.Code(err); got != codes.PermissionDenied {
 				t.Errorf("MintCert() code = %v (err = %v), want %v", got, err, codes.PermissionDenied)
@@ -632,6 +668,8 @@ func TestMintCertAuthorizesBeforeSigning(t *testing.T) {
 		Atespace:                  testAtespace,
 		ActorName:                 testActorName,
 		CertificateSigningRequest: []byte("not a CSR"),
+		WorkerPodUid:              "worker-uid",
+		Purpose:                   ateapipb.ActorCertificatePurpose_ACTOR_CERTIFICATE_PURPOSE_ATUNNEL,
 	})
 	if got := status.Code(err); got != codes.PermissionDenied {
 		t.Errorf("MintCert() code = %v (err = %v), want %v", got, err, codes.PermissionDenied)

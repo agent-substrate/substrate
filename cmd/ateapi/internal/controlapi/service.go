@@ -26,6 +26,7 @@ import (
 type Service struct {
 	ateapipb.UnimplementedControlServer
 	persistence         store.Interface
+	workerCache         *workercache.Cache
 	dialer              *AteletDialer
 	actorTemplateLister listersv1alpha1.ActorTemplateLister
 	workerPoolLister    listersv1alpha1.WorkerPoolLister
@@ -45,13 +46,15 @@ func NewService(
 	dialer *AteletDialer,
 	kubeClient kubernetes.Interface,
 	instruments *Instruments,
+	egressGatewayAddress string,
 ) *Service {
 	s := &Service{
 		persistence:         persistence,
+		workerCache:         workerCache,
 		actorTemplateLister: actorTemplateLister,
 		workerPoolLister:    workerPoolLister,
 		dialer:              dialer,
-		actorWorkflow:       NewActorWorkflow(persistence, workerCache, dialer, actorTemplateLister, workerPoolLister, sandboxConfigLister, kubeClient, instruments),
+		actorWorkflow:       NewActorWorkflow(persistence, workerCache, dialer, actorTemplateLister, workerPoolLister, sandboxConfigLister, kubeClient, instruments, egressGatewayAddress),
 		instruments:         instruments,
 	}
 	return s

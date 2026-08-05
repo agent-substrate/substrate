@@ -63,6 +63,9 @@ service Control {
   // List Workers.
   rpc ListWorkers(ListWorkersRequest) returns (ListWorkersResponse) {}
 
+  // Get a Worker by its Kubernetes Pod identity.
+  rpc GetWorker(GetWorkerRequest) returns (Worker) {}
+
   // List Actors.
   rpc ListActors(ListActorsRequest) returns (ListActorsResponse) {}
 
@@ -425,6 +428,11 @@ message ListWorkersResponse {
   string next_page_token = 2;
 }
 
+message GetWorkerRequest {
+  string worker_namespace = 1;
+  string worker_pod = 2;
+}
+
 // List actors with pagination. Provides "soft" guarantees: actors may be
 // missed or duplicated if the system state changes during pagination.
 message ListActorsRequest {
@@ -494,20 +502,10 @@ message DebugClearResponse {}
 
 // ActorIdentity allows substrate workloads to exchange their
 // infrastructure-level credentials (k8s service account token, etc.) for a
-// substrate actor-level credential.  A given substrate actor might migrate
+// substrate actor-level credential. A given substrate actor might migrate
 // between many different physical workers over the course of its lifecycle,
 // whereas the actor credential's identity will be stable for the life of the
 // actor.
-//
-// This service requires authentication. You can authenticate with a Kubernetes
-// service account token in an `Authorization: Bearer` header, or you can
-// authenticate with a Kubernetes service account certificate as an mTLS
-// certificate. (Kubernetes service account certificates do not currently exist
-// upstream, but we will provide a polyfill based on Pod Certificates).
-//
-// The broker will check that the service credentials you authenticated with
-// belong to a Pod that is currently mapped to the requested actor in the
-// actor database.
 service ActorIdentity {
   // Request an Actor Identity JWT.
   //
@@ -570,6 +568,18 @@ message MintCertRequest {
   // The signer will ignore the contents of the CSR except to extract the
   // subject public key.
   bytes certificate_signing_request = 4;
+
+  // Exact worker Pod requesting the certificate. This value is attested by the
+  // authenticated atelet. Ateapi still verifies that the worker is on that
+  // atelet's node and is currently assigned to the actor before signing.
+  string worker_pod_uid = 5;
+
+  ActorCertificatePurpose purpose = 6;
+}
+
+enum ActorCertificatePurpose {
+  ACTOR_CERTIFICATE_PURPOSE_UNSPECIFIED = 0;
+  ACTOR_CERTIFICATE_PURPOSE_ATUNNEL = 1;
 }
 
 message MintCertResponse {

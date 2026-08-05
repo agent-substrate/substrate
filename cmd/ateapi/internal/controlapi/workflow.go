@@ -132,16 +132,17 @@ func runStep[Params any, Context any](ctx context.Context, params Params, wCtx C
 
 // ActorWorkflow handles the workflows for actor's resume / suspend operations.
 type ActorWorkflow struct {
-	store               store.Interface
-	workerCache         *workercache.Cache
-	scheduler           scheduling.Scheduler
-	dialer              *AteletDialer
-	actorTemplateLister listersv1alpha1.ActorTemplateLister
-	workerPoolLister    listersv1alpha1.WorkerPoolLister
-	sandboxConfigLister listersv1alpha1.SandboxConfigLister
-	kubeClient          kubernetes.Interface
-	secretCache         *envSecretCache
-	instruments         *Instruments
+	store                store.Interface
+	workerCache          *workercache.Cache
+	scheduler            scheduling.Scheduler
+	dialer               *AteletDialer
+	actorTemplateLister  listersv1alpha1.ActorTemplateLister
+	workerPoolLister     listersv1alpha1.WorkerPoolLister
+	sandboxConfigLister  listersv1alpha1.SandboxConfigLister
+	kubeClient           kubernetes.Interface
+	secretCache          *envSecretCache
+	instruments          *Instruments
+	egressGatewayAddress string
 }
 
 // NewActorWorkflow creates a new ActorWorkflow. instruments may be nil.
@@ -154,18 +155,20 @@ func NewActorWorkflow(
 	sandboxConfigLister listersv1alpha1.SandboxConfigLister,
 	kubeClient kubernetes.Interface,
 	instruments *Instruments,
+	egressGatewayAddress string,
 ) *ActorWorkflow {
 	return &ActorWorkflow{
-		store:               store,
-		workerCache:         workerCache,
-		scheduler:           scheduling.New(workerCache, scheduling.WithMeter(otel.Meter("ateapi"))),
-		dialer:              dialer,
-		actorTemplateLister: actorTemplateLister,
-		workerPoolLister:    workerPoolLister,
-		sandboxConfigLister: sandboxConfigLister,
-		kubeClient:          kubeClient,
-		secretCache:         newEnvSecretCache(envSecretCacheTTL),
-		instruments:         instruments,
+		store:                store,
+		workerCache:          workerCache,
+		scheduler:            scheduling.New(workerCache, scheduling.WithMeter(otel.Meter("ateapi"))),
+		dialer:               dialer,
+		actorTemplateLister:  actorTemplateLister,
+		workerPoolLister:     workerPoolLister,
+		sandboxConfigLister:  sandboxConfigLister,
+		kubeClient:           kubeClient,
+		secretCache:          newEnvSecretCache(envSecretCacheTTL),
+		instruments:          instruments,
+		egressGatewayAddress: egressGatewayAddress,
 	}
 }
 
@@ -201,7 +204,7 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 		&CreateVolumesStep{store: w.store},
 		&AssignWorkerStep{store: w.store, workerCache: w.workerCache, scheduler: w.scheduler, instruments: w.instruments},
 		&AttachVolumesStep{store: w.store},
-		&CallAteletRestoreStep{store: w.store, dialer: w.dialer, kubeClient: w.kubeClient, secretCache: w.secretCache, workerPoolLister: w.workerPoolLister, sandboxConfigLister: w.sandboxConfigLister, scheduler: w.scheduler},
+		&CallAteletRestoreStep{store: w.store, dialer: w.dialer, kubeClient: w.kubeClient, secretCache: w.secretCache, workerPoolLister: w.workerPoolLister, sandboxConfigLister: w.sandboxConfigLister, scheduler: w.scheduler, egressGatewayAddress: w.egressGatewayAddress},
 		&FinalizeRunningStep{store: w.store},
 	}
 

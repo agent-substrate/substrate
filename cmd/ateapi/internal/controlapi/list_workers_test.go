@@ -45,3 +45,21 @@ func TestValidateListWorkersRequest(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateGetWorkerRequest(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		req  *ateapipb.GetWorkerRequest
+		want field.ErrorList
+	}{
+		{name: "valid", req: &ateapipb.GetWorkerRequest{WorkerNamespace: "workers", WorkerPod: "worker-1"}},
+		{name: "missing namespace", req: &ateapipb.GetWorkerRequest{WorkerPod: "worker-1"}, want: field.ErrorList{field.Required(field.NewPath("worker_namespace"), "")}},
+		{name: "missing pod", req: &ateapipb.GetWorkerRequest{WorkerNamespace: "workers"}, want: field.ErrorList{field.Required(field.NewPath("worker_pod"), "")}},
+		{name: "invalid namespace", req: &ateapipb.GetWorkerRequest{WorkerNamespace: "Workers", WorkerPod: "worker-1"}, want: field.ErrorList{field.Invalid(field.NewPath("worker_namespace"), "Workers", "")}},
+		{name: "invalid pod", req: &ateapipb.GetWorkerRequest{WorkerNamespace: "workers", WorkerPod: "Worker"}, want: field.ErrorList{field.Invalid(field.NewPath("worker_pod"), "Worker", "")}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			assertValidateErr(t, validateGetWorkerRequest(tc.req), tc.want)
+		})
+	}
+}
