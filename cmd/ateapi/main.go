@@ -31,8 +31,10 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/controlapi"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/debugapi"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/k8sjwt"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/oidcauth"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/sessionidentity"
+
+
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/ateredis"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
 	"github.com/agent-substrate/substrate/internal/ateapiauth"
@@ -71,8 +73,13 @@ var (
 	redisTLSServerName  = pflag.String("redis-tls-server-name", "", "The ServerName to use for Redis TLS hostname verification.")
 	redisClientCert     = pflag.String("redis-client-cert", "", "The file containing client TLS certificate/key credential bundle for Redis/Valkey.")
 
-	clientJWTIssuer      = pflag.String("client-jwt-issuer", "", "The expected issuer URL for client JWTs.")
-	clientJWTAudience    = pflag.String("client-jwt-audience", "", "The expected audience for client JWTs.")
+	k8sJWTIssuer      = pflag.String("k8s-jwt-issuer", "", "The expected issuer URL for in-cluster Kubernetes ServiceAccount JWTs.")
+	k8sJWTAudience    = pflag.String("k8s-jwt-audience", "", "The expected audience for in-cluster Kubernetes ServiceAccount JWTs.")
+	k8sJWTCAFile      = pflag.String("k8s-jwt-ca-cert", ateapiauth.DefaultServiceAccountCAFile, "CA cert file used to verify TLS when fetching the OIDC discovery document and JWKS for k8s JWT authentication. Defaults to the in-cluster service account CA.")
+
+	humanJWTIssuer   = pflag.String("human-jwt-issuer", "https://accounts.google.com", "The expected issuer URL for human user JWTs (e.g. Google IDP).")
+	humanJWTAudience = pflag.String("human-jwt-audience", "32555940559.apps.googleusercontent.com", "The expected audience for human user JWTs (e.g. gcloud auth print-identity-token client ID).")
+
 	sessionIDJWTPoolFile = pflag.String("session-id-jwt-pool", "", "The file that contains the serialized JWT authority pool for signing session JWTs")
 
 	sessionIDCAPoolFile    = pflag.String("session-id-ca-pool", "", "The file that contains the CA pool for signing session JWTs")
@@ -82,9 +89,9 @@ var (
 	drainDelay   = pflag.Duration("drain-delay", 13*time.Second, "How long to keep accepting new work after SIGTERM, before starting the gRPC drain.")
 	drainTimeout = pflag.Duration("drain-timeout", 15*time.Second, "Deadline for the graceful gRPC drain on shutdown. In-flight RPCs still running past it are forcefully cancelled.")
 
-	showVersion     = pflag.Bool("version", false, "Print version and exit.")
-	clientJWTCAFile = pflag.String("client-jwt-ca-cert", ateapiauth.DefaultServiceAccountCAFile, "CA cert file used to verify TLS when fetching the OIDC discovery document and JWKS for JWT authentication. Defaults to the in-cluster service account CA.")
+	showVersion = pflag.Bool("version", false, "Print version and exit.")
 )
+
 
 func main() {
 	pflag.Parse()
@@ -169,9 +176,9 @@ func main() {
 	ateletDialer := controlapi.NewAteletDialer(workerPodInformer.GetIndexer(), ateletPodInformer.GetIndexer(), *ateletClientCredBundle, *podIdentityCACerts)
 	sm := controlapi.NewService(redisPersistence, workerCache, actorTemplateLister, workerPoolLister, sandboxConfigLister, ateletDialer, clientset)
 
-	jwtIssuerDiscoveryClient := buildK8sServiceAccountIssuerDiscoveryClient(ctx, *clientJWTCAFile, *clientJWTIssuer)
+	jwtIssuerDiscoveryClient := buildK8sServiceAccountIssuerDiscoveryClient(ctx, *k8sJWTCAFile, *k8sJWTIssuer)
 
-	sessionIdentitySrv := sessionidentity.New(*clientJWTIssuer, *clientJWTAudience, *sessionIDJWTPoolFile, *sessionIDCAPoolFile, *podIdentityCACerts, jwtIssuerDiscoveryClient)
+	sessionIdentitySrv := sessionidentity.New(*k8sJWTIssuer, *k8sJWTAudience, *sessionIDJWTPoolFile, *sessionIDCAPoolFile, *podIdentityCACerts, jwtIssuerDiscoveryClient)
 	debugSrv := debugapi.NewService(redisPersistence)
 
 	lisCfg := &net.ListenConfig{}
@@ -180,16 +187,50 @@ func main() {
 		serverboot.Fatal(ctx, "Failed to start listener", err)
 	}
 
+	// TODO: Support structured authentication configuration from a file (--authentication-config),
+	// mirroring Kubernetes' apiserver.config.k8s.io/v1 AuthenticationConfiguration API,
+	// to dynamically populate authChain from a YAML config instead of hardcoded CLI flags.
+	var authChain oidcauth.Chain
+
+	if *k8sJWTIssuer != "" {
+		k8sAuds := []string{}
+		if *k8sJWTAudience != "" {
+			k8sAuds = append(k8sAuds, *k8sJWTAudience)
+		}
+		authChain = append(authChain, oidcauth.New(oidcauth.OIDCAuthenticatorConfig{
+			IssuerURL:     *k8sJWTIssuer,
+			Audiences:     k8sAuds,
+			UsernameClaim: "sub",
+		}, jwtIssuerDiscoveryClient))
+	}
+	if *humanJWTIssuer != "" {
+		humanAuds := []string{}
+		if *humanJWTAudience != "" {
+			humanAuds = append(humanAuds, *humanJWTAudience)
+		}
+		authChain = append(authChain, oidcauth.New(oidcauth.OIDCAuthenticatorConfig{
+			IssuerURL:     *humanJWTIssuer,
+			Audiences:     humanAuds,
+			UsernameClaim: "email",
+		}, nil))
+	}
+
+
+
 	authCfg := ateapiauth.ServerConfig{
 		VerifyBearerToken: func(ctx context.Context, bearer string) (string, error) {
-			claims, err := k8sjwt.Verify(ctx, jwtIssuerDiscoveryClient, bearer, *clientJWTIssuer, *clientJWTAudience, time.Now())
+			id, ok, err := authChain.AuthenticateToken(ctx, bearer)
 			if err != nil {
 				return "", err
 			}
-			return claims.Subject, nil
+			if !ok {
+				return "", fmt.Errorf("unrecognized token issuer")
+			}
+			return id, nil
 		},
 	}
 	if err := ateapiauth.ValidateServerConfig(authCfg); err != nil {
+
 		serverboot.Fatal(ctx, "Invalid auth config", err)
 	}
 
@@ -274,7 +315,10 @@ func loadFlagsFromEnv() {
 		env  string
 	}{
 		{redisClusterAddress, "ATE_API_REDIS_ADDRESS"},
-		{clientJWTIssuer, "ATE_API_K8SJWT_ISSUER"},
+		{k8sJWTIssuer, "ATE_API_K8SJWT_ISSUER"},
+		{k8sJWTAudience, "ATE_API_K8SJWT_AUDIENCE"},
+		{humanJWTIssuer, "ATE_API_HUMAN_JWT_ISSUER"},
+		{humanJWTAudience, "ATE_API_HUMAN_JWT_AUDIENCE"},
 		{redisUseIAMAuth, "ATE_API_REDIS_USE_IAM_AUTH"},
 		{redisTLSServerName, "ATE_API_REDIS_TLS_SERVER_NAME"},
 		{redisClientCert, "ATE_API_REDIS_CLIENT_CERT"},
@@ -295,8 +339,10 @@ func logFlagValues(ctx context.Context) {
 		slog.String("redis-use-iam-auth", *redisUseIAMAuth),
 		slog.String("redis-tls-server-name", *redisTLSServerName),
 		slog.String("redis-client-cert", *redisClientCert),
-		slog.String("client-jwt-issuer", *clientJWTIssuer),
-		slog.String("client-jwt-audience", *clientJWTAudience),
+		slog.String("k8s-jwt-issuer", *k8sJWTIssuer),
+		slog.String("k8s-jwt-audience", *k8sJWTAudience),
+		slog.String("human-jwt-issuer", *humanJWTIssuer),
+		slog.String("human-jwt-audience", *humanJWTAudience),
 		slog.String("session-id-jwt-pool", *sessionIDJWTPoolFile),
 		slog.String("session-id-ca-pool", *sessionIDCAPoolFile),
 		slog.String("pod-identity-ca-certs", *podIdentityCACerts),
@@ -305,6 +351,7 @@ func logFlagValues(ctx context.Context) {
 		slog.Duration("drain-timeout", *drainTimeout),
 	)
 }
+
 
 // connectRedis builds the Redis/Valkey TLS config, plumbs IAM auth if
 // requested, opens the cluster client, and pings with retries.
@@ -440,7 +487,8 @@ func buildServerCreds(ctx context.Context) (credentials.TransportCredentials, er
 // Kubernetes ServiceAccount issuer discovery. External issuers use system roots
 // and no pod ServiceAccount token. The in-cluster Kubernetes issuer trusts
 // caFile for TLS verification and injects the pod's ServiceAccount Bearer token
-// only for URLs under issuer. Returns nil (use the k8sjwt default timeout
+// only for URLs under issuer. Returns nil (use the oidcjwt default timeout
+
 // client) if issuer is empty, or if the in-cluster issuer is configured but
 // caFile is empty or unreadable.
 func buildK8sServiceAccountIssuerDiscoveryClient(ctx context.Context, caFile, issuer string) *http.Client {

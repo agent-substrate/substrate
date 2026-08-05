@@ -20,6 +20,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/agent-substrate/substrate/internal/ateclient"
 	"github.com/agent-substrate/substrate/internal/version"
 )
 
@@ -58,4 +59,6 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&endpoint, "endpoint", "", "Manual override for the gRPC target (e.g., localhost:8080). If omitted, automatically port-forwards.")
 	rootCmd.PersistentFlags().StringVarP(&outputFmt, "output", "o", "table", "Output format. One of: table|json|yaml")
 	rootCmd.PersistentFlags().BoolVar(&traceEnabled, "trace", false, "Enable tracing for the request")
+	rootCmd.PersistentFlags().StringVarP(&ateclient.Token, "token", "t", "", "Bearer token for authentication (e.g. from gcloud auth print-identity-token). Overrides default ServiceAccount token.")
 }
+

@@ -262,12 +262,17 @@ create_api_server_env_vars() {
     fi
   fi
 
+  local human_jwt_issuer="${HUMAN_JWT_ISSUER:-https://accounts.google.com}"
+  local human_jwt_audience="${HUMAN_JWT_AUDIENCE:-32555940559.apps.googleusercontent.com}"
+
   run_kubectl create configmap -n ate-system ate-api-server-envvars \
     --from-literal=ATE_API_REDIS_ADDRESS="${redis_address}" \
     --from-literal=ATE_API_REDIS_USE_IAM_AUTH="${use_iam_auth}" \
     --from-literal=ATE_API_REDIS_TLS_SERVER_NAME="${tls_server_name}" \
     --from-literal=ATE_API_REDIS_CLIENT_CERT="${client_cert}" \
     --from-literal=ATE_API_K8SJWT_ISSUER="${jwt_issuer}" \
+    --from-literal=ATE_API_HUMAN_JWT_ISSUER="${human_jwt_issuer}" \
+    --from-literal=ATE_API_HUMAN_JWT_AUDIENCE="${human_jwt_audience}" \
     --dry-run=client -o yaml \
     | run_kubectl apply -f -
 }

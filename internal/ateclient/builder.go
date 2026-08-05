@@ -227,10 +227,25 @@ func serverTLSConfig(ctx context.Context, clientset kubernetes.Interface) (*tls.
 	}, nil
 }
 
+// Token allows setting an explicit Bearer token for authentication (e.g. via --token flag or ATE_TOKEN env var).
+var Token string
+
 // bearerTokenDialOption attaches a ServiceAccount token for the ate-client SA
 // as per-RPC credentials.
 func bearerTokenDialOption(ctx context.Context, clientset *kubernetes.Clientset) (grpc.DialOption, error) {
+	tok := Token
+	if tok == "" {
+		tok = os.Getenv("ATE_TOKEN")
+	}
+	if tok == "" {
+		tok = os.Getenv("ATE_API_TOKEN")
+	}
+	if tok != "" {
+		return grpc.WithPerRPCCredentials(bearerTokenCreds(tok)), nil
+	}
+
 	expirationSeconds := int64(3600)
+
 	tokenRequest := &authv1.TokenRequest{
 		Spec: authv1.TokenRequestSpec{
 			Audiences:         []string{apiServerName},

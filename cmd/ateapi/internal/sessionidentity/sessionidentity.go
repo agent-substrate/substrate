@@ -28,7 +28,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/k8sjwt"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/oidcauth"
+
+
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/sessionidjwt"
 	"github.com/agent-substrate/substrate/internal/localca"
 	"github.com/agent-substrate/substrate/internal/localjwtauthority"
@@ -44,8 +46,8 @@ import (
 type Server struct {
 	ateapipb.UnimplementedSessionIdentityServer
 
-	clientJWTIssuer   string
-	clientJWTAudience string
+	k8sJWTIssuer   string
+	k8sJWTAudience string
 
 	// TODO: Cache the signing keys in memory, so we don't read from a file every time.
 	sessionIDJWTPoolFile string
@@ -57,10 +59,10 @@ type Server struct {
 
 var _ ateapipb.SessionIdentityServer = (*Server)(nil)
 
-func New(clientJWTIssuer, clientJWTAudience, sessionIDJWTPoolFile, sessionIDCAPoolFile, workerCACerts string, httpClient *http.Client) *Server {
+func New(k8sJWTIssuer, k8sJWTAudience, sessionIDJWTPoolFile, sessionIDCAPoolFile, workerCACerts string, httpClient *http.Client) *Server {
 	return &Server{
-		clientJWTIssuer:      clientJWTIssuer,
-		clientJWTAudience:    clientJWTAudience,
+		k8sJWTIssuer:         k8sJWTIssuer,
+		k8sJWTAudience:       k8sJWTAudience,
 		sessionIDJWTPoolFile: sessionIDJWTPoolFile,
 		sessionIDCAPoolFile:  sessionIDCAPoolFile,
 		workerCACerts:        workerCACerts,
@@ -81,13 +83,16 @@ func (s *Server) MintJWT(ctx context.Context, req *ateapipb.MintJWTRequest) (*at
 
 	clientJWT := strings.TrimPrefix(authorization[0], "Bearer ")
 
-	clientClaims, err := k8sjwt.Verify(ctx, s.httpClient, clientJWT, s.clientJWTIssuer, s.clientJWTAudience, time.Now())
+	clientClaims, err := oidcauth.Verify(ctx, s.httpClient, clientJWT, s.k8sJWTIssuer, []string{s.k8sJWTAudience}, time.Now())
+
+
 	if err != nil {
 		slog.ErrorContext(ctx, "Error while verifying client JWT", slog.Any("err", err))
 		return nil, status.Errorf(codes.Unauthenticated, "Unauthenticated")
 	}
 
 	slog.InfoContext(ctx, "Verified client JWT", slog.Any("claims", clientClaims))
+
 
 	// TODO: Extract K8s identity from incoming JWT
 
