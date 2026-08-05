@@ -572,9 +572,6 @@ func (s *Persistence) UpdateActorSnapshotTag(ctx context.Context, atespace, name
 		if tag.GetMetadata().GetVersion() != expectedVersion {
 			return store.ErrVersionConflict
 		}
-		if _, _, err := s.GetActorSnapshot(ctx, tag.GetSnapshot().GetAtespace(), tag.GetSnapshot().GetName()); err != nil {
-			return err
-		}
 		if tag.GetScope() == scope {
 			updated = tag
 			return nil
