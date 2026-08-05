@@ -81,6 +81,7 @@ function usage() {
   echo "  --create-podcertificate-controller-cas Create podcertificate controller CAs"
   echo "  --create-valkey-ca-certs-secret        Create Valkey CA certs secret"
   echo "  --create-api-server-env-vars           Create ate-api-server env vars"
+  echo "  --create-api-authentication-config     Create the default ate-api-server authentication config"
   echo ""
   echo "Benchmarks (see benchmarking/README.md for details and customization):"
   echo ""
@@ -291,6 +292,20 @@ create_api_server_env_vars() {
 
   echo "REDIS_ADDRESS: ${redis_address}"
 
+  run_kubectl create configmap -n ate-system ate-api-server-envvars \
+    --from-literal=ATE_API_REDIS_ADDRESS="${redis_address}" \
+    --from-literal=ATE_API_REDIS_USE_IAM_AUTH="${use_iam_auth}" \
+    --from-literal=ATE_API_REDIS_TLS_SERVER_NAME="${tls_server_name}" \
+    --from-literal=ATE_API_REDIS_CLIENT_CERT="${client_cert}" \
+    --dry-run=client -o yaml \
+    | run_kubectl apply -f -
+}
+
+create_api_authentication_config() {
+  log_step "create_api_authentication_config"
+  run_kubectl create namespace ate-system --dry-run=client -o yaml \
+    | run_kubectl apply -f -
+
   local jwt_issuer=""
   if [[ -n "${PROJECT_ID:-}" && -n "${CLUSTER_LOCATION:-}" && -n "${CLUSTER_NAME:-}" ]]; then
     jwt_issuer="https://container.googleapis.com/v1/projects/${PROJECT_ID}/locations/${CLUSTER_LOCATION}/clusters/${CLUSTER_NAME}"
@@ -301,12 +316,16 @@ create_api_server_env_vars() {
     fi
   fi
 
-  run_kubectl create configmap -n ate-system ate-api-server-envvars \
-    --from-literal=ATE_API_REDIS_ADDRESS="${redis_address}" \
-    --from-literal=ATE_API_REDIS_USE_IAM_AUTH="${use_iam_auth}" \
-    --from-literal=ATE_API_REDIS_TLS_SERVER_NAME="${tls_server_name}" \
-    --from-literal=ATE_API_REDIS_CLIENT_CERT="${client_cert}" \
-    --from-literal=ATE_API_K8SJWT_ISSUER="${jwt_issuer}" \
+  local discovery_config=""
+  case "${jwt_issuer}" in
+    https://kubernetes.default.svc|https://kubernetes.default.svc.cluster.local)
+      discovery_config=$'  certificateAuthorityFile: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt\n  discoveryTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token\n'
+      ;;
+  esac
+  local authentication_config
+  authentication_config=$(printf 'actorIdentityJWTProvider: kubernetes\njwtProviders:\n- name: kubernetes\n  issuer: %s\n  audiences: [api.ate-system.svc]\n%s' "${jwt_issuer}" "${discovery_config}")
+  run_kubectl create configmap -n ate-system ate-api-authentication \
+    --from-literal=authentication.yaml="${authentication_config}" \
     --dry-run=client -o yaml \
     | run_kubectl apply -f -
 }
@@ -385,6 +404,8 @@ ensure_apiserver_prerequisites() {
     || create_valkey_ca_certs_secret
   run_kubectl get configmap -n ate-system ate-api-server-envvars >/dev/null 2>&1 \
     || create_api_server_env_vars
+  run_kubectl get configmap -n ate-system ate-api-authentication >/dev/null 2>&1 \
+    || create_api_authentication_config
 }
 
 # Redeploy only the ate-apiserver
@@ -683,6 +704,7 @@ while [[ "$#" -gt 0 ]]; do
     --create-podcertificate-controller-cas) create_podcertificate_controller_cas ;;
     --create-valkey-ca-certs-secret) create_valkey_ca_certs_secret ;;
     --create-api-server-env-vars) create_api_server_env_vars ;;
+    --create-api-authentication-config) create_api_authentication_config ;;
 
     *)
       # Invalid option, should usage and exit with an error.

@@ -70,9 +70,8 @@ var (
 	redisTLSServerName  = pflag.String("redis-tls-server-name", "", "The ServerName to use for Redis TLS hostname verification.")
 	redisClientCert     = pflag.String("redis-client-cert", "", "The file containing client TLS certificate/key credential bundle for Redis/Valkey.")
 
-	clientJWTIssuer    = pflag.String("client-jwt-issuer", "", "The expected issuer URL for client JWTs.")
-	clientJWTAudience  = pflag.String("client-jwt-audience", "", "The expected audience for client JWTs.")
-	actorIDJWTPoolFile = pflag.String("actor-id-jwt-pool", "", "The file that contains the serialized JWT authority pool for signing actor JWTs")
+	authenticationConfigFile = pflag.String("authentication-config", "", "YAML file configuring trusted JWT providers.")
+	actorIDJWTPoolFile       = pflag.String("actor-id-jwt-pool", "", "The file that contains the serialized JWT authority pool for signing actor JWTs")
 
 	actorIDCAPoolFile      = pflag.String("actor-id-ca-pool", "", "The file that contains the CA pool for signing actor JWTs")
 	podIdentityCACerts     = pflag.String("pod-identity-ca-certs", "", "The file that contains the pod-identity CA bundle, used both for verifying client certificates presented to the gRPC server and for verifying atelet serving certificates when dialing atelet. If empty, client-cert verification is disabled and atelet dials will fail.")
@@ -81,9 +80,8 @@ var (
 	drainDelay   = pflag.Duration("drain-delay", 13*time.Second, "How long to keep accepting new work after SIGTERM, before starting the gRPC drain.")
 	drainTimeout = pflag.Duration("drain-timeout", 15*time.Second, "Deadline for the graceful gRPC drain on shutdown. In-flight RPCs still running past it are forcefully cancelled.")
 
-	showVersion     = pflag.Bool("version", false, "Print version and exit.")
-	logLevelFlag    = pflag.String("log-level", "info", "Minimum log level: debug, info, warn, or error.")
-	clientJWTCAFile = pflag.String("client-jwt-ca-cert", ateapiauth.DefaultServiceAccountCAFile, "CA cert file used to verify TLS when fetching the OIDC discovery document and JWKS for JWT authentication. Defaults to the in-cluster service account CA.")
+	showVersion  = pflag.Bool("version", false, "Print version and exit.")
+	logLevelFlag = pflag.String("log-level", "info", "Minimum log level: debug, info, warn, or error.")
 )
 
 func main() {
@@ -121,6 +119,14 @@ func main() {
 
 	loadFlagsFromEnv()
 	logFlagValues(ctx)
+	authenticationConfig, err := ateapiauth.LoadAuthenticationConfig(*authenticationConfigFile)
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to load authentication config", err)
+	}
+	authCfg, actorIdentityJWTIssuer, err := buildJWTProviders(ctx, authenticationConfig)
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to initialize JWT providers", err)
+	}
 
 	redisClient, err := connectRedis(ctx)
 	if err != nil {
@@ -177,9 +183,7 @@ func main() {
 	ateletDialer := controlapi.NewAteletDialer(workerPodInformer.GetIndexer(), ateletPodInformer.GetIndexer(), *ateletClientCredBundle, *podIdentityCACerts)
 	sm := controlapi.NewService(redisPersistence, workerCache, actorTemplateLister, workerPoolLister, sandboxConfigLister, ateletDialer, clientset, instruments)
 
-	jwtIssuerDiscoveryClient := buildK8sServiceAccountIssuerDiscoveryClient(ctx, *clientJWTCAFile, *clientJWTIssuer)
-
-	actorIdentitySrv := actoridentity.New(*clientJWTIssuer, *clientJWTAudience, *actorIDJWTPoolFile, *actorIDCAPoolFile, *podIdentityCACerts, jwtIssuerDiscoveryClient, redisPersistence)
+	actorIdentitySrv := actoridentity.New(actorIdentityJWTIssuer, *actorIDJWTPoolFile, *actorIDCAPoolFile, redisPersistence)
 	debugSrv := debugapi.NewService(redisPersistence)
 
 	lisCfg := &net.ListenConfig{}
@@ -188,15 +192,6 @@ func main() {
 		serverboot.Fatal(ctx, "Failed to start listener", err)
 	}
 
-	authCfg := ateapiauth.ServerConfig{
-		VerifyBearerToken: func(ctx context.Context, bearer string) (string, error) {
-			claims, err := k8sjwt.Verify(ctx, jwtIssuerDiscoveryClient, bearer, *clientJWTIssuer, *clientJWTAudience, time.Now())
-			if err != nil {
-				return "", err
-			}
-			return claims.Subject, nil
-		},
-	}
 	if err := ateapiauth.ValidateServerConfig(authCfg); err != nil {
 		serverboot.Fatal(ctx, "Invalid auth config", err)
 	}
@@ -282,7 +277,6 @@ func loadFlagsFromEnv() {
 		env  string
 	}{
 		{redisClusterAddress, "ATE_API_REDIS_ADDRESS"},
-		{clientJWTIssuer, "ATE_API_K8SJWT_ISSUER"},
 		{redisUseIAMAuth, "ATE_API_REDIS_USE_IAM_AUTH"},
 		{redisTLSServerName, "ATE_API_REDIS_TLS_SERVER_NAME"},
 		{redisClientCert, "ATE_API_REDIS_CLIENT_CERT"},
@@ -303,8 +297,7 @@ func logFlagValues(ctx context.Context) {
 		slog.String("redis-use-iam-auth", *redisUseIAMAuth),
 		slog.String("redis-tls-server-name", *redisTLSServerName),
 		slog.String("redis-client-cert", *redisClientCert),
-		slog.String("client-jwt-issuer", *clientJWTIssuer),
-		slog.String("client-jwt-audience", *clientJWTAudience),
+		slog.String("authentication-config", *authenticationConfigFile),
 		slog.String("actor-id-jwt-pool", *actorIDJWTPoolFile),
 		slog.String("actor-id-ca-pool", *actorIDCAPoolFile),
 		slog.String("pod-identity-ca-certs", *podIdentityCACerts),
@@ -444,65 +437,85 @@ func buildServerCreds(ctx context.Context) (credentials.TransportCredentials, er
 	}), nil
 }
 
-// buildK8sServiceAccountIssuerDiscoveryClient returns an *http.Client for
-// Kubernetes ServiceAccount issuer discovery. External issuers use system roots
-// and no pod ServiceAccount token. The in-cluster Kubernetes issuer trusts
-// caFile for TLS verification and injects the pod's ServiceAccount Bearer token
-// only for URLs under issuer. Returns nil (use the k8sjwt default timeout
-// client) if issuer is empty, or if the in-cluster issuer is configured but
-// caFile is empty or unreadable.
-func buildK8sServiceAccountIssuerDiscoveryClient(ctx context.Context, caFile, issuer string) *http.Client {
-	if issuer == "" {
-		return nil
-	}
-	if !isInClusterKubernetesIssuer(issuer) {
-		return &http.Client{Timeout: 10 * time.Second}
-	}
-	if caFile == "" {
-		return nil
-	}
-	ca, err := os.ReadFile(caFile)
-	if err != nil {
-		slog.WarnContext(ctx, "Could not read JWT CA cert file; OIDC discovery will use system trust", slog.String("path", caFile), slog.Any("err", err))
-		return nil
-	}
-	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM(ca) {
-		slog.WarnContext(ctx, "Could not parse JWT CA cert file; OIDC discovery will use system trust", slog.String("path", caFile))
-		return nil
-	}
-	return &http.Client{
-		Timeout: 10 * time.Second,
-		Transport: &k8sServiceAccountIssuerDiscoveryTransport{
-			base: &http.Transport{
-				TLSClientConfig: &tls.Config{RootCAs: pool},
+func buildJWTProviders(ctx context.Context, cfg *ateapiauth.AuthenticationConfig) (ateapiauth.ServerConfig, string, error) {
+	var serverCfg ateapiauth.ServerConfig
+	var actorIdentityIssuer string
+	for _, providerCfg := range cfg.JWTProviders {
+		httpClient, err := buildJWTIssuerDiscoveryClient(providerCfg)
+		if err != nil {
+			return ateapiauth.ServerConfig{}, "", fmt.Errorf("initialize JWT provider %q: %w", providerCfg.Name, err)
+		}
+		verifier := k8sjwt.NewVerifier(providerCfg.Issuer, providerCfg.Audiences, httpClient)
+		serverCfg.JWTProviders = append(serverCfg.JWTProviders, ateapiauth.JWTProvider{
+			Name:   providerCfg.Name,
+			Issuer: providerCfg.Issuer,
+			Verify: func(ctx context.Context, bearer string) (string, error) {
+				claims, err := verifier.Verify(ctx, bearer, time.Now())
+				if err != nil {
+					return "", err
+				}
+				return claims.Subject, nil
 			},
-			tokenFile: ateapiauth.DefaultServiceAccountTokenFile,
-			issuer:    issuer,
-		},
+		})
+		if providerCfg.Name == cfg.ActorIdentityJWTProvider {
+			actorIdentityIssuer = providerCfg.Issuer
+		}
+		slog.InfoContext(ctx, "Configured JWT provider", slog.String("name", providerCfg.Name), slog.String("issuer", providerCfg.Issuer))
 	}
+	return serverCfg, actorIdentityIssuer, nil
 }
 
-// k8sServiceAccountIssuerDiscoveryTransport injects the pod's ServiceAccount
-// Bearer token only when fetching OIDC documents within the configured issuer.
+func buildJWTIssuerDiscoveryClient(cfg ateapiauth.JWTProviderConfig) (*http.Client, error) {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	if cfg.CertificateAuthorityFile != "" {
+		ca, err := os.ReadFile(cfg.CertificateAuthorityFile)
+		if err != nil {
+			return nil, fmt.Errorf("read certificate authority file: %w", err)
+		}
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM(ca) {
+			return nil, fmt.Errorf("certificate authority file %q contains no certificates", cfg.CertificateAuthorityFile)
+		}
+		transport.TLSClientConfig = &tls.Config{RootCAs: pool}
+	}
+	var roundTripper http.RoundTripper = transport
+	if cfg.DiscoveryTokenFile != "" {
+		roundTripper = &jwtIssuerDiscoveryTransport{
+			base:                         transport,
+			tokenFile:                    cfg.DiscoveryTokenFile,
+			issuer:                       cfg.Issuer,
+			allowCrossHostKubernetesJWKS: cfg.CertificateAuthorityFile != "",
+		}
+	}
+	return &http.Client{Timeout: 10 * time.Second, Transport: roundTripper}, nil
+}
+
+// jwtIssuerDiscoveryTransport injects a bearer token only when fetching OIDC
+// documents within the configured issuer.
 // Kubernetes' discovered jwks_uri can point at the API server's routable host
 // instead of the issuer host (for example, Kind advertises the node IP), so the
 // standard Kubernetes JWKS path is also allowed.
 // Reads the token file fresh on each request so token rotation is handled
 // automatically.
-type k8sServiceAccountIssuerDiscoveryTransport struct {
-	base      http.RoundTripper
-	tokenFile string
-	issuer    string
+type jwtIssuerDiscoveryTransport struct {
+	base                         http.RoundTripper
+	tokenFile                    string
+	issuer                       string
+	allowCrossHostKubernetesJWKS bool
 }
 
-func (t *k8sServiceAccountIssuerDiscoveryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	if issuerScopedURL(req.URL.String(), t.issuer) || isKubernetesJWKSURL(req.URL.String()) {
+func (t *jwtIssuerDiscoveryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if issuerScopedURL(req.URL.String(), t.issuer) || (t.allowCrossHostKubernetesJWKS && isKubernetesJWKSURL(req.URL.String())) {
 		token, err := os.ReadFile(t.tokenFile)
-		if err == nil && len(token) > 0 {
-			req = req.Clone(req.Context())
-			req.Header.Set("Authorization", "Bearer "+strings.TrimSpace(string(token)))
+		if err != nil {
+			return nil, fmt.Errorf("read discovery token file: %w", err)
 		}
+		trimmed := strings.TrimSpace(string(token))
+		if trimmed == "" {
+			return nil, fmt.Errorf("discovery token file %q is empty", t.tokenFile)
+		}
+		req = req.Clone(req.Context())
+		req.Header.Set("Authorization", "Bearer "+trimmed)
 	}
 	return t.base.RoundTrip(req)
 }
@@ -536,12 +549,4 @@ func isKubernetesJWKSURL(rawURL string) bool {
 		return false
 	}
 	return strings.EqualFold(u.Scheme, "https") && u.EscapedPath() == "/openid/v1/jwks"
-}
-
-func isInClusterKubernetesIssuer(issuer string) bool {
-	u, err := url.Parse(issuer)
-	if err != nil {
-		return false
-	}
-	return u.Scheme == "https" && (u.Host == "kubernetes.default.svc" || u.Host == "kubernetes.default.svc.cluster.local")
 }

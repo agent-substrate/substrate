@@ -96,8 +96,7 @@ spec:
           - --redis-use-iam-auth=@env
           - --redis-tls-server-name=@env
           - --redis-client-cert=@env
-          - --client-jwt-issuer=@env
-          - --client-jwt-audience=api.ate-system.svc
+          - --authentication-config=/etc/ateapi/authentication/authentication.yaml
           - --actor-id-jwt-pool=/run/actor-id-jwt-pool/pool.json
           - --actor-id-ca-pool=/run/actor-id-ca-pool/pool.json
           - --atelet-client-cred-bundle=/run/podidentity.podcert.ate.dev/credential-bundle.pem
@@ -147,6 +146,9 @@ spec:
           readOnly: true
         - name: "actor-id-ca-pool"
           mountPath: "/run/actor-id-ca-pool"
+          readOnly: true
+        - name: "authentication-config"
+          mountPath: "/etc/ateapi/authentication"
           readOnly: true
         ports:
         - containerPort: 443
@@ -213,6 +215,9 @@ spec:
               items:
               - key: "pool"
                 path: "pool.json"
+      - name: "authentication-config"
+        configMap:
+          name: "ate-api-authentication"
 ---
 # Allow voluntary disruptions (node drains, cluster upgrades) to take
 # at most one API server pod at a time, at any replica count.

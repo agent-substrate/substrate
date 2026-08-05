@@ -37,7 +37,7 @@ var getActorsCmd = &cobra.Command{
 		ctx := cmd.Context()
 
 		// 1. Connect to API Server
-		apiClient, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, traceEnabled)
+		apiClient, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, tokenFile, traceEnabled)
 		if err != nil {
 			return fmt.Errorf("failed to connect to ate-api-server: %w", err)
 		}

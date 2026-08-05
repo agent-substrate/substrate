@@ -19,6 +19,8 @@ import (
 	"net/http"
 	"os"
 	"testing"
+
+	"github.com/agent-substrate/substrate/internal/ateapiauth"
 )
 
 func TestIssuerScopedURL(t *testing.T) {
@@ -74,7 +76,7 @@ func TestK8sServiceAccountIssuerDiscoveryTransport(t *testing.T) {
 	}
 
 	var gotAuth string
-	transport := &k8sServiceAccountIssuerDiscoveryTransport{
+	transport := &jwtIssuerDiscoveryTransport{
 		base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			gotAuth = req.Header.Get("Authorization")
 			return &http.Response{
@@ -106,7 +108,7 @@ func TestK8sServiceAccountIssuerDiscoveryTransportSendsTokenToKubernetesJWKSURL(
 	}
 
 	var gotAuth string
-	transport := &k8sServiceAccountIssuerDiscoveryTransport{
+	transport := &jwtIssuerDiscoveryTransport{
 		base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			gotAuth = req.Header.Get("Authorization")
 			return &http.Response{
@@ -115,8 +117,9 @@ func TestK8sServiceAccountIssuerDiscoveryTransportSendsTokenToKubernetesJWKSURL(
 				Header:     make(http.Header),
 			}, nil
 		}),
-		tokenFile: tokenFile,
-		issuer:    "https://kubernetes.default.svc",
+		tokenFile:                    tokenFile,
+		issuer:                       "https://kubernetes.default.svc",
+		allowCrossHostKubernetesJWKS: true,
 	}
 
 	req, err := http.NewRequest(http.MethodGet, "https://172.18.0.2:6443/openid/v1/jwks", nil)
@@ -138,7 +141,7 @@ func TestK8sServiceAccountIssuerDiscoveryTransportDoesNotSendTokenToArbitraryURL
 	}
 
 	var gotAuth string
-	transport := &k8sServiceAccountIssuerDiscoveryTransport{
+	transport := &jwtIssuerDiscoveryTransport{
 		base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 			gotAuth = req.Header.Get("Authorization")
 			return &http.Response{
@@ -163,34 +166,42 @@ func TestK8sServiceAccountIssuerDiscoveryTransportDoesNotSendTokenToArbitraryURL
 	}
 }
 
-func TestBuildK8sServiceAccountIssuerDiscoveryClientUsesDefaultTransportForExternalIssuer(t *testing.T) {
-	client := buildK8sServiceAccountIssuerDiscoveryClient(t.Context(), "/does/not/matter", "https://container.googleapis.com/v1/projects/p/locations/l/clusters/c")
-	if client == nil {
-		t.Fatalf("buildK8sServiceAccountIssuerDiscoveryClient() = nil, want client")
+func TestK8sServiceAccountIssuerDiscoveryTransportRequiresCustomCAForCrossHostJWKS(t *testing.T) {
+	tokenFile := t.TempDir() + "/token"
+	if err := os.WriteFile(tokenFile, []byte("test-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var gotAuth string
+	transport := &jwtIssuerDiscoveryTransport{
+		base: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			gotAuth = req.Header.Get("Authorization")
+			return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(nil), Header: make(http.Header)}, nil
+		}),
+		tokenFile: tokenFile,
+		issuer:    "https://kubernetes.default.svc",
+	}
+	req, err := http.NewRequest(http.MethodGet, "https://attacker.example/openid/v1/jwks", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := transport.RoundTrip(req); err != nil {
+		t.Fatal(err)
+	}
+	if gotAuth != "" {
+		t.Fatalf("Authorization = %q, want empty", gotAuth)
+	}
+}
+
+func TestBuildJWTIssuerDiscoveryClientUsesDefaultTransportWithoutDiscoveryToken(t *testing.T) {
+	client, err := buildJWTIssuerDiscoveryClient(ateapiauth.JWTProviderConfig{Issuer: "https://accounts.google.com"})
+	if err != nil {
+		t.Fatalf("buildJWTIssuerDiscoveryClient() error = %v", err)
 	}
 	if client.Timeout == 0 {
 		t.Fatalf("client timeout = 0, want nonzero timeout")
 	}
-	if _, ok := client.Transport.(*k8sServiceAccountIssuerDiscoveryTransport); ok {
-		t.Fatalf("external issuer should not use ServiceAccount token transport")
-	}
-}
-
-func TestIsInClusterKubernetesIssuer(t *testing.T) {
-	for _, tt := range []struct {
-		issuer string
-		want   bool
-	}{
-		{issuer: "https://kubernetes.default.svc", want: true},
-		{issuer: "https://kubernetes.default.svc.cluster.local", want: true},
-		{issuer: "https://container.googleapis.com/v1/projects/p/locations/l/clusters/c", want: false},
-		{issuer: "https://attacker.example", want: false},
-	} {
-		t.Run(tt.issuer, func(t *testing.T) {
-			if got := isInClusterKubernetesIssuer(tt.issuer); got != tt.want {
-				t.Fatalf("isInClusterKubernetesIssuer(%q) = %v, want %v", tt.issuer, got, tt.want)
-			}
-		})
+	if _, ok := client.Transport.(*jwtIssuerDiscoveryTransport); ok {
+		t.Fatalf("provider without discovery token should not use token transport")
 	}
 }
 

@@ -23,6 +23,8 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"math/big"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -57,6 +59,24 @@ func TestBearerTokenCreds(t *testing.T) {
 
 	if !bearerTokenCreds("some-token").RequireTransportSecurity() {
 		t.Error("RequireTransportSecurity() = false, want true")
+	}
+}
+
+func TestFileBearerTokenCreds(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(path, []byte("first-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	creds := fileBearerTokenCreds(path)
+	md, err := creds.GetRequestMetadata(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := md["authorization"]; got != "Bearer first-token" {
+		t.Fatalf("authorization = %q, want Bearer first-token", got)
+	}
+	if !creds.RequireTransportSecurity() {
+		t.Fatal("RequireTransportSecurity() = false, want true")
 	}
 }
 

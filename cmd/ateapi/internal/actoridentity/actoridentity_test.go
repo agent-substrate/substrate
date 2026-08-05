@@ -32,6 +32,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/internal/localca"
+	"github.com/agent-substrate/substrate/internal/principal"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/substratex509"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -147,7 +148,35 @@ func newTestServer(t *testing.T, st store.Interface) *Server {
 		t.Fatalf("write CA pool: %v", err)
 	}
 
-	return New("issuer", "audience", "", poolFile, "", nil, st)
+	return New("issuer", "", poolFile, st)
+}
+
+func TestMintJWTRequiresConfiguredJWTProvider(t *testing.T) {
+	srv := &Server{actorIdentityJWTIssuer: "https://kubernetes.example"}
+	for _, tt := range []struct {
+		name string
+		ctx  context.Context
+		code codes.Code
+	}{
+		{name: "no principal", ctx: context.Background(), code: codes.Unauthenticated},
+		{
+			name: "mTLS principal",
+			ctx:  principal.InjectContext(context.Background(), principal.PrincipalInfo{ID: "spiffe://caller", Kind: principal.KindMTLS}),
+			code: codes.Unauthenticated,
+		},
+		{
+			name: "different JWT provider",
+			ctx:  principal.InjectContext(context.Background(), principal.PrincipalInfo{ID: "user", Kind: principal.KindJWT, Issuer: "https://accounts.google.com"}),
+			code: codes.PermissionDenied,
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := srv.MintJWT(tt.ctx, &ateapipb.MintJWTRequest{})
+			if got := status.Code(err); got != tt.code {
+				t.Fatalf("MintJWT() code = %v, want %v (err = %v)", got, tt.code, err)
+			}
+		})
+	}
 }
 
 // newCSR returns a DER-encoded, correctly self-signed CSR.
@@ -605,7 +634,7 @@ func TestMintCertAuthorizesBeforeSigning(t *testing.T) {
 
 	// A server whose CA pool file does not exist: reaching the signing path at
 	// all would surface as Internal rather than PermissionDenied.
-	srv := New("issuer", "audience", "", filepath.Join(t.TempDir(), "missing.json"), "", nil, st)
+	srv := New("issuer", "", filepath.Join(t.TempDir(), "missing.json"), st)
 
 	_, err := srv.MintCert(ctxWithCert(ateletCertOn(t, testNode)), &ateapipb.MintCertRequest{
 		Atespace:                  testAtespace,
