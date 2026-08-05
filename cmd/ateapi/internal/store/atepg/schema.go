@@ -24,26 +24,17 @@ import (
 // schema is atepg's idempotent embedded schema.
 const schema = `
 CREATE TABLE IF NOT EXISTS atespaces (
-    name         text PRIMARY KEY,
-    uid          uuid NOT NULL UNIQUE,
-    version      bigint NOT NULL,
-    create_time  timestamptz NOT NULL,
-    update_time  timestamptz NOT NULL,
-    proto        bytea NOT NULL
+    name   text PRIMARY KEY,
+    proto  bytea NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS actors (
-    atespace                     text NOT NULL
+    atespace  text NOT NULL
         REFERENCES atespaces(name) ON DELETE RESTRICT,
-    name                         text NOT NULL,
-    uid                          uuid NOT NULL UNIQUE,
-    version                      bigint NOT NULL,
-    status                       integer NOT NULL,
-    actor_template_namespace     text NOT NULL,
-    actor_template_name          text NOT NULL,
-    create_time                  timestamptz NOT NULL,
-    update_time                  timestamptz NOT NULL,
-    proto                        bytea NOT NULL,
+    name      text NOT NULL,
+    version   bigint NOT NULL,
+    status    integer NOT NULL,
+    proto     bytea NOT NULL,
     PRIMARY KEY (atespace, name)
 );
 

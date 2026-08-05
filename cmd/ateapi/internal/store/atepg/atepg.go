@@ -15,11 +15,10 @@
 // Package atepg is an ate storage backend built on PostgreSQL.
 //
 // Each table holds native SQL columns for fields SQL must operate on
-// (primary keys, versions, timestamps, pagination, update/delete
-// preconditions) plus the complete protobuf message, binary-encoded, in a
-// BYTEA column. TLS is configured entirely through the connection string
-// passed to Connect (standard libpq sslmode/sslrootcert/sslcert/sslkey
-// parameters); no bespoke TLS plumbing is needed.
+// (primary keys, versions, pagination, update/delete preconditions) plus
+// the complete protobuf message, binary-encoded, in a BYTEA column.
+// TLS is configured entirely through the connection string passed
+// to Connect (standard libpq sslmode/sslrootcert/sslcert/sslkey parameters)
 package atepg
 
 import (
@@ -142,11 +141,10 @@ func (p *Persistence) CreateAtespace(ctx context.Context, atespace *ateapipb.Ate
 		return nil, fmt.Errorf("marshaling atespace: %w", err)
 	}
 
-	meta := dbAtespace.GetMetadata()
 	_, err = p.pool.Exec(ctx, `
-		INSERT INTO atespaces (name, uid, version, create_time, update_time, proto)
-		VALUES ($1, $2, $3, $4, $5, $6)`,
-		name, meta.GetUid(), meta.GetVersion(), meta.GetCreateTime().AsTime(), meta.GetUpdateTime().AsTime(), protoBytes)
+		INSERT INTO atespaces (name, proto)
+		VALUES ($1, $2)`,
+		name, protoBytes)
 	if err != nil {
 		if isUniqueViolation(err) {
 			return nil, store.ErrAlreadyExists
@@ -264,13 +262,10 @@ func (p *Persistence) CreateActor(ctx context.Context, actor *ateapipb.Actor) (*
 		return nil, fmt.Errorf("marshaling actor: %w", err)
 	}
 
-	meta := dbActor.GetMetadata()
 	_, err = p.pool.Exec(ctx, `
-		INSERT INTO actors (atespace, name, uid, version, status, actor_template_namespace, actor_template_name, create_time, update_time, proto)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
-		atespace, name, meta.GetUid(), meta.GetVersion(), int32(dbActor.GetStatus()),
-		dbActor.GetActorTemplateNamespace(), dbActor.GetActorTemplateName(),
-		meta.GetCreateTime().AsTime(), meta.GetUpdateTime().AsTime(), protoBytes)
+		INSERT INTO actors (atespace, name, version, status, proto)
+		VALUES ($1, $2, $3, $4, $5)`,
+		atespace, name, dbActor.GetMetadata().GetVersion(), int32(dbActor.GetStatus()), protoBytes)
 	if err != nil {
 		if isUniqueViolation(err) {
 			return nil, store.ErrAlreadyExists
@@ -322,17 +317,15 @@ func (p *Persistence) UpdateActor(ctx context.Context, actor *ateapipb.Actor, ex
 	if current.GetMetadata().GetVersion() != expectedVersion {
 		return nil, store.ErrVersionConflict
 	}
-	if current.GetActorTemplateNamespace() != actor.GetActorTemplateNamespace() {
-		return nil, fmt.Errorf("actor_template_namespace is immutable")
-	}
-	if current.GetActorTemplateName() != actor.GetActorTemplateName() {
-		return nil, fmt.Errorf("actor_template_name is immutable")
-	}
 
 	dbActor := proto.Clone(actor).(*ateapipb.Actor)
-	// UID, identity, create time, and current version are server-owned. Derive
-	// the new metadata from the stored resource rather than trusting fields
-	// supplied by the caller.
+	if current.GetActorTemplateNamespace() != dbActor.GetActorTemplateNamespace() {
+		return nil, fmt.Errorf("actor_template_namespace is immutable")
+	}
+	if current.GetActorTemplateName() != dbActor.GetActorTemplateName() {
+		return nil, fmt.Errorf("actor_template_name is immutable")
+	}
+	// UID, identity, create time, and version are server-owned.
 	dbActor.Metadata = newUpdateMetadata(current.GetMetadata())
 
 	protoBytes, err := proto.Marshal(dbActor)
@@ -343,10 +336,10 @@ func (p *Persistence) UpdateActor(ctx context.Context, actor *ateapipb.Actor, ex
 	var returnedProto []byte
 	err = tx.QueryRow(ctx, `
 		UPDATE actors
-		SET version = $1, status = $2, update_time = $3, proto = $4
-		WHERE atespace = $5 AND name = $6 AND version = $7
+		SET version = $1, status = $2, proto = $3
+		WHERE atespace = $4 AND name = $5 AND version = $6
 		RETURNING proto`,
-		dbActor.GetMetadata().GetVersion(), int32(dbActor.GetStatus()), dbActor.GetMetadata().GetUpdateTime().AsTime(), protoBytes,
+		dbActor.GetMetadata().GetVersion(), int32(dbActor.GetStatus()), protoBytes,
 		atespace, name, expectedVersion,
 	).Scan(&returnedProto)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
