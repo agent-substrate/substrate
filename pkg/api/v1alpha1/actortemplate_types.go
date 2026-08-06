@@ -15,6 +15,7 @@
 package v1alpha1
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
@@ -358,6 +359,19 @@ type ActorTemplateSpec struct {
 	// +optional
 	// +kubebuilder:validation:MaxItems=32
 	Volumes []Volume `json:"volumes,omitempty"`
+
+	// Resources declares the compute resources for each actor of this template.
+	// Unlike a pod, an actor is sized by its Limits: the sandbox is built to the
+	// CPU/memory limits (cgroup caps, and for the micro-VM the VM's vCPU count and
+	// memory), the scheduler only places the actor on a worker whose capacity is
+	// >= these limits, and the limits are supplied to the sandbox over the actor
+	// RPCs. Because the size is baked into snapshots, it is part of the immutable
+	// spec. Requests are not consulted today (an actor occupies its whole worker).
+	// A zero or absent limit leaves the sandbox at the runtime default (unlimited
+	// for gVisor, the kata config for the micro-VM).
+	//
+	// +optional
+	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
 }
 
 // TODO: add validation

@@ -121,6 +121,47 @@ func TestSchedule(t *testing.T) {
 			wantPod:     "w-active",
 		},
 		{
+			name: "worker with too little cpu capacity is skipped",
+			fleet: fleet{
+				worker("w-small", "gvisor", "node-a", tierTwo, withCapacity(1000, 8<<30)),
+				worker("w-big", "gvisor", "node-a", tierTwo, withCapacity(4000, 8<<30)),
+			},
+			constraints: Constraints{SandboxClass: "gvisor", CPUMilli: 2000},
+			wantPod:     "w-big",
+		},
+		{
+			name: "worker with too little memory capacity is skipped",
+			fleet: fleet{
+				worker("w-small", "gvisor", "node-a", tierTwo, withCapacity(4000, 1<<30)),
+				worker("w-big", "gvisor", "node-a", tierTwo, withCapacity(4000, 4<<30)),
+			},
+			constraints: Constraints{SandboxClass: "gvisor", MemoryBytes: 2 << 30},
+			wantPod:     "w-big",
+		},
+		{
+			name: "no worker with enough capacity yields ErrNoCapacity",
+			fleet: fleet{
+				worker("w-small", "gvisor", "node-a", tierTwo, withCapacity(1000, 1<<30)),
+			},
+			constraints: Constraints{SandboxClass: "gvisor", CPUMilli: 2000},
+		},
+		{
+			name: "zero worker capacity is treated as unconstrained",
+			fleet: fleet{
+				worker("w-unknown", "gvisor", "node-a", tierTwo),
+			},
+			constraints: Constraints{SandboxClass: "gvisor", CPUMilli: 2000, MemoryBytes: 2 << 30},
+			wantPod:     "w-unknown",
+		},
+		{
+			name: "zero constraint ignores worker capacity",
+			fleet: fleet{
+				worker("w-tiny", "gvisor", "node-a", tierTwo, withCapacity(100, 1<<20)),
+			},
+			constraints: Constraints{SandboxClass: "gvisor"},
+			wantPod:     "w-tiny",
+		},
+		{
 			name:        "empty fleet",
 			fleet:       fleet{},
 			constraints: Constraints{SandboxClass: "gvisor"},
@@ -266,6 +307,13 @@ func assigned(atespace, name string) func(*ateapipb.Worker) {
 			Actor:    &ateapipb.ObjectRef{Atespace: atespace, Name: name},
 			ActorUid: atespace + "/" + name,
 		}
+	}
+}
+
+func withCapacity(cpuMilli, memBytes int64) func(*ateapipb.Worker) {
+	return func(w *ateapipb.Worker) {
+		w.CpuMilliCapacity = cpuMilli
+		w.MemoryBytesCapacity = memBytes
 	}
 }
 

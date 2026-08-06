@@ -47,6 +47,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/readyz"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/serverboot"
+	"github.com/agent-substrate/substrate/internal/sizing"
 	"github.com/agent-substrate/substrate/internal/version"
 	"github.com/hashicorp/go-reap"
 	"github.com/spf13/pflag"
@@ -597,6 +598,7 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	rcmd := &runsc{
 		path:     req.GetRunscPath(),
 		actorUID: req.GetActorUid(),
+		size:     sizing.FromLimits(req.GetCpuMilli(), req.GetMemoryBytes()),
 	}
 	var containersToDelete []string
 	defer func() {
@@ -621,7 +623,6 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 			}
 		}
 	}()
-
 	// Create and start pause container. The bundle rootfs is composed here —
 	// an overlay of the node's cached image layers plus the bundle's private
 	// upper — because mounting is ateom's job (atelet runs with no
@@ -698,6 +699,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	//   * After we exit, atelet will upload checkpoint to GCS
 	//   * After we exit, atelet will tear down OCI bundles and reset the actor directory.
 
+	// Checkpoint only saves state; no sizing is applied, so size is left zero.
 	rcmd := &runsc{
 		path:     req.GetRunscPath(),
 		actorUID: req.GetActorUid(),
@@ -872,6 +874,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	rcmd := &runsc{
 		path:     req.GetRunscPath(),
 		actorUID: req.GetActorUid(),
+		size:     sizing.FromLimits(req.GetCpuMilli(), req.GetMemoryBytes()),
 	}
 	var containersToDelete []string
 	defer func() {
@@ -893,7 +896,6 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 			}
 		}
 	}()
-
 	checkpointDir := ateompath.RestoreStateDir(req.GetActorUid())
 
 	// Compose the pause rootfs before create (see RunWorkload). runsc restore

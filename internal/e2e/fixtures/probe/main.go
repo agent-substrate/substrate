@@ -21,10 +21,14 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"log"
 	"net/http"
 	"os"
+	"runtime"
+	"strconv"
+	"strings"
 )
 
 // identityFile is the actor-id file inside the identity directory atelet
@@ -48,6 +52,66 @@ func whoami(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, resp)
 }
 
+// resources reports the compute envelope the actor observes from inside the
+// sandbox, so the sizing e2e suite can assert the actor's declared limits
+// actually shaped the runtime.
+//
+//   - num_cpu is runtime.NumCPU(): for the gVisor runtime this is the sentry's
+//     vCPU count, provisioned from the CPU limit via runsc --cpu-num-from-quota,
+//     so it equals ceil(limits.cpu).
+//   - mem_total_bytes is MemTotal from /proc/meminfo: the memory the sandbox
+//     believes it has, bounded by limits.memory.
+//   - cpu_max / memory_max are the raw cgroup v2 files, reported best-effort for
+//     debugging; presence and format vary by runtime.
+func resources(w http.ResponseWriter, _ *http.Request) {
+	resp := map[string]any{"num_cpu": runtime.NumCPU()}
+
+	if v, err := memTotalBytes(); err == nil {
+		resp["mem_total_bytes"] = v
+	} else {
+		resp["mem_total_error"] = err.Error()
+	}
+	if b, err := os.ReadFile("/sys/fs/cgroup/cpu.max"); err == nil {
+		resp["cpu_max"] = strings.TrimSpace(string(b))
+	}
+	if b, err := os.ReadFile("/sys/fs/cgroup/memory.max"); err == nil {
+		resp["memory_max"] = strings.TrimSpace(string(b))
+	}
+
+	writeJSON(w, resp)
+}
+
+// memTotalBytes parses MemTotal (reported in kB) from /proc/meminfo.
+func memTotalBytes() (int64, error) {
+	f, err := os.Open("/proc/meminfo")
+	if err != nil {
+		return 0, err
+	}
+	defer f.Close()
+
+	sc := bufio.NewScanner(f)
+	for sc.Scan() {
+		line := sc.Text()
+		rest, ok := strings.CutPrefix(line, "MemTotal:")
+		if !ok {
+			continue
+		}
+		fields := strings.Fields(rest) // e.g. "524288 kB"
+		if len(fields) == 0 {
+			break
+		}
+		kb, err := strconv.ParseInt(fields[0], 10, 64)
+		if err != nil {
+			return 0, err
+		}
+		return kb * 1024, nil
+	}
+	if err := sc.Err(); err != nil {
+		return 0, err
+	}
+	return 0, os.ErrNotExist
+}
+
 func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(v); err != nil {
@@ -58,6 +122,7 @@ func writeJSON(w http.ResponseWriter, v any) {
 func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/whoami", whoami)
+	mux.HandleFunc("/resources", resources)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 
 	const addr = ":80"

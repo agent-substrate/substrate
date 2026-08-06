@@ -29,6 +29,17 @@ metadata:
 spec:
   replicas: 5
   ateomImage: ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor
+  template:
+    # Per-worker resources: these size the worker POD and advertise its
+    # scheduling capacity (the per-actor ceiling). The sandbox itself is sized by
+    # the ActorTemplate's spec.resources below, not by these (see internal/sizing).
+    resources:
+      requests:
+        cpu: "250m"
+        memory: 256Mi
+      limits:
+        cpu: "1"
+        memory: 1Gi
 
 ---
 
@@ -52,6 +63,13 @@ ${VALIDATE_EXISTING_FILE_PATH_ARG}
     - name: data
       mountPath: /home/counter
 ${EXTERNAL_VOLUME_MOUNTS}
+  # Sandbox size: an actor occupies its whole worker, so size it at (or below)
+  # the pool's per-worker capacity above. ateom writes these to the OCI spec
+  # (cgroup CPU quota + memory limit) — see internal/sizing.
+  resources:
+    limits:
+      cpu: "1"
+      memory: 512Mi
   workerSelector:
     matchLabels:
       workload: counter

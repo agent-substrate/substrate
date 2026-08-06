@@ -206,16 +206,19 @@ func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerK
 			return fmt.Errorf("getting worker from store: %w", err)
 		}
 		slog.InfoContext(ctx, "Syncer: creating worker in store", slog.String("worker", key.namespace+"/"+key.name))
+		cpuCap, memCap := workerCapacity(pod)
 		worker := &ateapipb.Worker{
-			WorkerNamespace: pod.Namespace,
-			WorkerPool:      key.pool,
-			WorkerPod:       pod.Name,
-			Ip:              pod.Status.PodIP,
-			WorkerPodUid:    string(pod.UID),
-			NodeName:        pod.Spec.NodeName,
-			SandboxClass:    string(pool.Spec.SandboxClass),
-			Labels:          pool.GetLabels(),
-			State:           ateapipb.Worker_STATE_ACTIVE,
+			WorkerNamespace:     pod.Namespace,
+			WorkerPool:          key.pool,
+			WorkerPod:           pod.Name,
+			Ip:                  pod.Status.PodIP,
+			WorkerPodUid:        string(pod.UID),
+			NodeName:            pod.Spec.NodeName,
+			SandboxClass:        string(pool.Spec.SandboxClass),
+			Labels:              pool.GetLabels(),
+			State:               ateapipb.Worker_STATE_ACTIVE,
+			CpuMilliCapacity:    cpuCap,
+			MemoryBytesCapacity: memCap,
 		}
 		// TODO(thockin): for now this is the only place Workers are
 		// created.  If/when this becomes a regular API, validation should
@@ -271,6 +274,33 @@ func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerK
 
 func isWorkerEligible(pod *corev1.Pod) bool {
 	return pod.Status.PodIP != ""
+}
+
+// ateomContainerName is the name of the container in a worker pod that hosts the
+// actor's sandbox; its resource limits bound what an actor placed here can use.
+const ateomContainerName = "ateom"
+
+// workerCapacity returns the worker pod's CPU (millicores) and memory (bytes)
+// capacity for hosting an actor, taken from the ateom container's resource
+// limits. A dimension the pod does not limit reports 0, which the scheduler
+// treats as "unknown" (unconstrained). The actor sandbox runs nested in the
+// ateom container's cgroup, so that container's limits — not the pod total —
+// are the relevant envelope.
+func workerCapacity(pod *corev1.Pod) (cpuMilli, memBytes int64) {
+	for i := range pod.Spec.Containers {
+		c := &pod.Spec.Containers[i]
+		if c.Name != ateomContainerName {
+			continue
+		}
+		if v := c.Resources.Limits.Cpu(); v != nil {
+			cpuMilli = v.MilliValue()
+		}
+		if v := c.Resources.Limits.Memory(); v != nil {
+			memBytes = v.Value()
+		}
+		break
+	}
+	return cpuMilli, memBytes
 }
 
 // markWorkerDraining transitions a worker to STATE_DRAINING so the scheduler

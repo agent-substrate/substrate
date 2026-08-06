@@ -316,6 +316,11 @@ type RunRequest struct {
 	SandboxAssets *SandboxAssets `protobuf:"bytes,8,opt,name=sandbox_assets,json=sandboxAssets,proto3" json:"sandbox_assets,omitempty"`
 	// When absent, actor traffic uses direct egress instead of atunnel.
 	EgressGateway *EgressGateway `protobuf:"bytes,9,opt,name=egress_gateway,json=egressGateway,proto3,oneof" json:"egress_gateway,omitempty"`
+	// The actor's declared size, from the ActorTemplate's resource limits. atelet
+	// passes these through to the sandbox so it is sized to the actor (not the
+	// whole host or worker pod). Zero means "unset": keep the runtime default.
+	CpuMilli      int64 `protobuf:"varint,10,opt,name=cpu_milli,json=cpuMilli,proto3" json:"cpu_milli,omitempty"`          // CPU limit in millicores (1000 = one core).
+	MemoryBytes   int64 `protobuf:"varint,11,opt,name=memory_bytes,json=memoryBytes,proto3" json:"memory_bytes,omitempty"` // Memory limit in bytes.
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -411,6 +416,20 @@ func (x *RunRequest) GetEgressGateway() *EgressGateway {
 		return x.EgressGateway
 	}
 	return nil
+}
+
+func (x *RunRequest) GetCpuMilli() int64 {
+	if x != nil {
+		return x.CpuMilli
+	}
+	return 0
+}
+
+func (x *RunRequest) GetMemoryBytes() int64 {
+	if x != nil {
+		return x.MemoryBytes
+	}
+	return 0
 }
 
 // EgressGateway configures tunneled egress for one actor activation.
@@ -1687,6 +1706,12 @@ type RestoreRequest struct {
 	GoldenSnapshotUri string `protobuf:"bytes,12,opt,name=golden_snapshot_uri,json=goldenSnapshotUri,proto3" json:"golden_snapshot_uri,omitempty"`
 	// When absent, actor traffic uses direct egress instead of atunnel.
 	EgressGateway *EgressGateway `protobuf:"bytes,13,opt,name=egress_gateway,json=egressGateway,proto3,oneof" json:"egress_gateway,omitempty"`
+	// The actor's declared size, from the ActorTemplate's resource limits. For
+	// gVisor and micro-VM DATA-scope restores the sandbox is (re)sized to these;
+	// for a FULL micro-VM restore the size baked into the snapshot wins. Zero
+	// means "unset": keep the runtime default.
+	CpuMilli      int64 `protobuf:"varint,14,opt,name=cpu_milli,json=cpuMilli,proto3" json:"cpu_milli,omitempty"`          // CPU limit in millicores (1000 = one core).
+	MemoryBytes   int64 `protobuf:"varint,15,opt,name=memory_bytes,json=memoryBytes,proto3" json:"memory_bytes,omitempty"` // Memory limit in bytes.
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1823,6 +1848,20 @@ func (x *RestoreRequest) GetEgressGateway() *EgressGateway {
 	return nil
 }
 
+func (x *RestoreRequest) GetCpuMilli() int64 {
+	if x != nil {
+		return x.CpuMilli
+	}
+	return 0
+}
+
+func (x *RestoreRequest) GetMemoryBytes() int64 {
+	if x != nil {
+		return x.MemoryBytes
+	}
+	return 0
+}
+
 type isRestoreRequest_Config interface {
 	isRestoreRequest_Config()
 }
@@ -1884,7 +1923,7 @@ const file_atelet_proto_rawDesc = "" +
 	"\x1bcertificate_signing_request\x18\x01 \x01(\fR\x19certificateSigningRequest\x12,\n" +
 	"\x12expected_actor_uid\x18\x02 \x01(\tR\x10expectedActorUid\"M\n" +
 	"\x1cMintActorCertificateResponse\x12-\n" +
-	"\x12actor_certificates\x18\x01 \x03(\fR\x11actorCertificates\"\xb6\x03\n" +
+	"\x12actor_certificates\x18\x01 \x03(\fR\x11actorCertificates\"\xf6\x03\n" +
 	"\n" +
 	"RunRequest\x12(\n" +
 	"\x10target_ateom_uid\x18\x01 \x01(\tR\x0etargetAteomUid\x12\x1a\n" +
@@ -1896,7 +1935,10 @@ const file_atelet_proto_rawDesc = "" +
 	"\x13actor_template_name\x18\x06 \x01(\tR\x11actorTemplateName\x12(\n" +
 	"\x04spec\x18\a \x01(\v2\x14.atelet.WorkloadSpecR\x04spec\x12<\n" +
 	"\x0esandbox_assets\x18\b \x01(\v2\x15.atelet.SandboxAssetsR\rsandboxAssets\x12A\n" +
-	"\x0eegress_gateway\x18\t \x01(\v2\x15.atelet.EgressGatewayH\x00R\regressGateway\x88\x01\x01B\x11\n" +
+	"\x0eegress_gateway\x18\t \x01(\v2\x15.atelet.EgressGatewayH\x00R\regressGateway\x88\x01\x01\x12\x1b\n" +
+	"\tcpu_milli\x18\n" +
+	" \x01(\x03R\bcpuMilli\x12!\n" +
+	"\fmemory_bytes\x18\v \x01(\x03R\vmemoryBytesB\x11\n" +
 	"\x0f_egress_gateway\")\n" +
 	"\rEgressGateway\x12\x18\n" +
 	"\aaddress\x18\x01 \x01(\tR\aaddress\"5\n" +
@@ -1991,7 +2033,7 @@ const file_atelet_proto_rawDesc = "" +
 	"\x13local_snapshot_name\x18\x06 \x01(\tR\x11localSnapshotName\x128\n" +
 	"\x18destination_snapshot_uri\x18\a \x01(\tR\x16destinationSnapshotUri\x12:\n" +
 	"\rdesired_scope\x18\b \x01(\x0e2\x15.atelet.SnapshotScopeR\fdesiredScope\" \n" +
-	"\x1eUploadPausedCheckpointResponse\"\xae\x05\n" +
+	"\x1eUploadPausedCheckpointResponse\"\xee\x05\n" +
 	"\x0eRestoreRequest\x12(\n" +
 	"\x10target_ateom_uid\x18\x01 \x01(\tR\x0etargetAteomUid\x12\x1a\n" +
 	"\batespace\x18\x02 \x01(\tR\batespace\x12\x1d\n" +
@@ -2007,7 +2049,9 @@ const file_atelet_proto_rawDesc = "" +
 	" \x01(\v2'.atelet.ExternalCheckpointConfigurationH\x00R\x0eexternalConfig\x12+\n" +
 	"\x05scope\x18\v \x01(\x0e2\x15.atelet.SnapshotScopeR\x05scope\x12.\n" +
 	"\x13golden_snapshot_uri\x18\f \x01(\tR\x11goldenSnapshotUri\x12A\n" +
-	"\x0eegress_gateway\x18\r \x01(\v2\x15.atelet.EgressGatewayH\x01R\regressGateway\x88\x01\x01B\b\n" +
+	"\x0eegress_gateway\x18\r \x01(\v2\x15.atelet.EgressGatewayH\x01R\regressGateway\x88\x01\x01\x12\x1b\n" +
+	"\tcpu_milli\x18\x0e \x01(\x03R\bcpuMilli\x12!\n" +
+	"\fmemory_bytes\x18\x0f \x01(\x03R\vmemoryBytesB\b\n" +
 	"\x06configB\x11\n" +
 	"\x0f_egress_gateway\"\x11\n" +
 	"\x0fRestoreResponse*`\n" +

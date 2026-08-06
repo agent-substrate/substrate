@@ -4530,8 +4530,15 @@ type Worker struct {
 	SandboxClass    string                 `protobuf:"bytes,9,opt,name=sandbox_class,json=sandboxClass,proto3" json:"sandbox_class,omitempty"`
 	Labels          map[string]string      `protobuf:"bytes,10,rep,name=labels,proto3" json:"labels,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	State           Worker_State           `protobuf:"varint,11,opt,name=state,proto3,enum=ateapi.Worker_State" json:"state,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// Capacity is the worker pod's compute capacity available to host an actor
+	// sandbox, taken from the ateom container's resource limits. The scheduler
+	// only places an actor on a worker whose capacity is >= the actor's declared
+	// resource limits. Zero means "unknown/unset": treated as unconstrained so
+	// placement is not blocked (matching the pre-capacity behaviour).
+	CpuMilliCapacity    int64 `protobuf:"varint,12,opt,name=cpu_milli_capacity,json=cpuMilliCapacity,proto3" json:"cpu_milli_capacity,omitempty"`          // CPU capacity in millicores.
+	MemoryBytesCapacity int64 `protobuf:"varint,13,opt,name=memory_bytes_capacity,json=memoryBytesCapacity,proto3" json:"memory_bytes_capacity,omitempty"` // Memory capacity in bytes.
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *Worker) Reset() {
@@ -4639,6 +4646,20 @@ func (x *Worker) GetState() Worker_State {
 		return x.State
 	}
 	return Worker_STATE_UNSPECIFIED
+}
+
+func (x *Worker) GetCpuMilliCapacity() int64 {
+	if x != nil {
+		return x.CpuMilliCapacity
+	}
+	return 0
+}
+
+func (x *Worker) GetMemoryBytesCapacity() int64 {
+	if x != nil {
+		return x.MemoryBytesCapacity
+	}
+	return 0
 }
 
 type Assignment struct {
@@ -5390,7 +5411,7 @@ const file_ateapi_proto_rawDesc = "" +
 	"page_token\x18\x03 \x01(\tR\tpageToken\"c\n" +
 	"\x12ListActorsResponse\x12%\n" +
 	"\x06actors\x18\x01 \x03(\v2\r.ateapi.ActorR\x06actors\x12&\n" +
-	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"\x9a\x04\n" +
+	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"\xfc\x04\n" +
 	"\x06Worker\x12)\n" +
 	"\x10worker_namespace\x18\x01 \x01(\tR\x0fworkerNamespace\x12\x1f\n" +
 	"\vworker_pool\x18\x02 \x01(\tR\n" +
@@ -5407,7 +5428,9 @@ const file_ateapi_proto_rawDesc = "" +
 	"\rsandbox_class\x18\t \x01(\tR\fsandboxClass\x122\n" +
 	"\x06labels\x18\n" +
 	" \x03(\v2\x1a.ateapi.Worker.LabelsEntryR\x06labels\x12*\n" +
-	"\x05state\x18\v \x01(\x0e2\x14.ateapi.Worker.StateR\x05state\x1a9\n" +
+	"\x05state\x18\v \x01(\x0e2\x14.ateapi.Worker.StateR\x05state\x12,\n" +
+	"\x12cpu_milli_capacity\x18\f \x01(\x03R\x10cpuMilliCapacity\x122\n" +
+	"\x15memory_bytes_capacity\x18\r \x01(\x03R\x13memoryBytesCapacity\x1a9\n" +
 	"\vLabelsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"D\n" +
