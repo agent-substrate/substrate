@@ -30,6 +30,7 @@ import (
 	"github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -357,6 +358,18 @@ func TestMultipleDurableDirLifecycle(t *testing.T) {
 func TestExternalVolumeLifecycle(t *testing.T) {
 	if isMicroVMEnvironment() {
 		t.Skip("Skipping TestExternalVolumeLifecycle for microVM environment")
+	}
+
+	ctx := context.Background()
+	clients := e2e.GetClients()
+
+	nodes, err := clients.K8s.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		t.Fatalf("failed to list nodes: %v", err)
+	}
+
+	if !isKindCluster(nodes.Items) && len(nodes.Items) > 1 {
+		t.Skipf("Skipping TestExternalVolumeLifecycle: external volumes with mock driver are not supported in multi-node non-kind environments (node count: %d)", len(nodes.Items))
 	}
 
 	tests := []struct {
@@ -1134,6 +1147,17 @@ func callActorOnce(t *testing.T, actorRef resources.ActorRef) (string, error) {
 // TestExternalVolumeLifecycle).
 func isMicroVMEnvironment() bool {
 	return os.Getenv("E2E_TEMPLATE_NAMESPACE") == "ate-demo-counter-microvm"
+}
+
+// isKindCluster reports whether the cluster is running on Kind by inspecting
+// the providerID of the nodes.
+func isKindCluster(nodes []corev1.Node) bool {
+	for _, node := range nodes {
+		if strings.HasPrefix(node.Spec.ProviderID, "kind://") {
+			return true
+		}
+	}
+	return false
 }
 
 func TestWorkerPodDeletion(t *testing.T) {
