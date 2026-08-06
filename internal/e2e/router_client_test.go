@@ -24,14 +24,6 @@ import (
 	"github.com/agent-substrate/substrate/internal/resources"
 )
 
-// SEE(lior): this file used to also hold TestResolveHTTPTargetPort and
-// TestIsPodReady. Main moved both into internal/portforward/portforward_test.go
-// (upstream 4453b5e7, "Prefactoring: Consolidate logic to port-forward to a
-// service Pod") and deleted this file, so git rename-matched this branch's
-// version of it against the new portforward test and reported the whole thing as
-// a conflict. Took main's move as-is and re-added only the net-new PostJSON test
-// here, rather than resurrecting the port-forward tests in a package that no
-// longer owns that code.
 func TestRouterClientPostJSON(t *testing.T) {
 	client := &RouterClient{
 		baseURL: "http://router.test",

@@ -124,13 +124,6 @@ fi
 ##############################################################################
 log "NEGATIVE — a pod identity is not an actor identity (expect a refused handshake)"
 ##############################################################################
-# SEE(lior): this used to be a 403 assertion. On the header-based design the
-# gateway trusted any podidentity holder's mTLS and let ext_proc adjudicate the
-# X-Ate-* headers it asserted, so a probe pod could reach the CONNECT and be
-# denied there. The gateway now trusts only the actor-identity CA, so the same
-# probe never gets past the TLS handshake — the denial moved a layer down and
-# there is no CONNECT response to read a status code out of. Assert the
-# handshake failure instead; it is the stronger property.
 ${K} apply -f - >/dev/null <<'YAML'
 apiVersion: v1
 kind: Pod

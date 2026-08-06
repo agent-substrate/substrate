@@ -17,13 +17,6 @@
 #     actor-identity client cert),
 #   * terminate the actor's HTTP CONNECT and tunnel raw TCP to the CONNECT
 #     authority (the actor's original destination, always sent as IP:port).
-#
-# SEE(lior): the client cert is the actor's own identity — minted per actor by
-# ateapi's actoridentity service off the actor-identity CA and carrying the
-# ActorIdentity X.509 extension — not the pod's podidentity cert. The pod cert
-# says "some substrate pod"; only the actor cert says *which actor*, which is
-# the thing the gateway has to authorize. The CONNECT carries no identity
-# headers at all; everything the PEP decides on comes out of the certificate.
 apiVersion: v1
 kind: ServiceAccount
 metadata:
@@ -89,9 +82,7 @@ data:
               # ActorIdentity in Go is to have Envoy hand over the raw chain.
               # SANITIZE_SET drops whatever x-forwarded-client-cert the client
               # sent and writes Envoy's own view of the verified peer, and
-              # chain: true puts the full URL-encoded PEM chain in it. Removing
-              # either of these breaks egress closed: the handler sees no XFCC
-              # and denies every CONNECT.
+              # chain: true puts the full URL-encoded PEM chain in it.
               forward_client_cert_details: SANITIZE_SET
               set_current_client_cert_details:
                 chain: true
@@ -106,16 +97,6 @@ data:
                   "@type": type.googleapis.com/envoy.extensions.access_loggers.stream.v3.StdoutAccessLog
                   log_format:
                     text_format_source:
-                      # SEE(lior): the peer fields come from the verified client
-                      # certificate, not from request headers. The actor sends no
-                      # identity headers any more, and logging attacker-controlled
-                      # ones would have made this log lie about who egressed.
-                      # peer_san= is the actor's SPIFFE URI SAN,
-                      # spiffe://substrate-actor.local/atespace/<atespace>/actor/<name>
-                      # — the only actor-identifying field Envoy can format
-                      # (ateapi mints these with an empty Subject, and the UID
-                      # lives in the ActorIdentity extension Envoy cannot read).
-                      # The ext_proc sidecar logs atespace/actor/UID separately.
                       inline_string: "[egress] authority=%REQ(:AUTHORITY)% peer_san=%DOWNSTREAM_PEER_URI_SAN% peer_serial=%DOWNSTREAM_PEER_SERIAL% code=%RESPONSE_CODE% flags=%RESPONSE_FLAGS% up_bytes=%BYTES_RECEIVED% down_bytes=%BYTES_SENT%\n"
               route_config:
                 name: connect_route
@@ -360,19 +341,6 @@ spec:
                 matchLabels:
                   podcert.ate.dev/canarying: live
               path: trust-bundle.pem
-      # SEE(lior): the actor-identity CA root, as a cert-only Secret that
-      # install-ate.sh derives from the actor-id-ca-pool Secret. It is a plain
-      # Secret rather than a projected clusterTrustBundle — unlike the two above
-      # — because the actor-identity CA has no signer/controller publishing a
-      # trust bundle for it yet; its only in-cluster home is actor-id-ca-pool,
-      # whose pool.json also holds the CA *signing key*. Mounting that here would
-      # put the key that mints every actor identity into the pod that merely
-      # verifies them, so install-ate.sh extracts the root and nothing else.
-      #
-      # TODO(liorlieberman): revisit once the actor-identity CA is published as a
-      # ClusterTrustBundle; this volume then becomes a third projected source and
-      # the install-time Secret goes away. See create_actor_id_ca_certs_secret in
-      # hack/install-ate.sh.
       - name: actor-id-ca-certs
         secret:
           secretName: actor-id-ca-certs

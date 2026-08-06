@@ -202,31 +202,14 @@ func (h *Handler) authenticateActorCertificate(md *extproc.RequestMetadata) (*su
 // actor certificate issued by the actor-identity CA, and returns the single
 // ActorIdentity it carries.
 //
-// ###########################################################################
-// SEE(lior): READ THIS IF YOU ARE WONDERING WHY WE VERIFY THE CHAIN TWICE.
-//
-// The egress listener already does full mTLS: require_client_certificate with
-// the actor-identity CA as its trusted_ca, so Envoy refuses the handshake for
-// anything this function would also reject on chain, expiry, or signature. The
-// re-verification below is therefore redundant *today*, and it is here on
-// purpose:
-//
-//   - Envoy validates the chain but cannot look at the ActorIdentity
-//     extension. This function has to parse the certificate regardless, and
-//     parsing an unverified certificate and then trusting its contents is the
-//     failure mode that keeps producing CVEs. Verifying what we parse keeps the
-//     trust decision in one place instead of split across a YAML file and a Go
-//     file.
-//   - It makes the handler safe under Envoy config drift. Someone relaxing
-//     require_client_certificate, widening trusted_ca, or putting another proxy
-//     in front should not silently turn this into an unauthenticated endpoint.
-//   - It costs one signature verification per CONNECT, not per request: the
-//     tunnel is established once and then carries raw TCP.
-//
-// If you decide the Envoy-side check is authoritative and this is dead weight,
-// this function is the thing to delete — but keep the ActorIdentity extraction
-// and the IsCA/EKU/purpose checks below it, because Envoy does none of those.
-// ###########################################################################
+// The chain is verified here even though Envoy already did it at the handshake
+// (require_client_certificate with the actor-identity CA as trusted_ca). We have
+// to parse the certificate anyway to read the ActorIdentity extension, which
+// Envoy cannot see, and trusting a parsed-but-unverified certificate is a
+// well-worn source of CVEs. It also keeps the handler safe if the Envoy config
+// is ever loosened, and costs one signature check per CONNECT rather than per
+// request. The IsCA, ClientAuth-EKU, and purpose checks below have no Envoy-side
+// equivalent at all.
 func (h *Handler) verifyActorCertificate(chain []*x509.Certificate) (*substratex509.ActorIdentity, error) {
 	leaf := chain[0]
 	intermediates := x509.NewCertPool()

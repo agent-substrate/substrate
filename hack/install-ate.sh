@@ -280,24 +280,13 @@ create_actor_id_ca_pool_secret() {
     --secret-namespace=ate-system
 }
 
-# ---------------------------------------------------------------------------
-# SEE(lior): actor-identity CA trust bundle for the egress PEP.
-#
 # The egress gateway has to verify actor client certificates, which means it
-# needs the actor-identity CA *root* — and only the root. The authoritative
-# copy today is the actor-id-ca-pool Secret, but its pool.json also carries the
-# CA signing key, so mounting that Secret into the gateway would put the key
-# that mints every actor identity inside a pod that only ever needs to verify
-# them. This derives a cert-only Secret instead, following exactly the pattern
-# create_valkey_ca_certs_secret already uses for the signer roots.
+# needs the actor-identity CA root. actor-id-ca-pool Secret containts both
+# root and CA signing key. This derives a cert-only Secret instead, following
+# exactly the pattern create_valkey_ca_certs_secret already uses for the
+# signer roots.
 #
-# TODO(liorlieberman): revisit. The other CAs reach their consumers as
-# ClusterTrustBundles published by the podcertificate controller, and the
-# actor-identity CA arguably should too — then the gateway would project a
-# trust bundle like it already does for servicedns/podidentity and this
-# install-time Secret would go away. Doing that needs a signer/controller path
-# that does not exist yet, so this is the interim shape.
-# ---------------------------------------------------------------------------
+# TODO(liorlieberman): should this be published as ClusterTrustBundles?
 create_actor_id_ca_certs_secret() {
   log_step "create_actor_id_ca_certs_secret"
   # Extract into its own variable first: errexit cannot see a substitution fail
@@ -459,7 +448,7 @@ ensure_apiserver_prerequisites() {
     || create_jwt_authority_pool_secret
   run_kubectl get secret -n ate-system actor-id-ca-pool >/dev/null 2>&1 \
     || create_actor_id_ca_pool_secret
-  # SEE(lior): derived from actor-id-ca-pool above, so it must come after it.
+  # Derived from actor-id-ca-pool above, so it must come after it.
   run_kubectl get secret -n ate-system actor-id-ca-certs >/dev/null 2>&1 \
     || create_actor_id_ca_certs_secret
   run_kubectl get secret -n podcertificate-controller-system service-dns-ca-pool >/dev/null 2>&1 \
