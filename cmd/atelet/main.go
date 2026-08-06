@@ -879,18 +879,13 @@ func (s *AteomHerder) prepareOCIBundles(
 			"io.kubernetes.cri.container-type": "sandbox",
 			"io.kubernetes.cri.container-name": "pause",
 		}
-		// Declare the durable-dir volume to gVisor. The annotation key holds a
-		// single mount ("durabledir"), so this can express exactly ONE volume —
-		// a second would silently overwrite the first. The ActorTemplate CEL
-		// rules are what keep that from happening: they cap gVisor templates at
-		// one durable-dir volume (micro-VM templates, which ignore these
-		// annotations entirely, may declare any number).
-		// TODO(dberkov) needs to revisit this logic once gVisor supports multiple durable-dir volumes.
+		// Declare durable-dir volumes to gVisor. We use the volume name as the
+		// mount hint name to support multiple durable-dir volumes.
 		for _, vol := range spec.GetVolumes() {
 			if vol.GetType() == ateletpb.VolumeType_VOLUME_TYPE_DURABLE_DIR {
-				annotations["dev.gvisor.spec.mount.durabledir.type"] = "bind"
-				annotations["dev.gvisor.spec.mount.durabledir.share"] = "container"
-				annotations["dev.gvisor.spec.mount.durabledir.source"] = ateompath.DurableDirVolumeMountPoint(actorUID, vol.GetName())
+				annotations[fmt.Sprintf("dev.gvisor.spec.mount.%s.type", vol.GetName())] = "bind"
+				annotations[fmt.Sprintf("dev.gvisor.spec.mount.%s.share", vol.GetName())] = "container"
+				annotations[fmt.Sprintf("dev.gvisor.spec.mount.%s.source", vol.GetName())] = ateompath.DurableDirVolumeMountPoint(actorUID, vol.GetName())
 			}
 		}
 
