@@ -132,6 +132,24 @@ func TestWorkerPoolValidation(t *testing.T) {
 		wantErr: true,
 		errMsg:  "nvidia.com/gpu is only supported when sandboxClass is 'gvisor'",
 	}, {
+		// Kubernetes refuses a pod that requests an extended resource without a
+		// matching limit, so a pool like this would shape a worker the Deployment
+		// then rejects. Catch it on the WorkerPool the user wrote.
+		name: "gpu in requests only",
+		mutate: func(wp *WorkerPool) {
+			wp.Spec.Template = gpuTemplate(nil, corev1.ResourceList{gpuResourceName: resource.MustParse("1")})
+		},
+		wantErr: true,
+		errMsg:  "nvidia.com/gpu must be set in limits",
+	}, {
+		name: "gpu in both limits and requests",
+		mutate: func(wp *WorkerPool) {
+			wp.Spec.Template = gpuTemplate(
+				corev1.ResourceList{gpuResourceName: resource.MustParse("1")},
+				corev1.ResourceList{gpuResourceName: resource.MustParse("1")})
+		},
+		wantErr: false,
+	}, {
 		name: "micro-VM pool without a gpu",
 		mutate: func(wp *WorkerPool) {
 			wp.Spec.SandboxClass = SandboxClassMicroVM
