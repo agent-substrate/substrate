@@ -220,12 +220,16 @@ func fieldRefEnv(name, fieldPath string) *corev1ac.EnvVarApplyConfiguration {
 // application (SYS_ADMIN/SYS_CHROOT/SYS_PTRACE), actor networking programs the
 // veth and nftables rules (NET_ADMIN/NET_RAW), and the OCI rootfs is unpacked
 // and device nodes created as root over image-owned trees
-// (DAC_OVERRIDE/FOWNER/CHOWN/MKNOD). This replaces the former privileged worker;
-// the default seccomp and AppArmor profiles are sufficient (no Unconfined).
+// (DAC_OVERRIDE/FOWNER/CHOWN/MKNOD). NET_BIND_SERVICE lets the atunnel listener
+// bind port 443 inside the worker pod: the container drops ALL capabilities and
+// re-adds an explicit list, so being UID 0 is insufficient — privileged-port
+// binding requires an explicit grant even as root when capabilities are dropped.
+// This replaces the former privileged worker; the default seccomp and AppArmor
+// profiles are sufficient (no Unconfined).
 var ateomGvisorCapabilities = []corev1.Capability{
 	"NET_ADMIN", "SYS_ADMIN", "SYS_CHROOT", "SYS_PTRACE",
 	"SETUID", "SETGID", "SETPCAP", "DAC_OVERRIDE",
-	"FOWNER", "CHOWN", "MKNOD", "NET_RAW", "SETFCAP",
+	"FOWNER", "CHOWN", "MKNOD", "NET_RAW", "SETFCAP", "NET_BIND_SERVICE",
 }
 
 // ateomSecurityContext returns the ateom container security context for a sandbox
