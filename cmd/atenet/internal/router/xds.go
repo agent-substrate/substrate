@@ -95,6 +95,25 @@ const defaultExtProcMessageTimeout = 5 * time.Second
 // requests to already-running actors. See buildCluster.
 const defaultExtProcMaxRequests = 2048
 
+// defaultRouteTimeout is Envoy's end-to-end route timeout for workload traffic:
+// the ceiling on a single request from the ingress listener to the actor's
+// response. It bounds the actor's own handling time, not the resume that
+// precedes it — parking and the ext_proc timeout cover that part.
+const defaultRouteTimeout = 10 * time.Second
+
+// envoyDefaultStreamIdleTimeout is the stream idle timeout Envoy applies when
+// the HTTP connection manager does not set one. We never set it, so this is
+// what governs today.
+//
+// It is a distinct limit from the route timeout: the route timeout bounds the
+// upstream response time, while this bounds how long the stream may go with no
+// encode/decode event at all. A turn that produces no bytes while the actor
+// thinks — a non-streaming completion, or a request parked across a resume —
+// is idle by this measure even though it is progressing, so without an
+// override a route timeout above five minutes would never be reached. See
+// routeIdleTimeout.
+const envoyDefaultStreamIdleTimeout = 5 * time.Minute
+
 // XdsServer implements an aggregated discovery service server for dynamic Envoy router nodes.
 type XdsServer struct {
 	xdsPort      int
@@ -139,6 +158,11 @@ type XdsServer struct {
 	// router's processing server, parked requests included. Must be >= the
 	// parking lot size (enforced at startup in Run).
 	extProcMaxRequests uint32
+
+	// routeTimeout is Envoy's end-to-end timeout on the workload route. Actors
+	// that hold a request open for a long turn — an LLM streaming a response,
+	// say — need this above the default or Envoy cuts the turn off with a 504.
+	routeTimeout time.Duration
 }
 
 func NewXdsServer(xdsPort int) *XdsServer {
@@ -154,6 +178,7 @@ func NewXdsServer(xdsPort int) *XdsServer {
 		ingressPort:           8080,
 		extProcMessageTimeout: defaultExtProcMessageTimeout,
 		extProcMaxRequests:    defaultExtProcMaxRequests,
+		routeTimeout:          defaultRouteTimeout,
 	}
 }
 
@@ -186,6 +211,38 @@ func (x *XdsServer) SetExtProcMaxRequests(n int) {
 	if n > 0 {
 		x.extProcMaxRequests = uint32(n)
 	}
+}
+
+// SetRouteTimeout sets Envoy's end-to-end timeout on the workload route. Raise
+// it for actors whose turns legitimately run long — a harness relaying an LLM
+// completion holds the request open for the whole generation, and at the
+// default the client sees a 504 mid-turn. A non-positive value leaves the
+// default unchanged.
+func (x *XdsServer) SetRouteTimeout(d time.Duration) {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	if d > 0 {
+		x.routeTimeout = d
+	}
+}
+
+// routeIdleTimeout resolves the route-level idle timeout that accompanies the
+// route timeout. Caller must hold x.mu.
+//
+// Raising --route-timeout on its own would not work: the stream a long turn
+// runs on is idle for the whole turn whenever the actor sends nothing until it
+// is done, and Envoy would reset it at the five-minute stream idle default
+// before the requested timeout was ever reached. The idle timer must therefore
+// never be the limit that bites first.
+//
+// Taking the larger of the two keeps the operator's ceiling honest without
+// making the idle timer stricter than it already is: below five minutes the
+// route timeout fires first anyway, so this leaves today's behavior alone.
+func (x *XdsServer) routeIdleTimeout() time.Duration {
+	if x.routeTimeout > envoyDefaultStreamIdleTimeout {
+		return x.routeTimeout
+	}
+	return envoyDefaultStreamIdleTimeout
 }
 
 func (x *XdsServer) SetTlsConfig(httpsPort int, certPath string) {
@@ -612,7 +669,8 @@ func (x *XdsServer) buildRoutes() *routev3.RouteConfiguration {
 								ClusterSpecifier: &routev3.RouteAction_Cluster{
 									Cluster: OriginalDstClusterName,
 								},
-								Timeout: durationpb.New(10 * time.Second),
+								Timeout:     durationpb.New(x.routeTimeout),
+								IdleTimeout: durationpb.New(x.routeIdleTimeout()),
 							},
 						},
 					},

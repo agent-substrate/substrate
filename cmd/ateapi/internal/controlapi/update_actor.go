@@ -18,23 +18,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"maps"
-	"slices"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
-// actorMutableFields maps the Actor field paths a client may name in an
-// UpdateActor update_mask to the setter that applies them.
-// Every other field is either output-only (server-managed), immutable or
-// unsupported (e.g. '*'), and naming one is an error.
-var actorMutableFields = map[string]func(dst, src *ateapipb.Actor){
+// actorMutableFields lists the Actor field paths a client may name in an
+// UpdateActor update_mask.
+var actorMutableFields = mutableFields[*ateapipb.Actor]{
 	"worker_selector": func(dst, src *ateapipb.Actor) { dst.WorkerSelector = src.GetWorkerSelector() },
 }
 
@@ -64,7 +59,7 @@ func (s *Service) UpdateActor(ctx context.Context, req *ateapipb.UpdateActorRequ
 		expectedVersion = version
 	}
 
-	applyActorUpdateMask(actor, in, req.GetUpdateMask())
+	applyUpdateMask(actor, in, req.GetUpdateMask(), actorMutableFields)
 
 	updated, err := s.persistence.UpdateActor(ctx, actor, expectedVersion)
 	if err != nil {
@@ -78,18 +73,6 @@ func (s *Service) UpdateActor(ctx context.Context, req *ateapipb.UpdateActorRequ
 	return updated, nil
 }
 
-// applyActorUpdateMask copies the masked fields from src onto dst. Fields set on
-// src but absent from the mask are ignored, and a masked field that is unset on
-// src is cleared on dst.
-func applyActorUpdateMask(dst, src *ateapipb.Actor, mask *fieldmaskpb.FieldMask) {
-	for _, path := range mask.GetPaths() {
-		apply, ok := actorMutableFields[path]
-		if ok {
-			apply(dst, src)
-		}
-	}
-}
-
 func validateUpdateActorRequest(req *ateapipb.UpdateActorRequest) field.ErrorList {
 	var fldPath *field.Path
 	var errs field.ErrorList
@@ -100,40 +83,9 @@ func validateUpdateActorRequest(req *ateapipb.UpdateActorRequest) field.ErrorLis
 		return field.ErrorList{field.Required(actorPath, "")}
 	}
 
-	// atespace and name identify the resource to update; uid and version are
-	// optional preconditions.
-	metaPath := actorPath.Child("metadata")
-	if atespace, p := actor.GetMetadata().GetAtespace(), metaPath.Child("atespace"); atespace == "" {
-		errs = append(errs, field.Required(p, ""))
-	} else {
-		errs = append(errs, resources.ValidateResourceName(atespace, p)...)
-	}
+	errs = append(errs, resources.ValidateResourceMetadataRef(actor.GetMetadata(), actorPath.Child("metadata"))...)
 
-	if name, p := actor.GetMetadata().GetName(), metaPath.Child("name"); name == "" {
-		errs = append(errs, field.Required(p, ""))
-	} else {
-		errs = append(errs, resources.ValidateResourceName(name, p)...)
-	}
-
-	if uid, p := actor.GetMetadata().GetUid(), metaPath.Child("uid"); uid != "" {
-		errs = append(errs, resources.ValidateUUID(uid, p)...)
-	}
-
-	if version, p := actor.GetMetadata().GetVersion(), metaPath.Child("version"); version < 0 {
-		errs = append(errs, field.Invalid(p, version, "must not be negative"))
-	}
-
-	maskPath := fldPath.Child("update_mask")
-	if paths := req.GetUpdateMask().GetPaths(); len(paths) == 0 {
-		errs = append(errs, field.Required(maskPath, "must name at least one field to update"))
-	} else {
-		supportedMutableFields := slices.Sorted(maps.Keys(actorMutableFields))
-		for _, path := range paths {
-			if _, ok := actorMutableFields[path]; !ok {
-				errs = append(errs, field.NotSupported(maskPath, path, supportedMutableFields))
-			}
-		}
-	}
+	errs = append(errs, validateUpdateMask(req.GetUpdateMask(), actorMutableFields)...)
 
 	if selector := actor.GetWorkerSelector(); selector != nil {
 		errs = append(errs, validateSelector(selector, actorPath.Child("worker_selector"))...)

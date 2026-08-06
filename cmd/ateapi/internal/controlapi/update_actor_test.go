@@ -18,11 +18,9 @@ import (
 	"context"
 	"testing"
 
-	"github.com/google/go-cmp/cmp"
 	"go.opentelemetry.io/otel/attribute"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/testing/protocmp"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 
@@ -128,51 +126,6 @@ func TestValidateUpdateActorRequest(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assertValidateErr(t, validateUpdateActorRequest(tt.req), tt.want)
-		})
-	}
-}
-
-func TestApplyActorUpdateMask(t *testing.T) {
-	selector := &ateapipb.Selector{MatchLabels: map[string]string{"tier": "paid"}}
-
-	tests := []struct {
-		name  string
-		src   *ateapipb.Actor
-		dst   *ateapipb.Actor
-		paths []string
-		want  *ateapipb.Actor
-	}{{
-		name:  "sets a masked field",
-		src:   &ateapipb.Actor{WorkerSelector: selector},
-		dst:   &ateapipb.Actor{},
-		paths: []string{"worker_selector"},
-		want:  &ateapipb.Actor{WorkerSelector: selector},
-	}, {
-		name:  "clears a masked field left unset on src",
-		src:   &ateapipb.Actor{},
-		dst:   &ateapipb.Actor{WorkerSelector: selector},
-		paths: []string{"worker_selector"},
-		want:  &ateapipb.Actor{},
-	}, {
-		name:  "ignores fields set on src but absent from the mask",
-		src:   &ateapipb.Actor{Status: ateapipb.Actor_STATUS_RUNNING, WorkerSelector: selector},
-		dst:   &ateapipb.Actor{Status: ateapipb.Actor_STATUS_SUSPENDED},
-		paths: []string{"worker_selector"},
-		want:  &ateapipb.Actor{Status: ateapipb.Actor_STATUS_SUSPENDED, WorkerSelector: selector},
-	}, {
-		// Unreachable through the RPC, which rejects the path during validation.
-		name:  "skips a path outside the mutable set",
-		src:   &ateapipb.Actor{Status: ateapipb.Actor_STATUS_RUNNING},
-		dst:   &ateapipb.Actor{Status: ateapipb.Actor_STATUS_SUSPENDED},
-		paths: []string{"status"},
-		want:  &ateapipb.Actor{Status: ateapipb.Actor_STATUS_SUSPENDED},
-	}}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			applyActorUpdateMask(tt.dst, tt.src, &fieldmaskpb.FieldMask{Paths: tt.paths})
-			if diff := cmp.Diff(tt.want, tt.dst, protocmp.Transform()); diff != "" {
-				t.Errorf("actor mismatch (-want +got):\n%s", diff)
-			}
 		})
 	}
 }

@@ -2086,10 +2086,21 @@ func (x *TagActorSnapshotRequest) GetTag() *ActorSnapshotTag {
 	return nil
 }
 
+// Request to update mutable fields on an existing ActorSnapshotTag.
+// The tag keeps its address: the snapshot it points at cannot be changed.
 type UpdateActorSnapshotTagRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Tag           *ObjectRef             `protobuf:"bytes,1,opt,name=tag,proto3" json:"tag,omitempty"`
-	Scope         ActorSnapshotTagScope  `protobuf:"varint,2,opt,name=scope,proto3,enum=ateapi.ActorSnapshotTagScope" json:"scope,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The tag to update.
+	// tag.metadata.atespace and tag.metadata.name identify which resource to
+	// update.
+	// tag.metadata.version and tag.metadata.uid are optional preconditions
+	// and zero values skip the check.
+	Tag *ActorSnapshotTag `protobuf:"bytes,1,opt,name=tag,proto3" json:"tag,omitempty"`
+	// The set of fields to update. Required.
+	//
+	// Only the following fields are supported:
+	//   - scope
+	UpdateMask    *fieldmaskpb.FieldMask `protobuf:"bytes,2,opt,name=update_mask,json=updateMask,proto3" json:"update_mask,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2124,18 +2135,18 @@ func (*UpdateActorSnapshotTagRequest) Descriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{30}
 }
 
-func (x *UpdateActorSnapshotTagRequest) GetTag() *ObjectRef {
+func (x *UpdateActorSnapshotTagRequest) GetTag() *ActorSnapshotTag {
 	if x != nil {
 		return x.Tag
 	}
 	return nil
 }
 
-func (x *UpdateActorSnapshotTagRequest) GetScope() ActorSnapshotTagScope {
+func (x *UpdateActorSnapshotTagRequest) GetUpdateMask() *fieldmaskpb.FieldMask {
 	if x != nil {
-		return x.Scope
+		return x.UpdateMask
 	}
-	return ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE
+	return nil
 }
 
 type DeleteActorSnapshotTagRequest struct {
@@ -3103,10 +3114,11 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x0fnext_page_token\x18\x02 \x01(\tR\rnextPageToken\"{\n" +
 	"\x17TagActorSnapshotRequest\x124\n" +
 	"\bsnapshot\x18\x01 \x01(\v2\x18.ateapi.ActorSnapshotRefR\bsnapshot\x12*\n" +
-	"\x03tag\x18\x02 \x01(\v2\x18.ateapi.ActorSnapshotTagR\x03tag\"y\n" +
-	"\x1dUpdateActorSnapshotTagRequest\x12#\n" +
-	"\x03tag\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\x03tag\x123\n" +
-	"\x05scope\x18\x02 \x01(\x0e2\x1d.ateapi.ActorSnapshotTagScopeR\x05scope\"D\n" +
+	"\x03tag\x18\x02 \x01(\v2\x18.ateapi.ActorSnapshotTagR\x03tag\"\x88\x01\n" +
+	"\x1dUpdateActorSnapshotTagRequest\x12*\n" +
+	"\x03tag\x18\x01 \x01(\v2\x18.ateapi.ActorSnapshotTagR\x03tag\x12;\n" +
+	"\vupdate_mask\x18\x02 \x01(\v2\x1a.google.protobuf.FieldMaskR\n" +
+	"updateMask\"D\n" +
 	"\x1dDeleteActorSnapshotTagRequest\x12#\n" +
 	"\x03tag\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\x03tag\"P\n" +
 	"\x12ListWorkersRequest\x12\x1b\n" +
@@ -3320,8 +3332,8 @@ var file_ateapi_proto_depIdxs = []int32{
 	11, // 37: ateapi.ListActorSnapshotsResponse.snapshots:type_name -> ateapi.ActorSnapshot
 	15, // 38: ateapi.TagActorSnapshotRequest.snapshot:type_name -> ateapi.ActorSnapshotRef
 	12, // 39: ateapi.TagActorSnapshotRequest.tag:type_name -> ateapi.ActorSnapshotTag
-	14, // 40: ateapi.UpdateActorSnapshotTagRequest.tag:type_name -> ateapi.ObjectRef
-	1,  // 41: ateapi.UpdateActorSnapshotTagRequest.scope:type_name -> ateapi.ActorSnapshotTagScope
+	12, // 40: ateapi.UpdateActorSnapshotTagRequest.tag:type_name -> ateapi.ActorSnapshotTag
+	53, // 41: ateapi.UpdateActorSnapshotTagRequest.update_mask:type_name -> google.protobuf.FieldMask
 	14, // 42: ateapi.DeleteActorSnapshotTagRequest.tag:type_name -> ateapi.ObjectRef
 	41, // 43: ateapi.ListWorkersResponse.workers:type_name -> ateapi.Worker
 	9,  // 44: ateapi.ListActorsResponse.actors:type_name -> ateapi.Actor

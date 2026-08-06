@@ -385,9 +385,21 @@ message TagActorSnapshotRequest {
   ActorSnapshotTag tag = 2;
 }
 
+// Request to update mutable fields on an existing ActorSnapshotTag.
+// The tag keeps its address: the snapshot it points at cannot be changed.
 message UpdateActorSnapshotTagRequest {
-  ObjectRef tag = 1;
-  ActorSnapshotTagScope scope = 2;
+  // The tag to update.
+  // tag.metadata.atespace and tag.metadata.name identify which resource to
+  // update.
+  // tag.metadata.version and tag.metadata.uid are optional preconditions
+  // and zero values skip the check.
+  ActorSnapshotTag tag = 1;
+
+  // The set of fields to update. Required.
+  //
+  // Only the following fields are supported:
+  //   - scope
+  google.protobuf.FieldMask update_mask = 2;
 }
 
 message DeleteActorSnapshotTagRequest {

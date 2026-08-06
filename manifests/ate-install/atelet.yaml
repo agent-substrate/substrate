@@ -64,6 +64,12 @@ spec:
         prometheus.io/port: "9090"
     spec:
       serviceAccountName: atelet
+      # Budget for the full shutdown sequence: --drain-delay (0 for atelet) +
+      # --drain-timeout (5m). Sized long because Checkpoint/Restore stream
+      # multi-GiB snapshots and must not be force-cancelled mid-upload. The sum
+      # must fit within terminationGracePeriodSeconds, plus slack for the force
+      # Stop() and the tracer/meter flush on exit.
+      terminationGracePeriodSeconds: 330
       containers:
       - name: atelet
         image: ko://github.com/agent-substrate/substrate/cmd/atelet
@@ -71,6 +77,10 @@ spec:
         - --gcp-auth-for-image-pulls=true
         - --grpc-server-cred-bundle=/run/podidentity.podcert.ate.dev/credential-bundle.pem
         - --client-ca-certs=/run/podidentity.podcert.ate.dev/trust-bundle.pem
+        # Graceful shutdown knobs. The sum must fit within
+        # terminationGracePeriodSeconds above.
+        - --drain-delay=0s
+        - --drain-timeout=5m
         # atelet does no mounts, netlink, device, or namespace operations (those
         # live in the ateom worker pod) — it only reads/writes the
         # /var/lib/ateom-gvisor hostPath as root, so it needs no Linux
@@ -120,6 +130,21 @@ spec:
           containerPort: 9090
           hostPort: 9090
           protocol: TCP
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 9090
+          initialDelaySeconds: 5
+          periodSeconds: 2
+          failureThreshold: 3
+        # /healthz stays 200 while a terminating pod drains; /readyz turns 503,
+        # so liveness and readiness diverge correctly during shutdown.
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 9090
+          initialDelaySeconds: 10
+          periodSeconds: 10
         volumeMounts:
         - name: run-ateom
           mountPath: /var/lib/ateom-gvisor

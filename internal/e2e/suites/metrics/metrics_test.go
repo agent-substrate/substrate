@@ -94,7 +94,7 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 
 	deadline := time.Now().Add(2 * time.Minute)
 	var missing []string
-	var ateomSeen bool
+	var ateomSeen, controllerSeen bool
 	var lastLabelErr error
 	for time.Now().Before(deadline) {
 		scrape, err := e2e.ScrapeCollectorMetrics(ctx)
@@ -103,6 +103,13 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 		}
 		missing = e2e.MissingPlatformMetrics(scrape, e2e.PlatformMetricPrefixes)
 		ateomSeen = e2e.CollectorHasService(scrape, "ateom-gvisor", "ateom-microvm")
+		// atecontroller bridges controller-runtime's Prometheus registry onto its OTLP
+		// reader, so the reconcile families are what prove the bridge, not just that
+		// some series arrived. Substring, not prefix: the collector's Prometheus
+		// exporter may re-suffix a name that already ends in _total.
+		controllerSeen = e2e.CollectorHasService(scrape, "atecontroller") &&
+			strings.Contains(scrape, "controller_runtime_")
+
 		if len(missing) == 0 && ateomSeen {
 			var errs []string
 
@@ -137,7 +144,7 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 						caseType = "[EDGE CASE: No Worker Pools Matched Constraints]"
 					}
 
-					// If the line has pool or namespace labels, verify both are non-empty (full per-pool line).
+					// If the line has pool/namespace labels, verify both are non-empty (full per-pool line).
 					if isPerPoolLine {
 						if nsVal == "" {
 							lineErrs = append(lineErrs, "ate_workerpool_namespace label is missing or empty")
@@ -223,9 +230,11 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 	}
 
 	if lastLabelErr != nil {
-		t.Fatalf("platform telemetry validation failed: missing metrics %v, ateom pushed=%v, detail: %v", missing, ateomSeen, lastLabelErr)
+		t.Fatalf("platform telemetry validation failed: missing metrics %v, ateom pushed=%v, atecontroller pushed=%v, error detail: %v",
+			missing, ateomSeen, controllerSeen, lastLabelErr)
 	}
-	t.Fatalf("platform telemetry never reached the collector: missing metrics %v, ateom pushed=%v", missing, ateomSeen)
+	t.Fatalf("platform telemetry never reached the collector: missing metrics %v, ateom pushed=%v, atecontroller pushed=%v",
+		missing, ateomSeen, controllerSeen)
 }
 
 func triggerActorCrash(t *testing.T, ctx context.Context, clients *e2e.Clients, actorID string) {

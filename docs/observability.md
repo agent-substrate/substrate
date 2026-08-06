@@ -129,6 +129,14 @@ For `ate.scheduler.eligible_workers`:
 
 The `ate.*` control-plane metric labels are either fixed value sets (operation, outcome, state, class, kind) or scoped to the deployment catalog (template and pool names are operator-created, never derived from request payloads), and the label set varies per operation: resume carries the most dimensions, delete only the operation and error type. `ate.sandbox.class` is derived from the template (each template has exactly one class), so it adds no extra series next to the template labels; it exists so dashboards can aggregate by class without enumerating template names. High-cardinality actor identity (name/uid/atespace) stays off metrics entirely and lives on logs and traces instead.
 
+### Bridged controller-runtime metrics (atecontroller)
+
+atecontroller bridges controller-runtime's private Prometheus registry, which the manager serves on an unscraped `:8080`, onto its OTLP reader. So `controller_runtime_*`, `workqueue_*`, `rest_client_*`, `leader_election_*`, `go_*`, and `process_*` reach the collector too, keeping their Prometheus names because they are upstream instruments and renaming them would break existing controller-runtime dashboards.
+
+These can be used to answer whether the controller is keeping up, e.g. rising `workqueue_depth` or `workqueue_queue_duration_seconds` means reconciles are falling behind, and `controller_runtime_reconcile_errors_total` says which controller.
+
+Note that controller-runtime enables native histograms on `controller_runtime_reconcile_time_seconds`, `workqueue_queue_duration_seconds`, and `workqueue_work_duration_seconds`, so those three arrive as OTLP exponential histograms rather than fixed-bucket ones.
+
 ### Local Metrics with Prometheus (Kind Cluster)
 
 For local development inside a `kind` cluster, Agent Substrate automatically provisions a Prometheus server in the `otel-system` namespace.
