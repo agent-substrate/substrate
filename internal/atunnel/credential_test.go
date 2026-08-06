@@ -82,11 +82,22 @@ func TestBrokerCertificateSourceRejectsExpiredCertificate(t *testing.T) {
 	}
 }
 
+func TestBrokerCertificateSourceRejectsUnexpectedActor(t *testing.T) {
+	source, broker := newTestBrokerCertificateSource(t, testAteletIdentity("node-a"), time.Hour)
+	broker.actorUID = "another-actor-uid"
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if _, err := source.Mint(ctx); err == nil || !strings.Contains(err.Error(), "unexpected actor") {
+		t.Fatalf("Mint() error = %v, want actor UID rejection", err)
+	}
+}
+
 type credentialBrokerStub struct {
 	ateletpb.UnimplementedCredentialBrokerServer
 	ca         *testCA
 	lifetime   time.Duration
 	publicKeys chan []byte
+	actorUID   string
 }
 
 func (s *credentialBrokerStub) MintActorCertificate(_ context.Context, req *ateletpb.MintActorCertificateRequest) (*ateletpb.MintActorCertificateResponse, error) {
@@ -106,7 +117,7 @@ func (s *credentialBrokerStub) MintActorCertificate(_ context.Context, req *atel
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
 	}
-	if err := substratex509.AddActorIdentityToCertificate(&substratex509.ActorIdentity{Atespace: "team", ActorName: "actor", ActorUid: "actor-uid", Purpose: substratex509.ActorIdentityPurposeAtunnel}, template); err != nil {
+	if err := substratex509.AddActorIdentityToCertificate(&substratex509.ActorIdentity{Atespace: "team", ActorName: "actor", ActorUid: s.actorUID, Purpose: substratex509.ActorIdentityPurposeAtunnel}, template); err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
 	der, err := x509.CreateCertificate(rand.Reader, template, s.ca.cert, csr.PublicKey, s.ca.key)
@@ -153,7 +164,7 @@ func newTestBrokerCertificateSource(t *testing.T, ateletIdentity *substratex509.
 		ClientAuth:   tls.RequireAndVerifyClientCert,
 		ClientCAs:    clientCAs,
 	})))
-	broker := &credentialBrokerStub{ca: ca, lifetime: lifetime, publicKeys: make(chan []byte, 2)}
+	broker := &credentialBrokerStub{ca: ca, lifetime: lifetime, publicKeys: make(chan []byte, 2), actorUID: "actor-uid"}
 	ateletpb.RegisterCredentialBrokerServer(server, broker)
 	go func() { _ = server.Serve(listener) }()
 	t.Cleanup(func() {

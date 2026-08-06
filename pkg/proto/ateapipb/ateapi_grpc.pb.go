@@ -962,8 +962,8 @@ type ActorIdentityClient interface {
 	// rather than a bearer token.
 	//
 	// Authorization is decided on that client certificate and the worker
-	// identity attested by atelet. Ateapi resolves the worker's current actor and
-	// verifies their reciprocal assignment before signing.
+	// identity attested by atelet. Ateapi verifies that the worker is assigned to
+	// the actor and that the actor points back to that exact worker before signing.
 	//
 	// The certificate in the response is the actor's identity, not the atelet's.
 	MintCert(ctx context.Context, in *MintCertRequest, opts ...grpc.CallOption) (*MintCertResponse, error)
@@ -1020,8 +1020,8 @@ type ActorIdentityServer interface {
 	// rather than a bearer token.
 	//
 	// Authorization is decided on that client certificate and the worker
-	// identity attested by atelet. Ateapi resolves the worker's current actor and
-	// verifies their reciprocal assignment before signing.
+	// identity attested by atelet. Ateapi verifies that the worker is assigned to
+	// the actor and that the actor points back to that exact worker before signing.
 	//
 	// The certificate in the response is the actor's identity, not the atelet's.
 	MintCert(context.Context, *MintCertRequest) (*MintCertResponse, error)

@@ -65,12 +65,13 @@ message RunWorkloadRequest {
   map<string, string> runtime_asset_paths = 8;
 
   // When absent, actor traffic uses direct egress instead of atunnel.
-  EgressGateway egress_gateway = 10;
+  optional EgressGateway egress_gateway = 10;
 }
 
 // EgressGateway configures tunneled egress for one actor activation.
 message EgressGateway {
-  // address is the remote gateway's host:port.
+  // address is required and identifies the remote gateway as an IP address or
+  // DNS name followed by its port.
   string address = 1;
 }
 
@@ -199,7 +200,7 @@ message RestoreWorkloadRequest {
   SnapshotScope scope = 10;
 
   // When absent, actor traffic uses direct egress instead of atunnel.
-  EgressGateway egress_gateway = 12;
+  optional EgressGateway egress_gateway = 12;
 
   // The object storage URI prefix of the ActorTemplate's golden snapshot.
   // Set only when scope is SNAPSHOT_SCOPE_DATA_ON_GOLDEN. Mirrors the

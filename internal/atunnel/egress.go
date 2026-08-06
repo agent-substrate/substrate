@@ -24,6 +24,9 @@ import (
 	"net"
 	"sync"
 	"time"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // egressDialer opens an authenticated tunnel to an original destination.
@@ -141,6 +144,15 @@ func (e *Egress) renew(active *egressActivation, expiresAt time.Time) {
 		}
 		nextExpiry, err := active.certificateSource.Mint(active.ctx)
 		if err != nil {
+			code := status.Code(err)
+			if code == codes.FailedPrecondition || code == codes.PermissionDenied {
+				e.mu.Lock()
+				active.expiresAt = time.Time{}
+				e.mu.Unlock()
+				slog.WarnContext(active.ctx, "Atunnel actor certificate renewal was denied; blocking new egress connections",
+					slog.Any("err", err))
+				return
+			}
 			delay = retryAfter(expiresAt)
 			continue
 		}

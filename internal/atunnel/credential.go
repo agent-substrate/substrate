@@ -175,6 +175,9 @@ func (s *BrokerCertificateSource) Mint(ctx context.Context) (time.Time, error) {
 	if identity.Purpose != substratex509.ActorIdentityPurposeAtunnel {
 		return time.Time{}, fmt.Errorf("atunnel: actor certificate is not scoped to atunnel")
 	}
+	if identity.ActorUid != s.expectedActorUID {
+		return time.Time{}, fmt.Errorf("atunnel: actor certificate is for an unexpected actor")
+	}
 	cert := &tls.Certificate{Certificate: chain, PrivateKey: s.privateKey, Leaf: leaf}
 	s.mu.Lock()
 	s.certificate = cert

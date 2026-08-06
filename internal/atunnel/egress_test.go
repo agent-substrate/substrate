@@ -18,6 +18,7 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -25,6 +26,9 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func TestEgressActivationFailsClosed(t *testing.T) {
@@ -151,6 +155,47 @@ func TestEgressRetriesRenewalAfterExpiry(t *testing.T) {
 		if got := retryAfter(time.Now().Add(-time.Second)); got < 25*time.Second || got >= 35*time.Second {
 			t.Fatalf("retryAfter(expired) = %v, want [25s, 35s)", got)
 		}
+	}
+}
+
+func TestEgressStopsAfterTerminalRenewalFailure(t *testing.T) {
+	for _, code := range []codes.Code{codes.FailedPrecondition, codes.PermissionDenied} {
+		t.Run(code.String(), func(t *testing.T) {
+			called := make(chan struct{}, 1)
+			egress, err := NewEgress(func(net.Conn) (string, error) { return "", nil })
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := egress.Activate(egressDialerFunc(func(context.Context, string) (net.Conn, error) {
+				t.Fatal("dialed after renewal was denied")
+				return nil, nil
+			}), fakeActorCertificateSource{
+				err:    fmt.Errorf("mint: %w", status.Error(code, "stale activation")),
+				called: called,
+			}, time.Now().Add(50*time.Millisecond)); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-called:
+			case <-time.After(time.Second):
+				t.Fatal("certificate renewal did not start")
+			}
+
+			deadline := time.Now().Add(time.Second)
+			for {
+				egress.mu.Lock()
+				expiresAt := egress.active.expiresAt
+				egress.mu.Unlock()
+				if expiresAt.IsZero() {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatal("terminal renewal failure did not block new egress")
+				}
+				time.Sleep(time.Millisecond)
+			}
+			_ = egress.Deactivate(context.Background())
+		})
 	}
 }
 

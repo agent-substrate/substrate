@@ -70,12 +70,13 @@ message RunRequest {
   SandboxAssets sandbox_assets = 8;
 
   // When absent, actor traffic uses direct egress instead of atunnel.
-  EgressGateway egress_gateway = 9;
+  optional EgressGateway egress_gateway = 9;
 }
 
 // EgressGateway configures tunneled egress for one actor activation.
 message EgressGateway {
-  // address is the remote gateway's host:port.
+  // address is required and identifies the remote gateway as an IP address or
+  // DNS name followed by its port.
   string address = 1;
 }
 
@@ -289,7 +290,7 @@ message RestoreRequest {
   string golden_snapshot_uri_prefix = 12;
 
   // When absent, actor traffic uses direct egress instead of atunnel.
-  EgressGateway egress_gateway = 13;
+  optional EgressGateway egress_gateway = 13;
 }
 
 message RestoreResponse {
