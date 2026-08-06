@@ -53,11 +53,13 @@ import (
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	corev1 "k8s.io/api/core/v1"
+	storagev1 "k8s.io/api/storage/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/utils/ptr"
@@ -107,6 +109,22 @@ func TestMain(m *testing.M) {
 	}, metav1.CreateOptions{})
 	if err != nil && !apierrors.IsAlreadyExists(err) {
 		log.Fatalf("create ate-system namespace: %v", err)
+	}
+
+	// Create StorageClasses for volume tests
+	_, err = k8sClient.StorageV1().StorageClasses().Create(context.Background(), &storagev1.StorageClass{
+		ObjectMeta:  metav1.ObjectMeta{Name: "standard"},
+		Provisioner: "substrate.io/mock",
+	}, metav1.CreateOptions{})
+	if err != nil && !apierrors.IsAlreadyExists(err) {
+		log.Fatalf("create standard storage class: %v", err)
+	}
+	_, err = k8sClient.StorageV1().StorageClasses().Create(context.Background(), &storagev1.StorageClass{
+		ObjectMeta:  metav1.ObjectMeta{Name: "fast"},
+		Provisioner: "substrate.io/mock",
+	}, metav1.CreateOptions{})
+	if err != nil && !apierrors.IsAlreadyExists(err) {
+		log.Fatalf("create fast storage class: %v", err)
 	}
 
 	// Create shared Atelet Pod
@@ -292,11 +310,14 @@ func setupTest(t *testing.T, ns string) *testContext {
 	// 3. Initialize Informers
 	workerFactory, workerInformer := WorkerPodInformer(k8sClient)
 	ateletFactory, ateletInformer := AteletInformer(k8sClient)
+	scFactory := informers.NewSharedInformerFactory(k8sClient, 0)
+	scLister := scFactory.Storage().V1().StorageClasses().Lister()
 
 	substrateInformerFactory := externalversions.NewSharedInformerFactory(substrateClient, 0)
 	actorTemplateLister := substrateInformerFactory.Api().V1alpha1().ActorTemplates().Lister()
 	workerPoolLister := substrateInformerFactory.Api().V1alpha1().WorkerPools().Lister()
 	sandboxConfigLister := substrateInformerFactory.Api().V1alpha1().SandboxConfigs().Lister()
+	csiDriverConfigLister := substrateInformerFactory.Api().V1alpha1().CSIDriverConfigs().Lister()
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -306,10 +327,12 @@ func setupTest(t *testing.T, ns string) *testContext {
 	workerFactory.Start(ctx.Done())
 	ateletFactory.Start(ctx.Done())
 	substrateInformerFactory.Start(ctx.Done())
+	scFactory.Start(ctx.Done())
 
 	workerFactory.WaitForCacheSync(ctx.Done())
 	ateletFactory.WaitForCacheSync(ctx.Done())
 	substrateInformerFactory.WaitForCacheSync(ctx.Done())
+	scFactory.WaitForCacheSync(ctx.Done())
 
 	// 4. Initialize Service
 	wc := workercache.New(persistence, 5*time.Minute)
@@ -332,7 +355,15 @@ func setupTest(t *testing.T, ns string) *testContext {
 		mr.Close()
 		t.Fatalf("failed to create metric instruments: %v", err)
 	}
-	service := NewService(persistence, wc, actorTemplateLister, workerPoolLister, sandboxConfigLister, dialer, k8sClient, instruments, "")
+	mockPlugin := volume.NewMockVolumePlugin()
+	mockDriverName, err := mockPlugin.DriverName(ctx)
+	if err != nil {
+		t.Fatalf("failed to get mock driver name: %v", err)
+	}
+	volPlugins := map[string]volume.VolumePluginControlPlane{
+		mockDriverName: mockPlugin,
+	}
+	service := NewService(persistence, wc, actorTemplateLister, workerPoolLister, sandboxConfigLister, csiDriverConfigLister, scLister, dialer, k8sClient, instruments, "", volPlugins)
 
 	// 5. Start REAL gRPC Server for ATE API
 	grpcServer := grpc.NewServer(grpc.UnaryInterceptor(ateinterceptors.ServerUnaryInterceptor))
@@ -1017,11 +1048,11 @@ type partialFailVolumePlugin struct {
 	deleted []string
 }
 
-func (f *partialFailVolumePlugin) CreateVolume(ctx context.Context, name, capacity, storageClass string) (string, error) {
+func (f *partialFailVolumePlugin) CreateVolume(ctx context.Context, name, capacity, driverName string, parameters map[string]string) (string, map[string]string, error) {
 	if strings.HasSuffix(name, "fail-vol2") {
-		return "", fmt.Errorf("simulated volume creation failure")
+		return "", nil, fmt.Errorf("simulated volume creation failure")
 	}
-	return "storage-" + name, nil
+	return "storage-" + name, parameters, nil
 }
 
 func (f *partialFailVolumePlugin) AttachVolume(ctx context.Context, volumeID, node string) error {
@@ -1074,11 +1105,9 @@ func TestResumeActor_VolumeCreationFailure(t *testing.T) {
 	// Inject a custom partial-failing VolumePlugin into global scope
 	// TODO this doesn't support parallelism of test cases
 	plugin := &partialFailVolumePlugin{}
-	oldGlobalPlugin := globalVolumePlugin
-	globalVolumePlugin = plugin
-	defer func() {
-		globalVolumePlugin = oldGlobalPlugin
-	}()
+	tc.service.volumePlugins = map[string]volume.VolumePluginControlPlane{
+		"substrate.io/mock": plugin,
+	}
 
 	// Call CreateActor RPC directly
 	_, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{
@@ -1164,16 +1193,16 @@ type retrySuccessVolumePlugin struct {
 	deleted  []string
 }
 
-func (r *retrySuccessVolumePlugin) CreateVolume(ctx context.Context, name, capacity, storageClass string) (string, error) {
+func (r *retrySuccessVolumePlugin) CreateVolume(ctx context.Context, name, capacity, driverName string, parameters map[string]string) (string, map[string]string, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if strings.HasSuffix(name, "retry-vol2") {
 		r.attempts++
 		if r.attempts == 1 {
-			return "", fmt.Errorf("simulated temporary volume creation failure")
+			return "", nil, fmt.Errorf("simulated temporary volume creation failure")
 		}
 	}
-	return "storage-" + name, nil
+	return "storage-" + name, parameters, nil
 }
 
 func (r *retrySuccessVolumePlugin) AttachVolume(ctx context.Context, volumeID, node string) error {
@@ -1226,11 +1255,9 @@ func TestResumeActor_VolumeCreationRetrySuccess(t *testing.T) {
 	createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
 
 	plugin := &retrySuccessVolumePlugin{}
-	oldGlobalPlugin := globalVolumePlugin
-	globalVolumePlugin = plugin
-	defer func() {
-		globalVolumePlugin = oldGlobalPlugin
-	}()
+	tc.service.volumePlugins = map[string]volume.VolumePluginControlPlane{
+		"substrate.io/mock": plugin,
+	}
 
 	// Call CreateActor RPC directly
 	_, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{

@@ -21,7 +21,9 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/volume"
+	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -42,15 +44,24 @@ var _ volume.VolumePluginWorkerPlane = (*Plugin)(nil)
 func NewPlugin(client *Client) *Plugin {
 	return &Plugin{
 		client:           client,
-		stagingDirPrefix: "/var/lib/ateom-gvisor/staging",
+		stagingDirPrefix: ateompath.StagingDirPrefix(),
 	}
 }
 
+// DriverName returns the driver name obtained from the CSI plugin.
+func (p *Plugin) DriverName(ctx context.Context) (string, error) {
+	resp, err := p.client.GetPluginInfo(ctx, &csi.GetPluginInfoRequest{})
+	if err != nil {
+		return "", err
+	}
+	return resp.GetName(), nil
+}
+
 // CreateVolume maps to CSI Controller CreateVolume.
-func (p *Plugin) CreateVolume(ctx context.Context, name string, capacity string, storageClass string) (string, error) {
+func (p *Plugin) CreateVolume(ctx context.Context, name string, capacity string, driverName string, parameters map[string]string) (string, map[string]string, error) {
 	qty, err := resource.ParseQuantity(capacity)
 	if err != nil {
-		return "", fmt.Errorf("failed to parse capacity %q: %w", capacity, err)
+		return "", nil, fmt.Errorf("failed to parse capacity %q: %w", capacity, err)
 	}
 	capBytes := qty.Value()
 
@@ -60,21 +71,19 @@ func (p *Plugin) CreateVolume(ctx context.Context, name string, capacity string,
 			RequiredBytes: capBytes,
 		},
 		VolumeCapabilities: getStandardCapabilities(),
-		Parameters: map[string]string{
-			"storageClass": storageClass,
-		},
+		Parameters:         parameters,
 	}
 
 	resp, err := p.client.CreateVolume(ctx, req)
 	if err != nil {
-		return "", fmt.Errorf("CSI CreateVolume failed: %w", err)
+		return "", nil, fmt.Errorf("CSI CreateVolume failed: %w", err)
 	}
 
 	if resp.GetVolume() == nil {
-		return "", fmt.Errorf("CSI CreateVolume response returned nil volume")
+		return "", nil, fmt.Errorf("CSI CreateVolume response returned nil volume")
 	}
 
-	return resp.GetVolume().GetVolumeId(), nil
+	return resp.GetVolume().GetVolumeId(), resp.GetVolume().GetVolumeContext(), nil
 }
 
 // DeleteVolume maps to CSI Controller DeleteVolume.
@@ -142,7 +151,7 @@ func (p *Plugin) DetachVolume(ctx context.Context, volumeID string, node string)
 
 // MountVolume maps to CSI Node NodePublishVolume.
 // It also handles NodeStageVolume staging if required by the driver.
-func (p *Plugin) MountVolume(ctx context.Context, volumeID string, targetPath string) error {
+func (p *Plugin) MountVolume(ctx context.Context, volumeID string, targetPath string, volumeContext map[string]string) error {
 	// 1. Stage the volume
 	stagingPath := filepath.Join(p.stagingDirPrefix, volumeID)
 	if err := os.MkdirAll(stagingPath, 0750); err != nil {
@@ -153,6 +162,7 @@ func (p *Plugin) MountVolume(ctx context.Context, volumeID string, targetPath st
 		VolumeId:          volumeID,
 		StagingTargetPath: stagingPath,
 		VolumeCapability:  getStandardCapabilities()[0], // Use primary capability
+		VolumeContext:     volumeContext,
 	}
 
 	_, err := p.client.NodeStageVolume(ctx, stageReq)
@@ -171,6 +181,7 @@ func (p *Plugin) MountVolume(ctx context.Context, volumeID string, targetPath st
 		TargetPath:       targetPath,
 		VolumeCapability: getStandardCapabilities()[0],
 		Readonly:         false,
+		VolumeContext:    volumeContext,
 	}
 	if stagingPath != "" {
 		req.StagingTargetPath = stagingPath
@@ -235,4 +246,45 @@ func getStandardCapabilities() []*csi.VolumeCapability {
 			},
 		},
 	}
+}
+
+// NewCSIPlugin establishes a CSI client and returns a verified Plugin instance.
+func NewCSIPlugin(ctx context.Context, lister listersv1alpha1.CSIDriverConfigLister, driverName string, isController bool) (*Plugin, error) {
+	if lister == nil {
+		return nil, fmt.Errorf("missing csiDriverConfigLister")
+	}
+
+	cfg, err := lister.Get(driverName)
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve CSIDriverConfig for %q: %w", driverName, err)
+	}
+
+	var endpoint string
+	switch {
+	case isController:
+		endpoint = cfg.Spec.ControllerEndpoint
+	case cfg.Spec.NodeSocketOverride != "":
+		endpoint = cfg.Spec.NodeSocketOverride
+		slog.InfoContext(ctx, "Found CSIDriverConfig with NodeSocketOverride", slog.String("driver", driverName), slog.String("endpoint", endpoint))
+	default:
+		endpoint = "unix://" + ateompath.KubeletPluginSocketPath(driverName)
+	}
+	csiClient, err := NewCSIClient(endpoint)
+	if err != nil {
+		return nil, fmt.Errorf("failed to initialize CSI client from endpoint %q: %w", endpoint, err)
+	}
+	csiPlugin := NewPlugin(csiClient)
+
+	// Verify CSI plugin reported name matches requested name.
+	reportedName, err := csiPlugin.DriverName(ctx)
+	if err != nil {
+		csiClient.Close()
+		return nil, fmt.Errorf("failed to get driver name from plugin %q: %w", driverName, err)
+	}
+	if reportedName != driverName {
+		csiClient.Close()
+		return nil, fmt.Errorf("reported driver name %q does not match requested name %q", reportedName, driverName)
+	}
+
+	return csiPlugin, nil
 }

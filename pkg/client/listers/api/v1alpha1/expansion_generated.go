@@ -24,6 +24,10 @@ type ActorTemplateListerExpansion interface{}
 // ActorTemplateNamespaceLister.
 type ActorTemplateNamespaceListerExpansion interface{}
 
+// CSIDriverConfigListerExpansion allows custom methods to be added to
+// CSIDriverConfigLister.
+type CSIDriverConfigListerExpansion interface{}
+
 // SandboxConfigListerExpansion allows custom methods to be added to
 // SandboxConfigLister.
 type SandboxConfigListerExpansion interface{}

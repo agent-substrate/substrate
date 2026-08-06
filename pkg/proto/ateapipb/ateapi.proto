@@ -154,6 +154,9 @@ message ExternalVolume {
     STATUS_DELETING = 3;
   }
   Status status = 4;
+  // volume_context contains metadata returned by the CSI driver during volume
+  // provisioning, needed by the node plugin for mounting (e.g. attachment info).
+  map<string, string> volume_context = 5;
 }
 
 message Actor {

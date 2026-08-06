@@ -217,3 +217,13 @@ func VolumeHostPath(actorUID, volumeName string) string {
 		volumeName,
 	)
 }
+
+// StagingDirPrefix returns the prefix directory for staging CSI volumes.
+func StagingDirPrefix() string {
+	return filepath.Join(BasePath, "staging")
+}
+
+// KubeletPluginSocketPath returns the path to the CSI driver socket in kubelet plugins directory.
+func KubeletPluginSocketPath(driverName string) string {
+	return filepath.Join("/var/lib/kubelet/plugins", driverName, "csi.sock")
+}

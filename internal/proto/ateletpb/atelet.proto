@@ -124,6 +124,7 @@ message DurableDirVolume {
 message ExternalVolumeSource {
   string storage_volume_id = 1;
   string volume_type = 2;
+  map<string, string> volume_context = 3;
 }
 
 message Volume {

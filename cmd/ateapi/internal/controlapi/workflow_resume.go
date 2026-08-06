@@ -37,6 +37,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
+	storagev1listers "k8s.io/client-go/listers/storage/v1"
 )
 
 // ResumeInput holds the immutable parameters requested by the client.
@@ -211,9 +212,10 @@ func (s *LoadActorForResumeStep) Execute(ctx context.Context, input *ResumeInput
 
 func (s *LoadActorForResumeStep) RetryBackoff() *wait.Backoff { return nil }
 
-// CreateVolumesStep provisions any initial actor volumes that are in PENDING state.
 type CreateVolumesStep struct {
-	store store.Interface
+	store              store.Interface
+	pluginRegistry     VolumePluginRegistry
+	storageClassLister storagev1listers.StorageClassLister
 }
 
 func (s *CreateVolumesStep) Name() string { return "CreateVolumes" }
@@ -238,7 +240,7 @@ func (s *CreateVolumesStep) CheckPrerequisite(ctx context.Context, input *Resume
 }
 
 func (s *CreateVolumesStep) Execute(ctx context.Context, input *ResumeInput, state *ResumeState) error {
-	volumes, err := createActorVolumes(ctx, state.Actor.GetMetadata().GetUid(), state.ActorTemplate, state.Actor.GetActorVolumes())
+	volumes, err := createActorVolumes(ctx, s.pluginRegistry, s.storageClassLister, state.Actor.GetMetadata().GetUid(), state.ActorTemplate, state.Actor.GetActorVolumes())
 	state.Actor.ActorVolumes = volumes
 	if err != nil {
 		// Even if volume creation failed, we still want to persist any updated volume state.
@@ -446,7 +448,8 @@ func (s *AssignWorkerStep) RetryBackoff() *wait.Backoff {
 }
 
 type AttachVolumesStep struct {
-	store store.Interface
+	store          store.Interface
+	pluginRegistry VolumePluginRegistry
 }
 
 func (s *AttachVolumesStep) Name() string { return "AttachVolumes" }
@@ -479,7 +482,11 @@ func (s *AttachVolumesStep) Execute(ctx context.Context, input *ResumeInput, sta
 	ref := &ateapipb.ObjectRef{Atespace: state.Actor.GetMetadata().GetAtespace(), Name: state.Actor.GetMetadata().GetName()}
 	for _, vol := range getMountedActorVolumes(ctx, ref, state.Actor.GetActorVolumes(), state.ActorTemplate) {
 		slog.InfoContext(ctx, "Attaching volume to node", slog.String("volume_id", vol.GetStorageVolumeId()), slog.String("node", node))
-		err := getVolumePlugin().AttachVolume(ctx, vol.GetStorageVolumeId(), node)
+		plugin, err := s.pluginRegistry.GetPlugin(ctx, vol.GetVolumeType())
+		if err != nil {
+			return fmt.Errorf("failed to get volume plugin for %q: %w", vol.GetVolumeType(), err)
+		}
+		err = plugin.AttachVolume(ctx, vol.GetStorageVolumeId(), node)
 		if err != nil {
 			return fmt.Errorf("failed to attach volume %q to node %q: %w", vol.GetStorageVolumeId(), node, err)
 		}

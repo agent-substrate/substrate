@@ -56,13 +56,16 @@ func NewMockVolumePlugin() *MockVolumePlugin {
 	return &MockVolumePlugin{}
 }
 
-// CreateVolume simulates volume provisioning. The returned volumeID is
-// derived deterministically from name so repeated calls (retries) are
-// idempotent by construction, with no state needed to enforce that.
-func (p *MockVolumePlugin) CreateVolume(ctx context.Context, name string, capacity string, storageClass string) (string, error) {
+// DriverName returns the driver name for mock plugin.
+func (p *MockVolumePlugin) DriverName(ctx context.Context) (string, error) {
+	return "substrate.io/mock", nil
+}
+
+// CreateVolume simulates volume provisioning.
+func (p *MockVolumePlugin) CreateVolume(ctx context.Context, name string, capacity string, storageClass string, parameters map[string]string) (string, map[string]string, error) {
 	volumeID := "mock-vol-" + name
 	slog.InfoContext(ctx, "MockVolumePlugin.CreateVolume", slog.String("name", name), slog.String("capacity", capacity), slog.String("storageClass", storageClass), slog.String("volumeID", volumeID))
-	return volumeID, nil
+	return volumeID, parameters, nil
 }
 
 // DeleteVolume simulates volume deletion.
@@ -84,7 +87,7 @@ func (p *MockVolumePlugin) DetachVolume(ctx context.Context, volumeID string, no
 }
 
 // MountVolume simulates mounting volume on the host.
-func (p *MockVolumePlugin) MountVolume(ctx context.Context, volumeID string, targetPath string) error {
+func (p *MockVolumePlugin) MountVolume(ctx context.Context, volumeID string, targetPath string, volumeContext map[string]string) error {
 	slog.InfoContext(ctx, "MockVolumePlugin.MountVolume", slog.String("volumeID", volumeID), slog.String("targetPath", targetPath))
 
 	volumeDir := filepath.Join(mockVolumeDirectories, volumeID)

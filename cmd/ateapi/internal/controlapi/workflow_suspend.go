@@ -196,7 +196,8 @@ func (s *CallAteletSuspendStep) Execute(ctx context.Context, input *SuspendInput
 func (s *CallAteletSuspendStep) RetryBackoff() *wait.Backoff { return nil }
 
 type DetachVolumesStep struct {
-	store store.Interface
+	store          store.Interface
+	pluginRegistry VolumePluginRegistry
 }
 
 func (s *DetachVolumesStep) Name() string { return "DetachVolumes" }
@@ -211,7 +212,7 @@ func (s *DetachVolumesStep) CheckPrerequisite(ctx context.Context, input *Suspen
 }
 
 func (s *DetachVolumesStep) Execute(ctx context.Context, input *SuspendInput, state *SuspendState) error {
-	return detachActorVolumes(ctx, s.store, state.Actor, state.ActorTemplate, ateattr.OperationSuspend)
+	return detachActorVolumes(ctx, s.store, s.pluginRegistry, state.Actor, state.ActorTemplate, ateattr.OperationSuspend)
 }
 
 func (s *DetachVolumesStep) RetryBackoff() *wait.Backoff { return nil }

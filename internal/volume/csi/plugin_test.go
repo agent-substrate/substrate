@@ -184,7 +184,7 @@ func TestPlugin_CreateVolume(t *testing.T) {
 	plugin := NewPlugin(client)
 
 	ctx := context.Background()
-	volID, err := plugin.CreateVolume(ctx, "test-vol", "1Gi", "standard")
+	volID, _, err := plugin.CreateVolume(ctx, "test-vol", "1Gi", "standard", nil)
 	if err != nil {
 		t.Fatalf("CreateVolume failed: %v", err)
 	}
@@ -294,7 +294,7 @@ func TestPlugin_MountVolume(t *testing.T) {
 	targetPath := filepath.Join(tmpDir, "target")
 
 	ctx := context.Background()
-	err = plugin.MountVolume(ctx, "test-vol", targetPath)
+	err = plugin.MountVolume(ctx, "test-vol", targetPath, nil)
 	if err != nil {
 		t.Fatalf("MountVolume failed: %v", err)
 	}
@@ -313,7 +313,7 @@ func TestPlugin_MountVolume(t *testing.T) {
 	os.RemoveAll(tmpDir)
 	os.MkdirAll(plugin.stagingDirPrefix, 0750)
 
-	err = plugin.MountVolume(ctx, "test-vol-2", targetPath)
+	err = plugin.MountVolume(ctx, "test-vol-2", targetPath, nil)
 	if err != nil {
 		t.Errorf("MountVolume should have succeeded when NodeStageVolume is unimplemented, got: %v", err)
 	}

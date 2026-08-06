@@ -24,6 +24,8 @@ import (
 type Interface interface {
 	// ActorTemplates returns a ActorTemplateInformer.
 	ActorTemplates() ActorTemplateInformer
+	// CSIDriverConfigs returns a CSIDriverConfigInformer.
+	CSIDriverConfigs() CSIDriverConfigInformer
 	// SandboxConfigs returns a SandboxConfigInformer.
 	SandboxConfigs() SandboxConfigInformer
 	// WorkerPools returns a WorkerPoolInformer.
@@ -44,6 +46,11 @@ func New(f internalinterfaces.SharedInformerFactory, namespace string, tweakList
 // ActorTemplates returns a ActorTemplateInformer.
 func (v *version) ActorTemplates() ActorTemplateInformer {
 	return &actorTemplateInformer{factory: v.factory, namespace: v.namespace, tweakListOptions: v.tweakListOptions}
+}
+
+// CSIDriverConfigs returns a CSIDriverConfigInformer.
+func (v *version) CSIDriverConfigs() CSIDriverConfigInformer {
+	return &cSIDriverConfigInformer{factory: v.factory, tweakListOptions: v.tweakListOptions}
 }
 
 // SandboxConfigs returns a SandboxConfigInformer.
