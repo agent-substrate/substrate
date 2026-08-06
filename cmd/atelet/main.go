@@ -446,6 +446,12 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 	sandboxRec.ActorTemplateNamespace = req.GetActorTemplateNamespace()
 	sandboxRec.ActorTemplateName = req.GetActorTemplateName()
 
+	// No earlier pause snapshot can ever be restored again, so remove them
+	// all: the actor's current state was just captured by CheckpointWorkload,
+	// and the control plane tracks only a single local snapshot, which this
+	// checkpoint either overwrites (pause) or clears (suspend).
+	pruneLocalCheckpoints(ctx, actorUID)
+
 	switch req.GetType() {
 	case ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL:
 		// TODO(#362): Because we do not cache the external snapshot files when upload fails, we have to mark the Actor as CRASHED.
@@ -1103,8 +1109,8 @@ func validateCheckpointRequest(req *ateletpb.CheckpointRequest) error {
 			return err
 		}
 	case ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL:
-		if req.GetLocalConfig().GetSnapshotPrefix() == "" {
-			return fmt.Errorf("snapshot prefix must be non-empty for type %s", req.GetType().String())
+		if err := resources.ValidateLocalSnapshotPrefix(req.GetLocalConfig().GetSnapshotPrefix()); err != nil {
+			return err
 		}
 	default:
 		return fmt.Errorf("invalid checkpoint type: %v", req.GetType())
@@ -1155,8 +1161,8 @@ func validateRestoreRequest(req *ateletpb.RestoreRequest) error {
 			return err
 		}
 	case ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL:
-		if req.GetLocalConfig().GetSnapshotPrefix() == "" {
-			return fmt.Errorf("snapshot prefix must be non-empty for type %s", req.GetType().String())
+		if err := resources.ValidateLocalSnapshotPrefix(req.GetLocalConfig().GetSnapshotPrefix()); err != nil {
+			return err
 		}
 	default:
 		return fmt.Errorf("invalid checkpoint type: %v", req.GetType())

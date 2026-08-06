@@ -302,6 +302,31 @@ func TestValidateSnapshotURIPrefix(t *testing.T) {
 	}
 }
 
+func TestValidateLocalSnapshotPrefix(t *testing.T) {
+	tests := []struct {
+		name    string
+		prefix  string
+		wantErr bool
+	}{
+		{"valid", "pause", false},
+		{"valid with dash and digits", "pause-2", false},
+		{"empty", "", true},
+		{"dot", ".", true},
+		{"dotdot", "..", true},
+		{"nested", "pause/2", true},
+		{"absolute", "/pause", true},
+		{"traversal", "../other-actor", true},
+		{"backslash", `pause\2`, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := ValidateLocalSnapshotPrefix(tt.prefix); (err != nil) != tt.wantErr {
+				t.Errorf("ValidateLocalSnapshotPrefix(%q) err = %v, wantErr %v", tt.prefix, err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestValidateWorker(t *testing.T) {
 	tests := []struct {
 		name    string
