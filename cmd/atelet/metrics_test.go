@@ -16,16 +16,16 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 
 	"github.com/agent-substrate/substrate/internal/ateattr"
+	"github.com/agent-substrate/substrate/internal/ateerrors"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 )
@@ -167,14 +167,17 @@ func TestCheckpointDurationShape(t *testing.T) {
 	}
 }
 
-// TestRecordPhasesSkipsPhasesThatNeverRan is the failure-path contract: a
-// restore that dies in the download still reports the phases it completed, with
-// error.type set, and does not report the later ones as instantaneous.
-func TestRecordPhasesSkipsPhasesThatNeverRan(t *testing.T) {
+// TestRecordPhasesFailurePath is the failure-path contract: a restore that dies
+// in the download marks ate.failure.reason on that phase and on the total,
+// leaves the phases that already succeeded unlabeled so their latency stays
+// queryable, and does not report phases that never started as instantaneous.
+func TestRecordPhasesFailurePath(t *testing.T) {
 	inst, reader := newTestInstruments(t)
 
-	inst.recordRestore(context.Background(), snapshotOp{scope: ateattr.SnapshotScopeFull},
-		status.Error(codes.DataLoss, "snapshot gone"),
+	downloadErr := fmt.Errorf("%w: while downloading snapshot", ateerrors.ReasonFailedGetExternalObject)
+	inst.recordRestore(context.Background(),
+		snapshotOp{scope: ateattr.SnapshotScopeFull, failedPhase: ateattr.SnapshotPhaseDownload},
+		downloadErr,
 		phase{ateattr.SnapshotPhaseManifestFetch, 50 * time.Millisecond},
 		phase{ateattr.SnapshotPhaseDownload, 2 * time.Second},
 		phase{ateattr.SnapshotPhaseAteomRestore, 0},
@@ -182,17 +185,53 @@ func TestRecordPhasesSkipsPhasesThatNeverRan(t *testing.T) {
 
 	byPhase := phaseValues(t, collectHistogram(t, reader, restoreDurationMetric))
 	if _, ok := byPhase[ateattr.SnapshotPhaseAteomRestore]; ok {
-		t.Error("a phase that never ran was recorded as a zero observation")
+		t.Error("a phase that never started was recorded as a zero observation")
 	}
-	for _, want := range []string{ateattr.SnapshotPhaseManifestFetch, ateattr.SnapshotPhaseDownload, ateattr.SnapshotPhaseTotal} {
-		set, ok := byPhase[want]
-		if !ok {
-			t.Errorf("phase %q missing", want)
-			continue
-		}
-		if v := attrString(t, set, ateattr.ErrorTypeKey); v != codes.DataLoss.String() {
-			t.Errorf("phase %q error.type = %q, want %q", want, v, codes.DataLoss)
-		}
+
+	wantReason := string(ateerrors.ReasonFailedGetExternalObject)
+	tests := []struct {
+		phase      string
+		wantReason string // empty means ate.failure.reason must be absent
+	}{
+		{phase: ateattr.SnapshotPhaseDownload, wantReason: wantReason},
+		{phase: ateattr.SnapshotPhaseTotal, wantReason: wantReason},
+		{phase: ateattr.SnapshotPhaseManifestFetch, wantReason: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.phase, func(t *testing.T) {
+			set, ok := byPhase[tt.phase]
+			if !ok {
+				t.Fatalf("phase %q missing", tt.phase)
+			}
+			got, present := set.Value(ateattr.FailureReasonKey)
+			if tt.wantReason == "" {
+				if present {
+					t.Errorf("ate.failure.reason = %q on a phase that succeeded, want absent", got.AsString())
+				}
+				return
+			}
+			if !present || got.AsString() != tt.wantReason {
+				t.Errorf("ate.failure.reason = %q (present=%v), want %q", got.AsString(), present, tt.wantReason)
+			}
+		})
+	}
+}
+
+// TestRecordPhasesUnclassifiedFailure covers the infrastructure failures that
+// carry no ateerrors.Reason (a dead object-storage endpoint, say): they must
+// collapse onto UNKNOWN rather than leaking an error message into the label.
+func TestRecordPhasesUnclassifiedFailure(t *testing.T) {
+	inst, reader := newTestInstruments(t)
+
+	inst.recordRestore(context.Background(),
+		snapshotOp{scope: ateattr.SnapshotScopeFull, failedPhase: ateattr.SnapshotPhaseManifestFetch},
+		fmt.Errorf("dial tcp 10.96.192.187:9000: connect: connection refused"),
+		phase{ateattr.SnapshotPhaseManifestFetch, 30 * time.Millisecond},
+		phase{ateattr.SnapshotPhaseTotal, 30 * time.Millisecond})
+
+	set := phaseValues(t, collectHistogram(t, reader, restoreDurationMetric))[ateattr.SnapshotPhaseManifestFetch]
+	if v := attrString(t, set, ateattr.FailureReasonKey); v != ateattr.ReasonUnknown {
+		t.Errorf("ate.failure.reason = %q, want %q", v, ateattr.ReasonUnknown)
 	}
 }
 
@@ -204,7 +243,7 @@ func TestSnapshotOpAttrsOmitsUnknownDimensions(t *testing.T) {
 		templateNamespace: testTemplateNamespace,
 		templateName:      testTemplateName,
 		scope:             ateattr.SnapshotScopeFull,
-	}.attrs(nil)
+	}.attrs()
 	for _, kv := range attrs {
 		if kv.Key == ateattr.SnapshotKindKey || kv.Key == ateattr.SandboxClassKey {
 			t.Errorf("attribute %s must be omitted while unknown, got %q", kv.Key, kv.Value.AsString())
@@ -215,7 +254,7 @@ func TestSnapshotOpAttrsOmitsUnknownDimensions(t *testing.T) {
 // TestSnapshotOpAttrsNormalizesSandboxClass keeps an unvalidated manifest value
 // from becoming an unbounded label.
 func TestSnapshotOpAttrsNormalizesSandboxClass(t *testing.T) {
-	attrs := snapshotOp{sandboxClass: "definitely-not-a-runtime"}.attrs(nil)
+	attrs := snapshotOp{sandboxClass: "definitely-not-a-runtime"}.attrs()
 	for _, kv := range attrs {
 		if kv.Key == ateattr.SandboxClassKey && kv.Value.AsString() != ateattr.SandboxClassUnknown {
 			t.Errorf("sandbox class = %q, want %q", kv.Value.AsString(), ateattr.SandboxClassUnknown)

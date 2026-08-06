@@ -210,6 +210,17 @@ const (
 	SnapshotPhaseTotal   = "total"
 )
 
+// FailureReason classifies err onto the bounded ateerrors taxonomy, reading the
+// wrapped Reason or the AIP-193 ErrorInfo detail. An error carrying neither
+// reports ReasonUnknown rather than anything derived from its message, which is
+// what keeps the label bounded.
+func FailureReason(err error) string {
+	if r := ateerrors.ExtractReason(err); r != "" {
+		return r
+	}
+	return ReasonUnknown
+}
+
 // SandboxClassUnknown is the NormalizeSandboxClass fallback.
 const SandboxClassUnknown = "unknown"
 

@@ -123,7 +123,7 @@ func main() {
 
 	instruments, err := NewInstruments(otel.Meter("atelet"))
 	if err != nil {
-		serverboot.Fatal(ctx, "Failed to create cold-start metrics", err)
+		serverboot.Fatal(ctx, "Failed to create atelet metrics", err)
 	}
 
 	// readiness flips to not-ready on SIGTERM so /readyz reports 503 while the
@@ -439,10 +439,11 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 
 	tAssets := time.Now()
 	assetPaths, err := s.ensureSandboxAssets(ctx, sandboxRec)
+	dAssets = time.Since(tAssets)
 	if err != nil {
+		op.failedPhase = ateattr.SnapshotPhaseSandboxAssets
 		return nil, ateerrors.CrashIfReason(ctx, err, ateerrors.ReasonInvalidSandboxAsset, ateerrors.ReasonTerminalFileSystemError, ateerrors.ReasonFailedGetExternalObject, ateerrors.ReasonInvalidObjectURL)
 	}
-	dAssets = time.Since(tAssets)
 
 	checkpointDir := ateompath.CheckpointStateDir(actorUID)
 
@@ -466,12 +467,13 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 		Scope:                  toAteomSnapshotScope(req.GetScope()),
 		ActorUid:               actorUID,
 	})
+	dAteom = time.Since(tAteom)
 	if err != nil {
 		// TODO: Ateom should classify checkpoint failures, and set "should-crash"
 		// in the metadata if the error is not retriable.
+		op.failedPhase = ateattr.SnapshotPhaseAteomCheckpoint
 		return nil, fmt.Errorf("while calling ateom.CheckpointWorkload: %w", err)
 	}
-	dAteom = time.Since(tAteom)
 
 	sandboxRec.SnapshotFiles = resp.GetSnapshotFiles()
 	if len(sandboxRec.SnapshotFiles) == 0 {
@@ -497,10 +499,14 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 	case ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL:
 		// TODO(#362): Because we do not cache the external snapshot files when upload fails, we have to mark the Actor as CRASHED.
 		if err := s.uploadExternalCheckpoint(ctx, req, checkpointDir, sandboxRec); err != nil {
+			dPersist = time.Since(tPersist)
+			op.failedPhase = ateattr.SnapshotPhasePersist
 			return nil, ateerrors.NewGRPCError(ctx, codes.DataLoss, ateerrors.ReasonFaileSaveSnapshot, ateerrors.ActorCrashedMetadata(), fmt.Errorf("%w: while uploading external snapshot: %w", ateerrors.ReasonFaileSaveSnapshot, err))
 		}
 	case ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL:
 		if err := s.moveLocalCheckpoint(ctx, req, checkpointDir, sandboxRec); err != nil {
+			dPersist = time.Since(tPersist)
+			op.failedPhase = ateattr.SnapshotPhasePersist
 			return nil, ateerrors.NewGRPCError(ctx, codes.DataLoss, ateerrors.ReasonFaileSaveSnapshot, ateerrors.ActorCrashedMetadata(), fmt.Errorf("%w: while moving to local snapshot: %w", ateerrors.ReasonFaileSaveSnapshot, err))
 		}
 	default:
@@ -629,10 +635,12 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	}
 
 	tMount := time.Now()
-	if err := s.mountExternalVolumes(ctx, actorUID, req.GetSpec().GetVolumes()); err != nil {
-		return nil, err
-	}
+	mountErr := s.mountExternalVolumes(ctx, actorUID, req.GetSpec().GetVolumes())
 	dMount = time.Since(tMount)
+	if mountErr != nil {
+		op.failedPhase = ateattr.SnapshotPhaseVolumeMount
+		return nil, mountErr
+	}
 
 	checkpointDir := ateompath.RestoreStateDir(actorUID)
 
@@ -641,6 +649,13 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	// request no longer carries the sandbox config). Fetch the (small) manifest
 	// first — both the checkpoint download and the OCI/asset prep below need it.
 	tManifest := time.Now()
+	manifestDone := false
+	defer func() {
+		if !manifestDone {
+			dManifest = time.Since(tManifest)
+			op.failedPhase = ateattr.SnapshotPhaseManifestFetch
+		}
+	}()
 	var sandboxRec *sandboxAssetsRecord
 	switch req.GetType() {
 	case ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL:
@@ -690,6 +705,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		}
 	}
 	dManifest = time.Since(tManifest)
+	manifestDone = true
 
 	// The manifest is what tells a golden restore from a latest one, so the
 	// metric dimensions only become knowable here.
@@ -715,9 +731,17 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	// TODO(dberkov): the old pause checkpoint files are not deleted after they are
 	// copied to checkpointDir for the LOCAL case.
 	var assetPaths map[string]string
+	// One per leg: a single field written from both goroutines would race.
+	var downloadFailedPhase, prepFailedPhase string
 	g, gctx := errgroup.WithContext(ctx)
-	g.Go(func() error {
+	g.Go(func() (err error) {
 		t := time.Now()
+		defer func() {
+			dDownload = time.Since(t)
+			if err != nil {
+				downloadFailedPhase = ateattr.SnapshotPhaseDownload
+			}
+		}()
 		switch req.GetType() {
 		case ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL:
 			if req.GetScope() == ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN {
@@ -757,24 +781,30 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 				return err
 			}
 		}
-		dDownload = time.Since(t)
 		return nil
 	})
-	g.Go(func() error {
-		var err error
+	g.Go(func() (err error) {
 		tAssets := time.Now()
-		if assetPaths, err = s.ensureSandboxAssets(gctx, runtimeRec); err != nil {
+		assetPaths, err = s.ensureSandboxAssets(gctx, runtimeRec)
+		dAssets = time.Since(tAssets)
+		if err != nil {
+			prepFailedPhase = ateattr.SnapshotPhaseSandboxAssets
 			return ateerrors.CrashIfReason(ctx, err, ateerrors.ReasonFailedGetExternalObject, ateerrors.ReasonInvalidObjectURL, ateerrors.ReasonTerminalFileSystemError, ateerrors.ReasonInvalidSandboxAsset)
 		}
-		dAssets = time.Since(tAssets)
 		t := time.Now()
-		if err := s.prepareOCIBundles(gctx, actorUID, actorRef.Name, req.GetSpec(), req.GetTargetAteomUid()); err != nil {
+		err = s.prepareOCIBundles(gctx, actorUID, actorRef.Name, req.GetSpec(), req.GetTargetAteomUid())
+		dBundles = time.Since(t)
+		if err != nil {
+			prepFailedPhase = ateattr.SnapshotPhaseOCIUnpack
 			return ateerrors.CrashIfReason(ctx, err, ateerrors.ReasonTerminalFileSystemError, ateerrors.ReasonInvalidContainerConfig)
 		}
-		dBundles = time.Since(t)
 		return nil
 	})
 	if err := g.Wait(); err != nil {
+		op.failedPhase = downloadFailedPhase
+		if op.failedPhase == "" {
+			op.failedPhase = prepFailedPhase
+		}
 		return nil, err
 	}
 
@@ -786,7 +816,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	// Tell ateom to do runsc create + runsc restore for pause container and
 	// all application containers.
 	tAteom := time.Now()
-	if _, err := client.RestoreWorkload(ctx, &ateompb.RestoreWorkloadRequest{
+	_, err = client.RestoreWorkload(ctx, &ateompb.RestoreWorkloadRequest{
 		Atespace:               actorRef.Atespace,
 		ActorName:              actorRef.Name,
 		ActorTemplateNamespace: req.GetActorTemplateNamespace(),
@@ -800,11 +830,13 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		// already staged into the restore dir by the combined download above;
 		// ateom restores from the shared dir and never fetches this URI.
 		GoldenSnapshotUriPrefix: req.GetGoldenSnapshotUriPrefix(),
-	}); err != nil {
+	})
+	dAteom = time.Since(tAteom)
+	if err != nil {
 		// TODO: classify the errors returned by Ateom and crash the actor if needed.
+		op.failedPhase = ateattr.SnapshotPhaseAteomRestore
 		return nil, fmt.Errorf("while calling ateom.RestoreWorkload: %w", err)
 	}
-	dAteom = time.Since(tAteom)
 
 	// Record the (manifest-pinned) sandbox binaries on-node so a subsequent
 	// Checkpoint of this restored actor can re-pin the same version. For a

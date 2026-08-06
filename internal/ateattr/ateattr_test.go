@@ -15,10 +15,16 @@
 package ateattr
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"testing"
 
 	"go.opentelemetry.io/otel/attribute"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
+	"github.com/agent-substrate/substrate/internal/ateerrors"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 
@@ -322,6 +328,59 @@ func TestNormalizeSandboxClass(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := NormalizeSandboxClass(tt.class); got != tt.want {
 				t.Errorf("NormalizeSandboxClass(%q) = %q, want %q", tt.class, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestFailureReason pins the error-to-label mapping: only the registered
+// ateerrors taxonomy may reach the label, so anything unclassified collapses
+// onto UNKNOWN instead of leaking an unbounded error message.
+func TestFailureReason(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{
+			name: "wrapped reason",
+			err:  fmt.Errorf("%w: while uploading external snapshot", ateerrors.ReasonFaileSaveSnapshot),
+			want: string(ateerrors.ReasonFaileSaveSnapshot),
+		},
+		{
+			name: "reason nested several wraps deep",
+			err:  fmt.Errorf("restore: %w", fmt.Errorf("%w: bad manifest", ateerrors.ReasonInvalidSandboxAsset)),
+			want: string(ateerrors.ReasonInvalidSandboxAsset),
+		},
+		{
+			name: "gRPC status carrying the reason as an ErrorInfo detail",
+			err:  ateerrors.NewGRPCError(context.Background(), codes.DataLoss, ateerrors.ReasonTerminalFileSystemError, nil, errors.New("no space left on device")),
+			want: string(ateerrors.ReasonTerminalFileSystemError),
+		},
+		{
+			name: "infrastructure error with no reason attached",
+			err:  errors.New("dial tcp 10.96.192.187:9000: connect: connection refused"),
+			want: ReasonUnknown,
+		},
+		{
+			name: "plain gRPC status with no ErrorInfo",
+			err:  status.Error(codes.Unavailable, "unavailable"),
+			want: ReasonUnknown,
+		},
+		{
+			name: "nil error",
+			err:  nil,
+			want: ReasonUnknown,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := FailureReason(tt.err)
+			if got != tt.want {
+				t.Errorf("FailureReason() = %q, want %q", got, tt.want)
+			}
+			if !ateerrors.IsValidReason(got) {
+				t.Errorf("FailureReason() = %q, which is not a registered reason", got)
 			}
 		})
 	}

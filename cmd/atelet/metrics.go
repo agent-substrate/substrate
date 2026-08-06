@@ -21,7 +21,6 @@ import (
 
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
-	"google.golang.org/grpc/status"
 
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
@@ -80,14 +79,16 @@ type snapshotOp struct {
 	kind              string
 	scope             string
 	sandboxClass      string
+	// failedPhase is the step the operation died in, so error.type lands there
+	// and on the total rather than on the phases that had already succeeded.
+	failedPhase string
 }
 
 // attrs omits kind and sandbox class while they are unknown (a restore that
 // failed before reading the snapshot manifest) rather than emitting an
-// empty-string series. error.type is set from the gRPC status; its absence
-// marks success.
-func (o snapshotOp) attrs(err error) []attribute.KeyValue {
-	attrs := make([]attribute.KeyValue, 0, 6)
+// empty-string series.
+func (o snapshotOp) attrs() []attribute.KeyValue {
+	attrs := make([]attribute.KeyValue, 0, 5)
 	attrs = append(attrs,
 		ateattr.TemplateNamespaceKey.String(o.templateNamespace),
 		ateattr.TemplateNameKey.String(o.templateName),
@@ -98,9 +99,6 @@ func (o snapshotOp) attrs(err error) []attribute.KeyValue {
 	}
 	if o.sandboxClass != "" {
 		attrs = append(attrs, ateattr.SandboxClassKey.String(ateattr.NormalizeSandboxClass(o.sandboxClass)))
-	}
-	if err != nil {
-		attrs = append(attrs, ateattr.ErrorTypeKey.String(status.Code(err).String()))
 	}
 	return attrs
 }
@@ -115,27 +113,36 @@ func (i *Instruments) recordRestore(ctx context.Context, op snapshotOp, err erro
 	if i == nil || i.restoreDuration == nil {
 		return
 	}
-	recordPhases(ctx, i.restoreDuration, op.attrs(err), phases)
+	recordPhases(ctx, i.restoreDuration, op, err, phases)
 }
 
 func (i *Instruments) recordCheckpoint(ctx context.Context, op snapshotOp, err error, phases ...phase) {
 	if i == nil || i.checkpointDuration == nil {
 		return
 	}
-	recordPhases(ctx, i.checkpointDuration, op.attrs(err), phases)
+	recordPhases(ctx, i.checkpointDuration, op, err, phases)
 }
 
-// recordPhases skips zero-valued phases: those never ran, because the operation
-// failed before reaching them, and reporting them as instantaneous would drag
-// every percentile down.
-func recordPhases(ctx context.Context, h metric.Float64Histogram, base []attribute.KeyValue, phases []phase) {
+// recordPhases skips zero-valued phases: those never started, because the
+// operation died before reaching them, and reporting them as instantaneous
+// would drag every percentile down.
+//
+// ate.failure.reason marks only the phase that failed and the total. It carries
+// substrate's taxonomy rather than a gRPC code, which would read Unknown for
+// almost every failure here: the interceptor maps these wrapped domain errors
+// to a status only after the handler returns.
+func recordPhases(ctx context.Context, h metric.Float64Histogram, op snapshotOp, err error, phases []phase) {
+	base := op.attrs()
 	for _, p := range phases {
 		if p.d == 0 {
 			continue
 		}
-		attrs := make([]attribute.KeyValue, 0, len(base)+1)
+		attrs := make([]attribute.KeyValue, 0, len(base)+2)
 		attrs = append(attrs, base...)
 		attrs = append(attrs, ateattr.SnapshotPhaseKey.String(p.name))
+		if err != nil && (p.name == ateattr.SnapshotPhaseTotal || p.name == op.failedPhase) {
+			attrs = append(attrs, ateattr.FailureReasonKey.String(ateattr.FailureReason(err)))
+		}
 		h.Record(ctx, p.d.Seconds(), metric.WithAttributes(attrs...))
 	}
 }
