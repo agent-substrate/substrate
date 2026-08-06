@@ -313,6 +313,15 @@ type SnapshotsConfig struct {
 // +kubebuilder:validation:XValidation:rule="!has(self.volumes) || self.volumes.all(v, has(self.containers) && self.containers.exists(c, has(c.volumeMounts) && c.volumeMounts.exists(vm, vm.name == v.name)))",message="All volumes defined in spec.volumes must be mounted by at least one container"
 // +kubebuilder:validation:XValidation:rule="!has(self.sandboxClass) || self.sandboxClass != 'microvm' || !has(self.volumes) || !self.volumes.exists(v, has(v.externalVolumeTemplate))",message="ExternalVolumes are not supported when sandboxClass is 'microvm'"
 // +kubebuilder:validation:XValidation:rule="(has(self.sandboxClass) && self.sandboxClass == 'microvm') || !has(self.snapshotsConfig.onResume) || (has(self.snapshotsConfig.onResume.fromData) ? self.snapshotsConfig.onResume.fromData : 'ColdBoot') != 'Golden'",message="onResume.fromData: Golden is not supported when sandboxClass is 'gvisor'"
+// A micro-VM's guest RAM is the declared memory limit minus a fixed VMM reserve
+// (256Mi, held back for cloud-hypervisor + virtiofsd); below a 256Mi guest minimum
+// the VM cannot boot. Reject at admission any micro-VM memory limit under 512Mi
+// (256Mi reserve + 256Mi guest minimum) so it fails at create time rather than at
+// cold boot — a coarse pre-filter; the reserve-aware check in ateom (see
+// cmd/ateom-microvm/run.go: resolveGuestMemMiB) stays authoritative. The 512Mi floor
+// assumes the default reserve; deployments that raise --vmm-mem-reserve-mib rely on
+// the runtime check. gVisor has no reserve, so this only applies to micro-VM.
+// +kubebuilder:validation:XValidation:rule="!has(self.sandboxClass) || self.sandboxClass != 'microvm' || !has(self.resources) || !has(self.resources.limits) || !('memory' in self.resources.limits) || !quantity(self.resources.limits['memory']).isLessThan(quantity('512Mi'))",message="For sandboxClass 'microvm', spec.resources.limits.memory must be at least 512Mi (256Mi VMM reserve + 256Mi guest minimum); below this the VM cannot boot"
 type ActorTemplateSpec struct {
 	// Containers is the workload definition.
 	//

@@ -123,6 +123,15 @@ const (
 // deployment via --vmm-mem-reserve-mib (see AteomService.memReserveMiB).
 const vmmMemReserveMiB = 256
 
+// minGuestMemMiB is the floor for guest RAM (the declared limit minus the VMM
+// reserve); a declared memory limit that leaves less is rejected at cold boot with a
+// clear error instead of being silently honored (see resolveGuestMemMiB), since too
+// little RAM makes the guest hang on boot rather than fail cleanly. It is a
+// conservative estimate; calibrate against a measured kata boot minimum if a tighter
+// bound is needed, and keep the admission floor on ActorTemplate.spec.resources in
+// sync (it is this value + vmmMemReserveMiB).
+const minGuestMemMiB = 256
+
 // maxActorContainers is a sanity cap on containers per actor (all share the one
 // micro-VM + virtiofsd). 25 is far above any real pod.
 const maxActorContainers = 25
@@ -223,11 +232,11 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	}
 
 	p := actorBootParams{
-		actorRef:     resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()},
-		actorUID:     req.GetActorUid(),
-		templateNS:   req.GetActorTemplateNamespace(),
-		templateName: req.GetActorTemplateName(),
-		containers:   req.GetSpec().GetContainers(),
+		actorRef:      resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()},
+		actorUID:      req.GetActorUid(),
+		templateNS:    req.GetActorTemplateNamespace(),
+		templateName:  req.GetActorTemplateName(),
+		containers:    req.GetSpec().GetContainers(),
 		assetPaths:    req.GetRuntimeAssetPaths(),
 		egressGateway: req.GetEgressGateway(),
 		size:          sizing.FromLimits(req.GetCpuMilli(), req.GetMemoryBytes()),
@@ -261,12 +270,12 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 // request, or from a Restore request whose snapshot scope covers only the
 // durable-dir volumes (the workload itself cold-starts).
 type actorBootParams struct {
-	actorRef      resources.ActorRef
-	actorUID      string
-	templateNS    string
-	templateName  string
-	containers    []*ateompb.Container
-	assetPaths    map[string]string
+	actorRef     resources.ActorRef
+	actorUID     string
+	templateNS   string
+	templateName string
+	containers   []*ateompb.Container
+	assetPaths   map[string]string
 	// egressGateway is nil unless actor TCP should be redirected through atunnel.
 	egressGateway *ateompb.EgressGateway
 	// size is the actor's declared limits (from the ActorTemplate), supplied on
@@ -390,17 +399,18 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 	// Right-size the VM to the actor's declared limits (see internal/sizing),
 	// keeping the kata-config values above as the fallback when a limit is unset.
 	// vCPUs round up; VM RAM reserves a fixed margin for the VMM + virtiofsd, which
-	// share the pod cgroup with the guest RAM. NB: a FULL-scope snapshot restore
+	// share the pod cgroup with the guest RAM. A declared memory limit the reserve
+	// leaves too small to boot is rejected (resolveGuestMemMiB) rather than silently
+	// falling back to the larger kata default. NB: a FULL-scope snapshot restore
 	// reuses the size baked into the snapshot (restoreFullScope), so resizing an
 	// existing actor takes effect on its next cold boot.
 	sz := p.size
 	if v := sz.VCPUs(); v > 0 {
 		vcpus = v
 	}
-	if sz.MemoryBytes > 0 {
-		if m := int(sz.MemoryBytes/(1024*1024)) - s.memReserveMiB; m > 0 {
-			memMiB = m
-		}
+	memMiB, err = resolveGuestMemMiB(sz.MemoryBytes, s.memReserveMiB, memMiB)
+	if err != nil {
+		return err
 	}
 
 	// Clean stale per-sandbox state + create the runtime dir for the sockets.
@@ -637,6 +647,27 @@ func (s *AteomService) guestConfig(rr resolvedRuntime) (memMiB, vcpus int, kpara
 		kparams = kata.WithAgentDebug(kparams)
 	}
 	return cfg.MemoryMiB, cfg.VCPUs, kparams, nil
+}
+
+// resolveGuestMemMiB returns the micro-VM guest RAM (MiB) for an actor's declared
+// memory limit. declaredBytes == 0 means "unset" and returns fallbackMiB (the
+// kata-config default). Otherwise the guest gets the declared memory minus the VMM
+// reserve; if that leaves less than a bootable minimum it errors — naming the limit,
+// the reserve, and the minimum — instead of silently reverting to the (larger)
+// fallback, which would boot the actor bigger than the worker was sized for and OOM
+// the pod (see vmmMemReserveMiB, minGuestMemMiB, and internal/sizing).
+func resolveGuestMemMiB(declaredBytes int64, reserveMiB, fallbackMiB int) (int, error) {
+	if declaredBytes <= 0 {
+		return fallbackMiB, nil
+	}
+	declaredMiB := int(declaredBytes / (1024 * 1024))
+	m := declaredMiB - reserveMiB
+	if m < minGuestMemMiB {
+		return 0, fmt.Errorf("actor memory limit %dMiB is too small for a micro-VM: "+
+			"the %dMiB VMM reserve leaves %dMiB, below the %dMiB guest minimum",
+			declaredMiB, reserveMiB, m, minGuestMemMiB)
+	}
+	return m, nil
 }
 
 // buildVMConfig assembles the cloud-hypervisor VmConfig. The kernel cmdline replicates

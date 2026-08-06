@@ -88,11 +88,11 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	}
 
 	p := actorBootParams{
-		actorRef:     resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()},
-		actorUID:     req.GetActorUid(),
-		templateNS:   req.GetActorTemplateNamespace(),
-		templateName: req.GetActorTemplateName(),
-		containers:   req.GetSpec().GetContainers(),
+		actorRef:      resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()},
+		actorUID:      req.GetActorUid(),
+		templateNS:    req.GetActorTemplateNamespace(),
+		templateName:  req.GetActorTemplateName(),
+		containers:    req.GetSpec().GetContainers(),
 		assetPaths:    req.GetRuntimeAssetPaths(),
 		egressGateway: req.GetEgressGateway(),
 		size:          sizing.FromLimits(req.GetCpuMilli(), req.GetMemoryBytes()),

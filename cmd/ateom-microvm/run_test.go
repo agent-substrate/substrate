@@ -94,3 +94,44 @@ func TestDialAgentRetryContextCanceled(t *testing.T) {
 		t.Errorf("dialAgentRetry(%q) error = %v, want context.Canceled", path, err)
 	}
 }
+
+// resolveGuestMemMiB must honor a declared limit (minus the VMM reserve), fall back
+// to the kata default only when the limit is unset, and error — never silently boot
+// bigger than declared — when the reserve leaves too little to boot a guest.
+func TestResolveGuestMemMiB(t *testing.T) {
+	const (
+		mib      = 1024 * 1024
+		reserve  = 256  // vmmMemReserveMiB
+		fallback = 2048 // kata-config default
+	)
+	tests := []struct {
+		name        string
+		declaredMiB int64 // 0 => unset
+		wantMiB     int
+		wantErr     bool
+	}{
+		{name: "unset falls back to kata default", declaredMiB: 0, wantMiB: fallback},
+		{name: "declared honored minus reserve", declaredMiB: 1536, wantMiB: 1536 - reserve},
+		{name: "just above minimum", declaredMiB: reserve + minGuestMemMiB, wantMiB: minGuestMemMiB},
+		{name: "reserve exactly swallows limit", declaredMiB: reserve, wantErr: true},
+		{name: "limit below reserve", declaredMiB: 128, wantErr: true},
+		{name: "boot-hang band (too little guest RAM)", declaredMiB: 320, wantErr: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := resolveGuestMemMiB(tc.declaredMiB*mib, reserve, fallback)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("resolveGuestMemMiB(%dMiB) = %d, nil; want an error", tc.declaredMiB, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("resolveGuestMemMiB(%dMiB) unexpected error: %v", tc.declaredMiB, err)
+			}
+			if got != tc.wantMiB {
+				t.Errorf("resolveGuestMemMiB(%dMiB) = %d, want %d", tc.declaredMiB, got, tc.wantMiB)
+			}
+		})
+	}
+}
