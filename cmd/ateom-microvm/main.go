@@ -33,6 +33,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"cloud.google.com/go/compute/metadata"
@@ -294,8 +295,7 @@ type AteomService struct {
 	// activeActor is the actor whose workload this ateom is currently running,
 	// or nil when it is "available". An ateom serves one actor at a time, so a
 	// single slot is enough; running is keyed by UID for lookup, not because
-	// several actors can be live at once. Guarded by lock, like every other
-	// RPC-visible field.
+	// several actors can be live at once.
 	//
 	// Set by RunWorkload / RestoreWorkload and cleared by CheckpointWorkload, so
 	// it tracks exactly the available/executing state machine described on the
@@ -309,7 +309,14 @@ type AteomService struct {
 	// from the moment the ateom accepts the actor, including for a boot that
 	// never finishes. Same field, same timing, as the gVisor ateom's
 	// AteomService.activeActor.
-	activeActor *ateomstats.ActorAttribution
+	//
+	// Atomic for the same reason as there, and it matters at least as much on
+	// this runtime: lock is held across a cold boot with its retry, across a
+	// snapshot write, and across a restore, so a lock-guarded read would park a
+	// poller through all of them. The writers keep holding lock; the point is the
+	// reader. As there, the type makes a lock-free read possible without making
+	// one happen — GetWorkloadStats must not take lock at all.
+	activeActor atomic.Pointer[ateomstats.ActorAttribution]
 }
 
 var _ ateompb.AteomServer = (*AteomService)(nil)

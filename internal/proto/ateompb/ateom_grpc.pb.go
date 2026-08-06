@@ -73,17 +73,31 @@ type AteomClient interface {
 	//
 	// It is a pure read: unlike the three calls above it does not move the ateom
 	// between "available" and "executing", so it is safe to call on a timer for
-	// the whole lifetime of a workload.
+	// the whole lifetime of a workload. It also does not wait on them. Those
+	// three serialize on a mutex an ateom holds for a whole boot, restore, or
+	// checkpoint; this call reads its state from outside that mutex, so a poll
+	// landing in the middle of one answers immediately instead of going quiet for
+	// the duration -- which would silence the poller during exactly the phases
+	// whose usage is most interesting.
 	//
-	// Returns FAILED_PRECONDITION when there is no sample to give. That covers
-	// more than the "available" state: an ateom becomes "executing" when it
-	// accepts the actor, but the sandbox it will measure does not exist yet, and
-	// a poll landing in the boot gets FAILED_PRECONDITION as well. The two are
-	// deliberately the same code, because a caller polling on a timer does the
-	// same thing either way -- skip this sample and take the next one. Read it as
-	// "no numbers right now", not as "the actor is gone"; the actor's identity is
-	// retained from the moment the ateom accepts it, so a workload that dies
-	// during boot is still attributable once a runtime can measure it.
+	// Two ways it declines to give a sample, and they ask different things of the
+	// caller:
+	//
+	//   - NOT_FOUND -- this ateom is not executing the actor in the request. It
+	//     may be "available", or a recycled worker may have moved on to a
+	//     different actor. Retrying on the same timer will not change the answer:
+	//     the caller's worker-to-actor mapping is stale and wants re-resolving.
+	//
+	//   - FAILED_PRECONDITION -- this ateom is executing the requested actor but
+	//     has no sample to give yet. It accepts an actor before the sandbox it
+	//     will measure exists, so a poll landing in the boot lands here. Read it
+	//     as "no numbers right now", not as "the actor is gone": it is transient,
+	//     and the caller should skip this sample and take the next one.
+	//
+	// The split is worth the two codes because the identity is retained from the
+	// moment the ateom accepts the actor, on both runtimes. That is what makes
+	// "booting" distinguishable from "not here" at all, and it means a workload
+	// that dies during boot is attributable rather than anonymous.
 	GetWorkloadStats(ctx context.Context, in *GetWorkloadStatsRequest, opts ...grpc.CallOption) (*GetWorkloadStatsResponse, error)
 }
 
@@ -169,17 +183,31 @@ type AteomServer interface {
 	//
 	// It is a pure read: unlike the three calls above it does not move the ateom
 	// between "available" and "executing", so it is safe to call on a timer for
-	// the whole lifetime of a workload.
+	// the whole lifetime of a workload. It also does not wait on them. Those
+	// three serialize on a mutex an ateom holds for a whole boot, restore, or
+	// checkpoint; this call reads its state from outside that mutex, so a poll
+	// landing in the middle of one answers immediately instead of going quiet for
+	// the duration -- which would silence the poller during exactly the phases
+	// whose usage is most interesting.
 	//
-	// Returns FAILED_PRECONDITION when there is no sample to give. That covers
-	// more than the "available" state: an ateom becomes "executing" when it
-	// accepts the actor, but the sandbox it will measure does not exist yet, and
-	// a poll landing in the boot gets FAILED_PRECONDITION as well. The two are
-	// deliberately the same code, because a caller polling on a timer does the
-	// same thing either way -- skip this sample and take the next one. Read it as
-	// "no numbers right now", not as "the actor is gone"; the actor's identity is
-	// retained from the moment the ateom accepts it, so a workload that dies
-	// during boot is still attributable once a runtime can measure it.
+	// Two ways it declines to give a sample, and they ask different things of the
+	// caller:
+	//
+	//   - NOT_FOUND -- this ateom is not executing the actor in the request. It
+	//     may be "available", or a recycled worker may have moved on to a
+	//     different actor. Retrying on the same timer will not change the answer:
+	//     the caller's worker-to-actor mapping is stale and wants re-resolving.
+	//
+	//   - FAILED_PRECONDITION -- this ateom is executing the requested actor but
+	//     has no sample to give yet. It accepts an actor before the sandbox it
+	//     will measure exists, so a poll landing in the boot lands here. Read it
+	//     as "no numbers right now", not as "the actor is gone": it is transient,
+	//     and the caller should skip this sample and take the next one.
+	//
+	// The split is worth the two codes because the identity is retained from the
+	// moment the ateom accepts the actor, on both runtimes. That is what makes
+	// "booting" distinguishable from "not here" at all, and it means a workload
+	// that dies during boot is attributable rather than anonymous.
 	GetWorkloadStats(context.Context, *GetWorkloadStatsRequest) (*GetWorkloadStatsResponse, error)
 	mustEmbedUnimplementedAteomServer()
 }

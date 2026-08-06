@@ -83,10 +83,10 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	// does, but the window between accepting the actor and serving it is the same
 	// window, and a poll landing in it should name the actor either way.
 	attribution := p.actorAttribution()
-	s.activeActor = &attribution
+	s.activeActor.Store(&attribution)
 	defer func() {
 		if retErr != nil {
-			s.activeActor = nil
+			s.activeActor.Store(nil)
 		}
 	}()
 

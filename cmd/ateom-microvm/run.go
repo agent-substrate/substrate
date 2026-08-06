@@ -225,10 +225,10 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	// reports nothing. The defer drops it again if the boot fails outright.
 	// Matches ateom-gvisor's RunWorkload.
 	attribution := p.actorAttribution()
-	s.activeActor = &attribution
+	s.activeActor.Store(&attribution)
 	defer func() {
 		if retErr != nil {
-			s.activeActor = nil
+			s.activeActor.Store(nil)
 		}
 	}()
 

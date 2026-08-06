@@ -169,7 +169,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	// left it present, and reporting its usage is then the honest answer. This is
 	// the same point at which the running entry goes away, which is what keeps
 	// the two views of "is an actor here" from disagreeing.
-	s.activeActor = nil
+	s.activeActor.Store(nil)
 
 	// Tear down the per-activation actor network.
 	if err := ateomnet.CleanupActorNetwork(ctx, s.interiorNetNS); err != nil {

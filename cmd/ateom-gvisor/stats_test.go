@@ -49,11 +49,11 @@ func TestGetWorkloadStatsUnimplemented(t *testing.T) {
 }
 
 // TestAteomServiceStartsAvailable checks that a freshly constructed service
-// retains no attribution. GetWorkloadStats's FAILED_PRECONDITION-when-available
-// behavior is built on this: a non-nil zero value here would make an idle ateom
-// report an empty actor's usage instead of refusing.
+// retains no attribution. GetWorkloadStats's NOT_FOUND-when-available behavior
+// is built on this: a non-nil zero value here would make an idle ateom report
+// an empty actor's usage instead of refusing.
 func TestAteomServiceStartsAvailable(t *testing.T) {
-	if s := (&AteomService{}); s.activeActor != nil {
-		t.Errorf("new AteomService.activeActor = %v, want nil", s.activeActor)
+	if s := (&AteomService{}); s.activeActor.Load() != nil {
+		t.Errorf("new AteomService.activeActor = %v, want nil", s.activeActor.Load())
 	}
 }

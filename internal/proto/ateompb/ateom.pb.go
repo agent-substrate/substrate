@@ -1030,9 +1030,9 @@ func (*RestoreWorkloadResponse) Descriptor() ([]byte, []int) {
 type GetWorkloadStatsRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The actor the caller believes is executing here. A worker can be recycled
-	// between the caller's view of the world and this call, so ateom rejects a
-	// mismatch with FAILED_PRECONDITION rather than reporting a different
-	// actor's numbers under the requested actor's identity.
+	// between the caller's view of the world and this call, so ateom answers
+	// NOT_FOUND on a mismatch rather than reporting a different actor's numbers
+	// under the requested actor's identity.
 	ActorUid      string `protobuf:"bytes,1,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
