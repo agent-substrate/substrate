@@ -65,12 +65,12 @@ def parse_args() -> argparse.Namespace:
     )
     p.add_argument(
         "--target-cluster-dir",
-        default="/etc/orchestrator/target-clusters",
+        default=TARGET_CLUSTER_DIR,
         help="Directory containing target cluster configuration scripts (<cluster>.sh)",
     )
     p.add_argument(
         "--runner-job-tmpl",
-        default="/opt/automation/manifests/runner-job.yaml.tmpl",
+        default=RUNNER_JOB_TMPL,
         help="Path to the runner job YAML template file",
     )
     return p.parse_args()
