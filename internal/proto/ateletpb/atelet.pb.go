@@ -304,7 +304,7 @@ func (x *RunRequest) GetSandboxAssets() *SandboxAssets {
 }
 
 // AssetFile is one content-addressed file atelet fetches for a sandbox runtime
-// (e.g. the gVisor runsc binary).
+// (e.g. the gVisor release tarball).
 type AssetFile struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// gs:// URL to download the asset from.
@@ -408,7 +408,8 @@ func (x *ArchAssets) GetFiles() map[string]*AssetFile {
 // SandboxAssets is the generic, backend-agnostic description of the sandbox
 // binaries for an actor: a sandbox class plus assets keyed first by
 // architecture (GOARCH) and then by asset name. atelet's backend code
-// interprets the asset names (gVisor expects "runsc").
+// interprets the asset names (gVisor expects "gvisor", the release tarball;
+// legacy "runsc", a bare binary, is still accepted).
 type SandboxAssets struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	SandboxClass  string                 `protobuf:"bytes,1,opt,name=sandbox_class,json=sandboxClass,proto3" json:"sandbox_class,omitempty"`                                           // e.g. "gvisor"

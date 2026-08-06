@@ -22,13 +22,18 @@ package metrics
 
 import (
 	"context"
+	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/ateattr"
+	"github.com/agent-substrate/substrate/internal/ateerrors"
 	"github.com/agent-substrate/substrate/internal/e2e"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 const metricsAtespace = "ate-metrics-e2e"
@@ -48,7 +53,7 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 	ctx := context.Background()
 	clients := e2e.GetClients()
 	tmplNS, tmplName := templateRef()
-	actorID := "metrics-probe"
+	actorID := fmt.Sprintf("metrics-probe-%d", time.Now().UnixNano())
 
 	// CreateActor requires the atespace to exist first; ignore AlreadyExists.
 	_, _ = clients.SubstrateAPI.CreateAtespace(ctx, &ateapipb.CreateAtespaceRequest{
@@ -84,9 +89,13 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 	}
 	_ = resp.Body.Close()
 
+	// Trigger an actor crash to verify ate_actor_crashes counter emission.
+	triggerActorCrash(t, ctx, clients, actorID)
+
 	deadline := time.Now().Add(2 * time.Minute)
 	var missing []string
-	var ateomSeen bool
+	var ateomSeen, controllerSeen bool
+	var lastLabelErr error
 	for time.Now().Before(deadline) {
 		scrape, err := e2e.ScrapeCollectorMetrics(ctx)
 		if err != nil {
@@ -94,12 +103,99 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 		}
 		missing = e2e.MissingPlatformMetrics(scrape, e2e.PlatformMetricPrefixes)
 		ateomSeen = e2e.CollectorHasService(scrape, "ateom-gvisor", "ateom-microvm")
-		if len(missing) == 0 && ateomSeen {
-			return
+		// atecontroller bridges controller-runtime's Prometheus registry onto its OTLP
+		// reader, so the reconcile families are what prove the bridge, not just that
+		// some series arrived. Substring, not prefix: the collector's Prometheus
+		// exporter may re-suffix a name that already ends in _total.
+		controllerSeen = e2e.CollectorHasService(scrape, "atecontroller") &&
+			strings.Contains(scrape, "controller_runtime_")
+		if len(missing) == 0 && ateomSeen && controllerSeen {
+			// Verify ate_actor_crashes metric carries valid, non-empty low-cardinality labels for all attributes.
+			foundCrashLine := false
+			for _, line := range strings.Split(scrape, "\n") {
+				if strings.HasPrefix(line, "ate_actor_crashes") {
+					foundCrashLine = true
+					opVal := extractPrometheusLabelValue(line, "ate_actor_operation_name")
+					reasonVal := extractPrometheusLabelValue(line, "ate_failure_reason")
+					tmplNSVal := extractPrometheusLabelValue(line, "ate_template_namespace")
+					tmplNameVal := extractPrometheusLabelValue(line, "ate_template_name")
+					workerPoolVal := extractPrometheusLabelValue(line, "ate_workerpool_name")
+					sandboxVal := extractPrometheusLabelValue(line, "ate_sandbox_class")
+
+					var errs []string
+					if opVal == "" {
+						errs = append(errs, "ate_actor_operation_name label is missing or empty")
+					} else if ateattr.NormalizeOperationName(opVal) != opVal {
+						errs = append(errs, fmt.Sprintf("ate_actor_operation_name %q is invalid (must be one of {create, resume, suspend, pause, delete, unknown})", opVal))
+					}
+
+					if reasonVal == "" {
+						errs = append(errs, "ate_failure_reason label is missing or empty")
+					} else if !ateerrors.IsValidReason(reasonVal) {
+						errs = append(errs, fmt.Sprintf("ate_failure_reason %q is invalid (must be a registered ateerrors reason enum like CORRUPTED_ASSIGNMENT, WORKER_POD_GONE, WORKER_REASSIGNED, UNKNOWN)", reasonVal))
+					}
+
+					if tmplNSVal == "" {
+						errs = append(errs, "ate_template_namespace label is missing or empty")
+					}
+					if tmplNameVal == "" {
+						errs = append(errs, "ate_template_name label is missing or empty")
+					}
+					if workerPoolVal == "" {
+						errs = append(errs, "ate_workerpool_name label is missing or empty")
+					}
+					if sandboxVal == "" {
+						errs = append(errs, "ate_sandbox_class label is missing or empty")
+					}
+
+					if len(errs) == 0 {
+						return
+					}
+					lastLabelErr = fmt.Errorf("scraped metric line %q failed label validation:\n  - %s\n  (Extracted labels: op=%q, reason=%q, tmplNS=%q, tmplName=%q, workerPool=%q, sandboxClass=%q)",
+						line, strings.Join(errs, "\n  - "), opVal, reasonVal, tmplNSVal, tmplNameVal, workerPoolVal, sandboxVal)
+				}
+			}
+			if !foundCrashLine {
+				lastLabelErr = fmt.Errorf("ate_actor_crashes metric line not found in collector scrape output")
+			}
 		}
+
 		time.Sleep(3 * time.Second)
 	}
-	t.Fatalf("platform telemetry never reached the collector: missing metrics %v, ateom pushed=%v", missing, ateomSeen)
+
+	if lastLabelErr != nil {
+		t.Fatalf("platform telemetry validation failed: missing metrics %v, ateom pushed=%v, atecontroller pushed=%v, error detail: %v",
+			missing, ateomSeen, controllerSeen, lastLabelErr)
+	}
+	t.Fatalf("platform telemetry never reached the collector: missing metrics %v, ateom pushed=%v, atecontroller pushed=%v",
+		missing, ateomSeen, controllerSeen)
+}
+
+func triggerActorCrash(t *testing.T, ctx context.Context, clients *e2e.Clients, actorID string) {
+	t.Helper()
+
+	// Get running actor to find its assigned worker pod.
+	actor, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: metricsAtespace, Name: actorID},
+	})
+	if err != nil {
+		t.Fatalf("GetActor failed: %v", err)
+	}
+
+	// Delete the assigned worker pod directly.
+	// The WorkerPoolSyncer will detect the pod is gone, crash the actor via syncer.go,
+	// and emit the ate_actor_crashes counter.
+	if ass := actor.GetWorkerAssignment(); ass != nil && ass.GetWorkerPod() != "" {
+		podName := ass.GetWorkerPod()
+		podNS := ass.GetWorkerNamespace()
+		if err := clients.K8s.CoreV1().Pods(podNS).Delete(ctx, podName, metav1.DeleteOptions{}); err != nil {
+			t.Fatalf("Delete worker pod failed: %v", err)
+		}
+	} else {
+		t.Fatalf("Actor %s has no assigned worker pod to delete", actorID)
+	}
+
+	waitForStatus(t, ctx, clients, actorID, ateapipb.Actor_STATUS_CRASHED)
 }
 
 func resume(t *testing.T, ctx context.Context, clients *e2e.Clients, actorID string) {
@@ -125,4 +221,18 @@ func waitForStatus(t *testing.T, ctx context.Context, clients *e2e.Clients, acto
 		time.Sleep(2 * time.Second)
 	}
 	t.Fatalf("actor %q never reached %v", actorID, want)
+}
+
+func extractPrometheusLabelValue(line, labelName string) string {
+	key := labelName + `="`
+	idx := strings.Index(line, key)
+	if idx == -1 {
+		return ""
+	}
+	start := idx + len(key)
+	end := strings.IndexByte(line[start:], '"')
+	if end == -1 {
+		return ""
+	}
+	return line[start : start+end]
 }

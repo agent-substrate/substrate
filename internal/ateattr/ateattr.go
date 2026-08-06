@@ -19,9 +19,13 @@
 package ateattr
 
 import (
+	"slices"
+
 	"go.opentelemetry.io/otel/attribute"
 
+	"github.com/agent-substrate/substrate/internal/ateerrors"
 	"github.com/agent-substrate/substrate/internal/resources"
+
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
@@ -62,6 +66,15 @@ const (
 	SchedulerOutcomeKey    = attribute.Key("ate.scheduler.outcome")
 	RouterResumeKey        = attribute.Key("ate.router.resume")
 	RouterOutcomeKey       = attribute.Key("ate.router.outcome")
+	FailureReasonKey       = attribute.Key("ate.failure.reason")
+)
+
+// Control-plane failure reasons for ate.actor.crashes metric.
+const (
+	ReasonCorruptedAssignment = string(ateerrors.ReasonCorruptedAssignment)
+	ReasonWorkerReassigned    = string(ateerrors.ReasonWorkerReassigned)
+	ReasonWorkerPodGone       = string(ateerrors.ReasonWorkerPodGone)
+	ReasonUnknown             = string(ateerrors.ReasonUnknown)
 )
 
 // Values for RouterResumeKey.
@@ -86,7 +99,7 @@ const (
 	WorkerStateAssigned = "assigned"
 )
 
-// Values for ActorOperationNameKey: the five actor lifecycle operations ateapi
+// Values for ActorOperationNameKey: the actor lifecycle operations ateapi
 // serves.
 const (
 	OperationCreate  = "create"
@@ -94,7 +107,26 @@ const (
 	OperationSuspend = "suspend"
 	OperationPause   = "pause"
 	OperationDelete  = "delete"
+	OperationUnknown = "unknown"
 )
+
+// AllOperations lists all registered bounded actor lifecycle operations.
+var AllOperations = []string{
+	OperationCreate,
+	OperationResume,
+	OperationSuspend,
+	OperationPause,
+	OperationDelete,
+}
+
+// NormalizeOperationName ensures op is one of the bounded lifecycle operations.
+// Any unlisted or empty operation maps to OperationUnknown.
+func NormalizeOperationName(op string) string {
+	if slices.Contains(AllOperations, op) {
+		return op
+	}
+	return OperationUnknown
+}
 
 // Values for SchedulerOutcomeKey. NoFreeWorker is a capacity signal, not a
 // failure, so it is a distinct outcome rather than an error.type value; only the
@@ -135,5 +167,33 @@ func ActorAttributes(a *ateapipb.Actor) []attribute.KeyValue {
 		TemplateNameKey.String(a.GetActorTemplateName()),
 		TemplateNamespaceKey.String(a.GetActorTemplateNamespace()),
 		ActorVersionKey.Int64(a.GetMetadata().GetVersion()),
+	}
+}
+
+// ActorMetricAttributes returns the metric labels for an Actor.
+// High-cardinality attributes (atespace, actor name, actor uid) are omitted.
+func ActorMetricAttributes(a *ateapipb.Actor, sandboxClass, operationName, reason string) []attribute.KeyValue {
+	if a == nil {
+		return nil
+	}
+
+	// Default values for unknown/unset attributes.
+	if reason == "" {
+		reason = ReasonUnknown
+	}
+	operationName = NormalizeOperationName(operationName)
+
+	pool := ""
+	if ass := a.GetWorkerAssignment(); ass != nil {
+		pool = ass.GetWorkerPool()
+	}
+
+	return []attribute.KeyValue{
+		TemplateNamespaceKey.String(a.GetActorTemplateNamespace()),
+		TemplateNameKey.String(a.GetActorTemplateName()),
+		WorkerPoolNameKey.String(pool),
+		SandboxClassKey.String(sandboxClass),
+		ActorOperationNameKey.String(operationName),
+		FailureReasonKey.String(reason),
 	}
 }

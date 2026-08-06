@@ -22,9 +22,12 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
+	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/ateerrors"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -216,7 +219,8 @@ func TestCrashActor(t *testing.T) {
 				tt.setup(t, ctx, st)
 			}
 
-			err := crashActor(ctx, st, actorRef)
+			err := crashActor(ctx, st, actorRef, ateattr.OperationUnknown, ateattr.ReasonUnknown)
+
 			tt.check(t, ctx, st, err)
 		})
 	}
@@ -339,8 +343,104 @@ func TestMaybeCrashActor(t *testing.T) {
 				seedActor(t, ctx, st, actorRef)
 			}
 
-			err := maybeCrashActor(ctx, st, actorRef, tt.err, wrapMsg)
+			err := maybeCrashActor(ctx, st, actorRef, tt.err, wrapMsg, ateattr.OperationUnknown)
+
 			tt.check(t, ctx, st, err)
 		})
 	}
+}
+
+func TestCrashActor_Metrics(t *testing.T) {
+	reader := sdkmetric.NewManualReader()
+	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	meter := mp.Meter("test")
+	if err := RegisterActorCrashes(meter); err != nil {
+		t.Fatalf("RegisterActorCrashes: %v", err)
+	}
+
+	ctx := context.Background()
+	st, cleanup := storetest.SetupTestStore(t)
+	defer cleanup()
+
+	actorRef := resources.ActorRef{Atespace: "demo-ns", Name: "counter-actor"}
+	worker := &ateapipb.Worker{
+		WorkerNamespace: "demo-ns",
+		WorkerPool:      "pool-1",
+		WorkerPod:       "pod-1",
+		SandboxClass:    "gvisor",
+		Assignment: &ateapipb.Assignment{
+			Actor: &ateapipb.ObjectRef{Atespace: actorRef.Atespace, Name: actorRef.Name},
+		},
+	}
+	if err := st.CreateWorker(ctx, worker); err != nil {
+		t.Fatalf("CreateWorker: %v", err)
+	}
+
+	actor := &ateapipb.Actor{
+		Metadata: &ateapipb.ResourceMetadata{
+			Atespace: "demo-ns",
+			Name:     "counter-actor",
+			Uid:      "actor-uid-1",
+		},
+		ActorTemplateNamespace: "demo-ns",
+		ActorTemplateName:      "counter-template",
+		WorkerAssignment: &ateapipb.WorkerAssignment{
+			WorkerNamespace: "demo-ns",
+			WorkerPool:      "pool-1",
+			WorkerPod:       "pod-1",
+			WorkerPodUid:    "pod-uid-1",
+		},
+		Status: ateapipb.Actor_STATUS_RUNNING,
+	}
+	if _, err := st.CreateActor(ctx, actor); err != nil {
+		t.Fatalf("CreateActor: %v", err)
+	}
+
+	if err := crashActor(ctx, st, actorRef, ateattr.OperationResume, ateattr.ReasonCorruptedAssignment); err != nil {
+		t.Fatalf("crashActor: %v", err)
+	}
+
+	assertCrashMetricDatapoint(t, reader, ateattr.OperationResume, ateattr.ReasonCorruptedAssignment, "demo-ns", "counter-template", "pool-1", "gvisor", 1)
+}
+
+func assertCrashMetricDatapoint(t *testing.T, reader *sdkmetric.ManualReader, wantOpName, wantReason, wantTmplNS, wantTmplName, wantWorkerPool, wantSandboxClass string, wantValue int64) {
+	t.Helper()
+	var rm metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &rm); err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			if m.Name != "ate.actor.crashes" {
+				continue
+			}
+			sum, ok := m.Data.(metricdata.Sum[int64])
+			if !ok {
+				continue
+			}
+			for _, dp := range sum.DataPoints {
+				op, _ := dp.Attributes.Value(ateattr.ActorOperationNameKey)
+				r, _ := dp.Attributes.Value(ateattr.FailureReasonKey)
+				tNS, _ := dp.Attributes.Value(ateattr.TemplateNamespaceKey)
+				tName, _ := dp.Attributes.Value(ateattr.TemplateNameKey)
+				wp, _ := dp.Attributes.Value(ateattr.WorkerPoolNameKey)
+				sc, _ := dp.Attributes.Value(ateattr.SandboxClassKey)
+
+				if op.AsString() == wantOpName &&
+					r.AsString() == wantReason &&
+					tNS.AsString() == wantTmplNS &&
+					tName.AsString() == wantTmplName &&
+					wp.AsString() == wantWorkerPool &&
+					sc.AsString() == wantSandboxClass {
+					if dp.Value != wantValue {
+						t.Errorf("metric value = %d, want %d", dp.Value, wantValue)
+					}
+					return
+				}
+			}
+		}
+	}
+	t.Errorf("did not find ate.actor.crashes metric with attrs: opName=%q, reason=%q, tmplNS=%q, tmplName=%q, workerPool=%q, sandboxClass=%q",
+		wantOpName, wantReason, wantTmplNS, wantTmplName, wantWorkerPool, wantSandboxClass)
 }

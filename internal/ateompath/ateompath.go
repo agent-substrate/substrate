@@ -40,6 +40,15 @@ func RunSCBinaryPath(sha256 string) string {
 	return filepath.Join(StaticFilesDir, "runsc-"+sha256)
 }
 
+// GVisorReleaseDir is the directory a gVisor release tarball (gvisor.tar.bz2,
+// containing runsc plus its gvisor-bin/ helper binaries) is extracted into,
+// content-addressed by the tarball's sha256. runsc requires the gvisor-bin/
+// subdirectory to sit next to it, so the whole release is kept together under
+// one directory rather than as loose files in StaticFilesDir.
+func GVisorReleaseDir(sha256 string) string {
+	return filepath.Join(StaticFilesDir, "gvisor-"+sha256)
+}
+
 func AteomPath(podUID string) string {
 	return filepath.Join(
 		BasePath,

@@ -287,3 +287,35 @@ func TestActorCrashRequested(t *testing.T) {
 		})
 	}
 }
+
+func TestExtractReason_EnforcesAllowedEnumValuesOnly(t *testing.T) {
+	t.Run("valid enum reason returned", func(t *testing.T) {
+		err := NewGRPCError(context.Background(), codes.DataLoss, ReasonFaileSaveSnapshot, nil, errors.New("boom"))
+		if got := ExtractReason(err); got != "FAILED_SAVE_SNAPSHOT" {
+			t.Errorf("ExtractReason(%v) = %q, want %q", err, got, "FAILED_SAVE_SNAPSHOT")
+		}
+	})
+
+	t.Run("unlisted dynamic reason rejected to prevent metric high cardinality", func(t *testing.T) {
+		err := NewGRPCError(context.Background(), codes.DataLoss, Reason("UNLISTED_DYNAMIC_ERROR_STRING"), nil, errors.New("boom"))
+		if got := ExtractReason(err); got != "" {
+			t.Errorf("ExtractReason(%v) = %q, want %q (empty string)", err, got, "")
+		}
+	})
+}
+
+func TestAllReasonsRegistered(t *testing.T) {
+	if len(AllReasons) == 0 {
+		t.Fatal("AllReasons slice is empty")
+	}
+
+	for _, r := range AllReasons {
+		if !IsValidReason(string(r)) {
+			t.Errorf("IsValidReason(%q) = false, want true", r)
+		}
+		err := NewGRPCError(context.Background(), codes.DataLoss, r, nil, errors.New("boom"))
+		if got := ExtractReason(err); got != string(r) {
+			t.Errorf("ExtractReason for %q = %q, want %q", r, got, r)
+		}
+	}
+}

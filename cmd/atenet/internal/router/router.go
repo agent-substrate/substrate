@@ -280,7 +280,7 @@ func (s *RouterServer) Run(ctx context.Context) error {
 		readiness:   readiness,
 		delay:       s.cfg.DrainDelay,
 		drainEnvoy:  drainEnvoy,
-		envoyWindow: actorRouteTimeout + drainTimeoutMargin,
+		envoyWindow: defaultRouteTimeout + drainTimeoutMargin,
 		extproc:     extprocGRPC,
 		timeout:     s.cfg.drainTimeout(parkCfg),
 		stopRest: func() {

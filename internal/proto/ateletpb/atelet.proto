@@ -51,7 +51,7 @@ message RunRequest {
 }
 
 // AssetFile is one content-addressed file atelet fetches for a sandbox runtime
-// (e.g. the gVisor runsc binary).
+// (e.g. the gVisor release tarball).
 message AssetFile {
   // gs:// URL to download the asset from.
   string url = 1;
@@ -68,7 +68,8 @@ message ArchAssets {
 // SandboxAssets is the generic, backend-agnostic description of the sandbox
 // binaries for an actor: a sandbox class plus assets keyed first by
 // architecture (GOARCH) and then by asset name. atelet's backend code
-// interprets the asset names (gVisor expects "runsc").
+// interprets the asset names (gVisor expects "gvisor", the release tarball;
+// legacy "runsc", a bare binary, is still accepted).
 message SandboxAssets {
   string sandbox_class = 1;           // e.g. "gvisor"
   map<string, ArchAssets> assets = 2; // arch -> {name -> file}

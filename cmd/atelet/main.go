@@ -25,9 +25,11 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"cloud.google.com/go/storage"
@@ -77,6 +79,9 @@ var (
 
 	showVersion  = pflag.Bool("version", false, "Print version and exit.")
 	logLevelFlag = pflag.String("log-level", "info", "Minimum log level: debug, info, warn, or error.")
+
+	drainDelay   = pflag.Duration("drain-delay", 0, "How long to keep accepting new RPCs after SIGTERM before starting the gRPC drain.")
+	drainTimeout = pflag.Duration("drain-timeout", 5*time.Minute, "Deadline for the graceful gRPC drain on shutdown. In-flight RPCs still running past it are forcefully cancelled.")
 )
 
 func main() {
@@ -90,6 +95,12 @@ func main() {
 	if err := serverboot.SetLogLevel(*logLevelFlag); err != nil {
 		serverboot.Fatal(ctx, "Invalid --log-level", err)
 	}
+
+	// Kept separate from ctx so in-flight work (e.g. a Checkpoint/Restore
+	// streaming a multi-GiB snapshot) is not cancelled the moment SIGTERM
+	// arrives; drainOnShutdown drives the shutdown sequence instead.
+	shutdownCtx, stopSignals := signal.NotifyContext(ctx, syscall.SIGTERM, os.Interrupt)
+	defer stopSignals()
 
 	tp, err := serverboot.InitTracing(ctx, serverboot.TracingOptions{
 		ServiceName: "atelet",
@@ -110,7 +121,14 @@ func main() {
 		serverboot.Fatal(ctx, "Failed to create snapshot size metric", err)
 	}
 
-	go serverboot.StartMetricsServer(ctx, serverboot.MetricsServerOptions{Addr: *metricsListenAddr})
+	// readiness flips to not-ready on SIGTERM so /readyz reports 503 while the
+	// pod drains, while /healthz stays 200 for liveness.
+	readiness := &serverboot.Readiness{}
+	go serverboot.StartMetricsServer(ctx, serverboot.MetricsServerOptions{
+		Addr:          *metricsListenAddr,
+		Readiness:     readiness,
+		EnableHealthz: true,
+	})
 
 	ateomDialer := &AteomDialer{
 		conns: lru.New(256),
@@ -200,9 +218,45 @@ func main() {
 	ateletpb.RegisterAteomHerderServer(svr, wmService)
 	reflection.Register(svr)
 	slog.InfoContext(ctx, "WorkersManagerService listening", slog.Any("address", lis.Addr()))
+
+	drainDone := drainOnShutdown(shutdownCtx, svr, readiness)
 	if err := svr.Serve(lis); err != nil {
 		serverboot.Fatal(ctx, "Failed to serve", err)
 	}
+	<-drainDone
+	slog.InfoContext(ctx, "Shutdown complete")
+}
+
+// drainOnShutdown drives graceful shutdown when ctx is cancelled (SIGTERM or
+// interrupt): it marks the process not-ready, waits drain-delay while still
+// accepting work, then GracefulStop()s the gRPC server so in-flight RPCs finish.
+// If they run past drain-timeout it forcefully Stop()s. The returned channel
+// closes once shutdown completes, so main can block on it before exiting (and
+// letting the deferred tracer/meter flushes run). Mirrors ateapi's
+// drainOnShutdown.
+func drainOnShutdown(ctx context.Context, srv *grpc.Server, readiness *serverboot.Readiness) <-chan struct{} {
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		<-ctx.Done()
+		slog.InfoContext(ctx, "Shutdown signal received; draining")
+		readiness.MarkNotReady()
+		time.Sleep(*drainDelay)
+		slog.InfoContext(ctx, "Starting gRPC drain")
+		drainComplete := make(chan struct{})
+		go func() {
+			srv.GracefulStop()
+			close(drainComplete)
+		}()
+		select {
+		case <-drainComplete:
+			slog.InfoContext(ctx, "Drain completed within deadline")
+		case <-time.After(*drainTimeout):
+			slog.WarnContext(ctx, "Drain deadline exceeded; forcing stop")
+			srv.Stop()
+		}
+	}()
+	return done
 }
 
 // AteomHerder is a service that allows controlling workloads on individual

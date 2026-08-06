@@ -156,13 +156,13 @@ func TestRouterConfigDrainTimeout(t *testing.T) {
 			name:    "auto derives budget + route timeout + margin",
 			cfg:     routerConfig{DrainTimeout: 0},
 			parkCfg: ParkedRequestConfig{Budget: 5 * time.Second, Max: 1024}.normalized(),
-			want:    5*time.Second + actorRouteTimeout + drainTimeoutMargin,
+			want:    5*time.Second + defaultRouteTimeout + drainTimeoutMargin,
 		},
 		{
 			name:    "auto scales with a larger budget",
 			cfg:     routerConfig{DrainTimeout: 0},
 			parkCfg: ParkedRequestConfig{Budget: 30 * time.Second, Max: 1024}.normalized(),
-			want:    30*time.Second + actorRouteTimeout + drainTimeoutMargin,
+			want:    30*time.Second + defaultRouteTimeout + drainTimeoutMargin,
 		},
 		{
 			name: "parking disabled still derives from the normalized default budget",
@@ -171,7 +171,7 @@ func TestRouterConfigDrainTimeout(t *testing.T) {
 			// derived drain still covers a later re-enable without a restart
 			// surprise.
 			parkCfg: ParkedRequestConfig{Max: 0}.normalized(),
-			want:    defaultParkedRequestBudget + actorRouteTimeout + drainTimeoutMargin,
+			want:    defaultParkedRequestBudget + defaultRouteTimeout + drainTimeoutMargin,
 		},
 		{
 			name:    "explicit value wins over derivation",

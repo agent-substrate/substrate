@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/resources"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -363,11 +364,30 @@ func (s *WorkerPoolSyncer) releaseActorOnDeadWorker(ctx context.Context, namespa
 	if actor.Status == ateapipb.Actor_STATUS_SUSPENDED {
 		return nil
 	}
+	opName := ateattr.OperationUnknown
+	switch actor.GetStatus() {
+	case ateapipb.Actor_STATUS_RESUMING:
+		opName = ateattr.OperationResume
+	case ateapipb.Actor_STATUS_SUSPENDING:
+		opName = ateattr.OperationSuspend
+	case ateapipb.Actor_STATUS_PAUSING:
+		opName = ateattr.OperationPause
+	}
+
+	wasAlreadyCrashed := actor.GetStatus() == ateapipb.Actor_STATUS_CRASHED
+
+	// Snapshot crash attributes before pod and pool pointers are cleared on actor.
+	crashAttrs := ateattr.ActorMetricAttributes(actor, worker.GetSandboxClass(), opName, ateattr.ReasonWorkerPodGone)
 
 	actor.Status = ateapipb.Actor_STATUS_CRASHED
 	actor.WorkerAssignment = nil
 	actor.InProgressSnapshot = ""
 
 	_, err = s.persistence.UpdateActor(ctx, actor, actor.GetMetadata().GetVersion())
+
+	if err == nil && !wasAlreadyCrashed {
+		recordActorCrash(ctx, crashAttrs)
+	}
 	return err
+
 }

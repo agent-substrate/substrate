@@ -36,12 +36,12 @@ jobs:
       uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
       with:
         go-version-file: 'go.mod'
-    - run: go test -v ./...
+    - run: go test -race -v ./...
     # Root-gated tests (overlay mounts, whiteout mknod, trusted.* xattrs, ...)
     # skip for the unprivileged runner user above; rerun the packages that
     # contain them (any test importing internal/roottest) under sudo.
     - name: root-gated tests
-      run: hack/run-root-tests.sh -v
+      run: hack/run-root-tests.sh -race -v
     - name: verify
       run: hack/verify-all.sh
   # One kind cluster exercises BOTH runtimes. Free x86-64 ubuntu-latest runners

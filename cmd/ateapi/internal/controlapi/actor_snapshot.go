@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/resources"
@@ -26,6 +27,21 @@ import (
 	"google.golang.org/grpc/status"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
+
+// actorSnapshotTagScopes lists the scopes a client may set on an ActorSnapshotTag.
+var actorSnapshotTagScopes = []ateapipb.ActorSnapshotTagScope{
+	ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
+	ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED,
+}
+
+// actorSnapshotTagScopeNames names actorSnapshotTagScopes for error messages.
+var actorSnapshotTagScopeNames = func() []string {
+	names := make([]string, len(actorSnapshotTagScopes))
+	for i, scope := range actorSnapshotTagScopes {
+		names[i] = scope.String()
+	}
+	return names
+}()
 
 func (s *Service) GetActorSnapshot(ctx context.Context, req *ateapipb.GetActorSnapshotRequest) (*ateapipb.ActorSnapshot, error) {
 	if err := validateActorSnapshotRef(req.GetSnapshot(), "snapshot"); err != nil {
@@ -100,35 +116,70 @@ func (s *Service) TagActorSnapshot(ctx context.Context, req *ateapipb.TagActorSn
 	return tag, nil
 }
 
+// actorSnapshotTagMutableFields lists the ActorSnapshotTag field paths a client
+// may name in an UpdateActorSnapshotTag update_mask.
+var actorSnapshotTagMutableFields = mutableFields[*ateapipb.ActorSnapshotTag]{
+	"scope": func(dst, src *ateapipb.ActorSnapshotTag) { dst.Scope = src.GetScope() },
+}
+
 func (s *Service) UpdateActorSnapshotTag(ctx context.Context, req *ateapipb.UpdateActorSnapshotTagRequest) (*ateapipb.ActorSnapshotTag, error) {
-	if errs := resources.ValidateObjectRef(req.GetTag(), field.NewPath("tag")); len(errs) > 0 {
-		return nil, status.Error(codes.InvalidArgument, errs.ToAggregate().Error())
+	if errs := validateUpdateActorSnapshotTagRequest(req); len(errs) > 0 {
+		return nil, toGRPCStatusError(errs)
 	}
-	if err := validateActorSnapshotTagScope(req.GetScope()); err != nil {
-		return nil, err
-	}
-	ref := &ateapipb.ActorSnapshotRef{Reference: &ateapipb.ActorSnapshotRef_Tag{Tag: req.GetTag()}}
-	lock, _, _, _, err := s.lockActorSnapshot(ctx, ref)
-	if err != nil {
-		return nil, err
-	}
-	defer lock.Close()
-	atespaceLock, err := s.persistence.AcquireLock(lock.Context(), "lock:atespace:"+req.GetTag().GetAtespace())
-	if errors.Is(err, store.ErrLockConflict) {
-		return nil, status.Error(codes.Aborted, "another operation is using this Atespace")
-	}
-	if err != nil {
-		return nil, fmt.Errorf("while locking tag Atespace: %w", err)
-	}
-	defer atespaceLock.Close()
-	tag, err := s.persistence.UpdateActorSnapshotTag(atespaceLock.Context(), req.GetTag().GetAtespace(), req.GetTag().GetName(), req.GetScope())
+	in := req.GetTag()
+	atespace, name := in.GetMetadata().GetAtespace(), in.GetMetadata().GetName()
+	_, _, current, err := s.persistence.GetActorSnapshotByTag(ctx, atespace, name)
 	if errors.Is(err, store.ErrNotFound) {
-		return nil, status.Errorf(codes.NotFound, "ActorSnapshot tag %s/%s not found", req.GetTag().GetAtespace(), req.GetTag().GetName())
+		return nil, status.Errorf(codes.NotFound, "ActorSnapshot tag %s/%s not found", atespace, name)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("while getting actor snapshot tag: %w", err)
+	}
+
+	// UID and version preconditions.
+	if uid := in.GetMetadata().GetUid(); uid != "" && uid != current.GetMetadata().GetUid() {
+		return nil, status.Errorf(codes.Aborted, "ActorSnapshot tag %s/%s has uid %s, not %s", atespace, name, current.GetMetadata().GetUid(), uid)
+	}
+
+	expectedVersion := current.GetMetadata().GetVersion()
+	if version := in.GetMetadata().GetVersion(); version != 0 {
+		expectedVersion = version
+	}
+
+	applyUpdateMask(current, in, req.GetUpdateMask(), actorSnapshotTagMutableFields)
+
+	updatedTag, err := s.persistence.UpdateActorSnapshotTag(ctx, atespace, name, current.GetScope(), expectedVersion)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, status.Errorf(codes.NotFound, "ActorSnapshot tag %s/%s not found", atespace, name)
+	}
+	if errors.Is(err, store.ErrVersionConflict) {
+		return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
 	}
 	if err != nil {
 		return nil, fmt.Errorf("while updating actor snapshot tag: %w", err)
 	}
-	return tag, nil
+	return updatedTag, nil
+}
+
+func validateUpdateActorSnapshotTagRequest(req *ateapipb.UpdateActorSnapshotTagRequest) field.ErrorList {
+	var fldPath *field.Path
+	var errs field.ErrorList
+
+	tag := req.GetTag()
+	tagPath := fldPath.Child("tag")
+	if tag == nil {
+		return field.ErrorList{field.Required(tagPath, "")}
+	}
+
+	errs = append(errs, resources.ValidateResourceMetadataRef(tag.GetMetadata(), tagPath.Child("metadata"))...)
+
+	errs = append(errs, validateUpdateMask(req.GetUpdateMask(), actorSnapshotTagMutableFields)...)
+
+	if scope, p := tag.GetScope(), tagPath.Child("scope"); validateActorSnapshotTagScope(scope) != nil {
+		errs = append(errs, field.NotSupported(p, scope.String(), actorSnapshotTagScopeNames))
+	}
+
+	return errs
 }
 
 func (s *Service) DeleteActorSnapshotTag(ctx context.Context, req *ateapipb.DeleteActorSnapshotTagRequest) (*ateapipb.ActorSnapshotTag, error) {
@@ -235,11 +286,8 @@ func validateActorSnapshotTag(tag *ateapipb.ActorSnapshotTag, name string) error
 }
 
 func validateActorSnapshotTagScope(scope ateapipb.ActorSnapshotTagScope) error {
-	switch scope {
-	case ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
-		ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED:
+	if slices.Contains(actorSnapshotTagScopes, scope) {
 		return nil
-	default:
-		return status.Error(codes.InvalidArgument, "invalid ActorSnapshot tag scope")
 	}
+	return status.Error(codes.InvalidArgument, "invalid ActorSnapshot tag scope")
 }

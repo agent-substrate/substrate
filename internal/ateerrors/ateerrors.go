@@ -22,6 +22,7 @@ import (
 	"slices"
 
 	epb "google.golang.org/genproto/googleapis/rpc/errdetails"
+
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -41,6 +42,7 @@ type Reason string
 // Error makes a Reason wrappable with %w and matchable with errors.Is/As.
 func (r Reason) Error() string { return string(r) }
 
+// NOTE: When adding a Reason constant below, also add it to AllReasons.
 const (
 	ReasonTerminalFileSystemError Reason = "TERMINAL_FILE_SYSTEM_ERROR"
 	ReasonInvalidSandboxAsset     Reason = "INVALID_SANDBOX_ASSET"
@@ -52,7 +54,28 @@ const (
 	// produce a runnable process (e.g. the resolved argv is empty because the
 	// image defines no ENTRYPOINT/CMD and the ActorTemplate sets no command/args).
 	ReasonInvalidContainerConfig Reason = "INVALID_CONTAINER_CONFIG"
+
+	// Control-plane failure reasons for ate.actor.crashes metric.
+	ReasonCorruptedAssignment Reason = "CORRUPTED_ASSIGNMENT"
+	ReasonWorkerReassigned    Reason = "WORKER_REASSIGNED"
+	ReasonWorkerPodGone       Reason = "WORKER_POD_GONE"
+	ReasonUnknown             Reason = "UNKNOWN"
 )
+
+// AllReasons contains all valid Reason constants for validation. Keep in sync with const block above.
+var AllReasons = []Reason{
+	ReasonTerminalFileSystemError,
+	ReasonInvalidSandboxAsset,
+	ReasonInvalidCheckpointResult,
+	ReasonFaileSaveSnapshot,
+	ReasonInvalidObjectURL,
+	ReasonFailedGetExternalObject,
+	ReasonInvalidContainerConfig,
+	ReasonCorruptedAssignment,
+	ReasonWorkerReassigned,
+	ReasonWorkerPodGone,
+	ReasonUnknown,
+}
 
 // MetadataKeyActorCrashed marks (in ErrorInfo.Metadata) a failure that requires
 // the control plane to crash the actor.
@@ -126,4 +149,32 @@ func ActorCrashRequested(err error) bool {
 		}
 	}
 	return false
+}
+
+// IsValidReason reports whether a string matches a known ateerrors.Reason enum.
+func IsValidReason(s string) bool {
+	return slices.Contains(AllReasons, Reason(s))
+}
+
+// ExtractReason returns the validated enum reason string from an error's AIP-193 ErrorInfo detail
+// or wrapped ateerrors.Reason, or empty string if unclassified.
+func ExtractReason(err error) string {
+	if err == nil {
+		return ""
+	}
+	var r Reason
+	if errors.As(err, &r) && IsValidReason(string(r)) {
+		return string(r)
+	}
+	st, ok := status.FromError(err)
+	if ok {
+		for _, d := range st.Details() {
+			if info, ok := d.(*epb.ErrorInfo); ok {
+				if rStr := info.GetReason(); rStr != "" && IsValidReason(rStr) {
+					return rStr
+				}
+			}
+		}
+	}
+	return ""
 }

@@ -22,6 +22,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateclient"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/spf13/cobra"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 )
 
 var (
@@ -144,8 +145,11 @@ var updateActorSnapshotTagCmd = &cobra.Command{
 		defer client.Close()
 
 		resp, err := client.UpdateActorSnapshotTag(ctx, &ateapipb.UpdateActorSnapshotTagRequest{
-			Tag:   &ateapipb.ObjectRef{Atespace: updateTagAtespaceFlag, Name: args[0]},
-			Scope: scope,
+			Tag: &ateapipb.ActorSnapshotTag{
+				Metadata: &ateapipb.ResourceMetadata{Atespace: updateTagAtespaceFlag, Name: args[0]},
+				Scope:    scope,
+			},
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"scope"}},
 		})
 		if err != nil {
 			return fmt.Errorf("failed to update actor snapshot tag: %w", err)

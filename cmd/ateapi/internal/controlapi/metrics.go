@@ -32,7 +32,32 @@ const (
 	workerpoolWorkersMetric   = "ate.workerpool.workers"
 	lifecycleOpDurationMetric = "ate.actor.lifecycle.operation.duration"
 	schedulerAssignmentMetric = "ate.scheduler.assignment.duration"
+	actorCrashesMetric        = "ate.actor.crashes"
 )
+
+var actorCrashesCounter metric.Int64Counter
+
+// RegisterActorCrashes initializes the ate.actor.crashes counter instrument.
+func RegisterActorCrashes(meter metric.Meter) error {
+	counter, err := meter.Int64Counter(
+		actorCrashesMetric,
+		metric.WithUnit("{crash}"),
+		metric.WithDescription("Number of times actors transitioned to STATUS_CRASHED with failure reasons."),
+	)
+	if err != nil {
+		return fmt.Errorf("create %s counter: %w", actorCrashesMetric, err)
+	}
+	actorCrashesCounter = counter
+	return nil
+}
+
+// recordActorCrash records a crash event on ate.actor.crashes with low-cardinality attributes.
+func recordActorCrash(ctx context.Context, attrs []attribute.KeyValue) {
+	if actorCrashesCounter == nil || len(attrs) == 0 {
+		return
+	}
+	actorCrashesCounter.Add(ctx, 1, metric.WithAttributes(attrs...))
+}
 
 // RegisterWorkerCount wires the ate.workerpool.workers observable against workers
 // (workercache.Cache.Workers in prod) and listPools (a WorkerPool lister's List,
