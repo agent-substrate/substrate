@@ -38,6 +38,27 @@ CREATE TABLE IF NOT EXISTS actors (
     PRIMARY KEY (atespace, name)
 );
 
+CREATE TABLE IF NOT EXISTS actor_snapshots (
+    atespace  text NOT NULL,
+    name      text NOT NULL,
+    location  text NOT NULL,
+    proto     bytea NOT NULL,
+    PRIMARY KEY (atespace, name)
+);
+
+CREATE TABLE IF NOT EXISTS actor_snapshot_tags (
+    atespace           text NOT NULL
+        REFERENCES atespaces(name) ON DELETE RESTRICT,
+    name               text NOT NULL,
+    snapshot_atespace  text NOT NULL,
+    snapshot_name      text NOT NULL,
+    version            bigint NOT NULL,
+    proto              bytea NOT NULL,
+    PRIMARY KEY (atespace, name),
+    FOREIGN KEY (snapshot_atespace, snapshot_name)
+        REFERENCES actor_snapshots(atespace, name) ON DELETE RESTRICT
+);
+
 CREATE TABLE IF NOT EXISTS workers (
     worker_namespace  text NOT NULL,
     worker_pool       text NOT NULL,

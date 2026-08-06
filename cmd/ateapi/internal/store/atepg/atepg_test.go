@@ -288,7 +288,7 @@ func TestAcquireLock_ExpiresAfterHolderStops(t *testing.T) {
 		t.Fatal("lock context was not cancelled with its holder")
 	}
 
-	// Cancelling the holder stops renewal without calling Close, modeling a
+	// Canceling the holder stops renewal without calling Close, modeling a
 	// process that disappeared and left its lease to expire.
 	time.Sleep(s.lockTTL + 500*time.Millisecond)
 

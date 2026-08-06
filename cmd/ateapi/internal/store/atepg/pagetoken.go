@@ -31,6 +31,7 @@ type resourceKind string
 const (
 	kindAtespace resourceKind = "atespace"
 	kindActor    resourceKind = "actor"
+	kindSnapshot resourceKind = "snapshot"
 	kindWorker   resourceKind = "worker"
 )
 
