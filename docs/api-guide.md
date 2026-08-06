@@ -143,7 +143,7 @@ The `ActorTemplate` defines the code, environment, and state-management policies
 | `containers` | `[]Container` | **Required.** The workload definition — see [Container Fields](#container-fields) below. Each container may also declare an optional `readyz` HTTP probe — see [Container Readiness Probe](#container-readiness-probe-readyz). |
 | `sandboxClass` | `string` | Optional. The sandbox runtime family this template's actors require: `gvisor` (default) or `microvm`. Only `WorkerPool`s whose `sandboxClass` matches are eligible. |
 | `workerSelector` | `*LabelSelector` | Optional. Gates which `WorkerPool`s actors from this template may use, by matching against each pool's labels. If unset, all pools are eligible (subject to the actor's own `worker_selector`). |
-| `snapshotsConfig` | `SnapshotsConfig` | **Required.** GCS bucket and folder where memory snapshots are stored. |
+| `snapshotsConfig` | `SnapshotsConfig` | **Required.** The base object-storage location snapshots are written under, plus the pause/commit/resume scopes. See [Snapshot Storage Layout](#snapshot-storage-layout). |
 | `pauseImage` | `string` | **Required.** The image used for the sandbox root (e.g. `gcr.io/gke-release/pause`). |
 | `volumes` | `[]Volume` | Optional. Volumes the containers may mount, each either a `durableDir` or an `externalVolumeTemplate`. Every declared volume must be mounted by at least one container. A `microvm` template may declare several `durableDir` volumes; a `gvisor` template is limited to one, and `externalVolumeTemplate` is `gvisor`-only. |
 
@@ -226,8 +226,38 @@ spec:
     matchLabels:
       workload: secret-agent
   snapshotsConfig:
-    location: gs://my-bucket/snapshots/secret-agent/
+    location: gs://my-bucket/secret-agent
 ```
+
+### Snapshot Storage Layout
+
+`snapshotsConfig.location` is a **base prefix**, not the address of any one snapshot. Every snapshot taken from the template lands at:
+
+```
+<location>/snapshots/<atespace>/<snapshot name>
+```
+
+and the objects of that snapshot (its manifest, memory image, durable-data tar) are named below it. So for the template above, a snapshot named `f47ac10b-…` of an actor in atespace `team-a` is stored at `gs://my-bucket/secret-agent/snapshots/team-a/f47ac10b-…`, and the template's golden snapshot — the golden actor lives in the reserved `ate-golden` atespace — at `gs://my-bucket/secret-agent/snapshots/ate-golden/<name>`.
+
+Each `ActorSnapshot` reports its own address in the **output-only** `snapshotUri` field. It is recorded when the snapshot is written, not recomputed on read, so the layout can change in future versions without stranding existing snapshots. Do not send it on input; parse it only against the scheme above.
+
+An `ActorTemplate` is namespaced but an atespace is the global isolation boundary, so one `location` holds snapshots for many atespaces. The `<atespace>` level exists so that access can be granted per tenant: an object-storage policy can only condition on an **object-name prefix**, and cannot read the identity recorded inside a snapshot's manifest. Binding a per-atespace grant on GCS looks like:
+
+```yaml
+# Read-only on team-a's snapshots for this template, and nothing else.
+- members: ["serviceAccount:node-runtime@my-project.iam.gserviceaccount.com"]
+  role: roles/storage.objectViewer
+  condition:
+    title: team-a-snapshots
+    expression: >
+      resource.name.startsWith(
+        "projects/_/buckets/my-bucket/objects/secret-agent/snapshots/team-a/")
+```
+
+Two consequences worth planning for:
+
+- **A published snapshot is read from the atespace that took it.** Cloning across atespaces via a `PUBLISHED` tag reads the source atespace's prefix, so the reader needs a grant covering it — the target atespace's grant is not enough.
+- **A location containing its own `snapshots` segment is legal but confusing.** `gs://my-bucket/snapshots/secret-agent` yields `gs://my-bucket/snapshots/secret-agent/snapshots/<atespace>/<name>`. It parses correctly; it just reads badly in a policy.
 
 ---
 

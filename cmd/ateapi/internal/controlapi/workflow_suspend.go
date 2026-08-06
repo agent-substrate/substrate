@@ -16,12 +16,9 @@ package controlapi
 
 import (
 	"context"
-	"crypto/rand"
 	"errors"
 	"fmt"
 	"log/slog"
-	"strings"
-	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/ateattr"
@@ -98,11 +95,17 @@ func (s *MarkSuspendingStep) CheckPrerequisite(ctx context.Context, input *Suspe
 	}
 	return nil
 }
+
 func (s *MarkSuspendingStep) Execute(ctx context.Context, input *SuspendInput, state *SuspendState) error {
 	state.Actor.Status = ateapipb.Actor_STATUS_SUSPENDING
 	state.Actor.InProgressSnapshotSourceActorVersion = state.SourceVersion
-	snapshotID := time.Now().Format(time.RFC3339) + "-" + rand.Text()
-	state.Actor.InProgressSnapshot = strings.TrimSuffix(state.ActorTemplate.Spec.SnapshotsConfig.Location, "/") + "/snapshots/" + snapshotID
+	name := resources.NewSnapshotName()
+	// Fail here rather than at checkpoint time if the template's location
+	// cannot produce a usable URI: nothing has been written yet.
+	if _, err := inProgressSnapshotURI(state, input.ActorRef.Atespace, name); err != nil {
+		return err
+	}
+	state.Actor.InProgressSnapshotName = name
 	updatedActor, err := s.store.UpdateActor(ctx, state.Actor, state.Actor.GetMetadata().GetVersion())
 	if err != nil {
 		return err
@@ -153,7 +156,7 @@ func (s *CallAteletSuspendStep) Execute(ctx context.Context, input *SuspendInput
 	ateletConn, err := s.dialer.DialForWorker(assignment.GetWorkerNamespace(), assignment.GetWorkerPod())
 	if err != nil {
 		if errors.Is(err, ErrWorkerPodNotFound) {
-			slog.ErrorContext(ctx, "Worker pod gone before checkpoint, crashing actor", "namespace", assignment.GetWorkerNamespace(), "pod", assignment.GetWorkerPod(), "in_progress_snapshot", state.Actor.GetInProgressSnapshot())
+			slog.ErrorContext(ctx, "Worker pod gone before checkpoint, crashing actor", "namespace", assignment.GetWorkerNamespace(), "pod", assignment.GetWorkerPod(), "in_progress_snapshot_name", state.Actor.GetInProgressSnapshotName())
 			if err := crashActor(ctx, s.store, input.ActorRef, ateattr.OperationSuspend, ateattr.ReasonWorkerPodGone); err != nil {
 				slog.ErrorContext(ctx, "Failed to crash actor", slog.String("err", err.Error()))
 			}
@@ -164,6 +167,11 @@ func (s *CallAteletSuspendStep) Execute(ctx context.Context, input *SuspendInput
 	client := ateletpb.NewAteomHerderClient(ateletConn)
 
 	workloadSpec, err := workloadSpecFromActorTemplate(state.ActorTemplate, state.Actor)
+	if err != nil {
+		return err
+	}
+
+	snapshotURI, err := inProgressSnapshotURI(state, state.Actor.GetMetadata().GetAtespace(), state.Actor.GetInProgressSnapshotName())
 	if err != nil {
 		return err
 	}
@@ -181,7 +189,7 @@ func (s *CallAteletSuspendStep) Execute(ctx context.Context, input *SuspendInput
 		Type:                   ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
 		Config: &ateletpb.CheckpointRequest_ExternalConfig{
 			ExternalConfig: &ateletpb.ExternalCheckpointConfiguration{
-				SnapshotUriPrefix: state.Actor.GetInProgressSnapshot(),
+				SnapshotUri: snapshotURI.String(),
 			},
 		},
 		Scope:    toAteletSnapshotScope(commitSnapshotScope(state.Actor.GetMetadata().GetAtespace(), state.ActorTemplate)),
@@ -191,6 +199,14 @@ func (s *CallAteletSuspendStep) Execute(ctx context.Context, input *SuspendInput
 
 	_, err = client.Checkpoint(ctx, req)
 	return maybeCrashActor(ctx, s.store, input.ActorRef, err, "while checkpointing workload", ateattr.OperationSuspend)
+}
+
+func inProgressSnapshotURI(state *SuspendState, atespace, name string) (resources.SnapshotURI, error) {
+	uri, err := resources.NewSnapshotURI(state.ActorTemplate.Spec.SnapshotsConfig.Location, atespace, name)
+	if err != nil {
+		return resources.SnapshotURI{}, fmt.Errorf("while building the snapshot URI for actor %s/%s: %w", atespace, state.Actor.GetMetadata().GetName(), err)
+	}
+	return uri, nil
 }
 
 func (s *CallAteletSuspendStep) RetryBackoff() *wait.Backoff { return nil }
@@ -266,12 +282,16 @@ func (s *FinalizeSuspendedStep) Execute(ctx context.Context, input *SuspendInput
 			return err
 		}
 		latestActor.Status = ateapipb.Actor_STATUS_SUSPENDED
-		if latestActor.InProgressSnapshot != "" {
-			location := latestActor.InProgressSnapshot
-			prefix := strings.TrimSuffix(state.ActorTemplate.Spec.SnapshotsConfig.Location, "/") + "/snapshots/"
-			snapshotID := strings.ToLower(strings.NewReplacer(":", "-", "+", "-").Replace(strings.TrimPrefix(location, prefix)))
+		if latestActor.InProgressSnapshotName != "" {
+			snapshotName := latestActor.InProgressSnapshotName
+			// The same inputs CallAteletSuspend used, so the recorded URI is
+			// where the bytes were actually written.
+			snapshotURI, err := inProgressSnapshotURI(state, input.ActorRef.Atespace, snapshotName)
+			if err != nil {
+				return err
+			}
 			snapshot := &ateapipb.ActorSnapshot{
-				Metadata:               &ateapipb.ResourceMetadata{Atespace: input.ActorRef.Atespace, Name: snapshotID},
+				Metadata:               &ateapipb.ResourceMetadata{Atespace: input.ActorRef.Atespace, Name: snapshotName},
 				SourceActor:            input.ActorRef.ToObjectRef(),
 				SourceActorUid:         latestActor.GetMetadata().GetUid(),
 				SourceActorVersion:     state.SourceVersion,
@@ -279,12 +299,13 @@ func (s *FinalizeSuspendedStep) Execute(ctx context.Context, input *SuspendInput
 				ActorTemplateName:      latestActor.GetActorTemplateName(),
 				ActorTemplateUid:       string(state.ActorTemplate.GetUID()),
 				ContentScope:           toActorSnapshotContentScope(commitSnapshotScope(input.ActorRef.Atespace, state.ActorTemplate)),
+				SnapshotUri:            snapshotURI.String(),
 			}
-			if _, err := s.store.CreateActorSnapshot(ctx, snapshot, location); err != nil && !errors.Is(err, store.ErrAlreadyExists) {
+			if _, err := s.store.CreateActorSnapshot(ctx, snapshot); err != nil && !errors.Is(err, store.ErrAlreadyExists) {
 				return err
 			}
-			latestActor.LatestSnapshot = &ateapipb.ObjectRef{Atespace: input.ActorRef.Atespace, Name: snapshotID}
-			latestActor.InProgressSnapshot = ""
+			latestActor.LatestSnapshot = &ateapipb.ObjectRef{Atespace: input.ActorRef.Atespace, Name: snapshotName}
+			latestActor.InProgressSnapshotName = ""
 			latestActor.InProgressSnapshotSourceActorVersion = 0
 		}
 		latestActor.WorkerAssignment = nil

@@ -179,41 +179,33 @@ func ValidateRunscHash(sha256Hash string) error {
 	return nil
 }
 
-// ValidateSnapshotURIPrefix ensures a checkpoint/restore snapshot location is
-// a well-formed URI with a bucket, so a bad prefix fails fast at the RPC
-// boundary instead of deep inside an object-storage call. It deliberately
-// does not restrict the scheme: the storage layer only uses the host (bucket)
-// and path, and which schemes are acceptable is a storage-backend policy, not
-// a per-RPC one. The local paths used for snapshot upload/download are
-// derived from the separately validated actor ref, not from this URI, so this
-// is a sanity check rather than a path-traversal guard.
-func ValidateSnapshotURIPrefix(prefix string) error {
-	u, err := url.Parse(prefix)
+// ValidateSnapshotLocation ensures an ActorTemplate's snapshotsConfig.location
+// is a well-formed URI with a bucket, so a bad location fails fast instead of
+// deep inside an object-storage call. It deliberately does not restrict the
+// scheme: the storage layer only uses the host (bucket) and path, and which
+// schemes are acceptable is a storage-backend policy, not a per-RPC one. The
+// local paths used for snapshot upload/download are derived from the
+// separately validated actor ref, not from this URI, so this is a sanity check
+// rather than a path-traversal guard.
+//
+// This validates the base that many snapshots share, not any one snapshot's
+// URI; SnapshotURI is the type for the latter, and it applies this check when
+// it is built.
+func ValidateSnapshotLocation(location string) error {
+	u, err := url.Parse(location)
 	if err != nil {
-		return fmt.Errorf("invalid snapshot URI prefix %q: %v", prefix, err)
+		return fmt.Errorf("invalid snapshot location %q: %v", location, err)
 	}
 	if u.Host == "" {
-		return fmt.Errorf("invalid snapshot URI prefix %q: missing bucket", prefix)
+		return fmt.Errorf("invalid snapshot location %q: missing bucket", location)
 	}
-	// Object names are appended to the prefix by string concatenation. A
-	// query, fragment, or userinfo component would swallow the appended name
-	// when the result is re-parsed (the storage layer uses only host and
-	// path), silently redirecting the upload/download to a different object.
+	// Snapshot and object names are appended to the location by string
+	// concatenation. A query, fragment, or userinfo component would swallow
+	// the appended name when the result is re-parsed (the storage layer uses
+	// only host and path), silently redirecting the upload/download to a
+	// different object.
 	if u.Opaque != "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
-		return fmt.Errorf("invalid snapshot URI prefix %q: must contain only a scheme, bucket, and path", prefix)
-	}
-	return nil
-}
-
-// ValidateLocalSnapshotPrefix ensures a local snapshot prefix is a single
-// path segment: it is joined onto the actor's checkpoint directory, so a
-// nested or relative prefix would escape it or nest below it.
-func ValidateLocalSnapshotPrefix(prefix string) error {
-	if prefix == "" {
-		return fmt.Errorf("snapshot prefix must be non-empty")
-	}
-	if prefix == "." || prefix == ".." || strings.ContainsAny(prefix, `/\`) {
-		return fmt.Errorf("invalid snapshot prefix %q: must be a single path segment", prefix)
+		return fmt.Errorf("invalid snapshot location %q: must contain only a scheme, bucket, and path", location)
 	}
 	return nil
 }

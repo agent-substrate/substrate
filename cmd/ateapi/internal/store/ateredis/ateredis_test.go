@@ -570,17 +570,20 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 		SourceActorUid:     "actor-uid",
 		SourceActorVersion: 7,
 		ContentScope:       ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
+		SnapshotUri:        "gs://bucket/root/snapshots/" + testAtespace + "/snapshot-1",
 	}
-	created, err := s.CreateActorSnapshot(ctx, snapshot, "gs://private/snapshot-1")
+	created, err := s.CreateActorSnapshot(ctx, snapshot)
 	if err != nil {
 		t.Fatalf("CreateActorSnapshot: %v", err)
 	}
-	got, location, err := s.GetActorSnapshot(ctx, testAtespace, "snapshot-1")
+	got, err := s.GetActorSnapshot(ctx, testAtespace, "snapshot-1")
 	if err != nil {
 		t.Fatalf("GetActorSnapshot: %v", err)
 	}
-	if !proto.Equal(created, got) || location != "gs://private/snapshot-1" {
-		t.Fatalf("GetActorSnapshot = (%v, %q), want (%v, private location)", got, location, created)
+	// The store round-trips the whole resource, snapshot_uri included: it is
+	// an ordinary field now, not a value the store keeps beside the record.
+	if !proto.Equal(created, got) {
+		t.Fatalf("GetActorSnapshot = %v, want %v", got, created)
 	}
 	tag := &ateapipb.ActorSnapshotTag{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "before-upgrade"},
@@ -590,13 +593,14 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 	if err != nil || tagged.GetSnapshot().GetName() != "snapshot-1" {
 		t.Fatalf("TagActorSnapshot = (%v, %v), want stable tag", tagged, err)
 	}
-	byTag, _, resolvedTag, err := s.GetActorSnapshotByTag(ctx, testAtespace, "before-upgrade")
+	byTag, resolvedTag, err := s.GetActorSnapshotByTag(ctx, testAtespace, "before-upgrade")
 	if err != nil || !proto.Equal(created, byTag) || !proto.Equal(tagged, resolvedTag) {
 		t.Fatalf("GetActorSnapshotByTag = (%v, %v, %v), want tagged snapshot", byTag, resolvedTag, err)
 	}
 	if _, err := s.CreateActorSnapshot(ctx, &ateapipb.ActorSnapshot{
-		Metadata: &ateapipb.ResourceMetadata{Atespace: "other", Name: "snapshot-2"},
-	}, "gs://private/snapshot-2"); err != nil {
+		Metadata:    &ateapipb.ResourceMetadata{Atespace: "other", Name: "snapshot-2"},
+		SnapshotUri: "gs://bucket/root/snapshots/other/snapshot-2",
+	}); err != nil {
 		t.Fatalf("CreateActorSnapshot second snapshot: %v", err)
 	}
 	otherTag := &ateapipb.ActorSnapshotTag{Metadata: &ateapipb.ResourceMetadata{Atespace: "other", Name: "before-upgrade"}, Scope: ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE}
@@ -615,7 +619,7 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 	if err != nil || tagged.GetScope() != ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED {
 		t.Fatalf("UpdateActorSnapshotTag = (%v, %v), want published", tagged, err)
 	}
-	if byTag, _, resolvedTag, err = s.GetActorSnapshotByTag(ctx, testAtespace, "before-upgrade"); err != nil || byTag.GetMetadata().GetUid() != created.GetMetadata().GetUid() || resolvedTag.GetScope() != ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED {
+	if byTag, resolvedTag, err = s.GetActorSnapshotByTag(ctx, testAtespace, "before-upgrade"); err != nil || byTag.GetMetadata().GetUid() != created.GetMetadata().GetUid() || resolvedTag.GetScope() != ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED {
 		t.Fatalf("tag after publication = (%v, %v, %v), want same address and snapshot", byTag, resolvedTag, err)
 	}
 	listed, _, err := s.ListActorSnapshots(ctx, testAtespace, 10, "")
@@ -627,10 +631,10 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 	if err != nil || deleted.GetMetadata().GetName() != "before-upgrade" {
 		t.Fatalf("DeleteActorSnapshotTag = (%v, %v)", deleted, err)
 	}
-	if _, _, _, err := s.GetActorSnapshotByTag(ctx, testAtespace, "before-upgrade"); !errors.Is(err, store.ErrNotFound) {
+	if _, _, err := s.GetActorSnapshotByTag(ctx, testAtespace, "before-upgrade"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("deleted tag lookup = %v, want ErrNotFound", err)
 	}
-	if got, _, err := s.GetActorSnapshot(ctx, testAtespace, "snapshot-1"); err != nil || got.GetMetadata().GetUid() != created.GetMetadata().GetUid() {
+	if got, err := s.GetActorSnapshot(ctx, testAtespace, "snapshot-1"); err != nil || got.GetMetadata().GetUid() != created.GetMetadata().GetUid() {
 		t.Fatalf("snapshot after tag deletion = (%v, %v), want retained metadata", got, err)
 	}
 }
@@ -638,8 +642,9 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 func TestUpdateActorSnapshotTag_Conflict(t *testing.T) {
 	_, s, ctx := setupTest(t)
 	if _, err := s.CreateActorSnapshot(ctx, &ateapipb.ActorSnapshot{
-		Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "snapshot-1"},
-	}, "gs://private/snapshot-1"); err != nil {
+		Metadata:    &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "snapshot-1"},
+		SnapshotUri: "gs://bucket/root/snapshots/" + testAtespace + "/snapshot-1",
+	}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.TagActorSnapshot(ctx, testAtespace, "snapshot-1", &ateapipb.ActorSnapshotTag{
@@ -647,11 +652,11 @@ func TestUpdateActorSnapshotTag_Conflict(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	_, _, tag1, err := s.GetActorSnapshotByTag(ctx, testAtespace, "tag-1")
+	_, tag1, err := s.GetActorSnapshotByTag(ctx, testAtespace, "tag-1")
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, _, tag2, err := s.GetActorSnapshotByTag(ctx, testAtespace, "tag-1")
+	_, tag2, err := s.GetActorSnapshotByTag(ctx, testAtespace, "tag-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1439,8 +1444,9 @@ func TestDeleteAtespace_WithTags_Rejected(t *testing.T) {
 		t.Fatalf("CreateAtespace: %v", err)
 	}
 	if _, err := s.CreateActorSnapshot(ctx, &ateapipb.ActorSnapshot{
-		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "snapshot-1"},
-	}, "gs://private/snapshot-1"); err != nil {
+		Metadata:    &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "snapshot-1"},
+		SnapshotUri: "gs://bucket/root/snapshots/team-a/snapshot-1",
+	}); err != nil {
 		t.Fatalf("CreateActorSnapshot: %v", err)
 	}
 	if _, err := s.TagActorSnapshot(ctx, "team-a", "snapshot-1", &ateapipb.ActorSnapshotTag{
@@ -1452,7 +1458,7 @@ func TestDeleteAtespace_WithTags_Rejected(t *testing.T) {
 	if _, err := s.DeleteAtespace(ctx, "team-a"); !errors.Is(err, store.ErrFailedPrecondition) {
 		t.Fatalf("DeleteAtespace = %v, want ErrFailedPrecondition", err)
 	}
-	if _, _, _, err := s.GetActorSnapshotByTag(ctx, "team-a", "keep-me"); err != nil {
+	if _, _, err := s.GetActorSnapshotByTag(ctx, "team-a", "keep-me"); err != nil {
 		t.Fatalf("GetActorSnapshotByTag after rejected deletion: %v", err)
 	}
 	if _, err := s.GetAtespace(ctx, "team-a"); err != nil {

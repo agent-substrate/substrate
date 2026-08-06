@@ -46,7 +46,7 @@ func seedActor(t *testing.T, ctx context.Context, st store.Interface, actorRef r
 			WorkerPodUid:    "uid",
 			WorkerPodIp:     "1.2.3.4",
 		},
-		InProgressSnapshot: "gs://snapshots/actor-1/reserved",
+		InProgressSnapshotName: "reserved-snapshot",
 	}); err != nil {
 		t.Fatalf("seed actor: %v", err)
 	}
@@ -85,9 +85,9 @@ func seedWorker(t *testing.T, ctx context.Context, st store.Interface, actorRef 
 func seedUnboundActor(t *testing.T, ctx context.Context, st store.Interface, actorRef resources.ActorRef) {
 	t.Helper()
 	if _, err := st.CreateActor(ctx, &ateapipb.Actor{
-		Metadata:           &ateapipb.ResourceMetadata{Name: actorRef.Name, Atespace: actorRef.Atespace},
-		Status:             ateapipb.Actor_STATUS_RUNNING,
-		InProgressSnapshot: "gs://snapshots/actor-1/reserved",
+		Metadata:               &ateapipb.ResourceMetadata{Name: actorRef.Name, Atespace: actorRef.Atespace},
+		Status:                 ateapipb.Actor_STATUS_RUNNING,
+		InProgressSnapshotName: "reserved-snapshot",
 	}); err != nil {
 		t.Fatalf("seed unbound actor: %v", err)
 	}
@@ -105,8 +105,8 @@ func assertCrashed(t *testing.T, ctx context.Context, st store.Interface, actorR
 		t.Errorf("status = %v, want %v", got.GetStatus(), ateapipb.Actor_STATUS_CRASHED)
 	}
 	// Keep the snapshot uri for debugging.
-	if got.GetInProgressSnapshot() == "" {
-		t.Error(`InProgressSnapshot = "", want preserved`)
+	if got.GetInProgressSnapshotName() == "" {
+		t.Error(`InProgressSnapshotName = "", want preserved`)
 	}
 	if got.GetWorkerAssignment() != nil {
 		t.Errorf("WorkerAssignment = %v, want cleared", got.GetWorkerAssignment())

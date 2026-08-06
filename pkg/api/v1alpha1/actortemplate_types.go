@@ -317,7 +317,8 @@ type OnResumeConfig struct {
 
 // +kubebuilder:validation:XValidation:rule="(has(self.onPause) ? self.onPause : 'Full') == 'Full' || (has(self.onCommit) ? self.onCommit : 'Full') == (has(self.onPause) ? self.onPause : 'Full')",message="onCommit must be a subset of onPause"
 type SnapshotsConfig struct {
-	// Location to store snapshots in.
+	// Location is the base object-storage URI snapshots of this template's
+	// actors are stored under.
 	//
 	// +required
 	// +kubebuilder:validation:MinLength=1

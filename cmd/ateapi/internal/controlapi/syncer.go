@@ -385,7 +385,10 @@ func (s *WorkerPoolSyncer) releaseActorOnDeadWorker(ctx context.Context, namespa
 
 	actor.Status = ateapipb.Actor_STATUS_CRASHED
 	actor.WorkerAssignment = nil
-	actor.InProgressSnapshot = ""
+	// Both in-progress checkpoints die with the worker: the durable one was
+	// never uploaded, the local one lived on the node that went away.
+	actor.InProgressSnapshotName = ""
+	actor.InProgressLocalSnapshotName = ""
 
 	_, err = s.persistence.UpdateActor(ctx, actor, actor.GetMetadata().GetVersion())
 

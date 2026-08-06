@@ -179,23 +179,17 @@ message RunResponse {
 }
 
 message LocalCheckpointConfiguration {
-  // A sub-directory on the local filesystem below which the checkpoint data will be
-  // stored.  The structure of the checkpoint should generally be treated as opaque.
-  string snapshot_prefix = 1;
+  // Names a sub-directory on the local filesystem below which the checkpoint
+  // data will be stored. atelet decides where that directory lives, from the
+  // actor's UID, so this is a bare name and must not contain a path separator.
+  // The structure of the checkpoint should generally be treated as opaque.
+  string snapshot_name = 1;
 }
 
 message ExternalCheckpointConfiguration {
-  // An object storage URI prefix below which the checkpoint data will be
-  // stored.
-  //
-  // The structure of the checkpoint should generally be treated as opaque. For
-  // gVisor, the checkpoint consists of a checkpoint.img file that contains the
-  // memory, sentry state, and filesystem deltas.  ateom will write additional
-  // files to store the WorkloadSpec, which must be reassembled before gVisor
-  // can restore a checkpoint.
-  //
-  // For example: "gs://bucket/actors/1234/snapshots/5678/"
-  string snapshot_uri_prefix = 1;
+  // The object storage URI of the snapshot to write. Object names are appended
+  // to it, so it addresses the snapshot as a whole rather than any one object.
+  string snapshot_uri = 1;
 }
 
 enum CheckpointType {
@@ -282,13 +276,13 @@ message RestoreRequest {
   // What content to restore from the checkpoint.
   SnapshotScope scope = 11;
 
-  // The object storage URI prefix of the ActorTemplate's golden snapshot.
+  // The object storage URI of the ActorTemplate's golden snapshot.
   // Set only when scope is SNAPSHOT_SCOPE_DATA_ON_GOLDEN: restore combines
   // the golden snapshot (memory + full fs delta) with the durable data in
   // the snapshot referenced by `config`. A top-level field rather than part
   // of the `config` oneof: the actor's snapshot may be local (a pause
   // checkpoint) while the golden snapshot is always external.
-  string golden_snapshot_uri_prefix = 12;
+  string golden_snapshot_uri = 12;
 
   // When absent, actor traffic uses direct egress instead of atunnel.
   optional EgressGateway egress_gateway = 13;

@@ -62,7 +62,7 @@ class ControlStub:
         self.UpdateActor = channel.unary_unary(
                 '/ateapi.Control/UpdateActor',
                 request_serializer=ateapi__pb2.UpdateActorRequest.SerializeToString,
-                response_deserializer=ateapi__pb2.UpdateActorResponse.FromString,
+                response_deserializer=ateapi__pb2.Actor.FromString,
                 _registered_method=True)
         self.SuspendActor = channel.unary_unary(
                 '/ateapi.Control/SuspendActor',
@@ -289,7 +289,7 @@ def add_ControlServicer_to_server(servicer, server):
             'UpdateActor': grpc.unary_unary_rpc_method_handler(
                     servicer.UpdateActor,
                     request_deserializer=ateapi__pb2.UpdateActorRequest.FromString,
-                    response_serializer=ateapi__pb2.UpdateActorResponse.SerializeToString,
+                    response_serializer=ateapi__pb2.Actor.SerializeToString,
             ),
             'SuspendActor': grpc.unary_unary_rpc_method_handler(
                     servicer.SuspendActor,
@@ -448,7 +448,7 @@ class Control:
             target,
             '/ateapi.Control/UpdateActor',
             ateapi__pb2.UpdateActorRequest.SerializeToString,
-            ateapi__pb2.UpdateActorResponse.FromString,
+            ateapi__pb2.Actor.FromString,
             options,
             channel_credentials,
             insecure,

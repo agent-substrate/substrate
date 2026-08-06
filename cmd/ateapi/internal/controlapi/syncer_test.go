@@ -262,8 +262,11 @@ func TestSyncer_DeleteBoundWorker_ClearsActor(t *testing.T) {
 		WorkerAssignment: &ateapipb.WorkerAssignment{
 			WorkerNamespace: ns, WorkerPool: pool, WorkerPod: pod, WorkerPodIp: ip,
 		},
-		InProgressSnapshot: "gs://snapshots/partial",
-		LatestSnapshot:     &ateapipb.ObjectRef{Atespace: "team-orphan", Name: "last"},
+		// Both in-progress checkpoints are set so the assertion below covers the
+		// shared crash path, which cannot know which workflow was in flight.
+		InProgressSnapshotName:      "partial-snapshot",
+		InProgressLocalSnapshotName: "partial-local-snapshot",
+		LatestSnapshot:              &ateapipb.ObjectRef{Atespace: "team-orphan", Name: "last"},
 	})
 	if err != nil {
 		t.Fatalf("create actor: %v", err)
@@ -297,7 +300,7 @@ func TestSyncer_DeleteBoundWorker_ClearsActor(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("actor not reset to CRASHED: %v", err)
 	}
-	if got.GetWorkerAssignment() != nil || got.InProgressSnapshot != "" {
+	if got.GetWorkerAssignment() != nil || got.InProgressSnapshotName != "" || got.InProgressLocalSnapshotName != "" {
 		t.Errorf("bind fields not cleared: %+v", got)
 	}
 	if got.GetLatestSnapshot().GetName() == "" {

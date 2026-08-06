@@ -77,8 +77,9 @@ func crashActor(ctx context.Context, st store.Interface, actorRef resources.Acto
 
 	actor.Status = ateapipb.Actor_STATUS_CRASHED
 
-	// InProgressSnapshot is kept for debugging; failed workflow
-	// steps must never promote it to an ActorSnapshot.
+	// InProgressSnapshotName and InProgressLocalSnapshotName are kept for
+	// debugging; failed workflow steps must never promote either of them to an
+	// ActorSnapshot or to LocalSnapshotInfo.
 	actor.WorkerAssignment = nil
 
 	_, err = st.UpdateActor(ctx, actor, actor.GetMetadata().GetVersion())

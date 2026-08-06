@@ -81,7 +81,8 @@ service Control {
 }
 
 message LocalSnapshotInfo {
-  string snapshot_prefix = 1;
+  // The name of the local checkpoint on each of the nodes below.
+  string snapshot_name = 1;
   // Node VMs that have local snapshots for this actor, while it's PAUSED.
   repeated string node_vms_with_local_snapshots = 2;
   // Scope the pause checkpoint captured (the template's onPause at pause
@@ -186,7 +187,7 @@ message Actor {
   // Unset whenever the Actor has no worker (SUSPENDED, PAUSED, CRASHED).
   WorkerAssignment worker_assignment = 5;
 
-  string in_progress_snapshot = 6;
+  string in_progress_snapshot_name = 6;
 
   // worker_selector is the per-actor placement constraint. The scheduler
   // evaluates the AND of this selector and the template's workerSelector to
@@ -206,6 +207,8 @@ message Actor {
   // Volumes attached to the actor. These volumes only live as long as the actor.
   // They are deleted when the actor is deleted.
   repeated ExternalVolume actor_volumes = 11;
+
+  string in_progress_local_snapshot_name = 12;
 }
 
 // WorkerAssignment identifies the Worker currently hosting an Actor.
@@ -227,8 +230,7 @@ message WorkerAssignment {
 }
 
 // ActorSnapshot is an independently addressable durable Actor snapshot. Its
-// contents are immutable. Its physical storage location is private to
-// Substrate.
+// contents are immutable.
 message ActorSnapshot {
   ResourceMetadata metadata = 1;
   ObjectRef source_actor = 2;
@@ -238,6 +240,7 @@ message ActorSnapshot {
   string actor_template_name = 6;
   string actor_template_uid = 7;
   SnapshotContentScope content_scope = 8;
+  string snapshot_uri = 9;
 }
 
 // ActorSnapshotTag is an immutable, Atespace-owned alias and retention pin.

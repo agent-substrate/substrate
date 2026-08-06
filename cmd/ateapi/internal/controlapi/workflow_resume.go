@@ -48,22 +48,22 @@ type ResumeInput struct {
 
 // ResumeState holds the mutable state loaded and modified during execution.
 type ResumeState struct {
-	Actor            *ateapipb.Actor
-	Worker           *ateapipb.Worker
-	ActorTemplate    *atev1alpha1.ActorTemplate
-	WasRunning       bool
-	SnapshotLocation string
-	SnapshotScope    ateapipb.SnapshotContentScope
-	SnapshotKind     string
+	Actor         *ateapipb.Actor
+	Worker        *ateapipb.Worker
+	ActorTemplate *atev1alpha1.ActorTemplate
+	WasRunning    bool
+	SnapshotScope ateapipb.SnapshotContentScope
+	SnapshotKind  string
+	SnapshotURI   resources.SnapshotURI
 	// WireSnapshotScope labels the restore requested, not the stored snapshot's
 	// SnapshotScope: a data snapshot restored on golden goes out as data_on_golden.
 	WireSnapshotScope string
-	// GoldenSnapshotLocation is the storage location of the ActorTemplate's
+	// GoldenSnapshotURI is the storage location of the ActorTemplate's
 	// golden snapshot. Populated only when the template's onResume
 	// configuration selects the golden snapshot as the boot source for the
 	// pending restore: restore then combines the golden snapshot with the
 	// actor's data.
-	GoldenSnapshotLocation string
+	GoldenSnapshotURI resources.SnapshotURI
 }
 
 // validateGoldenSnapshotScope rejects a golden snapshot that does not carry
@@ -113,17 +113,19 @@ func (s *LoadActorForResumeStep) Execute(ctx context.Context, input *ResumeInput
 	}
 	state.ActorTemplate = actorTemplate
 	if ref := actor.GetLatestSnapshot(); ref != nil {
-		snapshot, location, err := s.store.GetActorSnapshot(ctx, ref.GetAtespace(), ref.GetName())
+		snapshot, err := s.store.GetActorSnapshot(ctx, ref.GetAtespace(), ref.GetName())
 		if errors.Is(err, store.ErrNotFound) {
 			return status.Error(codes.DataLoss, "ActorSnapshot data is missing")
 		}
 		if err != nil {
 			return fmt.Errorf("while getting ActorSnapshot: %w", err)
 		}
-		state.SnapshotLocation = location
+		if state.SnapshotURI, err = resources.ParseSnapshotURI(snapshot.GetSnapshotUri()); err != nil {
+			return status.Errorf(codes.DataLoss, "ActorSnapshot %s/%s: %v", ref.GetAtespace(), ref.GetName(), err)
+		}
 		state.SnapshotScope = snapshot.GetContentScope()
 	} else if actorTemplate.Status.GoldenSnapshot != "" && !input.Boot {
-		snapshot, location, err := s.store.GetActorSnapshot(ctx, resources.GoldenActorAtespace, actorTemplate.Status.GoldenSnapshot)
+		snapshot, err := s.store.GetActorSnapshot(ctx, resources.GoldenActorAtespace, actorTemplate.Status.GoldenSnapshot)
 		if errors.Is(err, store.ErrNotFound) {
 			return status.Error(codes.DataLoss, "ActorTemplate golden snapshot data is missing")
 		}
@@ -133,7 +135,9 @@ func (s *LoadActorForResumeStep) Execute(ctx context.Context, input *ResumeInput
 		if err := validateGoldenSnapshotScope(snapshot); err != nil {
 			return err
 		}
-		state.SnapshotLocation = location
+		if state.SnapshotURI, err = resources.ParseSnapshotURI(snapshot.GetSnapshotUri()); err != nil {
+			return status.Errorf(codes.DataLoss, "golden ActorSnapshot %s: %v", actorTemplate.Status.GoldenSnapshot, err)
+		}
 		state.SnapshotScope = snapshot.GetContentScope()
 	}
 
@@ -156,7 +160,7 @@ func (s *LoadActorForResumeStep) Execute(ctx context.Context, input *ResumeInput
 			if actorTemplate.Status.GoldenSnapshot == "" {
 				return status.Error(codes.FailedPrecondition, "a Golden data resume requires the ActorTemplate golden snapshot, which is not available")
 			}
-			goldenSnapshot, goldenLocation, err := s.store.GetActorSnapshot(ctx, resources.GoldenActorAtespace, actorTemplate.Status.GoldenSnapshot)
+			goldenSnapshot, err := s.store.GetActorSnapshot(ctx, resources.GoldenActorAtespace, actorTemplate.Status.GoldenSnapshot)
 			if errors.Is(err, store.ErrNotFound) {
 				return status.Error(codes.DataLoss, "ActorTemplate golden snapshot data is missing")
 			}
@@ -166,7 +170,9 @@ func (s *LoadActorForResumeStep) Execute(ctx context.Context, input *ResumeInput
 			if err := validateGoldenSnapshotScope(goldenSnapshot); err != nil {
 				return err
 			}
-			state.GoldenSnapshotLocation = goldenLocation
+			if state.GoldenSnapshotURI, err = resources.ParseSnapshotURI(goldenSnapshot.GetSnapshotUri()); err != nil {
+				return status.Errorf(codes.DataLoss, "golden ActorSnapshot %s: %v", actorTemplate.Status.GoldenSnapshot, err)
+			}
 		}
 	}
 
@@ -581,37 +587,37 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 		}
 		req.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL
 		req.Config = &ateletpb.RestoreRequest_LocalConfig{
-			LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotPrefix: local.GetSnapshotPrefix()},
+			LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotName: local.GetSnapshotName()},
 		}
 		// The wire scope describes the restore OPERATION. When the template's
 		// onResume configuration selected the golden snapshot as the boot
-		// source, LoadActorForResume resolved the golden location, and the
+		// source, LoadActorForResume resolved the golden URI, and the
 		// pause snapshot restores as DATA_ON_GOLDEN — atelet combines the
 		// golden snapshot's guest state with the actor's data. Otherwise the
 		// scope mirrors what the pause captured.
 		req.Scope = toAteletSnapshotScope(state.ActorTemplate.Spec.SnapshotsConfig.OnPause)
-		if state.GoldenSnapshotLocation != "" {
+		if !state.GoldenSnapshotURI.IsZero() {
 			req.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
-			req.GoldenSnapshotUriPrefix = state.GoldenSnapshotLocation
+			req.GoldenSnapshotUri = state.GoldenSnapshotURI.String()
 		}
 		state.WireSnapshotScope = ateattr.SnapshotScopeValue(req.Scope)
 
 		_, err = client.Restore(ctx, req)
 		return maybeCrashActor(ctx, s.store, input.ActorRef, err, "while restoring workload", ateattr.OperationResume)
-	} else if state.SnapshotLocation != "" {
+	} else if !state.SnapshotURI.IsZero() {
 		slog.InfoContext(ctx, "Actor has durable snapshot; Restoring from snapshot")
-		// Mirrors LoadActorForResume's source resolution: the durable location
-		// is the actor's own snapshot when one exists, the golden otherwise.
+		// Mirrors LoadActorForResume's source resolution: the durable URI is
+		// the actor's own snapshot when one exists, the golden otherwise.
 		state.SnapshotKind = ateattr.SnapshotKindGolden
 		if state.Actor.GetLatestSnapshot() != nil {
 			state.SnapshotKind = ateattr.SnapshotKindLatest
 		}
 
 		// Same wire-scope derivation as the local branch above: the snapshot
-		// restores as DATA_ON_GOLDEN when the golden location was resolved
-		// per the template's onResume configuration.
+		// restores as DATA_ON_GOLDEN when the golden URI was resolved per the
+		// template's onResume configuration.
 		scope := actorSnapshotContentScopeToAtelet(state.SnapshotScope)
-		if state.GoldenSnapshotLocation != "" {
+		if !state.GoldenSnapshotURI.IsZero() {
 			scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
 		}
 		state.WireSnapshotScope = ateattr.SnapshotScopeValue(scope)
@@ -625,14 +631,14 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 			Type:                   ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
 			Config: &ateletpb.RestoreRequest_ExternalConfig{
 				ExternalConfig: &ateletpb.ExternalCheckpointConfiguration{
-					SnapshotUriPrefix: state.SnapshotLocation,
+					SnapshotUri: state.SnapshotURI.String(),
 				},
 			},
 			Scope: scope,
 			// Empty unless this is a Golden data resume.
-			GoldenSnapshotUriPrefix: state.GoldenSnapshotLocation,
-			ActorUid:                state.Actor.GetMetadata().Uid,
-			EgressGateway:           egressGateway,
+			GoldenSnapshotUri: state.GoldenSnapshotURI.String(),
+			ActorUid:          state.Actor.GetMetadata().Uid,
+			EgressGateway:     egressGateway,
 		}
 		_, err = client.Restore(ctx, req)
 		return maybeCrashActor(ctx, s.store, input.ActorRef, err, "while restoring durable snapshot", ateattr.OperationResume)

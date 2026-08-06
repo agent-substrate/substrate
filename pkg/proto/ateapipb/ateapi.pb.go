@@ -356,8 +356,9 @@ func (Worker_State) EnumDescriptor() ([]byte, []int) {
 }
 
 type LocalSnapshotInfo struct {
-	state          protoimpl.MessageState `protogen:"open.v1"`
-	SnapshotPrefix string                 `protobuf:"bytes,1,opt,name=snapshot_prefix,json=snapshotPrefix,proto3" json:"snapshot_prefix,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// The name of the local checkpoint on each of the nodes below.
+	SnapshotName string `protobuf:"bytes,1,opt,name=snapshot_name,json=snapshotName,proto3" json:"snapshot_name,omitempty"`
 	// Node VMs that have local snapshots for this actor, while it's PAUSED.
 	NodeVmsWithLocalSnapshots []string `protobuf:"bytes,2,rep,name=node_vms_with_local_snapshots,json=nodeVmsWithLocalSnapshots,proto3" json:"node_vms_with_local_snapshots,omitempty"`
 	// Scope the pause checkpoint captured (the template's onPause at pause
@@ -397,9 +398,9 @@ func (*LocalSnapshotInfo) Descriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{0}
 }
 
-func (x *LocalSnapshotInfo) GetSnapshotPrefix() string {
+func (x *LocalSnapshotInfo) GetSnapshotName() string {
 	if x != nil {
-		return x.SnapshotPrefix
+		return x.SnapshotName
 	}
 	return ""
 }
@@ -649,8 +650,8 @@ type Actor struct {
 	Status                 Actor_Status      `protobuf:"varint,4,opt,name=status,proto3,enum=ateapi.Actor_Status" json:"status,omitempty"`
 	// worker_assignment points at the worker currently hosting this Actor.
 	// Unset whenever the Actor has no worker (SUSPENDED, PAUSED, CRASHED).
-	WorkerAssignment   *WorkerAssignment `protobuf:"bytes,5,opt,name=worker_assignment,json=workerAssignment,proto3" json:"worker_assignment,omitempty"`
-	InProgressSnapshot string            `protobuf:"bytes,6,opt,name=in_progress_snapshot,json=inProgressSnapshot,proto3" json:"in_progress_snapshot,omitempty"`
+	WorkerAssignment       *WorkerAssignment `protobuf:"bytes,5,opt,name=worker_assignment,json=workerAssignment,proto3" json:"worker_assignment,omitempty"`
+	InProgressSnapshotName string            `protobuf:"bytes,6,opt,name=in_progress_snapshot_name,json=inProgressSnapshotName,proto3" json:"in_progress_snapshot_name,omitempty"`
 	// worker_selector is the per-actor placement constraint. The scheduler
 	// evaluates the AND of this selector and the template's workerSelector to
 	// find eligible pools. Set at CreateActor; may be updated at any time via
@@ -664,9 +665,10 @@ type Actor struct {
 	InProgressSnapshotSourceActorVersion int64 `protobuf:"varint,10,opt,name=in_progress_snapshot_source_actor_version,json=inProgressSnapshotSourceActorVersion,proto3" json:"in_progress_snapshot_source_actor_version,omitempty"`
 	// Volumes attached to the actor. These volumes only live as long as the actor.
 	// They are deleted when the actor is deleted.
-	ActorVolumes  []*ExternalVolume `protobuf:"bytes,11,rep,name=actor_volumes,json=actorVolumes,proto3" json:"actor_volumes,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	ActorVolumes                []*ExternalVolume `protobuf:"bytes,11,rep,name=actor_volumes,json=actorVolumes,proto3" json:"actor_volumes,omitempty"`
+	InProgressLocalSnapshotName string            `protobuf:"bytes,12,opt,name=in_progress_local_snapshot_name,json=inProgressLocalSnapshotName,proto3" json:"in_progress_local_snapshot_name,omitempty"`
+	unknownFields               protoimpl.UnknownFields
+	sizeCache                   protoimpl.SizeCache
 }
 
 func (x *Actor) Reset() {
@@ -734,9 +736,9 @@ func (x *Actor) GetWorkerAssignment() *WorkerAssignment {
 	return nil
 }
 
-func (x *Actor) GetInProgressSnapshot() string {
+func (x *Actor) GetInProgressSnapshotName() string {
 	if x != nil {
-		return x.InProgressSnapshot
+		return x.InProgressSnapshotName
 	}
 	return ""
 }
@@ -774,6 +776,13 @@ func (x *Actor) GetActorVolumes() []*ExternalVolume {
 		return x.ActorVolumes
 	}
 	return nil
+}
+
+func (x *Actor) GetInProgressLocalSnapshotName() string {
+	if x != nil {
+		return x.InProgressLocalSnapshotName
+	}
+	return ""
 }
 
 // WorkerAssignment identifies the Worker currently hosting an Actor.
@@ -859,8 +868,7 @@ func (x *WorkerAssignment) GetWorkerPodIp() string {
 }
 
 // ActorSnapshot is an independently addressable durable Actor snapshot. Its
-// contents are immutable. Its physical storage location is private to
-// Substrate.
+// contents are immutable.
 type ActorSnapshot struct {
 	state                  protoimpl.MessageState `protogen:"open.v1"`
 	Metadata               *ResourceMetadata      `protobuf:"bytes,1,opt,name=metadata,proto3" json:"metadata,omitempty"`
@@ -871,6 +879,7 @@ type ActorSnapshot struct {
 	ActorTemplateName      string                 `protobuf:"bytes,6,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
 	ActorTemplateUid       string                 `protobuf:"bytes,7,opt,name=actor_template_uid,json=actorTemplateUid,proto3" json:"actor_template_uid,omitempty"`
 	ContentScope           SnapshotContentScope   `protobuf:"varint,8,opt,name=content_scope,json=contentScope,proto3,enum=ateapi.SnapshotContentScope" json:"content_scope,omitempty"`
+	SnapshotUri            string                 `protobuf:"bytes,9,opt,name=snapshot_uri,json=snapshotUri,proto3" json:"snapshot_uri,omitempty"`
 	unknownFields          protoimpl.UnknownFields
 	sizeCache              protoimpl.SizeCache
 }
@@ -959,6 +968,13 @@ func (x *ActorSnapshot) GetContentScope() SnapshotContentScope {
 		return x.ContentScope
 	}
 	return SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_UNSPECIFIED
+}
+
+func (x *ActorSnapshot) GetSnapshotUri() string {
+	if x != nil {
+		return x.SnapshotUri
+	}
+	return ""
 }
 
 // ActorSnapshotTag is an immutable, Atespace-owned alias and retention pin.
@@ -3076,9 +3092,9 @@ var File_ateapi_proto protoreflect.FileDescriptor
 
 const file_ateapi_proto_rawDesc = "" +
 	"\n" +
-	"\fateapi.proto\x12\x06ateapi\x1a google/protobuf/field_mask.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\xc1\x01\n" +
-	"\x11LocalSnapshotInfo\x12'\n" +
-	"\x0fsnapshot_prefix\x18\x01 \x01(\tR\x0esnapshotPrefix\x12@\n" +
+	"\fateapi.proto\x12\x06ateapi\x1a google/protobuf/field_mask.proto\x1a\x1fgoogle/protobuf/timestamp.proto\"\xbd\x01\n" +
+	"\x11LocalSnapshotInfo\x12#\n" +
+	"\rsnapshot_name\x18\x01 \x01(\tR\fsnapshotName\x12@\n" +
 	"\x1dnode_vms_with_local_snapshots\x18\x02 \x03(\tR\x19nodeVmsWithLocalSnapshots\x12A\n" +
 	"\rcontent_scope\x18\x03 \x01(\x0e2\x1c.ateapi.SnapshotContentScopeR\fcontentScope\"\x90\x01\n" +
 	"\bSelector\x12D\n" +
@@ -3110,20 +3126,21 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x12STATUS_UNSPECIFIED\x10\x00\x12\x12\n" +
 	"\x0eSTATUS_PENDING\x10\x01\x12\x12\n" +
 	"\x0eSTATUS_CREATED\x10\x02\x12\x13\n" +
-	"\x0fSTATUS_DELETING\x10\x03\"\xef\x06\n" +
+	"\x0fSTATUS_DELETING\x10\x03\"\xbe\a\n" +
 	"\x05Actor\x124\n" +
 	"\bmetadata\x18\x01 \x01(\v2\x18.ateapi.ResourceMetadataR\bmetadata\x128\n" +
 	"\x18actor_template_namespace\x18\x02 \x01(\tR\x16actorTemplateNamespace\x12.\n" +
 	"\x13actor_template_name\x18\x03 \x01(\tR\x11actorTemplateName\x12,\n" +
 	"\x06status\x18\x04 \x01(\x0e2\x14.ateapi.Actor.StatusR\x06status\x12E\n" +
-	"\x11worker_assignment\x18\x05 \x01(\v2\x18.ateapi.WorkerAssignmentR\x10workerAssignment\x120\n" +
-	"\x14in_progress_snapshot\x18\x06 \x01(\tR\x12inProgressSnapshot\x129\n" +
+	"\x11worker_assignment\x18\x05 \x01(\v2\x18.ateapi.WorkerAssignmentR\x10workerAssignment\x129\n" +
+	"\x19in_progress_snapshot_name\x18\x06 \x01(\tR\x16inProgressSnapshotName\x129\n" +
 	"\x0fworker_selector\x18\a \x01(\v2\x10.ateapi.SelectorR\x0eworkerSelector\x12:\n" +
 	"\x0flatest_snapshot\x18\b \x01(\v2\x11.ateapi.ObjectRefR\x0elatestSnapshot\x12I\n" +
 	"\x13local_snapshot_info\x18\t \x01(\v2\x19.ateapi.LocalSnapshotInfoR\x11localSnapshotInfo\x12W\n" +
 	")in_progress_snapshot_source_actor_version\x18\n" +
 	" \x01(\x03R$inProgressSnapshotSourceActorVersion\x12;\n" +
-	"\ractor_volumes\x18\v \x03(\v2\x16.ateapi.ExternalVolumeR\factorVolumes\"\xc6\x01\n" +
+	"\ractor_volumes\x18\v \x03(\v2\x16.ateapi.ExternalVolumeR\factorVolumes\x12D\n" +
+	"\x1fin_progress_local_snapshot_name\x18\f \x01(\tR\x1binProgressLocalSnapshotName\"\xc6\x01\n" +
 	"\x06Status\x12\x16\n" +
 	"\x12STATUS_UNSPECIFIED\x10\x00\x12\x13\n" +
 	"\x0fSTATUS_RESUMING\x10\x01\x12\x12\n" +
@@ -3141,7 +3158,7 @@ const file_ateapi_proto_rawDesc = "" +
 	"\n" +
 	"worker_pod\x18\x03 \x01(\tR\tworkerPod\x12$\n" +
 	"\x0eworker_pod_uid\x18\x04 \x01(\tR\fworkerPodUid\x12\"\n" +
-	"\rworker_pod_ip\x18\x05 \x01(\tR\vworkerPodIp\"\xb2\x03\n" +
+	"\rworker_pod_ip\x18\x05 \x01(\tR\vworkerPodIp\"\xd5\x03\n" +
 	"\rActorSnapshot\x124\n" +
 	"\bmetadata\x18\x01 \x01(\v2\x18.ateapi.ResourceMetadataR\bmetadata\x124\n" +
 	"\fsource_actor\x18\x02 \x01(\v2\x11.ateapi.ObjectRefR\vsourceActor\x12(\n" +
@@ -3150,7 +3167,8 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x18actor_template_namespace\x18\x05 \x01(\tR\x16actorTemplateNamespace\x12.\n" +
 	"\x13actor_template_name\x18\x06 \x01(\tR\x11actorTemplateName\x12,\n" +
 	"\x12actor_template_uid\x18\a \x01(\tR\x10actorTemplateUid\x12A\n" +
-	"\rcontent_scope\x18\b \x01(\x0e2\x1c.ateapi.SnapshotContentScopeR\fcontentScope\"\xac\x01\n" +
+	"\rcontent_scope\x18\b \x01(\x0e2\x1c.ateapi.SnapshotContentScopeR\fcontentScope\x12!\n" +
+	"\fsnapshot_uri\x18\t \x01(\tR\vsnapshotUri\"\xac\x01\n" +
 	"\x10ActorSnapshotTag\x124\n" +
 	"\bmetadata\x18\x01 \x01(\v2\x18.ateapi.ResourceMetadataR\bmetadata\x12-\n" +
 	"\bsnapshot\x18\x02 \x01(\v2\x11.ateapi.ObjectRefR\bsnapshot\x123\n" +

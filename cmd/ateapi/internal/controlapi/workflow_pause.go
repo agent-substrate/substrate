@@ -16,11 +16,9 @@ package controlapi
 
 import (
 	"context"
-	"crypto/rand"
 	"errors"
 	"fmt"
 	"log/slog"
-	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/ateattr"
@@ -95,7 +93,7 @@ func (s *MarkPausingStep) CheckPrerequisite(ctx context.Context, input *PauseInp
 }
 func (s *MarkPausingStep) Execute(ctx context.Context, input *PauseInput, state *PauseState) error {
 	state.Actor.Status = ateapipb.Actor_STATUS_PAUSING
-	state.Actor.InProgressSnapshot = fmt.Sprintf("%s-%s-%s", state.Actor.GetMetadata().GetName(), time.Now().Format(time.RFC3339), rand.Text())
+	state.Actor.InProgressLocalSnapshotName = resources.NewSnapshotName()
 	updatedActor, err := s.store.UpdateActor(ctx, state.Actor, state.Actor.GetMetadata().GetVersion())
 	if err != nil {
 		return err
@@ -135,7 +133,7 @@ func (s *CallAteletPauseStep) Execute(ctx context.Context, input *PauseInput, st
 	ateletConn, err := s.dialer.DialForWorker(assignment.GetWorkerNamespace(), assignment.GetWorkerPod())
 	if err != nil {
 		if errors.Is(err, ErrWorkerPodNotFound) {
-			slog.ErrorContext(ctx, "Worker pod gone before checkpoint, crashing actor", "namespace", assignment.GetWorkerNamespace(), "pod", assignment.GetWorkerPod(), "in_progress_snapshot", state.Actor.GetInProgressSnapshot())
+			slog.ErrorContext(ctx, "Worker pod gone before checkpoint, crashing actor", "namespace", assignment.GetWorkerNamespace(), "pod", assignment.GetWorkerPod(), "in_progress_local_snapshot_name", state.Actor.GetInProgressLocalSnapshotName())
 			if err := crashActor(ctx, s.store, input.ActorRef, ateattr.OperationPause, ateattr.ReasonWorkerPodGone); err != nil {
 				slog.ErrorContext(ctx, "Failed to crash actor", slog.String("err", err.Error()))
 			}
@@ -163,7 +161,7 @@ func (s *CallAteletPauseStep) Execute(ctx context.Context, input *PauseInput, st
 		Type:                   ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
 		Config: &ateletpb.CheckpointRequest_LocalConfig{
 			LocalConfig: &ateletpb.LocalCheckpointConfiguration{
-				SnapshotPrefix: state.Actor.InProgressSnapshot,
+				SnapshotName: state.Actor.InProgressLocalSnapshotName,
 			},
 		},
 		Scope:    toAteletSnapshotScope(state.ActorTemplate.Spec.SnapshotsConfig.OnPause),
@@ -265,17 +263,17 @@ func (s *FinalizePausedStep) Execute(ctx context.Context, input *PauseInput, sta
 			slog.ErrorContext(ctx, "Node name not found during finalize pause, crashing actor", slog.Any("actor", input.ActorRef))
 			latestActor.Status = ateapipb.Actor_STATUS_CRASHED
 		}
-		// TODO(dberkov) - what if InProgressSnapshot is empty? That shouldn't be possible.
-		if latestActor.InProgressSnapshot != "" {
+		// TODO(dberkov) - what if InProgressLocalSnapshotName is empty? That shouldn't be possible.
+		if latestActor.InProgressLocalSnapshotName != "" {
 			localInfo := &ateapipb.LocalSnapshotInfo{
-				SnapshotPrefix: latestActor.InProgressSnapshot,
-				ContentScope:   toActorSnapshotContentScope(state.ActorTemplate.Spec.SnapshotsConfig.OnPause),
+				SnapshotName: latestActor.InProgressLocalSnapshotName,
+				ContentScope: toActorSnapshotContentScope(state.ActorTemplate.Spec.SnapshotsConfig.OnPause),
 			}
 			if latestActor.Status != ateapipb.Actor_STATUS_CRASHED {
 				localInfo.NodeVmsWithLocalSnapshots = []string{nodeName}
 			}
 			latestActor.LocalSnapshotInfo = localInfo
-			latestActor.InProgressSnapshot = ""
+			latestActor.InProgressLocalSnapshotName = ""
 		}
 		sandboxClass := ""
 		if worker != nil {

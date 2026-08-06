@@ -221,7 +221,7 @@ func validCheckpointRequest() *ateletpb.CheckpointRequest {
 		Type:                   ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
 		Config: &ateletpb.CheckpointRequest_ExternalConfig{
 			ExternalConfig: &ateletpb.ExternalCheckpointConfiguration{
-				SnapshotUriPrefix: "gs://bucket/actors/1/snapshots/2/",
+				SnapshotUri: "gs://bucket/root/snapshots/ate-demo/counter-1-snap",
 			},
 		},
 		Scope: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
@@ -240,7 +240,7 @@ func validRestoreRequest() *ateletpb.RestoreRequest {
 		Type:                   ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
 		Config: &ateletpb.RestoreRequest_ExternalConfig{
 			ExternalConfig: &ateletpb.ExternalCheckpointConfiguration{
-				SnapshotUriPrefix: "gs://bucket/actors/1/snapshots/2/",
+				SnapshotUri: "gs://bucket/root/snapshots/ate-demo/counter-1-snap",
 			},
 		},
 		Scope: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
@@ -275,7 +275,7 @@ func TestValidateRunRequest(t *testing.T) {
 	}
 }
 
-// Checkpoint and Restore must reject a bad snapshot URI prefix even when
+// Checkpoint and Restore must reject a bad snapshot URI even when
 // every common field is valid.
 func TestValidateCheckpointRequest(t *testing.T) {
 	makeReq := func(opts ...func(*ateletpb.CheckpointRequest)) *ateletpb.CheckpointRequest {
@@ -292,8 +292,8 @@ func TestValidateCheckpointRequest(t *testing.T) {
 		wantErr bool
 	}{
 		{"valid", makeReq(), false},
-		{"empty snapshot uri", makeReq(func(r *ateletpb.CheckpointRequest) { r.GetExternalConfig().SnapshotUriPrefix = "" }), true},
-		{"bucketless snapshot uri", makeReq(func(r *ateletpb.CheckpointRequest) { r.GetExternalConfig().SnapshotUriPrefix = "relative/path" }), true},
+		{"empty snapshot uri", makeReq(func(r *ateletpb.CheckpointRequest) { r.GetExternalConfig().SnapshotUri = "" }), true},
+		{"bucketless snapshot uri", makeReq(func(r *ateletpb.CheckpointRequest) { r.GetExternalConfig().SnapshotUri = "relative/path" }), true},
 		{"invalid ateom uid", makeReq(func(r *ateletpb.CheckpointRequest) { r.TargetAteomUid = "../escape" }), true},
 		{"invalid atespace", makeReq(func(r *ateletpb.CheckpointRequest) { r.Atespace = "../escape" }), true},
 		{"invalid actor name", makeReq(func(r *ateletpb.CheckpointRequest) { r.ActorName = "../escape" }), true},
@@ -305,15 +305,19 @@ func TestValidateCheckpointRequest(t *testing.T) {
 		}), true},
 		{"invalid local snapshot prefix", makeReq(func(r *ateletpb.CheckpointRequest) {
 			r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL
-			r.Config = &ateletpb.CheckpointRequest_LocalConfig{LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotPrefix: ""}}
+			r.Config = &ateletpb.CheckpointRequest_LocalConfig{LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotName: ""}}
+		}), true},
+		{"local snapshot name escapes its directory", makeReq(func(r *ateletpb.CheckpointRequest) {
+			r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL
+			r.Config = &ateletpb.CheckpointRequest_LocalConfig{LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotName: "../escape"}}
 		}), true},
 		{"nested local snapshot prefix", makeReq(func(r *ateletpb.CheckpointRequest) {
 			r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL
-			r.Config = &ateletpb.CheckpointRequest_LocalConfig{LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotPrefix: "pause/2"}}
+			r.Config = &ateletpb.CheckpointRequest_LocalConfig{LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotName: "pause/2"}}
 		}), true},
 		{"traversal local snapshot prefix", makeReq(func(r *ateletpb.CheckpointRequest) {
 			r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL
-			r.Config = &ateletpb.CheckpointRequest_LocalConfig{LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotPrefix: ".."}}
+			r.Config = &ateletpb.CheckpointRequest_LocalConfig{LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotName: ".."}}
 		}), true},
 		{"unspecified snapshot type", makeReq(func(r *ateletpb.CheckpointRequest) { r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_UNSPECIFIED }), true},
 		{"unspecified snapshot scope", makeReq(func(r *ateletpb.CheckpointRequest) { r.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED }), true},
@@ -346,8 +350,8 @@ func TestValidateRestoreRequest(t *testing.T) {
 		wantErr bool
 	}{
 		{"valid", makeReq(), false},
-		{"empty snapshot uri", makeReq(func(r *ateletpb.RestoreRequest) { r.GetExternalConfig().SnapshotUriPrefix = "" }), true},
-		{"bucketless snapshot uri", makeReq(func(r *ateletpb.RestoreRequest) { r.GetExternalConfig().SnapshotUriPrefix = "relative/path" }), true},
+		{"empty snapshot uri", makeReq(func(r *ateletpb.RestoreRequest) { r.GetExternalConfig().SnapshotUri = "" }), true},
+		{"bucketless snapshot uri", makeReq(func(r *ateletpb.RestoreRequest) { r.GetExternalConfig().SnapshotUri = "relative/path" }), true},
 		{"invalid ateom uid", makeReq(func(r *ateletpb.RestoreRequest) { r.TargetAteomUid = "../escape" }), true},
 		{"invalid atespace", makeReq(func(r *ateletpb.RestoreRequest) { r.Atespace = "../escape" }), true},
 		{"invalid actor name", makeReq(func(r *ateletpb.RestoreRequest) { r.ActorName = "../escape" }), true},
@@ -359,41 +363,45 @@ func TestValidateRestoreRequest(t *testing.T) {
 		}), true},
 		{"invalid local snapshot prefix", makeReq(func(r *ateletpb.RestoreRequest) {
 			r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL
-			r.Config = &ateletpb.RestoreRequest_LocalConfig{LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotPrefix: ""}}
+			r.Config = &ateletpb.RestoreRequest_LocalConfig{LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotName: ""}}
+		}), true},
+		{"local snapshot name escapes its directory", makeReq(func(r *ateletpb.RestoreRequest) {
+			r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL
+			r.Config = &ateletpb.RestoreRequest_LocalConfig{LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotName: "../escape"}}
 		}), true},
 		{"nested local snapshot prefix", makeReq(func(r *ateletpb.RestoreRequest) {
 			r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL
-			r.Config = &ateletpb.RestoreRequest_LocalConfig{LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotPrefix: "pause/2"}}
+			r.Config = &ateletpb.RestoreRequest_LocalConfig{LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotName: "pause/2"}}
 		}), true},
 		{"traversal local snapshot prefix", makeReq(func(r *ateletpb.RestoreRequest) {
 			r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL
-			r.Config = &ateletpb.RestoreRequest_LocalConfig{LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotPrefix: ".."}}
+			r.Config = &ateletpb.RestoreRequest_LocalConfig{LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotName: ".."}}
 		}), true},
 		{"unspecified snapshot type", makeReq(func(r *ateletpb.RestoreRequest) { r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_UNSPECIFIED }), true},
 		{"unspecified snapshot scope", makeReq(func(r *ateletpb.RestoreRequest) { r.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED }), true},
 		{"invalid snapshot scope", makeReq(func(r *ateletpb.RestoreRequest) { r.Scope = ateletpb.SnapshotScope(23) }), true},
 		{"data-on-golden with golden uri", makeReq(func(r *ateletpb.RestoreRequest) {
 			r.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
-			r.GoldenSnapshotUriPrefix = "gs://bucket/ate-golden/snapshots/1/"
+			r.GoldenSnapshotUri = "gs://bucket/golden-root/snapshots/ate-golden/golden-1"
 		}), false},
 		{"data-on-golden without golden uri", makeReq(func(r *ateletpb.RestoreRequest) {
 			r.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
 		}), true},
 		{"data-on-golden with bucketless golden uri", makeReq(func(r *ateletpb.RestoreRequest) {
 			r.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
-			r.GoldenSnapshotUriPrefix = "relative/path"
+			r.GoldenSnapshotUri = "relative/path"
 		}), true},
 		// A pause (local) checkpoint may combine with the golden snapshot:
 		// the golden URI is a top-level field precisely so LOCAL restores
 		// can carry it.
 		{"data-on-golden with local checkpoint type", makeReq(func(r *ateletpb.RestoreRequest) {
 			r.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
-			r.GoldenSnapshotUriPrefix = "gs://bucket/ate-golden/snapshots/1/"
+			r.GoldenSnapshotUri = "gs://bucket/golden-root/snapshots/ate-golden/golden-1"
 			r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL
-			r.Config = &ateletpb.RestoreRequest_LocalConfig{LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotPrefix: "prefix"}}
+			r.Config = &ateletpb.RestoreRequest_LocalConfig{LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotName: "local-snap-1"}}
 		}), false},
 		{"golden uri with non-data-on-golden scope", makeReq(func(r *ateletpb.RestoreRequest) {
-			r.GoldenSnapshotUriPrefix = "gs://bucket/ate-golden/snapshots/1/"
+			r.GoldenSnapshotUri = "gs://bucket/golden-root/snapshots/ate-golden/golden-1"
 		}), true},
 	}
 	for _, tc := range tests {
@@ -859,17 +867,17 @@ func TestDownloadCombinedCheckpoint(t *testing.T) {
 	}
 
 	store := mapObjectStorage{objects: map[string][]byte{
-		"bucket/actors/1/snapshots/2/durable-dir.tar.zstd":   zstdBytes(t, "actor durable data"),
-		"bucket/ate-golden/snapshots/1/config.json.zstd":     zstdBytes(t, "golden config"),
-		"bucket/ate-golden/snapshots/1/memory-ranges.zstd":   zstdBytes(t, "golden memory"),
-		"bucket/ate-golden/snapshots/1/durable-dir.tar.zstd": zstdBytes(t, "golden durable data (must not be downloaded)"),
+		"bucket/root/snapshots/ate-demo/counter-1-snap/durable-dir.tar.zstd":    zstdBytes(t, "actor durable data"),
+		"bucket/golden-root/snapshots/ate-golden/golden-1/config.json.zstd":     zstdBytes(t, "golden config"),
+		"bucket/golden-root/snapshots/ate-golden/golden-1/memory-ranges.zstd":   zstdBytes(t, "golden memory"),
+		"bucket/golden-root/snapshots/ate-golden/golden-1/durable-dir.tar.zstd": zstdBytes(t, "golden durable data (must not be downloaded)"),
 	}}
 	s := &AteomHerder{gcsClient: store}
 
 	dstDir := t.TempDir()
 	err := s.downloadCombinedCheckpoint(context.Background(),
-		"gs://bucket/actors/1/snapshots/2/",
-		"gs://bucket/ate-golden/snapshots/1/",
+		"gs://bucket/root/snapshots/ate-demo/counter-1-snap",
+		"gs://bucket/golden-root/snapshots/ate-golden/golden-1",
 		dstDir,
 		[]string{"durable-dir.tar"},
 		[]string{"config.json", "memory-ranges", "durable-dir.tar"})

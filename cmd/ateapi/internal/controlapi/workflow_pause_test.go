@@ -52,7 +52,7 @@ func TestFinalizePausedStep_WorkerGone(t *testing.T) {
 			WorkerPool:      "pool1",
 			WorkerPod:       "worker-pod-1",
 		},
-		InProgressSnapshot: "snap-prefix",
+		InProgressLocalSnapshotName: "local-snap-1",
 	}
 	if _, err := st.CreateActor(ctx, actor); err != nil {
 		t.Fatalf("CreateActor: %v", err)
@@ -120,7 +120,7 @@ func TestFinalizePausedStep_RecordsContentScope(t *testing.T) {
 					WorkerPool:      "pool1",
 					WorkerPod:       "worker-pod-1",
 				},
-				InProgressSnapshot: "snap-prefix",
+				InProgressLocalSnapshotName: "snap-prefix",
 			})
 			if err != nil {
 				t.Fatalf("CreateActor: %v", err)
@@ -309,8 +309,8 @@ func TestCallAteletPauseStep_DanglingWorkerDoesNotRecordPhantomSnapshot(t *testi
 					WorkerPool:      "pool",
 					WorkerPod:       "pod-gone",
 				},
-				InProgressSnapshot: "actor-1-never-written",
-				LatestSnapshot:     tt.prevSnapshot,
+				InProgressLocalSnapshotName: "actor-1-never-written",
+				LatestSnapshot:              tt.prevSnapshot,
 			}
 			created, err := persistence.CreateActor(ctx, actor)
 			if err != nil {
@@ -330,8 +330,8 @@ func TestCallAteletPauseStep_DanglingWorkerDoesNotRecordPhantomSnapshot(t *testi
 			if stored.GetStatus() != ateapipb.Actor_STATUS_CRASHED {
 				t.Errorf("status = %v, want CRASHED", stored.GetStatus())
 			}
-			if got := stored.GetInProgressSnapshot(); got != "actor-1-never-written" {
-				t.Errorf("InProgressSnapshot = %q, want preserved for debugging", got)
+			if got := stored.GetInProgressLocalSnapshotName(); got != "actor-1-never-written" {
+				t.Errorf("InProgressLocalSnapshotName = %q, want preserved for debugging", got)
 			}
 			if tt.prevSnapshot == nil {
 				if stored.GetLatestSnapshot() != nil {

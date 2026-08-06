@@ -1219,11 +1219,13 @@ func (*RunResponse) Descriptor() ([]byte, []int) {
 
 type LocalCheckpointConfiguration struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// A sub-directory on the local filesystem below which the checkpoint data will be
-	// stored.  The structure of the checkpoint should generally be treated as opaque.
-	SnapshotPrefix string `protobuf:"bytes,1,opt,name=snapshot_prefix,json=snapshotPrefix,proto3" json:"snapshot_prefix,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// Names a sub-directory on the local filesystem below which the checkpoint
+	// data will be stored. atelet decides where that directory lives, from the
+	// actor's UID, so this is a bare name and must not contain a path separator.
+	// The structure of the checkpoint should generally be treated as opaque.
+	SnapshotName  string `protobuf:"bytes,1,opt,name=snapshot_name,json=snapshotName,proto3" json:"snapshot_name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *LocalCheckpointConfiguration) Reset() {
@@ -1256,28 +1258,20 @@ func (*LocalCheckpointConfiguration) Descriptor() ([]byte, []int) {
 	return file_atelet_proto_rawDescGZIP(), []int{17}
 }
 
-func (x *LocalCheckpointConfiguration) GetSnapshotPrefix() string {
+func (x *LocalCheckpointConfiguration) GetSnapshotName() string {
 	if x != nil {
-		return x.SnapshotPrefix
+		return x.SnapshotName
 	}
 	return ""
 }
 
 type ExternalCheckpointConfiguration struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// An object storage URI prefix below which the checkpoint data will be
-	// stored.
-	//
-	// The structure of the checkpoint should generally be treated as opaque. For
-	// gVisor, the checkpoint consists of a checkpoint.img file that contains the
-	// memory, sentry state, and filesystem deltas.  ateom will write additional
-	// files to store the WorkloadSpec, which must be reassembled before gVisor
-	// can restore a checkpoint.
-	//
-	// For example: "gs://bucket/actors/1234/snapshots/5678/"
-	SnapshotUriPrefix string `protobuf:"bytes,1,opt,name=snapshot_uri_prefix,json=snapshotUriPrefix,proto3" json:"snapshot_uri_prefix,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// The object storage URI of the snapshot to write. Object names are appended
+	// to it, so it addresses the snapshot as a whole rather than any one object.
+	SnapshotUri   string `protobuf:"bytes,1,opt,name=snapshot_uri,json=snapshotUri,proto3" json:"snapshot_uri,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *ExternalCheckpointConfiguration) Reset() {
@@ -1310,9 +1304,9 @@ func (*ExternalCheckpointConfiguration) Descriptor() ([]byte, []int) {
 	return file_atelet_proto_rawDescGZIP(), []int{18}
 }
 
-func (x *ExternalCheckpointConfiguration) GetSnapshotUriPrefix() string {
+func (x *ExternalCheckpointConfiguration) GetSnapshotUri() string {
 	if x != nil {
-		return x.SnapshotUriPrefix
+		return x.SnapshotUri
 	}
 	return ""
 }
@@ -1535,13 +1529,13 @@ type RestoreRequest struct {
 	Config isRestoreRequest_Config `protobuf_oneof:"config"`
 	// What content to restore from the checkpoint.
 	Scope SnapshotScope `protobuf:"varint,11,opt,name=scope,proto3,enum=atelet.SnapshotScope" json:"scope,omitempty"`
-	// The object storage URI prefix of the ActorTemplate's golden snapshot.
+	// The object storage URI of the ActorTemplate's golden snapshot.
 	// Set only when scope is SNAPSHOT_SCOPE_DATA_ON_GOLDEN: restore combines
 	// the golden snapshot (memory + full fs delta) with the durable data in
 	// the snapshot referenced by `config`. A top-level field rather than part
 	// of the `config` oneof: the actor's snapshot may be local (a pause
 	// checkpoint) while the golden snapshot is always external.
-	GoldenSnapshotUriPrefix string `protobuf:"bytes,12,opt,name=golden_snapshot_uri_prefix,json=goldenSnapshotUriPrefix,proto3" json:"golden_snapshot_uri_prefix,omitempty"`
+	GoldenSnapshotUri string `protobuf:"bytes,12,opt,name=golden_snapshot_uri,json=goldenSnapshotUri,proto3" json:"golden_snapshot_uri,omitempty"`
 	// When absent, actor traffic uses direct egress instead of atunnel.
 	EgressGateway *EgressGateway `protobuf:"bytes,13,opt,name=egress_gateway,json=egressGateway,proto3,oneof" json:"egress_gateway,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -1666,9 +1660,9 @@ func (x *RestoreRequest) GetScope() SnapshotScope {
 	return SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED
 }
 
-func (x *RestoreRequest) GetGoldenSnapshotUriPrefix() string {
+func (x *RestoreRequest) GetGoldenSnapshotUri() string {
 	if x != nil {
-		return x.GoldenSnapshotUriPrefix
+		return x.GoldenSnapshotUri
 	}
 	return ""
 }
@@ -1817,11 +1811,11 @@ const file_atelet_proto_rawDesc = "" +
 	"\rHTTPGetAction\x12\x12\n" +
 	"\x04path\x18\x01 \x01(\tR\x04path\x12\x12\n" +
 	"\x04port\x18\x02 \x01(\x05R\x04port\"\r\n" +
-	"\vRunResponse\"G\n" +
-	"\x1cLocalCheckpointConfiguration\x12'\n" +
-	"\x0fsnapshot_prefix\x18\x01 \x01(\tR\x0esnapshotPrefix\"Q\n" +
-	"\x1fExternalCheckpointConfiguration\x12.\n" +
-	"\x13snapshot_uri_prefix\x18\x01 \x01(\tR\x11snapshotUriPrefix\"\xab\x04\n" +
+	"\vRunResponse\"C\n" +
+	"\x1cLocalCheckpointConfiguration\x12#\n" +
+	"\rsnapshot_name\x18\x01 \x01(\tR\fsnapshotName\"D\n" +
+	"\x1fExternalCheckpointConfiguration\x12!\n" +
+	"\fsnapshot_uri\x18\x01 \x01(\tR\vsnapshotUri\"\xab\x04\n" +
 	"\x11CheckpointRequest\x12(\n" +
 	"\x10target_ateom_uid\x18\x01 \x01(\tR\x0etargetAteomUid\x12\x1a\n" +
 	"\batespace\x18\x02 \x01(\tR\batespace\x12\x1d\n" +
@@ -1837,7 +1831,7 @@ const file_atelet_proto_rawDesc = "" +
 	" \x01(\v2'.atelet.ExternalCheckpointConfigurationH\x00R\x0eexternalConfig\x12+\n" +
 	"\x05scope\x18\v \x01(\x0e2\x15.atelet.SnapshotScopeR\x05scopeB\b\n" +
 	"\x06config\"\x14\n" +
-	"\x12CheckpointResponse\"\xbb\x05\n" +
+	"\x12CheckpointResponse\"\xae\x05\n" +
 	"\x0eRestoreRequest\x12(\n" +
 	"\x10target_ateom_uid\x18\x01 \x01(\tR\x0etargetAteomUid\x12\x1a\n" +
 	"\batespace\x18\x02 \x01(\tR\batespace\x12\x1d\n" +
@@ -1851,8 +1845,8 @@ const file_atelet_proto_rawDesc = "" +
 	"\flocal_config\x18\t \x01(\v2$.atelet.LocalCheckpointConfigurationH\x00R\vlocalConfig\x12R\n" +
 	"\x0fexternal_config\x18\n" +
 	" \x01(\v2'.atelet.ExternalCheckpointConfigurationH\x00R\x0eexternalConfig\x12+\n" +
-	"\x05scope\x18\v \x01(\x0e2\x15.atelet.SnapshotScopeR\x05scope\x12;\n" +
-	"\x1agolden_snapshot_uri_prefix\x18\f \x01(\tR\x17goldenSnapshotUriPrefix\x12A\n" +
+	"\x05scope\x18\v \x01(\x0e2\x15.atelet.SnapshotScopeR\x05scope\x12.\n" +
+	"\x13golden_snapshot_uri\x18\f \x01(\tR\x11goldenSnapshotUri\x12A\n" +
 	"\x0eegress_gateway\x18\r \x01(\v2\x15.atelet.EgressGatewayH\x01R\regressGateway\x88\x01\x01B\b\n" +
 	"\x06configB\x11\n" +
 	"\x0f_egress_gateway\"\x11\n" +

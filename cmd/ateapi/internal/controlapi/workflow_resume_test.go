@@ -806,7 +806,7 @@ func TestCallAteletRestoreStep_CheckPrerequisite_WorkerOwnership(t *testing.T) {
 // location into the resume state, and the resume fails early when the golden
 // snapshot is unavailable.
 func TestLoadActorForResumeStep_OnGoldenDataResume(t *testing.T) {
-	const goldenLocation = "gs://bucket/ate-golden/snapshots/1/"
+	const goldenSnapshotURI = "gs://bucket/golden-root/snapshots/ate-golden/golden-1"
 	actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
 
 	tests := []struct {
@@ -826,7 +826,7 @@ func TestLoadActorForResumeStep_OnGoldenDataResume(t *testing.T) {
 		seedGolden     bool
 		goldenScope    ateapipb.SnapshotContentScope
 		wantCode       codes.Code
-		wantGoldenLoc  string
+		wantGoldenURI  string
 	}{
 		{
 			name:           "resolves golden location for Data durable snapshot",
@@ -836,7 +836,7 @@ func TestLoadActorForResumeStep_OnGoldenDataResume(t *testing.T) {
 			seedGolden:     true,
 			goldenScope:    ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
 			wantCode:       codes.OK,
-			wantGoldenLoc:  goldenLocation,
+			wantGoldenURI:  goldenSnapshotURI,
 		},
 		{
 			name:           "resolves golden location for paused actor with Data onPause",
@@ -847,7 +847,7 @@ func TestLoadActorForResumeStep_OnGoldenDataResume(t *testing.T) {
 			seedGolden:     true,
 			goldenScope:    ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
 			wantCode:       codes.OK,
-			wantGoldenLoc:  goldenLocation,
+			wantGoldenURI:  goldenSnapshotURI,
 		},
 		{
 			// A Full pause snapshot restores from its own content; the policy
@@ -860,7 +860,7 @@ func TestLoadActorForResumeStep_OnGoldenDataResume(t *testing.T) {
 			seedGolden:     true,
 			goldenScope:    ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
 			wantCode:       codes.OK,
-			wantGoldenLoc:  "",
+			wantGoldenURI:  "",
 		},
 		{
 			name:           "fails when golden snapshot is not Full",
@@ -894,7 +894,7 @@ func TestLoadActorForResumeStep_OnGoldenDataResume(t *testing.T) {
 			seedGolden:     true,
 			goldenScope:    ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
 			wantCode:       codes.OK,
-			wantGoldenLoc:  "",
+			wantGoldenURI:  "",
 		},
 		{
 			name:           "leaves golden location empty under ColdBoot fromData",
@@ -904,7 +904,7 @@ func TestLoadActorForResumeStep_OnGoldenDataResume(t *testing.T) {
 			seedGolden:     true,
 			goldenScope:    ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
 			wantCode:       codes.OK,
-			wantGoldenLoc:  "",
+			wantGoldenURI:  "",
 		},
 	}
 
@@ -917,7 +917,8 @@ func TestLoadActorForResumeStep_OnGoldenDataResume(t *testing.T) {
 				if _, err := persistence.CreateActorSnapshot(ctx, &ateapipb.ActorSnapshot{
 					Metadata:     &ateapipb.ResourceMetadata{Atespace: resources.GoldenActorAtespace, Name: tt.goldenSnapshot},
 					ContentScope: tt.goldenScope,
-				}, goldenLocation); err != nil {
+					SnapshotUri:  goldenSnapshotURI,
+				}); err != nil {
 					t.Fatalf("CreateActorSnapshot(golden): %v", err)
 				}
 			}
@@ -925,14 +926,15 @@ func TestLoadActorForResumeStep_OnGoldenDataResume(t *testing.T) {
 			var seedOpts []func(*ateapipb.Actor)
 			if tt.paused {
 				seedOpts = append(seedOpts, func(a *ateapipb.Actor) {
-					a.LocalSnapshotInfo = &ateapipb.LocalSnapshotInfo{SnapshotPrefix: "pause-1"}
+					a.LocalSnapshotInfo = &ateapipb.LocalSnapshotInfo{SnapshotName: "pause-1"}
 				})
 			} else {
 				snap, err := persistence.CreateActorSnapshot(ctx, &ateapipb.ActorSnapshot{
 					Metadata:     &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: "snap-1"},
 					SourceActor:  &ateapipb.ObjectRef{Atespace: actorRef.Atespace, Name: actorRef.Name},
 					ContentScope: tt.contentScope,
-				}, "gs://bucket/actors/1/snapshots/2/")
+					SnapshotUri:  "gs://bucket/root/snapshots/" + actorRef.Atespace + "/snap-1",
+				})
 				if err != nil {
 					t.Fatalf("CreateActorSnapshot: %v", err)
 				}
@@ -969,8 +971,8 @@ func TestLoadActorForResumeStep_OnGoldenDataResume(t *testing.T) {
 			if err != nil {
 				return
 			}
-			if state.GoldenSnapshotLocation != tt.wantGoldenLoc {
-				t.Errorf("state.GoldenSnapshotLocation = %q, want %q", state.GoldenSnapshotLocation, tt.wantGoldenLoc)
+			if got := state.GoldenSnapshotURI.String(); got != tt.wantGoldenURI {
+				t.Errorf("state.GoldenSnapshotURI = %q, want %q", got, tt.wantGoldenURI)
 			}
 			if !tt.paused && state.SnapshotScope != tt.contentScope {
 				t.Errorf("state.SnapshotScope = %v, want %v", state.SnapshotScope, tt.contentScope)
@@ -993,7 +995,8 @@ func TestLoadActorForResumeStep_GoldenFallbackRejectsNonFullGolden(t *testing.T)
 	if _, err := persistence.CreateActorSnapshot(ctx, &ateapipb.ActorSnapshot{
 		Metadata:     &ateapipb.ResourceMetadata{Atespace: resources.GoldenActorAtespace, Name: "golden-1"},
 		ContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
-	}, "gs://bucket/ate-golden/snapshots/1/"); err != nil {
+		SnapshotUri:  "gs://bucket/golden-root/snapshots/ate-golden/golden-1",
+	}); err != nil {
 		t.Fatalf("CreateActorSnapshot(golden): %v", err)
 	}
 	seedWorkflowActor(t, ctx, persistence, actorRef, "ns", "tmpl1", ateapipb.Actor_STATUS_SUSPENDED)

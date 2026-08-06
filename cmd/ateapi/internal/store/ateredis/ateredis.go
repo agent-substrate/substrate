@@ -126,31 +126,6 @@ func actorSnapshotTagScanPattern(atespace string) string {
 	return "actor-snapshot-tag:" + atespace + ":*"
 }
 
-type dbActorSnapshot struct {
-	Snapshot json.RawMessage `json:"snapshot"`
-	Location string          `json:"location"`
-}
-
-func marshalActorSnapshot(snapshot *ateapipb.ActorSnapshot, location string) ([]byte, error) {
-	b, err := protojson.Marshal(snapshot)
-	if err != nil {
-		return nil, err
-	}
-	return json.Marshal(dbActorSnapshot{Snapshot: b, Location: location})
-}
-
-func unmarshalActorSnapshot(b []byte) (*ateapipb.ActorSnapshot, string, error) {
-	var record dbActorSnapshot
-	if err := json.Unmarshal(b, &record); err != nil {
-		return nil, "", err
-	}
-	snapshot := &ateapipb.ActorSnapshot{}
-	if err := protojson.Unmarshal(record.Snapshot, snapshot); err != nil {
-		return nil, "", err
-	}
-	return snapshot, record.Location, nil
-}
-
 func atespaceDBKey(name string) string {
 	return "atespace:" + name
 }
@@ -435,11 +410,11 @@ func (s *Persistence) CreateActor(ctx context.Context, actor *ateapipb.Actor) (*
 	return dbActor, nil
 }
 
-func (s *Persistence) CreateActorSnapshot(ctx context.Context, snapshot *ateapipb.ActorSnapshot, location string) (*ateapipb.ActorSnapshot, error) {
+func (s *Persistence) CreateActorSnapshot(ctx context.Context, snapshot *ateapipb.ActorSnapshot) (*ateapipb.ActorSnapshot, error) {
 	dbKey := actorSnapshotDBKey(snapshot.GetMetadata().GetAtespace(), snapshot.GetMetadata().GetName())
 	dbSnapshot := proto.Clone(snapshot).(*ateapipb.ActorSnapshot)
 	dbSnapshot.Metadata = newCreateMetadata(snapshot.GetMetadata().GetAtespace(), snapshot.GetMetadata().GetName())
-	b, err := marshalActorSnapshot(dbSnapshot, location)
+	b, err := protojson.Marshal(dbSnapshot)
 	if err != nil {
 		return nil, fmt.Errorf("while marshaling actor snapshot: %w", err)
 	}
@@ -453,36 +428,36 @@ func (s *Persistence) CreateActorSnapshot(ctx context.Context, snapshot *ateapip
 	return dbSnapshot, nil
 }
 
-func (s *Persistence) GetActorSnapshot(ctx context.Context, atespace, name string) (*ateapipb.ActorSnapshot, string, error) {
+func (s *Persistence) GetActorSnapshot(ctx context.Context, atespace, name string) (*ateapipb.ActorSnapshot, error) {
 	dbKey := actorSnapshotDBKey(atespace, name)
 	b, err := s.rdb.Get(ctx, dbKey).Bytes()
 	if err != nil {
 		if errors.Is(err, redis.Nil) {
-			return nil, "", store.ErrNotFound
+			return nil, store.ErrNotFound
 		}
-		return nil, "", fmt.Errorf("while getting actor snapshot key %q: %w", dbKey, err)
+		return nil, fmt.Errorf("while getting actor snapshot key %q: %w", dbKey, err)
 	}
-	snapshot, location, err := unmarshalActorSnapshot(b)
-	if err != nil {
-		return nil, "", fmt.Errorf("while unmarshaling actor snapshot: %w", err)
+	snapshot := &ateapipb.ActorSnapshot{}
+	if err := protojson.Unmarshal(b, snapshot); err != nil {
+		return nil, fmt.Errorf("while unmarshaling actor snapshot: %w", err)
 	}
-	return snapshot, location, nil
+	return snapshot, nil
 }
 
-func (s *Persistence) GetActorSnapshotByTag(ctx context.Context, atespace, name string) (*ateapipb.ActorSnapshot, string, *ateapipb.ActorSnapshotTag, error) {
+func (s *Persistence) GetActorSnapshotByTag(ctx context.Context, atespace, name string) (*ateapipb.ActorSnapshot, *ateapipb.ActorSnapshotTag, error) {
 	b, err := s.rdb.Get(ctx, actorSnapshotTagDBKey(atespace, name)).Bytes()
 	if err != nil {
 		if errors.Is(err, redis.Nil) {
-			return nil, "", nil, store.ErrNotFound
+			return nil, nil, store.ErrNotFound
 		}
-		return nil, "", nil, fmt.Errorf("while resolving actor snapshot tag %s/%s: %w", atespace, name, err)
+		return nil, nil, fmt.Errorf("while resolving actor snapshot tag %s/%s: %w", atespace, name, err)
 	}
 	tag := &ateapipb.ActorSnapshotTag{}
 	if err := protojson.Unmarshal(b, tag); err != nil {
-		return nil, "", nil, fmt.Errorf("while unmarshaling actor snapshot tag %s/%s: %w", atespace, name, err)
+		return nil, nil, fmt.Errorf("while unmarshaling actor snapshot tag %s/%s: %w", atespace, name, err)
 	}
-	snapshot, location, err := s.GetActorSnapshot(ctx, tag.GetSnapshot().GetAtespace(), tag.GetSnapshot().GetName())
-	return snapshot, location, tag, err
+	snapshot, err := s.GetActorSnapshot(ctx, tag.GetSnapshot().GetAtespace(), tag.GetSnapshot().GetName())
+	return snapshot, tag, err
 }
 
 func (s *Persistence) ListActorSnapshots(ctx context.Context, atespace string, pageSize int32, pageTokenStr string) ([]*ateapipb.ActorSnapshot, string, error) {
@@ -506,9 +481,9 @@ func (s *Persistence) ListActorSnapshots(ctx context.Context, atespace string, p
 			if getCmd.Err() != nil {
 				return 0, fmt.Errorf("while getting actor snapshot: %w", getCmd.Err())
 			}
-			snapshot, _, err := unmarshalActorSnapshot([]byte(getCmd.Val()))
-			if err != nil {
-				return 0, err
+			snapshot := &ateapipb.ActorSnapshot{}
+			if err := protojson.Unmarshal([]byte(getCmd.Val()), snapshot); err != nil {
+				return 0, fmt.Errorf("while unmarshaling actor snapshot: %w", err)
 			}
 			result = append(result, snapshot)
 			collected++
@@ -522,7 +497,7 @@ func (s *Persistence) ListActorSnapshots(ctx context.Context, atespace string, p
 }
 
 func (s *Persistence) TagActorSnapshot(ctx context.Context, atespace, name string, tag *ateapipb.ActorSnapshotTag) (*ateapipb.ActorSnapshotTag, error) {
-	if _, _, err := s.GetActorSnapshot(ctx, atespace, name); err != nil {
+	if _, err := s.GetActorSnapshot(ctx, atespace, name); err != nil {
 		return nil, err
 	}
 	dbTag := proto.Clone(tag).(*ateapipb.ActorSnapshotTag)
@@ -601,7 +576,7 @@ func (s *Persistence) UpdateActorSnapshotTag(ctx context.Context, atespace, name
 }
 
 func (s *Persistence) DeleteActorSnapshotTag(ctx context.Context, atespace, name string) (*ateapipb.ActorSnapshotTag, error) {
-	_, _, tag, err := s.GetActorSnapshotByTag(ctx, atespace, name)
+	_, tag, err := s.GetActorSnapshotByTag(ctx, atespace, name)
 	if err != nil {
 		return nil, err
 	}

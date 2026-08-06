@@ -185,15 +185,17 @@ message CheckpointWorkloadRequest {
 
   WorkloadSpec spec = 7;
 
-  // An object storage URI prefix below which the checkpoint data will be
-  // stored.
+  // The object storage URI of the snapshot to write. Object names are appended
+  // to it, so it addresses the snapshot as a whole rather than any one object.
   //
   // The structure of the checkpoint should generally be treated as opaque. For
   // gVisor, the checkpoint consists of a checkpoint.img file that contains the
   // memory, sentry state, and filesystem deltas.
   //
-  // For example: "gs://bucket/actors/1234/snapshots/5678/"
-  string snapshot_uri_prefix = 8;
+  // The control plane sends an ActorSnapshot's snapshot_uri, whose layout is
+  // "<snapshotsConfig.location>/snapshots/<atespace>/<snapshot name>". For
+  // example: "gs://bucket/root/snapshots/team-a/5678".
+  string snapshot_uri = 8;
 
   // runtime_asset_paths maps a runtime asset name to the local on-disk path
   // atelet fetched it to (see RunWorkloadRequest). Empty for gVisor.
@@ -221,8 +223,9 @@ message RestoreWorkloadRequest {
 
   WorkloadSpec spec = 7;
 
-  // The object storage URI prefix of the snapshot to restore.
-  string snapshot_uri_prefix = 8;
+  // The object storage URI of the snapshot to restore. Object names are
+  // appended to it; it addresses the snapshot, not any one object.
+  string snapshot_uri = 8;
 
   // runtime_asset_paths maps a runtime asset name to the local on-disk path
   // atelet fetched it to (see RunWorkloadRequest). Empty for gVisor.
@@ -234,10 +237,10 @@ message RestoreWorkloadRequest {
   // When absent, actor traffic uses direct egress instead of atunnel.
   optional EgressGateway egress_gateway = 12;
 
-  // The object storage URI prefix of the ActorTemplate's golden snapshot.
+  // The object storage URI of the ActorTemplate's golden snapshot.
   // Set only when scope is SNAPSHOT_SCOPE_DATA_ON_GOLDEN. Mirrors the
-  // snapshot_uri_prefix contract (field 8).
-  string golden_snapshot_uri_prefix = 13;
+  // snapshot_uri contract (field 8).
+  string golden_snapshot_uri = 13;
 }
 
 message RestoreWorkloadResponse {

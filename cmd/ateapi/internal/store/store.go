@@ -64,14 +64,15 @@ type Interface interface {
 	// empty. Returns a page of actors and a next page token.
 	ListActors(ctx context.Context, atespace string, pageSize int32, pageToken string) ([]*ateapipb.Actor, string, error)
 
-	// Creates an immutable ActorSnapshot and stores its private physical location.
-	CreateActorSnapshot(ctx context.Context, snapshot *ateapipb.ActorSnapshot, location string) (*ateapipb.ActorSnapshot, error)
+	// Creates an immutable ActorSnapshot. The caller sets snapshot_uri; the
+	// store keeps no location of its own.
+	CreateActorSnapshot(ctx context.Context, snapshot *ateapipb.ActorSnapshot) (*ateapipb.ActorSnapshot, error)
 
-	// Fetches an ActorSnapshot and its private physical location.
-	GetActorSnapshot(ctx context.Context, atespace, name string) (*ateapipb.ActorSnapshot, string, error)
+	// Fetches an ActorSnapshot.
+	GetActorSnapshot(ctx context.Context, atespace, name string) (*ateapipb.ActorSnapshot, error)
 
 	// Resolves an Atespace-owned tag to an ActorSnapshot in constant time.
-	GetActorSnapshotByTag(ctx context.Context, atespace, name string) (*ateapipb.ActorSnapshot, string, *ateapipb.ActorSnapshotTag, error)
+	GetActorSnapshotByTag(ctx context.Context, atespace, name string) (*ateapipb.ActorSnapshot, *ateapipb.ActorSnapshotTag, error)
 
 	// Lists ActorSnapshots in one atespace, or all atespaces when empty.
 	ListActorSnapshots(ctx context.Context, atespace string, pageSize int32, pageToken string) ([]*ateapipb.ActorSnapshot, string, error)
