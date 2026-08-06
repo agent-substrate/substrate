@@ -4534,7 +4534,7 @@ type Worker struct {
 	// sandbox, taken from the ateom container's resource limits. The scheduler
 	// only places an actor on a worker whose capacity is >= the actor's declared
 	// resource limits. Zero means "unknown/unset": treated as unconstrained so
-	// placement is not blocked (matching the pre-capacity behaviour).
+	// placement is not blocked (matching the pre-capacity behavior).
 	CpuMilliCapacity    int64 `protobuf:"varint,12,opt,name=cpu_milli_capacity,json=cpuMilliCapacity,proto3" json:"cpu_milli_capacity,omitempty"`          // CPU capacity in millicores.
 	MemoryBytesCapacity int64 `protobuf:"varint,13,opt,name=memory_bytes_capacity,json=memoryBytesCapacity,proto3" json:"memory_bytes_capacity,omitempty"` // Memory capacity in bytes.
 	unknownFields       protoimpl.UnknownFields

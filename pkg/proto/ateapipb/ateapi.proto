@@ -894,9 +894,9 @@ message Worker {
   // sandbox, taken from the ateom container's resource limits. The scheduler
   // only places an actor on a worker whose capacity is >= the actor's declared
   // resource limits. Zero means "unknown/unset": treated as unconstrained so
-  // placement is not blocked (matching the pre-capacity behaviour).
-  int64 cpu_milli_capacity = 12;      // CPU capacity in millicores.
-  int64 memory_bytes_capacity = 13;   // Memory capacity in bytes.
+  // placement is not blocked (matching the pre-capacity behavior).
+  int64 cpu_milli_capacity = 12;    // CPU capacity in millicores.
+  int64 memory_bytes_capacity = 13; // Memory capacity in bytes.
 }
 
 message Assignment {

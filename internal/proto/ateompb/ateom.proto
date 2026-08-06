@@ -273,8 +273,8 @@ message RestoreWorkloadRequest {
   // (re)size the sandbox on a DATA-scope restore (fresh guest container). On a
   // FULL micro-VM restore the size baked into the snapshot is authoritative and
   // these are ignored. Zero means "unset": keep the runtime default.
-  int64 cpu_milli = 14;      // CPU limit in millicores (1000 = one core).
-  int64 memory_bytes = 15;   // Memory limit in bytes.
+  int64 cpu_milli = 14;    // CPU limit in millicores (1000 = one core).
+  int64 memory_bytes = 15; // Memory limit in bytes.
 }
 
 message RestoreWorkloadResponse {

@@ -47,7 +47,7 @@ type Constraints struct {
 	// >= these. Zero means "unconstrained" for that dimension (the actor did not
 	// declare a limit), and a worker that reports zero capacity for a dimension
 	// is treated as unconstrained too, so placement is never blocked by missing
-	// data (matching the pre-capacity behaviour).
+	// data (matching the pre-capacity behavior).
 	CPUMilli    int64
 	MemoryBytes int64
 }

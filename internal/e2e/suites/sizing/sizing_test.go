@@ -56,7 +56,7 @@ type resourcesResponse struct {
 // resource-limits redesign: an ActorTemplate that declares spec.resources.limits
 // must produce a sandbox sized to those limits. The plumbing unit tests prove
 // the limits reach the OCI spec; this proves the running sandbox actually
-// honours them, by resuming an actor and asking it (via the probe /resources
+// honors them, by resuming an actor and asking it (via the probe /resources
 // endpoint) what compute envelope it sees from the inside.
 //
 // gVisor is the default (and only) runtime in the macOS/colima kind
