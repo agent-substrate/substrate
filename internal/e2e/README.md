@@ -22,6 +22,24 @@ The e2e tests assume you have a cluster set up with Agent Substrate installed,
 for example via `hack/install-ate.sh --deploy-ate-system` or
 `hack/install-ate-kind.sh --deploy-ate-system`.
 
+## After a failure
+
+A suite deletes the namespaces it created only when it passed. A failed run
+keeps them, because the failure is usually explained inside a worker pod (the
+ateom logs, and for a micro-VM worker the guest's console tail), and deleting
+the namespace takes those pods with it:
+
+```shell
+$ kubectl logs -n <kept-namespace> <worker-pod>
+```
+
+Nothing reclaims them afterwards, and each namespace holds a WorkerPool's worth
+of running pods, so clean up once you are done reading:
+
+```shell
+$ hack/cleanup-e2e.sh   # deletes every namespace labeled ate.dev/e2e
+```
+
 ## Creating a new test suite
 
 Copy `testmain_test.go` from `internal/e2e/suites/example` into your new suite. It will

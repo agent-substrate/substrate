@@ -28,8 +28,8 @@ import (
 )
 
 func (s *Service) CreateAtespace(ctx context.Context, req *ateapipb.CreateAtespaceRequest) (*ateapipb.Atespace, error) {
-	if err := validateCreateAtespaceRequest(req); err != nil {
-		return nil, err
+	if errs := validateCreateAtespaceRequest(req); len(errs) > 0 {
+		return nil, toGRPCStatusError(errs)
 	}
 
 	name := req.GetAtespace().GetMetadata().GetName()
@@ -49,7 +49,7 @@ func (s *Service) CreateAtespace(ctx context.Context, req *ateapipb.CreateAtespa
 	return stored, nil
 }
 
-func validateCreateAtespaceRequest(req *ateapipb.CreateAtespaceRequest) error {
+func validateCreateAtespaceRequest(req *ateapipb.CreateAtespaceRequest) field.ErrorList {
 	var fldPath *field.Path
 	var errs field.ErrorList
 
@@ -57,7 +57,7 @@ func validateCreateAtespaceRequest(req *ateapipb.CreateAtespaceRequest) error {
 	atespacePath := fldPath.Child("atespace")
 	if atespace == nil {
 		errs = append(errs, field.Required(atespacePath, ""))
-		return status.Error(codes.InvalidArgument, errs.ToAggregate().Error())
+		return errs
 	}
 
 	// Atespace is global-scoped: metadata.atespace must be empty, name required + valid.
@@ -71,8 +71,5 @@ func validateCreateAtespaceRequest(req *ateapipb.CreateAtespaceRequest) error {
 		errs = append(errs, resources.ValidateResourceName(val, p)...)
 	}
 
-	if len(errs) > 0 {
-		return status.Error(codes.InvalidArgument, errs.ToAggregate().Error())
-	}
-	return nil
+	return errs
 }

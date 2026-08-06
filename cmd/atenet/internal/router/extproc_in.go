@@ -22,6 +22,8 @@ import (
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 )
 
+const authorityHeader = ":authority"
+
 type requestMetadata struct {
 	headers map[string]string
 	path    string
@@ -44,7 +46,7 @@ func newRequestMetadata(headers []*corev3.HeaderValue) *requestMetadata {
 		if k == ":path" {
 			path = val
 		}
-		if k == ":authority" || k == "host" {
+		if k == authorityHeader || k == "host" {
 			host = val
 		}
 	}
@@ -56,17 +58,18 @@ func newRequestMetadata(headers []*corev3.HeaderValue) *requestMetadata {
 	}
 }
 
-// parseActorRef extracts the (atespace, actor name) an incoming request is
-// addressed to from its Host/:authority, which has the form
+// parseActorRef extracts the actor an incoming request is addressed to from its
+// Host/:authority, which has the form
 // "<actor_name>.<atespace>.actors.resources.substrate.ate.dev" (optionally with a
-// port). The atespace is required because an actor name is only unique within its
-// atespace.
-func parseActorRef(host string) (atespace, actorName string, err error) {
+// port). The atespace is part of the name because an actor name is only unique
+// within its atespace.
+func parseActorRef(host string) (resources.ActorRef, error) {
 	if strings.Contains(host, ":") {
-		host, _, err = net.SplitHostPort(host)
+		h, _, err := net.SplitHostPort(host)
 		if err != nil {
-			return "", "", err
+			return resources.ActorRef{}, err
 		}
+		host = h
 	}
 	return resources.ParseActorDNSName(host)
 }

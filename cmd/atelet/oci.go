@@ -102,8 +102,9 @@ func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, acto
 		extraDirs = append(extraDirs, vm.GetMountPath())
 	}
 	if err := imagecache.WriteSpec(bundlePath, &imagecache.OverlaySpec{
-		Layers:    img.LayerDirs,
-		ExtraDirs: extraDirs,
+		ImageDigest: img.Digest.String(),
+		Layers:      img.LayerDirs,
+		ExtraDirs:   extraDirs,
 	}); err != nil {
 		return fmt.Errorf("while writing overlay spec: %w", err)
 	}

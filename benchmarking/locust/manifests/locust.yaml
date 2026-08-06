@@ -90,7 +90,12 @@ spec:
         - "-f"
         - "/app/tests"
         - "--worker"
-        - "--master-host=localhost"
+        # Literal IPv4, not "localhost". The master binds 0.0.0.0:5557, which
+        # is IPv4-only; locust sets ZMQ_IPV6 on the worker socket whenever the
+        # master host resolves to anything AF_INET6, and the pod's /etc/hosts
+        # maps localhost to ::1 as well as 127.0.0.1. The worker would then
+        # dial [::1]:5557 and retry forever against a silent master.
+        - "--master-host=127.0.0.1"
         env:
         - name: OTEL_EXPORTER_OTLP_ENDPOINT
           value: http://opentelemetry-collector.gke-managed-otel.svc.cluster.local:4317

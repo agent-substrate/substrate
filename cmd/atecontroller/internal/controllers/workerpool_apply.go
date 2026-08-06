@@ -24,42 +24,129 @@ import (
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 )
 
+// ateomOTelResourceAttributes mirrors atelet.yaml; service.instance.id is the pod
+// uid so each worker pod is a distinct telemetry source.
+const ateomOTelResourceAttributes = "k8s.namespace.name=$(POD_NAMESPACE),k8s.pod.name=$(POD_NAME),k8s.pod.uid=$(POD_UID),service.instance.id=$(POD_UID)"
+
+// workerTerminationGracePeriodSeconds is the hardcoded pod termination grace
+// period for worker pods (60 minutes).
+const workerTerminationGracePeriodSeconds int64 = 3600
+
+// ateomOTelSettings is the telemetry configuration propagated to ateom worker
+// pods. A zero value leaves the pods without telemetry env.
+type ateomOTelSettings struct {
+	// Endpoint is the OTLP collector address. Empty disables ateom telemetry
+	// entirely, so the other fields are ignored.
+	Endpoint string
+	// MetricExportInterval overrides the SDK's 60s PeriodicReader interval. It is
+	// the raw OTEL_METRIC_EXPORT_INTERVAL value, i.e. whole milliseconds; the SDK
+	// falls back to its default when it does not parse. Empty keeps the default.
+	//
+	// ateom registers no instruments of its own, so its only telemetry is
+	// otelgrpc's rpc.server.* and it stays invisible to the collector until the
+	// first export tick fires. Shortening the interval is what keeps that
+	// startup gap inside an e2e budget; production leaves it unset.
+	MetricExportInterval string
+	// MetricExportTimeout overrides the SDK's  per-export timeout, in the same
+	// whole-millisecond form as MetricExportInterval. Empty keeps the default.
+	MetricExportTimeout string
+	// TracesSampler and TracesSamplerArg are the raw OTEL_TRACES_SAMPLER and
+	// OTEL_TRACES_SAMPLER_ARG values, passed through untouched: ateom's own
+	// serverboot resolution validates them. Empty sampler keeps the worker's
+	// default and drops the arg, which is dead config on its own.
+	TracesSampler    string
+	TracesSamplerArg string
+}
+
+const (
+	atunnelIdentityVolume       = "atunnel-identity"
+	atunnelIdentityMountPath    = "/run/podidentity.podcert.ate.dev"
+	atunnelEgressTrustVolume    = "atunnel-egress-trust"
+	atunnelEgressTrustMountPath = "/run/servicedns.podcert.ate.dev"
+)
+
 // buildDeploymentApplyConfig constructs the SSA apply configuration for the
 // Deployment managed by a WorkerPool. Only fields owned by this controller
-// are declared here.
-func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool) *appsv1ac.DeploymentApplyConfiguration {
+// are declared here. otel, when it carries an endpoint, is propagated to the
+// ateom container so it pushes telemetry to that collector.
+func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otel ateomOTelSettings) *appsv1ac.DeploymentApplyConfiguration {
 	containerAC := corev1ac.Container().
 		WithName("ateom").
 		WithImage(wp.Spec.AteomImage).
 		WithArgs(
 			"--pod-uid=$(POD_UID)",
+			"--atunnel-listen-address=0.0.0.0:443",
+			"--atunnel-credential-bundle="+atunnelIdentityMountPath+"/credential-bundle.pem",
+			"--atunnel-trust-bundle="+atunnelIdentityMountPath+"/trust-bundle.pem",
+			"--atunnel-egress-listen-address=0.0.0.0:15001",
+			"--atunnel-egress-trust-bundle="+atunnelEgressTrustMountPath+"/trust-bundle.pem",
 		).
+		WithPorts(corev1ac.ContainerPort().
+			WithName("https").
+			WithContainerPort(443).
+			WithProtocol(corev1.ProtocolTCP)).
 		WithSecurityContext(ateomSecurityContext(wp.Spec.SandboxClass)).
-		WithEnv(
-			corev1ac.EnvVar().
-				WithName("POD_UID").
-				WithValueFrom(corev1ac.EnvVarSource().
-					WithFieldRef(corev1ac.ObjectFieldSelector().
-						WithFieldPath("metadata.uid"))),
-		).
-		WithVolumeMounts(corev1ac.VolumeMount().
-			WithName("run-ateom").
-			WithMountPath(ateompath.BasePath).
-			WithMountPropagation(corev1.MountPropagationHostToContainer))
+		WithEnv(ateomContainerEnv(otel)...).
+		WithVolumeMounts(
+			corev1ac.VolumeMount().
+				WithName("run-ateom").
+				WithMountPath(ateompath.BasePath).
+				WithMountPropagation(corev1.MountPropagationHostToContainer),
+			corev1ac.VolumeMount().
+				WithName(atunnelIdentityVolume).
+				WithMountPath(atunnelIdentityMountPath).
+				WithReadOnly(true),
+			corev1ac.VolumeMount().
+				WithName(atunnelEgressTrustVolume).
+				WithMountPath(atunnelEgressTrustMountPath).
+				WithReadOnly(true),
+		)
 
 	podSpecAC := corev1ac.PodSpec().
 		WithSecurityContext(corev1ac.PodSecurityContext().
 			WithRunAsUser(0).
 			WithRunAsGroup(0)).
-		WithVolumes(corev1ac.Volume().
-			WithName("run-ateom").
-			WithHostPath(corev1ac.HostPathVolumeSource().
-				WithPath(ateompath.BasePath).
-				WithType(corev1.HostPathDirectoryOrCreate)))
+		WithVolumes(
+			corev1ac.Volume().
+				WithName("run-ateom").
+				WithHostPath(corev1ac.HostPathVolumeSource().
+					WithPath(ateompath.BasePath).
+					WithType(corev1.HostPathDirectoryOrCreate)),
+			corev1ac.Volume().
+				WithName(atunnelIdentityVolume).
+				WithProjected(corev1ac.ProjectedVolumeSource().
+					WithSources(
+						corev1ac.VolumeProjection().
+							WithPodCertificate(corev1ac.PodCertificateProjection().
+								WithSignerName("podidentity.podcert.ate.dev/identity").
+								WithKeyType("ECDSAP256").
+								WithCredentialBundlePath("credential-bundle.pem")),
+						corev1ac.VolumeProjection().
+							WithClusterTrustBundle(corev1ac.ClusterTrustBundleProjection().
+								WithSignerName("podidentity.podcert.ate.dev/identity").
+								WithLabelSelector(metav1ac.LabelSelector().
+									WithMatchLabels(map[string]string{"podcert.ate.dev/canarying": "live"})).
+								WithPath("trust-bundle.pem")),
+					),
+				),
+			corev1ac.Volume().
+				WithName(atunnelEgressTrustVolume).
+				WithProjected(corev1ac.ProjectedVolumeSource().
+					WithSources(
+						corev1ac.VolumeProjection().
+							WithClusterTrustBundle(corev1ac.ClusterTrustBundleProjection().
+								WithSignerName("servicedns.podcert.ate.dev/identity").
+								WithLabelSelector(metav1ac.LabelSelector().
+									WithMatchLabels(map[string]string{"podcert.ate.dev/canarying": "live"})).
+								WithPath("trust-bundle.pem")),
+					),
+				),
+		)
 
 	applyWorkerPoolPodTemplate(podSpecAC, containerAC, wp.Spec.Template)
 	maybeApplyMicroVMPodShape(podSpecAC, containerAC, wp.Spec.SandboxClass)
 	podSpecAC.WithContainers(containerAC)
+	podSpecAC.WithTerminationGracePeriodSeconds(workerTerminationGracePeriodSeconds)
 
 	return appsv1ac.Deployment(wp.Name, wp.Namespace).
 		WithOwnerReferences(metav1ac.OwnerReference().
@@ -78,6 +165,53 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool) *appsv1ac.Deployment
 					"ate.dev/worker-pool": wp.Name,
 				}).
 				WithSpec(podSpecAC)))
+}
+
+// ateomContainerEnv adds the OTLP endpoint and resource identity only when
+// telemetry is configured. POD_* refs precede OTEL_RESOURCE_ATTRIBUTES so its
+// $(POD_*) substitutions resolve.
+func ateomContainerEnv(otel ateomOTelSettings) []*corev1ac.EnvVarApplyConfiguration {
+	envs := []*corev1ac.EnvVarApplyConfiguration{
+		fieldRefEnv("POD_UID", "metadata.uid"),
+	}
+	if otel.Endpoint == "" {
+		return envs
+	}
+	envs = append(envs,
+		fieldRefEnv("POD_NAME", "metadata.name"),
+		fieldRefEnv("POD_NAMESPACE", "metadata.namespace"),
+		corev1ac.EnvVar().WithName("OTEL_EXPORTER_OTLP_ENDPOINT").WithValue(otel.Endpoint),
+		corev1ac.EnvVar().WithName("OTEL_RESOURCE_ATTRIBUTES").WithValue(ateomOTelResourceAttributes),
+	)
+	if otel.MetricExportInterval != "" {
+		envs = append(envs, corev1ac.EnvVar().
+			WithName("OTEL_METRIC_EXPORT_INTERVAL").
+			WithValue(otel.MetricExportInterval))
+	}
+	if otel.MetricExportTimeout != "" {
+		envs = append(envs, corev1ac.EnvVar().
+			WithName("OTEL_METRIC_EXPORT_TIMEOUT").
+			WithValue(otel.MetricExportTimeout))
+	}
+	if otel.TracesSampler != "" {
+		envs = append(envs, corev1ac.EnvVar().
+			WithName("OTEL_TRACES_SAMPLER").
+			WithValue(otel.TracesSampler))
+		if otel.TracesSamplerArg != "" {
+			envs = append(envs, corev1ac.EnvVar().
+				WithName("OTEL_TRACES_SAMPLER_ARG").
+				WithValue(otel.TracesSamplerArg))
+		}
+	}
+	return envs
+}
+
+func fieldRefEnv(name, fieldPath string) *corev1ac.EnvVarApplyConfiguration {
+	return corev1ac.EnvVar().
+		WithName(name).
+		WithValueFrom(corev1ac.EnvVarSource().
+			WithFieldRef(corev1ac.ObjectFieldSelector().
+				WithFieldPath(fieldPath)))
 }
 
 // ateomGvisorCapabilities is the capability set an unprivileged gVisor worker

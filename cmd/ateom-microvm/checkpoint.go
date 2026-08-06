@@ -25,11 +25,14 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/ateomnet"
+
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/ch"
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/kata"
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/imagecache"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/resources"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -58,21 +61,25 @@ import (
 func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.CheckpointWorkloadRequest) (*ateompb.CheckpointWorkloadResponse, error) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
+	if err := s.deactivateActorNetworking(ctx); err != nil {
+		return nil, err
+	}
 
-	atespace := req.GetAtespace()
-	name := req.GetActorName()
+	actorRef := resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()}
 	actorUID := req.GetActorUid()
 	templateNS := req.GetActorTemplateNamespace()
 	templateName := req.GetActorTemplateName()
 
-	s.actorLogger.EmitLifecycleLog("Actor checkpointing", atespace, name, actorUID, templateNS, templateName)
+	s.actorLogger.EmitLifecycleLog("Actor checkpointing", actorRef, actorUID, templateNS, templateName)
 
 	// Check what the request asks for BEFORE touching the guest: these are
 	// properties of the request, and pausing first would leave the actor
 	// suspended mid-flight for a call that could never have succeeded.
 	//
 	// Durable-dir volumes are host-backed, so they are captured the same way
-	// under either scope — and are the ONLY thing a Data-scope snapshot captures.
+	// under either scope — and are the ONLY thing a Data-scope snapshot
+	// captures. DATA_ON_GOLDEN is restore-only (a DataOnGolden commit arrives
+	// here as plain DATA) and lands in the default rejection.
 	durable := hasDurableVolumes(req.GetSpec().GetContainers())
 	scope := req.GetScope()
 	switch scope {
@@ -115,8 +122,10 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 
 	// Only a Full snapshot captures the guest. A Data snapshot deliberately
 	// captures no VM state — no memory image, and no base-id, since nothing will
-	// reattach to the frozen virtio-fs lower: the actor cold-boots from the OCI
-	// image and gets its durable-dir volumes back from the tar below.
+	// reattach to the frozen virtio-fs lower: at restore the actor cold-boots
+	// from the OCI image (or, under an OnGolden data resume policy, is combined
+	// with the golden snapshot's guest state) and gets its durable-dir volumes
+	// back from the tar below.
 	var dSnapshot time.Duration
 	if scope == ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL {
 		var err error
@@ -150,11 +159,11 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	delete(s.running, actorUID)
 
 	// Tear down the per-activation actor network.
-	if err := s.cleanupActorNetwork(ctx); err != nil {
+	if err := ateomnet.CleanupActorNetwork(ctx, s.interiorNetNS); err != nil {
 		slog.WarnContext(ctx, "Failed to clean up actor network after checkpoint", slog.Any("err", err))
 	}
 
-	s.actorLogger.EmitLifecycleLog("Actor checkpointed", atespace, name, actorUID, templateNS, templateName)
+	s.actorLogger.EmitLifecycleLog("Actor checkpointed", actorRef, actorUID, templateNS, templateName)
 	slog.InfoContext(ctx, "Actor checkpointed", slog.String("id", actorUID), slog.Any("snapshot_files", snapshotFiles),
 		slog.String("scope", scope.String()), slog.Duration("pause", dPause),
 		slog.Duration("snapshot", dSnapshot),

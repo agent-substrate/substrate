@@ -16,11 +16,14 @@ package router
 
 import (
 	"context"
+	"math"
+	"sync/atomic"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/ateattr"
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/trace"
 	"golang.org/x/sync/singleflight"
 	"google.golang.org/grpc/codes"
@@ -28,77 +31,235 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 )
 
+// failFastResumeBudget is the total time the resumer spends retrying a resume
+// when request parking is disabled. In that mode only concurrent-update
+// conflicts are retried; capacity errors fail immediately.
+const failFastResumeBudget = 15 * time.Second
+
+// resumeBackoff builds the backoff between resume attempts while a request is
+// parked, from the configured retry parameters.
+//
+// It intentionally sets NO Cap. wait.Backoff's delay() zeroes Steps the moment
+// the delay reaches Cap, which would end retries long before the parking budget
+// (a Cap of 2s stops the loop in ~7 steps regardless of the budget). A gentle
+// Factor keeps the gap small on its own — from 100ms at the default 1.1 the gap
+// only grows to ~0.5s over a 5s budget — while Steps is set high so the budget
+// context passed to ExponentialBackoffWithContext, not the step count, bounds
+// the wait.
+func resumeBackoff(interval time.Duration, factor, jitter float64) wait.Backoff {
+	return wait.Backoff{
+		Steps:    math.MaxInt32,
+		Duration: interval,
+		Factor:   factor,
+		Jitter:   jitter,
+	}
+}
+
+// budgetExhaustedError marks a resume that was still blocked on a retryable
+// condition (e.g. "no free workers available") when the parking budget elapsed.
+// It wraps the last retryable error, so the HTTP boundary still maps the
+// underlying gRPC status faithfully (503 with the capacity message), while the
+// parking metrics can report budget exhaustion as its own outcome.
+type budgetExhaustedError struct{ lastErr error }
+
+func (e *budgetExhaustedError) Error() string { return e.lastErr.Error() }
+func (e *budgetExhaustedError) Unwrap() error { return e.lastErr }
+
+// ResumeOutcome indicates the singleflight execution state of an actor resumption request.
+type ResumeOutcome string
+
+const (
+	ResumeOutcomeNone      ResumeOutcome = ateattr.RouterResumeNone
+	ResumeOutcomeTriggered ResumeOutcome = ateattr.RouterResumeTriggered
+	ResumeOutcomeJoined    ResumeOutcome = ateattr.RouterResumeJoined
+)
+
+type resumeCallResult struct {
+	actor *ateapipb.Actor
+	// resumed is true if ResumeActor call executed a cold activation
+	// false if the actor was already running
+	resumed bool
+	// leaderID is the unique request ID (reqID) of the leader that initiated
+	// the singleflight execution. It helps disambiguates the leader caller
+	// (ResumeOutcomeTriggered) from joiner callers (ResumeOutcomeJoined).
+	leaderID uint64
+	err      error
+}
+
 // ActorResumer coordinates safe, deduplicated resumption of actors.
 type ActorResumer struct {
 	apiClient ateapipb.ControlClient
 	flight    singleflight.Group
+
+	// parkEnabled makes transient worker-pool saturation (FailedPrecondition)
+	// retryable, so a request is parked and retried until budget rather than
+	// failing immediately.
+	parkEnabled bool
+	// budget bounds the total time a single resume operation retries before the
+	// underlying error is returned.
+	budget time.Duration
+	// backoff paces the retries within the budget.
+	backoff wait.Backoff
+	// nextID is a counter assigned to each incoming ResumeActor call.
+	// Used as a unique ID to identify requests (reqID) and disambiguate the
+	// leader vs joiners for singleflight outcome classification.
+	nextID uint64
 }
 
-func NewActorResumer(apiClient ateapipb.ControlClient) *ActorResumer {
-	return &ActorResumer{
+// resumerOption configures an ActorResumer.
+type resumerOption func(*ActorResumer)
+
+// withParking configures parking behavior from cfg. When parking is enabled,
+// FailedPrecondition ("no free workers available") becomes retryable and the
+// resume is retried, at cfg's retry cadence, for up to cfg's budget. When
+// disabled, the resumer applies fail-fast-on-capacity behavior.
+func withParking(cfg ParkedRequestConfig) resumerOption {
+	cfg = cfg.normalized()
+	return func(r *ActorResumer) {
+		r.parkEnabled = cfg.enabled()
+		if r.parkEnabled {
+			r.budget = cfg.Budget
+		}
+		r.backoff = resumeBackoff(cfg.RetryInterval, cfg.RetryFactor, cfg.RetryJitter)
+	}
+}
+
+func NewActorResumer(apiClient ateapipb.ControlClient, opts ...resumerOption) *ActorResumer {
+	r := &ActorResumer{
 		apiClient: apiClient,
+		budget:    failFastResumeBudget,
+		backoff: resumeBackoff(defaultParkedRequestRetryInterval,
+			defaultParkedRequestRetryFactor, defaultParkedRequestRetryJitter),
+	}
+	for _, opt := range opts {
+		opt(r)
+	}
+	return r
+}
+
+// retryable reports whether err warrants another resume attempt while the
+// request remains parked. A concurrent-resume conflict (Aborted) is always
+// retried. Transient pool saturation (FailedPrecondition, "no free workers
+// available") and transient control-plane unavailability (Unavailable, e.g. an
+// ateapi rolling restart) are retried only when parking is enabled, turning a
+// momentary condition into a bounded wait instead of an immediate failure — a
+// parked request should ride out a blip, not fail on it with budget remaining.
+// All other codes (NotFound, DeadlineExceeded, PermissionDenied, ...) are
+// returned to the caller so the HTTP boundary can map them with full fidelity.
+func (r *ActorResumer) retryable(err error) bool {
+	switch status.Code(err) {
+	case codes.Aborted:
+		return true
+	case codes.FailedPrecondition, codes.Unavailable:
+		return r.parkEnabled
+	default:
+		return false
 	}
 }
 
 // ResumeActor ensures the requested actor is running. It deduplicates concurrent
-// requests within the process and retries when needed. The actor is addressed by
-// (atespace, actorName) since an actor name is only unique within its atespace.
-func (r *ActorResumer) ResumeActor(ctx context.Context, atespace, actorName string) (*ateapipb.Actor, error) {
+// requests within the process and, when parking is enabled, holds the request
+// while retrying transient failures until the budget elapses.
+func (r *ActorResumer) ResumeActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, ResumeOutcome, error) {
 	ctx, span := otel.Tracer(routerServiceName).Start(ctx, "ResumeActor",
-		trace.WithAttributes(
-			attribute.String("atespace", atespace),
-			attribute.String("actor", actorName),
-		))
+		trace.WithAttributes(ateattr.ActorRefAttributes(actorRef)...))
 	defer span.End()
 
-	ch := r.flight.DoChan(atespace+"/"+actorName, func() (interface{}, error) {
-		// We detach the context from the first caller using a fixed background timeout.
+	reqID := atomic.AddUint64(&r.nextID, 1)
+
+	ch := r.flight.DoChan(actorRef.String(), func() (interface{}, error) {
+		// We detach the context from the first caller using a fixed background budget.
 		// This guarantees that if Caller 1 disconnects or times out, the underlying
 		// resume operation continues running for Caller 2 and Caller 3 without failing.
-		bgCtx, bgCancel := context.WithTimeout(context.Background(), 15*time.Second)
+		//
+		// The budget is therefore per-FLIGHT, not per-caller: its clock starts with
+		// the first caller, and later callers de-duplicated onto this flight share
+		// its remaining budget and outcome. A late joiner can see budget_exhausted
+		// after waiting far less than a full budget itself — the accepted cost of
+		// one control-plane RPC per hot actor (see docs/request-parking.md).
+		bgCtx, bgCancel := context.WithTimeout(context.Background(), r.budget)
 		defer bgCancel()
 
-		backoff := wait.Backoff{
-			Steps:    7,
-			Duration: 200 * time.Millisecond,
-			Factor:   1.5,
-			Jitter:   0.2,
-		}
+		backoff := r.backoff
 
 		var resumeResp *ateapipb.ResumeActorResponse
+		var lastRetryErr error
 
 		err := wait.ExponentialBackoffWithContext(bgCtx, backoff, func(ctx context.Context) (bool, error) {
 			var err error
 			resumeResp, err = r.apiClient.ResumeActor(ctx, &ateapipb.ResumeActorRequest{
-				Actor: &ateapipb.ObjectRef{Atespace: atespace, Name: actorName},
+				Actor: actorRef.ToObjectRef(),
 			})
 			if err == nil {
 				return true, nil
 			}
 
-			if status.Code(err) == codes.Aborted {
-				return false, nil // Concurrent resume call, retry.
+			if r.retryable(err) {
+				lastRetryErr = err // remember it in case the budget elapses
+				return false, nil  // park: retry until the budget elapses
 			}
-			// Other gRPC errors (NotFound, FailedPrecondition, Unavailable,
-			// DeadlineExceeded, ...) are returned to the caller unchanged so
-			// the HTTP boundary can map them with full fidelity.
 			return false, err
 		})
 
 		if err != nil {
-			return nil, err
+			// If the budget elapsed while we were still retrying a transient error,
+			// surface that underlying error rather than the generic wait/deadline
+			// error so the HTTP boundary maps it faithfully (e.g. 503 "no free
+			// workers available") instead of a misleading timeout. The wrapper marks
+			// the exhaustion explicitly for the parking wait-duration metric.
+			//
+			// Gate on bgCtx itself, not on errors.Is(err, context.DeadlineExceeded):
+			// when the deadline lands during an in-flight ResumeActor RPC, gRPC
+			// surfaces a *status* error with code DeadlineExceeded that does not
+			// match the context sentinel, which would misreport budget exhaustion
+			// as a 504. bgCtx is this loop's only deadline source, so checking it
+			// covers both landing spots (mid-RPC and between retries).
+			if lastRetryErr != nil && (bgCtx.Err() != nil || wait.Interrupted(err)) {
+				return &resumeCallResult{leaderID: reqID, err: &budgetExhaustedError{lastErr: lastRetryErr}}, nil
+			}
+			return &resumeCallResult{leaderID: reqID, err: err}, nil
 		}
 
-		return resumeResp.GetActor(), nil
+		return &resumeCallResult{
+			actor:    resumeResp.GetActor(),
+			resumed:  resumeResp.GetResumed(),
+			leaderID: reqID,
+		}, nil
 	})
 
 	select {
 	case <-ctx.Done():
-		return nil, ctx.Err()
+		// The caller's request context was canceled before the singleflight resume completed.
+		// Return early with ResumeOutcomeNone ("none")
+		return nil, ResumeOutcomeNone, ctx.Err()
 	case res := <-ch:
-		if res.Err != nil {
-			return nil, res.Err
+		callRes, _ := res.Val.(*resumeCallResult)
+		if callRes == nil {
+			if res.Err != nil {
+				return nil, ResumeOutcomeNone, res.Err
+			}
+			return nil, ResumeOutcomeNone, status.Error(codes.Internal, "resume call returned nil result")
 		}
-		return res.Val.(*ateapipb.Actor), nil
+
+		// On error, return ResumeOutcomeNone ("none") so the failure is tagged
+		// under the 'outcome' label rather than misreported as an activation.
+		if callRes.err != nil {
+			return nil, ResumeOutcomeNone, callRes.err
+		}
+
+		// Disambiguate singleflight resume outcome:
+		// - ResumeOutcomeNone ("none"): resumed == false, actor was already active/running.
+		// - ResumeOutcomeTriggered ("triggered"): Cold activation leader (resumed == true, caller's reqID == leaderID).
+		// - ResumeOutcomeJoined ("joined"): Cold activation joiner (resumed == true, caller's reqID != leaderID).
+		outcome := ResumeOutcomeNone
+		if callRes.resumed {
+			if callRes.leaderID == reqID {
+				outcome = ResumeOutcomeTriggered
+			} else {
+				outcome = ResumeOutcomeJoined
+			}
+		}
+
+		return callRes.actor, outcome, nil
 	}
 }

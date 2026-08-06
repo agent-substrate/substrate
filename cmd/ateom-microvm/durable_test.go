@@ -25,8 +25,6 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/kata"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 )
 
 func TestHasDurableVolumes(t *testing.T) {
@@ -44,7 +42,9 @@ func TestHasDurableVolumes(t *testing.T) {
 			name: "one of several containers has a durable volume",
 			containers: []*ateompb.Container{
 				{Name: "sidecar"},
-				{Name: "app", DurableDirVolumes: []string{"/home/counter"}},
+				{Name: "app", DurableDirVolumeMounts: []*ateompb.DurableDirVolumeMount{
+					{VolumeName: "data", MountPath: "/home/counter"},
+				}},
 			},
 			want: true,
 		},
@@ -76,66 +76,13 @@ func durableDirWith(t *testing.T, volumes []string, strayFile bool) string {
 	return dir
 }
 
-func TestResolveDurableVolumeName(t *testing.T) {
-	tests := []struct {
-		name      string
-		volumes   []string
-		strayFile bool
-		want      string
-		wantCode  codes.Code
-	}{
-		{
-			name:    "single volume",
-			volumes: []string{"data"},
-			want:    "data",
-		},
-		{
-			name:      "regular files are not volumes",
-			volumes:   []string{"data"},
-			strayFile: true,
-			want:      "data",
-		},
-		{
-			name:     "no volume directory",
-			wantCode: codes.FailedPrecondition,
-		},
-		{
-			name:     "more than one volume is unsupported",
-			volumes:  []string{"data", "other"},
-			wantCode: codes.Unimplemented,
-		},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got, err := resolveDurableVolumeName(durableDirWith(t, tc.volumes, tc.strayFile))
-			if tc.wantCode != codes.OK {
-				if status.Code(err) != tc.wantCode {
-					t.Fatalf("error = %v (code %v), want code %v", err, status.Code(err), tc.wantCode)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("resolveDurableVolumeName: %v", err)
-			}
-			if got != tc.want {
-				t.Errorf("resolveDurableVolumeName() = %q, want %q", got, tc.want)
-			}
-		})
-	}
-}
-
-func TestResolveDurableVolumeNameMissingDir(t *testing.T) {
-	missing := filepath.Join(t.TempDir(), "no-such-dir")
-	if _, err := resolveDurableVolumeName(missing); err == nil {
-		t.Fatal("resolveDurableVolumeName succeeded with no durable-dir directory, want an error")
-	}
-}
-
 func TestDurableVolumesRoundTrip(t *testing.T) {
-	// Checkpoint: a volume with data, archived while the guest is paused.
-	src := durableDirWith(t, []string{"data"}, false)
-	if err := os.WriteFile(filepath.Join(src, "data", "a.txt"), []byte("42"), 0o644); err != nil {
-		t.Fatalf("writing volume content: %v", err)
+	// Checkpoint: every volume the actor has, archived while the guest is paused.
+	src := durableDirWith(t, []string{"data", "cache"}, false)
+	for vol, content := range map[string]string{"data": "42", "cache": "7"} {
+		if err := os.WriteFile(filepath.Join(src, vol, "a.txt"), []byte(content), 0o644); err != nil {
+			t.Fatalf("writing %q content: %v", vol, err)
+		}
 	}
 	checkpointDir := t.TempDir()
 	if err := tarDurableVolumes(t.Context(), src, checkpointDir); err != nil {
@@ -150,29 +97,32 @@ func TestDurableVolumesRoundTrip(t *testing.T) {
 	if err := untarDurableVolumes(dst, checkpointDir); err != nil {
 		t.Fatalf("untarDurableVolumes: %v", err)
 	}
-	got, err := os.ReadFile(filepath.Join(dst, "data", "a.txt"))
-	if err != nil {
-		t.Fatalf("reading restored content: %v", err)
-	}
-	if string(got) != "42" {
-		t.Errorf("restored content = %q, want %q", got, "42")
-	}
-	// The volume name must survive the round trip: it is how the guest mount
-	// path is resolved after a restore onto another node.
-	name, err := resolveDurableVolumeName(dst)
-	if err != nil {
-		t.Fatalf("resolveDurableVolumeName after restore: %v", err)
-	}
-	if name != "data" {
-		t.Errorf("resolved volume name = %q, want %q", name, "data")
+	// Both volumes come back, each under its own name: the names are what the
+	// guest mount paths are built from after a restore onto another node.
+	for vol, want := range map[string]string{"data": "42", "cache": "7"} {
+		got, err := os.ReadFile(filepath.Join(dst, vol, "a.txt"))
+		if err != nil {
+			t.Errorf("reading restored %q content: %v", vol, err)
+			continue
+		}
+		if string(got) != want {
+			t.Errorf("restored %q content = %q, want %q", vol, got, want)
+		}
 	}
 }
 
 func TestDurableMounts(t *testing.T) {
-	got := durableMounts("data", []string{"/home/counter", "/var/data"})
+	got := durableMounts([]*ateompb.DurableDirVolumeMount{
+		{VolumeName: "data", MountPath: "/home/counter"},
+		{VolumeName: "data", MountPath: "/var/data"},
+		{VolumeName: "cache", MountPath: "/var/cache"},
+	})
+	// Each mount points at its own volume's subdirectory of the shared durable
+	// mount, and one volume may appear at several paths.
 	want := []specs.Mount{
-		{Destination: "/home/counter", Source: "/run/ateom-durable/data", Type: "bind", Options: []string{"rbind", "rw"}},
-		{Destination: "/var/data", Source: "/run/ateom-durable/data", Type: "bind", Options: []string{"rbind", "rw"}},
+		{Destination: "/home/counter", Source: kata.GuestDurableVolumeDir("data"), Type: "bind", Options: []string{"rbind", "rw"}},
+		{Destination: "/var/data", Source: kata.GuestDurableVolumeDir("data"), Type: "bind", Options: []string{"rbind", "rw"}},
+		{Destination: "/var/cache", Source: kata.GuestDurableVolumeDir("cache"), Type: "bind", Options: []string{"rbind", "rw"}},
 	}
 	if len(got) != len(want) {
 		t.Fatalf("durableMounts() returned %d mounts, want %d", len(got), len(want))
@@ -183,48 +133,45 @@ func TestDurableMounts(t *testing.T) {
 			t.Errorf("mount %d = %+v, want %+v", i, got[i], want[i])
 		}
 	}
-	// The source must match what the agent mounts the durable share at.
-	if want[0].Source != kata.GuestDurableVolumeDir("data") {
-		t.Errorf("mount source %q does not match kata.GuestDurableVolumeDir", want[0].Source)
-	}
 }
 
 func TestWorkloadSpec(t *testing.T) {
 	base := []specs.Mount{{Destination: "/proc", Type: "proc", Source: "proc"}}
-	newContainer := func(paths []string) actorContainer {
+	newContainer := func(mounts ...*ateompb.DurableDirVolumeMount) actorContainer {
 		return actorContainer{
-			name:              "app",
-			spec:              &specs.Spec{Mounts: slices.Clone(base)},
-			durableMountPaths: paths,
+			name:          "app",
+			spec:          &specs.Spec{Mounts: slices.Clone(base)},
+			durableMounts: mounts,
 		}
 	}
 
-	t.Run("no durable volume returns the spec unchanged", func(t *testing.T) {
-		c := newContainer(nil)
-		if got := workloadSpec(c, ""); got != c.spec {
+	t.Run("container without durable mounts is unchanged", func(t *testing.T) {
+		c := newContainer()
+		if got := workloadSpec(c); got != c.spec {
 			t.Error("workloadSpec() copied the spec when there was nothing to add")
 		}
 	})
 
-	t.Run("container without mounts is unchanged", func(t *testing.T) {
-		c := newContainer(nil)
-		if got := workloadSpec(c, "data"); got != c.spec {
-			t.Error("workloadSpec() copied the spec for a container with no durable mounts")
+	t.Run("every durable volume is appended without mutating the source spec", func(t *testing.T) {
+		c := newContainer(
+			&ateompb.DurableDirVolumeMount{VolumeName: "data", MountPath: "/home/counter"},
+			&ateompb.DurableDirVolumeMount{VolumeName: "cache", MountPath: "/var/cache"},
+		)
+		got := workloadSpec(c)
+		if len(got.Mounts) != len(base)+2 {
+			t.Fatalf("workload spec has %d mounts, want %d", len(got.Mounts), len(base)+2)
 		}
-	})
-
-	t.Run("durable mounts are appended without mutating the source spec", func(t *testing.T) {
-		c := newContainer([]string{"/home/counter"})
-		got := workloadSpec(c, "data")
-		if len(got.Mounts) != len(base)+1 {
-			t.Fatalf("workload spec has %d mounts, want %d", len(got.Mounts), len(base)+1)
-		}
-		last := got.Mounts[len(got.Mounts)-1]
-		if last.Destination != "/home/counter" || last.Source != kata.GuestDurableVolumeDir("data") {
-			t.Errorf("appended mount = %+v, want the durable volume bound at /home/counter", last)
+		for i, want := range []specs.Mount{
+			{Destination: "/home/counter", Source: kata.GuestDurableVolumeDir("data")},
+			{Destination: "/var/cache", Source: kata.GuestDurableVolumeDir("cache")},
+		} {
+			appended := got.Mounts[len(base)+i]
+			if appended.Destination != want.Destination || appended.Source != want.Source {
+				t.Errorf("appended mount %d = %+v, want %s bound at %s", i, appended, want.Source, want.Destination)
+			}
 		}
 		// The prepared spec (shared with the carrier and the on-disk bundle) must
-		// not gain the bind.
+		// not gain the binds.
 		if len(c.spec.Mounts) != len(base) {
 			t.Errorf("source spec now has %d mounts, want %d", len(c.spec.Mounts), len(base))
 		}

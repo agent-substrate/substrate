@@ -90,6 +90,70 @@ func TestValidateObjectRef(t *testing.T) {
 	}
 }
 
+func TestValidateResourceMetadataRef(t *testing.T) {
+	const uid = "8bf5b1a2-3c4d-4e5f-8a9b-0c1d2e3f4a5b"
+	tests := []struct {
+		name      string
+		input     *ateapipb.ResourceMetadata
+		wantError field.ErrorList
+	}{
+		{
+			name:      "valid without preconditions",
+			input:     &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "id1"},
+			wantError: nil,
+		},
+		{
+			name:      "valid with preconditions",
+			input:     &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "id1", Uid: uid, Version: 7},
+			wantError: nil,
+		},
+		{
+			name:  "nil metadata",
+			input: nil,
+			wantError: field.ErrorList{
+				field.Required(field.NewPath("path", "atespace"), ""),
+				field.Required(field.NewPath("path", "name"), ""),
+			},
+		},
+		{
+			name:      "missing atespace",
+			input:     &ateapipb.ResourceMetadata{Name: "id1"},
+			wantError: field.ErrorList{field.Required(field.NewPath("path", "atespace"), "")},
+		},
+		{
+			name:      "invalid atespace",
+			input:     &ateapipb.ResourceMetadata{Atespace: "NS1", Name: "id1"},
+			wantError: field.ErrorList{field.Invalid(field.NewPath("path", "atespace"), "NS1", "")},
+		},
+		{
+			name:      "missing name",
+			input:     &ateapipb.ResourceMetadata{Atespace: "ns1"},
+			wantError: field.ErrorList{field.Required(field.NewPath("path", "name"), "")},
+		},
+		{
+			name:      "invalid name",
+			input:     &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "ID1"},
+			wantError: field.ErrorList{field.Invalid(field.NewPath("path", "name"), "ID1", "")},
+		},
+		{
+			name:      "invalid uid",
+			input:     &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "id1", Uid: "not-a-uuid"},
+			wantError: field.ErrorList{field.Invalid(field.NewPath("path", "uid"), "not-a-uuid", "")},
+		},
+		{
+			name:      "negative version",
+			input:     &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "id1", Version: -1},
+			wantError: field.ErrorList{field.Invalid(field.NewPath("path", "version"), int64(-1), "")},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ValidateResourceMetadataRef(tt.input, field.NewPath("path"))
+			field.ErrorMatcher{}.ByType().ByField().ByValue().Test(t, tt.wantError, got)
+		})
+	}
+}
+
 func TestValidateGlobalObjectRef(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -473,6 +537,56 @@ func TestValidateWorker(t *testing.T) {
 			NodeName:        "NODE_NAME",
 		},
 		wantMsg: "node_name: Invalid value",
+	}, {
+		name: "valid active worker state",
+		worker: &ateapipb.Worker{
+			WorkerNamespace: "ns-1",
+			WorkerPool:      "pool-1",
+			WorkerPod:       "pod-1",
+			Ip:              "10.0.0.1",
+			WorkerPodUid:    "123e4567-e89b-12d3-a456-426614174000",
+			NodeName:        "node-1.example.com",
+			State:           ateapipb.Worker_STATE_ACTIVE,
+		},
+		wantMsg: "",
+	}, {
+		name: "valid draining worker state",
+		worker: &ateapipb.Worker{
+			WorkerNamespace: "ns-1",
+			WorkerPool:      "pool-1",
+			WorkerPod:       "pod-1",
+			Ip:              "10.0.0.1",
+			WorkerPodUid:    "123e4567-e89b-12d3-a456-426614174000",
+			NodeName:        "node-1.example.com",
+			State:           ateapipb.Worker_STATE_DRAINING,
+		},
+		wantMsg: "",
+	}, {
+		// The zero value (STATE_UNSPECIFIED) is tolerated for backward
+		// compatibility with worker records written before the state field existed.
+		name: "unset worker state is tolerated",
+		worker: &ateapipb.Worker{
+			WorkerNamespace: "ns-1",
+			WorkerPool:      "pool-1",
+			WorkerPod:       "pod-1",
+			Ip:              "10.0.0.1",
+			WorkerPodUid:    "123e4567-e89b-12d3-a456-426614174000",
+			NodeName:        "node-1.example.com",
+			State:           ateapipb.Worker_STATE_UNSPECIFIED,
+		},
+		wantMsg: "",
+	}, {
+		name: "invalid worker state",
+		worker: &ateapipb.Worker{
+			WorkerNamespace: "ns-1",
+			WorkerPool:      "pool-1",
+			WorkerPod:       "pod-1",
+			Ip:              "10.0.0.1",
+			WorkerPodUid:    "123e4567-e89b-12d3-a456-426614174000",
+			NodeName:        "node-1.example.com",
+			State:           ateapipb.Worker_State(99),
+		},
+		wantMsg: "state: Unsupported value",
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

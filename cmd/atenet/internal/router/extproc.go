@@ -23,14 +23,16 @@ import (
 	"net"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/ateattr"
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 	envoy_type "github.com/envoyproxy/go-control-plane/envoy/type/v3"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/propagation"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
@@ -38,20 +40,24 @@ import (
 // ExtProcServer implements the Envoy external processing gRPC server
 // to dynamically manage actor activations based on request traffic.
 type ExtProcServer struct {
-	port          int
-	apiClient     ateapipb.ControlClient
-	recorder      *QueryRecorder
-	resumer       *ActorResumer
-	routeDuration metric.Float64Histogram
+	port              int
+	apiClient         ateapipb.ControlClient
+	recorder          *QueryRecorder
+	resumer           *ActorResumer
+	routeDuration     metric.Float64Histogram
+	parking           *parkingLot
+	routeViaAuthority bool
 }
 
-func NewExtProcServer(port int, apiClient ateapipb.ControlClient, routeDuration metric.Float64Histogram) *ExtProcServer {
+func NewExtProcServer(port int, apiClient ateapipb.ControlClient, routeDuration metric.Float64Histogram, parkCfg ParkedRequestConfig, parkMetrics *parkingMetrics, routeViaAuthority bool) *ExtProcServer {
 	return &ExtProcServer{
-		port:          port,
-		apiClient:     apiClient,
-		recorder:      NewQueryRecorder(100),
-		resumer:       NewActorResumer(apiClient),
-		routeDuration: routeDuration,
+		port:              port,
+		apiClient:         apiClient,
+		recorder:          NewQueryRecorder(100),
+		resumer:           NewActorResumer(apiClient, withParking(parkCfg)),
+		routeDuration:     routeDuration,
+		parking:           newParkingLot(parkCfg, parkMetrics),
+		routeViaAuthority: routeViaAuthority,
 	}
 }
 
@@ -92,8 +98,10 @@ func (s *ExtProcServer) Process(stream extprocv3.ExternalProcessor_ProcessServer
 		switch reqType := req.Request.(type) {
 		case *extprocv3.ProcessingRequest_RequestHeaders:
 			start := time.Now()
-			hResponse, rqm, target, tmplNs, tmplName, err := s.handleRequestHeaders(stream.Context(), reqType.RequestHeaders)
+			hResponse, rqm, target, tmplNs, tmplName, resumeOutcome, err := s.handleRequestHeaders(stream.Context(), reqType.RequestHeaders)
 			elapsed := time.Since(start)
+			outcomeStr := classifyOutcome(err)
+			resumeStr := string(resumeOutcome)
 			if err != nil {
 				slog.ErrorContext(stream.Context(), "Error during ext_proc RequestHeaders processing", slog.String("err", err.Error()))
 				var reqErr *reqError
@@ -102,11 +110,11 @@ func (s *ExtProcServer) Process(stream extprocv3.ExternalProcessor_ProcessServer
 				} else {
 					resp = immediateResponse(envoy_type.StatusCode_InternalServerError, err.Error())
 				}
-				s.recordRouteDuration(stream.Context(), elapsed, tmplNs, tmplName, classifyOutcome(err))
+				s.recordRouteDuration(stream.Context(), elapsed, tmplNs, tmplName, outcomeStr, resumeStr)
 				s.recorder.AddRouterRequest(start, elapsed, "Error", "-", rqm)
 			} else {
 				resp.Response = &extprocv3.ProcessingResponse_RequestHeaders{RequestHeaders: hResponse}
-				s.recordRouteDuration(stream.Context(), elapsed, tmplNs, tmplName, "ok")
+				s.recordRouteDuration(stream.Context(), elapsed, tmplNs, tmplName, outcomeStr, resumeStr)
 				s.recorder.AddRouterRequest(start, elapsed, "Route ok", target, rqm)
 			}
 
@@ -130,7 +138,7 @@ func (s *ExtProcServer) Process(stream extprocv3.ExternalProcessor_ProcessServer
 func (s *ExtProcServer) handleRequestHeaders(
 	ctx context.Context,
 	reqHeaders *extprocv3.HttpHeaders,
-) (*extprocv3.HeadersResponse, *requestMetadata, string, string, string, error) {
+) (*extprocv3.HeadersResponse, *requestMetadata, string, string, string, ResumeOutcome, error) {
 	metadata := newRequestMetadata(reqHeaders.Headers.GetHeaders())
 	slog.InfoContext(ctx, "Request", slog.String("host", metadata.host))
 
@@ -142,16 +150,27 @@ func (s *ExtProcServer) handleRequestHeaders(
 	ctx, span := otel.Tracer(routerServiceName).Start(ctx, "ExtProc.RequestHeaders")
 	defer span.End()
 
-	atespace, actorName, err := parseActorRef(metadata.host)
+	actorRef, err := parseActorRef(metadata.host)
 	if err != nil {
 		// Host is invalid, respond with 404.
-		return nil, metadata, "", "", "", invalidHostErr(metadata.host, err)
+		return nil, metadata, "", "", "", ResumeOutcomeNone, invalidHostErr(metadata.host, err)
 	}
 
-	slog.InfoContext(ctx, "ResumeActor", slog.String("atespace", atespace), slog.String("actor", actorName))
-	actor, err := s.resumer.ResumeActor(ctx, atespace, actorName)
+	// Admit the request to the parking lot before resuming. While resume is
+	// in-flight the request occupies a slot; if the actor's worker pool is
+	// momentarily saturated the resumer parks (retries) here rather than failing
+	// fast. A full lot sheds the request immediately so the router applies
+	// backpressure instead of queueing without bound.
+	release, ok := s.parking.enter(ctx)
+	if !ok {
+		return nil, metadata, "", "", "", ResumeOutcomeNone, parkingFullErr(actorRef.String())
+	}
+
+	slog.InfoContext(ctx, "ResumeActor", slog.Any("actor", actorRef))
+	actor, resumeOutcome, err := s.resumer.ResumeActor(ctx, actorRef)
+	release(parkOutcomeFor(err))
 	if err != nil {
-		return nil, metadata, "", "", "", mapResumeError(actorName, err)
+		return nil, metadata, "", "", "", resumeOutcome, mapResumeError(actorRef, err)
 	}
 
 	// Actor template identity, used as low-cardinality route-latency metric
@@ -159,54 +178,87 @@ func (s *ExtProcServer) handleRequestHeaders(
 	tmplNs := actor.GetActorTemplateNamespace()
 	tmplName := actor.GetActorTemplateName()
 
-	workerIP := actor.GetAteomPodIp()
+	workerIP := actor.GetWorkerAssignment().GetWorkerPodIp()
 	slog.InfoContext(ctx, "ResumeActor result",
-		slog.String("atespace", atespace),
-		slog.String("actor", actorName),
+		slog.Any("actor", actorRef),
 		slog.String("status", actor.GetStatus().String()),
 		slog.String("workerIP", workerIP))
 
 	if ip := net.ParseIP(workerIP); ip == nil {
-		return nil, metadata, "", tmplNs, tmplName, newReqError(envoy_type.StatusCode_InternalServerError,
-			"actor %q routing failed", actorName)
+		return nil, metadata, "", tmplNs, tmplName, resumeOutcome, newReqError(envoy_type.StatusCode_InternalServerError,
+			"actor %s routing failed", actorRef)
 	}
 
+	// The actor is reached through the in-worker atunnel ingress server, which
+	// listens on :443 (mTLS) and forwards to the actor's :80. The worker no
+	// longer DNATs pod-IP:80 to the actor, so the router dials :443 and the
+	// ORIGINAL_DST cluster's upstream TLS context presents the router's
+	// podidentity client cert (see buildOriginalDstCluster and
+	// buildUpstreamTransportSocket).
 	// TODO(bowei) -- handle more than port 80 on the actor.
-	targetAddr := net.JoinHostPort(workerIP, "80")
+	targetAddr := net.JoinHostPort(workerIP, "443")
 
-	slog.InfoContext(ctx, "Route ok", slog.String("actor", actorName), slog.String("targetAddr", targetAddr))
+	slog.InfoContext(ctx, "Route ok", slog.Any("actor", actorRef), slog.String("targetAddr", targetAddr))
 
-	// Route by rewriting the :authority header.
+	// Route by telling the ORIGINAL_DST cluster which worker atunnel address to
+	// dial, without touching :authority — atunnel authorizes the actor by the
+	// original Host (actor DNS name).
 	mutation := &extprocv3.HeaderMutation{}
-	addAuthorityMutation(targetAddr, mutation)
+	addRoutingMutations(targetAddr, metadata.host, s.routeViaAuthority, mutation)
 
 	return &extprocv3.HeadersResponse{
 		Response: &extprocv3.CommonResponse{
 			HeaderMutation: mutation,
 		},
-	}, metadata, targetAddr, tmplNs, tmplName, nil
+	}, metadata, targetAddr, tmplNs, tmplName, resumeOutcome, nil
 }
 
-func (s *ExtProcServer) recordRouteDuration(ctx context.Context, d time.Duration, tmplNs, tmplName, outcome string) {
+func (s *ExtProcServer) recordRouteDuration(ctx context.Context, d time.Duration, tmplNs, tmplName, outcome, resume string) {
 	if s.routeDuration == nil {
 		return
 	}
 	s.routeDuration.Record(ctx, d.Seconds(), metric.WithAttributes(
-		attribute.String("actor_template_namespace", tmplNs),
-		attribute.String("actor_template_name", tmplName),
-		attribute.String("outcome", outcome),
+		ateattr.TemplateNamespaceKey.String(tmplNs),
+		ateattr.TemplateNameKey.String(tmplName),
+		ateattr.RouterOutcomeKey.String(outcome),
+		ateattr.RouterResumeKey.String(resume),
 	))
 }
 
 func classifyOutcome(err error) string {
-	switch {
-	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
-		return "cancelled"
-	default:
-		var re *reqError
-		if errors.As(err, &re) && re.statusCode == int(envoy_type.StatusCode_NotFound) {
-			return "not_found"
-		}
-		return "error"
+	if err == nil {
+		return "ok"
 	}
+	if errors.Is(err, context.Canceled) || status.Code(err) == codes.Canceled {
+		return "cancelled"
+	}
+	if errors.Is(err, context.DeadlineExceeded) || status.Code(err) == codes.DeadlineExceeded {
+		return "timeout"
+	}
+	switch status.Code(err) {
+	case codes.FailedPrecondition:
+		return "no_capacity"
+	case codes.Aborted:
+		return "lock_conflict"
+	case codes.NotFound:
+		return "not_found"
+	case codes.Unavailable:
+		return "unavailable"
+	case codes.ResourceExhausted:
+		return "rate_limited"
+	}
+	var re *reqError
+	if errors.As(err, &re) {
+		switch envoy_type.StatusCode(re.statusCode) {
+		case envoy_type.StatusCode_NotFound:
+			return "not_found"
+		case envoy_type.StatusCode_ServiceUnavailable:
+			return "no_capacity"
+		case envoy_type.StatusCode_GatewayTimeout:
+			return "timeout"
+		case envoy_type.StatusCode_TooManyRequests:
+			return "rate_limited"
+		}
+	}
+	return "resume_error"
 }

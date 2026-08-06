@@ -32,6 +32,10 @@ const (
 	DefaultServiceAccountTokenFile = "/var/run/secrets/kubernetes.io/serviceaccount/token"
 )
 
+// roundRobinServiceConfig spreads RPCs across every address the resolver
+// returns.
+const roundRobinServiceConfig = `{"loadBalancingConfig": [{"round_robin":{}}]}`
+
 // ClientConfig configures how to dial the ateapi gRPC server. The server
 // cert is always validated against CAFile. UseTokenAuth selects the client
 // credential: a client certificate from ClientCredBundle (mutual TLS,
@@ -87,11 +91,13 @@ func DialOptions(cfg ClientConfig) ([]grpc.DialOption, error) {
 		return []grpc.DialOption{
 			grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)),
 			grpc.WithPerRPCCredentials(&fileTokenCreds{path: cfg.TokenFile}),
+			grpc.WithDefaultServiceConfig(roundRobinServiceConfig),
 		}, nil
 	}
 	tlsCfg.GetClientCertificate = credbundle.ClientLoader(cfg.ClientCredBundle)
 	return []grpc.DialOption{
 		grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)),
+		grpc.WithDefaultServiceConfig(roundRobinServiceConfig),
 	}, nil
 }
 

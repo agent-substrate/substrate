@@ -34,7 +34,7 @@ All servers need to initialize an OpenTelemetry exporter and tracer provider.  S
 ```go
 tp, err := serverboot.InitTracing(ctx, serverboot.TracingOptions{
 	ServiceName: "ateapi",
-	Sampler:     sdktrace.ParentBased(sdktrace.AlwaysSample()),
+	Sampling:    serverboot.ResolveTraceSampling(ctx, serverboot.ParentRatioSampling(serverboot.ControlPlaneTraceRatio)),
 })
 if err != nil {
 	serverboot.Fatal(ctx, "Failed to initialize tracing", err)
@@ -48,10 +48,36 @@ Note the following important features:
 
 * We are not validating the TLS certs of the collector
 * We provide a service name to exporter to identify which process is emitting the spans
-* We only trace on-demand when desired by the client, as determined by the presence of tracing metadata/headers in the request
-  * For production, we will want to gate who/how tracing can be enabled for security purposes
+* Every component samples by default at a per-component ratio (see below); a client that arrives with a sampled trace context is always traced end to end
+  * For production, we will want to gate who/how client-forced tracing can be enabled for security purposes
 
-The YAML manifest for your server should include the `OTEL_EXPORTER_OTLP_ENDPOINT` environment variable to point the exporter to GKE's managed traces collector, e.g.:
+### Sampling defaults and overrides
+
+Samplers are resolved with `serverboot.ResolveTraceSampling`, which applies the standard `OTEL_TRACES_SAMPLER` / `OTEL_TRACES_SAMPLER_ARG` environment variables on top of a per-component default. Pass the component default; never pass a raw sampler to the provider, because an explicit sampler silences the env vars.
+
+| Component | Default |
+|---|---|
+| ateapi, atelet, ateom-gvisor, ateom-microvm | `parentbased_traceidratio` 0.1 |
+| atenet router (data plane root) | `parentbased_traceidratio` 0.01, mirrored into Envoy's `RandomSampling` |
+| glutton (benchmarking) | `parentbased_always_off` |
+| boomer (benchmarking) | runtime-controlled via dynconfig, ignores the env vars |
+
+All defaults are `ParentBased`, so a request that arrives already sampled stays sampled on every hop, and one that arrives explicitly unsampled stays unsampled. Only parentless requests are subject to the ratio, at whichever component roots the trace.
+
+An invalid sampler name, or a missing or unparsable ratio arg, keeps the component default and logs a warning. This deliberately diverges from the OTel SDK's own env handling, which falls back to 100% sampling on invalid input and reads a missing arg as ratio 1.0.
+
+In agentgateway mode the data plane root fraction lives in the agentgateway ConfigMap (`randomSampling`, same 0.01 default). Unlike Envoy's `RandomSampling`, it is static config that env overrides on the router do not reach, so adjust both together.
+
+These are head sampling ratios that bound what leaves the process. Keep decisions based on request outcome (errors, latency) belong in a collector pipeline, not in substrate binaries.
+
+### Disabling tracing (perf/load tests)
+
+Set `OTEL_TRACES_SAMPLER=always_off` on the components under test (for ateom workers, via the controller's `--otel-traces-sampler` flag). `parentbased_always_off` is not enough under a load generator: boomer and locust send ratio-sampled trace context, and parent based samplers honor it. Alternatively set the generator's `trace_probability` to 0 and leave the servers alone. On kind, also override ateapi's `parentbased_always_on` pin.
+
+The YAML manifest for your server needs `OTEL_EXPORTER_OTLP_ENDPOINT` set so the
+exporter knows where to push spans. Do not hardcode it — consume the shared
+`ate-otel-config` ConfigMap via `envFrom`, so your server follows the collector
+address for whichever environment it is deployed to:
 
 ```yaml
       containers:
@@ -59,11 +85,21 @@ The YAML manifest for your server should include the `OTEL_EXPORTER_OTLP_ENDPOIN
           image: ko://github.com/agent-substrate/substrate/cmd/ateapi
           ports:
             - containerPort: 443
-          env:
-            # Tracing related environment variables
-            - name: OTEL_EXPORTER_OTLP_ENDPOINT
-              value: "http://opentelemetry-collector.gke-managed-otel.svc.cluster.local:4317"
+          # Supplies OTEL_EXPORTER_OTLP_ENDPOINT (and, on kind, the metric
+          # export tunables) for every control plane component.
+          envFrom:
+            - configMapRef:
+                name: ate-otel-config
 ```
+
+The ConfigMap is defined in
+[`manifests/ate-install/ate-otel-config.yaml`](../../../manifests/ate-install/ate-otel-config.yaml)
+for GKE, with a kind replacement of the same name in
+[`manifests/ate-install/kind/ate-otel-config.yaml`](../../../manifests/ate-install/kind/ate-otel-config.yaml)
+that points at the in-cluster collector. Editing either one does not restart the
+pods that consume it; follow a change with `kubectl rollout restart`.
+
+For how to deploy that collector — the GKE managed option, a self-managed DaemonSet, and the constraints on what endpoints Substrate can talk to — see [OpenTelemetry Collector Best Practices](otel-collector.md).
 
 #### gRPC Servers
 When implementing a gRPC server, you should include the following middleware to handle tracing:
@@ -115,10 +151,14 @@ tracing metadata in their requests to give users the ability to initiate a trace
 
 #### Golang
 
-Like for servers, the tracer provider must be initialized and shutdown, but no exporter is required (note the sampler toggle):
+Like for servers, the tracer provider must be initialized and shutdown, but no exporter is required. When tracing is not requested, install nothing: a provider with a `NeverSample` sampler would inject an explicitly unsampled trace context, which pins every `ParentBased` server sampler downstream to not sampled and defeats the server side ratios. With the OTel globals left as noop, no context is injected and the server roots the trace itself.
 
 ```go
 func initTracing(ctx context.Context, enabled bool) (*sdktrace.TracerProvider, error) {
+	if !enabled {
+		return nil, nil
+	}
+
 	res, err := resource.New(ctx,
 		resource.WithAttributes(
 			semconv.UserAgentOriginal("my-client-name"),
@@ -128,14 +168,9 @@ func initTracing(ctx context.Context, enabled bool) (*sdktrace.TracerProvider, e
 		return nil, fmt.Errorf("failed to create resource: %w", err)
 	}
 
-	sampler := sdktrace.NeverSample()
-	if enabled {
-		sampler = sdktrace.AlwaysSample()
-	}
-
 	tp := sdktrace.NewTracerProvider(
 		sdktrace.WithResource(res),
-		sdktrace.WithSampler(sampler),
+		sdktrace.WithSampler(sdktrace.AlwaysSample()),
 	)
 	otel.SetTracerProvider(tp)
 	otel.SetTextMapPropagator(propagation.TraceContext{})

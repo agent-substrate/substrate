@@ -17,12 +17,16 @@ package controlapi
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"go.opentelemetry.io/otel/attribute"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/metric/metricdata"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 )
@@ -67,21 +71,38 @@ func mustMetric(t *testing.T, reader *sdkmetric.ManualReader, name string) metri
 	return m
 }
 
-func worker(pool, class string, assigned bool) *ateapipb.Worker {
-	w := &ateapipb.Worker{WorkerPool: pool, SandboxClass: class}
+func worker(namespace, pool, class string, assigned bool) *ateapipb.Worker {
+	w := &ateapipb.Worker{WorkerNamespace: namespace, WorkerPool: pool, SandboxClass: class}
 	if assigned {
 		w.Assignment = &ateapipb.Assignment{}
 	}
 	return w
 }
 
+type series struct{ namespace, pool, state, class string }
+
+func seriesCounts(sum metricdata.Sum[int64]) map[series]int64 {
+	got := make(map[series]int64)
+	for _, dp := range sum.DataPoints {
+		namespace, _ := dp.Attributes.Value(ateattr.WorkerPoolNamespaceKey)
+		pool, _ := dp.Attributes.Value(ateattr.WorkerPoolNameKey)
+		state, _ := dp.Attributes.Value(ateattr.WorkerStateKey)
+		class, _ := dp.Attributes.Value(ateattr.SandboxClassKey)
+		got[series{namespace.AsString(), pool.AsString(), state.AsString(), class.AsString()}] = dp.Value
+	}
+	return got
+}
+
+// TestWorkerCountTally covers the tally, including two pools that share a name in
+// different namespaces: a WorkerPool is namespaced, so those must stay two series.
 func TestWorkerCountTally(t *testing.T) {
 	workers := func() ([]*ateapipb.Worker, error) {
 		return []*ateapipb.Worker{
-			worker("pool-a", "gvisor", false),
-			worker("pool-a", "gvisor", false),
-			worker("pool-a", "gvisor", true),
-			worker("pool-b", "microvm", false),
+			worker("ns-1", "pool-a", "gvisor", false),
+			worker("ns-1", "pool-a", "gvisor", false),
+			worker("ns-1", "pool-a", "gvisor", true),
+			worker("ns-1", "pool-b", "microvm", false),
+			worker("ns-2", "pool-a", "gvisor", false),
 		}, nil
 	}
 	reader := newWorkerCountReader(t, workers, noPools)
@@ -98,18 +119,12 @@ func TestWorkerCountTally(t *testing.T) {
 		t.Errorf("IsMonotonic = true, want false (updowncounter, not counter)")
 	}
 
-	type key struct{ pool, state, class string }
-	got := make(map[key]int64)
-	for _, dp := range sum.DataPoints {
-		pool, _ := dp.Attributes.Value(ateattr.WorkerPoolNameKey)
-		state, _ := dp.Attributes.Value(ateattr.WorkerStateKey)
-		class, _ := dp.Attributes.Value(ateattr.SandboxClassKey)
-		got[key{pool.AsString(), state.AsString(), class.AsString()}] = dp.Value
-	}
-	want := map[key]int64{
-		{"pool-a", ateattr.WorkerStateIdle, "gvisor"}:     2,
-		{"pool-a", ateattr.WorkerStateAssigned, "gvisor"}: 1,
-		{"pool-b", ateattr.WorkerStateIdle, "microvm"}:    1,
+	got := seriesCounts(sum)
+	want := map[series]int64{
+		{"ns-1", "pool-a", ateattr.WorkerStateIdle, "gvisor"}:     2,
+		{"ns-1", "pool-a", ateattr.WorkerStateAssigned, "gvisor"}: 1,
+		{"ns-1", "pool-b", ateattr.WorkerStateIdle, "microvm"}:    1,
+		{"ns-2", "pool-a", ateattr.WorkerStateIdle, "gvisor"}:     1,
 	}
 	if len(got) != len(want) {
 		t.Fatalf("got %d series, want %d: %v", len(got), len(want), got)
@@ -134,9 +149,189 @@ func TestWorkerCountSkipsWhenCacheNotReady(t *testing.T) {
 	}
 }
 
-func workerPool(name string, class atev1alpha1.SandboxClass) *atev1alpha1.WorkerPool {
+// newTestInstruments builds the lifecycle/scheduler histograms on a local
+// ManualReader-backed provider so tests stay parallel-safe and never touch the
+// global meter provider.
+func newTestInstruments(t *testing.T) (*Instruments, *sdkmetric.ManualReader) {
+	t.Helper()
+	reader := sdkmetric.NewManualReader()
+	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
+	inst, err := NewInstruments(mp.Meter("ateapi"))
+	if err != nil {
+		t.Fatalf("NewInstruments: %v", err)
+	}
+	return inst, reader
+}
+
+// singleHistogramDP asserts name is a float histogram in seconds with exactly one
+// datapoint and returns it.
+func singleHistogramDP(t *testing.T, reader *sdkmetric.ManualReader, name string) metricdata.HistogramDataPoint[float64] {
+	t.Helper()
+	m := mustMetric(t, reader, name)
+	if m.Unit != "s" {
+		t.Errorf("%s unit = %q, want s", name, m.Unit)
+	}
+	hist, ok := m.Data.(metricdata.Histogram[float64])
+	if !ok {
+		t.Fatalf("%s data type = %T, want Histogram[float64]", name, m.Data)
+	}
+	if len(hist.DataPoints) != 1 {
+		t.Fatalf("%s: got %d datapoints, want 1", name, len(hist.DataPoints))
+	}
+	return hist.DataPoints[0]
+}
+
+// assertAttrKeys asserts the datapoint carries exactly want, order-independent.
+func assertAttrKeys(t *testing.T, dp metricdata.HistogramDataPoint[float64], want ...attribute.Key) {
+	t.Helper()
+	got := make(map[attribute.Key]bool, dp.Attributes.Len())
+	for _, kv := range dp.Attributes.ToSlice() {
+		got[kv.Key] = true
+	}
+	if len(got) != len(want) {
+		t.Errorf("attribute keys = %v, want %v", dp.Attributes.ToSlice(), want)
+	}
+	for _, k := range want {
+		if !got[k] {
+			t.Errorf("missing attribute key %s; got %v", k, dp.Attributes.ToSlice())
+		}
+	}
+}
+
+// attrString returns the string value of key k and whether it is present.
+func attrString(dp metricdata.HistogramDataPoint[float64], k attribute.Key) (string, bool) {
+	v, ok := dp.Attributes.Value(k)
+	return v.AsString(), ok
+}
+
+func TestLifecycleOpDurationShape(t *testing.T) {
+	inst, reader := newTestInstruments(t)
+
+	actor := &ateapipb.Actor{
+		ActorTemplateName:      "support-agent",
+		ActorTemplateNamespace: "ate-agents",
+		WorkerAssignment:       &ateapipb.WorkerAssignment{WorkerPool: "pool-a"},
+	}
+	template := &atev1alpha1.ActorTemplate{
+		Spec: atev1alpha1.ActorTemplateSpec{SandboxClass: atev1alpha1.SandboxClassGvisor},
+	}
+	inst.recordLifecycleOp(context.Background(), ateattr.OperationResume, time.Now(), nil,
+		lifecycleOpAttrs(actor, template, ateattr.SnapshotKindLatest)...)
+
+	dp := singleHistogramDP(t, reader, lifecycleOpDurationMetric)
+	assertAttrKeys(t, dp,
+		ateattr.ActorOperationNameKey,
+		ateattr.TemplateNameKey,
+		ateattr.TemplateNamespaceKey,
+		ateattr.WorkerPoolNameKey,
+		ateattr.SandboxClassKey,
+		ateattr.SnapshotKindKey,
+	)
+	if op, _ := attrString(dp, ateattr.ActorOperationNameKey); op != ateattr.OperationResume {
+		t.Errorf("operation = %q, want %q", op, ateattr.OperationResume)
+	}
+}
+
+// TestRecordLifecycleOp_OutcomeClassification asserts success omits error.type and
+// each gRPC failure maps onto its status-code string; the absence of error.type is
+// the success signal, so there is no separate failure counter.
+func TestRecordLifecycleOp_OutcomeClassification(t *testing.T) {
+	tests := []struct {
+		name          string
+		op            string
+		err           error
+		wantErrorType string // empty means error.type must be absent
+	}{
+		{name: "create success", op: ateattr.OperationCreate, err: nil, wantErrorType: ""},
+		{name: "create not found", op: ateattr.OperationCreate, err: status.Error(codes.NotFound, "missing"), wantErrorType: "NotFound"},
+		{name: "resume aborted", op: ateattr.OperationResume, err: status.Error(codes.Aborted, "conflict"), wantErrorType: "Aborted"},
+		{name: "resume crash", op: ateattr.OperationResume, err: status.Error(codes.DataLoss, "crashed"), wantErrorType: "DataLoss"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			inst, reader := newTestInstruments(t)
+			inst.recordLifecycleOp(context.Background(), tt.op, time.Now(), tt.err,
+				ateattr.TemplateNameKey.String("support-agent"),
+				ateattr.TemplateNamespaceKey.String("ate-agents"),
+			)
+
+			dp := singleHistogramDP(t, reader, lifecycleOpDurationMetric)
+			if op, _ := attrString(dp, ateattr.ActorOperationNameKey); op != tt.op {
+				t.Errorf("operation = %q, want %q", op, tt.op)
+			}
+			gotErrType, hasErrType := attrString(dp, ateattr.ErrorTypeKey)
+			if tt.wantErrorType == "" {
+				if hasErrType {
+					t.Errorf("error.type = %q, want absent", gotErrType)
+				}
+			} else if !hasErrType || gotErrType != tt.wantErrorType {
+				t.Errorf("error.type = %q (present=%v), want %q", gotErrType, hasErrType, tt.wantErrorType)
+			}
+		})
+	}
+}
+
+// TestSchedulerAssignmentShapeAndOutcomes asserts the assignment histogram stamps
+// pool only when a worker was assigned and error.type only for the error outcome,
+// so no_free_worker (a capacity signal) carries neither.
+func TestSchedulerAssignmentShapeAndOutcomes(t *testing.T) {
+	tests := []struct {
+		name          string
+		outcome       string
+		pool          string
+		class         string
+		err           error
+		wantKeys      []attribute.Key
+		wantErrorType string
+	}{
+		{
+			name:     "assigned stamps pool and class, no error.type",
+			outcome:  ateattr.SchedulerOutcomeAssigned,
+			pool:     "pool-a",
+			class:    "gvisor",
+			err:      nil,
+			wantKeys: []attribute.Key{ateattr.SchedulerOutcomeKey, ateattr.WorkerPoolNameKey, ateattr.SandboxClassKey},
+		},
+		{
+			name:     "no_free_worker carries class but neither pool nor error.type",
+			outcome:  ateattr.SchedulerOutcomeNoFreeWorker,
+			pool:     "",
+			class:    "gvisor",
+			err:      status.Error(codes.FailedPrecondition, "no free workers available"),
+			wantKeys: []attribute.Key{ateattr.SchedulerOutcomeKey, ateattr.SandboxClassKey},
+		},
+		{
+			name:          "error carries error.type, no pool, class omitted when unknown",
+			outcome:       ateattr.SchedulerOutcomeError,
+			pool:          "",
+			class:         "",
+			err:           status.Error(codes.Internal, "boom"),
+			wantKeys:      []attribute.Key{ateattr.SchedulerOutcomeKey, ateattr.ErrorTypeKey},
+			wantErrorType: "Internal",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			inst, reader := newTestInstruments(t)
+			inst.recordSchedulerAssignment(context.Background(), time.Now(), tt.outcome, tt.pool, tt.class, tt.err)
+
+			dp := singleHistogramDP(t, reader, schedulerAssignmentMetric)
+			assertAttrKeys(t, dp, tt.wantKeys...)
+			if o, _ := attrString(dp, ateattr.SchedulerOutcomeKey); o != tt.outcome {
+				t.Errorf("outcome = %q, want %q", o, tt.outcome)
+			}
+			if tt.wantErrorType != "" {
+				if et, ok := attrString(dp, ateattr.ErrorTypeKey); !ok || et != tt.wantErrorType {
+					t.Errorf("error.type = %q (present=%v), want %q", et, ok, tt.wantErrorType)
+				}
+			}
+		})
+	}
+}
+
+func workerPool(namespace, name string, class atev1alpha1.SandboxClass) *atev1alpha1.WorkerPool {
 	return &atev1alpha1.WorkerPool{
-		ObjectMeta: metav1.ObjectMeta{Name: name},
+		ObjectMeta: metav1.ObjectMeta{Namespace: namespace, Name: name},
 		Spec:       atev1alpha1.WorkerPoolSpec{SandboxClass: class},
 	}
 }
@@ -147,29 +342,22 @@ func workerPool(name string, class atev1alpha1.SandboxClass) *atev1alpha1.Worker
 func TestWorkerCountSeedsZeroForKnownPools(t *testing.T) {
 	pools := func(labels.Selector) ([]*atev1alpha1.WorkerPool, error) {
 		return []*atev1alpha1.WorkerPool{
-			workerPool("pool-a", ""),
-			workerPool("pool-c", atev1alpha1.SandboxClassMicroVM),
+			workerPool("ns-1", "pool-a", ""),
+			workerPool("ns-2", "pool-a", atev1alpha1.SandboxClassMicroVM),
 		}, nil
 	}
 	workers := func() ([]*ateapipb.Worker, error) {
-		return []*ateapipb.Worker{worker("pool-a", "gvisor", true)}, nil
+		return []*ateapipb.Worker{worker("ns-1", "pool-a", "gvisor", true)}, nil
 	}
 	reader := newWorkerCountReader(t, workers, pools)
 
 	sum := mustMetric(t, reader, workerpoolWorkersMetric).Data.(metricdata.Sum[int64])
-	type key struct{ pool, state, class string }
-	got := make(map[key]int64)
-	for _, dp := range sum.DataPoints {
-		pool, _ := dp.Attributes.Value(ateattr.WorkerPoolNameKey)
-		state, _ := dp.Attributes.Value(ateattr.WorkerStateKey)
-		class, _ := dp.Attributes.Value(ateattr.SandboxClassKey)
-		got[key{pool.AsString(), state.AsString(), class.AsString()}] = dp.Value
-	}
-	want := map[key]int64{
-		{"pool-a", ateattr.WorkerStateIdle, "gvisor"}:      0,
-		{"pool-a", ateattr.WorkerStateAssigned, "gvisor"}:  1,
-		{"pool-c", ateattr.WorkerStateIdle, "microvm"}:     0,
-		{"pool-c", ateattr.WorkerStateAssigned, "microvm"}: 0,
+	got := seriesCounts(sum)
+	want := map[series]int64{
+		{"ns-1", "pool-a", ateattr.WorkerStateIdle, "gvisor"}:      0,
+		{"ns-1", "pool-a", ateattr.WorkerStateAssigned, "gvisor"}:  1,
+		{"ns-2", "pool-a", ateattr.WorkerStateIdle, "microvm"}:     0,
+		{"ns-2", "pool-a", ateattr.WorkerStateAssigned, "microvm"}: 0,
 	}
 	if len(got) != len(want) {
 		t.Fatalf("got %d series, want %d: %v", len(got), len(want), got)

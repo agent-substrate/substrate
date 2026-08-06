@@ -35,7 +35,20 @@ const workerPoolFieldOwner = "workerpool-controller"
 
 type WorkerPoolReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	Scheme       *runtime.Scheme
+	OTelEndpoint string
+	// OTelMetricExportInterval is the OTEL_METRIC_EXPORT_INTERVAL propagated to
+	// ateom pods. Empty keeps the SDK's default.
+	OTelMetricExportInterval string
+	// OTelMetricExportTimeout is the OTEL_METRIC_EXPORT_TIMEOUT propagated to
+	// ateom pods. Empty keeps the SDK's default.
+	OTelMetricExportTimeout string
+	// OTelTracesSampler is the OTEL_TRACES_SAMPLER propagated to ateom pods.
+	// Empty keeps the ateom binary's default.
+	OTelTracesSampler string
+	// OTelTracesSamplerArg is the OTEL_TRACES_SAMPLER_ARG propagated to ateom
+	// pods. Ignored unless OTelTracesSampler is set.
+	OTelTracesSamplerArg string
 }
 
 //+kubebuilder:rbac:groups=ate.dev,resources=workerpools,verbs=get;list;watch;create;update;patch;delete
@@ -91,7 +104,13 @@ func (r *WorkerPoolReconciler) reconcileWorkerPool(ctx context.Context, wp *atev
 }
 
 func (r *WorkerPoolReconciler) applyDeployment(ctx context.Context, wp *atev1alpha1.WorkerPool) error {
-	depAC := buildDeploymentApplyConfig(wp)
+	depAC := buildDeploymentApplyConfig(wp, ateomOTelSettings{
+		Endpoint:             r.OTelEndpoint,
+		MetricExportInterval: r.OTelMetricExportInterval,
+		MetricExportTimeout:  r.OTelMetricExportTimeout,
+		TracesSampler:        r.OTelTracesSampler,
+		TracesSamplerArg:     r.OTelTracesSamplerArg,
+	})
 	if err := r.Apply(ctx, depAC, client.FieldOwner(workerPoolFieldOwner), client.ForceOwnership); err != nil {
 		return fmt.Errorf("failed to apply Deployment: %w", err)
 	}

@@ -61,7 +61,7 @@ build-demos:
 
 .PHONY: test
 test:
-	$(GO) test ./...
+	$(GO) test -race ./...
 
 .PHONY: e2e
 e2e: build build-demos

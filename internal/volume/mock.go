@@ -20,7 +20,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"sync"
 
 	"github.com/agent-substrate/substrate/internal/ateompath"
 )
@@ -39,88 +38,48 @@ var (
 // is scheduled to the same host.
 //
 // This plugin also does not cleanup the subdirectories, so that has to be done by the test infrastructure.
-type MockVolumePlugin struct {
-	mu      sync.Mutex
-	volumes map[string]*MockVolumeState
-	counter int
-}
-
-// MockVolumeState tracks the state of a mock volume.
-type MockVolumeState struct {
-	ID           string
-	Name         string
-	Capacity     string
-	StorageClass string
-	Node         string
-	Mounts       map[string]bool // targetPath -> mounted
-}
+//
+// The control-plane methods (Create/Delete/Attach/DetachVolume) are
+// intentionally stateless no-ops: they log and succeed, with no bookkeeping
+// of which volumes exist or which node they're attached to. Nothing reads
+// that state - the e2e test that exercises this plugin verifies the volume
+// actually worked by checking the real file MountVolume writes on the node,
+// not by querying the plugin. A stateful mock used to track this in an
+// in-process map, which broke once ate-api-server ran multiple replicas
+// (whichever replica handled a given RPC had no idea what a different
+// replica's map contained); going stateless removes the bug class instead
+// of syncing the state, since nothing actually needs it.
+type MockVolumePlugin struct{}
 
 // NewMockVolumePlugin creates a new MockVolumePlugin.
 func NewMockVolumePlugin() *MockVolumePlugin {
-	return &MockVolumePlugin{
-		volumes: make(map[string]*MockVolumeState),
-	}
+	return &MockVolumePlugin{}
 }
 
-// CreateVolume simulates volume provisioning.
+// CreateVolume simulates volume provisioning. The returned volumeID is
+// derived deterministically from name so repeated calls (retries) are
+// idempotent by construction, with no state needed to enforce that.
 func (p *MockVolumePlugin) CreateVolume(ctx context.Context, name string, capacity string, storageClass string) (string, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.counter++
-	volumeID := fmt.Sprintf("mock-vol-%d", p.counter)
+	volumeID := "mock-vol-" + name
 	slog.InfoContext(ctx, "MockVolumePlugin.CreateVolume", slog.String("name", name), slog.String("capacity", capacity), slog.String("storageClass", storageClass), slog.String("volumeID", volumeID))
-	p.volumes[volumeID] = &MockVolumeState{
-		ID:           volumeID,
-		Name:         name,
-		Capacity:     capacity,
-		StorageClass: storageClass,
-		Mounts:       make(map[string]bool),
-	}
 	return volumeID, nil
 }
 
 // DeleteVolume simulates volume deletion.
 func (p *MockVolumePlugin) DeleteVolume(ctx context.Context, volumeID string) error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
 	slog.InfoContext(ctx, "MockVolumePlugin.DeleteVolume", slog.String("volumeID", volumeID))
-	if _, ok := p.volumes[volumeID]; !ok {
-		slog.ErrorContext(ctx, "MockVolumePlugin.DeleteVolume failed: volume not found", slog.String("volumeID", volumeID))
-		return fmt.Errorf("volume %s not found", volumeID)
-	}
-	delete(p.volumes, volumeID)
 	return nil
 }
 
 // AttachVolume simulates volume attachment to a node.
 func (p *MockVolumePlugin) AttachVolume(ctx context.Context, volumeID string, node string) error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
 	slog.InfoContext(ctx, "MockVolumePlugin.AttachVolume", slog.String("volumeID", volumeID), slog.String("node", node))
-	vol, ok := p.volumes[volumeID]
-	if !ok {
-		slog.ErrorContext(ctx, "MockVolumePlugin.AttachVolume failed: volume not found", slog.String("volumeID", volumeID))
-		return fmt.Errorf("volume %s not found", volumeID)
-	}
-	vol.Node = node
 	return nil
 }
 
 // DetachVolume simulates volume detachment from a node.
 func (p *MockVolumePlugin) DetachVolume(ctx context.Context, volumeID string, node string) error {
-	p.mu.Lock()
-	defer p.mu.Unlock()
 	slog.InfoContext(ctx, "MockVolumePlugin.DetachVolume", slog.String("volumeID", volumeID), slog.String("node", node))
-	vol, ok := p.volumes[volumeID]
-	if !ok {
-		slog.ErrorContext(ctx, "MockVolumePlugin.DetachVolume failed: volume not found", slog.String("volumeID", volumeID))
-		return fmt.Errorf("volume %s not found", volumeID)
-	}
-	if vol.Node != node {
-		slog.ErrorContext(ctx, "MockVolumePlugin.DetachVolume failed: volume not attached to node", slog.String("volumeID", volumeID), slog.String("node", node), slog.String("attachedNode", vol.Node))
-		return fmt.Errorf("volume %s not attached to node %s", volumeID, node)
-	}
-	vol.Node = ""
 	return nil
 }
 
@@ -157,30 +116,4 @@ func (p *MockVolumePlugin) UnmountVolume(ctx context.Context, volumeID string, t
 		return fmt.Errorf("failed to remove target path %q: %w", targetPath, err)
 	}
 	return nil
-}
-
-// GetVolumeState returns the state of a mock volume for verification in tests.
-// This only works for controller methods.
-func (p *MockVolumePlugin) GetVolumeState(volumeID string) (*MockVolumeState, error) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	slog.Info("MockVolumePlugin.GetVolumeState", slog.String("volumeID", volumeID))
-	vol, ok := p.volumes[volumeID]
-	if !ok {
-		slog.Error("MockVolumePlugin.GetVolumeState failed: volume not found", slog.String("volumeID", volumeID))
-		return nil, fmt.Errorf("volume %s not found", volumeID)
-	}
-	// Return a copy to avoid concurrent access issues in tests
-	mountsCopy := make(map[string]bool)
-	for k, v := range vol.Mounts {
-		mountsCopy[k] = v
-	}
-	return &MockVolumeState{
-		ID:           vol.ID,
-		Name:         vol.Name,
-		Capacity:     vol.Capacity,
-		StorageClass: vol.StorageClass,
-		Node:         vol.Node,
-		Mounts:       mountsCopy,
-	}, nil
 }

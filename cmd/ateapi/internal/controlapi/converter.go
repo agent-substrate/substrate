@@ -19,6 +19,7 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
 // convert atev1alpha1.SnapshotScope to ateletpb.SnapshotScope
@@ -32,4 +33,18 @@ func toAteletSnapshotScope(in atev1alpha1.SnapshotScope) ateletpb.SnapshotScope 
 		slog.Warn("unknown SnapshotScope; falling back to Full", "scope", string(in))
 		return ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL
 	}
+}
+
+func toActorSnapshotContentScope(in atev1alpha1.SnapshotScope) ateapipb.SnapshotContentScope {
+	if in == atev1alpha1.SnapshotScopeData {
+		return ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA
+	}
+	return ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL
+}
+
+func actorSnapshotContentScopeToAtelet(in ateapipb.SnapshotContentScope) ateletpb.SnapshotScope {
+	if in == ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA {
+		return ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA
+	}
+	return ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL
 }

@@ -15,12 +15,20 @@
 package cmd
 
 import (
+	"context"
 	"fmt"
+	"io"
+	"os"
 
 	"github.com/agent-substrate/substrate/cmd/kubectl-ate/internal/printer"
 	"github.com/agent-substrate/substrate/internal/ateclient"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/spf13/cobra"
+)
+
+var (
+	getWorkerNamespaceFlag string
+	getWorkerAtespaceFlag  string
+	getWorkerSelectorFlag  string
 )
 
 var getWorkersCmd = &cobra.Command{
@@ -28,35 +36,58 @@ var getWorkersCmd = &cobra.Command{
 	Aliases: []string{"worker"},
 	Short:   "List all workers",
 	Args:    cobra.NoArgs,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		ctx := cmd.Context()
-		apiClient, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, traceEnabled)
-		if err != nil {
-			return fmt.Errorf("failed to connect to ate-api-server: %w", err)
-		}
-		defer apiClient.Close()
-
-		var allWorkers []*ateapipb.Worker
-		pageToken := ""
-		for {
-			resp, err := apiClient.ListWorkers(ctx, &ateapipb.ListWorkersRequest{
-				PageSize:  1000,
-				PageToken: pageToken,
-			})
-			if err != nil {
-				return fmt.Errorf("failed to list workers: %w", err)
-			}
-			allWorkers = append(allWorkers, resp.GetWorkers()...)
-
-			pageToken = resp.GetNextPageToken()
-			if pageToken == "" {
-				break
-			}
-		}
-		return printer.PrintWorkers(allWorkers, outputFmt)
-	},
+	RunE:    runGetWorkers,
 }
 
 func init() {
+	getWorkersCmd.Flags().StringVarP(&getWorkerNamespaceFlag, "namespace", "n", "", "Scope output to a specific Kubernetes namespace")
+	getWorkersCmd.Flags().StringVarP(&getWorkerAtespaceFlag, "atespace", "a", "", "Filter worker pods hosting actors in a specific atespace")
+	getWorkersCmd.Flags().StringVarP(&getWorkerSelectorFlag, "selector", "l", "", "Filter by worker pool labels")
 	getCmd.AddCommand(getWorkersCmd)
+}
+
+// GetWorkersRunner executes the get workers command logic.
+type GetWorkersRunner struct {
+	workerLister WorkerLister
+	namespace    string
+	atespace     string
+	selector     string
+	outputFmt    string
+	out          io.Writer
+}
+
+func (r *GetWorkersRunner) Run(ctx context.Context) error {
+	workers, err := listAllWorkers(ctx, r.workerLister)
+	if err != nil {
+		return err
+	}
+	filtered, err := filterWorkers(workers, r.namespace, r.atespace, r.selector)
+	if err != nil {
+		return err
+	}
+
+	outWriter := r.out
+	if outWriter == nil {
+		outWriter = os.Stdout
+	}
+	return printer.PrintWorkersTo(outWriter, filtered, r.outputFmt)
+}
+
+func runGetWorkers(cmd *cobra.Command, args []string) error {
+	ctx := cmd.Context()
+	apiClient, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, traceEnabled)
+	if err != nil {
+		return fmt.Errorf("failed to connect to ate-api-server: %w", err)
+	}
+	defer apiClient.Close()
+
+	runner := &GetWorkersRunner{
+		workerLister: apiClient,
+		namespace:    getWorkerNamespaceFlag,
+		atespace:     getWorkerAtespaceFlag,
+		selector:     getWorkerSelectorFlag,
+		outputFmt:    outputFmt,
+		out:          os.Stdout,
+	}
+	return runner.Run(ctx)
 }

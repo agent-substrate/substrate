@@ -53,10 +53,10 @@ patches:
       namespace: ate-system
     patch: |-
       - op: test
-        path: /spec/template/spec/containers/0/args/13
+        path: /spec/template/spec/containers/0/args/12
         value: --ateapi-client-cert=/run/podidentity.podcert.ate.dev/credential-bundle.pem
       - op: remove
-        path: /spec/template/spec/containers/0/args/13
+        path: /spec/template/spec/containers/0/args/12
       - op: add
         path: /spec/template/spec/containers/0/args/-
         value: --ateapi-use-token-auth=true

@@ -16,61 +16,44 @@ package controlapi
 
 import (
 	"context"
-	"errors"
-	"fmt"
+	"time"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
+	"go.opentelemetry.io/otel/attribute"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
-func (s *Service) DeleteActor(ctx context.Context, req *ateapipb.DeleteActorRequest) (*ateapipb.Actor, error) {
-	if err := validateDeleteActorRequest(req); err != nil {
+func (s *Service) DeleteActor(ctx context.Context, req *ateapipb.DeleteActorRequest) (deleted *ateapipb.Actor, err error) {
+	if errs := validateDeleteActorRequest(req); len(errs) > 0 {
+		return nil, toGRPCStatusError(errs)
+	}
+	start := time.Now()
+	// Template dims only once the record resolved: the request names only the
+	// actor, so failures before the load carry none.
+	defer func() {
+		var attrs []attribute.KeyValue
+		if deleted != nil {
+			attrs = append(attrs,
+				ateattr.TemplateNameKey.String(deleted.GetActorTemplateName()),
+				ateattr.TemplateNamespaceKey.String(deleted.GetActorTemplateNamespace()),
+			)
+		}
+		s.instruments.recordLifecycleOp(ctx, ateattr.OperationDelete, start, err, attrs...)
+	}()
+	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
+	setSpanActorRefAttributes(ctx, actorRef)
+
+	deleted, err = s.actorWorkflow.DeleteActor(ctx, req.GetActor().GetAtespace(), req.GetActor().GetName())
+	if err != nil {
 		return nil, err
-	}
-	setSpanActorRefAttributes(ctx, req.GetActor().GetAtespace(), req.GetActor().GetName())
-
-	atespace := req.GetActor().GetAtespace()
-	name := req.GetActor().GetName()
-
-	actor, err := s.persistence.GetActor(ctx, atespace, name)
-	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, status.Errorf(codes.NotFound, "Actor %s not found", name)
-		}
-		return nil, fmt.Errorf("while fetching actor: %w", err)
-	}
-
-	// Delete associated volumes
-	if err := s.deleteActorVolumes(ctx, req.GetActor(), actor.GetActorVolumes()); err != nil {
-		return nil, status.Errorf(codes.Internal, "while deleting actor volumes: %v", err)
-	}
-
-	deleted, err := s.persistence.DeleteActor(ctx, atespace, name)
-	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, status.Errorf(codes.NotFound, "Actor %s not found", req.GetActor().GetName())
-		}
-		if errors.Is(err, store.ErrFailedPrecondition) {
-			current, getErr := s.persistence.GetActor(ctx, req.GetActor().GetAtespace(), req.GetActor().GetName())
-			if getErr == nil {
-				return nil, status.Errorf(codes.FailedPrecondition, "Actor %s is not suspended (status: %v)", req.GetActor().GetName(), current.GetStatus())
-			}
-			return nil, status.Errorf(codes.FailedPrecondition, "Actor %s is not suspended", req.GetActor().GetName())
-		}
-		if errors.Is(err, store.ErrPersistenceRetry) {
-			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
-		}
-		return nil, fmt.Errorf("while deleting actor from DB: %w", err)
 	}
 
 	return deleted, nil
 }
 
-func validateDeleteActorRequest(req *ateapipb.DeleteActorRequest) error {
+func validateDeleteActorRequest(req *ateapipb.DeleteActorRequest) field.ErrorList {
 	var fldPath *field.Path
 	var errs field.ErrorList
 
@@ -80,8 +63,5 @@ func validateDeleteActorRequest(req *ateapipb.DeleteActorRequest) error {
 		errs = append(errs, resources.ValidateObjectRef(val, fldPath)...)
 	}
 
-	if len(errs) > 0 {
-		return status.Error(codes.InvalidArgument, errs.ToAggregate().Error())
-	}
-	return nil
+	return errs
 }

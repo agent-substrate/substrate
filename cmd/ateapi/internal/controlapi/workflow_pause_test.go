@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -40,14 +41,16 @@ func TestFinalizePausedStep_WorkerGone(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	const atespace, actorName = "team-a", "actor-1"
+	actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
 
 	actor := &ateapipb.Actor{
-		Metadata:           &ateapipb.ResourceMetadata{Atespace: atespace, Name: actorName},
-		Status:             ateapipb.Actor_STATUS_PAUSING,
-		AteomPodNamespace:  "default",
-		AteomPodName:       "worker-pod-1",
-		WorkerPoolName:     "pool1",
+		Metadata: &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+		Status:   ateapipb.Actor_STATUS_PAUSING,
+		WorkerAssignment: &ateapipb.WorkerAssignment{
+			WorkerNamespace: "default",
+			WorkerPool:      "pool1",
+			WorkerPod:       "worker-pod-1",
+		},
 		InProgressSnapshot: "snap-prefix",
 	}
 	if _, err := st.CreateActor(ctx, actor); err != nil {
@@ -56,13 +59,13 @@ func TestFinalizePausedStep_WorkerGone(t *testing.T) {
 	// Intentionally NOT creating the worker in store, simulates worker already gone.
 
 	step := &FinalizePausedStep{store: st}
-	input := &PauseInput{Atespace: atespace, ActorName: actorName}
+	input := &PauseInput{ActorRef: actorRef}
 	state := &PauseState{}
 	if err := step.Execute(ctx, input, state); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
 
-	got, err := st.GetActor(ctx, atespace, actorName)
+	got, err := st.GetActor(ctx, actorRef)
 	if err != nil {
 		t.Fatalf("GetActor: %v", err)
 	}
@@ -70,7 +73,7 @@ func TestFinalizePausedStep_WorkerGone(t *testing.T) {
 	if got.GetStatus() != ateapipb.Actor_STATUS_CRASHED {
 		t.Errorf("status = %v, want CRASHED (node name unknown, cannot resume safely)", got.GetStatus())
 	}
-	for _, n := range got.GetLatestSnapshotInfo().GetLocal().GetNodeVmsWithLocalSnapshots() {
+	for _, n := range got.GetLocalSnapshotInfo().GetNodeVmsWithLocalSnapshots() {
 		if n == "" {
 			t.Errorf("BUG: empty string in NodeVmsWithLocalSnapshots, the scheduler's node restriction would never match a real worker")
 		}
@@ -121,9 +124,9 @@ func TestPauseActorWorkflow_RejectedAndIdempotentPaths(t *testing.T) {
 			defer cleanup()
 			w := newTestActorWorkflow(t, st, "ns", "tmpl1")
 
-			seedWorkflowActor(t, ctx, st, "team-a", "id1", "ns", "tmpl1", tc.seedStatus)
+			seedWorkflowActor(t, ctx, st, resources.ActorRef{Atespace: "team-a", Name: "id1"}, "ns", "tmpl1", tc.seedStatus)
 
-			actor, err := w.PauseActor(ctx, "team-a", "id1")
+			actor, err := w.PauseActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"})
 			if tc.wantErr {
 				if got := status.Code(err); got != codes.FailedPrecondition {
 					t.Fatalf("status.Code(err) = %v, want %v (err: %v)", got, codes.FailedPrecondition, err)
@@ -137,7 +140,7 @@ func TestPauseActorWorkflow_RejectedAndIdempotentPaths(t *testing.T) {
 				}
 			}
 
-			got, err := st.GetActor(ctx, "team-a", "id1")
+			got, err := st.GetActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"})
 			if err != nil {
 				t.Fatalf("GetActor failed: %v", err)
 			}
@@ -197,10 +200,10 @@ func TestPauseSteps_CheckPrerequisite(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
 			for _, st := range allActorStatuses {
-				// Worker pod fields are populated so CallAteletPauseStep's
+				// The worker assignment is populated so CallAteletPauseStep's
 				// missing-worker crash branch is not taken; this test only
 				// verifies status gating.
-				err := tc.step.CheckPrerequisite(ctx, &PauseInput{ActorName: "id1"}, &PauseState{Actor: &ateapipb.Actor{Status: st, AteomPodNamespace: "ns", AteomPodName: "worker-1"}})
+				err := tc.step.CheckPrerequisite(ctx, &PauseInput{ActorRef: resources.ActorRef{Name: "id1"}}, &PauseState{Actor: &ateapipb.Actor{Status: st, WorkerAssignment: &ateapipb.WorkerAssignment{WorkerNamespace: "ns", WorkerPool: "pool", WorkerPod: "worker-1"}}})
 				assertPrerequisiteResult(t, st, err, tc.allowed == nil || tc.allowed[st])
 			}
 		})
@@ -210,15 +213,11 @@ func TestPauseSteps_CheckPrerequisite(t *testing.T) {
 func TestCallAteletPauseStep_DanglingWorkerDoesNotRecordPhantomSnapshot(t *testing.T) {
 	tests := []struct {
 		name         string
-		prevSnapshot *ateapipb.SnapshotInfo
+		prevSnapshot *ateapipb.ObjectRef
 	}{
 		{
-			name: "keeps previous snapshot",
-			prevSnapshot: &ateapipb.SnapshotInfo{
-				Data: &ateapipb.SnapshotInfo_External{
-					External: &ateapipb.ExternalSnapshotInfo{SnapshotUriPrefix: "gs://snapshots/actor-1/prev"},
-				},
-			},
+			name:         "keeps previous snapshot",
+			prevSnapshot: &ateapipb.ObjectRef{Atespace: "team-a", Name: "prev"},
 		},
 		{
 			name:         "stays nil without previous snapshot",
@@ -232,13 +231,15 @@ func TestCallAteletPauseStep_DanglingWorkerDoesNotRecordPhantomSnapshot(t *testi
 			persistence := newTestPersistence(t)
 
 			actor := &ateapipb.Actor{
-				Metadata:           &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor-1"},
-				Status:             ateapipb.Actor_STATUS_PAUSING,
-				AteomPodNamespace:  "worker-ns",
-				AteomPodName:       "pod-gone",
-				WorkerPoolName:     "pool",
+				Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor-1"},
+				Status:   ateapipb.Actor_STATUS_PAUSING,
+				WorkerAssignment: &ateapipb.WorkerAssignment{
+					WorkerNamespace: "worker-ns",
+					WorkerPool:      "pool",
+					WorkerPod:       "pod-gone",
+				},
 				InProgressSnapshot: "actor-1-never-written",
-				LatestSnapshotInfo: tt.prevSnapshot,
+				LatestSnapshot:     tt.prevSnapshot,
 			}
 			created, err := persistence.CreateActor(ctx, actor)
 			if err != nil {
@@ -246,12 +247,12 @@ func TestCallAteletPauseStep_DanglingWorkerDoesNotRecordPhantomSnapshot(t *testi
 			}
 
 			step := &CallAteletPauseStep{store: persistence, dialer: newDanglingDialer()}
-			input := &PauseInput{ActorName: "actor-1", Atespace: "team-a"}
+			input := &PauseInput{ActorRef: resources.ActorRef{Atespace: "team-a", Name: "actor-1"}}
 			if err := step.Execute(ctx, input, &PauseState{Actor: created}); err == nil {
 				t.Fatal("Execute: want error for dangling worker, got nil")
 			}
 
-			stored, err := persistence.GetActor(ctx, "team-a", "actor-1")
+			stored, err := persistence.GetActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"})
 			if err != nil {
 				t.Fatalf("GetActor: %v", err)
 			}
@@ -262,11 +263,11 @@ func TestCallAteletPauseStep_DanglingWorkerDoesNotRecordPhantomSnapshot(t *testi
 				t.Errorf("InProgressSnapshot = %q, want preserved for debugging", got)
 			}
 			if tt.prevSnapshot == nil {
-				if stored.GetLatestSnapshotInfo() != nil {
-					t.Errorf("LatestSnapshotInfo = %v, want nil", stored.GetLatestSnapshotInfo())
+				if stored.GetLatestSnapshot() != nil {
+					t.Errorf("LatestSnapshot = %v, want nil", stored.GetLatestSnapshot())
 				}
-			} else if got, want := stored.GetLatestSnapshotInfo().GetExternal().GetSnapshotUriPrefix(), tt.prevSnapshot.GetExternal().GetSnapshotUriPrefix(); got != want {
-				t.Errorf("LatestSnapshotInfo uri = %q, want %q", got, want)
+			} else if got, want := stored.GetLatestSnapshot().GetName(), tt.prevSnapshot.GetName(); got != want {
+				t.Errorf("LatestSnapshot name = %q, want %q", got, want)
 			}
 		})
 	}
@@ -282,14 +283,14 @@ func TestPauseActor_CrashesWhenPausingActorMissingWorkerPod(t *testing.T) {
 	defer cleanup()
 	w := newTestActorWorkflow(t, st, "ns", "tmpl1")
 
-	seedWorkflowActor(t, ctx, st, "team-a", "id1", "ns", "tmpl1", ateapipb.Actor_STATUS_PAUSING)
+	seedWorkflowActor(t, ctx, st, resources.ActorRef{Atespace: "team-a", Name: "id1"}, "ns", "tmpl1", ateapipb.Actor_STATUS_PAUSING)
 
-	_, err := w.PauseActor(ctx, "team-a", "id1")
+	_, err := w.PauseActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"})
 	if got := status.Code(err); got != codes.FailedPrecondition {
 		t.Fatalf("status.Code(err) = %v, want %v (err: %v)", got, codes.FailedPrecondition, err)
 	}
 
-	got, err := st.GetActor(ctx, "team-a", "id1")
+	got, err := st.GetActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"})
 	if err != nil {
 		t.Fatalf("GetActor failed: %v", err)
 	}

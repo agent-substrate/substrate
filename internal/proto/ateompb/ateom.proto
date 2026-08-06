@@ -51,6 +51,8 @@ message RunWorkloadRequest {
   string atespace = 1;
   string actor_name = 2;
   string actor_uid = 3;
+  // Actor resource version observed by ate-api when assigning this worker.
+  int64 actor_version = 9;
 
   string actor_template_namespace = 4;
   string actor_template_name = 5;
@@ -64,6 +66,10 @@ message RunWorkloadRequest {
   // to the local on-disk path atelet fetched it to (content-addressed, like
   // runsc_path). Empty for the gVisor runtime, which uses runsc_path.
   map<string, string> runtime_asset_paths = 8;
+
+  // Remote egress gateway selected for this activation. When absent, actor
+  // traffic uses direct egress instead of being redirected through atunnel.
+  optional string egress_gateway_address = 10;
 }
 
 // WorkloadSpec parallels Pod, but with far fewer configurable fields.
@@ -74,13 +80,33 @@ message WorkloadSpec {
 message Container {
   string name = 1;
   Readyz readyz = 2;
-  repeated string durable_dir_volumes = 3;
+
+  // Field 3 was durable_dir_volumes: the mount paths alone, which only worked
+  // while an actor was limited to a single durable-dir volume.
+  reserved 3;
+  reserved "durable_dir_volumes";
+
+  // durable_dir_volume_mounts are the durable-dir volumes this container
+  // mounts, if any.
+  repeated DurableDirVolumeMount durable_dir_volume_mounts = 4;
+}
+
+// DurableDirVolumeMount is one durable-dir volume mounted into a container.
+message DurableDirVolumeMount {
+  // volume_name is the name the ActorTemplate gave the volume. It selects the
+  // per-volume directory atelet prepared for the actor on the host.
+  string volume_name = 1;
+  // mount_path is where the container sees the volume.
+  string mount_path = 2;
 }
 
 // Readyz describes how to check that a container is ready to serve.
 // Only HTTP is supported today.
 message Readyz {
   HTTPGetAction http_get = 1;
+  // How long to keep polling before giving up and failing the actor start.
+  // Zero means the ateom's default.
+  int32 timeout_seconds = 2;
 }
 
 // HTTPGetAction performs an HTTP GET against the container.
@@ -104,6 +130,12 @@ enum SnapshotScope {
   // (currently DurableDir-typed volumes). Memory and the rest of rootfs are
   // excluded.
   SNAPSHOT_SCOPE_DATA = 2;
+  // Restore-only: restore the ActorTemplate's golden snapshot's guest state
+  // (memory + full filesystem delta) combined with the snapshot's durable
+  // data. Never valid for CheckpointWorkload — snapshots only ever capture
+  // FULL or DATA; the control plane selects this scope at restore per the
+  // template's onResume configuration.
+  SNAPSHOT_SCOPE_DATA_ON_GOLDEN = 3;
 }
 
 message CheckpointWorkloadRequest {
@@ -147,6 +179,8 @@ message RestoreWorkloadRequest {
   string atespace = 1;
   string actor_name = 2;
   string actor_uid = 3;
+  // Actor resource version observed by ate-api when assigning this worker.
+  int64 actor_version = 11;
 
   string actor_template_namespace = 4;
   string actor_template_name = 5;
@@ -164,6 +198,15 @@ message RestoreWorkloadRequest {
 
   // What content to restore from the snapshot.
   SnapshotScope scope = 10;
+
+  // Remote egress gateway selected for this activation. When absent, actor
+  // traffic uses direct egress instead of being redirected through atunnel.
+  optional string egress_gateway_address = 12;
+
+  // The object storage URI prefix of the ActorTemplate's golden snapshot.
+  // Set only when scope is SNAPSHOT_SCOPE_DATA_ON_GOLDEN. Mirrors the
+  // snapshot_uri_prefix contract (field 8).
+  string golden_snapshot_uri_prefix = 13;
 }
 
 message RestoreWorkloadResponse {

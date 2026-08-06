@@ -110,6 +110,10 @@ func (s *scheduler) Applies(worker *ateapipb.Worker, constraints Constraints) bo
 		return false
 	}
 
+	if worker.GetState() != ateapipb.Worker_STATE_ACTIVE {
+		return false
+	}
+
 	set := labels.Set(worker.GetLabels())
 	if constraints.TemplateSelector != nil && !constraints.TemplateSelector.Matches(set) {
 		return false

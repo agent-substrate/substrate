@@ -19,6 +19,7 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/kubectl-ate/internal/printer"
 	"github.com/agent-substrate/substrate/internal/ateclient"
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/spf13/cobra"
 )
@@ -37,8 +38,9 @@ var suspendActorCmd = &cobra.Command{
 		}
 		defer apiClient.Close()
 
+		actorRef := resources.ActorRef{Atespace: suspendAtespaceFlag, Name: args[0]}
 		resp, err := apiClient.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
-			Actor: &ateapipb.ObjectRef{Atespace: suspendAtespaceFlag, Name: args[0]},
+			Actor: actorRef.ToObjectRef(),
 		})
 		if err != nil {
 			return fmt.Errorf("failed to suspend actor: %w", err)

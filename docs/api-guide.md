@@ -100,6 +100,7 @@ The `ActorTemplate` defines the code, environment, and state-management policies
 | `workerSelector` | `*LabelSelector` | Optional. Gates which `WorkerPool`s actors from this template may use, by matching against each pool's labels. If unset, all pools are eligible (subject to the actor's own `worker_selector`). |
 | `snapshotsConfig` | `SnapshotsConfig` | **Required.** GCS bucket and folder where memory snapshots are stored. |
 | `pauseImage` | `string` | **Required.** The image used for the sandbox root (e.g. `gcr.io/gke-release/pause`). |
+| `volumes` | `[]Volume` | Optional. Volumes the containers may mount, each either a `durableDir` or an `externalVolumeTemplate`. Every declared volume must be mounted by at least one container. A `microvm` template may declare several `durableDir` volumes; a `gvisor` template is limited to one, and `externalVolumeTemplate` is `gvisor`-only. |
 
 The sandbox binaries (e.g. the gVisor `runsc` binary) are **no longer configured on the `ActorTemplate`**. They are resolved from the referenced `WorkerPool`'s [`SandboxConfig`](#3-sandboxconfig-sandbox-binaries) — by name (`workerPool.spec.sandboxConfigName`) or, by default, the cluster default `SandboxConfig` for the pool's `sandboxClass`.
 
@@ -197,7 +198,7 @@ This means a single, cluster-managed config pins the sandbox runtime version for
 | :--- | :--- | :--- |
 | `sandboxClass` | `string` | **Required.** Runtime family this config applies to: `gvisor` (default) or `microvm`. A `WorkerPool` only uses `SandboxConfig`s whose `sandboxClass` matches its own. |
 | `default` | `bool` | Optional. Marks this as the cluster default for its `sandboxClass`. A `WorkerPool` with no `sandboxConfigName` resolves to the default for its class. At most one default per class. |
-| `assets` | `map[arch]map[name]AssetFile` | Optional. Content-addressed files atelet fetches, keyed by architecture (`amd64`, `arm64`) then asset name. gVisor expects a `runsc` asset; a micro-VM backend expects several. Each `AssetFile` is a `{ url, sha256 }` pair. |
+| `assets` | `map[arch]map[name]AssetFile` | Optional. Content-addressed files atelet fetches, keyed by architecture (`amd64`, `arm64`) then asset name. gVisor expects a `gvisor` asset (the release's `gvisor.tar.bz2`), which atelet auto-extracts. A micro-VM backend expects several. Each `AssetFile` is a `{ url, sha256 }` pair. |
 
 A default cluster-wide gVisor `SandboxConfig` (`gvisor-default`) is installed with the platform, so gVisor pools work out of the box.
 
@@ -213,13 +214,13 @@ spec:
   default: true
   assets:
     amd64:
-      runsc:
-        url: "gs://gvisor/releases/nightly/2026-05-19/x86_64/runsc"
-        sha256: "a397be1abc2420d26bce6c70e6e2ff96c73aaaab929756c56f5e2089ea842b63"
+      gvisor:
+        url: "gs://gvisor/releases/release/20260727/x86_64/gvisor.tar.bz2"
+        sha256: "0ebce37235dcffad3a165aa86aad24a92ba887ab4c8c26f580db97eb373c39f9"
     arm64:
-      runsc:
-        url: "gs://gvisor/releases/nightly/2026-05-19/aarch64/runsc"
-        sha256: "1ba2366ae2efceba166046f51a4104f9261c9cb72c6db8f5b3fe2dc57dea86b9"
+      gvisor:
+        url: "gs://gvisor/releases/release/20260727/aarch64/gvisor.tar.bz2"
+        sha256: "4a54f2c5ace3da0d6b02cce384e6db253d1de8da55648ff96a0b560ef8e2a6c7"
 ```
 
 ### Micro-VM SandboxConfig
@@ -268,7 +269,7 @@ Activates a suspended actor by restoring it onto a physical worker.
 *   **Request:** `ResumeActorRequest`
     *   `actor`: `ObjectRef` of the actor to resume.
     *   `boot`: (Optional) If `true`, bypasses snapshots and performs a cold boot.
-*   **Response:** `ResumeActorResponse` containing the updated `Actor` object (including the physical `ateom_pod_ip`).
+*   **Response:** `ResumeActorResponse` containing the updated `Actor` object (including the physical worker placement in `worker_assignment`).
 
 #### `SuspendActor`
 Hibernate a running actor, capturing its current RAM and disk state into a snapshot.
@@ -294,13 +295,36 @@ Query the physical resource pool.
 
 ---
 
-## 7. Advanced: Session Identity
+## 7. Advanced: Actor Identity Credentials
 
-Workloads can exchange their ephemeral Kubernetes credentials for stable **Session Identity** credentials that persist even as the process migrates between different physical workers.
+Workloads can exchange their ephemeral Kubernetes credentials for stable **Actor Identity** credentials that persist even as the process migrates between different physical workers. This is distinct from the `/run/ate/actor-id` bind mount described under [Actor Identity](#actor-identity), which only tells an actor its own name.
 
-### Service: `ateapi.SessionIdentity`
+### Service: `ateapi.ActorIdentity`
 *   **`MintJWT`:** Generates an OIDC-compatible JWT identifying the Substrate Actor.
 *   **`MintCert`:** Signs a Certificate Signing Request (CSR) to provide an mTLS identity for the actor.
+
+Both RPCs identify the actor the same way the rest of the API does, by `atespace` and `actor_name`.
+
+#### Who may call `MintCert` and `MintJWT`
+
+`MintCert` and `MintJWT` are not callable by actors directly. They must be called over mTLS with a
+Pod Certificate, and the broker only signs a CSR when all of the following hold:
+
+1.  The client certificate identifies the **`atelet`** service account
+    (`spiffe://cluster.local/ns/ate-system/sa/atelet`) and carries a Pod Identity
+    extension, which pins the calling atelet to a node.
+2.  The requested actor is **currently running**, per the actor database.
+3.  The worker Pod hosting that actor is on the **same node** as the calling
+    atelet, and is still assigned to that actor.
+
+An atelet is therefore confined to minting credentials for the actors it is
+actually hosting. Callers that fail any of these checks receive
+`PERMISSION_DENIED` with no detail, so the RPC cannot be used to discover
+whether an actor exists or where it is running. An actor that exists but is
+suspended, paused, or crashed yields `FAILED_PRECONDITION`.
+
+The minted leaf certificate carries the SPIFFE URI
+`spiffe://substrate-actor.local/atespace/${atespace}/actor/${actor_name}`.
 
 ---
 
@@ -309,7 +333,7 @@ Workloads can exchange their ephemeral Kubernetes credentials for stable **Sessi
 Agent Substrate is designed to be the foundational execution layer for any agentic framework.
 
 ### Agent Development Kit (ADK)
-Substrate provides native support for ADK-compatible identities. Workloads can use the `SessionIdentity` service to mint JWTs that align with ADK's security model, ensuring seamless integration with ADK-managed tools and memory.
+Substrate provides native support for ADK-compatible identities. Workloads can use the `ActorIdentity` service to mint JWTs that align with ADK's security model, ensuring seamless integration with ADK-managed tools and memory.
 
 ### LangChain
 Substrate is an ideal runtime for stateful LangChain agents. By defining a LangChain agent as an `ActorTemplate`, you can preserve the agent's internal "thought process" and conversation history in memory across hibernations, while sandboxing its tool execution for security.

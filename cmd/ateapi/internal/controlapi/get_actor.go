@@ -28,19 +28,20 @@ import (
 )
 
 func (s *Service) GetActor(ctx context.Context, req *ateapipb.GetActorRequest) (*ateapipb.Actor, error) {
-	if err := validateGetActorRequest(req); err != nil {
-		return nil, err
+	if errs := validateGetActorRequest(req); len(errs) > 0 {
+		return nil, toGRPCStatusError(errs)
 	}
-	actor, err := s.persistence.GetActor(ctx, req.GetActor().GetAtespace(), req.GetActor().GetName())
+	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
+	actor, err := s.persistence.GetActor(ctx, actorRef)
 	if errors.Is(err, store.ErrNotFound) {
-		return nil, status.Errorf(codes.NotFound, "Actor %s not found", req.GetActor().GetName())
+		return nil, status.Errorf(codes.NotFound, "Actor %s not found", actorRef)
 	} else if err != nil {
 		return nil, fmt.Errorf("while getting actor from DB: %w", err)
 	}
 	return actor, nil
 }
 
-func validateGetActorRequest(req *ateapipb.GetActorRequest) error {
+func validateGetActorRequest(req *ateapipb.GetActorRequest) field.ErrorList {
 	var fldPath *field.Path
 	var errs field.ErrorList
 
@@ -50,8 +51,5 @@ func validateGetActorRequest(req *ateapipb.GetActorRequest) error {
 		errs = append(errs, resources.ValidateObjectRef(val, fldPath)...)
 	}
 
-	if len(errs) > 0 {
-		return status.Error(codes.InvalidArgument, errs.ToAggregate().Error())
-	}
-	return nil
+	return errs
 }

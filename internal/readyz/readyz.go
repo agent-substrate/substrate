@@ -39,11 +39,14 @@ import (
 // a few seconds to bind; HTTPClient below is a var so tests can substitute
 // a transport that targets a test server's loopback address.
 const (
-	OverallTimeout   = 30 * time.Second
-	RequestTimeout   = 250 * time.Millisecond
-	PollInterval     = 1 * time.Millisecond
-	DefaultPath      = "/readyz"
-	maxIdleConnsHost = 1
+	// DefaultOverallTimeout applies to probes that do not set
+	// timeout_seconds. A workload that needs longer says so on its
+	// ActorTemplate rather than having every actor wait as long.
+	DefaultOverallTimeout = 30 * time.Second
+	RequestTimeout        = 250 * time.Millisecond
+	PollInterval          = 1 * time.Millisecond
+	DefaultPath           = "/readyz"
+	maxIdleConnsHost      = 1
 )
 
 // HTTPClient builds a keep-alive HTTP client tuned for fast, repeated
@@ -87,8 +90,9 @@ func Wait(ctx context.Context, containerName string, probe *ateompb.Readyz, acto
 	client := HTTPClient()
 	defer client.CloseIdleConnections()
 
+	timeout := overallTimeout(probe)
 	start := time.Now()
-	deadline := start.Add(OverallTimeout)
+	deadline := start.Add(timeout)
 	attempts := 0
 	var lastErr error
 	for {
@@ -98,7 +102,7 @@ func Wait(ctx context.Context, containerName string, probe *ateompb.Readyz, acto
 		}
 		if time.Now().After(deadline) {
 			return fmt.Errorf("readyz for %q never returned 200 within %s (%d attempts, last error: %v)",
-				containerName, OverallTimeout, attempts, lastErr)
+				containerName, timeout, attempts, lastErr)
 		}
 
 		attempts++
@@ -124,6 +128,17 @@ func Wait(ctx context.Context, containerName string, probe *ateompb.Readyz, acto
 		case <-time.After(PollInterval):
 		}
 	}
+}
+
+// overallTimeout resolves how long Wait polls before giving up. A
+// non-positive timeout_seconds falls back to the default: unlike a warmup
+// delay, a zero deadline is never a meaningful request, so it means "unset"
+// rather than "fail immediately".
+func overallTimeout(probe *ateompb.Readyz) time.Duration {
+	if s := probe.GetTimeoutSeconds(); s > 0 {
+		return time.Duration(s) * time.Second
+	}
+	return DefaultOverallTimeout
 }
 
 func tryOnce(ctx context.Context, client *http.Client, url string) (bool, error) {

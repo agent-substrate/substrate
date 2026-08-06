@@ -64,6 +64,7 @@ These flags can be appended to any command:
 | Flag | Short | Description | Default |
 |---|---|---|---|
 | `--kubeconfig` | | Path to your kubeconfig file | `~/.kube/config` |
+| `--context` | | Name of the kubeconfig context to use | current context |
 | `--endpoint` | | Manual gRPC endpoint override (e.g., `localhost:8080`) | |
 | `--output` | `-o` | Output format (`table`, `json`, `yaml`) | `table` |
 | `--trace` | | Enable on-demand tracing for the request | `false` |
@@ -88,6 +89,12 @@ kubectl ate get actor <actor-name> --atespace <atespace> -o yaml
 
 # List all physical workers and see which actors are assigned to them
 kubectl ate get workers
+
+# Filter workers by Kubernetes namespace, assigned-actor atespace, or
+# worker pool labels (same flags as `top workers`)
+kubectl ate get workers -n <namespace>
+kubectl ate get workers -a <atespace>
+kubectl ate get workers -l <label-selector>
 ```
 
 > **Note:** `get actors` requires either `--atespace <name>` / `-a <name>` (one atespace) or `-A`/`--all-atespaces` (all atespaces) — there is no default atespace. Getting a single actor always requires `--atespace`/`-a`, since an actor is addressed by `(atespace, name)`. `-a` (lower-case) scopes to one atespace; `-A` (upper-case) spans all.
@@ -135,7 +142,7 @@ kubectl ate get atespace <atespace>
 kubectl ate delete atespace <atespace>
 ```
 
-> **Note:** `create actor … -a <atespace>` requires the atespace to already exist, otherwise it fails with `FailedPrecondition`. `delete atespace` only removes an **empty** atespace; delete its actors first (cascade delete is not yet supported).
+> **Note:** `create actor … -a <atespace>` requires the atespace to already exist, otherwise it fails with `FailedPrecondition`. `delete atespace` only removes an **empty** atespace; delete its actors and snapshot tags first (cascade delete is not yet supported).
 
 #### `kubectl ate get atespace` output columns
 
@@ -164,14 +171,39 @@ kubectl ate suspend actor my-actor -a <atespace>
 kubectl ate delete actor my-actor -a <atespace>
 ```
 
+### Actor Snapshots
+
+Suspending an actor creates a durable snapshot. Tags give snapshots stable,
+Atespace-owned names; published tags may be used from other Atespaces.
+
+```bash
+# List snapshots, or resolve one canonical snapshot or tag.
+kubectl ate get snapshots -a <atespace>
+kubectl ate get snapshot <snapshot-name> -a <atespace>
+kubectl ate get snapshot <tag-name> -a <atespace> --tag
+
+# Tag a snapshot, then publish or unpublish the tag.
+kubectl ate create snapshot-tag <tag-name> -a <atespace> --snapshot <snapshot-name>
+kubectl ate update snapshot-tag <tag-name> -a <atespace> --scope published
+kubectl ate update snapshot-tag <tag-name> -a <atespace> --scope atespace
+
+# Create an actor from a tag and remove the tag when it is no longer needed.
+kubectl ate create actor <actor-name> -a <atespace> --template <namespace/name> --snapshot-tag <tag-atespace/tag-name>
+kubectl ate delete snapshot-tag <tag-name> -a <atespace>
+```
+
 ### Logs
 
 `kubectl ate logs` requires a resource-type subcommand; running `kubectl ate logs <actor-name>` on its own prints help. The only supported resource type is `actors`:
 
 ```bash
-# Stream logs for an actor (follows by default; aggregated across worker
-# reassignments so the same actor is queryable as it teleports between pods).
-kubectl ate logs actors my-actor
+# Print the logs an actor has produced on its current worker.
+# -a/--atespace is required, since an actor is addressed by (atespace, name).
+kubectl ate logs actors my-actor -a <atespace>
+
+# Follow the logs with -f. The stream is aggregated across worker
+# reassignments, so the same actor stays queryable as it teleports between pods.
+kubectl ate logs actors my-actor -a <atespace> -f
 ```
 
 Logs are streamable only while the actor is bound to a worker (i.e., `STATUS_RUNNING`). For history across worker migrations, route through a centralized log backend (Cloud Logging, Loki, etc.); see `docs/observability.md`.
@@ -180,15 +212,15 @@ Logs are streamable only while the actor is bound to a worker (i.e., `STATUS_RUN
 Commands for bootstrapping the Substrate control plane and debugging local environments.
 
 ```bash
-# Generate a new Session ID CA pool and push it directly to a Kubernetes Secret
+# Generate a new Actor ID CA pool and push it directly to a Kubernetes Secret
 kubectl ate admin make-ca-pool \
-  --name session-id-ca-pool \
+  --name actor-id-ca-pool \
   --secret-namespace ate-system \
   --ca-id "1"
 
 # Generate a new JWT authority pool and push it to a Kubernetes Secret
 kubectl ate admin make-jwt-pool \
-  --name session-id-jwt-pool \
+  --name actor-id-jwt-pool \
   --secret-namespace ate-system \
   --key-id "1"
 

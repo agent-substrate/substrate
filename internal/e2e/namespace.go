@@ -29,6 +29,11 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
+// NamespaceLabel marks the namespaces the suites create, so leftovers from a
+// failed run (which are kept deliberately — see RetainNamespaces) can be found
+// and deleted later: `kubectl delete ns -l ate.dev/e2e`, or hack/cleanup-e2e.sh.
+const NamespaceLabel = "ate.dev/e2e"
+
 var (
 	namespacesToCleanup []string
 	namespacesMu        sync.Mutex
@@ -85,7 +90,8 @@ func CreateNamespace(t *testing.T) *Namespace {
 
 	ns := &corev1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: nsName,
+			Name:   nsName,
+			Labels: map[string]string{NamespaceLabel: "true"},
 		},
 	}
 
@@ -121,6 +127,24 @@ func (ns *Namespace) Delete(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to delete namespace %s: %v", ns.Name, err)
 	}
+}
+
+// RetainNamespaces leaves the registered namespaces in the cluster and reports
+// them, instead of deleting them. Used when the suite failed: the namespaces'
+// worker pods hold the ateom (and, for micro-VM workers, guest) logs a
+// post-mortem needs, and they are deleted long before anyone can read them.
+func RetainNamespaces() {
+	namespacesMu.Lock()
+	defer namespacesMu.Unlock()
+
+	if len(namespacesToCleanup) == 0 {
+		return
+	}
+
+	fmt.Printf("Tests failed: keeping %d namespace(s) for diagnosis: %s\n",
+		len(namespacesToCleanup), strings.Join(namespacesToCleanup, " "))
+	fmt.Printf("Delete them (and any from earlier failed runs) with: hack/cleanup-e2e.sh\n")
+	namespacesToCleanup = nil
 }
 
 // CleanupNamespaces deletes all registered namespaces using the K8s API.

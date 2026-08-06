@@ -200,6 +200,26 @@ spec:
                           required:
                           - port
                           type: object
+                        timeoutSeconds:
+                          default: 30
+                          description: |-
+                            TimeoutSeconds is how long to keep polling HTTPGet before giving up.
+                            Exceeding it fails the actor start rather than proceeding with a
+                            container that never reported ready.
+
+                            How long a workload takes to become ready is a property of that workload,
+                            which is why this is set per template rather than cluster-wide: a heavy
+                            runtime that needs minutes should not force every other template to wait
+                            as long before its failures surface.
+
+                            Unset defaults to 30, applied by the API server so the effective value is
+                            visible on the stored object rather than only in the ateom. A manifest
+                            asking for 0 is rejected: unlike a warmup delay, a zero deadline could
+                            never be met, so it is never what a template author means.
+                          format: int32
+                          maximum: 3600
+                          minimum: 1
+                          type: integer
                       required:
                       - httpGet
                       type: object
@@ -306,6 +326,25 @@ spec:
                     - Full
                     - Data
                     type: string
+                  onResume:
+                    default: {}
+                    description: |-
+                      OnResume specifies, per snapshot situation, what supplies the guest
+                      state at resume (see OnResumeConfig). "fromData: Golden" requires
+                      sandboxClass "microvm".
+                    properties:
+                      fromData:
+                        default: ColdBoot
+                        description: |-
+                          FromData applies when the resume uses a Data-scope snapshot (from
+                          onPause or onCommit): "ColdBoot" starts fresh from the OCI image with
+                          the durable data restored; "Golden" combines the durable data with the
+                          template's golden snapshot. Defaults to "ColdBoot".
+                        enum:
+                        - ColdBoot
+                        - Golden
+                        type: string
+                    type: object
                 required:
                 - location
                 type: object
@@ -421,13 +460,17 @@ spec:
             x-kubernetes-validations:
             - message: Spec is immutable
               rule: self == oldSelf
-            - message: At most one DurableDir-typed volume is supported per ActorTemplate
-              rule: '!has(self.volumes) || self.volumes.filter(v, has(v.durableDir)).size()
-                <= 1'
-            - message: A container may mount at most one DurableDir-typed volume
-              rule: '!has(self.containers) || self.containers.all(c, !has(c.volumeMounts)
+            - message: Only one DurableDir-typed volume is supported when sandboxClass
+                is 'gvisor'
+              rule: (has(self.sandboxClass) && self.sandboxClass == 'microvm') ||
+                !has(self.volumes) || self.volumes.filter(v, has(v.durableDir)).size()
+                <= 1
+            - message: A container may mount only one DurableDir-typed volume when
+                sandboxClass is 'gvisor'
+              rule: (has(self.sandboxClass) && self.sandboxClass == 'microvm') ||
+                !has(self.containers) || self.containers.all(c, !has(c.volumeMounts)
                 || c.volumeMounts.filter(vm, has(self.volumes) && self.volumes.exists(v,
-                v.name == vm.name && has(v.durableDir))).size() <= 1)'
+                v.name == vm.name && has(v.durableDir))).size() <= 1)
             - message: All volumes defined in spec.volumes must be mounted by at least
                 one container
               rule: '!has(self.volumes) || self.volumes.all(v, has(self.containers)
@@ -436,6 +479,11 @@ spec:
             - message: ExternalVolumes are not supported when sandboxClass is 'microvm'
               rule: '!has(self.sandboxClass) || self.sandboxClass != ''microvm'' ||
                 !has(self.volumes) || !self.volumes.exists(v, has(v.externalVolumeTemplate))'
+            - message: 'onResume.fromData: Golden is not supported when sandboxClass
+                is ''gvisor'''
+              rule: '(has(self.sandboxClass) && self.sandboxClass == ''microvm'')
+                || !has(self.snapshotsConfig.onResume) || (has(self.snapshotsConfig.onResume.fromData)
+                ? self.snapshotsConfig.onResume.fromData : ''ColdBoot'') != ''Golden'''
           status:
             description: status is the observed state of ActorTemplate
             properties:

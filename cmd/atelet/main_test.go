@@ -18,24 +18,51 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/agent-substrate/substrate/internal/ateerrors"
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/google/go-cmp/cmp"
+	"github.com/klauspost/compress/zstd"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/testing/protocmp"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
+
+func TestSnapshotManifestActorMetadata(t *testing.T) {
+	rec := sandboxAssetsRecord{
+		Atespace:               "team-a",
+		ActorName:              "actor-1",
+		ActorUID:               "actor-uid",
+		ActorTemplateNamespace: "templates",
+		ActorTemplateName:      "agent",
+	}
+	got, err := json.Marshal(rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{`"atespace":"team-a"`, `"actorName":"actor-1"`, `"actorUid":"actor-uid"`, `"actorTemplateNamespace":"templates"`, `"actorTemplateName":"agent"`} {
+		if !bytes.Contains(got, []byte(want)) {
+			t.Errorf("manifest %s missing %s", got, want)
+		}
+	}
+}
 
 func TestWriteFileAtomic(t *testing.T) {
 	dir := t.TempDir()
@@ -84,6 +111,63 @@ func TestWriteFileAtomic(t *testing.T) {
 			t.Errorf("leftover files in identity dir: %v", names)
 		}
 	})
+}
+
+func TestCopyFile(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	want := []byte("checkpoint pages")
+	if err := os.WriteFile(src, want, 0o600); err != nil {
+		t.Fatalf("seeding src: %v", err)
+	}
+
+	dst := filepath.Join(dir, "dst")
+	n, err := copyFile(src, dst)
+	if err != nil {
+		t.Fatalf("copyFile: %v", err)
+	}
+	if n != int64(len(want)) {
+		t.Errorf("copied %d bytes, want %d", n, len(want))
+	}
+	got, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatalf("reading dst: %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Errorf("dst content = %q, want %q", got, want)
+	}
+
+	if _, err := copyFile(dir, filepath.Join(dir, "dst2")); err == nil {
+		t.Error("copyFile(directory, ...) succeeded, want error")
+	}
+}
+
+type failingCloseFile struct{ *os.File }
+
+func (f failingCloseFile) Close() error {
+	_ = f.File.Close()
+	return errors.New("deferred flush failed")
+}
+
+func TestCopyFile_CloseError(t *testing.T) {
+	orig := createDestFile
+	createDestFile = func(name string) (io.WriteCloser, error) {
+		f, err := os.Create(name)
+		if err != nil {
+			return nil, err
+		}
+		return failingCloseFile{f}, nil
+	}
+	t.Cleanup(func() { createDestFile = orig })
+
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	if err := os.WriteFile(src, []byte("checkpoint pages"), 0o600); err != nil {
+		t.Fatalf("seeding src: %v", err)
+	}
+	if _, err := copyFile(src, filepath.Join(dir, "dst")); err == nil {
+		t.Error("copyFile with failing destination Close = nil, want error")
+	}
 }
 
 // validRunRequest, validCheckpointRequest, and validRestoreRequest build
@@ -202,6 +286,9 @@ func TestValidateCheckpointRequest(t *testing.T) {
 		{"unspecified snapshot type", makeReq(func(r *ateletpb.CheckpointRequest) { r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_UNSPECIFIED }), true},
 		{"unspecified snapshot scope", makeReq(func(r *ateletpb.CheckpointRequest) { r.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED }), true},
 		{"invalid snapshot scope", makeReq(func(r *ateletpb.CheckpointRequest) { r.Scope = ateletpb.SnapshotScope(23) }), true},
+		// DATA_ON_GOLDEN is a restore-only scope: checkpoints only ever
+		// capture FULL or DATA, so a checkpoint carrying it is a bug upstream.
+		{"data-on-golden scope is restore-only", makeReq(func(r *ateletpb.CheckpointRequest) { r.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN }), true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -245,6 +332,29 @@ func TestValidateRestoreRequest(t *testing.T) {
 		{"unspecified snapshot type", makeReq(func(r *ateletpb.RestoreRequest) { r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_UNSPECIFIED }), true},
 		{"unspecified snapshot scope", makeReq(func(r *ateletpb.RestoreRequest) { r.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED }), true},
 		{"invalid snapshot scope", makeReq(func(r *ateletpb.RestoreRequest) { r.Scope = ateletpb.SnapshotScope(23) }), true},
+		{"data-on-golden with golden uri", makeReq(func(r *ateletpb.RestoreRequest) {
+			r.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
+			r.GoldenSnapshotUriPrefix = "gs://bucket/ate-golden/snapshots/1/"
+		}), false},
+		{"data-on-golden without golden uri", makeReq(func(r *ateletpb.RestoreRequest) {
+			r.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
+		}), true},
+		{"data-on-golden with bucketless golden uri", makeReq(func(r *ateletpb.RestoreRequest) {
+			r.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
+			r.GoldenSnapshotUriPrefix = "relative/path"
+		}), true},
+		// A pause (local) checkpoint may combine with the golden snapshot:
+		// the golden URI is a top-level field precisely so LOCAL restores
+		// can carry it.
+		{"data-on-golden with local checkpoint type", makeReq(func(r *ateletpb.RestoreRequest) {
+			r.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
+			r.GoldenSnapshotUriPrefix = "gs://bucket/ate-golden/snapshots/1/"
+			r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL
+			r.Config = &ateletpb.RestoreRequest_LocalConfig{LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotPrefix: "prefix"}}
+		}), false},
+		{"golden uri with non-data-on-golden scope", makeReq(func(r *ateletpb.RestoreRequest) {
+			r.GoldenSnapshotUriPrefix = "gs://bucket/ate-golden/snapshots/1/"
+		}), true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -252,6 +362,24 @@ func TestValidateRestoreRequest(t *testing.T) {
 				t.Errorf("validateRestoreRequest err = %v, wantErr %v", err, tc.wantErr)
 			}
 		})
+	}
+}
+
+// Every valid atelet scope must map to its ateom counterpart; in particular
+// DATA_ON_GOLDEN must never silently degrade to FULL.
+func TestToAteomSnapshotScope(t *testing.T) {
+	tests := []struct {
+		in   ateletpb.SnapshotScope
+		want ateompb.SnapshotScope
+	}{
+		{ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL, ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL},
+		{ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA, ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA},
+		{ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN, ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN},
+	}
+	for _, tc := range tests {
+		if got := toAteomSnapshotScope(tc.in); got != tc.want {
+			t.Errorf("toAteomSnapshotScope(%v) = %v, want %v", tc.in, got, tc.want)
+		}
 	}
 }
 
@@ -466,7 +594,8 @@ func TestBuildAteomWorkloadSpecForwardsReadyz(t *testing.T) {
 				Name:  "with-probe",
 				Image: "main",
 				Readyz: &ateletpb.Readyz{
-					HttpGet: &ateletpb.HTTPGetAction{Path: "/health", Port: 8080},
+					HttpGet:        &ateletpb.HTTPGetAction{Path: "/health", Port: 8080},
+					TimeoutSeconds: 45,
 				},
 			},
 			{
@@ -479,10 +608,64 @@ func TestBuildAteomWorkloadSpecForwardsReadyz(t *testing.T) {
 			{
 				Name: "with-probe",
 				Readyz: &ateompb.Readyz{
-					HttpGet: &ateompb.HTTPGetAction{Path: "/health", Port: 8080},
+					HttpGet:        &ateompb.HTTPGetAction{Path: "/health", Port: 8080},
+					TimeoutSeconds: 45,
 				},
 			},
 			{Name: "without-probe"},
+		},
+	}
+	got := buildAteomWorkloadSpec(in)
+	if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
+		t.Errorf("buildAteomWorkloadSpec mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestBuildAteomWorkloadSpecForwardsDurableDirMounts(t *testing.T) {
+	in := &ateletpb.WorkloadSpec{
+		Volumes: []*ateletpb.Volume{
+			{Name: "data", Type: ateletpb.VolumeType_VOLUME_TYPE_DURABLE_DIR},
+			{Name: "cache", Type: ateletpb.VolumeType_VOLUME_TYPE_DURABLE_DIR},
+			{Name: "scratch", Type: ateletpb.VolumeType_VOLUME_TYPE_EXTERNAL},
+		},
+		Containers: []*ateletpb.Container{
+			{
+				Name: "main",
+				VolumeMounts: []*ateletpb.VolumeMount{
+					{Name: "data", MountPath: "/home/counter"},
+					{Name: "cache", MountPath: "/var/cache"},
+					// Only durable-dir volumes cross to ateom; other volume
+					// types are mounted by atelet itself.
+					{Name: "scratch", MountPath: "/scratch"},
+				},
+			},
+			{
+				Name: "sidecar",
+				VolumeMounts: []*ateletpb.VolumeMount{
+					{Name: "data", MountPath: "/shared"},
+				},
+			},
+			{Name: "no-volumes"},
+		},
+	}
+	// ateom needs the volume NAME as well as the path: the name selects the
+	// per-volume directory on the host, and an actor may have several.
+	want := &ateompb.WorkloadSpec{
+		Containers: []*ateompb.Container{
+			{
+				Name: "main",
+				DurableDirVolumeMounts: []*ateompb.DurableDirVolumeMount{
+					{VolumeName: "data", MountPath: "/home/counter"},
+					{VolumeName: "cache", MountPath: "/var/cache"},
+				},
+			},
+			{
+				Name: "sidecar",
+				DurableDirVolumeMounts: []*ateompb.DurableDirVolumeMount{
+					{VolumeName: "data", MountPath: "/shared"},
+				},
+			},
+			{Name: "no-volumes"},
 		},
 	}
 	got := buildAteomWorkloadSpec(in)
@@ -504,7 +687,10 @@ func TestIsTerminalFileErr(t *testing.T) {
 		{"name too long", syscall.ENAMETOOLONG, true},
 		{"symlink loop", syscall.ELOOP, true},
 		{"read-only filesystem", syscall.EROFS, true},
+		{"no space left on device", syscall.ENOSPC, true},
+		{"disk quota exceeded", syscall.EDQUOT, true},
 		{"wrapped not exist", fmt.Errorf("while reading: %w", os.ErrNotExist), true},
+		{"path error no space", &os.PathError{Op: "write", Path: "/var/lib/atelet/x", Err: syscall.ENOSPC}, true},
 		{"too many open files", syscall.EMFILE, false},
 		{"stale nfs handle", syscall.ESTALE, false},
 		{"try again", syscall.EAGAIN, false},
@@ -517,5 +703,288 @@ func TestIsTerminalFileErr(t *testing.T) {
 				t.Errorf("isTerminalFileSystemErr(%v) = %v, want %v", tt.err, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestGoldenOnlyFiles verifies the DataOnGolden combine rule: the actor's own
+// snapshot files shadow same-named golden files (the durable-dir tar), and the
+// golden snapshot supplies the rest.
+func TestGoldenOnlyFiles(t *testing.T) {
+	tests := []struct {
+		name        string
+		actorFiles  []string
+		goldenFiles []string
+		want        []string
+	}{
+		{
+			name:        "durable tar shadowed, guest files kept",
+			actorFiles:  []string{"durable-dir.tar"},
+			goldenFiles: []string{"config.json", "state.json", "memory-ranges", "base-id", "durable-dir.tar"},
+			want:        []string{"config.json", "state.json", "memory-ranges", "base-id"},
+		},
+		{
+			name:        "golden without durable tar is kept whole",
+			actorFiles:  []string{"durable-dir.tar"},
+			goldenFiles: []string{"config.json", "state.json"},
+			want:        []string{"config.json", "state.json"},
+		},
+		{
+			name:        "no actor files keeps everything",
+			actorFiles:  nil,
+			goldenFiles: []string{"config.json"},
+			want:        []string{"config.json"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := goldenOnlyFiles(tc.actorFiles, tc.goldenFiles)
+			if diff := cmp.Diff(tc.want, got); diff != "" {
+				t.Errorf("goldenOnlyFiles diff (-want +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestWrapFileSystemErrAttachesTerminalReason(t *testing.T) {
+	tests := []struct {
+		name         string
+		err          error
+		wantTerminal bool
+	}{
+		{"no space left on device", &os.PathError{Op: "write", Path: "/x", Err: syscall.ENOSPC}, true},
+		{"disk quota exceeded", syscall.EDQUOT, true},
+		{"not exist", os.ErrNotExist, true},
+		{"io error", syscall.EIO, false},
+		{"try again", syscall.EAGAIN, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			wrapped := wrapFileSystemErr("while writing asset", tt.err)
+			if got := errors.Is(wrapped, ateerrors.ReasonTerminalFileSystemError); got != tt.wantTerminal {
+				t.Errorf("errors.Is(wrapFileSystemErr(%v), ReasonTerminalFileSystemError) = %v, want %v", tt.err, got, tt.wantTerminal)
+			}
+			if !errors.Is(wrapped, tt.err) {
+				t.Errorf("wrapFileSystemErr(%v) lost the original error: %v", tt.err, wrapped)
+			}
+		})
+	}
+}
+
+// mapObjectStorage serves per-object bytes so multi-object downloads can be
+// tested; the key is "<bucket>/<object>".
+type mapObjectStorage struct {
+	objects map[string][]byte
+}
+
+func (m mapObjectStorage) GetObject(_ context.Context, bucket, object string) (io.ReadCloser, error) {
+	data, ok := m.objects[bucket+"/"+object]
+	if !ok {
+		return nil, fmt.Errorf("object %s/%s not found", bucket, object)
+	}
+	return io.NopCloser(bytes.NewReader(data)), nil
+}
+
+func (mapObjectStorage) PutObject(_ context.Context, _, _ string, _ io.Reader) error { return nil }
+
+// TestDownloadCombinedCheckpoint verifies a DataOnGolden restore stages one
+// folder holding the actor snapshot's durable-dir tar and the golden
+// snapshot's remaining files — and that the golden's own durable-dir tar is
+// the one that loses the name collision.
+func TestDownloadCombinedCheckpoint(t *testing.T) {
+	zstdBytes := func(t *testing.T, s string) []byte {
+		t.Helper()
+		var buf bytes.Buffer
+		zw, err := zstd.NewWriter(&buf)
+		if err != nil {
+			t.Fatalf("zstd.NewWriter: %v", err)
+		}
+		if _, err := zw.Write([]byte(s)); err != nil {
+			t.Fatalf("zstd write: %v", err)
+		}
+		if err := zw.Close(); err != nil {
+			t.Fatalf("zstd close: %v", err)
+		}
+		return buf.Bytes()
+	}
+
+	store := mapObjectStorage{objects: map[string][]byte{
+		"bucket/actors/1/snapshots/2/durable-dir.tar.zstd":   zstdBytes(t, "actor durable data"),
+		"bucket/ate-golden/snapshots/1/config.json.zstd":     zstdBytes(t, "golden config"),
+		"bucket/ate-golden/snapshots/1/memory-ranges.zstd":   zstdBytes(t, "golden memory"),
+		"bucket/ate-golden/snapshots/1/durable-dir.tar.zstd": zstdBytes(t, "golden durable data (must not be downloaded)"),
+	}}
+	s := &AteomHerder{gcsClient: store}
+
+	dstDir := t.TempDir()
+	err := s.downloadCombinedCheckpoint(context.Background(),
+		"gs://bucket/actors/1/snapshots/2/",
+		"gs://bucket/ate-golden/snapshots/1/",
+		dstDir,
+		[]string{"durable-dir.tar"},
+		[]string{"config.json", "memory-ranges", "durable-dir.tar"})
+	if err != nil {
+		t.Fatalf("downloadCombinedCheckpoint: %v", err)
+	}
+
+	want := map[string]string{
+		"durable-dir.tar": "actor durable data",
+		"config.json":     "golden config",
+		"memory-ranges":   "golden memory",
+	}
+	entries, err := os.ReadDir(dstDir)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	if len(entries) != len(want) {
+		t.Errorf("staged %d files, want %d", len(entries), len(want))
+	}
+	for name, content := range want {
+		got, err := os.ReadFile(filepath.Join(dstDir, name))
+		if err != nil {
+			t.Fatalf("ReadFile(%s): %v", name, err)
+		}
+		if string(got) != content {
+			t.Errorf("%s content = %q, want %q", name, got, content)
+		}
+	}
+}
+
+// blockerDesc registers a single unary method whose handler blocks until block
+// is closed (or the RPC context is cancelled). It lets a test hold one RPC
+// "in-flight" across a drain without any generated proto.
+func blockerDesc(block <-chan struct{}) grpc.ServiceDesc {
+	return grpc.ServiceDesc{
+		ServiceName: "drain.test.Blocker",
+		HandlerType: (*any)(nil),
+		Methods: []grpc.MethodDesc{{
+			MethodName: "Block",
+			Handler: func(_ any, ctx context.Context, dec func(any) error, _ grpc.UnaryServerInterceptor) (any, error) {
+				if err := dec(new(emptypb.Empty)); err != nil {
+					return nil, err
+				}
+				select {
+				case <-block:
+					return new(emptypb.Empty), nil
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				}
+			},
+		}},
+	}
+}
+
+// newBlockingTestServer starts a gRPC server on a loopback port exposing the
+// blocker service and returns it with a connected client.
+func newBlockingTestServer(t *testing.T, block <-chan struct{}) (*grpc.Server, *grpc.ClientConn) {
+	t.Helper()
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	srv := grpc.NewServer()
+	desc := blockerDesc(block)
+	srv.RegisterService(&desc, nil)
+	go func() { _ = srv.Serve(lis) }()
+
+	conn, err := grpc.NewClient(
+		lis.Addr().String(),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	return srv, conn
+}
+
+func callBlock(conn *grpc.ClientConn) <-chan error {
+	rpcErr := make(chan error, 1)
+	go func() {
+		rpcErr <- conn.Invoke(context.Background(), "/drain.test.Blocker/Block",
+			new(emptypb.Empty), new(emptypb.Empty))
+	}()
+	return rpcErr
+}
+
+// TestDrainOnShutdownInFlightFinishes asserts that an RPC already in flight when
+// SIGTERM arrives is allowed to complete (GracefulStop waits for it) and that
+// readiness flips to not-ready.
+func TestDrainOnShutdownInFlightFinishes(t *testing.T) {
+	*drainDelay = 0
+	*drainTimeout = 5 * time.Second
+
+	block := make(chan struct{})
+	srv, conn := newBlockingTestServer(t, block)
+
+	rpcErr := callBlock(conn)
+	time.Sleep(100 * time.Millisecond) // let the RPC reach the handler
+
+	readiness := &serverboot.Readiness{}
+	ctx, cancel := context.WithCancel(context.Background())
+	drainDone := drainOnShutdown(ctx, srv, readiness)
+
+	cancel() // simulate SIGTERM
+
+	// Release the handler shortly after the drain begins; a graceful drain must
+	// wait for it rather than abort it.
+	time.Sleep(100 * time.Millisecond)
+	close(block)
+
+	select {
+	case err := <-rpcErr:
+		if err != nil {
+			t.Fatalf("in-flight RPC should complete during graceful drain, got: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("in-flight RPC did not complete")
+	}
+
+	select {
+	case <-drainDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("drain did not complete")
+	}
+	if readiness.Ready() {
+		t.Fatal("readiness should be not-ready after drain")
+	}
+}
+
+// TestDrainOnShutdownForceStopsAfterTimeout asserts that an RPC still running
+// past drain-timeout is forcefully cancelled by Stop().
+func TestDrainOnShutdownForceStopsAfterTimeout(t *testing.T) {
+	*drainDelay = 0
+	*drainTimeout = 200 * time.Millisecond
+
+	block := make(chan struct{}) // never closed → handler blocks past the timeout
+	srv, conn := newBlockingTestServer(t, block)
+
+	rpcErr := callBlock(conn)
+	time.Sleep(100 * time.Millisecond)
+
+	readiness := &serverboot.Readiness{}
+	ctx, cancel := context.WithCancel(context.Background())
+	start := time.Now()
+	drainDone := drainOnShutdown(ctx, srv, readiness)
+	cancel()
+
+	select {
+	case <-drainDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("drain did not force-stop within deadline")
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("force stop took too long (%v); expected ~drain-timeout", elapsed)
+	}
+
+	select {
+	case err := <-rpcErr:
+		if err == nil {
+			t.Fatal("in-flight RPC should have been aborted by force stop")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("in-flight RPC did not return after force stop")
+	}
+	if readiness.Ready() {
+		t.Fatal("readiness should be not-ready after drain")
 	}
 }

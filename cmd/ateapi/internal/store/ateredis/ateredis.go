@@ -53,6 +53,7 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
@@ -89,8 +90,11 @@ func NewPersistence(redisClient *redis.ClusterClient) *Persistence {
 	}
 }
 
-func actorDBKey(atespace, name string) string {
-	return "actor:" + atespace + ":" + name
+// actorDBKey returns the Redis key an actor is stored under. The encoding is
+// "actor:<atespace>:<name>" and must not change: existing databases hold keys
+// in this form.
+func actorDBKey(actorRef resources.ActorRef) string {
+	return "actor:" + actorRef.Atespace + ":" + actorRef.Name
 }
 
 // actorScanPattern returns the SCAN match pattern for listing actors. An empty
@@ -101,6 +105,50 @@ func actorScanPattern(atespace string) string {
 		return "actor:*"
 	}
 	return "actor:" + atespace + ":*"
+}
+
+func actorSnapshotDBKey(atespace, name string) string {
+	return "actor-snapshot:" + atespace + ":" + name
+}
+
+func actorSnapshotScanPattern(atespace string) string {
+	if atespace == "" {
+		return "actor-snapshot:*"
+	}
+	return "actor-snapshot:" + atespace + ":*"
+}
+
+func actorSnapshotTagDBKey(atespace, name string) string {
+	return "actor-snapshot-tag:" + atespace + ":" + name
+}
+
+func actorSnapshotTagScanPattern(atespace string) string {
+	return "actor-snapshot-tag:" + atespace + ":*"
+}
+
+type dbActorSnapshot struct {
+	Snapshot json.RawMessage `json:"snapshot"`
+	Location string          `json:"location"`
+}
+
+func marshalActorSnapshot(snapshot *ateapipb.ActorSnapshot, location string) ([]byte, error) {
+	b, err := protojson.Marshal(snapshot)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(dbActorSnapshot{Snapshot: b, Location: location})
+}
+
+func unmarshalActorSnapshot(b []byte) (*ateapipb.ActorSnapshot, string, error) {
+	var record dbActorSnapshot
+	if err := json.Unmarshal(b, &record); err != nil {
+		return nil, "", err
+	}
+	snapshot := &ateapipb.ActorSnapshot{}
+	if err := protojson.Unmarshal(record.Snapshot, snapshot); err != nil {
+		return nil, "", err
+	}
+	return snapshot, record.Location, nil
 }
 
 func atespaceDBKey(name string) string {
@@ -174,8 +222,8 @@ func (s *Persistence) ListAtespaces(ctx context.Context, pageSize int32, pageTok
 }
 
 // DeleteAtespace deletes an empty atespace. Returns store.ErrNotFound if the
-// atespace does not exist, or store.ErrFailedPrecondition if any actor still
-// lives in it.
+// atespace does not exist, or store.ErrFailedPrecondition if any Actor or
+// ActorSnapshotTag still lives in it.
 func (s *Persistence) DeleteAtespace(ctx context.Context, name string) (*ateapipb.Atespace, error) {
 	dbKey := atespaceDBKey(name)
 
@@ -202,11 +250,39 @@ func (s *Persistence) DeleteAtespace(ctx context.Context, name string) (*ateapip
 	if len(actors) > 0 {
 		return nil, store.ErrFailedPrecondition
 	}
-
+	hasTags, err := s.hasMatching(ctx, actorSnapshotTagScanPattern(name))
+	if err != nil {
+		return nil, fmt.Errorf("while checking ActorSnapshot tags: %w", err)
+	}
+	if hasTags {
+		return nil, store.ErrFailedPrecondition
+	}
 	if err := s.rdb.Del(ctx, dbKey).Err(); err != nil {
 		return nil, fmt.Errorf("while deleting atespace key %q: %w", dbKey, err)
 	}
 	return deleted, nil
+}
+
+func (s *Persistence) hasMatching(ctx context.Context, pattern string) (bool, error) {
+	masters, err := s.getSortedMasters(ctx)
+	if err != nil {
+		return false, err
+	}
+	for _, master := range masters {
+		for cursor := uint64(0); ; {
+			keys, next, err := master.Scan(ctx, cursor, pattern, 1).Result()
+			if err != nil {
+				return false, err
+			}
+			if len(keys) > 0 {
+				return true, nil
+			}
+			if cursor = next; cursor == 0 {
+				break
+			}
+		}
+	}
+	return false, nil
 }
 
 func workerDBKey(namespace, poolName, podName string) string {
@@ -312,8 +388,8 @@ func (s *Persistence) DebugClearAll(ctx context.Context) error {
 	return err
 }
 
-func (s *Persistence) GetActor(ctx context.Context, atespace, name string) (*ateapipb.Actor, error) {
-	dbKey := actorDBKey(atespace, name)
+func (s *Persistence) GetActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error) {
+	dbKey := actorDBKey(actorRef)
 
 	dbActorBytes, err := s.rdb.Get(ctx, dbKey).Bytes()
 	if err != nil {
@@ -328,7 +404,7 @@ func (s *Persistence) GetActor(ctx context.Context, atespace, name string) (*ate
 		return nil, fmt.Errorf("while unmarshaling actor: %w", err)
 	}
 
-	if actor.GetMetadata().GetName() != name || actor.GetMetadata().GetAtespace() != atespace {
+	if resources.ActorRefFromActor(actor) != actorRef {
 		return nil, fmt.Errorf("(impossible) mismatch between stored name/atespace and key")
 	}
 
@@ -336,7 +412,7 @@ func (s *Persistence) GetActor(ctx context.Context, atespace, name string) (*ate
 }
 
 func (s *Persistence) CreateActor(ctx context.Context, actor *ateapipb.Actor) (*ateapipb.Actor, error) {
-	dbKey := actorDBKey(actor.GetMetadata().GetAtespace(), actor.GetMetadata().GetName())
+	dbKey := actorDBKey(resources.ActorRefFromActor(actor))
 
 	// Clone so we don't stomp the caller's copy, then attach fresh server-owned
 	// metadata carrying the caller-specified identity.
@@ -357,6 +433,185 @@ func (s *Persistence) CreateActor(ctx context.Context, actor *ateapipb.Actor) (*
 	}
 
 	return dbActor, nil
+}
+
+func (s *Persistence) CreateActorSnapshot(ctx context.Context, snapshot *ateapipb.ActorSnapshot, location string) (*ateapipb.ActorSnapshot, error) {
+	dbKey := actorSnapshotDBKey(snapshot.GetMetadata().GetAtespace(), snapshot.GetMetadata().GetName())
+	dbSnapshot := proto.Clone(snapshot).(*ateapipb.ActorSnapshot)
+	dbSnapshot.Metadata = newCreateMetadata(snapshot.GetMetadata().GetAtespace(), snapshot.GetMetadata().GetName())
+	b, err := marshalActorSnapshot(dbSnapshot, location)
+	if err != nil {
+		return nil, fmt.Errorf("while marshaling actor snapshot: %w", err)
+	}
+	ok, err := s.rdb.SetNX(ctx, dbKey, b, 0).Result()
+	if err != nil {
+		return nil, fmt.Errorf("while creating actor snapshot: %w", err)
+	}
+	if !ok {
+		return nil, store.ErrAlreadyExists
+	}
+	return dbSnapshot, nil
+}
+
+func (s *Persistence) GetActorSnapshot(ctx context.Context, atespace, name string) (*ateapipb.ActorSnapshot, string, error) {
+	dbKey := actorSnapshotDBKey(atespace, name)
+	b, err := s.rdb.Get(ctx, dbKey).Bytes()
+	if err != nil {
+		if errors.Is(err, redis.Nil) {
+			return nil, "", store.ErrNotFound
+		}
+		return nil, "", fmt.Errorf("while getting actor snapshot key %q: %w", dbKey, err)
+	}
+	snapshot, location, err := unmarshalActorSnapshot(b)
+	if err != nil {
+		return nil, "", fmt.Errorf("while unmarshaling actor snapshot: %w", err)
+	}
+	return snapshot, location, nil
+}
+
+func (s *Persistence) GetActorSnapshotByTag(ctx context.Context, atespace, name string) (*ateapipb.ActorSnapshot, string, *ateapipb.ActorSnapshotTag, error) {
+	b, err := s.rdb.Get(ctx, actorSnapshotTagDBKey(atespace, name)).Bytes()
+	if err != nil {
+		if errors.Is(err, redis.Nil) {
+			return nil, "", nil, store.ErrNotFound
+		}
+		return nil, "", nil, fmt.Errorf("while resolving actor snapshot tag %s/%s: %w", atespace, name, err)
+	}
+	tag := &ateapipb.ActorSnapshotTag{}
+	if err := protojson.Unmarshal(b, tag); err != nil {
+		return nil, "", nil, fmt.Errorf("while unmarshaling actor snapshot tag %s/%s: %w", atespace, name, err)
+	}
+	snapshot, location, err := s.GetActorSnapshot(ctx, tag.GetSnapshot().GetAtespace(), tag.GetSnapshot().GetName())
+	return snapshot, location, tag, err
+}
+
+func (s *Persistence) ListActorSnapshots(ctx context.Context, atespace string, pageSize int32, pageTokenStr string) ([]*ateapipb.ActorSnapshot, string, error) {
+	var result []*ateapipb.ActorSnapshot
+	nextToken, err := s.listPage(ctx, actorSnapshotScanPattern(atespace), pageSize, pageTokenStr, func(ctx context.Context, master *redis.Client, keys []string) (int, error) {
+		cmds, err := master.Pipelined(ctx, func(pipe redis.Pipeliner) error {
+			for _, key := range keys {
+				pipe.Get(ctx, key)
+			}
+			return nil
+		})
+		if err != nil && !errors.Is(err, redis.Nil) {
+			return 0, fmt.Errorf("while fetching actor snapshots in shard %s: %w", master.Options().Addr, err)
+		}
+		collected := 0
+		for _, cmd := range cmds {
+			getCmd, ok := cmd.(*redis.StringCmd)
+			if !ok || errors.Is(getCmd.Err(), redis.Nil) {
+				continue
+			}
+			if getCmd.Err() != nil {
+				return 0, fmt.Errorf("while getting actor snapshot: %w", getCmd.Err())
+			}
+			snapshot, _, err := unmarshalActorSnapshot([]byte(getCmd.Val()))
+			if err != nil {
+				return 0, err
+			}
+			result = append(result, snapshot)
+			collected++
+		}
+		return collected, nil
+	})
+	if err != nil {
+		return nil, "", err
+	}
+	return result, nextToken, nil
+}
+
+func (s *Persistence) TagActorSnapshot(ctx context.Context, atespace, name string, tag *ateapipb.ActorSnapshotTag) (*ateapipb.ActorSnapshotTag, error) {
+	if _, _, err := s.GetActorSnapshot(ctx, atespace, name); err != nil {
+		return nil, err
+	}
+	dbTag := proto.Clone(tag).(*ateapipb.ActorSnapshotTag)
+	dbTag.Metadata = newCreateMetadata(tag.GetMetadata().GetAtespace(), tag.GetMetadata().GetName())
+	dbTag.Snapshot = &ateapipb.ObjectRef{Atespace: atespace, Name: name}
+	b, err := protojson.Marshal(dbTag)
+	if err != nil {
+		return nil, fmt.Errorf("while marshaling actor snapshot tag: %w", err)
+	}
+	tagKey := actorSnapshotTagDBKey(dbTag.GetMetadata().GetAtespace(), dbTag.GetMetadata().GetName())
+	created, err := s.rdb.SetNX(ctx, tagKey, b, 0).Result()
+	if err != nil {
+		return nil, fmt.Errorf("while creating actor snapshot tag: %w", err)
+	}
+	if !created {
+		existing, err := s.rdb.Get(ctx, tagKey).Bytes()
+		if err != nil {
+			return nil, fmt.Errorf("while getting actor snapshot tag: %w", err)
+		}
+		existingTag := &ateapipb.ActorSnapshotTag{}
+		if err := protojson.Unmarshal(existing, existingTag); err != nil {
+			return nil, fmt.Errorf("while unmarshaling actor snapshot tag: %w", err)
+		}
+		if existingTag.GetSnapshot().GetAtespace() != atespace || existingTag.GetSnapshot().GetName() != name || existingTag.GetScope() != tag.GetScope() {
+			return nil, store.ErrAlreadyExists
+		}
+		return existingTag, nil
+	}
+	return dbTag, nil
+}
+
+func (s *Persistence) UpdateActorSnapshotTag(ctx context.Context, atespace, name string, scope ateapipb.ActorSnapshotTagScope, expectedVersion int64) (*ateapipb.ActorSnapshotTag, error) {
+	tagKey := actorSnapshotTagDBKey(atespace, name)
+	var updated *ateapipb.ActorSnapshotTag
+	err := s.rdb.Watch(ctx, func(tx *redis.Tx) error {
+		b, err := tx.Get(ctx, tagKey).Bytes()
+		if err != nil {
+			if errors.Is(err, redis.Nil) {
+				return store.ErrNotFound
+			}
+			return err
+		}
+		tag := &ateapipb.ActorSnapshotTag{}
+		if err := protojson.Unmarshal(b, tag); err != nil {
+			return fmt.Errorf("while unmarshaling actor snapshot tag %s/%s: %w", atespace, name, err)
+		}
+		if tag.GetMetadata().GetVersion() != expectedVersion {
+			return store.ErrVersionConflict
+		}
+		if tag.GetScope() == scope {
+			updated = tag
+			return nil
+		}
+		tag.Scope = scope
+		tag.Metadata = newUpdateMetadata(tag.GetMetadata())
+		b, err = protojson.Marshal(tag)
+		if err != nil {
+			return fmt.Errorf("while marshaling actor snapshot tag: %w", err)
+		}
+		if _, err := tx.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
+			pipe.Set(ctx, tagKey, b, 0)
+			return nil
+		}); err != nil {
+			return err
+		}
+		updated = tag
+		return nil
+	}, tagKey)
+	if errors.Is(err, redis.TxFailedErr) {
+		return nil, store.ErrVersionConflict
+	}
+	if err != nil {
+		return nil, fmt.Errorf("while updating actor snapshot tag: %w", err)
+	}
+	return updated, nil
+}
+
+func (s *Persistence) DeleteActorSnapshotTag(ctx context.Context, atespace, name string) (*ateapipb.ActorSnapshotTag, error) {
+	_, _, tag, err := s.GetActorSnapshotByTag(ctx, atespace, name)
+	if err != nil {
+		return nil, err
+	}
+	tagKey := actorSnapshotTagDBKey(atespace, name)
+	if n, err := s.rdb.Del(ctx, tagKey).Result(); err != nil {
+		return nil, fmt.Errorf("while deleting actor snapshot tag: %w", err)
+	} else if n == 0 {
+		return nil, store.ErrNotFound
+	}
+	return tag, nil
 }
 
 func (s *Persistence) CreateWorker(ctx context.Context, worker *ateapipb.Worker) error {
@@ -429,7 +684,7 @@ func (s *Persistence) UpdateWorker(ctx context.Context, worker *ateapipb.Worker,
 		}
 
 		if currentWorker.GetVersion() != expectedVersion {
-			return store.ErrPersistenceRetry
+			return store.ErrVersionConflict
 		}
 		dbWorker.Version = currentWorker.GetVersion() + 1
 		if currentWorker.GetWorkerNamespace() != dbWorker.GetWorkerNamespace() {
@@ -460,8 +715,8 @@ func (s *Persistence) UpdateWorker(ctx context.Context, worker *ateapipb.Worker,
 		if errors.Is(err, store.ErrNotFound) {
 			return store.ErrNotFound
 		}
-		if errors.Is(err, store.ErrPersistenceRetry) || errors.Is(err, redis.TxFailedErr) {
-			return store.ErrPersistenceRetry
+		if errors.Is(err, store.ErrVersionConflict) || errors.Is(err, redis.TxFailedErr) {
+			return store.ErrVersionConflict
 		}
 		return fmt.Errorf("while executing update worker transaction: %w", err)
 	}
@@ -483,8 +738,8 @@ func (s *Persistence) DeleteWorker(ctx context.Context, namespace, pool, pod str
 	return nil
 }
 
-func (s *Persistence) DeleteActor(ctx context.Context, atespace, name string) (*ateapipb.Actor, error) {
-	dbKey := actorDBKey(atespace, name)
+func (s *Persistence) DeleteActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error) {
+	dbKey := actorDBKey(actorRef)
 	var deleted *ateapipb.Actor
 	err := s.rdb.Watch(ctx, func(tx *redis.Tx) error {
 		currentVal, err := tx.Get(ctx, dbKey).Bytes()
@@ -500,8 +755,7 @@ func (s *Persistence) DeleteActor(ctx context.Context, atespace, name string) (*
 			return fmt.Errorf("in protojson.Unmarshal: %w", err)
 		}
 
-		if currentActor.GetStatus() != ateapipb.Actor_STATUS_SUSPENDED &&
-			currentActor.GetStatus() != ateapipb.Actor_STATUS_CRASHED {
+		if currentActor.GetStatus() != ateapipb.Actor_STATUS_DELETING {
 			return store.ErrFailedPrecondition
 		}
 
@@ -517,7 +771,7 @@ func (s *Persistence) DeleteActor(ctx context.Context, atespace, name string) (*
 
 	if err != nil {
 		if errors.Is(err, redis.TxFailedErr) {
-			return nil, store.ErrPersistenceRetry
+			return nil, store.ErrVersionConflict
 		}
 		return nil, err
 	}
@@ -526,7 +780,7 @@ func (s *Persistence) DeleteActor(ctx context.Context, atespace, name string) (*
 }
 
 func (s *Persistence) UpdateActor(ctx context.Context, actor *ateapipb.Actor, expectedVersion int64) (*ateapipb.Actor, error) {
-	dbKey := actorDBKey(actor.GetMetadata().GetAtespace(), actor.GetMetadata().GetName())
+	dbKey := actorDBKey(resources.ActorRefFromActor(actor))
 
 	// Clone because we will update the version field, and we don't want to
 	// stomp the caller's copy.
@@ -547,7 +801,7 @@ func (s *Persistence) UpdateActor(ctx context.Context, actor *ateapipb.Actor, ex
 		}
 
 		if currentActor.GetMetadata().GetVersion() != expectedVersion {
-			return store.ErrPersistenceRetry
+			return store.ErrVersionConflict
 		}
 		if currentActor.GetMetadata().GetName() != dbActor.GetMetadata().GetName() {
 			return fmt.Errorf("name is immutable")
@@ -580,8 +834,8 @@ func (s *Persistence) UpdateActor(ctx context.Context, actor *ateapipb.Actor, ex
 		if errors.Is(err, store.ErrNotFound) {
 			return nil, store.ErrNotFound
 		}
-		if errors.Is(err, store.ErrPersistenceRetry) || errors.Is(err, redis.TxFailedErr) {
-			return nil, store.ErrPersistenceRetry
+		if errors.Is(err, store.ErrVersionConflict) || errors.Is(err, redis.TxFailedErr) {
+			return nil, store.ErrVersionConflict
 		}
 		return nil, fmt.Errorf("while executing update actor transaction: %w", err)
 	}

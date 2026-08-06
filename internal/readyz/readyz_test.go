@@ -159,6 +159,64 @@ func TestWait_ContextCancellation(t *testing.T) {
 	}
 }
 
+func TestOverallTimeout(t *testing.T) {
+	tests := []struct {
+		name  string
+		probe *ateompb.Readyz
+		want  time.Duration
+	}{
+		{
+			name:  "unset falls back to the default",
+			probe: &ateompb.Readyz{},
+			want:  DefaultOverallTimeout,
+		},
+		{
+			name:  "explicit value is honored",
+			probe: &ateompb.Readyz{TimeoutSeconds: 300},
+			want:  300 * time.Second,
+		},
+		{
+			// A zero deadline could never be met, so it means "unset"
+			// rather than "fail immediately".
+			name:  "negative falls back to the default",
+			probe: &ateompb.Readyz{TimeoutSeconds: -1},
+			want:  DefaultOverallTimeout,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := overallTimeout(tt.probe); got != tt.want {
+				t.Errorf("overallTimeout = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestWait_GivesUpAtProbeTimeout(t *testing.T) {
+	// Nothing ever binds this port, so the poll loop runs until the
+	// probe's own deadline rather than the package default.
+	port := pickFreePort(t)
+	probe := &ateompb.Readyz{
+		HttpGet:        &ateompb.HTTPGetAction{Port: int32(port)},
+		TimeoutSeconds: 1,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	start := time.Now()
+	err := Wait(ctx, "main", probe, "127.0.0.1")
+	if err == nil {
+		t.Fatalf("Wait returned nil, expected a timeout error")
+	}
+	elapsed := time.Since(start)
+	if elapsed < time.Second {
+		t.Errorf("Wait gave up after %v, before the probe's 1s timeout", elapsed)
+	}
+	if elapsed > 5*time.Second {
+		t.Errorf("Wait took %v; the probe timeout was ignored in favor of the %v default", elapsed, DefaultOverallTimeout)
+	}
+}
+
 func TestWaitAll_SkipsContainersWithoutProbe(t *testing.T) {
 	// No server bound, but no probes => should return nil immediately.
 	containers := []*ateompb.Container{

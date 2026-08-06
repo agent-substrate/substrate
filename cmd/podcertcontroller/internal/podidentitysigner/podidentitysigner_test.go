@@ -97,6 +97,7 @@ func TestMakeCert(t *testing.T) {
 		namespace            string
 		podName              string
 		serviceAccount       string
+		podLabels            map[string]string
 		maxExpirationSeconds int32
 		wantLifetime         time.Duration
 		wantURI              string
@@ -117,6 +118,28 @@ func TestMakeCert(t *testing.T) {
 				ServiceAccountName: "atelet",
 				ServiceAccountUID:  "sa-uid-1",
 				PodName:            "atelet-abcde",
+				PodUID:             "pod-uid-1",
+				NodeName:           "node-1",
+				NodeUID:            "node-uid-1",
+			},
+		},
+		{
+			// Worker pods host the atunnel ingress server, so they serve TLS
+			// despite running as the actor namespace's default ServiceAccount.
+			name:                 "worker pod also serves",
+			namespace:            "ate-demo-counter",
+			podName:              "counter-abcde",
+			serviceAccount:       "default",
+			podLabels:            map[string]string{"ate.dev/worker-pool": "counter"},
+			maxExpirationSeconds: 86400,
+			wantLifetime:         24 * time.Hour,
+			wantURI:              "spiffe://cluster.local/ns/ate-demo-counter/sa/default",
+			wantEKUs:             []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
+			wantIdentity: &substratex509.PodIdentity{
+				Namespace:          "ate-demo-counter",
+				ServiceAccountName: "default",
+				ServiceAccountUID:  "sa-uid-1",
+				PodName:            "counter-abcde",
 				PodUID:             "pod-uid-1",
 				NodeName:           "node-1",
 				NodeUID:            "node-uid-1",
@@ -197,6 +220,7 @@ func TestMakeCert(t *testing.T) {
 			}
 
 			pod, pcr := makePodAndPCR(tc.namespace, tc.podName, tc.serviceAccount, tc.maxExpirationSeconds)
+			pod.ObjectMeta.Labels = tc.podLabels
 			pcr.Spec.StubPKCS10Request = stubCSR(t, subjectPriv)
 
 			kc := fake.NewSimpleClientset(pod, pcr)

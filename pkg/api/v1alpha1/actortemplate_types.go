@@ -158,6 +158,26 @@ type ContainerReadyz struct {
 	//
 	// +required
 	HTTPGet *HTTPGetAction `json:"httpGet"`
+
+	// TimeoutSeconds is how long to keep polling HTTPGet before giving up.
+	// Exceeding it fails the actor start rather than proceeding with a
+	// container that never reported ready.
+	//
+	// How long a workload takes to become ready is a property of that workload,
+	// which is why this is set per template rather than cluster-wide: a heavy
+	// runtime that needs minutes should not force every other template to wait
+	// as long before its failures surface.
+	//
+	// Unset defaults to 30, applied by the API server so the effective value is
+	// visible on the stored object rather than only in the ateom. A manifest
+	// asking for 0 is rejected: unlike a warmup delay, a zero deadline could
+	// never be met, so it is never what a template author means.
+	//
+	// +optional
+	// +kubebuilder:default=30
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=3600
+	TimeoutSeconds int32 `json:"timeoutSeconds,omitempty"`
 }
 
 // HTTPGetAction describes an HTTP GET request to perform against the
@@ -264,6 +284,37 @@ const (
 	SnapshotScopeData SnapshotScope = "Data"
 )
 
+// ResumeSource selects what supplies the guest state when an actor is brought
+// back from one of the snapshot situations named by OnResumeConfig's fields.
+// +kubebuilder:validation:Enum=ColdBoot;Golden
+type ResumeSource string
+
+const (
+	// ResumeSourceColdBoot starts the actor's containers afresh from the OCI
+	// image, with the durable-dir volumes pre-populated from the snapshot.
+	ResumeSourceColdBoot ResumeSource = "ColdBoot"
+	// ResumeSourceGolden restores the ActorTemplate's golden snapshot (guest
+	// memory + filesystem delta) and serves the snapshot's durable data to
+	// it, so the actor resumes with the golden's warm state over its own
+	// data. Requires sandboxClass "microvm".
+	ResumeSourceGolden ResumeSource = "Golden"
+)
+
+// OnResumeConfig selects, per snapshot situation, what supplies the guest
+// state at resume. Each field names what is being resumed FROM; the value
+// names the boot source. Full snapshots that are still valid always restore
+// from their own content and are not configurable here.
+type OnResumeConfig struct {
+	// FromData applies when the resume uses a Data-scope snapshot (from
+	// onPause or onCommit): "ColdBoot" starts fresh from the OCI image with
+	// the durable data restored; "Golden" combines the durable data with the
+	// template's golden snapshot. Defaults to "ColdBoot".
+	//
+	// +optional
+	// +kubebuilder:default=ColdBoot
+	FromData ResumeSource `json:"fromData,omitempty"`
+}
+
 // +kubebuilder:validation:XValidation:rule="(has(self.onPause) ? self.onPause : 'Full') == 'Full' || (has(self.onCommit) ? self.onCommit : 'Full') == (has(self.onPause) ? self.onPause : 'Full')",message="onCommit must be a subset of onPause"
 type SnapshotsConfig struct {
 	// Location to store snapshots in.
@@ -290,14 +341,23 @@ type SnapshotsConfig struct {
 	// +optional
 	// +kubebuilder:default=Full
 	OnCommit SnapshotScope `json:"onCommit,omitempty"`
+
+	// OnResume specifies, per snapshot situation, what supplies the guest
+	// state at resume (see OnResumeConfig). "fromData: Golden" requires
+	// sandboxClass "microvm".
+	//
+	// +optional
+	// +kubebuilder:default={}
+	OnResume OnResumeConfig `json:"onResume,omitempty"`
 }
 
 // ActorTemplateSpec defined desired spec of an actor.
 //
-// +kubebuilder:validation:XValidation:rule="!has(self.volumes) || self.volumes.filter(v, has(v.durableDir)).size() <= 1",message="At most one DurableDir-typed volume is supported per ActorTemplate"
-// +kubebuilder:validation:XValidation:rule="!has(self.containers) || self.containers.all(c, !has(c.volumeMounts) || c.volumeMounts.filter(vm, has(self.volumes) && self.volumes.exists(v, v.name == vm.name && has(v.durableDir))).size() <= 1)",message="A container may mount at most one DurableDir-typed volume"
+// +kubebuilder:validation:XValidation:rule="(has(self.sandboxClass) && self.sandboxClass == 'microvm') || !has(self.volumes) || self.volumes.filter(v, has(v.durableDir)).size() <= 1",message="Only one DurableDir-typed volume is supported when sandboxClass is 'gvisor'"
+// +kubebuilder:validation:XValidation:rule="(has(self.sandboxClass) && self.sandboxClass == 'microvm') || !has(self.containers) || self.containers.all(c, !has(c.volumeMounts) || c.volumeMounts.filter(vm, has(self.volumes) && self.volumes.exists(v, v.name == vm.name && has(v.durableDir))).size() <= 1)",message="A container may mount only one DurableDir-typed volume when sandboxClass is 'gvisor'"
 // +kubebuilder:validation:XValidation:rule="!has(self.volumes) || self.volumes.all(v, has(self.containers) && self.containers.exists(c, has(c.volumeMounts) && c.volumeMounts.exists(vm, vm.name == v.name)))",message="All volumes defined in spec.volumes must be mounted by at least one container"
 // +kubebuilder:validation:XValidation:rule="!has(self.sandboxClass) || self.sandboxClass != 'microvm' || !has(self.volumes) || !self.volumes.exists(v, has(v.externalVolumeTemplate))",message="ExternalVolumes are not supported when sandboxClass is 'microvm'"
+// +kubebuilder:validation:XValidation:rule="(has(self.sandboxClass) && self.sandboxClass == 'microvm') || !has(self.snapshotsConfig.onResume) || (has(self.snapshotsConfig.onResume.fromData) ? self.snapshotsConfig.onResume.fromData : 'ColdBoot') != 'Golden'",message="onResume.fromData: Golden is not supported when sandboxClass is 'gvisor'"
 type ActorTemplateSpec struct {
 	// PauseImage is the container to use as the root sandbox container.
 	//

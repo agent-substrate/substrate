@@ -15,6 +15,7 @@
 package router
 
 import (
+	"github.com/agent-substrate/substrate/internal/atunnel"
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	extproc "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 	envoy_type "github.com/envoyproxy/go-control-plane/envoy/type/v3"
@@ -32,15 +33,50 @@ type reqError struct {
 func (e *reqError) Error() string { return e.msg }
 func (e *reqError) Unwrap() error { return e.cause }
 
-func addAuthorityMutation(auth string, mut *extproc.HeaderMutation) {
+// addOriginalDstMutation sets the header the ORIGINAL_DST cluster reads to pick
+// the upstream address (the worker atunnel IP:443). Unlike an :authority
+// rewrite it leaves the request Host intact, so atunnel still sees the actor
+// DNS name and can authorize the active actor.
+//
+// Nothing strips this header from the incoming request, so overwrite rather
+// than append: a client-supplied value must never influence the address Envoy
+// dials. ext_proc mutations already default to replace, but the default is
+// split across the deprecated append field and append_action — pin it.
+func addOriginalDstMutation(dst string, mut *extproc.HeaderMutation) {
 	mut.SetHeaders = append(mut.SetHeaders,
 		&corev3.HeaderValueOption{
+			AppendAction: corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
 			Header: &corev3.HeaderValue{
-				Key:      ":authority",
-				RawValue: []byte(auth),
+				Key:      OriginalDstHeader,
+				RawValue: []byte(dst),
 			},
 		},
 	)
+}
+
+// addRoutingMutations overwrites all routing metadata derived from the
+// control-plane result. Envoy dials OriginalDstHeader while preserving
+// :authority. Agentgateway v1.4.1's static dynamic backend instead dials the
+// request :authority, so that mode rewrites it to the worker atunnel address.
+// OriginalHostHeader lets atunnel restore and authorize the actor authority.
+func addRoutingMutations(dst, actorHost string, routeViaAuthority bool, mut *extproc.HeaderMutation) {
+	addOriginalDstMutation(dst, mut)
+	mut.SetHeaders = append(mut.SetHeaders, &corev3.HeaderValueOption{
+		AppendAction: corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
+		Header: &corev3.HeaderValue{
+			Key:      atunnel.OriginalHostHeader,
+			RawValue: []byte(actorHost),
+		},
+	})
+	if routeViaAuthority {
+		mut.SetHeaders = append(mut.SetHeaders, &corev3.HeaderValueOption{
+			AppendAction: corev3.HeaderValueOption_OVERWRITE_IF_EXISTS_OR_ADD,
+			Header: &corev3.HeaderValue{
+				Key:      authorityHeader,
+				RawValue: []byte(dst),
+			},
+		})
+	}
 }
 
 func immediateResponse(statusCode envoy_type.StatusCode, message string) *extproc.ProcessingResponse {
@@ -54,9 +90,11 @@ func immediateResponse(statusCode envoy_type.StatusCode, message string) *extpro
 				Headers: &extproc.HeaderMutation{
 					SetHeaders: []*corev3.HeaderValueOption{
 						{
+							// Using RawValues instead of Value: newer versions of Envoy
+							// drop Value and use RawValue
 							Header: &corev3.HeaderValue{
-								Key:   "content-type",
-								Value: "text/plain",
+								Key:      "content-type",
+								RawValue: []byte("text/plain"),
 							},
 						},
 					},

@@ -76,6 +76,9 @@ spec:
         - name: ateapi-token
           mountPath: /run/ateapi-token
           readOnly: true
+        - name: podidentity
+          mountPath: /run/podidentity.podcert.ate.dev
+          readOnly: true
         resources:
           requests:
             cpu: "500m"
@@ -97,3 +100,10 @@ spec:
               audience: api.ate-system.svc
               expirationSeconds: 3600
               path: token
+      - name: podidentity
+        projected:
+          sources:
+          - podCertificate:
+              signerName: podidentity.podcert.ate.dev/identity
+              keyType: ECDSAP256
+              credentialBundlePath: credential-bundle.pem

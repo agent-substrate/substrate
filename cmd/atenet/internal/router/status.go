@@ -119,7 +119,7 @@ func (qr *QueryRecorder) AddRouterRequest(
 ) {
 	qr.Add(RecordedQuery{
 		Timestamp: start,
-		Client:    m.headers[":authority"],
+		Client:    m.headers[authorityHeader],
 		Host:      m.host,
 		Path:      redactPath(m.path),
 		Method:    m.headers[":method"],
@@ -132,6 +132,14 @@ func (qr *QueryRecorder) AddRouterRequest(
 type TemplateInfo struct {
 	Name      string `json:"name"`
 	Namespace string `json:"namespace"`
+}
+
+// ParkingStatus is a snapshot of the request-parking lot for the status page.
+type ParkingStatus struct {
+	Enabled   bool   `json:"enabled"`
+	Active    int    `json:"active"`
+	MaxParked int    `json:"max_parked"`
+	MaxWait   string `json:"max_wait"`
 }
 
 type DashboardContext struct {
@@ -147,6 +155,7 @@ type DashboardContext struct {
 	Queries         []FormattedQuery   `json:"queries"`
 	Health          RouterHealthReport `json:"health"`
 	Templates       []TemplateInfo     `json:"templates"`
+	Parking         ParkingStatus      `json:"parking"`
 }
 
 type FormattedQuery struct {
@@ -244,6 +253,11 @@ func (s *RouterServer) handleStatusz(w http.ResponseWriter, req *http.Request) {
 		}
 	}
 
+	var parking ParkingStatus
+	if s.extprocSrv != nil {
+		parking = s.extprocSrv.parking.status()
+	}
+
 	data := DashboardContext{
 		BuildTag:        buildInfo,
 		RouterClusterIP: routerIP,
@@ -257,6 +271,7 @@ func (s *RouterServer) handleStatusz(w http.ResponseWriter, req *http.Request) {
 		Queries:         formattedQueries,
 		Health:          hr,
 		Templates:       templateInfos,
+		Parking:         parking,
 	}
 
 	accept := req.Header.Get("Accept")

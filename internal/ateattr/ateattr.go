@@ -19,7 +19,12 @@
 package ateattr
 
 import (
+	"slices"
+
 	"go.opentelemetry.io/otel/attribute"
+
+	"github.com/agent-substrate/substrate/internal/ateerrors"
+	"github.com/agent-substrate/substrate/internal/resources"
 
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
@@ -46,13 +51,46 @@ const (
 // Metric-label keys: the only ate.* attributes allowed on metric datapoints,
 // each with a small bounded value set. High-cardinality identity (actor
 // name/uid, atespace) is absent by design; it belongs on spans and logs.
-// WorkerStateKey stays worker-rooted rather than nesting under the pool so it
-// can grow siblings.
+// ActorOperationNameKey follows the registry's *.operation.name pattern
+// (db.operation.name, gen_ai.operation.name). WorkerStateKey stays worker-rooted
+// rather than nesting under the pool so it can grow siblings.
+// WorkerPoolNamespaceKey pairs with WorkerPoolNameKey: a WorkerPool is
+// namespaced, so the name alone does not identify one.
 const (
-	WorkerPoolNameKey = attribute.Key("ate.workerpool.name")
-	WorkerStateKey    = attribute.Key("ate.worker.state")
-	SandboxClassKey   = attribute.Key("ate.sandbox.class")
+	ActorOperationNameKey  = attribute.Key("ate.actor.operation.name")
+	WorkerPoolNamespaceKey = attribute.Key("ate.workerpool.namespace")
+	WorkerPoolNameKey      = attribute.Key("ate.workerpool.name")
+	WorkerStateKey         = attribute.Key("ate.worker.state")
+	SandboxClassKey        = attribute.Key("ate.sandbox.class")
+	SnapshotKindKey        = attribute.Key("ate.snapshot.kind")
+	SchedulerOutcomeKey    = attribute.Key("ate.scheduler.outcome")
+	RouterResumeKey        = attribute.Key("ate.router.resume")
+	RouterOutcomeKey       = attribute.Key("ate.router.outcome")
+	FailureReasonKey       = attribute.Key("ate.failure.reason")
 )
+
+// Control-plane failure reasons for ate.actor.crashes metric.
+const (
+	ReasonCorruptedAssignment = string(ateerrors.ReasonCorruptedAssignment)
+	ReasonWorkerReassigned    = string(ateerrors.ReasonWorkerReassigned)
+	ReasonWorkerPodGone       = string(ateerrors.ReasonWorkerPodGone)
+	ReasonUnknown             = string(ateerrors.ReasonUnknown)
+)
+
+// Values for RouterResumeKey.
+const (
+	// RouterResumeNone indicates the actor was already running (steady-state route).
+	RouterResumeNone = "none"
+	// RouterResumeTriggered indicates this request won the singleflight lock and initiated cold activation.
+	RouterResumeTriggered = "triggered"
+	// RouterResumeJoined indicates this request parked on an in-flight singleflight resume.
+	RouterResumeJoined = "joined"
+)
+
+// ErrorTypeKey is the OTel registry attribute, reused verbatim (not aliased into
+// ate.*): failures are reported on the same instrument via this key, its absence
+// meaning success, never as a parallel _failures counter.
+const ErrorTypeKey = attribute.Key("error.type")
 
 // Values for WorkerStateKey. Only idle and assigned are representable today;
 // starting and unhealthy workers are not modeled in the cache.
@@ -61,13 +99,62 @@ const (
 	WorkerStateAssigned = "assigned"
 )
 
+// Values for ActorOperationNameKey: the actor lifecycle operations ateapi
+// serves.
+const (
+	OperationCreate  = "create"
+	OperationResume  = "resume"
+	OperationSuspend = "suspend"
+	OperationPause   = "pause"
+	OperationDelete  = "delete"
+	OperationUnknown = "unknown"
+)
+
+// AllOperations lists all registered bounded actor lifecycle operations.
+var AllOperations = []string{
+	OperationCreate,
+	OperationResume,
+	OperationSuspend,
+	OperationPause,
+	OperationDelete,
+}
+
+// NormalizeOperationName ensures op is one of the bounded lifecycle operations.
+// Any unlisted or empty operation maps to OperationUnknown.
+func NormalizeOperationName(op string) string {
+	if slices.Contains(AllOperations, op) {
+		return op
+	}
+	return OperationUnknown
+}
+
+// Values for SchedulerOutcomeKey. NoFreeWorker is a capacity signal, not a
+// failure, so it is a distinct outcome rather than an error.type value; only the
+// Error outcome carries an error.type.
+const (
+	SchedulerOutcomeAssigned     = "assigned"
+	SchedulerOutcomeNoFreeWorker = "no_free_worker"
+	SchedulerOutcomeError        = "error"
+)
+
+// Values for SnapshotKindKey, set by ateapi from its own resume branching, so
+// the label is bounded at the producer: Local restores an in-node snapshot,
+// Latest pulls the actor's durable snapshot from object storage, Golden pulls the
+// template's golden image, Boot is a from-scratch start (not a restore).
+const (
+	SnapshotKindGolden = "golden"
+	SnapshotKindLatest = "latest"
+	SnapshotKindLocal  = "local"
+	SnapshotKindBoot   = "boot"
+)
+
 // ActorRefAttributes returns the subset knowable before the Actor record
 // resolves: only the (atespace, name) the request addresses. The uid and version
 // are server-assigned and unknown until the record loads, so they are omitted.
-func ActorRefAttributes(atespace, name string) []attribute.KeyValue {
+func ActorRefAttributes(actorRef resources.ActorRef) []attribute.KeyValue {
 	return []attribute.KeyValue{
-		AtespaceKey.String(atespace),
-		ActorNameKey.String(name),
+		AtespaceKey.String(actorRef.Atespace),
+		ActorNameKey.String(actorRef.Name),
 	}
 }
 
@@ -80,5 +167,33 @@ func ActorAttributes(a *ateapipb.Actor) []attribute.KeyValue {
 		TemplateNameKey.String(a.GetActorTemplateName()),
 		TemplateNamespaceKey.String(a.GetActorTemplateNamespace()),
 		ActorVersionKey.Int64(a.GetMetadata().GetVersion()),
+	}
+}
+
+// ActorMetricAttributes returns the metric labels for an Actor.
+// High-cardinality attributes (atespace, actor name, actor uid) are omitted.
+func ActorMetricAttributes(a *ateapipb.Actor, sandboxClass, operationName, reason string) []attribute.KeyValue {
+	if a == nil {
+		return nil
+	}
+
+	// Default values for unknown/unset attributes.
+	if reason == "" {
+		reason = ReasonUnknown
+	}
+	operationName = NormalizeOperationName(operationName)
+
+	pool := ""
+	if ass := a.GetWorkerAssignment(); ass != nil {
+		pool = ass.GetWorkerPool()
+	}
+
+	return []attribute.KeyValue{
+		TemplateNamespaceKey.String(a.GetActorTemplateNamespace()),
+		TemplateNameKey.String(a.GetActorTemplateName()),
+		WorkerPoolNameKey.String(pool),
+		SandboxClassKey.String(sandboxClass),
+		ActorOperationNameKey.String(operationName),
+		FailureReasonKey.String(reason),
 	}
 }

@@ -16,6 +16,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -26,7 +27,7 @@ import (
 )
 
 var (
-	globalVolumePlugin = volume.NewMockVolumePlugin()
+	globalVolumePlugin volume.VolumePluginWorkerPlane = volume.NewMockVolumePlugin()
 )
 
 // TODO: Replace with actual volume plugin search
@@ -56,6 +57,7 @@ func (s *AteomHerder) mountExternalVolumes(ctx context.Context, actorUID string,
 }
 
 func (s *AteomHerder) unmountExternalVolumes(ctx context.Context, actorUID string, volumes []*ateletpb.Volume) error {
+	var errs []error
 	for _, vol := range volumes {
 		if vol.GetType() != ateletpb.VolumeType_VOLUME_TYPE_EXTERNAL {
 			continue
@@ -67,8 +69,8 @@ func (s *AteomHerder) unmountExternalVolumes(ctx context.Context, actorUID strin
 		hostPath := ateompath.VolumeHostPath(actorUID, vol.GetName())
 		slog.InfoContext(ctx, "Unmounting volume", slog.String("volume_id", ext.GetStorageVolumeId()), slog.String("host_path", hostPath))
 		if err := getVolumePlugin().UnmountVolume(ctx, ext.GetStorageVolumeId(), hostPath); err != nil {
-			slog.ErrorContext(ctx, "failed to unmount volume", slog.String("volume_id", ext.GetStorageVolumeId()), slog.String("host_path", hostPath), slog.Any("error", err))
+			errs = append(errs, fmt.Errorf("failed to unmount volume %q from %q: %w", ext.GetStorageVolumeId(), hostPath, err))
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }

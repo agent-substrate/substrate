@@ -77,14 +77,15 @@ func PrintActorsTo(out io.Writer, actors []*ateapipb.Actor, format string) error
 			template := actor.GetActorTemplateNamespace() + "/" + actor.GetActorTemplateName()
 			status := actor.GetStatus().String()
 
+			assignment := actor.GetWorkerAssignment()
 			worker := "<none>"
-			if actor.GetAteomPodNamespace() != "" {
-				worker = actor.GetAteomPodNamespace() + "/" + actor.GetAteomPodName()
+			if assignment != nil {
+				worker = assignment.GetWorkerNamespace() + "/" + assignment.GetWorkerPod()
 			}
 
 			version := actor.GetMetadata().GetVersion()
 			age := formatAge(actor.GetMetadata().GetCreateTime())
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%d\t%s\n", atespace, name, template, status, worker, actor.GetAteomPodIp(), version, age)
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%d\t%s\n", atespace, name, template, status, worker, assignment.GetWorkerPodIp(), version, age)
 		}
 		return w.Flush()
 	default:
@@ -230,6 +231,48 @@ func PrintWorkerTopYAML(out io.Writer, items []*WorkerTopItem) error {
 // PrintActor prints a single actor in the requested format.
 func PrintActor(actor *ateapipb.Actor, format string) error {
 	return PrintActors([]*ateapipb.Actor{actor}, format)
+}
+
+// PrintActorSnapshots prints actor snapshots to stdout in the requested format.
+func PrintActorSnapshots(snapshots []*ateapipb.ActorSnapshot, format string) error {
+	if format == "json" || format == "yaml" {
+		return printProto(os.Stdout, &ateapipb.ListActorSnapshotsResponse{Snapshots: snapshots}, format)
+	}
+	if format != "table" {
+		return fmt.Errorf("unsupported format %q", format)
+	}
+	slices.SortFunc(snapshots, func(a, b *ateapipb.ActorSnapshot) int {
+		if c := cmp.Compare(a.GetMetadata().GetAtespace(), b.GetMetadata().GetAtespace()); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.GetMetadata().GetName(), b.GetMetadata().GetName())
+	})
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
+	fmt.Fprintln(w, "ATESPACE\tNAME\tSOURCE ACTOR\tSOURCE VERSION\tSCOPE\tAGE")
+	for _, snapshot := range snapshots {
+		fmt.Fprintf(w, "%s\t%s\t%s/%s\t%d\t%s\t%s\n",
+			snapshot.GetMetadata().GetAtespace(), snapshot.GetMetadata().GetName(),
+			snapshot.GetSourceActor().GetAtespace(), snapshot.GetSourceActor().GetName(),
+			snapshot.GetSourceActorVersion(), snapshot.GetContentScope(), formatAge(snapshot.GetMetadata().GetCreateTime()))
+	}
+	return w.Flush()
+}
+
+// PrintActorSnapshotTag prints an actor snapshot tag to stdout.
+func PrintActorSnapshotTag(tag *ateapipb.ActorSnapshotTag, format string) error {
+	if format == "json" || format == "yaml" {
+		return printProto(os.Stdout, tag, format)
+	}
+	if format != "table" {
+		return fmt.Errorf("unsupported format %q", format)
+	}
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
+	fmt.Fprintln(w, "ATESPACE\tNAME\tSNAPSHOT\tSCOPE\tAGE")
+	fmt.Fprintf(w, "%s\t%s\t%s/%s\t%s\t%s\n",
+		tag.GetMetadata().GetAtespace(), tag.GetMetadata().GetName(),
+		tag.GetSnapshot().GetAtespace(), tag.GetSnapshot().GetName(),
+		tag.GetScope(), formatAge(tag.GetMetadata().GetCreateTime()))
+	return w.Flush()
 }
 
 // PrintAtespaces prints a slice of atespaces to stdout in the requested format.

@@ -358,7 +358,8 @@ func TestWorkloadSpecFromActorTemplatePropagatesReadyz(t *testing.T) {
 					Name:  "with-probe",
 					Image: "main",
 					Readyz: &atev1alpha1.ContainerReadyz{
-						HTTPGet: &atev1alpha1.HTTPGetAction{Path: "/health", Port: 8080},
+						HTTPGet:        &atev1alpha1.HTTPGetAction{Path: "/health", Port: 8080},
+						TimeoutSeconds: 45,
 					},
 				},
 				{
@@ -378,7 +379,8 @@ func TestWorkloadSpecFromActorTemplatePropagatesReadyz(t *testing.T) {
 				Name:  "with-probe",
 				Image: "main",
 				Readyz: &ateletpb.Readyz{
-					HttpGet: &ateletpb.HTTPGetAction{Path: "/health", Port: 8080},
+					HttpGet:        &ateletpb.HTTPGetAction{Path: "/health", Port: 8080},
+					TimeoutSeconds: 45,
 				},
 			},
 			{
@@ -516,7 +518,7 @@ func TestAppendExternalVolumes(t *testing.T) {
 		},
 		ActorVolumes: []*ateapipb.ExternalVolume{
 			{
-				ActorVolumeId:   "space-abc-actor-123-vol-1",
+				VolumeName:      "vol-1",
 				StorageVolumeId: "vol-gce-pd-123",
 				VolumeType:      "pd-standard",
 			},

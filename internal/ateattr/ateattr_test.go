@@ -19,6 +19,7 @@ import (
 
 	"go.opentelemetry.io/otel/attribute"
 
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
@@ -104,24 +105,21 @@ func TestActorAttributes(t *testing.T) {
 
 func TestActorRefAttributes(t *testing.T) {
 	tests := []struct {
-		name      string
-		atespace  string
-		actorName string
-		want      map[attribute.Key]any
+		name     string
+		actorRef resources.ActorRef
+		want     map[attribute.Key]any
 	}{
 		{
-			name:      "atespace and actor name only",
-			atespace:  "team-a",
-			actorName: "support-agent-42",
+			name:     "atespace and actor name only",
+			actorRef: resources.ActorRef{Atespace: "team-a", Name: "support-agent-42"},
 			want: map[attribute.Key]any{
 				AtespaceKey:  "team-a",
 				ActorNameKey: "support-agent-42",
 			},
 		},
 		{
-			name:      "empty values still produce both keys",
-			atespace:  "",
-			actorName: "",
+			name:     "zero ref still produces both keys",
+			actorRef: resources.ActorRef{},
 			want: map[attribute.Key]any{
 				AtespaceKey:  "",
 				ActorNameKey: "",
@@ -131,7 +129,7 @@ func TestActorRefAttributes(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			assertAttrs(t, toMap(ActorRefAttributes(tt.atespace, tt.actorName)), tt.want)
+			assertAttrs(t, toMap(ActorRefAttributes(tt.actorRef)), tt.want)
 		})
 	}
 }
@@ -150,9 +148,15 @@ func TestKeySpellings(t *testing.T) {
 		{TemplateNameKey, "ate.template.name"},
 		{TemplateNamespaceKey, "ate.template.namespace"},
 		{ActorVersionKey, "ate.actor.version"},
+		{ActorOperationNameKey, "ate.actor.operation.name"},
+		{WorkerPoolNamespaceKey, "ate.workerpool.namespace"},
 		{WorkerPoolNameKey, "ate.workerpool.name"},
 		{WorkerStateKey, "ate.worker.state"},
 		{SandboxClassKey, "ate.sandbox.class"},
+		{SnapshotKindKey, "ate.snapshot.kind"},
+		{SchedulerOutcomeKey, "ate.scheduler.outcome"},
+		{ErrorTypeKey, "error.type"},
+		{FailureReasonKey, "ate.failure.reason"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.want, func(t *testing.T) {
@@ -160,5 +164,115 @@ func TestKeySpellings(t *testing.T) {
 				t.Errorf("key = %q, want %q", string(tt.key), tt.want)
 			}
 		})
+	}
+}
+
+// TestMetricLabelValues pins the wire value of every bounded metric-label
+// constant. These are the exact strings dashboards and alerts group by, so a
+// typo or rename must fail here rather than silently fork a time series in
+// production.
+func TestMetricLabelValues(t *testing.T) {
+	tests := []struct {
+		got  string
+		want string
+	}{
+		{WorkerStateIdle, "idle"},
+		{WorkerStateAssigned, "assigned"},
+
+		{OperationCreate, "create"},
+		{OperationResume, "resume"},
+		{OperationSuspend, "suspend"},
+		{OperationPause, "pause"},
+		{OperationDelete, "delete"},
+		{OperationUnknown, "unknown"},
+
+		{SchedulerOutcomeAssigned, "assigned"},
+		{SchedulerOutcomeNoFreeWorker, "no_free_worker"},
+		{SchedulerOutcomeError, "error"},
+
+		{SnapshotKindGolden, "golden"},
+		{SnapshotKindLatest, "latest"},
+		{SnapshotKindLocal, "local"},
+		{SnapshotKindBoot, "boot"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.want, func(t *testing.T) {
+			if tt.got != tt.want {
+				t.Errorf("got %q, want %q", tt.got, tt.want)
+			}
+		})
+	}
+}
+
+func TestActorMetricAttributes(t *testing.T) {
+	actor := &ateapipb.Actor{
+		ActorTemplateNamespace: "default",
+		ActorTemplateName:      "counter-template",
+		WorkerAssignment: &ateapipb.WorkerAssignment{
+			WorkerPool: "default-pool",
+		},
+	}
+
+	t.Run("explicit operation and reason", func(t *testing.T) {
+		got := toMap(ActorMetricAttributes(actor, "gvisor", OperationResume, ReasonCorruptedAssignment))
+		want := map[attribute.Key]any{
+			TemplateNamespaceKey:  "default",
+			TemplateNameKey:       "counter-template",
+			WorkerPoolNameKey:     "default-pool",
+			SandboxClassKey:       "gvisor",
+			ActorOperationNameKey: OperationResume,
+			FailureReasonKey:      ReasonCorruptedAssignment,
+		}
+
+		assertAttrs(t, got, want)
+	})
+
+	t.Run("default unknown values", func(t *testing.T) {
+		got := toMap(ActorMetricAttributes(actor, "gvisor", "", ""))
+		want := map[attribute.Key]any{
+			TemplateNamespaceKey:  "default",
+			TemplateNameKey:       "counter-template",
+			WorkerPoolNameKey:     "default-pool",
+			SandboxClassKey:       "gvisor",
+			ActorOperationNameKey: OperationUnknown,
+			FailureReasonKey:      ReasonUnknown,
+		}
+
+		assertAttrs(t, got, want)
+	})
+
+	t.Run("out of range operation name is normalized to unknown", func(t *testing.T) {
+		got := toMap(ActorMetricAttributes(actor, "gvisor", "invalid_op", ""))
+		want := map[attribute.Key]any{
+			TemplateNamespaceKey:  "default",
+			TemplateNameKey:       "counter-template",
+			WorkerPoolNameKey:     "default-pool",
+			SandboxClassKey:       "gvisor",
+			ActorOperationNameKey: OperationUnknown,
+			FailureReasonKey:      ReasonUnknown,
+		}
+
+		assertAttrs(t, got, want)
+	})
+}
+
+func TestNormalizeOperationName(t *testing.T) {
+	tests := []struct {
+		op   string
+		want string
+	}{
+		{OperationCreate, OperationCreate},
+		{OperationResume, OperationResume},
+		{OperationSuspend, OperationSuspend},
+		{OperationPause, OperationPause},
+		{OperationDelete, OperationDelete},
+		{"", OperationUnknown},
+		{"invalid", OperationUnknown},
+		{"crash", OperationUnknown},
+	}
+	for _, tt := range tests {
+		if got := NormalizeOperationName(tt.op); got != tt.want {
+			t.Errorf("NormalizeOperationName(%q) = %q, want %q", tt.op, got, tt.want)
+		}
 	}
 }
