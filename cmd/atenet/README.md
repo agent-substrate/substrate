@@ -27,10 +27,10 @@ likely be split in the future for better scalability.)
   endpoint propagation → Envoy admin-API drain → ext_proc drain), and the
   Envoy container's `preStop` hook waits for the router's drain-complete
   marker on a pod-shared emptyDir — so established connections and parked
-  requests finish instead of resetting. The Deployment surges
-  (`maxSurge: 1, maxUnavailable: 0`) so a replacement pod is Ready before the
-  old one drains; the whole sequence must fit within
-  `terminationGracePeriodSeconds` (see the manifest comments).
+  requests finish instead of resetting. The whole sequence must fit within
+  `terminationGracePeriodSeconds` (see the manifest comments). Upgrades are
+  whole-system swaps (#473) rather than per-Deployment rolling updates; the
+  drain is what makes the old system's termination lossless.
 
 RBAC permissions:
 * read, list on ActorTemplate
