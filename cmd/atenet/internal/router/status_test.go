@@ -33,6 +33,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/extproc"
+	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/ingress"
 )
 
 func TestStatuszEndpoint(t *testing.T) {
@@ -68,6 +71,7 @@ func TestStatuszEndpoint(t *testing.T) {
 		ExtProcMaxRequests: defaultExtProcMaxRequests,
 		TemplatesFile:      tmpFile.Name(),
 		MetricsAddr:        "127.0.0.1:0",
+		ParkedRequest:      ingress.DefaultParkedRequestConfig(),
 		Auth: authConfig{
 			AteapiCAFile:         caPath,
 			AteapiClientCertPath: clientCertPath,
@@ -79,13 +83,13 @@ func TestStatuszEndpoint(t *testing.T) {
 		t.Fatalf("Failed generating router server: %v", err)
 	}
 
-	srv.extprocSrv = NewExtProcServer(cfg.ExtprocPort, &mockClient{}, nil, defaultParkedRequestConfig(), nil, false, nil)
+	srv.extprocSrv = extproc.NewServer(cfg.ExtprocPort, nil, nil)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	// Inject recorded queries
-	srv.extprocSrv.recorder.Add(RecordedQuery{
+	srv.extprocSrv.Recorder().Add(extproc.RecordedQuery{
 		Timestamp: time.Now(),
 		Client:    "127.0.0.1",
 		Host:      "example.com",
@@ -164,8 +168,8 @@ func TestStatuszEndpoint(t *testing.T) {
 	if !dashboard.Parking.Enabled {
 		t.Errorf("expected parking reported as enabled in status JSON")
 	}
-	if dashboard.Parking.MaxParked != defaultParkedRequestMax {
-		t.Errorf("expected parking max_parked %d, got %d", defaultParkedRequestMax, dashboard.Parking.MaxParked)
+	if dashboard.Parking.MaxParked != ingress.DefaultParkedRequestMax {
+		t.Errorf("expected parking max_parked %d, got %d", ingress.DefaultParkedRequestMax, dashboard.Parking.MaxParked)
 	}
 }
 

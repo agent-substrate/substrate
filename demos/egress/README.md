@@ -44,18 +44,20 @@ intercepted and carried over mTLS to a gateway that verifies who is making the r
 4. **Identity authentication.** Envoy requires a client certificate signed by the actor-identity
    CA, so a non-actor client is refused at the handshake. It then forwards the verified chain to
    `ext_proc` as `x-forwarded-client-cert`, and the **atenet router** (co-located in the gateway
-   pod as an ext_proc sidecar, the same ext_proc code used for ingress) re-verifies the chain,
-   requires exactly one `ActorIdentity` extension with `purpose: atunnel`, and calls the ate API
-   (`GetActor`). It returns **403** unless the certified **UID** matches a real, `RUNNING` actor.
-   This mirrors the ingress gateway's Envoy + ext_proc co-location; a standalone/shared ext_proc
-   is a future step.
+   pod as an ext_proc sidecar, the same binary that serves ingress, started with `--mode=egress`)
+   re-verifies the chain, requires exactly one `ActorIdentity` extension with `purpose: atunnel`,
+   and calls the ate API (`GetActor`). It returns **403** unless the certified **UID** matches a
+   real, `RUNNING` actor. This mirrors the ingress gateway's Envoy + ext_proc co-location; a
+   standalone/shared ext_proc is a future step.
 
 ## Components
 
 - **Egress app (`main.go`)** — the Actor: `POST /` with `{"url":"..."}` → fetches it → returns
   status + body.
 - **Egress gateway** — `manifests/ate-install/atenet-egress.yaml`. One pod, two containers:
-  an Envoy (`envoy`) and the atenet router ext_proc (`ext-proc`), called over localhost.
+  an Envoy (`envoy`) and the atenet router ext_proc (`ext-proc`, `--mode=egress`), called over
+  localhost. In egress mode the router serves the egress ext_proc handler only — no xDS server,
+  no ActorTemplate controller, and no Kubernetes access at all.
 - **Egress opt-in** — `ate-api-server --egress-gateway-address=atenet-egress.ate-system.svc:443`
   (set in `manifests/ate-install/ate-api-server.yaml`). ateapi stamps the address onto every
   atelet `Run`/`Restore`, which turns on tunneled egress cluster-wide.

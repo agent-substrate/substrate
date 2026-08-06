@@ -26,6 +26,49 @@ Router has several responsibilities:
   derived from the parking budget), then writes a drain-complete marker that
   releases the Envoy container's `preStop` hook. See `drain.go` and
   `envoydrain.go`.
+* Authenticates actor identity on egress: on every CONNECT, the egress Envoy's
+  ext_proc handler re-verifies the actor's client certificate against the
+  actor-identity CA, reads the `ActorIdentity` X.509 extension out of it, and
+  checks the certified UID against the ATE API.
+
+## packages
+
+The ext_proc server handles both traffic directions, and they apply opposite
+trust models — egress derives the actor identity from a client certificate
+Envoy verified against the actor-identity CA, ingress treats every request
+header as unauthenticated client input — so the two are kept in separate
+packages that cannot reach into each other:
+
+* `extproc` — the mux, and nothing else. It terminates the ext_proc stream,
+  decides which direction a request arrived on, dispatches to the `Handler`
+  registered for that direction, and records latency and outcome. It also owns
+  the vocabulary both handlers share (`RequestMetadata`, `Result`, `ReqError`).
+  It imports neither handler package.
+* `ingress` — resume, park, and route to the actor's worker.
+* `egress` — certificate-based actor-identity authentication for outbound
+  CONNECTs.
+
+Direction is decided by the Envoy filter chain that accepted the request
+(`xds.filter_chain_name`), never by anything in the request itself, so a client
+cannot pick the egress path by crafting one. `router` itself does the wiring.
+
+## modes
+
+One binary serves both directions. `--mode` selects which:
+
+| `--mode` | ext_proc handlers | xDS server + ActorTemplate controller | Kubernetes access |
+| --- | --- | --- | --- |
+| `ingress` | ingress | yes | yes |
+| `egress` | egress | no | none |
+| `all` (default) | both | yes | yes |
+
+The mux refuses a direction this instance was not started to serve (404) rather
+than falling back to the other handler, which would run the request through the
+wrong trust model.
+
+Ingress and egress are deployed separately today — `atenet-router` fronts the
+ingress Envoy, `atenet-egress` the egress one — because the two scale
+independently, not because they need separate binaries.
 
 ## status page
 

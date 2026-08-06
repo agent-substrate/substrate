@@ -58,6 +58,8 @@ import (
 	cachev3 "github.com/envoyproxy/go-control-plane/pkg/cache/v3"
 	resourcev3 "github.com/envoyproxy/go-control-plane/pkg/resource/v3"
 	serverv3 "github.com/envoyproxy/go-control-plane/pkg/server/v3"
+
+	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/ingress"
 )
 
 const (
@@ -76,12 +78,10 @@ const (
 	httpProtocolOptionsName = "envoy.extensions.upstreams.http.v3.HttpProtocolOptions"
 
 	// OriginalDstClusterName routes actor traffic to the worker's atunnel
-	// ingress by the IP:port the ext_proc puts in OriginalDstHeader, while the
-	// request :authority stays the actor DNS name so atunnel can identify the
-	// active actor.
+	// ingress by the IP:port the ext_proc puts in ingress.OriginalDstHeader,
+	// while the request :authority stays the actor DNS name so atunnel can
+	// identify the active actor.
 	OriginalDstClusterName = "actor_original_dst"
-	// OriginalDstHeader carries the resolved worker atunnel address (IP:443).
-	OriginalDstHeader = "x-ate-original-dst"
 )
 
 // defaultExtProcMessageTimeout is Envoy's per-message ext_proc response timeout
@@ -90,7 +90,7 @@ const (
 const defaultExtProcMessageTimeout = 5 * time.Second
 
 // defaultExtProcMaxRequests is the circuit-breaker max_requests set on the
-// ext_proc cluster: defaultParkedRequestMax plus equal fast-path headroom, so a
+// ext_proc cluster: ingress.DefaultParkedRequestMax plus equal fast-path headroom, so a
 // full parking lot cannot starve the millisecond-scale header exchanges of
 // requests to already-running actors. See buildCluster.
 const defaultExtProcMaxRequests = 2048
@@ -621,7 +621,7 @@ func (x *XdsServer) buildUpstreamTransportSocket() *corev3.TransportSocket {
 }
 
 // buildOriginalDstCluster dials the exact worker atunnel address supplied by
-// the ext_proc in OriginalDstHeader. Unlike the dynamic_forward_proxy cluster,
+// the ext_proc in ingress.OriginalDstHeader. Unlike the dynamic_forward_proxy cluster,
 // it does not derive the destination from :authority, so the request keeps the
 // actor DNS name as its Host for atunnel to authorize. mTLS to atunnel is
 // applied via the shared upstream transport socket (SPIFFE URI validation).
@@ -636,7 +636,7 @@ func (x *XdsServer) buildOriginalDstCluster() *clusterv3.Cluster {
 		LbConfig: &clusterv3.Cluster_OriginalDstLbConfig_{
 			OriginalDstLbConfig: &clusterv3.Cluster_OriginalDstLbConfig{
 				UseHttpHeader:  true,
-				HttpHeaderName: OriginalDstHeader,
+				HttpHeaderName: ingress.OriginalDstHeader,
 			},
 		},
 	}

@@ -22,6 +22,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"os"
 	"os/signal"
 	"syscall"
 
@@ -38,6 +39,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 
+	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/egress"
+	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/extproc"
+	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/ingress"
 	"github.com/agent-substrate/substrate/internal/ateapiauth"
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	v1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
@@ -61,51 +65,60 @@ func init() {
 type RouterServer struct {
 	cfg routerConfig
 
-	Cmd        *cobra.Command
-	k8sClient  client.Client
-	clientset  kubernetes.Interface
-	apiClient  ateapipb.ControlClient
-	extprocSrv *ExtProcServer
-	health     *routerHealth
-	atStore    atStore
+	Cmd       *cobra.Command
+	k8sClient client.Client
+	clientset kubernetes.Interface
+	apiClient ateapipb.ControlClient
+	// extprocSrv is the ext_proc mux. Which handlers it carries — ingress,
+	// egress, or both — follows cfg.Mode.
+	extprocSrv *extproc.Server
+	// ingressHandler is the ingress handler registered on extprocSrv, kept for
+	// the status page's parking snapshot. Nil in egress-only mode.
+	ingressHandler *ingress.Handler
+	health         *routerHealth
+	atStore        atStore
 }
 
 func NewRouterServer(cfg routerConfig) (*RouterServer, error) {
 	var k8sClient client.Client
 	var clientset kubernetes.Interface
-
-	if cfg.TemplatesFile == "" {
-		k8sCfg, err := config.GetConfig()
-		if err != nil {
-			if cfg.Kubeconfig != "" {
-				k8sCfg, err = clientcmd.BuildConfigFromFlags("", cfg.Kubeconfig)
-				if err != nil {
-					return nil, fmt.Errorf("failed to read config from path %s: %w", cfg.Kubeconfig, err)
-				}
-			} else {
-				return nil, fmt.Errorf("unable to establish Kubernetes configuration parameters: %w", err)
-			}
-		}
-		slog.Info("Connecting to Kubernetes API server", slog.String("host", k8sCfg.Host))
-
-		k8sClient, err = client.New(k8sCfg, client.Options{
-			Scheme: scheme,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("failed to initialize cluster client: %w", err)
-		}
-
-		clientset, err = kubernetes.NewForConfig(k8sCfg)
-		if err != nil {
-			return nil, fmt.Errorf("failed to initialize core client: %w", err)
-		}
-	}
-
 	var store atStore
-	if cfg.TemplatesFile != "" {
-		store = newFileATStore(cfg.TemplatesFile)
-	} else {
-		store = newk8sATStore(k8sClient)
+
+	// Only ingress needs Kubernetes: it is the ActorTemplate controller and the
+	// xDS server that read from it. An egress-only instance is pure ext_proc and
+	// deliberately runs without any cluster access at all, so do not even build
+	// the clients — in-cluster config would only fail for want of RBAC.
+	if cfg.Mode.ServesIngress() {
+		if cfg.TemplatesFile == "" {
+			k8sCfg, err := config.GetConfig()
+			if err != nil {
+				if cfg.Kubeconfig != "" {
+					k8sCfg, err = clientcmd.BuildConfigFromFlags("", cfg.Kubeconfig)
+					if err != nil {
+						return nil, fmt.Errorf("failed to read config from path %s: %w", cfg.Kubeconfig, err)
+					}
+				} else {
+					return nil, fmt.Errorf("unable to establish Kubernetes configuration parameters: %w", err)
+				}
+			}
+			slog.Info("Connecting to Kubernetes API server", slog.String("host", k8sCfg.Host))
+
+			k8sClient, err = client.New(k8sCfg, client.Options{
+				Scheme: scheme,
+			})
+			if err != nil {
+				return nil, fmt.Errorf("failed to initialize cluster client: %w", err)
+			}
+
+			clientset, err = kubernetes.NewForConfig(k8sCfg)
+			if err != nil {
+				return nil, fmt.Errorf("failed to initialize core client: %w", err)
+			}
+
+			store = newk8sATStore(k8sClient)
+		} else {
+			store = newFileATStore(cfg.TemplatesFile)
+		}
 	}
 
 	return &RouterServer{
@@ -137,7 +150,7 @@ func (s *RouterServer) Run(ctx context.Context) error {
 	if err := s.cfg.validate(); err != nil {
 		return fmt.Errorf("invalid router configuration: %w", err)
 	}
-	parkCfg := s.cfg.ParkedRequest.normalized()
+	parkCfg := s.cfg.ParkedRequest.Normalized()
 
 	// The drain-complete marker persists container restarts (emptyDir); a
 	// stale one would release the Envoy preStop hook the moment a later drain
@@ -155,7 +168,7 @@ func (s *RouterServer) Run(ctx context.Context) error {
 	// sampler and Envoy's RandomSampling percent cannot drift.
 	sampling := serverboot.ResolveTraceSampling(ctx, serverboot.ParentRatioSampling(dataPlaneTraceRatio))
 	tp, err := serverboot.InitTracing(ctx, serverboot.TracingOptions{
-		ServiceName: routerServiceName,
+		ServiceName: extproc.ServiceName,
 		Sampling:    sampling,
 	})
 	if err != nil {
@@ -163,7 +176,7 @@ func (s *RouterServer) Run(ctx context.Context) error {
 	}
 	defer serverboot.ShutdownProvider("TracerProvider", tp.Shutdown)
 
-	mp, err := serverboot.InitMetrics(ctx, routerServiceName)
+	mp, err := serverboot.InitMetrics(ctx, extproc.ServiceName)
 	if err != nil {
 		return fmt.Errorf("failed to initialize metrics: %w", err)
 	}
@@ -202,40 +215,62 @@ func (s *RouterServer) Run(ctx context.Context) error {
 	s.apiClient = ateapipb.NewControlClient(conn)
 
 	slog.InfoContext(ctx, "Starting substrate router subsystem",
+		slog.String("mode", string(s.cfg.Mode)),
 		slog.Bool("standalone", s.cfg.Standalone),
 		slog.String("atenet_router", string(s.cfg.atenetRouter())))
 
 	g, ctx := errgroup.WithContext(ctx)
 
-	if s.extprocSrv == nil {
-		routeDuration, err := newRouteDurationHistogram()
-		if err != nil {
-			return fmt.Errorf("failed to create route-duration histogram: %w", err)
-		}
-		parkMetrics, err := newParkingMetrics()
+	// Register one handler per direction this instance serves. The mux refuses
+	// any direction missing from this map, so the mode is enforced here rather
+	// than merely advertised.
+	handlers := extproc.Handlers{}
+	if s.cfg.Mode.ServesIngress() {
+		parkMetrics, err := ingress.NewParkingMetrics()
 		if err != nil {
 			return fmt.Errorf("failed to create parking metrics: %w", err)
 		}
+		s.ingressHandler = ingress.New(s.apiClient, parkCfg, parkMetrics, s.cfg.atenetRouter().routeViaAuthority())
+		handlers[s.ingressHandler.Direction()] = s.ingressHandler
+	}
+	if s.cfg.Mode.ServesEgress() {
 		// Load the actor-identity CA up front so a missing or unusable bundle
 		// fails startup, rather than turning into a 503 on the first actor
-		// egress attempt. An unset flag is the ingress-only case and is fine.
+		// egress attempt. An unset flag leaves the handler with no roots, which
+		// denies every CONNECT — see egress.New.
 		var actorIdentityRoots *x509.CertPool
 		if s.cfg.ActorIdentityCAFile != "" {
 			pemBytes, err := os.ReadFile(s.cfg.ActorIdentityCAFile)
 			if err != nil {
 				return fmt.Errorf("reading --actor-identity-ca-file: %w", err)
 			}
-			actorIdentityRoots, err = loadActorIdentityRoots(pemBytes)
+			actorIdentityRoots, err = egress.LoadActorIdentityRoots(pemBytes)
 			if err != nil {
 				return fmt.Errorf("loading --actor-identity-ca-file %q: %w", s.cfg.ActorIdentityCAFile, err)
 			}
 		}
-		s.extprocSrv = NewExtProcServer(s.cfg.ExtprocPort, s.apiClient, routeDuration, parkCfg, parkMetrics, s.cfg.atenetRouter().routeViaAuthority(), actorIdentityRoots)
+		egressHandler := egress.New(s.apiClient, actorIdentityRoots)
+		handlers[egressHandler.Direction()] = egressHandler
 	}
+
+	if s.extprocSrv == nil {
+		routeDuration, err := extproc.NewRouteDurationHistogram()
+		if err != nil {
+			return fmt.Errorf("failed to create route-duration histogram: %w", err)
+		}
+		s.extprocSrv = extproc.NewServer(s.cfg.ExtprocPort, routeDuration, handlers)
+	}
+
 	s.health = newRouterHealth(s.cfg.HealthInterval, s.clientset, s.apiClient, s.cfg)
 
-	if err := s.startDataplane(ctx, g, parkCfg, sampling.RootSamplingPercent()); err != nil {
-		return err
+	// The dataplane control plane — the xDS server and the ActorTemplate
+	// controller — configures the *ingress* Envoy. The egress Envoy is
+	// statically configured, so an egress-only instance runs neither and needs
+	// no Kubernetes access.
+	if s.cfg.Mode.ServesIngress() {
+		if err := s.startDataplane(ctx, g, parkCfg, sampling.RootSamplingPercent()); err != nil {
+			return err
+		}
 	}
 
 	// Start periodic service checking logic

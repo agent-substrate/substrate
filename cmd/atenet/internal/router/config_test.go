@@ -18,6 +18,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/ingress"
 )
 
 func TestRouterConfigValidate(t *testing.T) {
@@ -27,16 +29,16 @@ func TestRouterConfigValidate(t *testing.T) {
 		wantErr string // substring; empty means valid
 	}{
 		{
-			name: "atenet-router defaults to envoy",
-			cfg:  routerConfig{ExtProcMaxRequests: 0, ParkedRequest: ParkedRequestConfig{Max: defaultParkedRequestMax}},
+			name: "defaults are valid (auto breaker, atenet-router defaults to envoy)",
+			cfg:  routerConfig{ExtProcMaxRequests: 0, ParkedRequest: ingress.ParkedRequestConfig{Max: ingress.DefaultParkedRequestMax}},
 		},
 		{
 			name: "atenet-router set to envoy is valid",
-			cfg:  routerConfig{AtenetRouter: string(atenetRouterEnvoy), ParkedRequest: ParkedRequestConfig{Max: defaultParkedRequestMax}},
+			cfg:  routerConfig{AtenetRouter: string(atenetRouterEnvoy), ParkedRequest: ingress.ParkedRequestConfig{Max: ingress.DefaultParkedRequestMax}},
 		},
 		{
 			name: "atenet-router set to agentgateway is valid",
-			cfg:  routerConfig{AtenetRouter: string(atenetRouterAgentgateway), ParkedRequest: ParkedRequestConfig{Max: defaultParkedRequestMax}},
+			cfg:  routerConfig{AtenetRouter: string(atenetRouterAgentgateway), ParkedRequest: ingress.ParkedRequestConfig{Max: ingress.DefaultParkedRequestMax}},
 		},
 		{
 			name:    "unknown router rejected",
@@ -45,47 +47,64 @@ func TestRouterConfigValidate(t *testing.T) {
 		},
 		{
 			name:    "negative extproc-max-requests rejected",
-			cfg:     routerConfig{ExtProcMaxRequests: -1, ParkedRequest: ParkedRequestConfig{Max: 0}},
+			cfg:     routerConfig{ExtProcMaxRequests: -1, ParkedRequest: ingress.ParkedRequestConfig{Max: 0}},
 			wantErr: "must not be negative",
 		},
 		{
 			name:    "explicit breaker below the lot rejected",
-			cfg:     routerConfig{ExtProcMaxRequests: 512, ParkedRequest: ParkedRequestConfig{Max: 1024}},
+			cfg:     routerConfig{ExtProcMaxRequests: 512, ParkedRequest: ingress.ParkedRequestConfig{Max: 1024}},
 			wantErr: "must be >= --parked-request-max",
 		},
 		{
 			name: "explicit breaker equal to the lot accepted",
-			cfg:  routerConfig{ExtProcMaxRequests: 1024, ParkedRequest: ParkedRequestConfig{Max: 1024}},
+			cfg:  routerConfig{ExtProcMaxRequests: 1024, ParkedRequest: ingress.ParkedRequestConfig{Max: 1024}},
 		},
 		{
 			name: "parking disabled ignores the relation",
-			cfg:  routerConfig{ExtProcMaxRequests: 8, ParkedRequest: ParkedRequestConfig{Max: 0}},
+			cfg:  routerConfig{ExtProcMaxRequests: 8, ParkedRequest: ingress.ParkedRequestConfig{Max: 0}},
+		},
+		{
+			name: "explicit ingress mode accepted",
+			cfg:  routerConfig{Mode: ModeIngress},
+		},
+		{
+			name: "explicit egress mode accepted",
+			cfg:  routerConfig{Mode: ModeEgress},
+		},
+		{
+			name: "explicit all mode accepted",
+			cfg:  routerConfig{Mode: ModeAll},
+		},
+		{
+			name:    "unknown mode rejected",
+			cfg:     routerConfig{Mode: "both"},
+			wantErr: `--mode must be one of`,
 		},
 		{
 			name:    "drain-timeout below the parking budget rejected",
-			cfg:     routerConfig{ParkedRequest: ParkedRequestConfig{Budget: 5 * time.Second, Max: 1024}, DrainTimeout: 2 * time.Second},
+			cfg:     routerConfig{ParkedRequest: ingress.ParkedRequestConfig{Budget: 5 * time.Second, Max: 1024}, DrainTimeout: 2 * time.Second},
 			wantErr: "must be >= --parked-request-budget",
 		},
 		{
 			name: "drain-timeout equal to the parking budget accepted",
-			cfg:  routerConfig{ParkedRequest: ParkedRequestConfig{Budget: 5 * time.Second, Max: 1024}, DrainTimeout: 5 * time.Second},
+			cfg:  routerConfig{ParkedRequest: ingress.ParkedRequestConfig{Budget: 5 * time.Second, Max: 1024}, DrainTimeout: 5 * time.Second},
 		},
 		{
 			name: "drain-timeout above the parking budget accepted",
-			cfg:  routerConfig{ParkedRequest: ParkedRequestConfig{Budget: 5 * time.Second, Max: 1024}, DrainTimeout: 30 * time.Second},
+			cfg:  routerConfig{ParkedRequest: ingress.ParkedRequestConfig{Budget: 5 * time.Second, Max: 1024}, DrainTimeout: 30 * time.Second},
 		},
 		{
 			name: "short drain-timeout with parking disabled accepted",
-			cfg:  routerConfig{ParkedRequest: ParkedRequestConfig{Max: 0}, DrainTimeout: time.Second},
+			cfg:  routerConfig{ParkedRequest: ingress.ParkedRequestConfig{Max: 0}, DrainTimeout: time.Second},
 		},
 		{
 			name:    "negative drain-timeout rejected",
-			cfg:     routerConfig{ParkedRequest: ParkedRequestConfig{Max: defaultParkedRequestMax}, DrainTimeout: -time.Second},
+			cfg:     routerConfig{ParkedRequest: ingress.ParkedRequestConfig{Max: ingress.DefaultParkedRequestMax}, DrainTimeout: -time.Second},
 			wantErr: "--drain-timeout must not be negative",
 		},
 		{
 			name:    "negative drain-delay rejected",
-			cfg:     routerConfig{ParkedRequest: ParkedRequestConfig{Max: defaultParkedRequestMax}, DrainDelay: -time.Second},
+			cfg:     routerConfig{ParkedRequest: ingress.ParkedRequestConfig{Max: ingress.DefaultParkedRequestMax}, DrainDelay: -time.Second},
 			wantErr: "--drain-delay must not be negative",
 		},
 	}
@@ -124,17 +143,42 @@ func TestRouterConfigAtenetRouter(t *testing.T) {
 	}
 }
 
+// The empty mode is what a routerConfig built in code (rather than from flags)
+// carries, and it must behave as ModeAll so nothing silently stops serving.
+func TestModeServes(t *testing.T) {
+	tests := []struct {
+		mode        Mode
+		wantIngress bool
+		wantEgress  bool
+	}{
+		{mode: "", wantIngress: true, wantEgress: true},
+		{mode: ModeAll, wantIngress: true, wantEgress: true},
+		{mode: ModeIngress, wantIngress: true, wantEgress: false},
+		{mode: ModeEgress, wantIngress: false, wantEgress: true},
+	}
+	for _, tc := range tests {
+		t.Run(string(tc.mode), func(t *testing.T) {
+			if got := tc.mode.ServesIngress(); got != tc.wantIngress {
+				t.Errorf("ServesIngress() = %v, want %v", got, tc.wantIngress)
+			}
+			if got := tc.mode.ServesEgress(); got != tc.wantEgress {
+				t.Errorf("ServesEgress() = %v, want %v", got, tc.wantEgress)
+			}
+		})
+	}
+}
+
 func TestRouterConfigExtProcMaxRequests(t *testing.T) {
 	tests := []struct {
 		name string
 		cfg  routerConfig
 		want int
 	}{
-		{"auto derives twice the default lot", routerConfig{ExtProcMaxRequests: 0, ParkedRequest: ParkedRequestConfig{Max: defaultParkedRequestMax}}, 2 * defaultParkedRequestMax},
-		{"auto scales with a larger lot", routerConfig{ExtProcMaxRequests: 0, ParkedRequest: ParkedRequestConfig{Max: 4096}}, 8192},
-		{"auto floors at Envoy's default when the lot is small", routerConfig{ExtProcMaxRequests: 0, ParkedRequest: ParkedRequestConfig{Max: 10}}, extProcMaxRequestsFloor},
-		{"auto floors when parking is disabled", routerConfig{ExtProcMaxRequests: 0, ParkedRequest: ParkedRequestConfig{Max: 0}}, extProcMaxRequestsFloor},
-		{"explicit value wins over derivation", routerConfig{ExtProcMaxRequests: 1500, ParkedRequest: ParkedRequestConfig{Max: 1024}}, 1500},
+		{"auto derives twice the default lot", routerConfig{ExtProcMaxRequests: 0, ParkedRequest: ingress.ParkedRequestConfig{Max: ingress.DefaultParkedRequestMax}}, 2 * ingress.DefaultParkedRequestMax},
+		{"auto scales with a larger lot", routerConfig{ExtProcMaxRequests: 0, ParkedRequest: ingress.ParkedRequestConfig{Max: 4096}}, 8192},
+		{"auto floors at Envoy's default when the lot is small", routerConfig{ExtProcMaxRequests: 0, ParkedRequest: ingress.ParkedRequestConfig{Max: 10}}, extProcMaxRequestsFloor},
+		{"auto floors when parking is disabled", routerConfig{ExtProcMaxRequests: 0, ParkedRequest: ingress.ParkedRequestConfig{Max: 0}}, extProcMaxRequestsFloor},
+		{"explicit value wins over derivation", routerConfig{ExtProcMaxRequests: 1500, ParkedRequest: ingress.ParkedRequestConfig{Max: 1024}}, 1500},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -149,19 +193,19 @@ func TestRouterConfigDrainTimeout(t *testing.T) {
 	tests := []struct {
 		name    string
 		cfg     routerConfig
-		parkCfg ParkedRequestConfig
+		parkCfg ingress.ParkedRequestConfig
 		want    time.Duration
 	}{
 		{
 			name:    "auto derives budget + route timeout + margin",
 			cfg:     routerConfig{DrainTimeout: 0},
-			parkCfg: ParkedRequestConfig{Budget: 5 * time.Second, Max: 1024}.normalized(),
+			parkCfg: ingress.ParkedRequestConfig{Budget: 5 * time.Second, Max: 1024}.Normalized(),
 			want:    5*time.Second + defaultRouteTimeout + drainTimeoutMargin,
 		},
 		{
 			name:    "auto scales with a larger budget",
 			cfg:     routerConfig{DrainTimeout: 0},
-			parkCfg: ParkedRequestConfig{Budget: 30 * time.Second, Max: 1024}.normalized(),
+			parkCfg: ingress.ParkedRequestConfig{Budget: 30 * time.Second, Max: 1024}.Normalized(),
 			want:    30*time.Second + defaultRouteTimeout + drainTimeoutMargin,
 		},
 		{
@@ -170,13 +214,13 @@ func TestRouterConfigDrainTimeout(t *testing.T) {
 			// normalized() fills Budget even when Max disables parking, so the
 			// derived drain still covers a later re-enable without a restart
 			// surprise.
-			parkCfg: ParkedRequestConfig{Max: 0}.normalized(),
-			want:    defaultParkedRequestBudget + defaultRouteTimeout + drainTimeoutMargin,
+			parkCfg: ingress.ParkedRequestConfig{Max: 0}.Normalized(),
+			want:    ingress.DefaultParkedRequestBudget + defaultRouteTimeout + drainTimeoutMargin,
 		},
 		{
 			name:    "explicit value wins over derivation",
 			cfg:     routerConfig{DrainTimeout: 42 * time.Second},
-			parkCfg: ParkedRequestConfig{Budget: 5 * time.Second, Max: 1024}.normalized(),
+			parkCfg: ingress.ParkedRequestConfig{Budget: 5 * time.Second, Max: 1024}.Normalized(),
 			want:    42 * time.Second,
 		},
 	}

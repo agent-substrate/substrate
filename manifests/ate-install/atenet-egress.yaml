@@ -29,35 +29,11 @@ kind: ServiceAccount
 metadata:
   name: atenet-egress
   namespace: ate-system
----
-# RBAC for the co-located ext_proc sidecar (atenet router), which watches
-# ActorTemplates as part of its normal operation.
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: atenet-egress
-rules:
-- apiGroups:
-  - "ate.dev"
-  resources:
-  - actortemplates
-  verbs:
-  - get
-  - watch
-  - list
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
-metadata:
-  name: atenet-egress
-subjects:
-- kind: ServiceAccount
-  name: atenet-egress
-  namespace: ate-system
-roleRef:
-  kind: ClusterRole
-  name: atenet-egress
-  apiGroup: rbac.authorization.k8s.io
+#
+# No RBAC is bound to this ServiceAccount on purpose: the ext_proc sidecar runs
+# with --mode=egress, which serves the egress ext_proc handler and nothing else
+# — no xDS server and no ActorTemplate controller, so no Kubernetes access. It
+# reaches the control plane over the ate API only.
 ---
 apiVersion: v1
 kind: ConfigMap
@@ -77,7 +53,7 @@ data:
         filter_chains:
         # Named so ext_proc can read it back as xds.filter_chain_name. Must
         # match EgressFilterChainName in
-        # cmd/atenet/internal/router/extproc_egress.go.
+        # cmd/atenet/internal/router/extproc/dispatch.go.
         - name: egress
           transport_socket:
             name: envoy.transport_sockets.tls
@@ -173,9 +149,10 @@ data:
                   # this Envoy-asserted filter chain name so that no client can
                   # select the egress path by crafting a request. The value must
                   # match EgressFilterChainName in
-                  # cmd/atenet/internal/router/extproc_egress.go; renaming the
-                  # filter chain above without updating it fails closed (egress
-                  # requests take the ingress path and 404).
+                  # cmd/atenet/internal/router/extproc/dispatch.go; renaming the
+                  # filter chain above without updating it fails closed (the
+                  # request is classified as ingress, which this --mode=egress
+                  # instance does not serve, and is refused with a 404).
                   request_attributes:
                   - xds.filter_chain_name
                   processing_mode:
@@ -298,15 +275,20 @@ spec:
         - name: actor-id-ca-certs
           mountPath: /run/actor-id-ca-certs
           readOnly: true
-      # Co-located ext_proc server (the atenet router, ext_proc-only). The egress
-      # Envoy calls it over localhost to authenticate actor identity against the
-      # ate API on every CONNECT. This mirrors the ingress gateway topology
-      # (Envoy + ext_proc in one pod); a shared/standalone ext_proc is a future step.
+      # Co-located ext_proc server: the same atenet router binary the ingress
+      # gateway runs, started with --mode=egress so it serves only the egress
+      # ext_proc handler (no xDS server, no ActorTemplate controller, no
+      # Kubernetes access). The egress Envoy calls it over localhost to
+      # authenticate actor identity against the ate API on every CONNECT.
+      #
+      # Ingress and egress are separate Deployments because they scale
+      # independently, not because they need separate binaries: one instance can
+      # serve both directions with --mode=all.
       - name: ext-proc
         image: ko://github.com/agent-substrate/substrate/cmd/atenet
         args:
         - router
-        - --standalone
+        - --mode=egress
         - --namespace=ate-system
         - --port-extproc=50051
         - --extproc-address=127.0.0.1

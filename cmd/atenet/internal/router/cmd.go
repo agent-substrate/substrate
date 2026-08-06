@@ -20,6 +20,8 @@ import (
 	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/ingress"
 )
 
 func NewRouterCmd() *cobra.Command {
@@ -39,6 +41,7 @@ func NewRouterCmd() *cobra.Command {
 		},
 	}
 
+	cmd.Flags().StringVar((*string)(&cfg.Mode), "mode", string(ModeAll), fmt.Sprintf("Traffic direction this instance serves: %q (also runs the xDS server and ActorTemplate controller for the ingress Envoy), %q (ext_proc only, needs no Kubernetes access), or %q for both. The ext_proc mux refuses a direction this instance was not started to serve rather than falling back to the other one", ModeIngress, ModeEgress, ModeAll))
 	cmd.Flags().StringVar(&cfg.LogLevel, "log-level", "info", "Log level: debug, info, warn, error")
 	cmd.Flags().StringVar(&cfg.MetricsAddr, "metrics-listen-addr", ":9090", "Address and port the prometheus metrics server should listen on.")
 	cmd.Flags().BoolVar(&cfg.Standalone, "standalone", false, "Run in standalone mode, bypassing creation of managed deployment and services in Kubernetes cluster")
@@ -71,11 +74,11 @@ func NewRouterCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&cfg.Auth.AteapiUseTokenAuth, "ateapi-use-token-auth", false, "Authenticate to ateapi with the Bearer token from --ateapi-token-file instead of the client certificate from --ateapi-client-cert.")
 	cmd.Flags().StringVar(&cfg.Auth.AteapiTokenFile, "ateapi-token-file", "", "Projected SA token file used as Bearer credential. Required with --ateapi-use-token-auth, ignored otherwise.")
 	cmd.Flags().DurationVar(&cfg.RouteTimeout, "route-timeout", defaultRouteTimeout, "Envoy's end-to-end timeout on the workload route, bounding one request from the ingress listener to the actor's response. Raise it for actors whose turns legitimately run long — a harness relaying an LLM completion holds the request open for the whole generation. This does not cover the resume that may precede the request; see --parked-request-budget")
-	cmd.Flags().DurationVar(&cfg.ParkedRequest.Budget, "parked-request-budget", defaultParkedRequestBudget, "Maximum time a resume flight keeps a request parked (held and retried) waiting for its actor to become routable; concurrent requests for the same actor share one flight and its budget")
-	cmd.Flags().IntVar(&cfg.ParkedRequest.Max, "parked-request-max", defaultParkedRequestMax, "Maximum number of requests that may be parked simultaneously; excess requests are shed with 503. 0 disables parking (requests fail fast on worker-pool saturation)")
-	cmd.Flags().DurationVar(&cfg.ParkedRequest.RetryInterval, "parked-request-retry-interval", defaultParkedRequestRetryInterval, "Delay before a parked request's first resume retry")
-	cmd.Flags().Float64Var(&cfg.ParkedRequest.RetryFactor, "parked-request-retry-factor", defaultParkedRequestRetryFactor, "Multiplier applied to the retry delay after each attempt; must be >= 1")
-	cmd.Flags().Float64Var(&cfg.ParkedRequest.RetryJitter, "parked-request-retry-jitter", defaultParkedRequestRetryJitter, "Random fraction in [0, 1) added to each retry delay to de-synchronize parked requests")
+	cmd.Flags().DurationVar(&cfg.ParkedRequest.Budget, "parked-request-budget", ingress.DefaultParkedRequestBudget, "Maximum time a resume flight keeps a request parked (held and retried) waiting for its actor to become routable; concurrent requests for the same actor share one flight and its budget")
+	cmd.Flags().IntVar(&cfg.ParkedRequest.Max, "parked-request-max", ingress.DefaultParkedRequestMax, "Maximum number of requests that may be parked simultaneously; excess requests are shed with 503. 0 disables parking (requests fail fast on worker-pool saturation)")
+	cmd.Flags().DurationVar(&cfg.ParkedRequest.RetryInterval, "parked-request-retry-interval", ingress.DefaultParkedRequestRetryInterval, "Delay before a parked request's first resume retry")
+	cmd.Flags().Float64Var(&cfg.ParkedRequest.RetryFactor, "parked-request-retry-factor", ingress.DefaultParkedRequestRetryFactor, "Multiplier applied to the retry delay after each attempt; must be >= 1")
+	cmd.Flags().Float64Var(&cfg.ParkedRequest.RetryJitter, "parked-request-retry-jitter", ingress.DefaultParkedRequestRetryJitter, "Random fraction in [0, 1) added to each retry delay to de-synchronize parked requests")
 	cmd.Flags().IntVar(&cfg.ExtProcMaxRequests, "extproc-max-requests", 0, "Circuit-breaker max_requests for Envoy's ext_proc cluster; 0 (the default) derives it as twice --parked-request-max (minimum 1024). Explicit values must be >= --parked-request-max: every parked request holds one slot for its full wait, and the excess is fast-path headroom")
 	// Graceful shutdown knobs. The router sits behind a Service, so
 	// route-drain window is needed: after SIGTERM the readiness flip

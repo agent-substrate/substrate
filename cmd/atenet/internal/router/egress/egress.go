@@ -12,7 +12,18 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package router
+// Package egress implements the ext_proc handler for traffic leaving the mesh:
+// it authenticates the actor behind an egress CONNECT before the gateway
+// tunnels it out.
+//
+// The identity this handler acts on comes from the actor certificate presented
+// in the mTLS handshake and signed by the actor-identity CA — never from a
+// request header. That is the opposite of the ingress package's model, where
+// every header is unauthenticated client input. Keeping the two in separate
+// packages keeps that difference explicit; the ext_proc mux is what guarantees
+// a request only ever reaches the handler for the filter chain that accepted
+// it.
+package egress
 
 import (
 	"context"
@@ -30,27 +41,13 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/extproc"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/substratex509"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
 const (
-	// EgressFilterChainName is the Envoy filter chain that terminates actor
-	// egress CONNECTs. It must stay in sync with the filter chain name in
-	// manifests/ate-install/atenet-egress.yaml.
-	EgressFilterChainName = "egress"
-	// FilterChainNameAttribute is the CEL attribute carrying the name of the
-	// filter chain that accepted the request. The egress Envoy asks for it via
-	// request_attributes on its ext_proc filter.
-	//
-	// Do not "improve" this to xds.listener_name: Envoy 1.34 cannot parse that
-	// one, and rather than failing config load it logs "error parsing cel
-	// expression" at trace level and sends an empty attributes map. An absent
-	// attribute means "ingress" here, so every egress CONNECT would silently
-	// take the ingress path and 404 on the actor DNS name parse.
-	FilterChainNameAttribute = "xds.filter_chain_name"
-
 	// forwardedClientCertHeader is the header Envoy fills in with details of
 	// the mTLS peer, including the PEM chain it validated. The egress filter
 	// chain sets forward_client_cert_details: SANITIZE_SET, so whatever a
@@ -67,84 +64,62 @@ const (
 	xfccChainKey = "chain"
 )
 
-// isEgressRequest reports whether an ext_proc RequestHeaders callback arrived on
-// the egress gateway's filter chain rather than on an ingress one. This lets one
-// ext_proc server handle both directions off the same stream.
-//
-// Dispatch is by filter chain, not by :method, because the two handlers apply
-// opposite trust models: on egress the actor identity comes from a client
-// certificate Envoy validated, while on ingress every request header is
-// unauthenticated client input. Keying on :method would let any external client
-// sending CONNECT select the egress handler and use its denial messages as an
-// actor-existence and status oracle. Envoy asserts the filter chain name; the
-// request cannot influence it.
-//
-// An unrecognized or absent attribute means ingress, the fail-safe direction: an
-// egress request misrouted to the ingress handler fails to parse as an actor DNS
-// name and 404s, whereas the reverse leaks control-plane state.
-func isEgressRequest(req *extprocv3.ProcessingRequest) bool {
-	return filterChainName(req) == EgressFilterChainName
+// Handler authenticates the actor behind each egress CONNECT.
+type Handler struct {
+	apiClient ateapipb.ControlClient
+	// actorIdentityRoots is the actor-identity CA bundle every actor
+	// certificate must chain to. Nil means the gateway cannot authenticate
+	// anyone, and every CONNECT fails closed.
+	actorIdentityRoots *x509.CertPool
 }
 
-// filterChainName returns the xds.filter_chain_name attribute Envoy attached to
-// the request, or "" when the listener did not request the attribute. The
-// attributes map is keyed by the ext_proc filter's name within the HCM chain,
-// which we do not want to hardcode here, so scan every entry.
-func filterChainName(req *extprocv3.ProcessingRequest) string {
-	for _, attrs := range req.GetAttributes() {
-		if v, ok := attrs.GetFields()[FilterChainNameAttribute]; ok {
-			return v.GetStringValue()
-		}
-	}
-	return ""
+// New builds the egress handler. actorIdentityRoots is the same trust bundle
+// the egress listener uses as its trusted_ca; see verifyActorCertificate for
+// why the check is made again here.
+func New(apiClient ateapipb.ControlClient, actorIdentityRoots *x509.CertPool) *Handler {
+	return &Handler{apiClient: apiClient, actorIdentityRoots: actorIdentityRoots}
 }
 
-// handleEgressRequestHeaders authenticates the actor behind an egress CONNECT
-// before the gateway tunnels it out, using the actor certificate atunnel
-// presented in the mTLS handshake. Nothing the actor can write — no CONNECT
-// header, no request metadata — contributes to the identity; the only inputs
-// are the certificate the actor-identity CA signed and the control plane's own
-// view of that actor.
+func (h *Handler) Direction() extproc.Direction { return extproc.DirectionEgress }
+
+// HandleRequestHeaders authenticates the actor behind an egress CONNECT before
+// the gateway tunnels it out, using the actor certificate atunnel presented in
+// the mTLS handshake. Nothing the actor can write — no CONNECT header, no
+// request metadata — contributes to the identity; the only inputs are the
+// certificate the actor-identity CA signed and the control plane's own view of
+// that actor.
 //
 // Authorization by destination and credential/token injection are deliberately
 // a TODO once we have SessionIdentity RPC service figured out.
 //
-// The signature mirrors handleRequestHeaders so Process can dispatch to either
-// with a single branch. The (target, tmplNs, tmplName) results are unused for
-// egress and returned empty.
-//
-// The trailing ResumeOutcome exists only to match handleRequestHeaders.
-// Egress never resumes an actor — it requires one already RUNNING -
-// so every path returns ResumeOutcomeNone.
-func (s *ExtProcServer) handleEgressRequestHeaders(
-	ctx context.Context,
-	reqHeaders *extprocv3.HttpHeaders,
-) (*extprocv3.HeadersResponse, *requestMetadata, string, string, string, ResumeOutcome, error) {
-	metadata := newRequestMetadata(reqHeaders.Headers.GetHeaders())
-
-	// Dispatch is by filter chain, so reaching here means the egress chain
-	// accepted the request. That chain only routes CONNECT (its sole route is a
-	// connect_matcher), so anything else is config drift rather than a client
-	// the gateway should tunnel for.
-	if !strings.EqualFold(metadata.method, "CONNECT") {
-		return nil, metadata, "", "", "", ResumeOutcomeNone, newReqError(envoy_type.StatusCode_MethodNotAllowed,
-			"egress denied: expected CONNECT, got %q", metadata.method)
+// Egress never resumes an actor — it requires one already RUNNING — and picks
+// no upstream of its own, so the Result carries neither a resume outcome nor a
+// target.
+func (h *Handler) HandleRequestHeaders(ctx context.Context, md *extproc.RequestMetadata) (extproc.Result, error) {
+	// Dispatch is by filter chain, so reaching here means the egress listener
+	// accepted the request. That listener only routes CONNECT (its sole route
+	// is a connect_matcher), so anything else is a config drift rather than a
+	// client the gateway should tunnel for.
+	if !strings.EqualFold(md.Method, "CONNECT") {
+		return extproc.Result{}, extproc.NewReqError(envoy_type.StatusCode_MethodNotAllowed,
+			"egress denied: expected CONNECT, got %q", md.Method)
 	}
 
 	// No roots means the gateway cannot authenticate anyone. Fail closed, and
 	// as 503 rather than 403: this is our misconfiguration, not the actor's.
-	if s.actorIdentityRoots == nil {
-		return nil, metadata, "", "", "", ResumeOutcomeNone, newReqError(envoy_type.StatusCode_ServiceUnavailable,
+	if h.actorIdentityRoots == nil {
+		return extproc.Result{}, extproc.NewReqError(envoy_type.StatusCode_ServiceUnavailable,
 			"egress unavailable: no actor-identity CA configured")
 	}
 
-	identity, err := s.authenticateActorCertificate(metadata)
+	identity, err := h.authenticateActorCertificate(md)
 	if err != nil {
-		// The message stays generic on purpose: an actor that fails
-		// authentication has not proven it is anyone, so it gets no detail
-		// about why. The specific reason is logged below instead.
+		// The body stays generic on purpose: an actor that fails authentication
+		// has not proven it is anyone, so it gets no detail about why. The
+		// specific reason rides along as the wrapped cause, which only the
+		// server-side log below reads.
 		slog.WarnContext(ctx, "egress denied: actor certificate rejected", slog.Any("err", err))
-		return nil, metadata, "", "", "", ResumeOutcomeNone, newReqError(envoy_type.StatusCode_Forbidden,
+		return extproc.Result{}, extproc.WrapReqError(envoy_type.StatusCode_Forbidden, err,
 			"egress denied: invalid actor certificate")
 	}
 
@@ -152,22 +127,22 @@ func (s *ExtProcServer) handleEgressRequestHeaders(
 	actorName := identity.ActorName
 	actorUID := identity.ActorUid
 	// For a CONNECT the :authority is the actor's original destination (IP:port).
-	destination := metadata.host
+	destination := md.Host
 
 	// The CA only ever mints these from control-plane state, so a name that is
 	// not a legal resource name means the CA or its inputs are compromised.
 	if !resources.IsValidResourceName(atespace) || !resources.IsValidResourceName(actorName) {
-		return nil, metadata, "", "", "", ResumeOutcomeNone, newReqError(envoy_type.StatusCode_Forbidden,
+		return extproc.Result{}, extproc.NewReqError(envoy_type.StatusCode_Forbidden,
 			"egress denied: invalid actor identity %q/%q", atespace, actorName)
 	}
 
 	// Confirm the certified actor still exists. The name is only a lookup key
 	// here; the UID below is what actually authorizes.
-	actor, err := s.apiClient.GetActor(ctx, &ateapipb.GetActorRequest{
+	actor, err := h.apiClient.GetActor(ctx, &ateapipb.GetActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: atespace, Name: actorName},
 	})
 	if err != nil {
-		return nil, metadata, "", "", "", ResumeOutcomeNone, mapEgressIdentityError(atespace, actorName, err)
+		return extproc.Result{}, mapEgressIdentityError(atespace, actorName, err)
 	}
 
 	// Authorize on the UID, not the name. Names are reused: delete an actor and
@@ -181,13 +156,13 @@ func (s *ExtProcServer) handleEgressRequestHeaders(
 			slog.String("actor", actorName),
 			slog.String("certificateActorUid", actorUID),
 			slog.String("currentActorUid", uid))
-		return nil, metadata, "", "", "", ResumeOutcomeNone, newReqError(envoy_type.StatusCode_Forbidden,
+		return extproc.Result{}, extproc.NewReqError(envoy_type.StatusCode_Forbidden,
 			"egress denied: actor %q/%q is not the actor this certificate was issued to", atespace, actorName)
 	}
 
 	// The actor performing egress must actually be running.
 	if actor.GetStatus() != ateapipb.Actor_STATUS_RUNNING {
-		return nil, metadata, "", "", "", ResumeOutcomeNone, newReqError(envoy_type.StatusCode_Forbidden,
+		return extproc.Result{}, extproc.NewReqError(envoy_type.StatusCode_Forbidden,
 			"egress denied: actor %q/%q is %s, not running", atespace, actorName, actor.GetStatus())
 	}
 
@@ -201,16 +176,18 @@ func (s *ExtProcServer) handleEgressRequestHeaders(
 	// Identity is authenticated; let the CONNECT proceed unchanged. Milestone 2
 	// would additionally authorize `destination` and inject upstream credentials
 	// here by returning a HeaderMutation.
-	return &extprocv3.HeadersResponse{
-		Response: &extprocv3.CommonResponse{},
-	}, metadata, "", "", "", ResumeOutcomeNone, nil
+	return extproc.Result{
+		Response: &extprocv3.HeadersResponse{
+			Response: &extprocv3.CommonResponse{},
+		},
+	}, nil
 }
 
 // authenticateActorCertificate turns the mTLS peer certificate Envoy recorded
 // on the request into a verified ActorIdentity, or an error describing why it
 // cannot be trusted.
-func (s *ExtProcServer) authenticateActorCertificate(metadata *requestMetadata) (*substratex509.ActorIdentity, error) {
-	header := metadata.headers[forwardedClientCertHeader]
+func (h *Handler) authenticateActorCertificate(md *extproc.RequestMetadata) (*substratex509.ActorIdentity, error) {
+	header := md.Header(forwardedClientCertHeader)
 	if header == "" {
 		return nil, fmt.Errorf("request carries no %s header", forwardedClientCertHeader)
 	}
@@ -218,7 +195,7 @@ func (s *ExtProcServer) authenticateActorCertificate(metadata *requestMetadata) 
 	if err != nil {
 		return nil, err
 	}
-	return s.verifyActorCertificate(chain)
+	return h.verifyActorCertificate(chain)
 }
 
 // verifyActorCertificate checks that chain[0] is a live, non-CA, client-auth
@@ -250,7 +227,7 @@ func (s *ExtProcServer) authenticateActorCertificate(metadata *requestMetadata) 
 // this function is the thing to delete — but keep the ActorIdentity extraction
 // and the IsCA/EKU/purpose checks below it, because Envoy does none of those.
 // ###########################################################################
-func (s *ExtProcServer) verifyActorCertificate(chain []*x509.Certificate) (*substratex509.ActorIdentity, error) {
+func (h *Handler) verifyActorCertificate(chain []*x509.Certificate) (*substratex509.ActorIdentity, error) {
 	leaf := chain[0]
 	intermediates := x509.NewCertPool()
 	for _, cert := range chain[1:] {
@@ -275,7 +252,7 @@ func (s *ExtProcServer) verifyActorCertificate(chain []*x509.Certificate) (*subs
 		return nil, fmt.Errorf("actor certificate cannot authenticate a TLS client")
 	}
 	if _, err := leaf.Verify(x509.VerifyOptions{
-		Roots:         s.actorIdentityRoots,
+		Roots:         h.actorIdentityRoots,
 		Intermediates: intermediates,
 		CurrentTime:   now,
 		KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
@@ -430,26 +407,26 @@ func unquoteXFCC(value string) string {
 }
 
 // mapEgressIdentityError converts a GetActor failure into a client-facing
-// ext_proc denial. An unknown actor is treated as a forbidden (the actor was
+// ext_proc denial. An unknown actor is treated as forbidden (the actor was
 // deleted out from under a still-valid certificate); transient control-plane
 // failures fail closed with 503.
 func mapEgressIdentityError(atespace, actorName string, err error) error {
 	switch status.Code(err) {
 	case codes.NotFound:
-		return newReqError(envoy_type.StatusCode_Forbidden,
+		return extproc.WrapReqError(envoy_type.StatusCode_Forbidden, err,
 			"egress denied: unknown actor %q/%q", atespace, actorName)
 	case codes.Unavailable, codes.DeadlineExceeded:
-		return newReqError(envoy_type.StatusCode_ServiceUnavailable,
+		return extproc.WrapReqError(envoy_type.StatusCode_ServiceUnavailable, err,
 			"egress identity check unavailable for %q/%q: %v", atespace, actorName, err)
 	default:
-		return newReqError(envoy_type.StatusCode_Forbidden,
+		return extproc.WrapReqError(envoy_type.StatusCode_Forbidden, err,
 			"egress denied for %q/%q: %v", atespace, actorName, err)
 	}
 }
 
-// loadActorIdentityRoots reads the actor-identity CA trust bundle the egress
+// LoadActorIdentityRoots reads the actor-identity CA trust bundle the egress
 // gateway verifies actor client certificates against.
-func loadActorIdentityRoots(pemBytes []byte) (*x509.CertPool, error) {
+func LoadActorIdentityRoots(pemBytes []byte) (*x509.CertPool, error) {
 	roots := x509.NewCertPool()
 	if !roots.AppendCertsFromPEM(pemBytes) {
 		return nil, fmt.Errorf("actor-identity CA bundle contains no certificates")

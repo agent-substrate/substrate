@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package router
+package ingress
 
 import (
 	"context"
@@ -20,6 +20,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/extproc"
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -114,9 +115,9 @@ type resumerOption func(*ActorResumer)
 // resume is retried, at cfg's retry cadence, for up to cfg's budget. When
 // disabled, the resumer applies fail-fast-on-capacity behavior.
 func withParking(cfg ParkedRequestConfig) resumerOption {
-	cfg = cfg.normalized()
+	cfg = cfg.Normalized()
 	return func(r *ActorResumer) {
-		r.parkEnabled = cfg.enabled()
+		r.parkEnabled = cfg.Enabled()
 		if r.parkEnabled {
 			r.budget = cfg.Budget
 		}
@@ -128,8 +129,8 @@ func NewActorResumer(apiClient ateapipb.ControlClient, opts ...resumerOption) *A
 	r := &ActorResumer{
 		apiClient: apiClient,
 		budget:    failFastResumeBudget,
-		backoff: resumeBackoff(defaultParkedRequestRetryInterval,
-			defaultParkedRequestRetryFactor, defaultParkedRequestRetryJitter),
+		backoff: resumeBackoff(DefaultParkedRequestRetryInterval,
+			DefaultParkedRequestRetryFactor, DefaultParkedRequestRetryJitter),
 	}
 	for _, opt := range opts {
 		opt(r)
@@ -161,7 +162,7 @@ func (r *ActorResumer) retryable(err error) bool {
 // requests within the process and, when parking is enabled, holds the request
 // while retrying transient failures until the budget elapses.
 func (r *ActorResumer) ResumeActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, ResumeOutcome, error) {
-	ctx, span := otel.Tracer(routerServiceName).Start(ctx, "ResumeActor",
+	ctx, span := otel.Tracer(extproc.ServiceName).Start(ctx, "ResumeActor",
 		trace.WithAttributes(ateattr.ActorRefAttributes(actorRef)...))
 	defer span.End()
 

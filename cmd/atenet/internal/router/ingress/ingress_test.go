@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package router
+package ingress
 
 import (
 	"bytes"
@@ -24,17 +24,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/atunnel"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 	envoy_type "github.com/envoyproxy/go-control-plane/envoy/type/v3"
-	"go.opentelemetry.io/otel/attribute"
-	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
-	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/extproc"
+	"github.com/agent-substrate/substrate/internal/atunnel"
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
 type mockClient struct {
@@ -46,6 +45,12 @@ func (m *mockClient) ResumeActor(ctx context.Context, in *ateapipb.ResumeActorRe
 	return m.resumeFn(ctx, in, opts...)
 }
 
+// requestMetadata builds the metadata the ext_proc mux would hand the handler
+// for a request with these headers.
+func requestMetadata(headers ...*corev3.HeaderValue) *extproc.RequestMetadata {
+	return extproc.NewRequestMetadata(headers)
+}
+
 func TestHandleRequestHeadersDoesNotLogSensitiveData(t *testing.T) {
 	const testUUID = "123e4567-e89b-12d3-a456-426614174000"
 	const secret = "do-not-log-me"
@@ -55,25 +60,21 @@ func TestHandleRequestHeadersDoesNotLogSensitiveData(t *testing.T) {
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
-	s := NewExtProcServer(50051, &mockClient{
+	h := New(&mockClient{
 		resumeFn: func(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
 			return &ateapipb.ResumeActorResponse{Actor: &ateapipb.Actor{WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIp: "10.0.0.52"}}}, nil
 		},
-	}, nil, ParkedRequestConfig{}, nil, false, nil)
+	}, ParkedRequestConfig{}, nil, false)
 
-	reqHeaders := &extprocv3.HttpHeaders{
-		Headers: &corev3.HeaderMap{
-			Headers: []*corev3.HeaderValue{
-				{Key: ":path", Value: "/api/v1/reset?token=" + secret},
-				{Key: ":authority", Value: testUUID + ".team-a.actors.resources.substrate.ate.dev"},
-				{Key: ":method", Value: "POST"},
-				{Key: "authorization", Value: "Bearer " + secret},
-				{Key: "cookie", Value: "session=" + secret},
-			},
-		},
-	}
+	md := requestMetadata(
+		&corev3.HeaderValue{Key: ":path", Value: "/api/v1/reset?token=" + secret},
+		&corev3.HeaderValue{Key: ":authority", Value: testUUID + ".team-a.actors.resources.substrate.ate.dev"},
+		&corev3.HeaderValue{Key: ":method", Value: "POST"},
+		&corev3.HeaderValue{Key: "authorization", Value: "Bearer " + secret},
+		&corev3.HeaderValue{Key: "cookie", Value: "session=" + secret},
+	)
 
-	_, metadata, target, _, _, _, err := s.handleRequestHeaders(context.Background(), reqHeaders)
+	res, err := h.HandleRequestHeaders(context.Background(), md)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -86,15 +87,18 @@ func TestHandleRequestHeadersDoesNotLogSensitiveData(t *testing.T) {
 		t.Errorf("router log missing actor/host routing context: %s", out)
 	}
 
-	s.recorder.AddRouterRequest(time.Now(), time.Millisecond, "Route ok", target, metadata)
-	for _, q := range s.recorder.Get() {
+	// The mux records every handled request on the status page; the metadata the
+	// handler was given must not carry the secret into it either.
+	rec := extproc.NewQueryRecorder(10)
+	rec.AddRouterRequest(time.Now(), time.Millisecond, "Route ok", res.Target, md)
+	for _, q := range rec.Get() {
 		if blob, _ := json.Marshal(q); strings.Contains(string(blob), secret) {
 			t.Errorf("recorder/statusz retained sensitive value: %s", blob)
 		}
 	}
 }
 
-func TestExtProcHeadersEvaluation(t *testing.T) {
+func TestHandleRequestHeaders(t *testing.T) {
 	const testUUID = "123e4567-e89b-12d3-a456-426614174000"
 
 	tests := []struct {
@@ -195,20 +199,17 @@ func TestExtProcHeadersEvaluation(t *testing.T) {
 
 			// Parking disabled: these cases assert fail-fast mapping of resume
 			// errors (e.g. FailedPrecondition -> immediate 503). Parking behavior
-			// is covered separately in TestExtProc_ParkingLotFull and resumer_test.go.
-			s := NewExtProcServer(50051, clientMock, nil, ParkedRequestConfig{}, nil, false, nil)
+			// is covered separately in TestHandleRequestHeaders_ParkingLotFull and
+			// resumer_test.go.
+			h := New(clientMock, ParkedRequestConfig{}, nil, false)
 
-			reqHeaders := &extprocv3.HttpHeaders{
-				Headers: &corev3.HeaderMap{
-					Headers: []*corev3.HeaderValue{
-						{Key: ":path", Value: "/v1/actors/invoke"},
-						{Key: ":authority", Value: tc.authority},
-						{Key: ":method", Value: "POST"},
-					},
-				},
-			}
+			md := requestMetadata(
+				&corev3.HeaderValue{Key: ":path", Value: "/v1/actors/invoke"},
+				&corev3.HeaderValue{Key: ":authority", Value: tc.authority},
+				&corev3.HeaderValue{Key: ":method", Value: "POST"},
+			)
 
-			res, metadata, target, _, _, _, err := s.handleRequestHeaders(context.Background(), reqHeaders)
+			res, err := h.HandleRequestHeaders(context.Background(), md)
 			if tc.expectErr {
 				if err == nil {
 					t.Fatalf("expected error but got nil")
@@ -216,11 +217,11 @@ func TestExtProcHeadersEvaluation(t *testing.T) {
 				if tc.expectedErrStr != "" && err.Error() != tc.expectedErrStr {
 					t.Errorf("client body mismatch:\n  got:  %q\n  want: %q", err.Error(), tc.expectedErrStr)
 				}
-				var reqErr *reqError
+				var reqErr *extproc.ReqError
 				if !errors.As(err, &reqErr) {
-					t.Fatalf("expected *reqError, got %T (%v)", err, err)
+					t.Fatalf("expected *extproc.ReqError, got %T (%v)", err, err)
 				}
-				if got, want := reqErr.statusCode, int(tc.expectedStatus); got != want {
+				if got, want := reqErr.StatusCode, int(tc.expectedStatus); got != want {
 					t.Errorf("HTTP status code = %d, want %d", got, want)
 				}
 				if tc.resumeErr != nil && !errors.Is(err, tc.resumeErr) {
@@ -232,11 +233,11 @@ func TestExtProcHeadersEvaluation(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ext_proc processing error: %v", err)
 			}
-			if target != tc.expectedTarget {
-				t.Errorf("expected target %q, got %q", tc.expectedTarget, target)
+			if res.Target != tc.expectedTarget {
+				t.Errorf("expected target %q, got %q", tc.expectedTarget, res.Target)
 			}
 
-			mutation := res.Response.GetHeaderMutation()
+			mutation := res.Response.GetResponse().GetHeaderMutation()
 			if len(mutation.GetSetHeaders()) != 2 {
 				t.Fatalf("expected exactly two header options, found: %v", mutation.GetSetHeaders())
 			}
@@ -252,19 +253,13 @@ func TestExtProcHeadersEvaluation(t *testing.T) {
 				t.Errorf("original host mutation = %q, want %q", got, tc.authority)
 			}
 
-			// Confirm that query logs recorded metric trace details
-			s.recorder.AddRouterRequest(time.Now(), 10*time.Millisecond, "Route ok", tc.expectedTarget, metadata)
-			queries := s.recorder.Get()
-			if len(queries) != 1 {
-				t.Errorf("expected query trace entries, got: %v", queries)
-			}
 		})
 	}
 }
 
-// TestExtProc_ParkingLotFull verifies that when the parking lot is at capacity
+// TestHandleRequestHeaders_ParkingLotFull verifies that when the parking lot is at capacity
 // the request is shed with a 503 before any resume is attempted.
-func TestExtProc_ParkingLotFull(t *testing.T) {
+func TestHandleRequestHeaders_ParkingLotFull(t *testing.T) {
 	const testUUID = "123e4567-e89b-12d3-a456-426614174000"
 
 	var resumeCalled bool
@@ -277,148 +272,33 @@ func TestExtProc_ParkingLotFull(t *testing.T) {
 
 	// A 1-slot lot with the slot already occupied deterministically simulates a
 	// full lot without needing a concurrent in-flight request.
-	s := NewExtProcServer(50051, clientMock, nil, ParkedRequestConfig{Budget: time.Second, Max: 1}, nil, false, nil)
-	release, ok := s.parking.enter(context.Background())
+	h := New(clientMock, ParkedRequestConfig{Budget: time.Second, Max: 1}, nil, false)
+	release, ok := h.parking.enter(context.Background())
 	if !ok {
 		t.Fatal("priming enter should be admitted")
 	}
 	defer release(parkOutcomeServed)
 
-	reqHeaders := &extprocv3.HttpHeaders{
-		Headers: &corev3.HeaderMap{
-			Headers: []*corev3.HeaderValue{
-				{Key: ":authority", Value: testUUID + ".team-a.actors.resources.substrate.ate.dev"},
-			},
-		},
-	}
+	md := requestMetadata(
+		&corev3.HeaderValue{Key: ":authority", Value: testUUID + ".team-a.actors.resources.substrate.ate.dev"},
+	)
 
-	_, _, _, _, _, _, err := s.handleRequestHeaders(context.Background(), reqHeaders)
+	_, err := h.HandleRequestHeaders(context.Background(), md)
 	if err == nil {
 		t.Fatal("expected error when parking lot is full")
 	}
-	var reqErr *reqError
+	var reqErr *extproc.ReqError
 	if !errors.As(err, &reqErr) {
-		t.Fatalf("expected *reqError, got %T (%v)", err, err)
+		t.Fatalf("expected *extproc.ReqError, got %T (%v)", err, err)
 	}
-	if reqErr.statusCode != int(envoy_type.StatusCode_ServiceUnavailable) {
-		t.Errorf("status code = %d, want %d (503)", reqErr.statusCode, envoy_type.StatusCode_ServiceUnavailable)
+	if reqErr.StatusCode != int(envoy_type.StatusCode_ServiceUnavailable) {
+		t.Errorf("status code = %d, want %d (503)", reqErr.StatusCode, envoy_type.StatusCode_ServiceUnavailable)
 	}
 	if !strings.Contains(reqErr.Error(), "router at capacity") {
 		t.Errorf("error body = %q, want it to mention capacity", reqErr.Error())
 	}
 	if resumeCalled {
 		t.Error("resume must not be attempted for a shed request")
-	}
-}
-
-func TestClassifyOutcome(t *testing.T) {
-	tests := []struct {
-		name     string
-		err      error
-		expected string
-	}{
-		{
-			name:     "nil error maps to ok",
-			err:      nil,
-			expected: "ok",
-		},
-		{
-			name:     "context Canceled maps to cancelled",
-			err:      context.Canceled,
-			expected: "cancelled",
-		},
-		{
-			name:     "context DeadlineExceeded maps to timeout",
-			err:      context.DeadlineExceeded,
-			expected: "timeout",
-		},
-		{
-			name:     "FailedPrecondition gRPC code maps to no_capacity",
-			err:      status.Error(codes.FailedPrecondition, "capacity full"),
-			expected: "no_capacity",
-		},
-		{
-			name:     "Aborted gRPC code maps to lock_conflict",
-			err:      status.Error(codes.Aborted, "lock conflict"),
-			expected: "lock_conflict",
-		},
-		{
-			name:     "NotFound gRPC code maps to not_found",
-			err:      status.Error(codes.NotFound, "missing"),
-			expected: "not_found",
-		},
-		{
-			name:     "Unavailable gRPC code maps to unavailable",
-			err:      status.Error(codes.Unavailable, "control-plane down"),
-			expected: "unavailable",
-		},
-		{
-			name:     "ResourceExhausted gRPC code maps to rate_limited",
-			err:      status.Error(codes.ResourceExhausted, "rate limit exceeded"),
-			expected: "rate_limited",
-		},
-		{
-			name:     "StatusCode_NotFound reqError maps to not_found",
-			err:      newReqError(envoy_type.StatusCode_NotFound, "missing"),
-			expected: "not_found",
-		},
-		{
-			name:     "StatusCode_ServiceUnavailable reqError maps to no_capacity",
-			err:      newReqError(envoy_type.StatusCode_ServiceUnavailable, "no free workers"),
-			expected: "no_capacity",
-		},
-		{
-			name:     "StatusCode_TooManyRequests reqError maps to rate_limited",
-			err:      newReqError(envoy_type.StatusCode_TooManyRequests, "rate limited"),
-			expected: "rate_limited",
-		},
-		{
-			name:     "Unknown error maps to resume_error",
-			err:      errors.New("internal storage glitch"),
-			expected: "resume_error",
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := classifyOutcome(tc.err); got != tc.expected {
-				t.Errorf("classifyOutcome(%v) = %q, want %q", tc.err, got, tc.expected)
-			}
-		})
-	}
-}
-
-func TestRecordRouteDuration_Attributes(t *testing.T) {
-	reader := sdkmetric.NewManualReader()
-	mp := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader))
-	h, err := mp.Meter("atenet-router").Float64Histogram(routeDurationMetricName)
-	if err != nil {
-		t.Fatalf("failed to create histogram: %v", err)
-	}
-
-	s := NewExtProcServer(50051, nil, h, ParkedRequestConfig{}, nil, false, nil)
-	s.recordRouteDuration(context.Background(), 10*time.Millisecond, "team-a-ns", "tmpl-a", classifyOutcome(nil), string(ResumeOutcomeTriggered))
-
-	var rm metricdata.ResourceMetrics
-	if err := reader.Collect(context.Background(), &rm); err != nil {
-		t.Fatalf("Collect failed: %v", err)
-	}
-
-	dp := rm.ScopeMetrics[0].Metrics[0].Data.(metricdata.Histogram[float64]).DataPoints[0]
-	wantAttrs := map[string]string{
-		"ate.template.namespace": "team-a-ns",
-		"ate.template.name":      "tmpl-a",
-		"ate.router.outcome":     "ok",
-		"ate.router.resume":      "triggered",
-	}
-
-	for k, want := range wantAttrs {
-		val, exists := dp.Attributes.Value(attribute.Key(k))
-		if !exists {
-			t.Errorf("missing metric attribute %q", k)
-		} else if val.AsString() != want {
-			t.Errorf("attribute %q = %q, want %q", k, val.AsString(), want)
-		}
 	}
 }
 
@@ -439,7 +319,7 @@ func TestAddRoutingMutationsViaAuthority(t *testing.T) {
 	if got[strings.ToLower(atunnel.OriginalHostHeader)] != "actor-1.team-a.actors.resources.substrate.ate.dev" {
 		t.Errorf("%s = %q", atunnel.OriginalHostHeader, got[strings.ToLower(atunnel.OriginalHostHeader)])
 	}
-	if got[authorityHeader] != "10.0.0.52:443" {
-		t.Errorf("%s = %q", authorityHeader, got[authorityHeader])
+	if got[extproc.AuthorityHeader] != "10.0.0.52:443" {
+		t.Errorf("%s = %q", extproc.AuthorityHeader, got[extproc.AuthorityHeader])
 	}
 }

@@ -12,26 +12,31 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package router
+package extproc
 
 import (
-	"net"
 	"strings"
 
-	"github.com/agent-substrate/substrate/internal/resources"
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 )
 
-const authorityHeader = ":authority"
+// AuthorityHeader is the HTTP/2 pseudo-header carrying the request authority.
+// Exported because the direction handlers rewrite it when they pick an
+// upstream.
+const AuthorityHeader = ":authority"
 
-type requestMetadata struct {
-	headers map[string]string
-	path    string
-	host    string
-	method  string
+// RequestMetadata is the request the mux hands to a direction handler: the
+// HTTP headers Envoy sent, flattened and lowercased, with the pseudo-headers
+// every handler needs pulled out.
+type RequestMetadata struct {
+	// Headers holds every header, keyed by lowercased name.
+	Headers map[string]string
+	Path    string
+	Host    string
+	Method  string
 }
 
-func newRequestMetadata(headers []*corev3.HeaderValue) *requestMetadata {
+func NewRequestMetadata(headers []*corev3.HeaderValue) *RequestMetadata {
 	headersMap := make(map[string]string)
 	var path string
 	var host string
@@ -48,7 +53,7 @@ func newRequestMetadata(headers []*corev3.HeaderValue) *requestMetadata {
 		if k == ":path" {
 			path = val
 		}
-		if k == authorityHeader || k == "host" {
+		if k == AuthorityHeader || k == "host" {
 			host = val
 		}
 		if k == ":method" {
@@ -56,26 +61,16 @@ func newRequestMetadata(headers []*corev3.HeaderValue) *requestMetadata {
 		}
 	}
 
-	return &requestMetadata{
-		headers: headersMap,
-		path:    path,
-		host:    host,
-		method:  method,
+	return &RequestMetadata{
+		Headers: headersMap,
+		Path:    path,
+		Host:    host,
+		Method:  method,
 	}
 }
 
-// parseActorRef extracts the actor an incoming request is addressed to from its
-// Host/:authority, which has the form
-// "<actor_name>.<atespace>.actors.resources.substrate.ate.dev" (optionally with a
-// port). The atespace is part of the name because an actor name is only unique
-// within its atespace.
-func parseActorRef(host string) (resources.ActorRef, error) {
-	if strings.Contains(host, ":") {
-		h, _, err := net.SplitHostPort(host)
-		if err != nil {
-			return resources.ActorRef{}, err
-		}
-		host = h
-	}
-	return resources.ParseActorDNSName(host)
+// Header returns the value of a header by name, case-insensitively, or "" when
+// it was not sent.
+func (m *RequestMetadata) Header(name string) string {
+	return m.Headers[strings.ToLower(name)]
 }

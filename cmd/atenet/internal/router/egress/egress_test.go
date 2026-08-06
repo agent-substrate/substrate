@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package router
+package egress
 
 import (
 	"context"
@@ -33,120 +33,15 @@ import (
 	"time"
 
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
-	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 	envoy_type "github.com/envoyproxy/go-control-plane/envoy/type/v3"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/types/known/structpb"
 
+	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/extproc"
 	"github.com/agent-substrate/substrate/internal/substratex509"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
-
-// connectRequest builds a RequestHeaders ProcessingRequest for an egress
-// CONNECT, optionally attributed to a filter chain. filterKey is the ext_proc
-// filter name Envoy keys the attributes map by.
-func connectRequest(filterKey, chain string) *extprocv3.ProcessingRequest {
-	req := &extprocv3.ProcessingRequest{
-		Request: &extprocv3.ProcessingRequest_RequestHeaders{
-			RequestHeaders: &extprocv3.HttpHeaders{
-				Headers: &corev3.HeaderMap{
-					Headers: []*corev3.HeaderValue{
-						{Key: ":method", RawValue: []byte("CONNECT")},
-						{Key: ":authority", RawValue: []byte("10.0.0.9:443")},
-					},
-				},
-			},
-		},
-	}
-	if chain != "" {
-		req.Attributes = map[string]*structpb.Struct{
-			filterKey: {
-				Fields: map[string]*structpb.Value{
-					FilterChainNameAttribute: structpb.NewStringValue(chain),
-				},
-			},
-		}
-	}
-	return req
-}
-
-func TestIsEgressRequest(t *testing.T) {
-	tests := []struct {
-		name      string
-		filterKey string
-		chain     string
-		want      bool
-	}{
-		{
-			name:      "egress filter chain",
-			filterKey: "envoy.filters.http.ext_proc",
-			chain:     EgressFilterChainName,
-			want:      true,
-		},
-		{
-			name:      "egress filter chain under a renamed filter",
-			filterKey: "some.custom.ext_proc.name",
-			chain:     EgressFilterChainName,
-			want:      true,
-		},
-		{
-			// The pre-listener-dispatch hole: an external client sending
-			// CONNECT to the ingress gateway must not reach the egress handler,
-			// whose denials would otherwise report whether an arbitrary actor
-			// exists and is running.
-			name:      "CONNECT on the ingress HTTP listener",
-			filterKey: "envoy.filters.http.ext_proc",
-			chain:     IngressHTTPListener,
-			want:      false,
-		},
-		{
-			name:      "CONNECT on the ingress HTTPS listener",
-			filterKey: "envoy.filters.http.ext_proc",
-			chain:     IngressHTTPSListener,
-			want:      false,
-		},
-		{
-			// A listener that never requested the attribute falls back to
-			// ingress, the fail-safe direction.
-			name:  "no attributes at all",
-			chain: "",
-			want:  false,
-		},
-		{
-			name:      "unrecognised filter chain",
-			filterKey: "envoy.filters.http.ext_proc",
-			chain:     "some-other-chain",
-			want:      false,
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := isEgressRequest(connectRequest(tc.filterKey, tc.chain)); got != tc.want {
-				t.Errorf("isEgressRequest() = %v, want %v", got, tc.want)
-			}
-		})
-	}
-}
-
-// A request the client dresses up to look like egress must not be enough: only
-// the Envoy-asserted filter chain name selects the egress handler.
-func TestIsEgressRequestIgnoresClientSuppliedAttributeHeader(t *testing.T) {
-	req := connectRequest("envoy.filters.http.ext_proc", IngressHTTPListener)
-	rh := req.GetRequestHeaders().GetHeaders()
-	rh.Headers = append(rh.Headers,
-		&corev3.HeaderValue{Key: FilterChainNameAttribute, RawValue: []byte(EgressFilterChainName)},
-		&corev3.HeaderValue{Key: "x-envoy-filter-chain-name", RawValue: []byte(EgressFilterChainName)},
-	)
-
-	if isEgressRequest(req) {
-		t.Error("isEgressRequest() = true for a client-forged filter chain header, want false")
-	}
-}
-
-// --- actor certificate authentication -------------------------------------
 
 const (
 	testEgressAtespace = "default"
@@ -294,10 +189,9 @@ func xfccHeaderDER(chain ...[]byte) string {
 		url.PathEscape(buf.String()))
 }
 
-// egressServer builds an ExtProcServer whose GetActor returns actor/err.
-func egressServer(roots *x509.CertPool, actor *ateapipb.Actor, err error) *ExtProcServer {
-	client := &egressMockClient{actor: actor, err: err}
-	return NewExtProcServer(50051, client, nil, ParkedRequestConfig{}, nil, false, roots)
+// egressHandler builds a Handler whose GetActor returns actor/err.
+func egressHandler(roots *x509.CertPool, actor *ateapipb.Actor, err error) *Handler {
+	return New(&egressMockClient{actor: actor, err: err}, roots)
 }
 
 type egressMockClient struct {
@@ -324,8 +218,8 @@ func runningActor() *ateapipb.Actor {
 	}
 }
 
-// egressHeaders builds the CONNECT the egress listener hands to ext_proc.
-func egressHeaders(xfcc string) *extprocv3.HttpHeaders {
+// egressMetadata builds the CONNECT the egress listener hands to ext_proc.
+func egressMetadata(xfcc string) *extproc.RequestMetadata {
 	headers := []*corev3.HeaderValue{
 		{Key: ":method", RawValue: []byte("CONNECT")},
 		{Key: ":authority", RawValue: []byte("93.184.216.34:80")},
@@ -333,7 +227,7 @@ func egressHeaders(xfcc string) *extprocv3.HttpHeaders {
 	if xfcc != "" {
 		headers = append(headers, &corev3.HeaderValue{Key: forwardedClientCertHeader, RawValue: []byte(xfcc)})
 	}
-	return &extprocv3.HttpHeaders{Headers: &corev3.HeaderMap{Headers: headers}}
+	return extproc.NewRequestMetadata(headers)
 }
 
 func wantStatus(t *testing.T, err error, want envoy_type.StatusCode) {
@@ -341,35 +235,39 @@ func wantStatus(t *testing.T, err error, want envoy_type.StatusCode) {
 	if err == nil {
 		t.Fatalf("expected a denial with status %d, got none", want)
 	}
-	var re *reqError
+	var re *extproc.ReqError
 	if !errors.As(err, &re) {
-		t.Fatalf("error %v is not a *reqError", err)
+		t.Fatalf("error %v is not a *extproc.ReqError", err)
 	}
-	if re.statusCode != int(want) {
-		t.Errorf("status = %d, want %d (%v)", re.statusCode, want, err)
+	if re.StatusCode != int(want) {
+		t.Errorf("status = %d, want %d (%v)", re.StatusCode, want, err)
 	}
 }
 
-func TestHandleEgressRequestHeadersAllowsVerifiedActor(t *testing.T) {
+func TestHandleRequestHeadersAllowsVerifiedActor(t *testing.T) {
 	ca := newTestCA(t, "actor-identity-ca")
 	leaf := ca.issueActorCert(t, actorCertOptions{})
-	s := egressServer(ca.roots(), runningActor(), nil)
+	h := egressHandler(ca.roots(), runningActor(), nil)
 
-	resp, _, _, _, _, resume, err := s.handleEgressRequestHeaders(context.Background(), egressHeaders(xfccHeader(leaf)))
+	res, err := h.HandleRequestHeaders(context.Background(), egressMetadata(xfccHeader(leaf)))
 	if err != nil {
-		t.Fatalf("handleEgressRequestHeaders() error = %v, want nil", err)
+		t.Fatalf("HandleRequestHeaders() error = %v, want nil", err)
 	}
-	if resp == nil {
-		t.Fatal("handleEgressRequestHeaders() returned no response")
+	if res.Response == nil {
+		t.Fatal("HandleRequestHeaders() returned no response")
 	}
-	if resume != ResumeOutcomeNone {
-		t.Errorf("resume outcome = %q, want %q", resume, ResumeOutcomeNone)
+	// Egress neither resumes an actor nor picks an upstream.
+	if res.Resume != "" {
+		t.Errorf("resume outcome = %q, want %q", res.Resume, "")
+	}
+	if res.Target != "" {
+		t.Errorf("target = %q, want %q", res.Target, "")
 	}
 }
 
 // Every way an actor certificate can fail to prove an identity has to end in a
 // denial, never in a tunnel.
-func TestHandleEgressRequestHeadersRejectsBadCertificates(t *testing.T) {
+func TestHandleRequestHeadersRejectsBadCertificates(t *testing.T) {
 	ca := newTestCA(t, "actor-identity-ca")
 	otherCA := newTestCA(t, "some-other-ca")
 
@@ -554,8 +452,8 @@ func TestHandleEgressRequestHeadersRejectsBadCertificates(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			s := egressServer(ca.roots(), runningActor(), nil)
-			_, _, _, _, _, _, err := s.handleEgressRequestHeaders(context.Background(), egressHeaders(tc.xfcc(t)))
+			h := egressHandler(ca.roots(), runningActor(), nil)
+			_, err := h.HandleRequestHeaders(context.Background(), egressMetadata(tc.xfcc(t)))
 			wantStatus(t, err, tc.want)
 		})
 	}
@@ -563,7 +461,7 @@ func TestHandleEgressRequestHeadersRejectsBadCertificates(t *testing.T) {
 
 // The certificate authenticates; these cover what the control plane says about
 // the actor it names.
-func TestHandleEgressRequestHeadersAuthorization(t *testing.T) {
+func TestHandleRequestHeadersAuthorization(t *testing.T) {
 	ca := newTestCA(t, "actor-identity-ca")
 
 	tests := []struct {
@@ -621,9 +519,9 @@ func TestHandleEgressRequestHeadersAuthorization(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			s := egressServer(ca.roots(), tc.actor, tc.err)
+			h := egressHandler(ca.roots(), tc.actor, tc.err)
 			leaf := ca.issueActorCert(t, actorCertOptions{})
-			_, _, _, _, _, _, err := s.handleEgressRequestHeaders(context.Background(), egressHeaders(xfccHeader(leaf)))
+			_, err := h.HandleRequestHeaders(context.Background(), egressMetadata(xfccHeader(leaf)))
 			wantStatus(t, err, tc.want)
 		})
 	}
@@ -631,27 +529,25 @@ func TestHandleEgressRequestHeadersAuthorization(t *testing.T) {
 
 // An ingress-only router has no actor-identity CA. If an egress CONNECT somehow
 // reaches it, it must fail closed rather than tunnel unauthenticated traffic.
-func TestHandleEgressRequestHeadersWithoutConfiguredCA(t *testing.T) {
+func TestHandleRequestHeadersWithoutConfiguredCA(t *testing.T) {
 	ca := newTestCA(t, "actor-identity-ca")
 	leaf := ca.issueActorCert(t, actorCertOptions{})
-	s := egressServer(nil, runningActor(), nil)
+	h := egressHandler(nil, runningActor(), nil)
 
-	_, _, _, _, _, _, err := s.handleEgressRequestHeaders(context.Background(), egressHeaders(xfccHeader(leaf)))
+	_, err := h.HandleRequestHeaders(context.Background(), egressMetadata(xfccHeader(leaf)))
 	wantStatus(t, err, envoy_type.StatusCode_ServiceUnavailable)
 }
 
-func TestHandleEgressRequestHeadersRejectsNonConnect(t *testing.T) {
+func TestHandleRequestHeadersRejectsNonConnect(t *testing.T) {
 	ca := newTestCA(t, "actor-identity-ca")
 	leaf := ca.issueActorCert(t, actorCertOptions{})
-	s := egressServer(ca.roots(), runningActor(), nil)
+	h := egressHandler(ca.roots(), runningActor(), nil)
 
-	headers := egressHeaders(xfccHeader(leaf))
-	for _, h := range headers.Headers.Headers {
-		if h.Key == ":method" {
-			h.RawValue = []byte("GET")
-		}
-	}
-	_, _, _, _, _, _, err := s.handleEgressRequestHeaders(context.Background(), headers)
+	md := egressMetadata(xfccHeader(leaf))
+	md.Method = "GET"
+	md.Headers[":method"] = "GET"
+
+	_, err := h.HandleRequestHeaders(context.Background(), md)
 	wantStatus(t, err, envoy_type.StatusCode_MethodNotAllowed)
 }
 

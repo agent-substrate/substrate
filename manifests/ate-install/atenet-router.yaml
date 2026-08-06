@@ -161,6 +161,12 @@ spec:
         image: ko://github.com/agent-substrate/substrate/cmd/atenet
         args:
         - "router"
+        # Serve the ingress direction only: the xDS server and ActorTemplate
+        # controller for the Envoy in this pod, plus the ingress ext_proc
+        # handler. Egress runs the same binary with --mode=egress in its own
+        # Deployment (manifests/ate-install/atenet-egress.yaml), because the two
+        # directions scale independently.
+        - "--mode=ingress"
         - "--standalone"
         - "--namespace=ate-system"
         - "--port-http=8080"

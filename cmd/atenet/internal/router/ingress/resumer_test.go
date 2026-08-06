@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package router
+package ingress
 
 import (
 	"context"
@@ -527,7 +527,7 @@ func TestResumeBackoffHasNoCap(t *testing.T) {
 	// Steps the moment the delay reaches Cap, which would end parking retries far
 	// short of the budget (a 2s Cap stops the loop in ~7 steps / ~5s). The budget
 	// context — not the step count or a cap — must bound how long a request parks.
-	b := resumeBackoff(defaultParkedRequestRetryInterval, defaultParkedRequestRetryFactor, defaultParkedRequestRetryJitter)
+	b := resumeBackoff(DefaultParkedRequestRetryInterval, DefaultParkedRequestRetryFactor, DefaultParkedRequestRetryJitter)
 	if b.Cap != 0 {
 		t.Errorf("resume backoff must not set Cap (it would stop retries at the cap); got %v", b.Cap)
 	}
