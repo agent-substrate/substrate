@@ -89,7 +89,15 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 	}
 	_ = resp.Body.Close()
 
-	// Trigger an actor crash to verify ate_actor_crashes counter emission.
+	// The first resume restored the template's golden snapshot; the actor has
+	// none of its own yet. Suspend writes one, and the second resume reads it
+	// back, so the checkpoint histogram gets a datapoint and the restore
+	// histogram covers both the golden and the latest kind.
+	suspend(t, ctx, clients, actorID)
+	resume(t, ctx, clients, actorID)
+
+	// Trigger an actor crash to verify ate_actor_crashes counter emission. Last,
+	// because it deletes the worker pod.
 	triggerActorCrash(t, ctx, clients, actorID)
 
 	deadline := time.Now().Add(2 * time.Minute)
@@ -217,6 +225,10 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 				errs = append(errs, "ate_actor_crashes metric line not found in collector scrape output")
 			}
 
+			if err := validateSnapshotPhaseLabels(scrape); err != nil {
+				errs = append(errs, err.Error())
+			}
+
 			if len(errs) == 0 {
 				return
 			}
@@ -272,6 +284,46 @@ func resume(t *testing.T, ctx context.Context, clients *e2e.Clients, actorID str
 		t.Fatalf("ResumeActor: %v", err)
 	}
 	waitForStatus(t, ctx, clients, actorID, ateapipb.Actor_STATUS_RUNNING)
+}
+
+// validateSnapshotPhaseLabels guards atelet's cold-start histograms against a
+// silent regression the prefix check cannot see: kind and sandbox class are
+// derived from the snapshot manifest and omitted when they cannot be resolved,
+// so a broken derivation would keep emitting the metric with the labels that
+// make it useful missing.
+func validateSnapshotPhaseLabels(scrape string) error {
+	for _, m := range []string{"ate_actor_restore_duration_seconds_count", "ate_actor_checkpoint_duration_seconds_count"} {
+		var labelled bool
+		for _, line := range strings.Split(scrape, "\n") {
+			if !strings.HasPrefix(line, m) {
+				continue
+			}
+			phase := extractLabelValue(line, "ate_snapshot_phase")
+			kind := extractLabelValue(line, "ate_snapshot_kind")
+			scope := extractLabelValue(line, "ate_snapshot_scope")
+			class := extractLabelValue(line, "ate_sandbox_class")
+			if phase == "" {
+				return fmt.Errorf("%s line is missing ate_snapshot_phase: %q", m, line)
+			}
+			if kind != "" && scope != "" && class != "" {
+				labelled = true
+			}
+		}
+		if !labelled {
+			return fmt.Errorf("no %s line carried all of ate_snapshot_kind, ate_snapshot_scope and ate_sandbox_class", m)
+		}
+	}
+	return nil
+}
+
+func suspend(t *testing.T, ctx context.Context, clients *e2e.Clients, actorID string) {
+	t.Helper()
+	if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: metricsAtespace, Name: actorID},
+	}); err != nil {
+		t.Fatalf("SuspendActor: %v", err)
+	}
+	waitForStatus(t, ctx, clients, actorID, ateapipb.Actor_STATUS_SUSPENDED)
 }
 
 func waitForStatus(t *testing.T, ctx context.Context, clients *e2e.Clients, actorID string, want ateapipb.Actor_Status) {

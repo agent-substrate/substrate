@@ -43,6 +43,8 @@ var PlatformMetricPrefixes = []string{
 	"ate_actor_crashes",
 	"ate_actor_lifecycle_operation_duration",
 	"ate_scheduler_assignment_duration",
+	"ate_actor_restore_duration",
+	"ate_actor_checkpoint_duration",
 	"atenet_router_route_duration",
 	"ate_scheduler_eligible_workers",
 }

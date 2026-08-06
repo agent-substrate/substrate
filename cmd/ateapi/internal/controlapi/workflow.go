@@ -187,7 +187,7 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 			return
 		}
 		w.instruments.recordLifecycleOp(ctx, ateattr.OperationResume, start, err,
-			lifecycleOpAttrs(state.Actor, state.ActorTemplate, state.SnapshotKind)...)
+			lifecycleOpAttrs(state.Actor, state.ActorTemplate, state.SnapshotKind, state.WireSnapshotScope)...)
 	}()
 
 	lockCtx, lock, err := w.acquireActorLock(ctx, actorRef)
@@ -222,7 +222,7 @@ func (w *ActorWorkflow) SuspendActor(ctx context.Context, actorRef resources.Act
 
 	defer func() {
 		w.instruments.recordLifecycleOp(ctx, ateattr.OperationSuspend, start, err,
-			lifecycleOpAttrs(state.Actor, state.ActorTemplate, "")...)
+			lifecycleOpAttrs(state.Actor, state.ActorTemplate, "", state.WireSnapshotScope)...)
 	}()
 
 	lockCtx, lock, err := w.acquireActorLock(ctx, actorRef)
@@ -256,7 +256,7 @@ func (w *ActorWorkflow) PauseActor(ctx context.Context, actorRef resources.Actor
 
 	defer func() {
 		w.instruments.recordLifecycleOp(ctx, ateattr.OperationPause, start, err,
-			lifecycleOpAttrs(state.Actor, state.ActorTemplate, "")...)
+			lifecycleOpAttrs(state.Actor, state.ActorTemplate, "", state.WireSnapshotScope)...)
 	}()
 
 	lockCtx, lock, err := w.acquireActorLock(ctx, actorRef)

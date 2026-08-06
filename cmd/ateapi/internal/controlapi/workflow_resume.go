@@ -54,6 +54,9 @@ type ResumeState struct {
 	SnapshotLocation string
 	SnapshotScope    ateapipb.SnapshotContentScope
 	SnapshotKind     string
+	// WireSnapshotScope labels the restore requested, not the stored snapshot's
+	// SnapshotScope: a data snapshot restored on golden goes out as data_on_golden.
+	WireSnapshotScope string
 	// GoldenSnapshotLocation is the storage location of the ActorTemplate's
 	// golden snapshot. Populated only when the template's onResume
 	// configuration selects the golden snapshot as the boot source for the
@@ -581,6 +584,7 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 			req.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
 			req.GoldenSnapshotUriPrefix = state.GoldenSnapshotLocation
 		}
+		state.WireSnapshotScope = ateattr.SnapshotScopeValue(req.Scope)
 
 		_, err = client.Restore(ctx, req)
 		return maybeCrashActor(ctx, s.store, input.ActorRef, err, "while restoring workload", ateattr.OperationResume)
@@ -600,6 +604,7 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 		if state.GoldenSnapshotLocation != "" {
 			scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
 		}
+		state.WireSnapshotScope = ateattr.SnapshotScopeValue(scope)
 		req := &ateletpb.RestoreRequest{
 			TargetAteomUid:         assignment.GetWorkerPodUid(),
 			Atespace:               state.Actor.GetMetadata().GetAtespace(),

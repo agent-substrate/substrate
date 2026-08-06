@@ -42,9 +42,10 @@ type SuspendInput struct {
 
 // SuspendState holds the mutable state loaded and modified during execution.
 type SuspendState struct {
-	Actor         *ateapipb.Actor
-	ActorTemplate *atev1alpha1.ActorTemplate
-	SourceVersion int64
+	Actor             *ateapipb.Actor
+	ActorTemplate     *atev1alpha1.ActorTemplate
+	SourceVersion     int64
+	WireSnapshotScope string
 }
 
 type LoadActorForSuspendStep struct {
@@ -186,6 +187,7 @@ func (s *CallAteletSuspendStep) Execute(ctx context.Context, input *SuspendInput
 		Scope:    toAteletSnapshotScope(commitSnapshotScope(state.Actor.GetMetadata().GetAtespace(), state.ActorTemplate)),
 		ActorUid: state.Actor.GetMetadata().Uid,
 	}
+	state.WireSnapshotScope = ateattr.SnapshotScopeValue(req.Scope)
 
 	_, err = client.Checkpoint(ctx, req)
 	return maybeCrashActor(ctx, s.store, input.ActorRef, err, "while checkpointing workload", ateattr.OperationSuspend)

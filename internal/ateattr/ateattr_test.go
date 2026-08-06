@@ -19,7 +19,10 @@ import (
 
 	"go.opentelemetry.io/otel/attribute"
 
+	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
+
+	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
@@ -154,6 +157,8 @@ func TestKeySpellings(t *testing.T) {
 		{WorkerStateKey, "ate.worker.state"},
 		{SandboxClassKey, "ate.sandbox.class"},
 		{SnapshotKindKey, "ate.snapshot.kind"},
+		{SnapshotScopeKey, "ate.snapshot.scope"},
+		{SnapshotPhaseKey, "ate.snapshot.phase"},
 		{SchedulerOutcomeKey, "ate.scheduler.outcome"},
 		{ErrorTypeKey, "error.type"},
 		{FailureReasonKey, "ate.failure.reason"},
@@ -194,6 +199,23 @@ func TestMetricLabelValues(t *testing.T) {
 		{SnapshotKindLatest, "latest"},
 		{SnapshotKindLocal, "local"},
 		{SnapshotKindBoot, "boot"},
+
+		{SnapshotScopeFull, "full"},
+		{SnapshotScopeData, "data"},
+		{SnapshotScopeDataOnGolden, "data_on_golden"},
+		{SnapshotScopeUnknown, "unknown"},
+
+		{SnapshotPhaseVolumeMount, "volume_mount"},
+		{SnapshotPhaseManifestFetch, "manifest_fetch"},
+		{SnapshotPhaseSandboxAssets, "sandbox_assets"},
+		{SnapshotPhaseDownload, "download"},
+		{SnapshotPhaseOCIUnpack, "oci_unpack"},
+		{SnapshotPhaseAteomRestore, "ateom_restore"},
+		{SnapshotPhaseAteomCheckpoint, "ateom_checkpoint"},
+		{SnapshotPhasePersist, "persist"},
+		{SnapshotPhaseTotal, "total"},
+
+		{SandboxClassUnknown, "unknown"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.want, func(t *testing.T) {
@@ -254,6 +276,55 @@ func TestActorMetricAttributes(t *testing.T) {
 
 		assertAttrs(t, got, want)
 	})
+}
+
+// TestSnapshotScopeValue pins the enum-to-label mapping ateapi and atelet share.
+// An unmapped enum value must report unknown rather than its stringified form,
+// which would let a wire value widen the label set.
+func TestSnapshotScopeValue(t *testing.T) {
+	tests := []struct {
+		name  string
+		scope ateletpb.SnapshotScope
+		want  string
+	}{
+		{name: "full", scope: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL, want: SnapshotScopeFull},
+		{name: "data", scope: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA, want: SnapshotScopeData},
+		{name: "data on golden", scope: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN, want: SnapshotScopeDataOnGolden},
+		{name: "unspecified", scope: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED, want: SnapshotScopeUnknown},
+		{name: "value outside the enum", scope: ateletpb.SnapshotScope(9999), want: SnapshotScopeUnknown},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := SnapshotScopeValue(tt.scope); got != tt.want {
+				t.Errorf("SnapshotScopeValue(%v) = %q, want %q", tt.scope, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestNormalizeSandboxClass covers the cardinality guard: atelet reads the class
+// out of a snapshot manifest nothing validates, so anything unrecognized has to
+// collapse onto a single value.
+func TestNormalizeSandboxClass(t *testing.T) {
+	tests := []struct {
+		name  string
+		class string
+		want  string
+	}{
+		{name: "gvisor", class: string(atev1alpha1.SandboxClassGvisor), want: string(atev1alpha1.SandboxClassGvisor)},
+		{name: "microvm", class: string(atev1alpha1.SandboxClassMicroVM), want: string(atev1alpha1.SandboxClassMicroVM)},
+		{name: "empty", class: "", want: SandboxClassUnknown},
+		{name: "unknown runtime", class: "kvm", want: SandboxClassUnknown},
+		{name: "casing is not normalized away", class: "GVISOR", want: SandboxClassUnknown},
+		{name: "attacker-controlled manifest value", class: "gvisor\";evil=\"1", want: SandboxClassUnknown},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := NormalizeSandboxClass(tt.class); got != tt.want {
+				t.Errorf("NormalizeSandboxClass(%q) = %q, want %q", tt.class, got, tt.want)
+			}
+		})
+	}
 }
 
 func TestNormalizeOperationName(t *testing.T) {
