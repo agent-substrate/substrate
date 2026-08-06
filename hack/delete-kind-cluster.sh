@@ -40,8 +40,13 @@ fi
 if [ "${reg_exists}" == true ]; then
   reg_created_by="$(docker inspect --format '{{index .Config.Labels "created-by"}}' "${reg_name}" 2>/dev/null)"
   if [ "${reg_created_by}" == "agent-substrate" ]; then
-    echo "Deleting registry container '${reg_name}' (created by us)..."
-    docker rm -f "${reg_name}" || true
+    remaining_clusters="$("${ROOT}"/hack/kind.sh get clusters 2>/dev/null | grep -v 'No kind clusters found' | grep -v '^$' || true)"
+    if [ -z "${remaining_clusters}" ]; then
+      echo "No remaining Kind clusters found. Deleting registry container '${reg_name}'..."
+      docker rm -f "${reg_name}" || true
+    else
+      echo "Other Kind clusters are still running, keeping registry container '${reg_name}'."
+    fi
   else
     echo "Registry container '${reg_name}' was not created by us (${reg_created_by}), leaving it running."
   fi
