@@ -26,6 +26,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -34,6 +35,7 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/ateerrors"
+	"github.com/agent-substrate/substrate/internal/atelet"
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
@@ -41,6 +43,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/google/go-cmp/cmp"
 	"github.com/klauspost/compress/zstd"
+	"github.com/spf13/pflag"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -50,6 +53,17 @@ import (
 )
 
 const testPauseImage = "registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4"
+
+// TestPortFlagDefault verifies the default value of the --port flag.
+func TestPortFlagDefault(t *testing.T) {
+	f := pflag.Lookup("port")
+	if f == nil {
+		t.Fatal("no --port flag registered")
+	}
+	if want := strconv.Itoa(atelet.DefaultPort); f.DefValue != want {
+		t.Errorf("--port default = %q, want %q", f.DefValue, want)
+	}
+}
 
 func TestSnapshotManifestActorMetadata(t *testing.T) {
 	rec := sandboxAssetsRecord{

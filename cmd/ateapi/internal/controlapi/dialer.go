@@ -19,8 +19,11 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"net"
 	"slices"
+	"strconv"
 
+	"github.com/agent-substrate/substrate/internal/atelet"
 	"github.com/agent-substrate/substrate/internal/credbundle"
 	"github.com/agent-substrate/substrate/internal/substratex509"
 	"github.com/spiffe/go-spiffe/v2/bundle/x509bundle"
@@ -141,7 +144,7 @@ func (d *AteletDialer) DialForAteletOnNode(nodeName string) (*grpc.ClientConn, e
 	}
 
 	ateletConn, err := grpc.NewClient(
-		selectedAtelet.Status.PodIPs[0].IP+":8085",
+		net.JoinHostPort(selectedAtelet.Status.PodIPs[0].IP, strconv.Itoa(atelet.DefaultPort)),
 		grpc.WithTransportCredentials(creds),
 		grpc.WithStatsHandler(otelgrpc.NewClientHandler()),
 	)
