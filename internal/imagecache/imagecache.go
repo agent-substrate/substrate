@@ -61,6 +61,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/startupsweep"
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
@@ -189,14 +190,28 @@ func New(root string, opts ...Option) (*Store, error) {
 		return nil, fmt.Errorf("while reading image cache version marker: %w", err)
 	}
 
-	if err := s.sweepTempDirs(); err != nil {
-		return nil, err
-	}
 	return s, nil
 }
 
-func (s *Store) layersDir() string    { return filepath.Join(s.root, "layers", "sha256") }
-func (s *Store) manifestsDir() string { return filepath.Join(s.root, "manifests", "sha256") }
+// SweepEntries returns a registration function for the Sweeper that cleans up
+// temp dirs and manifest files left behind by a crash in the cache at root.
+// ".tmp-*": an unpack in flight at crash. ".rm-*": a layer retirement renamed
+// aside but not yet removed. ".*": writeRecord's temp files are
+// ".<hex>.json.tmp-<rand>"; finished records are "<hex>.json", so a leading
+// dot alone identifies an interrupted manifest write.
+func SweepEntries(root string) func(*startupsweep.Sweeper) {
+	return func(s *startupsweep.Sweeper) {
+		s.Register("image cache orphaned layer dirs", layersDirPath(root), ".tmp-*", RemoveAllWritable)
+		s.Register("image cache retired layer dirs", layersDirPath(root), retiredPrefix+"*", RemoveAllWritable)
+		s.Register("image cache orphaned manifest files", manifestsDirPath(root), ".*", os.Remove)
+	}
+}
+
+func layersDirPath(root string) string    { return filepath.Join(root, "layers", "sha256") }
+func manifestsDirPath(root string) string { return filepath.Join(root, "manifests", "sha256") }
+
+func (s *Store) layersDir() string    { return layersDirPath(s.root) }
+func (s *Store) manifestsDir() string { return manifestsDirPath(s.root) }
 
 func (s *Store) layerDir(diffID v1.Hash) string {
 	return filepath.Join(s.root, "layers", diffID.Algorithm, diffID.Hex)
@@ -204,53 +219,6 @@ func (s *Store) layerDir(diffID v1.Hash) string {
 
 func (s *Store) recordPath(digest v1.Hash) string {
 	return filepath.Join(s.root, "manifests", digest.Algorithm, digest.Hex+".json")
-}
-
-// sweepTempDirs removes unpack temp dirs, retired layer dirs, and
-// manifest-record temp files orphaned by a crash. A layer dir without the
-// temp/retired prefix and a record without a leading dot are always
-// complete (both are moved into place with a single rename), so this is
-// the only recovery the pool needs.
-func (s *Store) sweepTempDirs() error {
-	entries, err := os.ReadDir(s.layersDir())
-	if err != nil {
-		return fmt.Errorf("while listing layer pool: %w", err)
-	}
-	swept := 0
-	for _, e := range entries {
-		// ".tmp-": an unpack in flight at crash. ".rm-": a layer retirement
-		// renamed aside but not yet removed. Either way, unreferenced
-		// garbage.
-		if !strings.HasPrefix(e.Name(), ".tmp-") && !strings.HasPrefix(e.Name(), retiredPrefix) {
-			continue
-		}
-		p := filepath.Join(s.layersDir(), e.Name())
-		slog.Info("Image cache sweeping orphaned layer dir", slog.String("dir", e.Name()))
-		if err := RemoveAllWritable(p); err != nil {
-			return fmt.Errorf("while sweeping orphaned layer dir %q: %w", p, err)
-		}
-		swept++
-	}
-	if swept > 0 {
-		slog.Info("Image cache startup sweep removed orphaned layer dirs", slog.Int("count", swept))
-	}
-
-	// writeRecord's temp files are ".<hex>.json.tmp-<rand>"; finished records
-	// are "<hex>.json", so a leading dot alone identifies an orphan.
-	records, err := os.ReadDir(s.manifestsDir())
-	if err != nil {
-		return fmt.Errorf("while listing manifest records: %w", err)
-	}
-	for _, e := range records {
-		if !strings.HasPrefix(e.Name(), ".") {
-			continue
-		}
-		p := filepath.Join(s.manifestsDir(), e.Name())
-		if err := os.Remove(p); err != nil {
-			return fmt.Errorf("while sweeping orphaned manifest temp file %q: %w", p, err)
-		}
-	}
-	return nil
 }
 
 // EnsureImage makes ref's image available in the pool and returns its config

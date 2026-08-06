@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/startupsweep"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 )
 
@@ -101,9 +102,12 @@ func TestNewSweepsRetiredDirs(t *testing.T) {
 	if err := os.Chmod(filepath.Join(retired, "fs", "ro"), 0o500); err != nil {
 		t.Fatal(err)
 	}
+	sw := startupsweep.New()
+	sw.Add(SweepEntries(root))
 	if _, err := New(root); err != nil {
 		t.Fatalf("New (recovery): %v", err)
 	}
+	sw.Sweep(context.Background())
 	if _, err := os.Stat(retired); !os.IsNotExist(err) {
 		t.Errorf("retired dir not swept at startup: %v", err)
 	}
