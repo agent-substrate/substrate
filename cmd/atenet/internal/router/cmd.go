@@ -75,6 +75,13 @@ func NewRouterCmd() *cobra.Command {
 	cmd.Flags().Float64Var(&cfg.ParkedRequest.RetryFactor, "parked-request-retry-factor", defaultParkedRequestRetryFactor, "Multiplier applied to the retry delay after each attempt; must be >= 1")
 	cmd.Flags().Float64Var(&cfg.ParkedRequest.RetryJitter, "parked-request-retry-jitter", defaultParkedRequestRetryJitter, "Random fraction in [0, 1) added to each retry delay to de-synchronize parked requests")
 	cmd.Flags().IntVar(&cfg.ExtProcMaxRequests, "extproc-max-requests", 0, "Circuit-breaker max_requests for Envoy's ext_proc cluster; 0 (the default) derives it as twice --parked-request-max (minimum 1024). Explicit values must be >= --parked-request-max: every parked request holds one slot for its full wait, and the excess is fast-path headroom")
+	// Graceful shutdown knobs. The router sits behind a Service, so
+	// route-drain window is needed: after SIGTERM the readiness flip
+	// must propagate to the Service endpoints before the drain starts.
+	cmd.Flags().DurationVar(&cfg.DrainDelay, "drain-delay", 13*time.Second, "How long to keep serving after SIGTERM before starting the drain, covering readiness-probe detection and Service endpoint propagation")
+	cmd.Flags().DurationVar(&cfg.DrainTimeout, "drain-timeout", 0, "Deadline for the ext_proc drain on shutdown; streams still open past it (parked requests included) are forcefully cancelled. 0 (the default) derives --parked-request-budget + the actor route timeout + margin so parked requests always finish normally. Explicit values must be >= --parked-request-budget")
+	cmd.Flags().StringVar(&cfg.EnvoyAdminAddr, "envoy-admin-address", "127.0.0.1:9901", "Envoy admin interface the shutdown sequence drives to drain the sidecar (healthcheck/fail, drain_listeners, stats polling). Ignored with --atenet-router=agentgateway")
+	cmd.Flags().StringVar(&cfg.DrainCompleteFile, "drain-complete-file", defaultDrainCompleteFile, "Marker file created (on a pod-shared emptyDir) once the shutdown drain completes; the Envoy container's preStop hook polls for it so Envoy exits as soon as — and no sooner than — the drain is done. Removed at startup to defuse stale markers. Empty disables the handshake")
 
 	return cmd
 }

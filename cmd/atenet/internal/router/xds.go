@@ -89,6 +89,11 @@ const (
 // otherwise Envoy abandons a parked request (500) long before the router does.
 const defaultExtProcMessageTimeout = 5 * time.Second
 
+// actorRouteTimeout bounds a proxied request end-to-end on the actor route.
+// The drain sequence sizes its Envoy-drain window and its derived
+// drain-timeout from it, so keep the three in step (see routerConfig.drainTimeout).
+const actorRouteTimeout = 10 * time.Second
+
 // defaultExtProcMaxRequests is the circuit-breaker max_requests set on the
 // ext_proc cluster: defaultParkedRequestMax plus equal fast-path headroom, so a
 // full parking lot cannot starve the millisecond-scale header exchanges of
@@ -383,7 +388,12 @@ func (x *XdsServer) Serve(ctx context.Context, lis net.Listener) error {
 
 	select {
 	case <-ctx.Done():
-		grpcServer.GracefulStop()
+		// Hard stop, deliberately: ADS streams are open-ended, so GracefulStop
+		// would block until Envoy disconnects — which during shutdown it only
+		// does by dying. xDS clients treat a control-plane disconnect as benign
+		// (reconnect with backoff, keep the last delivered config), and the
+		// drain sequence only cancels this context after Envoy has drained.
+		grpcServer.Stop()
 		return nil
 	case err := <-errChan:
 		return err
@@ -612,7 +622,7 @@ func (x *XdsServer) buildRoutes() *routev3.RouteConfiguration {
 								ClusterSpecifier: &routev3.RouteAction_Cluster{
 									Cluster: OriginalDstClusterName,
 								},
-								Timeout: durationpb.New(10 * time.Second),
+								Timeout: durationpb.New(actorRouteTimeout),
 							},
 						},
 					},

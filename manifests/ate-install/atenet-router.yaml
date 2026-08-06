@@ -111,6 +111,13 @@ spec:
   selector:
     matchLabels:
       app: atenet-router
+  # Surge before draining: with a single replica, the replacement pod must be
+  # Ready before the old one starts its (long) graceful drain, or every
+  # rollout is an outage.
+  strategy:
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
   template:
     metadata:
       labels:
@@ -120,6 +127,13 @@ spec:
         prometheus.io/port: "9090"
     spec:
       serviceAccountName: atenet-router
+      # Budget for the full shutdown sequence: --drain-delay (13s, readiness
+      # propagation) + the Envoy drain window (~15s) + the derived
+      # --drain-timeout (park budget + route timeout + margin, ~20s at
+      # defaults) + slack for the force stop and the tracer/meter flush. The
+      # sum must fit within terminationGracePeriodSeconds, or the kubelet
+      # SIGKILLs mid-drain.
+      terminationGracePeriodSeconds: 60
       containers:
       - name: atenet-router
         image: ko://github.com/agent-substrate/substrate/cmd/atenet
@@ -139,6 +153,10 @@ spec:
         - "--ateapi-address=dns:///api.ate-system.svc:443"
         - "--ateapi-ca-file=/run/servicedns-ca/trust-bundle.pem"
         - "--ateapi-client-cert=/run/podidentity.podcert.ate.dev/credential-bundle.pem"
+        # Graceful shutdown knobs. --drain-timeout is left at its derived
+        # default (park budget + route timeout + margin). The sum of the
+        # sequence must fit within terminationGracePeriodSeconds above.
+        - "--drain-delay=13s"
         env:
         - name: POD_NAME
           valueFrom:
@@ -165,6 +183,21 @@ spec:
           containerPort: 4040
         - name: metrics
           containerPort: 9090
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 9090
+          initialDelaySeconds: 5
+          periodSeconds: 2
+          failureThreshold: 3
+        # /healthz stays 200 while a terminating pod drains; /readyz turns
+        # 503, so liveness and readiness diverge correctly during shutdown.
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 9090
+          initialDelaySeconds: 10
+          periodSeconds: 10
         volumeMounts:
         # Router's own client identity presented to ateapi.
         - name: "podidentity"
@@ -172,6 +205,11 @@ spec:
         # Trust bundle used to verify ateapi's servicedns serving cert.
         - name: "servicedns-ca"
           mountPath: "/run/servicedns-ca"
+        # Shared with the Envoy container: the router writes the
+        # drain-complete marker here at the end of its shutdown sequence,
+        # releasing Envoy's preStop poll.
+        - name: "drain-signal"
+          mountPath: "/var/run/atenet"
       - name: envoy
         image: envoyproxy/envoy:v1.30-latest
         command:
@@ -180,6 +218,14 @@ spec:
         - "/etc/envoy/envoy.yaml"
         - "--component-log-level"
         - "upstream:debug,router:debug,ext_proc:debug"
+        # Prevents Envoy from fast-exiting on SIGTERM before atenet-router finishes
+        # its drain sequence. Polls for the drain-complete marker written by the
+        # router on the shared emptyDir, terminating Envoy as soon as the drain
+        # completes (or at terminationGracePeriodSeconds if the router crashes).
+        lifecycle:
+          preStop:
+            exec:
+              command: ["sh", "-c", "while [ ! -f /var/run/atenet/drain-complete ]; do sleep 0.5; done"]
         ports:
         - name: http
           containerPort: 8080
@@ -201,10 +247,19 @@ spec:
         # --atunnel-client-identity allows.
         - name: "podidentity"
           mountPath: "/run/podidentity.podcert.ate.dev"
+        # The preStop hook polls this path for the router's drain-complete
+        # marker; read-only, the router is the only writer.
+        - name: "drain-signal"
+          mountPath: "/var/run/atenet"
+          readOnly: true
       volumes:
       - name: envoy-config
         configMap:
           name: atenet-router-envoy-config
+      # Pod-shared scratch space for the shutdown handshake between the router
+      # and the Envoy preStop hook.
+      - name: "drain-signal"
+        emptyDir: {}
       - name: "servicedns"
         projected:
           sources:
