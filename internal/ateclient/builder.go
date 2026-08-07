@@ -19,6 +19,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 	"sync"
@@ -233,6 +234,13 @@ func serverTLSConfig(ctx context.Context, clientset kubernetes.Interface) (*tls.
 // bearerTokenDialOption attaches a ServiceAccount token for the ate-client SA
 // as per-RPC credentials.
 func bearerTokenDialOption(ctx context.Context, clientset *kubernetes.Clientset, tokenFile string) (grpc.DialOption, error) {
+	if tokenFile == "-" {
+		creds, err := readBearerToken(os.Stdin)
+		if err != nil {
+			return nil, fmt.Errorf("read bearer token from stdin: %w", err)
+		}
+		return grpc.WithPerRPCCredentials(creds), nil
+	}
 	if tokenFile != "" {
 		return grpc.WithPerRPCCredentials(fileBearerTokenCreds(tokenFile)), nil
 	}
@@ -251,6 +259,18 @@ func bearerTokenDialOption(ctx context.Context, clientset *kubernetes.Clientset,
 		return nil, fmt.Errorf("failed to request ateapi bearer token: token response was empty")
 	}
 	return grpc.WithPerRPCCredentials(bearerTokenCreds(token.Status.Token)), nil
+}
+
+func readBearerToken(r io.Reader) (bearerTokenCreds, error) {
+	b, err := io.ReadAll(r)
+	if err != nil {
+		return "", err
+	}
+	token := strings.TrimSpace(string(b))
+	if token == "" {
+		return "", fmt.Errorf("bearer token is empty")
+	}
+	return bearerTokenCreds(token), nil
 }
 
 type bearerTokenCreds string

@@ -36,16 +36,14 @@ The Google Cloud CLI currently issues user identity tokens with issuer
 These values are examples rather than built-in defaults; verify the claims
 issued by your identity provider and configure them explicitly.
 
-With the provider configured, write the token to a private file and pass it to
-`kubectl-ate`:
+With the provider configured, pipe the token to `kubectl-ate`:
 
 ```sh
-umask 077
-gcloud auth print-identity-token > /tmp/ate-identity-token
-kubectl ate --token-file=/tmp/ate-identity-token get actors
+gcloud auth print-identity-token | kubectl ate --token-file=- get actors
 ```
 
-`--token-file` only replaces the credential sent to `ate-api`. `kubectl-ate`
+`--token-file` accepts either a file path or `-` for stdin and only replaces the
+credential sent to `ate-api`. `kubectl-ate`
 still uses kubeconfig access to establish its port-forward and obtain the
 server trust bundle.
 

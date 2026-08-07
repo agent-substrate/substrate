@@ -45,6 +45,7 @@ func TestValidateServerConfig(t *testing.T) {
 	}{
 		{name: "valid", cfg: ServerConfig{JWTProviders: []JWTProvider{validProvider}}},
 		{name: "missing verifier", cfg: ServerConfig{}, wantErr: true},
+		{name: "duplicate issuer", cfg: ServerConfig{JWTProviders: []JWTProvider{validProvider, validProvider}}, wantErr: true},
 	}
 
 	for _, tt := range tests {

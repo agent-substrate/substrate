@@ -25,6 +25,7 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -59,6 +60,19 @@ func TestBearerTokenCreds(t *testing.T) {
 
 	if !bearerTokenCreds("some-token").RequireTransportSecurity() {
 		t.Error("RequireTransportSecurity() = false, want true")
+	}
+}
+
+func TestReadBearerToken(t *testing.T) {
+	creds, err := readBearerToken(strings.NewReader("some-token\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if creds != "some-token" {
+		t.Fatalf("credentials = %q, want some-token", creds)
+	}
+	if _, err := readBearerToken(strings.NewReader(" \n")); err == nil {
+		t.Fatal("empty stdin token succeeded")
 	}
 }
 

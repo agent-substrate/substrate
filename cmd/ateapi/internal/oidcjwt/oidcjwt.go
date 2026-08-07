@@ -97,6 +97,11 @@ type Claims struct {
 	IssuedAt   time.Time
 	JTI        string
 
+	KubernetesClaims
+}
+
+// KubernetesClaims contains claims added to Kubernetes ServiceAccount tokens.
+type KubernetesClaims struct {
 	Namespace string
 
 	ServiceAccountName string
@@ -112,10 +117,10 @@ type Claims struct {
 }
 
 var (
-	permittedSkew             = 5 * time.Minute
-	jwksRefreshInterval       = 5 * time.Minute
-	unknownKeyRefreshInterval = time.Minute
-	defaultHTTPClient         = &http.Client{Timeout: 10 * time.Second}
+	permittedSkew            = 5 * time.Minute
+	jwksRefreshInterval      = 5 * time.Minute
+	jwksRefreshRetryInterval = time.Minute
+	defaultHTTPClient        = &http.Client{Timeout: 10 * time.Second}
 )
 
 // Verifier verifies JWTs from one trusted OIDC issuer and caches its signing
@@ -129,6 +134,7 @@ type Verifier struct {
 	mu                    sync.RWMutex
 	keys                  []*KeyAndID
 	lastRefresh           time.Time
+	lastFailedRefresh     time.Time
 	lastUnknownKeyRefresh time.Time
 }
 
@@ -136,20 +142,6 @@ type Verifier struct {
 // one of its audiences matches audiences.
 func NewVerifier(issuer string, audiences []string, httpClient *http.Client) *Verifier {
 	return &Verifier{issuer: issuer, audiences: slices.Clone(audiences), httpClient: httpClient}
-}
-
-// Verify verifies a JWT from one issuer against one audience.
-//
-// For bound service account tokens, this function performs cryptographic verification of the JWT,
-// checks the issuer and audience claims, and checks the time-binding claims. It *does not* check
-// the object binding claims. If needed for your use case, you will need check the object bindings
-// by connecting to the cluster and seeing if the object(s) the bindings name still exist within the
-// cluster.
-//
-// httpClient is used for OIDC discovery and JWKS fetches; nil uses a default
-// client with a whole-request timeout.
-func Verify(ctx context.Context, httpClient *http.Client, jwt string, expectedIssuer, expectedAudience string, now time.Time) (*Claims, error) {
-	return NewVerifier(expectedIssuer, []string{expectedAudience}, httpClient).Verify(ctx, jwt, now)
 }
 
 // Verify verifies and extracts claims from a JWT.
@@ -267,18 +259,18 @@ func (v *Verifier) Verify(ctx context.Context, jwt string, now time.Time) (*Clai
 		NotBefore:  notBefore,
 		IssuedAt:   issuedAt,
 		JTI:        rawClaims.JTI,
-
-		Namespace:          rawClaims.BoundClaims.Namespace,
-		ServiceAccountName: rawClaims.BoundClaims.ServiceAccount.Name,
-		ServiceAccountUID:  rawClaims.BoundClaims.ServiceAccount.UID,
-		PodName:            rawClaims.BoundClaims.Pod.Name,
-		PodUID:             rawClaims.BoundClaims.Pod.UID,
-		SecretName:         rawClaims.BoundClaims.Secret.Name,
-		SecretUID:          rawClaims.BoundClaims.Secret.UID,
-		NodeName:           rawClaims.BoundClaims.Node.Name,
-		NodeUID:            rawClaims.BoundClaims.Node.UID,
-
-		WarnAfter: time.Unix(int64(rawClaims.BoundClaims.WarnAfter), 0),
+		KubernetesClaims: KubernetesClaims{
+			Namespace:          rawClaims.BoundClaims.Namespace,
+			ServiceAccountName: rawClaims.BoundClaims.ServiceAccount.Name,
+			ServiceAccountUID:  rawClaims.BoundClaims.ServiceAccount.UID,
+			PodName:            rawClaims.BoundClaims.Pod.Name,
+			PodUID:             rawClaims.BoundClaims.Pod.UID,
+			SecretName:         rawClaims.BoundClaims.Secret.Name,
+			SecretUID:          rawClaims.BoundClaims.Secret.UID,
+			NodeName:           rawClaims.BoundClaims.Node.Name,
+			NodeUID:            rawClaims.BoundClaims.Node.UID,
+			WarnAfter:          time.Unix(int64(rawClaims.BoundClaims.WarnAfter), 0),
+		},
 	}, nil
 }
 
@@ -287,12 +279,19 @@ func (v *Verifier) key(ctx context.Context, keyID string, now time.Time) (crypto
 	key := findKey(v.keys, keyID)
 	hasKeys := len(v.keys) > 0
 	lastRefresh := v.lastRefresh
+	lastFailedRefresh := v.lastFailedRefresh
 	lastUnknownKeyRefresh := v.lastUnknownKeyRefresh
 	v.mu.RUnlock()
 	if key != nil && now.Sub(lastRefresh) < jwksRefreshInterval {
 		return key.PublicKey, nil
 	}
-	if key == nil && hasKeys && !lastUnknownKeyRefresh.IsZero() && now.Sub(lastUnknownKeyRefresh) < unknownKeyRefreshInterval {
+	if !lastFailedRefresh.IsZero() && now.Sub(lastFailedRefresh) < jwksRefreshRetryInterval {
+		if key != nil {
+			return key.PublicKey, nil
+		}
+		return nil, fmt.Errorf("signing key refresh is temporarily unavailable")
+	}
+	if key == nil && hasKeys && !lastUnknownKeyRefresh.IsZero() && now.Sub(lastUnknownKeyRefresh) < jwksRefreshRetryInterval {
 		return nil, fmt.Errorf("unknown key ID %q", keyID)
 	}
 
@@ -302,7 +301,13 @@ func (v *Verifier) key(ctx context.Context, keyID string, now time.Time) (crypto
 	if key != nil && now.Sub(v.lastRefresh) < jwksRefreshInterval {
 		return key.PublicKey, nil
 	}
-	if key == nil && len(v.keys) > 0 && !v.lastUnknownKeyRefresh.IsZero() && now.Sub(v.lastUnknownKeyRefresh) < unknownKeyRefreshInterval {
+	if !v.lastFailedRefresh.IsZero() && now.Sub(v.lastFailedRefresh) < jwksRefreshRetryInterval {
+		if key != nil {
+			return key.PublicKey, nil
+		}
+		return nil, fmt.Errorf("signing key refresh is temporarily unavailable")
+	}
+	if key == nil && len(v.keys) > 0 && !v.lastUnknownKeyRefresh.IsZero() && now.Sub(v.lastUnknownKeyRefresh) < jwksRefreshRetryInterval {
 		return nil, fmt.Errorf("unknown key ID %q", keyID)
 	}
 	if key == nil && len(v.keys) > 0 {
@@ -310,10 +315,16 @@ func (v *Verifier) key(ctx context.Context, keyID string, now time.Time) (crypto
 	}
 	keys, err := discoverKeysForIssuer(ctx, v.httpClient, v.issuer)
 	if err != nil {
+		v.lastFailedRefresh = now
+		if key != nil {
+			slog.WarnContext(ctx, "Could not refresh OIDC signing keys; using cached key", slog.String("issuer", v.issuer), slog.Any("err", err))
+			return key.PublicKey, nil
+		}
 		return nil, fmt.Errorf("while discovering keys from issuer: %w", err)
 	}
 	v.keys = keys
 	v.lastRefresh = now
+	v.lastFailedRefresh = time.Time{}
 	key = findKey(keys, keyID)
 	if key == nil {
 		return nil, fmt.Errorf("unknown key ID %q", keyID)

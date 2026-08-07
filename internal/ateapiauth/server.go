@@ -40,10 +40,15 @@ func ValidateServerConfig(cfg ServerConfig) error {
 	if len(cfg.JWTProviders) == 0 {
 		return fmt.Errorf("at least one JWT provider is required")
 	}
+	issuers := make(map[string]bool, len(cfg.JWTProviders))
 	for i, provider := range cfg.JWTProviders {
 		if provider.Name == "" || provider.Issuer == "" || provider.Verify == nil {
 			return fmt.Errorf("JWT provider %d requires a name, issuer, and verifier", i)
 		}
+		if issuers[provider.Issuer] {
+			return fmt.Errorf("duplicate JWT provider issuer %q", provider.Issuer)
+		}
+		issuers[provider.Issuer] = true
 	}
 	return nil
 }
@@ -181,6 +186,7 @@ func (a jwtServerAuthenticator) authenticate(ctx context.Context) (context.Conte
 			Issuer: provider.Issuer,
 		}), nil
 	}
+	slog.DebugContext(ctx, "No JWT provider matched token issuer", slog.String("issuer", issuer))
 	return nil, status.Error(codes.Unauthenticated, "invalid bearer token")
 }
 
