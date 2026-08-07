@@ -30,7 +30,6 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	grpcCodes "google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
 	storagev1listers "k8s.io/client-go/listers/storage/v1"
 )
@@ -65,101 +64,6 @@ func markSkipped(ctx context.Context, reason string) {
 		attribute.Bool("step.skipped", true),
 		attribute.String("step.skip_reason", reason),
 	)
-}
-
-// WorkflowStep represents a single, idempotent operation in a workflow graph.
-// Params is the immutable parameters used to start the workflow.
-// Context is the mutable context fetched or modified during execution.
-type WorkflowStep[Params any, Context any] interface {
-	// Name returns the identifier for this step (useful for logging and debugging).
-	Name() string
-
-	// IsComplete checks if this step's work has already been completed.
-	// If it returns true, the engine skips Execute() and fast-forwards to the next step.
-	IsComplete(ctx context.Context, params Params, wCtx Context) (bool, error)
-
-	// CheckPrerequisite validates that the current state permits executing this
-	// step (e.g. the actor's status allows this state-machine edge). The engine
-	// calls it only when IsComplete returned false, immediately before Execute,
-	// so completed steps of a retried workflow fast-forward without
-	// re-validation. Return a gRPC status error with
-	// codes.FailedPrecondition to abort the workflow if prereqs are not met.
-	CheckPrerequisite(ctx context.Context, params Params, wCtx Context) error
-
-	// Execute performs the step's business logic and persists any state changes.
-	// If an error is returned, the workflow stops and relies on the client to retry.
-	Execute(ctx context.Context, params Params, wCtx Context) error
-
-	// RetryBackoff returns an optional backoff configuration for this step.
-	// If non-nil, the workflow orchestrator automatically retries Execute() on version conflicts.
-	RetryBackoff() *wait.Backoff
-}
-
-// RunWorkflow is a synchronous executor that iterates through a sequence of generic steps.
-// It implements the Client-Driven Forward Recovery pattern.
-func RunWorkflow[Params any, Context any](ctx context.Context, params Params, wCtx Context, steps []WorkflowStep[Params, Context]) error {
-	tracer := otel.Tracer("controlapi")
-
-	for _, step := range steps {
-		if err := ctx.Err(); err != nil {
-			return fmt.Errorf("workflow cancelled: %w", err)
-		}
-
-		ctx, span := tracer.Start(ctx, "step."+step.Name())
-
-		done, err := step.IsComplete(ctx, params, wCtx)
-		if err != nil {
-			span.RecordError(err)
-			span.SetStatus(codes.Error, err.Error())
-			span.End()
-			return fmt.Errorf("failed checking status of step %s: %w", step.Name(), err)
-		}
-
-		if done {
-			span.End()
-			// Fast-forward past this step
-			continue
-		}
-
-		if err := step.CheckPrerequisite(ctx, params, wCtx); err != nil {
-			span.RecordError(err)
-			span.SetStatus(codes.Error, err.Error())
-			span.End()
-			return fmt.Errorf("prerequisite not met at step %s: %w", step.Name(), err)
-		}
-
-		err = runStep(ctx, params, wCtx, step)
-		if err != nil {
-			span.RecordError(err)
-			span.SetStatus(codes.Error, err.Error())
-			span.End()
-			return fmt.Errorf("workflow failed at step %s: %w", step.Name(), err)
-		}
-		span.End()
-	}
-
-	return nil
-}
-
-func runStep[Params any, Context any](ctx context.Context, params Params, wCtx Context, step WorkflowStep[Params, Context]) error {
-	backoff := step.RetryBackoff()
-	if backoff == nil {
-		return step.Execute(ctx, params, wCtx)
-	}
-
-	return wait.ExponentialBackoff(*backoff, func() (bool, error) {
-		if err := ctx.Err(); err != nil {
-			return false, err
-		}
-		execErr := step.Execute(ctx, params, wCtx)
-		if execErr == nil {
-			return true, nil
-		}
-		if errors.Is(execErr, store.ErrVersionConflict) {
-			return false, nil // retryable
-		}
-		return false, execErr // fatal
-	})
 }
 
 // ActorWorkflow handles the workflows for actor's resume / suspend operations.
