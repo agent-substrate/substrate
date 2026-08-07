@@ -24,7 +24,3 @@ baseImageOverrides:
   # (to bind the image into the virtiofsd shared dir) — both in debian:stable-slim but
   # not in the distroless static default.
   github.com/agent-substrate/substrate/cmd/ateom-microvm: debian:stable-slim
-  # ateom-gvisor runs the NVIDIA container toolkit binaries it mounts from the host
-  # for GPU passthrough (nvidia-ctk, nvidia-cdi-hook). Those are glibc-dynamic, and
-  # the distroless static default ships no libc to load them.
-  github.com/agent-substrate/substrate/cmd/ateom-gvisor: debian:stable-slim
