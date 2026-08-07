@@ -786,10 +786,11 @@ func (m mapObjectStorage) GetObject(_ context.Context, bucket, object string) (i
 
 func (mapObjectStorage) PutObject(_ context.Context, _, _ string, _ io.Reader) error { return nil }
 
-// TestDownloadCombinedCheckpoint verifies a DataOnGolden restore stages one
-// folder holding the actor snapshot's durable-dir tar and the golden
-// snapshot's remaining files — and that the golden's own durable-dir tar is
-// the one that loses the name collision.
+// TestDownloadCombinedCheckpoint verifies the micro-VM DataOnGolden layout:
+// one flat folder holding the actor snapshot's durable-dir tar and the golden
+// snapshot's remaining files — the caller shadows the golden's own
+// durable-dir tar out of the golden file list (goldenOnlyFiles), so the
+// actor's tar wins the name collision.
 func TestDownloadCombinedCheckpoint(t *testing.T) {
 	zstdBytes := func(t *testing.T, s string) []byte {
 		t.Helper()
@@ -816,12 +817,11 @@ func TestDownloadCombinedCheckpoint(t *testing.T) {
 	s := &AteomHerder{gcsClient: store}
 
 	dstDir := t.TempDir()
+	actorFiles := []string{"durable-dir.tar"}
+	goldenFiles := []string{"config.json", "memory-ranges", "durable-dir.tar"}
 	err := s.downloadCombinedCheckpoint(context.Background(),
-		"gs://bucket/actors/1/snapshots/2/",
-		"gs://bucket/ate-golden/snapshots/1/",
-		dstDir,
-		[]string{"durable-dir.tar"},
-		[]string{"config.json", "memory-ranges", "durable-dir.tar"})
+		"gs://bucket/actors/1/snapshots/2/", dstDir, actorFiles,
+		"gs://bucket/ate-golden/snapshots/1/", dstDir, goldenOnlyFiles(actorFiles, goldenFiles))
 	if err != nil {
 		t.Fatalf("downloadCombinedCheckpoint: %v", err)
 	}
@@ -986,5 +986,71 @@ func TestDrainOnShutdownForceStopsAfterTimeout(t *testing.T) {
 	}
 	if readiness.Ready() {
 		t.Fatal("readiness should be not-ready after drain")
+	}
+}
+
+// TestDownloadCombinedCheckpointGvisorFsOverride verifies the gVisor
+// DataOnGolden layout: the golden split checkpoint's memory files land at
+// the restore dir's top level (its own fs/ contents are excluded by
+// filesOutsideDir), while the actor's flat fscheckpoint image set is
+// re-rooted into the fs/ subfolder, overriding it wholesale — and the
+// subfolder is created on demand.
+func TestDownloadCombinedCheckpointGvisorFsOverride(t *testing.T) {
+	zstdBytes := func(t *testing.T, s string) []byte {
+		t.Helper()
+		var buf bytes.Buffer
+		zw, err := zstd.NewWriter(&buf)
+		if err != nil {
+			t.Fatalf("zstd.NewWriter: %v", err)
+		}
+		if _, err := zw.Write([]byte(s)); err != nil {
+			t.Fatalf("zstd write: %v", err)
+		}
+		if err := zw.Close(); err != nil {
+			t.Fatalf("zstd close: %v", err)
+		}
+		return buf.Bytes()
+	}
+
+	store := mapObjectStorage{objects: map[string][]byte{
+		"bucket/actors/1/snapshots/2/multitar.img.zstd":      zstdBytes(t, "actor data fs image"),
+		"bucket/ate-golden/snapshots/1/checkpoint.img.zstd":  zstdBytes(t, "golden memory"),
+		"bucket/ate-golden/snapshots/1/pages.img.zstd":       zstdBytes(t, "golden pages"),
+		"bucket/ate-golden/snapshots/1/fs/multitar.img.zstd": zstdBytes(t, "golden fs image (must not be downloaded)"),
+	}}
+	s := &AteomHerder{gcsClient: store}
+
+	dstDir := t.TempDir()
+	actorFiles := []string{"multitar.img"}
+	goldenFiles := []string{"checkpoint.img", "fs/multitar.img", "pages.img"}
+	err := s.downloadCombinedCheckpoint(context.Background(),
+		"gs://bucket/actors/1/snapshots/2/", filepath.Join(dstDir, "fs"), actorFiles,
+		"gs://bucket/ate-golden/snapshots/1/", dstDir, filesOutsideDir(goldenFiles, "fs"))
+	if err != nil {
+		t.Fatalf("downloadCombinedCheckpoint: %v", err)
+	}
+
+	for path, content := range map[string]string{
+		filepath.Join(dstDir, "checkpoint.img"):     "golden memory",
+		filepath.Join(dstDir, "pages.img"):          "golden pages",
+		filepath.Join(dstDir, "fs", "multitar.img"): "actor data fs image",
+	} {
+		got, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("ReadFile(%s): %v", path, err)
+		}
+		if string(got) != content {
+			t.Errorf("%s content = %q, want %q", path, got, content)
+		}
+	}
+}
+
+// TestFilesOutsideDir verifies the golden-file filter for the gVisor
+// fs-override layout, including that a prefix-similar name (fsx) survives.
+func TestFilesOutsideDir(t *testing.T) {
+	got := filesOutsideDir([]string{"checkpoint.img", "fs/multitar.img", "fs/pages.img", "fsx.img"}, "fs")
+	want := []string{"checkpoint.img", "fsx.img"}
+	if diff := cmp.Diff(want, got); diff != "" {
+		t.Errorf("filesOutsideDir diff (-want +got):\n%s", diff)
 	}
 }

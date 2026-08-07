@@ -239,13 +239,15 @@ func TestDurableDirLifecycle(t *testing.T) {
 			},
 		},
 		{
-			// OnGolden data resume: the suspend captures only the durable data
-			// (the snapshot records plain Data content); the resume combines it
-			// with the template's golden snapshot per onResume.fromData. The
-			// golden guest was never called, so its restored memory counter is
-			// 0 — the counter expectations match ColdBoot, while the file
-			// counter proves the durable data came from the ACTOR's snapshot
-			// (the golden's own durable tar would read 0).
+			// OnGolden data resume, on both runtimes: the suspend captures only
+			// the durable data (the snapshot records plain Data content); the
+			// resume combines it with the template's golden snapshot per
+			// onResume.fromData — micro-VM restores one merged folder, gVisor
+			// restores the golden split checkpoint with the actor's data as its
+			// fs/ half. The golden guest was never called, so its restored
+			// memory counter is 0 — the counter expectations match ColdBoot,
+			// while the file counter proves the durable data came from the
+			// ACTOR's snapshot (the golden's own durable data would read 0).
 			name: "onCommit:Data, onPause:Full, onResume.fromData:Golden",
 			tc: actorLifecycleTestCase{
 				onCommit:                 v1alpha1.SnapshotScopeData,
@@ -256,7 +258,6 @@ func TestDurableDirLifecycle(t *testing.T) {
 				wantMemoryAfterSuspend:   1,
 				wantFileAfterSuspend:     3,
 				wantSnapshotContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
-				microVMOnly:              true,
 			},
 		},
 		{
@@ -273,16 +274,12 @@ func TestDurableDirLifecycle(t *testing.T) {
 				wantMemoryAfterSuspend:   1,
 				wantFileAfterSuspend:     3,
 				wantSnapshotContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
-				microVMOnly:              true,
 			},
 		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if test.tc.microVMOnly && !isMicroVMEnvironment() {
-				t.Skipf("Skipping %s: the Golden resume source is micro-VM only", test.name)
-			}
 			t.Parallel()
 			runActorLifecycleTestCase(t, "durabledir-lifecycle", createActorTemplate, test.tc)
 		})
@@ -338,16 +335,12 @@ func TestMultipleDurableDirLifecycle(t *testing.T) {
 				wantFileAfterSuspend:     3,
 				checkSecondFileCounter:   true,
 				wantSnapshotContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
-				microVMOnly:              true,
 			},
 		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			if test.tc.microVMOnly && !isMicroVMEnvironment() {
-				t.Skipf("Skipping %s: the Golden resume source is micro-VM only", test.name)
-			}
 			t.Parallel()
 			runActorLifecycleTestCase(t, "multi-durabledir-lifecycle", createActorTemplateWithTwoDurableDirs, test.tc)
 		})
@@ -412,10 +405,6 @@ type actorLifecycleTestCase struct {
 	// the golden-combine is a restore-time behavior derived from the
 	// template's onResume.fromData source, never part of the snapshot record.
 	wantSnapshotContentScope ateapipb.SnapshotContentScope
-
-	// microVMOnly skips the case outside the micro-VM environment (e.g.
-	// fromData: Golden is rejected by the CRD CEL rules on gVisor).
-	microVMOnly bool
 }
 
 func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(context.Context, *testing.T, *e2e.Clients, *e2e.Namespace, v1alpha1.SnapshotScope, v1alpha1.SnapshotScope, v1alpha1.ResumeSource) (*v1alpha1.ActorTemplate, error), tc actorLifecycleTestCase) {

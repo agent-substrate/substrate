@@ -330,8 +330,7 @@ spec:
                     default: {}
                     description: |-
                       OnResume specifies, per snapshot situation, what supplies the guest
-                      state at resume (see OnResumeConfig). "fromData: Golden" requires
-                      sandboxClass "microvm".
+                      state at resume (see OnResumeConfig).
                     properties:
                       fromData:
                         default: ColdBoot
@@ -468,11 +467,6 @@ spec:
             - message: ExternalVolumes are not supported when sandboxClass is 'microvm'
               rule: '!has(self.sandboxClass) || self.sandboxClass != ''microvm'' ||
                 !has(self.volumes) || !self.volumes.exists(v, has(v.externalVolumeTemplate))'
-            - message: 'onResume.fromData: Golden is not supported when sandboxClass
-                is ''gvisor'''
-              rule: '(has(self.sandboxClass) && self.sandboxClass == ''microvm'')
-                || !has(self.snapshotsConfig.onResume) || (has(self.snapshotsConfig.onResume.fromData)
-                ? self.snapshotsConfig.onResume.fromData : ''ColdBoot'') != ''Golden'''
           status:
             description: status is the observed state of ActorTemplate
             properties:

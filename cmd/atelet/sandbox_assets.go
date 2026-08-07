@@ -50,6 +50,14 @@ const sandboxManifestName = "manifest.json"
 var maxAssetBytes int64 = 8 << 30
 
 const (
+	// sandboxClassGvisor mirrors the gVisor SandboxClass value recorded in a
+	// manifest's sandboxClass field (see atev1alpha1.SandboxClassGvisor;
+	// atelet does not depend on the CRD API package). Not to be confused
+	// with gvisorAssetName below: the class names the runtime family, the
+	// asset name keys one entry of the class's asset map, and the two only
+	// coincidentally share the value "gvisor".
+	sandboxClassGvisor = "gvisor"
+
 	// gvisorAssetName is the gVisor release tarball asset (gvisor.tar.bz2). The
 	// tarball carries `runsc` together with the `gvisor-bin/` helper binaries,
 	// so it is extracted into a content-addressed directory rather than as a
@@ -58,6 +66,12 @@ const (
 
 	// runscAssetName is the legacy single-binary gVisor asset.
 	runscAssetName = "runsc"
+
+	// gvisorSplitFsSubdir is the subfolder of a gVisor split checkpoint
+	// (`runsc checkpoint -split-fscheckpoint`) holding the durable-dir fs
+	// image; the memory snapshot files sit at the checkpoint's top level, and
+	// `runsc restore -split-fsrestore` reads the fs half from this subfolder.
+	gvisorSplitFsSubdir = "fs"
 )
 
 // assetEntry is one content-addressed sandbox asset (url + sha256).
@@ -140,6 +154,17 @@ func (s *AteomHerder) ensureSandboxAssets(ctx context.Context, rec *sandboxAsset
 		paths[name] = p
 	}
 	return paths, nil
+}
+
+// gvisorRuntimeAssetSHA returns the sha256 pinning a record's gVisor runtime:
+// the release tarball asset, or the legacy bare runsc binary for records
+// written before the tarball mechanism. Used to require that the two halves
+// of a DATA_ON_GOLDEN combine were produced by the same runsc.
+func gvisorRuntimeAssetSHA(rec *sandboxAssetsRecord) string {
+	if a, ok := rec.Assets[gvisorAssetName]; ok {
+		return a.SHA256
+	}
+	return rec.Assets[runscAssetName].SHA256
 }
 
 // runscPathFor returns the local path of the gVisor `runsc` binary from a

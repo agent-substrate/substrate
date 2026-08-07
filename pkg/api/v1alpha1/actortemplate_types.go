@@ -296,7 +296,7 @@ const (
 	// ResumeSourceGolden restores the ActorTemplate's golden snapshot (guest
 	// memory + filesystem delta) and serves the snapshot's durable data to
 	// it, so the actor resumes with the golden's warm state over its own
-	// data. Requires sandboxClass "microvm".
+	// data.
 	ResumeSourceGolden ResumeSource = "Golden"
 )
 
@@ -343,8 +343,7 @@ type SnapshotsConfig struct {
 	OnCommit SnapshotScope `json:"onCommit,omitempty"`
 
 	// OnResume specifies, per snapshot situation, what supplies the guest
-	// state at resume (see OnResumeConfig). "fromData: Golden" requires
-	// sandboxClass "microvm".
+	// state at resume (see OnResumeConfig).
 	//
 	// +optional
 	// +kubebuilder:default={}
@@ -355,7 +354,6 @@ type SnapshotsConfig struct {
 //
 // +kubebuilder:validation:XValidation:rule="!has(self.volumes) || self.volumes.all(v, has(self.containers) && self.containers.exists(c, has(c.volumeMounts) && c.volumeMounts.exists(vm, vm.name == v.name)))",message="All volumes defined in spec.volumes must be mounted by at least one container"
 // +kubebuilder:validation:XValidation:rule="!has(self.sandboxClass) || self.sandboxClass != 'microvm' || !has(self.volumes) || !self.volumes.exists(v, has(v.externalVolumeTemplate))",message="ExternalVolumes are not supported when sandboxClass is 'microvm'"
-// +kubebuilder:validation:XValidation:rule="(has(self.sandboxClass) && self.sandboxClass == 'microvm') || !has(self.snapshotsConfig.onResume) || (has(self.snapshotsConfig.onResume.fromData) ? self.snapshotsConfig.onResume.fromData : 'ColdBoot') != 'Golden'",message="onResume.fromData: Golden is not supported when sandboxClass is 'gvisor'"
 type ActorTemplateSpec struct {
 	// PauseImage is the container to use as the root sandbox container.
 	//

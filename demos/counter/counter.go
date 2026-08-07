@@ -18,11 +18,7 @@ package main
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/base64"
 	"fmt"
-	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -31,7 +27,6 @@ import (
 	"strconv"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	"github.com/spf13/pflag"
 )
@@ -115,59 +110,20 @@ func main() {
 		w.Write([]byte("ok\n"))
 	})
 
-	go func() {
-		slog.InfoContext(ctx, "Starting counter server on port 80")
-		if err := http.ListenAndServe(":80", defaultMux); err != nil {
-			slog.ErrorContext(ctx, "Error starting server", slog.Any("err", err))
-			os.Exit(1)
-		}
-	}()
-
-	// Write some random data to a file in the root filesystem, to test
-	// filesystem checkpoint/restore.
-	if err := writeRandomFile(); err != nil {
-		slog.InfoContext(ctx, "Error writing random file", slog.Any("err", err))
-	} else {
-		slog.InfoContext(ctx, "Wrote content to random file", slog.String("fshash", hashRandomFile()))
-	}
+	// TODO(dberkov): remove the temporary workaround for adding a file to durDir
+	// othereise gVisor does not take golden snapshot correclty.
+	incrementFileCounter(filepath.Join(*fileCounterDirectory, "tmp.txt"))
 
 	ready.Store(true)
 	slog.InfoContext(ctx, "Readyz now reports OK")
 
-	count := 0
-	slog.InfoContext(ctx, "Count", slog.Int("count", count), slog.String("fshash", hashRandomFile()))
-	count++
-
-	for range time.Tick(10 * time.Second) {
-		// TODO: Test outbound connectivity by pinging google.com
-		slog.InfoContext(ctx, "Count", slog.Int("count", count), slog.String("fshash", hashRandomFile()))
-		count++
+	// The server is the process's reason to live: block on it instead of a
+	// keep-alive loop, so the process exits when (and only when) it fails.
+	slog.InfoContext(ctx, "Starting counter server on port 80")
+	if err := http.ListenAndServe(":80", defaultMux); err != nil {
+		slog.ErrorContext(ctx, "Error starting server", slog.Any("err", err))
+		os.Exit(1)
 	}
-}
-
-func writeRandomFile() error {
-	rf, err := os.Create("/random-content-file")
-	if err != nil {
-		return fmt.Errorf("while opening file: %w", err)
-	}
-	defer rf.Close()
-
-	_, err = io.CopyN(rf, rand.Reader, 1*1024*1024)
-	if err != nil {
-		return fmt.Errorf("while copying rand data: %w", err)
-	}
-
-	return nil
-}
-
-func hashRandomFile() string {
-	rfBytes, err := os.ReadFile("/random-content-file")
-	if err != nil {
-		panic(err)
-	}
-
-	hash := sha256.Sum256(rfBytes)
-	return base64.RawStdEncoding.EncodeToString(hash[:])
 }
 
 func getCurrentIP() string {

@@ -20,10 +20,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net"
 	"net/url"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -439,15 +441,22 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 // listSnapshotFiles returns the (relative) names of regular files directly under
 // dir, which atelet ships to object storage as the snapshot.
 func listSnapshotFiles(dir string) ([]string, error) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil, err
-	}
 	var files []string
-	for _, e := range entries {
-		if e.Type().IsRegular() {
-			files = append(files, e.Name())
+	if err := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
 		}
+		if !d.Type().IsRegular() {
+			return nil
+		}
+		rel, err := filepath.Rel(dir, path)
+		if err != nil {
+			return err
+		}
+		files = append(files, rel)
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 	sort.Strings(files)
 	return files, nil
@@ -529,18 +538,30 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 		return nil, fmt.Errorf("while composing pause rootfs: %w", err)
 	}
 
+	fsRestoreArgs := func(dir string) []string {
+		if _, err := os.Stat(filepath.Join(dir, "fs")); err == nil {
+			return []string{"--fs-restore-image-path", dir + "/fs"}
+		}
+		return nil
+	}
+
 	switch req.GetScope() {
 	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA:
 		// Create and restore pause container
-		if err := rcmd.cmdCreate(ctx, os.Stdout, "pause", []string{"--fs-restore-image-path", checkpointDir}); err != nil {
+		if err := rcmd.cmdCreate(ctx, os.Stdout, "pause", fsRestoreArgs(checkpointDir)); err != nil {
 			return nil, fmt.Errorf("while creating pause container: %w", err)
 		}
 		if err := rcmd.cmdStart(ctx, os.Stdout, "pause"); err != nil {
 			return nil, fmt.Errorf("while starting pause container: %w", err)
 		}
-	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL:
-		// Create and restore pause container
-		if err := rcmd.cmdCreate(ctx, os.Stdout, "pause", nil); err != nil {
+	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
+		ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN:
+		// DATA_ON_GOLDEN restores exactly like FULL: atelet staged the golden
+		// checkpoint's memory files at the restore dir's top level and the
+		// ACTOR's data fs image in its fs/ subfolder, which is where
+		// `runsc restore -split-fsrestore` reads the fs half from anyway.
+		// Create and restore pause container.
+		if err := rcmd.cmdCreate(ctx, os.Stdout, "pause", fsRestoreArgs(checkpointDir)); err != nil {
 			return nil, fmt.Errorf("while creating pause container: %w", err)
 		}
 		if err := rcmd.cmdRestore(ctx, os.Stdout, "pause", checkpointDir); err != nil {
@@ -569,7 +590,8 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 			if err := rcmd.cmdStart(ctx, pw, ac.GetName()); err != nil {
 				return nil, fmt.Errorf("while starting %q application container: %w", ac.GetName(), err)
 			}
-		case ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL:
+		case ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
+			ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN:
 			if err := rcmd.cmdCreate(ctx, pw, ac.GetName(), nil); err != nil {
 				return nil, fmt.Errorf("while creating %q application container: %w", ac.GetName(), err)
 			}
