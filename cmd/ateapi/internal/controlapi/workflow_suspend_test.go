@@ -31,7 +31,7 @@ import (
 	"k8s.io/client-go/tools/cache"
 )
 
-func TestMarkSuspendingStep_SnapshotName(t *testing.T) {
+func TestEnsureMarkedSuspending_SnapshotName(t *testing.T) {
 	ctx := context.Background()
 	persistence := newTestPersistence(t)
 	actor, err := persistence.CreateActor(ctx, &ateapipb.Actor{
@@ -41,26 +41,25 @@ func TestMarkSuspendingStep_SnapshotName(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateActor: %v", err)
 	}
-	state := &SuspendState{
-		Actor: actor,
-		ActorTemplate: &atev1alpha1.ActorTemplate{Spec: atev1alpha1.ActorTemplateSpec{
-			SnapshotsConfig: atev1alpha1.SnapshotsConfig{Location: "gs://bucket/root/"},
-		}},
-	}
-	if err := (&MarkSuspendingStep{store: persistence}).Execute(ctx, &SuspendInput{ActorRef: resources.ActorRef{Atespace: "team-a", Name: "actor-1"}}, state); err != nil {
-		t.Fatalf("Execute: %v", err)
+	tmpl := &atev1alpha1.ActorTemplate{Spec: atev1alpha1.ActorTemplateSpec{
+		SnapshotsConfig: atev1alpha1.SnapshotsConfig{Location: "gs://bucket/root/"},
+	}}
+	w := &ActorWorkflow{store: persistence}
+	marked, err := w.ensureMarkedSuspending(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"}, actor, tmpl)
+	if err != nil {
+		t.Fatalf("ensureMarkedSuspending: %v", err)
 	}
 
-	// The field holds the snapshot's name, not its URI: FinalizeSuspendedStep
+	// The field holds the snapshot's name, not its URI: FinalizeSuspended
 	// names the ActorSnapshot after it, so it has to be usable as a resource
 	// name verbatim.
-	snapshotName := state.Actor.GetInProgressSnapshotName()
+	snapshotName := marked.GetInProgressSnapshotName()
 	if !resources.IsValidResourceName(snapshotName) {
 		t.Fatalf("in-progress snapshot = %q, want a valid resource name", snapshotName)
 	}
 	// The URI the later steps rebuild from that name nests under the actor's
 	// atespace so each tenant gets a distinct storage prefix.
-	uri, err := resources.NewSnapshotURI(state.ActorTemplate.Spec.SnapshotsConfig.Location, "team-a", snapshotName)
+	uri, err := resources.NewSnapshotURI(tmpl.Spec.SnapshotsConfig.Location, "team-a", snapshotName)
 	if err != nil {
 		t.Fatalf("NewSnapshotURI(%q): %v", snapshotName, err)
 	}
@@ -69,10 +68,37 @@ func TestMarkSuspendingStep_SnapshotName(t *testing.T) {
 	}
 }
 
+// TestEnsureMarkedSuspending_ReentryKeepsPersistedSnapshotLocation verifies a
+// re-entered workflow does not mint a second snapshot location: the location
+// persisted by the first attempt stays authoritative.
+func TestEnsureMarkedSuspending_ReentryKeepsPersistedSnapshotLocation(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+	actor, err := persistence.CreateActor(ctx, &ateapipb.Actor{
+		Metadata:                             &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor-1"},
+		Status:                               ateapipb.Actor_STATUS_SUSPENDING,
+		InProgressSnapshotName:               "first-attempt",
+		InProgressSnapshotSourceActorVersion: 7,
+	})
+	if err != nil {
+		t.Fatalf("CreateActor: %v", err)
+	}
+	w := &ActorWorkflow{store: persistence}
+	marked, err := w.ensureMarkedSuspending(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"}, actor, &atev1alpha1.ActorTemplate{})
+	if err != nil {
+		t.Fatalf("ensureMarkedSuspending: %v", err)
+	}
+	if got := marked.GetInProgressSnapshotName(); got != "first-attempt" {
+		t.Errorf("InProgressSnapshotName = %q, want the first attempt's location", got)
+	}
+	if got := marked.GetInProgressSnapshotSourceActorVersion(); got != 7 {
+		t.Errorf("InProgressSnapshotSourceActorVersion = %d, want 7", got)
+	}
+}
+
 // TestSuspendActorWorkflow_RejectedAndIdempotentPaths covers the two
-// short-circuit paths of the suspend workflow: rejection by
-// MarkSuspendingStep's CheckPrerequisite and the IsComplete idempotent
-// fast-forward.
+// short-circuit paths of the suspend workflow: rejection of the suspend edge
+// for a non-RUNNING actor and the idempotent fast-forward for a SUSPENDED one.
 func TestSuspendActorWorkflow_RejectedAndIdempotentPaths(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -133,62 +159,39 @@ func TestSuspendActorWorkflow_RejectedAndIdempotentPaths(t *testing.T) {
 	}
 }
 
-// TestSuspendSteps_CheckPrerequisite verifies each suspend step's
-// CheckPrerequisite against every actor status: nil for the step's allowed
-// statuses, FailedPrecondition for all others.
-func TestSuspendSteps_CheckPrerequisite(t *testing.T) {
-	tests := []struct {
-		name string
-		step WorkflowStep[*SuspendInput, *SuspendState]
-		// allowed lists the statuses CheckPrerequisite accepts; nil means
-		// every status is accepted.
-		allowed map[ateapipb.Actor_Status]bool
-	}{
-		{
-			// Loading has no prerequisite: it is allowed from every status.
-			name:    "LoadActorForSuspendStep",
-			step:    &LoadActorForSuspendStep{},
-			allowed: nil,
-		},
-		{
-			// Suspending is allowed only from RUNNING.
-			name: "MarkSuspendingStep",
-			step: &MarkSuspendingStep{},
-			allowed: map[ateapipb.Actor_Status]bool{
-				ateapipb.Actor_STATUS_RUNNING: true,
-			},
-		},
-		{
-			// The checkpoint call is allowed only from SUSPENDING (SUSPENDED
-			// is fast-forwarded by IsComplete).
-			name: "CallAteletSuspendStep",
-			step: &CallAteletSuspendStep{},
-			allowed: map[ateapipb.Actor_Status]bool{
-				ateapipb.Actor_STATUS_SUSPENDING: true,
-			},
-		},
-		{
-			// Finalizing is allowed only from SUSPENDING: a persisted
-			// SUSPENDED actor always has its worker pod fields cleared and is
-			// fast-forwarded by IsComplete.
-			name: "FinalizeSuspendedStep",
-			step: &FinalizeSuspendedStep{},
-			allowed: map[ateapipb.Actor_Status]bool{
-				ateapipb.Actor_STATUS_SUSPENDING: true,
-			},
-		},
+// TestEnsureMarkedSuspending_StatusMatrix verifies the suspend edge's status
+// gating against every actor status: RUNNING takes the edge, SUSPENDING skips
+// (a previous attempt already marked the actor), everything else is rejected
+// with FailedPrecondition. SUSPENDED is rejected here because the
+// orchestrator early-returns before this step for a fully suspended actor.
+func TestEnsureMarkedSuspending_StatusMatrix(t *testing.T) {
+	allowed := map[ateapipb.Actor_Status]bool{
+		ateapipb.Actor_STATUS_RUNNING:    true,
+		ateapipb.Actor_STATUS_SUSPENDING: true, // skipped, not re-marked
 	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			ctx := context.Background()
-			for _, st := range allActorStatuses {
-				// Worker pod fields are populated so CallAteletSuspendStep's
-				// missing-worker crash branch is not taken; this test only
-				// verifies status gating.
-				err := tc.step.CheckPrerequisite(ctx, &SuspendInput{ActorRef: resources.ActorRef{Name: "id1"}}, &SuspendState{Actor: &ateapipb.Actor{Status: st, WorkerAssignment: &ateapipb.WorkerAssignment{WorkerNamespace: "ns", WorkerPool: "pool", WorkerPod: "worker-1"}}})
-				assertPrerequisiteResult(t, st, err, tc.allowed == nil || tc.allowed[st])
-			}
+
+	for _, seedStatus := range allActorStatuses {
+		ctx := context.Background()
+		persistence := newTestPersistence(t)
+		w := &ActorWorkflow{store: persistence}
+
+		actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
+		actor, err := persistence.CreateActor(ctx, &ateapipb.Actor{
+			Metadata: &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+			Status:   seedStatus,
 		})
+		if err != nil {
+			t.Fatalf("status %v: CreateActor: %v", seedStatus, err)
+		}
+
+		tmpl := &atev1alpha1.ActorTemplate{Spec: atev1alpha1.ActorTemplateSpec{
+			SnapshotsConfig: atev1alpha1.SnapshotsConfig{Location: "gs://snapshots"},
+		}}
+		marked, err := w.ensureMarkedSuspending(ctx, actorRef, actor, tmpl)
+		assertPrerequisiteResult(t, seedStatus, err, allowed[seedStatus])
+		if err == nil && marked.GetStatus() != ateapipb.Actor_STATUS_SUSPENDING {
+			t.Errorf("status %v: ensureMarkedSuspending returned actor in %v, want SUSPENDING", seedStatus, marked.GetStatus())
+		}
 	}
 }
 
@@ -238,7 +241,7 @@ func newDanglingDialer() *AteletDialer {
 	return NewAteletDialer(empty, empty, "", "")
 }
 
-func TestCallAteletSuspendStep_DanglingWorkerDoesNotRecordPhantomSnapshot(t *testing.T) {
+func TestEnsureAteletSuspended_DanglingWorkerDoesNotRecordPhantomSnapshot(t *testing.T) {
 	tests := []struct {
 		name         string
 		prevSnapshot *ateapipb.ObjectRef
@@ -274,10 +277,9 @@ func TestCallAteletSuspendStep_DanglingWorkerDoesNotRecordPhantomSnapshot(t *tes
 				t.Fatalf("CreateActor: %v", err)
 			}
 
-			step := &CallAteletSuspendStep{store: persistence, dialer: newDanglingDialer()}
-			input := &SuspendInput{ActorRef: resources.ActorRef{Atespace: "team-a", Name: "actor-1"}}
-			if err := step.Execute(ctx, input, &SuspendState{Actor: created}); err == nil {
-				t.Fatal("Execute: want error for dangling worker, got nil")
+			w := &ActorWorkflow{store: persistence, dialer: newDanglingDialer()}
+			if _, err := w.ensureAteletSuspended(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"}, created, &atev1alpha1.ActorTemplate{}); err == nil {
+				t.Fatal("ensureAteletSuspended: want error for dangling worker, got nil")
 			}
 
 			stored, err := persistence.GetActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"})
@@ -301,21 +303,22 @@ func TestCallAteletSuspendStep_DanglingWorkerDoesNotRecordPhantomSnapshot(t *tes
 	}
 }
 
-// TestFinalizeSuspendedStep_NoAssignment verifies finalization runs even when
+// TestEnsureSuspendedFinalized_NoAssignment verifies finalization runs even when
 // the actor has no worker assignment: the ActorSnapshot must be recorded and
 // the actor moved to SUSPENDED rather than silently left SUSPENDING. This is
 // the shape a paused-origin suspend (#791) produces — a PAUSED actor has no
 // worker — and the regression test for finalization previously living inside
 // the worker-freeing branch.
-func TestFinalizeSuspendedStep_NoAssignment(t *testing.T) {
+func TestEnsureSuspendedFinalized_NoAssignment(t *testing.T) {
 	ctx := context.Background()
 	persistence := newTestPersistence(t)
 
 	const snapshotName = "2026-01-01t00-00-00z-abc"
 	actor := &ateapipb.Actor{
-		Metadata:               &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor-1"},
-		Status:                 ateapipb.Actor_STATUS_SUSPENDING,
-		InProgressSnapshotName: snapshotName,
+		Metadata:                             &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor-1"},
+		Status:                               ateapipb.Actor_STATUS_SUSPENDING,
+		InProgressSnapshotName:               snapshotName,
+		InProgressSnapshotSourceActorVersion: 1,
 		LocalSnapshotInfo: &ateapipb.LocalSnapshotInfo{
 			SnapshotName:              "actor-1-pause-snapshot",
 			NodeVmsWithLocalSnapshots: []string{"node1"},
@@ -326,21 +329,13 @@ func TestFinalizeSuspendedStep_NoAssignment(t *testing.T) {
 		t.Fatalf("CreateActor: %v", err)
 	}
 
-	step := &FinalizeSuspendedStep{store: persistence}
-	input := &SuspendInput{ActorRef: resources.ActorRef{Atespace: "team-a", Name: "actor-1"}}
-	state := &SuspendState{
-		Actor:         created,
-		ActorTemplate: &atev1alpha1.ActorTemplate{Spec: atev1alpha1.ActorTemplateSpec{SnapshotsConfig: atev1alpha1.SnapshotsConfig{Location: "gs://snapshots"}}},
-		SourceVersion: created.GetMetadata().GetVersion(),
-	}
-	if err := step.Execute(ctx, input, state); err != nil {
-		t.Fatalf("Execute: %v", err)
+	w := &ActorWorkflow{store: persistence}
+	tmpl := &atev1alpha1.ActorTemplate{Spec: atev1alpha1.ActorTemplateSpec{SnapshotsConfig: atev1alpha1.SnapshotsConfig{Location: "gs://snapshots"}}}
+	stored, err := w.ensureSuspendedFinalized(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"}, tmpl)
+	if err != nil {
+		t.Fatalf("ensureSuspendedFinalized: %v", err)
 	}
 
-	stored, err := persistence.GetActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"})
-	if err != nil {
-		t.Fatalf("GetActor: %v", err)
-	}
 	if stored.GetStatus() != ateapipb.Actor_STATUS_SUSPENDED {
 		t.Errorf("status = %v, want SUSPENDED", stored.GetStatus())
 	}
@@ -367,9 +362,12 @@ func TestFinalizeSuspendedStep_NoAssignment(t *testing.T) {
 	if got := snapshot.GetSourceActorUid(); got != created.GetMetadata().GetUid() {
 		t.Errorf("snapshot SourceActorUid = %q, want %q", got, created.GetMetadata().GetUid())
 	}
+	if got := snapshot.GetSourceActorVersion(); got != 1 {
+		t.Errorf("snapshot SourceActorVersion = %d, want 1", got)
+	}
 }
 
-func TestFinalizeSuspendedStep_ReleasesOnlyOwnWorker(t *testing.T) {
+func TestEnsureSuspendedFinalized_ReleasesOnlyOwnWorker(t *testing.T) {
 	tests := []struct {
 		name               string
 		assignmentAtespace string
@@ -431,11 +429,10 @@ func TestFinalizeSuspendedStep_ReleasesOnlyOwnWorker(t *testing.T) {
 				t.Fatalf("CreateWorker: %v", err)
 			}
 
-			step := &FinalizeSuspendedStep{store: persistence}
-			input := &SuspendInput{ActorRef: resources.ActorRef{Atespace: "team-a", Name: "shared"}}
-			state := &SuspendState{ActorTemplate: &atev1alpha1.ActorTemplate{Spec: atev1alpha1.ActorTemplateSpec{SnapshotsConfig: atev1alpha1.SnapshotsConfig{Location: "gs://bucket/root"}}}}
-			if err := step.Execute(ctx, input, state); err != nil {
-				t.Fatalf("Execute: %v", err)
+			w := &ActorWorkflow{store: persistence}
+			tmpl := &atev1alpha1.ActorTemplate{Spec: atev1alpha1.ActorTemplateSpec{SnapshotsConfig: atev1alpha1.SnapshotsConfig{Location: "gs://bucket/root"}}}
+			if _, err := w.ensureSuspendedFinalized(ctx, resources.ActorRef{Atespace: "team-a", Name: "shared"}, tmpl); err != nil {
+				t.Fatalf("ensureSuspendedFinalized: %v", err)
 			}
 
 			stored, err := persistence.GetWorker(ctx, "worker-ns", "pool", "pod-1")
@@ -446,6 +443,52 @@ func TestFinalizeSuspendedStep_ReleasesOnlyOwnWorker(t *testing.T) {
 				t.Errorf("worker released = %t, want %t (assignment: %v)", released, tt.wantReleased, stored.GetAssignment())
 			}
 		})
+	}
+}
+
+// TestEnsureSuspendedFinalized_SnapshotSourceActorVersion pins that the
+// ActorSnapshot records the source actor version persisted when suspension
+// was marked — the version the checkpoint captured — rather than the actor's
+// version at finalize time, including on a re-entered workflow.
+func TestEnsureSuspendedFinalized_SnapshotSourceActorVersion(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+
+	const snapshotName = "2026-01-01t00-00-00z-abc"
+	_, err := persistence.CreateActor(ctx, &ateapipb.Actor{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor-1"},
+		Status:   ateapipb.Actor_STATUS_SUSPENDING,
+		WorkerAssignment: &ateapipb.WorkerAssignment{
+			WorkerNamespace: "worker-ns",
+			WorkerPool:      "pool",
+			WorkerPod:       "pod-gone",
+		},
+		InProgressSnapshotName:               snapshotName,
+		InProgressSnapshotSourceActorVersion: 42,
+	})
+	if err != nil {
+		t.Fatalf("CreateActor: %v", err)
+	}
+
+	w := &ActorWorkflow{store: persistence}
+	tmpl := &atev1alpha1.ActorTemplate{Spec: atev1alpha1.ActorTemplateSpec{SnapshotsConfig: atev1alpha1.SnapshotsConfig{Location: "gs://snapshots"}}}
+	final, err := w.ensureSuspendedFinalized(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"}, tmpl)
+	if err != nil {
+		t.Fatalf("ensureSuspendedFinalized: %v", err)
+	}
+	if final.GetStatus() != ateapipb.Actor_STATUS_SUSPENDED {
+		t.Errorf("status = %v, want SUSPENDED", final.GetStatus())
+	}
+	if final.GetInProgressSnapshotName() != "" || final.GetInProgressSnapshotSourceActorVersion() != 0 {
+		t.Errorf("in-progress snapshot fields not cleared: %q / %d", final.GetInProgressSnapshotName(), final.GetInProgressSnapshotSourceActorVersion())
+	}
+
+	snap, err := persistence.GetActorSnapshot(ctx, "team-a", final.GetLatestSnapshot().GetName())
+	if err != nil {
+		t.Fatalf("GetActorSnapshot: %v", err)
+	}
+	if got := snap.GetSourceActorVersion(); got != 42 {
+		t.Errorf("SourceActorVersion = %d, want 42", got)
 	}
 }
 

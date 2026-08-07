@@ -256,40 +256,6 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 	return state.Actor, !state.WasRunning, nil
 }
 
-// SuspendActor executes the workflow to suspend a running actor. Idempotent.
-func (w *ActorWorkflow) SuspendActor(ctx context.Context, actorRef resources.ActorRef) (actor *ateapipb.Actor, err error) {
-	start := time.Now()
-	input := &SuspendInput{
-		ActorRef: actorRef,
-	}
-	state := &SuspendState{}
-
-	defer func() {
-		w.instruments.recordLifecycleOp(ctx, ateattr.OperationSuspend, start, err,
-			lifecycleOpAttrs(state.Actor, state.ActorTemplate, "", state.WireSnapshotScope)...)
-	}()
-
-	lockCtx, lock, err := w.acquireActorLock(ctx, actorRef)
-	if err != nil {
-		return nil, err
-	}
-	defer lock.Close()
-
-	steps := []WorkflowStep[*SuspendInput, *SuspendState]{
-		&LoadActorForSuspendStep{store: w.store, actorTemplateLister: w.actorTemplateLister},
-		&MarkSuspendingStep{store: w.store},
-		&CallAteletSuspendStep{store: w.store, dialer: w.dialer},
-		&DetachVolumesStep{store: w.store, pluginRegistry: w.pluginRegistry},
-		&FinalizeSuspendedStep{store: w.store},
-	}
-
-	if err = RunWorkflow(lockCtx, input, state, steps); err != nil {
-		return nil, err
-	}
-
-	return state.Actor, nil
-}
-
 // PauseActor executes the workflow to pause a running actor. Idempotent.
 func (w *ActorWorkflow) PauseActor(ctx context.Context, actorRef resources.ActorRef) (actor *ateapipb.Actor, err error) {
 	start := time.Now()
