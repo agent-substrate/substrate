@@ -118,7 +118,7 @@ it rather than replaced.
 
 **Known limitation: a GPU actor can only be suspended while no CUDA context is
 open.** gVisor cannot serialize GPU state, so a checkpoint taken while the workload
-holds a context fails with `can't save with live nvproxy clients` and terminates the
+holds a context fails with an nvproxy encoding error and terminates the
 sandbox. Workloads that run CUDA and exit snapshot normally; one that keeps a
 context alive (a model resident in device memory, say) cannot be suspended or have a
 golden snapshot taken.
