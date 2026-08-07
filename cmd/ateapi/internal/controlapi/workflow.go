@@ -28,13 +28,47 @@ import (
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/trace"
 	grpcCodes "google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
 	storagev1listers "k8s.io/client-go/listers/storage/v1"
 )
+
+// stepSpan opens the per-step trace span ("step.<name>" on the controlapi
+// tracer) and returns the step context plus a finish func the step defers:
+// it records a non-nil error on the span and wraps it with the step name.
+//
+// Workflow steps follow the ensure pattern: each step derives whether its
+// work is already done from persisted state alone (calling markSkipped when
+// so), validates the state-machine edge it is about to take, and persists
+// what it changed before returning — so a re-entered workflow fast-forwards
+// to wherever the previous attempt stopped.
+func stepSpan(ctx context.Context, name string) (context.Context, func(error) error) {
+	ctx, span := otel.Tracer("controlapi").Start(ctx, "step."+name)
+	return ctx, func(err error) error {
+		defer span.End()
+		if err == nil {
+			return nil
+		}
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+		return fmt.Errorf("workflow failed at step %s: %w", name, err)
+	}
+}
+
+// markSkipped annotates the current step's span when its postcondition
+// already holds, so a re-entered workflow's trace shows which steps
+// fast-forwarded and where real work restarted.
+func markSkipped(ctx context.Context, reason string) {
+	trace.SpanFromContext(ctx).SetAttributes(
+		attribute.Bool("step.skipped", true),
+		attribute.String("step.skip_reason", reason),
+	)
+}
 
 // WorkflowStep represents a single, idempotent operation in a workflow graph.
 // Params is the immutable parameters used to start the workflow.
@@ -288,34 +322,6 @@ func (w *ActorWorkflow) PauseActor(ctx context.Context, actorRef resources.Actor
 	}
 
 	return state.Actor, nil
-}
-
-// DeleteActor executes the workflow to delete an actor. Idempotent.
-func (w *ActorWorkflow) DeleteActor(ctx context.Context, atespace, name string) (*ateapipb.Actor, error) {
-	actorRef := resources.ActorRef{Atespace: atespace, Name: name}
-	input := &DeleteInput{
-		ActorRef: actorRef,
-	}
-	state := &DeleteState{}
-
-	ctx, lock, err := w.acquireActorLock(ctx, actorRef)
-	if err != nil {
-		return nil, err
-	}
-	defer lock.Close()
-
-	steps := []WorkflowStep[*DeleteInput, *DeleteState]{
-		&LoadActorForDeleteStep{store: w.store},
-		&MarkDeletingStep{store: w.store},
-		&DeleteVolumesStep{store: w.store, pluginRegistry: w.pluginRegistry},
-		&FinalizeDeletedStep{store: w.store},
-	}
-
-	if err := RunWorkflow(ctx, input, state, steps); err != nil {
-		return nil, err
-	}
-
-	return state.DeletedActor, nil
 }
 
 func (w *ActorWorkflow) acquireActorLock(ctx context.Context, actorRef resources.ActorRef) (context.Context, *store.Lock, error) {
