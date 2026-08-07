@@ -269,24 +269,24 @@ func (s *RouterServer) Run(ctx context.Context) error {
 		})
 	}
 
-	// The Envoy drain step only exists when there is an Envoy admin API to
-	// drive; agentgateway receives no equivalent and its container manages its
-	// own termination.
-	var drainEnvoy func(context.Context) error
+	// Only the Envoy dataplane offers the router an active drain hook (its
+	// admin API); agentgateway manages its own termination, so no drainer is
+	// wired and the sequence proceeds straight to the ext_proc drain.
+	var dataplane dataplaneDrainer
 	if s.cfg.atenetRouter() == atenetRouterEnvoy {
-		drainEnvoy = newEnvoyDrainer(s.cfg.EnvoyAdminAddr).Drain
+		dataplane = newEnvoyDrainer(s.cfg.EnvoyAdminAddr)
 	}
 	drainDone := drainOnShutdown(shutdownCtx, drainParams{
-		readiness:   readiness,
-		delay:       s.cfg.DrainDelay,
-		drainEnvoy:  drainEnvoy,
-		envoyWindow: defaultRouteTimeout + drainTimeoutMargin,
-		extproc:     extprocGRPC,
-		timeout:     s.cfg.drainTimeout(parkCfg),
+		readiness:       readiness,
+		delay:           s.cfg.DrainDelay,
+		dataplane:       dataplane,
+		dataplaneWindow: defaultRouteTimeout + drainTimeoutMargin,
+		extproc:         extprocGRPC,
+		timeout:         s.cfg.drainTimeout(parkCfg),
 		stopRest: func() {
-			// Written first so the Envoy preStop hook (polling this marker on
-			// the shared emptyDir) releases as soon as nothing client-visible
-			// remains; then stop the remaining subsystems.
+			// Written first so the dataplane container's preStop hook (polling
+			// this marker on the shared emptyDir) releases as soon as nothing
+			// client-visible remains; then stop the remaining subsystems.
 			writeDrainMarker(ctx, s.cfg.DrainCompleteFile)
 			cancelWork()
 		},

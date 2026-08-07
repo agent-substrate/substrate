@@ -28,6 +28,11 @@ import (
 	"github.com/agent-substrate/substrate/internal/serverboot"
 )
 
+// drainFunc adapts a bare function to the dataplaneDrainer interface.
+type drainFunc func(context.Context) error
+
+func (f drainFunc) Drain(ctx context.Context) error { return f(ctx) }
+
 // fakeStopper is a grpcStopper whose GracefulStop blocks until release is
 // closed, simulating an in-flight (parked) ext_proc stream.
 type fakeStopper struct {
@@ -48,7 +53,7 @@ func (f *fakeStopper) GracefulStop() {
 func (f *fakeStopper) Stop() { f.stopCalled.Store(true) }
 
 // orderRecorder captures the sequence of drain steps so tests can assert the
-// forced ordering: readiness → Envoy → ext_proc → stopRest.
+// forced ordering: readiness → dataplane → ext_proc → stopRest.
 type orderRecorder struct {
 	mu    sync.Mutex
 	steps []string
@@ -88,16 +93,16 @@ func TestDrainOnShutdownOrdering(t *testing.T) {
 	done := drainOnShutdown(ctx, drainParams{
 		readiness: readiness,
 		delay:     0,
-		drainEnvoy: func(context.Context) error {
+		dataplane: drainFunc(func(context.Context) error {
 			if readiness.Ready() {
-				t.Error("Envoy drain ran before the readiness flip")
+				t.Error("dataplane drain ran before the readiness flip")
 			}
-			rec.add("envoy")
+			rec.add("dataplane")
 			return nil
-		},
-		envoyWindow: time.Second,
-		extproc:     stopper,
-		timeout:     5 * time.Second,
+		}),
+		dataplaneWindow: time.Second,
+		extproc:         stopper,
+		timeout:         5 * time.Second,
 		stopRest: func() {
 			if !stopper.gracefulCalled.Load() {
 				t.Error("stopRest ran before the ext_proc drain")
@@ -114,7 +119,7 @@ func TestDrainOnShutdownOrdering(t *testing.T) {
 		t.Fatal("drain did not complete")
 	}
 
-	want := []string{"envoy", "extproc-drain-started", "stopRest"}
+	want := []string{"dataplane", "extproc-drain-started", "stopRest"}
 	got := rec.get()
 	if len(got) != len(want) {
 		t.Fatalf("drain steps = %v, want %v", got, want)
@@ -142,13 +147,13 @@ func TestDrainOnShutdownForceStopsAfterTimeout(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	start := time.Now()
 	done := drainOnShutdown(ctx, drainParams{
-		readiness:   &serverboot.Readiness{},
-		delay:       0,
-		drainEnvoy:  nil, // agentgateway shape: no Envoy step
-		envoyWindow: time.Second,
-		extproc:     stopper,
-		timeout:     100 * time.Millisecond,
-		stopRest:    func() { stopRest.Store(true) },
+		readiness:       &serverboot.Readiness{},
+		delay:           0,
+		dataplane:       nil, // dataplane offers no drain hook (agentgateway shape)
+		dataplaneWindow: time.Second,
+		extproc:         stopper,
+		timeout:         100 * time.Millisecond,
+		stopRest:        func() { stopRest.Store(true) },
 	})
 	cancel()
 
@@ -168,31 +173,32 @@ func TestDrainOnShutdownForceStopsAfterTimeout(t *testing.T) {
 	}
 }
 
-// TestDrainOnShutdownEnvoyFailureContinues asserts an incomplete Envoy drain
-// (connections still active at its deadline) does not wedge the sequence.
-func TestDrainOnShutdownEnvoyFailureContinues(t *testing.T) {
+// TestDrainOnShutdownDataplaneFailureContinues asserts an incomplete
+// dataplane drain (connections still active at its deadline) does not wedge
+// the sequence.
+func TestDrainOnShutdownDataplaneFailureContinues(t *testing.T) {
 	stopper := newFakeStopper()
 	close(stopper.release) // ext_proc idle
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := drainOnShutdown(ctx, drainParams{
-		readiness:   &serverboot.Readiness{},
-		delay:       0,
-		drainEnvoy:  func(ctx context.Context) error { return context.DeadlineExceeded },
-		envoyWindow: 50 * time.Millisecond,
-		extproc:     stopper,
-		timeout:     time.Second,
-		stopRest:    func() {},
+		readiness:       &serverboot.Readiness{},
+		delay:           0,
+		dataplane:       drainFunc(func(ctx context.Context) error { return context.DeadlineExceeded }),
+		dataplaneWindow: 50 * time.Millisecond,
+		extproc:         stopper,
+		timeout:         time.Second,
+		stopRest:        func() {},
 	})
 	cancel()
 
 	select {
 	case <-done:
 	case <-time.After(3 * time.Second):
-		t.Fatal("drain wedged on a failed Envoy drain")
+		t.Fatal("drain wedged on a failed dataplane drain")
 	}
 	if !stopper.gracefulCalled.Load() {
-		t.Error("ext_proc drain skipped after Envoy drain failure")
+		t.Error("ext_proc drain skipped after dataplane drain failure")
 	}
 }
 

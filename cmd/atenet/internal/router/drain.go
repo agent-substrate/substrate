@@ -27,14 +27,14 @@ import (
 )
 
 // defaultDrainCompleteFile is where the drain sequence leaves its completion
-// marker. The manifest mounts an emptyDir here in both containers; the Envoy
-// container's preStop hook polls the same path.
+// marker. The manifest mounts an emptyDir here in both containers; the
+// dataplane container's preStop hook polls the same path.
 const defaultDrainCompleteFile = "/var/run/atenet/drain-complete"
 
 // removeStaleDrainMarker deletes a leftover drain-complete marker at startup.
 // The emptyDir the marker lives on survives container restarts within the
-// pod, and a stale marker would let the Envoy preStop hook exit the instant a
-// later drain begins — before any connection has drained.
+// pod, and a stale marker would let the dataplane container's preStop hook
+// exit the instant a later drain begins — before any connection has drained.
 func removeStaleDrainMarker(ctx context.Context, path string) {
 	if path == "" {
 		return
@@ -44,8 +44,8 @@ func removeStaleDrainMarker(ctx context.Context, path string) {
 	}
 }
 
-// writeDrainMarker creates the drain-complete marker, releasing the Envoy
-// preStop hook. Failure is logged, never fatal: the kubelet still bounds the
+// writeDrainMarker creates the drain-complete marker, releasing the dataplane
+// container's preStop hook. Failure is logged, never fatal: the kubelet still bounds the
 // hook at terminationGracePeriodSeconds, so a missing marker degrades to a
 // slower exit, not a wedge.
 func writeDrainMarker(ctx context.Context, path string) {
@@ -72,20 +72,32 @@ type grpcStopper interface {
 	Stop()
 }
 
+// dataplaneDrainer actively drains the dataplane proxy sidecar: established
+// connections finish and their in-flight requests complete before the
+// implementation returns. envoyDrainer is the Envoy implementation (driving
+// the admin API); the orchestrator below stays agnostic of which proxy is
+// deployed.
+type dataplaneDrainer interface {
+	// Drain blocks until the dataplane has quiesced or ctx expires; an error
+	// reports an incomplete drain and the shutdown sequence continues.
+	Drain(ctx context.Context) error
+}
+
 // drainParams wires the shutdown sequence. The order is forced by the
-// dataplane: ext_proc is failClosed for Envoy, so the ext_proc server must
-// outlive Envoy's drain — any request Envoy still accepts during its drain
-// window needs ext_proc answering.
+// ext_proc filter being failClosed in the dataplane: the ext_proc server must
+// outlive the dataplane's drain, because any request the dataplane still
+// accepts during its drain window needs ext_proc answering.
 type drainParams struct {
 	readiness *serverboot.Readiness
 	// delay is the route-drain window: after the readiness flip, how long to
 	// keep serving while the Service endpoints drop this pod.
 	delay time.Duration
-	// drainEnvoy gracefully drains the dataplane sidecar; nil when there is
-	// none to drive (agentgateway mode). It is handed a context bounded by
-	// envoyWindow and must return when it expires.
-	drainEnvoy  func(context.Context) error
-	envoyWindow time.Duration
+	// dataplane, when non-nil, is drained after the delay and before the
+	// ext_proc server stops, bounded by dataplaneWindow. nil means the
+	// deployed dataplane offers the router no drain hook and manages its own
+	// termination; the sequence then proceeds directly to the ext_proc drain.
+	dataplane       dataplaneDrainer
+	dataplaneWindow time.Duration
 	// extproc is the ext_proc gRPC server; timeout bounds its graceful drain
 	// (sized >= the parking budget so parked requests finish normally).
 	extproc grpcStopper
@@ -98,11 +110,11 @@ type drainParams struct {
 
 // drainOnShutdown drives graceful shutdown when ctx is cancelled (SIGTERM or
 // interrupt): flip readiness (Service stops sending new connections), wait
-// out the propagation delay, drain the Envoy sidecar (established
-// connections finish), then drain ext_proc so parked requests complete —
-// force-stopping past the timeout — and finally stop everything else. The
-// returned channel closes once the sequence completes, so Run can block on
-// it before letting the deferred tracer/meter flushes run.
+// out the propagation delay, drain the dataplane (established connections
+// finish), then drain ext_proc so parked requests complete — force-stopping
+// past the timeout — and finally stop everything else. The returned channel
+// closes once the sequence completes, so Run can block on it before letting
+// the deferred tracer/meter flushes run.
 func drainOnShutdown(ctx context.Context, p drainParams) <-chan struct{} {
 	done := make(chan struct{})
 	go func() {
@@ -112,13 +124,16 @@ func drainOnShutdown(ctx context.Context, p drainParams) <-chan struct{} {
 		p.readiness.MarkNotReady()
 		time.Sleep(p.delay)
 
-		if p.drainEnvoy != nil {
-			slog.InfoContext(ctx, "Draining Envoy", slog.Duration("window", p.envoyWindow))
-			envoyCtx, cancel := context.WithTimeout(context.Background(), p.envoyWindow)
-			if err := p.drainEnvoy(envoyCtx); err != nil {
-				slog.WarnContext(ctx, "Envoy drain incomplete; continuing shutdown", slog.Any("err", err))
+		if p.dataplane != nil {
+			slog.InfoContext(ctx, "Draining dataplane", slog.Duration("window", p.dataplaneWindow))
+			dpCtx, cancel := context.WithTimeout(context.Background(), p.dataplaneWindow)
+			if err := p.dataplane.Drain(dpCtx); err != nil {
+				// TODO: Add a shutdown-outcome metric (clean vs
+				// dataplane-drain-incomplete vs ext_proc force-stopped) so
+				// unclean shutdowns are visible in dashboards, not only logs.
+				slog.WarnContext(ctx, "Dataplane drain incomplete; continuing shutdown", slog.Any("err", err))
 			} else {
-				slog.InfoContext(ctx, "Envoy drained")
+				slog.InfoContext(ctx, "Dataplane drained")
 			}
 			cancel()
 		}
@@ -133,6 +148,10 @@ func drainOnShutdown(ctx context.Context, p drainParams) <-chan struct{} {
 		case <-drainComplete:
 			slog.InfoContext(ctx, "ext_proc drain completed within deadline")
 		case <-time.After(p.timeout):
+			// TODO: Count this in the shutdown-outcome metric above: a
+			// force-stop here means in-flight ext_proc streams (parked
+			// requests included) were cancelled — the unclean-shutdown signal
+			// operators most need to see.
 			slog.WarnContext(ctx, "ext_proc drain deadline exceeded; forcing stop")
 			p.extproc.Stop()
 		}

@@ -95,6 +95,12 @@ phase="$(run_kubectl get actortemplate -n "${DEMO_NS}" "${DEMO_POOL}" -o jsonpat
 if run_kubectl_ate get workers 2>/dev/null | awk 'NR>1 && $4=="ASSIGNED"' | grep -q .; then
   fail "workers on the ${DEMO_POOL} pool are ASSIGNED; the check scales the pool to 1 and would crash running actors — suspend them first"
 fi
+for port in "${LOCAL_HTTP_PORT}" "${LOCAL_METRICS_PORT}"; do
+  if (exec 3<>"/dev/tcp/127.0.0.1/${port}") 2>/dev/null; then
+    exec 3>&- 3<&-
+    fail "local port ${port} is already in use (a stale port-forward?); free it or set LOCAL_HTTP_PORT/LOCAL_METRICS_PORT"
+  fi
+done
 
 # --- Fixture: 1 worker, two actors, worker occupied --------------------------
 
@@ -133,7 +139,12 @@ sleep 3
 readyz() { curl -s -o /dev/null -w '%{http_code}' "localhost:${LOCAL_METRICS_PORT}/readyz"; }
 healthz() { curl -s -o /dev/null -w '%{http_code}' "localhost:${LOCAL_METRICS_PORT}/healthz"; }
 
-[[ "$(readyz)" == "200" ]] || fail "steady-state /readyz != 200"
+# The port-forwards need a moment to come up; retry before judging.
+for i in $(seq 1 20); do
+  [[ "$(readyz)" == "200" ]] && break
+  [[ "$i" == 20 ]] && fail "steady-state /readyz != 200"
+  sleep 0.5
+done
 [[ "$(healthz)" == "200" ]] || fail "steady-state /healthz != 200"
 echo "steady state: /readyz=200 /healthz=200"
 
@@ -175,10 +186,10 @@ echo "pod terminated ${ELAPSED}s after deletion"
 (( ELAPSED <= 55 )) || fail "terminated in ${ELAPSED}s — at the grace period; SIGKILL path, the drain-complete handshake did not release Envoy"
 
 log_step "drain log sequence"
-for marker in "Shutdown signal received; draining" "Draining Envoy" "Starting ext_proc drain" "Drain-complete marker written" "Shutdown complete"; do
+for marker in "Shutdown signal received; draining" "Draining dataplane" "Starting ext_proc drain" "Drain-complete marker written" "Shutdown complete"; do
   grep -q "${marker}" "${LOG_FILE}" || fail "router log missing \"${marker}\" (see ${LOG_FILE})"
 done
-grep -E "Shutdown signal|Draining Envoy|Envoy drain|ext_proc drain|marker written|Shutdown complete" "${LOG_FILE}" | sed 's/^/  /'
+grep -E "Shutdown signal|Draining dataplane|Dataplane drain|ext_proc drain|marker written|Shutdown complete" "${LOG_FILE}" | sed 's/^/  /'
 
 log_step "waiting for the replacement router pod"
 run_kubectl rollout status deploy/atenet-router -n "${ROUTER_NS}" --timeout=120s >/dev/null
