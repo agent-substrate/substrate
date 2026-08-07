@@ -1400,32 +1400,9 @@ func (s *AteomHerder) prepareOCIBundles(
 			}
 
 		case *ateletpb.Volume_SystemInfo:
-			// Populated on every Run/Restore, so the contents carry the
-			// correct per-actor values even when restoring from the golden
-			// snapshot.
 			volRootHostPath := ateompath.SystemInfoVolumeRoot(actorUID, vol.GetName())
-			if err := os.MkdirAll(volRootHostPath, 0o755); err != nil {
-				return fmt.Errorf("while creating %q: %w", volRootHostPath, err)
-			}
-
-			aw, err := atomicwriter.NewAtomicWriter(volRootHostPath)
-			if err != nil {
-				return fmt.Errorf("while creating atomicwriter: %w", err)
-			}
-
-			contents := map[string]atomicwriter.FileProjection{}
-			for _, dataSourceAny := range volSrc.SystemInfo.GetDataSources() {
-				switch dataSource := dataSourceAny.GetDataSource().(type) {
-				case *ateletpb.SystemInfoDataSource_ActorIdentity:
-					contents[dataSource.ActorIdentity.GetPath()] = atomicwriter.FileProjection{
-						Data: []byte(actorName),
-						Mode: 0o644,
-					}
-				}
-			}
-
-			if err := aw.Write(ctx, contents, nil); err != nil {
-				return fmt.Errorf("while writing contents of SystemInfoVolume: %w", err)
+			if err := writeSystemInfoVolume(ctx, volRootHostPath, actorName, volSrc.SystemInfo); err != nil {
+				return fmt.Errorf("while populating system-info volume %q: %w", vol.GetName(), err)
 			}
 		}
 	}
@@ -1500,6 +1477,38 @@ func (s *AteomHerder) prepareOCIBundles(
 	}
 
 	return g.Wait()
+}
+
+// writeSystemInfoVolume populates the root directory of a system-info volume
+// with one file per data source. It runs on every Run/Restore, before the
+// sandbox starts, so the files carry the resumed actor's own values no matter
+// what checkpointed state the actor boots from. Files are written with the
+// atomic writer so a concurrent reader can never observe a partial write.
+func writeSystemInfoVolume(ctx context.Context, rootPath, actorName string, si *ateletpb.SystemInfoVolume) error {
+	if err := os.MkdirAll(rootPath, 0o755); err != nil {
+		return fmt.Errorf("while creating %q: %w", rootPath, err)
+	}
+
+	aw, err := atomicwriter.NewAtomicWriter(rootPath)
+	if err != nil {
+		return fmt.Errorf("while creating atomicwriter: %w", err)
+	}
+
+	contents := map[string]atomicwriter.FileProjection{}
+	for _, dataSourceAny := range si.GetDataSources() {
+		switch dataSource := dataSourceAny.GetDataSource().(type) {
+		case *ateletpb.SystemInfoDataSource_ActorIdentity:
+			contents[dataSource.ActorIdentity.GetPath()] = atomicwriter.FileProjection{
+				Data: []byte(actorName),
+				Mode: 0o644,
+			}
+		}
+	}
+
+	if err := aw.Write(ctx, contents, nil); err != nil {
+		return fmt.Errorf("while writing contents of SystemInfoVolume: %w", err)
+	}
+	return nil
 }
 
 // dialAteom opens (or reuses) the gRPC connection to the target ateom

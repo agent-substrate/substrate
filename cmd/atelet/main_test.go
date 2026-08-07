@@ -119,6 +119,52 @@ func TestSnapshotManifestRequiresPauseImage(t *testing.T) {
 	}
 }
 
+func TestWriteSystemInfoVolume(t *testing.T) {
+	ctx := context.Background()
+	root := filepath.Join(t.TempDir(), "system-info", "vol1")
+	si := &ateletpb.SystemInfoVolume{
+		DataSources: []*ateletpb.SystemInfoDataSource{
+			{DataSource: &ateletpb.SystemInfoDataSource_ActorIdentity{
+				ActorIdentity: &ateletpb.ActorIdentityDataSource{Path: "actor-id"},
+			}},
+			{DataSource: &ateletpb.SystemInfoDataSource_ActorIdentity{
+				ActorIdentity: &ateletpb.ActorIdentityDataSource{Path: "identity/name"},
+			}},
+		},
+	}
+
+	if err := writeSystemInfoVolume(ctx, root, "golden-actor", si); err != nil {
+		t.Fatalf("writeSystemInfoVolume: %v", err)
+	}
+
+	// Overwrite with a different actor name, as happens when a snapshot taken
+	// from one actor seeds another on resume: files must carry the new value.
+	if err := writeSystemInfoVolume(ctx, root, "probe-alpha", si); err != nil {
+		t.Fatalf("writeSystemInfoVolume (rewrite): %v", err)
+	}
+
+	for _, path := range []string{"actor-id", "identity/name"} {
+		t.Run(path, func(t *testing.T) {
+			target := filepath.Join(root, path)
+			got, err := os.ReadFile(target)
+			if err != nil {
+				t.Fatalf("reading %q: %v", target, err)
+			}
+			// Raw actor name, no trailing newline.
+			if string(got) != "probe-alpha" {
+				t.Errorf("content = %q, want %q", got, "probe-alpha")
+			}
+			info, err := os.Stat(target)
+			if err != nil {
+				t.Fatalf("stat %q: %v", target, err)
+			}
+			if perm := info.Mode().Perm(); perm != 0o644 {
+				t.Errorf("perm = %o, want 644", perm)
+			}
+		})
+	}
+}
+
 func TestWriteFileAtomic(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "actor-id")

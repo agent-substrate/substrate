@@ -50,11 +50,14 @@ type ExternalVolumeTemplate struct {
 // actor's ID to a file.
 type ActorIdentityDataSource struct {
 	// Relative path from the root of the SystemInfo volume that the actor
-	// identity file should be written.
+	// identity file should be written. Must be a clean relative Unix path:
+	// must not start or end with '/', and contain no ':', '..', '.', '//',
+	// or control characters.
 	//
 	// +required
 	// +kubebuilder:validation:MinLength=1
-	// +kubebuilder:validation:MaxLength=1024
+	// +kubebuilder:validation:MaxLength=255
+	// +kubebuilder:validation:XValidation:rule="!self.startsWith('/') && !self.endsWith('/') && !self.contains('//') && !self.contains(':') && !self.matches('[\\x00-\\x1f\\x7f]') && !self.matches('(^|/)[.][.]?(/|$)')",message="path must be a clean relative Unix path: must not start or end with '/', and contain no ':', '..', '.', '//', or control characters"
 	Path string `json:"path"`
 }
 
@@ -75,6 +78,7 @@ type SystemInfoVolumeSource struct {
 	// volume.
 	//
 	// +kubebuilder:validation:MaxItems=32
+	// +kubebuilder:validation:XValidation:rule="self.all(x, !has(x.actorIdentity) || self.exists_one(y, has(y.actorIdentity) && y.actorIdentity.path == x.actorIdentity.path))",message="dataSources must not contain duplicate paths"
 	DataSources []SystemInfoDataSource `json:"dataSources,omitempty"`
 }
 
