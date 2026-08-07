@@ -16,6 +16,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"testing"
 	"time"
@@ -259,6 +260,94 @@ func TestSnapshotOpAttrsNormalizesSandboxClass(t *testing.T) {
 		if kv.Key == ateattr.SandboxClassKey && kv.Value.AsString() != ateattr.SandboxClassUnknown {
 			t.Errorf("sandbox class = %q, want %q", kv.Value.AsString(), ateattr.SandboxClassUnknown)
 		}
+	}
+}
+
+// TestGroupFailedPhase covers the concurrent leg of a restore: whichever
+// goroutine fails first cancels the shared context, so the other one also
+// returns an error, and only the one whose error errgroup actually surfaced may
+// claim the phase.
+func TestGroupFailedPhase(t *testing.T) {
+	download := errors.New("download: connection reset")
+	prep := errors.New("prepare bundles: no entrypoint")
+	cancelled := errors.New("context canceled")
+
+	tests := []struct {
+		name        string
+		err         error
+		downloadErr error
+		prepErr     error
+		prepPhase   string
+		want        string
+	}{
+		{
+			name:        "download failed alone",
+			err:         download,
+			downloadErr: download,
+			want:        ateattr.SnapshotPhaseDownload,
+		},
+		{
+			name:      "prep failed alone during the asset fetch",
+			err:       prep,
+			prepErr:   prep,
+			prepPhase: ateattr.SnapshotPhaseSandboxAssets,
+			want:      ateattr.SnapshotPhaseSandboxAssets,
+		},
+		{
+			name:        "prep failed first and the in-flight download was collateral",
+			err:         prep,
+			downloadErr: cancelled,
+			prepErr:     prep,
+			prepPhase:   ateattr.SnapshotPhaseOCIUnpack,
+			want:        ateattr.SnapshotPhaseOCIUnpack,
+		},
+		{
+			name:        "download failed first and prep was collateral",
+			err:         download,
+			downloadErr: download,
+			prepErr:     cancelled,
+			prepPhase:   ateattr.SnapshotPhaseSandboxAssets,
+			want:        ateattr.SnapshotPhaseDownload,
+		},
+		{
+			name: "error from neither leg claims no phase",
+			err:  errors.New("something else entirely"),
+			want: "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := groupFailedPhase(tt.err, tt.downloadErr, tt.prepErr, tt.prepPhase); got != tt.want {
+				t.Errorf("groupFailedPhase() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestIsCollateral guards the durations the same way TestGroupFailedPhase
+// guards the label: a leg cancelled by the other leg's failure recorded an
+// unlabeled partial duration, which would land in the healthy-path percentiles
+// as a fast success and drag them down on every failed restore.
+func TestIsCollateral(t *testing.T) {
+	owner := errors.New("prepare bundles: no entrypoint")
+	cancelled := errors.New("context canceled")
+
+	tests := []struct {
+		name     string
+		groupErr error
+		legErr   error
+		want     bool
+	}{
+		{name: "leg that owns the error keeps its duration", groupErr: owner, legErr: owner, want: false},
+		{name: "leg cancelled as collateral drops its duration", groupErr: owner, legErr: cancelled, want: true},
+		{name: "leg that succeeded keeps its duration", groupErr: owner, legErr: nil, want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isCollateral(tt.groupErr, tt.legErr); got != tt.want {
+				t.Errorf("isCollateral() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 

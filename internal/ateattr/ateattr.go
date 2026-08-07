@@ -59,9 +59,9 @@ const (
 // WorkerPoolNamespaceKey pairs with WorkerPoolNameKey: a WorkerPool is
 // namespaced, so the name alone does not identify one.
 // The snapshot keys are orthogonal: kind is which snapshot, scope is what
-// content it covers, phase is which step of the operation an observation timed,
-// and file names one image within a snapshot (bounded by the sandbox runtime's
-// own file naming, which is why it is not the same thing as kind).
+// content it covers, and phase is which step of the operation an observation
+// timed. Naming one image within a snapshot is the registry's file.name, not an
+// ate.* key of its own.
 const (
 	ActorOperationNameKey   = attribute.Key("ate.actor.operation.name")
 	WorkerPoolNamespaceKey  = attribute.Key("ate.workerpool.namespace")
@@ -71,7 +71,6 @@ const (
 	SnapshotKindKey         = attribute.Key("ate.snapshot.kind")
 	SnapshotScopeKey        = attribute.Key("ate.snapshot.scope")
 	SnapshotPhaseKey        = attribute.Key("ate.snapshot.phase")
-	SnapshotFileKey         = attribute.Key("ate.snapshot.file")
 	SchedulerOutcomeKey     = attribute.Key("ate.scheduler.outcome")
 	SchedulingConstraintKey = attribute.Key("ate.scheduling.constraint")
 	RouterResumeKey         = attribute.Key("ate.router.resume")

@@ -147,6 +147,27 @@ func recordPhases(ctx context.Context, h metric.Float64Histogram, op snapshotOp,
 	}
 }
 
+// groupFailedPhase attributes a failed restore errgroup to the leg that
+// produced err. errgroup cancels the shared context on the first failure, so
+// the other leg aborts as collateral and would otherwise claim the phase; Wait
+// returns that first error verbatim, so identity separates the two.
+func groupFailedPhase(err, downloadErr, prepErr error, prepPhase string) string {
+	switch err {
+	case downloadErr:
+		return ateattr.SnapshotPhaseDownload
+	case prepErr:
+		return prepPhase
+	}
+	return ""
+}
+
+// isCollateral reports whether legErr is only fallout from the other leg
+// canceling the shared context. That leg stopped part way, so its duration
+// would read as an unusually fast success.
+func isCollateral(groupErr, legErr error) bool {
+	return legErr != nil && groupErr != legErr
+}
+
 // restoreSnapshotKind classifies which snapshot a restore reads. A local
 // restore is evident from the wire; golden and latest both arrive as an external
 // URI prefix, so they are told apart by the identity the manifest records for

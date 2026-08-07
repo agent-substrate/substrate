@@ -53,6 +53,7 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/metric"
+	semconv "go.opentelemetry.io/otel/semconv/v1.40.0"
 	"golang.org/x/sync/errgroup"
 	"google.golang.org/api/option"
 	"google.golang.org/grpc"
@@ -377,10 +378,9 @@ func initSnapshotSizeMetric() error {
 	return err
 }
 
-// recordSnapshotSize labels each image by its file name. That label used to be
-// spelled "kind", which is a different concept everywhere else in the ate.*
-// namespace (ate.snapshot.kind is the snapshot's provenance, not one of its
-// files), so it moved onto its own key along with the two template keys.
+// recordSnapshotSize labels each image with the registry's file.name. That
+// label used to be spelled "kind", which means the snapshot's provenance
+// everywhere else in the ate.* namespace, not one of its files.
 func recordSnapshotSize(ctx context.Context, file, path, atNamespace, atName string) {
 	if snapshotSizeBytes == nil {
 		return
@@ -395,7 +395,7 @@ func recordSnapshotSize(ctx context.Context, file, path, atNamespace, atName str
 		return
 	}
 	snapshotSizeBytes.Record(ctx, fi.Size(), metric.WithAttributes(
-		ateattr.SnapshotFileKey.String(file),
+		semconv.FileNameKey.String(file),
 		ateattr.TemplateNamespaceKey.String(atNamespace),
 		ateattr.TemplateNameKey.String(atName),
 	))
@@ -548,7 +548,7 @@ func (s *AteomHerder) moveLocalCheckpoint(ctx context.Context, req *ateletpb.Che
 	for _, fileName := range rec.SnapshotFiles {
 		src := filepath.Join(checkpointDir, fileName)
 		dst := filepath.Join(localCheckpointPath, fileName)
-		recordSnapshotSize(ctx, strings.TrimSuffix(fileName, ".img"), src, req.GetActorTemplateNamespace(), req.GetActorTemplateName())
+		recordSnapshotSize(ctx, fileName, src, req.GetActorTemplateNamespace(), req.GetActorTemplateName())
 
 		if err := os.Rename(src, dst); err != nil {
 			return fmt.Errorf("failed to move %s to %s: %w", src, dst, err)
@@ -575,7 +575,7 @@ func (s *AteomHerder) uploadExternalCheckpoint(ctx context.Context, req *ateletp
 	for _, fileName := range rec.SnapshotFiles {
 		fileName := fileName
 		local := filepath.Join(checkpointDir, fileName)
-		recordSnapshotSize(ctx, strings.TrimSuffix(fileName, ".img"), local, req.GetActorTemplateNamespace(), req.GetActorTemplateName())
+		recordSnapshotSize(ctx, fileName, local, req.GetActorTemplateNamespace(), req.GetActorTemplateName())
 		g.Go(func() error {
 			if err := ategcs.SendLocalFileToGCSWithZstd(gCtx, s.gcsClient, prefix+"/"+fileName+".zstd", local); err != nil {
 				return fmt.Errorf("while uploading %s to GCS: %w", fileName, err)
@@ -732,15 +732,14 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	// copied to checkpointDir for the LOCAL case.
 	var assetPaths map[string]string
 	// One per leg: a single field written from both goroutines would race.
-	var downloadFailedPhase, prepFailedPhase string
+	var downloadErr, prepErr error
+	var prepFailedPhase string
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() (err error) {
 		t := time.Now()
 		defer func() {
 			dDownload = time.Since(t)
-			if err != nil {
-				downloadFailedPhase = ateattr.SnapshotPhaseDownload
-			}
+			downloadErr = err
 		}()
 		switch req.GetType() {
 		case ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL:
@@ -784,6 +783,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		return nil
 	})
 	g.Go(func() (err error) {
+		defer func() { prepErr = err }()
 		tAssets := time.Now()
 		assetPaths, err = s.ensureSandboxAssets(gctx, runtimeRec)
 		dAssets = time.Since(tAssets)
@@ -801,9 +801,12 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		return nil
 	})
 	if err := g.Wait(); err != nil {
-		op.failedPhase = downloadFailedPhase
-		if op.failedPhase == "" {
-			op.failedPhase = prepFailedPhase
+		op.failedPhase = groupFailedPhase(err, downloadErr, prepErr, prepFailedPhase)
+		if isCollateral(err, downloadErr) {
+			dDownload = 0
+		}
+		if isCollateral(err, prepErr) {
+			dAssets, dBundles = 0, 0
 		}
 		return nil, err
 	}
