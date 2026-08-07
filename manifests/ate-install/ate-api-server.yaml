@@ -92,7 +92,6 @@ spec:
       - name: ate-api-server
         image: ko://github.com/agent-substrate/substrate/cmd/ateapi
         args:
-          - "--grpc-listen-addr=0.0.0.0:443"
           - "--grpc-server-cred-bundle=/run/servicedns.podcert.ate.dev/credential-bundle.pem"
           - --redis-cluster-address=@env
           - --redis-ca-certs=/etc/valkey-ca/ca.crt
@@ -243,6 +242,8 @@ spec:
   # Headless (i.e. `clusterIP: None`) services make DNS return one A record per
   # ready pod so gRPC clients can load balance client-side.
   clusterIP: None
+  # Prefer, not Require: Require fails Service creation on a single-stack cluster.
+  ipFamilyPolicy: PreferDualStack
   selector:
     app: ate-api-server
   ports:

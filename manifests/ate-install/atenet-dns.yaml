@@ -167,6 +167,8 @@ spec:
   selector:
     app: dns
   type: ClusterIP
+  # Prefer, not Require: Require fails Service creation on a single-stack cluster.
+  ipFamilyPolicy: PreferDualStack
   ports:
   - name: dns
     port: 53
