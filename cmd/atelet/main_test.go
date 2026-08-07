@@ -283,6 +283,14 @@ func TestValidateCheckpointRequest(t *testing.T) {
 			r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL
 			r.Config = &ateletpb.CheckpointRequest_LocalConfig{LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotPrefix: ""}}
 		}), true},
+		{"nested local snapshot prefix", makeReq(func(r *ateletpb.CheckpointRequest) {
+			r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL
+			r.Config = &ateletpb.CheckpointRequest_LocalConfig{LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotPrefix: "pause/2"}}
+		}), true},
+		{"traversal local snapshot prefix", makeReq(func(r *ateletpb.CheckpointRequest) {
+			r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL
+			r.Config = &ateletpb.CheckpointRequest_LocalConfig{LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotPrefix: ".."}}
+		}), true},
 		{"unspecified snapshot type", makeReq(func(r *ateletpb.CheckpointRequest) { r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_UNSPECIFIED }), true},
 		{"unspecified snapshot scope", makeReq(func(r *ateletpb.CheckpointRequest) { r.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED }), true},
 		{"invalid snapshot scope", makeReq(func(r *ateletpb.CheckpointRequest) { r.Scope = ateletpb.SnapshotScope(23) }), true},
@@ -328,6 +336,14 @@ func TestValidateRestoreRequest(t *testing.T) {
 		{"invalid local snapshot prefix", makeReq(func(r *ateletpb.RestoreRequest) {
 			r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL
 			r.Config = &ateletpb.RestoreRequest_LocalConfig{LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotPrefix: ""}}
+		}), true},
+		{"nested local snapshot prefix", makeReq(func(r *ateletpb.RestoreRequest) {
+			r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL
+			r.Config = &ateletpb.RestoreRequest_LocalConfig{LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotPrefix: "pause/2"}}
+		}), true},
+		{"traversal local snapshot prefix", makeReq(func(r *ateletpb.RestoreRequest) {
+			r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL
+			r.Config = &ateletpb.RestoreRequest_LocalConfig{LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotPrefix: ".."}}
 		}), true},
 		{"unspecified snapshot type", makeReq(func(r *ateletpb.RestoreRequest) { r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_UNSPECIFIED }), true},
 		{"unspecified snapshot scope", makeReq(func(r *ateletpb.RestoreRequest) { r.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED }), true},
@@ -671,6 +687,17 @@ func TestBuildAteomWorkloadSpecForwardsDurableDirMounts(t *testing.T) {
 	got := buildAteomWorkloadSpec(in)
 	if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
 		t.Errorf("buildAteomWorkloadSpec mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestToAteomEgressGateway(t *testing.T) {
+	if got := toAteomEgressGateway(nil); got != nil {
+		t.Fatalf("toAteomEgressGateway(nil) = %v, want nil", got)
+	}
+	want := &ateompb.EgressGateway{Address: "egress.example:443"}
+	got := toAteomEgressGateway(&ateletpb.EgressGateway{Address: want.Address})
+	if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
+		t.Errorf("toAteomEgressGateway mismatch (-want +got):\n%s", diff)
 	}
 }
 

@@ -20,15 +20,22 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math/rand/v2"
 	"net"
 	"sync"
+	"time"
 
-	"github.com/agent-substrate/substrate/internal/resources"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
-// EgressDialer opens an authenticated tunnel to an original destination.
-type EgressDialer interface {
-	DialContext(context.Context, string, EgressMetadata) (net.Conn, error)
+// egressDialer opens an authenticated tunnel to an original destination.
+type egressDialer interface {
+	DialContext(context.Context, string) (net.Conn, error)
+}
+
+type actorCertificateSource interface {
+	Mint(context.Context) (time.Time, error)
 }
 
 // OriginalDestination returns the address that a transparently intercepted
@@ -46,11 +53,15 @@ type Egress struct {
 }
 
 type egressActivation struct {
-	metadata EgressMetadata
-	dialer   EgressDialer
-	ctx      context.Context
-	cancel   context.CancelFunc
-	wg       sync.WaitGroup
+	dialer            egressDialer
+	certificateSource actorCertificateSource
+	expiresAt         time.Time
+
+	// ctx scopes certificate renewal and every tunnel opened by this activation. wg
+	// lets Deactivate wait until both renewal and tunnel forwarding have exited.
+	ctx    context.Context
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
 }
 
 // NewEgress creates an activation-aware egress proxy.
@@ -88,36 +99,112 @@ func (e *Egress) Serve(ctx context.Context, listener net.Listener) error {
 	}
 }
 
-// Activate allows egress for one actor. There can be only one active actor per
-// worker. bearerToken may be empty until actor JWT issuance is available.
-func (e *Egress) Activate(dialer EgressDialer, atespace, actorName string, actorVersion int64, bearerToken string) error {
+// Activate allows egress with a previously obtained actor certificate and
+// renews it until deactivation.
+func (e *Egress) Activate(dialer egressDialer, certificateSource actorCertificateSource, expiresAt time.Time) error {
 	if dialer == nil {
 		return fmt.Errorf("atunnel: egress dialer is required")
 	}
-	if !resources.IsValidResourceName(atespace) || !resources.IsValidResourceName(actorName) {
-		return fmt.Errorf("atunnel: invalid actor identity %q/%q", atespace, actorName)
+	if certificateSource == nil {
+		return fmt.Errorf("atunnel: actor certificate source is required")
 	}
-	if actorVersion < 1 {
-		return fmt.Errorf("atunnel: actor version must be positive")
+	if !expiresAt.After(time.Now()) {
+		return fmt.Errorf("atunnel: valid actor certificate is required")
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.active != nil {
-		return fmt.Errorf("atunnel: actor %s/%s already has active egress", e.active.metadata.Atespace, e.active.metadata.ActorName)
+		return fmt.Errorf("atunnel: actor already has active egress")
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	e.active = &egressActivation{
-		metadata: EgressMetadata{
-			Atespace:     atespace,
-			ActorName:    actorName,
-			ActorVersion: actorVersion,
-			BearerToken:  bearerToken,
-		},
-		dialer: dialer,
-		ctx:    ctx,
-		cancel: cancel,
+	activationCtx, cancel := context.WithCancel(context.Background())
+	active := &egressActivation{
+		dialer:            dialer,
+		certificateSource: certificateSource,
+		expiresAt:         expiresAt,
+		ctx:               activationCtx,
+		cancel:            cancel,
 	}
+	e.active = active
+	active.wg.Add(1)
+	go e.renew(active, expiresAt)
 	return nil
+}
+
+func (e *Egress) renew(active *egressActivation, expiresAt time.Time) {
+	defer active.wg.Done()
+	// Schedule from the credential's remaining lifetime: renew at 90%, then
+	// keep retrying after expiry so egress can recover without reactivation.
+	delay := renewAfter(expiresAt)
+	expired := false
+	for waitForRenewal(active.ctx, delay) {
+		if !expiresAt.After(time.Now()) && !expired {
+			slog.WarnContext(active.ctx, "Atunnel actor certificate expired; blocking new egress connections",
+				slog.Time("expiredAt", expiresAt))
+			expired = true
+		}
+		nextExpiry, err := active.certificateSource.Mint(active.ctx)
+		if err != nil {
+			code := status.Code(err)
+			if code == codes.FailedPrecondition || code == codes.PermissionDenied {
+				e.mu.Lock()
+				active.expiresAt = time.Time{}
+				e.mu.Unlock()
+				slog.WarnContext(active.ctx, "Atunnel actor certificate renewal was denied; blocking new egress connections",
+					slog.Any("err", err))
+				return
+			}
+			delay = retryAfter(expiresAt)
+			continue
+		}
+		if !nextExpiry.After(time.Now()) {
+			delay = retryAfter(expiresAt)
+			continue
+		}
+		e.mu.Lock()
+		// Check cancellation under the same lock as Deactivate. Whichever wins
+		// the lock last either installs a live expiry or leaves the activation empty;
+		// renewal can never restore a credential after deactivation cleared it.
+		if active.ctx.Err() != nil {
+			e.mu.Unlock()
+			return
+		}
+		active.expiresAt = nextExpiry
+		e.mu.Unlock()
+		if expired {
+			slog.InfoContext(active.ctx, "Atunnel actor certificate renewed; allowing new egress connections",
+				slog.Time("expiresAt", nextExpiry))
+			expired = false
+		}
+		expiresAt = nextExpiry
+		delay = renewAfter(expiresAt)
+	}
+}
+
+func renewAfter(expiresAt time.Time) time.Duration {
+	remaining := time.Until(expiresAt)
+	return remaining - remaining/10
+}
+
+func retryAfter(expiresAt time.Time) time.Duration {
+	remaining := time.Until(expiresAt)
+	if remaining <= 0 {
+		return 25*time.Second + rand.N(10*time.Second)
+	}
+	return min(30*time.Second, max(time.Second, remaining/10), remaining)
+}
+
+func waitForRenewal(ctx context.Context, delay time.Duration) bool {
+	if delay <= 0 {
+		return false
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
 }
 
 // Deactivate rejects new egress, closes active streams, and waits for their
@@ -127,6 +214,7 @@ func (e *Egress) Deactivate(ctx context.Context) error {
 	active := e.active
 	e.active = nil
 	if active != nil {
+		active.expiresAt = time.Time{}
 		active.cancel()
 	}
 	e.mu.Unlock()
@@ -155,6 +243,13 @@ func (e *Egress) handle(downstream net.Conn) {
 		_ = downstream.Close()
 		return
 	}
+	if time.Now().Compare(active.expiresAt) >= 0 {
+		// Expiry blocks only new tunnels. Connections admitted with a valid
+		// certificate have completed mTLS and are allowed to drain normally.
+		e.mu.Unlock()
+		_ = downstream.Close()
+		return
+	}
 	active.wg.Add(1)
 	e.mu.Unlock()
 
@@ -167,7 +262,7 @@ func (e *Egress) handle(downstream net.Conn) {
 			slog.WarnContext(active.ctx, "atunnel failed to resolve original egress destination", slog.Any("err", err))
 			return
 		}
-		upstream, err := active.dialer.DialContext(active.ctx, destination, active.metadata)
+		upstream, err := active.dialer.DialContext(active.ctx, destination)
 		if err != nil {
 			slog.WarnContext(active.ctx, "atunnel failed to open egress tunnel", slog.String("destination", destination), slog.Any("err", err))
 			return

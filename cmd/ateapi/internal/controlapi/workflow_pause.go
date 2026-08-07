@@ -41,8 +41,9 @@ type PauseInput struct {
 
 // PauseState holds the mutable state loaded and modified during execution.
 type PauseState struct {
-	Actor         *ateapipb.Actor
-	ActorTemplate *atev1alpha1.ActorTemplate
+	Actor             *ateapipb.Actor
+	ActorTemplate     *atev1alpha1.ActorTemplate
+	WireSnapshotScope string
 }
 
 type LoadActorForPauseStep struct {
@@ -168,6 +169,7 @@ func (s *CallAteletPauseStep) Execute(ctx context.Context, input *PauseInput, st
 		Scope:    toAteletSnapshotScope(state.ActorTemplate.Spec.SnapshotsConfig.OnPause),
 		ActorUid: state.Actor.GetMetadata().Uid,
 	}
+	state.WireSnapshotScope = ateattr.SnapshotScopeValue(req.Scope)
 
 	_, err = client.Checkpoint(ctx, req)
 	return maybeCrashActor(ctx, s.store, input.ActorRef, err, "while checkpointing workload", ateattr.OperationPause)
@@ -233,12 +235,11 @@ func (s *FinalizePausedStep) Execute(ctx context.Context, input *PauseInput, sta
 			}
 			slog.Warn("Worker already gone during finalize pause, skipping release", "worker", assignment.GetWorkerPod())
 		} else {
-			// TODO(dberkov) - what if worker does not belong to this actor?
 			nodeName = worker.GetNodeName()
 			// Only free it if it still belongs to us
 
 			if wass := worker.Assignment; wass != nil {
-				if resources.ActorRefFromObjectRef(wass.Actor) == input.ActorRef {
+				if wass.GetActorUid() == latestActor.GetMetadata().GetUid() {
 					worker.Assignment = nil
 					err = s.store.UpdateWorker(ctx, worker, worker.Version)
 					if err != nil {

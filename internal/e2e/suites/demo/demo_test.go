@@ -294,10 +294,6 @@ func TestDurableDirLifecycle(t *testing.T) {
 // micro-VM runtime supports more than one — gVisor templates are still capped at
 // one by the ActorTemplate CEL rules, so the template would be rejected there.
 func TestMultipleDurableDirLifecycle(t *testing.T) {
-	if !isMicroVMEnvironment() {
-		t.Skip("Skipping TestMultipleDurableDirLifecycle: multiple DurableDir volumes are micro-VM only")
-	}
-
 	tests := []struct {
 		name string
 		tc   actorLifecycleTestCase
@@ -342,12 +338,16 @@ func TestMultipleDurableDirLifecycle(t *testing.T) {
 				wantFileAfterSuspend:     3,
 				checkSecondFileCounter:   true,
 				wantSnapshotContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
+				microVMOnly:              true,
 			},
 		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			if test.tc.microVMOnly && !isMicroVMEnvironment() {
+				t.Skipf("Skipping %s: the Golden resume source is micro-VM only", test.name)
+			}
 			t.Parallel()
 			runActorLifecycleTestCase(t, "multi-durabledir-lifecycle", createActorTemplateWithTwoDurableDirs, test.tc)
 		})

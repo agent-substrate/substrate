@@ -345,15 +345,19 @@ func (s *WorkerPoolSyncer) releaseActorOnDeadWorker(ctx context.Context, namespa
 		}
 		return err
 	}
-	if worker.Assignment == nil {
+	if worker.Assignment == nil || worker.Assignment.GetActor() == nil {
 		return nil
 	}
-	actor, err := s.persistence.GetActor(ctx, resources.ActorRefFromObjectRef(worker.Assignment.Actor))
+	actorRef := resources.ActorRefFromObjectRef(worker.Assignment.GetActor())
+	actor, err := s.persistence.GetActor(ctx, actorRef)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return nil
 		}
 		return err
+	}
+	if actor.GetMetadata().GetUid() != worker.Assignment.GetActorUid() {
+		return nil
 	}
 	// Skip if a concurrent SuspendActor already cleared the pointer.
 	assignment := actor.GetWorkerAssignment()

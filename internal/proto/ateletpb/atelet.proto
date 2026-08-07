@@ -18,6 +18,26 @@ package atelet;
 
 option go_package = "github.com/agent-substrate/substrate/internal/proto/ateletpb";
 
+// CredentialBroker gives an authenticated worker its current actor credential.
+service CredentialBroker {
+  rpc MintActorCertificate(MintActorCertificateRequest) returns (MintActorCertificateResponse) {}
+}
+
+message MintActorCertificateRequest {
+  // DER-encoded PKCS #10 certificate signing request. Atunnel retains the
+  // corresponding private key.
+  bytes certificate_signing_request = 1;
+
+  // Actor incarnation this activation expects. Ateapi resolves the actor from
+  // the authenticated worker and rejects the request if its UID differs.
+  string expected_actor_uid = 2;
+}
+
+message MintActorCertificateResponse {
+  // DER-encoded leaf followed by any intermediate certificates.
+  repeated bytes actor_certificates = 1;
+}
+
 service AteomHerder {
   // Run tells atelet to create a new containerized workload from scratch on an
   // ateom.
@@ -48,6 +68,16 @@ message RunRequest {
   // fetches the relevant assets and records them with the actor's on-node state
   // so a later Checkpoint can pin the same version into the snapshot manifest.
   SandboxAssets sandbox_assets = 8;
+
+  // When absent, actor traffic uses direct egress instead of atunnel.
+  optional EgressGateway egress_gateway = 9;
+}
+
+// EgressGateway configures tunneled egress for one actor activation.
+message EgressGateway {
+  // address is required and identifies the remote gateway as an IP address or
+  // DNS name followed by its port.
+  string address = 1;
 }
 
 // AssetFile is one content-addressed file atelet fetches for a sandbox runtime
@@ -258,6 +288,9 @@ message RestoreRequest {
   // of the `config` oneof: the actor's snapshot may be local (a pause
   // checkpoint) while the golden snapshot is always external.
   string golden_snapshot_uri_prefix = 12;
+
+  // When absent, actor traffic uses direct egress instead of atunnel.
+  optional EgressGateway egress_gateway = 13;
 }
 
 message RestoreResponse {

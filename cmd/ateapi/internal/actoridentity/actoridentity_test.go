@@ -31,6 +31,7 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
 	"github.com/agent-substrate/substrate/internal/localca"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/internal/substratex509"
@@ -147,7 +148,16 @@ func newTestServer(t *testing.T, st store.Interface) *Server {
 		t.Fatalf("write CA pool: %v", err)
 	}
 
-	return New("issuer", "audience", "", poolFile, "", nil, st)
+	var workers *workercache.Cache
+	if st != nil {
+		workers = workercache.New(st, time.Hour)
+		ctx, cancel := context.WithCancel(context.Background())
+		t.Cleanup(cancel)
+		if err := workers.Start(ctx); err != nil {
+			t.Fatalf("start worker cache: %v", err)
+		}
+	}
+	return New("issuer", "audience", "", poolFile, "", nil, st, workers)
 }
 
 // newCSR returns a DER-encoded, correctly self-signed CSR.
@@ -166,10 +176,25 @@ func newCSR(t *testing.T) []byte {
 	return der
 }
 
+func mintCertRequest(t *testing.T, actorUID string) *ateapipb.MintCertRequest {
+	t.Helper()
+	return &ateapipb.MintCertRequest{
+		WorkerNamespace:           testPodNS,
+		WorkerPod:                 testWorkerPod,
+		WorkerPodUid:              "worker-uid",
+		ExpectedActorUid:          actorUID,
+		CertificateSigningRequest: newCSR(t),
+		Purpose:                   ateapipb.ActorCertificatePurpose_ACTOR_CERTIFICATE_PURPOSE_ATUNNEL,
+	}
+}
+
 // actorFixture describes the actor/worker pair seeded into the store.
 type actorFixture struct {
 	status     ateapipb.Actor_Status
 	workerNode string
+	// actorWorkerPod overrides the Pod named by the actor while leaving the
+	// requesting worker unchanged, simulating a stale reciprocal assignment.
+	actorWorkerPod string
 	// assignedTo overrides the actor the worker claims to be hosting. The zero
 	// value means the worker is assigned to the seeded actor.
 	assignedTo resources.ActorRef
@@ -180,6 +205,8 @@ type actorFixture struct {
 	noPlacement bool
 	// noWorker skips seeding the worker record entirely.
 	noWorker bool
+	// mismatchedUID simulates a worker assigned to an actor with the same name/atespace but a different UID.
+	mismatchedUID bool
 }
 
 // seedActor writes an actor, and normally its hosting worker, into st.
@@ -194,14 +221,19 @@ func seedActor(t *testing.T, ctx context.Context, st store.Interface, f actorFix
 		ActorTemplateName:      "counter",
 	}
 	if !f.noPlacement {
+		workerPod := testWorkerPod
+		if f.actorWorkerPod != "" {
+			workerPod = f.actorWorkerPod
+		}
 		actor.WorkerAssignment = &ateapipb.WorkerAssignment{
 			WorkerNamespace: testPodNS,
 			WorkerPool:      testPool,
-			WorkerPod:       testWorkerPod,
+			WorkerPod:       workerPod,
 			WorkerPodUid:    "worker-uid",
 		}
 	}
-	if _, err := st.CreateActor(ctx, actor); err != nil {
+	created, err := st.CreateActor(ctx, actor)
+	if err != nil {
 		t.Fatalf("seed actor: %v", err)
 	}
 
@@ -212,6 +244,10 @@ func seedActor(t *testing.T, ctx context.Context, st store.Interface, f actorFix
 	if assigned == (resources.ActorRef{}) {
 		assigned = actorRef
 	}
+	assignedActorUID := created.GetMetadata().GetUid()
+	if f.mismatchedUID || assigned != actorRef {
+		assignedActorUID = "other-actor-uid"
+	}
 	worker := &ateapipb.Worker{
 		WorkerNamespace: testPodNS,
 		WorkerPool:      testPool,
@@ -219,7 +255,10 @@ func seedActor(t *testing.T, ctx context.Context, st store.Interface, f actorFix
 		WorkerPodUid:    "worker-uid",
 		NodeName:        f.workerNode,
 		State:           ateapipb.Worker_STATE_ACTIVE,
-		Assignment:      &ateapipb.Assignment{Actor: assigned.ToObjectRef()},
+		Assignment: &ateapipb.Assignment{
+			Actor:    assigned.ToObjectRef(),
+			ActorUid: assignedActorUID,
+		},
 	}
 	if f.unassigned {
 		worker.Assignment = nil
@@ -250,9 +289,11 @@ func TestMintCertAuthorization(t *testing.T) {
 
 		fixture actorFixture
 
-		// atespace and actorName override the request fields when non-nil.
-		atespace  *string
-		actorName *string
+		// Request fields override their defaults when non-nil.
+		workerNamespace  *string
+		workerPod        *string
+		workerPodUID     *string
+		expectedActorUID *string
 
 		wantCode codes.Code
 	}{
@@ -298,24 +339,51 @@ func TestMintCertAuthorization(t *testing.T) {
 			wantCode: codes.PermissionDenied,
 		},
 		"actor does not exist": {
-			fixture:   runningOnNode(testNode),
-			actorName: ptr("no-such-actor"),
-			wantCode:  codes.PermissionDenied,
+			fixture: actorFixture{
+				status:     ateapipb.Actor_STATUS_RUNNING,
+				workerNode: testNode,
+				assignedTo: resources.ActorRef{Atespace: testAtespace, Name: "no-such-actor"},
+			},
+			wantCode: codes.PermissionDenied,
 		},
 		"actor exists under a different atespace": {
-			fixture:  runningOnNode(testNode),
-			atespace: ptr("some-other-atespace"),
+			fixture: actorFixture{
+				status:     ateapipb.Actor_STATUS_RUNNING,
+				workerNode: testNode,
+				assignedTo: resources.ActorRef{Atespace: "some-other-atespace", Name: testActorName},
+			},
 			wantCode: codes.PermissionDenied,
 		},
 		"actor is hosted on a different node": {
 			fixture:  runningOnNode(testOtherNode),
 			wantCode: codes.PermissionDenied,
 		},
+		"worker Pod UID does not match": {
+			fixture:      runningOnNode(testNode),
+			workerPodUID: ptr("sibling-worker-uid"),
+			wantCode:     codes.PermissionDenied,
+		},
 		"worker is assigned to a different actor": {
 			fixture: actorFixture{
 				status:     ateapipb.Actor_STATUS_RUNNING,
 				workerNode: testNode,
 				assignedTo: resources.ActorRef{Atespace: testAtespace, Name: "someone-else"},
+			},
+			wantCode: codes.PermissionDenied,
+		},
+		"worker is assigned to an actor with same name and atespace but different UID": {
+			fixture: actorFixture{
+				status:        ateapipb.Actor_STATUS_RUNNING,
+				workerNode:    testNode,
+				mismatchedUID: true,
+			},
+			wantCode: codes.PermissionDenied,
+		},
+		"actor points to a different worker": {
+			fixture: actorFixture{
+				status:         ateapipb.Actor_STATUS_RUNNING,
+				workerNode:     testNode,
+				actorWorkerPod: "replacement-worker",
 			},
 			wantCode: codes.PermissionDenied,
 		},
@@ -330,8 +398,8 @@ func TestMintCertAuthorization(t *testing.T) {
 		"actor has no placement": {
 			fixture: actorFixture{
 				status:      ateapipb.Actor_STATUS_RUNNING,
+				workerNode:  testNode,
 				noPlacement: true,
-				noWorker:    true,
 			},
 			wantCode: codes.FailedPrecondition,
 		},
@@ -343,15 +411,20 @@ func TestMintCertAuthorization(t *testing.T) {
 			},
 			wantCode: codes.PermissionDenied,
 		},
-		"atespace is empty": {
-			fixture:  runningOnNode(testNode),
-			atespace: ptr(""),
-			wantCode: codes.InvalidArgument,
+		"worker namespace is empty": {
+			fixture:         runningOnNode(testNode),
+			workerNamespace: ptr(""),
+			wantCode:        codes.InvalidArgument,
 		},
-		"actor name is empty": {
+		"worker Pod is empty": {
 			fixture:   runningOnNode(testNode),
-			actorName: ptr(""),
+			workerPod: ptr(""),
 			wantCode:  codes.InvalidArgument,
+		},
+		"expected actor UID is empty": {
+			fixture:          runningOnNode(testNode),
+			expectedActorUID: ptr(""),
+			wantCode:         codes.InvalidArgument,
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -371,19 +444,24 @@ func TestMintCertAuthorization(t *testing.T) {
 				callerCert = ateletCertOn(t, testNode)
 			}
 
-			atespace, actorName := testAtespace, testActorName
-			if tc.atespace != nil {
-				atespace = *tc.atespace
+			actor, err := st.GetActor(ctx, resources.ActorRef{Atespace: testAtespace, Name: testActorName})
+			if err != nil {
+				t.Fatalf("read seeded actor: %v", err)
 			}
-			if tc.actorName != nil {
-				actorName = *tc.actorName
+			req := mintCertRequest(t, actor.GetMetadata().GetUid())
+			if tc.workerNamespace != nil {
+				req.WorkerNamespace = *tc.workerNamespace
 			}
-
-			resp, err := srv.MintCert(ctxWithCert(callerCert), &ateapipb.MintCertRequest{
-				Atespace:                  atespace,
-				ActorName:                 actorName,
-				CertificateSigningRequest: newCSR(t),
-			})
+			if tc.workerPod != nil {
+				req.WorkerPod = *tc.workerPod
+			}
+			if tc.workerPodUID != nil {
+				req.WorkerPodUid = *tc.workerPodUID
+			}
+			if tc.expectedActorUID != nil {
+				req.ExpectedActorUid = *tc.expectedActorUID
+			}
+			resp, err := srv.MintCert(ctxWithCert(callerCert), req)
 			if got := status.Code(err); got != tc.wantCode {
 				t.Fatalf("MintCert() code = %v (err = %v), want %v", got, err, tc.wantCode)
 			}
@@ -404,6 +482,21 @@ func TestMintCertAuthorization(t *testing.T) {
 			want := "spiffe://substrate-actor.local/atespace/" + testAtespace + "/actor/" + testActorName
 			if len(leaf.URIs) != 1 || leaf.URIs[0].String() != want {
 				t.Errorf("minted SPIFFE URI = %v, want %q", leaf.URIs, want)
+			}
+		})
+	}
+}
+
+func TestMintCertRejectsUnsupportedPurpose(t *testing.T) {
+	server := newTestServer(t, nil)
+	for name, purpose := range map[string]ateapipb.ActorCertificatePurpose{
+		"unspecified": ateapipb.ActorCertificatePurpose_ACTOR_CERTIFICATE_PURPOSE_UNSPECIFIED,
+		"unknown":     ateapipb.ActorCertificatePurpose(99),
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := server.MintCert(ctxWithCert(ateletCertOn(t, testNode)), &ateapipb.MintCertRequest{Purpose: purpose})
+			if got := status.Code(err); got != codes.InvalidArgument {
+				t.Fatalf("MintCert() code = %v (err = %v), want %v", got, err, codes.InvalidArgument)
 			}
 		})
 	}
@@ -446,12 +539,8 @@ func mintCertFor(t *testing.T, request func(actorUID string) *ateapipb.MintCertR
 // TestMintCertEmbedsActorIdentity checks that a minted certificate carries the
 // ActorIdentity extension, naming the actor the store knows about.
 func TestMintCertEmbedsActorIdentity(t *testing.T) {
-	leaf, actorUID, err := mintCertFor(t, func(string) *ateapipb.MintCertRequest {
-		return &ateapipb.MintCertRequest{
-			Atespace:                  testAtespace,
-			ActorName:                 testActorName,
-			CertificateSigningRequest: newCSR(t),
-		}
+	leaf, actorUID, err := mintCertFor(t, func(actorUID string) *ateapipb.MintCertRequest {
+		return mintCertRequest(t, actorUID)
 	})
 	if err != nil {
 		t.Fatalf("MintCert(): %v", err)
@@ -468,35 +557,29 @@ func TestMintCertEmbedsActorIdentity(t *testing.T) {
 		Atespace:  testAtespace,
 		ActorName: testActorName,
 		ActorUid:  actorUID,
+		Purpose:   substratex509.ActorIdentityPurposeAtunnel,
 	}
 	if *got != *want {
 		t.Errorf("ActorIdentity = %+v, want %+v", got, want)
 	}
 }
 
-// TestMintCertActorUID checks how the caller-supplied actor_uid is treated: it
-// is honored when it agrees with the store, ignored when absent, and refused
-// when it names some other incarnation of the actor. In no case does it decide
-// what goes into the certificate — that always comes from the store.
+// TestMintCertActorUID checks that expected_actor_uid rejects a request that
+// crossed an actor reassignment. It never decides the certificate identity,
+// which always comes from ateapi state.
 func TestMintCertActorUID(t *testing.T) {
 	for name, tc := range map[string]struct {
-		// requestUID derives the actor_uid the caller sends from the UID the
-		// store assigned the seeded actor.
 		requestUID func(actorUID string) string
 		wantCode   codes.Code
 	}{
-		"Omitted":  {requestUID: func(string) string { return "" }, wantCode: codes.OK},
 		"Matching": {requestUID: func(actorUID string) string { return actorUID }, wantCode: codes.OK},
-		"Stale":    {requestUID: func(string) string { return "uid-of-a-previous-incarnation" }, wantCode: codes.PermissionDenied},
+		"Stale":    {requestUID: func(string) string { return "uid-of-a-previous-incarnation" }, wantCode: codes.FailedPrecondition},
 	} {
 		t.Run(name, func(t *testing.T) {
 			leaf, actorUID, err := mintCertFor(t, func(actorUID string) *ateapipb.MintCertRequest {
-				return &ateapipb.MintCertRequest{
-					Atespace:                  testAtespace,
-					ActorName:                 testActorName,
-					ActorUid:                  tc.requestUID(actorUID),
-					CertificateSigningRequest: newCSR(t),
-				}
+				req := mintCertRequest(t, actorUID)
+				req.ExpectedActorUid = tc.requestUID(actorUID)
+				return req
 			})
 			if got := status.Code(err); got != tc.wantCode {
 				t.Fatalf("MintCert() code = %v (err = %v), want %v", got, err, tc.wantCode)
@@ -548,11 +631,11 @@ func TestMintCertActorStatus(t *testing.T) {
 			seedActor(t, ctx, st, actorFixture{status: actorStatus, workerNode: testNode})
 			srv := newTestServer(t, st)
 
-			_, err := srv.MintCert(ctxWithCert(ateletCertOn(t, testNode)), &ateapipb.MintCertRequest{
-				Atespace:                  testAtespace,
-				ActorName:                 testActorName,
-				CertificateSigningRequest: newCSR(t),
-			})
+			actor, err := st.GetActor(ctx, resources.ActorRef{Atespace: testAtespace, Name: testActorName})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = srv.MintCert(ctxWithCert(ateletCertOn(t, testNode)), mintCertRequest(t, actor.GetMetadata().GetUid()))
 			if got := status.Code(err); got != wantCode {
 				t.Errorf("MintCert() code = %v (err = %v), want %v", got, err, wantCode)
 			}
@@ -583,11 +666,11 @@ func TestMintCertDeniesUnassignedActorWhateverItsStatus(t *testing.T) {
 			})
 			srv := newTestServer(t, st)
 
-			_, err := srv.MintCert(ctxWithCert(ateletCertOn(t, testNode)), &ateapipb.MintCertRequest{
-				Atespace:                  testAtespace,
-				ActorName:                 testActorName,
-				CertificateSigningRequest: newCSR(t),
-			})
+			actor, err := st.GetActor(ctx, resources.ActorRef{Atespace: testAtespace, Name: testActorName})
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = srv.MintCert(ctxWithCert(ateletCertOn(t, testNode)), mintCertRequest(t, actor.GetMetadata().GetUid()))
 			if got := status.Code(err); got != codes.PermissionDenied {
 				t.Errorf("MintCert() code = %v (err = %v), want %v", got, err, codes.PermissionDenied)
 			}
@@ -608,13 +691,21 @@ func TestMintCertAuthorizesBeforeSigning(t *testing.T) {
 
 	// A server whose CA pool file does not exist: reaching the signing path at
 	// all would surface as Internal rather than PermissionDenied.
-	srv := New("issuer", "audience", "", filepath.Join(t.TempDir(), "missing.json"), "", nil, st)
+	workers := workercache.New(st, time.Hour)
+	cacheCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	if err := workers.Start(cacheCtx); err != nil {
+		t.Fatal(err)
+	}
+	srv := New("issuer", "audience", "", filepath.Join(t.TempDir(), "missing.json"), "", nil, st, workers)
 
-	_, err := srv.MintCert(ctxWithCert(ateletCertOn(t, testNode)), &ateapipb.MintCertRequest{
-		Atespace:                  testAtespace,
-		ActorName:                 testActorName,
-		CertificateSigningRequest: []byte("not a CSR"),
-	})
+	actor, err := st.GetActor(ctx, resources.ActorRef{Atespace: testAtespace, Name: testActorName})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := mintCertRequest(t, actor.GetMetadata().GetUid())
+	req.CertificateSigningRequest = []byte("not a CSR")
+	_, err = srv.MintCert(ctxWithCert(ateletCertOn(t, testNode)), req)
 	if got := status.Code(err); got != codes.PermissionDenied {
 		t.Errorf("MintCert() code = %v (err = %v), want %v", got, err, codes.PermissionDenied)
 	}

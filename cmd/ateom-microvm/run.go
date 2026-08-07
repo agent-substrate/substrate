@@ -212,8 +212,7 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 		containers:   req.GetSpec().GetContainers(),
 		assetPaths:   req.GetRuntimeAssetPaths(),
 
-		actorVersion:         req.GetActorVersion(),
-		egressGatewayAddress: req.GetEgressGatewayAddress(),
+		egressGateway: req.GetEgressGateway(),
 	}
 
 	s.actorLogger.EmitLifecycleLog("Actor starting", p.actorRef, p.actorUID, p.templateNS, p.templateName)
@@ -235,12 +234,8 @@ type actorBootParams struct {
 	templateName string
 	containers   []*ateompb.Container
 	assetPaths   map[string]string
-	// actorVersion is the Actor resource version ate-api observed when it
-	// assigned this worker; atunnel asserts it to the egress gateway.
-	actorVersion int64
-	// egressGatewayAddress is empty unless an egress gateway is configured, in
-	// which case actor TCP egress is redirected to atunnel's local listener.
-	egressGatewayAddress string
+	// egressGateway is nil unless actor TCP should be redirected through atunnel.
+	egressGateway *ateompb.EgressGateway
 }
 
 // coldBootAttempts is how many times a cold boot is tried when the micro-VM
@@ -298,6 +293,10 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 		return fmt.Errorf("ateom-microvm requires %q and %q asset paths", assetKernel, assetImage)
 	}
 	rr := s.resolveRuntime(paths)
+	egress, err := s.prepareActorEgress(ctx, p.actorUID, p.egressGateway)
+	if err != nil {
+		return err
+	}
 
 	// Networking (host side): per-activation veth into the interior netns. The
 	// tap + TC mirror is built below (after the VM exists) so its FDs are fresh.
@@ -305,14 +304,19 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 		InteriorNetNS:      s.interiorNetNS,
 		HostVethHWAddr:     hostVethHWAddr,
 		SweepInteriorLinks: true,
-		EgressRedirectPort: s.egressRedirectPort(p.egressGatewayAddress != ""),
+		EgressRedirectPort: s.egressRedirectPort(p.egressGateway != nil),
 	}); err != nil {
 		return fmt.Errorf("while setting up actor network: %w", err)
 	}
 	defer func() {
 		if retErr != nil {
-			if cleanupErr := ateomnet.CleanupActorNetwork(ctx, s.interiorNetNS); cleanupErr != nil {
-				slog.WarnContext(ctx, "Failed to clean up actor network after Run failure", slog.Any("err", cleanupErr))
+			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+			defer cancel()
+			if cleanupErr := s.deactivateActorNetworking(cleanupCtx); cleanupErr != nil {
+				slog.WarnContext(cleanupCtx, "Failed to deactivate actor networking after Run failure", slog.Any("err", cleanupErr))
+			}
+			if cleanupErr := ateomnet.CleanupActorNetwork(cleanupCtx, s.interiorNetNS); cleanupErr != nil {
+				slog.WarnContext(cleanupCtx, "Failed to clean up actor network after Run failure", slog.Any("err", cleanupErr))
 			}
 			// Detach any bundle rootfs overlays mounted by buildActorContainers
 			// before the failure, mirroring teardownActor's cleanup.
@@ -459,7 +463,7 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 	}
 
 	ra := &runningActor{chCmd: chCmd, vfsdCmd: vfsdCmd, durableVfsdCmd: durableVfsdCmd, apiSocket: apiSocket, baseID: actorUID, logAgent: ac}
-	if err := s.activateActorNetworking(p.actorRef.Atespace, p.actorRef.Name, p.actorVersion, p.egressGatewayAddress); err != nil {
+	if err := s.activateActorNetworking(p.actorRef.Atespace, p.actorRef.Name, egress); err != nil {
 		return err
 	}
 	s.running[actorUID] = ra

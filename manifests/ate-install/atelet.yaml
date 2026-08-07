@@ -77,6 +77,7 @@ spec:
         - --gcp-auth-for-image-pulls=true
         - --grpc-server-cred-bundle=/run/podidentity.podcert.ate.dev/credential-bundle.pem
         - --client-ca-certs=/run/podidentity.podcert.ate.dev/trust-bundle.pem
+        - --ateapi-ca-file=/run/servicedns.podcert.ate.dev/trust-bundle.pem
         # Graceful shutdown knobs. The sum must fit within
         # terminationGracePeriodSeconds above.
         - --drain-delay=0s
@@ -97,10 +98,6 @@ spec:
             drop:
             - ALL
         env:
-        - name: MY_NODE_NAME
-          valueFrom:
-            fieldRef:
-              fieldPath: spec.nodeName
         - name: POD_NAME
           valueFrom:
             fieldRef:
@@ -150,6 +147,9 @@ spec:
           mountPath: /var/lib/ateom-gvisor
         - name: podidentity
           mountPath: /run/podidentity.podcert.ate.dev
+        - name: servicedns-ca
+          mountPath: /run/servicedns.podcert.ate.dev
+          readOnly: true
       volumes:
       - name: run-ateom
         hostPath:
@@ -168,6 +168,15 @@ spec:
               credentialBundlePath: credential-bundle.pem
           - clusterTrustBundle:
               signerName: podidentity.podcert.ate.dev/identity
+              labelSelector:
+                matchLabels:
+                  podcert.ate.dev/canarying: live
+              path: trust-bundle.pem
+      - name: servicedns-ca
+        projected:
+          sources:
+          - clusterTrustBundle:
+              signerName: servicedns.podcert.ate.dev/identity
               labelSelector:
                 matchLabels:
                   podcert.ate.dev/canarying: live

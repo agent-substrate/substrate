@@ -34,6 +34,10 @@ var (
 	// directories are visible at the same path in atelet (which writes them)
 	// and in every ateom pod (which mounts them as overlay lowerdirs).
 	ImageCacheDir = filepath.Join(BasePath, "image-cache")
+
+	// CredentialBrokerSocket is the node-local atelet socket used by atunnel
+	// to request credentials for the worker's current actor assignment.
+	CredentialBrokerSocket = filepath.Join(BasePath, "credential-broker.sock")
 )
 
 func RunSCBinaryPath(sha256 string) string {

@@ -302,6 +302,31 @@ func TestValidateSnapshotURIPrefix(t *testing.T) {
 	}
 }
 
+func TestValidateLocalSnapshotPrefix(t *testing.T) {
+	tests := []struct {
+		name    string
+		prefix  string
+		wantErr bool
+	}{
+		{"valid", "pause", false},
+		{"valid with dash and digits", "pause-2", false},
+		{"empty", "", true},
+		{"dot", ".", true},
+		{"dotdot", "..", true},
+		{"nested", "pause/2", true},
+		{"absolute", "/pause", true},
+		{"traversal", "../other-actor", true},
+		{"backslash", `pause\2`, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := ValidateLocalSnapshotPrefix(tt.prefix); (err != nil) != tt.wantErr {
+				t.Errorf("ValidateLocalSnapshotPrefix(%q) err = %v, wantErr %v", tt.prefix, err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestValidateWorker(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -330,9 +355,10 @@ func TestValidateWorker(t *testing.T) {
 					Name:      "actor-template",
 				},
 				Actor: &ateapipb.ObjectRef{
-					Name:     "actor-id",
-					Atespace: "actor-atespace",
+					Atespace: "actor-ns",
+					Name:     "actor",
 				},
+				ActorUid: "actor-uid",
 			},
 			Ip:           "10.0.0.1",
 			WorkerPodUid: "123e4567-e89b-12d3-a456-426614174000",
@@ -347,9 +373,10 @@ func TestValidateWorker(t *testing.T) {
 			WorkerPod:       "pod-1",
 			Assignment: &ateapipb.Assignment{
 				Actor: &ateapipb.ObjectRef{
-					Name:     "actor-id",
-					Atespace: "actor-atespace",
+					Atespace: "actor-ns",
+					Name:     "actor",
 				},
+				ActorUid: "actor-uid",
 			},
 			Ip:           "10.0.0.1",
 			WorkerPodUid: "123e4567-e89b-12d3-a456-426614174000",
@@ -367,9 +394,10 @@ func TestValidateWorker(t *testing.T) {
 					Name: "actor-template",
 				},
 				Actor: &ateapipb.ObjectRef{
-					Name:     "actor-id",
-					Atespace: "actor-atespace",
+					Atespace: "actor-ns",
+					Name:     "actor",
 				},
+				ActorUid: "actor-uid",
 			},
 			Ip:           "10.0.0.1",
 			WorkerPodUid: "123e4567-e89b-12d3-a456-426614174000",
@@ -387,9 +415,10 @@ func TestValidateWorker(t *testing.T) {
 					Namespace: "actor-ns",
 				},
 				Actor: &ateapipb.ObjectRef{
-					Name:     "actor-id",
-					Atespace: "actor-atespace",
+					Atespace: "actor-ns",
+					Name:     "actor",
 				},
+				ActorUid: "actor-uid",
 			},
 			Ip:           "10.0.0.1",
 			WorkerPodUid: "123e4567-e89b-12d3-a456-426614174000",
@@ -407,6 +436,7 @@ func TestValidateWorker(t *testing.T) {
 					Name:      "actor-template",
 					Namespace: "actor-ns",
 				},
+				ActorUid: "actor-uid",
 			},
 			Ip:           "10.0.0.1",
 			WorkerPodUid: "123e4567-e89b-12d3-a456-426614174000",
@@ -425,8 +455,9 @@ func TestValidateWorker(t *testing.T) {
 					Namespace: "actor-ns",
 				},
 				Actor: &ateapipb.ObjectRef{
-					Atespace: "actor-atespace",
+					Atespace: "actor-ns",
 				},
+				ActorUid: "actor-uid",
 			},
 			Ip:           "10.0.0.1",
 			WorkerPodUid: "123e4567-e89b-12d3-a456-426614174000",
@@ -445,14 +476,36 @@ func TestValidateWorker(t *testing.T) {
 					Namespace: "actor-ns",
 				},
 				Actor: &ateapipb.ObjectRef{
-					Name: "actor-id",
+					Name: "actor",
 				},
+				ActorUid: "actor-uid",
 			},
 			Ip:           "10.0.0.1",
 			WorkerPodUid: "123e4567-e89b-12d3-a456-426614174000",
 			NodeName:     "node-1.example.com",
 		},
 		wantMsg: "worker.assignment.actor.atespace: Required value",
+	}, {
+		name: "partially assigned worker, missing actor_uid",
+		worker: &ateapipb.Worker{
+			WorkerNamespace: "ns-1",
+			WorkerPool:      "pool-1",
+			WorkerPod:       "pod-1",
+			Assignment: &ateapipb.Assignment{
+				ActorTemplate: &ateapipb.KubeNamespacedObjectRef{
+					Name:      "actor-template",
+					Namespace: "actor-ns",
+				},
+				Actor: &ateapipb.ObjectRef{
+					Atespace: "actor-ns",
+					Name:     "actor",
+				},
+			},
+			Ip:           "10.0.0.1",
+			WorkerPodUid: "123e4567-e89b-12d3-a456-426614174000",
+			NodeName:     "node-1.example.com",
+		},
+		wantMsg: "worker.assignment.actor_uid: Required value",
 	}, {
 		name: "missing worker_namespace",
 		worker: &ateapipb.Worker{

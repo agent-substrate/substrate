@@ -24,8 +24,10 @@ import (
 	"go.opentelemetry.io/otel/attribute"
 
 	"github.com/agent-substrate/substrate/internal/ateerrors"
+	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 
+	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
@@ -56,17 +58,31 @@ const (
 // rather than nesting under the pool so it can grow siblings.
 // WorkerPoolNamespaceKey pairs with WorkerPoolNameKey: a WorkerPool is
 // namespaced, so the name alone does not identify one.
+// The snapshot keys are orthogonal: kind is which snapshot, scope is what
+// content it covers, and phase is which step of the operation an observation
+// timed. Naming one image within a snapshot is the registry's file.name, not an
+// ate.* key of its own.
 const (
-	ActorOperationNameKey  = attribute.Key("ate.actor.operation.name")
-	WorkerPoolNamespaceKey = attribute.Key("ate.workerpool.namespace")
-	WorkerPoolNameKey      = attribute.Key("ate.workerpool.name")
-	WorkerStateKey         = attribute.Key("ate.worker.state")
-	SandboxClassKey        = attribute.Key("ate.sandbox.class")
-	SnapshotKindKey        = attribute.Key("ate.snapshot.kind")
-	SchedulerOutcomeKey    = attribute.Key("ate.scheduler.outcome")
-	RouterResumeKey        = attribute.Key("ate.router.resume")
-	RouterOutcomeKey       = attribute.Key("ate.router.outcome")
-	FailureReasonKey       = attribute.Key("ate.failure.reason")
+	ActorOperationNameKey   = attribute.Key("ate.actor.operation.name")
+	WorkerPoolNamespaceKey  = attribute.Key("ate.workerpool.namespace")
+	WorkerPoolNameKey       = attribute.Key("ate.workerpool.name")
+	WorkerStateKey          = attribute.Key("ate.worker.state")
+	SandboxClassKey         = attribute.Key("ate.sandbox.class")
+	SnapshotKindKey         = attribute.Key("ate.snapshot.kind")
+	SnapshotScopeKey        = attribute.Key("ate.snapshot.scope")
+	SnapshotPhaseKey        = attribute.Key("ate.snapshot.phase")
+	SchedulerOutcomeKey     = attribute.Key("ate.scheduler.outcome")
+	SchedulingConstraintKey = attribute.Key("ate.scheduling.constraint")
+	RouterResumeKey         = attribute.Key("ate.router.resume")
+	RouterOutcomeKey        = attribute.Key("ate.router.outcome")
+	FailureReasonKey        = attribute.Key("ate.failure.reason")
+)
+
+// Values for SchedulingConstraintKey.
+const (
+	ConstraintNone          = "none"
+	ConstraintRequiredNodes = "required_nodes"
+	ConstraintSelector      = "selector"
 )
 
 // Control-plane failure reasons for ate.actor.crashes metric.
@@ -141,12 +157,84 @@ const (
 // the label is bounded at the producer: Local restores an in-node snapshot,
 // Latest pulls the actor's durable snapshot from object storage, Golden pulls the
 // template's golden image, Boot is a from-scratch start (not a restore).
+// atelet derives the same values for its own histograms, where the kind is the
+// snapshot a restore reads or a checkpoint writes; Boot never appears there.
 const (
 	SnapshotKindGolden = "golden"
 	SnapshotKindLatest = "latest"
 	SnapshotKindLocal  = "local"
 	SnapshotKindBoot   = "boot"
 )
+
+// Values for SnapshotScopeKey, mirroring ateletpb.SnapshotScope. Checkpoints
+// only ever capture Full or Data; DataOnGolden is restore-only.
+const (
+	SnapshotScopeFull         = "full"
+	SnapshotScopeData         = "data"
+	SnapshotScopeDataOnGolden = "data_on_golden"
+	SnapshotScopeUnknown      = "unknown"
+)
+
+// SnapshotScopeValue maps the wire enum onto its label value, shared so ateapi
+// (which sets the scope) and atelet (which receives it) cannot drift. An
+// unrecognized scope reports as unknown rather than stringified, so no wire
+// value can widen the label set.
+func SnapshotScopeValue(scope ateletpb.SnapshotScope) string {
+	switch scope {
+	case ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL:
+		return SnapshotScopeFull
+	case ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA:
+		return SnapshotScopeData
+	case ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN:
+		return SnapshotScopeDataOnGolden
+	default:
+		return SnapshotScopeUnknown
+	}
+}
+
+// Values for SnapshotPhaseKey. Phases overlap (the download runs concurrently
+// with the asset fetch and OCI unpack), so they are independent observations,
+// not a partition of Total: summing across them is meaningless.
+const (
+	SnapshotPhaseVolumeMount     = "volume_mount"
+	SnapshotPhaseManifestFetch   = "manifest_fetch"
+	SnapshotPhaseSandboxAssets   = "sandbox_assets"
+	SnapshotPhaseDownload        = "download"
+	SnapshotPhaseOCIUnpack       = "oci_unpack"
+	SnapshotPhaseAteomRestore    = "ateom_restore"
+	SnapshotPhaseAteomCheckpoint = "ateom_checkpoint"
+	// Persist is one step with two destinations (upload for external, rename
+	// for local); SnapshotKindKey already says which.
+	SnapshotPhasePersist = "persist"
+	SnapshotPhaseTotal   = "total"
+)
+
+// FailureReason classifies err onto the bounded ateerrors taxonomy, reading the
+// wrapped Reason or the AIP-193 ErrorInfo detail. An error carrying neither
+// reports ReasonUnknown rather than anything derived from its message, which is
+// what keeps the label bounded.
+func FailureReason(err error) string {
+	if r := ateerrors.ExtractReason(err); r != "" {
+		return r
+	}
+	return ReasonUnknown
+}
+
+// SandboxClassUnknown is the NormalizeSandboxClass fallback.
+const SandboxClassUnknown = "unknown"
+
+// NormalizeSandboxClass bounds the label: atelet reads the class from a
+// snapshot manifest in object storage that nothing validates on the way in.
+// Empty reports as unknown rather than the gvisor default, so a manifest
+// problem stays visible.
+func NormalizeSandboxClass(class string) string {
+	switch atev1alpha1.SandboxClass(class) {
+	case atev1alpha1.SandboxClassGvisor, atev1alpha1.SandboxClassMicroVM:
+		return class
+	default:
+		return SandboxClassUnknown
+	}
+}
 
 // ActorRefAttributes returns the subset knowable before the Actor record
 // resolves: only the (atespace, name) the request addresses. The uid and version

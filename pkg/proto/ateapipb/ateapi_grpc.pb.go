@@ -945,20 +945,10 @@ const (
 //
 // ActorIdentity allows substrate workloads to exchange their
 // infrastructure-level credentials (k8s service account token, etc.) for a
-// substrate actor-level credential.  A given substrate actor might migrate
+// substrate actor-level credential. A given substrate actor might migrate
 // between many different physical workers over the course of its lifecycle,
 // whereas the actor credential's identity will be stable for the life of the
 // actor.
-//
-// This service requires authentication. You can authenticate with a Kubernetes
-// service account token in an `Authorization: Bearer` header, or you can
-// authenticate with a Kubernetes service account certificate as an mTLS
-// certificate. (Kubernetes service account certificates do not currently exist
-// upstream, but we will provide a polyfill based on Pod Certificates).
-//
-// The broker will check that the service credentials you authenticated with
-// belong to a Pod that is currently mapped to the requested actor in the
-// actor database.
 type ActorIdentityClient interface {
 	// Request an Actor Identity JWT.
 	//
@@ -971,10 +961,9 @@ type ActorIdentityClient interface {
 	// it on the actor's behalf, authenticating with its own client certificate
 	// rather than a bearer token.
 	//
-	// Authorization is decided on that client certificate: it must identify the
-	// atelet running on the same node as the worker Pod that currently hosts the
-	// requested actor, and the actor must still be running. Any other caller is
-	// rejected with PERMISSION_DENIED.
+	// Authorization is decided on that client certificate and the worker
+	// identity attested by atelet. Ateapi verifies that the worker is assigned to
+	// the actor and that the actor points back to that exact worker before signing.
 	//
 	// The certificate in the response is the actor's identity, not the atelet's.
 	MintCert(ctx context.Context, in *MintCertRequest, opts ...grpc.CallOption) (*MintCertResponse, error)
@@ -1014,20 +1003,10 @@ func (c *actorIdentityClient) MintCert(ctx context.Context, in *MintCertRequest,
 //
 // ActorIdentity allows substrate workloads to exchange their
 // infrastructure-level credentials (k8s service account token, etc.) for a
-// substrate actor-level credential.  A given substrate actor might migrate
+// substrate actor-level credential. A given substrate actor might migrate
 // between many different physical workers over the course of its lifecycle,
 // whereas the actor credential's identity will be stable for the life of the
 // actor.
-//
-// This service requires authentication. You can authenticate with a Kubernetes
-// service account token in an `Authorization: Bearer` header, or you can
-// authenticate with a Kubernetes service account certificate as an mTLS
-// certificate. (Kubernetes service account certificates do not currently exist
-// upstream, but we will provide a polyfill based on Pod Certificates).
-//
-// The broker will check that the service credentials you authenticated with
-// belong to a Pod that is currently mapped to the requested actor in the
-// actor database.
 type ActorIdentityServer interface {
 	// Request an Actor Identity JWT.
 	//
@@ -1040,10 +1019,9 @@ type ActorIdentityServer interface {
 	// it on the actor's behalf, authenticating with its own client certificate
 	// rather than a bearer token.
 	//
-	// Authorization is decided on that client certificate: it must identify the
-	// atelet running on the same node as the worker Pod that currently hosts the
-	// requested actor, and the actor must still be running. Any other caller is
-	// rejected with PERMISSION_DENIED.
+	// Authorization is decided on that client certificate and the worker
+	// identity attested by atelet. Ateapi verifies that the worker is assigned to
+	// the actor and that the actor points back to that exact worker before signing.
 	//
 	// The certificate in the response is the actor's identity, not the atelet's.
 	MintCert(context.Context, *MintCertRequest) (*MintCertResponse, error)

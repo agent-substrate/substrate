@@ -27,20 +27,6 @@ import (
 	"os"
 	"strconv"
 	"strings"
-
-	"github.com/agent-substrate/substrate/internal/resources"
-)
-
-const (
-	// ActorAtespaceHeader identifies the atespace whose actor opened an egress
-	// tunnel. The egress gateway must authenticate this metadata before using it
-	// for policy decisions.
-	ActorAtespaceHeader = "X-Ate-Atespace"
-	// ActorNameHeader identifies the actor that opened an egress tunnel.
-	ActorNameHeader = "X-Ate-Actor-Name"
-	// ActorVersionHeader is the Actor resource version observed when the worker
-	// was assigned. Gateways use it as a lower bound on cached Actor metadata.
-	ActorVersionHeader = "X-Ate-Actor-Version"
 )
 
 // TODO(liorlieberman): support/use CONNECT on Ingress as well.
@@ -48,7 +34,7 @@ const (
 type ClientConfig struct {
 	GatewayAddress       string
 	ServerName           string
-	CredentialBundlePath string
+	GetClientCertificate func(*tls.CertificateRequestInfo) (*tls.Certificate, error)
 	TrustBundlePath      string
 }
 
@@ -69,15 +55,6 @@ func WithDialer(dial DialFunc) ClientOption {
 	}
 }
 
-// EgressMetadata is attached to an egress CONNECT request. BearerToken is
-// optional until actor JWT issuance is wired into ateom.
-type EgressMetadata struct {
-	Atespace     string
-	ActorName    string
-	ActorVersion int64
-	BearerToken  string
-}
-
 // Client opens actor egress streams through an mTLS-authenticated gateway.
 type Client struct {
 	gatewayAddress string
@@ -85,8 +62,8 @@ type Client struct {
 	dialContext    DialFunc
 }
 
-// Client implements EgressDialer.
-var _ EgressDialer = (*Client)(nil)
+// Client implements egressDialer.
+var _ egressDialer = (*Client)(nil)
 
 // NewClient creates an egress CONNECT client and validates its TLS material.
 func NewClient(cfg ClientConfig, opts ...ClientOption) (*Client, error) {
@@ -96,14 +73,11 @@ func NewClient(cfg ClientConfig, opts ...ClientOption) (*Client, error) {
 	if cfg.ServerName == "" {
 		return nil, fmt.Errorf("atunnel: egress gateway server name is required")
 	}
-	if cfg.CredentialBundlePath == "" {
-		return nil, fmt.Errorf("atunnel: credential bundle path is required")
+	if cfg.GetClientCertificate == nil {
+		return nil, fmt.Errorf("atunnel: client certificate source is required")
 	}
 	if cfg.TrustBundlePath == "" {
 		return nil, fmt.Errorf("atunnel: trust bundle path is required")
-	}
-	if _, err := loadCredentialBundle(cfg.CredentialBundlePath); err != nil {
-		return nil, err
 	}
 	trustPEM, err := os.ReadFile(cfg.TrustBundlePath)
 	if err != nil {
@@ -114,17 +88,14 @@ func NewClient(cfg ClientConfig, opts ...ClientOption) (*Client, error) {
 		return nil, fmt.Errorf("atunnel: trust bundle %q contains no certificates", cfg.TrustBundlePath)
 	}
 
-	credentialBundlePath := cfg.CredentialBundlePath
 	client := &Client{
 		gatewayAddress: cfg.GatewayAddress,
 		dialContext:    (&net.Dialer{}).DialContext,
 		tlsConfig: &tls.Config{
-			MinVersion: tls.VersionTLS12,
-			RootCAs:    rootCAs,
-			ServerName: cfg.ServerName,
-			GetClientCertificate: func(*tls.CertificateRequestInfo) (*tls.Certificate, error) {
-				return loadCredentialBundle(credentialBundlePath)
-			},
+			MinVersion:           tls.VersionTLS12,
+			RootCAs:              rootCAs,
+			ServerName:           cfg.ServerName,
+			GetClientCertificate: cfg.GetClientCertificate,
 		},
 	}
 	for _, opt := range opts {
@@ -135,17 +106,10 @@ func NewClient(cfg ClientConfig, opts ...ClientOption) (*Client, error) {
 
 // DialContext opens a CONNECT tunnel to destination. destination becomes the
 // request authority, so it must include an explicit port.
-func (c *Client) DialContext(ctx context.Context, destination string, metadata EgressMetadata) (net.Conn, error) {
+func (c *Client) DialContext(ctx context.Context, destination string) (net.Conn, error) {
 	if err := validateDestination(destination); err != nil {
 		return nil, err
 	}
-	if !resources.IsValidResourceName(metadata.Atespace) || !resources.IsValidResourceName(metadata.ActorName) {
-		return nil, fmt.Errorf("atunnel: invalid actor identity %q/%q", metadata.Atespace, metadata.ActorName)
-	}
-	if metadata.ActorVersion < 1 {
-		return nil, fmt.Errorf("atunnel: actor version must be positive")
-	}
-
 	rawConn, err := c.dialContext(ctx, "tcp", c.gatewayAddress)
 	if err != nil {
 		return nil, fmt.Errorf("atunnel: connecting to egress gateway: %w", err)
@@ -160,14 +124,6 @@ func (c *Client) DialContext(ctx context.Context, destination string, metadata E
 		Method: http.MethodConnect,
 		URL:    &url.URL{Host: destination},
 		Host:   destination,
-		Header: http.Header{
-			ActorAtespaceHeader: []string{metadata.Atespace},
-			ActorNameHeader:     []string{metadata.ActorName},
-			ActorVersionHeader:  []string{strconv.FormatInt(metadata.ActorVersion, 10)},
-		},
-	}
-	if metadata.BearerToken != "" {
-		req.Header.Set("Authorization", "Bearer "+metadata.BearerToken)
 	}
 	if err := req.Write(tlsConn); err != nil {
 		_ = tlsConn.Close()

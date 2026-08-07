@@ -205,6 +205,19 @@ func ValidateSnapshotURIPrefix(prefix string) error {
 	return nil
 }
 
+// ValidateLocalSnapshotPrefix ensures a local snapshot prefix is a single
+// path segment: it is joined onto the actor's checkpoint directory, so a
+// nested or relative prefix would escape it or nest below it.
+func ValidateLocalSnapshotPrefix(prefix string) error {
+	if prefix == "" {
+		return fmt.Errorf("snapshot prefix must be non-empty")
+	}
+	if prefix == "." || prefix == ".." || strings.ContainsAny(prefix, `/\`) {
+		return fmt.Errorf("invalid snapshot prefix %q: must be a single path segment", prefix)
+	}
+	return nil
+}
+
 // ValidateWorker checks that the worker message is well-formed.
 func ValidateWorker(worker *ateapipb.Worker, fldPath *field.Path) field.ErrorList {
 	var errs field.ErrorList
@@ -295,17 +308,11 @@ func ValidateAssignment(assignment *ateapipb.Assignment, fldPath *field.Path) fi
 	if val, fldPath := assignment.Actor, fldPath.Child("actor"); val == nil {
 		errs = append(errs, field.Required(fldPath, ""))
 	} else {
-		if val, fldPath := assignment.Actor.Name, fldPath.Child("name"); val == "" {
-			errs = append(errs, field.Required(fldPath, ""))
-		} else {
-			errs = append(errs, ValidateResourceName(val, fldPath)...)
-		}
+		errs = append(errs, ValidateObjectRef(val, fldPath)...)
+	}
 
-		if val, fldPath := assignment.Actor.Atespace, fldPath.Child("atespace"); val == "" {
-			errs = append(errs, field.Required(fldPath, ""))
-		} else {
-			errs = append(errs, ValidateResourceName(val, fldPath)...)
-		}
+	if val, fldPath := assignment.ActorUid, fldPath.Child("actor_uid"); val == "" {
+		errs = append(errs, field.Required(fldPath, ""))
 	}
 
 	return errs

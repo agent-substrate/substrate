@@ -138,6 +138,52 @@ func (ActorSnapshotTagScope) EnumDescriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{1}
 }
 
+type ActorCertificatePurpose int32
+
+const (
+	ActorCertificatePurpose_ACTOR_CERTIFICATE_PURPOSE_UNSPECIFIED ActorCertificatePurpose = 0
+	ActorCertificatePurpose_ACTOR_CERTIFICATE_PURPOSE_ATUNNEL     ActorCertificatePurpose = 1
+)
+
+// Enum value maps for ActorCertificatePurpose.
+var (
+	ActorCertificatePurpose_name = map[int32]string{
+		0: "ACTOR_CERTIFICATE_PURPOSE_UNSPECIFIED",
+		1: "ACTOR_CERTIFICATE_PURPOSE_ATUNNEL",
+	}
+	ActorCertificatePurpose_value = map[string]int32{
+		"ACTOR_CERTIFICATE_PURPOSE_UNSPECIFIED": 0,
+		"ACTOR_CERTIFICATE_PURPOSE_ATUNNEL":     1,
+	}
+)
+
+func (x ActorCertificatePurpose) Enum() *ActorCertificatePurpose {
+	p := new(ActorCertificatePurpose)
+	*p = x
+	return p
+}
+
+func (x ActorCertificatePurpose) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (ActorCertificatePurpose) Descriptor() protoreflect.EnumDescriptor {
+	return file_ateapi_proto_enumTypes[2].Descriptor()
+}
+
+func (ActorCertificatePurpose) Type() protoreflect.EnumType {
+	return &file_ateapi_proto_enumTypes[2]
+}
+
+func (x ActorCertificatePurpose) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use ActorCertificatePurpose.Descriptor instead.
+func (ActorCertificatePurpose) EnumDescriptor() ([]byte, []int) {
+	return file_ateapi_proto_rawDescGZIP(), []int{2}
+}
+
 type ExternalVolume_Status int32
 
 const (
@@ -177,11 +223,11 @@ func (x ExternalVolume_Status) String() string {
 }
 
 func (ExternalVolume_Status) Descriptor() protoreflect.EnumDescriptor {
-	return file_ateapi_proto_enumTypes[2].Descriptor()
+	return file_ateapi_proto_enumTypes[3].Descriptor()
 }
 
 func (ExternalVolume_Status) Type() protoreflect.EnumType {
-	return &file_ateapi_proto_enumTypes[2]
+	return &file_ateapi_proto_enumTypes[3]
 }
 
 func (x ExternalVolume_Status) Number() protoreflect.EnumNumber {
@@ -244,11 +290,11 @@ func (x Actor_Status) String() string {
 }
 
 func (Actor_Status) Descriptor() protoreflect.EnumDescriptor {
-	return file_ateapi_proto_enumTypes[3].Descriptor()
+	return file_ateapi_proto_enumTypes[4].Descriptor()
 }
 
 func (Actor_Status) Type() protoreflect.EnumType {
-	return &file_ateapi_proto_enumTypes[3]
+	return &file_ateapi_proto_enumTypes[4]
 }
 
 func (x Actor_Status) Number() protoreflect.EnumNumber {
@@ -293,11 +339,11 @@ func (x Worker_State) String() string {
 }
 
 func (Worker_State) Descriptor() protoreflect.EnumDescriptor {
-	return file_ateapi_proto_enumTypes[4].Descriptor()
+	return file_ateapi_proto_enumTypes[5].Descriptor()
 }
 
 func (Worker_State) Type() protoreflect.EnumType {
-	return &file_ateapi_proto_enumTypes[4]
+	return &file_ateapi_proto_enumTypes[5]
 }
 
 func (x Worker_State) Number() protoreflect.EnumNumber {
@@ -2554,6 +2600,7 @@ type Assignment struct {
 	state         protoimpl.MessageState   `protogen:"open.v1"`
 	ActorTemplate *KubeNamespacedObjectRef `protobuf:"bytes,1,opt,name=actor_template,json=actorTemplate,proto3" json:"actor_template,omitempty"`
 	Actor         *ObjectRef               `protobuf:"bytes,2,opt,name=actor,proto3" json:"actor,omitempty"`
+	ActorUid      string                   `protobuf:"bytes,3,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2600,6 +2647,13 @@ func (x *Assignment) GetActor() *ObjectRef {
 		return x.Actor
 	}
 	return nil
+}
+
+func (x *Assignment) GetActorUid() string {
+	if x != nil {
+		return x.ActorUid
+	}
+	return ""
 }
 
 type KubeNamespacedObjectRef struct {
@@ -2860,16 +2914,23 @@ func (x *MintJWTResponse) GetActorJwt() string {
 }
 
 type MintCertRequest struct {
-	state     protoimpl.MessageState `protogen:"open.v1"`
-	Atespace  string                 `protobuf:"bytes,1,opt,name=atespace,proto3" json:"atespace,omitempty"`
-	ActorName string                 `protobuf:"bytes,2,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
-	ActorUid  string                 `protobuf:"bytes,3,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Worker identity authenticated by the node-local atelet. Ateapi resolves
+	// the worker's current actor assignment rather than trusting actor metadata
+	// from the caller.
+	WorkerNamespace string `protobuf:"bytes,1,opt,name=worker_namespace,json=workerNamespace,proto3" json:"worker_namespace,omitempty"`
+	WorkerPod       string `protobuf:"bytes,2,opt,name=worker_pod,json=workerPod,proto3" json:"worker_pod,omitempty"`
+	WorkerPodUid    string `protobuf:"bytes,3,opt,name=worker_pod_uid,json=workerPodUid,proto3" json:"worker_pod_uid,omitempty"`
 	// Request contains DER encoded bytes of a x509 certificate signing request.
 	// The signer will ignore the contents of the CSR except to extract the
 	// subject public key.
 	CertificateSigningRequest []byte `protobuf:"bytes,4,opt,name=certificate_signing_request,json=certificateSigningRequest,proto3" json:"certificate_signing_request,omitempty"`
-	unknownFields             protoimpl.UnknownFields
-	sizeCache                 protoimpl.SizeCache
+	// Actor incarnation expected by the activation. This is only a stale-request
+	// guard: ateapi derives the actor and its identity from the worker assignment.
+	ExpectedActorUid string                  `protobuf:"bytes,5,opt,name=expected_actor_uid,json=expectedActorUid,proto3" json:"expected_actor_uid,omitempty"`
+	Purpose          ActorCertificatePurpose `protobuf:"varint,6,opt,name=purpose,proto3,enum=ateapi.ActorCertificatePurpose" json:"purpose,omitempty"`
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *MintCertRequest) Reset() {
@@ -2902,23 +2963,23 @@ func (*MintCertRequest) Descriptor() ([]byte, []int) {
 	return file_ateapi_proto_rawDescGZIP(), []int{43}
 }
 
-func (x *MintCertRequest) GetAtespace() string {
+func (x *MintCertRequest) GetWorkerNamespace() string {
 	if x != nil {
-		return x.Atespace
+		return x.WorkerNamespace
 	}
 	return ""
 }
 
-func (x *MintCertRequest) GetActorName() string {
+func (x *MintCertRequest) GetWorkerPod() string {
 	if x != nil {
-		return x.ActorName
+		return x.WorkerPod
 	}
 	return ""
 }
 
-func (x *MintCertRequest) GetActorUid() string {
+func (x *MintCertRequest) GetWorkerPodUid() string {
 	if x != nil {
-		return x.ActorUid
+		return x.WorkerPodUid
 	}
 	return ""
 }
@@ -2928,6 +2989,20 @@ func (x *MintCertRequest) GetCertificateSigningRequest() []byte {
 		return x.CertificateSigningRequest
 	}
 	return nil
+}
+
+func (x *MintCertRequest) GetExpectedActorUid() string {
+	if x != nil {
+		return x.ExpectedActorUid
+	}
+	return ""
+}
+
+func (x *MintCertRequest) GetPurpose() ActorCertificatePurpose {
+	if x != nil {
+		return x.Purpose
+	}
+	return ActorCertificatePurpose_ACTOR_CERTIFICATE_PURPOSE_UNSPECIFIED
 }
 
 type MintCertResponse struct {
@@ -3159,11 +3234,12 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x05State\x12\x15\n" +
 	"\x11STATE_UNSPECIFIED\x10\x00\x12\x10\n" +
 	"\fSTATE_ACTIVE\x10\x01\x12\x12\n" +
-	"\x0eSTATE_DRAINING\x10\x02\"}\n" +
+	"\x0eSTATE_DRAINING\x10\x02\"\x9a\x01\n" +
 	"\n" +
 	"Assignment\x12F\n" +
 	"\x0eactor_template\x18\x01 \x01(\v2\x1f.ateapi.KubeNamespacedObjectRefR\ractorTemplate\x12'\n" +
-	"\x05actor\x18\x02 \x01(\v2\x11.ateapi.ObjectRefR\x05actor\"K\n" +
+	"\x05actor\x18\x02 \x01(\v2\x11.ateapi.ObjectRefR\x05actor\x12\x1b\n" +
+	"\tactor_uid\x18\x03 \x01(\tR\bactorUid\"K\n" +
 	"\x17KubeNamespacedObjectRef\x12\x1c\n" +
 	"\tnamespace\x18\x01 \x01(\tR\tnamespace\x12\x12\n" +
 	"\x04name\x18\x02 \x01(\tR\x04name\"\x13\n" +
@@ -3176,13 +3252,15 @@ const file_ateapi_proto_rawDesc = "" +
 	"actor_name\x18\x03 \x01(\tR\tactorName\x12\x1b\n" +
 	"\tactor_uid\x18\x04 \x01(\tR\bactorUid\".\n" +
 	"\x0fMintJWTResponse\x12\x1b\n" +
-	"\tactor_jwt\x18\x01 \x01(\tR\bactorJwt\"\xa9\x01\n" +
-	"\x0fMintCertRequest\x12\x1a\n" +
-	"\batespace\x18\x01 \x01(\tR\batespace\x12\x1d\n" +
+	"\tactor_jwt\x18\x01 \x01(\tR\bactorJwt\"\xaa\x02\n" +
+	"\x0fMintCertRequest\x12)\n" +
+	"\x10worker_namespace\x18\x01 \x01(\tR\x0fworkerNamespace\x12\x1d\n" +
 	"\n" +
-	"actor_name\x18\x02 \x01(\tR\tactorName\x12\x1b\n" +
-	"\tactor_uid\x18\x03 \x01(\tR\bactorUid\x12>\n" +
-	"\x1bcertificate_signing_request\x18\x04 \x01(\fR\x19certificateSigningRequest\"A\n" +
+	"worker_pod\x18\x02 \x01(\tR\tworkerPod\x12$\n" +
+	"\x0eworker_pod_uid\x18\x03 \x01(\tR\fworkerPodUid\x12>\n" +
+	"\x1bcertificate_signing_request\x18\x04 \x01(\fR\x19certificateSigningRequest\x12,\n" +
+	"\x12expected_actor_uid\x18\x05 \x01(\tR\x10expectedActorUid\x129\n" +
+	"\apurpose\x18\x06 \x01(\x0e2\x1f.ateapi.ActorCertificatePurposeR\apurpose\"A\n" +
 	"\x10MintCertResponse\x12-\n" +
 	"\x12actor_certificates\x18\x01 \x03(\fR\x11actorCertificates*\x80\x01\n" +
 	"\x14SnapshotContentScope\x12&\n" +
@@ -3191,7 +3269,10 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x1bSNAPSHOT_CONTENT_SCOPE_DATA\x10\x02*f\n" +
 	"\x15ActorSnapshotTagScope\x12%\n" +
 	"!ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE\x10\x00\x12&\n" +
-	"\"ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED\x10\x012\xb3\n" +
+	"\"ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED\x10\x01*k\n" +
+	"\x17ActorCertificatePurpose\x12)\n" +
+	"%ACTOR_CERTIFICATE_PURPOSE_UNSPECIFIED\x10\x00\x12%\n" +
+	"!ACTOR_CERTIFICATE_PURPOSE_ATUNNEL\x10\x012\xb3\n" +
 	"\n" +
 	"\aControl\x124\n" +
 	"\bGetActor\x12\x17.ateapi.GetActorRequest\x1a\r.ateapi.Actor\"\x00\x12:\n" +
@@ -3233,162 +3314,164 @@ func file_ateapi_proto_rawDescGZIP() []byte {
 	return file_ateapi_proto_rawDescData
 }
 
-var file_ateapi_proto_enumTypes = make([]protoimpl.EnumInfo, 5)
+var file_ateapi_proto_enumTypes = make([]protoimpl.EnumInfo, 6)
 var file_ateapi_proto_msgTypes = make([]protoimpl.MessageInfo, 47)
 var file_ateapi_proto_goTypes = []any{
 	(SnapshotContentScope)(0),             // 0: ateapi.SnapshotContentScope
 	(ActorSnapshotTagScope)(0),            // 1: ateapi.ActorSnapshotTagScope
-	(ExternalVolume_Status)(0),            // 2: ateapi.ExternalVolume.Status
-	(Actor_Status)(0),                     // 3: ateapi.Actor.Status
-	(Worker_State)(0),                     // 4: ateapi.Worker.State
-	(*LocalSnapshotInfo)(nil),             // 5: ateapi.LocalSnapshotInfo
-	(*Selector)(nil),                      // 6: ateapi.Selector
-	(*ResourceMetadata)(nil),              // 7: ateapi.ResourceMetadata
-	(*ExternalVolume)(nil),                // 8: ateapi.ExternalVolume
-	(*Actor)(nil),                         // 9: ateapi.Actor
-	(*WorkerAssignment)(nil),              // 10: ateapi.WorkerAssignment
-	(*ActorSnapshot)(nil),                 // 11: ateapi.ActorSnapshot
-	(*ActorSnapshotTag)(nil),              // 12: ateapi.ActorSnapshotTag
-	(*Atespace)(nil),                      // 13: ateapi.Atespace
-	(*ObjectRef)(nil),                     // 14: ateapi.ObjectRef
-	(*ActorSnapshotRef)(nil),              // 15: ateapi.ActorSnapshotRef
-	(*CreateAtespaceRequest)(nil),         // 16: ateapi.CreateAtespaceRequest
-	(*GetAtespaceRequest)(nil),            // 17: ateapi.GetAtespaceRequest
-	(*ListAtespacesRequest)(nil),          // 18: ateapi.ListAtespacesRequest
-	(*ListAtespacesResponse)(nil),         // 19: ateapi.ListAtespacesResponse
-	(*DeleteAtespaceRequest)(nil),         // 20: ateapi.DeleteAtespaceRequest
-	(*GetActorRequest)(nil),               // 21: ateapi.GetActorRequest
-	(*CreateActorRequest)(nil),            // 22: ateapi.CreateActorRequest
-	(*UpdateActorRequest)(nil),            // 23: ateapi.UpdateActorRequest
-	(*SuspendActorRequest)(nil),           // 24: ateapi.SuspendActorRequest
-	(*SuspendActorResponse)(nil),          // 25: ateapi.SuspendActorResponse
-	(*PauseActorRequest)(nil),             // 26: ateapi.PauseActorRequest
-	(*PauseActorResponse)(nil),            // 27: ateapi.PauseActorResponse
-	(*ResumeActorRequest)(nil),            // 28: ateapi.ResumeActorRequest
-	(*ResumeActorResponse)(nil),           // 29: ateapi.ResumeActorResponse
-	(*DeleteActorRequest)(nil),            // 30: ateapi.DeleteActorRequest
-	(*GetActorSnapshotRequest)(nil),       // 31: ateapi.GetActorSnapshotRequest
-	(*ListActorSnapshotsRequest)(nil),     // 32: ateapi.ListActorSnapshotsRequest
-	(*ListActorSnapshotsResponse)(nil),    // 33: ateapi.ListActorSnapshotsResponse
-	(*TagActorSnapshotRequest)(nil),       // 34: ateapi.TagActorSnapshotRequest
-	(*UpdateActorSnapshotTagRequest)(nil), // 35: ateapi.UpdateActorSnapshotTagRequest
-	(*DeleteActorSnapshotTagRequest)(nil), // 36: ateapi.DeleteActorSnapshotTagRequest
-	(*ListWorkersRequest)(nil),            // 37: ateapi.ListWorkersRequest
-	(*ListWorkersResponse)(nil),           // 38: ateapi.ListWorkersResponse
-	(*ListActorsRequest)(nil),             // 39: ateapi.ListActorsRequest
-	(*ListActorsResponse)(nil),            // 40: ateapi.ListActorsResponse
-	(*Worker)(nil),                        // 41: ateapi.Worker
-	(*Assignment)(nil),                    // 42: ateapi.Assignment
-	(*KubeNamespacedObjectRef)(nil),       // 43: ateapi.KubeNamespacedObjectRef
-	(*DebugClearRequest)(nil),             // 44: ateapi.DebugClearRequest
-	(*DebugClearResponse)(nil),            // 45: ateapi.DebugClearResponse
-	(*MintJWTRequest)(nil),                // 46: ateapi.MintJWTRequest
-	(*MintJWTResponse)(nil),               // 47: ateapi.MintJWTResponse
-	(*MintCertRequest)(nil),               // 48: ateapi.MintCertRequest
-	(*MintCertResponse)(nil),              // 49: ateapi.MintCertResponse
-	nil,                                   // 50: ateapi.Selector.MatchLabelsEntry
-	nil,                                   // 51: ateapi.Worker.LabelsEntry
-	(*timestamppb.Timestamp)(nil),         // 52: google.protobuf.Timestamp
-	(*fieldmaskpb.FieldMask)(nil),         // 53: google.protobuf.FieldMask
+	(ActorCertificatePurpose)(0),          // 2: ateapi.ActorCertificatePurpose
+	(ExternalVolume_Status)(0),            // 3: ateapi.ExternalVolume.Status
+	(Actor_Status)(0),                     // 4: ateapi.Actor.Status
+	(Worker_State)(0),                     // 5: ateapi.Worker.State
+	(*LocalSnapshotInfo)(nil),             // 6: ateapi.LocalSnapshotInfo
+	(*Selector)(nil),                      // 7: ateapi.Selector
+	(*ResourceMetadata)(nil),              // 8: ateapi.ResourceMetadata
+	(*ExternalVolume)(nil),                // 9: ateapi.ExternalVolume
+	(*Actor)(nil),                         // 10: ateapi.Actor
+	(*WorkerAssignment)(nil),              // 11: ateapi.WorkerAssignment
+	(*ActorSnapshot)(nil),                 // 12: ateapi.ActorSnapshot
+	(*ActorSnapshotTag)(nil),              // 13: ateapi.ActorSnapshotTag
+	(*Atespace)(nil),                      // 14: ateapi.Atespace
+	(*ObjectRef)(nil),                     // 15: ateapi.ObjectRef
+	(*ActorSnapshotRef)(nil),              // 16: ateapi.ActorSnapshotRef
+	(*CreateAtespaceRequest)(nil),         // 17: ateapi.CreateAtespaceRequest
+	(*GetAtespaceRequest)(nil),            // 18: ateapi.GetAtespaceRequest
+	(*ListAtespacesRequest)(nil),          // 19: ateapi.ListAtespacesRequest
+	(*ListAtespacesResponse)(nil),         // 20: ateapi.ListAtespacesResponse
+	(*DeleteAtespaceRequest)(nil),         // 21: ateapi.DeleteAtespaceRequest
+	(*GetActorRequest)(nil),               // 22: ateapi.GetActorRequest
+	(*CreateActorRequest)(nil),            // 23: ateapi.CreateActorRequest
+	(*UpdateActorRequest)(nil),            // 24: ateapi.UpdateActorRequest
+	(*SuspendActorRequest)(nil),           // 25: ateapi.SuspendActorRequest
+	(*SuspendActorResponse)(nil),          // 26: ateapi.SuspendActorResponse
+	(*PauseActorRequest)(nil),             // 27: ateapi.PauseActorRequest
+	(*PauseActorResponse)(nil),            // 28: ateapi.PauseActorResponse
+	(*ResumeActorRequest)(nil),            // 29: ateapi.ResumeActorRequest
+	(*ResumeActorResponse)(nil),           // 30: ateapi.ResumeActorResponse
+	(*DeleteActorRequest)(nil),            // 31: ateapi.DeleteActorRequest
+	(*GetActorSnapshotRequest)(nil),       // 32: ateapi.GetActorSnapshotRequest
+	(*ListActorSnapshotsRequest)(nil),     // 33: ateapi.ListActorSnapshotsRequest
+	(*ListActorSnapshotsResponse)(nil),    // 34: ateapi.ListActorSnapshotsResponse
+	(*TagActorSnapshotRequest)(nil),       // 35: ateapi.TagActorSnapshotRequest
+	(*UpdateActorSnapshotTagRequest)(nil), // 36: ateapi.UpdateActorSnapshotTagRequest
+	(*DeleteActorSnapshotTagRequest)(nil), // 37: ateapi.DeleteActorSnapshotTagRequest
+	(*ListWorkersRequest)(nil),            // 38: ateapi.ListWorkersRequest
+	(*ListWorkersResponse)(nil),           // 39: ateapi.ListWorkersResponse
+	(*ListActorsRequest)(nil),             // 40: ateapi.ListActorsRequest
+	(*ListActorsResponse)(nil),            // 41: ateapi.ListActorsResponse
+	(*Worker)(nil),                        // 42: ateapi.Worker
+	(*Assignment)(nil),                    // 43: ateapi.Assignment
+	(*KubeNamespacedObjectRef)(nil),       // 44: ateapi.KubeNamespacedObjectRef
+	(*DebugClearRequest)(nil),             // 45: ateapi.DebugClearRequest
+	(*DebugClearResponse)(nil),            // 46: ateapi.DebugClearResponse
+	(*MintJWTRequest)(nil),                // 47: ateapi.MintJWTRequest
+	(*MintJWTResponse)(nil),               // 48: ateapi.MintJWTResponse
+	(*MintCertRequest)(nil),               // 49: ateapi.MintCertRequest
+	(*MintCertResponse)(nil),              // 50: ateapi.MintCertResponse
+	nil,                                   // 51: ateapi.Selector.MatchLabelsEntry
+	nil,                                   // 52: ateapi.Worker.LabelsEntry
+	(*timestamppb.Timestamp)(nil),         // 53: google.protobuf.Timestamp
+	(*fieldmaskpb.FieldMask)(nil),         // 54: google.protobuf.FieldMask
 }
 var file_ateapi_proto_depIdxs = []int32{
-	50, // 0: ateapi.Selector.match_labels:type_name -> ateapi.Selector.MatchLabelsEntry
-	52, // 1: ateapi.ResourceMetadata.create_time:type_name -> google.protobuf.Timestamp
-	52, // 2: ateapi.ResourceMetadata.update_time:type_name -> google.protobuf.Timestamp
-	2,  // 3: ateapi.ExternalVolume.status:type_name -> ateapi.ExternalVolume.Status
-	7,  // 4: ateapi.Actor.metadata:type_name -> ateapi.ResourceMetadata
-	3,  // 5: ateapi.Actor.status:type_name -> ateapi.Actor.Status
-	10, // 6: ateapi.Actor.worker_assignment:type_name -> ateapi.WorkerAssignment
-	6,  // 7: ateapi.Actor.worker_selector:type_name -> ateapi.Selector
-	14, // 8: ateapi.Actor.latest_snapshot:type_name -> ateapi.ObjectRef
-	5,  // 9: ateapi.Actor.local_snapshot_info:type_name -> ateapi.LocalSnapshotInfo
-	8,  // 10: ateapi.Actor.actor_volumes:type_name -> ateapi.ExternalVolume
-	7,  // 11: ateapi.ActorSnapshot.metadata:type_name -> ateapi.ResourceMetadata
-	14, // 12: ateapi.ActorSnapshot.source_actor:type_name -> ateapi.ObjectRef
+	51, // 0: ateapi.Selector.match_labels:type_name -> ateapi.Selector.MatchLabelsEntry
+	53, // 1: ateapi.ResourceMetadata.create_time:type_name -> google.protobuf.Timestamp
+	53, // 2: ateapi.ResourceMetadata.update_time:type_name -> google.protobuf.Timestamp
+	3,  // 3: ateapi.ExternalVolume.status:type_name -> ateapi.ExternalVolume.Status
+	8,  // 4: ateapi.Actor.metadata:type_name -> ateapi.ResourceMetadata
+	4,  // 5: ateapi.Actor.status:type_name -> ateapi.Actor.Status
+	11, // 6: ateapi.Actor.worker_assignment:type_name -> ateapi.WorkerAssignment
+	7,  // 7: ateapi.Actor.worker_selector:type_name -> ateapi.Selector
+	15, // 8: ateapi.Actor.latest_snapshot:type_name -> ateapi.ObjectRef
+	6,  // 9: ateapi.Actor.local_snapshot_info:type_name -> ateapi.LocalSnapshotInfo
+	9,  // 10: ateapi.Actor.actor_volumes:type_name -> ateapi.ExternalVolume
+	8,  // 11: ateapi.ActorSnapshot.metadata:type_name -> ateapi.ResourceMetadata
+	15, // 12: ateapi.ActorSnapshot.source_actor:type_name -> ateapi.ObjectRef
 	0,  // 13: ateapi.ActorSnapshot.content_scope:type_name -> ateapi.SnapshotContentScope
-	7,  // 14: ateapi.ActorSnapshotTag.metadata:type_name -> ateapi.ResourceMetadata
-	14, // 15: ateapi.ActorSnapshotTag.snapshot:type_name -> ateapi.ObjectRef
+	8,  // 14: ateapi.ActorSnapshotTag.metadata:type_name -> ateapi.ResourceMetadata
+	15, // 15: ateapi.ActorSnapshotTag.snapshot:type_name -> ateapi.ObjectRef
 	1,  // 16: ateapi.ActorSnapshotTag.scope:type_name -> ateapi.ActorSnapshotTagScope
-	7,  // 17: ateapi.Atespace.metadata:type_name -> ateapi.ResourceMetadata
-	14, // 18: ateapi.ActorSnapshotRef.snapshot:type_name -> ateapi.ObjectRef
-	14, // 19: ateapi.ActorSnapshotRef.tag:type_name -> ateapi.ObjectRef
-	13, // 20: ateapi.CreateAtespaceRequest.atespace:type_name -> ateapi.Atespace
-	14, // 21: ateapi.GetAtespaceRequest.atespace:type_name -> ateapi.ObjectRef
-	13, // 22: ateapi.ListAtespacesResponse.atespaces:type_name -> ateapi.Atespace
-	14, // 23: ateapi.DeleteAtespaceRequest.atespace:type_name -> ateapi.ObjectRef
-	14, // 24: ateapi.GetActorRequest.actor:type_name -> ateapi.ObjectRef
-	9,  // 25: ateapi.CreateActorRequest.actor:type_name -> ateapi.Actor
-	15, // 26: ateapi.CreateActorRequest.source_snapshot:type_name -> ateapi.ActorSnapshotRef
-	9,  // 27: ateapi.UpdateActorRequest.actor:type_name -> ateapi.Actor
-	53, // 28: ateapi.UpdateActorRequest.update_mask:type_name -> google.protobuf.FieldMask
-	14, // 29: ateapi.SuspendActorRequest.actor:type_name -> ateapi.ObjectRef
-	9,  // 30: ateapi.SuspendActorResponse.actor:type_name -> ateapi.Actor
-	14, // 31: ateapi.PauseActorRequest.actor:type_name -> ateapi.ObjectRef
-	9,  // 32: ateapi.PauseActorResponse.actor:type_name -> ateapi.Actor
-	14, // 33: ateapi.ResumeActorRequest.actor:type_name -> ateapi.ObjectRef
-	9,  // 34: ateapi.ResumeActorResponse.actor:type_name -> ateapi.Actor
-	14, // 35: ateapi.DeleteActorRequest.actor:type_name -> ateapi.ObjectRef
-	15, // 36: ateapi.GetActorSnapshotRequest.snapshot:type_name -> ateapi.ActorSnapshotRef
-	11, // 37: ateapi.ListActorSnapshotsResponse.snapshots:type_name -> ateapi.ActorSnapshot
-	15, // 38: ateapi.TagActorSnapshotRequest.snapshot:type_name -> ateapi.ActorSnapshotRef
-	12, // 39: ateapi.TagActorSnapshotRequest.tag:type_name -> ateapi.ActorSnapshotTag
-	12, // 40: ateapi.UpdateActorSnapshotTagRequest.tag:type_name -> ateapi.ActorSnapshotTag
-	53, // 41: ateapi.UpdateActorSnapshotTagRequest.update_mask:type_name -> google.protobuf.FieldMask
-	14, // 42: ateapi.DeleteActorSnapshotTagRequest.tag:type_name -> ateapi.ObjectRef
-	41, // 43: ateapi.ListWorkersResponse.workers:type_name -> ateapi.Worker
-	9,  // 44: ateapi.ListActorsResponse.actors:type_name -> ateapi.Actor
-	42, // 45: ateapi.Worker.assignment:type_name -> ateapi.Assignment
-	51, // 46: ateapi.Worker.labels:type_name -> ateapi.Worker.LabelsEntry
-	4,  // 47: ateapi.Worker.state:type_name -> ateapi.Worker.State
-	43, // 48: ateapi.Assignment.actor_template:type_name -> ateapi.KubeNamespacedObjectRef
-	14, // 49: ateapi.Assignment.actor:type_name -> ateapi.ObjectRef
-	21, // 50: ateapi.Control.GetActor:input_type -> ateapi.GetActorRequest
-	22, // 51: ateapi.Control.CreateActor:input_type -> ateapi.CreateActorRequest
-	23, // 52: ateapi.Control.UpdateActor:input_type -> ateapi.UpdateActorRequest
-	24, // 53: ateapi.Control.SuspendActor:input_type -> ateapi.SuspendActorRequest
-	26, // 54: ateapi.Control.PauseActor:input_type -> ateapi.PauseActorRequest
-	28, // 55: ateapi.Control.ResumeActor:input_type -> ateapi.ResumeActorRequest
-	30, // 56: ateapi.Control.DeleteActor:input_type -> ateapi.DeleteActorRequest
-	31, // 57: ateapi.Control.GetActorSnapshot:input_type -> ateapi.GetActorSnapshotRequest
-	32, // 58: ateapi.Control.ListActorSnapshots:input_type -> ateapi.ListActorSnapshotsRequest
-	34, // 59: ateapi.Control.TagActorSnapshot:input_type -> ateapi.TagActorSnapshotRequest
-	35, // 60: ateapi.Control.UpdateActorSnapshotTag:input_type -> ateapi.UpdateActorSnapshotTagRequest
-	36, // 61: ateapi.Control.DeleteActorSnapshotTag:input_type -> ateapi.DeleteActorSnapshotTagRequest
-	37, // 62: ateapi.Control.ListWorkers:input_type -> ateapi.ListWorkersRequest
-	39, // 63: ateapi.Control.ListActors:input_type -> ateapi.ListActorsRequest
-	16, // 64: ateapi.Control.CreateAtespace:input_type -> ateapi.CreateAtespaceRequest
-	17, // 65: ateapi.Control.GetAtespace:input_type -> ateapi.GetAtespaceRequest
-	18, // 66: ateapi.Control.ListAtespaces:input_type -> ateapi.ListAtespacesRequest
-	20, // 67: ateapi.Control.DeleteAtespace:input_type -> ateapi.DeleteAtespaceRequest
-	44, // 68: ateapi.Debug.DebugClear:input_type -> ateapi.DebugClearRequest
-	46, // 69: ateapi.ActorIdentity.MintJWT:input_type -> ateapi.MintJWTRequest
-	48, // 70: ateapi.ActorIdentity.MintCert:input_type -> ateapi.MintCertRequest
-	9,  // 71: ateapi.Control.GetActor:output_type -> ateapi.Actor
-	9,  // 72: ateapi.Control.CreateActor:output_type -> ateapi.Actor
-	9,  // 73: ateapi.Control.UpdateActor:output_type -> ateapi.Actor
-	25, // 74: ateapi.Control.SuspendActor:output_type -> ateapi.SuspendActorResponse
-	27, // 75: ateapi.Control.PauseActor:output_type -> ateapi.PauseActorResponse
-	29, // 76: ateapi.Control.ResumeActor:output_type -> ateapi.ResumeActorResponse
-	9,  // 77: ateapi.Control.DeleteActor:output_type -> ateapi.Actor
-	11, // 78: ateapi.Control.GetActorSnapshot:output_type -> ateapi.ActorSnapshot
-	33, // 79: ateapi.Control.ListActorSnapshots:output_type -> ateapi.ListActorSnapshotsResponse
-	12, // 80: ateapi.Control.TagActorSnapshot:output_type -> ateapi.ActorSnapshotTag
-	12, // 81: ateapi.Control.UpdateActorSnapshotTag:output_type -> ateapi.ActorSnapshotTag
-	12, // 82: ateapi.Control.DeleteActorSnapshotTag:output_type -> ateapi.ActorSnapshotTag
-	38, // 83: ateapi.Control.ListWorkers:output_type -> ateapi.ListWorkersResponse
-	40, // 84: ateapi.Control.ListActors:output_type -> ateapi.ListActorsResponse
-	13, // 85: ateapi.Control.CreateAtespace:output_type -> ateapi.Atespace
-	13, // 86: ateapi.Control.GetAtespace:output_type -> ateapi.Atespace
-	19, // 87: ateapi.Control.ListAtespaces:output_type -> ateapi.ListAtespacesResponse
-	13, // 88: ateapi.Control.DeleteAtespace:output_type -> ateapi.Atespace
-	45, // 89: ateapi.Debug.DebugClear:output_type -> ateapi.DebugClearResponse
-	47, // 90: ateapi.ActorIdentity.MintJWT:output_type -> ateapi.MintJWTResponse
-	49, // 91: ateapi.ActorIdentity.MintCert:output_type -> ateapi.MintCertResponse
-	71, // [71:92] is the sub-list for method output_type
-	50, // [50:71] is the sub-list for method input_type
-	50, // [50:50] is the sub-list for extension type_name
-	50, // [50:50] is the sub-list for extension extendee
-	0,  // [0:50] is the sub-list for field type_name
+	8,  // 17: ateapi.Atespace.metadata:type_name -> ateapi.ResourceMetadata
+	15, // 18: ateapi.ActorSnapshotRef.snapshot:type_name -> ateapi.ObjectRef
+	15, // 19: ateapi.ActorSnapshotRef.tag:type_name -> ateapi.ObjectRef
+	14, // 20: ateapi.CreateAtespaceRequest.atespace:type_name -> ateapi.Atespace
+	15, // 21: ateapi.GetAtespaceRequest.atespace:type_name -> ateapi.ObjectRef
+	14, // 22: ateapi.ListAtespacesResponse.atespaces:type_name -> ateapi.Atespace
+	15, // 23: ateapi.DeleteAtespaceRequest.atespace:type_name -> ateapi.ObjectRef
+	15, // 24: ateapi.GetActorRequest.actor:type_name -> ateapi.ObjectRef
+	10, // 25: ateapi.CreateActorRequest.actor:type_name -> ateapi.Actor
+	16, // 26: ateapi.CreateActorRequest.source_snapshot:type_name -> ateapi.ActorSnapshotRef
+	10, // 27: ateapi.UpdateActorRequest.actor:type_name -> ateapi.Actor
+	54, // 28: ateapi.UpdateActorRequest.update_mask:type_name -> google.protobuf.FieldMask
+	15, // 29: ateapi.SuspendActorRequest.actor:type_name -> ateapi.ObjectRef
+	10, // 30: ateapi.SuspendActorResponse.actor:type_name -> ateapi.Actor
+	15, // 31: ateapi.PauseActorRequest.actor:type_name -> ateapi.ObjectRef
+	10, // 32: ateapi.PauseActorResponse.actor:type_name -> ateapi.Actor
+	15, // 33: ateapi.ResumeActorRequest.actor:type_name -> ateapi.ObjectRef
+	10, // 34: ateapi.ResumeActorResponse.actor:type_name -> ateapi.Actor
+	15, // 35: ateapi.DeleteActorRequest.actor:type_name -> ateapi.ObjectRef
+	16, // 36: ateapi.GetActorSnapshotRequest.snapshot:type_name -> ateapi.ActorSnapshotRef
+	12, // 37: ateapi.ListActorSnapshotsResponse.snapshots:type_name -> ateapi.ActorSnapshot
+	16, // 38: ateapi.TagActorSnapshotRequest.snapshot:type_name -> ateapi.ActorSnapshotRef
+	13, // 39: ateapi.TagActorSnapshotRequest.tag:type_name -> ateapi.ActorSnapshotTag
+	13, // 40: ateapi.UpdateActorSnapshotTagRequest.tag:type_name -> ateapi.ActorSnapshotTag
+	54, // 41: ateapi.UpdateActorSnapshotTagRequest.update_mask:type_name -> google.protobuf.FieldMask
+	15, // 42: ateapi.DeleteActorSnapshotTagRequest.tag:type_name -> ateapi.ObjectRef
+	42, // 43: ateapi.ListWorkersResponse.workers:type_name -> ateapi.Worker
+	10, // 44: ateapi.ListActorsResponse.actors:type_name -> ateapi.Actor
+	43, // 45: ateapi.Worker.assignment:type_name -> ateapi.Assignment
+	52, // 46: ateapi.Worker.labels:type_name -> ateapi.Worker.LabelsEntry
+	5,  // 47: ateapi.Worker.state:type_name -> ateapi.Worker.State
+	44, // 48: ateapi.Assignment.actor_template:type_name -> ateapi.KubeNamespacedObjectRef
+	15, // 49: ateapi.Assignment.actor:type_name -> ateapi.ObjectRef
+	2,  // 50: ateapi.MintCertRequest.purpose:type_name -> ateapi.ActorCertificatePurpose
+	22, // 51: ateapi.Control.GetActor:input_type -> ateapi.GetActorRequest
+	23, // 52: ateapi.Control.CreateActor:input_type -> ateapi.CreateActorRequest
+	24, // 53: ateapi.Control.UpdateActor:input_type -> ateapi.UpdateActorRequest
+	25, // 54: ateapi.Control.SuspendActor:input_type -> ateapi.SuspendActorRequest
+	27, // 55: ateapi.Control.PauseActor:input_type -> ateapi.PauseActorRequest
+	29, // 56: ateapi.Control.ResumeActor:input_type -> ateapi.ResumeActorRequest
+	31, // 57: ateapi.Control.DeleteActor:input_type -> ateapi.DeleteActorRequest
+	32, // 58: ateapi.Control.GetActorSnapshot:input_type -> ateapi.GetActorSnapshotRequest
+	33, // 59: ateapi.Control.ListActorSnapshots:input_type -> ateapi.ListActorSnapshotsRequest
+	35, // 60: ateapi.Control.TagActorSnapshot:input_type -> ateapi.TagActorSnapshotRequest
+	36, // 61: ateapi.Control.UpdateActorSnapshotTag:input_type -> ateapi.UpdateActorSnapshotTagRequest
+	37, // 62: ateapi.Control.DeleteActorSnapshotTag:input_type -> ateapi.DeleteActorSnapshotTagRequest
+	38, // 63: ateapi.Control.ListWorkers:input_type -> ateapi.ListWorkersRequest
+	40, // 64: ateapi.Control.ListActors:input_type -> ateapi.ListActorsRequest
+	17, // 65: ateapi.Control.CreateAtespace:input_type -> ateapi.CreateAtespaceRequest
+	18, // 66: ateapi.Control.GetAtespace:input_type -> ateapi.GetAtespaceRequest
+	19, // 67: ateapi.Control.ListAtespaces:input_type -> ateapi.ListAtespacesRequest
+	21, // 68: ateapi.Control.DeleteAtespace:input_type -> ateapi.DeleteAtespaceRequest
+	45, // 69: ateapi.Debug.DebugClear:input_type -> ateapi.DebugClearRequest
+	47, // 70: ateapi.ActorIdentity.MintJWT:input_type -> ateapi.MintJWTRequest
+	49, // 71: ateapi.ActorIdentity.MintCert:input_type -> ateapi.MintCertRequest
+	10, // 72: ateapi.Control.GetActor:output_type -> ateapi.Actor
+	10, // 73: ateapi.Control.CreateActor:output_type -> ateapi.Actor
+	10, // 74: ateapi.Control.UpdateActor:output_type -> ateapi.Actor
+	26, // 75: ateapi.Control.SuspendActor:output_type -> ateapi.SuspendActorResponse
+	28, // 76: ateapi.Control.PauseActor:output_type -> ateapi.PauseActorResponse
+	30, // 77: ateapi.Control.ResumeActor:output_type -> ateapi.ResumeActorResponse
+	10, // 78: ateapi.Control.DeleteActor:output_type -> ateapi.Actor
+	12, // 79: ateapi.Control.GetActorSnapshot:output_type -> ateapi.ActorSnapshot
+	34, // 80: ateapi.Control.ListActorSnapshots:output_type -> ateapi.ListActorSnapshotsResponse
+	13, // 81: ateapi.Control.TagActorSnapshot:output_type -> ateapi.ActorSnapshotTag
+	13, // 82: ateapi.Control.UpdateActorSnapshotTag:output_type -> ateapi.ActorSnapshotTag
+	13, // 83: ateapi.Control.DeleteActorSnapshotTag:output_type -> ateapi.ActorSnapshotTag
+	39, // 84: ateapi.Control.ListWorkers:output_type -> ateapi.ListWorkersResponse
+	41, // 85: ateapi.Control.ListActors:output_type -> ateapi.ListActorsResponse
+	14, // 86: ateapi.Control.CreateAtespace:output_type -> ateapi.Atespace
+	14, // 87: ateapi.Control.GetAtespace:output_type -> ateapi.Atespace
+	20, // 88: ateapi.Control.ListAtespaces:output_type -> ateapi.ListAtespacesResponse
+	14, // 89: ateapi.Control.DeleteAtespace:output_type -> ateapi.Atespace
+	46, // 90: ateapi.Debug.DebugClear:output_type -> ateapi.DebugClearResponse
+	48, // 91: ateapi.ActorIdentity.MintJWT:output_type -> ateapi.MintJWTResponse
+	50, // 92: ateapi.ActorIdentity.MintCert:output_type -> ateapi.MintCertResponse
+	72, // [72:93] is the sub-list for method output_type
+	51, // [51:72] is the sub-list for method input_type
+	51, // [51:51] is the sub-list for extension type_name
+	51, // [51:51] is the sub-list for extension extendee
+	0,  // [0:51] is the sub-list for field type_name
 }
 
 func init() { file_ateapi_proto_init() }
@@ -3405,7 +3488,7 @@ func file_ateapi_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_ateapi_proto_rawDesc), len(file_ateapi_proto_rawDesc)),
-			NumEnums:      5,
+			NumEnums:      6,
 			NumMessages:   47,
 			NumExtensions: 0,
 			NumServices:   3,

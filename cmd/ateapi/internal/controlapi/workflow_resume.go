@@ -54,6 +54,9 @@ type ResumeState struct {
 	SnapshotLocation string
 	SnapshotScope    ateapipb.SnapshotContentScope
 	SnapshotKind     string
+	// WireSnapshotScope labels the restore requested, not the stored snapshot's
+	// SnapshotScope: a data snapshot restored on golden goes out as data_on_golden.
+	WireSnapshotScope string
 	// GoldenSnapshotLocation is the storage location of the ActorTemplate's
 	// golden snapshot. Populated only when the template's onResume
 	// configuration selects the golden snapshot as the boot source for the
@@ -319,7 +322,7 @@ func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, stat
 		if worker.Assignment == nil {
 			continue
 		}
-		if resources.ActorRefFromObjectRef(worker.Assignment.Actor) != input.ActorRef {
+		if worker.Assignment.GetActorUid() != state.Actor.GetMetadata().GetUid() {
 			continue
 		}
 		if s.scheduler.Applies(worker, constraints) {
@@ -366,7 +369,11 @@ func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, stat
 			Namespace: state.Actor.GetActorTemplateNamespace(),
 			Name:      state.Actor.GetActorTemplateName(),
 		},
-		Actor: input.ActorRef.ToObjectRef(),
+		Actor: &ateapipb.ObjectRef{
+			Atespace: state.Actor.GetMetadata().GetAtespace(),
+			Name:     state.Actor.GetMetadata().GetName(),
+		},
+		ActorUid: state.Actor.GetMetadata().GetUid(),
 	}
 
 	if err := s.store.UpdateWorker(ctx, assignedWorker, assignedWorker.Version); err != nil {
@@ -483,13 +490,14 @@ func (s *AttachVolumesStep) Execute(ctx context.Context, input *ResumeInput, sta
 func (s *AttachVolumesStep) RetryBackoff() *wait.Backoff { return nil }
 
 type CallAteletRestoreStep struct {
-	store               store.Interface
-	dialer              *AteletDialer
-	kubeClient          kubernetes.Interface
-	secretCache         *envSecretCache
-	workerPoolLister    listersv1alpha1.WorkerPoolLister
-	sandboxConfigLister listersv1alpha1.SandboxConfigLister
-	scheduler           scheduling.Scheduler
+	store                store.Interface
+	dialer               *AteletDialer
+	kubeClient           kubernetes.Interface
+	secretCache          *envSecretCache
+	workerPoolLister     listersv1alpha1.WorkerPoolLister
+	sandboxConfigLister  listersv1alpha1.SandboxConfigLister
+	scheduler            scheduling.Scheduler
+	egressGatewayAddress string
 }
 
 func (s *CallAteletRestoreStep) Name() string { return "CallAteletRestore" }
@@ -504,8 +512,8 @@ func (s *CallAteletRestoreStep) CheckPrerequisite(ctx context.Context, input *Re
 		return status.Errorf(codes.FailedPrecondition, "Assigned worker is nil")
 	}
 	// Verify if the worker is still assigned to the same Actor.
-	assigned := state.Worker.GetAssignment().GetActor()
-	if resources.ActorRefFromObjectRef(assigned) != input.ActorRef {
+	assignedActorUID := state.Worker.GetAssignment().GetActorUid()
+	if assignedActorUID != state.Actor.GetMetadata().GetUid() {
 		slog.ErrorContext(ctx, "crashing actor because its assigned worker no longer belongs to it",
 			slog.String("worker", state.Worker.GetWorkerPod()),
 			slog.Any("assignment", state.Worker.GetAssignment()))
@@ -548,6 +556,7 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 	if err != nil {
 		return err
 	}
+	egressGateway := s.egressGateway()
 
 	if local := state.Actor.GetLocalSnapshotInfo(); local != nil {
 		slog.InfoContext(ctx, "Actor has snapshot; Restoring from snapshot")
@@ -561,6 +570,7 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 			ActorTemplateName:      state.Actor.GetActorTemplateName(),
 			Spec:                   workloadSpec,
 			ActorUid:               state.Actor.GetMetadata().Uid,
+			EgressGateway:          egressGateway,
 		}
 		req.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL
 		req.Config = &ateletpb.RestoreRequest_LocalConfig{
@@ -577,6 +587,7 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 			req.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
 			req.GoldenSnapshotUriPrefix = state.GoldenSnapshotLocation
 		}
+		state.WireSnapshotScope = ateattr.SnapshotScopeValue(req.Scope)
 
 		_, err = client.Restore(ctx, req)
 		return maybeCrashActor(ctx, s.store, input.ActorRef, err, "while restoring workload", ateattr.OperationResume)
@@ -596,6 +607,7 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 		if state.GoldenSnapshotLocation != "" {
 			scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
 		}
+		state.WireSnapshotScope = ateattr.SnapshotScopeValue(scope)
 		req := &ateletpb.RestoreRequest{
 			TargetAteomUid:         assignment.GetWorkerPodUid(),
 			Atespace:               state.Actor.GetMetadata().GetAtespace(),
@@ -613,6 +625,7 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 			// Empty unless this is a Golden data resume.
 			GoldenSnapshotUriPrefix: state.GoldenSnapshotLocation,
 			ActorUid:                state.Actor.GetMetadata().Uid,
+			EgressGateway:           egressGateway,
 		}
 		_, err = client.Restore(ctx, req)
 		return maybeCrashActor(ctx, s.store, input.ActorRef, err, "while restoring durable snapshot", ateattr.OperationResume)
@@ -638,6 +651,7 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 			SandboxAssets:          sandboxAssets,
 			Spec:                   workloadSpec,
 			ActorUid:               state.Actor.GetMetadata().Uid,
+			EgressGateway:          egressGateway,
 		}
 		_, err = client.Run(ctx, req)
 		return maybeCrashActor(ctx, s.store, input.ActorRef, err, "while creating workload from spec", ateattr.OperationResume)
@@ -646,6 +660,13 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 }
 
 func (s *CallAteletRestoreStep) RetryBackoff() *wait.Backoff { return nil }
+
+func (s *CallAteletRestoreStep) egressGateway() *ateletpb.EgressGateway {
+	if s.egressGatewayAddress == "" {
+		return nil
+	}
+	return &ateletpb.EgressGateway{Address: s.egressGatewayAddress}
+}
 
 type FinalizeRunningStep struct {
 	store store.Interface
