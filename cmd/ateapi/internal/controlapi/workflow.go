@@ -18,15 +18,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/scheduling"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
-	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/resources"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
-	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
@@ -211,49 +208,6 @@ func NewActorWorkflow(
 		egressGatewayAddress: egressGatewayAddress,
 		pluginRegistry:       pluginRegistry,
 	}
-}
-
-// ResumeActor executes the workflow to resume a suspended actor. Idempotent.
-func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.ActorRef, boot bool) (actor *ateapipb.Actor, resumed bool, err error) {
-	start := time.Now()
-	input := &ResumeInput{
-		ActorRef: actorRef,
-		Boot:     boot,
-	}
-	state := &ResumeState{}
-
-	// Recorded before the lock so lock contention still counts as an attempt.
-	// Clean already-running no-ops are skipped: the router resumes per routed
-	// request, and recording those would sample at router QPS and bury
-	// cold-resume latency.
-	defer func() {
-		if err == nil && state.WasRunning {
-			return
-		}
-		w.instruments.recordLifecycleOp(ctx, ateattr.OperationResume, start, err,
-			lifecycleOpAttrs(state.Actor, state.ActorTemplate, state.SnapshotKind, state.WireSnapshotScope)...)
-	}()
-
-	lockCtx, lock, err := w.acquireActorLock(ctx, actorRef)
-	if err != nil {
-		return nil, false, err
-	}
-	defer lock.Close()
-
-	steps := []WorkflowStep[*ResumeInput, *ResumeState]{
-		&LoadActorForResumeStep{store: w.store, actorTemplateLister: w.actorTemplateLister},
-		&CreateVolumesStep{store: w.store, pluginRegistry: w.pluginRegistry, storageClassLister: w.storageClassLister},
-		&AssignWorkerStep{store: w.store, workerCache: w.workerCache, scheduler: w.scheduler, instruments: w.instruments},
-		&AttachVolumesStep{store: w.store, pluginRegistry: w.pluginRegistry},
-		&CallAteletRestoreStep{store: w.store, dialer: w.dialer, kubeClient: w.kubeClient, secretCache: w.secretCache, workerPoolLister: w.workerPoolLister, sandboxConfigLister: w.sandboxConfigLister, scheduler: w.scheduler, egressGatewayAddress: w.egressGatewayAddress},
-		&FinalizeRunningStep{store: w.store},
-	}
-
-	if err = RunWorkflow(lockCtx, input, state, steps); err != nil {
-		return nil, false, err
-	}
-
-	return state.Actor, !state.WasRunning, nil
 }
 
 func (w *ActorWorkflow) acquireActorLock(ctx context.Context, actorRef resources.ActorRef) (context.Context, *store.Lock, error) {
