@@ -224,10 +224,12 @@ func TestLogsActorRunner_Run_OneShotSuccess(t *testing.T) {
 				return nil, fmt.Errorf("unexpected actor name: %s", in.GetActor().GetName())
 			}
 			return &ateapipb.Actor{
-				Metadata:          &ateapipb.ResourceMetadata{Name: actorName},
-				AteomPodName:      podName,
-				AteomPodNamespace: namespace,
-				Status:            ateapipb.Actor_STATUS_RUNNING,
+				Metadata: &ateapipb.ResourceMetadata{Name: actorName},
+				WorkerAssignment: &ateapipb.WorkerAssignment{
+					WorkerPod:       podName,
+					WorkerNamespace: namespace,
+				},
+				Status: ateapipb.Actor_STATUS_RUNNING,
 			}, nil
 		},
 	}
@@ -338,10 +340,12 @@ func TestLogsActorRunner_Run_Follow_SuspendedToRunning(t *testing.T) {
 
 			// Subsequent calls: running
 			return &ateapipb.Actor{
-				Metadata:          &ateapipb.ResourceMetadata{Name: actorName},
-				AteomPodName:      podName,
-				AteomPodNamespace: namespace,
-				Status:            ateapipb.Actor_STATUS_RUNNING,
+				Metadata: &ateapipb.ResourceMetadata{Name: actorName},
+				WorkerAssignment: &ateapipb.WorkerAssignment{
+					WorkerPod:       podName,
+					WorkerNamespace: namespace,
+				},
+				Status: ateapipb.Actor_STATUS_RUNNING,
 			}, nil
 		},
 	}
@@ -465,10 +469,12 @@ func TestLogsActorRunner_Run_Follow_ActorMigration(t *testing.T) {
 			if getActorCalls == 1 {
 				// 1. Initial call for stream 1: pod-1
 				return &ateapipb.Actor{
-					Metadata:          &ateapipb.ResourceMetadata{Name: actorName},
-					AteomPodName:      "pod-1",
-					AteomPodNamespace: "ns",
-					Status:            ateapipb.Actor_STATUS_RUNNING,
+					Metadata: &ateapipb.ResourceMetadata{Name: actorName},
+					WorkerAssignment: &ateapipb.WorkerAssignment{
+						WorkerPod:       "pod-1",
+						WorkerNamespace: "ns",
+					},
+					Status: ateapipb.Actor_STATUS_RUNNING,
 				}, nil
 			}
 
@@ -481,10 +487,12 @@ func TestLogsActorRunner_Run_Follow_ActorMigration(t *testing.T) {
 			}
 
 			return &ateapipb.Actor{
-				Metadata:          &ateapipb.ResourceMetadata{Name: actorName},
-				AteomPodName:      "pod-2",
-				AteomPodNamespace: "ns",
-				Status:            ateapipb.Actor_STATUS_RUNNING,
+				Metadata: &ateapipb.ResourceMetadata{Name: actorName},
+				WorkerAssignment: &ateapipb.WorkerAssignment{
+					WorkerPod:       "pod-2",
+					WorkerNamespace: "ns",
+				},
+				Status: ateapipb.Actor_STATUS_RUNNING,
 			}, nil
 		},
 	}
@@ -575,10 +583,12 @@ func TestLogsActorRunner_Run_Follow_ActorSuspendedMidStream(t *testing.T) {
 			// 1. Initial call: running on pod-1
 			if getActorCalls == 1 {
 				return &ateapipb.Actor{
-					Metadata:          &ateapipb.ResourceMetadata{Name: actorName},
-					AteomPodName:      "pod-1",
-					AteomPodNamespace: "ns",
-					Status:            ateapipb.Actor_STATUS_RUNNING,
+					Metadata: &ateapipb.ResourceMetadata{Name: actorName},
+					WorkerAssignment: &ateapipb.WorkerAssignment{
+						WorkerPod:       "pod-1",
+						WorkerNamespace: "ns",
+					},
+					Status: ateapipb.Actor_STATUS_RUNNING,
 				}, nil
 			}
 
@@ -606,10 +616,12 @@ func TestLogsActorRunner_Run_Follow_ActorSuspendedMidStream(t *testing.T) {
 
 			// 4. Subsequent loop reconnection call: running again on pod-1
 			return &ateapipb.Actor{
-				Metadata:          &ateapipb.ResourceMetadata{Name: actorName},
-				AteomPodName:      "pod-1",
-				AteomPodNamespace: "ns",
-				Status:            ateapipb.Actor_STATUS_RUNNING,
+				Metadata: &ateapipb.ResourceMetadata{Name: actorName},
+				WorkerAssignment: &ateapipb.WorkerAssignment{
+					WorkerPod:       "pod-1",
+					WorkerNamespace: "ns",
+				},
+				Status: ateapipb.Actor_STATUS_RUNNING,
 			}, nil
 		},
 	}

@@ -29,6 +29,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -165,7 +166,11 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 		t.Fatalf("failed to tag ActorSnapshot: %v", err)
 	}
 	if _, err := clients.SubstrateAPI.UpdateActorSnapshotTag(ctx, &ateapipb.UpdateActorSnapshotTagRequest{
-		Tag: tagRef, Scope: ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED,
+		Tag: &ateapipb.ActorSnapshotTag{
+			Metadata: &ateapipb.ResourceMetadata{Atespace: tagRef.GetAtespace(), Name: tagRef.GetName()},
+			Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED,
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"scope"}},
 	}); err != nil {
 		t.Fatalf("failed to publish ActorSnapshot tag: %v", err)
 	}
@@ -289,10 +294,6 @@ func TestDurableDirLifecycle(t *testing.T) {
 // micro-VM runtime supports more than one — gVisor templates are still capped at
 // one by the ActorTemplate CEL rules, so the template would be rejected there.
 func TestMultipleDurableDirLifecycle(t *testing.T) {
-	if !isMicroVMEnvironment() {
-		t.Skip("Skipping TestMultipleDurableDirLifecycle: multiple DurableDir volumes are micro-VM only")
-	}
-
 	tests := []struct {
 		name string
 		tc   actorLifecycleTestCase
@@ -337,12 +338,16 @@ func TestMultipleDurableDirLifecycle(t *testing.T) {
 				wantFileAfterSuspend:     3,
 				checkSecondFileCounter:   true,
 				wantSnapshotContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
+				microVMOnly:              true,
 			},
 		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			if test.tc.microVMOnly && !isMicroVMEnvironment() {
+				t.Skipf("Skipping %s: the Golden resume source is micro-VM only", test.name)
+			}
 			t.Parallel()
 			runActorLifecycleTestCase(t, "multi-durabledir-lifecycle", createActorTemplateWithTwoDurableDirs, test.tc)
 		})
@@ -1183,8 +1188,8 @@ func TestWorkerPodDeletion(t *testing.T) {
 		t.Fatalf("failed to get Actor: %v", err)
 	}
 
-	podName := actor.GetAteomPodName()
-	podNamespace := actor.GetAteomPodNamespace()
+	podName := actor.GetWorkerAssignment().GetWorkerPod()
+	podNamespace := actor.GetWorkerAssignment().GetWorkerNamespace()
 	if podName == "" || podNamespace == "" {
 		t.Fatalf("actor is running but pod details are missing: podName=%q, podNamespace=%q", podName, podNamespace)
 	}

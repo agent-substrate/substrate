@@ -63,6 +63,16 @@ def parse_args() -> argparse.Namespace:
         default="/etc/orchestrator/tests.yaml",
         help="Path to the tests YAML file (mounted from a ConfigMap)",
     )
+    p.add_argument(
+        "--target-cluster-dir",
+        default=TARGET_CLUSTER_DIR,
+        help="Directory containing target cluster configuration scripts (<cluster>.sh)",
+    )
+    p.add_argument(
+        "--runner-job-tmpl",
+        default=RUNNER_JOB_TMPL,
+        help="Path to the runner job YAML template file",
+    )
     return p.parse_args()
 
 
@@ -90,14 +100,16 @@ def source_env(path: str) -> None:
         os.environ[k] = v
 
 
-def apply_target_cluster(target_cluster: str) -> None:
-    """Copy /etc/orchestrator/target-clusters/<name>.sh into the cloned
+def apply_target_cluster(
+    target_cluster: str, target_cluster_dir: str = TARGET_CLUSTER_DIR
+) -> None:
+    """Copy target_cluster_dir/<name>.sh into the cloned
     substrate repo as .ate-dev-env.sh (so install-ate.sh / deploy.sh source
     it) and merge it into this process's env (so the orchestrator's own
     gcloud / docker / kubectl calls see the same values). Resets os.environ
     to the startup baseline first so vars defined by a previous target
     cluster don't bleed into the next one."""
-    src = Path(TARGET_CLUSTER_DIR) / f"{target_cluster}.sh"
+    src = Path(target_cluster_dir) / f"{target_cluster}.sh"
     if not src.exists():
         raise FileNotFoundError(
             f"target cluster {target_cluster!r} not found at {src}"
@@ -308,7 +320,13 @@ def teardown_workloads() -> None:
     run_no_check(["benchmarking/workloads/deploy.sh", "--delete"])
 
 
-def run_test(test: dict[str, Any], image: str, dest: str, commit: str) -> str:
+def run_test(
+    test: dict[str, Any],
+    image: str,
+    dest: str,
+    commit: str,
+    runner_job_tmpl: str = RUNNER_JOB_TMPL,
+) -> str:
     name = test["name"]
     job_name = f"runner-{sanitize(name)}-{commit[:7]}-{uuid.uuid4().hex[:6]}"
     subs = {
@@ -320,8 +338,9 @@ def run_test(test: dict[str, Any], image: str, dest: str, commit: str) -> str:
         "TAG": commit,
         "NAME": name,
         "DEST": dest,
+        "ATE_ATEAPI_CLIENT_AUTH": os.environ.get("ATE_ATEAPI_CLIENT_AUTH", "cert"),
     }
-    manifest = render_template(RUNNER_JOB_TMPL, subs, test.get("flags", []))
+    manifest = render_template(runner_job_tmpl, subs, test.get("flags", []))
     wait_for_no_active_runners()
     print(f"Submitting Job {job_name}", flush=True)
     subprocess.run(
@@ -382,7 +401,7 @@ def main() -> None:
         )
 
         try:
-            apply_target_cluster(target_cluster)
+            apply_target_cluster(target_cluster, args.target_cluster_dir)
         except Exception as e:
             print(
                 f"Failed to apply target cluster {target_cluster!r}: {e}",
@@ -410,7 +429,13 @@ def main() -> None:
                 deploy_substrate()
                 deploy_workloads(test.get("workerCount", 1))
                 try:
-                    status = run_test(test, locust_image, args.dest, commit)
+                    status = run_test(
+                        test,
+                        locust_image,
+                        args.dest,
+                        commit,
+                        args.runner_job_tmpl,
+                    )
                 except Exception as e:
                     print(f"Test {test['name']} crashed: {e}", flush=True)
             except Exception as e:

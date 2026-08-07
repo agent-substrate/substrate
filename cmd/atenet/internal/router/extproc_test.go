@@ -57,7 +57,7 @@ func TestHandleRequestHeadersDoesNotLogSensitiveData(t *testing.T) {
 
 	s := NewExtProcServer(50051, &mockClient{
 		resumeFn: func(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
-			return &ateapipb.ResumeActorResponse{Actor: &ateapipb.Actor{AteomPodIp: "10.0.0.52"}}, nil
+			return &ateapipb.ResumeActorResponse{Actor: &ateapipb.Actor{WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIp: "10.0.0.52"}}}, nil
 		},
 	}, nil, ParkedRequestConfig{}, nil, false)
 
@@ -159,7 +159,7 @@ func TestExtProcHeadersEvaluation(t *testing.T) {
 			authority: testUUID + ".team-a.actors.resources.substrate.ate.dev",
 			resumeResp: &ateapipb.ResumeActorResponse{
 				Actor: &ateapipb.Actor{
-					AteomPodIp: "invalid-ip",
+					WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIp: "invalid-ip"},
 				},
 			},
 			expectErr:      true,
@@ -171,7 +171,7 @@ func TestExtProcHeadersEvaluation(t *testing.T) {
 			authority: testUUID + ".team-a.actors.resources.substrate.ate.dev",
 			resumeResp: &ateapipb.ResumeActorResponse{
 				Actor: &ateapipb.Actor{
-					AteomPodIp: "10.0.0.52",
+					WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIp: "10.0.0.52"},
 				},
 			},
 			expectErr:      false,
@@ -271,7 +271,7 @@ func TestExtProc_ParkingLotFull(t *testing.T) {
 	clientMock := &mockClient{
 		resumeFn: func(ctx context.Context, in *ateapipb.ResumeActorRequest, opts ...grpc.CallOption) (*ateapipb.ResumeActorResponse, error) {
 			resumeCalled = true
-			return &ateapipb.ResumeActorResponse{Actor: &ateapipb.Actor{AteomPodIp: "10.0.0.1"}}, nil
+			return &ateapipb.ResumeActorResponse{Actor: &ateapipb.Actor{WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPodIp: "10.0.0.1"}}}, nil
 		},
 	}
 

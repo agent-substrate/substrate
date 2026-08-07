@@ -139,6 +139,11 @@ spec:
         - "--ateapi-address=dns:///api.ate-system.svc:443"
         - "--ateapi-ca-file=/run/servicedns-ca/trust-bundle.pem"
         - "--ateapi-client-cert=/run/podidentity.podcert.ate.dev/credential-bundle.pem"
+        # Envoy's end-to-end timeout on the workload route. Raise it for actors
+        # whose turns legitimately run long — a harness relaying an LLM
+        # completion holds the request open for the whole generation, and at the
+        # 10s default the client gets a 504 mid-turn.
+        # - "--route-timeout=5m"
         env:
         - name: POD_NAME
           valueFrom:
@@ -154,8 +159,13 @@ spec:
               fieldPath: metadata.uid
         - name: OTEL_RESOURCE_ATTRIBUTES
           value: k8s.namespace.name=$(POD_NAMESPACE),k8s.pod.name=$(POD_NAME),k8s.pod.uid=$(POD_UID),service.instance.id=$(POD_UID)
-        - name: OTEL_EXPORTER_OTLP_ENDPOINT
-          value: http://opentelemetry-collector.gke-managed-otel.svc.cluster.local:4317
+        # OTLP exporter settings are shared by every control plane component;
+        # see manifests/ate-install/ate-otel-config.yaml. This also covers
+        # Envoy's own spans: --otlp-collector-address defaults to
+        # $OTEL_EXPORTER_OTLP_ENDPOINT, so the flag stays out of the args above.
+        envFrom:
+        - configMapRef:
+            name: ate-otel-config
         ports:
         - name: xds
           containerPort: 18000

@@ -71,6 +71,38 @@ func ValidateObjectRef(ref *ateapipb.ObjectRef, fldPath *field.Path) field.Error
 	return errs
 }
 
+// ValidateResourceMetadataRef checks the metadata a mutating request uses to
+// name the resource it acts on: atespace and name identify the resource and
+// are required, while uid and version are optional preconditions. It does not
+// check the server-managed timestamps, which clients may not set. Unlike
+// ValidateObjectRef, nil metadata is an error rather than a no-op: a request
+// that names no resource cannot be served.
+func ValidateResourceMetadataRef(meta *ateapipb.ResourceMetadata, fldPath *field.Path) field.ErrorList {
+	var errs field.ErrorList
+
+	if val, fldPath := meta.GetAtespace(), fldPath.Child("atespace"); val == "" {
+		errs = append(errs, field.Required(fldPath, ""))
+	} else {
+		errs = append(errs, ValidateResourceName(val, fldPath)...)
+	}
+
+	if val, fldPath := meta.GetName(), fldPath.Child("name"); val == "" {
+		errs = append(errs, field.Required(fldPath, ""))
+	} else {
+		errs = append(errs, ValidateResourceName(val, fldPath)...)
+	}
+
+	if val, fldPath := meta.GetUid(), fldPath.Child("uid"); val != "" {
+		errs = append(errs, ValidateUUID(val, fldPath)...)
+	}
+
+	if val, fldPath := meta.GetVersion(), fldPath.Child("version"); val < 0 {
+		errs = append(errs, field.Invalid(fldPath, val, "must not be negative"))
+	}
+
+	return errs
+}
+
 // ValidateGlobalObjectRef checks that a reference to a global-scoped resource is
 // well-formed: its atespace must be empty (global resources do not belong to an
 // atespace) and its name must be a valid resource name. It does not check that
@@ -173,6 +205,19 @@ func ValidateSnapshotURIPrefix(prefix string) error {
 	return nil
 }
 
+// ValidateLocalSnapshotPrefix ensures a local snapshot prefix is a single
+// path segment: it is joined onto the actor's checkpoint directory, so a
+// nested or relative prefix would escape it or nest below it.
+func ValidateLocalSnapshotPrefix(prefix string) error {
+	if prefix == "" {
+		return fmt.Errorf("snapshot prefix must be non-empty")
+	}
+	if prefix == "." || prefix == ".." || strings.ContainsAny(prefix, `/\`) {
+		return fmt.Errorf("invalid snapshot prefix %q: must be a single path segment", prefix)
+	}
+	return nil
+}
+
 // ValidateWorker checks that the worker message is well-formed.
 func ValidateWorker(worker *ateapipb.Worker, fldPath *field.Path) field.ErrorList {
 	var errs field.ErrorList
@@ -263,17 +308,11 @@ func ValidateAssignment(assignment *ateapipb.Assignment, fldPath *field.Path) fi
 	if val, fldPath := assignment.Actor, fldPath.Child("actor"); val == nil {
 		errs = append(errs, field.Required(fldPath, ""))
 	} else {
-		if val, fldPath := assignment.Actor.Name, fldPath.Child("name"); val == "" {
-			errs = append(errs, field.Required(fldPath, ""))
-		} else {
-			errs = append(errs, ValidateResourceName(val, fldPath)...)
-		}
+		errs = append(errs, ValidateObjectRef(val, fldPath)...)
+	}
 
-		if val, fldPath := assignment.Actor.Atespace, fldPath.Child("atespace"); val == "" {
-			errs = append(errs, field.Required(fldPath, ""))
-		} else {
-			errs = append(errs, ValidateResourceName(val, fldPath)...)
-		}
+	if val, fldPath := assignment.ActorUid, fldPath.Child("actor_uid"); val == "" {
+		errs = append(errs, field.Required(fldPath, ""))
 	}
 
 	return errs

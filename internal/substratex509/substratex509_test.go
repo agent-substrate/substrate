@@ -224,6 +224,7 @@ func TestActorIdentityFromCertificate(t *testing.T) {
 		Atespace:  "team-a",
 		ActorName: "researcher",
 		ActorUid:  "actor-uid",
+		Purpose:   ActorIdentityPurposeAtunnel,
 	}
 	for _, tc := range []struct {
 		name    string
@@ -288,6 +289,7 @@ func TestActorIdentityFromCertificate(t *testing.T) {
 				actor := ActorIdentity{
 					Atespace:  "team-a",
 					ActorName: "researcher",
+					Purpose:   ActorIdentityPurposeAtunnel,
 				}
 				value, err := json.Marshal(actor)
 				if err != nil {
@@ -335,6 +337,7 @@ func TestAddActorIdentityToCertificateEmptyField(t *testing.T) {
 		{"Atespace", func(a *ActorIdentity) { a.Atespace = "" }},
 		{"ActorName", func(a *ActorIdentity) { a.ActorName = "" }},
 		{"ActorUid", func(a *ActorIdentity) { a.ActorUid = "" }},
+		{"Purpose", func(a *ActorIdentity) { a.Purpose = "" }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
@@ -343,6 +346,7 @@ func TestAddActorIdentityToCertificateEmptyField(t *testing.T) {
 				Atespace:  "team-a",
 				ActorName: "researcher",
 				ActorUid:  "actor-uid",
+				Purpose:   ActorIdentityPurposeAtunnel,
 			}
 			tc.mutate(&actor)
 			err := AddActorIdentityToCertificate(&actor, &x509.Certificate{})
@@ -372,6 +376,7 @@ func TestExtensionValueIsJSON(t *testing.T) {
 		Atespace:  "team-a",
 		ActorName: "researcher",
 		ActorUid:  "actor-uid",
+		Purpose:   ActorIdentityPurposeAtunnel,
 	}
 	template := &x509.Certificate{}
 	if err := AddPodIdentityToCertificate(&pod, template); err != nil {

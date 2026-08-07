@@ -55,12 +55,7 @@ func TestClientDialContext(t *testing.T) {
 	})
 	client := newTestClient(t, ca, WithDialer(dialFixedAddress(gatewayAddress)))
 
-	conn, err := client.DialContext(context.Background(), "192.0.2.10:443", EgressMetadata{
-		Atespace:     "team-a",
-		ActorName:    "actor-1",
-		ActorVersion: 7,
-		BearerToken:  "actor-token",
-	})
+	conn, err := client.DialContext(context.Background(), "192.0.2.10:443")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,17 +68,13 @@ func TestClientDialContext(t *testing.T) {
 	if gotRequest.Host != "192.0.2.10:443" {
 		t.Errorf("authority = %q, want 192.0.2.10:443", gotRequest.Host)
 	}
-	if got := gotRequest.Header.Get(ActorAtespaceHeader); got != "team-a" {
-		t.Errorf("%s = %q, want team-a", ActorAtespaceHeader, got)
+	for name := range gotRequest.Header {
+		if strings.HasPrefix(strings.ToLower(name), "x-ate-") {
+			t.Errorf("legacy identity header %q was sent", name)
+		}
 	}
-	if got := gotRequest.Header.Get(ActorNameHeader); got != "actor-1" {
-		t.Errorf("%s = %q, want actor-1", ActorNameHeader, got)
-	}
-	if got := gotRequest.Header.Get(ActorVersionHeader); got != "7" {
-		t.Errorf("%s = %q, want 7", ActorVersionHeader, got)
-	}
-	if got := gotRequest.Header.Get("Authorization"); got != "Bearer actor-token" {
-		t.Errorf("Authorization = %q, want Bearer actor-token", got)
+	if got := gotRequest.Header.Get("Authorization"); got != "" {
+		t.Errorf("Authorization = %q, want empty", got)
 	}
 
 	buffered := make([]byte, len("hello"))
@@ -106,11 +97,7 @@ func TestClientDialContextRejected(t *testing.T) {
 	})
 	client := newTestClient(t, ca, WithDialer(dialFixedAddress(gatewayAddress)))
 
-	_, err := client.DialContext(context.Background(), "192.0.2.10:443", EgressMetadata{
-		Atespace:     "team-a",
-		ActorName:    "actor-1",
-		ActorVersion: 7,
-	})
+	_, err := client.DialContext(context.Background(), "192.0.2.10:443")
 	if err == nil || !strings.Contains(err.Error(), "denied by policy") {
 		t.Fatalf("DialContext error = %v, want policy rejection", err)
 	}
@@ -122,37 +109,19 @@ func TestClientDialContextValidatesInput(t *testing.T) {
 	tests := []struct {
 		name        string
 		destination string
-		metadata    EgressMetadata
 	}{
 		{
 			name:        "destination has no port",
 			destination: "192.0.2.10",
-			metadata:    EgressMetadata{Atespace: "team-a", ActorName: "actor-1", ActorVersion: 7},
 		},
 		{
 			name:        "destination is a hostname",
 			destination: "example.com:443",
-			metadata:    EgressMetadata{Atespace: "team-a", ActorName: "actor-1", ActorVersion: 7},
-		},
-		{
-			name:        "invalid atespace",
-			destination: "192.0.2.10:443",
-			metadata:    EgressMetadata{Atespace: "TEAM A", ActorName: "actor-1", ActorVersion: 7},
-		},
-		{
-			name:        "invalid actor",
-			destination: "192.0.2.10:443",
-			metadata:    EgressMetadata{Atespace: "team-a", ActorName: "actor/1", ActorVersion: 7},
-		},
-		{
-			name:        "invalid actor version",
-			destination: "192.0.2.10:443",
-			metadata:    EgressMetadata{Atespace: "team-a", ActorName: "actor-1"},
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if _, err := client.DialContext(context.Background(), tt.destination, tt.metadata); err == nil {
+			if _, err := client.DialContext(context.Background(), tt.destination); err == nil {
 				t.Fatal("DialContext unexpectedly succeeded")
 			}
 		})
@@ -170,19 +139,18 @@ func dialFixedAddress(address string) DialFunc {
 func newTestClient(t *testing.T, ca *testCA, opts ...ClientOption) *Client {
 	t.Helper()
 	dir := t.TempDir()
-	bundlePath := filepath.Join(dir, "client.pem")
 	trustPath := filepath.Join(dir, "trust.pem")
-	writeCredentialBundle(t, bundlePath, ca.issue(t,
-		"spiffe://cluster.local/ns/ate-demo/sa/ateom",
+	certificate := ca.issue(t,
+		"spiffe://substrate-actor.local/atespace/team/actor/actor",
 		[]x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
-	))
+	)
 	if err := os.WriteFile(trustPath, ca.certPEM, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	client, err := NewClient(ClientConfig{
 		GatewayAddress:       "127.0.0.1:1",
 		ServerName:           "egress.test",
-		CredentialBundlePath: bundlePath,
+		GetClientCertificate: func(*tls.CertificateRequestInfo) (*tls.Certificate, error) { return &certificate, nil },
 		TrustBundlePath:      trustPath,
 	}, opts...)
 	if err != nil {

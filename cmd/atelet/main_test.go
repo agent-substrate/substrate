@@ -22,21 +22,27 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
 	"github.com/agent-substrate/substrate/internal/ateerrors"
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/google/go-cmp/cmp"
 	"github.com/klauspost/compress/zstd"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/testing/protocmp"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 func TestSnapshotManifestActorMetadata(t *testing.T) {
@@ -277,6 +283,14 @@ func TestValidateCheckpointRequest(t *testing.T) {
 			r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL
 			r.Config = &ateletpb.CheckpointRequest_LocalConfig{LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotPrefix: ""}}
 		}), true},
+		{"nested local snapshot prefix", makeReq(func(r *ateletpb.CheckpointRequest) {
+			r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL
+			r.Config = &ateletpb.CheckpointRequest_LocalConfig{LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotPrefix: "pause/2"}}
+		}), true},
+		{"traversal local snapshot prefix", makeReq(func(r *ateletpb.CheckpointRequest) {
+			r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL
+			r.Config = &ateletpb.CheckpointRequest_LocalConfig{LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotPrefix: ".."}}
+		}), true},
 		{"unspecified snapshot type", makeReq(func(r *ateletpb.CheckpointRequest) { r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_UNSPECIFIED }), true},
 		{"unspecified snapshot scope", makeReq(func(r *ateletpb.CheckpointRequest) { r.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED }), true},
 		{"invalid snapshot scope", makeReq(func(r *ateletpb.CheckpointRequest) { r.Scope = ateletpb.SnapshotScope(23) }), true},
@@ -322,6 +336,14 @@ func TestValidateRestoreRequest(t *testing.T) {
 		{"invalid local snapshot prefix", makeReq(func(r *ateletpb.RestoreRequest) {
 			r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL
 			r.Config = &ateletpb.RestoreRequest_LocalConfig{LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotPrefix: ""}}
+		}), true},
+		{"nested local snapshot prefix", makeReq(func(r *ateletpb.RestoreRequest) {
+			r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL
+			r.Config = &ateletpb.RestoreRequest_LocalConfig{LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotPrefix: "pause/2"}}
+		}), true},
+		{"traversal local snapshot prefix", makeReq(func(r *ateletpb.RestoreRequest) {
+			r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL
+			r.Config = &ateletpb.RestoreRequest_LocalConfig{LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotPrefix: ".."}}
 		}), true},
 		{"unspecified snapshot type", makeReq(func(r *ateletpb.RestoreRequest) { r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_UNSPECIFIED }), true},
 		{"unspecified snapshot scope", makeReq(func(r *ateletpb.RestoreRequest) { r.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED }), true},
@@ -668,6 +690,17 @@ func TestBuildAteomWorkloadSpecForwardsDurableDirMounts(t *testing.T) {
 	}
 }
 
+func TestToAteomEgressGateway(t *testing.T) {
+	if got := toAteomEgressGateway(nil); got != nil {
+		t.Fatalf("toAteomEgressGateway(nil) = %v, want nil", got)
+	}
+	want := &ateompb.EgressGateway{Address: "egress.example:443"}
+	got := toAteomEgressGateway(&ateletpb.EgressGateway{Address: want.Address})
+	if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
+		t.Errorf("toAteomEgressGateway mismatch (-want +got):\n%s", diff)
+	}
+}
+
 func TestIsTerminalFileErr(t *testing.T) {
 	tests := []struct {
 		name string
@@ -840,5 +873,145 @@ func TestDownloadCombinedCheckpoint(t *testing.T) {
 		if string(got) != content {
 			t.Errorf("%s content = %q, want %q", name, got, content)
 		}
+	}
+}
+
+// blockerDesc registers a single unary method whose handler blocks until block
+// is closed (or the RPC context is cancelled). It lets a test hold one RPC
+// "in-flight" across a drain without any generated proto.
+func blockerDesc(block <-chan struct{}) grpc.ServiceDesc {
+	return grpc.ServiceDesc{
+		ServiceName: "drain.test.Blocker",
+		HandlerType: (*any)(nil),
+		Methods: []grpc.MethodDesc{{
+			MethodName: "Block",
+			Handler: func(_ any, ctx context.Context, dec func(any) error, _ grpc.UnaryServerInterceptor) (any, error) {
+				if err := dec(new(emptypb.Empty)); err != nil {
+					return nil, err
+				}
+				select {
+				case <-block:
+					return new(emptypb.Empty), nil
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				}
+			},
+		}},
+	}
+}
+
+// newBlockingTestServer starts a gRPC server on a loopback port exposing the
+// blocker service and returns it with a connected client.
+func newBlockingTestServer(t *testing.T, block <-chan struct{}) (*grpc.Server, *grpc.ClientConn) {
+	t.Helper()
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	srv := grpc.NewServer()
+	desc := blockerDesc(block)
+	srv.RegisterService(&desc, nil)
+	go func() { _ = srv.Serve(lis) }()
+
+	conn, err := grpc.NewClient(
+		lis.Addr().String(),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	return srv, conn
+}
+
+func callBlock(conn *grpc.ClientConn) <-chan error {
+	rpcErr := make(chan error, 1)
+	go func() {
+		rpcErr <- conn.Invoke(context.Background(), "/drain.test.Blocker/Block",
+			new(emptypb.Empty), new(emptypb.Empty))
+	}()
+	return rpcErr
+}
+
+// TestDrainOnShutdownInFlightFinishes asserts that an RPC already in flight when
+// SIGTERM arrives is allowed to complete (GracefulStop waits for it) and that
+// readiness flips to not-ready.
+func TestDrainOnShutdownInFlightFinishes(t *testing.T) {
+	*drainDelay = 0
+	*drainTimeout = 5 * time.Second
+
+	block := make(chan struct{})
+	srv, conn := newBlockingTestServer(t, block)
+
+	rpcErr := callBlock(conn)
+	time.Sleep(100 * time.Millisecond) // let the RPC reach the handler
+
+	readiness := &serverboot.Readiness{}
+	ctx, cancel := context.WithCancel(context.Background())
+	drainDone := drainOnShutdown(ctx, srv, readiness)
+
+	cancel() // simulate SIGTERM
+
+	// Release the handler shortly after the drain begins; a graceful drain must
+	// wait for it rather than abort it.
+	time.Sleep(100 * time.Millisecond)
+	close(block)
+
+	select {
+	case err := <-rpcErr:
+		if err != nil {
+			t.Fatalf("in-flight RPC should complete during graceful drain, got: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("in-flight RPC did not complete")
+	}
+
+	select {
+	case <-drainDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("drain did not complete")
+	}
+	if readiness.Ready() {
+		t.Fatal("readiness should be not-ready after drain")
+	}
+}
+
+// TestDrainOnShutdownForceStopsAfterTimeout asserts that an RPC still running
+// past drain-timeout is forcefully cancelled by Stop().
+func TestDrainOnShutdownForceStopsAfterTimeout(t *testing.T) {
+	*drainDelay = 0
+	*drainTimeout = 200 * time.Millisecond
+
+	block := make(chan struct{}) // never closed → handler blocks past the timeout
+	srv, conn := newBlockingTestServer(t, block)
+
+	rpcErr := callBlock(conn)
+	time.Sleep(100 * time.Millisecond)
+
+	readiness := &serverboot.Readiness{}
+	ctx, cancel := context.WithCancel(context.Background())
+	start := time.Now()
+	drainDone := drainOnShutdown(ctx, srv, readiness)
+	cancel()
+
+	select {
+	case <-drainDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("drain did not force-stop within deadline")
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("force stop took too long (%v); expected ~drain-timeout", elapsed)
+	}
+
+	select {
+	case err := <-rpcErr:
+		if err == nil {
+			t.Fatal("in-flight RPC should have been aborted by force stop")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("in-flight RPC did not return after force stop")
+	}
+	if readiness.Ready() {
+		t.Fatal("readiness should be not-ready after drain")
 	}
 }

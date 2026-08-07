@@ -74,7 +74,10 @@ These are head sampling ratios that bound what leaves the process. Keep decision
 
 Set `OTEL_TRACES_SAMPLER=always_off` on the components under test (for ateom workers, via the controller's `--otel-traces-sampler` flag). `parentbased_always_off` is not enough under a load generator: boomer and locust send ratio-sampled trace context, and parent based samplers honor it. Alternatively set the generator's `trace_probability` to 0 and leave the servers alone. On kind, also override ateapi's `parentbased_always_on` pin.
 
-The YAML manifest for your server should include the `OTEL_EXPORTER_OTLP_ENDPOINT` environment variable to point the exporter to GKE's managed traces collector, e.g.:
+The YAML manifest for your server needs `OTEL_EXPORTER_OTLP_ENDPOINT` set so the
+exporter knows where to push spans. Do not hardcode it — consume the shared
+`ate-otel-config` ConfigMap via `envFrom`, so your server follows the collector
+address for whichever environment it is deployed to:
 
 ```yaml
       containers:
@@ -82,11 +85,19 @@ The YAML manifest for your server should include the `OTEL_EXPORTER_OTLP_ENDPOIN
           image: ko://github.com/agent-substrate/substrate/cmd/ateapi
           ports:
             - containerPort: 443
-          env:
-            # Tracing related environment variables
-            - name: OTEL_EXPORTER_OTLP_ENDPOINT
-              value: "http://opentelemetry-collector.gke-managed-otel.svc.cluster.local:4317"
+          # Supplies OTEL_EXPORTER_OTLP_ENDPOINT (and, on kind, the metric
+          # export tunables) for every control plane component.
+          envFrom:
+            - configMapRef:
+                name: ate-otel-config
 ```
+
+The ConfigMap is defined in
+[`manifests/ate-install/ate-otel-config.yaml`](../../../manifests/ate-install/ate-otel-config.yaml)
+for GKE, with a kind replacement of the same name in
+[`manifests/ate-install/kind/ate-otel-config.yaml`](../../../manifests/ate-install/kind/ate-otel-config.yaml)
+that points at the in-cluster collector. Editing either one does not restart the
+pods that consume it; follow a change with `kubectl rollout restart`.
 
 For how to deploy that collector — the GKE managed option, a self-managed DaemonSet, and the constraints on what endpoints Substrate can talk to — see [OpenTelemetry Collector Best Practices](otel-collector.md).
 

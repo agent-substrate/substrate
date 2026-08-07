@@ -54,6 +54,9 @@ type ResumeState struct {
 	SnapshotLocation string
 	SnapshotScope    ateapipb.SnapshotContentScope
 	SnapshotKind     string
+	// WireSnapshotScope labels the restore requested, not the stored snapshot's
+	// SnapshotScope: a data snapshot restored on golden goes out as data_on_golden.
+	WireSnapshotScope string
 	// GoldenSnapshotLocation is the storage location of the ActorTemplate's
 	// golden snapshot. Populated only when the template's onResume
 	// configuration selects the golden snapshot as the boot source for the
@@ -169,25 +172,22 @@ func (s *LoadActorForResumeStep) Execute(ctx context.Context, input *ResumeInput
 	// If the Actor is in Resuming state, it means a previous attempt crashed after AssignWorkerStep.
 	// We don't need to repeat the AssignWorkerStep, load the Worker now.
 	if actor.Status == ateapipb.Actor_STATUS_RESUMING {
-		allPopulated := actor.AteomPodUid != "" && actor.WorkerPoolName != "" && actor.AteomPodName != ""
-		if !allPopulated {
-			slog.ErrorContext(ctx, "expected all of AteomPodUid, WorkerPoolName and AteomPodName to be populated, found",
-				slog.String("AteomPodUid", actor.AteomPodUid),
-				slog.String("WorkerPoolName", actor.WorkerPoolName),
-				slog.String("AteomPodName", actor.AteomPodName))
+		assignment := actor.GetWorkerAssignment()
+		if assignment == nil {
+			slog.ErrorContext(ctx, "expected a worker assignment on a RESUMING actor, found none")
 
-			// Crash the actor if its worker assignment is corrupted. We should never be in this state.
-			if cerr := crashActor(ctx, s.store, input.ActorRef); cerr != nil {
+			// Crash the actor if its worker assignment is missing. We should never be in this state.
+			if cerr := crashActor(ctx, s.store, input.ActorRef, ateattr.OperationResume, ateattr.ReasonCorruptedAssignment); cerr != nil {
 				return cerr
 			}
 			return status.Errorf(codes.Aborted, "actor %s crashed", input.ActorRef)
 		}
 
-		wk, err := s.store.GetWorker(ctx, actor.AteomPodNamespace, actor.WorkerPoolName, actor.AteomPodName)
+		wk, err := s.store.GetWorker(ctx, assignment.GetWorkerNamespace(), assignment.GetWorkerPool(), assignment.GetWorkerPod())
 		if err != nil {
 			// Crash the actor if it was assigned to a deleted pod.
 			if errors.Is(err, store.ErrNotFound) {
-				if cerr := crashActor(ctx, s.store, input.ActorRef); cerr != nil {
+				if cerr := crashActor(ctx, s.store, input.ActorRef, ateattr.OperationResume, ateattr.ReasonWorkerPodGone); cerr != nil {
 					return cerr
 				}
 				return status.Errorf(codes.Aborted, "actor %s crashed", input.ActorRef)
@@ -198,7 +198,8 @@ func (s *LoadActorForResumeStep) Execute(ctx context.Context, input *ResumeInput
 			slog.InfoContext(ctx, "Assigned worker is draining; crashing actor",
 				slog.String("actor", input.ActorRef.String()),
 				slog.String("worker", wk.GetWorkerNamespace()+"/"+wk.GetWorkerPod()))
-			if cerr := crashActor(ctx, s.store, input.ActorRef); cerr != nil {
+			if cerr := crashActor(ctx, s.store, input.ActorRef, ateattr.OperationResume, ateattr.ReasonWorkerReassigned); cerr != nil {
+
 				return cerr
 			}
 			return status.Errorf(codes.Aborted, "actor %s crashed", input.ActorRef.String())
@@ -321,7 +322,7 @@ func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, stat
 		if worker.Assignment == nil {
 			continue
 		}
-		if resources.ActorRefFromObjectRef(worker.Assignment.Actor) != input.ActorRef {
+		if worker.Assignment.GetActorUid() != state.Actor.GetMetadata().GetUid() {
 			continue
 		}
 		if s.scheduler.Applies(worker, constraints) {
@@ -368,7 +369,11 @@ func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, stat
 			Namespace: state.Actor.GetActorTemplateNamespace(),
 			Name:      state.Actor.GetActorTemplateName(),
 		},
-		Actor: input.ActorRef.ToObjectRef(),
+		Actor: &ateapipb.ObjectRef{
+			Atespace: state.Actor.GetMetadata().GetAtespace(),
+			Name:     state.Actor.GetMetadata().GetName(),
+		},
+		ActorUid: state.Actor.GetMetadata().GetUid(),
 	}
 
 	if err := s.store.UpdateWorker(ctx, assignedWorker, assignedWorker.Version); err != nil {
@@ -376,11 +381,7 @@ func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, stat
 	}
 
 	state.Actor.Status = ateapipb.Actor_STATUS_RESUMING
-	state.Actor.AteomPodNamespace = assignedWorker.GetWorkerNamespace()
-	state.Actor.AteomPodName = assignedWorker.GetWorkerPod()
-	state.Actor.AteomPodIp = assignedWorker.GetIp()
-	state.Actor.AteomPodUid = assignedWorker.GetWorkerPodUid()
-	state.Actor.WorkerPoolName = assignedWorker.GetWorkerPool()
+	state.Actor.WorkerAssignment = workerAssignmentFrom(assignedWorker)
 
 	updatedActor, err := s.store.UpdateActor(ctx, state.Actor, state.Actor.GetMetadata().GetVersion())
 	if err != nil {
@@ -407,6 +408,16 @@ func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, stat
 	pool = assignedWorker.GetWorkerPool()
 	outcome = ateattr.SchedulerOutcomeAssigned
 	return nil
+}
+
+func workerAssignmentFrom(w *ateapipb.Worker) *ateapipb.WorkerAssignment {
+	return &ateapipb.WorkerAssignment{
+		WorkerNamespace: w.GetWorkerNamespace(),
+		WorkerPool:      w.GetWorkerPool(),
+		WorkerPod:       w.GetWorkerPod(),
+		WorkerPodUid:    w.GetWorkerPodUid(),
+		WorkerPodIp:     w.GetIp(),
+	}
 }
 
 func schedulingConstraints(actor *ateapipb.Actor, tmpl *atev1alpha1.ActorTemplate) (scheduling.Constraints, error) {
@@ -450,11 +461,12 @@ func (s *AttachVolumesStep) CheckPrerequisite(ctx context.Context, input *Resume
 }
 
 func (s *AttachVolumesStep) Execute(ctx context.Context, input *ResumeInput, state *ResumeState) error {
-	if state.Actor.GetAteomPodNamespace() == "" {
+	assignment := state.Actor.GetWorkerAssignment()
+	if assignment == nil {
 		return fmt.Errorf("actor has no assigned worker pod")
 	}
 
-	worker, err := s.store.GetWorker(ctx, state.Actor.GetAteomPodNamespace(), state.Actor.GetWorkerPoolName(), state.Actor.GetAteomPodName())
+	worker, err := s.store.GetWorker(ctx, assignment.GetWorkerNamespace(), assignment.GetWorkerPool(), assignment.GetWorkerPod())
 	if err != nil {
 		return fmt.Errorf("failed to get worker for volume attachment: %w", err)
 	}
@@ -478,13 +490,14 @@ func (s *AttachVolumesStep) Execute(ctx context.Context, input *ResumeInput, sta
 func (s *AttachVolumesStep) RetryBackoff() *wait.Backoff { return nil }
 
 type CallAteletRestoreStep struct {
-	store               store.Interface
-	dialer              *AteletDialer
-	kubeClient          kubernetes.Interface
-	secretCache         *envSecretCache
-	workerPoolLister    listersv1alpha1.WorkerPoolLister
-	sandboxConfigLister listersv1alpha1.SandboxConfigLister
-	scheduler           scheduling.Scheduler
+	store                store.Interface
+	dialer               *AteletDialer
+	kubeClient           kubernetes.Interface
+	secretCache          *envSecretCache
+	workerPoolLister     listersv1alpha1.WorkerPoolLister
+	sandboxConfigLister  listersv1alpha1.SandboxConfigLister
+	scheduler            scheduling.Scheduler
+	egressGatewayAddress string
 }
 
 func (s *CallAteletRestoreStep) Name() string { return "CallAteletRestore" }
@@ -499,12 +512,12 @@ func (s *CallAteletRestoreStep) CheckPrerequisite(ctx context.Context, input *Re
 		return status.Errorf(codes.FailedPrecondition, "Assigned worker is nil")
 	}
 	// Verify if the worker is still assigned to the same Actor.
-	assigned := state.Worker.GetAssignment().GetActor()
-	if resources.ActorRefFromObjectRef(assigned) != input.ActorRef {
+	assignedActorUID := state.Worker.GetAssignment().GetActorUid()
+	if assignedActorUID != state.Actor.GetMetadata().GetUid() {
 		slog.ErrorContext(ctx, "crashing actor because its assigned worker no longer belongs to it",
 			slog.String("worker", state.Worker.GetWorkerPod()),
 			slog.Any("assignment", state.Worker.GetAssignment()))
-		if cerr := crashActor(ctx, s.store, input.ActorRef); cerr != nil {
+		if cerr := crashActor(ctx, s.store, input.ActorRef, ateattr.OperationResume, ateattr.ReasonWorkerReassigned); cerr != nil {
 			return fmt.Errorf("while crashing actor: %w", cerr)
 		}
 		return status.Errorf(codes.Aborted, "actor %s crashed", input.ActorRef)
@@ -524,7 +537,7 @@ func (s *CallAteletRestoreStep) CheckPrerequisite(ctx context.Context, input *Re
 		if err := s.store.UpdateWorker(ctx, release, release.Version); err != nil {
 			return fmt.Errorf("while releasing stale worker assignment: %w", err)
 		}
-		if cerr := crashActor(ctx, s.store, input.ActorRef); cerr != nil {
+		if cerr := crashActor(ctx, s.store, input.ActorRef, ateattr.OperationResume, ateattr.ReasonCorruptedAssignment); cerr != nil {
 			return fmt.Errorf("while crashing actor: %w", cerr)
 		}
 		return status.Errorf(codes.Aborted, "actor %s crashed", input.ActorRef)
@@ -532,7 +545,8 @@ func (s *CallAteletRestoreStep) CheckPrerequisite(ctx context.Context, input *Re
 	return nil
 }
 func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput, state *ResumeState) error {
-	ateletConn, err := s.dialer.DialForWorker(state.Actor.GetAteomPodNamespace(), state.Actor.GetAteomPodName())
+	assignment := state.Actor.GetWorkerAssignment()
+	ateletConn, err := s.dialer.DialForWorker(assignment.GetWorkerNamespace(), assignment.GetWorkerPod())
 	if err != nil {
 		return err
 	}
@@ -542,19 +556,21 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 	if err != nil {
 		return err
 	}
+	egressGateway := s.egressGateway()
 
 	if local := state.Actor.GetLocalSnapshotInfo(); local != nil {
 		slog.InfoContext(ctx, "Actor has snapshot; Restoring from snapshot")
 		state.SnapshotKind = ateattr.SnapshotKindLocal
 
 		req := &ateletpb.RestoreRequest{
-			TargetAteomUid:         state.Actor.GetAteomPodUid(),
+			TargetAteomUid:         assignment.GetWorkerPodUid(),
 			Atespace:               state.Actor.GetMetadata().GetAtespace(),
 			ActorName:              state.Actor.GetMetadata().GetName(),
 			ActorTemplateNamespace: state.Actor.GetActorTemplateNamespace(),
 			ActorTemplateName:      state.Actor.GetActorTemplateName(),
 			Spec:                   workloadSpec,
 			ActorUid:               state.Actor.GetMetadata().Uid,
+			EgressGateway:          egressGateway,
 		}
 		req.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL
 		req.Config = &ateletpb.RestoreRequest_LocalConfig{
@@ -571,9 +587,10 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 			req.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
 			req.GoldenSnapshotUriPrefix = state.GoldenSnapshotLocation
 		}
+		state.WireSnapshotScope = ateattr.SnapshotScopeValue(req.Scope)
 
 		_, err = client.Restore(ctx, req)
-		return maybeCrashActor(ctx, s.store, input.ActorRef, err, "while restoring workload")
+		return maybeCrashActor(ctx, s.store, input.ActorRef, err, "while restoring workload", ateattr.OperationResume)
 	} else if state.SnapshotLocation != "" {
 		slog.InfoContext(ctx, "Actor has durable snapshot; Restoring from snapshot")
 		// Mirrors LoadActorForResume's source resolution: the durable location
@@ -590,8 +607,9 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 		if state.GoldenSnapshotLocation != "" {
 			scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
 		}
+		state.WireSnapshotScope = ateattr.SnapshotScopeValue(scope)
 		req := &ateletpb.RestoreRequest{
-			TargetAteomUid:         state.Actor.GetAteomPodUid(),
+			TargetAteomUid:         assignment.GetWorkerPodUid(),
 			Atespace:               state.Actor.GetMetadata().GetAtespace(),
 			ActorName:              state.Actor.GetMetadata().GetName(),
 			ActorTemplateNamespace: state.Actor.GetActorTemplateNamespace(),
@@ -607,9 +625,11 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 			// Empty unless this is a Golden data resume.
 			GoldenSnapshotUriPrefix: state.GoldenSnapshotLocation,
 			ActorUid:                state.Actor.GetMetadata().Uid,
+			EgressGateway:           egressGateway,
 		}
 		_, err = client.Restore(ctx, req)
-		return maybeCrashActor(ctx, s.store, input.ActorRef, err, "while restoring durable snapshot")
+		return maybeCrashActor(ctx, s.store, input.ActorRef, err, "while restoring durable snapshot", ateattr.OperationResume)
+
 	} else {
 		slog.InfoContext(ctx, "Actor has no snapshot; ActorTemplate has no golden snapshot; Booting from ActorTemplate spec")
 		state.SnapshotKind = ateattr.SnapshotKindBoot
@@ -617,13 +637,13 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 		// Booting from scratch: resolve the sandbox binaries from the pool's
 		// SandboxConfig and send them so atelet can fetch and record them.
 		// (Restores above are self-describing via the snapshot manifest.)
-		sandboxAssets, err := resolveSandboxAssets(s.workerPoolLister, s.sandboxConfigLister, state.Actor.GetAteomPodNamespace(), state.Actor.GetWorkerPoolName())
+		sandboxAssets, err := resolveSandboxAssets(s.workerPoolLister, s.sandboxConfigLister, assignment.GetWorkerNamespace(), assignment.GetWorkerPool())
 		if err != nil {
 			return fmt.Errorf("while resolving sandbox assets: %w", err)
 		}
 
 		req := &ateletpb.RunRequest{
-			TargetAteomUid:         state.Actor.GetAteomPodUid(),
+			TargetAteomUid:         assignment.GetWorkerPodUid(),
 			Atespace:               state.Actor.GetMetadata().GetAtespace(),
 			ActorName:              state.Actor.GetMetadata().GetName(),
 			ActorTemplateNamespace: state.Actor.GetActorTemplateNamespace(),
@@ -631,14 +651,22 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 			SandboxAssets:          sandboxAssets,
 			Spec:                   workloadSpec,
 			ActorUid:               state.Actor.GetMetadata().Uid,
+			EgressGateway:          egressGateway,
 		}
 		_, err = client.Run(ctx, req)
-		return maybeCrashActor(ctx, s.store, input.ActorRef, err, "while creating workload from spec")
+		return maybeCrashActor(ctx, s.store, input.ActorRef, err, "while creating workload from spec", ateattr.OperationResume)
 	}
 	// Unreachable
 }
 
 func (s *CallAteletRestoreStep) RetryBackoff() *wait.Backoff { return nil }
+
+func (s *CallAteletRestoreStep) egressGateway() *ateletpb.EgressGateway {
+	if s.egressGatewayAddress == "" {
+		return nil
+	}
+	return &ateletpb.EgressGateway{Address: s.egressGatewayAddress}
+}
 
 type FinalizeRunningStep struct {
 	store store.Interface

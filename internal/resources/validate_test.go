@@ -90,6 +90,70 @@ func TestValidateObjectRef(t *testing.T) {
 	}
 }
 
+func TestValidateResourceMetadataRef(t *testing.T) {
+	const uid = "8bf5b1a2-3c4d-4e5f-8a9b-0c1d2e3f4a5b"
+	tests := []struct {
+		name      string
+		input     *ateapipb.ResourceMetadata
+		wantError field.ErrorList
+	}{
+		{
+			name:      "valid without preconditions",
+			input:     &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "id1"},
+			wantError: nil,
+		},
+		{
+			name:      "valid with preconditions",
+			input:     &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "id1", Uid: uid, Version: 7},
+			wantError: nil,
+		},
+		{
+			name:  "nil metadata",
+			input: nil,
+			wantError: field.ErrorList{
+				field.Required(field.NewPath("path", "atespace"), ""),
+				field.Required(field.NewPath("path", "name"), ""),
+			},
+		},
+		{
+			name:      "missing atespace",
+			input:     &ateapipb.ResourceMetadata{Name: "id1"},
+			wantError: field.ErrorList{field.Required(field.NewPath("path", "atespace"), "")},
+		},
+		{
+			name:      "invalid atespace",
+			input:     &ateapipb.ResourceMetadata{Atespace: "NS1", Name: "id1"},
+			wantError: field.ErrorList{field.Invalid(field.NewPath("path", "atespace"), "NS1", "")},
+		},
+		{
+			name:      "missing name",
+			input:     &ateapipb.ResourceMetadata{Atespace: "ns1"},
+			wantError: field.ErrorList{field.Required(field.NewPath("path", "name"), "")},
+		},
+		{
+			name:      "invalid name",
+			input:     &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "ID1"},
+			wantError: field.ErrorList{field.Invalid(field.NewPath("path", "name"), "ID1", "")},
+		},
+		{
+			name:      "invalid uid",
+			input:     &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "id1", Uid: "not-a-uuid"},
+			wantError: field.ErrorList{field.Invalid(field.NewPath("path", "uid"), "not-a-uuid", "")},
+		},
+		{
+			name:      "negative version",
+			input:     &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "id1", Version: -1},
+			wantError: field.ErrorList{field.Invalid(field.NewPath("path", "version"), int64(-1), "")},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ValidateResourceMetadataRef(tt.input, field.NewPath("path"))
+			field.ErrorMatcher{}.ByType().ByField().ByValue().Test(t, tt.wantError, got)
+		})
+	}
+}
+
 func TestValidateGlobalObjectRef(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -238,6 +302,31 @@ func TestValidateSnapshotURIPrefix(t *testing.T) {
 	}
 }
 
+func TestValidateLocalSnapshotPrefix(t *testing.T) {
+	tests := []struct {
+		name    string
+		prefix  string
+		wantErr bool
+	}{
+		{"valid", "pause", false},
+		{"valid with dash and digits", "pause-2", false},
+		{"empty", "", true},
+		{"dot", ".", true},
+		{"dotdot", "..", true},
+		{"nested", "pause/2", true},
+		{"absolute", "/pause", true},
+		{"traversal", "../other-actor", true},
+		{"backslash", `pause\2`, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := ValidateLocalSnapshotPrefix(tt.prefix); (err != nil) != tt.wantErr {
+				t.Errorf("ValidateLocalSnapshotPrefix(%q) err = %v, wantErr %v", tt.prefix, err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestValidateWorker(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -266,9 +355,10 @@ func TestValidateWorker(t *testing.T) {
 					Name:      "actor-template",
 				},
 				Actor: &ateapipb.ObjectRef{
-					Name:     "actor-id",
-					Atespace: "actor-atespace",
+					Atespace: "actor-ns",
+					Name:     "actor",
 				},
+				ActorUid: "actor-uid",
 			},
 			Ip:           "10.0.0.1",
 			WorkerPodUid: "123e4567-e89b-12d3-a456-426614174000",
@@ -283,9 +373,10 @@ func TestValidateWorker(t *testing.T) {
 			WorkerPod:       "pod-1",
 			Assignment: &ateapipb.Assignment{
 				Actor: &ateapipb.ObjectRef{
-					Name:     "actor-id",
-					Atespace: "actor-atespace",
+					Atespace: "actor-ns",
+					Name:     "actor",
 				},
+				ActorUid: "actor-uid",
 			},
 			Ip:           "10.0.0.1",
 			WorkerPodUid: "123e4567-e89b-12d3-a456-426614174000",
@@ -303,9 +394,10 @@ func TestValidateWorker(t *testing.T) {
 					Name: "actor-template",
 				},
 				Actor: &ateapipb.ObjectRef{
-					Name:     "actor-id",
-					Atespace: "actor-atespace",
+					Atespace: "actor-ns",
+					Name:     "actor",
 				},
+				ActorUid: "actor-uid",
 			},
 			Ip:           "10.0.0.1",
 			WorkerPodUid: "123e4567-e89b-12d3-a456-426614174000",
@@ -323,9 +415,10 @@ func TestValidateWorker(t *testing.T) {
 					Namespace: "actor-ns",
 				},
 				Actor: &ateapipb.ObjectRef{
-					Name:     "actor-id",
-					Atespace: "actor-atespace",
+					Atespace: "actor-ns",
+					Name:     "actor",
 				},
+				ActorUid: "actor-uid",
 			},
 			Ip:           "10.0.0.1",
 			WorkerPodUid: "123e4567-e89b-12d3-a456-426614174000",
@@ -343,6 +436,7 @@ func TestValidateWorker(t *testing.T) {
 					Name:      "actor-template",
 					Namespace: "actor-ns",
 				},
+				ActorUid: "actor-uid",
 			},
 			Ip:           "10.0.0.1",
 			WorkerPodUid: "123e4567-e89b-12d3-a456-426614174000",
@@ -361,8 +455,9 @@ func TestValidateWorker(t *testing.T) {
 					Namespace: "actor-ns",
 				},
 				Actor: &ateapipb.ObjectRef{
-					Atespace: "actor-atespace",
+					Atespace: "actor-ns",
 				},
+				ActorUid: "actor-uid",
 			},
 			Ip:           "10.0.0.1",
 			WorkerPodUid: "123e4567-e89b-12d3-a456-426614174000",
@@ -381,14 +476,36 @@ func TestValidateWorker(t *testing.T) {
 					Namespace: "actor-ns",
 				},
 				Actor: &ateapipb.ObjectRef{
-					Name: "actor-id",
+					Name: "actor",
 				},
+				ActorUid: "actor-uid",
 			},
 			Ip:           "10.0.0.1",
 			WorkerPodUid: "123e4567-e89b-12d3-a456-426614174000",
 			NodeName:     "node-1.example.com",
 		},
 		wantMsg: "worker.assignment.actor.atespace: Required value",
+	}, {
+		name: "partially assigned worker, missing actor_uid",
+		worker: &ateapipb.Worker{
+			WorkerNamespace: "ns-1",
+			WorkerPool:      "pool-1",
+			WorkerPod:       "pod-1",
+			Assignment: &ateapipb.Assignment{
+				ActorTemplate: &ateapipb.KubeNamespacedObjectRef{
+					Name:      "actor-template",
+					Namespace: "actor-ns",
+				},
+				Actor: &ateapipb.ObjectRef{
+					Atespace: "actor-ns",
+					Name:     "actor",
+				},
+			},
+			Ip:           "10.0.0.1",
+			WorkerPodUid: "123e4567-e89b-12d3-a456-426614174000",
+			NodeName:     "node-1.example.com",
+		},
+		wantMsg: "worker.assignment.actor_uid: Required value",
 	}, {
 		name: "missing worker_namespace",
 		worker: &ateapipb.Worker{

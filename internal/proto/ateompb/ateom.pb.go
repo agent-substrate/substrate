@@ -99,26 +99,23 @@ func (SnapshotScope) EnumDescriptor() ([]byte, []int) {
 }
 
 type RunWorkloadRequest struct {
-	state     protoimpl.MessageState `protogen:"open.v1"`
-	Atespace  string                 `protobuf:"bytes,1,opt,name=atespace,proto3" json:"atespace,omitempty"`
-	ActorName string                 `protobuf:"bytes,2,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
-	ActorUid  string                 `protobuf:"bytes,3,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
-	// Actor resource version observed by ate-api when assigning this worker.
-	ActorVersion           int64         `protobuf:"varint,9,opt,name=actor_version,json=actorVersion,proto3" json:"actor_version,omitempty"`
-	ActorTemplateNamespace string        `protobuf:"bytes,4,opt,name=actor_template_namespace,json=actorTemplateNamespace,proto3" json:"actor_template_namespace,omitempty"`
-	ActorTemplateName      string        `protobuf:"bytes,5,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
-	RunscPath              string        `protobuf:"bytes,6,opt,name=runsc_path,json=runscPath,proto3" json:"runsc_path,omitempty"`
-	Spec                   *WorkloadSpec `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
+	state                  protoimpl.MessageState `protogen:"open.v1"`
+	Atespace               string                 `protobuf:"bytes,1,opt,name=atespace,proto3" json:"atespace,omitempty"`
+	ActorName              string                 `protobuf:"bytes,2,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
+	ActorUid               string                 `protobuf:"bytes,3,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
+	ActorTemplateNamespace string                 `protobuf:"bytes,4,opt,name=actor_template_namespace,json=actorTemplateNamespace,proto3" json:"actor_template_namespace,omitempty"`
+	ActorTemplateName      string                 `protobuf:"bytes,5,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
+	RunscPath              string                 `protobuf:"bytes,6,opt,name=runsc_path,json=runscPath,proto3" json:"runsc_path,omitempty"`
+	Spec                   *WorkloadSpec          `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
 	// runtime_asset_paths maps a runtime asset name (e.g. "cloud-hypervisor",
 	// "virtiofsd", "kata-kernel", "kata-image", "kata-config")
 	// to the local on-disk path atelet fetched it to (content-addressed, like
 	// runsc_path). Empty for the gVisor runtime, which uses runsc_path.
 	RuntimeAssetPaths map[string]string `protobuf:"bytes,8,rep,name=runtime_asset_paths,json=runtimeAssetPaths,proto3" json:"runtime_asset_paths,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	// Remote egress gateway selected for this activation. When absent, actor
-	// traffic uses direct egress instead of being redirected through atunnel.
-	EgressGatewayAddress *string `protobuf:"bytes,10,opt,name=egress_gateway_address,json=egressGatewayAddress,proto3,oneof" json:"egress_gateway_address,omitempty"`
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
+	// When absent, actor traffic uses direct egress instead of atunnel.
+	EgressGateway *EgressGateway `protobuf:"bytes,10,opt,name=egress_gateway,json=egressGateway,proto3,oneof" json:"egress_gateway,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *RunWorkloadRequest) Reset() {
@@ -172,13 +169,6 @@ func (x *RunWorkloadRequest) GetActorUid() string {
 	return ""
 }
 
-func (x *RunWorkloadRequest) GetActorVersion() int64 {
-	if x != nil {
-		return x.ActorVersion
-	}
-	return 0
-}
-
 func (x *RunWorkloadRequest) GetActorTemplateNamespace() string {
 	if x != nil {
 		return x.ActorTemplateNamespace
@@ -214,9 +204,56 @@ func (x *RunWorkloadRequest) GetRuntimeAssetPaths() map[string]string {
 	return nil
 }
 
-func (x *RunWorkloadRequest) GetEgressGatewayAddress() string {
-	if x != nil && x.EgressGatewayAddress != nil {
-		return *x.EgressGatewayAddress
+func (x *RunWorkloadRequest) GetEgressGateway() *EgressGateway {
+	if x != nil {
+		return x.EgressGateway
+	}
+	return nil
+}
+
+// EgressGateway configures tunneled egress for one actor activation.
+type EgressGateway struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// address is required and identifies the remote gateway as an IP address or
+	// DNS name followed by its port.
+	Address       string `protobuf:"bytes,1,opt,name=address,proto3" json:"address,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *EgressGateway) Reset() {
+	*x = EgressGateway{}
+	mi := &file_ateom_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EgressGateway) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EgressGateway) ProtoMessage() {}
+
+func (x *EgressGateway) ProtoReflect() protoreflect.Message {
+	mi := &file_ateom_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EgressGateway.ProtoReflect.Descriptor instead.
+func (*EgressGateway) Descriptor() ([]byte, []int) {
+	return file_ateom_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *EgressGateway) GetAddress() string {
+	if x != nil {
+		return x.Address
 	}
 	return ""
 }
@@ -231,7 +268,7 @@ type WorkloadSpec struct {
 
 func (x *WorkloadSpec) Reset() {
 	*x = WorkloadSpec{}
-	mi := &file_ateom_proto_msgTypes[1]
+	mi := &file_ateom_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -243,7 +280,7 @@ func (x *WorkloadSpec) String() string {
 func (*WorkloadSpec) ProtoMessage() {}
 
 func (x *WorkloadSpec) ProtoReflect() protoreflect.Message {
-	mi := &file_ateom_proto_msgTypes[1]
+	mi := &file_ateom_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -256,7 +293,7 @@ func (x *WorkloadSpec) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WorkloadSpec.ProtoReflect.Descriptor instead.
 func (*WorkloadSpec) Descriptor() ([]byte, []int) {
-	return file_ateom_proto_rawDescGZIP(), []int{1}
+	return file_ateom_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *WorkloadSpec) GetContainers() []*Container {
@@ -279,7 +316,7 @@ type Container struct {
 
 func (x *Container) Reset() {
 	*x = Container{}
-	mi := &file_ateom_proto_msgTypes[2]
+	mi := &file_ateom_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -291,7 +328,7 @@ func (x *Container) String() string {
 func (*Container) ProtoMessage() {}
 
 func (x *Container) ProtoReflect() protoreflect.Message {
-	mi := &file_ateom_proto_msgTypes[2]
+	mi := &file_ateom_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -304,7 +341,7 @@ func (x *Container) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Container.ProtoReflect.Descriptor instead.
 func (*Container) Descriptor() ([]byte, []int) {
-	return file_ateom_proto_rawDescGZIP(), []int{2}
+	return file_ateom_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *Container) GetName() string {
@@ -342,7 +379,7 @@ type DurableDirVolumeMount struct {
 
 func (x *DurableDirVolumeMount) Reset() {
 	*x = DurableDirVolumeMount{}
-	mi := &file_ateom_proto_msgTypes[3]
+	mi := &file_ateom_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -354,7 +391,7 @@ func (x *DurableDirVolumeMount) String() string {
 func (*DurableDirVolumeMount) ProtoMessage() {}
 
 func (x *DurableDirVolumeMount) ProtoReflect() protoreflect.Message {
-	mi := &file_ateom_proto_msgTypes[3]
+	mi := &file_ateom_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -367,7 +404,7 @@ func (x *DurableDirVolumeMount) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DurableDirVolumeMount.ProtoReflect.Descriptor instead.
 func (*DurableDirVolumeMount) Descriptor() ([]byte, []int) {
-	return file_ateom_proto_rawDescGZIP(), []int{3}
+	return file_ateom_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *DurableDirVolumeMount) GetVolumeName() string {
@@ -398,7 +435,7 @@ type Readyz struct {
 
 func (x *Readyz) Reset() {
 	*x = Readyz{}
-	mi := &file_ateom_proto_msgTypes[4]
+	mi := &file_ateom_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -410,7 +447,7 @@ func (x *Readyz) String() string {
 func (*Readyz) ProtoMessage() {}
 
 func (x *Readyz) ProtoReflect() protoreflect.Message {
-	mi := &file_ateom_proto_msgTypes[4]
+	mi := &file_ateom_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -423,7 +460,7 @@ func (x *Readyz) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Readyz.ProtoReflect.Descriptor instead.
 func (*Readyz) Descriptor() ([]byte, []int) {
-	return file_ateom_proto_rawDescGZIP(), []int{4}
+	return file_ateom_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *Readyz) GetHttpGet() *HTTPGetAction {
@@ -453,7 +490,7 @@ type HTTPGetAction struct {
 
 func (x *HTTPGetAction) Reset() {
 	*x = HTTPGetAction{}
-	mi := &file_ateom_proto_msgTypes[5]
+	mi := &file_ateom_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -465,7 +502,7 @@ func (x *HTTPGetAction) String() string {
 func (*HTTPGetAction) ProtoMessage() {}
 
 func (x *HTTPGetAction) ProtoReflect() protoreflect.Message {
-	mi := &file_ateom_proto_msgTypes[5]
+	mi := &file_ateom_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -478,7 +515,7 @@ func (x *HTTPGetAction) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HTTPGetAction.ProtoReflect.Descriptor instead.
 func (*HTTPGetAction) Descriptor() ([]byte, []int) {
-	return file_ateom_proto_rawDescGZIP(), []int{5}
+	return file_ateom_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *HTTPGetAction) GetPath() string {
@@ -503,7 +540,7 @@ type RunWorkloadResponse struct {
 
 func (x *RunWorkloadResponse) Reset() {
 	*x = RunWorkloadResponse{}
-	mi := &file_ateom_proto_msgTypes[6]
+	mi := &file_ateom_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -515,7 +552,7 @@ func (x *RunWorkloadResponse) String() string {
 func (*RunWorkloadResponse) ProtoMessage() {}
 
 func (x *RunWorkloadResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ateom_proto_msgTypes[6]
+	mi := &file_ateom_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -528,7 +565,7 @@ func (x *RunWorkloadResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RunWorkloadResponse.ProtoReflect.Descriptor instead.
 func (*RunWorkloadResponse) Descriptor() ([]byte, []int) {
-	return file_ateom_proto_rawDescGZIP(), []int{6}
+	return file_ateom_proto_rawDescGZIP(), []int{7}
 }
 
 type CheckpointWorkloadRequest struct {
@@ -560,7 +597,7 @@ type CheckpointWorkloadRequest struct {
 
 func (x *CheckpointWorkloadRequest) Reset() {
 	*x = CheckpointWorkloadRequest{}
-	mi := &file_ateom_proto_msgTypes[7]
+	mi := &file_ateom_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -572,7 +609,7 @@ func (x *CheckpointWorkloadRequest) String() string {
 func (*CheckpointWorkloadRequest) ProtoMessage() {}
 
 func (x *CheckpointWorkloadRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ateom_proto_msgTypes[7]
+	mi := &file_ateom_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -585,7 +622,7 @@ func (x *CheckpointWorkloadRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CheckpointWorkloadRequest.ProtoReflect.Descriptor instead.
 func (*CheckpointWorkloadRequest) Descriptor() ([]byte, []int) {
-	return file_ateom_proto_rawDescGZIP(), []int{7}
+	return file_ateom_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *CheckpointWorkloadRequest) GetAtespace() string {
@@ -670,7 +707,7 @@ type CheckpointWorkloadResponse struct {
 
 func (x *CheckpointWorkloadResponse) Reset() {
 	*x = CheckpointWorkloadResponse{}
-	mi := &file_ateom_proto_msgTypes[8]
+	mi := &file_ateom_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -682,7 +719,7 @@ func (x *CheckpointWorkloadResponse) String() string {
 func (*CheckpointWorkloadResponse) ProtoMessage() {}
 
 func (x *CheckpointWorkloadResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ateom_proto_msgTypes[8]
+	mi := &file_ateom_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -695,7 +732,7 @@ func (x *CheckpointWorkloadResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CheckpointWorkloadResponse.ProtoReflect.Descriptor instead.
 func (*CheckpointWorkloadResponse) Descriptor() ([]byte, []int) {
-	return file_ateom_proto_rawDescGZIP(), []int{8}
+	return file_ateom_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *CheckpointWorkloadResponse) GetSnapshotFiles() []string {
@@ -706,16 +743,14 @@ func (x *CheckpointWorkloadResponse) GetSnapshotFiles() []string {
 }
 
 type RestoreWorkloadRequest struct {
-	state     protoimpl.MessageState `protogen:"open.v1"`
-	Atespace  string                 `protobuf:"bytes,1,opt,name=atespace,proto3" json:"atespace,omitempty"`
-	ActorName string                 `protobuf:"bytes,2,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
-	ActorUid  string                 `protobuf:"bytes,3,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
-	// Actor resource version observed by ate-api when assigning this worker.
-	ActorVersion           int64         `protobuf:"varint,11,opt,name=actor_version,json=actorVersion,proto3" json:"actor_version,omitempty"`
-	ActorTemplateNamespace string        `protobuf:"bytes,4,opt,name=actor_template_namespace,json=actorTemplateNamespace,proto3" json:"actor_template_namespace,omitempty"`
-	ActorTemplateName      string        `protobuf:"bytes,5,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
-	RunscPath              string        `protobuf:"bytes,6,opt,name=runsc_path,json=runscPath,proto3" json:"runsc_path,omitempty"`
-	Spec                   *WorkloadSpec `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
+	state                  protoimpl.MessageState `protogen:"open.v1"`
+	Atespace               string                 `protobuf:"bytes,1,opt,name=atespace,proto3" json:"atespace,omitempty"`
+	ActorName              string                 `protobuf:"bytes,2,opt,name=actor_name,json=actorName,proto3" json:"actor_name,omitempty"`
+	ActorUid               string                 `protobuf:"bytes,3,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
+	ActorTemplateNamespace string                 `protobuf:"bytes,4,opt,name=actor_template_namespace,json=actorTemplateNamespace,proto3" json:"actor_template_namespace,omitempty"`
+	ActorTemplateName      string                 `protobuf:"bytes,5,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
+	RunscPath              string                 `protobuf:"bytes,6,opt,name=runsc_path,json=runscPath,proto3" json:"runsc_path,omitempty"`
+	Spec                   *WorkloadSpec          `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
 	// The object storage URI prefix of the snapshot to restore.
 	SnapshotUriPrefix string `protobuf:"bytes,8,opt,name=snapshot_uri_prefix,json=snapshotUriPrefix,proto3" json:"snapshot_uri_prefix,omitempty"`
 	// runtime_asset_paths maps a runtime asset name to the local on-disk path
@@ -723,9 +758,8 @@ type RestoreWorkloadRequest struct {
 	RuntimeAssetPaths map[string]string `protobuf:"bytes,9,rep,name=runtime_asset_paths,json=runtimeAssetPaths,proto3" json:"runtime_asset_paths,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	// What content to restore from the snapshot.
 	Scope SnapshotScope `protobuf:"varint,10,opt,name=scope,proto3,enum=ateom.SnapshotScope" json:"scope,omitempty"`
-	// Remote egress gateway selected for this activation. When absent, actor
-	// traffic uses direct egress instead of being redirected through atunnel.
-	EgressGatewayAddress *string `protobuf:"bytes,12,opt,name=egress_gateway_address,json=egressGatewayAddress,proto3,oneof" json:"egress_gateway_address,omitempty"`
+	// When absent, actor traffic uses direct egress instead of atunnel.
+	EgressGateway *EgressGateway `protobuf:"bytes,12,opt,name=egress_gateway,json=egressGateway,proto3,oneof" json:"egress_gateway,omitempty"`
 	// The object storage URI prefix of the ActorTemplate's golden snapshot.
 	// Set only when scope is SNAPSHOT_SCOPE_DATA_ON_GOLDEN. Mirrors the
 	// snapshot_uri_prefix contract (field 8).
@@ -736,7 +770,7 @@ type RestoreWorkloadRequest struct {
 
 func (x *RestoreWorkloadRequest) Reset() {
 	*x = RestoreWorkloadRequest{}
-	mi := &file_ateom_proto_msgTypes[9]
+	mi := &file_ateom_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -748,7 +782,7 @@ func (x *RestoreWorkloadRequest) String() string {
 func (*RestoreWorkloadRequest) ProtoMessage() {}
 
 func (x *RestoreWorkloadRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_ateom_proto_msgTypes[9]
+	mi := &file_ateom_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -761,7 +795,7 @@ func (x *RestoreWorkloadRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RestoreWorkloadRequest.ProtoReflect.Descriptor instead.
 func (*RestoreWorkloadRequest) Descriptor() ([]byte, []int) {
-	return file_ateom_proto_rawDescGZIP(), []int{9}
+	return file_ateom_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *RestoreWorkloadRequest) GetAtespace() string {
@@ -783,13 +817,6 @@ func (x *RestoreWorkloadRequest) GetActorUid() string {
 		return x.ActorUid
 	}
 	return ""
-}
-
-func (x *RestoreWorkloadRequest) GetActorVersion() int64 {
-	if x != nil {
-		return x.ActorVersion
-	}
-	return 0
 }
 
 func (x *RestoreWorkloadRequest) GetActorTemplateNamespace() string {
@@ -841,11 +868,11 @@ func (x *RestoreWorkloadRequest) GetScope() SnapshotScope {
 	return SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED
 }
 
-func (x *RestoreWorkloadRequest) GetEgressGatewayAddress() string {
-	if x != nil && x.EgressGatewayAddress != nil {
-		return *x.EgressGatewayAddress
+func (x *RestoreWorkloadRequest) GetEgressGateway() *EgressGateway {
+	if x != nil {
+		return x.EgressGateway
 	}
-	return ""
+	return nil
 }
 
 func (x *RestoreWorkloadRequest) GetGoldenSnapshotUriPrefix() string {
@@ -863,7 +890,7 @@ type RestoreWorkloadResponse struct {
 
 func (x *RestoreWorkloadResponse) Reset() {
 	*x = RestoreWorkloadResponse{}
-	mi := &file_ateom_proto_msgTypes[10]
+	mi := &file_ateom_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -875,7 +902,7 @@ func (x *RestoreWorkloadResponse) String() string {
 func (*RestoreWorkloadResponse) ProtoMessage() {}
 
 func (x *RestoreWorkloadResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_ateom_proto_msgTypes[10]
+	mi := &file_ateom_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -888,32 +915,33 @@ func (x *RestoreWorkloadResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RestoreWorkloadResponse.ProtoReflect.Descriptor instead.
 func (*RestoreWorkloadResponse) Descriptor() ([]byte, []int) {
-	return file_ateom_proto_rawDescGZIP(), []int{10}
+	return file_ateom_proto_rawDescGZIP(), []int{11}
 }
 
 var File_ateom_proto protoreflect.FileDescriptor
 
 const file_ateom_proto_rawDesc = "" +
 	"\n" +
-	"\vateom.proto\x12\x05ateom\"\xc1\x04\n" +
+	"\vateom.proto\x12\x05ateom\"\x9b\x04\n" +
 	"\x12RunWorkloadRequest\x12\x1a\n" +
 	"\batespace\x18\x01 \x01(\tR\batespace\x12\x1d\n" +
 	"\n" +
 	"actor_name\x18\x02 \x01(\tR\tactorName\x12\x1b\n" +
-	"\tactor_uid\x18\x03 \x01(\tR\bactorUid\x12#\n" +
-	"\ractor_version\x18\t \x01(\x03R\factorVersion\x128\n" +
+	"\tactor_uid\x18\x03 \x01(\tR\bactorUid\x128\n" +
 	"\x18actor_template_namespace\x18\x04 \x01(\tR\x16actorTemplateNamespace\x12.\n" +
 	"\x13actor_template_name\x18\x05 \x01(\tR\x11actorTemplateName\x12\x1d\n" +
 	"\n" +
 	"runsc_path\x18\x06 \x01(\tR\trunscPath\x12'\n" +
 	"\x04spec\x18\a \x01(\v2\x13.ateom.WorkloadSpecR\x04spec\x12`\n" +
-	"\x13runtime_asset_paths\x18\b \x03(\v20.ateom.RunWorkloadRequest.RuntimeAssetPathsEntryR\x11runtimeAssetPaths\x129\n" +
-	"\x16egress_gateway_address\x18\n" +
-	" \x01(\tH\x00R\x14egressGatewayAddress\x88\x01\x01\x1aD\n" +
+	"\x13runtime_asset_paths\x18\b \x03(\v20.ateom.RunWorkloadRequest.RuntimeAssetPathsEntryR\x11runtimeAssetPaths\x12@\n" +
+	"\x0eegress_gateway\x18\n" +
+	" \x01(\v2\x14.ateom.EgressGatewayH\x00R\regressGateway\x88\x01\x01\x1aD\n" +
 	"\x16RuntimeAssetPathsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01B\x19\n" +
-	"\x17_egress_gateway_address\"@\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01B\x11\n" +
+	"\x0f_egress_gateway\")\n" +
+	"\rEgressGateway\x12\x18\n" +
+	"\aaddress\x18\x01 \x01(\tR\aaddress\"@\n" +
 	"\fWorkloadSpec\x120\n" +
 	"\n" +
 	"containers\x18\x01 \x03(\v2\x10.ateom.ContainerR\n" +
@@ -952,13 +980,12 @@ const file_ateom_proto_rawDesc = "" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"C\n" +
 	"\x1aCheckpointWorkloadResponse\x12%\n" +
-	"\x0esnapshot_files\x18\x01 \x03(\tR\rsnapshotFiles\"\xe2\x05\n" +
+	"\x0esnapshot_files\x18\x01 \x03(\tR\rsnapshotFiles\"\xbc\x05\n" +
 	"\x16RestoreWorkloadRequest\x12\x1a\n" +
 	"\batespace\x18\x01 \x01(\tR\batespace\x12\x1d\n" +
 	"\n" +
 	"actor_name\x18\x02 \x01(\tR\tactorName\x12\x1b\n" +
-	"\tactor_uid\x18\x03 \x01(\tR\bactorUid\x12#\n" +
-	"\ractor_version\x18\v \x01(\x03R\factorVersion\x128\n" +
+	"\tactor_uid\x18\x03 \x01(\tR\bactorUid\x128\n" +
 	"\x18actor_template_namespace\x18\x04 \x01(\tR\x16actorTemplateNamespace\x12.\n" +
 	"\x13actor_template_name\x18\x05 \x01(\tR\x11actorTemplateName\x12\x1d\n" +
 	"\n" +
@@ -967,13 +994,13 @@ const file_ateom_proto_rawDesc = "" +
 	"\x13snapshot_uri_prefix\x18\b \x01(\tR\x11snapshotUriPrefix\x12d\n" +
 	"\x13runtime_asset_paths\x18\t \x03(\v24.ateom.RestoreWorkloadRequest.RuntimeAssetPathsEntryR\x11runtimeAssetPaths\x12*\n" +
 	"\x05scope\x18\n" +
-	" \x01(\x0e2\x14.ateom.SnapshotScopeR\x05scope\x129\n" +
-	"\x16egress_gateway_address\x18\f \x01(\tH\x00R\x14egressGatewayAddress\x88\x01\x01\x12;\n" +
+	" \x01(\x0e2\x14.ateom.SnapshotScopeR\x05scope\x12@\n" +
+	"\x0eegress_gateway\x18\f \x01(\v2\x14.ateom.EgressGatewayH\x00R\regressGateway\x88\x01\x01\x12;\n" +
 	"\x1agolden_snapshot_uri_prefix\x18\r \x01(\tR\x17goldenSnapshotUriPrefix\x1aD\n" +
 	"\x16RuntimeAssetPathsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01B\x19\n" +
-	"\x17_egress_gateway_address\"\x19\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01B\x11\n" +
+	"\x0f_egress_gateway\"\x19\n" +
 	"\x17RestoreWorkloadResponse*\x84\x01\n" +
 	"\rSnapshotScope\x12\x1e\n" +
 	"\x1aSNAPSHOT_SCOPE_UNSPECIFIED\x10\x00\x12\x17\n" +
@@ -998,48 +1025,51 @@ func file_ateom_proto_rawDescGZIP() []byte {
 }
 
 var file_ateom_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_ateom_proto_msgTypes = make([]protoimpl.MessageInfo, 14)
+var file_ateom_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
 var file_ateom_proto_goTypes = []any{
 	(SnapshotScope)(0),                 // 0: ateom.SnapshotScope
 	(*RunWorkloadRequest)(nil),         // 1: ateom.RunWorkloadRequest
-	(*WorkloadSpec)(nil),               // 2: ateom.WorkloadSpec
-	(*Container)(nil),                  // 3: ateom.Container
-	(*DurableDirVolumeMount)(nil),      // 4: ateom.DurableDirVolumeMount
-	(*Readyz)(nil),                     // 5: ateom.Readyz
-	(*HTTPGetAction)(nil),              // 6: ateom.HTTPGetAction
-	(*RunWorkloadResponse)(nil),        // 7: ateom.RunWorkloadResponse
-	(*CheckpointWorkloadRequest)(nil),  // 8: ateom.CheckpointWorkloadRequest
-	(*CheckpointWorkloadResponse)(nil), // 9: ateom.CheckpointWorkloadResponse
-	(*RestoreWorkloadRequest)(nil),     // 10: ateom.RestoreWorkloadRequest
-	(*RestoreWorkloadResponse)(nil),    // 11: ateom.RestoreWorkloadResponse
-	nil,                                // 12: ateom.RunWorkloadRequest.RuntimeAssetPathsEntry
-	nil,                                // 13: ateom.CheckpointWorkloadRequest.RuntimeAssetPathsEntry
-	nil,                                // 14: ateom.RestoreWorkloadRequest.RuntimeAssetPathsEntry
+	(*EgressGateway)(nil),              // 2: ateom.EgressGateway
+	(*WorkloadSpec)(nil),               // 3: ateom.WorkloadSpec
+	(*Container)(nil),                  // 4: ateom.Container
+	(*DurableDirVolumeMount)(nil),      // 5: ateom.DurableDirVolumeMount
+	(*Readyz)(nil),                     // 6: ateom.Readyz
+	(*HTTPGetAction)(nil),              // 7: ateom.HTTPGetAction
+	(*RunWorkloadResponse)(nil),        // 8: ateom.RunWorkloadResponse
+	(*CheckpointWorkloadRequest)(nil),  // 9: ateom.CheckpointWorkloadRequest
+	(*CheckpointWorkloadResponse)(nil), // 10: ateom.CheckpointWorkloadResponse
+	(*RestoreWorkloadRequest)(nil),     // 11: ateom.RestoreWorkloadRequest
+	(*RestoreWorkloadResponse)(nil),    // 12: ateom.RestoreWorkloadResponse
+	nil,                                // 13: ateom.RunWorkloadRequest.RuntimeAssetPathsEntry
+	nil,                                // 14: ateom.CheckpointWorkloadRequest.RuntimeAssetPathsEntry
+	nil,                                // 15: ateom.RestoreWorkloadRequest.RuntimeAssetPathsEntry
 }
 var file_ateom_proto_depIdxs = []int32{
-	2,  // 0: ateom.RunWorkloadRequest.spec:type_name -> ateom.WorkloadSpec
-	12, // 1: ateom.RunWorkloadRequest.runtime_asset_paths:type_name -> ateom.RunWorkloadRequest.RuntimeAssetPathsEntry
-	3,  // 2: ateom.WorkloadSpec.containers:type_name -> ateom.Container
-	5,  // 3: ateom.Container.readyz:type_name -> ateom.Readyz
-	4,  // 4: ateom.Container.durable_dir_volume_mounts:type_name -> ateom.DurableDirVolumeMount
-	6,  // 5: ateom.Readyz.http_get:type_name -> ateom.HTTPGetAction
-	2,  // 6: ateom.CheckpointWorkloadRequest.spec:type_name -> ateom.WorkloadSpec
-	13, // 7: ateom.CheckpointWorkloadRequest.runtime_asset_paths:type_name -> ateom.CheckpointWorkloadRequest.RuntimeAssetPathsEntry
-	0,  // 8: ateom.CheckpointWorkloadRequest.scope:type_name -> ateom.SnapshotScope
-	2,  // 9: ateom.RestoreWorkloadRequest.spec:type_name -> ateom.WorkloadSpec
-	14, // 10: ateom.RestoreWorkloadRequest.runtime_asset_paths:type_name -> ateom.RestoreWorkloadRequest.RuntimeAssetPathsEntry
-	0,  // 11: ateom.RestoreWorkloadRequest.scope:type_name -> ateom.SnapshotScope
-	1,  // 12: ateom.Ateom.RunWorkload:input_type -> ateom.RunWorkloadRequest
-	8,  // 13: ateom.Ateom.CheckpointWorkload:input_type -> ateom.CheckpointWorkloadRequest
-	10, // 14: ateom.Ateom.RestoreWorkload:input_type -> ateom.RestoreWorkloadRequest
-	7,  // 15: ateom.Ateom.RunWorkload:output_type -> ateom.RunWorkloadResponse
-	9,  // 16: ateom.Ateom.CheckpointWorkload:output_type -> ateom.CheckpointWorkloadResponse
-	11, // 17: ateom.Ateom.RestoreWorkload:output_type -> ateom.RestoreWorkloadResponse
-	15, // [15:18] is the sub-list for method output_type
-	12, // [12:15] is the sub-list for method input_type
-	12, // [12:12] is the sub-list for extension type_name
-	12, // [12:12] is the sub-list for extension extendee
-	0,  // [0:12] is the sub-list for field type_name
+	3,  // 0: ateom.RunWorkloadRequest.spec:type_name -> ateom.WorkloadSpec
+	13, // 1: ateom.RunWorkloadRequest.runtime_asset_paths:type_name -> ateom.RunWorkloadRequest.RuntimeAssetPathsEntry
+	2,  // 2: ateom.RunWorkloadRequest.egress_gateway:type_name -> ateom.EgressGateway
+	4,  // 3: ateom.WorkloadSpec.containers:type_name -> ateom.Container
+	6,  // 4: ateom.Container.readyz:type_name -> ateom.Readyz
+	5,  // 5: ateom.Container.durable_dir_volume_mounts:type_name -> ateom.DurableDirVolumeMount
+	7,  // 6: ateom.Readyz.http_get:type_name -> ateom.HTTPGetAction
+	3,  // 7: ateom.CheckpointWorkloadRequest.spec:type_name -> ateom.WorkloadSpec
+	14, // 8: ateom.CheckpointWorkloadRequest.runtime_asset_paths:type_name -> ateom.CheckpointWorkloadRequest.RuntimeAssetPathsEntry
+	0,  // 9: ateom.CheckpointWorkloadRequest.scope:type_name -> ateom.SnapshotScope
+	3,  // 10: ateom.RestoreWorkloadRequest.spec:type_name -> ateom.WorkloadSpec
+	15, // 11: ateom.RestoreWorkloadRequest.runtime_asset_paths:type_name -> ateom.RestoreWorkloadRequest.RuntimeAssetPathsEntry
+	0,  // 12: ateom.RestoreWorkloadRequest.scope:type_name -> ateom.SnapshotScope
+	2,  // 13: ateom.RestoreWorkloadRequest.egress_gateway:type_name -> ateom.EgressGateway
+	1,  // 14: ateom.Ateom.RunWorkload:input_type -> ateom.RunWorkloadRequest
+	9,  // 15: ateom.Ateom.CheckpointWorkload:input_type -> ateom.CheckpointWorkloadRequest
+	11, // 16: ateom.Ateom.RestoreWorkload:input_type -> ateom.RestoreWorkloadRequest
+	8,  // 17: ateom.Ateom.RunWorkload:output_type -> ateom.RunWorkloadResponse
+	10, // 18: ateom.Ateom.CheckpointWorkload:output_type -> ateom.CheckpointWorkloadResponse
+	12, // 19: ateom.Ateom.RestoreWorkload:output_type -> ateom.RestoreWorkloadResponse
+	17, // [17:20] is the sub-list for method output_type
+	14, // [14:17] is the sub-list for method input_type
+	14, // [14:14] is the sub-list for extension type_name
+	14, // [14:14] is the sub-list for extension extendee
+	0,  // [0:14] is the sub-list for field type_name
 }
 
 func init() { file_ateom_proto_init() }
@@ -1048,14 +1078,14 @@ func file_ateom_proto_init() {
 		return
 	}
 	file_ateom_proto_msgTypes[0].OneofWrappers = []any{}
-	file_ateom_proto_msgTypes[9].OneofWrappers = []any{}
+	file_ateom_proto_msgTypes[10].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_ateom_proto_rawDesc), len(file_ateom_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   14,
+			NumMessages:   15,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

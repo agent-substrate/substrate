@@ -89,6 +89,20 @@ func (c *Cache) Workers() ([]*ateapipb.Worker, error) {
 	return out, nil
 }
 
+// Worker returns the worker for a Kubernetes namespace and Pod name.
+func (c *Cache) Worker(namespace, pod string) (*ateapipb.Worker, error) {
+	if !c.ready.Load() {
+		return nil, fmt.Errorf("worker cache not ready")
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	worker, ok := c.workers[namespace+":"+pod]
+	if !ok {
+		return nil, store.ErrNotFound
+	}
+	return worker, nil
+}
+
 func (c *Cache) sync(ctx context.Context) (*store.WorkerWatch, error) {
 	watch, err := c.store.WatchWorkers(ctx)
 	if err != nil {

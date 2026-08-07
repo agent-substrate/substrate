@@ -564,6 +564,90 @@ func TestXdsServer_ExtProcCircuitBreaker(t *testing.T) {
 	})
 }
 
+func TestXdsServer_RouteTimeout(t *testing.T) {
+	// routeAction digs out the one workload route buildRoutes emits, which is
+	// where Envoy actually reads its timeouts.
+	//
+	// It pins the route to OriginalDstClusterName rather than trusting position:
+	// that is the cluster carrying actor traffic to the worker's atunnel ingress.
+	// A change that moves actor traffic onto some other route would otherwise
+	// leave this passing while the timeouts govern a route nothing uses.
+	routeAction := func(t *testing.T, x *XdsServer) *routev3.RouteAction {
+		t.Helper()
+		hosts := x.buildRoutes().GetVirtualHosts()
+		if len(hosts) != 1 || len(hosts[0].GetRoutes()) != 1 {
+			t.Fatalf("buildRoutes() = %d virtual hosts, want exactly 1 with 1 route", len(hosts))
+		}
+		action := hosts[0].GetRoutes()[0].GetRoute()
+		if got := action.GetCluster(); got != OriginalDstClusterName {
+			t.Fatalf("workload route targets cluster %q, want %q", got, OriginalDstClusterName)
+		}
+		return action
+	}
+	routeTimeout := func(t *testing.T, x *XdsServer) time.Duration {
+		t.Helper()
+		return routeAction(t, x).GetTimeout().AsDuration()
+	}
+	idleTimeout := func(t *testing.T, x *XdsServer) time.Duration {
+		t.Helper()
+		return routeAction(t, x).GetIdleTimeout().AsDuration()
+	}
+
+	t.Run("Default", func(t *testing.T) {
+		if got := routeTimeout(t, NewXdsServer(0)); got != defaultRouteTimeout {
+			t.Errorf("default route timeout = %v, want %v", got, defaultRouteTimeout)
+		}
+	})
+
+	t.Run("SetterOverrides", func(t *testing.T) {
+		x := NewXdsServer(0)
+		x.SetRouteTimeout(5 * time.Minute)
+		if got := routeTimeout(t, x); got != 5*time.Minute {
+			t.Errorf("route timeout after SetRouteTimeout(5m) = %v, want 5m", got)
+		}
+	})
+
+	// The flag cannot produce a zero: --route-timeout carries defaultRouteTimeout,
+	// so an operator who never passes it gets 10s, not 0. The guard is on the
+	// setter because SetRouteTimeout is part of the type's API and reachable
+	// from any caller, and because a zero here is the one value Envoy reads as
+	// "no timeout at all" — a mis-set knob would silently turn every stuck
+	// actor into a held-open request rather than failing visibly. The sibling
+	// setters guard the same way.
+	t.Run("NonPositiveKeepsDefault", func(t *testing.T) {
+		for _, d := range []time.Duration{0, -time.Second} {
+			x := NewXdsServer(0)
+			x.SetRouteTimeout(d)
+			if got := routeTimeout(t, x); got != defaultRouteTimeout {
+				t.Errorf("route timeout after SetRouteTimeout(%v) = %v, want default %v", d, got, defaultRouteTimeout)
+			}
+		}
+	})
+
+	// The route timeout alone does not bound a long turn. A stream carrying no
+	// bytes while the actor works is idle by Envoy's reckoning, and Envoy resets
+	// it at the 5m stream idle default whatever the route timeout says. These
+	// pin the relationship: the idle timer never bites before the ceiling the
+	// operator asked for, and it is not tightened below what applies today.
+	t.Run("IdleTimeoutTracksLongerRouteTimeout", func(t *testing.T) {
+		x := NewXdsServer(0)
+		x.SetRouteTimeout(30 * time.Minute)
+		if got := idleTimeout(t, x); got != 30*time.Minute {
+			t.Errorf("idle timeout with a 30m route timeout = %v, want 30m: a shorter idle timer would reset the stream first", got)
+		}
+	})
+
+	t.Run("IdleTimeoutKeepsEnvoyDefaultWhenRouteTimeoutIsShorter", func(t *testing.T) {
+		for _, d := range []time.Duration{defaultRouteTimeout, envoyDefaultStreamIdleTimeout} {
+			x := NewXdsServer(0)
+			x.SetRouteTimeout(d)
+			if got := idleTimeout(t, x); got != envoyDefaultStreamIdleTimeout {
+				t.Errorf("idle timeout with a %v route timeout = %v, want %v (unchanged from Envoy's default)", d, got, envoyDefaultStreamIdleTimeout)
+			}
+		}
+	})
+}
+
 func TestXdsServer_SetOtlpCollector(t *testing.T) {
 	// --otlp-collector-address defaults to OTEL_EXPORTER_OTLP_ENDPOINT, so the
 	// URL forms that variable carries have to reduce to the bare host and port

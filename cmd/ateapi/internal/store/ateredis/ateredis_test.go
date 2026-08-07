@@ -341,6 +341,7 @@ func TestUpdateWorker_Success(t *testing.T) {
 		Actor: &ateapipb.ObjectRef{
 			Name: "actor-1",
 		},
+		ActorUid: "actor-1-uid",
 	}
 
 	if err := s.UpdateWorker(ctx, worker, 1); err != nil {
@@ -610,7 +611,7 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 	if _, err := s.TagActorSnapshot(ctx, testAtespace, "snapshot-1", differentScope); !errors.Is(err, store.ErrAlreadyExists) {
 		t.Fatalf("re-tag with different scope error = %v, want ErrAlreadyExists", err)
 	}
-	tagged, err = s.UpdateActorSnapshotTag(ctx, testAtespace, "before-upgrade", ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED)
+	tagged, err = s.UpdateActorSnapshotTag(ctx, testAtespace, "before-upgrade", ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED, tagged.GetMetadata().GetVersion())
 	if err != nil || tagged.GetScope() != ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED {
 		t.Fatalf("UpdateActorSnapshotTag = (%v, %v), want published", tagged, err)
 	}
@@ -631,6 +632,36 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 	}
 	if got, _, err := s.GetActorSnapshot(ctx, testAtespace, "snapshot-1"); err != nil || got.GetMetadata().GetUid() != created.GetMetadata().GetUid() {
 		t.Fatalf("snapshot after tag deletion = (%v, %v), want retained metadata", got, err)
+	}
+}
+
+func TestUpdateActorSnapshotTag_Conflict(t *testing.T) {
+	_, s, ctx := setupTest(t)
+	if _, err := s.CreateActorSnapshot(ctx, &ateapipb.ActorSnapshot{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "snapshot-1"},
+	}, "gs://private/snapshot-1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.TagActorSnapshot(ctx, testAtespace, "snapshot-1", &ateapipb.ActorSnapshotTag{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "tag-1"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	_, _, tag1, err := s.GetActorSnapshotByTag(ctx, testAtespace, "tag-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _, tag2, err := s.GetActorSnapshotByTag(ctx, testAtespace, "tag-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.UpdateActorSnapshotTag(ctx, testAtespace, "tag-1", ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED, tag1.GetMetadata().GetVersion()); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = s.UpdateActorSnapshotTag(ctx, testAtespace, "tag-1", ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE, tag2.GetMetadata().GetVersion())
+	if !errors.Is(err, store.ErrVersionConflict) {
+		t.Fatalf("UpdateActorSnapshotTag error = %v, want ErrVersionConflict", err)
 	}
 }
 
@@ -661,14 +692,20 @@ func TestUpdateWorker_Conflict(t *testing.T) {
 	}
 
 	// Update instance 1
-	worker1.Assignment = &ateapipb.Assignment{Actor: &ateapipb.ObjectRef{Name: "actor-1"}}
+	worker1.Assignment = &ateapipb.Assignment{
+		Actor:    &ateapipb.ObjectRef{Atespace: "team-a", Name: "actor-1"},
+		ActorUid: "actor-1-uid",
+	}
 	err = s.UpdateWorker(ctx, worker1, worker1.Version)
 	if err != nil {
 		t.Fatalf("UpdateWorker failed: %v", err)
 	}
 
 	// Try to update instance 2
-	worker2.Assignment = &ateapipb.Assignment{Actor: &ateapipb.ObjectRef{Name: "actor-2"}}
+	worker2.Assignment = &ateapipb.Assignment{
+		Actor:    &ateapipb.ObjectRef{Atespace: "team-a", Name: "actor-2"},
+		ActorUid: "actor-2-uid",
+	}
 	err = s.UpdateWorker(ctx, worker2, worker2.Version)
 	if !errors.Is(err, store.ErrVersionConflict) {
 		t.Errorf("expected ErrVersionConflict, got %v", err)

@@ -178,7 +178,7 @@ func TestSuspendSteps_CheckPrerequisite(t *testing.T) {
 				// Worker pod fields are populated so CallAteletSuspendStep's
 				// missing-worker crash branch is not taken; this test only
 				// verifies status gating.
-				err := tc.step.CheckPrerequisite(ctx, &SuspendInput{ActorRef: resources.ActorRef{Name: "id1"}}, &SuspendState{Actor: &ateapipb.Actor{Status: st, AteomPodNamespace: "ns", AteomPodName: "worker-1"}})
+				err := tc.step.CheckPrerequisite(ctx, &SuspendInput{ActorRef: resources.ActorRef{Name: "id1"}}, &SuspendState{Actor: &ateapipb.Actor{Status: st, WorkerAssignment: &ateapipb.WorkerAssignment{WorkerNamespace: "ns", WorkerPool: "pool", WorkerPod: "worker-1"}}})
 				assertPrerequisiteResult(t, st, err, tc.allowed == nil || tc.allowed[st])
 			}
 		})
@@ -252,11 +252,13 @@ func TestCallAteletSuspendStep_DanglingWorkerDoesNotRecordPhantomSnapshot(t *tes
 			persistence := newTestPersistence(t)
 
 			actor := &ateapipb.Actor{
-				Metadata:           &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor-1"},
-				Status:             ateapipb.Actor_STATUS_SUSPENDING,
-				AteomPodNamespace:  "worker-ns",
-				AteomPodName:       "pod-gone",
-				WorkerPoolName:     "pool",
+				Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor-1"},
+				Status:   ateapipb.Actor_STATUS_SUSPENDING,
+				WorkerAssignment: &ateapipb.WorkerAssignment{
+					WorkerNamespace: "worker-ns",
+					WorkerPool:      "pool",
+					WorkerPod:       "pod-gone",
+				},
 				InProgressSnapshot: "gs://snapshots/actor-1/never-written",
 				LatestSnapshot:     tt.prevSnapshot,
 			}
@@ -296,6 +298,7 @@ func TestFinalizeSuspendedStep_ReleasesOnlyOwnWorker(t *testing.T) {
 	tests := []struct {
 		name               string
 		assignmentAtespace string
+		mismatchedUID      bool
 		wantReleased       bool
 	}{
 		{
@@ -308,6 +311,12 @@ func TestFinalizeSuspendedStep_ReleasesOnlyOwnWorker(t *testing.T) {
 			assignmentAtespace: "team-b",
 			wantReleased:       false,
 		},
+		{
+			name:               "keeps worker assigned to previous incarnation of same actor",
+			assignmentAtespace: "team-a",
+			mismatchedUID:      true,
+			wantReleased:       false,
+		},
 	}
 
 	for _, tt := range tests {
@@ -315,28 +324,36 @@ func TestFinalizeSuspendedStep_ReleasesOnlyOwnWorker(t *testing.T) {
 			ctx := context.Background()
 			persistence := newTestPersistence(t)
 
+			actor := &ateapipb.Actor{
+				Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "shared"},
+				Status:   ateapipb.Actor_STATUS_SUSPENDING,
+				WorkerAssignment: &ateapipb.WorkerAssignment{
+					WorkerNamespace: "worker-ns",
+					WorkerPool:      "pool",
+					WorkerPod:       "pod-1",
+				},
+				InProgressSnapshot: "snapshot-1",
+			}
+			created, err := persistence.CreateActor(ctx, actor)
+			if err != nil {
+				t.Fatalf("CreateActor: %v", err)
+			}
+
+			uid := created.GetMetadata().GetUid()
+			if tt.assignmentAtespace != "team-a" || tt.mismatchedUID {
+				uid = "other-actor-uid-b"
+			}
 			worker := &ateapipb.Worker{
 				WorkerNamespace: "worker-ns",
 				WorkerPool:      "pool",
 				WorkerPod:       "pod-1",
 				Assignment: &ateapipb.Assignment{
-					Actor: &ateapipb.ObjectRef{Atespace: tt.assignmentAtespace, Name: "shared"},
+					Actor:    &ateapipb.ObjectRef{Atespace: tt.assignmentAtespace, Name: "shared"},
+					ActorUid: uid,
 				},
 			}
 			if err := persistence.CreateWorker(ctx, worker); err != nil {
 				t.Fatalf("CreateWorker: %v", err)
-			}
-
-			actor := &ateapipb.Actor{
-				Metadata:           &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "shared"},
-				Status:             ateapipb.Actor_STATUS_SUSPENDING,
-				AteomPodNamespace:  "worker-ns",
-				AteomPodName:       "pod-1",
-				WorkerPoolName:     "pool",
-				InProgressSnapshot: "snapshot-1",
-			}
-			if _, err := persistence.CreateActor(ctx, actor); err != nil {
-				t.Fatalf("CreateActor: %v", err)
 			}
 
 			step := &FinalizeSuspendedStep{store: persistence}
