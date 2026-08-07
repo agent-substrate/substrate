@@ -466,6 +466,11 @@ func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *
 		return nil, err
 	}
 
+	spec, err := buildAteomWorkloadSpec(req.GetSpec())
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid workload spec: %v", err)
+	}
+
 	// Tell ateom to start the workload. gVisor uses RunscPath; the micro-VM
 	// runtime uses the full RuntimeAssetPaths set.
 	if _, err := client.RunWorkload(ctx, &ateompb.RunWorkloadRequest{
@@ -475,7 +480,7 @@ func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *
 		ActorTemplateName:      req.GetActorTemplateName(),
 		RunscPath:              runscPathFor(assetPaths),
 		RuntimeAssetPaths:      assetPaths,
-		Spec:                   buildAteomWorkloadSpec(req.GetSpec()),
+		Spec:                   spec,
 		ActorUid:               actorUID,
 		EgressGateway:          toAteomEgressGateway(req.GetEgressGateway()),
 		CpuMilli:               req.GetCpuMilli(),
@@ -580,6 +585,11 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 	// Tell ateom to take the checkpoint and delete containers. ateom reports the
 	// exact files it wrote so we ship precisely that set (gVisor's image files,
 	// cloud-hypervisor's snapshot set, ...) rather than a hardcoded list.
+	spec, err := buildAteomWorkloadSpec(req.GetSpec())
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid workload spec: %v", err)
+	}
+
 	tAteom := time.Now()
 	resp, err := client.CheckpointWorkload(ctx, &ateompb.CheckpointWorkloadRequest{
 		Atespace:               actorRef.Atespace,
@@ -588,7 +598,7 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 		ActorTemplateName:      req.GetActorTemplateName(),
 		RunscPath:              runscPathFor(assetPaths),
 		RuntimeAssetPaths:      assetPaths,
-		Spec:                   buildAteomWorkloadSpec(req.GetSpec()),
+		Spec:                   spec,
 		Scope:                  toAteomSnapshotScope(req.GetScope()),
 		ActorUid:               actorUID,
 	})
@@ -601,7 +611,7 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 	}
 
 	sandboxRec.SnapshotFiles = resp.GetSnapshotFiles()
-	if len(sandboxRec.SnapshotFiles) == 0 {
+	if len(sandboxRec.SnapshotFiles) == 0 && shouldHaveSnapshots(req) {
 		return nil, ateerrors.NewGRPCError(ctx, codes.DataLoss, ateerrors.ReasonInvalidCheckpointResult, ateerrors.ActorCrashedMetadata(), errors.New("ateom reported no snapshot files for checkpoint"))
 	}
 	sandboxRec.Atespace = req.GetAtespace()
@@ -691,6 +701,20 @@ func (s *AteomHerder) moveLocalCheckpoint(ctx context.Context, req *ateletpb.Che
 	}
 
 	return nil
+}
+
+// shouldHaveSnapshots returns true if the checkpoint request is expected to produce snapshot files.
+func shouldHaveSnapshots(req *ateletpb.CheckpointRequest) bool {
+	if req.GetScope() != ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA {
+		return true
+	}
+
+	for _, vol := range req.GetSpec().GetVolumes() {
+		if vol.GetType() == ateletpb.VolumeType_VOLUME_TYPE_DURABLE_DIR {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *AteomHerder) uploadExternalCheckpoint(ctx context.Context, req *ateletpb.CheckpointRequest, checkpointDir string, rec *sandboxAssetsRecord) error {
@@ -1105,6 +1129,11 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 
 	// Tell ateom to do runsc create + runsc restore for pause container and
 	// all application containers.
+	spec, err := buildAteomWorkloadSpec(req.GetSpec())
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid workload spec: %v", err)
+	}
+
 	tAteom := time.Now()
 	_, err = client.RestoreWorkload(ctx, &ateompb.RestoreWorkloadRequest{
 		Atespace:               actorRef.Atespace,
@@ -1113,7 +1142,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		ActorTemplateName:      req.GetActorTemplateName(),
 		RunscPath:              runscPathFor(assetPaths),
 		RuntimeAssetPaths:      assetPaths,
-		Spec:                   buildAteomWorkloadSpec(req.GetSpec()),
+		Spec:                   spec,
 		Scope:                  toAteomSnapshotScope(req.GetScope()),
 		ActorUid:               req.GetActorUid(),
 		EgressGateway:          toAteomEgressGateway(req.GetEgressGateway()),
@@ -1495,32 +1524,50 @@ func (s *AteomHerder) dialAteom(ctx context.Context, targetAteomUid string) (ate
 
 // buildAteomWorkloadSpec projects the atelet-facing workload spec onto
 // the ateom-facing one.
-func buildAteomWorkloadSpec(spec *ateletpb.WorkloadSpec) *ateompb.WorkloadSpec {
-	ddVolumes := make(map[string]bool)
+func buildAteomWorkloadSpec(spec *ateletpb.WorkloadSpec) (*ateompb.WorkloadSpec, error) {
+	volumes := make(map[string]ateletpb.VolumeType)
 	for _, vol := range spec.GetVolumes() {
-		if vol.GetType() == ateletpb.VolumeType_VOLUME_TYPE_DURABLE_DIR {
-			ddVolumes[vol.GetName()] = true
+		name := vol.GetName()
+		if _, duplicate := volumes[name]; duplicate {
+			return nil, fmt.Errorf("duplicate volume name %q in workload spec", name)
 		}
+		volumes[name] = vol.GetType()
 	}
 
 	out := &ateompb.WorkloadSpec{}
 	for _, ctr := range spec.GetContainers() {
 		var ddMounts []*ateompb.DurableDirVolumeMount
+		var csiMounts []*ateompb.VolumeMount
 		for _, vm := range ctr.GetVolumeMounts() {
-			if ddVolumes[vm.GetName()] {
+			volName := vm.GetName()
+			volType, ok := volumes[volName]
+			if !ok {
+				return nil, fmt.Errorf("container %q mounts volume %q which is not defined in workload volumes", ctr.GetName(), volName)
+			}
+
+			switch volType {
+			case ateletpb.VolumeType_VOLUME_TYPE_DURABLE_DIR:
 				ddMounts = append(ddMounts, &ateompb.DurableDirVolumeMount{
-					VolumeName: vm.GetName(),
+					VolumeName: volName,
 					MountPath:  vm.GetMountPath(),
 				})
+			case ateletpb.VolumeType_VOLUME_TYPE_EXTERNAL:
+				csiMounts = append(csiMounts, &ateompb.VolumeMount{
+					VolumeName: volName,
+					MountPath:  vm.GetMountPath(),
+				})
+			default:
+				return nil, fmt.Errorf("container %q mounts volume %q with unsupported type %v", ctr.GetName(), volName, volType)
 			}
 		}
 		out.Containers = append(out.Containers, &ateompb.Container{
 			Name:                   ctr.GetName(),
 			DurableDirVolumeMounts: ddMounts,
+			CsiVolumeMounts:        csiMounts,
 			Readyz:                 toAteomReadyz(ctr.GetReadyz()),
 		})
 	}
-	return out
+	return out, nil
 }
 
 func toAteomEgressGateway(gateway *ateletpb.EgressGateway) *ateompb.EgressGateway {

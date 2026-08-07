@@ -35,3 +35,9 @@ func VsockSocketPath(id string) string { return filepath.Join(VMDir(id), "clh.so
 func DurableVirtiofsdSocketPath(id string) string {
 	return filepath.Join(VMDir(id), "virtiofsd-durable.sock")
 }
+
+// CsiVirtiofsdSocketPath is the vhost-user-fs socket for the actor's writable
+// CSI volumes share.
+func CsiVirtiofsdSocketPath(id string) string {
+	return filepath.Join(VMDir(id), "virtiofsd-csi.sock")
+}

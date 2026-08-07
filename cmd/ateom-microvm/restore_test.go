@@ -85,26 +85,24 @@ func TestRewriteSnapshotSocketPaths(t *testing.T) {
 		}
 	})
 
-	t.Run("each share keeps its own socket", func(t *testing.T) {
+	t.Run("legacy multi-share snapshots repoint each tag", func(t *testing.T) {
 		// Ordered with the rootfs share last to catch a rewrite that assumes it
 		// comes first, which would hand the guest the wrong filesystem.
 		dir := writeSnapshotConfig(t, []map[string]any{
-			{"tag": kata.DurableFsTag, "socket": "/run/vc/vm/golden/virtiofsd-durable.sock"},
+			{"tag": "ateDurable", "socket": "/run/vc/vm/golden/virtiofsd-durable.sock"},
 			{"tag": kata.FsTag, "socket": "/run/vc/vm/golden/virtiofsd.sock"},
 		})
 		if err := rewriteSnapshotSocketPaths(dir, id); err != nil {
 			t.Fatalf("rewriteSnapshotSocketPaths: %v", err)
 		}
 		got := readFsSockets(t, dir)
-		for tag, want := range map[string]string{
-			kata.FsTag:        kata.VirtiofsdSocketPath(id),
-			kata.DurableFsTag: kata.DurableVirtiofsdSocketPath(id),
-		} {
-			if got[tag] != want {
-				t.Errorf("%s socket = %q, want %q", tag, got[tag], want)
-			}
+		if got[kata.FsTag] != kata.VirtiofsdSocketPath(id) {
+			t.Errorf("%s socket = %q, want %q", kata.FsTag, got[kata.FsTag], kata.VirtiofsdSocketPath(id))
 		}
-		if got[kata.FsTag] == got[kata.DurableFsTag] {
+		if got["ateDurable"] != kata.DurableVirtiofsdSocketPath(id) {
+			t.Errorf("ateDurable socket = %q, want %q", got["ateDurable"], kata.DurableVirtiofsdSocketPath(id))
+		}
+		if got[kata.FsTag] == got["ateDurable"] {
 			t.Error("both shares were pointed at the same socket")
 		}
 	})

@@ -22,7 +22,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -260,7 +259,7 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 		return untarErr
 	}
 	tUpper := time.Now()
-	vfsdCmd, err := s.stageMergedRootfs(ctx, rr, actorUID, ctrs)
+	vfsdCmd, err := s.stageMergedRootfs(ctx, rr, actorUID, ctrs, containers)
 	if err != nil {
 		return err
 	}
@@ -272,26 +271,7 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 	}()
 
 	tLowers := time.Now()
-
-	// Restart the durable-dir share's virtiofsd over the contents the caller
-	// restored. The guest reattaches to it by the socket path rewritten into the
-	// snapshot config below; find-paths re-opens whatever files it still holds open
-	// against the same paths, which the restored tar reproduces exactly.
-	var durableVfsdCmd *exec.Cmd
-	if hasDurableVolumes(containers) {
-		if durableVfsdCmd, err = s.stageDurableShare(ctx, rr, actorUID); err != nil {
-			return err
-		}
-		defer func() {
-			if retErr != nil && durableVfsdCmd.Process != nil {
-				_ = durableVfsdCmd.Process.Kill()
-				_, _ = durableVfsdCmd.Process.Wait()
-			}
-		}()
-	}
-
-	tDurable := time.Now()
-
+	tDurable := tLowers
 	// Networking: rebuild the per-activation veth + tap; the snapshot's virtio-net
 	// is fd-backed, so CH needs fresh tap FDs (net_fds) on restore.
 	if err := ateomnet.SetupActorNetwork(ctx, ateomnet.NetworkConfig{
@@ -419,7 +399,7 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 	}
 
 	ra := &runningActor{
-		chCmd: chCmd, vfsdCmd: vfsdCmd, durableVfsdCmd: durableVfsdCmd,
+		chCmd: chCmd, vfsdCmd: vfsdCmd,
 		apiSocket: apiSocket, baseID: srcID, restoreSourceDir: restoreDir,
 		snapshotIsSelfContained: memMode == ch.MemRestoreEager,
 		// Signaling an id the agent does not know fails the whole graceful
@@ -492,11 +472,8 @@ func rewriteSnapshotSocketPaths(snapshotDir, id string) error {
 			serial["file"] = filepath.Join(kata.VMDir(id), "serial.log")
 		}
 	}
-	// Each virtio-fs share is served by its own per-VMDir virtiofsd socket; the
-	// snapshot recorded the golden actor's, so repoint them at this actor's VMDir.
-	// Match on the device tag: the shares have separate sockets (the rootfs
-	// share's and, when the actor has durable-dir volumes, the durable share's),
-	// and crossing them would hand the guest the wrong filesystem.
+	// The virtio-fs share is served by its per-VMDir virtiofsd socket; the
+	// snapshot recorded the golden actor's, so repoint it at this actor's VMDir.
 	if fss, ok := cfg["fs"].([]any); ok {
 		for _, f := range fss {
 			fm, ok := f.(map[string]any)
@@ -506,8 +483,12 @@ func rewriteSnapshotSocketPaths(snapshotDir, id string) error {
 			switch tag, _ := fm["tag"].(string); tag {
 			case kata.FsTag:
 				fm["socket"] = kata.VirtiofsdSocketPath(id)
-			case kata.DurableFsTag:
+			case "ateDurable":
+				// Legacy multi-virtiofs snapshot backward compatibility.
 				fm["socket"] = kata.DurableVirtiofsdSocketPath(id)
+			case "ateCSI":
+				// Legacy multi-virtiofs snapshot backward compatibility.
+				fm["socket"] = kata.CsiVirtiofsdSocketPath(id)
 			default:
 				return fmt.Errorf("snapshot config %q has fs device with unknown tag %q", cfgPath, tag)
 			}

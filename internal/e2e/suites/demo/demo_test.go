@@ -399,9 +399,6 @@ func TestMultipleDurableDirLifecycle(t *testing.T) {
 }
 
 func TestExternalVolumeLifecycle(t *testing.T) {
-	if isMicroVMEnvironment() {
-		t.Skip("Skipping TestExternalVolumeLifecycle for microVM environment")
-	}
 
 	tests := []struct {
 		name string
