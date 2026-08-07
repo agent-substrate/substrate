@@ -49,11 +49,12 @@ func workloadSpecFromActorTemplate(actorTemplate *atev1alpha1.ActorTemplate, act
 
 	for _, ctr := range actorTemplate.Spec.Containers {
 		ateletCtr := &ateletpb.Container{
-			Name:    ctr.Name,
-			Image:   ctr.Image,
-			Command: ctr.Command,
-			Args:    ctr.Args,
-			Readyz:  toAteletReadyz(ctr.Readyz),
+			Name:            ctr.Name,
+			Image:           ctr.Image,
+			Command:         ctr.Command,
+			Args:            ctr.Args,
+			Readyz:          toAteletReadyz(ctr.Readyz),
+			SecurityContext: toAteletSecurityContext(ctr.SecurityContext),
 		}
 		for _, env := range ctr.Env {
 			ateletCtr.Env = append(ateletCtr.Env, &ateletpb.EnvEntry{
@@ -142,6 +143,36 @@ func toAteletReadyz(in *atev1alpha1.ContainerReadyz) *ateletpb.Readyz {
 			Path: in.HTTPGet.Path,
 			Port: in.HTTPGet.Port,
 		}
+	}
+	return out
+}
+
+// toAteletSecurityContext projects the CRD securityContext onto the ateletpb
+// wire type. Returns nil when the source is nil or carries nothing, so
+// containers that set no security settings stay unchanged on the wire.
+func toAteletSecurityContext(in *atev1alpha1.SecurityContext) *ateletpb.SecurityContext {
+	if in == nil || in.Capabilities == nil {
+		return nil
+	}
+	caps := in.Capabilities
+	if len(caps.Add) == 0 && len(caps.Drop) == 0 {
+		return nil
+	}
+	return &ateletpb.SecurityContext{
+		Capabilities: &ateletpb.Capabilities{
+			Add:  capabilityNames(caps.Add),
+			Drop: capabilityNames(caps.Drop),
+		},
+	}
+}
+
+func capabilityNames(in []atev1alpha1.Capability) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(in))
+	for _, c := range in {
+		out = append(out, string(c))
 	}
 	return out
 }

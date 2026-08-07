@@ -338,3 +338,63 @@ func TestAppendExternalVolumes(t *testing.T) {
 		t.Errorf("appendExternalVolumes expected error for missing volume, got nil")
 	}
 }
+
+func TestWorkloadSpecFromActorTemplatePropagatesSecurityContext(t *testing.T) {
+	got, err := workloadSpecFromActorTemplate(&atev1alpha1.ActorTemplate{
+		ObjectMeta: metav1.ObjectMeta{Name: "tmpl-caps", Namespace: "agent-ns"},
+		Spec: atev1alpha1.ActorTemplateSpec{
+			Containers: []atev1alpha1.Container{
+				{
+					Name:  "adjusted",
+					Image: "main",
+					SecurityContext: &atev1alpha1.SecurityContext{
+						Capabilities: &atev1alpha1.Capabilities{
+							Add:  []atev1alpha1.Capability{"NET_ADMIN"},
+							Drop: []atev1alpha1.Capability{"ALL"},
+						},
+					},
+				},
+				{
+					Name:  "unset",
+					Image: "side",
+				},
+				{
+					// An empty capabilities block asks for no adjustment, so
+					// nothing is put on the wire for it.
+					Name:            "empty",
+					Image:           "third",
+					SecurityContext: &atev1alpha1.SecurityContext{Capabilities: &atev1alpha1.Capabilities{}},
+				},
+			},
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("workloadSpecFromActorTemplate failed: %v", err)
+	}
+
+	want := &ateletpb.WorkloadSpec{
+		Containers: []*ateletpb.Container{
+			{
+				Name:  "adjusted",
+				Image: "main",
+				SecurityContext: &ateletpb.SecurityContext{
+					Capabilities: &ateletpb.Capabilities{
+						Add:  []string{"NET_ADMIN"},
+						Drop: []string{"ALL"},
+					},
+				},
+			},
+			{
+				Name:  "unset",
+				Image: "side",
+			},
+			{
+				Name:  "empty",
+				Image: "third",
+			},
+		},
+	}
+	if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
+		t.Errorf("WorkloadSpec mismatch (-want +got):\n%s", diff)
+	}
+}

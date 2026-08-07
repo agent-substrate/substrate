@@ -95,6 +95,53 @@ type VolumeMount struct {
 	MountPath string `json:"mountPath"`
 }
 
+// Capability is a Linux capability named without the "CAP_" prefix (e.g.
+// "NET_BIND_SERVICE"), as in Kubernetes. The prefix is added when the OCI spec
+// is written, and the prefixed spelling is rejected so a manifest copied from
+// OCI docs fails at admission rather than granting nothing.
+//
+// +kubebuilder:validation:MaxLength=63
+// +kubebuilder:validation:Pattern=`^[A-Z][A-Z0-9_]*$`
+// +kubebuilder:validation:XValidation:rule="!self.startsWith('CAP_')",message="Capability must be named without the 'CAP_' prefix (e.g. 'NET_BIND_SERVICE', not 'CAP_NET_BIND_SERVICE')"
+type Capability string
+
+// CapabilityAll drops every default capability when used in Capabilities.Drop.
+const CapabilityAll Capability = "ALL"
+
+// Capabilities adjusts a container's Linux capabilities relative to the default
+// set. Drop applies first, then Add, so a capability in both is granted.
+type Capabilities struct {
+	// Add lists capabilities to grant on top of the default set.
+	//
+	// "ALL" is rejected: Kubernetes accepts it in the API and relies on
+	// PodSecurity admission to deny it, and there is no equivalent policy layer
+	// here yet.
+	//
+	// +optional
+	// +kubebuilder:validation:MaxItems=64
+	// +listType=atomic
+	// +kubebuilder:validation:XValidation:rule="!self.exists(c, c == 'ALL')",message="add does not accept 'ALL'; name the individual capabilities the container needs"
+	Add []Capability `json:"add,omitempty"`
+
+	// Drop lists capabilities to remove from the default set. "ALL" drops the
+	// whole set, so drop+add expresses an exact set rather than a relative one.
+	//
+	// +optional
+	// +kubebuilder:validation:MaxItems=64
+	// +listType=atomic
+	Drop []Capability `json:"drop,omitempty"`
+}
+
+// SecurityContext holds security settings for a container's process. It models
+// a subset of the Kubernetes container securityContext.
+type SecurityContext struct {
+	// Capabilities adjusts this container's Linux capabilities relative to the
+	// default set.
+	//
+	// +optional
+	Capabilities *Capabilities `json:"capabilities,omitempty"`
+}
+
 // A single application container that you want to run within a WorkerPool.
 type Container struct {
 	// Name of the container.
@@ -151,6 +198,12 @@ type Container struct {
 	// +optional
 	// +kubebuilder:validation:MaxItems=32
 	VolumeMounts []VolumeMount `json:"volumeMounts,omitempty"`
+
+	// securityContext holds security settings for this container. Unset leaves
+	// it with the default capability set.
+	//
+	// +optional
+	SecurityContext *SecurityContext `json:"securityContext,omitempty"`
 }
 
 // ContainerReadyz configures the readiness signal for a container.

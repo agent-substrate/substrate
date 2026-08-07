@@ -1210,6 +1210,66 @@ func TestActorTemplateValidation(t *testing.T) {
 		},
 		wantErr: true,
 		errMsg:  "vol1",
+	}, {
+		name: "capabilities add and drop",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Containers[0].SecurityContext = &SecurityContext{
+				Capabilities: &Capabilities{
+					Add:  []Capability{"NET_ADMIN"},
+					Drop: []Capability{"ALL"},
+				},
+			}
+		},
+		wantErr: false,
+	}, {
+		name: "capability with CAP_ prefix",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Containers[0].SecurityContext = &SecurityContext{
+				Capabilities: &Capabilities{
+					Add: []Capability{"CAP_NET_ADMIN"},
+				},
+			}
+		},
+		wantErr: true,
+		errMsg:  "must be named without the 'CAP_' prefix",
+	}, {
+		name: "lower-case capability",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Containers[0].SecurityContext = &SecurityContext{
+				Capabilities: &Capabilities{
+					Drop: []Capability{"net_admin"},
+				},
+			}
+		},
+		wantErr: true,
+		errMsg:  "should match",
+	}, {
+		name: "ALL in add",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Containers[0].SecurityContext = &SecurityContext{
+				Capabilities: &Capabilities{
+					Add: []Capability{"ALL"},
+				},
+			}
+		},
+		wantErr: true,
+		errMsg:  "add does not accept 'ALL'",
+	}, {
+		name: "ALL in drop",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Containers[0].SecurityContext = &SecurityContext{
+				Capabilities: &Capabilities{
+					Drop: []Capability{"ALL"},
+				},
+			}
+		},
+		wantErr: false,
+	}, {
+		name: "empty securityContext",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Containers[0].SecurityContext = &SecurityContext{}
+		},
+		wantErr: false,
 	}}
 
 	for _, tt := range tests {

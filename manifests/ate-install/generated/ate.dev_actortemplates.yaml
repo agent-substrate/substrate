@@ -186,6 +186,65 @@ spec:
                       required:
                       - httpGet
                       type: object
+                    securityContext:
+                      description: |-
+                        securityContext holds security settings for this container. Unset leaves
+                        it with the default capability set.
+                      properties:
+                        capabilities:
+                          description: |-
+                            Capabilities adjusts this container's Linux capabilities relative to the
+                            default set.
+                          properties:
+                            add:
+                              description: |-
+                                Add lists capabilities to grant on top of the default set.
+
+                                "ALL" is rejected: Kubernetes accepts it in the API and relies on
+                                PodSecurity admission to deny it, and there is no equivalent policy layer
+                                here yet.
+                              items:
+                                description: |-
+                                  Capability is a Linux capability named without the "CAP_" prefix (e.g.
+                                  "NET_BIND_SERVICE"), as in Kubernetes. The prefix is added when the OCI spec
+                                  is written, and the prefixed spelling is rejected so a manifest copied from
+                                  OCI docs fails at admission rather than granting nothing.
+                                maxLength: 63
+                                pattern: ^[A-Z][A-Z0-9_]*$
+                                type: string
+                                x-kubernetes-validations:
+                                - message: Capability must be named without the 'CAP_'
+                                    prefix (e.g. 'NET_BIND_SERVICE', not 'CAP_NET_BIND_SERVICE')
+                                  rule: '!self.startsWith(''CAP_'')'
+                              maxItems: 64
+                              type: array
+                              x-kubernetes-list-type: atomic
+                              x-kubernetes-validations:
+                              - message: add does not accept 'ALL'; name the individual
+                                  capabilities the container needs
+                                rule: '!self.exists(c, c == ''ALL'')'
+                            drop:
+                              description: |-
+                                Drop lists capabilities to remove from the default set. "ALL" drops the
+                                whole set, so drop+add expresses an exact set rather than a relative one.
+                              items:
+                                description: |-
+                                  Capability is a Linux capability named without the "CAP_" prefix (e.g.
+                                  "NET_BIND_SERVICE"), as in Kubernetes. The prefix is added when the OCI spec
+                                  is written, and the prefixed spelling is rejected so a manifest copied from
+                                  OCI docs fails at admission rather than granting nothing.
+                                maxLength: 63
+                                pattern: ^[A-Z][A-Z0-9_]*$
+                                type: string
+                                x-kubernetes-validations:
+                                - message: Capability must be named without the 'CAP_'
+                                    prefix (e.g. 'NET_BIND_SERVICE', not 'CAP_NET_BIND_SERVICE')
+                                  rule: '!self.startsWith(''CAP_'')'
+                              maxItems: 64
+                              type: array
+                              x-kubernetes-list-type: atomic
+                          type: object
+                      type: object
                     volumeMounts:
                       description: volumeMounts define the volumes to mount into this
                         container.
