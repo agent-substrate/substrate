@@ -40,6 +40,7 @@ ATE_DEMOS=()
 
 # Include demos.
 source "${ROOT}"/hack/install-demo-counter.sh
+source "${ROOT}"/hack/install-demo-actor-telemetry.sh
 source "${ROOT}"/hack/install-demo-sandbox.sh
 source "${ROOT}"/hack/install-demo-claude-code-multiplex.sh
 source "${ROOT}"/hack/install-demo-multi-template.sh
