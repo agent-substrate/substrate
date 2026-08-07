@@ -32,8 +32,8 @@ import (
 	"strings"
 )
 
-// identityFile is the actor-id file inside the identity directory atelet
-// bind-mounts at IdentityMountPath.
+// identityFile is the actorIdentity data-source file of the systemInfo
+// volume that probe.yaml.tmpl mounts at /run/ate.
 const identityFile = "/run/ate/actor-id"
 
 // procStatus is where the kernel reports this process's capability sets. Asking

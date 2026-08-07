@@ -786,6 +786,134 @@ func TestActorTemplateValidation(t *testing.T) {
 		wantErr: true,
 		errMsg:  "exactly one of the fields in [durableDir externalVolumeTemplate systemInfo] must be set",
 	}, {
+		name: "Volumes: SystemInfo volume with an ActorIdentity data source is valid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Volumes = []Volume{
+				{
+					Name: "system-info",
+					VolumeSource: VolumeSource{
+						SystemInfo: &SystemInfoVolumeSource{
+							DataSources: []SystemInfoDataSource{
+								{ActorIdentity: &ActorIdentityDataSource{Path: "actor-id"}},
+							},
+						},
+					},
+				},
+			}
+			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
+				{Name: "system-info", MountPath: "/run/ate"},
+			}
+		},
+		wantErr: false,
+	}, {
+		name: "Volumes: SystemInfo data source with nested relative path is valid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Volumes = []Volume{
+				{
+					Name: "system-info",
+					VolumeSource: VolumeSource{
+						SystemInfo: &SystemInfoVolumeSource{
+							DataSources: []SystemInfoDataSource{
+								{ActorIdentity: &ActorIdentityDataSource{Path: "identity/actor-id"}},
+							},
+						},
+					},
+				},
+			}
+			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
+				{Name: "system-info", MountPath: "/run/ate"},
+			}
+		},
+		wantErr: false,
+	}, {
+		name: "Volumes: SystemInfo data source with no member set is invalid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Volumes = []Volume{
+				{
+					Name: "system-info",
+					VolumeSource: VolumeSource{
+						SystemInfo: &SystemInfoVolumeSource{
+							DataSources: []SystemInfoDataSource{{}},
+						},
+					},
+				},
+			}
+		},
+		wantErr: true,
+		errMsg:  "exactly one of the fields in [actorIdentity] must be set",
+	}, {
+		name: "Volumes: SystemInfo data source with empty path is invalid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Volumes = []Volume{
+				{
+					Name: "system-info",
+					VolumeSource: VolumeSource{
+						SystemInfo: &SystemInfoVolumeSource{
+							DataSources: []SystemInfoDataSource{
+								{ActorIdentity: &ActorIdentityDataSource{Path: ""}},
+							},
+						},
+					},
+				},
+			}
+		},
+		wantErr: true,
+	}, {
+		name: "Volumes: SystemInfo data source with absolute path is invalid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Volumes = []Volume{
+				{
+					Name: "system-info",
+					VolumeSource: VolumeSource{
+						SystemInfo: &SystemInfoVolumeSource{
+							DataSources: []SystemInfoDataSource{
+								{ActorIdentity: &ActorIdentityDataSource{Path: "/etc/actor-id"}},
+							},
+						},
+					},
+				},
+			}
+		},
+		wantErr: true,
+		errMsg:  "path must be a clean relative Unix path",
+	}, {
+		name: "Volumes: SystemInfo data source with path traversal is invalid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Volumes = []Volume{
+				{
+					Name: "system-info",
+					VolumeSource: VolumeSource{
+						SystemInfo: &SystemInfoVolumeSource{
+							DataSources: []SystemInfoDataSource{
+								{ActorIdentity: &ActorIdentityDataSource{Path: "../escape"}},
+							},
+						},
+					},
+				},
+			}
+		},
+		wantErr: true,
+		errMsg:  "path must be a clean relative Unix path",
+	}, {
+		name: "Volumes: SystemInfo data sources with duplicate paths are invalid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Volumes = []Volume{
+				{
+					Name: "system-info",
+					VolumeSource: VolumeSource{
+						SystemInfo: &SystemInfoVolumeSource{
+							DataSources: []SystemInfoDataSource{
+								{ActorIdentity: &ActorIdentityDataSource{Path: "actor-id"}},
+								{ActorIdentity: &ActorIdentityDataSource{Path: "actor-id"}},
+							},
+						},
+					},
+				},
+			}
+		},
+		wantErr: true,
+		errMsg:  "dataSources must not contain duplicate paths",
+	}, {
 		name: "Volumes: DurableDir MountPath with nested absolute path is valid",
 		mutate: func(at *ActorTemplate) {
 			at.Spec.Volumes = []Volume{

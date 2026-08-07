@@ -497,10 +497,20 @@ spec:
                                   path:
                                     description: |-
                                       Relative path from the root of the SystemInfo volume that the actor
-                                      identity file should be written.
-                                    maxLength: 1024
+                                      identity file should be written. Must be a clean relative Unix path:
+                                      must not start or end with '/', and contain no ':', '..', '.', '//',
+                                      or control characters.
+                                    maxLength: 255
                                     minLength: 1
                                     type: string
+                                    x-kubernetes-validations:
+                                    - message: 'path must be a clean relative Unix
+                                        path: must not start or end with ''/'', and
+                                        contain no '':'', ''..'', ''.'', ''//'', or
+                                        control characters'
+                                      rule: '!self.startsWith(''/'') && !self.endsWith(''/'')
+                                        && !self.contains(''//'') && !self.contains('':'')
+                                        && !self.matches(''[\x00-\x1f\x7f]'') && !self.matches(''(^|/)[.][.]?(/|$)'')'
                                 required:
                                 - path
                                 type: object
@@ -512,6 +522,10 @@ spec:
                                 == 1'
                           maxItems: 32
                           type: array
+                          x-kubernetes-validations:
+                          - message: dataSources must not contain duplicate paths
+                            rule: self.all(x, !has(x.actorIdentity) || self.exists_one(y,
+                              has(y.actorIdentity) && y.actorIdentity.path == x.actorIdentity.path))
                       type: object
                   required:
                   - name
