@@ -486,7 +486,7 @@ func toAteomSnapshotScope(scope ateletpb.SnapshotScope) ateompb.SnapshotScope {
 
 func (s *AteomHerder) moveLocalCheckpoint(ctx context.Context, req *ateletpb.CheckpointRequest, checkpointDir string, rec *sandboxAssetsRecord) error {
 	localCheckpointPath := filepath.Join(ateompath.LocalCheckpointsDir(req.GetActorUid()), req.GetLocalConfig().GetSnapshotPrefix())
-	if err := os.MkdirAll(localCheckpointPath, 0o700); err != nil {
+	if err := ensureParentDirs(localCheckpointPath, rec.SnapshotFiles); err != nil {
 		return fmt.Errorf("while creating local checkpoint directory: %w", err)
 	}
 
@@ -620,6 +620,15 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 		if goldenRec.SandboxClass != sandboxRec.SandboxClass {
 			return nil, status.Errorf(codes.FailedPrecondition, "golden snapshot sandbox class %q does not match actor snapshot sandbox class %q", goldenRec.SandboxClass, sandboxRec.SandboxClass)
 		}
+		// gVisor checkpoint images are runsc-version-coupled: the actor's
+		// data fs image and the golden's memory image can only be combined
+		// when both were produced by the same pinned runsc. The micro-VM
+		// data half is a plain tar, so no such coupling there.
+		if sandboxRec.SandboxClass == sandboxClassGvisor {
+			if got, want := gvisorRuntimeAssetSHA(sandboxRec), gvisorRuntimeAssetSHA(goldenRec); got != want {
+				return nil, status.Errorf(codes.FailedPrecondition, "actor snapshot gVisor runtime (sha256 %s) does not match golden snapshot gVisor runtime (sha256 %s); the snapshots cannot be combined", got, want)
+			}
+		}
 	}
 
 	// The record whose pinned binaries run the restored workload: the golden's
@@ -631,6 +640,24 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	runtimeRec := sandboxRec
 	if goldenRec != nil {
 		runtimeRec = goldenRec
+	}
+
+	// Where a DATA_ON_GOLDEN restore stages each half, so the restore dir
+	// ends up looking like a Full snapshot whose durable data is the ACTOR's.
+	// Micro-VM: one flat folder — the actor's files shadow the golden's
+	// same-named files (its durable tar replaces the golden's).
+	// gVisor: the golden's split checkpoint keeps memory files at the top level
+	// and the durable fs image under fs/; the golden's fs/ contents are skipped
+	// and the actor's data snapshot (a flat fscheckpoint image set) is staged
+	// into fs/ instead, overriding it wholesale.
+	actorDstDir := checkpointDir
+	var goldenFiles []string
+	if goldenRec != nil {
+		goldenFiles = goldenOnlyFiles(sandboxRec.SnapshotFiles, goldenRec.SnapshotFiles)
+		if sandboxRec.SandboxClass == sandboxClassGvisor {
+			actorDstDir = filepath.Join(checkpointDir, gvisorSplitFsSubdir)
+			goldenFiles = filesOutsideDir(goldenRec.SnapshotFiles, gvisorSplitFsSubdir)
+		}
 	}
 
 	// Download the memory snapshot and prepare the sandbox assets + OCI bundle
@@ -650,7 +677,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 				if goldenRec == nil {
 					return fmt.Errorf("no golden snapshot record for a %s restore", req.GetScope())
 				}
-				if err := s.downloadCombinedCheckpoint(gctx, req.GetExternalConfig().GetSnapshotUriPrefix(), req.GetGoldenSnapshotUriPrefix(), checkpointDir, sandboxRec.SnapshotFiles, goldenRec.SnapshotFiles); err != nil {
+				if err := s.downloadCombinedCheckpoint(gctx, req.GetExternalConfig().GetSnapshotUriPrefix(), actorDstDir, sandboxRec.SnapshotFiles, req.GetGoldenSnapshotUriPrefix(), checkpointDir, goldenFiles); err != nil {
 					return ateerrors.CrashIfReason(ctx, err, ateerrors.ReasonFailedGetExternalObject, ateerrors.ReasonInvalidObjectURL, ateerrors.ReasonTerminalFileSystemError)
 				}
 			} else if err := s.downloadExternalCheckpoint(gctx, req.GetExternalConfig().GetSnapshotUriPrefix(), checkpointDir, sandboxRec.SnapshotFiles); err != nil {
@@ -666,14 +693,14 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 			// the golden's from object storage, concurrently.
 			gLocal, gLocalCtx := errgroup.WithContext(gctx)
 			gLocal.Go(func() error {
-				if err := s.copyLocalCheckpoint(gLocalCtx, req.GetLocalConfig().GetSnapshotPrefix(), ateompath.LocalCheckpointsDir(actorUID), checkpointDir, sandboxRec.SnapshotFiles); err != nil {
+				if err := s.copyLocalCheckpoint(gLocalCtx, req.GetLocalConfig().GetSnapshotPrefix(), ateompath.LocalCheckpointsDir(actorUID), actorDstDir, sandboxRec.SnapshotFiles); err != nil {
 					return ateerrors.CrashIfReason(ctx, err, ateerrors.ReasonTerminalFileSystemError)
 				}
 				return nil
 			})
 			if combineWithGolden {
 				gLocal.Go(func() error {
-					if err := s.downloadExternalCheckpoint(gLocalCtx, req.GetGoldenSnapshotUriPrefix(), checkpointDir, goldenOnlyFiles(sandboxRec.SnapshotFiles, goldenRec.SnapshotFiles)); err != nil {
+					if err := s.downloadExternalCheckpoint(gLocalCtx, req.GetGoldenSnapshotUriPrefix(), checkpointDir, goldenFiles); err != nil {
 						return ateerrors.CrashIfReason(ctx, err, ateerrors.ReasonFailedGetExternalObject, ateerrors.ReasonInvalidObjectURL, ateerrors.ReasonTerminalFileSystemError)
 					}
 					return nil
@@ -749,6 +776,9 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 }
 
 func (s *AteomHerder) copyLocalCheckpoint(ctx context.Context, snapshotPrefix string, srcDir, dstDir string, files []string) error {
+	if err := ensureParentDirs(dstDir, files); err != nil {
+		return err
+	}
 	for _, fileName := range files {
 		if ctx.Err() != nil {
 			return fmt.Errorf("context cancelled: %w", ctx.Err())
@@ -807,28 +837,65 @@ func goldenOnlyFiles(actorFiles, goldenFiles []string) []string {
 	return rest
 }
 
-// downloadCombinedCheckpoint stages a DATA_ON_GOLDEN restore set into dstDir
-// as a single folder: every file of the actor's own snapshot (the durable-dir
-// data) plus the golden snapshot's files the actor's set does not shadow, so
-// the result looks like a Full snapshot whose durable-dir data is the actor's.
-func (s *AteomHerder) downloadCombinedCheckpoint(ctx context.Context, actorPrefix, goldenPrefix, dstDir string, actorFiles, goldenFiles []string) error {
+// downloadCombinedCheckpoint stages both halves of a DATA_ON_GOLDEN restore
+// concurrently: the actor's own snapshot files (the durable-dir data) into
+// actorDstDir and the given golden snapshot files into goldenDstDir. The
+// caller decides the layout: one flat folder with the actor's files
+// shadowing the golden's (micro-VM), or the actor's files re-rooted into
+// the golden checkpoint's fs/ subfolder (gVisor).
+func (s *AteomHerder) downloadCombinedCheckpoint(ctx context.Context, actorPrefix, actorDstDir string, actorFiles []string, goldenPrefix, goldenDstDir string, goldenFiles []string) error {
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(func() error {
-		return s.downloadExternalCheckpoint(gctx, actorPrefix, dstDir, actorFiles)
+		return s.downloadExternalCheckpoint(gctx, actorPrefix, actorDstDir, actorFiles)
 	})
 	g.Go(func() error {
-		return s.downloadExternalCheckpoint(gctx, goldenPrefix, dstDir, goldenOnlyFiles(actorFiles, goldenFiles))
+		return s.downloadExternalCheckpoint(gctx, goldenPrefix, goldenDstDir, goldenFiles)
 	})
 	return g.Wait()
 }
 
+// filesOutsideDir returns the names not under the given top-level subdir. A
+// gVisor DATA_ON_GOLDEN restore fetches the golden's memory files (top
+// level) but not its fs/ contents, which the actor's data replaces.
+func filesOutsideDir(files []string, subdir string) []string {
+	kept := make([]string, 0, len(files))
+	for _, f := range files {
+		if !strings.HasPrefix(f, subdir+"/") {
+			kept = append(kept, f)
+		}
+	}
+	return kept
+}
+
+// ensureParentDirs creates, once each, the distinct parent directories the
+// given (possibly subdir-relative)
+// snapshot file names need under dstDir.
+func ensureParentDirs(dstDir string, files []string) error {
+	made := make(map[string]struct{}, 2)
+	for _, f := range files {
+		dir := filepath.Dir(filepath.Join(dstDir, f))
+		if _, ok := made[dir]; ok {
+			continue
+		}
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return fmt.Errorf("while creating snapshot subdirectory %q: %w", dir, err)
+		}
+		made[dir] = struct{}{}
+	}
+	return nil
+}
+
 func (s *AteomHerder) downloadExternalCheckpoint(ctx context.Context, snapshotUriPrefix string, dstDir string, files []string) error {
 	prefix := strings.TrimSuffix(snapshotUriPrefix, "/")
+	if err := ensureParentDirs(dstDir, files); err != nil {
+		return err
+	}
 	g, gCtx := errgroup.WithContext(ctx)
 	for _, fileName := range files {
 		fileName := fileName
 		local := filepath.Join(dstDir, fileName)
 		g.Go(func() error {
+			slog.InfoContext(ctx, "@@@@@ [downloadExternalCheckpoint #1]", slog.String("file", prefix+"/"+fileName+".zstd"), slog.String("local", local))
 			if err := ategcs.FetchLocalFileFromGCSWithZstd(gCtx, s.gcsClient, prefix+"/"+fileName+".zstd", local); err != nil {
 				return fmt.Errorf("while downloading %s from GCS: %w", fileName, err)
 			}

@@ -164,6 +164,7 @@ func (r *runsc) cmdCheckpoint(ctx context.Context, containerName, checkpointPath
 		"-root", ateompath.RunSCStateDir(r.actorUID),
 		"checkpoint",
 		"-image-path", checkpointPath,
+		"-split-fscheckpoint",
 		containerName, // Name of the container
 	)
 	cmd.Stdout = os.Stdout
@@ -240,6 +241,8 @@ func (r *runsc) cmdRestore(ctx context.Context, out io.Writer, containerName, ch
 		"restore",
 		"-bundle", ateompath.OCIBundlePath(r.actorUID, containerName),
 		"-image-path", checkpointPath,
+		"-fs-restore-image-path", filepath.Join(checkpointPath, "fs"),
+		"-split-fsrestore",
 		"-pid-file", ateompath.PIDFilePath(r.actorUID, containerName),
 		"-background",
 		"-direct",

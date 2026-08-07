@@ -645,22 +645,20 @@ func TestActorTemplateValidation(t *testing.T) {
 		wantErr: true,
 		errMsg:  "Unsupported value",
 	}, {
-		name: "SnapshotsConfig: onResume.fromData=Golden, explicit gvisor (invalid)",
+		name: "SnapshotsConfig: onResume.fromData=Golden, explicit gvisor",
 		mutate: func(at *ActorTemplate) {
 			at.Spec.SandboxClass = SandboxClassGvisor
 			at.Spec.SnapshotsConfig.OnCommit = SnapshotScopeData
 			at.Spec.SnapshotsConfig.OnResume = OnResumeConfig{FromData: ResumeSourceGolden}
 		},
-		wantErr: true,
-		errMsg:  "onResume.fromData: Golden is not supported when sandboxClass is 'gvisor'",
+		wantErr: false,
 	}, {
-		name: "SnapshotsConfig: onResume.fromData=Golden, SandboxClass unset (defaults to gvisor, invalid)",
+		name: "SnapshotsConfig: onResume.fromData=Golden, SandboxClass unset (defaults to gvisor)",
 		mutate: func(at *ActorTemplate) {
 			at.Spec.SnapshotsConfig.OnCommit = SnapshotScopeData
 			at.Spec.SnapshotsConfig.OnResume = OnResumeConfig{FromData: ResumeSourceGolden}
 		},
-		wantErr: true,
-		errMsg:  "onResume.fromData: Golden is not supported when sandboxClass is 'gvisor'",
+		wantErr: false,
 	}, {
 		name: "Volumes: 1 DurableDir mount is valid",
 		mutate: func(at *ActorTemplate) {

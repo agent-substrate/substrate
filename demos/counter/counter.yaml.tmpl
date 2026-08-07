@@ -59,6 +59,8 @@ ${EXTERNAL_VOLUME_MOUNTS}
   snapshotsConfig:
     onPause: Full
     onCommit: Data
+    onResume:
+      fromData: Golden
     location: gs://${BUCKET_NAME}/ate-demo-counter/
   volumes:
   - name: data
