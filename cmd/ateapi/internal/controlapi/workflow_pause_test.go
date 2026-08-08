@@ -20,6 +20,7 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/internal/resources"
+	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -60,7 +61,7 @@ func TestFinalizePausedStep_WorkerGone(t *testing.T) {
 
 	step := &FinalizePausedStep{store: st}
 	input := &PauseInput{ActorRef: actorRef}
-	state := &PauseState{}
+	state := &PauseState{ActorTemplate: &atev1alpha1.ActorTemplate{}}
 	if err := step.Execute(ctx, input, state); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -86,6 +87,76 @@ func TestFinalizePausedStep_WorkerGone(t *testing.T) {
 	}
 	if !done {
 		t.Error("IsComplete = false, want true once the actor is CRASHED and the worker is freed")
+	}
+}
+
+// TestFinalizePausedStep_RecordsContentScope verifies pause finalization
+// records the scope the pause checkpoint captured (the template's onPause) in
+// LocalSnapshotInfo, so a later suspend of the PAUSED actor knows what the
+// local snapshot contains even if the template's onPause changes while the
+// actor sits PAUSED.
+func TestFinalizePausedStep_RecordsContentScope(t *testing.T) {
+	tests := []struct {
+		name    string
+		onPause atev1alpha1.SnapshotScope
+		want    ateapipb.SnapshotContentScope
+	}{
+		{"data", atev1alpha1.SnapshotScopeData, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA},
+		{"full", atev1alpha1.SnapshotScopeFull, ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL},
+		{"unset defaults to full", "", ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			st, cleanup := storetest.SetupTestStore(t)
+			defer cleanup()
+			ctx := context.Background()
+			actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
+
+			created, err := st.CreateActor(ctx, &ateapipb.Actor{
+				Metadata: &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+				Status:   ateapipb.Actor_STATUS_PAUSING,
+				WorkerAssignment: &ateapipb.WorkerAssignment{
+					WorkerNamespace: "default",
+					WorkerPool:      "pool1",
+					WorkerPod:       "worker-pod-1",
+				},
+				InProgressSnapshot: "snap-prefix",
+			})
+			if err != nil {
+				t.Fatalf("CreateActor: %v", err)
+			}
+			if err := st.CreateWorker(ctx, &ateapipb.Worker{
+				WorkerNamespace: "default",
+				WorkerPool:      "pool1",
+				WorkerPod:       "worker-pod-1",
+				NodeName:        "node1",
+				Assignment: &ateapipb.Assignment{
+					Actor:    &ateapipb.ObjectRef{Atespace: actorRef.Atespace, Name: actorRef.Name},
+					ActorUid: created.GetMetadata().GetUid(),
+				},
+			}); err != nil {
+				t.Fatalf("CreateWorker: %v", err)
+			}
+
+			step := &FinalizePausedStep{store: st}
+			state := &PauseState{ActorTemplate: &atev1alpha1.ActorTemplate{
+				Spec: atev1alpha1.ActorTemplateSpec{SnapshotsConfig: atev1alpha1.SnapshotsConfig{OnPause: tc.onPause}},
+			}}
+			if err := step.Execute(ctx, &PauseInput{ActorRef: actorRef}, state); err != nil {
+				t.Fatalf("Execute: %v", err)
+			}
+
+			got, err := st.GetActor(ctx, actorRef)
+			if err != nil {
+				t.Fatalf("GetActor: %v", err)
+			}
+			if got.GetStatus() != ateapipb.Actor_STATUS_PAUSED {
+				t.Fatalf("status = %v, want PAUSED", got.GetStatus())
+			}
+			if scope := got.GetLocalSnapshotInfo().GetContentScope(); scope != tc.want {
+				t.Errorf("LocalSnapshotInfo.ContentScope = %v, want %v", scope, tc.want)
+			}
+		})
 	}
 }
 

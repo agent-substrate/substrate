@@ -269,6 +269,7 @@ func (s *FinalizePausedStep) Execute(ctx context.Context, input *PauseInput, sta
 		if latestActor.InProgressSnapshot != "" {
 			localInfo := &ateapipb.LocalSnapshotInfo{
 				SnapshotPrefix: latestActor.InProgressSnapshot,
+				ContentScope:   toActorSnapshotContentScope(state.ActorTemplate.Spec.SnapshotsConfig.OnPause),
 			}
 			if latestActor.Status != ateapipb.Actor_STATUS_CRASHED {
 				localInfo.NodeVmsWithLocalSnapshots = []string{nodeName}

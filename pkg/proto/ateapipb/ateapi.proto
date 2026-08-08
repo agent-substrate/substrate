@@ -84,6 +84,9 @@ message LocalSnapshotInfo {
   string snapshot_prefix = 1;
   // Node VMs that have local snapshots for this actor, while it's PAUSED.
   repeated string node_vms_with_local_snapshots = 2;
+  // Scope the pause checkpoint captured (the template's onPause at pause
+  // time).
+  SnapshotContentScope content_scope = 3;
 }
 
 enum SnapshotContentScope {

@@ -2316,6 +2316,7 @@ func TestPauseActor(t *testing.T) {
 		LocalSnapshotInfo: &ateapipb.LocalSnapshotInfo{
 			SnapshotPrefix:            name,
 			NodeVmsWithLocalSnapshots: []string{"node1"},
+			ContentScope:              ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
 		},
 	}
 
@@ -2325,7 +2326,10 @@ func TestPauseActor(t *testing.T) {
 		ignoreVersion,
 		ignoreTimestamps,
 		protocmp.FilterField(&ateapipb.LocalSnapshotInfo{}, "snapshot_prefix", cmp.Comparer(func(x, y string) bool {
-			return strings.HasPrefix(y, x)
+			// The stored prefix is "<actorName>-<timestamp>-<nonce>", so match
+			// by prefix — in both directions, since Comparers must be
+			// symmetric (go-cmp probes with swapped arguments).
+			return strings.HasPrefix(y, x) || strings.HasPrefix(x, y)
 		})),
 	); diff != "" {
 		t.Errorf("GetActor response mismatch (-want +got):\n%s", diff)
