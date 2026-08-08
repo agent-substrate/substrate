@@ -1,0 +1,106 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# Fixture for the capabilities e2e suite. Two templates run the same probe
+# image and differ only in securityContext.capabilities, so the suite can
+# compare what the kernel reports inside the sandbox against what the template
+# asked for.
+#
+# The sandbox-class fields are substituted by the suite from the source
+# WorkerPool it was pointed at, so this one file covers both gvisor and
+# micro-VM (see capabilities_test.go).
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ${NAMESPACE}
+
+---
+
+apiVersion: ate.dev/v1alpha1
+kind: WorkerPool
+metadata:
+  name: caps
+  namespace: ${NAMESPACE}
+  labels:
+    workload: caps
+spec:
+  # One worker per template for its golden snapshot, plus headroom for the
+  # actors the suite resumes.
+  replicas: 4
+  sandboxClass: ${SANDBOX_CLASS}
+${SANDBOX_CONFIG_LINE}
+  ateomImage: ${ATEOM_IMAGE}
+
+---
+
+# No securityContext: pins the default capability set, so a change to the
+# default is caught here and not only in atelet's unit tests.
+apiVersion: ate.dev/v1alpha1
+kind: ActorTemplate
+metadata:
+  name: caps-default
+  namespace: ${NAMESPACE}
+spec:
+  sandboxClass: ${SANDBOX_CLASS}
+  pauseImage: "registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4"
+  containers:
+  - name: probe
+    image: ko://github.com/agent-substrate/substrate/internal/e2e/fixtures/probe
+    command: ["/ko-app/probe"]
+    readyz:
+      httpGet:
+        path: /healthz
+        port: 80
+      timeoutSeconds: 60
+  workerSelector:
+    matchLabels:
+      workload: caps
+  snapshotsConfig:
+    location: gs://${BUCKET_NAME}/${NAMESPACE}-default/
+
+---
+
+# drop ALL + add: the resulting set is exact rather than relative, so asserting
+# it proves both halves at once — everything default was dropped, and only the
+# named capability was granted back.
+apiVersion: ate.dev/v1alpha1
+kind: ActorTemplate
+metadata:
+  name: caps-exact
+  namespace: ${NAMESPACE}
+spec:
+  sandboxClass: ${SANDBOX_CLASS}
+  pauseImage: "registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4"
+  containers:
+  - name: probe
+    image: ko://github.com/agent-substrate/substrate/internal/e2e/fixtures/probe
+    command: ["/ko-app/probe"]
+    # The probe binds :80, which is exactly what NET_BIND_SERVICE permits, so
+    # this template also proves the granted capability is usable and not merely
+    # present in the mask: without it the container could not become ready.
+    securityContext:
+      capabilities:
+        drop: ["ALL"]
+        add: ["NET_BIND_SERVICE"]
+    readyz:
+      httpGet:
+        path: /healthz
+        port: 80
+      timeoutSeconds: 60
+  workerSelector:
+    matchLabels:
+      workload: caps
+  snapshotsConfig:
+    location: gs://${BUCKET_NAME}/${NAMESPACE}-exact/
