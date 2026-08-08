@@ -1,0 +1,150 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# One arm of the capacity sweep. Rendered and applied by run.sh, which
+# substitutes every dollar-brace placeholder below and refuses to apply the
+# result if one is left over — so no comment here may contain literal
+# placeholder syntax (that check is a plain grep over the rendered file).
+#
+# Shaped to match benchmarking/automation's runner-job.yaml.tmpl (same
+# namespace, ServiceAccount and flags) so the orchestrator can drive it later.
+
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: ${JOB_NAME}
+  namespace: benchmarking
+  labels:
+    app: routercap
+    test-name: ${NAME}
+    tag: ${TAG}
+    arm: "${ARM}"
+spec:
+  # No retries. A rerun would start from a cold actor pool against a router
+  # that has already been loaded, which is a different experiment wearing the
+  # same label.
+  backoffLimit: 0
+  ttlSecondsAfterFinished: 3600
+  activeDeadlineSeconds: ${DEADLINE}
+  template:
+    metadata:
+      labels:
+        app: routercap
+        test-name: ${NAME}
+        tag: ${TAG}
+        arm: "${ARM}"
+    spec:
+      restartPolicy: Never
+      serviceAccountName: benchmark-runner
+      # The widest source-port range Linux allows, 2.3x the 28,232 default:
+      # this is the generator's hard ceiling on concurrent connections, and
+      # the wider range keeps its cliff past the router's. The binary reads
+      # the effective range from /proc at startup (the client_ports guard
+      # follows it); ip_local_port_range is a "safe" sysctl, namespaced to
+      # this pod.
+      securityContext:
+        sysctls:
+        - name: net.ipv4.ip_local_port_range
+          value: "1025 65535"
+      # Alone on its own node: sharing one with the router or the workers
+      # would fold the generator's packet processing into their measurement.
+      nodeSelector:
+        ${ROLE_KEY}: loadgen
+      tolerations:
+      - key: ${ROLE_KEY}
+        operator: Equal
+        value: loadgen
+        effect: NoSchedule
+      containers:
+      # Named routercap because cAdvisor reports containers by name and the
+      # binary watches its own container to measure the load generator itself.
+      - name: routercap
+        image: ${IMAGE}
+        imagePullPolicy: IfNotPresent
+        args:
+        - "--arm=${ARM}"
+        - "--expect-concurrency=${CONCURRENCY}"
+        - "--router-pods=${ROUTER_PODS}"
+        - "--pass=${PASS}"
+        - "--actors=${ACTORS}"
+        - "--start-qps=${START_QPS}"
+        - "--step-qps=${STEP_QPS}"
+        - "--rungs=${RUNGS}"
+        - "--hold=${HOLD}"
+        - "--warmup=${WARMUP}"
+        - "--port-range=${PORT_RANGE}"
+        - "--name=${NAME}"
+        - "--tag=${TAG}"
+        - "--git-sha=${GIT_SHA}"
+        - "--cluster=${CLUSTER}"
+        - "--location=${LOCATION}"
+        - "--machine-type=${MACHINE_TYPE}"
+        # Nothing can read files back out of a distroless container, so
+        # stdout is the one channel that survives; run.sh splits the tagged
+        # lines back into files. Logs go to stderr.
+        - "--records-to-stdout"
+        env:
+        # The binary identifies its own container from these to watch its own
+        # CPU; without them it refuses to start rather than silently disable
+        # that guard.
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        - name: NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: spec.nodeName
+        - name: GOMAXPROCS
+          value: "${LOADGEN_CPU}"
+        resources:
+          # requests == limits, like everything else in the run: the CPU
+          # guard trips at a fraction of this limit, so a Burstable container
+          # would make the threshold mean nothing.
+          requests:
+            cpu: "${LOADGEN_CPU}"
+            memory: ${LOADGEN_MEMORY}
+          limits:
+            cpu: "${LOADGEN_CPU}"
+            memory: ${LOADGEN_MEMORY}
+        volumeMounts:
+        # Client identity presented to ateapi when warming and tearing down the
+        # actor pool. Same pair the locust runner mounts.
+        - name: servicedns-ca
+          mountPath: /run/servicedns-ca
+          readOnly: true
+        - name: podidentity
+          mountPath: /run/podidentity.podcert.ate.dev
+          readOnly: true
+      volumes:
+      - name: servicedns-ca
+        projected:
+          sources:
+          - clusterTrustBundle:
+              signerName: servicedns.podcert.ate.dev/identity
+              labelSelector:
+                matchLabels:
+                  podcert.ate.dev/canarying: live
+              path: ca.crt
+      - name: podidentity
+        projected:
+          sources:
+          - podCertificate:
+              signerName: podidentity.podcert.ate.dev/identity
+              keyType: ECDSAP256
+              credentialBundlePath: credential-bundle.pem

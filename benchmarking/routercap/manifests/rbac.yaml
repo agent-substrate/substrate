@@ -1,0 +1,64 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# The generator's identity. Namespace and ServiceAccount names match
+# benchmarking/automation's runner-job.yaml.tmpl so the same Job can later be
+# driven by the orchestrator without a second set of bindings.
+#
+# Read-only, deliberately: everything that writes to the cluster is run.sh's
+# job, running as whoever invoked it. Generating load and mutating the system
+# under test are different privileges.
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: benchmarking
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: benchmark-runner
+  namespace: benchmarking
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: routercap-runner
+rules:
+# Resource usage comes from cAdvisor through the kubelet (see cadvisor.go for
+# why not metrics.k8s.io), reached via the API server's node proxy rather than
+# the kubelet directly. The run spans four node pools and one kubelet reports
+# only its own node, so this covers every node, not just the router's.
+- apiGroups: [""]
+  resources: ["nodes/proxy", "nodes/metrics"]
+  verbs: ["get"]
+# Pod discovery: which pod is the router, what its IP is, and which worker
+# pods exist. The worker count is read from the cluster because the
+# per-worker connection-rate guard divides a cluster-wide rate by it.
+- apiGroups: [""]
+  resources: ["pods", "nodes"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: routercap-runner
+subjects:
+- kind: ServiceAccount
+  name: benchmark-runner
+  namespace: benchmarking
+roleRef:
+  kind: ClusterRole
+  name: routercap-runner
+  apiGroup: rbac.authorization.k8s.io

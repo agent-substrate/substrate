@@ -1,0 +1,13 @@
+# A run directory ships exactly one file: report.html, which embeds every
+# chart inline. The raw data behind it (samples.jsonl, run.json,
+# worker-cpu.jsonl per arm) and the regenerable summary.json/SVGs stay local
+# to the machine that ran the sweep.
+runs/**
+!runs/*/
+!runs/*/report.html
+
+# profile.sh needs privileged node debug access that the shipped harness
+# should not imply is routine.
+profile.sh
+
+__pycache__/
