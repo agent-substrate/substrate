@@ -40,8 +40,8 @@ def render_chart(final_report_path, output_png_path):
     threat_ids = [item.get("threat_id", f"UNKNOWN-{i+1:02d}") for i, item in enumerate(sorted_data)]
     
     scores = []
-    colors = []
     errors = []
+    bottom_colors = []
 
     for item in sorted_data:
         raw_score = item.get("quality", 0.0)
@@ -55,24 +55,41 @@ def render_chart(final_report_path, output_png_path):
         score = max(0.0, min(1.0, score))
         scores.append(score)
 
-        if is_error:
-            colors.append("#dc2626")  # Red for error / timeout
-        elif score >= 0.8:
-            colors.append("#16a34a")  # Green
-        elif score >= 0.5:
-            colors.append("#d97706")  # Orange
+        if score > 0.85:
+            bottom_colors.append("#16a34a")  # Green
+        elif score >= 0.7:
+            bottom_colors.append("#eab308")  # Yellow
         else:
-            colors.append("#dc2626")  # Red
+            bottom_colors.append("#f97316")  # Orange
+
+    remaining_scores = [1.0 - s for s in scores]
 
     fig, ax = plt.subplots(figsize=(14, 6))
-    ax.bar(threat_ids, scores, color=colors, width=0.6)
+    ax.bar(threat_ids, scores, color=bottom_colors, width=1.0)
+    ax.bar(threat_ids, remaining_scores, bottom=scores, color="#dc2626", width=1.0)
+    
+    # Cap each bar with a thick black line for colorblind accessibility
+    x_positions = range(len(threat_ids))
+    ax.hlines(y=scores, xmin=[x - 0.5 for x in x_positions], xmax=[x + 0.5 for x in x_positions], color='black', linewidth=3)
+
+    # Display exact score just below the black cap
+    for x, (s, err) in enumerate(zip(scores, errors)):
+        if not err:
+            y_pos = s - 0.01
+            va = 'top'
+            if s < 0.05:
+                y_pos = s + 0.02
+                va = 'bottom'
+            ax.text(x, y_pos, f"{s:.2f}", color='black', ha='center', va=va, fontsize=8, fontweight='bold', 
+                    bbox=dict(facecolor='white', alpha=0.7, edgecolor='none', pad=1.5))
 
     # Annotate errors with vertical "ERROR" text above x-axis
     for i, err in enumerate(errors):
         if err:
-            ax.text(i, 0.02, "ERROR", rotation=90, ha='center', va='bottom', fontsize=8, fontweight='bold', color='#dc2626')
+            ax.text(i, 0.02, "ERROR", rotation=90, ha='center', va='bottom', fontsize=8, fontweight='bold', color='white')
 
     ax.set_ylim(0.0, 1.0)
+    ax.set_xlim(-0.5, len(threat_ids) - 0.5)
     ax.set_ylabel("Quality Score (0.0 - 1.0)", fontsize=12, fontweight='bold')
     ax.set_xlabel("Threat ID", fontsize=12, fontweight='bold')
     ax.set_title("Substrate Security Threat Posture Scores", fontsize=16, fontweight='bold', pad=15)
