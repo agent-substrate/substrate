@@ -111,10 +111,11 @@ const (
 // otherwise Envoy abandons a parked request (500) long before the router does.
 const defaultExtProcMessageTimeout = 5 * time.Second
 
-// defaultExtProcMaxRequests is the circuit-breaker max_requests set on the
-// ext_proc cluster: ingress.DefaultParkedRequestMax plus equal fast-path headroom, so a
-// full parking lot cannot starve the millisecond-scale header exchanges of
-// requests to already-running actors. See buildCluster.
+// defaultExtProcMaxRequests is the circuit-breaker ceiling set on the ext_proc
+// cluster, applied to both max_requests and max_pending_requests:
+// ingress.DefaultParkedRequestMax plus equal fast-path headroom, so a full
+// parking lot cannot starve the millisecond-scale header exchanges of requests
+// to already-running actors. See buildCluster.
 const defaultExtProcMaxRequests = 2048
 
 // defaultRouteTimeout is Envoy's end-to-end route timeout for workload traffic:
@@ -142,6 +143,12 @@ const defaultRouteTimeout = 10 * time.Second
 // override a route timeout above five minutes would never be reached. See
 // routeIdleTimeout.
 const envoyDefaultStreamIdleTimeout = 5 * time.Minute
+
+// actorClusterMaxConcurrency replaces Envoy's 1024 default, which is far below
+// what the router can carry. Kept under the ~28,232 ephemeral-port budget
+// (each in-flight HTTP/1.1 request holds one source port) so the breaker's
+// counted overflow trips before the kernel's opaque EADDRNOTAVAIL.
+const actorClusterMaxConcurrency = 20000
 
 // XdsServer implements an aggregated discovery service server for dynamic Envoy router nodes.
 type XdsServer struct {
@@ -184,10 +191,11 @@ type XdsServer struct {
 	// response. Must be >= the parking budget so parked requests aren't cut short.
 	extProcMessageTimeout time.Duration
 
-	// extProcMaxRequests is the circuit-breaker max_requests on the ext_proc
-	// cluster — the hard ceiling on concurrent requests held open against the
-	// router's processing server, parked requests included. Must be >= the
-	// parking lot size (enforced at startup in Run).
+	// extProcMaxRequests is the circuit-breaker ceiling on the ext_proc cluster
+	// — the hard limit on concurrent requests held open against the router's
+	// processing server, parked requests included. Applied to max_requests and
+	// max_pending_requests alike. Must be >= the parking lot size (enforced at
+	// startup in Run).
 	extProcMaxRequests uint32
 
 	// routeTimeout is Envoy's end-to-end timeout on the workload route. Actors
@@ -241,9 +249,10 @@ func (x *XdsServer) SetExtProcMessageTimeout(d time.Duration) {
 	}
 }
 
-// SetExtProcMaxRequests sets the circuit-breaker max_requests on the ext_proc
-// cluster. Size it to the parking lot plus fast-path headroom (validated in
-// Run()); a non-positive value leaves the default unchanged.
+// SetExtProcMaxRequests sets the circuit-breaker ceiling on the ext_proc
+// cluster, for max_requests and max_pending_requests together. Size it to the
+// parking lot plus fast-path headroom (validated in Run()); a non-positive
+// value leaves the default unchanged.
 func (x *XdsServer) SetExtProcMaxRequests(n int) {
 	x.mu.Lock()
 	defer x.mu.Unlock()
@@ -518,10 +527,14 @@ func (x *XdsServer) buildCluster() *clusterv3.Cluster {
 			Type: clusterv3.Cluster_STATIC,
 		},
 		LbPolicy: clusterv3.Cluster_ROUND_ROBIN,
+		// max_pending_requests rises with max_requests: a request is pending
+		// until the pool hands it a stream, and a shallower pending queue just
+		// moves the rejection.
 		CircuitBreakers: &clusterv3.CircuitBreakers{
 			Thresholds: []*clusterv3.CircuitBreakers_Thresholds{{
-				Priority:    corev3.RoutingPriority_DEFAULT,
-				MaxRequests: wrapperspb.UInt32(x.extProcMaxRequests),
+				Priority:           corev3.RoutingPriority_DEFAULT,
+				MaxRequests:        wrapperspb.UInt32(x.extProcMaxRequests),
+				MaxPendingRequests: wrapperspb.UInt32(x.extProcMaxRequests),
 			}},
 		},
 		LoadAssignment: &endpointv3.ClusterLoadAssignment{
@@ -751,6 +764,18 @@ func (x *XdsServer) buildOriginalDstCluster() *clusterv3.Cluster {
 					},
 				},
 			},
+		},
+		// Connections, pending and requests are lifted together: the upstream
+		// hop is HTTP/1.1, so capping any one below the others just moves
+		// where the queue forms. max_retries keeps Envoy's default — no route
+		// to this cluster sets a retry policy.
+		CircuitBreakers: &clusterv3.CircuitBreakers{
+			Thresholds: []*clusterv3.CircuitBreakers_Thresholds{{
+				Priority:           corev3.RoutingPriority_DEFAULT,
+				MaxConnections:     wrapperspb.UInt32(actorClusterMaxConcurrency),
+				MaxPendingRequests: wrapperspb.UInt32(actorClusterMaxConcurrency),
+				MaxRequests:        wrapperspb.UInt32(actorClusterMaxConcurrency),
+			}},
 		},
 	}
 
