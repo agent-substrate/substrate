@@ -46,7 +46,7 @@ files=(
 
 # Run clang-format on the found files.
 #
-# Don't reflow long lines, wince those tend to be comments which then require
+# Don't reflow long lines, since those tend to be comments which then require
 # re-running the proto generators, which makes "update-all" awkward.
 "${clangfmt}" \
     -i \

@@ -71,8 +71,8 @@ Fill both workers by requesting two actors, leaving them `RUNNING`:
 curl -s -H "Host: p1.parking.actors.resources.substrate.ate.dev" http://localhost:8000
 curl -s -H "Host: p2.parking.actors.resources.substrate.ate.dev" http://localhost:8000
 
-kubectl ate get workers   # both workers are now bound to p1 and p2
-kubectl ate get actors    # p1,p2 RUNNING; p3,p4 SUSPENDED
+kubectl ate get workers             # both workers are now bound to p1 and p2
+kubectl ate get actors -a parking   # p1,p2 RUNNING; p3,p4 SUSPENDED
 ```
 
 Now request **p3** with timing. The pool is full, so this request **parks** —

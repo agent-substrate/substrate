@@ -54,7 +54,7 @@ The kind overlay installed by `hack/install-ate-kind.sh --deploy-ate-system` alr
 Port-forward the Jaeger UI and invoke any command with `--trace`:
 ```bash
 kubectl port-forward -n otel-system svc/jaeger 16686:16686 &
-kubectl ate get actor my-counter-1 --trace
+kubectl ate get actor my-counter-1 -a demo --trace
 # open http://localhost:16686 and search for the most recent trace
 ```
 
@@ -91,11 +91,12 @@ kubectl ate get actor <actor-name> --atespace <atespace> -o yaml
 # List all physical workers and see which actors are assigned to them
 kubectl ate get workers
 
-# Filter workers by Kubernetes namespace, assigned-actor atespace, or
-# worker pool labels (same flags as `top workers`)
+# Filter workers by Kubernetes namespace, assigned-actor atespace, worker
+# pool labels, or sandbox class (same flags as `top workers`)
 kubectl ate get workers -n <namespace>
 kubectl ate get workers -a <atespace>
 kubectl ate get workers -l <label-selector>
+kubectl ate get workers --sandbox-class <gvisor|microvm>
 ```
 
 > **Note:** `get actors` requires either `--atespace <name>` / `-a <name>` (one atespace) or `-A`/`--all-atespaces` (all atespaces) — there is no default atespace. Getting a single actor always requires `--atespace`/`-a`, since an actor is addressed by `(atespace, name)`. `-a` (lower-case) scopes to one atespace; `-A` (upper-case) spans all.
@@ -109,7 +110,7 @@ kubectl ate get workers -l <label-selector>
 | `ATESPACE` | The atespace the actor belongs to. Part of the actor's identity; folded into the storage key as `actor:<atespace>:<name>`. |
 | `NAME` | The actor's name. User-provided for application actors; UUID for the golden actor that each template materialises during `ResumeGoldenActor`. |
 | `TEMPLATE` | The `ActorTemplate` the actor was created from, displayed as `<atespace>/<name>`. |
-| `STATE` | One of `ACTOR_STATE_RESUMING`, `ACTOR_STATE_RUNNING`, `ACTOR_STATE_SUSPENDING`, `ACTOR_STATE_SUSPENDED`. |
+| `STATE` | One of `ACTOR_STATE_RESUMING`, `ACTOR_STATE_RUNNING`, `ACTOR_STATE_SUSPENDING`, `ACTOR_STATE_SUSPENDED`, `ACTOR_STATE_PAUSING`, `ACTOR_STATE_PAUSED`, `ACTOR_STATE_CRASHED`, `ACTOR_STATE_DELETING`. |
 | `ATEOM POD` | The worker pod (namespace/name) currently hosting the actor. Empty while suspended. |
 | `ATEOM IP` | The pod IP of that worker. Empty while suspended. |
 | `VERSION` | Monotonic integer that increments on every state transition (resume / suspend / checkpoint). Useful for distinguishing snapshots. |
@@ -121,9 +122,10 @@ kubectl ate get workers -l <label-selector>
 |---|---|
 | `NAMESPACE` | The `WorkerPool` namespace. |
 | `POOL` | The `WorkerPool` name. |
+| `CLASS` | The pool's sandbox class (`gvisor` or `microvm`). |
 | `POD` | The worker pod name. |
 | `STATUS` | `FREE` (idle, ready to receive an actor) or `ASSIGNED` (currently hosting an actor). |
-| `ASSIGNED ACTOR` | If `STATUS=ASSIGNED`, the actor reference `<namespace>/<template>/<actor-name>`. |
+| `ASSIGNED ACTOR` | If `STATUS=ASSIGNED`, the template and actor as `<template-atespace>/<template-name>/<actor-atespace>/<actor-name>`; `<none>` when `FREE`. |
 
 ### Atespaces
 
@@ -203,12 +205,22 @@ kubectl ate resume actor my-actor -a <atespace>
 # Suspend an actor (snapshots its state to storage and frees the worker)
 kubectl ate suspend actor my-actor -a <atespace>
 
+# Pause an actor (checkpoints it, but keeps the snapshot on the node VM)
+kubectl ate pause actor my-actor -a <atespace>
+
 # Delete an actor (by default, requires the actor to be SUSPENDED or CRASHED).
 kubectl ate delete actor my-actor -a <atespace>
 
 # Delete an actor from any state (e.g. RUNNING, PAUSED), terminating workloads and detaching volumes.
 kubectl ate delete actor my-actor -a <atespace> --any-state
 ```
+
+> **Note:** `suspend` and `pause` are both checkpoints, but they differ in where
+> the snapshot lands. `suspend` uploads it to snapshot storage, so the actor can
+> resume on any node. `pause` keeps it on the node VM, and the next `resume` is
+> prioritized onto that same node — cheaper and faster, but tied to one node's
+> availability. See [Lifecycle](../../docs/glossary.md#lifecycle) for the full
+> definitions.
 
 ### Actor Snapshots
 
@@ -249,6 +261,38 @@ kubectl ate logs actors my-actor -a <atespace> -c my-container
 ```
 
 Logs are streamable only while the actor is bound to a worker (i.e., `ACTOR_STATE_RUNNING`). For history across worker migrations, route through a centralized log backend (Cloud Logging, Loki, etc.); see `docs/observability.md`.
+
+### Resource Usage
+
+`kubectl ate top` reports CPU and memory usage of worker pods. `workers` is the
+only supported resource type.
+
+```bash
+# Usage for every worker pod
+kubectl ate top workers
+
+# Same filters as `get workers`: Kubernetes namespace, the atespace of the
+# assigned actor, worker pool labels, or sandbox class
+kubectl ate top workers -n <namespace>
+kubectl ate top workers -a <atespace>
+kubectl ate top workers -l <label-selector>
+kubectl ate top workers --sandbox-class <gvisor|microvm>
+```
+
+Metrics come from the Kubernetes metrics API, so the cluster needs
+metrics-server (or an equivalent) installed.
+
+#### `kubectl ate top workers` output columns
+
+| Column | Meaning |
+|---|---|
+| `NAME` | The worker pod name. |
+| `POOL` | The `WorkerPool` the pod belongs to. |
+| `CLASS` | The pool's sandbox class (`gvisor` or `microvm`). |
+| `STATUS` | `FREE` (idle, ready to receive an actor) or `ASSIGNED` (currently hosting an actor). |
+| `ASSIGNED ACTOR` | Same reference as in `get workers`, or `<none>` when `FREE`. |
+| `CPU(CORES)` | CPU currently consumed by the worker pod. |
+| `MEMORY(bytes)` | Memory currently consumed by the worker pod. |
 
 ### Administration & Setup
 Commands for bootstrapping the Substrate control plane and debugging local environments.
