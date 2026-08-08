@@ -253,7 +253,7 @@ func (s *FinalizeSuspendedStep) Execute(ctx context.Context, input *SuspendInput
 		return err
 	}
 
-	// 1. Free the worker (if it hasn't been freed yet)
+	// 1. Free the worker (if the actor has one and it hasn't been freed yet)
 	if assignment := latestActor.GetWorkerAssignment(); assignment != nil {
 		workerPod := assignment.GetWorkerPod()
 
@@ -276,46 +276,50 @@ func (s *FinalizeSuspendedStep) Execute(ctx context.Context, input *SuspendInput
 			}
 		}
 
-		// 2. Clear the actor's assignment, now that the worker is freed
+		// Re-fetch the actor now that the worker is freed.
 		latestActor, err = s.store.GetActor(ctx, input.ActorRef)
 		if err != nil {
 			return err
 		}
-		latestActor.Status = ateapipb.Actor_STATUS_SUSPENDED
-		if latestActor.InProgressSnapshotName != "" {
-			snapshotName := latestActor.InProgressSnapshotName
-			// The same inputs CallAteletSuspend used, so the recorded URI is
-			// where the bytes were actually written.
-			snapshotURI, err := inProgressSnapshotURI(state, input.ActorRef.Atespace, snapshotName)
-			if err != nil {
-				return err
-			}
-			snapshot := &ateapipb.ActorSnapshot{
-				Metadata:               &ateapipb.ResourceMetadata{Atespace: input.ActorRef.Atespace, Name: snapshotName},
-				SourceActor:            input.ActorRef.ToObjectRef(),
-				SourceActorUid:         latestActor.GetMetadata().GetUid(),
-				SourceActorVersion:     state.SourceVersion,
-				ActorTemplateNamespace: latestActor.GetActorTemplateNamespace(),
-				ActorTemplateName:      latestActor.GetActorTemplateName(),
-				ActorTemplateUid:       string(state.ActorTemplate.GetUID()),
-				ContentScope:           toActorSnapshotContentScope(commitSnapshotScope(input.ActorRef.Atespace, state.ActorTemplate)),
-				SnapshotUri:            snapshotURI.String(),
-			}
-			if _, err := s.store.CreateActorSnapshot(ctx, snapshot); err != nil && !errors.Is(err, store.ErrAlreadyExists) {
-				return err
-			}
-			latestActor.LatestSnapshot = &ateapipb.ObjectRef{Atespace: input.ActorRef.Atespace, Name: snapshotName}
-			latestActor.InProgressSnapshotName = ""
-			latestActor.InProgressSnapshotSourceActorVersion = 0
-		}
-		latestActor.WorkerAssignment = nil
-		latestActor.LocalSnapshotInfo = nil
-		updatedActor, err := s.store.UpdateActor(ctx, latestActor, latestActor.GetMetadata().GetVersion())
+	}
+
+	// 2. Finalize the actor: record the snapshot and mark it SUSPENDED. This
+	// must run even with no worker assignment (nothing to free), or the actor
+	// would be left SUSPENDING forever with the workflow reporting success.
+	latestActor.Status = ateapipb.Actor_STATUS_SUSPENDED
+	if latestActor.InProgressSnapshotName != "" {
+		snapshotName := latestActor.InProgressSnapshotName
+		// The same inputs CallAteletSuspend used, so the recorded URI is
+		// where the bytes were actually written.
+		snapshotURI, err := inProgressSnapshotURI(state, input.ActorRef.Atespace, snapshotName)
 		if err != nil {
 			return err
 		}
-		latestActor = updatedActor
+		snapshot := &ateapipb.ActorSnapshot{
+			Metadata:               &ateapipb.ResourceMetadata{Atespace: input.ActorRef.Atespace, Name: snapshotName},
+			SourceActor:            input.ActorRef.ToObjectRef(),
+			SourceActorUid:         latestActor.GetMetadata().GetUid(),
+			SourceActorVersion:     state.SourceVersion,
+			ActorTemplateNamespace: latestActor.GetActorTemplateNamespace(),
+			ActorTemplateName:      latestActor.GetActorTemplateName(),
+			ActorTemplateUid:       string(state.ActorTemplate.GetUID()),
+			ContentScope:           toActorSnapshotContentScope(commitSnapshotScope(input.ActorRef.Atespace, state.ActorTemplate)),
+			SnapshotUri:            snapshotURI.String(),
+		}
+		if _, err := s.store.CreateActorSnapshot(ctx, snapshot); err != nil && !errors.Is(err, store.ErrAlreadyExists) {
+			return err
+		}
+		latestActor.LatestSnapshot = &ateapipb.ObjectRef{Atespace: input.ActorRef.Atespace, Name: snapshotName}
+		latestActor.InProgressSnapshotName = ""
+		latestActor.InProgressSnapshotSourceActorVersion = 0
 	}
+	latestActor.WorkerAssignment = nil
+	latestActor.LocalSnapshotInfo = nil
+	updatedActor, err := s.store.UpdateActor(ctx, latestActor, latestActor.GetMetadata().GetVersion())
+	if err != nil {
+		return err
+	}
+	latestActor = updatedActor
 
 	state.Actor = latestActor
 	return nil

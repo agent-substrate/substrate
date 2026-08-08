@@ -301,6 +301,74 @@ func TestCallAteletSuspendStep_DanglingWorkerDoesNotRecordPhantomSnapshot(t *tes
 	}
 }
 
+// TestFinalizeSuspendedStep_NoAssignment verifies finalization runs even when
+// the actor has no worker assignment: the ActorSnapshot must be recorded and
+// the actor moved to SUSPENDED rather than silently left SUSPENDING. This is
+// the shape a paused-origin suspend (#791) produces — a PAUSED actor has no
+// worker — and the regression test for finalization previously living inside
+// the worker-freeing branch.
+func TestFinalizeSuspendedStep_NoAssignment(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+
+	const snapshotName = "2026-01-01t00-00-00z-abc"
+	actor := &ateapipb.Actor{
+		Metadata:               &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor-1"},
+		Status:                 ateapipb.Actor_STATUS_SUSPENDING,
+		InProgressSnapshotName: snapshotName,
+		LocalSnapshotInfo: &ateapipb.LocalSnapshotInfo{
+			SnapshotName:              "actor-1-pause-snapshot",
+			NodeVmsWithLocalSnapshots: []string{"node1"},
+		},
+	}
+	created, err := persistence.CreateActor(ctx, actor)
+	if err != nil {
+		t.Fatalf("CreateActor: %v", err)
+	}
+
+	step := &FinalizeSuspendedStep{store: persistence}
+	input := &SuspendInput{ActorRef: resources.ActorRef{Atespace: "team-a", Name: "actor-1"}}
+	state := &SuspendState{
+		Actor:         created,
+		ActorTemplate: &atev1alpha1.ActorTemplate{Spec: atev1alpha1.ActorTemplateSpec{SnapshotsConfig: atev1alpha1.SnapshotsConfig{Location: "gs://snapshots"}}},
+		SourceVersion: created.GetMetadata().GetVersion(),
+	}
+	if err := step.Execute(ctx, input, state); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	stored, err := persistence.GetActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"})
+	if err != nil {
+		t.Fatalf("GetActor: %v", err)
+	}
+	if stored.GetStatus() != ateapipb.Actor_STATUS_SUSPENDED {
+		t.Errorf("status = %v, want SUSPENDED", stored.GetStatus())
+	}
+	if got := stored.GetLatestSnapshot().GetName(); got != snapshotName {
+		t.Errorf("LatestSnapshot = %q, want %q", got, snapshotName)
+	}
+	if got := stored.GetInProgressSnapshotName(); got != "" {
+		t.Errorf("InProgressSnapshotName = %q, want cleared", got)
+	}
+	if stored.GetLocalSnapshotInfo() != nil {
+		t.Errorf("LocalSnapshotInfo = %v, want cleared", stored.GetLocalSnapshotInfo())
+	}
+	snapshot, err := persistence.GetActorSnapshot(ctx, "team-a", snapshotName)
+	if err != nil {
+		t.Fatalf("GetActorSnapshot: %v", err)
+	}
+	wantURI, err := resources.NewSnapshotURI("gs://snapshots", "team-a", snapshotName)
+	if err != nil {
+		t.Fatalf("NewSnapshotURI: %v", err)
+	}
+	if got := snapshot.GetSnapshotUri(); got != wantURI.String() {
+		t.Errorf("snapshot URI = %q, want %q", got, wantURI.String())
+	}
+	if got := snapshot.GetSourceActorUid(); got != created.GetMetadata().GetUid() {
+		t.Errorf("snapshot SourceActorUid = %q, want %q", got, created.GetMetadata().GetUid())
+	}
+}
+
 func TestFinalizeSuspendedStep_ReleasesOnlyOwnWorker(t *testing.T) {
 	tests := []struct {
 		name               string
