@@ -42,6 +42,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateomnet"
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/atunnel"
+	"github.com/agent-substrate/substrate/internal/otlprelay"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/agent-substrate/substrate/internal/version"
@@ -59,6 +60,9 @@ var (
 	kataDebug    = flag.Bool("kata-debug", false, "Verbose kata-agent debugging: raise the guest agent log level and forward the guest console (incl. agent logs) into the pod logs.")
 	showVersion  = flag.Bool("version", false, "Print version and exit.")
 	logLevelFlag = flag.String("log-level", "info", "Minimum log level: debug, info, warn, or error.")
+
+	otlpRelaySocket = flag.String("otlp-relay-socket", ateompath.AteletOTLPSocketPath(),
+		"Unix socket of atelet's OTLP relay to export telemetry through, keeping it off the pod network. Empty, or absent at startup, exports directly to OTEL_EXPORTER_OTLP_ENDPOINT instead.")
 
 	atunnelListenAddress       = flag.String("atunnel-listen-address", "0.0.0.0:443", "Address for actor ingress HTTPS")
 	workerCredentialBundle     = flag.String("atunnel-credential-bundle", "/run/podidentity.podcert.ate.dev/credential-bundle.pem", "Worker Pod credential bundle used by atunnel for inbound serving and outbound mTLS")
@@ -101,16 +105,28 @@ func do(ctx context.Context) error {
 	slog.InfoContext(ctx, "ateom-microvm booting", slog.String("version", version.String()))
 
 	const serviceName = "ateom-microvm"
+	// Export through atelet's node-local relay when it is there, so telemetry
+	// never touches the worker pod's network. A nil conn means it is not, and
+	// both providers fall back to dialing the collector directly.
+	relayConn, err := otlprelay.Dial(ctx, *otlpRelaySocket)
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to connect to the OTLP relay", err)
+	}
+	if relayConn != nil {
+		defer relayConn.Close()
+	}
+
 	tp, err := serverboot.InitTracing(ctx, serverboot.TracingOptions{
-		ServiceName: serviceName,
-		Sampling:    serverboot.ResolveTraceSampling(ctx, serverboot.ParentRatioSampling(serverboot.ControlPlaneTraceRatio)),
+		ServiceName:  serviceName,
+		Sampling:     serverboot.ResolveTraceSampling(ctx, serverboot.ParentRatioSampling(serverboot.ControlPlaneTraceRatio)),
+		ExporterConn: relayConn,
 	})
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to initialize tracing", err)
 	}
 	defer serverboot.ShutdownProvider("TracerProvider", tp.Shutdown)
 
-	mp, err := serverboot.InitMetricsPushOnly(ctx, serviceName)
+	mp, err := serverboot.InitMetricsPushOnlyVia(ctx, serviceName, relayConn)
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to initialize metrics", err)
 	}

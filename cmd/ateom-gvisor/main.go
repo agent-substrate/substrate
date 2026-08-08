@@ -38,6 +38,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/atunnel"
 	"github.com/agent-substrate/substrate/internal/contextlogging"
 	"github.com/agent-substrate/substrate/internal/imagecache"
+	"github.com/agent-substrate/substrate/internal/otlprelay"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/readyz"
 	"github.com/agent-substrate/substrate/internal/resources"
@@ -65,6 +66,9 @@ var (
 
 	showVersion  = pflag.Bool("version", false, "Print version and exit.")
 	logLevelFlag = pflag.String("log-level", "info", "Minimum log level: debug, info, warn, or error.")
+
+	otlpRelaySocket = pflag.String("otlp-relay-socket", ateompath.AteletOTLPSocketPath(),
+		"Unix socket of atelet's OTLP relay to export telemetry through, keeping it off the pod network. Empty, or absent at startup, exports directly to OTEL_EXPORTER_OTLP_ENDPOINT instead.")
 
 	reapLock sync.RWMutex
 )
@@ -102,16 +106,28 @@ func do(ctx context.Context) error {
 	slog.InfoContext(ctx, "ateom booting")
 
 	const serviceName = "ateom-gvisor"
+	// Export through atelet's node-local relay when it is there, so telemetry
+	// never touches the worker pod's network. A nil conn means it is not, and
+	// both providers fall back to dialing the collector directly.
+	relayConn, err := otlprelay.Dial(ctx, *otlpRelaySocket)
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to connect to the OTLP relay", err)
+	}
+	if relayConn != nil {
+		defer relayConn.Close()
+	}
+
 	tp, err := serverboot.InitTracing(ctx, serverboot.TracingOptions{
-		ServiceName: serviceName,
-		Sampling:    serverboot.ResolveTraceSampling(ctx, serverboot.ParentRatioSampling(serverboot.ControlPlaneTraceRatio)),
+		ServiceName:  serviceName,
+		Sampling:     serverboot.ResolveTraceSampling(ctx, serverboot.ParentRatioSampling(serverboot.ControlPlaneTraceRatio)),
+		ExporterConn: relayConn,
 	})
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to initialize tracing", err)
 	}
 	defer serverboot.ShutdownProvider("TracerProvider", tp.Shutdown)
 
-	mp, err := serverboot.InitMetricsPushOnly(ctx, serviceName)
+	mp, err := serverboot.InitMetricsPushOnlyVia(ctx, serviceName, relayConn)
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to initialize metrics", err)
 	}

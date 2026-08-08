@@ -53,6 +53,22 @@ func GVisorReleaseDir(sha256 string) string {
 	return filepath.Join(StaticFilesDir, "gvisor-"+sha256)
 }
 
+// AteletOTLPSocketPath is the node-scoped unix socket atelet serves the OTLP
+// relay on (see internal/otlprelay). It is node-scoped rather than per-pod
+// because every ateom on the node pushes into the same relay: atelet is a
+// DaemonSet, so one socket collapses N per-pod collector connections into one
+// per-node connection.
+//
+// It sits directly under BasePath, which is the host directory already mounted
+// at the same path into atelet and into every ateom pod, so no new volume is
+// needed for ateom to reach it.
+func AteletOTLPSocketPath() string {
+	return filepath.Join(
+		BasePath,
+		"atelet-otlp.sock",
+	)
+}
+
 func AteomPath(podUID string) string {
 	return filepath.Join(
 		BasePath,

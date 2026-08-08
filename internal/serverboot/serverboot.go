@@ -40,6 +40,7 @@ import (
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.40.0"
+	"google.golang.org/grpc"
 )
 
 // InitLogger sets the global slog logger to a JSON handler wrapped in
@@ -111,6 +112,14 @@ type TracingOptions struct {
 	// OTEL_TRACES_SAMPLER / OTEL_TRACES_SAMPLER_ARG override the component
 	// default.
 	Sampling TraceSampling
+	// ExporterConn, when non-nil, is the connection the OTLP exporter sends
+	// over, instead of dialing OTEL_EXPORTER_OTLP_ENDPOINT itself. ateom passes
+	// the unix socket to atelet's relay (internal/otlprelay) so a worker pod
+	// exports without a network path of its own; nil keeps the direct dial.
+	//
+	// The caller owns the connection: the exporter's Shutdown does not close a
+	// connection it did not create.
+	ExporterConn *grpc.ClientConn
 }
 
 // InitTracing registers a global TracerProvider with the given options
@@ -138,10 +147,16 @@ func InitTracing(ctx context.Context, opts TracingOptions) (*sdktrace.TracerProv
 		sdktrace.WithResource(res),
 		sdktrace.WithSampler(opts.Sampling.Sampler()),
 	}
-	exporter, err := otlptracegrpc.New(ctx,
+	expOpts := []otlptracegrpc.Option{
 		// GKE managed traces doesn't support validating the TLS certs of the collector.
 		otlptracegrpc.WithInsecure(),
-	)
+	}
+	if opts.ExporterConn != nil {
+		// WithGRPCConn takes precedence over endpoint/credential options, so
+		// WithInsecure above is inert on this path.
+		expOpts = append(expOpts, otlptracegrpc.WithGRPCConn(opts.ExporterConn))
+	}
+	exporter, err := otlptracegrpc.New(ctx, expOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("create OTLP exporter: %w", err)
 	}
@@ -166,7 +181,7 @@ func InitMetrics(ctx context.Context, serviceName string) (*sdkmetric.MeterProvi
 	if err != nil {
 		return nil, fmt.Errorf("create Prometheus metric exporter: %w", err)
 	}
-	return newMeterProvider(ctx, serviceName, nil, promExporter)
+	return newMeterProvider(ctx, serviceName, nil, nil, promExporter)
 }
 
 // InitMetricsPushOnly is InitMetrics without the Prometheus reader, for binaries
@@ -175,14 +190,35 @@ func InitMetrics(ctx context.Context, serviceName string) (*sdkmetric.MeterProvi
 // recorded outside the OTel SDK on the same push path; atecontroller bridges
 // controller-runtime's registry that way.
 func InitMetricsPushOnly(ctx context.Context, serviceName string, producers ...sdkmetric.Producer) (*sdkmetric.MeterProvider, error) {
-	return newMeterProvider(ctx, serviceName, producers)
+	return newMeterProvider(ctx, serviceName, nil, producers)
 }
 
-func newMeterProvider(ctx context.Context, serviceName string, producers []sdkmetric.Producer, extraReaders ...sdkmetric.Reader) (*sdkmetric.MeterProvider, error) {
+// InitMetricsPushOnlyVia is InitMetricsPushOnly with an explicit exporter
+// connection: the metrics counterpart of TracingOptions.ExporterConn. ateom
+// passes atelet's relay socket (internal/otlprelay) so the worker pod needs no
+// network path of its own; a nil conn keeps the direct dial to
+// OTEL_EXPORTER_OTLP_ENDPOINT.
+//
+// The caller owns the connection: the meter provider's Shutdown does not close
+// a connection it did not create.
+func InitMetricsPushOnlyVia(ctx context.Context, serviceName string, conn *grpc.ClientConn, producers ...sdkmetric.Producer) (*sdkmetric.MeterProvider, error) {
+	return newMeterProvider(ctx, serviceName, conn, producers)
+}
+
+func newMeterProvider(ctx context.Context, serviceName string, conn *grpc.ClientConn, producers []sdkmetric.Producer, extraReaders ...sdkmetric.Reader) (*sdkmetric.MeterProvider, error) {
 	if serviceName == "" {
 		return nil, fmt.Errorf("serviceName is required")
 	}
-	otlpExporter, err := otlpmetricgrpc.New(ctx, otlpmetricgrpc.WithInsecure())
+	expOpts := []otlpmetricgrpc.Option{
+		// GKE managed metrics doesn't support validating the TLS certs of the collector.
+		otlpmetricgrpc.WithInsecure(),
+	}
+	if conn != nil {
+		// WithGRPCConn takes precedence over endpoint/credential options, so
+		// WithInsecure above is inert on this path.
+		expOpts = append(expOpts, otlpmetricgrpc.WithGRPCConn(conn))
+	}
+	otlpExporter, err := otlpmetricgrpc.New(ctx, expOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("create OTLP metric exporter: %w", err)
 	}
