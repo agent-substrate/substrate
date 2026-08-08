@@ -30,6 +30,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/ateerrors"
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
@@ -52,15 +53,38 @@ func TestSnapshotManifestActorMetadata(t *testing.T) {
 		ActorUID:               "actor-uid",
 		ActorTemplateNamespace: "templates",
 		ActorTemplateName:      "agent",
+		Scope:                  ateattr.SnapshotScopeFull,
 	}
 	got, err := json.Marshal(rec)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{`"atespace":"team-a"`, `"actorName":"actor-1"`, `"actorUid":"actor-uid"`, `"actorTemplateNamespace":"templates"`, `"actorTemplateName":"agent"`} {
+	for _, want := range []string{`"atespace":"team-a"`, `"actorName":"actor-1"`, `"actorUid":"actor-uid"`, `"actorTemplateNamespace":"templates"`, `"actorTemplateName":"agent"`, `"scope":"full"`} {
 		if !bytes.Contains(got, []byte(want)) {
 			t.Errorf("manifest %s missing %s", got, want)
 		}
+	}
+}
+
+// TestSnapshotManifestScopeAbsent pins backward compatibility: manifests
+// written before the scope field existed must still parse, reporting an empty
+// scope, and a scope-less record must not serialize a scope key at all.
+func TestSnapshotManifestScopeAbsent(t *testing.T) {
+	legacy := []byte(`{"sandboxClass":"gvisor","snapshotFiles":["checkpoint.img"]}`)
+	rec, err := unmarshalSandboxRecord(legacy)
+	if err != nil {
+		t.Fatalf("unmarshalSandboxRecord(legacy manifest): %v", err)
+	}
+	if rec.Scope != "" {
+		t.Errorf("legacy manifest scope = %q, want empty", rec.Scope)
+	}
+
+	got, err := json.Marshal(sandboxAssetsRecord{SandboxClass: "gvisor"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(got, []byte(`"scope"`)) {
+		t.Errorf("scope-less record serialized a scope key: %s", got)
 	}
 }
 

@@ -89,6 +89,11 @@ type sandboxAssetsRecord struct {
 	// (gVisor's image files, cloud-hypervisor's snapshot set, ...). Empty in the
 	// on-node record written at Run/Restore; populated at Checkpoint.
 	SnapshotFiles []string `json:"snapshotFiles,omitempty"`
+	// Scope is the snapshot scope the checkpoint captured, as the shared
+	// ateattr label ("full" or "data"), so a snapshot's content is knowable
+	// from the manifest alone. Empty in the on-node record written at
+	// Run/Restore and in snapshot manifests written before this field existed.
+	Scope string `json:"scope,omitempty"`
 }
 
 // recordFromRequest projects a request's per-architecture SandboxAssets onto the

@@ -571,6 +571,7 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 	sandboxRec.ActorUID = req.GetActorUid()
 	sandboxRec.ActorTemplateNamespace = req.GetActorTemplateNamespace()
 	sandboxRec.ActorTemplateName = req.GetActorTemplateName()
+	sandboxRec.Scope = ateattr.SnapshotScopeValue(req.GetScope())
 
 	// No earlier pause snapshot can ever be restored again, so remove them
 	// all: the actor's current state was just captured by CheckpointWorkload,
