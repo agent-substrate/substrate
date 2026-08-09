@@ -25,6 +25,7 @@ import (
 )
 
 var templateFlag string
+var templateVersionFlag string
 var atespaceFlag string
 var sourceSnapshotTagFlag string
 
@@ -41,21 +42,29 @@ var createActorCmd = &cobra.Command{
 		defer apiClient.Close()
 
 		actorName := args[0]
-		parts := strings.Split(templateFlag, "/")
-		if len(parts) != 2 {
-			return fmt.Errorf("malformed --template: %s (expected <namespace>/<name>)", templateFlag)
-		}
-
-		request := &ateapipb.CreateActorRequest{
-			Actor: &ateapipb.Actor{
-				Metadata: &ateapipb.ResourceMetadata{
-					Atespace: atespaceFlag,
-					Name:     actorName,
-				},
-				ActorTemplateNamespace: parts[0],
-				ActorTemplateName:      parts[1],
+		actor := &ateapipb.Actor{
+			Metadata: &ateapipb.ResourceMetadata{
+				Atespace: atespaceFlag,
+				Name:     actorName,
 			},
 		}
+		// <namespace>/<name> selects a CRD ActorTemplate; a bare name selects
+		// a global control-plane ActorTemplate (see kubectl ate apply).
+		switch parts := strings.Split(templateFlag, "/"); len(parts) {
+		case 1:
+			actor.ActorTemplate = templateFlag
+			actor.ActorTemplateVersion = templateVersionFlag
+		case 2:
+			if templateVersionFlag != "" {
+				return fmt.Errorf("--template-version only applies to control-plane templates (--template without a namespace)")
+			}
+			actor.ActorTemplateNamespace = parts[0]
+			actor.ActorTemplateName = parts[1]
+		default:
+			return fmt.Errorf("malformed --template: %s (expected <namespace>/<name> or <name>)", templateFlag)
+		}
+
+		request := &ateapipb.CreateActorRequest{Actor: actor}
 		if sourceSnapshotTagFlag != "" {
 			ref, err := parseNamespacedName(sourceSnapshotTagFlag)
 			if err != nil {
@@ -73,8 +82,9 @@ var createActorCmd = &cobra.Command{
 }
 
 func init() {
-	createActorCmd.Flags().StringVarP(&templateFlag, "template", "t", "", "Template to derive the actor from in <namespace>/<name> format (required)")
+	createActorCmd.Flags().StringVarP(&templateFlag, "template", "t", "", "Template to derive the actor from: <namespace>/<name> for a CRD ActorTemplate, <name> for a control-plane ActorTemplate (required)")
 	_ = createActorCmd.MarkFlagRequired("template")
+	createActorCmd.Flags().StringVar(&templateVersionFlag, "template-version", "", "Pin a control-plane ActorTemplateVersion (default: the template's defaultVersionOnCreate)")
 	createActorCmd.Flags().StringVarP(&atespaceFlag, "atespace", "a", "", "Atespace to create the actor in (required)")
 	_ = createActorCmd.MarkFlagRequired("atespace")
 	createActorCmd.Flags().StringVar(&sourceSnapshotTagFlag, "snapshot-tag", "", "Initialize from an ActorSnapshot tag in <atespace>/<name> format")

@@ -74,7 +74,12 @@ func PrintActorsTo(out io.Writer, actors []*ateapipb.Actor, format string) error
 		for _, actor := range actors {
 			atespace := actor.GetMetadata().GetAtespace()
 			name := actor.GetMetadata().GetName()
+			// Native actors run an ActorTemplateVersion; CRD actors a
+			// namespaced template.
 			template := actor.GetActorTemplateNamespace() + "/" + actor.GetActorTemplateName()
+			if actor.GetActorTemplateVersion() != "" {
+				template = actor.GetActorTemplateVersion()
+			}
 			status := actor.GetStatus().String()
 
 			assignment := actor.GetWorkerAssignment()
