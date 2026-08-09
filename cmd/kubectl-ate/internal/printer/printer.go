@@ -309,6 +309,77 @@ func PrintAtespace(atespace *ateapipb.Atespace, format string) error {
 	return PrintAtespaces([]*ateapipb.Atespace{atespace}, format)
 }
 
+// PrintActorTemplates prints actor templates to stdout in the requested format.
+func PrintActorTemplates(templates []*ateapipb.ActorTemplate, format string) error {
+	return PrintActorTemplatesTo(os.Stdout, templates, format)
+}
+
+func sortActorTemplates(templates []*ateapipb.ActorTemplate) {
+	slices.SortFunc(templates, func(a, b *ateapipb.ActorTemplate) int {
+		return cmp.Compare(a.GetMetadata().GetName(), b.GetMetadata().GetName())
+	})
+}
+
+// PrintActorTemplatesTo prints actor templates to the provided writer.
+func PrintActorTemplatesTo(out io.Writer, templates []*ateapipb.ActorTemplate, format string) error {
+	sortActorTemplates(templates)
+	switch format {
+	case "json", "yaml":
+		return printProto(out, &ateapipb.ListActorTemplatesResponse{ActorTemplates: templates}, format)
+	case "table":
+		w := tabwriter.NewWriter(out, 0, 0, 3, ' ', 0)
+		fmt.Fprintln(w, "NAME\tDEFAULT-VERSION\tAGE")
+		for _, t := range templates {
+			defaultVersion := t.GetSpec().GetDefaultVersionOnCreate().GetName()
+			if defaultVersion == "" {
+				defaultVersion = "<none>"
+			}
+			fmt.Fprintf(w, "%s\t%s\t%s\n", t.GetMetadata().GetName(), defaultVersion, formatAge(t.GetMetadata().GetCreateTime()))
+		}
+		return w.Flush()
+	default:
+		return fmt.Errorf("unsupported format %q", format)
+	}
+}
+
+// PrintActorTemplateVersions prints actor template versions to stdout in the
+// requested format.
+func PrintActorTemplateVersions(versions []*ateapipb.ActorTemplateVersion, format string) error {
+	return PrintActorTemplateVersionsTo(os.Stdout, versions, format)
+}
+
+func sortActorTemplateVersions(versions []*ateapipb.ActorTemplateVersion) {
+	slices.SortFunc(versions, func(a, b *ateapipb.ActorTemplateVersion) int {
+		if c := cmp.Compare(a.GetActorTemplate().GetName(), b.GetActorTemplate().GetName()); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.GetMetadata().GetName(), b.GetMetadata().GetName())
+	})
+}
+
+// PrintActorTemplateVersionsTo prints actor template versions to the
+// provided writer.
+func PrintActorTemplateVersionsTo(out io.Writer, versions []*ateapipb.ActorTemplateVersion, format string) error {
+	sortActorTemplateVersions(versions)
+	switch format {
+	case "json", "yaml":
+		return printProto(out, &ateapipb.ListActorTemplateVersionsResponse{ActorTemplateVersions: versions}, format)
+	case "table":
+		w := tabwriter.NewWriter(out, 0, 0, 3, ' ', 0)
+		fmt.Fprintln(w, "NAME\tTEMPLATE\tSTATE\tAGE")
+		for _, v := range versions {
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n",
+				v.GetMetadata().GetName(),
+				v.GetActorTemplate().GetName(),
+				v.GetStatus().GetState().String(),
+				formatAge(v.GetMetadata().GetCreateTime()))
+		}
+		return w.Flush()
+	default:
+		return fmt.Errorf("unsupported format %q", format)
+	}
+}
+
 func printProto(out io.Writer, msg proto.Message, format string) error {
 	m := protojson.MarshalOptions{}
 	b, err := m.Marshal(msg)

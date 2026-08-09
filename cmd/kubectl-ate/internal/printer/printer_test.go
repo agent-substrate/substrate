@@ -512,3 +512,52 @@ func TestPrintWorkerTopTo_Invalid(t *testing.T) {
 		t.Errorf("expected error for invalid format, got nil")
 	}
 }
+
+func TestPrintActorTemplatesTo_Table(t *testing.T) {
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	pinNow(t, now)
+
+	var buf bytes.Buffer
+	templates := []*ateapipb.ActorTemplate{{
+		Metadata: &ateapipb.ResourceMetadata{Name: "zeta", CreateTime: timestamppb.New(now.Add(-5 * time.Minute))},
+	}, {
+		Metadata: &ateapipb.ResourceMetadata{Name: "counter", CreateTime: timestamppb.New(now.Add(-5 * time.Hour))},
+		Spec: &ateapipb.ActorTemplateSpec{
+			DefaultVersionOnCreate: &ateapipb.ObjectRef{Name: "counter-v1"},
+		},
+	}}
+	if err := PrintActorTemplatesTo(&buf, templates, "table"); err != nil {
+		t.Fatalf("PrintActorTemplatesTo failed: %v", err)
+	}
+	want := "NAME      DEFAULT-VERSION   AGE\n" +
+		"counter   counter-v1        5h\n" +
+		"zeta      <none>            5m\n"
+	if diff := cmp.Diff(want, buf.String()); diff != "" {
+		t.Errorf("table mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestPrintActorTemplateVersionsTo_Table(t *testing.T) {
+	now := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	pinNow(t, now)
+
+	var buf bytes.Buffer
+	versions := []*ateapipb.ActorTemplateVersion{{
+		Metadata:      &ateapipb.ResourceMetadata{Name: "counter-v2", CreateTime: timestamppb.New(now.Add(-5 * time.Minute))},
+		ActorTemplate: &ateapipb.ObjectRef{Name: "counter"},
+		Status:        &ateapipb.ActorTemplateVersionStatus{State: ateapipb.ActorTemplateVersionStatus_STATE_INITIAL},
+	}, {
+		Metadata:      &ateapipb.ResourceMetadata{Name: "counter-v1", CreateTime: timestamppb.New(now.Add(-5 * time.Hour))},
+		ActorTemplate: &ateapipb.ObjectRef{Name: "counter"},
+		Status:        &ateapipb.ActorTemplateVersionStatus{State: ateapipb.ActorTemplateVersionStatus_STATE_READY},
+	}}
+	if err := PrintActorTemplateVersionsTo(&buf, versions, "table"); err != nil {
+		t.Fatalf("PrintActorTemplateVersionsTo failed: %v", err)
+	}
+	want := "NAME         TEMPLATE   STATE           AGE\n" +
+		"counter-v1   counter    STATE_READY     5h\n" +
+		"counter-v2   counter    STATE_INITIAL   5m\n"
+	if diff := cmp.Diff(want, buf.String()); diff != "" {
+		t.Errorf("table mismatch (-want +got):\n%s", diff)
+	}
+}

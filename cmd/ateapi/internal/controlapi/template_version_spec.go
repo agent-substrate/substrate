@@ -19,6 +19,7 @@ import (
 	"strings"
 
 	"github.com/agent-substrate/substrate/internal/resources"
+	"github.com/agent-substrate/substrate/internal/templateversion"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	k8sresource "k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/api/validate/content"
@@ -55,22 +56,10 @@ var (
 )
 
 // defaultActorTemplateVersionSpec materializes server-applied defaults into
-// the spec before validation and storage, mirroring the CRD's API-server
-// defaulting: a readyz timeout of 0 means 30s and an empty readyz path means
-// "/readyz", so the effective values are visible on the stored object.
+// the spec before validation and storage; shared with kubectl-ate, which
+// must default identically before comparing manifests on re-apply.
 func defaultActorTemplateVersionSpec(spec *ateapipb.ActorTemplateVersionSpec) {
-	for _, c := range spec.GetContainers() {
-		readyz := c.GetReadyz()
-		if readyz == nil {
-			continue
-		}
-		if readyz.GetTimeoutSeconds() == 0 {
-			readyz.TimeoutSeconds = defaultReadyzTimeout
-		}
-		if httpGet := readyz.GetHttpGet(); httpGet != nil && httpGet.GetPath() == "" {
-			httpGet.Path = defaultReadyzPath
-		}
-	}
+	templateversion.DefaultSpec(spec)
 }
 
 // validateActorTemplateVersionSpec ports the ActorTemplate CRD's CEL and
