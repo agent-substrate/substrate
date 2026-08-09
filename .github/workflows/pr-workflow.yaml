@@ -89,11 +89,15 @@ jobs:
     - name: Create cluster
       run: hack/create-kind-cluster.sh
     - name: Install Agent Substrate
-      run: hack/install-ate-kind.sh --deploy-ate-system --ateapi-client-auth=${{ matrix.ateapi-client-auth }}
+      env:
+        CLIENT_AUTH: ${{ matrix.ateapi-client-auth }}
+      run: hack/install-ate-kind.sh --deploy-ate-system --ateapi-client-auth="$CLIENT_AUTH"
     - name: Deploy micro-VM counter demo
       # Stages the (cached) assets into the cluster's rustfs and applies the
       # counter-microvm demo onto the control plane installed above.
-      run: hack/run-microvm-demo-kind.sh --ateapi-client-auth=${{ matrix.ateapi-client-auth }}
+      env:
+        CLIENT_AUTH: ${{ matrix.ateapi-client-auth }}
+      run: hack/run-microvm-demo-kind.sh --ateapi-client-auth="$CLIENT_AUTH"
     - name: Deploy gVisor counter demo
       run: hack/install-ate-kind.sh --deploy-demo-counter
     - name: Wait for micro-VM golden snapshot
@@ -134,8 +138,10 @@ jobs:
     if: always()
     steps:
     - name: Check E2E matrix
+      env:
+        MATRIX_RESULT: ${{ needs.e2e-test-matrix.result }}
       run: |
-        if [ "${{ needs.e2e-test-matrix.result }}" != "success" ]; then
-          echo "e2e-test-matrix result: ${{ needs.e2e-test-matrix.result }}"
+        if [ "$MATRIX_RESULT" != "success" ]; then
+          echo "e2e-test-matrix result: $MATRIX_RESULT"
           exit 1
         fi
