@@ -1915,3 +1915,395 @@ func failsNTimesThenHangs(n int, err error) evalFunc {
 		return hangs(ctx, sha1, keys, args...)
 	}
 }
+
+func newTestActorTemplate(name string) *ateapipb.ActorTemplate {
+	return &ateapipb.ActorTemplate{Metadata: &ateapipb.ResourceMetadata{Name: name}}
+}
+
+func newTestActorTemplateVersion(name, template string) *ateapipb.ActorTemplateVersion {
+	return &ateapipb.ActorTemplateVersion{
+		Metadata:      &ateapipb.ResourceMetadata{Name: name},
+		ActorTemplate: &ateapipb.ObjectRef{Name: template},
+		Spec:          &ateapipb.ActorTemplateVersionSpec{PauseImage: "pause@sha256:abc"},
+		Status:        &ateapipb.ActorTemplateVersionStatus{State: ateapipb.ActorTemplateVersionStatus_STATE_INITIAL},
+	}
+}
+
+func TestActorTemplateLifecycle(t *testing.T) {
+	_, s, ctx := setupTest(t)
+
+	want := newTestActorTemplate("tmpl-a")
+	created, err := s.CreateActorTemplate(ctx, want)
+	if err != nil {
+		t.Fatalf("CreateActorTemplate failed: %v", err)
+	}
+	if created.GetMetadata().GetUid() == "" {
+		t.Errorf("CreateActorTemplate returned empty uid; want server-assigned uid")
+	}
+	if created.GetMetadata().GetVersion() != 1 {
+		t.Errorf("CreateActorTemplate returned version %d, want 1", created.GetMetadata().GetVersion())
+	}
+	if created.GetMetadata().GetCreateTime() == nil || created.GetMetadata().GetUpdateTime() == nil {
+		t.Errorf("CreateActorTemplate returned unset create/update time")
+	}
+	// The input must not be mutated.
+	if want.GetMetadata().GetUid() != "" || want.GetMetadata().GetVersion() != 0 {
+		t.Errorf("CreateActorTemplate must not mutate its input, got metadata %v", want.GetMetadata())
+	}
+
+	got, err := s.GetActorTemplate(ctx, "tmpl-a")
+	if err != nil {
+		t.Fatalf("GetActorTemplate failed: %v", err)
+	}
+	if diff := cmp.Diff(created, got, protocmp.Transform()); diff != "" {
+		t.Errorf("CreateActorTemplate return does not match stored state (-created +got):\n%s", diff)
+	}
+
+	list, _, err := s.ListActorTemplates(ctx, 1000, "")
+	if err != nil {
+		t.Fatalf("ListActorTemplates failed: %v", err)
+	}
+	if len(list) != 1 || list[0].GetMetadata().GetName() != "tmpl-a" {
+		t.Errorf("ListActorTemplates = %v, want [tmpl-a]", list)
+	}
+
+	deleted, err := s.DeleteActorTemplate(ctx, "tmpl-a")
+	if err != nil {
+		t.Fatalf("DeleteActorTemplate failed: %v", err)
+	}
+	if diff := cmp.Diff(created, deleted, protocmp.Transform()); diff != "" {
+		t.Errorf("DeleteActorTemplate returned unexpected resource (-created +deleted):\n%s", diff)
+	}
+	if _, err := s.GetActorTemplate(ctx, "tmpl-a"); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("after delete, GetActorTemplate = %v, want ErrNotFound", err)
+	}
+}
+
+func TestCreateActorTemplate_AlreadyExists(t *testing.T) {
+	_, s, ctx := setupTest(t)
+
+	if _, err := s.CreateActorTemplate(ctx, newTestActorTemplate("tmpl-a")); err != nil {
+		t.Fatalf("first CreateActorTemplate failed: %v", err)
+	}
+	if _, err := s.CreateActorTemplate(ctx, newTestActorTemplate("tmpl-a")); !errors.Is(err, store.ErrAlreadyExists) {
+		t.Errorf("expected ErrAlreadyExists, got %v", err)
+	}
+}
+
+func TestGetActorTemplate_NotFound(t *testing.T) {
+	_, s, ctx := setupTest(t)
+
+	if _, err := s.GetActorTemplate(ctx, "nope"); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("expected ErrNotFound, got %v", err)
+	}
+}
+
+func TestActorTemplateExists(t *testing.T) {
+	_, s, ctx := setupTest(t)
+
+	if ok, err := s.ActorTemplateExists(ctx, "tmpl-a"); err != nil || ok {
+		t.Fatalf("ActorTemplateExists before create = (%v, %v), want (false, nil)", ok, err)
+	}
+	if _, err := s.CreateActorTemplate(ctx, newTestActorTemplate("tmpl-a")); err != nil {
+		t.Fatalf("CreateActorTemplate failed: %v", err)
+	}
+	if ok, err := s.ActorTemplateExists(ctx, "tmpl-a"); err != nil || !ok {
+		t.Fatalf("ActorTemplateExists after create = (%v, %v), want (true, nil)", ok, err)
+	}
+}
+
+func TestUpdateActorTemplate(t *testing.T) {
+	_, s, ctx := setupTest(t)
+
+	created, err := s.CreateActorTemplate(ctx, newTestActorTemplate("tmpl-a"))
+	if err != nil {
+		t.Fatalf("CreateActorTemplate failed: %v", err)
+	}
+
+	updated := proto.Clone(created).(*ateapipb.ActorTemplate)
+	updated.Spec = &ateapipb.ActorTemplateSpec{
+		WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"tier": "1"}},
+	}
+	stored, err := s.UpdateActorTemplate(ctx, updated, 1)
+	if err != nil {
+		t.Fatalf("UpdateActorTemplate failed: %v", err)
+	}
+	if stored.GetMetadata().GetVersion() != 2 {
+		t.Errorf("updated version = %d, want 2", stored.GetMetadata().GetVersion())
+	}
+	got, err := s.GetActorTemplate(ctx, "tmpl-a")
+	if err != nil {
+		t.Fatalf("GetActorTemplate failed: %v", err)
+	}
+	if diff := cmp.Diff(stored, got, protocmp.Transform()); diff != "" {
+		t.Errorf("UpdateActorTemplate return does not match stored state (-stored +got):\n%s", diff)
+	}
+
+	// A stale expected version must be rejected.
+	if _, err := s.UpdateActorTemplate(ctx, updated, 1); !errors.Is(err, store.ErrVersionConflict) {
+		t.Errorf("stale update = %v, want ErrVersionConflict", err)
+	}
+
+	missing := newTestActorTemplate("nope")
+	if _, err := s.UpdateActorTemplate(ctx, missing, 1); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("update of missing template = %v, want ErrNotFound", err)
+	}
+}
+
+func TestDeleteActorTemplate_NotFound(t *testing.T) {
+	_, s, ctx := setupTest(t)
+
+	if _, err := s.DeleteActorTemplate(ctx, "nope"); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("expected ErrNotFound, got %v", err)
+	}
+}
+
+func TestDeleteActorTemplate_HasVersions_Rejected(t *testing.T) {
+	_, s, ctx := setupTest(t)
+
+	if _, err := s.CreateActorTemplate(ctx, newTestActorTemplate("tmpl-a")); err != nil {
+		t.Fatalf("CreateActorTemplate failed: %v", err)
+	}
+	// A version parented to a DIFFERENT template must not block the delete.
+	if _, err := s.CreateActorTemplateVersion(ctx, newTestActorTemplateVersion("tmpl-b-v1", "tmpl-b")); err != nil {
+		t.Fatalf("CreateActorTemplateVersion failed: %v", err)
+	}
+	if _, err := s.CreateActorTemplateVersion(ctx, newTestActorTemplateVersion("tmpl-a-v1", "tmpl-a")); err != nil {
+		t.Fatalf("CreateActorTemplateVersion failed: %v", err)
+	}
+
+	if _, err := s.DeleteActorTemplate(ctx, "tmpl-a"); !errors.Is(err, store.ErrFailedPrecondition) {
+		t.Fatalf("DeleteActorTemplate with versions = %v, want ErrFailedPrecondition", err)
+	}
+	// The template must survive a rejected delete.
+	if _, err := s.GetActorTemplate(ctx, "tmpl-a"); err != nil {
+		t.Fatalf("template should still exist after rejected delete, got %v", err)
+	}
+
+	if _, err := s.DeleteActorTemplateVersion(ctx, "tmpl-a-v1"); err != nil {
+		t.Fatalf("DeleteActorTemplateVersion failed: %v", err)
+	}
+	if _, err := s.DeleteActorTemplate(ctx, "tmpl-a"); err != nil {
+		t.Errorf("DeleteActorTemplate after versions removed = %v, want nil", err)
+	}
+}
+
+func TestActorTemplateVersionLifecycle(t *testing.T) {
+	_, s, ctx := setupTest(t)
+
+	want := newTestActorTemplateVersion("tmpl-a-v1", "tmpl-a")
+	created, err := s.CreateActorTemplateVersion(ctx, want)
+	if err != nil {
+		t.Fatalf("CreateActorTemplateVersion failed: %v", err)
+	}
+	if created.GetMetadata().GetUid() == "" {
+		t.Errorf("CreateActorTemplateVersion returned empty uid; want server-assigned uid")
+	}
+	if created.GetMetadata().GetVersion() != 1 {
+		t.Errorf("CreateActorTemplateVersion returned version %d, want 1", created.GetMetadata().GetVersion())
+	}
+	// The caller-built spec and status are persisted verbatim.
+	if diff := cmp.Diff(want, created, protocmp.Transform(), ignoreUID, ignoreVersion, ignoreTimestamps); diff != "" {
+		t.Errorf("CreateActorTemplateVersion returned unexpected resource (-want +got):\n%s", diff)
+	}
+
+	got, err := s.GetActorTemplateVersion(ctx, "tmpl-a-v1")
+	if err != nil {
+		t.Fatalf("GetActorTemplateVersion failed: %v", err)
+	}
+	if diff := cmp.Diff(created, got, protocmp.Transform()); diff != "" {
+		t.Errorf("CreateActorTemplateVersion return does not match stored state (-created +got):\n%s", diff)
+	}
+
+	deleted, err := s.DeleteActorTemplateVersion(ctx, "tmpl-a-v1")
+	if err != nil {
+		t.Fatalf("DeleteActorTemplateVersion failed: %v", err)
+	}
+	if diff := cmp.Diff(created, deleted, protocmp.Transform()); diff != "" {
+		t.Errorf("DeleteActorTemplateVersion returned unexpected resource (-created +deleted):\n%s", diff)
+	}
+	if _, err := s.GetActorTemplateVersion(ctx, "tmpl-a-v1"); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("after delete, GetActorTemplateVersion = %v, want ErrNotFound", err)
+	}
+}
+
+func TestCreateActorTemplateVersion_AlreadyExists(t *testing.T) {
+	_, s, ctx := setupTest(t)
+
+	if _, err := s.CreateActorTemplateVersion(ctx, newTestActorTemplateVersion("v1", "tmpl-a")); err != nil {
+		t.Fatalf("first CreateActorTemplateVersion failed: %v", err)
+	}
+	if _, err := s.CreateActorTemplateVersion(ctx, newTestActorTemplateVersion("v1", "tmpl-a")); !errors.Is(err, store.ErrAlreadyExists) {
+		t.Errorf("expected ErrAlreadyExists, got %v", err)
+	}
+}
+
+func TestDeleteActorTemplateVersion_IsParentDefault_Rejected(t *testing.T) {
+	_, s, ctx := setupTest(t)
+
+	if _, err := s.CreateActorTemplate(ctx, newTestActorTemplate("tmpl-a")); err != nil {
+		t.Fatalf("CreateActorTemplate failed: %v", err)
+	}
+	if _, err := s.CreateActorTemplateVersion(ctx, newTestActorTemplateVersion("tmpl-a-v1", "tmpl-a")); err != nil {
+		t.Fatalf("CreateActorTemplateVersion failed: %v", err)
+	}
+	withDefault := newTestActorTemplate("tmpl-a")
+	withDefault.Spec = &ateapipb.ActorTemplateSpec{
+		DefaultVersionOnCreate: &ateapipb.ObjectRef{Name: "tmpl-a-v1"},
+	}
+	if _, err := s.UpdateActorTemplate(ctx, withDefault, 1); err != nil {
+		t.Fatalf("UpdateActorTemplate failed: %v", err)
+	}
+
+	if _, err := s.DeleteActorTemplateVersion(ctx, "tmpl-a-v1"); !errors.Is(err, store.ErrFailedPrecondition) {
+		t.Fatalf("DeleteActorTemplateVersion while default = %v, want ErrFailedPrecondition", err)
+	}
+	// The version must survive a rejected delete.
+	if _, err := s.GetActorTemplateVersion(ctx, "tmpl-a-v1"); err != nil {
+		t.Fatalf("version should still exist after rejected delete, got %v", err)
+	}
+
+	// Clearing the default unblocks the delete.
+	if _, err := s.UpdateActorTemplate(ctx, newTestActorTemplate("tmpl-a"), 2); err != nil {
+		t.Fatalf("UpdateActorTemplate (clear default) failed: %v", err)
+	}
+	if _, err := s.DeleteActorTemplateVersion(ctx, "tmpl-a-v1"); err != nil {
+		t.Errorf("DeleteActorTemplateVersion after clearing default = %v, want nil", err)
+	}
+}
+
+func TestDeleteActorTemplateVersion_MissingParent_Allowed(t *testing.T) {
+	_, s, ctx := setupTest(t)
+
+	if _, err := s.CreateActorTemplateVersion(ctx, newTestActorTemplateVersion("orphan-v1", "gone")); err != nil {
+		t.Fatalf("CreateActorTemplateVersion failed: %v", err)
+	}
+	if _, err := s.DeleteActorTemplateVersion(ctx, "orphan-v1"); err != nil {
+		t.Errorf("DeleteActorTemplateVersion with missing parent = %v, want nil", err)
+	}
+}
+
+func TestDeleteActorTemplateVersion_DeletesGoldenSnapshot(t *testing.T) {
+	_, s, ctx := setupTest(t)
+
+	if _, err := s.CreateActorSnapshot(ctx, &ateapipb.ActorSnapshot{
+		Metadata:    &ateapipb.ResourceMetadata{Atespace: "ate-golden", Name: "golden-1"},
+		SnapshotUri: "gs://bucket/root/snapshots/ate-golden/golden-1",
+	}); err != nil {
+		t.Fatalf("CreateActorSnapshot failed: %v", err)
+	}
+	version := newTestActorTemplateVersion("tmpl-a-v1", "tmpl-a")
+	version.Status.GoldenSnapshot = &ateapipb.ObjectRef{Atespace: "ate-golden", Name: "golden-1"}
+	if _, err := s.CreateActorTemplateVersion(ctx, version); err != nil {
+		t.Fatalf("CreateActorTemplateVersion failed: %v", err)
+	}
+
+	if _, err := s.DeleteActorTemplateVersion(ctx, "tmpl-a-v1"); err != nil {
+		t.Fatalf("DeleteActorTemplateVersion failed: %v", err)
+	}
+	if _, err := s.GetActorSnapshot(ctx, "ate-golden", "golden-1"); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("golden snapshot after delete = %v, want ErrNotFound", err)
+	}
+}
+
+func TestDeleteActorTemplateVersion_GoldenSnapshotAlreadyGone(t *testing.T) {
+	_, s, ctx := setupTest(t)
+
+	version := newTestActorTemplateVersion("tmpl-a-v1", "tmpl-a")
+	version.Status.GoldenSnapshot = &ateapipb.ObjectRef{Atespace: "ate-golden", Name: "never-created"}
+	if _, err := s.CreateActorTemplateVersion(ctx, version); err != nil {
+		t.Fatalf("CreateActorTemplateVersion failed: %v", err)
+	}
+	if _, err := s.DeleteActorTemplateVersion(ctx, "tmpl-a-v1"); err != nil {
+		t.Errorf("DeleteActorTemplateVersion with missing golden snapshot = %v, want nil", err)
+	}
+}
+
+func TestListActorTemplates_Pagination(t *testing.T) {
+	_, s, ctx := setupTest(t)
+
+	for i := 0; i < 5; i++ {
+		if _, err := s.CreateActorTemplate(ctx, newTestActorTemplate(fmt.Sprintf("tmpl-%d", i))); err != nil {
+			t.Fatalf("failed to create template %d: %v", i, err)
+		}
+	}
+
+	var all []*ateapipb.ActorTemplate
+	pageToken := ""
+	for {
+		templates, nextToken, err := s.ListActorTemplates(ctx, 2, pageToken)
+		if err != nil {
+			t.Fatalf("ListActorTemplates failed: %v", err)
+		}
+		all = append(all, templates...)
+		pageToken = nextToken
+		if pageToken == "" {
+			break
+		}
+	}
+
+	if len(all) != 5 {
+		t.Fatalf("expected 5 templates total, got %d", len(all))
+	}
+	seen := make(map[string]bool)
+	for _, tmpl := range all {
+		if seen[tmpl.GetMetadata().GetName()] {
+			t.Errorf("duplicate template found in paginated results: %s", tmpl.GetMetadata().GetName())
+		}
+		seen[tmpl.GetMetadata().GetName()] = true
+	}
+}
+
+func TestListActorTemplateVersions_ParentFilter(t *testing.T) {
+	_, s, ctx := setupTest(t)
+
+	// Interleave versions of two templates.
+	for i := 0; i < 3; i++ {
+		if _, err := s.CreateActorTemplateVersion(ctx, newTestActorTemplateVersion(fmt.Sprintf("tmpl-a-v%d", i), "tmpl-a")); err != nil {
+			t.Fatalf("failed to create tmpl-a version %d: %v", i, err)
+		}
+	}
+	for i := 0; i < 2; i++ {
+		if _, err := s.CreateActorTemplateVersion(ctx, newTestActorTemplateVersion(fmt.Sprintf("tmpl-b-v%d", i), "tmpl-b")); err != nil {
+			t.Fatalf("failed to create tmpl-b version %d: %v", i, err)
+		}
+	}
+
+	unfiltered, _, err := s.ListActorTemplateVersions(ctx, "", 1000, "")
+	if err != nil {
+		t.Fatalf("ListActorTemplateVersions(all) failed: %v", err)
+	}
+	if len(unfiltered) != 5 {
+		t.Fatalf("unfiltered list returned %d versions, want 5", len(unfiltered))
+	}
+
+	// Filtered list, paged with a small page size to exercise the
+	// matched-count pagination semantics.
+	var filtered []*ateapipb.ActorTemplateVersion
+	pageToken := ""
+	for {
+		versions, nextToken, err := s.ListActorTemplateVersions(ctx, "tmpl-a", 2, pageToken)
+		if err != nil {
+			t.Fatalf("ListActorTemplateVersions(tmpl-a) failed: %v", err)
+		}
+		filtered = append(filtered, versions...)
+		pageToken = nextToken
+		if pageToken == "" {
+			break
+		}
+	}
+
+	if len(filtered) != 3 {
+		t.Fatalf("filtered list returned %d versions, want 3", len(filtered))
+	}
+	seen := make(map[string]bool)
+	for _, v := range filtered {
+		if v.GetActorTemplate().GetName() != "tmpl-a" {
+			t.Errorf("filtered list returned version %q of template %q", v.GetMetadata().GetName(), v.GetActorTemplate().GetName())
+		}
+		if seen[v.GetMetadata().GetName()] {
+			t.Errorf("duplicate version found in paginated results: %s", v.GetMetadata().GetName())
+		}
+		seen[v.GetMetadata().GetName()] = true
+	}
+}

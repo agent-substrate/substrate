@@ -105,6 +105,50 @@ type Interface interface {
 	// (e.g. there are actors in it).
 	DeleteAtespace(ctx context.Context, name string) (*ateapipb.Atespace, error)
 
+	// Stores a new ActorTemplate and returns the stored resource with
+	// server-assigned metadata (uid, version, timestamps). The input is not
+	// mutated. Returns ErrAlreadyExists if the name is taken.
+	CreateActorTemplate(ctx context.Context, template *ateapipb.ActorTemplate) (*ateapipb.ActorTemplate, error)
+
+	// Fetches an ActorTemplate by name. Returns ErrNotFound if missing.
+	GetActorTemplate(ctx context.Context, name string) (*ateapipb.ActorTemplate, error)
+
+	// ActorTemplateExists reports whether the ActorTemplate exists.
+	ActorTemplateExists(ctx context.Context, name string) (bool, error)
+
+	// Updates an ActorTemplate with optimistic concurrency check and returns
+	// the stored resource with advanced metadata (version, update_time). The
+	// input is not mutated. Returns ErrNotFound if missing, or
+	// ErrVersionConflict on version mismatch.
+	UpdateActorTemplate(ctx context.Context, template *ateapipb.ActorTemplate, expectedVersion int64) (*ateapipb.ActorTemplate, error)
+
+	// Lists ActorTemplates. Returns a page of templates and a next page token.
+	ListActorTemplates(ctx context.Context, pageSize int32, pageToken string) ([]*ateapipb.ActorTemplate, string, error)
+
+	// Removes an ActorTemplate and returns the deleted resource. Returns
+	// ErrNotFound if missing, or ErrFailedPrecondition while any
+	// ActorTemplateVersion still names it as parent.
+	DeleteActorTemplate(ctx context.Context, name string) (*ateapipb.ActorTemplate, error)
+
+	// Stores a new ActorTemplateVersion and returns the stored resource with
+	// server-assigned metadata. The caller is responsible for the
+	// parent-exists check and for initializing status. The input is not
+	// mutated. Returns ErrAlreadyExists if the name is taken.
+	CreateActorTemplateVersion(ctx context.Context, version *ateapipb.ActorTemplateVersion) (*ateapipb.ActorTemplateVersion, error)
+
+	// Fetches an ActorTemplateVersion by name. Returns ErrNotFound if missing.
+	GetActorTemplateVersion(ctx context.Context, name string) (*ateapipb.ActorTemplateVersion, error)
+
+	// Lists ActorTemplateVersions parented to the named ActorTemplate, or
+	// across all templates when actorTemplate is empty.
+	ListActorTemplateVersions(ctx context.Context, actorTemplate string, pageSize int32, pageToken string) ([]*ateapipb.ActorTemplateVersion, string, error)
+
+	// Removes an ActorTemplateVersion and returns the deleted resource, also
+	// deleting the golden snapshot recorded in status.golden_snapshot, if any.
+	// Returns ErrNotFound if missing, or ErrFailedPrecondition while the
+	// version is its parent's default_version_on_create.
+	DeleteActorTemplateVersion(ctx context.Context, name string) (*ateapipb.ActorTemplateVersion, error)
+
 	// Fetches worker state by namespace, pool, and pod name. Returns ErrNotFound if missing.
 	GetWorker(ctx context.Context, namespace, pool, pod string) (*ateapipb.Worker, error)
 
