@@ -189,6 +189,10 @@ func main() {
 	ateletDialer := controlapi.NewAteletDialer(workerPodInformer.GetIndexer(), ateletPodInformer.GetIndexer(), *ateletClientCredBundle, *podIdentityCACerts)
 	sm := controlapi.NewService(redisPersistence, workerCache, actorTemplateLister, workerPoolLister, sandboxConfigLister, csiDriverConfigLister, storageClassLister, ateletDialer, clientset, instruments, *egressGatewayAddress, volPlugins)
 
+	// Builds golden snapshots for ActorTemplateVersions; replicas coordinate
+	// through per-version locks, so every replica runs the loop.
+	controlapi.NewTemplateVersionBuilder(sm, redisPersistence).Start(shutdownCtx)
+
 	jwtIssuerDiscoveryClient := buildK8sServiceAccountIssuerDiscoveryClient(ctx, *clientJWTCAFile, *clientJWTIssuer)
 
 	actorIdentitySrv := actoridentity.New(*clientJWTIssuer, *clientJWTAudience, *actorIDJWTPoolFile, *actorIDCAPoolFile, *podIdentityCACerts, jwtIssuerDiscoveryClient, redisPersistence, workerCache)
