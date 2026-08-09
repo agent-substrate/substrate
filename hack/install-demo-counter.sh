@@ -20,13 +20,16 @@ ATE_DEMOS+=(demo-counter) # register demo-counter
 
 demo-counter_usage() {
   echo "  --deploy-demo-counter-with-external-volume    Deploy demo-counter with external volume validation"
+  echo "  --deploy-demo-counter-atv                     Deploy demo-counter on control-plane ActorTemplate/ActorTemplateVersion"
 }
 
 demo-counter_cmdline() {
   case "${1}" in
     --deploy-demo-counter) demo-counter_deploy "false" ;;
     --deploy-demo-counter-with-external-volume) demo-counter_deploy "true" ;;
+    --deploy-demo-counter-atv) demo-counter-atv_deploy ;;
     --delete-demo-counter) demo-counter_delete ;;
+    --delete-demo-counter-atv) demo-counter-atv_delete ;;
     *)
       return 1
       ;;
@@ -64,6 +67,65 @@ demo-counter_deploy() {
   log_step "Waiting for counter demo to be ready..."
   run_kubectl rollout status deployment/counter -n ate-demo-counter --timeout=300s
   run_kubectl wait --for=condition=Ready actortemplate/counter -n ate-demo-counter --timeout=300s
+}
+
+# Deploys the counter demo on control-plane ActorTemplate/ActorTemplateVersion
+# resources. Reuses the CRD demo's WorkerPool (and its warm node), so the CRD
+# demo is deployed first; the AT/ATV manifests then go through ko resolve
+# (digest-pins the ko:// image, as the version spec requires) and
+# kubectl ate apply.
+demo-counter-atv_deploy() {
+  log_step "demo-counter-atv_deploy"
+  demo-counter_deploy "false"
+
+  sed -e "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" \
+      demos/counter/counter-atv.yaml.tmpl \
+    | run_ko resolve -f - \
+    | run_kubectl_ate apply -f -
+
+  log_step "Waiting for ActorTemplateVersion counter-atv-v1 to be READY..."
+  local deadline=$((SECONDS + 300))
+  while true; do
+    local json
+    json="$(run_kubectl_ate get actor-template-versions counter-atv-v1 -o json 2>/dev/null || true)"
+    if grep -q '"state": "STATE_READY"' <<<"${json}"; then
+      break
+    fi
+    if grep -q '"state": "STATE_FAILED"' <<<"${json}"; then
+      echo "ActorTemplateVersion counter-atv-v1 failed to build:" >&2
+      grep '"message"' <<<"${json}" >&2 || true
+      return 1
+    fi
+    if ((SECONDS >= deadline)); then
+      echo "Timed out waiting for ActorTemplateVersion counter-atv-v1 to be READY" >&2
+      return 1
+    fi
+    sleep 5
+  done
+}
+
+demo-counter-atv_delete() {
+  log_step "demo-counter-atv_delete"
+
+  # Native actors carry actorTemplate (global name), not the CRD
+  # namespace/name pair delete_demo_actors filters on.
+  if command -v jq &>/dev/null; then
+    local actors_json atespace actor_name
+    if actors_json=$(run_kubectl_ate get actors -A -o json 2>/dev/null); then
+      while IFS=$'\t' read -r atespace actor_name; do
+        [[ -z "${actor_name}" ]] && continue
+        log_step "  preparing actor ${atespace}/${actor_name} for delete"
+        prepare_actor_for_delete "${actor_name}" "${atespace}"
+        run_kubectl_ate delete actor "${actor_name}" -a "${atespace}"
+      done < <(
+        jq -r '.actors[]? | select(.actorTemplate == "counter-atv") | "\(.metadata.atespace)\t\(.metadata.name)"' \
+          <<<"${actors_json}"
+      )
+    fi
+  fi
+
+  run_kubectl_ate delete actor-template-version counter-atv-v1 --clear-default || true
+  run_kubectl_ate delete actor-template counter-atv || true
 }
 
 demo-counter_delete() {

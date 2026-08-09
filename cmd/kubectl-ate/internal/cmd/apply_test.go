@@ -17,6 +17,7 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"os"
 	"strings"
 	"testing"
 
@@ -255,5 +256,36 @@ func TestApplyDocs_VersionUnchangedAndDrifted(t *testing.T) {
 	err = applyDocs(context.Background(), &bytes.Buffer{}, drifted, docs)
 	if err == nil || !strings.Contains(err.Error(), "versions are immutable") {
 		t.Errorf("drifted apply error = %v, want immutability error", err)
+	}
+}
+
+// The demo manifest is the reference api.ate.dev document; parsing it here
+// pins the accepted enum spellings and field names.
+func TestParseApplyDocs_CounterDemoTemplate(t *testing.T) {
+	raw, err := os.ReadFile("../../../../demos/counter/counter-atv.yaml.tmpl")
+	if err != nil {
+		t.Fatalf("read demo template: %v", err)
+	}
+	manifest := strings.ReplaceAll(string(raw), "${BUCKET_NAME}", "test-bucket")
+
+	docs, err := parseApplyDocs(strings.NewReader(manifest))
+	if err != nil {
+		t.Fatalf("parseApplyDocs failed: %v", err)
+	}
+	if len(docs) != 2 || docs[0].template == nil || docs[1].version == nil {
+		t.Fatalf("parsed %d documents, want ActorTemplate + ActorTemplateVersion", len(docs))
+	}
+	spec := docs[1].version.GetSpec()
+	if got := spec.GetSnapshotsConfig().GetOnPause(); got != ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL {
+		t.Errorf("onPause = %v, want FULL", got)
+	}
+	if got := spec.GetSnapshotsConfig().GetOnCommit(); got != ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA {
+		t.Errorf("onCommit = %v, want DATA", got)
+	}
+	if got := spec.GetSnapshotsConfig().GetStorageLocation(); got != "gs://test-bucket/ate-demo-counter-atv/" {
+		t.Errorf("storageLocation = %q", got)
+	}
+	if got := docs[0].template.GetSpec().GetDefaultVersionOnCreate().GetName(); got != "counter-atv-v1" {
+		t.Errorf("defaultVersionOnCreate = %q, want counter-atv-v1", got)
 	}
 }
