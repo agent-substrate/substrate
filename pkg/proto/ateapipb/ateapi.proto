@@ -201,6 +201,17 @@ message Actor {
   string actor_template_namespace = 2;
   string actor_template_name = 3;
 
+  // actor_template names the control-plane ActorTemplate (global-scoped) this
+  // actor runs from. Exactly one of actor_template or
+  // (actor_template_namespace, actor_template_name) is set.
+  string actor_template = 13;
+
+  // actor_template_version pins the ActorTemplateVersion this actor runs.
+  // Optional at CreateActor (the server resolves the template's
+  // default_version_on_create when unset); always stored resolved and
+  // immutable thereafter. Non-empty iff actor_template is set.
+  string actor_template_version = 14;
+
   enum Status {
     STATUS_UNSPECIFIED = 0;
     STATUS_RESUMING = 1;
@@ -447,6 +458,15 @@ message ActorTemplateVersionStatus {
   // message is a human-readable explanation of the current state, most
   // useful when state is FAILED.
   string message = 4;
+
+  // golden_actor points at the actor, in the reserved ate-golden system
+  // atespace, being built to produce golden_snapshot. Set while the build is
+  // in progress; the actor is deleted once the snapshot is taken.
+  ObjectRef golden_actor = 5;
+
+  // take_golden_snapshot_at is when the WAIT_GOLDEN_ACTOR warmup elapses and
+  // the golden snapshot is taken.
+  google.protobuf.Timestamp take_golden_snapshot_at = 6;
 }
 
 // Container is a single application container of an ActorTemplateVersion.

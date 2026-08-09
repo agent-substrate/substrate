@@ -476,6 +476,59 @@ func (s *Persistence) GetActorTemplateVersion(ctx context.Context, name string) 
 	return version, nil
 }
 
+// UpdateActorTemplateVersionStatus replaces only the status of an
+// ActorTemplateVersion, leaving the immutable spec and parent untouched.
+func (s *Persistence) UpdateActorTemplateVersionStatus(ctx context.Context, name string, status *ateapipb.ActorTemplateVersionStatus, expectedVersion int64) (*ateapipb.ActorTemplateVersion, error) {
+	dbKey := actorTemplateVersionDBKey(name)
+
+	var dbVersion *ateapipb.ActorTemplateVersion
+	err := s.rdb.Watch(ctx, func(tx *redis.Tx) error {
+		currentVal, err := tx.Get(ctx, dbKey).Bytes()
+		if err != nil {
+			if errors.Is(err, redis.Nil) {
+				return store.ErrNotFound
+			}
+			return fmt.Errorf("while getting actor template version: %w", err)
+		}
+
+		current := &ateapipb.ActorTemplateVersion{}
+		if err := protojson.Unmarshal(currentVal, current); err != nil {
+			return fmt.Errorf("in protojson.Unmarshal: %w", err)
+		}
+
+		if current.GetMetadata().GetVersion() != expectedVersion {
+			return store.ErrVersionConflict
+		}
+
+		dbVersion = current
+		dbVersion.Status = proto.Clone(status).(*ateapipb.ActorTemplateVersionStatus)
+		dbVersion.Metadata = newUpdateMetadata(current.GetMetadata())
+
+		newVal, err := protojson.Marshal(dbVersion)
+		if err != nil {
+			return fmt.Errorf("in protojson.Marshal: %w", err)
+		}
+
+		_, err = tx.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
+			pipe.Set(ctx, dbKey, newVal, 0)
+			return nil
+		})
+		return err
+	}, dbKey)
+
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, store.ErrNotFound
+		}
+		if errors.Is(err, store.ErrVersionConflict) || errors.Is(err, redis.TxFailedErr) {
+			return nil, store.ErrVersionConflict
+		}
+		return nil, fmt.Errorf("while executing update actor template version status transaction: %w", err)
+	}
+
+	return dbVersion, nil
+}
+
 // ListActorTemplateVersions lists ActorTemplateVersions, filtered to one
 // parent template when actorTemplate is non-empty. The parent lives in the
 // stored value rather than the key, so filtering happens after fetching:

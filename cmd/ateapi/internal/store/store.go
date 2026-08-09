@@ -139,6 +139,12 @@ type Interface interface {
 	// Fetches an ActorTemplateVersion by name. Returns ErrNotFound if missing.
 	GetActorTemplateVersion(ctx context.Context, name string) (*ateapipb.ActorTemplateVersion, error)
 
+	// Replaces the status of an ActorTemplateVersion with optimistic
+	// concurrency check and returns the stored resource. Spec and parent are
+	// left untouched (the spec is immutable). Returns ErrNotFound if missing,
+	// or ErrVersionConflict if expectedVersion does not match.
+	UpdateActorTemplateVersionStatus(ctx context.Context, name string, status *ateapipb.ActorTemplateVersionStatus, expectedVersion int64) (*ateapipb.ActorTemplateVersion, error)
+
 	// Lists ActorTemplateVersions parented to the named ActorTemplate, or
 	// across all templates when actorTemplate is empty.
 	ListActorTemplateVersions(ctx context.Context, actorTemplate string, pageSize int32, pageToken string) ([]*ateapipb.ActorTemplateVersion, string, error)

@@ -2127,6 +2127,54 @@ func TestActorTemplateVersionLifecycle(t *testing.T) {
 	}
 }
 
+func TestUpdateActorTemplateVersionStatus(t *testing.T) {
+	_, s, ctx := setupTest(t)
+
+	created, err := s.CreateActorTemplateVersion(ctx, newTestActorTemplateVersion("tmpl-a-v1", "tmpl-a"))
+	if err != nil {
+		t.Fatalf("CreateActorTemplateVersion failed: %v", err)
+	}
+
+	newStatus := &ateapipb.ActorTemplateVersionStatus{
+		State:          ateapipb.ActorTemplateVersionStatus_STATE_READY,
+		GoldenSnapshot: &ateapipb.ObjectRef{Atespace: "ate-golden", Name: "snap-1"},
+		GoldenActor:    &ateapipb.ObjectRef{Atespace: "ate-golden", Name: "uid-1"},
+	}
+	stored, err := s.UpdateActorTemplateVersionStatus(ctx, "tmpl-a-v1", newStatus, 1)
+	if err != nil {
+		t.Fatalf("UpdateActorTemplateVersionStatus failed: %v", err)
+	}
+	if stored.GetMetadata().GetVersion() != 2 {
+		t.Errorf("updated version = %d, want 2", stored.GetMetadata().GetVersion())
+	}
+	if diff := cmp.Diff(newStatus, stored.GetStatus(), protocmp.Transform()); diff != "" {
+		t.Errorf("stored status mismatch (-want +got):\n%s", diff)
+	}
+	// Only status may change: spec and parent stay as created.
+	if diff := cmp.Diff(created.GetSpec(), stored.GetSpec(), protocmp.Transform()); diff != "" {
+		t.Errorf("spec must not change (-created +stored):\n%s", diff)
+	}
+	if diff := cmp.Diff(created.GetActorTemplate(), stored.GetActorTemplate(), protocmp.Transform()); diff != "" {
+		t.Errorf("actor_template must not change (-created +stored):\n%s", diff)
+	}
+	got, err := s.GetActorTemplateVersion(ctx, "tmpl-a-v1")
+	if err != nil {
+		t.Fatalf("GetActorTemplateVersion failed: %v", err)
+	}
+	if diff := cmp.Diff(stored, got, protocmp.Transform()); diff != "" {
+		t.Errorf("UpdateActorTemplateVersionStatus return does not match stored state (-stored +got):\n%s", diff)
+	}
+
+	// A stale expected version must be rejected.
+	if _, err := s.UpdateActorTemplateVersionStatus(ctx, "tmpl-a-v1", newStatus, 1); !errors.Is(err, store.ErrVersionConflict) {
+		t.Errorf("stale update = %v, want ErrVersionConflict", err)
+	}
+
+	if _, err := s.UpdateActorTemplateVersionStatus(ctx, "nope", newStatus, 1); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("update of missing version = %v, want ErrNotFound", err)
+	}
+}
+
 func TestCreateActorTemplateVersion_AlreadyExists(t *testing.T) {
 	_, s, ctx := setupTest(t)
 
