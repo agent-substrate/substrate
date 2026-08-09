@@ -16,6 +16,7 @@ package controlapi
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -26,6 +27,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/ateredis"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
@@ -3582,4 +3584,466 @@ func TestDeleteAtespace_NotFound(t *testing.T) {
 func assertValidateErr(t *testing.T, got field.ErrorList, want field.ErrorList) {
 	t.Helper()
 	field.ErrorMatcher{}.ByType().ByField().ByValue().Test(t, want, got)
+}
+
+func TestActorTemplateCRUD(t *testing.T) {
+	ns := namespaceForTest("ns-template-crud")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+	ctx := context.Background()
+
+	created, err := tc.client.CreateActorTemplate(ctx, &ateapipb.CreateActorTemplateRequest{
+		ActorTemplate: &ateapipb.ActorTemplate{
+			Metadata: &ateapipb.ResourceMetadata{Name: "tmpl-a"},
+			Spec: &ateapipb.ActorTemplateSpec{
+				WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"tier": "free"}},
+				// Server-owned fields on the request are ignored.
+				DefaultVersionOnCreate: nil,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateActorTemplate failed: %v", err)
+	}
+	want := &ateapipb.ActorTemplate{
+		Metadata: &ateapipb.ResourceMetadata{Name: "tmpl-a", Version: 1},
+		Spec: &ateapipb.ActorTemplateSpec{
+			WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"tier": "free"}},
+		},
+	}
+	if diff := cmp.Diff(want, created, protocmp.Transform(), ignoreUID, ignoreTimestamps); diff != "" {
+		t.Errorf("CreateActorTemplate response mismatch (-want +got):\n%s", diff)
+	}
+
+	_, err = tc.client.CreateActorTemplate(ctx, &ateapipb.CreateActorTemplateRequest{
+		ActorTemplate: &ateapipb.ActorTemplate{Metadata: &ateapipb.ResourceMetadata{Name: "tmpl-a"}},
+	})
+	assertGrpcError(t, err, codes.AlreadyExists, "ActorTemplate tmpl-a already exists")
+
+	got, err := tc.client.GetActorTemplate(ctx, &ateapipb.GetActorTemplateRequest{ActorTemplate: &ateapipb.ObjectRef{Name: "tmpl-a"}})
+	if err != nil {
+		t.Fatalf("GetActorTemplate failed: %v", err)
+	}
+	if diff := cmp.Diff(created, got, protocmp.Transform()); diff != "" {
+		t.Errorf("GetActorTemplate response mismatch (-created +got):\n%s", diff)
+	}
+
+	list, err := tc.client.ListActorTemplates(ctx, &ateapipb.ListActorTemplatesRequest{})
+	if err != nil {
+		t.Fatalf("ListActorTemplates failed: %v", err)
+	}
+	if len(list.GetActorTemplates()) != 1 || list.GetActorTemplates()[0].GetMetadata().GetName() != "tmpl-a" {
+		t.Errorf("ListActorTemplates = %v, want [tmpl-a]", list.GetActorTemplates())
+	}
+
+	deleted, err := tc.client.DeleteActorTemplate(ctx, &ateapipb.DeleteActorTemplateRequest{ActorTemplate: &ateapipb.ObjectRef{Name: "tmpl-a"}})
+	if err != nil {
+		t.Fatalf("DeleteActorTemplate failed: %v", err)
+	}
+	if diff := cmp.Diff(created, deleted, protocmp.Transform()); diff != "" {
+		t.Errorf("DeleteActorTemplate response mismatch (-created +deleted):\n%s", diff)
+	}
+	_, err = tc.client.GetActorTemplate(ctx, &ateapipb.GetActorTemplateRequest{ActorTemplate: &ateapipb.ObjectRef{Name: "tmpl-a"}})
+	assertGrpcError(t, err, codes.NotFound, "ActorTemplate tmpl-a not found")
+	_, err = tc.client.DeleteActorTemplate(ctx, &ateapipb.DeleteActorTemplateRequest{ActorTemplate: &ateapipb.ObjectRef{Name: "tmpl-a"}})
+	assertGrpcError(t, err, codes.NotFound, "ActorTemplate tmpl-a not found")
+}
+
+// createTemplateVersion creates a version through the RPC surface with a
+// valid spec, requiring the gvisor-default SandboxConfig named in the fixture.
+func createTemplateVersion(t *testing.T, tc *testContext, name, template string) *ateapipb.ActorTemplateVersion {
+	t.Helper()
+	version, err := tc.client.CreateActorTemplateVersion(context.Background(), &ateapipb.CreateActorTemplateVersionRequest{
+		ActorTemplateVersion: &ateapipb.ActorTemplateVersion{
+			Metadata:      &ateapipb.ResourceMetadata{Name: name},
+			ActorTemplate: &ateapipb.ObjectRef{Name: template},
+			Spec:          validTemplateVersionSpec(),
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateActorTemplateVersion(%s) failed: %v", name, err)
+	}
+	return version
+}
+
+func createTemplateForVersions(t *testing.T, tc *testContext, name string) {
+	t.Helper()
+	if _, err := tc.client.CreateActorTemplate(context.Background(), &ateapipb.CreateActorTemplateRequest{
+		ActorTemplate: &ateapipb.ActorTemplate{Metadata: &ateapipb.ResourceMetadata{Name: name}},
+	}); err != nil {
+		t.Fatalf("CreateActorTemplate(%s) failed: %v", name, err)
+	}
+}
+
+func TestCreateActorTemplateVersion(t *testing.T) {
+	ns := namespaceForTest("ns-template-version-create")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+	ensureDefaultGvisorSandboxConfig(t, tc)
+	ctx := context.Background()
+
+	// The parent must exist first.
+	_, err := tc.client.CreateActorTemplateVersion(ctx, &ateapipb.CreateActorTemplateVersionRequest{
+		ActorTemplateVersion: &ateapipb.ActorTemplateVersion{
+			Metadata:      &ateapipb.ResourceMetadata{Name: "tmpl-a-v1"},
+			ActorTemplate: &ateapipb.ObjectRef{Name: "tmpl-a"},
+			Spec:          validTemplateVersionSpec(),
+		},
+	})
+	assertGrpcError(t, err, codes.FailedPrecondition, "ActorTemplate tmpl-a not found")
+
+	createTemplateForVersions(t, tc, "tmpl-a")
+
+	// The caller's status and server-owned metadata are ignored: versions
+	// start INITIAL with the named gvisor SandboxConfig frozen into status.
+	created, err := tc.client.CreateActorTemplateVersion(ctx, &ateapipb.CreateActorTemplateVersionRequest{
+		ActorTemplateVersion: &ateapipb.ActorTemplateVersion{
+			Metadata:      &ateapipb.ResourceMetadata{Name: "tmpl-a-v1", Uid: "11111111-2222-3333-4444-555555555555"},
+			ActorTemplate: &ateapipb.ObjectRef{Name: "tmpl-a"},
+			Spec:          validTemplateVersionSpec(),
+			Status: &ateapipb.ActorTemplateVersionStatus{
+				State:          ateapipb.ActorTemplateVersionStatus_STATE_READY,
+				GoldenSnapshot: &ateapipb.ObjectRef{Atespace: "ate-golden", Name: "bogus"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateActorTemplateVersion failed: %v", err)
+	}
+	wantStatus := &ateapipb.ActorTemplateVersionStatus{
+		State: ateapipb.ActorTemplateVersionStatus_STATE_INITIAL,
+		ResolvedSandbox: &ateapipb.SandboxAssets{
+			SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR,
+			Assets: map[string]*ateapipb.ArchAssets{
+				"amd64": {Files: map[string]*ateapipb.AssetFile{"runsc": {
+					Url:    "gs://gvisor/releases/nightly/2026-05-19/x86_64/runsc",
+					Sha256: "a397be1abc2420d26bce6c70e6e2ff96c73aaaab929756c56f5e2089ea842b63",
+				}}},
+				"arm64": {Files: map[string]*ateapipb.AssetFile{"runsc": {
+					Url:    "gs://gvisor/releases/nightly/2026-05-19/aarch64/runsc",
+					Sha256: "1ba2366ae2efceba166046f51a4104f9261c9cb72c6db8f5b3fe2dc57dea86b9",
+				}}},
+			},
+		},
+	}
+	if diff := cmp.Diff(wantStatus, created.GetStatus(), protocmp.Transform()); diff != "" {
+		t.Errorf("created status mismatch (-want +got):\n%s", diff)
+	}
+	if got := created.GetMetadata().GetUid(); got == "" || got == "11111111-2222-3333-4444-555555555555" {
+		t.Errorf("uid = %q, want a fresh server-assigned uid", got)
+	}
+
+	_, err = tc.client.CreateActorTemplateVersion(ctx, &ateapipb.CreateActorTemplateVersionRequest{
+		ActorTemplateVersion: &ateapipb.ActorTemplateVersion{
+			Metadata:      &ateapipb.ResourceMetadata{Name: "tmpl-a-v1"},
+			ActorTemplate: &ateapipb.ObjectRef{Name: "tmpl-a"},
+			Spec:          validTemplateVersionSpec(),
+		},
+	})
+	assertGrpcError(t, err, codes.AlreadyExists, "ActorTemplateVersion tmpl-a-v1 already exists")
+
+	// One spec rule end-to-end: an unpinned image is InvalidArgument.
+	_, err = tc.client.CreateActorTemplateVersion(ctx, &ateapipb.CreateActorTemplateVersionRequest{
+		ActorTemplateVersion: &ateapipb.ActorTemplateVersion{
+			Metadata:      &ateapipb.ResourceMetadata{Name: "tmpl-a-v2"},
+			ActorTemplate: &ateapipb.ObjectRef{Name: "tmpl-a"},
+			Spec: validTemplateVersionSpec(func(s *ateapipb.ActorTemplateVersionSpec) {
+				s.Containers[0].Image = "app:latest"
+			}),
+		},
+	})
+	if got := status.Code(err); got != codes.InvalidArgument {
+		t.Errorf("CreateActorTemplateVersion(unpinned image) code = %v, want InvalidArgument (err: %v)", got, err)
+	}
+
+	// A spec omitting sandbox_config is rejected at validation: the server
+	// never falls back to a default SandboxConfig.
+	_, err = tc.client.CreateActorTemplateVersion(ctx, &ateapipb.CreateActorTemplateVersionRequest{
+		ActorTemplateVersion: &ateapipb.ActorTemplateVersion{
+			Metadata:      &ateapipb.ResourceMetadata{Name: "tmpl-a-v3"},
+			ActorTemplate: &ateapipb.ObjectRef{Name: "tmpl-a"},
+			Spec: validTemplateVersionSpec(func(s *ateapipb.ActorTemplateVersionSpec) {
+				s.SandboxConfig = nil
+			}),
+		},
+	})
+	if got := status.Code(err); got != codes.InvalidArgument {
+		t.Errorf("CreateActorTemplateVersion(no sandbox_config) code = %v, want InvalidArgument (err: %v)", got, err)
+	}
+
+	// Naming a SandboxConfig that does not exist is FailedPrecondition.
+	_, err = tc.client.CreateActorTemplateVersion(ctx, &ateapipb.CreateActorTemplateVersionRequest{
+		ActorTemplateVersion: &ateapipb.ActorTemplateVersion{
+			Metadata:      &ateapipb.ResourceMetadata{Name: "tmpl-a-v3"},
+			ActorTemplate: &ateapipb.ObjectRef{Name: "tmpl-a"},
+			Spec: validTemplateVersionSpec(func(s *ateapipb.ActorTemplateVersionSpec) {
+				s.SandboxConfig = &ateapipb.SandboxConfig{
+					SandboxClass: ateapipb.SandboxClass_SANDBOX_CLASS_MICROVM,
+					ConfigName:   "no-such-config",
+				}
+			}),
+		},
+	})
+	if got := status.Code(err); got != codes.FailedPrecondition {
+		t.Errorf("CreateActorTemplateVersion(missing named SandboxConfig) code = %v, want FailedPrecondition (err: %v)", got, err)
+	}
+
+	// The version blocks the parent's deletion until it is deleted itself.
+	_, err = tc.client.DeleteActorTemplate(ctx, &ateapipb.DeleteActorTemplateRequest{ActorTemplate: &ateapipb.ObjectRef{Name: "tmpl-a"}})
+	assertGrpcError(t, err, codes.FailedPrecondition, "ActorTemplate tmpl-a still has versions")
+	if _, err := tc.client.DeleteActorTemplateVersion(ctx, &ateapipb.DeleteActorTemplateVersionRequest{ActorTemplateVersion: &ateapipb.ObjectRef{Name: "tmpl-a-v1"}}); err != nil {
+		t.Fatalf("DeleteActorTemplateVersion failed: %v", err)
+	}
+	if _, err := tc.client.DeleteActorTemplate(ctx, &ateapipb.DeleteActorTemplateRequest{ActorTemplate: &ateapipb.ObjectRef{Name: "tmpl-a"}}); err != nil {
+		t.Errorf("DeleteActorTemplate after version removed failed: %v", err)
+	}
+}
+
+func TestUpdateActorTemplate(t *testing.T) {
+	ns := namespaceForTest("ns-template-update")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+	ensureDefaultGvisorSandboxConfig(t, tc)
+	ctx := context.Background()
+
+	createTemplateForVersions(t, tc, "tmpl-a")
+	createTemplateForVersions(t, tc, "tmpl-b")
+	createTemplateVersion(t, tc, "tmpl-a-v1", "tmpl-a")
+	createTemplateVersion(t, tc, "tmpl-b-v1", "tmpl-b")
+
+	setDefault := func(template, version string) (*ateapipb.ActorTemplate, error) {
+		var ref *ateapipb.ObjectRef
+		if version != "" {
+			ref = &ateapipb.ObjectRef{Name: version}
+		}
+		return tc.client.UpdateActorTemplate(ctx, &ateapipb.UpdateActorTemplateRequest{
+			ActorTemplate: &ateapipb.ActorTemplate{
+				Metadata: &ateapipb.ResourceMetadata{Name: template},
+				Spec:     &ateapipb.ActorTemplateSpec{DefaultVersionOnCreate: ref},
+			},
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.default_version_on_create"}},
+		})
+	}
+
+	// Selector-only update.
+	updated, err := tc.client.UpdateActorTemplate(ctx, &ateapipb.UpdateActorTemplateRequest{
+		ActorTemplate: &ateapipb.ActorTemplate{
+			Metadata: &ateapipb.ResourceMetadata{Name: "tmpl-a"},
+			Spec: &ateapipb.ActorTemplateSpec{
+				WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"tier": "paid"}},
+			},
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.worker_selector"}},
+	})
+	if err != nil {
+		t.Fatalf("UpdateActorTemplate(selector) failed: %v", err)
+	}
+	if got := updated.GetSpec().GetWorkerSelector().GetMatchLabels()["tier"]; got != "paid" {
+		t.Errorf("worker_selector[tier] = %q, want paid", got)
+	}
+	if got := updated.GetMetadata().GetVersion(); got != 2 {
+		t.Errorf("version after update = %d, want 2", got)
+	}
+
+	// A default must name an existing version of THIS template.
+	_, err = setDefault("tmpl-a", "no-such-version")
+	assertGrpcError(t, err, codes.FailedPrecondition, "ActorTemplateVersion no-such-version not found")
+	_, err = setDefault("tmpl-a", "tmpl-b-v1")
+	assertGrpcError(t, err, codes.FailedPrecondition, "ActorTemplateVersion tmpl-b-v1 belongs to ActorTemplate tmpl-b, not tmpl-a")
+
+	// A version still building (INITIAL) is accepted: readiness is enforced
+	// at CreateActor time, not here.
+	updated, err = setDefault("tmpl-a", "tmpl-a-v1")
+	if err != nil {
+		t.Fatalf("UpdateActorTemplate(set default) failed: %v", err)
+	}
+	if got := updated.GetSpec().GetDefaultVersionOnCreate().GetName(); got != "tmpl-a-v1" {
+		t.Errorf("default_version_on_create = %q, want tmpl-a-v1", got)
+	}
+	// The selector set before the default update must have survived it.
+	if got := updated.GetSpec().GetWorkerSelector().GetMatchLabels()["tier"]; got != "paid" {
+		t.Errorf("worker_selector[tier] after default update = %q, want paid", got)
+	}
+
+	// Precondition guards.
+	_, err = tc.client.UpdateActorTemplate(ctx, &ateapipb.UpdateActorTemplateRequest{
+		ActorTemplate: &ateapipb.ActorTemplate{
+			Metadata: &ateapipb.ResourceMetadata{Name: "tmpl-a", Uid: "00000000-0000-0000-0000-000000000000"},
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.worker_selector"}},
+	})
+	if got := status.Code(err); got != codes.Aborted {
+		t.Errorf("UpdateActorTemplate(stale uid) code = %v, want Aborted (err: %v)", got, err)
+	}
+	_, err = tc.client.UpdateActorTemplate(ctx, &ateapipb.UpdateActorTemplateRequest{
+		ActorTemplate: &ateapipb.ActorTemplate{
+			Metadata: &ateapipb.ResourceMetadata{Name: "tmpl-a", Version: 1},
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.worker_selector"}},
+	})
+	assertGrpcError(t, err, codes.Aborted, "concurrent update conflict, please retry")
+
+	_, err = tc.client.UpdateActorTemplate(ctx, &ateapipb.UpdateActorTemplateRequest{
+		ActorTemplate: &ateapipb.ActorTemplate{Metadata: &ateapipb.ResourceMetadata{Name: "nope"}},
+		UpdateMask:    &fieldmaskpb.FieldMask{Paths: []string{"spec.worker_selector"}},
+	})
+	assertGrpcError(t, err, codes.NotFound, "ActorTemplate nope not found")
+}
+
+func TestDeleteActorTemplateVersion_Default(t *testing.T) {
+	ns := namespaceForTest("ns-template-version-default")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+	ensureDefaultGvisorSandboxConfig(t, tc)
+	ctx := context.Background()
+
+	createTemplateForVersions(t, tc, "tmpl-a")
+	createTemplateVersion(t, tc, "tmpl-a-v1", "tmpl-a")
+	if _, err := tc.client.UpdateActorTemplate(ctx, &ateapipb.UpdateActorTemplateRequest{
+		ActorTemplate: &ateapipb.ActorTemplate{
+			Metadata: &ateapipb.ResourceMetadata{Name: "tmpl-a"},
+			Spec:     &ateapipb.ActorTemplateSpec{DefaultVersionOnCreate: &ateapipb.ObjectRef{Name: "tmpl-a-v1"}},
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.default_version_on_create"}},
+	}); err != nil {
+		t.Fatalf("UpdateActorTemplate(set default) failed: %v", err)
+	}
+
+	_, err := tc.client.DeleteActorTemplateVersion(ctx, &ateapipb.DeleteActorTemplateVersionRequest{ActorTemplateVersion: &ateapipb.ObjectRef{Name: "tmpl-a-v1"}})
+	assertGrpcError(t, err, codes.FailedPrecondition, "ActorTemplateVersion tmpl-a-v1 is the default_version_on_create of ActorTemplate tmpl-a")
+
+	// Clearing the default (masked path, unset value) unblocks the delete.
+	if _, err := tc.client.UpdateActorTemplate(ctx, &ateapipb.UpdateActorTemplateRequest{
+		ActorTemplate: &ateapipb.ActorTemplate{Metadata: &ateapipb.ResourceMetadata{Name: "tmpl-a"}},
+		UpdateMask:    &fieldmaskpb.FieldMask{Paths: []string{"spec.default_version_on_create"}},
+	}); err != nil {
+		t.Fatalf("UpdateActorTemplate(clear default) failed: %v", err)
+	}
+	if _, err := tc.client.DeleteActorTemplateVersion(ctx, &ateapipb.DeleteActorTemplateVersionRequest{ActorTemplateVersion: &ateapipb.ObjectRef{Name: "tmpl-a-v1"}}); err != nil {
+		t.Errorf("DeleteActorTemplateVersion after clearing default failed: %v", err)
+	}
+	_, err = tc.client.DeleteActorTemplateVersion(ctx, &ateapipb.DeleteActorTemplateVersionRequest{ActorTemplateVersion: &ateapipb.ObjectRef{Name: "tmpl-a-v1"}})
+	assertGrpcError(t, err, codes.NotFound, "ActorTemplateVersion tmpl-a-v1 not found")
+}
+
+func TestDeleteActorTemplateVersion_GoldenCleanup(t *testing.T) {
+	ns := namespaceForTest("ns-template-version-golden")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+	ctx := context.Background()
+
+	// Seed a version whose status already records a golden snapshot; the RPC
+	// surface never accepts caller status, so go through the store like the
+	// future golden driver will.
+	if _, err := tc.persistence.CreateActorSnapshot(ctx, &ateapipb.ActorSnapshot{
+		Metadata:    &ateapipb.ResourceMetadata{Atespace: resources.GoldenActorAtespace, Name: "golden-v1"},
+		SnapshotUri: "gs://fake-fake-fake/snapshots/" + resources.GoldenActorAtespace + "/golden-v1",
+	}); err != nil {
+		t.Fatalf("CreateActorSnapshot failed: %v", err)
+	}
+	if _, err := tc.persistence.CreateActorTemplateVersion(ctx, &ateapipb.ActorTemplateVersion{
+		Metadata:      &ateapipb.ResourceMetadata{Name: "tmpl-a-v1"},
+		ActorTemplate: &ateapipb.ObjectRef{Name: "tmpl-a"},
+		Spec:          validTemplateVersionSpec(),
+		Status: &ateapipb.ActorTemplateVersionStatus{
+			State:          ateapipb.ActorTemplateVersionStatus_STATE_READY,
+			GoldenSnapshot: &ateapipb.ObjectRef{Atespace: resources.GoldenActorAtespace, Name: "golden-v1"},
+		},
+	}); err != nil {
+		t.Fatalf("CreateActorTemplateVersion (store) failed: %v", err)
+	}
+
+	if _, err := tc.client.DeleteActorTemplateVersion(ctx, &ateapipb.DeleteActorTemplateVersionRequest{ActorTemplateVersion: &ateapipb.ObjectRef{Name: "tmpl-a-v1"}}); err != nil {
+		t.Fatalf("DeleteActorTemplateVersion failed: %v", err)
+	}
+	if _, err := tc.persistence.GetActorSnapshot(ctx, resources.GoldenActorAtespace, "golden-v1"); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("golden snapshot after delete = %v, want ErrNotFound", err)
+	}
+}
+
+func TestListActorTemplateVersions_Filter(t *testing.T) {
+	ns := namespaceForTest("ns-template-version-list")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+	ensureDefaultGvisorSandboxConfig(t, tc)
+	ctx := context.Background()
+
+	createTemplateForVersions(t, tc, "tmpl-a")
+	createTemplateForVersions(t, tc, "tmpl-b")
+	createTemplateVersion(t, tc, "tmpl-a-v1", "tmpl-a")
+	createTemplateVersion(t, tc, "tmpl-a-v2", "tmpl-a")
+	createTemplateVersion(t, tc, "tmpl-b-v1", "tmpl-b")
+
+	all, err := tc.client.ListActorTemplateVersions(ctx, &ateapipb.ListActorTemplateVersionsRequest{})
+	if err != nil {
+		t.Fatalf("ListActorTemplateVersions(all) failed: %v", err)
+	}
+	if got := len(all.GetActorTemplateVersions()); got != 3 {
+		t.Errorf("unfiltered list returned %d versions, want 3", got)
+	}
+
+	filtered, err := tc.client.ListActorTemplateVersions(ctx, &ateapipb.ListActorTemplateVersionsRequest{ActorTemplate: "tmpl-a"})
+	if err != nil {
+		t.Fatalf("ListActorTemplateVersions(tmpl-a) failed: %v", err)
+	}
+	if got := len(filtered.GetActorTemplateVersions()); got != 2 {
+		t.Fatalf("filtered list returned %d versions, want 2", got)
+	}
+	for _, v := range filtered.GetActorTemplateVersions() {
+		if v.GetActorTemplate().GetName() != "tmpl-a" {
+			t.Errorf("filtered list returned version %q of template %q", v.GetMetadata().GetName(), v.GetActorTemplate().GetName())
+		}
+	}
+}
+
+func TestActorTemplate_LockConflict(t *testing.T) {
+	ns := namespaceForTest("ns-template-lock")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+	ensureDefaultGvisorSandboxConfig(t, tc)
+	ctx := context.Background()
+
+	createTemplateForVersions(t, tc, "tmpl-a")
+	createTemplateVersion(t, tc, "tmpl-a-v1", "tmpl-a")
+
+	lock, err := tc.persistence.AcquireLock(ctx, actorTemplateLockKey("tmpl-a"))
+	if err != nil {
+		t.Fatalf("AcquireLock failed: %v", err)
+	}
+	defer lock.Close()
+
+	const wantMsg = "another operation is using this ActorTemplate"
+	_, err = tc.client.DeleteActorTemplate(ctx, &ateapipb.DeleteActorTemplateRequest{ActorTemplate: &ateapipb.ObjectRef{Name: "tmpl-a"}})
+	assertGrpcError(t, err, codes.Aborted, wantMsg)
+	_, err = tc.client.CreateActorTemplateVersion(ctx, &ateapipb.CreateActorTemplateVersionRequest{
+		ActorTemplateVersion: &ateapipb.ActorTemplateVersion{
+			Metadata:      &ateapipb.ResourceMetadata{Name: "tmpl-a-v2"},
+			ActorTemplate: &ateapipb.ObjectRef{Name: "tmpl-a"},
+			Spec:          validTemplateVersionSpec(),
+		},
+	})
+	assertGrpcError(t, err, codes.Aborted, wantMsg)
+	_, err = tc.client.DeleteActorTemplateVersion(ctx, &ateapipb.DeleteActorTemplateVersionRequest{ActorTemplateVersion: &ateapipb.ObjectRef{Name: "tmpl-a-v1"}})
+	assertGrpcError(t, err, codes.Aborted, wantMsg)
+	_, err = tc.client.UpdateActorTemplate(ctx, &ateapipb.UpdateActorTemplateRequest{
+		ActorTemplate: &ateapipb.ActorTemplate{
+			Metadata: &ateapipb.ResourceMetadata{Name: "tmpl-a"},
+			Spec:     &ateapipb.ActorTemplateSpec{DefaultVersionOnCreate: &ateapipb.ObjectRef{Name: "tmpl-a-v1"}},
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.default_version_on_create"}},
+	})
+	assertGrpcError(t, err, codes.Aborted, wantMsg)
+
+	// Selector-only updates don't take the lock and still go through.
+	if _, err := tc.client.UpdateActorTemplate(ctx, &ateapipb.UpdateActorTemplateRequest{
+		ActorTemplate: &ateapipb.ActorTemplate{
+			Metadata: &ateapipb.ResourceMetadata{Name: "tmpl-a"},
+			Spec: &ateapipb.ActorTemplateSpec{
+				WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"tier": "free"}},
+			},
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"spec.worker_selector"}},
+	}); err != nil {
+		t.Errorf("UpdateActorTemplate(selector) under held lock failed: %v", err)
+	}
 }

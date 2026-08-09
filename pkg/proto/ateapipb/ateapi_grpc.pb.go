@@ -122,10 +122,11 @@ type ControlClient interface {
 	GetActorTemplateVersion(ctx context.Context, in *GetActorTemplateVersionRequest, opts ...grpc.CallOption) (*ActorTemplateVersion, error)
 	// List ActorTemplateVersions, optionally filtered to one ActorTemplate.
 	ListActorTemplateVersions(ctx context.Context, in *ListActorTemplateVersionsRequest, opts ...grpc.CallOption) (*ListActorTemplateVersionsResponse, error)
-	// Delete an ActorTemplateVersion together with its golden actor and golden
-	// snapshot in the reserved ate-golden atespace. Rejects (FailedPrecondition)
-	// while the version is its parent's default_version_on_create or while any
-	// Actor pins it.
+	// Delete an ActorTemplateVersion together with its golden snapshot in the
+	// reserved ate-golden atespace. Rejects (FailedPrecondition) while the
+	// version is its parent's default_version_on_create. Once actors carry
+	// version pins and the golden state machine lands, this will also reject
+	// while any Actor pins the version, and clean up the golden actor.
 	DeleteActorTemplateVersion(ctx context.Context, in *DeleteActorTemplateVersionRequest, opts ...grpc.CallOption) (*ActorTemplateVersion, error)
 }
 
@@ -467,10 +468,11 @@ type ControlServer interface {
 	GetActorTemplateVersion(context.Context, *GetActorTemplateVersionRequest) (*ActorTemplateVersion, error)
 	// List ActorTemplateVersions, optionally filtered to one ActorTemplate.
 	ListActorTemplateVersions(context.Context, *ListActorTemplateVersionsRequest) (*ListActorTemplateVersionsResponse, error)
-	// Delete an ActorTemplateVersion together with its golden actor and golden
-	// snapshot in the reserved ate-golden atespace. Rejects (FailedPrecondition)
-	// while the version is its parent's default_version_on_create or while any
-	// Actor pins it.
+	// Delete an ActorTemplateVersion together with its golden snapshot in the
+	// reserved ate-golden atespace. Rejects (FailedPrecondition) while the
+	// version is its parent's default_version_on_create. Once actors carry
+	// version pins and the golden state machine lands, this will also reject
+	// while any Actor pins the version, and clean up the golden actor.
 	DeleteActorTemplateVersion(context.Context, *DeleteActorTemplateVersionRequest) (*ActorTemplateVersion, error)
 	mustEmbedUnimplementedControlServer()
 }

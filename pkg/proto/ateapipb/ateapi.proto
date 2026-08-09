@@ -103,10 +103,11 @@ service Control {
   // List ActorTemplateVersions, optionally filtered to one ActorTemplate.
   rpc ListActorTemplateVersions(ListActorTemplateVersionsRequest) returns (ListActorTemplateVersionsResponse) {}
 
-  // Delete an ActorTemplateVersion together with its golden actor and golden
-  // snapshot in the reserved ate-golden atespace. Rejects (FailedPrecondition)
-  // while the version is its parent's default_version_on_create or while any
-  // Actor pins it.
+  // Delete an ActorTemplateVersion together with its golden snapshot in the
+  // reserved ate-golden atespace. Rejects (FailedPrecondition) while the
+  // version is its parent's default_version_on_create. Once actors carry
+  // version pins and the golden state machine lands, this will also reject
+  // while any Actor pins the version, and clean up the golden actor.
   rpc DeleteActorTemplateVersion(DeleteActorTemplateVersionRequest) returns (ActorTemplateVersion) {}
 }
 
@@ -330,7 +331,7 @@ message ActorTemplateSpec {
 
   // default_version_on_create names the ActorTemplateVersion used by
   // CreateActor calls that do not pin a version. If unset, CreateActor
-  // without an explicit version fails with FailedPrecondition.
+  // without an explicit version fails with FailedPrecondition. 
   ObjectRef default_version_on_create = 2;
 }
 
