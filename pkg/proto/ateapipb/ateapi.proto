@@ -78,6 +78,36 @@ service Control {
   // Delete an empty Atespace. Rejects (FailedPrecondition) if any Actors or
   // ActorSnapshotTags remain.
   rpc DeleteAtespace(DeleteAtespaceRequest) returns (Atespace) {}
+
+  rpc CreateActorTemplate(CreateActorTemplateRequest) returns (ActorTemplate) {}
+
+  // Get an ActorTemplate by name.
+  rpc GetActorTemplate(GetActorTemplateRequest) returns (ActorTemplate) {}
+
+  // Update mutable fields on an existing ActorTemplate.
+  rpc UpdateActorTemplate(UpdateActorTemplateRequest) returns (ActorTemplate) {}
+
+  rpc ListActorTemplates(ListActorTemplatesRequest) returns (ListActorTemplatesResponse) {}
+
+  // Delete an ActorTemplate. Rejects (FailedPrecondition) while any of its
+  // ActorTemplateVersions exist.
+  rpc DeleteActorTemplate(DeleteActorTemplateRequest) returns (ActorTemplate) {}
+
+  // Create a new ActorTemplateVersion under an existing ActorTemplate
+  // (FailedPrecondition if the parent does not exist).
+  rpc CreateActorTemplateVersion(CreateActorTemplateVersionRequest) returns (ActorTemplateVersion) {}
+
+  // Get an ActorTemplateVersion by name.
+  rpc GetActorTemplateVersion(GetActorTemplateVersionRequest) returns (ActorTemplateVersion) {}
+
+  // List ActorTemplateVersions, optionally filtered to one ActorTemplate.
+  rpc ListActorTemplateVersions(ListActorTemplateVersionsRequest) returns (ListActorTemplateVersionsResponse) {}
+
+  // Delete an ActorTemplateVersion together with its golden actor and golden
+  // snapshot in the reserved ate-golden atespace. Rejects (FailedPrecondition)
+  // while the version is its parent's default_version_on_create or while any
+  // Actor pins it.
+  rpc DeleteActorTemplateVersion(DeleteActorTemplateVersionRequest) returns (ActorTemplateVersion) {}
 }
 
 message LocalSnapshotInfo {
@@ -276,6 +306,257 @@ message ActorSnapshotRef {
   }
 }
 
+// SandboxClass selects the sandbox runtime family. Snapshots are not portable
+// across classes.
+enum SandboxClass {
+  SANDBOX_CLASS_UNSPECIFIED = 0;
+  SANDBOX_CLASS_GVISOR = 1;
+  SANDBOX_CLASS_MICROVM = 2;
+}
+
+// ActorTemplate groups the versions of one actor application and carries the
+// version-independent placement policy.
+message ActorTemplate {
+  // Common resource metadata: name, uid, version, timestamps.
+  ResourceMetadata metadata = 1;
+
+  // worker_selector restricts which worker pools actors from this template
+  // may use.
+  Selector worker_selector = 2;
+
+  // default_version_on_create names the ActorTemplateVersion used by
+  // CreateActor calls that do not pin a version. If unset, CreateActor
+  // without an explicit version fails with FailedPrecondition.
+  ObjectRef default_version_on_create = 3;
+}
+
+// ActorTemplateVersion is one immutable released version of an ActorTemplate:
+// the workload definition plus everything that affects snapshot validity.
+// Global-scoped: metadata.atespace is always empty and metadata.name must be
+// globally unique (by convention "<template-name>-<version>").
+// The workload definition (pause_image through sandbox_config) is immutable
+// after creation; golden_snapshot, state, resolved_sandbox and message are
+// server-owned status fields.
+message ActorTemplateVersion {
+  // Common resource metadata: name, uid, version, timestamps.
+  ResourceMetadata metadata = 1;
+
+  // actor_template is the parent ActorTemplate. Required at creation and
+  // immutable.
+  ObjectRef actor_template = 2;
+
+  // pause_image is the container to use as the root sandbox container.
+  string pause_image = 3;
+
+  repeated Container containers = 4;
+
+  repeated Volume volumes = 5;
+
+  SnapshotsConfig snapshots_config = 6;
+
+  // sandbox_config selects the sandbox runtime this version's actors run on.
+  // Required. Resolved and frozen into resolved_sandbox at creation time.
+  SandboxConfig sandbox_config = 7;
+
+  // cpu class will be specified here in the future.
+
+  // golden_snapshot points at the ActorSnapshot, in the reserved ate-golden
+  // system atespace, built for this version by ate-api. Set once state is
+  // READY.
+  ObjectRef golden_snapshot = 8;
+
+  // State machine, mirroring the ActorTemplateVersion CRD PhaseType:
+  // INITIAL -> RESUME_GOLDEN_ACTOR -> WAIT_GOLDEN_ACTOR -> {READY | FAILED}.
+  // READY and FAILED are terminal; the version is only usable once READY.
+  ActorTemplateVersionPhase phase = 9;
+}
+
+message ActorTemplateVersionPhase {
+  enum Phase {
+    PHASE_UNSPECIFIED = 0;
+    PHASE_INITIAL = 1;
+    PHASE_RESUME_GOLDEN_ACTOR = 2;
+    PHASE_WAIT_GOLDEN_ACTOR = 3;
+    PHASE_READY = 4;
+    PHASE_FAILED = 5;
+  }
+  Phase phase = 1;
+
+  // message is a human-readable explanation of the current state, most
+  // useful when the ActorTemplateVersion is FAILED.
+  string message = 2;
+}
+
+// SandboxConfig selects the sandbox runtime for an ActorTemplateVersion.
+message SandboxConfig {
+  // sandbox_class selects the sandbox runtime family.
+  // Required; must be specified..
+  SandboxClass sandbox_class = 1;
+
+  // config_name names the cluster-scoped SandboxConfig Kubernetes object
+  // supplying the sandbox binaries. Required; must match sandbox_class.
+  string config_name = 2;
+
+  // sandbox_assets is the referenced SandboxConfig's content frozen at
+  // creation time.
+  SandboxAssets sandbox_assets = 3;
+}
+
+message SnapshotsConfig {
+  // on_pause selects what is captured during pause actor.
+  SnapshotContentScope on_pause = 1;
+
+  // on_commit selects what captures.
+  // Must be a subset of on_pause: FULL allows FULL or DATA, DATA allows DATA.
+  SnapshotContentScope on_commit = 2;
+
+  // on_resume selects, per snapshot situation, what supplies the guest state
+  // at resume. Unset means the defaults documented on OnResumeConfig.
+  OnResumeConfig on_resume = 3;
+
+  // storage_location is the base object-storage URI snapshots of actors on
+  // this version are stored under. Required.
+  string storage_location = 4;
+}
+
+// ResumeSource selects what supplies the guest state when an actor is resumed
+// from one of the snapshot situations named by OnResumeConfig's fields.
+enum ResumeSource {
+  RESUME_SOURCE_UNSPECIFIED = 0;
+  // Starts the actor's containers afresh from the OCI image, with the
+  // durable-dir volumes pre-populated from the snapshot.
+  RESUME_SOURCE_COLD_BOOT = 1;
+  // Restores with the version's golden snapshot and the actor's own
+  // durable data.
+  RESUME_SOURCE_GOLDEN = 2;
+}
+
+// OnResumeConfig selects, per snapshot situation, what supplies the guest
+// state at resume. Each field names what is being resumed FROM; the value
+// names the boot source. Full snapshots that are still valid always restore
+// from their own content and are not configurable here.
+message OnResumeConfig {
+  // from_data applies when the resume uses a DATA-scope snapshot (from
+  // on_pause or on_commit).
+  ResumeSource from_data = 1;
+}
+
+// Container is a single application container of an ActorTemplateVersion.
+message Container {
+  string name = 1;
+
+  string image = 2;
+
+  // Entrypoint array; when set, the image's ENTRYPOINT and CMD are both
+  // ignored and the process argv is command + args. Unlike Kubernetes,
+  // $(VAR_NAME) references are NOT expanded.
+  repeated string command = 3;
+
+  // Arguments to the entrypoint; the image's CMD is used if unset (unless
+  // command is set, which discards the image's CMD).
+  repeated string args = 4;
+
+  repeated EnvVar env = 5;
+
+  // readyz is an optional HTTP readiness probe; when set the actor is not
+  // ready until the endpoint returns 200.
+  ContainerReadyz readyz = 6;
+
+  repeated VolumeMount volume_mounts = 7;
+}
+
+// EnvVar supplies one environment variable to a container. Values are not
+// expanded with Kubernetes-style $(VAR) references.
+message EnvVar {
+  // name may be any printable ASCII character except '='.
+  string name = 1;
+
+  // Exactly one source must be set.
+  oneof source {
+    // Literal value.
+    string value = 2;
+  }
+}
+
+// ContainerReadyz configures the readiness signal for a container.
+message ContainerReadyz {
+  // http_get specifies the HTTP request to perform. Required.
+  HTTPGetAction http_get = 1;
+
+  // timeout_seconds bounds how long to poll http_get before failing the
+  // actor start. 0 means the server-applied default (30s).
+  int32 timeout_seconds = 2;
+}
+
+// HTTPGetAction describes an HTTP GET against the container's interior IP.
+message HTTPGetAction {
+  // path defaults to "/readyz".
+  string path = 1;
+
+  int32 port = 2;
+}
+
+message Volume {
+  // name of the volume. Must be a DNS label.
+  string name = 1;
+
+  // Exactly one source must be set.
+  oneof source {
+    DurableDirVolumeSource durable_dir = 2;
+    ExternalVolumeTemplate external_volume_template = 3;
+  }
+}
+
+// DurableDirVolumeSource is a durable directory on rootfs that persists
+// across resumes and participates in snapshots.
+message DurableDirVolumeSource {}
+
+// ExternalVolumeTemplate provisions an external volume per actor; the volume
+// lives only as long as the actor. Not supported with SANDBOX_CLASS_MICROVM.
+message ExternalVolumeTemplate {
+  // capacity of the volume to create, in Kubernetes resource.Quantity string
+  // form (e.g. "10Gi"). Required.
+  string capacity = 1;
+
+  // storage_class_name names the cluster-scoped Kubernetes StorageClass to
+  // create the volume from. Required.
+  string storage_class_name = 2;
+}
+
+// VolumeMount mounts a named Volume into a container.
+message VolumeMount {
+  // name must match the name of a Volume.
+  string name = 1;
+
+  // mount_path within the container. Must be a clean absolute Unix path.
+  string mount_path = 2;
+}
+
+// SandboxAssets is the frozen description of the sandbox binaries an actor
+// boots with: a class plus content-addressed files keyed first by
+// architecture and then by asset name, mirroring the SandboxConfig
+// CRD schema.
+message SandboxAssets {
+  SandboxClass sandbox_class = 1;
+  // assets maps architecture (GOARCH, e.g. "amd64") to that arch's files.
+  map<string, ArchAssets> assets = 2;
+}
+
+message ArchAssets {
+  // files maps asset name (e.g. "gvisor", "kata-kernel") to its file.
+  map<string, AssetFile> files = 1;
+}
+
+// AssetFile is one content-addressed file atelet fetches for a sandbox
+// runtime.
+message AssetFile {
+  // URL to download the asset from (e.g. a gs:// URL).
+  string url = 1;
+
+  // Lower-case hex SHA256 naming the cached file and verifying the download.
+  string sha256 = 2;
+}
+
 message CreateAtespaceRequest {
   // The atespace to create.
   Atespace atespace = 1;
@@ -306,6 +587,95 @@ message ListAtespacesResponse {
 
 message DeleteAtespaceRequest {
   ObjectRef atespace = 1;
+}
+
+message CreateActorTemplateRequest {
+  // The actor template to create. Server-assigned metadata (uid, version,
+  // timestamps) is ignored.
+  ActorTemplate actor_template = 1;
+}
+
+message GetActorTemplateRequest {
+  ObjectRef actor_template = 1;
+}
+
+// Request to update mutable fields on an existing ActorTemplate.
+message UpdateActorTemplateRequest {
+  // The actor template to update.
+  // actor_template.metadata.name identifies which resource to update.
+  // actor_template.metadata.version and actor_template.metadata.uid are
+  // optional preconditions and zero values skip the check.
+  ActorTemplate actor_template = 1;
+
+  // The set of fields to update. Required.
+  //
+  // Only the following fields are supported:
+  //   - worker_selector
+  //   - default_version_on_create
+  google.protobuf.FieldMask update_mask = 2;
+}
+
+message ListActorTemplatesRequest {
+  // Requested page size; the server may return fewer, or occasionally
+  // slightly more. If unspecified, defaults to a server-chosen value;
+  // values above 1000 are coerced to 1000.
+  int32 page_size = 1;
+
+  // Pagination token from a previous ListActorTemplates response.
+  // Omit or leave empty for the first request.
+  string page_token = 2;
+}
+
+message ListActorTemplatesResponse {
+  // The page of actor templates. This list may be empty even if there are
+  // more results.
+  repeated ActorTemplate actor_templates = 1;
+
+  // Pagination token for the next page. Empty if this is the last page.
+  string next_page_token = 2;
+}
+
+message DeleteActorTemplateRequest {
+  ObjectRef actor_template = 1;
+}
+
+message CreateActorTemplateVersionRequest {
+  // The actor template version to create. Server-assigned metadata (uid,
+  // version, timestamps) is ignored, as are the status fields: the server
+  // initializes new versions to STATE_INITIAL.
+  ActorTemplateVersion actor_template_version = 1;
+}
+
+message GetActorTemplateVersionRequest {
+  ObjectRef actor_template_version = 1;
+}
+
+message ListActorTemplateVersionsRequest {
+  // The parent ActorTemplate whose versions to list, by name. Empty lists
+  // versions across all templates.
+  string actor_template = 1;
+
+  // Requested page size; the server may return fewer, or occasionally
+  // slightly more. If unspecified, defaults to a server-chosen value;
+  // values above 1000 are coerced to 1000.
+  int32 page_size = 2;
+
+  // Pagination token from a previous ListActorTemplateVersions response.
+  // Omit or leave empty for the first request.
+  string page_token = 3;
+}
+
+message ListActorTemplateVersionsResponse {
+  // The page of actor template versions. This list may be empty even if
+  // there are more results.
+  repeated ActorTemplateVersion actor_template_versions = 1;
+
+  // Pagination token for the next page. Empty if this is the last page.
+  string next_page_token = 2;
+}
+
+message DeleteActorTemplateVersionRequest {
+  ObjectRef actor_template_version = 1;
 }
 
 message GetActorRequest {
