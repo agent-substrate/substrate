@@ -124,6 +124,47 @@ func TestValidateCreateActorRequest(t *testing.T) {
 		validActor(func(a *ateapipb.Actor) { a.ActorTemplateName = "invalid value" }),
 		field.ErrorList{field.Invalid(field.NewPath("actor", "actor_template_name"), "invalid value", "")},
 	}, {
+		"valid native actor_template",
+		validActor(func(a *ateapipb.Actor) {
+			a.ActorTemplateNamespace, a.ActorTemplateName = "", ""
+			a.ActorTemplate = "tmpl1"
+		}),
+		nil,
+	}, {
+		"valid native actor_template with version pin",
+		validActor(func(a *ateapipb.Actor) {
+			a.ActorTemplateNamespace, a.ActorTemplateName = "", ""
+			a.ActorTemplate = "tmpl1"
+			a.ActorTemplateVersion = "tmpl1-v1"
+		}),
+		nil,
+	}, {
+		"invalid native actor_template name",
+		validActor(func(a *ateapipb.Actor) {
+			a.ActorTemplateNamespace, a.ActorTemplateName = "", ""
+			a.ActorTemplate = "TMPL1"
+		}),
+		field.ErrorList{field.Invalid(field.NewPath("actor", "actor_template"), "TMPL1", "")},
+	}, {
+		"invalid actor_template_version",
+		validActor(func(a *ateapipb.Actor) {
+			a.ActorTemplateNamespace, a.ActorTemplateName = "", ""
+			a.ActorTemplate = "tmpl1"
+			a.ActorTemplateVersion = "TMPL1-V1"
+		}),
+		field.ErrorList{field.Invalid(field.NewPath("actor", "actor_template_version"), "TMPL1-V1", "")},
+	}, {
+		"actor_template excludes actor_template_namespace and actor_template_name",
+		validActor(func(a *ateapipb.Actor) { a.ActorTemplate = "tmpl1" }),
+		field.ErrorList{
+			field.Forbidden(field.NewPath("actor", "actor_template_namespace"), ""),
+			field.Forbidden(field.NewPath("actor", "actor_template_name"), ""),
+		},
+	}, {
+		"actor_template_version requires actor_template",
+		validActor(func(a *ateapipb.Actor) { a.ActorTemplateVersion = "tmpl1-v1" }),
+		field.ErrorList{field.Forbidden(field.NewPath("actor", "actor_template_version"), "")},
+	}, {
 		"worker_selector with nil match_labels",
 		validActor(func(a *ateapipb.Actor) { a.WorkerSelector = &ateapipb.Selector{} }),
 		nil,

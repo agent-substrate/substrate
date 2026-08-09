@@ -4047,3 +4047,144 @@ func TestActorTemplate_LockConflict(t *testing.T) {
 		t.Errorf("UpdateActorTemplate(selector) under held lock failed: %v", err)
 	}
 }
+
+// markTemplateVersionReady flips a stored ActorTemplateVersion to READY while
+// preserving the sandbox frozen at creation, standing in for the golden
+// snapshot build loop.
+func markTemplateVersionReady(t *testing.T, tc *testContext, name string) *ateapipb.ActorTemplateVersion {
+	t.Helper()
+	current, err := tc.persistence.GetActorTemplateVersion(context.Background(), name)
+	if err != nil {
+		t.Fatalf("GetActorTemplateVersion(%s) failed: %v", name, err)
+	}
+	status := proto.Clone(current.GetStatus()).(*ateapipb.ActorTemplateVersionStatus)
+	status.State = ateapipb.ActorTemplateVersionStatus_STATE_READY
+	ready, err := tc.persistence.UpdateActorTemplateVersionStatus(context.Background(), name, status, current.GetMetadata().GetVersion())
+	if err != nil {
+		t.Fatalf("UpdateActorTemplateVersionStatus(%s) failed: %v", name, err)
+	}
+	return ready
+}
+
+func TestCreateActorFromTemplateVersion(t *testing.T) {
+	ns := namespaceForTest("ns-create-native")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+	ctx := context.Background()
+	ensureDefaultGvisorSandboxConfig(t, tc)
+	createTemplateForVersions(t, tc, "tmpl-a")
+	createTemplateVersion(t, tc, "tmpl-a-v1", "tmpl-a")
+
+	nativeActor := func(name, atespace, version string) *ateapipb.CreateActorRequest {
+		return &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+			Metadata:             &ateapipb.ResourceMetadata{Atespace: atespace, Name: name},
+			ActorTemplate:        "tmpl-a",
+			ActorTemplateVersion: version,
+		}}
+	}
+
+	// No pin and no default_version_on_create.
+	_, err := tc.client.CreateActor(ctx, nativeActor("id1", testAtespace, ""))
+	assertGrpcError(t, err, codes.FailedPrecondition, `ActorTemplate "tmpl-a" has no default_version_on_create; pin a version`)
+
+	// Pinned, but the version is still INITIAL.
+	_, err = tc.client.CreateActor(ctx, nativeActor("id1", testAtespace, "tmpl-a-v1"))
+	assertGrpcError(t, err, codes.FailedPrecondition, `ActorTemplateVersion "tmpl-a-v1" is not READY (state STATE_INITIAL)`)
+
+	// The golden atespace bypasses the READY gate: this is how the build
+	// loop's golden actor is created from a version still being built.
+	createAtespace(t, tc, resources.GoldenActorAtespace)
+	if _, err := tc.client.CreateActor(ctx, nativeActor("golden-1", resources.GoldenActorAtespace, "tmpl-a-v1")); err != nil {
+		t.Fatalf("CreateActor in %s should bypass the READY gate, got: %v", resources.GoldenActorAtespace, err)
+	}
+
+	// Missing template and mismatched parent are rejected.
+	_, err = tc.client.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+		Metadata:      &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "id1"},
+		ActorTemplate: "nope",
+	}})
+	assertGrpcError(t, err, codes.FailedPrecondition, `ActorTemplate "nope" not found`)
+	createTemplateForVersions(t, tc, "tmpl-b")
+	_, err = tc.client.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+		Metadata:             &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "id1"},
+		ActorTemplate:        "tmpl-b",
+		ActorTemplateVersion: "tmpl-a-v1",
+	}})
+	assertGrpcError(t, err, codes.FailedPrecondition, `ActorTemplateVersion "tmpl-a-v1" belongs to ActorTemplate "tmpl-a", not "tmpl-b"`)
+
+	readyVersion := markTemplateVersionReady(t, tc, "tmpl-a-v1")
+
+	// A pinned create works once READY, and stores the native identity.
+	pinned, err := tc.client.CreateActor(ctx, nativeActor("id-pinned", testAtespace, "tmpl-a-v1"))
+	if err != nil {
+		t.Fatalf("CreateActor(pinned) failed: %v", err)
+	}
+	if pinned.GetActorTemplate() != "tmpl-a" || pinned.GetActorTemplateVersion() != "tmpl-a-v1" {
+		t.Errorf("stored native identity = (%q, %q), want (tmpl-a, tmpl-a-v1)", pinned.GetActorTemplate(), pinned.GetActorTemplateVersion())
+	}
+	if pinned.GetActorTemplateNamespace() != "" || pinned.GetActorTemplateName() != "" {
+		t.Errorf("CRD identity should stay empty, got (%q, %q)", pinned.GetActorTemplateNamespace(), pinned.GetActorTemplateName())
+	}
+
+	// An unpinned create resolves the template's default.
+	if _, err := tc.client.UpdateActorTemplate(ctx, &ateapipb.UpdateActorTemplateRequest{
+		ActorTemplate: &ateapipb.ActorTemplate{
+			Metadata: &ateapipb.ResourceMetadata{Name: "tmpl-a"},
+			Spec:     &ateapipb.ActorTemplateSpec{DefaultVersionOnCreate: &ateapipb.ObjectRef{Name: "tmpl-a-v1"}},
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{defaultVersionMaskPath}},
+	}); err != nil {
+		t.Fatalf("UpdateActorTemplate(default) failed: %v", err)
+	}
+	defaulted, err := tc.client.CreateActor(ctx, nativeActor("id-default", testAtespace, ""))
+	if err != nil {
+		t.Fatalf("CreateActor(default) failed: %v", err)
+	}
+	if defaulted.GetActorTemplateVersion() != "tmpl-a-v1" {
+		t.Errorf("default resolution stored version %q, want tmpl-a-v1", defaulted.GetActorTemplateVersion())
+	}
+
+	// Resume boots from the version spec with its frozen sandbox, and atelet
+	// sees the version name as the template identity (namespace empty).
+	createWorkerPool(t, tc, ns, "pool1", map[string]string{poolLabelKey: ns})
+	createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+	if _, err := tc.client.ResumeActor(ctx, &ateapipb.ResumeActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "id-pinned"},
+	}); err != nil {
+		t.Fatalf("ResumeActor failed: %v", err)
+	}
+	if !tc.fakeAtelet.RunCalled {
+		t.Fatal("expected a boot Run call for a version with no golden snapshot")
+	}
+	runReq := tc.fakeAtelet.RunRequest
+	if runReq.GetActorTemplateNamespace() != "" || runReq.GetActorTemplateName() != "tmpl-a-v1" {
+		t.Errorf("RunRequest template identity = (%q, %q), want (\"\", tmpl-a-v1)", runReq.GetActorTemplateNamespace(), runReq.GetActorTemplateName())
+	}
+	if got := runReq.GetSpec().GetPauseImage(); got != "pause@sha256:abc" {
+		t.Errorf("RunRequest pause image = %q, want the version's", got)
+	}
+	if got := runReq.GetSandboxAssets().GetSandboxClass(); got != "gvisor" {
+		t.Errorf("RunRequest sandbox class = %q, want the frozen gvisor sandbox", got)
+	}
+
+	// Suspend records the version as the snapshot's provenance.
+	if _, err := tc.client.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "id-pinned"},
+	}); err != nil {
+		t.Fatalf("SuspendActor failed: %v", err)
+	}
+	suspended, err := tc.client.GetActor(ctx, &ateapipb.GetActorRequest{Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "id-pinned"}})
+	if err != nil {
+		t.Fatalf("GetActor failed: %v", err)
+	}
+	snapshot, err := tc.persistence.GetActorSnapshot(ctx, testAtespace, suspended.GetLatestSnapshot().GetName())
+	if err != nil {
+		t.Fatalf("GetActorSnapshot failed: %v", err)
+	}
+	if snapshot.GetActorTemplateUid() != readyVersion.GetMetadata().GetUid() {
+		t.Errorf("snapshot ActorTemplateUid = %q, want the version uid %q", snapshot.GetActorTemplateUid(), readyVersion.GetMetadata().GetUid())
+	}
+	if snapshot.GetActorTemplateNamespace() != "" || snapshot.GetActorTemplateName() != "tmpl-a-v1" {
+		t.Errorf("snapshot template identity = (%q, %q), want (\"\", tmpl-a-v1)", snapshot.GetActorTemplateNamespace(), snapshot.GetActorTemplateName())
+	}
+}

@@ -64,6 +64,11 @@ type ResumeState struct {
 	// pending restore: restore then combines the golden snapshot with the
 	// actor's data.
 	GoldenSnapshotURI resources.SnapshotURI
+	// FrozenSandboxAssets is the sandbox resolved into the actor's
+	// ActorTemplateVersion at its creation. Non-nil only on the native
+	// template path; boots then use it instead of resolving the sandbox from
+	// the worker pool.
+	FrozenSandboxAssets *ateletpb.SandboxAssets
 }
 
 // validateGoldenSnapshotScope rejects a golden snapshot that does not carry
@@ -107,11 +112,12 @@ func (s *LoadActorForResumeStep) Execute(ctx context.Context, input *ResumeInput
 	state.Actor = actor
 	state.WasRunning = (actor.GetStatus() == ateapipb.Actor_STATUS_RUNNING)
 
-	actorTemplate, err := s.actorTemplateLister.ActorTemplates(actor.GetActorTemplateNamespace()).Get(actor.GetActorTemplateName())
+	actorTemplate, frozenAssets, err := resolveTemplateForActor(ctx, s.store, s.actorTemplateLister, actor)
 	if err != nil {
-		return fmt.Errorf("while getting ActorTemplate: %w", err)
+		return err
 	}
 	state.ActorTemplate = actorTemplate
+	state.FrozenSandboxAssets = frozenAssets
 	if ref := actor.GetLatestSnapshot(); ref != nil {
 		snapshot, err := s.store.GetActorSnapshot(ctx, ref.GetAtespace(), ref.GetName())
 		if errors.Is(err, store.ErrNotFound) {
@@ -372,10 +378,11 @@ func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, stat
 	// Workers() returns pointers directly from the cache so we need to clone before
 	// mutating so that the cache is not corrupted if UpdateWorker fails.
 	assignedWorker = proto.Clone(assignedWorker).(*ateapipb.Worker)
+	assignmentNamespace, assignmentName := templateRefForAtelet(state.Actor)
 	assignedWorker.Assignment = &ateapipb.Assignment{
 		ActorTemplate: &ateapipb.KubeNamespacedObjectRef{
-			Namespace: state.Actor.GetActorTemplateNamespace(),
-			Name:      state.Actor.GetActorTemplateName(),
+			Namespace: assignmentNamespace,
+			Name:      assignmentName,
 		},
 		Actor: &ateapipb.ObjectRef{
 			Atespace: state.Actor.GetMetadata().GetAtespace(),
@@ -570,6 +577,7 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 		return err
 	}
 	egressGateway := s.egressGateway()
+	tmplNamespace, tmplName := templateRefForAtelet(state.Actor)
 
 	if local := state.Actor.GetLocalSnapshotInfo(); local != nil {
 		slog.InfoContext(ctx, "Actor has snapshot; Restoring from snapshot")
@@ -579,8 +587,8 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 			TargetAteomUid:         assignment.GetWorkerPodUid(),
 			Atespace:               state.Actor.GetMetadata().GetAtespace(),
 			ActorName:              state.Actor.GetMetadata().GetName(),
-			ActorTemplateNamespace: state.Actor.GetActorTemplateNamespace(),
-			ActorTemplateName:      state.Actor.GetActorTemplateName(),
+			ActorTemplateNamespace: tmplNamespace,
+			ActorTemplateName:      tmplName,
 			Spec:                   workloadSpec,
 			ActorUid:               state.Actor.GetMetadata().Uid,
 			EgressGateway:          egressGateway,
@@ -625,8 +633,8 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 			TargetAteomUid:         assignment.GetWorkerPodUid(),
 			Atespace:               state.Actor.GetMetadata().GetAtespace(),
 			ActorName:              state.Actor.GetMetadata().GetName(),
-			ActorTemplateNamespace: state.Actor.GetActorTemplateNamespace(),
-			ActorTemplateName:      state.Actor.GetActorTemplateName(),
+			ActorTemplateNamespace: tmplNamespace,
+			ActorTemplateName:      tmplName,
 			Spec:                   workloadSpec,
 			Type:                   ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
 			Config: &ateletpb.RestoreRequest_ExternalConfig{
@@ -650,17 +658,23 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 		// Booting from scratch: resolve the sandbox binaries from the pool's
 		// SandboxConfig and send them so atelet can fetch and record them.
 		// (Restores above are self-describing via the snapshot manifest.)
-		sandboxAssets, err := resolveSandboxAssets(s.workerPoolLister, s.sandboxConfigLister, assignment.GetWorkerNamespace(), assignment.GetWorkerPool())
-		if err != nil {
-			return fmt.Errorf("while resolving sandbox assets: %w", err)
+		// Native actors instead boot the sandbox frozen into their
+		// ActorTemplateVersion at creation.
+		sandboxAssets := state.FrozenSandboxAssets
+		if sandboxAssets == nil {
+			var err error
+			sandboxAssets, err = resolveSandboxAssets(s.workerPoolLister, s.sandboxConfigLister, assignment.GetWorkerNamespace(), assignment.GetWorkerPool())
+			if err != nil {
+				return fmt.Errorf("while resolving sandbox assets: %w", err)
+			}
 		}
 
 		req := &ateletpb.RunRequest{
 			TargetAteomUid:         assignment.GetWorkerPodUid(),
 			Atespace:               state.Actor.GetMetadata().GetAtespace(),
 			ActorName:              state.Actor.GetMetadata().GetName(),
-			ActorTemplateNamespace: state.Actor.GetActorTemplateNamespace(),
-			ActorTemplateName:      state.Actor.GetActorTemplateName(),
+			ActorTemplateNamespace: tmplNamespace,
+			ActorTemplateName:      tmplName,
 			SandboxAssets:          sandboxAssets,
 			Spec:                   workloadSpec,
 			ActorUid:               state.Actor.GetMetadata().Uid,

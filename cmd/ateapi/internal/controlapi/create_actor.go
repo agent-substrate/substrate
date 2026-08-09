@@ -23,6 +23,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/resources"
+	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -37,12 +38,18 @@ func (s *Service) CreateActor(ctx context.Context, req *ateapipb.CreateActorRequ
 	}
 	start := time.Now()
 	in := req.GetActor()
+	templateNamespace := in.GetActorTemplateNamespace()
+	templateName := in.GetActorTemplateName()
+	if in.GetActorTemplate() != "" {
+		// Native templates are global-scoped: the namespace attribute stays empty.
+		templateName = in.GetActorTemplate()
+	}
 	// Recorded only after validation, so every operation uniformly measures a
 	// validated request; malformed ones stay visible in rpc.server.call.duration.
 	defer func() {
 		s.instruments.recordLifecycleOp(ctx, ateattr.OperationCreate, start, err,
-			ateattr.TemplateNameKey.String(in.GetActorTemplateName()),
-			ateattr.TemplateNamespaceKey.String(in.GetActorTemplateNamespace()),
+			ateattr.TemplateNameKey.String(templateName),
+			ateattr.TemplateNamespaceKey.String(templateNamespace),
 		)
 	}()
 	var sourceSnapshot *ateapipb.ActorSnapshot
@@ -70,17 +77,56 @@ func (s *Service) CreateActor(ctx context.Context, req *ateapipb.CreateActorRequ
 			return nil, status.Error(codes.FailedPrecondition, "source ActorSnapshot tag has an invalid scope")
 		}
 	}
-	templateNamespace := in.GetActorTemplateNamespace()
-	templateName := in.GetActorTemplateName()
-
 	setSpanActorRefAttributes(ctx, resources.ActorRefFromActor(in))
 
-	template, err := s.actorTemplateLister.ActorTemplates(templateNamespace).Get(templateName)
-	if err != nil {
-		if k8serrors.IsNotFound(err) {
-			return nil, status.Errorf(codes.FailedPrecondition, "ActorTemplate %s/%s not found", templateNamespace, templateName)
+	var template *atev1alpha1.ActorTemplate
+	var versionPin string
+	if in.GetActorTemplate() != "" {
+		at, err := s.persistence.GetActorTemplate(ctx, in.GetActorTemplate())
+		if err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				return nil, status.Errorf(codes.FailedPrecondition, "ActorTemplate %q not found", in.GetActorTemplate())
+			}
+			return nil, fmt.Errorf("while getting ActorTemplate: %w", err)
 		}
-		return nil, fmt.Errorf("while getting ActorTemplate: %w", err)
+		versionPin = in.GetActorTemplateVersion()
+		if versionPin == "" {
+			versionPin = at.GetSpec().GetDefaultVersionOnCreate().GetName()
+		}
+		if versionPin == "" {
+			return nil, status.Errorf(codes.FailedPrecondition, "ActorTemplate %q has no default_version_on_create; pin a version", in.GetActorTemplate())
+		}
+		atv, err := s.persistence.GetActorTemplateVersion(ctx, versionPin)
+		if err != nil {
+			if errors.Is(err, store.ErrNotFound) {
+				return nil, status.Errorf(codes.FailedPrecondition, "ActorTemplateVersion %q not found", versionPin)
+			}
+			return nil, fmt.Errorf("while getting ActorTemplateVersion: %w", err)
+		}
+		if atv.GetActorTemplate().GetName() != at.GetMetadata().GetName() {
+			return nil, status.Errorf(codes.FailedPrecondition,
+				"ActorTemplateVersion %q belongs to ActorTemplate %q, not %q",
+				versionPin, atv.GetActorTemplate().GetName(), at.GetMetadata().GetName())
+		}
+		// Only READY versions have a golden snapshot to run from. The golden
+		// actor building that snapshot is the one exception; like
+		// commitSnapshotScope, the reserved atespace is the discriminator.
+		if state := atv.GetStatus().GetState(); state != ateapipb.ActorTemplateVersionStatus_STATE_READY &&
+			in.GetMetadata().GetAtespace() != resources.GoldenActorAtespace {
+			return nil, status.Errorf(codes.FailedPrecondition, "ActorTemplateVersion %q is not READY (state %s)", versionPin, state)
+		}
+		if template, err = crdTemplateFromVersion(at, atv); err != nil {
+			return nil, err
+		}
+	} else {
+		var err error
+		template, err = s.actorTemplateLister.ActorTemplates(templateNamespace).Get(templateName)
+		if err != nil {
+			if k8serrors.IsNotFound(err) {
+				return nil, status.Errorf(codes.FailedPrecondition, "ActorTemplate %s/%s not found", templateNamespace, templateName)
+			}
+			return nil, fmt.Errorf("while getting ActorTemplate: %w", err)
+		}
 	}
 	// TODO: Permit compatible DATA snapshots when runtimes can extract portable data.
 	if sourceSnapshot != nil && sourceSnapshot.GetActorTemplateUid() != string(template.GetUID()) {
@@ -119,8 +165,10 @@ func (s *Service) CreateActor(ctx context.Context, req *ateapipb.CreateActorRequ
 			Name:     name,
 		},
 		Status:                 ateapipb.Actor_STATUS_SUSPENDED,
-		ActorTemplateNamespace: templateNamespace,
-		ActorTemplateName:      templateName,
+		ActorTemplateNamespace: in.GetActorTemplateNamespace(),
+		ActorTemplateName:      in.GetActorTemplateName(),
+		ActorTemplate:          in.GetActorTemplate(),
+		ActorTemplateVersion:   versionPin,
 		WorkerSelector:         in.GetWorkerSelector(),
 		ActorVolumes:           initVols,
 		LatestSnapshot:         sourceSnapshotRef,
@@ -160,18 +208,36 @@ func validateCreateActorRequest(req *ateapipb.CreateActorRequest) field.ErrorLis
 		errs = append(errs, resources.ValidateResourceName(val, p)...)
 	}
 
-	if val, p := actor.GetActorTemplateNamespace(), actorPath.Child("actor_template_namespace"); val == "" {
-		errs = append(errs, field.Required(p, ""))
-	} else {
-		for _, msg := range content.IsDNS1123Label(val) {
-			errs = append(errs, field.Invalid(p, val, msg))
+	// The actor names its template either as a global-scoped control-plane
+	// ActorTemplate or as a namespaced CRD ActorTemplate, never both.
+	if val := actor.GetActorTemplate(); val != "" {
+		errs = append(errs, resources.ValidateResourceName(val, actorPath.Child("actor_template"))...)
+		if actor.GetActorTemplateNamespace() != "" {
+			errs = append(errs, field.Forbidden(actorPath.Child("actor_template_namespace"), "must be empty when actor_template is set"))
 		}
-	}
-	if val, p := actor.GetActorTemplateName(), actorPath.Child("actor_template_name"); val == "" {
-		errs = append(errs, field.Required(p, ""))
+		if actor.GetActorTemplateName() != "" {
+			errs = append(errs, field.Forbidden(actorPath.Child("actor_template_name"), "must be empty when actor_template is set"))
+		}
+		if pin := actor.GetActorTemplateVersion(); pin != "" {
+			errs = append(errs, resources.ValidateResourceName(pin, actorPath.Child("actor_template_version"))...)
+		}
 	} else {
-		for _, msg := range content.IsDNS1123Subdomain(val) {
-			errs = append(errs, field.Invalid(p, val, msg))
+		if actor.GetActorTemplateVersion() != "" {
+			errs = append(errs, field.Forbidden(actorPath.Child("actor_template_version"), "requires actor_template"))
+		}
+		if val, p := actor.GetActorTemplateNamespace(), actorPath.Child("actor_template_namespace"); val == "" {
+			errs = append(errs, field.Required(p, ""))
+		} else {
+			for _, msg := range content.IsDNS1123Label(val) {
+				errs = append(errs, field.Invalid(p, val, msg))
+			}
+		}
+		if val, p := actor.GetActorTemplateName(), actorPath.Child("actor_template_name"); val == "" {
+			errs = append(errs, field.Required(p, ""))
+		} else {
+			for _, msg := range content.IsDNS1123Subdomain(val) {
+				errs = append(errs, field.Invalid(p, val, msg))
+			}
 		}
 	}
 

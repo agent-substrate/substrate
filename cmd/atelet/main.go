@@ -1406,8 +1406,12 @@ func validateRunRequest(req *ateletpb.RunRequest) error {
 	errs = append(errs, resources.ValidateResourceName(req.GetAtespace(), field.NewPath("atespace"))...)
 	errs = append(errs, resources.ValidateResourceName(req.GetActorName(), field.NewPath("actor_name"))...)
 	errs = append(errs, resources.ValidateResourceName(req.GetActorUid(), field.NewPath("actor_uid"))...)
-	for _, msg := range content.IsDNS1123Label(req.GetActorTemplateNamespace()) {
-		errs = append(errs, field.Invalid(field.NewPath("actor_template_namespace"), req.GetActorTemplateNamespace(), msg))
+	// Empty on actors from a control-plane ActorTemplateVersion, which is
+	// global-scoped; the field feeds metrics and the sandbox record only.
+	if req.GetActorTemplateNamespace() != "" {
+		for _, msg := range content.IsDNS1123Label(req.GetActorTemplateNamespace()) {
+			errs = append(errs, field.Invalid(field.NewPath("actor_template_namespace"), req.GetActorTemplateNamespace(), msg))
+		}
 	}
 	for _, msg := range content.IsDNS1123Subdomain(req.GetActorTemplateName()) {
 		errs = append(errs, field.Invalid(field.NewPath("actor_template_name"), req.GetActorTemplateName(), msg))
@@ -1431,8 +1435,12 @@ func validateCheckpointRequest(req *ateletpb.CheckpointRequest) error {
 	errs = append(errs, resources.ValidateResourceName(req.GetAtespace(), field.NewPath("atespace"))...)
 	errs = append(errs, resources.ValidateResourceName(req.GetActorName(), field.NewPath("actor_name"))...)
 	errs = append(errs, resources.ValidateResourceName(req.GetActorUid(), field.NewPath("actor_uid"))...)
-	for _, msg := range content.IsDNS1123Label(req.GetActorTemplateNamespace()) {
-		errs = append(errs, field.Invalid(field.NewPath("actor_template_namespace"), req.GetActorTemplateNamespace(), msg))
+	// Empty on actors from a control-plane ActorTemplateVersion, which is
+	// global-scoped; the field feeds metrics and the sandbox record only.
+	if req.GetActorTemplateNamespace() != "" {
+		for _, msg := range content.IsDNS1123Label(req.GetActorTemplateNamespace()) {
+			errs = append(errs, field.Invalid(field.NewPath("actor_template_namespace"), req.GetActorTemplateNamespace(), msg))
+		}
 	}
 	for _, msg := range content.IsDNS1123Subdomain(req.GetActorTemplateName()) {
 		errs = append(errs, field.Invalid(field.NewPath("actor_template_name"), req.GetActorTemplateName(), msg))
@@ -1483,8 +1491,12 @@ func validateRestoreRequest(req *ateletpb.RestoreRequest) error {
 	errs = append(errs, resources.ValidateResourceName(req.GetAtespace(), field.NewPath("atespace"))...)
 	errs = append(errs, resources.ValidateResourceName(req.GetActorName(), field.NewPath("actor_name"))...)
 	errs = append(errs, resources.ValidateResourceName(req.GetActorUid(), field.NewPath("actor_uid"))...)
-	for _, msg := range content.IsDNS1123Label(req.GetActorTemplateNamespace()) {
-		errs = append(errs, field.Invalid(field.NewPath("actor_template_namespace"), req.GetActorTemplateNamespace(), msg))
+	// Empty on actors from a control-plane ActorTemplateVersion, which is
+	// global-scoped; the field feeds metrics and the sandbox record only.
+	if req.GetActorTemplateNamespace() != "" {
+		for _, msg := range content.IsDNS1123Label(req.GetActorTemplateNamespace()) {
+			errs = append(errs, field.Invalid(field.NewPath("actor_template_namespace"), req.GetActorTemplateNamespace(), msg))
+		}
 	}
 	for _, msg := range content.IsDNS1123Subdomain(req.GetActorTemplateName()) {
 		errs = append(errs, field.Invalid(field.NewPath("actor_template_name"), req.GetActorTemplateName(), msg))

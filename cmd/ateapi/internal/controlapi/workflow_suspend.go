@@ -69,9 +69,9 @@ func (s *LoadActorForSuspendStep) Execute(ctx context.Context, input *SuspendInp
 		state.SourceVersion = actor.GetInProgressSnapshotSourceActorVersion()
 	}
 
-	actorTemplate, err := s.actorTemplateLister.ActorTemplates(actor.GetActorTemplateNamespace()).Get(actor.GetActorTemplateName())
+	actorTemplate, _, err := resolveTemplateForActor(ctx, s.store, s.actorTemplateLister, actor)
 	if err != nil {
-		return fmt.Errorf("while getting ActorTemplate: %w", err)
+		return err
 	}
 	state.ActorTemplate = actorTemplate
 
@@ -179,12 +179,13 @@ func (s *CallAteletSuspendStep) Execute(ctx context.Context, input *SuspendInput
 	// Checkpoint does not carry the sandbox config: atelet uses the version the
 	// actor is currently running (recorded on-node at Run/Restore) and pins it
 	// into the snapshot manifest.
+	tmplNamespace, tmplName := templateRefForAtelet(state.Actor)
 	req := &ateletpb.CheckpointRequest{
 		TargetAteomUid:         assignment.GetWorkerPodUid(),
 		Atespace:               state.Actor.GetMetadata().GetAtespace(),
 		ActorName:              state.Actor.GetMetadata().GetName(),
-		ActorTemplateNamespace: state.Actor.GetActorTemplateNamespace(),
-		ActorTemplateName:      state.Actor.GetActorTemplateName(),
+		ActorTemplateNamespace: tmplNamespace,
+		ActorTemplateName:      tmplName,
 		Spec:                   workloadSpec,
 		Type:                   ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
 		Config: &ateletpb.CheckpointRequest_ExternalConfig{
@@ -295,13 +296,14 @@ func (s *FinalizeSuspendedStep) Execute(ctx context.Context, input *SuspendInput
 		if err != nil {
 			return err
 		}
+		tmplNamespace, tmplName := templateRefForAtelet(latestActor)
 		snapshot := &ateapipb.ActorSnapshot{
 			Metadata:               &ateapipb.ResourceMetadata{Atespace: input.ActorRef.Atespace, Name: snapshotName},
 			SourceActor:            input.ActorRef.ToObjectRef(),
 			SourceActorUid:         latestActor.GetMetadata().GetUid(),
 			SourceActorVersion:     state.SourceVersion,
-			ActorTemplateNamespace: latestActor.GetActorTemplateNamespace(),
-			ActorTemplateName:      latestActor.GetActorTemplateName(),
+			ActorTemplateNamespace: tmplNamespace,
+			ActorTemplateName:      tmplName,
 			ActorTemplateUid:       string(state.ActorTemplate.GetUID()),
 			ContentScope:           toActorSnapshotContentScope(commitSnapshotScope(input.ActorRef.Atespace, state.ActorTemplate)),
 			SnapshotUri:            snapshotURI.String(),
