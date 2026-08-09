@@ -20,6 +20,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
+	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"k8s.io/apimachinery/pkg/labels"
 )
 
@@ -82,6 +83,60 @@ func defaultSandboxConfig(lister listersv1alpha1.SandboxConfigLister, class atev
 		return nil, fmt.Errorf("no default SandboxConfig for class %q; set one with spec.default=true or name one via WorkerPool.spec.sandboxConfigName", class)
 	}
 	return match, nil
+}
+
+// resolveTemplateVersionSandbox resolves an ActorTemplateVersion's
+// spec.sandbox_config into the SandboxAssets frozen into
+// status.resolved_sandbox at creation time. Spec validation guarantees
+// config_name is set; the named SandboxConfig must match the class.
+func resolveTemplateVersionSandbox(
+	sandboxConfigLister listersv1alpha1.SandboxConfigLister,
+	cfg *ateapipb.SandboxConfig,
+) (*ateapipb.SandboxAssets, error) {
+	class := sandboxClassFromProto(cfg.GetSandboxClass())
+
+	name := cfg.GetConfigName()
+	sc, err := sandboxConfigLister.Get(name)
+	if err != nil {
+		return nil, fmt.Errorf("while getting SandboxConfig %q: %w", name, err)
+	}
+	if sc.Spec.SandboxClass != class {
+		return nil, fmt.Errorf("SandboxConfig %q has class %q but the version asks for class %q",
+			name, sc.Spec.SandboxClass, class)
+	}
+
+	return sandboxAssetsAPIProto(class, sc), nil
+}
+
+// sandboxClassFromProto maps the control API sandbox class onto the CRD
+// class; UNSPECIFIED means gvisor.
+func sandboxClassFromProto(class ateapipb.SandboxClass) atev1alpha1.SandboxClass {
+	if class == ateapipb.SandboxClass_SANDBOX_CLASS_MICROVM {
+		return atev1alpha1.SandboxClassMicroVM
+	}
+	return atev1alpha1.SandboxClassGvisor
+}
+
+// sandboxAssetsAPIProto converts a resolved SandboxConfig into the control
+// API twin of sandboxAssetsProto, for freezing into ActorTemplateVersion
+// status.
+func sandboxAssetsAPIProto(class atev1alpha1.SandboxClass, sc *atev1alpha1.SandboxConfig) *ateapipb.SandboxAssets {
+	protoClass := ateapipb.SandboxClass_SANDBOX_CLASS_GVISOR
+	if class == atev1alpha1.SandboxClassMicroVM {
+		protoClass = ateapipb.SandboxClass_SANDBOX_CLASS_MICROVM
+	}
+	out := &ateapipb.SandboxAssets{
+		SandboxClass: protoClass,
+		Assets:       make(map[string]*ateapipb.ArchAssets, len(sc.Spec.Assets)),
+	}
+	for arch, files := range sc.Spec.Assets {
+		archAssets := &ateapipb.ArchAssets{Files: make(map[string]*ateapipb.AssetFile, len(files))}
+		for name, f := range files {
+			archAssets.Files[name] = &ateapipb.AssetFile{Url: f.URL, Sha256: f.SHA256}
+		}
+		out.Assets[arch] = archAssets
+	}
+	return out
 }
 
 // sandboxAssetsProto converts a resolved SandboxConfig into the proto atelet

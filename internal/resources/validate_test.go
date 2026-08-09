@@ -198,6 +198,64 @@ func TestValidateGlobalObjectRef(t *testing.T) {
 	}
 }
 
+func TestValidateGlobalResourceMetadataRef(t *testing.T) {
+	const uid = "8bf5b1a2-3c4d-4e5f-8a9b-0c1d2e3f4a5b"
+	tests := []struct {
+		name      string
+		input     *ateapipb.ResourceMetadata
+		wantError field.ErrorList
+	}{
+		{
+			name:      "valid without preconditions",
+			input:     &ateapipb.ResourceMetadata{Name: "tmpl-a"},
+			wantError: nil,
+		},
+		{
+			name:      "valid with preconditions",
+			input:     &ateapipb.ResourceMetadata{Name: "tmpl-a", Uid: uid, Version: 7},
+			wantError: nil,
+		},
+		{
+			name:  "nil metadata",
+			input: nil,
+			wantError: field.ErrorList{
+				field.Required(field.NewPath("path", "name"), ""),
+			},
+		},
+		{
+			name:      "atespace must be empty",
+			input:     &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "tmpl-a"},
+			wantError: field.ErrorList{field.Invalid(field.NewPath("path", "atespace"), "ns1", "")},
+		},
+		{
+			name:      "missing name",
+			input:     &ateapipb.ResourceMetadata{},
+			wantError: field.ErrorList{field.Required(field.NewPath("path", "name"), "")},
+		},
+		{
+			name:      "invalid name",
+			input:     &ateapipb.ResourceMetadata{Name: "TMPL"},
+			wantError: field.ErrorList{field.Invalid(field.NewPath("path", "name"), "TMPL", "")},
+		},
+		{
+			name:      "invalid uid",
+			input:     &ateapipb.ResourceMetadata{Name: "tmpl-a", Uid: "not-a-uuid"},
+			wantError: field.ErrorList{field.Invalid(field.NewPath("path", "uid"), "not-a-uuid", "")},
+		},
+		{
+			name:      "negative version",
+			input:     &ateapipb.ResourceMetadata{Name: "tmpl-a", Version: -1},
+			wantError: field.ErrorList{field.Invalid(field.NewPath("path", "version"), int64(-1), "")},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ValidateGlobalResourceMetadataRef(tt.input, field.NewPath("path"))
+			field.ErrorMatcher{}.ByType().ByField().ByValue().Test(t, tt.wantError, got)
+		})
+	}
+}
+
 func TestValidateAteomUID(t *testing.T) {
 	tests := []struct {
 		name    string

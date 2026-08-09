@@ -127,6 +127,36 @@ func ValidateGlobalObjectRef(ref *ateapipb.ObjectRef, fldPath *field.Path) field
 	return errs
 }
 
+// ValidateGlobalResourceMetadataRef checks the metadata a mutating request
+// uses to name the global-scoped resource it acts on: name identifies the
+// resource and is required, atespace must be empty (global resources do not
+// belong to an atespace), and uid and version are optional preconditions.
+// Like ValidateResourceMetadataRef, nil metadata is an error rather than a
+// no-op: a request that names no resource cannot be served.
+func ValidateGlobalResourceMetadataRef(meta *ateapipb.ResourceMetadata, fldPath *field.Path) field.ErrorList {
+	var errs field.ErrorList
+
+	if val, fldPath := meta.GetAtespace(), fldPath.Child("atespace"); val != "" {
+		errs = append(errs, field.Invalid(fldPath, val, "must be empty for a global-scoped resource"))
+	}
+
+	if val, fldPath := meta.GetName(), fldPath.Child("name"); val == "" {
+		errs = append(errs, field.Required(fldPath, ""))
+	} else {
+		errs = append(errs, ValidateResourceName(val, fldPath)...)
+	}
+
+	if val, fldPath := meta.GetUid(), fldPath.Child("uid"); val != "" {
+		errs = append(errs, ValidateUUID(val, fldPath)...)
+	}
+
+	if val, fldPath := meta.GetVersion(), fldPath.Child("version"); val < 0 {
+		errs = append(errs, field.Invalid(fldPath, val, "must not be negative"))
+	}
+
+	return errs
+}
+
 // ValidateAteomUID rejects a target ateom pod UID that could escape the host
 // paths built from it: the netns path (/run/netns/ateom:<uid>) and the ateom
 // control socket (.../ateoms/<uid>/ateom.sock). Kubernetes pod UIDs are UUIDs,
