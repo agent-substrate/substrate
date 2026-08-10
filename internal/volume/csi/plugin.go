@@ -16,6 +16,8 @@ package csi
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
 	"log/slog"
 	"os"
@@ -23,12 +25,14 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/volume"
+	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"k8s.io/apimachinery/pkg/api/resource"
 )
+
 
 // Plugin implements volume.VolumePluginWorkerPlane using the CSI Client.
 type Plugin struct {
@@ -248,8 +252,12 @@ func getStandardCapabilities() []*csi.VolumeCapability {
 	}
 }
 
+// SecretGetter is a function that retrieves a Secret's data.
+type SecretGetter func(ctx context.Context, namespace, name string) (map[string][]byte, error)
+
 // NewCSIPlugin establishes a CSI client and returns a verified Plugin instance.
-func NewCSIPlugin(ctx context.Context, lister listersv1alpha1.CSIDriverConfigLister, driverName string, isController bool) (*Plugin, error) {
+// If isController is true and TLS is configured, it resolves the TLS config using the secretGetter.
+func NewCSIPlugin(ctx context.Context, lister listersv1alpha1.CSIDriverConfigLister, secretGetter SecretGetter, driverName string, isController bool) (*Plugin, error) {
 	if lister == nil {
 		return nil, fmt.Errorf("missing csiDriverConfigLister")
 	}
@@ -269,7 +277,16 @@ func NewCSIPlugin(ctx context.Context, lister listersv1alpha1.CSIDriverConfigLis
 	default:
 		endpoint = "unix://" + ateompath.KubeletPluginSocketPath(driverName)
 	}
-	csiClient, err := NewCSIClient(endpoint)
+
+	var tlsCfg *tls.Config
+	if isController && cfg.Spec.TLS != nil && cfg.Spec.TLS.Enabled {
+		tlsCfg, err = resolveTLSConfig(ctx, secretGetter, cfg.Spec.TLS)
+		if err != nil {
+			return nil, fmt.Errorf("failed to resolve TLS config for driver %q: %w", driverName, err)
+		}
+	}
+
+	csiClient, err := NewCSIClient(endpoint, tlsCfg)
 	if err != nil {
 		return nil, fmt.Errorf("failed to initialize CSI client from endpoint %q: %w", endpoint, err)
 	}
@@ -288,3 +305,59 @@ func NewCSIPlugin(ctx context.Context, lister listersv1alpha1.CSIDriverConfigLis
 
 	return csiPlugin, nil
 }
+
+func resolveTLSConfig(ctx context.Context, secretGetter SecretGetter, tlsConfig *atev1alpha1.CSIDriverTLSConfig) (*tls.Config, error) {
+	if tlsConfig == nil || !tlsConfig.Enabled {
+		return nil, nil
+	}
+
+	tCfg := &tls.Config{
+		MinVersion: tls.VersionTLS13,
+		ServerName: tlsConfig.ServerName,
+	}
+
+	if tlsConfig.CACertSecretRef != nil {
+		if secretGetter == nil {
+			return nil, fmt.Errorf("secretGetter is required but not provided")
+		}
+		data, err := secretGetter(ctx, tlsConfig.CACertSecretRef.Namespace, tlsConfig.CACertSecretRef.Name)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get CA cert secret %s/%s: %w", tlsConfig.CACertSecretRef.Namespace, tlsConfig.CACertSecretRef.Name, err)
+		}
+		caBytes, ok := data["ca.crt"]
+		if !ok {
+			return nil, fmt.Errorf("CA cert secret %s/%s missing key 'ca.crt'", tlsConfig.CACertSecretRef.Namespace, tlsConfig.CACertSecretRef.Name)
+		}
+		caPool := x509.NewCertPool()
+		if !caPool.AppendCertsFromPEM(caBytes) {
+			return nil, fmt.Errorf("failed to parse CA cert from secret %s/%s", tlsConfig.CACertSecretRef.Namespace, tlsConfig.CACertSecretRef.Name)
+		}
+		tCfg.RootCAs = caPool
+	}
+
+	if tlsConfig.ClientCertSecretRef != nil {
+		if secretGetter == nil {
+			return nil, fmt.Errorf("secretGetter is required but not provided")
+		}
+		data, err := secretGetter(ctx, tlsConfig.ClientCertSecretRef.Namespace, tlsConfig.ClientCertSecretRef.Name)
+		if err != nil {
+			return nil, fmt.Errorf("failed to get client cert secret %s/%s: %w", tlsConfig.ClientCertSecretRef.Namespace, tlsConfig.ClientCertSecretRef.Name, err)
+		}
+		certBytes, ok := data["tls.crt"]
+		if !ok {
+			return nil, fmt.Errorf("client cert secret %s/%s missing key 'tls.crt'", tlsConfig.ClientCertSecretRef.Namespace, tlsConfig.ClientCertSecretRef.Name)
+		}
+		keyBytes, ok := data["tls.key"]
+		if !ok {
+			return nil, fmt.Errorf("client cert secret %s/%s missing key 'tls.key'", tlsConfig.ClientCertSecretRef.Namespace, tlsConfig.ClientCertSecretRef.Name)
+		}
+		cert, err := tls.X509KeyPair(certBytes, keyBytes)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load client key pair from secret %s/%s: %w", tlsConfig.ClientCertSecretRef.Namespace, tlsConfig.ClientCertSecretRef.Name, err)
+		}
+		tCfg.Certificates = []tls.Certificate{cert}
+	}
+
+	return tCfg, nil
+}
+

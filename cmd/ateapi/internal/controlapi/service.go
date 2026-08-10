@@ -24,6 +24,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/volume/csi"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	storagev1listers "k8s.io/client-go/listers/storage/v1"
 )
@@ -32,6 +33,7 @@ import (
 type Service struct {
 	ateapipb.UnimplementedControlServer
 	persistence           store.Interface
+	kubeClient            kubernetes.Interface
 	workerCache           *workercache.Cache
 	dialer                *AteletDialer
 	actorTemplateLister   listersv1alpha1.ActorTemplateLister
@@ -69,6 +71,7 @@ func NewService(
 	s := &Service{
 		persistence:           persistence,
 		workerCache:           workerCache,
+		kubeClient:            kubeClient,
 		actorTemplateLister:   actorTemplateLister,
 		workerPoolLister:      workerPoolLister,
 		csiDriverConfigLister: csiDriverConfigLister,
@@ -90,7 +93,15 @@ func (s *Service) GetPlugin(ctx context.Context, driverName string) (volume.Volu
 		return plugin, nil
 	}
 
-	csiPlugin, err := csi.NewCSIPlugin(ctx, s.csiDriverConfigLister, driverName, true /*isController*/)
+	secretGetter := func(ctx context.Context, namespace, name string) (map[string][]byte, error) {
+		secret, err := s.kubeClient.CoreV1().Secrets(namespace).Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			return nil, err
+		}
+		return secret.Data, nil
+	}
+
+	csiPlugin, err := csi.NewCSIPlugin(ctx, s.csiDriverConfigLister, secretGetter, driverName, true /*isController*/)
 	if err != nil {
 		return nil, err
 	}

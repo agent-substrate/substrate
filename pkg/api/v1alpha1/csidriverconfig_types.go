@@ -43,7 +43,46 @@ type CSIDriverConfigSpec struct {
 	// +optional
 	// +kubebuilder:validation:Pattern=`^unix://.+$`
 	NodeSocketOverride string `json:"nodeSocketOverride,omitempty"`
+
+	// TLS configures TLS/mTLS for the connection to the ControllerEndpoint.
+	// +optional
+	TLS *CSIDriverTLSConfig `json:"tls,omitempty"`
 }
+
+// SecretReference references a Secret in a specific namespace.
+type SecretReference struct {
+	// Name of the referent Secret.
+	// +required
+	// +kubebuilder:validation:MinLength=1
+	Name string `json:"name"`
+
+	// Namespace of the referent Secret.
+	// +required
+	// +kubebuilder:validation:MinLength=1
+	Namespace string `json:"namespace"`
+}
+
+// CSIDriverTLSConfig holds TLS and mTLS configuration for CSI driver connections.
+type CSIDriverTLSConfig struct {
+	// Enabled controls whether TLS is used.
+	// +required
+	Enabled bool `json:"enabled"`
+
+	// CACertSecretRef references a Secret containing the CA certificate to verify the server.
+	// The Secret must contain a key named "ca.crt".
+	// +optional
+	CACertSecretRef *SecretReference `json:"caCertSecretRef,omitempty"`
+
+	// ClientCertSecretRef references a Secret containing the client certificate and key for mTLS.
+	// The Secret must contain keys named "tls.crt" and "tls.key".
+	// +optional
+	ClientCertSecretRef *SecretReference `json:"clientCertSecretRef,omitempty"`
+
+	// ServerName override for TLS verification.
+	// +optional
+	ServerName string `json:"serverName,omitempty"`
+}
+
 
 // CSIDriverConfig is the Schema for the csidriverconfigs API
 //

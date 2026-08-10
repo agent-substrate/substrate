@@ -15,12 +15,14 @@
 package csi
 
 import (
+	"crypto/tls"
 	"fmt"
 	"log/slog"
 	"net/url"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/credentials/insecure"
 )
 
@@ -57,21 +59,25 @@ func parseEndpoint(endpoint string) (string, string, error) {
 
 // NewCSIClient establishes a gRPC connection to the CSI driver over UDS or TCP
 // and returns a client initialized with Identity, Controller, and Node service clients.
-func NewCSIClient(endpoint string) (*Client, error) {
+// If tlsCfg is not nil, it uses TLS/mTLS for the connection.
+func NewCSIClient(endpoint string, tlsCfg *tls.Config) (*Client, error) {
 	scheme, target, err := parseEndpoint(endpoint)
 	if err != nil {
 		return nil, err
 	}
 
-	if scheme == "tcp" {
-		slog.Warn("CSI connection is unencrypted over TCP! (TODO: Implement TLS)", slog.String("endpoint", target))
-	}
-
-	dialOpts := []grpc.DialOption{
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	var dialOpts []grpc.DialOption
+	if tlsCfg != nil {
+		dialOpts = append(dialOpts, grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)))
+	} else {
+		if scheme == "tcp" {
+			slog.Warn("CSI connection is unencrypted over TCP!", slog.String("endpoint", target))
+		}
+		dialOpts = append(dialOpts, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	}
 
 	conn, err := grpc.NewClient(target, dialOpts...)
+
 	if err != nil {
 		return nil, fmt.Errorf("failed to dial CSI endpoint %q: %w", target, err)
 	}

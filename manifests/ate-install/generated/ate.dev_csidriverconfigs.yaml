@@ -82,6 +82,52 @@ spec:
                   on the worker nodes. If empty, ATE defaults to unix:///var/lib/kubelet/plugins/[DriverName]/csi.sock.
                 pattern: ^unix://.+$
                 type: string
+              tls:
+                description: TLS configures TLS/mTLS for the connection to the ControllerEndpoint.
+                properties:
+                  caCertSecretRef:
+                    description: |-
+                      CACertSecretRef references a Secret containing the CA certificate to verify the server.
+                      The Secret must contain a key named "ca.crt".
+                    properties:
+                      name:
+                        description: Name of the referent Secret.
+                        minLength: 1
+                        type: string
+                      namespace:
+                        description: Namespace of the referent Secret.
+                        minLength: 1
+                        type: string
+                    required:
+                    - name
+                    - namespace
+                    type: object
+                  clientCertSecretRef:
+                    description: |-
+                      ClientCertSecretRef references a Secret containing the client certificate and key for mTLS.
+                      The Secret must contain keys named "tls.crt" and "tls.key".
+                    properties:
+                      name:
+                        description: Name of the referent Secret.
+                        minLength: 1
+                        type: string
+                      namespace:
+                        description: Namespace of the referent Secret.
+                        minLength: 1
+                        type: string
+                    required:
+                    - name
+                    - namespace
+                    type: object
+                  enabled:
+                    description: Enabled controls whether TLS is used.
+                    type: boolean
+                  serverName:
+                    description: ServerName override for TLS verification.
+                    type: string
+                required:
+                - enabled
+                type: object
             required:
             - controllerEndpoint
             - driverName
