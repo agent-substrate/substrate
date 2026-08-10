@@ -12,16 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package ateapipb
+// Kubernetes codegen tools required this to be in doc.go, no other name will
+// work.
 
-import (
-	"context"
+// +k8s:validation-gen=TypesWithSuffix=Request
+// +k8s:validation-gen-input=github.com/agent-substrate/substrate/pkg/proto/ateapipb
+// +k8s:validation-gen-scheme-registry=nil
 
-	operation "k8s.io/apimachinery/pkg/api/operation"
-	field "k8s.io/apimachinery/pkg/util/validation/field"
-)
-
-func (x *CreateActorRequest) Validate(ctx context.Context) field.ErrorList {
-	op := operation.Operation{Type: operation.Create}
-	return Validate_CreateActorRequest(ctx, op, nil, x, nil)
-}
+package controlapi
