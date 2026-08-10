@@ -754,70 +754,97 @@ func (s *Persistence) DeleteActor(ctx context.Context, actorRef resources.ActorR
 	return deleted, nil
 }
 
-func (s *Persistence) UpdateActor(ctx context.Context, actor *ateapipb.Actor, expectedVersion int64) (*ateapipb.Actor, error) {
-	dbKey := actorDBKey(resources.ActorRefFromActor(actor))
+// validateUpdateActorMutation reports whether an actor mutation left the fields it does
+// not own alone.
+func validateUpdateActorMutation(storedActor, mutatedActor *ateapipb.Actor) error {
+	if stored, mutated := storedActor.GetMetadata().GetAtespace(), mutatedActor.GetMetadata().GetAtespace(); stored != mutated {
+		return fmt.Errorf("metadata.atespace is immutable: mutation changed it from %q to %q", stored, mutated)
+	}
+	if stored, mutated := storedActor.GetMetadata().GetName(), mutatedActor.GetMetadata().GetName(); stored != mutated {
+		return fmt.Errorf("metadata.name is immutable: mutation changed it from %q to %q", stored, mutated)
+	}
+	if stored, mutated := storedActor.GetActorTemplateNamespace(), mutatedActor.GetActorTemplateNamespace(); stored != mutated {
+		return fmt.Errorf("actor_template_namespace is immutable: mutation changed it from %q to %q", stored, mutated)
+	}
+	if stored, mutated := storedActor.GetActorTemplateName(), mutatedActor.GetActorTemplateName(); stored != mutated {
+		return fmt.Errorf("actor_template_name is immutable: mutation changed it from %q to %q", stored, mutated)
+	}
+	return nil
+}
 
-	// Clone because we will update the version field, and we don't want to
-	// stomp the caller's copy.
-	dbActor := proto.Clone(actor).(*ateapipb.Actor)
+// updateActorMaxAttempts bounds how many times UpdateActor re-runs its
+// read-modify-write after a concurrent writer invalidates the transaction.
+const updateActorMaxAttempts = 5
 
-	err := s.rdb.Watch(ctx, func(tx *redis.Tx) error {
-		currentVal, err := tx.Get(ctx, dbKey).Bytes()
-		if err != nil {
-			if errors.Is(err, redis.Nil) {
-				return store.ErrNotFound
+func (s *Persistence) UpdateActor(ctx context.Context, actorRef resources.ActorRef, mutate func(*ateapipb.Actor) error) (*ateapipb.Actor, error) {
+	dbKey := actorDBKey(actorRef)
+	for range updateActorMaxAttempts {
+		var dbActor *ateapipb.Actor
+		var abortErr error
+
+		err := s.rdb.Watch(ctx, func(tx *redis.Tx) error {
+			currentVal, err := tx.Get(ctx, dbKey).Bytes()
+			if err != nil {
+				if errors.Is(err, redis.Nil) {
+					return store.ErrNotFound
+				}
+				return fmt.Errorf("while getting actor: %w", err)
 			}
-			return fmt.Errorf("while getting actor: %w", err)
-		}
 
-		currentActor := &ateapipb.Actor{}
-		if err := protojson.Unmarshal(currentVal, currentActor); err != nil {
-			return fmt.Errorf("in protojson.Unmarshal: %w", err)
-		}
+			currentActor := &ateapipb.Actor{}
+			if err := protojson.Unmarshal(currentVal, currentActor); err != nil {
+				return fmt.Errorf("in protojson.Unmarshal: %w", err)
+			}
 
-		if currentActor.GetMetadata().GetVersion() != expectedVersion {
-			return store.ErrVersionConflict
-		}
-		if currentActor.GetMetadata().GetName() != dbActor.GetMetadata().GetName() {
-			return fmt.Errorf("name is immutable")
-		}
-		if currentActor.GetMetadata().GetAtespace() != dbActor.GetMetadata().GetAtespace() {
-			return fmt.Errorf("atespace is immutable")
-		}
-		if currentActor.GetActorTemplateNamespace() != dbActor.GetActorTemplateNamespace() {
-			return fmt.Errorf("actor_template_namespace is immutable")
-		}
-		if currentActor.GetActorTemplateName() != dbActor.GetActorTemplateName() {
-			return fmt.Errorf("actor_template_name is immutable")
-		}
-		// The stored metadata is authoritative; derive the next metadata from it.
-		dbActor.Metadata = newUpdateMetadata(currentActor.GetMetadata())
+			// Snapshot the stored state before handing the actor to mutate.
+			// mutate is free to edit anything it is given.
+			actorBeforeMutation := proto.Clone(currentActor).(*ateapipb.Actor)
+			if err := mutate(currentActor); err != nil {
+				abortErr = err
+				return err
+			}
+			if err := validateUpdateActorMutation(actorBeforeMutation, currentActor); err != nil {
+				abortErr = err
+				return err
+			}
+			// The stored metadata is authoritative; derive the next metadata
+			// from it, discarding whatever mutate made of it.
+			currentActor.Metadata = newUpdateMetadata(actorBeforeMutation.GetMetadata())
 
-		newVal, err := protojson.Marshal(dbActor)
-		if err != nil {
-			return fmt.Errorf("in protojson.Marshal: %w", err)
-		}
+			newVal, err := protojson.Marshal(currentActor)
+			if err != nil {
+				return fmt.Errorf("in protojson.Marshal: %w", err)
+			}
 
-		_, err = tx.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
-			pipe.Set(ctx, dbKey, newVal, 0)
+			if _, err := tx.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
+				pipe.Set(ctx, dbKey, newVal, 0)
+				return nil
+			}); err != nil {
+				return err
+			}
+			dbActor = currentActor
 			return nil
-		})
-		return err
-	}, dbKey)
+		}, dbKey)
 
-	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
+		switch {
+		case err == nil:
+			return dbActor, nil
+		case abortErr != nil:
+			return nil, abortErr
+		case errors.Is(err, store.ErrNotFound):
 			return nil, store.ErrNotFound
+		case errors.Is(err, redis.TxFailedErr):
+			// A concurrent write landed between WATCH and EXEC, so mutate never
+			// saw it. Re-read and run it against the newer state.
+			continue
+		default:
+			return nil, fmt.Errorf("while executing update actor transaction: %w", err)
 		}
-		if errors.Is(err, store.ErrVersionConflict) || errors.Is(err, redis.TxFailedErr) {
-			return nil, store.ErrVersionConflict
-		}
-		return nil, fmt.Errorf("while executing update actor transaction: %w", err)
 	}
 
-	// dbActor is the persisted state (advanced version and update_time). The
-	// caller's input is left unmodified.
-	return dbActor, nil
+	// Only the TxFailedErr branch continues the loop, so getting here means every
+	// attempt lost the race.
+	return nil, store.ErrVersionConflict
 }
 
 func (s *Persistence) ListWorkers(ctx context.Context, pageSize int32, pageTokenStr string) ([]*ateapipb.Worker, string, error) {

@@ -2447,7 +2447,7 @@ func TestUpdateActor_Preconditions(t *testing.T) {
 	// The uid from the deleted lifecycle must be rejected, even though the
 	// atespace/name it was observed under still resolves.
 	_, err := update(&ateapipb.ResourceMetadata{Uid: staleUID}, "other-lifecycle")
-	assertGrpcError(t, err, codes.Aborted, fmt.Sprintf("Actor %s/%s has uid %s, not %s", testAtespace, testActorID, uid, staleUID))
+	assertGrpcError(t, err, codes.Aborted, fmt.Sprintf("actor %s/%s not found with uid %s", testAtespace, testActorID, staleUID))
 
 	// An unguarded update is last-writer-wins, and moves the resource past the
 	// version observed above.
@@ -2494,7 +2494,7 @@ func TestUpdateActor_NotFound(t *testing.T) {
 		Actor:      &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "does-not-exist"}},
 		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"worker_selector"}},
 	})
-	assertGrpcError(t, err, codes.NotFound, "Actor test-atespace/does-not-exist not found")
+	assertGrpcError(t, err, codes.NotFound, "actor test-atespace/does-not-exist not found")
 }
 
 func TestUpdateActorSnapshotTag_Success(t *testing.T) {
@@ -3287,21 +3287,19 @@ func TestDeleteActor_Crashed(t *testing.T) {
 
 	createTemplate(t, tc, ns)
 
-	_, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+	if _, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
 		Metadata:               &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "id1"},
 		ActorTemplateNamespace: ns,
 		ActorTemplateName:      "tmpl1",
-	}})
-	if err != nil {
+	}}); err != nil {
 		t.Fatalf("CreateActor failed: %v", err)
 	}
 
-	actor, err := tc.persistence.GetActor(context.Background(), resources.ActorRef{Atespace: testAtespace, Name: "id1"})
-	if err != nil {
-		t.Fatalf("GetActor failed: %v", err)
-	}
-	actor.Status = ateapipb.Actor_STATUS_CRASHED
-	if _, err := tc.persistence.UpdateActor(context.Background(), actor, actor.GetMetadata().GetVersion()); err != nil {
+	actorRef := resources.ActorRef{Atespace: testAtespace, Name: "id1"}
+	if _, err := tc.persistence.UpdateActor(context.Background(), actorRef, func(dbActor *ateapipb.Actor) error {
+		dbActor.Status = ateapipb.Actor_STATUS_CRASHED
+		return nil
+	}); err != nil {
 		t.Fatalf("UpdateActor failed: %v", err)
 	}
 

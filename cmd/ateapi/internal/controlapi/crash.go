@@ -75,14 +75,18 @@ func crashActor(ctx context.Context, st store.Interface, actorRef resources.Acto
 	// the counter itself is emitted only after the transition commits.
 	crashAttrs := ateattr.ActorMetricAttributes(actor, sandboxClass, opName, reason)
 
-	actor.Status = ateapipb.Actor_STATUS_CRASHED
+	_, err = st.UpdateActor(ctx, actorRef, func(dbActor *ateapipb.Actor) error {
+		if err := store.CheckActorPrecondition(dbActor, actor.GetMetadata().GetUid(), actor.GetMetadata().GetVersion()); err != nil {
+			return err
+		}
+		dbActor.Status = ateapipb.Actor_STATUS_CRASHED
 
-	// InProgressSnapshotName and InProgressLocalSnapshotName are kept for
-	// debugging; failed workflow steps must never promote either of them to an
-	// ActorSnapshot or to LocalSnapshotInfo.
-	actor.WorkerAssignment = nil
-
-	_, err = st.UpdateActor(ctx, actor, actor.GetMetadata().GetVersion())
+		// InProgressSnapshotName and InProgressLocalSnapshotName are kept for
+		// debugging; failed workflow steps must never promote either of them to an
+		// ActorSnapshot or to LocalSnapshotInfo.
+		dbActor.WorkerAssignment = nil
+		return nil
+	})
 	if err != nil {
 		errCollected = append(errCollected, fmt.Errorf("while marking actor crashed: %w", err))
 		return errors.Join(errCollected...)

@@ -98,7 +98,7 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 		return actor, false, nil
 	}
 	var created *ateapipb.Actor
-	if created, err = w.ensureVolumesCreated(lockCtx, actor, actorTemplate); err != nil {
+	if created, err = w.ensureVolumesCreated(lockCtx, actorRef, actor, actorTemplate); err != nil {
 		return nil, false, err
 	}
 	actor = created
@@ -235,7 +235,7 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 // ensureVolumesCreated provisions any initial actor volumes that are in
 // PENDING state, persisting the resulting volume state (even when creation
 // partially failed, so progress is not lost) and returning the stored copy.
-func (w *ActorWorkflow) ensureVolumesCreated(ctx context.Context, actor *ateapipb.Actor, actorTemplate *atev1alpha1.ActorTemplate) (_ *ateapipb.Actor, err error) {
+func (w *ActorWorkflow) ensureVolumesCreated(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor, actorTemplate *atev1alpha1.ActorTemplate) (_ *ateapipb.Actor, err error) {
 	ctx, done := stepSpan(ctx, "CreateVolumes")
 	defer func() { err = done(err) }()
 
@@ -252,15 +252,23 @@ func (w *ActorWorkflow) ensureVolumesCreated(ctx context.Context, actor *ateapip
 	}
 
 	volumes, createErr := createActorVolumes(ctx, w.pluginRegistry, w.storageClassLister, actor.GetMetadata().GetUid(), actorTemplate, actor.GetActorVolumes())
-	actor.ActorVolumes = volumes
+	// createActorVolumes reports the state it got to even when it fails, so both
+	// paths persist the same field.
+	persistVolumes := func(dbActor *ateapipb.Actor) error {
+		if err := store.CheckActorPrecondition(dbActor, actor.GetMetadata().GetUid(), actor.GetMetadata().GetVersion()); err != nil {
+			return err
+		}
+		dbActor.ActorVolumes = volumes
+		return nil
+	}
 	if createErr != nil {
 		// Even if volume creation failed, we still want to persist any updated volume state.
-		if _, updateErr := w.store.UpdateActor(ctx, actor, actor.GetMetadata().GetVersion()); updateErr != nil {
+		if _, updateErr := w.store.UpdateActor(ctx, actorRef, persistVolumes); updateErr != nil {
 			slog.ErrorContext(ctx, "failed to update actor volumes on volume creation failure in resume", slog.Any("error", updateErr))
 		}
 		return nil, createErr
 	}
-	updated, updateErr := w.store.UpdateActor(ctx, actor, actor.GetMetadata().GetVersion())
+	updated, updateErr := w.store.UpdateActor(ctx, actorRef, persistVolumes)
 	if updateErr != nil {
 		if errors.Is(updateErr, store.ErrVersionConflict) {
 			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
@@ -502,10 +510,15 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 		return nil, nil, err
 	}
 
-	actor.Status = ateapipb.Actor_STATUS_RESUMING
-	actor.WorkerAssignment = workerAssignmentFrom(assignedWorker)
-
-	updatedActor, err := w.store.UpdateActor(ctx, actor, actor.GetMetadata().GetVersion())
+	newAssignment := workerAssignmentFrom(assignedWorker)
+	updatedActor, err := w.store.UpdateActor(ctx, actorRef, func(dbActor *ateapipb.Actor) error {
+		if err := store.CheckActorPrecondition(dbActor, actor.GetMetadata().GetUid(), actor.GetMetadata().GetVersion()); err != nil {
+			return err
+		}
+		dbActor.Status = ateapipb.Actor_STATUS_RESUMING
+		dbActor.WorkerAssignment = newAssignment
+		return nil
+	})
 	if err != nil {
 		if !errors.Is(err, store.ErrVersionConflict) {
 			return nil, nil, err
@@ -722,8 +735,13 @@ func (w *ActorWorkflow) finalizeRunning(ctx context.Context, actorRef resources.
 		return nil, err
 	}
 
-	latestActor.Status = ateapipb.Actor_STATUS_RUNNING
-	updatedActor, err := w.store.UpdateActor(ctx, latestActor, latestActor.GetMetadata().GetVersion())
+	updatedActor, err := w.store.UpdateActor(ctx, actorRef, func(dbActor *ateapipb.Actor) error {
+		if err := store.CheckActorPrecondition(dbActor, latestActor.GetMetadata().GetUid(), latestActor.GetMetadata().GetVersion()); err != nil {
+			return err
+		}
+		dbActor.Status = ateapipb.Actor_STATUS_RUNNING
+		return nil
+	})
 	if err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {
 			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")

@@ -115,9 +115,15 @@ func (w *ActorWorkflow) ensureMarkedPausing(ctx context.Context, actorRef resour
 		return nil, status.Errorf(codes.FailedPrecondition, "MarkPausing prerequisite not met for Actor: %s (got: %v, want %s)", actorRef, actor.GetStatus(), ateapipb.Actor_STATUS_RUNNING)
 	}
 
-	actor.Status = ateapipb.Actor_STATUS_PAUSING
-	actor.InProgressLocalSnapshotName = resources.NewSnapshotName()
-	updated, err := w.store.UpdateActor(ctx, actor, actor.GetMetadata().GetVersion())
+	snapshotName := resources.NewSnapshotName()
+	updated, err := w.store.UpdateActor(ctx, actorRef, func(dbActor *ateapipb.Actor) error {
+		if err := store.CheckActorPrecondition(dbActor, actor.GetMetadata().GetUid(), actor.GetMetadata().GetVersion()); err != nil {
+			return err
+		}
+		dbActor.Status = ateapipb.Actor_STATUS_PAUSING
+		dbActor.InProgressLocalSnapshotName = snapshotName
+		return nil
+	})
 	if err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {
 			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
@@ -237,36 +243,44 @@ func (w *ActorWorkflow) ensurePausedFinalized(ctx context.Context, actorRef reso
 			return nil, err
 		}
 		wasAlreadyCrashed := latestActor.GetStatus() == ateapipb.Actor_STATUS_CRASHED
-		latestActor.Status = ateapipb.Actor_STATUS_PAUSED
+		newStatus := ateapipb.Actor_STATUS_PAUSED
 		if nodeName == "" {
 			// Without a node name we cannot record where the local snapshot lives,
 			// so the actor can never be resumed (the scheduler would search for a
 			// worker on an unknown node forever). Crash it instead of leaving it
 			// stuck in PAUSED.
 			slog.ErrorContext(ctx, "Node name not found during finalize pause, crashing actor", slog.Any("actor", actorRef))
-			latestActor.Status = ateapipb.Actor_STATUS_CRASHED
+			newStatus = ateapipb.Actor_STATUS_CRASHED
 		}
-		// TODO(dberkov) - what if InProgressLocalSnapshotName is empty? That shouldn't be possible.
-		if latestActor.InProgressLocalSnapshotName != "" {
-			localInfo := &ateapipb.LocalSnapshotInfo{
-				SnapshotName: latestActor.InProgressLocalSnapshotName,
-				ContentScope: toActorSnapshotContentScope(actorTemplate.Spec.SnapshotsConfig.OnPause),
-			}
-			if latestActor.Status != ateapipb.Actor_STATUS_CRASHED {
-				localInfo.NodeVmsWithLocalSnapshots = []string{nodeName}
-			}
-			latestActor.LocalSnapshotInfo = localInfo
-			latestActor.InProgressLocalSnapshotName = ""
-		}
+		contentScope := toActorSnapshotContentScope(actorTemplate.Spec.SnapshotsConfig.OnPause)
 		sandboxClass := ""
 		if worker != nil {
 			sandboxClass = worker.GetSandboxClass()
 		}
 		// Snapshot crash attributes before pod and pool pointers are cleared below.
+		latestActor.Status = newStatus
 		crashAttrs := ateattr.ActorMetricAttributes(latestActor, sandboxClass, ateattr.OperationPause, ateattr.ReasonCorruptedAssignment)
 
-		latestActor.WorkerAssignment = nil
-		updatedActor, err := w.store.UpdateActor(ctx, latestActor, latestActor.GetMetadata().GetVersion())
+		updatedActor, err := w.store.UpdateActor(ctx, actorRef, func(dbActor *ateapipb.Actor) error {
+			if err := store.CheckActorPrecondition(dbActor, latestActor.GetMetadata().GetUid(), latestActor.GetMetadata().GetVersion()); err != nil {
+				return err
+			}
+			dbActor.Status = newStatus
+			// TODO(dberkov) - what if InProgressLocalSnapshotName is empty? That shouldn't be possible.
+			if dbActor.GetInProgressLocalSnapshotName() != "" {
+				localInfo := &ateapipb.LocalSnapshotInfo{
+					SnapshotName: dbActor.GetInProgressLocalSnapshotName(),
+					ContentScope: contentScope,
+				}
+				if newStatus != ateapipb.Actor_STATUS_CRASHED {
+					localInfo.NodeVmsWithLocalSnapshots = []string{nodeName}
+				}
+				dbActor.LocalSnapshotInfo = localInfo
+				dbActor.InProgressLocalSnapshotName = ""
+			}
+			dbActor.WorkerAssignment = nil
+			return nil
+		})
 		if err == nil && updatedActor.GetStatus() == ateapipb.Actor_STATUS_CRASHED && !wasAlreadyCrashed {
 			recordActorCrash(ctx, crashAttrs)
 		}
