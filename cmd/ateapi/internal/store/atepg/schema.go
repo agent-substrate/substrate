@@ -22,6 +22,10 @@ import (
 )
 
 // schema is atepg's idempotent embedded schema.
+//
+// Resource fields are projected into columns only when PostgreSQL needs them
+// for identity, relationships, queries, ordering, or atomic concurrency
+// checks. All other resource state remains authoritative in the opaque proto.
 const schema = `
 CREATE TABLE IF NOT EXISTS atespaces (
     name   text PRIMARY KEY,
@@ -32,6 +36,7 @@ CREATE TABLE IF NOT EXISTS actors (
     atespace  text NOT NULL
         REFERENCES atespaces(name) ON DELETE RESTRICT,
     name      text NOT NULL,
+    uid       text NOT NULL UNIQUE,
     version   bigint NOT NULL,
     status    integer NOT NULL,
     proto     bytea NOT NULL,
@@ -63,7 +68,6 @@ CREATE TABLE IF NOT EXISTS workers (
     worker_namespace  text NOT NULL,
     worker_pool       text NOT NULL,
     worker_pod        text NOT NULL,
-    ip                text NOT NULL,
     version           bigint NOT NULL,
     proto             bytea NOT NULL,
     PRIMARY KEY (worker_namespace, worker_pool, worker_pod)

@@ -424,7 +424,7 @@ func RunContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
 		}
 	})
 
-	t.Run("UpdateWorker_ImmutableIP", func(t *testing.T) {
+	t.Run("UpdateWorker_IPChanged", func(t *testing.T) {
 		s := setup(t)
 		ctx := context.Background()
 
@@ -434,10 +434,18 @@ func RunContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
 		}
 		worker.Version = 1
 		worker.Ip = "10.0.0.2"
-		if err := s.UpdateWorker(ctx, worker, 1); err == nil {
-			t.Errorf("expected error updating immutable ip, got nil")
-		} else if errors.Is(err, store.ErrVersionConflict) || errors.Is(err, store.ErrNotFound) {
-			t.Errorf("expected a plain immutable-field error, got sentinel %v", err)
+		if err := s.UpdateWorker(ctx, worker, 1); err != nil {
+			t.Fatalf("UpdateWorker failed: %v", err)
+		}
+		got, err := s.GetWorker(ctx, "default", "pool-1", "pod-1")
+		if err != nil {
+			t.Fatalf("GetWorker failed: %v", err)
+		}
+		if got.GetIp() != "10.0.0.2" {
+			t.Errorf("worker ip = %q, want 10.0.0.2", got.GetIp())
+		}
+		if got.GetVersion() != 2 {
+			t.Errorf("worker version = %d, want 2", got.GetVersion())
 		}
 	})
 
@@ -531,6 +539,13 @@ func RunContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
 				if tt.wantErr != nil {
 					if !errors.Is(err, tt.wantErr) {
 						t.Errorf("DeleteActor: expected %v, got %v", tt.wantErr, err)
+					}
+					got, getErr := s.GetActor(ctx, resources.ActorRef{Atespace: testAtespace, Name: "session-1"})
+					if getErr != nil {
+						t.Fatalf("GetActor after rejected delete failed: %v", getErr)
+					}
+					if got.GetStatus() != tt.status {
+						t.Errorf("actor status after rejected delete = %v, want %v", got.GetStatus(), tt.status)
 					}
 					return
 				}

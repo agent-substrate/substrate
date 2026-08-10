@@ -73,7 +73,7 @@ type Interface interface {
 	UpdateActor(ctx context.Context, actorRef resources.ActorRef, mutate func(toUpdate *ateapipb.Actor) error) (*ateapipb.Actor, error)
 
 	// Removes an actor and returns the deleted resource. Returns ErrNotFound if
-	// missing, or ErrFailedPrecondition if not suspended.
+	// missing, or ErrFailedPrecondition if not already deleting.
 	DeleteActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error)
 
 	// Lists actors in the given atespace (scoped scan), or across ALL atespaces if atespace is

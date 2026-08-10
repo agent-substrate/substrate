@@ -175,9 +175,9 @@ func TestWorkerNotification_OnlyAfterCommit(t *testing.T) {
 		t.Fatalf("Begin failed: %v", err)
 	}
 	if _, err := tx.Exec(ctx, `
-		INSERT INTO workers (worker_namespace, worker_pool, worker_pod, ip, version, proto)
-		VALUES ($1, $2, $3, $4, $5, $6)`,
-		worker.GetWorkerNamespace(), worker.GetWorkerPool(), worker.GetWorkerPod(), worker.GetIp(), int64(1), protoBytes); err != nil {
+		INSERT INTO workers (worker_namespace, worker_pool, worker_pod, version, proto)
+		VALUES ($1, $2, $3, $4, $5)`,
+		worker.GetWorkerNamespace(), worker.GetWorkerPool(), worker.GetWorkerPod(), int64(1), protoBytes); err != nil {
 		t.Fatalf("insert failed: %v", err)
 	}
 	if _, err := tx.Exec(ctx, `SELECT pg_notify($1, $2)`, workerChangeChannel, "rolled-back-payload"); err != nil {

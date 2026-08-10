@@ -263,9 +263,9 @@ func (p *Persistence) CreateActor(ctx context.Context, actor *ateapipb.Actor) (*
 	}
 
 	_, err = p.pool.Exec(ctx, `
-		INSERT INTO actors (atespace, name, version, status, proto)
-		VALUES ($1, $2, $3, $4, $5)`,
-		atespace, name, dbActor.GetMetadata().GetVersion(), int32(dbActor.GetStatus()), protoBytes)
+		INSERT INTO actors (atespace, name, uid, version, status, proto)
+		VALUES ($1, $2, $3, $4, $5, $6)`,
+		atespace, name, dbActor.GetMetadata().GetUid(), dbActor.GetMetadata().GetVersion(), int32(dbActor.GetStatus()), protoBytes)
 	if err != nil {
 		if isUniqueViolation(err) {
 			return nil, store.ErrAlreadyExists
@@ -886,9 +886,9 @@ func (p *Persistence) CreateWorker(ctx context.Context, worker *ateapipb.Worker)
 
 	err = p.writeAndNotify(ctx, store.WorkerEventCreated, dbWorker, func(ctx context.Context, tx pgx.Tx) (bool, error) {
 		_, err := tx.Exec(ctx, `
-			INSERT INTO workers (worker_namespace, worker_pool, worker_pod, ip, version, proto)
-			VALUES ($1, $2, $3, $4, $5, $6)`,
-			dbWorker.GetWorkerNamespace(), dbWorker.GetWorkerPool(), dbWorker.GetWorkerPod(), dbWorker.GetIp(), dbWorker.GetVersion(), protoBytes)
+			INSERT INTO workers (worker_namespace, worker_pool, worker_pod, version, proto)
+			VALUES ($1, $2, $3, $4, $5)`,
+			dbWorker.GetWorkerNamespace(), dbWorker.GetWorkerPool(), dbWorker.GetWorkerPod(), dbWorker.GetVersion(), protoBytes)
 		if err != nil {
 			return false, err
 		}
@@ -941,9 +941,9 @@ func (p *Persistence) UpdateWorker(ctx context.Context, worker *ateapipb.Worker,
 			UPDATE workers
 			SET version = $1, proto = $2
 			WHERE worker_namespace = $3 AND worker_pool = $4 AND worker_pod = $5
-			  AND version = $6 AND ip = $7
+			  AND version = $6
 			RETURNING proto`,
-			dbWorker.GetVersion(), protoBytes, namespace, poolName, pod, expectedVersion, dbWorker.GetIp(),
+			dbWorker.GetVersion(), protoBytes, namespace, poolName, pod, expectedVersion,
 		).Scan(&returned)
 		if err == nil {
 			return true, nil
@@ -958,9 +958,6 @@ func (p *Persistence) UpdateWorker(ctx context.Context, worker *ateapipb.Worker,
 		}
 		if current.GetVersion() != expectedVersion {
 			return false, store.ErrVersionConflict
-		}
-		if current.GetIp() != dbWorker.GetIp() {
-			return false, fmt.Errorf("ip is immutable")
 		}
 		return false, fmt.Errorf("update worker %s/%s/%s: no row matched but current state is otherwise consistent", namespace, poolName, pod)
 	})
