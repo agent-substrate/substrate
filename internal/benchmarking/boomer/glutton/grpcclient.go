@@ -18,9 +18,13 @@ import (
 	"fmt"
 
 	"github.com/agent-substrate/substrate/internal/ateapiauth"
+	_ "github.com/agent-substrate/substrate/internal/k8sresolver"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"google.golang.org/grpc"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
+	"k8s.io/client-go/tools/clientcmd"
 )
 
 const (
@@ -42,7 +46,22 @@ const (
 // and atenet-router. ClientCredBundle re-reads the bundle on every handshake,
 // so rotations are picked up without a restart.
 func DialControl(endpoint string, useTokenAuth bool) (*grpc.ClientConn, ateapipb.ControlClient, error) {
+	k8sConfig, err := rest.InClusterConfig()
+	if err != nil {
+		loadingRules := clientcmd.NewDefaultClientConfigLoadingRules()
+		configOverrides := &clientcmd.ConfigOverrides{}
+		k8sConfig, err = clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, configOverrides).ClientConfig()
+		if err != nil {
+			return nil, nil, fmt.Errorf("k8s config: %w", err)
+		}
+	}
+	k8sClient, err := kubernetes.NewForConfig(k8sConfig)
+	if err != nil {
+		return nil, nil, fmt.Errorf("k8s client: %w", err)
+	}
+
 	dialOpts, err := ateapiauth.DialOptions(ateapiauth.ClientConfig{
+		K8sClient:        k8sClient,
 		UseTokenAuth:     useTokenAuth,
 		CAFile:           ateapiCAFile,
 		TokenFile:        "/run/ateapi-token/token",

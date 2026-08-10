@@ -47,6 +47,35 @@ roleRef:
   name: atenet-router
   apiGroup: rbac.authorization.k8s.io
 ---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: atenet-router-endpointslices
+  namespace: ate-system
+rules:
+- apiGroups:
+  - "discovery.k8s.io"
+  resources:
+  - endpointslices
+  verbs:
+  - get
+  - watch
+  - list
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: atenet-router-endpointslices
+  namespace: ate-system
+subjects:
+- kind: ServiceAccount
+  name: atenet-router
+  namespace: ate-system
+roleRef:
+  kind: Role
+  name: atenet-router-endpointslices
+  apiGroup: rbac.authorization.k8s.io
+---
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -143,7 +172,7 @@ spec:
         - "--envoy-cert-path=/run/servicedns.podcert.ate.dev/credential-bundle.pem"
         # Client auth to ateapi (mtls): verify the serving cert against the
         # servicedns trust bundle and present the podidentity client cert.
-        - "--ateapi-address=dns:///api.ate-system.svc:443"
+        - "--ateapi-address=k8s:///api.ate-system.svc:443"
         - "--ateapi-ca-file=/run/servicedns-ca/trust-bundle.pem"
         - "--ateapi-client-cert=/run/podidentity.podcert.ate.dev/credential-bundle.pem"
         # Graceful shutdown knobs. --drain-timeout is left at its derived

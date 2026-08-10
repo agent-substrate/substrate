@@ -196,8 +196,8 @@ func TestPullRewritesRecordEvictedMidPull(t *testing.T) {
 
 // The per-layer progress touch keeps a slow pull's record fresh mid-flight:
 // freshness must come from layer completions, not only from the final
-// rewrite. (The eviction pass asserting min-age against that freshness is
-// covered with the eviction engine's tests.)
+// rewrite — and that freshness must veto an eviction pass running while
+// the pull is still in flight.
 func TestProgressTouchKeepsSlowPullRecordFresh(t *testing.T) {
 	reg := newGatedRegistry(t)
 	free, gated1, gated2 := gatedTestLayers(t)
@@ -243,6 +243,14 @@ func TestProgressTouchKeepsSlowPullRecordFresh(t *testing.T) {
 		fi, err := os.Stat(recPath)
 		return err == nil && time.Since(fi.ModTime()) < time.Hour
 	})
+
+	// The pull is still mid-flight: the freshened record must veto eviction.
+	if _, err := store.EvictUnused(context.Background(), 1<<62, false); err != nil {
+		t.Fatalf("EvictUnused: %v", err)
+	}
+	if _, err := os.Stat(recPath); err != nil {
+		t.Fatalf("freshly-touched mid-pull record evicted: %v", err)
+	}
 
 	// Unblock the last layer and drain the pull.
 	release2()

@@ -45,7 +45,7 @@ func (s *Service) DeleteActor(ctx context.Context, req *ateapipb.DeleteActorRequ
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
 	setSpanActorRefAttributes(ctx, actorRef)
 
-	deleted, err = s.actorWorkflow.DeleteActor(ctx, req.GetActor().GetAtespace(), req.GetActor().GetName())
+	deleted, err = s.actorWorkflow.DeleteActor(ctx, actorRef)
 	if err != nil {
 		return nil, err
 	}

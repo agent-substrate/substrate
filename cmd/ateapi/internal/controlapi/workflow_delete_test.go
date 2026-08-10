@@ -71,7 +71,7 @@ func TestDeleteActorWorkflow_ExecutionPaths(t *testing.T) {
 			actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
 			seedWorkflowActor(t, ctx, st, actorRef, "ns", "tmpl1", tc.seedStatus)
 
-			deleted, err := w.DeleteActor(ctx, "team-a", "id1")
+			deleted, err := w.DeleteActor(ctx, actorRef)
 			if tc.wantErr {
 				if got := status.Code(err); got != tc.wantCode {
 					t.Fatalf("status.Code(err) = %v, want %v (err: %v)", got, tc.wantCode, err)
@@ -91,50 +91,30 @@ func TestDeleteActorWorkflow_ExecutionPaths(t *testing.T) {
 	}
 }
 
-func TestDeleteSteps_CheckPrerequisite(t *testing.T) {
-	tests := []struct {
-		name    string
-		step    WorkflowStep[*DeleteInput, *DeleteState]
-		allowed map[ateapipb.Actor_Status]bool
-	}{
-		{
-			name:    "LoadActorForDeleteStep",
-			step:    &LoadActorForDeleteStep{},
-			allowed: nil,
-		},
-		{
-			name: "MarkDeletingStep",
-			step: &MarkDeletingStep{},
-			allowed: map[ateapipb.Actor_Status]bool{
-				ateapipb.Actor_STATUS_SUSPENDED: true,
-				ateapipb.Actor_STATUS_CRASHED:   true,
-				ateapipb.Actor_STATUS_DELETING:  true,
-			},
-		},
-		{
-			name: "DeleteVolumesStep",
-			step: &DeleteVolumesStep{},
-			allowed: map[ateapipb.Actor_Status]bool{
-				ateapipb.Actor_STATUS_DELETING: true,
-			},
-		},
-		{
-			name: "FinalizeDeletedStep",
-			step: &FinalizeDeletedStep{},
-			allowed: map[ateapipb.Actor_Status]bool{
-				ateapipb.Actor_STATUS_DELETING: true,
-			},
-		},
+func TestEnsureMarkedDeleting_StatusMatrix(t *testing.T) {
+	allowed := map[ateapipb.Actor_Status]bool{
+		ateapipb.Actor_STATUS_SUSPENDED: true,
+		ateapipb.Actor_STATUS_CRASHED:   true,
+		ateapipb.Actor_STATUS_DELETING:  true, // skipped, not re-marked
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			ctx := context.Background()
-			actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
-			for _, st := range allActorStatuses {
-				err := tc.step.CheckPrerequisite(ctx, &DeleteInput{ActorRef: actorRef}, &DeleteState{Actor: &ateapipb.Actor{Status: st}})
-				assertPrerequisiteResult(t, st, err, tc.allowed == nil || tc.allowed[st])
-			}
-		})
+	for _, seedStatus := range allActorStatuses {
+		ctx := context.Background()
+		st, cleanup := storetest.SetupTestStore(t)
+		w := newTestActorWorkflow(t, st, "ns", "tmpl1")
+
+		actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
+		seedWorkflowActor(t, ctx, st, actorRef, "ns", "tmpl1", seedStatus)
+		actor, err := st.GetActor(ctx, actorRef)
+		if err != nil {
+			t.Fatalf("status %v: get seeded actor: %v", seedStatus, err)
+		}
+
+		updated, err := w.ensureMarkedDeleting(ctx, actorRef, actor)
+		assertPrerequisiteResult(t, seedStatus, err, allowed[seedStatus])
+		if err == nil && updated.GetStatus() != ateapipb.Actor_STATUS_DELETING {
+			t.Errorf("status %v: ensureMarkedDeleting returned actor in %v, want DELETING", seedStatus, updated.GetStatus())
+		}
+		cleanup()
 	}
 }

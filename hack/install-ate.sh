@@ -348,6 +348,10 @@ setup_csi() {
 
 deploy_ate_system() {
   log_step "deploy_ate_system"
+  # Ensure namespace exists before applying RBAC or CRDs
+  run_kubectl apply -f manifests/ate-install/ate-system-namespace.yaml \
+    && run_kubectl wait --for=jsonpath='{.status.phase}'=Active namespace/ate-system --timeout=60s
+
   # Not ensure_crds: its existence check skips upgrades, stranding stale CRD
   # schemas and RBAC (role.yaml has no other apply path).
   deploy_crds
@@ -369,10 +373,6 @@ deploy_ate_system() {
   # (decoupled from ActorTemplate). gVisor pools resolve to this default unless
   # they name their own SandboxConfig.
   run_kubectl apply -f manifests/ate-install/sandboxconfig-gvisor.yaml
-
-  # Ensure namespace exists
-  run_kubectl apply -f manifests/ate-install/ate-system-namespace.yaml \
-    && run_kubectl wait --for=jsonpath='{.status.phase}'=Active namespace/ate-system --timeout=60s
 
   # Ahead of the bundle below, for the same reason as the namespace: every
   # workload pulls this ConfigMap in via envFrom, and a container whose envFrom

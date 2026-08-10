@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"sync"
 	"testing"
 	"testing/synctest"
@@ -27,6 +28,7 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	"github.com/google/go-cmp/cmp"
 	"github.com/redis/go-redis/v9"
+	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/testing/protocmp"
 
@@ -141,24 +143,29 @@ func TestCreateActor_AlreadyExists(t *testing.T) {
 	}
 }
 
-func TestUpdateActor_Success(t *testing.T) {
-	_, s, ctx := setupTest(t)
-
-	actor := &ateapipb.Actor{
-		Metadata:               &ateapipb.ResourceMetadata{Name: "actor-1", Atespace: testAtespace},
+// newTestActor returns an unsaved actor for the UpdateActor tests.
+func newTestActor(name string) *ateapipb.Actor {
+	return &ateapipb.Actor{
+		Metadata:               &ateapipb.ResourceMetadata{Name: name, Atespace: testAtespace},
 		ActorTemplateNamespace: "default",
 		ActorTemplateName:      "test-template",
 		Status:                 ateapipb.Actor_STATUS_SUSPENDED,
 	}
+}
 
+func TestUpdateActor_Success(t *testing.T) {
+	_, s, ctx := setupTest(t)
+	actor := newTestActor("actor-1")
 	created, err := s.CreateActor(ctx, actor)
 	if err != nil {
 		t.Fatalf("CreateActor failed: %v", err)
 	}
 
-	toUpdate := proto.Clone(created).(*ateapipb.Actor)
-	toUpdate.Status = ateapipb.Actor_STATUS_RUNNING
-	updated, err := s.UpdateActor(ctx, toUpdate, created.GetMetadata().GetVersion())
+	actorRef := resources.ActorRefFromActor(actor)
+	updated, err := s.UpdateActor(ctx, actorRef, func(dbActor *ateapipb.Actor) error {
+		dbActor.Status = ateapipb.Actor_STATUS_RUNNING
+		return nil
+	})
 	if err != nil {
 		t.Fatalf("UpdateActor failed: %v", err)
 	}
@@ -178,13 +185,8 @@ func TestUpdateActor_Success(t *testing.T) {
 		t.Errorf("create_time changed on update: got %v, want %v", updated.GetMetadata().GetCreateTime().AsTime(), created.GetMetadata().GetCreateTime().AsTime())
 	}
 
-	// The input must not be mutated.
-	if toUpdate.GetMetadata().GetVersion() != created.GetMetadata().GetVersion() {
-		t.Errorf("UpdateActor must not mutate its input; version changed to %d", toUpdate.GetMetadata().GetVersion())
-	}
-
 	// The returned resource is exactly what GetActor reads back.
-	got, err := s.GetActor(ctx, resources.ActorRefFromActor(actor))
+	got, err := s.GetActor(ctx, actorRef)
 	if err != nil {
 		t.Fatalf("GetActor failed: %v", err)
 	}
@@ -193,59 +195,311 @@ func TestUpdateActor_Success(t *testing.T) {
 	}
 }
 
-func TestUpdateActor_Conflict(t *testing.T) {
+func TestUpdateActor_MutateErrorAreNotRetried(t *testing.T) {
 	_, s, ctx := setupTest(t)
-
-	actor := &ateapipb.Actor{
-		Metadata:               &ateapipb.ResourceMetadata{Name: "actor-1", Atespace: testAtespace},
-		ActorTemplateNamespace: "default",
-		ActorTemplateName:      "test-template",
-		Status:                 ateapipb.Actor_STATUS_SUSPENDED,
-	}
-
-	_, err := s.CreateActor(ctx, actor)
+	actor := newTestActor("actor-1")
+	created, err := s.CreateActor(ctx, actor)
 	if err != nil {
 		t.Fatalf("CreateActor failed: %v", err)
 	}
 
-	// Fetch instance 1
-	actor1, err := s.GetActor(ctx, resources.ActorRefFromActor(actor))
+	var mutationError = errors.New("mutation error")
+
+	actorRef := resources.ActorRefFromActor(actor)
+	callsToMutateFn := 0
+	_, err = s.UpdateActor(ctx, actorRef, func(dbActor *ateapipb.Actor) error {
+		callsToMutateFn++
+		dbActor.Status = ateapipb.Actor_STATUS_RUNNING
+		return fmt.Errorf("actor %s: %w", actorRef, mutationError)
+	})
+	// The error must arrive intact
+	if !errors.Is(err, mutationError) {
+		t.Errorf("UpdateActor error = %v, want one wrapping mutationError", err)
+	}
+	// Mutation errors are non-retriable
+	if callsToMutateFn != 1 {
+		t.Errorf("mutate ran %d times, want exactly 1 (a rejected precondition must not be retried)", callsToMutateFn)
+	}
+
+	got, err := s.GetActor(ctx, actorRef)
 	if err != nil {
 		t.Fatalf("GetActor failed: %v", err)
 	}
+	if diff := cmp.Diff(created, got, protocmp.Transform()); diff != "" {
+		t.Errorf("aborted mutation was persisted (-created +got):\n%s", diff)
+	}
+}
 
-	// Fetch instance 2 (stale after actor1 updates)
-	actor2, err := s.GetActor(ctx, resources.ActorRefFromActor(actor))
+func TestUpdateActor_DiscardsServerOwnedFieldsEdits(t *testing.T) {
+	_, s, ctx := setupTest(t)
+
+	actor := newTestActor("actor-1")
+	created, err := s.CreateActor(ctx, actor)
 	if err != nil {
-		t.Fatalf("GetActor failed: %v", err)
+		t.Fatalf("CreateActor failed: %v", err)
 	}
 
-	// Update instance 1
-	actor1.Status = ateapipb.Actor_STATUS_RUNNING
-	_, err = s.UpdateActor(ctx, actor1, actor1.GetMetadata().GetVersion())
+	actorRef := resources.ActorRefFromActor(actor)
+	updated, err := s.UpdateActor(ctx, actorRef, func(dbActor *ateapipb.Actor) error {
+		// Metadata is server-owned: a closure must not be able to change it.
+		dbActor.Metadata.Uid = "forged-uid"
+		dbActor.Metadata.Version = 99
+		dbActor.Metadata.CreateTime = nil
+		dbActor.Metadata.UpdateTime = nil
+		dbActor.Status = ateapipb.Actor_STATUS_RUNNING
+		return nil
+	})
 	if err != nil {
 		t.Fatalf("UpdateActor failed: %v", err)
 	}
 
-	// Try to update instance 2 (which has stale version)
-	actor2.Status = ateapipb.Actor_STATUS_SUSPENDED
-	_, err = s.UpdateActor(ctx, actor2, actor2.GetMetadata().GetVersion())
-	if !errors.Is(err, store.ErrVersionConflict) {
-		t.Errorf("expected ErrVersionConflict, got %v", err)
+	if got := updated.GetMetadata().GetUid(); got != created.GetMetadata().GetUid() {
+		t.Errorf("uid = %q, want the server-assigned %q", got, created.GetMetadata().GetUid())
+	}
+	if got := updated.GetMetadata().GetVersion(); got != created.GetMetadata().GetVersion()+1 {
+		t.Errorf("version = %d, want %d (one past the stored version, not the forged value)", got, created.GetMetadata().GetVersion()+1)
+	}
+	if got := updated.GetMetadata().GetCreateTime(); got == nil || !got.AsTime().Equal(created.GetMetadata().GetCreateTime().AsTime()) {
+		t.Errorf("create_time = %v, want the creation value %v", got, created.GetMetadata().GetCreateTime())
+	}
+	if updated.GetStatus() != ateapipb.Actor_STATUS_RUNNING {
+		t.Errorf("status = %v, want RUNNING: discarding metadata edits must not discard the mutation", updated.GetStatus())
+	}
+}
+
+// TestUpdateActor_RejectsImmutableFieldChange covers the fields a mutation may
+// not touch. Unlike the server-owned metadata, which is silently restored,
+// these fail the call: a caller that renamed an actor or repointed its template
+// asked for something the store cannot do, and must hear about it.
+func TestUpdateActor_RejectsImmutableFieldChange(t *testing.T) {
+	tests := []struct {
+		name      string
+		mutate    func(dbActor *ateapipb.Actor)
+		wantField string
+	}{
+		{
+			name:      "atespace",
+			mutate:    func(dbActor *ateapipb.Actor) { dbActor.Metadata.Atespace = "other-atespace" },
+			wantField: "metadata.atespace",
+		},
+		{
+			name:      "name",
+			mutate:    func(dbActor *ateapipb.Actor) { dbActor.Metadata.Name = "other-name" },
+			wantField: "metadata.name",
+		},
+		{
+			name:      "actor template namespace",
+			mutate:    func(dbActor *ateapipb.Actor) { dbActor.ActorTemplateNamespace = "other-ns" },
+			wantField: "actor_template_namespace",
+		},
+		{
+			name:      "actor template name",
+			mutate:    func(dbActor *ateapipb.Actor) { dbActor.ActorTemplateName = "other-template" },
+			wantField: "actor_template_name",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, s, ctx := setupTest(t)
+			actor := newTestActor("actor-1")
+			created, err := s.CreateActor(ctx, actor)
+			if err != nil {
+				t.Fatalf("CreateActor failed: %v", err)
+			}
+
+			actorRef := resources.ActorRefFromActor(actor)
+			_, err = s.UpdateActor(ctx, actorRef, func(dbActor *ateapipb.Actor) error {
+				// Paired with a legitimate edit, so the rejection cannot be
+				// mistaken for a no-op mutation.
+				dbActor.Status = ateapipb.Actor_STATUS_RUNNING
+				tt.mutate(dbActor)
+				return nil
+			})
+			// The message must name the offending field: the closure is buggy,
+			// and whoever has to fix it only has this error to go on.
+			if want := tt.wantField + " is immutable"; err == nil || !strings.Contains(err.Error(), want) {
+				t.Errorf("UpdateActor changing %s = %v, want an error containing %q", tt.name, err, want)
+			}
+
+			got, err := s.GetActor(ctx, actorRef)
+			if err != nil {
+				t.Fatalf("GetActor failed: %v", err)
+			}
+			if diff := cmp.Diff(created, got, protocmp.Transform()); diff != "" {
+				t.Errorf("rejected mutation was persisted anyway (-created +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+// watchInterceptor runs before each WATCH'd transaction body, so a test can
+// write the watched key from another connection and make EXEC fail the way a
+// real concurrent writer would.
+type watchInterceptor struct {
+	redisClient
+	before func()
+}
+
+func (w *watchInterceptor) Watch(ctx context.Context, fn func(*redis.Tx) error, keys ...string) error {
+	return w.redisClient.Watch(ctx, func(tx *redis.Tx) error {
+		w.before()
+		return fn(tx)
+	}, keys...)
+}
+
+func TestUpdateActor_RetriesOnConcurrentWrite(t *testing.T) {
+	mr, s, ctx := setupTest(t)
+	actor := newTestActor("actor-1")
+	if _, err := s.CreateActor(ctx, actor); err != nil {
+		t.Fatalf("CreateActor failed: %v", err)
+	}
+	actorRef := resources.ActorRefFromActor(actor)
+
+	// A separate client, so its write lands outside the transaction's connection.
+	otherClient := redis.NewClusterClient(&redis.ClusterOptions{Addrs: []string{mr.Addr()}})
+	t.Cleanup(func() { otherClient.Close() })
+
+	attempts := 0
+	interceptor := &watchInterceptor{redisClient: s.rdb, before: func() {
+		// Only the first attempt races. We do this to make sure the second retry
+		// will succeed.
+		if attempts > 0 {
+			return
+		}
+		concurrent, err := s.GetActor(ctx, actorRef)
+		if err != nil {
+			t.Errorf("GetActor for concurrent write failed: %v", err)
+			return
+		}
+		concurrent.WorkerSelector = &ateapipb.Selector{MatchLabels: map[string]string{"tier": "paid"}}
+		val, err := protojson.Marshal(concurrent)
+		if err != nil {
+			t.Errorf("protojson.Marshal failed: %v", err)
+			return
+		}
+		if err := otherClient.Set(ctx, actorDBKey(actorRef), val, 0).Err(); err != nil {
+			t.Errorf("concurrent Set failed: %v", err)
+		}
+	}}
+	racing := &Persistence{rdb: interceptor, lockTTL: defaultLockTTL}
+
+	updated, err := racing.UpdateActor(ctx, actorRef, func(dbActor *ateapipb.Actor) error {
+		attempts++
+		dbActor.Status = ateapipb.Actor_STATUS_RUNNING
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("UpdateActor failed: %v", err)
+	}
+	if attempts < 2 {
+		t.Errorf("mutate ran %d times, want at least 2: the firts write is racey and must be rejected", attempts)
+	}
+	if updated.GetStatus() != ateapipb.Actor_STATUS_RUNNING {
+		t.Errorf("status = %v, want RUNNING", updated.GetStatus())
+	}
+	// 1. The concurrent tx wrote "tier: paid" worker selector. This change should survive instead of
+	// being reverted by a mutation computed against the older state.
+	if got := updated.GetWorkerSelector().GetMatchLabels()["tier"]; got != "paid" {
+		t.Errorf("worker_selector[tier] = %q, want %q: the retry clobbered the concurrent write", got, "paid")
 	}
 }
 
 func TestUpdateActor_NotFound(t *testing.T) {
-	mr, s, ctx := setupTest(t)
-	defer mr.Close()
-
-	actor := &ateapipb.Actor{
-		Metadata: &ateapipb.ResourceMetadata{Name: "non-existent", Atespace: testAtespace},
-	}
-	_, err := s.UpdateActor(ctx, actor, 1)
+	_, s, ctx := setupTest(t)
+	_, err := s.UpdateActor(ctx, resources.ActorRef{Atespace: testAtespace, Name: "non-existent"}, func(dbActor *ateapipb.Actor) error {
+		t.Error("mutate must not run for a missing actor")
+		return nil
+	})
 	if !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("expected store.ErrNotFound, got %v", err)
 	}
+}
+
+func TestUpdateActor_RejectsStaleUID(t *testing.T) {
+	_, s, ctx := setupTest(t)
+
+	original, err := s.CreateActor(ctx, newTestActor("actor-1"))
+	if err != nil {
+		t.Fatalf("CreateActor failed: %v", err)
+	}
+	actorRef := resources.ActorRefFromActor(original)
+	if _, err := s.UpdateActor(ctx, actorRef, func(dbActor *ateapipb.Actor) error {
+		dbActor.Status = ateapipb.Actor_STATUS_DELETING
+		return nil
+	}); err != nil {
+		t.Fatalf("marking actor deleting failed: %v", err)
+	}
+	if _, err := s.DeleteActor(ctx, actorRef); err != nil {
+		t.Fatalf("DeleteActor failed: %v", err)
+	}
+	recreated, err := s.CreateActor(ctx, newTestActor("actor-1"))
+	if err != nil {
+		t.Fatalf("recreate CreateActor failed: %v", err)
+	}
+	if recreated.GetMetadata().GetUid() == original.GetMetadata().GetUid() {
+		t.Fatalf("recreated actor reused uid %s, want a fresh one", recreated.GetMetadata().GetUid())
+	}
+
+	_, err = s.UpdateActor(ctx, actorRef, func(dbActor *ateapipb.Actor) error {
+		if err := store.CheckActorPrecondition(dbActor, original.GetMetadata().GetUid(), store.AnyVersion); err != nil {
+			return err
+		}
+		t.Error("mutate ran past its precondition once the pinned incarnation was gone")
+		dbActor.Status = ateapipb.Actor_STATUS_RUNNING
+		return nil
+	})
+	if !errors.Is(err, store.ErrUIDConflict) {
+		t.Errorf("UpdateActor error = %v, want one matching store.ErrUIDConflict", err)
+	}
+
+	// The version guard was waived, so this is the incarnation failure alone.
+	if errors.Is(err, store.ErrVersionConflict) {
+		t.Errorf("UpdateActor error = %v, want no store.ErrVersionConflict match: no version was pinned", err)
+	}
+
+	stored, err := s.GetActor(ctx, actorRef)
+	if err != nil {
+		t.Fatalf("GetActor failed: %v", err)
+	}
+	if got := stored.GetMetadata().GetVersion(); got != recreated.GetMetadata().GetVersion() {
+		t.Errorf("version = %d, want %d: the rejected update still wrote", got, recreated.GetMetadata().GetVersion())
+	}
+}
+
+func TestUpdateActor_RejectsStaleVersion(t *testing.T) {
+	_, s, ctx := setupTest(t)
+
+	created, err := s.CreateActor(ctx, newTestActor("actor-1"))
+	if err != nil {
+		t.Fatalf("CreateActor failed: %v", err)
+	}
+	actorRef := resources.ActorRefFromActor(created)
+	staleVersion := created.GetMetadata().GetVersion()
+
+	if _, err := s.UpdateActor(ctx, actorRef, func(dbActor *ateapipb.Actor) error {
+		dbActor.Status = ateapipb.Actor_STATUS_RUNNING
+		return nil
+	}); err != nil {
+		t.Fatalf("UpdateActor failed: %v", err)
+	}
+
+	_, err = s.UpdateActor(ctx, actorRef, func(dbActor *ateapipb.Actor) error {
+		if err := store.CheckActorPrecondition(dbActor, created.GetMetadata().GetUid(), staleVersion); err != nil {
+			return err
+		}
+		t.Error("mutate ran past its precondition once the pinned version had moved")
+		dbActor.Status = ateapipb.Actor_STATUS_SUSPENDED
+		return nil
+	})
+	if !errors.Is(err, store.ErrVersionConflict) {
+		t.Errorf("UpdateActor error = %v, want one matching store.ErrVersionConflict", err)
+	}
+	// The uid still matches, so this is not the incarnation failure: callers key
+	// their retry decision off the difference.
+	if errors.Is(err, store.ErrUIDConflict) {
+		t.Errorf("UpdateActor error = %v, want no store.ErrUIDConflict match: the incarnation is unchanged", err)
+	}
+
 }
 
 func TestUpdateWorker_NotFound(t *testing.T) {

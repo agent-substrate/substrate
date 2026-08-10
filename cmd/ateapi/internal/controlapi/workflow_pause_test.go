@@ -26,9 +26,9 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-// TestFinalizePausedStep_WorkerGone reproduces the scenario where the worker pod
-// disappears from the DB during pause finalization, so the node it ran on is
-// unknown.
+// TestEnsurePausedFinalized_WorkerGone reproduces the scenario where the worker
+// pod disappears from the DB during pause finalization, so the node it ran on
+// is unknown.
 //
 // Old behavior: NodeVmsWithLocalSnapshots = []string{""}, which made the
 // scheduler's node restriction search for a worker with node name "", never
@@ -37,7 +37,7 @@ import (
 // Current behavior: NodeVmsWithLocalSnapshots is left nil, and the actor is
 // crashed instead of left PAUSED, since a local snapshot with an unknown node
 // can never be safely resumed.
-func TestFinalizePausedStep_WorkerGone(t *testing.T) {
+func TestEnsurePausedFinalized_WorkerGone(t *testing.T) {
 	st, cleanup := storetest.SetupTestStore(t)
 	defer cleanup()
 
@@ -59,11 +59,10 @@ func TestFinalizePausedStep_WorkerGone(t *testing.T) {
 	}
 	// Intentionally NOT creating the worker in store, simulates worker already gone.
 
-	step := &FinalizePausedStep{store: st}
-	input := &PauseInput{ActorRef: actorRef}
-	state := &PauseState{ActorTemplate: &atev1alpha1.ActorTemplate{}}
-	if err := step.Execute(ctx, input, state); err != nil {
-		t.Fatalf("Execute: %v", err)
+	w := &ActorWorkflow{store: st}
+	finalized, err := w.ensurePausedFinalized(ctx, actorRef, &atev1alpha1.ActorTemplate{})
+	if err != nil {
+		t.Fatalf("ensurePausedFinalized: %v", err)
 	}
 
 	got, err := st.GetActor(ctx, actorRef)
@@ -80,22 +79,20 @@ func TestFinalizePausedStep_WorkerGone(t *testing.T) {
 		}
 	}
 
-	state.Actor = got
-	done, err := step.IsComplete(ctx, input, state)
-	if err != nil {
-		t.Fatalf("IsComplete: %v", err)
+	if finalized.GetWorkerAssignment() != nil {
+		t.Error("returned actor still has a worker assignment, want it cleared")
 	}
-	if !done {
-		t.Error("IsComplete = false, want true once the actor is CRASHED and the worker is freed")
+	if finalized.GetStatus() != ateapipb.Actor_STATUS_CRASHED {
+		t.Errorf("returned status = %v, want CRASHED", finalized.GetStatus())
 	}
 }
 
-// TestFinalizePausedStep_RecordsContentScope verifies pause finalization
+// TestEnsurePausedFinalized_RecordsContentScope verifies pause finalization
 // records the scope the pause checkpoint captured (the template's onPause) in
 // LocalSnapshotInfo, so a later suspend of the PAUSED actor knows what the
 // local snapshot contains even if the template's onPause changes while the
 // actor sits PAUSED.
-func TestFinalizePausedStep_RecordsContentScope(t *testing.T) {
+func TestEnsurePausedFinalized_RecordsContentScope(t *testing.T) {
 	tests := []struct {
 		name    string
 		onPause atev1alpha1.SnapshotScope
@@ -138,18 +135,15 @@ func TestFinalizePausedStep_RecordsContentScope(t *testing.T) {
 				t.Fatalf("CreateWorker: %v", err)
 			}
 
-			step := &FinalizePausedStep{store: st}
-			state := &PauseState{ActorTemplate: &atev1alpha1.ActorTemplate{
+			w := &ActorWorkflow{store: st}
+			tmpl := &atev1alpha1.ActorTemplate{
 				Spec: atev1alpha1.ActorTemplateSpec{SnapshotsConfig: atev1alpha1.SnapshotsConfig{OnPause: tc.onPause}},
-			}}
-			if err := step.Execute(ctx, &PauseInput{ActorRef: actorRef}, state); err != nil {
-				t.Fatalf("Execute: %v", err)
+			}
+			got, err := w.ensurePausedFinalized(ctx, actorRef, tmpl)
+			if err != nil {
+				t.Fatalf("ensurePausedFinalized: %v", err)
 			}
 
-			got, err := st.GetActor(ctx, actorRef)
-			if err != nil {
-				t.Fatalf("GetActor: %v", err)
-			}
 			if got.GetStatus() != ateapipb.Actor_STATUS_PAUSED {
 				t.Fatalf("status = %v, want PAUSED", got.GetStatus())
 			}
@@ -161,8 +155,8 @@ func TestFinalizePausedStep_RecordsContentScope(t *testing.T) {
 }
 
 // TestPauseActorWorkflow_RejectedAndIdempotentPaths covers the two
-// short-circuit paths of the pause workflow: rejection by MarkPausingStep's
-// CheckPrerequisite and the IsComplete idempotent fast-forward.
+// short-circuit paths of the pause workflow: rejection of the pause edge for
+// a non-RUNNING actor and the idempotent fast-forward for a PAUSED one.
 func TestPauseActorWorkflow_RejectedAndIdempotentPaths(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -222,66 +216,40 @@ func TestPauseActorWorkflow_RejectedAndIdempotentPaths(t *testing.T) {
 	}
 }
 
-// TestPauseSteps_CheckPrerequisite verifies each pause step's CheckPrerequisite
-// against every actor status: nil for the step's allowed statuses,
-// FailedPrecondition for all others.
-func TestPauseSteps_CheckPrerequisite(t *testing.T) {
-	tests := []struct {
-		name string
-		step WorkflowStep[*PauseInput, *PauseState]
-		// allowed lists the statuses CheckPrerequisite accepts; nil means
-		// every status is accepted.
-		allowed map[ateapipb.Actor_Status]bool
-	}{
-		{
-			// Loading has no prerequisite: it is allowed from every status.
-			name:    "LoadActorForPauseStep",
-			step:    &LoadActorForPauseStep{},
-			allowed: nil,
-		},
-		{
-			// Pausing is allowed only from RUNNING.
-			name: "MarkPausingStep",
-			step: &MarkPausingStep{},
-			allowed: map[ateapipb.Actor_Status]bool{
-				ateapipb.Actor_STATUS_RUNNING: true,
-			},
-		},
-		{
-			// The checkpoint call is allowed only from PAUSING (PAUSED is
-			// fast-forwarded by IsComplete).
-			name: "CallAteletPauseStep",
-			step: &CallAteletPauseStep{},
-			allowed: map[ateapipb.Actor_Status]bool{
-				ateapipb.Actor_STATUS_PAUSING: true,
-			},
-		},
-		{
-			// Finalizing is allowed only from PAUSING: a persisted PAUSED
-			// actor always has its worker pod fields cleared and is
-			// fast-forwarded by IsComplete.
-			name: "FinalizePausedStep",
-			step: &FinalizePausedStep{},
-			allowed: map[ateapipb.Actor_Status]bool{
-				ateapipb.Actor_STATUS_PAUSING: true,
-			},
-		},
+// TestEnsureMarkedPausing_StatusMatrix verifies the pause edge's status gating
+// against every actor status: RUNNING takes the edge, PAUSING skips (a
+// previous attempt already marked the actor), everything else is rejected
+// with FailedPrecondition. PAUSED is rejected here because the orchestrator
+// early-returns before this step for a fully paused actor.
+func TestEnsureMarkedPausing_StatusMatrix(t *testing.T) {
+	allowed := map[ateapipb.Actor_Status]bool{
+		ateapipb.Actor_STATUS_RUNNING: true,
+		ateapipb.Actor_STATUS_PAUSING: true, // skipped, not re-marked
 	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			ctx := context.Background()
-			for _, st := range allActorStatuses {
-				// The worker assignment is populated so CallAteletPauseStep's
-				// missing-worker crash branch is not taken; this test only
-				// verifies status gating.
-				err := tc.step.CheckPrerequisite(ctx, &PauseInput{ActorRef: resources.ActorRef{Name: "id1"}}, &PauseState{Actor: &ateapipb.Actor{Status: st, WorkerAssignment: &ateapipb.WorkerAssignment{WorkerNamespace: "ns", WorkerPool: "pool", WorkerPod: "worker-1"}}})
-				assertPrerequisiteResult(t, st, err, tc.allowed == nil || tc.allowed[st])
-			}
+
+	for _, seedStatus := range allActorStatuses {
+		ctx := context.Background()
+		persistence := newTestPersistence(t)
+		w := &ActorWorkflow{store: persistence}
+
+		actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
+		actor, err := persistence.CreateActor(ctx, &ateapipb.Actor{
+			Metadata: &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+			Status:   seedStatus,
 		})
+		if err != nil {
+			t.Fatalf("status %v: CreateActor: %v", seedStatus, err)
+		}
+
+		marked, err := w.ensureMarkedPausing(ctx, actorRef, actor)
+		assertPrerequisiteResult(t, seedStatus, err, allowed[seedStatus])
+		if err == nil && marked.GetStatus() != ateapipb.Actor_STATUS_PAUSING {
+			t.Errorf("status %v: ensureMarkedPausing returned actor in %v, want PAUSING", seedStatus, marked.GetStatus())
+		}
 	}
 }
 
-func TestCallAteletPauseStep_DanglingWorkerDoesNotRecordPhantomSnapshot(t *testing.T) {
+func TestEnsureAteletPaused_DanglingWorkerDoesNotRecordPhantomSnapshot(t *testing.T) {
 	tests := []struct {
 		name         string
 		prevSnapshot *ateapipb.ObjectRef
@@ -317,10 +285,9 @@ func TestCallAteletPauseStep_DanglingWorkerDoesNotRecordPhantomSnapshot(t *testi
 				t.Fatalf("CreateActor: %v", err)
 			}
 
-			step := &CallAteletPauseStep{store: persistence, dialer: newDanglingDialer()}
-			input := &PauseInput{ActorRef: resources.ActorRef{Atespace: "team-a", Name: "actor-1"}}
-			if err := step.Execute(ctx, input, &PauseState{Actor: created}); err == nil {
-				t.Fatal("Execute: want error for dangling worker, got nil")
+			w := &ActorWorkflow{store: persistence, dialer: newDanglingDialer()}
+			if _, err := w.ensureAteletPaused(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"}, created, &atev1alpha1.ActorTemplate{}); err == nil {
+				t.Fatal("ensureAteletPaused: want error for dangling worker, got nil")
 			}
 
 			stored, err := persistence.GetActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"})
@@ -346,7 +313,7 @@ func TestCallAteletPauseStep_DanglingWorkerDoesNotRecordPhantomSnapshot(t *testi
 
 // TestPauseActor_CrashesWhenPausingActorMissingWorkerPod verifies that a
 // PAUSING actor with no worker pod recorded is moved to CRASHED by
-// CallAteletPauseStep's prerequisite check and the pause fails with
+// ensureAteletPaused's corrupted-assignment check and the pause fails with
 // FailedPrecondition.
 func TestPauseActor_CrashesWhenPausingActorMissingWorkerPod(t *testing.T) {
 	ctx := context.Background()

@@ -62,14 +62,23 @@ anywhere.
       fs/                            the unpacked layer tree (an overlay lowerdir)
       whiteouts.json                 whiteout state recorded at unpack time
       finalized                      marker written by FinalizeLayer (consumer side)
-  manifests/sha256/<digest-hex>.json image config + ordered diffID list
+      size                           byte count recorded at unpack (lazily
+                                     backfilled for older layers), so sizing
+                                     the pool never walks trees
+  layers/sha256/.tmp-*/              in-flight unpack (swept at startup)
+  layers/sha256/.rm-*/               retired by eviction, awaiting async
+                                     removal (swept at startup)
+  manifests/sha256/<digest-hex>.json image config + ordered diffID list; the
+                                     file's mtime doubles as the image's
+                                     last-use timestamp
 ```
 
 A layer directory that exists is always complete: unpack streams into a
 `.tmp-*` sibling and moves it into place with a single atomic rename.
-Startup recovery (`New`) therefore only has to sweep orphaned temp dirs and
-verify the layout version. An "image" is nothing but a manifest record
-listing layer diffIDs in order — layers shared by N images exist once.
+Startup recovery (`New`) sweeps leftover `.tmp-*` and `.rm-*` dirs,
+verifies the layout version, and reclaims orphaned layers (see Garbage
+collection below). An "image" is nothing but a manifest record listing
+layer diffIDs in order — layers shared by N images exist once.
 
 ## Pull path (atelet: `Store.EnsureImage`)
 
@@ -155,27 +164,84 @@ an actor's bundle directory (via `/proc/self/mountinfo`) before atelet wipes
 it — called from the checkpoint cleanup path in ateom-gvisor and
 `teardownActor` in ateom-microvm.
 
-## Not implemented yet: garbage collection
+## Garbage collection (engine; the periodic loop lands next)
 
-**There is no eviction. Layers and manifest records, once cached, are never
-deleted from the node VM.** Disk usage grows monotonically with the set of
-distinct layers ever pulled on the node, bounded only by the size of the
-volume backing the cache root. Operators should size the
-`--image-cache-dir` volume accordingly (and note that on GKE, disk size also
-gates IOPS, which directly bounds unpack throughput). If a node fills up,
-deleting the cache root entirely (or any individual
-`layers/sha256/<diffid>` directory plus the `manifests/` records) while no
-actors are starting is safe — the store re-pulls whatever is missing.
+`gc.go` holds the eviction engine. Nothing in production calls
+`Store.EvictUnused` yet — the watermark-driven periodic loop and its
+flags (period, high/low watermarks, max-bytes cap, min-age, dry-run)
+arrive with the next change — so cached data still only grows for now.
+The one behavior `New` gains today is the startup orphan scan below.
 
-This is Phase 2 of [#463](https://github.com/agent-substrate/substrate/issues/463):
-watermark-driven eviction (start evicting at a disk high-watermark, stop at
-the low-watermark) with a protection hierarchy — layers referenced by
-actively mounted images are never evicted, then preload-pinned images, then
-LRU by image last-use — plus cache metrics. Phase 3 adds the control-plane
-surface (reporting cached digests for scheduling affinity, and a
-`PreloadImage` API with expiring pins). The layer-materializer seam is also
-designed so a lazy-pull backend (eStargz/SOCI-style FUSE) can replace the
-untar backend later without restructuring.
+**One pass** (`Store.EvictUnused(ctx, targetBytes, dryRun)`):
+
+1. **Root set** (`Store.InUse`): scan every bundle's
+   `rootfs-overlay.json` under the actors dir (`WithActorsDir`).
+   Overlay mounts live in the ateom pods' mount namespaces, so atelet
+   cannot see them in its own `/proc/mounts`; the bundle specs are
+   written by atelet itself before any ateom is asked to mount and
+   removed only after unmount, so they are the authoritative "actively
+   mounted" set. A spec roots its image digest, each layer dir it
+   names, and its *exact* layer set — the last also roots the
+   multi-arch twin record and records of digestless (pre-`imageDigest`)
+   specs.
+2. **Refcount** layers across *all* image records, and list unrooted
+   records older than min-age as eviction candidates, LRU-ordered by
+   last use (the record's mtime — refreshed on every cache hit and on
+   every completed layer of an in-flight pull).
+3. **Evict** candidates until ~targetBytes is freed: delete the record
+   (after a freshness re-check under the same lock the cache-hit path
+   holds), then retire each layer the removal left unreferenced. If any
+   layer must be kept — still referenced by another record, rooted by a
+   spec, younger than min-age, or its retirement failed — the record is
+   restored byte-exact and the image simply is not evicted this pass: a
+   layer is never left on disk without a record explaining it.
+
+The pass reaches layers **only through records**: a layer is deleted
+exactly when its last referencing record goes, never by an independent
+scan of the pool.
+
+**Everything fails toward retention.** If the image records or the
+bundle specs cannot be fully enumerated (an unreadable file or
+directory), the pass does nothing and logs at ERROR naming the culprit:
+refcounts and roots computed from partial data would retire layers that
+unread records still reference or running actors still mount. Dry-run
+mutates nothing at all — not even the lazy size-file backfill.
+
+**In-flight pulls need no separate protection.** `EnsureImage` writes
+the image record **before** unpacking (the way Go allocates black during
+GC and containerd creates its ingest record before the bytes land), so
+every layer a pull produces is referenced — and kept fresh by a
+per-layer progress touch — from before it exists on disk. An interrupted
+pull's record is resumable progress, not garbage: the next pull of that
+digest re-fetches only the missing layers, and a pull that never resumes
+ages out through ordinary LRU.
+
+**Startup recovery.** A layer no record references can only be crash
+debris (eviction interrupted between record-delete and layer-rename) or
+operator damage; `New` reclaims such orphans once, at startup
+(`Store.RecoverOrphans`), when no pull can be racing the scan — and
+skips the scan entirely, conservatively, if any record or bundle spec
+fails to read. There is no online whole-pool scan (ext4's split: bounded
+recovery at mount, fsck offline).
+
+**Deletion is two-phase.** A layer is atomically renamed to `.rm-*`
+inside the layer's singleflight (one `rename(2)` — eviction can never
+stall a pull), then removed asynchronously; a crash in between leaves
+the dir for the startup sweep. This matters because the kernel offers no
+protection here: deleting a directory that is a live overlay lowerdir in
+another mount namespace succeeds silently, leaves the overlay's behavior
+undefined, and doesn't even free the space until the mount goes away.
+
+Deleting the cache root by hand (while no actors are starting) remains
+safe — the store re-pulls whatever is missing.
+
+This is Phase 2 of [#463](https://github.com/agent-substrate/substrate/issues/463);
+the watermark loop, flags, and cache metrics complete it. Phase 3 adds
+the control-plane surface (reporting cached digests for scheduling
+affinity, and a `PreloadImage` API with expiring pins). The
+layer-materializer seam is also designed so a lazy-pull backend
+(eStargz/SOCI-style FUSE) can replace the untar backend later without
+restructuring.
 
 ## Testing
 
