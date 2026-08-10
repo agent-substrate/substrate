@@ -58,9 +58,18 @@ import (
 // Either way the guest is paused first, which is what makes the tar coherent: the
 // durable share is served write-through, so every completed guest write is already on
 // the host and no further ones can arrive.
+//
+// Allow checkpointing even if the pod is shutting down. This will allow actors
+// (or the harness) to suspend on shutdown.
 func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.CheckpointWorkloadRequest) (*ateompb.CheckpointWorkloadResponse, error) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	s.setActiveRPC(rpcCheckpointWorkload, cancel)
+	defer s.clearActiveRPC()
+
 	if err := s.deactivateActorNetworking(ctx); err != nil {
 		return nil, err
 	}

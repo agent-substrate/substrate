@@ -83,6 +83,17 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	s.lock.Lock()
 	defer s.lock.Unlock()
 
+	if err := s.rejectIfDraining(); err != nil {
+		return nil, err
+	}
+
+	// Same as RunWorkload: a restore is a boot, and graceful shutdown cancels it
+	// rather than queueing behind it.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	s.setActiveRPC(rpcRestoreWorkload, cancel)
+	defer s.clearActiveRPC()
+
 	if err := s.deactivateActorNetworking(ctx); err != nil {
 		return nil, err
 	}
@@ -354,6 +365,7 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 		chCmd: chCmd, vfsdCmd: vfsdCmd, durableVfsdCmd: durableVfsdCmd,
 		apiSocket: apiSocket, baseID: srcID, restoreSourceDir: restoreDir,
 		snapshotIsSelfContained: memMode == ch.MemRestoreEager,
+		workloadIDs:             overlayWorkloadIDs(ctrs),
 	}
 
 	// Re-attach stdout/stderr forwarding for each container: the restored guest's

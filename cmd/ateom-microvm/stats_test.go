@@ -163,9 +163,11 @@ func containerStats(usage, peak, inactiveFile, cpuNanos uint64) *agentpb.CgroupS
 }
 
 // newStatsService builds a service executing testActor with the given guest
-// containers published to GetWorkloadStats.
+// containers published to GetWorkloadStats. lock is constructed like NewService
+// does, since it is a pointer with no usable zero value and
+// TestGetWorkloadStatsDoesNotTakeLock holds it.
 func newStatsService(agent containerStatsReader, workloadIDs ...string) *AteomService {
-	s := &AteomService{}
+	s := &AteomService{lock: newCancelableMutex()}
 	s.activeActor.Store(&testActor)
 	s.guestStats.Store(&guestStatsTarget{actorUID: testActor.UID, agent: agent, workloadIDs: workloadIDs})
 	return s
