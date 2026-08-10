@@ -14,7 +14,13 @@
 
 package main
 
-import "testing"
+import (
+	"errors"
+	"fmt"
+	"testing"
+
+	"github.com/agent-substrate/substrate/internal/imagecache"
+)
 
 func TestImageCacheGCTarget(t *testing.T) {
 	const gib = int64(1 << 30)
@@ -130,5 +136,31 @@ func TestValidateImageCacheGCFlags(t *testing.T) {
 	setFlags(85, -1)
 	if err := validateImageCacheGCFlags(); err == nil {
 		t.Error("negative low accepted")
+	}
+}
+
+func TestClassifyGCPass(t *testing.T) {
+	gated := fmt.Errorf("pass gated: %w", imagecache.ErrIncompleteEnumeration)
+	perItem := errors.New("while removing retired layer: permission denied")
+	cases := []struct {
+		name          string
+		err           error
+		target, freed int64
+		want          gcPassOutcome
+	}{
+		{"gated pass", gated, 100, 0, gcPassSkipped},
+		{"gated wins even with zero target", gated, 0, 0, gcPassSkipped},
+		{"per-item errors are not a skip", perItem, 100, 100, gcPassComplete},
+		{"per-item errors with shortfall", perItem, 100, 40, gcPassShortfall},
+		{"shortfall", nil, 100, 40, gcPassShortfall},
+		{"target met", nil, 100, 100, gcPassComplete},
+		{"no target", nil, 0, 0, gcPassQuiet},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := classifyGCPass(tc.err, tc.target, tc.freed); got != tc.want {
+				t.Errorf("classifyGCPass(%v, %d, %d) = %d, want %d", tc.err, tc.target, tc.freed, got, tc.want)
+			}
+		})
 	}
 }

@@ -17,6 +17,7 @@ package imagecache
 import (
 	"archive/tar"
 	"context"
+	"errors"
 	"math"
 	"os"
 	"path/filepath"
@@ -332,6 +333,9 @@ func TestEvictUnusedSkipsPassOnUnreadableRoots(t *testing.T) {
 			if err == nil {
 				t.Fatal("EvictUnused returned no error with an unenumerable root set")
 			}
+			if !errors.Is(err, ErrIncompleteEnumeration) {
+				t.Errorf("gate error does not wrap ErrIncompleteEnumeration: %v", err)
+			}
 			if stats.EvictedImages != 0 || stats.EvictedLayers != 0 {
 				t.Errorf("gated pass still evicted: %+v", stats)
 			}
@@ -388,6 +392,9 @@ func TestEvictUnusedSkipsPassOnBadRecord(t *testing.T) {
 			stats, err := store.EvictUnused(context.Background(), math.MaxInt64, false)
 			if err == nil {
 				t.Fatal("EvictUnused returned no error on a bad record")
+			}
+			if !errors.Is(err, ErrIncompleteEnumeration) {
+				t.Errorf("gate error does not wrap ErrIncompleteEnumeration: %v", err)
 			}
 			if stats.EvictedImages != 0 || stats.EvictedLayers != 0 {
 				t.Errorf("gated pass still evicted: %+v", stats)
