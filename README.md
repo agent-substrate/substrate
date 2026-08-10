@@ -88,7 +88,8 @@ To quickly set up the complete environment:
 
 2. Run the following steps:
 ```shell
-# create cluster and local registry
+# create cluster and local registry (IPv4; KIND_IP_FAMILY=dual|ipv6 overrides,
+# and hack/verify-kind-networking.sh checks the result)
 hack/create-kind-cluster.sh
 
 # install ate, valkey, rustfs
