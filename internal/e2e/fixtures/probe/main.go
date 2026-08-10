@@ -31,9 +31,13 @@ import (
 	"strings"
 )
 
-// identityFile is the actorIdentity data-source file of the systemInfo
-// volume that probe.yaml.tmpl mounts at /run/ate.
-const identityFile = "/run/ate/actor-id"
+// The actorMetadata data-source files of the systemInfo volume that
+// probe.yaml.tmpl mounts at /run/ate.
+const (
+	identityFile = "/run/ate/actor-id"
+	atespaceFile = "/run/ate/atespace"
+	uidFile      = "/run/ate/actor-uid"
+)
 
 // whoami reports the actor's identity as observed at request time from the
 // bind-mounted identity file. A read failure is reported in the response
@@ -42,11 +46,18 @@ func whoami(w http.ResponseWriter, _ *http.Request) {
 	host, _ := os.Hostname()
 
 	resp := map[string]string{"hostname": host}
-	if b, err := os.ReadFile(identityFile); err == nil {
-		resp["file"] = string(b)
-	} else {
-		resp["file"] = ""
-		resp["error"] = err.Error()
+	for key, path := range map[string]string{
+		"file":     identityFile,
+		"atespace": atespaceFile,
+		"uid":      uidFile,
+	} {
+		if b, err := os.ReadFile(path); err == nil {
+			resp[key] = string(b)
+		} else {
+			resp[key] = ""
+			// Concatenate: a failed assertion should explain every missing file.
+			resp["error"] += err.Error() + "; "
+		}
 	}
 
 	writeJSON(w, resp)

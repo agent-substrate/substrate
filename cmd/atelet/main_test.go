@@ -124,35 +124,44 @@ func TestWriteSystemInfoVolume(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "system-info", "vol1")
 	si := &ateletpb.SystemInfoVolume{
 		DataSources: []*ateletpb.SystemInfoDataSource{
-			{DataSource: &ateletpb.SystemInfoDataSource_ActorIdentity{
-				ActorIdentity: &ateletpb.ActorIdentityDataSource{Path: "actor-id"},
-			}},
-			{DataSource: &ateletpb.SystemInfoDataSource_ActorIdentity{
-				ActorIdentity: &ateletpb.ActorIdentityDataSource{Path: "identity/name"},
+			{DataSource: &ateletpb.SystemInfoDataSource_ActorMetadata{
+				ActorMetadata: &ateletpb.ActorMetadataDataSource{
+					Items: []*ateletpb.ActorMetadataItem{
+						{Field: ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_NAME, Path: "actor-name"},
+						{Field: ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_ATESPACE, Path: "atespace"},
+						{Field: ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_UID, Path: "identity/actor-uid"},
+					},
+				},
 			}},
 		},
 	}
 
-	if err := writeSystemInfoVolume(ctx, root, "golden-actor", si); err != nil {
+	golden := resources.ActorRef{Atespace: "ate-e2e-probe", Name: "golden-actor"}
+	if err := writeSystemInfoVolume(ctx, root, golden, "uid-golden", si); err != nil {
 		t.Fatalf("writeSystemInfoVolume: %v", err)
 	}
 
-	// Overwrite with a different actor name, as happens when a snapshot taken
-	// from one actor seeds another on resume: files must carry the new value.
-	if err := writeSystemInfoVolume(ctx, root, "probe-alpha", si); err != nil {
+	// Overwrite with a different actor, as happens when a snapshot taken from
+	// one actor seeds another on resume: files must carry the new values.
+	alpha := resources.ActorRef{Atespace: "ate-e2e-probe", Name: "probe-alpha"}
+	if err := writeSystemInfoVolume(ctx, root, alpha, "uid-alpha", si); err != nil {
 		t.Fatalf("writeSystemInfoVolume (rewrite): %v", err)
 	}
 
-	for _, path := range []string{"actor-id", "identity/name"} {
+	// Values are written raw, no trailing newline.
+	for path, want := range map[string]string{
+		"actor-name":         "probe-alpha",
+		"atespace":           "ate-e2e-probe",
+		"identity/actor-uid": "uid-alpha",
+	} {
 		t.Run(path, func(t *testing.T) {
 			target := filepath.Join(root, path)
 			got, err := os.ReadFile(target)
 			if err != nil {
 				t.Fatalf("reading %q: %v", target, err)
 			}
-			// Raw actor name, no trailing newline.
-			if string(got) != "probe-alpha" {
-				t.Errorf("content = %q, want %q", got, "probe-alpha")
+			if string(got) != want {
+				t.Errorf("content = %q, want %q", got, want)
 			}
 			info, err := os.Stat(target)
 			if err != nil {
