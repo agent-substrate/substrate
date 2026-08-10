@@ -303,7 +303,7 @@ type AteomService struct {
 	//
 	// Kept here rather than on runningActor, even though that struct already
 	// exists per actor: runningActor holds processes that do not exist until the
-	// guest is up (chCmd, vfsdCmd, logAgent), so it cannot be built before the
+	// guest is up (chCmd, vfsdCmd, guestAgent), so it cannot be built before the
 	// boot, and an entry in running is what tells CheckpointWorkload a live VM is
 	// there. Attribution has to outlive both of those constraints — it is needed
 	// from the moment the ateom accepts the actor, including for a boot that
@@ -317,6 +317,23 @@ type AteomService struct {
 	// reader. As there, the type makes a lock-free read possible without making
 	// one happen — GetWorkloadStats must not take lock at all.
 	activeActor atomic.Pointer[ateomstats.ActorAttribution]
+
+	// guestStats is what GetWorkloadStats measures with: the kata-agent client
+	// and the guest containers to sum. Nil whenever there is no guest to ask —
+	// before the containers are up, after teardownActor, and for the rest of an
+	// activation whose post-restore agent dial failed.
+	//
+	// Separate from activeActor because the two become true at different points:
+	// the attribution is retained from the moment the ateom accepts the actor,
+	// deliberately including a boot that never finishes, while this can only
+	// exist once the guest is answering. Non-nil here implies activeActor is
+	// set, never the reverse.
+	//
+	// Atomic for the same reason as activeActor, and it is the other half of the
+	// same rule: GetWorkloadStats must not take lock, so it cannot reach into
+	// running for the agent client the way a lifecycle RPC does. Written under
+	// lock like every other transition; the atomic is for the reader.
+	guestStats atomic.Pointer[guestStatsTarget]
 }
 
 var _ ateompb.AteomServer = (*AteomService)(nil)

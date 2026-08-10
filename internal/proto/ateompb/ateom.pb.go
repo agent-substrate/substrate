@@ -162,7 +162,12 @@ const (
 	StatsSource_STATS_SOURCE_UNSPECIFIED StatsSource = 0
 	// Read from the sandbox's cgroup on the host.
 	StatsSource_STATS_SOURCE_CGROUP StatsSource = 1
-	// Read from inside the guest, over the guest agent's vsock connection.
+	// Read from inside the guest, over the guest agent's vsock connection. What
+	// it counts is the workload's own containers, as the guest kernel accounts
+	// for them: the guest kernel itself, the agent, and the VMM process on the
+	// host are overhead this source cannot see. The cgroup source above is the
+	// other way round -- the sandbox's host process is one process, so its
+	// runtime's overhead is charged along with the workload's.
 	StatsSource_STATS_SOURCE_GUEST_AGENT StatsSource = 2
 )
 
@@ -1080,8 +1085,11 @@ func (x *GetWorkloadStatsRequest) GetActorUid() string {
 
 // GetWorkloadStatsResponse is one resource-usage sample for the executing
 // workload. The unit of measurement is the SANDBOX, which today equals the
-// actor; per-container attribution needs the gVisor sentry's own accounting and
-// is not reported here.
+// actor. Per-container attribution is not reported: the micro-VM source could
+// give it, since the guest keeps a cgroup per container and ateom sums them,
+// but the gVisor source cannot split one at all without the sentry's own
+// accounting, and a field only one runtime could ever fill would be worse than
+// none.
 type GetWorkloadStatsResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Identity of the measured actor, retained by ateom from the

@@ -263,6 +263,13 @@ func listFiles(dir string) ([]string, error) {
 // snapshot is already on disk, so this only needs to release resources. ra may be
 // nil (e.g. ateom restarted and lost in-memory state).
 func (s *AteomService) teardownActor(ctx context.Context, id string, ra *runningActor, client *ch.Client) {
+	// Stop offering the guest to GetWorkloadStats first, before anything below
+	// makes it stop answering. Clearing it here rather than alongside the
+	// attribution is what keeps a poll that lands mid-teardown on the
+	// FAILED_PRECONDITION path ("no numbers right now") instead of surfacing a
+	// closed connection as a failed read.
+	s.guestStats.Store(nil)
+
 	if client != nil {
 		tShutdown := time.Now()
 		shutCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
@@ -278,9 +285,9 @@ func (s *AteomService) teardownActor(ctx context.Context, id string, ra *running
 		// fails the forwarding goroutines' in-flight ReadStdout/ReadStderr calls, so
 		// they return io.EOF and exit (no goroutine leak). Guarded so a second
 		// teardown / a never-forwarded actor is a no-op.
-		if ra.logAgent != nil {
-			_ = ra.logAgent.Close()
-			ra.logAgent = nil
+		if ra.guestAgent != nil {
+			_ = ra.guestAgent.Close()
+			ra.guestAgent = nil
 		}
 
 		// Kill the CH process ateom launched.

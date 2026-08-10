@@ -82,13 +82,17 @@ type runningActor struct {
 	// there is no delta to overlay onto restoreSourceDir.
 	snapshotIsSelfContained bool
 
-	// logAgent is the kata-agent ttrpc client kept open for the lifetime of the
-	// stdout/stderr forwarding goroutines (they pump the container's output via
-	// ReadStdout/ReadStderr on this connection). It is NOT closed when RunWorkload /
-	// RestoreWorkload return — teardownActor closes it, which makes the in-flight
-	// ReadStdout/ReadStderr calls fail and the forwarding goroutines exit (io.EOF).
-	// nil if forwarding was not started (e.g. a best-effort post-restore dial failed).
-	logAgent *kata.AgentClient
+	// guestAgent is the kata-agent ttrpc client retained past boot. Two things
+	// share it: the stdout/stderr forwarding goroutines (they pump the
+	// container's output via ReadStdout/ReadStderr on this connection for the
+	// actor's lifetime) and GetWorkloadStats (via s.guestStats, which points at
+	// this same client). It is NOT closed when RunWorkload / RestoreWorkload
+	// return — teardownActor closes it, which makes the in-flight
+	// ReadStdout/ReadStderr calls fail and the forwarding goroutines exit
+	// (io.EOF). nil if the post-boot dial failed (e.g. a best-effort
+	// post-restore dial), which loses both log forwarding and guest stats for
+	// this activation.
+	guestAgent *kata.AgentClient
 }
 
 // baseIDFile is a tiny snapshot file (under the checkpoint/restore dir) holding
@@ -495,7 +499,7 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 		return fmt.Errorf("while waiting for container readyz: %w", err)
 	}
 
-	ra := &runningActor{chCmd: chCmd, vfsdCmd: vfsdCmd, durableVfsdCmd: durableVfsdCmd, apiSocket: apiSocket, baseID: actorUID, logAgent: ac}
+	ra := &runningActor{chCmd: chCmd, vfsdCmd: vfsdCmd, durableVfsdCmd: durableVfsdCmd, apiSocket: apiSocket, baseID: actorUID, guestAgent: ac}
 	if err := s.activateActorNetworking(p.actorRef.Atespace, p.actorRef.Name, egress); err != nil {
 		return err
 	}
@@ -505,9 +509,18 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 	// container/exec id is <name>_ovl (see startOverlayContainer), so key the streams by
 	// that and tag with the display container name. The goroutines read over ac for the
 	// actor's lifetime and exit (io.EOF) when teardownActor closes ac.
+	workloadIDs := make([]string, 0, len(ctrs))
 	for _, c := range ctrs {
 		s.startActorLogForwarding(ac, p.actorRef, actorUID, templateNS, templateName, overlayWorkloadID(c.name), c.name)
+		workloadIDs = append(workloadIDs, overlayWorkloadID(c.name))
 	}
+
+	// Publish the guest to GetWorkloadStats, past every error return above: a
+	// failing attempt closes ac on its way out (and coldBootActorRetrying may
+	// then try the whole boot again), so a target published earlier would leave
+	// the handler polling a connection nobody owns. Same client the forwarding
+	// above reads over — ttrpc multiplexes, and teardownActor ends both.
+	s.guestStats.Store(&guestStatsTarget{actorUID: actorUID, agent: ac, workloadIDs: workloadIDs})
 
 	return nil
 }

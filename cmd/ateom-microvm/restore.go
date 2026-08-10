@@ -353,14 +353,14 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 	// <name>_ovl (same as the cold run). Best-effort — a failed dial must not fail the
 	// restore (the actor is already running); forwarding is just skipped.
 	vsockPath := kata.VsockSocketPath(actorUID)
-	logAC, dialErr := dialAgentRetry(ctx, vsockPath, 15*time.Second)
+	guestAC, dialErr := dialAgentRetry(ctx, vsockPath, 15*time.Second)
 	if dialErr != nil {
-		slog.WarnContext(ctx, "post-restore agent dial failed; actor log forwarding disabled for this restore",
+		slog.WarnContext(ctx, "post-restore agent dial failed; actor log forwarding and guest stats disabled for this restore",
 			slog.String("id", actorUID), slog.Any("err", dialErr))
 	} else {
-		ra.logAgent = logAC
+		ra.guestAgent = guestAC
 		for _, c := range containers {
-			s.startActorLogForwarding(logAC, p.actorRef, actorUID, templateNS, templateName, overlayWorkloadID(c.GetName()), c.GetName())
+			s.startActorLogForwarding(guestAC, p.actorRef, actorUID, templateNS, templateName, overlayWorkloadID(c.GetName()), c.GetName())
 		}
 	}
 
@@ -368,6 +368,21 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 		return err
 	}
 	s.running[actorUID] = ra
+
+	// Publish the guest to GetWorkloadStats, past the last error return above
+	// for the same reason as in coldBootActor. Skipped when the dial failed:
+	// telemetry rides on the forwarding connection, so that activation answers
+	// FAILED_PRECONDITION until its next checkpoint. Not worth a second dial of
+	// its own — whatever kept the agent from answering a 15s retry loop would
+	// keep it from answering that one too.
+	if ra.guestAgent != nil {
+		workloadIDs := make([]string, 0, len(containers))
+		for _, c := range containers {
+			workloadIDs = append(workloadIDs, overlayWorkloadID(c.GetName()))
+		}
+		s.guestStats.Store(&guestStatsTarget{actorUID: actorUID, agent: ra.guestAgent, workloadIDs: workloadIDs})
+	}
+
 	slog.InfoContext(ctx, "Actor restored (overlay rootfs)",
 		slog.String("id", actorUID), slog.Duration("total", time.Since(tStart)))
 	return nil
