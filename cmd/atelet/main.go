@@ -472,7 +472,7 @@ func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *
 		return nil, fmt.Errorf("while recording sandbox assets: %w", err)
 	}
 
-	if err := s.prepareOCIBundles(ctx, actorUID, actorRef.Name,
+	if err := s.prepareOCIBundles(ctx, actorUID, actorRef,
 		req.GetSpec(), sandboxRec.PauseImage, req.GetTargetAteomUid(),
 	); err != nil {
 		return nil, ateerrors.CrashIfReason(ctx, err, ateerrors.ReasonInvalidContainerConfig)
@@ -1120,7 +1120,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 			return ateerrors.CrashIfReason(ctx, err, ateerrors.ReasonFailedGetExternalObject, ateerrors.ReasonInvalidObjectURL, ateerrors.ReasonTerminalFileSystemError, ateerrors.ReasonInvalidSandboxAsset)
 		}
 		t := time.Now()
-		err = s.prepareOCIBundles(gctx, actorUID, actorRef.Name, req.GetSpec(), runtimeRec.PauseImage, req.GetTargetAteomUid())
+		err = s.prepareOCIBundles(gctx, actorUID, actorRef, req.GetSpec(), runtimeRec.PauseImage, req.GetTargetAteomUid())
 		dBundles = time.Since(t)
 		if err != nil {
 			prepFailedPhase = ateattr.SnapshotPhaseOCIUnpack
@@ -1430,7 +1430,7 @@ func (s *AteomHerder) downloadExternalCheckpoint(ctx context.Context, snapshotUR
 func (s *AteomHerder) prepareOCIBundles(
 	ctx context.Context,
 	actorUID string,
-	actorName string,
+	actorRef resources.ActorRef,
 	spec *ateletpb.WorkloadSpec,
 	pauseImage string,
 	targetAteomUid string,
@@ -1446,7 +1446,7 @@ func (s *AteomHerder) prepareOCIBundles(
 
 		case *ateletpb.Volume_SystemInfo:
 			volRootHostPath := ateompath.SystemInfoVolumeRoot(actorUID, vol.GetName())
-			if err := writeSystemInfoVolume(ctx, volRootHostPath, actorName, volSrc.SystemInfo); err != nil {
+			if err := writeSystemInfoVolume(ctx, volRootHostPath, actorRef, actorUID, volSrc.SystemInfo); err != nil {
 				return fmt.Errorf("while populating system-info volume %q: %w", vol.GetName(), err)
 			}
 		}
@@ -1527,11 +1527,12 @@ func (s *AteomHerder) prepareOCIBundles(
 }
 
 // writeSystemInfoVolume populates the root directory of a system-info volume
-// with one file per data source. It runs on every Run/Restore, before the
-// sandbox starts, so the files carry the resumed actor's own values no matter
-// what checkpointed state the actor boots from. Files are written with the
-// atomic writer so a concurrent reader can never observe a partial write.
-func writeSystemInfoVolume(ctx context.Context, rootPath, actorName string, si *ateletpb.SystemInfoVolume) error {
+// with one file per projected item. It runs on every Run/Restore, before the
+// sandbox starts, so the files carry the values of the actor actually being
+// started, no matter what checkpointed state it boots from. Files are written
+// with the atomic writer so a concurrent reader can never observe a partial
+// write.
+func writeSystemInfoVolume(ctx context.Context, rootPath string, actorRef resources.ActorRef, actorUID string, si *ateletpb.SystemInfoVolume) error {
 	if err := os.MkdirAll(rootPath, 0o755); err != nil {
 		return fmt.Errorf("while creating %q: %w", rootPath, err)
 	}
@@ -1544,10 +1545,25 @@ func writeSystemInfoVolume(ctx context.Context, rootPath, actorName string, si *
 	contents := map[string]atomicwriter.FileProjection{}
 	for _, dataSourceAny := range si.GetDataSources() {
 		switch dataSource := dataSourceAny.GetDataSource().(type) {
-		case *ateletpb.SystemInfoDataSource_ActorIdentity:
-			contents[dataSource.ActorIdentity.GetPath()] = atomicwriter.FileProjection{
-				Data: []byte(actorName),
-				Mode: 0o644,
+		case *ateletpb.SystemInfoDataSource_ActorMetadata:
+			for _, item := range dataSource.ActorMetadata.GetItems() {
+				var value string
+				switch item.GetField() {
+				case ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_NAME:
+					value = actorRef.Name
+				case ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_ATESPACE:
+					value = actorRef.Atespace
+				case ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_UID:
+					value = actorUID
+				default:
+					// Unknown fields come only from a newer ateapi; skip the
+					// item rather than write an empty file under its path.
+					continue
+				}
+				contents[item.GetPath()] = atomicwriter.FileProjection{
+					Data: []byte(value),
+					Mode: 0o644,
+				}
 			}
 		}
 	}

@@ -71,19 +71,23 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 			},
 		},
 		{
-			name: "converts SystemInfo volume with ActorIdentity data sources",
+			name: "converts SystemInfo volume with actorMetadata items",
 			template: &atev1alpha1.ActorTemplate{
 				ObjectMeta: metav1.ObjectMeta{Name: "tmpl1", Namespace: "agent-ns"},
 				Spec: atev1alpha1.ActorTemplateSpec{
-					PauseImage: "pause",
 					Volumes: []atev1alpha1.Volume{
 						{
 							Name: "system-info",
 							VolumeSource: atev1alpha1.VolumeSource{
 								SystemInfo: &atev1alpha1.SystemInfoVolumeSource{
 									DataSources: []atev1alpha1.SystemInfoDataSource{
-										{ActorIdentity: &atev1alpha1.ActorIdentityDataSource{Path: "actor-id"}},
-										{ActorIdentity: &atev1alpha1.ActorIdentityDataSource{Path: "identity/name"}},
+										{ActorMetadata: &atev1alpha1.ActorMetadataDataSource{
+											Items: []atev1alpha1.ActorMetadataItem{
+												{Field: atev1alpha1.ActorMetadataFieldName, Path: "actor-name"},
+												{Field: atev1alpha1.ActorMetadataFieldAtespace, Path: "atespace"},
+												{Field: atev1alpha1.ActorMetadataFieldUID, Path: "identity/actor-uid"},
+											},
+										}},
 									},
 								},
 							},
@@ -101,18 +105,20 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 				},
 			},
 			want: &ateletpb.WorkloadSpec{
-				PauseImage: "pause",
 				Volumes: []*ateletpb.Volume{
 					{
 						Name: "system-info",
 						Source: &ateletpb.Volume_SystemInfo{
 							SystemInfo: &ateletpb.SystemInfoVolume{
 								DataSources: []*ateletpb.SystemInfoDataSource{
-									{DataSource: &ateletpb.SystemInfoDataSource_ActorIdentity{
-										ActorIdentity: &ateletpb.ActorIdentityDataSource{Path: "actor-id"},
-									}},
-									{DataSource: &ateletpb.SystemInfoDataSource_ActorIdentity{
-										ActorIdentity: &ateletpb.ActorIdentityDataSource{Path: "identity/name"},
+									{DataSource: &ateletpb.SystemInfoDataSource_ActorMetadata{
+										ActorMetadata: &ateletpb.ActorMetadataDataSource{
+											Items: []*ateletpb.ActorMetadataItem{
+												{Field: ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_NAME, Path: "actor-name"},
+												{Field: ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_ATESPACE, Path: "atespace"},
+												{Field: ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_UID, Path: "identity/actor-uid"},
+											},
+										},
 									}},
 								},
 							},

@@ -482,6 +482,10 @@ spec:
                           description: |-
                             DataSources is the list of data sources to place within the SystemInfo
                             volume.
+
+                            At most one actorMetadata entry may appear; this is what keeps file
+                            paths unique across the whole volume (uniqueness within the entry is
+                            enforced on its items).
                           items:
                             description: |-
                               SystemInfoDataSource is a container allowing you to pick a particular
@@ -489,43 +493,78 @@ spec:
 
                               Exactly one member must be set.
                             properties:
-                              actorIdentity:
+                              actorMetadata:
                                 description: |-
-                                  ActorIdentityDataSource is a SystemInfo volume data source that writes the
-                                  actor's ID to a file.
+                                  ActorMetadataDataSource is a SystemInfo volume data source that projects the
+                                  actor's identity fields (name, atespace, uid) to files, one per item —
+                                  analogous to the Kubernetes downwardAPI volume. Values are written raw with
+                                  no trailing newline, and are fixed for the actor's lifetime across
+                                  suspend/resume/migration.
                                 properties:
-                                  path:
+                                  items:
                                     description: |-
-                                      Relative path from the root of the SystemInfo volume that the actor
-                                      identity file should be written. Must be a clean relative Unix path:
-                                      must not start or end with '/', and contain no ':', '..', '.', '//',
-                                      or control characters.
-                                    maxLength: 255
-                                    minLength: 1
-                                    type: string
+                                      Items is the list of fields to project and the file path each is
+                                      written to.
+                                    items:
+                                      description: ActorMetadataItem projects one
+                                        actor identity field to one file.
+                                      properties:
+                                        field:
+                                          description: Field selects which identity
+                                            field to project.
+                                          enum:
+                                          - name
+                                          - atespace
+                                          - uid
+                                          type: string
+                                        path:
+                                          description: |-
+                                            Relative path from the root of the SystemInfo volume at which the
+                                            field's value is written. Must be a clean relative Unix path: must not
+                                            start or end with '/', and contain no ':', '..', '.', '//', or control
+                                            characters.
+                                          maxLength: 255
+                                          minLength: 1
+                                          type: string
+                                          x-kubernetes-validations:
+                                          - message: 'path must be a clean relative
+                                              Unix path: must not start or end with
+                                              ''/'', and contain no '':'', ''..'',
+                                              ''.'', ''//'', or control characters'
+                                            rule: '!self.startsWith(''/'') && !self.endsWith(''/'')
+                                              && !self.contains(''//'') && !self.contains('':'')
+                                              && !self.matches(''[\x00-\x1f\x7f]'')
+                                              && !self.matches(''(^|/)[.][.]?(/|$)'')'
+                                      required:
+                                      - field
+                                      - path
+                                      type: object
+                                    maxItems: 8
+                                    minItems: 1
+                                    type: array
                                     x-kubernetes-validations:
-                                    - message: 'path must be a clean relative Unix
-                                        path: must not start or end with ''/'', and
-                                        contain no '':'', ''..'', ''.'', ''//'', or
-                                        control characters'
-                                      rule: '!self.startsWith(''/'') && !self.endsWith(''/'')
-                                        && !self.contains(''//'') && !self.contains('':'')
-                                        && !self.matches(''[\x00-\x1f\x7f]'') && !self.matches(''(^|/)[.][.]?(/|$)'')'
+                                    - message: items must not project the same field
+                                        twice
+                                      rule: self.all(x, self.exists_one(y, y.field
+                                        == x.field))
+                                    - message: items must not contain duplicate paths
+                                      rule: self.all(x, self.exists_one(y, y.path
+                                        == x.path))
                                 required:
-                                - path
+                                - items
                                 type: object
                             type: object
                             x-kubernetes-validations:
-                            - message: exactly one of the fields in [actorIdentity]
+                            - message: exactly one of the fields in [actorMetadata]
                                 must be set
-                              rule: '[has(self.actorIdentity)].filter(x,x==true).size()
+                              rule: '[has(self.actorMetadata)].filter(x,x==true).size()
                                 == 1'
                           maxItems: 32
                           type: array
                           x-kubernetes-validations:
-                          - message: dataSources must not contain duplicate paths
-                            rule: self.all(x, !has(x.actorIdentity) || self.exists_one(y,
-                              has(y.actorIdentity) && y.actorIdentity.path == x.actorIdentity.path))
+                          - message: dataSources must contain at most one actorMetadata
+                              entry
+                            rule: self.filter(x, has(x.actorMetadata)).size() <= 1
                       type: object
                   required:
                   - name

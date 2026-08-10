@@ -49,8 +49,14 @@ ${TEMPLATE_SANDBOX_CLASS}
   - name: system-info
     systemInfo:
       dataSources:
-      - actorIdentity:
-          path: actor-id
+      - actorMetadata:
+          items:
+          - field: name
+            path: actor-id
+          - field: atespace
+            path: atespace
+          - field: uid
+            path: actor-uid
   containers:
   - name: probe
     image: ko://github.com/agent-substrate/substrate/internal/e2e/fixtures/probe

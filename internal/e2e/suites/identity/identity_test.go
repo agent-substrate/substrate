@@ -40,9 +40,11 @@ var probeNamespace = e2e.FixtureName("ate-e2e-probe")
 
 type whoamiResponse struct {
 	File     string `json:"file"`
+	Atespace string `json:"atespace"`
+	UID      string `json:"uid"`
 	Hostname string `json:"hostname"`
-	// Error is the probe's identity-file read error, if any, so a failed
-	// assertion explains why the ID was missing.
+	// Error is the probe's file read error(s), if any, so a failed assertion
+	// explains why a value was missing.
 	Error string `json:"error"`
 }
 
@@ -88,6 +90,7 @@ func TestActorIdentity_AfterRestore_IsOwnID_NotGolden(t *testing.T) {
 	defer rc.Close()
 
 	seen := map[string]string{}
+	seenUIDs := map[string]string{}
 	for _, id := range ids {
 		got := whoami(t, ctx, rc, id)
 
@@ -101,6 +104,25 @@ func TestActorIdentity_AfterRestore_IsOwnID_NotGolden(t *testing.T) {
 			t.Errorf("actor %q and %q both report identity %q — actors are not distinct", id, other, got.File)
 		}
 		seen[got.File] = id
+
+		if got.Atespace != probeNamespace {
+			t.Errorf("actor %q: /run/ate/atespace = %q, want %q (probe read error: %q)", id, got.Atespace, probeNamespace, got.Error)
+		}
+
+		// The projected UID must match the control plane's authoritative view
+		// of this actor, and be distinct per actor even though both actors
+		// were seeded from the same golden snapshot.
+		actor, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{Actor: &ateapipb.ObjectRef{Atespace: probeNamespace, Name: id}})
+		if err != nil {
+			t.Fatalf("GetActor %q: %v", id, err)
+		}
+		if wantUID := actor.GetMetadata().GetUid(); got.UID != wantUID {
+			t.Errorf("actor %q: /run/ate/actor-uid = %q, want %q (probe read error: %q)", id, got.UID, wantUID, got.Error)
+		}
+		if other, dup := seenUIDs[got.UID]; dup {
+			t.Errorf("actor %q and %q both report uid %q — actors are not distinct", id, other, got.UID)
+		}
+		seenUIDs[got.UID] = id
 	}
 }
 

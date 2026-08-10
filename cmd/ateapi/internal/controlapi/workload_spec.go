@@ -43,12 +43,17 @@ func workloadSpecFromActorTemplate(actorTemplate *atev1alpha1.ActorTemplate, act
 			ateletSystemInfo := &ateletpb.SystemInfoVolume{}
 			for _, dataSource := range vol.VolumeSource.SystemInfo.DataSources {
 				switch {
-				case dataSource.ActorIdentity != nil:
+				case dataSource.ActorMetadata != nil:
+					actorMetadata := &ateletpb.ActorMetadataDataSource{}
+					for _, item := range dataSource.ActorMetadata.Items {
+						actorMetadata.Items = append(actorMetadata.Items, &ateletpb.ActorMetadataItem{
+							Field: toAteletActorMetadataField(item.Field),
+							Path:  item.Path,
+						})
+					}
 					ateletSystemInfo.DataSources = append(ateletSystemInfo.DataSources, &ateletpb.SystemInfoDataSource{
-						DataSource: &ateletpb.SystemInfoDataSource_ActorIdentity{
-							ActorIdentity: &ateletpb.ActorIdentityDataSource{
-								Path: dataSource.ActorIdentity.Path,
-							},
+						DataSource: &ateletpb.SystemInfoDataSource_ActorMetadata{
+							ActorMetadata: actorMetadata,
 						},
 					})
 				default:
@@ -158,6 +163,22 @@ func isVolumeMounted(volumeName string, template *atev1alpha1.ActorTemplate) boo
 // toAteletReadyz projects the CRD readyz field onto the ateletpb wire type.
 // Returns nil when the source is nil so containers without a probe stay
 // unchanged on the wire.
+// toAteletActorMetadataField projects the CRD field selector onto the atelet
+// wire enum. Unknown values map to UNSPECIFIED, which atelet skips; CRD enum
+// validation makes that unreachable for stored templates.
+func toAteletActorMetadataField(in atev1alpha1.ActorMetadataField) ateletpb.ActorMetadataField {
+	switch in {
+	case atev1alpha1.ActorMetadataFieldName:
+		return ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_NAME
+	case atev1alpha1.ActorMetadataFieldAtespace:
+		return ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_ATESPACE
+	case atev1alpha1.ActorMetadataFieldUID:
+		return ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_UID
+	default:
+		return ateletpb.ActorMetadataField_ACTOR_METADATA_FIELD_UNSPECIFIED
+	}
+}
+
 func toAteletReadyz(in *atev1alpha1.ContainerReadyz) *ateletpb.Readyz {
 	if in == nil {
 		return nil

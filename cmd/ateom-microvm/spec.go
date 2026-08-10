@@ -96,7 +96,7 @@ func ensureKataCompatibleSpec(bundle, id, netnsPath string, size sizing.SandboxS
 	// agent accepts. (Static shaper; pod DNS integration is future work.)
 	//
 	// KNOWN GAP vs the gVisor runtime: this also drops atelet's read-only
-	// systemInfo volume bind mounts (e.g. the actorIdentity data-source file).
+	// systemInfo volume bind mounts (e.g. the actorMetadata data-source files).
 	// The micro-VM guest can't see host paths (the rootfs is an overlay of a
 	// virtio-fs base + a guest-RAM upper, not a host bind), so atelet's
 	// host-path volume roots have nothing to bind to. Exposing them needs a
