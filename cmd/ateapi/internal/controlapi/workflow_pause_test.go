@@ -336,3 +336,18 @@ func TestPauseActor_CrashesWhenPausingActorMissingWorkerPod(t *testing.T) {
 		t.Errorf("stored status = %v, want %v", got.GetStatus(), ateapipb.Actor_STATUS_CRASHED)
 	}
 }
+
+// TestEnsureMarkedPausing_GoldenAtespaceRejected verifies golden actors
+// cannot be paused: by design they can only be suspended (committed).
+func TestEnsureMarkedPausing_GoldenAtespaceRejected(t *testing.T) {
+	st, cleanup := storetest.SetupTestStore(t)
+	defer cleanup()
+	w := newTestActorWorkflow(t, st, "ns", "tmpl1")
+
+	_, err := w.ensureMarkedPausing(context.Background(),
+		resources.ActorRef{Atespace: resources.GoldenActorAtespace, Name: "golden-1"},
+		&ateapipb.Actor{Status: ateapipb.Actor_STATUS_RUNNING})
+	if got := status.Code(err); got != codes.FailedPrecondition {
+		t.Fatalf("status.Code = %v (err %v), want FailedPrecondition", got, err)
+	}
+}

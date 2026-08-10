@@ -74,8 +74,10 @@ because they change too frequently for etcd.
 
 ## Lifecycle
 
-- **Suspend**: hibernate a running Actor by checkpointing it to a snapshot and
-  freeing its Worker. The requested snapshots are uploaded to external storage.
+- **Suspend**: hibernate a running or paused Actor into a durable snapshot in
+  external storage. A running Actor is checkpointed on its Worker (which is
+  then freed); a paused Actor's node-local snapshot is uploaded as-is, ending
+  its node pinning.
 
 - **Pause**: a short-term checkpoint of a running Actor. Snapshot files remain
   on the node VM, and the following Resume is prioritized onto the node VM

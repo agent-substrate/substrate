@@ -394,6 +394,10 @@ stateDiagram-v2
     RESUMING --> RUNNING : restore / boot complete
     RUNNING --> SUSPENDING : SuspendActor
     SUSPENDING --> SUSPENDED : checkpoint complete
+    RUNNING --> PAUSING : PauseActor
+    PAUSING --> PAUSED : node-local checkpoint complete
+    PAUSED --> RESUMING : ResumeActor (pinned to the snapshot's node)
+    PAUSED --> SUSPENDING : SuspendActor (uploads the node-local snapshot)
     SUSPENDED --> [*] : DeleteActor
 ```
 
