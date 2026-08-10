@@ -22,6 +22,8 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/go-cmp/cmp"
 	"google.golang.org/protobuf/testing/protocmp"
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -558,5 +560,107 @@ func TestWorkloadSpecFromActorTemplatePropagatesSecurityContext(t *testing.T) {
 	}
 	if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
 		t.Errorf("WorkloadSpec mismatch (-want +got):\n%s", diff)
+	}
+}
+
+func TestToAteletResources(t *testing.T) {
+	tests := []struct {
+		name string
+		in   *atev1alpha1.ContainerResources
+		want *ateletpb.ResourceLimits
+	}{{
+		name: "nil resources",
+		in:   nil,
+		want: nil,
+	}, {
+		name: "empty limits",
+		in:   &atev1alpha1.ContainerResources{},
+		want: nil,
+	}, {
+		name: "memory only",
+		in: &atev1alpha1.ContainerResources{Limits: atev1alpha1.ContainerResourceList{
+			corev1.ResourceMemory: resource.MustParse("256Mi"),
+		}},
+		want: &ateletpb.ResourceLimits{MemoryBytes: 268435456},
+	}, {
+		name: "cpu only",
+		in: &atev1alpha1.ContainerResources{Limits: atev1alpha1.ContainerResourceList{
+			corev1.ResourceCPU: resource.MustParse("200m"),
+		}},
+		want: &ateletpb.ResourceLimits{CpuMillis: 200},
+	}, {
+		name: "both",
+		in: &atev1alpha1.ContainerResources{Limits: atev1alpha1.ContainerResourceList{
+			corev1.ResourceMemory: resource.MustParse("1Gi"),
+			corev1.ResourceCPU:    resource.MustParse("1"),
+		}},
+		want: &ateletpb.ResourceLimits{MemoryBytes: 1073741824, CpuMillis: 1000},
+	}}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := toAteletResources(tc.in)
+			if tc.want == nil {
+				if got != nil {
+					t.Fatalf("toAteletResources() = %v, want nil", got)
+				}
+				return
+			}
+			if got == nil {
+				t.Fatalf("toAteletResources() = nil, want %v", tc.want)
+			}
+			if got.GetMemoryBytes() != tc.want.GetMemoryBytes() {
+				t.Errorf("memory_bytes = %d, want %d", got.GetMemoryBytes(), tc.want.GetMemoryBytes())
+			}
+			if got.GetCpuMillis() != tc.want.GetCpuMillis() {
+				t.Errorf("cpu_millis = %d, want %d", got.GetCpuMillis(), tc.want.GetCpuMillis())
+			}
+		})
+	}
+}
+
+// The limits a template declares must reach the workload spec atelet receives.
+// Without this, removing the Resources field from the ateletpb.Container
+// literal leaves every test in the repository green while limits never leave
+// ate-api-server.
+func TestWorkloadSpecFromActorTemplatePropagatesResources(t *testing.T) {
+	got, err := workloadSpecFromActorTemplate(&atev1alpha1.ActorTemplate{
+		ObjectMeta: metav1.ObjectMeta{Name: "tmpl-limits", Namespace: "agent-ns"},
+		Spec: atev1alpha1.ActorTemplateSpec{
+			SandboxClass: atev1alpha1.SandboxClassMicroVM,
+			Containers: []atev1alpha1.Container{
+				{
+					Name:  "limited",
+					Image: "main",
+					Resources: &atev1alpha1.ContainerResources{
+						Limits: atev1alpha1.ContainerResourceList{
+							corev1.ResourceMemory: resource.MustParse("256Mi"),
+							corev1.ResourceCPU:    resource.MustParse("200m"),
+						},
+					},
+				},
+				{Name: "unlimited", Image: "main"},
+			},
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("workloadSpecFromActorTemplate failed: %v", err)
+	}
+	if len(got.GetContainers()) != 2 {
+		t.Fatalf("containers = %d, want 2", len(got.GetContainers()))
+	}
+
+	limited := got.GetContainers()[0].GetResources()
+	if limited == nil {
+		t.Fatal("limited container Resources = nil, want the declared limits")
+	}
+	if limited.GetMemoryBytes() != 268435456 {
+		t.Errorf("memory_bytes = %d, want 268435456", limited.GetMemoryBytes())
+	}
+	if limited.GetCpuMillis() != 200 {
+		t.Errorf("cpu_millis = %d, want 200", limited.GetCpuMillis())
+	}
+	if r := got.GetContainers()[1].GetResources(); r != nil {
+		t.Errorf("unlimited container Resources = %v, want nil", r)
 	}
 }
