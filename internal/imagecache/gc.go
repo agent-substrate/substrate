@@ -98,25 +98,33 @@ func layerSetSignature(hexes []string) string {
 // the images and layers referenced by actors placed on this node. Bundles
 // exist exactly while an actor runs or transitions here (spec written
 // before any mount, deleted after unmount), so the scan protects actively
-// mounted images via the same authority that hands out mounts. Unreadable
-// specs root nothing (logged); leftover bundles from crashed actors
-// over-pin until wiped.
-func (s *Store) InUse() RootSet {
+// mounted images via the same authority that hands out mounts. Leftover
+// bundles from crashed actors over-pin until wiped.
+//
+// A non-nil error means the root set may be incomplete: an unreadable
+// actors dir, bundles dir, or spec. Deleting callers must then do nothing —
+// a missing root fails toward retiring a running actor's layers, and for a
+// long-running actor the spec is the only protection (its record mtime can
+// be arbitrarily old, so min-age would not save it). A missing dir or spec
+// file is not an error: no actor was ever placed, the actor is torn down,
+// or the bundle predates its spec write.
+func (s *Store) InUse() (RootSet, error) {
 	// Per-item lines are Debug and gated: on a full node this loop emits
 	// hundreds of them, and ungated slog calls build their attr args even
 	// when suppressed.
 	dbg := slog.Default().Enabled(context.Background(), slog.LevelDebug)
 	rs := RootSet{ImageDigests: map[string]bool{}, LayerHexes: map[string]bool{}, LayerSets: map[string]bool{}}
 	if s.actorsDir == "" {
-		return rs
+		return rs, nil
 	}
 	actorEntries, err := os.ReadDir(s.actorsDir)
 	if err != nil {
-		if !errors.Is(err, os.ErrNotExist) {
-			slog.Warn("Failed to list actors dir for image-cache root set", slog.String("dir", s.actorsDir), slog.Any("err", err))
+		if errors.Is(err, os.ErrNotExist) {
+			return rs, nil
 		}
-		return rs
+		return rs, fmt.Errorf("while listing actors dir %q for root set: %w", s.actorsDir, err)
 	}
+	var errs []error
 	for _, actor := range actorEntries {
 		if !actor.IsDir() {
 			continue
@@ -124,7 +132,11 @@ func (s *Store) InUse() RootSet {
 		bundlesDir := filepath.Join(s.actorsDir, actor.Name(), "bundles")
 		bundles, err := os.ReadDir(bundlesDir)
 		if err != nil {
-			continue // no bundles: actor not placed / already torn down
+			if errors.Is(err, os.ErrNotExist) {
+				continue // no bundles: actor not placed / already torn down
+			}
+			errs = append(errs, fmt.Errorf("while listing bundles of actor %q: %w", actor.Name(), err))
+			continue
 		}
 		for _, bundle := range bundles {
 			if !bundle.IsDir() {
@@ -135,8 +147,7 @@ func (s *Store) InUse() RootSet {
 			// layers and fail toward deleting them.
 			spec, err := ReadSpec(filepath.Join(bundlesDir, bundle.Name()))
 			if err != nil {
-				slog.Warn("Unreadable bundle overlay spec during image-cache root-set scan",
-					slog.String("bundle", filepath.Join(bundlesDir, bundle.Name())), slog.Any("err", err))
+				errs = append(errs, fmt.Errorf("while reading bundle overlay spec %q: %w", filepath.Join(actor.Name(), "bundles", bundle.Name()), err))
 				continue
 			}
 			if spec == nil {
@@ -145,7 +156,7 @@ func (s *Store) InUse() RootSet {
 			addSpecRoots(&rs, spec, filepath.Join(actor.Name(), "bundles", bundle.Name()), dbg)
 		}
 	}
-	return rs
+	return rs, errors.Join(errs...)
 }
 
 // addSpecRoots roots one bundle spec's image digest, layers, and exact
@@ -215,14 +226,22 @@ type evictionCandidate struct {
 //
 // Per-item failures are aggregated into the error, not fatal: the pass
 // continues and each item retries next pass. Passes are serialized. An
-// incomplete record enumeration skips the pass entirely — refcounts from
-// partial data would retire layers the unread records still reference.
+// incomplete record or bundle-spec enumeration skips the pass entirely —
+// refcounts and roots from partial data would retire layers that unread
+// records still reference or running actors still mount.
 func (s *Store) EvictUnused(ctx context.Context, targetBytes int64, dryRun bool) (EvictStats, error) {
 	var stats EvictStats
 	s.evictMu.Lock()
 	defer s.evictMu.Unlock()
 
-	roots := s.InUse()
+	roots, rootsErr := s.InUse()
+	if rootsErr != nil {
+		// Same shape as the record gate below: refcounts and roots from a
+		// partial scan would retire layers a running actor still mounts.
+		slog.ErrorContext(ctx, "Image cache eviction pass skipped: bundle specs could not be fully enumerated",
+			slog.Any("err", rootsErr))
+		return stats, rootsErr
+	}
 	cutoff := time.Now().Add(-s.minAge)
 
 	candidates, refcount, complete, listErr := s.listEviction(roots, cutoff, &stats)
@@ -440,15 +459,21 @@ func removeRetiredDirs(dirs []string) []error {
 // damage, the accepted alternative to an fsck against a live pool every
 // pass — mid-life debris leaks until the next restart, logged.
 //
-// Skipped entirely (ERROR) when the record enumeration is incomplete:
-// refcounts from partial data make referenced layers look like garbage.
+// Skipped entirely (ERROR) when the record or bundle-spec enumeration is
+// incomplete: refcounts from partial data make referenced layers look
+// like garbage, and a missing spec root would sweep a mounted layer.
 // Bundle-spec roots and min-age still veto.
 func (s *Store) RecoverOrphans(ctx context.Context) (EvictStats, error) {
 	var stats EvictStats
 	s.evictMu.Lock()
 	defer s.evictMu.Unlock()
 
-	roots := s.InUse()
+	roots, rootsErr := s.InUse()
+	if rootsErr != nil {
+		slog.ErrorContext(ctx, "Image cache startup orphan scan skipped: bundle specs could not be fully enumerated; orphaned layers (if any) will persist until the specs are repaired",
+			slog.Any("err", rootsErr))
+		return stats, rootsErr
+	}
 	cutoff := time.Now().Add(-s.minAge)
 	_, refcount, complete, listErr := s.listEviction(roots, cutoff, &stats)
 	if !complete {

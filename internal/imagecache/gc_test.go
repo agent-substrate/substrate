@@ -184,7 +184,10 @@ func TestEvictUnusedRootSet(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	rs := store.InUse()
+	rs, err := store.InUse()
+	if err != nil {
+		t.Fatalf("InUse: %v", err)
+	}
 	if !rs.ImageDigests[imgRooted.Digest.String()] {
 		t.Error("InUse missing digest-rooted image")
 	}
@@ -276,6 +279,84 @@ func TestEvictUnusedSkipsPassOnUnreadableRecord(t *testing.T) {
 	if _, err := os.Stat(imgB.LayerDirs[0]); err != nil {
 		t.Errorf("shared layer retired while an unreadable record references it: %v", err)
 	}
+}
+
+// An unreadable actors dir, bundles dir, or bundle spec must gate the
+// whole pass, exactly like an unreadable record: a missing root fails
+// toward retiring a running actor's layers, and for a long-running actor
+// the spec is the only protection (its record mtime can be arbitrarily
+// old, so min-age cannot save it).
+func TestEvictUnusedSkipsPassOnUnreadableRoots(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("chmod 0000 does not block reads for root")
+	}
+	cases := []struct {
+		name string
+		deny func(t *testing.T, actorsDir, bundleDir string)
+	}{
+		{"actors dir unreadable", func(t *testing.T, actorsDir, _ string) {
+			denyRead(t, actorsDir)
+		}},
+		{"bundles dir unreadable", func(t *testing.T, actorsDir, _ string) {
+			denyRead(t, filepath.Join(actorsDir, "actor-1", "bundles"))
+		}},
+		{"bundle spec unreadable", func(t *testing.T, _, bundleDir string) {
+			denyRead(t, filepath.Join(bundleDir, OverlaySpecFileName))
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, host := newTestRegistry(t)
+			ref := host + "/test/rootgate:latest"
+			pushImage(t, ref, v1.Config{}, layerFromEntries(t, []tarEntry{
+				{name: "f", typeflag: tar.TypeReg, mode: 0o644, body: strings.Repeat("g", 1024)},
+			}))
+
+			actorsDir := t.TempDir()
+			store := newTestStore(t, WithActorsDir(actorsDir))
+			img := mustEnsure(t, store, ref)
+
+			// A running actor roots the image; its record is arbitrarily old.
+			bundleDir := filepath.Join(actorsDir, "actor-1", "bundles", "main")
+			if err := os.MkdirAll(bundleDir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := WriteSpec(bundleDir, &OverlaySpec{ImageDigest: img.Digest.String(), Layers: img.LayerDirs}); err != nil {
+				t.Fatal(err)
+			}
+			backdateStore(t, store, 3*time.Hour)
+
+			tc.deny(t, actorsDir, bundleDir)
+
+			stats, err := store.EvictUnused(context.Background(), math.MaxInt64, false)
+			if err == nil {
+				t.Fatal("EvictUnused returned no error with an unenumerable root set")
+			}
+			if stats.EvictedImages != 0 || stats.EvictedLayers != 0 {
+				t.Errorf("gated pass still evicted: %+v", stats)
+			}
+			if _, err := os.Stat(store.recordPath(img.Digest)); err != nil {
+				t.Errorf("record evicted while its actor's roots were unreadable: %v", err)
+			}
+			if _, err := os.Stat(img.LayerDirs[0]); err != nil {
+				t.Errorf("mounted layer retired while its actor's roots were unreadable: %v", err)
+			}
+		})
+	}
+}
+
+// denyRead removes all permissions and restores them at cleanup (so
+// t.TempDir removal works).
+func denyRead(t *testing.T, path string) {
+	t.Helper()
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(path, fi.Mode().Perm()) })
 }
 
 // An undecodable record contributes no refcounts, so evicting it would
