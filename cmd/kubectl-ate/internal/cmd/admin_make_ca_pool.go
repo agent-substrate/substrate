@@ -28,6 +28,10 @@ import (
 var caID string
 var targetSecretNamespace string
 var targetSecretName string
+var caKeyType string
+var caCommonName string
+var caPermittedDNSDomains []string
+var caMaxPathLen int
 
 var makeCaPoolCmd = &cobra.Command{
 	Use:   "make-ca-pool",
@@ -45,7 +49,19 @@ var makeCaPoolCmd = &cobra.Command{
 			return fmt.Errorf("while creating Kubernetes client: %w", err)
 		}
 
-		ca, err := localca.GenerateED25519CA(caID)
+		opts := localca.GenerateOptions{
+			ID:                  caID,
+			CommonName:          caCommonName,
+			KeyType:             localca.KeyType(caKeyType),
+			PermittedDNSDomains: caPermittedDNSDomains,
+		}
+		// -1 is the "say nothing about path length" sentinel, because 0 is a
+		// meaningful value here: it forbids intermediates entirely.
+		if caMaxPathLen >= 0 {
+			opts.MaxPathLen = &caMaxPathLen
+		}
+
+		ca, err := localca.GenerateCA(opts)
 		if err != nil {
 			return fmt.Errorf("while generating CA: %w", err)
 		}
@@ -84,5 +100,13 @@ func init() {
 	makeCaPoolCmd.Flags().StringVar(&caID, "ca-id", "", "The ID of the initial CA in the Pool")
 	makeCaPoolCmd.Flags().StringVar(&targetSecretNamespace, "secret-namespace", "default", "Create the secret in this namespace")
 	makeCaPoolCmd.Flags().StringVar(&targetSecretName, "name", "", "Create the secret with this name")
+	makeCaPoolCmd.Flags().StringVar(&caKeyType, "key-type", string(localca.KeyTypeED25519),
+		fmt.Sprintf("Signing key algorithm, %q or %q. Prefer %s for a CA whose certificates are validated by clients outside substrate, where Ed25519 support cannot be assumed.",
+			localca.KeyTypeED25519, localca.KeyTypeECDSAP256, localca.KeyTypeECDSAP256))
+	makeCaPoolCmd.Flags().StringVar(&caCommonName, "common-name", "", "Subject common name of the CA certificate. Cosmetic; nothing authenticates on it.")
+	makeCaPoolCmd.Flags().StringArrayVar(&caPermittedDNSDomains, "permitted-dns-domain", nil,
+		"Constrain the CA to issuing for names beneath this DNS domain. Repeatable. Strongly recommended for any CA that signs for names substrate does not own.")
+	makeCaPoolCmd.Flags().IntVar(&caMaxPathLen, "max-path-len", -1,
+		"Maximum number of intermediate CAs beneath this one. 0 forbids intermediates; 1 permits a delegated signing intermediate. -1 leaves it unconstrained.")
 	makeCaPoolCmd.MarkFlagRequired("name")
 }

@@ -16,13 +16,17 @@ package localca
 
 import (
 	"bytes"
+	"crypto"
+	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
+	"io"
 	"math/big"
 	"strings"
 	"testing"
@@ -296,5 +300,206 @@ func TestUnmarshalErrors(t *testing.T) {
 				t.Errorf("error = %q, want substring %q", err.Error(), tt.wantInErr)
 			}
 		})
+	}
+}
+
+// externalSigner stands in for a KMS or HSM signer: it can sign, but it holds
+// no exportable key material.
+type externalSigner struct{ inner ed25519.PrivateKey }
+
+func (e externalSigner) Public() crypto.PublicKey { return e.inner.Public() }
+func (e externalSigner) Sign(r io.Reader, digest []byte, opts crypto.SignerOpts) ([]byte, error) {
+	return e.inner.Sign(r, digest, opts)
+}
+
+// The point of typing SigningKey as crypto.Signer is that a key living outside
+// the process can be substituted. Verify that actually works end to end: such
+// a signer can issue certificates, and Marshal refuses it with an explanation
+// rather than x509's "unknown key type".
+func TestExternalSignerCanIssueButCannotBeMarshalled(t *testing.T) {
+	base, err := GenerateED25519CA("external")
+	if err != nil {
+		t.Fatalf("GenerateED25519CA: %v", err)
+	}
+	ca := &CA{
+		ID:              base.ID,
+		SigningKey:      externalSigner{inner: base.SigningKey.(ed25519.PrivateKey)},
+		RootCertificate: base.RootCertificate,
+	}
+
+	// Issuing works: x509.CreateCertificate only needs Public and Sign.
+	leafPub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generating leaf key: %v", err)
+	}
+	leafDER, err := x509.CreateCertificate(rand.Reader, &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "leaf"},
+		NotBefore:    time.Now().Add(-time.Minute),
+		NotAfter:     time.Now().Add(time.Hour),
+	}, ca.RootCertificate, leafPub, ca.SigningKey)
+	if err != nil {
+		t.Fatalf("signing with an external signer: %v", err)
+	}
+	if _, err := x509.ParseCertificate(leafDER); err != nil {
+		t.Fatalf("parsing the issued leaf: %v", err)
+	}
+
+	// Serializing does not, and must say why.
+	_, err = Marshal(&Pool{CAs: []*CA{ca}})
+	if err == nil {
+		t.Fatal("Marshal serialized a signer with no exportable key material")
+	}
+	if !strings.Contains(err.Error(), "KMS") {
+		t.Errorf("error does not explain the external-signer case: %v", err)
+	}
+}
+
+func TestGenerateCAKeyTypes(t *testing.T) {
+	for _, tc := range []struct {
+		keyType KeyType
+		check   func(*testing.T, crypto.Signer)
+	}{
+		{KeyTypeED25519, func(t *testing.T, k crypto.Signer) {
+			if _, ok := k.(ed25519.PrivateKey); !ok {
+				t.Errorf("key type = %T, want ed25519.PrivateKey", k)
+			}
+		}},
+		{KeyTypeECDSAP256, func(t *testing.T, k crypto.Signer) {
+			ec, ok := k.(*ecdsa.PrivateKey)
+			if !ok {
+				t.Fatalf("key type = %T, want *ecdsa.PrivateKey", k)
+			}
+			if ec.Curve != elliptic.P256() {
+				t.Errorf("curve = %v, want P-256", ec.Curve.Params().Name)
+			}
+		}},
+	} {
+		t.Run(string(tc.keyType), func(t *testing.T) {
+			ca, err := GenerateCA(GenerateOptions{ID: "k", KeyType: tc.keyType})
+			if err != nil {
+				t.Fatalf("GenerateCA: %v", err)
+			}
+			tc.check(t, ca.SigningKey)
+
+			// Whatever the algorithm, the result has to survive the pool.
+			data, err := Marshal(&Pool{CAs: []*CA{ca}})
+			if err != nil {
+				t.Fatalf("Marshal: %v", err)
+			}
+			restored, err := Unmarshal(data)
+			if err != nil {
+				t.Fatalf("Unmarshal: %v", err)
+			}
+			tc.check(t, restored.CAs[0].SigningKey)
+		})
+	}
+
+	if _, err := GenerateCA(GenerateOptions{ID: "k", KeyType: "rsa-8192"}); err == nil {
+		t.Error("GenerateCA accepted an unknown key type")
+	}
+}
+
+func TestGenerateCANameConstraintsAreEnforced(t *testing.T) {
+	ca, err := GenerateCA(GenerateOptions{
+		ID:                  "constrained",
+		CommonName:          "constrained CA",
+		PermittedDNSDomains: []string{"permitted.example"},
+	})
+	if err != nil {
+		t.Fatalf("GenerateCA: %v", err)
+	}
+	if !ca.RootCertificate.PermittedDNSDomainsCritical {
+		t.Error("the name constraint is not marked critical, so a client that ignores it still trusts the chain")
+	}
+
+	roots := x509.NewCertPool()
+	roots.AddCert(ca.RootCertificate)
+
+	for name, host := range map[string]string{
+		"inside":  "api.permitted.example",
+		"outside": "api.forbidden.example",
+	} {
+		t.Run(name, func(t *testing.T) {
+			leafPub, _, err := ed25519.GenerateKey(rand.Reader)
+			if err != nil {
+				t.Fatalf("generating leaf key: %v", err)
+			}
+			leafDER, err := x509.CreateCertificate(rand.Reader, &x509.Certificate{
+				SerialNumber: big.NewInt(2),
+				DNSNames:     []string{host},
+				NotBefore:    time.Now().Add(-time.Minute),
+				NotAfter:     time.Now().Add(time.Hour),
+				ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+			}, ca.RootCertificate, leafPub, ca.SigningKey)
+			if err != nil {
+				t.Fatalf("signing leaf: %v", err)
+			}
+			leaf, err := x509.ParseCertificate(leafDER)
+			if err != nil {
+				t.Fatalf("parsing leaf: %v", err)
+			}
+
+			// Signing always succeeds -- CreateCertificate does not check
+			// constraints. Verification is where the constraint bites, which
+			// is the property that makes it a compromise backstop.
+			_, err = leaf.Verify(x509.VerifyOptions{
+				DNSName: host, Roots: roots,
+				KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+			})
+			if name == "inside" && err != nil {
+				t.Errorf("in-constraint leaf failed to verify: %v", err)
+			}
+			if name == "outside" && err == nil {
+				t.Error("out-of-constraint leaf verified; the constraint is not enforced")
+			}
+		})
+	}
+}
+
+func TestGenerateCAMaxPathLen(t *testing.T) {
+	zero, one := 0, 1
+
+	unset, err := GenerateCA(GenerateOptions{ID: "unset"})
+	if err != nil {
+		t.Fatalf("GenerateCA: %v", err)
+	}
+	// Historical behavior: no path length stated at all. A parsed certificate
+	// reports that as -1, which is how it differs from an explicit 0.
+	if unset.RootCertificate.MaxPathLenZero || unset.RootCertificate.MaxPathLen != -1 {
+		t.Errorf("unset: MaxPathLen=%d MaxPathLenZero=%v, want the constraint absent",
+			unset.RootCertificate.MaxPathLen, unset.RootCertificate.MaxPathLenZero)
+	}
+
+	leafOnly, err := GenerateCA(GenerateOptions{ID: "leaf-only", MaxPathLen: &zero})
+	if err != nil {
+		t.Fatalf("GenerateCA: %v", err)
+	}
+	// 0 and "absent" encode identically in the struct; MaxPathLenZero is what
+	// separates them, and getting it wrong silently permits intermediates.
+	if !leafOnly.RootCertificate.MaxPathLenZero {
+		t.Error("MaxPathLen 0 did not set MaxPathLenZero, so the CA still permits intermediates")
+	}
+
+	delegating, err := GenerateCA(GenerateOptions{ID: "delegating", MaxPathLen: &one})
+	if err != nil {
+		t.Fatalf("GenerateCA: %v", err)
+	}
+	if delegating.RootCertificate.MaxPathLen != 1 || delegating.RootCertificate.MaxPathLenZero {
+		t.Errorf("MaxPathLen=%d MaxPathLenZero=%v, want 1 and false",
+			delegating.RootCertificate.MaxPathLen, delegating.RootCertificate.MaxPathLenZero)
+	}
+}
+
+func TestGenerateCALifetimeAndCommonName(t *testing.T) {
+	ca, err := GenerateCA(GenerateOptions{ID: "x", CommonName: "my ca", Lifetime: 2 * time.Hour})
+	if err != nil {
+		t.Fatalf("GenerateCA: %v", err)
+	}
+	if got := ca.RootCertificate.Subject.CommonName; got != "my ca" {
+		t.Errorf("CN = %q, want %q", got, "my ca")
+	}
+	if got := ca.RootCertificate.NotAfter.Sub(ca.RootCertificate.NotBefore); got != 2*time.Hour {
+		t.Errorf("lifetime = %v, want 2h", got)
 	}
 }
