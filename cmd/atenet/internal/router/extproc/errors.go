@@ -54,8 +54,8 @@ func WrapReqError(code envoy_type.StatusCode, cause error, format string, args .
 	}
 }
 
-// ImmediateResponse tells Envoy to answer the request itself, without going
-// upstream.
+// ImmediateResponse tells the dataplane to answer the request itself, without
+// going upstream.
 func ImmediateResponse(statusCode envoy_type.StatusCode, message string) *extprocv3.ProcessingResponse {
 	return &extprocv3.ProcessingResponse{
 		Response: &extprocv3.ProcessingResponse_ImmediateResponse{

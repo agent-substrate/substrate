@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package egress implements the ext_proc handler for traffic leaving the mesh:
+// Package egress implements the ext_proc handler for outbound actor traffic:
 // it authenticates the actor behind an egress CONNECT before the gateway
 // tunnels it out.
 //
@@ -88,18 +88,9 @@ func (h *Handler) Direction() extproc.Direction { return extproc.DirectionEgress
 // request metadata — contributes to the identity; the only inputs are the
 // certificate the actor-identity CA signed and the control plane's own view of
 // that actor.
-//
-// Authorization by destination and credential/token injection are deliberately
-// a TODO once we have SessionIdentity RPC service figured out.
-//
-// Egress never resumes an actor — it requires one already RUNNING — and picks
-// no upstream of its own, so the Result carries neither a resume outcome nor a
-// target.
 func (h *Handler) HandleRequestHeaders(ctx context.Context, md *extproc.RequestMetadata) (extproc.Result, error) {
-	// Dispatch is by filter chain, so reaching here means the egress listener
-	// accepted the request. That listener only routes CONNECT (its sole route
-	// is a connect_matcher), so anything else is a config drift rather than a
-	// client the gateway should tunnel for.
+	// Sanity check that we were called on the Egress listener filter chain with
+	// a CONNECT.
 	if !strings.EqualFold(md.Method, "CONNECT") {
 		return extproc.Result{}, extproc.NewReqError(envoy_type.StatusCode_MethodNotAllowed,
 			"egress denied: expected CONNECT, got %q", md.Method)
@@ -123,32 +114,62 @@ func (h *Handler) HandleRequestHeaders(ctx context.Context, md *extproc.RequestM
 			"egress denied: invalid actor certificate")
 	}
 
+	if err := validateIdentity(identity); err != nil {
+		return extproc.Result{}, err
+	}
+	if err := h.validateActor(ctx, identity); err != nil {
+		return extproc.Result{}, err
+	}
+
+	slog.InfoContext(ctx, "egress identity authenticated",
+		slog.String("atespace", identity.Atespace),
+		slog.String("actor", identity.ActorName),
+		slog.String("actorUid", identity.ActorUid),
+		// For a CONNECT the :authority is the actor's original destination
+		// (IP:port).
+		slog.String("destination", md.Host))
+
+	// Identity is authenticated; let the CONNECT proceed unchanged.
+	return extproc.Result{
+		Response: &extprocv3.HeadersResponse{
+			Response: &extprocv3.CommonResponse{},
+		},
+	}, nil
+}
+
+// validateIdentity checks that the identity a verified actor certificate
+// carries names an actor that could exist at all, before it is used as a
+// control-plane lookup key.
+func validateIdentity(identity *substratex509.ActorIdentity) error {
+	// The CA only ever mints these from control-plane state, so a name that is
+	// not a legal resource name means the CA or its inputs are compromised.
+	if !resources.IsValidResourceName(identity.Atespace) || !resources.IsValidResourceName(identity.ActorName) {
+		return extproc.NewReqError(envoy_type.StatusCode_Forbidden,
+			"egress denied: invalid actor identity %q/%q", identity.Atespace, identity.ActorName)
+	}
+	return nil
+}
+
+// validateActor checks the identity a certificate certifies against the control
+// plane's current view of that actor: it still exists, it is the actor the
+// certificate was issued to, and it is running. Every error it returns is
+// already a client-facing ext_proc denial.
+func (h *Handler) validateActor(ctx context.Context, identity *substratex509.ActorIdentity) error {
 	atespace := identity.Atespace
 	actorName := identity.ActorName
 	actorUID := identity.ActorUid
-	// For a CONNECT the :authority is the actor's original destination (IP:port).
-	destination := md.Host
-
-	// The CA only ever mints these from control-plane state, so a name that is
-	// not a legal resource name means the CA or its inputs are compromised.
-	if !resources.IsValidResourceName(atespace) || !resources.IsValidResourceName(actorName) {
-		return extproc.Result{}, extproc.NewReqError(envoy_type.StatusCode_Forbidden,
-			"egress denied: invalid actor identity %q/%q", atespace, actorName)
-	}
 
 	// Confirm the certified actor still exists. The name is only a lookup key
 	// here; the UID below is what actually authorizes.
+	// TODO: this can cause heavy load on ate api server. Change it based on https://github.com/agent-substrate/substrate/issues/592.
 	actor, err := h.apiClient.GetActor(ctx, &ateapipb.GetActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: atespace, Name: actorName},
 	})
 	if err != nil {
-		return extproc.Result{}, mapEgressIdentityError(atespace, actorName, err)
+		return mapEgressIdentityError(atespace, actorName, err)
 	}
 
-	// Authorize on the UID, not the name. Names are reused: delete an actor and
-	// recreate it under the same atespace/name and it is a different actor with
-	// a different UID. A certificate outliving its actor must not carry over to
-	// the successor, so the UID the CA certified has to match the UID the
+	// Authorize on the UID, not the name. The UID the CA certified has to match the UID the
 	// control plane holds right now.
 	if uid := actor.GetMetadata().GetUid(); uid != actorUID {
 		slog.WarnContext(ctx, "egress denied: actor UID mismatch",
@@ -156,31 +177,16 @@ func (h *Handler) HandleRequestHeaders(ctx context.Context, md *extproc.RequestM
 			slog.String("actor", actorName),
 			slog.String("certificateActorUid", actorUID),
 			slog.String("currentActorUid", uid))
-		return extproc.Result{}, extproc.NewReqError(envoy_type.StatusCode_Forbidden,
+		return extproc.NewReqError(envoy_type.StatusCode_Forbidden,
 			"egress denied: actor %q/%q is not the actor this certificate was issued to", atespace, actorName)
 	}
 
 	// The actor performing egress must actually be running.
 	if actor.GetStatus() != ateapipb.Actor_STATUS_RUNNING {
-		return extproc.Result{}, extproc.NewReqError(envoy_type.StatusCode_Forbidden,
+		return extproc.NewReqError(envoy_type.StatusCode_Forbidden,
 			"egress denied: actor %q/%q is %s, not running", atespace, actorName, actor.GetStatus())
 	}
-
-	slog.InfoContext(ctx, "egress identity authenticated",
-		slog.String("atespace", atespace),
-		slog.String("actor", actorName),
-		slog.String("actorUid", actorUID),
-		slog.String("destination", destination),
-		slog.String("status", actor.GetStatus().String()))
-
-	// Identity is authenticated; let the CONNECT proceed unchanged. Milestone 2
-	// would additionally authorize `destination` and inject upstream credentials
-	// here by returning a HeaderMutation.
-	return extproc.Result{
-		Response: &extprocv3.HeadersResponse{
-			Response: &extprocv3.CommonResponse{},
-		},
-	}, nil
+	return nil
 }
 
 // authenticateActorCertificate turns the mTLS peer certificate Envoy recorded

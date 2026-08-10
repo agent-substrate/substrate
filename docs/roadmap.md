@@ -95,7 +95,7 @@ Below is a collection of finer-grained efforts which we believe align with the a
 * Agent Development Kit (ADK) Native Support: Developing first-class bindings for ADK, allowing developers to build stateful agents that natively leverage Substrate’s lifecycle management and persistent working memory.
 * LangChain Remote Execution Provider: A dedicated provider for LangChain to run complex, long-running agent tools in durable, sandboxed environments.
 * Native MCP Server Hosting: Built-in support for deploying Model Context Protocol (MCP) servers as managed Substrate Actors, creating a secure tool ecosystem for any LLM.
-* Actor-to-Actor (A2A) Calling Model: Standardized protocol for actors to discover and call other actors within the mesh via the gateway.
+* Actor-to-Actor (A2A) Calling Model: Standardized protocol for actors to discover and call other actors within Substrate via the gateway.
 * Native MCP Tool Hosting: Ability to define and deploy standard Model Context Protocol (MCP) servers as managed Substrate Actors, providing a plug-and-play ecosystem for agentic tools.
 
 ### Operability

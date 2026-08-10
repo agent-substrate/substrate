@@ -29,7 +29,7 @@ func NewRouterCmd() *cobra.Command {
 
 	cmd := &cobra.Command{
 		Use:   "router",
-		Short: "Router components including xDS server and Envoy ExtProc gateway processing server",
+		Short: "Router components including the Envoy xDS server and the ext_proc gateway processing server",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			srv, err := NewRouterServer(cfg)
 			if err != nil {
@@ -41,7 +41,7 @@ func NewRouterCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar((*string)(&cfg.Mode), "mode", string(ModeAll), fmt.Sprintf("Traffic direction this instance serves: %q (also runs the xDS server and ActorTemplate controller for the ingress Envoy), %q (ext_proc only, needs no Kubernetes access), or %q for both. The ext_proc mux refuses a direction this instance was not started to serve rather than falling back to the other one", ModeIngress, ModeEgress, ModeAll))
+	cmd.Flags().StringVar((*string)(&cfg.Mode), "mode", string(ModeAll), fmt.Sprintf("Traffic direction this instance serves: %q (also runs the ingress control plane — the xDS server and ActorTemplate controller — for an Envoy dataplane), %q (ext_proc only, needs no Kubernetes access), or %q for both. The ext_proc mux refuses a direction this instance was not started to serve rather than falling back to the other one", ModeIngress, ModeEgress, ModeAll))
 	cmd.Flags().StringVar(&cfg.LogLevel, "log-level", "info", "Log level: debug, info, warn, error")
 	cmd.Flags().StringVar(&cfg.MetricsAddr, "metrics-listen-addr", ":9090", "Address and port the prometheus metrics server should listen on.")
 	cmd.Flags().BoolVar(&cfg.Standalone, "standalone", false, "Run in standalone mode, bypassing creation of managed deployment and services in Kubernetes cluster")
@@ -51,13 +51,13 @@ func NewRouterCmd() *cobra.Command {
 	cmd.Flags().StringVar(&cfg.AteapiAddr, "ateapi-address", "k8s:///api.ate-system.svc:443", "gRPC dial target for the cluster ateapi Control instance.")
 	cmd.Flags().IntVar(&cfg.HttpPort, "port-http", 8080, "TCP port for workload traffic entering through the Envoy Router")
 	cmd.Flags().IntVar(&cfg.XdsPort, "port-xds", 18000, "TCP port listening for the xDS dynamic Envoy connections")
-	cmd.Flags().IntVar(&cfg.ExtprocPort, "port-extproc", 50051, "Listen port for the Envoy dynamic External Processing (ext_proc) server")
-	cmd.Flags().StringVar(&cfg.ExtprocAddr, "extproc-address", "127.0.0.1", "Host IP or address of the Envoy External Processing (ext_proc) server")
+	cmd.Flags().IntVar(&cfg.ExtprocPort, "port-extproc", 50051, "Listen port for the External Processing (ext_proc) server the dataplane calls")
+	cmd.Flags().StringVar(&cfg.ExtprocAddr, "extproc-address", "127.0.0.1", "Host IP or address of the External Processing (ext_proc) server")
 	cmd.Flags().StringVar(&cfg.EnvoyImage, "envoy-image", "envoyproxy/envoy:v1.30-latest", "Image URI used for dynamically launched router instances")
 	cmd.Flags().StringVar(&cfg.TemplatesFile, "actor-templates-file", "", "Path to offline YAML configuration file listing ActorTemplates")
 	cmd.Flags().IntVar(&cfg.StatusPort, "status-port", 4040, "Port to serve /statusz on (set <= 0 to disable serving status)")
 	cmd.Flags().DurationVar(&cfg.HealthInterval, "health-interval", 1*time.Second, "Interval for checking health of dependent services")
-	cmd.Flags().IntVar(&cfg.HttpsPort, "port-https", 8443, "TCP port for HTTPS workload traffic entering through the Envoy Router")
+	cmd.Flags().IntVar(&cfg.HttpsPort, "port-https", 8443, "TCP port for HTTPS workload traffic entering through the router dataplane")
 	cmd.Flags().StringVar(&cfg.EnvoyCertPath, "envoy-cert-path", "", "Path to the Envoy certificate file.")
 	cmd.Flags().StringVar(&cfg.UpstreamCredentialBundlePath, "upstream-credential-bundle", "/run/podidentity.podcert.ate.dev/credential-bundle.pem", "PEM credential bundle (cert+key) the router presents as the client cert when dialing the actor's atunnel ingress server over mTLS. Empty disables upstream mTLS (legacy plaintext pod-IP:80).")
 	cmd.Flags().StringVar(&cfg.UpstreamTrustBundlePath, "upstream-trust-bundle", "/run/podidentity.podcert.ate.dev/trust-bundle.pem", "PEM trust bundle used to validate the actor's atunnel ingress server certificate.")
@@ -86,7 +86,7 @@ func NewRouterCmd() *cobra.Command {
 	cmd.Flags().DurationVar(&cfg.DrainDelay, "drain-delay", 13*time.Second, "How long to keep serving after SIGTERM before starting the drain, covering readiness-probe detection and Service endpoint propagation")
 	cmd.Flags().DurationVar(&cfg.DrainTimeout, "drain-timeout", 0, "Deadline for the ext_proc drain on shutdown; streams still open past it (parked requests included) are forcefully cancelled. 0 (the default) derives --parked-request-budget + the actor route timeout + margin so parked requests always finish normally. Explicit values must be >= --parked-request-budget")
 	cmd.Flags().StringVar(&cfg.EnvoyAdminAddr, "envoy-admin-address", "127.0.0.1:9901", "Envoy admin interface the shutdown sequence drives to drain the sidecar (healthcheck/fail, drain_listeners, stats polling). Ignored with --atenet-router=agentgateway")
-	cmd.Flags().StringVar(&cfg.DrainCompleteFile, "drain-complete-file", defaultDrainCompleteFile, "Marker file created (on a pod-shared emptyDir) once the shutdown drain completes; the Envoy container's preStop hook polls for it so Envoy exits as soon as — and no sooner than — the drain is done. Removed at startup to defuse stale markers. Empty disables the handshake")
+	cmd.Flags().StringVar(&cfg.DrainCompleteFile, "drain-complete-file", defaultDrainCompleteFile, "Marker file created (on a pod-shared emptyDir) once the shutdown drain completes; the dataplane container's preStop hook polls for it so the proxy exits as soon as — and no sooner than — the drain is done. Removed at startup to defuse stale markers. Empty disables the handshake")
 
 	return cmd
 }

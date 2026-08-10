@@ -19,8 +19,7 @@
 #   hack/install-ate-kind.sh --deploy-demo-egress
 #
 # The egress demo Actor accepts {"url":"..."} and performs an HTTP GET. With
-# egress turned on (ate-api-server --egress-gateway-address, which ateapi stamps
-# onto every atelet Run/Restore), the Actor's outbound TCP is nftables-REDIRECTed
+# egress turned on, the Actor's outbound TCP is nftables-REDIRECTed
 # into atunnel, wrapped in mTLS + HTTP CONNECT, and sent to the Envoy egress
 # gateway, which terminates CONNECT and tunnels to the real destination. This
 # script drives that path and shows the gateway's access log proving the actor's

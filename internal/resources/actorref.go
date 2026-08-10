@@ -47,7 +47,7 @@ func (r ActorRef) LogValue() slog.Value {
 	)
 }
 
-// DNSName returns the mesh DNS name the actor is reachable at.
+// DNSName returns the uniform DNS name the actor is reachable at.
 // This is: "<name>.<atespace>.actors.resources.substrate.ate.dev".
 func (r ActorRef) DNSName() string {
 	return r.Name + "." + r.Atespace + "." + ActorDNSSuffix

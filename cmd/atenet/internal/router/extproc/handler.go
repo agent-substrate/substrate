@@ -30,8 +30,8 @@ type Handler interface {
 	// its dispatch table by it.
 	Direction() Direction
 
-	// HandleRequestHeaders decides what Envoy should do with a request whose
-	// headers have just arrived.
+	// HandleRequestHeaders decides what the dataplane should do with a request
+	// whose headers have just arrived.
 	//
 	// A returned error denies the request: a *ReqError carries the status code
 	// and client-safe body to answer with, anything else becomes a 500. The
@@ -43,7 +43,7 @@ type Handler interface {
 
 // Result is what a handler tells the mux about a request it allowed.
 type Result struct {
-	// Response is the header mutation Envoy applies before the request
+	// Response is the header mutation the dataplane applies before the request
 	// continues. Handlers that only authenticate return an empty CommonResponse.
 	Response *extprocv3.HeadersResponse
 

@@ -30,9 +30,9 @@ const (
 
 // Mode selects which ext_proc directions an atenet instance serves. One binary
 // implements both, as two handlers behind the same ext_proc mux, but a
-// deployment usually fronts one Envoy and only needs the matching direction:
-// ingress and egress scale independently, so they run as separate Deployments
-// (atenet-router and atenet-egress).
+// deployment usually fronts one dataplane proxy and only needs the matching
+// direction: ingress and egress scale independently, so they run as separate
+// Deployments (atenet-router and atenet-egress).
 //
 // The mode is a floor on what an instance will answer, not just a hint. The mux
 // refuses a direction it has no handler for rather than falling back to the
@@ -42,12 +42,15 @@ const (
 type Mode string
 
 const (
-	// ModeIngress serves actor-addressed traffic entering the mesh, and runs
-	// the xDS server and ActorTemplate controller that configure its Envoy.
+	// ModeIngress serves actor-addressed traffic arriving at the ingress
+	// gateway, and runs the ingress control plane — the xDS server and
+	// ActorTemplate controller — that configures its dataplane. Only the Envoy
+	// dataplane takes configuration from it; agentgateway is statically
+	// configured.
 	ModeIngress Mode = "ingress"
-	// ModeEgress serves actor CONNECTs leaving the mesh. Nothing else runs: the
-	// egress Envoy is statically configured, so there is no xDS server, no
-	// ActorTemplate controller, and no Kubernetes client.
+	// ModeEgress serves actor CONNECTs leaving through the egress gateway.
+	// Nothing else runs: the egress gateway is statically configured, so there
+	// is no xDS server, no ActorTemplate controller, and no Kubernetes client.
 	ModeEgress Mode = "egress"
 	// ModeAll serves both directions from one instance. This is the default,
 	// and what a single-gateway or local development setup wants.
@@ -56,7 +59,7 @@ const (
 
 // ServesIngress reports whether this mode answers ingress requests. It also
 // gates the ingress control plane: the xDS server that configures the ingress
-// Envoy and the ActorTemplate controller that feeds it.
+// dataplane (Envoy only) and the ActorTemplate controller that feeds it.
 func (m Mode) ServesIngress() bool { return m != ModeEgress }
 
 // ServesEgress reports whether this mode answers egress CONNECTs.
@@ -159,8 +162,8 @@ type routerConfig struct {
 	EnvoyAdminAddr string
 
 	// DrainCompleteFile is the marker file written once shutdown completes,
-	// releasing Envoy's preStop hook on the shared emptyDir. Removed at startup to
-	// defuse stale markers. Empty disables the handshake.
+	// releasing the dataplane container's preStop hook on the shared emptyDir.
+	// Removed at startup to defuse stale markers. Empty disables the handshake.
 	DrainCompleteFile string
 }
 

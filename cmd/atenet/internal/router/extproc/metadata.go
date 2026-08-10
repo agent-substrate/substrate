@@ -26,8 +26,8 @@ import (
 const AuthorityHeader = ":authority"
 
 // RequestMetadata is the request the mux hands to a direction handler: the
-// HTTP headers Envoy sent, flattened and lowercased, with the pseudo-headers
-// every handler needs pulled out.
+// HTTP headers the dataplane sent, flattened and lowercased, with the
+// pseudo-headers every handler needs pulled out.
 type RequestMetadata struct {
 	// Headers holds every header, keyed by lowercased name.
 	Headers map[string]string

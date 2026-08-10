@@ -237,7 +237,7 @@ func TestSetOtlpCollector(t *testing.T) {
 	// No collector address may keep the router from starting. The address
 	// defaults to OTEL_EXPORTER_OTLP_ENDPOINT, which also feeds the router's
 	// own exporter and where https is perfectly valid; the router is the xDS
-	// control plane for every Envoy in the mesh, so dropping Envoy's spans is
+	// control plane for every ingress Envoy, so dropping Envoy's spans is
 	// always the cheaper failure. setOtlpCollector returns nothing precisely so
 	// this cannot regress into a startup error.
 	tests := []struct {

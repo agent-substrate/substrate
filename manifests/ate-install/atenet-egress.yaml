@@ -76,13 +76,7 @@ data:
               codec_type: HTTP1
               upgrade_configs:
               - upgrade_type: CONNECT
-              # SEE(lior): this pair is how the actor's certificate reaches the
-              # ext_proc handler. ext_proc can request Envoy attributes, but none
-              # of them carry a custom X.509 extension, so the only way to check
-              # ActorIdentity in Go is to have Envoy hand over the raw chain.
-              # SANITIZE_SET drops whatever x-forwarded-client-cert the client
-              # sent and writes Envoy's own view of the verified peer, and
-              # chain: true puts the full URL-encoded PEM chain in it.
+              # TODO(liorlieberman): Can we make this cleaner?
               forward_client_cert_details: SANITIZE_SET
               set_current_client_cert_details:
                 chain: true
@@ -155,7 +149,7 @@ data:
       clusters:
       # ext_proc gRPC server = the atenet router, co-located in this pod as a
       # sidecar and called over localhost (same topology the ingress gateway uses
-      # for its Envoy + ext_proc).
+      # for its dataplane + ext_proc).
       - name: ext_proc_server
         type: STATIC
         lb_policy: ROUND_ROBIN
@@ -210,6 +204,7 @@ spec:
         sysctls:
         - name: net.ipv4.ip_unprivileged_port_start
           value: "0"
+      terminationGracePeriodSeconds: 60
       containers:
       - name: envoy
         image: envoyproxy/envoy:v1.34-latest
@@ -227,6 +222,26 @@ spec:
         - atenet-egress
         - --service-cluster
         - atenet-egress
+        # Prevents Envoy from fast-exiting on SIGTERM before the ext-proc
+        # sidecar finishes its drain sequence. Polls for the drain-complete
+        # marker the sidecar writes on the shared emptyDir, terminating Envoy
+        # as soon as the drain completes (or at terminationGracePeriodSeconds
+        # if the sidecar crashes).
+        #
+        # TODO(liorlieberman): decide the drain policy for long-lived CONNECT
+        # tunnels. envoyDrainer polls downstream_cx_active until it reaches
+        # zero, which suits ingress (short request/response connections) but
+        # not egress: atunnel holds a tunnel open for the life of the actor's
+        # connection, so an actor still streaming when the rollout starts keeps
+        # the count above zero until the ~15s window expires. Every rollout
+        # with active egress will therefore log "N downstream connections still
+        # active at the drain deadline". Either accept that as the honest
+        # outcome (we tried to drain, then cut), or give egress its own shorter
+        # window so we stop pretending a tunnel will close on its own.
+        lifecycle:
+          preStop:
+            exec:
+              command: ["sh", "-c", "while [ ! -f /var/run/atenet/drain-complete ]; do sleep 0.5; done"]
         ports:
         - name: https
           containerPort: 443
@@ -256,6 +271,9 @@ spec:
         - name: actor-id-ca-certs
           mountPath: /run/actor-id-ca-certs
           readOnly: true
+        - name: drain-signal
+          mountPath: /var/run/atenet
+          readOnly: true
       # Co-located ext_proc server: the same atenet router binary the ingress
       # gateway runs, started with --mode=egress so it serves only the egress
       # ext_proc handler (no xDS server, no ActorTemplate controller, no
@@ -282,6 +300,11 @@ spec:
         # denies every egress CONNECT with a 503.
         - --actor-identity-ca-file=/run/actor-id-ca-certs/ca.crt
         - --otlp-collector-address=
+        # The egress Envoy's admin listener is on 15000, not the 9901 the flag
+        # defaults to (that is the ingress gateway's port). Without this the
+        # drain sequence dials a closed port, reads the connection refusal as
+        # "Envoy already exited", and reports a drain it never performed.
+        - --envoy-admin-address=127.0.0.1:15000
         env:
         - name: POD_NAME
           valueFrom:
@@ -311,10 +334,14 @@ spec:
         - name: actor-id-ca-certs
           mountPath: /run/actor-id-ca-certs
           readOnly: true
+        - name: drain-signal
+          mountPath: /var/run/atenet
       volumes:
       - name: config
         configMap:
           name: atenet-egress
+      - name: drain-signal
+        emptyDir: {}
       - name: servicedns
         projected:
           sources:

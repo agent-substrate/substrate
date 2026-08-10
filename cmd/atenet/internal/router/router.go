@@ -133,7 +133,7 @@ func (s *RouterServer) Run(ctx context.Context) error {
 	// shutdownCtx signals SIGTERM/SIGINT; kept separate from the work context
 	// so in-flight ext_proc streams (parked requests, most of all) are not
 	// cancelled the moment the signal arrives. drainOnShutdown drives the
-	// shutdown sequence: readiness flip → route-drain delay → Envoy drain →
+	// shutdown sequence: readiness flip → route-drain delay → dataplane drain →
 	// ext_proc drain → stop the rest.
 	shutdownCtx, stopSignals := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
 	defer stopSignals()
@@ -152,9 +152,9 @@ func (s *RouterServer) Run(ctx context.Context) error {
 	}
 	parkCfg := s.cfg.ParkedRequest.Normalized()
 
-	// The drain-complete marker persists container restarts (emptyDir); a
-	// stale one would release the Envoy preStop hook the moment a later drain
-	// begins.
+	// The drain-complete marker persists container restarts (emptyDir); a stale
+	// one would release the dataplane container's preStop hook the moment a
+	// later drain begins.
 	removeStaleDrainMarker(ctx, s.cfg.DrainCompleteFile)
 
 	serverboot.InitLogger()
@@ -263,8 +263,8 @@ func (s *RouterServer) Run(ctx context.Context) error {
 
 	s.health = newRouterHealth(s.cfg.HealthInterval, s.clientset, s.apiClient, s.cfg)
 
-	// The dataplane control plane — the xDS server and the ActorTemplate
-	// controller — configures the *ingress* Envoy. The egress Envoy is
+	// The ingress control plane — the xDS server and the ActorTemplate
+	// controller — configures the *ingress* dataplane. The egress gateway is
 	// statically configured, so an egress-only instance runs neither and needs
 	// no Kubernetes access.
 	if s.cfg.Mode.ServesIngress() {
@@ -281,7 +281,7 @@ func (s *RouterServer) Run(ctx context.Context) error {
 	})
 
 	// Start ExtProc Server. Driven by the drain sequence rather than context
-	// cancel: ext_proc is failClosed, so it must outlive Envoy's drain.
+	// cancel: ext_proc is failClosed, so it must outlive the dataplane's drain.
 	extprocGRPC := s.extprocSrv.NewGRPCServer()
 	g.Go(func() error {
 		slog.InfoContext(ctx, "Starting ExtProc Server", slog.Int("port", s.cfg.ExtprocPort))
@@ -356,8 +356,8 @@ func (s *RouterServer) Run(ctx context.Context) error {
 // OTEL_EXPORTER_OTLP_ENDPOINT, which the router's own exporter reads too and
 // which legitimately carries forms Envoy's plaintext tracer cluster cannot
 // reach — an https collector, most of all. Refusing to start would take the
-// xDS control plane for every Envoy in the mesh down over a tracing endpoint
-// that works fine for its other reader. Losing Envoy's spans is the smaller
+// xDS control plane for every ingress Envoy down over a tracing endpoint that
+// works fine for its other reader. Losing Envoy's spans is the smaller
 // failure, so take it and say so loudly.
 func setOtlpCollector(ctx context.Context, xdsSrv *XdsServer, addr string) {
 	if err := xdsSrv.SetOtlpCollector(addr); err != nil {

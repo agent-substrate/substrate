@@ -18,15 +18,15 @@ import (
 	extprocv3 "github.com/envoyproxy/go-control-plane/envoy/service/ext_proc/v3"
 )
 
-// Direction is the side of the mesh a request arrived on. It selects the
-// handler, so it must come from something Envoy asserts rather than from the
+// Direction is the gateway a request arrived through. It selects the handler,
+// so it must come from something the dataplane asserts rather than from the
 // request.
 type Direction string
 
 const (
-	// DirectionIngress is traffic entering the mesh, addressed to an actor.
+	// DirectionIngress is inbound traffic addressed to an actor.
 	DirectionIngress Direction = "ingress"
-	// DirectionEgress is traffic leaving the mesh, tunneled out of an actor.
+	// DirectionEgress is outbound traffic tunneled out of an actor.
 	DirectionEgress Direction = "egress"
 )
 

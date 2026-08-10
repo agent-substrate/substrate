@@ -36,7 +36,7 @@ import (
 const ServiceName = "atenet-router"
 
 // atenet.router.route.duration measures the latency from when the ext_proc handler receives a request
-// (Envoy -> EPP) until the target worker endpoint is resolved
+// (dataplane -> EPP) until the target worker endpoint is resolved
 const routeDurationMetricName = "atenet.router.route.duration"
 
 // NewRouteDurationHistogram creates the atenet.router.route.duration histogram from

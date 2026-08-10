@@ -72,7 +72,7 @@ func (c *RouterClient) Close() {
 	c.stop()
 }
 
-// Get issues GET path to actor through the router, setting the actor's mesh Host
+// Get issues GET path to actor through the router, setting the actor's DNS Host
 // so the router routes (and resumes) it. The caller must close the body.
 func (c *RouterClient) Get(ctx context.Context, actorRef resources.ActorRef, path string) (*http.Response, error) {
 	return c.request(ctx, http.MethodGet, actorRef, path, nil)

@@ -47,7 +47,7 @@ intercepted and carried over mTLS to a gateway that verifies who is making the r
    pod as an ext_proc sidecar, the same binary that serves ingress, started with `--mode=egress`)
    re-verifies the chain, requires exactly one `ActorIdentity` extension with `purpose: atunnel`,
    and calls the ate API (`GetActor`). It returns **403** unless the certified **UID** matches a
-   real, `RUNNING` actor. This mirrors the ingress gateway's Envoy + ext_proc co-location; a
+   real, `RUNNING` actor. This mirrors the ingress gateway's dataplane + ext_proc co-location; a
    standalone/shared ext_proc is a future step.
 
 ## Components
@@ -126,7 +126,7 @@ kubectl -n ate-system logs deploy/atenet-egress | grep '\[egress\]'
 
 # The co-located ext_proc sidecar logs the identity decision, including the UID it authorized on:
 kubectl -n ate-system logs deploy/atenet-egress -c ext-proc | grep -i 'egress identity\|egress denied'
-#   egress identity authenticated  atespace=demo actor=egress-demo actorUid=… status=STATUS_RUNNING
+#   egress identity authenticated  atespace=demo actor=egress-demo actorUid=… destination=<TARGET_IP>:80
 ```
 
 The `whoami` body shows `RemoteAddr: <atenet-egress pod IP>` — proof the request egressed

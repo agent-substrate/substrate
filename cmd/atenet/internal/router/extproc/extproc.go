@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package extproc implements the Envoy external processing (ext_proc) gRPC
-// server that the atenet router serves to its Envoy gateways.
+// Package extproc implements the external processing (ext_proc) gRPC server
+// that the atenet router serves to its dataplane gateways.
 //
 // This package is the multiplexer and nothing else: it terminates the
 // ext_proc stream, works out which direction — ingress or egress — a request
@@ -42,8 +42,8 @@ import (
 // direction absent from the map is refused at the mux — see Server.Process.
 type Handlers map[Direction]Handler
 
-// Server implements the Envoy external processing gRPC server, dispatching
-// each request to the Handler for the direction it arrived on.
+// Server implements the external processing gRPC server, dispatching each
+// request to the Handler for the direction it arrived on.
 type Server struct {
 	port          int
 	handlers      Handlers
@@ -132,12 +132,13 @@ func (s *Server) processRequestHeaders(
 
 	// One atenet binary serves both directions, as two ext_proc handlers
 	// selected here. They are deployed separately today — atenet-router fronts
-	// the ingress Envoy, atenet-egress the egress one — because the two scale
-	// independently, and --mode restricts an instance to the direction its
-	// deployment fronts. Nothing stops a single instance from serving both.
+	// the ingress dataplane, atenet-egress the egress gateway — because the two
+	// scale independently, and --mode restricts an instance to the direction
+	// its deployment fronts. Nothing stops a single instance from serving both.
 	//
-	// Which handler runs is decided by the Envoy filter chain that accepted the
-	// request, never by anything in the request itself (see directionOf).
+	// Which handler runs is decided by the filter chain the dataplane says
+	// accepted the request, never by anything in the request itself (see
+	// directionOf).
 	dir := directionOf(req)
 
 	var res Result
@@ -145,10 +146,10 @@ func (s *Server) processRequestHeaders(
 	if handler, ok := s.handlers[dir]; ok {
 		res, err = handler.HandleRequestHeaders(ctx, md)
 	} else {
-		// The Envoy in front of this instance is sending traffic the instance
-		// was not started to serve. Refuse it rather than falling back to the
-		// other direction's handler: the two apply opposite trust models, so a
-		// fallback would run a request through the wrong one.
+		// The dataplane in front of this instance is sending traffic the
+		// instance was not started to serve. Refuse it rather than falling back
+		// to the other direction's handler: the two apply opposite trust
+		// models, so a fallback would run a request through the wrong one.
 		err = NewReqError(envoy_type.StatusCode_NotFound,
 			"this router does not serve %s traffic", dir)
 	}

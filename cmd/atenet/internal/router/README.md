@@ -7,7 +7,7 @@ Router has several responsibilities:
   Services in Kubernetes.
   With `--atenet-router=agentgateway`, the sidecar uses a static ConfigMap and
   atenet does not start an xDS server.
-* ext_proc server for the proxy. To make the deployment and debugging easier, we will run this component together
+* ext_proc server for the dataplane. To make the deployment and debugging easier, we will run this component together
   with the router, but this will be split later into its own component.
   * ext_proc will call into the ATE gRPC API to get the set of relevant backends (specific the worker IP) and
     route the traffic accordingly
@@ -20,22 +20,22 @@ Router has several responsibilities:
   bounded wait elapses, instead of failing fast. See
   [docs/request-parking.md](../../../../../docs/request-parking.md).
 * Drains gracefully on SIGTERM: flips `/readyz` so the Service stops sending
-  new connections, waits out endpoint propagation (`--drain-delay`), drives
-  Envoy's admin API to drain established connections, gracefully stops the
-  ext_proc server so parked requests finish normally (`--drain-timeout`,
-  derived from the parking budget), then writes a drain-complete marker that
-  releases the Envoy container's `preStop` hook. See `drain.go` and
-  `envoydrain.go`.
-* Authenticates actor identity on egress: on every CONNECT, the egress Envoy's
-  ext_proc handler re-verifies the actor's client certificate against the
-  actor-identity CA, reads the `ActorIdentity` X.509 extension out of it, and
-  checks the certified UID against the ATE API.
+  new connections, waits out endpoint propagation (`--drain-delay`), drains the
+  dataplane's established connections (Envoy only — driven over its admin API;
+  agentgateway manages its own termination), gracefully stops the ext_proc
+  server so parked requests finish normally (`--drain-timeout`, derived from
+  the parking budget), then writes a drain-complete marker that releases the
+  dataplane container's `preStop` hook. See `drain.go` and `envoydrain.go`.
+* Authenticates actor identity on egress: on every CONNECT, the egress
+  gateway's ext_proc handler re-verifies the actor's client certificate against
+  the actor-identity CA, reads the `ActorIdentity` X.509 extension out of it,
+  and checks the certified UID against the ATE API.
 
 ## packages
 
 The ext_proc server handles both traffic directions, and they apply opposite
-trust models — egress derives the actor identity from a client certificate
-Envoy verified against the actor-identity CA, ingress treats every request
+trust models — egress derives the actor identity from a client certificate the
+gateway verified against the actor-identity CA, ingress treats every request
 header as unauthenticated client input — so the two are kept in separate
 packages that cannot reach into each other:
 
@@ -48,8 +48,9 @@ packages that cannot reach into each other:
 * `egress` — certificate-based actor-identity authentication for outbound
   CONNECTs.
 
-Direction is decided by the Envoy filter chain that accepted the request
-(`xds.filter_chain_name`), never by anything in the request itself, so a client
+Direction is decided by the filter chain the dataplane says accepted the
+request (`xds.filter_chain_name`, an Envoy attribute the egress gateway is
+configured to send), never by anything in the request itself, so a client
 cannot pick the egress path by crafting one. `router` itself does the wiring.
 
 ## modes
@@ -67,8 +68,12 @@ than falling back to the other handler, which would run the request through the
 wrong trust model.
 
 Ingress and egress are deployed separately today — `atenet-router` fronts the
-ingress Envoy, `atenet-egress` the egress one — because the two scale
+ingress dataplane, `atenet-egress` the egress gateway — because the two scale
 independently, not because they need separate binaries.
+
+The `--atenet-router` choice only applies to the ingress dataplane. The egress
+gateway is its own Deployment with a statically configured Envoy, so
+`--atenet-router=agentgateway` leaves it untouched.
 
 ## status page
 

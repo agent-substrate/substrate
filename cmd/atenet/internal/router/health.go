@@ -158,7 +158,7 @@ func updateComponentHealth(health *ComponentHealth, healthy bool, msg string, ch
 
 func (rh *routerHealth) checkDataplane(ctx context.Context) (bool, string) {
 	// The dataplane this polls is the *ingress* proxy sharing the router's pod.
-	// The egress Envoy is a separate, statically configured proxy on its own
+	// The egress gateway is a separate, statically configured proxy on its own
 	// admin port; an egress-only router has none beside it, and probing this
 	// address would report a permanently unhealthy dependency.
 	if !rh.cfg.Mode.ServesIngress() {

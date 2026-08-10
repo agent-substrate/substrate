@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Package ingress implements the ext_proc handler for traffic entering the
-// mesh: it resolves the actor a request is addressed to, resumes it through
-// the control plane (parking the request while the worker pool is saturated),
-// and points Envoy at the worker that ends up hosting it.
+// Package ingress implements the ext_proc handler for traffic arriving at the
+// ingress gateway: it resolves the actor a request is addressed to, resumes it
+// through the control plane (parking the request while the worker pool is
+// saturated), and points the dataplane at the worker that ends up hosting it.
 //
 // Everything reaching this handler is unauthenticated client input. The
 // opposite trust model — an actor identity carried by a CA-signed client
@@ -72,10 +72,10 @@ func (h *Handler) ParkingStatus() ParkingStatus { return h.parking.status() }
 func (h *Handler) HandleRequestHeaders(ctx context.Context, md *extproc.RequestMetadata) (extproc.Result, error) {
 	slog.InfoContext(ctx, "Request", slog.String("host", md.Host))
 
-	// Envoy doesn't propagate trace context into the ext_proc gRPC
+	// The dataplane doesn't propagate trace context into the ext_proc gRPC
 	// stream's metadata — the per-request traceparent arrives in the
 	// HTTP headers carried inside the ProcessingRequest payload. Extract
-	// from there so our span links to the Envoy ingress span.
+	// from there so our span links to the gateway's ingress span.
 	ctx = otel.GetTextMapPropagator().Extract(ctx, propagation.MapCarrier(md.Headers))
 	ctx, span := otel.Tracer(extproc.ServiceName).Start(ctx, "ExtProc.RequestHeaders")
 	defer span.End()
