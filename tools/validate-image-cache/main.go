@@ -26,13 +26,11 @@
 //
 //	gcloud artifacts docker images list REPO --format="value[separator='@'](package,version)"
 //
-// Disk is bounded by the cache's own eviction engine: when the cache
-// volume's free space drops below --min-free-gb, the tool asks
-// Store.EvictUnused to reclaim the difference — LRU by image last-use,
-// with in-flight pulls protected by record refcounts and layers younger
-// than --evict-idle never touched. --evict-all instead empties everything
-// evictable and exits (operator use: flush a cache without deleting the
-// directory).
+// Disk is bounded by the cache's own eviction engine: below
+// --min-free-gb free space, the tool asks Store.EvictUnused to reclaim
+// the shortfall. --evict-all instead empties everything evictable and
+// exits — safe on a live node, because placed actors' bundle specs root
+// their images (the root set is scanned from ateompath.ActorsDir).
 package main
 
 import (
@@ -50,6 +48,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/imagecache"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	googlecontainerauth "github.com/google/go-containerregistry/pkg/v1/google"
@@ -89,7 +88,13 @@ func main() {
 	if *evictAll {
 		// Flush mode: no refs, no registry auth. New also reclaims any
 		// crash-debris orphans before the pass.
-		store, err := imagecache.New(*cacheDir, imagecache.WithMinAge(*evictIdle))
+		// WithActorsDir makes a flush on a live node safe: placed actors'
+		// bundle specs root their images. On a validation host the dir
+		// doesn't exist, which InUse treats as an empty root set.
+		store, err := imagecache.New(*cacheDir,
+			imagecache.WithMinAge(*evictIdle),
+			imagecache.WithActorsDir(ateompath.ActorsDir),
+		)
 		if err != nil {
 			log.Fatalf("opening cache: %v", err)
 		}
@@ -126,6 +131,7 @@ func main() {
 		imagecache.WithAuthenticator(auth),
 		imagecache.WithPlatform(v1.Platform{OS: osName, Architecture: arch}),
 		imagecache.WithMinAge(*evictIdle),
+		imagecache.WithActorsDir(ateompath.ActorsDir),
 	)
 	if err != nil {
 		log.Fatalf("opening cache: %v", err)
@@ -224,12 +230,11 @@ func shortRef(ref string) string {
 	return ref
 }
 
-// evictIfLow asks the cache's eviction engine to reclaim the free-space
-// shortfall when the cache volume drops below minFree. The engine's
-// protections all apply — record refcounts keep in-flight images' layers
-// alive, --evict-idle is its min-age, deletion is two-phase — so nothing
-// here can race a running validation. With no actors dir configured the
-// root set is empty by design: nothing in a validation cache is mounted.
+// evictIfLow asks the eviction engine to reclaim the free-space
+// shortfall below minFree. All engine protections apply, so in-flight
+// validations are never raced. Unlike atelet's loop, the target is not
+// capped at the pool size: on a dedicated validation disk an oversized
+// target just runs out of candidates.
 var evictMu sync.Mutex // one attempt per low-water episode; queued workers re-check and return
 
 func evictIfLow(ctx context.Context, store *imagecache.Store, cacheRoot string, minFree uint64) {
