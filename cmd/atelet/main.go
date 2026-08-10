@@ -629,7 +629,7 @@ func toAteomSnapshotScope(scope ateletpb.SnapshotScope) ateompb.SnapshotScope {
 }
 
 func (s *AteomHerder) moveLocalCheckpoint(ctx context.Context, req *ateletpb.CheckpointRequest, checkpointDir string, rec *sandboxAssetsRecord) error {
-	localCheckpointPath := filepath.Join(ateompath.LocalCheckpointsDir(req.GetActorUid()), req.GetLocalConfig().GetSnapshotName())
+	localCheckpointPath := ateompath.LocalSnapshotDir(req.GetActorUid(), req.GetLocalConfig().GetSnapshotName())
 	if err := os.MkdirAll(localCheckpointPath, 0o700); err != nil {
 		return fmt.Errorf("while creating local checkpoint directory: %w", err)
 	}
@@ -662,13 +662,20 @@ func (s *AteomHerder) uploadExternalCheckpoint(ctx context.Context, req *ateletp
 	if err != nil {
 		return err
 	}
+	return s.uploadSnapshot(ctx, uri, checkpointDir, rec, req.GetActorTemplateNamespace(), req.GetActorTemplateName())
+}
 
-	// Upload exactly the files ateom reported (each zstd-compressed).
+// uploadSnapshot uploads rec's snapshot files from srcDir to uri (each
+// zstd-compressed, concurrently), then the marshaled manifest. The manifest
+// goes last, never in parallel: its presence is the commit marker — readers
+// assume every file it lists is already present. A crash mid-upload thus
+// leaves only orphaned files, never a manifest pointing at files that never
+// landed; retries overwrite the deterministic object names.
+func (s *AteomHerder) uploadSnapshot(ctx context.Context, uri resources.SnapshotURI, srcDir string, rec *sandboxAssetsRecord, templateNamespace, templateName string) error {
 	g, gCtx := errgroup.WithContext(ctx)
 	for _, fileName := range rec.SnapshotFiles {
-		fileName := fileName
-		local := filepath.Join(checkpointDir, fileName)
-		recordSnapshotSize(ctx, fileName, local, req.GetActorTemplateNamespace(), req.GetActorTemplateName())
+		local := filepath.Join(srcDir, fileName)
+		recordSnapshotSize(ctx, fileName, local, templateNamespace, templateName)
 		g.Go(func() error {
 			objectURI, err := uri.ObjectURI(fileName + ".zstd")
 			if err != nil {
@@ -684,7 +691,6 @@ func (s *AteomHerder) uploadExternalCheckpoint(ctx context.Context, req *ateletp
 		return err
 	}
 
-	// Write the self-describing snapshot manifest last.
 	manifest, err := json.Marshal(rec)
 	if err != nil {
 		return fmt.Errorf("while marshaling snapshot manifest: %w", err)
@@ -728,7 +734,7 @@ func (s *AteomHerder) UploadPausedCheckpoint(ctx context.Context, req *ateletpb.
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
-	localDir := filepath.Join(ateompath.LocalCheckpointsDir(req.GetActorUid()), req.GetLocalSnapshotName())
+	localDir := ateompath.LocalSnapshotDir(req.GetActorUid(), req.GetLocalSnapshotName())
 
 	tPersist := time.Now()
 	sandboxClass, err := s.uploadLocalCheckpointDir(ctx, req, localDir, uri)
@@ -763,16 +769,18 @@ func (s *AteomHerder) uploadLocalCheckpointDir(ctx context.Context, req *ateletp
 		// means the whole snapshot is committed and this retry already
 		// succeeded. Absent on both sides, the paused actor's state is
 		// unrecoverable.
-		if _, fetchErr := ategcs.FetchFromGCS(ctx, s.gcsClient, manifestURI); fetchErr == nil {
+		_, fetchErr := ategcs.FetchFromGCS(ctx, s.gcsClient, manifestURI)
+		if fetchErr == nil {
 			slog.InfoContext(ctx, "Local snapshot already uploaded and pruned; nothing to do", slog.String("snapshot_uri", req.GetDestinationSnapshotUri()))
 			return "", nil
-		} else if errors.Is(fetchErr, ateerrors.ReasonFailedGetExternalObject) {
+		}
+		if errors.Is(fetchErr, ateerrors.ReasonFailedGetExternalObject) {
 			return "", ateerrors.NewGRPCError(ctx, codes.DataLoss, ateerrors.ReasonLocalSnapshotGone, ateerrors.ActorCrashedMetadata(),
 				fmt.Errorf("local snapshot %q is gone and no uploaded copy exists: %w", req.GetLocalSnapshotName(), fetchErr))
-		} else {
-			return "", fmt.Errorf("while probing for an already-uploaded snapshot manifest: %w", fetchErr)
 		}
-	} else if err != nil {
+		return "", fmt.Errorf("while probing for an already-uploaded snapshot manifest: %w", fetchErr)
+	}
+	if err != nil {
 		return "", wrapFileSystemErr("while reading local snapshot manifest", err)
 	}
 
@@ -798,41 +806,8 @@ func (s *AteomHerder) uploadLocalCheckpointDir(ctx context.Context, req *ateletp
 			return rec.SandboxClass, err
 		}
 	}
-	files := rec.SnapshotFiles
 
-	// Upload the snapshot files concurrently, each zstd-compressed; the
-	// manifest follows separately below.
-	g, gCtx := errgroup.WithContext(ctx)
-	for _, fileName := range files {
-		local := filepath.Join(localDir, fileName)
-		recordSnapshotSize(ctx, fileName, local, req.GetActorTemplateNamespace(), req.GetActorTemplateName())
-		g.Go(func() error {
-			objectURI, err := uri.ObjectURI(fileName + ".zstd")
-			if err != nil {
-				return fmt.Errorf("while addressing %s in GCS: %w", fileName, err)
-			}
-			if err := ategcs.SendLocalFileToGCSWithZstd(gCtx, s.gcsClient, objectURI, local); err != nil {
-				return fmt.Errorf("while uploading %s to GCS: %w", fileName, err)
-			}
-			return nil
-		})
-	}
-	if err := g.Wait(); err != nil {
-		return rec.SandboxClass, err
-	}
-
-	updatedManifest, err := json.Marshal(rec)
-	if err != nil {
-		return rec.SandboxClass, fmt.Errorf("while marshaling snapshot manifest: %w", err)
-	}
-	// The manifest goes last, never in parallel: its presence is the commit
-	// marker — readers assume every file it lists is already present. A crash
-	// mid-upload thus leaves only orphaned files, never a manifest pointing
-	// at files that never landed.
-	if err := ategcs.SendBytesToGCS(ctx, s.gcsClient, manifestURI, updatedManifest); err != nil {
-		return rec.SandboxClass, fmt.Errorf("while uploading snapshot manifest: %w", err)
-	}
-	return rec.SandboxClass, nil
+	return rec.SandboxClass, s.uploadSnapshot(ctx, uri, localDir, rec, req.GetActorTemplateNamespace(), req.GetActorTemplateName())
 }
 
 // narrowFullCaptureToData rewrites rec so a FULL capture uploads as a DATA
@@ -939,9 +914,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 			return nil, ateerrors.CrashIfReason(ctx, fmt.Errorf("while unmarshalling sandbox record: %w", err), ateerrors.ReasonInvalidSandboxAsset)
 		}
 	case ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL:
-		localCheckpointDir := ateompath.LocalCheckpointsDir(actorUID)
-		snapshotName := req.GetLocalConfig().GetSnapshotName()
-		manifest, err := os.ReadFile(filepath.Join(localCheckpointDir, snapshotName, sandboxManifestName))
+		manifest, err := os.ReadFile(filepath.Join(ateompath.LocalSnapshotDir(actorUID, req.GetLocalConfig().GetSnapshotName()), sandboxManifestName))
 		if err != nil {
 			if isTerminalFileSystemErr(err) {
 				return nil, ateerrors.NewGRPCError(ctx, codes.DataLoss, ateerrors.ReasonTerminalFileSystemError, ateerrors.ActorCrashedMetadata(), err)

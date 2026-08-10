@@ -155,6 +155,12 @@ func LocalCheckpointsDir(actorUID string) string {
 	)
 }
 
+// LocalSnapshotDir is the directory holding one named local (pause) snapshot
+// of an actor: the checkpoint files plus their manifest.
+func LocalSnapshotDir(actorUID, snapshotName string) string {
+	return filepath.Join(LocalCheckpointsDir(actorUID), snapshotName)
+}
+
 // DurableDirTarFile is the snapshot file holding the tar of a micro-VM
 // actor's durable-dir volumes (entries are <volumeName>/... relative to
 // DurableDirVolumeMountsDir). Written by ateom-microvm at checkpoint; a DATA
