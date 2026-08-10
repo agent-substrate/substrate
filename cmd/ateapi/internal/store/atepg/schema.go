@@ -38,7 +38,6 @@ CREATE TABLE IF NOT EXISTS actors (
     name      text NOT NULL,
     uid       text NOT NULL UNIQUE,
     version   bigint NOT NULL,
-    status    integer NOT NULL,
     proto     bytea NOT NULL,
     PRIMARY KEY (atespace, name)
 );
@@ -46,7 +45,6 @@ CREATE TABLE IF NOT EXISTS actors (
 CREATE TABLE IF NOT EXISTS actor_snapshots (
     atespace  text NOT NULL,
     name      text NOT NULL,
-    location  text NOT NULL,
     proto     bytea NOT NULL,
     PRIMARY KEY (atespace, name)
 );

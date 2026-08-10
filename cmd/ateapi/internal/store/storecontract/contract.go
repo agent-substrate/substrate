@@ -1168,8 +1168,9 @@ func RunContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
 			SourceActorUid:     "actor-uid",
 			SourceActorVersion: 7,
 			ContentScope:       ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
+			SnapshotUri:        "gs://private/snapshot-1",
 		}
-		created, err := s.CreateActorSnapshot(ctx, input, "gs://private/snapshot-1")
+		created, err := s.CreateActorSnapshot(ctx, input)
 		if err != nil {
 			t.Fatalf("CreateActorSnapshot failed: %v", err)
 		}
@@ -1179,21 +1180,21 @@ func RunContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
 		if input.GetMetadata().GetUid() != "" || input.GetMetadata().GetVersion() != 0 {
 			t.Errorf("CreateActorSnapshot mutated its input metadata: %v", input.GetMetadata())
 		}
-		if _, err := s.CreateActorSnapshot(ctx, input, "gs://private/duplicate"); !errors.Is(err, store.ErrAlreadyExists) {
+		if _, err := s.CreateActorSnapshot(ctx, input); !errors.Is(err, store.ErrAlreadyExists) {
 			t.Errorf("duplicate CreateActorSnapshot = %v, want ErrAlreadyExists", err)
 		}
 
-		got, location, err := s.GetActorSnapshot(ctx, "team-a", "snapshot-1")
+		got, err := s.GetActorSnapshot(ctx, "team-a", "snapshot-1")
 		if err != nil {
 			t.Fatalf("GetActorSnapshot failed: %v", err)
 		}
 		if diff := cmp.Diff(created, got, protocmp.Transform()); diff != "" {
 			t.Errorf("GetActorSnapshot mismatch (-created +got):\n%s", diff)
 		}
-		if location != "gs://private/snapshot-1" {
-			t.Errorf("snapshot location = %q, want private location", location)
+		if got.GetSnapshotUri() != "gs://private/snapshot-1" {
+			t.Errorf("snapshot_uri = %q, want gs://private/snapshot-1", got.GetSnapshotUri())
 		}
-		if _, _, err := s.GetActorSnapshot(ctx, "team-a", "missing"); !errors.Is(err, store.ErrNotFound) {
+		if _, err := s.GetActorSnapshot(ctx, "team-a", "missing"); !errors.Is(err, store.ErrNotFound) {
 			t.Errorf("missing GetActorSnapshot = %v, want ErrNotFound", err)
 		}
 
@@ -1224,12 +1225,12 @@ func RunContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
 			t.Errorf("tagging missing snapshot = %v, want ErrNotFound", err)
 		}
 
-		resolved, resolvedLocation, resolvedTag, err := s.GetActorSnapshotByTag(ctx, "team-a", "production")
+		resolved, resolvedTag, err := s.GetActorSnapshotByTag(ctx, "team-a", "production")
 		if err != nil {
 			t.Fatalf("GetActorSnapshotByTag failed: %v", err)
 		}
-		if !proto.Equal(resolved, created) || !proto.Equal(resolvedTag, tag) || resolvedLocation != location {
-			t.Errorf("resolved tag = (%v, %q, %v), want created snapshot, location, and tag", resolved, resolvedLocation, resolvedTag)
+		if !proto.Equal(resolved, created) || !proto.Equal(resolvedTag, tag) {
+			t.Errorf("resolved tag = (%v, %v), want created snapshot and tag", resolved, resolvedTag)
 		}
 
 		updated, err := s.UpdateActorSnapshotTag(ctx, "team-a", "production", ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED, tag.GetMetadata().GetVersion())
@@ -1250,7 +1251,7 @@ func RunContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
 		if err != nil || !proto.Equal(deleted, updated) {
 			t.Errorf("DeleteActorSnapshotTag = (%v, %v), want updated tag", deleted, err)
 		}
-		if _, _, _, err := s.GetActorSnapshotByTag(ctx, "team-a", "production"); !errors.Is(err, store.ErrNotFound) {
+		if _, _, err := s.GetActorSnapshotByTag(ctx, "team-a", "production"); !errors.Is(err, store.ErrNotFound) {
 			t.Errorf("deleted GetActorSnapshotByTag = %v, want ErrNotFound", err)
 		}
 		if _, err := s.DeleteAtespace(ctx, "team-a"); err != nil {
@@ -1264,7 +1265,10 @@ func RunContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
 		for _, atespace := range []string{"team-a", "team-b"} {
 			for i := 0; i < 3; i++ {
 				name := fmt.Sprintf("snapshot-%d", i)
-				if _, err := s.CreateActorSnapshot(ctx, &ateapipb.ActorSnapshot{Metadata: &ateapipb.ResourceMetadata{Atespace: atespace, Name: name}}, "gs://private/"+atespace+"/"+name); err != nil {
+				if _, err := s.CreateActorSnapshot(ctx, &ateapipb.ActorSnapshot{
+					Metadata:    &ateapipb.ResourceMetadata{Atespace: atespace, Name: name},
+					SnapshotUri: "gs://private/" + atespace + "/" + name,
+				}); err != nil {
 					t.Fatalf("CreateActorSnapshot(%s/%s) failed: %v", atespace, name, err)
 				}
 			}

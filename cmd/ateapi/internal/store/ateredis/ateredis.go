@@ -1055,10 +1055,6 @@ func (s *Persistence) UpdateWorker(ctx context.Context, worker *ateapipb.Worker,
 		if currentWorker.GetWorkerPod() != dbWorker.GetWorkerPod() {
 			return fmt.Errorf("worker_pod is immutable")
 		}
-		if currentWorker.GetIp() != dbWorker.GetIp() {
-			return fmt.Errorf("ip is immutable")
-		}
-
 		newVal, err := protojson.Marshal(dbWorker)
 		if err != nil {
 			return fmt.Errorf("in protojson.Marshal: %w", err)
