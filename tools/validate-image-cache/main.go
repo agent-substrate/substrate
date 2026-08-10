@@ -26,9 +26,13 @@
 //
 //	gcloud artifacts docker images list REPO --format="value[separator='@'](package,version)"
 //
-// Disk is bounded by evicting the oldest cached layers when the cache
-// volume's free space drops below --min-free-gb. Only layers idle for more
-// than 30 minutes are evicted, so in-flight images are never raced.
+// Disk is bounded by the cache's own eviction engine: when the cache
+// volume's free space drops below --min-free-gb, the tool asks
+// Store.EvictUnused to reclaim the difference — LRU by image last-use,
+// with in-flight pulls protected by record refcounts and layers younger
+// than --evict-idle never touched. --evict-all instead empties everything
+// evictable and exits (operator use: flush a cache without deleting the
+// directory).
 package main
 
 import (
@@ -38,10 +42,9 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"math"
 	"math/rand"
 	"os"
-	"path/filepath"
-	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -61,8 +64,9 @@ var (
 	outCSV    = flag.String("out", "validate-results.csv", "Results CSV path")
 	parallel  = flag.Int("parallel", 3, "Images validated concurrently (each pulls up to 4 layers in parallel)")
 	timeout   = flag.Duration("timeout", 20*time.Minute, "Per-image timeout")
-	minFreeGB = flag.Uint64("min-free-gb", 150, "Evict oldest idle cached layers when the cache volume has less free space than this")
-	evictIdle = flag.Duration("evict-idle", 10*time.Minute, "Only evict layers idle for at least this long (must exceed the time any in-flight image needs a just-unpacked layer; small disks + high throughput need small values)")
+	minFreeGB = flag.Uint64("min-free-gb", 150, "Ask the eviction engine to reclaim disk when the cache volume has less free space than this")
+	evictIdle = flag.Duration("evict-idle", 10*time.Minute, "Eviction min-age: layers and records younger than this are never evicted. NOTE: if the corpus unpacks faster than this window elapses on a small disk, nothing is evictable while the disk fills — size it well below disk-fill time")
+	evictAll  = flag.Bool("evict-all", false, "Evict everything evictable from the cache and exit (no refs file needed)")
 	platform  = flag.String("platform", "linux/amd64", "Image platform to pull")
 )
 
@@ -76,11 +80,27 @@ type result struct {
 
 func main() {
 	flag.Parse()
-	if *refsFile == "" || *cacheDir == "" {
+	if *cacheDir == "" || (*refsFile == "" && !*evictAll) {
 		flag.Usage()
 		os.Exit(2)
 	}
 	ctx := context.Background()
+
+	if *evictAll {
+		// Flush mode: no refs, no registry auth. New also reclaims any
+		// crash-debris orphans before the pass.
+		store, err := imagecache.New(*cacheDir, imagecache.WithMinAge(*evictIdle))
+		if err != nil {
+			log.Fatalf("opening cache: %v", err)
+		}
+		stats, err := store.EvictUnused(ctx, math.MaxInt64, false)
+		if err != nil {
+			log.Fatalf("evict-all: %v", err)
+		}
+		log.Printf("evict-all: %d images / %d layers evicted, %.1f GB credited (free now %.0f GB)",
+			stats.EvictedImages, stats.EvictedLayers, float64(stats.FreedBytes)/1e9, float64(freeBytes(*cacheDir))/1e9)
+		return
+	}
 
 	refs, err := loadRefs(*refsFile)
 	if err != nil {
@@ -105,6 +125,7 @@ func main() {
 	store, err := imagecache.New(*cacheDir,
 		imagecache.WithAuthenticator(auth),
 		imagecache.WithPlatform(v1.Platform{OS: osName, Architecture: arch}),
+		imagecache.WithMinAge(*evictIdle),
 	)
 	if err != nil {
 		log.Fatalf("opening cache: %v", err)
@@ -132,7 +153,7 @@ func main() {
 		wg.Go(func() {
 			defer func() { <-sem }()
 
-			evictIfLow(*cacheDir, *minFreeGB*1e9)
+			evictIfLow(ctx, store, *cacheDir, *minFreeGB*1e9)
 
 			r := validateOne(ctx, store, ref, *timeout)
 
@@ -203,57 +224,31 @@ func shortRef(ref string) string {
 	return ref
 }
 
-// evictIfLow deletes the oldest cached layer trees until the cache volume
-// has at least minFree bytes available. Layers touched within the last
-// --evict-idle are skipped so an in-flight image's freshly unpacked layers
-// are not raced away mid-validation. NOTE: if the corpus unpacks faster
-// than the idle window elapses on a small disk, nothing is evictable while
-// the disk fills — size --evict-idle well below disk-fill time.
-var evictMu sync.Mutex
+// evictIfLow asks the cache's eviction engine to reclaim the free-space
+// shortfall when the cache volume drops below minFree. The engine's
+// protections all apply — record refcounts keep in-flight images' layers
+// alive, --evict-idle is its min-age, deletion is two-phase — so nothing
+// here can race a running validation. With no actors dir configured the
+// root set is empty by design: nothing in a validation cache is mounted.
+var evictMu sync.Mutex // one attempt per low-water episode; queued workers re-check and return
 
-func evictIfLow(cacheRoot string, minFree uint64) {
+func evictIfLow(ctx context.Context, store *imagecache.Store, cacheRoot string, minFree uint64) {
 	evictMu.Lock()
 	defer evictMu.Unlock()
 
-	if freeBytes(cacheRoot) >= minFree {
+	free := freeBytes(cacheRoot)
+	if free >= minFree {
 		return
 	}
-	layersDir := filepath.Join(cacheRoot, "layers", "sha256")
-	entries, err := os.ReadDir(layersDir)
+	stats, err := store.EvictUnused(ctx, int64(minFree-free), false)
 	if err != nil {
-		return
+		// Per-item failures or a gated pass: either way validation goes on;
+		// the next low-water check retries.
+		log.Printf("eviction pass reported errors (continuing): %v", err)
 	}
-	type aged struct {
-		path string
-		mod  time.Time
-	}
-	var candidates []aged
-	for _, e := range entries {
-		info, err := e.Info()
-		if err != nil || time.Since(info.ModTime()) < *evictIdle {
-			continue
-		}
-		candidates = append(candidates, aged{filepath.Join(layersDir, e.Name()), info.ModTime()})
-	}
-	sort.Slice(candidates, func(i, j int) bool { return candidates[i].mod.Before(candidates[j].mod) })
-
-	evicted := 0
-	for _, c := range candidates {
-		if freeBytes(cacheRoot) >= minFree {
-			break
-		}
-		if err := imagecache.RemoveAllWritable(c.path); err == nil {
-			evicted++
-		}
-	}
-	// Records referencing evicted layers re-pull only the missing layers, so
-	// stale manifests are harmless; drop them anyway to keep the dir tidy.
-	if evicted > 0 {
-		manifests, _ := filepath.Glob(filepath.Join(cacheRoot, "manifests", "sha256", "*.json"))
-		for _, m := range manifests {
-			_ = os.Remove(m)
-		}
-		log.Printf("evicted %d idle layers to reclaim disk (free now %.0f GB)", evicted, float64(freeBytes(cacheRoot))/1e9)
+	if stats.EvictedImages > 0 || stats.EvictedLayers > 0 {
+		log.Printf("evicted %d images / %d layers, %.1f GB credited (free now %.0f GB)",
+			stats.EvictedImages, stats.EvictedLayers, float64(stats.FreedBytes)/1e9, float64(freeBytes(cacheRoot))/1e9)
 	}
 }
 
