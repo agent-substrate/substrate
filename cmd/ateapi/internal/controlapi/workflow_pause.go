@@ -16,13 +16,12 @@ package controlapi
 
 import (
 	"context"
-	"crypto/rand"
 	"errors"
 	"fmt"
 	"log/slog"
-	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
@@ -40,8 +39,9 @@ type PauseInput struct {
 
 // PauseState holds the mutable state loaded and modified during execution.
 type PauseState struct {
-	Actor         *ateapipb.Actor
-	ActorTemplate *atev1alpha1.ActorTemplate
+	Actor             *ateapipb.Actor
+	ActorTemplate     *atev1alpha1.ActorTemplate
+	WireSnapshotScope string
 }
 
 type LoadActorForPauseStep struct {
@@ -93,7 +93,7 @@ func (s *MarkPausingStep) CheckPrerequisite(ctx context.Context, input *PauseInp
 }
 func (s *MarkPausingStep) Execute(ctx context.Context, input *PauseInput, state *PauseState) error {
 	state.Actor.Status = ateapipb.Actor_STATUS_PAUSING
-	state.Actor.InProgressSnapshot = fmt.Sprintf("%s-%s-%s", state.Actor.GetMetadata().GetName(), time.Now().Format(time.RFC3339), rand.Text())
+	state.Actor.InProgressLocalSnapshotName = resources.NewSnapshotName()
 	updatedActor, err := s.store.UpdateActor(ctx, state.Actor, state.Actor.GetMetadata().GetVersion())
 	if err != nil {
 		return err
@@ -119,7 +119,8 @@ func (s *CallAteletPauseStep) CheckPrerequisite(ctx context.Context, input *Paus
 		return status.Errorf(codes.FailedPrecondition, "CallAteletPauseStep prerequisite not met for Actor: %s (got: %v, want %s)", input.ActorRef, state.Actor.GetStatus(), ateapipb.Actor_STATUS_PAUSING)
 	}
 	if state.Actor.GetWorkerAssignment() == nil {
-		if err := crashActor(ctx, s.store, input.ActorRef); err != nil {
+		// Missing active worker pod reference in PAUSING state indicates corrupted store state.
+		if err := crashActor(ctx, s.store, input.ActorRef, ateattr.OperationPause, ateattr.ReasonCorruptedAssignment); err != nil {
 			slog.ErrorContext(ctx, "Failed to crash actor", slog.String("err", err.Error()))
 		}
 		return status.Errorf(codes.FailedPrecondition, "CallAteletPauseStep prerequisite not met for Actor: %s. No worker assignment", input.ActorRef)
@@ -132,8 +133,8 @@ func (s *CallAteletPauseStep) Execute(ctx context.Context, input *PauseInput, st
 	ateletConn, err := s.dialer.DialForWorker(assignment.GetWorkerNamespace(), assignment.GetWorkerPod())
 	if err != nil {
 		if errors.Is(err, ErrWorkerPodNotFound) {
-			slog.ErrorContext(ctx, "Worker pod gone before checkpoint, crashing actor", "namespace", assignment.GetWorkerNamespace(), "pod", assignment.GetWorkerPod(), "in_progress_snapshot", state.Actor.GetInProgressSnapshot())
-			if err := crashActor(ctx, s.store, input.ActorRef); err != nil {
+			slog.ErrorContext(ctx, "Worker pod gone before checkpoint, crashing actor", "namespace", assignment.GetWorkerNamespace(), "pod", assignment.GetWorkerPod(), "in_progress_local_snapshot_name", state.Actor.GetInProgressLocalSnapshotName())
+			if err := crashActor(ctx, s.store, input.ActorRef, ateattr.OperationPause, ateattr.ReasonWorkerPodGone); err != nil {
 				slog.ErrorContext(ctx, "Failed to crash actor", slog.String("err", err.Error()))
 			}
 			return fmt.Errorf("actor is CRASHED because its worker pod is gone and no snapshot was written")
@@ -160,15 +161,16 @@ func (s *CallAteletPauseStep) Execute(ctx context.Context, input *PauseInput, st
 		Type:                   ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL,
 		Config: &ateletpb.CheckpointRequest_LocalConfig{
 			LocalConfig: &ateletpb.LocalCheckpointConfiguration{
-				SnapshotPrefix: state.Actor.InProgressSnapshot,
+				SnapshotName: state.Actor.InProgressLocalSnapshotName,
 			},
 		},
 		Scope:    toAteletSnapshotScope(state.ActorTemplate.Spec.SnapshotsConfig.OnPause),
 		ActorUid: state.Actor.GetMetadata().Uid,
 	}
+	state.WireSnapshotScope = ateattr.SnapshotScopeValue(req.Scope)
 
 	_, err = client.Checkpoint(ctx, req)
-	return maybeCrashActor(ctx, s.store, input.ActorRef, err, "while checkpointing workload")
+	return maybeCrashActor(ctx, s.store, input.ActorRef, err, "while checkpointing workload", ateattr.OperationPause)
 }
 
 func (s *CallAteletPauseStep) RetryBackoff() *wait.Backoff { return nil }
@@ -176,7 +178,8 @@ func (s *CallAteletPauseStep) RetryBackoff() *wait.Backoff { return nil }
 // TODO: There is no difference between suspend and pause for now, but we could optimize
 // pause by not detaching. We would need to make sure Resume is idempotent.
 type DetachVolumesForPauseStep struct {
-	store store.Interface
+	store          store.Interface
+	pluginRegistry VolumePluginRegistry
 }
 
 func (s *DetachVolumesForPauseStep) Name() string { return "DetachVolumesForPause" }
@@ -191,7 +194,7 @@ func (s *DetachVolumesForPauseStep) CheckPrerequisite(ctx context.Context, input
 }
 
 func (s *DetachVolumesForPauseStep) Execute(ctx context.Context, input *PauseInput, state *PauseState) error {
-	return detachActorVolumes(ctx, s.store, state.Actor, state.ActorTemplate, "pause")
+	return detachActorVolumes(ctx, s.store, s.pluginRegistry, state.Actor, state.ActorTemplate, ateattr.OperationPause)
 }
 
 func (s *DetachVolumesForPauseStep) RetryBackoff() *wait.Backoff { return nil }
@@ -231,12 +234,11 @@ func (s *FinalizePausedStep) Execute(ctx context.Context, input *PauseInput, sta
 			}
 			slog.Warn("Worker already gone during finalize pause, skipping release", "worker", assignment.GetWorkerPod())
 		} else {
-			// TODO(dberkov) - what if worker does not belong to this actor?
 			nodeName = worker.GetNodeName()
 			// Only free it if it still belongs to us
 
 			if wass := worker.Assignment; wass != nil {
-				if resources.ActorRefFromObjectRef(wass.Actor) == input.ActorRef {
+				if wass.GetActorUid() == latestActor.GetMetadata().GetUid() {
 					worker.Assignment = nil
 					err = s.store.UpdateWorker(ctx, worker, worker.Version)
 					if err != nil {
@@ -251,6 +253,7 @@ func (s *FinalizePausedStep) Execute(ctx context.Context, input *PauseInput, sta
 		if err != nil {
 			return err
 		}
+		wasAlreadyCrashed := latestActor.GetStatus() == ateapipb.Actor_STATUS_CRASHED
 		latestActor.Status = ateapipb.Actor_STATUS_PAUSED
 		if nodeName == "" {
 			// Without a node name we cannot record where the local snapshot lives,
@@ -260,23 +263,35 @@ func (s *FinalizePausedStep) Execute(ctx context.Context, input *PauseInput, sta
 			slog.ErrorContext(ctx, "Node name not found during finalize pause, crashing actor", slog.Any("actor", input.ActorRef))
 			latestActor.Status = ateapipb.Actor_STATUS_CRASHED
 		}
-		// TODO(dberkov) - what if InProgressSnapshot is empty? That shouldn't be possible.
-		if latestActor.InProgressSnapshot != "" {
+		// TODO(dberkov) - what if InProgressLocalSnapshotName is empty? That shouldn't be possible.
+		if latestActor.InProgressLocalSnapshotName != "" {
 			localInfo := &ateapipb.LocalSnapshotInfo{
-				SnapshotPrefix: latestActor.InProgressSnapshot,
+				SnapshotName: latestActor.InProgressLocalSnapshotName,
+				ContentScope: toActorSnapshotContentScope(state.ActorTemplate.Spec.SnapshotsConfig.OnPause),
 			}
 			if latestActor.Status != ateapipb.Actor_STATUS_CRASHED {
 				localInfo.NodeVmsWithLocalSnapshots = []string{nodeName}
 			}
 			latestActor.LocalSnapshotInfo = localInfo
-			latestActor.InProgressSnapshot = ""
+			latestActor.InProgressLocalSnapshotName = ""
 		}
+		sandboxClass := ""
+		if worker != nil {
+			sandboxClass = worker.GetSandboxClass()
+		}
+		// Snapshot crash attributes before pod and pool pointers are cleared below.
+		crashAttrs := ateattr.ActorMetricAttributes(latestActor, sandboxClass, ateattr.OperationPause, ateattr.ReasonCorruptedAssignment)
+
 		latestActor.WorkerAssignment = nil
 		updatedActor, err := s.store.UpdateActor(ctx, latestActor, latestActor.GetMetadata().GetVersion())
+		if err == nil && updatedActor.GetStatus() == ateapipb.Actor_STATUS_CRASHED && !wasAlreadyCrashed {
+			recordActorCrash(ctx, crashAttrs)
+		}
 		if err != nil {
 			return err
 		}
 		latestActor = updatedActor
+
 	}
 
 	state.Actor = latestActor

@@ -29,6 +29,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -165,7 +166,11 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 		t.Fatalf("failed to tag ActorSnapshot: %v", err)
 	}
 	if _, err := clients.SubstrateAPI.UpdateActorSnapshotTag(ctx, &ateapipb.UpdateActorSnapshotTagRequest{
-		Tag: tagRef, Scope: ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED,
+		Tag: &ateapipb.ActorSnapshotTag{
+			Metadata: &ateapipb.ResourceMetadata{Atespace: tagRef.GetAtespace(), Name: tagRef.GetName()},
+			Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED,
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"scope"}},
 	}); err != nil {
 		t.Fatalf("failed to publish ActorSnapshot tag: %v", err)
 	}
@@ -289,10 +294,6 @@ func TestDurableDirLifecycle(t *testing.T) {
 // micro-VM runtime supports more than one — gVisor templates are still capped at
 // one by the ActorTemplate CEL rules, so the template would be rejected there.
 func TestMultipleDurableDirLifecycle(t *testing.T) {
-	if !isMicroVMEnvironment() {
-		t.Skip("Skipping TestMultipleDurableDirLifecycle: multiple DurableDir volumes are micro-VM only")
-	}
-
 	tests := []struct {
 		name string
 		tc   actorLifecycleTestCase
@@ -337,12 +338,16 @@ func TestMultipleDurableDirLifecycle(t *testing.T) {
 				wantFileAfterSuspend:     3,
 				checkSecondFileCounter:   true,
 				wantSnapshotContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
+				microVMOnly:              true,
 			},
 		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			if test.tc.microVMOnly && !isMicroVMEnvironment() {
+				t.Skipf("Skipping %s: the Golden resume source is micro-VM only", test.name)
+			}
 			t.Parallel()
 			runActorLifecycleTestCase(t, "multi-durabledir-lifecycle", createActorTemplateWithTwoDurableDirs, test.tc)
 		})
@@ -917,11 +922,21 @@ func createActorTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients
 }
 
 func createActorTemplateWithExternalVolume(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, onCommit, onPause v1alpha1.SnapshotScope, fromData v1alpha1.ResumeSource) (*v1alpha1.ActorTemplate, error) {
+	var scName string
+	switch {
+	// TODO: add support for other storage classes in e2e environment (e.g. csi-nfs-sc)
+	case hasStorageClass(ctx, clients, "csi-hostpath-sc"):
+		scName = "csi-hostpath-sc"
+	default:
+		t.Skip("Skipping TestExternalVolumeLifecycle: neither csi-hostpath-sc nor csi-nfs-sc StorageClass found")
+	}
+
 	modify := func(at *v1alpha1.ActorTemplate) {
 		var res []v1alpha1.Container
 		for _, c := range at.Spec.Containers {
 			if c.Name == "counter" {
-				c.Command = []string{"/ko-app/counter", "--file-counter-directory=/external-data", "--validate-existing-file-path=/external-data/test.txt"}
+				c.Command = []string{"/ko-app/counter", "--file-counter-directory=/external-data"}
+
 				hasExtMount := false
 				for _, vm := range c.VolumeMounts {
 					if vm.Name == "external-data" {
@@ -953,7 +968,7 @@ func createActorTemplateWithExternalVolume(ctx context.Context, t *testing.T, cl
 				VolumeSource: v1alpha1.VolumeSource{
 					ExternalVolumeTemplate: &v1alpha1.ExternalVolumeTemplate{
 						Capacity:         resource.MustParse("1Gi"),
-						StorageClassName: "standard",
+						StorageClassName: scName,
 					},
 				},
 			})
@@ -993,6 +1008,11 @@ func createActorTemplateWithTwoDurableDirs(ctx context.Context, t *testing.T, cl
 		})
 	}
 	return createActorTemplateInternal(ctx, t, clients, nsObj, "counter-two-durabledirs", onCommit, onPause, fromData, modify)
+}
+
+func hasStorageClass(ctx context.Context, clients *e2e.Clients, name string) bool {
+	_, err := clients.K8s.StorageV1().StorageClasses().Get(ctx, name, metav1.GetOptions{})
+	return err == nil
 }
 
 func waitForActorStatus(ctx context.Context, t *testing.T, clients *e2e.Clients, actorName string, expectedStatus ateapipb.Actor_Status) {

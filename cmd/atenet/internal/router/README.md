@@ -19,6 +19,13 @@ Router has several responsibilities:
   worker-pool saturation, retrying the resume until the actor is routable or a
   bounded wait elapses, instead of failing fast. See
   [docs/request-parking.md](../../../../../docs/request-parking.md).
+* Drains gracefully on SIGTERM: flips `/readyz` so the Service stops sending
+  new connections, waits out endpoint propagation (`--drain-delay`), drives
+  Envoy's admin API to drain established connections, gracefully stops the
+  ext_proc server so parked requests finish normally (`--drain-timeout`,
+  derived from the parking budget), then writes a drain-complete marker that
+  releases the Envoy container's `preStop` hook. See `drain.go` and
+  `envoydrain.go`.
 
 ## status page
 

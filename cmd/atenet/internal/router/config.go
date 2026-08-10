@@ -81,6 +81,13 @@ type routerConfig struct {
 
 	Auth authConfig
 
+	// RouteTimeout is Envoy's end-to-end timeout on the workload route: the
+	// ceiling on one request from the ingress listener to the actor's response.
+	// It bounds the actor's own handling time, not the resume that precedes it
+	// — parking and the ext_proc timeout cover that. A non-positive value
+	// leaves Envoy on defaultRouteTimeout.
+	RouteTimeout time.Duration
+
 	// ParkedRequest configures request parking: hold and retry requests whose
 	// actor cannot be served immediately due to transient worker-pool
 	// saturation, instead of failing fast. A non-positive Max disables parking.
@@ -92,6 +99,21 @@ type routerConfig struct {
 	// excess is fast-path headroom for requests to already-running actors.
 	// 0 derives it from the parking lot — see extProcMaxRequests.
 	ExtProcMaxRequests int
+
+	// DrainDelay is how long the router serves after SIGTERM before draining,
+	// allowing readiness flip propagation to Service endpoints. DrainTimeout
+	// bounds the ext_proc drain (0 derives it automatically — see drainTimeout).
+	DrainDelay   time.Duration
+	DrainTimeout time.Duration
+
+	// EnvoyAdminAddr is the Envoy admin interface the drain sequence drives
+	// (healthcheck/fail, drain_listeners, stats polling). Same-pod loopback.
+	EnvoyAdminAddr string
+
+	// DrainCompleteFile is the marker file written once shutdown completes,
+	// releasing Envoy's preStop hook on the shared emptyDir. Removed at startup to
+	// defuse stale markers. Empty disables the handshake.
+	DrainCompleteFile string
 }
 
 func (c routerConfig) atenetRouter() atenetRouter {
@@ -121,6 +143,24 @@ func (c routerConfig) extProcMaxRequests() int {
 	return derived
 }
 
+// drainTimeoutMargin is the slack added on top of the bounded in-flight work
+// when deriving the drain timeout, mirroring the +5s Envoy ext_proc
+// MessageTimeout margin so the router always sheds before a hard cut.
+const drainTimeoutMargin = 5 * time.Second
+
+// drainTimeout resolves the effective ext_proc drain deadline: an explicit
+// flag wins; 0 derives park budget + the DEFAULT route timeout + margin. The
+// derivation deliberately ignores a configured --route-timeout so a raised
+// route ceiling cannot silently stretch shutdown past the pod's grace period
+// (see defaultRouteTimeout); operators pair a long route timeout with an
+// explicit --drain-timeout instead.
+func (c routerConfig) drainTimeout(parkCfg ParkedRequestConfig) time.Duration {
+	if c.DrainTimeout > 0 {
+		return c.DrainTimeout
+	}
+	return parkCfg.Budget + defaultRouteTimeout + drainTimeoutMargin
+}
+
 // validate rejects flag combinations that would make the router misbehave
 // rather than merely differ.
 func (c routerConfig) validate() error {
@@ -139,6 +179,16 @@ func (c routerConfig) validate() error {
 	if c.ExtProcMaxRequests > 0 && c.ParkedRequest.Max > 0 && c.ExtProcMaxRequests < c.ParkedRequest.Max {
 		return fmt.Errorf("--extproc-max-requests (%d) must be >= --parked-request-max (%d): a circuit breaker below the parking lot silently truncates it with Envoy-generated 503s",
 			c.ExtProcMaxRequests, c.ParkedRequest.Max)
+	}
+	if c.DrainDelay < 0 {
+		return fmt.Errorf("--drain-delay must not be negative, got %s", c.DrainDelay)
+	}
+	if c.DrainTimeout < 0 {
+		return fmt.Errorf("--drain-timeout must not be negative, got %s (0 derives it from --parked-request-budget)", c.DrainTimeout)
+	}
+	if c.DrainTimeout > 0 && c.ParkedRequest.enabled() && c.DrainTimeout < c.ParkedRequest.normalized().Budget {
+		return fmt.Errorf("--drain-timeout (%s) must be >= --parked-request-budget (%s): a drain shorter than the parking budget resets parked requests on shutdown instead of letting them finish",
+			c.DrainTimeout, c.ParkedRequest.normalized().Budget)
 	}
 	return nil
 }

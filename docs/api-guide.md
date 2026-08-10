@@ -43,7 +43,13 @@ spec:
   # gvisor SandboxConfig unless sandboxConfigName is set.
 ```
 
-### Example with GPU node scheduling
+### GPU worker pools
+
+A GPU pool needs two things: (1) scheduling onto GPU nodes, and (2) a
+`nvidia.com/gpu` request in `template.resources`. The request does double duty —
+it makes the device plugin assign a GPU to the worker pod **and** triggers
+Substrate to pass that GPU **through to each actor's sandbox**. No per-actor
+configuration is needed.
 
 ```yaml
 apiVersion: ate.dev/v1alpha1
@@ -53,8 +59,10 @@ metadata:
   namespace: ate-demo
 spec:
   replicas: 5
-  ateomImage: ko://github.com/agent-substrate/substrate/cmd/ateom-gvisor
+  # GPU pools need a glibc ateom-gvisor build — see Requirements below.
+  ateomImage: <your-registry>/ateom-gvisor-glibc@sha256:...
   template:
+    # (1) schedule onto GPU nodes
     nodeSelector:
       cloud.google.com/gke-accelerator: nvidia-tesla-t4
     tolerations:
@@ -62,13 +70,6 @@ spec:
       operator: Exists
       effect: NoSchedule
     priorityClassName: substrate-workers
-    nodeAffinity:
-      requiredDuringSchedulingIgnoredDuringExecution:
-        nodeSelectorTerms:
-        - matchExpressions:
-          - key: workload
-            operator: In
-            values: [substrate]
     resources:
       requests:
         cpu: 500m
@@ -76,7 +77,51 @@ spec:
       limits:
         cpu: "1"
         memory: 2Gi
+        # (2) claim a GPU — this request is what triggers GPU passthrough
+        nvidia.com/gpu: "1"
 ```
+
+`atecontroller` propagates the request onto the `ateom` container and mounts the
+host NVIDIA toolkit into the pod. `ateom-gvisor` then generates a CDI spec with
+`nvidia-ctk` and injects the GPU device nodes, driver libraries, and env into
+each actor container's OCI spec, and runs `runsc` with `--nvproxy` so CUDA and NVML
+work inside the sandbox. A worker requesting `nvidia.com/gpu: N` passes all N
+through.
+
+Every container in the actor gets the GPU. An actor's containers share one sandbox
+and the worker's whole device set, and `ActorTemplate` has no per-container resource
+fields, so GPUs are shared at the actor level rather than assigned to one container,
+the same as cpu and memory. This differs from a Kubernetes Pod, where the GPU goes
+only to the container that requests it. If per-container resource limits are added
+later, GPU assignment should follow them.
+
+The driver library directory is prepended to each container's `LD_LIBRARY_PATH` so an
+image does not have to set it to find `libcuda.so.1`; any existing value is kept after
+it rather than replaced.
+
+**Requirements**
+
+- **A glibc `ateom-gvisor` image**, set as `spec.ateomImage`. The distroless default
+  cannot exec `nvidia-ctk`. Build one with
+  `KO_DEFAULTBASEIMAGE=debian:stable-slim ko build ./cmd/ateom-gvisor`.
+- **`nvidia-ctk` on the node**, at the path mounted into the worker — by default
+  `/usr/local/nvidia/toolkit`, overridable with the controller's
+  `ATE_NVIDIA_TOOLKIT_HOST_PATH`. gpu-operator installs it; GKE's built-in GPU
+  support does not.
+- **The driver mounted into the pod by the device plugin**, at `/usr/local/nvidia`
+  by default. `nvidia-ctk` needs its libraries to enumerate the GPUs at all, so a
+  cluster whose plugin uses a different layout must set the controller's
+  `ATE_NVIDIA_DRIVER_ROOT`.
+- **`atelet` must run on the GPU nodes**, so add a matching toleration to its
+  DaemonSet if those nodes are tainted (for example `nvidia.com/gpu`).
+- **gVisor only.** `microvm` pools would need VFIO PCI passthrough instead.
+
+**Known limitation: a GPU actor can only be suspended while no CUDA context is
+open.** gVisor cannot serialize GPU state, so a checkpoint taken while the workload
+holds a context fails with an nvproxy encoding error and terminates the
+sandbox. Workloads that run CUDA and exit snapshot normally; one that keeps a
+context alive (a model resident in device memory, say) cannot be suspended or have a
+golden snapshot taken.
 
 ### Status (`WorkerPoolStatus`)
 
@@ -98,7 +143,7 @@ The `ActorTemplate` defines the code, environment, and state-management policies
 | `containers` | `[]Container` | **Required.** The workload definition — see [Container Fields](#container-fields) below. Each container may also declare an optional `readyz` HTTP probe — see [Container Readiness Probe](#container-readiness-probe-readyz). |
 | `sandboxClass` | `string` | Optional. The sandbox runtime family this template's actors require: `gvisor` (default) or `microvm`. Only `WorkerPool`s whose `sandboxClass` matches are eligible. |
 | `workerSelector` | `*LabelSelector` | Optional. Gates which `WorkerPool`s actors from this template may use, by matching against each pool's labels. If unset, all pools are eligible (subject to the actor's own `worker_selector`). |
-| `snapshotsConfig` | `SnapshotsConfig` | **Required.** GCS bucket and folder where memory snapshots are stored. |
+| `snapshotsConfig` | `SnapshotsConfig` | **Required.** The base object-storage location snapshots are written under, plus the pause/commit/resume scopes. See [Snapshot Storage Layout](#snapshot-storage-layout). |
 | `pauseImage` | `string` | **Required.** The image used for the sandbox root (e.g. `gcr.io/gke-release/pause`). |
 | `volumes` | `[]Volume` | Optional. Volumes the containers may mount, each either a `durableDir` or an `externalVolumeTemplate`. Every declared volume must be mounted by at least one container. A `microvm` template may declare several `durableDir` volumes; a `gvisor` template is limited to one, and `externalVolumeTemplate` is `gvisor`-only. |
 
@@ -181,8 +226,38 @@ spec:
     matchLabels:
       workload: secret-agent
   snapshotsConfig:
-    location: gs://my-bucket/snapshots/secret-agent/
+    location: gs://my-bucket/secret-agent
 ```
+
+### Snapshot Storage Layout
+
+`snapshotsConfig.location` is a **base prefix**, not the address of any one snapshot. Every snapshot taken from the template lands at:
+
+```
+<location>/snapshots/<atespace>/<snapshot name>
+```
+
+and the objects of that snapshot (its manifest, memory image, durable-data tar) are named below it. So for the template above, a snapshot named `f47ac10b-…` of an actor in atespace `team-a` is stored at `gs://my-bucket/secret-agent/snapshots/team-a/f47ac10b-…`, and the template's golden snapshot — the golden actor lives in the reserved `ate-golden` atespace — at `gs://my-bucket/secret-agent/snapshots/ate-golden/<name>`.
+
+Each `ActorSnapshot` reports its own address in the **output-only** `snapshotUri` field. It is recorded when the snapshot is written, not recomputed on read, so the layout can change in future versions without stranding existing snapshots. Do not send it on input; parse it only against the scheme above.
+
+An `ActorTemplate` is namespaced but an atespace is the global isolation boundary, so one `location` holds snapshots for many atespaces. The `<atespace>` level exists so that access can be granted per tenant: an object-storage policy can only condition on an **object-name prefix**, and cannot read the identity recorded inside a snapshot's manifest. Binding a per-atespace grant on GCS looks like:
+
+```yaml
+# Read-only on team-a's snapshots for this template, and nothing else.
+- members: ["serviceAccount:node-runtime@my-project.iam.gserviceaccount.com"]
+  role: roles/storage.objectViewer
+  condition:
+    title: team-a-snapshots
+    expression: >
+      resource.name.startsWith(
+        "projects/_/buckets/my-bucket/objects/secret-agent/snapshots/team-a/")
+```
+
+Two consequences worth planning for:
+
+- **A published snapshot is read from the atespace that took it.** Cloning across atespaces via a `PUBLISHED` tag reads the source atespace's prefix, so the reader needs a grant covering it — the target atespace's grant is not enough.
+- **A location containing its own `snapshots` segment is legal but confusing.** `gs://my-bucket/snapshots/secret-agent` yields `gs://my-bucket/snapshots/secret-agent/snapshots/<atespace>/<name>`. It parses correctly; it just reads badly in a policy.
 
 ---
 
@@ -198,7 +273,7 @@ This means a single, cluster-managed config pins the sandbox runtime version for
 | :--- | :--- | :--- |
 | `sandboxClass` | `string` | **Required.** Runtime family this config applies to: `gvisor` (default) or `microvm`. A `WorkerPool` only uses `SandboxConfig`s whose `sandboxClass` matches its own. |
 | `default` | `bool` | Optional. Marks this as the cluster default for its `sandboxClass`. A `WorkerPool` with no `sandboxConfigName` resolves to the default for its class. At most one default per class. |
-| `assets` | `map[arch]map[name]AssetFile` | Optional. Content-addressed files atelet fetches, keyed by architecture (`amd64`, `arm64`) then asset name. gVisor expects a `runsc` asset; a micro-VM backend expects several. Each `AssetFile` is a `{ url, sha256 }` pair. |
+| `assets` | `map[arch]map[name]AssetFile` | Optional. Content-addressed files atelet fetches, keyed by architecture (`amd64`, `arm64`) then asset name. gVisor expects a `gvisor` asset (the release's `gvisor.tar.bz2`), which atelet auto-extracts. A micro-VM backend expects several. Each `AssetFile` is a `{ url, sha256 }` pair. |
 
 A default cluster-wide gVisor `SandboxConfig` (`gvisor-default`) is installed with the platform, so gVisor pools work out of the box.
 
@@ -214,13 +289,13 @@ spec:
   default: true
   assets:
     amd64:
-      runsc:
-        url: "gs://gvisor/releases/nightly/2026-05-19/x86_64/runsc"
-        sha256: "a397be1abc2420d26bce6c70e6e2ff96c73aaaab929756c56f5e2089ea842b63"
+      gvisor:
+        url: "gs://gvisor/releases/release/20260803/x86_64/gvisor.tar.bz2"
+        sha256: "9e7a5fcc2cbd28c9cd4af910a9327abcf07a8efcce242c285b860d79010c2db5"
     arm64:
-      runsc:
-        url: "gs://gvisor/releases/nightly/2026-05-19/aarch64/runsc"
-        sha256: "1ba2366ae2efceba166046f51a4104f9261c9cb72c6db8f5b3fe2dc57dea86b9"
+      gvisor:
+        url: "gs://gvisor/releases/release/20260803/aarch64/gvisor.tar.bz2"
+        sha256: "294d54dea2a18bcd2614a4b5072d6f32f0e8938f9e6e71c9e86b843c4a7b707b"
 ```
 
 ### Micro-VM SandboxConfig

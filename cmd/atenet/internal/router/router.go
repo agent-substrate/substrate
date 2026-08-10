@@ -21,7 +21,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"os"
 	"os/signal"
 	"syscall"
 
@@ -117,25 +116,32 @@ func NewRouterServer(cfg routerConfig) (*RouterServer, error) {
 }
 
 func (s *RouterServer) Run(ctx context.Context) error {
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
+	// shutdownCtx signals SIGTERM/SIGINT; kept separate from the work context
+	// so in-flight ext_proc streams (parked requests, most of all) are not
+	// cancelled the moment the signal arrives. drainOnShutdown drives the
+	// shutdown sequence: readiness flip → route-drain delay → Envoy drain →
+	// ext_proc drain → stop the rest.
+	shutdownCtx, stopSignals := signal.NotifyContext(ctx, syscall.SIGINT, syscall.SIGTERM)
+	defer stopSignals()
 
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-	go func() {
-		<-sigChan
-		cancel()
-	}()
+	ctx, cancelWork := context.WithCancel(ctx)
+	defer cancelWork()
 
 	// Validate the configuration before doing any other work, so a bad flag
 	// combination fails fast — no tracing, metrics, or connections are set up
 	// for a router that is about to refuse to start. The parking config is
-	// resolved once here so every consumer — the resumer's retry loop and the
-	// Envoy ext_proc timeout — sees the same effective values.
+	// resolved once here so every consumer — the resumer's retry loop, the
+	// Envoy ext_proc timeout, and the drain timeout — sees the same effective
+	// values.
 	if err := s.cfg.validate(); err != nil {
 		return fmt.Errorf("invalid router configuration: %w", err)
 	}
 	parkCfg := s.cfg.ParkedRequest.normalized()
+
+	// The drain-complete marker persists container restarts (emptyDir); a
+	// stale one would release the Envoy preStop hook the moment a later drain
+	// begins.
+	removeStaleDrainMarker(ctx, s.cfg.DrainCompleteFile)
 
 	serverboot.InitLogger()
 	if err := serverboot.SetLogLevel(s.cfg.LogLevel); err != nil {
@@ -162,7 +168,15 @@ func (s *RouterServer) Run(ctx context.Context) error {
 	}
 	defer serverboot.ShutdownProvider("MeterProvider", mp.Shutdown)
 
-	go serverboot.StartMetricsServer(ctx, serverboot.MetricsServerOptions{Addr: s.cfg.MetricsAddr})
+	// readiness flips to not-ready on SIGTERM so /readyz reports 503 while the
+	// pod drains — dropping it from the Service endpoints — while /healthz
+	// stays 200 for liveness.
+	readiness := &serverboot.Readiness{}
+	go serverboot.StartMetricsServer(ctx, serverboot.MetricsServerOptions{
+		Addr:          s.cfg.MetricsAddr,
+		Readiness:     readiness,
+		EnableHealthz: true,
+	})
 
 	dialOpts, err := ateapiauth.DialOptions(ateapiauth.ClientConfig{
 		UseTokenAuth:     s.cfg.Auth.AteapiUseTokenAuth,
@@ -215,7 +229,9 @@ func (s *RouterServer) Run(ctx context.Context) error {
 		return nil
 	})
 
-	// Start ExtProc Server
+	// Start ExtProc Server. Driven by the drain sequence rather than context
+	// cancel: ext_proc is failClosed, so it must outlive Envoy's drain.
+	extprocGRPC := s.extprocSrv.NewGRPCServer()
 	g.Go(func() error {
 		slog.InfoContext(ctx, "Starting ExtProc Server", slog.Int("port", s.cfg.ExtprocPort))
 		lis, err := net.Listen("tcp", fmt.Sprintf(":%d", s.cfg.ExtprocPort))
@@ -224,7 +240,8 @@ func (s *RouterServer) Run(ctx context.Context) error {
 		}
 		defer lis.Close()
 
-		return s.extprocSrv.Serve(ctx, lis)
+		// Serve returns nil after Stop/GracefulStop.
+		return extprocGRPC.Serve(lis)
 	})
 
 	// Start HTTP status endpoint
@@ -252,7 +269,33 @@ func (s *RouterServer) Run(ctx context.Context) error {
 		})
 	}
 
-	return g.Wait()
+	// Only the Envoy dataplane offers the router an active drain hook (its
+	// admin API); agentgateway manages its own termination, so no drainer is
+	// wired and the sequence proceeds straight to the ext_proc drain.
+	var dataplane dataplaneDrainer
+	if s.cfg.atenetRouter() == atenetRouterEnvoy {
+		dataplane = newEnvoyDrainer(s.cfg.EnvoyAdminAddr)
+	}
+	drainDone := drainOnShutdown(shutdownCtx, drainParams{
+		readiness:       readiness,
+		delay:           s.cfg.DrainDelay,
+		dataplane:       dataplane,
+		dataplaneWindow: defaultRouteTimeout + drainTimeoutMargin,
+		extproc:         extprocGRPC,
+		timeout:         s.cfg.drainTimeout(parkCfg),
+		stopRest: func() {
+			// Written first so the dataplane container's preStop hook (polling
+			// this marker on the shared emptyDir) releases as soon as nothing
+			// client-visible remains; then stop the remaining subsystems.
+			writeDrainMarker(ctx, s.cfg.DrainCompleteFile)
+			cancelWork()
+		},
+	})
+
+	err = g.Wait()
+	<-drainDone
+	slog.InfoContext(ctx, "Shutdown complete")
+	return err
 }
 
 // setOtlpCollector points Envoy's tracer at the configured collector, and

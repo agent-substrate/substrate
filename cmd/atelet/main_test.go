@@ -22,21 +22,28 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
+	"time"
 
+	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/ateerrors"
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
+	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/google/go-cmp/cmp"
 	"github.com/klauspost/compress/zstd"
+	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/testing/protocmp"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 func TestSnapshotManifestActorMetadata(t *testing.T) {
@@ -46,15 +53,38 @@ func TestSnapshotManifestActorMetadata(t *testing.T) {
 		ActorUID:               "actor-uid",
 		ActorTemplateNamespace: "templates",
 		ActorTemplateName:      "agent",
+		Scope:                  ateattr.SnapshotScopeFull,
 	}
 	got, err := json.Marshal(rec)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{`"atespace":"team-a"`, `"actorName":"actor-1"`, `"actorUid":"actor-uid"`, `"actorTemplateNamespace":"templates"`, `"actorTemplateName":"agent"`} {
+	for _, want := range []string{`"atespace":"team-a"`, `"actorName":"actor-1"`, `"actorUid":"actor-uid"`, `"actorTemplateNamespace":"templates"`, `"actorTemplateName":"agent"`, `"scope":"full"`} {
 		if !bytes.Contains(got, []byte(want)) {
 			t.Errorf("manifest %s missing %s", got, want)
 		}
+	}
+}
+
+// TestSnapshotManifestScopeAbsent pins backward compatibility: manifests
+// written before the scope field existed must still parse, reporting an empty
+// scope, and a scope-less record must not serialize a scope key at all.
+func TestSnapshotManifestScopeAbsent(t *testing.T) {
+	legacy := []byte(`{"sandboxClass":"gvisor","snapshotFiles":["checkpoint.img"]}`)
+	rec, err := unmarshalSandboxRecord(legacy)
+	if err != nil {
+		t.Fatalf("unmarshalSandboxRecord(legacy manifest): %v", err)
+	}
+	if rec.Scope != "" {
+		t.Errorf("legacy manifest scope = %q, want empty", rec.Scope)
+	}
+
+	got, err := json.Marshal(sandboxAssetsRecord{SandboxClass: "gvisor"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(got, []byte(`"scope"`)) {
+		t.Errorf("scope-less record serialized a scope key: %s", got)
 	}
 }
 
@@ -191,7 +221,7 @@ func validCheckpointRequest() *ateletpb.CheckpointRequest {
 		Type:                   ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
 		Config: &ateletpb.CheckpointRequest_ExternalConfig{
 			ExternalConfig: &ateletpb.ExternalCheckpointConfiguration{
-				SnapshotUriPrefix: "gs://bucket/actors/1/snapshots/2/",
+				SnapshotUri: "gs://bucket/root/snapshots/ate-demo/counter-1-snap",
 			},
 		},
 		Scope: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
@@ -210,7 +240,7 @@ func validRestoreRequest() *ateletpb.RestoreRequest {
 		Type:                   ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL,
 		Config: &ateletpb.RestoreRequest_ExternalConfig{
 			ExternalConfig: &ateletpb.ExternalCheckpointConfiguration{
-				SnapshotUriPrefix: "gs://bucket/actors/1/snapshots/2/",
+				SnapshotUri: "gs://bucket/root/snapshots/ate-demo/counter-1-snap",
 			},
 		},
 		Scope: ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
@@ -245,7 +275,7 @@ func TestValidateRunRequest(t *testing.T) {
 	}
 }
 
-// Checkpoint and Restore must reject a bad snapshot URI prefix even when
+// Checkpoint and Restore must reject a bad snapshot URI even when
 // every common field is valid.
 func TestValidateCheckpointRequest(t *testing.T) {
 	makeReq := func(opts ...func(*ateletpb.CheckpointRequest)) *ateletpb.CheckpointRequest {
@@ -262,8 +292,8 @@ func TestValidateCheckpointRequest(t *testing.T) {
 		wantErr bool
 	}{
 		{"valid", makeReq(), false},
-		{"empty snapshot uri", makeReq(func(r *ateletpb.CheckpointRequest) { r.GetExternalConfig().SnapshotUriPrefix = "" }), true},
-		{"bucketless snapshot uri", makeReq(func(r *ateletpb.CheckpointRequest) { r.GetExternalConfig().SnapshotUriPrefix = "relative/path" }), true},
+		{"empty snapshot uri", makeReq(func(r *ateletpb.CheckpointRequest) { r.GetExternalConfig().SnapshotUri = "" }), true},
+		{"bucketless snapshot uri", makeReq(func(r *ateletpb.CheckpointRequest) { r.GetExternalConfig().SnapshotUri = "relative/path" }), true},
 		{"invalid ateom uid", makeReq(func(r *ateletpb.CheckpointRequest) { r.TargetAteomUid = "../escape" }), true},
 		{"invalid atespace", makeReq(func(r *ateletpb.CheckpointRequest) { r.Atespace = "../escape" }), true},
 		{"invalid actor name", makeReq(func(r *ateletpb.CheckpointRequest) { r.ActorName = "../escape" }), true},
@@ -275,7 +305,19 @@ func TestValidateCheckpointRequest(t *testing.T) {
 		}), true},
 		{"invalid local snapshot prefix", makeReq(func(r *ateletpb.CheckpointRequest) {
 			r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL
-			r.Config = &ateletpb.CheckpointRequest_LocalConfig{LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotPrefix: ""}}
+			r.Config = &ateletpb.CheckpointRequest_LocalConfig{LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotName: ""}}
+		}), true},
+		{"local snapshot name escapes its directory", makeReq(func(r *ateletpb.CheckpointRequest) {
+			r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL
+			r.Config = &ateletpb.CheckpointRequest_LocalConfig{LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotName: "../escape"}}
+		}), true},
+		{"nested local snapshot prefix", makeReq(func(r *ateletpb.CheckpointRequest) {
+			r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL
+			r.Config = &ateletpb.CheckpointRequest_LocalConfig{LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotName: "pause/2"}}
+		}), true},
+		{"traversal local snapshot prefix", makeReq(func(r *ateletpb.CheckpointRequest) {
+			r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL
+			r.Config = &ateletpb.CheckpointRequest_LocalConfig{LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotName: ".."}}
 		}), true},
 		{"unspecified snapshot type", makeReq(func(r *ateletpb.CheckpointRequest) { r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_UNSPECIFIED }), true},
 		{"unspecified snapshot scope", makeReq(func(r *ateletpb.CheckpointRequest) { r.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED }), true},
@@ -308,8 +350,8 @@ func TestValidateRestoreRequest(t *testing.T) {
 		wantErr bool
 	}{
 		{"valid", makeReq(), false},
-		{"empty snapshot uri", makeReq(func(r *ateletpb.RestoreRequest) { r.GetExternalConfig().SnapshotUriPrefix = "" }), true},
-		{"bucketless snapshot uri", makeReq(func(r *ateletpb.RestoreRequest) { r.GetExternalConfig().SnapshotUriPrefix = "relative/path" }), true},
+		{"empty snapshot uri", makeReq(func(r *ateletpb.RestoreRequest) { r.GetExternalConfig().SnapshotUri = "" }), true},
+		{"bucketless snapshot uri", makeReq(func(r *ateletpb.RestoreRequest) { r.GetExternalConfig().SnapshotUri = "relative/path" }), true},
 		{"invalid ateom uid", makeReq(func(r *ateletpb.RestoreRequest) { r.TargetAteomUid = "../escape" }), true},
 		{"invalid atespace", makeReq(func(r *ateletpb.RestoreRequest) { r.Atespace = "../escape" }), true},
 		{"invalid actor name", makeReq(func(r *ateletpb.RestoreRequest) { r.ActorName = "../escape" }), true},
@@ -321,33 +363,45 @@ func TestValidateRestoreRequest(t *testing.T) {
 		}), true},
 		{"invalid local snapshot prefix", makeReq(func(r *ateletpb.RestoreRequest) {
 			r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL
-			r.Config = &ateletpb.RestoreRequest_LocalConfig{LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotPrefix: ""}}
+			r.Config = &ateletpb.RestoreRequest_LocalConfig{LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotName: ""}}
+		}), true},
+		{"local snapshot name escapes its directory", makeReq(func(r *ateletpb.RestoreRequest) {
+			r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL
+			r.Config = &ateletpb.RestoreRequest_LocalConfig{LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotName: "../escape"}}
+		}), true},
+		{"nested local snapshot prefix", makeReq(func(r *ateletpb.RestoreRequest) {
+			r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL
+			r.Config = &ateletpb.RestoreRequest_LocalConfig{LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotName: "pause/2"}}
+		}), true},
+		{"traversal local snapshot prefix", makeReq(func(r *ateletpb.RestoreRequest) {
+			r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL
+			r.Config = &ateletpb.RestoreRequest_LocalConfig{LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotName: ".."}}
 		}), true},
 		{"unspecified snapshot type", makeReq(func(r *ateletpb.RestoreRequest) { r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_UNSPECIFIED }), true},
 		{"unspecified snapshot scope", makeReq(func(r *ateletpb.RestoreRequest) { r.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_UNSPECIFIED }), true},
 		{"invalid snapshot scope", makeReq(func(r *ateletpb.RestoreRequest) { r.Scope = ateletpb.SnapshotScope(23) }), true},
 		{"data-on-golden with golden uri", makeReq(func(r *ateletpb.RestoreRequest) {
 			r.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
-			r.GoldenSnapshotUriPrefix = "gs://bucket/ate-golden/snapshots/1/"
+			r.GoldenSnapshotUri = "gs://bucket/golden-root/snapshots/ate-golden/golden-1"
 		}), false},
 		{"data-on-golden without golden uri", makeReq(func(r *ateletpb.RestoreRequest) {
 			r.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
 		}), true},
 		{"data-on-golden with bucketless golden uri", makeReq(func(r *ateletpb.RestoreRequest) {
 			r.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
-			r.GoldenSnapshotUriPrefix = "relative/path"
+			r.GoldenSnapshotUri = "relative/path"
 		}), true},
 		// A pause (local) checkpoint may combine with the golden snapshot:
 		// the golden URI is a top-level field precisely so LOCAL restores
 		// can carry it.
 		{"data-on-golden with local checkpoint type", makeReq(func(r *ateletpb.RestoreRequest) {
 			r.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
-			r.GoldenSnapshotUriPrefix = "gs://bucket/ate-golden/snapshots/1/"
+			r.GoldenSnapshotUri = "gs://bucket/golden-root/snapshots/ate-golden/golden-1"
 			r.Type = ateletpb.CheckpointType_CHECKPOINT_TYPE_LOCAL
-			r.Config = &ateletpb.RestoreRequest_LocalConfig{LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotPrefix: "prefix"}}
+			r.Config = &ateletpb.RestoreRequest_LocalConfig{LocalConfig: &ateletpb.LocalCheckpointConfiguration{SnapshotName: "local-snap-1"}}
 		}), false},
 		{"golden uri with non-data-on-golden scope", makeReq(func(r *ateletpb.RestoreRequest) {
-			r.GoldenSnapshotUriPrefix = "gs://bucket/ate-golden/snapshots/1/"
+			r.GoldenSnapshotUri = "gs://bucket/golden-root/snapshots/ate-golden/golden-1"
 		}), true},
 	}
 	for _, tc := range tests {
@@ -668,6 +722,17 @@ func TestBuildAteomWorkloadSpecForwardsDurableDirMounts(t *testing.T) {
 	}
 }
 
+func TestToAteomEgressGateway(t *testing.T) {
+	if got := toAteomEgressGateway(nil); got != nil {
+		t.Fatalf("toAteomEgressGateway(nil) = %v, want nil", got)
+	}
+	want := &ateompb.EgressGateway{Address: "egress.example:443"}
+	got := toAteomEgressGateway(&ateletpb.EgressGateway{Address: want.Address})
+	if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
+		t.Errorf("toAteomEgressGateway mismatch (-want +got):\n%s", diff)
+	}
+}
+
 func TestIsTerminalFileErr(t *testing.T) {
 	tests := []struct {
 		name string
@@ -802,17 +867,17 @@ func TestDownloadCombinedCheckpoint(t *testing.T) {
 	}
 
 	store := mapObjectStorage{objects: map[string][]byte{
-		"bucket/actors/1/snapshots/2/durable-dir.tar.zstd":   zstdBytes(t, "actor durable data"),
-		"bucket/ate-golden/snapshots/1/config.json.zstd":     zstdBytes(t, "golden config"),
-		"bucket/ate-golden/snapshots/1/memory-ranges.zstd":   zstdBytes(t, "golden memory"),
-		"bucket/ate-golden/snapshots/1/durable-dir.tar.zstd": zstdBytes(t, "golden durable data (must not be downloaded)"),
+		"bucket/root/snapshots/ate-demo/counter-1-snap/durable-dir.tar.zstd":    zstdBytes(t, "actor durable data"),
+		"bucket/golden-root/snapshots/ate-golden/golden-1/config.json.zstd":     zstdBytes(t, "golden config"),
+		"bucket/golden-root/snapshots/ate-golden/golden-1/memory-ranges.zstd":   zstdBytes(t, "golden memory"),
+		"bucket/golden-root/snapshots/ate-golden/golden-1/durable-dir.tar.zstd": zstdBytes(t, "golden durable data (must not be downloaded)"),
 	}}
 	s := &AteomHerder{gcsClient: store}
 
 	dstDir := t.TempDir()
 	err := s.downloadCombinedCheckpoint(context.Background(),
-		"gs://bucket/actors/1/snapshots/2/",
-		"gs://bucket/ate-golden/snapshots/1/",
+		"gs://bucket/root/snapshots/ate-demo/counter-1-snap",
+		"gs://bucket/golden-root/snapshots/ate-golden/golden-1",
 		dstDir,
 		[]string{"durable-dir.tar"},
 		[]string{"config.json", "memory-ranges", "durable-dir.tar"})
@@ -840,5 +905,314 @@ func TestDownloadCombinedCheckpoint(t *testing.T) {
 		if string(got) != content {
 			t.Errorf("%s content = %q, want %q", name, got, content)
 		}
+	}
+}
+
+// blockerDesc registers a single unary method whose handler blocks until block
+// is closed (or the RPC context is cancelled). It lets a test hold one RPC
+// "in-flight" across a drain without any generated proto.
+func blockerDesc(block <-chan struct{}) grpc.ServiceDesc {
+	return grpc.ServiceDesc{
+		ServiceName: "drain.test.Blocker",
+		HandlerType: (*any)(nil),
+		Methods: []grpc.MethodDesc{{
+			MethodName: "Block",
+			Handler: func(_ any, ctx context.Context, dec func(any) error, _ grpc.UnaryServerInterceptor) (any, error) {
+				if err := dec(new(emptypb.Empty)); err != nil {
+					return nil, err
+				}
+				select {
+				case <-block:
+					return new(emptypb.Empty), nil
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				}
+			},
+		}},
+	}
+}
+
+// newBlockingTestServer starts a gRPC server on a loopback port exposing the
+// blocker service and returns it with a connected client.
+func newBlockingTestServer(t *testing.T, block <-chan struct{}) (*grpc.Server, *grpc.ClientConn) {
+	t.Helper()
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	srv := grpc.NewServer()
+	desc := blockerDesc(block)
+	srv.RegisterService(&desc, nil)
+	go func() { _ = srv.Serve(lis) }()
+
+	conn, err := grpc.NewClient(
+		lis.Addr().String(),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	return srv, conn
+}
+
+func callBlock(conn *grpc.ClientConn) <-chan error {
+	rpcErr := make(chan error, 1)
+	go func() {
+		rpcErr <- conn.Invoke(context.Background(), "/drain.test.Blocker/Block",
+			new(emptypb.Empty), new(emptypb.Empty))
+	}()
+	return rpcErr
+}
+
+// TestDrainOnShutdownInFlightFinishes asserts that an RPC already in flight when
+// SIGTERM arrives is allowed to complete (GracefulStop waits for it) and that
+// readiness flips to not-ready.
+func TestDrainOnShutdownInFlightFinishes(t *testing.T) {
+	*drainDelay = 0
+	*drainTimeout = 5 * time.Second
+
+	block := make(chan struct{})
+	srv, conn := newBlockingTestServer(t, block)
+
+	rpcErr := callBlock(conn)
+	time.Sleep(100 * time.Millisecond) // let the RPC reach the handler
+
+	readiness := &serverboot.Readiness{}
+	ctx, cancel := context.WithCancel(context.Background())
+	drainDone := drainOnShutdown(ctx, srv, readiness)
+
+	cancel() // simulate SIGTERM
+
+	// Release the handler shortly after the drain begins; a graceful drain must
+	// wait for it rather than abort it.
+	time.Sleep(100 * time.Millisecond)
+	close(block)
+
+	select {
+	case err := <-rpcErr:
+		if err != nil {
+			t.Fatalf("in-flight RPC should complete during graceful drain, got: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("in-flight RPC did not complete")
+	}
+
+	select {
+	case <-drainDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("drain did not complete")
+	}
+	if readiness.Ready() {
+		t.Fatal("readiness should be not-ready after drain")
+	}
+}
+
+// TestDrainOnShutdownForceStopsAfterTimeout asserts that an RPC still running
+// past drain-timeout is forcefully cancelled by Stop().
+func TestDrainOnShutdownForceStopsAfterTimeout(t *testing.T) {
+	*drainDelay = 0
+	*drainTimeout = 200 * time.Millisecond
+
+	block := make(chan struct{}) // never closed → handler blocks past the timeout
+	srv, conn := newBlockingTestServer(t, block)
+
+	rpcErr := callBlock(conn)
+	time.Sleep(100 * time.Millisecond)
+
+	readiness := &serverboot.Readiness{}
+	ctx, cancel := context.WithCancel(context.Background())
+	start := time.Now()
+	drainDone := drainOnShutdown(ctx, srv, readiness)
+	cancel()
+
+	select {
+	case <-drainDone:
+	case <-time.After(3 * time.Second):
+		t.Fatal("drain did not force-stop within deadline")
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("force stop took too long (%v); expected ~drain-timeout", elapsed)
+	}
+
+	select {
+	case err := <-rpcErr:
+		if err == nil {
+			t.Fatal("in-flight RPC should have been aborted by force stop")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("in-flight RPC did not return after force stop")
+	}
+	if readiness.Ready() {
+		t.Fatal("readiness should be not-ready after drain")
+	}
+}
+
+// allocatedBytes reports how much disk a file actually occupies, which is less than its
+// size when it has holes.
+func allocatedBytes(t *testing.T, path string) int64 {
+	t.Helper()
+	var st syscall.Stat_t
+	if err := syscall.Stat(path, &st); err != nil {
+		t.Fatalf("stat %q: %v", path, err)
+	}
+	return st.Blocks * 512
+}
+
+// noFdFile hides the descriptor of an *os.File, forcing copySparse down its
+// userspace path.
+type noFdFile struct {
+	f *os.File
+}
+
+func (n noFdFile) Write(b []byte) (int, error)              { return n.f.Write(b) }
+func (n noFdFile) WriteAt(b []byte, off int64) (int, error) { return n.f.WriteAt(b, off) }
+func (n noFdFile) Truncate(size int64) error                { return n.f.Truncate(size) }
+func (n noFdFile) Close() error                             { return n.f.Close() }
+
+func TestCopyFilePreservesHoles(t *testing.T) {
+	const (
+		size     = 32 << 20
+		markerAt = 16 << 20
+	)
+	dir := t.TempDir()
+	src := filepath.Join(dir, "memory-ranges")
+
+	// A stand-in for a guest memory image: mostly hole, with data at both the start
+	// and the middle.
+	f, err := os.Create(src)
+	if err != nil {
+		t.Fatalf("creating src: %v", err)
+	}
+	if err := f.Truncate(size); err != nil {
+		t.Fatalf("sizing src: %v", err)
+	}
+	head := bytes.Repeat([]byte{0xAB}, 4<<10)
+	middle := bytes.Repeat([]byte{0xCD}, 4<<10)
+	if _, err := f.WriteAt(head, 0); err != nil {
+		t.Fatalf("writing head: %v", err)
+	}
+	if _, err := f.WriteAt(middle, markerAt); err != nil {
+		t.Fatalf("writing middle: %v", err)
+	}
+	if err := errors.Join(f.Sync(), f.Close()); err != nil {
+		t.Fatalf("flushing src: %v", err)
+	}
+
+	dst := filepath.Join(dir, "copied")
+	n, err := copyFile(src, dst)
+	if err != nil {
+		t.Fatalf("copyFile: %v", err)
+	}
+	if n != size {
+		t.Errorf("copied %d logical bytes, want %d", n, size)
+	}
+
+	// The copy must be byte-identical, holes included.
+	want, err := os.ReadFile(src)
+	if err != nil {
+		t.Fatalf("reading src: %v", err)
+	}
+	got, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatalf("reading dst: %v", err)
+	}
+	if !bytes.Equal(want, got) {
+		t.Fatal("copy differs from source")
+	}
+
+	srcAlloc, dstAlloc := allocatedBytes(t, src), allocatedBytes(t, dst)
+	if srcAlloc >= size/2 {
+		t.Skipf("source did not end up sparse (%d of %d bytes allocated); "+
+			"this filesystem cannot report holes", srcAlloc, int64(size))
+	}
+	// A dense copy would allocate the full logical size; a hole-preserving one stays
+	// near the source's footprint.
+	if dstAlloc > srcAlloc*4 {
+		t.Errorf("copy allocated %d bytes for a %d-byte source (logical %d): holes were filled in",
+			dstAlloc, srcAlloc, int64(size))
+	}
+}
+
+func TestCopyFileAllHoles(t *testing.T) {
+	const size = 8 << 20
+	dir := t.TempDir()
+	src := filepath.Join(dir, "empty")
+	f, err := os.Create(src)
+	if err != nil {
+		t.Fatalf("creating src: %v", err)
+	}
+	if err := errors.Join(f.Truncate(size), f.Close()); err != nil {
+		t.Fatalf("sizing src: %v", err)
+	}
+
+	dst := filepath.Join(dir, "copied")
+	if _, err := copyFile(src, dst); err != nil {
+		t.Fatalf("copyFile: %v", err)
+	}
+	st, err := os.Stat(dst)
+	if err != nil {
+		t.Fatalf("stat dst: %v", err)
+	}
+	if st.Size() != size {
+		t.Errorf("copy is %d bytes, want %d", st.Size(), int64(size))
+	}
+}
+
+// TestCopyFilePreservesHolesUserspace covers the fallback taken when the destination
+// does not expose a descriptor, so copy_file_range is unavailable.
+func TestCopyFilePreservesHolesUserspace(t *testing.T) {
+	orig := createDestFile
+	createDestFile = func(name string) (io.WriteCloser, error) {
+		f, err := os.Create(name)
+		if err != nil {
+			return nil, err
+		}
+		return noFdFile{f: f}, nil
+	}
+	t.Cleanup(func() { createDestFile = orig })
+
+	const size = 32 << 20
+	dir := t.TempDir()
+	src := filepath.Join(dir, "memory-ranges")
+	f, err := os.Create(src)
+	if err != nil {
+		t.Fatalf("creating src: %v", err)
+	}
+	if err := f.Truncate(size); err != nil {
+		t.Fatalf("sizing src: %v", err)
+	}
+	marker := bytes.Repeat([]byte{0xEF}, 4<<10)
+	if _, err := f.WriteAt(marker, 8<<20); err != nil {
+		t.Fatalf("writing marker: %v", err)
+	}
+	if err := errors.Join(f.Sync(), f.Close()); err != nil {
+		t.Fatalf("flushing src: %v", err)
+	}
+
+	dst := filepath.Join(dir, "copied")
+	if _, err := copyFile(src, dst); err != nil {
+		t.Fatalf("copyFile: %v", err)
+	}
+
+	want, err := os.ReadFile(src)
+	if err != nil {
+		t.Fatalf("reading src: %v", err)
+	}
+	got, err := os.ReadFile(dst)
+	if err != nil {
+		t.Fatalf("reading dst: %v", err)
+	}
+	if !bytes.Equal(want, got) {
+		t.Fatal("userspace copy differs from source")
+	}
+
+	srcAlloc, dstAlloc := allocatedBytes(t, src), allocatedBytes(t, dst)
+	if srcAlloc >= size/2 {
+		t.Skipf("source did not end up sparse (%d of %d bytes allocated)", srcAlloc, int64(size))
+	}
+	if dstAlloc > srcAlloc*4 {
+		t.Errorf("userspace copy allocated %d bytes for a %d-byte source: holes were filled in",
+			dstAlloc, srcAlloc)
 	}
 }

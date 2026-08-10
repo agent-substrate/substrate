@@ -69,12 +69,20 @@ func NewRouterCmd() *cobra.Command {
 	cmd.Flags().StringVar(&cfg.Auth.AteapiServerName, "ateapi-server-name", "", "SNI / hostname expected on the ateapi server cert. Optional.")
 	cmd.Flags().BoolVar(&cfg.Auth.AteapiUseTokenAuth, "ateapi-use-token-auth", false, "Authenticate to ateapi with the Bearer token from --ateapi-token-file instead of the client certificate from --ateapi-client-cert.")
 	cmd.Flags().StringVar(&cfg.Auth.AteapiTokenFile, "ateapi-token-file", "", "Projected SA token file used as Bearer credential. Required with --ateapi-use-token-auth, ignored otherwise.")
+	cmd.Flags().DurationVar(&cfg.RouteTimeout, "route-timeout", defaultRouteTimeout, "Envoy's end-to-end timeout on the workload route, bounding one request from the ingress listener to the actor's response. Raise it for actors whose turns legitimately run long — a harness relaying an LLM completion holds the request open for the whole generation. This does not cover the resume that may precede the request; see --parked-request-budget")
 	cmd.Flags().DurationVar(&cfg.ParkedRequest.Budget, "parked-request-budget", defaultParkedRequestBudget, "Maximum time a resume flight keeps a request parked (held and retried) waiting for its actor to become routable; concurrent requests for the same actor share one flight and its budget")
 	cmd.Flags().IntVar(&cfg.ParkedRequest.Max, "parked-request-max", defaultParkedRequestMax, "Maximum number of requests that may be parked simultaneously; excess requests are shed with 503. 0 disables parking (requests fail fast on worker-pool saturation)")
 	cmd.Flags().DurationVar(&cfg.ParkedRequest.RetryInterval, "parked-request-retry-interval", defaultParkedRequestRetryInterval, "Delay before a parked request's first resume retry")
 	cmd.Flags().Float64Var(&cfg.ParkedRequest.RetryFactor, "parked-request-retry-factor", defaultParkedRequestRetryFactor, "Multiplier applied to the retry delay after each attempt; must be >= 1")
 	cmd.Flags().Float64Var(&cfg.ParkedRequest.RetryJitter, "parked-request-retry-jitter", defaultParkedRequestRetryJitter, "Random fraction in [0, 1) added to each retry delay to de-synchronize parked requests")
 	cmd.Flags().IntVar(&cfg.ExtProcMaxRequests, "extproc-max-requests", 0, "Circuit-breaker max_requests for Envoy's ext_proc cluster; 0 (the default) derives it as twice --parked-request-max (minimum 1024). Explicit values must be >= --parked-request-max: every parked request holds one slot for its full wait, and the excess is fast-path headroom")
+	// Graceful shutdown knobs. The router sits behind a Service, so
+	// route-drain window is needed: after SIGTERM the readiness flip
+	// must propagate to the Service endpoints before the drain starts.
+	cmd.Flags().DurationVar(&cfg.DrainDelay, "drain-delay", 13*time.Second, "How long to keep serving after SIGTERM before starting the drain, covering readiness-probe detection and Service endpoint propagation")
+	cmd.Flags().DurationVar(&cfg.DrainTimeout, "drain-timeout", 0, "Deadline for the ext_proc drain on shutdown; streams still open past it (parked requests included) are forcefully cancelled. 0 (the default) derives --parked-request-budget + the actor route timeout + margin so parked requests always finish normally. Explicit values must be >= --parked-request-budget")
+	cmd.Flags().StringVar(&cfg.EnvoyAdminAddr, "envoy-admin-address", "127.0.0.1:9901", "Envoy admin interface the shutdown sequence drives to drain the sidecar (healthcheck/fail, drain_listeners, stats polling). Ignored with --atenet-router=agentgateway")
+	cmd.Flags().StringVar(&cfg.DrainCompleteFile, "drain-complete-file", defaultDrainCompleteFile, "Marker file created (on a pod-shared emptyDir) once the shutdown drain completes; the Envoy container's preStop hook polls for it so Envoy exits as soon as — and no sooner than — the drain is done. Removed at startup to defuse stale markers. Empty disables the handshake")
 
 	return cmd
 }

@@ -16,75 +16,13 @@
 # in-RAM (atomic uint64), so a successful suspend/resume across pods shows the
 # count continuing — proving the guest memory snapshot round-tripped.
 #
-# The sandbox binaries (cloud-hypervisor, virtiofsd, guest kernel, guest rootfs,
-# base configuration.toml) live on a cluster-scoped SandboxConfig, FETCHED at runtime
-# from the cluster object store bucket ${BUCKET_NAME} under kata-assets/ (rustfs on
-# kind, GCS on GKE) — NOT baked into the worker image. ateom boots cloud-hypervisor
-# itself and gives the actor an overlay rootfs (virtio-fs RO lower + guest-tmpfs
-# upper), so it fetches virtiofsd (v1.14.0 — the first release with the vhost-0.16
-# snapshot/restore fix; the kata-bundled v1.13.3 hangs restore). The kata containerd
-# shim is NOT fetched (ateom drives the kata-agent directly). kata assets are 4.0.0.
-# The per-arch sha256 values below are the asset sets produced by
-# hack/microvm-assets/assemble.sh; atelet selects the block matching the node's
-# architecture, and each cluster's bucket holds that arch's binaries at these paths
-# (staged by run-microvm-demo[-kind].sh).
+# The cluster-wide `microvm` SandboxConfig referenced below by name is
+# installed by hack/install-microvm-deps.sh
 
 apiVersion: v1
 kind: Namespace
 metadata:
   name: ate-demo-counter-microvm
-
----
-
-apiVersion: ate.dev/v1alpha1
-kind: SandboxConfig
-metadata:
-  name: counter-microvm
-spec:
-  sandboxClass: microvm
-  assets:
-    arm64:
-      cloud-hypervisor:
-        url: "gs://${BUCKET_NAME}/kata-assets/cloud-hypervisor"
-        sha256: "bf004ddc1a148f47caa87ac49a783b8dbd6bf9bc27abe522ed197df7b982d3b1"
-      # virtiofsd serves the overlay RO lower (virtio-fs); v1.14.0 carries the
-      # vhost-0.16 snapshot/restore fix the kata-bundled v1.13.3 lacks.
-      virtiofsd:
-        url: "gs://${BUCKET_NAME}/kata-assets/virtiofsd"
-        # Upstream publishes no arm64 prebuilt, so assemble.sh builds the v1.14.0 tag
-        # from source; the binary is not byte-reproducible across toolchains and can't
-        # carry a fixed pin. run-microvm-demo.sh computes this from the freshly-staged
-        # binary at deploy.
-        sha256: "${VIRTIOFSD_SHA256}"
-      kata-kernel:
-        url: "gs://${BUCKET_NAME}/kata-assets/vmlinux"
-        sha256: "4a8998a2e7ac12d6ad1f15b5e7d00571e4518ea9f33db1a1a568310373ca428d"
-      kata-image:
-        url: "gs://${BUCKET_NAME}/kata-assets/rootfs.img"
-        sha256: "24d77700749846355f3be25b87974c1fdea9fd2a9534256b4e4bbdde5df23588"
-      kata-config:
-        url: "gs://${BUCKET_NAME}/kata-assets/configuration-clh.toml"
-        sha256: "20f5de4f705423ddd1ee93318c784c6aede30c07c78dc6b311a771cc2f6859c7"
-    # amd64 assets are kata 4.0.0 + virtiofsd v1.14.0 (assemble.sh ARCH=amd64).
-    amd64:
-      cloud-hypervisor:
-        url: "gs://${BUCKET_NAME}/kata-assets/cloud-hypervisor"
-        sha256: "829af01ff075bb96c4f183905134c453a88d68cbabdc6b87df21098842581ee9"
-      virtiofsd:
-        url: "gs://${BUCKET_NAME}/kata-assets/virtiofsd"
-        # The x86_64-musl binary attached to the upstream v1.14.0 release (downloaded
-        # by assemble.sh, reproducible bytes), so it carries a fixed pin like the
-        # other downloaded assets.
-        sha256: "15b2e72a78cc08a9bd8a6943e89fb69c88cb3cbeb63069efceade835342ac7d4"
-      kata-kernel:
-        url: "gs://${BUCKET_NAME}/kata-assets/vmlinux"
-        sha256: "6abc48fa83c58e3db314037105d04ec00c1bc80d85eb2dfb2e2854f414573bca"
-      kata-image:
-        url: "gs://${BUCKET_NAME}/kata-assets/rootfs.img"
-        sha256: "fbbd40de605ab2f99dc82c777dc5b41f9a00dad3a0f699f2247c306ac9c1204d"
-      kata-config:
-        url: "gs://${BUCKET_NAME}/kata-assets/configuration-clh.toml"
-        sha256: "1e67eabdfb9d900bf95a00edb52cacc1efe64f23ea095f8b49ee81c7434bce90"
 
 ---
 
@@ -98,7 +36,7 @@ metadata:
 spec:
   replicas: 2
   sandboxClass: microvm
-  sandboxConfigName: counter-microvm
+  sandboxConfigName: microvm
   ateomImage: ko://github.com/agent-substrate/substrate/cmd/ateom-microvm
 
 ---

@@ -216,7 +216,7 @@ func TestLifecycleOpDurationShape(t *testing.T) {
 		Spec: atev1alpha1.ActorTemplateSpec{SandboxClass: atev1alpha1.SandboxClassGvisor},
 	}
 	inst.recordLifecycleOp(context.Background(), ateattr.OperationResume, time.Now(), nil,
-		lifecycleOpAttrs(actor, template, ateattr.SnapshotKindLatest)...)
+		lifecycleOpAttrs(actor, template, ateattr.SnapshotKindLatest, ateattr.SnapshotScopeDataOnGolden)...)
 
 	dp := singleHistogramDP(t, reader, lifecycleOpDurationMetric)
 	assertAttrKeys(t, dp,
@@ -226,9 +226,30 @@ func TestLifecycleOpDurationShape(t *testing.T) {
 		ateattr.WorkerPoolNameKey,
 		ateattr.SandboxClassKey,
 		ateattr.SnapshotKindKey,
+		ateattr.SnapshotScopeKey,
 	)
 	if op, _ := attrString(dp, ateattr.ActorOperationNameKey); op != ateattr.OperationResume {
 		t.Errorf("operation = %q, want %q", op, ateattr.OperationResume)
+	}
+	// Kind and scope are independent: a data_on_golden restore of the actor's
+	// own latest snapshot must stay distinguishable from one of a local snapshot.
+	if scope, _ := attrString(dp, ateattr.SnapshotScopeKey); scope != ateattr.SnapshotScopeDataOnGolden {
+		t.Errorf("snapshot scope = %q, want %q", scope, ateattr.SnapshotScopeDataOnGolden)
+	}
+	if kind, _ := attrString(dp, ateattr.SnapshotKindKey); kind != ateattr.SnapshotKindLatest {
+		t.Errorf("snapshot kind = %q, want %q", kind, ateattr.SnapshotKindLatest)
+	}
+}
+
+// TestLifecycleOpAttrsOmitsUnknownScope guards the failure path: a resume that
+// dies before the restore request is built has no scope, and an empty-string
+// series would be indistinguishable from a real one.
+func TestLifecycleOpAttrsOmitsUnknownScope(t *testing.T) {
+	actor := &ateapipb.Actor{ActorTemplateName: "support-agent", ActorTemplateNamespace: "ate-agents"}
+	for _, kv := range lifecycleOpAttrs(actor, nil, "", "") {
+		if kv.Key == ateattr.SnapshotScopeKey || kv.Key == ateattr.SnapshotKindKey {
+			t.Errorf("attribute %s must be omitted while unknown, got %q", kv.Key, kv.Value.AsString())
+		}
 	}
 }
 

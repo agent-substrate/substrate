@@ -31,7 +31,7 @@ import (
 // (simulating a Kubernetes eviction), and the control plane is expected to mark
 // the worker DRAINING, then remove it and detach the actor once the pod is gone.
 //
-// The demo counter actor installs a SIGTERM handler that sleeps for 5 seconds
+// The demo counter actor installs a SIGTERM handler that sleeps
 // before exiting, simulating a real-world workload that waits for graceful
 // termination. The actor eventually lands in a terminal, non-RUNNING state
 // (CRASHED). We assert the control-plane state

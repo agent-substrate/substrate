@@ -37,20 +37,34 @@ if [[ ! -f "${MANIFEST_TEMPLATE}" ]]; then
 fi
 
 WORKER_COUNT=1
+SANDBOX_CLASS="gvisor"
 
 usage() {
   echo "Usage: $0 [options]"
   echo ""
   echo "Options:"
-  echo "  --deploy             Substitute env vars and deploy workloads to the cluster using ko apply"
-  echo "  --delete             Substitute env vars and delete workloads from the cluster"
-  echo "  --worker-count N     Number of WorkerPool replicas (default: 1)"
-  echo "  -h, --help           Show this help message"
+  echo "  --deploy                    Substitute env vars and deploy workloads to the cluster using ko apply"
+  echo "  --delete                    Substitute env vars and delete workloads from the cluster"
+  echo "  --worker-count N            Number of WorkerPool replicas (default: 1)"
+  echo "  --sandbox-class CLASS       Sandbox runtime for the WorkerPool: gvisor | microvm (default: gvisor)."
+  echo "                              microvm requires hack/install-microvm-deps.sh --install to have run."
+  echo "  -h, --help                  Show this help message"
 }
 
 substitute() {
+  # SandboxConfig names are pinned per class (rather than defaulted) so a stale
+  # config from a dirty teardown fails loudly instead of silently binding this
+  # pool. gvisor-default is applied by hack/install-ate.sh; microvm is applied
+  # by hack/install-microvm-deps.sh.
+  local sandbox_config_name
+  case "${SANDBOX_CLASS}" in
+    gvisor)  sandbox_config_name="gvisor-default" ;;
+    microvm) sandbox_config_name="microvm"        ;;
+  esac
   sed -e "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" \
       -e "s|\${WORKER_COUNT}|${WORKER_COUNT}|g" \
+      -e "s|\${SANDBOX_CLASS}|${SANDBOX_CLASS}|g" \
+      -e "s|\${SANDBOX_CONFIG_NAME}|${sandbox_config_name}|g" \
       "${MANIFEST_TEMPLATE}"
 }
 
@@ -87,6 +101,13 @@ while [[ "$#" -gt 0 ]]; do
     --worker-count=*)
       WORKER_COUNT="${1#*=}"
       ;;
+    --sandbox-class)
+      shift
+      SANDBOX_CLASS="$1"
+      ;;
+    --sandbox-class=*)
+      SANDBOX_CLASS="${1#*=}"
+      ;;
     -h|--help)
       usage
       exit 0
@@ -99,6 +120,14 @@ while [[ "$#" -gt 0 ]]; do
   esac
   shift
 done
+
+case "${SANDBOX_CLASS}" in
+  gvisor|microvm) ;;
+  *)
+    echo "Error: --sandbox-class must be gvisor or microvm, got '${SANDBOX_CLASS}'" >&2
+    exit 1
+    ;;
+esac
 
 if [[ "${action}" == "deploy" ]]; then
   deploy

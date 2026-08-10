@@ -47,6 +47,10 @@ func sandboxConfig(name string, class SandboxClass, assets map[string]map[string
 
 func runscAsset() AssetFile { return AssetFile{URL: "gs://bucket/runsc", SHA256: validSHA256} }
 
+func gvisorAsset() AssetFile {
+	return AssetFile{URL: "gs://bucket/gvisor.tar.bz2", SHA256: validSHA256}
+}
+
 // microVMAssets returns a full, valid micro-VM asset set for one architecture:
 // the five assets the policy requires. The overlay rootfs serves the OCI image
 // over virtio-fs, so virtiofsd is part of the set.
@@ -113,8 +117,16 @@ func TestSandboxConfigValidation(t *testing.T) {
 		wantErr bool
 		errMsg  string
 	}{{
-		name:    "valid gvisor with runsc",
+		name:    "valid gvisor with release tarball",
+		sc:      sandboxConfig("ok-gvisor-tarball", SandboxClassGvisor, map[string]map[string]AssetFile{"amd64": {"gvisor": gvisorAsset()}, "arm64": {"gvisor": gvisorAsset()}}),
+		wantErr: false,
+	}, {
+		name:    "valid gvisor with legacy runsc",
 		sc:      sandboxConfig("ok-gvisor", SandboxClassGvisor, map[string]map[string]AssetFile{"amd64": {"runsc": runscAsset()}, "arm64": {"runsc": runscAsset()}}),
+		wantErr: false,
+	}, {
+		name:    "valid gvisor mixing tarball and legacy per arch",
+		sc:      sandboxConfig("ok-gvisor-mixed", SandboxClassGvisor, map[string]map[string]AssetFile{"amd64": {"gvisor": gvisorAsset()}, "arm64": {"runsc": runscAsset()}}),
 		wantErr: false,
 	}, {
 		name:    "valid microvm with full asset set",
@@ -143,13 +155,13 @@ func TestSandboxConfigValidation(t *testing.T) {
 		wantErr: true,
 		errMsg:  "microvm SandboxConfig must define",
 	}, {
-		name:    "gvisor arch missing runsc",
+		name:    "gvisor arch missing gvisor and runsc",
 		sc:      sandboxConfig("bad-no-runsc", SandboxClassGvisor, map[string]map[string]AssetFile{"amd64": {"notrunsc": runscAsset()}}),
 		wantErr: true,
 		errMsg:  "runsc",
 	}, {
-		name:    "gvisor one arch missing runsc",
-		sc:      sandboxConfig("bad-mixed-arch", SandboxClassGvisor, map[string]map[string]AssetFile{"amd64": {"runsc": runscAsset()}, "arm64": {"notrunsc": runscAsset()}}),
+		name:    "gvisor one arch missing gvisor and runsc",
+		sc:      sandboxConfig("bad-mixed-arch", SandboxClassGvisor, map[string]map[string]AssetFile{"amd64": {"gvisor": gvisorAsset()}, "arm64": {"notrunsc": runscAsset()}}),
 		wantErr: true,
 		errMsg:  "runsc",
 	}, {

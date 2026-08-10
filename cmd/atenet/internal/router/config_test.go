@@ -17,6 +17,7 @@ package router
 import (
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestRouterConfigValidate(t *testing.T) {
@@ -59,6 +60,33 @@ func TestRouterConfigValidate(t *testing.T) {
 		{
 			name: "parking disabled ignores the relation",
 			cfg:  routerConfig{ExtProcMaxRequests: 8, ParkedRequest: ParkedRequestConfig{Max: 0}},
+		},
+		{
+			name:    "drain-timeout below the parking budget rejected",
+			cfg:     routerConfig{ParkedRequest: ParkedRequestConfig{Budget: 5 * time.Second, Max: 1024}, DrainTimeout: 2 * time.Second},
+			wantErr: "must be >= --parked-request-budget",
+		},
+		{
+			name: "drain-timeout equal to the parking budget accepted",
+			cfg:  routerConfig{ParkedRequest: ParkedRequestConfig{Budget: 5 * time.Second, Max: 1024}, DrainTimeout: 5 * time.Second},
+		},
+		{
+			name: "drain-timeout above the parking budget accepted",
+			cfg:  routerConfig{ParkedRequest: ParkedRequestConfig{Budget: 5 * time.Second, Max: 1024}, DrainTimeout: 30 * time.Second},
+		},
+		{
+			name: "short drain-timeout with parking disabled accepted",
+			cfg:  routerConfig{ParkedRequest: ParkedRequestConfig{Max: 0}, DrainTimeout: time.Second},
+		},
+		{
+			name:    "negative drain-timeout rejected",
+			cfg:     routerConfig{ParkedRequest: ParkedRequestConfig{Max: defaultParkedRequestMax}, DrainTimeout: -time.Second},
+			wantErr: "--drain-timeout must not be negative",
+		},
+		{
+			name:    "negative drain-delay rejected",
+			cfg:     routerConfig{ParkedRequest: ParkedRequestConfig{Max: defaultParkedRequestMax}, DrainDelay: -time.Second},
+			wantErr: "--drain-delay must not be negative",
 		},
 	}
 	for _, tc := range tests {
@@ -112,6 +140,50 @@ func TestRouterConfigExtProcMaxRequests(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := tc.cfg.extProcMaxRequests(); got != tc.want {
 				t.Errorf("extProcMaxRequests() = %d, want %d", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRouterConfigDrainTimeout(t *testing.T) {
+	tests := []struct {
+		name    string
+		cfg     routerConfig
+		parkCfg ParkedRequestConfig
+		want    time.Duration
+	}{
+		{
+			name:    "auto derives budget + route timeout + margin",
+			cfg:     routerConfig{DrainTimeout: 0},
+			parkCfg: ParkedRequestConfig{Budget: 5 * time.Second, Max: 1024}.normalized(),
+			want:    5*time.Second + defaultRouteTimeout + drainTimeoutMargin,
+		},
+		{
+			name:    "auto scales with a larger budget",
+			cfg:     routerConfig{DrainTimeout: 0},
+			parkCfg: ParkedRequestConfig{Budget: 30 * time.Second, Max: 1024}.normalized(),
+			want:    30*time.Second + defaultRouteTimeout + drainTimeoutMargin,
+		},
+		{
+			name: "parking disabled still derives from the normalized default budget",
+			cfg:  routerConfig{DrainTimeout: 0},
+			// normalized() fills Budget even when Max disables parking, so the
+			// derived drain still covers a later re-enable without a restart
+			// surprise.
+			parkCfg: ParkedRequestConfig{Max: 0}.normalized(),
+			want:    defaultParkedRequestBudget + defaultRouteTimeout + drainTimeoutMargin,
+		},
+		{
+			name:    "explicit value wins over derivation",
+			cfg:     routerConfig{DrainTimeout: 42 * time.Second},
+			parkCfg: ParkedRequestConfig{Budget: 5 * time.Second, Max: 1024}.normalized(),
+			want:    42 * time.Second,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.cfg.drainTimeout(tc.parkCfg); got != tc.want {
+				t.Errorf("drainTimeout() = %s, want %s", got, tc.want)
 			}
 		})
 	}

@@ -38,9 +38,11 @@ patches:
               # Kind clusters are dev/CI: run atelet at debug so e2e suites can
               # assert on per-item log lines. Production installs default to info.
               - --log-level=debug
+              # The OTLP endpoint comes from the ate-otel-config ConfigMap the
+              # atelet DaemonSet consumes via envFrom; the kind copy lives at
+              # ../ate-otel-config.yaml and is applied by the parent overlay or
+              # by hack/install-ate.sh for a targeted redeploy.
               env:
-              - name: OTEL_EXPORTER_OTLP_ENDPOINT
-                value: http://opentelemetry-collector.otel-system.svc:4317
               - name: ATE_STORAGE_BACKEND
                 value: s3
               - name: AWS_REGION

@@ -42,7 +42,7 @@ var (
 	requestCount             uint64
 	ready                    atomic.Bool
 	fileMutex                sync.Mutex
-	sigtermSleepDurationSecs = 15
+	sigtermSleepDurationSecs atomic.Int64
 )
 
 func incrementFileCounter(filePath string) int {
@@ -64,6 +64,7 @@ func incrementFileCounter(filePath string) int {
 }
 
 func main() {
+	sigtermSleepDurationSecs.Store(15)
 	fileCounterDirectory := pflag.String("file-counter-directory", "/home/counter", "Directory for file counter")
 	secondFileCounterDirectory := pflag.String("second-file-counter-directory", "", "Directory for a second file counter; empty disables it. Used to exercise an Actor with more than one durable volume")
 	validateExistingFilePath := pflag.String("validate-existing-file-path", "", "Path to existing file to validate reading")
@@ -74,8 +75,8 @@ func main() {
 	signal.Notify(sigCh, syscall.SIGTERM)
 	go func() {
 		sig := <-sigCh
-		slog.InfoContext(ctx, "Received signal, waiting before exiting", slog.String("signal", sig.String()), slog.Int("sleep_secs", sigtermSleepDurationSecs))
-		time.Sleep(time.Duration(sigtermSleepDurationSecs) * time.Second)
+		slog.InfoContext(ctx, "Received signal, waiting before exiting", slog.String("signal", sig.String()), slog.Int64("sleep_secs", sigtermSleepDurationSecs.Load()))
+		time.Sleep(time.Duration(sigtermSleepDurationSecs.Load()) * time.Second)
 		slog.InfoContext(ctx, "Exiting now")
 		os.Exit(0)
 	}()
@@ -139,7 +140,7 @@ func main() {
 			http.Error(w, "invalid duration parameter", http.StatusBadRequest)
 			return
 		}
-		sigtermSleepDurationSecs = d
+		sigtermSleepDurationSecs.Store(int64(d))
 		response := fmt.Sprintf("SIGTERM sleep duration set to %d seconds\n", d)
 		slog.InfoContext(r.Context(), "Updated SIGTERM sleep duration", slog.Int("duration_secs", d))
 		w.WriteHeader(http.StatusOK)

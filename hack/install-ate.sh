@@ -62,6 +62,7 @@ function usage() {
   echo "Overall infrastructure (all infrastructure components):"
   echo ""
   echo "  --deploy-ate-system                    Deploy core system (CRDs, atelet, apiserver)"
+  echo "  --setup-csi                            Setup CSI hostpath and NFS drivers (Kind only)"
   echo "  --delete-ate-system                    Delete core system"
   echo "  --delete-all                           Delete core system and all registered demos"
   echo "  --ateapi-client-auth=cert|token        Select how in-cluster clients authenticate to ateapi for --deploy-ate-system (default: cert; the server always accepts both)"
@@ -206,6 +207,20 @@ render_atenet_router_manifest() {
   fi
 }
 
+# Apply the ate-otel-config ConfigMap that every control plane component reads
+# via envFrom. The full install gets it through render_ate_system_manifests, but
+# the targeted single-component redeploys below apply raw manifests with no
+# Kustomize, so they have to select the environment's copy themselves. Applying
+# the base file unconditionally would overwrite a kind cluster's ConfigMap with
+# the GKE endpoint and silently break telemetry for every component at once.
+apply_otel_config() {
+  if [[ "${ATE_INSTALL_KIND:-false}" == "true" ]]; then
+    run_kubectl apply -f manifests/ate-install/kind/ate-otel-config.yaml
+  else
+    run_kubectl apply -f manifests/ate-install/ate-otel-config.yaml
+  fi
+}
+
 # Extract a CA pool secret's RootCertificateDER and emit it as a PEM certificate.
 ca_pool_root_pem() {
   local secret="$1"
@@ -325,11 +340,25 @@ deploy_crds() {
   run_ko apply -f manifests/ate-install/generated
 }
 
+setup_csi() {
+  log_step "setup_csi"
+  "${ROOT}/hack/setup-csi-hostpath-kind.sh"
+  "${ROOT}/hack/setup-csi-nfs-kind.sh"
+}
+
 deploy_ate_system() {
   log_step "deploy_ate_system"
   # Not ensure_crds: its existence check skips upgrades, stranding stale CRD
   # schemas and RBAC (role.yaml has no other apply path).
   deploy_crds
+
+  if [[ "${SETUP_CSI:-false}" == "true" ]]; then
+    if [[ "${ATE_INSTALL_KIND:-false}" == "true" ]]; then
+      setup_csi
+    else
+      echo "Warning: CSI setup is only supported for Kind local installations. Skipping."
+    fi
+  fi
 
   # Enforce per-class SandboxConfig asset requirements (applied before any
   # SandboxConfig so the defaults below are validated too).
@@ -344,6 +373,14 @@ deploy_ate_system() {
   # Ensure namespace exists
   run_kubectl apply -f manifests/ate-install/ate-system-namespace.yaml \
     && run_kubectl wait --for=jsonpath='{.status.phase}'=Active namespace/ate-system --timeout=60s
+
+  # Ahead of the bundle below, for the same reason as the namespace: every
+  # workload pulls this ConfigMap in via envFrom, and a container whose envFrom
+  # target is missing will not start. The bundle contains it, but a raw
+  # directory apply orders by filename, so ate-api-server.yaml and
+  # ate-controller.yaml would otherwise be created before it and sit in
+  # CreateContainerConfigError until it caught up.
+  apply_otel_config
 
   ensure_apiserver_prerequisites
 
@@ -397,6 +434,7 @@ deploy_ate_apiserver() {
     && run_kubectl wait --for=jsonpath='{.status.phase}'=Active namespace/ate-system --timeout=60s
 
   ensure_apiserver_prerequisites
+  apply_otel_config
 
   run_ko apply -f manifests/ate-install/ate-api-server.yaml
   run_kubectl rollout status deployment/ate-api-server -n ate-system --timeout=120s
@@ -409,6 +447,8 @@ deploy_atelet() {
   # Ensure namespace exists
   run_kubectl apply -f manifests/ate-install/ate-system-namespace.yaml \
     && run_kubectl wait --for=jsonpath='{.status.phase}'=Active namespace/ate-system --timeout=60s
+
+  apply_otel_config
 
   local manifest=""
   if [[ "${ATE_INSTALL_KIND:-false}" == "true" ]]; then
@@ -429,6 +469,8 @@ deploy_atenet() {
   # Ensure namespace exists
   run_kubectl apply -f manifests/ate-install/ate-system-namespace.yaml \
     && run_kubectl wait --for=jsonpath='{.status.phase}'=Active namespace/ate-system --timeout=60s
+
+  apply_otel_config
 
   local router_manifest=""
   router_manifest="$(render_atenet_router_manifest)"
@@ -598,6 +640,7 @@ done
 # flag they configure (e.g. --benchmark-worker-count before/after
 # --deploy-benchmarks). The dispatch loop below also accepts these flags but
 # treats them as no-ops since the value is already captured here.
+SETUP_CSI=false
 BENCHMARK_WORKER_COUNT=1
 prescan_args=("$@")
 for ((i = 0; i < ${#prescan_args[@]}; i++)); do
@@ -623,6 +666,9 @@ for ((i = 0; i < ${#prescan_args[@]}; i++)); do
       ;;
     --benchmark-worker-count=*)
       BENCHMARK_WORKER_COUNT="${prescan_args[i]#*=}"
+      ;;
+    --setup-csi)
+      SETUP_CSI=true
       ;;
   esac
 done
@@ -662,6 +708,14 @@ while [[ "$#" -gt 0 ]]; do
       ;;
 
     --deploy-ate-system) deploy_ate_system ;;
+    --setup-csi)
+      if [[ "${ATE_INSTALL_KIND:-false}" == "true" ]]; then
+        ensure_crds
+        setup_csi
+      else
+        echo "Warning: CSI setup is only supported for Kind local installations. Skipping."
+      fi
+      ;;
     --delete-ate-system) delete_ate_system ;;
     --delete-all) delete_all ;;
 

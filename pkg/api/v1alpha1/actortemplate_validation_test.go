@@ -21,7 +21,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/agent-substrate/substrate/internal/envtestbins"
+	"github.com/agent-substrate/substrate/internal/testenv"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -32,48 +32,32 @@ import (
 	"k8s.io/utils/ptr"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/envtest"
 )
 
 var (
-	testEnv   *envtest.Environment
 	cfg       *rest.Config
 	k8sClient client.Client
 )
 
 func TestMain(m *testing.M) {
-	binaryAssetsDirectory, err := envtestbins.BinaryAssetsDir()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "%v\n", err)
-		os.Exit(1)
-	}
-
-	testEnv = &envtest.Environment{
-		CRDDirectoryPaths:     []string{"../../../manifests/ate-install/generated"},
-		BinaryAssetsDirectory: binaryAssetsDirectory,
-	}
-
-	cfg, err = testEnv.Start()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "envtest start failed: %v\n", err)
-		testEnv.Stop()
-		os.Exit(1)
-	}
+	var stopEnv func()
+	cfg, stopEnv = testenv.Start()
 
 	scheme := runtime.NewScheme()
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(AddToScheme(scheme))
 
+	var err error
 	k8sClient, err = client.New(cfg, client.Options{Scheme: scheme})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "k8s client creation failed: %v\n", err)
-		testEnv.Stop()
+		stopEnv()
 		os.Exit(1)
 	}
 
 	code := m.Run()
 
-	_ = testEnv.Stop()
+	stopEnv()
 	os.Exit(code)
 }
 
@@ -673,7 +657,7 @@ func TestActorTemplateValidation(t *testing.T) {
 		},
 		wantErr: false,
 	}, {
-		name: "Volumes: 2 DurableDir volumes in template is invalid for gvisor",
+		name: "Volumes: 2 DurableDir volumes in template is valid",
 		mutate: func(at *ActorTemplate) {
 			at.Spec.Volumes = []Volume{
 				{Name: "vol1", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
@@ -684,10 +668,9 @@ func TestActorTemplateValidation(t *testing.T) {
 				{Name: "vol2", MountPath: "/home2"},
 			}
 		},
-		wantErr: true,
-		errMsg:  "Only one DurableDir-typed volume is supported when sandboxClass is 'gvisor'",
+		wantErr: false,
 	}, {
-		name: "Volumes: 2 DurableDir volumes spread across containers is invalid for gvisor",
+		name: "Volumes: 2 DurableDir volumes spread across containers is valid",
 		mutate: func(at *ActorTemplate) {
 			at.Spec.Volumes = []Volume{
 				{Name: "vol1", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
@@ -704,10 +687,9 @@ func TestActorTemplateValidation(t *testing.T) {
 				{Name: "vol1", MountPath: "/home1"},
 			}
 		},
-		wantErr: true,
-		errMsg:  "Only one DurableDir-typed volume is supported when sandboxClass is 'gvisor'",
+		wantErr: false,
 	}, {
-		name: "Volumes: same DurableDir volume mounted twice in one container is invalid for gvisor",
+		name: "Volumes: same DurableDir volume mounted twice in one container is valid",
 		mutate: func(at *ActorTemplate) {
 			at.Spec.Volumes = []Volume{
 				{Name: "vol1", VolumeSource: VolumeSource{DurableDir: &DurableDirVolumeSource{}}},
@@ -717,8 +699,7 @@ func TestActorTemplateValidation(t *testing.T) {
 				{Name: "vol1", MountPath: "/home2"},
 			}
 		},
-		wantErr: true,
-		errMsg:  "A container may mount only one DurableDir-typed volume when sandboxClass is 'gvisor'",
+		wantErr: false,
 	}, {
 		name: "Volumes: same DurableDir volume mounted across two containers is valid",
 		mutate: func(at *ActorTemplate) {

@@ -156,7 +156,8 @@ func InitTracing(ctx context.Context, opts TracingOptions) (*sdktrace.TracerProv
 
 // InitMetrics registers a global MeterProvider with both a Prometheus
 // reader (exposed via StartMetricsServer's /metrics handler) and an
-// OTLP periodic reader.
+// OTLP periodic reader. No Producer option, unlike InitMetricsPushOnly: a bridged
+// registry would be served twice, here and on its own endpoint.
 func InitMetrics(ctx context.Context, serviceName string) (*sdkmetric.MeterProvider, error) {
 	if serviceName == "" {
 		return nil, fmt.Errorf("serviceName is required")
@@ -165,17 +166,19 @@ func InitMetrics(ctx context.Context, serviceName string) (*sdkmetric.MeterProvi
 	if err != nil {
 		return nil, fmt.Errorf("create Prometheus metric exporter: %w", err)
 	}
-	return newMeterProvider(ctx, serviceName, promExporter)
+	return newMeterProvider(ctx, serviceName, nil, promExporter)
 }
 
 // InitMetricsPushOnly is InitMetrics without the Prometheus reader, for binaries
-// that run no metrics HTTP server (ateom): a pull reader would collect into a
-// registry nothing serves.
-func InitMetricsPushOnly(ctx context.Context, serviceName string) (*sdkmetric.MeterProvider, error) {
-	return newMeterProvider(ctx, serviceName)
+// that run no metrics HTTP server of their own (ateom, atecontroller): a pull
+// reader would collect into a registry nothing serves. producers put metrics
+// recorded outside the OTel SDK on the same push path; atecontroller bridges
+// controller-runtime's registry that way.
+func InitMetricsPushOnly(ctx context.Context, serviceName string, producers ...sdkmetric.Producer) (*sdkmetric.MeterProvider, error) {
+	return newMeterProvider(ctx, serviceName, producers)
 }
 
-func newMeterProvider(ctx context.Context, serviceName string, extraReaders ...sdkmetric.Reader) (*sdkmetric.MeterProvider, error) {
+func newMeterProvider(ctx context.Context, serviceName string, producers []sdkmetric.Producer, extraReaders ...sdkmetric.Reader) (*sdkmetric.MeterProvider, error) {
 	if serviceName == "" {
 		return nil, fmt.Errorf("serviceName is required")
 	}
@@ -187,9 +190,13 @@ func newMeterProvider(ctx context.Context, serviceName string, extraReaders ...s
 	if err != nil {
 		return nil, fmt.Errorf("create metric resource: %w", err)
 	}
+	readerOpts := make([]sdkmetric.PeriodicReaderOption, 0, len(producers))
+	for _, p := range producers {
+		readerOpts = append(readerOpts, sdkmetric.WithProducer(p))
+	}
 	opts := []sdkmetric.Option{
 		sdkmetric.WithResource(res),
-		sdkmetric.WithReader(sdkmetric.NewPeriodicReader(otlpExporter)),
+		sdkmetric.WithReader(sdkmetric.NewPeriodicReader(otlpExporter, readerOpts...)),
 	}
 	for _, r := range extraReaders {
 		opts = append(opts, sdkmetric.WithReader(r))

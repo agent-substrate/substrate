@@ -54,7 +54,7 @@ import (
 //
 // Contract with atelet: the snapshot's files have been downloaded to RestoreStateDir,
 // and the durable-dir volume directories re-created (empty).
-func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.RestoreWorkloadRequest) (*ateompb.RestoreWorkloadResponse, error) {
+func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.RestoreWorkloadRequest) (resp *ateompb.RestoreWorkloadResponse, retErr error) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 
@@ -70,14 +70,25 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 		containers:   req.GetSpec().GetContainers(),
 		assetPaths:   req.GetRuntimeAssetPaths(),
 
-		actorVersion:         req.GetActorVersion(),
-		egressGatewayAddress: req.GetEgressGatewayAddress(),
+		egressGateway: req.GetEgressGateway(),
 	}
 	restoreDir := ateompath.RestoreStateDir(p.actorUID)
 	durableDir := ateompath.DurableDirVolumeMountsDir(p.actorUID)
 	tStart := time.Now()
 
 	s.actorLogger.EmitLifecycleLog("Actor restoring", p.actorRef, p.actorUID, p.templateNS, p.templateName)
+
+	// Same as RunWorkload: retain before the restore, drop again if it fails. A
+	// Full-scope resume reaches "executing" in a different way than a cold boot
+	// does, but the window between accepting the actor and serving it is the same
+	// window, and a poll landing in it should name the actor either way.
+	attribution := p.actorAttribution()
+	s.activeActor.Store(&attribution)
+	defer func() {
+		if retErr != nil {
+			s.activeActor.Store(nil)
+		}
+	}()
 
 	// Restore the durable-dir volumes before anything can observe them: for Full
 	// that means before the share's virtiofsd starts, for Data before the workload
@@ -133,6 +144,10 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 	templateNS, templateName := p.templateNS, p.templateName
 
 	rr := s.resolveRuntime(p.assetPaths)
+	egress, err := s.prepareActorEgress(ctx, p.actorUID, p.egressGateway)
+	if err != nil {
+		return err
+	}
 	kata.CleanupSandboxState(ctx, actorUID)
 
 	// Repoint the snapshot's vsock socket to this actor's VMDir (the disk + kernel
@@ -203,14 +218,19 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 		InteriorNetNS:      s.interiorNetNS,
 		HostVethHWAddr:     hostVethHWAddr,
 		SweepInteriorLinks: true,
-		EgressRedirectPort: s.egressRedirectPort(p.egressGatewayAddress != ""),
+		EgressRedirectPort: s.egressRedirectPort(p.egressGateway != nil),
 	}); err != nil {
 		return fmt.Errorf("while setting up actor network: %w", err)
 	}
 	defer func() {
 		if retErr != nil {
-			if cleanupErr := ateomnet.CleanupActorNetwork(ctx, s.interiorNetNS); cleanupErr != nil {
-				slog.WarnContext(ctx, "Failed to clean up actor network after Restore failure", slog.Any("err", cleanupErr))
+			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+			defer cancel()
+			if cleanupErr := s.deactivateActorNetworking(cleanupCtx); cleanupErr != nil {
+				slog.WarnContext(cleanupCtx, "Failed to deactivate actor networking after Restore failure", slog.Any("err", cleanupErr))
+			}
+			if cleanupErr := ateomnet.CleanupActorNetwork(cleanupCtx, s.interiorNetNS); cleanupErr != nil {
+				slog.WarnContext(cleanupCtx, "Failed to clean up actor network after Restore failure", slog.Any("err", cleanupErr))
 			}
 			// Detach any bundle rootfs overlays mounted by buildActorContainers
 			// before the failure, mirroring teardownActor's cleanup.
@@ -298,7 +318,7 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 		}
 	}
 
-	if err := s.activateActorNetworking(p.actorRef.Atespace, p.actorRef.Name, p.actorVersion, p.egressGatewayAddress); err != nil {
+	if err := s.activateActorNetworking(p.actorRef.Atespace, p.actorRef.Name, egress); err != nil {
 		return err
 	}
 	s.running[actorUID] = ra

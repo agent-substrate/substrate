@@ -120,6 +120,13 @@ spec:
         prometheus.io/port: "9090"
     spec:
       serviceAccountName: atenet-router
+      # Budget for the full shutdown sequence: --drain-delay (13s, readiness
+      # propagation) + the Envoy drain window (~15s) + the derived
+      # --drain-timeout (park budget + route timeout + margin, ~20s at
+      # defaults) + slack for the force stop and the tracer/meter flush. The
+      # sum must fit within terminationGracePeriodSeconds, or the kubelet
+      # SIGKILLs mid-drain.
+      terminationGracePeriodSeconds: 60
       containers:
       - name: atenet-router
         image: ko://github.com/agent-substrate/substrate/cmd/atenet
@@ -139,6 +146,18 @@ spec:
         - "--ateapi-address=dns:///api.ate-system.svc:443"
         - "--ateapi-ca-file=/run/servicedns-ca/trust-bundle.pem"
         - "--ateapi-client-cert=/run/podidentity.podcert.ate.dev/credential-bundle.pem"
+        # Graceful shutdown knobs. --drain-timeout is left at its derived
+        # default (park budget + the default route timeout + margin). The sum
+        # of the sequence must fit within terminationGracePeriodSeconds above.
+        - "--drain-delay=13s"
+        # Envoy's end-to-end timeout on the workload route. Raise it for actors
+        # whose turns legitimately run long — a harness relaying an LLM
+        # completion holds the request open for the whole generation, and at the
+        # 10s default the client gets a 504 mid-turn. NOTE: the drain sequence
+        # deliberately does NOT scale with this; if you raise it and want long
+        # turns to survive a shutdown, raise --drain-timeout and
+        # terminationGracePeriodSeconds alongside it.
+        # - "--route-timeout=5m"
         env:
         - name: POD_NAME
           valueFrom:
@@ -154,8 +173,13 @@ spec:
               fieldPath: metadata.uid
         - name: OTEL_RESOURCE_ATTRIBUTES
           value: k8s.namespace.name=$(POD_NAMESPACE),k8s.pod.name=$(POD_NAME),k8s.pod.uid=$(POD_UID),service.instance.id=$(POD_UID)
-        - name: OTEL_EXPORTER_OTLP_ENDPOINT
-          value: http://opentelemetry-collector.gke-managed-otel.svc.cluster.local:4317
+        # OTLP exporter settings are shared by every control plane component;
+        # see manifests/ate-install/ate-otel-config.yaml. This also covers
+        # Envoy's own spans: --otlp-collector-address defaults to
+        # $OTEL_EXPORTER_OTLP_ENDPOINT, so the flag stays out of the args above.
+        envFrom:
+        - configMapRef:
+            name: ate-otel-config
         ports:
         - name: xds
           containerPort: 18000
@@ -165,6 +189,21 @@ spec:
           containerPort: 4040
         - name: metrics
           containerPort: 9090
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 9090
+          initialDelaySeconds: 5
+          periodSeconds: 2
+          failureThreshold: 3
+        # /healthz stays 200 while a terminating pod drains; /readyz turns
+        # 503, so liveness and readiness diverge correctly during shutdown.
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 9090
+          initialDelaySeconds: 10
+          periodSeconds: 10
         volumeMounts:
         # Router's own client identity presented to ateapi.
         - name: "podidentity"
@@ -172,6 +211,11 @@ spec:
         # Trust bundle used to verify ateapi's servicedns serving cert.
         - name: "servicedns-ca"
           mountPath: "/run/servicedns-ca"
+        # Shared with the Envoy container: the router writes the
+        # drain-complete marker here at the end of its shutdown sequence,
+        # releasing Envoy's preStop poll.
+        - name: "drain-signal"
+          mountPath: "/var/run/atenet"
       - name: envoy
         image: envoyproxy/envoy:v1.30-latest
         command:
@@ -180,6 +224,14 @@ spec:
         - "/etc/envoy/envoy.yaml"
         - "--component-log-level"
         - "upstream:debug,router:debug,ext_proc:debug"
+        # Prevents Envoy from fast-exiting on SIGTERM before atenet-router finishes
+        # its drain sequence. Polls for the drain-complete marker written by the
+        # router on the shared emptyDir, terminating Envoy as soon as the drain
+        # completes (or at terminationGracePeriodSeconds if the router crashes).
+        lifecycle:
+          preStop:
+            exec:
+              command: ["sh", "-c", "while [ ! -f /var/run/atenet/drain-complete ]; do sleep 0.5; done"]
         ports:
         - name: http
           containerPort: 8080
@@ -201,10 +253,19 @@ spec:
         # --atunnel-client-identity allows.
         - name: "podidentity"
           mountPath: "/run/podidentity.podcert.ate.dev"
+        # The preStop hook polls this path for the router's drain-complete
+        # marker; read-only, the router is the only writer.
+        - name: "drain-signal"
+          mountPath: "/var/run/atenet"
+          readOnly: true
       volumes:
       - name: envoy-config
         configMap:
           name: atenet-router-envoy-config
+      # Pod-shared scratch space for the shutdown handshake between the router
+      # and the Envoy preStop hook.
+      - name: "drain-signal"
+        emptyDir: {}
       - name: "servicedns"
         projected:
           sources:

@@ -34,10 +34,23 @@ var (
 	// directories are visible at the same path in atelet (which writes them)
 	// and in every ateom pod (which mounts them as overlay lowerdirs).
 	ImageCacheDir = filepath.Join(BasePath, "image-cache")
+
+	// CredentialBrokerSocket is the node-local atelet socket used by atunnel
+	// to request credentials for the worker's current actor assignment.
+	CredentialBrokerSocket = filepath.Join(BasePath, "credential-broker.sock")
 )
 
 func RunSCBinaryPath(sha256 string) string {
 	return filepath.Join(StaticFilesDir, "runsc-"+sha256)
+}
+
+// GVisorReleaseDir is the directory a gVisor release tarball (gvisor.tar.bz2,
+// containing runsc plus its gvisor-bin/ helper binaries) is extracted into,
+// content-addressed by the tarball's sha256. runsc requires the gvisor-bin/
+// subdirectory to sit next to it, so the whole release is kept together under
+// one directory rather than as loose files in StaticFilesDir.
+func GVisorReleaseDir(sha256 string) string {
+	return filepath.Join(StaticFilesDir, "gvisor-"+sha256)
 }
 
 func AteomPath(podUID string) string {
@@ -203,4 +216,14 @@ func VolumeHostPath(actorUID, volumeName string) string {
 		VolumesDir(actorUID),
 		volumeName,
 	)
+}
+
+// StagingDirPrefix returns the prefix directory for staging CSI volumes.
+func StagingDirPrefix() string {
+	return filepath.Join(BasePath, "staging")
+}
+
+// KubeletPluginSocketPath returns the path to the CSI driver socket in kubelet plugins directory.
+func KubeletPluginSocketPath(driverName string) string {
+	return filepath.Join("/var/lib/kubelet/plugins", driverName, "csi.sock")
 }

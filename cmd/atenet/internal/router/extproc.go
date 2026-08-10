@@ -61,26 +61,16 @@ func NewExtProcServer(port int, apiClient ateapipb.ControlClient, routeDuration 
 	}
 }
 
-func (s *ExtProcServer) Serve(ctx context.Context, lis net.Listener) error {
+// NewGRPCServer builds the gRPC server with the ext_proc service registered.
+// The caller owns its lifecycle: Run serves it, and the drain sequence in
+// drain.go stops it — gracefully first so in-flight streams (parked requests
+// above all) finish, forcefully past the drain timeout.
+func (s *ExtProcServer) NewGRPCServer() *grpc.Server {
 	grpcServer := grpc.NewServer(
 		grpc.StatsHandler(otelgrpc.NewServerHandler()),
 	)
 	extprocv3.RegisterExternalProcessorServer(grpcServer, s)
-
-	errChan := make(chan error, 1)
-	go func() {
-		if err := grpcServer.Serve(lis); err != nil {
-			errChan <- err
-		}
-	}()
-
-	select {
-	case <-ctx.Done():
-		grpcServer.GracefulStop()
-		return nil
-	case err := <-errChan:
-		return err
-	}
+	return grpcServer
 }
 
 func (s *ExtProcServer) Process(stream extprocv3.ExternalProcessor_ProcessServer) error {

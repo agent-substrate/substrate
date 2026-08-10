@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/resources"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -344,15 +345,19 @@ func (s *WorkerPoolSyncer) releaseActorOnDeadWorker(ctx context.Context, namespa
 		}
 		return err
 	}
-	if worker.Assignment == nil {
+	if worker.Assignment == nil || worker.Assignment.GetActor() == nil {
 		return nil
 	}
-	actor, err := s.persistence.GetActor(ctx, resources.ActorRefFromObjectRef(worker.Assignment.Actor))
+	actorRef := resources.ActorRefFromObjectRef(worker.Assignment.GetActor())
+	actor, err := s.persistence.GetActor(ctx, actorRef)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return nil
 		}
 		return err
+	}
+	if actor.GetMetadata().GetUid() != worker.Assignment.GetActorUid() {
+		return nil
 	}
 	// Skip if a concurrent SuspendActor already cleared the pointer.
 	assignment := actor.GetWorkerAssignment()
@@ -363,11 +368,33 @@ func (s *WorkerPoolSyncer) releaseActorOnDeadWorker(ctx context.Context, namespa
 	if actor.Status == ateapipb.Actor_STATUS_SUSPENDED {
 		return nil
 	}
+	opName := ateattr.OperationUnknown
+	switch actor.GetStatus() {
+	case ateapipb.Actor_STATUS_RESUMING:
+		opName = ateattr.OperationResume
+	case ateapipb.Actor_STATUS_SUSPENDING:
+		opName = ateattr.OperationSuspend
+	case ateapipb.Actor_STATUS_PAUSING:
+		opName = ateattr.OperationPause
+	}
+
+	wasAlreadyCrashed := actor.GetStatus() == ateapipb.Actor_STATUS_CRASHED
+
+	// Snapshot crash attributes before pod and pool pointers are cleared on actor.
+	crashAttrs := ateattr.ActorMetricAttributes(actor, worker.GetSandboxClass(), opName, ateattr.ReasonWorkerPodGone)
 
 	actor.Status = ateapipb.Actor_STATUS_CRASHED
 	actor.WorkerAssignment = nil
-	actor.InProgressSnapshot = ""
+	// Both in-progress checkpoints die with the worker: the durable one was
+	// never uploaded, the local one lived on the node that went away.
+	actor.InProgressSnapshotName = ""
+	actor.InProgressLocalSnapshotName = ""
 
 	_, err = s.persistence.UpdateActor(ctx, actor, actor.GetMetadata().GetVersion())
+
+	if err == nil && !wasAlreadyCrashed {
+		recordActorCrash(ctx, crashAttrs)
+	}
 	return err
+
 }

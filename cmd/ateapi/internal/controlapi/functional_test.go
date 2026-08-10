@@ -29,9 +29,9 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/ateredis"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
-	"github.com/agent-substrate/substrate/internal/envtestbins"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
+	"github.com/agent-substrate/substrate/internal/testenv"
 	"github.com/agent-substrate/substrate/internal/volume"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/client/clientset/versioned"
@@ -50,21 +50,22 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/testing/protocmp"
+	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"google.golang.org/protobuf/types/known/timestamppb"
 	corev1 "k8s.io/api/core/v1"
+	storagev1 "k8s.io/api/storage/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/utils/ptr"
-	"sigs.k8s.io/controller-runtime/pkg/envtest"
 )
 
 var (
-	testEnv    *envtest.Environment
 	cfg        *rest.Config
 	fakeAtelet = &FakeAteletServer{}
 )
@@ -81,20 +82,8 @@ var (
 )
 
 func TestMain(m *testing.M) {
-	binaryAssetsDirectory, err := envtestbins.BinaryAssetsDir()
-	if err != nil {
-		log.Fatalf("%v", err)
-	}
-
-	testEnv = &envtest.Environment{
-		CRDDirectoryPaths:     []string{"../../../../manifests/ate-install/generated"},
-		BinaryAssetsDirectory: binaryAssetsDirectory,
-	}
-
-	cfg, err = testEnv.Start()
-	if err != nil {
-		log.Fatalf("testEnv.Start: %v", err)
-	}
+	var stopEnv func()
+	cfg, stopEnv = testenv.Start()
 
 	// Create ate-system namespace
 	k8sClient, err := kubernetes.NewForConfig(cfg)
@@ -106,6 +95,22 @@ func TestMain(m *testing.M) {
 	}, metav1.CreateOptions{})
 	if err != nil && !apierrors.IsAlreadyExists(err) {
 		log.Fatalf("create ate-system namespace: %v", err)
+	}
+
+	// Create StorageClasses for volume tests
+	_, err = k8sClient.StorageV1().StorageClasses().Create(context.Background(), &storagev1.StorageClass{
+		ObjectMeta:  metav1.ObjectMeta{Name: "standard"},
+		Provisioner: "substrate.io/mock",
+	}, metav1.CreateOptions{})
+	if err != nil && !apierrors.IsAlreadyExists(err) {
+		log.Fatalf("create standard storage class: %v", err)
+	}
+	_, err = k8sClient.StorageV1().StorageClasses().Create(context.Background(), &storagev1.StorageClass{
+		ObjectMeta:  metav1.ObjectMeta{Name: "fast"},
+		Provisioner: "substrate.io/mock",
+	}, metav1.CreateOptions{})
+	if err != nil && !apierrors.IsAlreadyExists(err) {
+		log.Fatalf("create fast storage class: %v", err)
 	}
 
 	// Create shared Atelet Pod
@@ -154,10 +159,7 @@ func TestMain(m *testing.M) {
 
 	ateletGrpcServer.Stop()
 
-	err = testEnv.Stop()
-	if err != nil {
-		log.Fatalf("testEnv.Stop: %v", err)
-	}
+	stopEnv()
 
 	os.Exit(code)
 }
@@ -291,11 +293,14 @@ func setupTest(t *testing.T, ns string) *testContext {
 	// 3. Initialize Informers
 	workerFactory, workerInformer := WorkerPodInformer(k8sClient)
 	ateletFactory, ateletInformer := AteletInformer(k8sClient)
+	scFactory := informers.NewSharedInformerFactory(k8sClient, 0)
+	scLister := scFactory.Storage().V1().StorageClasses().Lister()
 
 	substrateInformerFactory := externalversions.NewSharedInformerFactory(substrateClient, 0)
 	actorTemplateLister := substrateInformerFactory.Api().V1alpha1().ActorTemplates().Lister()
 	workerPoolLister := substrateInformerFactory.Api().V1alpha1().WorkerPools().Lister()
 	sandboxConfigLister := substrateInformerFactory.Api().V1alpha1().SandboxConfigs().Lister()
+	csiDriverConfigLister := substrateInformerFactory.Api().V1alpha1().CSIDriverConfigs().Lister()
 
 	ctx, cancel := context.WithCancel(context.Background())
 
@@ -305,10 +310,12 @@ func setupTest(t *testing.T, ns string) *testContext {
 	workerFactory.Start(ctx.Done())
 	ateletFactory.Start(ctx.Done())
 	substrateInformerFactory.Start(ctx.Done())
+	scFactory.Start(ctx.Done())
 
 	workerFactory.WaitForCacheSync(ctx.Done())
 	ateletFactory.WaitForCacheSync(ctx.Done())
 	substrateInformerFactory.WaitForCacheSync(ctx.Done())
+	scFactory.WaitForCacheSync(ctx.Done())
 
 	// 4. Initialize Service
 	wc := workercache.New(persistence, 5*time.Minute)
@@ -331,7 +338,15 @@ func setupTest(t *testing.T, ns string) *testContext {
 		mr.Close()
 		t.Fatalf("failed to create metric instruments: %v", err)
 	}
-	service := NewService(persistence, wc, actorTemplateLister, workerPoolLister, sandboxConfigLister, dialer, k8sClient, instruments)
+	mockPlugin := volume.NewMockVolumePlugin()
+	mockDriverName, err := mockPlugin.DriverName(ctx)
+	if err != nil {
+		t.Fatalf("failed to get mock driver name: %v", err)
+	}
+	volPlugins := map[string]volume.VolumePluginControlPlane{
+		mockDriverName: mockPlugin,
+	}
+	service := NewService(persistence, wc, actorTemplateLister, workerPoolLister, sandboxConfigLister, csiDriverConfigLister, scLister, dialer, k8sClient, instruments, "", volPlugins)
 
 	// 5. Start REAL gRPC Server for ATE API
 	grpcServer := grpc.NewServer(grpc.UnaryInterceptor(ateinterceptors.ServerUnaryInterceptor))
@@ -439,6 +454,45 @@ func createAtespace(t *testing.T, tc *testContext, name string) {
 	}
 }
 
+// createActorSnapshot seeds an ActorSnapshot in testAtespace directly through
+// the store, so tag tests do not need a full resume/suspend lifecycle.
+func createActorSnapshot(t *testing.T, tc *testContext, name string) *ateapipb.ObjectRef {
+	t.Helper()
+	if _, err := tc.persistence.CreateActorSnapshot(context.Background(), &ateapipb.ActorSnapshot{
+		Metadata:    &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: name},
+		SnapshotUri: "gs://my-bucket/snapshots/" + testAtespace + "/" + name,
+	}); err != nil {
+		t.Fatalf("CreateActorSnapshot(%s) failed: %v", name, err)
+	}
+	return &ateapipb.ObjectRef{Atespace: testAtespace, Name: name}
+}
+
+// tagActorSnapshot points tagName at snapshotRef with atespace scope.
+func tagActorSnapshot(t *testing.T, tc *testContext, snapshotRef *ateapipb.ObjectRef, tagName string) *ateapipb.ActorSnapshotTag {
+	t.Helper()
+	tag, err := tc.client.TagActorSnapshot(context.Background(), &ateapipb.TagActorSnapshotRequest{
+		Snapshot: &ateapipb.ActorSnapshotRef{Reference: &ateapipb.ActorSnapshotRef_Snapshot{Snapshot: snapshotRef}},
+		Tag: &ateapipb.ActorSnapshotTag{
+			Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: tagName},
+			Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
+		},
+	})
+	if err != nil {
+		t.Fatalf("TagActorSnapshot(%s) failed: %v", tagName, err)
+	}
+	return tag
+}
+
+// updateActorSnapshotTagScope sets tagName's scope, carrying meta as the
+// optional uid/version preconditions.
+func updateActorSnapshotTagScope(tc *testContext, tagName string, meta *ateapipb.ResourceMetadata, scope ateapipb.ActorSnapshotTagScope) (*ateapipb.ActorSnapshotTag, error) {
+	meta.Atespace, meta.Name = testAtespace, tagName
+	return tc.client.UpdateActorSnapshotTag(context.Background(), &ateapipb.UpdateActorSnapshotTagRequest{
+		Tag:        &ateapipb.ActorSnapshotTag{Metadata: meta, Scope: scope},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"scope"}},
+	})
+}
+
 const poolLabelKey = "pool"
 
 func createTemplateWithContainers(t *testing.T, tc *testContext, ns string, containers []atev1alpha1.Container) {
@@ -494,7 +548,8 @@ func createTemplateWithContainersAndVolumes(t *testing.T, tc *testContext, ns st
 		ActorTemplateName:      createdTemplate.GetName(),
 		ActorTemplateUid:       string(createdTemplate.GetUID()),
 		ContentScope:           ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
-	}, "gs://my-bucket/my-folder"); err != nil {
+		SnapshotUri:            "gs://fake-fake-fake/snapshots/" + resources.GoldenActorAtespace + "/" + goldenSnapshot,
+	}); err != nil {
 		t.Fatalf("failed to create golden ActorSnapshot: %v", err)
 	}
 	createdTemplate.Status = atev1alpha1.ActorTemplateStatus{
@@ -978,11 +1033,11 @@ type partialFailVolumePlugin struct {
 	deleted []string
 }
 
-func (f *partialFailVolumePlugin) CreateVolume(ctx context.Context, name, capacity, storageClass string) (string, error) {
+func (f *partialFailVolumePlugin) CreateVolume(ctx context.Context, name, capacity, driverName string, parameters map[string]string) (string, map[string]string, error) {
 	if strings.HasSuffix(name, "fail-vol2") {
-		return "", fmt.Errorf("simulated volume creation failure")
+		return "", nil, fmt.Errorf("simulated volume creation failure")
 	}
-	return "storage-" + name, nil
+	return "storage-" + name, parameters, nil
 }
 
 func (f *partialFailVolumePlugin) AttachVolume(ctx context.Context, volumeID, node string) error {
@@ -1035,11 +1090,9 @@ func TestResumeActor_VolumeCreationFailure(t *testing.T) {
 	// Inject a custom partial-failing VolumePlugin into global scope
 	// TODO this doesn't support parallelism of test cases
 	plugin := &partialFailVolumePlugin{}
-	oldGlobalPlugin := globalVolumePlugin
-	globalVolumePlugin = plugin
-	defer func() {
-		globalVolumePlugin = oldGlobalPlugin
-	}()
+	tc.service.volumePlugins = map[string]volume.VolumePluginControlPlane{
+		"substrate.io/mock": plugin,
+	}
 
 	// Call CreateActor RPC directly
 	_, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{
@@ -1125,16 +1178,16 @@ type retrySuccessVolumePlugin struct {
 	deleted  []string
 }
 
-func (r *retrySuccessVolumePlugin) CreateVolume(ctx context.Context, name, capacity, storageClass string) (string, error) {
+func (r *retrySuccessVolumePlugin) CreateVolume(ctx context.Context, name, capacity, driverName string, parameters map[string]string) (string, map[string]string, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if strings.HasSuffix(name, "retry-vol2") {
 		r.attempts++
 		if r.attempts == 1 {
-			return "", fmt.Errorf("simulated temporary volume creation failure")
+			return "", nil, fmt.Errorf("simulated temporary volume creation failure")
 		}
 	}
-	return "storage-" + name, nil
+	return "storage-" + name, parameters, nil
 }
 
 func (r *retrySuccessVolumePlugin) AttachVolume(ctx context.Context, volumeID, node string) error {
@@ -1187,11 +1240,9 @@ func TestResumeActor_VolumeCreationRetrySuccess(t *testing.T) {
 	createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
 
 	plugin := &retrySuccessVolumePlugin{}
-	oldGlobalPlugin := globalVolumePlugin
-	globalVolumePlugin = plugin
-	defer func() {
-		globalVolumePlugin = oldGlobalPlugin
-	}()
+	tc.service.volumePlugins = map[string]volume.VolumePluginControlPlane{
+		"substrate.io/mock": plugin,
+	}
 
 	// Call CreateActor RPC directly
 	_, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{
@@ -1709,6 +1760,7 @@ func TestResumeActor(t *testing.T) {
 				Name:     name,
 				Atespace: testAtespace,
 			},
+			ActorUid: getResp.GetMetadata().GetUid(),
 		},
 		Ip:           "127.0.0.1",
 		NodeName:     "node1",
@@ -2108,8 +2160,11 @@ func TestSuspendActor(t *testing.T) {
 		t.Fatalf("cross-atespace CreateActor status = %v, want FailedPrecondition", status.Code(err))
 	}
 	updated, err := tc.client.UpdateActorSnapshotTag(context.Background(), &ateapipb.UpdateActorSnapshotTagRequest{
-		Tag:   tagRef,
-		Scope: ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED,
+		Tag: &ateapipb.ActorSnapshotTag{
+			Metadata: &ateapipb.ResourceMetadata{Atespace: tagRef.GetAtespace(), Name: tagRef.GetName()},
+			Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED,
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"scope"}},
 	})
 	if err != nil || updated.GetScope() != ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED {
 		t.Fatalf("UpdateActorSnapshotTag = (%v, %v), want published", updated, err)
@@ -2261,8 +2316,8 @@ func TestPauseActor(t *testing.T) {
 		ActorTemplateName:      "tmpl1",
 		Status:                 ateapipb.Actor_STATUS_PAUSED,
 		LocalSnapshotInfo: &ateapipb.LocalSnapshotInfo{
-			SnapshotPrefix:            name,
 			NodeVmsWithLocalSnapshots: []string{"node1"},
+			ContentScope:              ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
 		},
 	}
 
@@ -2271,11 +2326,13 @@ func TestPauseActor(t *testing.T) {
 		ignoreUID,
 		ignoreVersion,
 		ignoreTimestamps,
-		protocmp.FilterField(&ateapipb.LocalSnapshotInfo{}, "snapshot_prefix", cmp.Comparer(func(x, y string) bool {
-			return strings.HasPrefix(y, x)
-		})),
+		protocmp.IgnoreFields(&ateapipb.WorkerAssignment{}, "worker_pod_uid"),
+		protocmp.IgnoreFields(&ateapipb.LocalSnapshotInfo{}, "snapshot_name"),
 	); diff != "" {
 		t.Errorf("GetActor response mismatch (-want +got):\n%s", diff)
+	}
+	if getResp.GetLocalSnapshotInfo().GetSnapshotName() == "" {
+		t.Error("LocalSnapshotInfo.SnapshotName is empty, want the name the pause checkpointed under")
 	}
 }
 
@@ -2301,10 +2358,15 @@ func TestUpdateActor_Success(t *testing.T) {
 	}
 
 	updateResp, err := tc.client.UpdateActor(context.Background(), &ateapipb.UpdateActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "id1"},
-		WorkerSelector: &ateapipb.Selector{
-			MatchLabels: map[string]string{"tier": "paid"},
+		Actor: &ateapipb.Actor{
+			Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "id1"},
+			WorkerSelector: &ateapipb.Selector{
+				MatchLabels: map[string]string{"tier": "paid"},
+			},
+			// Output-only fields outside the mask are ignored.
+			Status: ateapipb.Actor_STATUS_RUNNING,
 		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"worker_selector"}},
 	})
 	if err != nil {
 		t.Fatalf("UpdateActor failed: %v", err)
@@ -2319,8 +2381,7 @@ func TestUpdateActor_Success(t *testing.T) {
 			MatchLabels: map[string]string{"tier": "paid"},
 		},
 	}
-	wantUpdateResp := &ateapipb.UpdateActorResponse{Actor: wantActor}
-	if diff := cmp.Diff(wantUpdateResp, updateResp, protocmp.Transform(), ignoreUID, ignoreTimestamps); diff != "" {
+	if diff := cmp.Diff(wantActor, updateResp, protocmp.Transform(), ignoreUID, ignoreTimestamps); diff != "" {
 		t.Errorf("UpdateActor response mismatch (-want +got):\n%s", diff)
 	}
 
@@ -2334,13 +2395,273 @@ func TestUpdateActor_Success(t *testing.T) {
 	}
 }
 
+// TestUpdateActor_Preconditions verifies the optional version and uid guards
+// carried in the embedded resource's metadata.
+func TestUpdateActor_Preconditions(t *testing.T) {
+	ns := namespaceForTest("ns-update-preconditions")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	createTemplate(t, tc, ns)
+
+	ctx := context.Background()
+	createActor := func() *ateapipb.Actor {
+		t.Helper()
+		actor, err := tc.client.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+			Metadata:               &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: testActorID},
+			ActorTemplateNamespace: ns,
+			ActorTemplateName:      "tmpl1",
+		}})
+		if err != nil {
+			t.Fatalf("CreateActor failed: %v", err)
+		}
+		return actor
+	}
+
+	update := func(meta *ateapipb.ResourceMetadata, tier string) (*ateapipb.Actor, error) {
+		meta.Atespace, meta.Name = testAtespace, testActorID
+		return tc.client.UpdateActor(ctx, &ateapipb.UpdateActorRequest{
+			Actor: &ateapipb.Actor{
+				Metadata:       meta,
+				WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"tier": tier}},
+			},
+			UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"worker_selector"}},
+		})
+	}
+
+	// Delete and recreate the same atespace/name actor, so the first lifecycle's uid
+	// becomes stale.
+	staleUID := createActor().GetMetadata().GetUid()
+	if _, err := tc.client.DeleteActor(ctx, &ateapipb.DeleteActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: testActorID},
+	}); err != nil {
+		t.Fatalf("DeleteActor failed: %v", err)
+	}
+
+	created := createActor()
+	staleVersion := created.GetMetadata().GetVersion()
+	uid := created.GetMetadata().GetUid()
+	if uid == staleUID {
+		t.Fatalf("recreated actor reused uid %s, want a fresh one", uid)
+	}
+	// The uid from the deleted lifecycle must be rejected, even though the
+	// atespace/name it was observed under still resolves.
+	_, err := update(&ateapipb.ResourceMetadata{Uid: staleUID}, "other-lifecycle")
+	assertGrpcError(t, err, codes.Aborted, fmt.Sprintf("Actor %s/%s has uid %s, not %s", testAtespace, testActorID, uid, staleUID))
+
+	// An unguarded update is last-writer-wins, and moves the resource past the
+	// version observed above.
+	unguarded, err := update(&ateapipb.ResourceMetadata{}, "free")
+	if err != nil {
+		t.Fatalf("UpdateActor(no guards) failed: %v", err)
+	}
+	currentVersion := unguarded.GetMetadata().GetVersion()
+	if currentVersion <= staleVersion {
+		t.Fatalf("version = %d, want greater than %d after an update", currentVersion, staleVersion)
+	}
+	if got := unguarded.GetWorkerSelector().GetMatchLabels()["tier"]; got != "free" {
+		t.Errorf("worker_selector[tier] = %q, want free", got)
+	}
+
+	// The version observed before that write is now stale: rejected rather than
+	// silently overwriting the concurrent change.
+	_, err = update(&ateapipb.ResourceMetadata{Version: staleVersion}, "stale")
+	assertGrpcError(t, err, codes.Aborted, "concurrent update conflict, please retry")
+
+	// Both uid and version matching the observed state: the update goes through.
+	updated, err := update(&ateapipb.ResourceMetadata{Uid: uid, Version: currentVersion}, "paid")
+	if err != nil {
+		t.Fatalf("UpdateActor(matching guards) failed: %v", err)
+	}
+	if got := updated.GetWorkerSelector().GetMatchLabels()["tier"]; got != "paid" {
+		t.Errorf("worker_selector[tier] = %q, want paid", got)
+	}
+	if updated.GetMetadata().GetVersion() <= currentVersion {
+		t.Errorf("version = %d, want greater than %d", updated.GetMetadata().GetVersion(), currentVersion)
+	}
+
+	// The guard the client just satisfied is now stale in turn.
+	_, err = update(&ateapipb.ResourceMetadata{Version: currentVersion}, "free")
+	assertGrpcError(t, err, codes.Aborted, "concurrent update conflict, please retry")
+}
+
 func TestUpdateActor_NotFound(t *testing.T) {
 	ns := namespaceForTest("ns-update-actor-notfound")
 	tc := setupTest(t, ns)
 	defer tc.cleanup()
 
-	_, err := tc.client.UpdateActor(context.Background(), &ateapipb.UpdateActorRequest{Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "does-not-exist"}})
+	_, err := tc.client.UpdateActor(context.Background(), &ateapipb.UpdateActorRequest{
+		Actor:      &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "does-not-exist"}},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"worker_selector"}},
+	})
 	assertGrpcError(t, err, codes.NotFound, "Actor test-atespace/does-not-exist not found")
+}
+
+func TestUpdateActorSnapshotTag_Success(t *testing.T) {
+	ns := namespaceForTest("ns-update-tag")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	createTemplate(t, tc, ns)
+
+	ctx := context.Background()
+	const snapshotName, tagName = "snapshot-1", "before-upgrade"
+	snapshotRef := createActorSnapshot(t, tc, snapshotName)
+	tagActorSnapshot(t, tc, snapshotRef, tagName)
+
+	updateResp, err := tc.client.UpdateActorSnapshotTag(ctx, &ateapipb.UpdateActorSnapshotTagRequest{
+		Tag: &ateapipb.ActorSnapshotTag{
+			Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: tagName},
+			Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED,
+			Snapshot: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "some-other-snapshot"},
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"scope"}},
+	})
+	if err != nil {
+		t.Fatalf("UpdateActorSnapshotTag failed: %v", err)
+	}
+
+	wantTag := &ateapipb.ActorSnapshotTag{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: tagName, Version: 2},
+		Snapshot: snapshotRef,
+		Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED,
+	}
+	if diff := cmp.Diff(wantTag, updateResp, protocmp.Transform(), ignoreUID, ignoreTimestamps); diff != "" {
+		t.Errorf("UpdateActorSnapshotTag response mismatch (-want +got):\n%s", diff)
+	}
+
+	_, storedTag, err := tc.persistence.GetActorSnapshotByTag(ctx, testAtespace, tagName)
+	if err != nil {
+		t.Fatalf("GetActorSnapshotByTag failed: %v", err)
+	}
+	if diff := cmp.Diff(wantTag, storedTag, protocmp.Transform(), ignoreUID, ignoreTimestamps); diff != "" {
+		t.Errorf("stored tag mismatch after UpdateActorSnapshotTag (-want +got):\n%s", diff)
+	}
+}
+
+// TestUpdateActorSnapshotTag_Preconditions verifies the optional version and uid
+// guards carried in the tag's metadata.
+func TestUpdateActorSnapshotTag_Preconditions(t *testing.T) {
+	ns := namespaceForTest("ns-update-tag-preconditions")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	createTemplate(t, tc, ns)
+
+	ctx := context.Background()
+	const snapshotName, tagName = "snapshot-1", "before-upgrade"
+	snapshotRef := createActorSnapshot(t, tc, snapshotName)
+
+	// Each call to update() flips the scope, so every accepted update is an
+	// observable write that bumps the version.
+	update := func(meta *ateapipb.ResourceMetadata, scope ateapipb.ActorSnapshotTagScope) (*ateapipb.ActorSnapshotTag, error) {
+		return updateActorSnapshotTagScope(tc, tagName, meta, scope)
+	}
+
+	// Delete and recreate the same atespace/name tag, so the first lifecycle's
+	// uid becomes stale.
+	staleUID := tagActorSnapshot(t, tc, snapshotRef, tagName).GetMetadata().GetUid()
+	if _, err := tc.client.DeleteActorSnapshotTag(ctx, &ateapipb.DeleteActorSnapshotTagRequest{
+		Tag: &ateapipb.ObjectRef{Atespace: testAtespace, Name: tagName},
+	}); err != nil {
+		t.Fatalf("DeleteActorSnapshotTag failed: %v", err)
+	}
+
+	tagged := tagActorSnapshot(t, tc, snapshotRef, tagName)
+	staleVersion := tagged.GetMetadata().GetVersion()
+	uid := tagged.GetMetadata().GetUid()
+	if uid == staleUID {
+		t.Fatalf("recreated tag reused uid %s, want a fresh one", uid)
+	}
+	// The uid from the deleted lifecycle must be rejected, even though the
+	// atespace/name it was observed under still resolves.
+	_, err := update(&ateapipb.ResourceMetadata{Uid: staleUID}, ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED)
+	assertGrpcError(t, err, codes.Aborted, fmt.Sprintf("ActorSnapshot tag %s/%s has uid %s, not %s", testAtespace, tagName, uid, staleUID))
+
+	// An unguarded update is last-writer-wins, and moves the tag past the
+	// version observed above.
+	unguarded, err := update(&ateapipb.ResourceMetadata{}, ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED)
+	if err != nil {
+		t.Fatalf("UpdateActorSnapshotTag(no guards) failed: %v", err)
+	}
+	currentVersion := unguarded.GetMetadata().GetVersion()
+	if currentVersion <= staleVersion {
+		t.Fatalf("version = %d, want greater than %d after an update", currentVersion, staleVersion)
+	}
+	if got, want := unguarded.GetScope(), ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED; got != want {
+		t.Errorf("scope = %v, want %v", got, want)
+	}
+
+	// The version observed before that write is now stale: rejected rather than
+	// silently overwriting the concurrent change.
+	_, err = update(&ateapipb.ResourceMetadata{Version: staleVersion}, ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE)
+	assertGrpcError(t, err, codes.Aborted, "concurrent update conflict, please retry")
+
+	// Both uid and version matching the observed state: the update goes through.
+	updated, err := update(&ateapipb.ResourceMetadata{Uid: uid, Version: currentVersion}, ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE)
+	if err != nil {
+		t.Fatalf("UpdateActorSnapshotTag(matching guards) failed: %v", err)
+	}
+	if got, want := updated.GetScope(), ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE; got != want {
+		t.Errorf("scope = %v, want %v", got, want)
+	}
+	if updated.GetMetadata().GetVersion() <= currentVersion {
+		t.Errorf("version = %d, want greater than %d", updated.GetMetadata().GetVersion(), currentVersion)
+	}
+
+	// The guard the client just satisfied is now stale in turn.
+	_, err = update(&ateapipb.ResourceMetadata{Version: currentVersion}, ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED)
+	assertGrpcError(t, err, codes.Aborted, "concurrent update conflict, please retry")
+}
+
+// TestUpdateActorSnapshotTag_ClearsMaskedField verifies that a masked field
+// left unset on the request resets to its default. ATESPACE is the zero value
+// of ActorSnapshotTagScope, so masking scope without setting it unpublishes the
+// tag.
+func TestUpdateActorSnapshotTag_ClearsMaskedField(t *testing.T) {
+	ns := namespaceForTest("ns-update-tag-clear")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	createTemplate(t, tc, ns)
+
+	const tagName = "before-upgrade"
+	snapshotRef := createActorSnapshot(t, tc, "snapshot-1")
+	tagActorSnapshot(t, tc, snapshotRef, tagName)
+
+	published, err := updateActorSnapshotTagScope(tc, tagName, &ateapipb.ResourceMetadata{}, ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED)
+	if err != nil {
+		t.Fatalf("UpdateActorSnapshotTag(publish) failed: %v", err)
+	}
+	if got, want := published.GetScope(), ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED; got != want {
+		t.Fatalf("scope = %v, want %v", got, want)
+	}
+
+	cleared, err := tc.client.UpdateActorSnapshotTag(context.Background(), &ateapipb.UpdateActorSnapshotTagRequest{
+		Tag:        &ateapipb.ActorSnapshotTag{Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: tagName}},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"scope"}},
+	})
+	if err != nil {
+		t.Fatalf("UpdateActorSnapshotTag(masked clear) failed: %v", err)
+	}
+	if got, want := cleared.GetScope(), ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE; got != want {
+		t.Errorf("scope = %v, want %v after masked clear", got, want)
+	}
+}
+
+func TestUpdateActorSnapshotTag_NotFound(t *testing.T) {
+	ns := namespaceForTest("ns-update-tag-notfound")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	_, err := tc.client.UpdateActorSnapshotTag(context.Background(), &ateapipb.UpdateActorSnapshotTagRequest{
+		Tag: &ateapipb.ActorSnapshotTag{
+			Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "does-not-exist"},
+			Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED,
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"scope"}},
+	})
+	assertGrpcError(t, err, codes.NotFound, "ActorSnapshot tag test-atespace/does-not-exist not found")
 }
 
 // TestResumeActor_ReleasesStaleWorkerWhenPoolBecomesIneligible verifies that
@@ -2391,8 +2712,11 @@ func TestResumeActor_ReleasesStaleWorkerWhenPoolBecomesIneligible(t *testing.T) 
 	tc.fakeAtelet.FailRun = nil
 
 	if _, err := tc.client.UpdateActor(context.Background(), &ateapipb.UpdateActorRequest{
-		Actor:          &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
-		WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"tier": "b"}},
+		Actor: &ateapipb.Actor{
+			Metadata:       &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: name},
+			WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"tier": "b"}},
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"worker_selector"}},
 	}); err != nil {
 		t.Fatalf("UpdateActor failed: %v", err)
 	}
@@ -2605,10 +2929,13 @@ func TestUpdateActor_ReassignsPoolAcrossSuspendResume(t *testing.T) {
 	}
 
 	if _, err := tc.client.UpdateActor(context.Background(), &ateapipb.UpdateActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
-		WorkerSelector: &ateapipb.Selector{
-			MatchLabels: map[string]string{"tier": "b"},
+		Actor: &ateapipb.Actor{
+			Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: name},
+			WorkerSelector: &ateapipb.Selector{
+				MatchLabels: map[string]string{"tier": "b"},
+			},
 		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"worker_selector"}},
 	}); err != nil {
 		t.Fatalf("UpdateActor failed: %v", err)
 	}

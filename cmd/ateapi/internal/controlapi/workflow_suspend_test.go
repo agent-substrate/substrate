@@ -16,7 +16,6 @@ package controlapi
 
 import (
 	"context"
-	"strings"
 	"testing"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
@@ -32,7 +31,7 @@ import (
 	"k8s.io/client-go/tools/cache"
 )
 
-func TestMarkSuspendingStep_SnapshotLocation(t *testing.T) {
+func TestMarkSuspendingStep_SnapshotName(t *testing.T) {
 	ctx := context.Background()
 	persistence := newTestPersistence(t)
 	actor, err := persistence.CreateActor(ctx, &ateapipb.Actor{
@@ -52,13 +51,21 @@ func TestMarkSuspendingStep_SnapshotLocation(t *testing.T) {
 		t.Fatalf("Execute: %v", err)
 	}
 
-	const prefix = "gs://bucket/root/snapshots/"
-	snapshotID, ok := strings.CutPrefix(state.Actor.GetInProgressSnapshot(), prefix)
-	if !ok {
-		t.Fatalf("snapshot location = %q, want prefix %q", state.Actor.GetInProgressSnapshot(), prefix)
+	// The field holds the snapshot's name, not its URI: FinalizeSuspendedStep
+	// names the ActorSnapshot after it, so it has to be usable as a resource
+	// name verbatim.
+	snapshotName := state.Actor.GetInProgressSnapshotName()
+	if !resources.IsValidResourceName(snapshotName) {
+		t.Fatalf("in-progress snapshot = %q, want a valid resource name", snapshotName)
 	}
-	if snapshotID == "" {
-		t.Fatal("snapshot ID is empty")
+	// The URI the later steps rebuild from that name nests under the actor's
+	// atespace so each tenant gets a distinct storage prefix.
+	uri, err := resources.NewSnapshotURI(state.ActorTemplate.Spec.SnapshotsConfig.Location, "team-a", snapshotName)
+	if err != nil {
+		t.Fatalf("NewSnapshotURI(%q): %v", snapshotName, err)
+	}
+	if want := "gs://bucket/root/snapshots/team-a/" + snapshotName; uri.String() != want {
+		t.Errorf("snapshot URI = %q, want %q", uri, want)
 	}
 }
 
@@ -259,8 +266,8 @@ func TestCallAteletSuspendStep_DanglingWorkerDoesNotRecordPhantomSnapshot(t *tes
 					WorkerPool:      "pool",
 					WorkerPod:       "pod-gone",
 				},
-				InProgressSnapshot: "gs://snapshots/actor-1/never-written",
-				LatestSnapshot:     tt.prevSnapshot,
+				InProgressSnapshotName: "never-written",
+				LatestSnapshot:         tt.prevSnapshot,
 			}
 			created, err := persistence.CreateActor(ctx, actor)
 			if err != nil {
@@ -280,8 +287,8 @@ func TestCallAteletSuspendStep_DanglingWorkerDoesNotRecordPhantomSnapshot(t *tes
 			if stored.GetStatus() != ateapipb.Actor_STATUS_CRASHED {
 				t.Errorf("status = %v, want CRASHED", stored.GetStatus())
 			}
-			if got := stored.GetInProgressSnapshot(); got != "gs://snapshots/actor-1/never-written" {
-				t.Errorf("InProgressSnapshot = %q, want preserved for debugging", got)
+			if got := stored.GetInProgressSnapshotName(); got != "never-written" {
+				t.Errorf("InProgressSnapshotName = %q, want preserved for debugging", got)
 			}
 			if tt.prevSnapshot == nil {
 				if stored.GetLatestSnapshot() != nil {
@@ -294,10 +301,79 @@ func TestCallAteletSuspendStep_DanglingWorkerDoesNotRecordPhantomSnapshot(t *tes
 	}
 }
 
+// TestFinalizeSuspendedStep_NoAssignment verifies finalization runs even when
+// the actor has no worker assignment: the ActorSnapshot must be recorded and
+// the actor moved to SUSPENDED rather than silently left SUSPENDING. This is
+// the shape a paused-origin suspend (#791) produces — a PAUSED actor has no
+// worker — and the regression test for finalization previously living inside
+// the worker-freeing branch.
+func TestFinalizeSuspendedStep_NoAssignment(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+
+	const snapshotName = "2026-01-01t00-00-00z-abc"
+	actor := &ateapipb.Actor{
+		Metadata:               &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor-1"},
+		Status:                 ateapipb.Actor_STATUS_SUSPENDING,
+		InProgressSnapshotName: snapshotName,
+		LocalSnapshotInfo: &ateapipb.LocalSnapshotInfo{
+			SnapshotName:              "actor-1-pause-snapshot",
+			NodeVmsWithLocalSnapshots: []string{"node1"},
+		},
+	}
+	created, err := persistence.CreateActor(ctx, actor)
+	if err != nil {
+		t.Fatalf("CreateActor: %v", err)
+	}
+
+	step := &FinalizeSuspendedStep{store: persistence}
+	input := &SuspendInput{ActorRef: resources.ActorRef{Atespace: "team-a", Name: "actor-1"}}
+	state := &SuspendState{
+		Actor:         created,
+		ActorTemplate: &atev1alpha1.ActorTemplate{Spec: atev1alpha1.ActorTemplateSpec{SnapshotsConfig: atev1alpha1.SnapshotsConfig{Location: "gs://snapshots"}}},
+		SourceVersion: created.GetMetadata().GetVersion(),
+	}
+	if err := step.Execute(ctx, input, state); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	stored, err := persistence.GetActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"})
+	if err != nil {
+		t.Fatalf("GetActor: %v", err)
+	}
+	if stored.GetStatus() != ateapipb.Actor_STATUS_SUSPENDED {
+		t.Errorf("status = %v, want SUSPENDED", stored.GetStatus())
+	}
+	if got := stored.GetLatestSnapshot().GetName(); got != snapshotName {
+		t.Errorf("LatestSnapshot = %q, want %q", got, snapshotName)
+	}
+	if got := stored.GetInProgressSnapshotName(); got != "" {
+		t.Errorf("InProgressSnapshotName = %q, want cleared", got)
+	}
+	if stored.GetLocalSnapshotInfo() != nil {
+		t.Errorf("LocalSnapshotInfo = %v, want cleared", stored.GetLocalSnapshotInfo())
+	}
+	snapshot, err := persistence.GetActorSnapshot(ctx, "team-a", snapshotName)
+	if err != nil {
+		t.Fatalf("GetActorSnapshot: %v", err)
+	}
+	wantURI, err := resources.NewSnapshotURI("gs://snapshots", "team-a", snapshotName)
+	if err != nil {
+		t.Fatalf("NewSnapshotURI: %v", err)
+	}
+	if got := snapshot.GetSnapshotUri(); got != wantURI.String() {
+		t.Errorf("snapshot URI = %q, want %q", got, wantURI.String())
+	}
+	if got := snapshot.GetSourceActorUid(); got != created.GetMetadata().GetUid() {
+		t.Errorf("snapshot SourceActorUid = %q, want %q", got, created.GetMetadata().GetUid())
+	}
+}
+
 func TestFinalizeSuspendedStep_ReleasesOnlyOwnWorker(t *testing.T) {
 	tests := []struct {
 		name               string
 		assignmentAtespace string
+		mismatchedUID      bool
 		wantReleased       bool
 	}{
 		{
@@ -310,24 +386,18 @@ func TestFinalizeSuspendedStep_ReleasesOnlyOwnWorker(t *testing.T) {
 			assignmentAtespace: "team-b",
 			wantReleased:       false,
 		},
+		{
+			name:               "keeps worker assigned to previous incarnation of same actor",
+			assignmentAtespace: "team-a",
+			mismatchedUID:      true,
+			wantReleased:       false,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
 			persistence := newTestPersistence(t)
-
-			worker := &ateapipb.Worker{
-				WorkerNamespace: "worker-ns",
-				WorkerPool:      "pool",
-				WorkerPod:       "pod-1",
-				Assignment: &ateapipb.Assignment{
-					Actor: &ateapipb.ObjectRef{Atespace: tt.assignmentAtespace, Name: "shared"},
-				},
-			}
-			if err := persistence.CreateWorker(ctx, worker); err != nil {
-				t.Fatalf("CreateWorker: %v", err)
-			}
 
 			actor := &ateapipb.Actor{
 				Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "shared"},
@@ -337,15 +407,33 @@ func TestFinalizeSuspendedStep_ReleasesOnlyOwnWorker(t *testing.T) {
 					WorkerPool:      "pool",
 					WorkerPod:       "pod-1",
 				},
-				InProgressSnapshot: "snapshot-1",
+				InProgressSnapshotName: "snapshot-1",
 			}
-			if _, err := persistence.CreateActor(ctx, actor); err != nil {
+			created, err := persistence.CreateActor(ctx, actor)
+			if err != nil {
 				t.Fatalf("CreateActor: %v", err)
+			}
+
+			uid := created.GetMetadata().GetUid()
+			if tt.assignmentAtespace != "team-a" || tt.mismatchedUID {
+				uid = "other-actor-uid-b"
+			}
+			worker := &ateapipb.Worker{
+				WorkerNamespace: "worker-ns",
+				WorkerPool:      "pool",
+				WorkerPod:       "pod-1",
+				Assignment: &ateapipb.Assignment{
+					Actor:    &ateapipb.ObjectRef{Atespace: tt.assignmentAtespace, Name: "shared"},
+					ActorUid: uid,
+				},
+			}
+			if err := persistence.CreateWorker(ctx, worker); err != nil {
+				t.Fatalf("CreateWorker: %v", err)
 			}
 
 			step := &FinalizeSuspendedStep{store: persistence}
 			input := &SuspendInput{ActorRef: resources.ActorRef{Atespace: "team-a", Name: "shared"}}
-			state := &SuspendState{ActorTemplate: &atev1alpha1.ActorTemplate{Spec: atev1alpha1.ActorTemplateSpec{SnapshotsConfig: atev1alpha1.SnapshotsConfig{Location: "gs://snapshots"}}}}
+			state := &SuspendState{ActorTemplate: &atev1alpha1.ActorTemplate{Spec: atev1alpha1.ActorTemplateSpec{SnapshotsConfig: atev1alpha1.SnapshotsConfig{Location: "gs://bucket/root"}}}}
 			if err := step.Execute(ctx, input, state); err != nil {
 				t.Fatalf("Execute: %v", err)
 			}

@@ -23,6 +23,14 @@ likely be split in the future for better scalability.)
 * Upstream: Envoy's `ORIGINAL_DST` actor cluster dials the actor's in-worker
   `atunnel` ingress server on the worker pod's port 443 over mTLS, using the
   address `atenet router`'s ext_proc resolved into `x-ate-original-dst`.
+* Termination: the router drains gracefully on SIGTERM (readiness flip →
+  endpoint propagation → Envoy admin-API drain → ext_proc drain), and the
+  Envoy container's `preStop` hook waits for the router's drain-complete
+  marker on a pod-shared emptyDir — so established connections and parked
+  requests finish instead of resetting. The whole sequence must fit within
+  `terminationGracePeriodSeconds` (see the manifest comments). Upgrades are
+  whole-system swaps (#473) rather than per-Deployment rolling updates; the
+  drain is what makes the old system's termination lossless.
 
 RBAC permissions:
 * read, list on ActorTemplate

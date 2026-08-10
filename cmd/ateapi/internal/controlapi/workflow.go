@@ -33,6 +33,7 @@ import (
 	"google.golang.org/grpc/status"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
+	storagev1listers "k8s.io/client-go/listers/storage/v1"
 )
 
 // WorkflowStep represents a single, idempotent operation in a workflow graph.
@@ -132,16 +133,19 @@ func runStep[Params any, Context any](ctx context.Context, params Params, wCtx C
 
 // ActorWorkflow handles the workflows for actor's resume / suspend operations.
 type ActorWorkflow struct {
-	store               store.Interface
-	workerCache         *workercache.Cache
-	scheduler           scheduling.Scheduler
-	dialer              *AteletDialer
-	actorTemplateLister listersv1alpha1.ActorTemplateLister
-	workerPoolLister    listersv1alpha1.WorkerPoolLister
-	sandboxConfigLister listersv1alpha1.SandboxConfigLister
-	kubeClient          kubernetes.Interface
-	secretCache         *envSecretCache
-	instruments         *Instruments
+	store                store.Interface
+	workerCache          *workercache.Cache
+	scheduler            scheduling.Scheduler
+	dialer               *AteletDialer
+	actorTemplateLister  listersv1alpha1.ActorTemplateLister
+	workerPoolLister     listersv1alpha1.WorkerPoolLister
+	sandboxConfigLister  listersv1alpha1.SandboxConfigLister
+	storageClassLister   storagev1listers.StorageClassLister
+	kubeClient           kubernetes.Interface
+	secretCache          *envSecretCache
+	instruments          *Instruments
+	egressGatewayAddress string
+	pluginRegistry       VolumePluginRegistry
 }
 
 // NewActorWorkflow creates a new ActorWorkflow. instruments may be nil.
@@ -152,20 +156,26 @@ func NewActorWorkflow(
 	actorTemplateLister listersv1alpha1.ActorTemplateLister,
 	workerPoolLister listersv1alpha1.WorkerPoolLister,
 	sandboxConfigLister listersv1alpha1.SandboxConfigLister,
+	storageClassLister storagev1listers.StorageClassLister,
 	kubeClient kubernetes.Interface,
 	instruments *Instruments,
+	egressGatewayAddress string,
+	pluginRegistry VolumePluginRegistry,
 ) *ActorWorkflow {
 	return &ActorWorkflow{
-		store:               store,
-		workerCache:         workerCache,
-		scheduler:           scheduling.New(workerCache),
-		dialer:              dialer,
-		actorTemplateLister: actorTemplateLister,
-		workerPoolLister:    workerPoolLister,
-		sandboxConfigLister: sandboxConfigLister,
-		kubeClient:          kubeClient,
-		secretCache:         newEnvSecretCache(envSecretCacheTTL),
-		instruments:         instruments,
+		store:                store,
+		workerCache:          workerCache,
+		scheduler:            scheduling.New(workerCache, scheduling.WithMeter(otel.Meter("ateapi"))),
+		dialer:               dialer,
+		actorTemplateLister:  actorTemplateLister,
+		workerPoolLister:     workerPoolLister,
+		sandboxConfigLister:  sandboxConfigLister,
+		storageClassLister:   storageClassLister,
+		kubeClient:           kubeClient,
+		secretCache:          newEnvSecretCache(envSecretCacheTTL),
+		instruments:          instruments,
+		egressGatewayAddress: egressGatewayAddress,
+		pluginRegistry:       pluginRegistry,
 	}
 }
 
@@ -187,7 +197,7 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 			return
 		}
 		w.instruments.recordLifecycleOp(ctx, ateattr.OperationResume, start, err,
-			lifecycleOpAttrs(state.Actor, state.ActorTemplate, state.SnapshotKind)...)
+			lifecycleOpAttrs(state.Actor, state.ActorTemplate, state.SnapshotKind, state.WireSnapshotScope)...)
 	}()
 
 	lockCtx, lock, err := w.acquireActorLock(ctx, actorRef)
@@ -198,10 +208,10 @@ func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.Acto
 
 	steps := []WorkflowStep[*ResumeInput, *ResumeState]{
 		&LoadActorForResumeStep{store: w.store, actorTemplateLister: w.actorTemplateLister},
-		&CreateVolumesStep{store: w.store},
+		&CreateVolumesStep{store: w.store, pluginRegistry: w.pluginRegistry, storageClassLister: w.storageClassLister},
 		&AssignWorkerStep{store: w.store, workerCache: w.workerCache, scheduler: w.scheduler, instruments: w.instruments},
-		&AttachVolumesStep{store: w.store},
-		&CallAteletRestoreStep{store: w.store, dialer: w.dialer, kubeClient: w.kubeClient, secretCache: w.secretCache, workerPoolLister: w.workerPoolLister, sandboxConfigLister: w.sandboxConfigLister, scheduler: w.scheduler},
+		&AttachVolumesStep{store: w.store, pluginRegistry: w.pluginRegistry},
+		&CallAteletRestoreStep{store: w.store, dialer: w.dialer, kubeClient: w.kubeClient, secretCache: w.secretCache, workerPoolLister: w.workerPoolLister, sandboxConfigLister: w.sandboxConfigLister, scheduler: w.scheduler, egressGatewayAddress: w.egressGatewayAddress},
 		&FinalizeRunningStep{store: w.store},
 	}
 
@@ -222,7 +232,7 @@ func (w *ActorWorkflow) SuspendActor(ctx context.Context, actorRef resources.Act
 
 	defer func() {
 		w.instruments.recordLifecycleOp(ctx, ateattr.OperationSuspend, start, err,
-			lifecycleOpAttrs(state.Actor, state.ActorTemplate, "")...)
+			lifecycleOpAttrs(state.Actor, state.ActorTemplate, "", state.WireSnapshotScope)...)
 	}()
 
 	lockCtx, lock, err := w.acquireActorLock(ctx, actorRef)
@@ -235,7 +245,7 @@ func (w *ActorWorkflow) SuspendActor(ctx context.Context, actorRef resources.Act
 		&LoadActorForSuspendStep{store: w.store, actorTemplateLister: w.actorTemplateLister},
 		&MarkSuspendingStep{store: w.store},
 		&CallAteletSuspendStep{store: w.store, dialer: w.dialer},
-		&DetachVolumesStep{store: w.store},
+		&DetachVolumesStep{store: w.store, pluginRegistry: w.pluginRegistry},
 		&FinalizeSuspendedStep{store: w.store},
 	}
 
@@ -256,7 +266,7 @@ func (w *ActorWorkflow) PauseActor(ctx context.Context, actorRef resources.Actor
 
 	defer func() {
 		w.instruments.recordLifecycleOp(ctx, ateattr.OperationPause, start, err,
-			lifecycleOpAttrs(state.Actor, state.ActorTemplate, "")...)
+			lifecycleOpAttrs(state.Actor, state.ActorTemplate, "", state.WireSnapshotScope)...)
 	}()
 
 	lockCtx, lock, err := w.acquireActorLock(ctx, actorRef)
@@ -269,7 +279,7 @@ func (w *ActorWorkflow) PauseActor(ctx context.Context, actorRef resources.Actor
 		&LoadActorForPauseStep{store: w.store, actorTemplateLister: w.actorTemplateLister},
 		&MarkPausingStep{store: w.store},
 		&CallAteletPauseStep{store: w.store, dialer: w.dialer},
-		&DetachVolumesForPauseStep{store: w.store},
+		&DetachVolumesForPauseStep{store: w.store, pluginRegistry: w.pluginRegistry},
 		&FinalizePausedStep{store: w.store},
 	}
 
@@ -297,7 +307,7 @@ func (w *ActorWorkflow) DeleteActor(ctx context.Context, atespace, name string) 
 	steps := []WorkflowStep[*DeleteInput, *DeleteState]{
 		&LoadActorForDeleteStep{store: w.store},
 		&MarkDeletingStep{store: w.store},
-		&DeleteVolumesStep{store: w.store},
+		&DeleteVolumesStep{store: w.store, pluginRegistry: w.pluginRegistry},
 		&FinalizeDeletedStep{store: w.store},
 	}
 

@@ -128,10 +128,12 @@ func appendExternalVolumes(workloadSpec *ateletpb.WorkloadSpec, template *atev1a
 
 			var storageVolID string
 			var volType string
+			var volCtx map[string]string
 			for _, dbVol := range actor.GetActorVolumes() {
 				if dbVol.GetVolumeName() == vol.Name {
 					storageVolID = dbVol.GetStorageVolumeId()
 					volType = dbVol.GetVolumeType()
+					volCtx = dbVol.GetVolumeContext()
 					break
 				}
 			}
@@ -145,6 +147,7 @@ func appendExternalVolumes(workloadSpec *ateletpb.WorkloadSpec, template *atev1a
 					External: &ateletpb.ExternalVolumeSource{
 						StorageVolumeId: storageVolID,
 						VolumeType:      volType,
+						VolumeContext:   volCtx,
 					},
 				},
 			})
