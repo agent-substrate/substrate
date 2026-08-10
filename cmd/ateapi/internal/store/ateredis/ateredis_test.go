@@ -2266,7 +2266,7 @@ func TestActorTemplateExists(t *testing.T) {
 	}
 }
 
-func TestUpdateActorTemplate(t *testing.T) {
+func TestUpdateActorTemplate_Success(t *testing.T) {
 	_, s, ctx := setupTest(t)
 
 	created, err := s.CreateActorTemplate(ctx, newTestActorTemplate("tmpl-a"))
@@ -2274,31 +2274,259 @@ func TestUpdateActorTemplate(t *testing.T) {
 		t.Fatalf("CreateActorTemplate failed: %v", err)
 	}
 
-	updated := proto.Clone(created).(*ateapipb.ActorTemplate)
-	updated.WorkerSelector = &ateapipb.Selector{MatchLabels: map[string]string{"tier": "1"}}
-	stored, err := s.UpdateActorTemplate(ctx, updated, 1)
+	updated, err := s.UpdateActorTemplate(ctx, "tmpl-a", func(dbTemplate *ateapipb.ActorTemplate) error {
+		dbTemplate.WorkerSelector = &ateapipb.Selector{MatchLabels: map[string]string{"tier": "1"}}
+		return nil
+	})
 	if err != nil {
 		t.Fatalf("UpdateActorTemplate failed: %v", err)
 	}
-	if stored.GetMetadata().GetVersion() != 2 {
-		t.Errorf("updated version = %d, want 2", stored.GetMetadata().GetVersion())
+
+	// UpdateActorTemplate returns the stored resource: the mutation applied and
+	// version advanced, with uid and create_time preserved from creation.
+	if got := updated.GetWorkerSelector().GetMatchLabels()["tier"]; got != "1" {
+		t.Errorf("worker_selector[tier] = %q, want %q", got, "1")
 	}
+	if updated.GetMetadata().GetVersion() != 2 {
+		t.Errorf("UpdateActorTemplate returned version %d, want 2", updated.GetMetadata().GetVersion())
+	}
+	if updated.GetMetadata().GetUid() != created.GetMetadata().GetUid() {
+		t.Errorf("uid changed on update: got %q, want %q", updated.GetMetadata().GetUid(), created.GetMetadata().GetUid())
+	}
+	if !updated.GetMetadata().GetCreateTime().AsTime().Equal(created.GetMetadata().GetCreateTime().AsTime()) {
+		t.Errorf("create_time changed on update: got %v, want %v", updated.GetMetadata().GetCreateTime().AsTime(), created.GetMetadata().GetCreateTime().AsTime())
+	}
+
+	// The returned resource is exactly what GetActorTemplate reads back.
 	got, err := s.GetActorTemplate(ctx, "tmpl-a")
 	if err != nil {
 		t.Fatalf("GetActorTemplate failed: %v", err)
 	}
-	if diff := cmp.Diff(stored, got, protocmp.Transform()); diff != "" {
-		t.Errorf("UpdateActorTemplate return does not match stored state (-stored +got):\n%s", diff)
+	if diff := cmp.Diff(updated, got, protocmp.Transform()); diff != "" {
+		t.Errorf("UpdateActorTemplate return does not match stored state (-updated +got):\n%s", diff)
+	}
+}
+
+func TestUpdateActorTemplate_MutateErrorsAreNotRetried(t *testing.T) {
+	_, s, ctx := setupTest(t)
+
+	created, err := s.CreateActorTemplate(ctx, newTestActorTemplate("tmpl-a"))
+	if err != nil {
+		t.Fatalf("CreateActorTemplate failed: %v", err)
 	}
 
-	// A stale expected version must be rejected.
-	if _, err := s.UpdateActorTemplate(ctx, updated, 1); !errors.Is(err, store.ErrVersionConflict) {
-		t.Errorf("stale update = %v, want ErrVersionConflict", err)
+	var mutationError = errors.New("mutation error")
+
+	callsToMutateFn := 0
+	_, err = s.UpdateActorTemplate(ctx, "tmpl-a", func(dbTemplate *ateapipb.ActorTemplate) error {
+		callsToMutateFn++
+		dbTemplate.WorkerSelector = &ateapipb.Selector{MatchLabels: map[string]string{"tier": "1"}}
+		return fmt.Errorf("template tmpl-a: %w", mutationError)
+	})
+	// The error must arrive intact
+	if !errors.Is(err, mutationError) {
+		t.Errorf("UpdateActorTemplate error = %v, want one wrapping mutationError", err)
+	}
+	// Mutation errors are non-retriable
+	if callsToMutateFn != 1 {
+		t.Errorf("mutate ran %d times, want exactly 1 (a rejected precondition must not be retried)", callsToMutateFn)
 	}
 
-	missing := newTestActorTemplate("nope")
-	if _, err := s.UpdateActorTemplate(ctx, missing, 1); !errors.Is(err, store.ErrNotFound) {
-		t.Errorf("update of missing template = %v, want ErrNotFound", err)
+	got, err := s.GetActorTemplate(ctx, "tmpl-a")
+	if err != nil {
+		t.Fatalf("GetActorTemplate failed: %v", err)
+	}
+	if diff := cmp.Diff(created, got, protocmp.Transform()); diff != "" {
+		t.Errorf("aborted mutation was persisted (-created +got):\n%s", diff)
+	}
+}
+
+func TestUpdateActorTemplate_DiscardsServerOwnedFieldsEdits(t *testing.T) {
+	_, s, ctx := setupTest(t)
+
+	created, err := s.CreateActorTemplate(ctx, newTestActorTemplate("tmpl-a"))
+	if err != nil {
+		t.Fatalf("CreateActorTemplate failed: %v", err)
+	}
+
+	updated, err := s.UpdateActorTemplate(ctx, "tmpl-a", func(dbTemplate *ateapipb.ActorTemplate) error {
+		// Metadata is server-owned: a closure must not be able to change it.
+		dbTemplate.Metadata.Uid = "forged-uid"
+		dbTemplate.Metadata.Version = 99
+		dbTemplate.Metadata.CreateTime = nil
+		dbTemplate.Metadata.UpdateTime = nil
+		dbTemplate.WorkerSelector = &ateapipb.Selector{MatchLabels: map[string]string{"tier": "1"}}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("UpdateActorTemplate failed: %v", err)
+	}
+
+	if got := updated.GetMetadata().GetUid(); got != created.GetMetadata().GetUid() {
+		t.Errorf("uid = %q, want the server-assigned %q", got, created.GetMetadata().GetUid())
+	}
+	if got := updated.GetMetadata().GetVersion(); got != created.GetMetadata().GetVersion()+1 {
+		t.Errorf("version = %d, want %d (one past the stored version, not the forged value)", got, created.GetMetadata().GetVersion()+1)
+	}
+	if got := updated.GetMetadata().GetCreateTime(); got == nil || !got.AsTime().Equal(created.GetMetadata().GetCreateTime().AsTime()) {
+		t.Errorf("create_time = %v, want the creation value %v", got, created.GetMetadata().GetCreateTime())
+	}
+	if got := updated.GetWorkerSelector().GetMatchLabels()["tier"]; got != "1" {
+		t.Errorf("worker_selector[tier] = %q, want %q: discarding metadata edits must not discard the mutation", got, "1")
+	}
+}
+
+// TestUpdateActorTemplate_RejectsImmutableFieldChange covers the fields a
+// mutation may not touch. Unlike the server-owned metadata, which is silently
+// restored, these fail the call: a caller that renamed a template asked for
+// something the store cannot do, and must hear about it.
+func TestUpdateActorTemplate_RejectsImmutableFieldChange(t *testing.T) {
+	tests := []struct {
+		name      string
+		mutate    func(dbTemplate *ateapipb.ActorTemplate)
+		wantField string
+	}{
+		{
+			name:      "atespace",
+			mutate:    func(dbTemplate *ateapipb.ActorTemplate) { dbTemplate.Metadata.Atespace = "other-atespace" },
+			wantField: "metadata.atespace",
+		},
+		{
+			name:      "name",
+			mutate:    func(dbTemplate *ateapipb.ActorTemplate) { dbTemplate.Metadata.Name = "other-name" },
+			wantField: "metadata.name",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, s, ctx := setupTest(t)
+			created, err := s.CreateActorTemplate(ctx, newTestActorTemplate("tmpl-a"))
+			if err != nil {
+				t.Fatalf("CreateActorTemplate failed: %v", err)
+			}
+
+			_, err = s.UpdateActorTemplate(ctx, "tmpl-a", func(dbTemplate *ateapipb.ActorTemplate) error {
+				// Paired with a legitimate edit, so the rejection cannot be
+				// mistaken for a no-op mutation.
+				dbTemplate.WorkerSelector = &ateapipb.Selector{MatchLabels: map[string]string{"tier": "1"}}
+				tt.mutate(dbTemplate)
+				return nil
+			})
+			// The message must name the offending field: the closure is buggy,
+			// and whoever has to fix it only has this error to go on.
+			if want := tt.wantField + " is immutable"; err == nil || !strings.Contains(err.Error(), want) {
+				t.Errorf("UpdateActorTemplate changing %s = %v, want an error containing %q", tt.name, err, want)
+			}
+
+			got, err := s.GetActorTemplate(ctx, "tmpl-a")
+			if err != nil {
+				t.Fatalf("GetActorTemplate failed: %v", err)
+			}
+			if diff := cmp.Diff(created, got, protocmp.Transform()); diff != "" {
+				t.Errorf("rejected mutation was persisted anyway (-created +got):\n%s", diff)
+			}
+		})
+	}
+}
+
+func TestUpdateActorTemplate_RetriesOnConcurrentWrite(t *testing.T) {
+	mr, s, ctx := setupTest(t)
+	if _, err := s.CreateActorTemplate(ctx, newTestActorTemplate("tmpl-a")); err != nil {
+		t.Fatalf("CreateActorTemplate failed: %v", err)
+	}
+
+	// A separate client, so its write lands outside the transaction's connection.
+	otherClient := redis.NewClusterClient(&redis.ClusterOptions{Addrs: []string{mr.Addr()}})
+	t.Cleanup(func() { otherClient.Close() })
+
+	attempts := 0
+	interceptor := &watchInterceptor{redisClient: s.rdb, before: func() {
+		// Only the first attempt races. We do this to make sure the second retry
+		// will succeed.
+		if attempts > 0 {
+			return
+		}
+		concurrent, err := s.GetActorTemplate(ctx, "tmpl-a")
+		if err != nil {
+			t.Errorf("GetActorTemplate for concurrent write failed: %v", err)
+			return
+		}
+		concurrent.DefaultVersionOnCreate = &ateapipb.ObjectRef{Name: "tmpl-a-v1"}
+		val, err := protojson.Marshal(concurrent)
+		if err != nil {
+			t.Errorf("protojson.Marshal failed: %v", err)
+			return
+		}
+		if err := otherClient.Set(ctx, actorTemplateDBKey("tmpl-a"), val, 0).Err(); err != nil {
+			t.Errorf("concurrent Set failed: %v", err)
+		}
+	}}
+	racing := &Persistence{rdb: interceptor, lockTTL: defaultLockTTL}
+
+	updated, err := racing.UpdateActorTemplate(ctx, "tmpl-a", func(dbTemplate *ateapipb.ActorTemplate) error {
+		attempts++
+		dbTemplate.WorkerSelector = &ateapipb.Selector{MatchLabels: map[string]string{"tier": "1"}}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("UpdateActorTemplate failed: %v", err)
+	}
+	if attempts < 2 {
+		t.Errorf("mutate ran %d times, want at least 2: the first write is racey and must be rejected", attempts)
+	}
+	if got := updated.GetWorkerSelector().GetMatchLabels()["tier"]; got != "1" {
+		t.Errorf("worker_selector[tier] = %q, want %q", got, "1")
+	}
+	// The concurrent tx wrote default_version_on_create. This change should
+	// survive instead of being reverted by a mutation computed against the
+	// older state.
+	if got := updated.GetDefaultVersionOnCreate().GetName(); got != "tmpl-a-v1" {
+		t.Errorf("default_version_on_create = %q, want %q: the retry clobbered the concurrent write", got, "tmpl-a-v1")
+	}
+}
+
+func TestUpdateActorTemplate_NotFound(t *testing.T) {
+	_, s, ctx := setupTest(t)
+	_, err := s.UpdateActorTemplate(ctx, "non-existent", func(dbTemplate *ateapipb.ActorTemplate) error {
+		t.Error("mutate must not run for a missing template")
+		return nil
+	})
+	if !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("expected store.ErrNotFound, got %v", err)
+	}
+}
+
+func TestUpdateActorTemplate_RejectsStaleVersion(t *testing.T) {
+	_, s, ctx := setupTest(t)
+
+	created, err := s.CreateActorTemplate(ctx, newTestActorTemplate("tmpl-a"))
+	if err != nil {
+		t.Fatalf("CreateActorTemplate failed: %v", err)
+	}
+	staleVersion := created.GetMetadata().GetVersion()
+
+	if _, err := s.UpdateActorTemplate(ctx, "tmpl-a", func(dbTemplate *ateapipb.ActorTemplate) error {
+		dbTemplate.WorkerSelector = &ateapipb.Selector{MatchLabels: map[string]string{"tier": "1"}}
+		return nil
+	}); err != nil {
+		t.Fatalf("UpdateActorTemplate failed: %v", err)
+	}
+
+	_, err = s.UpdateActorTemplate(ctx, "tmpl-a", func(dbTemplate *ateapipb.ActorTemplate) error {
+		if err := store.CheckActorTemplatePrecondition(dbTemplate, created.GetMetadata().GetUid(), staleVersion); err != nil {
+			return err
+		}
+		t.Error("mutate ran past its precondition once the pinned version had moved")
+		dbTemplate.WorkerSelector = nil
+		return nil
+	})
+	if !errors.Is(err, store.ErrVersionConflict) {
+		t.Errorf("UpdateActorTemplate error = %v, want one matching store.ErrVersionConflict", err)
+	}
+	// The uid still matches, so this is not the incarnation failure: callers key
+	// their retry decision off the difference.
+	if errors.Is(err, store.ErrUIDConflict) {
+		t.Errorf("UpdateActorTemplate error = %v, want no store.ErrUIDConflict match: the incarnation is unchanged", err)
 	}
 }
 
@@ -2399,9 +2627,10 @@ func TestDeleteActorTemplateVersion_IsParentDefault_Rejected(t *testing.T) {
 	if _, err := s.CreateActorTemplateVersion(ctx, newTestActorTemplateVersion("tmpl-a-v1", "tmpl-a")); err != nil {
 		t.Fatalf("CreateActorTemplateVersion failed: %v", err)
 	}
-	withDefault := newTestActorTemplate("tmpl-a")
-	withDefault.DefaultVersionOnCreate = &ateapipb.ObjectRef{Name: "tmpl-a-v1"}
-	if _, err := s.UpdateActorTemplate(ctx, withDefault, 1); err != nil {
+	if _, err := s.UpdateActorTemplate(ctx, "tmpl-a", func(dbTemplate *ateapipb.ActorTemplate) error {
+		dbTemplate.DefaultVersionOnCreate = &ateapipb.ObjectRef{Name: "tmpl-a-v1"}
+		return nil
+	}); err != nil {
 		t.Fatalf("UpdateActorTemplate failed: %v", err)
 	}
 
@@ -2414,7 +2643,10 @@ func TestDeleteActorTemplateVersion_IsParentDefault_Rejected(t *testing.T) {
 	}
 
 	// Clearing the default unblocks the delete.
-	if _, err := s.UpdateActorTemplate(ctx, newTestActorTemplate("tmpl-a"), 2); err != nil {
+	if _, err := s.UpdateActorTemplate(ctx, "tmpl-a", func(dbTemplate *ateapipb.ActorTemplate) error {
+		dbTemplate.DefaultVersionOnCreate = nil
+		return nil
+	}); err != nil {
 		t.Fatalf("UpdateActorTemplate (clear default) failed: %v", err)
 	}
 	if _, err := s.DeleteActorTemplateVersion(ctx, "tmpl-a-v1"); err != nil {

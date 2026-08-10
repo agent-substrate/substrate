@@ -132,11 +132,9 @@ type Interface interface {
 	// ActorTemplateExists reports whether the ActorTemplate exists.
 	ActorTemplateExists(ctx context.Context, name string) (bool, error)
 
-	// Updates an ActorTemplate with optimistic concurrency check and returns
-	// the stored resource with advanced metadata (version, update_time). The
-	// input is not mutated. Returns ErrNotFound if missing, or
-	// ErrVersionConflict on version mismatch.
-	UpdateActorTemplate(ctx context.Context, template *ateapipb.ActorTemplate, expectedVersion int64) (*ateapipb.ActorTemplate, error)
+	// UpdateActorTemplate performs a transactional read-modify-write and returns
+	// the updated template with advanced metadata (version, update_time).
+	UpdateActorTemplate(ctx context.Context, name string, mutate func(dbTemplate *ateapipb.ActorTemplate) error) (*ateapipb.ActorTemplate, error)
 
 	// Lists ActorTemplates. Returns a page of templates and a next page token.
 	ListActorTemplates(ctx context.Context, pageSize int32, pageToken string) ([]*ateapipb.ActorTemplate, string, error)
@@ -213,7 +211,17 @@ const (
 // outside of it. Returns ErrUIDConflict or ErrVersionConflict, which UpdateActor
 // surfaces verbatim.
 func CheckActorPrecondition(dbActor *ateapipb.Actor, uid string, version int64) error {
-	md := dbActor.GetMetadata()
+	return checkPrecondition(dbActor.GetMetadata(), uid, version)
+}
+
+// CheckActorTemplatePrecondition is CheckActorPrecondition for ActorTemplates:
+// call it at the top of an UpdateActorTemplate mutation to pin the uid and
+// version the caller observed.
+func CheckActorTemplatePrecondition(dbTemplate *ateapipb.ActorTemplate, uid string, version int64) error {
+	return checkPrecondition(dbTemplate.GetMetadata(), uid, version)
+}
+
+func checkPrecondition(md *ateapipb.ResourceMetadata, uid string, version int64) error {
 	if uid != AnyUID && uid != md.GetUid() {
 		return ErrUIDConflict
 	}

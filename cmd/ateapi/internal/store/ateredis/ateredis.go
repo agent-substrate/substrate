@@ -322,64 +322,87 @@ func (s *Persistence) ActorTemplateExists(ctx context.Context, name string) (boo
 	return n > 0, nil
 }
 
-func (s *Persistence) UpdateActorTemplate(ctx context.Context, template *ateapipb.ActorTemplate, expectedVersion int64) (*ateapipb.ActorTemplate, error) {
-	dbKey := actorTemplateDBKey(template.GetMetadata().GetName())
+// validateUpdateActorTemplateMutation reports whether a template mutation left
+// the fields it does not own alone.
+func validateUpdateActorTemplateMutation(storedTemplate, mutatedTemplate *ateapipb.ActorTemplate) error {
+	if stored, mutated := storedTemplate.GetMetadata().GetAtespace(), mutatedTemplate.GetMetadata().GetAtespace(); stored != mutated {
+		return fmt.Errorf("metadata.atespace is immutable: mutation changed it from %q to %q", stored, mutated)
+	}
+	if stored, mutated := storedTemplate.GetMetadata().GetName(), mutatedTemplate.GetMetadata().GetName(); stored != mutated {
+		return fmt.Errorf("metadata.name is immutable: mutation changed it from %q to %q", stored, mutated)
+	}
+	return nil
+}
 
-	// Clone because we will update the version field, and we don't want to
-	// stomp the caller's copy.
-	dbTemplate := proto.Clone(template).(*ateapipb.ActorTemplate)
+func (s *Persistence) UpdateActorTemplate(ctx context.Context, name string, mutate func(*ateapipb.ActorTemplate) error) (*ateapipb.ActorTemplate, error) {
+	dbKey := actorTemplateDBKey(name)
+	for range updateMaxAttempts {
+		var dbTemplate *ateapipb.ActorTemplate
+		var abortErr error
 
-	err := s.rdb.Watch(ctx, func(tx *redis.Tx) error {
-		currentVal, err := tx.Get(ctx, dbKey).Bytes()
-		if err != nil {
-			if errors.Is(err, redis.Nil) {
-				return store.ErrNotFound
+		err := s.rdb.Watch(ctx, func(tx *redis.Tx) error {
+			currentVal, err := tx.Get(ctx, dbKey).Bytes()
+			if err != nil {
+				if errors.Is(err, redis.Nil) {
+					return store.ErrNotFound
+				}
+				return fmt.Errorf("while getting actor template: %w", err)
 			}
-			return fmt.Errorf("while getting actor template: %w", err)
-		}
 
-		currentTemplate := &ateapipb.ActorTemplate{}
-		if err := protojson.Unmarshal(currentVal, currentTemplate); err != nil {
-			return fmt.Errorf("in protojson.Unmarshal: %w", err)
-		}
+			currentTemplate := &ateapipb.ActorTemplate{}
+			if err := protojson.Unmarshal(currentVal, currentTemplate); err != nil {
+				return fmt.Errorf("in protojson.Unmarshal: %w", err)
+			}
 
-		if currentTemplate.GetMetadata().GetVersion() != expectedVersion {
-			return store.ErrVersionConflict
-		}
-		if currentTemplate.GetMetadata().GetName() != dbTemplate.GetMetadata().GetName() {
-			return fmt.Errorf("name is immutable")
-		}
-		if dbTemplate.GetMetadata().GetAtespace() != globalAtespace {
-			return fmt.Errorf("atespace must stay empty on a global-scoped resource")
-		}
-		// The stored metadata is authoritative; derive the next metadata from it.
-		dbTemplate.Metadata = newUpdateMetadata(currentTemplate.GetMetadata())
+			// Snapshot the stored state before handing the template to mutate.
+			// mutate is free to edit anything it is given.
+			templateBeforeMutation := proto.Clone(currentTemplate).(*ateapipb.ActorTemplate)
+			if err := mutate(currentTemplate); err != nil {
+				abortErr = err
+				return err
+			}
+			if err := validateUpdateActorTemplateMutation(templateBeforeMutation, currentTemplate); err != nil {
+				abortErr = err
+				return err
+			}
+			// The stored metadata is authoritative; derive the next metadata
+			// from it, discarding whatever mutate made of it.
+			currentTemplate.Metadata = newUpdateMetadata(templateBeforeMutation.GetMetadata())
 
-		newVal, err := protojson.Marshal(dbTemplate)
-		if err != nil {
-			return fmt.Errorf("in protojson.Marshal: %w", err)
-		}
+			newVal, err := protojson.Marshal(currentTemplate)
+			if err != nil {
+				return fmt.Errorf("in protojson.Marshal: %w", err)
+			}
 
-		_, err = tx.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
-			pipe.Set(ctx, dbKey, newVal, 0)
+			if _, err := tx.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
+				pipe.Set(ctx, dbKey, newVal, 0)
+				return nil
+			}); err != nil {
+				return err
+			}
+			dbTemplate = currentTemplate
 			return nil
-		})
-		return err
-	}, dbKey)
+		}, dbKey)
 
-	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
+		switch {
+		case err == nil:
+			return dbTemplate, nil
+		case abortErr != nil:
+			return nil, abortErr
+		case errors.Is(err, store.ErrNotFound):
 			return nil, store.ErrNotFound
+		case errors.Is(err, redis.TxFailedErr):
+			// A concurrent write landed between WATCH and EXEC, so mutate never
+			// saw it. Re-read and run it against the newer state.
+			continue
+		default:
+			return nil, fmt.Errorf("while executing update actor template transaction: %w", err)
 		}
-		if errors.Is(err, store.ErrVersionConflict) || errors.Is(err, redis.TxFailedErr) {
-			return nil, store.ErrVersionConflict
-		}
-		return nil, fmt.Errorf("while executing update actor template transaction: %w", err)
 	}
 
-	// dbTemplate is the persisted state (advanced version and update_time).
-	// The caller's input is left unmodified.
-	return dbTemplate, nil
+	// Only the TxFailedErr branch continues the loop, so getting here means every
+	// attempt lost the race.
+	return nil, store.ErrVersionConflict
 }
 
 func (s *Persistence) ListActorTemplates(ctx context.Context, pageSize int32, pageTokenStr string) ([]*ateapipb.ActorTemplate, string, error) {
@@ -1058,13 +1081,13 @@ func validateUpdateActorMutation(storedActor, mutatedActor *ateapipb.Actor) erro
 	return nil
 }
 
-// updateActorMaxAttempts bounds how many times UpdateActor re-runs its
+// updateMaxAttempts bounds how many times UpdateActor or UpdateActorTemplate re-runs its
 // read-modify-write after a concurrent writer invalidates the transaction.
-const updateActorMaxAttempts = 5
+const updateMaxAttempts = 5
 
 func (s *Persistence) UpdateActor(ctx context.Context, actorRef resources.ActorRef, mutate func(*ateapipb.Actor) error) (*ateapipb.Actor, error) {
 	dbKey := actorDBKey(actorRef)
-	for range updateActorMaxAttempts {
+	for range updateMaxAttempts {
 		var dbActor *ateapipb.Actor
 		var abortErr error
 
