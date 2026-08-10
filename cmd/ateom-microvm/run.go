@@ -460,6 +460,14 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 		return err
 	}
 
+	// Reject limits the guest can never satisfy, before the containers reach the
+	// agent. Restore does not repeat this: it resumes a snapshotted VM, and the
+	// template spec is immutable, so an actor's limits were validated when its
+	// golden was built.
+	if err := checkResourceEnvelope(ctrs, memMiB, vcpus); err != nil {
+		return err
+	}
+
 	// Clean stale per-sandbox state + create the runtime dir for the sockets.
 	kata.CleanupSandboxState(ctx, actorUID)
 	if err := os.MkdirAll(kata.VMDir(actorUID), 0o700); err != nil {
