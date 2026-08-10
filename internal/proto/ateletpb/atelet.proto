@@ -50,6 +50,12 @@ service AteomHerder {
 
   // Restore restores a workload from checkpoint onto an ateom.
   rpc Restore(RestoreRequest) returns (RestoreResponse) {}
+
+  // UploadPausedCheckpoint copies a local (pause) checkpoint from this node's
+  // disk to object storage. Unlike Checkpoint it drives no ateom: the actor is
+  // paused, its sandbox is gone; the checkpoint files plus their manifest
+  // already sit under the actor's local-checkpoints directory.
+  rpc UploadPausedCheckpoint(UploadPausedCheckpointRequest) returns (UploadPausedCheckpointResponse) {}
 }
 
 message RunRequest {
@@ -248,6 +254,33 @@ message CheckpointRequest {
 }
 
 message CheckpointResponse {
+}
+
+message UploadPausedCheckpointRequest {
+  string atespace = 1;
+  string actor_name = 2;
+  string actor_uid = 3;
+
+  // For metrics attribution, like on CheckpointRequest.
+  string actor_template_namespace = 4;
+  string actor_template_name = 5;
+
+  // The local checkpoint to upload: LocalSnapshotInfo.snapshot_name recorded
+  // at pause time.
+  string local_snapshot_name = 6;
+
+  // Destination object-storage URI (the actor's in-progress snapshot URI).
+  string destination_snapshot_uri = 7;
+
+  // Scope the uploaded snapshot must have (the commit scope; FULL or DATA).
+  // The scope the pause checkpoint captured is not sent: atelet reads it from
+  // the local snapshot's own manifest, which is authoritative. When they
+  // differ, atelet converts where possible (micro-VM FULL capture to a DATA
+  // upload by selecting the durable-dir tar) and rejects otherwise.
+  SnapshotScope desired_scope = 8;
+}
+
+message UploadPausedCheckpointResponse {
 }
 
 message RestoreRequest {
