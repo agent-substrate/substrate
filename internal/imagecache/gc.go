@@ -53,6 +53,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	v1 "github.com/google/go-containerregistry/pkg/v1"
@@ -190,8 +191,9 @@ func addSpecRoots(rs *RootSet, spec *OverlaySpec, bundle string, dbg bool) {
 
 // EvictStats reports what an eviction pass did (or, dry-run, would do).
 type EvictStats struct {
-	// FreedBytes sums recorded sizes of retired layers. Optimistic
-	// (tar-stream sizes); the caller's next statfs self-corrects.
+	// FreedBytes sums retired layers' sizes, walked from the renamed-aside
+	// trees (dry-run: read from size files, or walked read-only). An
+	// estimate either way; the caller's next statfs self-corrects.
 	FreedBytes int64
 	// EvictedImages / EvictedLayers count deleted records and retired layer
 	// dirs.
@@ -202,8 +204,10 @@ type EvictStats struct {
 	// RootedImages counts image records excluded because a bundle overlay
 	// spec roots them (the "actively placed" protection).
 	RootedImages int
-	// SkippedRooted / SkippedFresh count vetoes, whether fired at listing
-	// time or by the per-victim re-check during the pass.
+	// SkippedRooted counts layers kept during the pass because a bundle
+	// spec roots them (rooted images at listing time count into
+	// RootedImages instead). SkippedFresh counts min-age vetoes, fired at
+	// listing time or by the per-victim re-check.
 	SkippedRooted, SkippedFresh int
 	// OrphanLayers counts layers reclaimed by the startup scan
 	// (RecoverOrphans) — always zero for periodic passes, which reach
@@ -393,17 +397,17 @@ func (s *Store) retireCandidateLayers(ctx context.Context, cand evictionCandidat
 		if dryRun {
 			size, st = s.dryRunRetire(hex, cutoff)
 		} else {
-			// Sized before retiring. Backfilling here can rewind a
-			// concurrent reuse-touch — bounded by retireLayer's veto and
-			// the pull path's post-unpack re-verify.
 			var rerr error
-			if size, rerr = s.layerSize(filepath.Join(s.layersDir(), hex)); rerr != nil {
-				size = 0 // unknown size: still evict, credit nothing
-			}
 			if retiredPath, st, rerr = s.retireLayer(hex, cutoff); rerr != nil {
 				errs = append(errs, rerr)
 				kept = true
 				continue
+			}
+			if st == retireRetired {
+				// Credit from the renamed-aside tree: sizing after the
+				// retire means the eviction path never writes a size-file
+				// backfill (or its mtime bump) into the live pool.
+				size = walkLayerSize(retiredPath)
 			}
 		}
 		switch st {
@@ -432,21 +436,28 @@ func (s *Store) retireCandidateLayers(ctx context.Context, cand evictionCandidat
 // of two-phase deletion, run outside every lock: the dirs are unreachable
 // by diffID, so this contends with nothing. A crash mid-removal leaves
 // ".rm-*" dirs for the startup sweep.
+//
+// Errors are collected per dir rather than through errgroup.Wait, which
+// keeps only the first: every failed dir sits invisible as ".rm-*" until
+// the next startup, so each deserves surfacing.
 func removeRetiredDirs(dirs []string) []error {
-	var errs []error
+	var (
+		mu   sync.Mutex
+		errs []error
+	)
 	g := new(errgroup.Group)
 	g.SetLimit(4)
 	for _, dir := range dirs {
 		g.Go(func() error {
 			if err := RemoveAllWritable(dir); err != nil {
-				return fmt.Errorf("while removing retired layer %q: %w", dir, err)
+				mu.Lock()
+				errs = append(errs, fmt.Errorf("while removing retired layer %q: %w", dir, err))
+				mu.Unlock()
 			}
 			return nil
 		})
 	}
-	if err := g.Wait(); err != nil {
-		errs = append(errs, err)
-	}
+	_ = g.Wait() // goroutines only ever return nil
 	return errs
 }
 
@@ -530,12 +541,12 @@ func (s *Store) sweepOrphanLayers(ctx context.Context, roots RootSet, refcount m
 			size, st = s.dryRunRetire(hex, cutoff)
 		} else {
 			var rerr error
-			if size, rerr = s.layerSize(filepath.Join(s.layersDir(), hex)); rerr != nil {
-				size = 0 // unknown size: still evict, credit nothing
-			}
 			if retiredPath, st, rerr = s.retireLayer(hex, cutoff); rerr != nil {
 				errs = append(errs, rerr)
 				continue
+			}
+			if st == retireRetired {
+				size = walkLayerSize(retiredPath) // see retireCandidateLayers
 			}
 		}
 		if st != retireRetired {
@@ -627,6 +638,11 @@ func (s *Store) listEviction(roots RootSet, cutoff time.Time, stats *EvictStats)
 		for _, d := range rec.DiffIDs {
 			diffID, err := v1.NewHash(d)
 			if err != nil {
+				// A garbled diffID contributes no refcount, so a layer
+				// referenced only through it would look unreferenced — the
+				// same failure direction as an undecodable record. Gate.
+				complete = false
+				errs = append(errs, fmt.Errorf("invalid diffID %q in image record %s: %w", d, digest, err))
 				continue
 			}
 			if !seen[diffID.Hex] {
@@ -641,7 +657,9 @@ func (s *Store) listEviction(roots RootSet, cutoff time.Time, stats *EvictStats)
 			continue
 		}
 		// A record is rooted either by digest (a bundle spec naming it) or
-		// because every layer it lists is rooted. The latter covers the
+		// because its exact layer set matches a rooted bundle's (see
+		// RootSet.LayerSets — deliberately not "every layer rooted
+		// somewhere"). The latter covers the
 		// multi-arch twin — pull records an image under both the index
 		// and per-platform child digest, but a bundle spec carries only the
 		// requested one — and digestless (pre-ImageDigest) specs. Without it the

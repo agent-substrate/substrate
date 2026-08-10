@@ -62,12 +62,12 @@ func (s *Store) layerSize(layerDir string) (int64, error) {
 		return n, err
 	}
 	total := walkLayerSize(layerDir)
-	// Preserve the dir mtime (the eviction age signal) across the write.
-	if fi, statErr := os.Stat(layerDir); statErr == nil {
-		if err := os.WriteFile(filepath.Join(layerDir, layerSizeFileName), []byte(strconv.FormatInt(total, 10)+"\n"), 0o600); err == nil {
-			_ = os.Chtimes(layerDir, fi.ModTime(), fi.ModTime())
-		}
-	}
+	// Best-effort write; the walked total is valid regardless. The write
+	// bumps the dir mtime and deliberately does NOT restore it: restoring
+	// could rewind a concurrent ensureLayer reuse-touch and defeat
+	// retireLayer's freshness veto. The bump just makes a freshly
+	// backfilled layer read as recently used for one min-age window.
+	_ = os.WriteFile(filepath.Join(layerDir, layerSizeFileName), []byte(strconv.FormatInt(total, 10)+"\n"), 0o600)
 	return total, nil
 }
 
