@@ -260,9 +260,9 @@ message RestoreRequest {
   string actor_template_namespace = 5;
   string actor_template_name = 6;
 
-  // Sandbox binary config is not sent on restore: the snapshot is
-  // self-describing. atelet reads the snapshot manifest to recover the pinned
-  // sandbox version that created it.
+  // For FULL and DATA_ON_GOLDEN restores the snapshot is self-describing:
+  // atelet reads the snapshot manifest to recover the pinned sandbox version
+  // that created it. DATA restores may override it via sandbox_assets.
   WorkloadSpec spec = 7;
 
   CheckpointType type = 8;
@@ -286,6 +286,13 @@ message RestoreRequest {
 
   // When absent, actor traffic uses direct egress instead of atunnel.
   optional EgressGateway egress_gateway = 13;
+
+  // Sandbox binaries for the restored actor. Only honored when scope is
+  // SNAPSHOT_SCOPE_DATA (a cold boot, so nothing couples the memory image to
+  // the binaries): overrides the snapshot manifest's pinned set, letting a
+  // re-pinned actor cold-boot on its new version's sandbox. Invalid for FULL
+  // and DATA_ON_GOLDEN, where the manifest (or golden manifest) must win.
+  SandboxAssets sandbox_assets = 14;
 }
 
 message RestoreResponse {

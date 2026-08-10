@@ -33,7 +33,7 @@ func (s *Service) ResumeActor(ctx context.Context, req *ateapipb.ResumeActorRequ
 	actorRef := resources.ActorRefFromObjectRef(req.GetActor())
 	setSpanActorRefAttributes(ctx, actorRef)
 
-	actor, resumed, err := s.actorWorkflow.ResumeActor(ctx, actorRef, req.GetBoot())
+	actor, resumed, err := s.actorWorkflow.ResumeActor(ctx, actorRef, req.GetBoot(), req.GetActorTemplateVersion())
 	if err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {
 			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
@@ -56,6 +56,9 @@ func validateResumeActorRequest(req *ateapipb.ResumeActorRequest) field.ErrorLis
 		errs = append(errs, field.Required(fldPath, ""))
 	} else {
 		errs = append(errs, resources.ValidateObjectRef(val, fldPath)...)
+	}
+	if val := req.GetActorTemplateVersion(); val != "" {
+		errs = append(errs, resources.ValidateResourceName(val, fldPath.Child("actor_template_version"))...)
 	}
 
 	return errs

@@ -305,6 +305,7 @@ func (s *FinalizeSuspendedStep) Execute(ctx context.Context, input *SuspendInput
 			ActorTemplateNamespace: tmplNamespace,
 			ActorTemplateName:      tmplName,
 			ActorTemplateUid:       string(state.ActorTemplate.GetUID()),
+			ActorTemplateVersion:   latestActor.GetActorTemplateVersion(),
 			ContentScope:           toActorSnapshotContentScope(commitSnapshotScope(input.ActorRef.Atespace, state.ActorTemplate)),
 			SnapshotUri:            snapshotURI.String(),
 		}

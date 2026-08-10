@@ -3129,34 +3129,47 @@ func TestResumeActor_DanglingWorker(t *testing.T) {
 
 	deleteWorkerPod(t, tc, ns, "worker-a")
 
-	// 6. Create Worker Pod B
-	createWorkerPod(t, tc, ns, "worker-b", "node1", "pool1")
-
-	// 7. Configure fake Atelet to SUCCEED on Restore
-	tc.fakeAtelet.FailRestore = nil
-	tc.fakeAtelet.RestoreCalled = false // reset
-
-	// 8. Call ResumeActor again -> Expect it to fail because it is already CRASHED by background syncer.
-	_, err = tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
-		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
-	})
-	if err == nil {
-		t.Fatalf("expected ResumeActor to fail because worker is gone")
+	// 6. The background syncer crashes the actor once its worker vanished:
+	// CRASHED with the worker assignment cleared.
+	if err := wait.PollUntilContextTimeout(context.Background(), 100*time.Millisecond, 5*time.Second, true, func(ctx context.Context) (bool, error) {
+		stored, err := tc.persistence.GetActor(ctx, resources.ActorRef{Atespace: testAtespace, Name: name})
+		if err != nil {
+			return false, err
+		}
+		return stored.GetStatus() == ateapipb.Actor_STATUS_CRASHED, nil
+	}); err != nil {
+		t.Fatalf("actor never reached CRASHED after its worker vanished: %v", err)
 	}
-	if status.Code(err) != codes.FailedPrecondition || !strings.Contains(err.Error(), "STATUS_CRASHED") {
-		t.Errorf("expected FailedPrecondition/STATUS_CRASHED error, got %v", err)
-	}
-
-	// Verify actor state is CRASHED and worker assignment is empty
-	actor, err = tc.persistence.GetActor(context.Background(), resources.ActorRef{Atespace: testAtespace, Name: name})
+	crashed, err := tc.persistence.GetActor(context.Background(), resources.ActorRef{Atespace: testAtespace, Name: name})
 	if err != nil {
 		t.Fatalf("failed to get actor from store: %v", err)
 	}
-	if actor.GetStatus() != ateapipb.Actor_STATUS_CRASHED {
-		t.Errorf("expected status CRASHED, got %v", actor.GetStatus())
+	if crashed.GetWorkerAssignment().GetWorkerPod() != "" {
+		t.Errorf("expected worker to be unassigned, got %v", crashed.GetWorkerAssignment().GetWorkerPod())
 	}
-	if actor.GetWorkerAssignment().GetWorkerPod() != "" {
-		t.Errorf("expected worker to be unassigned, got %v", actor.GetWorkerAssignment().GetWorkerPod())
+
+	// 7. Create Worker Pod B and let Restore succeed.
+	createWorkerPod(t, tc, ns, "worker-b", "node1", "pool1")
+	tc.fakeAtelet.FailRestore = nil
+	tc.fakeAtelet.RestoreCalled = false // reset
+
+	// 8. CRASHED actors are resumable: the actor recovers onto the fresh worker.
+	if _, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
+	}); err != nil {
+		t.Fatalf("ResumeActor from CRASHED failed: %v", err)
+	}
+	actor, err = tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
+	})
+	if err != nil {
+		t.Fatalf("GetActor failed: %v", err)
+	}
+	if actor.GetStatus() != ateapipb.Actor_STATUS_RUNNING {
+		t.Errorf("expected status RUNNING after recovery, got %v", actor.GetStatus())
+	}
+	if actor.GetWorkerAssignment().GetWorkerPod() != "worker-b" {
+		t.Errorf("expected worker-b assigned, got %v", actor.GetWorkerAssignment().GetWorkerPod())
 	}
 }
 

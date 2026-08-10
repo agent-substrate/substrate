@@ -30,7 +30,7 @@ import (
 )
 
 func TestValidateUpdateActorRequest(t *testing.T) {
-	mutableFields := []string{"worker_selector"}
+	mutableFields := []string{"actor_template_version", "worker_selector"}
 
 	tests := []struct {
 		name string
@@ -122,6 +122,22 @@ func TestValidateUpdateActorRequest(t *testing.T) {
 		"too many worker_selector.match_labels",
 		updateActorReq(withSelector(selectorLabelsOfSize(11))),
 		field.ErrorList{field.TooMany(field.NewPath("actor", "worker_selector", "match_labels"), 11, 10)},
+	}, {
+		"valid actor_template_version re-pin",
+		updateActorReq(withMaskPaths("actor_template_version"), func(req *ateapipb.UpdateActorRequest) {
+			req.GetActor().ActorTemplateVersion = "tmpl-a-v2"
+		}),
+		nil,
+	}, {
+		"masked actor_template_version left empty",
+		updateActorReq(withMaskPaths("actor_template_version")),
+		field.ErrorList{field.Required(field.NewPath("actor", "actor_template_version"), "")},
+	}, {
+		"invalid actor_template_version",
+		updateActorReq(withMaskPaths("actor_template_version"), func(req *ateapipb.UpdateActorRequest) {
+			req.GetActor().ActorTemplateVersion = "Tmpl_A"
+		}),
+		field.ErrorList{field.Invalid(field.NewPath("actor", "actor_template_version"), "Tmpl_A", "")},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

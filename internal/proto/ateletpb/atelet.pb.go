@@ -1515,9 +1515,9 @@ type RestoreRequest struct {
 	ActorUid               string                 `protobuf:"bytes,4,opt,name=actor_uid,json=actorUid,proto3" json:"actor_uid,omitempty"`
 	ActorTemplateNamespace string                 `protobuf:"bytes,5,opt,name=actor_template_namespace,json=actorTemplateNamespace,proto3" json:"actor_template_namespace,omitempty"`
 	ActorTemplateName      string                 `protobuf:"bytes,6,opt,name=actor_template_name,json=actorTemplateName,proto3" json:"actor_template_name,omitempty"`
-	// Sandbox binary config is not sent on restore: the snapshot is
-	// self-describing. atelet reads the snapshot manifest to recover the pinned
-	// sandbox version that created it.
+	// For FULL and DATA_ON_GOLDEN restores the snapshot is self-describing:
+	// atelet reads the snapshot manifest to recover the pinned sandbox version
+	// that created it. DATA restores may override it via sandbox_assets.
 	Spec *WorkloadSpec  `protobuf:"bytes,7,opt,name=spec,proto3" json:"spec,omitempty"`
 	Type CheckpointType `protobuf:"varint,8,opt,name=type,proto3,enum=atelet.CheckpointType" json:"type,omitempty"`
 	// The checkpoint configuration, depending on the type.
@@ -1538,6 +1538,12 @@ type RestoreRequest struct {
 	GoldenSnapshotUri string `protobuf:"bytes,12,opt,name=golden_snapshot_uri,json=goldenSnapshotUri,proto3" json:"golden_snapshot_uri,omitempty"`
 	// When absent, actor traffic uses direct egress instead of atunnel.
 	EgressGateway *EgressGateway `protobuf:"bytes,13,opt,name=egress_gateway,json=egressGateway,proto3,oneof" json:"egress_gateway,omitempty"`
+	// Sandbox binaries for the restored actor. Only honored when scope is
+	// SNAPSHOT_SCOPE_DATA (a cold boot, so nothing couples the memory image to
+	// the binaries): overrides the snapshot manifest's pinned set, letting a
+	// re-pinned actor cold-boot on its new version's sandbox. Invalid for FULL
+	// and DATA_ON_GOLDEN, where the manifest (or golden manifest) must win.
+	SandboxAssets *SandboxAssets `protobuf:"bytes,14,opt,name=sandbox_assets,json=sandboxAssets,proto3" json:"sandbox_assets,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1670,6 +1676,13 @@ func (x *RestoreRequest) GetGoldenSnapshotUri() string {
 func (x *RestoreRequest) GetEgressGateway() *EgressGateway {
 	if x != nil {
 		return x.EgressGateway
+	}
+	return nil
+}
+
+func (x *RestoreRequest) GetSandboxAssets() *SandboxAssets {
+	if x != nil {
+		return x.SandboxAssets
 	}
 	return nil
 }
@@ -1831,7 +1844,7 @@ const file_atelet_proto_rawDesc = "" +
 	" \x01(\v2'.atelet.ExternalCheckpointConfigurationH\x00R\x0eexternalConfig\x12+\n" +
 	"\x05scope\x18\v \x01(\x0e2\x15.atelet.SnapshotScopeR\x05scopeB\b\n" +
 	"\x06config\"\x14\n" +
-	"\x12CheckpointResponse\"\xae\x05\n" +
+	"\x12CheckpointResponse\"\xec\x05\n" +
 	"\x0eRestoreRequest\x12(\n" +
 	"\x10target_ateom_uid\x18\x01 \x01(\tR\x0etargetAteomUid\x12\x1a\n" +
 	"\batespace\x18\x02 \x01(\tR\batespace\x12\x1d\n" +
@@ -1847,7 +1860,8 @@ const file_atelet_proto_rawDesc = "" +
 	" \x01(\v2'.atelet.ExternalCheckpointConfigurationH\x00R\x0eexternalConfig\x12+\n" +
 	"\x05scope\x18\v \x01(\x0e2\x15.atelet.SnapshotScopeR\x05scope\x12.\n" +
 	"\x13golden_snapshot_uri\x18\f \x01(\tR\x11goldenSnapshotUri\x12A\n" +
-	"\x0eegress_gateway\x18\r \x01(\v2\x15.atelet.EgressGatewayH\x01R\regressGateway\x88\x01\x01B\b\n" +
+	"\x0eegress_gateway\x18\r \x01(\v2\x15.atelet.EgressGatewayH\x01R\regressGateway\x88\x01\x01\x12<\n" +
+	"\x0esandbox_assets\x18\x0e \x01(\v2\x15.atelet.SandboxAssetsR\rsandboxAssetsB\b\n" +
 	"\x06configB\x11\n" +
 	"\x0f_egress_gateway\"\x11\n" +
 	"\x0fRestoreResponse*`\n" +
@@ -1945,21 +1959,22 @@ var file_atelet_proto_depIdxs = []int32{
 	21, // 23: atelet.RestoreRequest.external_config:type_name -> atelet.ExternalCheckpointConfiguration
 	2,  // 24: atelet.RestoreRequest.scope:type_name -> atelet.SnapshotScope
 	6,  // 25: atelet.RestoreRequest.egress_gateway:type_name -> atelet.EgressGateway
-	7,  // 26: atelet.ArchAssets.FilesEntry.value:type_name -> atelet.AssetFile
-	8,  // 27: atelet.SandboxAssets.AssetsEntry.value:type_name -> atelet.ArchAssets
-	3,  // 28: atelet.CredentialBroker.MintActorCertificate:input_type -> atelet.MintActorCertificateRequest
-	5,  // 29: atelet.AteomHerder.Run:input_type -> atelet.RunRequest
-	22, // 30: atelet.AteomHerder.Checkpoint:input_type -> atelet.CheckpointRequest
-	24, // 31: atelet.AteomHerder.Restore:input_type -> atelet.RestoreRequest
-	4,  // 32: atelet.CredentialBroker.MintActorCertificate:output_type -> atelet.MintActorCertificateResponse
-	19, // 33: atelet.AteomHerder.Run:output_type -> atelet.RunResponse
-	23, // 34: atelet.AteomHerder.Checkpoint:output_type -> atelet.CheckpointResponse
-	25, // 35: atelet.AteomHerder.Restore:output_type -> atelet.RestoreResponse
-	32, // [32:36] is the sub-list for method output_type
-	28, // [28:32] is the sub-list for method input_type
-	28, // [28:28] is the sub-list for extension type_name
-	28, // [28:28] is the sub-list for extension extendee
-	0,  // [0:28] is the sub-list for field type_name
+	9,  // 26: atelet.RestoreRequest.sandbox_assets:type_name -> atelet.SandboxAssets
+	7,  // 27: atelet.ArchAssets.FilesEntry.value:type_name -> atelet.AssetFile
+	8,  // 28: atelet.SandboxAssets.AssetsEntry.value:type_name -> atelet.ArchAssets
+	3,  // 29: atelet.CredentialBroker.MintActorCertificate:input_type -> atelet.MintActorCertificateRequest
+	5,  // 30: atelet.AteomHerder.Run:input_type -> atelet.RunRequest
+	22, // 31: atelet.AteomHerder.Checkpoint:input_type -> atelet.CheckpointRequest
+	24, // 32: atelet.AteomHerder.Restore:input_type -> atelet.RestoreRequest
+	4,  // 33: atelet.CredentialBroker.MintActorCertificate:output_type -> atelet.MintActorCertificateResponse
+	19, // 34: atelet.AteomHerder.Run:output_type -> atelet.RunResponse
+	23, // 35: atelet.AteomHerder.Checkpoint:output_type -> atelet.CheckpointResponse
+	25, // 36: atelet.AteomHerder.Restore:output_type -> atelet.RestoreResponse
+	33, // [33:37] is the sub-list for method output_type
+	29, // [29:33] is the sub-list for method input_type
+	29, // [29:29] is the sub-list for extension type_name
+	29, // [29:29] is the sub-list for extension extendee
+	0,  // [0:29] is the sub-list for field type_name
 }
 
 func init() { file_atelet_proto_init() }

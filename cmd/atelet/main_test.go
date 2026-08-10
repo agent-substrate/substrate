@@ -403,6 +403,21 @@ func TestValidateRestoreRequest(t *testing.T) {
 		{"golden uri with non-data-on-golden scope", makeReq(func(r *ateletpb.RestoreRequest) {
 			r.GoldenSnapshotUri = "gs://bucket/golden-root/snapshots/ate-golden/golden-1"
 		}), true},
+		// sandbox_assets pins a cold boot's binaries, so it rides only DATA
+		// restores; FULL and DATA_ON_GOLDEN resume a memory image the
+		// manifest's (or golden's) recorded binaries must run.
+		{"sandbox_assets with data scope", makeReq(func(r *ateletpb.RestoreRequest) {
+			r.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA
+			r.SandboxAssets = &ateletpb.SandboxAssets{SandboxClass: "gvisor"}
+		}), false},
+		{"sandbox_assets with full scope", makeReq(func(r *ateletpb.RestoreRequest) {
+			r.SandboxAssets = &ateletpb.SandboxAssets{SandboxClass: "gvisor"}
+		}), true},
+		{"sandbox_assets with data-on-golden scope", makeReq(func(r *ateletpb.RestoreRequest) {
+			r.Scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
+			r.GoldenSnapshotUri = "gs://bucket/golden-root/snapshots/ate-golden/golden-1"
+			r.SandboxAssets = &ateletpb.SandboxAssets{SandboxClass: "gvisor"}
+		}), true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -801,6 +816,29 @@ func TestGoldenOnlyFiles(t *testing.T) {
 				t.Errorf("goldenOnlyFiles diff (-want +got):\n%s", diff)
 			}
 		})
+	}
+}
+
+// TestDurableOnlyFiles guards the DATA_ON_GOLDEN staging rule for Full-scope
+// actor snapshots: only the durable tar survives the filter, so the composed
+// golden set keeps its guest files instead of losing them to shadowing.
+func TestDurableOnlyFiles(t *testing.T) {
+	fullSet := []string{"config.json", "state.json", "memory-ranges", "durable-dir.tar"}
+	goldenSet := []string{"config.json", "state.json", "memory-ranges", "base-id", "durable-dir.tar"}
+
+	filtered := durableOnlyFiles(fullSet)
+	if diff := cmp.Diff([]string{"durable-dir.tar"}, filtered); diff != "" {
+		t.Errorf("durableOnlyFiles diff (-want +got):\n%s", diff)
+	}
+	if got := durableOnlyFiles([]string{"config.json"}); got != nil {
+		t.Errorf("durableOnlyFiles(no tar) = %v, want nil", got)
+	}
+
+	// Unfiltered, the Full actor set would shadow every golden guest file;
+	// filtered, the golden supplies them all except the durable tar.
+	want := []string{"config.json", "state.json", "memory-ranges", "base-id"}
+	if diff := cmp.Diff(want, goldenOnlyFiles(filtered, goldenSet)); diff != "" {
+		t.Errorf("goldenOnlyFiles(filtered full set) diff (-want +got):\n%s", diff)
 	}
 }
 

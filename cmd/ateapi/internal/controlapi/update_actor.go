@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/resources"
@@ -30,7 +31,8 @@ import (
 // actorMutableFields lists the Actor field paths a client may name in an
 // UpdateActor update_mask.
 var actorMutableFields = mutableFields[*ateapipb.Actor]{
-	"worker_selector": func(dst, src *ateapipb.Actor) { dst.WorkerSelector = src.GetWorkerSelector() },
+	"worker_selector":        func(dst, src *ateapipb.Actor) { dst.WorkerSelector = src.GetWorkerSelector() },
+	"actor_template_version": func(dst, src *ateapipb.Actor) { dst.ActorTemplateVersion = src.GetActorTemplateVersion() },
 }
 
 func (s *Service) UpdateActor(ctx context.Context, req *ateapipb.UpdateActorRequest) (*ateapipb.Actor, error) {
@@ -57,6 +59,13 @@ func (s *Service) UpdateActor(ctx context.Context, req *ateapipb.UpdateActorRequ
 	expectedVersion := actor.GetMetadata().GetVersion()
 	if version := in.GetMetadata().GetVersion(); version != 0 {
 		expectedVersion = version
+	}
+
+	if slices.Contains(req.GetUpdateMask().GetPaths(), "actor_template_version") &&
+		in.GetActorTemplateVersion() != actor.GetActorTemplateVersion() {
+		if err := validateVersionRepin(ctx, s.persistence, actor, in.GetActorTemplateVersion()); err != nil {
+			return nil, err
+		}
 	}
 
 	applyUpdateMask(actor, in, req.GetUpdateMask(), actorMutableFields)
@@ -89,6 +98,14 @@ func validateUpdateActorRequest(req *ateapipb.UpdateActorRequest) field.ErrorLis
 
 	if selector := actor.GetWorkerSelector(); selector != nil {
 		errs = append(errs, validateSelector(selector, actorPath.Child("worker_selector"))...)
+	}
+	if slices.Contains(req.GetUpdateMask().GetPaths(), "actor_template_version") {
+		p := actorPath.Child("actor_template_version")
+		if val := actor.GetActorTemplateVersion(); val == "" {
+			errs = append(errs, field.Required(p, "the version pin cannot be cleared"))
+		} else {
+			errs = append(errs, resources.ValidateResourceName(val, p)...)
+		}
 	}
 
 	return errs

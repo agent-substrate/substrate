@@ -834,6 +834,30 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	if goldenRec != nil {
 		runtimeRec = goldenRec
 	}
+	// A DATA restore cold-boots, so the request may pin the sandbox instead
+	// (validated DATA-only): a re-pinned actor then runs its new version's
+	// binaries rather than the ones recorded when the snapshot was taken.
+	if req.GetSandboxAssets() != nil {
+		overrideRec, err := recordFromRequest(req.GetSandboxAssets())
+		if err != nil {
+			return nil, ateerrors.CrashIfReason(ctx, err, ateerrors.ReasonInvalidSandboxAsset)
+		}
+		if overrideRec.SandboxClass != sandboxRec.SandboxClass {
+			return nil, status.Errorf(codes.FailedPrecondition, "sandbox_assets class %q does not match snapshot sandbox class %q", overrideRec.SandboxClass, sandboxRec.SandboxClass)
+		}
+		runtimeRec = overrideRec
+	}
+
+	// The actor snapshot's contribution to a DATA_ON_GOLDEN restore is its
+	// durable data. Data-scope snapshots hold nothing else, but a Full
+	// snapshot's memory/VM-state files would shadow the golden's guest files
+	// under goldenOnlyFiles — stage only its durable tar. Manifests written
+	// before the Scope field existed are Data snapshots on every flow that
+	// reaches DATA_ON_GOLDEN, so they pass through unfiltered.
+	actorFiles := sandboxRec.SnapshotFiles
+	if goldenRec != nil && sandboxRec.Scope == ateattr.SnapshotScopeFull {
+		actorFiles = durableOnlyFiles(actorFiles)
+	}
 
 	// Download the memory snapshot and prepare the sandbox assets + OCI bundle
 	// CONCURRENTLY. They are independent — only the final ateom.RestoreWorkload
@@ -859,7 +883,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 				if goldenRec == nil {
 					return fmt.Errorf("no golden snapshot record for a %s restore", req.GetScope())
 				}
-				if err := s.downloadCombinedCheckpoint(gctx, req.GetExternalConfig().GetSnapshotUri(), req.GetGoldenSnapshotUri(), checkpointDir, sandboxRec.SnapshotFiles, goldenRec.SnapshotFiles); err != nil {
+				if err := s.downloadCombinedCheckpoint(gctx, req.GetExternalConfig().GetSnapshotUri(), req.GetGoldenSnapshotUri(), checkpointDir, actorFiles, goldenRec.SnapshotFiles); err != nil {
 					return ateerrors.CrashIfReason(ctx, err, ateerrors.ReasonFailedGetExternalObject, ateerrors.ReasonInvalidObjectURL, ateerrors.ReasonTerminalFileSystemError)
 				}
 			} else if err := s.downloadExternalCheckpoint(gctx, req.GetExternalConfig().GetSnapshotUri(), checkpointDir, sandboxRec.SnapshotFiles); err != nil {
@@ -875,14 +899,14 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 			// the golden's from object storage, concurrently.
 			gLocal, gLocalCtx := errgroup.WithContext(gctx)
 			gLocal.Go(func() error {
-				if err := s.copyLocalCheckpoint(gLocalCtx, req.GetLocalConfig().GetSnapshotName(), ateompath.LocalCheckpointsDir(actorUID), checkpointDir, sandboxRec.SnapshotFiles); err != nil {
+				if err := s.copyLocalCheckpoint(gLocalCtx, req.GetLocalConfig().GetSnapshotName(), ateompath.LocalCheckpointsDir(actorUID), checkpointDir, actorFiles); err != nil {
 					return ateerrors.CrashIfReason(ctx, err, ateerrors.ReasonTerminalFileSystemError)
 				}
 				return nil
 			})
 			if combineWithGolden {
 				gLocal.Go(func() error {
-					if err := s.downloadExternalCheckpoint(gLocalCtx, req.GetGoldenSnapshotUri(), checkpointDir, goldenOnlyFiles(sandboxRec.SnapshotFiles, goldenRec.SnapshotFiles)); err != nil {
+					if err := s.downloadExternalCheckpoint(gLocalCtx, req.GetGoldenSnapshotUri(), checkpointDir, goldenOnlyFiles(actorFiles, goldenRec.SnapshotFiles)); err != nil {
 						return ateerrors.CrashIfReason(ctx, err, ateerrors.ReasonFailedGetExternalObject, ateerrors.ReasonInvalidObjectURL, ateerrors.ReasonTerminalFileSystemError)
 					}
 					return nil
@@ -1137,6 +1161,18 @@ func copySparse(src *os.File, dst sparseDest, size int64) error {
 		off = holeOff
 	}
 	return nil
+}
+
+// durableOnlyFiles filters a snapshot's file set down to its durable-dir
+// tar, dropping the guest memory/VM-state files a Full snapshot also holds.
+func durableOnlyFiles(files []string) []string {
+	var out []string
+	for _, f := range files {
+		if f == ateompath.DurableTarFile {
+			out = append(out, f)
+		}
+	}
+	return out
 }
 
 // goldenOnlyFiles returns the golden snapshot files not shadowed by the
@@ -1542,6 +1578,13 @@ func validateRestoreRequest(req *ateletpb.RestoreRequest) error {
 		}
 	} else if req.GetGoldenSnapshotUri() != "" {
 		return fmt.Errorf("golden_snapshot_uri is only valid with snapshot scope %s", ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN)
+	}
+
+	// A FULL or DATA_ON_GOLDEN restore resumes a memory image, which must run
+	// on the exact binaries that produced it — the manifest (or golden
+	// manifest) pins those. Only a DATA restore, a cold boot, may override.
+	if req.GetSandboxAssets() != nil && req.GetScope() != ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA {
+		return fmt.Errorf("sandbox_assets is only valid with snapshot scope %s", ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA)
 	}
 	return nil
 }

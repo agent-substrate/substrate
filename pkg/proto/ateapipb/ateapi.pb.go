@@ -821,8 +821,10 @@ type Actor struct {
 	ActorTemplate string `protobuf:"bytes,13,opt,name=actor_template,json=actorTemplate,proto3" json:"actor_template,omitempty"`
 	// actor_template_version pins the ActorTemplateVersion this actor runs.
 	// Optional at CreateActor (the server resolves the template's
-	// default_version_on_create when unset); always stored resolved and
-	// immutable thereafter. Non-empty iff actor_template is set.
+	// default_version_on_create when unset); always stored resolved. May be
+	// re-pinned via UpdateActor or ResumeActor while the actor is SUSPENDED or
+	// CRASHED; takes effect at the next resume. Non-empty iff actor_template is
+	// set.
 	ActorTemplateVersion string       `protobuf:"bytes,14,opt,name=actor_template_version,json=actorTemplateVersion,proto3" json:"actor_template_version,omitempty"`
 	Status               Actor_Status `protobuf:"varint,4,opt,name=status,proto3,enum=ateapi.Actor_Status" json:"status,omitempty"`
 	// worker_assignment points at the worker currently hosting this Actor.
@@ -1071,8 +1073,12 @@ type ActorSnapshot struct {
 	ActorTemplateUid       string                 `protobuf:"bytes,7,opt,name=actor_template_uid,json=actorTemplateUid,proto3" json:"actor_template_uid,omitempty"`
 	ContentScope           SnapshotContentScope   `protobuf:"varint,8,opt,name=content_scope,json=contentScope,proto3,enum=ateapi.SnapshotContentScope" json:"content_scope,omitempty"`
 	SnapshotUri            string                 `protobuf:"bytes,9,opt,name=snapshot_uri,json=snapshotUri,proto3" json:"snapshot_uri,omitempty"`
-	unknownFields          protoimpl.UnknownFields
-	sizeCache              protoimpl.SizeCache
+	// The ActorTemplateVersion the source actor was pinned to when this
+	// snapshot was taken. Empty for CRD-path actors and for snapshots written
+	// before this field existed.
+	ActorTemplateVersion string `protobuf:"bytes,10,opt,name=actor_template_version,json=actorTemplateVersion,proto3" json:"actor_template_version,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *ActorSnapshot) Reset() {
@@ -1164,6 +1170,13 @@ func (x *ActorSnapshot) GetContentScope() SnapshotContentScope {
 func (x *ActorSnapshot) GetSnapshotUri() string {
 	if x != nil {
 		return x.SnapshotUri
+	}
+	return ""
+}
+
+func (x *ActorSnapshot) GetActorTemplateVersion() string {
+	if x != nil {
+		return x.ActorTemplateVersion
 	}
 	return ""
 }
@@ -3578,6 +3591,8 @@ type UpdateActorRequest struct {
 	//
 	// Only the following fields are supported:
 	//   - worker_selector
+	//   - actor_template_version (SUSPENDED or CRASHED actors only; the pin
+	//     takes effect at the next resume)
 	UpdateMask    *fieldmaskpb.FieldMask `protobuf:"bytes,2,opt,name=update_mask,json=updateMask,proto3" json:"update_mask,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -3807,9 +3822,15 @@ type ResumeActorRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	Actor *ObjectRef             `protobuf:"bytes,1,opt,name=actor,proto3" json:"actor,omitempty"`
 	// If true, skip golden snapshot and boot the workload from scratch.
-	Boot          bool `protobuf:"varint,2,opt,name=boot,proto3" json:"boot,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	Boot bool `protobuf:"varint,2,opt,name=boot,proto3" json:"boot,omitempty"`
+	// Optional. Re-pins the actor to this ActorTemplateVersion before resuming:
+	// the actor restores with the new version's spec while its durable-dir data
+	// is preserved. Only valid for actors created from a control-plane
+	// ActorTemplate, in SUSPENDED or CRASHED status. A no-op when it equals the
+	// current pin.
+	ActorTemplateVersion string `protobuf:"bytes,3,opt,name=actor_template_version,json=actorTemplateVersion,proto3" json:"actor_template_version,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *ResumeActorRequest) Reset() {
@@ -3854,6 +3875,13 @@ func (x *ResumeActorRequest) GetBoot() bool {
 		return x.Boot
 	}
 	return false
+}
+
+func (x *ResumeActorRequest) GetActorTemplateVersion() string {
+	if x != nil {
+		return x.ActorTemplateVersion
+	}
+	return ""
 }
 
 type ResumeActorResponse struct {
@@ -5154,7 +5182,7 @@ const file_ateapi_proto_rawDesc = "" +
 	"\n" +
 	"worker_pod\x18\x03 \x01(\tR\tworkerPod\x12$\n" +
 	"\x0eworker_pod_uid\x18\x04 \x01(\tR\fworkerPodUid\x12\"\n" +
-	"\rworker_pod_ip\x18\x05 \x01(\tR\vworkerPodIp\"\xd5\x03\n" +
+	"\rworker_pod_ip\x18\x05 \x01(\tR\vworkerPodIp\"\x8b\x04\n" +
 	"\rActorSnapshot\x124\n" +
 	"\bmetadata\x18\x01 \x01(\v2\x18.ateapi.ResourceMetadataR\bmetadata\x124\n" +
 	"\fsource_actor\x18\x02 \x01(\v2\x11.ateapi.ObjectRefR\vsourceActor\x12(\n" +
@@ -5164,7 +5192,9 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x13actor_template_name\x18\x06 \x01(\tR\x11actorTemplateName\x12,\n" +
 	"\x12actor_template_uid\x18\a \x01(\tR\x10actorTemplateUid\x12A\n" +
 	"\rcontent_scope\x18\b \x01(\x0e2\x1c.ateapi.SnapshotContentScopeR\fcontentScope\x12!\n" +
-	"\fsnapshot_uri\x18\t \x01(\tR\vsnapshotUri\"\xac\x01\n" +
+	"\fsnapshot_uri\x18\t \x01(\tR\vsnapshotUri\x124\n" +
+	"\x16actor_template_version\x18\n" +
+	" \x01(\tR\x14actorTemplateVersion\"\xac\x01\n" +
 	"\x10ActorSnapshotTag\x124\n" +
 	"\bmetadata\x18\x01 \x01(\v2\x18.ateapi.ResourceMetadataR\bmetadata\x12-\n" +
 	"\bsnapshot\x18\x02 \x01(\v2\x11.ateapi.ObjectRefR\bsnapshot\x123\n" +
@@ -5331,10 +5361,11 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x11PauseActorRequest\x12'\n" +
 	"\x05actor\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\x05actor\"9\n" +
 	"\x12PauseActorResponse\x12#\n" +
-	"\x05actor\x18\x01 \x01(\v2\r.ateapi.ActorR\x05actor\"Q\n" +
+	"\x05actor\x18\x01 \x01(\v2\r.ateapi.ActorR\x05actor\"\x87\x01\n" +
 	"\x12ResumeActorRequest\x12'\n" +
 	"\x05actor\x18\x01 \x01(\v2\x11.ateapi.ObjectRefR\x05actor\x12\x12\n" +
-	"\x04boot\x18\x02 \x01(\bR\x04boot\"T\n" +
+	"\x04boot\x18\x02 \x01(\bR\x04boot\x124\n" +
+	"\x16actor_template_version\x18\x03 \x01(\tR\x14actorTemplateVersion\"T\n" +
 	"\x13ResumeActorResponse\x12#\n" +
 	"\x05actor\x18\x01 \x01(\v2\r.ateapi.ActorR\x05actor\x12\x18\n" +
 	"\aresumed\x18\x02 \x01(\bR\aresumed\"=\n" +

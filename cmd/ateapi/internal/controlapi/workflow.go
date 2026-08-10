@@ -180,11 +180,14 @@ func NewActorWorkflow(
 }
 
 // ResumeActor executes the workflow to resume a suspended actor. Idempotent.
-func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.ActorRef, boot bool) (actor *ateapipb.Actor, resumed bool, err error) {
+// A non-empty targetVersion re-pins the actor to that ActorTemplateVersion
+// before resuming.
+func (w *ActorWorkflow) ResumeActor(ctx context.Context, actorRef resources.ActorRef, boot bool, targetVersion string) (actor *ateapipb.Actor, resumed bool, err error) {
 	start := time.Now()
 	input := &ResumeInput{
-		ActorRef: actorRef,
-		Boot:     boot,
+		ActorRef:      actorRef,
+		Boot:          boot,
+		TargetVersion: targetVersion,
 	}
 	state := &ResumeState{}
 

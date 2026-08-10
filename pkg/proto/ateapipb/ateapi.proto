@@ -208,8 +208,10 @@ message Actor {
 
   // actor_template_version pins the ActorTemplateVersion this actor runs.
   // Optional at CreateActor (the server resolves the template's
-  // default_version_on_create when unset); always stored resolved and
-  // immutable thereafter. Non-empty iff actor_template is set.
+  // default_version_on_create when unset); always stored resolved. May be
+  // re-pinned via UpdateActor or ResumeActor while the actor is SUSPENDED or
+  // CRASHED; takes effect at the next resume. Non-empty iff actor_template is
+  // set.
   string actor_template_version = 14;
 
   enum Status {
@@ -283,6 +285,11 @@ message ActorSnapshot {
   string actor_template_uid = 7;
   SnapshotContentScope content_scope = 8;
   string snapshot_uri = 9;
+
+  // The ActorTemplateVersion the source actor was pinned to when this
+  // snapshot was taken. Empty for CRD-path actors and for snapshots written
+  // before this field existed.
+  string actor_template_version = 10;
 }
 
 // ActorSnapshotTag is an immutable, Atespace-owned alias and retention pin.
@@ -734,6 +741,8 @@ message UpdateActorRequest {
   //
   // Only the following fields are supported:
   //   - worker_selector
+  //   - actor_template_version (SUSPENDED or CRASHED actors only; the pin
+  //     takes effect at the next resume)
   google.protobuf.FieldMask update_mask = 2;
 }
 
@@ -758,6 +767,13 @@ message ResumeActorRequest {
 
   // If true, skip golden snapshot and boot the workload from scratch.
   bool boot = 2;
+
+  // Optional. Re-pins the actor to this ActorTemplateVersion before resuming:
+  // the actor restores with the new version's spec while its durable-dir data
+  // is preserved. Only valid for actors created from a control-plane
+  // ActorTemplate, in SUSPENDED or CRASHED status. A no-op when it equals the
+  // current pin.
+  string actor_template_version = 3;
 }
 
 message ResumeActorResponse {

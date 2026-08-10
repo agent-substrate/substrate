@@ -71,6 +71,20 @@ func TestValidateResumeActorRequest(t *testing.T) {
 		"invalid actor.name",
 		&ateapipb.ResumeActorRequest{Actor: &ateapipb.ObjectRef{Atespace: "ns1", Name: "ID1"}},
 		field.ErrorList{field.Invalid(field.NewPath("actor", "name"), "ID1", "")},
+	}, {
+		"valid actor_template_version",
+		&ateapipb.ResumeActorRequest{
+			Actor:                &ateapipb.ObjectRef{Atespace: "ns1", Name: "id1"},
+			ActorTemplateVersion: "tmpl-a-v2",
+		},
+		nil,
+	}, {
+		"invalid actor_template_version",
+		&ateapipb.ResumeActorRequest{
+			Actor:                &ateapipb.ObjectRef{Atespace: "ns1", Name: "id1"},
+			ActorTemplateVersion: "Tmpl_A",
+		},
+		field.ErrorList{field.Invalid(field.NewPath("actor_template_version"), "Tmpl_A", "")},
 	}}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

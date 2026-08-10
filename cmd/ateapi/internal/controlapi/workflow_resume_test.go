@@ -485,7 +485,7 @@ func TestResumeActorWorkflow_RejectedAndIdempotentPaths(t *testing.T) {
 				}
 			})
 
-			actor, resumed, err := w.ResumeActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, false)
+			actor, resumed, err := w.ResumeActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, false, "")
 			if tc.wantErr {
 				if got := status.Code(err); got != codes.FailedPrecondition {
 					t.Fatalf("status.Code(err) = %v, want %v (err: %v)", got, codes.FailedPrecondition, err)
@@ -537,13 +537,15 @@ func TestResumeSteps_CheckPrerequisite(t *testing.T) {
 			allowed: nil,
 		},
 		{
-			// Resuming is allowed from SUSPENDED and PAUSED (RESUMING and
-			// RUNNING are fast-forwarded by IsComplete).
+			// Resuming is allowed from SUSPENDED, PAUSED and CRASHED —
+			// crashActor released the worker, so a crashed actor recovers via
+			// resume (RESUMING and RUNNING are fast-forwarded by IsComplete).
 			name: "AssignWorkerStep",
 			step: &AssignWorkerStep{},
 			allowed: map[ateapipb.Actor_Status]bool{
 				ateapipb.Actor_STATUS_SUSPENDED: true,
 				ateapipb.Actor_STATUS_PAUSED:    true,
+				ateapipb.Actor_STATUS_CRASHED:   true,
 			},
 		},
 		{
@@ -588,6 +590,24 @@ func TestResumeSteps_CheckPrerequisite(t *testing.T) {
 	}
 }
 
+// TestAssignWorkerStep_RejectsCrashedWithAssignment guards the corrupted-state
+// check: crashActor always clears the assignment, so a CRASHED actor that
+// still holds one must not claim a second worker.
+func TestAssignWorkerStep_RejectsCrashedWithAssignment(t *testing.T) {
+	step := &AssignWorkerStep{}
+	state := &ResumeState{
+		Actor: &ateapipb.Actor{
+			Metadata:         &ateapipb.ResourceMetadata{Name: "id1"},
+			Status:           ateapipb.Actor_STATUS_CRASHED,
+			WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPod: "pod-1"},
+		},
+	}
+	err := step.CheckPrerequisite(context.Background(), &ResumeInput{ActorRef: resources.ActorRef{Name: "id1"}}, state)
+	if status.Code(err) != codes.FailedPrecondition {
+		t.Fatalf("CheckPrerequisite = %v, want FailedPrecondition for CRASHED with a lingering assignment", err)
+	}
+}
+
 // TestResumeActor_MetricSkipsAlreadyRunningNoop guards the recording rule: the
 // router resumes per routed request, so a clean already-running no-op must not
 // be recorded, while failures must be.
@@ -618,7 +638,7 @@ func TestResumeActor_MetricSkipsAlreadyRunningNoop(t *testing.T) {
 				}
 			})
 
-			_, _, err := w.ResumeActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, false)
+			_, _, err := w.ResumeActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, false, "")
 			if tt.wantRecord && err == nil {
 				t.Fatal("expected resume to fail, got nil error")
 			}
@@ -649,7 +669,7 @@ func TestResumeActor_CrashesOnMissingWorkerAssignment(t *testing.T) {
 		a.WorkerAssignment = nil // RESUMING without a worker: corrupt record
 	})
 
-	_, _, err := w.ResumeActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, false)
+	_, _, err := w.ResumeActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, false, "")
 	if got := status.Code(err); got != codes.Aborted {
 		t.Fatalf("status.Code(err) = %v, want %v (err: %v)", got, codes.Aborted, err)
 	}

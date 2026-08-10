@@ -54,10 +54,9 @@ import (
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 )
 
-// durableTarFile is the snapshot file holding the tar of the actor's durable-dir
-// volumes. Its entries are <volumeName>/... relative to
+// durableTarFile's entries are <volumeName>/... relative to
 // ateompath.DurableDirVolumeMountsDir, so extraction restores the same layout.
-const durableTarFile = "durable-dir.tar"
+const durableTarFile = ateompath.DurableTarFile
 
 // hasDurableVolumes reports whether any container mounts a durable-dir volume.
 func hasDurableVolumes(containers []*ateompb.Container) bool {

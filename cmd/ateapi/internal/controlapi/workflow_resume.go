@@ -44,6 +44,9 @@ import (
 type ResumeInput struct {
 	ActorRef resources.ActorRef
 	Boot     bool
+	// TargetVersion, when non-empty, re-pins the actor to this
+	// ActorTemplateVersion before resuming.
+	TargetVersion string
 }
 
 // ResumeState holds the mutable state loaded and modified during execution.
@@ -88,6 +91,21 @@ func validateGoldenSnapshotScope(snapshot *ateapipb.ActorSnapshot) error {
 	}
 }
 
+// crossVersionSnapshot reports whether snapshot was produced under a
+// different ActorTemplateVersion than the actor is pinned to now. Only
+// meaningful on the native template path; tmpl's UID is the pinned version's
+// uid there (crdTemplateFromVersion), which older snapshots recorded as
+// actor_template_uid before the explicit field existed.
+func crossVersionSnapshot(actor *ateapipb.Actor, snapshot *ateapipb.ActorSnapshot, tmpl *atev1alpha1.ActorTemplate) bool {
+	if actor.GetActorTemplateVersion() == "" {
+		return false
+	}
+	if v := snapshot.GetActorTemplateVersion(); v != "" {
+		return v != actor.GetActorTemplateVersion()
+	}
+	return snapshot.GetActorTemplateUid() != string(tmpl.GetUID())
+}
+
 type LoadActorForResumeStep struct {
 	store               store.Interface
 	actorTemplateLister listersv1alpha1.ActorTemplateLister
@@ -108,6 +126,24 @@ func (s *LoadActorForResumeStep) Execute(ctx context.Context, input *ResumeInput
 			return status.Errorf(codes.NotFound, "Actor %s not found", input.ActorRef)
 		}
 		return fmt.Errorf("while getting actor from DB: %w", err)
+	}
+
+	// Re-pin before any status transition so retried workflows (with or
+	// without the version argument) resolve the same template from the
+	// persisted pin.
+	if input.TargetVersion != "" && input.TargetVersion != actor.GetActorTemplateVersion() {
+		if err := validateVersionRepin(ctx, s.store, actor, input.TargetVersion); err != nil {
+			return err
+		}
+		slog.InfoContext(ctx, "Re-pinning actor to new ActorTemplateVersion",
+			slog.String("actor", input.ActorRef.String()),
+			slog.String("from", actor.GetActorTemplateVersion()),
+			slog.String("to", input.TargetVersion))
+		actor.ActorTemplateVersion = input.TargetVersion
+		actor, err = s.store.UpdateActor(ctx, actor, actor.GetMetadata().GetVersion())
+		if err != nil {
+			return fmt.Errorf("while re-pinning actor to ActorTemplateVersion %q: %w", input.TargetVersion, err)
+		}
 	}
 	state.Actor = actor
 	state.WasRunning = (actor.GetStatus() == ateapipb.Actor_STATUS_RUNNING)
@@ -130,6 +166,17 @@ func (s *LoadActorForResumeStep) Execute(ctx context.Context, input *ResumeInput
 			return status.Errorf(codes.DataLoss, "ActorSnapshot %s/%s: %v", ref.GetAtespace(), ref.GetName(), err)
 		}
 		state.SnapshotScope = snapshot.GetContentScope()
+		// A snapshot taken under a different ActorTemplateVersion cannot
+		// restore its guest memory on the pinned version's images; restore
+		// only its durable data. The onResume policy below may still boot
+		// that data on the pinned version's golden snapshot.
+		if crossVersionSnapshot(actor, snapshot, actorTemplate) {
+			slog.InfoContext(ctx, "Snapshot predates the actor's version pin; restoring durable data only",
+				slog.String("actor", input.ActorRef.String()),
+				slog.String("snapshot", ref.GetName()),
+				slog.String("pinned_version", actor.GetActorTemplateVersion()))
+			state.SnapshotScope = ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA
+		}
 	} else if actorTemplate.Status.GoldenSnapshot != "" && !input.Boot {
 		snapshot, err := s.store.GetActorSnapshot(ctx, resources.GoldenActorAtespace, actorTemplate.Status.GoldenSnapshot)
 		if errors.Is(err, store.ErrNotFound) {
@@ -291,8 +338,16 @@ func (s *AssignWorkerStep) CheckPrerequisite(ctx context.Context, input *ResumeI
 	switch state.Actor.GetStatus() {
 	case ateapipb.Actor_STATUS_SUSPENDED, ateapipb.Actor_STATUS_PAUSED:
 		return nil
+	case ateapipb.Actor_STATUS_CRASHED:
+		// Resumable: crashActor released the worker and left LatestSnapshot
+		// intact. A lingering assignment means corrupted state — refuse
+		// rather than claim a second worker.
+		if state.Actor.GetWorkerAssignment() != nil {
+			return status.Errorf(codes.FailedPrecondition, "crashed Actor %s still has a worker assignment; refusing to resume", input.ActorRef)
+		}
+		return nil
 	default:
-		return status.Errorf(codes.FailedPrecondition, "AssignWorkerStep prerequisite not met for Actor: %s (got: %v, want %s or %s)", input.ActorRef, state.Actor.GetStatus(), ateapipb.Actor_STATUS_SUSPENDED, ateapipb.Actor_STATUS_PAUSED)
+		return status.Errorf(codes.FailedPrecondition, "AssignWorkerStep prerequisite not met for Actor: %s (got: %v, want %s, %s or %s)", input.ActorRef, state.Actor.GetStatus(), ateapipb.Actor_STATUS_SUSPENDED, ateapipb.Actor_STATUS_PAUSED, ateapipb.Actor_STATUS_CRASHED)
 	}
 }
 
@@ -410,6 +465,9 @@ func (s *AssignWorkerStep) Execute(ctx context.Context, input *ResumeInput, stat
 			return err
 		}
 		switch fresh.GetStatus() {
+		// CRASHED is deliberately absent: a concurrent crash surfaces as
+		// Aborted so the caller decides (retry, or roll the pin back) —
+		// resuming from CRASHED is a fresh, explicit ResumeActor call.
 		case ateapipb.Actor_STATUS_SUSPENDED, ateapipb.Actor_STATUS_PAUSED:
 			slog.InfoContext(ctx, "Retrying assignment due to actor version conflict", slog.Any("actor", input.ActorRef))
 			state.Actor = fresh
@@ -629,6 +687,14 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 			scope = ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN
 		}
 		state.WireSnapshotScope = ateattr.SnapshotScopeValue(scope)
+		// A Data restore is a cold boot of the pinned version's images, so it
+		// must run the pinned version's sandbox too: send the frozen assets to
+		// override the manifest's recorded binaries, which may predate a
+		// re-pin. FULL and DATA_ON_GOLDEN restores stay manifest-described.
+		var sandboxAssets *ateletpb.SandboxAssets
+		if scope == ateletpb.SnapshotScope_SNAPSHOT_SCOPE_DATA {
+			sandboxAssets = state.FrozenSandboxAssets
+		}
 		req := &ateletpb.RestoreRequest{
 			TargetAteomUid:         assignment.GetWorkerPodUid(),
 			Atespace:               state.Actor.GetMetadata().GetAtespace(),
@@ -647,6 +713,7 @@ func (s *CallAteletRestoreStep) Execute(ctx context.Context, input *ResumeInput,
 			GoldenSnapshotUri: state.GoldenSnapshotURI.String(),
 			ActorUid:          state.Actor.GetMetadata().Uid,
 			EgressGateway:     egressGateway,
+			SandboxAssets:     sandboxAssets,
 		}
 		_, err = client.Restore(ctx, req)
 		return maybeCrashActor(ctx, s.store, input.ActorRef, err, "while restoring durable snapshot", ateattr.OperationResume)
