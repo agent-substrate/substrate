@@ -12,10 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// Kubernetes codegen tools required this to be in doc.go, no other name will
-// work.
+package controlapi
 
-// +k8s:validation-gen=TypesWithSuffix=Request
-// +k8s:validation-gen-scheme-registry=nil
-
-package ateapipb
+//go:generate bash -c "../../../../hack/run-tool.sh validation-gen --go-header-file=../../../../hack/boilerplate/go.txt --output-file=zz_generated.validation.go --readonly-pkg=google.golang.org/protobuf/types/known/timestamppb --readonly-pkg=google.golang.org/protobuf/types/known/fieldmaskpb ."
