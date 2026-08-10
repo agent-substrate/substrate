@@ -164,13 +164,19 @@ an actor's bundle directory (via `/proc/self/mountinfo`) before atelet wipes
 it — called from the checkpoint cleanup path in ateom-gvisor and
 `teardownActor` in ateom-microvm.
 
-## Garbage collection (engine; the periodic loop lands next)
+## Garbage collection
 
-`gc.go` holds the eviction engine. Nothing in production calls
-`Store.EvictUnused` yet — the watermark-driven periodic loop and its
-flags (period, high/low watermarks, max-bytes cap, min-age, dry-run)
-arrive with the next change — so cached data still only grows for now.
-The one behavior `New` gains today is the startup orphan scan below.
+`gc.go` holds the eviction engine; atelet drives it as a periodic pass
+(`--image-cache-gc-period`, default 5m; `0` disables it). Each tick
+measures the cache volume with `statfs` and the pool's own size from the
+per-layer `size` files, then computes a byte target: free down to
+`--image-cache-low-percent` when volume usage reaches
+`--image-cache-high-percent`, and/or down to `--image-cache-max-bytes` —
+**capped at the pool's own size**, because this cache is one tenant of a
+shared volume and an uncapped target would evict the whole cache trying
+to fix disk pressure it didn't cause. `--image-cache-gc-dry-run`
+computes and logs every decision while mutating nothing: the
+recommended way to soak the policy on a live fleet.
 
 **One pass** (`Store.EvictUnused(ctx, targetBytes, dryRun)`):
 
