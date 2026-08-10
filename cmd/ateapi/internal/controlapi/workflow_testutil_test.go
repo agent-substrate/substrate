@@ -42,7 +42,7 @@ func newTestActorWorkflow(t *testing.T, st store.Interface, tmplNamespace, tmplN
 	}); err != nil {
 		t.Fatalf("add template to indexer: %v", err)
 	}
-	return NewActorWorkflow(st, nil, nil, listersv1alpha1.NewActorTemplateLister(indexer), nil, nil, nil, nil, nil, "", nil)
+	return NewActorWorkflow(st, nil, nil, listersv1alpha1.NewActorTemplateLister(indexer), nil, nil, nil, nil, "", nil)
 }
 
 // seedWorkflowActor stores an actor with the given status, bound to the given

@@ -346,7 +346,7 @@ func setupTest(t *testing.T, ns string) *testContext {
 	volPlugins := map[string]volume.VolumePluginControlPlane{
 		mockDriverName: mockPlugin,
 	}
-	service := NewService(persistence, wc, actorTemplateLister, workerPoolLister, sandboxConfigLister, csiDriverConfigLister, scLister, dialer, k8sClient, instruments, "", volPlugins)
+	service := NewService(persistence, wc, actorTemplateLister, workerPoolLister, sandboxConfigLister, csiDriverConfigLister, scLister, dialer, instruments, "", volPlugins)
 
 	// 5. Start REAL gRPC Server for ATE API
 	grpcServer := grpc.NewServer(grpc.UnaryInterceptor(ateinterceptors.ServerUnaryInterceptor))
@@ -1774,23 +1774,10 @@ func TestResumeActor(t *testing.T) {
 	}
 }
 
-func TestResumeActorResolvesValueFromEnv(t *testing.T) {
-	ns := namespaceForTest("ns-resume-secret-env")
+func TestResumeActorPassesLiteralEnv(t *testing.T) {
+	ns := namespaceForTest("ns-resume-literal-env")
 	tc := setupTest(t, ns)
 	defer tc.cleanup()
-
-	_, err := tc.k8sClient.CoreV1().Secrets(ns).Create(context.Background(), &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "api-keys",
-			Namespace: ns,
-		},
-		Data: map[string][]byte{
-			"anthropic": []byte("sk-test"),
-		},
-	}, metav1.CreateOptions{})
-	if err != nil {
-		t.Fatalf("failed to create secret: %v", err)
-	}
 
 	createTemplateWithContainers(t, tc, ns, []atev1alpha1.Container{
 		{
@@ -1800,23 +1787,14 @@ func TestResumeActorResolvesValueFromEnv(t *testing.T) {
 			Env: []atev1alpha1.EnvVar{
 				{
 					Name:  "LITERAL",
-					Value: ptr.To("plain"),
-				},
-				{
-					Name: "ANTHROPIC_API_KEY",
-					ValueFrom: &atev1alpha1.EnvVarSource{
-						SecretKeyRef: &atev1alpha1.SecretKeySelector{
-							Name: "api-keys",
-							Key:  "anthropic",
-						},
-					},
+					Value: "plain",
 				},
 			},
 		},
 	})
 	createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
 
-	_, err = tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+	_, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
 		Metadata:               &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "id1"},
 		ActorTemplateNamespace: ns,
 		ActorTemplateName:      "tmpl1",
@@ -1843,11 +1821,10 @@ func TestResumeActorResolvesValueFromEnv(t *testing.T) {
 		gotEnv[env.GetName()] = env.GetValue()
 	}
 	wantEnv := map[string]string{
-		"LITERAL":           "plain",
-		"ANTHROPIC_API_KEY": "sk-test",
+		"LITERAL": "plain",
 	}
 	if diff := cmp.Diff(wantEnv, gotEnv); diff != "" {
-		t.Errorf("resolved env mismatch (-want +got):\n%s", diff)
+		t.Errorf("env mismatch (-want +got):\n%s", diff)
 	}
 }
 

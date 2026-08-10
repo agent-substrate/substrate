@@ -24,7 +24,6 @@ import (
 	"github.com/agent-substrate/substrate/internal/volume/csi"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	"k8s.io/client-go/kubernetes"
 	storagev1listers "k8s.io/client-go/listers/storage/v1"
 )
 
@@ -61,7 +60,6 @@ func NewService(
 	csiDriverConfigLister listersv1alpha1.CSIDriverConfigLister,
 	storageClassLister storagev1listers.StorageClassLister,
 	dialer *AteletDialer,
-	kubeClient kubernetes.Interface,
 	instruments *Instruments,
 	egressGatewayAddress string,
 	volumePlugins map[string]volume.VolumePluginControlPlane,
@@ -77,7 +75,7 @@ func NewService(
 		instruments:           instruments,
 		volumePlugins:         volumePlugins,
 	}
-	s.actorWorkflow = NewActorWorkflow(persistence, workerCache, dialer, actorTemplateLister, workerPoolLister, sandboxConfigLister, storageClassLister, kubeClient, instruments, egressGatewayAddress, s)
+	s.actorWorkflow = NewActorWorkflow(persistence, workerCache, dialer, actorTemplateLister, workerPoolLister, sandboxConfigLister, storageClassLister, instruments, egressGatewayAddress, s)
 	return s
 }
 
