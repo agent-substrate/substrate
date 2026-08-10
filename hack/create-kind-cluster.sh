@@ -21,11 +21,24 @@ KIND_CLUSTER_NAME="${KIND_CLUSTER_NAME:-kind}"
 reg_name="kind-registry"
 reg_port="5001"
 
+if [ "$#" -gt 0 ]; then
+  case "$1" in
+    -h|--help)
+      echo "Usage: $0"
+      echo "Creates the kind cluster '${KIND_CLUSTER_NAME}' and a local registry container on port ${reg_port}."
+      echo
+      echo "Configured through the environment:"
+      echo "  KIND_CLUSTER_NAME  Name of the cluster to create (default: kind)."
+      exit 0
+      ;;
+  esac
+fi
+
 mkdir -p "${ROOT}/bin"
 
 # 1. Create registry container unless it already exists
 echo "Setting up local docker registry '${reg_name}' on port ${reg_port}..."
-if [ "$(docker inspect -f '{{.State.Running}}' "${reg_name}" 2>/dev/null || true)" == "true" ]; then
+if [ "$(docker inspect -f '{{.State.Running}}' "${reg_name}" 2>/dev/null || true)" = "true" ]; then
   if ! docker port "${reg_name}" | grep -q "${reg_port}"; then
     echo "Registry exists but is not mapped to port ${reg_port}. Recreating..."
     docker rm -f "${reg_name}"
