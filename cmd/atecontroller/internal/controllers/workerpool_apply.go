@@ -18,12 +18,14 @@ import (
 	"os"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	appsv1ac "k8s.io/client-go/applyconfigurations/apps/v1"
 	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
 	metav1ac "k8s.io/client-go/applyconfigurations/meta/v1"
 
 	"github.com/agent-substrate/substrate/internal/ateompath"
+	"github.com/agent-substrate/substrate/internal/deviceplugin"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 )
 
@@ -303,28 +305,33 @@ func maybeApplyMicroVMPodShape(
 		return
 	}
 
-	// The micro-VM runtime needs /dev/kvm. The container is already privileged
-	// (so it can also reach vhost devices), but we mount /dev/kvm explicitly.
-	containerAC.WithVolumeMounts(corev1ac.VolumeMount().
-		WithName("dev-kvm").
-		WithMountPath("/dev/kvm"))
-	podSpecAC.WithVolumes(corev1ac.Volume().
-		WithName("dev-kvm").
-		WithHostPath(corev1ac.HostPathVolumeSource().
-			WithPath("/dev/kvm").
-			WithType(corev1.HostPathCharDev)))
+	// The micro-VM runtime needs /dev/kvm (to create the VM) and /dev/net/tun
+	// (to build the guest's tap). Request them as extended resources served by
+	// atelet's device plugin rather than hostPath-mounting them: a container's
+	// device access is gated by the cgroup device controller, which denies the
+	// node by default, and kubelet's device manager is what adds the matching
+	// allow rule. A hostPath mount alone yields EPERM unless the pod is
+	// privileged, which would hand over every other device on the node too.
+	//
+	// atelet advertises these only on nodes where the device exists, so the
+	// request also keeps the pod off nodes that cannot run a micro-VM.
+	addDeviceResourceLimits(containerAC, deviceplugin.ResourceKVM, deviceplugin.ResourceTUN)
 
-	// Pin placement to KVM-capable, nested-virt nodes via nodeSelector +
-	// toleration on ate.dev/sandboxClass=microvm. This is our own convention
-	// (GKE attaches no label/taint to nested-virt pools): applied to kind nodes
-	// by hack/create-kind-cluster.sh and via --node-labels at GKE pool creation.
-	// Additive on top of the WorkerPool's configurable scheduling fields
-	// (spec.template nodeSelector/tolerations/affinity, added in #247) — merge,
-	// don't overwrite.
-	if podSpecAC.NodeSelector == nil {
-		podSpecAC.NodeSelector = map[string]string{}
-	}
-	podSpecAC.NodeSelector["ate.dev/sandboxClass"] = string(atev1alpha1.SandboxClassMicroVM)
+	// Placement onto KVM-capable nodes comes from the device request above: the
+	// scheduler only picks nodes advertising the resource, and atelet advertises
+	// it only where the device exists. That is derived from the node itself,
+	// unlike an ate.dev/sandboxClass label, which is a hand-applied convention
+	// that can be wrong in both directions (a labelled node without KVM takes
+	// pods that then fail at runtime; an unlabelled KVM node is invisible
+	// capacity). Note this makes the pool depend on atelet having registered:
+	// with no node advertising the resource, workers stay Pending rather than
+	// landing somewhere they cannot run.
+	//
+	// The toleration stays: extended resources constrain where this pod fits but
+	// repel nothing, so a cluster reserving nested-virt nodes with a taint still
+	// needs it. Additive on top of the WorkerPool's configurable scheduling
+	// fields (spec.template nodeSelector/tolerations/affinity, added in #247) —
+	// merge, don't overwrite.
 	podSpecAC.WithTolerations(corev1ac.Toleration().
 		WithKey("ate.dev/sandboxClass").
 		WithOperator(corev1.TolerationOpEqual).
@@ -416,6 +423,22 @@ func templateRequestsGPU(tmpl *atev1alpha1.WorkerPoolPodTemplate) bool {
 		return true
 	}
 	return false
+}
+
+// addDeviceResourceLimits requests one unit of each named extended resource,
+// merging into whatever limits the pod template already set.
+func addDeviceResourceLimits(containerAC *corev1ac.ContainerApplyConfiguration, resourceNames ...string) {
+	if containerAC.Resources == nil {
+		containerAC.WithResources(corev1ac.ResourceRequirements())
+	}
+	limits := corev1.ResourceList{}
+	if containerAC.Resources.Limits != nil {
+		limits = *containerAC.Resources.Limits
+	}
+	for _, name := range resourceNames {
+		limits[corev1.ResourceName(name)] = resource.MustParse("1")
+	}
+	containerAC.Resources.WithLimits(limits)
 }
 
 func applyWorkerPoolPodTemplate(

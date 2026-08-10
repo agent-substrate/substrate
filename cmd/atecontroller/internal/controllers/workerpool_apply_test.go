@@ -15,6 +15,7 @@
 package controllers
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/google/go-cmp/cmp"
@@ -27,6 +28,7 @@ import (
 	metav1ac "k8s.io/client-go/applyconfigurations/meta/v1"
 
 	"github.com/agent-substrate/substrate/internal/ateompath"
+	"github.com/agent-substrate/substrate/internal/deviceplugin"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 )
 
@@ -246,9 +248,10 @@ func TestBuildDeploymentApplyConfigMetadata(t *testing.T) {
 	}
 }
 
-// TestMicroVMPodShape asserts the micro-VM sandbox class adds the /dev/kvm
-// device (volume + container mount) and node placement (nodeSelector +
-// toleration on ate.dev/sandboxClass); other classes get none of it.
+// TestMicroVMPodShape asserts the micro-VM sandbox class requests the host
+// devices as extended resources (served by atelet's device plugin) and
+// tolerates the ate.dev/sandboxClass taint; other classes get none of it.
+// Placement comes from the device request, so no nodeSelector is added.
 func TestMicroVMPodShape(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -265,36 +268,74 @@ func TestMicroVMPodShape(t *testing.T) {
 			wp.Spec.SandboxClass = tt.class
 			ps := buildDeploymentApplyConfig(wp, ateomOTelSettings{}).Spec.Template.Spec
 
-			hasVol := false
+			// The devices must come from the device plugin, never a hostPath:
+			// a hostPath mount does not carry the cgroup device allow rule.
 			for _, v := range ps.Volumes {
-				if v.Name != nil && *v.Name == "dev-kvm" {
-					hasVol = true
-					if v.HostPath == nil || v.HostPath.Path == nil || *v.HostPath.Path != "/dev/kvm" ||
-						v.HostPath.Type == nil || *v.HostPath.Type != corev1.HostPathCharDev {
-						t.Errorf("dev-kvm volume = %+v, want /dev/kvm CharDevice", v.HostPath)
-					}
+				if v.HostPath != nil && v.HostPath.Path != nil && strings.HasPrefix(*v.HostPath.Path, "/dev/") {
+					t.Errorf("device %q must be requested as a resource, not hostPath-mounted", *v.HostPath.Path)
 				}
 			}
-			hasMount := false
-			for _, c := range ps.Containers {
-				for _, m := range c.VolumeMounts {
-					if m.MountPath != nil && *m.MountPath == "/dev/kvm" {
-						hasMount = true
-					}
+
+			hasDeviceRequest := true
+			for _, name := range []string{deviceplugin.ResourceKVM, deviceplugin.ResourceTUN} {
+				qty, ok := deviceLimit(ps.Containers[0], name)
+				if !ok {
+					hasDeviceRequest = false
+					continue
+				}
+				if qty != "1" {
+					t.Errorf("%s limit = %s, want 1", name, qty)
 				}
 			}
-			_, hasSelector := ps.NodeSelector["ate.dev/sandboxClass"]
+
+			// The device request handles placement, so the class must not also
+			// pin a nodeSelector (which would re-introduce the hand-applied
+			// label as a scheduling requirement).
+			if _, hasSelector := ps.NodeSelector["ate.dev/sandboxClass"]; hasSelector {
+				t.Errorf("nodeSelector on ate.dev/sandboxClass should be gone; placement comes from the device request")
+			}
 			hasTol := false
 			for _, tol := range ps.Tolerations {
 				if tol.Key != nil && *tol.Key == "ate.dev/sandboxClass" {
 					hasTol = true
 				}
 			}
-			if hasVol != tt.wantMicroVM || hasMount != tt.wantMicroVM || hasSelector != tt.wantMicroVM || hasTol != tt.wantMicroVM {
-				t.Errorf("microvm shape: vol=%v mount=%v selector=%v toleration=%v, want all %v",
-					hasVol, hasMount, hasSelector, hasTol, tt.wantMicroVM)
+			if hasDeviceRequest != tt.wantMicroVM || hasTol != tt.wantMicroVM {
+				t.Errorf("microvm shape: deviceRequest=%v toleration=%v, want both %v",
+					hasDeviceRequest, hasTol, tt.wantMicroVM)
 			}
 		})
+	}
+}
+
+// deviceLimit returns the container's limit for an extended resource.
+func deviceLimit(c corev1ac.ContainerApplyConfiguration, name string) (string, bool) {
+	if c.Resources == nil || c.Resources.Limits == nil {
+		return "", false
+	}
+	qty, ok := (*c.Resources.Limits)[corev1.ResourceName(name)]
+	if !ok {
+		return "", false
+	}
+	return qty.String(), true
+}
+
+// A pod template's own resource limits must survive the device requests being
+// merged in.
+func TestMicroVMDeviceRequestsPreserveTemplateResources(t *testing.T) {
+	wp := testWorkerPoolApplyConfig(&atev1alpha1.WorkerPoolPodTemplate{
+		Resources: &corev1.ResourceRequirements{
+			Limits: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("2Gi")},
+		},
+	})
+	wp.Spec.SandboxClass = atev1alpha1.SandboxClassMicroVM
+	c := buildDeploymentApplyConfig(wp, ateomOTelSettings{}).Spec.Template.Spec.Containers[0]
+
+	if got, ok := deviceLimit(c, string(corev1.ResourceMemory)); !ok || got != "2Gi" {
+		t.Errorf("memory limit = %q (present=%v), want 2Gi", got, ok)
+	}
+	if got, ok := deviceLimit(c, deviceplugin.ResourceKVM); !ok || got != "1" {
+		t.Errorf("%s limit = %q (present=%v), want 1", deviceplugin.ResourceKVM, got, ok)
 	}
 }
 

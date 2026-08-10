@@ -184,6 +184,8 @@ func main() {
 		}()
 	}
 
+	startDevicePlugins(ctx)
+
 	ateomDialer := newAteomDialer(256)
 
 	var gcpRegistryAuthn authn.Authenticator
