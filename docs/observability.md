@@ -235,6 +235,8 @@ The socket sits in the `BasePath` hostPath already mounted into both, so nothing
 
 The relay is best-effort. If the socket is absent when ateom starts — `atelet` not up yet, `--otlp-relay-socket=""`, or no collector configured for the relay to forward to — ateom logs it and exports directly to `OTEL_EXPORTER_OTLP_ENDPOINT` as before. That fallback is decided once at startup, not per export.
 
+It forwards each request verbatim rather than decoding and re-exporting, which is what keeps every ateom its own service in Jaeger instead of being absorbed into `atelet`'s. That is safe only because ateom's resource is already right, so the relay carries ateom telemetry only and refuses anything else with `PermissionDenied`, a resource declaring no `service.name` included. Actor telemetry is what that excludes: actors share a hostname (`runsc`) and an interior IP, so their series merge unless identity is injected from outside the actor ([#761](https://github.com/agent-substrate/substrate/issues/761)) — a rewrite, which is the opposite of pass-through.
+
 ---
 
 ## 5. Dashboards

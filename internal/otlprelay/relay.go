@@ -38,12 +38,16 @@
 // The relay forwards the OTLP request message verbatim rather than decoding it
 // into SDK records and re-exporting. Pass-through keeps each ateom's own
 // resource (service.name, service.instance.id, pod attributes) intact, so its
-// spans stay attributed to ateom instead of being absorbed into atelet's.
+// spans stay attributed to ateom instead of being absorbed into atelet's. That
+// holds only for a source whose resource is already right, so the relay carries
+// ateom telemetry only; see ateomServices.
 package otlprelay
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net"
 	"net/url"
@@ -52,10 +56,14 @@ import (
 	"strings"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 
+	semconv "go.opentelemetry.io/otel/semconv/v1.40.0"
 	colmetricspb "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
 	coltracepb "go.opentelemetry.io/proto/otlp/collector/trace/v1"
+	resourcepb "go.opentelemetry.io/proto/otlp/resource/v1"
 )
 
 const (
@@ -66,8 +74,7 @@ const (
 	tracesEndpointEnv  = "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"
 	metricsEndpointEnv = "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT"
 
-	// otlpDefaultPort is the OTLP/gRPC default, used when an endpoint names a
-	// host with no port. Matches atenet's normalizeOtlpCollector.
+	// otlpDefaultPort matches atenet's normalizeOtlpCollector.
 	otlpDefaultPort = "4317"
 
 	// socketMode keeps the relay socket reachable by the ateom pods on the node
@@ -89,6 +96,42 @@ type Server struct {
 	sockPath string
 }
 
+// ateomServices are the only sources this relay carries, keyed by the
+// service.name their resource declares. Mirrors the serviceName constants in
+// cmd/ateom-gvisor and cmd/ateom-microvm, which are package main and cannot be
+// imported; TestAteomServicesMatchTheAteomBinaries guards the duplication.
+//
+// Actor telemetry is what the allowlist excludes: actors share a hostname
+// ("runsc") and an interior IP, so their series merge unless identity is
+// injected from outside the actor (#761) -- a rewrite, not a forward. Nothing
+// but ateom reaches this socket today; naming the contract now makes that path
+// an added branch later rather than a re-argument about pass-through.
+var ateomServices = map[string]bool{
+	"ateom-gvisor":  true,
+	"ateom-microvm": true,
+}
+
+// checkAteomSource rejects a missing service.name along with an unrecognized
+// one: an unidentified source is the one the relay cannot vouch for.
+func checkAteomSource(r *resourcepb.Resource) error {
+	name := resourceServiceName(r)
+	if ateomServices[name] {
+		return nil
+	}
+	return status.Errorf(codes.PermissionDenied,
+		"the OTLP relay carries ateom telemetry only, got service.name %q; a source whose identity has to be rewritten (#761) must not be forwarded verbatim",
+		name)
+}
+
+func resourceServiceName(r *resourcepb.Resource) string {
+	for _, attr := range r.GetAttributes() {
+		if attr.GetKey() == string(semconv.ServiceNameKey) {
+			return attr.GetValue().GetStringValue()
+		}
+	}
+	return ""
+}
+
 // The two OTLP services both declare a method named Export, with different
 // request types, so one type cannot implement both: the embedded Unimplemented
 // structs would give Server an ambiguous promoted Export and satisfy neither
@@ -103,7 +146,15 @@ type traceRelay struct {
 //
 // Deliberately not wrapped in a span of atelet's own: the relay must not inject
 // itself into the trace it is carrying.
+//
+// A batch is refused whole rather than having the offending resource dropped: a
+// partial success the sender reads as success loses telemetry silently.
 func (t *traceRelay) Export(ctx context.Context, req *coltracepb.ExportTraceServiceRequest) (*coltracepb.ExportTraceServiceResponse, error) {
+	for _, rs := range req.GetResourceSpans() {
+		if err := checkAteomSource(rs.GetResource()); err != nil {
+			return nil, err
+		}
+	}
 	return t.upstream.Export(ctx, req)
 }
 
@@ -114,7 +165,23 @@ type metricRelay struct {
 
 // Export forwards a batch of metric datapoints to the collector unchanged.
 func (m *metricRelay) Export(ctx context.Context, req *colmetricspb.ExportMetricsServiceRequest) (*colmetricspb.ExportMetricsServiceResponse, error) {
+	for _, rm := range req.GetResourceMetrics() {
+		if err := checkAteomSource(rm.GetResource()); err != nil {
+			return nil, err
+		}
+	}
 	return m.upstream.Export(ctx, req)
+}
+
+// validateSocketPath rejects a relative path, which gRPC does not resolve:
+// "unix://foo/r.sock" parses as authority "foo", path "/r.sock". grpc.NewClient
+// being lazy, that wrong target is accepted at startup and fails per export
+// afterwards, which is why this errors rather than falling back.
+func validateSocketPath(sockPath string) error {
+	if !filepath.IsAbs(sockPath) {
+		return fmt.Errorf("the OTLP relay socket path %q is relative; it must be absolute, since atelet and ateom would otherwise resolve it against different working directories", sockPath)
+	}
+	return nil
 }
 
 // NewServer builds a relay that forwards to the collector named by the standard
@@ -125,6 +192,9 @@ func (m *metricRelay) Export(ctx context.Context, req *colmetricspb.ExportMetric
 func NewServer(ctx context.Context, sockPath string) (*Server, error) {
 	if sockPath == "" {
 		return nil, nil
+	}
+	if err := validateSocketPath(sockPath); err != nil {
+		return nil, err
 	}
 	target, err := upstreamTarget()
 	if err != nil {
@@ -164,7 +234,7 @@ func (s *Server) Serve(ctx context.Context) error {
 	}
 	// A socket left behind by a previous atelet would make Listen fail with
 	// EADDRINUSE even though nothing holds it.
-	if err := os.RemoveAll(s.sockPath); err != nil {
+	if err := os.Remove(s.sockPath); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return fmt.Errorf("while removing a stale OTLP relay socket %q: %w", s.sockPath, err)
 	}
 	lis, err := net.Listen("unix", s.sockPath)
@@ -183,7 +253,7 @@ func (s *Server) Serve(ctx context.Context) error {
 	return s.grpc.Serve(lis)
 }
 
-// Stop drains the relay and closes the upstream connection.
+// Stop drains the relay, closes the upstream connection and removes the socket.
 func (s *Server) Stop() {
 	s.grpc.GracefulStop()
 	_ = s.upstream.Close()

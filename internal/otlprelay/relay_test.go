@@ -21,6 +21,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -28,6 +29,8 @@ import (
 
 	"github.com/google/go-cmp/cmp"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/testing/protocmp"
 
 	colmetricspb "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
@@ -134,6 +137,20 @@ func waitForSocket(t *testing.T, sock string, serveErr <-chan error) {
 	t.Fatalf("relay socket %q never became connectable", sock)
 }
 
+// serviceResource builds the one resource attribute the relay's scoping looks
+// at. Passing "" yields a resource that declares no service.name at all.
+func serviceResource(name string) *resourcepb.Resource {
+	if name == "" {
+		return &resourcepb.Resource{}
+	}
+	return &resourcepb.Resource{
+		Attributes: []*commonpb.KeyValue{{
+			Key:   "service.name",
+			Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: name}},
+		}},
+	}
+}
+
 // TestRelayForwardsTracesVerbatim is the property the whole design rests on:
 // what an ateom exports is what the collector sees, including the resource
 // attributes that attribute the spans to that ateom rather than to atelet.
@@ -152,12 +169,7 @@ func TestRelayForwardsTracesVerbatim(t *testing.T) {
 
 	req := &coltracepb.ExportTraceServiceRequest{
 		ResourceSpans: []*tracepb.ResourceSpans{{
-			Resource: &resourcepb.Resource{
-				Attributes: []*commonpb.KeyValue{{
-					Key:   "service.name",
-					Value: &commonpb.AnyValue{Value: &commonpb.AnyValue_StringValue{StringValue: "ateom-microvm"}},
-				}},
-			},
+			Resource: serviceResource("ateom-microvm"),
 			ScopeSpans: []*tracepb.ScopeSpans{{
 				Spans: []*tracepb.Span{{
 					Name:    "RunWorkload",
@@ -199,6 +211,7 @@ func TestRelayForwardsMetrics(t *testing.T) {
 
 	req := &colmetricspb.ExportMetricsServiceRequest{
 		ResourceMetrics: []*metricspb.ResourceMetrics{{
+			Resource: serviceResource("ateom-microvm"),
 			ScopeMetrics: []*metricspb.ScopeMetrics{{
 				Metrics: []*metricspb.Metric{{Name: "ateom.workload.runs"}},
 			}},
@@ -310,6 +323,196 @@ func TestDialEmptyPath(t *testing.T) {
 	if conn != nil {
 		conn.Close()
 		t.Error("Dial(\"\") returned a connection, want nil")
+	}
+}
+
+// TestRelayRefusesNonAteomSource is the scoping contract. The empty
+// service.name case is the one worth keeping: that is the shape telemetry takes
+// when identity has not been injected, which is the actor situation in #761.
+func TestRelayRefusesNonAteomSource(t *testing.T) {
+	sink, collector := startFakeCollector(t)
+	sock := startRelay(t, collector)
+
+	conn, err := Dial(context.Background(), sock)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer conn.Close()
+
+	for _, tc := range []struct {
+		name    string
+		service string
+	}{
+		{name: "another substrate component", service: "atelet"},
+		{name: "actor telemetry", service: "actor"},
+		{name: "no service name at all", service: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := coltracepb.NewTraceServiceClient(conn).Export(context.Background(), &coltracepb.ExportTraceServiceRequest{
+				ResourceSpans: []*tracepb.ResourceSpans{{Resource: serviceResource(tc.service)}},
+			})
+			if got := status.Code(err); got != codes.PermissionDenied {
+				t.Errorf("trace Export from service.name %q = code %v (%v), want %v", tc.service, got, err, codes.PermissionDenied)
+			}
+
+			_, err = colmetricspb.NewMetricsServiceClient(conn).Export(context.Background(), &colmetricspb.ExportMetricsServiceRequest{
+				ResourceMetrics: []*metricspb.ResourceMetrics{{Resource: serviceResource(tc.service)}},
+			})
+			if got := status.Code(err); got != codes.PermissionDenied {
+				t.Errorf("metric Export from service.name %q = code %v (%v), want %v", tc.service, got, err, codes.PermissionDenied)
+			}
+		})
+	}
+
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if len(sink.traces) != 0 || len(sink.metrics) != 0 {
+		t.Errorf("collector received %d traces and %d metrics from refused sources, want none to be forwarded", len(sink.traces), len(sink.metrics))
+	}
+}
+
+// TestRelayRefusesMixedBatch pins the all-or-nothing choice: dropping just the
+// foreign resource would return success to a sender that lost telemetry.
+func TestRelayRefusesMixedBatch(t *testing.T) {
+	sink, collector := startFakeCollector(t)
+	sock := startRelay(t, collector)
+
+	conn, err := Dial(context.Background(), sock)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer conn.Close()
+
+	_, err = coltracepb.NewTraceServiceClient(conn).Export(context.Background(), &coltracepb.ExportTraceServiceRequest{
+		ResourceSpans: []*tracepb.ResourceSpans{
+			{Resource: serviceResource("ateom-gvisor")},
+			{Resource: serviceResource("actor")},
+		},
+	})
+	if got := status.Code(err); got != codes.PermissionDenied {
+		t.Errorf("Export of a mixed batch = code %v (%v), want %v", got, err, codes.PermissionDenied)
+	}
+
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if len(sink.traces) != 0 {
+		t.Errorf("collector received %d exports from a mixed batch, want the batch refused whole", len(sink.traces))
+	}
+}
+
+// TestRelayAcceptsEveryAteomService guards against the allowlist drifting from
+// the binaries in a way that silently drops all of one runtime's telemetry.
+func TestRelayAcceptsEveryAteomService(t *testing.T) {
+	sink, collector := startFakeCollector(t)
+	sock := startRelay(t, collector)
+
+	conn, err := Dial(context.Background(), sock)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer conn.Close()
+
+	for service := range ateomServices {
+		if _, err := coltracepb.NewTraceServiceClient(conn).Export(context.Background(), &coltracepb.ExportTraceServiceRequest{
+			ResourceSpans: []*tracepb.ResourceSpans{{Resource: serviceResource(service)}},
+		}); err != nil {
+			t.Errorf("Export from allowlisted service %q: %v", service, err)
+			continue
+		}
+		select {
+		case <-sink.got:
+		case <-time.After(5 * time.Second):
+			t.Errorf("collector never received the export from %q", service)
+		}
+	}
+}
+
+// TestAteomServicesMatchTheAteomBinaries keeps the allowlist honest. A typo in
+// it would otherwise be invisible: every real ateom export would be refused
+// while every test here still passed, because they would share the typo.
+func TestAteomServicesMatchTheAteomBinaries(t *testing.T) {
+	// Matches `const serviceName = "..."` in each ateom main package.
+	decl := regexp.MustCompile(`(?m)^\s*const\s+serviceName\s*=\s*"([^"]+)"`)
+
+	found := map[string]bool{}
+	for _, main := range []string{"../../cmd/ateom-gvisor/main.go", "../../cmd/ateom-microvm/main.go"} {
+		src, err := os.ReadFile(main)
+		if err != nil {
+			t.Fatalf("reading %s: %v", main, err)
+		}
+		m := decl.FindSubmatch(src)
+		if m == nil {
+			t.Fatalf("no `const serviceName = \"...\"` found in %s; if it moved, this test and ateomServices both need updating", main)
+		}
+		name := string(m[1])
+		found[name] = true
+		if !ateomServices[name] {
+			t.Errorf("%s reports service.name %q, which ateomServices does not allow; the relay would refuse all of its telemetry", main, name)
+		}
+	}
+
+	for name := range ateomServices {
+		if !found[name] {
+			t.Errorf("ateomServices allows %q, but no ateom binary declares it", name)
+		}
+	}
+}
+
+// TestDialRejectsRelativeSocketPath: a relative path was accepted here and then
+// failed lazily at the first export, with the spans already gone.
+func TestDialRejectsRelativeSocketPath(t *testing.T) {
+	conn, err := Dial(context.Background(), "relative/r.sock")
+	if conn != nil {
+		conn.Close()
+	}
+	if err == nil {
+		t.Fatal("Dial with a relative socket path returned no error; it would dial a misparsed target and lose telemetry per export")
+	}
+	if !strings.Contains(err.Error(), "absolute") {
+		t.Errorf("Dial error = %v, want it to say the path must be absolute", err)
+	}
+}
+
+func TestNewServerRejectsRelativeSocketPath(t *testing.T) {
+	t.Setenv(endpointEnv, "collector:4317")
+	relay, err := NewServer(context.Background(), "relative/r.sock")
+	if relay != nil {
+		relay.Stop()
+	}
+	if err == nil {
+		t.Fatal("NewServer with a relative socket path returned no error; it would listen somewhere no ateom can name")
+	}
+	if !strings.Contains(err.Error(), "absolute") {
+		t.Errorf("NewServer error = %v, want it to say the path must be absolute", err)
+	}
+}
+
+// TestServeLeavesAPopulatedDirectoryAlone is the RemoveAll regression: a flag
+// value naming the directory must fail rather than empty it.
+func TestServeLeavesAPopulatedDirectoryAlone(t *testing.T) {
+	_, collector := startFakeCollector(t)
+	t.Setenv(endpointEnv, collector)
+
+	dir := filepath.Join(t.TempDir(), "basepath")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	occupant := filepath.Join(dir, "ateom.sock")
+	if err := os.WriteFile(occupant, nil, 0o600); err != nil {
+		t.Fatalf("planting a neighbouring socket: %v", err)
+	}
+
+	relay, err := NewServer(context.Background(), dir)
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	t.Cleanup(relay.Stop)
+
+	if err := relay.Serve(context.Background()); err == nil {
+		t.Error("Serve on a populated directory returned no error, want it to refuse")
+	}
+	if _, err := os.Stat(occupant); err != nil {
+		t.Errorf("os.Stat(%q) = %v, want the neighbouring socket untouched", occupant, err)
 	}
 }
 

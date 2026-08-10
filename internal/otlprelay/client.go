@@ -43,6 +43,9 @@ func Dial(ctx context.Context, sockPath string) (*grpc.ClientConn, error) {
 	if sockPath == "" {
 		return nil, nil
 	}
+	if err := validateSocketPath(sockPath); err != nil {
+		return nil, err
+	}
 	if _, err := os.Stat(sockPath); err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			slog.WarnContext(ctx, "OTLP relay socket absent, exporting telemetry directly over the pod network",
