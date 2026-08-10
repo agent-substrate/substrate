@@ -359,29 +359,46 @@ func denyRead(t *testing.T, path string) {
 	t.Cleanup(func() { _ = os.Chmod(path, fi.Mode().Perm()) })
 }
 
-// An undecodable record contributes no refcounts, so evicting it would
-// strand its layers as orphans until restart. It must survive the pass
-// (which its presence gates entirely) and be surfaced in the error.
-func TestEvictUnusedLeavesUndecodableRecord(t *testing.T) {
-	store := newTestStore(t)
-	layer := filepath.Join(store.layersDir(), strings.Repeat("cc", 32))
-	if err := os.MkdirAll(filepath.Join(layer, layerFSDirName), 0o700); err != nil {
-		t.Fatal(err)
+// A record whose layer references cannot be established — undecodable
+// JSON, or a garbled diffID inside valid JSON — contributes no refcounts,
+// so a layer referenced only through it would look unreferenced. Either
+// shape must gate the pass, and the record must survive it: evicting the
+// record would strand its unknown layers as orphans until restart.
+func TestEvictUnusedSkipsPassOnBadRecord(t *testing.T) {
+	cases := []struct {
+		name      string
+		badRecord string
+	}{
+		{"undecodable JSON", `{not json`},
+		{"garbled diffID", `{"version":1,"diffIDs":["not-a-hash"]}`},
 	}
-	badPath := store.recordPath(v1.Hash{Algorithm: "sha256", Hex: strings.Repeat("dd", 32)})
-	if err := os.WriteFile(badPath, []byte("{not json"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	backdateStore(t, store, 3*time.Hour)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newTestStore(t)
+			layer := filepath.Join(store.layersDir(), strings.Repeat("cc", 32))
+			if err := os.MkdirAll(filepath.Join(layer, layerFSDirName), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			badPath := store.recordPath(v1.Hash{Algorithm: "sha256", Hex: strings.Repeat("dd", 32)})
+			if err := os.WriteFile(badPath, []byte(tc.badRecord), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			backdateStore(t, store, 3*time.Hour)
 
-	if _, err := store.EvictUnused(context.Background(), math.MaxInt64, false); err == nil {
-		t.Fatal("EvictUnused returned no error on an undecodable record")
-	}
-	if _, err := os.Stat(badPath); err != nil {
-		t.Errorf("undecodable record was evicted (its unknown layers would be stranded): %v", err)
-	}
-	if _, err := os.Stat(layer); err != nil {
-		t.Errorf("layer removed during a gated pass: %v", err)
+			stats, err := store.EvictUnused(context.Background(), math.MaxInt64, false)
+			if err == nil {
+				t.Fatal("EvictUnused returned no error on a bad record")
+			}
+			if stats.EvictedImages != 0 || stats.EvictedLayers != 0 {
+				t.Errorf("gated pass still evicted: %+v", stats)
+			}
+			if _, err := os.Stat(badPath); err != nil {
+				t.Errorf("bad record was evicted (its unknown layers would be stranded): %v", err)
+			}
+			if _, err := os.Stat(layer); err != nil {
+				t.Errorf("layer removed during a gated pass: %v", err)
+			}
+		})
 	}
 }
 
