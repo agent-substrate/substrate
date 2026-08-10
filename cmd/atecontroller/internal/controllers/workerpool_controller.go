@@ -175,9 +175,6 @@ func (r *WorkerPoolReconciler) InitMetrics(meter metric.Meter) error {
 
 	_, err = meter.RegisterCallback(
 		func(ctx context.Context, obs metric.Observer) error {
-			if r.Client == nil {
-				return nil
-			}
 			var list atev1alpha1.WorkerPoolList
 			if err := r.List(ctx, &list); err != nil {
 				return nil

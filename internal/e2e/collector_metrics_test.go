@@ -28,6 +28,10 @@ ate_actor_lifecycle_operation_duration_seconds_bucket{ate_actor_operation_name="
 ate_actor_lifecycle_operation_duration_seconds_count{ate_actor_operation_name="resume"} 2
 # TYPE ate_workerpool_workers gauge
 ate_workerpool_workers{ate_workerpool_name="pool-a",ate_worker_state="idle"} 3
+# TYPE ate_workerpool_desired_workers gauge
+ate_workerpool_desired_workers{ate_workerpool_name="pool-a",ate_workerpool_namespace="default"} 5
+# TYPE ate_workerpool_ready_workers gauge
+ate_workerpool_ready_workers{ate_workerpool_name="pool-a",ate_workerpool_namespace="default"} 5
 # TYPE atenet_router_route_duration_seconds histogram
 atenet_router_route_duration_seconds_count 1
 # TYPE atelet_snapshot_size_bytes histogram
@@ -49,6 +53,8 @@ func TestMissingPlatformMetrics(t *testing.T) {
 			prefixes: []string{
 				"ate_actor_lifecycle_operation_duration",
 				"ate_workerpool_workers",
+				"ate_workerpool_desired_workers",
+				"ate_workerpool_ready_workers",
 				"atenet_router_route_duration",
 				"atelet_snapshot_size",
 			},
