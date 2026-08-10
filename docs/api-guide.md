@@ -264,6 +264,7 @@ Each entry in `containers` describes one process to run in the actor's sandbox.
 | `readyz` | `ContainerReadyz` | Optional. HTTP readiness probe — see [Container Readiness Probe](#container-readiness-probe-readyz). |
 | `volumeMounts` | `[]VolumeMount` | Optional. Mounts a `spec.volumes` entry (e.g. `durableDir`) into this container. |
 | `securityContext` | `SecurityContext` | Optional. Security settings for the container process — see [Container Capabilities](#container-capabilities-securitycontextcapabilities). |
+| `resources` | `ContainerResources` | Optional. Compute limits for this container, enforced inside the actor's sandbox. Only `limits` is supported, and only `cpu` and `memory`. See [Per-container limits](#per-container-limits). |
 
 `command` and `args` resolve against the container image's `ENTRYPOINT`/`CMD` the same way [Kubernetes Pod `command`/`args`](https://kubernetes.io/docs/tasks/inject-data-application/define-command-argument-container/) resolve against `ENTRYPOINT`/`CMD`. If the resolved argv is empty — the image sets neither `ENTRYPOINT` nor `CMD`, and the container sets neither `command` nor `args` — `Run`/`Restore` fails.
 
@@ -291,6 +292,30 @@ Each container runs with a default set of Linux capabilities — `AUDIT_WRITE`, 
 - **Ambient capabilities are not supported** ([gvisor#3166](https://github.com/google/gvisor/issues/3166)).
 
 The sandbox — gVisor or micro-VM — remains the isolation boundary; capabilities constrain the workload *inside* it.
+
+### Per-container limits
+
+A container may cap its own CPU and memory so it cannot starve or kill its siblings in the same actor:
+
+```yaml
+containers:
+  - name: trainer
+    resources:
+      limits: {memory: 1500Mi}
+  - name: sidecar
+    resources:
+      limits: {memory: 256Mi, cpu: "0.2"}
+```
+
+A container that exceeds its memory limit is OOM-killed on its own; the actor's other containers are unaffected.
+
+Only `cpu` and `memory` are accepted, each must be greater than zero, and a `cpu` limit below `10m` is raised to `10m` because the kernel rejects a CFS quota under 1ms.
+
+**Micro-VM only.** gVisor applies cgroup limits at the sandbox level: one sentry backs every container in the actor, so a per-container cgroup is created and then stays empty ([google/gvisor#190](https://github.com/google/gvisor/issues/190)). A template that sets `resources` with `sandboxClass: gvisor` is rejected.
+
+**Limits only.** There is no `requests`. Scheduling happens at the pool level, so per-container limits subdivide a budget that is already held, and there is no scheduler inside the actor to hint at. For memory it is also a correctness question: a restore needs at least the footprint that was captured.
+
+**Bounded by the guest.** A micro-VM actor runs inside a guest VM whose size comes from the pool's [`SandboxConfig`](#3-sandboxconfig-sandbox-binaries), not from the actor. A limit above the guest, or limits summing above it across the actor's containers, can never bind, so the actor fails to start with an error naming both the limit and the guest size.
 
 ### Container Readiness Probe (`readyz`)
 
