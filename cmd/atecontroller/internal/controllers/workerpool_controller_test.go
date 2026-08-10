@@ -652,3 +652,53 @@ func eventually(t *testing.T, condition func(ctx context.Context) (bool, error))
 		t.Fatalf("condition not met within timeout: %v", err)
 	}
 }
+
+// TestSyncStatus_ReadyReplicas verifies that syncStatus correctly copies
+// dep.Status.ReadyReplicas and dep.Status.Replicas into WorkerPool.status.
+func TestSyncStatus_ReadyReplicas(t *testing.T) {
+	r := &WorkerPoolReconciler{
+		Client: k8sClient,
+	}
+	wp := makeWorkerPool("test-sync-ready", "default", 3, "ateom:v1")
+	if err := k8sClient.Create(t.Context(), wp); err != nil {
+		t.Fatalf("create WorkerPool: %v", err)
+	}
+	deleteOnCleanup(t, wp)
+
+	dep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: wp.Name, Namespace: wp.Namespace},
+		Spec: appsv1.DeploymentSpec{
+			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"ate.dev/worker-pool": wp.Name}},
+		},
+		Status: appsv1.DeploymentStatus{
+			Replicas:      3,
+			ReadyReplicas: 2,
+		},
+	}
+
+	if err := r.syncStatus(t.Context(), wp, dep); err != nil {
+		t.Fatalf("syncStatus failed: %v", err)
+	}
+
+	current := &atev1alpha1.WorkerPool{}
+	if err := k8sClient.Get(t.Context(), types.NamespacedName{Name: wp.Name, Namespace: wp.Namespace}, current); err != nil {
+		t.Fatalf("get WorkerPool failed: %v", err)
+	}
+	if current.Status.ReadyReplicas != 2 {
+		t.Errorf("got ReadyReplicas=%d, want 2", current.Status.ReadyReplicas)
+	}
+	if current.Status.Replicas != 3 {
+		t.Errorf("got Replicas=%d, want 3", current.Status.Replicas)
+	}
+}
+
+// TestWorkerPoolMetricsInitialization verifies that InitMetrics registers
+// the desired_workers and ready_workers instruments without error.
+func TestWorkerPoolMetricsInitialization(t *testing.T) {
+	r := &WorkerPoolReconciler{
+		Client: k8sClient,
+	}
+	if err := r.InitMetrics(nil); err != nil {
+		t.Fatalf("InitMetrics failed: %v", err)
+	}
+}

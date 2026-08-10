@@ -96,6 +96,11 @@ type WorkerPoolStatus struct {
 	// +optional
 	Replicas int32 `json:"replicas"`
 
+	// ReadyReplicas is the number of ready worker pods.
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	ReadyReplicas int32 `json:"readyReplicas,omitempty"`
+
 	// Selector is the label selector for the worker pods.
 	// +optional
 	Selector string `json:"selector,omitempty"`
@@ -110,6 +115,7 @@ type WorkerPoolStatus struct {
 // +kubebuilder:subresource:scale:specpath=.spec.replicas,statuspath=.status.replicas,selectorpath=.status.selector
 // +kubebuilder:printcolumn:name="Desired",type=integer,JSONPath=`.spec.replicas`
 // +kubebuilder:printcolumn:name="Replicas",type=integer,JSONPath=`.status.replicas`
+// +kubebuilder:printcolumn:name="Ready",type=integer,JSONPath=`.status.readyReplicas`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 type WorkerPool struct {
 	metav1.TypeMeta `json:",inline"`
