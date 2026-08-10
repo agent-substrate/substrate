@@ -191,9 +191,10 @@ func addSpecRoots(rs *RootSet, spec *OverlaySpec, bundle string, dbg bool) {
 
 // EvictStats reports what an eviction pass did (or, dry-run, would do).
 type EvictStats struct {
-	// FreedBytes sums retired layers' sizes, walked from the renamed-aside
-	// trees (dry-run: read from size files, or walked read-only). An
-	// estimate either way; the caller's next statfs self-corrects.
+	// FreedBytes sums retired layers' recorded sizes, read from the size
+	// files that rode along with the rename (walked read-only only when
+	// absent) — consistent with CacheSize's accounting. An estimate; the
+	// caller's next statfs self-corrects.
 	FreedBytes int64
 	// EvictedImages / EvictedLayers count deleted records and retired layer
 	// dirs.
@@ -404,10 +405,13 @@ func (s *Store) retireCandidateLayers(ctx context.Context, cand evictionCandidat
 				continue
 			}
 			if st == retireRetired {
-				// Credit from the renamed-aside tree: sizing after the
-				// retire means the eviction path never writes a size-file
-				// backfill (or its mtime bump) into the live pool.
-				size = walkLayerSize(retiredPath)
+				// Credit from the retired dir, whose size file rode along
+				// with the rename (O(1); walked only if absent, read-only
+				// either way). Sizing after the retire means the eviction
+				// path never writes a backfill into the live pool.
+				if size, rerr = s.layerSizeReadOnly(retiredPath); rerr != nil {
+					size = 0 // unknown size: still evicted, credit nothing
+				}
 			}
 		}
 		switch st {
@@ -546,7 +550,11 @@ func (s *Store) sweepOrphanLayers(ctx context.Context, roots RootSet, refcount m
 				continue
 			}
 			if st == retireRetired {
-				size = walkLayerSize(retiredPath) // see retireCandidateLayers
+				// See retireCandidateLayers: size file rode along with the
+				// rename; read-only, never a write into the live pool.
+				if size, rerr = s.layerSizeReadOnly(retiredPath); rerr != nil {
+					size = 0
+				}
 			}
 		}
 		if st != retireRetired {
@@ -659,10 +667,10 @@ func (s *Store) listEviction(roots RootSet, cutoff time.Time, stats *EvictStats)
 		// A record is rooted either by digest (a bundle spec naming it) or
 		// because its exact layer set matches a rooted bundle's (see
 		// RootSet.LayerSets — deliberately not "every layer rooted
-		// somewhere"). The latter covers the
-		// multi-arch twin — pull records an image under both the index
-		// and per-platform child digest, but a bundle spec carries only the
-		// requested one — and digestless (pre-ImageDigest) specs. Without it the
+		// somewhere"). The exact-set rule covers the multi-arch twin —
+		// pull records an image under both the index and per-platform
+		// child digest, but a bundle spec carries only the requested
+		// one — and digestless (pre-ImageDigest) specs. Without it the
 		// twin is evicted and rewritten on every pull of a rooted image:
 		// harmless but pure churn, and it inflates the eviction counters.
 		if roots.ImageDigests[digest.String()] || (len(unique) > 0 && roots.LayerSets[layerSetSignature(unique)]) {
