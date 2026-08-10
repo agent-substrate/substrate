@@ -43,6 +43,11 @@ const (
 	ActorVethIP       = "169.254.17.2"
 	ActorNftTableName = "ateom_actor"
 
+	HostVethIPv6CIDR     = "fd00:169:254::1/126"
+	ActorVethIPv6CIDR    = "fd00:169:254::2/126"
+	ActorVethIPv6Gateway = "fd00:169:254::1"
+	ActorVethIPv6IP      = "fd00:169:254::2"
+
 	// ActorVethSubnet is the point-to-point /30 the actor veth lives on.
 	ActorVethSubnet = "169.254.17.0/30"
 )
@@ -51,6 +56,10 @@ var (
 	HostVethAddr  = MustParseAddr(HostVethCIDR)
 	ActorVethAddr = MustParseAddr(ActorVethCIDR)
 	ActorVethGwIP = MustParseIP(ActorVethGateway)
+
+	HostVethIPv6Addr  = mustParseNoDADAddr(HostVethIPv6CIDR)
+	ActorVethIPv6Addr = mustParseNoDADAddr(ActorVethIPv6CIDR)
+	ActorVethIPv6GwIP = MustParseIPv6(ActorVethIPv6Gateway)
 )
 
 // MustParseAddr parses a CIDR string into a netlink.Addr, panicking on error.
@@ -62,11 +71,32 @@ func MustParseAddr(cidr string) *netlink.Addr {
 	return a
 }
 
+// mustParseNoDADAddr parses a CIDR into an address flagged IFA_F_NODAD.
+//
+// Per-address flag rather than the interface-wide accept_dad sysctl because the
+// ateom container is unprivileged, so containerd mounts /proc/sys read-only.
+// DAD is pointless on a point-to-point veth nobody else can reach, and it would
+// otherwise hold the address tentative for ~1s on every resume.
+func mustParseNoDADAddr(cidr string) *netlink.Addr {
+	a := MustParseAddr(cidr)
+	a.Flags = unix.IFA_F_NODAD
+	return a
+}
+
 // MustParseIP parses an IPv4 string into a net.IP, panicking on error.
 func MustParseIP(s string) net.IP {
 	ip := net.ParseIP(s).To4()
 	if ip == nil {
 		panic(fmt.Sprintf("parsing constant IPv4 %q", s))
+	}
+	return ip
+}
+
+// MustParseIPv6 parses an IPv6 string into a net.IP, panicking on error.
+func MustParseIPv6(s string) net.IP {
+	ip := net.ParseIP(s).To16()
+	if ip == nil {
+		panic(fmt.Sprintf("parsing constant IPv6 %q", s))
 	}
 	return ip
 }
@@ -107,6 +137,10 @@ func ConfigureActorVeth(ctx context.Context) error {
 	if err := netlink.AddrReplace(actorLink, ActorVethAddr); err != nil {
 		return fmt.Errorf("while assigning actor veth address: %w", err)
 	}
+	if err := netlink.AddrReplace(actorLink, ActorVethIPv6Addr); err != nil {
+		return fmt.Errorf("while assigning actor veth ipv6 address: %w", err)
+	}
+
 	if err := netlink.LinkSetUp(actorLink); err != nil {
 		return fmt.Errorf("while bringing up actor veth: %w", err)
 	}
@@ -116,6 +150,13 @@ func ConfigureActorVeth(ctx context.Context) error {
 		Gw:        ActorVethGwIP,
 	}); err != nil {
 		return fmt.Errorf("while installing actor default route: %w", err)
+	}
+	if err := netlink.RouteReplace(&netlink.Route{
+		LinkIndex: actorLink.Attrs().Index,
+		Gw:        ActorVethIPv6GwIP,
+		Dst:       &net.IPNet{IP: net.ParseIP("::"), Mask: net.CIDRMask(0, 128)},
+	}); err != nil {
+		return fmt.Errorf("while installing actor default ipv6 route: %w", err)
 	}
 
 	return nil
@@ -259,9 +300,6 @@ func InstallActorNftablesRules(egressPort uint16) error {
 	// rules in an ateom-owned table makes cleanup simple and avoids mutating
 	// Kubernetes or CNI-managed chains directly.
 	//
-	// TODO: Add IPv6 veth addressing, forwarding, and nftables rules once actor
-	// networking supports dual-stack pods. The current actor network is IPv4-only.
-	//
 	// The rules do three things:
 	//
 	//   * prerouting: redirect new actor TCP connections to atunnel's local
@@ -278,7 +316,7 @@ func InstallActorNftablesRules(egressPort uint16) error {
 
 	c := &nftables.Conn{}
 	table := &nftables.Table{
-		Family: nftables.TableFamilyIPv4,
+		Family: nftables.TableFamilyINet,
 		Name:   ActorNftTableName,
 	}
 	c.AddTable(table)
@@ -293,6 +331,9 @@ func InstallActorNftablesRules(egressPort uint16) error {
 	if redirectRule := ActorEgressRedirectRule(table, prerouting, egressPort); redirectRule != nil {
 		c.AddRule(redirectRule)
 	}
+	if redirectRuleIPv6 := ActorIPv6EgressRedirectRule(table, prerouting, egressPort); redirectRuleIPv6 != nil {
+		c.AddRule(redirectRuleIPv6)
+	}
 
 	postrouting := c.AddChain(&nftables.Chain{
 		Name:     "postrouting",
@@ -305,6 +346,11 @@ func InstallActorNftablesRules(egressPort uint16) error {
 		Table: table,
 		Chain: postrouting,
 		Exprs: append(IPSourceEqual(ActorVethIP), &expr.Masq{}),
+	})
+	c.AddRule(&nftables.Rule{
+		Table: table,
+		Chain: postrouting,
+		Exprs: append(IPv6SourceEqual(ActorVethIPv6IP), &expr.Masq{}),
 	})
 
 	acceptPolicy := nftables.ChainPolicyAccept
@@ -336,7 +382,7 @@ func RemoveActorNftablesRules() error {
 	// per-worker and currently per-active-actor because this worker path runs at
 	// most one actor at a time. Missing tables are treated as already clean.
 	c := &nftables.Conn{}
-	tables, err := c.ListTablesOfFamily(nftables.TableFamilyIPv4)
+	tables, err := c.ListTablesOfFamily(nftables.TableFamilyINet)
 	if err != nil {
 		return fmt.Errorf("while listing nftables tables: %w", err)
 	}
@@ -359,6 +405,12 @@ func IPSourceEqual(ip string) []expr.Any {
 
 func IPPayloadEqual(offset uint32, ip string) []expr.Any {
 	return []expr.Any{
+		&expr.Meta{Key: expr.MetaKeyNFPROTO, Register: 1},
+		&expr.Cmp{
+			Op:       expr.CmpOpEq,
+			Register: 1,
+			Data:     []byte{unix.NFPROTO_IPV4},
+		},
 		&expr.Payload{
 			DestRegister: 1,
 			Base:         expr.PayloadBaseNetworkHeader,
@@ -369,6 +421,32 @@ func IPPayloadEqual(offset uint32, ip string) []expr.Any {
 			Op:       expr.CmpOpEq,
 			Register: 1,
 			Data:     net.ParseIP(ip).To4(),
+		},
+	}
+}
+
+func IPv6SourceEqual(ip string) []expr.Any {
+	return IPv6PayloadEqual(8, ip)
+}
+
+func IPv6PayloadEqual(offset uint32, ip string) []expr.Any {
+	return []expr.Any{
+		&expr.Meta{Key: expr.MetaKeyNFPROTO, Register: 1},
+		&expr.Cmp{
+			Op:       expr.CmpOpEq,
+			Register: 1,
+			Data:     []byte{unix.NFPROTO_IPV6},
+		},
+		&expr.Payload{
+			DestRegister: 1,
+			Base:         expr.PayloadBaseNetworkHeader,
+			Offset:       offset,
+			Len:          16,
+		},
+		&expr.Cmp{
+			Op:       expr.CmpOpEq,
+			Register: 1,
+			Data:     MustParseIPv6(ip),
 		},
 	}
 }
@@ -392,6 +470,24 @@ func ActorEgressRedirectRule(table *nftables.Table, chain *nftables.Chain, port 
 		return nil
 	}
 	exprs := append(IPSourceEqual(ActorVethIP), TCPProtocol()...)
+	exprs = append(exprs,
+		&expr.Immediate{
+			Register: 1,
+			Data:     binaryutil.BigEndian.PutUint16(port),
+		},
+		&expr.Redir{RegisterProtoMin: 1},
+	)
+	return &nftables.Rule{Table: table, Chain: chain, Exprs: exprs}
+}
+
+// ActorIPv6EgressRedirectRule is ActorEgressRedirectRule for the actor's IPv6
+// source address. Both rules live in the same inet table, so each carries its
+// own NFPROTO match to keep it off the other family's packets.
+func ActorIPv6EgressRedirectRule(table *nftables.Table, chain *nftables.Chain, port uint16) *nftables.Rule {
+	if port == 0 {
+		return nil
+	}
+	exprs := append(IPv6SourceEqual(ActorVethIPv6IP), TCPProtocol()...)
 	exprs = append(exprs,
 		&expr.Immediate{
 			Register: 1,
@@ -586,6 +682,9 @@ func SetupActorNetwork(ctx context.Context, cfg NetworkConfig) (retErr error) {
 	}
 	if err := netlink.AddrReplace(hostLink, HostVethAddr); err != nil {
 		return fmt.Errorf("while assigning host veth address: %w", err)
+	}
+	if err := netlink.AddrReplace(hostLink, HostVethIPv6Addr); err != nil {
+		return fmt.Errorf("while assigning host veth ipv6 address: %w", err)
 	}
 	if err := netlink.LinkSetUp(hostLink); err != nil {
 		return fmt.Errorf("while bringing up host veth: %w", err)

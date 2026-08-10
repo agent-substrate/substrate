@@ -26,6 +26,7 @@ import (
 	"github.com/google/nftables"
 	"github.com/vishvananda/netlink"
 	"github.com/vishvananda/netns"
+	"golang.org/x/sys/unix"
 )
 
 // withTestNetNS runs fn with the calling thread inside a throwaway netns
@@ -86,6 +87,26 @@ func requireNftables(t *testing.T) {
 	}
 }
 
+// actorNftTableExists reports whether the actor table is present in the family
+// InstallActorNftablesRules creates it in. The family is load-bearing:
+// ListTablesOfFamily puts it in the netlink dump header, so the kernel filters
+// the dump and a query for the wrong family comes back empty rather than
+// erroring.
+func actorNftTableExists(t *testing.T) bool {
+	t.Helper()
+	c := &nftables.Conn{}
+	tables, err := c.ListTablesOfFamily(nftables.TableFamilyINet)
+	if err != nil {
+		t.Fatalf("listing inet nftables tables: %v", err)
+	}
+	for _, table := range tables {
+		if table.Name == ActorNftTableName {
+			return true
+		}
+	}
+	return false
+}
+
 // linkByName returns the link, or nil when it does not exist.
 func linkByName(t *testing.T, name string) netlink.Link {
 	t.Helper()
@@ -113,6 +134,32 @@ func hasAddr(t *testing.T, link netlink.Link, cidr string) bool {
 		}
 	}
 	return false
+}
+
+// assertIPv6AddrNoDAD requires cidr to be present on link and to carry
+// IFA_F_NODAD.
+//
+// The flag is the whole point: the ateom container is unprivileged, so the
+// accept_dad sysctl this replaced could not be written and setup failed outright
+// on a real worker. It passes as root, where /proc/sys is writable either way,
+// so nothing else here would catch a regression back to the sysctl.
+func assertIPv6AddrNoDAD(t *testing.T, link netlink.Link, cidr string) {
+	t.Helper()
+	addrs, err := netlink.AddrList(link, netlink.FAMILY_V6)
+	if err != nil {
+		t.Fatalf("listing IPv6 addresses of %q: %v", link.Attrs().Name, err)
+	}
+	want := MustParseAddr(cidr)
+	for _, addr := range addrs {
+		if addr.IPNet == nil || addr.IPNet.String() != want.IPNet.String() {
+			continue
+		}
+		if addr.Flags&unix.IFA_F_NODAD == 0 {
+			t.Errorf("%s on %q has flags %#x, want IFA_F_NODAD (%#x) set", cidr, link.Attrs().Name, addr.Flags, unix.IFA_F_NODAD)
+		}
+		return
+	}
+	t.Errorf("%q does not carry %s, got %v", link.Attrs().Name, cidr, addrs)
 }
 
 // TestSetupActorNetworkFinalState pins the namespace state gVisor and the
@@ -143,6 +190,7 @@ func TestSetupActorNetworkFinalState(t *testing.T) {
 		if host.Attrs().Flags&1 == 0 { // net.FlagUp
 			t.Errorf("host veth %q is not up", HostVethName)
 		}
+		assertIPv6AddrNoDAD(t, host, HostVethIPv6CIDR)
 
 		// The actor interface must exist ONLY in the interior netns. A peer left
 		// in the pod netns would mean the pair was built the old way, and worse,
@@ -162,6 +210,7 @@ func TestSetupActorNetworkFinalState(t *testing.T) {
 			if actor.Attrs().Flags&1 == 0 {
 				t.Errorf("actor veth %q is not up", ActorVethName)
 			}
+			assertIPv6AddrNoDAD(t, actor, ActorVethIPv6CIDR)
 
 			if lo := linkByName(t, "lo"); lo == nil {
 				t.Error("interior netns has no loopback")
@@ -215,8 +264,19 @@ func TestSetupActorNetworkIsRepeatable(t *testing.T) {
 			if linkByName(t, HostVethName) == nil {
 				t.Fatalf("host veth %q missing after activation %d", HostVethName, i)
 			}
+			if !actorNftTableExists(t) {
+				t.Fatalf("nftables table %q missing after activation %d", ActorNftTableName, i)
+			}
 			if err := CleanupActorNetwork(ctx, interior); err != nil {
 				t.Fatalf("CleanupActorNetwork (activation %d): %v", i, err)
+			}
+			// Install and teardown have to name the same family. When they do not,
+			// teardown's dump comes back empty, its "missing tables are already
+			// clean" path reports success, and the table survives -- so the next
+			// activation stacks another copy of every chain and rule onto it and
+			// the leak is invisible to every other assertion here.
+			if actorNftTableExists(t) {
+				t.Fatalf("nftables table %q survived cleanup after activation %d", ActorNftTableName, i)
 			}
 		}
 
@@ -227,6 +287,9 @@ func TestSetupActorNetworkIsRepeatable(t *testing.T) {
 		}
 		if stray := linkByName(t, HostVethName); stray != nil {
 			t.Errorf("host veth %q survived cleanup", HostVethName)
+		}
+		if actorNftTableExists(t) {
+			t.Errorf("nftables table %q survived a repeated cleanup", ActorNftTableName)
 		}
 		if err := NetNSDo(ctx, interior, func(context.Context) error {
 			if stray := linkByName(t, ActorVethName); stray != nil {
