@@ -84,6 +84,47 @@ kubectl ate delete actor my-counter-1 -a demo
 kubectl ate delete atespace demo
 ```
 
+## Control-plane AT/ATV variant and upgrades
+
+[`counter-atv.yaml.tmpl`](counter-atv.yaml.tmpl) runs the same counter on
+control-plane-native `ActorTemplate`/`ActorTemplateVersion` resources (issue
+#477). It ships two versions, `counter-atv-v1` and `counter-atv-v2`, identical
+except for the `VERSION` env var echoed in the response — so an upgrade is
+visible in plain curl output.
+
+```bash
+# Deploys the CRD demo (for its WorkerPool), then the AT/ATV manifests, and
+# waits for both versions' golden snapshots to build.
+./hack/install-ate.sh --deploy-demo-counter-atv
+
+# Create an actor on the default version (v1) and drive it.
+kubectl ate create atespace demo
+kubectl ate create actor my-counter-1 -a demo --template counter-atv
+curl -X POST -H "Host: my-counter-1.demo.actors.resources.substrate.ate.dev" http://localhost:8000
+# -> hello from: ... | version: v1 | preserved memory count: 1 | preserved file counter: 1
+```
+
+To upgrade, suspend the actor and resume it onto the new version. The durable
+volume (the file counter) carries over; the in-memory count restarts, because
+a memory snapshot cannot run on a different version's images:
+
+```bash
+kubectl ate suspend actor my-counter-1 -a demo
+kubectl ate resume actor my-counter-1 -a demo --template-version counter-atv-v2
+curl -X POST -H "Host: my-counter-1.demo.actors.resources.substrate.ate.dev" http://localhost:8000
+# -> hello from: ... | version: v2 | preserved memory count: 1 | preserved file counter: 2
+```
+
+Rolling back is the same operation with the previous version (after another
+suspend):
+
+```bash
+kubectl ate suspend actor my-counter-1 -a demo
+kubectl ate resume actor my-counter-1 -a demo --template-version counter-atv-v1
+```
+
+Clean up with `./hack/install-ate.sh --delete-demo-counter-atv`.
+
 ## Micro-VM variant
 
 The same in-RAM-counter suspend/resume-continuity demo also runs on the micro-VM

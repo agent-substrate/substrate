@@ -272,8 +272,11 @@ func TestParseApplyDocs_CounterDemoTemplate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parseApplyDocs failed: %v", err)
 	}
-	if len(docs) != 2 || docs[0].template == nil || docs[1].version == nil {
-		t.Fatalf("parsed %d documents, want ActorTemplate + ActorTemplateVersion", len(docs))
+	if len(docs) != 3 || docs[0].template == nil || docs[1].version == nil || docs[2].version == nil {
+		t.Fatalf("parsed %d documents, want ActorTemplate + two ActorTemplateVersions", len(docs))
+	}
+	if got := docs[2].version.GetMetadata().GetName(); got != "counter-atv-v2" {
+		t.Errorf("second version name = %q, want counter-atv-v2", got)
 	}
 	spec := docs[1].version.GetSpec()
 	if got := spec.GetSnapshotsConfig().GetOnPause(); got != ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL {

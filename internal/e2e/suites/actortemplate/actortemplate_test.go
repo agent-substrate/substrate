@@ -412,6 +412,215 @@ func callActorOnce(t *testing.T, actorRef resources.ActorRef) (string, error) {
 	return string(body), nil
 }
 
+// withVersionEnv appends a VERSION env var to every container, so the
+// counter's response identifies which version served it.
+func withVersionEnv(containers []*ateapipb.Container, version string) []*ateapipb.Container {
+	for _, c := range containers {
+		c.Env = append(c.Env, &ateapipb.EnvVar{Name: "VERSION", Source: &ateapipb.EnvVar_Value{Value: version}})
+	}
+	return containers
+}
+
+// createUpgradeTemplate creates a WorkerPool, an ActorTemplate, and two
+// versions differing only by their VERSION env var, committing DATA
+// snapshots: an upgrade restore is data-only by design, so this template
+// shape shows exactly what the upgrade preserves (durable files) and what it
+// restarts (memory).
+func createUpgradeTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace) (nt *nativeTemplate, v2 string) {
+	t.Helper()
+	env, err := e2e.CheckEnv("BUCKET_NAME")
+	if err != nil {
+		t.Fatalf("CheckEnv failed: %v", err)
+	}
+	srcWP, srcAT := sourceDemo(ctx, t, clients)
+
+	wp := &v1alpha1.WorkerPool{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "counter-upgrade",
+			Namespace: nsObj.Name,
+			Labels:    map[string]string{"demo": nsObj.Name},
+		},
+		Spec: v1alpha1.WorkerPoolSpec{
+			Replicas:          5,
+			AteomImage:        srcWP.Spec.AteomImage,
+			SandboxClass:      srcWP.Spec.SandboxClass,
+			SandboxConfigName: srcWP.Spec.SandboxConfigName,
+		},
+	}
+	if _, err := clients.SubstrateK8s.ApiV1alpha1().WorkerPools(nsObj.Name).Create(ctx, wp, metav1.CreateOptions{}); err != nil {
+		t.Fatalf("failed to create WorkerPool: %v", err)
+	}
+
+	nt = &nativeTemplate{template: nsObj.Name, version: nsObj.Name + "-v1"}
+	v2 = nsObj.Name + "-v2"
+	if _, err := clients.SubstrateAPI.CreateActorTemplate(ctx, &ateapipb.CreateActorTemplateRequest{
+		ActorTemplate: &ateapipb.ActorTemplate{
+			Metadata: &ateapipb.ResourceMetadata{Name: nt.template},
+			Spec: &ateapipb.ActorTemplateSpec{
+				WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"demo": nsObj.Name}},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("CreateActorTemplate failed: %v", err)
+	}
+	// Registered before the v2 cleanup below, so (LIFO) v2 is deleted first
+	// and the template delete does not trip the versions-exist invariant.
+	t.Cleanup(func() { cleanupNativeTemplate(t, clients, nt) })
+
+	for _, v := range []struct{ name, label string }{{nt.version, "v1"}, {v2, "v2"}} {
+		if _, err := clients.SubstrateAPI.CreateActorTemplateVersion(ctx, &ateapipb.CreateActorTemplateVersionRequest{
+			ActorTemplateVersion: &ateapipb.ActorTemplateVersion{
+				Metadata:      &ateapipb.ResourceMetadata{Name: v.name},
+				ActorTemplate: &ateapipb.ObjectRef{Name: nt.template},
+				Spec: &ateapipb.ActorTemplateVersionSpec{
+					PauseImage: srcAT.Spec.PauseImage,
+					Containers: withVersionEnv(containersToProto(srcAT.Spec.Containers), v.label),
+					Volumes:    volumesToProto(srcAT.Spec.Volumes),
+					SnapshotsConfig: &ateapipb.SnapshotsConfig{
+						OnPause:         ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
+						OnCommit:        ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
+						StorageLocation: "gs://" + env["BUCKET_NAME"] + "/ate-e2e-upgrade/" + nsObj.Name + "/",
+					},
+					SandboxConfig: sandboxConfigToProto(srcAT.Spec.SandboxClass, srcWP.Spec.SandboxConfigName),
+				},
+			},
+		}); err != nil {
+			t.Fatalf("CreateActorTemplateVersion(%s) failed: %v", v.name, err)
+		}
+	}
+	t.Cleanup(func() {
+		ctx := context.Background()
+		if atv, err := clients.SubstrateAPI.GetActorTemplateVersion(ctx, &ateapipb.GetActorTemplateVersionRequest{
+			ActorTemplateVersion: &ateapipb.ObjectRef{Name: v2},
+		}); err == nil {
+			if golden := atv.GetStatus().GetGoldenActor(); golden != nil {
+				_, _ = clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: golden})
+			}
+		}
+		if _, err := clients.SubstrateAPI.DeleteActorTemplateVersion(ctx, &ateapipb.DeleteActorTemplateVersionRequest{
+			ActorTemplateVersion: &ateapipb.ObjectRef{Name: v2},
+		}); err != nil && status.Code(err) != codes.NotFound {
+			t.Logf("cleanup: DeleteActorTemplateVersion(%s): %v", v2, err)
+		}
+	})
+	return nt, v2
+}
+
+func validateVersionedResponse(t *testing.T, resp, stage, wantVersion string, wantMemory, wantFile int) {
+	t.Helper()
+	validateCounterResponse(t, resp, stage, wantMemory, wantFile)
+	if !strings.Contains(resp, "version: "+wantVersion) {
+		t.Errorf("[%s] expected version %s, got response: %s", stage, wantVersion, resp)
+	}
+}
+
+// TestActorUpgradeOnResume drives the M2 upgrade primitive end to end:
+// resume with a target version re-pins the actor and restores its durable
+// data under the new version's spec (memory restarts — DATA commits cold
+// boot), a running actor cannot be re-pinned, and reverting the pin via
+// UpdateActor plus a plain resume rolls back. Requires a deployed counter
+// demo image that echoes the VERSION env var.
+//
+// Two golden snapshot builds run back to back; on a cold cluster raise
+// E2E_TEMPLATE_READY_TIMEOUT accordingly.
+func TestActorUpgradeOnResume(t *testing.T) {
+	ctx := context.Background()
+	clients := e2e.GetClients()
+	nsObj := e2e.CreateNamespace(t)
+
+	nt, v2 := createUpgradeTemplate(ctx, t, clients, nsObj)
+	waitForVersionReady(ctx, t, clients, nt.version)
+	waitForVersionReady(ctx, t, clients, v2)
+
+	atespace := nsObj.Name
+	createAtespace(ctx, t, clients, atespace)
+
+	actorRef := resources.ActorRef{Atespace: atespace, Name: "counter-upgrade"}
+	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+		Metadata:             &ateapipb.ResourceMetadata{Atespace: atespace, Name: actorRef.Name},
+		ActorTemplate:        nt.template,
+		ActorTemplateVersion: nt.version,
+	}}); err != nil {
+		t.Fatalf("CreateActor failed: %v", err)
+	}
+	defer clients.SubstrateAPI.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: actorRef.ToObjectRef()})
+
+	// v1 serves traffic.
+	if _, err := clients.SubstrateAPI.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: actorRef.ToObjectRef()}); err != nil {
+		t.Fatalf("ResumeActor failed: %v", err)
+	}
+	waitForActorStatus(ctx, t, clients, actorRef, ateapipb.Actor_STATUS_RUNNING)
+	resp, err := callActor(t, actorRef)
+	if err != nil {
+		t.Fatalf("callActor failed: %v", err)
+	}
+	validateVersionedResponse(t, resp, "on v1", "v1", 1, 1)
+
+	// A running actor cannot be re-pinned.
+	if _, err := clients.SubstrateAPI.ResumeActor(ctx, &ateapipb.ResumeActorRequest{
+		Actor:                actorRef.ToObjectRef(),
+		ActorTemplateVersion: v2,
+	}); status.Code(err) != codes.FailedPrecondition {
+		t.Errorf("ResumeActor(version) on RUNNING actor = %v, want FailedPrecondition", err)
+	}
+
+	// Upgrade: suspend, then resume onto v2. The durable file counter
+	// carries over; the memory count restarts with the cold boot.
+	if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: actorRef.ToObjectRef()}); err != nil {
+		t.Fatalf("SuspendActor failed: %v", err)
+	}
+	waitForActorStatus(ctx, t, clients, actorRef, ateapipb.Actor_STATUS_SUSPENDED)
+	if _, err := clients.SubstrateAPI.ResumeActor(ctx, &ateapipb.ResumeActorRequest{
+		Actor:                actorRef.ToObjectRef(),
+		ActorTemplateVersion: v2,
+	}); err != nil {
+		t.Fatalf("ResumeActor(upgrade to %s) failed: %v", v2, err)
+	}
+	waitForActorStatus(ctx, t, clients, actorRef, ateapipb.Actor_STATUS_RUNNING)
+	upgraded, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{Actor: actorRef.ToObjectRef()})
+	if err != nil {
+		t.Fatalf("GetActor failed: %v", err)
+	}
+	if got := upgraded.GetActorTemplateVersion(); got != v2 {
+		t.Errorf("actor pin after upgrade = %q, want %q", got, v2)
+	}
+	resp, err = callActor(t, actorRef)
+	if err != nil {
+		t.Fatalf("callActor after upgrade failed: %v", err)
+	}
+	validateVersionedResponse(t, resp, "after upgrade", "v2", 1, 2)
+
+	// Rollback via the UpdateActor primitive: revert the pin, plain resume.
+	if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: actorRef.ToObjectRef()}); err != nil {
+		t.Fatalf("SuspendActor before rollback failed: %v", err)
+	}
+	waitForActorStatus(ctx, t, clients, actorRef, ateapipb.Actor_STATUS_SUSPENDED)
+	if _, err := clients.SubstrateAPI.UpdateActor(ctx, &ateapipb.UpdateActorRequest{
+		Actor: &ateapipb.Actor{
+			Metadata:             &ateapipb.ResourceMetadata{Atespace: atespace, Name: actorRef.Name},
+			ActorTemplateVersion: nt.version,
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"actor_template_version"}},
+	}); err != nil {
+		t.Fatalf("UpdateActor(rollback pin) failed: %v", err)
+	}
+	if _, err := clients.SubstrateAPI.ResumeActor(ctx, &ateapipb.ResumeActorRequest{Actor: actorRef.ToObjectRef()}); err != nil {
+		t.Fatalf("ResumeActor after rollback failed: %v", err)
+	}
+	waitForActorStatus(ctx, t, clients, actorRef, ateapipb.Actor_STATUS_RUNNING)
+	resp, err = callActor(t, actorRef)
+	if err != nil {
+		t.Fatalf("callActor after rollback failed: %v", err)
+	}
+	validateVersionedResponse(t, resp, "after rollback", "v1", 1, 3)
+
+	// Suspend before delete so the actor is deletable.
+	if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: actorRef.ToObjectRef()}); err != nil {
+		t.Fatalf("final SuspendActor failed: %v", err)
+	}
+	waitForActorStatus(ctx, t, clients, actorRef, ateapipb.Actor_STATUS_SUSPENDED)
+}
+
 // TestActorTemplateVersionBuildAndLifecycle drives the whole native path:
 // AT+ATV creation, golden-snapshot build, actor creation pinned and via the
 // template default, live traffic, and suspend/resume + pause/resume state

@@ -26,6 +26,7 @@ import (
 
 var bootFlag bool
 var resumeAtespaceFlag string
+var resumeTemplateVersionFlag string
 
 var resumeActorCmd = &cobra.Command{
 	Use:   "actor <actor-name>",
@@ -41,8 +42,9 @@ var resumeActorCmd = &cobra.Command{
 
 		actorRef := resources.ActorRef{Atespace: resumeAtespaceFlag, Name: args[0]}
 		resp, err := apiClient.ResumeActor(ctx, &ateapipb.ResumeActorRequest{
-			Actor: actorRef.ToObjectRef(),
-			Boot:  bootFlag,
+			Actor:                actorRef.ToObjectRef(),
+			Boot:                 bootFlag,
+			ActorTemplateVersion: resumeTemplateVersionFlag,
 		})
 		if err != nil {
 			return fmt.Errorf("failed to resume actor: %w", err)
@@ -55,6 +57,7 @@ var resumeActorCmd = &cobra.Command{
 func init() {
 	resumeActorCmd.Flags().BoolVarP(&bootFlag, "boot", "", false, "Skip golden snapshot and boot from scratch.")
 	resumeActorCmd.Flags().StringVarP(&resumeAtespaceFlag, "atespace", "a", "", "Atespace the actor lives in")
+	resumeActorCmd.Flags().StringVarP(&resumeTemplateVersionFlag, "template-version", "", "", "Re-pin the actor to this ActorTemplateVersion before resuming (SUSPENDED or CRASHED actors only). Durable data is preserved; memory restarts from the new version.")
 	_ = resumeActorCmd.MarkFlagRequired("atespace")
 	resumeCmd.AddCommand(resumeActorCmd)
 }

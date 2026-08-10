@@ -69,6 +69,13 @@ func main() {
 
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
 
+	// The ActorTemplateVersion sets VERSION per version, making an upgrade
+	// visible in the response while the same image serves every version.
+	versionSuffix := ""
+	if v := os.Getenv("VERSION"); v != "" {
+		versionSuffix = fmt.Sprintf(" | version: %s", v)
+	}
+
 	defaultMux := http.NewServeMux()
 	defaultMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
@@ -96,7 +103,7 @@ func main() {
 			secondFileCounterStr = fmt.Sprintf(" | preserved second file counter: %d", secondFileCounter)
 		}
 
-		response := fmt.Sprintf("hello from: %s | preserved memory count: %d | preserved file counter: %d%s%s\n", currentIP, memoryCounter, fileCounter, secondFileCounterStr, fileContentStr)
+		response := fmt.Sprintf("hello from: %s%s | preserved memory count: %d | preserved file counter: %d%s%s\n", currentIP, versionSuffix, memoryCounter, fileCounter, secondFileCounterStr, fileContentStr)
 		slog.InfoContext(ctx, "Handled request", slog.String("response", response))
 
 		w.WriteHeader(http.StatusOK)

@@ -83,21 +83,29 @@ demo-counter-atv_deploy() {
     | run_ko resolve -f - \
     | run_kubectl_ate apply -f -
 
-  log_step "Waiting for ActorTemplateVersion counter-atv-v1 to be READY..."
+  wait_for_template_version_ready counter-atv-v1
+  wait_for_template_version_ready counter-atv-v2
+}
+
+# Polls a control-plane ActorTemplateVersion until its golden snapshot build
+# reaches STATE_READY; fails fast on STATE_FAILED.
+wait_for_template_version_ready() {
+  local version="${1}"
+  log_step "Waiting for ActorTemplateVersion ${version} to be READY..."
   local deadline=$((SECONDS + 300))
   while true; do
     local json
-    json="$(run_kubectl_ate get actor-template-versions counter-atv-v1 -o json 2>/dev/null || true)"
+    json="$(run_kubectl_ate get actor-template-versions "${version}" -o json 2>/dev/null || true)"
     if grep -q '"state": "STATE_READY"' <<<"${json}"; then
       break
     fi
     if grep -q '"state": "STATE_FAILED"' <<<"${json}"; then
-      echo "ActorTemplateVersion counter-atv-v1 failed to build:" >&2
+      echo "ActorTemplateVersion ${version} failed to build:" >&2
       grep '"message"' <<<"${json}" >&2 || true
       return 1
     fi
     if ((SECONDS >= deadline)); then
-      echo "Timed out waiting for ActorTemplateVersion counter-atv-v1 to be READY" >&2
+      echo "Timed out waiting for ActorTemplateVersion ${version} to be READY" >&2
       return 1
     fi
     sleep 5
@@ -124,6 +132,7 @@ demo-counter-atv_delete() {
     fi
   fi
 
+  run_kubectl_ate delete actor-template-version counter-atv-v2 || true
   run_kubectl_ate delete actor-template-version counter-atv-v1 --clear-default || true
   run_kubectl_ate delete actor-template counter-atv || true
 }

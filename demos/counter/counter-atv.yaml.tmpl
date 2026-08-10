@@ -42,6 +42,47 @@ spec:
     image: ko://github.com/agent-substrate/substrate/demos/counter
     command:
     - /ko-app/counter
+    env:
+    - name: VERSION
+      value: v1
+    readyz:
+      httpGet:
+        path: /readyz
+        port: 80
+    volumeMounts:
+    - name: data
+      mountPath: /home/counter
+  volumes:
+  - name: data
+    durableDir: {}
+  snapshotsConfig:
+    onPause: SNAPSHOT_CONTENT_SCOPE_FULL
+    onCommit: SNAPSHOT_CONTENT_SCOPE_DATA
+    storageLocation: gs://${BUCKET_NAME}/ate-demo-counter-atv/
+  sandboxConfig:
+    sandboxClass: SANDBOX_CLASS_GVISOR
+    configName: gvisor-default
+---
+# v2 differs from v1 only by the VERSION env var, so an upgrade is visible in
+# the counter's response. Upgrade a suspended actor with:
+#   kubectl ate resume actor <name> -a <atespace> --template-version counter-atv-v2
+# The file counter (durable data) carries over; the memory count restarts.
+apiVersion: api.ate.dev/v1alpha1
+kind: ActorTemplateVersion
+metadata:
+  name: counter-atv-v2
+actorTemplate:
+  name: counter-atv
+spec:
+  pauseImage: "registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4"
+  containers:
+  - name: counter
+    image: ko://github.com/agent-substrate/substrate/demos/counter
+    command:
+    - /ko-app/counter
+    env:
+    - name: VERSION
+      value: v2
     readyz:
       httpGet:
         path: /readyz
