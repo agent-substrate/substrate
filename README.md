@@ -194,6 +194,7 @@ We provide several sample applications demonstrating Agent Substrate's capabilit
 * [API Configuration Guide](docs/api-guide.md): Detailed reference for configuring WorkerPools, ActorTemplates, Secrets, and Volumes.
 * [Full CLI Documentation](cmd/kubectl-ate/README.md): Installation and usage for `kubectl-ate`.
 * [Glossary](docs/glossary.md): Core terms (Actor, Atespace, ActorTemplate, WorkerPool, Worker, ate-api-server, atenet, atelet, ateom) and how they relate.
+* [Counter E2E Testing Guide](docs/dev/counter-e2e-testing.md): Manual end-to-end walkthrough — provision GCP, deploy the counter template, and exercise suspend/resume and ActorTemplateVersion upgrades.
 * [Observability Guide](docs/observability.md): Guide to actor logging, metrics, and distributed tracing.
 * [Request Parking](docs/request-parking.md): How the router parks requests through transient worker-pool saturation.
 * [Threat Model](docs/threat-model.md): Trust boundaries, assumptions, and known risks.
