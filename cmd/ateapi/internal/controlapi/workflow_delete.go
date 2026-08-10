@@ -27,9 +27,7 @@ import (
 )
 
 // DeleteActor executes the workflow to delete an actor. Idempotent.
-func (w *ActorWorkflow) DeleteActor(ctx context.Context, atespace, name string) (*ateapipb.Actor, error) {
-	actorRef := resources.ActorRef{Atespace: atespace, Name: name}
-
+func (w *ActorWorkflow) DeleteActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error) {
 	ctx, lock, err := w.acquireActorLock(ctx, actorRef)
 	if err != nil {
 		return nil, err

@@ -71,7 +71,7 @@ func TestDeleteActorWorkflow_ExecutionPaths(t *testing.T) {
 			actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
 			seedWorkflowActor(t, ctx, st, actorRef, "ns", "tmpl1", tc.seedStatus)
 
-			deleted, err := w.DeleteActor(ctx, "team-a", "id1")
+			deleted, err := w.DeleteActor(ctx, actorRef)
 			if tc.wantErr {
 				if got := status.Code(err); got != tc.wantCode {
 					t.Fatalf("status.Code(err) = %v, want %v (err: %v)", got, tc.wantCode, err)

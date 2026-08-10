@@ -953,3 +953,31 @@ func TestLoadActorForResume_GoldenFallbackRejectsNonFullGolden(t *testing.T) {
 		t.Errorf("error %q does not tell the operator to regenerate the golden snapshot", err)
 	}
 }
+
+func TestLoadActorForResume_RunningActorShortCircuits(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+	actorRef := resources.ActorRef{Atespace: "team-a", Name: "id1"}
+
+	// Seed the actor as RUNNING. Note: No snapshot or template is seeded in the
+	// store or lister, proving that loadActorForResume short-circuits before
+	// attempting to fetch either.
+	seedWorkflowActor(t, ctx, persistence, actorRef, "ns", "missing-tmpl", ateapipb.Actor_STATUS_RUNNING)
+
+	indexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{})
+	w := &ActorWorkflow{store: persistence, actorTemplateLister: listersv1alpha1.NewActorTemplateLister(indexer)}
+
+	actor, tmpl, src, err := w.loadActorForResume(ctx, actorRef, false)
+	if err != nil {
+		t.Fatalf("loadActorForResume() unexpected error = %v", err)
+	}
+	if actor.GetStatus() != ateapipb.Actor_STATUS_RUNNING {
+		t.Errorf("actor status = %v, want %v", actor.GetStatus(), ateapipb.Actor_STATUS_RUNNING)
+	}
+	if tmpl != nil {
+		t.Errorf("expected nil template, got %v", tmpl)
+	}
+	if !src.SnapshotURI.IsZero() || !src.GoldenSnapshotURI.IsZero() {
+		t.Errorf("expected empty snapshot source, got %+v", src)
+	}
+}

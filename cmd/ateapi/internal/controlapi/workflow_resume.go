@@ -154,6 +154,13 @@ func (w *ActorWorkflow) loadActorForResume(ctx context.Context, actorRef resourc
 		return nil, nil, src, fmt.Errorf("while getting actor from DB: %w", err)
 	}
 
+	// If the actor is already running, there is no pending restore to prepare
+	// for. Short-circuit immediately to avoid unnecessary store reads for snapshots
+	// and template resolution on the hot resume path.
+	if actor.GetStatus() == ateapipb.Actor_STATUS_RUNNING {
+		return actor, nil, src, nil
+	}
+
 	actorTemplate, err := w.actorTemplateLister.ActorTemplates(actor.GetActorTemplateNamespace()).Get(actor.GetActorTemplateName())
 	if err != nil {
 		return nil, nil, src, fmt.Errorf("while getting ActorTemplate: %w", err)
