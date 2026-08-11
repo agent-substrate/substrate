@@ -315,7 +315,7 @@ Only `cpu` and `memory` are accepted, each must be greater than zero, and a `cpu
 
 **Limits only.** There is no `requests`. Scheduling happens at the pool level, so per-container limits subdivide a budget that is already held, and there is no scheduler inside the actor to hint at. For memory it is also a correctness question: a restore needs at least the footprint that was captured.
 
-**Bounded by the guest.** A micro-VM actor runs inside a guest VM whose size comes from the pool's [`SandboxConfig`](#3-sandboxconfig-sandbox-binaries), not from the actor. A limit above the guest, or limits summing above it across the actor's containers, can never bind, so the actor fails to start with an error naming both the limit and the guest size.
+**Bounded by the guest.** A micro-VM actor runs inside a guest VM whose size comes from the pool's [`SandboxConfig`](#3-sandboxconfig-the-sandbox-itself), not from the actor. A limit above the guest, or limits summing above it across the actor's containers, can never bind, so the actor fails to start with an error naming both the limit and the guest size.
 
 ### Container Readiness Probe (`readyz`)
 

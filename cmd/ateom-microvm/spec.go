@@ -179,7 +179,11 @@ func checkResourceEnvelope(ctrs []actorContainer, memMiB, vcpus int) error {
 			continue
 		}
 		r := c.spec.Linux.Resources
-		if r.Memory != nil && r.Memory.Limit != nil {
+		// A non-positive limit means "unlimited" in the OCI spec, so it is not a
+		// claim on the guest: skip it rather than summing it, which would let a
+		// negative offset another container's limit and slip the total through.
+		// cpuLimitMillis treats a non-positive quota the same way.
+		if r.Memory != nil && r.Memory.Limit != nil && *r.Memory.Limit > 0 {
 			limit := *r.Memory.Limit
 			if limit > guestBytes {
 				return status.Errorf(codes.InvalidArgument,

@@ -157,6 +157,13 @@ func TestCheckResourceEnvelope(t *testing.T) {
 		name: "memory equal to the whole guest is allowed",
 		ctrs: []actorContainer{mem("exact", 2048*mib)},
 	}, {
+		// A non-positive limit is "unlimited" in the OCI spec, not a claim on the
+		// guest, so it must not be summed: counting it would net these three down
+		// to 1024MiB against a 2048MiB guest and let the 2560MiB overrun through.
+		name:    "an unlimited sibling cannot offset limits that overrun",
+		ctrs:    []actorContainer{mem("a", 1536*mib), mem("b", 1024*mib), mem("unlimited", -1536*mib)},
+		wantErr: "in total",
+	}, {
 		name:    "limits that fit alone but not together",
 		ctrs:    []actorContainer{mem("a", 1536*mib), mem("b", 1024*mib)},
 		wantErr: "in total",
