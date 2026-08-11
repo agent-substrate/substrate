@@ -49,6 +49,8 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
+const testPauseImage = "registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4"
+
 func TestSnapshotManifestActorMetadata(t *testing.T) {
 	rec := sandboxAssetsRecord{
 		Atespace:               "team-a",
@@ -73,7 +75,7 @@ func TestSnapshotManifestActorMetadata(t *testing.T) {
 // written before the scope field existed must still parse, reporting an empty
 // scope, and a scope-less record must not serialize a scope key at all.
 func TestSnapshotManifestScopeAbsent(t *testing.T) {
-	legacy := []byte(`{"sandboxClass":"gvisor","pauseImage":"pause@sha256:abc","snapshotFiles":["checkpoint.img"]}`)
+	legacy := []byte(`{"sandboxClass":"gvisor","pauseImage":"` + testPauseImage + `","snapshotFiles":["checkpoint.img"]}`)
 	rec, err := unmarshalSandboxRecord(legacy)
 	if err != nil {
 		t.Fatalf("unmarshalSandboxRecord(legacy manifest): %v", err)
@@ -1320,7 +1322,7 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 	fullRec := func(class string) sandboxAssetsRecord {
 		return sandboxAssetsRecord{
 			SandboxClass:  class,
-			PauseImage:    "pause@sha256:abc",
+			PauseImage:    testPauseImage,
 			SnapshotFiles: []string{"config.json", "memory-ranges", ateompath.DurableDirTarFile},
 			Scope:         ateattr.SnapshotScopeFull,
 		}
@@ -1398,7 +1400,7 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 		dir := filepath.Join(t.TempDir(), "pause-snap-1")
 		writeLocalSnapshot(t, dir, sandboxAssetsRecord{
 			SandboxClass:  "gvisor",
-			PauseImage:    "pause@sha256:abc",
+			PauseImage:    testPauseImage,
 			SnapshotFiles: []string{"checkpoint.img"},
 			Scope:         ateattr.SnapshotScopeFull,
 		}, map[string]string{"checkpoint.img": "img"})
@@ -1416,7 +1418,7 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 		dir := filepath.Join(t.TempDir(), "pause-snap-1")
 		writeLocalSnapshot(t, dir, sandboxAssetsRecord{
 			SandboxClass:  "microvm",
-			PauseImage:    "pause@sha256:abc",
+			PauseImage:    testPauseImage,
 			SnapshotFiles: []string{"config.json", "memory-ranges"},
 			Scope:         ateattr.SnapshotScopeFull,
 		}, map[string]string{"config.json": "cfg", "memory-ranges": "mem"})
@@ -1434,7 +1436,7 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 		dir := filepath.Join(t.TempDir(), "pause-snap-1")
 		writeLocalSnapshot(t, dir, sandboxAssetsRecord{
 			SandboxClass:  "mystery",
-			PauseImage:    "pause@sha256:abc",
+			PauseImage:    testPauseImage,
 			SnapshotFiles: []string{ateompath.DurableDirTarFile},
 			Scope:         ateattr.SnapshotScopeFull,
 		}, map[string]string{ateompath.DurableDirTarFile: "data"})
@@ -1452,7 +1454,7 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 		dir := filepath.Join(t.TempDir(), "pause-snap-1")
 		writeLocalSnapshot(t, dir, sandboxAssetsRecord{
 			SandboxClass:  "microvm",
-			PauseImage:    "pause@sha256:abc",
+			PauseImage:    testPauseImage,
 			SnapshotFiles: []string{ateompath.DurableDirTarFile},
 			Scope:         ateattr.SnapshotScopeData,
 		}, map[string]string{ateompath.DurableDirTarFile: "data"})
@@ -1469,7 +1471,7 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 		dir := filepath.Join(t.TempDir(), "pause-snap-1")
 		writeLocalSnapshot(t, dir, sandboxAssetsRecord{
 			SandboxClass:  "microvm",
-			PauseImage:    "pause@sha256:abc",
+			PauseImage:    testPauseImage,
 			SnapshotFiles: []string{ateompath.DurableDirTarFile},
 		}, map[string]string{ateompath.DurableDirTarFile: "data"})
 
