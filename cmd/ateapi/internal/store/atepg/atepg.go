@@ -300,9 +300,26 @@ func (p *Persistence) GetActor(ctx context.Context, actorRef resources.ActorRef)
 	return getActorRow(ctx, p.pool, actorRef.Atespace, actorRef.Name)
 }
 
-func (p *Persistence) UpdateActor(ctx context.Context, actor *ateapipb.Actor, expectedVersion int64) (*ateapipb.Actor, error) {
-	atespace := actor.GetMetadata().GetAtespace()
-	name := actor.GetMetadata().GetName()
+// validateUpdateActorMutation reports whether an actor mutation changed fields
+// that are immutable for the lifetime of the stored actor.
+func validateUpdateActorMutation(storedActor, mutatedActor *ateapipb.Actor) error {
+	if stored, mutated := storedActor.GetMetadata().GetAtespace(), mutatedActor.GetMetadata().GetAtespace(); stored != mutated {
+		return fmt.Errorf("metadata.atespace is immutable: mutation changed it from %q to %q", stored, mutated)
+	}
+	if stored, mutated := storedActor.GetMetadata().GetName(), mutatedActor.GetMetadata().GetName(); stored != mutated {
+		return fmt.Errorf("metadata.name is immutable: mutation changed it from %q to %q", stored, mutated)
+	}
+	if stored, mutated := storedActor.GetActorTemplateNamespace(), mutatedActor.GetActorTemplateNamespace(); stored != mutated {
+		return fmt.Errorf("actor_template_namespace is immutable: mutation changed it from %q to %q", stored, mutated)
+	}
+	if stored, mutated := storedActor.GetActorTemplateName(), mutatedActor.GetActorTemplateName(); stored != mutated {
+		return fmt.Errorf("actor_template_name is immutable: mutation changed it from %q to %q", stored, mutated)
+	}
+	return nil
+}
+
+func (p *Persistence) UpdateActor(ctx context.Context, actorRef resources.ActorRef, mutate func(*ateapipb.Actor) error) (*ateapipb.Actor, error) {
+	atespace, name := actorRef.Atespace, actorRef.Name
 
 	tx, err := p.pool.Begin(ctx)
 	if err != nil {
@@ -310,46 +327,47 @@ func (p *Persistence) UpdateActor(ctx context.Context, actor *ateapipb.Actor, ex
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // no-op once committed
 
-	current, err := getActorRow(ctx, tx, atespace, name)
-	if err != nil {
+	var protoBytes []byte
+	if err := tx.QueryRow(ctx, `
+		SELECT proto FROM actors
+		WHERE atespace = $1 AND name = $2
+		FOR UPDATE`, atespace, name).Scan(&protoBytes); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, store.ErrNotFound
+		}
+		return nil, fmt.Errorf("locking actor %s/%s for update: %w", atespace, name, err)
+	}
+
+	dbActor := &ateapipb.Actor{}
+	if err := proto.Unmarshal(protoBytes, dbActor); err != nil {
+		return nil, fmt.Errorf("unmarshaling actor for update: %w", err)
+	}
+	actorBeforeMutation := proto.Clone(dbActor).(*ateapipb.Actor)
+	if err := mutate(dbActor); err != nil {
 		return nil, err
 	}
-	if current.GetMetadata().GetVersion() != expectedVersion {
-		return nil, store.ErrVersionConflict
+	if err := validateUpdateActorMutation(actorBeforeMutation, dbActor); err != nil {
+		return nil, err
 	}
+	// Stored metadata is authoritative; discard any metadata edits made by the
+	// closure and derive the next revision from the transactionally read actor.
+	dbActor.Metadata = newUpdateMetadata(actorBeforeMutation.GetMetadata())
 
-	dbActor := proto.Clone(actor).(*ateapipb.Actor)
-	if current.GetActorTemplateNamespace() != dbActor.GetActorTemplateNamespace() {
-		return nil, fmt.Errorf("actor_template_namespace is immutable")
-	}
-	if current.GetActorTemplateName() != dbActor.GetActorTemplateName() {
-		return nil, fmt.Errorf("actor_template_name is immutable")
-	}
-	// UID, identity, create time, and version are server-owned.
-	dbActor.Metadata = newUpdateMetadata(current.GetMetadata())
-
-	protoBytes, err := proto.Marshal(dbActor)
+	protoBytes, err = proto.Marshal(dbActor)
 	if err != nil {
 		return nil, fmt.Errorf("marshaling actor: %w", err)
 	}
 
-	var returnedProto []byte
-	err = tx.QueryRow(ctx, `
+	commandTag, err := tx.Exec(ctx, `
 		UPDATE actors
 		SET version = $1, proto = $2
-		WHERE atespace = $3 AND name = $4 AND version = $5
-		RETURNING proto`,
-		dbActor.GetMetadata().GetVersion(), protoBytes, atespace, name, expectedVersion,
-	).Scan(&returnedProto)
-	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		WHERE atespace = $3 AND name = $4`,
+		dbActor.GetMetadata().GetVersion(), protoBytes, atespace, name)
+	if err != nil {
 		return nil, fmt.Errorf("updating actor %s/%s: %w", atespace, name, err)
 	}
-	if errors.Is(err, pgx.ErrNoRows) {
-		// A concurrent update or delete won after the point read.
-		if _, getErr := getActorRow(ctx, tx, atespace, name); getErr != nil {
-			return nil, getErr
-		}
-		return nil, store.ErrVersionConflict
+	if commandTag.RowsAffected() != 1 {
+		return nil, fmt.Errorf("updating actor %s/%s affected %d rows, want 1", atespace, name, commandTag.RowsAffected())
 	}
 
 	if err := tx.Commit(ctx); err != nil {

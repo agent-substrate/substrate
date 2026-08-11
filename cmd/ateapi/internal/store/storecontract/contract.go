@@ -184,13 +184,16 @@ func RunContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
 			t.Fatalf("CreateActor failed: %v", err)
 		}
 
-		toUpdate := proto.Clone(created).(*ateapipb.Actor)
-		toUpdate.Status = ateapipb.Actor_STATUS_RUNNING
-		// Server-owned metadata must be derived from the stored resource, not
-		// accepted from an update payload.
-		toUpdate.Metadata.Uid = "client-supplied-uid"
-		toUpdate.Metadata.CreateTime = timestamppb.New(time.Unix(1, 0))
-		updated, err := s.UpdateActor(ctx, toUpdate, created.GetMetadata().GetVersion())
+		actorRef := resources.ActorRefFromActor(created)
+		updated, err := s.UpdateActor(ctx, actorRef, func(dbActor *ateapipb.Actor) error {
+			dbActor.Status = ateapipb.Actor_STATUS_RUNNING
+			// Server-owned metadata must be derived from the stored resource, not
+			// accepted from the mutation.
+			dbActor.Metadata.Uid = "client-supplied-uid"
+			dbActor.Metadata.CreateTime = timestamppb.New(time.Unix(1, 0))
+			dbActor.Metadata.Version = 99
+			return nil
+		})
 		if err != nil {
 			t.Fatalf("UpdateActor failed: %v", err)
 		}
@@ -208,8 +211,8 @@ func RunContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
 			t.Errorf("create_time changed on update: got %v, want %v", updated.GetMetadata().GetCreateTime().AsTime(), created.GetMetadata().GetCreateTime().AsTime())
 		}
 
-		if toUpdate.GetMetadata().GetVersion() != created.GetMetadata().GetVersion() {
-			t.Errorf("UpdateActor must not mutate its input; version changed to %d", toUpdate.GetMetadata().GetVersion())
+		if created.GetMetadata().GetVersion() != 1 {
+			t.Errorf("UpdateActor mutated the previously returned actor; version changed to %d", created.GetMetadata().GetVersion())
 		}
 
 		got, err := s.GetActor(ctx, resources.ActorRefFromActor(actor))
@@ -246,13 +249,24 @@ func RunContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
 			t.Fatalf("GetActor failed: %v", err)
 		}
 
-		actor1.Status = ateapipb.Actor_STATUS_RUNNING
-		if _, err := s.UpdateActor(ctx, actor1, actor1.GetMetadata().GetVersion()); err != nil {
+		actorRef := resources.ActorRefFromActor(actor1)
+		if _, err := s.UpdateActor(ctx, actorRef, func(dbActor *ateapipb.Actor) error {
+			if err := store.CheckActorPrecondition(dbActor, actor1.GetMetadata().GetUid(), actor1.GetMetadata().GetVersion()); err != nil {
+				return err
+			}
+			dbActor.Status = ateapipb.Actor_STATUS_RUNNING
+			return nil
+		}); err != nil {
 			t.Fatalf("UpdateActor failed: %v", err)
 		}
 
-		actor2.Status = ateapipb.Actor_STATUS_SUSPENDED
-		_, err = s.UpdateActor(ctx, actor2, actor2.GetMetadata().GetVersion())
+		_, err = s.UpdateActor(ctx, actorRef, func(dbActor *ateapipb.Actor) error {
+			if err := store.CheckActorPrecondition(dbActor, actor2.GetMetadata().GetUid(), actor2.GetMetadata().GetVersion()); err != nil {
+				return err
+			}
+			dbActor.Status = ateapipb.Actor_STATUS_SUSPENDED
+			return nil
+		})
 		if !errors.Is(err, store.ErrVersionConflict) {
 			t.Errorf("expected ErrVersionConflict, got %v", err)
 		}
@@ -274,12 +288,45 @@ func RunContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
 			t.Fatalf("CreateActor failed: %v", err)
 		}
 
-		toUpdate := proto.Clone(created).(*ateapipb.Actor)
-		toUpdate.ActorTemplateName = "other-template"
-		if _, err := s.UpdateActor(ctx, toUpdate, created.GetMetadata().GetVersion()); err == nil {
+		if _, err := s.UpdateActor(ctx, resources.ActorRefFromActor(created), func(dbActor *ateapipb.Actor) error {
+			dbActor.ActorTemplateName = "other-template"
+			return nil
+		}); err == nil {
 			t.Errorf("expected error updating actor_template_name, got nil")
 		} else if errors.Is(err, store.ErrVersionConflict) || errors.Is(err, store.ErrNotFound) {
 			t.Errorf("expected a plain immutable-field error, got sentinel %v", err)
+		}
+	})
+
+	t.Run("UpdateActor_MutateError", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		mustCreateAtespace(t, s, testAtespace)
+
+		created, err := s.CreateActor(ctx, &ateapipb.Actor{
+			Metadata:               &ateapipb.ResourceMetadata{Name: "session-1", Atespace: testAtespace},
+			ActorTemplateNamespace: "default",
+			ActorTemplateName:      "test-template",
+			Status:                 ateapipb.Actor_STATUS_SUSPENDED,
+		})
+		if err != nil {
+			t.Fatalf("CreateActor failed: %v", err)
+		}
+
+		mutateErr := errors.New("mutation rejected")
+		if _, err := s.UpdateActor(ctx, resources.ActorRefFromActor(created), func(dbActor *ateapipb.Actor) error {
+			dbActor.Status = ateapipb.Actor_STATUS_RUNNING
+			return fmt.Errorf("checking mutation: %w", mutateErr)
+		}); !errors.Is(err, mutateErr) {
+			t.Fatalf("UpdateActor error = %v, want one wrapping %v", err, mutateErr)
+		}
+
+		got, err := s.GetActor(ctx, resources.ActorRefFromActor(created))
+		if err != nil {
+			t.Fatalf("GetActor after rejected mutation failed: %v", err)
+		}
+		if diff := cmp.Diff(created, got, protocmp.Transform()); diff != "" {
+			t.Errorf("rejected mutation changed stored actor (-created +got):\n%s", diff)
 		}
 	})
 
