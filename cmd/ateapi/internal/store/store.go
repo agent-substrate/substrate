@@ -58,19 +58,19 @@ type Interface interface {
 	// mutated. Returns ErrAlreadyExists if key is taken.
 	CreateActor(ctx context.Context, actor *ateapipb.Actor) (*ateapipb.Actor, error)
 
-	// UpdateActor performs a transactional read-modify-write and returns the updated
+	// UpdateActor performs a transactional read-modify-write and returns the stored
 	// actor with advanced metadata (version, update_time).
 	//
 	// mutate receives the stored actor and edits it in place. The mutated actor is
 	// written iff mutate returns nil. A mutate that must only land on the actor the
-	// caller observed guards itself with CheckActorPrecondition.
+	// caller observed wraps itself in WithPrecondition.
 	//
 	// mutate may run more than once, because the store retries when a concurrent
 	// write invalidates the transaction.
 	//
 	// Returns ErrNotFound if missing, ErrVersionConflict if the retry budget is
 	// exhausted, or the mutate's error verbatim otherwise.
-	UpdateActor(ctx context.Context, actorRef resources.ActorRef, mutate func(dbActor *ateapipb.Actor) error) (*ateapipb.Actor, error)
+	UpdateActor(ctx context.Context, actorRef resources.ActorRef, mutate func(toUpdate *ateapipb.Actor) error) (*ateapipb.Actor, error)
 
 	// Removes an actor and returns the deleted resource. Returns ErrNotFound if
 	// missing, or ErrFailedPrecondition if not suspended.
@@ -96,8 +96,20 @@ type Interface interface {
 	// Adds an immutable Atespace-owned tag to an ActorSnapshot.
 	TagActorSnapshot(ctx context.Context, atespace, name string, tag *ateapipb.ActorSnapshotTag) (*ateapipb.ActorSnapshotTag, error)
 
-	// Updates a tag's reuse scope.
-	UpdateActorSnapshotTag(ctx context.Context, atespace, name string, scope ateapipb.ActorSnapshotTagScope, expectedVersion int64) (*ateapipb.ActorSnapshotTag, error)
+	// UpdateActorSnapshotTag performs a transactional read-modify-write on the tag
+	// addressed by atespace and name, and returns the stored ActorSnapshotTag with
+	// advanced metadata (version, update_time).
+	//
+	// mutate receives the stored tag and edits it in place. The mutated tag is
+	// written iff mutate returns nil. A mutate that must only land on the tag the
+	// caller observed wraps itself in WithPrecondition.
+	//
+	// mutate may run more than once, because the store retries when a concurrent
+	// write invalidates the transaction.
+	//
+	// Returns ErrNotFound if missing, ErrVersionConflict if the retry budget is
+	// exhausted, or the mutate's error verbatim otherwise.
+	UpdateActorSnapshotTag(ctx context.Context, atespace, name string, mutate func(toUpdate *ateapipb.ActorSnapshotTag) error) (*ateapipb.ActorSnapshotTag, error)
 
 	// Deletes and returns a tag.
 	DeleteActorSnapshotTag(ctx context.Context, atespace, name string) (*ateapipb.ActorSnapshotTag, error)
@@ -153,23 +165,20 @@ type Interface interface {
 }
 
 const (
-	// AnyUID accepts whichever actor holds the atespace and name at write time.
+	// AnyUID accepts whichever object holds the atespace and name at write time.
 	AnyUID = ""
 	// AnyVersion accepts whatever revision the store is at.
 	AnyVersion int64 = 0
 )
 
-// CheckActorPrecondition reports whether dbActor is still the actor the caller
+// checkPrecondition reports whether md still describes the object the caller
 // observed, pinned on the uid and version it read, each waivable with AnyUID or
-// AnyVersion. Version guards against concurrent writes, uid against actor
-// atespace/name re-use across actor lifecycles.
+// AnyVersion. Version guards against concurrent writes, uid against
+// atespace/name re-use across object lifecycles.
 //
-// Call it at the top of an UpdateActor mutation so the write is conditional on
-// the stored actor the transaction actually read, not on one read earlier
-// outside of it. Returns ErrUIDConflict or ErrVersionConflict, which UpdateActor
-// surfaces verbatim.
-func CheckActorPrecondition(dbActor *ateapipb.Actor, uid string, version int64) error {
-	md := dbActor.GetMetadata()
+// Returns ErrUIDConflict or ErrVersionConflict, which the update surfaces
+// verbatim.
+func checkPrecondition(md *ateapipb.ResourceMetadata, uid string, version int64) error {
 	if uid != AnyUID && uid != md.GetUid() {
 		return ErrUIDConflict
 	}
@@ -177,6 +186,29 @@ func CheckActorPrecondition(dbActor *ateapipb.Actor, uid string, version int64) 
 		return ErrVersionConflict
 	}
 	return nil
+}
+
+// hasResourceMetadata is an object the store addresses by atespace and name,
+// and whose identity a caller can pin with WithPrecondition.
+type hasResourceMetadata interface {
+	GetMetadata() *ateapipb.ResourceMetadata
+}
+
+// WithPrecondition returns a mutation that runs mutate only if the stored
+// object is still the one the caller observed, pinned on observed's uid and
+// version.
+//
+// An observed object carrying no uid or version pins nothing, so an unguarded
+// client update stays unguarded. To pin one of the two and waive the other,
+// pass an observed object carrying only the field to pin.
+func WithPrecondition[T hasResourceMetadata](observed T, mutate func(stored T) error) func(stored T) error {
+	uid, version := observed.GetMetadata().GetUid(), observed.GetMetadata().GetVersion()
+	return func(stored T) error {
+		if err := checkPrecondition(stored.GetMetadata(), uid, version); err != nil {
+			return err
+		}
+		return mutate(stored)
+	}
 }
 
 // WorkerEventType indicates the type of change to a Worker.

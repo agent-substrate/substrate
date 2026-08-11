@@ -529,50 +529,96 @@ func (s *Persistence) TagActorSnapshot(ctx context.Context, atespace, name strin
 	return dbTag, nil
 }
 
-func (s *Persistence) UpdateActorSnapshotTag(ctx context.Context, atespace, name string, scope ateapipb.ActorSnapshotTagScope, expectedVersion int64) (*ateapipb.ActorSnapshotTag, error) {
+func validateUpdateActorSnapshotTagMutation(storedTag, mutatedTag *ateapipb.ActorSnapshotTag) error {
+	if stored, mutated := storedTag.GetMetadata().GetAtespace(), mutatedTag.GetMetadata().GetAtespace(); stored != mutated {
+		return fmt.Errorf("metadata.atespace is immutable: mutation changed it from %q to %q", stored, mutated)
+	}
+	if stored, mutated := storedTag.GetMetadata().GetName(), mutatedTag.GetMetadata().GetName(); stored != mutated {
+		return fmt.Errorf("metadata.name is immutable: mutation changed it from %q to %q", stored, mutated)
+	}
+	if stored, mutated := storedTag.GetSnapshot().GetAtespace(), mutatedTag.GetSnapshot().GetAtespace(); stored != mutated {
+		return fmt.Errorf("snapshot.atespace is immutable: mutation changed it from %q to %q", stored, mutated)
+	}
+	if stored, mutated := storedTag.GetSnapshot().GetName(), mutatedTag.GetSnapshot().GetName(); stored != mutated {
+		return fmt.Errorf("snapshot.name is immutable: mutation changed it from %q to %q", stored, mutated)
+	}
+	return nil
+}
+
+// updateActorSnapshotTagMaxAttempts bounds how many times UpdateActorSnapshotTag
+// re-runs its read-modify-write after a concurrent writer invalidates the
+// transaction.
+const updateActorSnapshotTagMaxAttempts = 5
+
+func (s *Persistence) UpdateActorSnapshotTag(ctx context.Context, atespace, name string, mutate func(*ateapipb.ActorSnapshotTag) error) (*ateapipb.ActorSnapshotTag, error) {
 	tagKey := actorSnapshotTagDBKey(atespace, name)
-	var updated *ateapipb.ActorSnapshotTag
-	err := s.rdb.Watch(ctx, func(tx *redis.Tx) error {
-		b, err := tx.Get(ctx, tagKey).Bytes()
-		if err != nil {
-			if errors.Is(err, redis.Nil) {
-				return store.ErrNotFound
+	for range updateActorSnapshotTagMaxAttempts {
+		var dbTag *ateapipb.ActorSnapshotTag
+		var abortErr error
+
+		err := s.rdb.Watch(ctx, func(tx *redis.Tx) error {
+			currentVal, err := tx.Get(ctx, tagKey).Bytes()
+			if err != nil {
+				if errors.Is(err, redis.Nil) {
+					return store.ErrNotFound
+				}
+				return fmt.Errorf("while getting actor snapshot tag %s/%s: %w", atespace, name, err)
 			}
-			return err
-		}
-		tag := &ateapipb.ActorSnapshotTag{}
-		if err := protojson.Unmarshal(b, tag); err != nil {
-			return fmt.Errorf("while unmarshaling actor snapshot tag %s/%s: %w", atespace, name, err)
-		}
-		if tag.GetMetadata().GetVersion() != expectedVersion {
-			return store.ErrVersionConflict
-		}
-		if tag.GetScope() == scope {
-			updated = tag
+
+			currentTag := &ateapipb.ActorSnapshotTag{}
+			if err := protojson.Unmarshal(currentVal, currentTag); err != nil {
+				return fmt.Errorf("while unmarshaling actor snapshot tag %s/%s: %w", atespace, name, err)
+			}
+
+			// Snapshot the stored state before handing the tag to mutate.
+			// mutate is free to edit anything it is given.
+			tagBeforeMutation := proto.Clone(currentTag).(*ateapipb.ActorSnapshotTag)
+			if err := mutate(currentTag); err != nil {
+				abortErr = err
+				return err
+			}
+			if err := validateUpdateActorSnapshotTagMutation(tagBeforeMutation, currentTag); err != nil {
+				abortErr = err
+				return err
+			}
+			// The stored metadata is authoritative; derive the next metadata
+			// from it, discarding whatever mutate made of it.
+			currentTag.Metadata = newUpdateMetadata(tagBeforeMutation.GetMetadata())
+
+			newVal, err := protojson.Marshal(currentTag)
+			if err != nil {
+				return fmt.Errorf("while marshaling actor snapshot tag: %w", err)
+			}
+
+			if _, err := tx.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
+				pipe.Set(ctx, tagKey, newVal, 0)
+				return nil
+			}); err != nil {
+				return err
+			}
+			dbTag = currentTag
 			return nil
+		}, tagKey)
+
+		switch {
+		case err == nil:
+			return dbTag, nil
+		case abortErr != nil:
+			return nil, abortErr
+		case errors.Is(err, store.ErrNotFound):
+			return nil, store.ErrNotFound
+		case errors.Is(err, redis.TxFailedErr):
+			// A concurrent write landed before we could commit.
+			// Retry.
+			continue
+		default:
+			return nil, fmt.Errorf("while executing update actor snapshot tag transaction: %w", err)
 		}
-		tag.Scope = scope
-		tag.Metadata = newUpdateMetadata(tag.GetMetadata())
-		b, err = protojson.Marshal(tag)
-		if err != nil {
-			return fmt.Errorf("while marshaling actor snapshot tag: %w", err)
-		}
-		if _, err := tx.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
-			pipe.Set(ctx, tagKey, b, 0)
-			return nil
-		}); err != nil {
-			return err
-		}
-		updated = tag
-		return nil
-	}, tagKey)
-	if errors.Is(err, redis.TxFailedErr) {
-		return nil, store.ErrVersionConflict
 	}
-	if err != nil {
-		return nil, fmt.Errorf("while updating actor snapshot tag: %w", err)
-	}
-	return updated, nil
+
+	// Only the TxFailedErr branch continues the loop, so getting here means every
+	// attempt lost the race.
+	return nil, store.ErrVersionConflict
 }
 
 func (s *Persistence) DeleteActorSnapshotTag(ctx context.Context, atespace, name string) (*ateapipb.ActorSnapshotTag, error) {

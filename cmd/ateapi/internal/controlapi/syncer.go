@@ -383,18 +383,15 @@ func (s *WorkerPoolSyncer) releaseActorOnDeadWorker(ctx context.Context, namespa
 	// Snapshot crash attributes before pod and pool pointers are cleared on actor.
 	crashAttrs := ateattr.ActorMetricAttributes(actor, worker.GetSandboxClass(), opName, ateattr.ReasonWorkerPodGone)
 
-	_, err = s.persistence.UpdateActor(ctx, actorRef, func(dbActor *ateapipb.Actor) error {
-		if err := store.CheckActorPrecondition(dbActor, actor.GetMetadata().GetUid(), actor.GetMetadata().GetVersion()); err != nil {
-			return err
-		}
-		dbActor.Status = ateapipb.Actor_STATUS_CRASHED
-		dbActor.WorkerAssignment = nil
+	_, err = s.persistence.UpdateActor(ctx, actorRef, store.WithPrecondition(actor, func(toUpdate *ateapipb.Actor) error {
+		toUpdate.Status = ateapipb.Actor_STATUS_CRASHED
+		toUpdate.WorkerAssignment = nil
 		// Both in-progress checkpoints die with the worker: the durable one was
 		// never uploaded, the local one lived on the node that went away.
-		dbActor.InProgressSnapshotName = ""
-		dbActor.InProgressLocalSnapshotName = ""
+		toUpdate.InProgressSnapshotName = ""
+		toUpdate.InProgressLocalSnapshotName = ""
 		return nil
-	})
+	}))
 
 	if err == nil && !wasAlreadyCrashed {
 		recordActorCrash(ctx, crashAttrs)

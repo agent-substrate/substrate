@@ -2534,7 +2534,7 @@ func TestUpdateActorSnapshotTag_Preconditions(t *testing.T) {
 	// The uid from the deleted lifecycle must be rejected, even though the
 	// atespace/name it was observed under still resolves.
 	_, err := update(&ateapipb.ResourceMetadata{Uid: staleUID}, ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED)
-	assertGrpcError(t, err, codes.Aborted, fmt.Sprintf("ActorSnapshot tag %s/%s has uid %s, not %s", testAtespace, tagName, uid, staleUID))
+	assertGrpcError(t, err, codes.Aborted, fmt.Sprintf("ActorSnapshot tag %s/%s not found with uid %s", testAtespace, tagName, staleUID))
 
 	// An unguarded update is last-writer-wins, and moves the tag past the
 	// version observed above.
@@ -3219,8 +3219,8 @@ func TestDeleteActor_Crashed(t *testing.T) {
 	}
 
 	actorRef := resources.ActorRef{Atespace: testAtespace, Name: "id1"}
-	if _, err := tc.persistence.UpdateActor(context.Background(), actorRef, func(dbActor *ateapipb.Actor) error {
-		dbActor.Status = ateapipb.Actor_STATUS_CRASHED
+	if _, err := tc.persistence.UpdateActor(context.Background(), actorRef, func(toUpdate *ateapipb.Actor) error {
+		toUpdate.Status = ateapipb.Actor_STATUS_CRASHED
 		return nil
 	}); err != nil {
 		t.Fatalf("UpdateActor failed: %v", err)

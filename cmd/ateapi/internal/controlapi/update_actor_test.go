@@ -300,8 +300,8 @@ func TestUpdateActor_DeleteRecreateRace(t *testing.T) {
 	racing := &conflictInjectingStore{
 		Interface: persistence,
 		inject: func() {
-			if _, err := persistence.UpdateActor(ctx, actorRef, func(dbActor *ateapipb.Actor) error {
-				dbActor.Status = ateapipb.Actor_STATUS_DELETING
+			if _, err := persistence.UpdateActor(ctx, actorRef, func(toUpdate *ateapipb.Actor) error {
+				toUpdate.Status = ateapipb.Actor_STATUS_DELETING
 				return nil
 			}); err != nil {
 				t.Fatalf("racing writer: mark deleting: %v", err)
@@ -383,8 +383,8 @@ func TestUpdateActor_ConcurrentDisjointUpdates(t *testing.T) {
 	racing := &conflictInjectingStore{
 		Interface: persistence,
 		inject: func() {
-			if _, err := persistence.UpdateActor(ctx, actorRef, func(dbActor *ateapipb.Actor) error {
-				dbActor.Status = ateapipb.Actor_STATUS_SUSPENDING
+			if _, err := persistence.UpdateActor(ctx, actorRef, func(toUpdate *ateapipb.Actor) error {
+				toUpdate.Status = ateapipb.Actor_STATUS_SUSPENDING
 				return nil
 			}); err != nil {
 				t.Fatalf("racing writer: mark suspending: %v", err)

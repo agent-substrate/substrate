@@ -78,23 +78,20 @@ func (w *ActorWorkflow) ensureMarkedDeleting(ctx context.Context, actorRef resou
 		return nil, status.Errorf(codes.FailedPrecondition, "Actor %s is not in a deletable status (status: %v)", actorRef, actor.GetStatus())
 	}
 
-	updated, err := w.store.UpdateActor(ctx, actorRef, func(dbActor *ateapipb.Actor) error {
-		if err := store.CheckActorPrecondition(dbActor, actor.GetMetadata().GetUid(), actor.GetMetadata().GetVersion()); err != nil {
-			return err
-		}
-		dbActor.Status = ateapipb.Actor_STATUS_DELETING
-		for _, vol := range dbActor.GetActorVolumes() {
+	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.WithPrecondition(actor, func(toUpdate *ateapipb.Actor) error {
+		toUpdate.Status = ateapipb.Actor_STATUS_DELETING
+		for _, vol := range toUpdate.GetActorVolumes() {
 			vol.Status = ateapipb.ExternalVolume_STATUS_DELETING
 		}
 		return nil
-	})
+	}))
 	if err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {
 			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
 		}
 		return nil, fmt.Errorf("while setting actor status to DELETING: %w", err)
 	}
-	return updated, nil
+	return storedActor, nil
 }
 
 // ensureVolumesDeleted removes the actor's external volumes. Volume deletion

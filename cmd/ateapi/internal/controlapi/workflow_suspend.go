@@ -137,22 +137,19 @@ func (w *ActorWorkflow) ensureMarkedSuspending(ctx context.Context, actorRef res
 	if _, err := inProgressSnapshotURI(actorTemplate, actorRef.Atespace, name); err != nil {
 		return nil, err
 	}
-	updated, err := w.store.UpdateActor(ctx, actorRef, func(dbActor *ateapipb.Actor) error {
-		if err := store.CheckActorPrecondition(dbActor, actor.GetMetadata().GetUid(), actor.GetMetadata().GetVersion()); err != nil {
-			return err
-		}
-		dbActor.Status = ateapipb.Actor_STATUS_SUSPENDING
-		dbActor.InProgressSnapshotSourceActorVersion = dbActor.GetMetadata().GetVersion()
-		dbActor.InProgressSnapshotName = name
+	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.WithPrecondition(actor, func(toUpdate *ateapipb.Actor) error {
+		toUpdate.Status = ateapipb.Actor_STATUS_SUSPENDING
+		toUpdate.InProgressSnapshotSourceActorVersion = toUpdate.GetMetadata().GetVersion()
+		toUpdate.InProgressSnapshotName = name
 		return nil
-	})
+	}))
 	if err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {
 			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
 		}
 		return nil, err
 	}
-	return updated, nil
+	return storedActor, nil
 }
 
 // commitSnapshotScope returns the scope a commit (suspend) snapshot is taken
@@ -405,25 +402,22 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 			return nil, err
 		}
 	}
-	updatedActor, err := w.store.UpdateActor(ctx, actorRef, func(dbActor *ateapipb.Actor) error {
-		if err := store.CheckActorPrecondition(dbActor, latestActor.GetMetadata().GetUid(), latestActor.GetMetadata().GetVersion()); err != nil {
-			return err
-		}
-		dbActor.Status = ateapipb.Actor_STATUS_SUSPENDED
+	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.WithPrecondition(latestActor, func(toUpdate *ateapipb.Actor) error {
+		toUpdate.Status = ateapipb.Actor_STATUS_SUSPENDED
 		if snapshotName != "" {
-			dbActor.LatestSnapshot = &ateapipb.ObjectRef{Atespace: actorRef.Atespace, Name: snapshotName}
-			dbActor.InProgressSnapshotName = ""
-			dbActor.InProgressSnapshotSourceActorVersion = 0
+			toUpdate.LatestSnapshot = &ateapipb.ObjectRef{Atespace: actorRef.Atespace, Name: snapshotName}
+			toUpdate.InProgressSnapshotName = ""
+			toUpdate.InProgressSnapshotSourceActorVersion = 0
 		}
-		dbActor.WorkerAssignment = nil
-		dbActor.LocalSnapshotInfo = nil
+		toUpdate.WorkerAssignment = nil
+		toUpdate.LocalSnapshotInfo = nil
 		return nil
-	})
+	}))
 	if err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {
 			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
 		}
 		return nil, err
 	}
-	return updatedActor, nil
+	return storedActor, nil
 }

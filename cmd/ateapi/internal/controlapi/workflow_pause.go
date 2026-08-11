@@ -121,21 +121,18 @@ func (w *ActorWorkflow) ensureMarkedPausing(ctx context.Context, actorRef resour
 	}
 
 	snapshotName := resources.NewSnapshotName()
-	updated, err := w.store.UpdateActor(ctx, actorRef, func(dbActor *ateapipb.Actor) error {
-		if err := store.CheckActorPrecondition(dbActor, actor.GetMetadata().GetUid(), actor.GetMetadata().GetVersion()); err != nil {
-			return err
-		}
-		dbActor.Status = ateapipb.Actor_STATUS_PAUSING
-		dbActor.InProgressLocalSnapshotName = snapshotName
+	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.WithPrecondition(actor, func(toUpdate *ateapipb.Actor) error {
+		toUpdate.Status = ateapipb.Actor_STATUS_PAUSING
+		toUpdate.InProgressLocalSnapshotName = snapshotName
 		return nil
-	})
+	}))
 	if err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {
 			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
 		}
 		return nil, err
 	}
-	return updated, nil
+	return storedActor, nil
 }
 
 // ensureAteletPaused checkpoints the workload locally on the worker node
@@ -266,27 +263,24 @@ func (w *ActorWorkflow) ensurePausedFinalized(ctx context.Context, actorRef reso
 		latestActor.Status = newStatus
 		crashAttrs := ateattr.ActorMetricAttributes(latestActor, sandboxClass, ateattr.OperationPause, ateattr.ReasonCorruptedAssignment)
 
-		updatedActor, err := w.store.UpdateActor(ctx, actorRef, func(dbActor *ateapipb.Actor) error {
-			if err := store.CheckActorPrecondition(dbActor, latestActor.GetMetadata().GetUid(), latestActor.GetMetadata().GetVersion()); err != nil {
-				return err
-			}
-			dbActor.Status = newStatus
+		storedActor, err := w.store.UpdateActor(ctx, actorRef, store.WithPrecondition(latestActor, func(toUpdate *ateapipb.Actor) error {
+			toUpdate.Status = newStatus
 			// TODO(dberkov) - what if InProgressLocalSnapshotName is empty? That shouldn't be possible.
-			if dbActor.GetInProgressLocalSnapshotName() != "" {
+			if toUpdate.GetInProgressLocalSnapshotName() != "" {
 				localInfo := &ateapipb.LocalSnapshotInfo{
-					SnapshotName: dbActor.GetInProgressLocalSnapshotName(),
+					SnapshotName: toUpdate.GetInProgressLocalSnapshotName(),
 					ContentScope: contentScope,
 				}
 				if newStatus != ateapipb.Actor_STATUS_CRASHED {
 					localInfo.NodeVmsWithLocalSnapshots = []string{nodeName}
 				}
-				dbActor.LocalSnapshotInfo = localInfo
-				dbActor.InProgressLocalSnapshotName = ""
+				toUpdate.LocalSnapshotInfo = localInfo
+				toUpdate.InProgressLocalSnapshotName = ""
 			}
-			dbActor.WorkerAssignment = nil
+			toUpdate.WorkerAssignment = nil
 			return nil
-		})
-		if err == nil && updatedActor.GetStatus() == ateapipb.Actor_STATUS_CRASHED && !wasAlreadyCrashed {
+		}))
+		if err == nil && storedActor.GetStatus() == ateapipb.Actor_STATUS_CRASHED && !wasAlreadyCrashed {
 			recordActorCrash(ctx, crashAttrs)
 		}
 		if err != nil {
@@ -295,7 +289,7 @@ func (w *ActorWorkflow) ensurePausedFinalized(ctx context.Context, actorRef reso
 			}
 			return nil, err
 		}
-		latestActor = updatedActor
+		latestActor = storedActor
 	}
 
 	return latestActor, nil

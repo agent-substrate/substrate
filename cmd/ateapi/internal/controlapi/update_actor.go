@@ -43,13 +43,10 @@ func (s *Service) UpdateActor(ctx context.Context, req *ateapipb.UpdateActorRequ
 	actorRef := resources.ActorRefFromActor(in)
 	setSpanActorRefAttributes(ctx, actorRef)
 
-	updated, err := s.persistence.UpdateActor(ctx, actorRef, func(dbActor *ateapipb.Actor) error {
-		if err := store.CheckActorPrecondition(dbActor, in.GetMetadata().GetUid(), in.GetMetadata().GetVersion()); err != nil {
-			return err
-		}
-		fieldmask.Apply(dbActor, in, req.GetUpdateMask())
+	storedActor, err := s.persistence.UpdateActor(ctx, actorRef, store.WithPrecondition(in, func(toUpdate *ateapipb.Actor) error {
+		fieldmask.Apply(toUpdate, in, req.GetUpdateMask())
 		return nil
-	})
+	}))
 	if err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {
 			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
@@ -63,8 +60,8 @@ func (s *Service) UpdateActor(ctx context.Context, req *ateapipb.UpdateActorRequ
 		return nil, fmt.Errorf("while updating actor: %w", err)
 	}
 
-	setSpanActorAttributes(ctx, updated)
-	return updated, nil
+	setSpanActorAttributes(ctx, storedActor)
+	return storedActor, nil
 }
 
 func validateUpdateActorRequest(req *ateapipb.UpdateActorRequest) field.ErrorList {

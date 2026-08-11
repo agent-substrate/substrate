@@ -254,13 +254,10 @@ func (w *ActorWorkflow) ensureVolumesCreated(ctx context.Context, actorRef resou
 	volumes, createErr := createActorVolumes(ctx, w.pluginRegistry, w.storageClassLister, actor.GetMetadata().GetUid(), actorTemplate, actor.GetActorVolumes())
 	// createActorVolumes reports the state it got to even when it fails, so both
 	// paths persist the same field.
-	persistVolumes := func(dbActor *ateapipb.Actor) error {
-		if err := store.CheckActorPrecondition(dbActor, actor.GetMetadata().GetUid(), actor.GetMetadata().GetVersion()); err != nil {
-			return err
-		}
-		dbActor.ActorVolumes = volumes
+	persistVolumes := store.WithPrecondition(actor, func(toUpdate *ateapipb.Actor) error {
+		toUpdate.ActorVolumes = volumes
 		return nil
-	}
+	})
 	if createErr != nil {
 		// Even if volume creation failed, we still want to persist any updated volume state.
 		if _, updateErr := w.store.UpdateActor(ctx, actorRef, persistVolumes); updateErr != nil {
@@ -268,14 +265,14 @@ func (w *ActorWorkflow) ensureVolumesCreated(ctx context.Context, actorRef resou
 		}
 		return nil, createErr
 	}
-	updated, updateErr := w.store.UpdateActor(ctx, actorRef, persistVolumes)
+	storedActor, updateErr := w.store.UpdateActor(ctx, actorRef, persistVolumes)
 	if updateErr != nil {
 		if errors.Is(updateErr, store.ErrVersionConflict) {
 			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
 		}
 		return nil, fmt.Errorf("while updating actor after volume creation: %w", updateErr)
 	}
-	return updated, nil
+	return storedActor, nil
 }
 
 // ensureWorkerAssigned leaves the actor RESUMING with a validated, live,
@@ -511,14 +508,11 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 	}
 
 	newAssignment := workerAssignmentFrom(assignedWorker)
-	updatedActor, err := w.store.UpdateActor(ctx, actorRef, func(dbActor *ateapipb.Actor) error {
-		if err := store.CheckActorPrecondition(dbActor, actor.GetMetadata().GetUid(), actor.GetMetadata().GetVersion()); err != nil {
-			return err
-		}
-		dbActor.Status = ateapipb.Actor_STATUS_RESUMING
-		dbActor.WorkerAssignment = newAssignment
+	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.WithPrecondition(actor, func(toUpdate *ateapipb.Actor) error {
+		toUpdate.Status = ateapipb.Actor_STATUS_RESUMING
+		toUpdate.WorkerAssignment = newAssignment
 		return nil
-	})
+	}))
 	if err != nil {
 		if !errors.Is(err, store.ErrVersionConflict) {
 			return nil, nil, err
@@ -539,7 +533,7 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 	}
 	pool = assignedWorker.GetWorkerPool()
 	outcome = ateattr.SchedulerOutcomeAssigned
-	return updatedActor, assignedWorker, nil
+	return storedActor, assignedWorker, nil
 }
 
 func workerAssignmentFrom(w *ateapipb.Worker) *ateapipb.WorkerAssignment {
@@ -735,18 +729,15 @@ func (w *ActorWorkflow) finalizeRunning(ctx context.Context, actorRef resources.
 		return nil, err
 	}
 
-	updatedActor, err := w.store.UpdateActor(ctx, actorRef, func(dbActor *ateapipb.Actor) error {
-		if err := store.CheckActorPrecondition(dbActor, latestActor.GetMetadata().GetUid(), latestActor.GetMetadata().GetVersion()); err != nil {
-			return err
-		}
-		dbActor.Status = ateapipb.Actor_STATUS_RUNNING
+	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.WithPrecondition(latestActor, func(toUpdate *ateapipb.Actor) error {
+		toUpdate.Status = ateapipb.Actor_STATUS_RUNNING
 		return nil
-	})
+	}))
 	if err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {
 			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
 		}
 		return nil, err
 	}
-	return updatedActor, nil
+	return storedActor, nil
 }

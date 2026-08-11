@@ -127,37 +127,24 @@ func (s *Service) UpdateActorSnapshotTag(ctx context.Context, req *ateapipb.Upda
 	}
 	in := req.GetTag()
 	atespace, name := in.GetMetadata().GetAtespace(), in.GetMetadata().GetName()
-	_, current, err := s.persistence.GetActorSnapshotByTag(ctx, atespace, name)
-	if errors.Is(err, store.ErrNotFound) {
-		return nil, status.Errorf(codes.NotFound, "ActorSnapshot tag %s/%s not found", atespace, name)
-	}
+
+	storedTag, err := s.persistence.UpdateActorSnapshotTag(ctx, atespace, name, store.WithPrecondition(in, func(toUpdate *ateapipb.ActorSnapshotTag) error {
+		fieldmask.Apply(toUpdate, in, req.GetUpdateMask())
+		return nil
+	}))
 	if err != nil {
-		return nil, fmt.Errorf("while getting actor snapshot tag: %w", err)
-	}
-
-	// UID and version preconditions.
-	if uid := in.GetMetadata().GetUid(); uid != "" && uid != current.GetMetadata().GetUid() {
-		return nil, status.Errorf(codes.Aborted, "ActorSnapshot tag %s/%s has uid %s, not %s", atespace, name, current.GetMetadata().GetUid(), uid)
-	}
-
-	expectedVersion := current.GetMetadata().GetVersion()
-	if version := in.GetMetadata().GetVersion(); version != 0 {
-		expectedVersion = version
-	}
-
-	fieldmask.Apply(current, in, req.GetUpdateMask())
-
-	updatedTag, err := s.persistence.UpdateActorSnapshotTag(ctx, atespace, name, current.GetScope(), expectedVersion)
-	if errors.Is(err, store.ErrNotFound) {
-		return nil, status.Errorf(codes.NotFound, "ActorSnapshot tag %s/%s not found", atespace, name)
-	}
-	if errors.Is(err, store.ErrVersionConflict) {
-		return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
-	}
-	if err != nil {
+		if errors.Is(err, store.ErrVersionConflict) {
+			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
+		}
+		if errors.Is(err, store.ErrUIDConflict) {
+			return nil, status.Errorf(codes.Aborted, "ActorSnapshot tag %s/%s not found with uid %s", atespace, name, in.GetMetadata().GetUid())
+		}
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, status.Errorf(codes.NotFound, "ActorSnapshot tag %s/%s not found", atespace, name)
+		}
 		return nil, fmt.Errorf("while updating actor snapshot tag: %w", err)
 	}
-	return updatedTag, nil
+	return storedTag, nil
 }
 
 func validateUpdateActorSnapshotTagRequest(req *ateapipb.UpdateActorSnapshotTagRequest) field.ErrorList {
