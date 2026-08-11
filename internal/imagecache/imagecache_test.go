@@ -20,13 +20,16 @@ import (
 	"context"
 	"io"
 	"log"
+	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
+	"sync/atomic"
 	"testing"
 
+	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/google/go-containerregistry/pkg/registry"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
@@ -162,6 +165,50 @@ func TestEnsureImage_TagPullAndDigestHit(t *testing.T) {
 	}
 	if !slices.Equal(img2.Config.Env, img.Config.Env) {
 		t.Errorf("cache hit Config.Env = %v, want %v", img2.Config.Env, img.Config.Env)
+	}
+}
+
+func TestEnsureImageWithAuthenticatorProviderTriesAllCredentials(t *testing.T) {
+	var requireAuth atomic.Bool
+	var rejected atomic.Int32
+	registryHandler := registry.New(registry.Logger(log.New(io.Discard, "", 0)))
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if requireAuth.Load() {
+			username, password, ok := r.BasicAuth()
+			if !ok || username != "valid-user" || password != "valid-password" {
+				rejected.Add(1)
+				w.Header().Set("WWW-Authenticate", `Basic realm="registry"`)
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+		}
+		registryHandler.ServeHTTP(w, r)
+	}))
+	t.Cleanup(srv.Close)
+	u, err := url.Parse(srv.URL)
+	if err != nil {
+		t.Fatalf("parsing registry URL: %v", err)
+	}
+	ref := u.Host + "/test/private:latest"
+	pushed := pushImage(t, ref, v1.Config{})
+	digest, err := pushed.Digest()
+	if err != nil {
+		t.Fatalf("image digest: %v", err)
+	}
+	requireAuth.Store(true)
+
+	store := newTestStore(t)
+	_, err = store.EnsureImageWithAuthenticatorProvider(context.Background(), u.Host+"/test/private@"+digest.String(), func(context.Context) ([]authn.Authenticator, error) {
+		return []authn.Authenticator{
+			authn.FromConfig(authn.AuthConfig{Username: "stale-user", Password: "stale-password"}),
+			authn.FromConfig(authn.AuthConfig{Username: "valid-user", Password: "valid-password"}),
+		}, nil
+	})
+	if err != nil {
+		t.Fatalf("EnsureImageWithAuthenticatorProvider: %v", err)
+	}
+	if rejected.Load() == 0 {
+		t.Error("stale credential was not attempted")
 	}
 }
 

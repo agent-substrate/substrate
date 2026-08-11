@@ -19,6 +19,7 @@ import (
 	"testing"
 
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
+	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-containerregistry/pkg/authn"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -35,11 +36,14 @@ func TestImagePullSecretResolverSelectsMatchingCredential(t *testing.T) {
 	})
 	resolver := newImagePullSecretResolver(kubeClient, "agent-ns", []*ateletpb.ImagePullSecretReference{{Name: "registry-credentials"}})
 
-	authenticator, err := resolver.authenticator(context.Background(), "registry.example.com/team/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	authenticators, err := resolver.authenticators(context.Background(), "registry.example.com/team/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 	if err != nil {
-		t.Fatalf("authenticator: %v", err)
+		t.Fatalf("authenticators: %v", err)
 	}
-	auth, err := authenticator.Authorization()
+	if len(authenticators) != 1 {
+		t.Fatalf("authenticators = %d, want 1", len(authenticators))
+	}
+	auth, err := authenticators[0].Authorization()
 	if err != nil {
 		t.Fatalf("Authorization: %v", err)
 	}
@@ -47,8 +51,8 @@ func TestImagePullSecretResolverSelectsMatchingCredential(t *testing.T) {
 		t.Errorf("authorization = (%q, %q), want user:pass", auth.Username, auth.Password)
 	}
 
-	if _, err := resolver.authenticator(context.Background(), "registry.example.com/team/other@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"); err != nil {
-		t.Fatalf("second authenticator: %v", err)
+	if _, err := resolver.authenticators(context.Background(), "registry.example.com/team/other@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"); err != nil {
+		t.Fatalf("second authenticators: %v", err)
 	}
 	secretGets := 0
 	for _, action := range kubeClient.Actions() {
@@ -71,35 +75,43 @@ func TestRegistryAuthsFromSecretAcceptsLegacyDockerConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("registryAuthsFromSecret: %v", err)
 	}
-	auth, ok, err := registryAuthForImage("busybox@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", auths)
+	matches, err := registryAuthsForImage("busybox@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", auths)
 	if err != nil {
-		t.Fatalf("registryAuthForImage: %v", err)
+		t.Fatalf("registryAuthsForImage: %v", err)
 	}
-	if !ok || auth.config.Username != "user" || auth.config.Password != "pass" {
-		t.Errorf("credential = %#v, matched = %t; want user:pass", auth.config, ok)
+	if len(matches) != 1 || matches[0].config.Username != "user" || matches[0].config.Password != "pass" {
+		t.Errorf("credentials = %#v, want user:pass", matches)
 	}
 }
 
-func TestRegistryAuthForImageUsesMostSpecificMatchingScope(t *testing.T) {
+func TestRegistryAuthsForImageReturnsAllMatchesMostSpecificFirst(t *testing.T) {
 	auths := []registryAuth{
 		{scope: registryAuthScope{host: "registry.example.com"}, config: authn.AuthConfig{Username: "registry"}},
 		{scope: registryAuthScope{host: "registry.example.com", repository: "team"}, config: authn.AuthConfig{Username: "team"}},
+		{scope: registryAuthScope{host: "registry.example.com", repository: "team"}, config: authn.AuthConfig{Username: "team-rotated"}},
 		{scope: registryAuthScope{host: "*.example.com", repository: "team"}, config: authn.AuthConfig{Username: "wildcard"}},
+		{scope: registryAuthScope{host: "*.exa?ple.com", repository: "team"}, config: authn.AuthConfig{Username: "question-mark"}},
+		{scope: registryAuthScope{host: "*.[a-z]xample.com", repository: "team"}, config: authn.AuthConfig{Username: "character-class"}},
 	}
 	for _, test := range []struct {
 		image string
-		want  string
+		want  []string
 	}{
-		{"registry.example.com/team/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "team"},
-		{"registry.example.com/other/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "registry"},
-		{"us.example.com/team/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "wildcard"},
+		{"registry.example.com/team/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", []string{"team", "team-rotated", "registry", "wildcard"}},
+		{"registry.example.com/other/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", []string{"registry"}},
+		{"us.example.com/team/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", []string{"wildcard"}},
+		{"a.b.example.com/team/app@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", nil},
 	} {
-		auth, ok, err := registryAuthForImage(test.image, auths)
+		matches, err := registryAuthsForImage(test.image, auths)
 		if err != nil {
-			t.Fatalf("registryAuthForImage(%q): %v", test.image, err)
+			t.Fatalf("registryAuthsForImage(%q): %v", test.image, err)
 		}
-		if !ok || auth.config.Username != test.want {
-			t.Errorf("registryAuthForImage(%q) = (%q, %t), want (%q, true)", test.image, auth.config.Username, ok, test.want)
+		var got []string
+		for _, match := range matches {
+			got = append(got, match.config.Username)
+		}
+		if diff := cmp.Diff(test.want, got); diff != "" {
+			t.Errorf("registryAuthsForImage(%q) mismatch (-want +got):\n%s", test.image, diff)
 		}
 	}
 }

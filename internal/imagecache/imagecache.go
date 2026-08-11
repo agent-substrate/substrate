@@ -331,14 +331,14 @@ func (s *Store) EnsureImage(ctx context.Context, ref string) (*Image, error) {
 	return s.ensureImage(ctx, ref, nil)
 }
 
-// EnsureImageWithAuthenticatorProvider resolves an explicit credential only if
-// a registry request is required. In particular, digest-pinned cache hits do
-// not require a Kubernetes Secret read from the caller's provider.
-func (s *Store) EnsureImageWithAuthenticatorProvider(ctx context.Context, ref string, provider func(context.Context) (authn.Authenticator, error)) (*Image, error) {
+// EnsureImageWithAuthenticatorProvider resolves explicit credentials only if a
+// registry request is required and tries them in provider order. In particular,
+// digest-pinned cache hits do not require a Kubernetes Secret read.
+func (s *Store) EnsureImageWithAuthenticatorProvider(ctx context.Context, ref string, provider func(context.Context) ([]authn.Authenticator, error)) (*Image, error) {
 	return s.ensureImage(ctx, ref, provider)
 }
 
-func (s *Store) ensureImage(ctx context.Context, ref string, authenticatorProvider func(context.Context) (authn.Authenticator, error)) (_ *Image, err error) {
+func (s *Store) ensureImage(ctx context.Context, ref string, authenticatorProvider func(context.Context) ([]authn.Authenticator, error)) (_ *Image, err error) {
 	// A miss until a complete record proves otherwise; recordRequest
 	// reclassifies a failure onto its own outcome.
 	outcome := ateattr.ImageCacheOutcomeMiss
@@ -358,13 +358,21 @@ func (s *Store) ensureImage(ctx context.Context, ref string, authenticatorProvid
 	} else {
 		// Tag ref: one small HEAD request pins it to an immutable manifest
 		// digest, which is the only safe cache key for mutable tags.
-		opts, err := s.remoteOpts(ctx, parsedRef, authenticatorProvider)
+		optionSets, err := s.remoteOptionSets(ctx, parsedRef, authenticatorProvider)
 		if err != nil {
 			return nil, err
 		}
-		desc, err := remote.Head(parsedRef, opts...)
-		if err != nil {
-			return nil, fmt.Errorf("while resolving tag %q to a digest: %w", ref, err)
+		var desc *v1.Descriptor
+		var errs []error
+		for _, opts := range optionSets {
+			desc, err = remote.Head(parsedRef, opts...)
+			if err == nil {
+				break
+			}
+			errs = append(errs, err)
+		}
+		if desc == nil {
+			return nil, fmt.Errorf("while resolving tag %q to a digest: %w", ref, errors.Join(errs...))
 		}
 		digest = desc.Digest
 	}
@@ -448,7 +456,7 @@ func (s *Store) cachedImage(digest v1.Hash) (*Image, error) {
 // means "known image, possibly partially present", which readers already
 // handle: cachedImage verifies every layer and re-pulls what is missing,
 // so an interrupted pull's record is just resumable progress.
-func (s *Store) pull(ctx context.Context, parsedRef name.Reference, digest v1.Hash, authenticatorProvider func(context.Context) (authn.Authenticator, error)) (*Image, error) {
+func (s *Store) pull(ctx context.Context, parsedRef name.Reference, digest v1.Hash, authenticatorProvider func(context.Context) ([]authn.Authenticator, error)) (*Image, error) {
 	// Re-check under the flight lock: a racing EnsureImage may have completed
 	// the pull between our cache miss and winning the singleflight slot.
 	if img, err := s.cachedImage(digest); err != nil {
@@ -459,13 +467,21 @@ func (s *Store) pull(ctx context.Context, parsedRef name.Reference, digest v1.Ha
 
 	tStart := time.Now()
 	digestRef := parsedRef.Context().Digest(digest.String())
-	opts, err := s.remoteOpts(ctx, parsedRef, authenticatorProvider)
+	optionSets, err := s.remoteOptionSets(ctx, parsedRef, authenticatorProvider)
 	if err != nil {
 		return nil, err
 	}
-	img, err := remote.Image(digestRef, opts...)
-	if err != nil {
-		return nil, fmt.Errorf("in remote.Image: %w", err)
+	var img v1.Image
+	var errs []error
+	for _, opts := range optionSets {
+		img, err = remote.Image(digestRef, opts...)
+		if err == nil {
+			break
+		}
+		errs = append(errs, err)
+	}
+	if img == nil {
+		return nil, fmt.Errorf("in remote.Image: %w", errors.Join(errs...))
 	}
 
 	cfgFile, err := img.ConfigFile()
@@ -681,9 +697,9 @@ func (s *Store) writeRecord(digest v1.Hash, rec imageRecord) error {
 	return nil
 }
 
-// remoteOpts assembles the go-containerregistry options for pulls from
-// parsedRef's registry.
-func (s *Store) remoteOpts(ctx context.Context, parsedRef name.Reference, authenticatorProvider func(context.Context) (authn.Authenticator, error)) ([]remote.Option, error) {
+// remoteOptionSets assembles one set of go-containerregistry options per
+// matching explicit credential. Callers try the sets in order.
+func (s *Store) remoteOptionSets(ctx context.Context, parsedRef name.Reference, authenticatorProvider func(context.Context) ([]authn.Authenticator, error)) ([][]remote.Option, error) {
 	platform := v1.Platform{
 		Architecture: runtime.GOARCH,
 		OS:           "linux",
@@ -691,7 +707,7 @@ func (s *Store) remoteOpts(ctx context.Context, parsedRef name.Reference, authen
 	if s.platform != nil {
 		platform = *s.platform
 	}
-	opts := []remote.Option{
+	baseOpts := []remote.Option{
 		// Propagate caller ctx into go-containerregistry so cancellation tears
 		// down in-flight layer-blob HTTP requests instead of letting them run
 		// to completion in background goroutines.
@@ -699,20 +715,26 @@ func (s *Store) remoteOpts(ctx context.Context, parsedRef name.Reference, authen
 		remote.WithPlatform(platform),
 	}
 	registry := parsedRef.Context().Registry.RegistryStr()
-	var explicitAuthenticator authn.Authenticator
+	var explicitAuthenticators []authn.Authenticator
 	if authenticatorProvider != nil {
 		var err error
-		explicitAuthenticator, err = authenticatorProvider(ctx)
+		explicitAuthenticators, err = authenticatorProvider(ctx)
 		if err != nil {
 			return nil, fmt.Errorf("while resolving registry credentials: %w", err)
 		}
 	}
-	if explicitAuthenticator != nil {
-		opts = append(opts, remote.WithAuth(explicitAuthenticator))
-	} else if s.authenticator != nil && registryUsesGCPAuth(registry) {
-		opts = append(opts, remote.WithAuth(s.authenticator))
+	if len(explicitAuthenticators) > 0 {
+		optionSets := make([][]remote.Option, 0, len(explicitAuthenticators))
+		for _, authenticator := range explicitAuthenticators {
+			opts := append([]remote.Option(nil), baseOpts...)
+			optionSets = append(optionSets, append(opts, remote.WithAuth(authenticator)))
+		}
+		return optionSets, nil
 	}
-	return opts, nil
+	if s.authenticator != nil && registryUsesGCPAuth(registry) {
+		baseOpts = append(baseOpts, remote.WithAuth(s.authenticator))
+	}
+	return [][]remote.Option{baseOpts}, nil
 }
 
 func registryUsesGCPAuth(registry string) bool {

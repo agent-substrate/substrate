@@ -635,8 +635,8 @@ func (x *SandboxAssets) GetPauseImage() string {
 type WorkloadSpec struct {
 	state            protoimpl.MessageState      `protogen:"open.v1"`
 	Containers       []*Container                `protobuf:"bytes,1,rep,name=containers,proto3" json:"containers,omitempty"`
-	ImagePullSecrets []*ImagePullSecretReference `protobuf:"bytes,2,rep,name=image_pull_secrets,json=imagePullSecrets,proto3" json:"image_pull_secrets,omitempty"`
 	Volumes          []*Volume                   `protobuf:"bytes,3,rep,name=volumes,proto3" json:"volumes,omitempty"`
+	ImagePullSecrets []*ImagePullSecretReference `protobuf:"bytes,4,rep,name=image_pull_secrets,json=imagePullSecrets,proto3" json:"image_pull_secrets,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
@@ -678,16 +678,16 @@ func (x *WorkloadSpec) GetContainers() []*Container {
 	return nil
 }
 
-func (x *WorkloadSpec) GetImagePullSecrets() []*ImagePullSecretReference {
+func (x *WorkloadSpec) GetVolumes() []*Volume {
 	if x != nil {
-		return x.ImagePullSecrets
+		return x.Volumes
 	}
 	return nil
 }
 
-func (x *WorkloadSpec) GetVolumes() []*Volume {
+func (x *WorkloadSpec) GetImagePullSecrets() []*ImagePullSecretReference {
 	if x != nil {
-		return x.Volumes
+		return x.ImagePullSecrets
 	}
 	return nil
 }
@@ -1972,13 +1972,13 @@ const file_atelet_proto_rawDesc = "" +
 	"pauseImage\x1aM\n" +
 	"\vAssetsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12(\n" +
-	"\x05value\x18\x02 \x01(\v2\x12.atelet.ArchAssetsR\x05value:\x028\x01\"\xc8\x01\n" +
+	"\x05value\x18\x02 \x01(\v2\x12.atelet.ArchAssetsR\x05value:\x028\x01\"\xce\x01\n" +
 	"\fWorkloadSpec\x121\n" +
 	"\n" +
 	"containers\x18\x01 \x03(\v2\x11.atelet.ContainerR\n" +
-	"containers\x12N\n" +
-	"\x12image_pull_secrets\x18\x02 \x03(\v2 .atelet.ImagePullSecretReferenceR\x10imagePullSecrets\x12(\n" +
-	"\avolumes\x18\x03 \x03(\v2\x0e.atelet.VolumeR\avolumesR\vpause_image\".\n" +
+	"containers\x12(\n" +
+	"\avolumes\x18\x03 \x03(\v2\x0e.atelet.VolumeR\avolumes\x12N\n" +
+	"\x12image_pull_secrets\x18\x04 \x03(\v2 .atelet.ImagePullSecretReferenceR\x10imagePullSecretsJ\x04\b\x02\x10\x03R\vpause_image\".\n" +
 	"\x18ImagePullSecretReference\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\"\x12\n" +
 	"\x10DurableDirVolume\"\xfd\x01\n" +
@@ -2147,8 +2147,8 @@ var file_atelet_proto_depIdxs = []int32{
 	29, // 3: atelet.ArchAssets.files:type_name -> atelet.ArchAssets.FilesEntry
 	30, // 4: atelet.SandboxAssets.assets:type_name -> atelet.SandboxAssets.AssetsEntry
 	16, // 5: atelet.WorkloadSpec.containers:type_name -> atelet.Container
-	11, // 6: atelet.WorkloadSpec.image_pull_secrets:type_name -> atelet.ImagePullSecretReference
-	14, // 7: atelet.WorkloadSpec.volumes:type_name -> atelet.Volume
+	14, // 6: atelet.WorkloadSpec.volumes:type_name -> atelet.Volume
+	11, // 7: atelet.WorkloadSpec.image_pull_secrets:type_name -> atelet.ImagePullSecretReference
 	31, // 8: atelet.ExternalVolumeSource.volume_context:type_name -> atelet.ExternalVolumeSource.VolumeContextEntry
 	0,  // 9: atelet.Volume.type:type_name -> atelet.VolumeType
 	12, // 10: atelet.Volume.durable_dir:type_name -> atelet.DurableDirVolume

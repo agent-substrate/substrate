@@ -82,8 +82,8 @@ func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, acto
 	if imagePullSecrets == nil {
 		img, err = imageCache.EnsureImage(ctx, ref)
 	} else {
-		img, err = imageCache.EnsureImageWithAuthenticatorProvider(ctx, ref, func(ctx context.Context) (authn.Authenticator, error) {
-			return imagePullSecrets.authenticator(ctx, ref)
+		img, err = imageCache.EnsureImageWithAuthenticatorProvider(ctx, ref, func(ctx context.Context) ([]authn.Authenticator, error) {
+			return imagePullSecrets.authenticators(ctx, ref)
 		})
 	}
 	if err != nil {

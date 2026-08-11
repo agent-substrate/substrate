@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/url"
 	"sort"
 	"strings"
@@ -54,7 +55,8 @@ func newImagePullSecretResolver(kubeClient kubernetes.Interface, namespace strin
 	}
 }
 
-func (r *imagePullSecretResolver) authenticator(ctx context.Context, image string) (authn.Authenticator, error) {
+func (r *imagePullSecretResolver) authenticators(ctx context.Context, image string) ([]authn.Authenticator, error) {
+	var registryAuths []registryAuth
 	for _, ref := range r.refs {
 		secret, err := r.secret(ctx, ref.GetName())
 		if err != nil {
@@ -64,15 +66,17 @@ func (r *imagePullSecretResolver) authenticator(ctx context.Context, image strin
 		if err != nil {
 			return nil, fmt.Errorf("invalid imagePullSecret %s/%s: %w", r.namespace, ref.GetName(), err)
 		}
-		auth, ok, err := registryAuthForImage(image, auths)
-		if err != nil {
-			return nil, fmt.Errorf("while matching image %q against imagePullSecret %s/%s: %w", image, r.namespace, ref.GetName(), err)
-		}
-		if ok {
-			return authn.FromConfig(auth.config), nil
-		}
+		registryAuths = append(registryAuths, auths...)
 	}
-	return nil, nil
+	matches, err := registryAuthsForImage(image, registryAuths)
+	if err != nil {
+		return nil, fmt.Errorf("while matching image %q against imagePullSecrets: %w", image, err)
+	}
+	result := make([]authn.Authenticator, 0, len(matches))
+	for _, match := range matches {
+		result = append(result, authn.FromConfig(match.config))
+	}
+	return result, nil
 }
 
 func (r *imagePullSecretResolver) secret(ctx context.Context, name string) (*corev1.Secret, error) {
@@ -143,10 +147,10 @@ func registryAuthsFromSecret(secret *corev1.Secret) ([]registryAuth, error) {
 	return result, nil
 }
 
-func registryAuthForImage(image string, auths []registryAuth) (registryAuth, bool, error) {
+func registryAuthsForImage(image string, auths []registryAuth) ([]registryAuth, error) {
 	ref, err := name.ParseReference(image)
 	if err != nil {
-		return registryAuth{}, false, fmt.Errorf("invalid image reference: %w", err)
+		return nil, fmt.Errorf("invalid image reference: %w", err)
 	}
 	host := ref.Context().Registry.RegistryStr()
 	if host == "index.docker.io" {
@@ -156,14 +160,45 @@ func registryAuthForImage(image string, auths []registryAuth) (registryAuth, boo
 	sort.SliceStable(auths, func(i, j int) bool {
 		return len(auths[i].scope.host)+len(auths[i].scope.repository) > len(auths[j].scope.host)+len(auths[j].scope.repository)
 	})
+	var matches []registryAuth
 	for _, auth := range auths {
 		scope := auth.scope
-		if (scope.host == host || (strings.HasPrefix(scope.host, "*.") && strings.HasSuffix(host, scope.host[1:]))) &&
+		if registryHostsMatch(scope.host, host) &&
 			(scope.repository == "" || repository == scope.repository || strings.HasPrefix(repository, scope.repository+"/")) {
-			return auth, true, nil
+			matches = append(matches, auth)
 		}
 	}
-	return registryAuth{}, false, nil
+	return matches, nil
+}
+
+func registryHostsMatch(pattern, target string) bool {
+	if pattern == target {
+		return true
+	}
+	patternHost, patternPort := splitRegistryHost(pattern)
+	targetHost, targetPort := splitRegistryHost(target)
+	if patternPort != targetPort {
+		return false
+	}
+	patternParts := strings.Split(patternHost, ".")
+	targetParts := strings.Split(targetHost, ".")
+	if len(patternParts) != len(targetParts) {
+		return false
+	}
+	for i := range patternParts {
+		if patternParts[i] != "*" && patternParts[i] != targetParts[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func splitRegistryHost(hostPort string) (string, string) {
+	host, port, err := net.SplitHostPort(hostPort)
+	if err != nil {
+		return hostPort, ""
+	}
+	return host, port
 }
 
 // parseRegistryScope splits a Docker config auth key into its registry host
