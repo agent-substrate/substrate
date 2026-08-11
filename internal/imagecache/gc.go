@@ -601,10 +601,11 @@ func (s *Store) dryRunRetire(hex string, cutoff time.Time) (int64, retireStatus)
 // their references are what keep shared layers alive — counting
 // listing-stage vetoes into stats.
 //
-// complete reports whether every record was read and decoded. Refcounts
-// from a partial listing understate references — a layer shared with an
-// unread record looks unreferenced — so both callers gate on it and do
-// nothing with a partial listing.
+// complete reports whether every record was read and decoded, and is
+// false only alongside a non-nil err (the gates wrap that err with %w,
+// which a nil would garble). Refcounts from a partial listing understate
+// references — a layer shared with an unread record looks unreferenced —
+// so both callers gate on it and do nothing with a partial listing.
 func (s *Store) listEviction(roots RootSet, cutoff time.Time, stats *EvictStats) (cands []evictionCandidate, refcount map[string]int, complete bool, err error) {
 	refcount = map[string]int{}
 	entries, err := os.ReadDir(s.manifestsDir())

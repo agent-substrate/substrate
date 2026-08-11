@@ -224,13 +224,15 @@ func TestRunPassSkipsOnCacheSizeFailure(t *testing.T) {
 }
 
 func TestRunPassEvictsAndPassesDryRun(t *testing.T) {
-	// high=100 keeps the host volume's real usage out of the target, so
-	// the max-bytes overage (100-1=99) is the whole target.
-	fake := &fakeGCStore{size: 100, stats: imagecache.EvictStats{FreedBytes: 99}}
+	// high=100 sidelines the watermark on any volume with >=1% free, so
+	// the max-bytes overage (99) is the target; a near-full host volume
+	// can lift it to the cacheSize cap, hence >= not ==.
+	fake := &fakeGCStore{size: 100, stats: imagecache.EvictStats{FreedBytes: 100}}
 	g := &imageCacheGC{store: fake, cacheDir: t.TempDir(), highPct: 100, lowPct: 0, maxBytes: 1, dryRun: true}
+	g.consecutiveShortfalls = 5 // a met target must reset it
 	g.runPass(context.Background())
-	if fake.evictCalls != 1 || fake.gotTarget != 99 || !fake.gotDryRun {
-		t.Errorf("evictCalls=%d target=%d dryRun=%v, want 1/99/true", fake.evictCalls, fake.gotTarget, fake.gotDryRun)
+	if fake.evictCalls != 1 || fake.gotTarget < 99 || !fake.gotDryRun {
+		t.Errorf("evictCalls=%d target=%d dryRun=%v, want 1/>=99/true", fake.evictCalls, fake.gotTarget, fake.gotDryRun)
 	}
 	if g.consecutiveShortfalls != 0 {
 		t.Errorf("consecutiveShortfalls=%d after met target, want 0", g.consecutiveShortfalls)

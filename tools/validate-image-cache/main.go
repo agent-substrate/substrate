@@ -33,7 +33,8 @@
 // placed actors' mounted images, but the engine's locks are per-process:
 // a run concurrent with a live atelet is two unsynchronized GC passes
 // over one pool, and New's orphan scan assumes no pull is in flight.
-// Stop atelet first for a clean flush.
+// Stop atelet first for a clean flush, and run as the user that owns
+// the cache and actors dirs — an unreadable actors dir gates every pass.
 package main
 
 import (
@@ -110,13 +111,14 @@ func main() {
 		}
 		stats, err := store.EvictUnused(ctx, math.MaxInt64, false)
 		if errors.Is(err, imagecache.ErrIncompleteEnumeration) {
-			// Gated: nothing was attempted; the error names the file to
-			// repair or delete.
+			// Gated: nothing was attempted; the error names the unreadable
+			// or corrupt file.
 			log.Fatalf("evict-all did nothing: %v", err)
 		}
 		if err != nil {
 			log.Printf("evict-all finished with errors: %v", err)
 		}
+		// Print the summary even on partial failure; err decides the exit code.
 		log.Printf("evict-all: %d images / %d layers evicted, %.1f GB credited (free now %.0f GB)",
 			stats.EvictedImages, stats.EvictedLayers, float64(stats.FreedBytes)/1e9, float64(freeBytes(*cacheDir))/1e9)
 		if err != nil {
@@ -256,10 +258,10 @@ func shortRef(ref string) string {
 // worker's re-check converges.
 var (
 	evictMu sync.Mutex // one attempt per low-water episode; queued workers re-check and return
-	// lastFruitless backs off when a pass freed nothing (typically:
-	// everything is younger than --evict-idle). Without it, every queued
-	// worker would run a full root-set scan and record enumeration ahead
-	// of its validation until free space moved.
+	// lastFruitless backs off when a pass freed nothing — everything
+	// younger than --evict-idle, or a gated pass. Without it every queued
+	// worker would run a full engine pass ahead of its validation until
+	// free space moved.
 	lastFruitless time.Time
 )
 
