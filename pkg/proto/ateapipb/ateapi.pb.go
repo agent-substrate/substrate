@@ -1471,23 +1471,21 @@ type ActorTemplateVersion struct {
 	Metadata *ResourceMetadata `protobuf:"bytes,1,opt,name=metadata,proto3" json:"metadata,omitempty"`
 	// actor_template is the parent ActorTemplate. Required at creation and
 	// immutable.
-	ActorTemplate *ObjectRef `protobuf:"bytes,2,opt,name=actor_template,json=actorTemplate,proto3" json:"actor_template,omitempty"`
-	// pause_image is the container to use as the root sandbox container.
-	PauseImage      string           `protobuf:"bytes,3,opt,name=pause_image,json=pauseImage,proto3" json:"pause_image,omitempty"`
-	Containers      []*Container     `protobuf:"bytes,4,rep,name=containers,proto3" json:"containers,omitempty"`
-	Volumes         []*Volume        `protobuf:"bytes,5,rep,name=volumes,proto3" json:"volumes,omitempty"`
-	SnapshotsConfig *SnapshotsConfig `protobuf:"bytes,6,opt,name=snapshots_config,json=snapshotsConfig,proto3" json:"snapshots_config,omitempty"`
+	ActorTemplate   *ObjectRef       `protobuf:"bytes,2,opt,name=actor_template,json=actorTemplate,proto3" json:"actor_template,omitempty"`
+	Containers      []*Container     `protobuf:"bytes,3,rep,name=containers,proto3" json:"containers,omitempty"`
+	Volumes         []*Volume        `protobuf:"bytes,4,rep,name=volumes,proto3" json:"volumes,omitempty"`
+	SnapshotsConfig *SnapshotsConfig `protobuf:"bytes,5,opt,name=snapshots_config,json=snapshotsConfig,proto3" json:"snapshots_config,omitempty"`
 	// sandbox_config selects the sandbox runtime this version's actors run on.
 	// Required. Resolved and frozen into resolved_sandbox at creation time.
-	SandboxConfig *SandboxConfig `protobuf:"bytes,7,opt,name=sandbox_config,json=sandboxConfig,proto3" json:"sandbox_config,omitempty"`
+	SandboxConfig *SandboxConfig `protobuf:"bytes,6,opt,name=sandbox_config,json=sandboxConfig,proto3" json:"sandbox_config,omitempty"`
 	// golden_snapshot points at the ActorSnapshot, in the reserved ate-golden
 	// system atespace, built for this version by ate-api. Set once state is
 	// READY.
-	GoldenSnapshot *ObjectRef `protobuf:"bytes,8,opt,name=golden_snapshot,json=goldenSnapshot,proto3" json:"golden_snapshot,omitempty"`
+	GoldenSnapshot *ObjectRef `protobuf:"bytes,7,opt,name=golden_snapshot,json=goldenSnapshot,proto3" json:"golden_snapshot,omitempty"`
 	// State machine, mirroring the ActorTemplateVersion CRD PhaseType:
 	// INITIAL -> RESUME_GOLDEN_ACTOR -> WAIT_GOLDEN_ACTOR -> {READY | FAILED}.
 	// READY and FAILED are terminal; the version is only usable once READY.
-	Phase         *ActorTemplateVersionPhase `protobuf:"bytes,9,opt,name=phase,proto3" json:"phase,omitempty"`
+	Phase         *ActorTemplateVersionPhase `protobuf:"bytes,8,opt,name=phase,proto3" json:"phase,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1534,13 +1532,6 @@ func (x *ActorTemplateVersion) GetActorTemplate() *ObjectRef {
 		return x.ActorTemplate
 	}
 	return nil
-}
-
-func (x *ActorTemplateVersion) GetPauseImage() string {
-	if x != nil {
-		return x.PauseImage
-	}
-	return ""
 }
 
 func (x *ActorTemplateVersion) GetContainers() []*Container {
@@ -1645,12 +1636,14 @@ type SandboxConfig struct {
 	// sandbox_class selects the sandbox runtime family.
 	// Required; must be specified..
 	SandboxClass SandboxClass `protobuf:"varint,1,opt,name=sandbox_class,json=sandboxClass,proto3,enum=ateapi.SandboxClass" json:"sandbox_class,omitempty"`
+	// pause_image is the container to use as the root sandbox container.
+	PauseImage string `protobuf:"bytes,2,opt,name=pause_image,json=pauseImage,proto3" json:"pause_image,omitempty"`
 	// config_name names the cluster-scoped SandboxConfig Kubernetes object
 	// supplying the sandbox binaries. Required; must match sandbox_class.
-	ConfigName string `protobuf:"bytes,2,opt,name=config_name,json=configName,proto3" json:"config_name,omitempty"`
+	ConfigName string `protobuf:"bytes,3,opt,name=config_name,json=configName,proto3" json:"config_name,omitempty"`
 	// sandbox_assets is the referenced SandboxConfig's content frozen at
 	// creation time.
-	SandboxAssets *SandboxAssets `protobuf:"bytes,3,opt,name=sandbox_assets,json=sandboxAssets,proto3" json:"sandbox_assets,omitempty"`
+	SandboxAssets *SandboxAssets `protobuf:"bytes,4,opt,name=sandbox_assets,json=sandboxAssets,proto3" json:"sandbox_assets,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1690,6 +1683,13 @@ func (x *SandboxConfig) GetSandboxClass() SandboxClass {
 		return x.SandboxClass
 	}
 	return SandboxClass_SANDBOX_CLASS_UNSPECIFIED
+}
+
+func (x *SandboxConfig) GetPauseImage() string {
+	if x != nil {
+		return x.PauseImage
+	}
+	return ""
 }
 
 func (x *SandboxConfig) GetConfigName() string {
@@ -5047,20 +5047,18 @@ const file_ateapi_proto_rawDesc = "" +
 	"\rActorTemplate\x124\n" +
 	"\bmetadata\x18\x01 \x01(\v2\x18.ateapi.ResourceMetadataR\bmetadata\x129\n" +
 	"\x0fworker_selector\x18\x02 \x01(\v2\x10.ateapi.SelectorR\x0eworkerSelector\x12L\n" +
-	"\x19default_version_on_create\x18\x03 \x01(\v2\x11.ateapi.ObjectRefR\x16defaultVersionOnCreate\"\xfb\x03\n" +
+	"\x19default_version_on_create\x18\x03 \x01(\v2\x11.ateapi.ObjectRefR\x16defaultVersionOnCreate\"\xda\x03\n" +
 	"\x14ActorTemplateVersion\x124\n" +
 	"\bmetadata\x18\x01 \x01(\v2\x18.ateapi.ResourceMetadataR\bmetadata\x128\n" +
-	"\x0eactor_template\x18\x02 \x01(\v2\x11.ateapi.ObjectRefR\ractorTemplate\x12\x1f\n" +
-	"\vpause_image\x18\x03 \x01(\tR\n" +
-	"pauseImage\x121\n" +
+	"\x0eactor_template\x18\x02 \x01(\v2\x11.ateapi.ObjectRefR\ractorTemplate\x121\n" +
 	"\n" +
-	"containers\x18\x04 \x03(\v2\x11.ateapi.ContainerR\n" +
+	"containers\x18\x03 \x03(\v2\x11.ateapi.ContainerR\n" +
 	"containers\x12(\n" +
-	"\avolumes\x18\x05 \x03(\v2\x0e.ateapi.VolumeR\avolumes\x12B\n" +
-	"\x10snapshots_config\x18\x06 \x01(\v2\x17.ateapi.SnapshotsConfigR\x0fsnapshotsConfig\x12<\n" +
-	"\x0esandbox_config\x18\a \x01(\v2\x15.ateapi.SandboxConfigR\rsandboxConfig\x12:\n" +
-	"\x0fgolden_snapshot\x18\b \x01(\v2\x11.ateapi.ObjectRefR\x0egoldenSnapshot\x127\n" +
-	"\x05phase\x18\t \x01(\v2!.ateapi.ActorTemplateVersionPhaseR\x05phase\"\x87\x02\n" +
+	"\avolumes\x18\x04 \x03(\v2\x0e.ateapi.VolumeR\avolumes\x12B\n" +
+	"\x10snapshots_config\x18\x05 \x01(\v2\x17.ateapi.SnapshotsConfigR\x0fsnapshotsConfig\x12<\n" +
+	"\x0esandbox_config\x18\x06 \x01(\v2\x15.ateapi.SandboxConfigR\rsandboxConfig\x12:\n" +
+	"\x0fgolden_snapshot\x18\a \x01(\v2\x11.ateapi.ObjectRefR\x0egoldenSnapshot\x127\n" +
+	"\x05phase\x18\b \x01(\v2!.ateapi.ActorTemplateVersionPhaseR\x05phase\"\x87\x02\n" +
 	"\x19ActorTemplateVersionPhase\x12=\n" +
 	"\x05phase\x18\x01 \x01(\x0e2'.ateapi.ActorTemplateVersionPhase.PhaseR\x05phase\x12\x18\n" +
 	"\amessage\x18\x02 \x01(\tR\amessage\"\x90\x01\n" +
@@ -5070,12 +5068,14 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x19PHASE_RESUME_GOLDEN_ACTOR\x10\x02\x12\x1b\n" +
 	"\x17PHASE_WAIT_GOLDEN_ACTOR\x10\x03\x12\x0f\n" +
 	"\vPHASE_READY\x10\x04\x12\x10\n" +
-	"\fPHASE_FAILED\x10\x05\"\xa9\x01\n" +
+	"\fPHASE_FAILED\x10\x05\"\xca\x01\n" +
 	"\rSandboxConfig\x129\n" +
 	"\rsandbox_class\x18\x01 \x01(\x0e2\x14.ateapi.SandboxClassR\fsandboxClass\x12\x1f\n" +
-	"\vconfig_name\x18\x02 \x01(\tR\n" +
+	"\vpause_image\x18\x02 \x01(\tR\n" +
+	"pauseImage\x12\x1f\n" +
+	"\vconfig_name\x18\x03 \x01(\tR\n" +
 	"configName\x12<\n" +
-	"\x0esandbox_assets\x18\x03 \x01(\v2\x15.ateapi.SandboxAssetsR\rsandboxAssets\"\xe5\x01\n" +
+	"\x0esandbox_assets\x18\x04 \x01(\v2\x15.ateapi.SandboxAssetsR\rsandboxAssets\"\xe5\x01\n" +
 	"\x0fSnapshotsConfig\x127\n" +
 	"\bon_pause\x18\x01 \x01(\x0e2\x1c.ateapi.SnapshotContentScopeR\aonPause\x129\n" +
 	"\ton_commit\x18\x02 \x01(\x0e2\x1c.ateapi.SnapshotContentScopeR\bonCommit\x123\n" +

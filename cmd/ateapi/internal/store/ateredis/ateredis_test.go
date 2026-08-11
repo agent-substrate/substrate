@@ -2178,7 +2178,7 @@ func newTestActorTemplateVersion(name, template string) *ateapipb.ActorTemplateV
 	return &ateapipb.ActorTemplateVersion{
 		Metadata:      &ateapipb.ResourceMetadata{Name: name},
 		ActorTemplate: &ateapipb.ObjectRef{Name: template},
-		PauseImage:    "pause@sha256:abc",
+		SandboxConfig: &ateapipb.SandboxConfig{PauseImage: "pause@sha256:abc"},
 		Phase:         &ateapipb.ActorTemplateVersionPhase{Phase: ateapipb.ActorTemplateVersionPhase_PHASE_INITIAL},
 	}
 }

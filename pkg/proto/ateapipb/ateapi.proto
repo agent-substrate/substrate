@@ -345,28 +345,25 @@ message ActorTemplateVersion {
   // immutable.
   ObjectRef actor_template = 2;
 
-  // pause_image is the container to use as the root sandbox container.
-  string pause_image = 3;
+  repeated Container containers = 3;
 
-  repeated Container containers = 4;
+  repeated Volume volumes = 4;
 
-  repeated Volume volumes = 5;
-
-  SnapshotsConfig snapshots_config = 6;
+  SnapshotsConfig snapshots_config = 5;
 
   // sandbox_config selects the sandbox runtime this version's actors run on.
   // Required. Resolved and frozen into resolved_sandbox at creation time.
-  SandboxConfig sandbox_config = 7;
+  SandboxConfig sandbox_config = 6;
 
   // golden_snapshot points at the ActorSnapshot, in the reserved ate-golden
   // system atespace, built for this version by ate-api. Set once state is
   // READY.
-  ObjectRef golden_snapshot = 8;
+  ObjectRef golden_snapshot = 7;
 
   // State machine, mirroring the ActorTemplateVersion CRD PhaseType:
   // INITIAL -> RESUME_GOLDEN_ACTOR -> WAIT_GOLDEN_ACTOR -> {READY | FAILED}.
   // READY and FAILED are terminal; the version is only usable once READY.
-  ActorTemplateVersionPhase phase = 9;
+  ActorTemplateVersionPhase phase = 8;
 
   // TODO: cpu class will be specified here in the future.
 }
@@ -400,6 +397,9 @@ message SandboxConfig {
   // sandbox_assets is the referenced SandboxConfig's content frozen at
   // creation time.
   SandboxAssets sandbox_assets = 3;
+
+  // pause_image is the container to use as the root sandbox container.
+  string pause_image = 4;
 }
 
 message SnapshotsConfig {
