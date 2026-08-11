@@ -199,8 +199,11 @@ message Actor {
   // Common resource metadata: atespace, name, uid, version, timestamps.
   ResourceMetadata metadata = 1;
 
+  // TODO: delete both fields once we start using actor_template_version below.
   string actor_template_namespace = 2;
   string actor_template_name = 3;
+
+  ObjectRef actor_template_version = 13;
 
   enum Status {
     STATUS_UNSPECIFIED = 0;
@@ -273,6 +276,8 @@ message ActorSnapshot {
   string actor_template_uid = 7;
   SnapshotContentScope content_scope = 8;
   string snapshot_uri = 9;
+  // Immutable reference to the actor_template_version where the snapshot was created from.
+  ObjectRef actor_template_version = 10;
 }
 
 // ActorSnapshotTag is an immutable, Atespace-owned alias and retention pin.
@@ -316,56 +321,66 @@ enum SandboxClass {
   SANDBOX_CLASS_MICROVM = 2;
 }
 
-// ActorTemplate groups the versions of one actor application and carries the
-// version-independent placement policy.
-message ActorTemplate {
-  // Common resource metadata: name, uid, version, timestamps.
-  ResourceMetadata metadata = 1;
+// ActorTemplateRef addresses a template by its canonical identity or by an
+// Atespace-owned ActorTemplateVersion.
+message ActorTemplateRef {
+  oneof reference {
+    ObjectRef actor_template_version = 1;
+    ObjectRef actor_template = 2;
+  }
+}
 
-  // worker_selector restricts which worker pools actors from this template
-  // may use.
-  Selector worker_selector = 2;
+// ActorTemplate an mutable, Atespace-owned resource that points to a default
+// ActorTemplateVersion to be used when creating Actors.
+message ActorTemplate {
+  // Common resource metadata: atespace, name, uid, version, timestamps.
+  ResourceMetadata metadata = 1;
 
   // default_version_on_create names the ActorTemplateVersion used by
   // CreateActor calls that do not pin a version. If unset, CreateActor
   // without an explicit version fails with FailedPrecondition.
   ObjectRef default_version_on_create = 3;
+
+  // TODO: A "scope" field could be useful to allow global ActorTemplateVersion.
 }
 
 // ActorTemplateVersion is one immutable released version of an ActorTemplate:
 // the workload definition plus everything that affects snapshot validity.
-// Global-scoped: metadata.atespace is always empty and metadata.name must be
-// globally unique (by convention "<template-name>-<version>").
 // The workload definition (pause_image through sandbox_config) is immutable
 // after creation; golden_snapshot, state, resolved_sandbox and message are
 // server-owned status fields.
+// ActorTemplateVersion is Atespaced.
 message ActorTemplateVersion {
-  // Common resource metadata: name, uid, version, timestamps.
+  // Common resource metadata: atespace, name, uid, version, timestamps.
   ResourceMetadata metadata = 1;
 
   // actor_template is the parent ActorTemplate. Required at creation and
   // immutable.
   ObjectRef actor_template = 2;
 
-  repeated Container containers = 3;
+  // worker_selector restricts which worker pools actors from this template
+  // may use.
+  Selector worker_selector = 3;
 
-  repeated Volume volumes = 4;
+  repeated Container containers = 4;
 
-  SnapshotsConfig snapshots_config = 5;
+  repeated Volume volumes = 5;
+
+  SnapshotsConfig snapshots_config = 6;
 
   // sandbox_config selects the sandbox runtime this version's actors run on.
   // Required. Resolved and frozen into resolved_sandbox at creation time.
-  SandboxConfig sandbox_config = 6;
+  SandboxConfig sandbox_config = 7;
 
   // golden_snapshot points at the ActorSnapshot, in the reserved ate-golden
   // system atespace, built for this version by ate-api. Set once state is
   // READY.
-  ObjectRef golden_snapshot = 7;
+  ObjectRef golden_snapshot = 8;
 
   // State machine, mirroring the ActorTemplateVersion CRD PhaseType:
   // INITIAL -> RESUME_GOLDEN_ACTOR -> WAIT_GOLDEN_ACTOR -> {READY | FAILED}.
   // READY and FAILED are terminal; the version is only usable once READY.
-  ActorTemplateVersionPhase phase = 8;
+  ActorTemplateVersionPhase phase = 9;
 
   // TODO: cpu class will be specified here in the future.
 }
@@ -612,20 +627,23 @@ message UpdateActorTemplateRequest {
   // The set of fields to update. Required.
   //
   // Only the following fields are supported:
-  //   - worker_selector
   //   - default_version_on_create
   google.protobuf.FieldMask update_mask = 2;
 }
 
 message ListActorTemplatesRequest {
+  // The atespace to list actor templates from. Empty lists across all
+  // atespaces.
+  string atespace = 1;
+
   // Requested page size; the server may return fewer, or occasionally
   // slightly more. If unspecified, defaults to a server-chosen value;
   // values above 1000 are coerced to 1000.
-  int32 page_size = 1;
+  int32 page_size = 2;
 
   // Pagination token from a previous ListActorTemplates response.
   // Omit or leave empty for the first request.
-  string page_token = 2;
+  string page_token = 3;
 }
 
 message ListActorTemplatesResponse {
@@ -653,18 +671,22 @@ message GetActorTemplateVersionRequest {
 }
 
 message ListActorTemplateVersionsRequest {
-  // The parent ActorTemplate whose versions to list, by name. Empty lists
+  // The parent ActorTemplate whose versions to list. An unset ref lists
   // versions across all templates.
-  string actor_template = 1;
+  ObjectRef actor_template = 1;
+
+  // The atespace to list actor templates from. Empty lists across all
+  // atespaces.
+  string atespace = 2;
 
   // Requested page size; the server may return fewer, or occasionally
   // slightly more. If unspecified, defaults to a server-chosen value;
   // values above 1000 are coerced to 1000.
-  int32 page_size = 2;
+  int32 page_size = 3;
 
   // Pagination token from a previous ListActorTemplateVersions response.
   // Omit or leave empty for the first request.
-  string page_token = 3;
+  string page_token = 4;
 }
 
 message ListActorTemplateVersionsResponse {
