@@ -20,6 +20,7 @@ import (
 	"fmt"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/internal/fieldmask"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
@@ -29,9 +30,10 @@ import (
 
 // actorMutableFields lists the Actor field paths a client may name in an
 // UpdateActor update_mask.
-var actorMutableFields = mutableFields[*ateapipb.Actor]{
-	"worker_selector": func(dst, src *ateapipb.Actor) { dst.WorkerSelector = src.GetWorkerSelector() },
-}
+var actorMutableFields = fieldmask.NewMutableFields(
+	"worker_selector",
+	"worker_selector.match_labels",
+)
 
 func (s *Service) UpdateActor(ctx context.Context, req *ateapipb.UpdateActorRequest) (*ateapipb.Actor, error) {
 	if errs := validateUpdateActorRequest(req); len(errs) > 0 {
@@ -45,7 +47,7 @@ func (s *Service) UpdateActor(ctx context.Context, req *ateapipb.UpdateActorRequ
 		if err := store.CheckActorPrecondition(dbActor, in.GetMetadata().GetUid(), in.GetMetadata().GetVersion()); err != nil {
 			return err
 		}
-		applyUpdateMask(dbActor, in, req.GetUpdateMask(), actorMutableFields)
+		fieldmask.Apply(dbActor, in, req.GetUpdateMask())
 		return nil
 	})
 	if err != nil {
@@ -77,7 +79,7 @@ func validateUpdateActorRequest(req *ateapipb.UpdateActorRequest) field.ErrorLis
 
 	errs = append(errs, resources.ValidateResourceMetadataRef(actor.GetMetadata(), actorPath.Child("metadata"))...)
 
-	errs = append(errs, validateUpdateMask(req.GetUpdateMask(), actorMutableFields)...)
+	errs = append(errs, fieldmask.Validate(req.GetUpdateMask(), actorMutableFields, fldPath.Child("update_mask"))...)
 
 	if selector := actor.GetWorkerSelector(); selector != nil {
 		errs = append(errs, validateSelector(selector, actorPath.Child("worker_selector"))...)

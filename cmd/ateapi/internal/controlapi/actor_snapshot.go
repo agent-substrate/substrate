@@ -21,6 +21,7 @@ import (
 	"slices"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/internal/fieldmask"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
@@ -118,9 +119,7 @@ func (s *Service) TagActorSnapshot(ctx context.Context, req *ateapipb.TagActorSn
 
 // actorSnapshotTagMutableFields lists the ActorSnapshotTag field paths a client
 // may name in an UpdateActorSnapshotTag update_mask.
-var actorSnapshotTagMutableFields = mutableFields[*ateapipb.ActorSnapshotTag]{
-	"scope": func(dst, src *ateapipb.ActorSnapshotTag) { dst.Scope = src.GetScope() },
-}
+var actorSnapshotTagMutableFields = fieldmask.NewMutableFields("scope")
 
 func (s *Service) UpdateActorSnapshotTag(ctx context.Context, req *ateapipb.UpdateActorSnapshotTagRequest) (*ateapipb.ActorSnapshotTag, error) {
 	if errs := validateUpdateActorSnapshotTagRequest(req); len(errs) > 0 {
@@ -146,7 +145,7 @@ func (s *Service) UpdateActorSnapshotTag(ctx context.Context, req *ateapipb.Upda
 		expectedVersion = version
 	}
 
-	applyUpdateMask(current, in, req.GetUpdateMask(), actorSnapshotTagMutableFields)
+	fieldmask.Apply(current, in, req.GetUpdateMask())
 
 	updatedTag, err := s.persistence.UpdateActorSnapshotTag(ctx, atespace, name, current.GetScope(), expectedVersion)
 	if errors.Is(err, store.ErrNotFound) {
@@ -173,7 +172,7 @@ func validateUpdateActorSnapshotTagRequest(req *ateapipb.UpdateActorSnapshotTagR
 
 	errs = append(errs, resources.ValidateResourceMetadataRef(tag.GetMetadata(), tagPath.Child("metadata"))...)
 
-	errs = append(errs, validateUpdateMask(req.GetUpdateMask(), actorSnapshotTagMutableFields)...)
+	errs = append(errs, fieldmask.Validate(req.GetUpdateMask(), actorSnapshotTagMutableFields, field.NewPath("update_mask"))...)
 
 	if scope, p := tag.GetScope(), tagPath.Child("scope"); validateActorSnapshotTagScope(scope) != nil {
 		errs = append(errs, field.NotSupported(p, scope.String(), actorSnapshotTagScopeNames))

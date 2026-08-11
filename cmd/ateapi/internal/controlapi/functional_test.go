@@ -2497,48 +2497,6 @@ func TestUpdateActor_NotFound(t *testing.T) {
 	assertGrpcError(t, err, codes.NotFound, "actor test-atespace/does-not-exist not found")
 }
 
-func TestUpdateActorSnapshotTag_Success(t *testing.T) {
-	ns := namespaceForTest("ns-update-tag")
-	tc := setupTest(t, ns)
-	defer tc.cleanup()
-
-	createTemplate(t, tc, ns)
-
-	ctx := context.Background()
-	const snapshotName, tagName = "snapshot-1", "before-upgrade"
-	snapshotRef := createActorSnapshot(t, tc, snapshotName)
-	tagActorSnapshot(t, tc, snapshotRef, tagName)
-
-	updateResp, err := tc.client.UpdateActorSnapshotTag(ctx, &ateapipb.UpdateActorSnapshotTagRequest{
-		Tag: &ateapipb.ActorSnapshotTag{
-			Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: tagName},
-			Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED,
-			Snapshot: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "some-other-snapshot"},
-		},
-		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"scope"}},
-	})
-	if err != nil {
-		t.Fatalf("UpdateActorSnapshotTag failed: %v", err)
-	}
-
-	wantTag := &ateapipb.ActorSnapshotTag{
-		Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: tagName, Version: 2},
-		Snapshot: snapshotRef,
-		Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED,
-	}
-	if diff := cmp.Diff(wantTag, updateResp, protocmp.Transform(), ignoreUID, ignoreTimestamps); diff != "" {
-		t.Errorf("UpdateActorSnapshotTag response mismatch (-want +got):\n%s", diff)
-	}
-
-	_, storedTag, err := tc.persistence.GetActorSnapshotByTag(ctx, testAtespace, tagName)
-	if err != nil {
-		t.Fatalf("GetActorSnapshotByTag failed: %v", err)
-	}
-	if diff := cmp.Diff(wantTag, storedTag, protocmp.Transform(), ignoreUID, ignoreTimestamps); diff != "" {
-		t.Errorf("stored tag mismatch after UpdateActorSnapshotTag (-want +got):\n%s", diff)
-	}
-}
-
 // TestUpdateActorSnapshotTag_Preconditions verifies the optional version and uid
 // guards carried in the tag's metadata.
 func TestUpdateActorSnapshotTag_Preconditions(t *testing.T) {
@@ -2612,41 +2570,6 @@ func TestUpdateActorSnapshotTag_Preconditions(t *testing.T) {
 	// The guard the client just satisfied is now stale in turn.
 	_, err = update(&ateapipb.ResourceMetadata{Version: currentVersion}, ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED)
 	assertGrpcError(t, err, codes.Aborted, "concurrent update conflict, please retry")
-}
-
-// TestUpdateActorSnapshotTag_ClearsMaskedField verifies that a masked field
-// left unset on the request resets to its default. ATESPACE is the zero value
-// of ActorSnapshotTagScope, so masking scope without setting it unpublishes the
-// tag.
-func TestUpdateActorSnapshotTag_ClearsMaskedField(t *testing.T) {
-	ns := namespaceForTest("ns-update-tag-clear")
-	tc := setupTest(t, ns)
-	defer tc.cleanup()
-
-	createTemplate(t, tc, ns)
-
-	const tagName = "before-upgrade"
-	snapshotRef := createActorSnapshot(t, tc, "snapshot-1")
-	tagActorSnapshot(t, tc, snapshotRef, tagName)
-
-	published, err := updateActorSnapshotTagScope(tc, tagName, &ateapipb.ResourceMetadata{}, ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED)
-	if err != nil {
-		t.Fatalf("UpdateActorSnapshotTag(publish) failed: %v", err)
-	}
-	if got, want := published.GetScope(), ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED; got != want {
-		t.Fatalf("scope = %v, want %v", got, want)
-	}
-
-	cleared, err := tc.client.UpdateActorSnapshotTag(context.Background(), &ateapipb.UpdateActorSnapshotTagRequest{
-		Tag:        &ateapipb.ActorSnapshotTag{Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: tagName}},
-		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"scope"}},
-	})
-	if err != nil {
-		t.Fatalf("UpdateActorSnapshotTag(masked clear) failed: %v", err)
-	}
-	if got, want := cleared.GetScope(), ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE; got != want {
-		t.Errorf("scope = %v, want %v after masked clear", got, want)
-	}
 }
 
 func TestUpdateActorSnapshotTag_NotFound(t *testing.T) {

@@ -18,9 +18,11 @@ import (
 	"context"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
 	"go.opentelemetry.io/otel/attribute"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/testing/protocmp"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 
@@ -31,7 +33,10 @@ import (
 )
 
 func TestValidateUpdateActorRequest(t *testing.T) {
-	mutableFields := []string{"worker_selector"}
+	mutableFields := []string{
+		"worker_selector",
+		"worker_selector.match_labels",
+	}
 
 	tests := []struct {
 		name string
@@ -100,9 +105,9 @@ func TestValidateUpdateActorRequest(t *testing.T) {
 		updateActorReq(withMaskPaths("metadata.name")),
 		field.ErrorList{field.NotSupported(field.NewPath("update_mask"), "metadata.name", mutableFields)},
 	}, {
-		"nested path in update_mask",
+		"leaf path under a whole-mutable field, also separately mutable",
 		updateActorReq(withMaskPaths("worker_selector.match_labels")),
-		field.ErrorList{field.NotSupported(field.NewPath("update_mask"), "worker_selector.match_labels", mutableFields)},
+		nil,
 	}, {
 		"nil worker_selector",
 		updateActorReq(),
@@ -131,26 +136,73 @@ func TestValidateUpdateActorRequest(t *testing.T) {
 	}
 }
 
-// TestUpdateActor_ClearsMaskedField verifies that naming a field in the mask
-// while leaving it unset on the request clears it, which is the whole point of
-// requiring an explicit mask.
-func TestUpdateActor_ClearsMaskedField(t *testing.T) {
-	svc, _ := serviceWithActor(t, &ateapipb.Actor{
-		Metadata:               &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: testActorID},
-		ActorTemplateNamespace: "ns1",
-		ActorTemplateName:      "tmpl1",
-		WorkerSelector:         &ateapipb.Selector{MatchLabels: map[string]string{"tier": "free"}},
-	})
-
-	updated, err := svc.UpdateActor(context.Background(), &ateapipb.UpdateActorRequest{
-		Actor:      &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: testActorID}},
-		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"worker_selector"}},
-	})
-	if err != nil {
-		t.Fatalf("UpdateActor failed: %v", err)
+func TestUpdateActor_FieldMasks(t *testing.T) {
+	tests := []struct {
+		name      string
+		stored    *ateapipb.Actor
+		req       *ateapipb.Actor
+		maskPaths []string
+		want      *ateapipb.Actor
+	}{
+		{
+			name:      "whole mask sets worker_selector from nil",
+			stored:    &ateapipb.Actor{},
+			req:       &ateapipb.Actor{WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"tier": "paid"}}},
+			maskPaths: []string{"worker_selector"},
+			want:      &ateapipb.Actor{WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"tier": "paid"}}},
+		},
+		{
+			name:      "whole mask clears worker_selector to nil",
+			stored:    &ateapipb.Actor{WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"tier": "free"}}},
+			req:       &ateapipb.Actor{},
+			maskPaths: []string{"worker_selector"},
+			want:      &ateapipb.Actor{},
+		},
+		{
+			name:      "leaf mask initializes worker_selector from nil to set match_labels",
+			stored:    &ateapipb.Actor{},
+			req:       &ateapipb.Actor{WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"tier": "paid"}}},
+			maskPaths: []string{"worker_selector.match_labels"},
+			want:      &ateapipb.Actor{WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"tier": "paid"}}},
+		},
+		{
+			name:      "leaf mask overwrites match_labels, worker_selector already present",
+			stored:    &ateapipb.Actor{WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"tier": "free"}}},
+			req:       &ateapipb.Actor{WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"tier": "paid"}}},
+			maskPaths: []string{"worker_selector.match_labels"},
+			want:      &ateapipb.Actor{WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"tier": "paid"}}},
+		},
+		{
+			name:      "leaf mask clears match_labels, worker_selector stays present",
+			stored:    &ateapipb.Actor{WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"tier": "free"}}},
+			req:       &ateapipb.Actor{},
+			maskPaths: []string{"worker_selector.match_labels"},
+			want:      &ateapipb.Actor{WorkerSelector: &ateapipb.Selector{}},
+		},
 	}
-	if got := updated.GetWorkerSelector(); got != nil {
-		t.Errorf("worker_selector = %v, want nil after masked clear", got)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.stored.Metadata = &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: testActorID}
+			tt.stored.ActorTemplateNamespace = "ns1"
+			tt.stored.ActorTemplateName = "tmpl1"
+			svc, _ := serviceWithActor(t, tt.stored)
+
+			tt.req.Metadata = &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: testActorID}
+			updated, err := svc.UpdateActor(context.Background(), &ateapipb.UpdateActorRequest{
+				Actor:      tt.req,
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: tt.maskPaths},
+			})
+			if err != nil {
+				t.Fatalf("UpdateActor failed: %v", err)
+			}
+
+			tt.want.Metadata = &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: testActorID, Version: 2}
+			tt.want.ActorTemplateNamespace = "ns1"
+			tt.want.ActorTemplateName = "tmpl1"
+			if diff := cmp.Diff(tt.want, updated, protocmp.Transform(), ignoreUID, ignoreTimestamps); diff != "" {
+				t.Errorf("UpdateActor response mismatch (-want +got):\n%s", diff)
+			}
+		})
 	}
 }
 
