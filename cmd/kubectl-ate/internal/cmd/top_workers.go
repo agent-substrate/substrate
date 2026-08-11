@@ -143,6 +143,7 @@ func (r *TopWorkersRunner) Run(ctx context.Context) error {
 		items = append(items, &printer.WorkerTopItem{
 			Pod:           podName,
 			Pool:          pool,
+			Class:         w.GetSandboxClass(),
 			Status:        status,
 			AssignedActor: assignedActor,
 			CPU:           cpuStr,
