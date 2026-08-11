@@ -30,6 +30,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/testing/protocmp"
 
@@ -46,15 +47,20 @@ import (
 type fakeCollector struct {
 	coltracepb.UnimplementedTraceServiceServer
 
-	mu      sync.Mutex
-	traces  []*coltracepb.ExportTraceServiceRequest
-	metrics []*colmetricspb.ExportMetricsServiceRequest
-	got     chan struct{}
+	mu       sync.Mutex
+	traces   []*coltracepb.ExportTraceServiceRequest
+	metrics  []*colmetricspb.ExportMetricsServiceRequest
+	traceMD  []metadata.MD
+	metricMD []metadata.MD
+	got      chan struct{}
 }
 
 func (f *fakeCollector) Export(ctx context.Context, req *coltracepb.ExportTraceServiceRequest) (*coltracepb.ExportTraceServiceResponse, error) {
 	f.mu.Lock()
 	f.traces = append(f.traces, req)
+	if md, ok := metadata.FromIncomingContext(ctx); ok {
+		f.traceMD = append(f.traceMD, md.Copy())
+	}
 	f.mu.Unlock()
 	f.got <- struct{}{}
 	return &coltracepb.ExportTraceServiceResponse{}, nil
@@ -70,6 +76,9 @@ type metricsSink struct {
 func (m *metricsSink) Export(ctx context.Context, req *colmetricspb.ExportMetricsServiceRequest) (*colmetricspb.ExportMetricsServiceResponse, error) {
 	m.parent.mu.Lock()
 	m.parent.metrics = append(m.parent.metrics, req)
+	if md, ok := metadata.FromIncomingContext(ctx); ok {
+		m.parent.metricMD = append(m.parent.metricMD, md.Copy())
+	}
 	m.parent.mu.Unlock()
 	m.parent.got <- struct{}{}
 	return &colmetricspb.ExportMetricsServiceResponse{}, nil
@@ -566,8 +575,11 @@ func TestUpstreamTarget(t *testing.T) {
 		{name: "unset", want: ""},
 		{name: "generic only", generic: "collector:4317", want: "collector:4317"},
 		{name: "signal specific overrides generic", generic: "generic:4317", traces: "specific:4317", metrics: "specific:4317", want: "specific:4317"},
-		{name: "one signal specific", generic: "generic:4317", metrics: "specific:4317", want: "specific:4317"},
-		{name: "signal specific alone", traces: "specific:4317", want: "specific:4317"},
+		{name: "generic conflicts with different traces specific", generic: "generic:4317", traces: "traces-only:4317", wantErr: true},
+		{name: "generic conflicts with different metrics specific", generic: "generic:4317", metrics: "metrics-only:4317", wantErr: true},
+		{name: "matching generic and signal specific", generic: "collector:4317", traces: "collector:4317", metrics: "collector:4317", want: "collector:4317"},
+		{name: "traces specific alone", traces: "specific:4317", want: "specific:4317"},
+		{name: "metrics specific alone", metrics: "specific:4317", want: "specific:4317"},
 		{name: "conflicting signals rejected", traces: "a:4317", metrics: "b:4317", wantErr: true},
 		{name: "whitespace trimmed", generic: "  collector:4317  ", want: "collector:4317"},
 	} {
@@ -589,5 +601,118 @@ func TestUpstreamTarget(t *testing.T) {
 				t.Errorf("upstreamTarget() = %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestUpstreamCompression(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		generic string
+		traces  string
+		metrics string
+		want    string
+		wantErr bool
+	}{
+		{name: "unset", want: "none"},
+		{name: "generic gzip", generic: "gzip", want: "gzip"},
+		{name: "generic none", generic: "none", want: "none"},
+		{name: "traces specific gzip", traces: "gzip", want: "gzip"},
+		{name: "metrics specific gzip", metrics: "gzip", want: "gzip"},
+		{name: "both specific gzip", traces: "gzip", metrics: "gzip", want: "gzip"},
+		{name: "conflicting compression rejected", traces: "gzip", metrics: "none", wantErr: true},
+		{name: "generic conflicts with traces", generic: "none", traces: "gzip", wantErr: true},
+		{name: "invalid compression rejected", generic: "zstd", wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(compressionEnv, tc.generic)
+			t.Setenv(tracesCompressionEnv, tc.traces)
+			t.Setenv(metricsCompressionEnv, tc.metrics)
+			got, err := upstreamCompression()
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("upstreamCompression() = %q, want error", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("upstreamCompression(): %v", err)
+			}
+			if got != tc.want {
+				t.Errorf("upstreamCompression() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestExportForwardsMetadata(t *testing.T) {
+	sink, collector := startFakeCollector(t)
+	sock := startRelay(t, collector)
+
+	conn, err := Dial(context.Background(), sock)
+	if err != nil {
+		t.Fatalf("Dial: %v", err)
+	}
+	defer conn.Close()
+
+	ctx := metadata.AppendToOutgoingContext(context.Background(),
+		"authorization", "Bearer test-token",
+		"custom-header", "custom-value",
+	)
+
+	// Send trace export with metadata
+	traceClient := coltracepb.NewTraceServiceClient(conn)
+	_, err = traceClient.Export(ctx, &coltracepb.ExportTraceServiceRequest{
+		ResourceSpans: []*tracepb.ResourceSpans{{
+			Resource: serviceResource("ateom-gvisor"),
+		}},
+	})
+	if err != nil {
+		t.Fatalf("traceClient.Export: %v", err)
+	}
+
+	// Send metrics export with metadata
+	metricClient := colmetricspb.NewMetricsServiceClient(conn)
+	_, err = metricClient.Export(ctx, &colmetricspb.ExportMetricsServiceRequest{
+		ResourceMetrics: []*metricspb.ResourceMetrics{{
+			Resource: serviceResource("ateom-gvisor"),
+		}},
+	})
+	if err != nil {
+		t.Fatalf("metricClient.Export: %v", err)
+	}
+
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	if len(sink.traceMD) == 0 {
+		t.Fatal("collector received no metadata for trace export")
+	}
+	if got := sink.traceMD[0].Get("authorization"); len(got) == 0 || got[0] != "Bearer test-token" {
+		t.Errorf("trace export authorization metadata = %v, want Bearer test-token", got)
+	}
+	if got := sink.traceMD[0].Get("custom-header"); len(got) == 0 || got[0] != "custom-value" {
+		t.Errorf("trace export custom-header metadata = %v, want custom-value", got)
+	}
+
+	if len(sink.metricMD) == 0 {
+		t.Fatal("collector received no metadata for metrics export")
+	}
+	if got := sink.metricMD[0].Get("authorization"); len(got) == 0 || got[0] != "Bearer test-token" {
+		t.Errorf("metric export authorization metadata = %v, want Bearer test-token", got)
+	}
+	if got := sink.metricMD[0].Get("custom-header"); len(got) == 0 || got[0] != "custom-value" {
+		t.Errorf("metric export custom-header metadata = %v, want custom-value", got)
+	}
+}
+
+func TestSocketPermissions(t *testing.T) {
+	_, collector := startFakeCollector(t)
+	sock := startRelay(t, collector)
+
+	info, err := os.Stat(sock)
+	if err != nil {
+		t.Fatalf("Stat(%q): %v", sock, err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Errorf("socket permissions = %04o, want 0600", perm)
 	}
 }

@@ -36,11 +36,12 @@
 //     in the batch processor. atelet outlives the worker pod.
 //
 // The relay forwards the OTLP request message verbatim rather than decoding it
-// into SDK records and re-exporting. Pass-through keeps each ateom's own
-// resource (service.name, service.instance.id, pod attributes) intact, so its
-// spans stay attributed to ateom instead of being absorbed into atelet's. That
-// holds only for a source whose resource is already right, so the relay carries
-// ateom telemetry only; see ateomServices.
+// into SDK records and re-exporting. Verbatim pass-through keeps each ateom's
+// own resource (service.name, service.instance.id, pod attributes) intact, so
+// its spans stay attributed to ateom instead of being absorbed into atelet's.
+// Restricting this pass-through to verified ateom sources ensures that future
+// actor telemetry requiring identity rewrites (#761) will be added as an
+// explicit rewriting path alongside this forwarder; see ateomServices.
 package otlprelay
 
 import (
@@ -58,6 +59,8 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/encoding/gzip"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
 	semconv "go.opentelemetry.io/otel/semconv/v1.40.0"
@@ -74,13 +77,19 @@ const (
 	tracesEndpointEnv  = "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"
 	metricsEndpointEnv = "OTEL_EXPORTER_OTLP_METRICS_ENDPOINT"
 
+	// compressionEnv and its signal-specific overrides configure upstream
+	// gRPC compression (gzip or none).
+	compressionEnv        = "OTEL_EXPORTER_OTLP_COMPRESSION"
+	tracesCompressionEnv  = "OTEL_EXPORTER_OTLP_TRACES_COMPRESSION"
+	metricsCompressionEnv = "OTEL_EXPORTER_OTLP_METRICS_COMPRESSION"
+
 	// otlpDefaultPort matches atenet's normalizeOtlpCollector.
 	otlpDefaultPort = "4317"
 
-	// socketMode keeps the relay socket reachable by the ateom pods on the node
-	// (which do not necessarily share atelet's uid) while staying off-node by
-	// construction. The socket is inside BasePath, a root-owned host directory.
-	socketMode = 0o666
+	// socketMode keeps the relay socket private to root: both atelet and the
+	// ateom worker pods run as root (runAsUser: 0). The socket lives inside
+	// BasePath, a root-owned host directory.
+	socketMode = 0o600
 
 	// maxRecvMsgSize bounds a single Export payload. One misbehaving ateom
 	// should not be able to make atelet allocate without limit; the OTel SDK's
@@ -101,11 +110,12 @@ type Server struct {
 // cmd/ateom-gvisor and cmd/ateom-microvm, which are package main and cannot be
 // imported; TestAteomServicesMatchTheAteomBinaries guards the duplication.
 //
-// Actor telemetry is what the allowlist excludes: actors share a hostname
-// ("runsc") and an interior IP, so their series merge unless identity is
-// injected from outside the actor (#761) -- a rewrite, not a forward. Nothing
-// but ateom reaches this socket today; naming the contract now makes that path
-// an added branch later rather than a re-argument about pass-through.
+// This allowlist is a protocol contract rather than a security boundary:
+// service.name is client-provided, so a compromised process could claim an
+// ateom name. Its purpose is to prevent accidental misuse (e.g. an actor SDK
+// pointed at the socket) and keep the pass-through contract explicit for #761.
+// Peer authentication, if needed, would require per-pod sockets or UDS peer
+// credentials (SO_PEERCRED) tied to #741.
 var ateomServices = map[string]bool{
 	"ateom-gvisor":  true,
 	"ateom-microvm": true,
@@ -132,6 +142,15 @@ func resourceServiceName(r *resourcepb.Resource) string {
 	return ""
 }
 
+// forwardContext propagates incoming gRPC metadata (headers, auth tokens)
+// to outgoing context so upstream calls preserve client headers.
+func forwardContext(ctx context.Context) context.Context {
+	if md, ok := metadata.FromIncomingContext(ctx); ok {
+		return metadata.NewOutgoingContext(ctx, md.Copy())
+	}
+	return ctx
+}
+
 // The two OTLP services both declare a method named Export, with different
 // request types, so one type cannot implement both: the embedded Unimplemented
 // structs would give Server an ambiguous promoted Export and satisfy neither
@@ -155,7 +174,7 @@ func (t *traceRelay) Export(ctx context.Context, req *coltracepb.ExportTraceServ
 			return nil, err
 		}
 	}
-	return t.upstream.Export(ctx, req)
+	return t.upstream.Export(forwardContext(ctx), req)
 }
 
 type metricRelay struct {
@@ -170,7 +189,7 @@ func (m *metricRelay) Export(ctx context.Context, req *colmetricspb.ExportMetric
 			return nil, err
 		}
 	}
-	return m.upstream.Export(ctx, req)
+	return m.upstream.Export(forwardContext(ctx), req)
 }
 
 // validateSocketPath rejects a relative path, which gRPC does not resolve:
@@ -206,10 +225,23 @@ func NewServer(ctx context.Context, sockPath string) (*Server, error) {
 		return nil, nil
 	}
 
+	comp, err := upstreamCompression()
+	if err != nil {
+		return nil, err
+	}
+
+	dialOpts := []grpc.DialOption{
+		// Plaintext by design today; TLS support for the upstream leg will be added
+		// in tandem with #741.
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	}
+	if comp == "gzip" {
+		dialOpts = append(dialOpts, grpc.WithDefaultCallOptions(grpc.UseCompressor(gzip.Name)))
+	}
+
 	// Lazy by design: grpc.NewClient does not block on the collector being up,
 	// so atelet startup does not depend on the collector's readiness.
-	upstream, err := grpc.NewClient(target,
-		grpc.WithTransportCredentials(insecure.NewCredentials()))
+	upstream, err := grpc.NewClient(target, dialOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("while dialing OTLP collector %q: %w", target, err)
 	}
@@ -221,7 +253,7 @@ func NewServer(ctx context.Context, sockPath string) (*Server, error) {
 	}
 	coltracepb.RegisterTraceServiceServer(s.grpc, &traceRelay{upstream: coltracepb.NewTraceServiceClient(upstream)})
 	colmetricspb.RegisterMetricsServiceServer(s.grpc, &metricRelay{upstream: colmetricspb.NewMetricsServiceClient(upstream)})
-	slog.InfoContext(ctx, "OTLP relay forwarding to collector", slog.String("collector", target))
+	slog.InfoContext(ctx, "OTLP relay forwarding to collector", slog.String("collector", target), slog.String("compression", comp))
 	return s, nil
 }
 
@@ -260,6 +292,41 @@ func (s *Server) Stop() {
 	_ = os.Remove(s.sockPath)
 }
 
+// upstreamCompression resolves the compression algorithm (gzip or none) to use
+// for upstream export.
+func upstreamCompression() (string, error) {
+	generic := strings.TrimSpace(os.Getenv(compressionEnv))
+	traces := strings.TrimSpace(os.Getenv(tracesCompressionEnv))
+	metrics := strings.TrimSpace(os.Getenv(metricsCompressionEnv))
+
+	traceComp := generic
+	if traces != "" {
+		traceComp = traces
+	}
+	metricComp := generic
+	if metrics != "" {
+		metricComp = metrics
+	}
+
+	if traceComp != "" && metricComp != "" && traceComp != metricComp {
+		return "", fmt.Errorf("signal-specific compression settings conflict (%q for traces vs %q for metrics); the relay carries both signals over one connection",
+			traceComp, metricComp)
+	}
+
+	resolved := traceComp
+	if resolved == "" {
+		resolved = metricComp
+	}
+	switch resolved {
+	case "", "none":
+		return "none", nil
+	case "gzip":
+		return "gzip", nil
+	default:
+		return "", fmt.Errorf("unsupported OTLP compression %q, want gzip or none", resolved)
+	}
+}
+
 // upstreamTarget resolves the collector address the relay forwards to, from the
 // standard OTLP endpoint variables, into the bare host:port grpc.NewClient wants.
 //
@@ -272,16 +339,23 @@ func upstreamTarget() (string, error) {
 	traces := strings.TrimSpace(os.Getenv(tracesEndpointEnv))
 	metrics := strings.TrimSpace(os.Getenv(metricsEndpointEnv))
 
-	resolved := generic
-	for _, specific := range []string{traces, metrics} {
-		if specific == "" {
-			continue
-		}
-		if resolved != "" && resolved != generic && specific != resolved {
-			return "", fmt.Errorf("%s and %s name different collectors (%q vs %q); the relay carries both signals over one connection",
-				tracesEndpointEnv, metricsEndpointEnv, resolved, specific)
-		}
-		resolved = specific
+	traceTarget := generic
+	if traces != "" {
+		traceTarget = traces
+	}
+	metricTarget := generic
+	if metrics != "" {
+		metricTarget = metrics
+	}
+
+	if traceTarget != "" && metricTarget != "" && traceTarget != metricTarget {
+		return "", fmt.Errorf("signal-specific endpoints conflict (%q for traces vs %q for metrics); the relay carries both signals over one connection",
+			traceTarget, metricTarget)
+	}
+
+	resolved := traceTarget
+	if resolved == "" {
+		resolved = metricTarget
 	}
 	if resolved == "" {
 		return "", nil

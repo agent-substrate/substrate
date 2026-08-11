@@ -32,6 +32,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
 	"go.opentelemetry.io/otel/exporters/prometheus"
@@ -84,16 +85,18 @@ var serviceInstanceID = uuid.NewString()
 
 // newResource builds the resource shared by the tracer and meter providers.
 // WithFromEnv is last so OTEL_* env vars override the defaults.
-func newResource(ctx context.Context, serviceName string) (*resource.Resource, error) {
+func newResource(ctx context.Context, serviceName string, extraAttrs ...attribute.KeyValue) (*resource.Resource, error) {
+	attrs := []attribute.KeyValue{
+		semconv.ServiceName(serviceName),
+		semconv.ServiceInstanceID(serviceInstanceID),
+	}
+	attrs = append(attrs, extraAttrs...)
 	res, err := resource.New(ctx,
 		resource.WithTelemetrySDK(),
 		// Must track the schema version the SDK's own detectors emit, else the
 		// merge drops the schema URL with ErrSchemaURLConflict (tolerated below).
 		resource.WithSchemaURL(semconv.SchemaURL),
-		resource.WithAttributes(
-			semconv.ServiceName(serviceName),
-			semconv.ServiceInstanceID(serviceInstanceID),
-		),
+		resource.WithAttributes(attrs...),
 		resource.WithFromEnv(),
 	)
 	if errors.Is(err, resource.ErrPartialResource) || errors.Is(err, resource.ErrSchemaURLConflict) {
@@ -131,7 +134,11 @@ func InitTracing(ctx context.Context, opts TracingOptions) (*sdktrace.TracerProv
 	if opts.Sampling.sampler == nil {
 		return nil, fmt.Errorf("TracingOptions.Sampling is required")
 	}
-	res, err := newResource(ctx, opts.ServiceName)
+	relayStatus := "direct"
+	if opts.ExporterConn != nil {
+		relayStatus = "relay"
+	}
+	res, err := newResource(ctx, opts.ServiceName, attribute.String("substrate.otlp.relay", relayStatus))
 	if err != nil {
 		return nil, fmt.Errorf("create tracer resource: %w", err)
 	}
@@ -222,7 +229,11 @@ func newMeterProvider(ctx context.Context, serviceName string, conn *grpc.Client
 	if err != nil {
 		return nil, fmt.Errorf("create OTLP metric exporter: %w", err)
 	}
-	res, err := newResource(ctx, serviceName)
+	relayStatus := "direct"
+	if conn != nil {
+		relayStatus = "relay"
+	}
+	res, err := newResource(ctx, serviceName, attribute.String("substrate.otlp.relay", relayStatus))
 	if err != nil {
 		return nil, fmt.Errorf("create metric resource: %w", err)
 	}

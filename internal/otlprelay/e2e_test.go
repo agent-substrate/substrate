@@ -39,6 +39,10 @@ import (
 func TestEndToEndThroughServerboot(t *testing.T) {
 	sink, collector := startFakeCollector(t)
 	sock := startRelay(t, collector)
+	// Re-point the generic endpoint at an unroutable address so an exporter
+	// that ignored ExporterConn would fail deterministically instead of dialing
+	// the test collector directly.
+	t.Setenv(endpointEnv, "http://127.0.0.1:1")
 	t.Logf("fake collector on %s, relay socket %s", collector, sock)
 
 	conn, err := Dial(context.Background(), sock)
@@ -82,12 +86,15 @@ func TestEndToEndThroughServerboot(t *testing.T) {
 		t.Fatal("collector recorded no trace exports")
 	}
 
-	var gotService, gotSpan string
+	var gotService, gotSpan, gotRelay string
 	for _, req := range sink.traces {
 		for _, rs := range req.GetResourceSpans() {
 			for _, attr := range rs.GetResource().GetAttributes() {
 				if attr.GetKey() == "service.name" {
 					gotService = attr.GetValue().GetStringValue()
+				}
+				if attr.GetKey() == "substrate.otlp.relay" {
+					gotRelay = attr.GetValue().GetStringValue()
 				}
 			}
 			for _, ss := range rs.GetScopeSpans() {
@@ -97,7 +104,7 @@ func TestEndToEndThroughServerboot(t *testing.T) {
 			}
 		}
 	}
-	t.Logf("collector received span %q from service %q", gotSpan, gotService)
+	t.Logf("collector received span %q from service %q (relay=%q)", gotSpan, gotService, gotRelay)
 
 	// The point of forwarding the request verbatim: the span is still ateom's,
 	// not atelet's.
@@ -106,5 +113,8 @@ func TestEndToEndThroughServerboot(t *testing.T) {
 	}
 	if gotSpan != "RunWorkload" {
 		t.Errorf("span arrived named %q, want %q", gotSpan, "RunWorkload")
+	}
+	if gotRelay != "relay" {
+		t.Errorf("span arrived with substrate.otlp.relay %q, want %q", gotRelay, "relay")
 	}
 }

@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/sdk/resource"
 	semconv "go.opentelemetry.io/otel/semconv/v1.21.0"
 )
@@ -64,6 +65,24 @@ func TestNewResourceEnvWins(t *testing.T) {
 	}
 	if got := attrs[string(semconv.ServiceInstanceIDKey)]; got != "fixed-id" {
 		t.Errorf("service.instance.id = %q, want fixed-id (OTEL_RESOURCE_ATTRIBUTES must win)", got)
+	}
+}
+
+func TestResourceRelayAttribute(t *testing.T) {
+	resDirect, err := newResource(context.Background(), "ateom-gvisor", attribute.String("substrate.otlp.relay", "direct"))
+	if err != nil {
+		t.Fatalf("newResource: %v", err)
+	}
+	if got := resourceAttrs(resDirect)["substrate.otlp.relay"]; got != "direct" {
+		t.Errorf("substrate.otlp.relay = %q, want direct", got)
+	}
+
+	resRelay, err := newResource(context.Background(), "ateom-gvisor", attribute.String("substrate.otlp.relay", "relay"))
+	if err != nil {
+		t.Fatalf("newResource: %v", err)
+	}
+	if got := resourceAttrs(resRelay)["substrate.otlp.relay"]; got != "relay" {
+		t.Errorf("substrate.otlp.relay = %q, want relay", got)
 	}
 }
 
