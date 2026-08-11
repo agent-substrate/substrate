@@ -1320,6 +1320,7 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 	fullRec := func(class string) sandboxAssetsRecord {
 		return sandboxAssetsRecord{
 			SandboxClass:  class,
+			PauseImage:    "pause@sha256:abc",
 			SnapshotFiles: []string{"config.json", "memory-ranges", ateompath.DurableDirTarFile},
 			Scope:         ateattr.SnapshotScopeFull,
 		}
@@ -1397,6 +1398,7 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 		dir := filepath.Join(t.TempDir(), "pause-snap-1")
 		writeLocalSnapshot(t, dir, sandboxAssetsRecord{
 			SandboxClass:  "gvisor",
+			PauseImage:    "pause@sha256:abc",
 			SnapshotFiles: []string{"checkpoint.img"},
 			Scope:         ateattr.SnapshotScopeFull,
 		}, map[string]string{"checkpoint.img": "img"})
@@ -1414,6 +1416,7 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 		dir := filepath.Join(t.TempDir(), "pause-snap-1")
 		writeLocalSnapshot(t, dir, sandboxAssetsRecord{
 			SandboxClass:  "microvm",
+			PauseImage:    "pause@sha256:abc",
 			SnapshotFiles: []string{"config.json", "memory-ranges"},
 			Scope:         ateattr.SnapshotScopeFull,
 		}, map[string]string{"config.json": "cfg", "memory-ranges": "mem"})
@@ -1431,6 +1434,7 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 		dir := filepath.Join(t.TempDir(), "pause-snap-1")
 		writeLocalSnapshot(t, dir, sandboxAssetsRecord{
 			SandboxClass:  "mystery",
+			PauseImage:    "pause@sha256:abc",
 			SnapshotFiles: []string{ateompath.DurableDirTarFile},
 			Scope:         ateattr.SnapshotScopeFull,
 		}, map[string]string{ateompath.DurableDirTarFile: "data"})
@@ -1448,6 +1452,7 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 		dir := filepath.Join(t.TempDir(), "pause-snap-1")
 		writeLocalSnapshot(t, dir, sandboxAssetsRecord{
 			SandboxClass:  "microvm",
+			PauseImage:    "pause@sha256:abc",
 			SnapshotFiles: []string{ateompath.DurableDirTarFile},
 			Scope:         ateattr.SnapshotScopeData,
 		}, map[string]string{ateompath.DurableDirTarFile: "data"})
@@ -1464,6 +1469,7 @@ func TestUploadLocalCheckpointDir(t *testing.T) {
 		dir := filepath.Join(t.TempDir(), "pause-snap-1")
 		writeLocalSnapshot(t, dir, sandboxAssetsRecord{
 			SandboxClass:  "microvm",
+			PauseImage:    "pause@sha256:abc",
 			SnapshotFiles: []string{ateompath.DurableDirTarFile},
 		}, map[string]string{ateompath.DurableDirTarFile: "data"})
 
