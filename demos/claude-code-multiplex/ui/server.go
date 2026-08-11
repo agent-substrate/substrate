@@ -25,17 +25,26 @@
 //     kubeconfig when running outside the cluster; in-cluster service
 //     account credentials otherwise.
 //
-// Prereq when running outside the cluster:
+// Connecting to ateapi: by default the server auto-port-forwards to
+// svc/api in ate-system, mints an ate-client ServiceAccount token, and
+// verifies ateapi's serving cert against the live ClusterTrustBundle —
+// the same authenticated path kubectl-ate uses. It needs a kube context
+// with access to ate-system (a laptop/dev kubeconfig, or an in-cluster
+// ServiceAccount with the ate-client RBAC):
 //
-//	kubectl port-forward svc/ateapi 8080:8080 -n ate-system &
-//	PORT=8090 ATEAPI_ADDR=localhost:8080 DEMO_NAMESPACE=claude-multiplex-demo go run ./server.go
+//	PORT=8090 DEMO_NAMESPACE=claude-multiplex-demo go run ./server.go
 //
-// (Pick a UI PORT that doesn't collide with the port-forward.)
+// To target an already-forwarded endpoint instead of auto-forwarding,
+// set ATEAPI_ADDR (still authenticated — token + CTB verification):
+//
+//	kubectl port-forward svc/api 8443:443 -n ate-system &
+//	PORT=8090 ATEAPI_ADDR=localhost:8443 DEMO_NAMESPACE=claude-multiplex-demo go run ./server.go
+//
+// (Pick a UI PORT that doesn't collide with any manual port-forward.)
 package main
 
 import (
 	"context"
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -49,9 +58,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/ateclient"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -59,12 +67,11 @@ import (
 )
 
 const (
-	defaultPort       = "8080"
-	defaultNamespace  = "claude-multiplex-demo"
-	defaultAteapiAddr = "localhost:8080"
-	maxAssignments    = 50
-	rpcTimeout        = 10 * time.Second
-	logTailLines      = int64(25)
+	defaultPort      = "8080"
+	defaultNamespace = "claude-multiplex-demo"
+	maxAssignments   = 50
+	rpcTimeout       = 10 * time.Second
+	logTailLines     = int64(25)
 
 	// Assignment lifecycle states the UI badge logic reads.
 	// queued → running → completed; computeState drives the
@@ -125,13 +132,13 @@ type actorSummary struct {
 
 var (
 	namespace   = envOr("DEMO_NAMESPACE", defaultNamespace)
-	ateapiAddr  = envOr("ATEAPI_ADDR", defaultAteapiAddr)
+	ateapiAddr  = os.Getenv("ATEAPI_ADDR") // empty → auto port-forward to svc/api in ate-system
 	rootDir     = mustRootDir()
 	mu          sync.Mutex
 	assignments = make([]*assignment, 0, maxAssignments) // newest first
 
 	ateClient  ateapipb.ControlClient
-	ateConn    *grpc.ClientConn
+	ateAPI     *ateclient.Client
 	kubeClient *kubernetes.Clientset
 )
 
@@ -161,19 +168,6 @@ func mustRootDir() string {
 func fileExists(p string) bool {
 	_, err := os.Stat(p)
 	return err == nil
-}
-
-// dialAteAPI opens a gRPC client to the substrate ateapi service.
-// Mirrors demos/sandbox/client/main.go: TLS with InsecureSkipVerify
-// (ateapi serves a self-signed cert; the demo trusts whichever
-// instance the port-forward / in-cluster DNS resolves to).
-func dialAteAPI(endpoint string) (ateapipb.ControlClient, *grpc.ClientConn, error) {
-	creds := credentials.NewTLS(&tls.Config{InsecureSkipVerify: true})
-	conn, err := grpc.NewClient(endpoint, grpc.WithTransportCredentials(creds))
-	if err != nil {
-		return nil, nil, err
-	}
-	return ateapipb.NewControlClient(conn), conn, nil
 }
 
 // newKubeClient returns a typed kubernetes client. Tries in-cluster
@@ -502,16 +496,18 @@ func main() {
 	port := envOr("PORT", defaultPort)
 
 	// Open the ateapi connection up front so the UI surfaces a clear
-	// startup error if the operator forgot the port-forward, rather
-	// than per-request failures with cryptic gRPC messages.
-	log.Printf("[ui] dialing ateapi at %s", ateapiAddr)
-	cli, conn, err := dialAteAPI(ateapiAddr)
+	// startup error at boot rather than per-request failures with
+	// cryptic gRPC messages. NewClient mints an ate-client token and
+	// verifies ateapi's serving cert against the live ClusterTrustBundle;
+	// an empty endpoint auto-port-forwards to svc/api in ate-system.
+	log.Printf("[ui] connecting to ateapi (endpoint=%q; empty = auto port-forward to svc/api)", ateapiAddr)
+	cli, err := ateclient.NewClient(context.Background(), "", "", ateapiAddr, false)
 	if err != nil {
-		log.Fatalf("dial ateapi: %v", err)
+		log.Fatalf("connect ateapi: %v", err)
 	}
+	ateAPI = cli
 	ateClient = cli
-	ateConn = conn
-	defer ateConn.Close()
+	defer ateAPI.Close()
 
 	// Best-effort k8s client for logs; nil is OK (handleLogs degrades
 	// to a 503 with a clear message). This lets the demo start even
