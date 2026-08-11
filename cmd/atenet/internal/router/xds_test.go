@@ -43,6 +43,8 @@ import (
 	secretgrpc "github.com/envoyproxy/go-control-plane/envoy/service/secret/v3"
 	cachev3 "github.com/envoyproxy/go-control-plane/pkg/cache/v3"
 	resourcev3 "github.com/envoyproxy/go-control-plane/pkg/resource/v3"
+
+	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/ingress"
 )
 
 func TestXdsServer_UpdateSnapshot(t *testing.T) {
@@ -540,8 +542,8 @@ func TestXdsServer_ExtProcCircuitBreaker(t *testing.T) {
 		if got != uint32(defaultExtProcMaxRequests) {
 			t.Errorf("default max_requests = %d, want %d", got, defaultExtProcMaxRequests)
 		}
-		if got < uint32(defaultParkedRequestMax) {
-			t.Errorf("default breaker (%d) below the default lot (%d): a full lot would be truncated by Envoy", got, defaultParkedRequestMax)
+		if got < uint32(ingress.DefaultParkedRequestMax) {
+			t.Errorf("default breaker (%d) below the default lot (%d): a full lot would be truncated by Envoy", got, ingress.DefaultParkedRequestMax)
 		}
 	})
 

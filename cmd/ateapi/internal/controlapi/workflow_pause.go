@@ -114,6 +114,11 @@ func (w *ActorWorkflow) ensureMarkedPausing(ctx context.Context, actorRef resour
 	if actor.GetStatus() != ateapipb.Actor_STATUS_RUNNING {
 		return nil, status.Errorf(codes.FailedPrecondition, "MarkPausing prerequisite not met for Actor: %s (got: %v, want %s)", actorRef, actor.GetStatus(), ateapipb.Actor_STATUS_RUNNING)
 	}
+	// By design a golden actor cannot be paused — it can only be suspended
+	// (committed).
+	if actorRef.Atespace == resources.GoldenActorAtespace {
+		return nil, status.Errorf(codes.FailedPrecondition, "actors in atespace %q are golden actors, which cannot be paused", actorRef.Atespace)
+	}
 
 	snapshotName := resources.NewSnapshotName()
 	updated, err := w.store.UpdateActor(ctx, actorRef, func(dbActor *ateapipb.Actor) error {

@@ -32,7 +32,9 @@ service Control {
   // Update mutable fields on an existing Actor.
   rpc UpdateActor(UpdateActorRequest) returns (Actor) {}
 
-  // Suspend a given actor to a new snapshot.
+  // Suspend a given actor to a new snapshot. A running actor is checkpointed
+  // on its worker; a paused actor's node-local snapshot is uploaded, narrowed
+  // to the template's commit scope where required (Full capture, Data commit).
   rpc SuspendActor(SuspendActorRequest) returns (SuspendActorResponse) {}
 
   // Pause a given actor and keep its snapshots on node VM.

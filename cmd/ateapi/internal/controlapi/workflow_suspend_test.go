@@ -16,6 +16,7 @@ package controlapi
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
@@ -23,11 +24,13 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/internal/resources"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
+	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/cache"
 )
 
@@ -109,15 +112,6 @@ func TestSuspendActorWorkflow_RejectedAndIdempotentPaths(t *testing.T) {
 		wantStatus ateapipb.Actor_Status
 	}{
 		{
-			// The state machine's PAUSED->SUSPENDED commit edge is rejected
-			// (suspending needs a live worker to checkpoint from) and the
-			// actor's status is left untouched.
-			name:       "paused rejected",
-			seedStatus: ateapipb.Actor_STATUS_PAUSED,
-			wantErr:    true,
-			wantStatus: ateapipb.Actor_STATUS_PAUSED,
-		},
-		{
 			// Suspending a SUSPENDED actor succeeds idempotently via
 			// IsComplete fast-forward without calling atelet.
 			name:       "newly created suspended succeeds",
@@ -160,13 +154,16 @@ func TestSuspendActorWorkflow_RejectedAndIdempotentPaths(t *testing.T) {
 }
 
 // TestEnsureMarkedSuspending_StatusMatrix verifies the suspend edge's status
-// gating against every actor status: RUNNING takes the edge, SUSPENDING skips
-// (a previous attempt already marked the actor), everything else is rejected
-// with FailedPrecondition. SUSPENDED is rejected here because the
-// orchestrator early-returns before this step for a fully suspended actor.
+// gating against every actor status: RUNNING takes the edge (checkpoint the
+// workload), PAUSED takes it too (upload the node-local pause snapshot),
+// SUSPENDING skips (a previous attempt already marked the actor), everything
+// else is rejected with FailedPrecondition. SUSPENDED is rejected here
+// because the orchestrator early-returns before this step for a fully
+// suspended actor.
 func TestEnsureMarkedSuspending_StatusMatrix(t *testing.T) {
 	allowed := map[ateapipb.Actor_Status]bool{
 		ateapipb.Actor_STATUS_RUNNING:    true,
+		ateapipb.Actor_STATUS_PAUSED:     true,
 		ateapipb.Actor_STATUS_SUSPENDING: true, // skipped, not re-marked
 	}
 
@@ -233,10 +230,12 @@ func newTestPersistence(t *testing.T) store.Interface {
 }
 
 // newDanglingDialer returns a dialer whose informer cache has no pods, so
-// DialForWorker returns ErrWorkerPodNotFound.
+// DialForWorker returns ErrWorkerPodNotFound and DialForAteletOnNode returns
+// ErrNoAteletOnNode.
 func newDanglingDialer() *AteletDialer {
 	empty := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{
 		byNamespaceAndName: func(obj any) ([]string, error) { return nil, nil },
+		byNode:             func(obj any) ([]string, error) { return nil, nil },
 	})
 	return NewAteletDialer(empty, empty, "", "")
 }
@@ -518,5 +517,181 @@ func TestCommitSnapshotScope(t *testing.T) {
 				t.Errorf("commitSnapshotScope(%q, onCommit=%s) = %s, want %s", tc.atespace, tc.onCommit, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestIsPausedOriginSuspend pins the paused-origin discriminator:
+// LocalSnapshotInfo alone must not select the paused path, because resume
+// leaves it stale on RUNNING actors; only PAUSED status, or SUSPENDING with
+// no worker assignment, means the suspend uploads a local snapshot.
+func TestIsPausedOriginSuspend(t *testing.T) {
+	assignment := &ateapipb.WorkerAssignment{WorkerNamespace: "ns", WorkerPool: "pool", WorkerPod: "pod-1"}
+	localInfo := &ateapipb.LocalSnapshotInfo{SnapshotName: "snap", NodeVmsWithLocalSnapshots: []string{"node1"}}
+	tests := []struct {
+		name  string
+		actor *ateapipb.Actor
+		want  bool
+	}{
+		{"paused actor", &ateapipb.Actor{Status: ateapipb.Actor_STATUS_PAUSED, LocalSnapshotInfo: localInfo}, true},
+		{"suspending retry of a paused-origin suspend", &ateapipb.Actor{Status: ateapipb.Actor_STATUS_SUSPENDING, LocalSnapshotInfo: localInfo}, true},
+		{"running actor with stale local snapshot info", &ateapipb.Actor{Status: ateapipb.Actor_STATUS_RUNNING, LocalSnapshotInfo: localInfo, WorkerAssignment: assignment}, false},
+		{"suspending retry of a running-origin suspend with stale local snapshot info", &ateapipb.Actor{Status: ateapipb.Actor_STATUS_SUSPENDING, LocalSnapshotInfo: localInfo, WorkerAssignment: assignment}, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isPausedOriginSuspend(tc.actor); got != tc.want {
+				t.Errorf("isPausedOriginSuspend = %t, want %t", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestEnsureMarkedSuspending_PausedScopeRejection verifies a paused-origin
+// suspend is rejected before the actor leaves PAUSED when the pause captured
+// Data but the template commits Full: an upload cannot fabricate memory.
+func TestEnsureMarkedSuspending_PausedScopeRejection(t *testing.T) {
+	tmpl := func(onPause, onCommit atev1alpha1.SnapshotScope) *atev1alpha1.ActorTemplate {
+		return &atev1alpha1.ActorTemplate{Spec: atev1alpha1.ActorTemplateSpec{
+			SnapshotsConfig: atev1alpha1.SnapshotsConfig{OnPause: onPause, OnCommit: onCommit, Location: "gs://snapshots"},
+		}}
+	}
+	tests := []struct {
+		name     string
+		captured ateapipb.SnapshotContentScope
+		tmpl     *atev1alpha1.ActorTemplate
+		wantErr  bool
+	}{
+		{"data capture cannot commit full", ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA, tmpl(atev1alpha1.SnapshotScopeData, atev1alpha1.SnapshotScopeFull), true},
+		{"data capture commits data", ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA, tmpl(atev1alpha1.SnapshotScopeData, atev1alpha1.SnapshotScopeData), false},
+		{"full capture commits full", ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL, tmpl(atev1alpha1.SnapshotScopeFull, atev1alpha1.SnapshotScopeFull), false},
+		{"full capture commits data via conversion", ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL, tmpl(atev1alpha1.SnapshotScopeFull, atev1alpha1.SnapshotScopeData), false},
+		// Actors paused before content_scope existed fall back to the
+		// template's onPause.
+		{"unset capture falls back to onPause", ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_UNSPECIFIED, tmpl(atev1alpha1.SnapshotScopeData, atev1alpha1.SnapshotScopeFull), true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			persistence := newTestPersistence(t)
+			w := &ActorWorkflow{store: persistence}
+
+			actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}
+			actor, err := persistence.CreateActor(ctx, &ateapipb.Actor{
+				Metadata:          &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
+				Status:            ateapipb.Actor_STATUS_PAUSED,
+				LocalSnapshotInfo: &ateapipb.LocalSnapshotInfo{SnapshotName: "snap", NodeVmsWithLocalSnapshots: []string{"node1"}, ContentScope: tc.captured},
+			})
+			if err != nil {
+				t.Fatalf("CreateActor: %v", err)
+			}
+
+			_, err = w.ensureMarkedSuspending(ctx, actorRef, actor, tc.tmpl)
+			if gotErr := err != nil; gotErr != tc.wantErr {
+				t.Fatalf("ensureMarkedSuspending = %v, wantErr %t", err, tc.wantErr)
+			}
+			if tc.wantErr {
+				if got := status.Code(err); got != codes.FailedPrecondition {
+					t.Errorf("status.Code = %v, want FailedPrecondition", got)
+				}
+			}
+		})
+	}
+}
+
+// TestEnsurePausedSnapshotUploaded_Preconditions covers the paused branch's
+// failure handling: a lost node record crashes the actor (the snapshot can
+// never be found), while an unreachable atelet stays retryable (the bytes
+// are likely still on the node's disk).
+func TestEnsurePausedSnapshotUploaded_Preconditions(t *testing.T) {
+	t.Run("no node recorded crashes", func(t *testing.T) {
+		ctx := context.Background()
+		persistence := newTestPersistence(t)
+		w := &ActorWorkflow{store: persistence, dialer: newDanglingDialer()}
+
+		created, err := persistence.CreateActor(ctx, &ateapipb.Actor{
+			Metadata:          &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor-1"},
+			Status:            ateapipb.Actor_STATUS_SUSPENDING,
+			LocalSnapshotInfo: &ateapipb.LocalSnapshotInfo{SnapshotName: "snap"},
+		})
+		if err != nil {
+			t.Fatalf("CreateActor: %v", err)
+		}
+
+		if _, err := w.ensurePausedSnapshotUploaded(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"}, created, &atev1alpha1.ActorTemplate{}); err == nil {
+			t.Fatal("ensurePausedSnapshotUploaded = nil, want error for missing node record")
+		}
+
+		stored, err := persistence.GetActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"})
+		if err != nil {
+			t.Fatalf("GetActor: %v", err)
+		}
+		if stored.GetStatus() != ateapipb.Actor_STATUS_CRASHED {
+			t.Errorf("status = %v, want CRASHED", stored.GetStatus())
+		}
+	})
+
+	t.Run("no atelet on node stays retryable", func(t *testing.T) {
+		ctx := context.Background()
+		persistence := newTestPersistence(t)
+		w := &ActorWorkflow{store: persistence, dialer: newDanglingDialer()}
+
+		created, err := persistence.CreateActor(ctx, &ateapipb.Actor{
+			Metadata:               &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor-1"},
+			Status:                 ateapipb.Actor_STATUS_SUSPENDING,
+			InProgressSnapshotName: "snap-dest",
+			LocalSnapshotInfo:      &ateapipb.LocalSnapshotInfo{SnapshotName: "snap", NodeVmsWithLocalSnapshots: []string{"node1"}},
+		})
+		if err != nil {
+			t.Fatalf("CreateActor: %v", err)
+		}
+
+		tmpl := &atev1alpha1.ActorTemplate{Spec: atev1alpha1.ActorTemplateSpec{SnapshotsConfig: atev1alpha1.SnapshotsConfig{Location: "gs://snapshots"}}}
+		_, err = w.ensurePausedSnapshotUploaded(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"}, created, tmpl)
+		if !errors.Is(err, ErrNoAteletOnNode) {
+			t.Fatalf("ensurePausedSnapshotUploaded = %v, want ErrNoAteletOnNode", err)
+		}
+
+		stored, err := persistence.GetActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"})
+		if err != nil {
+			t.Fatalf("GetActor: %v", err)
+		}
+		if stored.GetStatus() != ateapipb.Actor_STATUS_SUSPENDING {
+			t.Errorf("status = %v, want SUSPENDING (retryable, not crashed)", stored.GetStatus())
+		}
+	})
+}
+
+// TestSuspendActor_PausedWithoutLocalSnapshotCrashes verifies a PAUSED actor
+// whose LocalSnapshotInfo is missing (corrupted store state: nothing records
+// where the pause snapshot lives) is crashed by the suspend workflow rather
+// than left flapping between PAUSED and SUSPENDING.
+func TestSuspendActor_PausedWithoutLocalSnapshotCrashes(t *testing.T) {
+	ctx := context.Background()
+	st, cleanup := storetest.SetupTestStore(t)
+	defer cleanup()
+
+	// The template needs a snapshot location: MarkSuspending validates the
+	// destination URI before the workflow reaches the crash under test.
+	indexer := cache.NewIndexer(cache.MetaNamespaceKeyFunc, cache.Indexers{})
+	if err := indexer.Add(&atev1alpha1.ActorTemplate{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "tmpl1"},
+		Spec:       atev1alpha1.ActorTemplateSpec{SnapshotsConfig: atev1alpha1.SnapshotsConfig{Location: "gs://snapshots"}},
+	}); err != nil {
+		t.Fatalf("add template to indexer: %v", err)
+	}
+	w := NewActorWorkflow(st, nil, nil, listersv1alpha1.NewActorTemplateLister(indexer), nil, nil, nil, nil, nil, "", nil)
+
+	seedWorkflowActor(t, ctx, st, resources.ActorRef{Atespace: "team-a", Name: "id1"}, "ns", "tmpl1", ateapipb.Actor_STATUS_PAUSED)
+
+	if _, err := w.SuspendActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}); err == nil {
+		t.Fatal("SuspendActor succeeded, want error for PAUSED actor with no local snapshot record")
+	}
+
+	got, err := st.GetActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"})
+	if err != nil {
+		t.Fatalf("GetActor failed: %v", err)
+	}
+	if got.GetStatus() != ateapipb.Actor_STATUS_CRASHED {
+		t.Errorf("stored status = %v, want %v", got.GetStatus(), ateapipb.Actor_STATUS_CRASHED)
 	}
 }

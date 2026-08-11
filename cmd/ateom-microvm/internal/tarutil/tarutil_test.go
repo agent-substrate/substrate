@@ -87,8 +87,12 @@ func TestRoundTrip(t *testing.T) {
 		t.Cleanup(func() { _ = os.Chmod(filepath.Join(dir, "ro"), 0o700) })
 	}
 	restoreWritable(src)
-	if err := os.Mkdir(filepath.Join(src, "empty"), 0o755); err != nil {
+	emptyDir := filepath.Join(src, "empty")
+	if err := os.Mkdir(emptyDir, 0o755); err != nil {
 		t.Fatalf("mkdir empty: %v", err)
+	}
+	if err := os.Chmod(emptyDir, 0o755); err != nil {
+		t.Fatalf("chmod empty: %v", err)
 	}
 	if err := os.Symlink("a.txt", filepath.Join(src, "link")); err != nil {
 		t.Fatalf("symlink: %v", err)

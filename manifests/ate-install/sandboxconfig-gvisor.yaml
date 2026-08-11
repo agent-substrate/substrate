@@ -26,6 +26,9 @@ metadata:
 spec:
   sandboxClass: gvisor
   default: true
+  # The root sandbox container's image. On GCP, prefer the in-project mirror
+  # gcr.io/gke-release/pause@sha256:bcbd57ba5653580ec647b16d8163cdd1112df3609129b01f912a8032e48265da.
+  pauseImage: "registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4"
   assets:
     amd64:
       gvisor:

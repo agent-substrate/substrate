@@ -23,10 +23,11 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 )
 
-// resolveSandboxAssets determines the sandbox binaries an actor should boot with
-// and projects them onto the ateletpb.SandboxAssets atelet fetches. It takes the
-// SandboxClass (default gvisor) of a given worker pool, then picks the SandboxConfig
-// named by the pool — or, if none is named, the cluster default SandboxConfig for that class.
+// resolveSandboxAssets determines the sandbox binaries and pause image an actor
+// should boot with and projects them onto the ateletpb.SandboxAssets atelet
+// fetches. It takes the SandboxClass (default gvisor) of a given worker pool,
+// then picks the SandboxConfig named by the pool — or, if none is named, the
+// cluster default SandboxConfig for that class.
 func resolveSandboxAssets(
 	workerPoolLister listersv1alpha1.WorkerPoolLister,
 	sandboxConfigLister listersv1alpha1.SandboxConfigLister,
@@ -89,6 +90,7 @@ func defaultSandboxConfig(lister listersv1alpha1.SandboxConfigLister, class atev
 func sandboxAssetsProto(class atev1alpha1.SandboxClass, sc *atev1alpha1.SandboxConfig) *ateletpb.SandboxAssets {
 	out := &ateletpb.SandboxAssets{
 		SandboxClass: string(class),
+		PauseImage:   sc.Spec.PauseImage,
 		Assets:       make(map[string]*ateletpb.ArchAssets, len(sc.Spec.Assets)),
 	}
 	for arch, files := range sc.Spec.Assets {

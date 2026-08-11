@@ -139,9 +139,10 @@ var CredentialBroker_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	AteomHerder_Run_FullMethodName        = "/atelet.AteomHerder/Run"
-	AteomHerder_Checkpoint_FullMethodName = "/atelet.AteomHerder/Checkpoint"
-	AteomHerder_Restore_FullMethodName    = "/atelet.AteomHerder/Restore"
+	AteomHerder_Run_FullMethodName                    = "/atelet.AteomHerder/Run"
+	AteomHerder_Checkpoint_FullMethodName             = "/atelet.AteomHerder/Checkpoint"
+	AteomHerder_Restore_FullMethodName                = "/atelet.AteomHerder/Restore"
+	AteomHerder_UploadPausedCheckpoint_FullMethodName = "/atelet.AteomHerder/UploadPausedCheckpoint"
 )
 
 // AteomHerderClient is the client API for AteomHerder service.
@@ -157,6 +158,11 @@ type AteomHerderClient interface {
 	Checkpoint(ctx context.Context, in *CheckpointRequest, opts ...grpc.CallOption) (*CheckpointResponse, error)
 	// Restore restores a workload from checkpoint onto an ateom.
 	Restore(ctx context.Context, in *RestoreRequest, opts ...grpc.CallOption) (*RestoreResponse, error)
+	// UploadPausedCheckpoint copies a local (pause) checkpoint from this node's
+	// disk to object storage. Unlike Checkpoint it drives no ateom: the actor is
+	// paused, its sandbox is gone; the checkpoint files plus their manifest
+	// already sit under the actor's local-checkpoints directory.
+	UploadPausedCheckpoint(ctx context.Context, in *UploadPausedCheckpointRequest, opts ...grpc.CallOption) (*UploadPausedCheckpointResponse, error)
 }
 
 type ateomHerderClient struct {
@@ -197,6 +203,16 @@ func (c *ateomHerderClient) Restore(ctx context.Context, in *RestoreRequest, opt
 	return out, nil
 }
 
+func (c *ateomHerderClient) UploadPausedCheckpoint(ctx context.Context, in *UploadPausedCheckpointRequest, opts ...grpc.CallOption) (*UploadPausedCheckpointResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(UploadPausedCheckpointResponse)
+	err := c.cc.Invoke(ctx, AteomHerder_UploadPausedCheckpoint_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // AteomHerderServer is the server API for AteomHerder service.
 // All implementations must embed UnimplementedAteomHerderServer
 // for forward compatibility.
@@ -210,6 +226,11 @@ type AteomHerderServer interface {
 	Checkpoint(context.Context, *CheckpointRequest) (*CheckpointResponse, error)
 	// Restore restores a workload from checkpoint onto an ateom.
 	Restore(context.Context, *RestoreRequest) (*RestoreResponse, error)
+	// UploadPausedCheckpoint copies a local (pause) checkpoint from this node's
+	// disk to object storage. Unlike Checkpoint it drives no ateom: the actor is
+	// paused, its sandbox is gone; the checkpoint files plus their manifest
+	// already sit under the actor's local-checkpoints directory.
+	UploadPausedCheckpoint(context.Context, *UploadPausedCheckpointRequest) (*UploadPausedCheckpointResponse, error)
 	mustEmbedUnimplementedAteomHerderServer()
 }
 
@@ -228,6 +249,9 @@ func (UnimplementedAteomHerderServer) Checkpoint(context.Context, *CheckpointReq
 }
 func (UnimplementedAteomHerderServer) Restore(context.Context, *RestoreRequest) (*RestoreResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method Restore not implemented")
+}
+func (UnimplementedAteomHerderServer) UploadPausedCheckpoint(context.Context, *UploadPausedCheckpointRequest) (*UploadPausedCheckpointResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method UploadPausedCheckpoint not implemented")
 }
 func (UnimplementedAteomHerderServer) mustEmbedUnimplementedAteomHerderServer() {}
 func (UnimplementedAteomHerderServer) testEmbeddedByValue()                     {}
@@ -304,6 +328,24 @@ func _AteomHerder_Restore_Handler(srv interface{}, ctx context.Context, dec func
 	return interceptor(ctx, in, info, handler)
 }
 
+func _AteomHerder_UploadPausedCheckpoint_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(UploadPausedCheckpointRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(AteomHerderServer).UploadPausedCheckpoint(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: AteomHerder_UploadPausedCheckpoint_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(AteomHerderServer).UploadPausedCheckpoint(ctx, req.(*UploadPausedCheckpointRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // AteomHerder_ServiceDesc is the grpc.ServiceDesc for AteomHerder service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -322,6 +364,10 @@ var AteomHerder_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "Restore",
 			Handler:    _AteomHerder_Restore_Handler,
+		},
+		{
+			MethodName: "UploadPausedCheckpoint",
+			Handler:    _AteomHerder_UploadPausedCheckpoint_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
