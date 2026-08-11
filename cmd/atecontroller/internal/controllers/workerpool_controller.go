@@ -149,10 +149,6 @@ func (r *WorkerPoolReconciler) syncStatus(ctx context.Context, wp *atev1alpha1.W
 // InitMetrics initializes the OpenTelemetry instruments for ate.workerpool.desired_workers
 // and ate.workerpool.ready_workers and registers the asynchronous callback.
 func (r *WorkerPoolReconciler) InitMetrics(meter metric.Meter) error {
-	if meter == nil {
-		meter = otel.Meter("atecontroller")
-	}
-
 	desiredWorkers, err := meter.Int64ObservableUpDownCounter(
 		"ate.workerpool.desired_workers",
 		metric.WithUnit("{worker}"),
@@ -177,6 +173,7 @@ func (r *WorkerPoolReconciler) InitMetrics(meter metric.Meter) error {
 		func(ctx context.Context, obs metric.Observer) error {
 			var list atev1alpha1.WorkerPoolList
 			if err := r.List(ctx, &list); err != nil {
+				log.FromContext(ctx).Error(err, "failed to list worker pools to observe ate.workerpool.desired_workers and ate.workerpool.ready_workers")
 				return nil
 			}
 			for _, wp := range list.Items {
