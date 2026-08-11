@@ -335,7 +335,7 @@ type ActorTemplateSpec struct {
 	// ActorTemplate's namespace that hold registry credentials. Each Secret
 	// must be of type kubernetes.io/dockerconfigjson or kubernetes.io/dockercfg.
 	// Atelet resolves these references immediately before pulling this
-	// template's images; Secret contents are never exposed through this API.
+	// template's images.
 	//
 	// +optional
 	// +kubebuilder:validation:MaxItems=32

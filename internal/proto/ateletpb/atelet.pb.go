@@ -694,8 +694,7 @@ func (x *WorkloadSpec) GetVolumes() []*Volume {
 
 // ImagePullSecretReference identifies a Secret in RunRequest's
 // actor_template_namespace. Atelet resolves these secrets immediately before
-// it pulls workload images; registry credentials never cross the ate-api to
-// atelet RPC.
+// it pulls workload images.
 type ImagePullSecretReference struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Name          string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
