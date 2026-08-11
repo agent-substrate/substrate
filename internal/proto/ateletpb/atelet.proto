@@ -96,20 +96,28 @@ message ArchAssets {
 }
 
 // SandboxAssets is the generic, backend-agnostic description of the sandbox
-// binaries for an actor: a sandbox class plus assets keyed first by
-// architecture (GOARCH) and then by asset name. atelet's backend code
-// interprets the asset names (gVisor expects "gvisor", the release tarball;
-// legacy "runsc", a bare binary, is still accepted).
+// an actor runs in: a sandbox class, the pause image holding its namespaces,
+// and binaries keyed first by architecture (GOARCH) and then by asset name.
+// atelet's backend code interprets the asset names (gVisor expects "gvisor",
+// the release tarball; legacy "runsc", a bare binary, is still accepted).
 message SandboxAssets {
   string sandbox_class = 1;           // e.g. "gvisor"
   map<string, ArchAssets> assets = 2; // arch -> {name -> file}
+
+  // pause_image is the image for the sandbox's root container. Like the
+  // binaries above it is sandbox configuration, not workload configuration,
+  // and atelet pins it into the snapshot manifest so a restore rebuilds the
+  // sandbox from the same image.
+  string pause_image = 3;
 }
 
 // WorkloadSpec parallels Pod, but with far fewer configurable fields.
 message WorkloadSpec {
   repeated Container containers = 1;
-  string pause_image = 2;
   repeated Volume volumes = 3;
+
+  reserved 2;
+  reserved "pause_image"; // moved to SandboxAssets
 }
 
 enum VolumeType {

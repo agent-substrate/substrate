@@ -19,9 +19,10 @@ For how the pieces fit together, see the [Architecture](architecture.md) and
 
 - **SandboxConfig**: a cluster-scoped resource holding the sandbox binaries for
   one runtime family (the gVisor `runsc` binary, or a micro-VM
-  kernel/firmware/config). A `WorkerPool` resolves its binaries from the config
-  it names, or from the cluster default for its class, so one config pins the
-  runtime version for many templates.
+  kernel/firmware/config), plus the pause image for the sandbox's root
+  container. A `WorkerPool` resolves its sandbox from the config it names, or
+  from the cluster default for its class, so one config pins the runtime version
+  for many templates.
 
 ## Records (dynamic state, in the control-plane store)
 

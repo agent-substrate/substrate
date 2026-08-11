@@ -525,7 +525,6 @@ func createTemplateWithContainersAndVolumes(t *testing.T, tc *testContext, ns st
 			Namespace: ns,
 		},
 		Spec: atev1alpha1.ActorTemplateSpec{
-			PauseImage: "pause@sha256:abc",
 			SnapshotsConfig: atev1alpha1.SnapshotsConfig{
 				Location: "gs://fake-fake-fake",
 			},
@@ -574,6 +573,10 @@ func createTemplateWithContainersAndVolumes(t *testing.T, tc *testContext, ns st
 	}
 }
 
+// testPauseImage is the pause image the default test SandboxConfig carries;
+// it is what a resolved WorkloadSpec's sandbox assets should name.
+const testPauseImage = "pause@sha256:abc"
+
 // ensureDefaultGvisorSandboxConfig creates the cluster-scoped default gvisor
 // SandboxConfig (idempotently) and waits for it to appear in the lister.
 func ensureDefaultGvisorSandboxConfig(t *testing.T, tc *testContext) {
@@ -584,6 +587,7 @@ func ensureDefaultGvisorSandboxConfig(t *testing.T, tc *testContext) {
 		Spec: atev1alpha1.SandboxConfigSpec{
 			SandboxClass: atev1alpha1.SandboxClassGvisor,
 			Default:      true,
+			PauseImage:   testPauseImage,
 			Assets: map[string]map[string]atev1alpha1.AssetFile{
 				"amd64": {"runsc": {
 					URL:    "gs://gvisor/releases/nightly/2026-05-19/x86_64/runsc",
@@ -643,7 +647,6 @@ func createTemplateWithSelector(t *testing.T, tc *testContext, ns string, name s
 			Namespace: ns,
 		},
 		Spec: atev1alpha1.ActorTemplateSpec{
-			PauseImage: "pause@sha256:abc",
 			SnapshotsConfig: atev1alpha1.SnapshotsConfig{
 				Location: "gs://fake-fake-fake",
 			},

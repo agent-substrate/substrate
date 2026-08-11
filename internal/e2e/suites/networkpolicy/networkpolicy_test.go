@@ -326,7 +326,6 @@ func setupDemoCounterTemplate(ctx context.Context, t *testing.T, clients *e2e.Cl
 				MatchLabels: map[string]string{"netpol-test": ns},
 			},
 			SandboxClass:    existingAt.Spec.SandboxClass,
-			PauseImage:      existingAt.Spec.PauseImage,
 			Containers:      existingAt.Spec.Containers,
 			SnapshotsConfig: existingAt.Spec.SnapshotsConfig,
 			Volumes:         existingAt.Spec.Volumes,

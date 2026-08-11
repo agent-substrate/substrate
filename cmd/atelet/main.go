@@ -420,7 +420,7 @@ func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *
 	}
 
 	if err := s.prepareOCIBundles(ctx, actorUID, actorRef.Name,
-		req.GetSpec(), req.GetTargetAteomUid(),
+		req.GetSpec(), sandboxRec.PauseImage, req.GetTargetAteomUid(),
 	); err != nil {
 		return nil, ateerrors.CrashIfReason(ctx, err, ateerrors.ReasonInvalidContainerConfig)
 	}
@@ -825,12 +825,12 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 	op.kind = restoreSnapshotKind(req, sandboxRec)
 	op.sandboxClass = sandboxRec.SandboxClass
 
-	// The record whose pinned binaries run the restored workload: the golden's
-	// for a DATA_ON_GOLDEN restore, the snapshot's own otherwise. The golden's
-	// set wins because the guest state being resumed is the golden snapshot's
-	// memory image, and a memory image must be resumed by the exact binary
-	// versions that produced it; the actor's snapshot contributes only durable
-	// data (a plain tar), which no binary version reads back.
+	// The record whose pinned sandbox (binaries + pause image) runs the restored
+	// workload: the golden's for a DATA_ON_GOLDEN restore, the snapshot's own
+	// otherwise. The golden's set wins because the guest state being resumed is
+	// the golden snapshot's memory image, and a memory image must be resumed by
+	// the exact sandbox that produced it; the actor's snapshot contributes only
+	// durable data (a plain tar), which no sandbox version reads back.
 	runtimeRec := sandboxRec
 	if goldenRec != nil {
 		runtimeRec = goldenRec
@@ -905,7 +905,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 			return ateerrors.CrashIfReason(ctx, err, ateerrors.ReasonFailedGetExternalObject, ateerrors.ReasonInvalidObjectURL, ateerrors.ReasonTerminalFileSystemError, ateerrors.ReasonInvalidSandboxAsset)
 		}
 		t := time.Now()
-		err = s.prepareOCIBundles(gctx, actorUID, actorRef.Name, req.GetSpec(), req.GetTargetAteomUid())
+		err = s.prepareOCIBundles(gctx, actorUID, actorRef.Name, req.GetSpec(), runtimeRec.PauseImage, req.GetTargetAteomUid())
 		dBundles = time.Since(t)
 		if err != nil {
 			prepFailedPhase = ateattr.SnapshotPhaseOCIUnpack
@@ -1201,12 +1201,16 @@ func (s *AteomHerder) downloadExternalCheckpoint(ctx context.Context, snapshotUR
 }
 
 // prepareOCIBundles pulls images and assembles OCI bundles for the pause
-// container and every application container in spec, in parallel.
+// container and every application container in spec, in parallel. pauseImage
+// comes from the sandbox record, not the workload spec: it is sandbox
+// configuration, and on a restore it must be the image the snapshot was taken
+// with.
 func (s *AteomHerder) prepareOCIBundles(
 	ctx context.Context,
 	actorUID string,
 	actorName string,
 	spec *ateletpb.WorkloadSpec,
+	pauseImage string,
 	targetAteomUid string,
 ) error {
 	// Populate the per-actor identity directory that gets bind-mounted into
@@ -1252,7 +1256,7 @@ func (s *AteomHerder) prepareOCIBundles(
 			s.imageCache,
 			actorUID,
 			"pause",
-			spec.GetPauseImage(),
+			pauseImage,
 			[]string{"/pause"},
 			nil,
 			nil,

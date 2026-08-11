@@ -563,14 +563,19 @@ func (x *ArchAssets) GetFiles() map[string]*AssetFile {
 }
 
 // SandboxAssets is the generic, backend-agnostic description of the sandbox
-// binaries for an actor: a sandbox class plus assets keyed first by
-// architecture (GOARCH) and then by asset name. atelet's backend code
-// interprets the asset names (gVisor expects "gvisor", the release tarball;
-// legacy "runsc", a bare binary, is still accepted).
+// an actor runs in: a sandbox class, the pause image holding its namespaces,
+// and binaries keyed first by architecture (GOARCH) and then by asset name.
+// atelet's backend code interprets the asset names (gVisor expects "gvisor",
+// the release tarball; legacy "runsc", a bare binary, is still accepted).
 type SandboxAssets struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	SandboxClass  string                 `protobuf:"bytes,1,opt,name=sandbox_class,json=sandboxClass,proto3" json:"sandbox_class,omitempty"`                                           // e.g. "gvisor"
-	Assets        map[string]*ArchAssets `protobuf:"bytes,2,rep,name=assets,proto3" json:"assets,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // arch -> {name -> file}
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	SandboxClass string                 `protobuf:"bytes,1,opt,name=sandbox_class,json=sandboxClass,proto3" json:"sandbox_class,omitempty"`                                           // e.g. "gvisor"
+	Assets       map[string]*ArchAssets `protobuf:"bytes,2,rep,name=assets,proto3" json:"assets,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"` // arch -> {name -> file}
+	// pause_image is the image for the sandbox's root container. Like the
+	// binaries above it is sandbox configuration, not workload configuration,
+	// and atelet pins it into the snapshot manifest so a restore rebuilds the
+	// sandbox from the same image.
+	PauseImage    string `protobuf:"bytes,3,opt,name=pause_image,json=pauseImage,proto3" json:"pause_image,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -619,11 +624,17 @@ func (x *SandboxAssets) GetAssets() map[string]*ArchAssets {
 	return nil
 }
 
+func (x *SandboxAssets) GetPauseImage() string {
+	if x != nil {
+		return x.PauseImage
+	}
+	return ""
+}
+
 // WorkloadSpec parallels Pod, but with far fewer configurable fields.
 type WorkloadSpec struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Containers    []*Container           `protobuf:"bytes,1,rep,name=containers,proto3" json:"containers,omitempty"`
-	PauseImage    string                 `protobuf:"bytes,2,opt,name=pause_image,json=pauseImage,proto3" json:"pause_image,omitempty"`
 	Volumes       []*Volume              `protobuf:"bytes,3,rep,name=volumes,proto3" json:"volumes,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -664,13 +675,6 @@ func (x *WorkloadSpec) GetContainers() []*Container {
 		return x.Containers
 	}
 	return nil
-}
-
-func (x *WorkloadSpec) GetPauseImage() string {
-	if x != nil {
-		return x.PauseImage
-	}
-	return ""
 }
 
 func (x *WorkloadSpec) GetVolumes() []*Volume {
@@ -1760,20 +1764,20 @@ const file_atelet_proto_rawDesc = "" +
 	"\n" +
 	"FilesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12'\n" +
-	"\x05value\x18\x02 \x01(\v2\x11.atelet.AssetFileR\x05value:\x028\x01\"\xbe\x01\n" +
+	"\x05value\x18\x02 \x01(\v2\x11.atelet.AssetFileR\x05value:\x028\x01\"\xdf\x01\n" +
 	"\rSandboxAssets\x12#\n" +
 	"\rsandbox_class\x18\x01 \x01(\tR\fsandboxClass\x129\n" +
-	"\x06assets\x18\x02 \x03(\v2!.atelet.SandboxAssets.AssetsEntryR\x06assets\x1aM\n" +
+	"\x06assets\x18\x02 \x03(\v2!.atelet.SandboxAssets.AssetsEntryR\x06assets\x12\x1f\n" +
+	"\vpause_image\x18\x03 \x01(\tR\n" +
+	"pauseImage\x1aM\n" +
 	"\vAssetsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12(\n" +
-	"\x05value\x18\x02 \x01(\v2\x12.atelet.ArchAssetsR\x05value:\x028\x01\"\x8c\x01\n" +
+	"\x05value\x18\x02 \x01(\v2\x12.atelet.ArchAssetsR\x05value:\x028\x01\"~\n" +
 	"\fWorkloadSpec\x121\n" +
 	"\n" +
 	"containers\x18\x01 \x03(\v2\x11.atelet.ContainerR\n" +
-	"containers\x12\x1f\n" +
-	"\vpause_image\x18\x02 \x01(\tR\n" +
-	"pauseImage\x12(\n" +
-	"\avolumes\x18\x03 \x03(\v2\x0e.atelet.VolumeR\avolumes\"\x12\n" +
+	"containers\x12(\n" +
+	"\avolumes\x18\x03 \x03(\v2\x0e.atelet.VolumeR\avolumesJ\x04\b\x02\x10\x03R\vpause_image\"\x12\n" +
 	"\x10DurableDirVolume\"\xfd\x01\n" +
 	"\x14ExternalVolumeSource\x12*\n" +
 	"\x11storage_volume_id\x18\x01 \x01(\tR\x0fstorageVolumeId\x12\x1f\n" +

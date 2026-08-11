@@ -70,7 +70,7 @@ func TestSnapshotManifestActorMetadata(t *testing.T) {
 // written before the scope field existed must still parse, reporting an empty
 // scope, and a scope-less record must not serialize a scope key at all.
 func TestSnapshotManifestScopeAbsent(t *testing.T) {
-	legacy := []byte(`{"sandboxClass":"gvisor","snapshotFiles":["checkpoint.img"]}`)
+	legacy := []byte(`{"sandboxClass":"gvisor","pauseImage":"pause@sha256:abc","snapshotFiles":["checkpoint.img"]}`)
 	rec, err := unmarshalSandboxRecord(legacy)
 	if err != nil {
 		t.Fatalf("unmarshalSandboxRecord(legacy manifest): %v", err)
@@ -85,6 +85,18 @@ func TestSnapshotManifestScopeAbsent(t *testing.T) {
 	}
 	if bytes.Contains(got, []byte(`"scope"`)) {
 		t.Errorf("scope-less record serialized a scope key: %s", got)
+	}
+}
+
+// TestSnapshotManifestRequiresPauseImage pins that a manifest without a pause
+// image is rejected outright rather than yielding an empty image that would
+// fail later, deep in the image pull.
+func TestSnapshotManifestRequiresPauseImage(t *testing.T) {
+	noPause := []byte(`{"sandboxClass":"gvisor","snapshotFiles":["checkpoint.img"]}`)
+	if _, err := unmarshalSandboxRecord(noPause); err == nil {
+		t.Fatal("unmarshalSandboxRecord accepted a manifest with no pauseImage")
+	} else if !strings.Contains(err.Error(), "pauseImage") {
+		t.Errorf("error = %v, want it to name pauseImage", err)
 	}
 }
 
@@ -636,7 +648,6 @@ func TestRPCBoundariesReject(t *testing.T) {
 
 func TestBuildAteomWorkloadSpecForwardsReadyz(t *testing.T) {
 	in := &ateletpb.WorkloadSpec{
-		PauseImage: "pause",
 		Containers: []*ateletpb.Container{
 			{
 				Name:  "with-probe",
