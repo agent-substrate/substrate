@@ -42,29 +42,37 @@ func (s *Service) UpdateActorTemplate(ctx context.Context, req *ateapipb.UpdateA
 	in := req.GetActorTemplate()
 	templateRef := resources.ActorTemplateRefFromActorTemplate(in)
 
-	// Setting a new default names an ActorTemplateVersion; take the template
-	// lock so the reference check below cannot race a concurrent
-	// DeleteActorTemplateVersion. Clearing the default needs no cross-resource
-	// check, so it stays lock-free.
+	// Take the template lock so the update cannot race concurrent operations
+	// on this ActorTemplate.
+	lock, err := s.persistence.AcquireLock(ctx, actorTemplateLockKey(templateRef))
+	if errors.Is(err, store.ErrLockConflict) {
+		return nil, status.Error(codes.Aborted, "another operation is using this ActorTemplate")
+	}
+	if err != nil {
+		return nil, fmt.Errorf("while locking ActorTemplate: %w", err)
+	}
+	defer lock.Close()
+	ctx = lock.Context()
+
+	// The new default must exist and belong to this template; hold its lock
+	// while it becomes the default so no concurrent operation on the version
+	// interleaves. Readiness is deliberately not checked here: CreateActor
+	// enforces it when the default is used, so a template can point at a
+	// version that is still building.
 	newDefault := in.GetDefaultVersionOnCreate()
 	setsDefault := newDefault != nil && slices.Contains(req.GetUpdateMask().GetPaths(), defaultVersionMaskPath)
 	if setsDefault {
-		lock, err := s.persistence.AcquireLock(ctx, actorTemplateLockKey(templateRef))
+		versionRef := resources.ActorTemplateVersionRefFromObjectRef(newDefault)
+		versionLock, err := s.persistence.AcquireLock(ctx, actorTemplateVersionLockKey(versionRef))
 		if errors.Is(err, store.ErrLockConflict) {
-			return nil, status.Error(codes.Aborted, "another operation is using this ActorTemplate")
+			return nil, status.Error(codes.Aborted, "another operation is using this ActorTemplateVersion")
 		}
 		if err != nil {
-			return nil, fmt.Errorf("while locking ActorTemplate: %w", err)
+			return nil, fmt.Errorf("while locking ActorTemplateVersion: %w", err)
 		}
-		defer lock.Close()
-		ctx = lock.Context()
-	}
+		defer versionLock.Close()
+		ctx = versionLock.Context()
 
-	// The new default must exist and belong to this template. Readiness is
-	// deliberately not checked here: CreateActor enforces it when the default
-	// is used, so a template can point at a version that is still building.
-	if setsDefault {
-		versionRef := resources.ActorTemplateVersionRefFromObjectRef(newDefault)
 		version, err := s.persistence.GetActorTemplateVersion(ctx, versionRef)
 		if err != nil {
 			if errors.Is(err, store.ErrNotFound) {

@@ -35,6 +35,7 @@ type Service struct {
 	dialer                *AteletDialer
 	actorTemplateLister   listersv1alpha1.ActorTemplateLister
 	workerPoolLister      listersv1alpha1.WorkerPoolLister
+	sandboxConfigLister   listersv1alpha1.SandboxConfigLister
 	csiDriverConfigLister listersv1alpha1.CSIDriverConfigLister
 	storageClassLister    storagev1listers.StorageClassLister
 	actorWorkflow         *ActorWorkflow
@@ -69,6 +70,7 @@ func NewService(
 		workerCache:           workerCache,
 		actorTemplateLister:   actorTemplateLister,
 		workerPoolLister:      workerPoolLister,
+		sandboxConfigLister:   sandboxConfigLister,
 		csiDriverConfigLister: csiDriverConfigLister,
 		storageClassLister:    storageClassLister,
 		dialer:                dialer,
