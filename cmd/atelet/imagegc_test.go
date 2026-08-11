@@ -239,6 +239,17 @@ func TestRunPassEvictsAndPassesDryRun(t *testing.T) {
 	}
 }
 
+func TestRunImmediateFirstPassThenTicks(t *testing.T) {
+	fake := &fakeGCStore{}
+	g := &imageCacheGC{store: fake, cacheDir: t.TempDir(), highPct: 100, lowPct: 0, period: 10 * time.Millisecond}
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+	g.Run(ctx)
+	if fake.evictCalls < 2 {
+		t.Errorf("evictCalls=%d, want >=2 (immediate first pass plus ticks)", fake.evictCalls)
+	}
+}
+
 func TestRunPassRecoversPanic(t *testing.T) {
 	g := &imageCacheGC{store: &fakeGCStore{panicOnEvict: true}, cacheDir: t.TempDir(), highPct: 100, lowPct: 0}
 	g.runPass(context.Background()) // must not propagate the panic

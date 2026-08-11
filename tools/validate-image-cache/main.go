@@ -30,11 +30,13 @@
 // --min-free-gb free space, the tool asks Store.EvictUnused to reclaim
 // the shortfall. --evict-all instead empties everything evictable and
 // exits. Bundle-spec rooting (scanned from ateompath.ActorsDir) protects
-// placed actors' mounted images, but the engine's locks are per-process:
-// a run concurrent with a live atelet is two unsynchronized GC passes
-// over one pool, and New's orphan scan assumes no pull is in flight.
-// Stop atelet first for a clean flush, and run as the user that owns
-// the cache and actors dirs — an unreadable actors dir gates every pass.
+// placed actors' mounted images. The engine's locks are per-process, so a
+// run beside a live atelet is unsynchronized with its GC and pulls — the
+// pool cannot be corrupted (record-first pulls, two-phase retirement),
+// but a layer idle past --evict-idle can be retired just as a new pull
+// cache-hits it: that actor start fails once and heals on re-pull. Run
+// as the user that owns the cache and actors dirs — an unreadable actors
+// dir gates every pass.
 package main
 
 import (
@@ -70,7 +72,7 @@ var (
 	timeout   = flag.Duration("timeout", 20*time.Minute, "Per-image timeout")
 	minFreeGB = flag.Uint64("min-free-gb", 150, "Ask the eviction engine to reclaim disk when the cache volume has less free space than this")
 	evictIdle = flag.Duration("evict-idle", 10*time.Minute, "Eviction min-age: layers and records younger than this are never evicted. NOTE: if the corpus unpacks faster than this window elapses on a small disk, nothing is evictable while the disk fills — size it well below disk-fill time")
-	evictAll  = flag.Bool("evict-all", false, "Evict everything evictable from the cache and exit (no refs file needed). Rooted images and anything younger than --evict-idle survive")
+	evictAll  = flag.Bool("evict-all", false, "Evict everything evictable from the cache and exit (no refs file needed). Rooted images and anything younger than --evict-idle survive. Safe alongside a running atelet: worst case a concurrent actor start fails once and heals on retry")
 	platform  = flag.String("platform", "linux/amd64", "Image platform to pull")
 )
 
@@ -103,8 +105,11 @@ func main() {
 
 	if *evictAll {
 		// Flush mode: no refs, no registry auth. New also reclaims any
-		// crash-debris orphans before the pass. See the package doc for
-		// why a live atelet should be stopped first.
+		// crash-debris orphans before the pass.
+		if _, err := os.Stat(ateompath.ActorsDir); err == nil {
+			// An actors dir is a decent proxy for a live node.
+			log.Printf("live node: this run is not synchronized with atelet's GC; a concurrent actor start may fail once and heal on retry")
+		}
 		store, err := newStore()
 		if err != nil {
 			log.Fatalf("opening cache: %v", err)
@@ -292,7 +297,9 @@ func evictIfLow(ctx context.Context, store *imagecache.Store, cacheRoot string, 
 		log.Printf("evicted %d images / %d layers, %.1f GB credited (free now %.0f GB)",
 			stats.EvictedImages, stats.EvictedLayers, float64(stats.FreedBytes)/1e9, float64(freeBytes(cacheRoot))/1e9)
 	}
-	if stats.FreedBytes == 0 {
+	// Layers retired with an unreadable size file credit zero bytes, so
+	// bytes alone would call a productive pass fruitless.
+	if stats.EvictedLayers == 0 && stats.FreedBytes == 0 {
 		lastFruitless = time.Now()
 	}
 }
