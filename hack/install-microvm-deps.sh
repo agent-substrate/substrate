@@ -145,7 +145,7 @@ fi
 
 # --- 2. stage assets to rustfs (kind) / GCS (GKE) --------------------------
 # Upload the five assets under kata-assets/, where atelet fetches them: the
-# in-cluster rustfs (port-forwarded, S3 API) on kind, or the GCS bucket on GKE.
+# in-cluster rustfs (S3 API) on kind, or the GCS bucket on GKE.
 if [[ "${ATE_INSTALL_KIND}" == "true" ]]; then
   log "Staging assets to in-cluster rustfs bucket ${BUCKET_NAME} (kata-assets/)..."
   OUT="${OUT}" BUCKET="${BUCKET_NAME}" KUBECTL_CONTEXT="${KUBECTL_CONTEXT}" hack/microvm-assets/stage-to-rustfs.sh

@@ -303,9 +303,9 @@ type conflictInjectingStore struct {
 	inject func()
 }
 
-func (c *conflictInjectingStore) UpdateActor(ctx context.Context, actor *ateapipb.Actor, expectedVersion int64) (*ateapipb.Actor, error) {
+func (c *conflictInjectingStore) UpdateActor(ctx context.Context, actorRef resources.ActorRef, mutate func(*ateapipb.Actor) error) (*ateapipb.Actor, error) {
 	c.once.Do(c.inject)
-	return c.Interface.UpdateActor(ctx, actor, expectedVersion)
+	return c.Interface.UpdateActor(ctx, actorRef, mutate)
 }
 
 // seedAssignFixture stores one free gvisor worker and a SUSPENDED actor and
@@ -384,8 +384,13 @@ func TestAssignWorkerAttempt_ConflictRefreshesActor(t *testing.T) {
 					t.Errorf("inject GetActor: %v", err)
 					return
 				}
-				tc.mutate(fresh)
-				injected, err = persistence.UpdateActor(ctx, fresh, fresh.GetMetadata().GetVersion())
+				injected, err = persistence.UpdateActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, func(dbActor *ateapipb.Actor) error {
+					if err := store.CheckActorPrecondition(dbActor, store.AnyUID, fresh.GetMetadata().GetVersion()); err != nil {
+						return err
+					}
+					tc.mutate(dbActor)
+					return nil
+				})
 				if err != nil {
 					t.Errorf("inject UpdateActor: %v", err)
 				}

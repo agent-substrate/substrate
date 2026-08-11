@@ -69,7 +69,6 @@ func TestActorTemplateValidation(t *testing.T) {
 			Namespace: "default",
 		},
 		Spec: ActorTemplateSpec{
-			PauseImage: "gcr.io/gke-release/pause@sha256:bcbd57ba5653580ec647b16d8163cdd1112df3609129b01f912a8032e48265da",
 			Containers: []Container{
 				{
 					Name:  "main",
@@ -97,20 +96,6 @@ func TestActorTemplateValidation(t *testing.T) {
 		name:    "base template",
 		mutate:  func(at *ActorTemplate) {},
 		wantErr: false,
-	}, {
-		name: "missing PauseImage",
-		mutate: func(at *ActorTemplate) {
-			at.Spec.PauseImage = ""
-		},
-		wantErr: true,
-		errMsg:  "Required value",
-	}, {
-		name: "unpinned PauseImage",
-		mutate: func(at *ActorTemplate) {
-			at.Spec.PauseImage = "pause"
-		},
-		wantErr: true,
-		errMsg:  "All images must be pinned",
 	}, {
 		name: "missing SnapshotsConfig.Location",
 		mutate: func(at *ActorTemplate) {
@@ -1154,7 +1139,6 @@ func TestActorTemplateSpecImmutability(t *testing.T) {
 
 	baseTemplate := &ActorTemplate{
 		Spec: ActorTemplateSpec{
-			PauseImage: "pause@hash",
 			Containers: []Container{
 				{
 					Name:  "main",
@@ -1175,9 +1159,9 @@ func TestActorTemplateSpecImmutability(t *testing.T) {
 		mutate func(*ActorTemplate)
 	}{
 		{
-			name: "update-pause-image",
+			name: "update-container-image",
 			mutate: func(at *ActorTemplate) {
-				at.Spec.PauseImage = "pause@new"
+				at.Spec.Containers[0].Image = "busybox@new"
 			},
 		},
 		{

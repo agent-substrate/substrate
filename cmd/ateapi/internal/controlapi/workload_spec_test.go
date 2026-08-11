@@ -36,7 +36,6 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 			template: &atev1alpha1.ActorTemplate{
 				ObjectMeta: metav1.ObjectMeta{Name: "tmpl1", Namespace: "agent-ns"},
 				Spec: atev1alpha1.ActorTemplateSpec{
-					PauseImage: "pause",
 					Volumes: []atev1alpha1.Volume{
 						{Name: "home", VolumeSource: atev1alpha1.VolumeSource{DurableDir: &atev1alpha1.DurableDirVolumeSource{}}},
 					},
@@ -53,7 +52,6 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 				},
 			},
 			want: &ateletpb.WorkloadSpec{
-				PauseImage: "pause",
 				Volumes: []*ateletpb.Volume{
 					{
 						Name:   "home",

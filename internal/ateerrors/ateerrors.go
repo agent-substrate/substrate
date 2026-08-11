@@ -55,6 +55,11 @@ const (
 	// image defines no ENTRYPOINT/CMD and the ActorTemplate sets no command/args).
 	ReasonInvalidContainerConfig Reason = "INVALID_CONTAINER_CONFIG"
 
+	// ReasonLocalSnapshotGone marks a paused actor whose local snapshot is
+	// missing from the node it was recorded on and absent from object storage:
+	// its state is unrecoverable.
+	ReasonLocalSnapshotGone Reason = "LOCAL_SNAPSHOT_GONE"
+
 	// Control-plane failure reasons for ate.actor.crashes metric.
 	ReasonCorruptedAssignment Reason = "CORRUPTED_ASSIGNMENT"
 	ReasonWorkerReassigned    Reason = "WORKER_REASSIGNED"
@@ -71,6 +76,7 @@ var AllReasons = []Reason{
 	ReasonInvalidObjectURL,
 	ReasonFailedGetExternalObject,
 	ReasonInvalidContainerConfig,
+	ReasonLocalSnapshotGone,
 	ReasonCorruptedAssignment,
 	ReasonWorkerReassigned,
 	ReasonWorkerPodGone,

@@ -26,6 +26,7 @@ import (
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/internal/ateattr"
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
@@ -215,6 +216,152 @@ func TestUpdateActor_FailedLookupStampsRefIdentityOnly(t *testing.T) {
 		if _, ok := attrs[k]; ok {
 			t.Errorf("unexpected %s on failed-update span", k)
 		}
+	}
+}
+
+// TestUpdateActor_DeleteRecreateRace checks that an update is not applied
+// if an actor was deleted and recreated during the update operation.
+func TestUpdateActor_DeleteRecreateRace(t *testing.T) {
+	ctx := context.Background()
+	persistence, cleanup := storetest.SetupTestStore(t)
+	t.Cleanup(cleanup)
+
+	actorRef := resources.ActorRef{Atespace: testAtespace, Name: testActorID}
+
+	// Actor A: what the client reads, and what its uid precondition names.
+	// Freshly created, so it sits at version 1.
+	original, err := persistence.CreateActor(ctx, &ateapipb.Actor{
+		Metadata:               &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: testActorID},
+		ActorTemplateNamespace: "ns1",
+		ActorTemplateName:      "tmpl1",
+		Status:                 ateapipb.Actor_STATUS_RUNNING,
+		WorkerAssignment:       &ateapipb.WorkerAssignment{WorkerPod: "pod-a"},
+	})
+	if err != nil {
+		t.Fatalf("seed CreateActor: %v", err)
+	}
+
+	// A concurrent client deletes A and recreates the same atespace/name as a
+	// brand new actor B, in the window the handler used to leave open between
+	// its own read and the store's WATCH.
+	var recreated *ateapipb.Actor
+	racing := &conflictInjectingStore{
+		Interface: persistence,
+		inject: func() {
+			if _, err := persistence.UpdateActor(ctx, actorRef, func(dbActor *ateapipb.Actor) error {
+				dbActor.Status = ateapipb.Actor_STATUS_DELETING
+				return nil
+			}); err != nil {
+				t.Fatalf("racing writer: mark deleting: %v", err)
+			}
+			if _, err := persistence.DeleteActor(ctx, actorRef); err != nil {
+				t.Fatalf("racing writer: DeleteActor: %v", err)
+			}
+			recreated, err = persistence.CreateActor(ctx, &ateapipb.Actor{
+				Metadata:               &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: testActorID},
+				ActorTemplateNamespace: "ns1",
+				ActorTemplateName:      "tmpl1",
+				Status:                 ateapipb.Actor_STATUS_SUSPENDED,
+			})
+			if err != nil {
+				t.Fatalf("racing writer: recreate CreateActor: %v", err)
+			}
+		},
+	}
+	svc := &Service{persistence: racing}
+
+	// The client asserts "only update the actor with uid A".
+	_, err = svc.UpdateActor(ctx, &ateapipb.UpdateActorRequest{
+		Actor: &ateapipb.Actor{
+			Metadata: &ateapipb.ResourceMetadata{
+				Atespace: testAtespace,
+				Name:     testActorID,
+				Uid:      original.GetMetadata().GetUid(),
+			},
+			WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"tier": "paid"}},
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"worker_selector"}},
+	})
+	if code := status.Code(err); code != codes.Aborted {
+		t.Errorf("UpdateActor error = %v (code %v), want code Aborted: the actor holding uid %s was deleted mid-update",
+			err, code, original.GetMetadata().GetUid())
+	}
+
+	stored, err := persistence.GetActor(ctx, actorRef)
+	if err != nil {
+		t.Fatalf("GetActor: %v", err)
+	}
+	if got, want := stored.GetMetadata().GetUid(), recreated.GetMetadata().GetUid(); got != want {
+		t.Fatalf("stored uid = %s, want recreated actor's uid %s", got, want)
+	}
+	// The stored record must still be actor B as its creator left it. Any of A's
+	// state showing up here is the clobber.
+	if got := stored.GetStatus(); got != ateapipb.Actor_STATUS_SUSPENDED {
+		t.Errorf("stored status = %v, want %v: recreated actor was overwritten with the deleted actor's state",
+			got, ateapipb.Actor_STATUS_SUSPENDED)
+	}
+	if got := stored.GetWorkerAssignment(); got != nil {
+		t.Errorf("stored worker_assignment = %v, want nil: recreated actor inherited the deleted actor's worker", got)
+	}
+	if got := stored.GetWorkerSelector(); got != nil {
+		t.Errorf("stored worker_selector = %v, want nil: update meant for the deleted actor was applied", got)
+	}
+}
+
+// TestUpdateActor_ConcurrentDisjointUpdates checks that concurrent write
+// to a disjoint field is resolved by the store and both fields survive the update.
+func TestUpdateActor_ConcurrentDisjointUpdates(t *testing.T) {
+	ctx := context.Background()
+	persistence, cleanup := storetest.SetupTestStore(t)
+	t.Cleanup(cleanup)
+
+	actorRef := resources.ActorRef{Atespace: testAtespace, Name: testActorID}
+
+	if _, err := persistence.CreateActor(ctx, &ateapipb.Actor{
+		Metadata:               &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: testActorID},
+		ActorTemplateNamespace: "ns1",
+		ActorTemplateName:      "tmpl1",
+		Status:                 ateapipb.Actor_STATUS_RUNNING,
+	}); err != nil {
+		t.Fatalf("seed CreateActor: %v", err)
+	}
+
+	// A suspend workflow bumps status (a field that a later update operation will not touch)
+	// inside the handler's read-modify-write window.
+	racing := &conflictInjectingStore{
+		Interface: persistence,
+		inject: func() {
+			if _, err := persistence.UpdateActor(ctx, actorRef, func(dbActor *ateapipb.Actor) error {
+				dbActor.Status = ateapipb.Actor_STATUS_SUSPENDING
+				return nil
+			}); err != nil {
+				t.Fatalf("racing writer: mark suspending: %v", err)
+			}
+		},
+	}
+	svc := &Service{persistence: racing}
+
+	// Update operation is changing the worker_selector field, not the actor's status (like the concurrent op)
+	if _, err := svc.UpdateActor(ctx, &ateapipb.UpdateActorRequest{
+		Actor: &ateapipb.Actor{
+			Metadata:       &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: testActorID},
+			WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"tier": "paid"}},
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"worker_selector"}},
+	}); err != nil {
+		t.Fatalf("UpdateActor error = %v, want success: no version precondition was set, so the conflict is the server's to resolve", err)
+	}
+
+	stored, err := persistence.GetActor(ctx, actorRef)
+	if err != nil {
+		t.Fatalf("GetActor: %v", err)
+	}
+	// Both worker selector and status updates survive
+	if got := stored.GetWorkerSelector().GetMatchLabels()["tier"]; got != "paid" {
+		t.Errorf("stored worker_selector[tier] = %q, want %q", got, "paid")
+	}
+	if got := stored.GetStatus(); got != ateapipb.Actor_STATUS_SUSPENDING {
+		t.Errorf("stored status = %v, want %v: the concurrent writer's field must survive", got, ateapipb.Actor_STATUS_SUSPENDING)
 	}
 }
 

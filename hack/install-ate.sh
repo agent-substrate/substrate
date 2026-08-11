@@ -40,6 +40,7 @@ ATE_DEMOS=()
 
 # Include demos.
 source "${ROOT}"/hack/install-demo-counter.sh
+source "${ROOT}"/hack/install-demo-egress.sh
 source "${ROOT}"/hack/install-demo-sandbox.sh
 source "${ROOT}"/hack/install-demo-claude-code-multiplex.sh
 source "${ROOT}"/hack/install-demo-multi-template.sh
@@ -79,6 +80,7 @@ function usage() {
   echo ""
   echo "  --create-jwt-authority-pool-secret     Create JWT authority pool secret"
   echo "  --create-actor-id-ca-pool-secret       Create actor ID CA pool secret"
+  echo "  --create-actor-id-ca-certs-secret      Create actor ID CA certs secret"
   echo "  --create-podcertificate-controller-cas Create podcertificate controller CAs"
   echo "  --create-valkey-ca-certs-secret        Create Valkey CA certs secret"
   echo "  --create-api-server-env-vars           Create ate-api-server env vars"
@@ -222,10 +224,13 @@ apply_otel_config() {
 }
 
 # Extract a CA pool secret's RootCertificateDER and emit it as a PEM certificate.
+# The namespace defaults to the podcertificate controller's, where the signer
+# CAs live; the actor-identity CA pool is in ate-system, so it passes its own.
 ca_pool_root_pem() {
   local secret="$1"
+  local namespace="${2:-podcertificate-controller-system}"
   local pool_json=""
-  pool_json=$(run_kubectl get secret -n podcertificate-controller-system "${secret}" -o jsonpath='{.data.pool}' | base64 --decode)
+  pool_json=$(run_kubectl get secret -n "${namespace}" "${secret}" -o jsonpath='{.data.pool}' | base64 --decode)
   local der_base64=""
   der_base64=$(echo "${pool_json}" | grep -o '"RootCertificateDER":"[^"]*' | sed 's/"RootCertificateDER":"//')
   echo "${der_base64}" | base64 --decode | openssl x509 -inform der -outform pem
@@ -273,6 +278,32 @@ create_actor_id_ca_pool_secret() {
     --ca-id="1" \
     --name="actor-id-ca-pool" \
     --secret-namespace=ate-system
+}
+
+# The egress gateway has to verify actor client certificates, which means it
+# needs the actor-identity CA root. actor-id-ca-pool Secret containts both
+# root and CA signing key. This derives a cert-only Secret instead, following
+# exactly the pattern create_valkey_ca_certs_secret already uses for the
+# signer roots.
+#
+# TODO(liorlieberman): should this be published as ClusterTrustBundles?
+create_actor_id_ca_certs_secret() {
+  log_step "create_actor_id_ca_certs_secret"
+  # Extract into its own variable first: errexit cannot see a substitution fail
+  # inside the create-secret argument list, which would silently produce an
+  # empty trust bundle and an egress gateway that rejects every actor.
+  local actorid_root=""
+  actorid_root=$(ca_pool_root_pem actor-id-ca-pool ate-system)
+  if [[ -z "${actorid_root}" ]]; then
+    echo "error: failed to extract the actor-identity CA root for actor-id-ca-certs" >&2
+    return 1
+  fi
+
+  run_kubectl create secret generic actor-id-ca-certs \
+    --from-literal=ca.crt="${actorid_root}" \
+    -n ate-system \
+    --dry-run=client -o yaml \
+    | run_kubectl apply -f -
 }
 
 create_podcertificate_controller_cas() {
@@ -348,6 +379,10 @@ setup_csi() {
 
 deploy_ate_system() {
   log_step "deploy_ate_system"
+  # Ensure namespace exists before applying RBAC or CRDs
+  run_kubectl apply -f manifests/ate-install/ate-system-namespace.yaml \
+    && run_kubectl wait --for=jsonpath='{.status.phase}'=Active namespace/ate-system --timeout=60s
+
   # Not ensure_crds: its existence check skips upgrades, stranding stale CRD
   # schemas and RBAC (role.yaml has no other apply path).
   deploy_crds
@@ -369,10 +404,6 @@ deploy_ate_system() {
   # (decoupled from ActorTemplate). gVisor pools resolve to this default unless
   # they name their own SandboxConfig.
   run_kubectl apply -f manifests/ate-install/sandboxconfig-gvisor.yaml
-
-  # Ensure namespace exists
-  run_kubectl apply -f manifests/ate-install/ate-system-namespace.yaml \
-    && run_kubectl wait --for=jsonpath='{.status.phase}'=Active namespace/ate-system --timeout=60s
 
   # Ahead of the bundle below, for the same reason as the namespace: every
   # workload pulls this ConfigMap in via envFrom, and a container whose envFrom
@@ -405,6 +436,7 @@ deploy_ate_system() {
   run_kubectl rollout status deployment/ate-api-server -n ate-system --timeout=120s
   run_kubectl rollout status deployment/ate-controller -n ate-system --timeout=120s
   run_kubectl rollout status deployment/atenet-router -n ate-system --timeout=120s
+  run_kubectl rollout status deployment/atenet-egress -n ate-system --timeout=120s
   run_kubectl rollout status statefulset/valkey-cluster -n ate-system --timeout=120s
   run_kubectl rollout status daemonset/atelet -n ate-system --timeout=120s
 }
@@ -416,6 +448,9 @@ ensure_apiserver_prerequisites() {
     || create_jwt_authority_pool_secret
   run_kubectl get secret -n ate-system actor-id-ca-pool >/dev/null 2>&1 \
     || create_actor_id_ca_pool_secret
+  # Derived from actor-id-ca-pool above, so it must come after it.
+  run_kubectl get secret -n ate-system actor-id-ca-certs >/dev/null 2>&1 \
+    || create_actor_id_ca_certs_secret
   run_kubectl get secret -n podcertificate-controller-system service-dns-ca-pool >/dev/null 2>&1 \
     || create_podcertificate_controller_cas
   run_kubectl get secret -n ate-system valkey-ca-certs >/dev/null 2>&1 \
@@ -476,11 +511,10 @@ deploy_atenet() {
   router_manifest="$(render_atenet_router_manifest)"
   echo "${router_manifest}" | run_kubectl apply -f -
 
+  run_ko apply -f manifests/ate-install/atenet-egress.yaml
   run_ko apply -f manifests/ate-install/atenet-dns.yaml
   run_kubectl rollout status deployment/atenet-router -n ate-system --timeout=120s
-  # The Deployment in atenet-dns.yaml is named "dns"; every other resource in
-  # that file is "atenet-dns". Waiting on the filename rather than the actual
-  # Deployment made this step fail with NotFound on every successful deploy.
+  run_kubectl rollout status deployment/atenet-egress -n ate-system --timeout=120s
   run_kubectl rollout status deployment/dns -n ate-system --timeout=120s
 }
 
@@ -599,6 +633,8 @@ delete_atenet() {
   run_kubectl delete --ignore-not-found -f manifests/ate-install/atenet-router.yaml
   run_kubectl delete --ignore-not-found \
     -f manifests/ate-install/components/agentgateway/configmap.yaml
+  run_kubectl delete --ignore-not-found -f manifests/ate-install/atenet-egress.yaml
+  run_kubectl delete --ignore-not-found -f manifests/ate-install/atenet-dns.yaml
 }
 
 deploy_benchmarks() {
@@ -734,6 +770,7 @@ while [[ "$#" -gt 0 ]]; do
 
     --create-jwt-authority-pool-secret) create_jwt_authority_pool_secret ;;
     --create-actor-id-ca-pool-secret) create_actor_id_ca_pool_secret ;;
+    --create-actor-id-ca-certs-secret) create_actor_id_ca_certs_secret ;;
     --create-podcertificate-controller-cas) create_podcertificate_controller_cas ;;
     --create-valkey-ca-certs-secret) create_valkey_ca_certs_secret ;;
     --create-api-server-env-vars) create_api_server_env_vars ;;

@@ -12,48 +12,31 @@
 //  See the License for the specific language governing permissions and
 //  limitations under the License.
 
-package router
+package ingress
 
 import (
 	"context"
 	"errors"
 	"testing"
 
-	"github.com/agent-substrate/substrate/internal/resources"
 	envoy_type "github.com/envoyproxy/go-control-plane/envoy/type/v3"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+
+	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/extproc"
+	"github.com/agent-substrate/substrate/internal/resources"
 )
-
-func TestNewReqError(t *testing.T) {
-	t.Parallel()
-
-	err := newReqError(envoy_type.StatusCode_BadRequest, "actor %q is %s", "abc", "bad")
-	if err == nil {
-		t.Fatal("newReqError returned nil")
-	}
-	var reqErr *reqError
-	if !errors.As(err, &reqErr) {
-		t.Fatalf("errors.As(*reqError) = false, want true; err type = %T", err)
-	}
-	if reqErr.statusCode != int(envoy_type.StatusCode_BadRequest) {
-		t.Errorf("statusCode = %d, want %d", reqErr.statusCode, envoy_type.StatusCode_BadRequest)
-	}
-	if got, want := err.Error(), `actor "abc" is bad`; got != want {
-		t.Errorf("Error() = %q, want %q", got, want)
-	}
-}
 
 func TestActorNotFoundErr(t *testing.T) {
 	t.Parallel()
 
 	err := actorNotFoundErr(resources.ActorRef{Atespace: "team-a", Name: "ctr6"})
-	var reqErr *reqError
+	var reqErr *extproc.ReqError
 	if !errors.As(err, &reqErr) {
-		t.Fatalf("errors.As(*reqError) = false, want true; err type = %T", err)
+		t.Fatalf("errors.As(*extproc.ReqError) = false, want true; err type = %T", err)
 	}
-	if reqErr.statusCode != int(envoy_type.StatusCode_NotFound) {
-		t.Errorf("statusCode = %d, want %d", reqErr.statusCode, envoy_type.StatusCode_NotFound)
+	if reqErr.StatusCode != int(envoy_type.StatusCode_NotFound) {
+		t.Errorf("StatusCode = %d, want %d", reqErr.StatusCode, envoy_type.StatusCode_NotFound)
 	}
 	if got, want := err.Error(), `actor team-a/ctr6 not found`; got != want {
 		t.Errorf("Error() = %q, want %q", got, want)
@@ -66,12 +49,12 @@ func TestInvalidHostErr(t *testing.T) {
 	cause := errors.New("missing suffix")
 	err := invalidHostErr("foo.example.com", cause)
 
-	var reqErr *reqError
+	var reqErr *extproc.ReqError
 	if !errors.As(err, &reqErr) {
-		t.Fatalf("errors.As(*reqError) = false, want true; err type = %T", err)
+		t.Fatalf("errors.As(*extproc.ReqError) = false, want true; err type = %T", err)
 	}
-	if reqErr.statusCode != int(envoy_type.StatusCode_NotFound) {
-		t.Errorf("statusCode = %d, want %d", reqErr.statusCode, envoy_type.StatusCode_NotFound)
+	if reqErr.StatusCode != int(envoy_type.StatusCode_NotFound) {
+		t.Errorf("StatusCode = %d, want %d", reqErr.StatusCode, envoy_type.StatusCode_NotFound)
 	}
 	if got, want := err.Error(), `invalid host "foo.example.com": missing suffix`; got != want {
 		t.Errorf("Error() = %q, want %q", got, want)
@@ -186,12 +169,12 @@ func TestMapResumeError(t *testing.T) {
 			if got == nil {
 				t.Fatal("mapResumeError returned nil")
 			}
-			var reqErr *reqError
+			var reqErr *extproc.ReqError
 			if !errors.As(got, &reqErr) {
-				t.Fatalf("errors.As(*reqError) = false, want true; err type = %T", got)
+				t.Fatalf("errors.As(*extproc.ReqError) = false, want true; err type = %T", got)
 			}
-			if reqErr.statusCode != int(tc.wantCode) {
-				t.Errorf("statusCode = %d, want %d", reqErr.statusCode, tc.wantCode)
+			if reqErr.StatusCode != int(tc.wantCode) {
+				t.Errorf("StatusCode = %d, want %d", reqErr.StatusCode, tc.wantCode)
 			}
 			if got.Error() != tc.wantBody {
 				t.Errorf("Error() = %q, want %q", got.Error(), tc.wantBody)
@@ -213,35 +196,14 @@ func TestMapResumeError_NilError(t *testing.T) {
 	}
 }
 
-// Ensures mapResumeError result satisfies the reqError contract so the
-// existing handleRequestHeaders branch (errors.As(err, &reqErr)) keeps working.
+// Ensures mapResumeError result satisfies the extproc.ReqError contract so the
+// mux's errors.As(err, &reqErr) branch keeps mapping it to the right status.
 func TestMapResumeError_IsReqError(t *testing.T) {
 	t.Parallel()
 
 	err := mapResumeError(resources.ActorRef{Atespace: "team-a", Name: "x"}, status.Error(codes.NotFound, "x"))
-	var reqErr *reqError
+	var reqErr *extproc.ReqError
 	if !errors.As(err, &reqErr) {
-		t.Fatalf("errors.As(*reqError) = false, want true; err type = %T", err)
-	}
-}
-
-// TestImmediateResponseHeaderEncoding pins the RawValue encoding: Envoy drops
-// plain Value in ext_proc header mutations, so a Value-encoded header reaches
-// the client with an empty value (found live — content-type on every immediate
-// response had been arriving empty).
-func TestImmediateResponseHeaderEncoding(t *testing.T) {
-	t.Parallel()
-
-	resp := immediateResponse(envoy_type.StatusCode_ServiceUnavailable, "body")
-	set := resp.GetImmediateResponse().GetHeaders().GetSetHeaders()
-	if len(set) != 1 {
-		t.Fatalf("SetHeaders count = %d, want 1", len(set))
-	}
-	h := set[0].GetHeader()
-	if h.GetKey() != "content-type" || string(h.GetRawValue()) != "text/plain" {
-		t.Errorf("header = %q:%q (RawValue), want content-type:text/plain", h.GetKey(), h.GetRawValue())
-	}
-	if h.GetValue() != "" {
-		t.Errorf("header uses Value (%q); must use RawValue only", h.GetValue())
+		t.Fatalf("errors.As(*extproc.ReqError) = false, want true; err type = %T", err)
 	}
 }

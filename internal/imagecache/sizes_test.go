@@ -86,8 +86,8 @@ func TestLayerSizeRecordedAndBackfilled(t *testing.T) {
 		t.Errorf("backfill did not rewrite the size file: %v", err)
 	}
 	after, _ := os.Stat(img.LayerDirs[0])
-	if !after.ModTime().Equal(before.ModTime()) {
-		t.Errorf("backfill changed the layer dir mtime (the eviction age signal): %v -> %v", before.ModTime(), after.ModTime())
+	if !after.ModTime().After(before.ModTime()) {
+		t.Errorf("backfill must bump the layer dir mtime (not restore it — a restore could rewind a concurrent reuse-touch): %v -> %v", before.ModTime(), after.ModTime())
 	}
 
 	// Corrupt size file: healed the same way as a missing one.

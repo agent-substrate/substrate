@@ -25,137 +25,38 @@ import (
 	"os"
 	"runtime/debug"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/spf13/pflag"
 	"go.opentelemetry.io/otel"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/extproc"
+	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/ingress"
 )
 
 var BuildTag = "dev"
-
-type RecordedQuery struct {
-	Timestamp time.Time     `json:"timestamp"`
-	Client    string        `json:"client"`
-	Host      string        `json:"host"`
-	Path      string        `json:"path"`
-	Method    string        `json:"method"`
-	Action    string        `json:"action"`
-	Target    string        `json:"target"`
-	Duration  time.Duration `json:"duration"`
-}
-
-type QueryRecorder struct {
-	mu      sync.RWMutex
-	queries []RecordedQuery
-	size    int
-	index   int
-}
-
-func NewQueryRecorder(size int) *QueryRecorder {
-	return &QueryRecorder{
-		queries: make([]RecordedQuery, 0, size),
-		size:    size,
-	}
-}
-
-func (qr *QueryRecorder) Add(q RecordedQuery) {
-	if qr == nil {
-		return
-	}
-
-	qr.mu.Lock()
-	defer qr.mu.Unlock()
-
-	if len(qr.queries) < qr.size {
-		qr.queries = append(qr.queries, q)
-	} else {
-		qr.queries[qr.index] = q
-		qr.index = (qr.index + 1) % qr.size
-	}
-}
-
-func (qr *QueryRecorder) Get() []RecordedQuery {
-	if qr == nil {
-		return nil
-	}
-
-	qr.mu.RLock()
-	defer qr.mu.RUnlock()
-
-	n := len(qr.queries)
-	if n == 0 {
-		return nil
-	}
-
-	res := make([]RecordedQuery, n)
-	if n < qr.size {
-		for i := 0; i < n; i++ {
-			res[i] = qr.queries[n-1-i]
-		}
-	} else {
-		for i := 0; i < n; i++ {
-			pos := (qr.index - 1 - i + n) % n
-			res[i] = qr.queries[pos]
-		}
-	}
-
-	return res
-}
-
-// redactPath drops the query string, which may carry credentials (CWE-598).
-func redactPath(path string) string {
-	p, _, _ := strings.Cut(path, "?")
-	return p
-}
-
-func (qr *QueryRecorder) AddRouterRequest(
-	start time.Time,
-	duration time.Duration,
-	action,
-	target string,
-	m *requestMetadata,
-) {
-	qr.Add(RecordedQuery{
-		Timestamp: start,
-		Client:    m.headers[authorityHeader],
-		Host:      m.host,
-		Path:      redactPath(m.path),
-		Method:    m.headers[":method"],
-		Action:    action,
-		Target:    target,
-		Duration:  duration,
-	})
-}
 
 type TemplateInfo struct {
 	Name      string `json:"name"`
 	Namespace string `json:"namespace"`
 }
 
-// ParkingStatus is a snapshot of the request-parking lot for the status page.
-type ParkingStatus struct {
-	Enabled   bool   `json:"enabled"`
-	Active    int    `json:"active"`
-	MaxParked int    `json:"max_parked"`
-	MaxWait   string `json:"max_wait"`
-}
-
 type DashboardContext struct {
-	BuildTag        string             `json:"build_tag"`
-	RouterClusterIP string             `json:"router_cluster_ip"`
-	Namespace       string             `json:"namespace"`
-	HttpPort        int                `json:"port_http"`
-	XdsPort         int                `json:"port_xds"`
-	ExtprocPort     int                `json:"port_extproc"`
-	StatusPort      int                `json:"status_port"`
-	Args            string             `json:"args"`
-	Flags           map[string]string  `json:"flags"`
-	Queries         []FormattedQuery   `json:"queries"`
-	Health          RouterHealthReport `json:"health"`
-	Templates       []TemplateInfo     `json:"templates"`
-	Parking         ParkingStatus      `json:"parking"`
+	BuildTag        string                `json:"build_tag"`
+	RouterClusterIP string                `json:"router_cluster_ip"`
+	Namespace       string                `json:"namespace"`
+	Mode            Mode                  `json:"mode"`
+	HttpPort        int                   `json:"port_http"`
+	XdsPort         int                   `json:"port_xds"`
+	ExtprocPort     int                   `json:"port_extproc"`
+	StatusPort      int                   `json:"status_port"`
+	Args            string                `json:"args"`
+	Flags           map[string]string     `json:"flags"`
+	Queries         []FormattedQuery      `json:"queries"`
+	Health          RouterHealthReport    `json:"health"`
+	Templates       []TemplateInfo        `json:"templates"`
+	Parking         ingress.ParkingStatus `json:"parking"`
 }
 
 type FormattedQuery struct {
@@ -187,7 +88,7 @@ func (s *RouterServer) getRouterIP(ctx context.Context) string {
 }
 
 func (s *RouterServer) handleStatusz(w http.ResponseWriter, req *http.Request) {
-	ctx, span := otel.Tracer(routerServiceName).Start(req.Context(), "handleStatusz")
+	ctx, span := otel.Tracer(extproc.ServiceName).Start(req.Context(), "handleStatusz")
 	defer span.End()
 
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
@@ -213,9 +114,9 @@ func (s *RouterServer) handleStatusz(w http.ResponseWriter, req *http.Request) {
 		})
 	}
 
-	var rawQueries []RecordedQuery
-	if s.extprocSrv != nil && s.extprocSrv.recorder != nil {
-		rawQueries = s.extprocSrv.recorder.Get()
+	var rawQueries []extproc.RecordedQuery
+	if s.extprocSrv != nil {
+		rawQueries = s.extprocSrv.Queries()
 	}
 
 	formattedQueries := make([]FormattedQuery, len(rawQueries))
@@ -253,15 +154,17 @@ func (s *RouterServer) handleStatusz(w http.ResponseWriter, req *http.Request) {
 		}
 	}
 
-	var parking ParkingStatus
-	if s.extprocSrv != nil {
-		parking = s.extprocSrv.parking.status()
+	// Parking belongs to the ingress handler; an egress-only instance has none.
+	var parking ingress.ParkingStatus
+	if s.ingressHandler != nil {
+		parking = s.ingressHandler.ParkingStatus()
 	}
 
 	data := DashboardContext{
 		BuildTag:        buildInfo,
 		RouterClusterIP: routerIP,
 		Namespace:       s.cfg.Namespace,
+		Mode:            s.cfg.Mode,
 		HttpPort:        s.cfg.HttpPort,
 		XdsPort:         s.cfg.XdsPort,
 		ExtprocPort:     s.cfg.ExtprocPort,

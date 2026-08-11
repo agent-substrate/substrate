@@ -12,13 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package router
+package extproc
 
 import (
 	"reflect"
 	"testing"
 
-	"github.com/agent-substrate/substrate/internal/resources"
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 )
 
@@ -105,78 +104,16 @@ func TestExtractMetadata(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := newRequestMetadata(tc.headers)
+			got := NewRequestMetadata(tc.headers)
 
-			if !reflect.DeepEqual(got.headers, tc.wantHeaders) {
-				t.Errorf("extractMetadata() headersMap = %v, want %v", got.headers, tc.wantHeaders)
+			if !reflect.DeepEqual(got.Headers, tc.wantHeaders) {
+				t.Errorf("NewRequestMetadata() headersMap = %v, want %v", got.Headers, tc.wantHeaders)
 			}
-			if got.path != tc.wantPath {
-				t.Errorf("extractMetadata() path = %v, want %v", got.path, tc.wantPath)
+			if got.Path != tc.wantPath {
+				t.Errorf("NewRequestMetadata() path = %v, want %v", got.Path, tc.wantPath)
 			}
-			if got.host != tc.wantHost {
-				t.Errorf("extractMetadata() host = %v, want %v", got.host, tc.wantHost)
-			}
-		})
-	}
-}
-
-func TestParseActorRef(t *testing.T) {
-	tests := []struct {
-		name    string
-		host    string
-		want    resources.ActorRef
-		wantErr bool
-	}{
-		{
-			name:    "valid host without port",
-			host:    "my-actor.team-a.actors.resources.substrate.ate.dev",
-			want:    resources.ActorRef{Atespace: "team-a", Name: "my-actor"},
-			wantErr: false,
-		},
-		{
-			name:    "valid host with port",
-			host:    "my-actor.team-a.actors.resources.substrate.ate.dev:8443",
-			want:    resources.ActorRef{Atespace: "team-a", Name: "my-actor"},
-			wantErr: false,
-		},
-		{
-			name:    "valid host with trailing dot",
-			host:    "my-actor.team-a.actors.resources.substrate.ate.dev.",
-			want:    resources.ActorRef{Atespace: "team-a", Name: "my-actor"},
-			wantErr: false,
-		},
-		{
-			name:    "valid host with trailing dot and port",
-			host:    "my-actor.team-a.actors.resources.substrate.ate.dev.:8080",
-			want:    resources.ActorRef{Atespace: "team-a", Name: "my-actor"},
-			wantErr: false,
-		},
-		{
-			name:    "missing atespace label",
-			host:    "my-actor.actors.resources.substrate.ate.dev",
-			wantErr: true,
-		},
-		{
-			name:    "invalid suffix",
-			host:    "my-actor.team-a.example.com",
-			wantErr: true,
-		},
-		{
-			name:    "invalid host port format",
-			host:    "my-actor.team-a.actors.resources.substrate.ate.dev:invalid:port",
-			wantErr: true,
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got, err := parseActorRef(tc.host)
-			if (err != nil) != tc.wantErr {
-				t.Errorf("parseActorRef(%q) error = %v, wantErr %v", tc.host, err, tc.wantErr)
-				return
-			}
-			if got != tc.want {
-				t.Errorf("parseActorRef(%q) = %+v, want %+v", tc.host, got, tc.want)
+			if got.Host != tc.wantHost {
+				t.Errorf("NewRequestMetadata() host = %v, want %v", got.Host, tc.wantHost)
 			}
 		})
 	}

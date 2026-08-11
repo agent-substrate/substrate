@@ -22,6 +22,8 @@ import (
 	"time"
 
 	"golang.org/x/sync/errgroup"
+
+	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/ingress"
 )
 
 type dataplaneHealthCheck struct {
@@ -44,7 +46,7 @@ func (r atenetRouter) healthCheck() dataplaneHealthCheck {
 	}
 }
 
-func (s *RouterServer) startDataplane(ctx context.Context, g *errgroup.Group, parkCfg ParkedRequestConfig, traceRootSamplingPercent float64) error {
+func (s *RouterServer) startDataplane(ctx context.Context, g *errgroup.Group, parkCfg ingress.ParkedRequestConfig, traceRootSamplingPercent float64) error {
 	switch s.cfg.atenetRouter() {
 	case atenetRouterEnvoy:
 		s.startEnvoyDataplane(ctx, g, parkCfg, traceRootSamplingPercent)
@@ -56,7 +58,7 @@ func (s *RouterServer) startDataplane(ctx context.Context, g *errgroup.Group, pa
 	return nil
 }
 
-func (s *RouterServer) startEnvoyDataplane(ctx context.Context, g *errgroup.Group, parkCfg ParkedRequestConfig, traceRootSamplingPercent float64) {
+func (s *RouterServer) startEnvoyDataplane(ctx context.Context, g *errgroup.Group, parkCfg ingress.ParkedRequestConfig, traceRootSamplingPercent float64) {
 	xdsSrv := NewXdsServer(s.cfg.XdsPort)
 	xdsSrv.SetConfig(s.cfg.HttpPort, s.cfg.ExtprocPort, s.cfg.ExtprocAddr)
 	setOtlpCollector(ctx, xdsSrv, s.cfg.OtlpCollectorAddress)
@@ -64,7 +66,7 @@ func (s *RouterServer) startEnvoyDataplane(ctx context.Context, g *errgroup.Grou
 
 	xdsSrv.SetRouteTimeout(s.cfg.RouteTimeout)
 	xdsSrv.SetExtProcMaxRequests(s.cfg.extProcMaxRequests())
-	if parkCfg.enabled() {
+	if parkCfg.Enabled() {
 		// Envoy must keep a parked request open at least as long as the router
 		// will hold it; add a margin so the router surfaces its own 503 first.
 		xdsSrv.SetExtProcMessageTimeout(parkCfg.Budget + 5*time.Second)
@@ -72,7 +74,7 @@ func (s *RouterServer) startEnvoyDataplane(ctx context.Context, g *errgroup.Grou
 
 	xdsSrv.SetTlsConfig(s.cfg.HttpsPort, s.cfg.EnvoyCertPath)
 	xdsSrv.SetUpstreamTls(s.cfg.UpstreamCredentialBundlePath, s.cfg.UpstreamTrustBundlePath, s.cfg.UpstreamSpiffePrefix)
-	ctrl := NewController(s.k8sClient, s.clientset, s.cfg, xdsSrv, s.extprocSrv)
+	ctrl := NewController(s.k8sClient, s.clientset, s.cfg, xdsSrv)
 
 	// Envoy receives all routing configuration from the local xDS server.
 	g.Go(func() error {

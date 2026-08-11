@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package router
+package ingress
 
 import (
 	"context"
@@ -26,22 +26,30 @@ import (
 // Default request-parking parameters. See ParkedRequestConfig for the meaning of each
 // field; these are also the flag defaults wired up in NewRouterCmd.
 const (
-	defaultParkedRequestBudget = 5 * time.Second
+	DefaultParkedRequestBudget = 5 * time.Second
 
-	// defaultParkedRequestMax is sized together with the ext_proc cluster's
+	// DefaultParkedRequestMax is sized together with the ext_proc cluster's
 	// circuit breaker (--extproc-max-requests, derived as twice the lot by default): each parked
 	// request holds one ext_proc stream, i.e. one active request against that
 	// cluster, for its entire wait. Startup validation keeps an explicit breaker >= the
 	// lot, and the default pair (1024 lot / 2048 breaker) leaves equal headroom
 	// for the fast path. See buildCluster in xds.go.
-	defaultParkedRequestMax = 1024
+	DefaultParkedRequestMax = 1024
 
 	// Retry cadence between resume attempts while a request is parked: a gentle
 	// exponential backoff.
-	defaultParkedRequestRetryInterval = 100 * time.Millisecond
-	defaultParkedRequestRetryFactor   = 1.1
-	defaultParkedRequestRetryJitter   = 0.1
+	DefaultParkedRequestRetryInterval = 100 * time.Millisecond
+	DefaultParkedRequestRetryFactor   = 1.1
+	DefaultParkedRequestRetryJitter   = 0.1
 )
+
+// ParkingStatus is a snapshot of the request-parking lot for the status page.
+type ParkingStatus struct {
+	Enabled   bool   `json:"enabled"`
+	Active    int    `json:"active"`
+	MaxParked int    `json:"max_parked"`
+	MaxWait   string `json:"max_wait"`
+}
 
 // parkOutcome is the terminal disposition of a parked request. It is recorded
 // as the `outcome` label on the parking.wait.duration histogram.
@@ -81,31 +89,31 @@ type ParkedRequestConfig struct {
 	RetryJitter   float64
 }
 
-// enabled reports whether request parking is active. Parking has no separate
+// Enabled reports whether request parking is active. Parking has no separate
 // on/off switch: setting Max to 0 disables it, applying a fail-fast behavior
 // (no admission cap, no retry on pool saturation).
-func (c ParkedRequestConfig) enabled() bool { return c.Max > 0 }
+func (c ParkedRequestConfig) Enabled() bool { return c.Max > 0 }
 
-// normalized returns the config with non-positive budget and retry parameters
+// Normalized returns the config with non-positive budget and retry parameters
 // replaced by their defaults, so every consumer (the resumer's retry loop and
 // the Envoy ext_proc timeout) sees the same effective values.
-func (c ParkedRequestConfig) normalized() ParkedRequestConfig {
+func (c ParkedRequestConfig) Normalized() ParkedRequestConfig {
 	if c.Budget <= 0 {
-		c.Budget = defaultParkedRequestBudget
+		c.Budget = DefaultParkedRequestBudget
 	}
 	if c.RetryInterval <= 0 {
-		c.RetryInterval = defaultParkedRequestRetryInterval
+		c.RetryInterval = DefaultParkedRequestRetryInterval
 	}
 	if c.RetryFactor == 0 {
-		c.RetryFactor = defaultParkedRequestRetryFactor
+		c.RetryFactor = DefaultParkedRequestRetryFactor
 	}
 	return c
 }
 
-// validate rejects retry parameters that would make parking misbehave rather
+// Validate rejects retry parameters that would make parking misbehave rather
 // than merely differ: a factor below 1 shrinks delays toward zero and turns
 // the parked retry loop into a hot loop against the control plane.
-func (c ParkedRequestConfig) validate() error {
+func (c ParkedRequestConfig) Validate() error {
 	if c.RetryFactor != 0 && c.RetryFactor < 1.0 {
 		return fmt.Errorf("parked-request retry factor must be >= 1.0, got %v", c.RetryFactor)
 	}
@@ -115,15 +123,15 @@ func (c ParkedRequestConfig) validate() error {
 	return nil
 }
 
-// defaultParkedRequestConfig returns the built-in parking configuration
+// DefaultParkedRequestConfig returns the built-in parking configuration
 // (matching the NewRouterCmd flag defaults).
-func defaultParkedRequestConfig() ParkedRequestConfig {
+func DefaultParkedRequestConfig() ParkedRequestConfig {
 	return ParkedRequestConfig{
-		Budget:        defaultParkedRequestBudget,
-		Max:           defaultParkedRequestMax,
-		RetryInterval: defaultParkedRequestRetryInterval,
-		RetryFactor:   defaultParkedRequestRetryFactor,
-		RetryJitter:   defaultParkedRequestRetryJitter,
+		Budget:        DefaultParkedRequestBudget,
+		Max:           DefaultParkedRequestMax,
+		RetryInterval: DefaultParkedRequestRetryInterval,
+		RetryFactor:   DefaultParkedRequestRetryFactor,
+		RetryJitter:   DefaultParkedRequestRetryJitter,
 	}
 }
 
@@ -136,13 +144,13 @@ func defaultParkedRequestConfig() ParkedRequestConfig {
 // accounting, applying the router's fail-fast behavior.
 type parkingLot struct {
 	cfg     ParkedRequestConfig
-	metrics *parkingMetrics
+	metrics *ParkingMetrics
 
 	mu     sync.Mutex
 	active int // current number of occupied slots; guarded by mu
 }
 
-func newParkingLot(cfg ParkedRequestConfig, m *parkingMetrics) *parkingLot {
+func newParkingLot(cfg ParkedRequestConfig, m *ParkingMetrics) *parkingLot {
 	return &parkingLot{cfg: cfg, metrics: m}
 }
 
@@ -153,7 +161,7 @@ func newParkingLot(cfg ParkedRequestConfig, m *parkingMetrics) *parkingLot {
 // waiting. When parking is disabled every request is admitted and no slot
 // accounting or metrics are recorded.
 func (l *parkingLot) enter(ctx context.Context) (release func(outcome parkOutcome), ok bool) {
-	if !l.cfg.enabled() {
+	if !l.cfg.Enabled() {
 		return func(parkOutcome) {}, true
 	}
 
@@ -198,7 +206,7 @@ func (l *parkingLot) activeCount() int {
 // status returns a snapshot of the lot for the /statusz page.
 func (l *parkingLot) status() ParkingStatus {
 	return ParkingStatus{
-		Enabled:   l.cfg.enabled(),
+		Enabled:   l.cfg.Enabled(),
 		Active:    l.activeCount(),
 		MaxParked: l.cfg.Max,
 		MaxWait:   l.cfg.Budget.String(),

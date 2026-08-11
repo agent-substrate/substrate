@@ -25,9 +25,7 @@ import (
 // workloadSpecFromActorTemplate builds a WorkloadSpec from the template;
 // container env is copied verbatim.
 func workloadSpecFromActorTemplate(actorTemplate *atev1alpha1.ActorTemplate, actor *ateapipb.Actor) (*ateletpb.WorkloadSpec, error) {
-	workloadSpec := &ateletpb.WorkloadSpec{
-		PauseImage: actorTemplate.Spec.PauseImage,
-	}
+	workloadSpec := &ateletpb.WorkloadSpec{}
 
 	// add volumes
 	for _, vol := range actorTemplate.Spec.Volumes {

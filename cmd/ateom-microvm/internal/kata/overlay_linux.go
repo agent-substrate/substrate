@@ -131,20 +131,45 @@ func StartVirtiofsd(ctx context.Context, o VirtiofsdOptions) (*exec.Cmd, error) 
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("starting virtiofsd: %w", err)
 	}
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		if _, err := os.Stat(o.SocketPath); err == nil {
-			return cmd, nil
+	if err := waitForSocket(ctx, o.SocketPath, virtiofsdSocketTimeout); err != nil {
+		_ = cmd.Process.Kill()
+		return nil, err
+	}
+	return cmd, nil
+}
+
+const (
+	// virtiofsdSocketTimeout bounds how long we wait for virtiofsd to bind.
+	virtiofsdSocketTimeout = 10 * time.Second
+	// socketPollInterval is how often we look for it. This sits on the restore
+	// path, ahead of the guest coming back, and virtiofsd binds in single-digit
+	// milliseconds — so the interval, not the work, decides what this costs. At
+	// 50ms every restore paid a full tick; polling finely enough to notice makes
+	// it a few milliseconds instead, at the price of a handful of extra stats.
+	socketPollInterval = 1 * time.Millisecond
+)
+
+// waitForSocket blocks until path exists, ctx is done, or timeout elapses.
+func waitForSocket(ctx context.Context, path string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	// One ticker rather than a timer per iteration: polling this finely, the
+	// allocations add up, and a ticker does not stretch the interval by however
+	// long the stat took.
+	ticker := time.NewTicker(socketPollInterval)
+	defer ticker.Stop()
+	for {
+		if _, err := os.Stat(path); err == nil {
+			return nil
+		}
+		if !time.Now().Before(deadline) {
+			return fmt.Errorf("virtiofsd socket %q did not appear within %s", path, timeout)
 		}
 		select {
 		case <-ctx.Done():
-			_ = cmd.Process.Kill()
-			return nil, ctx.Err()
-		case <-time.After(50 * time.Millisecond):
+			return ctx.Err()
+		case <-ticker.C:
 		}
 	}
-	_ = cmd.Process.Kill()
-	return nil, fmt.Errorf("virtiofsd socket %q did not appear", o.SocketPath)
 }
 
 // ReconstructSharedDirFromImage bind-mounts a container's OCI image rootfs at
