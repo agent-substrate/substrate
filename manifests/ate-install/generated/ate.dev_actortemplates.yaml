@@ -227,6 +227,32 @@ spec:
                   type: object
                 maxItems: 10
                 type: array
+              imagePullSecrets:
+                description: |-
+                  ImagePullSecrets is an optional list of references to Secrets in this
+                  ActorTemplate's namespace that hold registry credentials. Each Secret
+                  must be of type kubernetes.io/dockerconfigjson or kubernetes.io/dockercfg.
+                  Atelet resolves these references immediately before pulling this
+                  template's images; Secret contents are never exposed through this API.
+                items:
+                  description: |-
+                    ImagePullSecretReference identifies a Secret containing registry credentials
+                    in the ActorTemplate's namespace. Its JSON representation intentionally
+                    matches corev1.LocalObjectReference, which is used by PodSpec.imagePullSecrets.
+                  properties:
+                    name:
+                      description: Name of the referenced Secret.
+                      maxLength: 253
+                      type: string
+                      x-kubernetes-validations:
+                      - message: Name must be a valid DNS subdomain
+                        rule: '!format.dns1123Subdomain().validate(self).hasValue()'
+                  required:
+                  - name
+                  type: object
+                maxItems: 32
+                type: array
+                x-kubernetes-list-type: atomic
               sandboxClass:
                 default: gvisor
                 description: |-

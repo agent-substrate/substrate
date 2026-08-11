@@ -246,6 +246,28 @@ func TestWorkloadSpecFromActorTemplatePropagatesReadyz(t *testing.T) {
 	}
 }
 
+func TestWorkloadSpecFromActorTemplateCarriesImagePullSecretReferences(t *testing.T) {
+	got, err := workloadSpecFromActorTemplate(&atev1alpha1.ActorTemplate{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "tmpl1",
+			Namespace: "agent-ns",
+		},
+		Spec: atev1alpha1.ActorTemplateSpec{
+			ImagePullSecrets: []atev1alpha1.ImagePullSecretReference{{Name: "registry-credentials"}},
+		},
+	}, nil)
+	if err != nil {
+		t.Fatalf("workloadSpecFromActorTemplate failed: %v", err)
+	}
+
+	want := []*ateletpb.ImagePullSecretReference{{
+		Name: "registry-credentials",
+	}}
+	if diff := cmp.Diff(want, got.GetImagePullSecrets(), protocmp.Transform()); diff != "" {
+		t.Errorf("ImagePullSecrets mismatch (-want +got):\n%s", diff)
+	}
+}
+
 func TestAppendExternalVolumes(t *testing.T) {
 	template := &atev1alpha1.ActorTemplate{
 		Spec: atev1alpha1.ActorTemplateSpec{

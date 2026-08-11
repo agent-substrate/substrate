@@ -30,6 +30,8 @@ import (
 	"github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
+	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -899,6 +901,44 @@ func createActorTemplateInternal(ctx context.Context, t *testing.T, clients *e2e
 		t.Fatalf("failed to get existing ActorTemplate %s/%s: %v", srcNS, srcName, err)
 	}
 
+	pullSecretName := name + "-pull-secret"
+	if _, err := clients.K8s.CoreV1().Secrets(nsObj.Name).Create(ctx, &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: pullSecretName},
+		Type:       corev1.SecretTypeDockerConfigJson,
+		Data: map[string][]byte{
+			corev1.DockerConfigJsonKey: []byte(`{"auths":{}}`),
+		},
+	}, metav1.CreateOptions{}); err != nil {
+		t.Fatalf("failed to create image pull Secret: %v", err)
+	}
+	roleName := name + "-atelet-pull-secret"
+	if _, err := clients.K8s.RbacV1().Roles(nsObj.Name).Create(ctx, &rbacv1.Role{
+		ObjectMeta: metav1.ObjectMeta{Name: roleName},
+		Rules: []rbacv1.PolicyRule{{
+			APIGroups:     []string{""},
+			Resources:     []string{"secrets"},
+			ResourceNames: []string{pullSecretName},
+			Verbs:         []string{"get"},
+		}},
+	}, metav1.CreateOptions{}); err != nil {
+		t.Fatalf("failed to create atelet image pull Secret Role: %v", err)
+	}
+	if _, err := clients.K8s.RbacV1().RoleBindings(nsObj.Name).Create(ctx, &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{Name: roleName},
+		Subjects: []rbacv1.Subject{{
+			Kind:      rbacv1.ServiceAccountKind,
+			Name:      "atelet",
+			Namespace: "ate-system",
+		}},
+		RoleRef: rbacv1.RoleRef{
+			APIGroup: rbacv1.GroupName,
+			Kind:     "Role",
+			Name:     roleName,
+		},
+	}, metav1.CreateOptions{}); err != nil {
+		t.Fatalf("failed to create atelet image pull Secret RoleBinding: %v", err)
+	}
+
 	// Create WorkerPool. Labeled uniquely to this test's namespace so the
 	// cluster-wide scheduler doesn't make this pool's workers eligible for
 	// (or eligible to receive) any other namespace's actors.
@@ -935,6 +975,9 @@ func createActorTemplateInternal(ctx context.Context, t *testing.T, clients *e2e
 			// "microvm"; the gVisor source leaves it "" — copying keeps both correct.
 			SandboxClass: existingAt.Spec.SandboxClass,
 			Containers:   existingAt.Spec.Containers,
+			ImagePullSecrets: []v1alpha1.ImagePullSecretReference{{
+				Name: pullSecretName,
+			}},
 			SnapshotsConfig: v1alpha1.SnapshotsConfig{
 				Location: "gs://" + env["BUCKET_NAME"] + "/ate-demo-" + name,
 				OnPause:  onPause,

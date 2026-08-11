@@ -47,6 +47,10 @@ build-images:
 	    ./cmd/podcertcontroller \
 	    ./cmd/atenet
 
+.PHONY: redeploy-kind
+redeploy-kind:
+	hack/install-ate-kind.sh --deploy-ate-system
+
 .PHONY: build-atectl
 build-atectl:
 	$(GO) build -ldflags "$(LDFLAGS)" -o $(ATECTL) ./cmd/kubectl-ate

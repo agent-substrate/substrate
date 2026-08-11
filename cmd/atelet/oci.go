@@ -25,12 +25,12 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateerrors"
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/imagecache"
+	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
+	"github.com/google/go-containerregistry/pkg/authn"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
-
-	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 )
 
 const (
@@ -50,7 +50,7 @@ const (
 	ActorIDFileName = "actor-id"
 )
 
-func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, actorUID, containerName, ref string, command, args []string, env []string, annotations map[string]string, netns string, identityDir string, volumes []*ateletpb.Volume, volumeMounts []*ateletpb.VolumeMount) error {
+func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, actorUID, containerName, ref string, imagePullSecrets *imagePullSecretResolver, command, args []string, env []string, annotations map[string]string, netns string, identityDir string, volumes []*ateletpb.Volume, volumeMounts []*ateletpb.VolumeMount) error {
 	tracer := otel.Tracer("prepareOCIDirectory")
 
 	ctx, span := tracer.Start(ctx, "prepareOCIDirectory")
@@ -77,7 +77,15 @@ func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, acto
 		}
 	}
 
-	img, err := imageCache.EnsureImage(ctx, ref)
+	var img *imagecache.Image
+	var err error
+	if imagePullSecrets == nil {
+		img, err = imageCache.EnsureImage(ctx, ref)
+	} else {
+		img, err = imageCache.EnsureImageWithAuthenticatorProvider(ctx, ref, func(ctx context.Context) (authn.Authenticator, error) {
+			return imagePullSecrets.authenticator(ctx, ref)
+		})
+	}
 	if err != nil {
 		return fmt.Errorf("in imageCache.EnsureImage: %w", err)
 	}

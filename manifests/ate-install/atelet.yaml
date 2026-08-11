@@ -31,6 +31,9 @@ rules:
 - apiGroups: ["ate.dev"]
   resources: ["csidriverconfigs"]
   verbs: ["get", "list", "watch"]
+# Pull Secrets are intentionally not readable cluster-wide. Each tenant grants
+# this ServiceAccount get access to the specific Secrets named by its
+# ActorTemplates, using a namespace-scoped Role and RoleBinding.
 ---
 # 3. Bind Identity to Permissions
 apiVersion: rbac.authorization.k8s.io/v1
