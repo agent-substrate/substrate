@@ -185,6 +185,9 @@ type actorContainer struct {
 	// csiMounts are the CSI volumes this container mounts, and where (see csi.go).
 	// Empty for containers that declare none.
 	csiMounts []*ateompb.VolumeMount
+	// systemInfoMounts are the system-info volumes this container mounts, and
+	// where (see systeminfo.go). Empty for containers that declare none.
+	systemInfoMounts []*ateompb.SystemInfoVolumeMount
 }
 
 // resolvedRuntime holds the concrete binary/config paths for a request, taken
@@ -642,11 +645,12 @@ func (s *AteomService) buildActorContainers(actorUID string, containers []*ateom
 			return nil, fmt.Errorf("while writing guest resolv.conf for %q: %w", cn, err)
 		}
 		ctrs[i] = actorContainer{
-			name:          cn,
-			bundleRootfs:  bundleRootfs,
-			spec:          spec,
-			durableMounts: c.GetDurableDirVolumeMounts(),
-			csiMounts:     c.GetCsiVolumeMounts(),
+			name:             cn,
+			bundleRootfs:     bundleRootfs,
+			spec:             spec,
+			durableMounts:    c.GetDurableDirVolumeMounts(),
+			csiMounts:        c.GetCsiVolumeMounts(),
+			systemInfoMounts: c.GetSystemInfoVolumeMounts(),
 		}
 	}
 	return ctrs, nil
@@ -654,8 +658,9 @@ func (s *AteomService) buildActorContainers(actorUID string, containers []*ateom
 
 // stageMergedRootfs assembles each container's merged rootfs on the host
 // (overlay: image lower + the actor's rootfs-upper dirs) at virtiofsd's
-// find-paths location (SharedDir(id)/<cid>/rootfs), stages durable-dir volumes
-// and CSI volumes (if any) under SharedDir(id)/durable and SharedDir(id)/csi,
+// find-paths location (SharedDir(id)/<cid>/rootfs), stages durable-dir volumes,
+// CSI volumes, and system-info volumes (if any) under SharedDir(id)/durable,
+// SharedDir(id)/csi, and SharedDir(id)/system-info,
 // then starts the ONE virtiofsd that serves them all. Must run AFTER CleanupSandboxState (which
 // wipes SharedDir) and resetRootfsUpperDir/untarRootfsUpper (which own the
 // upper contents). The returned virtiofsd cmd outlives this call (CH
@@ -676,6 +681,11 @@ func (s *AteomService) stageMergedRootfs(ctx context.Context, rr resolvedRuntime
 	if hasCsiVolumes(containers) {
 		if err := s.stageCsiVolumes(ctx, id); err != nil {
 			return nil, fmt.Errorf("while staging CSI volumes: %w", err)
+		}
+	}
+	if hasSystemInfoVolumes(containers) {
+		if err := s.stageSystemInfoVolumes(ctx, id); err != nil {
+			return nil, fmt.Errorf("while staging system-info volumes: %w", err)
 		}
 	}
 	vfsdLog, _ := os.OpenFile(virtiofsdLogPath(id), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
@@ -869,8 +879,9 @@ func earlyconParam() string {
 }
 
 // buildFsConfigs returns the VM's virtio-fs device: the unified share hosting
-// container rootfs trees, durable volumes, and CSI volumes. Sits on PCI
-// segment 1 (the segment buildVMConfig reserves for virtio-fs).
+// container rootfs trees, durable volumes, CSI volumes, and system-info
+// volumes. Sits on PCI segment 1 (the segment buildVMConfig reserves for
+// virtio-fs).
 func buildFsConfigs(id string) []ch.FsConfig {
 	return []ch.FsConfig{{
 		Tag: kata.FsTag, Socket: kata.VirtiofsdSocketPath(id),
@@ -884,8 +895,8 @@ func buildFsConfigs(id string) []ch.FsConfig {
 // container on its own overlay rootfs. On failure it dumps guest diagnostics.
 func (s *AteomService) startActorContainers(ctx context.Context, ac *kata.AgentClient, id, vsockPath string, ctrs []actorContainer) error {
 	// Establish the agent sandbox + the kataShared virtio-fs mount (every
-	// container's merged rootfs, durable volumes, and CSI volumes). All containers
-	// share it, so use the first container's hostname.
+	// container's merged rootfs, durable volumes, CSI volumes, and system-info
+	// volumes). All containers share it, so use the first container's hostname.
 	tStart := time.Now()
 	sbCtx, sbCancel := context.WithTimeout(ctx, 20*time.Second)
 	err := ac.CreateSandboxForActor(sbCtx, kata.CreateSandboxOpts{

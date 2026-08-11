@@ -50,8 +50,9 @@ const (
 	virtioFSDriver = "virtio-fs"
 	// guestSharedDir is where the agent mounts the kataShared tag in the guest;
 	// per-container rootfs then lives at <guestSharedDir>/<cid>/rootfs, durable
-	// volumes at <guestSharedDir>/durable/<volumeName>, and CSI volumes at
-	// <guestSharedDir>/csi/<volumeName>.
+	// volumes at <guestSharedDir>/durable/<volumeName>, CSI volumes at
+	// <guestSharedDir>/csi/<volumeName>, and system-info volumes at
+	// <guestSharedDir>/system-info/<volumeName>.
 	guestSharedDir = "/run/kata-containers/shared/containers/"
 )
 
@@ -65,6 +66,20 @@ func GuestDurableVolumeDir(volumeName string) string {
 // contents, i.e. the bind source for that volume's container mount points.
 func GuestCSIVolumeDir(volumeName string) string {
 	return guestSharedDir + "csi/" + volumeName
+}
+
+// GuestSystemInfoVolumeDir is the in-guest path holding one system-info
+// volume's contents, i.e. the read-only bind source for that volume's
+// container mount points.
+func GuestSystemInfoVolumeDir(volumeName string) string {
+	return guestSharedDir + "system-info/" + volumeName
+}
+
+// GuestSystemInfoVolumeDir is the in-guest path holding one system-info
+// volume's contents, i.e. the bind source for that volume's container mount
+// points.
+func GuestSystemInfoVolumeDir(volumeName string) string {
+	return guestSystemInfoDir + "/" + volumeName
 }
 
 // SharedDir is the host directory virtiofsd serves into the guest as the RO base.
@@ -289,8 +304,8 @@ type CreateSandboxOpts struct {
 }
 
 // CreateSandboxForActor creates the guest sandbox with the kataShared virtio-fs mount
-// (the merged rootfs trees, durable volumes, and CSI volumes every container runs on).
-// Mirrors kata startSandbox.
+// (the merged rootfs trees, durable volumes, CSI volumes, and system-info
+// volumes every container runs on). Mirrors kata startSandbox.
 func (a *AgentClient) CreateSandboxForActor(ctx context.Context, opts CreateSandboxOpts) error {
 	storages := []*agentpb.Storage{{
 		Driver:     virtioFSDriver,

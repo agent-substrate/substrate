@@ -87,12 +87,13 @@ func durableMounts(mounts []*ateompb.DurableDirVolumeMount) []specs.Mount {
 }
 
 // workloadSpec returns the OCI spec to start a container with: the prepared
-// spec, plus a bind for each durable-dir volume it mounts.
+// spec, plus a bind for each durable-dir volume (writable), CSI volume, and
+// system-info volume (read-only) it mounts.
 //
 // The spec is copied rather than mutated so the bundle's on-disk config.json
 // stays as prepared — only the started container sees the binds.
 func workloadSpec(c actorContainer) *specs.Spec {
-	if len(c.durableMounts) == 0 && len(c.csiMounts) == 0 {
+	if len(c.durableMounts) == 0 && len(c.csiMounts) == 0 && len(c.systemInfoMounts) == 0 {
 		return c.spec
 	}
 	spec := *c.spec
@@ -101,6 +102,7 @@ func workloadSpec(c actorContainer) *specs.Spec {
 	mounts = append(mounts, c.spec.Mounts...)
 	mounts = append(mounts, durableMounts(c.durableMounts)...)
 	mounts = append(mounts, csiMounts(c.csiMounts)...)
+	mounts = append(mounts, systemInfoMounts(c.systemInfoMounts)...)
 	spec.Mounts = mounts
 	return &spec
 }
