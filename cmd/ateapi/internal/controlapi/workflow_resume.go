@@ -30,7 +30,6 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/proto"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -386,13 +385,14 @@ func (w *ActorWorkflow) validateAssignedWorker(ctx context.Context, actorRef res
 	}
 	if !w.scheduler.Applies(worker, constraints) {
 		slog.ErrorContext(ctx, "crashing actor because previously assigned worker is not eligible anymore")
-		release := proto.Clone(worker).(*ateapipb.Worker)
-		release.Assignment = nil
 		// If that worker's pool is no longer eligible (e.g. the actor's
 		// worker_selector was updated after the failed attempt), release it back
 		// to the free pool instead of leaving it claimed forever — nothing else
 		// reclaims a healthy worker whose actor moved on to a different pool.
-		if err := w.store.UpdateWorker(ctx, release, release.Version); err != nil {
+		if _, err := w.store.UpdateWorker(ctx, worker.GetWorkerNamespace(), worker.GetWorkerPool(), worker.GetWorkerPod(), store.WithWorkerPrecondition(worker, func(toUpdate *ateapipb.Worker) error {
+			toUpdate.Assignment = nil
+			return nil
+		})); err != nil {
 			return nil, fmt.Errorf("while releasing stale worker assignment: %w", err)
 		}
 		if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationResume, ateattr.ReasonCorruptedAssignment); cerr != nil {
@@ -456,10 +456,6 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 			assignedWorker = worker
 			break
 		}
-		// Workers() returns pointers directly from the cache so we need to clone before
-		// mutating so that the cache is not corrupted if UpdateWorker fails.
-		releaseWorker := proto.Clone(worker).(*ateapipb.Worker)
-		releaseWorker.Assignment = nil
 		// The claimed worker is no longer eligible (e.g. the actor's
 		// worker_selector changed after the failed attempt); release it back
 		// to the free pool — nothing else reclaims a healthy worker whose
@@ -467,12 +463,15 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 		go func(release *ateapipb.Worker) {
 			bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
-			if err := w.store.UpdateWorker(bgCtx, release, release.Version); err != nil {
+			if _, err := w.store.UpdateWorker(bgCtx, release.GetWorkerNamespace(), release.GetWorkerPool(), release.GetWorkerPod(), store.WithWorkerPrecondition(release, func(toUpdate *ateapipb.Worker) error {
+				toUpdate.Assignment = nil
+				return nil
+			})); err != nil {
 				slog.ErrorContext(bgCtx, "Failed to release stale worker assignment",
 					slog.String("worker", release.GetWorkerNamespace()+"/"+release.GetWorkerPod()),
 					slog.Any("err", err))
 			}
-		}(releaseWorker)
+		}(worker)
 	}
 	if assignedWorker == nil {
 		pickedWorker, err := w.scheduler.Schedule(ctx, constraints)
@@ -488,10 +487,7 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 		slog.InfoContext(ctx, "Picked worker", slog.Any("worker", pickedWorker.String()))
 	}
 
-	// Workers() returns pointers directly from the cache so we need to clone before
-	// mutating so that the cache is not corrupted if UpdateWorker fails.
-	assignedWorker = proto.Clone(assignedWorker).(*ateapipb.Worker)
-	assignedWorker.Assignment = &ateapipb.Assignment{
+	claim := &ateapipb.Assignment{
 		ActorTemplate: &ateapipb.KubeNamespacedObjectRef{
 			Namespace: actor.GetActorTemplateNamespace(),
 			Name:      actor.GetActorTemplateName(),
@@ -503,7 +499,11 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 		ActorUid: actor.GetMetadata().GetUid(),
 	}
 
-	if err := w.store.UpdateWorker(ctx, assignedWorker, assignedWorker.Version); err != nil {
+	assignedWorker, err = w.store.UpdateWorker(ctx, assignedWorker.GetWorkerNamespace(), assignedWorker.GetWorkerPool(), assignedWorker.GetWorkerPod(), store.WithWorkerPrecondition(assignedWorker, func(toUpdate *ateapipb.Worker) error {
+		toUpdate.Assignment = claim
+		return nil
+	}))
+	if err != nil {
 		return nil, nil, err
 	}
 

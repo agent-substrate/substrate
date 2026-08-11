@@ -130,8 +130,11 @@ func releaseWorker(ctx context.Context, st store.Interface, actor *ateapipb.Acto
 		return sandboxClass, nil
 	}
 
-	worker.Assignment = nil
-	if err := st.UpdateWorker(ctx, worker, worker.GetVersion()); err != nil {
+	_, err = st.UpdateWorker(ctx, worker.GetWorkerNamespace(), worker.GetWorkerPool(), worker.GetWorkerPod(), store.WithWorkerPrecondition(worker, func(toUpdate *ateapipb.Worker) error {
+		toUpdate.Assignment = nil
+		return nil
+	}))
+	if err != nil {
 		return sandboxClass, fmt.Errorf("while releasing worker: %w", err)
 	}
 	return sandboxClass, nil

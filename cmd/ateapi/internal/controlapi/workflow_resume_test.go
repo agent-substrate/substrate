@@ -223,20 +223,15 @@ func TestAssignWorkerAttempt_RetryAfterConflictPicksFreshWorker(t *testing.T) {
 		}
 	}
 
-	// Snapshot the contested worker at the version the failed attempt saw.
-	beforeClaim, err := persistence.GetWorker(ctx, "worker-ns", "pool", "contested-pod")
-	if err != nil {
-		t.Fatalf("GetWorker: %v", err)
-	}
-
 	// A concurrent resume of another actor wins the contested worker, bumping
 	// its stored version past the failed attempt's snapshot.
-	claimed := proto.Clone(beforeClaim).(*ateapipb.Worker)
-	claimed.Assignment = &ateapipb.Assignment{
-		Actor:    &ateapipb.ObjectRef{Atespace: "team-a", Name: "other"},
-		ActorUid: "other-actor-uid",
-	}
-	if err := persistence.UpdateWorker(ctx, claimed, claimed.GetVersion()); err != nil {
+	if _, err := persistence.UpdateWorker(ctx, "worker-ns", "pool", "contested-pod", func(toUpdate *ateapipb.Worker) error {
+		toUpdate.Assignment = &ateapipb.Assignment{
+			Actor:    &ateapipb.ObjectRef{Atespace: "team-a", Name: "other"},
+			ActorUid: "other-actor-uid",
+		}
+		return nil
+	}); err != nil {
 		t.Fatalf("UpdateWorker (concurrent claim): %v", err)
 	}
 
@@ -311,6 +306,11 @@ func (c *conflictInjectingStore) UpdateActor(ctx context.Context, actorRef resou
 func (c *conflictInjectingStore) UpdateActorSnapshotTag(ctx context.Context, atespace, name string, mutate func(*ateapipb.ActorSnapshotTag) error) (*ateapipb.ActorSnapshotTag, error) {
 	c.once.Do(c.inject)
 	return c.Interface.UpdateActorSnapshotTag(ctx, atespace, name, mutate)
+}
+
+func (c *conflictInjectingStore) UpdateWorker(ctx context.Context, namespace, pool, pod string, mutate func(*ateapipb.Worker) error) (*ateapipb.Worker, error) {
+	c.once.Do(c.inject)
+	return c.Interface.UpdateWorker(ctx, namespace, pool, pod, mutate)
 }
 
 // seedAssignFixture stores one free gvisor worker and a SUSPENDED actor and

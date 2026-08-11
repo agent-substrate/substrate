@@ -26,6 +26,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/ateredis"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
@@ -2729,8 +2730,11 @@ func TestResumeActor_CrashesIfAssignedWorkerIsDraining(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetWorker(%s) failed: %v", assignedPod, err)
 	}
-	assigned.State = ateapipb.Worker_STATE_DRAINING
-	if err := tc.persistence.UpdateWorker(context.Background(), assigned, assigned.GetVersion()); err != nil {
+	_, err = tc.persistence.UpdateWorker(context.Background(), ns, "pool1", assignedPod, store.WithWorkerPrecondition(assigned, func(toUpdate *ateapipb.Worker) error {
+		toUpdate.State = ateapipb.Worker_STATE_DRAINING
+		return nil
+	}))
+	if err != nil {
 		t.Fatalf("marking worker %s draining failed: %v", assignedPod, err)
 	}
 

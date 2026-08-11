@@ -1264,36 +1264,47 @@ func unmarshalWorkerEvent(payload string) (store.WorkerEvent, error) {
 	return store.WorkerEvent{Type: store.WorkerEventType(env.Type), Worker: worker}, nil
 }
 
-// writeAndNotify runs fn inside a transaction, then--only if fn reports a
-// change worth notifying--calls pg_notify in the same transaction so
-// delivery happens if and only if the transaction commits.
-func (p *Persistence) writeAndNotify(ctx context.Context, eventType store.WorkerEventType, worker *ateapipb.Worker, fn func(ctx context.Context, tx pgx.Tx) (notify bool, err error)) error {
+// writeAndNotify runs fn inside a transaction, then--only if fn returns a
+// worker worth notifying about--calls pg_notify in the same transaction so
+// delivery happens if and only if the transaction commits. fn returns the
+// worker the write produced, or nil when there is nothing to announce; that
+// worker is what writeAndNotify returns once the transaction commits.
+func (p *Persistence) writeAndNotify(ctx context.Context, eventType store.WorkerEventType, fn func(ctx context.Context, tx pgx.Tx) (*ateapipb.Worker, error)) (*ateapipb.Worker, error) {
 	tx, err := p.pool.Begin(ctx)
 	if err != nil {
-		return fmt.Errorf("beginning transaction: %w", err)
+		return nil, fmt.Errorf("beginning transaction: %w", err)
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // no-op once committed
 
-	notify, err := fn(ctx, tx)
+	worker, err := fn(ctx, tx)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	if notify {
-		payload, err := marshalWorkerEvent(eventType, worker)
-		if err != nil {
-			return fmt.Errorf("marshaling worker event: %w", err)
-		}
-		if len(payload) > maxNotifyPayloadBytes {
-			return fmt.Errorf("worker event payload of %d bytes exceeds PostgreSQL NOTIFY limit of %d bytes", len(payload), maxNotifyPayloadBytes)
-		}
-		if _, err := tx.Exec(ctx, `SELECT pg_notify($1, $2)`, workerChangeChannel, string(payload)); err != nil {
-			return fmt.Errorf("notifying worker change: %w", err)
+	if worker != nil {
+		if err := notifyWorkerEvent(ctx, tx, eventType, worker); err != nil {
+			return nil, err
 		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("committing transaction: %w", err)
+		return nil, fmt.Errorf("committing transaction: %w", err)
+	}
+	return worker, nil
+}
+
+// notifyWorkerEvent queues a worker change notification inside tx, so delivery
+// happens if and only if the transaction commits.
+func notifyWorkerEvent(ctx context.Context, tx pgx.Tx, eventType store.WorkerEventType, worker *ateapipb.Worker) error {
+	payload, err := marshalWorkerEvent(eventType, worker)
+	if err != nil {
+		return fmt.Errorf("marshaling worker event: %w", err)
+	}
+	if len(payload) > maxNotifyPayloadBytes {
+		return fmt.Errorf("worker event payload of %d bytes exceeds PostgreSQL NOTIFY limit of %d bytes", len(payload), maxNotifyPayloadBytes)
+	}
+	if _, err := tx.Exec(ctx, `SELECT pg_notify($1, $2)`, workerChangeChannel, string(payload)); err != nil {
+		return fmt.Errorf("notifying worker change: %w", err)
 	}
 	return nil
 }
@@ -1307,15 +1318,15 @@ func (p *Persistence) CreateWorker(ctx context.Context, worker *ateapipb.Worker)
 		return fmt.Errorf("marshaling worker: %w", err)
 	}
 
-	err = p.writeAndNotify(ctx, store.WorkerEventCreated, dbWorker, func(ctx context.Context, tx pgx.Tx) (bool, error) {
+	_, err = p.writeAndNotify(ctx, store.WorkerEventCreated, func(ctx context.Context, tx pgx.Tx) (*ateapipb.Worker, error) {
 		_, err := tx.Exec(ctx, `
 			INSERT INTO workers (worker_namespace, worker_pool, worker_pod, version, proto)
 			VALUES ($1, $2, $3, $4, $5)`,
 			dbWorker.GetWorkerNamespace(), dbWorker.GetWorkerPool(), dbWorker.GetWorkerPod(), dbWorker.GetVersion(), protoBytes)
 		if err != nil {
-			return false, err
+			return nil, err
 		}
-		return true, nil
+		return dbWorker, nil
 	})
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -1347,48 +1358,71 @@ func (p *Persistence) GetWorker(ctx context.Context, namespace, poolName, pod st
 	return getWorkerRow(ctx, p.pool, namespace, poolName, pod)
 }
 
-func (p *Persistence) UpdateWorker(ctx context.Context, worker *ateapipb.Worker, expectedVersion int64) error {
-	namespace, poolName, pod := worker.GetWorkerNamespace(), worker.GetWorkerPool(), worker.GetWorkerPod()
-
-	dbWorker := proto.Clone(worker).(*ateapipb.Worker)
-	dbWorker.Version = expectedVersion + 1
-
-	protoBytes, err := proto.Marshal(dbWorker)
-	if err != nil {
-		return fmt.Errorf("marshaling worker: %w", err)
+func validateUpdateWorkerMutation(storedWorker, mutatedWorker *ateapipb.Worker) error {
+	if stored, mutated := storedWorker.GetWorkerNamespace(), mutatedWorker.GetWorkerNamespace(); stored != mutated {
+		return fmt.Errorf("worker_namespace is immutable: mutation changed it from %q to %q", stored, mutated)
 	}
+	if stored, mutated := storedWorker.GetWorkerPool(), mutatedWorker.GetWorkerPool(); stored != mutated {
+		return fmt.Errorf("worker_pool is immutable: mutation changed it from %q to %q", stored, mutated)
+	}
+	if stored, mutated := storedWorker.GetWorkerPod(), mutatedWorker.GetWorkerPod(); stored != mutated {
+		return fmt.Errorf("worker_pod is immutable: mutation changed it from %q to %q", stored, mutated)
+	}
+	if stored, mutated := storedWorker.GetIp(), mutatedWorker.GetIp(); stored != mutated {
+		return fmt.Errorf("ip is immutable: mutation changed it from %q to %q", stored, mutated)
+	}
+	return nil
+}
 
-	return p.writeAndNotify(ctx, store.WorkerEventUpdated, dbWorker, func(ctx context.Context, tx pgx.Tx) (bool, error) {
-		var returned []byte
+func (p *Persistence) UpdateWorker(ctx context.Context, namespace, poolName, pod string, mutate func(toUpdate *ateapipb.Worker) error) (*ateapipb.Worker, error) {
+	return p.writeAndNotify(ctx, store.WorkerEventUpdated, func(ctx context.Context, tx pgx.Tx) (*ateapipb.Worker, error) {
+		var protoBytes []byte
 		err := tx.QueryRow(ctx, `
+			SELECT proto FROM workers
+			WHERE worker_namespace = $1 AND worker_pool = $2 AND worker_pod = $3
+			FOR UPDATE`, namespace, poolName, pod).Scan(&protoBytes)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil, store.ErrNotFound
+			}
+			return nil, fmt.Errorf("selecting worker %s/%s/%s for update: %w", namespace, poolName, pod, err)
+		}
+		currentWorker := &ateapipb.Worker{}
+		if err := proto.Unmarshal(protoBytes, currentWorker); err != nil {
+			return nil, fmt.Errorf("unmarshaling worker: %w", err)
+		}
+
+		// Snapshot the stored state before handing the worker to mutate.
+		// mutate is free to edit anything it is given.
+		workerBeforeMutation := proto.Clone(currentWorker).(*ateapipb.Worker)
+		if err := mutate(currentWorker); err != nil {
+			return nil, err
+		}
+		if err := validateUpdateWorkerMutation(workerBeforeMutation, currentWorker); err != nil {
+			return nil, err
+		}
+		// The stored version is authoritative; derive the next one from it,
+		// discarding whatever mutate made of it.
+		currentWorker.Version = workerBeforeMutation.GetVersion() + 1
+
+		updatedBytes, err := proto.Marshal(currentWorker)
+		if err != nil {
+			return nil, fmt.Errorf("marshaling worker: %w", err)
+		}
+		if _, err := tx.Exec(ctx, `
 			UPDATE workers
 			SET version = $1, proto = $2
-			WHERE worker_namespace = $3 AND worker_pool = $4 AND worker_pod = $5
-			  AND version = $6
-			RETURNING proto`,
-			dbWorker.GetVersion(), protoBytes, namespace, poolName, pod, expectedVersion,
-		).Scan(&returned)
-		if err == nil {
-			return true, nil
+			WHERE worker_namespace = $3 AND worker_pool = $4 AND worker_pod = $5`,
+			currentWorker.GetVersion(), updatedBytes, namespace, poolName, pod); err != nil {
+			return nil, fmt.Errorf("updating worker %s/%s/%s: %w", namespace, poolName, pod, err)
 		}
-		if !errors.Is(err, pgx.ErrNoRows) {
-			return false, fmt.Errorf("updating worker %s/%s/%s: %w", namespace, poolName, pod, err)
-		}
-
-		current, getErr := getWorkerRow(ctx, tx, namespace, poolName, pod)
-		if getErr != nil {
-			return false, getErr
-		}
-		if current.GetVersion() != expectedVersion {
-			return false, store.ErrVersionConflict
-		}
-		return false, fmt.Errorf("update worker %s/%s/%s: no row matched but current state is otherwise consistent", namespace, poolName, pod)
+		return currentWorker, nil
 	})
 }
 
 func (p *Persistence) DeleteWorker(ctx context.Context, namespace, poolName, pod string) error {
 	deletedEvent := &ateapipb.Worker{WorkerNamespace: namespace, WorkerPod: pod}
-	return p.writeAndNotify(ctx, store.WorkerEventDeleted, deletedEvent, func(ctx context.Context, tx pgx.Tx) (bool, error) {
+	_, err := p.writeAndNotify(ctx, store.WorkerEventDeleted, func(ctx context.Context, tx pgx.Tx) (*ateapipb.Worker, error) {
 		var protoBytes []byte
 		err := tx.QueryRow(ctx, `
 			DELETE FROM workers
@@ -1397,12 +1431,13 @@ func (p *Persistence) DeleteWorker(ctx context.Context, namespace, poolName, pod
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				// Idempotent: nothing existed, so nothing to notify either.
-				return false, nil
+				return nil, nil
 			}
-			return false, fmt.Errorf("deleting worker %s/%s/%s: %w", namespace, poolName, pod, err)
+			return nil, fmt.Errorf("deleting worker %s/%s/%s: %w", namespace, poolName, pod, err)
 		}
-		return true, nil
+		return deletedEvent, nil
 	})
+	return err
 }
 
 func (p *Persistence) ListWorkers(ctx context.Context, pageSize int32, pageTokenStr string) ([]*ateapipb.Worker, string, error) {

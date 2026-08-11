@@ -284,6 +284,81 @@ func TestWorkerNotification_OnlyAfterCommit(t *testing.T) {
 	}
 }
 
+// TestUpdateWorker_ConcurrentUpdatesSerialize pins the SELECT ... FOR UPDATE in
+// UpdateWorker. Two updaters race on the same row, each editing a different
+// field. The row lock is what makes the loser re-read the winner's committed
+// proto before applying its own mutation; without it both would compute their
+// write from version 1 and whoever committed last would silently drop the
+// other's field.
+func TestUpdateWorker_ConcurrentUpdatesAreSerialized(t *testing.T) {
+	s := setupPostgresStore(t).(*Persistence)
+	ctx := context.Background()
+
+	if err := s.CreateWorker(ctx, &ateapipb.Worker{
+		WorkerNamespace: "ns",
+		WorkerPool:      "pool",
+		WorkerPod:       "pod",
+		State:           ateapipb.Worker_STATE_ACTIVE,
+	}); err != nil {
+		t.Fatalf("CreateWorker failed: %v", err)
+	}
+
+	// Both updaters block on this until each has been given the go-ahead, so
+	// they contend for the row lock rather than running one after the other.
+	start := make(chan struct{})
+	mutations := []struct {
+		name   string
+		mutate func(toUpdate *ateapipb.Worker)
+	}{
+		{
+			name:   "sets node name",
+			mutate: func(toUpdate *ateapipb.Worker) { toUpdate.NodeName = "node-1" },
+		},
+		{
+			name:   "sets state",
+			mutate: func(toUpdate *ateapipb.Worker) { toUpdate.State = ateapipb.Worker_STATE_DRAINING },
+		},
+	}
+
+	var wg sync.WaitGroup
+	errs := make([]error, len(mutations))
+	for i, m := range mutations {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			_, errs[i] = s.UpdateWorker(ctx, "ns", "pool", "pod", func(toUpdate *ateapipb.Worker) error {
+				m.mutate(toUpdate)
+				return nil
+			})
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("UpdateWorker that %s failed: %v", mutations[i].name, err)
+		}
+	}
+
+	got, err := s.GetWorker(ctx, "ns", "pool", "pod")
+	if err != nil {
+		t.Fatalf("GetWorker failed: %v", err)
+	}
+	// Version 3 -> 2 updates should've occurred.
+	if got.GetVersion() != 3 {
+		t.Errorf("version = %d, want 3: both updates must advance it in turn", got.GetVersion())
+	}
+	// Both fields survive only if the second updater reads the first's commit.
+	if got.GetNodeName() != "node-1" {
+		t.Errorf("node_name = %q, want %q: a concurrent update clobbered it", got.GetNodeName(), "node-1")
+	}
+	if got.GetState() != ateapipb.Worker_STATE_DRAINING {
+		t.Errorf("state = %v, want %v: a concurrent update clobbered it", got.GetState(), ateapipb.Worker_STATE_DRAINING)
+	}
+}
+
 func TestListActors_InvalidPageToken(t *testing.T) {
 	s := setupPostgresStore(t).(*Persistence)
 	ctx := context.Background()

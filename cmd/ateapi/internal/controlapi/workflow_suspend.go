@@ -356,10 +356,17 @@ func (w *ActorWorkflow) ensureSuspendedFinalized(ctx context.Context, actorRef r
 			// Only free it if it still belongs to us
 			if wass := worker.Assignment; wass != nil {
 				if wass.GetActorUid() == latestActor.GetMetadata().GetUid() {
-					worker.Assignment = nil
-					if err := w.store.UpdateWorker(ctx, worker, worker.Version); err != nil {
+					_, err := w.store.UpdateWorker(ctx, worker.GetWorkerNamespace(), worker.GetWorkerPool(), workerPod, store.WithWorkerPrecondition(worker, func(toUpdate *ateapipb.Worker) error {
+						toUpdate.Assignment = nil
+						return nil
+					}))
+					if err != nil {
 						if errors.Is(err, store.ErrVersionConflict) {
 							return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
+						}
+						if errors.Is(err, store.ErrUIDConflict) {
+							return nil, status.Errorf(codes.Aborted, "worker %s/%s/%s not found with uid %s",
+								worker.GetWorkerNamespace(), worker.GetWorkerPool(), workerPod, worker.GetWorkerPodUid())
 						}
 						return nil, err
 					}

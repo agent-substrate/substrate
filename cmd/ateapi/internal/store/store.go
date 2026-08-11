@@ -190,8 +190,20 @@ type Interface interface {
 	// Registers a new idle worker. Returns ErrAlreadyExists if already registered.
 	CreateWorker(ctx context.Context, worker *ateapipb.Worker) error
 
-	// Updates worker state with optimistic concurrency check. Returns ErrNotFound if missing, or ErrVersionConflict on version mismatch.
-	UpdateWorker(ctx context.Context, worker *ateapipb.Worker, expectedVersion int64) error
+	// UpdateWorker performs a transactional read-modify-write on the worker
+	// addressed by namespace, pool and pod, and returns the stored Worker with its
+	// version advanced.
+	//
+	// mutate receives the stored worker and edits it in place. The mutated worker
+	// is written iff mutate returns nil. A mutate that must only land on the worker
+	// the caller observed wraps itself in WithWorkerPrecondition.
+	//
+	// mutate may run more than once, because the store retries when a concurrent
+	// write invalidates the transaction.
+	//
+	// Returns ErrNotFound if missing, ErrVersionConflict if the retry budget is
+	// exhausted, or the mutate's error verbatim otherwise.
+	UpdateWorker(ctx context.Context, namespace, pool, pod string, mutate func(toUpdate *ateapipb.Worker) error) (*ateapipb.Worker, error)
 
 	// Removes a worker. Idempotent: does nothing if worker is not found.
 	DeleteWorker(ctx context.Context, namespace, pool, pod string) error
@@ -222,18 +234,18 @@ const (
 	AnyVersion int64 = 0
 )
 
-// checkPrecondition reports whether md still describes the object the caller
-// observed, pinned on the uid and version it read, each waivable with AnyUID or
-// AnyVersion. Version guards against concurrent writes, uid against
-// atespace/name re-use across object lifecycles.
+// checkPrecondition reports whether the stored uid and version still describe
+// the object the caller observed, pinned on the uid and version it read, each
+// waivable with AnyUID or AnyVersion. Version guards against concurrent writes,
+// uid against atespace/name re-use across object lifecycles.
 //
 // Returns ErrUIDConflict or ErrVersionConflict, which the update surfaces
 // verbatim.
-func checkPrecondition(md *ateapipb.ResourceMetadata, uid string, version int64) error {
-	if uid != AnyUID && uid != md.GetUid() {
+func checkPrecondition(storedUID string, storedVersion int64, uid string, version int64) error {
+	if uid != AnyUID && uid != storedUID {
 		return ErrUIDConflict
 	}
-	if version != AnyVersion && version != md.GetVersion() {
+	if version != AnyVersion && version != storedVersion {
 		return ErrVersionConflict
 	}
 	return nil
@@ -255,7 +267,25 @@ type hasResourceMetadata interface {
 func WithPrecondition[T hasResourceMetadata](observed T, mutate func(stored T) error) func(stored T) error {
 	uid, version := observed.GetMetadata().GetUid(), observed.GetMetadata().GetVersion()
 	return func(stored T) error {
-		if err := checkPrecondition(stored.GetMetadata(), uid, version); err != nil {
+		md := stored.GetMetadata()
+		if err := checkPrecondition(md.GetUid(), md.GetVersion(), uid, version); err != nil {
+			return err
+		}
+		return mutate(stored)
+	}
+}
+
+// WithWorkerPrecondition is WithPrecondition for Worker, which carries its
+// identity in flat fields rather than in a ResourceMetadata. It pins on the
+// worker's pod uid, which changes when a pod is deleted and recreated under the
+// same name, and on its version.
+//
+// An observed worker carrying no pod uid or version pins nothing. To pin one of
+// the two and waive the other, pass an observed worker carrying only the field
+// to pin.
+func WithWorkerPrecondition(observed *ateapipb.Worker, mutate func(stored *ateapipb.Worker) error) func(stored *ateapipb.Worker) error {
+	return func(stored *ateapipb.Worker) error {
+		if err := checkPrecondition(stored.GetWorkerPodUid(), stored.GetVersion(), observed.GetWorkerPodUid(), observed.GetVersion()); err != nil {
 			return err
 		}
 		return mutate(stored)

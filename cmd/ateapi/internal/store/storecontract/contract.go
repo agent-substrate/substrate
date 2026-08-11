@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -77,6 +78,28 @@ func actorNameSet(actors []*ateapipb.Actor) map[string]bool {
 		set[a.GetMetadata().GetName()] = true
 	}
 	return set
+}
+
+// seedWorker stores a worker under the given pod name and pod uid, and returns
+// it as the store holds it.
+func seedWorker(t *testing.T, s store.Interface, pod, podUID string) *ateapipb.Worker {
+	t.Helper()
+	ctx := context.Background()
+	if err := s.CreateWorker(ctx, &ateapipb.Worker{
+		WorkerNamespace: "default",
+		WorkerPool:      "pool-1",
+		WorkerPod:       pod,
+		WorkerPodUid:    podUID,
+		Ip:              "10.0.0.1",
+		State:           ateapipb.Worker_STATE_ACTIVE,
+	}); err != nil {
+		t.Fatalf("CreateWorker(%s) failed: %v", pod, err)
+	}
+	stored, err := s.GetWorker(ctx, "default", "pool-1", pod)
+	if err != nil {
+		t.Fatalf("GetWorker(%s) failed: %v", pod, err)
+	}
+	return stored
 }
 
 func receiveEvent(t *testing.T, ch <-chan store.WorkerEvent) store.WorkerEvent {
@@ -401,81 +424,7 @@ func RunContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
 		}
 	})
 
-	t.Run("UpdateWorker_Success", func(t *testing.T) {
-		s := setup(t)
-		ctx := context.Background()
-
-		worker := &ateapipb.Worker{WorkerNamespace: "default", WorkerPool: "pool-1", WorkerPod: "pod-1"}
-		if err := s.CreateWorker(ctx, worker); err != nil {
-			t.Fatalf("CreateWorker failed: %v", err)
-		}
-
-		// Subscribe after create so the create event doesn't pollute the channel.
-		watch, err := s.WatchWorkers(ctx)
-		if err != nil {
-			t.Fatalf("WatchWorkers failed: %v", err)
-		}
-		defer watch.Close()
-
-		worker.Assignment = &ateapipb.Assignment{
-			ActorTemplate: &ateapipb.KubeNamespacedObjectRef{Namespace: "default", Name: "test-template"},
-			Actor:         &ateapipb.ObjectRef{Name: "session-1"},
-		}
-		if err := s.UpdateWorker(ctx, worker, 1); err != nil {
-			t.Fatalf("UpdateWorker failed: %v", err)
-		}
-
-		got, err := s.GetWorker(ctx, "default", "pool-1", "pod-1")
-		if err != nil {
-			t.Fatalf("GetWorker failed: %v", err)
-		}
-		if got.Version != 2 {
-			t.Errorf("expected version 2, got %d", got.Version)
-		}
-
-		worker.Version = 2
-		if diff := cmp.Diff(worker, got, protocmp.Transform()); diff != "" {
-			t.Errorf("UpdateWorker yielded unexpected state in DB (-want +got):\n%s", diff)
-		}
-
-		event := receiveEvent(t, watch.Events)
-		if event.Type != store.WorkerEventUpdated {
-			t.Errorf("expected WorkerEventUpdated, got %v", event.Type)
-		}
-		if diff := cmp.Diff(worker, event.Worker, protocmp.Transform()); diff != "" {
-			t.Errorf("updated event worker mismatch (-want +got):\n%s", diff)
-		}
-	})
-
-	t.Run("UpdateWorker_Conflict", func(t *testing.T) {
-		s := setup(t)
-		ctx := context.Background()
-
-		worker := &ateapipb.Worker{WorkerNamespace: "default", WorkerPool: "pool-1", WorkerPod: "pod-1"}
-		if err := s.CreateWorker(ctx, worker); err != nil {
-			t.Fatalf("CreateWorker failed: %v", err)
-		}
-
-		worker1, err := s.GetWorker(ctx, "default", "pool-1", "pod-1")
-		if err != nil {
-			t.Fatalf("GetWorker failed: %v", err)
-		}
-		worker2, err := s.GetWorker(ctx, "default", "pool-1", "pod-1")
-		if err != nil {
-			t.Fatalf("GetWorker failed: %v", err)
-		}
-
-		worker1.Assignment = &ateapipb.Assignment{Actor: &ateapipb.ObjectRef{Name: "session-1"}}
-		if err := s.UpdateWorker(ctx, worker1, worker1.Version); err != nil {
-			t.Fatalf("UpdateWorker failed: %v", err)
-		}
-
-		worker2.Assignment = &ateapipb.Assignment{Actor: &ateapipb.ObjectRef{Name: "session-2"}}
-		err = s.UpdateWorker(ctx, worker2, worker2.Version)
-		if !errors.Is(err, store.ErrVersionConflict) {
-			t.Errorf("expected ErrVersionConflict, got %v", err)
-		}
-	})
+	runUpdateWorkerContractTests(t, setup)
 
 	t.Run("DeleteWorker", func(t *testing.T) {
 		s := setup(t)
@@ -1500,6 +1449,275 @@ func RunContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
 		}
 		if len(global) != 6 {
 			t.Errorf("global ListActorSnapshots returned %d snapshots, want 6", len(global))
+		}
+	})
+}
+
+// runUpdateWorkerContractTests covers UpdateWorker's contract
+func runUpdateWorkerContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
+	t.Helper()
+
+	t.Run("UpdateWorker_Success", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+
+		worker := &ateapipb.Worker{WorkerNamespace: "default", WorkerPool: "pool-1", WorkerPod: "pod-1"}
+		if err := s.CreateWorker(ctx, worker); err != nil {
+			t.Fatalf("CreateWorker failed: %v", err)
+		}
+
+		// Subscribe after create so the create event doesn't pollute the channel.
+		watch, err := s.WatchWorkers(ctx)
+		if err != nil {
+			t.Fatalf("WatchWorkers failed: %v", err)
+		}
+		defer watch.Close()
+
+		assignment := &ateapipb.Assignment{
+			ActorTemplate: &ateapipb.KubeNamespacedObjectRef{Namespace: "default", Name: "test-template"},
+			Actor:         &ateapipb.ObjectRef{Name: "session-1"},
+		}
+		updated, err := s.UpdateWorker(ctx, "default", "pool-1", "pod-1", func(toUpdate *ateapipb.Worker) error {
+			toUpdate.Assignment = assignment
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("UpdateWorker failed: %v", err)
+		}
+
+		got, err := s.GetWorker(ctx, "default", "pool-1", "pod-1")
+		if err != nil {
+			t.Fatalf("GetWorker failed: %v", err)
+		}
+		if got.Version != 2 {
+			t.Errorf("expected version 2, got %d", got.Version)
+		}
+
+		worker.Assignment = assignment
+		worker.Version = 2
+		if diff := cmp.Diff(worker, got, protocmp.Transform()); diff != "" {
+			t.Errorf("UpdateWorker yielded unexpected state in DB (-want +got):\n%s", diff)
+		}
+		if diff := cmp.Diff(worker, updated, protocmp.Transform()); diff != "" {
+			t.Errorf("UpdateWorker returned unexpected worker (-want +got):\n%s", diff)
+		}
+
+		event := receiveEvent(t, watch.Events)
+		if event.Type != store.WorkerEventUpdated {
+			t.Errorf("expected WorkerEventUpdated, got %v", event.Type)
+		}
+		if diff := cmp.Diff(worker, event.Worker, protocmp.Transform()); diff != "" {
+			t.Errorf("updated event worker mismatch (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("UpdateWorker_Conflict", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+
+		worker := &ateapipb.Worker{WorkerNamespace: "default", WorkerPool: "pool-1", WorkerPod: "pod-1"}
+		if err := s.CreateWorker(ctx, worker); err != nil {
+			t.Fatalf("CreateWorker failed: %v", err)
+		}
+
+		worker1, err := s.GetWorker(ctx, "default", "pool-1", "pod-1")
+		if err != nil {
+			t.Fatalf("GetWorker failed: %v", err)
+		}
+		staleWorker1, err := s.GetWorker(ctx, "default", "pool-1", "pod-1")
+		if err != nil {
+			t.Fatalf("GetWorker failed: %v", err)
+		}
+
+		// Update the worker off the first read, moving the version worker2 is
+		// pinned on.
+		_, err = s.UpdateWorker(ctx, "default", "pool-1", "pod-1", store.WithWorkerPrecondition(worker1, func(toUpdate *ateapipb.Worker) error {
+			toUpdate.Assignment = &ateapipb.Assignment{Actor: &ateapipb.ObjectRef{Name: "session-1"}}
+			return nil
+		}))
+		if err != nil {
+			t.Fatalf("UpdateWorker failed: %v", err)
+		}
+
+		_, err = s.UpdateWorker(ctx, "default", "pool-1", "pod-1", store.WithWorkerPrecondition(staleWorker1, func(toUpdate *ateapipb.Worker) error {
+			t.Error("mutate() ran past its precondition once the pinned version had moved")
+			toUpdate.Assignment = &ateapipb.Assignment{Actor: &ateapipb.ObjectRef{Name: "session-2"}}
+			return nil
+		}))
+		if !errors.Is(err, store.ErrVersionConflict) {
+			t.Errorf("expected ErrVersionConflict, got %v", err)
+		}
+		// The pod uid still matches, so this is not the replaced-pod failure:
+		// callers key their retry decision off the difference.
+		if errors.Is(err, store.ErrUIDConflict) {
+			t.Errorf("UpdateWorker error = %v, want no store.ErrUIDConflict match: the pod is unchanged", err)
+		}
+	})
+
+	t.Run("UpdateWorker_NotFound", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+
+		_, err := s.UpdateWorker(ctx, "default", "pool-1", "non-existent", func(*ateapipb.Worker) error {
+			t.Error("mutate() ran for a worker that does not exist")
+			return nil
+		})
+		if !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("UpdateWorker error = %v, want one matching store.ErrNotFound", err)
+		}
+	})
+
+	t.Run("UpdateWorker_RejectsStaleUID", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+
+		original := seedWorker(t, s, "pod-1", "pod-uid-1")
+		if err := s.DeleteWorker(ctx, "default", "pool-1", "pod-1"); err != nil {
+			t.Fatalf("DeleteWorker failed: %v", err)
+		}
+		// k8s can reuse the pod name but never the pod uid.
+		recreated := seedWorker(t, s, "pod-1", "pod-uid-2")
+		// The version reset to 1 along with the pod, so a version guard alone
+		// would have waved this write through. Only the pod uid distinguishes
+		// the pods.
+		if recreated.GetVersion() != 1 {
+			t.Fatalf("recreated version = %d, want 1: the version cannot tell the pods apart", recreated.GetVersion())
+		}
+
+		// Pins the pod alone: the observed worker carries the original pod uid
+		// and no version.
+		pinOriginalUID := &ateapipb.Worker{WorkerPodUid: original.GetWorkerPodUid(), Version: store.AnyVersion}
+		_, err := s.UpdateWorker(ctx, "default", "pool-1", "pod-1", store.WithWorkerPrecondition(pinOriginalUID, func(toUpdate *ateapipb.Worker) error {
+			t.Error("mutate() ran past its precondition once the pinned pod was gone")
+			toUpdate.State = ateapipb.Worker_STATE_DRAINING
+			return nil
+		}))
+		if !errors.Is(err, store.ErrUIDConflict) {
+			t.Errorf("UpdateWorker error = %v, want one matching store.ErrUIDConflict", err)
+		}
+
+		stored, err := s.GetWorker(ctx, "default", "pool-1", "pod-1")
+		if err != nil {
+			t.Fatalf("GetWorker failed: %v", err)
+		}
+		if diff := cmp.Diff(recreated, stored, protocmp.Transform()); diff != "" {
+			t.Errorf("The rejected update still wrote (-recreated +stored):\n%s", diff)
+		}
+	})
+
+	t.Run("UpdateWorker_MutateErrorIsNotRetried", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+
+		created := seedWorker(t, s, "pod-1", "pod-uid-1")
+		mutationError := errors.New("mutation error")
+
+		callsToMutateFn := 0
+		_, err := s.UpdateWorker(ctx, "default", "pool-1", "pod-1", func(toUpdate *ateapipb.Worker) error {
+			callsToMutateFn++
+			toUpdate.State = ateapipb.Worker_STATE_DRAINING
+			return fmt.Errorf("worker pool-1/pod-1: %w", mutationError)
+		})
+		// The error must arrive intact.
+		if !errors.Is(err, mutationError) {
+			t.Errorf("UpdateWorker error = %v, want one wrapping mutationError", err)
+		}
+		// Mutation errors are non-retriable.
+		if callsToMutateFn != 1 {
+			t.Errorf("mutate ran %d times, want exactly 1 (a rejected mutation must not be retried)", callsToMutateFn)
+		}
+
+		got, err := s.GetWorker(ctx, "default", "pool-1", "pod-1")
+		if err != nil {
+			t.Fatalf("GetWorker failed: %v", err)
+		}
+		if diff := cmp.Diff(created, got, protocmp.Transform()); diff != "" {
+			t.Errorf("aborted mutation was persisted (-created +got):\n%s", diff)
+		}
+	})
+
+	t.Run("UpdateWorker_DiscardsServerOwnedFieldEdits", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+
+		created := seedWorker(t, s, "pod-1", "pod-uid-1")
+		updated, err := s.UpdateWorker(ctx, "default", "pool-1", "pod-1", func(toUpdate *ateapipb.Worker) error {
+			// The version is server-owned: a closure must not be able to change it.
+			toUpdate.Version = 99
+			toUpdate.State = ateapipb.Worker_STATE_DRAINING
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("UpdateWorker failed: %v", err)
+		}
+
+		if got, want := updated.GetVersion(), created.GetVersion()+1; got != want {
+			t.Errorf("version = %d, want %d (one past the stored version, not the forged value)", got, want)
+		}
+		if got, want := updated.GetState(), ateapipb.Worker_STATE_DRAINING; got != want {
+			t.Errorf("state = %v, want %v: discarding the version edit must not discard the mutation", got, want)
+		}
+	})
+
+	// UpdateWorker_RejectsImmutableFieldChange covers the fields a mutation may
+	// not touch. Unlike the server-owned version, which is silently restored,
+	// these fail the call: a caller that re-addressed a worker or changed the IP
+	// the atetunnel dials asked for something the store cannot do, and must hear
+	// about it.
+	t.Run("UpdateWorker_RejectsImmutableFieldChange", func(t *testing.T) {
+		tests := []struct {
+			name      string
+			mutate    func(toUpdate *ateapipb.Worker)
+			wantField string
+		}{
+			{
+				name:      "worker namespace",
+				mutate:    func(toUpdate *ateapipb.Worker) { toUpdate.WorkerNamespace = "other-namespace" },
+				wantField: "worker_namespace",
+			},
+			{
+				name:      "worker pool",
+				mutate:    func(toUpdate *ateapipb.Worker) { toUpdate.WorkerPool = "other-pool" },
+				wantField: "worker_pool",
+			},
+			{
+				name:      "worker pod",
+				mutate:    func(toUpdate *ateapipb.Worker) { toUpdate.WorkerPod = "other-pod" },
+				wantField: "worker_pod",
+			},
+			{
+				name:      "ip",
+				mutate:    func(toUpdate *ateapipb.Worker) { toUpdate.Ip = "10.0.0.2" },
+				wantField: "ip",
+			},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				s := setup(t)
+				ctx := context.Background()
+
+				created := seedWorker(t, s, "pod-1", "pod-uid-1")
+				_, err := s.UpdateWorker(ctx, "default", "pool-1", "pod-1", func(toUpdate *ateapipb.Worker) error {
+					// Paired with a legitimate edit, so the rejection cannot be
+					// mistaken for a no-op mutation.
+					toUpdate.State = ateapipb.Worker_STATE_DRAINING
+					tt.mutate(toUpdate)
+					return nil
+				})
+				// The message must name the offending field: the closure is
+				// buggy, and whoever has to fix it only has this error to go on.
+				if want := tt.wantField + " is immutable"; err == nil || !strings.Contains(err.Error(), want) {
+					t.Errorf("UpdateWorker changing %s = %v, want an error containing %q", tt.name, err, want)
+				}
+
+				got, err := s.GetWorker(ctx, "default", "pool-1", "pod-1")
+				if err != nil {
+					t.Fatalf("GetWorker failed: %v", err)
+				}
+				if diff := cmp.Diff(created, got, protocmp.Transform()); diff != "" {
+					t.Errorf("rejected mutation was persisted anyway (-created +got):\n%s", diff)
+				}
+			})
 		}
 	})
 }

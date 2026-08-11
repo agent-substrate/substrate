@@ -65,6 +65,10 @@ import (
 // globalAtespace in Substrate is represented by "".
 const globalAtespace = ""
 
+// updateMaxAttempts bounds how many times an updater re-runs its
+// read-modify-write after a concurrent writer invalidates the transaction.
+const updateMaxAttempts = 5
+
 type workerPubSubMsg struct {
 	Type   int    `json:"t"`
 	Worker string `json:"w"` // protojson-encoded Worker
@@ -883,14 +887,9 @@ func validateUpdateActorSnapshotTagMutation(storedTag, mutatedTag *ateapipb.Acto
 	return nil
 }
 
-// updateActorSnapshotTagMaxAttempts bounds how many times UpdateActorSnapshotTag
-// re-runs its read-modify-write after a concurrent writer invalidates the
-// transaction.
-const updateActorSnapshotTagMaxAttempts = 5
-
 func (s *Persistence) UpdateActorSnapshotTag(ctx context.Context, atespace, name string, mutate func(*ateapipb.ActorSnapshotTag) error) (*ateapipb.ActorSnapshotTag, error) {
 	tagKey := actorSnapshotTagDBKey(atespace, name)
-	for range updateActorSnapshotTagMaxAttempts {
+	for range updateMaxAttempts {
 		var dbTag *ateapipb.ActorSnapshotTag
 		var abortErr error
 
@@ -1021,66 +1020,92 @@ func (s *Persistence) GetWorker(ctx context.Context, namespace, pool, pod string
 	return worker, nil
 }
 
-func (s *Persistence) UpdateWorker(ctx context.Context, worker *ateapipb.Worker, expectedVersion int64) error {
-	dbKey := workerDBKey(worker.GetWorkerNamespace(), worker.GetWorkerPool(), worker.GetWorkerPod())
+func validateUpdateWorkerMutation(storedWorker, mutatedWorker *ateapipb.Worker) error {
+	if stored, mutated := storedWorker.GetWorkerNamespace(), mutatedWorker.GetWorkerNamespace(); stored != mutated {
+		return fmt.Errorf("worker_namespace is immutable: mutation changed it from %q to %q", stored, mutated)
+	}
+	if stored, mutated := storedWorker.GetWorkerPool(), mutatedWorker.GetWorkerPool(); stored != mutated {
+		return fmt.Errorf("worker_pool is immutable: mutation changed it from %q to %q", stored, mutated)
+	}
+	if stored, mutated := storedWorker.GetWorkerPod(), mutatedWorker.GetWorkerPod(); stored != mutated {
+		return fmt.Errorf("worker_pod is immutable: mutation changed it from %q to %q", stored, mutated)
+	}
+	if stored, mutated := storedWorker.GetIp(), mutatedWorker.GetIp(); stored != mutated {
+		return fmt.Errorf("ip is immutable: mutation changed it from %q to %q", stored, mutated)
+	}
+	return nil
+}
 
-	// Clone because we will update the version field, and we don't want to
-	// stomp the caller's copy.
-	dbWorker := proto.Clone(worker).(*ateapipb.Worker)
+func (s *Persistence) UpdateWorker(ctx context.Context, namespace, pool, pod string, mutate func(*ateapipb.Worker) error) (*ateapipb.Worker, error) {
+	dbKey := workerDBKey(namespace, pool, pod)
+	for range updateMaxAttempts {
+		var dbWorker *ateapipb.Worker
+		var abortErr error
 
-	err := s.rdb.Watch(ctx, func(tx *redis.Tx) error {
-		currentVal, err := tx.Get(ctx, dbKey).Bytes()
-		if err != nil {
-			if errors.Is(err, redis.Nil) {
-				return store.ErrNotFound
+		err := s.rdb.Watch(ctx, func(tx *redis.Tx) error {
+			currentVal, err := tx.Get(ctx, dbKey).Bytes()
+			if err != nil {
+				if errors.Is(err, redis.Nil) {
+					return store.ErrNotFound
+				}
+				return fmt.Errorf("while getting worker: %w", err)
 			}
-			return fmt.Errorf("while getting worker: %w", err)
-		}
 
-		currentWorker := &ateapipb.Worker{}
-		if err := protojson.Unmarshal(currentVal, currentWorker); err != nil {
-			return fmt.Errorf("in protojson.Unmarshal: %w", err)
-		}
+			currentWorker := &ateapipb.Worker{}
+			if err := protojson.Unmarshal(currentVal, currentWorker); err != nil {
+				return fmt.Errorf("in protojson.Unmarshal: %w", err)
+			}
 
-		if currentWorker.GetVersion() != expectedVersion {
-			return store.ErrVersionConflict
-		}
-		dbWorker.Version = currentWorker.GetVersion() + 1
-		if currentWorker.GetWorkerNamespace() != dbWorker.GetWorkerNamespace() {
-			return fmt.Errorf("worker_namespace is immutable")
-		}
-		if currentWorker.GetWorkerPool() != dbWorker.GetWorkerPool() {
-			return fmt.Errorf("worker_pool is immutable")
-		}
-		if currentWorker.GetWorkerPod() != dbWorker.GetWorkerPod() {
-			return fmt.Errorf("worker_pod is immutable")
-		}
-		if currentWorker.GetIp() != dbWorker.GetIp() {
-			return fmt.Errorf("ip is immutable")
-		}
-		newVal, err := protojson.Marshal(dbWorker)
-		if err != nil {
-			return fmt.Errorf("in protojson.Marshal: %w", err)
-		}
+			// Snapshot the stored state before handing the worker to mutate.
+			// mutate is free to edit anything it is given.
+			workerBeforeMutation := proto.Clone(currentWorker).(*ateapipb.Worker)
+			if err := mutate(currentWorker); err != nil {
+				abortErr = err
+				return err
+			}
+			if err := validateUpdateWorkerMutation(workerBeforeMutation, currentWorker); err != nil {
+				abortErr = err
+				return err
+			}
+			// The stored version is authoritative; derive the next one from it,
+			// discarding whatever mutate made of it.
+			currentWorker.Version = workerBeforeMutation.GetVersion() + 1
 
-		_, err = tx.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
-			pipe.Set(ctx, dbKey, newVal, 0)
+			newVal, err := protojson.Marshal(currentWorker)
+			if err != nil {
+				return fmt.Errorf("in protojson.Marshal: %w", err)
+			}
+
+			if _, err := tx.TxPipelined(ctx, func(pipe redis.Pipeliner) error {
+				pipe.Set(ctx, dbKey, newVal, 0)
+				return nil
+			}); err != nil {
+				return err
+			}
+			dbWorker = currentWorker
 			return nil
-		})
-		return err
-	}, dbKey)
-	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return store.ErrNotFound
+		}, dbKey)
+
+		switch {
+		case err == nil:
+			s.publishWorkerEvent(ctx, store.WorkerEventUpdated, dbWorker)
+			return dbWorker, nil
+		case abortErr != nil:
+			return nil, abortErr
+		case errors.Is(err, store.ErrNotFound):
+			return nil, store.ErrNotFound
+		case errors.Is(err, redis.TxFailedErr):
+			// A concurrent write landed between WATCH and EXEC, so mutate never
+			// saw it. Re-read and run it against the newer state.
+			continue
+		default:
+			return nil, fmt.Errorf("while executing update worker transaction: %w", err)
 		}
-		if errors.Is(err, store.ErrVersionConflict) || errors.Is(err, redis.TxFailedErr) {
-			return store.ErrVersionConflict
-		}
-		return fmt.Errorf("while executing update worker transaction: %w", err)
 	}
 
-	s.publishWorkerEvent(ctx, store.WorkerEventUpdated, dbWorker)
-	return nil
+	// Only the TxFailedErr branch continues the loop, so getting here means every
+	// attempt lost the race.
+	return nil, store.ErrVersionConflict
 }
 
 func (s *Persistence) DeleteWorker(ctx context.Context, namespace, pool, pod string) error {
@@ -1154,10 +1179,6 @@ func validateUpdateActorMutation(storedActor, mutatedActor *ateapipb.Actor) erro
 	}
 	return nil
 }
-
-// updateMaxAttempts bounds how many times UpdateActor or UpdateActorTemplate re-runs its
-// read-modify-write after a concurrent writer invalidates the transaction.
-const updateMaxAttempts = 5
 
 func (s *Persistence) UpdateActor(ctx context.Context, actorRef resources.ActorRef, mutate func(*ateapipb.Actor) error) (*ateapipb.Actor, error) {
 	dbKey := actorDBKey(actorRef)

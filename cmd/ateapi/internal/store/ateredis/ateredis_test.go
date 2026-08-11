@@ -502,21 +502,6 @@ func TestUpdateActor_RejectsStaleVersion(t *testing.T) {
 
 }
 
-func TestUpdateWorker_NotFound(t *testing.T) {
-	mr, s, ctx := setupTest(t)
-	defer mr.Close()
-
-	worker := &ateapipb.Worker{
-		WorkerNamespace: "default",
-		WorkerPool:      "pool-1",
-		WorkerPod:       "non-existent",
-	}
-	err := s.UpdateWorker(ctx, worker, 1)
-	if !errors.Is(err, store.ErrNotFound) {
-		t.Errorf("expected store.ErrNotFound, got %v", err)
-	}
-}
-
 func TestGetWorker_NotFound(t *testing.T) {
 	_, s, ctx := setupTest(t)
 
@@ -598,7 +583,11 @@ func TestUpdateWorker_Success(t *testing.T) {
 		ActorUid: "actor-1-uid",
 	}
 
-	if err := s.UpdateWorker(ctx, worker, 1); err != nil {
+	updated, err := s.UpdateWorker(ctx, "default", "pool-1", "pod-1", func(toUpdate *ateapipb.Worker) error {
+		toUpdate.Assignment = worker.GetAssignment()
+		return nil
+	})
+	if err != nil {
 		t.Fatalf("UpdateWorker failed: %v", err)
 	}
 
@@ -612,6 +601,9 @@ func TestUpdateWorker_Success(t *testing.T) {
 	}
 
 	worker.Version = 2
+	if diff := cmp.Diff(worker, updated, protocmp.Transform()); diff != "" {
+		t.Errorf("UpdateWorker returned unexpected worker (-want +got):\n%s", diff)
+	}
 	if diff := cmp.Diff(worker, got, protocmp.Transform()); diff != "" {
 		t.Errorf("UpdateWorker yielded unexpected state in DB (-want +got):\n%s", diff)
 	}
@@ -1212,23 +1204,104 @@ func TestUpdateWorker_Conflict(t *testing.T) {
 	}
 
 	// Update instance 1
-	worker1.Assignment = &ateapipb.Assignment{
-		Actor:    &ateapipb.ObjectRef{Atespace: "team-a", Name: "actor-1"},
-		ActorUid: "actor-1-uid",
-	}
-	err = s.UpdateWorker(ctx, worker1, worker1.Version)
+	_, err = s.UpdateWorker(ctx, "default", "pool-1", "pod-1", store.WithWorkerPrecondition(worker1, func(toUpdate *ateapipb.Worker) error {
+		toUpdate.Assignment = &ateapipb.Assignment{
+			Actor:    &ateapipb.ObjectRef{Atespace: "team-a", Name: "actor-1"},
+			ActorUid: "actor-1-uid",
+		}
+		return nil
+	}))
 	if err != nil {
 		t.Fatalf("UpdateWorker failed: %v", err)
 	}
 
-	// Try to update instance 2
-	worker2.Assignment = &ateapipb.Assignment{
-		Actor:    &ateapipb.ObjectRef{Atespace: "team-a", Name: "actor-2"},
-		ActorUid: "actor-2-uid",
-	}
-	err = s.UpdateWorker(ctx, worker2, worker2.Version)
+	// Try to update instance 2, which is pinned on the version instance 1 moved.
+	_, err = s.UpdateWorker(ctx, "default", "pool-1", "pod-1", store.WithWorkerPrecondition(worker2, func(toUpdate *ateapipb.Worker) error {
+		toUpdate.Assignment = &ateapipb.Assignment{
+			Actor:    &ateapipb.ObjectRef{Atespace: "team-a", Name: "actor-2"},
+			ActorUid: "actor-2-uid",
+		}
+		return nil
+	}))
 	if !errors.Is(err, store.ErrVersionConflict) {
 		t.Errorf("expected ErrVersionConflict, got %v", err)
+	}
+}
+
+// seedWorker stores a worker under the given pod name and pod uid, and returns
+// it as the store holds it.
+func seedWorker(t *testing.T, s *Persistence, ctx context.Context, pod, podUID string) *ateapipb.Worker {
+	t.Helper()
+	if err := s.CreateWorker(ctx, &ateapipb.Worker{
+		WorkerNamespace: "default",
+		WorkerPool:      "pool-1",
+		WorkerPod:       pod,
+		WorkerPodUid:    podUID,
+		Ip:              "10.0.0.1",
+		State:           ateapipb.Worker_STATE_ACTIVE,
+	}); err != nil {
+		t.Fatalf("CreateWorker(%s) failed: %v", pod, err)
+	}
+	stored, err := s.GetWorker(ctx, "default", "pool-1", pod)
+	if err != nil {
+		t.Fatalf("GetWorker(%s) failed: %v", pod, err)
+	}
+	return stored
+}
+
+func TestUpdateWorker_RetriesOnConcurrentWrite(t *testing.T) {
+	mr, s, ctx := setupTest(t)
+	seedWorker(t, s, ctx, "pod-1", "pod-uid-1")
+	workerKey := workerDBKey("default", "pool-1", "pod-1")
+
+	// A separate client, so its write lands outside the transaction's connection.
+	otherClient := redis.NewClusterClient(&redis.ClusterOptions{Addrs: []string{mr.Addr()}})
+	t.Cleanup(func() { otherClient.Close() })
+
+	attempts := 0
+	interceptor := &watchInterceptor{redisClient: s.rdb, before: func() {
+		// Only the first attempt races. We do this to make sure the second retry
+		// will succeed.
+		if attempts > 0 {
+			return
+		}
+		concurrent, err := s.GetWorker(ctx, "default", "pool-1", "pod-1")
+		if err != nil {
+			t.Errorf("GetWorker for concurrent write failed: %v", err)
+			return
+		}
+		// The retry must carry the concurrent scheduling decision forward, not
+		// revert it to what the first attempt read.
+		concurrent.NodeName = "node-2"
+		val, err := protojson.Marshal(concurrent)
+		if err != nil {
+			t.Errorf("protojson.Marshal failed: %v", err)
+			return
+		}
+		if err := otherClient.Set(ctx, workerKey, val, 0).Err(); err != nil {
+			t.Errorf("concurrent Set failed: %v", err)
+		}
+	}}
+	racing := &Persistence{rdb: interceptor, lockTTL: defaultLockTTL}
+
+	updated, err := racing.UpdateWorker(ctx, "default", "pool-1", "pod-1", func(toUpdate *ateapipb.Worker) error {
+		attempts++
+		toUpdate.State = ateapipb.Worker_STATE_DRAINING
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("UpdateWorker failed: %v", err)
+	}
+	if attempts < 2 {
+		t.Errorf("mutate ran %d times, want at least 2: the first write is racey and must be rejected", attempts)
+	}
+	if got, want := updated.GetState(), ateapipb.Worker_STATE_DRAINING; got != want {
+		t.Errorf("state = %v, want %v", got, want)
+	}
+	// The concurrent tx moved the worker to node-2. That change should survive
+	// instead of being reverted by a mutation computed against the older state.
+	if got := updated.GetNodeName(); got != "node-2" {
+		t.Errorf("node_name = %q, want %q: the retry clobbered the concurrent write", got, "node-2")
 	}
 }
 

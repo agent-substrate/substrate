@@ -491,3 +491,80 @@ func assertCrashMetricDatapoint(t *testing.T, reader *sdkmetric.ManualReader, wa
 	t.Errorf("did not find ate.actor.crashes metric with attrs: opName=%q, reason=%q, tmplNS=%q, tmplName=%q, workerPool=%q, sandboxClass=%q",
 		wantOpName, wantReason, wantTmplNS, wantTmplName, wantWorkerPool, wantSandboxClass)
 }
+
+// TestReleaseWorker_PodReplaceRace checks that a release is not applied to a
+// worker whose pod was replaced between the caller's read and its write. The
+// recreated record reuses the pod name and resets to version 1, so only the pod
+// uid can tell the two pods apart.
+func TestReleaseWorker_PodReplaceRace(t *testing.T) {
+	ctx := context.Background()
+	persistence, cleanup := storetest.SetupTestStore(t)
+	t.Cleanup(cleanup)
+
+	actor, err := persistence.CreateActor(ctx, &ateapipb.Actor{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor-1"},
+		Status:   ateapipb.Actor_STATUS_RUNNING,
+		WorkerAssignment: &ateapipb.WorkerAssignment{
+			WorkerNamespace: "ns",
+			WorkerPool:      "pool",
+			WorkerPod:       "pod",
+			WorkerPodUid:    "pod-uid-1",
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateActor: %v", err)
+	}
+
+	// Pod A: the worker the caller reads, holding this actor's claim.
+	if err := persistence.CreateWorker(ctx, &ateapipb.Worker{
+		WorkerNamespace: "ns",
+		WorkerPool:      "pool",
+		WorkerPod:       "pod",
+		WorkerPodUid:    "pod-uid-1",
+		Assignment: &ateapipb.Assignment{
+			Actor:    &ateapipb.ObjectRef{Atespace: "team-a", Name: "actor-1"},
+			ActorUid: actor.GetMetadata().GetUid(),
+		},
+	}); err != nil {
+		t.Fatalf("CreateWorker: %v", err)
+	}
+
+	// A racing syncer replaces pod A with pod B under the same name, and another
+	// actor claims the replacement.
+	racing := &conflictInjectingStore{
+		Interface: persistence,
+		inject: func() {
+			if err := persistence.DeleteWorker(ctx, "ns", "pool", "pod"); err != nil {
+				t.Errorf("Racing writer: DeleteWorker: %v", err)
+				return
+			}
+			if err := persistence.CreateWorker(ctx, &ateapipb.Worker{
+				WorkerNamespace: "ns",
+				WorkerPool:      "pool",
+				WorkerPod:       "pod",
+				WorkerPodUid:    "pod-uid-2",
+				Assignment: &ateapipb.Assignment{
+					Actor:    &ateapipb.ObjectRef{Atespace: "team-a", Name: "other-actor"},
+					ActorUid: "other-actor-uid",
+				},
+			}); err != nil {
+				t.Errorf("Racing writer: CreateWorker: %v", err)
+			}
+		},
+	}
+
+	// The uid conflict returns an error
+	if _, err = releaseWorker(ctx, racing, actor); err == nil {
+		t.Errorf("releaseWorker()=nil, want %v", err)
+	}
+
+	stored, err := persistence.GetWorker(ctx, "ns", "pool", "pod")
+	if err != nil {
+		t.Fatalf("GetWorker: %v", err)
+	}
+	// The version reset to 1 along with the pod, so a version guard alone would
+	// have waved the release through and freed a worker another actor owns.
+	if got := stored.GetAssignment().GetActorUid(); got != "other-actor-uid" {
+		t.Errorf("assignment actor uid = %q, want %q: the release landed on the replacement pod", got, "other-actor-uid")
+	}
+}

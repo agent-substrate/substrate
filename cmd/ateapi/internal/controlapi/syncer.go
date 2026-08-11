@@ -246,18 +246,15 @@ func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerK
 	changed := false
 	if w.Ip != pod.Status.PodIP {
 		// TODO: I don't think this is possible, but handling this case so we can log it just in case we can reproduce it.
-		slog.InfoContext(ctx, "Syncer: updating worker in store (IP changed)", slog.String("worker", key.namespace+"/"+key.name))
-		w.Ip = pod.Status.PodIP
+		slog.WarnContext(ctx, "Syncer: updating worker in store (IP changed). This should never happen", slog.String("worker", key.namespace+"/"+key.name))
 		changed = true
 	}
 	if w.SandboxClass != string(pool.Spec.SandboxClass) {
 		slog.InfoContext(ctx, "Syncer: updating worker in store (SandboxClass changed)", slog.String("worker", key.namespace+"/"+key.name))
-		w.SandboxClass = string(pool.Spec.SandboxClass)
 		changed = true
 	}
 	if !maps.Equal(w.Labels, pool.GetLabels()) {
 		slog.InfoContext(ctx, "Syncer: updating worker in store (labels changed)", slog.String("worker", key.namespace+"/"+key.name))
-		w.Labels = pool.GetLabels()
 		changed = true
 	}
 	if !changed {
@@ -266,32 +263,45 @@ func (s *WorkerPoolSyncer) createOrUpdateWorker(ctx context.Context, key workerK
 
 	// ErrVersionConflict requeues the key; the retry re-fetches the worker at
 	// its new version.
-	return s.persistence.UpdateWorker(ctx, w, w.Version)
+	_, err = s.persistence.UpdateWorker(ctx, key.namespace, key.pool, key.name, store.WithWorkerPrecondition(w, func(toUpdate *ateapipb.Worker) error {
+		toUpdate.Ip = pod.Status.PodIP
+		toUpdate.SandboxClass = string(pool.Spec.SandboxClass)
+		toUpdate.Labels = maps.Clone(pool.GetLabels())
+		return nil
+	}))
+	return err
 }
 
 func isWorkerEligible(pod *corev1.Pod) bool {
 	return pod.Status.PodIP != ""
 }
 
+// errWorkerAlreadyDraining aborts a markWorkerDraining mutation that finds the
+// transition already done, so the store writes nothing and publishes no event.
+var errWorkerAlreadyDraining = errors.New("worker is already draining")
+
 // markWorkerDraining transitions a worker to STATE_DRAINING so the scheduler
 // stops routing new actors to it while its pod is Terminating. If the worker is
 // already gone or already draining there is nothing more to do — the Pod
-// Deleted event will clean up the record. A version conflict is returned so the
-// caller requeues and retries against the updated record.
+// Deleted event will clean up the record.
 func (s *WorkerPoolSyncer) markWorkerDraining(ctx context.Context, namespace, pool, podName string) error {
-	worker, err := s.persistence.GetWorker(ctx, namespace, pool, podName)
-	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return nil
+	// The state is read and written inside one transaction, so the transition needs
+	// no precondition: it is decided against the very worker the write lands on.
+	_, err := s.persistence.UpdateWorker(ctx, namespace, pool, podName, func(toUpdate *ateapipb.Worker) error {
+		if toUpdate.GetState() == ateapipb.Worker_STATE_DRAINING {
+			return errWorkerAlreadyDraining
 		}
-		return err
-	}
-	if worker.GetState() == ateapipb.Worker_STATE_DRAINING {
+		toUpdate.State = ateapipb.Worker_STATE_DRAINING
+		return nil
+	})
+	if errors.Is(err, store.ErrNotFound) || errors.Is(err, errWorkerAlreadyDraining) {
 		return nil
 	}
-	slog.InfoContext(ctx, "Syncer: marking worker draining (pod deleting)", slog.String("worker", namespace+"/"+podName))
-	worker.State = ateapipb.Worker_STATE_DRAINING
-	return s.persistence.UpdateWorker(ctx, worker, worker.GetVersion())
+	if err != nil {
+		return err
+	}
+	slog.InfoContext(ctx, "Syncer: marked worker draining (pod deleting)", slog.String("worker", namespace+"/"+podName))
+	return nil
 }
 
 // reconcileDeadWorker cleans up a worker whose pod is gone. It releases the

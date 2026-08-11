@@ -271,16 +271,17 @@ func TestSyncer_DeleteBoundWorker_ClearsActor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create actor: %v", err)
 	}
-	w, _ := persistence.GetWorker(ctx, ns, pool, pod)
-	w.Assignment = &ateapipb.Assignment{
-		ActorTemplate: &ateapipb.KubeNamespacedObjectRef{
-			Namespace: ns,
-			Name:      "tmpl",
-		},
-		Actor:    &ateapipb.ObjectRef{Atespace: createdActor.GetMetadata().GetAtespace(), Name: createdActor.GetMetadata().GetName()},
-		ActorUid: createdActor.GetMetadata().GetUid(),
-	}
-	if err := persistence.UpdateWorker(ctx, w, w.Version); err != nil {
+	if _, err := persistence.UpdateWorker(ctx, ns, pool, pod, func(toUpdate *ateapipb.Worker) error {
+		toUpdate.Assignment = &ateapipb.Assignment{
+			ActorTemplate: &ateapipb.KubeNamespacedObjectRef{
+				Namespace: ns,
+				Name:      "tmpl",
+			},
+			Actor:    &ateapipb.ObjectRef{Atespace: createdActor.GetMetadata().GetAtespace(), Name: createdActor.GetMetadata().GetName()},
+			ActorUid: createdActor.GetMetadata().GetUid(),
+		}
+		return nil
+	}); err != nil {
 		t.Fatalf("update worker: %v", err)
 	}
 
@@ -828,14 +829,14 @@ func TestReleaseActorOnDeadWorker_StatusTransitions(t *testing.T) {
 type conflictStore struct {
 	store.Interface
 	conflictTriggered atomic.Bool
-	onUpdate          func(ctx context.Context, worker *ateapipb.Worker)
+	onUpdate          func(ctx context.Context, namespace, pool, pod string)
 }
 
-func (c *conflictStore) UpdateWorker(ctx context.Context, worker *ateapipb.Worker, expectedVersion int64) error {
+func (c *conflictStore) UpdateWorker(ctx context.Context, namespace, pool, pod string, mutate func(*ateapipb.Worker) error) (*ateapipb.Worker, error) {
 	if c.onUpdate != nil && c.conflictTriggered.CompareAndSwap(false, true) {
-		c.onUpdate(ctx, worker)
+		c.onUpdate(ctx, namespace, pool, pod)
 	}
-	return c.Interface.UpdateWorker(ctx, worker, expectedVersion)
+	return c.Interface.UpdateWorker(ctx, namespace, pool, pod, mutate)
 }
 
 func TestSyncer_UpdateWorker_RetryOnVersionConflict(t *testing.T) {
@@ -929,11 +930,11 @@ func TestSyncer_UpdateWorker_RetryOnVersionConflict(t *testing.T) {
 	}
 
 	// Configure conflictStore to inject a concurrent version bump in Redis when the syncer calls UpdateWorker.
-	cs.onUpdate = func(c context.Context, w *ateapipb.Worker) {
-		if cw, err := cs.Interface.GetWorker(c, ns, poolName, podName); err == nil {
-			cw.NodeName = "node2"
-			_ = cs.Interface.UpdateWorker(c, cw, cw.Version)
-		}
+	cs.onUpdate = func(c context.Context, namespace, pool, pod string) {
+		_, _ = cs.Interface.UpdateWorker(c, namespace, pool, pod, func(toUpdate *ateapipb.Worker) error {
+			toUpdate.NodeName = "node2"
+			return nil
+		})
 	}
 
 	// Touch the pod ONCE in K8s so the syncer reconciles it. The first reconcile's
