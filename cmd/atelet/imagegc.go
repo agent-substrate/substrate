@@ -42,11 +42,11 @@ import (
 )
 
 var (
-	imageCacheGCPeriod = pflag.Duration("image-cache-gc-period", 5*time.Minute, "How often to run the image cache eviction pass. 0 disables eviction entirely.")
+	imageCacheGCPeriod = pflag.Duration("image-cache-gc-period", 5*time.Minute, "How often to run the image cache eviction pass. 0 disables the periodic pass (startup orphan recovery still runs at every atelet start).")
 	imageCacheHighPct  = pflag.Int("image-cache-high-percent", 85, "Cache-volume usage percentage above which eviction starts.")
 	imageCacheLowPct   = pflag.Int("image-cache-low-percent", 80, "Cache-volume usage percentage eviction frees down to. Must be lower than --image-cache-high-percent.")
 	imageCacheMaxBytes = pflag.Int64("image-cache-max-bytes", 0, "Absolute cap on the summed size of cached layers, evicted down to independently of the volume watermarks. 0 means no cap.")
-	imageCacheMinAge   = pflag.Duration("image-cache-min-age", 2*time.Minute, "Layers and image records younger than this are never evicted (protects images pulled but not yet mounted).")
+	imageCacheMinAge   = pflag.Duration("image-cache-min-age", 2*time.Minute, "Layers and image records younger than this are never evicted (protects images pulled but not yet mounted). Governs startup orphan recovery too, so it is live even with the periodic pass disabled.")
 	imageCacheGCDryRun = pflag.Bool("image-cache-gc-dry-run", false, "Compute and log eviction decisions without deleting anything.")
 )
 
@@ -60,6 +60,11 @@ const (
 )
 
 func validateImageCacheGCFlags() error {
+	if *imageCacheGCPeriod < 0 {
+		// A negative period would silently disable the loop (it fails the
+		// > 0 guard at the launch site, which also protects the ticker).
+		return fmt.Errorf("--image-cache-gc-period %v must be >= 0", *imageCacheGCPeriod)
+	}
 	if *imageCacheHighPct < 1 || *imageCacheHighPct > 100 {
 		return fmt.Errorf("--image-cache-high-percent %d out of range [1,100]", *imageCacheHighPct)
 	}
@@ -71,16 +76,24 @@ func validateImageCacheGCFlags() error {
 		// future), making just-pulled layers evictable.
 		return fmt.Errorf("--image-cache-min-age %v must be >= 0", *imageCacheMinAge)
 	}
-	// Outside BasePath the watermarks measure a different volume than
-	// actor state, so the pass would chase pressure the cache doesn't
-	// contribute to. Warn, don't fail: a separate cache volume is
-	// legitimate (recommended for IOPS) — it just wants its own numbers.
-	if !strings.HasPrefix(filepath.Clean(*imageCacheDir), ateompath.BasePath+string(os.PathSeparator)) {
+	if imageCacheDirOutsideBasePath(*imageCacheDir) {
 		slog.Warn("Image cache dir is outside the ateom base path; its volume watermarks are measured separately from actor state",
 			slog.String("image_cache_dir", *imageCacheDir),
 			slog.String("actors_dir", ateompath.ActorsDir))
 	}
 	return nil
+}
+
+// imageCacheDirOutsideBasePath reports whether the cache dir is outside
+// the ateom base path — the watermarks then measure a different volume
+// than actor state. Warn-worthy, not an error: a separate cache volume is
+// legitimate (recommended for IOPS).
+func imageCacheDirOutsideBasePath(dir string) bool {
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		abs = filepath.Clean(dir)
+	}
+	return !strings.HasPrefix(abs, ateompath.BasePath+string(os.PathSeparator))
 }
 
 // imageCacheGCTarget computes the bytes a pass should free: the larger
@@ -151,6 +164,10 @@ func newImageCacheGC(store *imagecache.Store, cacheDir string) *imageCacheGC {
 // Run executes eviction passes on the configured period until ctx is
 // done. Passes are strictly serialized: a slow pass delays the next tick
 // rather than overlapping it.
+//
+// atelet passes its root context (the StartMetricsServer convention), so
+// the loop dies with the process; a pass cut off there leaves only .rm-*
+// dirs for the startup sweep. Cancellation is honored for tests.
 func (g *imageCacheGC) Run(ctx context.Context) {
 	// First pass immediately: a node booting under disk pressure must not
 	// wait a full period (startup recovery reclaims debris, not pressure).
@@ -221,7 +238,13 @@ func (g *imageCacheGC) runPass(ctx context.Context) {
 		slog.Bool("dry_run", g.dryRun),
 		slog.Duration("took", time.Since(tStart)),
 	}
-	outcome := classifyGCPass(err, target, stats.FreedBytes)
+	g.noteOutcome(ctx, classifyGCPass(err, target, stats.FreedBytes), err, attrs)
+}
+
+// noteOutcome logs one finished pass and advances the shortfall backoff.
+// The counter survives a gated pass (which says nothing about whether the
+// cache can meet a target) and resets when a target is met or absent.
+func (g *imageCacheGC) noteOutcome(ctx context.Context, outcome gcPassOutcome, err error, attrs []any) {
 	if outcome == gcPassSkipped {
 		slog.ErrorContext(ctx, "Image cache GC pass skipped", append(attrs, slog.Any("err", err))...)
 		return

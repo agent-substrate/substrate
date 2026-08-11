@@ -167,7 +167,8 @@ it — called from the checkpoint cleanup path in ateom-gvisor and
 ## Garbage collection
 
 `gc.go` holds the eviction engine; atelet drives it as a periodic pass
-(`--image-cache-gc-period`, default 5m; `0` disables it). Each tick
+(`--image-cache-gc-period`, default 5m; `0` disables the periodic pass,
+but startup orphan recovery still runs at every atelet start). Each tick
 measures the cache volume with `statfs` and the pool's own size from the
 per-layer `size` files, then computes a byte target: free down to
 `--image-cache-low-percent` when volume usage reaches
@@ -177,6 +178,18 @@ shared volume and an uncapped target would evict the whole cache trying
 to fix disk pressure it didn't cause. `--image-cache-gc-dry-run`
 computes and logs every decision while mutating nothing: the
 recommended way to soak the policy on a live fleet.
+
+Two caveats on those numbers. The cap is the pool's *total* size, not
+the evictable subset (rooted and fresh layers can never be freed), so
+under **sustained** foreign pressure the target stays unreachable and
+every pass evicts everything unrooted and older than min-age — hit rate
+goes to zero until the pressure clears. The "could not reach target"
+WARNs are the signal; if this bites in practice, a retention floor
+(never evict below N bytes) is the intended extension. And usage is
+computed against the volume's raw capacity — kubelet's formula, so
+operator intuition transfers — which counts ext4's ~5% reserved blocks
+as used: eviction starts about five points below the configured
+percentage as `df` reports it.
 
 **One pass** (`Store.EvictUnused(ctx, targetBytes, dryRun)`):
 
