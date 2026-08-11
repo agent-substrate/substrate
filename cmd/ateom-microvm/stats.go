@@ -61,10 +61,14 @@ type guestStatsTarget struct {
 	// multiplexes, so a poll and the forwarding reads share it safely.
 	agent containerStatsReader
 
-	// workloadIDs are the guest containers to sum: the overlay WORKLOADS, one
-	// per actor container. Their carriers are deliberately absent — a carrier is
-	// created and never started (see CreateCarrier), so it runs no process and
-	// its cgroup has nothing in it to add.
+	// workloadIDs are the guest containers to sum, one per actor container.
+	// Each actor container exists in the guest as TWO kata containers (see
+	// overlayWorkloadID): a "carrier", whose only job is to make the agent
+	// bind the read-only image rootfs at a fixed guest path, and the overlay
+	// WORKLOAD, which lays a writable upper over it and runs the container's
+	// actual process. Only workload ids belong here: a carrier is created but
+	// never started, so no process ever runs in it and its cgroup has nothing
+	// to add to the sum.
 	workloadIDs []string
 }
 

@@ -237,7 +237,10 @@ func (a *AgentClient) ReadStderr(ctx context.Context, containerID, execID string
 // It returns only the cgroup half of the response; the network counters
 // alongside it are per-guest-interface rather than per-container and are not
 // what ateom reports. A nil return with a nil error means the agent answered
-// without cgroup stats, which callers should read as "no numbers", not zero.
+// without cgroup stats for this container — it has no accounting for it, which
+// is a normal state for one that has exited. What that means for the actor is
+// the caller's call: the summing in GetWorkloadStats folds it in as a zero
+// contribution, because a gone container consumes nothing from here on.
 //
 // Safe to call while the stdout/stderr forwarding goroutines are reading over
 // the same client: ttrpc multiplexes concurrent calls over the one connection,
