@@ -134,11 +134,18 @@ func imageCacheGCTarget(capacity, available uint64, cacheSize, maxBytes int64, h
 	return target
 }
 
+// gcStore is what the loop needs from *imagecache.Store — a seam so
+// runPass's skip and recovery paths are testable without a real pool.
+type gcStore interface {
+	CacheSize() (int64, error)
+	EvictUnused(ctx context.Context, targetBytes int64, dryRun bool) (imagecache.EvictStats, error)
+}
+
 // imageCacheGC is the loop's state: configuration snapshotted from the
 // flags at construction (the pass logic never reads globals, so it is
 // testable without flag juggling) plus the shortfall-backoff counter.
 type imageCacheGC struct {
-	store    *imagecache.Store
+	store    gcStore
 	cacheDir string
 	period   time.Duration
 	highPct  int

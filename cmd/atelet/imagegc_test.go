@@ -178,6 +178,70 @@ func TestImageCacheDirOutsideBasePath(t *testing.T) {
 	}
 }
 
+type fakeGCStore struct {
+	size         int64
+	sizeErr      error
+	sizeCalls    int
+	evictCalls   int
+	gotTarget    int64
+	gotDryRun    bool
+	evictErr     error
+	stats        imagecache.EvictStats
+	panicOnEvict bool
+}
+
+func (f *fakeGCStore) CacheSize() (int64, error) {
+	f.sizeCalls++
+	return f.size, f.sizeErr
+}
+
+func (f *fakeGCStore) EvictUnused(_ context.Context, target int64, dryRun bool) (imagecache.EvictStats, error) {
+	f.evictCalls++
+	f.gotTarget = target
+	f.gotDryRun = dryRun
+	if f.panicOnEvict {
+		panic("boom")
+	}
+	return f.stats, f.evictErr
+}
+
+func TestRunPassSkipsOnStatfsFailure(t *testing.T) {
+	fake := &fakeGCStore{}
+	g := &imageCacheGC{store: fake, cacheDir: filepath.Join(t.TempDir(), "missing"), highPct: 85, lowPct: 80}
+	g.runPass(context.Background())
+	if fake.sizeCalls != 0 || fake.evictCalls != 0 {
+		t.Errorf("statfs failure: sizeCalls=%d evictCalls=%d, want 0/0", fake.sizeCalls, fake.evictCalls)
+	}
+}
+
+func TestRunPassSkipsOnCacheSizeFailure(t *testing.T) {
+	fake := &fakeGCStore{sizeErr: errors.New("unreadable size file")}
+	g := &imageCacheGC{store: fake, cacheDir: t.TempDir(), highPct: 85, lowPct: 80}
+	g.runPass(context.Background())
+	if fake.evictCalls != 0 {
+		t.Errorf("CacheSize failure: evictCalls=%d, want 0", fake.evictCalls)
+	}
+}
+
+func TestRunPassEvictsAndPassesDryRun(t *testing.T) {
+	// high=100 keeps the host volume's real usage out of the target, so
+	// the max-bytes overage (100-1=99) is the whole target.
+	fake := &fakeGCStore{size: 100, stats: imagecache.EvictStats{FreedBytes: 99}}
+	g := &imageCacheGC{store: fake, cacheDir: t.TempDir(), highPct: 100, lowPct: 0, maxBytes: 1, dryRun: true}
+	g.runPass(context.Background())
+	if fake.evictCalls != 1 || fake.gotTarget != 99 || !fake.gotDryRun {
+		t.Errorf("evictCalls=%d target=%d dryRun=%v, want 1/99/true", fake.evictCalls, fake.gotTarget, fake.gotDryRun)
+	}
+	if g.consecutiveShortfalls != 0 {
+		t.Errorf("consecutiveShortfalls=%d after met target, want 0", g.consecutiveShortfalls)
+	}
+}
+
+func TestRunPassRecoversPanic(t *testing.T) {
+	g := &imageCacheGC{store: &fakeGCStore{panicOnEvict: true}, cacheDir: t.TempDir(), highPct: 100, lowPct: 0}
+	g.runPass(context.Background()) // must not propagate the panic
+}
+
 // TestNoteOutcomeShortfallBackoff drives the shortfall cadence end to end:
 // warn on the first shortfallWarnLimit consecutive shortfalls, then only
 // every shortfallReminderEvery-th, streak preserved across a gated pass,
