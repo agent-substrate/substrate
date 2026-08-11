@@ -38,7 +38,6 @@ metadata:
   name: egress
   namespace: ate-demo-egress
 spec:
-  pauseImage: "registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4"
   containers:
   - name: egress
     image: ko://github.com/agent-substrate/substrate/demos/egress
