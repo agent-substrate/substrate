@@ -46,7 +46,6 @@ metadata:
   name: sleep
   namespace: benchmark-workloads
 spec:
-  pauseImage: "gcr.io/gke-release/pause@sha256:bcbd57ba5653580ec647b16d8163cdd1112df3609129b01f912a8032e48265da"
   containers:
   - name: sleep
     image: busybox@sha256:1487d0af5f52b4ba31c7e465126ee2123fe3f2305d638e7827681e7cf6c83d5e
@@ -65,7 +64,6 @@ metadata:
   name: usermem
   namespace: benchmark-workloads
 spec:
-  pauseImage: "gcr.io/gke-release/pause@sha256:bcbd57ba5653580ec647b16d8163cdd1112df3609129b01f912a8032e48265da"
   containers:
   - name: usermem
     image: containerstack/alpine-stress:latest
@@ -84,7 +82,6 @@ metadata:
   name: kernelmem
   namespace: benchmark-workloads
 spec:
-  pauseImage: "gcr.io/gke-release/pause@sha256:bcbd57ba5653580ec647b16d8163cdd1112df3609129b01f912a8032e48265da"
   containers:
   - name: kernelmem
     image: containerstack/alpine-stress:latest
@@ -103,7 +100,6 @@ metadata:
   name: glutton
   namespace: benchmark-workloads
 spec:
-  pauseImage: "gcr.io/gke-release/pause@sha256:bcbd57ba5653580ec647b16d8163cdd1112df3609129b01f912a8032e48265da"
   containers:
   - name: glutton
     image: ko://github.com/agent-substrate/substrate/cmd/benchmarking/glutton

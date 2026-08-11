@@ -58,17 +58,47 @@ func (s *Store) touchRecord(digest v1.Hash) {
 // layerSize returns the layer's recorded byte count, backfilling the size
 // file for layers unpacked before sizes were recorded.
 func (s *Store) layerSize(layerDir string) (int64, error) {
-	b, err := os.ReadFile(filepath.Join(layerDir, layerSizeFileName))
-	if err == nil {
-		n, perr := strconv.ParseInt(strings.TrimSpace(string(b)), 10, 64)
-		if perr == nil {
-			return n, nil
-		}
-		// Corrupt size file: fall through to backfill.
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return 0, fmt.Errorf("while reading layer size: %w", err)
+	if n, ok, err := recordedLayerSize(layerDir); err != nil || ok {
+		return n, err
 	}
+	total := walkLayerSize(layerDir)
+	// Best-effort write; the walked total is valid regardless. The write
+	// bumps the dir mtime and deliberately does NOT restore it: restoring
+	// could rewind a concurrent ensureLayer reuse-touch and defeat
+	// retireLayer's freshness veto. The bump just makes a freshly
+	// backfilled layer read as recently used for one min-age window.
+	_ = os.WriteFile(filepath.Join(layerDir, layerSizeFileName), []byte(strconv.FormatInt(total, 10)+"\n"), 0o600)
+	return total, nil
+}
 
+// layerSizeReadOnly is layerSize without the backfill write, for dry-run
+// eviction: "dry run mutates nothing" includes derived metadata.
+func (s *Store) layerSizeReadOnly(layerDir string) (int64, error) {
+	if n, ok, err := recordedLayerSize(layerDir); err != nil || ok {
+		return n, err
+	}
+	return walkLayerSize(layerDir), nil
+}
+
+// recordedLayerSize reads the layer's size file. ok is false when the file
+// is absent or corrupt (the caller falls back to walking the tree).
+func recordedLayerSize(layerDir string) (n int64, ok bool, err error) {
+	b, err := os.ReadFile(filepath.Join(layerDir, layerSizeFileName))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return 0, false, nil
+		}
+		return 0, false, fmt.Errorf("while reading layer size: %w", err)
+	}
+	n, perr := strconv.ParseInt(strings.TrimSpace(string(b)), 10, 64)
+	if perr != nil {
+		return 0, false, nil
+	}
+	return n, true, nil
+}
+
+// walkLayerSize sums regular-file sizes under the layer's fs tree.
+func walkLayerSize(layerDir string) int64 {
 	var total int64
 	fsRoot := filepath.Join(layerDir, layerFSDirName)
 	// The callback swallows every error (skip-and-under-count contract),
@@ -90,13 +120,7 @@ func (s *Store) layerSize(layerDir string) (int64, error) {
 		}
 		return nil
 	})
-	// Preserve the dir mtime (the eviction age signal) across the write.
-	if fi, statErr := os.Stat(layerDir); statErr == nil {
-		if err := os.WriteFile(filepath.Join(layerDir, layerSizeFileName), []byte(strconv.FormatInt(total, 10)+"\n"), 0o600); err == nil {
-			_ = os.Chtimes(layerDir, fi.ModTime(), fi.ModTime())
-		}
-	}
-	return total, nil
+	return total
 }
 
 // CacheSize returns the sum of recorded sizes of every layer in the pool

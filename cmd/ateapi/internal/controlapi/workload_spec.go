@@ -37,9 +37,7 @@ const envSecretCacheTTL = 30 * time.Second
 // container env vars. Use this when downstream consumers (e.g. checkpoint
 // requests) don't need env entries materialized.
 func workloadSpecFromActorTemplate(actorTemplate *atev1alpha1.ActorTemplate, actor *ateapipb.Actor) (*ateletpb.WorkloadSpec, error) {
-	workloadSpec := &ateletpb.WorkloadSpec{
-		PauseImage: actorTemplate.Spec.PauseImage,
-	}
+	workloadSpec := &ateletpb.WorkloadSpec{}
 
 	// add volumes
 	for _, vol := range actorTemplate.Spec.Volumes {

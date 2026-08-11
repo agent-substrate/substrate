@@ -96,6 +96,10 @@ jobs:
       run: hack/run-microvm-demo-kind.sh --ateapi-client-auth=${{ matrix.ateapi-client-auth }}
     - name: Deploy gVisor counter demo
       run: hack/install-ate-kind.sh --deploy-demo-counter
+    - name: Deploy egress demo
+      # TestActorEgress in the networking suite builds its Actor from the
+      # ate-demo-egress/egress ActorTemplate, so the fixture has to exist before.
+      run: hack/install-ate-kind.sh --deploy-demo-egress
     - name: Wait for micro-VM golden snapshot
       run: |
         kubectl --context kind-kind wait --for=condition=Ready \

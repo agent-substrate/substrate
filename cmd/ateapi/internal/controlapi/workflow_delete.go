@@ -24,138 +24,113 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"k8s.io/apimachinery/pkg/util/wait"
 )
 
-// DeleteInput holds the immutable parameters requested by the client.
-type DeleteInput struct {
-	ActorRef resources.ActorRef
+// DeleteActor executes the workflow to delete an actor. Idempotent.
+func (w *ActorWorkflow) DeleteActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error) {
+	ctx, lock, err := w.acquireActorLock(ctx, actorRef)
+	if err != nil {
+		return nil, err
+	}
+	defer lock.Close()
+
+	actor, err := w.loadActorForDelete(ctx, actorRef)
+	if err != nil {
+		return nil, err
+	}
+	if actor, err = w.ensureMarkedDeleting(ctx, actorRef, actor); err != nil {
+		return nil, err
+	}
+	if err := w.ensureVolumesDeleted(ctx, actor); err != nil {
+		return nil, err
+	}
+	return w.finalizeDeleted(ctx, actorRef)
 }
 
-// DeleteState holds the mutable state loaded and modified during execution.
-type DeleteState struct {
-	Actor        *ateapipb.Actor
-	DeletedActor *ateapipb.Actor
-}
+// loadActorForDelete fetches the current actor record.
+func (w *ActorWorkflow) loadActorForDelete(ctx context.Context, actorRef resources.ActorRef) (_ *ateapipb.Actor, err error) {
+	ctx, done := stepSpan(ctx, "LoadActorForDelete")
+	defer func() { err = done(err) }()
 
-type LoadActorForDeleteStep struct {
-	store store.Interface
-}
-
-func (s *LoadActorForDeleteStep) Name() string { return "LoadActorForDelete" }
-func (s *LoadActorForDeleteStep) IsComplete(ctx context.Context, input *DeleteInput, state *DeleteState) (bool, error) {
-	// Always run to get the freshest state
-	return false, nil
-}
-func (s *LoadActorForDeleteStep) CheckPrerequisite(ctx context.Context, input *DeleteInput, state *DeleteState) error {
-	return nil
-}
-func (s *LoadActorForDeleteStep) Execute(ctx context.Context, input *DeleteInput, state *DeleteState) error {
-	actor, err := s.store.GetActor(ctx, input.ActorRef)
+	actor, err := w.store.GetActor(ctx, actorRef)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return status.Errorf(codes.NotFound, "Actor %s not found", input.ActorRef)
+			return nil, status.Errorf(codes.NotFound, "Actor %s not found", actorRef)
 		}
-		return fmt.Errorf("while fetching actor: %w", err)
+		return nil, fmt.Errorf("while fetching actor: %w", err)
 	}
-	state.Actor = actor
-	return nil
+	return actor, nil
 }
 
-func (s *LoadActorForDeleteStep) RetryBackoff() *wait.Backoff { return nil }
+// ensureMarkedDeleting transitions the actor and its volumes to DELETING and
+// persists the change, returning the stored copy. Skips when a previous
+// attempt already marked the actor.
+func (w *ActorWorkflow) ensureMarkedDeleting(ctx context.Context, actorRef resources.ActorRef, actor *ateapipb.Actor) (_ *ateapipb.Actor, err error) {
+	ctx, done := stepSpan(ctx, "MarkDeleting")
+	defer func() { err = done(err) }()
 
-type MarkDeletingStep struct {
-	store store.Interface
-}
+	if actor.GetStatus() == ateapipb.Actor_STATUS_DELETING {
+		markSkipped(ctx, "actor already DELETING")
+		return actor, nil
+	}
+	if actor.GetStatus() != ateapipb.Actor_STATUS_SUSPENDED &&
+		actor.GetStatus() != ateapipb.Actor_STATUS_CRASHED {
+		return nil, status.Errorf(codes.FailedPrecondition, "Actor %s is not in a deletable status (status: %v)", actorRef, actor.GetStatus())
+	}
 
-func (s *MarkDeletingStep) Name() string { return "MarkDeleting" }
-func (s *MarkDeletingStep) IsComplete(ctx context.Context, input *DeleteInput, state *DeleteState) (bool, error) {
-	return state.Actor.GetStatus() == ateapipb.Actor_STATUS_DELETING, nil
-}
-func (s *MarkDeletingStep) CheckPrerequisite(ctx context.Context, input *DeleteInput, state *DeleteState) error {
-	if state.Actor.GetStatus() != ateapipb.Actor_STATUS_SUSPENDED &&
-		state.Actor.GetStatus() != ateapipb.Actor_STATUS_CRASHED &&
-		state.Actor.GetStatus() != ateapipb.Actor_STATUS_DELETING {
-		return status.Errorf(codes.FailedPrecondition, "Actor %s is not in a deletable status (status: %v)", input.ActorRef, state.Actor.GetStatus())
-	}
-	return nil
-}
-func (s *MarkDeletingStep) Execute(ctx context.Context, input *DeleteInput, state *DeleteState) error {
-	state.Actor.Status = ateapipb.Actor_STATUS_DELETING
-	for _, vol := range state.Actor.GetActorVolumes() {
-		vol.Status = ateapipb.ExternalVolume_STATUS_DELETING
-	}
-	updated, err := s.store.UpdateActor(ctx, state.Actor, state.Actor.GetMetadata().GetVersion())
+	updated, err := w.store.UpdateActor(ctx, actorRef, func(dbActor *ateapipb.Actor) error {
+		if err := store.CheckActorPrecondition(dbActor, actor.GetMetadata().GetUid(), actor.GetMetadata().GetVersion()); err != nil {
+			return err
+		}
+		dbActor.Status = ateapipb.Actor_STATUS_DELETING
+		for _, vol := range dbActor.GetActorVolumes() {
+			vol.Status = ateapipb.ExternalVolume_STATUS_DELETING
+		}
+		return nil
+	})
 	if err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {
-			return status.Error(codes.Aborted, "concurrent update conflict, please retry")
+			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
 		}
-		return fmt.Errorf("while setting actor status to DELETING: %w", err)
+		return nil, fmt.Errorf("while setting actor status to DELETING: %w", err)
 	}
-	state.Actor = updated
-	return nil
+	return updated, nil
 }
 
-func (s *MarkDeletingStep) RetryBackoff() *wait.Backoff { return nil }
+// ensureVolumesDeleted removes the actor's external volumes. Volume deletion
+// is idempotent, so a re-entered workflow can safely run it again.
+func (w *ActorWorkflow) ensureVolumesDeleted(ctx context.Context, actor *ateapipb.Actor) (err error) {
+	ctx, done := stepSpan(ctx, "DeleteVolumes")
+	defer func() { err = done(err) }()
 
-type DeleteVolumesStep struct {
-	store          store.Interface
-	pluginRegistry VolumePluginRegistry
-}
-
-func (s *DeleteVolumesStep) Name() string { return "DeleteVolumes" }
-func (s *DeleteVolumesStep) IsComplete(ctx context.Context, input *DeleteInput, state *DeleteState) (bool, error) {
-	return false, nil
-}
-func (s *DeleteVolumesStep) CheckPrerequisite(ctx context.Context, input *DeleteInput, state *DeleteState) error {
-	if state.Actor.GetStatus() != ateapipb.Actor_STATUS_DELETING {
-		return status.Errorf(codes.FailedPrecondition, "DeleteVolumesStep prerequisite not met for Actor: %s (got: %v, want %s)", input.ActorRef, state.Actor.GetStatus(), ateapipb.Actor_STATUS_DELETING)
-	}
-	return nil
-}
-func (s *DeleteVolumesStep) Execute(ctx context.Context, input *DeleteInput, state *DeleteState) error {
-	if err := deleteActorVolumes(ctx, s.pluginRegistry, state.Actor.GetMetadata().GetUid(), state.Actor.GetActorVolumes()); err != nil {
+	if err := deleteActorVolumes(ctx, w.pluginRegistry, actor.GetMetadata().GetUid(), actor.GetActorVolumes()); err != nil {
 		return status.Errorf(codes.Internal, "while deleting actor volumes: %v", err)
 	}
 	return nil
 }
 
-func (s *DeleteVolumesStep) RetryBackoff() *wait.Backoff { return nil }
+// finalizeDeleted removes the actor from the store and returns the deleted
+// record. The store enforces that only a DELETING actor can be removed.
+func (w *ActorWorkflow) finalizeDeleted(ctx context.Context, actorRef resources.ActorRef) (_ *ateapipb.Actor, err error) {
+	ctx, done := stepSpan(ctx, "FinalizeDeleted")
+	defer func() { err = done(err) }()
 
-type FinalizeDeletedStep struct {
-	store store.Interface
-}
-
-func (s *FinalizeDeletedStep) Name() string { return "FinalizeDeleted" }
-func (s *FinalizeDeletedStep) IsComplete(ctx context.Context, input *DeleteInput, state *DeleteState) (bool, error) {
-	return state.DeletedActor != nil, nil
-}
-func (s *FinalizeDeletedStep) CheckPrerequisite(ctx context.Context, input *DeleteInput, state *DeleteState) error {
-	if state.Actor.GetStatus() != ateapipb.Actor_STATUS_DELETING {
-		return status.Errorf(codes.FailedPrecondition, "FinalizeDeletedStep prerequisite not met for Actor: %s (got: %v, want %s)", input.ActorRef, state.Actor.GetStatus(), ateapipb.Actor_STATUS_DELETING)
-	}
-	return nil
-}
-func (s *FinalizeDeletedStep) Execute(ctx context.Context, input *DeleteInput, state *DeleteState) error {
-	deleted, err := s.store.DeleteActor(ctx, input.ActorRef)
+	deleted, err := w.store.DeleteActor(ctx, actorRef)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
-			return status.Errorf(codes.NotFound, "Actor %s not found", input.ActorRef)
+			return nil, status.Errorf(codes.NotFound, "Actor %s not found", actorRef)
 		}
 		if errors.Is(err, store.ErrFailedPrecondition) {
-			current, getErr := s.store.GetActor(ctx, input.ActorRef)
+			current, getErr := w.store.GetActor(ctx, actorRef)
 			if getErr == nil {
-				return status.Errorf(codes.FailedPrecondition, "Actor %s is not in a deletable status (status: %v)", input.ActorRef, current.GetStatus())
+				return nil, status.Errorf(codes.FailedPrecondition, "Actor %s is not in a deletable status (status: %v)", actorRef, current.GetStatus())
 			}
-			return status.Errorf(codes.FailedPrecondition, "Actor %s is not in a deletable status", input.ActorRef)
+			return nil, status.Errorf(codes.FailedPrecondition, "Actor %s is not in a deletable status", actorRef)
 		}
 		if errors.Is(err, store.ErrVersionConflict) {
-			return status.Error(codes.Aborted, "concurrent update conflict, please retry")
+			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
 		}
-		return fmt.Errorf("while deleting actor from DB: %w", err)
+		return nil, fmt.Errorf("while deleting actor from DB: %w", err)
 	}
-	state.DeletedActor = deleted
-	return nil
+	return deleted, nil
 }
-
-func (s *FinalizeDeletedStep) RetryBackoff() *wait.Backoff { return nil }

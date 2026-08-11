@@ -213,7 +213,6 @@ func TestCreateActor_RejectsSnapshotWithExternalVolumes(t *testing.T) {
 	template, err := tc.substrateClient.ApiV1alpha1().ActorTemplates(ns).Create(context.Background(), &atev1alpha1.ActorTemplate{
 		ObjectMeta: metav1.ObjectMeta{Name: "tmpl1", Namespace: ns},
 		Spec: atev1alpha1.ActorTemplateSpec{
-			PauseImage:      "pause@sha256:abc",
 			SnapshotsConfig: atev1alpha1.SnapshotsConfig{Location: "gs://snapshots"},
 			Containers: []atev1alpha1.Container{{
 				Name: "main", Image: "main@sha256:abc", VolumeMounts: []atev1alpha1.VolumeMount{{Name: "data", MountPath: "/data"}},

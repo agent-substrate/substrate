@@ -144,6 +144,12 @@ func TestApplyDirFixups_SkipsShadowedPaths(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(rootfs, "afile"), nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
+	fiBefore, err := os.Lstat(filepath.Join(rootfs, "afile"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	expectedMode := fiBefore.Mode().Perm()
+
 	fixups := []dirFixup{
 		{Path: "missing", Mode: 0o700},
 		{Path: "afile", Mode: 0o700},
@@ -151,7 +157,7 @@ func TestApplyDirFixups_SkipsShadowedPaths(t *testing.T) {
 	if err := applyDirFixups(rootfs, fixups); err != nil {
 		t.Fatalf("apply: %v", err)
 	}
-	if fi, _ := os.Lstat(filepath.Join(rootfs, "afile")); fi.Mode().Perm() != 0o644 {
-		t.Errorf("non-directory was chmodded: %v", fi.Mode())
+	if fi, _ := os.Lstat(filepath.Join(rootfs, "afile")); fi.Mode().Perm() != expectedMode {
+		t.Errorf("non-directory was chmodded: %v (expected %v)", fi.Mode().Perm(), expectedMode)
 	}
 }

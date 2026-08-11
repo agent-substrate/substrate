@@ -65,7 +65,9 @@ type ControlClient interface {
 	CreateActor(ctx context.Context, in *CreateActorRequest, opts ...grpc.CallOption) (*Actor, error)
 	// Update mutable fields on an existing Actor.
 	UpdateActor(ctx context.Context, in *UpdateActorRequest, opts ...grpc.CallOption) (*Actor, error)
-	// Suspend a given actor to a new snapshot.
+	// Suspend a given actor to a new snapshot. A running actor is checkpointed
+	// on its worker; a paused actor's node-local snapshot is uploaded, narrowed
+	// to the template's commit scope where required (Full capture, Data commit).
 	SuspendActor(ctx context.Context, in *SuspendActorRequest, opts ...grpc.CallOption) (*SuspendActorResponse, error)
 	// Pause a given actor and keep its snapshots on node VM.
 	PauseActor(ctx context.Context, in *PauseActorRequest, opts ...grpc.CallOption) (*PauseActorResponse, error)
@@ -299,7 +301,9 @@ type ControlServer interface {
 	CreateActor(context.Context, *CreateActorRequest) (*Actor, error)
 	// Update mutable fields on an existing Actor.
 	UpdateActor(context.Context, *UpdateActorRequest) (*Actor, error)
-	// Suspend a given actor to a new snapshot.
+	// Suspend a given actor to a new snapshot. A running actor is checkpointed
+	// on its worker; a paused actor's node-local snapshot is uploaded, narrowed
+	// to the template's commit scope where required (Full capture, Data commit).
 	SuspendActor(context.Context, *SuspendActorRequest) (*SuspendActorResponse, error)
 	// Pause a given actor and keep its snapshots on node VM.
 	PauseActor(context.Context, *PauseActorRequest) (*PauseActorResponse, error)

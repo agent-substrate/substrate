@@ -181,6 +181,10 @@ type FakeAteletServer struct {
 	RestoreRequest *ateletpb.RestoreRequest
 	FailRestore    error
 	RestoreDelay   time.Duration
+
+	UploadCalled  bool
+	UploadRequest *ateletpb.UploadPausedCheckpointRequest
+	FailUpload    error
 }
 
 func (f *FakeAteletServer) Reset() {
@@ -198,6 +202,22 @@ func (f *FakeAteletServer) Reset() {
 	f.RestoreRequest = nil
 	f.FailRestore = nil
 	f.RestoreDelay = 0
+
+	f.UploadCalled = false
+	f.UploadRequest = nil
+	f.FailUpload = nil
+}
+
+func (f *FakeAteletServer) UploadPausedCheckpoint(ctx context.Context, req *ateletpb.UploadPausedCheckpointRequest) (*ateletpb.UploadPausedCheckpointResponse, error) {
+	f.Lock.Lock()
+	defer f.Lock.Unlock()
+
+	f.UploadCalled = true
+	f.UploadRequest = proto.Clone(req).(*ateletpb.UploadPausedCheckpointRequest)
+	if f.FailUpload != nil {
+		return nil, f.FailUpload
+	}
+	return &ateletpb.UploadPausedCheckpointResponse{}, nil
 }
 
 func (f *FakeAteletServer) Run(ctx context.Context, req *ateletpb.RunRequest) (*ateletpb.RunResponse, error) {
@@ -525,7 +545,6 @@ func createTemplateWithContainersAndVolumes(t *testing.T, tc *testContext, ns st
 			Namespace: ns,
 		},
 		Spec: atev1alpha1.ActorTemplateSpec{
-			PauseImage: "pause@sha256:abc",
 			SnapshotsConfig: atev1alpha1.SnapshotsConfig{
 				Location: "gs://fake-fake-fake",
 			},
@@ -574,6 +593,10 @@ func createTemplateWithContainersAndVolumes(t *testing.T, tc *testContext, ns st
 	}
 }
 
+// testPauseImage is the pause image the default test SandboxConfig carries;
+// it is what a resolved WorkloadSpec's sandbox assets should name.
+const testPauseImage = "pause@sha256:abc"
+
 // ensureDefaultGvisorSandboxConfig creates the cluster-scoped default gvisor
 // SandboxConfig (idempotently) and waits for it to appear in the lister.
 func ensureDefaultGvisorSandboxConfig(t *testing.T, tc *testContext) {
@@ -584,6 +607,7 @@ func ensureDefaultGvisorSandboxConfig(t *testing.T, tc *testContext) {
 		Spec: atev1alpha1.SandboxConfigSpec{
 			SandboxClass: atev1alpha1.SandboxClassGvisor,
 			Default:      true,
+			PauseImage:   testPauseImage,
 			Assets: map[string]map[string]atev1alpha1.AssetFile{
 				"amd64": {"runsc": {
 					URL:    "gs://gvisor/releases/nightly/2026-05-19/x86_64/runsc",
@@ -643,7 +667,6 @@ func createTemplateWithSelector(t *testing.T, tc *testContext, ns string, name s
 			Namespace: ns,
 		},
 		Spec: atev1alpha1.ActorTemplateSpec{
-			PauseImage: "pause@sha256:abc",
 			SnapshotsConfig: atev1alpha1.SnapshotsConfig{
 				Location: "gs://fake-fake-fake",
 			},
@@ -2447,7 +2470,7 @@ func TestUpdateActor_Preconditions(t *testing.T) {
 	// The uid from the deleted lifecycle must be rejected, even though the
 	// atespace/name it was observed under still resolves.
 	_, err := update(&ateapipb.ResourceMetadata{Uid: staleUID}, "other-lifecycle")
-	assertGrpcError(t, err, codes.Aborted, fmt.Sprintf("Actor %s/%s has uid %s, not %s", testAtespace, testActorID, uid, staleUID))
+	assertGrpcError(t, err, codes.Aborted, fmt.Sprintf("actor %s/%s not found with uid %s", testAtespace, testActorID, staleUID))
 
 	// An unguarded update is last-writer-wins, and moves the resource past the
 	// version observed above.
@@ -2494,7 +2517,7 @@ func TestUpdateActor_NotFound(t *testing.T) {
 		Actor:      &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "does-not-exist"}},
 		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"worker_selector"}},
 	})
-	assertGrpcError(t, err, codes.NotFound, "Actor test-atespace/does-not-exist not found")
+	assertGrpcError(t, err, codes.NotFound, "actor test-atespace/does-not-exist not found")
 }
 
 func TestUpdateActorSnapshotTag_Success(t *testing.T) {
@@ -3287,21 +3310,19 @@ func TestDeleteActor_Crashed(t *testing.T) {
 
 	createTemplate(t, tc, ns)
 
-	_, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+	if _, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
 		Metadata:               &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "id1"},
 		ActorTemplateNamespace: ns,
 		ActorTemplateName:      "tmpl1",
-	}})
-	if err != nil {
+	}}); err != nil {
 		t.Fatalf("CreateActor failed: %v", err)
 	}
 
-	actor, err := tc.persistence.GetActor(context.Background(), resources.ActorRef{Atespace: testAtespace, Name: "id1"})
-	if err != nil {
-		t.Fatalf("GetActor failed: %v", err)
-	}
-	actor.Status = ateapipb.Actor_STATUS_CRASHED
-	if _, err := tc.persistence.UpdateActor(context.Background(), actor, actor.GetMetadata().GetVersion()); err != nil {
+	actorRef := resources.ActorRef{Atespace: testAtespace, Name: "id1"}
+	if _, err := tc.persistence.UpdateActor(context.Background(), actorRef, func(dbActor *ateapipb.Actor) error {
+		dbActor.Status = ateapipb.Actor_STATUS_CRASHED
+		return nil
+	}); err != nil {
 		t.Fatalf("UpdateActor failed: %v", err)
 	}
 
@@ -3582,4 +3603,165 @@ func TestDeleteAtespace_NotFound(t *testing.T) {
 func assertValidateErr(t *testing.T, got field.ErrorList, want field.ErrorList) {
 	t.Helper()
 	field.ErrorMatcher{}.ByType().ByField().ByValue().Test(t, want, got)
+}
+
+// TestSuspendActor_FromPaused suspends a PAUSED actor end-to-end: instead of
+// checkpointing a running workload, ateapi asks the atelet on the node
+// holding the pause snapshot to upload it, then finalizes the actor with a
+// durable ActorSnapshot and no node pinning left behind.
+func TestSuspendActor_FromPaused(t *testing.T) {
+	ns := namespaceForTest("ns-suspend-paused")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	createTemplate(t, tc, ns)
+	createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+
+	name := "id1"
+	_, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+		Metadata:               &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: name},
+		ActorTemplateNamespace: ns,
+		ActorTemplateName:      "tmpl1",
+	}})
+	if err != nil {
+		t.Fatalf("CreateActor failed: %v", err)
+	}
+	if _, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
+	}); err != nil {
+		t.Fatalf("ResumeActor failed: %v", err)
+	}
+	if _, err := tc.client.PauseActor(context.Background(), &ateapipb.PauseActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
+	}); err != nil {
+		t.Fatalf("PauseActor failed: %v", err)
+	}
+	paused, err := tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
+	})
+	if err != nil {
+		t.Fatalf("GetActor failed: %v", err)
+	}
+	// Drop the pause's Checkpoint call so the suspend's atelet traffic is
+	// observable in isolation.
+	tc.fakeAtelet.Reset()
+
+	suspended, err := tc.client.SuspendActor(context.Background(), &ateapipb.SuspendActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
+	})
+	if err != nil {
+		t.Fatalf("SuspendActor failed: %v", err)
+	}
+
+	if !tc.fakeAtelet.UploadCalled {
+		t.Fatal("expected atelet UploadPausedCheckpoint to be called")
+	}
+	if tc.fakeAtelet.CheckpointCalled {
+		t.Error("atelet Checkpoint called for a paused actor; there is no workload to checkpoint")
+	}
+	upload := tc.fakeAtelet.UploadRequest
+	if got, want := upload.GetLocalSnapshotName(), paused.GetLocalSnapshotInfo().GetSnapshotName(); got != want {
+		t.Errorf("upload local_snapshot_name = %q, want the pause snapshot %q", got, want)
+	}
+	if got, want := upload.GetAtespace(), testAtespace; got != want {
+		t.Errorf("upload atespace = %q, want %q", got, want)
+	}
+	if got := upload.GetDesiredScope(); got != ateletpb.SnapshotScope_SNAPSHOT_SCOPE_FULL {
+		t.Errorf("upload desired_scope = %v, want FULL (template default)", got)
+	}
+
+	actor := suspended.GetActor()
+	if actor.GetStatus() != ateapipb.Actor_STATUS_SUSPENDED {
+		t.Errorf("status = %v, want SUSPENDED", actor.GetStatus())
+	}
+	if actor.GetLocalSnapshotInfo() != nil {
+		t.Errorf("LocalSnapshotInfo = %v, want cleared (node pinning must not survive suspend)", actor.GetLocalSnapshotInfo())
+	}
+	ref := actor.GetLatestSnapshot()
+	if ref.GetName() == "" {
+		t.Fatalf("SuspendActor returned no ActorSnapshot reference: %v", suspended)
+	}
+	snapshot, err := tc.client.GetActorSnapshot(context.Background(), &ateapipb.GetActorSnapshotRequest{
+		Snapshot: &ateapipb.ActorSnapshotRef{Reference: &ateapipb.ActorSnapshotRef_Snapshot{Snapshot: ref}},
+	})
+	if err != nil {
+		t.Fatalf("GetActorSnapshot failed: %v", err)
+	}
+	if got, want := snapshot.GetSnapshotUri(), upload.GetDestinationSnapshotUri(); got != want {
+		t.Errorf("snapshot URI = %q, want the upload destination %q", got, want)
+	}
+	if got := snapshot.GetContentScope(); got != ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL {
+		t.Errorf("snapshot ContentScope = %v, want FULL", got)
+	}
+}
+
+// TestSuspendActor_FromPaused_RetryAfterUploadFailure exercises client-driven
+// forward recovery on the paused path: a failed upload leaves the actor
+// SUSPENDING with its local snapshot record intact, and a retry completes the
+// suspend against the same destination.
+func TestSuspendActor_FromPaused_RetryAfterUploadFailure(t *testing.T) {
+	ns := namespaceForTest("ns-suspend-paused-retry")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+
+	createTemplate(t, tc, ns)
+	createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+
+	name := "id1"
+	_, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
+		Metadata:               &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: name},
+		ActorTemplateNamespace: ns,
+		ActorTemplateName:      "tmpl1",
+	}})
+	if err != nil {
+		t.Fatalf("CreateActor failed: %v", err)
+	}
+	if _, err := tc.client.ResumeActor(context.Background(), &ateapipb.ResumeActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
+	}); err != nil {
+		t.Fatalf("ResumeActor failed: %v", err)
+	}
+	if _, err := tc.client.PauseActor(context.Background(), &ateapipb.PauseActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
+	}); err != nil {
+		t.Fatalf("PauseActor failed: %v", err)
+	}
+
+	tc.fakeAtelet.Reset()
+	tc.fakeAtelet.FailUpload = status.Error(codes.Unavailable, "injected upload failure")
+	if _, err := tc.client.SuspendActor(context.Background(), &ateapipb.SuspendActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
+	}); err == nil {
+		t.Fatal("SuspendActor succeeded despite failing upload")
+	}
+
+	stuck, err := tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
+	})
+	if err != nil {
+		t.Fatalf("GetActor failed: %v", err)
+	}
+	if stuck.GetStatus() != ateapipb.Actor_STATUS_SUSPENDING {
+		t.Fatalf("status after failed upload = %v, want SUSPENDING (retryable)", stuck.GetStatus())
+	}
+	if stuck.GetLocalSnapshotInfo() == nil {
+		t.Fatal("LocalSnapshotInfo cleared by a failed upload; the retry could never find the snapshot")
+	}
+	firstDestination := tc.fakeAtelet.UploadRequest.GetDestinationSnapshotUri()
+
+	tc.fakeAtelet.Lock.Lock()
+	tc.fakeAtelet.FailUpload = nil
+	tc.fakeAtelet.Lock.Unlock()
+	retried, err := tc.client.SuspendActor(context.Background(), &ateapipb.SuspendActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
+	})
+	if err != nil {
+		t.Fatalf("SuspendActor retry failed: %v", err)
+	}
+	if got := retried.GetActor().GetStatus(); got != ateapipb.Actor_STATUS_SUSPENDED {
+		t.Errorf("status after retry = %v, want SUSPENDED", got)
+	}
+	if got := tc.fakeAtelet.UploadRequest.GetDestinationSnapshotUri(); got != firstDestination {
+		t.Errorf("retry destination = %q, want the original %q (idempotent upload target)", got, firstDestination)
+	}
 }

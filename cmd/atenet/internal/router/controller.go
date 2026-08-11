@@ -23,14 +23,15 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-// Controller monitors ActorTemplates and coordinates configuration updates
-// for the Envoy xDS and external processing servers.
+// Controller monitors ActorTemplates and coordinates configuration updates for
+// the ingress Envoy's xDS server. It is part of the ingress control plane and
+// only runs in a mode that serves ingress — the egress Envoy is statically
+// configured and has no templates to watch.
 type Controller struct {
-	k8sClient  client.Client
-	clientset  kubernetes.Interface
-	cfg        routerConfig
-	xdsSrv     *XdsServer
-	extprocSrv *ExtProcServer
+	k8sClient client.Client
+	clientset kubernetes.Interface
+	cfg       routerConfig
+	xdsSrv    *XdsServer
 
 	atStore     atStore
 	envoyRunner *envoyrunner
@@ -41,7 +42,6 @@ func NewController(
 	clientset kubernetes.Interface,
 	cfg routerConfig,
 	xdsSrv *XdsServer,
-	extprocSrv *ExtProcServer,
 ) *Controller {
 	xdsSrv.SetConfig(cfg.HttpPort, cfg.ExtprocPort, cfg.ExtprocAddr)
 
@@ -53,11 +53,10 @@ func NewController(
 	}
 
 	return &Controller{
-		k8sClient:  k8sClient,
-		clientset:  clientset,
-		cfg:        cfg,
-		xdsSrv:     xdsSrv,
-		extprocSrv: extprocSrv,
+		k8sClient: k8sClient,
+		clientset: clientset,
+		cfg:       cfg,
+		xdsSrv:    xdsSrv,
 
 		atStore:     store,
 		envoyRunner: newEnvoyRunner(k8sClient, cfg),

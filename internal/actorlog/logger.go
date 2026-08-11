@@ -123,6 +123,9 @@ func (al *ActorLogger) WrapContainerLogs(r io.Reader, actorRef resources.ActorRe
 			dec.UseNumber()
 
 			unmarshalErr := dec.Decode(&m)
+			if unmarshalErr == nil && m == nil {
+				unmarshalErr = errors.New("JSON value is not an object")
+			}
 			if unmarshalErr == nil {
 				var trailing any
 				if err := dec.Decode(&trailing); err != io.EOF {
@@ -155,6 +158,7 @@ func (al *ActorLogger) WrapContainerLogs(r io.Reader, actorRef resources.ActorRe
 				}
 				labels["ate.dev/actor_atespace"] = actorRef.Atespace
 				labels["ate.dev/actor_name"] = actorRef.Name
+				labels["ate.dev/actor_uid"] = actorUID
 				labels["ate.dev/actor_template_namespace"] = actorTemplateNamespace
 				labels["ate.dev/actor_template_name"] = actorTemplateName
 				labels["ate.dev/container_name"] = containerName

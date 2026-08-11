@@ -358,17 +358,6 @@ type SnapshotsConfig struct {
 // +kubebuilder:validation:XValidation:rule="!has(self.sandboxClass) || self.sandboxClass != 'microvm' || !has(self.volumes) || !self.volumes.exists(v, has(v.externalVolumeTemplate))",message="ExternalVolumes are not supported when sandboxClass is 'microvm'"
 // +kubebuilder:validation:XValidation:rule="(has(self.sandboxClass) && self.sandboxClass == 'microvm') || !has(self.snapshotsConfig.onResume) || (has(self.snapshotsConfig.onResume.fromData) ? self.snapshotsConfig.onResume.fromData : 'ColdBoot') != 'Golden'",message="onResume.fromData: Golden is not supported when sandboxClass is 'gvisor'"
 type ActorTemplateSpec struct {
-	// PauseImage is the container to use as the root sandbox container.
-	//
-	// Typically, set it to [1] for on-gcp, and [2] for off-gcp
-	//
-	//   - [1] gcr.io/gke-release/pause@sha256:bcbd57ba5653580ec647b16d8163cdd1112df3609129b01f912a8032e48265da
-	//   - [2] registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4
-	//
-	// +required
-	// +kubebuilder:validation:XValidation:rule="self.contains('@')",message="All images must be pinned (changing the image invalidates snapshots)"
-	PauseImage string `json:"pauseImage,omitempty"`
-
 	// Containers is the workload definition.
 	//
 	// +optional

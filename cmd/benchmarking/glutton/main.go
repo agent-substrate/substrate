@@ -29,6 +29,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -118,6 +119,15 @@ func main() {
 		slog.String("mode", *mode),
 	)
 
+	// ateom blocks RestoreWorkload until /readyz returns 200, so ResumeActor
+	// cannot report success before this listener is reachable. The probe is
+	// an HTTP GET, so both modes must serve it.
+	mux := http.NewServeMux()
+	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	var handler http.Handler
 	switch *mode {
 	case "grpc":
 		srv := grpc.NewServer(
@@ -125,26 +135,45 @@ func main() {
 		)
 		glutton.RegisterGluttonServer(srv, svc)
 		reflection.Register(srv)
-		if err := srv.Serve(lis); err != nil {
-			serverboot.Fatal(ctx, "Failed to serve", err)
-		}
+		handler = splitGRPC(srv, mux)
 	case "http":
 		// HTTP/1.1 mode: a single /ping route that consumes
 		// proto.Marshal(PingRequest) and returns proto.Marshal(PingResponse).
 		// Only Ping is exposed in HTTP mode; the other RPCs remain gRPC-only
 		// (re-exposable as additional routes if/when needed).
-		mux := http.NewServeMux()
 		mux.HandleFunc("/ping", httpPingHandler(svc))
 		// otelhttp at the mux level + per-handler span follows
 		// docs/dev/best-practices/tracing.md: extract incoming context,
 		// then name the span after the operation in each handler.
-		httpSrv := &http.Server{Handler: otelhttp.NewHandler(mux, "/")}
-		if err := httpSrv.Serve(lis); err != nil {
-			serverboot.Fatal(ctx, "Failed to serve", err)
-		}
+		handler = otelhttp.NewHandler(mux, "/")
 	default:
 		serverboot.Fatal(ctx, "Invalid --mode", fmt.Errorf("must be grpc or http: %q", *mode))
 	}
+	if err := newServer(handler).Serve(lis); err != nil {
+		serverboot.Fatal(ctx, "Failed to serve", err)
+	}
+}
+
+// newServer enables unencrypted HTTP/2 so gRPC works on the plaintext
+// listener, alongside HTTP/1.1 for the readyz probe.
+func newServer(handler http.Handler) *http.Server {
+	protocols := new(http.Protocols)
+	protocols.SetHTTP1(true)
+	protocols.SetUnencryptedHTTP2(true)
+	return &http.Server{Handler: handler, Protocols: protocols}
+}
+
+// splitGRPC serves gRPC and plain HTTP on one listener: requests with a
+// gRPC content-type go to grpcSrv, everything else to rest. All glutton
+// RPCs are unary, which is what grpc.Server.ServeHTTP supports.
+func splitGRPC(grpcSrv, rest http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.ProtoMajor == 2 && strings.HasPrefix(r.Header.Get("Content-Type"), "application/grpc") {
+			grpcSrv.ServeHTTP(w, r)
+			return
+		}
+		rest.ServeHTTP(w, r)
+	})
 }
 
 // httpPingHandler accepts a POST whose body is proto.Marshal(PingRequest) and

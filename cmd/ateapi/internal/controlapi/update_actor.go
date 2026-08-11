@@ -41,30 +41,22 @@ func (s *Service) UpdateActor(ctx context.Context, req *ateapipb.UpdateActorRequ
 	actorRef := resources.ActorRefFromActor(in)
 	setSpanActorRefAttributes(ctx, actorRef)
 
-	actor, err := s.persistence.GetActor(ctx, actorRef)
-	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, status.Errorf(codes.NotFound, "Actor %s not found", actorRef)
+	updated, err := s.persistence.UpdateActor(ctx, actorRef, func(dbActor *ateapipb.Actor) error {
+		if err := store.CheckActorPrecondition(dbActor, in.GetMetadata().GetUid(), in.GetMetadata().GetVersion()); err != nil {
+			return err
 		}
-		return nil, fmt.Errorf("while getting actor: %w", err)
-	}
-
-	// UID and version preconditions
-	if uid := in.GetMetadata().GetUid(); uid != "" && uid != actor.GetMetadata().GetUid() {
-		return nil, status.Errorf(codes.Aborted, "Actor %s has uid %s, not %s", actorRef, actor.GetMetadata().GetUid(), uid)
-	}
-
-	expectedVersion := actor.GetMetadata().GetVersion()
-	if version := in.GetMetadata().GetVersion(); version != 0 {
-		expectedVersion = version
-	}
-
-	applyUpdateMask(actor, in, req.GetUpdateMask(), actorMutableFields)
-
-	updated, err := s.persistence.UpdateActor(ctx, actor, expectedVersion)
+		applyUpdateMask(dbActor, in, req.GetUpdateMask(), actorMutableFields)
+		return nil
+	})
 	if err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {
 			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
+		}
+		if errors.Is(err, store.ErrUIDConflict) {
+			return nil, status.Errorf(codes.Aborted, "actor %s/%s not found with uid %s", in.GetMetadata().GetAtespace(), in.GetMetadata().GetName(), in.GetMetadata().GetUid())
+		}
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, status.Errorf(codes.NotFound, "actor %s not found", actorRef)
 		}
 		return nil, fmt.Errorf("while updating actor: %w", err)
 	}

@@ -67,15 +67,20 @@ type assetEntry struct {
 }
 
 // sandboxAssetsRecord is the sandbox runtime an actor is running, projected onto
-// the local node's architecture: the sandbox class plus the asset set keyed by
-// asset name (gVisor uses a single "gvisor" release-tarball asset; records
-// written before the tarball release mechanism use a bare "runsc" asset).
+// the local node's architecture: the sandbox class and pause image plus the
+// asset set keyed by asset name (gVisor uses a single "gvisor" release-tarball
+// asset; records written before the tarball release mechanism use a bare
+// "runsc" asset).
 // It is both the per-actor on-node record (written at Run/Restore, read at
 // Checkpoint) and the snapshot manifest (written at Checkpoint, read at
 // Restore).
 type sandboxAssetsRecord struct {
 	SandboxClass string                `json:"sandboxClass"`
 	Assets       map[string]assetEntry `json:"assets"`
+	// PauseImage is the root sandbox container's image. It is recorded here
+	// rather than taken from the request at Restore so a snapshot is rebuilt
+	// with the same sandbox it was captured from.
+	PauseImage string `json:"pauseImage"`
 	// Actor identity makes a flat snapshot self-identifying if control-plane
 	// persistence is unavailable.
 	Atespace               string `json:"atespace,omitempty"`
@@ -107,8 +112,12 @@ func recordFromRequest(sa *ateletpb.SandboxAssets) (*sandboxAssetsRecord, error)
 	if archAssets == nil || len(archAssets.GetFiles()) == 0 {
 		return nil, fmt.Errorf("sandbox_assets has no assets for architecture %q", arch)
 	}
+	if sa.GetPauseImage() == "" {
+		return nil, fmt.Errorf("sandbox_assets has no pause_image")
+	}
 	rec := &sandboxAssetsRecord{
 		SandboxClass: sa.GetSandboxClass(),
+		PauseImage:   sa.GetPauseImage(),
 		Assets:       make(map[string]assetEntry, len(archAssets.GetFiles())),
 	}
 	for name, f := range archAssets.GetFiles() {
@@ -415,6 +424,12 @@ func unmarshalSandboxRecord(data []byte) (*sandboxAssetsRecord, error) {
 	rec := &sandboxAssetsRecord{}
 	if err := json.Unmarshal(data, rec); err != nil {
 		return nil, fmt.Errorf("%w: while parsing sandbox record/manifest: %w", ateerrors.ReasonInvalidSandboxAsset, err)
+	}
+	// Fail loudly rather than let an empty image reach the image pull: a record
+	// without one predates the pause image moving into the sandbox config, and
+	// its snapshot cannot be rebuilt with a known-matching sandbox.
+	if rec.PauseImage == "" {
+		return nil, fmt.Errorf("%w: sandbox record/manifest has no pauseImage", ateerrors.ReasonInvalidSandboxAsset)
 	}
 	return rec, nil
 }

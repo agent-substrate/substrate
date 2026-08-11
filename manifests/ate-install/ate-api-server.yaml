@@ -92,7 +92,6 @@ spec:
       - name: ate-api-server
         image: ko://github.com/agent-substrate/substrate/cmd/ateapi
         args:
-          - "--grpc-listen-addr=0.0.0.0:443"
           - "--grpc-server-cred-bundle=/run/servicedns.podcert.ate.dev/credential-bundle.pem"
           - --redis-cluster-address=@env
           - --redis-ca-certs=/etc/valkey-ca/ca.crt
@@ -105,6 +104,12 @@ spec:
           - --actor-id-ca-pool=/run/actor-id-ca-pool/pool.json
           - --atelet-client-cred-bundle=/run/podidentity.podcert.ate.dev/credential-bundle.pem
           - --pod-identity-ca-certs=/run/podidentity.podcert.ate.dev/trust-bundle.pem
+          # TODO(lior):Remove when egress API pr is merged. This turns on pluggable actor
+          # egress cluster-wide. ateapi stamps this address onto every atelet
+          # Run/Restore, ateom hands it to atunnel, and actor TCP egress is
+          # transparently redirected (nftables) into atunnel, which wraps it in
+          # mTLS + HTTP CONNECT to the egress gateway.
+          - --egress-gateway-address=atenet-egress.ate-system.svc:443
           # Graceful shutdown knobs. The sum must fit within terminationGracePeriodSeconds.
           - --drain-delay=13s
           - --drain-timeout=15s
@@ -243,6 +248,8 @@ spec:
   # Headless (i.e. `clusterIP: None`) services make DNS return one A record per
   # ready pod so gRPC clients can load balance client-side.
   clusterIP: None
+  # Prefer, not Require: Require fails Service creation on a single-stack cluster.
+  ipFamilyPolicy: PreferDualStack
   selector:
     app: ate-api-server
   ports:

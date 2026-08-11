@@ -474,7 +474,7 @@ advertises the 4318 HTTP endpoint.
 use.** Envoy's tracer cluster is plaintext h2c, so an `https://` endpoint is
 neither honored nor silently downgraded: the router logs a warning, turns
 Envoy-side tracing off, and starts normally. Its own spans are unaffected.
-Taking the xDS control plane down for every Envoy in the mesh over a tracing
+Taking the xDS control plane down for every ingress Envoy over a tracing
 endpoint that works fine for the router's own exporter would be the larger
 failure.
 

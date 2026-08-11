@@ -31,7 +31,9 @@ var (
 	// ErrAlreadyExists indicates that the object already exists in the DB.
 	ErrAlreadyExists = errors.New("persistence: already exists")
 
-	// ErrVersionConflict indicates an update's expected version did not match the stored one.
+	// ErrVersionConflict indicates a write lost to a concurrent one: either a
+	// precondition pinned a version the stored object is no longer at, or the
+	// store's own retry budget was exhausted losing the same race.
 	ErrVersionConflict = errors.New("persistence: version conflict")
 
 	// ErrFailedPrecondition indicates the object is not in the required state for the operation.
@@ -39,6 +41,11 @@ var (
 
 	// ErrLockConflict indicates that a distributed lock is already held by another client.
 	ErrLockConflict = errors.New("persistence: lock conflict")
+
+	// ErrUIDConflict indicates a precondition pinned a uid the stored object does
+	// not carry, meaning the name now addresses a different incarnation. Retrying
+	// can never resolve it.
+	ErrUIDConflict = errors.New("persistence: uid conflict")
 )
 
 // Interface defines the contract for the persistence layer storing actor state.
@@ -51,10 +58,19 @@ type Interface interface {
 	// mutated. Returns ErrAlreadyExists if key is taken.
 	CreateActor(ctx context.Context, actor *ateapipb.Actor) (*ateapipb.Actor, error)
 
-	// Updates actor state with optimistic concurrency check and returns the stored
-	// resource with advanced metadata (version, update_time). The input is not
-	// mutated. Returns ErrNotFound if missing, or ErrVersionConflict on version mismatch.
-	UpdateActor(ctx context.Context, actor *ateapipb.Actor, expectedVersion int64) (*ateapipb.Actor, error)
+	// UpdateActor performs a transactional read-modify-write and returns the updated
+	// actor with advanced metadata (version, update_time).
+	//
+	// mutate receives the stored actor and edits it in place. The mutated actor is
+	// written iff mutate returns nil. A mutate that must only land on the actor the
+	// caller observed guards itself with CheckActorPrecondition.
+	//
+	// mutate may run more than once, because the store retries when a concurrent
+	// write invalidates the transaction.
+	//
+	// Returns ErrNotFound if missing, ErrVersionConflict if the retry budget is
+	// exhausted, or the mutate's error verbatim otherwise.
+	UpdateActor(ctx context.Context, actorRef resources.ActorRef, mutate func(dbActor *ateapipb.Actor) error) (*ateapipb.Actor, error)
 
 	// Removes an actor and returns the deleted resource. Returns ErrNotFound if
 	// missing, or ErrFailedPrecondition if not suspended.
@@ -134,6 +150,33 @@ type Interface interface {
 
 	// DebugClearAll drop all data from the database. Useful for debugging / local testing/
 	DebugClearAll(ctx context.Context) error
+}
+
+const (
+	// AnyUID accepts whichever actor holds the atespace and name at write time.
+	AnyUID = ""
+	// AnyVersion accepts whatever revision the store is at.
+	AnyVersion int64 = 0
+)
+
+// CheckActorPrecondition reports whether dbActor is still the actor the caller
+// observed, pinned on the uid and version it read, each waivable with AnyUID or
+// AnyVersion. Version guards against concurrent writes, uid against actor
+// atespace/name re-use across actor lifecycles.
+//
+// Call it at the top of an UpdateActor mutation so the write is conditional on
+// the stored actor the transaction actually read, not on one read earlier
+// outside of it. Returns ErrUIDConflict or ErrVersionConflict, which UpdateActor
+// surfaces verbatim.
+func CheckActorPrecondition(dbActor *ateapipb.Actor, uid string, version int64) error {
+	md := dbActor.GetMetadata()
+	if uid != AnyUID && uid != md.GetUid() {
+		return ErrUIDConflict
+	}
+	if version != AnyVersion && version != md.GetVersion() {
+		return ErrVersionConflict
+	}
+	return nil
 }
 
 // WorkerEventType indicates the type of change to a Worker.
