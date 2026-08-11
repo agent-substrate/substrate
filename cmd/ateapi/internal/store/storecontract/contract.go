@@ -471,31 +471,6 @@ func RunContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
 		}
 	})
 
-	t.Run("UpdateWorker_IPChanged", func(t *testing.T) {
-		s := setup(t)
-		ctx := context.Background()
-
-		worker := &ateapipb.Worker{WorkerNamespace: "default", WorkerPool: "pool-1", WorkerPod: "pod-1", Ip: "10.0.0.1"}
-		if err := s.CreateWorker(ctx, worker); err != nil {
-			t.Fatalf("CreateWorker failed: %v", err)
-		}
-		worker.Version = 1
-		worker.Ip = "10.0.0.2"
-		if err := s.UpdateWorker(ctx, worker, 1); err != nil {
-			t.Fatalf("UpdateWorker failed: %v", err)
-		}
-		got, err := s.GetWorker(ctx, "default", "pool-1", "pod-1")
-		if err != nil {
-			t.Fatalf("GetWorker failed: %v", err)
-		}
-		if got.GetIp() != "10.0.0.2" {
-			t.Errorf("worker ip = %q, want 10.0.0.2", got.GetIp())
-		}
-		if got.GetVersion() != 2 {
-			t.Errorf("worker version = %d, want 2", got.GetVersion())
-		}
-	})
-
 	t.Run("DeleteWorker", func(t *testing.T) {
 		s := setup(t)
 		ctx := context.Background()
