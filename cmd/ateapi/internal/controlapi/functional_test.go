@@ -3665,3 +3665,77 @@ func TestSuspendActor_FromPaused_RetryAfterUploadFailure(t *testing.T) {
 		t.Errorf("retry destination = %q, want the original %q (idempotent upload target)", got, firstDestination)
 	}
 }
+
+func TestActorTemplateCRUD(t *testing.T) {
+	ns := namespaceForTest("ns-template-crud")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+	ctx := context.Background()
+
+	created, err := tc.client.CreateActorTemplate(ctx, &ateapipb.CreateActorTemplateRequest{
+		ActorTemplate: &ateapipb.ActorTemplate{
+			Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "tmpl-a"},
+			// Server-owned fields on the request are ignored.
+			DefaultVersionOnCreate: nil,
+		},
+	})
+	if err != nil {
+		t.Fatalf("CreateActorTemplate failed: %v", err)
+	}
+	want := &ateapipb.ActorTemplate{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "tmpl-a", Version: 1},
+	}
+	if diff := cmp.Diff(want, created, protocmp.Transform(), ignoreUID, ignoreTimestamps); diff != "" {
+		t.Errorf("CreateActorTemplate response mismatch (-want +got):\n%s", diff)
+	}
+
+	_, err = tc.client.CreateActorTemplate(ctx, &ateapipb.CreateActorTemplateRequest{
+		ActorTemplate: &ateapipb.ActorTemplate{Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "tmpl-a"}},
+	})
+	assertGrpcError(t, err, codes.AlreadyExists, "ActorTemplate "+testAtespace+"/tmpl-a already exists")
+
+	got, err := tc.client.GetActorTemplate(ctx, &ateapipb.GetActorTemplateRequest{ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl-a"}})
+	if err != nil {
+		t.Fatalf("GetActorTemplate failed: %v", err)
+	}
+	if diff := cmp.Diff(created, got, protocmp.Transform()); diff != "" {
+		t.Errorf("GetActorTemplate response mismatch (-created +got):\n%s", diff)
+	}
+
+	list, err := tc.client.ListActorTemplates(ctx, &ateapipb.ListActorTemplatesRequest{})
+	if err != nil {
+		t.Fatalf("ListActorTemplates failed: %v", err)
+	}
+	if len(list.GetActorTemplates()) != 1 || list.GetActorTemplates()[0].GetMetadata().GetName() != "tmpl-a" {
+		t.Errorf("ListActorTemplates = %v, want [tmpl-a]", list.GetActorTemplates())
+	}
+
+	// The atespace filter scopes the listing: a match returns the template, a
+	// different atespace returns nothing.
+	list, err = tc.client.ListActorTemplates(ctx, &ateapipb.ListActorTemplatesRequest{Atespace: testAtespace})
+	if err != nil {
+		t.Fatalf("ListActorTemplates(atespace) failed: %v", err)
+	}
+	if len(list.GetActorTemplates()) != 1 {
+		t.Errorf("ListActorTemplates(atespace=%s) = %v, want [tmpl-a]", testAtespace, list.GetActorTemplates())
+	}
+	list, err = tc.client.ListActorTemplates(ctx, &ateapipb.ListActorTemplatesRequest{Atespace: "other-atespace"})
+	if err != nil {
+		t.Fatalf("ListActorTemplates(other atespace) failed: %v", err)
+	}
+	if len(list.GetActorTemplates()) != 0 {
+		t.Errorf("ListActorTemplates(atespace=other-atespace) = %v, want []", list.GetActorTemplates())
+	}
+
+	deleted, err := tc.client.DeleteActorTemplate(ctx, &ateapipb.DeleteActorTemplateRequest{ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl-a"}})
+	if err != nil {
+		t.Fatalf("DeleteActorTemplate failed: %v", err)
+	}
+	if diff := cmp.Diff(created, deleted, protocmp.Transform()); diff != "" {
+		t.Errorf("DeleteActorTemplate response mismatch (-created +deleted):\n%s", diff)
+	}
+	_, err = tc.client.GetActorTemplate(ctx, &ateapipb.GetActorTemplateRequest{ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl-a"}})
+	assertGrpcError(t, err, codes.NotFound, "ActorTemplate "+testAtespace+"/tmpl-a not found")
+	_, err = tc.client.DeleteActorTemplate(ctx, &ateapipb.DeleteActorTemplateRequest{ActorTemplate: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "tmpl-a"}})
+	assertGrpcError(t, err, codes.NotFound, "ActorTemplate "+testAtespace+"/tmpl-a not found")
+}
