@@ -113,6 +113,10 @@ func (h *Impl) MakeCert(ctx context.Context, pcr *certsv1beta1.PodCertificateReq
 			continue
 		}
 
+		if len(svc.Spec.Selector) == 0 {
+			continue
+		}
+
 		// Find the set of pods that the service selects.
 		matchedPods, err := h.kc.CoreV1().Pods(pcr.ObjectMeta.Namespace).List(ctx, metav1.ListOptions{
 			LabelSelector: metav1.FormatLabelSelector(&metav1.LabelSelector{MatchLabels: svc.Spec.Selector}),

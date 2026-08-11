@@ -82,6 +82,26 @@ spec:
                   on the worker nodes. If empty, ATE defaults to unix:///var/lib/kubelet/plugins/[DriverName]/csi.sock.
                 pattern: ^unix://.+$
                 type: string
+              tls:
+                description: TLS configures TLS/mTLS for the connection to the ControllerEndpoint.
+                properties:
+                  enabled:
+                    description: Enabled controls whether TLS is used.
+                    type: boolean
+                  serverName:
+                    description: ServerName override for TLS verification.
+                    type: string
+                  usePodIdentity:
+                    description: UsePodIdentity indicates whether to reuse Substrate's
+                      Pod Identity (SPIFFE) certificates.
+                    type: boolean
+                required:
+                - enabled
+                type: object
+                x-kubernetes-validations:
+                - message: tls.usePodIdentity must be true when tls.enabled is true;
+                    manual certificates are not yet supported
+                  rule: '!self.enabled || (has(self.usePodIdentity) && self.usePodIdentity)'
             required:
             - controllerEndpoint
             - driverName

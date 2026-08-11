@@ -637,14 +637,6 @@ deploy_ate_system() {
   # schemas and RBAC (role.yaml has no other apply path).
   deploy_crds
 
-  if [[ "${SETUP_CSI:-false}" == "true" ]]; then
-    if [[ "${ATE_INSTALL_KIND:-false}" == "true" ]]; then
-      setup_csi
-    else
-      echo "Warning: CSI setup is only supported for Kind local installations. Skipping."
-    fi
-  fi
-
   # Enforce per-class SandboxConfig asset requirements (applied before any
   # SandboxConfig so the defaults below are validated too).
   run_kubectl apply -f manifests/ate-install/sandboxconfig-validation.yaml
@@ -679,6 +671,18 @@ deploy_ate_system() {
   # in a separate change.
   if [[ "$(store_backend)" == "postgres" ]]; then
     apply_postgres
+  fi
+
+  # CSI setup must run after podcertificate-controller is ready and trust bundles
+  # exist. The ghostunnel sidecar uses projected podCertificate and clusterTrustBundle
+  # volumes which cannot be fulfilled until podcertcontroller is actively signing,
+  # otherwise rollout of csi-hostpath-socat times out.
+  if [[ "${SETUP_CSI:-false}" == "true" ]]; then
+    if [[ "${ATE_INSTALL_KIND:-false}" == "true" ]]; then
+      setup_csi
+    else
+      echo "Warning: CSI setup is only supported for Kind local installations. Skipping."
+    fi
   fi
 
   local manifests=""
@@ -979,7 +983,7 @@ done
 # flag they configure (e.g. --benchmark-worker-count before/after
 # --deploy-benchmarks). The dispatch loop below also accepts these flags but
 # treats them as no-ops since the value is already captured here.
-SETUP_CSI=false
+SETUP_CSI="${SETUP_CSI:-false}"
 BENCHMARK_WORKER_COUNT=1
 BENCHMARK_SANDBOX_CLASS=gvisor
 # Empty keeps the default in benchmarking/workloads/deploy.sh (256Mi).

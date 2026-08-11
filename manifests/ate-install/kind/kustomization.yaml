@@ -55,3 +55,4 @@ patches:
               env:
               - name: OTEL_TRACES_SAMPLER
                 value: parentbased_always_on
+
