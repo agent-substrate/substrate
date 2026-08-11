@@ -30,6 +30,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"runtime/debug"
 	"strings"
 	"time"
@@ -65,11 +66,16 @@ func validateImageCacheGCFlags() error {
 	if *imageCacheLowPct < 0 || *imageCacheLowPct >= *imageCacheHighPct {
 		return fmt.Errorf("--image-cache-low-percent %d must be in [0,%d)", *imageCacheLowPct, *imageCacheHighPct)
 	}
+	if *imageCacheMinAge < 0 {
+		// A negative min-age inverts the veto (the cutoff lands in the
+		// future), making just-pulled layers evictable.
+		return fmt.Errorf("--image-cache-min-age %v must be >= 0", *imageCacheMinAge)
+	}
 	// Outside BasePath the watermarks measure a different volume than
 	// actor state, so the pass would chase pressure the cache doesn't
 	// contribute to. Warn, don't fail: a separate cache volume is
 	// legitimate (recommended for IOPS) — it just wants its own numbers.
-	if !strings.HasPrefix(*imageCacheDir, ateompath.BasePath+string(os.PathSeparator)) {
+	if !strings.HasPrefix(filepath.Clean(*imageCacheDir), ateompath.BasePath+string(os.PathSeparator)) {
 		slog.Warn("Image cache dir is outside the ateom base path; its volume watermarks are measured separately from actor state",
 			slog.String("image_cache_dir", *imageCacheDir),
 			slog.String("actors_dir", ateompath.ActorsDir))
@@ -92,6 +98,8 @@ func validateImageCacheGCFlags() error {
 func imageCacheGCTarget(capacity, available uint64, cacheSize, maxBytes int64, highPct, lowPct int) int64 {
 	var target int64
 	if capacity > 0 {
+		// Integer floor of the available fraction: usage reads up to ~1%
+		// high, so eviction can trigger just before the nominal watermark.
 		usedPct := 100 - int(available*100/capacity)
 		if usedPct >= highPct {
 			// Free enough that available climbs back to (100-lowPct)% of
@@ -113,16 +121,42 @@ func imageCacheGCTarget(capacity, available uint64, cacheSize, maxBytes int64, h
 	return target
 }
 
-// runImageCacheGC runs eviction passes on the configured period until ctx
-// is done. Passes are strictly serialized: a slow pass delays the next
-// tick rather than overlapping it.
-func runImageCacheGC(ctx context.Context, store *imagecache.Store, cacheDir string) {
-	consecutiveShortfalls := 0
+// imageCacheGC is the loop's state: configuration snapshotted from the
+// flags at construction (the pass logic never reads globals, so it is
+// testable without flag juggling) plus the shortfall-backoff counter.
+type imageCacheGC struct {
+	store    *imagecache.Store
+	cacheDir string
+	period   time.Duration
+	highPct  int
+	lowPct   int
+	maxBytes int64
+	dryRun   bool
+
+	consecutiveShortfalls int
+}
+
+func newImageCacheGC(store *imagecache.Store, cacheDir string) *imageCacheGC {
+	return &imageCacheGC{
+		store:    store,
+		cacheDir: cacheDir,
+		period:   *imageCacheGCPeriod,
+		highPct:  *imageCacheHighPct,
+		lowPct:   *imageCacheLowPct,
+		maxBytes: *imageCacheMaxBytes,
+		dryRun:   *imageCacheGCDryRun,
+	}
+}
+
+// Run executes eviction passes on the configured period until ctx is
+// done. Passes are strictly serialized: a slow pass delays the next tick
+// rather than overlapping it.
+func (g *imageCacheGC) Run(ctx context.Context) {
 	// First pass immediately: a node booting under disk pressure must not
 	// wait a full period (startup recovery reclaims debris, not pressure).
-	runImageCacheGCPass(ctx, store, cacheDir, &consecutiveShortfalls)
+	g.runPass(ctx)
 
-	ticker := time.NewTicker(*imageCacheGCPeriod)
+	ticker := time.NewTicker(g.period)
 	defer ticker.Stop()
 	for {
 		select {
@@ -131,15 +165,15 @@ func runImageCacheGC(ctx context.Context, store *imagecache.Store, cacheDir stri
 		case <-ticker.C:
 		}
 
-		runImageCacheGCPass(ctx, store, cacheDir, &consecutiveShortfalls)
+		g.runPass(ctx)
 	}
 }
 
-// runImageCacheGCPass performs one pass. It recovers from panics: this is a
+// runPass performs one pass. It recovers from panics: this is a
 // background janitor, and a bug here (or a malformed directory an operator
 // dropped into the pool) must not take atelet down with it and strand every
 // actor on the node.
-func runImageCacheGCPass(ctx context.Context, store *imagecache.Store, cacheDir string, consecutiveShortfalls *int) {
+func (g *imageCacheGC) runPass(ctx context.Context) {
 	defer func() {
 		if r := recover(); r != nil {
 			slog.ErrorContext(ctx, "Image cache GC pass panicked; skipping this pass",
@@ -148,8 +182,8 @@ func runImageCacheGCPass(ctx context.Context, store *imagecache.Store, cacheDir 
 	}()
 
 	var st unix.Statfs_t
-	if err := unix.Statfs(cacheDir, &st); err != nil {
-		slog.WarnContext(ctx, "Image cache GC: statfs failed", slog.String("dir", cacheDir), slog.Any("err", err))
+	if err := unix.Statfs(g.cacheDir, &st); err != nil {
+		slog.WarnContext(ctx, "Image cache GC: statfs failed", slog.String("dir", g.cacheDir), slog.Any("err", err))
 		return
 	}
 	capacity := st.Blocks * uint64(st.Bsize)
@@ -157,17 +191,22 @@ func runImageCacheGCPass(ctx context.Context, store *imagecache.Store, cacheDir 
 
 	// Same failure class as the enumeration gates (ReadDir of the layer
 	// pool): fail toward retention, retry next tick.
-	cacheSize, err := store.CacheSize()
+	cacheSize, err := g.store.CacheSize()
 	if err != nil {
 		slog.WarnContext(ctx, "Image cache GC: sizing the pool failed; skipping this pass",
 			slog.Any("err", err))
 		return
 	}
 
-	target := imageCacheGCTarget(capacity, available, cacheSize, *imageCacheMaxBytes, *imageCacheHighPct, *imageCacheLowPct)
+	target := imageCacheGCTarget(capacity, available, cacheSize, g.maxBytes, g.highPct, g.lowPct)
 
 	tStart := time.Now()
-	stats, err := store.EvictUnused(ctx, target, *imageCacheGCDryRun)
+	// Runs even at target 0: the enumeration gates should surface a
+	// corrupt record or spec on the next tick, not first under disk
+	// pressure. Cost: the full root-set scan (a ReadDir per actor, a
+	// read per bundle spec) plus a read per image record — hundreds of
+	// small reads on a busy node. Deliberate, and cheap at this period.
+	stats, err := g.store.EvictUnused(ctx, target, g.dryRun)
 	attrs := []any{
 		slog.Int64("target_bytes", target),
 		slog.Int64("freed_bytes", stats.FreedBytes),
@@ -179,7 +218,7 @@ func runImageCacheGCPass(ctx context.Context, store *imagecache.Store, cacheDir 
 		slog.Int("skipped_rooted", stats.SkippedRooted),
 		slog.Int("skipped_fresh", stats.SkippedFresh),
 		slog.Int64("cache_size_bytes", cacheSize),
-		slog.Bool("dry_run", *imageCacheGCDryRun),
+		slog.Bool("dry_run", g.dryRun),
 		slog.Duration("took", time.Since(tStart)),
 	}
 	outcome := classifyGCPass(err, target, stats.FreedBytes)
@@ -197,20 +236,20 @@ func runImageCacheGCPass(ctx context.Context, store *imagecache.Store, cacheDir 
 		// more" — on a volume under foreign pressure, the steady state.
 		// Warn on the first few, then a periodic reminder, never
 		// ERROR-per-tick.
-		*consecutiveShortfalls++
+		g.consecutiveShortfalls++
 		switch {
-		case *consecutiveShortfalls <= shortfallWarnLimit:
+		case g.consecutiveShortfalls <= shortfallWarnLimit:
 			slog.WarnContext(ctx, "Image cache GC could not reach target",
-				append(attrs, slog.Int("consecutive", *consecutiveShortfalls))...)
-		case *consecutiveShortfalls%shortfallReminderEvery == 0:
+				append(attrs, slog.Int("consecutive", g.consecutiveShortfalls))...)
+		case g.consecutiveShortfalls%shortfallReminderEvery == 0:
 			slog.WarnContext(ctx, "Image cache GC still short of target; the remaining pressure is not the image cache's to free",
-				append(attrs, slog.Int("consecutive", *consecutiveShortfalls))...)
+				append(attrs, slog.Int("consecutive", g.consecutiveShortfalls))...)
 		}
 	case gcPassComplete:
-		*consecutiveShortfalls = 0
+		g.consecutiveShortfalls = 0
 		slog.InfoContext(ctx, "Image cache GC pass complete", attrs...)
 	default: // gcPassQuiet: no target, nothing to say.
-		*consecutiveShortfalls = 0
+		g.consecutiveShortfalls = 0
 	}
 }
 

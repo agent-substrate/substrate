@@ -177,7 +177,7 @@ func main() {
 		serverboot.Fatal(ctx, "Failed to open image cache", err)
 	}
 	if *imageCacheGCPeriod > 0 {
-		go runImageCacheGC(ctx, imageCache, *imageCacheDir)
+		go newImageCacheGC(imageCache, *imageCacheDir).Run(ctx)
 	}
 
 	anonGCSClient, err := storage.NewClient(ctx, option.WithoutAuthentication())

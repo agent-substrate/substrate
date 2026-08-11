@@ -249,8 +249,8 @@ func (s *Store) EvictUnused(ctx context.Context, targetBytes int64, dryRun bool)
 	if rootsErr != nil {
 		// Same shape as the record gate below: refcounts and roots from a
 		// partial scan would retire layers a running actor still mounts.
-		slog.ErrorContext(ctx, "Image cache eviction pass skipped: bundle specs could not be fully enumerated",
-			slog.Any("err", rootsErr))
+		// Not logged here — the caller logs the gated pass once, with its
+		// own context (see ErrIncompleteEnumeration).
 		return stats, errors.Join(ErrIncompleteEnumeration, rootsErr)
 	}
 	cutoff := time.Now().Add(-s.minAge)
@@ -261,8 +261,6 @@ func (s *Store) EvictUnused(ctx context.Context, targetBytes int64, dryRun bool)
 		// be retired while that record still names it. Fail the whole pass
 		// toward retention; the error names the records to repair or
 		// delete, and every later pass retries.
-		slog.ErrorContext(ctx, "Image cache eviction pass skipped: image records could not be fully enumerated",
-			slog.Any("err", listErr))
 		return stats, errors.Join(ErrIncompleteEnumeration, listErr)
 	}
 	stats.Candidates = len(candidates)
@@ -491,15 +489,11 @@ func (s *Store) RecoverOrphans(ctx context.Context) (EvictStats, error) {
 
 	roots, rootsErr := s.InUse()
 	if rootsErr != nil {
-		slog.ErrorContext(ctx, "Image cache startup orphan scan skipped: bundle specs could not be fully enumerated; orphaned layers (if any) will persist until the specs are repaired",
-			slog.Any("err", rootsErr))
 		return stats, errors.Join(ErrIncompleteEnumeration, rootsErr)
 	}
 	cutoff := time.Now().Add(-s.minAge)
 	_, refcount, complete, listErr := s.listEviction(roots, cutoff, &stats)
 	if !complete {
-		slog.ErrorContext(ctx, "Image cache startup orphan scan skipped: image records could not be fully enumerated; orphaned layers (if any) will persist until the records are repaired",
-			slog.Any("err", listErr))
 		return stats, errors.Join(ErrIncompleteEnumeration, listErr)
 	}
 
