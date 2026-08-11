@@ -1541,19 +1541,29 @@ func (s *AteomHerder) dialAteom(ctx context.Context, targetAteomUid string) (ate
 // the ateom-facing one.
 func buildAteomWorkloadSpec(spec *ateletpb.WorkloadSpec) *ateompb.WorkloadSpec {
 	ddVolumes := make(map[string]bool)
+	siVolumes := make(map[string]bool)
 	for _, vol := range spec.GetVolumes() {
 		switch vol.GetSource().(type) {
 		case *ateletpb.Volume_DurableDir:
 			ddVolumes[vol.GetName()] = true
+		case *ateletpb.Volume_SystemInfo:
+			siVolumes[vol.GetName()] = true
 		}
 	}
 
 	out := &ateompb.WorkloadSpec{}
 	for _, ctr := range spec.GetContainers() {
 		var ddMounts []*ateompb.DurableDirVolumeMount
+		var siMounts []*ateompb.SystemInfoVolumeMount
 		for _, vm := range ctr.GetVolumeMounts() {
-			if ddVolumes[vm.GetName()] {
+			switch {
+			case ddVolumes[vm.GetName()]:
 				ddMounts = append(ddMounts, &ateompb.DurableDirVolumeMount{
+					VolumeName: vm.GetName(),
+					MountPath:  vm.GetMountPath(),
+				})
+			case siVolumes[vm.GetName()]:
+				siMounts = append(siMounts, &ateompb.SystemInfoVolumeMount{
 					VolumeName: vm.GetName(),
 					MountPath:  vm.GetMountPath(),
 				})
@@ -1562,6 +1572,7 @@ func buildAteomWorkloadSpec(spec *ateletpb.WorkloadSpec) *ateompb.WorkloadSpec {
 		out.Containers = append(out.Containers, &ateompb.Container{
 			Name:                   ctr.GetName(),
 			DurableDirVolumeMounts: ddMounts,
+			SystemInfoVolumeMounts: siMounts,
 			Readyz:                 toAteomReadyz(ctr.GetReadyz()),
 		})
 	}

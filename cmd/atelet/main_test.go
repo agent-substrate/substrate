@@ -760,6 +760,7 @@ func TestBuildAteomWorkloadSpecForwardsDurableDirMounts(t *testing.T) {
 			{Name: "data", Source: &ateletpb.Volume_DurableDir{DurableDir: &ateletpb.DurableDirVolume{}}},
 			{Name: "cache", Source: &ateletpb.Volume_DurableDir{DurableDir: &ateletpb.DurableDirVolume{}}},
 			{Name: "scratch", Source: &ateletpb.Volume_External{External: &ateletpb.ExternalVolumeSource{}}},
+			{Name: "system-info", Source: &ateletpb.Volume_SystemInfo{SystemInfo: &ateletpb.SystemInfoVolume{}}},
 		},
 		Containers: []*ateletpb.Container{
 			{
@@ -767,9 +768,10 @@ func TestBuildAteomWorkloadSpecForwardsDurableDirMounts(t *testing.T) {
 				VolumeMounts: []*ateletpb.VolumeMount{
 					{Name: "data", MountPath: "/home/counter"},
 					{Name: "cache", MountPath: "/var/cache"},
-					// Only durable-dir volumes cross to ateom; other volume
-					// types are mounted by atelet itself.
+					// External volumes do not cross to ateom; they are
+					// mounted by atelet itself.
 					{Name: "scratch", MountPath: "/scratch"},
+					{Name: "system-info", MountPath: "/run/ate"},
 				},
 			},
 			{
@@ -790,6 +792,9 @@ func TestBuildAteomWorkloadSpecForwardsDurableDirMounts(t *testing.T) {
 				DurableDirVolumeMounts: []*ateompb.DurableDirVolumeMount{
 					{VolumeName: "data", MountPath: "/home/counter"},
 					{VolumeName: "cache", MountPath: "/var/cache"},
+				},
+				SystemInfoVolumeMounts: []*ateompb.SystemInfoVolumeMount{
+					{VolumeName: "system-info", MountPath: "/run/ate"},
 				},
 			},
 			{

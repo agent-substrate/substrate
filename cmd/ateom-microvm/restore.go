@@ -245,6 +245,23 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 		}()
 	}
 
+	// Restart the system-info share's virtiofsd over the contents atelet
+	// regenerated for THIS restore: unlike the durable share, nothing is
+	// restored from the snapshot — the files already carry the resumed actor's
+	// own values, which is the point of system-info volumes.
+	var systemInfoVfsdCmd *exec.Cmd
+	if hasSystemInfoVolumes(containers) {
+		if systemInfoVfsdCmd, err = s.stageSystemInfoShare(ctx, rr, actorUID); err != nil {
+			return err
+		}
+		defer func() {
+			if retErr != nil && systemInfoVfsdCmd.Process != nil {
+				_ = systemInfoVfsdCmd.Process.Kill()
+				_, _ = systemInfoVfsdCmd.Process.Wait()
+			}
+		}()
+	}
+
 	// Networking: rebuild the per-activation veth + tap; the snapshot's virtio-net
 	// is fd-backed, so CH needs fresh tap FDs (net_fds) on restore.
 	if err := ateomnet.SetupActorNetwork(ctx, ateomnet.NetworkConfig{
@@ -351,7 +368,7 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 	}
 
 	ra := &runningActor{
-		chCmd: chCmd, vfsdCmd: vfsdCmd, durableVfsdCmd: durableVfsdCmd,
+		chCmd: chCmd, vfsdCmd: vfsdCmd, durableVfsdCmd: durableVfsdCmd, systemInfoVfsdCmd: systemInfoVfsdCmd,
 		apiSocket: apiSocket, baseID: srcID, restoreSourceDir: restoreDir,
 		snapshotIsSelfContained: memMode == ch.MemRestoreEager,
 	}
@@ -441,6 +458,8 @@ func rewriteSnapshotSocketPaths(snapshotDir, id string) error {
 				fm["socket"] = kata.VirtiofsdSocketPath(id)
 			case kata.DurableFsTag:
 				fm["socket"] = kata.DurableVirtiofsdSocketPath(id)
+			case kata.SystemInfoFsTag:
+				fm["socket"] = kata.SystemInfoVirtiofsdSocketPath(id)
 			default:
 				return fmt.Errorf("snapshot config %q has fs device with unknown tag %q", cfgPath, tag)
 			}

@@ -35,3 +35,9 @@ func VsockSocketPath(id string) string { return filepath.Join(VMDir(id), "clh.so
 func DurableVirtiofsdSocketPath(id string) string {
 	return filepath.Join(VMDir(id), "virtiofsd-durable.sock")
 }
+
+// SystemInfoVirtiofsdSocketPath is the vhost-user-fs socket for the actor's
+// system-info share, served by a third virtiofsd alongside the others.
+func SystemInfoVirtiofsdSocketPath(id string) string {
+	return filepath.Join(VMDir(id), "virtiofsd-system-info.sock")
+}

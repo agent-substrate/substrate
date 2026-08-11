@@ -88,16 +88,20 @@ func durableMounts(mounts []*ateompb.DurableDirVolumeMount) []specs.Mount {
 }
 
 // workloadSpec returns the OCI spec to start a container's overlay workload
-// with: the prepared spec, plus a bind for each durable-dir volume it mounts.
+// with: the prepared spec, plus a bind for each durable-dir volume it mounts
+// (writable) and each system-info volume it mounts (read-only).
 //
 // The spec is copied rather than mutated so the bundle's on-disk config.json and
 // the carrier's view stay as prepared — only the workload sees the binds.
 func workloadSpec(c actorContainer) *specs.Spec {
-	if len(c.durableMounts) == 0 {
+	if len(c.durableMounts) == 0 && len(c.systemInfoMounts) == 0 {
 		return c.spec
 	}
 	spec := *c.spec
-	spec.Mounts = append(append([]specs.Mount(nil), c.spec.Mounts...), durableMounts(c.durableMounts)...)
+	mounts := append([]specs.Mount(nil), c.spec.Mounts...)
+	mounts = append(mounts, durableMounts(c.durableMounts)...)
+	mounts = append(mounts, systemInfoMounts(c.systemInfoMounts)...)
+	spec.Mounts = mounts
 	return &spec
 }
 

@@ -95,13 +95,12 @@ func ensureKataCompatibleSpec(bundle, id, netnsPath string, size sizing.SandboxS
 	// the exact set `ctr run --runtime io.containerd.kata.v2` emits, which kata's
 	// agent accepts. (Static shaper; pod DNS integration is future work.)
 	//
-	// KNOWN GAP vs the gVisor runtime: this also drops atelet's read-only
-	// systemInfo volume bind mounts (e.g. the actorMetadata data-source files).
-	// The micro-VM guest can't see host paths (the rootfs is an overlay of a
-	// virtio-fs base + a guest-RAM upper, not a host bind), so atelet's
-	// host-path volume roots have nothing to bind to. Exposing them needs a
-	// per-actor volume plumbed into the guest; not yet implemented. No
-	// micro-VM workload depends on it today.
+	// Dropping atelet's volume bind mounts here is fine: host-path binds can't
+	// attach inside the guest anyway. Volumes reach micro-VM containers over
+	// per-actor virtio-fs shares instead — durable-dir volumes via the
+	// writable share (durable.go) and system-info volumes via the read-only
+	// share (systeminfo.go) — with the binds added to the workload specs ateom
+	// drives through the kata-agent (see workloadSpec).
 	spec.Mounts = defaultKataMounts()
 
 	out, err := json.MarshalIndent(&spec, "", "  ")
