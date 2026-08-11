@@ -29,14 +29,18 @@
 // Disk is bounded by the cache's own eviction engine: below
 // --min-free-gb free space, the tool asks Store.EvictUnused to reclaim
 // the shortfall. --evict-all instead empties everything evictable and
-// exits — safe on a live node, because placed actors' bundle specs root
-// their images (the root set is scanned from ateompath.ActorsDir).
+// exits. Bundle-spec rooting (scanned from ateompath.ActorsDir) protects
+// placed actors' mounted images, but the engine's locks are per-process:
+// a run concurrent with a live atelet is two unsynchronized GC passes
+// over one pool, and New's orphan scan assumes no pull is in flight.
+// Stop atelet first for a clean flush.
 package main
 
 import (
 	"bufio"
 	"context"
 	"encoding/csv"
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -65,9 +69,19 @@ var (
 	timeout   = flag.Duration("timeout", 20*time.Minute, "Per-image timeout")
 	minFreeGB = flag.Uint64("min-free-gb", 150, "Ask the eviction engine to reclaim disk when the cache volume has less free space than this")
 	evictIdle = flag.Duration("evict-idle", 10*time.Minute, "Eviction min-age: layers and records younger than this are never evicted. NOTE: if the corpus unpacks faster than this window elapses on a small disk, nothing is evictable while the disk fills — size it well below disk-fill time")
-	evictAll  = flag.Bool("evict-all", false, "Evict everything evictable from the cache and exit (no refs file needed)")
+	evictAll  = flag.Bool("evict-all", false, "Evict everything evictable from the cache and exit (no refs file needed). Rooted images and anything younger than --evict-idle survive")
 	platform  = flag.String("platform", "linux/amd64", "Image platform to pull")
 )
+
+// newStore opens the cache with the options both modes share: min-age
+// from --evict-idle, and bundle-spec rooting from the node's actors dir
+// (absent on a validation host, which InUse treats as an empty root set).
+func newStore(extra ...imagecache.Option) (*imagecache.Store, error) {
+	return imagecache.New(*cacheDir, append([]imagecache.Option{
+		imagecache.WithMinAge(*evictIdle),
+		imagecache.WithActorsDir(ateompath.ActorsDir),
+	}, extra...)...)
+}
 
 type result struct {
 	ref     string
@@ -79,7 +93,8 @@ type result struct {
 
 func main() {
 	flag.Parse()
-	if *cacheDir == "" || (*refsFile == "" && !*evictAll) {
+	if *cacheDir == "" || (*refsFile == "" && !*evictAll) || (*refsFile != "" && *evictAll) {
+		fmt.Fprintln(os.Stderr, "need --cache-dir plus exactly one of --refs-file or --evict-all")
 		flag.Usage()
 		os.Exit(2)
 	}
@@ -87,23 +102,26 @@ func main() {
 
 	if *evictAll {
 		// Flush mode: no refs, no registry auth. New also reclaims any
-		// crash-debris orphans before the pass.
-		// WithActorsDir makes a flush on a live node safe: placed actors'
-		// bundle specs root their images. On a validation host the dir
-		// doesn't exist, which InUse treats as an empty root set.
-		store, err := imagecache.New(*cacheDir,
-			imagecache.WithMinAge(*evictIdle),
-			imagecache.WithActorsDir(ateompath.ActorsDir),
-		)
+		// crash-debris orphans before the pass. See the package doc for
+		// why a live atelet should be stopped first.
+		store, err := newStore()
 		if err != nil {
 			log.Fatalf("opening cache: %v", err)
 		}
 		stats, err := store.EvictUnused(ctx, math.MaxInt64, false)
+		if errors.Is(err, imagecache.ErrIncompleteEnumeration) {
+			// Gated: nothing was attempted; the error names the file to
+			// repair or delete.
+			log.Fatalf("evict-all did nothing: %v", err)
+		}
 		if err != nil {
-			log.Fatalf("evict-all: %v", err)
+			log.Printf("evict-all finished with errors: %v", err)
 		}
 		log.Printf("evict-all: %d images / %d layers evicted, %.1f GB credited (free now %.0f GB)",
 			stats.EvictedImages, stats.EvictedLayers, float64(stats.FreedBytes)/1e9, float64(freeBytes(*cacheDir))/1e9)
+		if err != nil {
+			os.Exit(1)
+		}
 		return
 	}
 
@@ -127,11 +145,9 @@ func main() {
 		log.Fatalf("creating GCP authenticator (need application-default credentials): %v", err)
 	}
 
-	store, err := imagecache.New(*cacheDir,
+	store, err := newStore(
 		imagecache.WithAuthenticator(auth),
 		imagecache.WithPlatform(v1.Platform{OS: osName, Architecture: arch}),
-		imagecache.WithMinAge(*evictIdle),
-		imagecache.WithActorsDir(ateompath.ActorsDir),
 	)
 	if err != nil {
 		log.Fatalf("opening cache: %v", err)
@@ -234,8 +250,20 @@ func shortRef(ref string) string {
 // shortfall below minFree. All engine protections apply, so in-flight
 // validations are never raced. Unlike atelet's loop, the target is not
 // capped at the pool size: on a dedicated validation disk an oversized
-// target just runs out of candidates.
-var evictMu sync.Mutex // one attempt per low-water episode; queued workers re-check and return
+// target just runs out of candidates. The statfs shortfall and the
+// engine's FreedBytes are different estimates (disk blocks vs recorded
+// sizes), so a "met" target can leave free space still short; the next
+// worker's re-check converges.
+var (
+	evictMu sync.Mutex // one attempt per low-water episode; queued workers re-check and return
+	// lastFruitless backs off when a pass freed nothing (typically:
+	// everything is younger than --evict-idle). Without it, every queued
+	// worker would run a full root-set scan and record enumeration ahead
+	// of its validation until free space moved.
+	lastFruitless time.Time
+)
+
+const fruitlessCooldown = 30 * time.Second
 
 func evictIfLow(ctx context.Context, store *imagecache.Store, cacheRoot string, minFree uint64) {
 	evictMu.Lock()
@@ -245,15 +273,25 @@ func evictIfLow(ctx context.Context, store *imagecache.Store, cacheRoot string, 
 	if free >= minFree {
 		return
 	}
+	if time.Since(lastFruitless) < fruitlessCooldown {
+		return
+	}
 	stats, err := store.EvictUnused(ctx, int64(minFree-free), false)
-	if err != nil {
-		// Per-item failures or a gated pass: either way validation goes on;
-		// the next low-water check retries.
-		log.Printf("eviction pass reported errors (continuing): %v", err)
+	switch {
+	case errors.Is(err, imagecache.ErrIncompleteEnumeration):
+		// Gated: nothing was attempted; the error names the file to repair.
+		// Validation itself goes on — it only needed the disk space.
+		log.Printf("eviction pass skipped, nothing attempted: %v", err)
+	case err != nil:
+		// Per-item failures on a pass that ran; each retries next pass.
+		log.Printf("eviction pass finished with errors: %v", err)
 	}
 	if stats.EvictedImages > 0 || stats.EvictedLayers > 0 {
 		log.Printf("evicted %d images / %d layers, %.1f GB credited (free now %.0f GB)",
 			stats.EvictedImages, stats.EvictedLayers, float64(stats.FreedBytes)/1e9, float64(freeBytes(cacheRoot))/1e9)
+	}
+	if stats.FreedBytes == 0 {
+		lastFruitless = time.Now()
 	}
 }
 
