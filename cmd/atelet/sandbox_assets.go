@@ -25,13 +25,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	gzip "github.com/klauspost/compress/gzip"
 	"io"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/ategcs"
 	"github.com/agent-substrate/substrate/internal/ateerrors"
@@ -176,11 +179,14 @@ func (s *AteomHerder) fetchAsset(ctx context.Context, entry assetEntry) (string,
 	localPath := ateompath.RunSCBinaryPath(entry.SHA256)
 	_, err := os.Stat(localPath)
 	if err == nil {
+		slog.DebugContext(ctx, "Sandbox asset cache hit", slog.String("path", localPath))
 		return localPath, nil
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return "", wrapFileSystemErr("while stat-ing local file", err)
 	}
 
+	slog.InfoContext(ctx, "Sandbox asset cache miss; downloading", slog.String("url", entry.URL), slog.String("sha256", entry.SHA256))
+	t := time.Now()
 	tmpName, err := s.downloadVerified(ctx, entry, filepath.Base(localPath)+"-download-")
 	if err != nil {
 		return "", err
@@ -194,6 +200,7 @@ func (s *AteomHerder) fetchAsset(ctx context.Context, entry assetEntry) (string,
 		return "", wrapFileSystemErr("while renaming temp file to target", err)
 	}
 
+	slog.InfoContext(ctx, "Sandbox asset download complete", slog.String("path", localPath), slog.Duration("duration", time.Since(t)))
 	return localPath, nil
 }
 
@@ -210,16 +217,20 @@ func (s *AteomHerder) fetchGVisorRelease(ctx context.Context, entry assetEntry) 
 	runscPath := filepath.Join(releaseDir, "runsc")
 	_, err := os.Stat(releaseDir)
 	if err == nil {
+		slog.DebugContext(ctx, "gVisor release cache hit", slog.String("dir", releaseDir))
 		return runscPath, nil
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return "", wrapFileSystemErr("while stat-ing extracted release dir", err)
 	}
 
+	slog.InfoContext(ctx, "gVisor release cache miss; downloading", slog.String("url", entry.URL), slog.String("sha256", entry.SHA256))
+	tDownload := time.Now()
 	tarball, err := s.downloadVerified(ctx, entry, filepath.Base(releaseDir)+"-download-")
 	if err != nil {
 		return "", err
 	}
 	defer os.Remove(tarball)
+	slog.InfoContext(ctx, "gVisor release download complete", slog.String("url", entry.URL), slog.Duration("duration", time.Since(tDownload)))
 
 	tmpDir, err := os.MkdirTemp(ateompath.StaticFilesDir, filepath.Base(releaseDir)+"-extract-")
 	if err != nil {
@@ -227,9 +238,12 @@ func (s *AteomHerder) fetchGVisorRelease(ctx context.Context, entry assetEntry) 
 	}
 	defer func() { _ = os.RemoveAll(tmpDir) }() // no-op after rename
 
-	if err := extractTarBz2(tarball, tmpDir); err != nil {
+	slog.InfoContext(ctx, "Extracting gVisor archive", slog.String("path", tarball), slog.String("url", entry.URL))
+	tExtract := time.Now()
+	if err := extractTarArchive(ctx, tarball, entry.URL, tmpDir); err != nil {
 		return "", err
 	}
+	slog.InfoContext(ctx, "gVisor archive extraction complete", slog.String("url", entry.URL), slog.Duration("duration", time.Since(tExtract)))
 	if fi, err := os.Stat(filepath.Join(tmpDir, "runsc")); err != nil || !fi.Mode().IsRegular() {
 		return "", fmt.Errorf("%w: gvisor tarball %v contains no runsc binary (stat: %v)", ateerrors.ReasonInvalidSandboxAsset, entry.URL, err)
 	}
@@ -258,6 +272,7 @@ func (s *AteomHerder) downloadVerified(ctx context.Context, entry assetEntry, tm
 	// atelet-level decision, not per-asset: try the anonymous client first so the
 	// common public-gVisor path stays fast, then fall back to the main client. The
 	// asset is streamed (not buffered) to disk below.
+	slog.DebugContext(ctx, "Streaming download from storage", slog.String("url", entry.URL))
 	rc, err := s.openAsset(ctx, entry.URL)
 	if err != nil {
 		return "", fmt.Errorf("while fetching %v: %w", entry.URL, err)
@@ -304,18 +319,55 @@ func (s *AteomHerder) downloadVerified(ctx context.Context, entry assetEntry, tm
 	return tmpName, nil
 }
 
-// extractTarBz2 unpacks the tar.bz2 at tarPath into destDir.
-func extractTarBz2(tarPath, destDir string) error {
+// extractTarArchive decompresses and extracts the tarball file at tarPath into
+// destDir. It dynamically selects the decompression format (gzip, bzip2, or none)
+// based on the suffix of urlPath. If ctx is canceled, extraction will stop
+// early and return an error.
+func extractTarArchive(ctx context.Context, tarPath, urlPath, destDir string) error {
+	var isGz, isBz, isTar bool
+	if strings.HasSuffix(urlPath, ".tar.gz") || strings.HasSuffix(urlPath, ".tgz") {
+		isGz = true
+	} else if strings.HasSuffix(urlPath, ".tar.bz2") || strings.HasSuffix(urlPath, ".tbz2") {
+		isBz = true
+	} else if strings.HasSuffix(urlPath, ".tar") {
+		isTar = true
+	} else {
+		return fmt.Errorf("%w: unsupported archive format for URL %s (must be .tar.gz, .tgz, .tar.bz2, .tbz2, or .tar)", ateerrors.ReasonInvalidSandboxAsset, urlPath)
+	}
+
 	f, err := os.Open(tarPath)
 	if err != nil {
 		return wrapFileSystemErr("while opening downloaded tarball", err)
 	}
 	defer f.Close()
-	tr := tar.NewReader(bzip2.NewReader(bufio.NewReader(f)))
+
+	var r io.Reader
+	buf := bufio.NewReader(f)
+
+	if isGz {
+		gzr, err := gzip.NewReader(buf)
+		if err != nil {
+			return fmt.Errorf("%w: failed to create gzip reader for %s: %w", ateerrors.ReasonInvalidSandboxAsset, urlPath, err)
+		}
+		defer gzr.Close()
+		r = gzr
+	} else if isBz {
+		r = bzip2.NewReader(buf)
+	} else if isTar {
+		r = buf
+	}
+
+	tr := tar.NewReader(r)
 	var total int64
+	var filesCount int
 	for {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("archive extraction canceled: %w", err)
+		}
+
 		hdr, err := tr.Next()
 		if err == io.EOF {
+			slog.DebugContext(ctx, "Extracted tar entries successfully", slog.Int("files", filesCount), slog.Int64("bytes", total))
 			return nil
 		}
 		if err != nil {
@@ -336,6 +388,7 @@ func extractTarBz2(tarPath, destDir string) error {
 			}
 		case tar.TypeReg:
 			total += hdr.Size
+			filesCount++
 			if total > maxAssetBytes {
 				return fmt.Errorf("%w: gvisor tarball inflates past the %d-byte cap", ateerrors.ReasonInvalidSandboxAsset, maxAssetBytes)
 			}
@@ -349,7 +402,6 @@ func extractTarBz2(tarPath, destDir string) error {
 			return fmt.Errorf("%w: gvisor tarball entry %q has unsupported type %d", ateerrors.ReasonInvalidSandboxAsset, hdr.Name, hdr.Typeflag)
 		}
 	}
-
 }
 
 // writeTarFile writes one regular tarball entry to `dest` with the given mode.
