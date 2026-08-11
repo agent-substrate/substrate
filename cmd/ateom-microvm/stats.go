@@ -178,6 +178,11 @@ func (s *AteomService) GetWorkloadStats(ctx context.Context, req *ateompb.GetWor
 // It fails only when no container could be read at all, which is the guest as a
 // whole not answering rather than one container being gone, and returns the
 // last error so the caller can say why.
+//
+// The loop as a whole is bounded by ctx — the caller's RPC deadline — with
+// maxActorContainers * statsCallTimeout as the ceiling when the caller set
+// none. statsCallTimeout is per call so that one hung container read cannot
+// eat the budget the remaining containers still need.
 func sumContainerStats(ctx context.Context, target *guestStatsTarget) (agentstats.Sample, error) {
 	var (
 		total   agentstats.Sample
@@ -185,6 +190,11 @@ func sumContainerStats(ctx context.Context, target *guestStatsTarget) (agentstat
 		lastErr error
 	)
 	for _, id := range target.workloadIDs {
+		if err := ctx.Err(); err != nil {
+			// The caller is gone; the per-call ctx below would fail instantly
+			// anyway, so stop burning through the remaining containers.
+			return agentstats.Sample{}, err
+		}
 		callCtx, cancel := context.WithTimeout(ctx, statsCallTimeout)
 		cs, err := target.agent.StatsContainer(callCtx, id)
 		cancel()

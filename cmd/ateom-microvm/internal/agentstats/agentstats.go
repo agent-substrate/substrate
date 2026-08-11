@@ -47,6 +47,9 @@ type Sample struct {
 	// MemoryPeakBytes is the high-water mark of MemoryCurrentBytes. Zero when
 	// the guest kernel does not expose one: the agent fills it from the cgroup's
 	// max-usage file, which cgroup v2 only grew in Linux 5.19.
+	//
+	// For a single container this is exact; summed across containers it is an
+	// upper bound, not an observed maximum — see Plus for why.
 	MemoryPeakBytes uint64
 
 	// MemoryWorkingSetBytes is MemoryCurrentBytes less the reclaimable page
@@ -128,11 +131,17 @@ func inactiveFileBytes(cs *agentpb.CgroupStats) (uint64, bool) {
 //
 // Summing the peaks is an upper bound on the peak of the sum, not the peak of
 // the sum itself: two containers that peaked at different moments add up to a
-// total the actor never actually reached. Reporting the true figure would need
-// the guest to track the actor as a unit, which it does not — each container
-// gets its own cgroup (see StartOverlayWorkload). The bound is the honest
+// total the actor never actually reached. The bound is the honest
 // approximation, and for the single-container actors this runtime mostly serves
 // it is exact.
+//
+// The guest kernel does track the true figure: every container cgroup sits
+// under the shared /ateomchv parent (see StartOverlayWorkload and the
+// CgroupsPath defaults in internal/kata), so with hierarchical accounting the
+// parent's memory.peak is the actor-level maximum this sum approximates. The
+// kata-agent just has no RPC that reads a cgroup by path — StatsContainer is
+// per-container only. If the agent ever grows a sandbox-level stats read, that
+// replaces this summing outright.
 //
 // Saturating on overflow, so a nonsensical reading from one container cannot
 // wrap the total to a small number and read as healthy.
