@@ -55,7 +55,6 @@ spec:
         - "/app/tests/glutton.py"
         - "--master"
         - "--master-bind-host=0.0.0.0"
-        - "--class-picker"
         env:
         - name: OTEL_EXPORTER_OTLP_ENDPOINT
           value: http://opentelemetry-collector.gke-managed-otel.svc.cluster.local:4317
