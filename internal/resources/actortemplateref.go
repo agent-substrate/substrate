@@ -15,44 +15,26 @@
 package resources
 
 import (
-	"log/slog"
-
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
+// Phantom ResourceRef markers keeping template and version references
+// distinct types.
+type (
+	actorTemplateKind        struct{}
+	actorTemplateVersionKind struct{}
+)
+
 // ActorTemplateRef identifies an ActorTemplate by the (atespace, name).
-//
-// ActorTemplateRef is the in-process form of the identity that
-// ateapipb.ObjectRef carries on the wire.
-type ActorTemplateRef struct {
-	// Atespace is the isolation boundary the template was created into. Required.
-	Atespace string
-	// Name is the template's name, unique within Atespace. Required.
-	Name string
-}
+type ActorTemplateRef = ResourceRef[actorTemplateKind]
 
-func (r ActorTemplateRef) String() string {
-	return r.Atespace + "/" + r.Name
-}
-
-// LogValue implements slog.LogValuer so that slog.Any("template", ref) records
-// the two components as a group ("template.atespace", "template.name") rather
-// than flattening them into one opaque string.
-func (r ActorTemplateRef) LogValue() slog.Value {
-	return slog.GroupValue(
-		slog.String("atespace", r.Atespace),
-		slog.String("name", r.Name),
-	)
-}
-
-// ToObjectRef converts the reference to its wire form.
-func (r ActorTemplateRef) ToObjectRef() *ateapipb.ObjectRef {
-	return &ateapipb.ObjectRef{Atespace: r.Atespace, Name: r.Name}
-}
+// ActorTemplateVersionRef identifies an ActorTemplateVersion by the
+// (atespace, name).
+type ActorTemplateVersionRef = ResourceRef[actorTemplateVersionKind]
 
 // ActorTemplateRefFromObjectRef converts a wire reference to an ActorTemplateRef.
 func ActorTemplateRefFromObjectRef(ref *ateapipb.ObjectRef) ActorTemplateRef {
-	return ActorTemplateRef{Atespace: ref.GetAtespace(), Name: ref.GetName()}
+	return resourceRefFromObjectRef[actorTemplateKind](ref)
 }
 
 // ActorTemplateRefFromActorTemplate returns the reference addressing the given
@@ -64,41 +46,10 @@ func ActorTemplateRefFromActorTemplate(t *ateapipb.ActorTemplate) ActorTemplateR
 	}
 }
 
-// ActorTemplateVersionRef identifies an ActorTemplateVersion by the
-// (atespace, name).
-//
-// ActorTemplateVersionRef is the in-process form of the identity that
-// ateapipb.ObjectRef carries on the wire.
-type ActorTemplateVersionRef struct {
-	// Atespace is the isolation boundary the version was created into. Required.
-	Atespace string
-	// Name is the version's name, unique within Atespace. Required.
-	Name string
-}
-
-func (r ActorTemplateVersionRef) String() string {
-	return r.Atespace + "/" + r.Name
-}
-
-// LogValue implements slog.LogValuer so that slog.Any("version", ref) records
-// the two components as a group ("version.atespace", "version.name") rather
-// than flattening them into one opaque string.
-func (r ActorTemplateVersionRef) LogValue() slog.Value {
-	return slog.GroupValue(
-		slog.String("atespace", r.Atespace),
-		slog.String("name", r.Name),
-	)
-}
-
-// ToObjectRef converts the reference to its wire form.
-func (r ActorTemplateVersionRef) ToObjectRef() *ateapipb.ObjectRef {
-	return &ateapipb.ObjectRef{Atespace: r.Atespace, Name: r.Name}
-}
-
 // ActorTemplateVersionRefFromObjectRef converts a wire reference to an
 // ActorTemplateVersionRef.
 func ActorTemplateVersionRefFromObjectRef(ref *ateapipb.ObjectRef) ActorTemplateVersionRef {
-	return ActorTemplateVersionRef{Atespace: ref.GetAtespace(), Name: ref.GetName()}
+	return resourceRefFromObjectRef[actorTemplateVersionKind](ref)
 }
 
 // ActorTemplateVersionRefFromActorTemplateVersion returns the reference

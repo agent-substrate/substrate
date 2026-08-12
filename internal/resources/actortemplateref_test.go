@@ -15,10 +15,20 @@
 package resources
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
+
+// The template and version aliases must stay distinct types: the phantom
+// ResourceRef kind is what stops a template reference from being passed where
+// a version reference is expected.
+func TestTemplateAndVersionRefsAreDistinctTypes(t *testing.T) {
+	if reflect.TypeFor[ActorTemplateRef]() == reflect.TypeFor[ActorTemplateVersionRef]() {
+		t.Error("ActorTemplateRef and ActorTemplateVersionRef are the same type; the phantom kind marker was lost")
+	}
+}
 
 func TestActorTemplateRefString(t *testing.T) {
 	got := ActorTemplateRef{Atespace: "team-a", Name: "tmpl-1"}.String()
