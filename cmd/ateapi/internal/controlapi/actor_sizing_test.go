@@ -129,9 +129,10 @@ func TestWorkerCapacity(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			cpu, mem := workerCapacity(tc.pod)
-			if cpu != tc.wantCPU || mem != tc.wantMemory {
-				t.Fatalf("workerCapacity() = (%d, %d), want (%d, %d)", cpu, mem, tc.wantCPU, tc.wantMemory)
+			got := workerCapacity(tc.pod)
+			if got.GetCpuMilli() != tc.wantCPU || got.GetMemoryBytes() != tc.wantMemory {
+				t.Fatalf("workerCapacity() = (%d, %d), want (%d, %d)",
+					got.GetCpuMilli(), got.GetMemoryBytes(), tc.wantCPU, tc.wantMemory)
 			}
 		})
 	}

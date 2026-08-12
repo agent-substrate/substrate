@@ -890,13 +890,19 @@ message Worker {
   }
   State state = 11;
 
-  // Capacity is the worker pod's compute capacity available to host an actor
-  // sandbox, taken from the ateom container's resource limits. The scheduler
-  // only places an actor on a worker whose capacity is >= the actor's declared
-  // resource limits. Zero means "unknown/unset": treated as unconstrained so
-  // placement is not blocked (matching the pre-capacity behavior).
-  int64 cpu_milli_capacity = 12;    // CPU capacity in millicores.
-  int64 memory_bytes_capacity = 13; // Memory capacity in bytes.
+  // The compute capacity this worker can give an actor sandbox.
+  WorkerCapacity capacity = 12;
+}
+
+// WorkerCapacity is the worker pod's compute capacity available to host an
+// actor sandbox, taken from the ateom container's resource limits. The
+// scheduler only places an actor on a worker whose capacity is >= the actor's
+// declared resource limits. An unset message, or a zero field within it, means
+// "unknown/unset" for that dimension: treated as unconstrained so placement is
+// not blocked (matching the pre-capacity behavior).
+message WorkerCapacity {
+  int64 cpu_milli = 1;    // CPU capacity in millicores (1000 = one core).
+  int64 memory_bytes = 2; // Memory capacity in bytes.
 }
 
 message Assignment {

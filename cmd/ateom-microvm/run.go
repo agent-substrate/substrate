@@ -410,9 +410,9 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 	// lower). No host disk — the rootfs is overlay(virtio-fs lower + guest-tmpfs upper).
 	// Size the guest container cgroup to the post-reserve guest RAM (matching memMiB)
 	// so the in-guest cgroup limit binds against actual guest memory.
-	guestSize := sz
-	if sz.MemoryBytes > 0 {
-		guestSize.MemoryBytes = int64(memMiB) * 1024 * 1024
+	guestSize, err := s.guestSize(sz)
+	if err != nil {
+		return err
 	}
 	ctrs, err := s.buildActorContainers(actorUID, containers, guestSize)
 	if err != nil {
@@ -680,16 +680,29 @@ func resolveGuestMemMiB(declaredBytes int64, reserveMiB, fallbackMiB int) (int, 
 // limits: CPU passes through unchanged (kata-agent sets the CFS quota), while
 // memory is reduced by the VMM reserve so the container cgroup limit inside the
 // guest matches the guest VM's actual RAM rather than the (larger) outer limit.
-func (s *AteomService) guestSize(sz sizing.SandboxSize) sizing.SandboxSize {
+// An unset (zero) memory limit passes through unset.
+//
+// The VM's RAM is the real envelope; the per-container cgroup is belt-and-braces.
+// Every container in a multi-container actor gets the same limit — the whole
+// guest RAM — so containers are not bounded relative to each other, and because
+// the guest kernel, agent and init consume part of that RAM the workload reaches
+// the guest OOM killer just before the cgroup limit binds. Sizing the cgroup to
+// the guest's RAM keeps the two numbers from contradicting each other; enforcing
+// a per-container share would need those overheads subtracted first.
+//
+// An error means the declared limit cannot be honored (see resolveGuestMemMiB);
+// callers must not fall back to the unreduced size, which is the mismatch this
+// translation exists to avoid.
+func (s *AteomService) guestSize(sz sizing.SandboxSize) (sizing.SandboxSize, error) {
 	if sz.MemoryBytes <= 0 {
-		return sz
+		return sz, nil
 	}
 	memMiB, err := resolveGuestMemMiB(sz.MemoryBytes, s.memReserveMiB, 0)
 	if err != nil {
-		return sz
+		return sz, err
 	}
 	sz.MemoryBytes = int64(memMiB) * 1024 * 1024
-	return sz
+	return sz, nil
 }
 
 // buildVMConfig assembles the cloud-hypervisor VmConfig. The kernel cmdline replicates

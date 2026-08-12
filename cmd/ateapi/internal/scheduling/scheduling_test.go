@@ -312,8 +312,7 @@ func assigned(atespace, name string) func(*ateapipb.Worker) {
 
 func withCapacity(cpuMilli, memBytes int64) func(*ateapipb.Worker) {
 	return func(w *ateapipb.Worker) {
-		w.CpuMilliCapacity = cpuMilli
-		w.MemoryBytesCapacity = memBytes
+		w.Capacity = &ateapipb.WorkerCapacity{CpuMilli: cpuMilli, MemoryBytes: memBytes}
 	}
 }
 

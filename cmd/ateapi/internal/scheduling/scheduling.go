@@ -149,10 +149,11 @@ func (s *scheduler) Applies(worker *ateapipb.Worker, constraints Constraints) bo
 	// constraint (actor declared no limit) or zero worker capacity (capacity
 	// unknown) is treated as unconstrained, so placement is never blocked by
 	// missing data.
-	if constraints.CPUMilli > 0 && worker.GetCpuMilliCapacity() > 0 && worker.GetCpuMilliCapacity() < constraints.CPUMilli {
+	capacity := worker.GetCapacity()
+	if constraints.CPUMilli > 0 && capacity.GetCpuMilli() > 0 && capacity.GetCpuMilli() < constraints.CPUMilli {
 		return false
 	}
-	if constraints.MemoryBytes > 0 && worker.GetMemoryBytesCapacity() > 0 && worker.GetMemoryBytesCapacity() < constraints.MemoryBytes {
+	if constraints.MemoryBytes > 0 && capacity.GetMemoryBytes() > 0 && capacity.GetMemoryBytes() < constraints.MemoryBytes {
 		return false
 	}
 
