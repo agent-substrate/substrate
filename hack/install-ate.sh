@@ -90,6 +90,8 @@ function usage() {
   echo "  --deploy-benchmarks                    Deploy workloads + locust load test stack"
   echo "  --delete-benchmarks                    Delete the locust stack and workloads"
   echo "  --benchmark-worker-count N             Number of WorkerPool replicas (default: 1)"
+  echo "  --benchmark-sandbox-class CLASS        Sandbox runtime for the benchmark WorkerPool: gvisor | microvm (default: gvisor)."
+  echo "                                         microvm requires hack/install-microvm-deps.sh --install to have run."
   echo ""
   for demo_name in "${ATE_DEMOS[@]}"; do
     echo "Demo: ${demo_name}"
@@ -638,13 +640,26 @@ delete_atenet() {
 }
 
 deploy_benchmarks() {
-  log_step "deploy_benchmarks (worker_count=${BENCHMARK_WORKER_COUNT})"
-  "${ROOT}/benchmarking/deploy_locust.sh" --deploy --worker-count "${BENCHMARK_WORKER_COUNT}"
+  log_step "deploy_benchmarks (worker_count=${BENCHMARK_WORKER_COUNT}, sandbox_class=${BENCHMARK_SANDBOX_CLASS})"
+  # The microvm SandboxConfig lives outside --deploy-ate-system's default set
+  # (which only installs gvisor-default); the workloads deploy references it
+  # by name and would fail if we skipped this.
+  if [[ "${BENCHMARK_SANDBOX_CLASS}" == "microvm" ]]; then
+    "${ROOT}/hack/install-microvm-deps.sh" --install
+  fi
+  "${ROOT}/benchmarking/deploy_locust.sh" \
+    --deploy \
+    --worker-count "${BENCHMARK_WORKER_COUNT}" \
+    --sandbox-class "${BENCHMARK_SANDBOX_CLASS}"
 }
 
 delete_benchmarks() {
-  log_step "delete_benchmarks"
+  log_step "delete_benchmarks (sandbox_class=${BENCHMARK_SANDBOX_CLASS})"
   "${ROOT}/benchmarking/deploy_locust.sh" --delete
+  # only tear down the microvm SandboxConfig if the caller opted into microvm.
+  if [[ "${BENCHMARK_SANDBOX_CLASS}" == "microvm" ]]; then
+    "${ROOT}/hack/install-microvm-deps.sh" --delete
+  fi
 }
 
 delete_all() {
@@ -678,6 +693,7 @@ done
 # treats them as no-ops since the value is already captured here.
 SETUP_CSI=false
 BENCHMARK_WORKER_COUNT=1
+BENCHMARK_SANDBOX_CLASS=gvisor
 prescan_args=("$@")
 for ((i = 0; i < ${#prescan_args[@]}; i++)); do
   case "${prescan_args[i]}" in
@@ -703,12 +719,29 @@ for ((i = 0; i < ${#prescan_args[@]}; i++)); do
     --benchmark-worker-count=*)
       BENCHMARK_WORKER_COUNT="${prescan_args[i]#*=}"
       ;;
+    --benchmark-sandbox-class)
+      if (( i + 1 >= ${#prescan_args[@]} )); then
+        echo "Error: --benchmark-sandbox-class requires gvisor or microvm" >&2
+        exit 1
+      fi
+      BENCHMARK_SANDBOX_CLASS="${prescan_args[$((i + 1))]}"
+      ;;
+    --benchmark-sandbox-class=*)
+      BENCHMARK_SANDBOX_CLASS="${prescan_args[i]#*=}"
+      ;;
     --setup-csi)
       SETUP_CSI=true
       ;;
   esac
 done
 atenet_router >/dev/null
+case "${BENCHMARK_SANDBOX_CLASS}" in
+  gvisor|microvm) ;;
+  *)
+    echo "Error: --benchmark-sandbox-class must be gvisor or microvm, got '${BENCHMARK_SANDBOX_CLASS}'" >&2
+    exit 1
+    ;;
+esac
 
 while [[ "$#" -gt 0 ]]; do
   # Run ${demo}_cmdline if it exists. If it returns 0, then we successfully
@@ -767,6 +800,8 @@ while [[ "$#" -gt 0 ]]; do
     # dispatch loop's `*)` unknown-option branch doesn't reject it.
     --benchmark-worker-count) shift ;;
     --benchmark-worker-count=*) ;;
+    --benchmark-sandbox-class) shift ;;
+    --benchmark-sandbox-class=*) ;;
 
     --create-jwt-authority-pool-secret) create_jwt_authority_pool_secret ;;
     --create-actor-id-ca-pool-secret) create_actor_id_ca_pool_secret ;;
