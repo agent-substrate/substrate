@@ -96,6 +96,17 @@ When parking is **disabled** (`--parked-request-max=0`), the router fails fast:
 admission cap, and only `Aborted` (concurrent-resume) conflicts are retried,
 within a `15s` budget.
 
+### Parked requests survive router shutdown
+
+A request parked when the router pod receives SIGTERM is **not** reset: the
+shutdown sequence keeps the ext_proc server (and, via a preStop handshake, the
+Envoy sidecar) alive until in-flight streams finish, and the ext_proc drain
+deadline (`--drain-timeout`) defaults to a value derived from
+`--parked-request-budget` and is validated at startup to be `>=` the budget —
+so a parked request always gets its full budget and a normal verdict (routed
+`200` or capacity `503`) even mid-termination. See the graceful-shutdown knobs
+(`--drain-delay`, `--drain-timeout`) in `manifests/ate-install/atenet-router.yaml`.
+
 ## Configuration
 
 | Flag                             | Default | Meaning                                                            |

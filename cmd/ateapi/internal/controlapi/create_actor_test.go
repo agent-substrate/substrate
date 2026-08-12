@@ -181,7 +181,8 @@ func TestCreateActor_RejectsDifferentTemplateForDataSnapshot(t *testing.T) {
 		SourceActor:      &ateapipb.ObjectRef{Atespace: testAtespace, Name: "source"},
 		ActorTemplateUid: string(tmpl.GetUID()),
 		ContentScope:     ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
-	}, "gs://snapshots/data")
+		SnapshotUri:      "gs://snapshots/snapshots/" + testAtespace + "/data-snapshot",
+	})
 	if err != nil {
 		t.Fatalf("CreateActorSnapshot: %v", err)
 	}
@@ -212,7 +213,6 @@ func TestCreateActor_RejectsSnapshotWithExternalVolumes(t *testing.T) {
 	template, err := tc.substrateClient.ApiV1alpha1().ActorTemplates(ns).Create(context.Background(), &atev1alpha1.ActorTemplate{
 		ObjectMeta: metav1.ObjectMeta{Name: "tmpl1", Namespace: ns},
 		Spec: atev1alpha1.ActorTemplateSpec{
-			PauseImage:      "pause@sha256:abc",
 			SnapshotsConfig: atev1alpha1.SnapshotsConfig{Location: "gs://snapshots"},
 			Containers: []atev1alpha1.Container{{
 				Name: "main", Image: "main@sha256:abc", VolumeMounts: []atev1alpha1.VolumeMount{{Name: "data", MountPath: "/data"}},
@@ -237,7 +237,8 @@ func TestCreateActor_RejectsSnapshotWithExternalVolumes(t *testing.T) {
 	snapshot, err := tc.persistence.CreateActorSnapshot(context.Background(), &ateapipb.ActorSnapshot{
 		Metadata:         &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "external-volume-snapshot"},
 		ActorTemplateUid: string(template.GetUID()),
-	}, "gs://snapshots/external-volume")
+		SnapshotUri:      "gs://snapshots/snapshots/" + testAtespace + "/external-volume-snapshot",
+	})
 	if err != nil {
 		t.Fatalf("CreateActorSnapshot: %v", err)
 	}

@@ -18,19 +18,25 @@ import (
 	"context"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
 	"go.opentelemetry.io/otel/attribute"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/testing/protocmp"
 	"google.golang.org/protobuf/types/known/fieldmaskpb"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/internal/ateattr"
+	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
 func TestValidateUpdateActorRequest(t *testing.T) {
-	mutableFields := []string{"worker_selector"}
+	mutableFields := []string{
+		"worker_selector",
+		"worker_selector.match_labels",
+	}
 
 	tests := []struct {
 		name string
@@ -99,9 +105,9 @@ func TestValidateUpdateActorRequest(t *testing.T) {
 		updateActorReq(withMaskPaths("metadata.name")),
 		field.ErrorList{field.NotSupported(field.NewPath("update_mask"), "metadata.name", mutableFields)},
 	}, {
-		"nested path in update_mask",
+		"leaf path under a whole-mutable field, also separately mutable",
 		updateActorReq(withMaskPaths("worker_selector.match_labels")),
-		field.ErrorList{field.NotSupported(field.NewPath("update_mask"), "worker_selector.match_labels", mutableFields)},
+		nil,
 	}, {
 		"nil worker_selector",
 		updateActorReq(),
@@ -130,26 +136,73 @@ func TestValidateUpdateActorRequest(t *testing.T) {
 	}
 }
 
-// TestUpdateActor_ClearsMaskedField verifies that naming a field in the mask
-// while leaving it unset on the request clears it, which is the whole point of
-// requiring an explicit mask.
-func TestUpdateActor_ClearsMaskedField(t *testing.T) {
-	svc, _ := serviceWithActor(t, &ateapipb.Actor{
-		Metadata:               &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: testActorID},
-		ActorTemplateNamespace: "ns1",
-		ActorTemplateName:      "tmpl1",
-		WorkerSelector:         &ateapipb.Selector{MatchLabels: map[string]string{"tier": "free"}},
-	})
-
-	updated, err := svc.UpdateActor(context.Background(), &ateapipb.UpdateActorRequest{
-		Actor:      &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: testActorID}},
-		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"worker_selector"}},
-	})
-	if err != nil {
-		t.Fatalf("UpdateActor failed: %v", err)
+func TestUpdateActor_FieldMasks(t *testing.T) {
+	tests := []struct {
+		name      string
+		stored    *ateapipb.Actor
+		req       *ateapipb.Actor
+		maskPaths []string
+		want      *ateapipb.Actor
+	}{
+		{
+			name:      "whole mask sets worker_selector from nil",
+			stored:    &ateapipb.Actor{},
+			req:       &ateapipb.Actor{WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"tier": "paid"}}},
+			maskPaths: []string{"worker_selector"},
+			want:      &ateapipb.Actor{WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"tier": "paid"}}},
+		},
+		{
+			name:      "whole mask clears worker_selector to nil",
+			stored:    &ateapipb.Actor{WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"tier": "free"}}},
+			req:       &ateapipb.Actor{},
+			maskPaths: []string{"worker_selector"},
+			want:      &ateapipb.Actor{},
+		},
+		{
+			name:      "leaf mask initializes worker_selector from nil to set match_labels",
+			stored:    &ateapipb.Actor{},
+			req:       &ateapipb.Actor{WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"tier": "paid"}}},
+			maskPaths: []string{"worker_selector.match_labels"},
+			want:      &ateapipb.Actor{WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"tier": "paid"}}},
+		},
+		{
+			name:      "leaf mask overwrites match_labels, worker_selector already present",
+			stored:    &ateapipb.Actor{WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"tier": "free"}}},
+			req:       &ateapipb.Actor{WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"tier": "paid"}}},
+			maskPaths: []string{"worker_selector.match_labels"},
+			want:      &ateapipb.Actor{WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"tier": "paid"}}},
+		},
+		{
+			name:      "leaf mask clears match_labels, worker_selector stays present",
+			stored:    &ateapipb.Actor{WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"tier": "free"}}},
+			req:       &ateapipb.Actor{},
+			maskPaths: []string{"worker_selector.match_labels"},
+			want:      &ateapipb.Actor{WorkerSelector: &ateapipb.Selector{}},
+		},
 	}
-	if got := updated.GetWorkerSelector(); got != nil {
-		t.Errorf("worker_selector = %v, want nil after masked clear", got)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tt.stored.Metadata = &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: testActorID}
+			tt.stored.ActorTemplateNamespace = "ns1"
+			tt.stored.ActorTemplateName = "tmpl1"
+			svc, _ := serviceWithActor(t, tt.stored)
+
+			tt.req.Metadata = &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: testActorID}
+			updated, err := svc.UpdateActor(context.Background(), &ateapipb.UpdateActorRequest{
+				Actor:      tt.req,
+				UpdateMask: &fieldmaskpb.FieldMask{Paths: tt.maskPaths},
+			})
+			if err != nil {
+				t.Fatalf("UpdateActor failed: %v", err)
+			}
+
+			tt.want.Metadata = &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: testActorID, Version: 2}
+			tt.want.ActorTemplateNamespace = "ns1"
+			tt.want.ActorTemplateName = "tmpl1"
+			if diff := cmp.Diff(tt.want, updated, protocmp.Transform(), ignoreUID, ignoreTimestamps); diff != "" {
+				t.Errorf("UpdateActor response mismatch (-want +got):\n%s", diff)
+			}
+		})
 	}
 }
 
@@ -215,6 +268,152 @@ func TestUpdateActor_FailedLookupStampsRefIdentityOnly(t *testing.T) {
 		if _, ok := attrs[k]; ok {
 			t.Errorf("unexpected %s on failed-update span", k)
 		}
+	}
+}
+
+// TestUpdateActor_DeleteRecreateRace checks that an update is not applied
+// if an actor was deleted and recreated during the update operation.
+func TestUpdateActor_DeleteRecreateRace(t *testing.T) {
+	ctx := context.Background()
+	persistence, cleanup := storetest.SetupTestStore(t)
+	t.Cleanup(cleanup)
+
+	actorRef := resources.ActorRef{Atespace: testAtespace, Name: testActorID}
+
+	// Actor A: what the client reads, and what its uid precondition names.
+	// Freshly created, so it sits at version 1.
+	original, err := persistence.CreateActor(ctx, &ateapipb.Actor{
+		Metadata:               &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: testActorID},
+		ActorTemplateNamespace: "ns1",
+		ActorTemplateName:      "tmpl1",
+		Status:                 ateapipb.Actor_STATUS_RUNNING,
+		WorkerAssignment:       &ateapipb.WorkerAssignment{WorkerPod: "pod-a"},
+	})
+	if err != nil {
+		t.Fatalf("seed CreateActor: %v", err)
+	}
+
+	// A concurrent client deletes A and recreates the same atespace/name as a
+	// brand new actor B, in the window the handler used to leave open between
+	// its own read and the store's WATCH.
+	var recreated *ateapipb.Actor
+	racing := &conflictInjectingStore{
+		Interface: persistence,
+		inject: func() {
+			if _, err := persistence.UpdateActor(ctx, actorRef, func(toUpdate *ateapipb.Actor) error {
+				toUpdate.Status = ateapipb.Actor_STATUS_DELETING
+				return nil
+			}); err != nil {
+				t.Fatalf("racing writer: mark deleting: %v", err)
+			}
+			if _, err := persistence.DeleteActor(ctx, actorRef); err != nil {
+				t.Fatalf("racing writer: DeleteActor: %v", err)
+			}
+			recreated, err = persistence.CreateActor(ctx, &ateapipb.Actor{
+				Metadata:               &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: testActorID},
+				ActorTemplateNamespace: "ns1",
+				ActorTemplateName:      "tmpl1",
+				Status:                 ateapipb.Actor_STATUS_SUSPENDED,
+			})
+			if err != nil {
+				t.Fatalf("racing writer: recreate CreateActor: %v", err)
+			}
+		},
+	}
+	svc := &Service{persistence: racing}
+
+	// The client asserts "only update the actor with uid A".
+	_, err = svc.UpdateActor(ctx, &ateapipb.UpdateActorRequest{
+		Actor: &ateapipb.Actor{
+			Metadata: &ateapipb.ResourceMetadata{
+				Atespace: testAtespace,
+				Name:     testActorID,
+				Uid:      original.GetMetadata().GetUid(),
+			},
+			WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"tier": "paid"}},
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"worker_selector"}},
+	})
+	if code := status.Code(err); code != codes.Aborted {
+		t.Errorf("UpdateActor error = %v (code %v), want code Aborted: the actor holding uid %s was deleted mid-update",
+			err, code, original.GetMetadata().GetUid())
+	}
+
+	stored, err := persistence.GetActor(ctx, actorRef)
+	if err != nil {
+		t.Fatalf("GetActor: %v", err)
+	}
+	if got, want := stored.GetMetadata().GetUid(), recreated.GetMetadata().GetUid(); got != want {
+		t.Fatalf("stored uid = %s, want recreated actor's uid %s", got, want)
+	}
+	// The stored record must still be actor B as its creator left it. Any of A's
+	// state showing up here is the clobber.
+	if got := stored.GetStatus(); got != ateapipb.Actor_STATUS_SUSPENDED {
+		t.Errorf("stored status = %v, want %v: recreated actor was overwritten with the deleted actor's state",
+			got, ateapipb.Actor_STATUS_SUSPENDED)
+	}
+	if got := stored.GetWorkerAssignment(); got != nil {
+		t.Errorf("stored worker_assignment = %v, want nil: recreated actor inherited the deleted actor's worker", got)
+	}
+	if got := stored.GetWorkerSelector(); got != nil {
+		t.Errorf("stored worker_selector = %v, want nil: update meant for the deleted actor was applied", got)
+	}
+}
+
+// TestUpdateActor_ConcurrentDisjointUpdates checks that concurrent write
+// to a disjoint field is resolved by the store and both fields survive the update.
+func TestUpdateActor_ConcurrentDisjointUpdates(t *testing.T) {
+	ctx := context.Background()
+	persistence, cleanup := storetest.SetupTestStore(t)
+	t.Cleanup(cleanup)
+
+	actorRef := resources.ActorRef{Atespace: testAtespace, Name: testActorID}
+
+	if _, err := persistence.CreateActor(ctx, &ateapipb.Actor{
+		Metadata:               &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: testActorID},
+		ActorTemplateNamespace: "ns1",
+		ActorTemplateName:      "tmpl1",
+		Status:                 ateapipb.Actor_STATUS_RUNNING,
+	}); err != nil {
+		t.Fatalf("seed CreateActor: %v", err)
+	}
+
+	// A suspend workflow bumps status (a field that a later update operation will not touch)
+	// inside the handler's read-modify-write window.
+	racing := &conflictInjectingStore{
+		Interface: persistence,
+		inject: func() {
+			if _, err := persistence.UpdateActor(ctx, actorRef, func(toUpdate *ateapipb.Actor) error {
+				toUpdate.Status = ateapipb.Actor_STATUS_SUSPENDING
+				return nil
+			}); err != nil {
+				t.Fatalf("racing writer: mark suspending: %v", err)
+			}
+		},
+	}
+	svc := &Service{persistence: racing}
+
+	// Update operation is changing the worker_selector field, not the actor's status (like the concurrent op)
+	if _, err := svc.UpdateActor(ctx, &ateapipb.UpdateActorRequest{
+		Actor: &ateapipb.Actor{
+			Metadata:       &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: testActorID},
+			WorkerSelector: &ateapipb.Selector{MatchLabels: map[string]string{"tier": "paid"}},
+		},
+		UpdateMask: &fieldmaskpb.FieldMask{Paths: []string{"worker_selector"}},
+	}); err != nil {
+		t.Fatalf("UpdateActor error = %v, want success: no version precondition was set, so the conflict is the server's to resolve", err)
+	}
+
+	stored, err := persistence.GetActor(ctx, actorRef)
+	if err != nil {
+		t.Fatalf("GetActor: %v", err)
+	}
+	// Both worker selector and status updates survive
+	if got := stored.GetWorkerSelector().GetMatchLabels()["tier"]; got != "paid" {
+		t.Errorf("stored worker_selector[tier] = %q, want %q", got, "paid")
+	}
+	if got := stored.GetStatus(); got != ateapipb.Actor_STATUS_SUSPENDING {
+		t.Errorf("stored status = %v, want %v: the concurrent writer's field must survive", got, ateapipb.Actor_STATUS_SUSPENDING)
 	}
 }
 

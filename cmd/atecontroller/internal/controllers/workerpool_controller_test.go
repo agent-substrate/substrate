@@ -18,9 +18,13 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"reflect"
 	"testing"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	k8errors "k8s.io/apimachinery/pkg/api/errors"
@@ -35,41 +39,28 @@ import (
 	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/envtest"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
-	"github.com/agent-substrate/substrate/internal/envtestbins"
+	"github.com/agent-substrate/substrate/internal/ateattr"
+	"github.com/agent-substrate/substrate/internal/testenv"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 )
 
 var (
-	testEnv   *envtest.Environment
 	cfg       *rest.Config
 	k8sClient client.Client
 )
 
 func TestMain(m *testing.M) {
-	binaryAssetsDirectory, err := envtestbins.BinaryAssetsDir()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "%v\n", err)
-		os.Exit(1)
-	}
-
-	testEnv = &envtest.Environment{
-		CRDDirectoryPaths:     []string{"../../../../manifests/ate-install/generated"},
-		BinaryAssetsDirectory: binaryAssetsDirectory,
-	}
-
-	cfg, err = testEnv.Start()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "envtest start failed: %v\n", err)
-		os.Exit(1)
-	}
+	var stopEnv func()
+	cfg, stopEnv = testenv.Start()
 
 	scheme := runtime.NewScheme()
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(atev1alpha1.AddToScheme(scheme))
 
+	var err error
 	k8sClient, err = client.New(cfg, client.Options{Scheme: scheme})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "k8s client creation failed: %v\n", err)
@@ -110,7 +101,7 @@ func TestMain(m *testing.M) {
 	code := m.Run()
 
 	mgrCancel()
-	_ = testEnv.Stop()
+	stopEnv()
 	os.Exit(code)
 }
 
@@ -665,5 +656,83 @@ func eventually(t *testing.T, condition func(ctx context.Context) (bool, error))
 	t.Helper()
 	if err := wait.PollUntilContextTimeout(t.Context(), 100*time.Millisecond, 15*time.Second, true, condition); err != nil {
 		t.Fatalf("condition not met within timeout: %v", err)
+	}
+}
+
+// TestSyncStatus_ReadyReplicas verifies that a Deployment reporting 3 replicas
+// with 2 ready propagates to WorkerPool.status.
+func TestSyncStatus_ReadyReplicas(t *testing.T) {
+	t.Parallel()
+	ctx := t.Context()
+	wp := makeWorkerPool("test-sync-ready", "default", 3, "ateom:v1")
+	if err := k8sClient.Create(ctx, wp); err != nil {
+		t.Fatalf("create WorkerPool: %v", err)
+	}
+	deleteOnCleanup(t, wp)
+	eventually(t, func(ctx context.Context) (bool, error) {
+		_, err := getDeployment(ctx, wp)
+		return err == nil, nil
+	})
+	// Simulate the deployment controller reporting 3 pods, 2 of them ready.
+	updateDeploymentStatus(t, ctx, wp, "patch Deployment status", func(dep *appsv1.Deployment) {
+		dep.Status.Replicas = 3
+		dep.Status.ReadyReplicas = 2
+	})
+	eventually(t, func(ctx context.Context) (bool, error) {
+		current := &atev1alpha1.WorkerPool{}
+		if err := k8sClient.Get(ctx, types.NamespacedName{Name: wp.Name, Namespace: wp.Namespace}, current); err != nil {
+			return false, nil
+		}
+		return current.Status.Replicas == 3 && current.Status.ReadyReplicas == 2, nil
+	})
+}
+
+// TestWorkerPoolMetrics verifies that the registered callback observes
+// spec.replicas and status.readyReplicas per WorkerPool, labeled with the pool
+// namespace and name. A fake client keeps this off the envtest reconciler,
+// which would otherwise resync status out from under the assertion.
+func TestWorkerPoolMetrics(t *testing.T) {
+	t.Parallel()
+	scheme := runtime.NewScheme()
+	if err := atev1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatalf("add scheme: %v", err)
+	}
+	wp := makeWorkerPool("test-metrics", "default", 4, "ateom:v1")
+	wp.Status = atev1alpha1.WorkerPoolStatus{Replicas: 4, ReadyReplicas: 2}
+	reader := sdkmetric.NewManualReader()
+	r := &WorkerPoolReconciler{
+		Client: fake.NewClientBuilder().WithScheme(scheme).WithObjects(wp).Build(),
+	}
+	if err := r.InitMetrics(sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)).Meter("test")); err != nil {
+		t.Fatalf("InitMetrics: %v", err)
+	}
+	var rm metricdata.ResourceMetrics
+	if err := reader.Collect(t.Context(), &rm); err != nil {
+		t.Fatalf("collect metrics: %v", err)
+	}
+	wantAttrs := attribute.NewSet(
+		ateattr.WorkerPoolNamespaceKey.String(wp.Namespace),
+		ateattr.WorkerPoolNameKey.String(wp.Name),
+	)
+	got := map[string]int64{}
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			sum, ok := m.Data.(metricdata.Sum[int64])
+			if !ok {
+				continue
+			}
+			for _, dp := range sum.DataPoints {
+				if dp.Attributes.Equals(&wantAttrs) {
+					got[m.Name] = dp.Value
+				}
+			}
+		}
+	}
+	want := map[string]int64{
+		"ate.workerpool.desired_workers": 4,
+		"ate.workerpool.ready_workers":   2,
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("observed %v, want %v", got, want)
 	}
 }

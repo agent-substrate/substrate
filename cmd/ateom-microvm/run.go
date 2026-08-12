@@ -34,6 +34,7 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/kata"
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/third_party/kata/agentpb"
 	"github.com/agent-substrate/substrate/internal/ateompath"
+	"github.com/agent-substrate/substrate/internal/ateomstats"
 	"github.com/agent-substrate/substrate/internal/imagecache"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/readyz"
@@ -75,13 +76,23 @@ type runningActor struct {
 	// un-faulted pages). Empty for cold-run actors (their snapshot is already complete).
 	restoreSourceDir string
 
-	// logAgent is the kata-agent ttrpc client kept open for the lifetime of the
-	// stdout/stderr forwarding goroutines (they pump the container's output via
-	// ReadStdout/ReadStderr on this connection). It is NOT closed when RunWorkload /
-	// RestoreWorkload return — teardownActor closes it, which makes the in-flight
-	// ReadStdout/ReadStderr calls fail and the forwarding goroutines exit (io.EOF).
-	// nil if forwarding was not started (e.g. a best-effort post-restore dial failed).
-	logAgent *kata.AgentClient
+	// snapshotIsSelfContained is set when this actor was restored eagerly, which
+	// reads every populated extent up front. Every page the snapshot had is then
+	// resident, so cloud-hypervisor's next snapshot already holds all of it and
+	// there is no delta to overlay onto restoreSourceDir.
+	snapshotIsSelfContained bool
+
+	// guestAgent is the kata-agent ttrpc client retained past boot. Two things
+	// share it: the stdout/stderr forwarding goroutines (they pump the
+	// container's output via ReadStdout/ReadStderr on this connection for the
+	// actor's lifetime) and GetWorkloadStats (via s.guestStats, which points at
+	// this same client). It is NOT closed when RunWorkload / RestoreWorkload
+	// return — teardownActor closes it, which makes the in-flight
+	// ReadStdout/ReadStderr calls fail and the forwarding goroutines exit
+	// (io.EOF). nil if the post-boot dial failed (e.g. a best-effort
+	// post-restore dial), which loses both log forwarding and guest stats for
+	// this activation.
+	guestAgent *kata.AgentClient
 }
 
 // baseIDFile is a tiny snapshot file (under the checkpoint/restore dir) holding
@@ -197,7 +208,7 @@ func writeGuestResolvConf(rootfs string) error {
 //   - The runtime assets (guest kernel, guest OS image, cloud-hypervisor, virtiofsd,
 //     base kata config) are on disk and passed as runtime asset paths.
 //   - The OCI bundle (config.json + populated rootfs/) is prepared per container.
-func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkloadRequest) (*ateompb.RunWorkloadResponse, error) {
+func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkloadRequest) (resp *ateompb.RunWorkloadResponse, retErr error) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 	if err := s.deactivateActorNetworking(ctx); err != nil {
@@ -216,6 +227,21 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	}
 
 	s.actorLogger.EmitLifecycleLog("Actor starting", p.actorRef, p.actorUID, p.templateNS, p.templateName)
+
+	// Retain the attribution before the boot rather than after it, so a sample
+	// taken against a workload that dies mid-boot is still attributable. A cold
+	// boot can take a while and can be retried, and an actor that never reaches
+	// readyz is one whose usage is worth reporting rather than the one case that
+	// reports nothing. The defer drops it again if the boot fails outright.
+	// Matches ateom-gvisor's RunWorkload.
+	attribution := p.actorAttribution()
+	s.activeActor.Store(&attribution)
+	defer func() {
+		if retErr != nil {
+			s.activeActor.Store(nil)
+		}
+	}()
+
 	if err := s.coldBootActorRetrying(ctx, p); err != nil {
 		return nil, err
 	}
@@ -236,6 +262,17 @@ type actorBootParams struct {
 	assetPaths   map[string]string
 	// egressGateway is nil unless actor TCP should be redirected through atunnel.
 	egressGateway *ateompb.EgressGateway
+}
+
+// actorAttribution regroups the actor fields that arrived on the Run/Restore
+// request, for retention in AteomService.activeActor.
+func (p actorBootParams) actorAttribution() ateomstats.ActorAttribution {
+	return ateomstats.ActorAttribution{
+		Ref:               p.actorRef,
+		UID:               p.actorUID,
+		TemplateNamespace: p.templateNS,
+		TemplateName:      p.templateName,
+	}
 }
 
 // coldBootAttempts is how many times a cold boot is tried when the micro-VM
@@ -462,7 +499,7 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 		return fmt.Errorf("while waiting for container readyz: %w", err)
 	}
 
-	ra := &runningActor{chCmd: chCmd, vfsdCmd: vfsdCmd, durableVfsdCmd: durableVfsdCmd, apiSocket: apiSocket, baseID: actorUID, logAgent: ac}
+	ra := &runningActor{chCmd: chCmd, vfsdCmd: vfsdCmd, durableVfsdCmd: durableVfsdCmd, apiSocket: apiSocket, baseID: actorUID, guestAgent: ac}
 	if err := s.activateActorNetworking(p.actorRef.Atespace, p.actorRef.Name, egress); err != nil {
 		return err
 	}
@@ -472,9 +509,18 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 	// container/exec id is <name>_ovl (see startOverlayContainer), so key the streams by
 	// that and tag with the display container name. The goroutines read over ac for the
 	// actor's lifetime and exit (io.EOF) when teardownActor closes ac.
+	workloadIDs := make([]string, 0, len(ctrs))
 	for _, c := range ctrs {
 		s.startActorLogForwarding(ac, p.actorRef, actorUID, templateNS, templateName, overlayWorkloadID(c.name), c.name)
+		workloadIDs = append(workloadIDs, overlayWorkloadID(c.name))
 	}
+
+	// Publish the guest to GetWorkloadStats, past every error return above: a
+	// failing attempt closes ac on its way out (and coldBootActorRetrying may
+	// then try the whole boot again), so a target published earlier would leave
+	// the handler polling a connection nobody owns. Same client the forwarding
+	// above reads over — ttrpc multiplexes, and teardownActor ends both.
+	s.guestStats.Store(&guestStatsTarget{actorUID: actorUID, agent: ac, workloadIDs: workloadIDs})
 
 	return nil
 }

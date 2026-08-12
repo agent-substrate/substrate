@@ -23,7 +23,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"net/http"
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -32,7 +31,6 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/portforward"
-	"k8s.io/client-go/transport/spdy"
 )
 
 // ServicePortForward forwards a random local port to servicePort of the
@@ -111,11 +109,10 @@ func podPortForward(ctx context.Context, config *rest.Config, clientset kubernet
 		Name(podName).
 		SubResource("portforward")
 
-	transport, upgrader, err := spdy.RoundTripperFor(config)
+	dialer, err := portforward.NewSPDYOverWebsocketDialer(req.URL(), config)
 	if err != nil {
-		return 0, nil, fmt.Errorf("creating SPDY transport: %w", err)
+		return 0, nil, fmt.Errorf("creating websocket dialer: %w", err)
 	}
-	dialer := spdy.NewDialer(upgrader, &http.Client{Transport: transport}, http.MethodPost, req.URL())
 
 	stopCh := make(chan struct{})
 	readyCh := make(chan struct{})

@@ -35,14 +35,23 @@ const validSHA256 = "a397be1abc2420d26bce6c70e6e2ff96c73aaaab929756c56f5e2089ea8
 // the install — loaded here so the test guards the policy we actually ship.
 const vapManifestPath = "../../../manifests/ate-install/sandboxconfig-validation.yaml"
 
+const validPauseImage = "registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4"
+
 func sandboxConfig(name string, class SandboxClass, assets map[string]map[string]AssetFile) *SandboxConfig {
 	return &SandboxConfig{
 		ObjectMeta: metav1.ObjectMeta{Name: name},
 		Spec: SandboxConfigSpec{
 			SandboxClass: class,
+			PauseImage:   validPauseImage,
 			Assets:       assets,
 		},
 	}
+}
+
+// withPauseImage overrides the pause image on an otherwise-valid config.
+func withPauseImage(sc *SandboxConfig, image string) *SandboxConfig {
+	sc.Spec.PauseImage = image
+	return sc
 }
 
 func runscAsset() AssetFile { return AssetFile{URL: "gs://bucket/runsc", SHA256: validSHA256} }
@@ -184,6 +193,16 @@ func TestSandboxConfigValidation(t *testing.T) {
 		sc:      sandboxConfig("bad-sha", SandboxClassGvisor, map[string]map[string]AssetFile{"amd64": {"runsc": {URL: "gs://bucket/runsc", SHA256: "deadbeef"}}}),
 		wantErr: true,
 		errMsg:  "sha256",
+	}, {
+		name:    "missing pauseImage",
+		sc:      withPauseImage(sandboxConfig("bad-no-pause", SandboxClassGvisor, map[string]map[string]AssetFile{"amd64": {"gvisor": gvisorAsset()}}), ""),
+		wantErr: true,
+		errMsg:  "pauseImage",
+	}, {
+		name:    "unpinned pauseImage",
+		sc:      withPauseImage(sandboxConfig("bad-unpinned-pause", SandboxClassGvisor, map[string]map[string]AssetFile{"amd64": {"gvisor": gvisorAsset()}}), "registry.k8s.io/pause:3.10.2"),
+		wantErr: true,
+		errMsg:  "All images must be pinned",
 	}}
 
 	for _, tt := range tests {

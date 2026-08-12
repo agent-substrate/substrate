@@ -29,9 +29,24 @@ import (
 
 const networkingAtespace = "networking-e2e"
 
+// actorTemplate identifies a demo ActorTemplate to build test Actors from,
+// along with the hack/install-ate.sh flag that deploys it.
+type actorTemplate struct {
+	namespace string
+	name      string
+	// deployFlag names the install flag that creates the template, so a
+	// missing fixture reports how to fix it rather than just failing.
+	deployFlag string
+}
+
+var (
+	counterTemplate = actorTemplate{namespace: "ate-demo-counter", name: "counter", deployFlag: "--deploy-demo-counter"}
+	egressTemplate  = actorTemplate{namespace: "ate-demo-egress", name: "egress", deployFlag: "--deploy-demo-egress"}
+)
+
 func TestActorDirectAccess(t *testing.T) {
 	ctx := context.Background()
-	actorName, actor := createAndResumeActor(t, ctx, "direct")
+	actorName, actor := createAndResumeActor(t, ctx, "direct", counterTemplate)
 	router := mustRouterClient(t, ctx)
 	defer router.Close()
 
@@ -68,7 +83,38 @@ func TestActorDirectAccess(t *testing.T) {
 	})
 }
 
-func createAndResumeActor(t *testing.T, ctx context.Context, prefix string) (string, *ateapipb.Actor) {
+// TestActorEgress exercises the full egress path. The Actor's outbound TCP
+// connection is transparently redirected by nftables into atunnel, wrapped in
+// mTLS with the Actor's own actor-identity certificate plus an HTTP CONNECT to
+// atenet-egress, authorized there against that certificate, and only then
+// dialed out. A masqueraded (pre-gateway) egress would also return 200, so this
+// asserts the gateway is deployed and that it did not reject the Actor.
+func TestActorEgress(t *testing.T) {
+	ctx := context.Background()
+	actorName, _ := createAndResumeActor(t, ctx, "egress", egressTemplate)
+	router := mustRouterClient(t, ctx)
+	defer router.Close()
+
+	// The egress demo fetches the URL it is given and echoes the upstream
+	// status and body back.
+	payload := []byte(`{"url":"http://example.com/"}`)
+	actorRef := resources.ActorRef{Atespace: networkingAtespace, Name: actorName}
+	response, err := router.PostJSON(ctx, actorRef, "/", payload)
+	if err != nil {
+		t.Fatalf("POST to egress Actor through ingress: %v", err)
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(response.Body)
+	if err != nil {
+		t.Fatalf("reading egress response body (HTTP %d): %v", response.StatusCode, err)
+	}
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("Actor egress fetch returned HTTP %d, want 200; body: %s", response.StatusCode, body)
+	}
+	t.Logf("Actor egress fetch succeeded; body: %s", body)
+}
+
+func createAndResumeActor(t *testing.T, ctx context.Context, prefix string, template actorTemplate) (string, *ateapipb.Actor) {
 	t.Helper()
 	clients := e2e.GetClients()
 	actorName := fmt.Sprintf("%s-%d", prefix, time.Now().UnixNano())
@@ -80,10 +126,10 @@ func createAndResumeActor(t *testing.T, ctx context.Context, prefix string) (str
 	})
 	if _, err := clients.SubstrateAPI.CreateActor(ctx, &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
 		Metadata:               &ateapipb.ResourceMetadata{Atespace: networkingAtespace, Name: actorName},
-		ActorTemplateNamespace: "ate-demo-counter",
-		ActorTemplateName:      "counter",
+		ActorTemplateNamespace: template.namespace,
+		ActorTemplateName:      template.name,
 	}}); err != nil {
-		t.Fatalf("CreateActor: %v (deploy the fixture with --deploy-demo-counter)", err)
+		t.Fatalf("CreateActor from %s/%s: %v (deploy the fixture with %s)", template.namespace, template.name, err, template.deployFlag)
 	}
 	t.Cleanup(func() {
 		_, _ = clients.SubstrateAPI.SuspendActor(context.Background(), &ateapipb.SuspendActorRequest{Actor: actorRef})

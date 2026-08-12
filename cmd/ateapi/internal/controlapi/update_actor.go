@@ -20,6 +20,7 @@ import (
 	"fmt"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/internal/fieldmask"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
@@ -29,9 +30,10 @@ import (
 
 // actorMutableFields lists the Actor field paths a client may name in an
 // UpdateActor update_mask.
-var actorMutableFields = mutableFields[*ateapipb.Actor]{
-	"worker_selector": func(dst, src *ateapipb.Actor) { dst.WorkerSelector = src.GetWorkerSelector() },
-}
+var actorMutableFields = fieldmask.NewMutableFields(
+	"worker_selector",
+	"worker_selector.match_labels",
+)
 
 func (s *Service) UpdateActor(ctx context.Context, req *ateapipb.UpdateActorRequest) (*ateapipb.Actor, error) {
 	if errs := validateUpdateActorRequest(req); len(errs) > 0 {
@@ -41,36 +43,25 @@ func (s *Service) UpdateActor(ctx context.Context, req *ateapipb.UpdateActorRequ
 	actorRef := resources.ActorRefFromActor(in)
 	setSpanActorRefAttributes(ctx, actorRef)
 
-	actor, err := s.persistence.GetActor(ctx, actorRef)
-	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
-			return nil, status.Errorf(codes.NotFound, "Actor %s not found", actorRef)
-		}
-		return nil, fmt.Errorf("while getting actor: %w", err)
-	}
-
-	// UID and version preconditions
-	if uid := in.GetMetadata().GetUid(); uid != "" && uid != actor.GetMetadata().GetUid() {
-		return nil, status.Errorf(codes.Aborted, "Actor %s has uid %s, not %s", actorRef, actor.GetMetadata().GetUid(), uid)
-	}
-
-	expectedVersion := actor.GetMetadata().GetVersion()
-	if version := in.GetMetadata().GetVersion(); version != 0 {
-		expectedVersion = version
-	}
-
-	applyUpdateMask(actor, in, req.GetUpdateMask(), actorMutableFields)
-
-	updated, err := s.persistence.UpdateActor(ctx, actor, expectedVersion)
+	storedActor, err := s.persistence.UpdateActor(ctx, actorRef, store.WithPrecondition(in, func(toUpdate *ateapipb.Actor) error {
+		fieldmask.Apply(toUpdate, in, req.GetUpdateMask())
+		return nil
+	}))
 	if err != nil {
 		if errors.Is(err, store.ErrVersionConflict) {
 			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
 		}
+		if errors.Is(err, store.ErrUIDConflict) {
+			return nil, status.Errorf(codes.Aborted, "actor %s/%s not found with uid %s", in.GetMetadata().GetAtespace(), in.GetMetadata().GetName(), in.GetMetadata().GetUid())
+		}
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, status.Errorf(codes.NotFound, "actor %s not found", actorRef)
+		}
 		return nil, fmt.Errorf("while updating actor: %w", err)
 	}
 
-	setSpanActorAttributes(ctx, updated)
-	return updated, nil
+	setSpanActorAttributes(ctx, storedActor)
+	return storedActor, nil
 }
 
 func validateUpdateActorRequest(req *ateapipb.UpdateActorRequest) field.ErrorList {
@@ -85,7 +76,7 @@ func validateUpdateActorRequest(req *ateapipb.UpdateActorRequest) field.ErrorLis
 
 	errs = append(errs, resources.ValidateResourceMetadataRef(actor.GetMetadata(), actorPath.Child("metadata"))...)
 
-	errs = append(errs, validateUpdateMask(req.GetUpdateMask(), actorMutableFields)...)
+	errs = append(errs, fieldmask.Validate(req.GetUpdateMask(), actorMutableFields, fldPath.Child("update_mask"))...)
 
 	if selector := actor.GetWorkerSelector(); selector != nil {
 		errs = append(errs, validateSelector(selector, actorPath.Child("worker_selector"))...)

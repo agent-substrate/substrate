@@ -16,11 +16,11 @@
 #
 # This is sourced as part of install-ate.sh. Do not run directly.
 
-ATE_DEMOS+=(demo-autoscaled-workerpool) # register demo-autoscaled-workerpool
-
-demo-autoscaled-workerpool_usage() {
-  echo "  --deploy-demo-autoscaled-workerpool            Deploy autoscaled-workerpool demo (HPA + prometheus-adapter + counter workload)"
-}
+# This demo is kind-only: it ships its own prometheus-adapter and a kind
+# specific HPA.
+if [[ "${ATE_INSTALL_KIND:-false}" == "true" ]]; then
+  ATE_DEMOS+=(demo-autoscaled-workerpool) # register demo-autoscaled-workerpool
+fi
 
 demo-autoscaled-workerpool_cmdline() {
   case "${1}" in

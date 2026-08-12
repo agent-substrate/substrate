@@ -40,6 +40,30 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+// restoreMemMode picks how cloud-hypervisor should load guest RAM, from what the VMM
+// just told us about itself over vmm.ping.
+//
+// OnDemand is what we want: it faults pages in as the guest touches them, so an idle
+// restored actor holds its working set rather than its whole snapshot — on the counter
+// demo, 16MiB against 158MiB. Eager gives that up, reading every populated extent up
+// front.
+//
+// It is still the right choice on a VMM that prefaults, where OnDemand is not merely
+// wasteful but unusable: the prefault storm starves the guest and its readiness probe
+// never passes.
+func restoreMemMode(ctx context.Context, info ch.VMMInfo) string {
+	if !info.PrefaultsUnconditionally() {
+		return ch.MemRestoreOnDemand
+	}
+	if info.Version == "" && info.BuildVersion == "" {
+		// Unknown version: eager works everywhere, so prefer a bigger idle footprint
+		// over an actor that cannot start. Say so, because that cost is invisible.
+		slog.WarnContext(ctx, "cloud-hypervisor did not report a version; restoring eagerly",
+			slog.String("mode", ch.MemRestoreEager))
+	}
+	return ch.MemRestoreEager
+}
+
 // RestoreWorkload brings the actor back from a snapshot, on a possibly different
 // pod. What that means depends on the scope the snapshot was taken with:
 //
@@ -54,7 +78,7 @@ import (
 //
 // Contract with atelet: the snapshot's files have been downloaded to RestoreStateDir,
 // and the durable-dir volume directories re-created (empty).
-func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.RestoreWorkloadRequest) (*ateompb.RestoreWorkloadResponse, error) {
+func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.RestoreWorkloadRequest) (resp *ateompb.RestoreWorkloadResponse, retErr error) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
 
@@ -77,6 +101,18 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	tStart := time.Now()
 
 	s.actorLogger.EmitLifecycleLog("Actor restoring", p.actorRef, p.actorUID, p.templateNS, p.templateName)
+
+	// Same as RunWorkload: retain before the restore, drop again if it fails. A
+	// Full-scope resume reaches "executing" in a different way than a cold boot
+	// does, but the window between accepting the actor and serving it is the same
+	// window, and a poll landing in it should name the actor either way.
+	attribution := p.actorAttribution()
+	s.activeActor.Store(&attribution)
+	defer func() {
+		if retErr != nil {
+			s.activeActor.Store(nil)
+		}
+	}()
 
 	// Restore the durable-dir volumes before anything can observe them: for Full
 	// that means before the share's virtiofsd starts, for Data before the workload
@@ -265,14 +301,20 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 			_ = chCmd.Process.Kill()
 		}
 	}()
-	// OnDemand (userfaultfd) memory restore: ~75ms vs ~1.8s eager, and it keeps the
-	// memfd SPARSE so the next suspend isn't the eager-copy-densified full-RAM scan.
-	// CH's OnDemand snapshot alone would be INCOMPLETE (it writes only faulted pages,
-	// dropping the un-faulted ones it demand-pages from this source) — so
-	// CheckpointWorkload overlays CH's delta onto this source (restoreSourceDir) to
-	// rebuild a complete snapshot. CH demand-pages from restoreDir for the VM's whole
-	// lifetime, so it must persist until teardown (atelet keeps it until reset).
-	if err := client.RestoreWithNetFDs(ctx, restoreDir, restoredNets, "OnDemand"); err != nil {
+	// How guest RAM comes back depends on the VMM (see restoreMemMode), and the rest
+	// of the actor's lifecycle follows from that choice:
+	//
+	//   - OnDemand: cloud-hypervisor demand-pages from restoreDir for the VM's whole
+	//     lifetime, so it must stay put, and the snapshot it writes later holds only
+	//     the pages faulted in meanwhile — CheckpointWorkload overlays that delta onto
+	//     this source to rebuild a complete one.
+	//   - Eager: every populated extent is read here and now. Nothing pages from the
+	//     source afterwards and nothing merges against it, so it is dropped below and
+	//     the next snapshot stands on its own.
+	memMode := restoreMemMode(ctx, client.Info())
+	slog.InfoContext(ctx, "restoring guest memory",
+		slog.String("mode", memMode), slog.String("vmm_version", client.Info().Version))
+	if err := client.RestoreWithNetFDs(ctx, restoreDir, restoredNets, memMode); err != nil {
 		return fmt.Errorf("while restoring VM with net FDs: %w", err)
 	}
 	if err := client.Resume(ctx); err != nil {
@@ -284,9 +326,25 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 		return fmt.Errorf("while waiting for container readyz: %w", err)
 	}
 
+	// An eager restore has read the whole snapshot into guest memory, and nothing
+	// merges against it afterwards, so the staged copy is dead weight from here on —
+	// a second ~160MiB per running actor on top of the checkpoint it will write.
+	// Drop the memory image but keep the directory: atelet re-stages it wholesale
+	// before any later restore, and the small files beside it stay cheap to keep.
+	if memMode == ch.MemRestoreEager {
+		staged := filepath.Join(restoreDir, "memory-ranges")
+		if err := os.Remove(staged); err != nil && !os.IsNotExist(err) {
+			// Not fatal: it only costs disk until the actor is torn down.
+			slog.WarnContext(ctx, "could not drop the staged memory image", "error", err)
+		} else {
+			slog.InfoContext(ctx, "dropped the staged memory image (eager restore needs no merge base)")
+		}
+	}
+
 	ra := &runningActor{
 		chCmd: chCmd, vfsdCmd: vfsdCmd, durableVfsdCmd: durableVfsdCmd,
 		apiSocket: apiSocket, baseID: srcID, restoreSourceDir: restoreDir,
+		snapshotIsSelfContained: memMode == ch.MemRestoreEager,
 	}
 
 	// Re-attach stdout/stderr forwarding for each container: the restored guest's
@@ -295,14 +353,14 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 	// <name>_ovl (same as the cold run). Best-effort — a failed dial must not fail the
 	// restore (the actor is already running); forwarding is just skipped.
 	vsockPath := kata.VsockSocketPath(actorUID)
-	logAC, dialErr := dialAgentRetry(ctx, vsockPath, 15*time.Second)
+	guestAC, dialErr := dialAgentRetry(ctx, vsockPath, 15*time.Second)
 	if dialErr != nil {
-		slog.WarnContext(ctx, "post-restore agent dial failed; actor log forwarding disabled for this restore",
+		slog.WarnContext(ctx, "post-restore agent dial failed; actor log forwarding and guest stats disabled for this restore",
 			slog.String("id", actorUID), slog.Any("err", dialErr))
 	} else {
-		ra.logAgent = logAC
+		ra.guestAgent = guestAC
 		for _, c := range containers {
-			s.startActorLogForwarding(logAC, p.actorRef, actorUID, templateNS, templateName, overlayWorkloadID(c.GetName()), c.GetName())
+			s.startActorLogForwarding(guestAC, p.actorRef, actorUID, templateNS, templateName, overlayWorkloadID(c.GetName()), c.GetName())
 		}
 	}
 
@@ -310,6 +368,21 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 		return err
 	}
 	s.running[actorUID] = ra
+
+	// Publish the guest to GetWorkloadStats, past the last error return above
+	// for the same reason as in coldBootActor. Skipped when the dial failed:
+	// telemetry rides on the forwarding connection, so that activation answers
+	// FAILED_PRECONDITION until its next checkpoint. Not worth a second dial of
+	// its own — whatever kept the agent from answering a 15s retry loop would
+	// keep it from answering that one too.
+	if ra.guestAgent != nil {
+		workloadIDs := make([]string, 0, len(containers))
+		for _, c := range containers {
+			workloadIDs = append(workloadIDs, overlayWorkloadID(c.GetName()))
+		}
+		s.guestStats.Store(&guestStatsTarget{actorUID: actorUID, agent: ra.guestAgent, workloadIDs: workloadIDs})
+	}
+
 	slog.InfoContext(ctx, "Actor restored (overlay rootfs)",
 		slog.String("id", actorUID), slog.Duration("total", time.Since(tStart)))
 	return nil

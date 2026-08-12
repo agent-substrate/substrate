@@ -108,7 +108,10 @@ func (s *Service) CreateActor(ctx context.Context, req *ateapipb.CreateActorRequ
 	}
 
 	// Volume creation is completed asynchronously after the actor is recorded.
-	initVols := initialActorVolumes(template)
+	initVols, err := initialActorVolumes(ctx, s.storageClassLister, template)
+	if err != nil {
+		return nil, err
+	}
 
 	actor := &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{

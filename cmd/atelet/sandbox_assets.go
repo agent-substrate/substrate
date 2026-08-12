@@ -25,13 +25,16 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	gzip "github.com/klauspost/compress/gzip"
 	"io"
 	"io/fs"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/agent-substrate/substrate/cmd/atelet/internal/ategcs"
 	"github.com/agent-substrate/substrate/internal/ateerrors"
@@ -67,15 +70,20 @@ type assetEntry struct {
 }
 
 // sandboxAssetsRecord is the sandbox runtime an actor is running, projected onto
-// the local node's architecture: the sandbox class plus the asset set keyed by
-// asset name (gVisor uses a single "gvisor" release-tarball asset; records
-// written before the tarball release mechanism use a bare "runsc" asset).
+// the local node's architecture: the sandbox class and pause image plus the
+// asset set keyed by asset name (gVisor uses a single "gvisor" release-tarball
+// asset; records written before the tarball release mechanism use a bare
+// "runsc" asset).
 // It is both the per-actor on-node record (written at Run/Restore, read at
 // Checkpoint) and the snapshot manifest (written at Checkpoint, read at
 // Restore).
 type sandboxAssetsRecord struct {
 	SandboxClass string                `json:"sandboxClass"`
 	Assets       map[string]assetEntry `json:"assets"`
+	// PauseImage is the root sandbox container's image. It is recorded here
+	// rather than taken from the request at Restore so a snapshot is rebuilt
+	// with the same sandbox it was captured from.
+	PauseImage string `json:"pauseImage"`
 	// Actor identity makes a flat snapshot self-identifying if control-plane
 	// persistence is unavailable.
 	Atespace               string `json:"atespace,omitempty"`
@@ -89,6 +97,11 @@ type sandboxAssetsRecord struct {
 	// (gVisor's image files, cloud-hypervisor's snapshot set, ...). Empty in the
 	// on-node record written at Run/Restore; populated at Checkpoint.
 	SnapshotFiles []string `json:"snapshotFiles,omitempty"`
+	// Scope is the snapshot scope the checkpoint captured, as the shared
+	// ateattr label ("full" or "data"), so a snapshot's content is knowable
+	// from the manifest alone. Empty in the on-node record written at
+	// Run/Restore and in snapshot manifests written before this field existed.
+	Scope string `json:"scope,omitempty"`
 }
 
 // recordFromRequest projects a request's per-architecture SandboxAssets onto the
@@ -102,8 +115,12 @@ func recordFromRequest(sa *ateletpb.SandboxAssets) (*sandboxAssetsRecord, error)
 	if archAssets == nil || len(archAssets.GetFiles()) == 0 {
 		return nil, fmt.Errorf("sandbox_assets has no assets for architecture %q", arch)
 	}
+	if sa.GetPauseImage() == "" {
+		return nil, fmt.Errorf("sandbox_assets has no pause_image")
+	}
 	rec := &sandboxAssetsRecord{
 		SandboxClass: sa.GetSandboxClass(),
+		PauseImage:   sa.GetPauseImage(),
 		Assets:       make(map[string]assetEntry, len(archAssets.GetFiles())),
 	}
 	for name, f := range archAssets.GetFiles() {
@@ -162,11 +179,14 @@ func (s *AteomHerder) fetchAsset(ctx context.Context, entry assetEntry) (string,
 	localPath := ateompath.RunSCBinaryPath(entry.SHA256)
 	_, err := os.Stat(localPath)
 	if err == nil {
+		slog.DebugContext(ctx, "Sandbox asset cache hit", slog.String("path", localPath))
 		return localPath, nil
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return "", wrapFileSystemErr("while stat-ing local file", err)
 	}
 
+	slog.InfoContext(ctx, "Sandbox asset cache miss; downloading", slog.String("url", entry.URL), slog.String("sha256", entry.SHA256))
+	t := time.Now()
 	tmpName, err := s.downloadVerified(ctx, entry, filepath.Base(localPath)+"-download-")
 	if err != nil {
 		return "", err
@@ -180,6 +200,7 @@ func (s *AteomHerder) fetchAsset(ctx context.Context, entry assetEntry) (string,
 		return "", wrapFileSystemErr("while renaming temp file to target", err)
 	}
 
+	slog.InfoContext(ctx, "Sandbox asset download complete", slog.String("path", localPath), slog.Duration("duration", time.Since(t)))
 	return localPath, nil
 }
 
@@ -196,16 +217,20 @@ func (s *AteomHerder) fetchGVisorRelease(ctx context.Context, entry assetEntry) 
 	runscPath := filepath.Join(releaseDir, "runsc")
 	_, err := os.Stat(releaseDir)
 	if err == nil {
+		slog.DebugContext(ctx, "gVisor release cache hit", slog.String("dir", releaseDir))
 		return runscPath, nil
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return "", wrapFileSystemErr("while stat-ing extracted release dir", err)
 	}
 
+	slog.InfoContext(ctx, "gVisor release cache miss; downloading", slog.String("url", entry.URL), slog.String("sha256", entry.SHA256))
+	tDownload := time.Now()
 	tarball, err := s.downloadVerified(ctx, entry, filepath.Base(releaseDir)+"-download-")
 	if err != nil {
 		return "", err
 	}
 	defer os.Remove(tarball)
+	slog.InfoContext(ctx, "gVisor release download complete", slog.String("url", entry.URL), slog.Duration("duration", time.Since(tDownload)))
 
 	tmpDir, err := os.MkdirTemp(ateompath.StaticFilesDir, filepath.Base(releaseDir)+"-extract-")
 	if err != nil {
@@ -213,9 +238,12 @@ func (s *AteomHerder) fetchGVisorRelease(ctx context.Context, entry assetEntry) 
 	}
 	defer func() { _ = os.RemoveAll(tmpDir) }() // no-op after rename
 
-	if err := extractTarBz2(tarball, tmpDir); err != nil {
+	slog.InfoContext(ctx, "Extracting gVisor archive", slog.String("path", tarball), slog.String("url", entry.URL))
+	tExtract := time.Now()
+	if err := extractTarArchive(ctx, tarball, entry.URL, tmpDir); err != nil {
 		return "", err
 	}
+	slog.InfoContext(ctx, "gVisor archive extraction complete", slog.String("url", entry.URL), slog.Duration("duration", time.Since(tExtract)))
 	if fi, err := os.Stat(filepath.Join(tmpDir, "runsc")); err != nil || !fi.Mode().IsRegular() {
 		return "", fmt.Errorf("%w: gvisor tarball %v contains no runsc binary (stat: %v)", ateerrors.ReasonInvalidSandboxAsset, entry.URL, err)
 	}
@@ -244,6 +272,7 @@ func (s *AteomHerder) downloadVerified(ctx context.Context, entry assetEntry, tm
 	// atelet-level decision, not per-asset: try the anonymous client first so the
 	// common public-gVisor path stays fast, then fall back to the main client. The
 	// asset is streamed (not buffered) to disk below.
+	slog.DebugContext(ctx, "Streaming download from storage", slog.String("url", entry.URL))
 	rc, err := s.openAsset(ctx, entry.URL)
 	if err != nil {
 		return "", fmt.Errorf("while fetching %v: %w", entry.URL, err)
@@ -290,18 +319,55 @@ func (s *AteomHerder) downloadVerified(ctx context.Context, entry assetEntry, tm
 	return tmpName, nil
 }
 
-// extractTarBz2 unpacks the tar.bz2 at tarPath into destDir.
-func extractTarBz2(tarPath, destDir string) error {
+// extractTarArchive decompresses and extracts the tarball file at tarPath into
+// destDir. It dynamically selects the decompression format (gzip, bzip2, or none)
+// based on the suffix of urlPath. If ctx is canceled, extraction will stop
+// early and return an error.
+func extractTarArchive(ctx context.Context, tarPath, urlPath, destDir string) error {
+	var isGz, isBz, isTar bool
+	if strings.HasSuffix(urlPath, ".tar.gz") || strings.HasSuffix(urlPath, ".tgz") {
+		isGz = true
+	} else if strings.HasSuffix(urlPath, ".tar.bz2") || strings.HasSuffix(urlPath, ".tbz2") {
+		isBz = true
+	} else if strings.HasSuffix(urlPath, ".tar") {
+		isTar = true
+	} else {
+		return fmt.Errorf("%w: unsupported archive format for URL %s (must be .tar.gz, .tgz, .tar.bz2, .tbz2, or .tar)", ateerrors.ReasonInvalidSandboxAsset, urlPath)
+	}
+
 	f, err := os.Open(tarPath)
 	if err != nil {
 		return wrapFileSystemErr("while opening downloaded tarball", err)
 	}
 	defer f.Close()
-	tr := tar.NewReader(bzip2.NewReader(bufio.NewReader(f)))
+
+	var r io.Reader
+	buf := bufio.NewReader(f)
+
+	if isGz {
+		gzr, err := gzip.NewReader(buf)
+		if err != nil {
+			return fmt.Errorf("%w: failed to create gzip reader for %s: %w", ateerrors.ReasonInvalidSandboxAsset, urlPath, err)
+		}
+		defer gzr.Close()
+		r = gzr
+	} else if isBz {
+		r = bzip2.NewReader(buf)
+	} else if isTar {
+		r = buf
+	}
+
+	tr := tar.NewReader(r)
 	var total int64
+	var filesCount int
 	for {
+		if err := ctx.Err(); err != nil {
+			return fmt.Errorf("archive extraction canceled: %w", err)
+		}
+
 		hdr, err := tr.Next()
 		if err == io.EOF {
+			slog.DebugContext(ctx, "Extracted tar entries successfully", slog.Int("files", filesCount), slog.Int64("bytes", total))
 			return nil
 		}
 		if err != nil {
@@ -322,6 +388,7 @@ func extractTarBz2(tarPath, destDir string) error {
 			}
 		case tar.TypeReg:
 			total += hdr.Size
+			filesCount++
 			if total > maxAssetBytes {
 				return fmt.Errorf("%w: gvisor tarball inflates past the %d-byte cap", ateerrors.ReasonInvalidSandboxAsset, maxAssetBytes)
 			}
@@ -335,7 +402,6 @@ func extractTarBz2(tarPath, destDir string) error {
 			return fmt.Errorf("%w: gvisor tarball entry %q has unsupported type %d", ateerrors.ReasonInvalidSandboxAsset, hdr.Name, hdr.Typeflag)
 		}
 	}
-
 }
 
 // writeTarFile writes one regular tarball entry to `dest` with the given mode.
@@ -410,6 +476,12 @@ func unmarshalSandboxRecord(data []byte) (*sandboxAssetsRecord, error) {
 	rec := &sandboxAssetsRecord{}
 	if err := json.Unmarshal(data, rec); err != nil {
 		return nil, fmt.Errorf("%w: while parsing sandbox record/manifest: %w", ateerrors.ReasonInvalidSandboxAsset, err)
+	}
+	// Fail loudly rather than let an empty image reach the image pull: a record
+	// without one predates the pause image moving into the sandbox config, and
+	// its snapshot cannot be rebuilt with a known-matching sandbox.
+	if rec.PauseImage == "" {
+		return nil, fmt.Errorf("%w: sandbox record/manifest has no pauseImage", ateerrors.ReasonInvalidSandboxAsset)
 	}
 	return rec, nil
 }

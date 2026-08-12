@@ -52,10 +52,9 @@ spec:
         - "-m"
         - "locust"
         - "-f"
-        - "/app/tests"
+        - "/app/tests/glutton.py"
         - "--master"
         - "--master-bind-host=0.0.0.0"
-        - "--class-picker"
         env:
         - name: OTEL_EXPORTER_OTLP_ENDPOINT
           value: http://opentelemetry-collector.gke-managed-otel.svc.cluster.local:4317
@@ -73,39 +72,8 @@ spec:
         - name: servicedns-ca
           mountPath: /run/servicedns-ca
           readOnly: true
-        - name: podidentity
-          mountPath: /run/podidentity.podcert.ate.dev
-          readOnly: true
-        resources:
-          requests:
-            cpu: "500m"
-            memory: "512Mi"
-
-      - name: locust-python-worker
-        image: us-docker.pkg.dev/${PROJECT_ID}/gcr.io/ate-images/locust-test:latest
-        imagePullPolicy: Always
-        args:
-        - "-m"
-        - "locust"
-        - "-f"
-        - "/app/tests"
-        - "--worker"
-        # Literal IPv4, not "localhost". The master binds 0.0.0.0:5557, which
-        # is IPv4-only; locust sets ZMQ_IPV6 on the worker socket whenever the
-        # master host resolves to anything AF_INET6, and the pod's /etc/hosts
-        # maps localhost to ::1 as well as 127.0.0.1. The worker would then
-        # dial [::1]:5557 and retry forever against a silent master.
-        - "--master-host=127.0.0.1"
-        env:
-        - name: OTEL_EXPORTER_OTLP_ENDPOINT
-          value: http://opentelemetry-collector.gke-managed-otel.svc.cluster.local:4317
-        # Skips the GluttonUser stub declaration so the master never assigns
-        # GluttonUser spawns to this worker — boomer owns that class.
-        - name: LOCUST_NO_GLUTTON_USER
-          value: "1"
-        volumeMounts:
-        - name: servicedns-ca
-          mountPath: /run/servicedns-ca
+        - name: ateapi-token
+          mountPath: /run/ateapi-token
           readOnly: true
         - name: podidentity
           mountPath: /run/podidentity.podcert.ate.dev
@@ -114,6 +82,43 @@ spec:
           requests:
             cpu: "500m"
             memory: "512Mi"
+      # Python and boomer workers do not play nicely together, leaving this in for reference.
+      # - name: locust-python-worker
+      #   image: us-docker.pkg.dev/${PROJECT_ID}/gcr.io/ate-images/locust-test:latest
+      #   imagePullPolicy: Always
+      #   args:
+      #   - "-m"
+      #   - "locust"
+      #   - "-f"
+      #   - "/app/tests"
+      #   - "--worker"
+      #   # Literal IPv4, not "localhost". The master binds 0.0.0.0:5557, which
+      #   # is IPv4-only; locust sets ZMQ_IPV6 on the worker socket whenever the
+      #   # master host resolves to anything AF_INET6, and the pod's /etc/hosts
+      #   # maps localhost to ::1 as well as 127.0.0.1. The worker would then
+      #   # dial [::1]:5557 and retry forever against a silent master.
+      #   - "--master-host=127.0.0.1"
+      #   env:
+      #   - name: OTEL_EXPORTER_OTLP_ENDPOINT
+      #     value: http://opentelemetry-collector.gke-managed-otel.svc.cluster.local:4317
+      #   # Skips the GluttonUser stub declaration so the master never assigns
+      #   # GluttonUser spawns to this worker — boomer owns that class.
+      #   - name: LOCUST_NO_GLUTTON_USER
+      #     value: "1"
+      #   volumeMounts:
+      #   - name: servicedns-ca
+      #     mountPath: /run/servicedns-ca
+      #     readOnly: true
+      #   - name: ateapi-token
+      #     mountPath: /run/ateapi-token
+      #     readOnly: true
+      #   - name: podidentity
+      #     mountPath: /run/podidentity.podcert.ate.dev
+      #     readOnly: true
+      #   resources:
+      #     requests:
+      #       cpu: "500m"
+      #       memory: "512Mi"
 
       - name: boomer-glutton
         # Same image as the master/worker — the boomer-glutton Go binary is
@@ -140,6 +145,9 @@ spec:
         - name: servicedns-ca
           mountPath: /run/servicedns-ca
           readOnly: true
+        - name: ateapi-token
+          mountPath: /run/ateapi-token
+          readOnly: true
         - name: podidentity
           mountPath: /run/podidentity.podcert.ate.dev
           readOnly: true
@@ -158,6 +166,13 @@ spec:
                 matchLabels:
                   podcert.ate.dev/canarying: live
               path: ca.crt
+      - name: ateapi-token
+        projected:
+          sources:
+          - serviceAccountToken:
+              audience: api.ate-system.svc
+              expirationSeconds: 3600
+              path: token
       # The benchmark's own client identity, presented to ateapi. Its
       # interceptor rejects calls carrying no credential, taking identity from
       # an mTLS client cert or, failing that, a Bearer token. Use the cert:
@@ -193,3 +208,17 @@ spec:
     protocol: TCP
     port: 8001
     targetPort: 8001
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: benchmarking-permissions
+  namespace: ate-system
+subjects:
+- kind: ServiceAccount
+  name: default
+  namespace: benchmarking
+roleRef:
+  kind: Role
+  name: atelet-endpointslices
+  apiGroup: rbac.authorization.k8s.io

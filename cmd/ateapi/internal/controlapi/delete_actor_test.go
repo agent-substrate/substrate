@@ -169,9 +169,9 @@ func TestDeleteActor_MultipleVolumeDeletionFailures(t *testing.T) {
 	createTemplate(t, tc, ns)
 
 	plugin := &failingVolumePlugin{}
-	oldGlobalPlugin := globalVolumePlugin
-	globalVolumePlugin = plugin
-	defer func() { globalVolumePlugin = oldGlobalPlugin }()
+	tc.service.volumePlugins = map[string]volume.VolumePluginControlPlane{
+		"substrate.io/mock": plugin,
+	}
 
 	actor := &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{
@@ -182,8 +182,8 @@ func TestDeleteActor_MultipleVolumeDeletionFailures(t *testing.T) {
 		ActorTemplateNamespace: ns,
 		ActorTemplateName:      "tmpl1",
 		ActorVolumes: []*ateapipb.ExternalVolume{
-			{VolumeName: "vol1", StorageVolumeId: "storage-vol-1", Status: ateapipb.ExternalVolume_STATUS_CREATED},
-			{VolumeName: "vol2", StorageVolumeId: "storage-vol-2", Status: ateapipb.ExternalVolume_STATUS_CREATED},
+			{VolumeName: "vol1", StorageVolumeId: "storage-vol-1", Status: ateapipb.ExternalVolume_STATUS_CREATED, VolumeType: "substrate.io/mock"},
+			{VolumeName: "vol2", StorageVolumeId: "storage-vol-2", Status: ateapipb.ExternalVolume_STATUS_CREATED, VolumeType: "substrate.io/mock"},
 		},
 	}
 	if _, err := tc.persistence.CreateActor(context.Background(), actor); err != nil {

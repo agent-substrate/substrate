@@ -57,7 +57,9 @@ import (
 // durableTarFile is the snapshot file holding the tar of the actor's durable-dir
 // volumes. Its entries are <volumeName>/... relative to
 // ateompath.DurableDirVolumeMountsDir, so extraction restores the same layout.
-const durableTarFile = "durable-dir.tar"
+// The name is shared with atelet, which uses it to carve durable data out of a
+// FULL snapshot's file set when uploading a paused checkpoint as DATA.
+const durableTarFile = ateompath.DurableDirTarFile
 
 // hasDurableVolumes reports whether any container mounts a durable-dir volume.
 func hasDurableVolumes(containers []*ateompb.Container) bool {

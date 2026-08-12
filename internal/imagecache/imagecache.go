@@ -65,8 +65,11 @@ import (
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
+	"go.opentelemetry.io/otel/metric"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/singleflight"
+
+	"github.com/agent-substrate/substrate/internal/ateattr"
 )
 
 const (
@@ -83,6 +86,9 @@ const (
 	// file sizes when backfilled, so it may differ from disk usage and
 	// across nodes.
 	layerSizeFileName = "size"
+
+	// defaultMinAge is the default eviction minimum age (see WithMinAge).
+	defaultMinAge = 2 * time.Minute
 
 	// layerPullConcurrency bounds concurrent layer download+unpack streams per
 	// image pull. Memory use is O(stream buffers) per slot, independent of
@@ -102,17 +108,37 @@ type Store struct {
 
 	localhostRegistryReplacement string
 
-	// platform overrides the default pull platform (linux/GOARCH). Used by
-	// validation tooling that runs on a different architecture than the
-	// nodes it validates for.
+	// platform overrides the default pull platform (linux/GOARCH), for
+	// callers pulling on a different architecture than the images' target.
 	platform *v1.Platform
+
+	// actorsDir is scanned by InUse for bundle overlay specs; empty disables
+	// the scan (the root set is then empty).
+	actorsDir string
+
+	// minAge vetoes eviction of any layer or image record younger than this,
+	// covering the window between a pull (or cache-hit stat) and the bundle
+	// spec write / ateom mount that roots it.
+	minAge time.Duration
+
+	// meter, when set, is the meter the store reports on. See WithMeter.
+	meter metric.Meter
+
+	// requests counts EnsureImage lookups by outcome. Nil without a meter,
+	// which recordRequest treats as a no-op.
+	requests metric.Int64Counter
 
 	imageSF singleflight.Group
 	layerSF singleflight.Group
 
-	// hitMu makes the hit path's record read + last-use touch atomic with
-	// respect to eviction, which will hold it exclusive around record
-	// removal. No exclusive holder yet, so effectively free.
+	// evictMu serializes EvictUnused passes (concurrent passes would fight
+	// over the same candidates for no benefit).
+	evictMu sync.Mutex
+
+	// hitMu closes the hit-vs-evict window: held shared by the hit path
+	// (cachedImageHit), exclusive by eviction's record removal
+	// (removeStaleRecord), so a hit's last-use touch and eviction's final
+	// re-check can never interleave. Uncontended except during a pass.
 	hitMu sync.RWMutex
 }
 
@@ -135,6 +161,27 @@ func WithLocalhostRegistryReplacement(replacement string) Option {
 // WithPlatform overrides the pull platform (default: linux/GOARCH).
 func WithPlatform(p v1.Platform) Option {
 	return func(s *Store) { s.platform = &p }
+}
+
+// WithActorsDir points the eviction root-set scan at the node's actors
+// directory (the per-actor state dirs under ateompath.BasePath). Each
+// <actorsDir>/<actorUID>/bundles/<container>/rootfs-overlay.json roots its
+// image and layers against eviction. Empty disables the scan.
+func WithActorsDir(dir string) Option {
+	return func(s *Store) { s.actorsDir = dir }
+}
+
+// WithMinAge overrides the eviction minimum age (default 2m): layers and
+// image records younger than this are never evicted.
+func WithMinAge(d time.Duration) Option {
+	return func(s *Store) { s.minAge = d }
+}
+
+// WithMeter attaches the meter the store reports ate.imagecache.requests on.
+// Without it the store records nothing, so a caller with no metrics pipeline
+// needs no meter provider.
+func WithMeter(m metric.Meter) Option {
+	return func(s *Store) { s.meter = m }
 }
 
 // Image describes one cached, ready-to-compose image.
@@ -162,9 +209,17 @@ type imageRecord struct {
 // startup recovery: verifying the layout version and sweeping temp dirs left
 // by unpacks that were in flight when a previous atelet died.
 func New(root string, opts ...Option) (*Store, error) {
-	s := &Store{root: root}
+	s := &Store{root: root, minAge: defaultMinAge}
 	for _, o := range opts {
 		o(s)
+	}
+
+	if s.meter != nil {
+		requests, err := newRequestsCounter(s.meter)
+		if err != nil {
+			return nil, err
+		}
+		s.requests = requests
 	}
 
 	for _, d := range []string{s.layersDir(), s.manifestsDir()} {
@@ -191,6 +246,19 @@ func New(root string, opts ...Option) (*Store, error) {
 
 	if err := s.sweepTempDirs(); err != nil {
 		return nil, err
+	}
+	// Startup-only orphan recovery (see RecoverOrphans for why it must not
+	// run during normal operation). Never fatal: a corrupt record must not
+	// keep atelet from serving actors. Gated means nothing was attempted
+	// (orphans persist until the named file is repaired and the next
+	// restart); per-item errors mean the scan ran and reclaimed what it
+	// could.
+	if _, err := s.RecoverOrphans(context.Background()); err != nil {
+		if errors.Is(err, ErrIncompleteEnumeration) {
+			slog.Error("Image cache startup orphan scan skipped", slog.Any("err", err))
+		} else {
+			slog.Warn("Image cache startup orphan recovery incomplete", slog.Any("err", err))
+		}
 	}
 	return s, nil
 }
@@ -258,7 +326,12 @@ func (s *Store) sweepTempDirs() error {
 // I/O; tag refs cost one HEAD request to resolve the tag to a manifest
 // digest (so tag refs are cacheable, and a moved tag is picked up on the
 // next call).
-func (s *Store) EnsureImage(ctx context.Context, ref string) (*Image, error) {
+func (s *Store) EnsureImage(ctx context.Context, ref string) (_ *Image, err error) {
+	// A miss until a complete record proves otherwise; recordRequest
+	// reclassifies a failure onto its own outcome.
+	outcome := ateattr.ImageCacheOutcomeMiss
+	defer func() { s.recordRequest(ctx, outcome, err) }()
+
 	parsedRef, err := s.parseRef(ref)
 	if err != nil {
 		return nil, fmt.Errorf("while parsing reference: %w", err)
@@ -273,24 +346,20 @@ func (s *Store) EnsureImage(ctx context.Context, ref string) (*Image, error) {
 	} else {
 		// Tag ref: one small HEAD request pins it to an immutable manifest
 		// digest, which is the only safe cache key for mutable tags.
-		desc, err := remote.Head(parsedRef, s.remoteOpts(ctx, parsedRef)...)
-		if err != nil {
-			return nil, fmt.Errorf("while resolving tag %q to a digest: %w", ref, err)
+		desc, headErr := remote.Head(parsedRef, s.remoteOpts(ctx, parsedRef)...)
+		if headErr != nil {
+			err = fmt.Errorf("while resolving tag %q to a digest: %w", ref, headErr)
+			return nil, err
 		}
 		digest = desc.Digest
 	}
 
-	s.hitMu.RLock()
-	img, err := s.cachedImage(digest)
-	if err == nil && img != nil {
-		// Record last-use for eviction's LRU ordering.
-		s.touchRecord(digest)
-	}
-	s.hitMu.RUnlock()
+	img, err := s.cachedImageHit(digest)
 	if err != nil {
 		return nil, err
 	}
 	if img != nil {
+		outcome = ateattr.ImageCacheOutcomeHit
 		slog.InfoContext(ctx, "Image cache hit", slog.String("ref", ref), slog.String("digest", digest.String()))
 		return img, nil
 	}
@@ -307,6 +376,22 @@ func (s *Store) EnsureImage(ctx context.Context, ref string) (*Image, error) {
 		return nil, err
 	}
 	return v.(*Image), nil
+}
+
+// cachedImageHit is the hit side of the hitMu contract: it verifies the
+// cached image and records last-use for eviction's LRU ordering, atomic
+// with respect to eviction's record removal (removeStaleRecord holds
+// hitMu exclusive). Refreshing the mtime also renews the min-age veto, so
+// an image in active use cannot age into eviction between this stat and
+// the ateom's mount.
+func (s *Store) cachedImageHit(digest v1.Hash) (*Image, error) {
+	s.hitMu.RLock()
+	defer s.hitMu.RUnlock()
+	img, err := s.cachedImage(digest)
+	if err == nil && img != nil {
+		s.touchRecord(digest)
+	}
+	return img, err
 }
 
 // cachedImage returns the cached image for digest, or nil if the record or

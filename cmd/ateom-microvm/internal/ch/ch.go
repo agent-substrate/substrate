@@ -35,6 +35,7 @@ import (
 type Client struct {
 	apiSocket string
 	api       *apiClient
+	info      VMMInfo
 }
 
 // NewClient returns a Client bound to a cloud-hypervisor api-socket path. The
@@ -43,24 +44,47 @@ func NewClient(apiSocket string) *Client {
 	return &Client{apiSocket: apiSocket, api: newAPIClient(apiSocket)}
 }
 
-// Ping returns nil if the VMM api-socket answers vmm.ping.
-func (c *Client) Ping(ctx context.Context) error {
-	return c.api.get(ctx, "/api/v1/vmm.ping")
+// Info returns what the VMM last reported about itself, zero until a successful
+// Ping or WaitReady. A Client belongs to one actor's VMM and is used from that
+// actor's goroutine, so this needs no synchronization.
+func (c *Client) Info() VMMInfo { return c.info }
+
+// VMMInfo is what vmm.ping reports about the running VMM. Version is a semver
+// ("53.0.0"); BuildVersion is the release tag it was built from ("v53.0").
+type VMMInfo struct {
+	Version      string   `json:"version"`
+	BuildVersion string   `json:"build_version"`
+	Features     []string `json:"features"`
 }
 
-// WaitReady blocks until the api-socket answers vmm.ping or the deadline passes.
-func (c *Client) WaitReady(ctx context.Context, deadline time.Duration) error {
+// Ping reports what the VMM says about itself, or an error if the api-socket does
+// not answer vmm.ping.
+func (c *Client) Ping(ctx context.Context) (VMMInfo, error) {
+	var info VMMInfo
+	if err := c.api.getJSON(ctx, "/api/v1/vmm.ping", &info); err != nil {
+		return VMMInfo{}, err
+	}
+	c.info = info
+	return info, nil
+}
+
+// WaitReady blocks until the api-socket answers vmm.ping or the deadline passes,
+// returning what that answer said. Callers get the VMM's version for free this way:
+// the handshake already happens before every boot and restore, so nothing has to
+// run the binary again to ask.
+func (c *Client) WaitReady(ctx context.Context, deadline time.Duration) (VMMInfo, error) {
 	end := time.Now().Add(deadline)
 	for {
-		if err := c.Ping(ctx); err == nil {
-			return nil
+		info, err := c.Ping(ctx)
+		if err == nil {
+			return info, nil
 		}
 		if !time.Now().Before(end) {
-			return fmt.Errorf("cloud-hypervisor api socket %q not ready after %s", c.apiSocket, deadline)
+			return VMMInfo{}, fmt.Errorf("cloud-hypervisor api socket %q not ready after %s", c.apiSocket, deadline)
 		}
 		select {
 		case <-ctx.Done():
-			return ctx.Err()
+			return VMMInfo{}, ctx.Err()
 		case <-time.After(10 * time.Millisecond):
 		}
 	}

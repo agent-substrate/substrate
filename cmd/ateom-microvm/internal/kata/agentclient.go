@@ -230,6 +230,30 @@ func (a *AgentClient) ReadStderr(ctx context.Context, containerID, execID string
 	return resp.GetData(), nil
 }
 
+// StatsContainer returns the guest cgroup accounting for one container, as the
+// kata-agent reads it from inside the guest. Mirrors
+// grpc.AgentService/StatsContainer.
+//
+// It returns only the cgroup half of the response; the network counters
+// alongside it are per-guest-interface rather than per-container and are not
+// what ateom reports. A nil return with a nil error means the agent answered
+// without cgroup stats for this container — it has no accounting for it, which
+// is a normal state for one that has exited. What that means for the actor is
+// the caller's call: the summing in GetWorkloadStats folds it in as a zero
+// contribution, because a gone container consumes nothing from here on.
+//
+// Safe to call while the stdout/stderr forwarding goroutines are reading over
+// the same client: ttrpc multiplexes concurrent calls over the one connection,
+// which is already what those goroutines rely on.
+func (a *AgentClient) StatsContainer(ctx context.Context, containerID string) (*agentpb.CgroupStats, error) {
+	resp := &agentpb.StatsContainerResponse{}
+	req := &agentpb.StatsContainerRequest{ContainerId: containerID}
+	if err := a.client.Call(ctx, "grpc.AgentService", "StatsContainer", req, resp); err != nil {
+		return nil, fmt.Errorf("agent StatsContainer %q: %w", containerID, err)
+	}
+	return resp.GetCgroupStats(), nil
+}
+
 // StreamReader adapts the agent's repeated ReadStdout/ReadStderr unary calls into
 // an io.Reader, so the consumer can pump the container's output through the shared
 // actorlog forwarder like any other stream. Each Read issues one RPC with Len set

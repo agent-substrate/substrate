@@ -18,7 +18,7 @@
 #   --deploy:  workloads/deploy.sh --deploy -> locust/build_and_push.sh -> locust/deploy.sh --deploy
 #   --delete:  locust/deploy.sh --delete -> workloads/deploy.sh --delete (reverse order)
 #
-# Worker count is forwarded to workloads/deploy.sh.
+# Worker count and sandbox class are forwarded to workloads/deploy.sh.
 
 set -o errexit -o nounset -o pipefail
 
@@ -26,17 +26,20 @@ ROOT="$(git rev-parse --show-toplevel)"
 BENCHMARKING_DIR="${ROOT}/benchmarking"
 
 WORKER_COUNT=1
+SANDBOX_CLASS=gvisor
 SKIP_BUILD=0
 
 usage() {
   echo "Usage: $0 [options]"
   echo ""
   echo "Options:"
-  echo "  --deploy             Deploy workloads, build/push locust image, then deploy locust"
-  echo "  --delete             Delete locust and then workloads"
-  echo "  --worker-count N     Number of WorkerPool replicas (default: 1)"
-  echo "  --skip-build         Skip locust image build/push (use the existing :latest image)"
-  echo "  -h|--help            Show this help message"
+  echo "  --deploy                Deploy workloads, build/push locust image, then deploy locust"
+  echo "  --delete                Delete locust and then workloads"
+  echo "  --worker-count N        Number of WorkerPool replicas (default: 1)"
+  echo "  --sandbox-class CLASS   Sandbox runtime for the WorkerPool: gvisor | microvm (default: gvisor)."
+  echo "                          microvm requires hack/install-microvm-deps.sh --install to have run."
+  echo "  --skip-build            Skip locust image build/push (use the existing :latest image)"
+  echo "  -h|--help               Show this help message"
   echo ""
   echo "Environment:"
   echo "  PROJECT_ID, BUCKET_NAME, etc. are read from .ate-dev-env.sh by the"
@@ -55,6 +58,8 @@ while [[ "$#" -gt 0 ]]; do
     --delete) action="delete" ;;
     --worker-count) shift; WORKER_COUNT="$1" ;;
     --worker-count=*) WORKER_COUNT="${1#*=}" ;;
+    --sandbox-class) shift; SANDBOX_CLASS="$1" ;;
+    --sandbox-class=*) SANDBOX_CLASS="${1#*=}" ;;
     --skip-build) SKIP_BUILD=1 ;;
     -h|--help) usage; exit 0 ;;
     *)
@@ -66,9 +71,20 @@ while [[ "$#" -gt 0 ]]; do
   shift
 done
 
+case "${SANDBOX_CLASS}" in
+  gvisor|microvm) ;;
+  *)
+    echo "Error: --sandbox-class must be gvisor or microvm, got '${SANDBOX_CLASS}'" >&2
+    exit 1
+    ;;
+esac
+
 if [[ "${action}" == "deploy" ]]; then
-  echo "=== Deploying benchmark workloads (worker_count=${WORKER_COUNT}) ==="
-  "${BENCHMARKING_DIR}/workloads/deploy.sh" --deploy --worker-count "${WORKER_COUNT}"
+  echo "=== Deploying benchmark workloads (worker_count=${WORKER_COUNT}, sandbox_class=${SANDBOX_CLASS}) ==="
+  "${BENCHMARKING_DIR}/workloads/deploy.sh" \
+    --deploy \
+    --worker-count "${WORKER_COUNT}" \
+    --sandbox-class "${SANDBOX_CLASS}"
 
   if [[ "${SKIP_BUILD}" -eq 0 ]]; then
     echo

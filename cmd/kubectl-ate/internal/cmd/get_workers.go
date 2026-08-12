@@ -29,6 +29,7 @@ var (
 	getWorkerNamespaceFlag string
 	getWorkerAtespaceFlag  string
 	getWorkerSelectorFlag  string
+	getWorkerClassFlag     string
 )
 
 var getWorkersCmd = &cobra.Command{
@@ -43,6 +44,7 @@ func init() {
 	getWorkersCmd.Flags().StringVarP(&getWorkerNamespaceFlag, "namespace", "n", "", "Scope output to a specific Kubernetes namespace")
 	getWorkersCmd.Flags().StringVarP(&getWorkerAtespaceFlag, "atespace", "a", "", "Filter worker pods hosting actors in a specific atespace")
 	getWorkersCmd.Flags().StringVarP(&getWorkerSelectorFlag, "selector", "l", "", "Filter by worker pool labels")
+	getWorkersCmd.Flags().StringVar(&getWorkerClassFlag, "sandbox-class", "", "Filter by sandbox class (e.g. gvisor, microvm)")
 	getCmd.AddCommand(getWorkersCmd)
 }
 
@@ -52,6 +54,7 @@ type GetWorkersRunner struct {
 	namespace    string
 	atespace     string
 	selector     string
+	sandboxClass string
 	outputFmt    string
 	out          io.Writer
 }
@@ -61,7 +64,7 @@ func (r *GetWorkersRunner) Run(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	filtered, err := filterWorkers(workers, r.namespace, r.atespace, r.selector)
+	filtered, err := filterWorkers(workers, r.namespace, r.atespace, r.selector, r.sandboxClass)
 	if err != nil {
 		return err
 	}
@@ -86,6 +89,7 @@ func runGetWorkers(cmd *cobra.Command, args []string) error {
 		namespace:    getWorkerNamespaceFlag,
 		atespace:     getWorkerAtespaceFlag,
 		selector:     getWorkerSelectorFlag,
+		sandboxClass: getWorkerClassFlag,
 		outputFmt:    outputFmt,
 		out:          os.Stdout,
 	}

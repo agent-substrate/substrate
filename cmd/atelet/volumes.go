@@ -24,16 +24,10 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/volume"
+	"github.com/agent-substrate/substrate/internal/volume/csi"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
-
-var (
-	globalVolumePlugin volume.VolumePluginWorkerPlane = volume.NewMockVolumePlugin()
-)
-
-// TODO: Replace with actual volume plugin search
-func getVolumePlugin() volume.VolumePluginWorkerPlane {
-	return globalVolumePlugin
-}
 
 func (s *AteomHerder) mountExternalVolumes(ctx context.Context, actorUID string, volumes []*ateletpb.Volume) error {
 	for _, vol := range volumes {
@@ -48,8 +42,12 @@ func (s *AteomHerder) mountExternalVolumes(ctx context.Context, actorUID string,
 		if err := os.MkdirAll(hostPath, 0o750); err != nil {
 			return fmt.Errorf("failed to create mount point %q: %w", hostPath, err)
 		}
-		slog.InfoContext(ctx, "Mounting volume", slog.String("volume_id", ext.GetStorageVolumeId()), slog.String("host_path", hostPath))
-		if err := getVolumePlugin().MountVolume(ctx, ext.GetStorageVolumeId(), hostPath); err != nil {
+		slog.InfoContext(ctx, "Mounting volume", slog.String("volume_id", ext.GetStorageVolumeId()), slog.String("host_path", hostPath), slog.String("volume_type", ext.GetVolumeType()))
+		plugin, err := s.getPlugin(ctx, ext.GetVolumeType())
+		if err != nil {
+			return fmt.Errorf("failed to get volume plugin for %q: %w", ext.GetVolumeType(), err)
+		}
+		if err := plugin.MountVolume(ctx, ext.GetStorageVolumeId(), hostPath, ext.GetVolumeContext()); err != nil {
 			return fmt.Errorf("failed to mount volume %q to %q: %w", ext.GetStorageVolumeId(), hostPath, err)
 		}
 	}
@@ -67,10 +65,40 @@ func (s *AteomHerder) unmountExternalVolumes(ctx context.Context, actorUID strin
 			continue
 		}
 		hostPath := ateompath.VolumeHostPath(actorUID, vol.GetName())
-		slog.InfoContext(ctx, "Unmounting volume", slog.String("volume_id", ext.GetStorageVolumeId()), slog.String("host_path", hostPath))
-		if err := getVolumePlugin().UnmountVolume(ctx, ext.GetStorageVolumeId(), hostPath); err != nil {
-			errs = append(errs, fmt.Errorf("failed to unmount volume %q from %q: %w", ext.GetStorageVolumeId(), hostPath, err))
+		slog.InfoContext(ctx, "Unmounting volume", slog.String("volume_id", ext.GetStorageVolumeId()), slog.String("host_path", hostPath), slog.String("volume_type", ext.GetVolumeType()))
+		// TODO: Standardize volume plugin lookup and error handling across control plane
+		// and worker plane (e.g. via a shared helper).
+		plugin, err := s.getPlugin(ctx, ext.GetVolumeType())
+		if err != nil {
+			errs = append(errs, fmt.Errorf("failed to get volume plugin for %q (volume %q): %w", ext.GetVolumeType(), ext.GetStorageVolumeId(), err))
+			continue
+		}
+		if err := plugin.UnmountVolume(ctx, ext.GetStorageVolumeId(), hostPath); err != nil {
+			if status.Code(err) == codes.NotFound {
+				slog.WarnContext(ctx, "Volume not found during unmount, assuming already unmounted", slog.String("volume_id", ext.GetStorageVolumeId()), slog.Any("error", err))
+			} else {
+				errs = append(errs, fmt.Errorf("failed to unmount volume %q from %q: %w", ext.GetStorageVolumeId(), hostPath, err))
+			}
 		}
 	}
 	return errors.Join(errs...)
+}
+
+func (s *AteomHerder) getPlugin(ctx context.Context, driverName string) (volume.VolumePluginWorkerPlane, error) {
+	s.mu.RLock()
+	plugin, ok := s.volumePlugins[driverName]
+	s.mu.RUnlock()
+	if ok {
+		return plugin, nil
+	}
+
+	csiPlugin, err := csi.NewCSIPlugin(ctx, s.csiDriverConfigLister, driverName, false /*isController*/)
+	if err != nil {
+		return nil, err
+	}
+
+	s.mu.Lock()
+	s.volumePlugins[driverName] = csiPlugin
+	s.mu.Unlock()
+	return csiPlugin, nil
 }

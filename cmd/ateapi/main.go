@@ -30,6 +30,8 @@ import (
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/controlapi"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/debugapi"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/oidcjwt"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/atepg"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/ateredis"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
 	"github.com/agent-substrate/substrate/internal/ateapiauth"
@@ -37,6 +39,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/credbundle"
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/agent-substrate/substrate/internal/version"
+	"github.com/agent-substrate/substrate/internal/volume"
 	"github.com/agent-substrate/substrate/pkg/client/clientset/versioned"
 	"github.com/agent-substrate/substrate/pkg/client/informers/externalversions"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -49,6 +52,7 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/reflection"
+	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 )
@@ -68,8 +72,11 @@ var (
 	redisClientCert     = pflag.String("redis-client-cert", "", "The file containing client TLS certificate/key credential bundle for Redis/Valkey.")
 
 	authenticationConfigFile = pflag.String("authentication-config", "", "YAML file configuring trusted JWT providers.")
-	actorIDJWTPoolFile       = pflag.String("actor-id-jwt-pool", "", "The file that contains the serialized JWT authority pool for signing actor JWTs")
-	egressGatewayAddress     = pflag.String("egress-gateway-address", "", "Address of the egress PEP. Empty disables tunneled egress.")
+	storeBackend             = pflag.String("store-backend", "redis", "The persistence backend to use: redis|postgres.")
+	postgresConnectionString = pflag.String("postgres-connection-string", "", "PostgreSQL connection string (libpq DSN or URI), used when --store-backend=postgres.")
+
+	actorIDJWTPoolFile   = pflag.String("actor-id-jwt-pool", "", "The file that contains the serialized JWT authority pool for signing actor JWTs")
+	egressGatewayAddress = pflag.String("egress-gateway-address", "", "Address of the egress PEP. Empty disables tunneled egress.")
 
 	actorIDCAPoolFile      = pflag.String("actor-id-ca-pool", "", "The file that contains the CA pool for signing actor JWTs")
 	podIdentityCACerts     = pflag.String("pod-identity-ca-certs", "", "The file that contains the pod-identity CA bundle, used both for verifying client certificates presented to the gRPC server and for verifying atelet serving certificates when dialing atelet. If empty, client-cert verification is disabled and atelet dials will fail.")
@@ -126,9 +133,9 @@ func main() {
 		serverboot.Fatal(ctx, "Failed to initialize JWT providers", err)
 	}
 
-	redisClient, err := connectRedis(ctx)
+	persistence, err := connectStore(ctx)
 	if err != nil {
-		serverboot.Fatal(ctx, "Failed to set up Redis/Valkey", err)
+		serverboot.Fatal(ctx, "Failed to set up persistence backend", err)
 	}
 
 	clientset, ateClient, err := newKubeClients()
@@ -141,9 +148,7 @@ func main() {
 		serverboot.Fatal(ctx, "Failed to build server credentials", err)
 	}
 
-	redisPersistence := ateredis.NewPersistence(redisClient)
-
-	workerCache := workercache.New(redisPersistence, 5*time.Minute)
+	workerCache := workercache.New(persistence, 5*time.Minute)
 	if err := workerCache.Start(ctx); err != nil {
 		serverboot.Fatal(ctx, "Failed to seed worker cache", err)
 	}
@@ -152,11 +157,14 @@ func main() {
 	actorTemplateLister := ateFactory.Api().V1alpha1().ActorTemplates().Lister()
 	workerPoolLister := ateFactory.Api().V1alpha1().WorkerPools().Lister()
 	sandboxConfigLister := ateFactory.Api().V1alpha1().SandboxConfigs().Lister()
+	csiDriverConfigLister := ateFactory.Api().V1alpha1().CSIDriverConfigs().Lister()
 
 	workerPodInformerFactory, workerPodInformer := controlapi.WorkerPodInformer(clientset)
 	ateletPodInformerFactory, ateletPodInformer := controlapi.AteletInformer(clientset)
+	scInformerFactory := informers.NewSharedInformerFactory(clientset, 0)
+	storageClassLister := scInformerFactory.Storage().V1().StorageClasses().Lister()
 
-	syncer := controlapi.NewWorkerPoolSyncer(redisPersistence, workerPodInformer, workerPoolLister)
+	syncer := controlapi.NewWorkerPoolSyncer(persistence, workerPodInformer, workerPoolLister)
 	syncer.Start(ctx)
 
 	stopCh := make(chan struct{})
@@ -164,10 +172,12 @@ func main() {
 	workerPodInformerFactory.Start(stopCh)
 	ateletPodInformerFactory.Start(stopCh)
 	ateFactory.Start(stopCh)
+	scInformerFactory.Start(stopCh)
 
 	workerPodInformerFactory.WaitForCacheSync(stopCh)
 	ateletPodInformerFactory.WaitForCacheSync(stopCh)
 	ateFactory.WaitForCacheSync(stopCh)
+	scInformerFactory.WaitForCacheSync(stopCh)
 
 	if err := controlapi.RegisterWorkerCount(otel.Meter("ateapi"), workerCache.Workers, workerPoolLister.List); err != nil {
 		serverboot.Fatal(ctx, "Failed to register worker-count metric", err)
@@ -181,11 +191,12 @@ func main() {
 		serverboot.Fatal(ctx, "Failed to create metric instruments", err)
 	}
 
+	volPlugins := make(map[string]volume.VolumePluginControlPlane)
 	ateletDialer := controlapi.NewAteletDialer(workerPodInformer.GetIndexer(), ateletPodInformer.GetIndexer(), *ateletClientCredBundle, *podIdentityCACerts)
-	sm := controlapi.NewService(redisPersistence, workerCache, actorTemplateLister, workerPoolLister, sandboxConfigLister, ateletDialer, clientset, instruments, *egressGatewayAddress)
+	sm := controlapi.NewService(persistence, workerCache, actorTemplateLister, workerPoolLister, sandboxConfigLister, csiDriverConfigLister, storageClassLister, ateletDialer, instruments, *egressGatewayAddress, volPlugins)
 
-	actorIdentitySrv := actoridentity.New(actorIdentityJWTIssuer, *actorIDJWTPoolFile, *actorIDCAPoolFile, redisPersistence, workerCache)
-	debugSrv := debugapi.NewService(redisPersistence)
+	actorIdentitySrv := actoridentity.New(actorIdentityJWTIssuer, *actorIDJWTPoolFile, *actorIDCAPoolFile, persistence, workerCache)
+	debugSrv := debugapi.NewService(persistence)
 
 	lisCfg := &net.ListenConfig{}
 	lis, err := lisCfg.Listen(ctx, "tcp", *listenAddr)
@@ -200,17 +211,11 @@ func main() {
 	mux := grpc.NewServer(
 		grpc.Creds(serverCreds),
 		grpc.StatsHandler(otelgrpc.NewServerHandler()),
-		// Bounds every connection's lifetime so round_robin clients
-		// periodically re-resolve DNS and pick up replicas added since they
-		// last connected - without this, an existing connection never
-		// notices new replicas on its own (see https://github.com/grpc/grpc/issues/12295).
-		//
-		// TODO: Replace with a resolver that watches Endpoints/EndpointSlices
-		// directly and pushes address updates, instead of relying on forced
-		// reconnects to trigger DNS re-resolution. See
-		// https://github.com/sercand/kuberesolver.
+		// Close connections after an hour to allow for any
+		// client that doesn't use Kubernetes endpoint resolvers
+		// to eventually reobtain backend IPs. https://github.com/grpc/grpc/issues/12295
 		grpc.KeepaliveParams(keepalive.ServerParameters{
-			MaxConnectionAge:      1 * time.Minute,
+			MaxConnectionAge:      1 * time.Hour,
 			MaxConnectionAgeGrace: maxRPCDeadline + time.Minute,
 		}),
 		grpc.ChainUnaryInterceptor(
@@ -281,6 +286,8 @@ func loadFlagsFromEnv() {
 		{redisUseIAMAuth, "ATE_API_REDIS_USE_IAM_AUTH"},
 		{redisTLSServerName, "ATE_API_REDIS_TLS_SERVER_NAME"},
 		{redisClientCert, "ATE_API_REDIS_CLIENT_CERT"},
+		{storeBackend, "ATE_API_STORE_BACKEND"},
+		{postgresConnectionString, "ATE_API_POSTGRES_CONNECTION_STRING"},
 	}
 	for _, o := range overrides {
 		if *o.flag == "@env" {
@@ -299,6 +306,7 @@ func logFlagValues(ctx context.Context) {
 		slog.String("redis-tls-server-name", *redisTLSServerName),
 		slog.String("redis-client-cert", *redisClientCert),
 		slog.String("authentication-config", *authenticationConfigFile),
+		slog.String("store-backend", *storeBackend),
 		slog.String("actor-id-jwt-pool", *actorIDJWTPoolFile),
 		slog.String("actor-id-ca-pool", *actorIDCAPoolFile),
 		slog.String("pod-identity-ca-certs", *podIdentityCACerts),
@@ -306,6 +314,31 @@ func logFlagValues(ctx context.Context) {
 		slog.Duration("drain-delay", *drainDelay),
 		slog.Duration("drain-timeout", *drainTimeout),
 	)
+}
+
+// connectStore builds the store.Interface for the selected --store-backend.
+// Startup fails if the selected backend's configuration is missing or the
+// database can't be reached.
+func connectStore(ctx context.Context) (store.Interface, error) {
+	switch *storeBackend {
+	case "redis":
+		redisClient, err := connectRedis(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("setting up Redis/Valkey: %w", err)
+		}
+		return ateredis.NewPersistence(redisClient), nil
+	case "postgres":
+		if *postgresConnectionString == "" {
+			return nil, fmt.Errorf("--store-backend=postgres requires --postgres-connection-string")
+		}
+		persistence, err := atepg.Connect(ctx, *postgresConnectionString)
+		if err != nil {
+			return nil, fmt.Errorf("setting up PostgreSQL: %w", err)
+		}
+		return persistence, nil
+	default:
+		return nil, fmt.Errorf("unknown --store-backend %q (want redis|postgres)", *storeBackend)
+	}
 }
 
 // connectRedis builds the Redis/Valkey TLS config, plumbs IAM auth if

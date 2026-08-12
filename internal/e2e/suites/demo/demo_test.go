@@ -276,12 +276,56 @@ func TestDurableDirLifecycle(t *testing.T) {
 				microVMOnly:              true,
 			},
 		},
+		{
+			// Suspend from PAUSED with matching Full scopes.
+			name: "onCommit:Full, onPause:Full, suspend from PAUSED",
+			tc: actorLifecycleTestCase{
+				onCommit:                 v1alpha1.SnapshotScopeFull,
+				onPause:                  v1alpha1.SnapshotScopeFull,
+				wantMemoryAfterPause:     2,
+				wantFileAfterPause:       2,
+				wantMemoryAfterSuspend:   3,
+				wantFileAfterSuspend:     3,
+				wantSnapshotContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
+				suspendWhilePaused:       true,
+			},
+		},
+		{
+			// Suspend from PAUSED with matching Data scopes.
+			name: "onCommit:Data, onPause:Data, suspend from PAUSED",
+			tc: actorLifecycleTestCase{
+				onCommit:                 v1alpha1.SnapshotScopeData,
+				onPause:                  v1alpha1.SnapshotScopeData,
+				wantMemoryAfterPause:     1,
+				wantFileAfterPause:       2,
+				wantMemoryAfterSuspend:   1,
+				wantFileAfterSuspend:     3,
+				wantSnapshotContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
+				suspendWhilePaused:       true,
+			},
+		},
+		{
+			// Suspend from PAUSED with scope conversion.
+			// mircoVM already implemnted, while gVisor is blocked by #790:
+			name: "onCommit:Data, onPause:Full, suspend from PAUSED",
+			tc: actorLifecycleTestCase{
+				onCommit:                 v1alpha1.SnapshotScopeData,
+				onPause:                  v1alpha1.SnapshotScopeFull,
+				wantMemoryAfterPause:     2,
+				wantFileAfterPause:       2,
+				wantMemoryAfterSuspend:   1,
+				wantFileAfterSuspend:     3,
+				wantSnapshotContentScope: ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_DATA,
+				suspendWhilePaused:       true,
+				microVMOnly:              true,
+			},
+		},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			if test.tc.microVMOnly && !isMicroVMEnvironment() {
-				t.Skipf("Skipping %s: the Golden resume source is micro-VM only", test.name)
+				t.Skipf("Skipping %s: micro-VM-only case (Golden resume source, or durable-data extraction from a Full capture)", test.name)
 			}
 			t.Parallel()
 			runActorLifecycleTestCase(t, "durabledir-lifecycle", createActorTemplate, test.tc)
@@ -416,6 +460,13 @@ type actorLifecycleTestCase struct {
 	// microVMOnly skips the case outside the micro-VM environment (e.g.
 	// fromData: Golden is rejected by the CRD CEL rules on gVisor).
 	microVMOnly bool
+
+	// suspendWhilePaused pauses the actor again before the suspend step, so
+	// the suspend runs from PAUSED: it must upload the node-local pause
+	// snapshot instead of checkpointing a running workload. The counter
+	// expectations are unchanged — both origins capture the state after the
+	// second call.
+	suspendWhilePaused bool
 }
 
 func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(context.Context, *testing.T, *e2e.Clients, *e2e.Namespace, v1alpha1.SnapshotScope, v1alpha1.SnapshotScope, v1alpha1.ResumeSource) (*v1alpha1.ActorTemplate, error), tc actorLifecycleTestCase) {
@@ -505,6 +556,15 @@ func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(
 	//
 	// Suspending the actor
 	//
+	if tc.suspendWhilePaused {
+		t.Logf("Pausing Actor %q before suspending...", actorID)
+		if _, err := clients.SubstrateAPI.PauseActor(ctx, &ateapipb.PauseActorRequest{
+			Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID},
+		}); err != nil {
+			t.Fatalf("failed to pause Actor before suspend: %v", err)
+		}
+		waitForActorStatus(ctx, t, clients, actorID, ateapipb.Actor_STATUS_PAUSED)
+	}
 	t.Logf("Suspending Actor %q...", actorID)
 	if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID},
@@ -512,6 +572,20 @@ func runActorLifecycleTestCase(t *testing.T, prefix string, createTemplate func(
 		t.Fatalf("failed to suspend Actor: %v", err)
 	}
 	waitForActorStatus(ctx, t, clients, actorID, ateapipb.Actor_STATUS_SUSPENDED)
+
+	if tc.suspendWhilePaused {
+		// The suspend must end the node pinning: a suspended actor's snapshot
+		// lives in object storage, not on a node.
+		suspendedActor, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{
+			Actor: &ateapipb.ObjectRef{Atespace: demoAtespace, Name: actorID},
+		})
+		if err != nil {
+			t.Fatalf("failed to get suspended Actor: %v", err)
+		}
+		if suspendedActor.GetLocalSnapshotInfo() != nil {
+			t.Errorf("suspended Actor still carries LocalSnapshotInfo: %v", suspendedActor.GetLocalSnapshotInfo())
+		}
+	}
 
 	if tc.wantSnapshotContentScope != ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_UNSPECIFIED {
 		validateSnapshotContentScope(ctx, t, clients, actorID, tc.wantSnapshotContentScope)
@@ -860,7 +934,6 @@ func createActorTemplateInternal(ctx context.Context, t *testing.T, clients *e2e
 			// ActorTemplate↔WorkerPool match succeeds. The micro-VM source sets
 			// "microvm"; the gVisor source leaves it "" — copying keeps both correct.
 			SandboxClass: existingAt.Spec.SandboxClass,
-			PauseImage:   existingAt.Spec.PauseImage,
 			Containers:   existingAt.Spec.Containers,
 			SnapshotsConfig: v1alpha1.SnapshotsConfig{
 				Location: "gs://" + env["BUCKET_NAME"] + "/ate-demo-" + name,
@@ -922,11 +995,21 @@ func createActorTemplate(ctx context.Context, t *testing.T, clients *e2e.Clients
 }
 
 func createActorTemplateWithExternalVolume(ctx context.Context, t *testing.T, clients *e2e.Clients, nsObj *e2e.Namespace, onCommit, onPause v1alpha1.SnapshotScope, fromData v1alpha1.ResumeSource) (*v1alpha1.ActorTemplate, error) {
+	var scName string
+	switch {
+	// TODO: add support for other storage classes in e2e environment (e.g. csi-nfs-sc)
+	case hasStorageClass(ctx, clients, "csi-hostpath-sc"):
+		scName = "csi-hostpath-sc"
+	default:
+		t.Skip("Skipping TestExternalVolumeLifecycle: neither csi-hostpath-sc nor csi-nfs-sc StorageClass found")
+	}
+
 	modify := func(at *v1alpha1.ActorTemplate) {
 		var res []v1alpha1.Container
 		for _, c := range at.Spec.Containers {
 			if c.Name == "counter" {
-				c.Command = []string{"/ko-app/counter", "--file-counter-directory=/external-data", "--validate-existing-file-path=/external-data/test.txt"}
+				c.Command = []string{"/ko-app/counter", "--file-counter-directory=/external-data"}
+
 				hasExtMount := false
 				for _, vm := range c.VolumeMounts {
 					if vm.Name == "external-data" {
@@ -958,7 +1041,7 @@ func createActorTemplateWithExternalVolume(ctx context.Context, t *testing.T, cl
 				VolumeSource: v1alpha1.VolumeSource{
 					ExternalVolumeTemplate: &v1alpha1.ExternalVolumeTemplate{
 						Capacity:         resource.MustParse("1Gi"),
-						StorageClassName: "standard",
+						StorageClassName: scName,
 					},
 				},
 			})
@@ -1000,10 +1083,18 @@ func createActorTemplateWithTwoDurableDirs(ctx context.Context, t *testing.T, cl
 	return createActorTemplateInternal(ctx, t, clients, nsObj, "counter-two-durabledirs", onCommit, onPause, fromData, modify)
 }
 
+func hasStorageClass(ctx context.Context, clients *e2e.Clients, name string) bool {
+	_, err := clients.K8s.StorageV1().StorageClasses().Get(ctx, name, metav1.GetOptions{})
+	return err == nil
+}
+
 func waitForActorStatus(ctx context.Context, t *testing.T, clients *e2e.Clients, actorName string, expectedStatus ateapipb.Actor_Status) {
+	waitForActorStatusWithTimeout(ctx, t, clients, actorName, expectedStatus, 60*time.Second)
+}
+
+func waitForActorStatusWithTimeout(ctx context.Context, t *testing.T, clients *e2e.Clients, actorName string, expectedStatus ateapipb.Actor_Status, timeout time.Duration) {
 	t.Helper()
 	t.Logf("Waiting for Actor %q to be %v...", actorName, expectedStatus)
-	timeout := 60 * time.Second
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		resp, err := clients.SubstrateAPI.GetActor(ctx, &ateapipb.GetActorRequest{
@@ -1021,12 +1112,16 @@ func waitForActorStatus(ctx context.Context, t *testing.T, clients *e2e.Clients,
 }
 
 func callActor(t *testing.T, actorRef resources.ActorRef) (string, error) {
+	return callActorPath(t, actorRef, "POST", "/")
+}
+
+func callActorPath(t *testing.T, actorRef resources.ActorRef, method, path string) (string, error) {
 	t.Helper()
 
 	deadline := time.Now().Add(30 * time.Second)
 	var lastErr error
 	for time.Now().Before(deadline) {
-		resp, err := callActorOnce(t, actorRef)
+		resp, err := callActorPathOnce(t, actorRef, method, path)
 		if err == nil {
 			return resp, nil
 		}
@@ -1037,7 +1132,7 @@ func callActor(t *testing.T, actorRef resources.ActorRef) (string, error) {
 	return "", fmt.Errorf("timed out waiting for actor response: %w", lastErr)
 }
 
-func callActorOnce(t *testing.T, actorRef resources.ActorRef) (string, error) {
+func callActorPathOnce(t *testing.T, actorRef resources.ActorRef, method, path string) (string, error) {
 	t.Helper()
 	clients := e2e.GetClients()
 
@@ -1104,7 +1199,7 @@ func callActorOnce(t *testing.T, actorRef resources.ActorRef) (string, error) {
 	}
 	localPort := forwardedPorts[0].Local
 
-	reqHttp, err := http.NewRequest("POST", fmt.Sprintf("http://127.0.0.1:%d", localPort), nil)
+	reqHttp, err := http.NewRequest(method, fmt.Sprintf("http://127.0.0.1:%d%s", localPort, path), nil)
 	if err != nil {
 		return "", fmt.Errorf("failed to create request: %w", err)
 	}

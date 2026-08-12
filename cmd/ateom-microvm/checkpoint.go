@@ -101,7 +101,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 		chSocket = ra.apiSocket
 	}
 	client := ch.NewClient(chSocket)
-	if err := client.WaitReady(ctx, 10*time.Second); err != nil {
+	if _, err := client.WaitReady(ctx, 10*time.Second); err != nil {
 		return nil, fmt.Errorf("while waiting for CH api-socket: %w", err)
 	}
 
@@ -158,6 +158,19 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	dTeardown := time.Since(tTeardown)
 	delete(s.running, actorUID)
 
+	// The guest is gone as of the teardown above, so the ateom is back to
+	// "available": there is nothing left to measure, and holding the attribution
+	// would let a later GetWorkloadStats report a checkpointed actor as though it
+	// were still running.
+	//
+	// Nothing above this point clears it, unlike the gVisor ateom, which clears
+	// as soon as its checkpoint call has taken the sandbox down. Here the guest
+	// is only paused until this teardown, so a checkpoint that failed earlier has
+	// left it present, and reporting its usage is then the honest answer. This is
+	// the same point at which the running entry goes away, which is what keeps
+	// the two views of "is an actor here" from disagreeing.
+	s.activeActor.Store(nil)
+
 	// Tear down the per-activation actor network.
 	if err := ateomnet.CleanupActorNetwork(ctx, s.interiorNetNS); err != nil {
 		slog.WarnContext(ctx, "Failed to clean up actor network after checkpoint", slog.Any("err", err))
@@ -205,7 +218,13 @@ func (s *AteomService) snapshotVMState(ctx context.Context, client *ch.Client, r
 	// source). Overlay it onto that source to rebuild a COMPLETE memory-ranges, so the
 	// snapshot is self-contained and re-restorable. (A cold-run actor has no restore
 	// source and its snapshot is already complete — no merge.)
-	if ra != nil && ra.restoreSourceDir != "" {
+	if ra != nil && ra.snapshotIsSelfContained {
+		// Eager restore already pulled every populated extent into guest memory, so
+		// what cloud-hypervisor just wrote is the whole guest, not a delta. Merging
+		// would copy the entire resident set onto the restore source for nothing.
+		slog.InfoContext(ctx, "Snapshot is self-contained (eager restore); skipping merge",
+			slog.String("id", actorUID))
+	} else if ra != nil && ra.restoreSourceDir != "" {
 		base := filepath.Join(ra.restoreSourceDir, "memory-ranges")
 		delta := filepath.Join(checkpointDir, "memory-ranges")
 		tMerge := time.Now()
@@ -244,6 +263,13 @@ func listFiles(dir string) ([]string, error) {
 // snapshot is already on disk, so this only needs to release resources. ra may be
 // nil (e.g. ateom restarted and lost in-memory state).
 func (s *AteomService) teardownActor(ctx context.Context, id string, ra *runningActor, client *ch.Client) {
+	// Stop offering the guest to GetWorkloadStats first, before anything below
+	// makes it stop answering. Clearing it here rather than alongside the
+	// attribution is what keeps a poll that lands mid-teardown on the
+	// FAILED_PRECONDITION path ("no numbers right now") instead of surfacing a
+	// closed connection as a failed read.
+	s.guestStats.Store(nil)
+
 	if client != nil {
 		tShutdown := time.Now()
 		shutCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
@@ -259,9 +285,9 @@ func (s *AteomService) teardownActor(ctx context.Context, id string, ra *running
 		// fails the forwarding goroutines' in-flight ReadStdout/ReadStderr calls, so
 		// they return io.EOF and exit (no goroutine leak). Guarded so a second
 		// teardown / a never-forwarded actor is a no-op.
-		if ra.logAgent != nil {
-			_ = ra.logAgent.Close()
-			ra.logAgent = nil
+		if ra.guestAgent != nil {
+			_ = ra.guestAgent.Close()
+			ra.guestAgent = nil
 		}
 
 		// Kill the CH process ateom launched.

@@ -1,0 +1,388 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+# contract expected by atunnel's egress client:
+#   * downstream mTLS on :443 (present servicedns identity, require + verify an
+#     actor-identity client cert),
+#   * terminate the actor's HTTP CONNECT and tunnel raw TCP to the CONNECT
+#     authority (the actor's original destination, always sent as IP:port).
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: atenet-egress
+  namespace: ate-system
+#
+# No RBAC is bound to this ServiceAccount on purpose: the ext_proc sidecar runs
+# with --mode=egress, which serves the egress ext_proc handler and nothing else
+# — no xDS server and no ActorTemplate controller, so no Kubernetes access. It
+# reaches the control plane over the ate API only.
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: atenet-egress
+  namespace: ate-system
+data:
+  envoy.yaml: |
+    admin:
+      address:
+        socket_address: { address: 0.0.0.0, port_value: 15000 }
+    static_resources:
+      listeners:
+      - name: egress
+        address:
+          socket_address: { address: 0.0.0.0, port_value: 443 }
+        filter_chains:
+        # Named so ext_proc can read it back as xds.filter_chain_name. Must
+        # match EgressFilterChainName in
+        # cmd/atenet/internal/router/extproc/dispatch.go.
+        - name: egress
+          transport_socket:
+            name: envoy.transport_sockets.tls
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext
+              require_client_certificate: true
+              common_tls_context:
+                tls_certificates:
+                # Gateway server identity (servicedns signer). credential-bundle.pem
+                # holds the leaf cert and key concatenated. watched_directory picks
+                # up kubelet's projected certificate rotation without a restart.
+                - certificate_chain: { filename: /run/servicedns.podcert.ate.dev/credential-bundle.pem }
+                  private_key: { filename: /run/servicedns.podcert.ate.dev/credential-bundle.pem }
+                  watched_directory: { path: /run/servicedns.podcert.ate.dev }
+                validation_context:
+                  # Actors authenticate with an actor-identity client cert.
+                  # Envoy enforces chain, signature, and validity period here, so
+                  # an unsigned or expired actor cert never reaches ext_proc; the
+                  # ActorIdentity extension is checked there because Envoy cannot
+                  # read custom X.509 extensions.
+                  trusted_ca: { filename: /run/actor-id-ca-certs/ca.crt }
+          filters:
+          - name: envoy.filters.network.http_connection_manager
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+              stat_prefix: egress_connect
+              codec_type: HTTP1
+              upgrade_configs:
+              - upgrade_type: CONNECT
+              # TODO(liorlieberman): Can we make this cleaner?
+              forward_client_cert_details: SANITIZE_SET
+              set_current_client_cert_details:
+                chain: true
+              # Emit the access log as soon as the CONNECT tunnel is established
+              # (atunnel keeps the tunnel open, so the default log-on-close would
+              # not fire during the demo).
+              access_log_options:
+                flush_log_on_tunnel_successfully_established: true
+              access_log:
+              - name: envoy.access_loggers.stdout
+                typed_config:
+                  "@type": type.googleapis.com/envoy.extensions.access_loggers.stream.v3.StdoutAccessLog
+                  log_format:
+                    text_format_source:
+                      inline_string: "[egress] authority=%REQ(:AUTHORITY)% peer_san=%DOWNSTREAM_PEER_URI_SAN% peer_serial=%DOWNSTREAM_PEER_SERIAL% code=%RESPONSE_CODE% flags=%RESPONSE_FLAGS% up_bytes=%BYTES_RECEIVED% down_bytes=%BYTES_SENT%\n"
+              route_config:
+                name: connect_route
+                virtual_hosts:
+                - name: connect
+                  domains: ["*"]
+                  routes:
+                  - match: { connect_matcher: {} }
+                    route:
+                      cluster: egress_forward_proxy
+                      upgrade_configs:
+                      - upgrade_type: CONNECT
+                        connect_config: {}
+              http_filters:
+              # Actor-identity authorization: on every egress CONNECT, ext_proc
+              # reads the actor certificate out of x-forwarded-client-cert,
+              # re-verifies it against the actor-identity CA, pulls the
+              # ActorIdentity extension, and asks the ate API whether that UID is
+              # a real, running actor. Denials come back as an immediate 403.
+              # Fails closed if the router is down.
+              - name: envoy.filters.http.ext_proc
+                typed_config:
+                  "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExternalProcessor
+                  grpc_service:
+                    envoy_grpc:
+                      cluster_name: ext_proc_server
+                    timeout: 2s
+                  failure_mode_allow: false
+                  # How the ext_proc server tells egress from ingress. It applies
+                  # opposite trust models to the two directions, and dispatches on
+                  # this Envoy-asserted filter chain name so that no client can
+                  # select the egress path by crafting a request. The value must
+                  # match EgressFilterChainName in
+                  # cmd/atenet/internal/router/extproc/dispatch.go; renaming the
+                  # filter chain above without updating it fails closed (the
+                  # request is classified as ingress, which this --mode=egress
+                  # instance does not serve, and is refused with a 404).
+                  request_attributes:
+                  - xds.filter_chain_name
+                  processing_mode:
+                    request_header_mode: SEND
+                    response_header_mode: SKIP
+                    request_body_mode: NONE
+                    response_body_mode: NONE
+                    request_trailer_mode: SKIP
+                    response_trailer_mode: SKIP
+              - name: envoy.filters.http.dynamic_forward_proxy
+                typed_config:
+                  "@type": type.googleapis.com/envoy.extensions.filters.http.dynamic_forward_proxy.v3.FilterConfig
+                  dns_cache_config:
+                    name: egress_dns_cache
+                    dns_lookup_family: V4_ONLY
+              - name: envoy.filters.http.router
+                typed_config:
+                  "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+      clusters:
+      # ext_proc gRPC server = the atenet router, co-located in this pod as a
+      # sidecar and called over localhost (same topology the ingress gateway uses
+      # for its dataplane + ext_proc).
+      - name: ext_proc_server
+        type: STATIC
+        lb_policy: ROUND_ROBIN
+        connect_timeout: 1s
+        typed_extension_protocol_options:
+          envoy.extensions.upstreams.http.v3.HttpProtocolOptions:
+            "@type": type.googleapis.com/envoy.extensions.upstreams.http.v3.HttpProtocolOptions
+            explicit_http_config:
+              http2_protocol_options: {}
+        load_assignment:
+          cluster_name: ext_proc_server
+          endpoints:
+          - lb_endpoints:
+            - endpoint:
+                address:
+                  socket_address:
+                    address: 127.0.0.1
+                    port_value: 50051
+      # Dials the terminated-CONNECT target (IP:port from the authority). atunnel
+      # always sends an IP:port, so DNS resolution is effectively a passthrough.
+      - name: egress_forward_proxy
+        lb_policy: CLUSTER_PROVIDED
+        connect_timeout: 5s
+        cluster_type:
+          name: envoy.clusters.dynamic_forward_proxy
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.clusters.dynamic_forward_proxy.v3.ClusterConfig
+            dns_cache_config:
+              name: egress_dns_cache
+              dns_lookup_family: V4_ONLY
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: atenet-egress
+  namespace: ate-system
+  labels:
+    app: atenet-egress
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: atenet-egress
+  template:
+    metadata:
+      labels:
+        app: atenet-egress
+    spec:
+      serviceAccountName: atenet-egress
+      securityContext:
+        # Allow the non-root envoy user to bind :443.
+        sysctls:
+        - name: net.ipv4.ip_unprivileged_port_start
+          value: "0"
+      terminationGracePeriodSeconds: 60
+      containers:
+      - name: envoy
+        image: envoyproxy/envoy:v1.34-latest
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          runAsNonRoot: true
+          runAsUser: 65532
+        args:
+        - -c
+        - /etc/envoy/envoy.yaml
+        - --service-node
+        - atenet-egress
+        - --service-cluster
+        - atenet-egress
+        # Prevents Envoy from fast-exiting on SIGTERM before the ext-proc
+        # sidecar finishes its drain sequence. Polls for the drain-complete
+        # marker the sidecar writes on the shared emptyDir, terminating Envoy
+        # as soon as the drain completes (or at terminationGracePeriodSeconds
+        # if the sidecar crashes).
+        #
+        # TODO(liorlieberman): decide the drain policy for long-lived CONNECT
+        # tunnels. envoyDrainer polls downstream_cx_active until it reaches
+        # zero, which suits ingress (short request/response connections) but
+        # not egress: atunnel holds a tunnel open for the life of the actor's
+        # connection, so an actor still streaming when the rollout starts keeps
+        # the count above zero until the ~15s window expires. Every rollout
+        # with active egress will therefore log "N downstream connections still
+        # active at the drain deadline". Either accept that as the honest
+        # outcome (we tried to drain, then cut), or give egress its own shorter
+        # window so we stop pretending a tunnel will close on its own.
+        lifecycle:
+          preStop:
+            exec:
+              command: ["sh", "-c", "while [ ! -f /var/run/atenet/drain-complete ]; do sleep 0.5; done"]
+        ports:
+        - name: https
+          containerPort: 443
+        - name: admin
+          containerPort: 15000
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: admin
+          periodSeconds: 10
+        startupProbe:
+          failureThreshold: 60
+          httpGet:
+            path: /ready
+            port: admin
+          periodSeconds: 1
+        volumeMounts:
+        - name: config
+          mountPath: /etc/envoy
+          readOnly: true
+        - name: servicedns
+          mountPath: /run/servicedns.podcert.ate.dev
+          readOnly: true
+        - name: podidentity
+          mountPath: /run/podidentity.podcert.ate.dev
+          readOnly: true
+        - name: actor-id-ca-certs
+          mountPath: /run/actor-id-ca-certs
+          readOnly: true
+        - name: drain-signal
+          mountPath: /var/run/atenet
+          readOnly: true
+      # Co-located ext_proc server: the same atenet router binary the ingress
+      # gateway runs, started with --mode=egress so it serves only the egress
+      # ext_proc handler (no xDS server, no ActorTemplate controller, no
+      # Kubernetes access). The egress Envoy calls it over localhost to
+      # authenticate actor identity against the ate API on every CONNECT.
+      #
+      # Ingress and egress are separate Deployments because they scale
+      # independently, not because they need separate binaries: one instance can
+      # serve both directions with --mode=all.
+      - name: ext-proc
+        image: ko://github.com/agent-substrate/substrate/cmd/atenet
+        args:
+        - router
+        - --mode=egress
+        - --namespace=ate-system
+        - --port-extproc=50051
+        - --extproc-address=127.0.0.1
+        - --ateapi-address=dns:///api.ate-system.svc:443
+        - --ateapi-ca-file=/run/servicedns.podcert.ate.dev/trust-bundle.pem
+        - --ateapi-client-cert=/run/podidentity.podcert.ate.dev/credential-bundle.pem
+        # Same bundle Envoy validates the handshake against. The handler
+        # re-verifies the chain in Go and reads the ActorIdentity extension out
+        # of it; without this flag the router has no actor-identity roots and
+        # denies every egress CONNECT with a 503.
+        - --actor-identity-ca-file=/run/actor-id-ca-certs/ca.crt
+        - --otlp-collector-address=
+        # The egress Envoy's admin listener is on 15000, not the 9901 the flag
+        # defaults to (that is the ingress gateway's port). Without this the
+        # drain sequence dials a closed port, reads the connection refusal as
+        # "Envoy already exited", and reports a drain it never performed.
+        - --envoy-admin-address=127.0.0.1:15000
+        env:
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: POD_NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        ports:
+        - name: extproc
+          containerPort: 50051
+        readinessProbe:
+          tcpSocket:
+            port: extproc
+          periodSeconds: 10
+        volumeMounts:
+        # Trust bundle used to verify ateapi's servicedns serving cert.
+        - name: servicedns
+          mountPath: /run/servicedns.podcert.ate.dev
+          readOnly: true
+        # ext-proc's own client identity presented to ateapi.
+        - name: podidentity
+          mountPath: /run/podidentity.podcert.ate.dev
+          readOnly: true
+        # Actor-identity CA roots, for --actor-identity-ca-file above.
+        - name: actor-id-ca-certs
+          mountPath: /run/actor-id-ca-certs
+          readOnly: true
+        - name: drain-signal
+          mountPath: /var/run/atenet
+      volumes:
+      - name: config
+        configMap:
+          name: atenet-egress
+      - name: drain-signal
+        emptyDir: {}
+      - name: servicedns
+        projected:
+          sources:
+          - podCertificate:
+              signerName: servicedns.podcert.ate.dev/identity
+              keyType: ECDSAP256
+              credentialBundlePath: credential-bundle.pem
+          - clusterTrustBundle:
+              signerName: servicedns.podcert.ate.dev/identity
+              labelSelector:
+                matchLabels:
+                  podcert.ate.dev/canarying: live
+              path: trust-bundle.pem
+      - name: podidentity
+        projected:
+          sources:
+          - podCertificate:
+              signerName: podidentity.podcert.ate.dev/identity
+              keyType: ECDSAP256
+              credentialBundlePath: credential-bundle.pem
+          - clusterTrustBundle:
+              signerName: podidentity.podcert.ate.dev/identity
+              labelSelector:
+                matchLabels:
+                  podcert.ate.dev/canarying: live
+              path: trust-bundle.pem
+      - name: actor-id-ca-certs
+        secret:
+          secretName: actor-id-ca-certs
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: atenet-egress
+  namespace: ate-system
+spec:
+  type: ClusterIP
+  selector:
+    app: atenet-egress
+  ports:
+  - name: https
+    port: 443
+    targetPort: https
+    protocol: TCP

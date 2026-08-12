@@ -30,6 +30,7 @@ import (
 	"google.golang.org/grpc"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
@@ -43,7 +44,7 @@ var (
 	scheme   = runtime.NewScheme()
 	setupLog = ctrl.Log.WithName("setup")
 
-	ateAPIConnSpec = pflag.String("ateapi-conn-spec", "dns:///api.ate-system.svc:443", "")
+	ateAPIConnSpec = pflag.String("ateapi-conn-spec", "k8s:///api.ate-system.svc:443", "")
 
 	logLevelFlag = pflag.String("log-level", "info", "Minimum log level: debug, info, warn, or error.")
 
@@ -84,7 +85,6 @@ func newControllerRuntimeLogger(h slog.Handler) logr.Logger {
 
 func main() {
 	pflag.Parse()
-
 	ctx := context.Background()
 	serverboot.InitLogger()
 	if err := serverboot.SetLogLevel(*logLevelFlag); err != nil {
@@ -114,7 +114,15 @@ func main() {
 	}
 	defer serverboot.ShutdownProvider("MeterProvider", mp.Shutdown)
 
+	k8sConfig := ctrl.GetConfigOrDie()
+	k8sClient, err := kubernetes.NewForConfig(k8sConfig)
+	if err != nil {
+		setupLog.Error(err, "creating kubernetes client for ateapi dialer")
+		os.Exit(1)
+	}
+
 	dialOpts, err := ateapiauth.DialOptions(ateapiauth.ClientConfig{
+		K8sClient:        k8sClient,
 		UseTokenAuth:     *ateapiTokenAuth,
 		CAFile:           *ateapiCAFile,
 		ServerName:       *ateapiServerName,
@@ -135,7 +143,7 @@ func main() {
 
 	ateapiClient := ateapipb.NewControlClient(ateapiConn)
 
-	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
+	mgr, err := ctrl.NewManager(k8sConfig, ctrl.Options{
 		Scheme: scheme,
 	})
 	if err != nil {

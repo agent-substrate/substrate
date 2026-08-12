@@ -210,7 +210,6 @@ func createParkingFixture(ctx context.Context, t *testing.T, clients *e2e.Client
 				MatchLabels: map[string]string{"demo": nsObj.Name},
 			},
 			SandboxClass: existingAt.Spec.SandboxClass,
-			PauseImage:   existingAt.Spec.PauseImage,
 			Containers:   existingAt.Spec.Containers,
 			SnapshotsConfig: v1alpha1.SnapshotsConfig{
 				Location: "gs://" + env["BUCKET_NAME"] + "/e2e-parking-" + nsObj.Name,

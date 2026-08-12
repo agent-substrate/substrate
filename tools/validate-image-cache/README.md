@@ -23,9 +23,9 @@ whiteouts, oversized layer counts, ...).
   `domain:google.com` grant) is not necessarily readable by a *service
   account* — validate with the identity that production will use.
 - Disk: unpacked layers are 2–3× their compressed size. The tool bounds
-  usage by evicting idle cached layers when the cache volume's free space
-  drops below `--min-free-gb`, but give it room to breathe (tens of GB
-  minimum).
+  usage by asking the cache's own eviction engine to reclaim space when the
+  cache volume's free space drops below `--min-free-gb`, but give it room
+  to breathe (tens of GB minimum).
 - Runs anywhere Go runs, including macOS (unpack is pure file I/O). Caveat:
   a case-insensitive filesystem (default macOS APFS) unpacks case-colliding
   paths slightly differently than Linux — silently, not as an error. Linux
@@ -68,15 +68,17 @@ go run ./tools/validate-image-cache \
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--refs-file` | (required) | file with one image ref per line |
+| `--refs-file` | (required unless `--evict-all`) | file with one image ref per line |
 | `--cache-dir` | (required) | cache root; reused (and cache-hit) across runs |
 | `--sample` | 0 (= all) | validate a random sample of N refs |
 | `--seed` | 1 | sampling seed; same seed + file ⇒ same sample |
 | `--out` | `validate-results.csv` | results CSV, written incrementally |
 | `--parallel` | 3 | images validated concurrently (each pulls up to 4 layers in parallel) |
 | `--timeout` | 20m | per-image timeout |
-| `--min-free-gb` | 150 | evict oldest idle layers below this free-space floor |
-| `--evict-idle` | 10m | only evict layers idle at least this long; must be far below disk-fill time on small disks |
+| `--min-free-gb` | 150 | reclaim the shortfall below this free-space floor via the eviction engine |
+| `--evict-idle` | 10m | eviction min-age: layers and records younger than this are never evicted (minimum 1m on a node with an actors dir); must be far below disk-fill time on small disks |
+| `--evict-all` | false | evict everything evictable and exit (mutually exclusive with `--refs-file`); rooted images and anything younger than `--evict-idle` survive |
+| `--force` | false | allow eviction on a node with an actors dir (required for both modes there) |
 | `--platform` | `linux/amd64` | image platform to pull |
 
 ## Output and rerunning
@@ -89,10 +91,22 @@ non-zero if any image failed.
 Reruns are cheap by design: completed layers stay in the cache (and even an
 interrupted pull keeps every layer that finished), so re-running the same
 sample — or just the failed refs — mostly re-validates from local disk.
-Eviction only removes layers idle for at least `--evict-idle`, so in-flight
-images are not raced; on a small disk with high throughput, set it well
-below the time the corpus needs to fill the disk, or nothing will be
-evictable while it fills.
+Eviction never removes layers or records younger than `--evict-idle`, so
+this process's own in-flight images are not raced; on a small disk with
+high throughput, set it well below the time the corpus needs to fill the
+disk, or nothing will be evictable while it fills.
+
+## Live nodes
+
+On a node with an actors dir, **both modes require `--force`** and
+`--evict-idle` is floored at 1m. The engine's locks are per-process, so a
+run there is not synchronized with the node agent's own GC and pulls.
+Bundle-spec rooting protects placed actors' images and min-age protects
+fresh pulls, but a layer that ages past `--evict-idle` and is reused
+mid-pass can be evicted out from under an actor: a not-yet-mounted start
+fails once and heals on re-pull; an already-mounted actor can take I/O
+errors from a removed lowerdir. Note that refs mode evicts too — below
+`--min-free-gb` (default 150) it flushes repeatedly, not once.
 
 ## Scaling out
 

@@ -39,6 +39,7 @@ import (
 	healthpb "google.golang.org/grpc/health/grpc_health_v1"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+	"k8s.io/client-go/kubernetes/fake"
 )
 
 func TestDialOptionsRequiresCAFile(t *testing.T) {
@@ -56,10 +57,11 @@ func TestDialOptionsRequiresCAFile(t *testing.T) {
 }
 
 func TestDialOptionsRequiresModeCredential(t *testing.T) {
+	fakeClient := fake.NewSimpleClientset()
 	for name, cfg := range map[string]ClientConfig{
-		"cert mode without bundle":              {CAFile: "ca.pem"},
-		"token mode without token":              {CAFile: "ca.pem", UseTokenAuth: true},
-		"cert path does not satisfy token mode": {CAFile: "ca.pem", UseTokenAuth: true, ClientCredBundle: "bundle.pem"},
+		"cert mode without bundle":              {K8sClient: fakeClient, CAFile: "ca.pem"},
+		"token mode without token":              {K8sClient: fakeClient, CAFile: "ca.pem", UseTokenAuth: true},
+		"cert path does not satisfy token mode": {K8sClient: fakeClient, CAFile: "ca.pem", UseTokenAuth: true, ClientCredBundle: "bundle.pem"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			_, err := DialOptions(cfg)
@@ -106,6 +108,7 @@ func TestDialOptionsMTLSHandshake(t *testing.T) {
 	t.Run("with client cert", func(t *testing.T) {
 		// TokenFile is ignored in cert mode (the default).
 		opts, err := DialOptions(ClientConfig{
+			K8sClient:        fake.NewSimpleClientset(),
 			CAFile:           caFile,
 			ClientCredBundle: clientBundle,
 			TokenFile:        filepath.Join(dir, "does-not-exist-token"),
@@ -168,6 +171,7 @@ func TestDialOptionsTokenSendsBearer(t *testing.T) {
 	// ClientCredBundle stays set (as the base manifests leave it) but is
 	// ignored in token mode — it doesn't even need to exist on disk.
 	opts, err := DialOptions(ClientConfig{
+		K8sClient:        fake.NewSimpleClientset(),
 		CAFile:           caFile,
 		UseTokenAuth:     true,
 		TokenFile:        tokenFile,

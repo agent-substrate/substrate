@@ -206,9 +206,7 @@ type HTTPGetAction struct {
 // EnvVar represents an environment variable supplied to a container in an
 // ActorTemplate. It models only a subset of Kubernetes Pod env behavior:
 // literal values are not expanded with Kubernetes-style $(VAR) references,
-// envFrom is not supported, and valueFrom currently supports only secretKeyRef.
-//
-// +kubebuilder:validation:ExactlyOneOf={value, valueFrom}
+// and envFrom and valueFrom are not supported.
 type EnvVar struct {
 	// Name is the name of the environment variable. May be any printable ASCII
 	// character except '='.
@@ -218,56 +216,13 @@ type EnvVar struct {
 	// +kubebuilder:validation:Pattern=`^[ -<>-~]+$`
 	Name string `json:"name"`
 
-	// Exactly one of the following must be specified.
-
-	// Variable value. Mutually exclusive with ValueFrom.
 	// Value is the literal value of the environment variable. Unlike in
 	// Kubernetes pods, this value is not interpolated, and $(VAR)
 	// references are not expanded.
 	//
-	// +optional
+	// +required
 	// +kubebuilder:validation:MinLength=0
-	Value *string `json:"value,omitempty"`
-
-	// Source for the environment variable's value. Mutually exclusive with
-	// Value.
-	//
-	// +optional
-	ValueFrom *EnvVarSource `json:"valueFrom,omitempty"`
-}
-
-// EnvVarSource represents a source for the value of an EnvVar. Exactly one of
-// its fields must be set.
-//
-// +kubebuilder:validation:MinProperties=1
-// +kubebuilder:validation:MaxProperties=1
-type EnvVarSource struct {
-	// Selects a key of a Secret in the ActorTemplate's namespace.
-	//
-	// +optional
-	SecretKeyRef *SecretKeySelector `json:"secretKeyRef,omitempty"`
-}
-
-// SecretKeySelector selects a key from a Secret.
-type SecretKeySelector struct {
-	// Name of the referent Secret.
-	//
-	// +required
-	// +kubebuilder:validation:MaxLength=253
-	// +kubebuilder:validation:XValidation:rule="!format.dns1123Subdomain().validate(self).hasValue()",message="Name must be a valid DNS subdomain"
-	Name string `json:"name"`
-
-	// Key to select within the Secret.
-	//
-	// +required
-	// +kubebuilder:validation:MinLength=1
-	// +kubebuilder:validation:Pattern=`^[-._a-zA-Z0-9]+$`
-	Key string `json:"key"`
-
-	// Specify whether the Secret or its key must be defined.
-	//
-	// +optional
-	Optional *bool `json:"optional,omitempty"`
+	Value string `json:"value"`
 }
 
 // SnapshotScope defines what components to include in a snapshot.
@@ -317,7 +272,8 @@ type OnResumeConfig struct {
 
 // +kubebuilder:validation:XValidation:rule="(has(self.onPause) ? self.onPause : 'Full') == 'Full' || (has(self.onCommit) ? self.onCommit : 'Full') == (has(self.onPause) ? self.onPause : 'Full')",message="onCommit must be a subset of onPause"
 type SnapshotsConfig struct {
-	// Location to store snapshots in.
+	// Location is the base object-storage URI snapshots of this template's
+	// actors are stored under.
 	//
 	// +required
 	// +kubebuilder:validation:MinLength=1
@@ -357,17 +313,6 @@ type SnapshotsConfig struct {
 // +kubebuilder:validation:XValidation:rule="!has(self.sandboxClass) || self.sandboxClass != 'microvm' || !has(self.volumes) || !self.volumes.exists(v, has(v.externalVolumeTemplate))",message="ExternalVolumes are not supported when sandboxClass is 'microvm'"
 // +kubebuilder:validation:XValidation:rule="(has(self.sandboxClass) && self.sandboxClass == 'microvm') || !has(self.snapshotsConfig.onResume) || (has(self.snapshotsConfig.onResume.fromData) ? self.snapshotsConfig.onResume.fromData : 'ColdBoot') != 'Golden'",message="onResume.fromData: Golden is not supported when sandboxClass is 'gvisor'"
 type ActorTemplateSpec struct {
-	// PauseImage is the container to use as the root sandbox container.
-	//
-	// Typically, set it to [1] for on-gcp, and [2] for off-gcp
-	//
-	//   - [1] gcr.io/gke-release/pause@sha256:bcbd57ba5653580ec647b16d8163cdd1112df3609129b01f912a8032e48265da
-	//   - [2] registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4
-	//
-	// +required
-	// +kubebuilder:validation:XValidation:rule="self.contains('@')",message="All images must be pinned (changing the image invalidates snapshots)"
-	PauseImage string `json:"pauseImage,omitempty"`
-
 	// Containers is the workload definition.
 	//
 	// +optional

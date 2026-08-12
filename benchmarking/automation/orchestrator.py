@@ -284,6 +284,9 @@ def wait_for_job(name: str, timeout_seconds: int) -> str:
     return "timeout"
 
 
+SANDBOX_CLASSES = ("gvisor", "microvm")
+
+
 def deploy_substrate() -> None:
     run(["hack/install-ate.sh", "--deploy-ate-system"])
 
@@ -292,13 +295,29 @@ def teardown_substrate() -> None:
     run_no_check(["hack/install-ate.sh", "--delete-ate-system"])
 
 
-def deploy_workloads(worker_count: int = 1) -> None:
+def install_microvm_deps() -> None:
+    """Stage kata/cloud-hypervisor assets and apply the cluster-wide
+    microvm SandboxConfig. Required before a microvm WorkerPool can
+    schedule; must run after deploy_substrate() (which installs the CRDs)."""
+    run(["hack/install-microvm-deps.sh", "--install"])
+
+
+def teardown_microvm_deps() -> None:
+    """Remove the microvm SandboxConfig. Must run before
+    teardown_substrate(), which deletes the SandboxConfig CRD (and would
+    prevent this from succeeding via kubectl)."""
+    run_no_check(["hack/install-microvm-deps.sh", "--delete"])
+
+
+def deploy_workloads(worker_count: int = 1, sandbox_class: str = "gvisor") -> None:
     run(
         [
             "benchmarking/workloads/deploy.sh",
             "--deploy",
             "--worker-count",
             str(worker_count),
+            "--sandbox-class",
+            sandbox_class,
         ]
     )
     # Block until ActorTemplates are Ready
@@ -384,6 +403,12 @@ def main() -> None:
             sys.exit(
                 f"test {t.get('name')!r} missing required 'targetCluster' field"
             )
+        sandbox_class = t.get("sandboxClass", "gvisor")
+        if sandbox_class not in SANDBOX_CLASSES:
+            sys.exit(
+                f"test {t.get('name')!r} has invalid sandboxClass "
+                f"{sandbox_class!r} (want one of {list(SANDBOX_CLASSES)})"
+            )
 
     # Per-target-cluster caches: re-running setup for the same target
     # cluster is wasted work, so we track what was last set up and only
@@ -419,15 +444,23 @@ def main() -> None:
             # Idempotent sweep before anything else: a previous CronJob
             # fire that crashed mid-test (or any other process that left
             # state behind) would otherwise leak its substrate + workloads
-            # into this run. Both teardowns use --ignore-not-found, so
-            # this is cheap on a clean cluster.
+            # into this run. All teardowns use --ignore-not-found, so
+            # this is cheap on a clean cluster. Order matters:
+            # microvm-deps deletes a SandboxConfig CR, which requires the
+            # SandboxConfig CRD that teardown_substrate removes.
             teardown_workloads()
+            teardown_microvm_deps()
             teardown_substrate()
 
+            sandbox_class = test.get("sandboxClass", "gvisor")
             status = "error"
             try:
                 deploy_substrate()
-                deploy_workloads(test.get("workerCount", 1))
+                # install-microvm-deps needs the CRDs from deploy_substrate;
+                # deploy_workloads needs the microvm SandboxConfig.
+                if sandbox_class == "microvm":
+                    install_microvm_deps()
+                deploy_workloads(test.get("workerCount", 1), sandbox_class)
                 try:
                     status = run_test(
                         test,
@@ -443,7 +476,10 @@ def main() -> None:
             finally:
                 # Always tear down, even if deploy or run failed, so the
                 # next test (and the next CronJob fire) starts clean.
+                # microvm-deps must go before substrate for the same reason
+                # as above.
                 teardown_workloads()
+                teardown_microvm_deps()
                 teardown_substrate()
             results.append((test["name"], status))
         finally:

@@ -19,9 +19,10 @@ For how the pieces fit together, see the [Architecture](architecture.md) and
 
 - **SandboxConfig**: a cluster-scoped resource holding the sandbox binaries for
   one runtime family (the gVisor `runsc` binary, or a micro-VM
-  kernel/firmware/config). A `WorkerPool` resolves its binaries from the config
-  it names, or from the cluster default for its class, so one config pins the
-  runtime version for many templates.
+  kernel/firmware/config), plus the pause image for the sandbox's root
+  container. A `WorkerPool` resolves its sandbox from the config it names, or
+  from the cluster default for its class, so one config pins the runtime version
+  for many templates.
 
 ## Records (dynamic state, in the control-plane store)
 
@@ -74,8 +75,10 @@ because they change too frequently for etcd.
 
 ## Lifecycle
 
-- **Suspend**: hibernate a running Actor by checkpointing it to a snapshot and
-  freeing its Worker. The requested snapshots are uploaded to external storage.
+- **Suspend**: hibernate a running or paused Actor into a durable snapshot in
+  external storage. A running Actor is checkpointed on its Worker (which is
+  then freed); a paused Actor's node-local snapshot is uploaded — narrowed to
+  the commit scope when the pause captured more — ending its node pinning.
 
 - **Pause**: a short-term checkpoint of a running Actor. Snapshot files remain
   on the node VM, and the following Resume is prioritized onto the node VM

@@ -28,6 +28,9 @@ rules:
 - apiGroups: [""]
   resources: ["pods"]
   verbs: ["get", "watch", "list"]
+- apiGroups: ["ate.dev"]
+  resources: ["csidriverconfigs"]
+  verbs: ["get", "list", "watch"]
 ---
 # 3. Bind Identity to Permissions
 apiVersion: rbac.authorization.k8s.io/v1
@@ -41,6 +44,31 @@ subjects:
 roleRef:
   kind: ClusterRole
   name: atelet
+  apiGroup: rbac.authorization.k8s.io
+---
+# 4. Namespaced Role for EndpointSlices
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: atelet-endpointslices
+  namespace: ate-system
+rules:
+- apiGroups: ["discovery.k8s.io"]
+  resources: ["endpointslices"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: atelet-endpointslices
+  namespace: ate-system
+subjects:
+- kind: ServiceAccount
+  name: atelet
+  namespace: ate-system
+roleRef:
+  kind: Role
+  name: atelet-endpointslices
   apiGroup: rbac.authorization.k8s.io
 ---
 # 4. Create DaemonSet
@@ -70,6 +98,16 @@ spec:
       # must fit within terminationGracePeriodSeconds, plus slack for the force
       # Stop() and the tracer/meter flush on exit.
       terminationGracePeriodSeconds: 330
+      # atelet must run on every node a WorkerPool actor may schedule to.
+      # Microvm pools are tainted ate.dev/sandboxClass=<class>:NoSchedule per
+      # the convention in cmd/atecontroller/internal/controllers/workerpool_apply.go
+      # (which also adds the matching toleration to ateom worker pods).
+      # Tolerating the key with operator: Exists covers any current or future
+      # sandbox class value without needing another manifest edit.
+      tolerations:
+      - key: ate.dev/sandboxClass
+        operator: Exists
+        effect: NoSchedule
       containers:
       - name: atelet
         image: ko://github.com/agent-substrate/substrate/cmd/atelet
@@ -150,10 +188,17 @@ spec:
         - name: servicedns-ca
           mountPath: /run/servicedns.podcert.ate.dev
           readOnly: true
+        - name: kubelet-plugins
+          mountPath: /var/lib/kubelet/plugins
       volumes:
       - name: run-ateom
         hostPath:
           path: /var/lib/ateom-gvisor
+          type: DirectoryOrCreate
+      # Mount Kubelet plugins directory to access CSI driver Unix domain sockets.
+      - name: kubelet-plugins
+        hostPath:
+          path: /var/lib/kubelet/plugins
           type: DirectoryOrCreate
       # Identity for mutual TLS with the ate-apiserver. atelet is not behind a
       # Service, so it uses a podidentity (SPIFFE) cert rather than a servicedns

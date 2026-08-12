@@ -36,6 +36,23 @@ type runsc struct {
 	actorUID string
 }
 
+// nvproxyGlobalArgs returns the runsc global flags for GPU sandboxes, enabling
+// gVisor's GPU ioctl proxy when the worker has a GPU. --nvproxy must be set when
+// the sandbox is created (the pause/root container) so the sentry initializes GPU
+// support up front — like enabling nvproxy in the containerd runtime config on
+// normal Kubernetes. Otherwise nvproxy would try to initialize late, when the app
+// subcontainer joins carrying the CDI /dev/nvidia* devices, and the running sentry
+// crashes (StartSubcontainer: EOF).
+//
+// Only create and restore need it: both boot a sentry. `runsc start` acts on a
+// sandbox that already exists, so the flag has no effect there.
+func nvproxyGlobalArgs() []string {
+	if gpuPresent() {
+		return []string{"--nvproxy"}
+	}
+	return nil
+}
+
 // ensureContainerCgroupsPath sets the OCI spec's cgroupsPath so runsc creates a
 // per-container cgroup leaf under the worker pod's own cgroup (see
 // setupCgroupDelegation). atelet emits a runtime-agnostic spec with no
@@ -90,10 +107,13 @@ func (r *runsc) cmdCreate(ctx context.Context, out io.Writer, containerName stri
 		// "-log-packets",
 		// "-strace",
 		"-root", ateompath.RunSCStateDir(r.actorUID),
+	}
+	args = append(args, nvproxyGlobalArgs()...)
+	args = append(args,
 		"create",
 		"-bundle", ateompath.OCIBundlePath(r.actorUID, containerName),
 		"-pid-file", ateompath.PIDFilePath(r.actorUID, containerName),
-	}
+	)
 
 	args = append(args, additionalArgs...)
 	args = append(args, containerName) // Name of the container
@@ -119,9 +139,7 @@ func (r *runsc) cmdStart(ctx context.Context, out io.Writer, containerName strin
 
 	slog.InfoContext(ctx, "About to run runsc start", slog.String("container", containerName))
 
-	cmd := exec.CommandContext(
-		ctx,
-		r.path,
+	startArgs := []string{
 		"-log-format", "json",
 		"--alsologtostderr",
 		// "-debug",
@@ -131,9 +149,9 @@ func (r *runsc) cmdStart(ctx context.Context, out io.Writer, containerName strin
 		// "-strace",
 		"-allow-connected-on-save",
 		"-root", ateompath.RunSCStateDir(r.actorUID),
-		"start",
-		containerName, // Name of the container
-	)
+	}
+	startArgs = append(startArgs, "start", containerName)
+	cmd := exec.CommandContext(ctx, r.path, startArgs...)
 	cmd.Stdout = out
 	cmd.Stderr = out
 
@@ -226,9 +244,7 @@ func (r *runsc) cmdRestore(ctx context.Context, out io.Writer, containerName, ch
 		return fmt.Errorf("while setting cgroups path for %q: %w", containerName, err)
 	}
 
-	cmd := exec.CommandContext(
-		ctx,
-		r.path,
+	restoreArgs := []string{
 		"-log-format", "json",
 		"--alsologtostderr",
 		// "-debug",
@@ -237,6 +253,9 @@ func (r *runsc) cmdRestore(ctx context.Context, out io.Writer, containerName, ch
 		// "-log-packets",
 		// "-strace",
 		"-root", ateompath.RunSCStateDir(r.actorUID),
+	}
+	restoreArgs = append(restoreArgs, nvproxyGlobalArgs()...)
+	restoreArgs = append(restoreArgs,
 		"restore",
 		"-bundle", ateompath.OCIBundlePath(r.actorUID, containerName),
 		"-image-path", checkpointPath,
@@ -246,6 +265,7 @@ func (r *runsc) cmdRestore(ctx context.Context, out io.Writer, containerName, ch
 		"-detach",
 		containerName,
 	)
+	cmd := exec.CommandContext(ctx, r.path, restoreArgs...)
 	cmd.Stdout = out
 	cmd.Stderr = out
 	if err := cmd.Run(); err != nil {
@@ -300,6 +320,70 @@ func (r *runsc) cmdState(ctx context.Context, containerName string) error {
 	cmd.Stderr = os.Stderr
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("while running `runsc state`: %w", err)
+	}
+	return nil
+}
+
+// killArgs builds the argv for `runsc kill <container> <signal>`. Factored out
+// so the argument construction can be unit-tested without executing runsc.
+func (r *runsc) killArgs(containerName, signal string) []string {
+	return []string{
+		"-log-format", "json",
+		"--alsologtostderr",
+		"-root", ateompath.RunSCStateDir(r.actorUID),
+		"kill",
+		containerName,
+		signal,
+	}
+}
+
+// cmdKill sends signal to the given container's process(es) inside the gVisor
+// sandbox. Used during graceful shutdown to propagate SIGTERM to the actor.
+func (r *runsc) cmdKill(ctx context.Context, containerName, signal string) error {
+	reapLock.RLock()
+	defer reapLock.RUnlock()
+
+	slog.InfoContext(ctx, "About to run runsc kill", slog.String("container", containerName), slog.String("signal", signal))
+
+	cmd := exec.CommandContext(ctx, r.path, r.killArgs(containerName, signal)...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("while running `runsc kill`: %w", err)
+	}
+	return nil
+}
+
+// waitArgs builds the argv for `runsc wait <container>`. Factored out so the
+// argument construction can be unit-tested without executing runsc.
+func (r *runsc) waitArgs(containerName string) []string {
+	return []string{
+		"-log-format", "json",
+		"--alsologtostderr",
+		"-root", ateompath.RunSCStateDir(r.actorUID),
+		"wait",
+		containerName,
+	}
+}
+
+// cmdWait blocks until the given container's process exits. Used during
+// graceful shutdown to confirm the actor has stopped before ateom exits.
+//
+// We deliberately DO NOT acquire reapLock here. If we held reapLock.RLock()
+// during this long wait, a pending background reaper write lock (reapLock.Lock())
+// would block, starving any subsequent read lock attempts (like CheckpointWorkload
+// which needs to run runsc checkpoint).
+func (r *runsc) cmdWait(ctx context.Context, containerName string) error {
+	slog.InfoContext(ctx, "About to run runsc wait", slog.String("container", containerName))
+
+	cmd := exec.CommandContext(ctx, r.path, r.waitArgs(containerName)...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		// TODO: If the background child reaper collects the runsc wait process before
+		// cmd.Run's own wait finishes, it returns ECHILD. In these cases we return an error
+		// when we shouldn't. We can fix this by forking the reap.ReapChildren() call in main.
+		return fmt.Errorf("while running `runsc wait`: %w", err)
 	}
 	return nil
 }
