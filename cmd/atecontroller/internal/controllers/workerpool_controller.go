@@ -21,11 +21,13 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/metric"
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	k8errors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -38,7 +40,12 @@ const workerPoolFieldOwner = "workerpool-controller"
 
 type WorkerPoolReconciler struct {
 	client.Client
-	Scheme       *runtime.Scheme
+	Scheme *runtime.Scheme
+	// Recorder emits Kubernetes Events against the reconciled WorkerPool so
+	// reconcile progress and failures surface in `kubectl describe`. Wired in
+	// SetupWithManager; may be left unset (nil) in unit tests that construct
+	// the reconciler directly and never call Reconcile.
+	Recorder     record.EventRecorder
 	OTelEndpoint string
 	// OTelMetricExportInterval is the OTEL_METRIC_EXPORT_INTERVAL propagated to
 	// ateom pods. Empty keeps the SDK's default.
@@ -79,11 +86,15 @@ func (r *WorkerPoolReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	// Handle deletion
 	if !wp.GetDeletionTimestamp().IsZero() {
 		log.Info("WorkerPool is being deleted")
+		r.Recorder.Event(wp, corev1.EventTypeNormal, "Deleting",
+			"WorkerPool is being deleted; the managed Deployment is garbage-collected via its OwnerReference")
 		return ctrl.Result{}, nil
 	}
 
 	if err := r.reconcileWorkerPool(ctx, wp); err != nil {
 		log.Error(err, "Failed to reconcile worker pool")
+		r.Recorder.Eventf(wp, corev1.EventTypeWarning, "ReconcileFailed",
+			"Failed to reconcile WorkerPool: %v", err)
 		return ctrl.Result{}, err
 	}
 
@@ -142,6 +153,9 @@ func (r *WorkerPoolReconciler) syncStatus(ctx context.Context, wp *atev1alpha1.W
 	if err := r.Status().Update(ctx, wp); err != nil {
 		return fmt.Errorf("failed to update WorkerPool status: %w", err)
 	}
+	r.Recorder.Eventf(wp, corev1.EventTypeNormal, "Synced",
+		"WorkerPool status synced from managed Deployment: replicas=%d readyReplicas=%d",
+		want.Replicas, want.ReadyReplicas)
 
 	return nil
 }
@@ -200,6 +214,9 @@ func (r *WorkerPoolReconciler) InitMetrics(meter metric.Meter) error {
 func (r *WorkerPoolReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	if err := r.InitMetrics(otel.Meter("atecontroller")); err != nil {
 		return fmt.Errorf("failed to initialize workerpool metrics: %w", err)
+	}
+	if r.Recorder == nil {
+		r.Recorder = mgr.GetEventRecorderFor(workerPoolFieldOwner)
 	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&atev1alpha1.WorkerPool{}).

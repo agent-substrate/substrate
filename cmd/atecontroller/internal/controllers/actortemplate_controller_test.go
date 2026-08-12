@@ -25,6 +25,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -153,6 +154,7 @@ func TestActorTemplateReconciler_Reconcile_PhaseInitial(t *testing.T) {
 			Client:    fakeK8sClient,
 			Scheme:    scheme,
 			AteClient: fakeAteClient,
+			Recorder:  record.NewFakeRecorder(10),
 		}
 
 		ctx := context.Background()
@@ -210,6 +212,7 @@ func TestActorTemplateReconciler_Reconcile_PhaseInitial(t *testing.T) {
 			Client:    fakeK8sClient,
 			Scheme:    scheme,
 			AteClient: fakeAteClient,
+			Recorder:  record.NewFakeRecorder(10),
 		}
 
 		ctx := context.Background()

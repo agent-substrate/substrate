@@ -24,16 +24,22 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	corev1 "k8s.io/api/core/v1"
 	k8errors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 const (
 	GoldenSnapshotCreationReason = "GoldenSnapshotCreation"
+
+	// actorTemplateControllerName is the source component recorded on Events
+	// emitted for ActorTemplate reconciliation.
+	actorTemplateControllerName = "actortemplate-controller"
 
 	// goldenSnapshotWarmup is the default wall-clock delay between resuming
 	// the golden actor and taking its snapshot, used as a coarse "give the
@@ -49,6 +55,13 @@ type ActorTemplateReconciler struct {
 	Scheme *runtime.Scheme
 
 	AteClient ateapipb.ControlClient
+
+	// Recorder emits Kubernetes Events against the reconciled ActorTemplate so
+	// golden-actor lifecycle progress and failures surface in
+	// `kubectl describe`. Wired in SetupWithManager; may be left unset (nil) in
+	// unit tests that construct the reconciler directly — such tests inject a
+	// record.NewFakeRecorder so Reconcile does not panic.
+	Recorder record.EventRecorder
 }
 
 //+kubebuilder:rbac:groups=ate.dev,resources=actortemplates,verbs=get;list;watch;create;update;patch;delete
@@ -91,6 +104,8 @@ func (r *ActorTemplateReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 			},
 		})
 		if err != nil && status.Code(err) != codes.AlreadyExists {
+			r.Recorder.Eventf(at, corev1.EventTypeWarning, "GoldenActorCreateFailed",
+				"Failed to ensure golden atespace %q: %v", resources.GoldenActorAtespace, err)
 			return ctrl.Result{}, fmt.Errorf("while ensuring atespace %q: %w", resources.GoldenActorAtespace, err)
 		}
 
@@ -106,6 +121,8 @@ func (r *ActorTemplateReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		}
 		_, err = r.AteClient.CreateActor(ctx, createReq)
 		if err != nil && status.Code(err) != codes.AlreadyExists {
+			r.Recorder.Eventf(at, corev1.EventTypeWarning, "GoldenActorCreateFailed",
+				"Failed to create golden actor %q: %v", actorName, err)
 			return ctrl.Result{}, fmt.Errorf("while creating golden actor: %w", err)
 		}
 
@@ -114,6 +131,8 @@ func (r *ActorTemplateReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		if err := r.Status().Update(ctx, at); err != nil {
 			return ctrl.Result{}, err
 		}
+		r.Recorder.Eventf(at, corev1.EventTypeNormal, "GoldenActorCreated",
+			"Created golden actor %q in atespace %q", actorName, resources.GoldenActorAtespace)
 		return ctrl.Result{}, nil
 
 	case atev1alpha1.PhaseResumeGoldenActor:
@@ -133,6 +152,8 @@ func (r *ActorTemplateReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		}
 		_, err := r.AteClient.ResumeActor(ctx, resumeReq)
 		if err != nil {
+			r.Recorder.Eventf(at, corev1.EventTypeWarning, "GoldenActorResumeFailed",
+				"Failed to resume golden actor %q: %v", at.Status.GoldenActorID, err)
 			return ctrl.Result{}, fmt.Errorf("while resuming golden actor: %w", err)
 		}
 
@@ -141,6 +162,8 @@ func (r *ActorTemplateReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		if err := r.Status().Update(ctx, at); err != nil {
 			return ctrl.Result{}, err
 		}
+		r.Recorder.Eventf(at, corev1.EventTypeNormal, "GoldenActorResumed",
+			"Resumed golden actor %q; will snapshot at %s", at.Status.GoldenActorID, at.Status.TakeGoldenSnapshotAt.Format(time.RFC3339))
 		return ctrl.Result{}, nil
 
 	case atev1alpha1.PhaseWaitGoldenActor:
@@ -159,11 +182,15 @@ func (r *ActorTemplateReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		}
 		resp, err := r.AteClient.SuspendActor(ctx, req)
 		if err != nil {
+			r.Recorder.Eventf(at, corev1.EventTypeWarning, "GoldenSnapshotFailed",
+				"Failed to suspend golden actor %q for snapshot: %v", at.Status.GoldenActorID, err)
 			return ctrl.Result{}, fmt.Errorf("while suspending golden actor: %w", err)
 		}
 
 		snapshot := resp.GetActor().GetLatestSnapshot()
 		if snapshot == nil {
+			r.Recorder.Eventf(at, corev1.EventTypeWarning, "GoldenSnapshotFailed",
+				"Suspending golden actor %q returned no ActorSnapshot", at.Status.GoldenActorID)
 			return ctrl.Result{}, fmt.Errorf("suspending golden actor returned no ActorSnapshot")
 		}
 
@@ -179,6 +206,8 @@ func (r *ActorTemplateReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		if err := r.Status().Update(ctx, at); err != nil {
 			return ctrl.Result{}, err
 		}
+		r.Recorder.Eventf(at, corev1.EventTypeNormal, "Ready",
+			"Golden snapshot %q captured; ActorTemplate is ready for use", snapshot.GetName())
 
 		return ctrl.Result{}, nil
 	case atev1alpha1.PhaseReady:
@@ -190,6 +219,9 @@ func (r *ActorTemplateReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *ActorTemplateReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	if r.Recorder == nil {
+		r.Recorder = mgr.GetEventRecorderFor(actorTemplateControllerName)
+	}
 	return ctrl.NewControllerManagedBy(mgr).For(&atev1alpha1.ActorTemplate{}).Complete(r)
 }
 
