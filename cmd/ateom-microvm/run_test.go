@@ -23,6 +23,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/agent-substrate/substrate/internal/sizing"
 )
 
 // A vsock socket that has gone missing means cloud-hypervisor stopped the VM
@@ -133,5 +135,29 @@ func TestResolveGuestMemMiB(t *testing.T) {
 				t.Errorf("resolveGuestMemMiB(%dMiB) = %d, want %d", tc.declaredMiB, got, tc.wantMiB)
 			}
 		})
+	}
+}
+
+// guestSize translates an actor's declared limits to effective in-guest limits:
+// CPU is preserved while memory is reduced by the VMM reserve.
+func TestGuestSize(t *testing.T) {
+	const (
+		mib     = 1024 * 1024
+		reserve = 256
+	)
+	s := &AteomService{memReserveMiB: reserve}
+
+	// Declared memory limit is reduced by reserve.
+	got := s.guestSize(sizing.SandboxSize{MilliCPU: 2000, MemoryBytes: 1024 * mib})
+	want := sizing.SandboxSize{MilliCPU: 2000, MemoryBytes: (1024 - reserve) * mib}
+	if got != want {
+		t.Errorf("guestSize(1024MiB) = %+v, want %+v", got, want)
+	}
+
+	// Unset memory (0) is left unset.
+	gotUnset := s.guestSize(sizing.SandboxSize{MilliCPU: 1000, MemoryBytes: 0})
+	wantUnset := sizing.SandboxSize{MilliCPU: 1000, MemoryBytes: 0}
+	if gotUnset != wantUnset {
+		t.Errorf("guestSize(unset) = %+v, want %+v", gotUnset, wantUnset)
 	}
 }

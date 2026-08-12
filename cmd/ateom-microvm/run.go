@@ -383,13 +383,6 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 		}
 	}()
 
-	// Prepare each container's OCI spec + record its bundle rootfs (the overlay RO
-	// lower). No host disk — the rootfs is overlay(virtio-fs lower + guest-tmpfs upper).
-	ctrs, err := s.buildActorContainers(actorUID, containers, p.size)
-	if err != nil {
-		return err
-	}
-
 	// Guest sizing + agent kernel params from the kata config.
 	memMiB, vcpus, kparams, err := s.guestConfig(rr)
 	if err != nil {
@@ -409,6 +402,19 @@ func (s *AteomService) coldBootActor(ctx context.Context, p actorBootParams) (re
 		vcpus = v
 	}
 	memMiB, err = resolveGuestMemMiB(sz.MemoryBytes, s.memReserveMiB, memMiB)
+	if err != nil {
+		return err
+	}
+
+	// Prepare each container's OCI spec + record its bundle rootfs (the overlay RO
+	// lower). No host disk — the rootfs is overlay(virtio-fs lower + guest-tmpfs upper).
+	// Size the guest container cgroup to the post-reserve guest RAM (matching memMiB)
+	// so the in-guest cgroup limit binds against actual guest memory.
+	guestSize := sz
+	if sz.MemoryBytes > 0 {
+		guestSize.MemoryBytes = int64(memMiB) * 1024 * 1024
+	}
+	ctrs, err := s.buildActorContainers(actorUID, containers, guestSize)
 	if err != nil {
 		return err
 	}
@@ -668,6 +674,22 @@ func resolveGuestMemMiB(declaredBytes int64, reserveMiB, fallbackMiB int) (int, 
 			declaredMiB, reserveMiB, m, minGuestMemMiB)
 	}
 	return m, nil
+}
+
+// guestSize translates an actor's declared limits into the effective in-guest
+// limits: CPU passes through unchanged (kata-agent sets the CFS quota), while
+// memory is reduced by the VMM reserve so the container cgroup limit inside the
+// guest matches the guest VM's actual RAM rather than the (larger) outer limit.
+func (s *AteomService) guestSize(sz sizing.SandboxSize) sizing.SandboxSize {
+	if sz.MemoryBytes <= 0 {
+		return sz
+	}
+	memMiB, err := resolveGuestMemMiB(sz.MemoryBytes, s.memReserveMiB, 0)
+	if err != nil {
+		return sz
+	}
+	sz.MemoryBytes = int64(memMiB) * 1024 * 1024
+	return sz
 }
 
 // buildVMConfig assembles the cloud-hypervisor VmConfig. The kernel cmdline replicates

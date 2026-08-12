@@ -467,6 +467,37 @@ func TestActorTemplateValidation(t *testing.T) {
 		},
 		wantErr: false,
 	}, {
+		name: "resources with requests is rejected",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Resources = &corev1.ResourceRequirements{
+				Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("1")},
+				Limits:   corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("2")},
+			}
+		},
+		wantErr: true,
+		errMsg:  "spec.resources.requests is not supported",
+	}, {
+		name: "resources with claims is rejected",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Resources = &corev1.ResourceRequirements{
+				Limits: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("2")},
+				Claims: []corev1.ResourceClaim{{Name: "claim-1"}},
+			}
+		},
+		wantErr: true,
+		errMsg:  "spec.resources.claims is not supported",
+	}, {
+		name: "resources with limits only is accepted",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Resources = &corev1.ResourceRequirements{
+				Limits: corev1.ResourceList{
+					corev1.ResourceCPU:    resource.MustParse("2"),
+					corev1.ResourceMemory: resource.MustParse("1Gi"),
+				},
+			}
+		},
+		wantErr: false,
+	}, {
 		name: "invalid SandboxClass",
 		mutate: func(at *ActorTemplate) {
 			at.Spec.SandboxClass = "kvm"

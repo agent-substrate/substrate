@@ -113,6 +113,7 @@ func (r *runsc) cmdCreate(ctx context.Context, out io.Writer, containerName stri
 		// "-debug-to-user-log",
 		// "-log-packets",
 		// "-strace",
+		"-root", ateompath.RunSCStateDir(r.actorUID),
 		// Provision the sentry's vCPU count from the cgroup CPU quota written by
 		// sizing.ApplyToOCISpec, so the sandbox is sized to the pod's limit (runsc
 		// otherwise sizes to all host CPUs). Global flag: before the subcommand.

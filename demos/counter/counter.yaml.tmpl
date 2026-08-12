@@ -34,9 +34,6 @@ spec:
     # scheduling capacity (the per-actor ceiling). The sandbox itself is sized by
     # the ActorTemplate's spec.resources below, not by these (see internal/sizing).
     resources:
-      requests:
-        cpu: "250m"
-        memory: 256Mi
       limits:
         cpu: "1"
         memory: 1Gi

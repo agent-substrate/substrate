@@ -266,6 +266,7 @@ message RestoreWorkloadRequest {
   optional EgressGateway egress_gateway = 12;
 
   // The object storage URI of the ActorTemplate's golden snapshot.
+  // Set only when scope is SNAPSHOT_SCOPE_DATA_ON_GOLDEN. Mirrors the
   // snapshot_uri contract (field 8).
   string golden_snapshot_uri = 13;
 

@@ -954,6 +954,7 @@ type RestoreWorkloadRequest struct {
 	// When absent, actor traffic uses direct egress instead of atunnel.
 	EgressGateway *EgressGateway `protobuf:"bytes,12,opt,name=egress_gateway,json=egressGateway,proto3,oneof" json:"egress_gateway,omitempty"`
 	// The object storage URI of the ActorTemplate's golden snapshot.
+	// Set only when scope is SNAPSHOT_SCOPE_DATA_ON_GOLDEN. Mirrors the
 	// snapshot_uri contract (field 8).
 	GoldenSnapshotUri string `protobuf:"bytes,13,opt,name=golden_snapshot_uri,json=goldenSnapshotUri,proto3" json:"golden_snapshot_uri,omitempty"`
 	// The actor's declared size, from the ActorTemplate's resource limits. Used to

@@ -44,9 +44,6 @@ spec:
     # sized by the ActorTemplate's spec.resources below, not by these; keep the
     # actor memory below this limit so the VMM reserve fits (see internal/sizing).
     resources:
-      requests:
-        cpu: "1"
-        memory: 1Gi
       limits:
         cpu: "2"
         memory: 2Gi

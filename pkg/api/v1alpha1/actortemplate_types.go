@@ -313,6 +313,8 @@ type SnapshotsConfig struct {
 // +kubebuilder:validation:XValidation:rule="!has(self.volumes) || self.volumes.all(v, has(self.containers) && self.containers.exists(c, has(c.volumeMounts) && c.volumeMounts.exists(vm, vm.name == v.name)))",message="All volumes defined in spec.volumes must be mounted by at least one container"
 // +kubebuilder:validation:XValidation:rule="!has(self.sandboxClass) || self.sandboxClass != 'microvm' || !has(self.volumes) || !self.volumes.exists(v, has(v.externalVolumeTemplate))",message="ExternalVolumes are not supported when sandboxClass is 'microvm'"
 // +kubebuilder:validation:XValidation:rule="(has(self.sandboxClass) && self.sandboxClass == 'microvm') || !has(self.snapshotsConfig.onResume) || (has(self.snapshotsConfig.onResume.fromData) ? self.snapshotsConfig.onResume.fromData : 'ColdBoot') != 'Golden'",message="onResume.fromData: Golden is not supported when sandboxClass is 'gvisor'"
+// +kubebuilder:validation:XValidation:rule="!has(self.resources) || !has(self.resources.requests)",message="spec.resources.requests is not supported; actors are sized by spec.resources.limits only"
+// +kubebuilder:validation:XValidation:rule="!has(self.resources) || !has(self.resources.claims)",message="spec.resources.claims is not supported"
 // A micro-VM's guest RAM is the declared memory limit minus a fixed VMM reserve
 // (256Mi, held back for cloud-hypervisor + virtiofsd); below a 256Mi guest minimum
 // the VM cannot boot. Reject at admission any micro-VM memory limit under 512Mi
@@ -375,7 +377,7 @@ type ActorTemplateSpec struct {
 	// memory), the scheduler only places the actor on a worker whose capacity is
 	// >= these limits, and the limits are supplied to the sandbox over the actor
 	// RPCs. Because the size is baked into snapshots, it is part of the immutable
-	// spec. Requests are not consulted today (an actor occupies its whole worker).
+	// spec. Requests and claims are not supported (actors are sized by limits only).
 	// A zero or absent limit leaves the sandbox at the runtime default (unlimited
 	// for gVisor, the kata config for the micro-VM).
 	//
