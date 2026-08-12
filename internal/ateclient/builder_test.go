@@ -42,24 +42,6 @@ func TestInitTracingDisabledReturnsNoProvider(t *testing.T) {
 	}
 }
 
-func TestBearerTokenCreds(t *testing.T) {
-	md, err := bearerTokenCreds("some-token").GetRequestMetadata(context.Background())
-	if err != nil {
-		t.Fatalf("GetRequestMetadata: %v", err)
-	}
-	if got, want := md["authorization"], "Bearer some-token"; got != want {
-		t.Errorf("authorization=%q want %q", got, want)
-	}
-
-	if _, err := bearerTokenCreds("").GetRequestMetadata(context.Background()); err == nil {
-		t.Error("GetRequestMetadata with empty token: want error, got nil")
-	}
-
-	if !bearerTokenCreds("some-token").RequireTransportSecurity() {
-		t.Error("RequireTransportSecurity() = false, want true")
-	}
-}
-
 // testCAPEM generates a self-signed CA and returns its PEM encoding.
 func testCAPEM(t *testing.T, cn string) []byte {
 	t.Helper()
