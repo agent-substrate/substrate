@@ -361,6 +361,10 @@ create_api_server_env_vars() {
 
 ensure_crds() {
   log_step "ensure_crds"
+  if run_kubectl get crd workerpools.ate.dev actortemplates.ate.dev sandboxconfigs.ate.dev >/dev/null 2>&1; then
+    return
+  fi
+
   deploy_crds
 }
 

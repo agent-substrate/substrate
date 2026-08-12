@@ -152,15 +152,6 @@ Because a snapshot is not restorable across sandbox runtimes, `sandboxClass` is 
 
 Container environment variables support literal `value` entries only. Values are not interpolated (`$(VAR)` references are not expanded), and Kubernetes `envFrom`/`valueFrom` sources are not supported.
 
-`spec.imagePullSecrets` references `kubernetes.io/dockerconfigjson` or legacy
-`kubernetes.io/dockercfg` Secrets in the `ActorTemplate` namespace. Atelet
-resolves matching credentials on the node immediately before it pulls a
-workload container image; Secret contents never cross the ate-api-to-atelet RPC
-or appear in Actor resources. Grant the `atelet` service account in
-`ate-system` a namespace-scoped `get` permission for each referenced Secret
-(for example, with a Role using `resourceNames`). These credentials do not
-apply to the sandbox pause image, which is configured independently.
-
 ### Workload Connectivity (Uniform DNS)
 Substrate uses a **Uniform DNS Mesh**: every actor created from a template is automatically reachable through the **Substrate Router** via its atespace and name:
 

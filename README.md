@@ -143,17 +143,6 @@ curl -X POST -H "Host: my-counter-1.demo.actors.resources.substrate.ate.dev" -i 
    ./hack/install-ate.sh --deploy-demo-counter
    ```
 
-#### Redeploying a local Kind cluster
-
-After changing Substrate code, rebuild and reapply the core system, including
-CRD updates, to an existing local Kind cluster with:
-
-```shell
-make redeploy-kind
-```
-
-This preserves the cluster and existing demo resources.
-
 #### Custom Setup and Deployment
 
 You can run individual setup steps to create GCP resources as needed. See `go run ./tools/setup-gcp --help` for available options. For example:
