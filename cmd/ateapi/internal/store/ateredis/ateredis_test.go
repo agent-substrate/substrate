@@ -2803,8 +2803,6 @@ func TestUpdateActorTemplate_RejectsStaleVersion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateActorTemplate failed: %v", err)
 	}
-	staleVersion := created.GetMetadata().GetVersion()
-
 	if _, err := s.UpdateActorTemplate(ctx, resources.ActorTemplateRef{Atespace: "team-a", Name: "tmpl-a"}, func(dbTemplate *ateapipb.ActorTemplate) error {
 		dbTemplate.DefaultVersionOnCreate = &ateapipb.ObjectRef{Atespace: "team-a", Name: "tmpl-a-v1"}
 		return nil
@@ -2812,14 +2810,12 @@ func TestUpdateActorTemplate_RejectsStaleVersion(t *testing.T) {
 		t.Fatalf("UpdateActorTemplate failed: %v", err)
 	}
 
-	_, err = s.UpdateActorTemplate(ctx, resources.ActorTemplateRef{Atespace: "team-a", Name: "tmpl-a"}, func(dbTemplate *ateapipb.ActorTemplate) error {
-		if err := store.CheckActorTemplatePrecondition(dbTemplate, created.GetMetadata().GetUid(), staleVersion); err != nil {
-			return err
-		}
+	// created still carries the pre-update version, so the pin is stale.
+	_, err = s.UpdateActorTemplate(ctx, resources.ActorTemplateRef{Atespace: "team-a", Name: "tmpl-a"}, store.WithPrecondition(created, func(dbTemplate *ateapipb.ActorTemplate) error {
 		t.Error("mutate ran past its precondition once the pinned version had moved")
 		dbTemplate.DefaultVersionOnCreate = nil
 		return nil
-	})
+	}))
 	if !errors.Is(err, store.ErrVersionConflict) {
 		t.Errorf("UpdateActorTemplate error = %v, want one matching store.ErrVersionConflict", err)
 	}
