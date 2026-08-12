@@ -30,10 +30,23 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 )
 
 const (
 	GoldenSnapshotCreationReason = "GoldenSnapshotCreation"
+
+	// goldenActorFinalizer gates ActorTemplate deletion on reclaiming the
+	// underlying golden actor (and its snapshot). Without it, deleting an
+	// ActorTemplate orphans the golden actor in substrate's store and its
+	// snapshot blobs in object storage, with no path to reach them again once
+	// status.GoldenActorID is gone with the CR.
+	goldenActorFinalizer = "ate.dev/golden-actor-cleanup"
+
+	// goldenActorDeleteRetry is the requeue delay used while waiting for a
+	// still-running golden actor to reach a deletable (suspended) state during
+	// finalization.
+	goldenActorDeleteRetry = 5 * time.Second
 
 	// goldenSnapshotWarmup is the default wall-clock delay between resuming
 	// the golden actor and taking its snapshot, used as a coarse "give the
@@ -73,8 +86,34 @@ func (r *ActorTemplateReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return ctrl.Result{}, fmt.Errorf("failed to get actor template %q: %w", req.NamespacedName, err)
 	}
 
-	// Handle deletion
+	// Handle deletion: run golden-actor cleanup while the finalizer is held,
+	// then release it so the CR can be garbage-collected.
 	if !at.GetDeletionTimestamp().IsZero() {
+		if !controllerutil.ContainsFinalizer(at, goldenActorFinalizer) {
+			return ctrl.Result{}, nil
+		}
+		requeue, err := r.cleanupGoldenActor(ctx, at)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if requeue {
+			// Golden actor was not yet deletable (e.g. still running); it has
+			// been asked to suspend. Retry the delete on the next pass.
+			return ctrl.Result{RequeueAfter: goldenActorDeleteRetry}, nil
+		}
+		controllerutil.RemoveFinalizer(at, goldenActorFinalizer)
+		if err := r.Update(ctx, at); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{}, nil
+	}
+
+	// Ensure the cleanup finalizer is present before any golden actor exists,
+	// so a delete that races template setup still triggers reclamation.
+	if controllerutil.AddFinalizer(at, goldenActorFinalizer) {
+		if err := r.Update(ctx, at); err != nil {
+			return ctrl.Result{}, err
+		}
 		return ctrl.Result{}, nil
 	}
 
@@ -185,6 +224,43 @@ func (r *ActorTemplateReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return ctrl.Result{}, nil
 	default:
 		return ctrl.Result{}, fmt.Errorf("unrecognized phase %q", at.Status.Phase)
+	}
+}
+
+// cleanupGoldenActor reclaims the golden actor backing a deleted ActorTemplate.
+// It returns requeue=true when the actor could not be deleted yet because it is
+// not in a deletable state (DeleteActor requires SUSPENDED/CRASHED); in that
+// case it asks the actor to suspend and the caller retries. Deletion is
+// idempotent: a golden actor that was never created or is already gone is
+// treated as success.
+func (r *ActorTemplateReconciler) cleanupGoldenActor(ctx context.Context, at *atev1alpha1.ActorTemplate) (requeue bool, err error) {
+	actorName := at.Status.GoldenActorID
+	if actorName == "" {
+		// The golden actor was never created (template deleted before the first
+		// reconcile persisted GoldenActorID) — nothing to reclaim.
+		return false, nil
+	}
+
+	ref := &ateapipb.ObjectRef{Atespace: resources.GoldenActorAtespace, Name: actorName}
+
+	_, err = r.AteClient.DeleteActor(ctx, &ateapipb.DeleteActorRequest{Actor: ref})
+	if err == nil {
+		return false, nil
+	}
+	switch status.Code(err) {
+	case codes.NotFound:
+		// Already reclaimed — idempotent success.
+		return false, nil
+	case codes.FailedPrecondition:
+		// The golden actor is not in a deletable status (typically still
+		// running, e.g. the template was deleted mid-lifecycle). Suspend it so
+		// a subsequent pass can delete it.
+		if _, serr := r.AteClient.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: ref}); serr != nil {
+			return false, fmt.Errorf("while suspending golden actor %q for deletion: %w", actorName, serr)
+		}
+		return true, nil
+	default:
+		return false, fmt.Errorf("while deleting golden actor %q: %w", actorName, err)
 	}
 }
 
