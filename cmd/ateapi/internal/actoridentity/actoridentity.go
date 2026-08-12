@@ -93,9 +93,7 @@ func (s *Server) MintJWT(ctx context.Context, req *ateapipb.MintJWTRequest) (*at
 		return nil, status.Errorf(codes.PermissionDenied, "caller is not permitted to mint actor JWTs")
 	}
 
-	// TODO: Extract K8s identity from incoming JWT
-
-	// TODO: Cross-check requested actor and user claims against the actor database.
+	// TODO: Cross-check the verified caller and requested actor against the actor database.
 
 	// TODO: Cache signing keys in memory, so we don't read from disk every time.
 	signingPoolBytes, err := os.ReadFile(s.actorIDJWTPoolFile)

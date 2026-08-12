@@ -27,6 +27,9 @@ import (
 
 // NewHTTPClient returns a client for OIDC discovery and JWKS requests.
 func NewHTTPClient(issuer, certificateAuthorityFile, discoveryTokenFile string) (*http.Client, error) {
+	if discoveryTokenFile != "" && certificateAuthorityFile == "" {
+		return nil, fmt.Errorf("discovery token file requires a certificate authority file")
+	}
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	if certificateAuthorityFile != "" {
 		ca, err := os.ReadFile(certificateAuthorityFile)

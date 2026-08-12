@@ -178,7 +178,8 @@ func (a jwtServerAuthenticator) authenticate(ctx context.Context) (context.Conte
 		}
 		id, err := provider.Verify(ctx, bearer)
 		if err != nil {
-			return nil, status.Errorf(codes.Unauthenticated, "invalid bearer token: %v", err)
+			slog.DebugContext(ctx, "JWT verification failed", slog.String("provider", provider.Name), slog.Any("err", err))
+			return nil, status.Error(codes.Unauthenticated, "invalid bearer token")
 		}
 		return principal.InjectContext(ctx, principal.PrincipalInfo{
 			ID:     id,

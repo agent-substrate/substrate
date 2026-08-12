@@ -179,11 +179,17 @@ func TestJWTServerAuthenticatorRequiresBearer(t *testing.T) {
 		t.Fatalf("missing bearer: want Unauthenticated, got %v (err=%v)", code, err)
 	}
 
-	// Garbage bearer -> Unauthenticated (JWT verification will fail).
+	// Garbage bearer -> Unauthenticated (JWT parsing will fail).
 	ctx := metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", "Bearer not-a-jwt"))
 	_, err = auth.authenticate(ctx)
 	if code := status.Code(err); code != codes.Unauthenticated {
 		t.Fatalf("bad bearer: want Unauthenticated, got %v (err=%v)", code, err)
+	}
+
+	ctx = metadata.NewIncomingContext(context.Background(), metadata.Pairs("authorization", "Bearer "+testBadToken))
+	_, err = auth.authenticate(ctx)
+	if got := status.Convert(err).Message(); got != "invalid bearer token" {
+		t.Fatalf("verification error = %q, want generic error", got)
 	}
 }
 

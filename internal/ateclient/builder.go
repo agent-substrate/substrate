@@ -231,8 +231,8 @@ func serverTLSConfig(ctx context.Context, clientset kubernetes.Interface) (*tls.
 	}, nil
 }
 
-// bearerTokenDialOption attaches a ServiceAccount token for the ate-client SA
-// as per-RPC credentials.
+// bearerTokenDialOption attaches the configured token, or mints an ate-client
+// ServiceAccount token when tokenFile is empty.
 func bearerTokenDialOption(ctx context.Context, clientset *kubernetes.Clientset, tokenFile string) (grpc.DialOption, error) {
 	if tokenFile == "-" {
 		creds, err := readBearerToken(os.Stdin)

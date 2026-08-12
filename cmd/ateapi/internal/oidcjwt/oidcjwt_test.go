@@ -468,6 +468,7 @@ func TestParseJWKRejects(t *testing.T) {
 		{"EC missing coordinate", jwkT{KeyType: "EC", KeyID: "k", EllipticCurve: "P-256", EllipticX: "AA"}},
 		{"EC malformed x", jwkT{KeyType: "EC", KeyID: "k", EllipticCurve: "P-256", EllipticX: "!!!", EllipticY: "AA"}},
 		{"RSA malformed n", jwkT{KeyType: "RSA", KeyID: "k", RSAN: "!!!", RSAE: "AQAB"}},
+		{"RSA oversized exponent", jwkT{KeyType: "RSA", KeyID: "k", RSAN: "Aw", RSAE: b64url(new(big.Int).Lsh(big.NewInt(1), 80).Bytes())}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

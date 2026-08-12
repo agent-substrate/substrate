@@ -35,11 +35,7 @@ import (
 	"time"
 )
 
-// KeyAndID wraps a crypto.PublicKey along with the key ID that will identify it during
-// the verification process.
-//
-// Use GKEKeyIDForLocallyStoredKey and GKEKeyIDForCloudKMSKey to get the correct key ID the way we
-// calculate it in GKE.
+// KeyAndID wraps a crypto.PublicKey and its JWK key ID.
 type KeyAndID struct {
 	KeyID     string
 	PublicKey crypto.PublicKey
@@ -212,12 +208,11 @@ func (v *Verifier) Verify(ctx context.Context, jwt string, now time.Time) (*Clai
 
 	// It is now safe to consider arbitrary data from the payload.
 	//
-	// At this point, the payload is mostly trusted. We know that it was really issued by the selected
-	// verification key, but we need to check the issuer, audience binding, and time bindings to be
-	// sure that it's really valid.
+	// The signature proves the payload's authenticity, but the audience and time
+	// bindings still need validation before the token is accepted.
 
 	// Because the JWT spec authors wanted to be fancy, we need to try to deserialize
-	// rawClaims.Audience both as a single string and as a slice of strings.
+	// rawClaims.Audiences both as a single string and as a slice of strings.
 	var singleAudience string
 	var audiences []string
 	if err := json.Unmarshal(rawClaims.Audiences, &singleAudience); err == nil { // err EQUALS nil
@@ -493,7 +488,7 @@ func discoverKeysForIssuer(ctx context.Context, httpClient *http.Client, issuer 
 			// Skip an unusable key instead of failing the whole issuer; it's safe because
 			// keys are selected by kid and the signature is still verified, so a skipped
 			// key can't be abused. Debug, not Warn: unsupported key types are a normal
-			// config and discovery runs on every Verify (no cache yet), so Warn would spam.
+			// issuer configuration and periodic refreshes would otherwise spam warnings.
 			slog.DebugContext(ctx, "Skipping unusable JWK from issuer",
 				slog.String("kid", jwk.KeyID), slog.String("kty", jwk.KeyType), slog.Any("err", err))
 			skipped++
@@ -571,6 +566,9 @@ func parseJWK(jwk jwkT) (*KeyAndID, error) {
 		}
 		e := &big.Int{}
 		e.SetBytes(eBytes)
+		if !e.IsInt64() || e.Int64() < 2 || int64(int(e.Int64())) != e.Int64() {
+			return nil, fmt.Errorf("RSA JWK exponent is outside the supported integer range")
+		}
 
 		return &KeyAndID{
 			KeyID: jwk.KeyID,

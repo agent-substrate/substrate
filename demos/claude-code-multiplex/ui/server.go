@@ -501,7 +501,7 @@ func main() {
 	// verifies ateapi's serving cert against the live ClusterTrustBundle;
 	// an empty endpoint auto-port-forwards to svc/api in ate-system.
 	log.Printf("[ui] connecting to ateapi (endpoint=%q; empty = auto port-forward to svc/api)", ateapiAddr)
-	cli, err := ateclient.NewClient(context.Background(), "", "", ateapiAddr, false)
+	cli, err := ateclient.NewClient(context.Background(), "", "", ateapiAddr, "", false)
 	if err != nil {
 		log.Fatalf("connect ateapi: %v", err)
 	}

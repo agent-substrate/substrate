@@ -176,6 +176,12 @@ func TestBuildJWTIssuerDiscoveryClientUsesDefaultTransportWithoutDiscoveryToken(
 	}
 }
 
+func TestNewHTTPClientRequiresCAWithDiscoveryToken(t *testing.T) {
+	if _, err := NewHTTPClient("https://kubernetes.default.svc", "", "/token"); err == nil {
+		t.Fatal("NewHTTPClient() with a discovery token and no CA succeeded")
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(req *http.Request) (*http.Response, error) {
