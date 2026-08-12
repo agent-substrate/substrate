@@ -248,6 +248,393 @@ func (p *Persistence) DeleteAtespace(ctx context.Context, name string) (*ateapip
 	return out, nil
 }
 
+// --- Actor templates ---
+
+func (p *Persistence) CreateActorTemplate(ctx context.Context, template *ateapipb.ActorTemplate) (*ateapipb.ActorTemplate, error) {
+	atespace, name := template.GetMetadata().GetAtespace(), template.GetMetadata().GetName()
+	dbTemplate := proto.Clone(template).(*ateapipb.ActorTemplate)
+	dbTemplate.Metadata = newCreateMetadata(atespace, name)
+	protoBytes, err := proto.Marshal(dbTemplate)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling actor template: %w", err)
+	}
+	_, err = p.pool.Exec(ctx, `
+		INSERT INTO actor_templates (atespace, name, uid, version, proto)
+		VALUES ($1, $2, $3, $4, $5)`,
+		atespace, name, dbTemplate.GetMetadata().GetUid(), dbTemplate.GetMetadata().GetVersion(), protoBytes)
+	if err != nil {
+		if isUniqueViolation(err) {
+			return nil, store.ErrAlreadyExists
+		}
+		if isForeignKeyViolation(err) {
+			return nil, store.ErrFailedPrecondition
+		}
+		return nil, fmt.Errorf("inserting actor template %s/%s: %w", atespace, name, err)
+	}
+	return dbTemplate, nil
+}
+
+func getActorTemplateRow(ctx context.Context, q querier, templateRef resources.ActorTemplateRef) (*ateapipb.ActorTemplate, error) {
+	var protoBytes []byte
+	err := q.QueryRow(ctx, `SELECT proto FROM actor_templates WHERE atespace = $1 AND name = $2`, templateRef.Atespace, templateRef.Name).Scan(&protoBytes)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, store.ErrNotFound
+		}
+		return nil, fmt.Errorf("getting actor template %s: %w", templateRef, err)
+	}
+	out := &ateapipb.ActorTemplate{}
+	if err := proto.Unmarshal(protoBytes, out); err != nil {
+		return nil, fmt.Errorf("unmarshaling actor template: %w", err)
+	}
+	return out, nil
+}
+
+func (p *Persistence) GetActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef) (*ateapipb.ActorTemplate, error) {
+	return getActorTemplateRow(ctx, p.pool, templateRef)
+}
+
+func (p *Persistence) ActorTemplateExists(ctx context.Context, templateRef resources.ActorTemplateRef) (bool, error) {
+	var exists bool
+	if err := p.pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM actor_templates WHERE atespace = $1 AND name = $2)`, templateRef.Atespace, templateRef.Name).Scan(&exists); err != nil {
+		return false, fmt.Errorf("checking actor template existence: %w", err)
+	}
+	return exists, nil
+}
+
+func validateUpdateActorTemplateMutation(storedTemplate, mutatedTemplate *ateapipb.ActorTemplate) error {
+	if stored, mutated := storedTemplate.GetMetadata().GetAtespace(), mutatedTemplate.GetMetadata().GetAtespace(); stored != mutated {
+		return fmt.Errorf("metadata.atespace is immutable: mutation changed it from %q to %q", stored, mutated)
+	}
+	if stored, mutated := storedTemplate.GetMetadata().GetName(), mutatedTemplate.GetMetadata().GetName(); stored != mutated {
+		return fmt.Errorf("metadata.name is immutable: mutation changed it from %q to %q", stored, mutated)
+	}
+	return nil
+}
+
+func (p *Persistence) UpdateActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef, mutate func(*ateapipb.ActorTemplate) error) (*ateapipb.ActorTemplate, error) {
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("beginning actor template update: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op once committed
+
+	var currentBytes []byte
+	if err := tx.QueryRow(ctx, `
+		SELECT proto FROM actor_templates
+		WHERE atespace = $1 AND name = $2
+		FOR UPDATE`, templateRef.Atespace, templateRef.Name).Scan(&currentBytes); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, store.ErrNotFound
+		}
+		return nil, fmt.Errorf("locking actor template %s for update: %w", templateRef, err)
+	}
+
+	dbTemplate := &ateapipb.ActorTemplate{}
+	if err := proto.Unmarshal(currentBytes, dbTemplate); err != nil {
+		return nil, fmt.Errorf("unmarshaling actor template for update: %w", err)
+	}
+	templateBeforeMutation := proto.Clone(dbTemplate).(*ateapipb.ActorTemplate)
+	if err := mutate(dbTemplate); err != nil {
+		return nil, err
+	}
+	if err := validateUpdateActorTemplateMutation(templateBeforeMutation, dbTemplate); err != nil {
+		return nil, err
+	}
+	dbTemplate.Metadata = newUpdateMetadata(templateBeforeMutation.GetMetadata())
+	updatedBytes, err := proto.Marshal(dbTemplate)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling actor template: %w", err)
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE actor_templates SET version = $1, proto = $2
+		WHERE atespace = $3 AND name = $4`,
+		dbTemplate.GetMetadata().GetVersion(), updatedBytes, templateRef.Atespace, templateRef.Name); err != nil {
+		return nil, fmt.Errorf("updating actor template %s: %w", templateRef, err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("committing actor template update: %w", err)
+	}
+	return dbTemplate, nil
+}
+
+func (p *Persistence) ListActorTemplates(ctx context.Context, atespace string, pageSize int32, pageTokenStr string) ([]*ateapipb.ActorTemplate, string, error) {
+	keyParts := 2
+	if atespace != "" {
+		keyParts = 1
+	}
+	token, err := decodePageToken(pageTokenStr, kindActorTemplate, atespace, keyParts)
+	if err != nil {
+		return nil, "", err
+	}
+
+	var rows pgx.Rows
+	if atespace != "" {
+		var last *string
+		if len(token.Last) == 1 {
+			last = &token.Last[0]
+		}
+		rows, err = p.pool.Query(ctx, `
+			SELECT atespace, name, proto FROM actor_templates
+			WHERE atespace = $1 AND ($2::text IS NULL OR name > $2)
+			ORDER BY name LIMIT $3`, atespace, last, int64(pageSize)+1)
+	} else {
+		var lastAtespace, lastName *string
+		if len(token.Last) == 2 {
+			lastAtespace, lastName = &token.Last[0], &token.Last[1]
+		}
+		rows, err = p.pool.Query(ctx, `
+			SELECT atespace, name, proto FROM actor_templates
+			WHERE $1::text IS NULL OR (atespace, name) > ($1, $2)
+			ORDER BY atespace, name LIMIT $3`, lastAtespace, lastName, int64(pageSize)+1)
+	}
+	if err != nil {
+		return nil, "", fmt.Errorf("listing actor templates: %w", err)
+	}
+	defer rows.Close()
+
+	type key struct{ atespace, name string }
+	var keys []key
+	var result []*ateapipb.ActorTemplate
+	for rows.Next() {
+		var k key
+		var protoBytes []byte
+		if err := rows.Scan(&k.atespace, &k.name, &protoBytes); err != nil {
+			return nil, "", fmt.Errorf("scanning actor template row: %w", err)
+		}
+		template := &ateapipb.ActorTemplate{}
+		if err := proto.Unmarshal(protoBytes, template); err != nil {
+			return nil, "", fmt.Errorf("unmarshaling actor template: %w", err)
+		}
+		keys = append(keys, k)
+		result = append(result, template)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, "", fmt.Errorf("listing actor templates: %w", err)
+	}
+	var nextToken string
+	if len(result) > int(pageSize) {
+		result = result[:pageSize]
+		last := keys[pageSize-1]
+		lastParts := []string{last.atespace, last.name}
+		if atespace != "" {
+			lastParts = []string{last.name}
+		}
+		nextToken = encodePageToken(kindActorTemplate, atespace, lastParts)
+	}
+	return result, nextToken, nil
+}
+
+func (p *Persistence) DeleteActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef) (*ateapipb.ActorTemplate, error) {
+	var protoBytes []byte
+	err := p.pool.QueryRow(ctx, `
+		DELETE FROM actor_templates AS t
+		WHERE t.atespace = $1 AND t.name = $2
+		  AND NOT EXISTS (
+		      SELECT 1 FROM actor_template_versions AS v
+		      WHERE v.actor_template_atespace = t.atespace
+		        AND v.actor_template_name = t.name)
+		RETURNING t.proto`, templateRef.Atespace, templateRef.Name).Scan(&protoBytes)
+	if errors.Is(err, pgx.ErrNoRows) {
+		exists, existsErr := p.ActorTemplateExists(ctx, templateRef)
+		if existsErr != nil {
+			return nil, existsErr
+		}
+		if exists {
+			return nil, store.ErrFailedPrecondition
+		}
+		return nil, store.ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("deleting actor template %s: %w", templateRef, err)
+	}
+	out := &ateapipb.ActorTemplate{}
+	if err := proto.Unmarshal(protoBytes, out); err != nil {
+		return nil, fmt.Errorf("unmarshaling deleted actor template: %w", err)
+	}
+	return out, nil
+}
+
+// --- Actor template versions ---
+
+func (p *Persistence) CreateActorTemplateVersion(ctx context.Context, version *ateapipb.ActorTemplateVersion) (*ateapipb.ActorTemplateVersion, error) {
+	atespace, name := version.GetMetadata().GetAtespace(), version.GetMetadata().GetName()
+	dbVersion := proto.Clone(version).(*ateapipb.ActorTemplateVersion)
+	dbVersion.Metadata = newCreateMetadata(atespace, name)
+	protoBytes, err := proto.Marshal(dbVersion)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling actor template version: %w", err)
+	}
+	parent := resources.ActorTemplateRefFromObjectRef(dbVersion.GetActorTemplate())
+	_, err = p.pool.Exec(ctx, `
+		INSERT INTO actor_template_versions
+		    (atespace, name, actor_template_atespace, actor_template_name, uid, proto)
+		VALUES ($1, $2, $3, $4, $5, $6)`,
+		atespace, name, parent.Atespace, parent.Name, dbVersion.GetMetadata().GetUid(), protoBytes)
+	if err != nil {
+		if isUniqueViolation(err) {
+			return nil, store.ErrAlreadyExists
+		}
+		if isForeignKeyViolation(err) {
+			return nil, store.ErrFailedPrecondition
+		}
+		return nil, fmt.Errorf("inserting actor template version %s/%s: %w", atespace, name, err)
+	}
+	return dbVersion, nil
+}
+
+func getActorTemplateVersionRow(ctx context.Context, q querier, versionRef resources.ActorTemplateVersionRef) (*ateapipb.ActorTemplateVersion, error) {
+	var protoBytes []byte
+	err := q.QueryRow(ctx, `SELECT proto FROM actor_template_versions WHERE atespace = $1 AND name = $2`, versionRef.Atespace, versionRef.Name).Scan(&protoBytes)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, store.ErrNotFound
+		}
+		return nil, fmt.Errorf("getting actor template version %s: %w", versionRef, err)
+	}
+	out := &ateapipb.ActorTemplateVersion{}
+	if err := proto.Unmarshal(protoBytes, out); err != nil {
+		return nil, fmt.Errorf("unmarshaling actor template version: %w", err)
+	}
+	return out, nil
+}
+
+func (p *Persistence) GetActorTemplateVersion(ctx context.Context, versionRef resources.ActorTemplateVersionRef) (*ateapipb.ActorTemplateVersion, error) {
+	return getActorTemplateVersionRow(ctx, p.pool, versionRef)
+}
+
+func actorTemplateVersionListScope(atespace string, parent resources.ActorTemplateRef) string {
+	return atespace + "\x00" + parent.Atespace + "\x00" + parent.Name
+}
+
+func (p *Persistence) ListActorTemplateVersions(ctx context.Context, atespace string, parent resources.ActorTemplateRef, pageSize int32, pageTokenStr string) ([]*ateapipb.ActorTemplateVersion, string, error) {
+	scope := actorTemplateVersionListScope(atespace, parent)
+	keyParts := 2
+	if atespace != "" {
+		keyParts = 1
+	}
+	token, err := decodePageToken(pageTokenStr, kindActorTemplateVersion, scope, keyParts)
+	if err != nil {
+		return nil, "", err
+	}
+	filterParent := parent != (resources.ActorTemplateRef{})
+
+	var rows pgx.Rows
+	if atespace != "" {
+		var last *string
+		if len(token.Last) == 1 {
+			last = &token.Last[0]
+		}
+		rows, err = p.pool.Query(ctx, `
+			SELECT atespace, name, proto FROM actor_template_versions
+			WHERE atespace = $1
+			  AND (NOT $2 OR (actor_template_atespace = $3 AND actor_template_name = $4))
+			  AND ($5::text IS NULL OR name > $5)
+			ORDER BY name LIMIT $6`, atespace, filterParent, parent.Atespace, parent.Name, last, int64(pageSize)+1)
+	} else {
+		var lastAtespace, lastName *string
+		if len(token.Last) == 2 {
+			lastAtespace, lastName = &token.Last[0], &token.Last[1]
+		}
+		rows, err = p.pool.Query(ctx, `
+			SELECT atespace, name, proto FROM actor_template_versions
+			WHERE (NOT $1 OR (actor_template_atespace = $2 AND actor_template_name = $3))
+			  AND ($4::text IS NULL OR (atespace, name) > ($4, $5))
+			ORDER BY atespace, name LIMIT $6`, filterParent, parent.Atespace, parent.Name, lastAtespace, lastName, int64(pageSize)+1)
+	}
+	if err != nil {
+		return nil, "", fmt.Errorf("listing actor template versions: %w", err)
+	}
+	defer rows.Close()
+
+	type key struct{ atespace, name string }
+	var keys []key
+	var result []*ateapipb.ActorTemplateVersion
+	for rows.Next() {
+		var k key
+		var protoBytes []byte
+		if err := rows.Scan(&k.atespace, &k.name, &protoBytes); err != nil {
+			return nil, "", fmt.Errorf("scanning actor template version row: %w", err)
+		}
+		version := &ateapipb.ActorTemplateVersion{}
+		if err := proto.Unmarshal(protoBytes, version); err != nil {
+			return nil, "", fmt.Errorf("unmarshaling actor template version: %w", err)
+		}
+		keys = append(keys, k)
+		result = append(result, version)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, "", fmt.Errorf("listing actor template versions: %w", err)
+	}
+	var nextToken string
+	if len(result) > int(pageSize) {
+		result = result[:pageSize]
+		last := keys[pageSize-1]
+		lastParts := []string{last.atespace, last.name}
+		if atespace != "" {
+			lastParts = []string{last.name}
+		}
+		nextToken = encodePageToken(kindActorTemplateVersion, scope, lastParts)
+	}
+	return result, nextToken, nil
+}
+
+func (p *Persistence) DeleteActorTemplateVersion(ctx context.Context, versionRef resources.ActorTemplateVersionRef) (*ateapipb.ActorTemplateVersion, error) {
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("beginning actor template version delete: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op once committed
+
+	var protoBytes []byte
+	if err := tx.QueryRow(ctx, `
+		SELECT proto FROM actor_template_versions
+		WHERE atespace = $1 AND name = $2 FOR UPDATE`, versionRef.Atespace, versionRef.Name).Scan(&protoBytes); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, store.ErrNotFound
+		}
+		return nil, fmt.Errorf("locking actor template version %s for deletion: %w", versionRef, err)
+	}
+	deleted := &ateapipb.ActorTemplateVersion{}
+	if err := proto.Unmarshal(protoBytes, deleted); err != nil {
+		return nil, fmt.Errorf("unmarshaling actor template version for deletion: %w", err)
+	}
+
+	parentRef := resources.ActorTemplateRefFromObjectRef(deleted.GetActorTemplate())
+	var parentBytes []byte
+	err = tx.QueryRow(ctx, `
+		SELECT proto FROM actor_templates
+		WHERE atespace = $1 AND name = $2 FOR UPDATE`, parentRef.Atespace, parentRef.Name).Scan(&parentBytes)
+	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		return nil, fmt.Errorf("locking parent actor template %s: %w", parentRef, err)
+	}
+	if err == nil {
+		parent := &ateapipb.ActorTemplate{}
+		if err := proto.Unmarshal(parentBytes, parent); err != nil {
+			return nil, fmt.Errorf("unmarshaling parent actor template: %w", err)
+		}
+		if resources.ActorTemplateVersionRefFromObjectRef(parent.GetDefaultVersionOnCreate()) == versionRef {
+			return nil, store.ErrFailedPrecondition
+		}
+	}
+
+	if golden := deleted.GetGoldenSnapshot(); golden != nil {
+		if _, err := tx.Exec(ctx, `DELETE FROM actor_snapshots WHERE atespace = $1 AND name = $2`, golden.GetAtespace(), golden.GetName()); err != nil {
+			if isForeignKeyViolation(err) {
+				return nil, store.ErrFailedPrecondition
+			}
+			return nil, fmt.Errorf("deleting golden actor snapshot %s/%s: %w", golden.GetAtespace(), golden.GetName(), err)
+		}
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM actor_template_versions WHERE atespace = $1 AND name = $2`, versionRef.Atespace, versionRef.Name); err != nil {
+		return nil, fmt.Errorf("deleting actor template version %s: %w", versionRef, err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("committing actor template version delete: %w", err)
+	}
+	return deleted, nil
+}
+
 // --- Actors ---
 
 func (p *Persistence) CreateActor(ctx context.Context, actor *ateapipb.Actor) (*ateapipb.Actor, error) {
@@ -1260,7 +1647,7 @@ func (p *Persistence) releaseLease(ctx context.Context, key, token string) error
 // --- Debug ---
 
 func (p *Persistence) DebugClearAll(ctx context.Context) error {
-	if _, err := p.pool.Exec(ctx, `TRUNCATE atespaces, actors, actor_snapshots, actor_snapshot_tags, workers, leases`); err != nil {
+	if _, err := p.pool.Exec(ctx, `TRUNCATE atespaces, actors, actor_templates, actor_template_versions, actor_snapshots, actor_snapshot_tags, workers, leases`); err != nil {
 		return fmt.Errorf("truncating tables: %w", err)
 	}
 	return nil

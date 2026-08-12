@@ -29,10 +29,12 @@ const pageTokenVersion = 1
 type resourceKind string
 
 const (
-	kindAtespace resourceKind = "atespace"
-	kindActor    resourceKind = "actor"
-	kindSnapshot resourceKind = "snapshot"
-	kindWorker   resourceKind = "worker"
+	kindAtespace             resourceKind = "atespace"
+	kindActor                resourceKind = "actor"
+	kindActorTemplate        resourceKind = "actor-template"
+	kindActorTemplateVersion resourceKind = "actor-template-version"
+	kindSnapshot             resourceKind = "snapshot"
+	kindWorker               resourceKind = "worker"
 )
 
 // pageToken is PostgreSQL's opaque keyset page token. Unlike ateredis's
