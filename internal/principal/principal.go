@@ -23,12 +23,12 @@ const (
 	KindJWT  = "jwt"
 )
 
-// TODO(shrutinair): Pass through additional principal metadata from UserInfo.ExtraInfo.
-// PrincipalInfo contains information about an authenticated principal.
+// PrincipalInfo contains information about an authenticated principal,
+// mirroring k8s.io/apiserver/pkg/authentication/user.Info.
 type PrincipalInfo struct {
 	ID        string
 	Kind      string
-	ExtraInfo map[string]string
+	ExtraInfo map[string][]string
 }
 
 type contextKey struct{}

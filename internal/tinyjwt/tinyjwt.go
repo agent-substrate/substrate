@@ -23,6 +23,7 @@ import (
 	"crypto/rsa"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -33,6 +34,9 @@ import (
 	"sync"
 	"time"
 )
+
+// ErrIssuerMismatch indicates that the JWT issuer does not match the expected issuer.
+var ErrIssuerMismatch = errors.New("tinyjwt: issuer mismatch")
 
 // KeyAndID wraps a crypto.PublicKey along with the key ID that will identify it during
 // the verification process.
@@ -158,7 +162,7 @@ func Verify(ctx context.Context, httpClient *http.Client, jwt string, expectedIs
 	}
 
 	if !issuerMatches(rawClaims.Issuer, expectedIssuer) {
-		return nil, fmt.Errorf("unexpected issuer %q", rawClaims.Issuer)
+		return nil, fmt.Errorf("%w: actual %q, expected %q", ErrIssuerMismatch, rawClaims.Issuer, expectedIssuer)
 	}
 
 	keys, err := discoverKeysForIssuer(ctx, httpClient, expectedIssuer)

@@ -125,11 +125,11 @@ func TestOIDCAuthenticator_SubClaim(t *testing.T) {
 	if user.ID != "user-123" {
 		t.Errorf("user.ID = %q, want %q", user.ID, "user-123")
 	}
-	if user.ExtraInfo["sub"] != "user-123" {
-		t.Errorf("user.ExtraInfo[sub] = %q, want %q", user.ExtraInfo["sub"], "user-123")
+	if len(user.ExtraInfo["sub"]) == 0 || user.ExtraInfo["sub"][0] != "user-123" {
+		t.Errorf("user.ExtraInfo[sub] = %v, want %q", user.ExtraInfo["sub"], "user-123")
 	}
-	if user.ExtraInfo["iss"] != ti.issuer() {
-		t.Errorf("user.ExtraInfo[iss] = %q, want %q", user.ExtraInfo["iss"], ti.issuer())
+	if len(user.ExtraInfo["iss"]) == 0 || user.ExtraInfo["iss"][0] != ti.issuer() {
+		t.Errorf("user.ExtraInfo[iss] = %v, want %q", user.ExtraInfo["iss"], ti.issuer())
 	}
 }
 
@@ -162,8 +162,8 @@ func TestOIDCAuthenticator_EmailClaimWithPrefix(t *testing.T) {
 	if user.ID != "google:shrutinair@google.com" {
 		t.Errorf("user.ID = %q, want %q", user.ID, "google:shrutinair@google.com")
 	}
-	if user.ExtraInfo["email"] != "shrutinair@google.com" {
-		t.Errorf("user.ExtraInfo[email] = %q, want %q", user.ExtraInfo["email"], "shrutinair@google.com")
+	if len(user.ExtraInfo["email"]) == 0 || user.ExtraInfo["email"][0] != "shrutinair@google.com" {
+		t.Errorf("user.ExtraInfo[email] = %v, want %q", user.ExtraInfo["email"], "shrutinair@google.com")
 	}
 }
 
@@ -292,14 +292,14 @@ func TestChain_BothKubernetesAndOIDC(t *testing.T) {
 	if userK8s.ID != "system:serviceaccount:ate-system:atelet" {
 		t.Errorf("userK8s.ID = %q, want %q", userK8s.ID, "system:serviceaccount:ate-system:atelet")
 	}
-	if userK8s.ExtraInfo["kubernetes.io/namespace"] != "ate-system" {
-		t.Errorf("userK8s.ExtraInfo[kubernetes.io/namespace] = %q, want %q", userK8s.ExtraInfo["kubernetes.io/namespace"], "ate-system")
+	if len(userK8s.ExtraInfo["kubernetes.io/namespace"]) == 0 || userK8s.ExtraInfo["kubernetes.io/namespace"][0] != "ate-system" {
+		t.Errorf("userK8s.ExtraInfo[kubernetes.io/namespace] = %v, want %q", userK8s.ExtraInfo["kubernetes.io/namespace"], "ate-system")
 	}
-	if userK8s.ExtraInfo["kubernetes.io/serviceaccount/name"] != "atelet" {
-		t.Errorf("userK8s.ExtraInfo[kubernetes.io/serviceaccount/name] = %q, want %q", userK8s.ExtraInfo["kubernetes.io/serviceaccount/name"], "atelet")
+	if len(userK8s.ExtraInfo["kubernetes.io/serviceaccount/name"]) == 0 || userK8s.ExtraInfo["kubernetes.io/serviceaccount/name"][0] != "atelet" {
+		t.Errorf("userK8s.ExtraInfo[kubernetes.io/serviceaccount/name] = %v, want %q", userK8s.ExtraInfo["kubernetes.io/serviceaccount/name"], "atelet")
 	}
-	if userK8s.ExtraInfo["kubernetes.io/serviceaccount/uid"] != "sa-uid-123" {
-		t.Errorf("userK8s.ExtraInfo[kubernetes.io/serviceaccount/uid] = %q, want %q", userK8s.ExtraInfo["kubernetes.io/serviceaccount/uid"], "sa-uid-123")
+	if len(userK8s.ExtraInfo["kubernetes.io/serviceaccount/uid"]) == 0 || userK8s.ExtraInfo["kubernetes.io/serviceaccount/uid"][0] != "sa-uid-123" {
+		t.Errorf("userK8s.ExtraInfo[kubernetes.io/serviceaccount/uid] = %v, want %q", userK8s.ExtraInfo["kubernetes.io/serviceaccount/uid"], "sa-uid-123")
 	}
 
 	// Test Case 2: Human OIDC token (issued by Google IDP)

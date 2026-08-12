@@ -41,11 +41,11 @@ func ValidateServerConfig(cfg ServerConfig) error {
 	return nil
 }
 
-// TODO(shrutinair): Extend UserInfo in ateapiauth with authorization roles/groups as needed.
-// UserInfo contains authenticated principal identity information and extra claims.
+// UserInfo contains authenticated principal identity information and extra claims,
+// mirroring k8s.io/apiserver/pkg/authentication/user.Info.
 type UserInfo struct {
 	ID        string
-	ExtraInfo map[string]string
+	ExtraInfo map[string][]string
 }
 
 // ServerConfig configures the server-side auth interceptor.
@@ -163,7 +163,7 @@ func (a jwtServerAuthenticator) authenticate(ctx context.Context) (context.Conte
 		return nil, status.Errorf(codes.Unauthenticated, "invalid bearer token: %v", err)
 	}
 	var id string
-	var extra map[string]string
+	var extra map[string][]string
 	if user != nil {
 		id = user.ID
 		extra = user.ExtraInfo

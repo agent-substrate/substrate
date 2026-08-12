@@ -19,6 +19,7 @@ package oidcauth
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 	"time"
@@ -30,11 +31,11 @@ import (
 
 
 
-// TODO(shrutinair): Expand UserInfo and ExtraInfo as Kubernetes and Substrate require additional extracted claims.
-// UserInfo contains authenticated principal identity information and extra claims.
+// UserInfo contains authenticated principal identity information and extra claims,
+// mirroring k8s.io/apiserver/pkg/authentication/user.Info.
 type UserInfo struct {
 	ID        string
-	ExtraInfo map[string]string
+	ExtraInfo map[string][]string
 }
 
 // Authenticator evaluates a Bearer token and returns authenticated principal user info.
@@ -114,7 +115,7 @@ func (a *OIDCAuthenticator) AuthenticateToken(ctx context.Context, token string)
 
 	if err != nil {
 		// If verification failed because of unexpected issuer, return ok=false so chain can continue.
-		if isIssuerMismatch(err) {
+		if errors.Is(err, tinyjwt.ErrIssuerMismatch) {
 			return nil, false, nil
 		}
 		return nil, true, err
@@ -122,46 +123,46 @@ func (a *OIDCAuthenticator) AuthenticateToken(ctx context.Context, token string)
 
 	username := evaluateUsernameExpression(a.cfg.ClaimMappings.Username, claims)
 
-	extraInfo := make(map[string]string)
+	extraInfo := make(map[string][]string)
 	if claims.Issuer != "" {
-		extraInfo["iss"] = claims.Issuer
+		extraInfo["iss"] = []string{claims.Issuer}
 	}
 	if claims.Subject != "" {
-		extraInfo["sub"] = claims.Subject
+		extraInfo["sub"] = []string{claims.Subject}
 	}
 	if claims.Email != "" {
-		extraInfo["email"] = claims.Email
+		extraInfo["email"] = []string{claims.Email}
 	}
 	if claims.JTI != "" {
-		extraInfo["jti"] = claims.JTI
+		extraInfo["jti"] = []string{claims.JTI}
 	}
 	if claims.Kubernetes != nil {
 		if claims.Kubernetes.Namespace != "" {
-			extraInfo["kubernetes.io/namespace"] = claims.Kubernetes.Namespace
+			extraInfo["kubernetes.io/namespace"] = []string{claims.Kubernetes.Namespace}
 		}
 		if claims.Kubernetes.ServiceAccountName != "" {
-			extraInfo["kubernetes.io/serviceaccount/name"] = claims.Kubernetes.ServiceAccountName
+			extraInfo["kubernetes.io/serviceaccount/name"] = []string{claims.Kubernetes.ServiceAccountName}
 		}
 		if claims.Kubernetes.ServiceAccountUID != "" {
-			extraInfo["kubernetes.io/serviceaccount/uid"] = claims.Kubernetes.ServiceAccountUID
+			extraInfo["kubernetes.io/serviceaccount/uid"] = []string{claims.Kubernetes.ServiceAccountUID}
 		}
 		if claims.Kubernetes.PodName != "" {
-			extraInfo["kubernetes.io/pod/name"] = claims.Kubernetes.PodName
+			extraInfo["kubernetes.io/pod/name"] = []string{claims.Kubernetes.PodName}
 		}
 		if claims.Kubernetes.PodUID != "" {
-			extraInfo["kubernetes.io/pod/uid"] = claims.Kubernetes.PodUID
+			extraInfo["kubernetes.io/pod/uid"] = []string{claims.Kubernetes.PodUID}
 		}
 		if claims.Kubernetes.NodeName != "" {
-			extraInfo["kubernetes.io/node/name"] = claims.Kubernetes.NodeName
+			extraInfo["kubernetes.io/node/name"] = []string{claims.Kubernetes.NodeName}
 		}
 		if claims.Kubernetes.NodeUID != "" {
-			extraInfo["kubernetes.io/node/uid"] = claims.Kubernetes.NodeUID
+			extraInfo["kubernetes.io/node/uid"] = []string{claims.Kubernetes.NodeUID}
 		}
 		if claims.Kubernetes.SecretName != "" {
-			extraInfo["kubernetes.io/secret/name"] = claims.Kubernetes.SecretName
+			extraInfo["kubernetes.io/secret/name"] = []string{claims.Kubernetes.SecretName}
 		}
 		if claims.Kubernetes.SecretUID != "" {
-			extraInfo["kubernetes.io/secret/uid"] = claims.Kubernetes.SecretUID
+			extraInfo["kubernetes.io/secret/uid"] = []string{claims.Kubernetes.SecretUID}
 		}
 	}
 
@@ -169,13 +170,6 @@ func (a *OIDCAuthenticator) AuthenticateToken(ctx context.Context, token string)
 		ID:        username,
 		ExtraInfo: extraInfo,
 	}, true, nil
-}
-
-func isIssuerMismatch(err error) bool {
-	if err == nil {
-		return false
-	}
-	return strings.HasPrefix(err.Error(), "unexpected issuer")
 }
 
 // evaluateUsernameExpression evaluates simple username mapping expressions.

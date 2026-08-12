@@ -70,7 +70,7 @@ func TestChainedServerAuthenticatorPrincipal(t *testing.T) {
 		}
 		return &UserInfo{
 			ID:        subject,
-			ExtraInfo: map[string]string{"key": "val"},
+			ExtraInfo: map[string][]string{"key": {"val"}},
 		}, nil
 	}
 
@@ -99,7 +99,7 @@ func TestChainedServerAuthenticatorPrincipal(t *testing.T) {
 			name:     "no peer with valid bearer",
 			ctx:      withBearer(context.Background(), "good-token"),
 			verify:   verifyGoodToken,
-			want:     principal.PrincipalInfo{ID: subject, Kind: principal.KindJWT, ExtraInfo: map[string]string{"key": "val"}},
+			want:     principal.PrincipalInfo{ID: subject, Kind: principal.KindJWT, ExtraInfo: map[string][]string{"key": {"val"}}},
 			wantCode: codes.OK,
 		},
 		{
@@ -116,7 +116,7 @@ func TestChainedServerAuthenticatorPrincipal(t *testing.T) {
 				}},
 			}), "good-token"),
 			verify:   verifyGoodToken,
-			want:     principal.PrincipalInfo{ID: subject, Kind: principal.KindJWT, ExtraInfo: map[string]string{"key": "val"}},
+			want:     principal.PrincipalInfo{ID: subject, Kind: principal.KindJWT, ExtraInfo: map[string][]string{"key": {"val"}}},
 			wantCode: codes.OK,
 		},
 		{
@@ -168,9 +168,15 @@ func principalEqual(a, b principal.PrincipalInfo) bool {
 	if len(a.ExtraInfo) != len(b.ExtraInfo) {
 		return false
 	}
-	for k, v := range a.ExtraInfo {
-		if b.ExtraInfo[k] != v {
+	for k, vSlice := range a.ExtraInfo {
+		bSlice, ok := b.ExtraInfo[k]
+		if !ok || len(vSlice) != len(bSlice) {
 			return false
+		}
+		for i, v := range vSlice {
+			if bSlice[i] != v {
+				return false
+			}
 		}
 	}
 	return true
@@ -202,7 +208,7 @@ func TestJWTServerAuthenticatorInjectsPrincipal(t *testing.T) {
 	const subject = "system:serviceaccount:default:router"
 	auth := jwtServerAuthenticator{
 		verifyBearerToken: func(context.Context, string) (*UserInfo, error) {
-			return &UserInfo{ID: subject, ExtraInfo: map[string]string{"ns": "default"}}, nil
+			return &UserInfo{ID: subject, ExtraInfo: map[string][]string{"ns": {"default"}}}, nil
 		},
 	}
 
@@ -215,7 +221,7 @@ func TestJWTServerAuthenticatorInjectsPrincipal(t *testing.T) {
 	if !ok {
 		t.Fatal("no principal in context")
 	}
-	want := principal.PrincipalInfo{ID: subject, Kind: principal.KindJWT, ExtraInfo: map[string]string{"ns": "default"}}
+	want := principal.PrincipalInfo{ID: subject, Kind: principal.KindJWT, ExtraInfo: map[string][]string{"ns": {"default"}}}
 	if !principalEqual(got, want) {
 		t.Errorf("principal=%+v want %+v", got, want)
 	}
