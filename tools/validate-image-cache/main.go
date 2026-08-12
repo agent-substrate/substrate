@@ -76,9 +76,18 @@ var (
 	timeout   = flag.Duration("timeout", 20*time.Minute, "Per-image timeout")
 	minFreeGB = flag.Uint64("min-free-gb", 150, "Ask the eviction engine to reclaim disk when the cache volume has less free space than this")
 	evictIdle = flag.Duration("evict-idle", 10*time.Minute, "Eviction min-age: layers and records younger than this are never evicted. Minimum 1m on a node with an actors dir. NOTE: if the corpus unpacks faster than this window elapses on a small disk, nothing is evictable while the disk fills — size it well below disk-fill time")
-	evictAll  = flag.Bool("evict-all", false, "Evict everything evictable from the cache and exit (no refs file needed). Rooted images and anything younger than --evict-idle survive")
+	evictAll  = flag.Bool("evict-all", false, "Evict everything evictable from the cache and exit (no refs file needed). Rooted images and anything younger than --evict-idle survive. Requires --force on a node with an actors dir")
+	force     = flag.Bool("force", false, "Allow --evict-all on a node with an actors dir")
 	platform  = flag.String("platform", "linux/amd64", "Image platform to pull")
 )
+
+// looksLikeLiveNode reports whether the node's actors dir exists — the
+// same authority the eviction root set is scanned from. Anything but
+// ENOENT counts: an unreadable actors dir is still a node.
+func looksLikeLiveNode() bool {
+	_, err := os.Stat(ateompath.ActorsDir)
+	return err == nil || !errors.Is(err, os.ErrNotExist)
+}
 
 // newStore opens the cache with the options both modes share: min-age
 // from --evict-idle, and bundle-spec rooting from the node's actors dir
@@ -105,24 +114,36 @@ func main() {
 		flag.Usage()
 		os.Exit(2)
 	}
+	if *evictIdle < 0 {
+		// A negative min-age inverts the veto (the cutoff lands in the
+		// future), making even in-flight pulls' layers evictable.
+		log.Fatalf("--evict-idle %v must be >= 0", *evictIdle)
+	}
 	// min-age is the only protection that works across processes (the
 	// engine's locks are per-process), so on a live node it must not be
 	// tuned away. Validation hosts (no actors dir) keep full freedom.
 	const liveNodeIdleFloor = time.Minute
-	if *evictIdle < liveNodeIdleFloor {
-		if _, err := os.Stat(ateompath.ActorsDir); err == nil {
-			log.Fatalf("--evict-idle=%v is below %v with %s present: min-age is the only protection that applies across processes using the cache",
-				*evictIdle, liveNodeIdleFloor, ateompath.ActorsDir)
-		}
+	if *evictIdle < liveNodeIdleFloor && looksLikeLiveNode() {
+		log.Fatalf("--evict-idle=%v is below %v with %s present: min-age is the only protection that applies across processes using the cache",
+			*evictIdle, liveNodeIdleFloor, ateompath.ActorsDir)
 	}
 	ctx := context.Background()
 
 	if *evictAll {
 		// Flush mode: no refs, no registry auth. New also reclaims any
 		// crash-debris orphans before the pass.
-		if _, err := os.Stat(ateompath.ActorsDir); err == nil {
-			// An actors dir is a decent proxy for a live node.
-			log.Printf("WARNING: %s exists — this looks like a live node, and this run is not synchronized with other processes using the cache", ateompath.ActorsDir)
+		var stray []string
+		flag.Visit(func(f *flag.Flag) {
+			switch f.Name {
+			case "min-free-gb", "sample", "seed", "out", "parallel", "timeout", "platform":
+				stray = append(stray, "--"+f.Name)
+			}
+		})
+		if len(stray) > 0 {
+			log.Fatalf("%s: only valid with --refs-file", strings.Join(stray, ", "))
+		}
+		if looksLikeLiveNode() && !*force {
+			log.Fatalf("%s exists — this looks like a live node, and this run is not synchronized with other processes using the cache; re-run with --force to proceed", ateompath.ActorsDir)
 		}
 		store, err := newStore()
 		if err != nil {
@@ -138,12 +159,18 @@ func main() {
 			log.Printf("evict-all finished with errors: %v", err)
 		}
 		// Print the summary even on partial failure; err decides the exit code.
-		log.Printf("evict-all: %d images / %d layers evicted, %.1f GB credited (free now %.0f GB)",
-			stats.EvictedImages, stats.EvictedLayers, float64(stats.FreedBytes)/1e9, float64(freeBytes(*cacheDir))/1e9)
+		log.Printf("evict-all: %d images / %d layers evicted, %.1f GB credited (free now %s)",
+			stats.EvictedImages, stats.EvictedLayers, float64(stats.FreedBytes)/1e9, freeGB(*cacheDir))
 		if err != nil {
 			os.Exit(1)
 		}
 		return
+	}
+
+	if looksLikeLiveNode() {
+		// Same caveat as flush mode: evictIfLow runs the same engine
+		// beside whatever else uses this pool.
+		log.Printf("WARNING: %s exists — this looks like a live node, and evictions during this run are not synchronized with other processes using the cache", ateompath.ActorsDir)
 	}
 
 	refs, err := loadRefs(*refsFile)
@@ -308,12 +335,12 @@ func evictIfLow(ctx context.Context, store *imagecache.Store, cacheRoot string, 
 		log.Printf("eviction pass finished with errors: %v", err)
 	}
 	if stats.EvictedImages > 0 || stats.EvictedLayers > 0 {
-		log.Printf("evicted %d images / %d layers, %.1f GB credited (free now %.0f GB)",
-			stats.EvictedImages, stats.EvictedLayers, float64(stats.FreedBytes)/1e9, float64(freeBytes(cacheRoot))/1e9)
+		log.Printf("evicted %d images / %d layers, %.1f GB credited (free now %s)",
+			stats.EvictedImages, stats.EvictedLayers, float64(stats.FreedBytes)/1e9, freeGB(cacheRoot))
 	}
-	// Layers retired with an unreadable size file credit zero bytes, so
-	// bytes alone would call a productive pass fruitless.
-	if stats.EvictedLayers == 0 && stats.FreedBytes == 0 {
+	// The same counters the log line above gates on — not bytes, which
+	// credit zero for a layer retired with an unreadable size file.
+	if stats.EvictedImages == 0 && stats.EvictedLayers == 0 {
 		lastFruitless = time.Now()
 	}
 }
@@ -324,4 +351,14 @@ func freeBytes(path string) uint64 {
 		return ^uint64(0) // unknown: don't evict
 	}
 	return st.Bavail * uint64(st.Bsize)
+}
+
+// freeGB renders free space for logs, naming the statfs-failure sentinel
+// instead of printing it as ~18 billion GB.
+func freeGB(path string) string {
+	free := freeBytes(path)
+	if free == ^uint64(0) {
+		return "unknown"
+	}
+	return fmt.Sprintf("%.0f GB", float64(free)/1e9)
 }

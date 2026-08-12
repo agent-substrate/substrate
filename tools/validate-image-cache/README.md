@@ -78,6 +78,7 @@ go run ./tools/validate-image-cache \
 | `--min-free-gb` | 150 | reclaim the shortfall below this free-space floor via the eviction engine |
 | `--evict-idle` | 10m | eviction min-age: layers and records younger than this are never evicted (minimum 1m on a node with an actors dir); must be far below disk-fill time on small disks |
 | `--evict-all` | false | evict everything evictable and exit (mutually exclusive with `--refs-file`); rooted images and anything younger than `--evict-idle` survive |
+| `--force` | false | allow `--evict-all` on a node with an actors dir |
 | `--platform` | `linux/amd64` | image platform to pull |
 
 ## Output and rerunning
