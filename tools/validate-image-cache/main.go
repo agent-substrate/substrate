@@ -77,16 +77,75 @@ var (
 	minFreeGB = flag.Uint64("min-free-gb", 150, "Ask the eviction engine to reclaim disk when the cache volume has less free space than this")
 	evictIdle = flag.Duration("evict-idle", 10*time.Minute, "Eviction min-age: layers and records younger than this are never evicted. Minimum 1m on a node with an actors dir. NOTE: if the corpus unpacks faster than this window elapses on a small disk, nothing is evictable while the disk fills — size it well below disk-fill time")
 	evictAll  = flag.Bool("evict-all", false, "Evict everything evictable from the cache and exit (no refs file needed). Rooted images and anything younger than --evict-idle survive. Requires --force on a node with an actors dir")
-	force     = flag.Bool("force", false, "Allow --evict-all on a node with an actors dir")
+	force     = flag.Bool("force", false, "Allow eviction on a node with an actors dir")
 	platform  = flag.String("platform", "linux/amd64", "Image platform to pull")
 )
 
-// looksLikeLiveNode reports whether the node's actors dir exists — the
-// same authority the eviction root set is scanned from. Anything but
-// ENOENT counts: an unreadable actors dir is still a node.
-func looksLikeLiveNode() bool {
-	_, err := os.Stat(ateompath.ActorsDir)
+// looksLikeLiveNode reports whether dir — the node's actors dir, the
+// same authority the eviction root set is scanned from — exists.
+// Anything but ENOENT counts: an unreadable actors dir is still a node.
+func looksLikeLiveNode(dir string) bool {
+	_, err := os.Stat(dir)
 	return err == nil || !errors.Is(err, os.ErrNotExist)
+}
+
+// liveNodeIdleFloor: min-age is the only protection that works across
+// processes (the engine's locks are per-process), so on a live node it
+// must not be tuned away. Validation hosts keep full freedom.
+const liveNodeIdleFloor = time.Minute
+
+// errUsage marks validation failures that should print flag usage.
+var errUsage = errors.New("usage")
+
+// runConfig is the flag state validate checks — a plain struct so the
+// combination matrix is table-testable.
+type runConfig struct {
+	cacheDir, refsFile string
+	evictAll, force    bool
+	evictIdle          time.Duration
+	minFreeGB          uint64
+	live               bool
+	setFlags           []string // flag names given explicitly
+}
+
+func (c runConfig) validate() error {
+	if c.cacheDir == "" || (c.refsFile == "" && !c.evictAll) || (c.refsFile != "" && c.evictAll) {
+		return fmt.Errorf("%w: need --cache-dir plus exactly one of --refs-file or --evict-all", errUsage)
+	}
+	if c.evictIdle < 0 {
+		// A negative min-age inverts the veto (the cutoff lands in the
+		// future), making even in-flight pulls' layers evictable.
+		return fmt.Errorf("--evict-idle %v must be >= 0", c.evictIdle)
+	}
+	if c.minFreeGB > math.MaxUint64/uint64(1e9) {
+		return fmt.Errorf("--min-free-gb %d overflows a byte count", c.minFreeGB)
+	}
+	if c.evictAll {
+		var stray []string
+		for _, name := range c.setFlags {
+			switch name {
+			case "cache-dir", "evict-idle", "evict-all", "force":
+				// The whole flush-mode surface; new flags fail closed.
+			default:
+				stray = append(stray, "--"+name)
+			}
+		}
+		if len(stray) > 0 {
+			return fmt.Errorf("%w: %s: only valid with --refs-file", errUsage, strings.Join(stray, ", "))
+		}
+	}
+	if c.live {
+		if c.evictIdle < liveNodeIdleFloor {
+			return fmt.Errorf("--evict-idle=%v is below %v with %s present: min-age is the only protection that applies across processes using the cache",
+				c.evictIdle, liveNodeIdleFloor, ateompath.ActorsDir)
+		}
+		// Both modes evict here (evictIfLow is a low-water flush on a
+		// loop), unsynchronized with every other user of the pool.
+		if !c.force {
+			return fmt.Errorf("%s exists — this looks like a live node, and evictions are not synchronized with other processes using the cache; re-run with --force to proceed", ateompath.ActorsDir)
+		}
+	}
+	return nil
 }
 
 // newStore opens the cache with the options both modes share: min-age
@@ -109,42 +168,26 @@ type result struct {
 
 func main() {
 	flag.Parse()
-	if *cacheDir == "" || (*refsFile == "" && !*evictAll) || (*refsFile != "" && *evictAll) {
-		fmt.Fprintln(os.Stderr, "need --cache-dir plus exactly one of --refs-file or --evict-all")
-		flag.Usage()
-		os.Exit(2)
+	cfg := runConfig{
+		cacheDir: *cacheDir, refsFile: *refsFile,
+		evictAll: *evictAll, force: *force,
+		evictIdle: *evictIdle, minFreeGB: *minFreeGB,
+		live: looksLikeLiveNode(ateompath.ActorsDir),
 	}
-	if *evictIdle < 0 {
-		// A negative min-age inverts the veto (the cutoff lands in the
-		// future), making even in-flight pulls' layers evictable.
-		log.Fatalf("--evict-idle %v must be >= 0", *evictIdle)
-	}
-	// min-age is the only protection that works across processes (the
-	// engine's locks are per-process), so on a live node it must not be
-	// tuned away. Validation hosts (no actors dir) keep full freedom.
-	const liveNodeIdleFloor = time.Minute
-	if *evictIdle < liveNodeIdleFloor && looksLikeLiveNode() {
-		log.Fatalf("--evict-idle=%v is below %v with %s present: min-age is the only protection that applies across processes using the cache",
-			*evictIdle, liveNodeIdleFloor, ateompath.ActorsDir)
+	flag.Visit(func(f *flag.Flag) { cfg.setFlags = append(cfg.setFlags, f.Name) })
+	if err := cfg.validate(); err != nil {
+		if errors.Is(err, errUsage) {
+			fmt.Fprintln(os.Stderr, err)
+			flag.Usage()
+			os.Exit(2)
+		}
+		log.Fatal(err)
 	}
 	ctx := context.Background()
 
 	if *evictAll {
 		// Flush mode: no refs, no registry auth. New also reclaims any
 		// crash-debris orphans before the pass.
-		var stray []string
-		flag.Visit(func(f *flag.Flag) {
-			switch f.Name {
-			case "min-free-gb", "sample", "seed", "out", "parallel", "timeout", "platform":
-				stray = append(stray, "--"+f.Name)
-			}
-		})
-		if len(stray) > 0 {
-			log.Fatalf("%s: only valid with --refs-file", strings.Join(stray, ", "))
-		}
-		if looksLikeLiveNode() && !*force {
-			log.Fatalf("%s exists — this looks like a live node, and this run is not synchronized with other processes using the cache; re-run with --force to proceed", ateompath.ActorsDir)
-		}
 		store, err := newStore()
 		if err != nil {
 			log.Fatalf("opening cache: %v", err)
@@ -165,12 +208,6 @@ func main() {
 			os.Exit(1)
 		}
 		return
-	}
-
-	if looksLikeLiveNode() {
-		// Same caveat as flush mode: evictIfLow runs the same engine
-		// beside whatever else uses this pool.
-		log.Printf("WARNING: %s exists — this looks like a live node, and evictions during this run are not synchronized with other processes using the cache", ateompath.ActorsDir)
 	}
 
 	refs, err := loadRefs(*refsFile)
