@@ -30,10 +30,10 @@ func TestActorRefString(t *testing.T) {
 func TestActorRefDNSName(t *testing.T) {
 	actorRef := ActorRef{Atespace: "team-a", Name: "act-1"}
 
-	got := actorRef.DNSName()
+	got := ActorDNSName(actorRef)
 	want := "act-1.team-a.actors.resources.substrate.ate.dev"
 	if got != want {
-		t.Errorf("DNSName() = %q, want %q", got, want)
+		t.Errorf("ActorDNSName() = %q, want %q", got, want)
 	}
 
 	parsed, err := ParseActorDNSName(got)

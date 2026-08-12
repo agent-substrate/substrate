@@ -21,12 +21,21 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
-// The template and version aliases must stay distinct types: the phantom
-// ResourceRef kind is what stops a template reference from being passed where
-// a version reference is expected.
-func TestTemplateAndVersionRefsAreDistinctTypes(t *testing.T) {
-	if reflect.TypeFor[ActorTemplateRef]() == reflect.TypeFor[ActorTemplateVersionRef]() {
-		t.Error("ActorTemplateRef and ActorTemplateVersionRef are the same type; the phantom kind marker was lost")
+// The ref aliases must stay distinct types: the phantom ResourceRef kind is
+// what stops a reference to one resource kind from being passed where another
+// is expected.
+func TestRefAliasesAreDistinctTypes(t *testing.T) {
+	types := map[string]reflect.Type{
+		"ActorRef":                reflect.TypeFor[ActorRef](),
+		"ActorTemplateRef":        reflect.TypeFor[ActorTemplateRef](),
+		"ActorTemplateVersionRef": reflect.TypeFor[ActorTemplateVersionRef](),
+	}
+	seen := make(map[reflect.Type]string)
+	for name, typ := range types {
+		if other, dup := seen[typ]; dup {
+			t.Errorf("%s and %s are the same type; the phantom kind marker was lost", name, other)
+		}
+		seen[typ] = name
 	}
 }
 

@@ -16,51 +16,20 @@ package resources
 
 import (
 	"fmt"
-	"log/slog"
 	"strings"
 
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
+// Phantom ResourceRef marker keeping actor references a distinct type.
+type actorKind struct{}
+
 // ActorRef identifies an actor by the (atespace, name).
-//
-// ActorRef is the in-process form of the identity that ateapipb.ObjectRef
-// carries on the wire.
-type ActorRef struct {
-	// Atespace is the isolation boundary the actor was created into. Required.
-	Atespace string
-	// Name is the actor's name, unique within Atespace. Required.
-	Name string
-}
-
-func (r ActorRef) String() string {
-	return r.Atespace + "/" + r.Name
-}
-
-// LogValue implements slog.LogValuer so that slog.Any("actor", ref) records the
-// two components as a group ("actor.atespace", "actor.name") rather than
-// flattening them into one opaque string.
-func (r ActorRef) LogValue() slog.Value {
-	return slog.GroupValue(
-		slog.String("atespace", r.Atespace),
-		slog.String("name", r.Name),
-	)
-}
-
-// DNSName returns the uniform DNS name the actor is reachable at.
-// This is: "<name>.<atespace>.actors.resources.substrate.ate.dev".
-func (r ActorRef) DNSName() string {
-	return r.Name + "." + r.Atespace + "." + ActorDNSSuffix
-}
-
-// ToObjectRef converts the reference to its wire form.
-func (r ActorRef) ToObjectRef() *ateapipb.ObjectRef {
-	return &ateapipb.ObjectRef{Atespace: r.Atespace, Name: r.Name}
-}
+type ActorRef = ResourceRef[actorKind]
 
 // ActorRefFromObjectRef converts a wire reference to an ActorRef.
 func ActorRefFromObjectRef(ref *ateapipb.ObjectRef) ActorRef {
-	return ActorRef{Atespace: ref.GetAtespace(), Name: ref.GetName()}
+	return resourceRefFromObjectRef[actorKind](ref)
 }
 
 // ActorRefFromActor returns the reference addressing the given actor.
@@ -69,6 +38,12 @@ func ActorRefFromActor(a *ateapipb.Actor) ActorRef {
 		Atespace: a.GetMetadata().GetAtespace(),
 		Name:     a.GetMetadata().GetName(),
 	}
+}
+
+// ActorDNSName returns the uniform DNS name the actor is reachable at.
+// This is: "<name>.<atespace>.actors.resources.substrate.ate.dev".
+func ActorDNSName(r ActorRef) string {
+	return r.Name + "." + r.Atespace + "." + ActorDNSSuffix
 }
 
 // ParseActorDNSName parses a DNS name for a given actor.
