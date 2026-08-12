@@ -108,20 +108,28 @@ func TestOIDCAuthenticator_SubClaim(t *testing.T) {
 	})
 
 	auth := New(OIDCAuthenticatorConfig{
-		IssuerURL:     ti.issuer(),
-		Audiences:     []string{"test-aud"},
-		UsernameClaim: "sub",
+		IssuerURL: ti.issuer(),
+		Audiences: []string{"test-aud"},
+		ClaimMappings: ClaimMappings{
+			Username: "claims.sub",
+		},
 	}, ti.server.Client())
 
-	id, ok, err := auth.AuthenticateToken(context.Background(), tok)
+	user, ok, err := auth.AuthenticateToken(context.Background(), tok)
 	if err != nil {
 		t.Fatalf("AuthenticateToken() err = %v, want nil", err)
 	}
-	if !ok {
-		t.Fatalf("AuthenticateToken() ok = false, want true")
+	if !ok || user == nil {
+		t.Fatalf("AuthenticateToken() ok = false or user is nil, want user")
 	}
-	if id != "user-123" {
-		t.Errorf("id = %q, want %q", id, "user-123")
+	if user.ID != "user-123" {
+		t.Errorf("user.ID = %q, want %q", user.ID, "user-123")
+	}
+	if user.ExtraInfo["sub"] != "user-123" {
+		t.Errorf("user.ExtraInfo[sub] = %q, want %q", user.ExtraInfo["sub"], "user-123")
+	}
+	if user.ExtraInfo["iss"] != ti.issuer() {
+		t.Errorf("user.ExtraInfo[iss] = %q, want %q", user.ExtraInfo["iss"], ti.issuer())
 	}
 }
 
@@ -137,21 +145,25 @@ func TestOIDCAuthenticator_EmailClaimWithPrefix(t *testing.T) {
 	})
 
 	auth := New(OIDCAuthenticatorConfig{
-		IssuerURL:      ti.issuer(),
-		Audiences:      []string{"test-aud"},
-		UsernameClaim:  "email",
-		UsernamePrefix: "google:",
+		IssuerURL: ti.issuer(),
+		Audiences: []string{"test-aud"},
+		ClaimMappings: ClaimMappings{
+			Username: "'google:' + claims.email",
+		},
 	}, ti.server.Client())
 
-	id, ok, err := auth.AuthenticateToken(context.Background(), tok)
+	user, ok, err := auth.AuthenticateToken(context.Background(), tok)
 	if err != nil {
 		t.Fatalf("AuthenticateToken() err = %v, want nil", err)
 	}
-	if !ok {
-		t.Fatalf("AuthenticateToken() ok = false, want true")
+	if !ok || user == nil {
+		t.Fatalf("AuthenticateToken() ok = false or user is nil, want user")
 	}
-	if id != "google:shrutinair@google.com" {
-		t.Errorf("id = %q, want %q", id, "google:shrutinair@google.com")
+	if user.ID != "google:shrutinair@google.com" {
+		t.Errorf("user.ID = %q, want %q", user.ID, "google:shrutinair@google.com")
+	}
+	if user.ExtraInfo["email"] != "shrutinair@google.com" {
+		t.Errorf("user.ExtraInfo[email] = %q, want %q", user.ExtraInfo["email"], "shrutinair@google.com")
 	}
 }
 
@@ -170,26 +182,30 @@ func TestChain_AuthenticateToken(t *testing.T) {
 
 	chain := Chain{
 		New(OIDCAuthenticatorConfig{
-			IssuerURL:     ti1.issuer(),
-			Audiences:     []string{"aud-1"},
-			UsernameClaim: "sub",
+			IssuerURL: ti1.issuer(),
+			Audiences: []string{"aud-1"},
+			ClaimMappings: ClaimMappings{
+				Username: "claims.sub",
+			},
 		}, ti1.server.Client()),
 		New(OIDCAuthenticatorConfig{
-			IssuerURL:     ti2.issuer(),
-			Audiences:     []string{"aud-2"},
-			UsernameClaim: "email",
+			IssuerURL: ti2.issuer(),
+			Audiences: []string{"aud-2"},
+			ClaimMappings: ClaimMappings{
+				Username: "claims.email",
+			},
 		}, ti2.server.Client()),
 	}
 
-	id, ok, err := chain.AuthenticateToken(context.Background(), tok2)
+	user, ok, err := chain.AuthenticateToken(context.Background(), tok2)
 	if err != nil {
 		t.Fatalf("chain.AuthenticateToken() err = %v, want nil", err)
 	}
-	if !ok {
-		t.Fatalf("chain.AuthenticateToken() ok = false, want true")
+	if !ok || user == nil {
+		t.Fatalf("chain.AuthenticateToken() ok = false or user is nil, want user")
 	}
-	if id != "dev@example.com" {
-		t.Errorf("id = %q, want %q", id, "dev@example.com")
+	if user.ID != "dev@example.com" {
+		t.Errorf("user.ID = %q, want %q", user.ID, "dev@example.com")
 	}
 }
 
@@ -207,9 +223,11 @@ func TestChain_VerificationFailureStopsChain(t *testing.T) {
 
 	chain := Chain{
 		New(OIDCAuthenticatorConfig{
-			IssuerURL:     ti1.issuer(),
-			Audiences:     []string{"aud-1"},
-			UsernameClaim: "sub",
+			IssuerURL: ti1.issuer(),
+			Audiences: []string{"aud-1"},
+			ClaimMappings: ClaimMappings{
+				Username: "claims.sub",
+			},
 		}, ti1.server.Client()),
 	}
 
@@ -232,16 +250,19 @@ func TestChain_BothKubernetesAndOIDC(t *testing.T) {
 	chain := Chain{
 		// 1. Kubernetes Bound ServiceAccount Authenticator
 		New(OIDCAuthenticatorConfig{
-			IssuerURL:     k8sIssuer.issuer(),
-			Audiences:     []string{"api.ate-system.svc"},
-			UsernameClaim: "sub",
+			IssuerURL: k8sIssuer.issuer(),
+			Audiences: []string{"api.ate-system.svc"},
+			ClaimMappings: ClaimMappings{
+				Username: "claims.sub",
+			},
 		}, k8sIssuer.server.Client()),
 		// 2. Human Google IDP Authenticator
 		New(OIDCAuthenticatorConfig{
-			IssuerURL:      oidcIssuer.issuer(),
-			Audiences:      []string{"32555940559.apps.googleusercontent.com"},
-			UsernameClaim:  "email",
-			UsernamePrefix: "google:",
+			IssuerURL: oidcIssuer.issuer(),
+			Audiences: []string{"32555940559.apps.googleusercontent.com"},
+			ClaimMappings: ClaimMappings{
+				Username: "'google:' + claims.email",
+			},
 		}, oidcIssuer.server.Client()),
 	}
 
@@ -261,15 +282,24 @@ func TestChain_BothKubernetesAndOIDC(t *testing.T) {
 		},
 	})
 
-	idK8s, ok, err := chain.AuthenticateToken(context.Background(), k8sTok)
+	userK8s, ok, err := chain.AuthenticateToken(context.Background(), k8sTok)
 	if err != nil {
 		t.Fatalf("chain.AuthenticateToken(k8sTok) err = %v, want nil", err)
 	}
-	if !ok {
-		t.Fatalf("chain.AuthenticateToken(k8sTok) ok = false, want true")
+	if !ok || userK8s == nil {
+		t.Fatalf("chain.AuthenticateToken(k8sTok) ok = false or user is nil, want user")
 	}
-	if idK8s != "system:serviceaccount:ate-system:atelet" {
-		t.Errorf("idK8s = %q, want %q", idK8s, "system:serviceaccount:ate-system:atelet")
+	if userK8s.ID != "system:serviceaccount:ate-system:atelet" {
+		t.Errorf("userK8s.ID = %q, want %q", userK8s.ID, "system:serviceaccount:ate-system:atelet")
+	}
+	if userK8s.ExtraInfo["kubernetes.io/namespace"] != "ate-system" {
+		t.Errorf("userK8s.ExtraInfo[kubernetes.io/namespace] = %q, want %q", userK8s.ExtraInfo["kubernetes.io/namespace"], "ate-system")
+	}
+	if userK8s.ExtraInfo["kubernetes.io/serviceaccount/name"] != "atelet" {
+		t.Errorf("userK8s.ExtraInfo[kubernetes.io/serviceaccount/name] = %q, want %q", userK8s.ExtraInfo["kubernetes.io/serviceaccount/name"], "atelet")
+	}
+	if userK8s.ExtraInfo["kubernetes.io/serviceaccount/uid"] != "sa-uid-123" {
+		t.Errorf("userK8s.ExtraInfo[kubernetes.io/serviceaccount/uid] = %q, want %q", userK8s.ExtraInfo["kubernetes.io/serviceaccount/uid"], "sa-uid-123")
 	}
 
 	// Test Case 2: Human OIDC token (issued by Google IDP)
@@ -281,15 +311,15 @@ func TestChain_BothKubernetesAndOIDC(t *testing.T) {
 		"exp":   now.Add(time.Hour).Unix(),
 	})
 
-	idOIDC, ok, err := chain.AuthenticateToken(context.Background(), oidcTok)
+	userOIDC, ok, err := chain.AuthenticateToken(context.Background(), oidcTok)
 	if err != nil {
 		t.Fatalf("chain.AuthenticateToken(oidcTok) err = %v, want nil", err)
 	}
-	if !ok {
-		t.Fatalf("chain.AuthenticateToken(oidcTok) ok = false, want true")
+	if !ok || userOIDC == nil {
+		t.Fatalf("chain.AuthenticateToken(oidcTok) ok = false or user is nil, want user")
 	}
-	if idOIDC != "google:shrutinair@google.com" {
-		t.Errorf("idOIDC = %q, want %q", idOIDC, "google:shrutinair@google.com")
+	if userOIDC.ID != "google:shrutinair@google.com" {
+		t.Errorf("userOIDC.ID = %q, want %q", userOIDC.ID, "google:shrutinair@google.com")
 	}
 
 	// Test Case 3: Token from an unrecognized third issuer -> skipped (ok=false)

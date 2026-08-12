@@ -41,13 +41,20 @@ func ValidateServerConfig(cfg ServerConfig) error {
 	return nil
 }
 
+// TODO(shrutinair): Extend UserInfo in ateapiauth with authorization roles/groups as needed.
+// UserInfo contains authenticated principal identity information and extra claims.
+type UserInfo struct {
+	ID        string
+	ExtraInfo map[string]string
+}
+
 // ServerConfig configures the server-side auth interceptor.
 type ServerConfig struct {
 	// VerifyBearerToken verifies a Bearer token presented by a client and
-	// returns the authenticated principal's ID (e.g. the JWT subject). It
+	// returns the authenticated user info. It
 	// authenticates clients that did not present a certificate identity
 	// (e.g. kubectl-ate, which dials without a client certificate).
-	VerifyBearerToken func(context.Context, string) (string, error)
+	VerifyBearerToken func(context.Context, string) (*UserInfo, error)
 }
 
 // UnaryServerInterceptor returns a gRPC unary interceptor enforcing cfg.
@@ -143,7 +150,7 @@ func mtlsPeerIdentity(ctx context.Context) (string, bool) {
 }
 
 type jwtServerAuthenticator struct {
-	verifyBearerToken func(context.Context, string) (string, error)
+	verifyBearerToken func(context.Context, string) (*UserInfo, error)
 }
 
 func (a jwtServerAuthenticator) authenticate(ctx context.Context) (context.Context, error) {
@@ -151,13 +158,20 @@ func (a jwtServerAuthenticator) authenticate(ctx context.Context) (context.Conte
 	if !ok {
 		return nil, status.Error(codes.Unauthenticated, "missing bearer token")
 	}
-	id, err := a.verifyBearerToken(ctx, bearer)
+	user, err := a.verifyBearerToken(ctx, bearer)
 	if err != nil {
 		return nil, status.Errorf(codes.Unauthenticated, "invalid bearer token: %v", err)
 	}
+	var id string
+	var extra map[string]string
+	if user != nil {
+		id = user.ID
+		extra = user.ExtraInfo
+	}
 	return principal.InjectContext(ctx, principal.PrincipalInfo{
-		ID:   id,
-		Kind: principal.KindJWT,
+		ID:        id,
+		Kind:      principal.KindJWT,
+		ExtraInfo: extra,
 	}), nil
 }
 

@@ -28,11 +28,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/oidcauth"
-
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/sessionidjwt"
 	"github.com/agent-substrate/substrate/internal/localca"
+	"github.com/agent-substrate/substrate/internal/tinyjwt"
 	"github.com/agent-substrate/substrate/internal/localjwtauthority"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
@@ -83,7 +82,7 @@ func (s *Server) MintJWT(ctx context.Context, req *ateapipb.MintJWTRequest) (*at
 
 	clientJWT := strings.TrimPrefix(authorization[0], "Bearer ")
 
-	clientClaims, err := oidcauth.Verify(ctx, s.httpClient, clientJWT, s.k8sJWTIssuer, []string{s.k8sJWTAudience}, time.Now())
+	clientClaims, err := tinyjwt.Verify(ctx, s.httpClient, clientJWT, s.k8sJWTIssuer, []string{s.k8sJWTAudience}, time.Now())
 
 
 	if err != nil {
@@ -94,9 +93,11 @@ func (s *Server) MintJWT(ctx context.Context, req *ateapipb.MintJWTRequest) (*at
 	slog.InfoContext(ctx, "Verified client JWT", slog.Any("claims", clientClaims))
 
 
-	// TODO: Extract K8s identity from incoming JWT
+	// TODO(shrutinair): Refactor MintJWT to use principal.FromContext(ctx) populated by the shared gRPC AuthChain interceptor
+	// instead of manually parsing headers and calling raw oidcauth.Verify. Inspect UserInfo.ExtraInfo (e.g. namespace, pod, serviceaccount)
+	// to verify that the calling atelet is authorized to request session tokens.
 
-	// TODO: Cross-check requested session and user claims against the session database.
+	// TODO(shrutinair): Cross-check requested session and user claims against the session database.
 
 	// TODO: Cache signing keys in memory, so we don't read from disk every time.
 	signingPoolBytes, err := os.ReadFile(s.sessionIDJWTPoolFile)

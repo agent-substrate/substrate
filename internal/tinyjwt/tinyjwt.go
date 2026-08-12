@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package oidcauth
+// Package tinyjwt implements low-level, zero-dependency RFC7519 JWT verification and OIDC discovery/JWKS key fetching.
+package tinyjwt
 
 import (
 	"context"
@@ -75,8 +76,8 @@ type parseBoundObjectReference struct {
 	UID  string `json:"uid,omitempty"`
 }
 
-// OIDCClaims covers standard RFC7519/OIDC claims as well as optional Kubernetes bound claims.
-type OIDCClaims struct {
+// Claims covers standard RFC7519/OIDC claims as well as optional Kubernetes bound claims.
+type Claims struct {
 	// Mandatory OIDC Specification Claims (RFC 7519 / OIDC Core 1.0)
 	Issuer     string
 	Subject    string
@@ -113,7 +114,7 @@ var (
 )
 
 // Verify verifies and extracts claims from a Kubernetes or external IDP OIDC JWT.
-func Verify(ctx context.Context, httpClient *http.Client, jwt string, expectedIssuer string, expectedAudiences []string, now time.Time) (*OIDCClaims, error) {
+func Verify(ctx context.Context, httpClient *http.Client, jwt string, expectedIssuer string, expectedAudiences []string, now time.Time) (*Claims, error) {
 	segments := strings.Split(jwt, ".")
 	if len(segments) != 3 {
 		return nil, fmt.Errorf("malformed JWT")
@@ -239,7 +240,7 @@ func Verify(ctx context.Context, httpClient *http.Client, jwt string, expectedIs
 		}
 	}
 
-	return &OIDCClaims{
+	return &Claims{
 		Issuer:     rawClaims.Issuer,
 		Audiences:  audiences,
 		Subject:    rawClaims.Subject,

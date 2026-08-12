@@ -37,7 +37,7 @@ func TestValidateServerConfig(t *testing.T) {
 		cfg     ServerConfig
 		wantErr bool
 	}{
-		{name: "valid", cfg: ServerConfig{VerifyBearerToken: func(context.Context, string) (string, error) { return "", nil }}},
+		{name: "valid", cfg: ServerConfig{VerifyBearerToken: func(context.Context, string) (*UserInfo, error) { return nil, nil }}},
 		{name: "missing verifier", cfg: ServerConfig{}, wantErr: true},
 	}
 
@@ -64,11 +64,14 @@ func TestChainedServerAuthenticatorPrincipal(t *testing.T) {
 	withBearer := func(ctx context.Context, token string) context.Context {
 		return metadata.NewIncomingContext(ctx, metadata.Pairs("authorization", "Bearer "+token))
 	}
-	verifyGoodToken := func(_ context.Context, bearer string) (string, error) {
+	verifyGoodToken := func(_ context.Context, bearer string) (*UserInfo, error) {
 		if bearer != "good-token" {
-			return "", fmt.Errorf("bad token")
+			return nil, fmt.Errorf("bad token")
 		}
-		return subject, nil
+		return &UserInfo{
+			ID:        subject,
+			ExtraInfo: map[string]string{"key": "val"},
+		}, nil
 	}
 
 	tests := []struct {
@@ -76,7 +79,7 @@ func TestChainedServerAuthenticatorPrincipal(t *testing.T) {
 		ctx  context.Context
 		// verify is the bearer token verifier; nil means the test fails if
 		// it is called (the certificate identity must take precedence).
-		verify   func(context.Context, string) (string, error)
+		verify   func(context.Context, string) (*UserInfo, error)
 		want     principal.PrincipalInfo
 		wantCode codes.Code
 	}{
@@ -96,7 +99,7 @@ func TestChainedServerAuthenticatorPrincipal(t *testing.T) {
 			name:     "no peer with valid bearer",
 			ctx:      withBearer(context.Background(), "good-token"),
 			verify:   verifyGoodToken,
-			want:     principal.PrincipalInfo{ID: subject, Kind: principal.KindJWT},
+			want:     principal.PrincipalInfo{ID: subject, Kind: principal.KindJWT, ExtraInfo: map[string]string{"key": "val"}},
 			wantCode: codes.OK,
 		},
 		{
@@ -113,7 +116,7 @@ func TestChainedServerAuthenticatorPrincipal(t *testing.T) {
 				}},
 			}), "good-token"),
 			verify:   verifyGoodToken,
-			want:     principal.PrincipalInfo{ID: subject, Kind: principal.KindJWT},
+			want:     principal.PrincipalInfo{ID: subject, Kind: principal.KindJWT, ExtraInfo: map[string]string{"key": "val"}},
 			wantCode: codes.OK,
 		},
 		{
@@ -134,9 +137,9 @@ func TestChainedServerAuthenticatorPrincipal(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			verify := tt.verify
 			if verify == nil {
-				verify = func(context.Context, string) (string, error) {
+				verify = func(context.Context, string) (*UserInfo, error) {
 					t.Fatal("bearer token verifier called; certificate identity must take precedence")
-					return "", nil
+					return nil, nil
 				}
 			}
 			auth := newChainedAuthenticator(ServerConfig{VerifyBearerToken: verify})
@@ -151,17 +154,32 @@ func TestChainedServerAuthenticatorPrincipal(t *testing.T) {
 			if !ok {
 				t.Fatal("no principal in context")
 			}
-			if got != tt.want {
+			if !principalEqual(got, tt.want) {
 				t.Errorf("principal=%+v want %+v", got, tt.want)
 			}
 		})
 	}
 }
 
+func principalEqual(a, b principal.PrincipalInfo) bool {
+	if a.ID != b.ID || a.Kind != b.Kind {
+		return false
+	}
+	if len(a.ExtraInfo) != len(b.ExtraInfo) {
+		return false
+	}
+	for k, v := range a.ExtraInfo {
+		if b.ExtraInfo[k] != v {
+			return false
+		}
+	}
+	return true
+}
+
 func TestJWTServerAuthenticatorRequiresBearer(t *testing.T) {
 	auth := jwtServerAuthenticator{
-		verifyBearerToken: func(context.Context, string) (string, error) {
-			return "", fmt.Errorf("bad token")
+		verifyBearerToken: func(context.Context, string) (*UserInfo, error) {
+			return nil, fmt.Errorf("bad token")
 		},
 	}
 
@@ -183,8 +201,8 @@ func TestJWTServerAuthenticatorRequiresBearer(t *testing.T) {
 func TestJWTServerAuthenticatorInjectsPrincipal(t *testing.T) {
 	const subject = "system:serviceaccount:default:router"
 	auth := jwtServerAuthenticator{
-		verifyBearerToken: func(context.Context, string) (string, error) {
-			return subject, nil
+		verifyBearerToken: func(context.Context, string) (*UserInfo, error) {
+			return &UserInfo{ID: subject, ExtraInfo: map[string]string{"ns": "default"}}, nil
 		},
 	}
 
@@ -197,8 +215,8 @@ func TestJWTServerAuthenticatorInjectsPrincipal(t *testing.T) {
 	if !ok {
 		t.Fatal("no principal in context")
 	}
-	want := principal.PrincipalInfo{ID: subject, Kind: principal.KindJWT}
-	if got != want {
+	want := principal.PrincipalInfo{ID: subject, Kind: principal.KindJWT, ExtraInfo: map[string]string{"ns": "default"}}
+	if !principalEqual(got, want) {
 		t.Errorf("principal=%+v want %+v", got, want)
 	}
 }

@@ -771,7 +771,8 @@ func fetchProtos[M proto.Message](ctx context.Context, master *redis.Client, key
 		}
 
 		msg := newMsg()
-		if err := protojson.Unmarshal([]byte(getCmd.Val()), msg); err != nil {
+		unmarshalOpts := protojson.UnmarshalOptions{DiscardUnknown: true}
+		if err := unmarshalOpts.Unmarshal([]byte(getCmd.Val()), msg); err != nil {
 			return nil, fmt.Errorf("in protojson.Unmarshal: %w", err)
 		}
 		out = append(out, msg)

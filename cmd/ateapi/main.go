@@ -198,9 +198,11 @@ func main() {
 			k8sAuds = append(k8sAuds, *k8sJWTAudience)
 		}
 		authChain = append(authChain, oidcauth.New(oidcauth.OIDCAuthenticatorConfig{
-			IssuerURL:     *k8sJWTIssuer,
-			Audiences:     k8sAuds,
-			UsernameClaim: "sub",
+			IssuerURL: *k8sJWTIssuer,
+			Audiences: k8sAuds,
+			ClaimMappings: oidcauth.ClaimMappings{
+				Username: "claims.sub",
+			},
 		}, jwtIssuerDiscoveryClient))
 	}
 	if *humanJWTIssuer != "" {
@@ -209,24 +211,29 @@ func main() {
 			humanAuds = append(humanAuds, *humanJWTAudience)
 		}
 		authChain = append(authChain, oidcauth.New(oidcauth.OIDCAuthenticatorConfig{
-			IssuerURL:     *humanJWTIssuer,
-			Audiences:     humanAuds,
-			UsernameClaim: "email",
+			IssuerURL: *humanJWTIssuer,
+			Audiences: humanAuds,
+			ClaimMappings: oidcauth.ClaimMappings{
+				Username: "'google:' + claims.email",
+			},
 		}, nil))
 	}
 
 
 
 	authCfg := ateapiauth.ServerConfig{
-		VerifyBearerToken: func(ctx context.Context, bearer string) (string, error) {
-			id, ok, err := authChain.AuthenticateToken(ctx, bearer)
+		VerifyBearerToken: func(ctx context.Context, bearer string) (*ateapiauth.UserInfo, error) {
+			user, ok, err := authChain.AuthenticateToken(ctx, bearer)
 			if err != nil {
-				return "", err
+				return nil, err
 			}
 			if !ok {
-				return "", fmt.Errorf("unrecognized token issuer")
+				return nil, fmt.Errorf("unrecognized token issuer")
 			}
-			return id, nil
+			return &ateapiauth.UserInfo{
+				ID:        user.ID,
+				ExtraInfo: user.ExtraInfo,
+			}, nil
 		},
 	}
 	if err := ateapiauth.ValidateServerConfig(authCfg); err != nil {

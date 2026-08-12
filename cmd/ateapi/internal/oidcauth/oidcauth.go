@@ -22,20 +22,29 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/agent-substrate/substrate/internal/tinyjwt"
 )
 
 
 
 
 
-// Authenticator evaluates a Bearer token and returns an authenticated principal ID.
+// TODO(shrutinair): Expand UserInfo and ExtraInfo as Kubernetes and Substrate require additional extracted claims.
+// UserInfo contains authenticated principal identity information and extra claims.
+type UserInfo struct {
+	ID        string
+	ExtraInfo map[string]string
+}
+
+// Authenticator evaluates a Bearer token and returns authenticated principal user info.
 //
 // ok == false indicates that the token was not recognized by this authenticator
 // (e.g., unrecognized issuer), so the chain should try the next authenticator.
 // ok == true indicates that the token was evaluated by this authenticator; if err != nil,
 // verification failed (e.g. expired token or invalid signature) and the chain stops.
 type Authenticator interface {
-	AuthenticateToken(ctx context.Context, token string) (id string, ok bool, err error)
+	AuthenticateToken(ctx context.Context, token string) (user *UserInfo, ok bool, err error)
 }
 
 // Chain evaluates multiple Authenticators sequentially.
@@ -43,20 +52,28 @@ type Chain []Authenticator
 
 // AuthenticateToken calls each authenticator in sequence.
 // The first authenticator whose issuer matches the token evaluates it.
-// If verification succeeds, the principal ID is returned with ok=true, err=nil.
+// If verification succeeds, the principal user info is returned with ok=true, err=nil.
 // If verification fails, authentication fails immediately with ok=true, err!=nil.
 // If no authenticator recognizes the token issuer, ok=false, err=nil is returned.
-func (c Chain) AuthenticateToken(ctx context.Context, token string) (string, bool, error) {
+func (c Chain) AuthenticateToken(ctx context.Context, token string) (*UserInfo, bool, error) {
 	for _, auth := range c {
-		id, ok, err := auth.AuthenticateToken(ctx, token)
+		user, ok, err := auth.AuthenticateToken(ctx, token)
 		if err != nil {
-			return "", true, err
+			return nil, true, err
 		}
 		if ok {
-			return id, true, nil
+			return user, true, nil
 		}
 	}
-	return "", false, nil
+	return nil, false, nil
+}
+
+// ClaimMappings defines how identity claims are mapped via CEL expressions,
+// mirroring Kubernetes' apiserver.config.k8s.io/v1 AuthenticationConfiguration API.
+type ClaimMappings struct {
+	// Username defines the CEL expression for mapping the principal ID from JWT claims.
+	// E.g. 'claims.sub', 'claims.email', or '"google:" + claims.email'.
+	Username string
 }
 
 // OIDCAuthenticatorConfig defines the configuration for an OIDC authenticator,
@@ -66,11 +83,8 @@ type OIDCAuthenticatorConfig struct {
 	IssuerURL string
 	// Audiences is the list of acceptable audience values in the token.
 	Audiences []string
-	// UsernameClaim specifies which JWT claim to map to the principal ID ("email" or "sub").
-	// If empty or if the claim is absent in the token, it falls back to the "sub" claim.
-	UsernameClaim string
-	// UsernamePrefix is prepended to the extracted username claim (if non-empty).
-	UsernamePrefix string
+	// ClaimMappings specifies CEL expressions for mapping user identity attributes from claims.
+	ClaimMappings ClaimMappings
 }
 
 // OIDCAuthenticator implements Authenticator for a specific OIDC issuer.
@@ -90,33 +104,71 @@ func New(cfg OIDCAuthenticatorConfig, httpClient *http.Client) *OIDCAuthenticato
 }
 
 // AuthenticateToken verifies the Bearer token against this authenticator's configured issuer and audiences.
-func (a *OIDCAuthenticator) AuthenticateToken(ctx context.Context, token string) (string, bool, error) {
+func (a *OIDCAuthenticator) AuthenticateToken(ctx context.Context, token string) (*UserInfo, bool, error) {
 
 	if a.cfg.IssuerURL == "" {
-		return "", false, nil
+		return nil, false, nil
 	}
 
-	claims, err := Verify(ctx, a.httpClient, token, a.cfg.IssuerURL, a.cfg.Audiences, a.now())
-
+	claims, err := tinyjwt.Verify(ctx, a.httpClient, token, a.cfg.IssuerURL, a.cfg.Audiences, a.now())
 
 	if err != nil {
 		// If verification failed because of unexpected issuer, return ok=false so chain can continue.
 		if isIssuerMismatch(err) {
-			return "", false, nil
+			return nil, false, nil
 		}
-		return "", true, err
+		return nil, true, err
 	}
 
-	username := claims.Subject
-	if a.cfg.UsernameClaim == "email" && claims.Email != "" {
-		username = claims.Email
+	username := evaluateUsernameExpression(a.cfg.ClaimMappings.Username, claims)
+
+	extraInfo := make(map[string]string)
+	if claims.Issuer != "" {
+		extraInfo["iss"] = claims.Issuer
+	}
+	if claims.Subject != "" {
+		extraInfo["sub"] = claims.Subject
+	}
+	if claims.Email != "" {
+		extraInfo["email"] = claims.Email
+	}
+	if claims.JTI != "" {
+		extraInfo["jti"] = claims.JTI
+	}
+	if claims.Kubernetes != nil {
+		if claims.Kubernetes.Namespace != "" {
+			extraInfo["kubernetes.io/namespace"] = claims.Kubernetes.Namespace
+		}
+		if claims.Kubernetes.ServiceAccountName != "" {
+			extraInfo["kubernetes.io/serviceaccount/name"] = claims.Kubernetes.ServiceAccountName
+		}
+		if claims.Kubernetes.ServiceAccountUID != "" {
+			extraInfo["kubernetes.io/serviceaccount/uid"] = claims.Kubernetes.ServiceAccountUID
+		}
+		if claims.Kubernetes.PodName != "" {
+			extraInfo["kubernetes.io/pod/name"] = claims.Kubernetes.PodName
+		}
+		if claims.Kubernetes.PodUID != "" {
+			extraInfo["kubernetes.io/pod/uid"] = claims.Kubernetes.PodUID
+		}
+		if claims.Kubernetes.NodeName != "" {
+			extraInfo["kubernetes.io/node/name"] = claims.Kubernetes.NodeName
+		}
+		if claims.Kubernetes.NodeUID != "" {
+			extraInfo["kubernetes.io/node/uid"] = claims.Kubernetes.NodeUID
+		}
+		if claims.Kubernetes.SecretName != "" {
+			extraInfo["kubernetes.io/secret/name"] = claims.Kubernetes.SecretName
+		}
+		if claims.Kubernetes.SecretUID != "" {
+			extraInfo["kubernetes.io/secret/uid"] = claims.Kubernetes.SecretUID
+		}
 	}
 
-	if a.cfg.UsernamePrefix != "" {
-		username = a.cfg.UsernamePrefix + username
-	}
-
-	return username, true, nil
+	return &UserInfo{
+		ID:        username,
+		ExtraInfo: extraInfo,
+	}, true, nil
 }
 
 func isIssuerMismatch(err error) bool {
@@ -124,5 +176,26 @@ func isIssuerMismatch(err error) bool {
 		return false
 	}
 	return strings.HasPrefix(err.Error(), "unexpected issuer")
+}
+
+// evaluateUsernameExpression evaluates simple username mapping expressions.
+// TODO(shrutinair): Integrate full CEL evaluation (google/cel-go) once AuthenticationConfiguration YAML loading is added.
+func evaluateUsernameExpression(expr string, claims *tinyjwt.Claims) string {
+	switch strings.TrimSpace(expr) {
+	case "claims.email":
+		if claims.Email != "" {
+			return claims.Email
+		}
+		return claims.Subject
+	case `'google:' + claims.email`, `"google:" + claims.email`:
+		if claims.Email != "" {
+			return "google:" + claims.Email
+		}
+		return "google:" + claims.Subject
+	case "claims.sub", "":
+		return claims.Subject
+	default:
+		return claims.Subject
+	}
 }
 
