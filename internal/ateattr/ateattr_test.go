@@ -165,6 +165,7 @@ func TestKeySpellings(t *testing.T) {
 		{SnapshotKindKey, "ate.snapshot.kind"},
 		{SnapshotScopeKey, "ate.snapshot.scope"},
 		{SnapshotPhaseKey, "ate.snapshot.phase"},
+		{ImageCacheOutcomeKey, "ate.imagecache.outcome"},
 		{SchedulerOutcomeKey, "ate.scheduler.outcome"},
 		{ErrorTypeKey, "error.type"},
 		{FailureReasonKey, "ate.failure.reason"},
@@ -196,6 +197,12 @@ func TestMetricLabelValues(t *testing.T) {
 		{OperationPause, "pause"},
 		{OperationDelete, "delete"},
 		{OperationUnknown, "unknown"},
+
+		{ImageCacheOutcomeHit, "hit"},
+		{ImageCacheOutcomeMiss, "miss"},
+		{ImageCacheOutcomeError, "error"},
+		{ImageCacheOutcomeCancelled, "cancelled"},
+		{ImageCacheOutcomeTimeout, "timeout"},
 
 		{SchedulerOutcomeAssigned, "assigned"},
 		{SchedulerOutcomeNoFreeWorker, "no_free_worker"},

@@ -97,7 +97,7 @@ spec:
                           EnvVar represents an environment variable supplied to a container in an
                           ActorTemplate. It models only a subset of Kubernetes Pod env behavior:
                           literal values are not expanded with Kubernetes-style $(VAR) references,
-                          envFrom is not supported, and valueFrom currently supports only secretKeyRef.
+                          and envFrom and valueFrom are not supported.
                         properties:
                           name:
                             description: |-
@@ -108,52 +108,15 @@ spec:
                             type: string
                           value:
                             description: |-
-                              Variable value. Mutually exclusive with ValueFrom.
                               Value is the literal value of the environment variable. Unlike in
                               Kubernetes pods, this value is not interpolated, and $(VAR)
                               references are not expanded.
                             minLength: 0
                             type: string
-                          valueFrom:
-                            description: |-
-                              Source for the environment variable's value. Mutually exclusive with
-                              Value.
-                            maxProperties: 1
-                            minProperties: 1
-                            properties:
-                              secretKeyRef:
-                                description: Selects a key of a Secret in the ActorTemplate's
-                                  namespace.
-                                properties:
-                                  key:
-                                    description: Key to select within the Secret.
-                                    minLength: 1
-                                    pattern: ^[-._a-zA-Z0-9]+$
-                                    type: string
-                                  name:
-                                    description: Name of the referent Secret.
-                                    maxLength: 253
-                                    type: string
-                                    x-kubernetes-validations:
-                                    - message: Name must be a valid DNS subdomain
-                                      rule: '!format.dns1123Subdomain().validate(self).hasValue()'
-                                  optional:
-                                    description: Specify whether the Secret or its
-                                      key must be defined.
-                                    type: boolean
-                                required:
-                                - key
-                                - name
-                                type: object
-                            type: object
                         required:
                         - name
+                        - value
                         type: object
-                        x-kubernetes-validations:
-                        - message: exactly one of the fields in [value valueFrom]
-                            must be set
-                          rule: '[has(self.value),has(self.valueFrom)].filter(x,x==true).size()
-                            == 1'
                       maxItems: 32
                       type: array
                     image:

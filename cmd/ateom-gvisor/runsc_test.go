@@ -19,7 +19,10 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
+
+	"github.com/agent-substrate/substrate/internal/ateompath"
 )
 
 // TestNvproxyGlobalArgs checks that runsc is told to enable nvproxy exactly when the
@@ -41,5 +44,46 @@ func TestNvproxyGlobalArgs(t *testing.T) {
 	got := nvproxyGlobalArgs()
 	if len(got) != 1 || got[0] != "--nvproxy" {
 		t.Fatalf("GPU: want [--nvproxy], got %v", got)
+	}
+}
+
+func TestKillArgs(t *testing.T) {
+	r := &runsc{
+		path:     "/usr/bin/runsc",
+		actorUID: "test-actor-123",
+	}
+
+	got := r.killArgs("my-container", "SIGTERM")
+	want := []string{
+		"-log-format", "json",
+		"--alsologtostderr",
+		"-root", ateompath.RunSCStateDir("test-actor-123"),
+		"kill",
+		"my-container",
+		"SIGTERM",
+	}
+
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("killArgs() = %v, want %v", got, want)
+	}
+}
+
+func TestWaitArgs(t *testing.T) {
+	r := &runsc{
+		path:     "/usr/bin/runsc",
+		actorUID: "test-actor-123",
+	}
+
+	got := r.waitArgs("my-container")
+	want := []string{
+		"-log-format", "json",
+		"--alsologtostderr",
+		"-root", ateompath.RunSCStateDir("test-actor-123"),
+		"wait",
+		"my-container",
+	}
+
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("waitArgs() = %v, want %v", got, want)
 	}
 }

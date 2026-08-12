@@ -323,3 +323,67 @@ func (r *runsc) cmdState(ctx context.Context, containerName string) error {
 	}
 	return nil
 }
+
+// killArgs builds the argv for `runsc kill <container> <signal>`. Factored out
+// so the argument construction can be unit-tested without executing runsc.
+func (r *runsc) killArgs(containerName, signal string) []string {
+	return []string{
+		"-log-format", "json",
+		"--alsologtostderr",
+		"-root", ateompath.RunSCStateDir(r.actorUID),
+		"kill",
+		containerName,
+		signal,
+	}
+}
+
+// cmdKill sends signal to the given container's process(es) inside the gVisor
+// sandbox. Used during graceful shutdown to propagate SIGTERM to the actor.
+func (r *runsc) cmdKill(ctx context.Context, containerName, signal string) error {
+	reapLock.RLock()
+	defer reapLock.RUnlock()
+
+	slog.InfoContext(ctx, "About to run runsc kill", slog.String("container", containerName), slog.String("signal", signal))
+
+	cmd := exec.CommandContext(ctx, r.path, r.killArgs(containerName, signal)...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("while running `runsc kill`: %w", err)
+	}
+	return nil
+}
+
+// waitArgs builds the argv for `runsc wait <container>`. Factored out so the
+// argument construction can be unit-tested without executing runsc.
+func (r *runsc) waitArgs(containerName string) []string {
+	return []string{
+		"-log-format", "json",
+		"--alsologtostderr",
+		"-root", ateompath.RunSCStateDir(r.actorUID),
+		"wait",
+		containerName,
+	}
+}
+
+// cmdWait blocks until the given container's process exits. Used during
+// graceful shutdown to confirm the actor has stopped before ateom exits.
+//
+// We deliberately DO NOT acquire reapLock here. If we held reapLock.RLock()
+// during this long wait, a pending background reaper write lock (reapLock.Lock())
+// would block, starving any subsequent read lock attempts (like CheckpointWorkload
+// which needs to run runsc checkpoint).
+func (r *runsc) cmdWait(ctx context.Context, containerName string) error {
+	slog.InfoContext(ctx, "About to run runsc wait", slog.String("container", containerName))
+
+	cmd := exec.CommandContext(ctx, r.path, r.waitArgs(containerName)...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	if err := cmd.Run(); err != nil {
+		// TODO: If the background child reaper collects the runsc wait process before
+		// cmd.Run's own wait finishes, it returns ECHILD. In these cases we return an error
+		// when we shouldn't. We can fix this by forking the reap.ReapChildren() call in main.
+		return fmt.Errorf("while running `runsc wait`: %w", err)
+	}
+	return nil
+}

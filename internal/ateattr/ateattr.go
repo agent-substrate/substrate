@@ -62,6 +62,9 @@ const (
 // content it covers, and phase is which step of the operation an observation
 // timed. Naming one image within a snapshot is the registry's file.name, not an
 // ate.* key of its own.
+// ImageCacheOutcomeKey is rooted at the subsystem, not under actor: the layer
+// pool is node state every actor shares. For the same reason it is the only
+// ate.* label on its counter.
 const (
 	ActorOperationNameKey   = attribute.Key("ate.actor.operation.name")
 	WorkerPoolNamespaceKey  = attribute.Key("ate.workerpool.namespace")
@@ -71,6 +74,7 @@ const (
 	SnapshotKindKey         = attribute.Key("ate.snapshot.kind")
 	SnapshotScopeKey        = attribute.Key("ate.snapshot.scope")
 	SnapshotPhaseKey        = attribute.Key("ate.snapshot.phase")
+	ImageCacheOutcomeKey    = attribute.Key("ate.imagecache.outcome")
 	SchedulerOutcomeKey     = attribute.Key("ate.scheduler.outcome")
 	SchedulingConstraintKey = attribute.Key("ate.scheduling.constraint")
 	RouterResumeKey         = attribute.Key("ate.router.resume")
@@ -101,6 +105,17 @@ const (
 	RouterResumeTriggered = "triggered"
 	// RouterResumeJoined indicates this request parked on an in-flight singleflight resume.
 	RouterResumeJoined = "joined"
+)
+
+// Values for ImageCacheOutcomeKey. A hit is a complete image record; a miss
+// must pull. A failed lookup is neither: Error is the only one that carries an
+// error.type, Cancelled and Timeout mean the caller gave up.
+const (
+	ImageCacheOutcomeHit       = "hit"
+	ImageCacheOutcomeMiss      = "miss"
+	ImageCacheOutcomeError     = "error"
+	ImageCacheOutcomeCancelled = "cancelled"
+	ImageCacheOutcomeTimeout   = "timeout"
 )
 
 // ErrorTypeKey is the OTel registry attribute, reused verbatim (not aliased into

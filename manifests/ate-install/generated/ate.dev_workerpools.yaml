@@ -37,6 +37,9 @@ spec:
     - jsonPath: .status.replicas
       name: Replicas
       type: integer
+    - jsonPath: .status.readyReplicas
+      name: Ready
+      type: integer
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
@@ -430,6 +433,11 @@ spec:
           status:
             description: status is the observed state of WorkerPool
             properties:
+              readyReplicas:
+                description: ReadyReplicas is the number of ready worker pods.
+                format: int32
+                minimum: 0
+                type: integer
               replicas:
                 description: Replicas is the total number of worker pods.
                 format: int32

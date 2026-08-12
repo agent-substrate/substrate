@@ -101,7 +101,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 		chSocket = ra.apiSocket
 	}
 	client := ch.NewClient(chSocket)
-	if err := client.WaitReady(ctx, 10*time.Second); err != nil {
+	if _, err := client.WaitReady(ctx, 10*time.Second); err != nil {
 		return nil, fmt.Errorf("while waiting for CH api-socket: %w", err)
 	}
 
@@ -218,7 +218,13 @@ func (s *AteomService) snapshotVMState(ctx context.Context, client *ch.Client, r
 	// source). Overlay it onto that source to rebuild a COMPLETE memory-ranges, so the
 	// snapshot is self-contained and re-restorable. (A cold-run actor has no restore
 	// source and its snapshot is already complete — no merge.)
-	if ra != nil && ra.restoreSourceDir != "" {
+	if ra != nil && ra.snapshotIsSelfContained {
+		// Eager restore already pulled every populated extent into guest memory, so
+		// what cloud-hypervisor just wrote is the whole guest, not a delta. Merging
+		// would copy the entire resident set onto the restore source for nothing.
+		slog.InfoContext(ctx, "Snapshot is self-contained (eager restore); skipping merge",
+			slog.String("id", actorUID))
+	} else if ra != nil && ra.restoreSourceDir != "" {
 		base := filepath.Join(ra.restoreSourceDir, "memory-ranges")
 		delta := filepath.Join(checkpointDir, "memory-ranges")
 		tMerge := time.Now()

@@ -29,6 +29,7 @@ func TestGetWorkersRunner_Filters(t *testing.T) {
 			WorkerNamespace: "ns-1",
 			WorkerPool:      "counter",
 			WorkerPod:       "pod-1",
+			SandboxClass:    "microvm",
 			Assignment: &ateapipb.Assignment{
 				ActorTemplate: &ateapipb.KubeNamespacedObjectRef{Namespace: "ns-1", Name: "counter"},
 				Actor:         &ateapipb.ObjectRef{Atespace: "space-a", Name: "actor-a"},
@@ -39,12 +40,14 @@ func TestGetWorkersRunner_Filters(t *testing.T) {
 			WorkerNamespace: "ns-1",
 			WorkerPool:      "other",
 			WorkerPod:       "pod-2",
+			SandboxClass:    "gvisor",
 			Labels:          map[string]string{"ate.dev/worker-pool": "other"},
 		},
 		{
 			WorkerNamespace: "ns-2",
 			WorkerPool:      "counter",
 			WorkerPod:       "pod-3",
+			SandboxClass:    "gvisor",
 			Assignment: &ateapipb.Assignment{
 				ActorTemplate: &ateapipb.KubeNamespacedObjectRef{Namespace: "ns-2", Name: "counter"},
 				Actor:         &ateapipb.ObjectRef{Atespace: "space-b", Name: "actor-b"},
@@ -53,24 +56,30 @@ func TestGetWorkersRunner_Filters(t *testing.T) {
 		},
 	}
 
-	header := "NAMESPACE   POOL      POD     STATUS     ASSIGNED ACTOR\n"
-	row1 := "ns-1        counter   pod-1   ASSIGNED   ns-1/counter/space-a/actor-a\n"
-	row2 := "ns-1        other     pod-2   FREE       <none>\n"
-	row3 := "ns-2        counter   pod-3   ASSIGNED   ns-2/counter/space-b/actor-b\n"
+	header := "NAMESPACE   POOL      CLASS     POD     STATUS     ASSIGNED ACTOR\n"
+	row1 := "ns-1        counter   microvm   pod-1   ASSIGNED   ns-1/counter/space-a/actor-a\n"
+	row2 := "ns-1        other     gvisor    pod-2   FREE       <none>\n"
+	row3 := "ns-2        counter   gvisor    pod-3   ASSIGNED   ns-2/counter/space-b/actor-b\n"
 
 	tests := []struct {
-		name      string
-		namespace string
-		atespace  string
-		selector  string
-		expected  string
+		name         string
+		namespace    string
+		atespace     string
+		selector     string
+		sandboxClass string
+		expected     string
 	}{
 		{name: "no filter", expected: header + row1 + row2 + row3},
 		{name: "namespace", namespace: "ns-1", expected: header + row1 + row2},
 		{name: "atespace", atespace: "space-a", expected: header + row1},
 		// With no matching rows the tabwriter sizes columns to the header alone.
-		{name: "atespace excludes free workers", atespace: "no-such-space", expected: "NAMESPACE   POOL   POD   STATUS   ASSIGNED ACTOR\n"},
+		{name: "atespace excludes free workers", atespace: "no-such-space", expected: "NAMESPACE   POOL   CLASS   POD   STATUS   ASSIGNED ACTOR\n"},
 		{name: "selector", selector: "ate.dev/worker-pool=counter", expected: header + row1 + row3},
+		{name: "sandbox class", sandboxClass: "microvm", expected: header + row1},
+		// gvisor-only rows shrink the CLASS column to the widest survivor.
+		{name: "sandbox class gvisor", sandboxClass: "gvisor", expected: "NAMESPACE   POOL      CLASS    POD     STATUS     ASSIGNED ACTOR\n" +
+			"ns-1        other     gvisor   pod-2   FREE       <none>\n" +
+			"ns-2        counter   gvisor   pod-3   ASSIGNED   ns-2/counter/space-b/actor-b\n"},
 		{name: "combined", namespace: "ns-1", selector: "ate.dev/worker-pool=counter", expected: header + row1},
 	}
 
@@ -82,6 +91,7 @@ func TestGetWorkersRunner_Filters(t *testing.T) {
 				namespace:    test.namespace,
 				atespace:     test.atespace,
 				selector:     test.selector,
+				sandboxClass: test.sandboxClass,
 				outputFmt:    "table",
 				out:          &buf,
 			}

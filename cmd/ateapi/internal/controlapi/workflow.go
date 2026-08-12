@@ -30,7 +30,6 @@ import (
 	"go.opentelemetry.io/otel/trace"
 	grpcCodes "google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"k8s.io/client-go/kubernetes"
 	storagev1listers "k8s.io/client-go/listers/storage/v1"
 )
 
@@ -76,8 +75,6 @@ type ActorWorkflow struct {
 	workerPoolLister     listersv1alpha1.WorkerPoolLister
 	sandboxConfigLister  listersv1alpha1.SandboxConfigLister
 	storageClassLister   storagev1listers.StorageClassLister
-	kubeClient           kubernetes.Interface
-	secretCache          *envSecretCache
 	instruments          *Instruments
 	egressGatewayAddress string
 	pluginRegistry       VolumePluginRegistry
@@ -92,7 +89,6 @@ func NewActorWorkflow(
 	workerPoolLister listersv1alpha1.WorkerPoolLister,
 	sandboxConfigLister listersv1alpha1.SandboxConfigLister,
 	storageClassLister storagev1listers.StorageClassLister,
-	kubeClient kubernetes.Interface,
 	instruments *Instruments,
 	egressGatewayAddress string,
 	pluginRegistry VolumePluginRegistry,
@@ -106,8 +102,6 @@ func NewActorWorkflow(
 		workerPoolLister:     workerPoolLister,
 		sandboxConfigLister:  sandboxConfigLister,
 		storageClassLister:   storageClassLister,
-		kubeClient:           kubeClient,
-		secretCache:          newEnvSecretCache(envSecretCacheTTL),
 		instruments:          instruments,
 		egressGatewayAddress: egressGatewayAddress,
 		pluginRegistry:       pluginRegistry,

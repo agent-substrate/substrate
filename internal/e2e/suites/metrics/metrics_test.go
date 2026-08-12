@@ -118,8 +118,56 @@ func TestPlatformMetricsEmitted(t *testing.T) {
 		controllerSeen = e2e.CollectorHasService(scrape, "atecontroller") &&
 			strings.Contains(scrape, "controller_runtime_")
 
-		if len(missing) == 0 && ateomSeen {
+		if len(missing) == 0 && ateomSeen && controllerSeen {
 			var errs []string
+
+			// Verify ate_workerpool_desired_workers carries required namespaced attributes.
+			foundDesiredLine := false
+			for _, line := range strings.Split(scrape, "\n") {
+				if strings.HasPrefix(line, "ate_workerpool_desired_workers") {
+					foundDesiredLine = true
+					nsVal := extractLabelValue(line, "ate_workerpool_namespace")
+					poolVal := extractLabelValue(line, "ate_workerpool_name")
+					var lineErrs []string
+					if nsVal == "" {
+						lineErrs = append(lineErrs, "ate_workerpool_namespace label is missing or empty")
+					}
+					if poolVal == "" {
+						lineErrs = append(lineErrs, "ate_workerpool_name label is missing or empty")
+					}
+					if len(lineErrs) > 0 {
+						errs = append(errs, fmt.Sprintf("ate_workerpool_desired_workers validation failed on line %q: %s (Extracted labels: ate_workerpool_namespace=%q, ate_workerpool_name=%q)",
+							line, strings.Join(lineErrs, "; "), nsVal, poolVal))
+					}
+				}
+			}
+			if !foundDesiredLine {
+				errs = append(errs, "ate_workerpool_desired_workers validation failed: metric line not found in collector scrape text (no time series emitted by atecontroller callback)")
+			}
+
+			// Verify ate_workerpool_ready_workers carries required namespaced attributes.
+			foundReadyLine := false
+			for _, line := range strings.Split(scrape, "\n") {
+				if strings.HasPrefix(line, "ate_workerpool_ready_workers") {
+					foundReadyLine = true
+					nsVal := extractLabelValue(line, "ate_workerpool_namespace")
+					poolVal := extractLabelValue(line, "ate_workerpool_name")
+					var lineErrs []string
+					if nsVal == "" {
+						lineErrs = append(lineErrs, "ate_workerpool_namespace label is missing or empty")
+					}
+					if poolVal == "" {
+						lineErrs = append(lineErrs, "ate_workerpool_name label is missing or empty")
+					}
+					if len(lineErrs) > 0 {
+						errs = append(errs, fmt.Sprintf("ate_workerpool_ready_workers validation failed on line %q: %s (Extracted labels: ate_workerpool_namespace=%q, ate_workerpool_name=%q)",
+							line, strings.Join(lineErrs, "; "), nsVal, poolVal))
+					}
+				}
+			}
+			if !foundReadyLine {
+				errs = append(errs, "ate_workerpool_ready_workers validation failed: metric line not found in collector scrape text (no time series emitted by atecontroller callback)")
+			}
 
 			// Verify ate_scheduler_eligible_workers metric carries valid attributes:
 			// - Full labels (namespace, pool, class, constraint) for per-pool candidate lines.

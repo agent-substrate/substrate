@@ -76,6 +76,12 @@ type runningActor struct {
 	// un-faulted pages). Empty for cold-run actors (their snapshot is already complete).
 	restoreSourceDir string
 
+	// snapshotIsSelfContained is set when this actor was restored eagerly, which
+	// reads every populated extent up front. Every page the snapshot had is then
+	// resident, so cloud-hypervisor's next snapshot already holds all of it and
+	// there is no delta to overlay onto restoreSourceDir.
+	snapshotIsSelfContained bool
+
 	// logAgent is the kata-agent ttrpc client kept open for the lifetime of the
 	// stdout/stderr forwarding goroutines (they pump the container's output via
 	// ReadStdout/ReadStderr on this connection). It is NOT closed when RunWorkload /

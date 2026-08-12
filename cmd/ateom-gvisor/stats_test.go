@@ -72,7 +72,10 @@ func newStatsService(t *testing.T, files map[string]string) *AteomService {
 			}
 		}
 	}
-	return &AteomService{cgroupRoot: root}
+	return &AteomService{
+		lock:       newCancelableMutex(),
+		cgroupRoot: root,
+	}
 }
 
 func TestGetWorkloadStats(t *testing.T) {

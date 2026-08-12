@@ -295,8 +295,8 @@ func TestAssignWorkerAttempt_RetryAfterConflictPicksFreshWorker(t *testing.T) {
 }
 
 // conflictInjectingStore wraps a store and runs inject exactly once,
-// immediately before the first UpdateActor, simulating a concurrent writer
-// racing the step's read-modify-write window.
+// immediately before the first update, simulating a concurrent writer racing
+// the step's read-modify-write window.
 type conflictInjectingStore struct {
 	store.Interface
 	once   sync.Once
@@ -306,6 +306,11 @@ type conflictInjectingStore struct {
 func (c *conflictInjectingStore) UpdateActor(ctx context.Context, actorRef resources.ActorRef, mutate func(*ateapipb.Actor) error) (*ateapipb.Actor, error) {
 	c.once.Do(c.inject)
 	return c.Interface.UpdateActor(ctx, actorRef, mutate)
+}
+
+func (c *conflictInjectingStore) UpdateActorSnapshotTag(ctx context.Context, atespace, name string, mutate func(*ateapipb.ActorSnapshotTag) error) (*ateapipb.ActorSnapshotTag, error) {
+	c.once.Do(c.inject)
+	return c.Interface.UpdateActorSnapshotTag(ctx, atespace, name, mutate)
 }
 
 // seedAssignFixture stores one free gvisor worker and a SUSPENDED actor and
@@ -384,13 +389,15 @@ func TestAssignWorkerAttempt_ConflictRefreshesActor(t *testing.T) {
 					t.Errorf("inject GetActor: %v", err)
 					return
 				}
-				injected, err = persistence.UpdateActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, func(dbActor *ateapipb.Actor) error {
-					if err := store.CheckActorPrecondition(dbActor, store.AnyUID, fresh.GetMetadata().GetVersion()); err != nil {
-						return err
-					}
-					tc.mutate(dbActor)
+				// Pins the version alone: the observed actor carries the version
+				// just read and no uid.
+				pinVersion := &ateapipb.Actor{
+					Metadata: &ateapipb.ResourceMetadata{Uid: store.AnyUID, Version: fresh.GetMetadata().GetVersion()},
+				}
+				injected, err = persistence.UpdateActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "id1"}, store.WithPrecondition(pinVersion, func(toUpdate *ateapipb.Actor) error {
+					tc.mutate(toUpdate)
 					return nil
-				})
+				}))
 				if err != nil {
 					t.Errorf("inject UpdateActor: %v", err)
 				}

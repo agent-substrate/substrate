@@ -21,6 +21,7 @@ import (
 	"slices"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/internal/fieldmask"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
@@ -118,9 +119,7 @@ func (s *Service) TagActorSnapshot(ctx context.Context, req *ateapipb.TagActorSn
 
 // actorSnapshotTagMutableFields lists the ActorSnapshotTag field paths a client
 // may name in an UpdateActorSnapshotTag update_mask.
-var actorSnapshotTagMutableFields = mutableFields[*ateapipb.ActorSnapshotTag]{
-	"scope": func(dst, src *ateapipb.ActorSnapshotTag) { dst.Scope = src.GetScope() },
-}
+var actorSnapshotTagMutableFields = fieldmask.NewMutableFields("scope")
 
 func (s *Service) UpdateActorSnapshotTag(ctx context.Context, req *ateapipb.UpdateActorSnapshotTagRequest) (*ateapipb.ActorSnapshotTag, error) {
 	if errs := validateUpdateActorSnapshotTagRequest(req); len(errs) > 0 {
@@ -128,37 +127,24 @@ func (s *Service) UpdateActorSnapshotTag(ctx context.Context, req *ateapipb.Upda
 	}
 	in := req.GetTag()
 	atespace, name := in.GetMetadata().GetAtespace(), in.GetMetadata().GetName()
-	_, current, err := s.persistence.GetActorSnapshotByTag(ctx, atespace, name)
-	if errors.Is(err, store.ErrNotFound) {
-		return nil, status.Errorf(codes.NotFound, "ActorSnapshot tag %s/%s not found", atespace, name)
-	}
+
+	storedTag, err := s.persistence.UpdateActorSnapshotTag(ctx, atespace, name, store.WithPrecondition(in, func(toUpdate *ateapipb.ActorSnapshotTag) error {
+		fieldmask.Apply(toUpdate, in, req.GetUpdateMask())
+		return nil
+	}))
 	if err != nil {
-		return nil, fmt.Errorf("while getting actor snapshot tag: %w", err)
-	}
-
-	// UID and version preconditions.
-	if uid := in.GetMetadata().GetUid(); uid != "" && uid != current.GetMetadata().GetUid() {
-		return nil, status.Errorf(codes.Aborted, "ActorSnapshot tag %s/%s has uid %s, not %s", atespace, name, current.GetMetadata().GetUid(), uid)
-	}
-
-	expectedVersion := current.GetMetadata().GetVersion()
-	if version := in.GetMetadata().GetVersion(); version != 0 {
-		expectedVersion = version
-	}
-
-	applyUpdateMask(current, in, req.GetUpdateMask(), actorSnapshotTagMutableFields)
-
-	updatedTag, err := s.persistence.UpdateActorSnapshotTag(ctx, atespace, name, current.GetScope(), expectedVersion)
-	if errors.Is(err, store.ErrNotFound) {
-		return nil, status.Errorf(codes.NotFound, "ActorSnapshot tag %s/%s not found", atespace, name)
-	}
-	if errors.Is(err, store.ErrVersionConflict) {
-		return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
-	}
-	if err != nil {
+		if errors.Is(err, store.ErrVersionConflict) {
+			return nil, status.Error(codes.Aborted, "concurrent update conflict, please retry")
+		}
+		if errors.Is(err, store.ErrUIDConflict) {
+			return nil, status.Errorf(codes.Aborted, "ActorSnapshot tag %s/%s not found with uid %s", atespace, name, in.GetMetadata().GetUid())
+		}
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, status.Errorf(codes.NotFound, "ActorSnapshot tag %s/%s not found", atespace, name)
+		}
 		return nil, fmt.Errorf("while updating actor snapshot tag: %w", err)
 	}
-	return updatedTag, nil
+	return storedTag, nil
 }
 
 func validateUpdateActorSnapshotTagRequest(req *ateapipb.UpdateActorSnapshotTagRequest) field.ErrorList {
@@ -173,7 +159,7 @@ func validateUpdateActorSnapshotTagRequest(req *ateapipb.UpdateActorSnapshotTagR
 
 	errs = append(errs, resources.ValidateResourceMetadataRef(tag.GetMetadata(), tagPath.Child("metadata"))...)
 
-	errs = append(errs, validateUpdateMask(req.GetUpdateMask(), actorSnapshotTagMutableFields)...)
+	errs = append(errs, fieldmask.Validate(req.GetUpdateMask(), actorSnapshotTagMutableFields, field.NewPath("update_mask"))...)
 
 	if scope, p := tag.GetScope(), tagPath.Child("scope"); validateActorSnapshotTagScope(scope) != nil {
 		errs = append(errs, field.NotSupported(p, scope.String(), actorSnapshotTagScopeNames))

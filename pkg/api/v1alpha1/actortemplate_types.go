@@ -206,9 +206,7 @@ type HTTPGetAction struct {
 // EnvVar represents an environment variable supplied to a container in an
 // ActorTemplate. It models only a subset of Kubernetes Pod env behavior:
 // literal values are not expanded with Kubernetes-style $(VAR) references,
-// envFrom is not supported, and valueFrom currently supports only secretKeyRef.
-//
-// +kubebuilder:validation:ExactlyOneOf={value, valueFrom}
+// and envFrom and valueFrom are not supported.
 type EnvVar struct {
 	// Name is the name of the environment variable. May be any printable ASCII
 	// character except '='.
@@ -218,56 +216,13 @@ type EnvVar struct {
 	// +kubebuilder:validation:Pattern=`^[ -<>-~]+$`
 	Name string `json:"name"`
 
-	// Exactly one of the following must be specified.
-
-	// Variable value. Mutually exclusive with ValueFrom.
 	// Value is the literal value of the environment variable. Unlike in
 	// Kubernetes pods, this value is not interpolated, and $(VAR)
 	// references are not expanded.
 	//
-	// +optional
+	// +required
 	// +kubebuilder:validation:MinLength=0
-	Value *string `json:"value,omitempty"`
-
-	// Source for the environment variable's value. Mutually exclusive with
-	// Value.
-	//
-	// +optional
-	ValueFrom *EnvVarSource `json:"valueFrom,omitempty"`
-}
-
-// EnvVarSource represents a source for the value of an EnvVar. Exactly one of
-// its fields must be set.
-//
-// +kubebuilder:validation:MinProperties=1
-// +kubebuilder:validation:MaxProperties=1
-type EnvVarSource struct {
-	// Selects a key of a Secret in the ActorTemplate's namespace.
-	//
-	// +optional
-	SecretKeyRef *SecretKeySelector `json:"secretKeyRef,omitempty"`
-}
-
-// SecretKeySelector selects a key from a Secret.
-type SecretKeySelector struct {
-	// Name of the referent Secret.
-	//
-	// +required
-	// +kubebuilder:validation:MaxLength=253
-	// +kubebuilder:validation:XValidation:rule="!format.dns1123Subdomain().validate(self).hasValue()",message="Name must be a valid DNS subdomain"
-	Name string `json:"name"`
-
-	// Key to select within the Secret.
-	//
-	// +required
-	// +kubebuilder:validation:MinLength=1
-	// +kubebuilder:validation:Pattern=`^[-._a-zA-Z0-9]+$`
-	Key string `json:"key"`
-
-	// Specify whether the Secret or its key must be defined.
-	//
-	// +optional
-	Optional *bool `json:"optional,omitempty"`
+	Value string `json:"value"`
 }
 
 // SnapshotScope defines what components to include in a snapshot.

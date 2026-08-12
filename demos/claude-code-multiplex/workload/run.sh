@@ -21,7 +21,7 @@
 # Env vars:
 #   TASK              — the prompt to pass to claude-code each tick
 #   INTERVAL_SECONDS  — sleep length between ticks (longer = more multiplex headroom)
-#   ANTHROPIC_API_KEY — required; supplied via Secret-backed env
+#   ANTHROPIC_API_KEY — required; supplied via container env
 
 set -u
 

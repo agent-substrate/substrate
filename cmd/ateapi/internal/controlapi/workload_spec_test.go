@@ -15,21 +15,14 @@
 package controlapi
 
 import (
-	"context"
 	"testing"
 
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/go-cmp/cmp"
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/testing/protocmp"
-	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/client-go/kubernetes/fake"
-	"k8s.io/utils/ptr"
 )
 
 func TestWorkloadSpecFromActorTemplate(t *testing.T) {
@@ -142,7 +135,7 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 			},
 		},
 		{
-			name: "ignores container env",
+			name: "maps literal env",
 			template: &atev1alpha1.ActorTemplate{
 				ObjectMeta: metav1.ObjectMeta{Name: "tmpl1", Namespace: "agent-ns"},
 				Spec: atev1alpha1.ActorTemplateSpec{
@@ -151,20 +144,22 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 							Name:  "main",
 							Image: "main",
 							Env: []atev1alpha1.EnvVar{
-								{Name: "LITERAL", Value: ptr.To("plain")},
-								{
-									Name: "SECRET",
-									ValueFrom: &atev1alpha1.EnvVarSource{
-										SecretKeyRef: &atev1alpha1.SecretKeySelector{Name: "any", Key: "any"},
-									},
-								},
+								{Name: "LITERAL", Value: "plain"},
+								{Name: "EMPTY", Value: ""},
 							},
 						},
 					},
 				},
 			},
 			want: &ateletpb.WorkloadSpec{
-				Containers: []*ateletpb.Container{{Name: "main", Image: "main"}},
+				Containers: []*ateletpb.Container{{
+					Name:  "main",
+					Image: "main",
+					Env: []*ateletpb.EnvEntry{
+						{Name: "LITERAL", Value: "plain"},
+						{Name: "EMPTY", Value: ""},
+					},
+				}},
 			},
 		},
 		{
@@ -198,145 +193,6 @@ func TestWorkloadSpecFromActorTemplate(t *testing.T) {
 			got, err := workloadSpecFromActorTemplate(tt.template, nil)
 			if err != nil {
 				t.Fatalf("workloadSpecFromActorTemplate failed: %v", err)
-			}
-			if diff := cmp.Diff(tt.want, got, protocmp.Transform()); diff != "" {
-				t.Errorf("WorkloadSpec mismatch (-want +got):\n%s", diff)
-			}
-		})
-	}
-}
-
-func TestWorkloadSpecFromActorTemplateWithEnv(t *testing.T) {
-	tests := []struct {
-		name        string
-		secrets     []runtime.Object
-		template    *atev1alpha1.ActorTemplate
-		want        *ateletpb.WorkloadSpec
-		wantErrCode codes.Code
-	}{
-		{
-			name: "resolves literal and secretKeyRef env",
-			secrets: []runtime.Object{
-				&corev1.Secret{
-					ObjectMeta: metav1.ObjectMeta{Name: "some-secret", Namespace: "agent-ns"},
-					Data:       map[string][]byte{"some-key": []byte("some-value")},
-				},
-			},
-			template: &atev1alpha1.ActorTemplate{
-				ObjectMeta: metav1.ObjectMeta{Name: "tmpl1", Namespace: "agent-ns"},
-				Spec: atev1alpha1.ActorTemplateSpec{
-					Containers: []atev1alpha1.Container{
-						{
-							Name:    "main",
-							Image:   "main",
-							Command: []string{"/main"},
-							Env: []atev1alpha1.EnvVar{
-								{Name: "LITERAL", Value: ptr.To("plain")},
-								{
-									Name: "SOME_KEY",
-									ValueFrom: &atev1alpha1.EnvVarSource{
-										SecretKeyRef: &atev1alpha1.SecretKeySelector{Name: "some-secret", Key: "some-key"},
-									},
-								},
-							},
-						},
-					},
-				},
-			},
-			want: &ateletpb.WorkloadSpec{
-				Containers: []*ateletpb.Container{
-					{
-						Name:    "main",
-						Image:   "main",
-						Command: []string{"/main"},
-						Env: []*ateletpb.EnvEntry{
-							{Name: "LITERAL", Value: "plain"},
-							{Name: "SOME_KEY", Value: "some-value"},
-						},
-					},
-				},
-			},
-		},
-		{
-			name: "skips optional missing secret",
-			template: &atev1alpha1.ActorTemplate{
-				ObjectMeta: metav1.ObjectMeta{Name: "tmpl1", Namespace: "agent-ns"},
-				Spec: atev1alpha1.ActorTemplateSpec{
-					Containers: []atev1alpha1.Container{
-						{
-							Name:  "main",
-							Image: "main",
-							Env: []atev1alpha1.EnvVar{
-								{
-									Name: "OPTIONAL",
-									ValueFrom: &atev1alpha1.EnvVarSource{
-										SecretKeyRef: &atev1alpha1.SecretKeySelector{Name: "missing", Key: "key", Optional: ptr.To(true)},
-									},
-								},
-							},
-						},
-					},
-				},
-			},
-			want: &ateletpb.WorkloadSpec{
-				Containers: []*ateletpb.Container{{Name: "main", Image: "main"}},
-			},
-		},
-		{
-			name: "required missing secret fails",
-			template: &atev1alpha1.ActorTemplate{
-				ObjectMeta: metav1.ObjectMeta{Name: "tmpl1", Namespace: "agent-ns"},
-				Spec: atev1alpha1.ActorTemplateSpec{
-					Containers: []atev1alpha1.Container{
-						{
-							Name:  "main",
-							Image: "main",
-							Env: []atev1alpha1.EnvVar{
-								{
-									Name: "REQUIRED",
-									ValueFrom: &atev1alpha1.EnvVarSource{
-										SecretKeyRef: &atev1alpha1.SecretKeySelector{Name: "missing", Key: "key"},
-									},
-								},
-							},
-						},
-					},
-				},
-			},
-			wantErrCode: codes.FailedPrecondition,
-		},
-		{
-			name: "empty valueFrom fails",
-			template: &atev1alpha1.ActorTemplate{
-				ObjectMeta: metav1.ObjectMeta{Name: "tmpl1", Namespace: "agent-ns"},
-				Spec: atev1alpha1.ActorTemplateSpec{
-					Containers: []atev1alpha1.Container{
-						{
-							Name:  "main",
-							Image: "main",
-							Env: []atev1alpha1.EnvVar{
-								{Name: "EMPTY", ValueFrom: &atev1alpha1.EnvVarSource{}},
-							},
-						},
-					},
-				},
-			},
-			wantErrCode: codes.FailedPrecondition,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			kubeClient := fake.NewSimpleClientset(tt.secrets...)
-			got, err := workloadSpecFromActorTemplateWithEnv(context.Background(), kubeClient, nil, tt.template, nil)
-			if tt.wantErrCode != codes.OK {
-				if status.Code(err) != tt.wantErrCode {
-					t.Fatalf("error code = %v, want %v: %v", status.Code(err), tt.wantErrCode, err)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("workloadSpecFromActorTemplateWithEnv failed: %v", err)
 			}
 			if diff := cmp.Diff(tt.want, got, protocmp.Transform()); diff != "" {
 				t.Errorf("WorkloadSpec mismatch (-want +got):\n%s", diff)
@@ -388,85 +244,6 @@ func TestWorkloadSpecFromActorTemplatePropagatesReadyz(t *testing.T) {
 	if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
 		t.Errorf("WorkloadSpec mismatch (-want +got):\n%s", diff)
 	}
-}
-
-func TestWorkloadSpecFromActorTemplateWithEnvCachesSecretsAcrossCalls(t *testing.T) {
-	ctx := context.Background()
-	secretCache := newEnvSecretCache(envSecretCacheTTL)
-	kubeClient := fake.NewSimpleClientset(
-		&corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "some-secret",
-				Namespace: "agent-ns",
-			},
-			Data: map[string][]byte{
-				"some-key": []byte("some-value"),
-			},
-		},
-	)
-	actorTemplate := &atev1alpha1.ActorTemplate{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "tmpl1",
-			Namespace: "agent-ns",
-		},
-		Spec: atev1alpha1.ActorTemplateSpec{
-			Containers: []atev1alpha1.Container{
-				{
-					Name:  "main",
-					Image: "main",
-					Env: []atev1alpha1.EnvVar{
-						{
-							Name: "SOME_KEY",
-							ValueFrom: &atev1alpha1.EnvVarSource{
-								SecretKeyRef: &atev1alpha1.SecretKeySelector{
-									Name: "some-secret",
-									Key:  "some-key",
-								},
-							},
-						},
-					},
-				},
-			},
-		},
-	}
-
-	if _, err := workloadSpecFromActorTemplateWithEnv(ctx, kubeClient, secretCache, actorTemplate, nil); err != nil {
-		t.Fatalf("first workloadSpecFromActorTemplateWithEnv failed: %v", err)
-	}
-	if _, err := workloadSpecFromActorTemplateWithEnv(ctx, kubeClient, secretCache, actorTemplate, nil); err != nil {
-		t.Fatalf("second workloadSpecFromActorTemplateWithEnv failed: %v", err)
-	}
-	if got := secretGetCount(kubeClient); got != 1 {
-		t.Fatalf("secret gets before TTL expiry = %d, want 1", got)
-	}
-
-	expireSecretCache(secretCache)
-	if _, err := workloadSpecFromActorTemplateWithEnv(ctx, kubeClient, secretCache, actorTemplate, nil); err != nil {
-		t.Fatalf("third workloadSpecFromActorTemplateWithEnv failed: %v", err)
-	}
-	if got := secretGetCount(kubeClient); got != 2 {
-		t.Fatalf("secret gets after TTL expiry = %d, want 2", got)
-	}
-}
-
-func expireSecretCache(secretCache *envSecretCache) {
-	secretCache.mu.Lock()
-	defer secretCache.mu.Unlock()
-
-	for key, entry := range secretCache.entries {
-		entry.expiresAt = entry.expiresAt.Add(-envSecretCacheTTL)
-		secretCache.entries[key] = entry
-	}
-}
-
-func secretGetCount(kubeClient *fake.Clientset) int {
-	count := 0
-	for _, action := range kubeClient.Actions() {
-		if action.GetVerb() == "get" && action.GetResource().Resource == "secrets" {
-			count++
-		}
-	}
-	return count
 }
 
 func TestAppendExternalVolumes(t *testing.T) {

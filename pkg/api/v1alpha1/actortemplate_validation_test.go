@@ -29,7 +29,6 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
-	"k8s.io/utils/ptr"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
@@ -199,7 +198,7 @@ func TestActorTemplateValidation(t *testing.T) {
 		name: "valid EnvVar",
 		mutate: func(at *ActorTemplate) {
 			at.Spec.Containers[0].Env = []EnvVar{
-				{Name: "FOO", Value: ptr.To("BAR")},
+				{Name: "FOO", Value: "BAR"},
 			}
 		},
 		wantErr: false,
@@ -207,7 +206,7 @@ func TestActorTemplateValidation(t *testing.T) {
 		name: "long EnvVar",
 		mutate: func(at *ActorTemplate) {
 			for range 32 {
-				at.Spec.Containers[0].Env = append(at.Spec.Containers[0].Env, EnvVar{Name: "X", Value: ptr.To("Y")})
+				at.Spec.Containers[0].Env = append(at.Spec.Containers[0].Env, EnvVar{Name: "X", Value: "Y"})
 			}
 		},
 		wantErr: false,
@@ -215,7 +214,7 @@ func TestActorTemplateValidation(t *testing.T) {
 		name: "too-many EnvVar",
 		mutate: func(at *ActorTemplate) {
 			for range 33 {
-				at.Spec.Containers[0].Env = append(at.Spec.Containers[0].Env, EnvVar{Name: "X", Value: ptr.To("Y")})
+				at.Spec.Containers[0].Env = append(at.Spec.Containers[0].Env, EnvVar{Name: "X", Value: "Y"})
 			}
 		},
 		wantErr: true,
@@ -223,143 +222,29 @@ func TestActorTemplateValidation(t *testing.T) {
 	}, {
 		name: "envVar Name with space",
 		mutate: func(at *ActorTemplate) {
-			at.Spec.Containers[0].Env = []EnvVar{{Name: "FOO BAR", Value: ptr.To("VAL")}}
+			at.Spec.Containers[0].Env = []EnvVar{{Name: "FOO BAR", Value: "VAL"}}
 		},
 		wantErr: false, // strange but valid
 	}, {
 		name: "empty EnvVar Name",
 		mutate: func(at *ActorTemplate) {
-			at.Spec.Containers[0].Env = []EnvVar{{Name: "", Value: ptr.To("VAL")}}
+			at.Spec.Containers[0].Env = []EnvVar{{Name: "", Value: "VAL"}}
 		},
 		wantErr: true,
 		errMsg:  "Invalid value",
 	}, {
 		name: "invalid EnvVar Name (contains '=')",
 		mutate: func(at *ActorTemplate) {
-			at.Spec.Containers[0].Env = []EnvVar{{Name: "FOO=BAR", Value: ptr.To("VAL")}}
+			at.Spec.Containers[0].Env = []EnvVar{{Name: "FOO=BAR", Value: "VAL"}}
 		},
 		wantErr: true,
 		errMsg:  "Invalid value",
 	}, {
-		name: "missing EnvVar Value",
+		name: "empty EnvVar Value",
 		mutate: func(at *ActorTemplate) {
-			at.Spec.Containers[0].Env = []EnvVar{{Name: "FOO"}}
-		},
-		wantErr: true,
-		errMsg:  "Invalid value",
-	}, {
-		name: "EnvVar with ValueFrom SecretKeyRef",
-		mutate: func(at *ActorTemplate) {
-			at.Spec.Containers[0].Env = []EnvVar{{
-				Name: "FOO",
-				ValueFrom: &EnvVarSource{
-					SecretKeyRef: &SecretKeySelector{
-						Name: "my-secret",
-						Key:  "my-key",
-					},
-				},
-			}}
+			at.Spec.Containers[0].Env = []EnvVar{{Name: "FOO", Value: ""}}
 		},
 		wantErr: false,
-	}, {
-		name: "EnvVar with both Value and ValueFrom",
-		mutate: func(at *ActorTemplate) {
-			at.Spec.Containers[0].Env = []EnvVar{{
-				Name:  "FOO",
-				Value: ptr.To("BAR"),
-				ValueFrom: &EnvVarSource{
-					SecretKeyRef: &SecretKeySelector{
-						Name: "my-secret",
-						Key:  "my-key",
-					},
-				},
-			}}
-		},
-		wantErr: true,
-		errMsg:  "exactly one of the fields in",
-	}, {
-		name: "EnvVarSource empty",
-		mutate: func(at *ActorTemplate) {
-			at.Spec.Containers[0].Env = []EnvVar{{
-				Name:      "FOO",
-				ValueFrom: &EnvVarSource{},
-			}}
-		},
-		wantErr: true,
-		errMsg:  "Invalid value",
-	}, {
-		name: "SecretKeySelector missing Name",
-		mutate: func(at *ActorTemplate) {
-			at.Spec.Containers[0].Env = []EnvVar{{
-				Name: "FOO",
-				ValueFrom: &EnvVarSource{
-					SecretKeyRef: &SecretKeySelector{
-						Key: "my-key",
-					},
-				},
-			}}
-		},
-		wantErr: true,
-		errMsg:  "Name must be a valid DNS subdomain",
-	}, {
-		name: "SecretKeySelector Name too long",
-		mutate: func(at *ActorTemplate) {
-			at.Spec.Containers[0].Env = []EnvVar{{
-				Name: "FOO",
-				ValueFrom: &EnvVarSource{
-					SecretKeyRef: &SecretKeySelector{
-						Name: strings.Repeat("x", 254),
-						Key:  "my-key",
-					},
-				},
-			}}
-		},
-		wantErr: true,
-		errMsg:  "Too long",
-	}, {
-		name: "SecretKeySelector invalid Name",
-		mutate: func(at *ActorTemplate) {
-			at.Spec.Containers[0].Env = []EnvVar{{
-				Name: "FOO",
-				ValueFrom: &EnvVarSource{
-					SecretKeyRef: &SecretKeySelector{
-						Name: "Invalid_Name",
-						Key:  "my-key",
-					},
-				},
-			}}
-		},
-		wantErr: true,
-		errMsg:  "Name must be a valid DNS subdomain",
-	}, {
-		name: "SecretKeySelector missing Key",
-		mutate: func(at *ActorTemplate) {
-			at.Spec.Containers[0].Env = []EnvVar{{
-				Name: "FOO",
-				ValueFrom: &EnvVarSource{
-					SecretKeyRef: &SecretKeySelector{
-						Name: "my-secret",
-					},
-				},
-			}}
-		},
-		wantErr: true,
-		errMsg:  "at least 1 chars long",
-	}, {
-		name: "SecretKeySelector invalid Key",
-		mutate: func(at *ActorTemplate) {
-			at.Spec.Containers[0].Env = []EnvVar{{
-				Name: "FOO",
-				ValueFrom: &EnvVarSource{
-					SecretKeyRef: &SecretKeySelector{
-						Name: "my-secret",
-						Key:  "invalid/key",
-					},
-				},
-			}}
-		},
-		wantErr: true,
-		errMsg:  "Invalid value",
 	}, {
 		name: "valid Readyz with default path",
 		mutate: func(at *ActorTemplate) {

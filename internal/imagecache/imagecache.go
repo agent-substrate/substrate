@@ -65,8 +65,11 @@ import (
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
+	"go.opentelemetry.io/otel/metric"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/singleflight"
+
+	"github.com/agent-substrate/substrate/internal/ateattr"
 )
 
 const (
@@ -119,6 +122,13 @@ type Store struct {
 	// spec write / ateom mount that roots it.
 	minAge time.Duration
 
+	// meter, when set, is the meter the store reports on. See WithMeter.
+	meter metric.Meter
+
+	// requests counts EnsureImage lookups by outcome. Nil without a meter,
+	// which recordRequest treats as a no-op.
+	requests metric.Int64Counter
+
 	imageSF singleflight.Group
 	layerSF singleflight.Group
 
@@ -168,6 +178,13 @@ func WithMinAge(d time.Duration) Option {
 	return func(s *Store) { s.minAge = d }
 }
 
+// WithMeter attaches the meter the store reports ate.imagecache.requests on.
+// Without it the store records nothing, so a caller with no metrics pipeline
+// needs no meter provider.
+func WithMeter(m metric.Meter) Option {
+	return func(s *Store) { s.meter = m }
+}
+
 // Image describes one cached, ready-to-compose image.
 type Image struct {
 	// Digest is the manifest digest the caller's ref resolved to (for a
@@ -198,6 +215,14 @@ func New(root string, opts ...Option) (*Store, error) {
 		o(s)
 	}
 
+	if s.meter != nil {
+		requests, err := newRequestsCounter(s.meter)
+		if err != nil {
+			return nil, err
+		}
+		s.requests = requests
+	}
+
 	for _, d := range []string{s.layersDir(), s.manifestsDir()} {
 		if err := os.MkdirAll(d, 0o700); err != nil {
 			return nil, fmt.Errorf("while creating image cache dir %q: %w", d, err)
@@ -224,10 +249,17 @@ func New(root string, opts ...Option) (*Store, error) {
 		return nil, err
 	}
 	// Startup-only orphan recovery (see RecoverOrphans for why it must not
-	// run during normal operation). Failure is logged inside, never fatal:
-	// a corrupt record must not keep atelet from serving actors.
+	// run during normal operation). Never fatal: a corrupt record must not
+	// keep atelet from serving actors. Gated means nothing was attempted
+	// (orphans persist until the named file is repaired and the next
+	// restart); per-item errors mean the scan ran and reclaimed what it
+	// could.
 	if _, err := s.RecoverOrphans(context.Background()); err != nil {
-		slog.Warn("Image cache startup orphan recovery incomplete", slog.Any("err", err))
+		if errors.Is(err, ErrIncompleteEnumeration) {
+			slog.Error("Image cache startup orphan scan skipped", slog.Any("err", err))
+		} else {
+			slog.Warn("Image cache startup orphan recovery incomplete", slog.Any("err", err))
+		}
 	}
 	return s, nil
 }
@@ -295,7 +327,12 @@ func (s *Store) sweepTempDirs() error {
 // I/O; tag refs cost one HEAD request to resolve the tag to a manifest
 // digest (so tag refs are cacheable, and a moved tag is picked up on the
 // next call).
-func (s *Store) EnsureImage(ctx context.Context, ref string) (*Image, error) {
+func (s *Store) EnsureImage(ctx context.Context, ref string) (_ *Image, err error) {
+	// A miss until a complete record proves otherwise; recordRequest
+	// reclassifies a failure onto its own outcome.
+	outcome := ateattr.ImageCacheOutcomeMiss
+	defer func() { s.recordRequest(ctx, outcome, err) }()
+
 	parsedRef, err := s.parseRef(ref)
 	if err != nil {
 		return nil, fmt.Errorf("while parsing reference: %w", err)
@@ -310,9 +347,10 @@ func (s *Store) EnsureImage(ctx context.Context, ref string) (*Image, error) {
 	} else {
 		// Tag ref: one small HEAD request pins it to an immutable manifest
 		// digest, which is the only safe cache key for mutable tags.
-		desc, err := remote.Head(parsedRef, s.remoteOpts(ctx, parsedRef)...)
-		if err != nil {
-			return nil, fmt.Errorf("while resolving tag %q to a digest: %w", ref, err)
+		desc, headErr := remote.Head(parsedRef, s.remoteOpts(ctx, parsedRef)...)
+		if headErr != nil {
+			err = fmt.Errorf("while resolving tag %q to a digest: %w", ref, headErr)
+			return nil, err
 		}
 		digest = desc.Digest
 	}
@@ -322,6 +360,7 @@ func (s *Store) EnsureImage(ctx context.Context, ref string) (*Image, error) {
 		return nil, err
 	}
 	if img != nil {
+		outcome = ateattr.ImageCacheOutcomeHit
 		slog.InfoContext(ctx, "Image cache hit", slog.String("ref", ref), slog.String("digest", digest.String()))
 		return img, nil
 	}
