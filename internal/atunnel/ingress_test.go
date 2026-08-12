@@ -95,6 +95,63 @@ func TestServeHTTP(t *testing.T) {
 	}
 }
 
+func TestServeHTTPHonorsTargetPortHeader(t *testing.T) {
+	upstreamURL, err := url.Parse("http://actor.internal:80")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	s := newTestServer(t, upstreamURL)
+	var gotURLHost, gotHost, gotHeader string
+	s.proxy.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		gotURLHost = r.URL.Host
+		gotHost = r.Host
+		gotHeader = r.Header.Get(TargetPortHeader)
+		return &http.Response{
+			StatusCode: http.StatusNoContent,
+			Header:     make(http.Header),
+			Body:       http.NoBody,
+		}, nil
+	})
+	if err := s.Activate("team-a", "actor-1"); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name           string
+		targetPort     string
+		wantDialedHost string
+	}{
+		{"arbitrary port overrides upstream's", "9090", "actor.internal:9090"},
+		{"absent falls back to upstream's own port", "", "actor.internal:80"},
+		{"invalid falls back to upstream's own port", "not-a-port", "actor.internal:80"},
+		{"out of range falls back to upstream's own port", "70000", "actor.internal:80"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, "https://worker/hello", nil)
+			req.Host = "actor-1.team-a.actors.resources.substrate.ate.dev"
+			if tt.targetPort != "" {
+				req.Header.Set(TargetPortHeader, tt.targetPort)
+			}
+			rec := httptest.NewRecorder()
+			s.ServeHTTP(rec, req)
+			if rec.Code != http.StatusNoContent {
+				t.Fatalf("status = %d, want %d", rec.Code, http.StatusNoContent)
+			}
+			if gotURLHost != tt.wantDialedHost {
+				t.Errorf("dialed host = %q, want %q", gotURLHost, tt.wantDialedHost)
+			}
+			if gotHost != "actor-1.team-a.actors.resources.substrate.ate.dev" {
+				t.Errorf("Host header changed to %q; the actor should see its stable mesh hostname", gotHost)
+			}
+			if gotHeader != "" {
+				t.Errorf("%s leaked to the actor upstream: %q", TargetPortHeader, gotHeader)
+			}
+		})
+	}
+}
+
 type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {

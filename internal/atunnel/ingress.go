@@ -44,6 +44,15 @@ const (
 	// atunnel only accepts mTLS-authenticated router clients, and the router's
 	// ext_proc server overwrites this header before every request.
 	OriginalHostHeader = "X-Ate-Original-Host"
+
+	// TargetPortHeader carries the port the router resolved the request's
+	// target to be -- e.g. from the CONNECT :authority for arbitrary-port
+	// ingress, or the actor's default port 80 otherwise (see
+	// atenet-router's handleRequestHeaders). cfg.Upstream is fixed for the
+	// Server's whole lifetime and can't vary per port, so this header lets
+	// the reverse proxy pick the right port per request. Not meant for the
+	// actor application: stripped before the request is proxied.
+	TargetPortHeader = "X-Ate-Target-Port"
 )
 
 // Config configures an ingress Server.
@@ -103,12 +112,26 @@ func NewServer(cfg Config) (*Server, error) {
 		return nil, fmt.Errorf("atunnel: trust bundle %q contains no certificates", cfg.TrustBundlePath)
 	}
 
-	proxy := httputil.NewSingleHostReverseProxy(cfg.Upstream)
 	transport := http.DefaultTransport.(*http.Transport).Clone()
-	proxy.Transport = transport
-	proxy.ErrorHandler = func(w http.ResponseWriter, r *http.Request, err error) {
-		slog.WarnContext(r.Context(), "atunnel upstream request failed", slog.Any("err", err))
-		http.Error(w, "bad gateway", http.StatusBadGateway)
+	proxy := &httputil.ReverseProxy{
+		Rewrite: func(pr *httputil.ProxyRequest) {
+			pr.SetURL(cfg.Upstream)
+			// Retain the actor's stable mesh hostname rather than the
+			// upstream's, matching NewSingleHostReverseProxy's default
+			// behavior.
+			pr.Out.Host = pr.In.Host
+
+			port := pr.In.Header.Get(TargetPortHeader)
+			pr.Out.Header.Del(TargetPortHeader)
+			if p, err := strconv.Atoi(port); err == nil && p > 0 && p <= 65535 {
+				pr.Out.URL.Host = net.JoinHostPort(cfg.Upstream.Hostname(), strconv.Itoa(p))
+			}
+		},
+		Transport: transport,
+		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
+			slog.WarnContext(r.Context(), "atunnel upstream request failed", slog.Any("err", err))
+			http.Error(w, "bad gateway", http.StatusBadGateway)
+		},
 	}
 
 	s := &Server{
