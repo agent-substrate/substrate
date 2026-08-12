@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/internal/fieldmask"
@@ -30,6 +31,8 @@ import (
 )
 
 // actorSnapshotTagScopes lists the scopes a client may set on an ActorSnapshotTag.
+// ACTOR_SNAPSHOT_TAG_SCOPE_UNSPECIFIED is deliberately absent: scope is required
+// on the wire, not defaulted. See validateActorSnapshotTagScope.
 var actorSnapshotTagScopes = []ateapipb.ActorSnapshotTagScope{
 	ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
 	ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED,
@@ -161,9 +164,7 @@ func validateUpdateActorSnapshotTagRequest(req *ateapipb.UpdateActorSnapshotTagR
 
 	errs = append(errs, fieldmask.Validate(req.GetUpdateMask(), actorSnapshotTagMutableFields, field.NewPath("update_mask"))...)
 
-	if scope, p := tag.GetScope(), tagPath.Child("scope"); validateActorSnapshotTagScope(scope) != nil {
-		errs = append(errs, field.NotSupported(p, scope.String(), actorSnapshotTagScopeNames))
-	}
+	errs = append(errs, validateActorSnapshotTagScope(tag.GetScope(), tagPath.Child("scope"))...)
 
 	return errs
 }
@@ -267,12 +268,19 @@ func validateActorSnapshotTag(tag *ateapipb.ActorSnapshotTag, name string) error
 	if errs := resources.ValidateObjectRef(&ateapipb.ObjectRef{Atespace: tag.GetMetadata().GetAtespace(), Name: tag.GetMetadata().GetName()}, p.Child("metadata")); len(errs) > 0 {
 		return status.Error(codes.InvalidArgument, errs.ToAggregate().Error())
 	}
-	return validateActorSnapshotTagScope(tag.GetScope())
+	if errs := validateActorSnapshotTagScope(tag.GetScope(), p.Child("scope")); len(errs) > 0 {
+		return status.Error(codes.InvalidArgument, errs.ToAggregate().Error())
+	}
+	return nil
 }
 
-func validateActorSnapshotTagScope(scope ateapipb.ActorSnapshotTagScope) error {
-	if slices.Contains(actorSnapshotTagScopes, scope) {
-		return nil
+// validateActorSnapshotTagScope checks that scope is one a client may set.
+func validateActorSnapshotTagScope(scope ateapipb.ActorSnapshotTagScope, p *field.Path) field.ErrorList {
+	switch {
+	case scope == ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_UNSPECIFIED:
+		return field.ErrorList{field.Required(p, "must be one of: "+strings.Join(actorSnapshotTagScopeNames, ", "))}
+	case !slices.Contains(actorSnapshotTagScopes, scope):
+		return field.ErrorList{field.NotSupported(p, scope.String(), actorSnapshotTagScopeNames)}
 	}
-	return status.Error(codes.InvalidArgument, "invalid ActorSnapshot tag scope")
+	return nil
 }

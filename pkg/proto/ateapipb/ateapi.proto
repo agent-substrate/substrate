@@ -132,11 +132,13 @@ enum SnapshotContentScope {
 }
 
 enum ActorSnapshotTagScope {
+  // Not set and rejected wherever a client supplies a scope
+  ACTOR_SNAPSHOT_TAG_SCOPE_UNSPECIFIED = 0;
   // May initialize Actors only in the tag's owning Atespace.
-  ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE = 0;
+  ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE = 1;
   // Published for use by Actors in any Atespace. The tag remains addressed
   // through its owning Atespace.
-  ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED = 1;
+  ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED = 2;
 }
 
 // Selector matches worker pools by label.

@@ -92,22 +92,26 @@ func (SnapshotContentScope) EnumDescriptor() ([]byte, []int) {
 type ActorSnapshotTagScope int32
 
 const (
+	// Not set and rejected wherever a client supplies a scope
+	ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_UNSPECIFIED ActorSnapshotTagScope = 0
 	// May initialize Actors only in the tag's owning Atespace.
-	ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE ActorSnapshotTagScope = 0
+	ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE ActorSnapshotTagScope = 1
 	// Published for use by Actors in any Atespace. The tag remains addressed
 	// through its owning Atespace.
-	ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED ActorSnapshotTagScope = 1
+	ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED ActorSnapshotTagScope = 2
 )
 
 // Enum value maps for ActorSnapshotTagScope.
 var (
 	ActorSnapshotTagScope_name = map[int32]string{
-		0: "ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE",
-		1: "ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED",
+		0: "ACTOR_SNAPSHOT_TAG_SCOPE_UNSPECIFIED",
+		1: "ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE",
+		2: "ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED",
 	}
 	ActorSnapshotTagScope_value = map[string]int32{
-		"ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE":  0,
-		"ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED": 1,
+		"ACTOR_SNAPSHOT_TAG_SCOPE_UNSPECIFIED": 0,
+		"ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE":    1,
+		"ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED":   2,
 	}
 )
 
@@ -1218,7 +1222,7 @@ func (x *ActorSnapshotTag) GetScope() ActorSnapshotTagScope {
 	if x != nil {
 		return x.Scope
 	}
-	return ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE
+	return ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_UNSPECIFIED
 }
 
 // Atespace is the isolation boundary an Actor is created into. Global-scoped:
@@ -5418,10 +5422,11 @@ const file_ateapi_proto_rawDesc = "" +
 	"\x14SnapshotContentScope\x12&\n" +
 	"\"SNAPSHOT_CONTENT_SCOPE_UNSPECIFIED\x10\x00\x12\x1f\n" +
 	"\x1bSNAPSHOT_CONTENT_SCOPE_FULL\x10\x01\x12\x1f\n" +
-	"\x1bSNAPSHOT_CONTENT_SCOPE_DATA\x10\x02*f\n" +
-	"\x15ActorSnapshotTagScope\x12%\n" +
-	"!ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE\x10\x00\x12&\n" +
-	"\"ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED\x10\x01*b\n" +
+	"\x1bSNAPSHOT_CONTENT_SCOPE_DATA\x10\x02*\x90\x01\n" +
+	"\x15ActorSnapshotTagScope\x12(\n" +
+	"$ACTOR_SNAPSHOT_TAG_SCOPE_UNSPECIFIED\x10\x00\x12%\n" +
+	"!ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE\x10\x01\x12&\n" +
+	"\"ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED\x10\x02*b\n" +
 	"\fSandboxClass\x12\x1d\n" +
 	"\x19SANDBOX_CLASS_UNSPECIFIED\x10\x00\x12\x18\n" +
 	"\x14SANDBOX_CLASS_GVISOR\x10\x01\x12\x19\n" +

@@ -139,6 +139,51 @@ class ControlStub:
                 request_serializer=ateapi__pb2.DeleteAtespaceRequest.SerializeToString,
                 response_deserializer=ateapi__pb2.Atespace.FromString,
                 _registered_method=True)
+        self.CreateActorTemplate = channel.unary_unary(
+                '/ateapi.Control/CreateActorTemplate',
+                request_serializer=ateapi__pb2.CreateActorTemplateRequest.SerializeToString,
+                response_deserializer=ateapi__pb2.ActorTemplate.FromString,
+                _registered_method=True)
+        self.GetActorTemplate = channel.unary_unary(
+                '/ateapi.Control/GetActorTemplate',
+                request_serializer=ateapi__pb2.GetActorTemplateRequest.SerializeToString,
+                response_deserializer=ateapi__pb2.ActorTemplate.FromString,
+                _registered_method=True)
+        self.UpdateActorTemplate = channel.unary_unary(
+                '/ateapi.Control/UpdateActorTemplate',
+                request_serializer=ateapi__pb2.UpdateActorTemplateRequest.SerializeToString,
+                response_deserializer=ateapi__pb2.ActorTemplate.FromString,
+                _registered_method=True)
+        self.ListActorTemplates = channel.unary_unary(
+                '/ateapi.Control/ListActorTemplates',
+                request_serializer=ateapi__pb2.ListActorTemplatesRequest.SerializeToString,
+                response_deserializer=ateapi__pb2.ListActorTemplatesResponse.FromString,
+                _registered_method=True)
+        self.DeleteActorTemplate = channel.unary_unary(
+                '/ateapi.Control/DeleteActorTemplate',
+                request_serializer=ateapi__pb2.DeleteActorTemplateRequest.SerializeToString,
+                response_deserializer=ateapi__pb2.ActorTemplate.FromString,
+                _registered_method=True)
+        self.CreateActorTemplateVersion = channel.unary_unary(
+                '/ateapi.Control/CreateActorTemplateVersion',
+                request_serializer=ateapi__pb2.CreateActorTemplateVersionRequest.SerializeToString,
+                response_deserializer=ateapi__pb2.ActorTemplateVersion.FromString,
+                _registered_method=True)
+        self.GetActorTemplateVersion = channel.unary_unary(
+                '/ateapi.Control/GetActorTemplateVersion',
+                request_serializer=ateapi__pb2.GetActorTemplateVersionRequest.SerializeToString,
+                response_deserializer=ateapi__pb2.ActorTemplateVersion.FromString,
+                _registered_method=True)
+        self.ListActorTemplateVersions = channel.unary_unary(
+                '/ateapi.Control/ListActorTemplateVersions',
+                request_serializer=ateapi__pb2.ListActorTemplateVersionsRequest.SerializeToString,
+                response_deserializer=ateapi__pb2.ListActorTemplateVersionsResponse.FromString,
+                _registered_method=True)
+        self.DeleteActorTemplateVersion = channel.unary_unary(
+                '/ateapi.Control/DeleteActorTemplateVersion',
+                request_serializer=ateapi__pb2.DeleteActorTemplateVersionRequest.SerializeToString,
+                response_deserializer=ateapi__pb2.ActorTemplateVersion.FromString,
+                _registered_method=True)
 
 
 class ControlServicer:
@@ -167,7 +212,9 @@ class ControlServicer:
         raise NotImplementedError('Method not implemented!')
 
     def SuspendActor(self, request, context):
-        """Suspend a given actor to a new snapshot.
+        """Suspend a given actor to a new snapshot. A running actor is checkpointed
+        on its worker; a paused actor's node-local snapshot is uploaded, narrowed
+        to the template's commit scope where required (Full capture, Data commit).
         """
         context.set_code(grpc.StatusCode.UNIMPLEMENTED)
         context.set_details('Method not implemented!')
@@ -273,6 +320,72 @@ class ControlServicer:
         context.set_details('Method not implemented!')
         raise NotImplementedError('Method not implemented!')
 
+    def CreateActorTemplate(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def GetActorTemplate(self, request, context):
+        """Get an ActorTemplate by name.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def UpdateActorTemplate(self, request, context):
+        """Update mutable fields on an existing ActorTemplate.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ListActorTemplates(self, request, context):
+        """Missing associated documentation comment in .proto file."""
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def DeleteActorTemplate(self, request, context):
+        """Delete an ActorTemplate. Rejects (FailedPrecondition) while any of its
+        ActorTemplateVersions exist.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def CreateActorTemplateVersion(self, request, context):
+        """Create a new ActorTemplateVersion under an existing ActorTemplate
+        (FailedPrecondition if the parent does not exist).
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def GetActorTemplateVersion(self, request, context):
+        """Get an ActorTemplateVersion by name.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def ListActorTemplateVersions(self, request, context):
+        """List ActorTemplateVersions, optionally filtered to one ActorTemplate.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
+    def DeleteActorTemplateVersion(self, request, context):
+        """Delete an ActorTemplateVersion together with its golden actor and golden
+        snapshot in the reserved ate-golden atespace. Rejects (FailedPrecondition)
+        while the version is its parent's default_version_on_create or while any
+        Actor pins it.
+        """
+        context.set_code(grpc.StatusCode.UNIMPLEMENTED)
+        context.set_details('Method not implemented!')
+        raise NotImplementedError('Method not implemented!')
+
 
 def add_ControlServicer_to_server(servicer, server):
     rpc_method_handlers = {
@@ -365,6 +478,51 @@ def add_ControlServicer_to_server(servicer, server):
                     servicer.DeleteAtespace,
                     request_deserializer=ateapi__pb2.DeleteAtespaceRequest.FromString,
                     response_serializer=ateapi__pb2.Atespace.SerializeToString,
+            ),
+            'CreateActorTemplate': grpc.unary_unary_rpc_method_handler(
+                    servicer.CreateActorTemplate,
+                    request_deserializer=ateapi__pb2.CreateActorTemplateRequest.FromString,
+                    response_serializer=ateapi__pb2.ActorTemplate.SerializeToString,
+            ),
+            'GetActorTemplate': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetActorTemplate,
+                    request_deserializer=ateapi__pb2.GetActorTemplateRequest.FromString,
+                    response_serializer=ateapi__pb2.ActorTemplate.SerializeToString,
+            ),
+            'UpdateActorTemplate': grpc.unary_unary_rpc_method_handler(
+                    servicer.UpdateActorTemplate,
+                    request_deserializer=ateapi__pb2.UpdateActorTemplateRequest.FromString,
+                    response_serializer=ateapi__pb2.ActorTemplate.SerializeToString,
+            ),
+            'ListActorTemplates': grpc.unary_unary_rpc_method_handler(
+                    servicer.ListActorTemplates,
+                    request_deserializer=ateapi__pb2.ListActorTemplatesRequest.FromString,
+                    response_serializer=ateapi__pb2.ListActorTemplatesResponse.SerializeToString,
+            ),
+            'DeleteActorTemplate': grpc.unary_unary_rpc_method_handler(
+                    servicer.DeleteActorTemplate,
+                    request_deserializer=ateapi__pb2.DeleteActorTemplateRequest.FromString,
+                    response_serializer=ateapi__pb2.ActorTemplate.SerializeToString,
+            ),
+            'CreateActorTemplateVersion': grpc.unary_unary_rpc_method_handler(
+                    servicer.CreateActorTemplateVersion,
+                    request_deserializer=ateapi__pb2.CreateActorTemplateVersionRequest.FromString,
+                    response_serializer=ateapi__pb2.ActorTemplateVersion.SerializeToString,
+            ),
+            'GetActorTemplateVersion': grpc.unary_unary_rpc_method_handler(
+                    servicer.GetActorTemplateVersion,
+                    request_deserializer=ateapi__pb2.GetActorTemplateVersionRequest.FromString,
+                    response_serializer=ateapi__pb2.ActorTemplateVersion.SerializeToString,
+            ),
+            'ListActorTemplateVersions': grpc.unary_unary_rpc_method_handler(
+                    servicer.ListActorTemplateVersions,
+                    request_deserializer=ateapi__pb2.ListActorTemplateVersionsRequest.FromString,
+                    response_serializer=ateapi__pb2.ListActorTemplateVersionsResponse.SerializeToString,
+            ),
+            'DeleteActorTemplateVersion': grpc.unary_unary_rpc_method_handler(
+                    servicer.DeleteActorTemplateVersion,
+                    request_deserializer=ateapi__pb2.DeleteActorTemplateVersionRequest.FromString,
+                    response_serializer=ateapi__pb2.ActorTemplateVersion.SerializeToString,
             ),
     }
     generic_handler = grpc.method_handlers_generic_handler(
@@ -864,6 +1022,249 @@ class Control:
             metadata,
             _registered_method=True)
 
+    @staticmethod
+    def CreateActorTemplate(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/ateapi.Control/CreateActorTemplate',
+            ateapi__pb2.CreateActorTemplateRequest.SerializeToString,
+            ateapi__pb2.ActorTemplate.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetActorTemplate(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/ateapi.Control/GetActorTemplate',
+            ateapi__pb2.GetActorTemplateRequest.SerializeToString,
+            ateapi__pb2.ActorTemplate.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def UpdateActorTemplate(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/ateapi.Control/UpdateActorTemplate',
+            ateapi__pb2.UpdateActorTemplateRequest.SerializeToString,
+            ateapi__pb2.ActorTemplate.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ListActorTemplates(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/ateapi.Control/ListActorTemplates',
+            ateapi__pb2.ListActorTemplatesRequest.SerializeToString,
+            ateapi__pb2.ListActorTemplatesResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def DeleteActorTemplate(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/ateapi.Control/DeleteActorTemplate',
+            ateapi__pb2.DeleteActorTemplateRequest.SerializeToString,
+            ateapi__pb2.ActorTemplate.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def CreateActorTemplateVersion(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/ateapi.Control/CreateActorTemplateVersion',
+            ateapi__pb2.CreateActorTemplateVersionRequest.SerializeToString,
+            ateapi__pb2.ActorTemplateVersion.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def GetActorTemplateVersion(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/ateapi.Control/GetActorTemplateVersion',
+            ateapi__pb2.GetActorTemplateVersionRequest.SerializeToString,
+            ateapi__pb2.ActorTemplateVersion.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def ListActorTemplateVersions(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/ateapi.Control/ListActorTemplateVersions',
+            ateapi__pb2.ListActorTemplateVersionsRequest.SerializeToString,
+            ateapi__pb2.ListActorTemplateVersionsResponse.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
+    @staticmethod
+    def DeleteActorTemplateVersion(request,
+            target,
+            options=(),
+            channel_credentials=None,
+            call_credentials=None,
+            insecure=False,
+            compression=None,
+            wait_for_ready=None,
+            timeout=None,
+            metadata=None):
+        return grpc.experimental.unary_unary(
+            request,
+            target,
+            '/ateapi.Control/DeleteActorTemplateVersion',
+            ateapi__pb2.DeleteActorTemplateVersionRequest.SerializeToString,
+            ateapi__pb2.ActorTemplateVersion.FromString,
+            options,
+            channel_credentials,
+            insecure,
+            call_credentials,
+            compression,
+            wait_for_ready,
+            timeout,
+            metadata,
+            _registered_method=True)
+
 
 class DebugStub:
     """Debug is the RPC interface for administrative and debugging operations
@@ -947,20 +1348,10 @@ class Debug:
 class ActorIdentityStub:
     """ActorIdentity allows substrate workloads to exchange their
     infrastructure-level credentials (k8s service account token, etc.) for a
-    substrate actor-level credential.  A given substrate actor might migrate
+    substrate actor-level credential. A given substrate actor might migrate
     between many different physical workers over the course of its lifecycle,
     whereas the actor credential's identity will be stable for the life of the
     actor.
-
-    This service requires authentication. You can authenticate with a Kubernetes
-    service account token in an `Authorization: Bearer` header, or you can
-    authenticate with a Kubernetes service account certificate as an mTLS
-    certificate. (Kubernetes service account certificates do not currently exist
-    upstream, but we will provide a polyfill based on Pod Certificates).
-
-    The broker will check that the service credentials you authenticated with
-    belong to a Pod that is currently mapped to the requested actor in the
-    actor database.
     """
 
     def __init__(self, channel):
@@ -984,20 +1375,10 @@ class ActorIdentityStub:
 class ActorIdentityServicer:
     """ActorIdentity allows substrate workloads to exchange their
     infrastructure-level credentials (k8s service account token, etc.) for a
-    substrate actor-level credential.  A given substrate actor might migrate
+    substrate actor-level credential. A given substrate actor might migrate
     between many different physical workers over the course of its lifecycle,
     whereas the actor credential's identity will be stable for the life of the
     actor.
-
-    This service requires authentication. You can authenticate with a Kubernetes
-    service account token in an `Authorization: Bearer` header, or you can
-    authenticate with a Kubernetes service account certificate as an mTLS
-    certificate. (Kubernetes service account certificates do not currently exist
-    upstream, but we will provide a polyfill based on Pod Certificates).
-
-    The broker will check that the service credentials you authenticated with
-    belong to a Pod that is currently mapped to the requested actor in the
-    actor database.
     """
 
     def MintJWT(self, request, context):
@@ -1017,10 +1398,9 @@ class ActorIdentityServicer:
         it on the actor's behalf, authenticating with its own client certificate
         rather than a bearer token.
 
-        Authorization is decided on that client certificate: it must identify the
-        atelet running on the same node as the worker Pod that currently hosts the
-        requested actor, and the actor must still be running. Any other caller is
-        rejected with PERMISSION_DENIED.
+        Authorization is decided on that client certificate and the worker
+        identity attested by atelet. Ateapi verifies that the worker is assigned to
+        the actor and that the actor points back to that exact worker before signing.
 
         The certificate in the response is the actor's identity, not the atelet's.
         """
@@ -1052,20 +1432,10 @@ def add_ActorIdentityServicer_to_server(servicer, server):
 class ActorIdentity:
     """ActorIdentity allows substrate workloads to exchange their
     infrastructure-level credentials (k8s service account token, etc.) for a
-    substrate actor-level credential.  A given substrate actor might migrate
+    substrate actor-level credential. A given substrate actor might migrate
     between many different physical workers over the course of its lifecycle,
     whereas the actor credential's identity will be stable for the life of the
     actor.
-
-    This service requires authentication. You can authenticate with a Kubernetes
-    service account token in an `Authorization: Bearer` header, or you can
-    authenticate with a Kubernetes service account certificate as an mTLS
-    certificate. (Kubernetes service account certificates do not currently exist
-    upstream, but we will provide a polyfill based on Pod Certificates).
-
-    The broker will check that the service credentials you authenticated with
-    belong to a Pod that is currently mapped to the requested actor in the
-    actor database.
     """
 
     @staticmethod

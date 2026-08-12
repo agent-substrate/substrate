@@ -187,7 +187,7 @@ func parseActorSnapshotTagScope(value string) (ateapipb.ActorSnapshotTagScope, e
 	case "published":
 		return ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED, nil
 	default:
-		return 0, fmt.Errorf("invalid scope %q; must be atespace or published", value)
+		return ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_UNSPECIFIED, fmt.Errorf("invalid scope %q; must be atespace or published", value)
 	}
 }
 
