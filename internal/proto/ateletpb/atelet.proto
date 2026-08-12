@@ -123,6 +123,7 @@ message WorkloadSpec {
   repeated Volume volumes = 3;
   repeated ImagePullSecretReference image_pull_secrets = 4;
 
+  reserved 2;
   reserved "pause_image"; // moved to SandboxAssets
 }
 
