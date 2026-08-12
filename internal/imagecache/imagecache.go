@@ -105,9 +105,8 @@ type Store struct {
 
 	localhostRegistryReplacement string
 
-	// platform overrides the default pull platform (linux/GOARCH). Used by
-	// validation tooling that runs on a different architecture than the
-	// nodes it validates for.
+	// platform overrides the default pull platform (linux/GOARCH), for
+	// callers pulling on a different architecture than the images' target.
 	platform *v1.Platform
 
 	// actorsDir is scanned by InUse for bundle overlay specs; empty disables

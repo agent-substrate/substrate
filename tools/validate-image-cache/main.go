@@ -33,10 +33,14 @@
 // placed actors' mounted images. The engine's locks are per-process, so a
 // run beside a live atelet is unsynchronized with its GC and pulls — the
 // pool cannot be corrupted (record-first pulls, two-phase retirement),
-// but a layer idle past --evict-idle can be retired just as a new pull
-// cache-hits it: that actor start fails once and heals on re-pull. Run
-// as the user that owns the cache and actors dirs — an unreadable actors
-// dir gates every pass.
+// but a layer idle past --evict-idle can be retired just as atelet
+// reuses it: a not-yet-mounted actor start fails once and heals on
+// re-pull; an already-mounted actor can take EIO from a removed
+// lowerdir. min-age is the only cross-process guard, hence the floor on
+// --evict-idle when an actors dir exists. (The end state is an
+// atelet-owned flush — RPC or trigger file — not a second process in
+// the pool.) Run as the user that owns the cache and actors dirs — an
+// unreadable actors dir gates every pass.
 package main
 
 import (
@@ -63,7 +67,7 @@ import (
 )
 
 var (
-	refsFile  = flag.String("refs-file", "", "File with one image ref per line (required)")
+	refsFile  = flag.String("refs-file", "", "File with one image ref per line (required unless --evict-all)")
 	sample    = flag.Int("sample", 0, "Validate a random sample of N refs (0 = all)")
 	seed      = flag.Int64("seed", 1, "Seed for reproducible sampling")
 	cacheDir  = flag.String("cache-dir", "", "Cache root (required); reused across runs")
@@ -71,8 +75,8 @@ var (
 	parallel  = flag.Int("parallel", 3, "Images validated concurrently (each pulls up to 4 layers in parallel)")
 	timeout   = flag.Duration("timeout", 20*time.Minute, "Per-image timeout")
 	minFreeGB = flag.Uint64("min-free-gb", 150, "Ask the eviction engine to reclaim disk when the cache volume has less free space than this")
-	evictIdle = flag.Duration("evict-idle", 10*time.Minute, "Eviction min-age: layers and records younger than this are never evicted. NOTE: if the corpus unpacks faster than this window elapses on a small disk, nothing is evictable while the disk fills — size it well below disk-fill time")
-	evictAll  = flag.Bool("evict-all", false, "Evict everything evictable from the cache and exit (no refs file needed). Rooted images and anything younger than --evict-idle survive. Safe alongside a running atelet: worst case a concurrent actor start fails once and heals on retry")
+	evictIdle = flag.Duration("evict-idle", 10*time.Minute, "Eviction min-age: layers and records younger than this are never evicted. Minimum 1m on a node with an actors dir. NOTE: if the corpus unpacks faster than this window elapses on a small disk, nothing is evictable while the disk fills — size it well below disk-fill time")
+	evictAll  = flag.Bool("evict-all", false, "Evict everything evictable from the cache and exit (no refs file needed). Rooted images and anything younger than --evict-idle survive")
 	platform  = flag.String("platform", "linux/amd64", "Image platform to pull")
 )
 
@@ -101,6 +105,16 @@ func main() {
 		flag.Usage()
 		os.Exit(2)
 	}
+	// min-age is the only protection that works across processes (the
+	// engine's locks are per-process), so on a live node it must not be
+	// tuned away. Validation hosts (no actors dir) keep full freedom.
+	const liveNodeIdleFloor = time.Minute
+	if *evictIdle < liveNodeIdleFloor {
+		if _, err := os.Stat(ateompath.ActorsDir); err == nil {
+			log.Fatalf("--evict-idle=%v is below %v with %s present: min-age is the only protection that applies across processes using the cache",
+				*evictIdle, liveNodeIdleFloor, ateompath.ActorsDir)
+		}
+	}
 	ctx := context.Background()
 
 	if *evictAll {
@@ -108,7 +122,7 @@ func main() {
 		// crash-debris orphans before the pass.
 		if _, err := os.Stat(ateompath.ActorsDir); err == nil {
 			// An actors dir is a decent proxy for a live node.
-			log.Printf("live node: this run is not synchronized with atelet's GC; a concurrent actor start may fail once and heal on retry")
+			log.Printf("WARNING: %s exists — this looks like a live node, and this run is not synchronized with other processes using the cache", ateompath.ActorsDir)
 		}
 		store, err := newStore()
 		if err != nil {
@@ -117,7 +131,7 @@ func main() {
 		stats, err := store.EvictUnused(ctx, math.MaxInt64, false)
 		if errors.Is(err, imagecache.ErrIncompleteEnumeration) {
 			// Gated: nothing was attempted; the error names the unreadable
-			// or corrupt file.
+			// or corrupt path.
 			log.Fatalf("evict-all did nothing: %v", err)
 		}
 		if err != nil {
@@ -286,7 +300,7 @@ func evictIfLow(ctx context.Context, store *imagecache.Store, cacheRoot string, 
 	stats, err := store.EvictUnused(ctx, int64(minFree-free), false)
 	switch {
 	case errors.Is(err, imagecache.ErrIncompleteEnumeration):
-		// Gated: nothing was attempted; the error names the file to repair.
+		// Gated: nothing was attempted; the error names the path to repair.
 		// Validation itself goes on — it only needed the disk space.
 		log.Printf("eviction pass skipped, nothing attempted: %v", err)
 	case err != nil:

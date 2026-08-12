@@ -23,9 +23,9 @@ whiteouts, oversized layer counts, ...).
   `domain:google.com` grant) is not necessarily readable by a *service
   account* — validate with the identity that production will use.
 - Disk: unpacked layers are 2–3× their compressed size. The tool bounds
-  usage by evicting idle cached layers when the cache volume's free space
-  drops below `--min-free-gb`, but give it room to breathe (tens of GB
-  minimum).
+  usage by asking the cache's own eviction engine to reclaim space when the
+  cache volume's free space drops below `--min-free-gb`, but give it room
+  to breathe (tens of GB minimum).
 - Runs anywhere Go runs, including macOS (unpack is pure file I/O). Caveat:
   a case-insensitive filesystem (default macOS APFS) unpacks case-colliding
   paths slightly differently than Linux — silently, not as an error. Linux
@@ -68,15 +68,16 @@ go run ./tools/validate-image-cache \
 
 | Flag | Default | Meaning |
 |---|---|---|
-| `--refs-file` | (required) | file with one image ref per line |
+| `--refs-file` | (required unless `--evict-all`) | file with one image ref per line |
 | `--cache-dir` | (required) | cache root; reused (and cache-hit) across runs |
 | `--sample` | 0 (= all) | validate a random sample of N refs |
 | `--seed` | 1 | sampling seed; same seed + file ⇒ same sample |
 | `--out` | `validate-results.csv` | results CSV, written incrementally |
 | `--parallel` | 3 | images validated concurrently (each pulls up to 4 layers in parallel) |
 | `--timeout` | 20m | per-image timeout |
-| `--min-free-gb` | 150 | evict oldest idle layers below this free-space floor |
-| `--evict-idle` | 10m | only evict layers idle at least this long; must be far below disk-fill time on small disks |
+| `--min-free-gb` | 150 | reclaim the shortfall below this free-space floor via the eviction engine |
+| `--evict-idle` | 10m | eviction min-age: layers and records younger than this are never evicted (minimum 1m on a node with an actors dir); must be far below disk-fill time on small disks |
+| `--evict-all` | false | evict everything evictable and exit (mutually exclusive with `--refs-file`); rooted images and anything younger than `--evict-idle` survive |
 | `--platform` | `linux/amd64` | image platform to pull |
 
 ## Output and rerunning

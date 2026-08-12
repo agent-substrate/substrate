@@ -239,14 +239,27 @@ func TestRunPassEvictsAndPassesDryRun(t *testing.T) {
 	}
 }
 
-func TestRunImmediateFirstPassThenTicks(t *testing.T) {
+func TestRunFirstPassIsImmediate(t *testing.T) {
+	// A cancelled context and an hour-long period: the single call can
+	// only be the immediate first pass, never a tick.
+	fake := &fakeGCStore{}
+	g := &imageCacheGC{store: fake, cacheDir: t.TempDir(), highPct: 100, lowPct: 0, period: time.Hour}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	g.Run(ctx)
+	if fake.evictCalls != 1 {
+		t.Errorf("evictCalls=%d, want exactly 1 (the immediate first pass)", fake.evictCalls)
+	}
+}
+
+func TestRunTicks(t *testing.T) {
 	fake := &fakeGCStore{}
 	g := &imageCacheGC{store: fake, cacheDir: t.TempDir(), highPct: 100, lowPct: 0, period: 10 * time.Millisecond}
 	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
 	defer cancel()
 	g.Run(ctx)
 	if fake.evictCalls < 2 {
-		t.Errorf("evictCalls=%d, want >=2 (immediate first pass plus ticks)", fake.evictCalls)
+		t.Errorf("evictCalls=%d, want >=2 (first pass plus at least one tick)", fake.evictCalls)
 	}
 }
 
