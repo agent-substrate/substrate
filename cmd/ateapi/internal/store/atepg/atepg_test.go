@@ -149,8 +149,9 @@ func TestCreateActor_MissingAtespace_FailedPrecondition(t *testing.T) {
 }
 
 // TestWorkerNotification_OnlyAfterCommit proves the doc's atomicity claim: a
-// worker write's pg_notify shares the write's transaction, so a rolled-back
-// write never notifies, while a committed write always does.
+// worker write's change-feed insert shares the write's transaction, so a
+// rolled-back write never produces an event, while a committed write always
+// does.
 func TestWorkerNotification_OnlyAfterCommit(t *testing.T) {
 	s := setupPostgresStore(t).(*Persistence)
 	ctx := context.Background()
@@ -174,9 +175,9 @@ func TestWorkerNotification_OnlyAfterCommit(t *testing.T) {
 		t.Fatalf("marshaling worker: %v", err)
 	}
 
-	// Write the row and roll back instead of committing: no notification
-	// should ever arrive, proving pg_notify's effect is undone with the rest
-	// of the transaction.
+	// Write the row and roll back instead of committing: no event should
+	// ever arrive, proving the feed insert is undone with the rest of the
+	// transaction.
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		t.Fatalf("Begin failed: %v", err)
@@ -187,8 +188,8 @@ func TestWorkerNotification_OnlyAfterCommit(t *testing.T) {
 		workerName, "rolled-back-uid", int64(1), protoBytes); err != nil {
 		t.Fatalf("insert failed: %v", err)
 	}
-	if _, err := tx.Exec(ctx, `SELECT pg_notify($1, $2)`, workerChangeChannel, "rolled-back-payload"); err != nil {
-		t.Fatalf("pg_notify failed: %v", err)
+	if _, err := tx.Exec(ctx, `INSERT INTO worker_changes (payload) VALUES ($1)`, []byte("rolled-back-payload")); err != nil {
+		t.Fatalf("feed insert failed: %v", err)
 	}
 	if err := tx.Rollback(ctx); err != nil {
 		t.Fatalf("Rollback failed: %v", err)

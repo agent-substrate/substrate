@@ -1049,14 +1049,6 @@ func (p *Persistence) DeleteActorSnapshotTag(ctx context.Context, atespace, name
 
 // --- Workers ---
 
-const (
-	// workerChangeChannel is the fixed LISTEN/NOTIFY channel for worker changes.
-	workerChangeChannel = "worker_changes"
-	// maxNotifyPayloadBytes reflects PostgreSQL's NOTIFY payload size limit.
-	// Writes fail rather than silently omit a notification if exceeded.
-	maxNotifyPayloadBytes = 8000
-)
-
 type workerEventEnvelope struct {
 	Type   int    `json:"t"`
 	Worker string `json:"w"` // protojson-encoded Worker
@@ -1106,11 +1098,8 @@ func (p *Persistence) writeAndNotify(ctx context.Context, eventType store.Worker
 		if err != nil {
 			return fmt.Errorf("marshaling worker event: %w", err)
 		}
-		if len(payload) > maxNotifyPayloadBytes {
-			return fmt.Errorf("worker event payload of %d bytes exceeds PostgreSQL NOTIFY limit of %d bytes", len(payload), maxNotifyPayloadBytes)
-		}
-		if _, err := tx.Exec(ctx, `SELECT pg_notify($1, $2)`, workerChangeChannel, string(payload)); err != nil {
-			return fmt.Errorf("notifying worker change: %w", err)
+		if _, err := tx.Exec(ctx, `INSERT INTO worker_changes (payload) VALUES ($1)`, payload); err != nil {
+			return fmt.Errorf("appending worker change feed: %w", err)
 		}
 	}
 
@@ -1279,43 +1268,87 @@ func (p *Persistence) ListWorkers(ctx context.Context, opts store.ListOptions) (
 // it's never handed back for unrelated queries), LISTENs on the fixed
 // worker-change channel, and forwards decoded notifications until the
 // context is cancelled or the caller closes the watch.
+// changeFeedPollInterval bounds worker-event delivery latency (watch target
+// is <=1s); changeFeedRetention is how far behind the cursor the janitor
+// keeps rows.
+const (
+	changeFeedPollInterval = 100 * time.Millisecond
+	changeFeedBatch        = 1024
+	changeFeedRetention    = int64(1_000_000)
+	changeFeedJanitorEvery = 600 // polls (~1 min)
+)
+
+// WatchWorkers subscribes by polling the worker_changes feed table past a
+// cursor. Events are appended to the feed in the same transaction as the
+// worker write (see writeAndNotify), so delivery happens iff the write
+// committed.
 func (p *Persistence) WatchWorkers(ctx context.Context) (*store.WorkerWatch, error) {
 	watchCtx, cancel := context.WithCancel(ctx)
 
-	poolConn, err := p.pool.Acquire(watchCtx)
-	if err != nil {
+	var cursor int64
+	if err := p.pool.QueryRow(watchCtx, `SELECT COALESCE(max(seq), 0) FROM worker_changes`).Scan(&cursor); err != nil {
 		cancel()
-		return nil, fmt.Errorf("acquiring watch connection: %w", err)
-	}
-	conn := poolConn.Hijack()
-
-	if _, err := conn.Exec(watchCtx, "LISTEN "+workerChangeChannel); err != nil {
-		conn.Close(watchCtx) //nolint:errcheck
-		cancel()
-		return nil, fmt.Errorf("listening for worker changes: %w", err)
+		return nil, fmt.Errorf("reading worker change feed cursor: %w", err)
 	}
 
 	ch := make(chan store.WorkerEvent, 128)
 	go func() {
 		defer close(ch)
-		defer conn.Close(context.Background()) //nolint:errcheck
+		ticker := time.NewTicker(changeFeedPollInterval)
+		defer ticker.Stop()
+		polls := 0
 		for {
-			notification, err := conn.WaitForNotification(watchCtx)
-			if err != nil {
-				// Context cancelled (caller closed the watch) or the
-				// connection was lost. Either way, the caller must
-				// re-subscribe; matches ateredis's WatchWorkers contract.
-				return
-			}
-			event, err := unmarshalWorkerEvent(notification.Payload)
-			if err != nil {
-				slog.ErrorContext(ctx, "worker event unmarshal failed", slog.Any("err", err))
-				continue
-			}
 			select {
-			case ch <- event:
 			case <-watchCtx.Done():
 				return
+			case <-ticker.C:
+			}
+			rows, err := p.pool.Query(watchCtx, `
+				SELECT seq, payload FROM worker_changes
+				WHERE seq > $1 ORDER BY seq LIMIT $2`, cursor, changeFeedBatch)
+			if err != nil {
+				if watchCtx.Err() != nil {
+					return
+				}
+				// Transient poll failure: like a dropped LISTEN connection,
+				// but recoverable in place — keep the cursor, try again.
+				slog.WarnContext(watchCtx, "worker change feed poll failed", slog.Any("err", err))
+				continue
+			}
+			type feedRow struct {
+				seq     int64
+				payload []byte
+			}
+			var batch []feedRow
+			for rows.Next() {
+				var r feedRow
+				if err := rows.Scan(&r.seq, &r.payload); err != nil {
+					rows.Close()
+					slog.WarnContext(watchCtx, "worker change feed scan failed", slog.Any("err", err))
+					batch = nil
+					break
+				}
+				batch = append(batch, r)
+			}
+			rows.Close()
+			for _, r := range batch {
+				event, err := unmarshalWorkerEvent(string(r.payload))
+				if err != nil {
+					slog.ErrorContext(watchCtx, "worker event unmarshal failed", slog.Any("err", err))
+					cursor = r.seq
+					continue
+				}
+				select {
+				case ch <- event:
+					cursor = r.seq
+				case <-watchCtx.Done():
+					return
+				}
+			}
+			if polls++; polls%changeFeedJanitorEvery == 0 && cursor > changeFeedRetention {
+				if _, err := p.pool.Exec(watchCtx, `DELETE FROM worker_changes WHERE seq < $1`, cursor-changeFeedRetention); err != nil && watchCtx.Err() == nil {
+					slog.WarnContext(watchCtx, "worker change feed janitor failed", slog.Any("err", err))
+				}
 			}
 		}
 	}()
@@ -1468,7 +1501,7 @@ func (p *Persistence) releaseLease(ctx context.Context, key, token string) error
 // --- Debug ---
 
 func (p *Persistence) DebugClearAll(ctx context.Context) error {
-	if _, err := p.pool.Exec(ctx, `TRUNCATE atespaces, actors, actor_templates, actor_snapshots, actor_snapshot_tags, workers, leases`); err != nil {
+	if _, err := p.pool.Exec(ctx, `TRUNCATE atespaces, actors, actor_templates, actor_snapshots, actor_snapshot_tags, workers, leases, worker_changes`); err != nil {
 		return fmt.Errorf("truncating tables: %w", err)
 	}
 	return nil

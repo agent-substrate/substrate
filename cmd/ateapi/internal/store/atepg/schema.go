@@ -81,6 +81,15 @@ CREATE TABLE IF NOT EXISTS workers (
     proto    bytea NOT NULL
 );
 
+-- Transactional change feed for worker watches (used when
+-- ATEPG_CHANGE_FEED=1). Plain inserts commit in parallel, unlike pg_notify,
+-- whose global commit serialization caps notifying writes at ~600/s.
+-- payload is the same JSON envelope the NOTIFY path carries.
+CREATE TABLE IF NOT EXISTS worker_changes (
+    seq      bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    payload  bytea NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS leases (
     key         text PRIMARY KEY,
     token       text NOT NULL,
