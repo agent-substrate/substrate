@@ -18,6 +18,13 @@
 # local kind cluster use hack/run-microvm-demo-kind.sh (which sets the kind env
 # and calls this script), mirroring install-ate.sh / install-ate-kind.sh.
 #
+# Composes:
+#   1. hack/install-ate.sh --deploy-ate-system  (control plane)
+#   2. hack/install-microvm-deps.sh --install   (asset build/stage + cluster-wide
+#                                                microvm SandboxConfig)
+#   3. Apply the counter-microvm demo manifest (namespace + WorkerPool +
+#      ActorTemplate).
+#
 # Like the other hack scripts, this sources .ate-dev-env.sh for the cluster /
 # registry / bucket settings unless NO_DEV_ENV is set.
 #
@@ -77,17 +84,6 @@ case "${ATE_ATEAPI_CLIENT_AUTH}" in
     ;;
 esac
 
-# Target arch: match the images' platform (KO_DEFAULTPLATFORMS is set by
-# .ate-dev-env.sh on GKE and by the kind wrapper); fall back to the host arch.
-if [[ -z "${ARCH:-}" ]]; then
-  if [[ -n "${KO_DEFAULTPLATFORMS:-}" ]]; then
-    ARCH="${KO_DEFAULTPLATFORMS##*/}"
-  else
-    ARCH="$(go env GOARCH)"
-  fi
-fi
-OUT="${OUT:-${ROOT}/bin/microvm-assets/$ARCH}"
-
 if [[ -z "${KO_DOCKER_REPO}" ]]; then
   echo "Error: KO_DOCKER_REPO is required (set it in .ate-dev-env.sh for GKE," >&2
   echo "       or use hack/run-microvm-demo-kind.sh for a local kind cluster)." >&2
@@ -102,32 +98,7 @@ log() {
   echo -e "${COLOR_CYAN}[run-microvm-demo]: $*${COLOR_RESET}"
 }
 
-# --- 2. assets: assemble (if missing) then stage to rustfs (kind) / GCS (GKE) --
-need_assemble=false
-for f in cloud-hypervisor virtiofsd vmlinux rootfs.img configuration-clh.toml; do
-  if [[ ! -f "${OUT}/${f}" ]]; then
-    need_assemble=true
-    break
-  fi
-done
-if [[ "${need_assemble}" == "true" ]]; then
-  log "Assembling micro-VM assets into ${OUT} (ARCH=${ARCH})..."
-  ARCH="${ARCH}" OUT="${OUT}" hack/microvm-assets/assemble.sh
-else
-  log "Assets already present in ${OUT}; skipping assemble."
-fi
-
-# Upload the five assets under kata-assets/, where atelet fetches them: the
-# in-cluster rustfs (port-forwarded, S3 API) on kind, or the GCS bucket on GKE.
-if [[ "${ATE_INSTALL_KIND}" == "true" ]]; then
-  log "Staging assets to in-cluster rustfs bucket ${BUCKET_NAME} (kata-assets/)..."
-  OUT="${OUT}" BUCKET="${BUCKET_NAME}" KUBECTL_CONTEXT="${KUBECTL_CONTEXT}" hack/microvm-assets/stage-to-rustfs.sh
-else
-  log "Uploading assets to gs://${BUCKET_NAME}/kata-assets/ ..."
-  OUT="${OUT}" BUCKET="${BUCKET_NAME}" hack/microvm-assets/stage-to-gcs.sh
-fi
-
-# --- 3. deploy the control plane --------------------------------------------
+# --- 1. deploy the control plane -------------------------------------------
 log "Deploying the ate control plane (--deploy-ate-system)..."
 if [[ "${ATE_INSTALL_KIND}" == "true" ]]; then
   # install-ate-kind.sh sets NO_DEV_ENV/KO_DOCKER_REPO/ARCH/ATE_INSTALL_KIND itself.
@@ -137,24 +108,23 @@ else
   KUBECTL_CONTEXT="${KUBECTL_CONTEXT}" hack/install-ate.sh --deploy-ate-system --ateapi-client-auth="${ATE_ATEAPI_CLIENT_AUTH}"
 fi
 
-# --- 4. apply the demo ------------------------------------------------------
+# --- 2. install micro-VM deps (assets + cluster-wide SandboxConfig) --------
+# install-microvm-deps.sh handles the assemble/stage/apply flow and injects
+# the arm64 virtiofsd sha at deploy (see that script for details). Ordering
+# matters: the control plane must be up so the SandboxConfig CRD exists.
+log "Installing micro-VM dependencies..."
+hack/install-microvm-deps.sh --install
+
+# --- 3. apply the demo ------------------------------------------------------
 # Use ./hack/run-tool.sh ko so ko honors KO_DOCKER_REPO (the committed .ko.yaml base
 # is used as-is — no override). Only ko apply/create/delete/run accept args after
 # `--`; thread --context there (mirrors the run_ko helper in hack/install-ate.sh).
 log "Applying the counter-microvm demo manifest..."
-# The arm64 virtiofsd is built from source (release tag in assemble.sh), so its binary
-# bytes are not reproducible across toolchains and its sha can't be a fixed pin in the
-# manifest. Compute it from the freshly-staged binary and inject it, so the deployed
-# SandboxConfig always matches whatever was staged. The downloaded assets
-# (cloud-hypervisor/kernel/rootfs/config, plus virtiofsd on amd64 where upstream
-# publishes a prebuilt) keep their committed, reproducible per-arch shas.
-VIRTIOFSD_SHA256="$(sha256sum "${OUT}/virtiofsd" | awk '{print $1}')"
 sed -e "s|\${BUCKET_NAME}|${BUCKET_NAME}|g" \
-    -e "s|\${VIRTIOFSD_SHA256}|${VIRTIOFSD_SHA256}|g" \
     demos/counter/counter-microvm.yaml.tmpl \
   | ./hack/run-tool.sh ko apply -f - ${KUBECTL_CONTEXT:+-- --context="${KUBECTL_CONTEXT}"}
 
-# --- 5. next steps ----------------------------------------------------------
+# --- 4. next steps ----------------------------------------------------------
 KCTX_FLAG=""
 if [[ -n "${KUBECTL_CONTEXT}" ]]; then
   KCTX_FLAG=" --context=${KUBECTL_CONTEXT}"

@@ -16,9 +16,15 @@ package controlapi
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"testing"
 
+	"github.com/google/go-cmp/cmp"
+
 	"github.com/agent-substrate/substrate/internal/ateattr"
+	"github.com/agent-substrate/substrate/internal/resources"
+	"github.com/agent-substrate/substrate/internal/volume"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
@@ -86,5 +92,118 @@ func TestValidateDeleteActorRequest(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			assertValidateErr(t, validateDeleteActorRequest(tt.req), tt.want)
 		})
+	}
+}
+
+func TestDeleteActor_StatusDeleting(t *testing.T) {
+	ns := namespaceForTest("ns-delete-deleting")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+	createTemplate(t, tc, ns)
+
+	deletingActor := &ateapipb.Actor{
+		Metadata: &ateapipb.ResourceMetadata{
+			Atespace: testAtespace,
+			Name:     "deleting-actor",
+		},
+		Status:                 ateapipb.Actor_STATUS_DELETING,
+		ActorTemplateNamespace: ns,
+		ActorTemplateName:      "tmpl1",
+	}
+	if _, err := tc.persistence.CreateActor(context.Background(), deletingActor); err != nil {
+		t.Fatalf("CreateActor: %v", err)
+	}
+
+	if _, err := tc.service.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "deleting-actor"},
+	}); err != nil {
+		t.Fatalf("DeleteActor on STATUS_DELETING actor failed: %v", err)
+	}
+
+	if _, err := tc.persistence.GetActor(context.Background(), resources.ActorRef{Atespace: testAtespace, Name: "deleting-actor"}); err == nil {
+		t.Errorf("expected actor to be deleted, but it still exists")
+	}
+}
+
+func TestDeleteActor_WrongStatus(t *testing.T) {
+	ns := namespaceForTest("ns-delete-wrong-status")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+	createTemplate(t, tc, ns)
+
+	runningActor := &ateapipb.Actor{
+		Metadata: &ateapipb.ResourceMetadata{
+			Atespace: testAtespace,
+			Name:     "running-actor",
+		},
+		Status:                 ateapipb.Actor_STATUS_RUNNING,
+		ActorTemplateNamespace: ns,
+		ActorTemplateName:      "tmpl1",
+	}
+	if _, err := tc.persistence.CreateActor(context.Background(), runningActor); err != nil {
+		t.Fatalf("CreateActor: %v", err)
+	}
+
+	_, err := tc.service.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "running-actor"},
+	})
+	if err == nil {
+		t.Fatalf("expected DeleteActor on STATUS_RUNNING actor to fail, but it succeeded")
+	}
+}
+
+type failingVolumePlugin struct {
+	volume.VolumePluginControlPlane
+	deletedIDs []string
+}
+
+func (f *failingVolumePlugin) DeleteVolume(ctx context.Context, volumeID string) error {
+	f.deletedIDs = append(f.deletedIDs, volumeID)
+	return fmt.Errorf("simulated delete error for %s", volumeID)
+}
+
+func TestDeleteActor_MultipleVolumeDeletionFailures(t *testing.T) {
+	ns := namespaceForTest("ns-delete-multivol-fail")
+	tc := setupTest(t, ns)
+	defer tc.cleanup()
+	createTemplate(t, tc, ns)
+
+	plugin := &failingVolumePlugin{}
+	tc.service.volumePlugins = map[string]volume.VolumePluginControlPlane{
+		"substrate.io/mock": plugin,
+	}
+
+	actor := &ateapipb.Actor{
+		Metadata: &ateapipb.ResourceMetadata{
+			Atespace: testAtespace,
+			Name:     "multi-vol-actor",
+		},
+		Status:                 ateapipb.Actor_STATUS_SUSPENDED,
+		ActorTemplateNamespace: ns,
+		ActorTemplateName:      "tmpl1",
+		ActorVolumes: []*ateapipb.ExternalVolume{
+			{VolumeName: "vol1", StorageVolumeId: "storage-vol-1", Status: ateapipb.ExternalVolume_STATUS_CREATED, VolumeType: "substrate.io/mock"},
+			{VolumeName: "vol2", StorageVolumeId: "storage-vol-2", Status: ateapipb.ExternalVolume_STATUS_CREATED, VolumeType: "substrate.io/mock"},
+		},
+	}
+	if _, err := tc.persistence.CreateActor(context.Background(), actor); err != nil {
+		t.Fatalf("CreateActor: %v", err)
+	}
+
+	_, err := tc.service.DeleteActor(context.Background(), &ateapipb.DeleteActorRequest{
+		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "multi-vol-actor"},
+	})
+	if err == nil {
+		t.Fatalf("expected DeleteActor to fail when volume deletion fails, but it succeeded")
+	}
+
+	wantDeleted := []string{"storage-vol-1", "storage-vol-2"}
+	if diff := cmp.Diff(wantDeleted, plugin.deletedIDs); diff != "" {
+		t.Errorf("deletedIDs mismatch (-want +got):\n%s", diff)
+	}
+
+	errMsg := err.Error()
+	if !strings.Contains(errMsg, "storage-vol-1") || !strings.Contains(errMsg, "storage-vol-2") {
+		t.Errorf("expected error message to contain both volume failure details, got: %v", errMsg)
 	}
 }

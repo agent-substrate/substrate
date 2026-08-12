@@ -23,8 +23,10 @@ import (
 	"strings"
 
 	"github.com/agent-substrate/substrate/internal/credbundle"
+	"github.com/agent-substrate/substrate/internal/k8sresolver"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+	"k8s.io/client-go/kubernetes"
 )
 
 const (
@@ -63,6 +65,10 @@ type ClientConfig struct {
 	// and PKCS8 private key presented to the server. Required unless
 	// UseTokenAuth is set, ignored otherwise.
 	ClientCredBundle string
+
+	// K8sClient is an optional Kubernetes client. When provided, an EndpointSlice
+	// resolver builder using this client will be attached to DialOptions.
+	K8sClient kubernetes.Interface
 }
 
 // DialOptions returns the grpc.DialOption set described by cfg, suitable to
@@ -87,18 +93,25 @@ func DialOptions(cfg ClientConfig) ([]grpc.DialOption, error) {
 		RootCAs:    pool,
 		ServerName: cfg.ServerName,
 	}
+
+	opts := []grpc.DialOption{
+		grpc.WithDefaultServiceConfig(roundRobinServiceConfig),
+	}
+	if cfg.K8sClient != nil {
+		opts = append(opts, grpc.WithResolvers(k8sresolver.NewBuilder(cfg.K8sClient)))
+	}
+
 	if cfg.UseTokenAuth {
-		return []grpc.DialOption{
+		opts = append(opts,
 			grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)),
 			grpc.WithPerRPCCredentials(&fileTokenCreds{path: cfg.TokenFile}),
-			grpc.WithDefaultServiceConfig(roundRobinServiceConfig),
-		}, nil
+		)
+		return opts, nil
 	}
+
 	tlsCfg.GetClientCertificate = credbundle.ClientLoader(cfg.ClientCredBundle)
-	return []grpc.DialOption{
-		grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)),
-		grpc.WithDefaultServiceConfig(roundRobinServiceConfig),
-	}, nil
+	opts = append(opts, grpc.WithTransportCredentials(credentials.NewTLS(tlsCfg)))
+	return opts, nil
 }
 
 func loadCAPool(caFile string) (*x509.CertPool, error) {

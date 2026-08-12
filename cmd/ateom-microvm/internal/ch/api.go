@@ -56,24 +56,6 @@ func newAPIClient(socketPath string) *apiClient {
 	}
 }
 
-// get issues a GET and checks for a 2xx status.
-func (c *apiClient) get(ctx context.Context, path string) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiBase+path, nil)
-	if err != nil {
-		return err
-	}
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, resp.Body)
-	if resp.StatusCode >= 300 {
-		return fmt.Errorf("GET %s: status %d", path, resp.StatusCode)
-	}
-	return nil
-}
-
 // getJSON issues a GET and decodes the 2xx JSON response into out.
 func (c *apiClient) getJSON(ctx context.Context, path string, out any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiBase+path, nil)

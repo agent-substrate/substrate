@@ -123,6 +123,9 @@ func TestWrapContainerLogs_JSONInput(t *testing.T) {
 	if labels["ate.dev/actor_name"] != "act-1" {
 		t.Errorf("got actor_name = %v, want 'act-1'", labels["ate.dev/actor_name"])
 	}
+	if labels["ate.dev/actor_uid"] != "uid-1" {
+		t.Errorf("got actor_uid = %v, want 'uid-1'", labels["ate.dev/actor_uid"])
+	}
 	if labels["ate.dev/actor_template_namespace"] != "tmpl-ns" {
 		t.Errorf("got actor_template_namespace = %v, want 'tmpl-ns'", labels["ate.dev/actor_template_namespace"])
 	}
@@ -209,7 +212,7 @@ func TestWrapContainerLogs_MergeLabels(t *testing.T) {
 }
 
 func TestWrapContainerLogs_LabelCollision(t *testing.T) {
-	input := `{"level":"info","msg":"App log","labels":{"ate.dev/actor_name":"malicious-id","app":"my-app"}}` + "\n"
+	input := `{"level":"info","msg":"App log","labels":{"ate.dev/actor_name":"malicious-id","ate.dev/actor_uid":"malicious-uid","app":"my-app"}}` + "\n"
 	rdr := strings.NewReader(input)
 
 	var buf bytes.Buffer
@@ -235,6 +238,39 @@ func TestWrapContainerLogs_LabelCollision(t *testing.T) {
 	}
 	if labels["ate.dev/actor_name"] != "act-1" {
 		t.Errorf("got actor_name = %v, want 'act-1' (Substrate metadata should take precedence)", labels["ate.dev/actor_name"])
+	}
+	if labels["ate.dev/actor_uid"] != "uid-1" {
+		t.Errorf("got actor_uid = %v, want 'uid-1' (Substrate metadata should take precedence)", labels["ate.dev/actor_uid"])
+	}
+}
+
+func TestWrapContainerLogs_JSONNull(t *testing.T) {
+	input := "null\n"
+	rdr := strings.NewReader(input)
+
+	var buf bytes.Buffer
+	al := NewActorLogger(&buf, false)
+	al.WrapContainerLogs(rdr, resources.ActorRef{Atespace: "default", Name: "act-1"}, "uid-1", "tmpl-ns", "tmpl-1", "ctr-1")
+
+	var m map[string]any
+	if err := json.Unmarshal(buf.Bytes(), &m); err != nil {
+		t.Fatalf("failed to parse JSON output: %v", err)
+	}
+
+	if m["message"] != "null" {
+		t.Errorf("got message = %v, want 'null'", m["message"])
+	}
+
+	labelsAny, ok := m[al.labelsKey]
+	if !ok {
+		t.Fatal("missing labels group")
+	}
+	labels, ok := labelsAny.(map[string]any)
+	if !ok {
+		t.Fatal("labels group is not a map")
+	}
+	if labels["ate.dev/actor_uid"] != "uid-1" {
+		t.Errorf("got actor_uid = %v, want 'uid-1'", labels["ate.dev/actor_uid"])
 	}
 }
 

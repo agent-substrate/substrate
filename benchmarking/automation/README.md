@@ -15,15 +15,29 @@ Each run uploads results to GCS via `benchmarking/locust/runner.py`.
 4. `docker build && docker push` builds the locust image tagged with the commit
    hash and pushes it to `${KO_DOCKER_REPO}/locust-test:<commit>`.
 5. `hack/install-ate.sh --deploy-ate-system` + `benchmarking/workloads/deploy.sh
-   --deploy` (these build & push substrate / workload images via `ko` as part
-   of their deploy steps — there's no separate `make build-images` step).
+   --deploy --sandbox-class <class>` (these build & push substrate / workload
+   images via `ko` as part of their deploy steps — there's no separate
+   `make build-images` step). For a `microvm` test the orchestrator also
+   runs `hack/install-microvm-deps.sh --install` between the two, which
+   stages kata + cloud-hypervisor + virtiofsd assets to the cluster's object
+   store bucket and applies the cluster-wide `microvm` SandboxConfig.
 6. For each test in `tests.yaml`:
    - Submits a Job using the just-built locust image; the Job runs
      `runner.py -f <file> -t <duration> -u <users> --tag <commit> --name <name>
      --dest <dest>`.
    - Polls until complete/failed/timeout; tails logs; deletes the Job.
-   - Tears down substrate + workloads.
+   - Tears down workloads + micro-VM deps (if any) + substrate.
    - If not the last test, redeploys them so the next run starts clean.
+
+## Choosing a sandbox class
+
+Each entry in `tests.yaml` may set `sandboxClass: gvisor | microvm` (default
+`gvisor`). This controls both `spec.sandboxClass` on the benchmark WorkerPool
+and its `ateomImage` (`ateom-gvisor` vs `ateom-microvm`).
+
+For `microvm` tests the target cluster must have KVM-capable nodes and the
+object store bucket named in its `.ate-dev-env.sh` must be writable by the
+orchestrator's Workload Identity principal.
 
 ## Setup
 

@@ -56,15 +56,20 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/go-containerregistry/pkg/authn"
 	"github.com/google/go-containerregistry/pkg/name"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
+	"go.opentelemetry.io/otel/metric"
 	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/singleflight"
+
+	"github.com/agent-substrate/substrate/internal/ateattr"
 )
 
 const (
@@ -74,6 +79,16 @@ const (
 	layerFSDirName           = "fs"
 	layerWhiteoutsFileName   = "whiteouts.json"
 	layerFinalizedMarkerName = "finalized"
+	// layerSizeFileName holds the layer's byte count, recorded at unpack so
+	// sizing the pool never walks a tree. Absent for layers unpacked by
+	// older atelets (backfilled lazily, see layerSize). An estimate: the
+	// value is the tar-stream length when written at unpack, or the summed
+	// file sizes when backfilled, so it may differ from disk usage and
+	// across nodes.
+	layerSizeFileName = "size"
+
+	// defaultMinAge is the default eviction minimum age (see WithMinAge).
+	defaultMinAge = 2 * time.Minute
 
 	// layerPullConcurrency bounds concurrent layer download+unpack streams per
 	// image pull. Memory use is O(stream buffers) per slot, independent of
@@ -98,8 +113,34 @@ type Store struct {
 	// nodes it validates for.
 	platform *v1.Platform
 
+	// actorsDir is scanned by InUse for bundle overlay specs; empty disables
+	// the scan (the root set is then empty).
+	actorsDir string
+
+	// minAge vetoes eviction of any layer or image record younger than this,
+	// covering the window between a pull (or cache-hit stat) and the bundle
+	// spec write / ateom mount that roots it.
+	minAge time.Duration
+
+	// meter, when set, is the meter the store reports on. See WithMeter.
+	meter metric.Meter
+
+	// requests counts EnsureImage lookups by outcome. Nil without a meter,
+	// which recordRequest treats as a no-op.
+	requests metric.Int64Counter
+
 	imageSF singleflight.Group
 	layerSF singleflight.Group
+
+	// evictMu serializes EvictUnused passes (concurrent passes would fight
+	// over the same candidates for no benefit).
+	evictMu sync.Mutex
+
+	// hitMu closes the hit-vs-evict window: held shared by the hit path
+	// (cachedImageHit), exclusive by eviction's record removal
+	// (removeStaleRecord), so a hit's last-use touch and eviction's final
+	// re-check can never interleave. Uncontended except during a pass.
+	hitMu sync.RWMutex
 }
 
 // Option configures a Store.
@@ -121,6 +162,27 @@ func WithLocalhostRegistryReplacement(replacement string) Option {
 // WithPlatform overrides the pull platform (default: linux/GOARCH).
 func WithPlatform(p v1.Platform) Option {
 	return func(s *Store) { s.platform = &p }
+}
+
+// WithActorsDir points the eviction root-set scan at the node's actors
+// directory (the per-actor state dirs under ateompath.BasePath). Each
+// <actorsDir>/<actorUID>/bundles/<container>/rootfs-overlay.json roots its
+// image and layers against eviction. Empty disables the scan.
+func WithActorsDir(dir string) Option {
+	return func(s *Store) { s.actorsDir = dir }
+}
+
+// WithMinAge overrides the eviction minimum age (default 2m): layers and
+// image records younger than this are never evicted.
+func WithMinAge(d time.Duration) Option {
+	return func(s *Store) { s.minAge = d }
+}
+
+// WithMeter attaches the meter the store reports ate.imagecache.requests on.
+// Without it the store records nothing, so a caller with no metrics pipeline
+// needs no meter provider.
+func WithMeter(m metric.Meter) Option {
+	return func(s *Store) { s.meter = m }
 }
 
 // Image describes one cached, ready-to-compose image.
@@ -148,9 +210,17 @@ type imageRecord struct {
 // startup recovery: verifying the layout version and sweeping temp dirs left
 // by unpacks that were in flight when a previous atelet died.
 func New(root string, opts ...Option) (*Store, error) {
-	s := &Store{root: root}
+	s := &Store{root: root, minAge: defaultMinAge}
 	for _, o := range opts {
 		o(s)
+	}
+
+	if s.meter != nil {
+		requests, err := newRequestsCounter(s.meter)
+		if err != nil {
+			return nil, err
+		}
+		s.requests = requests
 	}
 
 	for _, d := range []string{s.layersDir(), s.manifestsDir()} {
@@ -178,6 +248,19 @@ func New(root string, opts ...Option) (*Store, error) {
 	if err := s.sweepTempDirs(); err != nil {
 		return nil, err
 	}
+	// Startup-only orphan recovery (see RecoverOrphans for why it must not
+	// run during normal operation). Never fatal: a corrupt record must not
+	// keep atelet from serving actors. Gated means nothing was attempted
+	// (orphans persist until the named file is repaired and the next
+	// restart); per-item errors mean the scan ran and reclaimed what it
+	// could.
+	if _, err := s.RecoverOrphans(context.Background()); err != nil {
+		if errors.Is(err, ErrIncompleteEnumeration) {
+			slog.Error("Image cache startup orphan scan skipped", slog.Any("err", err))
+		} else {
+			slog.Warn("Image cache startup orphan recovery incomplete", slog.Any("err", err))
+		}
+	}
 	return s, nil
 }
 
@@ -192,23 +275,33 @@ func (s *Store) recordPath(digest v1.Hash) string {
 	return filepath.Join(s.root, "manifests", digest.Algorithm, digest.Hex+".json")
 }
 
-// sweepTempDirs removes unpack temp dirs and manifest-record temp files
-// orphaned by a crash. A layer dir without the temp prefix and a record
-// without a leading dot are always complete (both are moved into place with
-// a single rename), so this is the only recovery the pool needs.
+// sweepTempDirs removes unpack temp dirs, retired layer dirs, and
+// manifest-record temp files orphaned by a crash. A layer dir without the
+// temp/retired prefix and a record without a leading dot are always
+// complete (both are moved into place with a single rename), so this is
+// the only recovery the pool needs.
 func (s *Store) sweepTempDirs() error {
 	entries, err := os.ReadDir(s.layersDir())
 	if err != nil {
 		return fmt.Errorf("while listing layer pool: %w", err)
 	}
+	swept := 0
 	for _, e := range entries {
-		if !strings.HasPrefix(e.Name(), ".tmp-") {
+		// ".tmp-": an unpack in flight at crash. ".rm-": a layer retirement
+		// renamed aside but not yet removed. Either way, unreferenced
+		// garbage.
+		if !strings.HasPrefix(e.Name(), ".tmp-") && !strings.HasPrefix(e.Name(), retiredPrefix) {
 			continue
 		}
 		p := filepath.Join(s.layersDir(), e.Name())
+		slog.Info("Image cache sweeping orphaned layer dir", slog.String("dir", e.Name()))
 		if err := RemoveAllWritable(p); err != nil {
-			return fmt.Errorf("while sweeping orphaned layer temp dir %q: %w", p, err)
+			return fmt.Errorf("while sweeping orphaned layer dir %q: %w", p, err)
 		}
+		swept++
+	}
+	if swept > 0 {
+		slog.Info("Image cache startup sweep removed orphaned layer dirs", slog.Int("count", swept))
 	}
 
 	// writeRecord's temp files are ".<hex>.json.tmp-<rand>"; finished records
@@ -234,7 +327,12 @@ func (s *Store) sweepTempDirs() error {
 // I/O; tag refs cost one HEAD request to resolve the tag to a manifest
 // digest (so tag refs are cacheable, and a moved tag is picked up on the
 // next call).
-func (s *Store) EnsureImage(ctx context.Context, ref string) (*Image, error) {
+func (s *Store) EnsureImage(ctx context.Context, ref string) (_ *Image, err error) {
+	// A miss until a complete record proves otherwise; recordRequest
+	// reclassifies a failure onto its own outcome.
+	outcome := ateattr.ImageCacheOutcomeMiss
+	defer func() { s.recordRequest(ctx, outcome, err) }()
+
 	parsedRef, err := s.parseRef(ref)
 	if err != nil {
 		return nil, fmt.Errorf("while parsing reference: %w", err)
@@ -249,16 +347,20 @@ func (s *Store) EnsureImage(ctx context.Context, ref string) (*Image, error) {
 	} else {
 		// Tag ref: one small HEAD request pins it to an immutable manifest
 		// digest, which is the only safe cache key for mutable tags.
-		desc, err := remote.Head(parsedRef, s.remoteOpts(ctx, parsedRef)...)
-		if err != nil {
-			return nil, fmt.Errorf("while resolving tag %q to a digest: %w", ref, err)
+		desc, headErr := remote.Head(parsedRef, s.remoteOpts(ctx, parsedRef)...)
+		if headErr != nil {
+			err = fmt.Errorf("while resolving tag %q to a digest: %w", ref, headErr)
+			return nil, err
 		}
 		digest = desc.Digest
 	}
 
-	if img, err := s.cachedImage(digest); err != nil {
+	img, err := s.cachedImageHit(digest)
+	if err != nil {
 		return nil, err
-	} else if img != nil {
+	}
+	if img != nil {
+		outcome = ateattr.ImageCacheOutcomeHit
 		slog.InfoContext(ctx, "Image cache hit", slog.String("ref", ref), slog.String("digest", digest.String()))
 		return img, nil
 	}
@@ -275,6 +377,22 @@ func (s *Store) EnsureImage(ctx context.Context, ref string) (*Image, error) {
 		return nil, err
 	}
 	return v.(*Image), nil
+}
+
+// cachedImageHit is the hit side of the hitMu contract: it verifies the
+// cached image and records last-use for eviction's LRU ordering, atomic
+// with respect to eviction's record removal (removeStaleRecord holds
+// hitMu exclusive). Refreshing the mtime also renews the min-age veto, so
+// an image in active use cannot age into eviction between this stat and
+// the ateom's mount.
+func (s *Store) cachedImageHit(digest v1.Hash) (*Image, error) {
+	s.hitMu.RLock()
+	defer s.hitMu.RUnlock()
+	img, err := s.cachedImage(digest)
+	if err == nil && img != nil {
+		s.touchRecord(digest)
+	}
+	return img, err
 }
 
 // cachedImage returns the cached image for digest, or nil if the record or
@@ -308,8 +426,14 @@ func (s *Store) cachedImage(digest v1.Hash) (*Image, error) {
 }
 
 // pull fetches the image (by its resolved digest, so what is unpacked is
-// exactly what was recorded), unpacks every missing layer into the pool, and
-// writes the image record.
+// exactly what was recorded), writes the image record, and then unpacks
+// every missing layer into the pool.
+//
+// The record comes first so that every layer is referenced — and thereby
+// safe from eviction — before it can exist on disk. A record therefore
+// means "known image, possibly partially present", which readers already
+// handle: cachedImage verifies every layer and re-pulls what is missing,
+// so an interrupted pull's record is just resumable progress.
 func (s *Store) pull(ctx context.Context, parsedRef name.Reference, digest v1.Hash) (*Image, error) {
 	// Re-check under the flight lock: a racing EnsureImage may have completed
 	// the pull between our cache miss and winning the singleflight slot.
@@ -336,8 +460,33 @@ func (s *Store) pull(ctx context.Context, parsedRef name.Reference, digest v1.Ha
 		return nil, fmt.Errorf("while listing image layers: %w", err)
 	}
 
-	layerDirs := make([]string, len(layers))
+	if len(cfgFile.RootFS.DiffIDs) != len(layers) {
+		return nil, fmt.Errorf("image %s config lists %d diffIDs but manifest has %d layers", digest, len(cfgFile.RootFS.DiffIDs), len(layers))
+	}
 	diffIDs := make([]string, len(layers))
+	for i, d := range cfgFile.RootFS.DiffIDs {
+		diffIDs[i] = d.String()
+	}
+
+	// The full diffID list is known from the config before any unpack; make
+	// every layer of this pull referenced before it can exist.
+	rec := imageRecord{Version: 1, Config: cfgFile.Config, DiffIDs: diffIDs}
+	if err := s.writeRecord(digest, rec); err != nil {
+		return nil, err
+	}
+	// For a multi-arch ref the requested digest is the index digest, but the
+	// layers unpacked belong to the per-platform child manifest. Record the
+	// image under the child digest too, so refs pinned either way hit.
+	var actualDigest *v1.Hash
+	if actual, err := img.Digest(); err == nil && actual != digest {
+		actualDigest = &actual
+		if err := s.writeRecord(actual, rec); err != nil {
+			slog.WarnContext(ctx, "Failed to record image under platform manifest digest",
+				slog.String("digest", actual.String()), slog.Any("err", err))
+		}
+	}
+
+	layerDirs := make([]string, len(layers))
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(layerPullConcurrency)
 	for i, layer := range layers {
@@ -346,11 +495,21 @@ func (s *Store) pull(ctx context.Context, parsedRef name.Reference, digest v1.Ha
 			if err != nil {
 				return fmt.Errorf("while reading layer diffID: %w", err)
 			}
+			if diffID.String() != diffIDs[i] {
+				// The record must reference exactly what lands on disk.
+				return fmt.Errorf("layer %d diffID %s does not match config rootfs diffID %s", i, diffID, diffIDs[i])
+			}
 			dir, err := s.ensureLayer(gctx, diffID, layer)
 			if err != nil {
 				return fmt.Errorf("while unpacking layer %s: %w", diffID, err)
 			}
-			layerDirs[i], diffIDs[i] = dir, diffID.String()
+			layerDirs[i] = dir
+			// Each completed layer refreshes the record's mtime: a pull
+			// making progress stays fresh indefinitely; a wedged one ages
+			// into ordinary LRU eviction. The twin is not touched — the
+			// primary keeps the layers referenced, and the final rewrite
+			// recreates the twin if it ages out mid-pull.
+			s.touchRecord(digest)
 			return nil
 		})
 	}
@@ -358,17 +517,26 @@ func (s *Store) pull(ctx context.Context, parsedRef name.Reference, digest v1.Ha
 		return nil, err
 	}
 
-	rec := imageRecord{Version: 1, Config: cfgFile.Config, DiffIDs: diffIDs}
+	// Rewrite the record: eviction may legitimately remove it mid-pull
+	// (no progress for min-age reads as wedged), and success must never
+	// leave the just-unpacked layers unreferenced.
 	if err := s.writeRecord(digest, rec); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("while rewriting image record after unpack: %w", err)
 	}
-	// For a multi-arch ref the requested digest is the index digest, but the
-	// layers unpacked belong to the per-platform child manifest. Record the
-	// image under the child digest too, so refs pinned either way hit.
-	if actual, err := img.Digest(); err == nil && actual != digest {
-		if err := s.writeRecord(actual, rec); err != nil {
-			slog.WarnContext(ctx, "Failed to record image under platform manifest digest",
-				slog.String("digest", actual.String()), slog.Any("err", err))
+	if actualDigest != nil {
+		if err := s.writeRecord(*actualDigest, rec); err != nil {
+			slog.WarnContext(ctx, "Failed to rewrite platform manifest record after unpack",
+				slog.String("digest", actualDigest.String()), slog.Any("err", err))
+		}
+	}
+
+	// Never return LayerDirs that are not on disk right now: a vanished
+	// dir fails the pull into a clean RPC retry instead of a bundle spec
+	// naming a missing lowerdir. Ordered after the rewrite so even this
+	// failure path leaves the surviving layers referenced.
+	for _, dir := range layerDirs {
+		if _, err := os.Stat(filepath.Join(dir, layerFSDirName)); err != nil {
+			return nil, fmt.Errorf("layer dir vanished during pull (evicted?): %w", err)
 		}
 	}
 
@@ -384,8 +552,16 @@ func (s *Store) pull(ctx context.Context, parsedRef name.Reference, digest v1.Ha
 // collapsing concurrent requests for the same layer across images.
 func (s *Store) ensureLayer(ctx context.Context, diffID v1.Hash, layer v1.Layer) (string, error) {
 	dir := s.layerDir(diffID)
-	_, err, _ := s.layerSF.Do(diffID.String(), func() (any, error) {
+	_, err, _ := s.layerSF.Do(layerFlightKey(diffID.Hex), func() (any, error) {
 		if _, err := os.Stat(filepath.Join(dir, layerFSDirName)); err == nil {
+			// Refresh the dir mtime inside the flight: retireLayer re-checks
+			// the mtime in this same flight, so a layer reused here can
+			// never be renamed away between this stat and the image record
+			// that will re-reference it.
+			now := time.Now()
+			if err := os.Chtimes(dir, now, now); err != nil {
+				slog.WarnContext(ctx, "Failed to refresh layer mtime on reuse", slog.String("diffid", diffID.String()), slog.Any("err", err))
+			}
 			return nil, nil
 		}
 		return nil, s.unpackLayerToPool(ctx, diffID, layer)
@@ -430,9 +606,18 @@ func (s *Store) unpackLayerToPool(ctx context.Context, diffID v1.Hash, layer v1.
 	}
 	defer root.Close()
 
-	wh, err := unpackLayer(ctx, rc, root)
+	// The uncompressed tar stream is the recorded size: an optimistic
+	// estimate (tar framing vs. block rounding), cheap to capture here.
+	cr := &countingReader{r: rc}
+	wh, err := unpackLayer(ctx, cr, root)
 	if err != nil {
 		return err
+	}
+	// Non-fatal: a missing size file is recovered by layerSize's backfill,
+	// so a metadata write must not discard a successful unpack.
+	if err := os.WriteFile(filepath.Join(tmp, layerSizeFileName), []byte(strconv.FormatInt(cr.n, 10)+"\n"), 0o600); err != nil {
+		slog.WarnContext(ctx, "Failed to record layer size; will backfill lazily",
+			slog.String("diffid", diffID.String()), slog.Any("err", err))
 	}
 
 	whBytes, err := json.Marshal(wh)

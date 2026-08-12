@@ -40,6 +40,7 @@ ATE_DEMOS=()
 
 # Include demos.
 source "${ROOT}"/hack/install-demo-counter.sh
+source "${ROOT}"/hack/install-demo-egress.sh
 source "${ROOT}"/hack/install-demo-sandbox.sh
 source "${ROOT}"/hack/install-demo-claude-code-multiplex.sh
 source "${ROOT}"/hack/install-demo-multi-template.sh
@@ -62,9 +63,11 @@ function usage() {
   echo "Overall infrastructure (all infrastructure components):"
   echo ""
   echo "  --deploy-ate-system                    Deploy core system (CRDs, atelet, apiserver)"
+  echo "  --setup-csi                            Setup CSI hostpath and NFS drivers (Kind only)"
   echo "  --delete-ate-system                    Delete core system"
   echo "  --delete-all                           Delete core system and all registered demos"
-  echo "  --ateapi-client-auth=cert|token               Select how in-cluster clients authenticate to ateapi for --deploy-ate-system (default: cert; the server always accepts both)"
+  echo "  --ateapi-client-auth=cert|token        Select how in-cluster clients authenticate to ateapi for --deploy-ate-system (default: cert; the server always accepts both)"
+  echo "  --atenet-router=envoy|agentgateway     Select the atenet router dataplane (default: envoy)"
   echo ""
   echo "Infrastructure components:"
   echo ""
@@ -76,7 +79,8 @@ function usage() {
   echo "called automatically by --deploy-ate-system):"
   echo ""
   echo "  --create-jwt-authority-pool-secret     Create JWT authority pool secret"
-  echo "  --create-session-id-ca-pool-secret     Create session ID CA pool secret"
+  echo "  --create-actor-id-ca-pool-secret       Create actor ID CA pool secret"
+  echo "  --create-actor-id-ca-certs-secret      Create actor ID CA certs secret"
   echo "  --create-podcertificate-controller-cas Create podcertificate controller CAs"
   echo "  --create-valkey-ca-certs-secret        Create Valkey CA certs secret"
   echo "  --create-api-server-env-vars           Create ate-api-server env vars"
@@ -86,6 +90,8 @@ function usage() {
   echo "  --deploy-benchmarks                    Deploy workloads + locust load test stack"
   echo "  --delete-benchmarks                    Delete the locust stack and workloads"
   echo "  --benchmark-worker-count N             Number of WorkerPool replicas (default: 1)"
+  echo "  --benchmark-sandbox-class CLASS        Sandbox runtime for the benchmark WorkerPool: gvisor | microvm (default: gvisor)."
+  echo "                                         microvm requires hack/install-microvm-deps.sh --install to have run."
   echo ""
   for demo_name in "${ATE_DEMOS[@]}"; do
     echo "Demo: ${demo_name}"
@@ -145,9 +151,38 @@ ateapi_client_auth() {
   esac
 }
 
+atenet_router() {
+  case "${ATE_ATENET_ROUTER:-envoy}" in
+    envoy|agentgateway)
+      echo "${ATE_ATENET_ROUTER:-envoy}"
+      ;;
+    *)
+      echo "Error: --atenet-router must be envoy or agentgateway, got '${ATE_ATENET_ROUTER}'" >&2
+      exit 1
+      ;;
+  esac
+}
+
 render_ate_system_manifests() {
   local client_auth=""
+  local router=""
   client_auth="$(ateapi_client_auth)"
+  router="$(atenet_router)"
+
+  if [[ "${router}" == "agentgateway" ]]; then
+    local overlay="manifests/ate-install/agentgateway"
+    if [[ "${client_auth}" == "token" ]]; then
+      overlay="manifests/ate-install/agentgateway-token-client"
+    fi
+    if [[ "${ATE_INSTALL_KIND:-false}" == "true" ]]; then
+      overlay="manifests/ate-install/kind-agentgateway"
+      if [[ "${client_auth}" == "token" ]]; then
+        overlay="manifests/ate-install/kind-agentgateway-token-client"
+      fi
+    fi
+    kubectl kustomize "${overlay}" --load-restrictor LoadRestrictionsNone | run_ko resolve -f -
+    return
+  fi
 
   if [[ "${client_auth}" == "token" ]]; then
     local overlay="manifests/ate-install/token-client"
@@ -167,11 +202,37 @@ render_ate_system_manifests() {
   fi
 }
 
+render_atenet_router_manifest() {
+  if [[ "$(atenet_router)" == "agentgateway" ]]; then
+    kubectl kustomize manifests/ate-install/agentgateway-router \
+      --load-restrictor LoadRestrictionsNone | run_ko resolve -f -
+  else
+    run_ko resolve -f manifests/ate-install/atenet-router.yaml
+  fi
+}
+
+# Apply the ate-otel-config ConfigMap that every control plane component reads
+# via envFrom. The full install gets it through render_ate_system_manifests, but
+# the targeted single-component redeploys below apply raw manifests with no
+# Kustomize, so they have to select the environment's copy themselves. Applying
+# the base file unconditionally would overwrite a kind cluster's ConfigMap with
+# the GKE endpoint and silently break telemetry for every component at once.
+apply_otel_config() {
+  if [[ "${ATE_INSTALL_KIND:-false}" == "true" ]]; then
+    run_kubectl apply -f manifests/ate-install/kind/ate-otel-config.yaml
+  else
+    run_kubectl apply -f manifests/ate-install/ate-otel-config.yaml
+  fi
+}
+
 # Extract a CA pool secret's RootCertificateDER and emit it as a PEM certificate.
+# The namespace defaults to the podcertificate controller's, where the signer
+# CAs live; the actor-identity CA pool is in ate-system, so it passes its own.
 ca_pool_root_pem() {
   local secret="$1"
+  local namespace="${2:-podcertificate-controller-system}"
   local pool_json=""
-  pool_json=$(run_kubectl get secret -n podcertificate-controller-system "${secret}" -o jsonpath='{.data.pool}' | base64 --decode)
+  pool_json=$(run_kubectl get secret -n "${namespace}" "${secret}" -o jsonpath='{.data.pool}' | base64 --decode)
   local der_base64=""
   der_base64=$(echo "${pool_json}" | grep -o '"RootCertificateDER":"[^"]*' | sed 's/"RootCertificateDER":"//')
   echo "${der_base64}" | base64 --decode | openssl x509 -inform der -outform pem
@@ -209,16 +270,42 @@ create_jwt_authority_pool_secret() {
   log_step "create_jwt_authority_pool_secret"
   run_kubectl_ate admin make-jwt-pool \
     --key-id="1" \
-    --name="session-id-jwt-pool" \
+    --name="actor-id-jwt-pool" \
     --secret-namespace=ate-system
 }
 
-create_session_id_ca_pool_secret() {
-  log_step "create_session_id_ca_pool_secret"
+create_actor_id_ca_pool_secret() {
+  log_step "create_actor_id_ca_pool_secret"
   run_kubectl_ate admin make-ca-pool \
     --ca-id="1" \
-    --name="session-id-ca-pool" \
+    --name="actor-id-ca-pool" \
     --secret-namespace=ate-system
+}
+
+# The egress gateway has to verify actor client certificates, which means it
+# needs the actor-identity CA root. actor-id-ca-pool Secret containts both
+# root and CA signing key. This derives a cert-only Secret instead, following
+# exactly the pattern create_valkey_ca_certs_secret already uses for the
+# signer roots.
+#
+# TODO(liorlieberman): should this be published as ClusterTrustBundles?
+create_actor_id_ca_certs_secret() {
+  log_step "create_actor_id_ca_certs_secret"
+  # Extract into its own variable first: errexit cannot see a substitution fail
+  # inside the create-secret argument list, which would silently produce an
+  # empty trust bundle and an egress gateway that rejects every actor.
+  local actorid_root=""
+  actorid_root=$(ca_pool_root_pem actor-id-ca-pool ate-system)
+  if [[ -z "${actorid_root}" ]]; then
+    echo "error: failed to extract the actor-identity CA root for actor-id-ca-certs" >&2
+    return 1
+  fi
+
+  run_kubectl create secret generic actor-id-ca-certs \
+    --from-literal=ca.crt="${actorid_root}" \
+    -n ate-system \
+    --dry-run=client -o yaml \
+    | run_kubectl apply -f -
 }
 
 create_podcertificate_controller_cas() {
@@ -286,9 +373,29 @@ deploy_crds() {
   run_ko apply -f manifests/ate-install/generated
 }
 
+setup_csi() {
+  log_step "setup_csi"
+  "${ROOT}/hack/setup-csi-hostpath-kind.sh"
+  "${ROOT}/hack/setup-csi-nfs-kind.sh"
+}
+
 deploy_ate_system() {
   log_step "deploy_ate_system"
-  ensure_crds
+  # Ensure namespace exists before applying RBAC or CRDs
+  run_kubectl apply -f manifests/ate-install/ate-system-namespace.yaml \
+    && run_kubectl wait --for=jsonpath='{.status.phase}'=Active namespace/ate-system --timeout=60s
+
+  # Not ensure_crds: its existence check skips upgrades, stranding stale CRD
+  # schemas and RBAC (role.yaml has no other apply path).
+  deploy_crds
+
+  if [[ "${SETUP_CSI:-false}" == "true" ]]; then
+    if [[ "${ATE_INSTALL_KIND:-false}" == "true" ]]; then
+      setup_csi
+    else
+      echo "Warning: CSI setup is only supported for Kind local installations. Skipping."
+    fi
+  fi
 
   # Enforce per-class SandboxConfig asset requirements (applied before any
   # SandboxConfig so the defaults below are validated too).
@@ -300,9 +407,13 @@ deploy_ate_system() {
   # they name their own SandboxConfig.
   run_kubectl apply -f manifests/ate-install/sandboxconfig-gvisor.yaml
 
-  # Ensure namespace exists
-  run_kubectl apply -f manifests/ate-install/ate-system-namespace.yaml \
-    && run_kubectl wait --for=jsonpath='{.status.phase}'=Active namespace/ate-system --timeout=60s
+  # Ahead of the bundle below, for the same reason as the namespace: every
+  # workload pulls this ConfigMap in via envFrom, and a container whose envFrom
+  # target is missing will not start. The bundle contains it, but a raw
+  # directory apply orders by filename, so ate-api-server.yaml and
+  # ate-controller.yaml would otherwise be created before it and sit in
+  # CreateContainerConfigError until it caught up.
+  apply_otel_config
 
   ensure_apiserver_prerequisites
 
@@ -327,6 +438,7 @@ deploy_ate_system() {
   run_kubectl rollout status deployment/ate-api-server -n ate-system --timeout=120s
   run_kubectl rollout status deployment/ate-controller -n ate-system --timeout=120s
   run_kubectl rollout status deployment/atenet-router -n ate-system --timeout=120s
+  run_kubectl rollout status deployment/atenet-egress -n ate-system --timeout=120s
   run_kubectl rollout status statefulset/valkey-cluster -n ate-system --timeout=120s
   run_kubectl rollout status daemonset/atelet -n ate-system --timeout=120s
 }
@@ -334,10 +446,13 @@ deploy_ate_system() {
 # Ensure secrets and configmaps required by ate-apiserver
 ensure_apiserver_prerequisites() {
   log_step "ensure_apiserver_prerequisites"
-  run_kubectl get secret -n ate-system session-id-jwt-pool >/dev/null 2>&1 \
+  run_kubectl get secret -n ate-system actor-id-jwt-pool >/dev/null 2>&1 \
     || create_jwt_authority_pool_secret
-  run_kubectl get secret -n ate-system session-id-ca-pool >/dev/null 2>&1 \
-    || create_session_id_ca_pool_secret
+  run_kubectl get secret -n ate-system actor-id-ca-pool >/dev/null 2>&1 \
+    || create_actor_id_ca_pool_secret
+  # Derived from actor-id-ca-pool above, so it must come after it.
+  run_kubectl get secret -n ate-system actor-id-ca-certs >/dev/null 2>&1 \
+    || create_actor_id_ca_certs_secret
   run_kubectl get secret -n podcertificate-controller-system service-dns-ca-pool >/dev/null 2>&1 \
     || create_podcertificate_controller_cas
   run_kubectl get secret -n ate-system valkey-ca-certs >/dev/null 2>&1 \
@@ -356,6 +471,7 @@ deploy_ate_apiserver() {
     && run_kubectl wait --for=jsonpath='{.status.phase}'=Active namespace/ate-system --timeout=60s
 
   ensure_apiserver_prerequisites
+  apply_otel_config
 
   run_ko apply -f manifests/ate-install/ate-api-server.yaml
   run_kubectl rollout status deployment/ate-api-server -n ate-system --timeout=120s
@@ -368,6 +484,8 @@ deploy_atelet() {
   # Ensure namespace exists
   run_kubectl apply -f manifests/ate-install/ate-system-namespace.yaml \
     && run_kubectl wait --for=jsonpath='{.status.phase}'=Active namespace/ate-system --timeout=60s
+
+  apply_otel_config
 
   local manifest=""
   if [[ "${ATE_INSTALL_KIND:-false}" == "true" ]]; then
@@ -389,12 +507,16 @@ deploy_atenet() {
   run_kubectl apply -f manifests/ate-install/ate-system-namespace.yaml \
     && run_kubectl wait --for=jsonpath='{.status.phase}'=Active namespace/ate-system --timeout=60s
 
-  run_ko apply -f manifests/ate-install/atenet-router.yaml
+  apply_otel_config
+
+  local router_manifest=""
+  router_manifest="$(render_atenet_router_manifest)"
+  echo "${router_manifest}" | run_kubectl apply -f -
+
+  run_ko apply -f manifests/ate-install/atenet-egress.yaml
   run_ko apply -f manifests/ate-install/atenet-dns.yaml
   run_kubectl rollout status deployment/atenet-router -n ate-system --timeout=120s
-  # The Deployment in atenet-dns.yaml is named "dns"; every other resource in
-  # that file is "atenet-dns". Waiting on the filename rather than the actual
-  # Deployment made this step fail with NotFound on every successful deploy.
+  run_kubectl rollout status deployment/atenet-egress -n ate-system --timeout=120s
   run_kubectl rollout status deployment/dns -n ate-system --timeout=120s
 }
 
@@ -503,22 +625,41 @@ delete_ate_system() {
   else
     run_kubectl delete --ignore-not-found -f manifests/ate-install
   fi
+  run_kubectl delete --ignore-not-found \
+    -f manifests/ate-install/components/agentgateway/configmap.yaml
   run_kubectl delete --ignore-not-found -f manifests/ate-install/generated
 }
 
 delete_atenet() {
   log_step "delete_atenet"
   run_kubectl delete --ignore-not-found -f manifests/ate-install/atenet-router.yaml
+  run_kubectl delete --ignore-not-found \
+    -f manifests/ate-install/components/agentgateway/configmap.yaml
+  run_kubectl delete --ignore-not-found -f manifests/ate-install/atenet-egress.yaml
+  run_kubectl delete --ignore-not-found -f manifests/ate-install/atenet-dns.yaml
 }
 
 deploy_benchmarks() {
-  log_step "deploy_benchmarks (worker_count=${BENCHMARK_WORKER_COUNT})"
-  "${ROOT}/benchmarking/deploy_locust.sh" --deploy --worker-count "${BENCHMARK_WORKER_COUNT}"
+  log_step "deploy_benchmarks (worker_count=${BENCHMARK_WORKER_COUNT}, sandbox_class=${BENCHMARK_SANDBOX_CLASS})"
+  # The microvm SandboxConfig lives outside --deploy-ate-system's default set
+  # (which only installs gvisor-default); the workloads deploy references it
+  # by name and would fail if we skipped this.
+  if [[ "${BENCHMARK_SANDBOX_CLASS}" == "microvm" ]]; then
+    "${ROOT}/hack/install-microvm-deps.sh" --install
+  fi
+  "${ROOT}/benchmarking/deploy_locust.sh" \
+    --deploy \
+    --worker-count "${BENCHMARK_WORKER_COUNT}" \
+    --sandbox-class "${BENCHMARK_SANDBOX_CLASS}"
 }
 
 delete_benchmarks() {
-  log_step "delete_benchmarks"
+  log_step "delete_benchmarks (sandbox_class=${BENCHMARK_SANDBOX_CLASS})"
   "${ROOT}/benchmarking/deploy_locust.sh" --delete
+  # only tear down the microvm SandboxConfig if the caller opted into microvm.
+  if [[ "${BENCHMARK_SANDBOX_CLASS}" == "microvm" ]]; then
+    "${ROOT}/hack/install-microvm-deps.sh" --delete
+  fi
 }
 
 delete_all() {
@@ -550,7 +691,9 @@ done
 # flag they configure (e.g. --benchmark-worker-count before/after
 # --deploy-benchmarks). The dispatch loop below also accepts these flags but
 # treats them as no-ops since the value is already captured here.
+SETUP_CSI=false
 BENCHMARK_WORKER_COUNT=1
+BENCHMARK_SANDBOX_CLASS=gvisor
 prescan_args=("$@")
 for ((i = 0; i < ${#prescan_args[@]}; i++)); do
   case "${prescan_args[i]}" in
@@ -562,14 +705,43 @@ for ((i = 0; i < ${#prescan_args[@]}; i++)); do
       fi
       ATE_ATEAPI_CLIENT_AUTH="${prescan_args[$((i + 1))]}"
       ;;
+    --atenet-router=*) ATE_ATENET_ROUTER="${prescan_args[i]#*=}" ;;
+    --atenet-router)
+      if (( i + 1 >= ${#prescan_args[@]} )); then
+        echo "Error: --atenet-router requires envoy or agentgateway" >&2
+        exit 1
+      fi
+      ATE_ATENET_ROUTER="${prescan_args[$((i + 1))]}"
+      ;;
     --benchmark-worker-count)
       BENCHMARK_WORKER_COUNT="${prescan_args[i+1]:-1}"
       ;;
     --benchmark-worker-count=*)
       BENCHMARK_WORKER_COUNT="${prescan_args[i]#*=}"
       ;;
+    --benchmark-sandbox-class)
+      if (( i + 1 >= ${#prescan_args[@]} )); then
+        echo "Error: --benchmark-sandbox-class requires gvisor or microvm" >&2
+        exit 1
+      fi
+      BENCHMARK_SANDBOX_CLASS="${prescan_args[$((i + 1))]}"
+      ;;
+    --benchmark-sandbox-class=*)
+      BENCHMARK_SANDBOX_CLASS="${prescan_args[i]#*=}"
+      ;;
+    --setup-csi)
+      SETUP_CSI=true
+      ;;
   esac
 done
+atenet_router >/dev/null
+case "${BENCHMARK_SANDBOX_CLASS}" in
+  gvisor|microvm) ;;
+  *)
+    echo "Error: --benchmark-sandbox-class must be gvisor or microvm, got '${BENCHMARK_SANDBOX_CLASS}'" >&2
+    exit 1
+    ;;
+esac
 
 while [[ "$#" -gt 0 ]]; do
   # Run ${demo}_cmdline if it exists. If it returns 0, then we successfully
@@ -594,8 +766,25 @@ while [[ "$#" -gt 0 ]]; do
       fi
       ATE_ATEAPI_CLIENT_AUTH="$1"
       ;;
+    --atenet-router=*) ATE_ATENET_ROUTER="${1#*=}" ;;
+    --atenet-router)
+      shift
+      if [[ "$#" -eq 0 ]]; then
+        echo "Error: --atenet-router requires envoy or agentgateway" >&2
+        exit 1
+      fi
+      ATE_ATENET_ROUTER="$1"
+      ;;
 
     --deploy-ate-system) deploy_ate_system ;;
+    --setup-csi)
+      if [[ "${ATE_INSTALL_KIND:-false}" == "true" ]]; then
+        ensure_crds
+        setup_csi
+      else
+        echo "Warning: CSI setup is only supported for Kind local installations. Skipping."
+      fi
+      ;;
     --delete-ate-system) delete_ate_system ;;
     --delete-all) delete_all ;;
 
@@ -611,9 +800,12 @@ while [[ "$#" -gt 0 ]]; do
     # dispatch loop's `*)` unknown-option branch doesn't reject it.
     --benchmark-worker-count) shift ;;
     --benchmark-worker-count=*) ;;
+    --benchmark-sandbox-class) shift ;;
+    --benchmark-sandbox-class=*) ;;
 
     --create-jwt-authority-pool-secret) create_jwt_authority_pool_secret ;;
-    --create-session-id-ca-pool-secret) create_session_id_ca_pool_secret ;;
+    --create-actor-id-ca-pool-secret) create_actor_id_ca_pool_secret ;;
+    --create-actor-id-ca-certs-secret) create_actor_id_ca_certs_secret ;;
     --create-podcertificate-controller-cas) create_podcertificate_controller_cas ;;
     --create-valkey-ca-certs-secret) create_valkey_ca_certs_secret ;;
     --create-api-server-env-vars) create_api_server_env_vars ;;

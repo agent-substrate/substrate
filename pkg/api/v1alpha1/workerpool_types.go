@@ -51,6 +51,8 @@ type WorkerPoolPodTemplate struct {
 	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
 }
 
+// +kubebuilder:validation:XValidation:rule="!has(self.sandboxClass) || self.sandboxClass == 'gvisor' || !has(self.template) || !has(self.template.resources) || !((has(self.template.resources.limits) && 'nvidia.com/gpu' in self.template.resources.limits) || (has(self.template.resources.requests) && 'nvidia.com/gpu' in self.template.resources.requests))",message="nvidia.com/gpu is only supported when sandboxClass is 'gvisor'"
+// +kubebuilder:validation:XValidation:rule="!has(self.template) || !has(self.template.resources) || !has(self.template.resources.requests) || !('nvidia.com/gpu' in self.template.resources.requests) || (has(self.template.resources.limits) && 'nvidia.com/gpu' in self.template.resources.limits)",message="nvidia.com/gpu must be set in limits: Kubernetes does not admit a request for an extended resource without a matching limit"
 type WorkerPoolSpec struct {
 	// Replicas is the number of worker pods to run.
 	// +required
@@ -86,17 +88,6 @@ type WorkerPoolSpec struct {
 	// SandboxClass is used.
 	// +optional
 	SandboxConfigName string `json:"sandboxConfigName,omitempty"`
-
-	// TerminationGracePeriodSeconds is the termination grace period applied to
-	// this pool's worker pods. On eviction, ateom traps SIGTERM and forwards it
-	// to the actor so it can save state and exit cleanly before the kubelet
-	// sends SIGKILL. Tune this to the maximum time your actors need to shut
-	// down gracefully. Defaults to 300 (5 minutes).
-	//
-	// +optional
-	// +kubebuilder:validation:Minimum=1
-	// +kubebuilder:default=300
-	TerminationGracePeriodSeconds *int32 `json:"terminationGracePeriodSeconds,omitempty"`
 }
 
 type WorkerPoolStatus struct {
@@ -104,6 +95,11 @@ type WorkerPoolStatus struct {
 	// +kubebuilder:validation:Minimum=0
 	// +optional
 	Replicas int32 `json:"replicas"`
+
+	// ReadyReplicas is the number of ready worker pods.
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	ReadyReplicas int32 `json:"readyReplicas,omitempty"`
 
 	// Selector is the label selector for the worker pods.
 	// +optional
@@ -119,6 +115,7 @@ type WorkerPoolStatus struct {
 // +kubebuilder:subresource:scale:specpath=.spec.replicas,statuspath=.status.replicas,selectorpath=.status.selector
 // +kubebuilder:printcolumn:name="Desired",type=integer,JSONPath=`.spec.replicas`
 // +kubebuilder:printcolumn:name="Replicas",type=integer,JSONPath=`.status.replicas`
+// +kubebuilder:printcolumn:name="Ready",type=integer,JSONPath=`.status.readyReplicas`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 type WorkerPool struct {
 	metav1.TypeMeta `json:",inline"`

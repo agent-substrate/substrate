@@ -36,6 +36,9 @@ spec:
         name: ate_workerpool_workers
         selector:
           matchLabels:
+            # The namespace is required: pool names are unique per namespace, and
+            # the counter demo ships a WorkerPool named "counter" too.
+            ate_workerpool_namespace: ate-demo-autoscaled-workerpool
             ate_workerpool_name: counter
             ate_worker_state: assigned
       target:

@@ -40,6 +40,30 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+// restoreMemMode picks how cloud-hypervisor should load guest RAM, from what the VMM
+// just told us about itself over vmm.ping.
+//
+// OnDemand is what we want: it faults pages in as the guest touches them, so an idle
+// restored actor holds its working set rather than its whole snapshot — on the counter
+// demo, 16MiB against 158MiB. Eager gives that up, reading every populated extent up
+// front.
+//
+// It is still the right choice on a VMM that prefaults, where OnDemand is not merely
+// wasteful but unusable: the prefault storm starves the guest and its readiness probe
+// never passes.
+func restoreMemMode(ctx context.Context, info ch.VMMInfo) string {
+	if !info.PrefaultsUnconditionally() {
+		return ch.MemRestoreOnDemand
+	}
+	if info.Version == "" && info.BuildVersion == "" {
+		// Unknown version: eager works everywhere, so prefer a bigger idle footprint
+		// over an actor that cannot start. Say so, because that cost is invisible.
+		slog.WarnContext(ctx, "cloud-hypervisor did not report a version; restoring eagerly",
+			slog.String("mode", ch.MemRestoreEager))
+	}
+	return ch.MemRestoreEager
+}
+
 // RestoreWorkload brings the actor back from a snapshot, on a possibly different
 // pod. What that means depends on the scope the snapshot was taken with:
 //
@@ -47,12 +71,20 @@ import (
 //     (restoreFullScope).
 //   - DATA: there is no guest to resume — re-materialize the durable-dir volumes and
 //     cold-boot the actor, which starts its containers afresh from the OCI image.
+//   - DATA_ON_GOLDEN: atelet staged a combined set into RestoreStateDir — the
+//     guest files (memory + VM state) from the template's golden snapshot plus
+//     the durable-dir tar from the actor's own snapshot — so this restores
+//     exactly like FULL: the golden guest resumes over the actor's data.
 //
 // Contract with atelet: the snapshot's files have been downloaded to RestoreStateDir,
 // and the durable-dir volume directories re-created (empty).
-func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.RestoreWorkloadRequest) (*ateompb.RestoreWorkloadResponse, error) {
+func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.RestoreWorkloadRequest) (resp *ateompb.RestoreWorkloadResponse, retErr error) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
+
+	if err := s.deactivateActorNetworking(ctx); err != nil {
+		return nil, err
+	}
 
 	p := actorBootParams{
 		actorRef:     resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()},
@@ -61,12 +93,26 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 		templateName: req.GetActorTemplateName(),
 		containers:   req.GetSpec().GetContainers(),
 		assetPaths:   req.GetRuntimeAssetPaths(),
+
+		egressGateway: req.GetEgressGateway(),
 	}
 	restoreDir := ateompath.RestoreStateDir(p.actorUID)
 	durableDir := ateompath.DurableDirVolumeMountsDir(p.actorUID)
 	tStart := time.Now()
 
 	s.actorLogger.EmitLifecycleLog("Actor restoring", p.actorRef, p.actorUID, p.templateNS, p.templateName)
+
+	// Same as RunWorkload: retain before the restore, drop again if it fails. A
+	// Full-scope resume reaches "executing" in a different way than a cold boot
+	// does, but the window between accepting the actor and serving it is the same
+	// window, and a poll landing in it should name the actor either way.
+	attribution := p.actorAttribution()
+	s.activeActor.Store(&attribution)
+	defer func() {
+		if retErr != nil {
+			s.activeActor.Store(nil)
+		}
+	}()
 
 	// Restore the durable-dir volumes before anything can observe them: for Full
 	// that means before the share's virtiofsd starts, for Data before the workload
@@ -79,7 +125,12 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	}
 
 	switch scope := req.GetScope(); scope {
-	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL:
+	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL,
+		ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA_ON_GOLDEN:
+		// DATA_ON_GOLDEN: the restore dir holds the golden snapshot's guest
+		// files, and the untar above re-materialized the ACTOR's durable-dir
+		// data, so resuming the golden guest picks up the actor's data through
+		// the durable virtio-fs share.
 		if err := s.restoreFullScope(ctx, p, restoreDir, tStart); err != nil {
 			return nil, err
 		}
@@ -87,7 +138,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 		// A Data snapshot holds no guest state, so this is a cold boot that
 		// happens to start with the volumes already populated. readyz gating comes
 		// with the cold-boot path, so the actor is serving when we return.
-		if err := s.coldBootActor(ctx, p); err != nil {
+		if err := s.coldBootActorRetrying(ctx, p); err != nil {
 			return nil, err
 		}
 		slog.InfoContext(ctx, "Actor restored (durable-dir volumes, cold boot)",
@@ -117,6 +168,10 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 	templateNS, templateName := p.templateNS, p.templateName
 
 	rr := s.resolveRuntime(p.assetPaths)
+	egress, err := s.prepareActorEgress(ctx, p.actorUID, p.egressGateway)
+	if err != nil {
+		return err
+	}
 	kata.CleanupSandboxState(ctx, actorUID)
 
 	// Repoint the snapshot's vsock socket to this actor's VMDir (the disk + kernel
@@ -187,13 +242,19 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 		InteriorNetNS:      s.interiorNetNS,
 		HostVethHWAddr:     hostVethHWAddr,
 		SweepInteriorLinks: true,
+		EgressRedirectPort: s.egressRedirectPort(p.egressGateway != nil),
 	}); err != nil {
 		return fmt.Errorf("while setting up actor network: %w", err)
 	}
 	defer func() {
 		if retErr != nil {
-			if cleanupErr := ateomnet.CleanupActorNetwork(ctx, s.interiorNetNS); cleanupErr != nil {
-				slog.WarnContext(ctx, "Failed to clean up actor network after Restore failure", slog.Any("err", cleanupErr))
+			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+			defer cancel()
+			if cleanupErr := s.deactivateActorNetworking(cleanupCtx); cleanupErr != nil {
+				slog.WarnContext(cleanupCtx, "Failed to deactivate actor networking after Restore failure", slog.Any("err", cleanupErr))
+			}
+			if cleanupErr := ateomnet.CleanupActorNetwork(cleanupCtx, s.interiorNetNS); cleanupErr != nil {
+				slog.WarnContext(cleanupCtx, "Failed to clean up actor network after Restore failure", slog.Any("err", cleanupErr))
 			}
 			// Detach any bundle rootfs overlays mounted by buildActorContainers
 			// before the failure, mirroring teardownActor's cleanup.
@@ -240,14 +301,20 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 			_ = chCmd.Process.Kill()
 		}
 	}()
-	// OnDemand (userfaultfd) memory restore: ~75ms vs ~1.8s eager, and it keeps the
-	// memfd SPARSE so the next suspend isn't the eager-copy-densified full-RAM scan.
-	// CH's OnDemand snapshot alone would be INCOMPLETE (it writes only faulted pages,
-	// dropping the un-faulted ones it demand-pages from this source) — so
-	// CheckpointWorkload overlays CH's delta onto this source (restoreSourceDir) to
-	// rebuild a complete snapshot. CH demand-pages from restoreDir for the VM's whole
-	// lifetime, so it must persist until teardown (atelet keeps it until reset).
-	if err := client.RestoreWithNetFDs(ctx, restoreDir, restoredNets, "OnDemand"); err != nil {
+	// How guest RAM comes back depends on the VMM (see restoreMemMode), and the rest
+	// of the actor's lifecycle follows from that choice:
+	//
+	//   - OnDemand: cloud-hypervisor demand-pages from restoreDir for the VM's whole
+	//     lifetime, so it must stay put, and the snapshot it writes later holds only
+	//     the pages faulted in meanwhile — CheckpointWorkload overlays that delta onto
+	//     this source to rebuild a complete one.
+	//   - Eager: every populated extent is read here and now. Nothing pages from the
+	//     source afterwards and nothing merges against it, so it is dropped below and
+	//     the next snapshot stands on its own.
+	memMode := restoreMemMode(ctx, client.Info())
+	slog.InfoContext(ctx, "restoring guest memory",
+		slog.String("mode", memMode), slog.String("vmm_version", client.Info().Version))
+	if err := client.RestoreWithNetFDs(ctx, restoreDir, restoredNets, memMode); err != nil {
 		return fmt.Errorf("while restoring VM with net FDs: %w", err)
 	}
 	if err := client.Resume(ctx); err != nil {
@@ -259,9 +326,25 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 		return fmt.Errorf("while waiting for container readyz: %w", err)
 	}
 
+	// An eager restore has read the whole snapshot into guest memory, and nothing
+	// merges against it afterwards, so the staged copy is dead weight from here on —
+	// a second ~160MiB per running actor on top of the checkpoint it will write.
+	// Drop the memory image but keep the directory: atelet re-stages it wholesale
+	// before any later restore, and the small files beside it stay cheap to keep.
+	if memMode == ch.MemRestoreEager {
+		staged := filepath.Join(restoreDir, "memory-ranges")
+		if err := os.Remove(staged); err != nil && !os.IsNotExist(err) {
+			// Not fatal: it only costs disk until the actor is torn down.
+			slog.WarnContext(ctx, "could not drop the staged memory image", "error", err)
+		} else {
+			slog.InfoContext(ctx, "dropped the staged memory image (eager restore needs no merge base)")
+		}
+	}
+
 	ra := &runningActor{
 		chCmd: chCmd, vfsdCmd: vfsdCmd, durableVfsdCmd: durableVfsdCmd,
 		apiSocket: apiSocket, baseID: srcID, restoreSourceDir: restoreDir,
+		snapshotIsSelfContained: memMode == ch.MemRestoreEager,
 	}
 
 	// Re-attach stdout/stderr forwarding for each container: the restored guest's
@@ -281,6 +364,9 @@ func (s *AteomService) restoreFullScope(ctx context.Context, p actorBootParams, 
 		}
 	}
 
+	if err := s.activateActorNetworking(p.actorRef.Atespace, p.actorRef.Name, egress); err != nil {
+		return err
+	}
 	s.running[actorUID] = ra
 	slog.InfoContext(ctx, "Actor restored (overlay rootfs)",
 		slog.String("id", actorUID), slog.Duration("total", time.Since(tStart)))

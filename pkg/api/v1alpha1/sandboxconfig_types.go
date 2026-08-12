@@ -67,12 +67,31 @@ type SandboxConfigSpec struct {
 	// +optional
 	Default bool `json:"default,omitempty"`
 
+	// PauseImage is the container image used as the root sandbox container.
+	// It holds the sandbox's namespaces and runs no workload code, so it is an
+	// implementation detail of the sandbox rather than something actor authors
+	// choose. It is captured in the snapshot manifest alongside the sandbox
+	// binaries, so a restore always re-creates the sandbox from the same image
+	// the snapshot was taken with.
+	//
+	// Typically, set it to [1] for on-gcp, and [2] for off-gcp
+	//
+	//   - [1] gcr.io/gke-release/pause@sha256:bcbd57ba5653580ec647b16d8163cdd1112df3609129b01f912a8032e48265da
+	//   - [2] registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4
+	//
+	// +required
+	// +kubebuilder:validation:XValidation:rule="self.contains('@')",message="All images must be pinned (changing the image invalidates snapshots)"
+	PauseImage string `json:"pauseImage"`
+
 	// Assets is the set of files atelet fetches for this runtime, keyed first by
 	// architecture (GOARCH, e.g. "amd64", "arm64") and then by asset name. The
 	// asset names are interpreted by the sandbox backend: gVisor expects a
-	// "runsc" asset; a micro-VM backend expects several (e.g. "cloud-hypervisor",
-	// "kata-kernel", "kata-image"). The schema is intentionally generic;
-	// per-class requirements are enforced by a ValidatingAdmissionPolicy.
+	// "gvisor" asset (the release's gvisor.tar.bz2, which atelet extracts so
+	// the gvisor-bin/ helpers sit next to runsc; a legacy bare-binary "runsc"
+	// asset is still accepted); a micro-VM backend expects several (e.g.
+	// "cloud-hypervisor", "kata-kernel", "kata-image"). The schema is
+	// intentionally generic; per-class requirements are enforced by a
+	// ValidatingAdmissionPolicy.
 	//
 	// +optional
 	Assets map[string]map[string]AssetFile `json:"assets,omitempty"`

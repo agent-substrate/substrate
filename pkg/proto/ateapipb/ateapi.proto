@@ -12,12 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-// TODO: Here and everywhere, s/Session/Actor to align with the glossary.
-
 syntax = "proto3";
 
 package ateapi;
 
+import "google/protobuf/field_mask.proto";
 import "google/protobuf/timestamp.proto";
 
 option go_package = "github.com/agent-substrate/substrate/pkg/proto/ateapipb";
@@ -31,9 +30,11 @@ service Control {
   rpc CreateActor(CreateActorRequest) returns (Actor) {}
 
   // Update mutable fields on an existing Actor.
-  rpc UpdateActor(UpdateActorRequest) returns (UpdateActorResponse) {}
+  rpc UpdateActor(UpdateActorRequest) returns (Actor) {}
 
-  // Suspend a given actor to a new snapshot.
+  // Suspend a given actor to a new snapshot. A running actor is checkpointed
+  // on its worker; a paused actor's node-local snapshot is uploaded, narrowed
+  // to the template's commit scope where required (Full capture, Data commit).
   rpc SuspendActor(SuspendActorRequest) returns (SuspendActorResponse) {}
 
   // Pause a given actor and keep its snapshots on node VM.
@@ -44,6 +45,22 @@ service Control {
 
   // Delete an actor. Only suspended actors can be deleted.
   rpc DeleteActor(DeleteActorRequest) returns (Actor) {}
+
+  // Get an ActorSnapshot.
+  rpc GetActorSnapshot(GetActorSnapshotRequest) returns (ActorSnapshot) {}
+
+  // List ActorSnapshots.
+  rpc ListActorSnapshots(ListActorSnapshotsRequest) returns (ListActorSnapshotsResponse) {}
+
+  // Add an Atespace-owned, stable name for an ActorSnapshot.
+  rpc TagActorSnapshot(TagActorSnapshotRequest) returns (ActorSnapshotTag) {}
+
+  // Publish or unpublish an ActorSnapshot tag without changing its address.
+  rpc UpdateActorSnapshotTag(UpdateActorSnapshotTagRequest) returns (ActorSnapshotTag) {}
+
+  // Delete an ActorSnapshot tag. The snapshot becomes garbage-collectable when
+  // its final tag is deleted.
+  rpc DeleteActorSnapshotTag(DeleteActorSnapshotTagRequest) returns (ActorSnapshotTag) {}
 
   // List Workers.
   rpc ListWorkers(ListWorkersRequest) returns (ListWorkersResponse) {}
@@ -60,28 +77,36 @@ service Control {
   // List Atespaces.
   rpc ListAtespaces(ListAtespacesRequest) returns (ListAtespacesResponse) {}
 
-  // Delete an empty Atespace. Rejects (FailedPrecondition) if any actors remain.
+  // Delete an empty Atespace. Rejects (FailedPrecondition) if any Actors or
+  // ActorSnapshotTags remain.
   rpc DeleteAtespace(DeleteAtespaceRequest) returns (Atespace) {}
 }
 
-message ExternalSnapshotInfo {
-  string snapshot_uri_prefix = 1;
-}
-
 message LocalSnapshotInfo {
-  string snapshot_prefix = 1;
+  // The name of the local checkpoint on each of the nodes below.
+  string snapshot_name = 1;
   // Node VMs that have local snapshots for this actor, while it's PAUSED.
   repeated string node_vms_with_local_snapshots = 2;
+  // Scope the pause checkpoint captured (the template's onPause at pause
+  // time).
+  SnapshotContentScope content_scope = 3;
 }
 
-message SnapshotInfo {
-  oneof data {
-    ExternalSnapshotInfo external = 2;
-    LocalSnapshotInfo local = 3;
-  }
+enum SnapshotContentScope {
+  // Defaults to FULL for compatibility with existing snapshot configuration.
+  SNAPSHOT_CONTENT_SCOPE_UNSPECIFIED = 0;
+  // Captures process memory, root filesystem changes, and durable data.
+  SNAPSHOT_CONTENT_SCOPE_FULL = 1;
+  // Captures durable data without process memory or root filesystem changes.
+  SNAPSHOT_CONTENT_SCOPE_DATA = 2;
+}
 
-  reserved 1;
-  reserved "type";
+enum ActorSnapshotTagScope {
+  // May initialize Actors only in the tag's owning Atespace.
+  ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE = 0;
+  // Published for use by Actors in any Atespace. The tag remains addressed
+  // through its owning Atespace.
+  ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED = 1;
 }
 
 // Selector matches worker pools by label.
@@ -115,21 +140,29 @@ message ResourceMetadata {
 }
 
 message ExternalVolume {
-  // actor_id + the volume name specified in the actor template.
-  string actor_volume_id = 1;
+  // Name of the volume specified in the actor template.
+  string volume_name = 1;
 
-  // The volume_id returned from the storage system.
+  // The globally unique volume_id returned from the storage system.
+  // This will be initially empty during volume creation
   string storage_volume_id = 2;
 
   // Internal volume plugin name or CSI driver name.
   string volume_type = 3;
 
   enum Status {
-    PROVISIONING = 0;
-    CREATED = 1;
-    DELETING = 2;
+    STATUS_UNSPECIFIED = 0;
+    // Volume creation pending in the storage system.
+    STATUS_PENDING = 1;
+    // Volume successfully created in the storage system.
+    STATUS_CREATED = 2;
+    // Volume being deleted from the storage system.
+    STATUS_DELETING = 3;
   }
   Status status = 4;
+  // volume_context contains metadata returned by the CSI driver during volume
+  // provisioning, needed by the node plugin for mounting (e.g. attachment info).
+  map<string, string> volume_context = 5;
 }
 
 message Actor {
@@ -148,34 +181,76 @@ message Actor {
     STATUS_PAUSING = 5;
     STATUS_PAUSED = 6;
     STATUS_CRASHED = 7;
+    STATUS_DELETING = 8;
   }
   Status status = 4;
 
-  string ateom_pod_namespace = 5;
-  string ateom_pod_name = 6;
-  string ateom_pod_ip = 7;
+  // worker_assignment points at the worker currently hosting this Actor.
+  // Unset whenever the Actor has no worker (SUSPENDED, PAUSED, CRASHED).
+  WorkerAssignment worker_assignment = 5;
 
-  string in_progress_snapshot = 8;
-  string ateom_pod_uid = 9;
-  SnapshotInfo latest_snapshot_info = 10;
+  string in_progress_snapshot_name = 6;
 
   // worker_selector is the per-actor placement constraint. The scheduler
   // evaluates the AND of this selector and the template's workerSelector to
   // find eligible pools. Set at CreateActor; may be updated at any time via
   // UpdateActor. Changes take effect on the next ResumeActor call.
-  Selector worker_selector = 11;
+  Selector worker_selector = 7;
 
-  // worker_pool_name is the name of the WorkerPool that owns the currently
-  // assigned worker, in the same namespace as ateom_pod_namespace (pool and
-  // pod namespaces always match). Set by the scheduler at assignment time
-  // and cleared when the worker is freed. Needed to release the worker on
-  // suspend/pause since eligibility is no longer a single fixed pool
-  // reference on the ActorTemplate.
-  string worker_pool_name = 12;
+  // The latest durable snapshot created for this Actor.
+  ObjectRef latest_snapshot = 8;
+
+  // Node-local state used only while the Actor is paused.
+  LocalSnapshotInfo local_snapshot_info = 9;
+
+  // Actor version captured when the current durable snapshot began.
+  int64 in_progress_snapshot_source_actor_version = 10;
 
   // Volumes attached to the actor. These volumes only live as long as the actor.
   // They are deleted when the actor is deleted.
-  repeated ExternalVolume actor_volumes = 16;
+  repeated ExternalVolume actor_volumes = 11;
+
+  string in_progress_local_snapshot_name = 12;
+}
+
+// WorkerAssignment identifies the Worker currently hosting an Actor.
+message WorkerAssignment {
+  // worker_namespace is the Kubernetes namespace of the WorkerPool and worker Pod.
+  string worker_namespace = 1;
+
+  // worker_pool is the name of the WorkerPool the worker belongs to.
+  string worker_pool = 2;
+
+  // worker_pod is the name of the Kubernetes pod hosting the Actor.
+  string worker_pod = 3;
+
+  // worker_pod_uid is the Kubernetes UID of worker_pod.
+  string worker_pod_uid = 4;
+
+  // worker_pod_ip is the IP of worker_pod.
+  string worker_pod_ip = 5;
+}
+
+// ActorSnapshot is an independently addressable durable Actor snapshot. Its
+// contents are immutable.
+message ActorSnapshot {
+  ResourceMetadata metadata = 1;
+  ObjectRef source_actor = 2;
+  string source_actor_uid = 3;
+  int64 source_actor_version = 4;
+  string actor_template_namespace = 5;
+  string actor_template_name = 6;
+  string actor_template_uid = 7;
+  SnapshotContentScope content_scope = 8;
+  string snapshot_uri = 9;
+}
+
+// ActorSnapshotTag is an immutable, Atespace-owned alias and retention pin.
+// Its owning Atespace cannot be deleted until the tag is removed.
+message ActorSnapshotTag {
+  ResourceMetadata metadata = 1;
+  ObjectRef snapshot = 2;
+  ActorSnapshotTagScope scope = 3;
 }
 
 // Atespace is the isolation boundary an Actor is created into. Global-scoped:
@@ -192,6 +267,15 @@ message ObjectRef {
   // The name of the resource. Required. Unique within an atespace, or globally
   // unique if the resource is global-scoped.
   string name = 2;
+}
+
+// ActorSnapshotRef addresses a snapshot by its canonical identity or by an
+// Atespace-owned tag. Tag addresses remain stable when tags are published.
+message ActorSnapshotRef {
+  oneof reference {
+    ObjectRef snapshot = 1;
+    ObjectRef tag = 2;
+  }
 }
 
 message CreateAtespaceRequest {
@@ -234,21 +318,27 @@ message GetActorRequest {
 message CreateActorRequest {
   // The actor to create.
   Actor actor = 1;
+
+  // Optional durable snapshot used to initialize the Actor.
+  ActorSnapshotRef source_snapshot = 2;
 }
 
 // Request to update mutable fields on an existing Actor.
 // May be called regardless of the actor's current status.
 // Changes take effect on the next ResumeActor call.
 message UpdateActorRequest {
-  ObjectRef actor = 1;
-
-  // worker_selector replaces the actor's current placement constraint.
-  // Takes effect on the next ResumeActor call.
-  Selector worker_selector = 2;
-}
-
-message UpdateActorResponse {
+  // The actor to update.
+  // actor.metadata.atespace and actor.metadata.name identify which resource to
+  // update.
+  // actor.metadata.version and actor.metadata.uid are optional preconditions and
+  // zero values skip the check.
   Actor actor = 1;
+
+  // The set of fields to update. Required.
+  //
+  // Only the following fields are supported:
+  //   - worker_selector
+  google.protobuf.FieldMask update_mask = 2;
 }
 
 message SuspendActorRequest {
@@ -276,10 +366,55 @@ message ResumeActorRequest {
 
 message ResumeActorResponse {
   Actor actor = 1;
+
+  // True if a resume workflow was executed to activate the actor.
+  // False if the actor was already RUNNING.
+  bool resumed = 2;
 }
 
 message DeleteActorRequest {
   ObjectRef actor = 1;
+}
+
+message GetActorSnapshotRequest {
+  ActorSnapshotRef snapshot = 1;
+}
+
+message ListActorSnapshotsRequest {
+  string atespace = 1;
+  int32 page_size = 2;
+  string page_token = 3;
+}
+
+message ListActorSnapshotsResponse {
+  repeated ActorSnapshot snapshots = 1;
+  string next_page_token = 2;
+}
+
+message TagActorSnapshotRequest {
+  ActorSnapshotRef snapshot = 1;
+  ActorSnapshotTag tag = 2;
+}
+
+// Request to update mutable fields on an existing ActorSnapshotTag.
+// The tag keeps its address: the snapshot it points at cannot be changed.
+message UpdateActorSnapshotTagRequest {
+  // The tag to update.
+  // tag.metadata.atespace and tag.metadata.name identify which resource to
+  // update.
+  // tag.metadata.version and tag.metadata.uid are optional preconditions
+  // and zero values skip the check.
+  ActorSnapshotTag tag = 1;
+
+  // The set of fields to update. Required.
+  //
+  // Only the following fields are supported:
+  //   - scope
+  google.protobuf.FieldMask update_mask = 2;
+}
+
+message DeleteActorSnapshotTagRequest {
+  ObjectRef tag = 1;
 }
 
 message ListWorkersRequest {
@@ -349,6 +484,7 @@ message Worker {
 message Assignment {
   KubeNamespacedObjectRef actor_template = 1;
   ObjectRef actor = 2;
+  string actor_uid = 3;
 }
 
 message KubeNamespacedObjectRef {
@@ -367,44 +503,45 @@ message DebugClearRequest {}
 
 message DebugClearResponse {}
 
-// SessionIdentity allows substrate workloads to exchange their
+// ActorIdentity allows substrate workloads to exchange their
 // infrastructure-level credentials (k8s service account token, etc.) for a
-// substrate session-level credential.  A given substrate session might migrate
+// substrate actor-level credential. A given substrate actor might migrate
 // between many different physical workers over the course of its lifecycle,
-// whereas the session credential's identity will be stable for the life of the
-// session.
-//
-// This service requires authentication. You can authenticate with a Kubernetes
-// service account token in an `Authorization: Bearer` header, or you can
-// authenticate with a Kubernetes service account certificate as an mTLS
-// certificate. (Kubernetes service account certificates do not currently exist
-// upstream, but we will provide a polyfill based on Pod Certificates).
-//
-// The broker will check that the service credentials you authenticated with
-// belong to a Pod that is currently mapped to the requested session in the
-// session database.
-service SessionIdentity {
-  // Request a Session Identity JWT.
+// whereas the actor credential's identity will be stable for the life of the
+// actor.
+service ActorIdentity {
+  // Request an Actor Identity JWT.
   //
   // To call this RPC, you must be authenticated as the Kubernetes Pod that is
-  // currently running the requested session.
+  // currently running the requested actor.
   rpc MintJWT(MintJWTRequest) returns (MintJWTResponse);
 
-  // Request a Session Identity Certificate. To call this RPC, you must have
-  // authenticated with a client certificate, not a bearer token.
+  // Request an Actor Identity Certificate for an actor.
+  //
+  // Actors do not call this RPC themselves. The atelet hosting the actor calls
+  // it on the actor's behalf, authenticating with its own client certificate
+  // rather than a bearer token.
+  //
+  // Authorization is decided on that client certificate and the worker
+  // identity attested by atelet. Ateapi verifies that the worker is assigned to
+  // the actor and that the actor points back to that exact worker before signing.
+  //
+  // The certificate in the response is the actor's identity, not the atelet's.
   rpc MintCert(MintCertRequest) returns (MintCertResponse);
 }
 
 message MintJWTRequest {
   repeated string audience = 1;
 
-  string app_id = 2;
-  string user_id = 3;
-  string session_id = 4;
+  string atespace = 2;
+  string actor_name = 3;
+  string actor_uid = 4;
 }
 
+// TODO: check why k8s do ":" and not "/" as a seprator for the Subject format
+// TODO: whats the right format for the subject? kubernetes follow "system:serviceaccount:<namespace>:<name>".
 message MintJWTResponse {
-  // Session JWT.  An OIDC Discovery-compatible JWT
+  // Actor JWT.  An OIDC Discovery-compatible JWT
   //
   // Claims:
   //
@@ -412,33 +549,46 @@ message MintJWTResponse {
   //   discovery documents.
   // * sub: Subject - a string expressing the identity carried in the
   // credential. Format
-  //   `app/${appid}/user/${userid}/session/${sessionid}`.
+  //   `atespaces:${atespace}:actors:${actorname}`.
   // * aud: Audience - a string identifying the service this token will be used
   //   to authenticate to.
   // * nbf: Not Before - a numeric unix timestamp
   // * exp: Expiration - a numeric unix timestamp
   // * iat: Issued At - a numeric unix timestamp
   // * `ate.dev`: Ate/Substrate Extension - JSON object
-  //   * appID: (string) The Substrate App ID
-  //   * userID: (string) The Substrate User ID
-  //   * sessionID: (string) The Substrate Session ID
-  string session_jwt = 1;
+  //   * atespace: (string) The atespace the actor belongs to
+  //   * actorName: (string) The actor's name, unique within its atespace
+  string actor_jwt = 1;
 }
 
 message MintCertRequest {
-  string app_id = 1;
-  string user_id = 2;
-  string session_id = 3;
+  // Worker identity authenticated by the node-local atelet. Ateapi resolves
+  // the worker's current actor assignment rather than trusting actor metadata
+  // from the caller.
+  string worker_namespace = 1;
+  string worker_pod = 2;
+  string worker_pod_uid = 3;
 
   // Request contains DER encoded bytes of a x509 certificate signing request.
   // The signer will ignore the contents of the CSR except to extract the
   // subject public key.
   bytes certificate_signing_request = 4;
+
+  // Actor incarnation expected by the activation. This is only a stale-request
+  // guard: ateapi derives the actor and its identity from the worker assignment.
+  string expected_actor_uid = 5;
+
+  ActorCertificatePurpose purpose = 6;
+}
+
+enum ActorCertificatePurpose {
+  ACTOR_CERTIFICATE_PURPOSE_UNSPECIFIED = 0;
+  ACTOR_CERTIFICATE_PURPOSE_ATUNNEL = 1;
 }
 
 message MintCertResponse {
   // Response contains a list of DER encoded certificates. The first entry is the
   // leaf certificate, and any remaining entries are intermediates in
   // leaf-to-root order.
-  repeated bytes session_certificates = 1;
+  repeated bytes actor_certificates = 1;
 }

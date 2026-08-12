@@ -31,9 +31,10 @@ metadata:
 # The external rule maps the Prometheus series ate_workerpool_workers to an
 # external metric of the same name. An HPA's metric.selector.matchLabels are
 # substituted into <<.LabelMatchers>>, so a selector of
-# {ate_workerpool_name: shared-pool, ate_worker_state: assigned} yields
-# max(ate_workerpool_workers{ate_workerpool_name="shared-pool",ate_worker_state="assigned"})
-# — the pool's assigned-worker count.
+# {ate_workerpool_namespace: demo-ns, ate_workerpool_name: shared-pool, ate_worker_state: assigned}
+# yields max(ate_workerpool_workers{ate_workerpool_namespace="demo-ns",ate_workerpool_name="shared-pool",ate_worker_state="assigned"}),
+# the pool's assigned-worker count. Selecting on the name alone would match
+# every same-named pool in the cluster, so the namespace belongs in the selector.
 
 # We use max() rather than sum() because ate-api-server is sharded;
 # every replica reports the global worker tally.
@@ -53,7 +54,7 @@ data:
         as: "$1"
       # max() across ate-api-server replicas since each replica reports the
       # global count.
-      metricsQuery: 'max(<<.Series>>{<<.LabelMatchers>>}) by (ate_workerpool_name, ate_worker_state)'
+      metricsQuery: 'max(<<.Series>>{<<.LabelMatchers>>}) by (ate_workerpool_namespace, ate_workerpool_name, ate_worker_state)'
 ---
 apiVersion: apps/v1
 kind: Deployment

@@ -38,13 +38,13 @@ import (
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	listenerv3 "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
 	routev3 "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
-	dfpclusterv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/clusters/dynamic_forward_proxy/v3"
 	tlsv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/transport_sockets/tls/v3"
-	httpv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/upstreams/http/v3"
 	discoverygrpc "github.com/envoyproxy/go-control-plane/envoy/service/discovery/v3"
 	secretgrpc "github.com/envoyproxy/go-control-plane/envoy/service/secret/v3"
 	cachev3 "github.com/envoyproxy/go-control-plane/pkg/cache/v3"
 	resourcev3 "github.com/envoyproxy/go-control-plane/pkg/resource/v3"
+
+	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/ingress"
 )
 
 func TestXdsServer_UpdateSnapshot(t *testing.T) {
@@ -95,12 +95,15 @@ func TestXdsServer_UpdateSnapshot(t *testing.T) {
 		}
 	}
 
-	if raw, exists := clustersMap["dynamic_forward_proxy_cluster"]; !exists {
-		t.Error("'dynamic_forward_proxy_cluster' is missing from clusters")
+	if raw, exists := clustersMap[OriginalDstClusterName]; !exists {
+		t.Errorf("'%s' is missing from clusters", OriginalDstClusterName)
 	} else {
 		c := raw.(*clusterv3.Cluster)
-		if c.GetName() != "dynamic_forward_proxy_cluster" {
-			t.Errorf("Expected 'dynamic_forward_proxy_cluster', got %s", c.GetName())
+		if c.GetName() != OriginalDstClusterName {
+			t.Errorf("Expected '%s', got %s", OriginalDstClusterName, c.GetName())
+		}
+		if c.GetType() != clusterv3.Cluster_ORIGINAL_DST {
+			t.Errorf("Expected ORIGINAL_DST cluster, got %s", c.GetType())
 		}
 	}
 
@@ -532,53 +535,6 @@ func rotateProjectedVolume(t *testing.T, dir, newTsDir, oldTsDir string, bundle 
 	}
 }
 
-// TestDynamicForwardProxyCluster_EnvoyAcceptsHttpProtocolOptions guards a
-// coupling that is invisible on the Go side but fatal at runtime.
-//
-// Envoy refuses a dynamic_forward_proxy cluster that carries
-// HttpProtocolOptions unless the cluster config either turns on both auto_sni
-// and auto_san_validation or sets allow_insecure_cluster_options. A snapshot
-// that breaks the rule is a perfectly well-formed proto and passes
-// Consistent(), so nothing here fails: the only symptom is Envoy NACKing every
-// CDS push and the cluster silently missing from its config dump, which reads
-// as "all actor traffic 503s" rather than as a config error.
-func TestDynamicForwardProxyCluster_EnvoyAcceptsHttpProtocolOptions(t *testing.T) {
-	cluster := NewXdsServer(18000).buildDynamicForwardProxyCluster()
-
-	var clusterConfig dfpclusterv3.ClusterConfig
-	if err := cluster.GetClusterType().GetTypedConfig().UnmarshalTo(&clusterConfig); err != nil {
-		t.Fatalf("Failed to unmarshal dynamic forward proxy cluster config: %v", err)
-	}
-
-	if !clusterConfig.GetAllowInsecureClusterOptions() {
-		t.Errorf("Cluster carries %s but neither allows insecure cluster options nor "+
-			"enables auto_sni and auto_san_validation; Envoy will reject every CDS push",
-			httpProtocolOptionsName)
-	}
-}
-
-// TestDynamicForwardProxyCluster_DisablesConnectionReuse pins the fix for the
-// 503 storm seen under actor churn. Worker pod IPs are stable while the actor
-// sandbox behind them is destroyed on every Suspend, so a pooled connection
-// outlives the actor that owned it.
-func TestDynamicForwardProxyCluster_DisablesConnectionReuse(t *testing.T) {
-	cluster := NewXdsServer(18000).buildDynamicForwardProxyCluster()
-
-	raw, ok := cluster.GetTypedExtensionProtocolOptions()[httpProtocolOptionsName]
-	if !ok {
-		t.Fatalf("Cluster is missing %s", httpProtocolOptionsName)
-	}
-
-	var opts httpv3.HttpProtocolOptions
-	if err := raw.UnmarshalTo(&opts); err != nil {
-		t.Fatalf("Failed to unmarshal HttpProtocolOptions: %v", err)
-	}
-
-	if got := opts.GetCommonHttpProtocolOptions().GetMaxRequestsPerConnection().GetValue(); got != 1 {
-		t.Errorf("Expected max_requests_per_connection 1, got %d", got)
-	}
-}
-
 func TestXdsServer_ExtProcCircuitBreaker(t *testing.T) {
 	t.Run("DefaultCoversLotPlusHeadroom", func(t *testing.T) {
 		x := NewXdsServer(0)
@@ -586,8 +542,8 @@ func TestXdsServer_ExtProcCircuitBreaker(t *testing.T) {
 		if got != uint32(defaultExtProcMaxRequests) {
 			t.Errorf("default max_requests = %d, want %d", got, defaultExtProcMaxRequests)
 		}
-		if got < uint32(defaultParkedRequestMax) {
-			t.Errorf("default breaker (%d) below the default lot (%d): a full lot would be truncated by Envoy", got, defaultParkedRequestMax)
+		if got < uint32(ingress.DefaultParkedRequestMax) {
+			t.Errorf("default breaker (%d) below the default lot (%d): a full lot would be truncated by Envoy", got, ingress.DefaultParkedRequestMax)
 		}
 	})
 
@@ -608,4 +564,238 @@ func TestXdsServer_ExtProcCircuitBreaker(t *testing.T) {
 			t.Errorf("max_requests after SetExtProcMaxRequests(0) = %d, want default %d", got, defaultExtProcMaxRequests)
 		}
 	})
+}
+
+func TestXdsServer_RouteTimeout(t *testing.T) {
+	// routeAction digs out the one workload route buildRoutes emits, which is
+	// where Envoy actually reads its timeouts.
+	//
+	// It pins the route to OriginalDstClusterName rather than trusting position:
+	// that is the cluster carrying actor traffic to the worker's atunnel ingress.
+	// A change that moves actor traffic onto some other route would otherwise
+	// leave this passing while the timeouts govern a route nothing uses.
+	routeAction := func(t *testing.T, x *XdsServer) *routev3.RouteAction {
+		t.Helper()
+		hosts := x.buildRoutes().GetVirtualHosts()
+		if len(hosts) != 1 || len(hosts[0].GetRoutes()) != 1 {
+			t.Fatalf("buildRoutes() = %d virtual hosts, want exactly 1 with 1 route", len(hosts))
+		}
+		action := hosts[0].GetRoutes()[0].GetRoute()
+		if got := action.GetCluster(); got != OriginalDstClusterName {
+			t.Fatalf("workload route targets cluster %q, want %q", got, OriginalDstClusterName)
+		}
+		return action
+	}
+	routeTimeout := func(t *testing.T, x *XdsServer) time.Duration {
+		t.Helper()
+		return routeAction(t, x).GetTimeout().AsDuration()
+	}
+	idleTimeout := func(t *testing.T, x *XdsServer) time.Duration {
+		t.Helper()
+		return routeAction(t, x).GetIdleTimeout().AsDuration()
+	}
+
+	t.Run("Default", func(t *testing.T) {
+		if got := routeTimeout(t, NewXdsServer(0)); got != defaultRouteTimeout {
+			t.Errorf("default route timeout = %v, want %v", got, defaultRouteTimeout)
+		}
+	})
+
+	t.Run("SetterOverrides", func(t *testing.T) {
+		x := NewXdsServer(0)
+		x.SetRouteTimeout(5 * time.Minute)
+		if got := routeTimeout(t, x); got != 5*time.Minute {
+			t.Errorf("route timeout after SetRouteTimeout(5m) = %v, want 5m", got)
+		}
+	})
+
+	// The flag cannot produce a zero: --route-timeout carries defaultRouteTimeout,
+	// so an operator who never passes it gets 10s, not 0. The guard is on the
+	// setter because SetRouteTimeout is part of the type's API and reachable
+	// from any caller, and because a zero here is the one value Envoy reads as
+	// "no timeout at all" — a mis-set knob would silently turn every stuck
+	// actor into a held-open request rather than failing visibly. The sibling
+	// setters guard the same way.
+	t.Run("NonPositiveKeepsDefault", func(t *testing.T) {
+		for _, d := range []time.Duration{0, -time.Second} {
+			x := NewXdsServer(0)
+			x.SetRouteTimeout(d)
+			if got := routeTimeout(t, x); got != defaultRouteTimeout {
+				t.Errorf("route timeout after SetRouteTimeout(%v) = %v, want default %v", d, got, defaultRouteTimeout)
+			}
+		}
+	})
+
+	// The route timeout alone does not bound a long turn. A stream carrying no
+	// bytes while the actor works is idle by Envoy's reckoning, and Envoy resets
+	// it at the 5m stream idle default whatever the route timeout says. These
+	// pin the relationship: the idle timer never bites before the ceiling the
+	// operator asked for, and it is not tightened below what applies today.
+	t.Run("IdleTimeoutTracksLongerRouteTimeout", func(t *testing.T) {
+		x := NewXdsServer(0)
+		x.SetRouteTimeout(30 * time.Minute)
+		if got := idleTimeout(t, x); got != 30*time.Minute {
+			t.Errorf("idle timeout with a 30m route timeout = %v, want 30m: a shorter idle timer would reset the stream first", got)
+		}
+	})
+
+	t.Run("IdleTimeoutKeepsEnvoyDefaultWhenRouteTimeoutIsShorter", func(t *testing.T) {
+		for _, d := range []time.Duration{defaultRouteTimeout, envoyDefaultStreamIdleTimeout} {
+			x := NewXdsServer(0)
+			x.SetRouteTimeout(d)
+			if got := idleTimeout(t, x); got != envoyDefaultStreamIdleTimeout {
+				t.Errorf("idle timeout with a %v route timeout = %v, want %v (unchanged from Envoy's default)", d, got, envoyDefaultStreamIdleTimeout)
+			}
+		}
+	})
+}
+
+func TestXdsServer_SetOtlpCollector(t *testing.T) {
+	// --otlp-collector-address defaults to OTEL_EXPORTER_OTLP_ENDPOINT, so the
+	// URL forms that variable carries have to reduce to the bare host and port
+	// an xDS SocketAddress accepts.
+	tests := []struct {
+		name     string
+		addr     string
+		wantHost string
+		wantPort uint32
+	}{
+		{"HostPort", "collector.otel-system.svc:4317", "collector.otel-system.svc", 4317},
+		{"HostOnlyDefaultsPort", "collector.otel-system.svc", "collector.otel-system.svc", 4317},
+		{"HttpURL", "http://collector.otel-system.svc:4317", "collector.otel-system.svc", 4317},
+		{"HttpURLNoPort", "http://collector.otel-system.svc", "collector.otel-system.svc", 4317},
+		{"HttpURLTrailingSlash", "http://collector.otel-system.svc:4317/", "collector.otel-system.svc", 4317},
+		{"HttpURLWithPath", "http://collector.otel-system.svc:4317/v1/traces", "collector.otel-system.svc", 4317},
+		{"NonDefaultPort", "http://collector.otel-system.svc:14317", "collector.otel-system.svc", 14317},
+		{"IPv6", "[::1]:4317", "::1", 4317},
+		{"IPv6URL", "http://[::1]:4317", "::1", 4317},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			x := NewXdsServer(0)
+			if err := x.SetOtlpCollector(tc.addr); err != nil {
+				t.Fatalf("SetOtlpCollector(%q) failed: %v", tc.addr, err)
+			}
+			if x.otlpHost != tc.wantHost || x.otlpPort != tc.wantPort {
+				t.Errorf("SetOtlpCollector(%q) = %q:%d, want %q:%d", tc.addr, x.otlpHost, x.otlpPort, tc.wantHost, tc.wantPort)
+			}
+
+			// The address only matters insofar as it reaches Envoy: it must
+			// land in the tracer cluster's socket address, unaltered.
+			sock := x.buildOtlpCollectorCluster().GetLoadAssignment().GetEndpoints()[0].GetLbEndpoints()[0].GetEndpoint().GetAddress().GetSocketAddress()
+			if sock.GetAddress() != tc.wantHost || sock.GetPortValue() != tc.wantPort {
+				t.Errorf("tracer cluster endpoint = %q:%d, want %q:%d", sock.GetAddress(), sock.GetPortValue(), tc.wantHost, tc.wantPort)
+			}
+		})
+	}
+}
+
+func TestXdsServer_SetOtlpCollector_Rejects(t *testing.T) {
+	// An endpoint Envoy cannot use has to be reported rather than silently
+	// accepted: https downgraded to the plaintext tracer cluster would leak
+	// spans, and a garbage port would yield a cluster that never connects.
+	// Reporting it is as far as this layer goes — setOtlpCollector turns the
+	// error into a warning and runs without Envoy tracing, never a startup
+	// failure. See TestSetOtlpCollector.
+	for _, tc := range []struct {
+		name string
+		addr string
+	}{
+		{"Https", "https://collector.otel-system.svc:4317"},
+		{"UnknownScheme", "grpc://collector.otel-system.svc:4317"},
+		{"NoHost", "http://:4317"},
+		{"NonNumericPort", "collector.otel-system.svc:grpc"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := NewXdsServer(0).SetOtlpCollector(tc.addr); err == nil {
+				t.Errorf("SetOtlpCollector(%q) succeeded, want error", tc.addr)
+			}
+		})
+	}
+}
+
+func TestXdsServer_SetOtlpCollector_EmptyDisablesTracing(t *testing.T) {
+	// Empty has to stay a working off switch: the router's own spans keep
+	// flowing via OTEL_EXPORTER_OTLP_ENDPOINT, but Envoy emits none.
+	x := NewXdsServer(0)
+	if err := x.SetOtlpCollector(""); err != nil {
+		t.Fatalf("SetOtlpCollector(\"\") failed: %v", err)
+	}
+	if tr := x.buildTracing(); tr != nil {
+		t.Errorf("buildTracing() = %v, want nil when no collector is configured", tr)
+	}
+	if err := x.UpdateSnapshot(); err != nil {
+		t.Fatalf("UpdateSnapshot failed: %v", err)
+	}
+	res, err := x.snapshot.GetSnapshot(NodeID)
+	if err != nil {
+		t.Fatalf("GetSnapshot failed: %v", err)
+	}
+	if _, ok := res.GetResources(resourcev3.ClusterType)[OtlpClusterName]; ok {
+		t.Errorf("snapshot contains cluster %q, want it omitted when tracing is disabled", OtlpClusterName)
+	}
+}
+
+func TestXdsServer_BuildTracingRandomSamplingFromPolicy(t *testing.T) {
+	const collectorAddr = "collector.otel-system.svc:4317"
+
+	tests := []struct {
+		name        string
+		collector   string
+		percent     float64
+		setPercent  bool
+		wantTracing bool
+		wantPercent float64
+	}{
+		{
+			name:        "percent mirrors the resolved policy",
+			collector:   collectorAddr,
+			percent:     1,
+			setPercent:  true,
+			wantTracing: true,
+			wantPercent: 1,
+		},
+		{
+			name:        "full sampling",
+			collector:   collectorAddr,
+			percent:     100,
+			setPercent:  true,
+			wantTracing: true,
+			wantPercent: 100,
+		},
+		{
+			// A caller that never threads in a policy must fail toward no
+			// root sampling, not toward 100%.
+			name:        "setter never called defaults to zero",
+			collector:   collectorAddr,
+			wantTracing: true,
+			wantPercent: 0,
+		},
+		{
+			name:       "no collector yields no tracing block",
+			percent:    100,
+			setPercent: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			x := NewXdsServer(0)
+			if err := x.SetOtlpCollector(tt.collector); err != nil {
+				t.Fatalf("SetOtlpCollector(%q) failed: %v", tt.collector, err)
+			}
+			if tt.setPercent {
+				x.SetTraceRootSamplingPercent(tt.percent)
+			}
+			tr := x.buildTracing()
+			if (tr != nil) != tt.wantTracing {
+				t.Fatalf("buildTracing() = %v, want tracing block: %v", tr, tt.wantTracing)
+			}
+			if !tt.wantTracing {
+				return
+			}
+			if got := tr.GetRandomSampling().GetValue(); got != tt.wantPercent {
+				t.Errorf("RandomSampling = %v, want %v", got, tt.wantPercent)
+			}
+		})
+	}
 }

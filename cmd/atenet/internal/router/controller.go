@@ -20,8 +20,10 @@ import (
 	"time"
 )
 
-// Controller monitors ActorTemplates and coordinates configuration updates
-// for the Envoy xDS and external processing servers.
+// Controller monitors ActorTemplates and coordinates configuration updates for
+// the ingress Envoy's xDS server. It is part of the ingress control plane and
+// only runs in a mode that serves ingress — the egress Envoy is statically
+// configured and has no templates to watch.
 type Controller struct {
 	xdsSrv *XdsServer
 

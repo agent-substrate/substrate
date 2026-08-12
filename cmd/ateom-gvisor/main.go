@@ -18,19 +18,28 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
+	"net/url"
 	"os"
+	"os/signal"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"syscall"
+	"time"
 
 	"cloud.google.com/go/compute/metadata"
 	"github.com/agent-substrate/substrate/internal/actorlog"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/ateomnet"
 	"github.com/agent-substrate/substrate/internal/ateompath"
+	"github.com/agent-substrate/substrate/internal/ateomstats"
+	"github.com/agent-substrate/substrate/internal/atunnel"
 	"github.com/agent-substrate/substrate/internal/contextlogging"
 	"github.com/agent-substrate/substrate/internal/imagecache"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
@@ -42,19 +51,37 @@ import (
 	"github.com/spf13/pflag"
 	"github.com/vishvananda/netns"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
-	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"golang.org/x/sys/unix"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/reflection"
+	"google.golang.org/grpc/status"
 )
 
 var (
 	podUID = pflag.String("pod-uid", "", "The UID of the current pod")
 
-	showVersion = pflag.Bool("version", false, "Print version and exit.")
+	// TODO(liorlieberman) have a sub package for all atunnel releated things like that
+	atunnelListenAddress       = pflag.String("atunnel-listen-address", "0.0.0.0:443", "Address for actor ingress HTTPS")
+	workerCredentialBundle     = pflag.String("atunnel-credential-bundle", "/run/podidentity.podcert.ate.dev/credential-bundle.pem", "Worker Pod credential bundle used by atunnel for inbound serving and outbound mTLS")
+	podIdentityTrustBundle     = pflag.String("atunnel-trust-bundle", "/run/podidentity.podcert.ate.dev/trust-bundle.pem", "Pod identity trust bundle used for router clients and the node-local atelet")
+	atunnelClientIdentity      = pflag.String("atunnel-client-identity", "spiffe://cluster.local/ns/ate-system/sa/atenet-router", "SPIFFE identity allowed to call actor ingress HTTPS")
+	atunnelEgressListenAddress = pflag.String("atunnel-egress-listen-address", "0.0.0.0:15001", "Address for transparently intercepted actor egress TCP")
+	egressGatewayTrustBundle   = pflag.String("atunnel-egress-trust-bundle", "/run/servicedns.podcert.ate.dev/trust-bundle.pem", "Service DNS trust bundle for the remote egress gateway")
+
+	showVersion  = pflag.Bool("version", false, "Print version and exit.")
+	logLevelFlag = pflag.String("log-level", "info", "Minimum log level: debug, info, warn, or error.")
 
 	reapLock sync.RWMutex
 )
+
+// actorHTTPUpstream is the in-sandbox HTTP endpoint atunnel proxies actor
+// ingress to.
+const actorHTTPUpstream = "http://" + ateomnet.ActorVethIP + ":80"
+
+// Workers get a conservative shutdown period. This needs to be significantly less than the K8s
+// termination grace period for the ateom.
+const workloadGracePeriod = 1 * time.Minute
 
 func main() {
 	pflag.Parse()
@@ -76,15 +103,18 @@ func do(ctx context.Context) error {
 	defer cancel()
 
 	syncedWriter := actorlog.NewSyncedWriter(os.Stdout)
-	logger := slog.New(contextlogging.NewHandler(slog.NewJSONHandler(syncedWriter, nil)))
+	logger := slog.New(contextlogging.NewHandler(slog.NewJSONHandler(syncedWriter, &slog.HandlerOptions{Level: serverboot.LogLevel()})))
 	slog.SetDefault(logger)
+	if err := serverboot.SetLogLevel(*logLevelFlag); err != nil {
+		return err
+	}
 
 	slog.InfoContext(ctx, "ateom booting")
 
 	const serviceName = "ateom-gvisor"
 	tp, err := serverboot.InitTracing(ctx, serverboot.TracingOptions{
 		ServiceName: serviceName,
-		Sampler:     sdktrace.ParentBased(sdktrace.NeverSample()),
+		Sampling:    serverboot.ResolveTraceSampling(ctx, serverboot.ParentRatioSampling(serverboot.ControlPlaneTraceRatio)),
 	})
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to initialize tracing", err)
@@ -104,9 +134,13 @@ func do(ctx context.Context) error {
 	}
 
 	// Prepare the pod cgroup so runsc can create per-actor-container leaves under
-	// it with real accounting, instead of ignoring cgroups entirely.
+	// it with real accounting.
 	if err := setupCgroupDelegation(ctx); err != nil {
 		return fmt.Errorf("while setting up cgroup delegation: %w", err)
+	}
+
+	if gpuPresent() {
+		slog.InfoContext(ctx, "GPU detected; enabling runsc nvproxy for all sandboxes")
 	}
 
 	// TODO: Consider whether we want to fork, so that we have an "init" process
@@ -137,7 +171,16 @@ func do(ctx context.Context) error {
 	}
 
 	actorLogger := actorlog.NewActorLogger(syncedWriter, metadata.OnGCE())
-	ateomService := NewService(interiorNetNS, actorLogger)
+	upstream, err := url.Parse(actorHTTPUpstream)
+	if err != nil {
+		return fmt.Errorf("while parsing atunnel upstream: %w", err)
+	}
+	atunnelIngress, atunnelEgress, atunnelEgressPort, err := runAtunnel(ctx, upstream)
+	if err != nil {
+		return err
+	}
+
+	ateomService := NewService(interiorNetNS, actorLogger, atunnelIngress, atunnelEgress, atunnelEgressPort, *workerCredentialBundle, *podIdentityTrustBundle, *egressGatewayTrustBundle)
 
 	svr := grpc.NewServer(
 		grpc.StatsHandler(otelgrpc.NewServerHandler()),
@@ -145,6 +188,21 @@ func do(ctx context.Context) error {
 	)
 	ateompb.RegisterAteomServer(svr, ateomService)
 	reflection.Register(svr)
+
+	// Trap SIGTERM (sent by the kubelet at the start of the pod's termination
+	// grace period) and propagate it into the sandbox so the actor can save its
+	// state and exit cleanly before the grace period expires.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGTERM)
+	go func() {
+		sig := <-sigCh
+		slog.InfoContext(ctx, "Received signal; beginning graceful shutdown", slog.String("signal", sig.String()))
+		// Use a fresh context: the do() context is torn down on return, but the
+		// shutdown must outlive it until the sandbox has stopped.
+		ateomService.gracefulShutdown(context.Background())
+		// Stop the server gracefully. This blocks until all in-flight RPCs have completed.
+		svr.GracefulStop()
+	}()
 
 	if err := svr.Serve(lis); err != nil {
 		slog.ErrorContext(ctx, "Failed to serve", slog.Any("err", err))
@@ -154,46 +212,395 @@ func do(ctx context.Context) error {
 	return nil
 }
 
+func runAtunnel(ctx context.Context, upstream *url.URL) (*atunnel.Server, *atunnel.Egress, uint16, error) {
+	atunnelIngress, err := atunnel.NewServer(atunnel.Config{
+		CredentialBundlePath: *workerCredentialBundle,
+		TrustBundlePath:      *podIdentityTrustBundle,
+		AllowedClientID:      *atunnelClientIdentity,
+		Upstream:             upstream,
+	})
+	if err != nil {
+		return nil, nil, 0, fmt.Errorf("while configuring atunnel: %w", err)
+	}
+	atunnelListener, err := net.Listen("tcp", *atunnelListenAddress)
+	if err != nil {
+		return nil, nil, 0, fmt.Errorf("while opening atunnel listener: %w", err)
+	}
+	go func() {
+		if err := atunnelIngress.Serve(ctx, atunnelListener); err != nil {
+			serverboot.Fatal(ctx, "Failed to serve actor ingress", err)
+		}
+	}()
+	slog.InfoContext(ctx, "atunnel serving", slog.String("address", *atunnelListenAddress))
+
+	atunnelEgress, err := atunnel.NewEgress(atunnel.TCPOriginalDestination)
+	if err != nil {
+		return nil, nil, 0, fmt.Errorf("while configuring atunnel egress: %w", err)
+	}
+	egressListener, err := net.Listen("tcp", *atunnelEgressListenAddress)
+	if err != nil {
+		return nil, nil, 0, fmt.Errorf("while opening atunnel egress listener: %w", err)
+	}
+	egressTCPAddr, ok := egressListener.Addr().(*net.TCPAddr)
+	if !ok || egressTCPAddr.Port < 1 || egressTCPAddr.Port > 65535 {
+		_ = egressListener.Close()
+		return nil, nil, 0, fmt.Errorf("atunnel egress listener has invalid address %q", egressListener.Addr())
+	}
+	atunnelEgressPort := uint16(egressTCPAddr.Port)
+	go func() {
+		if err := atunnelEgress.Serve(ctx, egressListener); err != nil {
+			serverboot.Fatal(ctx, "Failed to serve actor egress", err)
+		}
+	}()
+	slog.InfoContext(ctx, "atunnel egress serving", slog.String("address", *atunnelEgressListenAddress))
+	return atunnelIngress, atunnelEgress, atunnelEgressPort, nil
+}
+
+const (
+	rpcRunWorkload        = "RunWorkload"
+	rpcRestoreWorkload    = "RestoreWorkload"
+	rpcCheckpointWorkload = "CheckpointWorkload"
+)
+
+type activeRPCInfo struct {
+	name   string
+	cancel context.CancelFunc
+}
+
+// workloadSession captures the in-memory metadata for the workload currently running
+// in the sandbox, so the SIGTERM handler knows which containers to signal and
+// wait on during graceful shutdown. The sandbox runs one workload at a time.
+type workloadSession struct {
+	rcmd       *runsc
+	containers []string
+}
+
+type cancelableMutex struct {
+	ch chan struct{}
+}
+
+func newCancelableMutex() *cancelableMutex {
+	ch := make(chan struct{}, 1)
+	ch <- struct{}{}
+	return &cancelableMutex{ch: ch}
+}
+
+func (m *cancelableMutex) Lock() {
+	<-m.ch
+}
+
+func (m *cancelableMutex) Unlock() {
+	m.ch <- struct{}{}
+}
+
+func (m *cancelableMutex) LockContext(ctx context.Context) bool {
+	select {
+	case <-m.ch:
+		return true
+	case <-ctx.Done():
+		return false
+	}
+}
+
 // AteomService is a service for shepherding single microvm.
 type AteomService struct {
 	ateompb.UnimplementedAteomServer
 
 	// Let's go ahead and assume that Ateom RPCs that are running `runsc`
 	// subcommands are probably not safe to call concurrently.
-	lock sync.Mutex
+	lock *cancelableMutex
 
-	interiorNetNS netns.NsHandle
-	actorLogger   *actorlog.ActorLogger
+	interiorNetNS  netns.NsHandle
+	actorLogger    *actorlog.ActorLogger
+	atunnelIngress *atunnel.Server
+	atunnelEgress  *atunnel.Egress
+
+	// atunnelEgressPort is the local atunnel listener used as the target of the
+	// actor network's transparent TCP redirect.
+	atunnelEgressPort uint16
+	// workerCredentialBundlePath contains the worker Pod certificate and key.
+	// Atunnel uses it for ingress serving and authentication to the atelet broker.
+	workerCredentialBundlePath string
+	// podIdentityTrustBundlePath verifies the node-local atelet's Pod identity.
+	podIdentityTrustBundlePath string
+	// egressGatewayTrustBundlePath verifies the remote gateway's serving cert.
+	egressGatewayTrustBundlePath string
+
+	// activeActor is the actor whose workload this ateom is currently running,
+	// or nil when it is "available". An ateom serves one actor at a time, so a
+	// single slot is enough (the micro-VM ateom holds the same field, set and
+	// cleared at the same points).
+	//
+	// Set by RunWorkload / RestoreWorkload and cleared by CheckpointWorkload, so
+	// it tracks exactly the available/executing state machine described on the
+	// Ateom service. GetWorkloadStats reads it to attribute its sample.
+	//
+	// Atomic rather than guarded by lock, unlike every other RPC-visible field
+	// here. The three writers already hold lock for their whole bodies and keep
+	// doing so; the point is the reader. lock is held across an entire boot,
+	// restore, or checkpoint, so a lock-guarded read would park a poller for the
+	// full duration of each -- going quiet during exactly the phases whose usage
+	// is most interesting -- and holding it across the read would put a
+	// CheckpointWorkload behind telemetry instead. The field is only ever
+	// assigned or cleared as a whole pointer, never mutated in place, which is
+	// exactly what atomic.Pointer is for.
+	//
+	// The type makes a lock-free read possible; it does not make one happen.
+	// GetWorkloadStats must not take lock at all, including around the cgroup
+	// read it does with the value. TestGetWorkloadStatsDoesNotTakeLock pins that.
+	activeActor atomic.Pointer[ateomstats.ActorAttribution]
+
+	// shuttingDown is set once SIGTERM has been received. While true, new
+	// workload RPCs are rejected with codes.Unavailable.
+	shuttingDown atomic.Bool
+
+	// activeSession tracks the currently running workload (nil when idle). Set by
+	// RunWorkload/RestoreWorkload, cleared by CheckpointWorkload. Guarded by lock.
+	activeSession *workloadSession
+
+	activeRPCMu sync.Mutex
+	activeRPC   *activeRPCInfo
+
+	// cgroupRoot is where the sandbox's cgroup v2 leaves live: the worker pod's
+	// own cgroup scope, which setupCgroupDelegation prepares. A field rather
+	// than a constant so tests can point GetWorkloadStats at a fixture tree.
+	cgroupRoot string
 }
 
 var _ ateompb.AteomServer = (*AteomService)(nil)
 
 // NewService creates a new AteomService.
-func NewService(interiorNetNS netns.NsHandle, actorLogger *actorlog.ActorLogger) *AteomService {
-	svc := &AteomService{
-		interiorNetNS: interiorNetNS,
-		actorLogger:   actorLogger,
+func NewService(interiorNetNS netns.NsHandle, actorLogger *actorlog.ActorLogger, atunnelIngress *atunnel.Server, atunnelEgress *atunnel.Egress, atunnelEgressPort uint16, workerCredentialBundlePath, podIdentityTrustBundlePath, egressGatewayTrustBundlePath string) *AteomService {
+	return &AteomService{
+		lock:                         newCancelableMutex(),
+		interiorNetNS:                interiorNetNS,
+		actorLogger:                  actorLogger,
+		atunnelIngress:               atunnelIngress,
+		atunnelEgress:                atunnelEgress,
+		atunnelEgressPort:            atunnelEgressPort,
+		workerCredentialBundlePath:   workerCredentialBundlePath,
+		podIdentityTrustBundlePath:   podIdentityTrustBundlePath,
+		egressGatewayTrustBundlePath: egressGatewayTrustBundlePath,
+		cgroupRoot:                   defaultCgroupRoot,
 	}
-	return svc
+}
+
+// rejectIfDraining returns a codes.Unavailable error if ateom has begun graceful
+// shutdown, so the control plane reschedules the actor onto a live worker.
+func (s *AteomService) rejectIfDraining() error {
+	if s.shuttingDown.Load() {
+		return status.Error(codes.Unavailable, "worker draining: not accepting new workloads")
+	}
+	return nil
+}
+
+func (s *AteomService) setActiveRPC(name string, cancel context.CancelFunc) {
+	s.activeRPCMu.Lock()
+	defer s.activeRPCMu.Unlock()
+	s.activeRPC = &activeRPCInfo{name: name, cancel: cancel}
+}
+
+func (s *AteomService) clearActiveRPC() {
+	s.activeRPCMu.Lock()
+	defer s.activeRPCMu.Unlock()
+	s.activeRPC = nil
+}
+
+func (s *AteomService) cancelActiveRestoreOrRunRPC() {
+	s.activeRPCMu.Lock()
+	defer s.activeRPCMu.Unlock()
+	if s.activeRPC != nil && (s.activeRPC.name == rpcRestoreWorkload || s.activeRPC.name == rpcRunWorkload) {
+		slog.Info("Cancelling in-progress workload startup RPC due to graceful shutdown", slog.String("rpc", s.activeRPC.name))
+		s.activeRPC.cancel()
+	}
+}
+
+// gracefulShutdown propagates SIGTERM into the sandbox and waits for the application's
+// containers to exit.
+func (s *AteomService) gracefulShutdown(ctx context.Context) {
+	s.shuttingDown.Store(true)
+	// If there is an active run or restore RPC, try to cancel it. This is considered
+	// less disruptive than waiting for it to complete and then immediately sending
+	// a SIGTERM.
+	s.cancelActiveRestoreOrRunRPC()
+
+	// Attempt to acquire the lock used to serialize ateom RPCs. This will wait for any
+	// pending RPCs to finish (suspend, resume, etc...). After the RPCs finish there
+	// should be no active session. The run / resume was cancelled and the
+	// checkpoint / restore will stop the workload and clear the active session.
+	//
+	// In the worst case, these RPCs take almost the entire grace period and then
+	// fail. We will then proceed to send SIGTERM to the containers and wait for
+	// them to exit, potentially waiting for 2x the total grace period.
+	lockCtx, lockCancel := context.WithTimeout(ctx, workloadGracePeriod)
+	defer lockCancel()
+
+	if !s.lock.LockContext(lockCtx) {
+		slog.ErrorContext(ctx, "Failed to acquire lock during graceful shutdown. Another RPC is still running ")
+		return
+	}
+	session := s.activeSession
+	// Release the lock so that AteomService and respond to new RPCs.
+	s.lock.Unlock()
+
+	if session == nil {
+		slog.InfoContext(ctx, "No active workload at shutdown; exiting cleanly")
+		return
+	}
+
+	var wg sync.WaitGroup
+	for _, name := range session.containers {
+		wg.Add(1)
+		go func(containerName string) {
+			defer wg.Done()
+			if err := s.killContainer(ctx, session, containerName); err != nil {
+				slog.WarnContext(ctx, "Failed to kill container during shutdown", slog.String("container", containerName), slog.Any("err", err))
+			}
+		}(name)
+	}
+	wg.Wait()
+
+	slog.InfoContext(ctx, "Shutting down")
+}
+
+// killContainer stops a container by sending SIGTERM, waiting for the grace period,
+// and escalating to SIGKILL if necessary.
+func (s *AteomService) killContainer(ctx context.Context, session *workloadSession, name string) error {
+	// Propagate SIGTERM to the application container so it can save state and close connections.
+	// If the actor installed no SIGTERM handler it terminates immediately.
+	slog.InfoContext(ctx, "Sending SIGTERM to container", slog.String("container", name))
+	if err := session.rcmd.cmdKill(ctx, name, "SIGTERM"); err != nil {
+		slog.ErrorContext(ctx, "Failed to propagate SIGTERM to container", slog.String("container", name), slog.Any("err", err))
+		return fmt.Errorf("failed to propagate SIGTERM to container %q: %w", name, err)
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- session.rcmd.cmdWait(ctx, name)
+	}()
+
+	sigTermCtx, sigTermCtxCancel := context.WithTimeout(ctx, workloadGracePeriod)
+	defer sigTermCtxCancel()
+
+	err := waitContainerStop(sigTermCtx, done)
+	if err == nil {
+		slog.InfoContext(ctx, "Container exited successfully", slog.String("container", name))
+		return nil
+	}
+
+	// If the error was not due to context timeout or cancellation, it means the wait command
+	// itself failed, so we return the error and do not escalate to SIGKILL. Ateom shutting down
+	// will kill the containers.
+	if !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
+		return fmt.Errorf("wait failed: %w", err)
+	}
+
+	// If the parent context was cancelled or exceeded return immediately
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+
+	// sigTermCtx timed out. Send SIGKILL.
+	slog.WarnContext(ctx, "Grace period expired; killing container", slog.String("container", name))
+	if err := session.rcmd.cmdKill(ctx, name, "SIGKILL"); err != nil {
+		slog.WarnContext(ctx, "Failed to send SIGKILL to container (it might have already exited)", slog.String("container", name), slog.Any("err", err))
+	}
+
+	// Block until the killed container actually exits, but set a short timeout (e.g. 5 seconds)
+	// to avoid blocking indefinitely if gVisor is completely broken.
+	killCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+
+	err = waitContainerStop(killCtx, done)
+	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return fmt.Errorf("container %q failed to exit even after SIGKILL: %w", name, err)
+		}
+		if errors.Is(err, context.Canceled) {
+			return err
+		}
+	}
+
+	slog.InfoContext(ctx, "Container exited after SIGKILL", slog.String("container", name))
+	return nil
+}
+
+// waitContainerStop waits for container exit or context termination.
+func waitContainerStop(ctx context.Context, done <-chan error) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case err := <-done:
+		return err
+	}
+}
+
+func containerNames(containers []*ateompb.Container) []string {
+	names := make([]string, 0, len(containers))
+	for _, c := range containers {
+		names = append(names, c.GetName())
+	}
+	return names
 }
 
 func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkloadRequest) (resp *ateompb.RunWorkloadResponse, retErr error) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
+	if err := s.rejectIfDraining(); err != nil {
+		return nil, err
+	}
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	s.setActiveRPC(rpcRunWorkload, cancel)
+	defer s.clearActiveRPC()
+
+	if err := s.deactivateActorNetworking(ctx); err != nil {
+		return nil, err
+	}
 
 	actorRef := resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()}
 	s.actorLogger.EmitLifecycleLog("Actor starting", actorRef, req.GetActorUid(), req.GetActorTemplateNamespace(), req.GetActorTemplateName())
+
+	// Retain the attribution before the boot rather than after it, so a sample
+	// taken against a workload that dies mid-boot is still attributable. The
+	// cleanup below drops it again if the boot fails outright.
+	attribution := ateomstats.ActorAttributionFromRequest(req)
+	s.activeActor.Store(&attribution)
 
 	// Contract with atelet:
 	//
 	//   * Correct runsc version is downloaded and placed on disk.
 	//   * All OCI bundles are set up, including for "pause" container.
 
-	if err := ateomnet.SetupActorNetwork(ctx, ateomnet.NetworkConfig{InteriorNetNS: s.interiorNetNS, DumpNetInfo: true}); err != nil {
+	egress, err := s.prepareActorEgress(ctx, req.GetActorUid(), req.GetEgressGateway())
+	if err != nil {
+		return nil, err
+	}
+	if err := ateomnet.SetupActorNetwork(ctx, ateomnet.NetworkConfig{
+		InteriorNetNS:      s.interiorNetNS,
+		DumpNetInfo:        true,
+		EgressRedirectPort: s.egressRedirectPort(req.GetEgressGateway() != nil),
+	}); err != nil {
+		// Cleared here as well as in the deferred cleanup below, because that
+		// defer is not registered until after this check.
+		s.activeActor.Store(nil)
 		return nil, fmt.Errorf("while setting up actor network: %w", err)
 	}
+	rcmd := &runsc{
+		path:     req.GetRunscPath(),
+		actorUID: req.GetActorUid(),
+	}
+	var containersToDelete []string
 	defer func() {
 		if retErr != nil {
+			s.activeActor.Store(nil)
+			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+			defer cancel()
+			if err := s.deactivateActorNetworking(cleanupCtx); err != nil {
+				slog.WarnContext(cleanupCtx, "Failed to deactivate actor networking after Run failure", slog.Any("err", err))
+			}
+			deleteContainers(cleanupCtx, rcmd, containersToDelete, "Run")
 			// Detach any bundle rootfs overlays a partially-completed setup
 			// mounted, mirroring the post-checkpoint cleanup — otherwise they
 			// linger in this namespace until atelet wipes the bundle dirs.
@@ -202,16 +609,11 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 				slog.WarnContext(ctx, "Failed to unmount bundle rootfs overlays after Run failure",
 					"actorUID", req.GetActorUid(), "err", err)
 			}
-			if err := ateomnet.CleanupActorNetwork(ctx, s.interiorNetNS); err != nil {
-				slog.WarnContext(ctx, "Failed to clean up actor network after Run failure", slog.Any("err", err))
+			if err := ateomnet.CleanupActorNetwork(cleanupCtx, s.interiorNetNS); err != nil {
+				slog.WarnContext(cleanupCtx, "Failed to clean up actor network after Run failure", slog.Any("err", err))
 			}
 		}
 	}()
-
-	rcmd := &runsc{
-		path:     req.GetRunscPath(),
-		actorUID: req.GetActorUid(),
-	}
 
 	// Create and start pause container. The bundle rootfs is composed here —
 	// an overlay of the node's cached image layers plus the bundle's private
@@ -221,6 +623,7 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	if err := imagecache.SetupBundleRootfs(ateompath.OCIBundlePath(req.GetActorUid(), "pause")); err != nil {
 		return nil, fmt.Errorf("while composing pause rootfs: %w", err)
 	}
+	containersToDelete = append(containersToDelete, "pause")
 	if err := rcmd.cmdCreate(ctx, os.Stdout, "pause", nil); err != nil {
 		return nil, fmt.Errorf("while creating pause container: %w", err)
 	}
@@ -239,6 +642,10 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 		if err := imagecache.SetupBundleRootfs(ateompath.OCIBundlePath(req.GetActorUid(), ac.GetName())); err != nil {
 			return nil, fmt.Errorf("while composing %q rootfs: %w", ac.GetName(), err)
 		}
+		containersToDelete = append(containersToDelete, ac.GetName())
+		if err := maybeInjectGPU(ctx, req.GetActorUid(), ac.GetName()); err != nil {
+			return nil, fmt.Errorf("while injecting GPU for %q: %w", ac.GetName(), err)
+		}
 		if err := rcmd.cmdCreate(ctx, pw, ac.GetName(), nil); err != nil {
 			return nil, fmt.Errorf("while creating %q application container: %w", ac.GetName(), err)
 		}
@@ -251,15 +658,30 @@ func (s *AteomService) RunWorkload(ctx context.Context, req *ateompb.RunWorkload
 	if err := readyz.WaitAll(ctx, req.GetSpec().GetContainers(), ateomnet.ActorVethIP); err != nil {
 		return nil, fmt.Errorf("while waiting for container readyz: %w", err)
 	}
+	if err := s.activateActorNetworking(req.GetAtespace(), req.GetActorName(), egress); err != nil {
+		return nil, err
+	}
 
 	s.actorLogger.EmitLifecycleLog("Actor started", actorRef, req.GetActorUid(), req.GetActorTemplateNamespace(), req.GetActorTemplateName())
+	s.activeSession = &workloadSession{rcmd: rcmd, containers: containerNames(req.GetSpec().GetContainers())}
 
 	return &ateompb.RunWorkloadResponse{}, nil
 }
 
+// Allow checkpointing even if the pod is shutting down. This will allow actors
+// (or the harness) to suspend on shutdown.
 func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.CheckpointWorkloadRequest) (*ateompb.CheckpointWorkloadResponse, error) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	s.setActiveRPC(rpcCheckpointWorkload, cancel)
+	defer s.clearActiveRPC()
+
+	if err := s.deactivateActorNetworking(ctx); err != nil {
+		return nil, err
+	}
 
 	actorRef := resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()}
 	s.actorLogger.EmitLifecycleLog("Actor checkpointing", actorRef, req.GetActorUid(), req.GetActorTemplateNamespace(), req.GetActorTemplateName())
@@ -285,7 +707,9 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA:
 		var ddv []string
 		for _, ctr := range req.GetSpec().GetContainers() {
-			ddv = append(ddv, ctr.GetDurableDirVolumes()...)
+			for _, m := range ctr.GetDurableDirVolumeMounts() {
+				ddv = append(ddv, m.GetMountPath())
+			}
 		}
 		if len(ddv) == 0 {
 			return nil, fmt.Errorf("no durable-dir volumes found for DATA snapshot")
@@ -301,6 +725,19 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	default:
 		return nil, fmt.Errorf("unsupported snapshot scope: %v", req.GetScope())
 	}
+
+	// The sandbox is gone as of the checkpoint above, so the ateom is back to
+	// "available" from here on: there is nothing left to measure, and holding
+	// the attribution would let a later GetWorkloadStats report a checkpointed
+	// actor as though it were still running.
+	//
+	// Cleared here rather than at the end of the function because everything
+	// below is bookkeeping over a dead sandbox and can still fail (listing the
+	// snapshot files returns an error), which would otherwise leave the
+	// attribution behind. Conversely nothing above this point clears it: a
+	// checkpoint that failed may well have left the workload running, and
+	// reporting its usage is then the honest answer.
+	s.activeActor.Store(nil)
 
 	// After checkpointing the sandbox root, runsc may no longer have a usable
 	// control server for state/delete calls. Keep this as best-effort cleanup:
@@ -335,6 +772,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	}
 
 	s.actorLogger.EmitLifecycleLog("Actor checkpointed", actorRef, req.GetActorUid(), req.GetActorTemplateNamespace(), req.GetActorTemplateName())
+	s.activeSession = nil
 
 	return &ateompb.CheckpointWorkloadResponse{SnapshotFiles: snapshotFiles}, nil
 }
@@ -385,9 +823,25 @@ func (r *runsc) cleanupContainersAfterCheckpoint(ctx context.Context, containers
 func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.RestoreWorkloadRequest) (resp *ateompb.RestoreWorkloadResponse, retErr error) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
+	if err := s.rejectIfDraining(); err != nil {
+		return nil, err
+	}
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	s.setActiveRPC(rpcRestoreWorkload, cancel)
+	defer s.clearActiveRPC()
+
+	if err := s.deactivateActorNetworking(ctx); err != nil {
+		return nil, err
+	}
 
 	actorRef := resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()}
 	s.actorLogger.EmitLifecycleLog("Actor restoring", actorRef, req.GetActorUid(), req.GetActorTemplateNamespace(), req.GetActorTemplateName())
+
+	// Same as RunWorkload: retain before the boot, drop again if it fails.
+	attribution := ateomstats.ActorAttributionFromRequest(req)
+	s.activeActor.Store(&attribution)
 
 	// Contract with atelet:
 	//
@@ -395,26 +849,43 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	//   * All OCI bundles are set up, including for "pause" container.
 	//   * Checkpoint downloaded and placed on disk
 
-	if err := ateomnet.SetupActorNetwork(ctx, ateomnet.NetworkConfig{InteriorNetNS: s.interiorNetNS, DumpNetInfo: true}); err != nil {
+	egress, err := s.prepareActorEgress(ctx, req.GetActorUid(), req.GetEgressGateway())
+	if err != nil {
+		return nil, err
+	}
+	if err := ateomnet.SetupActorNetwork(ctx, ateomnet.NetworkConfig{
+		InteriorNetNS:      s.interiorNetNS,
+		DumpNetInfo:        true,
+		EgressRedirectPort: s.egressRedirectPort(req.GetEgressGateway() != nil),
+	}); err != nil {
+		// Same as the Run path: the defer below is not registered yet.
+		s.activeActor.Store(nil)
 		return nil, fmt.Errorf("while setting up actor network: %w", err)
 	}
+	rcmd := &runsc{
+		path:     req.GetRunscPath(),
+		actorUID: req.GetActorUid(),
+	}
+	var containersToDelete []string
 	defer func() {
 		if retErr != nil {
+			s.activeActor.Store(nil)
+			cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+			defer cancel()
+			if err := s.deactivateActorNetworking(cleanupCtx); err != nil {
+				slog.WarnContext(cleanupCtx, "Failed to deactivate actor networking after Restore failure", slog.Any("err", err))
+			}
+			deleteContainers(cleanupCtx, rcmd, containersToDelete, "Restore")
 			// Same overlay detach as the Run-failure path above.
 			if err := imagecache.UnmountAllUnder(ateompath.OCIBundleDir(req.GetActorUid())); err != nil {
 				slog.WarnContext(ctx, "Failed to unmount bundle rootfs overlays after Restore failure",
 					"actorUID", req.GetActorUid(), "err", err)
 			}
-			if err := ateomnet.CleanupActorNetwork(ctx, s.interiorNetNS); err != nil {
-				slog.WarnContext(ctx, "Failed to clean up actor network after Restore failure", slog.Any("err", err))
+			if err := ateomnet.CleanupActorNetwork(cleanupCtx, s.interiorNetNS); err != nil {
+				slog.WarnContext(cleanupCtx, "Failed to clean up actor network after Restore failure", slog.Any("err", err))
 			}
 		}
 	}()
-
-	rcmd := &runsc{
-		path:     req.GetRunscPath(),
-		actorUID: req.GetActorUid(),
-	}
 
 	checkpointDir := ateompath.RestoreStateDir(req.GetActorUid())
 
@@ -428,6 +899,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	switch req.GetScope() {
 	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA:
 		// Create and restore pause container
+		containersToDelete = append(containersToDelete, "pause")
 		if err := rcmd.cmdCreate(ctx, os.Stdout, "pause", []string{"--fs-restore-image-path", checkpointDir}); err != nil {
 			return nil, fmt.Errorf("while creating pause container: %w", err)
 		}
@@ -436,6 +908,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 		}
 	case ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL:
 		// Create and restore pause container
+		containersToDelete = append(containersToDelete, "pause")
 		if err := rcmd.cmdCreate(ctx, os.Stdout, "pause", nil); err != nil {
 			return nil, fmt.Errorf("while creating pause container: %w", err)
 		}
@@ -457,8 +930,12 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 		if err := imagecache.SetupBundleRootfs(ateompath.OCIBundlePath(req.GetActorUid(), ac.GetName())); err != nil {
 			return nil, fmt.Errorf("while composing %q rootfs: %w", ac.GetName(), err)
 		}
+		if err := maybeInjectGPU(ctx, req.GetActorUid(), ac.GetName()); err != nil {
+			return nil, fmt.Errorf("while injecting GPU for %q: %w", ac.GetName(), err)
+		}
 		switch req.GetScope() {
 		case ateompb.SnapshotScope_SNAPSHOT_SCOPE_DATA:
+			containersToDelete = append(containersToDelete, ac.GetName())
 			if err := rcmd.cmdCreate(ctx, pw, ac.GetName(), nil); err != nil {
 				return nil, fmt.Errorf("while creating %q application container: %w", ac.GetName(), err)
 			}
@@ -466,6 +943,7 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 				return nil, fmt.Errorf("while starting %q application container: %w", ac.GetName(), err)
 			}
 		case ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL:
+			containersToDelete = append(containersToDelete, ac.GetName())
 			if err := rcmd.cmdCreate(ctx, pw, ac.GetName(), nil); err != nil {
 				return nil, fmt.Errorf("while creating %q application container: %w", ac.GetName(), err)
 			}
@@ -481,10 +959,102 @@ func (s *AteomService) RestoreWorkload(ctx context.Context, req *ateompb.Restore
 	if err := readyz.WaitAll(ctx, req.GetSpec().GetContainers(), ateomnet.ActorVethIP); err != nil {
 		return nil, fmt.Errorf("while waiting for container readyz: %w", err)
 	}
+	if err := s.activateActorNetworking(req.GetAtespace(), req.GetActorName(), egress); err != nil {
+		return nil, err
+	}
 
 	s.actorLogger.EmitLifecycleLog("Actor restored", actorRef, req.GetActorUid(), req.GetActorTemplateNamespace(), req.GetActorTemplateName())
+	s.activeSession = &workloadSession{rcmd: rcmd, containers: containerNames(req.GetSpec().GetContainers())}
 
 	return &ateompb.RestoreWorkloadResponse{}, nil
+}
+
+type actorEgress struct {
+	// client presents the actor certificate to the remote egress gateway.
+	client *atunnel.Client
+	// certificateSource owns the actor key and renews its certificate via atelet.
+	certificateSource *atunnel.BrokerCertificateSource
+	expiresAt         time.Time
+}
+
+func (s *AteomService) prepareActorEgress(ctx context.Context, actorUID string, gateway *ateompb.EgressGateway) (*actorEgress, error) {
+	if gateway == nil {
+		return nil, nil
+	}
+	if gateway.GetAddress() == "" {
+		return nil, fmt.Errorf("egress gateway address is required")
+	}
+	serverName, _, err := net.SplitHostPort(gateway.GetAddress())
+	if err != nil {
+		return nil, fmt.Errorf("invalid egress gateway address %q: %w", gateway.GetAddress(), err)
+	}
+	certificateSource, err := atunnel.NewBrokerCertificateSource(atunnel.BrokerConfig{
+		SocketPath:           ateompath.CredentialBrokerSocket,
+		CredentialBundlePath: s.workerCredentialBundlePath,
+		TrustBundlePath:      s.podIdentityTrustBundlePath,
+		ExpectedActorUID:     actorUID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("while configuring actor certificate broker: %w", err)
+	}
+	// Mint before starting the workload so configured tunneled egress fails
+	// closed. The source retains the private key for mTLS and renewal.
+	expiresAt, err := certificateSource.Mint(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("while obtaining actor certificate: %w", err)
+	}
+	gatewayClient, err := atunnel.NewClient(atunnel.ClientConfig{
+		GatewayAddress:       gateway.GetAddress(),
+		ServerName:           serverName,
+		GetClientCertificate: certificateSource.GetClientCertificate,
+		TrustBundlePath:      s.egressGatewayTrustBundlePath,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("while configuring actor egress client: %w", err)
+	}
+	return &actorEgress{client: gatewayClient, certificateSource: certificateSource, expiresAt: expiresAt}, nil
+}
+
+func (s *AteomService) activateActorNetworking(atespace, actorName string, egress *actorEgress) error {
+	if err := s.atunnelIngress.Activate(atespace, actorName); err != nil {
+		return fmt.Errorf("while activating actor ingress: %w", err)
+	}
+	if egress == nil {
+		return nil
+	}
+	if err := s.atunnelEgress.Activate(egress.client, egress.certificateSource, egress.expiresAt); err != nil {
+		return fmt.Errorf("while activating actor egress: %w", err)
+	}
+	return nil
+}
+
+func deleteContainers(ctx context.Context, rcmd *runsc, containers []string, operation string) {
+	for _, container := range slices.Backward(containers) {
+		if err := rcmd.cmdDelete(ctx, container); err != nil {
+			slog.WarnContext(ctx, "Failed to delete runsc container after failure",
+				"operation", operation, "container", container, "err", err)
+		}
+	}
+}
+
+func (s *AteomService) deactivateActorNetworking(ctx context.Context) error {
+	// Stop admitting traffic and drain active streams before the Actor network
+	// is torn down. Attempt both directions even if one fails to deactivate.
+	err := errors.Join(s.atunnelIngress.Deactivate(ctx), s.atunnelEgress.Deactivate(ctx))
+	if err != nil {
+		return fmt.Errorf("while deactivating actor networking: %w", err)
+	}
+	return nil
+}
+
+// egressRedirectPort returns the local atunnel egress listener port when the
+// activation arms tunneled egress, and zero otherwise, which leaves the
+// prerouting redirect uninstalled and actor egress on the masquerade path.
+func (s *AteomService) egressRedirectPort(redirectEgress bool) uint16 {
+	if !redirectEgress {
+		return 0
+	}
+	return s.atunnelEgressPort
 }
 
 // setupCgroupDelegation prepares the worker pod's cgroup so runsc can create a

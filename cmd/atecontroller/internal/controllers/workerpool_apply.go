@@ -15,6 +15,8 @@
 package controllers
 
 import (
+	"os"
+
 	corev1 "k8s.io/api/core/v1"
 	appsv1ac "k8s.io/client-go/applyconfigurations/apps/v1"
 	corev1ac "k8s.io/client-go/applyconfigurations/core/v1"
@@ -28,38 +30,126 @@ import (
 // uid so each worker pod is a distinct telemetry source.
 const ateomOTelResourceAttributes = "k8s.namespace.name=$(POD_NAMESPACE),k8s.pod.name=$(POD_NAME),k8s.pod.uid=$(POD_UID),service.instance.id=$(POD_UID)"
 
+// workerTerminationGracePeriodSeconds is the hardcoded pod termination grace
+// period for worker pods (60 minutes).
+const workerTerminationGracePeriodSeconds int64 = 3600
+
+// ateomOTelSettings is the telemetry configuration propagated to ateom worker
+// pods. A zero value leaves the pods without telemetry env.
+type ateomOTelSettings struct {
+	// Endpoint is the OTLP collector address. Empty disables ateom telemetry
+	// entirely, so the other fields are ignored.
+	Endpoint string
+	// MetricExportInterval overrides the SDK's 60s PeriodicReader interval. It is
+	// the raw OTEL_METRIC_EXPORT_INTERVAL value, i.e. whole milliseconds; the SDK
+	// falls back to its default when it does not parse. Empty keeps the default.
+	//
+	// ateom registers no instruments of its own, so its only telemetry is
+	// otelgrpc's rpc.server.* and it stays invisible to the collector until the
+	// first export tick fires. Shortening the interval is what keeps that
+	// startup gap inside an e2e budget; production leaves it unset.
+	MetricExportInterval string
+	// MetricExportTimeout overrides the SDK's  per-export timeout, in the same
+	// whole-millisecond form as MetricExportInterval. Empty keeps the default.
+	MetricExportTimeout string
+	// TracesSampler and TracesSamplerArg are the raw OTEL_TRACES_SAMPLER and
+	// OTEL_TRACES_SAMPLER_ARG values, passed through untouched: ateom's own
+	// serverboot resolution validates them. Empty sampler keeps the worker's
+	// default and drops the arg, which is dead config on its own.
+	TracesSampler    string
+	TracesSamplerArg string
+}
+
+const (
+	atunnelIdentityVolume       = "atunnel-identity"
+	atunnelIdentityMountPath    = "/run/podidentity.podcert.ate.dev"
+	atunnelEgressTrustVolume    = "atunnel-egress-trust"
+	atunnelEgressTrustMountPath = "/run/servicedns.podcert.ate.dev"
+)
+
 // buildDeploymentApplyConfig constructs the SSA apply configuration for the
 // Deployment managed by a WorkerPool. Only fields owned by this controller
-// are declared here. otelEndpoint, when non-empty, is propagated to the ateom
-// container so it pushes telemetry to that collector.
-func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otelEndpoint string) *appsv1ac.DeploymentApplyConfiguration {
+// are declared here. otel, when it carries an endpoint, is propagated to the
+// ateom container so it pushes telemetry to that collector.
+func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otel ateomOTelSettings) *appsv1ac.DeploymentApplyConfiguration {
 	containerAC := corev1ac.Container().
 		WithName("ateom").
 		WithImage(wp.Spec.AteomImage).
 		WithArgs(
 			"--pod-uid=$(POD_UID)",
+			"--atunnel-listen-address=0.0.0.0:443",
+			"--atunnel-credential-bundle="+atunnelIdentityMountPath+"/credential-bundle.pem",
+			"--atunnel-trust-bundle="+atunnelIdentityMountPath+"/trust-bundle.pem",
+			"--atunnel-egress-listen-address=0.0.0.0:15001",
+			"--atunnel-egress-trust-bundle="+atunnelEgressTrustMountPath+"/trust-bundle.pem",
 		).
+		WithPorts(corev1ac.ContainerPort().
+			WithName("https").
+			WithContainerPort(443).
+			WithProtocol(corev1.ProtocolTCP)).
 		WithSecurityContext(ateomSecurityContext(wp.Spec.SandboxClass)).
-		WithEnv(ateomContainerEnv(otelEndpoint)...).
-		WithVolumeMounts(corev1ac.VolumeMount().
-			WithName("run-ateom").
-			WithMountPath(ateompath.BasePath).
-			WithMountPropagation(corev1.MountPropagationHostToContainer))
+		WithEnv(ateomContainerEnv(otel)...).
+		WithVolumeMounts(
+			corev1ac.VolumeMount().
+				WithName("run-ateom").
+				WithMountPath(ateompath.BasePath).
+				WithMountPropagation(corev1.MountPropagationHostToContainer),
+			corev1ac.VolumeMount().
+				WithName(atunnelIdentityVolume).
+				WithMountPath(atunnelIdentityMountPath).
+				WithReadOnly(true),
+			corev1ac.VolumeMount().
+				WithName(atunnelEgressTrustVolume).
+				WithMountPath(atunnelEgressTrustMountPath).
+				WithReadOnly(true),
+		)
 
 	podSpecAC := corev1ac.PodSpec().
 		WithSecurityContext(corev1ac.PodSecurityContext().
 			WithRunAsUser(0).
 			WithRunAsGroup(0)).
-		WithVolumes(corev1ac.Volume().
-			WithName("run-ateom").
-			WithHostPath(corev1ac.HostPathVolumeSource().
-				WithPath(ateompath.BasePath).
-				WithType(corev1.HostPathDirectoryOrCreate)))
+		WithVolumes(
+			corev1ac.Volume().
+				WithName("run-ateom").
+				WithHostPath(corev1ac.HostPathVolumeSource().
+					WithPath(ateompath.BasePath).
+					WithType(corev1.HostPathDirectoryOrCreate)),
+			corev1ac.Volume().
+				WithName(atunnelIdentityVolume).
+				WithProjected(corev1ac.ProjectedVolumeSource().
+					WithSources(
+						corev1ac.VolumeProjection().
+							WithPodCertificate(corev1ac.PodCertificateProjection().
+								WithSignerName("podidentity.podcert.ate.dev/identity").
+								WithKeyType("ECDSAP256").
+								WithCredentialBundlePath("credential-bundle.pem")),
+						corev1ac.VolumeProjection().
+							WithClusterTrustBundle(corev1ac.ClusterTrustBundleProjection().
+								WithSignerName("podidentity.podcert.ate.dev/identity").
+								WithLabelSelector(metav1ac.LabelSelector().
+									WithMatchLabels(map[string]string{"podcert.ate.dev/canarying": "live"})).
+								WithPath("trust-bundle.pem")),
+					),
+				),
+			corev1ac.Volume().
+				WithName(atunnelEgressTrustVolume).
+				WithProjected(corev1ac.ProjectedVolumeSource().
+					WithSources(
+						corev1ac.VolumeProjection().
+							WithClusterTrustBundle(corev1ac.ClusterTrustBundleProjection().
+								WithSignerName("servicedns.podcert.ate.dev/identity").
+								WithLabelSelector(metav1ac.LabelSelector().
+									WithMatchLabels(map[string]string{"podcert.ate.dev/canarying": "live"})).
+								WithPath("trust-bundle.pem")),
+					),
+				),
+		)
 
 	applyWorkerPoolPodTemplate(podSpecAC, containerAC, wp.Spec.Template)
 	maybeApplyMicroVMPodShape(podSpecAC, containerAC, wp.Spec.SandboxClass)
+	maybeApplyGPUPodShape(podSpecAC, containerAC, wp.Spec.Template, wp.Spec.SandboxClass)
 	podSpecAC.WithContainers(containerAC)
-	podSpecAC.WithTerminationGracePeriodSeconds(int64(workerTerminationGracePeriodSeconds(wp)))
+	podSpecAC.WithTerminationGracePeriodSeconds(workerTerminationGracePeriodSeconds)
 
 	return appsv1ac.Deployment(wp.Name, wp.Namespace).
 		WithOwnerReferences(metav1ac.OwnerReference().
@@ -83,19 +173,40 @@ func buildDeploymentApplyConfig(wp *atev1alpha1.WorkerPool, otelEndpoint string)
 // ateomContainerEnv adds the OTLP endpoint and resource identity only when
 // telemetry is configured. POD_* refs precede OTEL_RESOURCE_ATTRIBUTES so its
 // $(POD_*) substitutions resolve.
-func ateomContainerEnv(otelEndpoint string) []*corev1ac.EnvVarApplyConfiguration {
+func ateomContainerEnv(otel ateomOTelSettings) []*corev1ac.EnvVarApplyConfiguration {
 	envs := []*corev1ac.EnvVarApplyConfiguration{
 		fieldRefEnv("POD_UID", "metadata.uid"),
 	}
-	if otelEndpoint == "" {
+	if otel.Endpoint == "" {
 		return envs
 	}
-	return append(envs,
+	envs = append(envs,
 		fieldRefEnv("POD_NAME", "metadata.name"),
 		fieldRefEnv("POD_NAMESPACE", "metadata.namespace"),
-		corev1ac.EnvVar().WithName("OTEL_EXPORTER_OTLP_ENDPOINT").WithValue(otelEndpoint),
+		corev1ac.EnvVar().WithName("OTEL_EXPORTER_OTLP_ENDPOINT").WithValue(otel.Endpoint),
 		corev1ac.EnvVar().WithName("OTEL_RESOURCE_ATTRIBUTES").WithValue(ateomOTelResourceAttributes),
 	)
+	if otel.MetricExportInterval != "" {
+		envs = append(envs, corev1ac.EnvVar().
+			WithName("OTEL_METRIC_EXPORT_INTERVAL").
+			WithValue(otel.MetricExportInterval))
+	}
+	if otel.MetricExportTimeout != "" {
+		envs = append(envs, corev1ac.EnvVar().
+			WithName("OTEL_METRIC_EXPORT_TIMEOUT").
+			WithValue(otel.MetricExportTimeout))
+	}
+	if otel.TracesSampler != "" {
+		envs = append(envs, corev1ac.EnvVar().
+			WithName("OTEL_TRACES_SAMPLER").
+			WithValue(otel.TracesSampler))
+		if otel.TracesSamplerArg != "" {
+			envs = append(envs, corev1ac.EnvVar().
+				WithName("OTEL_TRACES_SAMPLER_ARG").
+				WithValue(otel.TracesSamplerArg))
+		}
+	}
+	return envs
 }
 
 func fieldRefEnv(name, fieldPath string) *corev1ac.EnvVarApplyConfiguration {
@@ -113,7 +224,8 @@ func fieldRefEnv(name, fieldPath string) *corev1ac.EnvVarApplyConfiguration {
 // veth and nftables rules (NET_ADMIN/NET_RAW), and the OCI rootfs is unpacked
 // and device nodes created as root over image-owned trees
 // (DAC_OVERRIDE/FOWNER/CHOWN/MKNOD). This replaces the former privileged worker;
-// the default seccomp and AppArmor profiles are sufficient (no Unconfined).
+// seccomp stays at the runtime default, but AppArmor must be Unconfined (see
+// ateomSecurityContext) since runsc's own mounts trip the default profile.
 var ateomGvisorCapabilities = []corev1.Capability{
 	"NET_ADMIN", "SYS_ADMIN", "SYS_CHROOT", "SYS_PTRACE",
 	"SETUID", "SETGID", "SETPCAP", "DAC_OVERRIDE",
@@ -144,19 +256,6 @@ func ateomSecurityContext(class atev1alpha1.SandboxClass) *corev1ac.SecurityCont
 			WithAdd(ateomGvisorCapabilities...)).
 		WithAppArmorProfile(corev1ac.AppArmorProfile().
 			WithType(corev1.AppArmorProfileTypeUnconfined))
-}
-
-// defaultTerminationGracePeriodSeconds is the fallback pod termination grace
-// period for worker pods (5 minutes), used when a WorkerPool does not set
-// spec.terminationGracePeriodSeconds. It matches the CRD default and gives
-// actors ample time to trap SIGTERM and save state before SIGKILL.
-const defaultTerminationGracePeriodSeconds int32 = 300
-
-func workerTerminationGracePeriodSeconds(wp *atev1alpha1.WorkerPool) int32 {
-	if wp.Spec.TerminationGracePeriodSeconds != nil {
-		return *wp.Spec.TerminationGracePeriodSeconds
-	}
-	return defaultTerminationGracePeriodSeconds
 }
 
 // maybeApplyMicroVMPodShape adds the /dev/kvm device and node placement a
@@ -204,6 +303,92 @@ func maybeApplyMicroVMPodShape(
 		WithOperator(corev1.TolerationOpEqual).
 		WithValue(string(atev1alpha1.SandboxClassMicroVM)).
 		WithEffect(corev1.TaintEffectNoSchedule))
+}
+
+// nvidiaToolkitContainerPath is where the host toolkit is mounted inside the
+// worker; ateom-gvisor's toolkitDir must match this. It sits outside
+// /usr/local/nvidia because the GPU device plugin mounts that tree into the
+// container read-only, and a mount cannot create its own mountpoint there, so
+// mounting under it only works when the toolkit happens to live inside the
+// directory the plugin mounts.
+const nvidiaToolkitContainerPath = "/opt/nvidia-toolkit"
+
+// defaultNvidiaToolkitHostPath is where gpu-operator installs the toolkit
+// (toolkit.installDir defaults to /usr/local/nvidia). It is deliberately not the
+// container path above: the two are independent, since where the node keeps the
+// toolkit says nothing about where we can mount it.
+const defaultNvidiaToolkitHostPath = "/usr/local/nvidia/toolkit"
+
+// nvidiaDriverRootEnv names the directory the GPU device plugin mounts the driver
+// into a pod at. ateom derives the driver library and binary paths from it, both of
+// which nvidia-ctk needs to generate a CDI spec. Only set it when the cluster's
+// device plugin does not use the /usr/local/nvidia convention; the controller
+// forwards its own value onto GPU worker pods.
+const nvidiaDriverRootEnv = "ATE_NVIDIA_DRIVER_ROOT"
+
+// nvidiaToolkitHostPath is where the NVIDIA container toolkit lives on the node.
+// It is platform-specific: gpu-operator and EKS install it at
+// /usr/local/nvidia/toolkit, while GKE keeps NVIDIA assets under
+// /home/kubernetes/bin/nvidia, so it is overridable via the
+// ATE_NVIDIA_TOOLKIT_HOST_PATH env var on the controller. We mount it read-only
+// so nvidia-ctk / nvidia-cdi-hook match whatever toolkit/driver the cluster runs.
+var nvidiaToolkitHostPath = envOrDefault("ATE_NVIDIA_TOOLKIT_HOST_PATH", defaultNvidiaToolkitHostPath)
+
+func envOrDefault(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
+}
+
+// maybeApplyGPUPodShape shapes a gVisor worker pod that requests a GPU so ateom
+// can inject the GPU into actors via CDI. It mounts the host NVIDIA toolkit
+// (version-matched to the node) read-only, for the glibc-based ateom image to run
+// directly. The pod keeps the same security posture as any other gVisor worker.
+// No-op for non-GPU pools and non-gVisor classes; an empty class defaults to
+// gVisor (WorkerPoolSpec kubebuilder default).
+func maybeApplyGPUPodShape(
+	podSpecAC *corev1ac.PodSpecApplyConfiguration,
+	containerAC *corev1ac.ContainerApplyConfiguration,
+	tmpl *atev1alpha1.WorkerPoolPodTemplate,
+	sandboxClass atev1alpha1.SandboxClass,
+) {
+	if sandboxClass != atev1alpha1.SandboxClassGvisor && sandboxClass != "" {
+		return
+	}
+	if !templateRequestsGPU(tmpl) {
+		return
+	}
+	// Mount the host NVIDIA toolkit (version-matched to the node) read-only.
+	containerAC.WithVolumeMounts(corev1ac.VolumeMount().
+		WithName("nvidia-toolkit").
+		WithMountPath(nvidiaToolkitContainerPath).
+		WithReadOnly(true))
+	podSpecAC.WithVolumes(corev1ac.Volume().
+		WithName("nvidia-toolkit").
+		WithHostPath(corev1ac.HostPathVolumeSource().
+			WithPath(nvidiaToolkitHostPath).
+			WithType(corev1.HostPathDirectory)))
+	// Only propagated when set, so a default deployment adds no env to worker pods.
+	if root := os.Getenv(nvidiaDriverRootEnv); root != "" {
+		containerAC.WithEnv(corev1ac.EnvVar().WithName(nvidiaDriverRootEnv).WithValue(root))
+	}
+}
+
+// templateRequestsGPU reports whether the pool template requests one or more
+// nvidia.com/gpu devices (limits or requests).
+func templateRequestsGPU(tmpl *atev1alpha1.WorkerPoolPodTemplate) bool {
+	if tmpl == nil || tmpl.Resources == nil {
+		return false
+	}
+	const gpu = corev1.ResourceName("nvidia.com/gpu")
+	if q, ok := tmpl.Resources.Limits[gpu]; ok && !q.IsZero() {
+		return true
+	}
+	if q, ok := tmpl.Resources.Requests[gpu]; ok && !q.IsZero() {
+		return true
+	}
+	return false
 }
 
 func applyWorkerPoolPodTemplate(

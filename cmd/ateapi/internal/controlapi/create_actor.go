@@ -18,8 +18,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/resources"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"google.golang.org/grpc/codes"
@@ -29,11 +31,45 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
-func (s *Service) CreateActor(ctx context.Context, req *ateapipb.CreateActorRequest) (*ateapipb.Actor, error) {
+func (s *Service) CreateActor(ctx context.Context, req *ateapipb.CreateActorRequest) (created *ateapipb.Actor, err error) {
 	if errs := validateCreateActorRequest(req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
+	start := time.Now()
 	in := req.GetActor()
+	// Recorded only after validation, so every operation uniformly measures a
+	// validated request; malformed ones stay visible in rpc.server.call.duration.
+	defer func() {
+		s.instruments.recordLifecycleOp(ctx, ateattr.OperationCreate, start, err,
+			ateattr.TemplateNameKey.String(in.GetActorTemplateName()),
+			ateattr.TemplateNamespaceKey.String(in.GetActorTemplateNamespace()),
+		)
+	}()
+	var sourceSnapshot *ateapipb.ActorSnapshot
+	var sourceSnapshotRef *ateapipb.ObjectRef
+	if ref := req.GetSourceSnapshot(); ref != nil {
+		if _, ok := ref.GetReference().(*ateapipb.ActorSnapshotRef_Tag); !ok {
+			return nil, status.Error(codes.FailedPrecondition, "source ActorSnapshot must be referenced by tag")
+		}
+		lock, snapshot, canonical, tag, err := s.lockActorSnapshot(ctx, ref)
+		if err != nil {
+			return nil, err
+		}
+		defer lock.Close()
+		ctx = lock.Context()
+		sourceSnapshot = snapshot
+		sourceSnapshotRef = canonical
+		target := in.GetMetadata()
+		switch tag.GetScope() {
+		case ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE:
+			if tag.GetMetadata().GetAtespace() != target.GetAtespace() {
+				return nil, status.Error(codes.FailedPrecondition, "ActorSnapshot tag is not published outside its Atespace")
+			}
+		case ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED:
+		default:
+			return nil, status.Error(codes.FailedPrecondition, "source ActorSnapshot tag has an invalid scope")
+		}
+	}
 	templateNamespace := in.GetActorTemplateNamespace()
 	templateName := in.GetActorTemplateName()
 
@@ -45,6 +81,18 @@ func (s *Service) CreateActor(ctx context.Context, req *ateapipb.CreateActorRequ
 			return nil, status.Errorf(codes.FailedPrecondition, "ActorTemplate %s/%s not found", templateNamespace, templateName)
 		}
 		return nil, fmt.Errorf("while getting ActorTemplate: %w", err)
+	}
+	// TODO: Permit compatible DATA snapshots when runtimes can extract portable data.
+	if sourceSnapshot != nil && sourceSnapshot.GetActorTemplateUid() != string(template.GetUID()) {
+		return nil, status.Error(codes.FailedPrecondition, "ActorSnapshot requires the source ActorTemplate")
+	}
+	if sourceSnapshot != nil {
+		for _, volume := range template.Spec.Volumes {
+			if volume.ExternalVolumeTemplate != nil {
+				// TODO: Permit cloning after CSI volume snapshots are supported.
+				return nil, status.Error(codes.FailedPrecondition, "ActorSnapshot cloning does not support external volumes")
+			}
+		}
 	}
 
 	atespace := in.GetMetadata().GetAtespace()
@@ -59,12 +107,8 @@ func (s *Service) CreateActor(ctx context.Context, req *ateapipb.CreateActorRequ
 		return nil, status.Errorf(codes.FailedPrecondition, "Atespace %s not found", atespace)
 	}
 
-	actorRef := &ateapipb.ObjectRef{
-		Atespace: atespace,
-		Name:     name,
-	}
-
-	volumes, err := s.createActorVolumes(ctx, actorRef, template)
+	// Volume creation is completed asynchronously after the actor is recorded.
+	initVols, err := initialActorVolumes(ctx, s.storageClassLister, template)
 	if err != nil {
 		return nil, err
 	}
@@ -78,12 +122,11 @@ func (s *Service) CreateActor(ctx context.Context, req *ateapipb.CreateActorRequ
 		ActorTemplateNamespace: templateNamespace,
 		ActorTemplateName:      templateName,
 		WorkerSelector:         in.GetWorkerSelector(),
-		ActorVolumes:           volumes,
+		ActorVolumes:           initVols,
+		LatestSnapshot:         sourceSnapshotRef,
 	}
 	stored, err := s.persistence.CreateActor(ctx, actor)
 	if err != nil {
-		// Cleanup created volumes if DB write fails
-		_ = s.deleteActorVolumes(ctx, actorRef, volumes)
 		if errors.Is(err, store.ErrAlreadyExists) {
 			return nil, status.Errorf(codes.AlreadyExists, "Actor %s already exists", name)
 		}
@@ -134,6 +177,11 @@ func validateCreateActorRequest(req *ateapipb.CreateActorRequest) field.ErrorLis
 
 	if val := actor.GetWorkerSelector(); val != nil {
 		errs = append(errs, validateSelector(val, actorPath.Child("worker_selector"))...)
+	}
+	if val := req.GetSourceSnapshot(); val != nil {
+		if err := validateActorSnapshotRef(val, "source_snapshot"); err != nil {
+			errs = append(errs, field.Invalid(fldPath.Child("source_snapshot"), val, err.Error()))
+		}
 	}
 
 	return errs

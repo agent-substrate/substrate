@@ -45,13 +45,44 @@ service Ateom {
   // written by CheckpointWorkload.  Ateom will handle downloading the correct
   // gVisor / runsc version to match the checkpoint.
   rpc RestoreWorkload(RestoreWorkloadRequest) returns (RestoreWorkloadResponse) {}
+
+  // GetWorkloadStats returns a point-in-time resource-usage sample for the
+  // workload this ateom is currently executing.
+  //
+  // It is a pure read: unlike the three calls above it does not move the ateom
+  // between "available" and "executing", so it is safe to call on a timer for
+  // the whole lifetime of a workload. It also does not wait on them. Those
+  // three serialize on a mutex an ateom holds for a whole boot, restore, or
+  // checkpoint; this call reads its state from outside that mutex, so a poll
+  // landing in the middle of one answers immediately instead of going quiet for
+  // the duration -- which would silence the poller during exactly the phases
+  // whose usage is most interesting.
+  //
+  // Two ways it declines to give a sample, and they ask different things of the
+  // caller:
+  //
+  //   * NOT_FOUND -- this ateom is not executing the actor in the request. It
+  //     may be "available", or a recycled worker may have moved on to a
+  //     different actor. Retrying on the same timer will not change the answer:
+  //     the caller's worker-to-actor mapping is stale and wants re-resolving.
+  //
+  //   * FAILED_PRECONDITION -- this ateom is executing the requested actor but
+  //     has no sample to give yet. It accepts an actor before the sandbox it
+  //     will measure exists, so a poll landing in the boot lands here. Read it
+  //     as "no numbers right now", not as "the actor is gone": it is transient,
+  //     and the caller should skip this sample and take the next one.
+  //
+  // The split is worth the two codes because the identity is retained from the
+  // moment the ateom accepts the actor, on both runtimes. That is what makes
+  // "booting" distinguishable from "not here" at all, and it means a workload
+  // that dies during boot is attributable rather than anonymous.
+  rpc GetWorkloadStats(GetWorkloadStatsRequest) returns (GetWorkloadStatsResponse) {}
 }
 
 message RunWorkloadRequest {
   string atespace = 1;
   string actor_name = 2;
   string actor_uid = 3;
-
   string actor_template_namespace = 4;
   string actor_template_name = 5;
 
@@ -64,6 +95,16 @@ message RunWorkloadRequest {
   // to the local on-disk path atelet fetched it to (content-addressed, like
   // runsc_path). Empty for the gVisor runtime, which uses runsc_path.
   map<string, string> runtime_asset_paths = 8;
+
+  // When absent, actor traffic uses direct egress instead of atunnel.
+  optional EgressGateway egress_gateway = 10;
+}
+
+// EgressGateway configures tunneled egress for one actor activation.
+message EgressGateway {
+  // address is required and identifies the remote gateway as an IP address or
+  // DNS name followed by its port.
+  string address = 1;
 }
 
 // WorkloadSpec parallels Pod, but with far fewer configurable fields.
@@ -74,13 +115,33 @@ message WorkloadSpec {
 message Container {
   string name = 1;
   Readyz readyz = 2;
-  repeated string durable_dir_volumes = 3;
+
+  // Field 3 was durable_dir_volumes: the mount paths alone, which only worked
+  // while an actor was limited to a single durable-dir volume.
+  reserved 3;
+  reserved "durable_dir_volumes";
+
+  // durable_dir_volume_mounts are the durable-dir volumes this container
+  // mounts, if any.
+  repeated DurableDirVolumeMount durable_dir_volume_mounts = 4;
+}
+
+// DurableDirVolumeMount is one durable-dir volume mounted into a container.
+message DurableDirVolumeMount {
+  // volume_name is the name the ActorTemplate gave the volume. It selects the
+  // per-volume directory atelet prepared for the actor on the host.
+  string volume_name = 1;
+  // mount_path is where the container sees the volume.
+  string mount_path = 2;
 }
 
 // Readyz describes how to check that a container is ready to serve.
 // Only HTTP is supported today.
 message Readyz {
   HTTPGetAction http_get = 1;
+  // How long to keep polling before giving up and failing the actor start.
+  // Zero means the ateom's default.
+  int32 timeout_seconds = 2;
 }
 
 // HTTPGetAction performs an HTTP GET against the container.
@@ -104,6 +165,12 @@ enum SnapshotScope {
   // (currently DurableDir-typed volumes). Memory and the rest of rootfs are
   // excluded.
   SNAPSHOT_SCOPE_DATA = 2;
+  // Restore-only: restore the ActorTemplate's golden snapshot's guest state
+  // (memory + full filesystem delta) combined with the snapshot's durable
+  // data. Never valid for CheckpointWorkload — snapshots only ever capture
+  // FULL or DATA; the control plane selects this scope at restore per the
+  // template's onResume configuration.
+  SNAPSHOT_SCOPE_DATA_ON_GOLDEN = 3;
 }
 
 message CheckpointWorkloadRequest {
@@ -118,15 +185,17 @@ message CheckpointWorkloadRequest {
 
   WorkloadSpec spec = 7;
 
-  // An object storage URI prefix below which the checkpoint data will be
-  // stored.
+  // The object storage URI of the snapshot to write. Object names are appended
+  // to it, so it addresses the snapshot as a whole rather than any one object.
   //
   // The structure of the checkpoint should generally be treated as opaque. For
   // gVisor, the checkpoint consists of a checkpoint.img file that contains the
   // memory, sentry state, and filesystem deltas.
   //
-  // For example: "gs://bucket/actors/1234/snapshots/5678/"
-  string snapshot_uri_prefix = 8;
+  // The control plane sends an ActorSnapshot's snapshot_uri, whose layout is
+  // "<snapshotsConfig.location>/snapshots/<atespace>/<snapshot name>". For
+  // example: "gs://bucket/root/snapshots/team-a/5678".
+  string snapshot_uri = 8;
 
   // runtime_asset_paths maps a runtime asset name to the local on-disk path
   // atelet fetched it to (see RunWorkloadRequest). Empty for gVisor.
@@ -147,7 +216,6 @@ message RestoreWorkloadRequest {
   string atespace = 1;
   string actor_name = 2;
   string actor_uid = 3;
-
   string actor_template_namespace = 4;
   string actor_template_name = 5;
 
@@ -155,8 +223,9 @@ message RestoreWorkloadRequest {
 
   WorkloadSpec spec = 7;
 
-  // The object storage URI prefix of the snapshot to restore.
-  string snapshot_uri_prefix = 8;
+  // The object storage URI of the snapshot to restore. Object names are
+  // appended to it; it addresses the snapshot, not any one object.
+  string snapshot_uri = 8;
 
   // runtime_asset_paths maps a runtime asset name to the local on-disk path
   // atelet fetched it to (see RunWorkloadRequest). Empty for gVisor.
@@ -164,7 +233,96 @@ message RestoreWorkloadRequest {
 
   // What content to restore from the snapshot.
   SnapshotScope scope = 10;
+
+  // When absent, actor traffic uses direct egress instead of atunnel.
+  optional EgressGateway egress_gateway = 12;
+
+  // The object storage URI of the ActorTemplate's golden snapshot.
+  // Set only when scope is SNAPSHOT_SCOPE_DATA_ON_GOLDEN. Mirrors the
+  // snapshot_uri contract (field 8).
+  string golden_snapshot_uri = 13;
 }
 
 message RestoreWorkloadResponse {
+}
+
+message GetWorkloadStatsRequest {
+  // The actor the caller believes is executing here. A worker can be recycled
+  // between the caller's view of the world and this call, so ateom answers
+  // NOT_FOUND on a mismatch rather than reporting a different actor's numbers
+  // under the requested actor's identity.
+  string actor_uid = 1;
+}
+
+// SandboxClass is the sandbox runtime family that produced a sample. Mirrors
+// the ate.dev/v1alpha1 SandboxClass the WorkerPool and ActorTemplate are
+// configured with; an ateom binary only ever reports its own.
+enum SandboxClass {
+  SANDBOX_CLASS_UNSPECIFIED = 0;
+  // gVisor / runsc (cmd/ateom-gvisor).
+  SANDBOX_CLASS_GVISOR = 1;
+  // Micro-VM (cmd/ateom-microvm).
+  SANDBOX_CLASS_MICROVM = 2;
+}
+
+// StatsSource is how a sample's measurements were obtained. The two are not
+// measured the same way and should not be compared against each other as though
+// they were.
+enum StatsSource {
+  // No measurement was taken.
+  STATS_SOURCE_UNSPECIFIED = 0;
+  // Read from the sandbox's cgroup on the host.
+  STATS_SOURCE_CGROUP = 1;
+  // Read from inside the guest, over the guest agent's vsock connection.
+  STATS_SOURCE_GUEST_AGENT = 2;
+}
+
+// GetWorkloadStatsResponse is one resource-usage sample for the executing
+// workload. The unit of measurement is the SANDBOX, which today equals the
+// actor; per-container attribution needs the gVisor sentry's own accounting and
+// is not reported here.
+message GetWorkloadStatsResponse {
+  // Identity of the measured actor, retained by ateom from the
+  // RunWorkloadRequest / RestoreWorkloadRequest that started it. Echoed back so
+  // the caller can attribute the sample without holding its own mapping from
+  // worker to actor.
+  string atespace = 1;
+  string actor_name = 2;
+  string actor_uid = 3;
+  string actor_template_namespace = 4;
+  string actor_template_name = 5;
+
+  // The sandbox runtime family that produced this sample.
+  SandboxClass sandbox_class = 6;
+
+  // How the measurements below were obtained.
+  StatsSource source = 7;
+
+  // Measurements. All four are zero when source is STATS_SOURCE_UNSPECIFIED,
+  // which means "not measured" rather than "measured as zero".
+  //
+  // Two of them accumulate -- memory_peak_bytes and cpu_usage_usec -- and both
+  // are scoped to the current EPOCH rather than to the actor's lifetime. An
+  // epoch begins wherever the accounting behind the sample begins, which is not
+  // the same event for every source: STATS_SOURCE_CGROUP reads a sandbox cgroup
+  // that a restore recreates, so both restart at zero there, while
+  // STATS_SOURCE_GUEST_AGENT reads counters the guest kernel keeps in its own
+  // RAM, which a restored guest brings back with it. A caller that wants a
+  // lifetime figure has to accumulate one itself, and must read a decrease as a
+  // new epoch rather than emit a negative delta -- but not the converse. An
+  // epoch can also begin at a value above the last one reported, so no
+  // comparison of consecutive samples detects every boundary.
+  uint64 memory_current_bytes = 8;
+  // High-water mark of memory_current_bytes within the current epoch. Also zero
+  // when the runtime cannot report a peak at all: the cgroup source reads
+  // memory.peak, which only exists on Linux 5.19 and later.
+  uint64 memory_peak_bytes = 9;
+  // memory_current_bytes less the reclaimable page cache, floored at zero. This
+  // is the figure to compare against a memory limit; memory_current_bytes
+  // drifts upward with cache the kernel would drop for free under pressure.
+  uint64 memory_working_set_bytes = 10;
+  // Cumulative CPU time within the current epoch.
+  uint64 cpu_usage_usec = 11;
+
+  int64 observed_at_unix_nano = 12;
 }

@@ -19,8 +19,10 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/url"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -39,13 +41,9 @@ import (
 	routev3 "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
 	tracev3 "github.com/envoyproxy/go-control-plane/envoy/config/trace/v3"
 	streamaccesslogv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/access_loggers/stream/v3"
-	dfpclusterv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/clusters/dynamic_forward_proxy/v3"
-	dfpcommonv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/common/dynamic_forward_proxy/v3"
-	dfpv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/dynamic_forward_proxy/v3"
 	extprocv3filter "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/ext_proc/v3"
 	routerv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/router/v3"
 	hcmv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
-	getaddrinfov3 "github.com/envoyproxy/go-control-plane/envoy/extensions/network/dns_resolver/getaddrinfo/v3"
 	tlsv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/transport_sockets/tls/v3"
 	httpv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/upstreams/http/v3"
 	clustergrpc "github.com/envoyproxy/go-control-plane/envoy/service/cluster/v3"
@@ -54,11 +52,14 @@ import (
 	listenergrpc "github.com/envoyproxy/go-control-plane/envoy/service/listener/v3"
 	routegrpc "github.com/envoyproxy/go-control-plane/envoy/service/route/v3"
 	secretgrpc "github.com/envoyproxy/go-control-plane/envoy/service/secret/v3"
+	matcherv3 "github.com/envoyproxy/go-control-plane/envoy/type/matcher/v3"
 	typev3 "github.com/envoyproxy/go-control-plane/envoy/type/v3"
 	"github.com/envoyproxy/go-control-plane/pkg/cache/types"
 	cachev3 "github.com/envoyproxy/go-control-plane/pkg/cache/v3"
 	resourcev3 "github.com/envoyproxy/go-control-plane/pkg/resource/v3"
 	serverv3 "github.com/envoyproxy/go-control-plane/pkg/server/v3"
+
+	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/ingress"
 )
 
 const (
@@ -75,6 +76,12 @@ const (
 	// full proto type name exactly; a typo is silently ignored rather than
 	// rejected, so the options simply never take effect.
 	httpProtocolOptionsName = "envoy.extensions.upstreams.http.v3.HttpProtocolOptions"
+
+	// OriginalDstClusterName routes actor traffic to the worker's atunnel
+	// ingress by the IP:port the ext_proc puts in ingress.OriginalDstHeader,
+	// while the request :authority stays the actor DNS name so atunnel can
+	// identify the active actor.
+	OriginalDstClusterName = "actor_original_dst"
 )
 
 // defaultExtProcMessageTimeout is Envoy's per-message ext_proc response timeout
@@ -83,10 +90,36 @@ const (
 const defaultExtProcMessageTimeout = 5 * time.Second
 
 // defaultExtProcMaxRequests is the circuit-breaker max_requests set on the
-// ext_proc cluster: defaultParkedRequestMax plus equal fast-path headroom, so a
+// ext_proc cluster: ingress.DefaultParkedRequestMax plus equal fast-path headroom, so a
 // full parking lot cannot starve the millisecond-scale header exchanges of
 // requests to already-running actors. See buildCluster.
 const defaultExtProcMaxRequests = 2048
+
+// defaultRouteTimeout is Envoy's end-to-end route timeout for workload traffic:
+// the ceiling on a single request from the ingress listener to the actor's
+// response. It bounds the actor's own handling time, not the resume that
+// precedes it — parking and the ext_proc timeout cover that part.
+//
+// The drain sequence also sizes its Envoy-drain window and derived
+// drain-timeout from this DEFAULT — deliberately not from the configured
+// --route-timeout, so raising the route ceiling for long-running actor turns
+// does not silently stretch every shutdown past terminationGracePeriodSeconds.
+// Operators who raise --route-timeout and want such turns to survive a drain
+// must raise --drain-timeout (and the grace period) explicitly.
+const defaultRouteTimeout = 10 * time.Second
+
+// envoyDefaultStreamIdleTimeout is the stream idle timeout Envoy applies when
+// the HTTP connection manager does not set one. We never set it, so this is
+// what governs today.
+//
+// It is a distinct limit from the route timeout: the route timeout bounds the
+// upstream response time, while this bounds how long the stream may go with no
+// encode/decode event at all. A turn that produces no bytes while the actor
+// thinks — a non-streaming completion, or a request parked across a resume —
+// is idle by this measure even though it is progressing, so without an
+// override a route timeout above five minutes would never be reached. See
+// routeIdleTimeout.
+const envoyDefaultStreamIdleTimeout = 5 * time.Minute
 
 // XdsServer implements an aggregated discovery service server for dynamic Envoy router nodes.
 type XdsServer struct {
@@ -103,8 +136,25 @@ type XdsServer struct {
 	httpsPort int
 	certPath  string
 
+	// Upstream (actor-facing) mTLS. When upstreamCredentialBundlePath is set, the
+	// ORIGINAL_DST actor cluster dials the actor's in-worker atunnel ingress
+	// server over mTLS: it presents this podidentity credential bundle as the
+	// client cert and validates the atunnel server against upstreamTrustBundlePath.
+	upstreamCredentialBundlePath string
+	upstreamTrustBundlePath      string
+	// upstreamSpiffePrefix, when set, makes the upstream validator accept the
+	// atunnel server cert by matching its SPIFFE URI SAN against this prefix
+	// (trust-domain match) instead of the actor's ephemeral pod IP. The atunnel
+	// cert carries only a spiffe:// URI SAN, so without this Envoy's default
+	// SAN check against the dialed IP fails ("verify SAN list").
+	upstreamSpiffePrefix string
+
 	otlpHost string
 	otlpPort uint32
+
+	// traceRootSamplingPercent mirrors the router's resolved sampling policy
+	// into Envoy's RandomSampling. Zero until Run sets it.
+	traceRootSamplingPercent float64
 
 	// extProcMessageTimeout bounds how long Envoy waits for the router's ext_proc
 	// response. Must be >= the parking budget so parked requests aren't cut short.
@@ -115,6 +165,11 @@ type XdsServer struct {
 	// router's processing server, parked requests included. Must be >= the
 	// parking lot size (enforced at startup in Run).
 	extProcMaxRequests uint32
+
+	// routeTimeout is Envoy's end-to-end timeout on the workload route. Actors
+	// that hold a request open for a long turn — an LLM streaming a response,
+	// say — need this above the default or Envoy cuts the turn off with a 504.
+	routeTimeout time.Duration
 }
 
 func NewXdsServer(xdsPort int) *XdsServer {
@@ -130,6 +185,7 @@ func NewXdsServer(xdsPort int) *XdsServer {
 		ingressPort:           8080,
 		extProcMessageTimeout: defaultExtProcMessageTimeout,
 		extProcMaxRequests:    defaultExtProcMaxRequests,
+		routeTimeout:          defaultRouteTimeout,
 	}
 }
 
@@ -164,6 +220,38 @@ func (x *XdsServer) SetExtProcMaxRequests(n int) {
 	}
 }
 
+// SetRouteTimeout sets Envoy's end-to-end timeout on the workload route. Raise
+// it for actors whose turns legitimately run long — a harness relaying an LLM
+// completion holds the request open for the whole generation, and at the
+// default the client sees a 504 mid-turn. A non-positive value leaves the
+// default unchanged.
+func (x *XdsServer) SetRouteTimeout(d time.Duration) {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	if d > 0 {
+		x.routeTimeout = d
+	}
+}
+
+// routeIdleTimeout resolves the route-level idle timeout that accompanies the
+// route timeout. Caller must hold x.mu.
+//
+// Raising --route-timeout on its own would not work: the stream a long turn
+// runs on is idle for the whole turn whenever the actor sends nothing until it
+// is done, and Envoy would reset it at the five-minute stream idle default
+// before the requested timeout was ever reached. The idle timer must therefore
+// never be the limit that bites first.
+//
+// Taking the larger of the two keeps the operator's ceiling honest without
+// making the idle timer stricter than it already is: below five minutes the
+// route timeout fires first anyway, so this leaves today's behavior alone.
+func (x *XdsServer) routeIdleTimeout() time.Duration {
+	if x.routeTimeout > envoyDefaultStreamIdleTimeout {
+		return x.routeTimeout
+	}
+	return envoyDefaultStreamIdleTimeout
+}
+
 func (x *XdsServer) SetTlsConfig(httpsPort int, certPath string) {
 	x.mu.Lock()
 	defer x.mu.Unlock()
@@ -174,29 +262,113 @@ func (x *XdsServer) SetTlsConfig(httpsPort int, certPath string) {
 	x.certPath = certPath
 }
 
-// SetOtlpCollector enables Envoy-side tracing pointed at the OTLP gRPC
-// collector at host:port. addr empty disables tracing. port defaults to
-// 4317 if omitted.
-func (x *XdsServer) SetOtlpCollector(addr string) error {
+// otlpDefaultPort is the OTLP/gRPC default port, used when the collector
+// endpoint names no port.
+const otlpDefaultPort = "4317"
+
+// SetUpstreamTls configures actor-facing mTLS on the ORIGINAL_DST actor
+// cluster. credentialBundlePath is the router's podidentity credential bundle
+// (cert+key concatenated) presented to the actor's atunnel ingress server;
+// trustBundlePath is the CA bundle used to validate that server. Empty
+// credentialBundlePath leaves the upstream as plaintext.
+func (x *XdsServer) SetUpstreamTls(credentialBundlePath, trustBundlePath, spiffePrefix string) {
 	x.mu.Lock()
 	defer x.mu.Unlock()
+	x.upstreamCredentialBundlePath = credentialBundlePath
+	x.upstreamTrustBundlePath = trustBundlePath
+	x.upstreamSpiffePrefix = spiffePrefix
+}
+
+// SetOtlpCollector enables Envoy-side tracing pointed at the OTLP gRPC
+// collector. addr empty disables tracing. See normalizeOtlpCollector for the
+// accepted forms.
+func (x *XdsServer) SetOtlpCollector(addr string) error {
 	if addr == "" {
-		x.otlpHost = ""
-		x.otlpPort = 0
+		x.DisableOtlpCollector()
 		return nil
 	}
-	host, portStr, err := net.SplitHostPort(addr)
+	// normalizeOtlpCollector reads nothing off x, so it runs unlocked.
+	host, port, err := normalizeOtlpCollector(addr)
 	if err != nil {
-		host = addr
-		portStr = "4317"
+		return err
+	}
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	x.otlpHost = host
+	x.otlpPort = port
+	return nil
+}
+
+// DisableOtlpCollector turns Envoy-side tracing off. The router's own exporter
+// is independent of this and keeps reporting spans.
+func (x *XdsServer) DisableOtlpCollector() {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	x.otlpHost = ""
+	x.otlpPort = 0
+}
+
+// SetTraceRootSamplingPercent sets the RandomSampling percent Envoy applies to
+// requests arriving without a traceparent. Derived from the router's resolved
+// OTel sampling policy so the two root decisions cannot drift.
+func (x *XdsServer) SetTraceRootSamplingPercent(p float64) {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	x.traceRootSamplingPercent = p
+}
+
+// normalizeOtlpCollector resolves a collector endpoint to the bare host and
+// numeric port an xDS SocketAddress requires (buildOtlpCollectorCluster).
+//
+// It accepts both a bare "host:port" and the URL form carried by
+// OTEL_EXPORTER_OTLP_ENDPOINT, which is where --otlp-collector-address gets
+// its default: Envoy's tracer reaches the collector through a named cluster,
+// and a cluster endpoint has no room for a scheme or a path. Port defaults to
+// otlpDefaultPort when omitted.
+//
+// https is rejected rather than downgraded — the tracer cluster carries no
+// UpstreamTlsContext, so honoring it would mean shipping spans in plaintext to
+// an endpoint that asked for TLS. Rejection here only means "Envoy cannot use
+// this", not that the router should stop: the same endpoint is usable by the
+// router's own exporter, so the caller warns and runs without Envoy-side
+// tracing (see setOtlpCollector).
+func normalizeOtlpCollector(addr string) (string, uint32, error) {
+	hostport := addr
+	if strings.Contains(addr, "://") {
+		u, err := url.Parse(addr)
+		if err != nil {
+			return "", 0, fmt.Errorf("parse OTLP collector endpoint %q: %w", addr, err)
+		}
+		switch u.Scheme {
+		case "http":
+		case "https":
+			return "", 0, fmt.Errorf("OTLP collector endpoint %q uses https, which Envoy-side tracing does not support: the tracer cluster is plaintext h2c. Point --otlp-collector-address at an http:// endpoint, or pass it empty to disable Envoy-side tracing", addr)
+		default:
+			return "", 0, fmt.Errorf("OTLP collector endpoint %q has unsupported scheme %q, want http", addr, u.Scheme)
+		}
+		if p := strings.Trim(u.Path, "/"); p != "" {
+			// Envoy's OpenTelemetry tracer derives the gRPC method itself, so a
+			// path here cannot be honored. Warn instead of failing: the OTLP
+			// spec lets the signal-agnostic env var carry one.
+			slog.Warn("Ignoring path in OTLP collector endpoint; Envoy-side tracing addresses the collector by host and port only",
+				slog.String("endpoint", addr), slog.String("path", u.Path))
+		}
+		hostport = u.Host
+	}
+
+	host, portStr, err := net.SplitHostPort(hostport)
+	if err != nil {
+		host = strings.Trim(hostport, "[]")
+		portStr = otlpDefaultPort
+	}
+	if host == "" {
+		return "", 0, fmt.Errorf("OTLP collector endpoint %q names no host", addr)
 	}
 	port, err := strconv.ParseUint(portStr, 10, 32)
 	if err != nil {
-		return fmt.Errorf("parse OTLP collector port from %q: %w", addr, err)
+		return "", 0, fmt.Errorf("parse OTLP collector port from %q: %w", addr, err)
 	}
-	x.otlpHost = host
-	x.otlpPort = uint32(port)
-	return nil
+	return host, uint32(port), nil
 }
 
 func (x *XdsServer) UpdateSnapshot() error {
@@ -209,7 +381,7 @@ func (x *XdsServer) UpdateSnapshot() error {
 	// Clusters
 	clusters := []types.Resource{
 		x.buildCluster(),
-		x.buildDynamicForwardProxyCluster(),
+		x.buildOriginalDstCluster(),
 	}
 	if x.otlpHost != "" {
 		clusters = append(clusters, x.buildOtlpCollectorCluster())
@@ -275,7 +447,12 @@ func (x *XdsServer) Serve(ctx context.Context, lis net.Listener) error {
 
 	select {
 	case <-ctx.Done():
-		grpcServer.GracefulStop()
+		// Hard stop, deliberately: ADS streams are open-ended, so GracefulStop
+		// would block until Envoy disconnects — which during shutdown it only
+		// does by dying. xDS clients treat a control-plane disconnect as benign
+		// (reconnect with backoff, keep the last delivered config), and the
+		// drain sequence only cancels this context after Envoy has drained.
+		grpcServer.Stop()
 		return nil
 	case err := <-errChan:
 		return err
@@ -335,18 +512,6 @@ func (x *XdsServer) buildCluster() *clusterv3.Cluster {
 	}
 }
 
-func buildDnsCacheConfig() *dfpcommonv3.DnsCacheConfig {
-	resolverConfigAny, _ := anypb.New(&getaddrinfov3.GetAddrInfoDnsResolverConfig{})
-	return &dfpcommonv3.DnsCacheConfig{
-		Name:            "dynamic_forward_proxy_cache_config",
-		DnsLookupFamily: clusterv3.Cluster_V4_ONLY,
-		TypedDnsResolverConfig: &corev3.TypedExtensionConfig{
-			Name:        "envoy.network.dns_resolver.getaddrinfo",
-			TypedConfig: resolverConfigAny,
-		},
-	}
-}
-
 // buildOtlpCollectorCluster builds a STRICT_DNS HTTP/2 cluster that
 // targets the OTLP gRPC collector. Required when HCM tracing is enabled
 // so Envoy has somewhere to ship spans.
@@ -397,50 +562,104 @@ func (x *XdsServer) buildOtlpCollectorCluster() *clusterv3.Cluster {
 	}
 }
 
-func (x *XdsServer) buildDynamicForwardProxyCluster() *clusterv3.Cluster {
-	dfpClusterConfig := &dfpclusterv3.ClusterConfig{
-		ClusterImplementationSpecifier: &dfpclusterv3.ClusterConfig_DnsCacheConfig{
-			DnsCacheConfig: buildDnsCacheConfig(),
-		},
-		// A DFP cluster rejects HttpProtocolOptions unless auto_sni and
-		// auto_san_validation are on or this is set. This cluster has no
-		// transport socket — plaintext to worker pod IPs, with an IP literal for
-		// the authority — so there is no certificate to validate against.
-		AllowInsecureClusterOptions: true,
+// buildUpstreamTransportSocket returns the actor-facing mTLS transport socket
+// for the ORIGINAL_DST actor cluster, or nil when upstream mTLS is not
+// configured. The router presents its podidentity credential bundle as the
+// client cert and validates the atunnel ingress server against the trust
+// bundle. Validation is by the SPIFFE URI SAN prefix (see upstreamSpiffePrefix)
+// rather than the dialed pod IP.
+func (x *XdsServer) buildUpstreamTransportSocket() *corev3.TransportSocket {
+	if x.upstreamCredentialBundlePath == "" {
+		return nil
 	}
 
-	clusterConfigAny, _ := anypb.New(dfpClusterConfig)
-
-	// One request per connection. Envoy pools by destination address, which
-	// assumes an address means one stable server. A worker pod's IP is stable
-	// but the actor sandbox behind port 80 is destroyed on every Suspend and a
-	// different actor takes the slot, so a pooled connection can belong to an
-	// actor that is already gone and the request 503s.
-	httpOpts, _ := anypb.New(&httpv3.HttpProtocolOptions{
-		CommonHttpProtocolOptions: &corev3.HttpProtocolOptions{
-			MaxRequestsPerConnection: wrapperspb.UInt32(1),
-		},
-		UpstreamProtocolOptions: &httpv3.HttpProtocolOptions_ExplicitHttpConfig_{
-			ExplicitHttpConfig: &httpv3.HttpProtocolOptions_ExplicitHttpConfig{
-				// HTTP/1.1 upstream, matching what actors serve on port 80.
-				ProtocolConfig: &httpv3.HttpProtocolOptions_ExplicitHttpConfig_HttpProtocolOptions{},
+	commonTls := &tlsv3.CommonTlsContext{
+		TlsCertificates: []*tlsv3.TlsCertificate{
+			{
+				CertificateChain: &corev3.DataSource{
+					Specifier: &corev3.DataSource_Filename{Filename: x.upstreamCredentialBundlePath},
+				},
+				PrivateKey: &corev3.DataSource{
+					Specifier: &corev3.DataSource_Filename{Filename: x.upstreamCredentialBundlePath},
+				},
 			},
 		},
-	})
+	}
+	if x.upstreamTrustBundlePath != "" {
+		validationCtx := &tlsv3.CertificateValidationContext{
+			TrustedCa: &corev3.DataSource{
+				Specifier: &corev3.DataSource_Filename{Filename: x.upstreamTrustBundlePath},
+			},
+		}
+		// Validate the atunnel server by its SPIFFE URI SAN (trust-domain
+		// prefix) rather than the dialed pod IP. Without this, Envoy checks the
+		// cert SAN against the ephemeral pod IP, which the SPIFFE-only cert
+		// never matches.
+		if x.upstreamSpiffePrefix != "" {
+			validationCtx.MatchTypedSubjectAltNames = []*tlsv3.SubjectAltNameMatcher{
+				{
+					SanType: tlsv3.SubjectAltNameMatcher_URI,
+					Matcher: &matcherv3.StringMatcher{
+						MatchPattern: &matcherv3.StringMatcher_Prefix{Prefix: x.upstreamSpiffePrefix},
+					},
+				},
+			}
+		}
+		commonTls.ValidationContextType = &tlsv3.CommonTlsContext_ValidationContext{
+			ValidationContext: validationCtx,
+		}
+	}
 
-	return &clusterv3.Cluster{
-		Name:     "dynamic_forward_proxy_cluster",
+	upstreamTls := &tlsv3.UpstreamTlsContext{CommonTlsContext: commonTls}
+	upstreamTlsAny, _ := anypb.New(upstreamTls)
+	return &corev3.TransportSocket{
+		Name: "envoy.transport_sockets.tls",
+		ConfigType: &corev3.TransportSocket_TypedConfig{
+			TypedConfig: upstreamTlsAny,
+		},
+	}
+}
+
+// buildOriginalDstCluster dials the exact worker atunnel address supplied by
+// the ext_proc in ingress.OriginalDstHeader. Unlike the dynamic_forward_proxy cluster,
+// it does not derive the destination from :authority, so the request keeps the
+// actor DNS name as its Host for atunnel to authorize. mTLS to atunnel is
+// applied via the shared upstream transport socket (SPIFFE URI validation).
+func (x *XdsServer) buildOriginalDstCluster() *clusterv3.Cluster {
+	cluster := &clusterv3.Cluster{
+		Name:           OriginalDstClusterName,
+		ConnectTimeout: durationpb.New(5 * time.Second),
+		ClusterDiscoveryType: &clusterv3.Cluster_Type{
+			Type: clusterv3.Cluster_ORIGINAL_DST,
+		},
 		LbPolicy: clusterv3.Cluster_CLUSTER_PROVIDED,
-		ClusterDiscoveryType: &clusterv3.Cluster_ClusterType{
-			ClusterType: &clusterv3.Cluster_CustomClusterType{
-				Name:        "envoy.clusters.dynamic_forward_proxy",
-				TypedConfig: clusterConfigAny,
+		LbConfig: &clusterv3.Cluster_OriginalDstLbConfig_{
+			OriginalDstLbConfig: &clusterv3.Cluster_OriginalDstLbConfig{
+				UseHttpHeader:  true,
+				HttpHeaderName: ingress.OriginalDstHeader,
 			},
 		},
-		TypedExtensionProtocolOptions: map[string]*anypb.Any{
-			httpProtocolOptionsName: httpOpts,
-		},
 	}
+
+	if ts := x.buildUpstreamTransportSocket(); ts != nil {
+		cluster.TransportSocket = ts
+		// The atunnel ingress server terminates TLS and reverse-proxies to the
+		// actor over HTTP/1.1.
+		httpOpts, _ := anypb.New(&httpv3.HttpProtocolOptions{
+			UpstreamProtocolOptions: &httpv3.HttpProtocolOptions_ExplicitHttpConfig_{
+				ExplicitHttpConfig: &httpv3.HttpProtocolOptions_ExplicitHttpConfig{
+					ProtocolConfig: &httpv3.HttpProtocolOptions_ExplicitHttpConfig_HttpProtocolOptions{
+						HttpProtocolOptions: &corev3.Http1ProtocolOptions{},
+					},
+				},
+			},
+		})
+		cluster.TypedExtensionProtocolOptions = map[string]*anypb.Any{
+			httpProtocolOptionsName: httpOpts,
+		}
+	}
+
+	return cluster
 }
 
 func (x *XdsServer) buildRoutes() *routev3.RouteConfiguration {
@@ -460,9 +679,10 @@ func (x *XdsServer) buildRoutes() *routev3.RouteConfiguration {
 						Action: &routev3.Route_Route{
 							Route: &routev3.RouteAction{
 								ClusterSpecifier: &routev3.RouteAction_Cluster{
-									Cluster: "dynamic_forward_proxy_cluster",
+									Cluster: OriginalDstClusterName,
 								},
-								Timeout: durationpb.New(10 * time.Second),
+								Timeout:     durationpb.New(x.routeTimeout),
+								IdleTimeout: durationpb.New(x.routeIdleTimeout()),
 							},
 						},
 					},
@@ -499,12 +719,6 @@ func (x *XdsServer) buildHcm(statPrefix string) *anypb.Any {
 		},
 	})
 
-	dfpFilterConfig, _ := anypb.New(&dfpv3.FilterConfig{
-		ImplementationSpecifier: &dfpv3.FilterConfig_DnsCacheConfig{
-			DnsCacheConfig: buildDnsCacheConfig(),
-		},
-	})
-
 	routerAny, _ := anypb.New(&routerv3.Router{})
 
 	accessLogConfig, _ := anypb.New(&streamaccesslogv3.StdoutAccessLog{})
@@ -526,12 +740,6 @@ func (x *XdsServer) buildHcm(statPrefix string) *anypb.Any {
 				Name: "envoy.filters.http.ext_proc",
 				ConfigType: &hcmv3.HttpFilter_TypedConfig{
 					TypedConfig: extProcConfig,
-				},
-			},
-			{
-				Name: "envoy.filters.http.dynamic_forward_proxy",
-				ConfigType: &hcmv3.HttpFilter_TypedConfig{
-					TypedConfig: dfpFilterConfig,
 				},
 			},
 			{
@@ -560,12 +768,10 @@ func (x *XdsServer) buildHcm(statPrefix string) *anypb.Any {
 // configured OTLP gRPC collector. Returns nil when no collector is set,
 // in which case Envoy emits no spans on its own.
 //
-// `RandomSampling: 100%` makes Envoy ALWAYS sample requests that arrive
-// with no parent traceparent. We rely on upstream clients (locust, etc.)
-// to gate sampling: requests without a sampled parent are still tagged
-// `sampled` here but downstream services in this repo use
-// `ParentBased(NeverSample)` so unsampled-by-client requests stay
-// unsampled overall.
+// RandomSampling is the root decision for requests arriving without a
+// traceparent. Requests already sampled by the caller (kubectl-ate --trace,
+// load generators) are continued regardless of the percent, and downstream
+// ParentBased samplers keep the decision end to end.
 func (x *XdsServer) buildTracing() *hcmv3.HttpConnectionManager_Tracing {
 	if x.otlpHost == "" {
 		return nil
@@ -581,7 +787,7 @@ func (x *XdsServer) buildTracing() *hcmv3.HttpConnectionManager_Tracing {
 		ServiceName: "atenet-router-envoy",
 	})
 	return &hcmv3.HttpConnectionManager_Tracing{
-		RandomSampling: &typev3.Percent{Value: 100},
+		RandomSampling: &typev3.Percent{Value: x.traceRootSamplingPercent},
 		Provider: &tracev3.Tracing_Http{
 			Name: "envoy.tracers.opentelemetry",
 			ConfigType: &tracev3.Tracing_Http_TypedConfig{

@@ -61,6 +61,9 @@ import (
 func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.CheckpointWorkloadRequest) (*ateompb.CheckpointWorkloadResponse, error) {
 	s.lock.Lock()
 	defer s.lock.Unlock()
+	if err := s.deactivateActorNetworking(ctx); err != nil {
+		return nil, err
+	}
 
 	actorRef := resources.ActorRef{Atespace: req.GetAtespace(), Name: req.GetActorName()}
 	actorUID := req.GetActorUid()
@@ -74,7 +77,9 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	// suspended mid-flight for a call that could never have succeeded.
 	//
 	// Durable-dir volumes are host-backed, so they are captured the same way
-	// under either scope — and are the ONLY thing a Data-scope snapshot captures.
+	// under either scope — and are the ONLY thing a Data-scope snapshot
+	// captures. DATA_ON_GOLDEN is restore-only (a DataOnGolden commit arrives
+	// here as plain DATA) and lands in the default rejection.
 	durable := hasDurableVolumes(req.GetSpec().GetContainers())
 	scope := req.GetScope()
 	switch scope {
@@ -96,7 +101,7 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 		chSocket = ra.apiSocket
 	}
 	client := ch.NewClient(chSocket)
-	if err := client.WaitReady(ctx, 10*time.Second); err != nil {
+	if _, err := client.WaitReady(ctx, 10*time.Second); err != nil {
 		return nil, fmt.Errorf("while waiting for CH api-socket: %w", err)
 	}
 
@@ -117,8 +122,10 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 
 	// Only a Full snapshot captures the guest. A Data snapshot deliberately
 	// captures no VM state — no memory image, and no base-id, since nothing will
-	// reattach to the frozen virtio-fs lower: the actor cold-boots from the OCI
-	// image and gets its durable-dir volumes back from the tar below.
+	// reattach to the frozen virtio-fs lower: at restore the actor cold-boots
+	// from the OCI image (or, under an OnGolden data resume policy, is combined
+	// with the golden snapshot's guest state) and gets its durable-dir volumes
+	// back from the tar below.
 	var dSnapshot time.Duration
 	if scope == ateompb.SnapshotScope_SNAPSHOT_SCOPE_FULL {
 		var err error
@@ -150,6 +157,19 @@ func (s *AteomService) CheckpointWorkload(ctx context.Context, req *ateompb.Chec
 	s.teardownActor(ctx, actorUID, ra, client)
 	dTeardown := time.Since(tTeardown)
 	delete(s.running, actorUID)
+
+	// The guest is gone as of the teardown above, so the ateom is back to
+	// "available": there is nothing left to measure, and holding the attribution
+	// would let a later GetWorkloadStats report a checkpointed actor as though it
+	// were still running.
+	//
+	// Nothing above this point clears it, unlike the gVisor ateom, which clears
+	// as soon as its checkpoint call has taken the sandbox down. Here the guest
+	// is only paused until this teardown, so a checkpoint that failed earlier has
+	// left it present, and reporting its usage is then the honest answer. This is
+	// the same point at which the running entry goes away, which is what keeps
+	// the two views of "is an actor here" from disagreeing.
+	s.activeActor.Store(nil)
 
 	// Tear down the per-activation actor network.
 	if err := ateomnet.CleanupActorNetwork(ctx, s.interiorNetNS); err != nil {
@@ -198,7 +218,13 @@ func (s *AteomService) snapshotVMState(ctx context.Context, client *ch.Client, r
 	// source). Overlay it onto that source to rebuild a COMPLETE memory-ranges, so the
 	// snapshot is self-contained and re-restorable. (A cold-run actor has no restore
 	// source and its snapshot is already complete — no merge.)
-	if ra != nil && ra.restoreSourceDir != "" {
+	if ra != nil && ra.snapshotIsSelfContained {
+		// Eager restore already pulled every populated extent into guest memory, so
+		// what cloud-hypervisor just wrote is the whole guest, not a delta. Merging
+		// would copy the entire resident set onto the restore source for nothing.
+		slog.InfoContext(ctx, "Snapshot is self-contained (eager restore); skipping merge",
+			slog.String("id", actorUID))
+	} else if ra != nil && ra.restoreSourceDir != "" {
 		base := filepath.Join(ra.restoreSourceDir, "memory-ranges")
 		delta := filepath.Join(checkpointDir, "memory-ranges")
 		tMerge := time.Now()

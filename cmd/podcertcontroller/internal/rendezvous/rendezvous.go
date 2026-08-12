@@ -275,7 +275,7 @@ func Hash(item string, replicas []string) string {
 }
 
 func fnvhash(key string) uint64 {
-	hasher := fnv.New64()
+	hasher := fnv.New64a()
 	_, _ = hasher.Write([]byte(key))
 	return hasher.Sum64()
 }

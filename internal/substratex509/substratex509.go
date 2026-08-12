@@ -35,6 +35,8 @@ var (
 
 	// oidPodIdentity identifies the Kubernetes PodIdentity X.509 extension specifically in substrate.
 	oidPodIdentity = makeSubstrateOID(1)
+	// oidActorIdentity identifies the Substrate ActorIdentity X.509 extension specifically in substrate.
+	oidActorIdentity = makeSubstrateOID(2)
 )
 
 func makeSubstrateOID(subIDs ...int) asn1.ObjectIdentifier {
@@ -128,6 +130,89 @@ func validatePodIdentity(pod *PodIdentity) error {
 	}
 	if len(empty) > 0 {
 		return fmt.Errorf("empty fields: %s", strings.Join(empty, ", "))
+	}
+	return nil
+}
+
+// ActorIdentity is the Substrate Actor Identity of an Actor, as embedded in the
+// oidActorIdentity extension of its certificate.
+type ActorIdentityPurpose string
+
+const ActorIdentityPurposeAtunnel ActorIdentityPurpose = "atunnel"
+
+type ActorIdentity struct {
+	Atespace  string
+	ActorName string
+	ActorUid  string
+	Purpose   ActorIdentityPurpose
+}
+
+func AddActorIdentityToCertificate(actor *ActorIdentity, template *x509.Certificate) error {
+	if err := validateActorIdentity(actor); err != nil {
+		return fmt.Errorf("while validating ActorIdentity input: %w", err)
+	}
+	actorIdentityBytes, err := json.Marshal(actor)
+	if err != nil {
+		return fmt.Errorf("while json-marshaling ActorIdentity extension: %w", err)
+	}
+
+	template.ExtraExtensions = append(template.ExtraExtensions, pkix.Extension{
+		Id:    oidActorIdentity,
+		Value: actorIdentityBytes,
+	})
+
+	return nil
+}
+
+func ActorIdentityFromCertificate(cert *x509.Certificate) (*ActorIdentity, error) {
+	actorIdentityCount := 0
+
+	var actorIdentityValue []byte
+	for _, ext := range cert.Extensions {
+		if ext.Id.Equal(oidActorIdentity) {
+			actorIdentityCount++
+			actorIdentityValue = ext.Value
+		}
+	}
+
+	if actorIdentityCount == 0 {
+		return nil, nil
+	}
+	if actorIdentityCount > 1 {
+		return nil, fmt.Errorf("certificate contains multiple ActorIdentity extensions")
+	}
+
+	actor := &ActorIdentity{}
+	if err := json.Unmarshal(actorIdentityValue, actor); err != nil {
+		return nil, fmt.Errorf("while json-unmarshaling ActorIdentity extension: %w", err)
+	}
+
+	if err := validateActorIdentity(actor); err != nil {
+		return nil, fmt.Errorf("while validating ActorIdentity extension: %w", err)
+	}
+
+	return actor, nil
+}
+
+func validateActorIdentity(actor *ActorIdentity) error {
+	var empty []string
+	if actor.Atespace == "" {
+		empty = append(empty, "Atespace")
+	}
+	if actor.ActorName == "" {
+		empty = append(empty, "ActorName")
+	}
+	if actor.ActorUid == "" {
+		empty = append(empty, "ActorUid")
+	}
+	if actor.Purpose == "" {
+		empty = append(empty, "Purpose")
+	}
+	if len(empty) > 0 {
+		return fmt.Errorf("empty fields: %s", strings.Join(empty, ", "))
+	}
+	if actor.Purpose != ActorIdentityPurposeAtunnel {
+		return fmt.Errorf("unsupported Purpose %q", actor.Purpose)
 	}
 	return nil
 }

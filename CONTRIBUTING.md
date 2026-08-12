@@ -25,6 +25,14 @@ sign a new one.
 This project follows [Google's Open Source Community
 Guidelines](https://opensource.google/conduct/).
 
+### Set up a local development environment
+
+The [Quickstart (Development)](README.md#quickstart-development) in the README
+covers bringing up a local cluster with the default (gVisor) runtime. To run
+the microVM runtime locally — which needs `/dev/kvm`, or Lima nested
+virtualization on Apple Silicon — see
+[docs/dev/microvm-local.md](docs/dev/microvm-local.md).
+
 ## Contribution process
 
 This is a very new project, so we are still working out exactly how it is going

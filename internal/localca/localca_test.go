@@ -209,7 +209,7 @@ func TestUnmarshalPEMPool(t *testing.T) {
 	}
 	template := &x509.Certificate{
 		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{CommonName: "session-id-ca"},
+		Subject:               pkix.Name{CommonName: "actor-id-ca"},
 		NotBefore:             time.Now(),
 		NotAfter:              time.Now().Add(24 * time.Hour),
 		IsCA:                  true,
@@ -244,8 +244,8 @@ func TestUnmarshalPEMPool(t *testing.T) {
 	if _, ok := pool.CAs[0].SigningKey.(*rsa.PrivateKey); !ok {
 		t.Fatalf("SigningKey type = %T, want *rsa.PrivateKey", pool.CAs[0].SigningKey)
 	}
-	if pool.CAs[0].RootCertificate.Subject.CommonName != "session-id-ca" {
-		t.Fatalf("RootCertificate CN = %q, want session-id-ca", pool.CAs[0].RootCertificate.Subject.CommonName)
+	if pool.CAs[0].RootCertificate.Subject.CommonName != "actor-id-ca" {
+		t.Fatalf("RootCertificate CN = %q, want actor-id-ca", pool.CAs[0].RootCertificate.Subject.CommonName)
 	}
 }
 

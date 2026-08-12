@@ -29,10 +29,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/actoridentity"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/controlapi"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/debugapi"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/k8sjwt"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/sessionidentity"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/ateredis"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
 	"github.com/agent-substrate/substrate/internal/ateapiauth"
@@ -40,6 +40,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/credbundle"
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/agent-substrate/substrate/internal/version"
+	"github.com/agent-substrate/substrate/internal/volume"
 	"github.com/agent-substrate/substrate/pkg/client/clientset/versioned"
 	"github.com/agent-substrate/substrate/pkg/client/informers/externalversions"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
@@ -47,12 +48,12 @@ import (
 	"github.com/spf13/pflag"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
 	"go.opentelemetry.io/otel"
-	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"golang.org/x/oauth2/google"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/reflection"
+	"k8s.io/client-go/informers"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 )
@@ -73,9 +74,10 @@ var (
 
 	clientJWTIssuer      = pflag.String("client-jwt-issuer", "", "The expected issuer URL for client JWTs.")
 	clientJWTAudience    = pflag.String("client-jwt-audience", "", "The expected audience for client JWTs.")
-	sessionIDJWTPoolFile = pflag.String("session-id-jwt-pool", "", "The file that contains the serialized JWT authority pool for signing session JWTs")
+	actorIDJWTPoolFile   = pflag.String("actor-id-jwt-pool", "", "The file that contains the serialized JWT authority pool for signing actor JWTs")
+	egressGatewayAddress = pflag.String("egress-gateway-address", "", "Address of the egress PEP. Empty disables tunneled egress.")
 
-	sessionIDCAPoolFile    = pflag.String("session-id-ca-pool", "", "The file that contains the CA pool for signing session JWTs")
+	actorIDCAPoolFile      = pflag.String("actor-id-ca-pool", "", "The file that contains the CA pool for signing actor JWTs")
 	podIdentityCACerts     = pflag.String("pod-identity-ca-certs", "", "The file that contains the pod-identity CA bundle, used both for verifying client certificates presented to the gRPC server and for verifying atelet serving certificates when dialing atelet. If empty, client-cert verification is disabled and atelet dials will fail.")
 	ateletClientCredBundle = pflag.String("atelet-client-cred-bundle", "", "Credential bundle presented as the client certificate when dialing atelet.")
 
@@ -83,6 +85,7 @@ var (
 	drainTimeout = pflag.Duration("drain-timeout", 15*time.Second, "Deadline for the graceful gRPC drain on shutdown. In-flight RPCs still running past it are forcefully cancelled.")
 
 	showVersion     = pflag.Bool("version", false, "Print version and exit.")
+	logLevelFlag    = pflag.String("log-level", "info", "Minimum log level: debug, info, warn, or error.")
 	clientJWTCAFile = pflag.String("client-jwt-ca-cert", ateapiauth.DefaultServiceAccountCAFile, "CA cert file used to verify TLS when fetching the OIDC discovery document and JWKS for JWT authentication. Defaults to the in-cluster service account CA.")
 )
 
@@ -94,6 +97,9 @@ func main() {
 	}
 	ctx := context.Background()
 	serverboot.InitLogger()
+	if err := serverboot.SetLogLevel(*logLevelFlag); err != nil {
+		serverboot.Fatal(ctx, "Invalid --log-level", err)
+	}
 
 	// Kept separate from ctx so that in-progress work (clients, informers) is
 	// not cancelled the moment SIGTERM arrives. The drainOnShutdown
@@ -103,7 +109,7 @@ func main() {
 
 	tp, err := serverboot.InitTracing(ctx, serverboot.TracingOptions{
 		ServiceName: "ateapi",
-		Sampler:     sdktrace.ParentBased(sdktrace.AlwaysSample()),
+		Sampling:    serverboot.ResolveTraceSampling(ctx, serverboot.ParentRatioSampling(serverboot.ControlPlaneTraceRatio)),
 	})
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to initialize tracing", err)
@@ -145,9 +151,12 @@ func main() {
 	actorTemplateLister := ateFactory.Api().V1alpha1().ActorTemplates().Lister()
 	workerPoolLister := ateFactory.Api().V1alpha1().WorkerPools().Lister()
 	sandboxConfigLister := ateFactory.Api().V1alpha1().SandboxConfigs().Lister()
+	csiDriverConfigLister := ateFactory.Api().V1alpha1().CSIDriverConfigs().Lister()
 
 	workerPodInformerFactory, workerPodInformer := controlapi.WorkerPodInformer(clientset)
 	ateletPodInformerFactory, ateletPodInformer := controlapi.AteletInformer(clientset)
+	scInformerFactory := informers.NewSharedInformerFactory(clientset, 0)
+	storageClassLister := scInformerFactory.Storage().V1().StorageClasses().Lister()
 
 	syncer := controlapi.NewWorkerPoolSyncer(redisPersistence, workerPodInformer, workerPoolLister)
 	syncer.Start(ctx)
@@ -157,21 +166,32 @@ func main() {
 	workerPodInformerFactory.Start(stopCh)
 	ateletPodInformerFactory.Start(stopCh)
 	ateFactory.Start(stopCh)
+	scInformerFactory.Start(stopCh)
 
 	workerPodInformerFactory.WaitForCacheSync(stopCh)
 	ateletPodInformerFactory.WaitForCacheSync(stopCh)
 	ateFactory.WaitForCacheSync(stopCh)
+	scInformerFactory.WaitForCacheSync(stopCh)
 
 	if err := controlapi.RegisterWorkerCount(otel.Meter("ateapi"), workerCache.Workers, workerPoolLister.List); err != nil {
 		serverboot.Fatal(ctx, "Failed to register worker-count metric", err)
 	}
+	if err := controlapi.RegisterActorCrashes(otel.Meter("ateapi")); err != nil {
+		serverboot.Fatal(ctx, "Failed to register actor-crashes metric", err)
+	}
 
+	instruments, err := controlapi.NewInstruments(otel.Meter("ateapi"))
+	if err != nil {
+		serverboot.Fatal(ctx, "Failed to create metric instruments", err)
+	}
+
+	volPlugins := make(map[string]volume.VolumePluginControlPlane)
 	ateletDialer := controlapi.NewAteletDialer(workerPodInformer.GetIndexer(), ateletPodInformer.GetIndexer(), *ateletClientCredBundle, *podIdentityCACerts)
-	sm := controlapi.NewService(redisPersistence, workerCache, actorTemplateLister, workerPoolLister, sandboxConfigLister, ateletDialer, clientset)
+	sm := controlapi.NewService(redisPersistence, workerCache, actorTemplateLister, workerPoolLister, sandboxConfigLister, csiDriverConfigLister, storageClassLister, ateletDialer, instruments, *egressGatewayAddress, volPlugins)
 
 	jwtIssuerDiscoveryClient := buildK8sServiceAccountIssuerDiscoveryClient(ctx, *clientJWTCAFile, *clientJWTIssuer)
 
-	sessionIdentitySrv := sessionidentity.New(*clientJWTIssuer, *clientJWTAudience, *sessionIDJWTPoolFile, *sessionIDCAPoolFile, *podIdentityCACerts, jwtIssuerDiscoveryClient)
+	actorIdentitySrv := actoridentity.New(*clientJWTIssuer, *clientJWTAudience, *actorIDJWTPoolFile, *actorIDCAPoolFile, *podIdentityCACerts, jwtIssuerDiscoveryClient, redisPersistence, workerCache)
 	debugSrv := debugapi.NewService(redisPersistence)
 
 	lisCfg := &net.ListenConfig{}
@@ -196,17 +216,11 @@ func main() {
 	mux := grpc.NewServer(
 		grpc.Creds(serverCreds),
 		grpc.StatsHandler(otelgrpc.NewServerHandler()),
-		// Bounds every connection's lifetime so round_robin clients
-		// periodically re-resolve DNS and pick up replicas added since they
-		// last connected - without this, an existing connection never
-		// notices new replicas on its own (see https://github.com/grpc/grpc/issues/12295).
-		//
-		// TODO: Replace with a resolver that watches Endpoints/EndpointSlices
-		// directly and pushes address updates, instead of relying on forced
-		// reconnects to trigger DNS re-resolution. See
-		// https://github.com/sercand/kuberesolver.
+		// Close connections after an hour to allow for any
+		// client that doesn't use Kubernetes endpoint resolvers
+		// to eventually reobtain backend IPs. https://github.com/grpc/grpc/issues/12295
 		grpc.KeepaliveParams(keepalive.ServerParameters{
-			MaxConnectionAge:      1 * time.Minute,
+			MaxConnectionAge:      1 * time.Hour,
 			MaxConnectionAgeGrace: maxRPCDeadline + time.Minute,
 		}),
 		grpc.ChainUnaryInterceptor(
@@ -220,7 +234,7 @@ func main() {
 	)
 	reflection.Register(mux)
 	ateapipb.RegisterControlServer(mux, sm)
-	ateapipb.RegisterSessionIdentityServer(mux, sessionIdentitySrv)
+	ateapipb.RegisterActorIdentityServer(mux, actorIdentitySrv)
 	ateapipb.RegisterDebugServer(mux, debugSrv)
 
 	readiness := &serverboot.Readiness{}
@@ -297,8 +311,8 @@ func logFlagValues(ctx context.Context) {
 		slog.String("redis-client-cert", *redisClientCert),
 		slog.String("client-jwt-issuer", *clientJWTIssuer),
 		slog.String("client-jwt-audience", *clientJWTAudience),
-		slog.String("session-id-jwt-pool", *sessionIDJWTPoolFile),
-		slog.String("session-id-ca-pool", *sessionIDCAPoolFile),
+		slog.String("actor-id-jwt-pool", *actorIDJWTPoolFile),
+		slog.String("actor-id-ca-pool", *actorIDCAPoolFile),
 		slog.String("pod-identity-ca-certs", *podIdentityCACerts),
 		slog.String("atelet-client-cred-bundle", *ateletClientCredBundle),
 		slog.Duration("drain-delay", *drainDelay),

@@ -52,8 +52,31 @@ func InitLogger() {
 // one synchronized writer between the runtime logger and a separate writer (e.g.
 // ateom's actor-log forwarder) so their lines don't interleave.
 func InitLoggerWithWriter(w io.Writer) {
-	slog.SetDefault(slog.New(contextlogging.NewHandler(slog.NewJSONHandler(w, nil))))
+	slog.SetDefault(slog.New(contextlogging.NewHandler(slog.NewJSONHandler(w, &slog.HandlerOptions{Level: &logLevel}))))
 }
+
+// logLevel is the dynamic minimum level behind the serverboot loggers.
+// A LevelVar so SetLogLevel works before or after InitLogger.
+var logLevel slog.LevelVar
+
+// SetLogLevel sets the minimum level of the serverboot loggers from a flag
+// value: "debug", "info", "warn", or "error" (case-insensitive). Empty
+// means unset and leaves the current level unchanged, so configs that
+// never populate the field keep the default.
+func SetLogLevel(level string) error {
+	if level == "" {
+		return nil
+	}
+	if err := logLevel.UnmarshalText([]byte(level)); err != nil {
+		return fmt.Errorf("invalid log level %q (want debug, info, warn, or error): %w", level, err)
+	}
+	return nil
+}
+
+// LogLevel exposes the level behind the serverboot loggers, for binaries
+// that build their own handler but should still honor --log-level. A
+// Leveler (not the LevelVar) so SetLogLevel stays the only mutation path.
+func LogLevel() slog.Leveler { return &logLevel }
 
 // serviceInstanceID is generated once so the tracer and meter resources share it.
 var serviceInstanceID = uuid.NewString()
@@ -84,9 +107,10 @@ func newResource(ctx context.Context, serviceName string) (*resource.Resource, e
 type TracingOptions struct {
 	// ServiceName is required; populates resource.semconv ServiceName.
 	ServiceName string
-	// Sampler is required. ateapi typically uses ParentBased(AlwaysSample);
-	// atelet/ateom-gvisor use ParentBased(NeverSample).
-	Sampler sdktrace.Sampler
+	// Sampling is required. Build it with ResolveTraceSampling so
+	// OTEL_TRACES_SAMPLER / OTEL_TRACES_SAMPLER_ARG override the component
+	// default.
+	Sampling TraceSampling
 }
 
 // InitTracing registers a global TracerProvider with the given options
@@ -95,14 +119,24 @@ func InitTracing(ctx context.Context, opts TracingOptions) (*sdktrace.TracerProv
 	if opts.ServiceName == "" {
 		return nil, fmt.Errorf("TracingOptions.ServiceName is required")
 	}
+	if opts.Sampling.sampler == nil {
+		return nil, fmt.Errorf("TracingOptions.Sampling is required")
+	}
 	res, err := newResource(ctx, opts.ServiceName)
 	if err != nil {
 		return nil, fmt.Errorf("create tracer resource: %w", err)
 	}
 
+	// The SDK's default handler writes to stderr, bypassing the JSON logs.
+	// Registered before NewTracerProvider so its env parsing complaints land
+	// in slog too.
+	otel.SetErrorHandler(otel.ErrorHandlerFunc(func(err error) {
+		slog.Warn("OpenTelemetry SDK error", slog.Any("err", err))
+	}))
+
 	tpOpts := []sdktrace.TracerProviderOption{
 		sdktrace.WithResource(res),
-		sdktrace.WithSampler(opts.Sampler),
+		sdktrace.WithSampler(opts.Sampling.Sampler()),
 	}
 	exporter, err := otlptracegrpc.New(ctx,
 		// GKE managed traces doesn't support validating the TLS certs of the collector.
@@ -116,12 +150,14 @@ func InitTracing(ctx context.Context, opts TracingOptions) (*sdktrace.TracerProv
 	tp := sdktrace.NewTracerProvider(tpOpts...)
 	otel.SetTracerProvider(tp)
 	otel.SetTextMapPropagator(propagation.TraceContext{})
+	slog.InfoContext(ctx, "Tracing initialized", slog.String("sampler", opts.Sampling.Sampler().Description()))
 	return tp, nil
 }
 
 // InitMetrics registers a global MeterProvider with both a Prometheus
 // reader (exposed via StartMetricsServer's /metrics handler) and an
-// OTLP periodic reader.
+// OTLP periodic reader. No Producer option, unlike InitMetricsPushOnly: a bridged
+// registry would be served twice, here and on its own endpoint.
 func InitMetrics(ctx context.Context, serviceName string) (*sdkmetric.MeterProvider, error) {
 	if serviceName == "" {
 		return nil, fmt.Errorf("serviceName is required")
@@ -130,17 +166,19 @@ func InitMetrics(ctx context.Context, serviceName string) (*sdkmetric.MeterProvi
 	if err != nil {
 		return nil, fmt.Errorf("create Prometheus metric exporter: %w", err)
 	}
-	return newMeterProvider(ctx, serviceName, promExporter)
+	return newMeterProvider(ctx, serviceName, nil, promExporter)
 }
 
 // InitMetricsPushOnly is InitMetrics without the Prometheus reader, for binaries
-// that run no metrics HTTP server (ateom): a pull reader would collect into a
-// registry nothing serves.
-func InitMetricsPushOnly(ctx context.Context, serviceName string) (*sdkmetric.MeterProvider, error) {
-	return newMeterProvider(ctx, serviceName)
+// that run no metrics HTTP server of their own (ateom, atecontroller): a pull
+// reader would collect into a registry nothing serves. producers put metrics
+// recorded outside the OTel SDK on the same push path; atecontroller bridges
+// controller-runtime's registry that way.
+func InitMetricsPushOnly(ctx context.Context, serviceName string, producers ...sdkmetric.Producer) (*sdkmetric.MeterProvider, error) {
+	return newMeterProvider(ctx, serviceName, producers)
 }
 
-func newMeterProvider(ctx context.Context, serviceName string, extraReaders ...sdkmetric.Reader) (*sdkmetric.MeterProvider, error) {
+func newMeterProvider(ctx context.Context, serviceName string, producers []sdkmetric.Producer, extraReaders ...sdkmetric.Reader) (*sdkmetric.MeterProvider, error) {
 	if serviceName == "" {
 		return nil, fmt.Errorf("serviceName is required")
 	}
@@ -152,9 +190,13 @@ func newMeterProvider(ctx context.Context, serviceName string, extraReaders ...s
 	if err != nil {
 		return nil, fmt.Errorf("create metric resource: %w", err)
 	}
+	readerOpts := make([]sdkmetric.PeriodicReaderOption, 0, len(producers))
+	for _, p := range producers {
+		readerOpts = append(readerOpts, sdkmetric.WithProducer(p))
+	}
 	opts := []sdkmetric.Option{
 		sdkmetric.WithResource(res),
-		sdkmetric.WithReader(sdkmetric.NewPeriodicReader(otlpExporter)),
+		sdkmetric.WithReader(sdkmetric.NewPeriodicReader(otlpExporter, readerOpts...)),
 	}
 	for _, r := range extraReaders {
 		opts = append(opts, sdkmetric.WithReader(r))

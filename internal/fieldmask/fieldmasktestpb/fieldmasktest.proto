@@ -1,0 +1,65 @@
+// Copyright 2026 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+syntax = "proto3";
+
+package fieldmasktest;
+
+option go_package = "github.com/agent-substrate/substrate/internal/fieldmask/fieldmasktestpb";
+
+// TestMessage exercises every field kind the fieldmask package needs to
+// handle correctly: plain and presence-tracking ("optional") scalars, an
+// enum, a nested message reachable three levels deep (to exercise
+// multi-level intermediate initialization), repeated scalar and message
+// fields, string- and message-valued maps, and a oneof.
+message TestMessage {
+  string name = 1;
+  optional string optional_name = 2;
+
+  int32 count = 3;
+  optional int32 optional_count = 4;
+
+  bool active = 5;
+  bytes payload = 6;
+
+  TestEnum kind = 7;
+
+  Nested nested = 8;
+
+  repeated string tags = 9;
+  repeated Nested items = 10;
+
+  map<string, string> labels = 11;
+  map<string, Nested> named_items = 12;
+
+  oneof choice {
+    string choice_text = 13;
+    Nested choice_nested = 14;
+  }
+}
+
+enum TestEnum {
+  TEST_ENUM_UNSPECIFIED = 0;
+  TEST_ENUM_FIRST = 1;
+  TEST_ENUM_SECOND = 2;
+}
+
+message Nested {
+  string value = 1;
+  Inner inner = 2;
+}
+
+message Inner {
+  int32 number = 1;
+}

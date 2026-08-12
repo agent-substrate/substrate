@@ -201,7 +201,7 @@ func TestBuildDeploymentApplyConfig(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := buildDeploymentApplyConfig(tt.wp, "")
+			got := buildDeploymentApplyConfig(tt.wp, ateomOTelSettings{})
 			if diff := cmp.Diff(tt.want, got); diff != "" {
 				t.Fatalf("buildDeploymentApplyConfig() mismatch (-want +got):\n%s", diff)
 			}
@@ -226,7 +226,7 @@ func TestMicroVMPodShape(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			wp := testWorkerPoolApplyConfig(nil)
 			wp.Spec.SandboxClass = tt.class
-			ps := buildDeploymentApplyConfig(wp, "").Spec.Template.Spec
+			ps := buildDeploymentApplyConfig(wp, ateomOTelSettings{}).Spec.Template.Spec
 
 			hasVol := false
 			for _, v := range ps.Volumes {
@@ -309,30 +309,15 @@ func TestAteomSecurityContextByClass(t *testing.T) {
 	}
 }
 
-// TestTerminationGracePeriodSeconds asserts the pod's grace period is the pool's
-// explicit setting when present, and the 300s default otherwise.
+// TestTerminationGracePeriodSeconds asserts the pod's grace period is hardcoded to 3600s.
 func TestTerminationGracePeriodSeconds(t *testing.T) {
-	override := int32(120)
-	tests := []struct {
-		name string
-		set  *int32
-		want int64
-	}{
-		{name: "default when unset", set: nil, want: int64(defaultTerminationGracePeriodSeconds)},
-		{name: "explicit override honored", set: &override, want: 120},
+	wp := testWorkerPoolApplyConfig(nil)
+	ps := buildDeploymentApplyConfig(wp, ateomOTelSettings{}).Spec.Template.Spec
+	if ps.TerminationGracePeriodSeconds == nil {
+		t.Fatalf("TerminationGracePeriodSeconds not set")
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			wp := testWorkerPoolApplyConfig(nil)
-			wp.Spec.TerminationGracePeriodSeconds = tt.set
-			ps := buildDeploymentApplyConfig(wp, "").Spec.Template.Spec
-			if ps.TerminationGracePeriodSeconds == nil {
-				t.Fatalf("TerminationGracePeriodSeconds not set")
-			}
-			if *ps.TerminationGracePeriodSeconds != tt.want {
-				t.Errorf("TerminationGracePeriodSeconds = %d, want %d", *ps.TerminationGracePeriodSeconds, tt.want)
-			}
-		})
+	if *ps.TerminationGracePeriodSeconds != 3600 {
+		t.Errorf("TerminationGracePeriodSeconds = %d, want 3600", *ps.TerminationGracePeriodSeconds)
 	}
 }
 
@@ -351,7 +336,7 @@ func TestBuildDeploymentApplyConfigOTelEndpoint(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			c := buildDeploymentApplyConfig(testWorkerPoolApplyConfig(nil), tt.endpoint).
+			c := buildDeploymentApplyConfig(testWorkerPoolApplyConfig(nil), ateomOTelSettings{Endpoint: tt.endpoint}).
 				Spec.Template.Spec.Containers[0]
 			env := envByName(c.Env)
 
@@ -360,7 +345,7 @@ func TestBuildDeploymentApplyConfigOTelEndpoint(t *testing.T) {
 			}
 
 			if !tt.wantTelemetry {
-				for _, k := range []string{"OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_RESOURCE_ATTRIBUTES", "POD_NAME", "POD_NAMESPACE"} {
+				for _, k := range []string{"OTEL_EXPORTER_OTLP_ENDPOINT", "OTEL_RESOURCE_ATTRIBUTES", "OTEL_METRIC_EXPORT_INTERVAL", "OTEL_METRIC_EXPORT_TIMEOUT", "POD_NAME", "POD_NAMESPACE"} {
 					if _, ok := env[k]; ok {
 						t.Errorf("%s must be absent without an OTLP endpoint", k)
 					}
@@ -388,6 +373,122 @@ func TestBuildDeploymentApplyConfigOTelEndpoint(t *testing.T) {
 	}
 }
 
+// TestBuildDeploymentApplyConfigMetricExportTuning asserts the export interval and
+// per-export timeout reach the ateom container only when each is set alongside an
+// endpoint. ateom is invisible to the collector until its first successful export
+// tick, so the kind stack shortens the SDK's 60s interval to keep that gap inside
+// the e2e budget, and its 30s timeout so a failing tick cannot swallow three
+// shortened intervals.
+func TestBuildDeploymentApplyConfigMetricExportTuning(t *testing.T) {
+	const endpoint = "http://collector.otel-system.svc:4317"
+	tests := []struct {
+		name string
+		otel ateomOTelSettings
+		want map[string]string // env name -> value; absent key means must not be set
+	}{
+		{
+			name: "unset keeps SDK defaults",
+			otel: ateomOTelSettings{Endpoint: endpoint},
+			want: nil,
+		},
+		{
+			name: "both set with endpoint",
+			otel: ateomOTelSettings{Endpoint: endpoint, MetricExportInterval: "10000", MetricExportTimeout: "10000"},
+			want: map[string]string{"OTEL_METRIC_EXPORT_INTERVAL": "10000", "OTEL_METRIC_EXPORT_TIMEOUT": "10000"},
+		},
+		{
+			name: "interval alone",
+			otel: ateomOTelSettings{Endpoint: endpoint, MetricExportInterval: "10000"},
+			want: map[string]string{"OTEL_METRIC_EXPORT_INTERVAL": "10000"},
+		},
+		{
+			name: "timeout alone",
+			otel: ateomOTelSettings{Endpoint: endpoint, MetricExportTimeout: "10000"},
+			want: map[string]string{"OTEL_METRIC_EXPORT_TIMEOUT": "10000"},
+		},
+		{
+			name: "ignored without endpoint",
+			otel: ateomOTelSettings{MetricExportInterval: "10000", MetricExportTimeout: "10000"},
+			want: nil,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := buildDeploymentApplyConfig(testWorkerPoolApplyConfig(nil), tt.otel).
+				Spec.Template.Spec.Containers[0]
+			env := envByName(c.Env)
+			for _, k := range []string{"OTEL_METRIC_EXPORT_INTERVAL", "OTEL_METRIC_EXPORT_TIMEOUT"} {
+				got, ok := env[k]
+				want, wantSet := tt.want[k]
+				if ok != wantSet {
+					t.Errorf("%s present = %v, want %v", k, ok, wantSet)
+					continue
+				}
+				if ok && got.value != want {
+					t.Errorf("%s = %q, want %q", k, got.value, want)
+				}
+			}
+		})
+	}
+}
+
+// TestBuildDeploymentApplyConfigTracesSamplerPropagation asserts the sampler
+// env pair reaches the ateom container only alongside an endpoint, and the arg
+// only alongside a sampler: an arg without a sampler name is dead config the
+// SDK ignores.
+func TestBuildDeploymentApplyConfigTracesSamplerPropagation(t *testing.T) {
+	const endpoint = "http://collector.otel-system.svc:4317"
+	tests := []struct {
+		name string
+		otel ateomOTelSettings
+		want map[string]string // value by env name; absent key means must not be set
+	}{
+		{
+			name: "unset keeps binary default",
+			otel: ateomOTelSettings{Endpoint: endpoint},
+			want: nil,
+		},
+		{
+			name: "sampler and arg with endpoint",
+			otel: ateomOTelSettings{Endpoint: endpoint, TracesSampler: "parentbased_traceidratio", TracesSamplerArg: "0.25"},
+			want: map[string]string{"OTEL_TRACES_SAMPLER": "parentbased_traceidratio", "OTEL_TRACES_SAMPLER_ARG": "0.25"},
+		},
+		{
+			name: "sampler alone",
+			otel: ateomOTelSettings{Endpoint: endpoint, TracesSampler: "parentbased_always_on"},
+			want: map[string]string{"OTEL_TRACES_SAMPLER": "parentbased_always_on"},
+		},
+		{
+			name: "arg alone stays unset",
+			otel: ateomOTelSettings{Endpoint: endpoint, TracesSamplerArg: "0.25"},
+			want: nil,
+		},
+		{
+			name: "ignored without endpoint",
+			otel: ateomOTelSettings{TracesSampler: "parentbased_traceidratio", TracesSamplerArg: "0.25"},
+			want: nil,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := buildDeploymentApplyConfig(testWorkerPoolApplyConfig(nil), tt.otel).
+				Spec.Template.Spec.Containers[0]
+			env := envByName(c.Env)
+			for _, k := range []string{"OTEL_TRACES_SAMPLER", "OTEL_TRACES_SAMPLER_ARG"} {
+				got, ok := env[k]
+				want, wantSet := tt.want[k]
+				if ok != wantSet {
+					t.Errorf("%s present = %v, want %v", k, ok, wantSet)
+					continue
+				}
+				if ok && got.value != want {
+					t.Errorf("%s = %q, want %q", k, got.value, want)
+				}
+			}
+		})
+	}
+}
+
 type envInfo struct {
 	index int
 	value string
@@ -408,6 +509,172 @@ func envByName(env []corev1ac.EnvVarApplyConfiguration) map[string]envInfo {
 	return m
 }
 
+func TestGPUPoolMountsToolkit(t *testing.T) {
+	gpu := resource.MustParse("1")
+	wp := &atev1alpha1.WorkerPool{
+		ObjectMeta: metav1.ObjectMeta{Name: "wp", Namespace: "ns"},
+		Spec: atev1alpha1.WorkerPoolSpec{
+			AteomImage: "img",
+			Template: &atev1alpha1.WorkerPoolPodTemplate{
+				Resources: &corev1.ResourceRequirements{
+					Limits: corev1.ResourceList{"nvidia.com/gpu": gpu},
+				},
+			},
+		},
+	}
+	dep := buildDeploymentApplyConfig(wp, ateomOTelSettings{})
+	pod := dep.Spec.Template.Spec
+
+	var found bool
+	for _, v := range pod.Volumes {
+		if v.Name != nil && *v.Name == "nvidia-toolkit" {
+			found = true
+			if v.HostPath == nil || *v.HostPath.Path != defaultNvidiaToolkitHostPath {
+				t.Fatalf("nvidia-toolkit volume has wrong hostPath: %+v", v.HostPath)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("expected nvidia-toolkit host mount on a GPU pool")
+	}
+
+	var mounted bool
+	for _, c := range pod.Containers {
+		for _, m := range c.VolumeMounts {
+			if m.Name != nil && *m.Name == "nvidia-toolkit" && *m.MountPath == nvidiaToolkitContainerPath {
+				mounted = true
+			}
+		}
+	}
+	if !mounted {
+		t.Fatal("expected nvidia-toolkit mount on the ateom container")
+	}
+
+	// A GPU pool keeps the same posture as any other unprivileged gVisor worker: no
+	// user namespace and no unmasked /proc, which the skipped update-ldcache hook
+	// would otherwise force.
+	if pod.HostUsers != nil {
+		t.Error("did not expect hostUsers to be set on a GPU pool")
+	}
+	for _, c := range pod.Containers {
+		if c.SecurityContext != nil && c.SecurityContext.ProcMount != nil {
+			t.Errorf("did not expect procMount to be set, got %v", *c.SecurityContext.ProcMount)
+		}
+	}
+}
+
+// TestGPUPoolDriverRootEnv covers the override reaching the worker: ateom derives the
+// driver library and binary paths from it, and nvidia-ctk cannot generate a CDI spec
+// without them. Unset, no env is added at all.
+func TestGPUPoolDriverRootEnv(t *testing.T) {
+	gpu := resource.MustParse("1")
+	newGPUPool := func() *atev1alpha1.WorkerPool {
+		return &atev1alpha1.WorkerPool{
+			ObjectMeta: metav1.ObjectMeta{Name: "wp", Namespace: "ns"},
+			Spec: atev1alpha1.WorkerPoolSpec{
+				AteomImage: "img",
+				Template: &atev1alpha1.WorkerPoolPodTemplate{
+					Resources: &corev1.ResourceRequirements{
+						Limits: corev1.ResourceList{"nvidia.com/gpu": gpu},
+					},
+				},
+			},
+		}
+	}
+	driverRootEnv := func(wp *atev1alpha1.WorkerPool) (string, bool) {
+		for _, c := range buildDeploymentApplyConfig(wp, ateomOTelSettings{}).Spec.Template.Spec.Containers {
+			for _, e := range c.Env {
+				if e.Name != nil && *e.Name == nvidiaDriverRootEnv {
+					return *e.Value, true
+				}
+			}
+		}
+		return "", false
+	}
+
+	if v, ok := driverRootEnv(newGPUPool()); ok {
+		t.Errorf("unset: expected no %s on the worker, got %q", nvidiaDriverRootEnv, v)
+	}
+
+	t.Setenv(nvidiaDriverRootEnv, "/opt/nvidia")
+	v, ok := driverRootEnv(newGPUPool())
+	if !ok || v != "/opt/nvidia" {
+		t.Errorf("set: want %s=/opt/nvidia on the worker, got %q (present=%v)", nvidiaDriverRootEnv, v, ok)
+	}
+}
+
+func TestNonGPUPoolHasNoToolkit(t *testing.T) {
+	wp := &atev1alpha1.WorkerPool{
+		ObjectMeta: metav1.ObjectMeta{Name: "wp", Namespace: "ns"},
+		Spec:       atev1alpha1.WorkerPoolSpec{AteomImage: "img"},
+	}
+	dep := buildDeploymentApplyConfig(wp, ateomOTelSettings{})
+	pod := dep.Spec.Template.Spec
+	for _, v := range pod.Volumes {
+		if v.Name != nil && *v.Name == "nvidia-toolkit" {
+			t.Fatal("non-GPU pool must not mount the toolkit")
+		}
+	}
+	// Non-GPU workers keep the tighter base posture: no user namespace, no
+	// unmasked /proc.
+	if pod.HostUsers != nil {
+		t.Error("non-GPU pool must not set hostUsers")
+	}
+	for _, c := range pod.Containers {
+		if c.SecurityContext != nil && c.SecurityContext.ProcMount != nil {
+			t.Error("non-GPU pool must not set procMount")
+		}
+	}
+}
+
+// TestGPUMicroVMPoolHasNoGPUPodShape asserts none of the GPU pod shaping is applied
+// to a non-gVisor pool: no toolkit volume, no toolkit mount, no driver-root env.
+//
+// A WorkerPool like this is rejected at apply time by the CEL rule on
+// WorkerPoolSpec, so it should never reach the controller. This covers the case
+// where one already exists — the rule was added after the fact, or the object was
+// written by a path that skipped CRD validation. The controller does not strip the
+// resource request itself, so such a pod still schedules onto a GPU node and holds a
+// device no actor can use; that gap is why the combination is rejected at the API
+// rather than only here.
+func TestGPUMicroVMPoolHasNoGPUPodShape(t *testing.T) {
+	// Set so the driver-root assertion below is not vacuous: a gVisor GPU pool would
+	// carry this env, a micro-VM one must not.
+	t.Setenv(nvidiaDriverRootEnv, "/opt/nvidia")
+	gpu := resource.MustParse("1")
+	wp := &atev1alpha1.WorkerPool{
+		ObjectMeta: metav1.ObjectMeta{Name: "wp", Namespace: "ns"},
+		Spec: atev1alpha1.WorkerPoolSpec{
+			AteomImage:   "img",
+			SandboxClass: atev1alpha1.SandboxClassMicroVM,
+			Template: &atev1alpha1.WorkerPoolPodTemplate{
+				Resources: &corev1.ResourceRequirements{
+					Limits: corev1.ResourceList{"nvidia.com/gpu": gpu},
+				},
+			},
+		},
+	}
+	pod := buildDeploymentApplyConfig(wp, ateomOTelSettings{}).Spec.Template.Spec
+
+	for _, v := range pod.Volumes {
+		if v.Name != nil && *v.Name == "nvidia-toolkit" {
+			t.Error("micro-VM pool must not mount the NVIDIA toolkit even when it requests a GPU")
+		}
+	}
+	for _, c := range pod.Containers {
+		for _, m := range c.VolumeMounts {
+			if m.Name != nil && *m.Name == "nvidia-toolkit" {
+				t.Error("micro-VM pool must not get the toolkit volume mount")
+			}
+		}
+		for _, e := range c.Env {
+			if e.Name != nil && *e.Name == nvidiaDriverRootEnv {
+				t.Errorf("micro-VM pool must not get %s", nvidiaDriverRootEnv)
+			}
+		}
+	}
+}
+
 func testWorkerPoolApplyConfig(tmpl *atev1alpha1.WorkerPoolPodTemplate) *atev1alpha1.WorkerPool {
 	return &atev1alpha1.WorkerPool{
 		ObjectMeta: metav1.ObjectMeta{Name: "pool", Namespace: "default", UID: "uid"},
@@ -426,15 +693,57 @@ func expectedDeploymentApplyConfig(mutatePodSpec func(*corev1ac.PodSpecApplyConf
 		WithSecurityContext(corev1ac.PodSecurityContext().
 			WithRunAsUser(0).
 			WithRunAsGroup(0)).
-		WithVolumes(corev1ac.Volume().
-			WithName("run-ateom").
-			WithHostPath(corev1ac.HostPathVolumeSource().
-				WithPath(ateompath.BasePath).
-				WithType(corev1.HostPathDirectoryOrCreate))).
+		WithVolumes(
+			corev1ac.Volume().
+				WithName("run-ateom").
+				WithHostPath(corev1ac.HostPathVolumeSource().
+					WithPath(ateompath.BasePath).
+					WithType(corev1.HostPathDirectoryOrCreate)),
+			corev1ac.Volume().
+				WithName(atunnelIdentityVolume).
+				WithProjected(corev1ac.ProjectedVolumeSource().
+					WithSources(
+						corev1ac.VolumeProjection().
+							WithPodCertificate(corev1ac.PodCertificateProjection().
+								WithSignerName("podidentity.podcert.ate.dev/identity").
+								WithKeyType("ECDSAP256").
+								WithCredentialBundlePath("credential-bundle.pem")),
+						corev1ac.VolumeProjection().
+							WithClusterTrustBundle(corev1ac.ClusterTrustBundleProjection().
+								WithSignerName("podidentity.podcert.ate.dev/identity").
+								WithLabelSelector(metav1ac.LabelSelector().
+									WithMatchLabels(map[string]string{"podcert.ate.dev/canarying": "live"})).
+								WithPath("trust-bundle.pem")),
+					),
+				),
+			corev1ac.Volume().
+				WithName(atunnelEgressTrustVolume).
+				WithProjected(corev1ac.ProjectedVolumeSource().
+					WithSources(
+						corev1ac.VolumeProjection().
+							WithClusterTrustBundle(corev1ac.ClusterTrustBundleProjection().
+								WithSignerName("servicedns.podcert.ate.dev/identity").
+								WithLabelSelector(metav1ac.LabelSelector().
+									WithMatchLabels(map[string]string{"podcert.ate.dev/canarying": "live"})).
+								WithPath("trust-bundle.pem")),
+					),
+				),
+		).
 		WithContainers(corev1ac.Container().
 			WithName("ateom").
 			WithImage(wp.Spec.AteomImage).
-			WithArgs("--pod-uid=$(POD_UID)").
+			WithArgs(
+				"--pod-uid=$(POD_UID)",
+				"--atunnel-listen-address=0.0.0.0:443",
+				"--atunnel-credential-bundle="+atunnelIdentityMountPath+"/credential-bundle.pem",
+				"--atunnel-trust-bundle="+atunnelIdentityMountPath+"/trust-bundle.pem",
+				"--atunnel-egress-listen-address=0.0.0.0:15001",
+				"--atunnel-egress-trust-bundle="+atunnelEgressTrustMountPath+"/trust-bundle.pem",
+			).
+			WithPorts(corev1ac.ContainerPort().
+				WithName("https").
+				WithContainerPort(443).
+				WithProtocol(corev1.ProtocolTCP)).
 			WithSecurityContext(corev1ac.SecurityContext().
 				WithRunAsUser(0).
 				WithRunAsGroup(0).
@@ -449,17 +758,27 @@ func expectedDeploymentApplyConfig(mutatePodSpec func(*corev1ac.PodSpecApplyConf
 				WithValueFrom(corev1ac.EnvVarSource().
 					WithFieldRef(corev1ac.ObjectFieldSelector().
 						WithFieldPath("metadata.uid")))).
-			WithVolumeMounts(corev1ac.VolumeMount().
-				WithName("run-ateom").
-				WithMountPath(ateompath.BasePath).
-				WithMountPropagation(corev1.MountPropagationHostToContainer)).
+			WithVolumeMounts(
+				corev1ac.VolumeMount().
+					WithName("run-ateom").
+					WithMountPath(ateompath.BasePath).
+					WithMountPropagation(corev1.MountPropagationHostToContainer),
+				corev1ac.VolumeMount().
+					WithName(atunnelIdentityVolume).
+					WithMountPath(atunnelIdentityMountPath).
+					WithReadOnly(true),
+				corev1ac.VolumeMount().
+					WithName(atunnelEgressTrustVolume).
+					WithMountPath(atunnelEgressTrustMountPath).
+					WithReadOnly(true),
+			).
 			WithResources(corev1ac.ResourceRequirements()))
 
 	podSpecAC.NodeSelector = map[string]string{}
 	podSpecAC.Tolerations = []corev1ac.TolerationApplyConfiguration{}
 	podSpecAC.WithPriorityClassName("")
 	podSpecAC.WithAffinity(corev1ac.Affinity())
-	podSpecAC.WithTerminationGracePeriodSeconds(int64(defaultTerminationGracePeriodSeconds))
+	podSpecAC.WithTerminationGracePeriodSeconds(workerTerminationGracePeriodSeconds)
 	if mutatePodSpec != nil {
 		mutatePodSpec(podSpecAC)
 	}

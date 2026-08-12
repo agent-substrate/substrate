@@ -30,6 +30,7 @@ import (
 	"github.com/agent-substrate/substrate/internal/localca"
 	"github.com/agent-substrate/substrate/internal/substratex509"
 	certsv1beta1 "k8s.io/api/certificates/v1beta1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/utils/clock"
@@ -47,9 +48,18 @@ const (
 	ateletServiceAccount = "atelet"
 )
 
-func extKeyUsages(namespace, serviceAccount string) []x509.ExtKeyUsage {
+// workerPoolLabel marks pods created by atecontroller for a WorkerPool. Worker
+// pods host the atunnel ingress server, presenting this cert as a TLS server
+// cert to atenet-router, so they need the serverAuth EKU too. They run as the
+// actor namespace's default ServiceAccount, so the label is what distinguishes
+// them rather than their identity.
+const workerPoolLabel = "ate.dev/worker-pool"
+
+func extKeyUsages(pod *corev1.Pod, namespace, serviceAccount string) []x509.ExtKeyUsage {
 	usages := []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth}
-	if namespace == ateletNamespace && serviceAccount == ateletServiceAccount {
+	_, isWorker := pod.ObjectMeta.Labels[workerPoolLabel]
+	isAtelet := namespace == ateletNamespace && serviceAccount == ateletServiceAccount
+	if isAtelet || isWorker {
 		usages = append(usages, x509.ExtKeyUsageServerAuth)
 	}
 	return usages
@@ -146,7 +156,7 @@ func (h *Impl) MakeCert(ctx context.Context, pcr *certsv1beta1.PodCertificateReq
 		NotAfter:              notAfter,
 		URIs:                  []*url.URL{spiffeURI},
 		KeyUsage:              x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:           extKeyUsages(pcr.ObjectMeta.Namespace, pcr.Spec.ServiceAccountName),
+		ExtKeyUsage:           extKeyUsages(pod, pcr.ObjectMeta.Namespace, pcr.Spec.ServiceAccountName),
 		// Link the leaf to its issuing CA by key id so verifiers can disambiguate
 		// a multi-CA trust bundle (e.g. valkey trusts both the servicedns and
 		// podidentity CAs).

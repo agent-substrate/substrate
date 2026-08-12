@@ -37,10 +37,18 @@ const (
 // mapped to underscores) the substrate platform must emit. The Collector's
 // prometheus exporter appends unit and type suffixes (e.g. _seconds_bucket,
 // _bytes_count), so matching is by prefix. This slice grows as each metric
-// slice lands and as more components are wired to push to the collector; today
-// it pins the worker-count instrument introduced alongside this harness.
+// slice lands and as more components are wired to push to the collector.
 var PlatformMetricPrefixes = []string{
 	"ate_workerpool_workers",
+	"ate_workerpool_desired_workers",
+	"ate_workerpool_ready_workers",
+	"ate_actor_crashes",
+	"ate_actor_lifecycle_operation_duration",
+	"ate_scheduler_assignment_duration",
+	"ate_actor_restore_duration",
+	"ate_actor_checkpoint_duration",
+	"atenet_router_route_duration",
+	"ate_scheduler_eligible_workers",
 }
 
 // ScrapeCollectorMetrics port-forwards the kind stack's OTel Collector and reads
@@ -108,13 +116,13 @@ func MissingPlatformMetrics(scrape string, prefixes []string) []string {
 }
 
 // CollectorHasService reports whether any named service has pushed telemetry to
-// the collector. Its prometheus exporter surfaces each pushed resource as a
-// target_info series and stamps the service.name as the job label, so a service
-// that has exported anything shows up under either.
+// the collector. Its prometheus exporter maps each pushed resource's service.name
+// onto the job label, so a service that has exported at least one data point
+// shows up there. Note the exporter never emits a service_name label, and a
+// resource whose instruments have recorded nothing yet produces no series at all.
 func CollectorHasService(scrape string, services ...string) bool {
 	for _, svc := range services {
-		if strings.Contains(scrape, `service_name="`+svc+`"`) ||
-			strings.Contains(scrape, `job="`+svc+`"`) {
+		if strings.Contains(scrape, `job="`+svc+`"`) {
 			return true
 		}
 	}

@@ -18,6 +18,8 @@ import (
 	"context"
 	"fmt"
 
+	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/metric"
 	appsv1 "k8s.io/api/apps/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	k8errors "k8s.io/apimachinery/pkg/api/errors"
@@ -28,6 +30,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
+	"github.com/agent-substrate/substrate/internal/ateattr"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 )
 
@@ -37,6 +40,21 @@ type WorkerPoolReconciler struct {
 	client.Client
 	Scheme       *runtime.Scheme
 	OTelEndpoint string
+	// OTelMetricExportInterval is the OTEL_METRIC_EXPORT_INTERVAL propagated to
+	// ateom pods. Empty keeps the SDK's default.
+	OTelMetricExportInterval string
+	// OTelMetricExportTimeout is the OTEL_METRIC_EXPORT_TIMEOUT propagated to
+	// ateom pods. Empty keeps the SDK's default.
+	OTelMetricExportTimeout string
+	// OTelTracesSampler is the OTEL_TRACES_SAMPLER propagated to ateom pods.
+	// Empty keeps the ateom binary's default.
+	OTelTracesSampler string
+	// OTelTracesSamplerArg is the OTEL_TRACES_SAMPLER_ARG propagated to ateom
+	// pods. Ignored unless OTelTracesSampler is set.
+	OTelTracesSamplerArg string
+
+	desiredWorkers metric.Int64ObservableUpDownCounter
+	readyWorkers   metric.Int64ObservableUpDownCounter
 }
 
 //+kubebuilder:rbac:groups=ate.dev,resources=workerpools,verbs=get;list;watch;create;update;patch;delete
@@ -92,7 +110,13 @@ func (r *WorkerPoolReconciler) reconcileWorkerPool(ctx context.Context, wp *atev
 }
 
 func (r *WorkerPoolReconciler) applyDeployment(ctx context.Context, wp *atev1alpha1.WorkerPool) error {
-	depAC := buildDeploymentApplyConfig(wp, r.OTelEndpoint)
+	depAC := buildDeploymentApplyConfig(wp, ateomOTelSettings{
+		Endpoint:             r.OTelEndpoint,
+		MetricExportInterval: r.OTelMetricExportInterval,
+		MetricExportTimeout:  r.OTelMetricExportTimeout,
+		TracesSampler:        r.OTelTracesSampler,
+		TracesSamplerArg:     r.OTelTracesSamplerArg,
+	})
 	if err := r.Apply(ctx, depAC, client.FieldOwner(workerPoolFieldOwner), client.ForceOwnership); err != nil {
 		return fmt.Errorf("failed to apply Deployment: %w", err)
 	}
@@ -106,8 +130,9 @@ func (r *WorkerPoolReconciler) syncStatus(ctx context.Context, wp *atev1alpha1.W
 	}
 
 	want := atev1alpha1.WorkerPoolStatus{
-		Replicas: dep.Status.Replicas,
-		Selector: selector.String(),
+		Replicas:      dep.Status.Replicas,
+		ReadyReplicas: dep.Status.ReadyReplicas,
+		Selector:      selector.String(),
 	}
 	if equality.Semantic.DeepEqual(wp.Status, want) {
 		return nil
@@ -121,8 +146,61 @@ func (r *WorkerPoolReconciler) syncStatus(ctx context.Context, wp *atev1alpha1.W
 	return nil
 }
 
+// InitMetrics initializes the OpenTelemetry instruments for ate.workerpool.desired_workers
+// and ate.workerpool.ready_workers and registers the asynchronous callback.
+func (r *WorkerPoolReconciler) InitMetrics(meter metric.Meter) error {
+	desiredWorkers, err := meter.Int64ObservableUpDownCounter(
+		"ate.workerpool.desired_workers",
+		metric.WithUnit("{worker}"),
+		metric.WithDescription("number of worker pods requested for a WorkerPool (spec.replicas)"),
+	)
+	if err != nil {
+		return fmt.Errorf("create ate.workerpool.desired_workers instrument: %w", err)
+	}
+	r.desiredWorkers = desiredWorkers
+
+	readyWorkers, err := meter.Int64ObservableUpDownCounter(
+		"ate.workerpool.ready_workers",
+		metric.WithUnit("{worker}"),
+		metric.WithDescription("number of worker pods currently ready for a WorkerPool (status.readyReplicas)"),
+	)
+	if err != nil {
+		return fmt.Errorf("create ate.workerpool.ready_workers instrument: %w", err)
+	}
+	r.readyWorkers = readyWorkers
+
+	_, err = meter.RegisterCallback(
+		func(ctx context.Context, obs metric.Observer) error {
+			var list atev1alpha1.WorkerPoolList
+			if err := r.List(ctx, &list); err != nil {
+				log.FromContext(ctx).Error(err, "failed to list worker pools to observe ate.workerpool.desired_workers and ate.workerpool.ready_workers")
+				return nil
+			}
+			for _, wp := range list.Items {
+				attrs := metric.WithAttributes(
+					ateattr.WorkerPoolNamespaceKey.String(wp.Namespace),
+					ateattr.WorkerPoolNameKey.String(wp.Name),
+				)
+				obs.ObserveInt64(r.desiredWorkers, int64(wp.Spec.Replicas), attrs)
+				obs.ObserveInt64(r.readyWorkers, int64(wp.Status.ReadyReplicas), attrs)
+			}
+			return nil
+		},
+		r.desiredWorkers,
+		r.readyWorkers,
+	)
+	if err != nil {
+		return fmt.Errorf("register workerpool metrics callback: %w", err)
+	}
+
+	return nil
+}
+
 // SetupWithManager sets up the controller with the Manager.
 func (r *WorkerPoolReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	if err := r.InitMetrics(otel.Meter("atecontroller")); err != nil {
+		return fmt.Errorf("failed to initialize workerpool metrics: %w", err)
+	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&atev1alpha1.WorkerPool{}).
 		Owns(&appsv1.Deployment{}).

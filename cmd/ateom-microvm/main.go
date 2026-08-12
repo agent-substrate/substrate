@@ -24,13 +24,17 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
 	"net"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"cloud.google.com/go/compute/metadata"
 	"github.com/agent-substrate/substrate/cmd/ateom-microvm/internal/reaper"
@@ -38,23 +42,36 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/ateomnet"
 	"github.com/agent-substrate/substrate/internal/ateompath"
+	"github.com/agent-substrate/substrate/internal/ateomstats"
+	"github.com/agent-substrate/substrate/internal/atunnel"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/agent-substrate/substrate/internal/version"
 	"github.com/vishvananda/netns"
 	"go.opentelemetry.io/contrib/instrumentation/google.golang.org/grpc/otelgrpc"
-	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"golang.org/x/sys/unix"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/reflection"
 )
 
 var (
-	podUID      = flag.String("pod-uid", "", "The UID of the current pod")
-	chBinary    = flag.String("cloud-hypervisor-binary", "cloud-hypervisor", "Path to the cloud-hypervisor binary (used to relaunch on restore).")
-	kataConfig  = flag.String("kata-config", "", "Path to a kata configuration.toml (passed to the shim as KATA_CONF_FILE). Empty uses kata's default. atelet generates one pointing at runtime-fetched assets.")
-	kataDebug   = flag.Bool("kata-debug", false, "Verbose kata-agent debugging: raise the guest agent log level and forward the guest console (incl. agent logs) into the pod logs.")
-	showVersion = flag.Bool("version", false, "Print version and exit.")
+	podUID       = flag.String("pod-uid", "", "The UID of the current pod")
+	chBinary     = flag.String("cloud-hypervisor-binary", "cloud-hypervisor", "Path to the cloud-hypervisor binary (used to relaunch on restore).")
+	kataConfig   = flag.String("kata-config", "", "Path to a kata configuration.toml (passed to the shim as KATA_CONF_FILE). Empty uses kata's default. atelet generates one pointing at runtime-fetched assets.")
+	kataDebug    = flag.Bool("kata-debug", false, "Verbose kata-agent debugging: raise the guest agent log level and forward the guest console (incl. agent logs) into the pod logs.")
+	showVersion  = flag.Bool("version", false, "Print version and exit.")
+	logLevelFlag = flag.String("log-level", "info", "Minimum log level: debug, info, warn, or error.")
+
+	atunnelListenAddress       = flag.String("atunnel-listen-address", "0.0.0.0:443", "Address for actor ingress HTTPS")
+	workerCredentialBundle     = flag.String("atunnel-credential-bundle", "/run/podidentity.podcert.ate.dev/credential-bundle.pem", "Worker Pod credential bundle used by atunnel for inbound serving and outbound mTLS")
+	podIdentityTrustBundle     = flag.String("atunnel-trust-bundle", "/run/podidentity.podcert.ate.dev/trust-bundle.pem", "Pod identity trust bundle used for router clients and the node-local atelet")
+	atunnelClientIdentity      = flag.String("atunnel-client-identity", "spiffe://cluster.local/ns/ate-system/sa/atenet-router", "SPIFFE identity allowed to call actor ingress HTTPS")
+	atunnelEgressListenAddress = flag.String("atunnel-egress-listen-address", "0.0.0.0:15001", "Address for transparently intercepted actor egress TCP")
+	egressGatewayTrustBundle   = flag.String("atunnel-egress-trust-bundle", "/run/servicedns.podcert.ate.dev/trust-bundle.pem", "Service DNS trust bundle for the remote egress gateway")
+)
+
+const (
+	actorHTTPUpstream = "http://169.254.17.2:80"
 )
 
 func main() {
@@ -80,12 +97,15 @@ func do(ctx context.Context) error {
 	// interleave-corrupt each other's lines.
 	logWriter := actorlog.NewSyncedWriter(os.Stdout)
 	serverboot.InitLoggerWithWriter(logWriter)
+	if err := serverboot.SetLogLevel(*logLevelFlag); err != nil {
+		return err
+	}
 	slog.InfoContext(ctx, "ateom-microvm booting", slog.String("version", version.String()))
 
 	const serviceName = "ateom-microvm"
 	tp, err := serverboot.InitTracing(ctx, serverboot.TracingOptions{
 		ServiceName: serviceName,
-		Sampler:     sdktrace.ParentBased(sdktrace.NeverSample()),
+		Sampling:    serverboot.ResolveTraceSampling(ctx, serverboot.ParentRatioSampling(serverboot.ControlPlaneTraceRatio)),
 	})
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to initialize tracing", err)
@@ -146,12 +166,55 @@ func do(ctx context.Context) error {
 	// logWriter with the runtime logger so the two streams to os.Stdout are
 	// serialized through one SyncedWriter and never interleave-corrupt lines.
 	actorLogger := actorlog.NewActorLogger(logWriter, metadata.OnGCE())
+	upstream, err := url.Parse(actorHTTPUpstream)
+	if err != nil {
+		return fmt.Errorf("while parsing atunnel upstream: %w", err)
+	}
+	atunnelIngress, err := atunnel.NewServer(atunnel.Config{
+		CredentialBundlePath: *workerCredentialBundle,
+		TrustBundlePath:      *podIdentityTrustBundle,
+		AllowedClientID:      *atunnelClientIdentity,
+		Upstream:             upstream,
+	})
+	if err != nil {
+		return fmt.Errorf("while configuring atunnel: %w", err)
+	}
+	atunnelListener, err := net.Listen("tcp", *atunnelListenAddress)
+	if err != nil {
+		return fmt.Errorf("while opening atunnel listener: %w", err)
+	}
+	go func() {
+		if err := atunnelIngress.Serve(ctx, atunnelListener); err != nil {
+			serverboot.Fatal(ctx, "Failed to serve actor ingress", err)
+		}
+	}()
+	slog.InfoContext(ctx, "atunnel serving", slog.String("address", *atunnelListenAddress))
+	atunnelEgress, err := atunnel.NewEgress(atunnel.TCPOriginalDestination)
+	if err != nil {
+		return fmt.Errorf("while configuring atunnel egress: %w", err)
+	}
+	egressListener, err := net.Listen("tcp", *atunnelEgressListenAddress)
+	if err != nil {
+		return fmt.Errorf("while opening atunnel egress listener: %w", err)
+	}
+	egressTCPAddr, ok := egressListener.Addr().(*net.TCPAddr)
+	if !ok || egressTCPAddr.Port < 1 || egressTCPAddr.Port > 65535 {
+		_ = egressListener.Close()
+		return fmt.Errorf("atunnel egress listener has invalid address %q", egressListener.Addr())
+	}
+	atunnelEgressPort := uint16(egressTCPAddr.Port)
+	go func() {
+		if err := atunnelEgress.Serve(ctx, egressListener); err != nil {
+			serverboot.Fatal(ctx, "Failed to serve actor egress", err)
+		}
+	}()
+	slog.InfoContext(ctx, "atunnel egress serving", slog.String("address", *atunnelEgressListenAddress))
 
 	svr := grpc.NewServer(
 		grpc.StatsHandler(otelgrpc.NewServerHandler()),
 		grpc.UnaryInterceptor(ateinterceptors.InternalServerUnaryInterceptor),
 	)
-	ateompb.RegisterAteomServer(svr, NewService(*podUID, *chBinary, *kataConfig, *kataDebug, interiorNetNS, actorLogger))
+	ateompb.RegisterAteomServer(svr, NewService(*podUID, *chBinary, *kataConfig, *kataDebug, interiorNetNS, actorLogger, atunnelIngress, atunnelEgress, atunnelEgressPort, *workerCredentialBundle, *podIdentityTrustBundle, *egressGatewayTrustBundle))
 	reflection.Register(svr)
 
 	slog.InfoContext(ctx, "ateom-microvm serving", slog.String("socket", sockPath))
@@ -209,25 +272,149 @@ type AteomService struct {
 	// actorLogger forwards the actor container's stdout/stderr to the worker pod's
 	// stdout as ate.dev/*-labeled JSON and emits actor lifecycle events (parity
 	// with ateom-gvisor).
-	actorLogger *actorlog.ActorLogger
+	actorLogger    *actorlog.ActorLogger
+	atunnelIngress *atunnel.Server
+	atunnelEgress  *atunnel.Egress
+
+	// atunnelEgressPort is the local atunnel listener used as the target of the
+	// actor network's transparent TCP redirect.
+	atunnelEgressPort uint16
+	// workerCredentialBundlePath contains the worker Pod certificate and key.
+	// Atunnel uses it for ingress serving and authentication to the atelet broker.
+	workerCredentialBundlePath string
+	// podIdentityTrustBundlePath verifies the node-local atelet's Pod identity.
+	podIdentityTrustBundlePath string
+	// egressGatewayTrustBundlePath verifies the remote gateway's serving cert.
+	egressGatewayTrustBundlePath string
 
 	// running maps actor UID -> the live micro-VM, kept so CheckpointWorkload can
 	// pause+snapshot+teardown the same sandbox (and RestoreWorkload can track the
 	// CH it relaunched).
 	running map[string]*runningActor
+
+	// activeActor is the actor whose workload this ateom is currently running,
+	// or nil when it is "available". An ateom serves one actor at a time, so a
+	// single slot is enough; running is keyed by UID for lookup, not because
+	// several actors can be live at once.
+	//
+	// Set by RunWorkload / RestoreWorkload and cleared by CheckpointWorkload, so
+	// it tracks exactly the available/executing state machine described on the
+	// Ateom service. GetWorkloadStats reads it to attribute its sample.
+	//
+	// Kept here rather than on runningActor, even though that struct already
+	// exists per actor: runningActor holds processes that do not exist until the
+	// guest is up (chCmd, vfsdCmd, logAgent), so it cannot be built before the
+	// boot, and an entry in running is what tells CheckpointWorkload a live VM is
+	// there. Attribution has to outlive both of those constraints — it is needed
+	// from the moment the ateom accepts the actor, including for a boot that
+	// never finishes. Same field, same timing, as the gVisor ateom's
+	// AteomService.activeActor.
+	//
+	// Atomic for the same reason as there, and it matters at least as much on
+	// this runtime: lock is held across a cold boot with its retry, across a
+	// snapshot write, and across a restore, so a lock-guarded read would park a
+	// poller through all of them. The writers keep holding lock; the point is the
+	// reader. As there, the type makes a lock-free read possible without making
+	// one happen — GetWorkloadStats must not take lock at all.
+	activeActor atomic.Pointer[ateomstats.ActorAttribution]
 }
 
 var _ ateompb.AteomServer = (*AteomService)(nil)
 
 // NewService creates a new AteomService.
-func NewService(podUID, chBinary, kataConfig string, kataDebug bool, interiorNetNS netns.NsHandle, actorLogger *actorlog.ActorLogger) *AteomService {
+func NewService(podUID, chBinary, kataConfig string, kataDebug bool, interiorNetNS netns.NsHandle, actorLogger *actorlog.ActorLogger, atunnelIngress *atunnel.Server, atunnelEgress *atunnel.Egress, atunnelEgressPort uint16, workerCredentialBundlePath, podIdentityTrustBundlePath, egressGatewayTrustBundlePath string) *AteomService {
 	return &AteomService{
-		podUID:        podUID,
-		chBinary:      chBinary,
-		kataConfig:    kataConfig,
-		kataDebug:     kataDebug,
-		interiorNetNS: interiorNetNS,
-		actorLogger:   actorLogger,
-		running:       map[string]*runningActor{},
+		podUID:                       podUID,
+		chBinary:                     chBinary,
+		kataConfig:                   kataConfig,
+		kataDebug:                    kataDebug,
+		interiorNetNS:                interiorNetNS,
+		actorLogger:                  actorLogger,
+		atunnelIngress:               atunnelIngress,
+		atunnelEgress:                atunnelEgress,
+		atunnelEgressPort:            atunnelEgressPort,
+		workerCredentialBundlePath:   workerCredentialBundlePath,
+		podIdentityTrustBundlePath:   podIdentityTrustBundlePath,
+		egressGatewayTrustBundlePath: egressGatewayTrustBundlePath,
+		running:                      map[string]*runningActor{},
 	}
+}
+
+type actorEgress struct {
+	// client presents the actor certificate to the remote egress gateway.
+	client *atunnel.Client
+	// certificateSource owns the actor key and renews its certificate via atelet.
+	certificateSource *atunnel.BrokerCertificateSource
+	expiresAt         time.Time
+}
+
+func (s *AteomService) prepareActorEgress(ctx context.Context, actorUID string, gateway *ateompb.EgressGateway) (*actorEgress, error) {
+	if gateway == nil {
+		return nil, nil
+	}
+	if gateway.GetAddress() == "" {
+		return nil, fmt.Errorf("egress gateway address is required")
+	}
+	serverName, _, err := net.SplitHostPort(gateway.GetAddress())
+	if err != nil {
+		return nil, fmt.Errorf("invalid egress gateway address %q: %w", gateway.GetAddress(), err)
+	}
+	certificateSource, err := atunnel.NewBrokerCertificateSource(atunnel.BrokerConfig{
+		SocketPath:           ateompath.CredentialBrokerSocket,
+		CredentialBundlePath: s.workerCredentialBundlePath,
+		TrustBundlePath:      s.podIdentityTrustBundlePath,
+		ExpectedActorUID:     actorUID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("while configuring actor certificate broker: %w", err)
+	}
+	// Mint before starting the workload so configured tunneled egress fails
+	// closed. The source retains the private key for mTLS and renewal.
+	expiresAt, err := certificateSource.Mint(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("while obtaining actor certificate: %w", err)
+	}
+	gatewayClient, err := atunnel.NewClient(atunnel.ClientConfig{
+		GatewayAddress:       gateway.GetAddress(),
+		ServerName:           serverName,
+		GetClientCertificate: certificateSource.GetClientCertificate,
+		TrustBundlePath:      s.egressGatewayTrustBundlePath,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("while configuring actor egress client: %w", err)
+	}
+	return &actorEgress{client: gatewayClient, certificateSource: certificateSource, expiresAt: expiresAt}, nil
+}
+
+func (s *AteomService) activateActorNetworking(atespace, actorName string, egress *actorEgress) error {
+	if err := s.atunnelIngress.Activate(atespace, actorName); err != nil {
+		return fmt.Errorf("while activating actor ingress: %w", err)
+	}
+	if egress == nil {
+		return nil
+	}
+	if err := s.atunnelEgress.Activate(egress.client, egress.certificateSource, egress.expiresAt); err != nil {
+		return fmt.Errorf("while activating actor egress: %w", err)
+	}
+	return nil
+}
+
+func (s *AteomService) deactivateActorNetworking(ctx context.Context) error {
+	// Stop admitting traffic and drain active streams before the Actor network
+	// is torn down. Attempt both directions even if one fails to deactivate.
+	err := errors.Join(s.atunnelIngress.Deactivate(ctx), s.atunnelEgress.Deactivate(ctx))
+	if err != nil {
+		return fmt.Errorf("while deactivating actor networking: %w", err)
+	}
+	return nil
+}
+
+// egressRedirectPort returns the local atunnel egress listener port when the
+// activation arms tunneled egress, and zero otherwise, which leaves the
+// prerouting redirect uninstalled and actor egress on the masquerade path.
+func (s *AteomService) egressRedirectPort(redirectEgress bool) uint16 {
+	if !redirectEgress {
+		return 0
+	}
+	return s.atunnelEgressPort
 }

@@ -23,16 +23,14 @@ rules:
   resources: ["pods"]
   verbs: ["get", "watch", "list"]
 - apiGroups: ["ate.dev"]
-  resources: ["actortemplates", "workerpools", "sandboxconfigs"]
+  resources: ["actortemplates", "workerpools", "sandboxconfigs", "csidriverconfigs"]
   verbs: ["get", "watch", "list"]
 - apiGroups: ["ate.dev"]
   resources: ["workerpools"]
   verbs: ["get", "watch", "list"]
-# Secret reads for env source resolution are intentionally NOT granted
-# cluster-wide here. Each demo / tenant is responsible for granting
-# ate-api-server read access only to the specific Secrets referenced by its
-# ActorTemplates (e.g. via a namespace-scoped Role + RoleBinding using
-# resourceNames).
+- apiGroups: ["storage.k8s.io"]
+  resources: ["storageclasses"]
+  verbs: ["get", "watch", "list"]
 ---
 # Create Service Account for Workload Identity
 apiVersion: v1
@@ -89,7 +87,6 @@ spec:
       - name: ate-api-server
         image: ko://github.com/agent-substrate/substrate/cmd/ateapi
         args:
-          - "--grpc-listen-addr=0.0.0.0:443"
           - "--grpc-server-cred-bundle=/run/servicedns.podcert.ate.dev/credential-bundle.pem"
           - --redis-cluster-address=@env
           - --redis-ca-certs=/etc/valkey-ca/ca.crt
@@ -98,10 +95,16 @@ spec:
           - --redis-client-cert=@env
           - --client-jwt-issuer=@env
           - --client-jwt-audience=api.ate-system.svc
-          - --session-id-jwt-pool=/run/session-id-jwt-pool/pool.json
-          - --session-id-ca-pool=/run/session-id-ca-pool/pool.json
+          - --actor-id-jwt-pool=/run/actor-id-jwt-pool/pool.json
+          - --actor-id-ca-pool=/run/actor-id-ca-pool/pool.json
           - --atelet-client-cred-bundle=/run/podidentity.podcert.ate.dev/credential-bundle.pem
           - --pod-identity-ca-certs=/run/podidentity.podcert.ate.dev/trust-bundle.pem
+          # TODO(lior):Remove when egress API pr is merged. This turns on pluggable actor
+          # egress cluster-wide. ateapi stamps this address onto every atelet
+          # Run/Restore, ateom hands it to atunnel, and actor TCP egress is
+          # transparently redirected (nftables) into atunnel, which wraps it in
+          # mTLS + HTTP CONNECT to the egress gateway.
+          - --egress-gateway-address=atenet-egress.ate-system.svc:443
           # Graceful shutdown knobs. The sum must fit within terminationGracePeriodSeconds.
           - --drain-delay=13s
           - --drain-timeout=15s
@@ -120,13 +123,16 @@ spec:
               fieldPath: metadata.uid
         - name: OTEL_RESOURCE_ATTRIBUTES
           value: k8s.namespace.name=$(POD_NAMESPACE),k8s.pod.name=$(POD_NAME),k8s.pod.uid=$(POD_UID),service.instance.id=$(POD_UID)
-        - name: OTEL_EXPORTER_OTLP_ENDPOINT
-          value: http://opentelemetry-collector.gke-managed-otel.svc.cluster.local:4317
+        # OTLP exporter settings are shared by every control plane component;
+        # see manifests/ate-install/ate-otel-config.yaml. Listed first so the
+        # per-developer ConfigMap below can still override a key.
+        envFrom:
+        - configMapRef:
+            name: ate-otel-config
         # Inject env vars from a ConfigMap created by each developer.  This lets
         # each developer customize their own redis address, etc, without having
         # to edit this manifest, which can remain constant across all
         # developers.
-        envFrom:
         - configMapRef:
             name: ate-api-server-envvars
             optional: true
@@ -139,14 +145,14 @@ spec:
         # serving certificate.
         - name: "podidentity"
           mountPath: "/run/podidentity.podcert.ate.dev"
-        - name: "session-id-jwt-pool"
-          mountPath: "/run/session-id-jwt-pool"
+        - name: "actor-id-jwt-pool"
+          mountPath: "/run/actor-id-jwt-pool"
         # Note: See README.md for how to generate this secret.
         - name: "valkey-ca-certs"
           mountPath: "/etc/valkey-ca"
           readOnly: true
-        - name: "session-id-ca-pool"
-          mountPath: "/run/session-id-ca-pool"
+        - name: "actor-id-ca-pool"
+          mountPath: "/run/actor-id-ca-pool"
           readOnly: true
         ports:
         - containerPort: 443
@@ -189,11 +195,11 @@ spec:
                 matchLabels:
                   podcert.ate.dev/canarying: live
               path: trust-bundle.pem
-      - name: "session-id-jwt-pool"
+      - name: "actor-id-jwt-pool"
         projected:
           sources:
           - secret:
-              name: "session-id-jwt-pool"
+              name: "actor-id-jwt-pool"
               items:
               - key: "pool"
                 path: "pool.json"
@@ -205,11 +211,11 @@ spec:
               items:
               - key: "ca.crt"
                 path: "ca.crt"
-      - name: "session-id-ca-pool"
+      - name: "actor-id-ca-pool"
         projected:
           sources:
           - secret:
-              name: "session-id-ca-pool"
+              name: "actor-id-ca-pool"
               items:
               - key: "pool"
                 path: "pool.json"
@@ -227,7 +233,7 @@ spec:
     matchLabels:
       app: ate-api-server
 ---
-# 6. Expose the Session Assigner
+# 6. Expose the Actor Assigner
 apiVersion: v1
 kind: Service
 metadata:
@@ -237,6 +243,8 @@ spec:
   # Headless (i.e. `clusterIP: None`) services make DNS return one A record per
   # ready pod so gRPC clients can load balance client-side.
   clusterIP: None
+  # Prefer, not Require: Require fails Service creation on a single-stack cluster.
+  ipFamilyPolicy: PreferDualStack
   selector:
     app: ate-api-server
   ports:
