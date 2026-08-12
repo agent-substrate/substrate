@@ -55,9 +55,11 @@ def render_chart(final_report_path, output_png_path):
         score = max(0.0, min(1.0, score))
         scores.append(score)
 
-        if score > 0.85:
+        # These thresholds can be tweaked over time, they
+        # are NOT a policy, just a visual assist.
+        if score >= 0.95:
             bottom_colors.append("#16a34a")  # Green
-        elif score >= 0.7:
+        elif score >= 0.5:
             bottom_colors.append("#eab308")  # Yellow
         else:
             bottom_colors.append("#f97316")  # Orange

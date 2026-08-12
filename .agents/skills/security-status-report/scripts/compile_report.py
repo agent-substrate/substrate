@@ -23,7 +23,6 @@ def compile_report(threats_json_path, results_dir, output_path):
     final_report = []
     succeeded_count = 0
     failed_ids = []
-    total_quality = 0.0
 
     for t in threats:
         threat_id = t.get("threat_id", "unknown")
@@ -35,12 +34,16 @@ def compile_report(threats_json_path, results_dir, output_path):
                     res = json.load(rf)
 
                 # Check threat_id matching
-                if res.get("threat_id") and res.get("threat_id") != threat_id:
+                if not res.get("threat_id"):
+                    t["error"] = f"Missing threat_id in result file"
+                elif res.get("threat_id") and res.get("threat_id") != threat_id:
                     t["error"] = f"Mismatched threat_id in result file: expected {threat_id}, got {res.get('threat_id')}"
                 else:
                     # Validate quality score presence, type, and range
                     if "quality" not in res:
                         t["error"] = "Result JSON missing 'quality' score"
+                    elif isinstance(res["quality"], bool):
+                      t["error"] = f"Invalid boolean quality score: {res['quality']}"
                     else:
                         try:
                             score = float(res["quality"])
@@ -70,13 +73,12 @@ def compile_report(threats_json_path, results_dir, output_path):
             except Exception as e:
                 t["error"] = f"Failed to parse agent JSON: {e}"
         else:
-            t["error"] = "The evaluation sub-agent timed out or failed to produce a valid JSON."
+            t["error"] = "Missing result file. The evaluation sub-agent may have timed out, failed to produce a valid JSON, or written to the wrong location."
 
         if "error" in t:
             failed_ids.append(threat_id)
         else:
             succeeded_count += 1
-            total_quality += t.get("quality", 0.0)
 
         final_report.append(t)
             
