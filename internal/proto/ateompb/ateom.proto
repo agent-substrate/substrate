@@ -77,6 +77,24 @@ service Ateom {
   // "booting" distinguishable from "not here" at all, and it means a workload
   // that dies during boot is attributable rather than anonymous.
   rpc GetWorkloadStats(GetWorkloadStatsRequest) returns (GetWorkloadStatsResponse) {}
+
+  // GetActiveWorkloadStats samples whatever this ateom is currently
+  // executing, without asserting an identity. It is the discovery read for a
+  // scraper that enumerates ateoms and holds no worker-to-actor mapping;
+  // GetWorkloadStats above is the verified read for a caller that must be
+  // answered about a specific actor.
+  //
+  // An "available" ateom answers an empty stats list, not an error: an idle
+  // worker is a normal thing for a scraper to find. FAILED_PRECONDITION keeps
+  // the meaning it has on GetWorkloadStats -- executing, but no numbers to give
+  // yet -- so a poll landing in a boot skips the sample and takes the next one.
+  //
+  // Consumers MUST attribute each sample solely from the identity echoed
+  // inside it, never from a mapping they hold: without an asserted uid, the
+  // response is the only statement of who was measured. Like GetWorkloadStats
+  // it is a pure read, safe on a timer, and does not touch the lifecycle
+  // mutex.
+  rpc GetActiveWorkloadStats(GetActiveWorkloadStatsRequest) returns (GetActiveWorkloadStatsResponse) {}
 }
 
 message RunWorkloadRequest {
@@ -333,4 +351,16 @@ message GetWorkloadStatsResponse {
   uint64 cpu_usage_usec = 11;
 
   int64 observed_at_unix_nano = 12;
+}
+
+message GetActiveWorkloadStatsRequest {
+}
+
+message GetActiveWorkloadStatsResponse {
+  // Zero samples when the ateom is "available" (not an error), one when it is
+  // "executing" -- an ateom serves one actor at a time, and the empty list
+  // lets a scraper treat an idle worker as a normal answer rather than an
+  // error to classify. Each sample is self-describing; see the attribution
+  // rule on the rpc.
+  repeated GetWorkloadStatsResponse stats = 1;
 }

@@ -27,6 +27,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/agent-substrate/substrate/cmd/ateom-gvisor/internal/cgroupstats"
+	"github.com/agent-substrate/substrate/internal/ateomstats"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 )
 
@@ -112,21 +113,9 @@ func (s *AteomService) GetWorkloadStats(ctx context.Context, req *ateompb.GetWor
 		return nil, status.Errorf(codes.NotFound, "ateom is executing actor %q, not the requested %q", active.UID, req.GetActorUid())
 	}
 
-	observedAt := time.Now()
-	sample, err := cgroupstats.Read(filepath.Join(s.cgroupRoot, sandboxCgroupContainer))
+	resp, err := s.sampleSandbox(active)
 	if err != nil {
-		// The requested actor is the active one but its cgroup is not there. Most
-		// often that is a poll landing in the boot: the ateom retains the
-		// attribution from the moment it accepts the actor, before runsc has
-		// created the leaf. The other way in is a sandbox that went away between
-		// the check above and the read, which the next CheckpointWorkload turns
-		// into the NOT_FOUND above. Either way it is "no numbers right now" and the
-		// caller should take the next sample, so FAILED_PRECONDITION. Anything else
-		// is a real read failure.
-		if errors.Is(err, fs.ErrNotExist) {
-			return nil, status.Error(codes.FailedPrecondition, "no sandbox cgroup to measure yet")
-		}
-		return nil, status.Errorf(codes.Internal, "reading sandbox cgroup: %v", err)
+		return nil, err
 	}
 
 	// Re-check that the same workload is still the active one. The read above
@@ -142,6 +131,62 @@ func (s *AteomService) GetWorkloadStats(ctx context.Context, req *ateompb.GetWor
 	// depending on where in the handler it was noticed.
 	if s.activeActor.Load() != active {
 		return nil, status.Errorf(codes.NotFound, "ateom stopped executing actor %q while the sample was being taken", req.GetActorUid())
+	}
+
+	return resp, nil
+}
+
+// GetActiveWorkloadStats implements
+// ateompb.Ateom/GetActiveWorkloadStats: the discovery read, sampling
+// whatever is executing with no identity asserted. Same lock discipline as
+// GetWorkloadStats above, for the same reasons.
+func (s *AteomService) GetActiveWorkloadStats(ctx context.Context, req *ateompb.GetActiveWorkloadStatsRequest) (*ateompb.GetActiveWorkloadStatsResponse, error) {
+	active := s.activeActor.Load()
+	if active == nil {
+		// "Available" is a normal answer for a scraper to get, per the proto:
+		// an empty list, not an error.
+		return &ateompb.GetActiveWorkloadStatsResponse{}, nil
+	}
+
+	resp, err := s.sampleSandbox(active)
+	if err != nil {
+		return nil, err
+	}
+
+	// Same re-check as GetWorkloadStats, different code: with no uid asserted
+	// there is no "requested actor" for NOT_FOUND to disown. A transition
+	// underneath the read just means these numbers cannot be attributed to any
+	// single actor, so the answer is the discovery read's usual "no numbers
+	// this tick, take the next sample".
+	if s.activeActor.Load() != active {
+		return nil, status.Error(codes.FailedPrecondition, "ateom transitioned while the sample was being taken")
+	}
+
+	return &ateompb.GetActiveWorkloadStatsResponse{
+		Stats: []*ateompb.GetWorkloadStatsResponse{resp},
+	}, nil
+}
+
+// sampleSandbox reads the sandbox cgroup and builds the sample attributed to
+// active. Callers re-check s.activeActor against the pointer they loaded after
+// this returns — the read holds no lock, and each RPC reports a transition
+// with its own code.
+func (s *AteomService) sampleSandbox(active *ateomstats.ActorAttribution) (*ateompb.GetWorkloadStatsResponse, error) {
+	observedAt := time.Now()
+	sample, err := cgroupstats.Read(filepath.Join(s.cgroupRoot, sandboxCgroupContainer))
+	if err != nil {
+		// The actor is the active one but its cgroup is not there. Most often
+		// that is a poll landing in the boot: the ateom retains the attribution
+		// from the moment it accepts the actor, before runsc has created the
+		// leaf. The other way in is a sandbox that went away underneath the
+		// read, which the next CheckpointWorkload turns into the callers'
+		// not-executing answers. Either way it is "no numbers right now" and
+		// the caller should take the next sample, so FAILED_PRECONDITION.
+		// Anything else is a real read failure.
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, status.Error(codes.FailedPrecondition, "no sandbox cgroup to measure yet")
+		}
+		return nil, status.Errorf(codes.Internal, "reading sandbox cgroup: %v", err)
 	}
 
 	return &ateompb.GetWorkloadStatsResponse{

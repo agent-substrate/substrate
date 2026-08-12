@@ -414,3 +414,58 @@ func TestAteomServiceStartsAvailable(t *testing.T) {
 		t.Errorf("new AteomService.guestStats = %v, want nil", got)
 	}
 }
+
+func TestGetActiveWorkloadStats(t *testing.T) {
+	agent := &fakeAgent{stats: map[string]*agentpb.CgroupStats{
+		"app_ovl": containerStats(157286400, 209715200, 20971520, 1234567000),
+	}}
+	s := newStatsService(agent, "app_ovl")
+
+	got, err := s.GetActiveWorkloadStats(context.Background(), &ateompb.GetActiveWorkloadStatsRequest{})
+	if err != nil {
+		t.Fatalf("GetActiveWorkloadStats() error = %v, want nil", err)
+	}
+	if len(got.GetStats()) != 1 {
+		t.Fatalf("GetActiveWorkloadStats() returned %d samples, want 1", len(got.GetStats()))
+	}
+
+	// The keyed read against the same fake is the reference: the discovery read
+	// must produce the identical sample, since both are the same measurement
+	// with a different addressing mode.
+	want, err := s.GetWorkloadStats(context.Background(), &ateompb.GetWorkloadStatsRequest{ActorUid: "uid-a"})
+	if err != nil {
+		t.Fatalf("GetWorkloadStats() error = %v, want nil", err)
+	}
+	sample := got.GetStats()[0]
+	sample.ObservedAtUnixNano = 0
+	want.ObservedAtUnixNano = 0
+	if diff := cmp.Diff(want, sample, protocmp.Transform()); diff != "" {
+		t.Errorf("discovery sample differs from keyed sample (-keyed +discovery):\n%s", diff)
+	}
+}
+
+// TestGetActiveWorkloadStatsAvailable pins the contract that makes the
+// discovery read scrapeable: an idle ateom is an empty list, never an error.
+func TestGetActiveWorkloadStatsAvailable(t *testing.T) {
+	s := &AteomService{}
+
+	got, err := s.GetActiveWorkloadStats(context.Background(), &ateompb.GetActiveWorkloadStatsRequest{})
+	if err != nil {
+		t.Fatalf("GetActiveWorkloadStats() on an available ateom: error = %v, want nil", err)
+	}
+	if n := len(got.GetStats()); n != 0 {
+		t.Errorf("GetActiveWorkloadStats() on an available ateom returned %d samples, want 0", n)
+	}
+}
+
+// TestGetActiveWorkloadStatsBooting: executing but no guest target yet
+// keeps GetWorkloadStats's FAILED_PRECONDITION meaning.
+func TestGetActiveWorkloadStatsBooting(t *testing.T) {
+	s := &AteomService{}
+	s.activeActor.Store(&testActor) // attribution retained, target not published
+
+	_, err := s.GetActiveWorkloadStats(context.Background(), &ateompb.GetActiveWorkloadStatsRequest{})
+	if got := status.Code(err); got != codes.FailedPrecondition {
+		t.Errorf("GetActiveWorkloadStats() mid-boot: code = %v, want %v (err: %v)", got, codes.FailedPrecondition, err)
+	}
+}
