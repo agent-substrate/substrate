@@ -50,7 +50,6 @@ func TestRequestParking(t *testing.T) {
 	ctx := context.Background()
 	clients := e2e.GetClients()
 	nsObj := e2e.CreateNamespace(t)
-	defer nsObj.Delete(t)
 
 	// One worker, two actors: the minimal deterministic oversubscription.
 	at := createParkingFixture(ctx, t, clients, nsObj)
