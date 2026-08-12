@@ -113,9 +113,20 @@ func (s *AteomService) GetWorkloadStats(ctx context.Context, req *ateompb.GetWor
 		return nil, status.Errorf(codes.NotFound, "ateom is executing actor %q, not the requested %q", active.UID, req.GetActorUid())
 	}
 
-	resp, err := s.sampleSandbox(active)
+	sample, err := s.sampleSandbox(active)
 	if err != nil {
-		return nil, err
+		// The requested actor is the active one but its cgroup is not there.
+		// Most often that is a poll landing in the boot: the ateom retains the
+		// attribution from the moment it accepts the actor, before runsc has
+		// created the leaf. The other way in is a sandbox that went away
+		// underneath the read, which the next CheckpointWorkload turns into the
+		// NOT_FOUND above. Either way it is "no numbers right now" and the
+		// caller should take the next sample, so FAILED_PRECONDITION. Anything
+		// else is a real read failure.
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, status.Error(codes.FailedPrecondition, "no sandbox cgroup to measure yet")
+		}
+		return nil, status.Errorf(codes.Internal, "reading sandbox cgroup: %v", err)
 	}
 
 	// Re-check that the same workload is still the active one. The read above
@@ -133,7 +144,7 @@ func (s *AteomService) GetWorkloadStats(ctx context.Context, req *ateompb.GetWor
 		return nil, status.Errorf(codes.NotFound, "ateom stopped executing actor %q while the sample was being taken", req.GetActorUid())
 	}
 
-	return resp, nil
+	return &ateompb.GetWorkloadStatsResponse{Sample: sample}, nil
 }
 
 // GetActiveWorkloadStats implements
@@ -143,53 +154,58 @@ func (s *AteomService) GetWorkloadStats(ctx context.Context, req *ateompb.GetWor
 func (s *AteomService) GetActiveWorkloadStats(ctx context.Context, req *ateompb.GetActiveWorkloadStatsRequest) (*ateompb.GetActiveWorkloadStatsResponse, error) {
 	active := s.activeActor.Load()
 	if active == nil {
-		// "Available" is a normal answer for a scraper to get, per the proto:
-		// an empty list, not an error.
-		return &ateompb.GetActiveWorkloadStatsResponse{}, nil
+		return &ateompb.GetActiveWorkloadStatsResponse{
+			State: ateompb.WorkloadState_WORKLOAD_STATE_AVAILABLE,
+		}, nil
 	}
 
-	resp, err := s.sampleSandbox(active)
+	sample, err := s.sampleSandbox(active)
 	if err != nil {
-		return nil, err
-	}
-
-	// Same re-check as GetWorkloadStats, different code: with no uid asserted
-	// there is no "requested actor" for NOT_FOUND to disown. A transition
-	// underneath the read just means these numbers cannot be attributed to any
-	// single actor, so the answer is the discovery read's usual "no numbers
-	// this tick, take the next sample".
-	if s.activeActor.Load() != active {
-		return nil, status.Error(codes.FailedPrecondition, "ateom transitioned while the sample was being taken")
-	}
-
-	return &ateompb.GetActiveWorkloadStatsResponse{
-		Stats: []*ateompb.GetWorkloadStatsResponse{resp},
-	}, nil
-}
-
-// sampleSandbox reads the sandbox cgroup and builds the sample attributed to
-// active. Callers re-check s.activeActor against the pointer they loaded after
-// this returns — the read holds no lock, and each RPC reports a transition
-// with its own code.
-func (s *AteomService) sampleSandbox(active *ateomstats.ActorAttribution) (*ateompb.GetWorkloadStatsResponse, error) {
-	observedAt := time.Now()
-	sample, err := cgroupstats.Read(filepath.Join(s.cgroupRoot, sandboxCgroupContainer))
-	if err != nil {
-		// The actor is the active one but its cgroup is not there. Most often
-		// that is a poll landing in the boot: the ateom retains the attribution
-		// from the moment it accepts the actor, before runsc has created the
-		// leaf. The other way in is a sandbox that went away underneath the
-		// read, which the next CheckpointWorkload turns into the callers'
-		// not-executing answers. Either way it is "no numbers right now" and
-		// the caller should take the next sample, so FAILED_PRECONDITION.
-		// Anything else is a real read failure.
+		// A missing cgroup is EXECUTING with no numbers yet -- a poll landing
+		// in the boot -- which for a caller with no prior knowledge is as
+		// normal a finding as an available ateom, so it is a state, not an
+		// error. Anything else is a real read failure.
 		if errors.Is(err, fs.ErrNotExist) {
-			return nil, status.Error(codes.FailedPrecondition, "no sandbox cgroup to measure yet")
+			return &ateompb.GetActiveWorkloadStatsResponse{
+				State: ateompb.WorkloadState_WORKLOAD_STATE_EXECUTING,
+			}, nil
 		}
 		return nil, status.Errorf(codes.Internal, "reading sandbox cgroup: %v", err)
 	}
 
-	return &ateompb.GetWorkloadStatsResponse{
+	// Same re-check as GetWorkloadStats, different answer: with no uid asserted
+	// there is no "requested actor" for NOT_FOUND to disown, and a transition
+	// underneath the read just means these numbers cannot be attributed to any
+	// single actor. Report the state as of now, with no sample -- the next tick
+	// resolves it either way.
+	if latest := s.activeActor.Load(); latest != active {
+		state := ateompb.WorkloadState_WORKLOAD_STATE_EXECUTING
+		if latest == nil {
+			state = ateompb.WorkloadState_WORKLOAD_STATE_AVAILABLE
+		}
+		return &ateompb.GetActiveWorkloadStatsResponse{State: state}, nil
+	}
+
+	return &ateompb.GetActiveWorkloadStatsResponse{
+		State:  ateompb.WorkloadState_WORKLOAD_STATE_EXECUTING,
+		Sample: sample,
+	}, nil
+}
+
+// sampleSandbox reads the sandbox cgroup and builds the sample attributed to
+// active. Errors come back raw -- notably fs.ErrNotExist for a cgroup that is
+// not there yet -- because the two RPCs disagree on what that means: an error
+// code for the keyed read, a normal EXECUTING answer for the discovery read.
+// Callers re-check s.activeActor against the pointer they loaded after this
+// returns; the read holds no lock.
+func (s *AteomService) sampleSandbox(active *ateomstats.ActorAttribution) (*ateompb.WorkloadStatsSample, error) {
+	observedAt := time.Now()
+	sample, err := cgroupstats.Read(filepath.Join(s.cgroupRoot, sandboxCgroupContainer))
+	if err != nil {
+		return nil, err
+	}
+
+	return &ateompb.WorkloadStatsSample{
 		Atespace:               active.Ref.Atespace,
 		ActorName:              active.Ref.Name,
 		ActorUid:               active.UID,

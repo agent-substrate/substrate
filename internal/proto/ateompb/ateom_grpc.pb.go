@@ -106,10 +106,13 @@ type AteomClient interface {
 	// GetWorkloadStats above is the verified read for a caller that must be
 	// answered about a specific actor.
 	//
-	// An "available" ateom answers an empty stats list, not an error: an idle
-	// worker is a normal thing for a scraper to find. FAILED_PRECONDITION keeps
-	// the meaning it has on GetWorkloadStats -- executing, but no numbers to give
-	// yet -- so a poll landing in a boot skips the sample and takes the next one.
+	// Every state a blind caller can find is a normal answer here, never an
+	// error: the response carries a WorkloadState, sample is absent when there
+	// is nothing to measure ("available") or nothing to measure YET (a poll
+	// landing in a boot or a restore), and error codes are reserved for real
+	// failures reading a sandbox that should be measurable. This is deliberately
+	// unlike GetWorkloadStats, whose caller asserts knowledge the codes then
+	// answer.
 	//
 	// Consumers MUST attribute each sample solely from the identity echoed
 	// inside it, never from a mapping they hold: without an asserted uid, the
@@ -243,10 +246,13 @@ type AteomServer interface {
 	// GetWorkloadStats above is the verified read for a caller that must be
 	// answered about a specific actor.
 	//
-	// An "available" ateom answers an empty stats list, not an error: an idle
-	// worker is a normal thing for a scraper to find. FAILED_PRECONDITION keeps
-	// the meaning it has on GetWorkloadStats -- executing, but no numbers to give
-	// yet -- so a poll landing in a boot skips the sample and takes the next one.
+	// Every state a blind caller can find is a normal answer here, never an
+	// error: the response carries a WorkloadState, sample is absent when there
+	// is nothing to measure ("available") or nothing to measure YET (a poll
+	// landing in a boot or a restore), and error codes are reserved for real
+	// failures reading a sandbox that should be measurable. This is deliberately
+	// unlike GetWorkloadStats, whose caller asserts knowledge the codes then
+	// answer.
 	//
 	// Consumers MUST attribute each sample solely from the identity echoed
 	// inside it, never from a mapping they hold: without an asserted uid, the

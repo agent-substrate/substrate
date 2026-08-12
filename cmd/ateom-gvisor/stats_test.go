@@ -89,13 +89,13 @@ func TestGetWorkloadStats(t *testing.T) {
 		t.Fatalf("GetWorkloadStats() error = %v, want nil", err)
 	}
 
-	if got.GetObservedAtUnixNano() < before || got.GetObservedAtUnixNano() > after {
-		t.Errorf("GetWorkloadStats() observed_at_unix_nano = %d, want within [%d, %d]", got.GetObservedAtUnixNano(), before, after)
+	if got.GetSample().GetObservedAtUnixNano() < before || got.GetSample().GetObservedAtUnixNano() > after {
+		t.Errorf("GetWorkloadStats() observed_at_unix_nano = %d, want within [%d, %d]", got.GetSample().GetObservedAtUnixNano(), before, after)
 	}
 	// Checked above; zeroed so the rest can be compared as a whole.
-	got.ObservedAtUnixNano = 0
+	got.GetSample().ObservedAtUnixNano = 0
 
-	want := &ateompb.GetWorkloadStatsResponse{
+	want := &ateompb.GetWorkloadStatsResponse{Sample: &ateompb.WorkloadStatsSample{
 		Atespace:               "space-a",
 		ActorName:              "actor-a",
 		ActorUid:               "uid-a",
@@ -107,7 +107,7 @@ func TestGetWorkloadStats(t *testing.T) {
 		MemoryPeakBytes:        209715200,
 		MemoryWorkingSetBytes:  136314880,
 		CpuUsageUsec:           1234567,
-	}
+	}}
 	if diff := cmp.Diff(want, got, protocmp.Transform()); diff != "" {
 		t.Errorf("GetWorkloadStats() mismatch (-want +got):\n%s", diff)
 	}
@@ -227,8 +227,11 @@ func TestGetActiveWorkloadStats(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetActiveWorkloadStats() error = %v, want nil", err)
 	}
-	if len(got.GetStats()) != 1 {
-		t.Fatalf("GetActiveWorkloadStats() returned %d samples, want 1", len(got.GetStats()))
+	if got.GetState() != ateompb.WorkloadState_WORKLOAD_STATE_EXECUTING {
+		t.Errorf("GetActiveWorkloadStats() state = %v, want EXECUTING", got.GetState())
+	}
+	if got.GetSample() == nil {
+		t.Fatal("GetActiveWorkloadStats() returned no sample, want one")
 	}
 
 	// The keyed read against the same fixture is the reference: the discovery
@@ -238,16 +241,16 @@ func TestGetActiveWorkloadStats(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetWorkloadStats() error = %v, want nil", err)
 	}
-	sample := got.GetStats()[0]
+	sample := got.GetSample()
 	sample.ObservedAtUnixNano = 0
-	want.ObservedAtUnixNano = 0
-	if diff := cmp.Diff(want, sample, protocmp.Transform()); diff != "" {
+	want.GetSample().ObservedAtUnixNano = 0
+	if diff := cmp.Diff(want.GetSample(), sample, protocmp.Transform()); diff != "" {
 		t.Errorf("discovery sample differs from keyed sample (-keyed +discovery):\n%s", diff)
 	}
 }
 
 // TestGetActiveWorkloadStatsAvailable pins the contract that makes the
-// discovery read scrapeable: an idle ateom is an empty list, never an error.
+// discovery read scrapeable: an idle ateom is a state, never an error.
 func TestGetActiveWorkloadStatsAvailable(t *testing.T) {
 	s := newStatsService(t, healthyCgroup)
 
@@ -255,19 +258,30 @@ func TestGetActiveWorkloadStatsAvailable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetActiveWorkloadStats() on an available ateom: error = %v, want nil", err)
 	}
-	if n := len(got.GetStats()); n != 0 {
-		t.Errorf("GetActiveWorkloadStats() on an available ateom returned %d samples, want 0", n)
+	if got.GetState() != ateompb.WorkloadState_WORKLOAD_STATE_AVAILABLE {
+		t.Errorf("GetActiveWorkloadStats() state = %v, want AVAILABLE", got.GetState())
+	}
+	if got.GetSample() != nil {
+		t.Errorf("GetActiveWorkloadStats() on an available ateom returned sample %v, want none", got.GetSample())
 	}
 }
 
-// TestGetActiveWorkloadStatsBooting: executing but nothing to measure
-// yet keeps GetWorkloadStats's FAILED_PRECONDITION meaning.
+// TestGetActiveWorkloadStatsBooting: executing but nothing to measure yet is
+// EXECUTING with no samples -- a state, not an error, unlike the keyed read's
+// FAILED_PRECONDITION. A blind caller finds boots as routinely as idle
+// workers.
 func TestGetActiveWorkloadStatsBooting(t *testing.T) {
 	s := newStatsService(t, nil) // no cgroup directory: a poll landing mid-boot
 	s.activeActor.Store(&testActor)
 
-	_, err := s.GetActiveWorkloadStats(context.Background(), &ateompb.GetActiveWorkloadStatsRequest{})
-	if got := status.Code(err); got != codes.FailedPrecondition {
-		t.Errorf("GetActiveWorkloadStats() mid-boot: code = %v, want %v (err: %v)", got, codes.FailedPrecondition, err)
+	got, err := s.GetActiveWorkloadStats(context.Background(), &ateompb.GetActiveWorkloadStatsRequest{})
+	if err != nil {
+		t.Fatalf("GetActiveWorkloadStats() mid-boot: error = %v, want nil", err)
+	}
+	if got.GetState() != ateompb.WorkloadState_WORKLOAD_STATE_EXECUTING {
+		t.Errorf("GetActiveWorkloadStats() mid-boot state = %v, want EXECUTING", got.GetState())
+	}
+	if got.GetSample() != nil {
+		t.Errorf("GetActiveWorkloadStats() mid-boot returned sample %v, want none", got.GetSample())
 	}
 }

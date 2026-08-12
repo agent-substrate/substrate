@@ -84,10 +84,13 @@ service Ateom {
   // GetWorkloadStats above is the verified read for a caller that must be
   // answered about a specific actor.
   //
-  // An "available" ateom answers an empty stats list, not an error: an idle
-  // worker is a normal thing for a scraper to find. FAILED_PRECONDITION keeps
-  // the meaning it has on GetWorkloadStats -- executing, but no numbers to give
-  // yet -- so a poll landing in a boot skips the sample and takes the next one.
+  // Every state a blind caller can find is a normal answer here, never an
+  // error: the response carries a WorkloadState, sample is absent when there
+  // is nothing to measure ("available") or nothing to measure YET (a poll
+  // landing in a boot or a restore), and error codes are reserved for real
+  // failures reading a sandbox that should be measurable. This is deliberately
+  // unlike GetWorkloadStats, whose caller asserts knowledge the codes then
+  // answer.
   //
   // Consumers MUST attribute each sample solely from the identity echoed
   // inside it, never from a mapping they hold: without an asserted uid, the
@@ -300,14 +303,14 @@ enum StatsSource {
   STATS_SOURCE_GUEST_AGENT = 2;
 }
 
-// GetWorkloadStatsResponse is one resource-usage sample for the executing
-// workload. The unit of measurement is the SANDBOX, which today equals the
-// actor. Per-container attribution is not reported: the micro-VM source could
-// give it, since the guest keeps a cgroup per container and ateom sums them,
-// but the gVisor source cannot split one at all without the sentry's own
-// accounting, and a field only one runtime could ever fill would be worse than
-// none.
-message GetWorkloadStatsResponse {
+// WorkloadStatsSample is one resource-usage sample for an executing workload,
+// shared by both stats reads. The unit of measurement is the SANDBOX, which
+// today equals the actor. Per-container attribution is not reported: the
+// micro-VM source could give it, since the guest keeps a cgroup per container
+// and ateom sums them, but the gVisor source cannot split one at all without
+// the sentry's own accounting, and a field only one runtime could ever fill
+// would be worse than none.
+message WorkloadStatsSample {
   // Identity of the measured actor, retained by ateom from the
   // RunWorkloadRequest / RestoreWorkloadRequest that started it. Echoed back so
   // the caller can attribute the sample without holding its own mapping from
@@ -353,14 +356,35 @@ message GetWorkloadStatsResponse {
   int64 observed_at_unix_nano = 12;
 }
 
+message GetWorkloadStatsResponse {
+  WorkloadStatsSample sample = 1;
+}
+
 message GetActiveWorkloadStatsRequest {
 }
 
+// WorkloadState is the executing/available half of the ateom state machine, as
+// the discovery read reports it. It exists so a caller with no prior knowledge
+// can tell "nothing here" from "something here without numbers yet" without
+// either being an error.
+enum WorkloadState {
+  WORKLOAD_STATE_UNSPECIFIED = 0;
+  // Nothing is executing. sample is absent.
+  WORKLOAD_STATE_AVAILABLE = 1;
+  // A workload is executing. sample is set -- or absent, when there are no
+  // numbers to give yet: a poll landing in a boot or a restore, or a
+  // lifecycle transition underneath the read. Skip and take the next one.
+  WORKLOAD_STATE_EXECUTING = 2;
+}
+
 message GetActiveWorkloadStatsResponse {
-  // Zero samples when the ateom is "available" (not an error), one when it is
-  // "executing" -- an ateom serves one actor at a time, and the empty list
-  // lets a scraper treat an idle worker as a normal answer rather than an
-  // error to classify. Each sample is self-describing; see the attribution
-  // rule on the rpc.
-  repeated GetWorkloadStatsResponse stats = 1;
+  WorkloadState state = 1;
+
+  // Set when state is WORKLOAD_STATE_EXECUTING and there are numbers to give;
+  // absent when the ateom is available, and absent mid-boot/restore/teardown
+  // when there is nothing to measure yet (see WorkloadState). An ateom serves
+  // one actor at a time, so the slot is singular like the state that
+  // describes it. The sample is self-describing; see the attribution rule on
+  // the rpc.
+  WorkloadStatsSample sample = 2;
 }

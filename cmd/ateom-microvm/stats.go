@@ -19,6 +19,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"google.golang.org/grpc/codes"
@@ -103,9 +104,16 @@ func (s *AteomService) GetWorkloadStats(ctx context.Context, req *ateompb.GetWor
 		return nil, status.Errorf(codes.NotFound, "ateom is executing actor %q, not the requested %q", active.UID, req.GetActorUid())
 	}
 
-	resp, err := s.sampleGuest(ctx, active)
+	sample, err := s.sampleGuest(ctx, active)
 	if err != nil {
-		return nil, err
+		// "No numbers right now", never NOT_FOUND: the requested actor IS the
+		// one here. The reasons are all routine -- a poll landing in the boot
+		// or the restore before the target is published, a teardown that
+		// cleared the target ahead of closing the connection, a restore whose
+		// post-restore agent dial failed, or a guest that has stopped
+		// answering. The caller should take the next sample; after a teardown
+		// the next sample is the NOT_FOUND above.
+		return nil, status.Error(codes.FailedPrecondition, err.Error())
 	}
 
 	// Re-check that the same workload is still the active one. The calls above
@@ -123,7 +131,7 @@ func (s *AteomService) GetWorkloadStats(ctx context.Context, req *ateompb.GetWor
 		return nil, status.Errorf(codes.NotFound, "ateom stopped executing actor %q while the sample was being taken", req.GetActorUid())
 	}
 
-	return resp, nil
+	return &ateompb.GetWorkloadStatsResponse{Sample: sample}, nil
 }
 
 // GetActiveWorkloadStats implements
@@ -133,35 +141,50 @@ func (s *AteomService) GetWorkloadStats(ctx context.Context, req *ateompb.GetWor
 func (s *AteomService) GetActiveWorkloadStats(ctx context.Context, req *ateompb.GetActiveWorkloadStatsRequest) (*ateompb.GetActiveWorkloadStatsResponse, error) {
 	active := s.activeActor.Load()
 	if active == nil {
-		// "Available" is a normal answer for a scraper to get, per the proto:
-		// an empty list, not an error.
-		return &ateompb.GetActiveWorkloadStatsResponse{}, nil
+		return &ateompb.GetActiveWorkloadStatsResponse{
+			State: ateompb.WorkloadState_WORKLOAD_STATE_AVAILABLE,
+		}, nil
 	}
 
-	resp, err := s.sampleGuest(ctx, active)
+	sample, err := s.sampleGuest(ctx, active)
 	if err != nil {
-		return nil, err
+		// Every way sampleGuest declines is EXECUTING with no numbers yet --
+		// boot, restore, teardown in progress, a guest that has stopped
+		// answering -- and for a caller with no prior knowledge each is as
+		// normal a finding as an available ateom. A state, not an error.
+		return &ateompb.GetActiveWorkloadStatsResponse{
+			State: ateompb.WorkloadState_WORKLOAD_STATE_EXECUTING,
+		}, nil
 	}
 
-	// Same re-check as GetWorkloadStats, different code: with no uid asserted
-	// there is no "requested actor" for NOT_FOUND to disown. A transition
+	// Same re-check as GetWorkloadStats, different answer: with no uid asserted
+	// there is no "requested actor" for NOT_FOUND to disown, and a transition
 	// underneath the read just means these numbers cannot be attributed to any
-	// single actor, so the answer is the discovery read's usual "no numbers
-	// this tick, take the next sample".
-	if s.activeActor.Load() != active {
-		return nil, status.Error(codes.FailedPrecondition, "ateom transitioned while the sample was being taken")
+	// single actor. Report the state as of now, with no sample -- the next tick
+	// resolves it either way.
+	if latest := s.activeActor.Load(); latest != active {
+		state := ateompb.WorkloadState_WORKLOAD_STATE_EXECUTING
+		if latest == nil {
+			state = ateompb.WorkloadState_WORKLOAD_STATE_AVAILABLE
+		}
+		return &ateompb.GetActiveWorkloadStatsResponse{State: state}, nil
 	}
 
 	return &ateompb.GetActiveWorkloadStatsResponse{
-		Stats: []*ateompb.GetWorkloadStatsResponse{resp},
+		State:  ateompb.WorkloadState_WORKLOAD_STATE_EXECUTING,
+		Sample: sample,
 	}, nil
 }
 
 // sampleGuest reads the guest's container cgroups through the agent and builds
-// the sample attributed to active. Callers re-check s.activeActor against the
-// pointer they loaded after this returns — the read holds no lock, and each
-// RPC reports a transition with its own code.
-func (s *AteomService) sampleGuest(ctx context.Context, active *ateomstats.ActorAttribution) (*ateompb.GetWorkloadStatsResponse, error) {
+// the sample attributed to active. Every error it returns means "no numbers
+// right now" rather than a bug -- there is deliberately no Internal class on
+// this runtime, since a guest that has stopped answering is routine here --
+// and it comes back raw because the two RPCs express that differently: an
+// error code for the keyed read, a normal EXECUTING answer for the discovery
+// read. Callers re-check s.activeActor against the pointer they loaded after
+// this returns; the read holds no lock.
+func (s *AteomService) sampleGuest(ctx context.Context, active *ateomstats.ActorAttribution) (*ateompb.WorkloadStatsSample, error) {
 	// The actor is the one here, but there is no guest to ask yet. Usually that
 	// is a poll landing in the boot or the restore: the ateom retains the
 	// attribution from the moment it accepts the actor, and the target is only
@@ -169,33 +192,25 @@ func (s *AteomService) sampleGuest(ctx context.Context, active *ateomstats.Actor
 	// like from here, since teardownActor clears the target before it closes
 	// the connection, and what a restore whose post-restore agent dial failed
 	// looks like for the rest of that activation.
-	//
-	// FAILED_PRECONDITION in all three: the answer is "no numbers right now",
-	// the caller should take the next sample, and for the teardown the next
-	// sample is the caller's own not-executing answer.
 	target := s.guestStats.Load()
 	if target == nil {
-		return nil, status.Error(codes.FailedPrecondition, "no guest agent connection to measure yet")
+		return nil, errors.New("no guest agent connection to measure yet")
 	}
 	// Belt and braces against the one thing that must never happen. The target
 	// is published and cleared under lock alongside the attribution, so this
 	// should be unreachable; if the two ever disagree, decline rather than
 	// report a stale guest's numbers under the requested actor's name.
 	if target.actorUID != active.UID {
-		return nil, status.Errorf(codes.FailedPrecondition, "guest agent connection belongs to actor %q, not %q", target.actorUID, active.UID)
+		return nil, fmt.Errorf("guest agent connection belongs to actor %q, not %q", target.actorUID, active.UID)
 	}
 
 	observedAt := time.Now()
 	sample, err := sumContainerStats(ctx, target)
 	if err != nil {
-		// Not Internal: a guest that has stopped answering is a routine state
-		// here, not a bug. Either the sandbox is going away — which the next
-		// CheckpointWorkload turns into the caller's not-executing answer — or
-		// the agent is briefly unreachable, and the next poll gets a number.
-		return nil, status.Errorf(codes.FailedPrecondition, "no container stats from the guest agent: %v", err)
+		return nil, fmt.Errorf("no container stats from the guest agent: %w", err)
 	}
 
-	return &ateompb.GetWorkloadStatsResponse{
+	return &ateompb.WorkloadStatsSample{
 		Atespace:               active.Ref.Atespace,
 		ActorName:              active.Ref.Name,
 		ActorUid:               active.UID,
