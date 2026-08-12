@@ -488,6 +488,17 @@ spec:
                 type: string
               goldenSnapshot:
                 type: string
+              observedGeneration:
+                description: |-
+                  ObservedGeneration is the most recent generation observed for this
+                  ActorTemplate. It corresponds to the ActorTemplate's .metadata.generation,
+                  which is updated on mutation by the API server. The ActorTemplate spec is
+                  immutable, so in practice this transitions 0 -> 1 once the controller first
+                  reconciles the object, letting consumers distinguish an unobserved
+                  ActorTemplate (0) from a reconciled one.
+                format: int64
+                minimum: 0
+                type: integer
               phase:
                 description: Phase of the actor template.
                 type: string

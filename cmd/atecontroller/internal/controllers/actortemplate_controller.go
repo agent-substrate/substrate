@@ -78,6 +78,11 @@ func (r *ActorTemplateReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return ctrl.Result{}, nil
 	}
 
+	// Record the generation this reconcile observed so consumers can detect
+	// whether the controller has caught up to the latest spec. The per-phase
+	// Status().Update() calls below persist this value.
+	at.Status.ObservedGeneration = at.Generation
+
 	switch at.Status.Phase {
 	case atev1alpha1.PhaseInitial:
 		actorName := string(at.UID)

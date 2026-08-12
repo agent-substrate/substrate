@@ -130,9 +130,10 @@ func (r *WorkerPoolReconciler) syncStatus(ctx context.Context, wp *atev1alpha1.W
 	}
 
 	want := atev1alpha1.WorkerPoolStatus{
-		Replicas:      dep.Status.Replicas,
-		ReadyReplicas: dep.Status.ReadyReplicas,
-		Selector:      selector.String(),
+		ObservedGeneration: wp.Generation,
+		Replicas:           dep.Status.Replicas,
+		ReadyReplicas:      dep.Status.ReadyReplicas,
+		Selector:           selector.String(),
 	}
 	if equality.Semantic.DeepEqual(wp.Status, want) {
 		return nil

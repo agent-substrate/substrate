@@ -91,6 +91,15 @@ type WorkerPoolSpec struct {
 }
 
 type WorkerPoolStatus struct {
+	// ObservedGeneration is the most recent generation observed for this
+	// WorkerPool. It corresponds to the WorkerPool's .metadata.generation, which
+	// is updated on mutation by the API server. When observedGeneration lags
+	// .metadata.generation, the controller has not yet reconciled the latest
+	// spec, so consumers can detect a stale/in-progress status.
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+
 	// Replicas is the total number of worker pods.
 	// +kubebuilder:validation:Minimum=0
 	// +optional

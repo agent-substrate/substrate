@@ -362,6 +362,16 @@ type ActorTemplateSpec struct {
 
 // TODO: add validation
 type ActorTemplateStatus struct {
+	// ObservedGeneration is the most recent generation observed for this
+	// ActorTemplate. It corresponds to the ActorTemplate's .metadata.generation,
+	// which is updated on mutation by the API server. The ActorTemplate spec is
+	// immutable, so in practice this transitions 0 -> 1 once the controller first
+	// reconciles the object, letting consumers distinguish an unobserved
+	// ActorTemplate (0) from a reconciled one.
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+
 	// Phase of the actor template.
 	// +optional
 	Phase PhaseType `json:"phase,omitempty"`
