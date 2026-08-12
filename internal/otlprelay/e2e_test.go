@@ -16,6 +16,7 @@ package otlprelay
 
 import (
 	"context"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -60,6 +61,7 @@ func TestEndToEndThroughServerboot(t *testing.T) {
 		// Ratio 1.0: this test asserts on delivery, not on sampling.
 		Sampling:     serverboot.ParentRatioSampling(1.0),
 		ExporterConn: conn,
+		RelayCapable: true,
 	})
 	if err != nil {
 		t.Fatalf("InitTracing: %v", err)
@@ -93,7 +95,7 @@ func TestEndToEndThroughServerboot(t *testing.T) {
 				if attr.GetKey() == "service.name" {
 					gotService = attr.GetValue().GetStringValue()
 				}
-				if attr.GetKey() == "substrate.otlp.relay" {
+				if attr.GetKey() == relayAttrKey {
 					gotRelay = attr.GetValue().GetStringValue()
 				}
 			}
@@ -115,6 +117,86 @@ func TestEndToEndThroughServerboot(t *testing.T) {
 		t.Errorf("span arrived named %q, want %q", gotSpan, "RunWorkload")
 	}
 	if gotRelay != "relay" {
-		t.Errorf("span arrived with substrate.otlp.relay %q, want %q", gotRelay, "relay")
+		t.Errorf("span arrived with %s %q, want %q", relayAttrKey, gotRelay, "relay")
+	}
+}
+
+// relayAttrKey duplicates serverboot's unexported constant. Keeping a literal
+// here is the point: if serverboot renames the attribute, the dashboards and
+// alerts keyed on it break too, and this test is where that shows up.
+const relayAttrKey = "ate.otlp.relay"
+
+// TestEndToEndFallsBackToDirect is the other half of TestEndToEndThroughServerboot:
+// the ateom asked for the relay, atelet was not serving one, and the exporter
+// must fall back to the network path rather than dropping telemetry.
+//
+// This is the case the ateoms degrade into instead of exiting (see the Dial call
+// in cmd/ateom-*/main.go), so it needs to be more than a nil check: the span has
+// to reach the collector, and it has to be distinguishable from a relayed one at
+// query time — hence the "direct" attribute.
+func TestEndToEndFallsBackToDirect(t *testing.T) {
+	sink, collector := startFakeCollector(t)
+	// No relay: the socket path is inside a fresh temp dir nothing created.
+	sock := filepath.Join(t.TempDir(), "absent-atelet-otlp.sock")
+	// The direct path is the exporter dialing this itself, which is exactly what
+	// the relay test points at an unroutable address to rule out.
+	t.Setenv(endpointEnv, "http://"+collector)
+	t.Logf("fake collector on %s, absent relay socket %s", collector, sock)
+
+	conn, err := Dial(context.Background(), sock)
+	if err != nil {
+		t.Fatalf("Dial with no relay present must not fail: %v", err)
+	}
+	if conn != nil {
+		conn.Close()
+		t.Fatal("Dial returned a connection for a socket that does not exist")
+	}
+
+	const serviceName = "ateom-microvm"
+	tp, err := serverboot.InitTracing(context.Background(), serverboot.TracingOptions{
+		ServiceName:  serviceName,
+		Sampling:     serverboot.ParentRatioSampling(1.0),
+		ExporterConn: conn, // nil: the fallback
+		RelayCapable: true,
+	})
+	if err != nil {
+		t.Fatalf("InitTracing: %v", err)
+	}
+
+	_, span := tp.Tracer("relay-e2e").Start(context.Background(), "RunWorkload")
+	span.End()
+
+	if err := tp.Shutdown(context.Background()); err != nil {
+		t.Fatalf("TracerProvider.Shutdown: %v", err)
+	}
+
+	select {
+	case <-sink.got:
+	case <-time.After(10 * time.Second):
+		t.Fatal("collector never received a span over the direct path")
+	}
+
+	sink.mu.Lock()
+	defer sink.mu.Unlock()
+	var gotService, gotRelay string
+	for _, req := range sink.traces {
+		for _, rs := range req.GetResourceSpans() {
+			for _, attr := range rs.GetResource().GetAttributes() {
+				switch attr.GetKey() {
+				case "service.name":
+					gotService = attr.GetValue().GetStringValue()
+				case relayAttrKey:
+					gotRelay = attr.GetValue().GetStringValue()
+				}
+			}
+		}
+	}
+	if gotService != serviceName {
+		t.Errorf("span arrived with service.name %q, want %q", gotService, serviceName)
+	}
+	// Without this, a node whose atelet never came up looks identical to a
+	// healthy one in the trace store.
+	if gotRelay != "direct" {
+		t.Errorf("span arrived with %s %q, want %q", relayAttrKey, gotRelay, "direct")
 	}
 }

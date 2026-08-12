@@ -15,9 +15,11 @@
 package otlprelay
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io/fs"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
@@ -335,6 +337,38 @@ func TestDialEmptyPath(t *testing.T) {
 	}
 }
 
+// A rejected export is dropped by the SDK without a retry, so the node log is
+// the only place the misconfiguration shows up — and it has to show up exactly
+// once per name, because the rejected exporter keeps retrying for the life of
+// the pod.
+func TestSourceGateLogsEachRejectionOnce(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	gate := &sourceGate{}
+	for range 3 {
+		if err := gate.check(context.Background(), serviceResource("actor")); status.Code(err) != codes.PermissionDenied {
+			t.Fatalf("gate.check = %v, want PermissionDenied every time", err)
+		}
+	}
+	if err := gate.check(context.Background(), serviceResource("atelet")); err == nil {
+		t.Fatal("gate.check accepted atelet")
+	}
+	if err := gate.check(context.Background(), serviceResource("ateom-gvisor")); err != nil {
+		t.Fatalf("gate.check rejected an ateom: %v", err)
+	}
+
+	if got := strings.Count(buf.String(), "rejected telemetry"); got != 2 {
+		t.Errorf("logged %d rejections, want 2 (one per distinct service.name):\n%s", got, buf.String())
+	}
+	// The operator has to be able to tell which override to go looking for.
+	if !strings.Contains(buf.String(), "OTEL_SERVICE_NAME") {
+		t.Errorf("rejection log does not name the env var that causes it:\n%s", buf.String())
+	}
+}
+
 // TestRelayRefusesNonAteomSource is the scoping contract. The empty
 // service.name case is the one worth keeping: that is the shape telemetry takes
 // when identity has not been injected, which is the actor situation in #761.
@@ -644,40 +678,24 @@ func TestUpstreamCompression(t *testing.T) {
 	}
 }
 
-func TestExportForwardsMetadata(t *testing.T) {
-	sink, collector := startFakeCollector(t)
-	sock := startRelay(t, collector)
-
+// exportBoth sends one empty trace batch and one empty metric batch from
+// service through the relay, and returns the metadata each arrived with.
+func exportBoth(t *testing.T, sink *fakeCollector, sock, service string, ctx context.Context) (traceMD, metricMD metadata.MD) {
+	t.Helper()
 	conn, err := Dial(context.Background(), sock)
 	if err != nil {
 		t.Fatalf("Dial: %v", err)
 	}
 	defer conn.Close()
 
-	ctx := metadata.AppendToOutgoingContext(context.Background(),
-		"authorization", "Bearer test-token",
-		"custom-header", "custom-value",
-	)
-
-	// Send trace export with metadata
-	traceClient := coltracepb.NewTraceServiceClient(conn)
-	_, err = traceClient.Export(ctx, &coltracepb.ExportTraceServiceRequest{
-		ResourceSpans: []*tracepb.ResourceSpans{{
-			Resource: serviceResource("ateom-gvisor"),
-		}},
-	})
-	if err != nil {
+	if _, err := coltracepb.NewTraceServiceClient(conn).Export(ctx, &coltracepb.ExportTraceServiceRequest{
+		ResourceSpans: []*tracepb.ResourceSpans{{Resource: serviceResource(service)}},
+	}); err != nil {
 		t.Fatalf("traceClient.Export: %v", err)
 	}
-
-	// Send metrics export with metadata
-	metricClient := colmetricspb.NewMetricsServiceClient(conn)
-	_, err = metricClient.Export(ctx, &colmetricspb.ExportMetricsServiceRequest{
-		ResourceMetrics: []*metricspb.ResourceMetrics{{
-			Resource: serviceResource("ateom-gvisor"),
-		}},
-	})
-	if err != nil {
+	if _, err := colmetricspb.NewMetricsServiceClient(conn).Export(ctx, &colmetricspb.ExportMetricsServiceRequest{
+		ResourceMetrics: []*metricspb.ResourceMetrics{{Resource: serviceResource(service)}},
+	}); err != nil {
 		t.Fatalf("metricClient.Export: %v", err)
 	}
 
@@ -686,21 +704,154 @@ func TestExportForwardsMetadata(t *testing.T) {
 	if len(sink.traceMD) == 0 {
 		t.Fatal("collector received no metadata for trace export")
 	}
-	if got := sink.traceMD[0].Get("authorization"); len(got) == 0 || got[0] != "Bearer test-token" {
-		t.Errorf("trace export authorization metadata = %v, want Bearer test-token", got)
-	}
-	if got := sink.traceMD[0].Get("custom-header"); len(got) == 0 || got[0] != "custom-value" {
-		t.Errorf("trace export custom-header metadata = %v, want custom-value", got)
-	}
-
 	if len(sink.metricMD) == 0 {
 		t.Fatal("collector received no metadata for metrics export")
 	}
-	if got := sink.metricMD[0].Get("authorization"); len(got) == 0 || got[0] != "Bearer test-token" {
-		t.Errorf("metric export authorization metadata = %v, want Bearer test-token", got)
+	return sink.traceMD[0], sink.metricMD[0]
+}
+
+// The upstream leg is atelet's connection, so its credentials are atelet's. An
+// ateom that sets a header of its own must not get to choose what atelet
+// presents to the collector.
+func TestExportDropsClientMetadata(t *testing.T) {
+	sink, collector := startFakeCollector(t)
+	sock := startRelay(t, collector)
+
+	ctx := metadata.AppendToOutgoingContext(context.Background(),
+		"authorization", "Bearer client-token",
+		"custom-header", "custom-value",
+	)
+	traceMD, metricMD := exportBoth(t, sink, sock, "ateom-gvisor", ctx)
+
+	for _, tc := range []struct {
+		signal string
+		md     metadata.MD
+	}{{"trace", traceMD}, {"metric", metricMD}} {
+		for _, key := range []string{"authorization", "custom-header"} {
+			if got := tc.md.Get(key); len(got) != 0 {
+				t.Errorf("%s export reached the collector with the client's %s = %v, want it dropped", tc.signal, key, got)
+			}
+		}
 	}
-	if got := sink.metricMD[0].Get("custom-header"); len(got) == 0 || got[0] != "custom-value" {
-		t.Errorf("metric export custom-header metadata = %v, want custom-value", got)
+}
+
+// ...and the headers atelet is configured with are attached in its place, per
+// signal, exactly as the SDK exporter the relay stands in for would have.
+func TestExportAttachesAteletHeaders(t *testing.T) {
+	sink, collector := startFakeCollector(t)
+	// Set before startRelay: NewServer resolves headers once, at construction.
+	t.Setenv(headersEnv, "authorization=Bearer atelet-token,x-tenant=substrate")
+	t.Setenv(metricsHeadersEnv, "authorization=Bearer metrics-token")
+	sock := startRelay(t, collector)
+
+	// The client sends its own, which must lose to atelet's rather than
+	// appending a second value the collector might pick either way.
+	ctx := metadata.AppendToOutgoingContext(context.Background(), "authorization", "Bearer client-token")
+	traceMD, metricMD := exportBoth(t, sink, sock, "ateom-gvisor", ctx)
+
+	if got := traceMD.Get("authorization"); len(got) != 1 || got[0] != "Bearer atelet-token" {
+		t.Errorf("trace export authorization = %v, want exactly [Bearer atelet-token]", got)
+	}
+	if got := traceMD.Get("x-tenant"); len(got) != 1 || got[0] != "substrate" {
+		t.Errorf("trace export x-tenant = %v, want [substrate]", got)
+	}
+	// The metrics-specific variable replaces the generic one whole, so x-tenant
+	// is deliberately absent here.
+	if got := metricMD.Get("authorization"); len(got) != 1 || got[0] != "Bearer metrics-token" {
+		t.Errorf("metric export authorization = %v, want exactly [Bearer metrics-token]", got)
+	}
+	if got := metricMD.Get("x-tenant"); len(got) != 0 {
+		t.Errorf("metric export x-tenant = %v, want absent: %s replaces %s rather than merging", got, metricsHeadersEnv, headersEnv)
+	}
+}
+
+func TestParseHeaders(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		raw     string
+		want    map[string][]string
+		wantErr bool
+	}{
+		{name: "empty", raw: "", want: map[string][]string{}},
+		{name: "single", raw: "api-key=secret", want: map[string][]string{"api-key": {"secret"}}},
+		{name: "multiple with spaces", raw: "api-key=secret, x-tenant = sub ", want: map[string][]string{"api-key": {"secret"}, "x-tenant": {"sub"}}},
+		// gRPC metadata keys are case-insensitive and stored lower-cased; a
+		// mixed-case key here would be invisible to metadata.Get.
+		{name: "key lower-cased", raw: "X-Tenant=sub", want: map[string][]string{"x-tenant": {"sub"}}},
+		// Percent-decoding is what lets a base64 token containing "=" through.
+		{name: "percent-encoded value", raw: "authorization=Bearer%20abc%3D%3D", want: map[string][]string{"authorization": {"Bearer abc=="}}},
+		{name: "empty value kept", raw: "x-tenant=", want: map[string][]string{"x-tenant": {""}}},
+		{name: "trailing comma tolerated", raw: "api-key=secret,", want: map[string][]string{"api-key": {"secret"}}},
+		{name: "missing equals rejected", raw: "api-key", wantErr: true},
+		{name: "empty name rejected", raw: "=secret", wantErr: true},
+		{name: "bad percent-encoding rejected", raw: "api-key=%zz", wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := parseHeaders(tc.raw)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("parseHeaders(%q) = %v, want error", tc.raw, got)
+				}
+				// A credential must not end up in a log line or a test failure.
+				if strings.Contains(err.Error(), "secret") {
+					t.Errorf("parseHeaders error leaks the header value: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseHeaders(%q): %v", tc.raw, err)
+			}
+			if len(got) != len(tc.want) {
+				t.Fatalf("parseHeaders(%q) = %v, want %v", tc.raw, got, tc.want)
+			}
+			for k, want := range tc.want {
+				if diff := got.Get(k); len(diff) != len(want) || (len(want) == 1 && diff[0] != want[0]) {
+					t.Errorf("parseHeaders(%q)[%q] = %v, want %v", tc.raw, k, diff, want)
+				}
+			}
+		})
+	}
+}
+
+// The signal-specific variable replaces the generic one, per the OTLP spec.
+func TestUpstreamHeadersSignalOverride(t *testing.T) {
+	t.Setenv(headersEnv, "api-key=generic")
+	t.Setenv(tracesHeadersEnv, "x-tenant=traces")
+
+	traces, err := upstreamHeaders(tracesHeadersEnv)
+	if err != nil {
+		t.Fatalf("upstreamHeaders(traces): %v", err)
+	}
+	if got := traces.Get("api-key"); len(got) != 0 {
+		t.Errorf("traces api-key = %v, want absent; the signal-specific variable replaces the generic one", got)
+	}
+	if got := traces.Get("x-tenant"); len(got) != 1 || got[0] != "traces" {
+		t.Errorf("traces x-tenant = %v, want [traces]", got)
+	}
+
+	// metrics has no override, so it falls back to the generic variable.
+	metrics, err := upstreamHeaders(metricsHeadersEnv)
+	if err != nil {
+		t.Fatalf("upstreamHeaders(metrics): %v", err)
+	}
+	if got := metrics.Get("api-key"); len(got) != 1 || got[0] != "generic" {
+		t.Errorf("metrics api-key = %v, want [generic]", got)
+	}
+}
+
+// A header set atelet cannot parse fails startup rather than becoming a
+// per-export failure once the socket is already live.
+func TestNewServerRejectsUnparseableHeaders(t *testing.T) {
+	_, collector := startFakeCollector(t)
+	t.Setenv(endpointEnv, collector)
+	t.Setenv(headersEnv, "not-a-pair")
+
+	relay, err := NewServer(context.Background(), filepath.Join(t.TempDir(), "r.sock"))
+	if err == nil {
+		if relay != nil {
+			relay.Stop()
+		}
+		t.Fatal("NewServer accepted an unparseable OTEL_EXPORTER_OTLP_HEADERS")
 	}
 }
 

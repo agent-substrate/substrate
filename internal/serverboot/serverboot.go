@@ -107,6 +107,38 @@ func newResource(ctx context.Context, serviceName string, extraAttrs ...attribut
 	return res, nil
 }
 
+// relayAttrKey records which OTLP export path a signal took. It only makes
+// sense for the components that have a relay to take or miss — the ateoms —
+// so relayAttrs leaves it off everything else rather than labelling, say,
+// atecontroller "direct" for a relay it was never offered.
+//
+// The name is spelled here rather than taken from internal/ateattr on purpose:
+// serverboot is the bottom of the dependency graph (it imports one other
+// agent-substrate package) and every binary's main links it, while ateattr
+// pulls in pkg/api/v1alpha1, ateapipb, internal/resources and ateletpb. Move it
+// to ateattr if that cost ever drops, or if a second non-ate.* consumer appears.
+const relayAttrKey = "ate.otlp.relay"
+
+// relayAttrs describes the export path taken by a component that could have
+// used the relay. relayCapable false means the component never had one, and
+// gets no attribute at all; true means it did, and conn says whether it got it.
+//
+// The distinction matters because a nil conn on a relay-capable component is
+// exactly the degraded case worth alerting on: the ateom asked for the relay,
+// could not dial it, and is now exporting over the worker pod's own network.
+// Collapsing that into the same "no attribute" bucket as atecontroller would
+// hide it.
+func relayAttrs(relayCapable bool, conn *grpc.ClientConn) []attribute.KeyValue {
+	if !relayCapable {
+		return nil
+	}
+	status := "direct"
+	if conn != nil {
+		status = "relay"
+	}
+	return []attribute.KeyValue{attribute.String(relayAttrKey, status)}
+}
+
 // TracingOptions configures InitTracing.
 type TracingOptions struct {
 	// ServiceName is required; populates resource.semconv ServiceName.
@@ -123,6 +155,11 @@ type TracingOptions struct {
 	// The caller owns the connection: the exporter's Shutdown does not close a
 	// connection it did not create.
 	ExporterConn *grpc.ClientConn
+	// RelayCapable marks a component that is meant to export through the relay,
+	// whether or not it managed to (see relayAttrs). Only the ateoms set it. It
+	// is separate from ExporterConn because a nil conn on its own cannot tell
+	// "the ateom tried and fell back" from "this component never had a relay".
+	RelayCapable bool
 }
 
 // InitTracing registers a global TracerProvider with the given options
@@ -134,11 +171,7 @@ func InitTracing(ctx context.Context, opts TracingOptions) (*sdktrace.TracerProv
 	if opts.Sampling.sampler == nil {
 		return nil, fmt.Errorf("TracingOptions.Sampling is required")
 	}
-	relayStatus := "direct"
-	if opts.ExporterConn != nil {
-		relayStatus = "relay"
-	}
-	res, err := newResource(ctx, opts.ServiceName, attribute.String("substrate.otlp.relay", relayStatus))
+	res, err := newResource(ctx, opts.ServiceName, relayAttrs(opts.RelayCapable, opts.ExporterConn)...)
 	if err != nil {
 		return nil, fmt.Errorf("create tracer resource: %w", err)
 	}
@@ -188,7 +221,7 @@ func InitMetrics(ctx context.Context, serviceName string) (*sdkmetric.MeterProvi
 	if err != nil {
 		return nil, fmt.Errorf("create Prometheus metric exporter: %w", err)
 	}
-	return newMeterProvider(ctx, serviceName, nil, nil, promExporter)
+	return newMeterProvider(ctx, serviceName, false, nil, nil, promExporter)
 }
 
 // InitMetricsPushOnly is InitMetrics without the Prometheus reader, for binaries
@@ -197,7 +230,7 @@ func InitMetrics(ctx context.Context, serviceName string) (*sdkmetric.MeterProvi
 // recorded outside the OTel SDK on the same push path; atecontroller bridges
 // controller-runtime's registry that way.
 func InitMetricsPushOnly(ctx context.Context, serviceName string, producers ...sdkmetric.Producer) (*sdkmetric.MeterProvider, error) {
-	return newMeterProvider(ctx, serviceName, nil, producers)
+	return newMeterProvider(ctx, serviceName, false, nil, producers)
 }
 
 // InitMetricsPushOnlyVia is InitMetricsPushOnly with an explicit exporter
@@ -208,11 +241,17 @@ func InitMetricsPushOnly(ctx context.Context, serviceName string, producers ...s
 //
 // The caller owns the connection: the meter provider's Shutdown does not close
 // a connection it did not create.
+//
+// Calling this at all marks the component relay-capable, so its metrics carry
+// the relay attribute (see relayAttrs) either way — "relay" with a conn,
+// "direct" without one. It is the metrics counterpart of
+// TracingOptions.RelayCapable, implied rather than a parameter because only a
+// caller that has a relay to pass reaches for this function in the first place.
 func InitMetricsPushOnlyVia(ctx context.Context, serviceName string, conn *grpc.ClientConn, producers ...sdkmetric.Producer) (*sdkmetric.MeterProvider, error) {
-	return newMeterProvider(ctx, serviceName, conn, producers)
+	return newMeterProvider(ctx, serviceName, true, conn, producers)
 }
 
-func newMeterProvider(ctx context.Context, serviceName string, conn *grpc.ClientConn, producers []sdkmetric.Producer, extraReaders ...sdkmetric.Reader) (*sdkmetric.MeterProvider, error) {
+func newMeterProvider(ctx context.Context, serviceName string, relayCapable bool, conn *grpc.ClientConn, producers []sdkmetric.Producer, extraReaders ...sdkmetric.Reader) (*sdkmetric.MeterProvider, error) {
 	if serviceName == "" {
 		return nil, fmt.Errorf("serviceName is required")
 	}
@@ -229,11 +268,7 @@ func newMeterProvider(ctx context.Context, serviceName string, conn *grpc.Client
 	if err != nil {
 		return nil, fmt.Errorf("create OTLP metric exporter: %w", err)
 	}
-	relayStatus := "direct"
-	if conn != nil {
-		relayStatus = "relay"
-	}
-	res, err := newResource(ctx, serviceName, attribute.String("substrate.otlp.relay", relayStatus))
+	res, err := newResource(ctx, serviceName, relayAttrs(relayCapable, conn)...)
 	if err != nil {
 		return nil, fmt.Errorf("create metric resource: %w", err)
 	}

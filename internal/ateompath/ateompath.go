@@ -61,7 +61,13 @@ func GVisorReleaseDir(sha256 string) string {
 //
 // It sits directly under BasePath, which is the host directory already mounted
 // at the same path into atelet and into every ateom pod, so no new volume is
-// needed for ateom to reach it.
+// needed for ateom to reach it. Note that BasePath is mounted writable
+// (workerpool_apply.go) and shared with CredentialBrokerSocket and the image
+// cache, so a worker pod can unlink or replace this socket. Confining
+// atelet-owned sockets to a subdirectory mounted read-only would be an
+// improvement, but it is a property of the whole BasePath mount rather than of
+// this socket — a read-only subdir needs its own volume and mount, and the pod
+// keeps CAP_SYS_ADMIN. Tracked separately rather than solved here.
 func AteletOTLPSocketPath() string {
 	return filepath.Join(
 		BasePath,

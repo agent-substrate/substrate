@@ -108,9 +108,17 @@ func do(ctx context.Context) error {
 	// Export through atelet's node-local relay when it is there, so telemetry
 	// never touches the worker pod's network. A nil conn means it is not, and
 	// both providers fall back to dialing the collector directly.
+	//
+	// A relay that cannot be dialed is logged rather than fatal, matching both
+	// ends of the same decision: Dial already treats an absent socket as a
+	// fallback rather than an error, and atelet logs and keeps going when it
+	// cannot serve the relay at all. What is lost here is the node-local export
+	// path, not the ateom's ability to run actors, and failing the worker pod
+	// over its telemetry route would turn a misconfigured flag into an outage.
 	relayConn, err := otlprelay.Dial(ctx, *otlpRelaySocket)
 	if err != nil {
-		serverboot.Fatal(ctx, "Failed to connect to the OTLP relay", err)
+		slog.ErrorContext(ctx, "Failed to connect to the OTLP relay; exporting telemetry directly over the pod network",
+			slog.String("socket", *otlpRelaySocket), slog.Any("err", err))
 	}
 	if relayConn != nil {
 		defer relayConn.Close()
@@ -120,6 +128,9 @@ func do(ctx context.Context) error {
 		ServiceName:  serviceName,
 		Sampling:     serverboot.ResolveTraceSampling(ctx, serverboot.ParentRatioSampling(serverboot.ControlPlaneTraceRatio)),
 		ExporterConn: relayConn,
+		// So the spans say which path they took, including when relayConn is nil
+		// because the dial above failed and this ateom is exporting directly.
+		RelayCapable: true,
 	})
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to initialize tracing", err)
