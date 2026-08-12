@@ -725,7 +725,23 @@ func (p *Persistence) TagActorSnapshot(ctx context.Context, snapshotAtespace, sn
 	return existing, nil
 }
 
-func (p *Persistence) UpdateActorSnapshotTag(ctx context.Context, atespace, name string, scope ateapipb.ActorSnapshotTagScope, expectedVersion int64) (*ateapipb.ActorSnapshotTag, error) {
+func validateUpdateActorSnapshotTagMutation(storedTag, mutatedTag *ateapipb.ActorSnapshotTag) error {
+	if stored, mutated := storedTag.GetMetadata().GetAtespace(), mutatedTag.GetMetadata().GetAtespace(); stored != mutated {
+		return fmt.Errorf("metadata.atespace is immutable: mutation changed it from %q to %q", stored, mutated)
+	}
+	if stored, mutated := storedTag.GetMetadata().GetName(), mutatedTag.GetMetadata().GetName(); stored != mutated {
+		return fmt.Errorf("metadata.name is immutable: mutation changed it from %q to %q", stored, mutated)
+	}
+	if stored, mutated := storedTag.GetSnapshot().GetAtespace(), mutatedTag.GetSnapshot().GetAtespace(); stored != mutated {
+		return fmt.Errorf("snapshot.atespace is immutable: mutation changed it from %q to %q", stored, mutated)
+	}
+	if stored, mutated := storedTag.GetSnapshot().GetName(), mutatedTag.GetSnapshot().GetName(); stored != mutated {
+		return fmt.Errorf("snapshot.name is immutable: mutation changed it from %q to %q", stored, mutated)
+	}
+	return nil
+}
+
+func (p *Persistence) UpdateActorSnapshotTag(ctx context.Context, atespace, name string, mutate func(*ateapipb.ActorSnapshotTag) error) (*ateapipb.ActorSnapshotTag, error) {
 	tx, err := p.pool.Begin(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("beginning actor snapshot tag update: %w", err)
@@ -733,56 +749,50 @@ func (p *Persistence) UpdateActorSnapshotTag(ctx context.Context, atespace, name
 	defer tx.Rollback(ctx) //nolint:errcheck // no-op once committed
 
 	var currentBytes []byte
-	var currentVersion int64
 	if err := tx.QueryRow(ctx, `
-		SELECT version, proto FROM actor_snapshot_tags
-		WHERE atespace = $1 AND name = $2`, atespace, name).Scan(&currentVersion, &currentBytes); err != nil {
+		SELECT proto FROM actor_snapshot_tags
+		WHERE atespace = $1 AND name = $2
+		FOR UPDATE`, atespace, name).Scan(&currentBytes); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, store.ErrNotFound
 		}
-		return nil, fmt.Errorf("getting actor snapshot tag %s/%s: %w", atespace, name, err)
-	}
-	if currentVersion != expectedVersion {
-		return nil, store.ErrVersionConflict
-	}
-	current := &ateapipb.ActorSnapshotTag{}
-	if err := proto.Unmarshal(currentBytes, current); err != nil {
-		return nil, fmt.Errorf("unmarshaling actor snapshot tag: %w", err)
-	}
-	if current.GetScope() == scope {
-		if err := tx.Commit(ctx); err != nil {
-			return nil, fmt.Errorf("committing unchanged actor snapshot tag update: %w", err)
-		}
-		return current, nil
+		return nil, fmt.Errorf("locking actor snapshot tag %s/%s for update: %w", atespace, name, err)
 	}
 
-	updated := proto.Clone(current).(*ateapipb.ActorSnapshotTag)
-	updated.Scope = scope
-	updated.Metadata = newUpdateMetadata(current.GetMetadata())
-	updatedBytes, err := proto.Marshal(updated)
+	dbTag := &ateapipb.ActorSnapshotTag{}
+	if err := proto.Unmarshal(currentBytes, dbTag); err != nil {
+		return nil, fmt.Errorf("unmarshaling actor snapshot tag: %w", err)
+	}
+	tagBeforeMutation := proto.Clone(dbTag).(*ateapipb.ActorSnapshotTag)
+	if err := mutate(dbTag); err != nil {
+		return nil, err
+	}
+	if err := validateUpdateActorSnapshotTagMutation(tagBeforeMutation, dbTag); err != nil {
+		return nil, err
+	}
+	// Stored metadata is authoritative; discard any metadata edits made by the
+	// closure and derive the next revision from the transactionally read tag.
+	dbTag.Metadata = newUpdateMetadata(tagBeforeMutation.GetMetadata())
+
+	updatedBytes, err := proto.Marshal(dbTag)
 	if err != nil {
 		return nil, fmt.Errorf("marshaling actor snapshot tag: %w", err)
 	}
-	var returned []byte
-	err = tx.QueryRow(ctx, `
+	commandTag, err := tx.Exec(ctx, `
 		UPDATE actor_snapshot_tags
 		SET version = $1, proto = $2
-		WHERE atespace = $3 AND name = $4 AND version = $5
-		RETURNING proto`, updated.GetMetadata().GetVersion(), updatedBytes,
-		atespace, name, expectedVersion).Scan(&returned)
-	if errors.Is(err, pgx.ErrNoRows) {
-		if _, _, getErr := p.getActorSnapshotByTag(ctx, tx, atespace, name); getErr != nil {
-			return nil, getErr
-		}
-		return nil, store.ErrVersionConflict
-	}
+		WHERE atespace = $3 AND name = $4`,
+		dbTag.GetMetadata().GetVersion(), updatedBytes, atespace, name)
 	if err != nil {
 		return nil, fmt.Errorf("updating actor snapshot tag %s/%s: %w", atespace, name, err)
+	}
+	if commandTag.RowsAffected() != 1 {
+		return nil, fmt.Errorf("updating actor snapshot tag %s/%s affected %d rows, want 1", atespace, name, commandTag.RowsAffected())
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("committing actor snapshot tag update: %w", err)
 	}
-	return updated, nil
+	return dbTag, nil
 }
 
 func (p *Persistence) getActorSnapshotByTag(ctx context.Context, q querier, atespace, name string) (*ateapipb.ActorSnapshot, *ateapipb.ActorSnapshotTag, error) {

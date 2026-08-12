@@ -250,23 +250,17 @@ func RunContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
 		}
 
 		actorRef := resources.ActorRefFromActor(actor1)
-		if _, err := s.UpdateActor(ctx, actorRef, func(dbActor *ateapipb.Actor) error {
-			if err := store.CheckActorPrecondition(dbActor, actor1.GetMetadata().GetUid(), actor1.GetMetadata().GetVersion()); err != nil {
-				return err
-			}
+		if _, err := s.UpdateActor(ctx, actorRef, store.WithPrecondition(actor1, func(dbActor *ateapipb.Actor) error {
 			dbActor.Status = ateapipb.Actor_STATUS_RUNNING
 			return nil
-		}); err != nil {
+		})); err != nil {
 			t.Fatalf("UpdateActor failed: %v", err)
 		}
 
-		_, err = s.UpdateActor(ctx, actorRef, func(dbActor *ateapipb.Actor) error {
-			if err := store.CheckActorPrecondition(dbActor, actor2.GetMetadata().GetUid(), actor2.GetMetadata().GetVersion()); err != nil {
-				return err
-			}
+		_, err = s.UpdateActor(ctx, actorRef, store.WithPrecondition(actor2, func(dbActor *ateapipb.Actor) error {
 			dbActor.Status = ateapipb.Actor_STATUS_SUSPENDED
 			return nil
-		})
+		}))
 		if !errors.Is(err, store.ErrVersionConflict) {
 			t.Errorf("expected ErrVersionConflict, got %v", err)
 		}
@@ -1255,14 +1249,20 @@ func RunContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
 			t.Errorf("resolved tag = (%v, %v), want created snapshot and tag", resolved, resolvedTag)
 		}
 
-		updated, err := s.UpdateActorSnapshotTag(ctx, "team-a", "production", ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED, tag.GetMetadata().GetVersion())
+		updated, err := s.UpdateActorSnapshotTag(ctx, "team-a", "production", store.WithPrecondition(tag, func(toUpdate *ateapipb.ActorSnapshotTag) error {
+			toUpdate.Scope = ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED
+			return nil
+		}))
 		if err != nil {
 			t.Fatalf("UpdateActorSnapshotTag failed: %v", err)
 		}
 		if updated.GetScope() != ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED || updated.GetMetadata().GetVersion() != tag.GetMetadata().GetVersion()+1 {
 			t.Errorf("updated tag = %v, want published scope and advanced version", updated)
 		}
-		if _, err := s.UpdateActorSnapshotTag(ctx, "team-a", "production", tag.GetScope(), tag.GetMetadata().GetVersion()); !errors.Is(err, store.ErrVersionConflict) {
+		if _, err := s.UpdateActorSnapshotTag(ctx, "team-a", "production", store.WithPrecondition(tag, func(toUpdate *ateapipb.ActorSnapshotTag) error {
+			toUpdate.Scope = tag.GetScope()
+			return nil
+		})); !errors.Is(err, store.ErrVersionConflict) {
 			t.Errorf("stale UpdateActorSnapshotTag = %v, want ErrVersionConflict", err)
 		}
 		if _, err := s.DeleteAtespace(ctx, "team-a"); !errors.Is(err, store.ErrFailedPrecondition) {
