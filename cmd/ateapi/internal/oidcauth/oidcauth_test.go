@@ -97,7 +97,7 @@ func (ti *testIssuer) mintJWT(t *testing.T, claims map[string]any) string {
 	return signingInput + "." + b64url(sig)
 }
 
-func TestOIDCAuthenticator_SubClaim(t *testing.T) {
+func TestOIDCAuthenticator_SubClaimMapping(t *testing.T) {
 	ti := newTestIssuer(t)
 	now := time.Now()
 	tok := ti.mintJWT(t, map[string]any{
@@ -133,7 +133,7 @@ func TestOIDCAuthenticator_SubClaim(t *testing.T) {
 	}
 }
 
-func TestOIDCAuthenticator_EmailClaimWithPrefix(t *testing.T) {
+func TestOIDCAuthenticator_EmailClaimMapping(t *testing.T) {
 	ti := newTestIssuer(t)
 	now := time.Now()
 	tok := ti.mintJWT(t, map[string]any{

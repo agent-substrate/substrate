@@ -237,9 +237,6 @@ func bearerTokenDialOption(ctx context.Context, clientset *kubernetes.Clientset)
 	if tok == "" {
 		tok = os.Getenv("ATE_TOKEN")
 	}
-	if tok == "" {
-		tok = os.Getenv("ATE_API_TOKEN")
-	}
 	if tok != "" {
 		return grpc.WithPerRPCCredentials(bearerTokenCreds(tok)), nil
 	}
