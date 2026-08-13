@@ -347,7 +347,7 @@ func TestSourceGateLogsEachRejectionOnce(t *testing.T) {
 	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, nil)))
 	t.Cleanup(func() { slog.SetDefault(prev) })
 
-	gate := &sourceGate{}
+	gate := newSourceGate()
 	for range 3 {
 		if err := gate.check(context.Background(), serviceResource("actor")); status.Code(err) != codes.PermissionDenied {
 			t.Fatalf("gate.check = %v, want PermissionDenied every time", err)
@@ -779,7 +779,9 @@ func TestParseHeaders(t *testing.T) {
 		// mixed-case key here would be invisible to metadata.Get.
 		{name: "key lower-cased", raw: "X-Tenant=sub", want: map[string][]string{"x-tenant": {"sub"}}},
 		// Percent-decoding is what lets a base64 token containing "=" through.
+		// PathUnescape keeps '+' as a literal rather than converting it to a space.
 		{name: "percent-encoded value", raw: "authorization=Bearer%20abc%3D%3D", want: map[string][]string{"authorization": {"Bearer abc=="}}},
+		{name: "plus preserved", raw: "authorization=Bearer+token%20val", want: map[string][]string{"authorization": {"Bearer+token val"}}},
 		{name: "empty value kept", raw: "x-tenant=", want: map[string][]string{"x-tenant": {""}}},
 		{name: "trailing comma tolerated", raw: "api-key=secret,", want: map[string][]string{"api-key": {"secret"}}},
 		{name: "missing equals rejected", raw: "api-key", wantErr: true},

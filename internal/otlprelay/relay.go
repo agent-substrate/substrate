@@ -61,7 +61,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"sync"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
@@ -69,6 +68,7 @@ import (
 	"google.golang.org/grpc/encoding/gzip"
 	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
+	"k8s.io/utils/lru"
 
 	semconv "go.opentelemetry.io/otel/semconv/v1.40.0"
 	colmetricspb "go.opentelemetry.io/proto/otlp/collector/metrics/v1"
@@ -151,12 +151,18 @@ var ateomServices = map[string]bool{
 // line per distinct name on the node makes it greppable; the ateom itself is
 // unaffected, so this is a diagnosability problem rather than an outage.
 //
-// Dedup keyed by name, because a rejected exporter keeps retrying on its own
-// schedule (seconds) for the pod's whole life: unbounded logging would be the
-// bigger operational problem. The map is bounded by the number of distinct names
-// a node's own ateoms declare.
+// Dedup is keyed by name with an LRU cache bounded at 256 entries to prevent
+// memory growth from arbitrary client-provided service names, while still
+// suppressing spam from a rejected exporter that retries repeatedly for the
+// pod's whole life.
 type sourceGate struct {
-	logged sync.Map // service.name -> struct{}
+	logged *lru.Cache // service.name -> struct{}
+}
+
+func newSourceGate() *sourceGate {
+	return &sourceGate{
+		logged: lru.New(256),
+	}
 }
 
 // check rejects a missing service.name along with an unrecognized one: an
@@ -166,7 +172,11 @@ func (g *sourceGate) check(ctx context.Context, r *resourcepb.Resource) error {
 	if ateomServices[name] {
 		return nil
 	}
-	if _, dup := g.logged.LoadOrStore(name, struct{}{}); !dup {
+	if g.logged == nil {
+		g.logged = lru.New(256)
+	}
+	if _, seen := g.logged.Get(name); !seen {
+		g.logged.Add(name, struct{}{})
 		slog.WarnContext(ctx, "OTLP relay rejected telemetry from an unrecognized source; it is being dropped, not retried. If this is an ateom, check whether OTEL_SERVICE_NAME or OTEL_RESOURCE_ATTRIBUTES on the worker pod is overriding its service.name",
 			slog.String("service.name", name),
 			slog.Any("allowed", allowedServices()),
@@ -249,8 +259,9 @@ func parseHeaders(raw string) (metadata.MD, error) {
 			return nil, fmt.Errorf("OTLP header %d has an empty name", i+1)
 		}
 		// Percent-decoding is what makes a value containing "," or "=" (a base64
-		// token, say) expressible in this format at all.
-		decoded, err := url.QueryUnescape(strings.TrimSpace(value))
+		// token, say) expressible in this format at all. PathUnescape preserves '+'
+		// as a literal character rather than converting it to a space.
+		decoded, err := url.PathUnescape(strings.TrimSpace(value))
 		if err != nil {
 			// The value is deliberately not in the message: these are credentials.
 			return nil, fmt.Errorf("OTLP header %q has a value that is not valid percent-encoding: %w", key, err)
@@ -396,7 +407,7 @@ func NewServer(ctx context.Context, sockPath string) (*Server, error) {
 		sockPath: sockPath,
 		grpc:     grpc.NewServer(grpc.MaxRecvMsgSize(maxRecvMsgSize)),
 	}
-	gate := &sourceGate{}
+	gate := newSourceGate()
 	coltracepb.RegisterTraceServiceServer(s.grpc, &traceRelay{
 		upstream: coltracepb.NewTraceServiceClient(upstream),
 		headers:  traceHeaders,
