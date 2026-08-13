@@ -37,6 +37,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/structpb"
 
 	"github.com/agent-substrate/substrate/cmd/atenet/internal/router/extproc"
 	"github.com/agent-substrate/substrate/internal/substratex509"
@@ -227,7 +228,20 @@ func egressMetadata(xfcc string) *extproc.RequestMetadata {
 	if xfcc != "" {
 		headers = append(headers, &corev3.HeaderValue{Key: forwardedClientCertHeader, RawValue: []byte(xfcc)})
 	}
-	return extproc.NewRequestMetadata(headers)
+	return extproc.NewRequestMetadata(headers, nil)
+}
+
+func agentgatewayEgressMetadata(certificate string) *extproc.RequestMetadata {
+	return extproc.NewRequestMetadata([]*corev3.HeaderValue{
+		{Key: ":method", RawValue: []byte("CONNECT")},
+		{Key: ":authority", RawValue: []byte("93.184.216.34:80")},
+	}, map[string]*structpb.Struct{
+		"envoy.filters.http.ext_proc": {
+			Fields: map[string]*structpb.Value{
+				ClientCertificateAttribute: structpb.NewStringValue(certificate),
+			},
+		},
+	})
 }
 
 func wantStatus(t *testing.T, err error, want envoy_type.StatusCode) {
@@ -262,6 +276,17 @@ func TestHandleRequestHeadersAllowsVerifiedActor(t *testing.T) {
 	}
 	if res.Target != "" {
 		t.Errorf("target = %q, want %q", res.Target, "")
+	}
+}
+
+func TestHandleRequestHeadersAllowsAgentgatewayCertificateAttribute(t *testing.T) {
+	ca := newTestCA(t, "actor-identity-ca")
+	leaf := ca.issueActorCert(t, actorCertOptions{})
+	h := egressHandler(ca.roots(), runningActor(), nil)
+
+	certificate := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: leaf.Raw})
+	if _, err := h.HandleRequestHeaders(context.Background(), agentgatewayEgressMetadata(string(certificate))); err != nil {
+		t.Fatalf("HandleRequestHeaders() error = %v, want nil", err)
 	}
 }
 

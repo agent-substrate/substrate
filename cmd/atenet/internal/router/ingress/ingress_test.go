@@ -48,7 +48,7 @@ func (m *mockClient) ResumeActor(ctx context.Context, in *ateapipb.ResumeActorRe
 // requestMetadata builds the metadata the ext_proc mux would hand the handler
 // for a request with these headers.
 func requestMetadata(headers ...*corev3.HeaderValue) *extproc.RequestMetadata {
-	return extproc.NewRequestMetadata(headers)
+	return extproc.NewRequestMetadata(headers, nil)
 }
 
 func TestHandleRequestHeadersDoesNotLogSensitiveData(t *testing.T) {

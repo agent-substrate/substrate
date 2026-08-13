@@ -67,7 +67,7 @@ function usage() {
   echo "  --delete-ate-system                    Delete core system"
   echo "  --delete-all                           Delete core system and all registered demos"
   echo "  --ateapi-client-auth=cert|token        Select how in-cluster clients authenticate to ateapi for --deploy-ate-system (default: cert; the server always accepts both)"
-  echo "  --atenet-router=envoy|agentgateway     Select the atenet router dataplane (default: envoy)"
+  echo "  --atenet-router=envoy|agentgateway     Select the ingress and egress dataplane (default: envoy)"
   echo "  --store-backend=redis|postgres         Configure the ateapi store backend (default: redis)"
   echo ""
   echo "Infrastructure components:"
@@ -231,6 +231,15 @@ render_atenet_router_manifest() {
       --load-restrictor LoadRestrictionsNone | run_ko resolve -f -
   else
     run_ko resolve -f manifests/ate-install/atenet-router.yaml
+  fi
+}
+
+render_atenet_egress_manifest() {
+  if [[ "$(atenet_router)" == "agentgateway" ]]; then
+    kubectl kustomize manifests/ate-install/agentgateway-egress \
+      --load-restrictor LoadRestrictionsNone | run_ko resolve -f -
+  else
+    run_ko resolve -f manifests/ate-install/atenet-egress.yaml
   fi
 }
 
@@ -586,7 +595,9 @@ deploy_atenet() {
   router_manifest="$(render_atenet_router_manifest)"
   echo "${router_manifest}" | run_kubectl apply -f -
 
-  run_ko apply -f manifests/ate-install/atenet-egress.yaml
+  local egress_manifest=""
+  egress_manifest="$(render_atenet_egress_manifest)"
+  echo "${egress_manifest}" | run_kubectl apply -f -
   run_ko apply -f manifests/ate-install/atenet-dns.yaml
   run_kubectl rollout status deployment/atenet-router -n ate-system --timeout=120s
   run_kubectl rollout status deployment/atenet-egress -n ate-system --timeout=120s

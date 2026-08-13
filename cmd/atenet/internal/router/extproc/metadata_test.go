@@ -104,7 +104,7 @@ func TestExtractMetadata(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := NewRequestMetadata(tc.headers)
+			got := NewRequestMetadata(tc.headers, nil)
 
 			if !reflect.DeepEqual(got.Headers, tc.wantHeaders) {
 				t.Errorf("NewRequestMetadata() headersMap = %v, want %v", got.Headers, tc.wantHeaders)

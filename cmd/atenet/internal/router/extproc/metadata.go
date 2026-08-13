@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 // AuthorityHeader is the HTTP/2 pseudo-header carrying the request authority.
@@ -30,14 +31,16 @@ const AuthorityHeader = ":authority"
 // pseudo-headers every handler needs pulled out.
 type RequestMetadata struct {
 	// Headers holds every header, keyed by lowercased name.
-	Headers map[string]string
-	Path    string
-	Host    string
-	Method  string
+	Headers    map[string]string
+	Attributes map[string]string
+	Path       string
+	Host       string
+	Method     string
 }
 
-func NewRequestMetadata(headers []*corev3.HeaderValue) *RequestMetadata {
+func NewRequestMetadata(headers []*corev3.HeaderValue, attributes map[string]*structpb.Struct) *RequestMetadata {
 	headersMap := make(map[string]string)
+	attributesMap := make(map[string]string)
 	var path string
 	var host string
 	var method string
@@ -60,12 +63,18 @@ func NewRequestMetadata(headers []*corev3.HeaderValue) *RequestMetadata {
 			method = val
 		}
 	}
+	for _, attrs := range attributes {
+		for name, value := range attrs.GetFields() {
+			attributesMap[name] = value.GetStringValue()
+		}
+	}
 
 	return &RequestMetadata{
-		Headers: headersMap,
-		Path:    path,
-		Host:    host,
-		Method:  method,
+		Headers:    headersMap,
+		Attributes: attributesMap,
+		Path:       path,
+		Host:       host,
+		Method:     method,
 	}
 }
 
@@ -74,3 +83,6 @@ func NewRequestMetadata(headers []*corev3.HeaderValue) *RequestMetadata {
 func (m *RequestMetadata) Header(name string) string {
 	return m.Headers[strings.ToLower(name)]
 }
+
+// Attribute returns a dataplane-computed ext_proc request attribute.
+func (m *RequestMetadata) Attribute(name string) string { return m.Attributes[name] }
