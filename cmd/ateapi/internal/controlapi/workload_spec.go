@@ -39,6 +39,19 @@ func workloadSpecFromActorTemplate(actorTemplate *atev1alpha1.ActorTemplate, act
 				},
 			})
 		}
+
+		// volume is image type
+		if vol.VolumeSource.Image != nil {
+			workloadSpec.Volumes = append(workloadSpec.Volumes, &ateletpb.Volume{
+				Name: vol.Name,
+				Type: ateletpb.VolumeType_VOLUME_TYPE_IMAGE,
+				Source: &ateletpb.Volume_Image{
+					Image: &ateletpb.ImageVolumeSource{
+						Reference: vol.VolumeSource.Image.Reference,
+					},
+				},
+			})
+		}
 	}
 
 	// TODO: order may be important for nested mounts. Also need to think about

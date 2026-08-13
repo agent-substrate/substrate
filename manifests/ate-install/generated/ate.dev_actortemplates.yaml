@@ -337,6 +337,21 @@ spec:
                       - capacity
                       - storageClassName
                       type: object
+                    image:
+                      description: image represents the contents of an OCI image,
+                        mounted read-only.
+                      properties:
+                        reference:
+                          description: reference is the image to mount.
+                          maxLength: 512
+                          type: string
+                          x-kubernetes-validations:
+                          - message: All images must be pinned (changing the image
+                              invalidates snapshots)
+                            rule: self.contains('@')
+                      required:
+                      - reference
+                      type: object
                     name:
                       description: name of the volume.
                       maxLength: 63
@@ -348,9 +363,9 @@ spec:
                   - name
                   type: object
                   x-kubernetes-validations:
-                  - message: exactly one of the fields in [durableDir externalVolumeTemplate]
-                      must be set
-                    rule: '[has(self.durableDir),has(self.externalVolumeTemplate)].filter(x,x==true).size()
+                  - message: exactly one of the fields in [durableDir externalVolumeTemplate
+                      image] must be set
+                    rule: '[has(self.durableDir),has(self.externalVolumeTemplate),has(self.image)].filter(x,x==true).size()
                       == 1'
                 maxItems: 32
                 type: array
