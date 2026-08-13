@@ -106,6 +106,9 @@ func (s *AteomService) GetWorkloadStats(ctx context.Context, req *ateompb.GetWor
 
 	sample, err := s.sampleGuest(ctx, active)
 	if err != nil {
+		if errors.Is(err, errStaleGuestTarget) {
+			return nil, status.Error(codes.Internal, err.Error())
+		}
 		// "No numbers right now", never NOT_FOUND: the requested actor IS the
 		// one here. The reasons are all routine -- a poll landing in the boot
 		// or the restore before the target is published, a teardown that
@@ -146,8 +149,11 @@ func (s *AteomService) GetActiveWorkloadStats(ctx context.Context, req *ateompb.
 
 	sample, err := s.sampleGuest(ctx, active)
 	if err != nil {
-		// Every way sampleGuest declines is a workload with no numbers yet --
-		// boot, restore, teardown in progress, a guest that has stopped
+		if errors.Is(err, errStaleGuestTarget) {
+			return nil, status.Error(codes.Internal, err.Error())
+		}
+		// Every routine way sampleGuest declines is a workload with no numbers
+		// yet -- boot, restore, teardown in progress, a guest that has stopped
 		// answering -- and for a caller with no prior knowledge each is as
 		// normal a finding as an available ateom. A reason, not an error.
 		return noSample(ateompb.NoSampleReason_NO_SAMPLE_REASON_NOT_MEASURABLE_YET), nil
@@ -179,14 +185,22 @@ func noSample(reason ateompb.NoSampleReason) *ateompb.GetActiveWorkloadStatsResp
 	}
 }
 
+// errStaleGuestTarget is the one bug-shaped failure sampleGuest can return:
+// the published guest target and the attribution disagree, which the lifecycle
+// RPCs write together under lock and so should never happen. Both stats reads
+// map it to Internal; everything else sampleGuest returns is routine.
+var errStaleGuestTarget = errors.New("guest agent connection belongs to a different actor")
+
 // sampleGuest reads the guest's container cgroups through the agent and builds
-// the sample attributed to active. Every error it returns means "no numbers
-// right now" rather than a bug -- there is deliberately no Internal class on
-// this runtime, since a guest that has stopped answering is routine here --
-// and it comes back raw because the two RPCs express that differently: an
-// error code for the keyed read, a normal EXECUTING answer for the discovery
-// read. Callers re-check s.activeActor against the pointer they loaded after
-// this returns; the read holds no lock.
+// the sample attributed to active. With one exception its errors mean "no
+// numbers right now" rather than a bug -- a guest that has stopped answering
+// is routine here, and unlike the gVisor runtime's local file reads, a vsock
+// call offers no error type that separates "gone" from "broken". The
+// exception is errStaleGuestTarget, above. Errors come back raw because the
+// two RPCs express the routine ones differently: an error code for the keyed
+// read, a NoSampleReason for the discovery read. Callers re-check
+// s.activeActor against the pointer they loaded after this returns; the read
+// holds no lock.
 func (s *AteomService) sampleGuest(ctx context.Context, active *ateomstats.ActorAttribution) (*ateompb.WorkloadStatsSample, error) {
 	// The actor is the one here, but there is no guest to ask yet. Usually that
 	// is a poll landing in the boot or the restore: the ateom retains the
@@ -204,7 +218,7 @@ func (s *AteomService) sampleGuest(ctx context.Context, active *ateomstats.Actor
 	// should be unreachable; if the two ever disagree, decline rather than
 	// report a stale guest's numbers under the requested actor's name.
 	if target.actorUID != active.UID {
-		return nil, fmt.Errorf("guest agent connection belongs to actor %q, not %q", target.actorUID, active.UID)
+		return nil, fmt.Errorf("%w: %q, not %q", errStaleGuestTarget, target.actorUID, active.UID)
 	}
 
 	observedAt := time.Now()

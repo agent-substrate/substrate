@@ -341,8 +341,8 @@ func TestGetWorkloadStatsErrors(t *testing.T) {
 		},
 		{
 			// Should be unreachable — the two atomics are written together under
-			// lock — so what is pinned here is that disagreeing state declines
-			// instead of misattributing.
+			// lock — so a disagreement is an invariant violation, not a routine
+			// state: Internal, unlike every other way sampleGuest declines.
 			name: "guest agent connection belongs to another actor",
 			service: func() *AteomService {
 				s := newStatsService(healthy, "app_ovl")
@@ -350,7 +350,7 @@ func TestGetWorkloadStatsErrors(t *testing.T) {
 				return s
 			},
 			actorUID: "uid-a",
-			want:     codes.FailedPrecondition,
+			want:     codes.Internal,
 		},
 		{
 			// Not one container gone but the guest as a whole not answering: the
@@ -540,5 +540,21 @@ func TestGetWorkloadStatsTransition(t *testing.T) {
 	_, err := s.GetWorkloadStats(context.Background(), &ateompb.GetWorkloadStatsRequest{ActorUid: "uid-a"})
 	if got := status.Code(err); got != codes.NotFound {
 		t.Errorf("GetWorkloadStats() during transition: code = %v, want %v (err: %v)", got, codes.NotFound, err)
+	}
+}
+
+// TestGetActiveWorkloadStatsStaleTarget pins that the one bug-shaped failure
+// stays an error on the discovery read too: a target/attribution disagreement
+// is an invariant violation, not a NOT_MEASURABLE_YET to skip past silently.
+func TestGetActiveWorkloadStatsStaleTarget(t *testing.T) {
+	agent := &fakeAgent{stats: map[string]*agentpb.CgroupStats{
+		"app_ovl": containerStats(1000, 2000, 100, 5000),
+	}}
+	s := newStatsService(agent, "app_ovl")
+	s.guestStats.Store(&guestStatsTarget{actorUID: "uid-b", agent: agent, workloadIDs: []string{"app_ovl"}})
+
+	_, err := s.GetActiveWorkloadStats(context.Background(), &ateompb.GetActiveWorkloadStatsRequest{})
+	if got := status.Code(err); got != codes.Internal {
+		t.Errorf("GetActiveWorkloadStats() with stale target: code = %v, want %v (err: %v)", got, codes.Internal, err)
 	}
 }
