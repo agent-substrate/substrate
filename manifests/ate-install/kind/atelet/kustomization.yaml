@@ -56,3 +56,18 @@ patches:
                 value: rustfsadmin
               - name: AWS_SECRET_ACCESS_KEY
                 value: rustfsadmin
+              # kind nodes ship no credential provider plugin (the args above
+              # leave the --image-credential-provider-* flags unset), so drop
+              # the base manifest's host mounts instead of fabricating empty
+              # ones on the node. volumeMounts merges on mountPath; volumes
+              # merges on name.
+              volumeMounts:
+              - mountPath: /run/image-credential-provider/bin
+                $patch: delete
+              - mountPath: /run/image-credential-provider/config.yaml
+                $patch: delete
+            volumes:
+            - name: image-credential-provider-bin
+              $patch: delete
+            - name: image-credential-provider-config
+              $patch: delete
