@@ -16,6 +16,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// substrate: modified from upstream k8s.io/kubernetes/pkg/volume/util —
+// package renamed. See README.md for the full modification list.
+
 package atomicwriter
 
 import "os"

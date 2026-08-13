@@ -16,6 +16,11 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// substrate: modified from upstream k8s.io/kubernetes/pkg/volume/util —
+// package renamed, context threading on Write, k8s.io/client-go test dep
+// replaced by a local mkTmpdir helper. See README.md for the full
+// modification list.
+
 package atomicwriter
 
 import (
