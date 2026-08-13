@@ -109,7 +109,7 @@ func newResource(ctx context.Context, serviceName string, extraAttrs ...attribut
 
 // relayAttrKey records which OTLP export path a signal took. It only makes
 // sense for the components that have a relay to take or miss — the ateoms —
-// so relayAttrs leaves it off everything else rather than labelling, say,
+// so relayAttrs leaves it off everything else rather than labeling, say,
 // atecontroller "direct" for a relay it was never offered.
 //
 // The name is spelled here rather than taken from internal/ateattr on purpose:

@@ -96,7 +96,7 @@ func TestRelayAttrs(t *testing.T) {
 		{name: "relay capable with conn", relayCapable: true, conn: true, want: "relay"},
 		{name: "relay capable fell back", relayCapable: true, conn: false, want: "direct"},
 		{name: "not relay capable", relayCapable: false, conn: false},
-		// atecontroller stays unlabelled even if some future caller hands it a
+		// atecontroller stays unlabeled even if some future caller hands it a
 		// connection for another reason: capability, not the conn, is the gate.
 		{name: "not relay capable with conn", relayCapable: false, conn: true},
 	} {
