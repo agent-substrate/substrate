@@ -24,6 +24,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"math"
 	"net/http"
 	"sync/atomic"
 	"time"
@@ -103,7 +104,11 @@ func Parse(jsonBytes []byte, current Config) (Config, error) {
 	if err := json.Unmarshal(jsonBytes, &p); err != nil {
 		return current, fmt.Errorf("decode config json: %w", err)
 	}
-	return p.merge(current), nil
+	merged := p.merge(current)
+	if err := merged.Validate(); err != nil {
+		return current, fmt.Errorf("validate config: %w", err)
+	}
+	return merged, nil
 }
 
 // Fetch GETs `url` and merges any returned fields into `current`. Returns
@@ -125,7 +130,40 @@ func Fetch(ctx context.Context, url string, current Config) (Config, error) {
 	if err := json.NewDecoder(resp.Body).Decode(&p); err != nil {
 		return current, fmt.Errorf("decode %s: %w", url, err)
 	}
-	return p.merge(current), nil
+	merged := p.merge(current)
+	if err := merged.Validate(); err != nil {
+		return current, fmt.Errorf("validate %s: %w", url, err)
+	}
+	return merged, nil
+}
+
+// Validate checks that the config values are within legal ranges.
+func (c Config) Validate() error {
+	if c.MinWait < 0 {
+		return fmt.Errorf("min_wait_time cannot be negative: %v", c.MinWait)
+	}
+	if c.MaxWait < 0 {
+		return fmt.Errorf("max_wait_time cannot be negative: %v", c.MaxWait)
+	}
+	if c.MaxWait < c.MinWait {
+		return fmt.Errorf("max_wait_time (%v) cannot be less than min_wait_time (%v)", c.MaxWait, c.MinWait)
+	}
+	if c.TraceProbability < 0 || c.TraceProbability > 1 {
+		return fmt.Errorf("trace_probability must be between 0.0 and 1.0, got: %f", c.TraceProbability)
+	}
+	if c.DurDirFileSize < 0 {
+		return fmt.Errorf("durdir_file_size_bytes cannot be negative: %d", c.DurDirFileSize)
+	}
+	if c.DurDirFileSize > math.MaxInt32 {
+		return fmt.Errorf("durdir_file_size_bytes cannot exceed %d (2 GiB), got: %d", math.MaxInt32, c.DurDirFileSize)
+	}
+	if c.ResumeMode != "" && c.ResumeMode != ResumeModeExplicit && c.ResumeMode != ResumeModeImplicit {
+		return fmt.Errorf("invalid resume_mode %q: must be %q or %q", c.ResumeMode, ResumeModeExplicit, ResumeModeImplicit)
+	}
+	if c.DurDirReadMode != "" && c.DurDirReadMode != ReadModeData && c.DurDirReadMode != ReadModeDigest {
+		return fmt.Errorf("invalid durdir_read_mode %q: must be %q or %q", c.DurDirReadMode, ReadModeData, ReadModeDigest)
+	}
+	return nil
 }
 
 // merge folds the payload's set fields into `current`, leaving unset fields
