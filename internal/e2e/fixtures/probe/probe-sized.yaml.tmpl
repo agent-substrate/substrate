@@ -44,11 +44,17 @@ metadata:
   name: probe-sized
   namespace: ate-e2e-sizing
 spec:
-  pauseImage: "registry.k8s.io/pause:3.10.2@sha256:f548e0e8e3dc1896ca956272154dde3314e8cc4fde0a57577ee9fa1c63f5baf4"
   containers:
   - name: probe
     image: ko://github.com/agent-substrate/substrate/internal/e2e/fixtures/probe
     command: ["/ko-app/probe"]
+    # Gate the golden snapshot on the probe actually serving, so the single
+    # (un-retried) GET /resources the suite makes after resuming cannot race a
+    # sandbox that was checkpointed before the listener was up.
+    readyz:
+      httpGet:
+        path: /healthz
+        port: 80
   # The feature under test: these limits size the sandbox (and, when the worker
   # advertises capacity, gate scheduling). CPU=2 makes NumCPU() inside the
   # gVisor sandbox a distinct, assertable value.
