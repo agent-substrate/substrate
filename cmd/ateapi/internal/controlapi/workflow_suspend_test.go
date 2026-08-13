@@ -227,6 +227,7 @@ func TestSuspendActor_CrashesWhenSuspendingActorMissingWorkerPod(t *testing.T) {
 // newTestPersistence returns an isolated PostgreSQL-backed store.
 func newTestPersistence(t *testing.T) store.Interface {
 	persistence, _ := storetest.SetupTestStore(t)
+	storetest.MustCreateAtespace(t, context.Background(), persistence, "team-a")
 	return persistence
 }
 
@@ -260,6 +261,7 @@ func TestEnsureAteletSuspended_DanglingWorkerDoesNotRecordPhantomSnapshot(t *tes
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
 			persistence := newTestPersistence(t)
+			storetest.MustCreateAtespace(t, ctx, persistence, "team-a")
 
 			if _, err := persistence.CreateAtespace(ctx, &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: "team-a"}}); err != nil {
 				t.Fatalf("CreateAtespace: %v", err)
@@ -408,6 +410,7 @@ func TestEnsureSuspendedFinalized_ReleasesOnlyOwnWorker(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
 			persistence := newTestPersistence(t)
+			storetest.MustCreateAtespace(t, ctx, persistence, "team-a")
 
 			if _, err := persistence.CreateAtespace(ctx, &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: "team-a"}}); err != nil {
 				t.Fatalf("CreateAtespace: %v", err)
@@ -477,6 +480,7 @@ func TestEnsureSuspendedFinalized_ReleasesOnlyOwnWorker(t *testing.T) {
 func TestEnsureSuspendedFinalized_SnapshotSourceActorVersion(t *testing.T) {
 	ctx := context.Background()
 	persistence := newTestPersistence(t)
+	storetest.MustCreateAtespace(t, ctx, persistence, "team-a")
 
 	if _, err := persistence.CreateAtespace(ctx, &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: "team-a"}}); err != nil {
 		t.Fatalf("CreateAtespace: %v", err)
@@ -606,6 +610,7 @@ func TestEnsureMarkedSuspending_PausedScopeRejection(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
 			persistence := newTestPersistence(t)
+			storetest.MustCreateAtespace(t, ctx, persistence, "team-a")
 			w := &ActorWorkflow{store: persistence}
 
 			actorRef := resources.ActorRef{Atespace: "team-a", Name: "actor-1"}

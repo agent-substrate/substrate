@@ -428,6 +428,7 @@ func (c *conflictInjectingStore) UpdateActorSnapshotTag(ctx context.Context, ate
 // returns the actor plus a started worker cache.
 func seedAssignFixture(t *testing.T, ctx context.Context, persistence store.Interface) (*ateapipb.Actor, *workercache.Cache) {
 	t.Helper()
+	storetest.MustCreateAtespace(t, ctx, persistence, "team-a")
 	if err := persistence.CreateWorker(ctx, &ateapipb.Worker{
 		Metadata:        &ateapipb.ResourceMetadata{Name: testWorkerUID("pod-1")},
 		WorkerNamespace: "worker-ns",
