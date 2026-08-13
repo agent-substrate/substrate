@@ -86,7 +86,10 @@ data:
     admin:
       address:
         socket_address:
-          address: 0.0.0.0
+          # ipv4_compat clears IPV6_V6ONLY, so this one socket serves both
+          # families; dataplane.go probes /ready over the IPv4 loopback.
+          address: "::"
+          ipv4_compat: true
           port_value: 9901
 
     node:
@@ -354,6 +357,8 @@ metadata:
   namespace: ate-system
 spec:
   type: ClusterIP
+  # Prefer, not Require: Require fails Service creation on a single-stack cluster.
+  ipFamilyPolicy: PreferDualStack
   selector:
     app: atenet-router
   ports:
