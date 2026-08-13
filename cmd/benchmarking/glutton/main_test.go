@@ -18,19 +18,22 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"io"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/agent-substrate/substrate/internal/ateinterceptors"
+	"github.com/agent-substrate/substrate/internal/proto/glutton"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
-
-	"github.com/agent-substrate/substrate/internal/proto/glutton"
+	"google.golang.org/protobuf/proto"
 )
 
 // TestSplitGRPCServesReadyzAndGRPCOnOneListener starts the grpc-mode handler
@@ -313,4 +316,138 @@ func TestReadDiskNotFound(t *testing.T) {
 	if s, ok := status.FromError(err); !ok || s.Code() != codes.NotFound {
 		t.Errorf("expected NotFound code, got %v", err)
 	}
+}
+
+func TestHTTPRoutes(t *testing.T) {
+	tempDir := t.TempDir()
+	svc, err := newGluttonService(tempDir)
+	if err != nil {
+		t.Fatalf("failed to create glutton service: %v", err)
+	}
+	defer svc.Close()
+
+	ts := httptest.NewServer(newMux(svc))
+	defer ts.Close()
+
+	// 1. /readyz GET -> 200 OK
+	res, err := http.Get(ts.URL + "/readyz")
+	if err != nil {
+		t.Fatalf("GET /readyz failed: %v", err)
+	}
+	if res.StatusCode != http.StatusOK {
+		t.Errorf("GET /readyz status: got %d, want 200", res.StatusCode)
+	}
+	res.Body.Close()
+
+	// 2. GET on /ping -> 405 Method Not Allowed
+	res, err = http.Get(ts.URL + "/ping")
+	if err != nil {
+		t.Fatalf("GET /ping failed: %v", err)
+	}
+	if res.StatusCode != http.StatusMethodNotAllowed {
+		t.Errorf("GET /ping status: got %d, want 405", res.StatusCode)
+	}
+	res.Body.Close()
+
+	// 3. POST bad body -> 400 Bad Request
+	res, err = http.Post(ts.URL+"/ping", "application/x-protobuf", bytes.NewReader([]byte("garbage")))
+	if err != nil {
+		t.Fatalf("POST /ping garbage failed: %v", err)
+	}
+	if res.StatusCode != http.StatusBadRequest {
+		t.Errorf("POST /ping garbage status: got %d, want 400", res.StatusCode)
+	}
+	res.Body.Close()
+
+	// 4. POST /ping -> 200 OK & protobuf Content-Type & ServerElapsedTrailer & echo message
+	pingReqBytes, _ := proto.Marshal(&glutton.PingRequest{Message: "hello"})
+	res, err = http.Post(ts.URL+"/ping", "application/x-protobuf", bytes.NewReader(pingReqBytes))
+	if err != nil {
+		t.Fatalf("POST /ping failed: %v", err)
+	}
+	if res.StatusCode != http.StatusOK {
+		t.Errorf("POST /ping status: got %d, want 200", res.StatusCode)
+	}
+	if ct := res.Header.Get("Content-Type"); ct != "application/x-protobuf" {
+		t.Errorf("POST /ping Content-Type: got %q, want application/x-protobuf", ct)
+	}
+	if elapsed := res.Header.Get(ateinterceptors.ServerElapsedTrailer); elapsed == "" {
+		t.Errorf("POST /ping missing header %q", ateinterceptors.ServerElapsedTrailer)
+	}
+	body, _ := io.ReadAll(res.Body)
+	res.Body.Close()
+	var pingResp glutton.PingResponse
+	if err := proto.Unmarshal(body, &pingResp); err != nil {
+		t.Fatalf("unmarshal PingResponse failed: %v", err)
+	}
+	if pingResp.GetMessage() != "hello" {
+		t.Errorf("PingResponse message: got %q, want 'hello'", pingResp.GetMessage())
+	}
+
+	// 5. POST /writedisk -> 200 OK & protobuf Content-Type
+	writeReqBytes, _ := proto.Marshal(&glutton.WriteDiskRequest{
+		Key:       "httpfile",
+		Size:      512,
+		WriteMode: glutton.WriteMode_WRITE_MODE_TRUNCATE,
+	})
+	res, err = http.Post(ts.URL+"/writedisk", "application/x-protobuf", bytes.NewReader(writeReqBytes))
+	if err != nil {
+		t.Fatalf("POST /writedisk failed: %v", err)
+	}
+	if res.StatusCode != http.StatusOK {
+		t.Errorf("POST /writedisk status: got %d, want 200", res.StatusCode)
+	}
+	body, _ = io.ReadAll(res.Body)
+	res.Body.Close()
+	var writeResp glutton.WriteDiskResponse
+	if err := proto.Unmarshal(body, &writeResp); err != nil {
+		t.Fatalf("unmarshal WriteDiskResponse failed: %v", err)
+	}
+	if writeResp.GetSize() != 512 {
+		t.Errorf("WriteDiskResponse size: got %d, want 512", writeResp.GetSize())
+	}
+
+	// 6. POST /readdisk -> 200 OK & matching size & digest
+	readReqBytes, _ := proto.Marshal(&glutton.ReadDiskRequest{Key: "httpfile"})
+	res, err = http.Post(ts.URL+"/readdisk", "application/x-protobuf", bytes.NewReader(readReqBytes))
+	if err != nil {
+		t.Fatalf("POST /readdisk failed: %v", err)
+	}
+	if res.StatusCode != http.StatusOK {
+		t.Errorf("POST /readdisk status: got %d, want 200", res.StatusCode)
+	}
+	body, _ = io.ReadAll(res.Body)
+	res.Body.Close()
+	var readResp glutton.ReadDiskResponse
+	if err := proto.Unmarshal(body, &readResp); err != nil {
+		t.Fatalf("unmarshal ReadDiskResponse failed: %v", err)
+	}
+	if readResp.GetSize() != 512 {
+		t.Errorf("ReadDiskResponse size: got %d, want 512", readResp.GetSize())
+	}
+	if !bytes.Equal(readResp.GetSha256(), writeResp.GetSha256()) {
+		t.Errorf("sha256 mismatch over HTTP between writedisk and readdisk")
+	}
+
+	// 7. unknown key -> 404 (NotFound mapping)
+	missBytes, _ := proto.Marshal(&glutton.ReadDiskRequest{Key: "nosuchfile"})
+	res, err = http.Post(ts.URL+"/readdisk", "application/x-protobuf", bytes.NewReader(missBytes))
+	if err != nil {
+		t.Fatalf("POST /readdisk miss failed: %v", err)
+	}
+	if res.StatusCode != http.StatusNotFound {
+		t.Errorf("POST /readdisk miss status: got %d, want 404", res.StatusCode)
+	}
+	res.Body.Close()
+
+	// 8. traversal key -> 400 (InvalidArgument mapping)
+	badBytes, _ := proto.Marshal(&glutton.ReadDiskRequest{Key: "../etc/passwd"})
+	res, err = http.Post(ts.URL+"/readdisk", "application/x-protobuf", bytes.NewReader(badBytes))
+	if err != nil {
+		t.Fatalf("POST /readdisk bad key failed: %v", err)
+	}
+	if res.StatusCode != http.StatusBadRequest {
+		t.Errorf("POST /readdisk bad key status: got %d, want 400", res.StatusCode)
+	}
+	res.Body.Close()
 }

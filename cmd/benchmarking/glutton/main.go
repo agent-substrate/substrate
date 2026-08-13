@@ -30,6 +30,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -48,6 +49,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 
+	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/proto/glutton"
 	"github.com/agent-substrate/substrate/internal/serverboot"
 	"github.com/agent-substrate/substrate/internal/version"
@@ -120,14 +122,6 @@ func main() {
 		slog.String("mode", *mode),
 	)
 
-	// ateom blocks RestoreWorkload until /readyz returns 200, so ResumeActor
-	// cannot report success before this listener is reachable. The probe is
-	// an HTTP GET, so both modes must serve it.
-	mux := http.NewServeMux()
-	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})
-
 	var handler http.Handler
 	switch *mode {
 	case "grpc":
@@ -136,17 +130,14 @@ func main() {
 		)
 		glutton.RegisterGluttonServer(srv, svc)
 		reflection.Register(srv)
-		handler = splitGRPC(srv, mux)
+		// The readiness probe is an HTTP GET, so gRPC mode serves it next to
+		// the gRPC handler on the same listener.
+		handler = splitGRPC(srv, readyzMux())
 	case "http":
-		// HTTP/1.1 mode: a single /ping route that consumes
-		// proto.Marshal(PingRequest) and returns proto.Marshal(PingResponse).
-		// Only Ping is exposed in HTTP mode; the other RPCs remain gRPC-only
-		// (re-exposable as additional routes if/when needed).
-		mux.HandleFunc("/ping", httpPingHandler(svc))
 		// otelhttp at the mux level + per-handler span follows
 		// docs/dev/best-practices/tracing.md: extract incoming context,
 		// then name the span after the operation in each handler.
-		handler = otelhttp.NewHandler(mux, "/")
+		handler = otelhttp.NewHandler(newMux(svc), "/")
 	default:
 		serverboot.Fatal(ctx, "Invalid --mode", fmt.Errorf("must be grpc or http: %q", *mode))
 	}
@@ -177,11 +168,34 @@ func splitGRPC(grpcSrv, rest http.Handler) http.Handler {
 	})
 }
 
-// httpPingHandler accepts a POST whose body is proto.Marshal(PingRequest) and
-// returns proto.Marshal(PingResponse) (same Ping handler the gRPC server
-// uses, so the per-call stats stay comparable across protocols).
-func httpPingHandler(svc *gluttonService) http.HandlerFunc {
+// readyzMux serves the readiness probe both modes need: ateom blocks
+// RestoreWorkload until /readyz returns 200, so ResumeActor cannot report
+// success before this listener is reachable.
+func readyzMux() *http.ServeMux {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/readyz", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	return mux
+}
+
+// newMux builds the HTTP-mode route table on top of the readiness probe.
+func newMux(svc *gluttonService) *http.ServeMux {
+	mux := readyzMux()
+	mux.HandleFunc("/ping", protoRoute("Ping", svc.Ping))
+	mux.HandleFunc("/writedisk", protoRoute("WriteDisk", svc.WriteDisk))
+	mux.HandleFunc("/readdisk", protoRoute("ReadDisk", svc.ReadDisk))
+	return mux
+}
+
+// protoRoute wraps a protobuf handler with POST-only routing, protobuf
+// unmarshaling, status code mapping, and server-timing headers.
+func protoRoute[Req any, Resp proto.Message, PtrReq interface {
+	*Req
+	proto.Message
+}](spanName string, handler func(context.Context, PtrReq) (Resp, error)) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
@@ -191,16 +205,28 @@ func httpPingHandler(svc *gluttonService) http.HandlerFunc {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		var req glutton.PingRequest
-		if err := proto.Unmarshal(body, &req); err != nil {
+		var req Req
+		ptrReq := PtrReq(&req)
+		if err := proto.Unmarshal(body, ptrReq); err != nil {
 			http.Error(w, "unmarshal: "+err.Error(), http.StatusBadRequest)
 			return
 		}
-		ctx, span := otel.Tracer("glutton").Start(r.Context(), "Ping")
+		ctx, span := otel.Tracer("glutton").Start(r.Context(), spanName)
 		defer span.End()
-		resp, err := svc.Ping(ctx, &req)
+		resp, err := handler(ctx, ptrReq)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			if st, ok := status.FromError(err); ok {
+				switch st.Code() {
+				case codes.InvalidArgument:
+					http.Error(w, st.Message(), http.StatusBadRequest)
+				case codes.NotFound:
+					http.Error(w, st.Message(), http.StatusNotFound)
+				default:
+					http.Error(w, st.Message(), http.StatusInternalServerError)
+				}
+			} else {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+			}
 			return
 		}
 		out, err := proto.Marshal(resp)
@@ -208,6 +234,11 @@ func httpPingHandler(svc *gluttonService) http.HandlerFunc {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		// Glutton does not run ateinterceptors, so without this the serve path has no
+		// server-side timing at all. Mirrors the control-plane gRPC trailer so boomer's
+		// elapsedFromMD logic (source=server) works identically over HTTP.
+		w.Header().Set(ateinterceptors.ServerElapsedTrailer,
+			strconv.FormatInt(time.Since(start).Microseconds(), 10))
 		w.Header().Set("Content-Type", "application/x-protobuf")
 		_, _ = w.Write(out)
 	}
