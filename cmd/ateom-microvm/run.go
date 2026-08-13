@@ -143,6 +143,8 @@ type actorContainer struct {
 	// durableMounts are the durable-dir volumes this container mounts, and where
 	// (see durable.go). Empty for containers that declare none.
 	durableMounts []*ateompb.DurableDirVolumeMount
+	// imageMounts are the image volumes this container mounts, and where.
+	imageMounts []*ateompb.ImageVolumeMount
 }
 
 // resolvedRuntime holds the concrete binary/config paths for a request, taken
@@ -563,6 +565,7 @@ func (s *AteomService) buildActorContainers(actorUID string, containers []*ateom
 			bundleRootfs:  bundleRootfs,
 			spec:          spec,
 			durableMounts: c.GetDurableDirVolumeMounts(),
+			imageMounts:   c.GetImageVolumeMounts(),
 		}
 	}
 	return ctrs, nil
@@ -578,6 +581,13 @@ func (s *AteomService) stageOverlayLowers(ctx context.Context, rr resolvedRuntim
 	for _, c := range ctrs {
 		if err := kata.ReconstructSharedDirFromImage(ctx, c.bundleRootfs, id, c.name); err != nil {
 			return nil, fmt.Errorf("while staging overlay lower for %q: %w", c.name, err)
+		}
+		// Image volumes ride the same read-only virtiofsd share.
+		for _, vm := range c.imageMounts {
+			src := ateompath.ImageVolumeMountPath(id, c.name, vm.GetVolumeName())
+			if err := kata.StageImageVolume(ctx, src, id, c.name, vm.GetVolumeName()); err != nil {
+				return nil, fmt.Errorf("while staging image volume %q for %q: %w", vm.GetVolumeName(), c.name, err)
+			}
 		}
 	}
 	vfsdLog, _ := os.OpenFile(virtiofsdLogPath(id), os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)

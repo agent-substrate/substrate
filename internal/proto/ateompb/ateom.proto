@@ -145,12 +145,24 @@ message Container {
   // durable_dir_volume_mounts are the durable-dir volumes this container
   // mounts, if any.
   repeated DurableDirVolumeMount durable_dir_volume_mounts = 4;
+
+  // image_volume_mounts are the image volumes this container mounts, if any.
+  repeated ImageVolumeMount image_volume_mounts = 5;
 }
 
 // DurableDirVolumeMount is one durable-dir volume mounted into a container.
 message DurableDirVolumeMount {
-  // volume_name is the name the ActorTemplate gave the volume. It selects the
-  // per-volume directory atelet prepared for the actor on the host.
+  // volume_name is the name the ActorTemplate gave the volume.
+  string volume_name = 1;
+  // mount_path is where the container sees the volume.
+  string mount_path = 2;
+}
+
+// ImageVolumeMount is one image volume mounted into a container. ateom uses
+// these to construct the container's volume mounts — each names the volume
+// and its destination path.
+message ImageVolumeMount {
+  // volume_name is the name the ActorTemplate gave the volume.
   string volume_name = 1;
   // mount_path is where the container sees the volume.
   string mount_path = 2;

@@ -83,6 +83,18 @@ func OverlayUpperBase(containerID string) string { return "/run/ateom-upper/" + 
 // uses as its lowerdir.
 func GuestSharedRootfs(containerID string) string { return guestSharedDir + containerID + "/rootfs" }
 
+// GuestSharedVolumeDir is the in-guest path one image volume's contents appear
+// at, beside the container's rootfs in the same kataShared tree.
+func GuestSharedVolumeDir(containerID, volumeName string) string {
+	return filepath.Join(guestSharedDir, containerID, "volumes", volumeName)
+}
+
+// SharedVolumeDir is the host path under virtiofsd's served tree that
+// GuestSharedVolumeDir resolves to.
+func SharedVolumeDir(id, containerID, volumeName string) string {
+	return filepath.Join(SharedDir(id), containerID, "volumes", volumeName)
+}
+
 // VirtiofsdOptions configures StartVirtiofsd.
 type VirtiofsdOptions struct {
 	Binary     string // virtiofsd executable; defaults to "virtiofsd"
@@ -170,6 +182,35 @@ func waitForSocket(ctx context.Context, path string, timeout time.Duration) erro
 		case <-ticker.C:
 		}
 	}
+}
+
+// StageImageVolume bind-mounts one composed image volume read-only at
+// <cid>/volumes/<name> under SharedDir(id), so virtiofsd exposes it to the
+// guest.
+func StageImageVolume(ctx context.Context, src, id, cid, volumeName string) error {
+	if cid == "" || volumeName == "" {
+		return fmt.Errorf("StageImageVolume: empty container id or volume name")
+	}
+	dst := SharedVolumeDir(id, cid, volumeName)
+	if err := reaper.Run(exec.Command("umount", dst)); err != nil {
+		_ = reaper.Run(exec.Command("umount", "-l", dst))
+	}
+	if err := os.MkdirAll(dst, 0o755); err != nil {
+		return fmt.Errorf("creating shared volume dir %q: %w", dst, err)
+	}
+	cmd := exec.CommandContext(ctx, "mount", "--rbind", src, dst)
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	if err := reaper.Run(cmd); err != nil {
+		return fmt.Errorf("bind-mounting image volume %q -> %q: %w (%s)", src, dst, err, strings.TrimSpace(stderr.String()))
+	}
+	ro := exec.CommandContext(ctx, "mount", "-o", "remount,bind,ro", dst)
+	var roErr strings.Builder
+	ro.Stderr = &roErr
+	if err := reaper.Run(ro); err != nil {
+		return fmt.Errorf("remounting image volume %q read-only: %w (%s)", dst, err, strings.TrimSpace(roErr.String()))
+	}
+	return nil
 }
 
 // ReconstructSharedDirFromImage bind-mounts a container's OCI image rootfs at
