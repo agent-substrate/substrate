@@ -843,13 +843,17 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 		Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "before-upgrade"},
 		Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
 	}
-	tagged, err := s.TagActorSnapshot(ctx, testAtespace, "snapshot-1", tag)
+	tagged, err := s.CreateActorSnapshotTag(ctx, testAtespace, "snapshot-1", tag)
 	if err != nil || tagged.GetSnapshot().GetName() != "snapshot-1" {
-		t.Fatalf("TagActorSnapshot = (%v, %v), want stable tag", tagged, err)
+		t.Fatalf("CreateActorSnapshotTag = (%v, %v), want stable tag", tagged, err)
 	}
-	byTag, resolvedTag, err := s.GetActorSnapshotByTag(ctx, testAtespace, "before-upgrade")
-	if err != nil || !proto.Equal(created, byTag) || !proto.Equal(tagged, resolvedTag) {
-		t.Fatalf("GetActorSnapshotByTag = (%v, %v, %v), want tagged snapshot", byTag, resolvedTag, err)
+	resolvedTag, err := s.GetActorSnapshotTag(ctx, testAtespace, "before-upgrade")
+	if err != nil || !proto.Equal(tagged, resolvedTag) {
+		t.Fatalf("GetActorSnapshotTag = (%v, %v), want tagged tag", resolvedTag, err)
+	}
+	byTag, err := s.GetActorSnapshot(ctx, resolvedTag.GetSnapshot().GetAtespace(), resolvedTag.GetSnapshot().GetName())
+	if err != nil || !proto.Equal(created, byTag) {
+		t.Fatalf("GetActorSnapshot(resolved tag target) = (%v, %v), want tagged snapshot", byTag, err)
 	}
 	if _, err := s.CreateActorSnapshot(ctx, &ateapipb.ActorSnapshot{
 		Metadata:    &ateapipb.ResourceMetadata{Atespace: "other", Name: "snapshot-2"},
@@ -858,15 +862,15 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 		t.Fatalf("CreateActorSnapshot second snapshot: %v", err)
 	}
 	otherTag := &ateapipb.ActorSnapshotTag{Metadata: &ateapipb.ResourceMetadata{Atespace: "other", Name: "before-upgrade"}, Scope: ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE}
-	if _, err := s.TagActorSnapshot(ctx, "other", "snapshot-2", otherTag); err != nil {
+	if _, err := s.CreateActorSnapshotTag(ctx, "other", "snapshot-2", otherTag); err != nil {
 		t.Fatalf("same tag name in another Atespace: %v", err)
 	}
-	if _, err := s.TagActorSnapshot(ctx, "other", "snapshot-2", tag); !errors.Is(err, store.ErrAlreadyExists) {
+	if _, err := s.CreateActorSnapshotTag(ctx, "other", "snapshot-2", tag); !errors.Is(err, store.ErrAlreadyExists) {
 		t.Fatalf("duplicate Atespace tag error = %v, want ErrAlreadyExists", err)
 	}
 	differentScope := proto.Clone(tag).(*ateapipb.ActorSnapshotTag)
 	differentScope.Scope = ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED
-	if _, err := s.TagActorSnapshot(ctx, testAtespace, "snapshot-1", differentScope); !errors.Is(err, store.ErrAlreadyExists) {
+	if _, err := s.CreateActorSnapshotTag(ctx, testAtespace, "snapshot-1", differentScope); !errors.Is(err, store.ErrAlreadyExists) {
 		t.Fatalf("re-tag with different scope error = %v, want ErrAlreadyExists", err)
 	}
 	tagged, err = s.UpdateActorSnapshotTag(ctx, testAtespace, "before-upgrade", func(toUpdate *ateapipb.ActorSnapshotTag) error {
@@ -876,8 +880,11 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 	if err != nil || tagged.GetScope() != ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED {
 		t.Fatalf("UpdateActorSnapshotTag = (%v, %v), want published", tagged, err)
 	}
-	if byTag, resolvedTag, err = s.GetActorSnapshotByTag(ctx, testAtespace, "before-upgrade"); err != nil || byTag.GetMetadata().GetUid() != created.GetMetadata().GetUid() || resolvedTag.GetScope() != ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED {
-		t.Fatalf("tag after publication = (%v, %v, %v), want same address and snapshot", byTag, resolvedTag, err)
+	if resolvedTag, err = s.GetActorSnapshotTag(ctx, testAtespace, "before-upgrade"); err != nil || resolvedTag.GetScope() != ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED {
+		t.Fatalf("tag after publication = (%v, %v), want published scope", resolvedTag, err)
+	}
+	if byTag, err = s.GetActorSnapshot(ctx, resolvedTag.GetSnapshot().GetAtespace(), resolvedTag.GetSnapshot().GetName()); err != nil || byTag.GetMetadata().GetUid() != created.GetMetadata().GetUid() {
+		t.Fatalf("snapshot after publication = (%v, %v), want same address", byTag, err)
 	}
 	listed, _, err := s.ListActorSnapshots(ctx, testAtespace, 10, "")
 	if err != nil || len(listed) != 1 {
@@ -888,7 +895,7 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 	if err != nil || deleted.GetMetadata().GetName() != "before-upgrade" {
 		t.Fatalf("DeleteActorSnapshotTag = (%v, %v)", deleted, err)
 	}
-	if _, _, err := s.GetActorSnapshotByTag(ctx, testAtespace, "before-upgrade"); !errors.Is(err, store.ErrNotFound) {
+	if _, err := s.GetActorSnapshotTag(ctx, testAtespace, "before-upgrade"); !errors.Is(err, store.ErrNotFound) {
 		t.Fatalf("deleted tag lookup = %v, want ErrNotFound", err)
 	}
 	if got, err := s.GetActorSnapshot(ctx, testAtespace, "snapshot-1"); err != nil || got.GetMetadata().GetUid() != created.GetMetadata().GetUid() {
@@ -906,12 +913,12 @@ func seedTaggedSnapshot(t *testing.T, s *Persistence, ctx context.Context, snaps
 	}); err != nil {
 		t.Fatalf("CreateActorSnapshot(%s) failed: %v", snapshotName, err)
 	}
-	tagged, err := s.TagActorSnapshot(ctx, testAtespace, snapshotName, &ateapipb.ActorSnapshotTag{
+	tagged, err := s.CreateActorSnapshotTag(ctx, testAtespace, snapshotName, &ateapipb.ActorSnapshotTag{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: tagName},
 		Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
 	})
 	if err != nil {
-		t.Fatalf("TagActorSnapshot(%s) failed: %v", tagName, err)
+		t.Fatalf("CreateActorSnapshotTag(%s) failed: %v", tagName, err)
 	}
 	return tagged
 }
@@ -937,9 +944,9 @@ func TestUpdateActorSnapshotTag_MutateErrorAreNotRetried(t *testing.T) {
 		t.Errorf("mutate ran %d times, want exactly 1 (a rejected precondition must not be retried)", callsToMutateFn)
 	}
 
-	_, got, err := s.GetActorSnapshotByTag(ctx, testAtespace, "tag-1")
+	got, err := s.GetActorSnapshotTag(ctx, testAtespace, "tag-1")
 	if err != nil {
-		t.Fatalf("GetActorSnapshotByTag failed: %v", err)
+		t.Fatalf("GetActorSnapshotTag failed: %v", err)
 	}
 	if diff := cmp.Diff(tagged, got, protocmp.Transform()); diff != "" {
 		t.Errorf("aborted mutation was persisted (-tagged +got):\n%s", diff)
@@ -1027,9 +1034,9 @@ func TestUpdateActorSnapshotTag_RejectsImmutableFieldChange(t *testing.T) {
 				t.Errorf("UpdateActorSnapshotTag changing %s = %v, want an error containing %q", tt.name, err, want)
 			}
 
-			_, got, err := s.GetActorSnapshotByTag(ctx, testAtespace, "tag-1")
+			got, err := s.GetActorSnapshotTag(ctx, testAtespace, "tag-1")
 			if err != nil {
-				t.Fatalf("GetActorSnapshotByTag failed: %v", err)
+				t.Fatalf("GetActorSnapshotTag failed: %v", err)
 			}
 			if diff := cmp.Diff(tagged, got, protocmp.Transform()); diff != "" {
 				t.Errorf("rejected mutation was persisted anyway (-tagged +got):\n%s", diff)
@@ -1054,9 +1061,9 @@ func TestUpdateActorSnapshotTag_RetriesOnConcurrentWrite(t *testing.T) {
 		if attempts > 0 {
 			return
 		}
-		_, concurrent, err := s.GetActorSnapshotByTag(ctx, testAtespace, "tag-1")
+		concurrent, err := s.GetActorSnapshotTag(ctx, testAtespace, "tag-1")
 		if err != nil {
-			t.Errorf("GetActorSnapshotByTag for concurrent write failed: %v", err)
+			t.Errorf("GetActorSnapshotTag for concurrent write failed: %v", err)
 			return
 		}
 		// Repointing the tag is not something a mutation may do, but a writer
@@ -1113,12 +1120,12 @@ func TestUpdateActorSnapshotTag_RejectsStaleUID(t *testing.T) {
 	if _, err := s.DeleteActorSnapshotTag(ctx, testAtespace, "tag-1"); err != nil {
 		t.Fatalf("DeleteActorSnapshotTag failed: %v", err)
 	}
-	recreated, err := s.TagActorSnapshot(ctx, testAtespace, "snapshot-1", &ateapipb.ActorSnapshotTag{
+	recreated, err := s.CreateActorSnapshotTag(ctx, testAtespace, "snapshot-1", &ateapipb.ActorSnapshotTag{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "tag-1"},
 		Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
 	})
 	if err != nil {
-		t.Fatalf("re-tag TagActorSnapshot failed: %v", err)
+		t.Fatalf("re-tag CreateActorSnapshotTag failed: %v", err)
 	}
 	if recreated.GetMetadata().GetUid() == original.GetMetadata().GetUid() {
 		t.Fatalf("recreated tag reused uid %s, want a fresh one", recreated.GetMetadata().GetUid())
@@ -1148,9 +1155,9 @@ func TestUpdateActorSnapshotTag_RejectsStaleUID(t *testing.T) {
 		t.Errorf("UpdateActorSnapshotTag error = %v, want no store.ErrVersionConflict match: no version was pinned", err)
 	}
 
-	_, stored, err := s.GetActorSnapshotByTag(ctx, testAtespace, "tag-1")
+	stored, err := s.GetActorSnapshotTag(ctx, testAtespace, "tag-1")
 	if err != nil {
-		t.Fatalf("GetActorSnapshotByTag failed: %v", err)
+		t.Fatalf("GetActorSnapshotTag failed: %v", err)
 	}
 	if diff := cmp.Diff(recreated, stored, protocmp.Transform()); diff != "" {
 		t.Errorf("the rejected update still wrote (-recreated +stored):\n%s", diff)
@@ -1964,17 +1971,17 @@ func TestDeleteAtespace_WithTags_Rejected(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("CreateActorSnapshot: %v", err)
 	}
-	if _, err := s.TagActorSnapshot(ctx, "team-a", "snapshot-1", &ateapipb.ActorSnapshotTag{
+	if _, err := s.CreateActorSnapshotTag(ctx, "team-a", "snapshot-1", &ateapipb.ActorSnapshotTag{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "keep-me"},
 		Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED,
 	}); err != nil {
-		t.Fatalf("TagActorSnapshot: %v", err)
+		t.Fatalf("CreateActorSnapshotTag: %v", err)
 	}
 	if _, err := s.DeleteAtespace(ctx, "team-a"); !errors.Is(err, store.ErrFailedPrecondition) {
 		t.Fatalf("DeleteAtespace = %v, want ErrFailedPrecondition", err)
 	}
-	if _, _, err := s.GetActorSnapshotByTag(ctx, "team-a", "keep-me"); err != nil {
-		t.Fatalf("GetActorSnapshotByTag after rejected deletion: %v", err)
+	if _, err := s.GetActorSnapshotTag(ctx, "team-a", "keep-me"); err != nil {
+		t.Fatalf("GetActorSnapshotTag after rejected deletion: %v", err)
 	}
 	if _, err := s.GetAtespace(ctx, "team-a"); err != nil {
 		t.Fatalf("GetAtespace after rejected deletion: %v", err)

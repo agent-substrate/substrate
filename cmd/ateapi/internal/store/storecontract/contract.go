@@ -1392,35 +1392,39 @@ func RunContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
 			Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "production"},
 			Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
 		}
-		tag, err := s.TagActorSnapshot(ctx, "team-a", "snapshot-1", tagInput)
+		tag, err := s.CreateActorSnapshotTag(ctx, "team-a", "snapshot-1", tagInput)
 		if err != nil {
-			t.Fatalf("TagActorSnapshot failed: %v", err)
+			t.Fatalf("CreateActorSnapshotTag failed: %v", err)
 		}
 		if tag.GetSnapshot().GetAtespace() != "team-a" || tag.GetSnapshot().GetName() != "snapshot-1" {
 			t.Errorf("tag snapshot = %v, want team-a/snapshot-1", tag.GetSnapshot())
 		}
 		if tagInput.GetSnapshot() != nil || tagInput.GetMetadata().GetVersion() != 0 {
-			t.Errorf("TagActorSnapshot mutated its input: %v", tagInput)
+			t.Errorf("CreateActorSnapshotTag mutated its input: %v", tagInput)
 		}
-		idempotent, err := s.TagActorSnapshot(ctx, "team-a", "snapshot-1", tagInput)
+		idempotent, err := s.CreateActorSnapshotTag(ctx, "team-a", "snapshot-1", tagInput)
 		if err != nil || !proto.Equal(idempotent, tag) {
-			t.Errorf("idempotent TagActorSnapshot = (%v, %v), want existing tag", idempotent, err)
+			t.Errorf("idempotent CreateActorSnapshotTag = (%v, %v), want existing tag", idempotent, err)
 		}
 		conflicting := proto.Clone(tagInput).(*ateapipb.ActorSnapshotTag)
 		conflicting.Scope = ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED
-		if _, err := s.TagActorSnapshot(ctx, "team-a", "snapshot-1", conflicting); !errors.Is(err, store.ErrAlreadyExists) {
-			t.Errorf("conflicting TagActorSnapshot = %v, want ErrAlreadyExists", err)
+		if _, err := s.CreateActorSnapshotTag(ctx, "team-a", "snapshot-1", conflicting); !errors.Is(err, store.ErrAlreadyExists) {
+			t.Errorf("conflicting CreateActorSnapshotTag = %v, want ErrAlreadyExists", err)
 		}
-		if _, err := s.TagActorSnapshot(ctx, "team-a", "missing", &ateapipb.ActorSnapshotTag{Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "missing"}}); !errors.Is(err, store.ErrNotFound) {
+		if _, err := s.CreateActorSnapshotTag(ctx, "team-a", "missing", &ateapipb.ActorSnapshotTag{Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "missing"}}); !errors.Is(err, store.ErrNotFound) {
 			t.Errorf("tagging missing snapshot = %v, want ErrNotFound", err)
 		}
 
-		resolved, resolvedTag, err := s.GetActorSnapshotByTag(ctx, "team-a", "production")
+		resolvedTag, err := s.GetActorSnapshotTag(ctx, "team-a", "production")
 		if err != nil {
-			t.Fatalf("GetActorSnapshotByTag failed: %v", err)
+			t.Fatalf("GetActorSnapshotTag failed: %v", err)
 		}
-		if !proto.Equal(resolved, created) || !proto.Equal(resolvedTag, tag) {
-			t.Errorf("resolved tag = (%v, %v), want created snapshot and tag", resolved, resolvedTag)
+		if !proto.Equal(resolvedTag, tag) {
+			t.Errorf("resolved tag = %v, want created tag", resolvedTag)
+		}
+		resolved, err := s.GetActorSnapshot(ctx, resolvedTag.GetSnapshot().GetAtespace(), resolvedTag.GetSnapshot().GetName())
+		if err != nil || !proto.Equal(resolved, created) {
+			t.Errorf("GetActorSnapshot(resolved tag target) = (%v, %v), want created snapshot", resolved, err)
 		}
 
 		updated, err := s.UpdateActorSnapshotTag(ctx, "team-a", "production", store.WithPrecondition(tag, func(toUpdate *ateapipb.ActorSnapshotTag) error {
@@ -1447,8 +1451,8 @@ func RunContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
 		if err != nil || !proto.Equal(deleted, updated) {
 			t.Errorf("DeleteActorSnapshotTag = (%v, %v), want updated tag", deleted, err)
 		}
-		if _, _, err := s.GetActorSnapshotByTag(ctx, "team-a", "production"); !errors.Is(err, store.ErrNotFound) {
-			t.Errorf("deleted GetActorSnapshotByTag = %v, want ErrNotFound", err)
+		if _, err := s.GetActorSnapshotTag(ctx, "team-a", "production"); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("deleted GetActorSnapshotTag = %v, want ErrNotFound", err)
 		}
 		if _, err := s.DeleteAtespace(ctx, "team-a"); err != nil {
 			t.Errorf("DeleteAtespace after tag deletion = %v, want nil", err)

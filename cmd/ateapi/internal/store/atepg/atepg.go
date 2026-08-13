@@ -949,8 +949,21 @@ func (p *Persistence) GetActorSnapshot(ctx context.Context, atespace, name strin
 	return getActorSnapshotRow(ctx, p.pool, atespace, name)
 }
 
-func (p *Persistence) GetActorSnapshotByTag(ctx context.Context, atespace, name string) (*ateapipb.ActorSnapshot, *ateapipb.ActorSnapshotTag, error) {
-	return p.getActorSnapshotByTag(ctx, p.pool, atespace, name)
+func (p *Persistence) GetActorSnapshotTag(ctx context.Context, atespace, name string) (*ateapipb.ActorSnapshotTag, error) {
+	var protoBytes []byte
+	if err := p.pool.QueryRow(ctx, `
+		SELECT proto FROM actor_snapshot_tags
+		WHERE atespace = $1 AND name = $2`, atespace, name).Scan(&protoBytes); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, store.ErrNotFound
+		}
+		return nil, fmt.Errorf("getting actor snapshot tag %s/%s: %w", atespace, name, err)
+	}
+	tag := &ateapipb.ActorSnapshotTag{}
+	if err := proto.Unmarshal(protoBytes, tag); err != nil {
+		return nil, fmt.Errorf("unmarshaling actor snapshot tag: %w", err)
+	}
+	return tag, nil
 }
 
 func (p *Persistence) ListActorSnapshots(ctx context.Context, atespace string, pageSize int32, pageTokenStr string) ([]*ateapipb.ActorSnapshot, string, error) {
@@ -1052,7 +1065,7 @@ func (p *Persistence) listActorSnapshotsGlobal(ctx context.Context, pageSize int
 	return result, nextToken, nil
 }
 
-func (p *Persistence) TagActorSnapshot(ctx context.Context, snapshotAtespace, snapshotName string, tag *ateapipb.ActorSnapshotTag) (*ateapipb.ActorSnapshotTag, error) {
+func (p *Persistence) CreateActorSnapshotTag(ctx context.Context, snapshotAtespace, snapshotName string, tag *ateapipb.ActorSnapshotTag) (*ateapipb.ActorSnapshotTag, error) {
 	tagAtespace := tag.GetMetadata().GetAtespace()
 	tagName := tag.GetMetadata().GetName()
 	dbTag := proto.Clone(tag).(*ateapipb.ActorSnapshotTag)
@@ -1180,31 +1193,6 @@ func (p *Persistence) UpdateActorSnapshotTag(ctx context.Context, atespace, name
 		return nil, fmt.Errorf("committing actor snapshot tag update: %w", err)
 	}
 	return dbTag, nil
-}
-
-func (p *Persistence) getActorSnapshotByTag(ctx context.Context, q querier, atespace, name string) (*ateapipb.ActorSnapshot, *ateapipb.ActorSnapshotTag, error) {
-	var snapshotBytes, tagBytes []byte
-	err := q.QueryRow(ctx, `
-		SELECT s.proto, t.proto
-		FROM actor_snapshot_tags AS t
-		JOIN actor_snapshots AS s
-		  ON s.atespace = t.snapshot_atespace AND s.name = t.snapshot_name
-		WHERE t.atespace = $1 AND t.name = $2`, atespace, name).Scan(&snapshotBytes, &tagBytes)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, nil, store.ErrNotFound
-		}
-		return nil, nil, fmt.Errorf("resolving actor snapshot tag %s/%s: %w", atespace, name, err)
-	}
-	snapshot := &ateapipb.ActorSnapshot{}
-	if err := proto.Unmarshal(snapshotBytes, snapshot); err != nil {
-		return nil, nil, fmt.Errorf("unmarshaling actor snapshot: %w", err)
-	}
-	tag := &ateapipb.ActorSnapshotTag{}
-	if err := proto.Unmarshal(tagBytes, tag); err != nil {
-		return nil, nil, fmt.Errorf("unmarshaling actor snapshot tag: %w", err)
-	}
-	return snapshot, tag, nil
 }
 
 func (p *Persistence) DeleteActorSnapshotTag(ctx context.Context, atespace, name string) (*ateapipb.ActorSnapshotTag, error) {

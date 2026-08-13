@@ -155,10 +155,10 @@ func TestDeleteActorTemplateVersion_TaggedGoldenSnapshotRollsBack(t *testing.T) 
 	}); err != nil {
 		t.Fatalf("CreateActorSnapshot failed: %v", err)
 	}
-	if _, err := s.TagActorSnapshot(ctx, "ate-golden", "golden-1", &ateapipb.ActorSnapshotTag{
+	if _, err := s.CreateActorSnapshotTag(ctx, "ate-golden", "golden-1", &ateapipb.ActorSnapshotTag{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "keep-golden"},
 	}); err != nil {
-		t.Fatalf("TagActorSnapshot failed: %v", err)
+		t.Fatalf("CreateActorSnapshotTag failed: %v", err)
 	}
 	version := newTestActorTemplateVersion("team-a", "tmpl-a-v1", "tmpl-a")
 	version.GoldenSnapshot = &ateapipb.ObjectRef{Atespace: "ate-golden", Name: "golden-1"}

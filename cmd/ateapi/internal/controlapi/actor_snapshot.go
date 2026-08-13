@@ -69,7 +69,7 @@ func (s *Service) GetActorSnapshotTag(ctx context.Context, req *ateapipb.GetActo
 	if errs := resources.ValidateObjectRef(req.GetTag(), field.NewPath("tag")); len(errs) > 0 {
 		return nil, status.Error(codes.InvalidArgument, errs.ToAggregate().Error())
 	}
-	_, tag, err := s.persistence.GetActorSnapshotByTag(ctx, req.GetTag().GetAtespace(), req.GetTag().GetName())
+	tag, err := s.persistence.GetActorSnapshotTag(ctx, req.GetTag().GetAtespace(), req.GetTag().GetName())
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, status.Error(codes.NotFound, "ActorSnapshot tag not found")
 	}
@@ -133,7 +133,7 @@ func (s *Service) CreateActorSnapshotTag(ctx context.Context, req *ateapipb.Crea
 	if !exists {
 		return nil, status.Errorf(codes.FailedPrecondition, "Atespace %s not found", req.GetTag().GetMetadata().GetAtespace())
 	}
-	tag, err := s.persistence.TagActorSnapshot(atespaceLock.Context(), ref.GetAtespace(), ref.GetName(), req.GetTag())
+	tag, err := s.persistence.CreateActorSnapshotTag(atespaceLock.Context(), ref.GetAtespace(), ref.GetName(), req.GetTag())
 	if errors.Is(err, store.ErrAlreadyExists) {
 		return nil, status.Errorf(codes.AlreadyExists, "ActorSnapshot tag %s/%s already exists", req.GetTag().GetMetadata().GetAtespace(), req.GetTag().GetMetadata().GetName())
 	}
@@ -224,11 +224,15 @@ func (s *Service) getActorSnapshot(ctx context.Context, canonical, tag *ateapipb
 		}
 		return snapshot, canonical, nil, nil
 	}
-	snapshot, resolvedTag, err := s.persistence.GetActorSnapshotByTag(ctx, tag.GetAtespace(), tag.GetName())
+	resolvedTag, err := s.persistence.GetActorSnapshotTag(ctx, tag.GetAtespace(), tag.GetName())
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	resolvedCanonical := &ateapipb.ObjectRef{Atespace: snapshot.GetMetadata().GetAtespace(), Name: snapshot.GetMetadata().GetName()}
+	resolvedCanonical := &ateapipb.ObjectRef{Atespace: resolvedTag.GetSnapshot().GetAtespace(), Name: resolvedTag.GetSnapshot().GetName()}
+	snapshot, err := s.persistence.GetActorSnapshot(ctx, resolvedCanonical.GetAtespace(), resolvedCanonical.GetName())
+	if err != nil {
+		return nil, nil, nil, err
+	}
 	return snapshot, resolvedCanonical, resolvedTag, nil
 }
 
