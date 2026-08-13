@@ -88,6 +88,34 @@ func MustCreateAtespace(t *testing.T, ctx context.Context, s store.Interface, na
 	}
 }
 
+// MustCreateActor ensures actor's parent atespace exists, then creates actor.
+// Use the store method directly only in tests that exercise missing-parent
+// behavior.
+func MustCreateActor(t *testing.T, ctx context.Context, s store.Interface, actor *ateapipb.Actor) *ateapipb.Actor {
+	t.Helper()
+	atespace := actor.GetMetadata().GetAtespace()
+	MustCreateAtespace(t, ctx, s, atespace)
+	created, err := s.CreateActor(ctx, actor)
+	if err != nil {
+		t.Fatalf("creating test actor %q/%q: %v", atespace, actor.GetMetadata().GetName(), err)
+	}
+	return created
+}
+
+// MustCreateActorSnapshot ensures snapshot's parent atespace exists, then
+// creates snapshot. Use the store method directly only in tests that exercise
+// missing-parent behavior.
+func MustCreateActorSnapshot(t *testing.T, ctx context.Context, s store.Interface, snapshot *ateapipb.ActorSnapshot) *ateapipb.ActorSnapshot {
+	t.Helper()
+	atespace := snapshot.GetMetadata().GetAtespace()
+	MustCreateAtespace(t, ctx, s, atespace)
+	created, err := s.CreateActorSnapshot(ctx, snapshot)
+	if err != nil {
+		t.Fatalf("creating test actor snapshot %q/%q: %v", atespace, snapshot.GetMetadata().GetName(), err)
+	}
+	return created
+}
+
 func requireAdminPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	containerOnce.Do(func() {

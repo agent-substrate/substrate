@@ -75,10 +75,7 @@ func seedWorkflowActor(t *testing.T, ctx context.Context, st store.Interface, ac
 	for _, opt := range opts {
 		opt(actor)
 	}
-	storetest.MustCreateAtespace(t, ctx, st, actorRef.Atespace)
-	if _, err := st.CreateActor(ctx, actor); err != nil {
-		t.Fatalf("seed actor: %v", err)
-	}
+	storetest.MustCreateActor(t, ctx, st, actor)
 }
 
 // allActorStates enumerates every ActorState value, for exhaustive

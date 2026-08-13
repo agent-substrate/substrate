@@ -345,14 +345,10 @@ func rpcServiceWithActorSnapshotTag(t *testing.T, tag *ateapipb.ActorSnapshotTag
 	t.Cleanup(cleanup)
 
 	atespace, name := tag.GetMetadata().GetAtespace(), tag.GetMetadata().GetName()
-	storetest.MustCreateAtespace(t, context.Background(), persistence, atespace)
-	snapshot, err := persistence.CreateActorSnapshot(context.Background(), &ateapipb.ActorSnapshot{
+	snapshot := storetest.MustCreateActorSnapshot(t, context.Background(), persistence, &ateapipb.ActorSnapshot{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: atespace, Name: "snapshot-" + name},
 		Status:   &ateapipb.ActorSnapshotStatus{SnapshotUri: "gs://my-bucket/snapshots/" + atespace + "/snapshot-" + name},
 	})
-	if err != nil {
-		t.Fatalf("Failed to CreateActorSnapshot: %v", err)
-	}
 	tag.Snapshot = &ateapipb.ObjectRef{Atespace: snapshot.GetMetadata().GetAtespace(), Name: snapshot.GetMetadata().GetName()}
 	created, err := persistence.CreateActorSnapshotTag(context.Background(), atespace, snapshot.GetMetadata().GetName(), tag)
 	if err != nil {

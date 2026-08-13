@@ -439,14 +439,9 @@ func TestUpdateActor_DeleteRecreateRace(t *testing.T) {
 
 	actorRef := resources.ActorRef{Atespace: testAtespace, Name: testActorID}
 
-	atespace := &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: actorRef.Atespace}}
-	if _, err := persistence.CreateAtespace(ctx, atespace); err != nil {
-		t.Fatalf("seed CreateAtespace: %v", err)
-	}
-
 	// Actor A: what the client reads, and what its uid precondition names.
 	// Freshly created, so it sits at version 1.
-	original, err := persistence.CreateActor(ctx, &ateapipb.Actor{
+	original := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
 		Metadata:               &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: testActorID},
 		ActorTemplateNamespace: "ns1",
 		ActorTemplateName:      "tmpl1",
@@ -455,14 +450,12 @@ func TestUpdateActor_DeleteRecreateRace(t *testing.T) {
 			WorkerAssignment: &ateapipb.WorkerAssignment{WorkerPod: "pod-a"},
 		},
 	})
-	if err != nil {
-		t.Fatalf("seed CreateActor: %v", err)
-	}
 
 	// A concurrent client deletes A and recreates the same atespace/name as a
 	// brand new actor B, in the window the handler used to leave open between
 	// its own read and the store's WATCH.
 	var recreated *ateapipb.Actor
+	var err error
 	racing := &conflictInjectingStore{
 		Interface: persistence,
 		inject: func() {
@@ -528,19 +521,12 @@ func TestUpdateActor_ConcurrentDisjointUpdates(t *testing.T) {
 
 	actorRef := resources.ActorRef{Atespace: testAtespace, Name: testActorID}
 
-	atespace := &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: actorRef.Atespace}}
-	if _, err := persistence.CreateAtespace(ctx, atespace); err != nil {
-		t.Fatalf("seed CreateAtespace: %v", err)
-	}
-	original, err := persistence.CreateActor(ctx, &ateapipb.Actor{
+	original := storetest.MustCreateActor(t, ctx, persistence, &ateapipb.Actor{
 		Metadata:               &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: testActorID},
 		ActorTemplateNamespace: "ns1",
 		ActorTemplateName:      "tmpl1",
 		Status:                 &ateapipb.ActorStatus{State: ateapipb.ActorState_ACTOR_STATE_RUNNING},
 	})
-	if err != nil {
-		t.Fatalf("seed CreateActor: %v", err)
-	}
 
 	// A suspend workflow bumps state (a field that a later update operation will not touch)
 	// inside the handler's read-modify-write window.
@@ -560,7 +546,7 @@ func TestUpdateActor_ConcurrentDisjointUpdates(t *testing.T) {
 	// Update operation is changing the worker_selector field, not the actor's state (like the concurrent op)
 	// This update must fail: the racing update bumped the version.
 	original.WorkerSelector = &ateapipb.Selector{MatchLabels: map[string]string{"tier": "paid"}}
-	_, err = svc.UpdateActor(ctx, &ateapipb.UpdateActorRequest{Actor: original})
+	_, err := svc.UpdateActor(ctx, &ateapipb.UpdateActorRequest{Actor: original})
 	if code := status.Code(err); code != codes.Aborted {
 		t.Errorf("UpdateActor error = %v (code %v), want code Aborted: the guarded version moved under the update", err, code)
 	}
@@ -614,12 +600,7 @@ func rpcServiceWithActor(t *testing.T, actor *ateapipb.Actor) (*RPCService, *ate
 	persistence, cleanup := storetest.SetupTestStore(t)
 	t.Cleanup(cleanup)
 
-	storetest.MustCreateAtespace(t, context.Background(), persistence, actor.GetMetadata().GetAtespace())
-
-	created, err := persistence.CreateActor(context.Background(), actor)
-	if err != nil {
-		t.Fatalf("Failed to CreateActor: %v", err)
-	}
+	created := storetest.MustCreateActor(t, context.Background(), persistence, actor)
 	return &RPCService{persistence: persistence}, created
 }
 
