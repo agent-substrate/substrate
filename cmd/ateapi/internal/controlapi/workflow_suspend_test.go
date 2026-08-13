@@ -20,14 +20,11 @@ import (
 	"testing"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/ateredis"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/internal/resources"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	"github.com/alicebob/miniredis/v2"
-	"github.com/redis/go-redis/v9"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -227,17 +224,10 @@ func TestSuspendActor_CrashesWhenSuspendingActorMissingWorkerPod(t *testing.T) {
 	}
 }
 
-// newTestPersistence returns a store backed by a throwaway miniredis.
+// newTestPersistence returns an isolated PostgreSQL-backed store.
 func newTestPersistence(t *testing.T) store.Interface {
-	t.Helper()
-	mr, err := miniredis.Run()
-	if err != nil {
-		t.Fatalf("failed to start miniredis: %v", err)
-	}
-	t.Cleanup(mr.Close)
-	rdb := redis.NewClusterClient(&redis.ClusterOptions{Addrs: []string{mr.Addr()}})
-	t.Cleanup(func() { rdb.Close() }) //nolint:errcheck // test cleanup
-	return ateredis.NewPersistence(rdb)
+	persistence, _ := storetest.SetupTestStore(t)
+	return persistence
 }
 
 // newDanglingDialer returns a dialer whose informer cache has no pods, so

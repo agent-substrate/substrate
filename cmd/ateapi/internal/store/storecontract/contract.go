@@ -93,9 +93,7 @@ func newTestWorker(name, pod string) *ateapipb.Worker {
 }
 
 // mustCreateAtespace creates the atespace an actor test is about to populate.
-// Backends that enforce the actor->atespace foreign key (atepg) reject
-// CreateActor for a nonexistent atespace, so every actor test needs a real
-// parent atespace even though ateredis doesn't check.
+// The PostgreSQL store enforces the actor->atespace foreign key.
 func mustCreateAtespace(t *testing.T, s store.Interface, name string) {
 	t.Helper()
 	if _, err := s.CreateAtespace(context.Background(), newTestAtespace(name)); err != nil {
@@ -129,9 +127,8 @@ func receiveEvent(t *testing.T, ch <-chan store.WorkerEvent) store.WorkerEvent {
 // against a fresh store.Interface built by setup for each subtest. setup is
 // responsible for its own cleanup (e.g. via t.Cleanup).
 //
-// Backend-specific behavior (e.g. ateredis's multi-shard pagination, atepg's
-// foreign-key races and transactional notifications) is NOT covered here; see
-// each backend's own test file for that.
+// PostgreSQL-specific behavior such as foreign-key races and transactional
+// notifications is not covered here; see atepg's own test file for that.
 func RunContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
 	runActorContractTests(t, setup)
 	runWorkerContractTests(t, setup)

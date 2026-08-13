@@ -43,7 +43,7 @@ Substrate is an early, fast moving product. It is full of debate and subject to 
 * **atenet-router:** Substrate runs Envoy with an `ext_proc` external processor to handle Actor ingress. The ext_proc extracts the Actor name and Atespace from the HTTP `Host` header, calls the Substrate API to resume the Actor and obtain its current worker assignment, and selects that worker as a dynamic backend. The router then connects with mTLS to `atunnel` on worker port 443; `atunnel` validates the router identity and forwards traffic only to the Actor currently assigned to that worker.
 * **Object Storage:** Used to store actor snapshots.  
 * **Filesystem support:** Container local filesystem is saved in snapshots, future integrations likely to include networked storage.  
-* **Substrate Database:** Currently Valkey (Redis-compatible API). The choice of backend database/interface is under active debate.  
+* **Substrate Database:** PostgreSQL.
 * **Kubernetes:** The underlying infrastructure that Substrate runs on is expected to be Kubernetes.
 
 # Threats and Mitigations

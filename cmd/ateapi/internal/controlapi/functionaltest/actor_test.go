@@ -1622,7 +1622,7 @@ func TestResumeActor_VolumeCreationRetrySuccess(t *testing.T) {
 // 1. Creates a mock ActorTemplate.
 // 2. Creates a mock Atelet Pod in 'ate-system' namespace on 'node1'.
 // 3. Creates a mock worker Pod in the test namespace on 'node1'.
-// 4. Waits for the WorkerPoolSyncer to mirror the worker to Redis.
+// 4. Waits for the WorkerPoolSyncer to mirror the worker to the store.
 // 5. Creates an actor (starts as SUSPENDED).
 // 6. Calls ResumeActor RPC.
 // 7. Verifies that the fake Atelet received the Restore call.
@@ -1954,7 +1954,7 @@ func TestResumeActor_Reentrancy(t *testing.T) {
 		t.Fatalf("expected ResumeActor to fail due to atelet error")
 	}
 
-	// Verify actor state is RESUMING in Redis!
+	// Verify actor state is RESUMING in the store.
 	actor, err := tc.persistence.GetActor(context.Background(), resources.ActorRef{Atespace: testAtespace, Name: name})
 	if err != nil {
 		t.Fatalf("failed to get actor from store: %v", err)
@@ -2012,7 +2012,7 @@ func TestResumeActor_ErrorStillStampsRefSpanIdentity(t *testing.T) {
 // 1. Creates a mock ActorTemplate.
 // 2. Creates a mock Atelet Pod on 'node1'.
 // 3. Creates a mock worker Pod on 'node1'.
-// 4. Waits for the WorkerPoolSyncer to mirror the worker to Redis.
+// 4. Waits for the WorkerPoolSyncer to mirror the worker to the store.
 // 5. Creates an actor.
 // 6. Calls ResumeActor to transition it to RUNNING.
 // 7. Calls SuspendActor RPC.
@@ -2205,7 +2205,7 @@ func TestSuspendActor(t *testing.T) {
 // 1. Creates a mock ActorTemplate.
 // 2. Creates a mock Atelet Pod on 'node1'.
 // 3. Creates a mock worker Pod on 'node1'.
-// 4. Waits for the WorkerPoolSyncer to mirror the worker to Redis.
+// 4. Waits for the WorkerPoolSyncer to mirror the worker to the store.
 // 5. Creates an actor.
 // 6. Calls ResumeActor to transition it to RUNNING.
 // 7. Calls PauseActor RPC.
@@ -2767,7 +2767,7 @@ func TestSuspendActor_DanglingWorker(t *testing.T) {
 		t.Errorf("expected FailedPrecondition error, got %v", err)
 	}
 
-	// 4. Verify it becomes CRASHED in Redis
+	// 4. Verify it becomes CRASHED in the store.
 	getResp, err := tc.client.GetActor(context.Background(), &ateapipb.GetActorRequest{
 		Actor: &ateapipb.ObjectRef{Atespace: testAtespace, Name: name},
 	})

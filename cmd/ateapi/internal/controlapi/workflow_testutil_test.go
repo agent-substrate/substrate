@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/internal/resources"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
@@ -74,6 +75,7 @@ func seedWorkflowActor(t *testing.T, ctx context.Context, st store.Interface, ac
 	for _, opt := range opts {
 		opt(actor)
 	}
+	storetest.MustCreateAtespace(t, ctx, st, actorRef.Atespace)
 	if _, err := st.CreateActor(ctx, actor); err != nil {
 		t.Fatalf("seed actor: %v", err)
 	}

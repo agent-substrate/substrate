@@ -37,10 +37,7 @@ import (
 func seedActor(t *testing.T, ctx context.Context, st store.Interface, actorRef resources.ActorRef) {
 	t.Helper()
 
-	atespace := &ateapipb.Atespace{Metadata: &ateapipb.ResourceMetadata{Name: actorRef.Atespace}}
-	if _, err := st.CreateAtespace(ctx, atespace); err != nil {
-		t.Fatalf("Failed to CreateAtespace: %v", err)
-	}
+	storetest.MustCreateAtespace(t, ctx, st, actorRef.Atespace)
 
 	if _, err := st.CreateActor(ctx, &ateapipb.Actor{
 		Metadata: &ateapipb.ResourceMetadata{Name: actorRef.Name, Atespace: actorRef.Atespace},

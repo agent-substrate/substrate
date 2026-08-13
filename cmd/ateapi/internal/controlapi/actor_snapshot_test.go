@@ -338,13 +338,14 @@ func TestCreateActorSnapshotTag_RejectsUnsetScope(t *testing.T) {
 }
 
 // rpcServiceWithActorSnapshotTag seeds an ActorSnapshot and a tag pointing at it
-// in a miniredis-backed store, and returns a RPCService over it.
+// in a PostgreSQL-backed store, and returns an RPCService over it.
 func rpcServiceWithActorSnapshotTag(t *testing.T, tag *ateapipb.ActorSnapshotTag) (*RPCService, *ateapipb.ActorSnapshotTag) {
 	t.Helper()
 	persistence, cleanup := storetest.SetupTestStore(t)
 	t.Cleanup(cleanup)
 
 	atespace, name := tag.GetMetadata().GetAtespace(), tag.GetMetadata().GetName()
+	storetest.MustCreateAtespace(t, context.Background(), persistence, atespace)
 	snapshot, err := persistence.CreateActorSnapshot(context.Background(), &ateapipb.ActorSnapshot{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: atespace, Name: "snapshot-" + name},
 		Status:   &ateapipb.ActorSnapshotStatus{SnapshotUri: "gs://my-bucket/snapshots/" + atespace + "/snapshot-" + name},
@@ -366,6 +367,7 @@ func TestUpdateActorSnapshotTag_DeleteRecreateRace(t *testing.T) {
 	ctx := context.Background()
 	persistence, cleanup := storetest.SetupTestStore(t)
 	t.Cleanup(cleanup)
+	storetest.MustCreateAtespace(t, ctx, persistence, testAtespace)
 
 	for _, name := range []string{"snapshot-1", "snapshot-2"} {
 		if _, err := persistence.CreateActorSnapshot(ctx, &ateapipb.ActorSnapshot{
@@ -438,6 +440,7 @@ func TestUpdateActorSnapshotTag_ConcurrentUpdate(t *testing.T) {
 	ctx := context.Background()
 	persistence, cleanup := storetest.SetupTestStore(t)
 	t.Cleanup(cleanup)
+	storetest.MustCreateAtespace(t, ctx, persistence, testAtespace)
 
 	if _, err := persistence.CreateActorSnapshot(ctx, &ateapipb.ActorSnapshot{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "snapshot-1"},

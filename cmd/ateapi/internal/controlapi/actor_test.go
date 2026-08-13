@@ -607,20 +607,14 @@ func withSelector(labels map[string]string) func(*ateapipb.UpdateActorRequest) {
 	}
 }
 
-// rpcServiceWithActor seeds one actor in a miniredis-backed store and returns a
+// rpcServiceWithActor seeds one actor in a PostgreSQL-backed store and returns an
 // RPCService over it.
 func rpcServiceWithActor(t *testing.T, actor *ateapipb.Actor) (*RPCService, *ateapipb.Actor) {
 	t.Helper()
 	persistence, cleanup := storetest.SetupTestStore(t)
 	t.Cleanup(cleanup)
 
-	atespace := &ateapipb.Atespace{
-		Metadata: &ateapipb.ResourceMetadata{Name: actor.Metadata.Atespace},
-	}
-	_, err := persistence.CreateAtespace(context.Background(), atespace)
-	if err != nil {
-		t.Fatalf("Failed to CreateAtespace: %v", err)
-	}
+	storetest.MustCreateAtespace(t, context.Background(), persistence, actor.GetMetadata().GetAtespace())
 
 	created, err := persistence.CreateActor(context.Background(), actor)
 	if err != nil {

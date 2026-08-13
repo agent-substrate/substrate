@@ -48,7 +48,6 @@ Below is a collection of finer-grained efforts which we believe align with the a
 
 ### Storage
 
-* Decide: Is Redis/ValKey the right answer for API storage?
 * gVisor snapshot/resume optimizations
   * storage tiering (local zswap, local SSD, peer-to-peer, blob)
   * incremental snapshots
@@ -79,7 +78,7 @@ Below is a collection of finer-grained efforts which we believe align with the a
 * Provisioning load test and benchmarking compute/infrastructure
 * Storage and visualization for benchmark results
 * Integrate debugging into load tests
-* State Store Scale: Horizontal sharding support (via Redis Hash Tags) to enable management of 1M+ concurrent actors.
+* State Store Scale: PostgreSQL scaling and partitioning support to enable management of 1M+ concurrent actors.
 * Disk-Only Resume Policy: Support for cost-optimized hibernation where only the filesystem state is preserved, skipping the RAM restore for stateless or "cold" start-capable agents.
 
 ### Testing

@@ -158,7 +158,7 @@ func (h *Impl) MakeCert(ctx context.Context, pcr *certsv1beta1.PodCertificateReq
 		KeyUsage:              x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:           extKeyUsages(pod, pcr.ObjectMeta.Namespace, pcr.Spec.ServiceAccountName),
 		// Link the leaf to its issuing CA by key id so verifiers can disambiguate
-		// a multi-CA trust bundle (e.g. valkey trusts both the servicedns and
+		// a multi-CA trust bundle when a service trusts both the servicedns and
 		// podidentity CAs).
 		// https://datatracker.ietf.org/doc/html/rfc5280#section-4.2.1.1
 		AuthorityKeyId: parent.SubjectKeyId,

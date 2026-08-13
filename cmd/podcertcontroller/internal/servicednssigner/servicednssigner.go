@@ -175,7 +175,7 @@ func (h *Impl) MakeCert(ctx context.Context, pcr *certsv1beta1.PodCertificateReq
 		DNSNames:              dnsNames,
 		KeyUsage:              x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth, x509.ExtKeyUsageServerAuth},
-		// Link the leaf to its issuing CA by key id. Needed this for Valkey
+		// Link the leaf to its issuing CA by key id. Services use this
 		// to understand which CA to use when validating a client cert.
 		AuthorityKeyId: parent.SubjectKeyId,
 	}

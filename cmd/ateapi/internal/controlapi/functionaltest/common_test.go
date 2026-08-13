@@ -23,7 +23,8 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/controlapi"
-	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/ateredis"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/workercache"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/resources"
@@ -33,8 +34,6 @@ import (
 	"github.com/agent-substrate/substrate/pkg/client/informers/externalversions"
 	listersv1alpha1 "github.com/agent-substrate/substrate/pkg/client/listers/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
-	"github.com/alicebob/miniredis/v2"
-	"github.com/redis/go-redis/v9"
 	"go.opentelemetry.io/otel/attribute"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
@@ -75,12 +74,11 @@ var (
 )
 
 type testContext struct {
-	mr                  *miniredis.Miniredis
 	service             *controlapi.RPCService
 	client              ateapipb.ControlClient
 	k8sClient           kubernetes.Interface
 	substrateClient     versioned.Interface
-	persistence         *ateredis.Persistence
+	persistence         store.Interface
 	workerCache         *workercache.Cache
 	fakeAtelet          *FakeAteletServer
 	cleanup             func()
@@ -107,27 +105,19 @@ func setupTest(t *testing.T, ns string) *testContext {
 // test owns its own plugin set.
 func setupTestWithVolumePlugins(t *testing.T, ns string, plugins map[string]volume.VolumePluginControlPlane) *testContext {
 	t.Helper()
-	// 1. Start Miniredis
-	mr, err := miniredis.Run()
-	if err != nil {
-		t.Fatalf("failed to start miniredis: %v", err)
-	}
-
-	rdb := redis.NewClusterClient(&redis.ClusterOptions{
-		Addrs: []string{mr.Addr()},
-	})
-	persistence := ateredis.NewPersistence(rdb)
+	// 1. Start an isolated PostgreSQL-backed store.
+	persistence, cleanupStore := storetest.SetupTestStore(t)
 
 	// 2. Initialize Clientsets using global cfg
 	k8sClient, err := kubernetes.NewForConfig(cfg)
 	if err != nil {
-		mr.Close()
+		cleanupStore()
 		t.Fatalf("failed to create k8s clientset: %v", err)
 	}
 
 	substrateClient, err := versioned.NewForConfig(cfg)
 	if err != nil {
-		mr.Close()
+		cleanupStore()
 		t.Fatalf("failed to create substrate clientset: %v", err)
 	}
 
@@ -162,7 +152,7 @@ func setupTestWithVolumePlugins(t *testing.T, ns string, plugins map[string]volu
 	wc := workercache.New(persistence, 5*time.Minute)
 	if err := wc.Start(ctx); err != nil {
 		cancel()
-		mr.Close()
+		cleanupStore()
 		t.Fatalf("failed to start worker cache: %v", err)
 	}
 
@@ -177,7 +167,7 @@ func setupTestWithVolumePlugins(t *testing.T, ns string, plugins map[string]volu
 	instruments, err := controlapi.NewInstruments(sdkmetric.NewMeterProvider(sdkmetric.WithReader(metricReader)).Meter("ateapi"))
 	if err != nil {
 		cancel()
-		mr.Close()
+		cleanupStore()
 		t.Fatalf("failed to create metric instruments: %v", err)
 	}
 	volPlugins := plugins
@@ -200,7 +190,7 @@ func setupTestWithVolumePlugins(t *testing.T, ns string, plugins map[string]volu
 	lis, err := net.Listen("tcp", "localhost:0")
 	if err != nil {
 		cancel()
-		mr.Close()
+		cleanupStore()
 		t.Fatalf("failed to listen: %v", err)
 	}
 
@@ -214,7 +204,7 @@ func setupTestWithVolumePlugins(t *testing.T, ns string, plugins map[string]volu
 	if err != nil {
 		grpcServer.Stop()
 		cancel()
-		mr.Close()
+		cleanupStore()
 		t.Fatalf("failed to connect: %v", err)
 	}
 
@@ -231,7 +221,7 @@ func setupTestWithVolumePlugins(t *testing.T, ns string, plugins map[string]volu
 		conn.Close()
 		grpcServer.Stop()
 		cancel()
-		mr.Close()
+		cleanupStore()
 		t.Fatalf("failed to create namespace %s: %v", ns, err)
 	}
 
@@ -240,7 +230,7 @@ func setupTestWithVolumePlugins(t *testing.T, ns string, plugins map[string]volu
 		conn.Close()
 		grpcServer.Stop()
 		cancel()
-		mr.Close()
+		cleanupStore()
 		t.Fatalf("failed to seed test atespace %q: %v", testAtespace, err)
 	}
 
@@ -248,12 +238,10 @@ func setupTestWithVolumePlugins(t *testing.T, ns string, plugins map[string]volu
 		conn.Close()
 		grpcServer.Stop()
 		cancel()
-		rdb.Close()
-		mr.Close()
+		cleanupStore()
 	}
 
 	return &testContext{
-		mr:                  mr,
 		service:             service,
 		client:              client,
 		k8sClient:           k8sClient,

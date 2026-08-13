@@ -226,7 +226,7 @@ environment definitions.
 
 These resources represent the high-frequency, ephemeral state of individual
 actors and workers. They are stored in a high-performance, low-latency state
-store (currently ValKey/Redis) to support real-time operations.
+store (PostgreSQL) to support real-time operations.
 
   * **Actor**: A specific instance of an ActorTemplate. An Actor record tracks
     its globally unique identifier, physical location (Worker IP), current
@@ -303,7 +303,7 @@ The brain of the system. It exposes a gRPC API for the data plane and CLI to
 manage actor lifecycles.
 
   * **State Store**: Tracks the mapping of Actors to Workers in a
-    high-performance Redis store.
+    PostgreSQL store.
 
   * **Scheduler**: Selects a ready worker for a resumption request.
 
