@@ -332,25 +332,23 @@ func TestUpdateActorSnapshotTag_UnsetScopeDoesNotUnpublish(t *testing.T) {
 	}
 }
 
-// TestTagActorSnapshot_RejectsUnsetScope checks that scope is required at
+// TestCreateActorSnapshotTag_RejectsUnsetScope checks that scope is required at
 // creation.
-func TestTagActorSnapshot_RejectsUnsetScope(t *testing.T) {
+func TestCreateActorSnapshotTag_RejectsUnsetScope(t *testing.T) {
 	ctx := context.Background()
 	svc, stored := serviceWithActorSnapshotTag(t, &ateapipb.ActorSnapshotTag{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "tag1"},
 		Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
 	})
 
-	_, err := svc.TagActorSnapshot(ctx, &ateapipb.TagActorSnapshotRequest{
-		Snapshot: &ateapipb.ActorSnapshotRef{
-			Reference: &ateapipb.ActorSnapshotRef_Snapshot{Snapshot: stored.GetSnapshot()},
-		},
+	_, err := svc.CreateActorSnapshotTag(ctx, &ateapipb.CreateActorSnapshotTagRequest{
+		Snapshot: stored.GetSnapshot(),
 		Tag: &ateapipb.ActorSnapshotTag{
 			Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "tag2"},
 		},
 	})
 	if code := status.Code(err); code != codes.InvalidArgument {
-		t.Errorf("TagActorSnapshot error = %v (code %v), want code InvalidArgument", err, code)
+		t.Errorf("CreateActorSnapshotTag error = %v (code %v), want code InvalidArgument", err, code)
 	}
 }
 
