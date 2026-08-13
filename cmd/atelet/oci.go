@@ -29,6 +29,7 @@ import (
 	"github.com/opencontainers/runtime-spec/specs-go"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 )
@@ -77,9 +78,25 @@ func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, acto
 		}
 	}
 
-	img, err := imageCache.EnsureImage(ctx, ref)
-	if err != nil {
-		return fmt.Errorf("in imageCache.EnsureImage: %w", err)
+	var (
+		img          *imagecache.Image
+		imageVolumes []imagecache.ImageVolumeOverlay
+	)
+	g, gctx := errgroup.WithContext(ctx)
+	g.Go(func() error {
+		var err error
+		if img, err = imageCache.EnsureImage(gctx, ref); err != nil {
+			return fmt.Errorf("in imageCache.EnsureImage: %w", err)
+		}
+		return nil
+	})
+	g.Go(func() error {
+		var err error
+		imageVolumes, err = resolveImageVolumes(gctx, imageCache, volumes, volumeMounts)
+		return err
+	})
+	if err := g.Wait(); err != nil {
+		return err
 	}
 
 	// Argv and env need only the image config; resolve them before writing
@@ -102,14 +119,15 @@ func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, acto
 		extraDirs = append(extraDirs, vm.GetMountPath())
 	}
 	if err := imagecache.WriteSpec(bundlePath, &imagecache.OverlaySpec{
-		ImageDigest: img.Digest.String(),
-		Layers:      img.LayerDirs,
-		ExtraDirs:   extraDirs,
+		ImageDigest:  img.Digest.String(),
+		Layers:       img.LayerDirs,
+		ExtraDirs:    extraDirs,
+		ImageVolumes: imageVolumes,
 	}); err != nil {
 		return fmt.Errorf("while writing overlay spec: %w", err)
 	}
 
-	ociSpec := buildActorOCISpec(actorUID, resolvedArgs, resolvedEnv, annotations, netns, identityDir, volumes, volumeMounts)
+	ociSpec := buildActorOCISpec(actorUID, containerName, resolvedArgs, resolvedEnv, annotations, netns, identityDir, volumes, volumeMounts)
 	ociSpecBytes, err := json.MarshalIndent(ociSpec, "", "  ")
 	if err != nil {
 		return fmt.Errorf("while marshaling OCI spec: %w", err)
@@ -120,6 +138,46 @@ func prepareOCIDirectory(ctx context.Context, imageCache *imagecache.Store, acto
 	}
 
 	return nil
+}
+
+// resolveImageVolumes pulls the image behind every image-typed volume this
+// container mounts and returns what the overlay spec needs to compose each.
+func resolveImageVolumes(ctx context.Context, imageCache *imagecache.Store, volumes []*ateletpb.Volume, volumeMounts []*ateletpb.VolumeMount) ([]imagecache.ImageVolumeOverlay, error) {
+	mounted := make(map[string]bool, len(volumeMounts))
+	for _, vm := range volumeMounts {
+		mounted[vm.GetName()] = true
+	}
+
+	var wanted []*ateletpb.Volume
+	for _, vol := range volumes {
+		if vol.GetType() != ateletpb.VolumeType_VOLUME_TYPE_IMAGE || !mounted[vol.GetName()] {
+			continue
+		}
+		wanted = append(wanted, vol)
+	}
+
+	// Pull the volumes concurrently; each entry lands at its own index so the
+	// spec order stays the template order.
+	out := make([]imagecache.ImageVolumeOverlay, len(wanted))
+	g, gctx := errgroup.WithContext(ctx)
+	for i, vol := range wanted {
+		g.Go(func() error {
+			img, err := imageCache.EnsureImage(gctx, vol.GetImage().GetReference())
+			if err != nil {
+				return fmt.Errorf("in imageCache.EnsureImage for volume %q: %w", vol.GetName(), err)
+			}
+			out[i] = imagecache.ImageVolumeOverlay{
+				Name:        vol.GetName(),
+				ImageDigest: img.Digest.String(),
+				Layers:      img.LayerDirs,
+			}
+			return nil
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return nil, err
+	}
+	return out, nil
 }
 
 // resolveActorEnv computes the final container environment from the image's ENV
@@ -186,7 +244,7 @@ func resolveProcessArgs(imageCfg *v1.Config, command, args []string) ([]string, 
 // When identityDir is non-empty it adds a read-only bind mount of that host
 // directory at IdentityMountPath so the actor can read its own ID (see
 // IdentityMountPath for why this is a bind mount rather than env vars).
-func buildActorOCISpec(actorUID string, args []string, env []string, annotations map[string]string, netns string, identityDir string, volumes []*ateletpb.Volume, volumeMounts []*ateletpb.VolumeMount) *specs.Spec {
+func buildActorOCISpec(actorUID, containerName string, args []string, env []string, annotations map[string]string, netns string, identityDir string, volumes []*ateletpb.Volume, volumeMounts []*ateletpb.VolumeMount) *specs.Spec {
 	mounts := []specs.Mount{
 		{
 			Destination: "/proc",
@@ -302,11 +360,15 @@ func buildActorOCISpec(actorUID string, args []string, env []string, annotations
 
 	for _, vm := range volumeMounts {
 		var srcPath string
+		access := "rw"
 		switch volumeTypes[vm.GetName()] {
 		case ateletpb.VolumeType_VOLUME_TYPE_DURABLE_DIR:
 			srcPath = ateompath.DurableDirVolumeMountPoint(actorUID, vm.GetName())
 		case ateletpb.VolumeType_VOLUME_TYPE_EXTERNAL:
 			srcPath = ateompath.VolumeHostPath(actorUID, vm.GetName())
+		case ateletpb.VolumeType_VOLUME_TYPE_IMAGE:
+			srcPath = ateompath.ImageVolumeMountPath(actorUID, containerName, vm.GetName())
+			access = "ro"
 		default:
 			continue
 		}
@@ -314,7 +376,7 @@ func buildActorOCISpec(actorUID string, args []string, env []string, annotations
 			Destination: vm.GetMountPath(),
 			Type:        "bind",
 			Source:      srcPath,
-			Options:     []string{"bind", "rw"},
+			Options:     []string{"bind", access},
 		})
 	}
 

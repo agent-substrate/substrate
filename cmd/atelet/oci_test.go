@@ -23,12 +23,13 @@ import (
 	"github.com/agent-substrate/substrate/internal/ateompath"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
+	specs "github.com/opencontainers/runtime-spec/specs-go"
 )
 
 // With an identity dir, a read-only bind mount appears at IdentityMountPath.
 func TestBuildActorOCISpec_IdentityMount(t *testing.T) {
 	spec := buildActorOCISpec(
-		"actor_uid",
+		"actor_uid", "app",
 		[]string{"/app"},
 		[]string{"FOO=bar"},
 		map[string]string{"k": "v"},
@@ -194,7 +195,7 @@ func TestResolveProcessArgs(t *testing.T) {
 
 // Without an identity dir (the pause container), no identity mount appears.
 func TestBuildActorOCISpec_NoIdentityMountForPause(t *testing.T) {
-	bare := buildActorOCISpec("actor_uid", []string{"/pause"}, nil, nil, "/run/netns/x", "", nil, nil)
+	bare := buildActorOCISpec("actor_uid", "app", []string{"/pause"}, nil, nil, "/run/netns/x", "", nil, nil)
 	for _, m := range bare.Mounts {
 		if m.Destination == IdentityMountPath {
 			t.Errorf("identity mount must be absent when identityDir is empty")
@@ -215,7 +216,7 @@ func TestBuildActorOCISpec_DurableDirVolumeMounts(t *testing.T) {
 		{Name: "cache", Type: ateletpb.VolumeType_VOLUME_TYPE_DURABLE_DIR},
 	}
 	spec := buildActorOCISpec(
-		actorUID,
+		actorUID, "app",
 		[]string{"/app"}, nil, nil,
 		"/run/netns/x",
 		"",
@@ -241,5 +242,44 @@ func TestBuildActorOCISpec_DurableDirVolumeMounts(t *testing.T) {
 		if !found {
 			t.Fatalf("durable-dir mount for %q missing; mounts=%v", vm.MountPath, spec.Mounts)
 		}
+	}
+}
+
+// An image volume binds the layer directory resolved for it, read-only.
+func TestBuildActorOCISpec_ImageVolumeMounts(t *testing.T) {
+	volumes := []*ateletpb.Volume{
+		{Name: "agent", Type: ateletpb.VolumeType_VOLUME_TYPE_IMAGE},
+		{Name: "data", Type: ateletpb.VolumeType_VOLUME_TYPE_DURABLE_DIR},
+	}
+	mounts := []*ateletpb.VolumeMount{
+		{Name: "agent", MountPath: "/ate"},
+		{Name: "data", MountPath: "/var/data"},
+	}
+	spec := buildActorOCISpec(
+		"actor_uid", "app",
+		[]string{"/ate/payload-binary"}, nil, nil,
+		"/run/netns/x",
+		"",
+		volumes,
+		mounts,
+	)
+
+	var got *specs.Mount
+	for i, m := range spec.Mounts {
+		if m.Destination == "/ate" {
+			got = &spec.Mounts[i]
+		}
+	}
+	if got == nil {
+		t.Fatalf("image volume mount for /ate missing; mounts=%v", spec.Mounts)
+	}
+	if want := ateompath.ImageVolumeMountPath("actor_uid", "app", "agent"); got.Source != want {
+		t.Errorf("image volume source = %q, want %q", got.Source, want)
+	}
+	if got.Type != "bind" {
+		t.Errorf("image volume type = %q, want bind", got.Type)
+	}
+	if want := []string{"bind", "ro"}; !slices.Equal(got.Options, want) {
+		t.Errorf("image volume options = %v, want %v", got.Options, want)
 	}
 }
