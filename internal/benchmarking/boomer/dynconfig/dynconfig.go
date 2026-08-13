@@ -31,12 +31,28 @@ import (
 	"github.com/myzhan/boomer"
 )
 
+// Resume modes. Explicit issues a ResumeActor RPC before sending traffic.
+// Implicit issues no wake request at all: the actor stays suspended until a
+// request reaches the atenet router, which wakes it while the request is
+// parked.
+const (
+	ResumeModeExplicit = "explicit"
+	ResumeModeImplicit = "implicit"
+
+	ReadModeData   = "data"
+	ReadModeDigest = "digest"
+)
+
 // Config is the dynamic-mutable subset of boomer's behavior. Holder swaps
 // it atomically so task goroutines read a consistent snapshot.
 type Config struct {
 	MinWait          time.Duration
 	MaxWait          time.Duration
 	TraceProbability float64
+	DurDirFileSize   int64  // bytes
+	ResumeMode       string // ResumeModeExplicit | ResumeModeImplicit
+	DurDirReadMode   string // ReadModeData | ReadModeDigest
+	DurDirTemplate   string // ActorTemplate name
 }
 
 // Holder lets readers Load() the current Config and writers Store() a new
@@ -70,6 +86,10 @@ type payload struct {
 	TraceProbability *float64 `json:"trace_probability"`
 	MinWaitTime      *float64 `json:"min_wait_time"`
 	MaxWaitTime      *float64 `json:"max_wait_time"`
+	DurDirFileSize   *float64 `json:"durdir_file_size_bytes"`
+	ResumeMode       *string  `json:"resume_mode"`
+	DurDirReadMode   *string  `json:"durdir_read_mode"`
+	DurDirTemplate   *string  `json:"durdir_template"`
 }
 
 // Parse decodes a JSON blob (typically from a CLI flag) and merges its
@@ -122,6 +142,18 @@ func (p payload) merge(current Config) Config {
 	if p.MaxWaitTime != nil {
 		out.MaxWait = time.Duration(*p.MaxWaitTime * float64(time.Second))
 	}
+	if p.DurDirFileSize != nil {
+		out.DurDirFileSize = int64(*p.DurDirFileSize)
+	}
+	if p.ResumeMode != nil {
+		out.ResumeMode = *p.ResumeMode
+	}
+	if p.DurDirReadMode != nil {
+		out.DurDirReadMode = *p.DurDirReadMode
+	}
+	if p.DurDirTemplate != nil {
+		out.DurDirTemplate = *p.DurDirTemplate
+	}
 	return out
 }
 
@@ -148,6 +180,10 @@ func SubscribeSpawn(url string, holder *Holder, sampler ProbabilityUpdater, fetc
 			slog.Float64("trace_probability", next.TraceProbability),
 			slog.Duration("min_wait", next.MinWait),
 			slog.Duration("max_wait", next.MaxWait),
+			slog.Int64("durdir_file_size_bytes", next.DurDirFileSize),
+			slog.String("resume_mode", next.ResumeMode),
+			slog.String("durdir_read_mode", next.DurDirReadMode),
+			slog.String("durdir_template", next.DurDirTemplate),
 		)
 	})
 }
