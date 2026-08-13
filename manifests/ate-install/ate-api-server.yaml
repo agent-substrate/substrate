@@ -88,13 +88,7 @@ spec:
         image: ko://github.com/agent-substrate/substrate/cmd/ateapi
         args:
           - "--grpc-server-cred-bundle=/run/servicedns.podcert.ate.dev/credential-bundle.pem"
-          - --redis-cluster-address=@env
-          - --redis-ca-certs=/run/servicedns.podcert.ate.dev/trust-bundle.pem
-          - --redis-use-iam-auth=@env
-          - --redis-tls-server-name=@env
-          - --redis-client-cert=@env
           - --authentication-config=/etc/ateapi/authentication/authentication.yaml
-          - --store-backend=@env
           - --postgres-connection-string=@env
           - --actor-id-jwt-pool=/run/actor-id-jwt-pool/pool.json
           - --actor-id-ca-pool=/run/actor-id-ca-pool/pool.json
@@ -131,7 +125,7 @@ spec:
         - configMapRef:
             name: ate-otel-config
         # Inject env vars from a ConfigMap created by each developer.  This lets
-        # each developer customize their own redis address, etc, without having
+        # each developer customize their own PostgreSQL connection settings without having
         # to edit this manifest, which can remain constant across all
         # developers.
         - configMapRef:

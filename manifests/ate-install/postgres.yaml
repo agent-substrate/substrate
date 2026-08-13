@@ -29,8 +29,8 @@ data:
     # Local socket access is limited to processes in this pod and is used by
     # health checks and the workload's idempotent database bootstrap.
     local all all trust
-    # Auth mirrors valkey.yaml's model. PostgreSQL does not need its own serving
-    # CA here because it never verifies its own server certificate.
+    # PostgreSQL verifies client certificates against the pod-identity CA. It
+    # does not need its own serving CA because it never verifies its server certificate.
     hostssl all all all trust clientcert=verify-ca
 ---
 apiVersion: v1
