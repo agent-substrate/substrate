@@ -48,6 +48,30 @@ func whoami(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, resp)
 }
 
+// readfile reports the contents of a path inside the actor, so a test can
+// assert on what a volume actually delivered.
+func readfile(w http.ResponseWriter, r *http.Request) {
+	path := r.URL.Query().Get("path")
+	resp := map[string]string{"path": path}
+	if b, err := os.ReadFile(path); err == nil {
+		resp["content"] = string(b)
+	} else {
+		resp["error"] = err.Error()
+	}
+	writeJSON(w, resp)
+}
+
+func writefile(w http.ResponseWriter, r *http.Request) {
+	path := r.URL.Query().Get("path")
+	resp := map[string]string{"path": path}
+	if err := os.WriteFile(path, []byte("written by probe"), 0o644); err != nil {
+		resp["error"] = err.Error()
+	} else {
+		resp["ok"] = "true"
+	}
+	writeJSON(w, resp)
+}
+
 func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(v); err != nil {
@@ -58,6 +82,8 @@ func writeJSON(w http.ResponseWriter, v any) {
 func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/whoami", whoami)
+	mux.HandleFunc("/readfile", readfile)
+	mux.HandleFunc("/writefile", writefile)
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 
 	const addr = ":80"
