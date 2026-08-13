@@ -14,6 +14,11 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
+// substrate: modified from upstream k8s.io/kubernetes/pkg/volume/util —
+// package renamed, klog→slog with context threading, errors wrapped instead
+// of logged, logContext and ResolvesFsUser removed. See README.md for the
+// full modification list.
+
 package atomicwriter
 
 import (
