@@ -37,12 +37,15 @@ data:
   envoy.yaml: |
     admin:
       address:
-        socket_address: { address: 0.0.0.0, port_value: 15000 }
+        # ipv4_compat is load-bearing: see --envoy-admin-address below.
+        socket_address: { address: "::", ipv4_compat: true, port_value: 15000 }
     static_resources:
       listeners:
       - name: egress
         address:
-          socket_address: { address: 0.0.0.0, port_value: 443 }
+          # ipv4_compat rather than a second socket: IPv4 peers arrive as
+          # ::ffff: and nothing here reads the peer -- identity is the cert.
+          socket_address: { address: "::", ipv4_compat: true, port_value: 443 }
         filter_chains:
         # Named so ext_proc can read it back as xds.filter_chain_name. Must
         # match EgressFilterChainName in
@@ -379,6 +382,8 @@ metadata:
   namespace: ate-system
 spec:
   type: ClusterIP
+  # Prefer, not Require: Require fails Service creation on a single-stack cluster.
+  ipFamilyPolicy: PreferDualStack
   selector:
     app: atenet-egress
   ports:
