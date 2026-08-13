@@ -142,10 +142,12 @@ func TestMapResumeError(t *testing.T) {
 			wantBody: `actor team-a/ctr6 authentication required`,
 		},
 		{
-			name:     "ResourceExhausted maps to 429",
-			err:      status.Error(codes.ResourceExhausted, "quota"),
-			wantCode: envoy_type.StatusCode_TooManyRequests,
-			wantBody: `actor team-a/ctr6 rate limited`,
+			// Pool saturation is 503, not 429: the fleet is full, the caller
+			// did not send too many requests.
+			name:     "ResourceExhausted maps to 503 preserving the description",
+			err:      status.Error(codes.ResourceExhausted, "no free workers available"),
+			wantCode: envoy_type.StatusCode_ServiceUnavailable,
+			wantBody: `actor team-a/ctr6 unavailable: no free workers available`,
 		},
 		{
 			name:     "unknown gRPC code maps to 500 without leaking desc",

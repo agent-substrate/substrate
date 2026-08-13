@@ -20,7 +20,7 @@ Envoy --(ext_proc RequestHeaders)--> router.handleRequestHeaders
 `ateapi`'s `AssignWorkerStep` claims a free worker from the actor's `WorkerPool`.
 In an oversubscribed system — the core premise of Substrate, where many actors
 multiplex onto few workers — a burst of traffic can momentarily exhaust the
-pool. `AssignWorkerStep` then returns `FailedPrecondition: "no free workers
+pool. `AssignWorkerStep` then returns `ResourceExhausted: "no free workers
 available"`.
 
 Previously the router mapped that straight to an HTTP `503` and failed the
@@ -30,12 +30,12 @@ user-visible error.
 
 ## Behavior
 
-With parking enabled (the default), the router treats `FailedPrecondition` and
-`Unavailable` from `ResumeActor` as **retryable** conditions (alongside the
-existing `Aborted` concurrent-resume conflict) — a parked request rides out
-transient pool saturation and control-plane blips (e.g. an ateapi rolling
-restart) alike. The request is *parked*: the resumer keeps retrying with
-exponential backoff until either
+With parking enabled (the default), the router treats `ResourceExhausted`,
+`FailedPrecondition` and `Unavailable` from `ResumeActor` as **retryable**
+conditions (alongside the existing `Aborted` concurrent-resume conflict) — a
+parked request rides out transient pool saturation and control-plane blips
+(e.g. an ateapi rolling restart) alike. The request is *parked*: the resumer
+keeps retrying with exponential backoff until either
 
 - the resume succeeds (the actor is `RUNNING` and has a worker IP) — the request
   is then routed normally; or
