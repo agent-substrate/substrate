@@ -577,6 +577,20 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 		return nil, err
 	}
 
+	// Drop earlier pause snapshots BEFORE checkpointing, not after. No earlier one
+	// can be restored again: the control plane tracks a single local snapshot, which
+	// this checkpoint either overwrites (pause) or clears (suspend). Ordering it here
+	// matters because restore staged this actor's memory image by linking to that
+	// snapshot, and MergeDeltaIntoBase can only take its cheap in-place path while
+	// the staged image is the sole name for those bytes. Releasing the other name
+	// first leaves the image untouched (the staged link still holds the inode) and
+	// keeps the merge off the copying path.
+	//
+	// The cost is that a checkpoint failing from here on leaves no earlier snapshot
+	// to fall back to. That is survivable: the guest stays paused when
+	// CheckpointWorkload fails, so the checkpoint can simply be retried.
+	pruneLocalCheckpoints(ctx, actorUID)
+
 	// Tell ateom to take the checkpoint and delete containers. ateom reports the
 	// exact files it wrote so we ship precisely that set (gVisor's image files,
 	// cloud-hypervisor's snapshot set, ...) rather than a hardcoded list.
@@ -611,15 +625,6 @@ func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRe
 	sandboxRec.ActorTemplateName = req.GetActorTemplateName()
 	sandboxRec.Scope = ateattr.SnapshotScopeValue(req.GetScope())
 
-	// No earlier pause snapshot can ever be restored again, so remove them
-	// all: the actor's current state was just captured by CheckpointWorkload,
-	// and the control plane tracks only a single local snapshot, which this
-	// checkpoint either overwrites (pause) or clears (suspend).
-	pruneLocalCheckpoints(ctx, actorUID)
-
-	// Pruning stays outside the persist window: it collects superseded
-	// snapshots on both paths, so timing it as part of an external upload would
-	// mix local disk deletion into the object-storage measurement.
 	tPersist := time.Now()
 	switch req.GetType() {
 	case ateletpb.CheckpointType_CHECKPOINT_TYPE_EXTERNAL:
@@ -1156,6 +1161,16 @@ func (s *AteomHerder) copyLocalCheckpoint(ctx context.Context, snapshotName stri
 		}
 		src := filepath.Join(srcDir, snapshotName, fileName)
 		dst := filepath.Join(dstDir, fileName)
+		// Link rather than copy. The local checkpoint lives under the same actor dir
+		// as the restore staging area, so this stages the memory image in constant
+		// time instead of re-writing its whole working set. Nothing mutates the
+		// staged file: CH demand-pages from it read-only, and MergeDeltaIntoBase
+		// refuses its in-place overlay once the image carries a second link, so the
+		// cached snapshot cannot be rewritten through the staged name. Falls back to
+		// copying if the two ever land on different filesystems.
+		if err := os.Link(src, dst); err == nil {
+			continue
+		}
 		if _, err := copyFile(src, dst); err != nil {
 			return fmt.Errorf("failed to copy %s to %s: %w", src, dst, err)
 		}
