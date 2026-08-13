@@ -97,3 +97,81 @@ spec:
       workload: benchmark-ateom
   snapshotsConfig:
     location: gs://${BUCKET_NAME}/benchmark-workloads/glutton/
+
+---
+
+apiVersion: ate.dev/v1alpha1
+kind: ActorTemplate
+metadata:
+  name: glutton-durdir-data
+  namespace: benchmark-workloads
+spec:
+  # Must match the WorkerPool's sandboxClass so snapshots stay within a class.
+  sandboxClass: ${SANDBOX_CLASS}
+  containers:
+  - name: glutton
+    image: ko://github.com/agent-substrate/substrate/cmd/benchmarking/glutton
+    command:
+    - "/ko-app/glutton"
+    - "--grpc-listen-addr=:80"
+    - "--metrics-listen-addr=:9090"
+    - "--data-dir=/var/lib/glutton"
+    - "--mode=http"
+    # Data-scope resume is a cold boot; without this the router can reach the
+    # sandbox before glutton is listening.
+    readyz:
+      httpGet:
+        path: /readyz
+        port: 80
+    volumeMounts:
+    - name: data
+      mountPath: /var/lib/glutton
+  volumes:
+  - name: data
+    durableDir: {}
+  workerSelector:
+    matchLabels:
+      workload: benchmark-ateom
+  snapshotsConfig:
+    onPause: Full
+    onCommit: Data    # suspend uploads ONLY the durable dir
+    onResume:
+      fromData: ColdBoot
+    location: gs://${BUCKET_NAME}/benchmark-workloads/glutton-durdir-data/
+
+---
+
+apiVersion: ate.dev/v1alpha1
+kind: ActorTemplate
+metadata:
+  name: glutton-durdir-full
+  namespace: benchmark-workloads
+spec:
+  # Must match the WorkerPool's sandboxClass so snapshots stay within a class.
+  sandboxClass: ${SANDBOX_CLASS}
+  containers:
+  - name: glutton
+    image: ko://github.com/agent-substrate/substrate/cmd/benchmarking/glutton
+    command:
+    - "/ko-app/glutton"
+    - "--grpc-listen-addr=:80"
+    - "--metrics-listen-addr=:9090"
+    - "--data-dir=/var/lib/glutton"
+    - "--mode=http"
+    readyz:
+      httpGet:
+        path: /readyz
+        port: 80
+    volumeMounts:
+    - name: data
+      mountPath: /var/lib/glutton
+  volumes:
+  - name: data
+    durableDir: {}
+  workerSelector:
+    matchLabels:
+      workload: benchmark-ateom
+  snapshotsConfig:
+    onPause: Full
+    onCommit: Full
+    location: gs://${BUCKET_NAME}/benchmark-workloads/glutton-durdir-full/
