@@ -100,7 +100,7 @@ kubectl ate get workers -l <label-selector>
 
 > **Note:** `get actors` requires either `--atespace <name>` / `-a <name>` (one atespace) or `-A`/`--all-atespaces` (all atespaces) — there is no default atespace. Getting a single actor always requires `--atespace`/`-a`, since an actor is addressed by `(atespace, name)`. `-a` (lower-case) scopes to one atespace; `-A` (upper-case) spans all.
 
-> **Note:** Actors and workers are not Kubernetes CRDs — they live in the Substrate control plane (valkey/redis), not `etcd`. `kubectl get actor` and `kubectl get worker` will not return anything; only `kubectl ate get …` queries the control plane. `kubectl get actortemplate` and `kubectl get workerpool` *do* work, because those are CRDs.
+> **Note:** Actors and workers are not Kubernetes CRDs — they live in the Substrate control plane's PostgreSQL database, not `etcd`. `kubectl get actor` and `kubectl get worker` will not return anything; only `kubectl ate get …` queries the control plane. `kubectl get actortemplate` and `kubectl get workerpool` *do* work, because those are CRDs.
 
 #### `kubectl ate get actor` output columns
 
@@ -231,6 +231,6 @@ kubectl ate admin make-jwt-pool \
   --secret-namespace ate-system \
   --key-id "1"
 
-# DANGEROUS: Completely flush all Actor and Worker tracking state from Redis
-kubectl ate admin debug-flush-redis
+# DANGEROUS: Completely clear all Actor and Worker tracking state
+kubectl ate admin debug-clear-store
 ```

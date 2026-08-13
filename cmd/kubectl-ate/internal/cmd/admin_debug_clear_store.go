@@ -22,9 +22,9 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var debugRedisFlushCmd = &cobra.Command{
-	Use:   "debug-flush-redis",
-	Short: "DANGEROUS: Flush all data from Redis",
+var debugClearStoreCmd = &cobra.Command{
+	Use:   "debug-clear-store",
+	Short: "DANGEROUS: Clear all control-plane state",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
 		apiClient, err := ateclient.NewClient(ctx, kubeconfig, k8sContext, endpoint, tokenFile, traceEnabled)
@@ -32,17 +32,14 @@ var debugRedisFlushCmd = &cobra.Command{
 			return fmt.Errorf("failed to connect to ate-api-server: %w", err)
 		}
 		defer apiClient.Close()
-
-		_, err = apiClient.DebugClear(ctx, &ateapipb.DebugClearRequest{})
-		if err != nil {
-			return fmt.Errorf("failed to flush redis: %w", err)
+		if _, err := apiClient.DebugClear(ctx, &ateapipb.DebugClearRequest{}); err != nil {
+			return fmt.Errorf("failed to clear control-plane state: %w", err)
 		}
-
-		fmt.Println("Successfully flushed all data from Redis.")
+		fmt.Println("Successfully cleared all control-plane state.")
 		return nil
 	},
 }
 
 func init() {
-	adminCmd.AddCommand(debugRedisFlushCmd)
+	adminCmd.AddCommand(debugClearStoreCmd)
 }
