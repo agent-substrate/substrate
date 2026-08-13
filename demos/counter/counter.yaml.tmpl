@@ -33,9 +33,18 @@ spec:
     # Per-worker resources: these size the worker POD and advertise its
     # scheduling capacity (the per-actor ceiling). The sandbox itself is sized by
     # the ActorTemplate's spec.resources below, not by these (see internal/sizing).
+    #
+    # Capacity comes from the limits (workerCapacity reads limits only), while the
+    # kube-scheduler packs nodes by the requests — so the CPU request is set well
+    # below the limit to keep a 5-replica pool placeable on a small node (a single
+    # kind node in CI) without changing what an actor is allowed to use. Memory is
+    # not compressible, so its request matches the limit.
     resources:
       limits:
         cpu: "1"
+        memory: 1Gi
+      requests:
+        cpu: 250m
         memory: 1Gi
 
 ---

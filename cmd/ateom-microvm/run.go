@@ -690,6 +690,18 @@ func resolveGuestMemMiB(declaredBytes int64, reserveMiB, fallbackMiB int) (int, 
 // the guest's RAM keeps the two numbers from contradicting each other; enforcing
 // a per-container share would need those overheads subtracted first.
 //
+// CPU has no equivalent of the VMM reserve, so "unchanged" above is about the
+// number, not about what the workload gets. On gVisor the sentry is the workload
+// and shares the sandbox's cgroup leaf, so the declared limit covers everything
+// the sandbox costs the host. Here the limit reaches the guest cgroup intact, but
+// cloud-hypervisor's vCPU threads, virtiofsd and ateom are host processes drawing
+// on the same worker-pod CPU quota, and the scheduler's capacity check (>=) sets
+// none of it aside — so the workload runs on somewhat less than it declared, and
+// the in-guest quota is throttled by the host before it ever binds. The asymmetry
+// with memory is deliberate: an unreduced memory limit would push the pod past its
+// own and get it OOM-killed, whereas CPU is compressible, so the shortfall only
+// slows the workload down. Carving out a CPU reserve is left for a follow-up.
+//
 // An error means the declared limit cannot be honored (see resolveGuestMemMiB);
 // callers must not fall back to the unreduced size, which is the mismatch this
 // translation exists to avoid.
