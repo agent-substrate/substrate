@@ -20,6 +20,7 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -230,6 +231,7 @@ type gluttonService struct {
 
 	ramWriteBytes  metric.Int64Counter
 	diskWriteBytes metric.Int64Counter
+	diskReadBytes  metric.Int64Counter
 	pingsReceived  metric.Int64Counter
 	gossipSent     metric.Int64Counter
 	gossipLatency  metric.Float64Histogram
@@ -267,6 +269,14 @@ func newGluttonService(dir string) (*gluttonService, error) {
 	)
 	if err != nil {
 		return nil, fmt.Errorf("create glutton.disk.write.bytes counter: %w", err)
+	}
+	s.diskReadBytes, err = m.Int64Counter(
+		"glutton.disk.read.bytes",
+		metric.WithUnit("By"),
+		metric.WithDescription("Total bytes read from disk via ReadDisk over the process lifetime."),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("create glutton.disk.read.bytes counter: %w", err)
 	}
 	s.pingsReceived, err = m.Int64Counter(
 		"glutton.ping.requests",
@@ -391,10 +401,10 @@ func (s *gluttonService) WriteDisk(ctx context.Context, req *glutton.WriteDiskRe
 	var flag int
 	switch req.GetWriteMode() {
 	case glutton.WriteMode_WRITE_MODE_TRUNCATE:
-		flag = os.O_WRONLY | os.O_CREATE | os.O_TRUNC
+		flag = os.O_RDWR | os.O_CREATE | os.O_TRUNC
 	case glutton.WriteMode_WRITE_MODE_OVERWRITE:
 		// No O_TRUNC: writes go from offset 0 but any bytes beyond size remain.
-		flag = os.O_WRONLY | os.O_CREATE
+		flag = os.O_RDWR | os.O_CREATE
 	default:
 		return nil, status.Errorf(codes.InvalidArgument, "unknown write_mode %v", req.GetWriteMode())
 	}
@@ -405,12 +415,68 @@ func (s *gluttonService) WriteDisk(ctx context.Context, req *glutton.WriteDiskRe
 	}
 	defer f.Close()
 
-	if err := streamRandomBytes(f, int64(req.GetSize())); err != nil {
+	h := sha256.New()
+	size := int64(req.GetSize())
+	if err := streamRandomBytes(io.MultiWriter(f, h), size); err != nil {
 		return nil, status.Errorf(codes.Internal, "write %s: %v", path, err)
 	}
 
+	// OVERWRITE has no O_TRUNC, bytes from a larger, earlier write will persist.
+	// The cursor is already at size, so folding the remainder into the
+	// same digest completes it without re-reading the prefix.
+	if req.GetWriteMode() == glutton.WriteMode_WRITE_MODE_OVERWRITE {
+		tail, err := io.Copy(h, f)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "hash tail %s: %v", path, err)
+		}
+		size += tail
+	}
+
 	s.diskWriteBytes.Add(ctx, int64(req.GetSize()))
-	return &glutton.WriteDiskResponse{}, nil
+	return &glutton.WriteDiskResponse{Size: size, Sha256: h.Sum(nil)}, nil
+}
+
+func (s *gluttonService) ReadDisk(ctx context.Context, req *glutton.ReadDiskRequest) (*glutton.ReadDiskResponse, error) {
+	if !diskKeyRE.MatchString(req.GetKey()) {
+		return nil, status.Errorf(codes.InvalidArgument, "key %q must match %s", req.GetKey(), diskKeyRE)
+	}
+
+	path := filepath.Join(s.dataDir, req.GetKey())
+
+	f, err := os.Open(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, status.Errorf(codes.NotFound, "file %q not found", req.GetKey())
+		}
+		return nil, status.Errorf(codes.Internal, "open %s: %v", path, err)
+	}
+	defer f.Close()
+
+	h := sha256.New()
+
+	if req.GetReadMode() == glutton.ReadMode_READ_MODE_DIGEST_ONLY {
+		n, err := io.Copy(h, f)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "read %s: %v", path, err)
+		}
+		s.diskReadBytes.Add(ctx, n)
+		return &glutton.ReadDiskResponse{
+			Size:   n,
+			Sha256: h.Sum(nil),
+		}, nil
+	}
+
+	data, err := io.ReadAll(io.TeeReader(f, h))
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "read %s: %v", path, err)
+	}
+
+	s.diskReadBytes.Add(ctx, int64(len(data)))
+	return &glutton.ReadDiskResponse{
+		Size:   int64(len(data)),
+		Sha256: h.Sum(nil),
+		Data:   data,
+	}, nil
 }
 
 // Make sure it has the specified number of file descriptors open. It will open or
