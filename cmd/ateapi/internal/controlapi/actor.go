@@ -221,13 +221,13 @@ func (s *Service) ListActors(ctx context.Context, req *ateapipb.ListActorsReques
 		return nil, toGRPCStatusError(errs)
 	}
 
-	actors, nextToken, err := s.persistence.ListActors(ctx, req.GetAtespace(), effectivePageSize(req.GetPageSize()), req.GetPageToken())
+	page, err := s.persistence.ListActors(ctx, req.GetAtespace(), store.ListOptions{PageSize: effectivePageSize(req.GetPageSize()), PageToken: req.GetPageToken()})
 	if err != nil {
 		return nil, fmt.Errorf("while listing actors in db: %w", err)
 	}
 	return &ateapipb.ListActorsResponse{
-		Actors:        actors,
-		NextPageToken: nextToken,
+		Actors:        page.Items,
+		NextPageToken: page.NextPageToken,
 	}, nil
 }
 

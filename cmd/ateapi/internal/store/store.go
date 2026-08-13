@@ -59,8 +59,8 @@ type Interface interface {
 	GetActor(ctx context.Context, actorRef resources.ActorRef) (*ateapipb.Actor, error)
 
 	// Lists actors in the given atespace (scoped scan), or across ALL atespaces if atespace is
-	// empty. Returns a page of actors and a next page token.
-	ListActors(ctx context.Context, atespace string, pageSize int32, pageToken string) ([]*ateapipb.Actor, string, error)
+	// empty.
+	ListActors(ctx context.Context, atespace string, opts ListOptions) (ListResponse[*ateapipb.Actor], error)
 
 	// UpdateActor performs a transactional read-modify-write and returns the stored
 	// actor with advanced metadata (version, update_time).
@@ -88,7 +88,7 @@ type Interface interface {
 	GetActorSnapshot(ctx context.Context, atespace, name string) (*ateapipb.ActorSnapshot, error)
 
 	// Lists ActorSnapshots in one atespace, or all atespaces when empty.
-	ListActorSnapshots(ctx context.Context, atespace string, pageSize int32, pageToken string) ([]*ateapipb.ActorSnapshot, string, error)
+	ListActorSnapshots(ctx context.Context, atespace string, opts ListOptions) (ListResponse[*ateapipb.ActorSnapshot], error)
 
 	// Adds an immutable Atespace-owned tag to an ActorSnapshot.
 	CreateActorSnapshotTag(ctx context.Context, atespace, name string, tag *ateapipb.ActorSnapshotTag) (*ateapipb.ActorSnapshotTag, error)
@@ -127,8 +127,8 @@ type Interface interface {
 	// AtespaceExists reports whether the atespace object exists.
 	AtespaceExists(ctx context.Context, name string) (bool, error)
 
-	// Lists atespaces. Returns a page of atespaces and a next page token.
-	ListAtespaces(ctx context.Context, pageSize int32, pageToken string) ([]*ateapipb.Atespace, string, error)
+	// Lists atespaces.
+	ListAtespaces(ctx context.Context, opts ListOptions) (ListResponse[*ateapipb.Atespace], error)
 
 	// Removes an empty atespace and returns the deleted resource. Returns
 	// ErrNotFound if missing, or ErrFailedPrecondition if the atespace is not empty
@@ -147,8 +147,8 @@ type Interface interface {
 	ActorTemplateExists(ctx context.Context, templateRef resources.ActorTemplateRef) (bool, error)
 
 	// Lists ActorTemplates in an atespace, or across all atespaces when
-	// atespace is empty. Returns a page of templates and a next page token.
-	ListActorTemplates(ctx context.Context, atespace string, pageSize int32, pageToken string) ([]*ateapipb.ActorTemplate, string, error)
+	// atespace is empty.
+	ListActorTemplates(ctx context.Context, atespace string, opts ListOptions) (ListResponse[*ateapipb.ActorTemplate], error)
 
 	// UpdateActorTemplate performs a transactional read-modify-write and returns
 	// the updated template with advanced metadata (version, update_time).
@@ -172,7 +172,7 @@ type Interface interface {
 	// Lists ActorTemplateVersions in an atespace (all atespaces when atespace
 	// is empty), filtered to one parent template when actorTemplateRef is
 	// non-zero. The parent lives in the same atespace as its versions.
-	ListActorTemplateVersions(ctx context.Context, atespace string, actorTemplateRef resources.ActorTemplateRef, pageSize int32, pageToken string) ([]*ateapipb.ActorTemplateVersion, string, error)
+	ListActorTemplateVersions(ctx context.Context, atespace string, actorTemplateRef resources.ActorTemplateRef, opts ListOptions) (ListResponse[*ateapipb.ActorTemplateVersion], error)
 
 	// Removes an ActorTemplateVersion and returns the deleted resource, also
 	// deleting the golden snapshot recorded in golden_snapshot, if any.
@@ -186,8 +186,8 @@ type Interface interface {
 	// Fetches worker state by namespace, pool, and pod name. Returns ErrNotFound if missing.
 	GetWorker(ctx context.Context, namespace, pool, pod string) (*ateapipb.Worker, error)
 
-	// Lists workers. Returns a page of workers and a next page token.
-	ListWorkers(ctx context.Context, pageSize int32, pageToken string) ([]*ateapipb.Worker, string, error)
+	// Lists workers.
+	ListWorkers(ctx context.Context, opts ListOptions) (ListResponse[*ateapipb.Worker], error)
 
 	// Updates worker state with optimistic concurrency check. Returns ErrNotFound if missing, or ErrVersionConflict on version mismatch.
 	UpdateWorker(ctx context.Context, worker *ateapipb.Worker, expectedVersion int64) error
@@ -318,3 +318,25 @@ func (l *Lock) Context() context.Context { return l.ctx }
 // Close stops lease renewal and releases the lock. Safe to call multiple
 // times.
 func (l *Lock) Close() { l.once.Do(l.closeFn) }
+
+// ListOptions carries the pagination parameters common to every List method.
+type ListOptions struct {
+	// PageSize caps how many items a single call returns.
+	PageSize int32
+	// PageToken resumes a listing after the page it was issued for. Empty
+	// starts from the first page.
+	PageToken string
+}
+
+// ListResponse is the return value of a List method: the page of items it
+// addressed, plus the token to fetch the next page. NextPageToken is empty
+// once the listing has reached its last page.
+type ListResponse[T any] struct {
+	Items         []T
+	NextPageToken string
+}
+
+// HasNextPage reports whether another page follows this one.
+func (r ListResponse[T]) HasNextPage() bool {
+	return r.NextPageToken != ""
+}

@@ -93,11 +93,11 @@ func (s *Service) ListActorSnapshots(ctx context.Context, req *ateapipb.ListActo
 	if len(errs) > 0 {
 		return nil, status.Error(codes.InvalidArgument, errs.ToAggregate().Error())
 	}
-	snapshots, nextToken, err := s.persistence.ListActorSnapshots(ctx, req.GetAtespace(), effectivePageSize(req.GetPageSize()), req.GetPageToken())
+	page, err := s.persistence.ListActorSnapshots(ctx, req.GetAtespace(), store.ListOptions{PageSize: effectivePageSize(req.GetPageSize()), PageToken: req.GetPageToken()})
 	if err != nil {
 		return nil, fmt.Errorf("while listing actor snapshots: %w", err)
 	}
-	return &ateapipb.ListActorSnapshotsResponse{Snapshots: snapshots, NextPageToken: nextToken}, nil
+	return &ateapipb.ListActorSnapshotsResponse{Snapshots: page.Items, NextPageToken: page.NextPageToken}, nil
 }
 
 func (s *Service) CreateActorSnapshotTag(ctx context.Context, req *ateapipb.CreateActorSnapshotTagRequest) (*ateapipb.ActorSnapshotTag, error) {

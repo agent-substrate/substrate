@@ -407,15 +407,15 @@ func (f *fakeStore) WatchWorkers(_ context.Context) (*store.WorkerWatch, error) 
 	}), nil
 }
 
-func (f *fakeStore) ListWorkers(_ context.Context, _ int32, _ string) ([]*ateapipb.Worker, string, error) {
+func (f *fakeStore) ListWorkers(_ context.Context, _ store.ListOptions) (store.ListResponse[*ateapipb.Worker], error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.listErr != nil {
-		return nil, "", f.listErr
+		return store.ListResponse[*ateapipb.Worker]{}, f.listErr
 	}
 	out := make([]*ateapipb.Worker, len(f.workers))
 	copy(out, f.workers)
-	return out, "", nil
+	return store.ListResponse[*ateapipb.Worker]{Items: out}, nil
 }
 
 func (f *fakeStore) send(event store.WorkerEvent) {

@@ -182,10 +182,11 @@ func (p *Persistence) AtespaceExists(ctx context.Context, name string) (bool, er
 	return exists, nil
 }
 
-func (p *Persistence) ListAtespaces(ctx context.Context, pageSize int32, pageTokenStr string) ([]*ateapipb.Atespace, string, error) {
+func (p *Persistence) ListAtespaces(ctx context.Context, opts store.ListOptions) (store.ListResponse[*ateapipb.Atespace], error) {
+	pageSize, pageTokenStr := opts.PageSize, opts.PageToken
 	token, err := decodePageToken(pageTokenStr, kindAtespace, "", 1)
 	if err != nil {
-		return nil, "", err
+		return store.ListResponse[*ateapipb.Atespace]{}, err
 	}
 	var last *string
 	if len(token.Last) > 0 {
@@ -198,7 +199,7 @@ func (p *Persistence) ListAtespaces(ctx context.Context, pageSize int32, pageTok
 		ORDER BY name
 		LIMIT $2`, last, int64(pageSize)+1)
 	if err != nil {
-		return nil, "", fmt.Errorf("listing atespaces: %w", err)
+		return store.ListResponse[*ateapipb.Atespace]{}, fmt.Errorf("listing atespaces: %w", err)
 	}
 	defer rows.Close()
 
@@ -208,17 +209,17 @@ func (p *Persistence) ListAtespaces(ctx context.Context, pageSize int32, pageTok
 		var name string
 		var protoBytes []byte
 		if err := rows.Scan(&name, &protoBytes); err != nil {
-			return nil, "", fmt.Errorf("scanning atespace row: %w", err)
+			return store.ListResponse[*ateapipb.Atespace]{}, fmt.Errorf("scanning atespace row: %w", err)
 		}
 		a := &ateapipb.Atespace{}
 		if err := proto.Unmarshal(protoBytes, a); err != nil {
-			return nil, "", fmt.Errorf("unmarshaling atespace: %w", err)
+			return store.ListResponse[*ateapipb.Atespace]{}, fmt.Errorf("unmarshaling atespace: %w", err)
 		}
 		result = append(result, a)
 		names = append(names, name)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, "", fmt.Errorf("listing atespaces: %w", err)
+		return store.ListResponse[*ateapipb.Atespace]{}, fmt.Errorf("listing atespaces: %w", err)
 	}
 
 	var nextToken string
@@ -226,7 +227,7 @@ func (p *Persistence) ListAtespaces(ctx context.Context, pageSize int32, pageTok
 		result = result[:pageSize]
 		nextToken = encodePageToken(kindAtespace, "", []string{names[pageSize-1]})
 	}
-	return result, nextToken, nil
+	return store.ListResponse[*ateapipb.Atespace]{Items: result, NextPageToken: nextToken}, nil
 }
 
 func (p *Persistence) DeleteAtespace(ctx context.Context, name string) (*ateapipb.Atespace, error) {
@@ -358,14 +359,15 @@ func (p *Persistence) UpdateActorTemplate(ctx context.Context, templateRef resou
 	return dbTemplate, nil
 }
 
-func (p *Persistence) ListActorTemplates(ctx context.Context, atespace string, pageSize int32, pageTokenStr string) ([]*ateapipb.ActorTemplate, string, error) {
+func (p *Persistence) ListActorTemplates(ctx context.Context, atespace string, opts store.ListOptions) (store.ListResponse[*ateapipb.ActorTemplate], error) {
+	pageSize, pageTokenStr := opts.PageSize, opts.PageToken
 	keyParts := 2
 	if atespace != "" {
 		keyParts = 1
 	}
 	token, err := decodePageToken(pageTokenStr, kindActorTemplate, atespace, keyParts)
 	if err != nil {
-		return nil, "", err
+		return store.ListResponse[*ateapipb.ActorTemplate]{}, err
 	}
 
 	var rows pgx.Rows
@@ -389,7 +391,7 @@ func (p *Persistence) ListActorTemplates(ctx context.Context, atespace string, p
 			ORDER BY atespace, name LIMIT $3`, lastAtespace, lastName, int64(pageSize)+1)
 	}
 	if err != nil {
-		return nil, "", fmt.Errorf("listing actor templates: %w", err)
+		return store.ListResponse[*ateapipb.ActorTemplate]{}, fmt.Errorf("listing actor templates: %w", err)
 	}
 	defer rows.Close()
 
@@ -400,17 +402,17 @@ func (p *Persistence) ListActorTemplates(ctx context.Context, atespace string, p
 		var k key
 		var protoBytes []byte
 		if err := rows.Scan(&k.atespace, &k.name, &protoBytes); err != nil {
-			return nil, "", fmt.Errorf("scanning actor template row: %w", err)
+			return store.ListResponse[*ateapipb.ActorTemplate]{}, fmt.Errorf("scanning actor template row: %w", err)
 		}
 		template := &ateapipb.ActorTemplate{}
 		if err := proto.Unmarshal(protoBytes, template); err != nil {
-			return nil, "", fmt.Errorf("unmarshaling actor template: %w", err)
+			return store.ListResponse[*ateapipb.ActorTemplate]{}, fmt.Errorf("unmarshaling actor template: %w", err)
 		}
 		keys = append(keys, k)
 		result = append(result, template)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, "", fmt.Errorf("listing actor templates: %w", err)
+		return store.ListResponse[*ateapipb.ActorTemplate]{}, fmt.Errorf("listing actor templates: %w", err)
 	}
 	var nextToken string
 	if len(result) > int(pageSize) {
@@ -422,7 +424,7 @@ func (p *Persistence) ListActorTemplates(ctx context.Context, atespace string, p
 		}
 		nextToken = encodePageToken(kindActorTemplate, atespace, lastParts)
 	}
-	return result, nextToken, nil
+	return store.ListResponse[*ateapipb.ActorTemplate]{Items: result, NextPageToken: nextToken}, nil
 }
 
 func (p *Persistence) DeleteActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef) (*ateapipb.ActorTemplate, error) {
@@ -507,7 +509,8 @@ func actorTemplateVersionListScope(atespace string, parent resources.ActorTempla
 	return atespace + "\x00" + parent.Atespace + "\x00" + parent.Name
 }
 
-func (p *Persistence) ListActorTemplateVersions(ctx context.Context, atespace string, parent resources.ActorTemplateRef, pageSize int32, pageTokenStr string) ([]*ateapipb.ActorTemplateVersion, string, error) {
+func (p *Persistence) ListActorTemplateVersions(ctx context.Context, atespace string, parent resources.ActorTemplateRef, opts store.ListOptions) (store.ListResponse[*ateapipb.ActorTemplateVersion], error) {
+	pageSize, pageTokenStr := opts.PageSize, opts.PageToken
 	scope := actorTemplateVersionListScope(atespace, parent)
 	keyParts := 2
 	if atespace != "" {
@@ -515,7 +518,7 @@ func (p *Persistence) ListActorTemplateVersions(ctx context.Context, atespace st
 	}
 	token, err := decodePageToken(pageTokenStr, kindActorTemplateVersion, scope, keyParts)
 	if err != nil {
-		return nil, "", err
+		return store.ListResponse[*ateapipb.ActorTemplateVersion]{}, err
 	}
 	filterParent := parent != (resources.ActorTemplateRef{})
 
@@ -543,7 +546,7 @@ func (p *Persistence) ListActorTemplateVersions(ctx context.Context, atespace st
 			ORDER BY atespace, name LIMIT $6`, filterParent, parent.Atespace, parent.Name, lastAtespace, lastName, int64(pageSize)+1)
 	}
 	if err != nil {
-		return nil, "", fmt.Errorf("listing actor template versions: %w", err)
+		return store.ListResponse[*ateapipb.ActorTemplateVersion]{}, fmt.Errorf("listing actor template versions: %w", err)
 	}
 	defer rows.Close()
 
@@ -554,17 +557,17 @@ func (p *Persistence) ListActorTemplateVersions(ctx context.Context, atespace st
 		var k key
 		var protoBytes []byte
 		if err := rows.Scan(&k.atespace, &k.name, &protoBytes); err != nil {
-			return nil, "", fmt.Errorf("scanning actor template version row: %w", err)
+			return store.ListResponse[*ateapipb.ActorTemplateVersion]{}, fmt.Errorf("scanning actor template version row: %w", err)
 		}
 		version := &ateapipb.ActorTemplateVersion{}
 		if err := proto.Unmarshal(protoBytes, version); err != nil {
-			return nil, "", fmt.Errorf("unmarshaling actor template version: %w", err)
+			return store.ListResponse[*ateapipb.ActorTemplateVersion]{}, fmt.Errorf("unmarshaling actor template version: %w", err)
 		}
 		keys = append(keys, k)
 		result = append(result, version)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, "", fmt.Errorf("listing actor template versions: %w", err)
+		return store.ListResponse[*ateapipb.ActorTemplateVersion]{}, fmt.Errorf("listing actor template versions: %w", err)
 	}
 	var nextToken string
 	if len(result) > int(pageSize) {
@@ -576,7 +579,7 @@ func (p *Persistence) ListActorTemplateVersions(ctx context.Context, atespace st
 		}
 		nextToken = encodePageToken(kindActorTemplateVersion, scope, lastParts)
 	}
-	return result, nextToken, nil
+	return store.ListResponse[*ateapipb.ActorTemplateVersion]{Items: result, NextPageToken: nextToken}, nil
 }
 
 func (p *Persistence) DeleteActorTemplateVersion(ctx context.Context, versionRef resources.ActorTemplateVersionRef) (*ateapipb.ActorTemplateVersion, error) {
@@ -801,11 +804,19 @@ func (p *Persistence) DeleteActor(ctx context.Context, actorRef resources.ActorR
 	return out, nil
 }
 
-func (p *Persistence) ListActors(ctx context.Context, atespace string, pageSize int32, pageTokenStr string) ([]*ateapipb.Actor, string, error) {
+func (p *Persistence) ListActors(ctx context.Context, atespace string, opts store.ListOptions) (store.ListResponse[*ateapipb.Actor], error) {
+	var items []*ateapipb.Actor
+	var nextToken string
+	var err error
 	if atespace != "" {
-		return p.listActorsScoped(ctx, atespace, pageSize, pageTokenStr)
+		items, nextToken, err = p.listActorsScoped(ctx, atespace, opts.PageSize, opts.PageToken)
+	} else {
+		items, nextToken, err = p.listActorsGlobal(ctx, opts.PageSize, opts.PageToken)
 	}
-	return p.listActorsGlobal(ctx, pageSize, pageTokenStr)
+	if err != nil {
+		return store.ListResponse[*ateapipb.Actor]{}, err
+	}
+	return store.ListResponse[*ateapipb.Actor]{Items: items, NextPageToken: nextToken}, nil
 }
 
 func (p *Persistence) listActorsScoped(ctx context.Context, atespace string, pageSize int32, pageTokenStr string) ([]*ateapipb.Actor, string, error) {
@@ -966,11 +977,19 @@ func (p *Persistence) GetActorSnapshotTag(ctx context.Context, atespace, name st
 	return tag, nil
 }
 
-func (p *Persistence) ListActorSnapshots(ctx context.Context, atespace string, pageSize int32, pageTokenStr string) ([]*ateapipb.ActorSnapshot, string, error) {
+func (p *Persistence) ListActorSnapshots(ctx context.Context, atespace string, opts store.ListOptions) (store.ListResponse[*ateapipb.ActorSnapshot], error) {
+	var items []*ateapipb.ActorSnapshot
+	var nextToken string
+	var err error
 	if atespace != "" {
-		return p.listActorSnapshotsScoped(ctx, atespace, pageSize, pageTokenStr)
+		items, nextToken, err = p.listActorSnapshotsScoped(ctx, atespace, opts.PageSize, opts.PageToken)
+	} else {
+		items, nextToken, err = p.listActorSnapshotsGlobal(ctx, opts.PageSize, opts.PageToken)
 	}
-	return p.listActorSnapshotsGlobal(ctx, pageSize, pageTokenStr)
+	if err != nil {
+		return store.ListResponse[*ateapipb.ActorSnapshot]{}, err
+	}
+	return store.ListResponse[*ateapipb.ActorSnapshot]{Items: items, NextPageToken: nextToken}, nil
 }
 
 func (p *Persistence) listActorSnapshotsScoped(ctx context.Context, atespace string, pageSize int32, pageTokenStr string) ([]*ateapipb.ActorSnapshot, string, error) {
@@ -1393,10 +1412,11 @@ func (p *Persistence) DeleteWorker(ctx context.Context, namespace, poolName, pod
 	})
 }
 
-func (p *Persistence) ListWorkers(ctx context.Context, pageSize int32, pageTokenStr string) ([]*ateapipb.Worker, string, error) {
+func (p *Persistence) ListWorkers(ctx context.Context, opts store.ListOptions) (store.ListResponse[*ateapipb.Worker], error) {
+	pageSize, pageTokenStr := opts.PageSize, opts.PageToken
 	token, err := decodePageToken(pageTokenStr, kindWorker, "", 3)
 	if err != nil {
-		return nil, "", err
+		return store.ListResponse[*ateapipb.Worker]{}, err
 	}
 	var lastNS, lastPool, lastPod *string
 	if len(token.Last) == 3 {
@@ -1409,7 +1429,7 @@ func (p *Persistence) ListWorkers(ctx context.Context, pageSize int32, pageToken
 		ORDER BY worker_namespace, worker_pool, worker_pod
 		LIMIT $4`, lastNS, lastPool, lastPod, int64(pageSize)+1)
 	if err != nil {
-		return nil, "", fmt.Errorf("listing workers: %w", err)
+		return store.ListResponse[*ateapipb.Worker]{}, fmt.Errorf("listing workers: %w", err)
 	}
 	defer rows.Close()
 
@@ -1420,17 +1440,17 @@ func (p *Persistence) ListWorkers(ctx context.Context, pageSize int32, pageToken
 		var k key
 		var protoBytes []byte
 		if err := rows.Scan(&k.namespace, &k.pool, &k.pod, &protoBytes); err != nil {
-			return nil, "", fmt.Errorf("scanning worker row: %w", err)
+			return store.ListResponse[*ateapipb.Worker]{}, fmt.Errorf("scanning worker row: %w", err)
 		}
 		w := &ateapipb.Worker{}
 		if err := proto.Unmarshal(protoBytes, w); err != nil {
-			return nil, "", fmt.Errorf("unmarshaling worker: %w", err)
+			return store.ListResponse[*ateapipb.Worker]{}, fmt.Errorf("unmarshaling worker: %w", err)
 		}
 		result = append(result, w)
 		keys = append(keys, k)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, "", fmt.Errorf("listing workers: %w", err)
+		return store.ListResponse[*ateapipb.Worker]{}, fmt.Errorf("listing workers: %w", err)
 	}
 
 	var nextToken string
@@ -1439,7 +1459,7 @@ func (p *Persistence) ListWorkers(ctx context.Context, pageSize int32, pageToken
 		last := keys[pageSize-1]
 		nextToken = encodePageToken(kindWorker, "", []string{last.namespace, last.pool, last.pod})
 	}
-	return result, nextToken, nil
+	return store.ListResponse[*ateapipb.Worker]{Items: result, NextPageToken: nextToken}, nil
 }
 
 // WatchWorkers acquires a dedicated connection (hijacked out of the pool, so

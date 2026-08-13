@@ -313,18 +313,18 @@ func (s *WorkerPoolSyncer) reconcileDeadWorker(ctx context.Context, namespace, p
 func (s *WorkerPoolSyncer) enqueueStoredWorkers(ctx context.Context) {
 	var pageToken string
 	for {
-		workers, nextToken, err := s.persistence.ListWorkers(ctx, 1000, pageToken)
+		page, err := s.persistence.ListWorkers(ctx, store.ListOptions{PageSize: 1000, PageToken: pageToken})
 		if err != nil {
 			slog.ErrorContext(ctx, "Syncer: failed to list workers for orphan reconcile", slog.Any("err", err))
 			return
 		}
-		for _, w := range workers {
+		for _, w := range page.Items {
 			s.queue.Add(workerKey{namespace: w.GetWorkerNamespace(), pool: w.GetWorkerPool(), name: w.GetWorkerPod()})
 		}
-		if nextToken == "" {
+		if !page.HasNextPage() {
 			return
 		}
-		pageToken = nextToken
+		pageToken = page.NextPageToken
 	}
 }
 

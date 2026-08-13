@@ -119,15 +119,15 @@ func (c *Cache) relist(ctx context.Context) error {
 	var workers []*ateapipb.Worker
 	pageToken := ""
 	for {
-		page, nextToken, err := c.store.ListWorkers(ctx, relistPageSize, pageToken)
+		page, err := c.store.ListWorkers(ctx, store.ListOptions{PageSize: relistPageSize, PageToken: pageToken})
 		if err != nil {
 			return fmt.Errorf("ListWorkers: %w", err)
 		}
-		workers = append(workers, page...)
-		if nextToken == "" {
+		workers = append(workers, page.Items...)
+		if !page.HasNextPage() {
 			break
 		}
-		pageToken = nextToken
+		pageToken = page.NextPageToken
 	}
 	newMap := make(map[string]*ateapipb.Worker, len(workers))
 	for _, w := range workers {
