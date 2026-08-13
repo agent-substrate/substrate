@@ -107,9 +107,9 @@ type AteomClient interface {
 	// answered about a specific actor.
 	//
 	// Every state a blind caller can find is a normal answer here, never an
-	// error: the response carries a WorkloadState, sample is absent when there
-	// is nothing to measure ("available") or nothing to measure YET (a poll
-	// landing in a boot or a restore), and error codes are reserved for real
+	// error: the response is either a sample or the NoSampleReason there is
+	// none -- nothing to measure ("available"), or nothing to measure YET (a
+	// poll landing in a boot or a restore). Error codes are reserved for real
 	// failures reading a sandbox that should be measurable. This is deliberately
 	// unlike GetWorkloadStats, whose caller asserts knowledge the codes then
 	// answer.
@@ -247,9 +247,9 @@ type AteomServer interface {
 	// answered about a specific actor.
 	//
 	// Every state a blind caller can find is a normal answer here, never an
-	// error: the response carries a WorkloadState, sample is absent when there
-	// is nothing to measure ("available") or nothing to measure YET (a poll
-	// landing in a boot or a restore), and error codes are reserved for real
+	// error: the response is either a sample or the NoSampleReason there is
+	// none -- nothing to measure ("available"), or nothing to measure YET (a
+	// poll landing in a boot or a restore). Error codes are reserved for real
 	// failures reading a sandbox that should be measurable. This is deliberately
 	// unlike GetWorkloadStats, whose caller asserts knowledge the codes then
 	// answer.

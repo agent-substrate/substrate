@@ -141,39 +141,42 @@ func (s *AteomService) GetWorkloadStats(ctx context.Context, req *ateompb.GetWor
 func (s *AteomService) GetActiveWorkloadStats(ctx context.Context, req *ateompb.GetActiveWorkloadStatsRequest) (*ateompb.GetActiveWorkloadStatsResponse, error) {
 	active := s.activeActor.Load()
 	if active == nil {
-		return &ateompb.GetActiveWorkloadStatsResponse{
-			State: ateompb.WorkloadState_WORKLOAD_STATE_AVAILABLE,
-		}, nil
+		return noSample(ateompb.NoSampleReason_NO_SAMPLE_REASON_NO_WORKLOAD), nil
 	}
 
 	sample, err := s.sampleGuest(ctx, active)
 	if err != nil {
-		// Every way sampleGuest declines is EXECUTING with no numbers yet --
+		// Every way sampleGuest declines is a workload with no numbers yet --
 		// boot, restore, teardown in progress, a guest that has stopped
 		// answering -- and for a caller with no prior knowledge each is as
-		// normal a finding as an available ateom. A state, not an error.
-		return &ateompb.GetActiveWorkloadStatsResponse{
-			State: ateompb.WorkloadState_WORKLOAD_STATE_EXECUTING,
-		}, nil
+		// normal a finding as an available ateom. A reason, not an error.
+		return noSample(ateompb.NoSampleReason_NO_SAMPLE_REASON_NOT_MEASURABLE_YET), nil
 	}
 
 	// Same re-check as GetWorkloadStats, different answer: with no uid asserted
 	// there is no "requested actor" for NOT_FOUND to disown, and a transition
 	// underneath the read just means these numbers cannot be attributed to any
-	// single actor. Report the state as of now, with no sample -- the next tick
-	// resolves it either way.
+	// single actor. Report the reason as of now -- the next tick resolves it
+	// either way.
 	if latest := s.activeActor.Load(); latest != active {
-		state := ateompb.WorkloadState_WORKLOAD_STATE_EXECUTING
+		reason := ateompb.NoSampleReason_NO_SAMPLE_REASON_NOT_MEASURABLE_YET
 		if latest == nil {
-			state = ateompb.WorkloadState_WORKLOAD_STATE_AVAILABLE
+			reason = ateompb.NoSampleReason_NO_SAMPLE_REASON_NO_WORKLOAD
 		}
-		return &ateompb.GetActiveWorkloadStatsResponse{State: state}, nil
+		return noSample(reason), nil
 	}
 
 	return &ateompb.GetActiveWorkloadStatsResponse{
-		State:  ateompb.WorkloadState_WORKLOAD_STATE_EXECUTING,
-		Sample: sample,
+		Result: &ateompb.GetActiveWorkloadStatsResponse_Sample{Sample: sample},
 	}, nil
+}
+
+// noSample is the discovery read's "nothing to give, and that is normal"
+// answer.
+func noSample(reason ateompb.NoSampleReason) *ateompb.GetActiveWorkloadStatsResponse {
+	return &ateompb.GetActiveWorkloadStatsResponse{
+		Result: &ateompb.GetActiveWorkloadStatsResponse_NoSampleReason{NoSampleReason: reason},
+	}
 }
 
 // sampleGuest reads the guest's container cgroups through the agent and builds

@@ -85,9 +85,9 @@ service Ateom {
   // answered about a specific actor.
   //
   // Every state a blind caller can find is a normal answer here, never an
-  // error: the response carries a WorkloadState, sample is absent when there
-  // is nothing to measure ("available") or nothing to measure YET (a poll
-  // landing in a boot or a restore), and error codes are reserved for real
+  // error: the response is either a sample or the NoSampleReason there is
+  // none -- nothing to measure ("available"), or nothing to measure YET (a
+  // poll landing in a boot or a restore). Error codes are reserved for real
   // failures reading a sandbox that should be measurable. This is deliberately
   // unlike GetWorkloadStats, whose caller asserts knowledge the codes then
   // answer.
@@ -363,28 +363,27 @@ message GetWorkloadStatsResponse {
 message GetActiveWorkloadStatsRequest {
 }
 
-// WorkloadState is the executing/available half of the ateom state machine, as
-// the discovery read reports it. It exists so a caller with no prior knowledge
-// can tell "nothing here" from "something here without numbers yet" without
-// either being an error.
-enum WorkloadState {
-  WORKLOAD_STATE_UNSPECIFIED = 0;
-  // Nothing is executing. sample is absent.
-  WORKLOAD_STATE_AVAILABLE = 1;
-  // A workload is executing. sample is set -- or absent, when there are no
-  // numbers to give yet: a poll landing in a boot or a restore, or a
-  // lifecycle transition underneath the read. Skip and take the next one.
-  WORKLOAD_STATE_EXECUTING = 2;
+// NoSampleReason is why the discovery read has no sample to give -- every
+// value is a normal state a caller with no prior knowledge routinely finds,
+// never an error.
+enum NoSampleReason {
+  NO_SAMPLE_REASON_UNSPECIFIED = 0;
+  // Nothing is executing: the ateom is "available".
+  NO_SAMPLE_REASON_NO_WORKLOAD = 1;
+  // A workload is executing but there are no numbers to give yet: a poll
+  // landing in a boot or a restore, a teardown in progress, or a lifecycle
+  // transition underneath the read. Transient -- take the next sample.
+  NO_SAMPLE_REASON_NOT_MEASURABLE_YET = 2;
 }
 
 message GetActiveWorkloadStatsResponse {
-  WorkloadState state = 1;
-
-  // Set when state is WORKLOAD_STATE_EXECUTING and there are numbers to give;
-  // absent when the ateom is available, and absent mid-boot/restore/teardown
-  // when there is nothing to measure yet (see WorkloadState). An ateom serves
-  // one actor at a time, so the slot is singular like the state that
-  // describes it. The sample is self-describing; see the attribution rule on
-  // the rpc.
-  WorkloadStatsSample sample = 2;
+  // Exactly one of the two is set: either a measurement, or the reason there
+  // is none. An ateom serves one actor at a time, so the sample slot is
+  // singular; the sample is self-describing (see the attribution rule on the
+  // rpc), and a sample being present is itself the statement that a workload
+  // is executing.
+  oneof result {
+    WorkloadStatsSample sample = 1;
+    NoSampleReason no_sample_reason = 2;
+  }
 }

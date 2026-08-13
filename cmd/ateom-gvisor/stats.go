@@ -154,21 +154,17 @@ func (s *AteomService) GetWorkloadStats(ctx context.Context, req *ateompb.GetWor
 func (s *AteomService) GetActiveWorkloadStats(ctx context.Context, req *ateompb.GetActiveWorkloadStatsRequest) (*ateompb.GetActiveWorkloadStatsResponse, error) {
 	active := s.activeActor.Load()
 	if active == nil {
-		return &ateompb.GetActiveWorkloadStatsResponse{
-			State: ateompb.WorkloadState_WORKLOAD_STATE_AVAILABLE,
-		}, nil
+		return noSample(ateompb.NoSampleReason_NO_SAMPLE_REASON_NO_WORKLOAD), nil
 	}
 
 	sample, err := s.sampleSandbox(active)
 	if err != nil {
-		// A missing cgroup is EXECUTING with no numbers yet -- a poll landing
+		// A missing cgroup is a workload with no numbers yet -- a poll landing
 		// in the boot -- which for a caller with no prior knowledge is as
-		// normal a finding as an available ateom, so it is a state, not an
+		// normal a finding as an available ateom, so it is a reason, not an
 		// error. Anything else is a real read failure.
 		if errors.Is(err, fs.ErrNotExist) {
-			return &ateompb.GetActiveWorkloadStatsResponse{
-				State: ateompb.WorkloadState_WORKLOAD_STATE_EXECUTING,
-			}, nil
+			return noSample(ateompb.NoSampleReason_NO_SAMPLE_REASON_NOT_MEASURABLE_YET), nil
 		}
 		return nil, status.Errorf(codes.Internal, "reading sandbox cgroup: %v", err)
 	}
@@ -176,20 +172,27 @@ func (s *AteomService) GetActiveWorkloadStats(ctx context.Context, req *ateompb.
 	// Same re-check as GetWorkloadStats, different answer: with no uid asserted
 	// there is no "requested actor" for NOT_FOUND to disown, and a transition
 	// underneath the read just means these numbers cannot be attributed to any
-	// single actor. Report the state as of now, with no sample -- the next tick
-	// resolves it either way.
+	// single actor. Report the reason as of now -- the next tick resolves it
+	// either way.
 	if latest := s.activeActor.Load(); latest != active {
-		state := ateompb.WorkloadState_WORKLOAD_STATE_EXECUTING
+		reason := ateompb.NoSampleReason_NO_SAMPLE_REASON_NOT_MEASURABLE_YET
 		if latest == nil {
-			state = ateompb.WorkloadState_WORKLOAD_STATE_AVAILABLE
+			reason = ateompb.NoSampleReason_NO_SAMPLE_REASON_NO_WORKLOAD
 		}
-		return &ateompb.GetActiveWorkloadStatsResponse{State: state}, nil
+		return noSample(reason), nil
 	}
 
 	return &ateompb.GetActiveWorkloadStatsResponse{
-		State:  ateompb.WorkloadState_WORKLOAD_STATE_EXECUTING,
-		Sample: sample,
+		Result: &ateompb.GetActiveWorkloadStatsResponse_Sample{Sample: sample},
 	}, nil
+}
+
+// noSample is the discovery read's "nothing to give, and that is normal"
+// answer.
+func noSample(reason ateompb.NoSampleReason) *ateompb.GetActiveWorkloadStatsResponse {
+	return &ateompb.GetActiveWorkloadStatsResponse{
+		Result: &ateompb.GetActiveWorkloadStatsResponse_NoSampleReason{NoSampleReason: reason},
+	}
 }
 
 // sampleSandbox reads the sandbox cgroup and builds the sample attributed to
@@ -199,8 +202,12 @@ func (s *AteomService) GetActiveWorkloadStats(ctx context.Context, req *ateompb.
 // Callers re-check s.activeActor against the pointer they loaded after this
 // returns; the read holds no lock.
 func (s *AteomService) sampleSandbox(active *ateomstats.ActorAttribution) (*ateompb.WorkloadStatsSample, error) {
+	read := s.readSandboxCgroup
+	if read == nil {
+		read = cgroupstats.Read
+	}
 	observedAt := time.Now()
-	sample, err := cgroupstats.Read(filepath.Join(s.cgroupRoot, sandboxCgroupContainer))
+	sample, err := read(filepath.Join(s.cgroupRoot, sandboxCgroupContainer))
 	if err != nil {
 		return nil, err
 	}

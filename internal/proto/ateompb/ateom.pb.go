@@ -212,60 +212,59 @@ func (StatsSource) EnumDescriptor() ([]byte, []int) {
 	return file_ateom_proto_rawDescGZIP(), []int{2}
 }
 
-// WorkloadState is the executing/available half of the ateom state machine, as
-// the discovery read reports it. It exists so a caller with no prior knowledge
-// can tell "nothing here" from "something here without numbers yet" without
-// either being an error.
-type WorkloadState int32
+// NoSampleReason is why the discovery read has no sample to give -- every
+// value is a normal state a caller with no prior knowledge routinely finds,
+// never an error.
+type NoSampleReason int32
 
 const (
-	WorkloadState_WORKLOAD_STATE_UNSPECIFIED WorkloadState = 0
-	// Nothing is executing. sample is absent.
-	WorkloadState_WORKLOAD_STATE_AVAILABLE WorkloadState = 1
-	// A workload is executing. sample is set -- or absent, when there are no
-	// numbers to give yet: a poll landing in a boot or a restore, or a
-	// lifecycle transition underneath the read. Skip and take the next one.
-	WorkloadState_WORKLOAD_STATE_EXECUTING WorkloadState = 2
+	NoSampleReason_NO_SAMPLE_REASON_UNSPECIFIED NoSampleReason = 0
+	// Nothing is executing: the ateom is "available".
+	NoSampleReason_NO_SAMPLE_REASON_NO_WORKLOAD NoSampleReason = 1
+	// A workload is executing but there are no numbers to give yet: a poll
+	// landing in a boot or a restore, a teardown in progress, or a lifecycle
+	// transition underneath the read. Transient -- take the next sample.
+	NoSampleReason_NO_SAMPLE_REASON_NOT_MEASURABLE_YET NoSampleReason = 2
 )
 
-// Enum value maps for WorkloadState.
+// Enum value maps for NoSampleReason.
 var (
-	WorkloadState_name = map[int32]string{
-		0: "WORKLOAD_STATE_UNSPECIFIED",
-		1: "WORKLOAD_STATE_AVAILABLE",
-		2: "WORKLOAD_STATE_EXECUTING",
+	NoSampleReason_name = map[int32]string{
+		0: "NO_SAMPLE_REASON_UNSPECIFIED",
+		1: "NO_SAMPLE_REASON_NO_WORKLOAD",
+		2: "NO_SAMPLE_REASON_NOT_MEASURABLE_YET",
 	}
-	WorkloadState_value = map[string]int32{
-		"WORKLOAD_STATE_UNSPECIFIED": 0,
-		"WORKLOAD_STATE_AVAILABLE":   1,
-		"WORKLOAD_STATE_EXECUTING":   2,
+	NoSampleReason_value = map[string]int32{
+		"NO_SAMPLE_REASON_UNSPECIFIED":        0,
+		"NO_SAMPLE_REASON_NO_WORKLOAD":        1,
+		"NO_SAMPLE_REASON_NOT_MEASURABLE_YET": 2,
 	}
 )
 
-func (x WorkloadState) Enum() *WorkloadState {
-	p := new(WorkloadState)
+func (x NoSampleReason) Enum() *NoSampleReason {
+	p := new(NoSampleReason)
 	*p = x
 	return p
 }
 
-func (x WorkloadState) String() string {
+func (x NoSampleReason) String() string {
 	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
 }
 
-func (WorkloadState) Descriptor() protoreflect.EnumDescriptor {
+func (NoSampleReason) Descriptor() protoreflect.EnumDescriptor {
 	return file_ateom_proto_enumTypes[3].Descriptor()
 }
 
-func (WorkloadState) Type() protoreflect.EnumType {
+func (NoSampleReason) Type() protoreflect.EnumType {
 	return &file_ateom_proto_enumTypes[3]
 }
 
-func (x WorkloadState) Number() protoreflect.EnumNumber {
+func (x NoSampleReason) Number() protoreflect.EnumNumber {
 	return protoreflect.EnumNumber(x)
 }
 
-// Deprecated: Use WorkloadState.Descriptor instead.
-func (WorkloadState) EnumDescriptor() ([]byte, []int) {
+// Deprecated: Use NoSampleReason.Descriptor instead.
+func (NoSampleReason) EnumDescriptor() ([]byte, []int) {
 	return file_ateom_proto_rawDescGZIP(), []int{3}
 }
 
@@ -1388,14 +1387,17 @@ func (*GetActiveWorkloadStatsRequest) Descriptor() ([]byte, []int) {
 
 type GetActiveWorkloadStatsResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	State WorkloadState          `protobuf:"varint,1,opt,name=state,proto3,enum=ateom.WorkloadState" json:"state,omitempty"`
-	// Set when state is WORKLOAD_STATE_EXECUTING and there are numbers to give;
-	// absent when the ateom is available, and absent mid-boot/restore/teardown
-	// when there is nothing to measure yet (see WorkloadState). An ateom serves
-	// one actor at a time, so the slot is singular like the state that
-	// describes it. The sample is self-describing; see the attribution rule on
-	// the rpc.
-	Sample        *WorkloadStatsSample `protobuf:"bytes,2,opt,name=sample,proto3" json:"sample,omitempty"`
+	// Exactly one of the two is set: either a measurement, or the reason there
+	// is none. An ateom serves one actor at a time, so the sample slot is
+	// singular; the sample is self-describing (see the attribution rule on the
+	// rpc), and a sample being present is itself the statement that a workload
+	// is executing.
+	//
+	// Types that are valid to be assigned to Result:
+	//
+	//	*GetActiveWorkloadStatsResponse_Sample
+	//	*GetActiveWorkloadStatsResponse_NoSampleReason
+	Result        isGetActiveWorkloadStatsResponse_Result `protobuf_oneof:"result"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -1430,19 +1432,46 @@ func (*GetActiveWorkloadStatsResponse) Descriptor() ([]byte, []int) {
 	return file_ateom_proto_rawDescGZIP(), []int{16}
 }
 
-func (x *GetActiveWorkloadStatsResponse) GetState() WorkloadState {
+func (x *GetActiveWorkloadStatsResponse) GetResult() isGetActiveWorkloadStatsResponse_Result {
 	if x != nil {
-		return x.State
+		return x.Result
 	}
-	return WorkloadState_WORKLOAD_STATE_UNSPECIFIED
+	return nil
 }
 
 func (x *GetActiveWorkloadStatsResponse) GetSample() *WorkloadStatsSample {
 	if x != nil {
-		return x.Sample
+		if x, ok := x.Result.(*GetActiveWorkloadStatsResponse_Sample); ok {
+			return x.Sample
+		}
 	}
 	return nil
 }
+
+func (x *GetActiveWorkloadStatsResponse) GetNoSampleReason() NoSampleReason {
+	if x != nil {
+		if x, ok := x.Result.(*GetActiveWorkloadStatsResponse_NoSampleReason); ok {
+			return x.NoSampleReason
+		}
+	}
+	return NoSampleReason_NO_SAMPLE_REASON_UNSPECIFIED
+}
+
+type isGetActiveWorkloadStatsResponse_Result interface {
+	isGetActiveWorkloadStatsResponse_Result()
+}
+
+type GetActiveWorkloadStatsResponse_Sample struct {
+	Sample *WorkloadStatsSample `protobuf:"bytes,1,opt,name=sample,proto3,oneof"`
+}
+
+type GetActiveWorkloadStatsResponse_NoSampleReason struct {
+	NoSampleReason NoSampleReason `protobuf:"varint,2,opt,name=no_sample_reason,json=noSampleReason,proto3,enum=ateom.NoSampleReason,oneof"`
+}
+
+func (*GetActiveWorkloadStatsResponse_Sample) isGetActiveWorkloadStatsResponse_Result() {}
+
+func (*GetActiveWorkloadStatsResponse_NoSampleReason) isGetActiveWorkloadStatsResponse_Result() {}
 
 var File_ateom_proto protoreflect.FileDescriptor
 
@@ -1547,10 +1576,11 @@ const file_ateom_proto_rawDesc = "" +
 	"\x15observed_at_unix_nano\x18\f \x01(\x03R\x12observedAtUnixNano\"N\n" +
 	"\x18GetWorkloadStatsResponse\x122\n" +
 	"\x06sample\x18\x01 \x01(\v2\x1a.ateom.WorkloadStatsSampleR\x06sample\"\x1f\n" +
-	"\x1dGetActiveWorkloadStatsRequest\"\x80\x01\n" +
-	"\x1eGetActiveWorkloadStatsResponse\x12*\n" +
-	"\x05state\x18\x01 \x01(\x0e2\x14.ateom.WorkloadStateR\x05state\x122\n" +
-	"\x06sample\x18\x02 \x01(\v2\x1a.ateom.WorkloadStatsSampleR\x06sample*\x84\x01\n" +
+	"\x1dGetActiveWorkloadStatsRequest\"\xa3\x01\n" +
+	"\x1eGetActiveWorkloadStatsResponse\x124\n" +
+	"\x06sample\x18\x01 \x01(\v2\x1a.ateom.WorkloadStatsSampleH\x00R\x06sample\x12A\n" +
+	"\x10no_sample_reason\x18\x02 \x01(\x0e2\x15.ateom.NoSampleReasonH\x00R\x0enoSampleReasonB\b\n" +
+	"\x06result*\x84\x01\n" +
 	"\rSnapshotScope\x12\x1e\n" +
 	"\x1aSNAPSHOT_SCOPE_UNSPECIFIED\x10\x00\x12\x17\n" +
 	"\x13SNAPSHOT_SCOPE_FULL\x10\x01\x12\x17\n" +
@@ -1563,11 +1593,11 @@ const file_ateom_proto_rawDesc = "" +
 	"\vStatsSource\x12\x1c\n" +
 	"\x18STATS_SOURCE_UNSPECIFIED\x10\x00\x12\x17\n" +
 	"\x13STATS_SOURCE_CGROUP\x10\x01\x12\x1c\n" +
-	"\x18STATS_SOURCE_GUEST_AGENT\x10\x02*k\n" +
-	"\rWorkloadState\x12\x1e\n" +
-	"\x1aWORKLOAD_STATE_UNSPECIFIED\x10\x00\x12\x1c\n" +
-	"\x18WORKLOAD_STATE_AVAILABLE\x10\x01\x12\x1c\n" +
-	"\x18WORKLOAD_STATE_EXECUTING\x10\x022\xc0\x03\n" +
+	"\x18STATS_SOURCE_GUEST_AGENT\x10\x02*}\n" +
+	"\x0eNoSampleReason\x12 \n" +
+	"\x1cNO_SAMPLE_REASON_UNSPECIFIED\x10\x00\x12 \n" +
+	"\x1cNO_SAMPLE_REASON_NO_WORKLOAD\x10\x01\x12'\n" +
+	"#NO_SAMPLE_REASON_NOT_MEASURABLE_YET\x10\x022\xc0\x03\n" +
 	"\x05Ateom\x12F\n" +
 	"\vRunWorkload\x12\x19.ateom.RunWorkloadRequest\x1a\x1a.ateom.RunWorkloadResponse\"\x00\x12[\n" +
 	"\x12CheckpointWorkload\x12 .ateom.CheckpointWorkloadRequest\x1a!.ateom.CheckpointWorkloadResponse\"\x00\x12R\n" +
@@ -1593,7 +1623,7 @@ var file_ateom_proto_goTypes = []any{
 	(SnapshotScope)(0),                     // 0: ateom.SnapshotScope
 	(SandboxClass)(0),                      // 1: ateom.SandboxClass
 	(StatsSource)(0),                       // 2: ateom.StatsSource
-	(WorkloadState)(0),                     // 3: ateom.WorkloadState
+	(NoSampleReason)(0),                    // 3: ateom.NoSampleReason
 	(*RunWorkloadRequest)(nil),             // 4: ateom.RunWorkloadRequest
 	(*EgressGateway)(nil),                  // 5: ateom.EgressGateway
 	(*WorkloadSpec)(nil),                   // 6: ateom.WorkloadSpec
@@ -1633,8 +1663,8 @@ var file_ateom_proto_depIdxs = []int32{
 	1,  // 14: ateom.WorkloadStatsSample.sandbox_class:type_name -> ateom.SandboxClass
 	2,  // 15: ateom.WorkloadStatsSample.source:type_name -> ateom.StatsSource
 	17, // 16: ateom.GetWorkloadStatsResponse.sample:type_name -> ateom.WorkloadStatsSample
-	3,  // 17: ateom.GetActiveWorkloadStatsResponse.state:type_name -> ateom.WorkloadState
-	17, // 18: ateom.GetActiveWorkloadStatsResponse.sample:type_name -> ateom.WorkloadStatsSample
+	17, // 17: ateom.GetActiveWorkloadStatsResponse.sample:type_name -> ateom.WorkloadStatsSample
+	3,  // 18: ateom.GetActiveWorkloadStatsResponse.no_sample_reason:type_name -> ateom.NoSampleReason
 	4,  // 19: ateom.Ateom.RunWorkload:input_type -> ateom.RunWorkloadRequest
 	12, // 20: ateom.Ateom.CheckpointWorkload:input_type -> ateom.CheckpointWorkloadRequest
 	14, // 21: ateom.Ateom.RestoreWorkload:input_type -> ateom.RestoreWorkloadRequest
@@ -1659,6 +1689,10 @@ func file_ateom_proto_init() {
 	}
 	file_ateom_proto_msgTypes[0].OneofWrappers = []any{}
 	file_ateom_proto_msgTypes[10].OneofWrappers = []any{}
+	file_ateom_proto_msgTypes[16].OneofWrappers = []any{
+		(*GetActiveWorkloadStatsResponse_Sample)(nil),
+		(*GetActiveWorkloadStatsResponse_NoSampleReason)(nil),
+	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{

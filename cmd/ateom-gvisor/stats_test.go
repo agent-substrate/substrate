@@ -28,6 +28,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/testing/protocmp"
 
+	"github.com/agent-substrate/substrate/cmd/ateom-gvisor/internal/cgroupstats"
 	"github.com/agent-substrate/substrate/internal/ateomstats"
 	"github.com/agent-substrate/substrate/internal/proto/ateompb"
 	"github.com/agent-substrate/substrate/internal/resources"
@@ -227,11 +228,8 @@ func TestGetActiveWorkloadStats(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetActiveWorkloadStats() error = %v, want nil", err)
 	}
-	if got.GetState() != ateompb.WorkloadState_WORKLOAD_STATE_EXECUTING {
-		t.Errorf("GetActiveWorkloadStats() state = %v, want EXECUTING", got.GetState())
-	}
 	if got.GetSample() == nil {
-		t.Fatal("GetActiveWorkloadStats() returned no sample, want one")
+		t.Fatalf("GetActiveWorkloadStats() = %v, want a sample", got)
 	}
 
 	// The keyed read against the same fixture is the reference: the discovery
@@ -250,7 +248,7 @@ func TestGetActiveWorkloadStats(t *testing.T) {
 }
 
 // TestGetActiveWorkloadStatsAvailable pins the contract that makes the
-// discovery read scrapeable: an idle ateom is a state, never an error.
+// discovery read scrapeable: an idle ateom is a reason, never an error.
 func TestGetActiveWorkloadStatsAvailable(t *testing.T) {
 	s := newStatsService(t, healthyCgroup)
 
@@ -258,16 +256,13 @@ func TestGetActiveWorkloadStatsAvailable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetActiveWorkloadStats() on an available ateom: error = %v, want nil", err)
 	}
-	if got.GetState() != ateompb.WorkloadState_WORKLOAD_STATE_AVAILABLE {
-		t.Errorf("GetActiveWorkloadStats() state = %v, want AVAILABLE", got.GetState())
-	}
-	if got.GetSample() != nil {
-		t.Errorf("GetActiveWorkloadStats() on an available ateom returned sample %v, want none", got.GetSample())
+	if got.GetNoSampleReason() != ateompb.NoSampleReason_NO_SAMPLE_REASON_NO_WORKLOAD {
+		t.Errorf("GetActiveWorkloadStats() = %v, want NO_WORKLOAD reason", got)
 	}
 }
 
 // TestGetActiveWorkloadStatsBooting: executing but nothing to measure yet is
-// EXECUTING with no samples -- a state, not an error, unlike the keyed read's
+// a NOT_MEASURABLE_YET reason, not an error, unlike the keyed read's
 // FAILED_PRECONDITION. A blind caller finds boots as routinely as idle
 // workers.
 func TestGetActiveWorkloadStatsBooting(t *testing.T) {
@@ -278,10 +273,68 @@ func TestGetActiveWorkloadStatsBooting(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetActiveWorkloadStats() mid-boot: error = %v, want nil", err)
 	}
-	if got.GetState() != ateompb.WorkloadState_WORKLOAD_STATE_EXECUTING {
-		t.Errorf("GetActiveWorkloadStats() mid-boot state = %v, want EXECUTING", got.GetState())
+	if got.GetNoSampleReason() != ateompb.NoSampleReason_NO_SAMPLE_REASON_NOT_MEASURABLE_YET {
+		t.Errorf("GetActiveWorkloadStats() mid-boot = %v, want NOT_MEASURABLE_YET reason", got)
 	}
-	if got.GetSample() != nil {
-		t.Errorf("GetActiveWorkloadStats() mid-boot returned sample %v, want none", got.GetSample())
+}
+
+// The transition tests cover the re-check that runs after the lock-free
+// measurement, via the readSandboxCgroup seam: flipping activeActor inside the
+// read lands in exactly the window a checkpoint plus a fresh run (or a
+// checkpoint alone) can land in.
+
+func TestGetActiveWorkloadStatsTransition(t *testing.T) {
+	otherActor := testActor
+	otherActor.UID = "uid-b"
+
+	tests := []struct {
+		name string
+		to   *ateomstats.ActorAttribution
+		want ateompb.NoSampleReason
+	}{
+		// A new actor took the slot: there is a workload, its numbers are just
+		// not attributable this tick.
+		{name: "to another actor", to: &otherActor, want: ateompb.NoSampleReason_NO_SAMPLE_REASON_NOT_MEASURABLE_YET},
+		// A checkpoint emptied the slot: report what is true now.
+		{name: "to available", to: nil, want: ateompb.NoSampleReason_NO_SAMPLE_REASON_NO_WORKLOAD},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			s := newStatsService(t, healthyCgroup)
+			s.activeActor.Store(&testActor)
+			s.readSandboxCgroup = func(dir string) (cgroupstats.Sample, error) {
+				s.activeActor.Store(tc.to)
+				return cgroupstats.Read(dir)
+			}
+
+			got, err := s.GetActiveWorkloadStats(context.Background(), &ateompb.GetActiveWorkloadStatsRequest{})
+			if err != nil {
+				t.Fatalf("GetActiveWorkloadStats() during transition: error = %v, want nil", err)
+			}
+			if got.GetSample() != nil {
+				t.Errorf("GetActiveWorkloadStats() during transition returned sample %v, want none", got.GetSample())
+			}
+			if got.GetNoSampleReason() != tc.want {
+				t.Errorf("GetActiveWorkloadStats() during transition = %v, want %v reason", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestGetWorkloadStatsTransition pins the keyed read's side of the same
+// window: the caller asserted an actor that is gone by the time the sample
+// exists, so the answer is NOT_FOUND -- its mapping wants re-resolving.
+func TestGetWorkloadStatsTransition(t *testing.T) {
+	s := newStatsService(t, healthyCgroup)
+	s.activeActor.Store(&testActor)
+	s.readSandboxCgroup = func(dir string) (cgroupstats.Sample, error) {
+		s.activeActor.Store(nil)
+		return cgroupstats.Read(dir)
+	}
+
+	_, err := s.GetWorkloadStats(context.Background(), &ateompb.GetWorkloadStatsRequest{ActorUid: "uid-a"})
+	if got := status.Code(err); got != codes.NotFound {
+		t.Errorf("GetWorkloadStats() during transition: code = %v, want %v (err: %v)", got, codes.NotFound, err)
 	}
 }

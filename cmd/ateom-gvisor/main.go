@@ -34,6 +34,7 @@ import (
 	"time"
 
 	"cloud.google.com/go/compute/metadata"
+	"github.com/agent-substrate/substrate/cmd/ateom-gvisor/internal/cgroupstats"
 	"github.com/agent-substrate/substrate/internal/actorlog"
 	"github.com/agent-substrate/substrate/internal/ateinterceptors"
 	"github.com/agent-substrate/substrate/internal/ateomnet"
@@ -365,6 +366,12 @@ type AteomService struct {
 	// own cgroup scope, which setupCgroupDelegation prepares. A field rather
 	// than a constant so tests can point GetWorkloadStats at a fixture tree.
 	cgroupRoot string
+
+	// readSandboxCgroup overrides cgroupstats.Read when set. Only tests set it:
+	// it is the seam that lets them interleave a lifecycle transition with the
+	// stats handlers' lock-free read, the way containerStatsReader does for the
+	// micro-VM runtime. nil means the real read.
+	readSandboxCgroup func(dir string) (cgroupstats.Sample, error)
 }
 
 var _ ateompb.AteomServer = (*AteomService)(nil)
