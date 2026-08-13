@@ -185,7 +185,7 @@ func runCommand(ctx context.Context, atenetAddr string, actorRef resources.Actor
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Host = actorRef.DNSName()
+	req.Host = resources.ActorDNSName(actorRef)
 
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {

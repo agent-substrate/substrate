@@ -15,10 +15,121 @@
 package resources
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
+
+// The ref aliases must stay distinct types: the phantom ResourceRef kind is
+// what stops a reference to one resource kind from being passed where another
+// is expected.
+func TestRefAliasesAreDistinctTypes(t *testing.T) {
+	types := map[string]reflect.Type{
+		"ActorRef":                reflect.TypeFor[ActorRef](),
+		"ActorTemplateRef":        reflect.TypeFor[ActorTemplateRef](),
+		"ActorTemplateVersionRef": reflect.TypeFor[ActorTemplateVersionRef](),
+	}
+	seen := make(map[reflect.Type]string)
+	for name, typ := range types {
+		if other, dup := seen[typ]; dup {
+			t.Errorf("%s and %s are the same type; the phantom kind marker was lost", name, other)
+		}
+		seen[typ] = name
+	}
+}
+
+func TestActorRefString(t *testing.T) {
+	got := ActorRef{Atespace: "team-a", Name: "act-1"}.String()
+	if want := "team-a/act-1"; got != want {
+		t.Errorf("String() = %q, want %q", got, want)
+	}
+}
+
+func TestActorRefDNSName(t *testing.T) {
+	actorRef := ActorRef{Atespace: "team-a", Name: "act-1"}
+
+	got := ActorDNSName(actorRef)
+	want := "act-1.team-a.actors.resources.substrate.ate.dev"
+	if got != want {
+		t.Errorf("ActorDNSName() = %q, want %q", got, want)
+	}
+
+	parsed, err := ParseActorDNSName(got)
+	if err != nil {
+		t.Fatalf("ParseActorDNSName(%q) error = %v", got, err)
+	}
+	if parsed != actorRef {
+		t.Errorf("round-trip = %+v, want %+v", parsed, actorRef)
+	}
+}
+
+func TestParseActorDNSName(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		want    ActorRef
+		wantErr bool
+	}{
+		{"valid", "act-1.team-a.actors.resources.substrate.ate.dev", ActorRef{Atespace: "team-a", Name: "act-1"}, false},
+		{"valid trailing dot", "act-1.team-a.actors.resources.substrate.ate.dev.", ActorRef{Atespace: "team-a", Name: "act-1"}, false},
+		{"wrong suffix", "act-1.team-a.example.com", ActorRef{}, true},
+		{"missing atespace", "act-1.actors.resources.substrate.ate.dev", ActorRef{}, true},
+		{"invalid actor name", "ACT-1.team-a.actors.resources.substrate.ate.dev", ActorRef{}, true},
+		{"invalid atespace", "act-1.TEAM.actors.resources.substrate.ate.dev", ActorRef{}, true},
+		{"host:port not accepted", "act-1.team-a.actors.resources.substrate.ate.dev:8080", ActorRef{}, true},
+		{"empty", "", ActorRef{}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := ParseActorDNSName(tt.input)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("ParseActorDNSName(%q) error = %v, wantErr %v", tt.input, err, tt.wantErr)
+			}
+			if got != tt.want {
+				t.Errorf("ParseActorDNSName(%q) = %+v, want %+v", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestActorRefObjectRefRoundTrip(t *testing.T) {
+	actorRef := ActorRef{Atespace: "team-a", Name: "act-1"}
+
+	obj := actorRef.ToObjectRef()
+	if obj.GetAtespace() != "team-a" || obj.GetName() != "act-1" {
+		t.Errorf("ToObjectRef() = (%q, %q), want (team-a, act-1)", obj.GetAtespace(), obj.GetName())
+	}
+	if got := ActorRefFromObjectRef(obj); got != actorRef {
+		t.Errorf("round-trip = %+v, want %+v", got, actorRef)
+	}
+}
+
+func TestActorRefFromActor(t *testing.T) {
+	tests := []struct {
+		name  string
+		actor *ateapipb.Actor
+		want  ActorRef
+	}{
+		{
+			name: "populated",
+			actor: &ateapipb.Actor{Metadata: &ateapipb.ResourceMetadata{
+				Atespace: "team-a",
+				Name:     "act-1",
+			}},
+			want: ActorRef{Atespace: "team-a", Name: "act-1"},
+		},
+		{"nil actor", nil, ActorRef{}},
+		{"nil metadata", &ateapipb.Actor{}, ActorRef{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ActorRefFromActor(tt.actor); got != tt.want {
+				t.Errorf("ActorRefFromActor() = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}
 
 func TestActorTemplateRefString(t *testing.T) {
 	got := ActorTemplateRef{Atespace: "team-a", Name: "tmpl-1"}.String()

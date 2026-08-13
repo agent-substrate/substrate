@@ -93,6 +93,6 @@ func (c *RouterClient) request(ctx context.Context, method string, actorRef reso
 		req.Header.Set("Content-Type", "application/json")
 	}
 	// The router routes on the Host/:authority, not a header.
-	req.Host = actorRef.DNSName()
+	req.Host = resources.ActorDNSName(actorRef)
 	return c.http.Do(req)
 }

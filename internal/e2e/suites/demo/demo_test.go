@@ -1203,7 +1203,7 @@ func callActorPathOnce(t *testing.T, actorRef resources.ActorRef, method, path s
 	if err != nil {
 		return "", fmt.Errorf("failed to create request: %w", err)
 	}
-	reqHttp.Host = actorRef.DNSName()
+	reqHttp.Host = resources.ActorDNSName(actorRef)
 
 	httpClient := &http.Client{Timeout: 15 * time.Second}
 	resp, err := httpClient.Do(reqHttp)
