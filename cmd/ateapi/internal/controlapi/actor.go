@@ -48,19 +48,20 @@ func (s *Service) CreateActor(ctx context.Context, req *ateapipb.CreateActorRequ
 		)
 	}()
 	var sourceSnapshot *ateapipb.ActorSnapshot
-	var sourceSnapshotRef *ateapipb.ObjectRef
-	if ref := req.GetSourceSnapshot(); ref != nil {
-		if _, ok := ref.GetReference().(*ateapipb.ActorSnapshotRef_Tag); !ok {
-			return nil, status.Error(codes.FailedPrecondition, "source ActorSnapshot must be referenced by tag")
-		}
-		lock, snapshot, canonical, tag, err := s.lockActorSnapshot(ctx, ref)
+	var sourceSnapshotInfo *ateapipb.ActorSnapshotSource
+	if src := in.GetSourceSnapshot(); src != nil {
+		lock, snapshot, canonical, tag, err := s.lockActorSnapshot(ctx, nil, src.GetTag())
 		if err != nil {
 			return nil, err
 		}
 		defer lock.Close()
 		ctx = lock.Context()
 		sourceSnapshot = snapshot
-		sourceSnapshotRef = canonical
+		sourceSnapshotInfo = &ateapipb.ActorSnapshotSource{
+			Tag:         src.GetTag(),
+			Snapshot:    canonical,
+			SnapshotUid: snapshot.GetMetadata().GetUid(),
+		}
 		target := in.GetMetadata()
 		switch tag.GetScope() {
 		case ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE:
@@ -125,7 +126,8 @@ func (s *Service) CreateActor(ctx context.Context, req *ateapipb.CreateActorRequ
 		ActorTemplateName:      templateName,
 		WorkerSelector:         in.GetWorkerSelector(),
 		ActorVolumes:           initVols,
-		LatestSnapshot:         sourceSnapshotRef,
+		LatestSnapshot:         sourceSnapshotInfo.GetSnapshot(),
+		SourceSnapshot:         sourceSnapshotInfo,
 	}
 	stored, err := s.persistence.CreateActor(ctx, actor)
 	if err != nil {
@@ -180,10 +182,8 @@ func validateCreateActorRequest(req *ateapipb.CreateActorRequest) field.ErrorLis
 	if val := actor.GetWorkerSelector(); val != nil {
 		errs = append(errs, validateSelector(val, actorPath.Child("worker_selector"))...)
 	}
-	if val := req.GetSourceSnapshot(); val != nil {
-		if err := validateActorSnapshotRef(val, "source_snapshot"); err != nil {
-			errs = append(errs, field.Invalid(fldPath.Child("source_snapshot"), val, err.Error()))
-		}
+	if src := actor.GetSourceSnapshot(); src != nil {
+		errs = append(errs, resources.ValidateObjectRef(src.GetTag(), actorPath.Child("source_snapshot").Child("tag"))...)
 	}
 
 	return errs

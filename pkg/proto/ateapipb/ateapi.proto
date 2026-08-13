@@ -49,11 +49,14 @@ service Control {
   // Get an ActorSnapshot.
   rpc GetActorSnapshot(GetActorSnapshotRequest) returns (ActorSnapshot) {}
 
+  // Get an ActorSnapshot tag.
+  rpc GetActorSnapshotTag(GetActorSnapshotTagRequest) returns (ActorSnapshotTag) {}
+
   // List ActorSnapshots.
   rpc ListActorSnapshots(ListActorSnapshotsRequest) returns (ListActorSnapshotsResponse) {}
 
   // Add an Atespace-owned, stable name for an ActorSnapshot.
-  rpc TagActorSnapshot(TagActorSnapshotRequest) returns (ActorSnapshotTag) {}
+  rpc CreateActorSnapshotTag(CreateActorSnapshotTagRequest) returns (ActorSnapshotTag) {}
 
   // Publish or unpublish an ActorSnapshot tag without changing its address.
   rpc UpdateActorSnapshotTag(UpdateActorSnapshotTagRequest) returns (ActorSnapshotTag) {}
@@ -244,6 +247,11 @@ message Actor {
   repeated ExternalVolume actor_volumes = 11;
 
   string in_progress_local_snapshot_name = 12;
+
+  // How this Actor was seeded from an ActorSnapshot at CreateActor. Unset if
+  // the Actor was not created from a snapshot. Set once at creation and
+  // immutable afterward.
+  ActorSnapshotSource source_snapshot = 14;
 }
 
 // WorkerAssignment identifies the Worker currently hosting an Actor.
@@ -304,13 +312,20 @@ message ObjectRef {
   string name = 2;
 }
 
-// ActorSnapshotRef addresses a snapshot by its canonical identity or by an
-// Atespace-owned tag. Tag addresses remain stable when tags are published.
-message ActorSnapshotRef {
-  oneof reference {
-    ObjectRef snapshot = 1;
-    ObjectRef tag = 2;
-  }
+// ActorSnapshotSource records how an Actor was seeded from an ActorSnapshot.
+// Set once at CreateActor; every field is immutable afterward.
+message ActorSnapshotSource {
+  // The tag specified by the caller at CreateActor.
+  ObjectRef tag = 1;
+
+  // Output only. Canonical (atespace, name) of the snapshot the tag
+  // resolved to at creation time.
+  ObjectRef snapshot = 2;
+
+  // Output only. UID of the snapshot resolved at creation time. Stays a
+  // permanent trail even if that snapshot is later deleted and its name
+  // reused by an unrelated snapshot.
+  string snapshot_uid = 3;
 }
 
 // SandboxClass selects the sandbox runtime family. Snapshots are not portable
@@ -710,9 +725,6 @@ message GetActorRequest {
 message CreateActorRequest {
   // The actor to create.
   Actor actor = 1;
-
-  // Optional durable snapshot used to initialize the Actor.
-  ActorSnapshotRef source_snapshot = 2;
 }
 
 // Request to update mutable fields on an existing Actor.
@@ -769,7 +781,11 @@ message DeleteActorRequest {
 }
 
 message GetActorSnapshotRequest {
-  ActorSnapshotRef snapshot = 1;
+  ObjectRef snapshot = 1;
+}
+
+message GetActorSnapshotTagRequest {
+  ObjectRef tag = 1;
 }
 
 message ListActorSnapshotsRequest {
@@ -783,8 +799,8 @@ message ListActorSnapshotsResponse {
   string next_page_token = 2;
 }
 
-message TagActorSnapshotRequest {
-  ActorSnapshotRef snapshot = 1;
+message CreateActorSnapshotTagRequest {
+  ObjectRef snapshot = 1;
   ActorSnapshotTag tag = 2;
 }
 

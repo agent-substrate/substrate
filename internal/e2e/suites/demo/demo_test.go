@@ -133,7 +133,7 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 	if snapshot.GetName() == "" {
 		t.Fatal("suspended Actor has no latest snapshot")
 	}
-	snapshotRef := &ateapipb.ActorSnapshotRef{Reference: &ateapipb.ActorSnapshotRef_Snapshot{Snapshot: snapshot}}
+	snapshotRef := snapshot
 	if _, err := clients.SubstrateAPI.GetActorSnapshot(ctx, &ateapipb.GetActorSnapshotRequest{Snapshot: snapshotRef}); err != nil {
 		t.Fatalf("failed to get ActorSnapshot: %v", err)
 	}
@@ -156,7 +156,7 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 	t.Cleanup(func() {
 		_, _ = clients.SubstrateAPI.DeleteActorSnapshotTag(context.Background(), &ateapipb.DeleteActorSnapshotTagRequest{Tag: tagRef})
 	})
-	if _, err := clients.SubstrateAPI.TagActorSnapshot(ctx, &ateapipb.TagActorSnapshotRequest{
+	if _, err := clients.SubstrateAPI.CreateActorSnapshotTag(ctx, &ateapipb.CreateActorSnapshotTagRequest{
 		Snapshot: snapshotRef,
 		Tag: &ateapipb.ActorSnapshotTag{
 			Metadata: &ateapipb.ResourceMetadata{Atespace: tagRef.GetAtespace(), Name: tagRef.GetName()},
@@ -180,8 +180,8 @@ func TestActorSnapshotLifecycle(t *testing.T) {
 			Metadata:               &ateapipb.ResourceMetadata{Atespace: demoAtespace, Name: cloneName},
 			ActorTemplateNamespace: nsObj.Name,
 			ActorTemplateName:      at.Name,
+			SourceSnapshot:         &ateapipb.ActorSnapshotSource{Tag: tagRef},
 		},
-		SourceSnapshot: &ateapipb.ActorSnapshotRef{Reference: &ateapipb.ActorSnapshotRef_Tag{Tag: tagRef}},
 	}); err != nil {
 		t.Fatalf("failed to create Actor from snapshot tag: %v", err)
 	}
@@ -625,7 +625,7 @@ func validateSnapshotContentScope(ctx context.Context, t *testing.T, clients *e2
 		t.Fatal("suspended Actor has no latest snapshot")
 	}
 	snapshot, err := clients.SubstrateAPI.GetActorSnapshot(ctx, &ateapipb.GetActorSnapshotRequest{
-		Snapshot: &ateapipb.ActorSnapshotRef{Reference: &ateapipb.ActorSnapshotRef_Snapshot{Snapshot: snapRef}},
+		Snapshot: snapRef,
 	})
 	if err != nil {
 		t.Fatalf("failed to get ActorSnapshot %q: %v", snapRef.GetName(), err)

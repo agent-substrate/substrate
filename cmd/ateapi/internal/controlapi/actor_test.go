@@ -205,8 +205,8 @@ func TestCreateActor_RejectsDifferentTemplateForDataSnapshot(t *testing.T) {
 			Metadata:               &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "clone"},
 			ActorTemplateNamespace: ns,
 			ActorTemplateName:      "tmpl2",
+			SourceSnapshot:         &ateapipb.ActorSnapshotSource{Tag: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "data-snapshot"}},
 		},
-		SourceSnapshot: &ateapipb.ActorSnapshotRef{Reference: &ateapipb.ActorSnapshotRef_Tag{Tag: &ateapipb.ObjectRef{Atespace: testAtespace, Name: "data-snapshot"}}},
 	})
 	if status.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("CreateActor status = %v, want FailedPrecondition", status.Code(err))
@@ -262,8 +262,8 @@ func TestCreateActor_RejectsSnapshotWithExternalVolumes(t *testing.T) {
 			Metadata:               &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "clone"},
 			ActorTemplateNamespace: ns,
 			ActorTemplateName:      "tmpl1",
+			SourceSnapshot:         &ateapipb.ActorSnapshotSource{Tag: tagRef},
 		},
-		SourceSnapshot: &ateapipb.ActorSnapshotRef{Reference: &ateapipb.ActorSnapshotRef_Tag{Tag: tagRef}},
 	})
 	if status.Code(err) != codes.FailedPrecondition {
 		t.Fatalf("CreateActor status = %v, want FailedPrecondition", status.Code(err))

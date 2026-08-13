@@ -88,12 +88,18 @@ type Interface interface {
 	GetActorSnapshot(ctx context.Context, atespace, name string) (*ateapipb.ActorSnapshot, error)
 
 	// Resolves an Atespace-owned tag to an ActorSnapshot in constant time.
+	//
+	// TODO: rename to GetActorSnapshotTag to match the Create/Get/Update/Delete
+	// naming used by every other resource in this interface.
 	GetActorSnapshotByTag(ctx context.Context, atespace, name string) (*ateapipb.ActorSnapshot, *ateapipb.ActorSnapshotTag, error)
 
 	// Lists ActorSnapshots in one atespace, or all atespaces when empty.
 	ListActorSnapshots(ctx context.Context, atespace string, pageSize int32, pageToken string) ([]*ateapipb.ActorSnapshot, string, error)
 
 	// Adds an immutable Atespace-owned tag to an ActorSnapshot.
+	//
+	// TODO: rename to CreateActorSnapshotTag to match the Create/Get/Update/Delete
+	// naming used by every other resource in this interface.
 	TagActorSnapshot(ctx context.Context, atespace, name string, tag *ateapipb.ActorSnapshotTag) (*ateapipb.ActorSnapshotTag, error)
 
 	// UpdateActorSnapshotTag performs a transactional read-modify-write on the tag

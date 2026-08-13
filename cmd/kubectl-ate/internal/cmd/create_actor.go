@@ -61,7 +61,7 @@ var createActorCmd = &cobra.Command{
 			if err != nil {
 				return err
 			}
-			request.SourceSnapshot = &ateapipb.ActorSnapshotRef{Reference: &ateapipb.ActorSnapshotRef_Tag{Tag: ref}}
+			request.Actor.SourceSnapshot = &ateapipb.ActorSnapshotSource{Tag: ref}
 		}
 		resp, err := apiClient.CreateActor(ctx, request)
 		if err != nil {

@@ -68,11 +68,14 @@ var getActorSnapshotsCmd = &cobra.Command{
 		if len(args) > 0 {
 			for _, name := range args {
 				ref := &ateapipb.ObjectRef{Atespace: snapshotAtespaceFlag, Name: name}
-				snapshotRef := &ateapipb.ActorSnapshotRef{Reference: &ateapipb.ActorSnapshotRef_Snapshot{Snapshot: ref}}
 				if snapshotTagRefFlag {
-					snapshotRef.Reference = &ateapipb.ActorSnapshotRef_Tag{Tag: ref}
+					tag, err := client.GetActorSnapshotTag(ctx, &ateapipb.GetActorSnapshotTagRequest{Tag: ref})
+					if err != nil {
+						return fmt.Errorf("failed to get actor snapshot tag %q: %w", name, err)
+					}
+					ref = tag.GetSnapshot()
 				}
-				snapshot, err := client.GetActorSnapshot(ctx, &ateapipb.GetActorSnapshotRequest{Snapshot: snapshotRef})
+				snapshot, err := client.GetActorSnapshot(ctx, &ateapipb.GetActorSnapshotRequest{Snapshot: ref})
 				if err != nil {
 					return fmt.Errorf("failed to get actor snapshot %q: %w", name, err)
 				}
@@ -113,8 +116,8 @@ var createActorSnapshotTagCmd = &cobra.Command{
 		}
 		defer client.Close()
 
-		resp, err := client.TagActorSnapshot(ctx, &ateapipb.TagActorSnapshotRequest{
-			Snapshot: &ateapipb.ActorSnapshotRef{Reference: &ateapipb.ActorSnapshotRef_Snapshot{Snapshot: &ateapipb.ObjectRef{Atespace: createTagAtespaceFlag, Name: createTagSnapshotFlag}}},
+		resp, err := client.CreateActorSnapshotTag(ctx, &ateapipb.CreateActorSnapshotTagRequest{
+			Snapshot: &ateapipb.ObjectRef{Atespace: createTagAtespaceFlag, Name: createTagSnapshotFlag},
 			Tag: &ateapipb.ActorSnapshotTag{
 				Metadata: &ateapipb.ResourceMetadata{Atespace: createTagAtespaceFlag, Name: args[0]},
 				Scope:    scope,
