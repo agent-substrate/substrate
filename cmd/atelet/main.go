@@ -536,7 +536,7 @@ func initSnapshotSizeMetric() error {
 	snapshotSizeBytes, err = otel.Meter("atelet").Int64Histogram(
 		"atelet.snapshot.size",
 		metric.WithUnit("By"),
-		metric.WithDescription("Uncompressed size in bytes of each gVisor snapshot image written during checkpoint."),
+		metric.WithDescription("On-disk size in bytes of each snapshot image written during checkpoint: the blocks the filesystem allocated, not the length the file reports. The two differ for the micro-VM memory image, which is sparse — see allocatedBytes."),
 
 		metric.WithExplicitBucketBoundaries(
 			1e6, 5e6, 1e7, 2.5e7, 5e7, 1e8, 2.5e8, 5e8, 1e9, 2e9, 5e9, 1e10,
@@ -561,11 +561,43 @@ func recordSnapshotSize(ctx context.Context, file, path, atNamespace, atName str
 			slog.String("file", file), slog.String("path", path), slog.Any("err", err))
 		return
 	}
-	snapshotSizeBytes.Record(ctx, fi.Size(), metric.WithAttributes(
+	snapshotSizeBytes.Record(ctx, allocatedBytes(fi), metric.WithAttributes(
 		semconv.FileNameKey.String(file),
 		ateattr.TemplateNamespaceKey.String(atNamespace),
 		ateattr.TemplateNameKey.String(atName),
 	))
+}
+
+// allocatedBytes is what a snapshot image actually costs: the blocks the
+// filesystem has given it, not the length the file reports.
+//
+// The two differ only for a SPARSE file, and the micro-VM memory image is
+// exactly that. cloud-hypervisor creates memory-ranges at the guest's full RAM
+// size and writes only the pages the guest ever touched; the untouched
+// remainder is a hole that occupies nothing. Its LENGTH is therefore a
+// constant — the VM's configured memory — identical for a guest that just
+// booted and one that has filled its RAM, so recording the length measured
+// nothing at all. Measured on a live counter actor: length 2147483648,
+// allocated 163577856.
+//
+// st_blocks is in 512-byte units by POSIX definition, whatever the filesystem's
+// own block size is. It rounds up to a block, so this over-reports the small
+// JSON images beside the memory one by under 4 KiB — noise on a histogram whose
+// first bucket boundary is 1 MB, and the honest answer to "what did this cost"
+// in any case.
+//
+// The gVisor images are not sparse, so for them the two agree to within that
+// rounding and the change is invisible.
+//
+// Falls back to the length when the stat carries no Unix shape. No platform
+// atelet runs on is in that case; the fallback exists so a future one degrades
+// to the old reading rather than to zero.
+func allocatedBytes(fi os.FileInfo) int64 {
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return fi.Size()
+	}
+	return int64(st.Blocks) * 512
 }
 
 func (s *AteomHerder) Checkpoint(ctx context.Context, req *ateletpb.CheckpointRequest) (_ *ateletpb.CheckpointResponse, err error) {

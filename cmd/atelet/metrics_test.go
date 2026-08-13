@@ -18,6 +18,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -446,5 +448,100 @@ func TestCheckpointSnapshotKind(t *testing.T) {
 				t.Errorf("checkpointSnapshotKind() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+// sparseImage writes a file shaped like the micro-VM memory image: created at
+// the guest's full RAM size, with only a small prefix ever written. Returns its
+// path, its apparent length, and how much was actually written.
+func sparseImage(t *testing.T) (path string, apparent, written int64) {
+	t.Helper()
+
+	// The real numbers from a live actor: a 2048 MiB guest whose touched pages
+	// are a small fraction of that.
+	apparent, written = 2<<30, 1<<20
+
+	path = filepath.Join(t.TempDir(), "memory-ranges")
+	f, err := os.Create(path)
+	if err != nil {
+		t.Fatalf("create sparse image: %v", err)
+	}
+	defer f.Close()
+	if _, err := f.Write(make([]byte, written)); err != nil {
+		t.Fatalf("write sparse image prefix: %v", err)
+	}
+	if err := f.Truncate(apparent); err != nil {
+		t.Fatalf("extend sparse image to %d: %v", apparent, err)
+	}
+	if err := f.Sync(); err != nil {
+		t.Fatalf("sync sparse image: %v", err)
+	}
+	return path, apparent, written
+}
+
+func TestAllocatedBytesCountsBlocksNotLengthForASparseImage(t *testing.T) {
+	path, apparent, written := sparseImage(t)
+
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if fi.Size() != apparent {
+		t.Fatalf("Size() = %d, want the length the file was extended to, %d", fi.Size(), apparent)
+	}
+
+	got := allocatedBytes(fi)
+	if got >= apparent {
+		t.Errorf("allocatedBytes() = %d, want well under the apparent length %d; "+
+			"the hole past the first %d bytes should occupy no blocks", got, apparent, written)
+	}
+	// The written prefix is real data, so its blocks must be there. This is what
+	// separates "reads the hole correctly" from "reads zero".
+	if got < written {
+		t.Errorf("allocatedBytes() = %d, want at least the %d bytes actually written", got, written)
+	}
+}
+
+func TestAllocatedBytesAgreesWithLengthForADenseImage(t *testing.T) {
+	// Above any filesystem's inline-in-metadata threshold, so the file really
+	// does own blocks, and a whole number of blocks on every page size atelet
+	// runs on, so the rounding below is only ever upward by a partial block.
+	const size = 64 << 10
+
+	path := filepath.Join(t.TempDir(), "state.json")
+	if err := os.WriteFile(path, make([]byte, size), 0o600); err != nil {
+		t.Fatalf("write dense image: %v", err)
+	}
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+
+	// The non-sparse images — the JSON beside the memory one, and every gVisor
+	// image — must read the same as they always did, give or take the block the
+	// count rounds up to.
+	got := allocatedBytes(fi)
+	if got < size || got > size+(64<<10) {
+		t.Errorf("allocatedBytes() = %d, want the file's own %d bytes rounded up by at most a block", got, size)
+	}
+}
+
+// statlessFileInfo is an os.FileInfo from a filesystem whose Sys() carries no
+// Unix stat — the case allocatedBytes falls back for.
+type statlessFileInfo struct {
+	os.FileInfo
+	size int64
+}
+
+func (fi statlessFileInfo) Size() int64 { return fi.size }
+func (fi statlessFileInfo) Sys() any    { return nil }
+
+func TestAllocatedBytesFallsBackToLengthWithoutAUnixStat(t *testing.T) {
+	const size = 4096
+
+	got := allocatedBytes(statlessFileInfo{size: size})
+	if got != size {
+		t.Errorf("allocatedBytes() = %d, want the length %d: a stat with no Unix shape "+
+			"should degrade to the old reading, not to zero", got, size)
 	}
 }
