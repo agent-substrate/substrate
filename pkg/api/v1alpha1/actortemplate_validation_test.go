@@ -913,7 +913,7 @@ func TestActorTemplateValidation(t *testing.T) {
 			}
 		},
 		wantErr: true,
-		errMsg:  "exactly one of the fields in [actorMetadata] must be set",
+		errMsg:  "exactly one of the fields in [actorMetadata trustBundle] must be set",
 	}, {
 		name: "Volumes: SystemInfo actorMetadata with no items is invalid",
 		mutate: func(at *ActorTemplate) {
@@ -1063,6 +1063,120 @@ func TestActorTemplateValidation(t *testing.T) {
 		},
 		wantErr: true,
 		errMsg:  "items must not contain duplicate paths",
+	}, {
+		name: "Volumes: SystemInfo trustBundle data source is valid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Volumes = []Volume{
+				{
+					Name: "system-info",
+					VolumeSource: VolumeSource{
+						SystemInfo: &SystemInfoVolumeSource{
+							DataSources: []SystemInfoDataSource{
+								{TrustBundle: &TrustBundleDataSource{Name: "egress-trust", Path: "trust/ca.pem"}},
+							},
+						},
+					},
+				},
+			}
+			at.Spec.Containers[0].VolumeMounts = []VolumeMount{
+				{Name: "system-info", MountPath: "/run/substrate/certs"},
+			}
+		},
+		wantErr: false,
+	}, {
+		name: "Volumes: SystemInfo clusterTrustBundle with empty name is invalid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Volumes = []Volume{
+				{
+					Name: "system-info",
+					VolumeSource: VolumeSource{
+						SystemInfo: &SystemInfoVolumeSource{
+							DataSources: []SystemInfoDataSource{
+								{TrustBundle: &TrustBundleDataSource{Name: "", Path: "ca.pem"}},
+							},
+						},
+					},
+				},
+			}
+		},
+		wantErr: true,
+	}, {
+		name: "Volumes: SystemInfo clusterTrustBundle with absolute path is invalid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Volumes = []Volume{
+				{
+					Name: "system-info",
+					VolumeSource: VolumeSource{
+						SystemInfo: &SystemInfoVolumeSource{
+							DataSources: []SystemInfoDataSource{
+								{TrustBundle: &TrustBundleDataSource{Name: "egress-trust", Path: "/etc/ca.pem"}},
+							},
+						},
+					},
+				},
+			}
+		},
+		wantErr: true,
+		errMsg:  "path must be a clean relative Unix path",
+	}, {
+		name: "Volumes: SystemInfo data source with both members set is invalid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Volumes = []Volume{
+				{
+					Name: "system-info",
+					VolumeSource: VolumeSource{
+						SystemInfo: &SystemInfoVolumeSource{
+							DataSources: []SystemInfoDataSource{
+								{
+									ActorMetadata: &ActorMetadataDataSource{Items: []ActorMetadataItem{{Field: ActorMetadataFieldName, Path: "actor-name"}}},
+									TrustBundle:   &TrustBundleDataSource{Name: "egress-trust", Path: "ca.pem"},
+								},
+							},
+						},
+					},
+				},
+			}
+		},
+		wantErr: true,
+		errMsg:  "exactly one of the fields in [actorMetadata trustBundle] must be set",
+	}, {
+		name: "Volumes: SystemInfo clusterTrustBundles with duplicate paths are invalid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Volumes = []Volume{
+				{
+					Name: "system-info",
+					VolumeSource: VolumeSource{
+						SystemInfo: &SystemInfoVolumeSource{
+							DataSources: []SystemInfoDataSource{
+								{TrustBundle: &TrustBundleDataSource{Name: "bundle-a", Path: "ca.pem"}},
+								{TrustBundle: &TrustBundleDataSource{Name: "bundle-b", Path: "ca.pem"}},
+							},
+						},
+					},
+				},
+			}
+		},
+		wantErr: true,
+		errMsg:  "dataSources must not contain duplicate paths",
+	}, {
+		name: "Volumes: SystemInfo clusterTrustBundle path colliding with an actorMetadata item is invalid",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.Volumes = []Volume{
+				{
+					Name: "system-info",
+					VolumeSource: VolumeSource{
+						SystemInfo: &SystemInfoVolumeSource{
+							DataSources: []SystemInfoDataSource{
+								{ActorMetadata: &ActorMetadataDataSource{Items: []ActorMetadataItem{{Field: ActorMetadataFieldName, Path: "shared-path"}}}},
+								{TrustBundle: &TrustBundleDataSource{Name: "egress-trust", Path: "shared-path"}},
+							},
+						},
+					},
+				},
+			}
+		},
+		wantErr: true,
+		errMsg:  "dataSources must not contain duplicate paths",
 	}, {
 		name: "Volumes: SystemInfo with two actorMetadata entries is invalid",
 		mutate: func(at *ActorTemplate) {

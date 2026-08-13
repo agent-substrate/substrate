@@ -39,6 +39,7 @@ type whoamiResponse struct {
 	File     string `json:"file"`
 	Atespace string `json:"atespace"`
 	UID      string `json:"uid"`
+	Trust    string `json:"trust"`
 	Hostname string `json:"hostname"`
 	// Held is the actor id read through a file descriptor the probe opened at
 	// startup and holds across checkpoints — the snapshot therefore carries an
@@ -74,6 +75,10 @@ func TestActorIdentity_AfterRestore_IsOwnID_NotGolden(t *testing.T) {
 	ctx := context.Background()
 	clients := e2e.GetClients()
 
+	// Own the pool's contents before the fixture deploys (DeployProbe only
+	// ensures a bundle EXISTS): the assertions below compare the projected
+	// file against this run's CA, and rotation later replaces it again.
+	wantTrust := e2e.ReplaceEgressTrustPool(t, ctx, clients, "ate-e2e-probe-trust")
 	probeNamespace = e2e.DeployProbe(t, env["BUCKET_NAME"], "identity")
 	golden := waitForGolden(t, ctx, clients)
 
@@ -117,6 +122,14 @@ func TestActorIdentity_AfterRestore_IsOwnID_NotGolden(t *testing.T) {
 			t.Errorf("actor %q: /run/ate/atespace = %q, want %q (probe read error: %q)", id, got.Atespace, probeNamespace, got.Error)
 		}
 
+		// The projected trust bundle must be this run's pool CA, as published
+		// by the reconciler and sanitized by atelet (byte-identical here: the
+		// reconciler emits clean CERTIFICATE blocks; junk-tolerant
+		// sanitization is pinned by the resolve and pemutil unit tests).
+		if got.Trust != wantTrust {
+			t.Errorf("actor %q: /run/ate/trust-bundle.pem = %q, want the sanitized bundle %q (probe read error: %q)", id, got.Trust, wantTrust, got.Error)
+		}
+
 		// The projected UID must match the control plane's authoritative view
 		// of this actor, and be distinct per actor even though both actors
 		// were seeded from the same golden snapshot.
@@ -137,6 +150,14 @@ func TestActorIdentity_AfterRestore_IsOwnID_NotGolden(t *testing.T) {
 	// calls above deliberately seeded the guest state a suspend records — the
 	// held fd from probe startup plus the freshly indexed file inodes — and the
 	// resume regenerates every file underneath that state.
+	//
+	// The trust bundle is rotated first, so the same cycle also proves the
+	// "bundle contents refresh on every Run/Restore" semantic end to end: the
+	// resumed actor must observe the NEW sanitized contents at the same path.
+	// (Live propagation to running actors, without a resume, is #932 PR 2;
+	// until then a running actor's file is the bundle as of its last
+	// Run/Restore.)
+	rotatedTrust := e2e.ReplaceEgressTrustPool(t, ctx, clients, "ate-e2e-probe-trust-rotated")
 	id := ids[0]
 	ref := &ateapipb.ObjectRef{Atespace: probeNamespace, Name: id}
 	if _, err := clients.SubstrateAPI.SuspendActor(ctx, &ateapipb.SuspendActorRequest{Actor: ref}); err != nil {
@@ -160,6 +181,9 @@ func TestActorIdentity_AfterRestore_IsOwnID_NotGolden(t *testing.T) {
 	}
 	if wantUID := seenUIDFor(t, seenUIDs, id); got.UID != wantUID {
 		t.Errorf("after suspend/resume: /run/ate/actor-uid = %q, want %q (probe read error: %q)", got.UID, wantUID, got.Error)
+	}
+	if got.Trust != rotatedTrust {
+		t.Errorf("after suspend/resume: /run/ate/trust-bundle.pem = %q, want the rotated sanitized bundle %q (probe read error: %q)", got.Trust, rotatedTrust, got.Error)
 	}
 }
 

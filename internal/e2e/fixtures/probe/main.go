@@ -33,12 +33,14 @@ import (
 	"strings"
 )
 
-// The actorMetadata data-source files of the systemInfo volume that
-// probe.yaml.tmpl mounts at /run/ate.
+// The systemInfo volume data-source files that probe.yaml.tmpl mounts at
+// /run/ate: the actorMetadata projections plus a trustBundle
+// projection.
 const (
 	identityFile = "/run/ate/actor-id"
 	atespaceFile = "/run/ate/atespace"
 	uidFile      = "/run/ate/actor-uid"
+	trustFile    = "/run/ate/trust-bundle.pem"
 )
 
 // procStatus is where the kernel reports this process's capability sets. Asking
@@ -170,6 +172,7 @@ func whoami(w http.ResponseWriter, _ *http.Request) {
 		"file":     identityFile,
 		"atespace": atespaceFile,
 		"uid":      uidFile,
+		"trust":    trustFile,
 	} {
 		if b, err := os.ReadFile(path); err == nil {
 			resp[key] = string(b)

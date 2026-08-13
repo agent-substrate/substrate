@@ -15,6 +15,7 @@
 package e2e
 
 import (
+	"context"
 	"path/filepath"
 	"testing"
 )
@@ -35,6 +36,11 @@ func DeployProbe(t *testing.T, bucket, name string) string {
 	if err != nil {
 		t.Fatalf("FindRepoRoot: %v", err)
 	}
+
+	// The probe template projects the egress trust bundle, and every actor —
+	// including the fixture's golden boot — fails closed while the bundle is
+	// missing, so make sure it exists whatever suite is deploying.
+	EnsureEgressTrustBundle(t, context.Background(), GetClients())
 
 	// One manifest, rendered for the sandbox class under test, so both apply
 	// and delete consume the same file without any shell involved.

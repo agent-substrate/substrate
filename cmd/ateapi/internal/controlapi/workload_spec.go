@@ -56,6 +56,17 @@ func workloadSpecFromActorTemplate(actorTemplate *atev1alpha1.ActorTemplate, act
 							ActorMetadata: actorMetadata,
 						},
 					})
+				case dataSource.TrustBundle != nil:
+					// atelet resolves named trustBundles against its allowlist
+					// and ClusterTrustBundle informer at write time
+					ateletSystemInfo.DataSources = append(ateletSystemInfo.DataSources, &ateletpb.SystemInfoDataSource{
+						DataSource: &ateletpb.SystemInfoDataSource_TrustBundle{
+							TrustBundle: &ateletpb.TrustBundleDataSource{
+								Name: dataSource.TrustBundle.Name,
+								Path: dataSource.TrustBundle.Path,
+							},
+						},
+					})
 				default:
 					continue // Drop unrecognized data sources
 				}
