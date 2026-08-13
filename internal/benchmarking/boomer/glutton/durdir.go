@@ -47,7 +47,7 @@ import (
 
 const (
 	// Locust class name from tests/durdir.py; must match boomer.Task.Name.
-	durDirUserClass    = "DurDirUser"
+	durDirUserClass    = "DurdirUser"
 	defaultDurTemplate = "glutton-durdir-data"
 
 	writeDiskRoute = "/writedisk"
