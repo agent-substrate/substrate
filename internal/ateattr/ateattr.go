@@ -80,6 +80,18 @@ const (
 	RouterResumeKey         = attribute.Key("ate.router.resume")
 	RouterOutcomeKey        = attribute.Key("ate.router.outcome")
 	FailureReasonKey        = attribute.Key("ate.failure.reason")
+	StatsSourceKey          = attribute.Key("ate.stats.source")
+)
+
+// Values for StatsSourceKey, mirroring ateompb.StatsSource. The two sources do
+// not measure the same thing (the cgroup source charges the sandbox runtime's
+// overhead along with the workload, the guest-agent source sees only the
+// workload's containers), so rollups must group by this key rather than sum
+// across it.
+const (
+	StatsSourceUnspecified = "unspecified"
+	StatsSourceCgroup      = "cgroup"
+	StatsSourceGuestAgent  = "guest-agent"
 )
 
 // Values for SchedulingConstraintKey.
