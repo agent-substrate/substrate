@@ -45,15 +45,23 @@ const (
 	// ext_proc server overwrites this header before every request.
 	OriginalHostHeader = "X-Ate-Original-Host"
 
-	// TargetPortHeader carries the port the router resolved the request's
-	// target to be -- e.g. from the CONNECT :authority for arbitrary-port
-	// ingress, or the actor's default port 80 otherwise (see
-	// atenet-router's handleRequestHeaders). cfg.Upstream is fixed for the
-	// Server's whole lifetime and can't vary per port, so this header lets
-	// the reverse proxy pick the right port per request. Not meant for the
-	// actor application: stripped before the request is proxied.
+	// TargetPortHeader carries the port to reach on the actor: the CONNECT
+	// :authority's port for arbitrary-port ingress, or the default 80
+	// otherwise (see atenet-router's HandleRequestHeaders). cfg.Upstream is
+	// fixed for the Server's lifetime, so this lets the port vary per
+	// request; stripped before the request reaches the actor.
 	TargetPortHeader = "X-Ate-Target-Port"
 )
+
+// ParsePort parses s as a TCP port number, returning ok=false for anything
+// outside the valid 1-65535 range (including non-numeric input).
+func ParsePort(s string) (port int, ok bool) {
+	p, err := strconv.Atoi(s)
+	if err != nil || p < 1 || p > 65535 {
+		return 0, false
+	}
+	return p, true
+}
 
 // Config configures an ingress Server.
 type Config struct {
@@ -123,7 +131,7 @@ func NewServer(cfg Config) (*Server, error) {
 
 			port := pr.In.Header.Get(TargetPortHeader)
 			pr.Out.Header.Del(TargetPortHeader)
-			if p, err := strconv.Atoi(port); err == nil && p > 0 && p <= 65535 {
+			if p, ok := ParsePort(port); ok {
 				pr.Out.URL.Host = net.JoinHostPort(cfg.Upstream.Hostname(), strconv.Itoa(p))
 			}
 			pr.SetXForwarded()
@@ -319,8 +327,7 @@ func requestHostname(hostport string) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("invalid host %q: %w", hostport, err)
 		}
-		portNumber, err := strconv.Atoi(port)
-		if err != nil || portNumber < 1 || portNumber > 65535 {
+		if _, ok := ParsePort(port); !ok {
 			return "", fmt.Errorf("invalid port in host %q", hostport)
 		}
 	}

@@ -35,8 +35,6 @@ import (
 
 	"github.com/agent-substrate/substrate/internal/atunnel"
 
-	xdsv3 "github.com/cncf/xds/go/xds/core/v3"
-	v3 "github.com/cncf/xds/go/xds/type/matcher/v3"
 	accesslogv3 "github.com/envoyproxy/go-control-plane/envoy/config/accesslog/v3"
 	clusterv3 "github.com/envoyproxy/go-control-plane/envoy/config/cluster/v3"
 	mutationrulesv3 "github.com/envoyproxy/go-control-plane/envoy/config/common/mutation_rules/v3"
@@ -50,13 +48,8 @@ import (
 	extprocv3filter "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/ext_proc/v3"
 	routerv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/router/v3"
 	setfilterstatev3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/set_filter_state/v3"
-	httpinspectorv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/listener/http_inspector/v3"
 	originaldstv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/listener/original_dst/v3"
-	tlsinspectorv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/listener/tls_inspector/v3"
-	networkextprocv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/ext_proc/v3"
 	hcmv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
-	tcpproxyv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/tcp_proxy/v3"
-	networkv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/matching/common_inputs/network/v3"
 	internalupstreamv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/transport_sockets/internal_upstream/v3"
 	rawbufferv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/transport_sockets/raw_buffer/v3"
 	tlsv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/transport_sockets/tls/v3"
@@ -84,7 +77,6 @@ const (
 	IngressHTTPSListener = "ingress_https_listener"
 	RouteName            = "substrate_routes"
 	ClusterName          = "ate-cluster"
-	TCPClusterName       = "ate-tcp-cluster"
 	OtlpClusterName      = "otel_collector_cluster"
 	HTTPSCertSecretName  = "https_serving_cert"
 
@@ -95,10 +87,9 @@ const (
 	httpProtocolOptionsName = "envoy.extensions.upstreams.http.v3.HttpProtocolOptions"
 
 	// OriginalDstClusterName routes actor traffic to the worker's atunnel
-	// ingress by the IP:port either ext_proc server (HTTP or network) reports
-	// in dynamic metadata (see ingress.OriginalDstMetadataKey), while the
-	// request :authority stays the actor DNS name so atunnel can identify the
-	// active actor.
+	// ingress by the IP:port ext_proc reports in dynamic metadata (see
+	// ingress.OriginalDstMetadataKey), while the request :authority stays the
+	// actor DNS name so atunnel can identify the active actor.
 	OriginalDstClusterName = "actor_original_dst"
 
 	WildcardIP         = "0.0.0.0"
@@ -152,21 +143,6 @@ const defaultRouteTimeout = 10 * time.Second
 // routeIdleTimeout.
 const envoyDefaultStreamIdleTimeout = 5 * time.Minute
 
-// defaultExtProcMaxConnections is the circuit-breaker max_connections set on the
-// network ext_proc cluster. 1/4 of the max requests is a reasonable starting point,
-// especially considering the implications of hitting ext_proc on every
-// read. Parking is not supported because the semantics
-// are too new.
-const defaultExtProcMaxConnections = 512
-
-// defaultTcpEarlyDataBytes bounds how much downstream data tcp_proxy buffers
-// (see buildTcpConnectFilterChain's UpstreamConnectMode) while waiting for the
-// network ext_proc round trip to resolve the actor and establish the upstream
-// connection. 16KiB comfortably covers a TLS ClientHello or a few app-layer
-// frames; past this, tcp_proxy read-disables the downstream connection rather
-// than failing it.
-const defaultTcpEarlyDataBytes = 16384
-
 // XdsServer implements an aggregated discovery service server for dynamic Envoy router nodes.
 type XdsServer struct {
 	xdsPort      int
@@ -179,10 +155,10 @@ type XdsServer struct {
 
 	mu sync.Mutex
 
-	httpsPort      int
-	connectPort    int
-	connectTLSPort int
-	certPath       string
+	httpsPort            int
+	connectPlainTextPort int
+	connectTLSPort       int
+	certPath             string
 
 	// Upstream (actor-facing) mTLS. When upstreamCredentialBundlePath is set, the
 	// ORIGINAL_DST actor cluster dials the actor's in-worker atunnel ingress
@@ -218,10 +194,6 @@ type XdsServer struct {
 	// that hold a request open for a long turn — an LLM streaming a response,
 	// say — need this above the default or Envoy cuts the turn off with a 504.
 	routeTimeout time.Duration
-
-	// extProcMaxConnections is the circuit-breaker max_connections on the network
-	// ext_proc cluster.
-	extProcMaxConnections uint32
 }
 
 func NewXdsServer(xdsPort int) *XdsServer {
@@ -238,7 +210,6 @@ func NewXdsServer(xdsPort int) *XdsServer {
 		extProcMessageTimeout: defaultExtProcMessageTimeout,
 		extProcMaxRequests:    defaultExtProcMaxRequests,
 		routeTimeout:          defaultRouteTimeout,
-		extProcMaxConnections: defaultExtProcMaxConnections,
 	}
 }
 
@@ -251,10 +222,10 @@ func (x *XdsServer) SetConfig(ingressPort int, extprocPort int, extprocAddr stri
 }
 
 // TODO: More extensible config setting that doesn't require another lock op
-func (x *XdsServer) SetConnectPorts(connectPort int, connectTLSPort int) {
+func (x *XdsServer) SetConnectPorts(connectPlainTextPort int, connectTLSPort int) {
 	x.mu.Lock()
 	defer x.mu.Unlock()
-	x.connectPort = connectPort
+	x.connectPlainTextPort = connectPlainTextPort
 	x.connectTLSPort = connectTLSPort
 }
 
@@ -311,14 +282,6 @@ func (x *XdsServer) routeIdleTimeout() time.Duration {
 		return x.routeTimeout
 	}
 	return envoyDefaultStreamIdleTimeout
-}
-
-func (x *XdsServer) SetExtProcMaxConnections(n int) {
-	x.mu.Lock()
-	defer x.mu.Unlock()
-	if n > 0 {
-		x.extProcMaxConnections = uint32(n)
-	}
 }
 
 func (x *XdsServer) SetTlsConfig(httpsPort int, certPath string) {
@@ -449,7 +412,7 @@ func (x *XdsServer) UpdateSnapshot() error {
 
 	// connectEnabled is true when either CONNECT listener (plaintext or TLS) is
 	// configured; the main_internal cluster/listener only exist to serve them.
-	connectEnabled := x.connectPort > 0 || x.connectTLSPort > 0
+	connectEnabled := x.connectPlainTextPort > 0 || x.connectTLSPort > 0
 
 	// Clusters
 	clusters := []types.Resource{
@@ -458,7 +421,6 @@ func (x *XdsServer) UpdateSnapshot() error {
 	}
 	if connectEnabled {
 		clusters = append(clusters, x.buildMainInternalCluster())
-		clusters = append(clusters, x.buildTCPCluster())
 	}
 	if x.otlpHost != "" {
 		clusters = append(clusters, x.buildOtlpCollectorCluster())
@@ -476,7 +438,7 @@ func (x *XdsServer) UpdateSnapshot() error {
 	if connectEnabled {
 		listeners = append(listeners, x.buildMainInternalListener())
 	}
-	if x.connectPort > 0 {
+	if x.connectPlainTextPort > 0 {
 		listeners = append(listeners, x.buildConnectTerminateListener())
 	}
 	var secrets []types.Resource
@@ -545,70 +507,6 @@ func (x *XdsServer) Serve(ctx context.Context, lis net.Listener) error {
 		return nil
 	case err := <-errChan:
 		return err
-	}
-}
-
-func (x *XdsServer) buildTCPCluster() *clusterv3.Cluster {
-	return &clusterv3.Cluster{
-		Name:           TCPClusterName,
-		ConnectTimeout: durationpb.New(250 * time.Millisecond),
-		ClusterDiscoveryType: &clusterv3.Cluster_Type{
-			Type: clusterv3.Cluster_STATIC,
-		},
-		LbPolicy: clusterv3.Cluster_ROUND_ROBIN,
-		CircuitBreakers: &clusterv3.CircuitBreakers{
-			Thresholds: []*clusterv3.CircuitBreakers_Thresholds{
-				{
-					Priority:       corev3.RoutingPriority_DEFAULT,
-					MaxConnections: wrapperspb.UInt32(x.extProcMaxConnections),
-				},
-			},
-		},
-		// Required for the network ext_proc filter's gRPC stream: without an
-		// explicit HTTP/2 upstream, Envoy defaults this cluster to HTTP/1.1,
-		// which can't carry gRPC framing at all (see buildCluster's identical
-		// setting for the HTTP ext_proc cluster).
-		TypedExtensionProtocolOptions: map[string]*anypb.Any{
-			httpProtocolOptionsName: newAny(&httpv3.HttpProtocolOptions{
-				UpstreamProtocolOptions: &httpv3.HttpProtocolOptions_ExplicitHttpConfig_{
-					ExplicitHttpConfig: &httpv3.HttpProtocolOptions_ExplicitHttpConfig{
-						ProtocolConfig: &httpv3.HttpProtocolOptions_ExplicitHttpConfig_Http2ProtocolOptions{},
-					},
-				},
-			}),
-		},
-		LoadAssignment: &endpointv3.ClusterLoadAssignment{
-			ClusterName: TCPClusterName,
-			Endpoints: []*endpointv3.LocalityLbEndpoints{
-				{
-					LbEndpoints: []*endpointv3.LbEndpoint{
-						{
-							HostIdentifier: &endpointv3.LbEndpoint_Endpoint{
-								Endpoint: &endpointv3.Endpoint{
-									Address: &corev3.Address{
-										Address: &corev3.Address_SocketAddress{
-											SocketAddress: &corev3.SocketAddress{
-												Address: x.extprocAddr,
-												// The network ext_proc service shares extprocPort
-												// with the HTTP one -- one gRPC server, one
-												// listener, dispatched by service name (see
-												// router.go's Run). A separate cluster still exists
-												// (rather than reusing ClusterName) for its own
-												// max_connections circuit breaker, independent of
-												// the HTTP cluster's max_requests.
-												PortSpecifier: &corev3.SocketAddress_PortValue{
-													PortValue: uint32(x.extprocPort),
-												},
-											},
-										},
-									},
-								},
-							},
-						},
-					},
-				},
-			},
-		},
 	}
 }
 
@@ -832,13 +730,10 @@ func (x *XdsServer) buildMainInternalCluster() *clusterv3.Cluster {
 }
 
 // buildOriginalDstCluster dials the exact worker atunnel address supplied by
-// either ext_proc server in dynamic metadata (see ingress.OriginalDstMetadataKey).
-// A header mutation only works for HTTP traffic, and the network (TCP) ext_proc
-// leg has no HTTP headers at all, so metadata is the one mechanism that serves
-// both. It does not derive the destination from :authority, so the request
-// keeps the actor DNS name as its Host for atunnel to authorize. mTLS to
-// atunnel is applied via the shared upstream transport socket (SPIFFE URI
-// validation).
+// ext_proc in dynamic metadata (see ingress.OriginalDstMetadataKey). It does
+// not derive the destination from :authority, so the request keeps the actor
+// DNS name as its Host for atunnel to authorize. mTLS to atunnel is applied
+// via the shared upstream transport socket (SPIFFE URI validation).
 func (x *XdsServer) buildOriginalDstCluster() *clusterv3.Cluster {
 	cluster := &clusterv3.Cluster{
 		Name:           OriginalDstClusterName,
@@ -849,10 +744,6 @@ func (x *XdsServer) buildOriginalDstCluster() *clusterv3.Cluster {
 		LbPolicy: clusterv3.Cluster_CLUSTER_PROVIDED,
 		LbConfig: &clusterv3.Cluster_OriginalDstLbConfig_{
 			OriginalDstLbConfig: &clusterv3.Cluster_OriginalDstLbConfig{
-				// Request-scoped metadata (the HTTP ext_proc leg's) is checked
-				// first, then connection-scoped (the network ext_proc leg's) --
-				// one MetadataKey serves both without knowing which leg served
-				// this particular connection.
 				MetadataKey: &metadatav3.MetadataKey{
 					Key: ingress.OriginalDstMetadataKey,
 					Path: []*metadatav3.MetadataKey_PathSegment{
@@ -903,22 +794,19 @@ func (x *XdsServer) buildRoutes() *routev3.RouteConfiguration {
 								ClusterSpecifier: &routev3.RouteAction_Cluster{
 									Cluster: OriginalDstClusterName,
 								},
-								// This route also serves CONNECT-tunneled traffic re-injected
-								// via main_internal (buildMainInternalListener). Envoy applies
-								// Timeout to the whole tunnel duration for an upgraded/CONNECT
-								// stream, so a long-lived tunnel needs --route-timeout raised
-								// the same way a long LLM turn does; routeIdleTimeout tracks it
-								// so the idle timer doesn't cut the tunnel first.
+								// Also serves CONNECT-tunneled traffic re-injected via
+								// main_internal: Envoy applies Timeout to the whole tunnel
+								// lifetime, so a long-lived tunnel needs --route-timeout raised
+								// like a long LLM turn does; routeIdleTimeout keeps the idle
+								// timer from cutting it first.
 								Timeout:     durationpb.New(x.routeTimeout),
 								IdleTimeout: durationpb.New(x.routeIdleTimeout()),
 							},
 						},
-						// atunnel can't read Envoy's dynamic metadata directly, so
-						// this derives its one real header dependency (which port
-						// to reach on the actor) straight from the same metadata
-						// ext_proc already wrote for OriginalDstClusterName's
-						// MetadataKey (see ingress.OriginalDstPortKey), rather than
-						// ext_proc building the header mutation itself.
+						// atunnel reads the actor's target port from a header, since
+						// it can't see Envoy's dynamic metadata; this derives it
+						// declaratively from the same metadata ext_proc wrote (see
+						// ingress.OriginalDstPortKey).
 						RequestHeadersToAdd: []*corev3.HeaderValueOption{
 							{
 								Header: &corev3.HeaderValue{
@@ -941,9 +829,11 @@ func (x *XdsServer) buildMainInternalListener() *listenerv3.Listener {
 		ListenerSpecifier: &listenerv3.Listener_InternalListener{
 			InternalListener: &listenerv3.Listener_InternalListenerConfig{},
 		},
+		// A single, unconditional HTTP chain: every CONNECT-tunneled protocol
+		// this router understands is HTTP, so there is nothing left for a
+		// FilterChainMatcher to key off of.
 		FilterChains: []*listenerv3.FilterChain{
 			{
-				Name: "http",
 				Filters: []*listenerv3.Filter{
 					{
 						Name: "envoy.filters.network.http_connection_manager",
@@ -953,89 +843,9 @@ func (x *XdsServer) buildMainInternalListener() *listenerv3.Listener {
 					},
 				},
 			},
-			x.buildTcpConnectFilterChain("main_internal"),
 		},
-		// Matching must key off transport protocol first, application
-		// protocol second -- not application protocol alone. tls_inspector
-		// populates the ALPN list (what ApplicationProtocolInput reads) from
-		// the ClientHello for ANY TLS connection, and a normal HTTPS client
-		// offers 'http/1.1' alongside 'h2' as a fallback; matching on
-		// application protocol alone would send that genuinely
-		// TLS-encrypted traffic into the "http" chain, which then tries to
-		// parse ciphertext as plaintext HTTP and resets the connection. Only
-		// a plaintext (raw_buffer) connection can actually carry plaintext
-		// HTTP/1.1 or h2c; anything else -- tls included -- falls through to
-		// the "tcp" chain, which forwards it opaquely.
-		FilterChainMatcher: &v3.Matcher{
-			MatcherType: &v3.Matcher_MatcherTree_{
-				MatcherTree: &v3.Matcher_MatcherTree{
-					Input: &xdsv3.TypedExtensionConfig{
-						Name:        "transport-protocol",
-						TypedConfig: newAny(&networkv3.TransportProtocolInput{}),
-					},
-					TreeType: &v3.Matcher_MatcherTree_ExactMatchMap{
-						ExactMatchMap: &v3.Matcher_MatcherTree_MatchMap{
-							Map: map[string]*v3.Matcher_OnMatch{
-								"raw_buffer": {
-									OnMatch: &v3.Matcher_OnMatch_Matcher{
-										Matcher: &v3.Matcher{
-											MatcherType: &v3.Matcher_MatcherTree_{
-												MatcherTree: &v3.Matcher_MatcherTree{
-													Input: &xdsv3.TypedExtensionConfig{
-														Name:        "application-protocol",
-														TypedConfig: newAny(&networkv3.ApplicationProtocolInput{}),
-													},
-													TreeType: &v3.Matcher_MatcherTree_ExactMatchMap{
-														ExactMatchMap: &v3.Matcher_MatcherTree_MatchMap{
-															Map: map[string]*v3.Matcher_OnMatch{
-																`'h2c'`: {
-																	OnMatch: &v3.Matcher_OnMatch_Action{
-																		Action: &xdsv3.TypedExtensionConfig{
-																			Name:        "http",
-																			TypedConfig: newAny(&wrapperspb.StringValue{Value: "http"}),
-																		},
-																	},
-																},
-																`'http/1.1'`: {
-																	OnMatch: &v3.Matcher_OnMatch_Action{
-																		Action: &xdsv3.TypedExtensionConfig{
-																			Name:        "http",
-																			TypedConfig: newAny(&wrapperspb.StringValue{Value: "http"}),
-																		},
-																	},
-																},
-															},
-														},
-													},
-												},
-											},
-											OnNoMatch: &v3.Matcher_OnMatch{
-												OnMatch: &v3.Matcher_OnMatch_Action{
-													Action: &xdsv3.TypedExtensionConfig{
-														Name:        "tcp",
-														TypedConfig: newAny(&wrapperspb.StringValue{Value: "tcp"}),
-													},
-												},
-											},
-										},
-									},
-								},
-							},
-						},
-					},
-				},
-			},
-			OnNoMatch: &v3.Matcher_OnMatch{
-				OnMatch: &v3.Matcher_OnMatch_Action{
-					Action: &xdsv3.TypedExtensionConfig{
-						Name:        "tcp",
-						TypedConfig: newAny(&wrapperspb.StringValue{Value: "tcp"}),
-					},
-				},
-			},
-		},
-		// Read the original_dst filter state from the connect_terminate listener and set this
-		// listener's filter
+		// buildMainInternalCluster's PassthroughMetadata reads this filter's
+		// Host-kind filter state and forwards it to the actor connection.
 		ListenerFilters: []*listenerv3.ListenerFilter{
 			{
 				Name: "envoy.filters.listener.original_dst",
@@ -1043,35 +853,16 @@ func (x *XdsServer) buildMainInternalListener() *listenerv3.Listener {
 					TypedConfig: newAny(&originaldstv3.OriginalDst{}),
 				},
 			},
-			{
-				Name: "envoy.filters.listener.http_inspector",
-				ConfigType: &listenerv3.ListenerFilter_TypedConfig{
-					TypedConfig: newAny(&httpinspectorv3.HttpInspector{}),
-				},
-			},
-			{
-				Name: "envoy.filters.listener.tls_inspector",
-				ConfigType: &listenerv3.ListenerFilter_TypedConfig{
-					TypedConfig: newAny(&tlsinspectorv3.TlsInspector{}),
-				},
-			},
 		},
 	}
 }
 
-// authorityFilterStateFilter captures :authority into ingress.AuthorityFilterStateKey
-// filter state, shared with the upstream internal connection so
-// main_internal's ext_proc leg can read it back via
-// ingress.AuthorityFilterStateAttribute (see buildHcm) -- the one source of actor
-// identity that survives both a plain HTTP request and a CONNECT tunnel
-// reinjected through main_internal (which has no reliable Host header of its
-// own -- see handleRequestHeaders).
-//
-// Shared by buildConnectTerminateHCM (the only place the original CONNECT
-// :authority is ever seen) and buildHcm's ingress-only case (buildHcm's
-// main_internal case must NOT re-run this: it would capture the tunneled
-// protocol's own, unrelated :authority and clobber the value already shared
-// from connect_terminate).
+// authorityFilterStateFilter captures :authority into
+// ingress.AuthorityFilterStateKey filter state, so main_internal's HTTP leg
+// can read it back across the internal-listener hop (see buildHcm,
+// ingress.HandleRequestHeaders). buildConnectTerminateHCM and buildHcm's
+// ingress listeners use it; main_internal itself must not, since that would
+// capture the tunneled protocol's own, unrelated :authority instead.
 func authorityFilterStateFilter() *hcmv3.HttpFilter {
 	return &hcmv3.HttpFilter{
 		Name: "envoy.filters.http.set_filter_state",
@@ -1169,15 +960,11 @@ func buildConnectRoutes() *routev3.RouteConfiguration {
 								ClusterSpecifier: &routev3.RouteAction_Cluster{
 									Cluster: MainInternalName,
 								},
-								// Unlike a WebSocket upgrade, Envoy never disables the route
-								// timeout once a CONNECT tunnel is established, so the
-								// ordinary request timeout applies to the tunnel's entire
-								// lifetime. Left unset here it would fall back to Envoy's
-								// global default of 15s, silently killing every CONNECT
-								// tunnel through this router after 15 seconds regardless of
-								// activity. 0 explicitly disables it; the tunnel's lifetime
-								// is bounded by other means (idle timeout, connection drain,
-								// either side closing).
+								// Envoy applies the route timeout to a CONNECT tunnel's whole
+								// lifetime, not just its headers; left at Envoy's 15s default
+								// this would silently kill every tunnel after 15s. 0 disables
+								// it -- the tunnel's lifetime is bounded by idle timeout,
+								// drain, and the peers themselves.
 								Timeout: durationpb.New(0),
 							},
 						},
@@ -1188,104 +975,12 @@ func buildConnectRoutes() *routev3.RouteConfiguration {
 	}
 }
 
-func (x *XdsServer) buildTcpConnectFilterChain(statPrefix string) *listenerv3.FilterChain {
-	return &listenerv3.FilterChain{
-		Name: "tcp",
-		Filters: []*listenerv3.Filter{
-			{
-				Name: "envoy.filters.network.ext_proc",
-				ConfigType: &listenerv3.Filter_TypedConfig{
-					TypedConfig: newAny(&networkextprocv3.NetworkExternalProcessor{
-						StatPrefix: statPrefix,
-						GrpcService: &corev3.GrpcService{
-							TargetSpecifier: &corev3.GrpcService_EnvoyGrpc_{
-								EnvoyGrpc: &corev3.GrpcService_EnvoyGrpc{
-									ClusterName: TCPClusterName,
-								},
-							},
-							Timeout: durationpb.New(x.extProcMessageTimeout),
-						},
-						// TODO: Consider the implications of TCP-only actors and their suspend lifecycle
-						// Right now, we hit ext-proc on each write which is pretty expensive, but is necessary
-						// to ensure the actor is awake and ready to receive the new data.
-						ProcessingMode: &networkextprocv3.ProcessingMode{
-							ProcessRead:  networkextprocv3.ProcessingMode_STREAMED,
-							ProcessWrite: networkextprocv3.ProcessingMode_SKIP,
-						},
-						// ConnectionAttributes evaluates ingress.AuthorityFilterStateAttribute
-						// against the connection's filter state -- the network-filter
-						// equivalent of buildHcm's RequestAttributes for the HTTP leg,
-						// and the same source authorityFilterStateFilter/connect_terminate
-						// populate. Requires Envoy >= envoyproxy/envoy@5973c51c23
-						// (network_ext_proc: support connection attributes and filter
-						// state, envoyproxy/envoy#46551); earlier versions have no such
-						// field on NetworkExternalProcessor at all, so this is the fix
-						// for handleFirstFrame's previously-documented "authority is
-						// always empty" limitation.
-						ConnectionAttributes: []string{ingress.AuthorityFilterStateAttribute},
-						MetadataOptions: &networkextprocv3.MetadataOptions{
-							ForwardingNamespaces: &networkextprocv3.MetadataOptions_MetadataNamespaces{
-								Untyped: []string{ingress.OriginalDstMetadataKey},
-							},
-							// Lets handleFirstFrame's resolved worker address (see
-							// extproc_network.go) reach the connection's dynamic
-							// metadata for OriginalDstClusterName's MetadataKey to
-							// read -- the network-filter equivalent of buildHcm's
-							// same field for the HTTP leg. Requires Envoy >=
-							// envoyproxy/envoy@b27925c960 (first released in 1.39);
-							// earlier versions silently drop
-							// ProcessingResponse.DynamicMetadata for this filter.
-							ReceivingNamespaces: &networkextprocv3.MetadataOptions_MetadataNamespaces{
-								Untyped: []string{ingress.OriginalDstMetadataKey},
-							},
-						},
-					}),
-				},
-			},
-			{
-				Name: "envoy.filters.network.tcp_proxy",
-				ConfigType: &listenerv3.Filter_TypedConfig{
-					TypedConfig: newAny(&tcpproxyv3.TcpProxy{
-						StatPrefix: statPrefix,
-						ClusterSpecifier: &tcpproxyv3.TcpProxy_Cluster{
-							Cluster: OriginalDstClusterName,
-						},
-						// The default IMMEDIATE mode picks the upstream host (from
-						// OriginalDstClusterName's MetadataKey) synchronously at
-						// connection-accept, before the ext_proc filter above --
-						// which only fires from onData -- has ever run, so the
-						// original_dst metadata it sets always arrives too late.
-						// ON_DOWNSTREAM_DATA instead waits for the first byte of
-						// downstream data (buffered up to MaxEarlyDataBytes) before
-						// picking a host, which is after ext_proc's response.
-						UpstreamConnectMode: tcpproxyv3.UpstreamConnectMode_ON_DOWNSTREAM_DATA,
-						MaxEarlyDataBytes:   wrapperspb.UInt32(defaultTcpEarlyDataBytes),
-						AccessLog: []*accesslogv3.AccessLog{
-							{
-								Name: "envoy.access_loggers.stdout",
-								ConfigType: &accesslogv3.AccessLog_TypedConfig{
-									TypedConfig: newAny(&streamaccesslogv3.StdoutAccessLog{}),
-								},
-							},
-						},
-					}),
-				},
-			},
-		},
-	}
-}
-
 // buildHcm builds the HTTP ext_proc-fronted HCM shared by the ingress_http,
-// ingress_https, and main_internal ("http" sub-chain) listeners.
-//
-// captureAuthority controls whether this HCM re-derives
-// ingress.AuthorityFilterStateKey from its own :authority header via
-// authorityFilterStateFilter. Ingress listeners need it (nothing else would
-// ever populate that filter state for them); main_internal's "http" chain
-// must pass false, since the tunneled protocol's own :authority is unrelated
-// to the actor's DNS name -- the correct value already arrived as filter
-// state shared from connect_terminate (see authorityFilterStateFilter), and
-// re-running this filter there would clobber it.
+// ingress_https, and main_internal listeners. captureAuthority runs
+// authorityFilterStateFilter to populate the actor's :authority for ingress
+// listeners; main_internal passes false, since connect_terminate already
+// shared the correct value and re-deriving it here would clobber it with
+// the tunneled protocol's own, unrelated :authority.
 func (x *XdsServer) buildHcm(statPrefix string, captureAuthority bool) *anypb.Any {
 	extProcConfig := newAny(&extprocv3filter.ExternalProcessor{
 		GrpcService: &corev3.GrpcService{
@@ -1311,13 +1006,10 @@ func (x *XdsServer) buildHcm(statPrefix string, captureAuthority bool) *anypb.An
 			RequestTrailerMode:  extprocv3filter.ProcessingMode_SKIP,
 			ResponseTrailerMode: extprocv3filter.ProcessingMode_SKIP,
 		},
-		// Pass the resolved actor's authority as a request attribute (read from
-		// ingress.AuthorityFilterStateKey filter state -- see authorityFilterStateFilter
-		// and handleRequestHeaders) since the actor cannot always be resolved
-		// from the Host header, and the original_dst metadata so the response
-		// can write the resolved worker address and target port back into
-		// ingress.OriginalDstMetadataKey -- the metadata equivalent of the header
-		// mutation this filter used to make.
+		// Passes the resolved actor's authority as a request attribute (see
+		// ingress.AuthorityFilterStateAttribute, ingress.HandleRequestHeaders)
+		// and lets the response write the resolved worker address into
+		// ingress.OriginalDstMetadataKey.
 		RequestAttributes: []string{ingress.AuthorityFilterStateAttribute},
 		MetadataOptions: &extprocv3filter.MetadataOptions{
 			ForwardingNamespaces: &extprocv3filter.MetadataOptions_MetadataNamespaces{
@@ -1513,7 +1205,7 @@ func (x *XdsServer) buildConnectTerminateListener() *listenerv3.Listener {
 				SocketAddress: &corev3.SocketAddress{
 					Address: WildcardIP,
 					PortSpecifier: &corev3.SocketAddress_PortValue{
-						PortValue: uint32(x.connectPort),
+						PortValue: uint32(x.connectPlainTextPort),
 					},
 				},
 			},

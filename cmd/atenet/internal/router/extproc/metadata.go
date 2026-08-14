@@ -37,13 +37,11 @@ type RequestMetadata struct {
 	Method  string
 
 	// Attributes is the CEL request_attributes Envoy attached to this
-	// callback, keyed by the ext_proc filter name within the HCM chain that
-	// asked for them (see directionOf/filterChainName for why the map is
-	// scanned rather than keyed by a hardcoded filter name). Ingress reads its
-	// resolved actor authority from here — filter state, not the raw Host
-	// header — because dynamic metadata does not survive the
+	// callback, keyed by the ext_proc filter name that requested them (see
+	// Attribute). Ingress reads its resolved actor authority from here, since
+	// filter state -- unlike dynamic metadata -- survives the
 	// connect_terminate -> main_internal internal-listener hop that CONNECT
-	// requests take, while filter state does.
+	// requests take.
 	Attributes map[string]*structpb.Struct
 }
 
@@ -87,10 +85,9 @@ func (m *RequestMetadata) Header(name string) string {
 	return m.Headers[strings.ToLower(name)]
 }
 
-// Attribute returns the named CEL request_attributes value, or "" when no
-// filter requested it. Attributes is keyed by the ext_proc filter name within
-// the HCM chain, which callers should not need to hardcode, so every entry is
-// scanned (mirroring filterChainName's handling of the same map shape).
+// Attribute returns the named CEL request_attributes value, scanning every
+// filter's entries so callers don't need to hardcode which one reported it,
+// or "" if none did.
 func (m *RequestMetadata) Attribute(name string) string {
 	for _, attrs := range m.Attributes {
 		if v, ok := attrs.GetFields()[name]; ok {

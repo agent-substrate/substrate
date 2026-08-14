@@ -75,14 +75,8 @@ type RouterServer struct {
 	// ingressHandler is the ingress handler registered on extprocSrv, kept for
 	// the status page's parking snapshot. Nil in egress-only mode.
 	ingressHandler *ingress.Handler
-	// networkExtprocSrv serves Envoy's network (L4) ext_proc protocol for
-	// CONNECT-tunneled TCP traffic reinjected through main_internal (see
-	// xds.go's buildMainInternalListener). It has no egress equivalent — the
-	// egress gateway never reinjects a connection through an internal
-	// listener — so this is nil in egress-only mode.
-	networkExtprocSrv *ingress.NetworkExtProcServer
-	health            *routerHealth
-	atStore           atStore
+	health         *routerHealth
+	atStore        atStore
 }
 
 func NewRouterServer(cfg routerConfig) (*RouterServer, error) {
@@ -237,10 +231,6 @@ func (s *RouterServer) Run(ctx context.Context) error {
 		}
 		s.ingressHandler = ingress.New(s.apiClient, parkCfg, parkMetrics)
 		handlers[s.ingressHandler.Direction()] = s.ingressHandler
-
-		if s.networkExtprocSrv == nil {
-			s.networkExtprocSrv = ingress.NewNetworkExtProcServer(s.apiClient)
-		}
 	}
 	if s.cfg.Mode.ServesEgress() {
 		// Load the actor-identity CA up front so a missing or unusable bundle
@@ -291,18 +281,7 @@ func (s *RouterServer) Run(ctx context.Context) error {
 
 	// Start ExtProc Server. Driven by the drain sequence rather than context
 	// cancel: ext_proc is failClosed, so it must outlive the dataplane's drain.
-	//
-	// The network (L4) ext_proc service, when this instance serves ingress,
-	// shares this same server rather than listening on its own port: gRPC
-	// dispatches by the fully-qualified service name in the request path, not
-	// by port, so registering both services here is the ordinary case, not a
-	// special one. It also means CONNECT-tunneled TCP connections now drain on
-	// the same timed GracefulStop below as parked HTTP requests, rather than
-	// being cut off wherever shutdown happens to be when cancelWork() fires.
 	extprocGRPC := s.extprocSrv.NewGRPCServer()
-	if s.networkExtprocSrv != nil {
-		s.networkExtprocSrv.Register(extprocGRPC)
-	}
 	g.Go(func() error {
 		slog.InfoContext(ctx, "Starting ExtProc Server", slog.Int("port", s.cfg.ExtprocPort))
 		lis, err := net.Listen("tcp", fmt.Sprintf(":%d", s.cfg.ExtprocPort))

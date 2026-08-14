@@ -59,31 +59,10 @@ func TestActorDirectAccess(t *testing.T) {
 	})
 	t.Run("via ingress", func(t *testing.T) {
 		actorRef := resources.ActorRef{Atespace: networkingAtespace, Name: actorName}
-		// Retry until the ingress routes are programmed. After ResumeActor returns
-		// the xDS update from the control plane may not have reached the router yet,
-		// causing a transient 503 connection timeout.
-		const timeout = 30 * time.Second
-		deadline := time.Now().Add(timeout)
-		for {
-			response, err := router.Get(ctx, actorRef, "/readyz")
-			if err != nil {
-				t.Fatalf("GET Actor through ingress: %v", err)
-			}
-			body, err := io.ReadAll(response.Body)
-			response.Body.Close()
-			if err != nil {
-				t.Fatalf("reading ingress response body (HTTP %d): %v", response.StatusCode, err)
-			}
-			if response.StatusCode == http.StatusOK {
-				t.Logf("Actor access through ingress succeeded; body: %s", body)
-				return
-			}
-			if time.Now().After(deadline) {
-				t.Fatalf("Actor access through ingress returned HTTP %d after %v; body: %s", response.StatusCode, timeout, body)
-			}
-			t.Logf("Actor access through ingress returned HTTP %d; retrying...", response.StatusCode)
-			time.Sleep(1 * time.Second)
-		}
+		body := waitForRouteReady(t, "Actor access through ingress", func() (*http.Response, error) {
+			return router.Get(ctx, actorRef, "/readyz")
+		})
+		t.Logf("Actor access through ingress succeeded; body: %s", body)
 	})
 }
 
@@ -133,23 +112,34 @@ func TestActorEgressHTTPS(t *testing.T) {
 }
 
 // fetchThroughEgressActor asks the egress demo Actor to fetch url and returns
-// the status and body it echoes back.
+// the status and body it echoes back. Retries a non-200 response for up to
+// 30s: ResumeActor can return before its route reaches atenet-router's xDS
+// snapshot, and a request sent in that window sees a transient 503.
 func fetchThroughEgressActor(t *testing.T, ctx context.Context, router *e2e.RouterClient, actorRef resources.ActorRef, url string) (int, []byte) {
 	t.Helper()
 	payload, err := json.Marshal(map[string]string{"url": url})
 	if err != nil {
 		t.Fatalf("marshaling the fetch request for %s: %v", url, err)
 	}
-	response, err := router.PostJSON(ctx, actorRef, "/", payload)
-	if err != nil {
-		t.Fatalf("POST %s to egress Actor through ingress: %v", url, err)
+
+	const timeout = 30 * time.Second
+	deadline := time.Now().Add(timeout)
+	for {
+		response, err := router.PostJSON(ctx, actorRef, "/", payload)
+		if err != nil {
+			t.Fatalf("POST %s to egress Actor through ingress: %v", url, err)
+		}
+		body, err := io.ReadAll(response.Body)
+		response.Body.Close()
+		if err != nil {
+			t.Fatalf("reading egress response body (HTTP %d): %v", response.StatusCode, err)
+		}
+		if response.StatusCode == http.StatusOK || time.Now().After(deadline) {
+			return response.StatusCode, body
+		}
+		t.Logf("fetch through egress Actor returned HTTP %d; retrying...", response.StatusCode)
+		time.Sleep(1 * time.Second)
 	}
-	defer response.Body.Close()
-	body, err := io.ReadAll(response.Body)
-	if err != nil {
-		t.Fatalf("reading egress response body (HTTP %d): %v", response.StatusCode, err)
-	}
-	return response.StatusCode, body
 }
 
 // assertEgressGatewayConnect waits for the atenet-egress access log to show a
@@ -278,6 +268,37 @@ func mustRouterClient(t *testing.T, ctx context.Context) *e2e.RouterClient {
 		t.Fatalf("NewRouterClient: %v", err)
 	}
 	return router
+}
+
+// waitForRouteReady retries request until it returns a 200 response or
+// timeout elapses, and returns that response's body. This rides out the race
+// between ResumeActor returning and its route reaching atenet-router's xDS
+// snapshot: a request sent in that window sees a transient 503 connection
+// timeout, not a real failure, and every caller through the router hits it.
+// what names the request in log/failure output.
+func waitForRouteReady(t *testing.T, what string, request func() (*http.Response, error)) string {
+	t.Helper()
+	const timeout = 30 * time.Second
+	deadline := time.Now().Add(timeout)
+	for {
+		response, err := request()
+		if err != nil {
+			t.Fatalf("%s: %v", what, err)
+		}
+		body, err := io.ReadAll(response.Body)
+		response.Body.Close()
+		if err != nil {
+			t.Fatalf("reading %s response body (HTTP %d): %v", what, response.StatusCode, err)
+		}
+		if response.StatusCode == http.StatusOK {
+			return string(body)
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%s returned HTTP %d after %v; body: %s", what, response.StatusCode, timeout, body)
+		}
+		t.Logf("%s returned HTTP %d; retrying...", what, response.StatusCode)
+		time.Sleep(1 * time.Second)
+	}
 }
 
 func assertDirectActorAccess(t *testing.T, ctx context.Context, clients *e2e.Clients, actor *ateapipb.Actor) {

@@ -55,28 +55,10 @@ func TestActorArbitraryPortAccess(t *testing.T) {
 
 	t.Run("regression: default port still reachable", func(t *testing.T) {
 		// The new capability must not disturb the existing default-port path.
-		const timeout = 30 * time.Second
-		deadline := time.Now().Add(timeout)
-		for {
-			response, err := router.Get(ctx, actorRef, "/readyz")
-			if err != nil {
-				t.Fatalf("GET Actor through ingress: %v", err)
-			}
-			body, err := io.ReadAll(response.Body)
-			response.Body.Close()
-			if err != nil {
-				t.Fatalf("reading ingress response body (HTTP %d): %v", response.StatusCode, err)
-			}
-			if response.StatusCode == http.StatusOK {
-				t.Logf("default-port access through ingress succeeded; body: %s", body)
-				return
-			}
-			if time.Now().After(deadline) {
-				t.Fatalf("default-port access through ingress returned HTTP %d after %v; body: %s", response.StatusCode, timeout, body)
-			}
-			t.Logf("default-port access through ingress returned HTTP %d; retrying...", response.StatusCode)
-			time.Sleep(1 * time.Second)
-		}
+		body := waitForRouteReady(t, "default-port access through ingress", func() (*http.Response, error) {
+			return router.Get(ctx, actorRef, "/readyz")
+		})
+		t.Logf("default-port access through ingress succeeded; body: %s", body)
 	})
 
 	t.Run("arbitrary port reachable", func(t *testing.T) {

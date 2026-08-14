@@ -27,7 +27,6 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -35,16 +34,11 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 
-	v3 "github.com/cncf/xds/go/xds/type/matcher/v3"
 	clusterv3 "github.com/envoyproxy/go-control-plane/envoy/config/cluster/v3"
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	listenerv3 "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
 	routev3 "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
-	networkextprocv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/ext_proc/v3"
-	tcpproxyv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/tcp_proxy/v3"
-	networkv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/matching/common_inputs/network/v3"
 	tlsv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/transport_sockets/tls/v3"
-	httpv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/upstreams/http/v3"
 	discoverygrpc "github.com/envoyproxy/go-control-plane/envoy/service/discovery/v3"
 	secretgrpc "github.com/envoyproxy/go-control-plane/envoy/service/secret/v3"
 	cachev3 "github.com/envoyproxy/go-control-plane/pkg/cache/v3"
@@ -756,230 +750,17 @@ func TestXdsServer_RouteTimeout(t *testing.T) {
 	})
 }
 
-// TestXdsServer_BuildTCPCluster covers the network (TCP) ext_proc cluster's
-// configuration: it dials the same address/port as the HTTP ext_proc cluster
-// (SetConfig's extprocPort) -- the two services share one gRPC server, see
-// router.go's Run -- as a separate Envoy cluster for its own independent
-// max_connections circuit breaker.
-func TestXdsServer_BuildTCPCluster(t *testing.T) {
-	x := NewXdsServer(18000)
-	x.SetConfig(8085, 50053, "10.0.0.9")
-
-	c := x.buildTCPCluster()
-	if c.GetName() != TCPClusterName {
-		t.Errorf("Expected name %q, got %q", TCPClusterName, c.GetName())
-	}
-	if c.GetType() != clusterv3.Cluster_STATIC {
-		t.Errorf("Expected STATIC cluster, got %s", c.GetType())
-	}
-	if c.GetLbPolicy() != clusterv3.Cluster_ROUND_ROBIN {
-		t.Errorf("Expected ROUND_ROBIN lb policy, got %s", c.GetLbPolicy())
-	}
-
-	eps := c.GetLoadAssignment().GetEndpoints()[0].GetLbEndpoints()[0].GetEndpoint().GetAddress().GetSocketAddress()
-	if eps.GetAddress() != "10.0.0.9" {
-		t.Errorf("Expected address '10.0.0.9', got %s", eps.GetAddress())
-	}
-	if eps.GetPortValue() != 50053 {
-		t.Errorf("Expected port 50053 (extprocPort -- the network ext_proc service shares it with the HTTP one), got %d", eps.GetPortValue())
-	}
-
-	protocolOpts := &httpv3.HttpProtocolOptions{}
-	if err := c.GetTypedExtensionProtocolOptions()[httpProtocolOptionsName].UnmarshalTo(protocolOpts); err != nil {
-		t.Fatalf("Failed to unmarshal HttpProtocolOptions: %v", err)
-	}
-	if protocolOpts.GetExplicitHttpConfig().GetHttp2ProtocolOptions() == nil {
-		t.Error("Expected explicit HTTP/2 protocol options -- without them this cluster defaults to HTTP/1.1, which can't carry the network ext_proc filter's gRPC stream")
-	}
-}
-
-// TestXdsServer_NetworkExtProcCircuitBreaker mirrors
-// TestXdsServer_ExtProcCircuitBreaker for the TCP cluster's max_connections
-// breaker: an explicit positive value wins, 0 (or never calling the setter)
-// keeps the default.
-func TestXdsServer_NetworkExtProcCircuitBreaker(t *testing.T) {
-	t.Run("DefaultCoversConfiguredMax", func(t *testing.T) {
-		x := NewXdsServer(0)
-		got := x.buildTCPCluster().GetCircuitBreakers().GetThresholds()[0].GetMaxConnections().GetValue()
-		if got != uint32(defaultExtProcMaxConnections) {
-			t.Errorf("default max_connections = %d, want %d", got, defaultExtProcMaxConnections)
-		}
-	})
-
-	t.Run("SetterOverrides", func(t *testing.T) {
-		x := NewXdsServer(0)
-		x.SetExtProcMaxConnections(1024)
-		got := x.buildTCPCluster().GetCircuitBreakers().GetThresholds()[0].GetMaxConnections().GetValue()
-		if got != 1024 {
-			t.Errorf("max_connections after SetExtProcMaxConnections(1024) = %d, want 1024", got)
-		}
-	})
-
-	t.Run("NonPositiveKeepsDefault", func(t *testing.T) {
-		x := NewXdsServer(0)
-		x.SetExtProcMaxConnections(0)
-		got := x.buildTCPCluster().GetCircuitBreakers().GetThresholds()[0].GetMaxConnections().GetValue()
-		if got != uint32(defaultExtProcMaxConnections) {
-			t.Errorf("max_connections after SetExtProcMaxConnections(0) = %d, want default %d", got, defaultExtProcMaxConnections)
-		}
-	})
-}
-
-// TestXdsServer_BuildTcpConnectFilterChain covers the network ext_proc +
-// tcp_proxy filter chain that processes CONNECT-tunneled TCP traffic
-// reinjected through main_internal: the "tcp" filter chain must carry the
-// configured NetworkExternalProcessor filter (pointed at the TCP ext_proc
-// cluster, with the router's configured message timeout and a read-only
-// processing mode -- see buildTcpConnectFilterChain's TODO on why writes are
-// skipped), registered under the network filter's own well-known name, and a
-// tcp_proxy filter after it that dials OriginalDstClusterName -- the address
-// the network ext_proc server resolves and reports via dynamic metadata (see
-// OriginalDstClusterName's MetadataKey in buildOriginalDstCluster).
-func TestXdsServer_BuildTcpConnectFilterChain(t *testing.T) {
-	x := NewXdsServer(18000)
-	x.SetExtProcMessageTimeout(7 * time.Second)
-
-	fc := x.buildTcpConnectFilterChain("connect_terminate_tcp")
-	if fc.GetName() != "tcp" {
-		t.Errorf("Expected filter chain name 'tcp', got %q", fc.GetName())
-	}
-	if len(fc.GetFilters()) != 2 {
-		t.Fatalf("Expected exactly 2 filters in the tcp chain (network ext_proc, tcp_proxy), got %d", len(fc.GetFilters()))
-	}
-
-	extProcFilter := fc.GetFilters()[0]
-	if got, want := extProcFilter.GetName(), "envoy.filters.network.ext_proc"; got != want {
-		t.Errorf("Expected first filter name %q, got %q", want, got)
-	}
-	cfg := &networkextprocv3.NetworkExternalProcessor{}
-	if err := extProcFilter.GetTypedConfig().UnmarshalTo(cfg); err != nil {
-		t.Fatalf("Failed to unmarshal NetworkExternalProcessor config: %v", err)
-	}
-	if got := cfg.GetGrpcService().GetEnvoyGrpc().GetClusterName(); got != TCPClusterName {
-		t.Errorf("Expected network ext_proc grpc service cluster %q, got %q", TCPClusterName, got)
-	}
-	if got, want := cfg.GetGrpcService().GetTimeout().AsDuration(), 7*time.Second; got != want {
-		t.Errorf("Expected grpc service timeout %s, got %s", want, got)
-	}
-	if got := cfg.GetProcessingMode().GetProcessRead(); got != networkextprocv3.ProcessingMode_STREAMED {
-		t.Errorf("Expected ProcessRead STREAMED, got %s", got)
-	}
-	if got := cfg.GetProcessingMode().GetProcessWrite(); got != networkextprocv3.ProcessingMode_SKIP {
-		t.Errorf("Expected ProcessWrite SKIP, got %s", got)
-	}
-	if got, want := cfg.GetMetadataOptions().GetReceivingNamespaces().GetUntyped(), []string{ingress.OriginalDstMetadataKey}; !slices.Equal(got, want) {
-		t.Errorf("Expected ReceivingNamespaces.Untyped %v, got %v -- without this, Envoy silently drops handleFirstFrame's resolved worker address instead of merging it into connection metadata", want, got)
-	}
-	// ConnectionAttributes is what makes ingress.AuthorityFilterStateAttribute
-	// (the filter-state authority captured at connect_terminate) reach
-	// handleFirstFrame at all -- without it Envoy never evaluates the
-	// expression, and ProcessingRequest.Attributes comes back empty (see
-	// envoyproxy/envoy#46551, which added this field to
-	// NetworkExternalProcessor in the first place).
-	if got, want := cfg.GetConnectionAttributes(), []string{ingress.AuthorityFilterStateAttribute}; !slices.Equal(got, want) {
-		t.Errorf("Expected ConnectionAttributes %v, got %v", want, got)
-	}
-
-	tcpProxyFilter := fc.GetFilters()[1]
-	if got, want := tcpProxyFilter.GetName(), "envoy.filters.network.tcp_proxy"; got != want {
-		t.Errorf("Expected second filter name %q, got %q", want, got)
-	}
-	tcpProxyCfg := &tcpproxyv3.TcpProxy{}
-	if err := tcpProxyFilter.GetTypedConfig().UnmarshalTo(tcpProxyCfg); err != nil {
-		t.Fatalf("Failed to unmarshal TcpProxy config: %v", err)
-	}
-	if got := tcpProxyCfg.GetCluster(); got != OriginalDstClusterName {
-		t.Errorf("Expected tcp_proxy cluster %q, got %q", OriginalDstClusterName, got)
-	}
-	// IMMEDIATE (the proto default) picks the upstream host synchronously at
-	// connection-accept, before the network ext_proc filter above -- which
-	// only runs from onData -- has a chance to resolve the actor and set the
-	// metadata tcp_proxy's ORIGINAL_DST cluster needs.
-	if got, want := tcpProxyCfg.GetUpstreamConnectMode(), tcpproxyv3.UpstreamConnectMode_ON_DOWNSTREAM_DATA; got != want {
-		t.Errorf("Expected UpstreamConnectMode %s, got %s", want, got)
-	}
-	if got := tcpProxyCfg.GetMaxEarlyDataBytes().GetValue(); got == 0 {
-		t.Error("Expected a nonzero MaxEarlyDataBytes -- required whenever UpstreamConnectMode isn't IMMEDIATE")
-	}
-}
-
-// TestXdsServer_BuildMainInternalListener_FilterChainMatcherKeysOnTransportProtocol
-// covers a real bug: matching on application protocol (ALPN/plaintext
-// detection) alone incorrectly routed genuinely TLS-encrypted traffic into
-// the "http" chain, because tls_inspector populates the ALPN list from the
-// ClientHello for any TLS connection, and a normal HTTPS client offers
-// 'http/1.1' alongside 'h2' as a fallback. The matcher must key on transport
-// protocol first: only a plaintext ("raw_buffer") connection may fall into
-// the nested application-protocol match; anything else (tls included) must
-// go straight to "tcp".
-func TestXdsServer_BuildMainInternalListener_FilterChainMatcherKeysOnTransportProtocol(t *testing.T) {
-	x := NewXdsServer(18000)
-	matcher := x.buildMainInternalListener().GetFilterChainMatcher()
-
-	tree := matcher.GetMatcherTree()
-	if tree == nil {
-		t.Fatal("Expected a top-level MatcherTree")
-	}
-	inputCfg := &networkv3.TransportProtocolInput{}
-	if err := tree.GetInput().GetTypedConfig().UnmarshalTo(inputCfg); err != nil {
-		t.Fatalf("Expected the top-level matcher to key on TransportProtocolInput: %v", err)
-	}
-
-	// tls (or anything else/undetected) must fall through to "tcp" directly,
-	// never reaching the application-protocol match.
-	topAction := matcher.GetOnNoMatch().GetOnMatch().(*v3.Matcher_OnMatch_Action).Action
-	if topAction.GetName() != "tcp" {
-		t.Errorf("Expected top-level OnNoMatch (covers tls) to select %q, got %q", "tcp", topAction.GetName())
-	}
-
-	rawBufferEntry := tree.GetExactMatchMap().GetMap()["raw_buffer"]
-	if rawBufferEntry == nil {
-		t.Fatal("Expected a \"raw_buffer\" entry in the transport-protocol match map")
-	}
-	nested, ok := rawBufferEntry.GetOnMatch().(*v3.Matcher_OnMatch_Matcher)
-	if !ok {
-		t.Fatalf("Expected \"raw_buffer\" to nest into another Matcher, got %T", rawBufferEntry.GetOnMatch())
-	}
-
-	nestedTree := nested.Matcher.GetMatcherTree()
-	if nestedTree == nil {
-		t.Fatal("Expected the nested matcher to be a MatcherTree")
-	}
-	nestedInputCfg := &networkv3.ApplicationProtocolInput{}
-	if err := nestedTree.GetInput().GetTypedConfig().UnmarshalTo(nestedInputCfg); err != nil {
-		t.Fatalf("Expected the nested matcher to key on ApplicationProtocolInput: %v", err)
-	}
-
-	for _, alpn := range []string{`'h2c'`, `'http/1.1'`} {
-		entry := nestedTree.GetExactMatchMap().GetMap()[alpn]
-		if entry == nil {
-			t.Errorf("Expected an entry for %s in the nested application-protocol match map", alpn)
-			continue
-		}
-		action := entry.GetOnMatch().(*v3.Matcher_OnMatch_Action).Action
-		if action.GetName() != "http" {
-			t.Errorf("Expected %s to select %q, got %q", alpn, "http", action.GetName())
-		}
-	}
-	nestedNoMatchAction := nested.Matcher.GetOnNoMatch().GetOnMatch().(*v3.Matcher_OnMatch_Action).Action
-	if nestedNoMatchAction.GetName() != "tcp" {
-		t.Errorf("Expected the nested matcher's OnNoMatch to select %q, got %q", "tcp", nestedNoMatchAction.GetName())
-	}
-}
-
 // TestXdsServer_BuildOriginalDstCluster_UsesMetadataKey covers the fix for a
 // header-mutation-only LB config: a header only works for HTTP traffic, so
 // the ORIGINAL_DST cluster must resolve its destination from
 // ingress.OriginalDstMetadataKey/ingress.OriginalDstAddressKey dynamic
-// metadata instead -- the one mechanism both the HTTP and network ext_proc
-// legs can report through (see buildOriginalDstCluster,
-// ingress.Handler.HandleRequestHeaders, and
-// ingress.NetworkExtProcServer.handleFirstFrame).
+// metadata instead (see buildOriginalDstCluster and
+// ingress.Handler.HandleRequestHeaders).
 func TestXdsServer_BuildOriginalDstCluster_UsesMetadataKey(t *testing.T) {
 	x := NewXdsServer(18000)
 	lbConfig := x.buildOriginalDstCluster().GetLbConfig().(*clusterv3.Cluster_OriginalDstLbConfig_).OriginalDstLbConfig
 	if lbConfig.GetUseHttpHeader() {
-		t.Error("UseHttpHeader must not be set: it only applies to HTTP traffic, and the network ext_proc leg has none")
+		t.Error("UseHttpHeader must not be set: it only applies to HTTP traffic, and dynamic metadata is the mechanism ext_proc uses instead")
 	}
 	key := lbConfig.GetMetadataKey()
 	if key.GetKey() != ingress.OriginalDstMetadataKey {

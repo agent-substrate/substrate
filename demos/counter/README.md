@@ -57,6 +57,10 @@ To interact with the router locally:
 ```bash
 # Port-forward the Atenet Router
 kubectl port-forward -n ate-system svc/atenet-router 8000:80
+
+# Also port-forward the CONNECT listener if you want to reach the actor's
+# extra port (see "Reaching a non-default port" below).
+kubectl port-forward -n ate-system svc/atenet-router 8001:8081
 ```
 
 ## How to Use
@@ -83,6 +87,34 @@ kubectl ate suspend actor my-counter-1 -a demo
 kubectl ate delete actor my-counter-1 -a demo
 kubectl ate delete atespace demo
 ```
+
+## Reaching a non-default port
+
+`counter.go` also listens on a second, configurable port (`--extra-port=9090`
+in this demo's template) to demonstrate atenet-router's arbitrary-port ingress
+support: a client reaches any port an actor listens on, not just its default
+(port 80), by naming the port in an HTTP `CONNECT` request's authority rather
+than a separate header. The router terminates the `CONNECT` on its own
+listener (`--port-connect`, 8081 by default) and tunnels ordinary HTTP requests
+through it to the named port.
+
+`curl -p` forces a tunnel even for a plain (non-TLS) target, which its default
+proxy behavior wouldn't do:
+
+```bash
+curl -p -x http://localhost:8001 http://my-counter-1.demo.actors.resources.substrate.ate.dev:9090/
+```
+
+This reaches the same actor's second listener and resumes it exactly like any
+other request — the only difference from the default-port examples above is
+the port named in the URL and dialing the router's CONNECT listener (8081/8001
+here) instead of its plain HTTP one.
+
+**Current limitation**: only HTTP(S) traffic over the tunnel is supported.
+Raw TCP or other non-HTTP protocols on a non-default port aren't reachable
+this way today — if your use case needs that, please open an issue or reach
+out; the CONNECT tunnel itself is protocol-agnostic, so it's a matter of
+prioritizing it, not a fundamental limitation of the design.
 
 ## Micro-VM variant
 
