@@ -593,17 +593,6 @@ func runActorTemplateContractTests(t *testing.T, setup func(t *testing.T) store.
 			t.Errorf("stored template mismatch (-created +got):\n%s", diff)
 		}
 
-		updated, err := s.UpdateActorTemplate(ctx, templateRef, func(template *ateapipb.ActorTemplate) error {
-			template.DefaultVersionOnCreate = &ateapipb.ObjectRef{Atespace: "team-a", Name: "tmpl-a-v1"}
-			return nil
-		})
-		if err != nil {
-			t.Fatalf("UpdateActorTemplate failed: %v", err)
-		}
-		if updated.GetMetadata().GetVersion() != 2 || updated.GetMetadata().GetUid() != created.GetMetadata().GetUid() {
-			t.Errorf("updated template metadata = %v, want version 2 and original uid", updated.GetMetadata())
-		}
-
 		versionInput := newTestActorTemplateVersion("team-a", "tmpl-a-v1", "tmpl-a")
 		version, err := s.CreateActorTemplateVersion(ctx, versionInput)
 		if err != nil {
@@ -623,15 +612,6 @@ func runActorTemplateContractTests(t *testing.T, setup func(t *testing.T) store.
 
 		if _, err := s.DeleteActorTemplate(ctx, templateRef); !errors.Is(err, store.ErrFailedPrecondition) {
 			t.Errorf("DeleteActorTemplate with a child = %v, want ErrFailedPrecondition", err)
-		}
-		if _, err := s.DeleteActorTemplateVersion(ctx, versionRef); !errors.Is(err, store.ErrFailedPrecondition) {
-			t.Errorf("DeleteActorTemplateVersion while default = %v, want ErrFailedPrecondition", err)
-		}
-		if _, err := s.UpdateActorTemplate(ctx, templateRef, func(template *ateapipb.ActorTemplate) error {
-			template.DefaultVersionOnCreate = nil
-			return nil
-		}); err != nil {
-			t.Fatalf("clearing default version failed: %v", err)
 		}
 		if deleted, err := s.DeleteActorTemplateVersion(ctx, versionRef); err != nil {
 			t.Fatalf("DeleteActorTemplateVersion failed: %v", err)

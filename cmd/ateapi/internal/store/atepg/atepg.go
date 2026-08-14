@@ -303,62 +303,6 @@ func (p *Persistence) ActorTemplateExists(ctx context.Context, templateRef resou
 	return exists, nil
 }
 
-func validateUpdateActorTemplateMutation(storedTemplate, mutatedTemplate *ateapipb.ActorTemplate) error {
-	if stored, mutated := storedTemplate.GetMetadata().GetAtespace(), mutatedTemplate.GetMetadata().GetAtespace(); stored != mutated {
-		return fmt.Errorf("metadata.atespace is immutable: mutation changed it from %q to %q", stored, mutated)
-	}
-	if stored, mutated := storedTemplate.GetMetadata().GetName(), mutatedTemplate.GetMetadata().GetName(); stored != mutated {
-		return fmt.Errorf("metadata.name is immutable: mutation changed it from %q to %q", stored, mutated)
-	}
-	return nil
-}
-
-func (p *Persistence) UpdateActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef, mutate func(*ateapipb.ActorTemplate) error) (*ateapipb.ActorTemplate, error) {
-	tx, err := p.pool.Begin(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("beginning actor template update: %w", err)
-	}
-	defer tx.Rollback(ctx) //nolint:errcheck // no-op once committed
-
-	var currentBytes []byte
-	if err := tx.QueryRow(ctx, `
-		SELECT proto FROM actor_templates
-		WHERE atespace = $1 AND name = $2
-		FOR UPDATE`, templateRef.Atespace, templateRef.Name).Scan(&currentBytes); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, store.ErrNotFound
-		}
-		return nil, fmt.Errorf("locking actor template %s for update: %w", templateRef, err)
-	}
-
-	dbTemplate := &ateapipb.ActorTemplate{}
-	if err := proto.Unmarshal(currentBytes, dbTemplate); err != nil {
-		return nil, fmt.Errorf("unmarshaling actor template for update: %w", err)
-	}
-	templateBeforeMutation := proto.Clone(dbTemplate).(*ateapipb.ActorTemplate)
-	if err := mutate(dbTemplate); err != nil {
-		return nil, err
-	}
-	if err := validateUpdateActorTemplateMutation(templateBeforeMutation, dbTemplate); err != nil {
-		return nil, err
-	}
-	dbTemplate.Metadata = newUpdateMetadata(templateBeforeMutation.GetMetadata())
-	updatedBytes, err := proto.Marshal(dbTemplate)
-	if err != nil {
-		return nil, fmt.Errorf("marshaling actor template: %w", err)
-	}
-	if _, err := tx.Exec(ctx, `
-		UPDATE actor_templates SET version = $1, proto = $2
-		WHERE atespace = $3 AND name = $4`,
-		dbTemplate.GetMetadata().GetVersion(), updatedBytes, templateRef.Atespace, templateRef.Name); err != nil {
-		return nil, fmt.Errorf("updating actor template %s: %w", templateRef, err)
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return nil, fmt.Errorf("committing actor template update: %w", err)
-	}
-	return dbTemplate, nil
-}
-
 func (p *Persistence) ListActorTemplates(ctx context.Context, atespace string, opts store.ListOptions) (store.ListResponse[*ateapipb.ActorTemplate], error) {
 	pageSize, pageTokenStr := opts.PageSize, opts.PageToken
 	keyParts := 2
@@ -601,24 +545,6 @@ func (p *Persistence) DeleteActorTemplateVersion(ctx context.Context, versionRef
 	deleted := &ateapipb.ActorTemplateVersion{}
 	if err := proto.Unmarshal(protoBytes, deleted); err != nil {
 		return nil, fmt.Errorf("unmarshaling actor template version for deletion: %w", err)
-	}
-
-	parentRef := resources.ActorTemplateRefFromObjectRef(deleted.GetActorTemplate())
-	var parentBytes []byte
-	err = tx.QueryRow(ctx, `
-		SELECT proto FROM actor_templates
-		WHERE atespace = $1 AND name = $2 FOR UPDATE`, parentRef.Atespace, parentRef.Name).Scan(&parentBytes)
-	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		return nil, fmt.Errorf("locking parent actor template %s: %w", parentRef, err)
-	}
-	if err == nil {
-		parent := &ateapipb.ActorTemplate{}
-		if err := proto.Unmarshal(parentBytes, parent); err != nil {
-			return nil, fmt.Errorf("unmarshaling parent actor template: %w", err)
-		}
-		if resources.ActorTemplateVersionRefFromObjectRef(parent.GetDefaultVersionOnCreate()) == versionRef {
-			return nil, store.ErrFailedPrecondition
-		}
 	}
 
 	if golden := deleted.GetGoldenSnapshot(); golden != nil {

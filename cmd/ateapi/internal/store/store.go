@@ -150,10 +150,6 @@ type Interface interface {
 	// atespace is empty.
 	ListActorTemplates(ctx context.Context, atespace string, opts ListOptions) (ListResponse[*ateapipb.ActorTemplate], error)
 
-	// UpdateActorTemplate performs a transactional read-modify-write and returns
-	// the updated template with advanced metadata (version, update_time).
-	UpdateActorTemplate(ctx context.Context, templateRef resources.ActorTemplateRef, mutate func(dbTemplate *ateapipb.ActorTemplate) error) (*ateapipb.ActorTemplate, error)
-
 	// Removes an ActorTemplate and returns the deleted resource. Returns
 	// ErrNotFound if missing, or ErrFailedPrecondition while any
 	// ActorTemplateVersion still names it as parent.
