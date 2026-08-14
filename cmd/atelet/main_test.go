@@ -44,6 +44,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/klauspost/compress/zstd"
 	"github.com/spf13/pflag"
+	"golang.org/x/sys/unix"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
@@ -245,23 +246,42 @@ func TestCopyLocalCheckpointLinks(t *testing.T) {
 		}
 	})
 
-	t.Run("falls back to copying", func(t *testing.T) {
+	t.Run("falls back to copying across filesystems", func(t *testing.T) {
 		srcDir, dstDir := newDirs(t)
-		// A destination already in place makes link() fail, standing in for the
-		// cross-filesystem case a unit test cannot produce.
-		dst := filepath.Join(dstDir, "memory-ranges")
-		if err := os.WriteFile(dst, []byte("stale"), 0o600); err != nil {
-			t.Fatal(err)
-		}
+		// EXDEV stands in for the mount boundary a unit test cannot produce.
+		orig := linkFile
+		linkFile = func(string, string) error { return unix.EXDEV }
+		t.Cleanup(func() { linkFile = orig })
+
 		s := &AteomHerder{}
 		if err := s.copyLocalCheckpoint(context.Background(), snapshot, srcDir, dstDir, []string{"memory-ranges"}); err != nil {
 			t.Fatalf("copyLocalCheckpoint: %v", err)
 		}
+		dst := filepath.Join(dstDir, "memory-ranges")
 		if got, err := os.ReadFile(dst); err != nil || !bytes.Equal(got, want) {
 			t.Fatalf("dst content = %q (err %v), want %q", got, err, want)
 		}
 		if inode(t, filepath.Join(srcDir, snapshot, "memory-ranges")) == inode(t, dst) {
 			t.Error("expected a copy on the fallback path, got a link")
+		}
+	})
+
+	// Only EXDEV may fall back. Copying on any other link failure would silently
+	// undo this optimization, and would hand copyFile a dst that may already be a
+	// link to src, where its O_TRUNC empties both before the copy reads a byte.
+	t.Run("other link failures are fatal", func(t *testing.T) {
+		srcDir, dstDir := newDirs(t)
+		dst := filepath.Join(dstDir, "memory-ranges")
+		if err := os.Link(filepath.Join(srcDir, snapshot, "memory-ranges"), dst); err != nil {
+			t.Fatal(err)
+		}
+		s := &AteomHerder{}
+		// dst already exists, so os.Link fails with EEXIST.
+		if err := s.copyLocalCheckpoint(context.Background(), snapshot, srcDir, dstDir, []string{"memory-ranges"}); err == nil {
+			t.Fatal("copyLocalCheckpoint accepted a non-EXDEV link failure, want an error")
+		}
+		if got, err := os.ReadFile(dst); err != nil || !bytes.Equal(got, want) {
+			t.Fatalf("dst content = %q (err %v), want the untouched %q", got, err, want)
 		}
 	})
 }

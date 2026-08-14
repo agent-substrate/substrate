@@ -185,8 +185,8 @@ func TestMergeSparseOverlayNewOutFile(t *testing.T) {
 
 // TestMergeDeltaIntoBaseHardlinkedBase asserts the fast path is refused when base
 // has a second link. The fast path overlays base's inode in place, so a shared
-// inode (atelet linking restore-state from its snapshot cache) would have the
-// golden image other actors restore from silently rewritten under them.
+// inode (atelet stages restore-state by linking from the actor's local pause
+// snapshot) would have that snapshot silently rewritten behind the merge.
 func TestMergeDeltaIntoBaseHardlinkedBase(t *testing.T) {
 	const size = 8 << 20 // 8 MiB logical
 	baseRegions := []region{{off: 0, data: fill(1, 4096)}}
@@ -201,10 +201,10 @@ func TestMergeDeltaIntoBaseHardlinkedBase(t *testing.T) {
 	dir := t.TempDir()
 	base := filepath.Join(dir, "base")
 	delta := filepath.Join(dir, "delta")
-	golden := filepath.Join(dir, "golden")
+	cached := filepath.Join(dir, "cached-snapshot")
 	writeSparse(t, base, size, baseRegions)
 	writeSparse(t, delta, size, deltaRegions)
-	if err := os.Link(base, golden); err != nil {
+	if err := os.Link(base, cached); err != nil {
 		t.Fatal(err)
 	}
 
@@ -218,12 +218,12 @@ func TestMergeDeltaIntoBaseHardlinkedBase(t *testing.T) {
 	if !bytes.Equal(got, want) {
 		t.Fatalf("merged result != expected (len got=%d want=%d)", len(got), len(want))
 	}
-	shared, err := os.ReadFile(golden)
+	shared, err := os.ReadFile(cached)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(shared, baseOnly) {
-		t.Error("the hardlinked base was mutated; the golden snapshot behind it is now corrupt")
+		t.Error("the hardlinked base was mutated; the cached snapshot behind it is now corrupt")
 	}
 	// The copying merge leaves base alone, unlike the fast path which consumes it.
 	if _, err := os.Stat(base); err != nil {
