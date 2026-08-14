@@ -120,17 +120,15 @@ func requireAdminPool(t *testing.T) *pgxpool.Pool {
 	t.Helper()
 	containerOnce.Do(func() {
 		ctx := context.Background()
-		container, err := postgres.Run(ctx, "postgres:18-alpine",
+		containerPG, containerErr = postgres.Run(ctx, "postgres:18-alpine",
 			postgres.WithDatabase("postgres"),
 			postgres.WithUsername("postgres"),
 			postgres.WithPassword("postgres"),
 		)
-		if err != nil {
-			containerErr = err
+		if containerErr != nil {
 			return
 		}
-		containerPG = container
-		dsn, err := container.ConnectionString(ctx, "sslmode=disable")
+		dsn, err := containerPG.ConnectionString(ctx, "sslmode=disable")
 		if err != nil {
 			containerErr = err
 			return
