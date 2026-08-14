@@ -332,7 +332,7 @@ func connectStore(ctx context.Context) (store.Interface, error) {
 		if err != nil {
 			return nil, fmt.Errorf("setting up Redis/Valkey: %w", err)
 		}
-		return ateredis.NewPersistence(redisClient), nil
+		return ateredis.NewPersistence(redisClient, otel.Meter("ateapi")), nil
 	case "postgres":
 		if *postgresConnectionString == "" {
 			return nil, fmt.Errorf("--store-backend=postgres requires --postgres-connection-string")

@@ -116,7 +116,7 @@ func setupTestWithVolumePlugins(t *testing.T, ns string, plugins map[string]volu
 	rdb := redis.NewClusterClient(&redis.ClusterOptions{
 		Addrs: []string{mr.Addr()},
 	})
-	persistence := ateredis.NewPersistence(rdb)
+	persistence := ateredis.NewPersistence(rdb, nil)
 
 	// 2. Initialize Clientsets using global cfg
 	k8sClient, err := kubernetes.NewForConfig(cfg)

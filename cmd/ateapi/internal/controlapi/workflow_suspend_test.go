@@ -237,7 +237,7 @@ func newTestPersistence(t *testing.T) store.Interface {
 	t.Cleanup(mr.Close)
 	rdb := redis.NewClusterClient(&redis.ClusterOptions{Addrs: []string{mr.Addr()}})
 	t.Cleanup(func() { rdb.Close() }) //nolint:errcheck // test cleanup
-	return ateredis.NewPersistence(rdb)
+	return ateredis.NewPersistence(rdb, nil)
 }
 
 // newDanglingDialer returns a dialer whose informer cache has no pods, so

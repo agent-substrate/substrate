@@ -172,7 +172,7 @@ func newTestServer(t *testing.T, st store.Interface) *Server {
 type staleWatchStore struct{ store.Interface }
 
 func (s staleWatchStore) WatchWorkers(context.Context) (*store.WorkerWatch, error) {
-	return store.NewWorkerWatch(make(chan store.WorkerEvent), func() {}), nil
+	return store.NewWorkerWatch(make(chan store.WorkerEvent), nil, func() {}), nil
 }
 
 // TestMintCertReadsThroughStaleWorkerCache pins the authorization

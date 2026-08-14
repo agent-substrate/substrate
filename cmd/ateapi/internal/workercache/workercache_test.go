@@ -384,24 +384,27 @@ func TestCache_Relist_FailureIsNonFatal(t *testing.T) {
 type fakeStore struct {
 	store.Interface
 
-	mu      sync.Mutex
-	workers []*ateapipb.Worker
-	watchCh chan store.WorkerEvent
-	listErr error // if set, ListWorkers returns it
-	closes  int   // number of times a returned watch was Closed
+	mu           sync.Mutex
+	workers      []*ateapipb.Worker
+	watchCh      chan store.WorkerEvent
+	invalidateCh chan struct{}
+	listErr      error // if set, ListWorkers returns it
+	failListOnce bool  // if set, the next ListWorkers fails and clears it
+	closes       int   // number of times a returned watch was Closed
 }
 
 func newFakeStore(workers ...*ateapipb.Worker) *fakeStore {
 	return &fakeStore{
-		workers: workers,
-		watchCh: make(chan store.WorkerEvent, 16),
+		workers:      workers,
+		watchCh:      make(chan store.WorkerEvent, 16),
+		invalidateCh: make(chan struct{}, 1),
 	}
 }
 
 func (f *fakeStore) WatchWorkers(_ context.Context) (*store.WorkerWatch, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return store.NewWorkerWatch(f.watchCh, func() {
+	return store.NewWorkerWatch(f.watchCh, f.invalidateCh, func() {
 		f.mu.Lock()
 		f.closes++
 		f.mu.Unlock()
@@ -411,6 +414,10 @@ func (f *fakeStore) WatchWorkers(_ context.Context) (*store.WorkerWatch, error) 
 func (f *fakeStore) ListWorkers(_ context.Context, _ store.ListOptions) (store.ListResponse[*ateapipb.Worker], error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.failListOnce {
+		f.failListOnce = false
+		return store.ListResponse[*ateapipb.Worker]{}, errors.New("transient list failure")
+	}
 	if f.listErr != nil {
 		return store.ListResponse[*ateapipb.Worker]{}, f.listErr
 	}
@@ -475,5 +482,147 @@ func eventually(t *testing.T, condition func() bool, timeout time.Duration) {
 	})
 	if err != nil {
 		t.Fatal("condition not met within timeout")
+	}
+}
+
+func TestInvalidationTriggersImmediateRelist(t *testing.T) {
+	ctx := t.Context()
+	w1 := makeWorker("ns", "w1", 1)
+	fs := newFakeStore(w1)
+	c := workercache.New(fs, time.Hour)
+	if err := c.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	w2 := makeWorker("ns", "w2", 1)
+	fs.mu.Lock()
+	fs.workers = []*ateapipb.Worker{w1, w2}
+	fs.mu.Unlock()
+
+	fs.invalidateCh <- struct{}{}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		workers, err := c.Workers()
+		if err != nil {
+			t.Fatalf("Workers() = %v; the cache must stay ready through an invalidation relist", err)
+		}
+		if len(workers) == 2 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("cache never picked up the dropped worker via relist; have %d workers", len(workers))
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// The invalidation signal is consumed once, so a failed corrective relist must
+// be retried on its own schedule — the periodic ticker is an hour away here.
+func TestInvalidationRelistRetriesAfterFailure(t *testing.T) {
+	ctx := t.Context()
+	w1 := makeWorker("ns", "w1", 1)
+	fs := newFakeStore(w1)
+	c := workercache.New(fs, time.Hour)
+	if err := c.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	w2 := makeWorker("ns", "w2", 1)
+	fs.mu.Lock()
+	fs.workers = []*ateapipb.Worker{w1, w2}
+	fs.failListOnce = true
+	fs.mu.Unlock()
+
+	fs.invalidateCh <- struct{}{}
+
+	eventually(t, func() bool {
+		workers, err := c.Workers()
+		if err != nil {
+			t.Errorf("Workers() = %v; the cache must keep serving its stale snapshot while the relist retries", err)
+			return true
+		}
+		return len(workers) == 2
+	}, 5*time.Second)
+
+	if workers, err := c.Workers(); err != nil || len(workers) != 2 {
+		t.Fatalf("Workers() = %d workers, %v; want 2 after the retried relist", len(workers), err)
+	}
+}
+
+// A resync relists against a fresh watch, satisfying any pending correction.
+// A retry left armed from before would drain that new watch and relist over
+// state the resync just established.
+func TestResyncCancelsPendingInvalidationRetry(t *testing.T) {
+	ctx := t.Context()
+	w1 := makeWorker("ns", "w1", 1)
+	fs := newFakeStore(w1)
+	c := workercache.New(fs, time.Hour)
+	if err := c.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	fs.mu.Lock()
+	fs.failListOnce = true
+	fs.mu.Unlock()
+	fs.invalidateCh <- struct{}{}
+
+	eventually(t, func() bool {
+		fs.mu.Lock()
+		defer fs.mu.Unlock()
+		return !fs.failListOnce
+	}, 2*time.Second)
+
+	fs.disconnect()
+	eventually(t, func() bool {
+		workers, err := c.Workers()
+		return err == nil && len(workers) == 1
+	}, 2*time.Second)
+
+	// w2 exists only as an event, never in the store snapshot: a relist the
+	// resync did not ask for would drop it back out of the cache.
+	w2 := makeWorker("ns", "w2", 1)
+	fs.send(store.WorkerEvent{Type: store.WorkerEventCreated, Worker: w2})
+	eventually(t, func() bool {
+		workers, err := c.Workers()
+		return err == nil && len(workers) == 2
+	}, 2*time.Second)
+
+	time.Sleep(400 * time.Millisecond)
+	if workers, err := c.Workers(); err != nil || len(workers) != 2 {
+		t.Fatalf("Workers() = %d workers, %v; want 2: the stale retry relisted over the resynced watch", len(workers), err)
+	}
+}
+
+func TestInvalidationDiscardsStaleBacklog(t *testing.T) {
+	ctx := t.Context()
+	w1 := makeWorker("ns", "w1", 1)
+	fs := newFakeStore(w1)
+	c := workercache.New(fs, time.Hour)
+	if err := c.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	ghost := makeWorker("ns", "ghost", 1)
+	for range 16 {
+		fs.send(store.WorkerEvent{Type: store.WorkerEventCreated, Worker: ghost})
+	}
+	fs.invalidateCh <- struct{}{}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for stable := 0; stable < 5; {
+		workers, err := c.Workers()
+		if err != nil {
+			t.Fatalf("Workers() = %v; the cache must stay ready through an invalidation relist", err)
+		}
+		if len(workers) == 1 && workers[0].GetWorkerPod() == "w1" {
+			stable++
+		} else {
+			stable = 0
+			if time.Now().After(deadline) {
+				t.Fatalf("ghost worker still in cache after invalidation relist; have %d workers", len(workers))
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }

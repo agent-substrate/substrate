@@ -34,6 +34,11 @@ import (
 // relistPageSize is the page size used for the relist.
 const relistPageSize = 1000
 
+const (
+	minInvalidationRetry = 100 * time.Millisecond
+	maxInvalidationRetry = 5 * time.Second
+)
+
 // Cache maintains an in-memory snapshot of all workers.
 //
 // TODO: add metrics — at minimum a gauge for worker count, a counter for
@@ -160,6 +165,30 @@ func (c *Cache) relist(ctx context.Context) error {
 func (c *Cache) watchEvents(ctx context.Context, watch *store.WorkerWatch) {
 	ticker := time.NewTicker(c.relistInterval)
 	defer ticker.Stop()
+
+	// Signal consumed and backlog discarded: a failed relist has nothing to retrigger it, so retry ourselves.
+	var retry <-chan time.Time
+	retryDelay := minInvalidationRetry
+	correct := func() {
+		// Discard events buffered before the drop so a stale event can't roll
+		// back the relisted snapshot.
+		for draining := true; draining; {
+			select {
+			case _, ok := <-watch.Events:
+				draining = ok
+			default:
+				draining = false
+			}
+		}
+		if err := c.relist(ctx); err != nil {
+			slog.WarnContext(ctx, "worker cache: invalidation relist failed, retrying", slog.Any("err", err), slog.Duration("in", retryDelay))
+			retry = time.After(retryDelay)
+			retryDelay = min(retryDelay*2, maxInvalidationRetry)
+			return
+		}
+		retry, retryDelay = nil, minInvalidationRetry
+	}
+
 	for {
 		select {
 		case event, ok := <-watch.Events:
@@ -174,13 +203,22 @@ func (c *Cache) watchEvents(ctx context.Context, watch *store.WorkerWatch) {
 				if watch == nil {
 					return // context cancelled
 				}
+				// resync already relisted; a pending correction would only drain the new watch.
+				retry, retryDelay = nil, minInvalidationRetry
 				c.ready.Store(true)
 			} else {
 				c.applyEvent(event)
 			}
+		case <-watch.Invalidated:
+			slog.WarnContext(ctx, "worker cache: watch events dropped, relisting")
+			correct()
+		case <-retry:
+			correct()
 		case <-ticker.C:
 			if err := c.relist(ctx); err != nil {
 				slog.WarnContext(ctx, "worker cache: periodic relist failed", slog.Any("err", err))
+			} else {
+				retry, retryDelay = nil, minInvalidationRetry
 			}
 		case <-ctx.Done():
 			c.ready.Store(false)

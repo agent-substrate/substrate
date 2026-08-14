@@ -28,6 +28,9 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	"github.com/google/go-cmp/cmp"
 	"github.com/redis/go-redis/v9"
+	"go.opentelemetry.io/otel/metric"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
+	"go.opentelemetry.io/otel/sdk/metric/metricdata"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/testing/protocmp"
@@ -38,6 +41,10 @@ import (
 )
 
 func setupTest(t *testing.T) (*miniredis.Miniredis, *Persistence, context.Context) {
+	return setupTestWithMeter(t, nil)
+}
+
+func setupTestWithMeter(t *testing.T, meter metric.Meter) (*miniredis.Miniredis, *Persistence, context.Context) {
 	mr, err := miniredis.Run()
 	if err != nil {
 		t.Fatalf("failed to start miniredis: %v", err)
@@ -50,7 +57,7 @@ func setupTest(t *testing.T) (*miniredis.Miniredis, *Persistence, context.Contex
 		Addrs: []string{mr.Addr()},
 	})
 	t.Cleanup(func() { rdb.Close() })
-	return mr, NewPersistence(rdb), t.Context()
+	return mr, NewPersistence(rdb, meter), t.Context()
 }
 
 // testAtespace is the atespace used by tests that create a single actor. Actors
@@ -2755,5 +2762,95 @@ func TestListActorTemplates_AtespaceFilter(t *testing.T) {
 	}
 	if len(allResp.Items) != 3 {
 		t.Errorf("ListActorTemplates(all) returned %d templates, want 3", len(allResp.Items))
+	}
+}
+
+func droppedEventsCount(t *testing.T, reader *sdkmetric.ManualReader) int64 {
+	t.Helper()
+	var rm metricdata.ResourceMetrics
+	if err := reader.Collect(context.Background(), &rm); err != nil {
+		t.Fatalf("collecting metrics: %v", err)
+	}
+	for _, sm := range rm.ScopeMetrics {
+		for _, m := range sm.Metrics {
+			if m.Name != droppedEventsMetric {
+				continue
+			}
+			var total int64
+			for _, dp := range m.Data.(metricdata.Sum[int64]).DataPoints {
+				total += dp.Value
+			}
+			return total
+		}
+	}
+	return 0
+}
+
+func TestWatchWorkersOverflowSignalsInvalidation(t *testing.T) {
+	reader := sdkmetric.NewManualReader()
+	meter := sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)).Meter("test")
+	_, s, ctx := setupTestWithMeter(t, meter)
+
+	watch, err := s.WatchWorkers(ctx)
+	if err != nil {
+		t.Fatalf("WatchWorkers failed: %v", err)
+	}
+	defer watch.Close()
+
+	for i := 0; i < 200; i++ {
+		if err := s.CreateWorker(ctx, &ateapipb.Worker{
+			Metadata:        &ateapipb.ResourceMetadata{Name: fmt.Sprintf("worker-%d", i)},
+			WorkerNamespace: "default",
+			WorkerPool:      "pool-1",
+			WorkerPod:       fmt.Sprintf("pod-%d", i),
+			Status:          &ateapipb.WorkerStatus{},
+		}); err != nil {
+			t.Fatalf("CreateWorker %d failed: %v", i, err)
+		}
+	}
+
+	select {
+	case <-watch.Invalidated:
+	case <-time.After(10 * time.Second):
+		t.Fatal("no invalidation signal after overflowing the watch buffer")
+	}
+
+	if got := droppedEventsCount(t, reader); got <= 0 {
+		t.Errorf("%s = %d, want > 0 after overflow", droppedEventsMetric, got)
+	}
+
+	for draining := true; draining; {
+		select {
+		case _, ok := <-watch.Events:
+			if !ok {
+				t.Fatal("watch events channel closed after overflow; the subscription must survive")
+			}
+		case <-time.After(200 * time.Millisecond):
+			draining = false
+		}
+	}
+
+	if err := s.CreateWorker(ctx, &ateapipb.Worker{
+		Metadata:        &ateapipb.ResourceMetadata{Name: "worker-after-overflow"},
+		WorkerNamespace: "default",
+		WorkerPool:      "pool-1",
+		WorkerPod:       "pod-after-overflow",
+		Status:          &ateapipb.WorkerStatus{},
+	}); err != nil {
+		t.Fatalf("CreateWorker after overflow failed: %v", err)
+	}
+	deadline := time.After(10 * time.Second)
+	for {
+		select {
+		case event, ok := <-watch.Events:
+			if !ok {
+				t.Fatal("watch events channel closed after overflow")
+			}
+			if event.Worker.GetWorkerPod() == "pod-after-overflow" {
+				return
+			}
+		case <-deadline:
+			t.Fatal("event published after overflow never delivered")
+		}
 	}
 }

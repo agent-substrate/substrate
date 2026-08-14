@@ -567,5 +567,6 @@ func (p *Persistence) WatchWorkers(ctx context.Context) (*store.WorkerWatch, err
 			}
 		}
 	}()
-	return store.NewWorkerWatch(ch, cancel), nil
+	// nil invalidation: this watch closes rather than dropping events.
+	return store.NewWorkerWatch(ch, nil, cancel), nil
 }

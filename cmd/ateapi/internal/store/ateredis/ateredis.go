@@ -57,6 +57,7 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
+	"go.opentelemetry.io/otel/metric"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/encoding/protojson"
@@ -81,18 +82,34 @@ type redisClient interface {
 
 // Persistence is a service that stores information about applications in Redis.
 type Persistence struct {
-	rdb     redisClient
-	lockTTL time.Duration
+	rdb           redisClient
+	lockTTL       time.Duration
+	droppedEvents metric.Int64Counter
 }
 
 var _ store.Interface = (*Persistence)(nil)
 
-// NewPersistence creates a new Persistence.
-func NewPersistence(redisClient *redis.ClusterClient) *Persistence {
-	return &Persistence{
+const droppedEventsMetric = "ate.store.worker_watch.dropped_events"
+
+// NewPersistence creates a new Persistence. meter may be nil to disable metrics.
+func NewPersistence(redisClient *redis.ClusterClient, meter metric.Meter) *Persistence {
+	p := &Persistence{
 		rdb:     redisClient,
 		lockTTL: defaultLockTTL,
 	}
+	if meter != nil {
+		counter, err := meter.Int64Counter(
+			droppedEventsMetric,
+			metric.WithUnit("{event}"),
+			metric.WithDescription("Worker watch events dropped because the consumer buffer was full."),
+		)
+		if err != nil {
+			slog.Error("Failed to register worker watch dropped-events counter", "metric", droppedEventsMetric, "error", err)
+		} else {
+			p.droppedEvents = counter
+		}
+	}
+	return p
 }
 
 // actorDBKey returns the Redis key an actor is stored under. The encoding is
@@ -538,6 +555,7 @@ func (s *Persistence) WatchWorkers(ctx context.Context) (*store.WorkerWatch, err
 		return nil, fmt.Errorf("while confirming worker subscription: %w", err)
 	}
 	ch := make(chan store.WorkerEvent, 128)
+	invalidated := make(chan struct{}, 1)
 	go func() {
 		defer close(ch)
 		defer pubsub.Close()
@@ -557,13 +575,22 @@ func (s *Persistence) WatchWorkers(ctx context.Context) (*store.WorkerWatch, err
 				}
 				select {
 				case ch <- event:
-				case <-watchCtx.Done():
-					return
+				default:
+					// Blocking here would stall the pub/sub socket and drop the
+					// connection; drop the event and coalesce an invalidation.
+					if s.droppedEvents != nil {
+						s.droppedEvents.Add(ctx, 1)
+					}
+					select {
+					case invalidated <- struct{}{}:
+						slog.WarnContext(ctx, "worker watch buffer full; dropping events, invalidation signaled")
+					default:
+					}
 				}
 			}
 		}
 	}()
-	return store.NewWorkerWatch(ch, cancel), nil
+	return store.NewWorkerWatch(ch, invalidated, cancel), nil
 }
 
 // DebugClearAll flushes all data from Redis.

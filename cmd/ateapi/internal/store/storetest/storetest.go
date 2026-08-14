@@ -37,7 +37,7 @@ func SetupTestStore(t *testing.T) (store.Interface, func()) {
 		Addrs: []string{mr.Addr()},
 	})
 
-	persistence := ateredis.NewPersistence(rdb)
+	persistence := ateredis.NewPersistence(rdb, nil)
 
 	cleanup := func() {
 		rdb.Close()

@@ -293,15 +293,18 @@ type WorkerEvent struct {
 type WorkerWatch struct {
 	// Events delivers worker state changes until the watch is torn down.
 	Events <-chan WorkerEvent
+	// Invalidated signals that events were dropped and the consumer should
+	// relist. Signals coalesce; nil for stores that never drop events.
+	Invalidated <-chan struct{}
 	// stop releases the subscription backing Events. It is a context.CancelFunc,
 	// so it is safe to call multiple times.
 	stop context.CancelFunc
 }
 
-// NewWorkerWatch builds a WorkerWatch from an events channel and the cancel
-// func that tears down its subscription.
-func NewWorkerWatch(events <-chan WorkerEvent, stop context.CancelFunc) *WorkerWatch {
-	return &WorkerWatch{Events: events, stop: stop}
+// NewWorkerWatch builds a WorkerWatch from an events channel, an optional
+// invalidation channel, and the cancel func that tears down its subscription.
+func NewWorkerWatch(events <-chan WorkerEvent, invalidated <-chan struct{}, stop context.CancelFunc) *WorkerWatch {
+	return &WorkerWatch{Events: events, Invalidated: invalidated, stop: stop}
 }
 
 // Close releases the subscription. Safe to call multiple times.
