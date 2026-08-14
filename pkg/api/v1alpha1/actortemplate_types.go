@@ -307,6 +307,18 @@ type SnapshotsConfig struct {
 	OnResume OnResumeConfig `json:"onResume,omitempty"`
 }
 
+// ImagePullSecretReference identifies a Secret containing registry credentials
+// in the ActorTemplate's namespace. Its JSON representation intentionally
+// matches corev1.LocalObjectReference, which is used by PodSpec.imagePullSecrets.
+type ImagePullSecretReference struct {
+	// Name of the referenced Secret.
+	//
+	// +required
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:XValidation:rule="!format.dns1123Subdomain().validate(self).hasValue()",message="Name must be a valid DNS subdomain"
+	Name string `json:"name"`
+}
+
 // ActorTemplateSpec defined desired spec of an actor.
 //
 // +kubebuilder:validation:XValidation:rule="!has(self.volumes) || self.volumes.all(v, has(self.containers) && self.containers.exists(c, has(c.volumeMounts) && c.volumeMounts.exists(vm, vm.name == v.name)))",message="All volumes defined in spec.volumes must be mounted by at least one container"
@@ -318,6 +330,17 @@ type ActorTemplateSpec struct {
 	// +optional
 	// +kubebuilder:validation:MaxItems=10
 	Containers []Container `json:"containers,omitempty"`
+
+	// ImagePullSecrets is an optional list of references to Secrets in this
+	// ActorTemplate's namespace that hold registry credentials. Each Secret
+	// must be of type kubernetes.io/dockerconfigjson or kubernetes.io/dockercfg.
+	// Atelet resolves these references immediately before pulling this
+	// template's images.
+	//
+	// +optional
+	// +kubebuilder:validation:MaxItems=32
+	// +listType=atomic
+	ImagePullSecrets []ImagePullSecretReference `json:"imagePullSecrets,omitempty"`
 
 	// Snapshots configuration for the actor.
 	//

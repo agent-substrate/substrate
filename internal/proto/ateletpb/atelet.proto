@@ -121,9 +121,17 @@ message SandboxAssets {
 message WorkloadSpec {
   repeated Container containers = 1;
   repeated Volume volumes = 3;
+  repeated ImagePullSecretReference image_pull_secrets = 4;
 
   reserved 2;
   reserved "pause_image"; // moved to SandboxAssets
+}
+
+// ImagePullSecretReference identifies a Secret in RunRequest's
+// actor_template_namespace. Atelet resolves these secrets immediately before
+// it pulls workload images.
+message ImagePullSecretReference {
+  string name = 1;
 }
 
 enum VolumeType {

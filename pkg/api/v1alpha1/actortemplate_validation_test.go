@@ -149,6 +149,26 @@ func TestActorTemplateValidation(t *testing.T) {
 		wantErr: true,
 		errMsg:  "All images must be pinned",
 	}, {
+		name: "valid imagePullSecrets",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.ImagePullSecrets = []ImagePullSecretReference{{Name: "registry-credentials"}}
+		},
+		wantErr: false,
+	}, {
+		name: "empty imagePullSecrets name",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.ImagePullSecrets = []ImagePullSecretReference{{Name: ""}}
+		},
+		wantErr: true,
+		errMsg:  "Name must be a valid DNS subdomain",
+	}, {
+		name: "invalid imagePullSecrets name",
+		mutate: func(at *ActorTemplate) {
+			at.Spec.ImagePullSecrets = []ImagePullSecretReference{{Name: "Invalid_Name"}}
+		},
+		wantErr: true,
+		errMsg:  "Name must be a valid DNS subdomain",
+	}, {
 		name: "valid container Command",
 		mutate: func(at *ActorTemplate) {
 			at.Spec.Containers[0].Command = []string{"command"}

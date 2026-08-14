@@ -69,6 +69,11 @@ func workloadSpecFromActorTemplate(actorTemplate *atev1alpha1.ActorTemplate, act
 		}
 		workloadSpec.Containers = append(workloadSpec.Containers, ateletCtr)
 	}
+	for _, ref := range actorTemplate.Spec.ImagePullSecrets {
+		workloadSpec.ImagePullSecrets = append(workloadSpec.ImagePullSecrets, &ateletpb.ImagePullSecretReference{
+			Name: ref.Name,
+		})
+	}
 
 	return workloadSpec, nil
 }

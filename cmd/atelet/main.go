@@ -249,6 +249,7 @@ func main() {
 		instruments,
 		volPlugins,
 		csiDriverConfigLister,
+		k8sClient,
 	)
 	dialOpts, err := ateapiauth.DialOptions(ateapiauth.ClientConfig{
 		K8sClient:        k8sClient,
@@ -370,6 +371,7 @@ type AteomHerder struct {
 	mu                    sync.RWMutex
 	volumePlugins         map[string]volume.VolumePluginWorkerPlane
 	csiDriverConfigLister listersv1alpha1.CSIDriverConfigLister
+	kubeClient            kubernetes.Interface
 }
 
 var _ ateletpb.AteomHerderServer = (*AteomHerder)(nil)
@@ -384,6 +386,7 @@ func NewService(
 	instruments *Instruments,
 	volumePlugins map[string]volume.VolumePluginWorkerPlane,
 	csiDriverConfigLister listersv1alpha1.CSIDriverConfigLister,
+	kubeClient kubernetes.Interface,
 ) *AteomHerder {
 	wms := &AteomHerder{
 		ateomDialer:           ateomDialer,
@@ -393,6 +396,7 @@ func NewService(
 		instruments:           instruments,
 		volumePlugins:         volumePlugins,
 		csiDriverConfigLister: csiDriverConfigLister,
+		kubeClient:            kubeClient,
 	}
 	return wms
 }
@@ -431,7 +435,7 @@ func (s *AteomHerder) Run(ctx context.Context, req *ateletpb.RunRequest) (resp *
 		return nil, fmt.Errorf("while recording sandbox assets: %w", err)
 	}
 
-	if err := s.prepareOCIBundles(ctx, actorUID, actorRef.Name,
+	if err := s.prepareOCIBundles(ctx, actorUID, actorRef.Name, req.GetActorTemplateNamespace(),
 		req.GetSpec(), sandboxRec.PauseImage, req.GetTargetAteomUid(),
 	); err != nil {
 		return nil, ateerrors.CrashIfReason(ctx, err, ateerrors.ReasonInvalidContainerConfig)
@@ -1053,7 +1057,7 @@ func (s *AteomHerder) Restore(ctx context.Context, req *ateletpb.RestoreRequest)
 			return ateerrors.CrashIfReason(ctx, err, ateerrors.ReasonFailedGetExternalObject, ateerrors.ReasonInvalidObjectURL, ateerrors.ReasonTerminalFileSystemError, ateerrors.ReasonInvalidSandboxAsset)
 		}
 		t := time.Now()
-		err = s.prepareOCIBundles(gctx, actorUID, actorRef.Name, req.GetSpec(), runtimeRec.PauseImage, req.GetTargetAteomUid())
+		err = s.prepareOCIBundles(gctx, actorUID, actorRef.Name, req.GetActorTemplateNamespace(), req.GetSpec(), runtimeRec.PauseImage, req.GetTargetAteomUid())
 		dBundles = time.Since(t)
 		if err != nil {
 			prepFailedPhase = ateattr.SnapshotPhaseOCIUnpack
@@ -1357,6 +1361,7 @@ func (s *AteomHerder) prepareOCIBundles(
 	ctx context.Context,
 	actorUID string,
 	actorName string,
+	actorTemplateNamespace string,
 	spec *ateletpb.WorkloadSpec,
 	pauseImage string,
 	targetAteomUid string,
@@ -1382,7 +1387,7 @@ func (s *AteomHerder) prepareOCIBundles(
 	}
 
 	g, gCtx := errgroup.WithContext(ctx)
-
+	imagePullSecrets := newImagePullSecretResolver(s.kubeClient, actorTemplateNamespace, spec.GetImagePullSecrets())
 	// Pause container.
 	g.Go(func() error {
 		annotations := map[string]string{
@@ -1405,6 +1410,7 @@ func (s *AteomHerder) prepareOCIBundles(
 			actorUID,
 			"pause",
 			pauseImage,
+			nil,
 			[]string{"/pause"},
 			nil,
 			nil,
@@ -1433,6 +1439,7 @@ func (s *AteomHerder) prepareOCIBundles(
 				actorUID,
 				ctr.GetName(),
 				ctr.GetImage(),
+				imagePullSecrets,
 				ctr.GetCommand(),
 				ctr.GetArgs(),
 				envs,
