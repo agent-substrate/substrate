@@ -71,3 +71,19 @@ func toFieldPath(p protopath.Path, root *field.Path) *field.Path {
 	}
 	return out
 }
+
+func toGRPCInternalError(errs field.ErrorList) error {
+	return status.Error(codes.Internal, errs.ToAggregate().Error())
+}
+
+func protoDeepEqual[T any](a, b T) bool {
+	pa, ok := any(a).(proto.Message)
+	if !ok {
+		panic("protoDeepEqual: a is not a proto.Message")
+	}
+	pb, ok := any(b).(proto.Message)
+	if !ok {
+		panic("protoDeepEqual: b is not a proto.Message")
+	}
+	return proto.Equal(pa, pb)
+}

@@ -188,6 +188,7 @@ type querier interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 }
 
+// TODO: EOL this in favor of setCreateMetadata
 func newCreateMetadata(atespace, name string) *ateapipb.ResourceMetadata {
 	now := timestamppb.Now()
 	return &ateapipb.ResourceMetadata{
@@ -198,6 +199,16 @@ func newCreateMetadata(atespace, name string) *ateapipb.ResourceMetadata {
 		CreateTime: now,
 		UpdateTime: now,
 	}
+}
+
+// TODO: This really does not belong in the storage layer, but there are a lot
+// of tests which assume that it does, so we can maybe fix this later.  For now
+// it is part of the storage contract.
+func setCreateMetadata(metadata *ateapipb.ResourceMetadata) {
+	metadata.Uid = uuid.NewString()
+	metadata.Version = 1
+	metadata.CreateTime = timestamppb.Now()
+	metadata.UpdateTime = metadata.CreateTime
 }
 
 func newUpdateMetadata(current *ateapipb.ResourceMetadata) *ateapipb.ResourceMetadata {
@@ -566,8 +577,12 @@ func (p *Persistence) CreateActor(ctx context.Context, actor *ateapipb.Actor) (*
 	atespace := actor.GetMetadata().GetAtespace()
 	name := actor.GetMetadata().GetName()
 
+	// TODO: doing a full clone here is wasteful - the caller already has to
+	// make modifications to the actor before passing it in, so we can safely
+	// mutate it in place.  This breaks some of the contract tests, so we can
+	// fix it later.
 	dbActor := proto.Clone(actor).(*ateapipb.Actor)
-	dbActor.Metadata = newCreateMetadata(atespace, name)
+	setCreateMetadata(dbActor.Metadata)
 
 	protoBytes, err := proto.Marshal(dbActor)
 	if err != nil {

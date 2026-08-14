@@ -156,6 +156,7 @@ message ResourceMetadata {
   // Non-atespaced resources should add +k8s:subfield(atespace)=+k8s:forbidden
   // +k8s:optional
   // +k8s:format=k8s-short-name
+  // +k8s:immutable
   string atespace = 1;
 
   // name is the resource's name, unique within its atespace (or globally, for
@@ -163,6 +164,7 @@ message ResourceMetadata {
   //
   // +k8s:required
   // +k8s:format=k8s-short-name
+  // +k8s:immutable
   string name = 2;
 
   // uid is a server-assigned, globally unique identifier for this resource.
@@ -171,7 +173,9 @@ message ResourceMetadata {
   // This field is ignored during create operations and used as precondition
   // for update operations.
   //
-  // +k8s:optional # optional on input, always specified on output
+  // +k8s:ifDisabled(validateOutput)=+k8s:optional
+  // +k8s:ifEnabled(validateOutput)=+k8s:required
+  // +k8s:ifEnabled(validateOutput)=+k8s:immutable
   // +k8s:format=k8s-uuid
   string uid = 3;
 
@@ -180,18 +184,31 @@ message ResourceMetadata {
   // This field is ignored during create operations and used as precondition
   // for update operations.
   //
-  // +k8s:optional # optional on input, always specified on output
+  // +k8s:ifDisabled(validateOutput)=+k8s:optional
+  // +k8s:ifEnabled(validateOutput)=+k8s:required
+  // +k8s:alpha(since: "0.0")=+k8s:ifEnabled(validateOutput)=+k8s:monotonic # TODO: get rid of alpha prefix
+  // +k8s:ifEnabled(validateOutput)=+k8s:update=NoUnset
   // +k8s:minimum=1
   int64 version = 4;
 
   // create_time is the time the resource was created.
   //
   // This field is ignored on input.
+  //
+  // +k8s:ifDisabled(validateOutput)=+k8s:optional
+  // +k8s:ifEnabled(validateOutput)=+k8s:required
+  // +k8s:ifEnabled(validateOutput)=+k8s:immutable
+  // TODO: validate that this is a valid timestamp
   google.protobuf.Timestamp create_time = 5;
 
   // update_time is the time the resource was last updated.
   //
   // This field is ignored on input.
+  //
+  // +k8s:ifDisabled(validateOutput)=+k8s:optional
+  // +k8s:ifEnabled(validateOutput)=+k8s:required
+  // TODO: validate that this is a valid timestamp
+  // TODO: validate that UpdateTime >= CreateTime
   google.protobuf.Timestamp update_time = 6;
 }
 
@@ -246,7 +263,8 @@ message Actor {
   // once at creation and immutable afterward.
   ObjectRef source_snapshot_tag = 6;
 
-  // +k8s:optional
+  // +k8s:ifDisabled(validateOutput)=+k8s:forbidden
+  // +k8s:ifEnabled(validateOutput)=+k8s:required
   ActorStatus status = 7;
 }
 
@@ -266,7 +284,7 @@ enum ActorState {
 message ActorStatus {
   // state is the Actor's current lifecycle state.
   //
-  // +k8s:optional
+  // +k8s:required
   // +k8s:minimum=1
   // +k8s:maximum=8 # keep this in sync with the ActorState enum
   ActorState state = 1;

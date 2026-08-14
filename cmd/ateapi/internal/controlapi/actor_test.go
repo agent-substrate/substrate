@@ -70,9 +70,7 @@ func TestValidateCreateActorRequest(t *testing.T) {
 			Metadata:               &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "id1"},
 			ActorTemplateNamespace: "ns1",
 			ActorTemplateName:      "tmpl1",
-			Status: &ateapipb.ActorStatus{
-				State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
-			},
+			Status:                 nil, // scrubbed on input
 		}
 		if mutate != nil {
 			mutate(a)
@@ -141,17 +139,9 @@ func TestValidateCreateActorRequest(t *testing.T) {
 		validActor(func(a *ateapipb.Actor) { a.Status = nil }),
 		nil,
 	}, {
-		"unspecified actor.status.state",
-		validActor(func(a *ateapipb.Actor) { a.Status.State = 0 }),
-		nil,
-	}, {
-		"negative actor.status.state",
-		validActor(func(a *ateapipb.Actor) { a.Status.State = -1 }),
-		field.ErrorList{field.Invalid(field.NewPath("actor", "status", "state"), nil, "").WithOrigin("minimum")},
-	}, {
-		"invalid actor.status.state",
-		validActor(func(a *ateapipb.Actor) { a.Status.State = 1234567890 }),
-		field.ErrorList{field.Invalid(field.NewPath("actor", "status", "state"), nil, "").WithOrigin("maximum")},
+		"specified actor.status",
+		validActor(func(a *ateapipb.Actor) { a.Status = &ateapipb.ActorStatus{} }),
+		field.ErrorList{field.Forbidden(field.NewPath("actor", "status"), "")},
 	}, {
 		"worker_selector with nil match_labels",
 		validActor(func(a *ateapipb.Actor) { a.WorkerSelector = &ateapipb.Selector{} }),
@@ -190,6 +180,88 @@ func TestValidateCreateActorRequest(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assertValidateErr(t, validateCreateActorRequest(context.Background(), tt.req), tt.want)
+		})
+	}
+}
+
+func TestValidateActorUpdate(t *testing.T) {
+	validInput := func(mutate func(*ateapipb.Actor)) *ateapipb.Actor {
+		a := &ateapipb.Actor{
+			Metadata:               &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "id1"},
+			ActorTemplateNamespace: "ns1",
+			ActorTemplateName:      "tmpl1",
+			Status:                 nil, // force updates to alway validate
+		}
+		if mutate != nil {
+			mutate(a)
+		}
+		return a
+	}
+	validOutput := func(mutate func(*ateapipb.Actor)) *ateapipb.Actor {
+		a := validInput(nil)
+		a.Status = &ateapipb.ActorStatus{
+			State: ateapipb.ActorState_ACTOR_STATE_SUSPENDED,
+		}
+		if mutate != nil {
+			mutate(a)
+		}
+		return a
+	}
+
+	tests := []struct {
+		name   string
+		oldVal *ateapipb.Actor
+		newVal *ateapipb.Actor
+		want   field.ErrorList
+	}{{
+		"valid",
+		validInput(nil),
+		validOutput(nil),
+		nil,
+	}, {
+		"missing actor.metadata",
+		validInput(nil),
+		validOutput(func(a *ateapipb.Actor) { a.Metadata = nil }),
+		field.ErrorList{field.Required(field.NewPath("metadata"), "")},
+	}, {
+		"invalid actor.metadata.atespace",
+		validInput(nil),
+		validOutput(func(a *ateapipb.Actor) { a.Metadata.Atespace = "NS1" }),
+		field.ErrorList{field.Invalid(field.NewPath("metadata", "atespace"), nil, "").WithOrigin("immutable")},
+	}, {
+		"invalid actor.metadata.name",
+		validInput(nil),
+		validOutput(func(a *ateapipb.Actor) { a.Metadata.Name = "ID1" }),
+		field.ErrorList{field.Invalid(field.NewPath("metadata", "name"), nil, "").WithOrigin("immutable")},
+	}, {
+		"unspecified actor.status",
+		validInput(func(a *ateapipb.Actor) { a.Status = &ateapipb.ActorStatus{} }),
+		validOutput(func(a *ateapipb.Actor) { a.Status = nil }),
+		field.ErrorList{field.Required(field.NewPath("status"), "")},
+	}, {
+		"unspecified actor.status.state",
+		validInput(nil),
+		validOutput(func(a *ateapipb.Actor) { a.Status.State = 0 }),
+		field.ErrorList{field.Required(field.NewPath("status", "state"), "")},
+	}, {
+		"negative actor.status.state",
+		validInput(nil),
+		validOutput(func(a *ateapipb.Actor) { a.Status = &ateapipb.ActorStatus{State: -1} }),
+		field.ErrorList{field.Invalid(field.NewPath("status", "state"), nil, "").WithOrigin("minimum")},
+	}, {
+		"invalid actor.status.state",
+		validInput(nil),
+		validOutput(func(a *ateapipb.Actor) { a.Status.State = 1234567890 }),
+		field.ErrorList{field.Invalid(field.NewPath("status", "state"), nil, "").WithOrigin("maximum")},
+	}, {
+		"worker_selector with nil match_labels",
+		validInput(nil),
+		validOutput(func(a *ateapipb.Actor) { a.WorkerSelector = &ateapipb.Selector{} }),
+		nil,
+	}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertValidateErr(t, validateActorUpdate(context.Background(), nil, tt.newVal, tt.oldVal), tt.want)
 		})
 	}
 }
