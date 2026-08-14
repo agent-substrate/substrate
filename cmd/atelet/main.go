@@ -1532,6 +1532,10 @@ func (s *AteomHerder) prepareOCIBundles(
 // started, no matter what checkpointed state it boots from. Files are written
 // with the atomic writer so a concurrent reader can never observe a partial
 // write.
+//
+// TODO(#802): rotating data sources (identity JWTs, certificates) will need
+// these files refreshed while the actor runs, not just at Run/Restore.
+// actorMetadata never changes after start, so writing here is enough for it.
 func writeSystemInfoVolume(ctx context.Context, rootPath string, actorRef resources.ActorRef, actorUID string, si *ateletpb.SystemInfoVolume) error {
 	if err := os.MkdirAll(rootPath, 0o755); err != nil {
 		return fmt.Errorf("while creating %q: %w", rootPath, err)
