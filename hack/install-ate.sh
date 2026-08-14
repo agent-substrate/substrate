@@ -38,6 +38,11 @@ fi
 # ATE_DEMOS is an array that registers the prefix name of the demo functions.
 ATE_DEMOS=()
 
+# Called by a ${demo}_cmdline handler for an argument it does not own.
+ate_demo_flag_unhandled() {
+  ATE_DEMO_FLAG_HANDLED=false
+}
+
 # Include demos.
 source "${ROOT}"/hack/install-demo-counter.sh
 source "${ROOT}"/hack/install-demo-egress.sh
@@ -1105,7 +1110,7 @@ get_actor_state() {
 }
 
 # prepare_actor_for_delete suspends (or resumes then suspends) until DeleteActor
-# is allowed. Actors must be ACTOR_STATE_SUSPENDED before deletion.
+# accepts the actor: ACTOR_STATE_SUSPENDED or ACTOR_STATE_CRASHED.
 prepare_actor_for_delete() {
   local actor_name="$1"
   local atespace="$2"
@@ -1119,7 +1124,7 @@ prepare_actor_for_delete() {
     fi
 
     case "${state}" in
-      ACTOR_STATE_SUSPENDED)
+      ACTOR_STATE_SUSPENDED | ACTOR_STATE_CRASHED)
         return 0
         ;;
       ACTOR_STATE_PAUSED)
@@ -1138,7 +1143,7 @@ prepare_actor_for_delete() {
     sleep 2
   done
 
-  echo "timed out waiting for actor ${actor_name} to reach ACTOR_STATE_SUSPENDED" >&2
+  echo "timed out waiting for actor ${actor_name} to become deletable" >&2
   return 1
 }
 
@@ -1521,17 +1526,21 @@ podcert_workers_per_signer >/dev/null
 rollout_timeout >/dev/null
 
 while [[ "$#" -gt 0 ]]; do
-  # Run ${demo}_cmdline if it exists. If it returns 0, then we successfully
-  # handled this argument and can continue. Otherwise, fallthrough to check
-  # the other arguments.
+  # Handlers signal an unclaimed argument via ate_demo_flag_unhandled, not exit
+  # status: an `if`-condition call would suppress errexit in the whole call tree.
+  ATE_DEMO_FLAG_HANDLED=false
   for demo_name in "${ATE_DEMOS[@]}"; do
-    if declare -F "${demo_name}_cmdline" >/dev/null 2>&1; then
-      if "${demo_name}_cmdline" "$1"; then
-        shift
-        continue 2
-      fi
+    declare -F "${demo_name}_cmdline" >/dev/null 2>&1 || continue
+    ATE_DEMO_FLAG_HANDLED=true
+    "${demo_name}_cmdline" "$1"
+    if [[ "${ATE_DEMO_FLAG_HANDLED}" == "true" ]]; then
+      break
     fi
   done
+  if [[ "${ATE_DEMO_FLAG_HANDLED}" == "true" ]]; then
+    shift
+    continue
+  fi
 
   case $1 in
     --atenet-router=*) ATE_ATENET_ROUTER="${1#*=}" ;;

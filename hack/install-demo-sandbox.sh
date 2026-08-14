@@ -23,10 +23,9 @@ demo-sandbox_cmdline() {
     --deploy-demo-sandbox) demo-sandbox_deploy ;;
     --delete-demo-sandbox) demo-sandbox_delete ;;
     *)
-      return 1
+      ate_demo_flag_unhandled
       ;;
   esac
-  return 0
 }
 
 demo-sandbox_deploy() {
