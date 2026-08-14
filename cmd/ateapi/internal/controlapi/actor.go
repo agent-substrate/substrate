@@ -26,9 +26,12 @@ import (
 	"github.com/agent-substrate/substrate/internal/resources"
 	atev1alpha1 "github.com/agent-substrate/substrate/pkg/api/v1alpha1"
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
+	"github.com/google/uuid"
 	"go.opentelemetry.io/otel/attribute"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	k8serrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/operation"
 	"k8s.io/apimachinery/pkg/api/validate/content"
@@ -36,23 +39,34 @@ import (
 )
 
 func (s *Service) CreateActor(ctx context.Context, req *ateapipb.CreateActorRequest) (created *ateapipb.Actor, err error) {
+	// First scrub any fields that users are not allowed to set.
+	inActor := req.Actor
+	if inActor != nil { // otherwise validation will flag it
+		scrubActor(inActor)
+	}
+
+	// Validate the request, including the object within it.
 	if errs := validateCreateActorRequest(ctx, req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
+
+	//
+	// Handle the request
+	//
+
 	start := time.Now()
-	in := req.GetActor()
 	// Recorded only after validation, so every operation uniformly measures a
 	// validated request; malformed ones stay visible in rpc.server.call.duration.
 	defer func() {
 		s.instruments.recordLifecycleOp(ctx, ateattr.OperationCreate, start, err,
-			ateattr.TemplateNameKey.String(in.GetActorTemplateName()),
-			ateattr.TemplateNamespaceKey.String(in.GetActorTemplateNamespace()),
+			ateattr.TemplateNameKey.String(inActor.GetActorTemplateName()),
+			ateattr.TemplateNamespaceKey.String(inActor.GetActorTemplateNamespace()),
 		)
 	}()
-	templateNamespace := in.GetActorTemplateNamespace()
-	templateName := in.GetActorTemplateName()
+	templateNamespace := inActor.GetActorTemplateNamespace()
+	templateName := inActor.GetActorTemplateName()
 
-	setSpanActorRefAttributes(ctx, resources.ActorRefFromActor(in))
+	setSpanActorRefAttributes(ctx, resources.ActorRefFromActor(inActor))
 
 	template, err := s.actorTemplateLister.ActorTemplates(templateNamespace).Get(templateName)
 	if err != nil {
@@ -63,15 +77,15 @@ func (s *Service) CreateActor(ctx context.Context, req *ateapipb.CreateActorRequ
 	}
 
 	var sourceSnapshotInfo *ateapipb.ActorSnapshotSource
-	if src := in.GetSourceSnapshot(); src != nil {
-		sourceSnapshotInfo, err = s.resolveSnapshotSource(ctx, in.GetMetadata().GetAtespace(), src, template)
+	if src := inActor.GetSourceSnapshot(); src != nil {
+		sourceSnapshotInfo, err = s.resolveSnapshotSource(ctx, inActor.GetMetadata().GetAtespace(), src, template)
 		if err != nil {
 			return nil, err
 		}
 	}
 
-	atespace := in.GetMetadata().GetAtespace()
-	name := in.GetMetadata().GetName()
+	atespace := inActor.GetMetadata().GetAtespace()
+	name := inActor.GetMetadata().GetName()
 
 	// The atespace must already exist.
 	exists, err := s.persistence.AtespaceExists(ctx, atespace)
@@ -88,20 +102,18 @@ func (s *Service) CreateActor(ctx context.Context, req *ateapipb.CreateActorRequ
 		return nil, err
 	}
 
-	actor := &ateapipb.Actor{
-		Metadata: &ateapipb.ResourceMetadata{
-			Atespace: atespace,
-			Name:     name,
-		},
-		Status:                 ateapipb.Actor_STATUS_SUSPENDED,
-		ActorTemplateNamespace: templateNamespace,
-		ActorTemplateName:      templateName,
-		WorkerSelector:         in.GetWorkerSelector(),
-		ActorVolumes:           initVols,
-		LatestSnapshot:         sourceSnapshotInfo.GetSnapshot(),
-		SourceSnapshot:         sourceSnapshotInfo,
+	// Verify that the result is properly valid before storing it.
+	outActor := proto.CloneOf(inActor)
+	outActor.Status = ateapipb.Actor_STATUS_SUSPENDED
+	outActor.ActorVolumes = initVols
+	outActor.LatestSnapshot = sourceSnapshotInfo.GetSnapshot()
+	outActor.SourceSnapshot = sourceSnapshotInfo
+	if errs := validateActorUpdate(ctx, outActor, inActor); len(errs) > 0 {
+		return nil, toGRPCInternalError(errs)
 	}
-	stored, err := s.persistence.CreateActor(ctx, actor)
+
+	// Save the data in the storage layer.
+	stored, err := s.persistence.CreateActor(ctx, outActor)
 	if err != nil {
 		if errors.Is(err, store.ErrAlreadyExists) {
 			return nil, status.Errorf(codes.AlreadyExists, "Actor %s already exists", name)
@@ -111,6 +123,40 @@ func (s *Service) CreateActor(ctx context.Context, req *ateapipb.CreateActorRequ
 
 	setSpanActorAttributes(ctx, stored)
 	return stored, nil
+}
+
+// scrubActor removes any fields from the request that clients are not allowed
+// to set.
+func scrubActor(actor *ateapipb.Actor) {
+	// TODO: find a way to do this automatically - proto tags or codegen or something
+	//FIXME: this is obviously wrong for update
+	scrubResourceMetadata(actor.Metadata)
+	actor.Status = 0
+	actor.WorkerAssignment = nil
+	actor.InProgressSnapshotName = ""
+	actor.LatestSnapshot = nil
+	actor.LocalSnapshotInfo = nil
+	actor.InProgressSnapshotSourceActorVersion = 0
+	actor.ActorVolumes = nil
+	actor.InProgressLocalSnapshotName = ""
+	// FIXME: is .SourceSnapshot allowed on input?
+}
+
+// FIXME: put this in a common place for all resources.
+// TODO: find a way to do this automatically - proto tags or codegen or something
+func scrubResourceMetadata(in *ateapipb.ResourceMetadata) {
+	if in == nil {
+		return // validation will flag it
+	}
+	now := timestamppb.Now()
+	*in = ateapipb.ResourceMetadata{
+		Atespace:   in.Atespace,
+		Name:       in.Name,
+		Uid:        uuid.NewString(),
+		Version:    1,
+		CreateTime: now,
+		UpdateTime: now,
+	}
 }
 
 // resolveSnapshotSource resolves a CreateActor request's source snapshot tag
@@ -457,6 +503,16 @@ func validateSuspendActorRequest(req *ateapipb.SuspendActorRequest) field.ErrorL
 	} else {
 		errs = append(errs, resources.ValidateObjectRef(val, fldPath)...)
 	}
+	return errs
+}
+
+func validateActorUpdate(ctx context.Context, newVal, oldVal *ateapipb.Actor) field.ErrorList {
+	var fldPath *field.Path
+
+	// Call the generated validation.
+	op := operation.Operation{Type: operation.Update}
+	errs := Validate_Actor(ctx, op, fldPath, newVal, oldVal)
+
 	return errs
 }
 

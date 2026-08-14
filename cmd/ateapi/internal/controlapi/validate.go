@@ -17,9 +17,18 @@ package controlapi
 import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 )
 
 func toGRPCStatusError(errs field.ErrorList) error {
 	return status.Error(codes.InvalidArgument, errs.ToAggregate().Error())
+}
+
+func toGRPCInternalError(errs field.ErrorList) error {
+	return status.Error(codes.Internal, errs.ToAggregate().Error())
+}
+
+func protoDeepEqual[T proto.Message](a, b T) bool {
+	return proto.Equal(a, b)
 }

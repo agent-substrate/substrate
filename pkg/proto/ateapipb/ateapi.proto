@@ -174,8 +174,11 @@ message ResourceMetadata {
   // This field is ignored during create operations and used as precondition
   // for update operations.
   //
+  // FIXME: document this better
+  // TODO: use upcoming "set by server" tag
   // +k8s:optional # optional on input, always specified on output
   // +k8s:format=k8s-uuid
+  // +k8s:immutable
   string uid = 3;
 
   // version is increased on every mutation.
@@ -183,18 +186,28 @@ message ResourceMetadata {
   // This field is ignored during create operations and used as precondition
   // for update operations.
   //
+  // FIXME: document this better
+  // TODO: use upcoming "set by server" tag
   // +k8s:optional # optional on input, always specified on output
   // +k8s:minimum=1
+  // +k8s:alpha(since: "0.0")=+k8s:monotonic # TODO: get rid of alpha prefix
+  // +k8s:update=NoUnset
   int64 version = 4;
 
   // create_time is the time the resource was created.
   //
-  // This field is ignored on input.
+  // FIXME: document this better
+  // TODO: use upcoming "set by server" tag
+  // +k8s:optional # optional on input, always specified on output
+  // +k8s:immutable
   google.protobuf.Timestamp create_time = 5;
 
   // update_time is the time the resource was last updated.
   //
-  // This field is ignored on input.
+  // FIXME: document this better
+  // TODO: use upcoming "set by server" tag
+  // +k8s:optional # optional on input, always specified on output
+  // TODO: do customValidation to ensure >= createTime
   google.protobuf.Timestamp update_time = 6;
 }
 
