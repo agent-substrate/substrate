@@ -295,9 +295,7 @@ func (s *AteomService) teardownActor(ctx context.Context, id string, ra *running
 			_ = ra.chCmd.Process.Kill()
 			_, _ = ra.chCmd.Process.Wait()
 		}
-		// Kill the virtiofsds (after CH, their only client): the overlay RO
-		// lower's and, when the actor declares such volumes, the writable
-		// durable share's and the read-only system-info share's.
+		// Kill the virtiofsds after cloud-hypervisor
 		for _, cmd := range []*exec.Cmd{ra.vfsdCmd, ra.durableVfsdCmd, ra.systemInfoVfsdCmd} {
 			if cmd != nil && cmd.Process != nil {
 				_ = cmd.Process.Kill()

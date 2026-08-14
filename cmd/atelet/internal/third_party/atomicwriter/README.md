@@ -8,12 +8,8 @@ Kubelet's atomic writer, copied from the Kubernetes monorepo:
 - **Delta last verified against:** [`kubernetes/kubernetes@52ba9013`](https://github.com/kubernetes/kubernetes/commit/52ba90138eb40cab0987dac73e05c838149bdd1c) (master, 2026-08-13)
 - **License:** Apache-2.0; the upstream copyright headers are retained in every file.
 
-It is copied, not imported, because upstream lives in the `k8s.io/kubernetes`
-monorepo, which is not consumable as a Go module. Expect this to remain a
-permanent fork: the algorithm has been stable upstream since ~2016, and our
-adaptations below are ones upstream would not take. Occasional manual re-syncs
-for upstream bugfixes (e.g. path-validation hardening) are the only planned
-convergence.
+Copied rather than imported to avoid importing the full Kubernetes dependency tree
+into atelet.
 
 ## Local modifications
 
