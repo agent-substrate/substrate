@@ -342,9 +342,9 @@ func TestCreateActorSnapshotTag_RejectsUnsetScope(t *testing.T) {
 	})
 
 	_, err := svc.CreateActorSnapshotTag(ctx, &ateapipb.CreateActorSnapshotTagRequest{
-		Snapshot: stored.GetSnapshot(),
-		Tag: &ateapipb.ActorSnapshotTag{
+		ActorSnapshotTag: &ateapipb.ActorSnapshotTag{
 			Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "tag2"},
+			Snapshot: stored.GetSnapshot(),
 		},
 	})
 	if code := status.Code(err); code != codes.InvalidArgument {

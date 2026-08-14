@@ -491,9 +491,9 @@ func createActorSnapshot(t *testing.T, tc *testContext, name string) *ateapipb.O
 func tagActorSnapshot(t *testing.T, tc *testContext, snapshotRef *ateapipb.ObjectRef, tagName string) *ateapipb.ActorSnapshotTag {
 	t.Helper()
 	tag, err := tc.client.CreateActorSnapshotTag(context.Background(), &ateapipb.CreateActorSnapshotTagRequest{
-		Snapshot: snapshotRef,
-		Tag: &ateapipb.ActorSnapshotTag{
+		ActorSnapshotTag: &ateapipb.ActorSnapshotTag{
 			Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: tagName},
+			Snapshot: snapshotRef,
 			Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
 		},
 	})
@@ -2120,9 +2120,9 @@ func TestSuspendActor(t *testing.T) {
 	}
 	tagRef := &ateapipb.ObjectRef{Atespace: testAtespace, Name: "before-upgrade"}
 	tagged, err := tc.client.CreateActorSnapshotTag(context.Background(), &ateapipb.CreateActorSnapshotTagRequest{
-		Snapshot: snapshotRef,
-		Tag: &ateapipb.ActorSnapshotTag{
+		ActorSnapshotTag: &ateapipb.ActorSnapshotTag{
 			Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "before-upgrade"},
+			Snapshot: snapshotRef,
 			Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
 		},
 	})
@@ -2130,9 +2130,9 @@ func TestSuspendActor(t *testing.T) {
 		t.Fatalf("CreateActorSnapshotTag = (%v, %v), want tag for snapshot", tagged, err)
 	}
 	if _, err := tc.client.CreateActorSnapshotTag(context.Background(), &ateapipb.CreateActorSnapshotTagRequest{
-		Snapshot: snapshotRef,
-		Tag: &ateapipb.ActorSnapshotTag{
+		ActorSnapshotTag: &ateapipb.ActorSnapshotTag{
 			Metadata: &ateapipb.ResourceMetadata{Atespace: "other", Name: "cross-atespace"},
+			Snapshot: snapshotRef,
 			Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
 		},
 	}); status.Code(err) != codes.FailedPrecondition {

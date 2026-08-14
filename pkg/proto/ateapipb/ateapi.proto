@@ -802,8 +802,8 @@ message ListActorSnapshotsResponse {
 }
 
 message CreateActorSnapshotTagRequest {
-  ObjectRef snapshot = 1;
-  ActorSnapshotTag tag = 2;
+  // The tag to create.
+  ActorSnapshotTag actor_snapshot_tag = 1;
 }
 
 // Request to update mutable fields on an existing ActorSnapshotTag.

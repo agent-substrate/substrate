@@ -132,19 +132,19 @@ func (s *Service) CreateActorSnapshotTag(ctx context.Context, req *ateapipb.Crea
 	if errs := validateCreateActorSnapshotTagRequest(req); len(errs) > 0 {
 		return nil, toGRPCStatusError(errs)
 	}
-	ref := req.GetSnapshot()
-	if req.GetTag().GetMetadata().GetAtespace() != ref.GetAtespace() {
+	ref := req.GetActorSnapshotTag().GetSnapshot()
+	if req.GetActorSnapshotTag().GetMetadata().GetAtespace() != ref.GetAtespace() {
 		return nil, status.Error(codes.FailedPrecondition, "ActorSnapshot tags must belong to the snapshot's Atespace")
 	}
-	tag, err := s.persistence.CreateActorSnapshotTag(ctx, ref.GetAtespace(), ref.GetName(), req.GetTag())
+	tag, err := s.persistence.CreateActorSnapshotTag(ctx, ref.GetAtespace(), ref.GetName(), req.GetActorSnapshotTag())
 	if errors.Is(err, store.ErrNotFound) {
 		return nil, status.Error(codes.NotFound, "ActorSnapshot not found")
 	}
 	if errors.Is(err, store.ErrFailedPrecondition) {
-		return nil, status.Errorf(codes.FailedPrecondition, "Atespace %s not found", req.GetTag().GetMetadata().GetAtespace())
+		return nil, status.Errorf(codes.FailedPrecondition, "Atespace %s not found", req.GetActorSnapshotTag().GetMetadata().GetAtespace())
 	}
 	if errors.Is(err, store.ErrAlreadyExists) {
-		return nil, status.Errorf(codes.AlreadyExists, "ActorSnapshot tag %s/%s already exists", req.GetTag().GetMetadata().GetAtespace(), req.GetTag().GetMetadata().GetName())
+		return nil, status.Errorf(codes.AlreadyExists, "ActorSnapshot tag %s/%s already exists", req.GetActorSnapshotTag().GetMetadata().GetAtespace(), req.GetActorSnapshotTag().GetMetadata().GetName())
 	}
 	if err != nil {
 		return nil, fmt.Errorf("while tagging actor snapshot: %w", err)
@@ -156,20 +156,20 @@ func validateCreateActorSnapshotTagRequest(req *ateapipb.CreateActorSnapshotTagR
 	var fldPath *field.Path
 	var errs field.ErrorList
 
-	if val, fldPath := req.Snapshot, fldPath.Child("snapshot"); val == nil {
-		errs = append(errs, field.Required(fldPath, ""))
-	} else {
-		errs = append(errs, resources.ValidateObjectRef(val, fldPath)...)
-	}
-
-	tag := req.Tag
-	tagPath := fldPath.Child("tag")
+	tag := req.ActorSnapshotTag
+	tagPath := fldPath.Child("actor_snapshot_tag")
 	if tag == nil {
 		errs = append(errs, field.Required(tagPath, ""))
 		return errs
 	}
 
 	errs = append(errs, resources.ValidateObjectRef(&ateapipb.ObjectRef{Atespace: tag.GetMetadata().GetAtespace(), Name: tag.GetMetadata().GetName()}, tagPath.Child("metadata"))...)
+
+	if val, p := tag.Snapshot, tagPath.Child("snapshot"); val == nil {
+		errs = append(errs, field.Required(p, ""))
+	} else {
+		errs = append(errs, resources.ValidateObjectRef(val, p)...)
+	}
 
 	errs = append(errs, validateActorSnapshotTagScope(tag.GetScope(), tagPath.Child("scope"))...)
 
