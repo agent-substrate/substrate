@@ -18,5 +18,6 @@
 // +k8s:validation-gen=TypesWithSuffix=Request
 // +k8s:validation-gen-input=github.com/agent-substrate/substrate/pkg/proto/ateapipb
 // +k8s:validation-gen-scheme-registry=nil
+// +k8s:validation-gen-deep-equal-func=protoDeepEqual
 
 package controlapi

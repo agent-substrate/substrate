@@ -656,24 +656,37 @@ type ResourceMetadata struct {
 	// This field is ignored during create operations and used as precondition
 	// for update operations.
 	//
+	// FIXME: document this better
+	// TODO: use upcoming "set by server" tag
 	// +k8s:optional # optional on input, always specified on output
 	// +k8s:format=k8s-uuid
+	// +k8s:immutable
 	Uid string `protobuf:"bytes,3,opt,name=uid,proto3" json:"uid,omitempty"`
 	// version is increased on every mutation.
 	//
 	// This field is ignored during create operations and used as precondition
 	// for update operations.
 	//
+	// FIXME: document this better
+	// TODO: use upcoming "set by server" tag
 	// +k8s:optional # optional on input, always specified on output
 	// +k8s:minimum=1
+	// +k8s:alpha(since: "0.0")=+k8s:monotonic # TODO: get rid of alpha prefix
+	// +k8s:update=NoUnset
 	Version int64 `protobuf:"varint,4,opt,name=version,proto3" json:"version,omitempty"`
 	// create_time is the time the resource was created.
 	//
-	// This field is ignored on input.
+	// FIXME: document this better
+	// TODO: use upcoming "set by server" tag
+	// +k8s:optional # optional on input, always specified on output
+	// +k8s:immutable
 	CreateTime *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=create_time,json=createTime,proto3" json:"create_time,omitempty"`
 	// update_time is the time the resource was last updated.
 	//
-	// This field is ignored on input.
+	// FIXME: document this better
+	// TODO: use upcoming "set by server" tag
+	// +k8s:optional # optional on input, always specified on output
+	// TODO: do customValidation to ensure >= createTime
 	UpdateTime    *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=update_time,json=updateTime,proto3" json:"update_time,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
