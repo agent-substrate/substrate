@@ -338,15 +338,6 @@ enum SandboxClass {
   SANDBOX_CLASS_MICROVM = 2;
 }
 
-// ActorTemplateRef addresses a template by its canonical identity or by an
-// Atespace-owned ActorTemplateVersion.
-message ActorTemplateRef {
-  oneof reference {
-    ObjectRef actor_template_version = 1;
-    ObjectRef actor_template = 2;
-  }
-}
-
 // ActorTemplate an mutable, Atespace-owned resource that points to a default
 // ActorTemplateVersion to be used when creating Actors.
 message ActorTemplate {
