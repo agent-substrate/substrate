@@ -29,6 +29,322 @@ import (
 	"github.com/agent-substrate/substrate/pkg/proto/ateapipb"
 )
 
+func TestValidateGetActorSnapshotRequest(t *testing.T) {
+	tests := []struct {
+		name      string
+		req       *ateapipb.GetActorSnapshotRequest
+		wantError field.ErrorList
+	}{
+		{
+			name:      "valid",
+			req:       &ateapipb.GetActorSnapshotRequest{Snapshot: &ateapipb.ObjectRef{Atespace: "ns1", Name: "snapshot1"}},
+			wantError: nil,
+		},
+		{
+			name:      "missing snapshot",
+			req:       &ateapipb.GetActorSnapshotRequest{},
+			wantError: field.ErrorList{field.Required(field.NewPath("snapshot"), "")},
+		},
+		{
+			name:      "missing snapshot.atespace",
+			req:       &ateapipb.GetActorSnapshotRequest{Snapshot: &ateapipb.ObjectRef{Name: "snapshot1"}},
+			wantError: field.ErrorList{field.Required(field.NewPath("snapshot", "atespace"), "")},
+		},
+		{
+			name:      "invalid snapshot.atespace",
+			req:       &ateapipb.GetActorSnapshotRequest{Snapshot: &ateapipb.ObjectRef{Atespace: "NS1", Name: "snapshot1"}},
+			wantError: field.ErrorList{field.Invalid(field.NewPath("snapshot", "atespace"), "NS1", "")},
+		},
+		{
+			name:      "missing snapshot.name",
+			req:       &ateapipb.GetActorSnapshotRequest{Snapshot: &ateapipb.ObjectRef{Atespace: "ns1"}},
+			wantError: field.ErrorList{field.Required(field.NewPath("snapshot", "name"), "")},
+		},
+		{
+			name:      "invalid snapshot.name",
+			req:       &ateapipb.GetActorSnapshotRequest{Snapshot: &ateapipb.ObjectRef{Atespace: "ns1", Name: "SNAPSHOT1"}},
+			wantError: field.ErrorList{field.Invalid(field.NewPath("snapshot", "name"), "SNAPSHOT1", "")},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertValidateErr(t, validateGetActorSnapshotRequest(tt.req), tt.wantError)
+		})
+	}
+}
+
+func TestValidateGetActorSnapshotTagRequest(t *testing.T) {
+	tests := []struct {
+		name      string
+		req       *ateapipb.GetActorSnapshotTagRequest
+		wantError field.ErrorList
+	}{
+		{
+			name:      "valid",
+			req:       &ateapipb.GetActorSnapshotTagRequest{Tag: &ateapipb.ObjectRef{Atespace: "ns1", Name: "tag1"}},
+			wantError: nil,
+		},
+		{
+			name:      "missing tag",
+			req:       &ateapipb.GetActorSnapshotTagRequest{},
+			wantError: field.ErrorList{field.Required(field.NewPath("tag"), "")},
+		},
+		{
+			name:      "missing tag.atespace",
+			req:       &ateapipb.GetActorSnapshotTagRequest{Tag: &ateapipb.ObjectRef{Name: "tag1"}},
+			wantError: field.ErrorList{field.Required(field.NewPath("tag", "atespace"), "")},
+		},
+		{
+			name:      "invalid tag.atespace",
+			req:       &ateapipb.GetActorSnapshotTagRequest{Tag: &ateapipb.ObjectRef{Atespace: "NS1", Name: "tag1"}},
+			wantError: field.ErrorList{field.Invalid(field.NewPath("tag", "atespace"), "NS1", "")},
+		},
+		{
+			name:      "missing tag.name",
+			req:       &ateapipb.GetActorSnapshotTagRequest{Tag: &ateapipb.ObjectRef{Atespace: "ns1"}},
+			wantError: field.ErrorList{field.Required(field.NewPath("tag", "name"), "")},
+		},
+		{
+			name:      "invalid tag.name",
+			req:       &ateapipb.GetActorSnapshotTagRequest{Tag: &ateapipb.ObjectRef{Atespace: "ns1", Name: "TAG1"}},
+			wantError: field.ErrorList{field.Invalid(field.NewPath("tag", "name"), "TAG1", "")},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertValidateErr(t, validateGetActorSnapshotTagRequest(tt.req), tt.wantError)
+		})
+	}
+}
+
+func TestValidateListActorSnapshotsRequest(t *testing.T) {
+	tests := []struct {
+		name      string
+		req       *ateapipb.ListActorSnapshotsRequest
+		wantError field.ErrorList
+	}{
+		{
+			name:      "valid",
+			req:       &ateapipb.ListActorSnapshotsRequest{Atespace: "ns1", PageSize: 10},
+			wantError: nil,
+		},
+		{
+			name:      "empty atespace lists all atespaces",
+			req:       &ateapipb.ListActorSnapshotsRequest{},
+			wantError: nil,
+		},
+		{
+			name:      "invalid atespace",
+			req:       &ateapipb.ListActorSnapshotsRequest{Atespace: "NS1"},
+			wantError: field.ErrorList{field.Invalid(field.NewPath("atespace"), "NS1", "")},
+		},
+		{
+			name:      "zero page_size defaults server-side",
+			req:       &ateapipb.ListActorSnapshotsRequest{Atespace: "ns1", PageSize: 0},
+			wantError: nil,
+		},
+		{
+			name:      "negative page_size",
+			req:       &ateapipb.ListActorSnapshotsRequest{Atespace: "ns1", PageSize: -1},
+			wantError: field.ErrorList{field.Invalid(field.NewPath("page_size"), int32(-1), "")},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertValidateErr(t, validateListActorSnapshotsRequest(tt.req), tt.wantError)
+		})
+	}
+}
+
+func TestValidateCreateActorSnapshotTagRequest(t *testing.T) {
+	scopes := []string{
+		ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE.String(),
+		ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED.String(),
+	}
+
+	tests := []struct {
+		name      string
+		req       *ateapipb.CreateActorSnapshotTagRequest
+		wantError field.ErrorList
+	}{
+		{
+			name: "valid",
+			req: &ateapipb.CreateActorSnapshotTagRequest{
+				Snapshot: &ateapipb.ObjectRef{Atespace: "ns1", Name: "snapshot1"},
+				Tag: &ateapipb.ActorSnapshotTag{
+					Metadata: &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "tag1"},
+					Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED,
+				},
+			},
+			wantError: nil,
+		},
+		{
+			name: "missing snapshot",
+			req: &ateapipb.CreateActorSnapshotTagRequest{
+				Tag: &ateapipb.ActorSnapshotTag{
+					Metadata: &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "tag1"},
+					Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED,
+				},
+			},
+			wantError: field.ErrorList{field.Required(field.NewPath("snapshot"), "")},
+		},
+		{
+			name: "invalid snapshot.name",
+			req: &ateapipb.CreateActorSnapshotTagRequest{
+				Snapshot: &ateapipb.ObjectRef{Atespace: "ns1", Name: "SNAPSHOT1"},
+				Tag: &ateapipb.ActorSnapshotTag{
+					Metadata: &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "tag1"},
+					Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED,
+				},
+			},
+			wantError: field.ErrorList{field.Invalid(field.NewPath("snapshot", "name"), "SNAPSHOT1", "")},
+		},
+		{
+			name:      "missing tag",
+			req:       &ateapipb.CreateActorSnapshotTagRequest{Snapshot: &ateapipb.ObjectRef{Atespace: "ns1", Name: "snapshot1"}},
+			wantError: field.ErrorList{field.Required(field.NewPath("tag"), "")},
+		},
+		{
+			name: "missing tag.metadata.atespace",
+			req: &ateapipb.CreateActorSnapshotTagRequest{
+				Snapshot: &ateapipb.ObjectRef{Atespace: "ns1", Name: "snapshot1"},
+				Tag: &ateapipb.ActorSnapshotTag{
+					Metadata: &ateapipb.ResourceMetadata{Name: "tag1"},
+					Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED,
+				},
+			},
+			wantError: field.ErrorList{field.Required(field.NewPath("tag", "metadata", "atespace"), "")},
+		},
+		{
+			name: "invalid tag.metadata.atespace",
+			req: &ateapipb.CreateActorSnapshotTagRequest{
+				Snapshot: &ateapipb.ObjectRef{Atespace: "ns1", Name: "snapshot1"},
+				Tag: &ateapipb.ActorSnapshotTag{
+					Metadata: &ateapipb.ResourceMetadata{Atespace: "NS1", Name: "tag1"},
+					Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED,
+				},
+			},
+			wantError: field.ErrorList{field.Invalid(field.NewPath("tag", "metadata", "atespace"), "NS1", "")},
+		},
+		{
+			name: "missing tag.metadata.name",
+			req: &ateapipb.CreateActorSnapshotTagRequest{
+				Snapshot: &ateapipb.ObjectRef{Atespace: "ns1", Name: "snapshot1"},
+				Tag: &ateapipb.ActorSnapshotTag{
+					Metadata: &ateapipb.ResourceMetadata{Atespace: "ns1"},
+					Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED,
+				},
+			},
+			wantError: field.ErrorList{field.Required(field.NewPath("tag", "metadata", "name"), "")},
+		},
+		{
+			name: "invalid tag.metadata.name",
+			req: &ateapipb.CreateActorSnapshotTagRequest{
+				Snapshot: &ateapipb.ObjectRef{Atespace: "ns1", Name: "snapshot1"},
+				Tag: &ateapipb.ActorSnapshotTag{
+					Metadata: &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "TAG1"},
+					Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED,
+				},
+			},
+			wantError: field.ErrorList{field.Invalid(field.NewPath("tag", "metadata", "name"), "TAG1", "")},
+		},
+		{
+			name: "server-managed tag.metadata.uid is not a precondition at creation",
+			req: &ateapipb.CreateActorSnapshotTagRequest{
+				Snapshot: &ateapipb.ObjectRef{Atespace: "ns1", Name: "snapshot1"},
+				Tag: &ateapipb.ActorSnapshotTag{
+					Metadata: &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "tag1", Uid: "not-a-uuid"},
+					Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED,
+				},
+			},
+			wantError: nil,
+		},
+		{
+			name: "unset tag.scope",
+			req: &ateapipb.CreateActorSnapshotTagRequest{
+				Snapshot: &ateapipb.ObjectRef{Atespace: "ns1", Name: "snapshot1"},
+				Tag: &ateapipb.ActorSnapshotTag{
+					Metadata: &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "tag1"},
+				},
+			},
+			wantError: field.ErrorList{field.Required(field.NewPath("tag", "scope"), "")},
+		},
+		{
+			name: "tag.scope outside the enum",
+			req: &ateapipb.CreateActorSnapshotTagRequest{
+				Snapshot: &ateapipb.ObjectRef{Atespace: "ns1", Name: "snapshot1"},
+				Tag: &ateapipb.ActorSnapshotTag{
+					Metadata: &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "tag1"},
+					Scope:    ateapipb.ActorSnapshotTagScope(7),
+				},
+			},
+			wantError: field.ErrorList{field.NotSupported(field.NewPath("tag", "scope"), "7", scopes)},
+		},
+		{
+			name: "errors from snapshot and tag are aggregated",
+			req: &ateapipb.CreateActorSnapshotTagRequest{
+				Snapshot: &ateapipb.ObjectRef{Name: "snapshot1"},
+				Tag: &ateapipb.ActorSnapshotTag{
+					Metadata: &ateapipb.ResourceMetadata{Atespace: "ns1", Name: "tag1"},
+				},
+			},
+			wantError: field.ErrorList{
+				field.Required(field.NewPath("snapshot", "atespace"), ""),
+				field.Required(field.NewPath("tag", "scope"), ""),
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertValidateErr(t, validateCreateActorSnapshotTagRequest(tt.req), tt.wantError)
+		})
+	}
+}
+
+func TestValidateDeleteActorSnapshotTagRequest(t *testing.T) {
+	tests := []struct {
+		name      string
+		req       *ateapipb.DeleteActorSnapshotTagRequest
+		wantError field.ErrorList
+	}{
+		{
+			name:      "valid",
+			req:       &ateapipb.DeleteActorSnapshotTagRequest{Tag: &ateapipb.ObjectRef{Atespace: "ns1", Name: "tag1"}},
+			wantError: nil,
+		},
+		{
+			name:      "missing tag",
+			req:       &ateapipb.DeleteActorSnapshotTagRequest{},
+			wantError: field.ErrorList{field.Required(field.NewPath("tag"), "")},
+		},
+		{
+			name:      "missing tag.atespace",
+			req:       &ateapipb.DeleteActorSnapshotTagRequest{Tag: &ateapipb.ObjectRef{Name: "tag1"}},
+			wantError: field.ErrorList{field.Required(field.NewPath("tag", "atespace"), "")},
+		},
+		{
+			name:      "invalid tag.atespace",
+			req:       &ateapipb.DeleteActorSnapshotTagRequest{Tag: &ateapipb.ObjectRef{Atespace: "NS1", Name: "tag1"}},
+			wantError: field.ErrorList{field.Invalid(field.NewPath("tag", "atespace"), "NS1", "")},
+		},
+		{
+			name:      "missing tag.name",
+			req:       &ateapipb.DeleteActorSnapshotTagRequest{Tag: &ateapipb.ObjectRef{Atespace: "ns1"}},
+			wantError: field.ErrorList{field.Required(field.NewPath("tag", "name"), "")},
+		},
+		{
+			name:      "invalid tag.name",
+			req:       &ateapipb.DeleteActorSnapshotTagRequest{Tag: &ateapipb.ObjectRef{Atespace: "ns1", Name: "TAG1"}},
+			wantError: field.ErrorList{field.Invalid(field.NewPath("tag", "name"), "TAG1", "")},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assertValidateErr(t, validateDeleteActorSnapshotTagRequest(tt.req), tt.wantError)
+		})
+	}
+}
+
 func TestValidateUpdateActorSnapshotTagRequest(t *testing.T) {
 	mutableFields := []string{"scope"}
 	scopes := []string{
