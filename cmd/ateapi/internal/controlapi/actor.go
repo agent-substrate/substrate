@@ -50,16 +50,26 @@ func (s *Service) CreateActor(ctx context.Context, req *ateapipb.CreateActorRequ
 	var sourceSnapshot *ateapipb.ActorSnapshot
 	var sourceSnapshotInfo *ateapipb.ActorSnapshotSource
 	if src := in.GetSourceSnapshot(); src != nil {
-		lock, snapshot, canonical, tag, err := s.lockActorSnapshot(ctx, nil, src.GetTag())
-		if err != nil {
-			return nil, err
+		tagRef := src.GetTag()
+		tag, err := s.persistence.GetActorSnapshotTag(ctx, tagRef.GetAtespace(), tagRef.GetName())
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, status.Error(codes.NotFound, "ActorSnapshot not found")
 		}
-		defer lock.Close()
-		ctx = lock.Context()
+		if err != nil {
+			return nil, fmt.Errorf("while getting actor snapshot tag: %w", err)
+		}
+		snapshotRef := tag.GetSnapshot()
+		snapshot, err := s.persistence.GetActorSnapshot(ctx, snapshotRef.GetAtespace(), snapshotRef.GetName())
+		if errors.Is(err, store.ErrNotFound) {
+			return nil, status.Error(codes.NotFound, "ActorSnapshot not found")
+		}
+		if err != nil {
+			return nil, fmt.Errorf("while getting actor snapshot: %w", err)
+		}
 		sourceSnapshot = snapshot
 		sourceSnapshotInfo = &ateapipb.ActorSnapshotSource{
-			Tag:         src.GetTag(),
-			Snapshot:    canonical,
+			Tag:         tagRef,
+			Snapshot:    snapshotRef,
 			SnapshotUid: snapshot.GetMetadata().GetUid(),
 		}
 		target := in.GetMetadata()
