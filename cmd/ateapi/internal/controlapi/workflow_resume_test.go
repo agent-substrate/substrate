@@ -728,6 +728,36 @@ func TestResumeActor_CrashesOnMissingWorkerAssignment(t *testing.T) {
 	}
 }
 
+func TestFinalizeRunning_SetsLastResumeTime(t *testing.T) {
+	ctx := context.Background()
+	st, cleanup := storetest.SetupTestStore(t)
+	defer cleanup()
+	w := newTestActorWorkflow(t, st, "ns", "tmpl1")
+
+	ref := resources.ActorRef{Atespace: "team-a", Name: "id1"}
+	seedWorkflowActor(t, ctx, st, ref, "ns", "tmpl1", ateapipb.ActorState_ACTOR_STATE_RESUMING)
+
+	before := time.Now()
+	if _, err := w.finalizeRunning(ctx, ref); err != nil {
+		t.Fatalf("finalizeRunning: %v", err)
+	}
+
+	got, err := st.GetActor(ctx, ref)
+	if err != nil {
+		t.Fatalf("GetActor: %v", err)
+	}
+	if got.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_RUNNING {
+		t.Errorf("state = %v, want RUNNING", got.GetStatus().GetState())
+	}
+	lrt := got.GetStatus().GetLastResumeTime()
+	if lrt == nil {
+		t.Fatal("LastResumeTime not set")
+	}
+	if ts := lrt.AsTime(); ts.Before(before.Add(-time.Second)) || ts.After(time.Now().Add(time.Second)) {
+		t.Errorf("LastResumeTime = %v, want within test window", ts)
+	}
+}
+
 // TestValidateAssignedWorker_WorkerOwnership verifies that RESUMING recovery
 // only proceeds on a worker whose assignment still names this actor: the
 // recovery path loads the worker by pod name only, so the assignment may have

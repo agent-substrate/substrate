@@ -1679,7 +1679,7 @@ func TestResumeActor(t *testing.T) {
 			},
 		},
 	}
-	if diff := cmp.Diff(want, getResp, protocmp.Transform(), ignoreUID, ignoreVersion, ignoreTimestamps); diff != "" {
+	if diff := cmp.Diff(want, getResp, protocmp.Transform(), ignoreUID, ignoreVersion, ignoreTimestamps, ignoreResumeTime); diff != "" {
 		t.Errorf("GetActor response mismatch (-want +got):\n%s", diff)
 	}
 
@@ -2179,7 +2179,7 @@ func TestSuspendActor(t *testing.T) {
 		ignoreUID,
 		ignoreVersion,
 		ignoreTimestamps,
-		protocmp.IgnoreFields(&ateapipb.ActorStatus{}, "latest_snapshot"),
+		protocmp.IgnoreFields(&ateapipb.ActorStatus{}, "latest_snapshot", "last_resume_time"),
 	); diff != "" {
 		t.Errorf("GetActor response mismatch (-want +got):\n%s", diff)
 	}
@@ -2273,6 +2273,7 @@ func TestPauseActor(t *testing.T) {
 		ignoreUID,
 		ignoreVersion,
 		ignoreTimestamps,
+		ignoreResumeTime,
 		protocmp.IgnoreFields(&ateapipb.LocalSnapshotInfo{}, "snapshot_name"),
 	); diff != "" {
 		t.Errorf("GetActor response mismatch (-want +got):\n%s", diff)

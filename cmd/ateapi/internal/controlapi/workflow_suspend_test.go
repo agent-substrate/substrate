@@ -18,6 +18,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/ateredis"
@@ -30,6 +31,7 @@ import (
 	"github.com/redis/go-redis/v9"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/cache"
 )
@@ -386,6 +388,41 @@ func TestEnsureSuspendedFinalized_NoAssignment(t *testing.T) {
 	}
 	if got := snapshot.GetStatus().GetSourceActorVersion(); got != 1 {
 		t.Errorf("snapshot SourceActorVersion = %d, want 1", got)
+	}
+}
+
+// LastResumeTime records the last transition into RUNNING, so suspending must
+// leave it alone: it stays queryable while the actor is suspended.
+func TestEnsureSuspendedFinalized_KeepsLastResumeTime(t *testing.T) {
+	ctx := context.Background()
+	persistence := newTestPersistence(t)
+
+	resumedAt := timestamppb.New(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+	actor := &ateapipb.Actor{
+		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor-1"},
+		Status: &ateapipb.ActorStatus{
+			State:                                ateapipb.ActorState_ACTOR_STATE_SUSPENDING,
+			InProgressSnapshotName:               "2026-01-01t00-00-00z-abc",
+			InProgressSnapshotSourceActorVersion: 1,
+			LastResumeTime:                       resumedAt,
+		},
+	}
+	if _, err := persistence.CreateActor(ctx, actor); err != nil {
+		t.Fatalf("CreateActor: %v", err)
+	}
+
+	w := &ActorWorkflow{store: persistence}
+	tmpl := &atev1alpha1.ActorTemplate{Spec: atev1alpha1.ActorTemplateSpec{SnapshotsConfig: atev1alpha1.SnapshotsConfig{Location: "gs://snapshots"}}}
+	stored, err := w.ensureSuspendedFinalized(ctx, resources.ActorRef{Atespace: "team-a", Name: "actor-1"}, tmpl)
+	if err != nil {
+		t.Fatalf("ensureSuspendedFinalized: %v", err)
+	}
+
+	if stored.GetStatus().GetState() != ateapipb.ActorState_ACTOR_STATE_SUSPENDED {
+		t.Errorf("state = %v, want SUSPENDED", stored.GetStatus().GetState())
+	}
+	if got := stored.GetStatus().GetLastResumeTime(); !got.AsTime().Equal(resumedAt.AsTime()) {
+		t.Errorf("LastResumeTime = %v, want %v preserved through suspend", got.AsTime(), resumedAt.AsTime())
 	}
 }
 

@@ -31,6 +31,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/timestamppb"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/util/wait"
@@ -785,6 +786,7 @@ func (w *ActorWorkflow) finalizeRunning(ctx context.Context, actorRef resources.
 
 	storedActor, err := w.store.UpdateActor(ctx, actorRef, store.PreconditionFrom(latestActor), func(toUpdate *ateapipb.Actor) error {
 		toUpdate.Status.State = ateapipb.ActorState_ACTOR_STATE_RUNNING
+		toUpdate.Status.LastResumeTime = timestamppb.Now()
 		return nil
 	})
 	if err != nil {

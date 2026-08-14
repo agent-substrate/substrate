@@ -260,6 +260,9 @@ message ActorStatus {
   // How this Actor was seeded from an ActorSnapshot at CreateActor. Unset if
   // the Actor was not created from a snapshot.
   ActorSourceSnapshotStatus source_snapshot = 9;
+
+  // Time of the most recent transition into ACTOR_STATE_RUNNING.
+  google.protobuf.Timestamp last_resume_time = 10;
 }
 
 // ActorSourceSnapshotStatus records what an Actor's source_snapshot_tag
