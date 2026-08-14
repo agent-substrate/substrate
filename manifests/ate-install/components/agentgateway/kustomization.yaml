@@ -67,6 +67,10 @@ patches:
             containerPort: 8080
           - name: https
             containerPort: 8443
+          - name: connect
+            containerPort: 8081
+          - name: connect-tls
+            containerPort: 8444
           - name: readiness
             containerPort: 15021
           - name: stats

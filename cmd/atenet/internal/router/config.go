@@ -95,6 +95,12 @@ type routerConfig struct {
 	StatusPort     int
 	HealthInterval time.Duration
 	HttpsPort      int
+	// ConnectPort and ConnectTLSPort are the plaintext and TLS listener ports
+	// for CONNECT-tunneled traffic (arbitrary-port ingress and the raw-TCP
+	// leg it falls through to — see xds.go's connect_terminate listeners).
+	// Non-positive disables the corresponding listener.
+	ConnectPort    int
+	ConnectTLSPort int
 	EnvoyCertPath  string
 
 	// UpstreamCredentialBundlePath is the router's podidentity credential bundle
@@ -148,6 +154,12 @@ type routerConfig struct {
 	// excess is fast-path headroom for requests to already-running actors.
 	// 0 derives it from the parking lot — see extProcMaxRequests.
 	ExtProcMaxRequests int
+
+	// ExtProcMaxConnections is the circuit-breaker max_connections Envoy
+	// applies to the network ext_proc cluster (the TCP/CONNECT leg's
+	// counterpart to ExtProcMaxRequests). Non-positive keeps the default —
+	// see XdsServer.SetExtProcMaxConnections.
+	ExtProcMaxConnections int
 
 	// DrainDelay is how long the router serves after SIGTERM before draining,
 	// allowing readiness flip propagation to Service endpoints. DrainTimeout

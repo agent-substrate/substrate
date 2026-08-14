@@ -18,6 +18,7 @@ import (
 	"strings"
 
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 // AuthorityHeader is the HTTP/2 pseudo-header carrying the request authority.
@@ -34,9 +35,19 @@ type RequestMetadata struct {
 	Path    string
 	Host    string
 	Method  string
+
+	// Attributes is the CEL request_attributes Envoy attached to this
+	// callback, keyed by the ext_proc filter name within the HCM chain that
+	// asked for them (see directionOf/filterChainName for why the map is
+	// scanned rather than keyed by a hardcoded filter name). Ingress reads its
+	// resolved actor authority from here — filter state, not the raw Host
+	// header — because dynamic metadata does not survive the
+	// connect_terminate -> main_internal internal-listener hop that CONNECT
+	// requests take, while filter state does.
+	Attributes map[string]*structpb.Struct
 }
 
-func NewRequestMetadata(headers []*corev3.HeaderValue) *RequestMetadata {
+func NewRequestMetadata(headers []*corev3.HeaderValue, attributes map[string]*structpb.Struct) *RequestMetadata {
 	headersMap := make(map[string]string)
 	var path string
 	var host string
@@ -62,10 +73,11 @@ func NewRequestMetadata(headers []*corev3.HeaderValue) *RequestMetadata {
 	}
 
 	return &RequestMetadata{
-		Headers: headersMap,
-		Path:    path,
-		Host:    host,
-		Method:  method,
+		Headers:    headersMap,
+		Path:       path,
+		Host:       host,
+		Method:     method,
+		Attributes: attributes,
 	}
 }
 
@@ -73,4 +85,17 @@ func NewRequestMetadata(headers []*corev3.HeaderValue) *RequestMetadata {
 // it was not sent.
 func (m *RequestMetadata) Header(name string) string {
 	return m.Headers[strings.ToLower(name)]
+}
+
+// Attribute returns the named CEL request_attributes value, or "" when no
+// filter requested it. Attributes is keyed by the ext_proc filter name within
+// the HCM chain, which callers should not need to hardcode, so every entry is
+// scanned (mirroring filterChainName's handling of the same map shape).
+func (m *RequestMetadata) Attribute(name string) string {
+	for _, attrs := range m.Attributes {
+		if v, ok := attrs.GetFields()[name]; ok {
+			return v.GetStringValue()
+		}
+	}
+	return ""
 }

@@ -19,7 +19,7 @@ set -o errexit -o nounset -o pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 KIND_CLUSTER_NAME="${KIND_CLUSTER_NAME:-kind}"
 reg_name="kind-registry"
-reg_port="5001"
+reg_port="${KIND_REGISTRY_PORT:-5001}"
 
 mkdir -p "${ROOT}/bin"
 

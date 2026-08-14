@@ -126,6 +126,7 @@ func NewServer(cfg Config) (*Server, error) {
 			if p, err := strconv.Atoi(port); err == nil && p > 0 && p <= 65535 {
 				pr.Out.URL.Host = net.JoinHostPort(cfg.Upstream.Hostname(), strconv.Itoa(p))
 			}
+			pr.SetXForwarded()
 		},
 		Transport: transport,
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
