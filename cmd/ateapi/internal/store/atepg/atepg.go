@@ -23,10 +23,10 @@ package atepg
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
@@ -36,15 +36,16 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
-	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 // Persistence is a service that stores ate state in PostgreSQL.
 type Persistence struct {
-	pool    *pgxpool.Pool
-	lockTTL time.Duration
+	pool            *pgxpool.Pool
+	lockTTL         time.Duration
+	stopMaintenance context.CancelFunc
+	maintenanceDone chan struct{}
 }
 
 var _ store.Interface = (*Persistence)(nil)
@@ -75,7 +76,27 @@ func NewPersistence(ctx context.Context, pool *pgxpool.Pool) (*Persistence, erro
 	if err := applySchema(ctx, pool); err != nil {
 		return nil, err
 	}
-	return &Persistence{pool: pool, lockTTL: defaultLockTTL}, nil
+	maintenanceCtx, stopMaintenance := context.WithCancel(context.Background())
+	p := &Persistence{pool: pool, lockTTL: defaultLockTTL, stopMaintenance: stopMaintenance, maintenanceDone: make(chan struct{})}
+	// Cover the partition lead before accepting writes; from then on the
+	// maintenance loop keeps partitions ahead of the clock (and the
+	// DEFAULT partition catches writes if it ever falls behind).
+	if err := p.createWorkerChangesPartitions(ctx, changeFeedPartitionLeadTimes(time.Now())...); err != nil {
+		stopMaintenance()
+		return nil, err
+	}
+	go func() {
+		defer close(p.maintenanceDone)
+		p.changeFeedMaintenance(maintenanceCtx)
+	}()
+	return p, nil
+}
+
+// Close stops the change-feed maintenance loop and waits for it to exit.
+// It does not close the pool, which the caller owns.
+func (p *Persistence) Close() {
+	p.stopMaintenance()
+	<-p.maintenanceDone
 }
 
 // querier is satisfied by both *pgxpool.Pool and pgx.Tx, letting read helpers
@@ -1049,51 +1070,45 @@ func (p *Persistence) DeleteActorSnapshotTag(ctx context.Context, atespace, name
 
 // --- Workers ---
 
-type workerEventEnvelope struct {
-	Type   int    `json:"t"`
-	Worker string `json:"w"` // protojson-encoded Worker
-}
-
+// Feed payload format: one event-type byte followed by the binary Worker proto.
+// The tag byte is read by other replicas during rolling deploys, so
+// store.WorkerEventType values must stay append-only stable and fit a byte.
 func marshalWorkerEvent(eventType store.WorkerEventType, worker *ateapipb.Worker) ([]byte, error) {
-	workerJSON, err := protojson.Marshal(worker)
+	b, err := proto.Marshal(worker)
 	if err != nil {
-		return nil, fmt.Errorf("in protojson.Marshal: %w", err)
+		return nil, fmt.Errorf("in proto.Marshal: %w", err)
 	}
-	msg, err := json.Marshal(workerEventEnvelope{Type: int(eventType), Worker: string(workerJSON)})
-	if err != nil {
-		return nil, fmt.Errorf("in json.Marshal: %w", err)
-	}
-	return msg, nil
+	return append([]byte{byte(eventType)}, b...), nil
 }
 
-func unmarshalWorkerEvent(payload string) (store.WorkerEvent, error) {
-	var env workerEventEnvelope
-	if err := json.Unmarshal([]byte(payload), &env); err != nil {
-		return store.WorkerEvent{}, fmt.Errorf("in json.Unmarshal: %w", err)
+func unmarshalWorkerEvent(payload []byte) (store.WorkerEvent, error) {
+	if len(payload) == 0 {
+		return store.WorkerEvent{}, fmt.Errorf("empty worker event payload")
 	}
 	worker := &ateapipb.Worker{}
-	if err := protojson.Unmarshal([]byte(env.Worker), worker); err != nil {
-		return store.WorkerEvent{}, fmt.Errorf("in protojson.Unmarshal: %w", err)
+	if err := proto.Unmarshal(payload[1:], worker); err != nil {
+		return store.WorkerEvent{}, fmt.Errorf("in proto.Unmarshal: %w", err)
 	}
-	return store.WorkerEvent{Type: store.WorkerEventType(env.Type), Worker: worker}, nil
+	return store.WorkerEvent{Type: store.WorkerEventType(payload[0]), Worker: worker}, nil
 }
 
-// writeAndNotify runs fn inside a transaction, then--only if fn reports a
-// change worth notifying--calls pg_notify in the same transaction so
-// delivery happens if and only if the transaction commits.
-func (p *Persistence) writeAndNotify(ctx context.Context, eventType store.WorkerEventType, worker *ateapipb.Worker, fn func(ctx context.Context, tx pgx.Tx) (notify bool, err error)) error {
+// writeAndAppendChange runs fn inside a transaction, then--only if fn
+// reports a change worth publishing--appends the event to the worker_changes
+// feed in the same transaction, so watchers see it if and only if the
+// transaction commits.
+func (p *Persistence) writeAndAppendChange(ctx context.Context, eventType store.WorkerEventType, worker *ateapipb.Worker, fn func(ctx context.Context, tx pgx.Tx) (changed bool, err error)) error {
 	tx, err := p.pool.Begin(ctx)
 	if err != nil {
 		return fmt.Errorf("beginning transaction: %w", err)
 	}
 	defer tx.Rollback(ctx) //nolint:errcheck // no-op once committed
 
-	notify, err := fn(ctx, tx)
+	changed, err := fn(ctx, tx)
 	if err != nil {
 		return err
 	}
 
-	if notify {
+	if changed {
 		payload, err := marshalWorkerEvent(eventType, worker)
 		if err != nil {
 			return fmt.Errorf("marshaling worker event: %w", err)
@@ -1119,7 +1134,7 @@ func (p *Persistence) CreateWorker(ctx context.Context, worker *ateapipb.Worker)
 		return fmt.Errorf("marshaling worker: %w", err)
 	}
 
-	err = p.writeAndNotify(ctx, store.WorkerEventCreated, dbWorker, func(ctx context.Context, tx pgx.Tx) (bool, error) {
+	err = p.writeAndAppendChange(ctx, store.WorkerEventCreated, dbWorker, func(ctx context.Context, tx pgx.Tx) (bool, error) {
 		_, err := tx.Exec(ctx, `
 			INSERT INTO workers (name, uid, version, proto)
 			VALUES ($1, $2, $3, $4)`,
@@ -1170,7 +1185,7 @@ func (p *Persistence) UpdateWorker(ctx context.Context, worker *ateapipb.Worker,
 		return fmt.Errorf("marshaling worker: %w", err)
 	}
 
-	return p.writeAndNotify(ctx, store.WorkerEventUpdated, dbWorker, func(ctx context.Context, tx pgx.Tx) (bool, error) {
+	return p.writeAndAppendChange(ctx, store.WorkerEventUpdated, dbWorker, func(ctx context.Context, tx pgx.Tx) (bool, error) {
 		var returned []byte
 		err := tx.QueryRow(ctx, `
 			UPDATE workers
@@ -1199,7 +1214,7 @@ func (p *Persistence) UpdateWorker(ctx context.Context, worker *ateapipb.Worker,
 
 func (p *Persistence) DeleteWorker(ctx context.Context, name string) error {
 	deletedEvent := &ateapipb.Worker{Metadata: &ateapipb.ResourceMetadata{Name: name}}
-	return p.writeAndNotify(ctx, store.WorkerEventDeleted, deletedEvent, func(ctx context.Context, tx pgx.Tx) (bool, error) {
+	return p.writeAndAppendChange(ctx, store.WorkerEventDeleted, deletedEvent, func(ctx context.Context, tx pgx.Tx) (bool, error) {
 		var protoBytes []byte
 		err := tx.QueryRow(ctx, `
 			DELETE FROM workers
@@ -1207,7 +1222,7 @@ func (p *Persistence) DeleteWorker(ctx context.Context, name string) error {
 			RETURNING proto`, name).Scan(&protoBytes)
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
-				// Idempotent: nothing existed, so nothing to notify either.
+				// Idempotent: nothing existed, so no event to publish either.
 				return false, nil
 			}
 			return false, fmt.Errorf("deleting worker %s: %w", name, err)
@@ -1264,29 +1279,257 @@ func (p *Persistence) ListWorkers(ctx context.Context, opts store.ListOptions) (
 	return store.ListResponse[*ateapipb.Worker]{Items: result, NextPageToken: nextToken}, nil
 }
 
-// WatchWorkers acquires a dedicated connection (hijacked out of the pool, so
-// it's never handed back for unrelated queries), LISTENs on the fixed
-// worker-change channel, and forwards decoded notifications until the
-// context is cancelled or the caller closes the watch.
-// changeFeedPollInterval bounds worker-event delivery latency (watch target
-// is <=1s); changeFeedRetention is how far behind the cursor the janitor
-// keeps rows.
 const (
+	// Bound worker-event delivery latency in the absence of an xmin stall.
 	changeFeedPollInterval = 100 * time.Millisecond
-	changeFeedBatch        = 1024
-	changeFeedRetention    = int64(1_000_000)
-	changeFeedJanitorEvery = 600 // polls (~1 min)
+
+	// Cap rows fetched per poll; a burst beyond it carries over to the next poll 
+	// (events are delayed, never dropped).
+	changeFeedBatch = 1024
+
+	// Minimum time retention keeps feed rows.
+	changeFeedRetentionAge = 15 * time.Minute
+
+	// Paces partition maintenance.
+	changeFeedMaintenanceInterval = time.Minute
+
+	// The feed partition range width.
+	changeFeedPartitionInterval = 15 * time.Minute
+
+	// How many intervals ahead partitions are pre-created: creation must stall past 
+	// lead-1 intervals before any write detours into the DEFAULT partition backstop.
+	changeFeedPartitionLead = 2
 )
 
-// WatchWorkers subscribes by polling the worker_changes feed table past a
-// cursor. Events are appended to the feed in the same transaction as the
-// worker write (see writeAndNotify), so delivery happens iff the write
-// committed.
+// Maintains worker_changes partitions on a fixed timer.
+func (p *Persistence) changeFeedMaintenance(ctx context.Context) {
+	ticker := time.NewTicker(changeFeedMaintenanceInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+		if err := p.maintainWorkerChangesPartitions(ctx); err != nil && ctx.Err() == nil {
+			slog.WarnContext(ctx, "worker change feed maintenance failed", slog.Any("err", err))
+		}
+	}
+}
+
+// Database-scoped advisory lock used to elect a single replica to run the retention transaction (drops + trim).
+const changeFeedMaintenanceLockKey = "atepg-change-feed-maintenance"
+
+// pollWorkerChangesSQL is the watch's batch query. The xid::text cast MUST
+// carry an alias so that ORDER BY xid sorts numerically by the table's xid8
+// column instead of alphabetically by the string output.
+const pollWorkerChangesSQL = `
+	SELECT xid::text AS xid_text, payload FROM worker_changes
+	WHERE xid > $1::xid8
+	  AND xid < pg_snapshot_xmin(pg_current_snapshot())
+	ORDER BY xid LIMIT $2`
+
+// pollSafetySQL returns cheap safety scalars fetched on every poll:
+// 1. A fell-behind check (trim mark is past both cursor and baseline).
+// 2. The postmaster start time (to detect database restarts).
+const pollSafetySQL = `
+	SELECT EXISTS(
+		SELECT 1 FROM worker_changes_trim
+		WHERE xid > $1::xid8 AND xid > $2::xid8),
+	pg_postmaster_start_time()::text`
+
+// maintainWorkerChangesPartitions is one maintenance pass. Partition
+// creation runs on every replica, unelected — it is idempotent.
+func (p *Persistence) maintainWorkerChangesPartitions(ctx context.Context) error {
+	now := time.Now().UTC()
+	if err := p.createWorkerChangesPartitions(ctx, changeFeedPartitionLeadTimes(now)...); err != nil {
+		return err
+	}
+
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("beginning feed retention transaction: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op once committed
+
+	var elected bool
+	if err := tx.QueryRow(ctx, `SELECT pg_try_advisory_xact_lock(hashtext(current_database() || ':' || $1))`, changeFeedMaintenanceLockKey).Scan(&elected); err != nil {
+		return fmt.Errorf("electing feed maintenance: %w", err)
+	}
+	if !elected {
+		return nil // another replica is maintaining; next tick retries
+	}
+	// A non-empty DEFAULT partition means partition creation stalled and writes
+	// detoured here. Watchers that lose events will detect the trim mark and resync.
+	var strays bool
+	if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM worker_changes_default)`).Scan(&strays); err != nil {
+		return fmt.Errorf("checking feed default partition: %w", err)
+	}
+	if strays {
+		slog.WarnContext(ctx, "change feed DEFAULT partition is non-empty; partition creation has stalled and writes are detouring")
+		if err := p.truncateWorkerChangesDefault(ctx, tx); err != nil {
+			return err
+		}
+	}
+	// Dropping a partition takes ACCESS EXCLUSIVE on the parent, blocking every worker write's feed append.
+	if err := p.dropExpiredWorkerChangesPartitions(ctx, tx, now); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("committing feed retention transaction: %w", err)
+	}
+	return nil
+}
+
+// workerChangesPartitionName names the partition covering the given instant.
+func workerChangesPartitionName(at time.Time) string {
+	// it truncates to the partition boundary itself so callers can pass any moment within the range.
+	return "worker_changes_p" + at.UTC().Truncate(changeFeedPartitionInterval).Format("200601021504")
+}
+
+// changeFeedPartitionLeadTimes lists instants covering now through the creation lead, one per partition interval.
+func changeFeedPartitionLeadTimes(now time.Time) []time.Time {
+	times := make([]time.Time, changeFeedPartitionLead+1)
+	for i := range times {
+		times[i] = now.UTC().Add(time.Duration(i) * changeFeedPartitionInterval)
+	}
+	return times
+}
+
+// createWorkerChangesPartitions idempotently creates the feed partitions covering the given instants.
+func (p *Persistence) createWorkerChangesPartitions(ctx context.Context, instants ...time.Time) error {
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return fmt.Errorf("beginning feed partition transaction: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op once committed
+
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('agent-substrate-atepg-feed-partitions'))`); err != nil {
+		return fmt.Errorf("locking feed partition DDL: %w", err)
+	}
+	for _, at := range instants {
+		start := at.UTC().Truncate(changeFeedPartitionInterval)
+		// UNLOGGED: see schema comment for the durability trade-off.
+		// autovacuum off: partitions are insert-only and discarded whole,
+		// so autovacuum is unnecessary and its scans would cause latency spikes.
+		stmt := fmt.Sprintf(`CREATE UNLOGGED TABLE IF NOT EXISTS %s PARTITION OF worker_changes FOR VALUES FROM ('%s') TO ('%s') WITH (autovacuum_enabled = off)`,
+			workerChangesPartitionName(start), start.Format(time.RFC3339), start.Add(changeFeedPartitionInterval).Format(time.RFC3339))
+		if _, err := tx.Exec(ctx, stmt); err != nil {
+			return fmt.Errorf("creating feed partition for %s: %w", start, err)
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("committing feed partition transaction: %w", err)
+	}
+	return nil
+}
+
+// dropExpiredWorkerChangesPartitions drops every feed partition whose
+// entire range is older than retention.
+func (p *Persistence) dropExpiredWorkerChangesPartitions(ctx context.Context, q querier, now time.Time) error {
+	rows, err := q.Query(ctx, `
+		SELECT c.relname FROM pg_inherits i
+		JOIN pg_class c ON c.oid = i.inhrelid
+		JOIN pg_class parent ON parent.oid = i.inhparent
+		WHERE parent.relname = 'worker_changes'`)
+	if err != nil {
+		return fmt.Errorf("listing feed partitions: %w", err)
+	}
+	var names []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			rows.Close()
+			return fmt.Errorf("scanning feed partition name: %w", err)
+		}
+		names = append(names, name)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("listing feed partitions: %w", err)
+	}
+
+	for _, name := range names {
+		// The DEFAULT partition (worker_changes_default) doesn't match
+		// the range prefix and is skipped here naturally.
+		suffix, ok := strings.CutPrefix(name, "worker_changes_p")
+		if !ok {
+			continue
+		}
+		start, err := time.Parse("200601021504", suffix)
+		if err != nil {
+			continue // not a partition this maintenance loop manages
+		}
+		if now.Sub(start.Add(changeFeedPartitionInterval)) < changeFeedRetentionAge {
+			continue
+		}
+		if err := p.dropWorkerChangesPartition(ctx, q, name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// dropWorkerChangesPartition records the trim mark and drops the
+// partition on the caller's (elected, single) retention transaction.
+func (p *Persistence) dropWorkerChangesPartition(ctx context.Context, q querier, name string) error {
+	ident := pgx.Identifier{name}.Sanitize()
+	// The mark is the partition's greatest xid.
+	if _, err := q.Exec(ctx, fmt.Sprintf(`
+		INSERT INTO worker_changes_trim (xid)
+		SELECT xid FROM %s ORDER BY xid DESC LIMIT 1
+		ON CONFLICT (id) DO UPDATE SET xid = EXCLUDED.xid
+		WHERE EXCLUDED.xid > worker_changes_trim.xid`, ident)); err != nil {
+		return fmt.Errorf("recording trim mark for feed partition %s: %w", name, err)
+	}
+	if _, err := q.Exec(ctx, `DROP TABLE `+ident); err != nil {
+		return fmt.Errorf("dropping feed partition %s: %w", name, err)
+	}
+	return nil
+}
+
+// truncateWorkerChangesDefault discards the DEFAULT partition wholesale to
+// un-stall partition creation.
+func (p *Persistence) truncateWorkerChangesDefault(ctx context.Context, q querier) error {
+	// Highest xid is recorded as a trim mark in the same transaction so lagging watchers detect the loss and resync.
+	if _, err := q.Exec(ctx, `
+		INSERT INTO worker_changes_trim (xid)
+		SELECT xid FROM worker_changes_default ORDER BY xid DESC LIMIT 1
+		ON CONFLICT (id) DO UPDATE SET xid = EXCLUDED.xid
+		WHERE EXCLUDED.xid > worker_changes_trim.xid`); err != nil {
+		return fmt.Errorf("recording trim mark for feed default partition: %w", err)
+	}
+	if _, err := q.Exec(ctx, `TRUNCATE worker_changes_default`); err != nil {
+		return fmt.Errorf("truncating feed default partition: %w", err)
+	}
+	return nil
+}
+
+// WatchWorkers subscribes by polling the worker_changes feed using an xid cursor.
+// It fences reads behind pg_snapshot_xmin (the oldest in-flight transaction)
+// to guarantee gap-free delivery. Note that a long-running transaction anywhere
+// in the database will stall this feed.
+//
+// Events are delivered in xid order, so consumers must reconcile worker versions.
+// If the watcher detects missed events—either by lagging behind retention drops
+// or if a database restart truncates the UNLOGGED partitions—it closes the channel
+// to force the consumer to resync from the primary tables.
 func (p *Persistence) WatchWorkers(ctx context.Context) (*store.WorkerWatch, error) {
 	watchCtx, cancel := context.WithCancel(ctx)
 
-	var cursor int64
-	if err := p.pool.QueryRow(watchCtx, `SELECT COALESCE(max(seq), 0) FROM worker_changes`).Scan(&cursor); err != nil {
+	// cursorXid starts at xmin - 1. The minus 1 is required because the poll
+	// query is exclusive (xid > cursor); starting exactly at xmin on an idle
+	// system would skip the very next event.
+	// baselineXid records the highest xid or trim mark at subscribe time so
+	// past garbage collection isn't mistaken for events lost during this watch.
+	// Xids are passed as decimal strings end-to-end; all ordering happens in SQL.
+	var cursorXid, baselineXid, baselineStart string
+	if err := p.pool.QueryRow(watchCtx, `
+		SELECT (pg_snapshot_xmin(pg_current_snapshot())::text::numeric - 1)::text,
+		       GREATEST(
+		           COALESCE((SELECT xid FROM worker_changes ORDER BY xid DESC LIMIT 1), '0'::xid8),
+		           COALESCE((SELECT xid FROM worker_changes_trim), '0'::xid8))::text,
+		       pg_postmaster_start_time()::text`).Scan(&cursorXid, &baselineXid, &baselineStart); err != nil {
 		cancel()
 		return nil, fmt.Errorf("reading worker change feed cursor: %w", err)
 	}
@@ -1296,58 +1539,91 @@ func (p *Persistence) WatchWorkers(ctx context.Context) (*store.WorkerWatch, err
 		defer close(ch)
 		ticker := time.NewTicker(changeFeedPollInterval)
 		defer ticker.Stop()
-		polls := 0
 		for {
 			select {
 			case <-watchCtx.Done():
 				return
 			case <-ticker.C:
 			}
-			rows, err := p.pool.Query(watchCtx, `
-				SELECT seq, payload FROM worker_changes
-				WHERE seq > $1 ORDER BY seq LIMIT $2`, cursor, changeFeedBatch)
-			if err != nil {
-				if watchCtx.Err() != nil {
-					return
+			// Drain until a batch is partial. Sleeping between full batches would
+			// cap throughput and cause unrecoverable lag during bursts.
+			for {
+				// Safety checks share the batch round trip but must remain separate
+				// queries so we can detect gaps and restarts even when no rows match.
+				b := &pgx.Batch{}
+				b.Queue(pollWorkerChangesSQL, cursorXid, changeFeedBatch)
+				b.Queue(pollSafetySQL, cursorXid, baselineXid)
+				br := p.pool.SendBatch(watchCtx, b)
+
+				type feedRow struct {
+					xid     string
+					payload []byte
 				}
-				// Transient poll failure: like a dropped LISTEN connection,
-				// but recoverable in place — keep the cursor, try again.
-				slog.WarnContext(watchCtx, "worker change feed poll failed", slog.Any("err", err))
-				continue
-			}
-			type feedRow struct {
-				seq     int64
-				payload []byte
-			}
-			var batch []feedRow
-			for rows.Next() {
-				var r feedRow
-				if err := rows.Scan(&r.seq, &r.payload); err != nil {
+				var batch []feedRow
+				rows, err := br.Query()
+				if err == nil {
+					for rows.Next() {
+						var r feedRow
+						if err = rows.Scan(&r.xid, &r.payload); err != nil {
+							batch = nil
+							break
+						}
+						batch = append(batch, r)
+					}
 					rows.Close()
-					slog.WarnContext(watchCtx, "worker change feed scan failed", slog.Any("err", err))
-					batch = nil
+				}
+				var fellBehind bool
+				var pmStart string
+				if err == nil {
+					err = br.QueryRow().Scan(&fellBehind, &pmStart)
+				}
+				if closeErr := br.Close(); err == nil {
+					err = closeErr
+				}
+				if err != nil {
+					if watchCtx.Err() != nil {
+						return
+					}
+					// Transient poll failure: keep the cursor, try again on the next tick. 
+					// If the outage was a restart, the next successful safety check catches it.
+					slog.WarnContext(watchCtx, "worker change feed poll failed", slog.Any("err", err))
 					break
 				}
-				batch = append(batch, r)
-			}
-			rows.Close()
-			for _, r := range batch {
-				event, err := unmarshalWorkerEvent(string(r.payload))
-				if err != nil {
-					slog.ErrorContext(watchCtx, "worker event unmarshal failed", slog.Any("err", err))
-					cursor = r.seq
-					continue
-				}
-				select {
-				case ch <- event:
-					cursor = r.seq
-				case <-watchCtx.Done():
+				// A restarted postmaster truncated the UNLOGGED feed:
+				// committed-but-undelivered events may be gone, so close
+				// before the cursor can skip past them; consumers resync
+				// with a full relist.
+				if pmStart != baselineStart {
+					slog.WarnContext(watchCtx, "database restarted under the change feed; closing watch for resync",
+						slog.String("was", baselineStart), slog.String("now", pmStart))
 					return
 				}
-			}
-			if polls++; polls%changeFeedJanitorEvery == 0 && cursor > changeFeedRetention {
-				if _, err := p.pool.Exec(watchCtx, `DELETE FROM worker_changes WHERE seq < $1`, cursor-changeFeedRetention); err != nil && watchCtx.Err() == nil {
-					slog.WarnContext(watchCtx, "worker change feed janitor failed", slog.Any("err", err))
+				// Retention safety: if retention's recorded trim high-water
+				// mark is ahead of everything this watcher has seen, a row
+				// it never consumed was discarded. Close before delivering
+				// anything past the gap.
+				if fellBehind {
+					slog.WarnContext(watchCtx, "worker watch fell behind change feed retention; closing for resync",
+						slog.String("cursor_xid", cursorXid))
+					return
+				}
+
+				for _, r := range batch {
+					event, err := unmarshalWorkerEvent(r.payload)
+					if err != nil {
+						slog.ErrorContext(watchCtx, "worker event unmarshal failed", slog.Any("err", err))
+						cursorXid = r.xid
+						continue
+					}
+					select {
+					case ch <- event:
+						cursorXid = r.xid
+					case <-watchCtx.Done():
+						return
+					}
+				}
+				if len(batch) < changeFeedBatch {
+					break // caught up; wait for the next tick
 				}
 			}
 		}
@@ -1501,7 +1777,7 @@ func (p *Persistence) releaseLease(ctx context.Context, key, token string) error
 // --- Debug ---
 
 func (p *Persistence) DebugClearAll(ctx context.Context) error {
-	if _, err := p.pool.Exec(ctx, `TRUNCATE atespaces, actors, actor_templates, actor_snapshots, actor_snapshot_tags, workers, leases, worker_changes`); err != nil {
+	if _, err := p.pool.Exec(ctx, `TRUNCATE atespaces, actors, actor_templates, actor_snapshots, actor_snapshot_tags, workers, leases, worker_changes, worker_changes_trim`); err != nil {
 		return fmt.Errorf("truncating tables: %w", err)
 	}
 	return nil

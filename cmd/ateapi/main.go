@@ -137,6 +137,11 @@ func main() {
 	if err != nil {
 		serverboot.Fatal(ctx, "Failed to set up persistence backend", err)
 	}
+	// Backends may run background maintenance rooted in their own context
+	// (atepg's change-feed maintenance loop); stop it on shutdown.
+	if closer, ok := persistence.(interface{ Close() }); ok {
+		defer closer.Close()
+	}
 
 	clientset, ateClient, err := newKubeClients()
 	if err != nil {
