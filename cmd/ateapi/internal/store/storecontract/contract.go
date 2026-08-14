@@ -101,6 +101,16 @@ func receiveEvent(t *testing.T, ch <-chan store.WorkerEvent) store.WorkerEvent {
 // foreign-key races and transactional notifications) is NOT covered here; see
 // each backend's own test file for that.
 func RunContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
+	runActorContractTests(t, setup)
+	runWorkerContractTests(t, setup)
+	runAtespaceContractTests(t, setup)
+	runActorTemplateContractTests(t, setup)
+	runActorSnapshotContractTests(t, setup)
+	runLockContractTests(t, setup)
+	runDebugContractTests(t, setup)
+}
+
+func runActorContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
 	t.Helper()
 
 	t.Run("GetActor_NotFound", func(t *testing.T) {
@@ -336,6 +346,555 @@ func RunContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
 		}
 	})
 
+	t.Run("DeleteActor", func(t *testing.T) {
+		tests := []struct {
+			name    string
+			status  ateapipb.Actor_Status
+			wantErr error
+		}{
+			{name: "suspended", status: ateapipb.Actor_STATUS_SUSPENDED, wantErr: store.ErrFailedPrecondition},
+			{name: "crashed", status: ateapipb.Actor_STATUS_CRASHED, wantErr: store.ErrFailedPrecondition},
+			{name: "deleting", status: ateapipb.Actor_STATUS_DELETING},
+			{name: "running", status: ateapipb.Actor_STATUS_RUNNING, wantErr: store.ErrFailedPrecondition},
+			{name: "paused", status: ateapipb.Actor_STATUS_PAUSED, wantErr: store.ErrFailedPrecondition},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				s := setup(t)
+				ctx := context.Background()
+				mustCreateAtespace(t, s, testAtespace)
+
+				actor := &ateapipb.Actor{
+					Metadata:               &ateapipb.ResourceMetadata{Name: "session-1", Atespace: testAtespace},
+					ActorTemplateNamespace: "default",
+					ActorTemplateName:      "test-template",
+					Status:                 tt.status,
+				}
+				if _, err := s.CreateActor(ctx, actor); err != nil {
+					t.Fatalf("CreateActor failed: %v", err)
+				}
+
+				deleted, err := s.DeleteActor(ctx, resources.ActorRef{Atespace: testAtespace, Name: "session-1"})
+				if tt.wantErr != nil {
+					if !errors.Is(err, tt.wantErr) {
+						t.Errorf("DeleteActor: expected %v, got %v", tt.wantErr, err)
+					}
+					got, getErr := s.GetActor(ctx, resources.ActorRef{Atespace: testAtespace, Name: "session-1"})
+					if getErr != nil {
+						t.Fatalf("GetActor after rejected delete failed: %v", getErr)
+					}
+					if got.GetStatus() != tt.status {
+						t.Errorf("actor status after rejected delete = %v, want %v", got.GetStatus(), tt.status)
+					}
+					return
+				}
+				if err != nil {
+					t.Fatalf("DeleteActor failed: %v", err)
+				}
+				if got := deleted.GetMetadata().GetName(); got != "session-1" {
+					t.Errorf("deleted actor name = %q, want session-1", got)
+				}
+				if _, err := s.GetActor(ctx, resources.ActorRef{Atespace: testAtespace, Name: "session-1"}); !errors.Is(err, store.ErrNotFound) {
+					t.Errorf("expected ErrNotFound after delete, got %v", err)
+				}
+			})
+		}
+	})
+
+	t.Run("DeleteActor_NotFound", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+
+		if _, err := s.DeleteActor(ctx, resources.ActorRef{Atespace: testAtespace, Name: "non-existent"}); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("expected ErrNotFound deleting non-existent actor, got %v", err)
+		}
+	})
+
+	t.Run("ListActors_Empty", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+
+		actorsResp, err := s.ListActors(ctx, "", store.ListOptions{PageSize: 1000})
+		if err != nil {
+			t.Fatalf("ListActors failed: %v", err)
+		}
+		if len(actorsResp.Items) != 0 {
+			t.Errorf("expected 0 actors, got %d", len(actorsResp.Items))
+		}
+	})
+
+	t.Run("ListActors", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		mustCreateAtespace(t, s, testAtespace)
+
+		actor1 := &ateapipb.Actor{
+			Metadata:               &ateapipb.ResourceMetadata{Name: "id1", Atespace: testAtespace},
+			ActorTemplateNamespace: "ns1",
+			ActorTemplateName:      "tmpl1",
+			Status:                 ateapipb.Actor_STATUS_SUSPENDED,
+			LatestSnapshot:         &ateapipb.ObjectRef{Atespace: testAtespace, Name: "snapshot-1"},
+		}
+		actor2 := &ateapipb.Actor{
+			Metadata:               &ateapipb.ResourceMetadata{Name: "id2", Atespace: testAtespace},
+			ActorTemplateNamespace: "ns1",
+			ActorTemplateName:      "tmpl1",
+			Status:                 ateapipb.Actor_STATUS_SUSPENDED,
+			LatestSnapshot:         &ateapipb.ObjectRef{Atespace: testAtespace, Name: "snapshot-2"},
+		}
+		if _, err := s.CreateActor(ctx, actor1); err != nil {
+			t.Fatalf("failed to create actor1: %v", err)
+		}
+		if _, err := s.CreateActor(ctx, actor2); err != nil {
+			t.Fatalf("failed to create actor2: %v", err)
+		}
+
+		actorsResp, err := s.ListActors(ctx, "", store.ListOptions{PageSize: 1000})
+		if err != nil {
+			t.Fatalf("ListActors failed: %v", err)
+		}
+		actors := actorsResp.Items
+		if len(actors) != 2 {
+			t.Errorf("expected 2 actors, got %d", len(actors))
+		}
+		if got := actorNameSet(actors); !got["id1"] || !got["id2"] {
+			t.Errorf("did not find all actors: %v", got)
+		}
+	})
+
+	t.Run("ListActors_Pagination", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		mustCreateAtespace(t, s, testAtespace)
+
+		for i := 0; i < 5; i++ {
+			actor := &ateapipb.Actor{
+				Metadata:               &ateapipb.ResourceMetadata{Name: fmt.Sprintf("name%d", i), Atespace: testAtespace},
+				ActorTemplateNamespace: "ns1",
+				ActorTemplateName:      "tmpl1",
+				Status:                 ateapipb.Actor_STATUS_SUSPENDED,
+			}
+			if _, err := s.CreateActor(ctx, actor); err != nil {
+				t.Fatalf("failed to create actor %d: %v", i, err)
+			}
+		}
+
+		var allActors []*ateapipb.Actor
+		pageToken := ""
+		for {
+			page, err := s.ListActors(ctx, "", store.ListOptions{PageSize: 2, PageToken: pageToken})
+			if err != nil {
+				t.Fatalf("ListActors failed: %v", err)
+			}
+			allActors = append(allActors, page.Items...)
+			pageToken = page.NextPageToken
+			if pageToken == "" {
+				break
+			}
+		}
+
+		if len(allActors) != 5 {
+			t.Fatalf("expected 5 actors total, got %d", len(allActors))
+		}
+		seen := make(map[string]bool)
+		for _, a := range allActors {
+			if seen[a.GetMetadata().GetName()] {
+				t.Errorf("duplicate actor found in paginated results: %s", a.GetMetadata().GetName())
+			}
+			seen[a.GetMetadata().GetName()] = true
+		}
+	})
+
+	t.Run("ListActors_ScopedByAtespace", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		mustCreateAtespace(t, s, "team-a")
+		mustCreateAtespace(t, s, "team-b")
+
+		mkActor := func(atespace, name string) *ateapipb.Actor {
+			return &ateapipb.Actor{
+				Metadata:               &ateapipb.ResourceMetadata{Name: name, Atespace: atespace},
+				ActorTemplateNamespace: "ns1",
+				ActorTemplateName:      "tmpl1",
+				Status:                 ateapipb.Actor_STATUS_SUSPENDED,
+			}
+		}
+		for _, a := range []*ateapipb.Actor{mkActor("team-a", "a1"), mkActor("team-a", "a2"), mkActor("team-b", "b1")} {
+			if _, err := s.CreateActor(ctx, a); err != nil {
+				t.Fatalf("CreateActor(%s/%s) failed: %v", a.GetMetadata().GetAtespace(), a.GetMetadata().GetName(), err)
+			}
+		}
+
+		teamAResp, err := s.ListActors(ctx, "team-a", store.ListOptions{PageSize: 1000})
+		if err != nil {
+			t.Fatalf("ListActors(team-a) failed: %v", err)
+		}
+		if got := actorNameSet(teamAResp.Items); !got["a1"] || !got["a2"] || got["b1"] || len(got) != 2 {
+			t.Errorf("ListActors(team-a) = %v, want exactly {a1, a2}", got)
+		}
+
+		teamBResp, err := s.ListActors(ctx, "team-b", store.ListOptions{PageSize: 1000})
+		if err != nil {
+			t.Fatalf("ListActors(team-b) failed: %v", err)
+		}
+		if got := actorNameSet(teamBResp.Items); !got["b1"] || got["a1"] || len(got) != 1 {
+			t.Errorf("ListActors(team-b) = %v, want exactly {b1}", got)
+		}
+
+		allResp, err := s.ListActors(ctx, "", store.ListOptions{PageSize: 1000})
+		if err != nil {
+			t.Fatalf("ListActors(all) failed: %v", err)
+		}
+		if got := actorNameSet(allResp.Items); !got["a1"] || !got["a2"] || !got["b1"] || len(got) != 3 {
+			t.Errorf("ListActors(all) = %v, want exactly {a1, a2, b1}", got)
+		}
+
+		if _, err := s.GetActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "a1"}); err != nil {
+			t.Errorf("GetActor(team-a, a1) failed: %v", err)
+		}
+		if _, err := s.GetActor(ctx, resources.ActorRef{Atespace: "team-b", Name: "a1"}); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("GetActor(team-b, a1) = %v, want ErrNotFound", err)
+		}
+		if _, err := s.GetActor(ctx, resources.ActorRef{Name: "a1"}); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("GetActor(empty, a1) = %v, want ErrNotFound", err)
+		}
+	})
+}
+
+func runActorTemplateContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
+	t.Helper()
+
+	t.Run("ActorTemplateAndVersion_Lifecycle", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		mustCreateAtespace(t, s, "team-a")
+
+		input := newTestActorTemplate("team-a", "tmpl-a")
+		created, err := s.CreateActorTemplate(ctx, input)
+		if err != nil {
+			t.Fatalf("CreateActorTemplate failed: %v", err)
+		}
+		if created.GetMetadata().GetUid() == "" || created.GetMetadata().GetVersion() != 1 {
+			t.Errorf("created template metadata = %v, want assigned uid and version 1", created.GetMetadata())
+		}
+		if input.GetMetadata().GetUid() != "" || input.GetMetadata().GetVersion() != 0 {
+			t.Errorf("CreateActorTemplate mutated its input: %v", input.GetMetadata())
+		}
+		templateRef := resources.ActorTemplateRef{Atespace: "team-a", Name: "tmpl-a"}
+		if exists, err := s.ActorTemplateExists(ctx, templateRef); err != nil || !exists {
+			t.Fatalf("ActorTemplateExists = (%v, %v), want (true, nil)", exists, err)
+		}
+		gotTemplate, err := s.GetActorTemplate(ctx, templateRef)
+		if err != nil {
+			t.Fatalf("GetActorTemplate failed: %v", err)
+		}
+		if diff := cmp.Diff(created, gotTemplate, protocmp.Transform()); diff != "" {
+			t.Errorf("stored template mismatch (-created +got):\n%s", diff)
+		}
+
+		updated, err := s.UpdateActorTemplate(ctx, templateRef, func(template *ateapipb.ActorTemplate) error {
+			template.DefaultVersionOnCreate = &ateapipb.ObjectRef{Atespace: "team-a", Name: "tmpl-a-v1"}
+			return nil
+		})
+		if err != nil {
+			t.Fatalf("UpdateActorTemplate failed: %v", err)
+		}
+		if updated.GetMetadata().GetVersion() != 2 || updated.GetMetadata().GetUid() != created.GetMetadata().GetUid() {
+			t.Errorf("updated template metadata = %v, want version 2 and original uid", updated.GetMetadata())
+		}
+
+		versionInput := newTestActorTemplateVersion("team-a", "tmpl-a-v1", "tmpl-a")
+		version, err := s.CreateActorTemplateVersion(ctx, versionInput)
+		if err != nil {
+			t.Fatalf("CreateActorTemplateVersion failed: %v", err)
+		}
+		if versionInput.GetMetadata().GetUid() != "" || versionInput.GetMetadata().GetVersion() != 0 {
+			t.Errorf("CreateActorTemplateVersion mutated its input: %v", versionInput.GetMetadata())
+		}
+		versionRef := resources.ActorTemplateVersionRef{Atespace: "team-a", Name: "tmpl-a-v1"}
+		gotVersion, err := s.GetActorTemplateVersion(ctx, versionRef)
+		if err != nil {
+			t.Fatalf("GetActorTemplateVersion failed: %v", err)
+		}
+		if diff := cmp.Diff(version, gotVersion, protocmp.Transform()); diff != "" {
+			t.Errorf("stored version mismatch (-created +got):\n%s", diff)
+		}
+
+		if _, err := s.DeleteActorTemplate(ctx, templateRef); !errors.Is(err, store.ErrFailedPrecondition) {
+			t.Errorf("DeleteActorTemplate with a child = %v, want ErrFailedPrecondition", err)
+		}
+		if _, err := s.DeleteActorTemplateVersion(ctx, versionRef); !errors.Is(err, store.ErrFailedPrecondition) {
+			t.Errorf("DeleteActorTemplateVersion while default = %v, want ErrFailedPrecondition", err)
+		}
+		if _, err := s.UpdateActorTemplate(ctx, templateRef, func(template *ateapipb.ActorTemplate) error {
+			template.DefaultVersionOnCreate = nil
+			return nil
+		}); err != nil {
+			t.Fatalf("clearing default version failed: %v", err)
+		}
+		if deleted, err := s.DeleteActorTemplateVersion(ctx, versionRef); err != nil {
+			t.Fatalf("DeleteActorTemplateVersion failed: %v", err)
+		} else if diff := cmp.Diff(version, deleted, protocmp.Transform()); diff != "" {
+			t.Errorf("deleted version mismatch (-created +deleted):\n%s", diff)
+		}
+		if _, err := s.GetActorTemplateVersion(ctx, versionRef); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("GetActorTemplateVersion after delete = %v, want ErrNotFound", err)
+		}
+		if _, err := s.DeleteActorTemplate(ctx, templateRef); err != nil {
+			t.Fatalf("DeleteActorTemplate failed: %v", err)
+		}
+	})
+
+	t.Run("ListActorTemplateVersions_FilteredPagination", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		for _, atespace := range []string{"team-a", "team-b"} {
+			mustCreateAtespace(t, s, atespace)
+		}
+		for _, item := range []struct{ atespace, name, parent string }{
+			{"team-a", "a-1", "tmpl-a"},
+			{"team-a", "a-2", "tmpl-a"},
+			{"team-a", "b-1", "tmpl-b"},
+			{"team-b", "a-1", "tmpl-a"},
+		} {
+			if _, err := s.CreateActorTemplateVersion(ctx, newTestActorTemplateVersion(item.atespace, item.name, item.parent)); err != nil {
+				t.Fatalf("CreateActorTemplateVersion(%s/%s) failed: %v", item.atespace, item.name, err)
+			}
+		}
+
+		parent := resources.ActorTemplateRef{Atespace: "team-a", Name: "tmpl-a"}
+		var got []string
+		for token := ""; ; {
+			page, err := s.ListActorTemplateVersions(ctx, "", parent, store.ListOptions{PageSize: 1, PageToken: token})
+			if err != nil {
+				t.Fatalf("ListActorTemplateVersions failed: %v", err)
+			}
+			for _, version := range page.Items {
+				got = append(got, version.GetMetadata().GetAtespace()+"/"+version.GetMetadata().GetName())
+			}
+			if page.NextPageToken == "" {
+				break
+			}
+			token = page.NextPageToken
+		}
+		if diff := cmp.Diff([]string{"team-a/a-1", "team-a/a-2"}, got); diff != "" {
+			t.Errorf("filtered pagination mismatch (-want +got):\n%s", diff)
+		}
+	})
+
+	t.Run("ActorTemplateResources_BlockAtespaceDeletion", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		mustCreateAtespace(t, s, "team-a")
+		if _, err := s.CreateActorTemplate(ctx, newTestActorTemplate("team-a", "tmpl-a")); err != nil {
+			t.Fatalf("CreateActorTemplate failed: %v", err)
+		}
+		if _, err := s.DeleteAtespace(ctx, "team-a"); !errors.Is(err, store.ErrFailedPrecondition) {
+			t.Errorf("DeleteAtespace with template = %v, want ErrFailedPrecondition", err)
+		}
+		if _, err := s.DeleteActorTemplate(ctx, resources.ActorTemplateRef{Atespace: "team-a", Name: "tmpl-a"}); err != nil {
+			t.Fatalf("DeleteActorTemplate failed: %v", err)
+		}
+		if _, err := s.CreateActorTemplateVersion(ctx, newTestActorTemplateVersion("team-a", "orphan-v1", "gone")); err != nil {
+			t.Fatalf("CreateActorTemplateVersion failed: %v", err)
+		}
+		if _, err := s.DeleteAtespace(ctx, "team-a"); !errors.Is(err, store.ErrFailedPrecondition) {
+			t.Errorf("DeleteAtespace with version = %v, want ErrFailedPrecondition", err)
+		}
+	})
+
+	t.Run("DeleteActorTemplateVersion_DeletesGoldenSnapshot", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		mustCreateAtespace(t, s, "team-a")
+		if _, err := s.CreateActorSnapshot(ctx, &ateapipb.ActorSnapshot{
+			Metadata:    &ateapipb.ResourceMetadata{Atespace: "ate-golden", Name: "golden-1"},
+			SnapshotUri: "gs://bucket/golden-1",
+		}); err != nil {
+			t.Fatalf("CreateActorSnapshot failed: %v", err)
+		}
+		version := newTestActorTemplateVersion("team-a", "tmpl-a-v1", "tmpl-a")
+		version.GoldenSnapshot = &ateapipb.ObjectRef{Atespace: "ate-golden", Name: "golden-1"}
+		if _, err := s.CreateActorTemplateVersion(ctx, version); err != nil {
+			t.Fatalf("CreateActorTemplateVersion failed: %v", err)
+		}
+		if _, err := s.DeleteActorTemplateVersion(ctx, resources.ActorTemplateVersionRef{Atespace: "team-a", Name: "tmpl-a-v1"}); err != nil {
+			t.Fatalf("DeleteActorTemplateVersion failed: %v", err)
+		}
+		if _, err := s.GetActorSnapshot(ctx, "ate-golden", "golden-1"); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("golden snapshot after version delete = %v, want ErrNotFound", err)
+		}
+	})
+}
+
+func runActorSnapshotContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
+	t.Helper()
+
+	t.Run("ActorSnapshotAndTag_Lifecycle", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		mustCreateAtespace(t, s, "team-a")
+
+		input := &ateapipb.ActorSnapshot{
+			Metadata:           &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "snapshot-1"},
+			SourceActor:        &ateapipb.ObjectRef{Atespace: "team-a", Name: "actor-1"},
+			SourceActorUid:     "actor-uid",
+			SourceActorVersion: 7,
+			ContentScope:       ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
+			SnapshotUri:        "gs://private/snapshot-1",
+		}
+		created, err := s.CreateActorSnapshot(ctx, input)
+		if err != nil {
+			t.Fatalf("CreateActorSnapshot failed: %v", err)
+		}
+		if created.GetMetadata().GetVersion() != 1 || created.GetMetadata().GetUid() == "" {
+			t.Errorf("created snapshot metadata = %v, want server-owned uid and version 1", created.GetMetadata())
+		}
+		if input.GetMetadata().GetUid() != "" || input.GetMetadata().GetVersion() != 0 {
+			t.Errorf("CreateActorSnapshot mutated its input metadata: %v", input.GetMetadata())
+		}
+		if _, err := s.CreateActorSnapshot(ctx, input); !errors.Is(err, store.ErrAlreadyExists) {
+			t.Errorf("duplicate CreateActorSnapshot = %v, want ErrAlreadyExists", err)
+		}
+
+		got, err := s.GetActorSnapshot(ctx, "team-a", "snapshot-1")
+		if err != nil {
+			t.Fatalf("GetActorSnapshot failed: %v", err)
+		}
+		if diff := cmp.Diff(created, got, protocmp.Transform()); diff != "" {
+			t.Errorf("GetActorSnapshot mismatch (-created +got):\n%s", diff)
+		}
+		if got.GetSnapshotUri() != "gs://private/snapshot-1" {
+			t.Errorf("snapshot_uri = %q, want gs://private/snapshot-1", got.GetSnapshotUri())
+		}
+		if _, err := s.GetActorSnapshot(ctx, "team-a", "missing"); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("missing GetActorSnapshot = %v, want ErrNotFound", err)
+		}
+
+		tagInput := &ateapipb.ActorSnapshotTag{
+			Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "production"},
+			Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
+		}
+		tag, err := s.CreateActorSnapshotTag(ctx, "team-a", "snapshot-1", tagInput)
+		if err != nil {
+			t.Fatalf("CreateActorSnapshotTag failed: %v", err)
+		}
+		if tag.GetSnapshot().GetAtespace() != "team-a" || tag.GetSnapshot().GetName() != "snapshot-1" {
+			t.Errorf("tag snapshot = %v, want team-a/snapshot-1", tag.GetSnapshot())
+		}
+		if tagInput.GetSnapshot() != nil || tagInput.GetMetadata().GetVersion() != 0 {
+			t.Errorf("CreateActorSnapshotTag mutated its input: %v", tagInput)
+		}
+		idempotent, err := s.CreateActorSnapshotTag(ctx, "team-a", "snapshot-1", tagInput)
+		if err != nil || !proto.Equal(idempotent, tag) {
+			t.Errorf("idempotent CreateActorSnapshotTag = (%v, %v), want existing tag", idempotent, err)
+		}
+		conflicting := proto.Clone(tagInput).(*ateapipb.ActorSnapshotTag)
+		conflicting.Scope = ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED
+		if _, err := s.CreateActorSnapshotTag(ctx, "team-a", "snapshot-1", conflicting); !errors.Is(err, store.ErrAlreadyExists) {
+			t.Errorf("conflicting CreateActorSnapshotTag = %v, want ErrAlreadyExists", err)
+		}
+		if _, err := s.CreateActorSnapshotTag(ctx, "team-a", "missing", &ateapipb.ActorSnapshotTag{Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "missing"}}); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("tagging missing snapshot = %v, want ErrNotFound", err)
+		}
+
+		resolvedTag, err := s.GetActorSnapshotTag(ctx, "team-a", "production")
+		if err != nil {
+			t.Fatalf("GetActorSnapshotTag failed: %v", err)
+		}
+		if !proto.Equal(resolvedTag, tag) {
+			t.Errorf("resolved tag = %v, want created tag", resolvedTag)
+		}
+		resolved, err := s.GetActorSnapshot(ctx, resolvedTag.GetSnapshot().GetAtespace(), resolvedTag.GetSnapshot().GetName())
+		if err != nil || !proto.Equal(resolved, created) {
+			t.Errorf("GetActorSnapshot(resolved tag target) = (%v, %v), want created snapshot", resolved, err)
+		}
+
+		updated, err := s.UpdateActorSnapshotTag(ctx, "team-a", "production", store.WithPrecondition(tag, func(toUpdate *ateapipb.ActorSnapshotTag) error {
+			toUpdate.Scope = ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED
+			return nil
+		}))
+		if err != nil {
+			t.Fatalf("UpdateActorSnapshotTag failed: %v", err)
+		}
+		if updated.GetScope() != ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED || updated.GetMetadata().GetVersion() != tag.GetMetadata().GetVersion()+1 {
+			t.Errorf("updated tag = %v, want published scope and advanced version", updated)
+		}
+		if _, err := s.UpdateActorSnapshotTag(ctx, "team-a", "production", store.WithPrecondition(tag, func(toUpdate *ateapipb.ActorSnapshotTag) error {
+			toUpdate.Scope = tag.GetScope()
+			return nil
+		})); !errors.Is(err, store.ErrVersionConflict) {
+			t.Errorf("stale UpdateActorSnapshotTag = %v, want ErrVersionConflict", err)
+		}
+		if _, err := s.DeleteAtespace(ctx, "team-a"); !errors.Is(err, store.ErrFailedPrecondition) {
+			t.Errorf("DeleteAtespace with tag = %v, want ErrFailedPrecondition", err)
+		}
+
+		deleted, err := s.DeleteActorSnapshotTag(ctx, "team-a", "production")
+		if err != nil || !proto.Equal(deleted, updated) {
+			t.Errorf("DeleteActorSnapshotTag = (%v, %v), want updated tag", deleted, err)
+		}
+		if _, err := s.GetActorSnapshotTag(ctx, "team-a", "production"); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("deleted GetActorSnapshotTag = %v, want ErrNotFound", err)
+		}
+		if _, err := s.DeleteAtespace(ctx, "team-a"); err != nil {
+			t.Errorf("DeleteAtespace after tag deletion = %v, want nil", err)
+		}
+	})
+
+	t.Run("ListActorSnapshots_PaginationAndScope", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+		for _, atespace := range []string{"team-a", "team-b"} {
+			for i := 0; i < 3; i++ {
+				name := fmt.Sprintf("snapshot-%d", i)
+				if _, err := s.CreateActorSnapshot(ctx, &ateapipb.ActorSnapshot{
+					Metadata:    &ateapipb.ResourceMetadata{Atespace: atespace, Name: name},
+					SnapshotUri: "gs://private/" + atespace + "/" + name,
+				}); err != nil {
+					t.Fatalf("CreateActorSnapshot(%s/%s) failed: %v", atespace, name, err)
+				}
+			}
+		}
+
+		var scoped []*ateapipb.ActorSnapshot
+		for token := ""; ; {
+			page, err := s.ListActorSnapshots(ctx, "team-a", store.ListOptions{PageSize: 2, PageToken: token})
+			if err != nil {
+				t.Fatalf("scoped ListActorSnapshots failed: %v", err)
+			}
+			scoped = append(scoped, page.Items...)
+			if page.NextPageToken == "" {
+				break
+			}
+			token = page.NextPageToken
+		}
+		if len(scoped) != 3 {
+			t.Errorf("scoped ListActorSnapshots returned %d snapshots, want 3", len(scoped))
+		}
+
+		var global []*ateapipb.ActorSnapshot
+		for token := ""; ; {
+			page, err := s.ListActorSnapshots(ctx, "", store.ListOptions{PageSize: 2, PageToken: token})
+			if err != nil {
+				t.Fatalf("global ListActorSnapshots failed: %v", err)
+			}
+			global = append(global, page.Items...)
+			if page.NextPageToken == "" {
+				break
+			}
+			token = page.NextPageToken
+		}
+		if len(global) != 6 {
+			t.Errorf("global ListActorSnapshots returned %d snapshots, want 6", len(global))
+		}
+	})
+}
+
+func runWorkerContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
+	t.Helper()
+
 	t.Run("GetWorker_NotFound", func(t *testing.T) {
 		s := setup(t)
 		ctx := context.Background()
@@ -534,71 +1093,6 @@ func RunContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
 		}
 	})
 
-	t.Run("DeleteActor", func(t *testing.T) {
-		tests := []struct {
-			name    string
-			status  ateapipb.Actor_Status
-			wantErr error
-		}{
-			{name: "suspended", status: ateapipb.Actor_STATUS_SUSPENDED, wantErr: store.ErrFailedPrecondition},
-			{name: "crashed", status: ateapipb.Actor_STATUS_CRASHED, wantErr: store.ErrFailedPrecondition},
-			{name: "deleting", status: ateapipb.Actor_STATUS_DELETING},
-			{name: "running", status: ateapipb.Actor_STATUS_RUNNING, wantErr: store.ErrFailedPrecondition},
-			{name: "paused", status: ateapipb.Actor_STATUS_PAUSED, wantErr: store.ErrFailedPrecondition},
-		}
-
-		for _, tt := range tests {
-			t.Run(tt.name, func(t *testing.T) {
-				s := setup(t)
-				ctx := context.Background()
-				mustCreateAtespace(t, s, testAtespace)
-
-				actor := &ateapipb.Actor{
-					Metadata:               &ateapipb.ResourceMetadata{Name: "session-1", Atespace: testAtespace},
-					ActorTemplateNamespace: "default",
-					ActorTemplateName:      "test-template",
-					Status:                 tt.status,
-				}
-				if _, err := s.CreateActor(ctx, actor); err != nil {
-					t.Fatalf("CreateActor failed: %v", err)
-				}
-
-				deleted, err := s.DeleteActor(ctx, resources.ActorRef{Atespace: testAtespace, Name: "session-1"})
-				if tt.wantErr != nil {
-					if !errors.Is(err, tt.wantErr) {
-						t.Errorf("DeleteActor: expected %v, got %v", tt.wantErr, err)
-					}
-					got, getErr := s.GetActor(ctx, resources.ActorRef{Atespace: testAtespace, Name: "session-1"})
-					if getErr != nil {
-						t.Fatalf("GetActor after rejected delete failed: %v", getErr)
-					}
-					if got.GetStatus() != tt.status {
-						t.Errorf("actor status after rejected delete = %v, want %v", got.GetStatus(), tt.status)
-					}
-					return
-				}
-				if err != nil {
-					t.Fatalf("DeleteActor failed: %v", err)
-				}
-				if got := deleted.GetMetadata().GetName(); got != "session-1" {
-					t.Errorf("deleted actor name = %q, want session-1", got)
-				}
-				if _, err := s.GetActor(ctx, resources.ActorRef{Atespace: testAtespace, Name: "session-1"}); !errors.Is(err, store.ErrNotFound) {
-					t.Errorf("expected ErrNotFound after delete, got %v", err)
-				}
-			})
-		}
-	})
-
-	t.Run("DeleteActor_NotFound", func(t *testing.T) {
-		s := setup(t)
-		ctx := context.Background()
-
-		if _, err := s.DeleteActor(ctx, resources.ActorRef{Atespace: testAtespace, Name: "non-existent"}); !errors.Is(err, store.ErrNotFound) {
-			t.Errorf("expected ErrNotFound deleting non-existent actor, got %v", err)
-		}
-	})
-
 	t.Run("ListWorkers", func(t *testing.T) {
 		s := setup(t)
 		ctx := context.Background()
@@ -684,6 +1178,10 @@ func RunContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
 			seen[w.GetWorkerPod()] = true
 		}
 	})
+}
+
+func runAtespaceContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
+	t.Helper()
 
 	t.Run("ListAtespaces_Pagination", func(t *testing.T) {
 		s := setup(t)
@@ -718,275 +1216,6 @@ func RunContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
 				t.Errorf("duplicate atespace found in paginated results: %s", a.GetMetadata().GetName())
 			}
 			seen[a.GetMetadata().GetName()] = true
-		}
-	})
-
-	t.Run("ListActors_Empty", func(t *testing.T) {
-		s := setup(t)
-		ctx := context.Background()
-
-		actorsResp, err := s.ListActors(ctx, "", store.ListOptions{PageSize: 1000})
-		if err != nil {
-			t.Fatalf("ListActors failed: %v", err)
-		}
-		if len(actorsResp.Items) != 0 {
-			t.Errorf("expected 0 actors, got %d", len(actorsResp.Items))
-		}
-	})
-
-	t.Run("ListActors", func(t *testing.T) {
-		s := setup(t)
-		ctx := context.Background()
-		mustCreateAtespace(t, s, testAtespace)
-
-		actor1 := &ateapipb.Actor{
-			Metadata:               &ateapipb.ResourceMetadata{Name: "id1", Atespace: testAtespace},
-			ActorTemplateNamespace: "ns1",
-			ActorTemplateName:      "tmpl1",
-			Status:                 ateapipb.Actor_STATUS_SUSPENDED,
-			LatestSnapshot:         &ateapipb.ObjectRef{Atespace: testAtespace, Name: "snapshot-1"},
-		}
-		actor2 := &ateapipb.Actor{
-			Metadata:               &ateapipb.ResourceMetadata{Name: "id2", Atespace: testAtespace},
-			ActorTemplateNamespace: "ns1",
-			ActorTemplateName:      "tmpl1",
-			Status:                 ateapipb.Actor_STATUS_SUSPENDED,
-			LatestSnapshot:         &ateapipb.ObjectRef{Atespace: testAtespace, Name: "snapshot-2"},
-		}
-		if _, err := s.CreateActor(ctx, actor1); err != nil {
-			t.Fatalf("failed to create actor1: %v", err)
-		}
-		if _, err := s.CreateActor(ctx, actor2); err != nil {
-			t.Fatalf("failed to create actor2: %v", err)
-		}
-
-		actorsResp, err := s.ListActors(ctx, "", store.ListOptions{PageSize: 1000})
-		if err != nil {
-			t.Fatalf("ListActors failed: %v", err)
-		}
-		actors := actorsResp.Items
-		if len(actors) != 2 {
-			t.Errorf("expected 2 actors, got %d", len(actors))
-		}
-		if got := actorNameSet(actors); !got["id1"] || !got["id2"] {
-			t.Errorf("did not find all actors: %v", got)
-		}
-	})
-
-	t.Run("ListActors_Pagination", func(t *testing.T) {
-		s := setup(t)
-		ctx := context.Background()
-		mustCreateAtespace(t, s, testAtespace)
-
-		for i := 0; i < 5; i++ {
-			actor := &ateapipb.Actor{
-				Metadata:               &ateapipb.ResourceMetadata{Name: fmt.Sprintf("name%d", i), Atespace: testAtespace},
-				ActorTemplateNamespace: "ns1",
-				ActorTemplateName:      "tmpl1",
-				Status:                 ateapipb.Actor_STATUS_SUSPENDED,
-			}
-			if _, err := s.CreateActor(ctx, actor); err != nil {
-				t.Fatalf("failed to create actor %d: %v", i, err)
-			}
-		}
-
-		var allActors []*ateapipb.Actor
-		pageToken := ""
-		for {
-			page, err := s.ListActors(ctx, "", store.ListOptions{PageSize: 2, PageToken: pageToken})
-			if err != nil {
-				t.Fatalf("ListActors failed: %v", err)
-			}
-			allActors = append(allActors, page.Items...)
-			pageToken = page.NextPageToken
-			if pageToken == "" {
-				break
-			}
-		}
-
-		if len(allActors) != 5 {
-			t.Fatalf("expected 5 actors total, got %d", len(allActors))
-		}
-		seen := make(map[string]bool)
-		for _, a := range allActors {
-			if seen[a.GetMetadata().GetName()] {
-				t.Errorf("duplicate actor found in paginated results: %s", a.GetMetadata().GetName())
-			}
-			seen[a.GetMetadata().GetName()] = true
-		}
-	})
-
-	t.Run("ListActors_ScopedByAtespace", func(t *testing.T) {
-		s := setup(t)
-		ctx := context.Background()
-		mustCreateAtespace(t, s, "team-a")
-		mustCreateAtespace(t, s, "team-b")
-
-		mkActor := func(atespace, name string) *ateapipb.Actor {
-			return &ateapipb.Actor{
-				Metadata:               &ateapipb.ResourceMetadata{Name: name, Atespace: atespace},
-				ActorTemplateNamespace: "ns1",
-				ActorTemplateName:      "tmpl1",
-				Status:                 ateapipb.Actor_STATUS_SUSPENDED,
-			}
-		}
-		for _, a := range []*ateapipb.Actor{mkActor("team-a", "a1"), mkActor("team-a", "a2"), mkActor("team-b", "b1")} {
-			if _, err := s.CreateActor(ctx, a); err != nil {
-				t.Fatalf("CreateActor(%s/%s) failed: %v", a.GetMetadata().GetAtespace(), a.GetMetadata().GetName(), err)
-			}
-		}
-
-		teamAResp, err := s.ListActors(ctx, "team-a", store.ListOptions{PageSize: 1000})
-		if err != nil {
-			t.Fatalf("ListActors(team-a) failed: %v", err)
-		}
-		if got := actorNameSet(teamAResp.Items); !got["a1"] || !got["a2"] || got["b1"] || len(got) != 2 {
-			t.Errorf("ListActors(team-a) = %v, want exactly {a1, a2}", got)
-		}
-
-		teamBResp, err := s.ListActors(ctx, "team-b", store.ListOptions{PageSize: 1000})
-		if err != nil {
-			t.Fatalf("ListActors(team-b) failed: %v", err)
-		}
-		if got := actorNameSet(teamBResp.Items); !got["b1"] || got["a1"] || len(got) != 1 {
-			t.Errorf("ListActors(team-b) = %v, want exactly {b1}", got)
-		}
-
-		allResp, err := s.ListActors(ctx, "", store.ListOptions{PageSize: 1000})
-		if err != nil {
-			t.Fatalf("ListActors(all) failed: %v", err)
-		}
-		if got := actorNameSet(allResp.Items); !got["a1"] || !got["a2"] || !got["b1"] || len(got) != 3 {
-			t.Errorf("ListActors(all) = %v, want exactly {a1, a2, b1}", got)
-		}
-
-		if _, err := s.GetActor(ctx, resources.ActorRef{Atespace: "team-a", Name: "a1"}); err != nil {
-			t.Errorf("GetActor(team-a, a1) failed: %v", err)
-		}
-		if _, err := s.GetActor(ctx, resources.ActorRef{Atespace: "team-b", Name: "a1"}); !errors.Is(err, store.ErrNotFound) {
-			t.Errorf("GetActor(team-b, a1) = %v, want ErrNotFound", err)
-		}
-		if _, err := s.GetActor(ctx, resources.ActorRef{Name: "a1"}); !errors.Is(err, store.ErrNotFound) {
-			t.Errorf("GetActor(empty, a1) = %v, want ErrNotFound", err)
-		}
-	})
-
-	t.Run("AcquireLock_Success", func(t *testing.T) {
-		s := setup(t)
-		ctx := context.Background()
-
-		lock, err := s.AcquireLock(ctx, "test-lock")
-		if err != nil {
-			t.Fatalf("AcquireLock failed: %v", err)
-		}
-		if lock == nil {
-			t.Fatal("AcquireLock returned a nil lock")
-		}
-		if err := lock.Context().Err(); err != nil {
-			t.Errorf("new lock context is already done: %v", err)
-		}
-		lock.Close()
-	})
-
-	t.Run("AcquireLock_Conflict", func(t *testing.T) {
-		s := setup(t)
-		ctx := context.Background()
-
-		lock, err := s.AcquireLock(ctx, "test-lock")
-		if err != nil {
-			t.Fatalf("first AcquireLock failed: %v", err)
-		}
-		defer lock.Close()
-
-		if _, err := s.AcquireLock(ctx, "test-lock"); !errors.Is(err, store.ErrLockConflict) {
-			t.Errorf("second AcquireLock error = %v, want ErrLockConflict", err)
-		}
-	})
-
-	t.Run("AcquireLock_NonReentry", func(t *testing.T) {
-		s := setup(t)
-		ctx := context.Background()
-
-		lock, err := s.AcquireLock(ctx, "test-lock")
-		if err != nil {
-			t.Fatalf("first AcquireLock failed: %v", err)
-		}
-		defer lock.Close()
-
-		if _, err := s.AcquireLock(ctx, "test-lock"); !errors.Is(err, store.ErrLockConflict) {
-			t.Errorf("reentrant AcquireLock error = %v, want ErrLockConflict", err)
-		}
-	})
-
-	t.Run("Lock_Close_Releases", func(t *testing.T) {
-		s := setup(t)
-		ctx := context.Background()
-
-		lock, err := s.AcquireLock(ctx, "test-lock")
-		if err != nil {
-			t.Fatalf("AcquireLock failed: %v", err)
-		}
-		lock.Close()
-
-		newLock, err := s.AcquireLock(ctx, "test-lock")
-		if err != nil {
-			t.Fatalf("AcquireLock after Close failed: %v", err)
-		}
-		newLock.Close()
-	})
-
-	t.Run("Lock_Close_Idempotent", func(t *testing.T) {
-		s := setup(t)
-		ctx := context.Background()
-
-		lock, err := s.AcquireLock(ctx, "test-lock")
-		if err != nil {
-			t.Fatalf("AcquireLock failed: %v", err)
-		}
-		lock.Close()
-		lock.Close()
-	})
-
-	t.Run("DebugClearAll", func(t *testing.T) {
-		s := setup(t)
-		ctx := context.Background()
-
-		if _, err := s.CreateAtespace(ctx, newTestAtespace("team-a")); err != nil {
-			t.Fatalf("CreateAtespace failed: %v", err)
-		}
-		if _, err := s.CreateActor(ctx, &ateapipb.Actor{
-			Metadata: &ateapipb.ResourceMetadata{Name: "id1", Atespace: "team-a"},
-			Status:   ateapipb.Actor_STATUS_SUSPENDED,
-		}); err != nil {
-			t.Fatalf("CreateActor failed: %v", err)
-		}
-		if err := s.CreateWorker(ctx, &ateapipb.Worker{WorkerNamespace: "ns", WorkerPool: "pool", WorkerPod: "pod"}); err != nil {
-			t.Fatalf("CreateWorker failed: %v", err)
-		}
-		lock, err := s.AcquireLock(ctx, "lock-1")
-		if err != nil {
-			t.Fatalf("AcquireLock failed: %v", err)
-		}
-		defer lock.Close()
-
-		if err := s.DebugClearAll(ctx); err != nil {
-			t.Fatalf("DebugClearAll failed: %v", err)
-		}
-
-		if _, err := s.GetAtespace(ctx, "team-a"); !errors.Is(err, store.ErrNotFound) {
-			t.Errorf("atespace survived DebugClearAll: %v", err)
-		}
-		if actors, err := s.ListActors(ctx, "", store.ListOptions{PageSize: 1000}); err != nil || len(actors.Items) != 0 {
-			t.Errorf("actors survived DebugClearAll: actors=%v err=%v", actors.Items, err)
-		}
-		if workers, err := s.ListWorkers(ctx, store.ListOptions{PageSize: 1000}); err != nil || len(workers.Items) != 0 {
-			t.Errorf("workers survived DebugClearAll: workers=%v err=%v", workers.Items, err)
-		}
-		reacquired, err := s.AcquireLock(ctx, "lock-1")
-		if err != nil {
-			t.Errorf("lock survived DebugClearAll: %v", err)
-		} else {
-			reacquired.Close()
 		}
 	})
 
@@ -1187,326 +1416,133 @@ func RunContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
 			t.Errorf("DeleteAtespace(team-b, non-empty) = %v, want ErrFailedPrecondition", err)
 		}
 	})
+}
 
-	t.Run("ActorTemplateAndVersion_Lifecycle", func(t *testing.T) {
+func runLockContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
+	t.Helper()
+
+	t.Run("AcquireLock_Success", func(t *testing.T) {
 		s := setup(t)
 		ctx := context.Background()
-		mustCreateAtespace(t, s, "team-a")
 
-		input := newTestActorTemplate("team-a", "tmpl-a")
-		created, err := s.CreateActorTemplate(ctx, input)
+		lock, err := s.AcquireLock(ctx, "test-lock")
 		if err != nil {
-			t.Fatalf("CreateActorTemplate failed: %v", err)
+			t.Fatalf("AcquireLock failed: %v", err)
 		}
-		if created.GetMetadata().GetUid() == "" || created.GetMetadata().GetVersion() != 1 {
-			t.Errorf("created template metadata = %v, want assigned uid and version 1", created.GetMetadata())
+		if lock == nil {
+			t.Fatal("AcquireLock returned a nil lock")
 		}
-		if input.GetMetadata().GetUid() != "" || input.GetMetadata().GetVersion() != 0 {
-			t.Errorf("CreateActorTemplate mutated its input: %v", input.GetMetadata())
+		if err := lock.Context().Err(); err != nil {
+			t.Errorf("new lock context is already done: %v", err)
 		}
-		templateRef := resources.ActorTemplateRef{Atespace: "team-a", Name: "tmpl-a"}
-		if exists, err := s.ActorTemplateExists(ctx, templateRef); err != nil || !exists {
-			t.Fatalf("ActorTemplateExists = (%v, %v), want (true, nil)", exists, err)
-		}
-		gotTemplate, err := s.GetActorTemplate(ctx, templateRef)
-		if err != nil {
-			t.Fatalf("GetActorTemplate failed: %v", err)
-		}
-		if diff := cmp.Diff(created, gotTemplate, protocmp.Transform()); diff != "" {
-			t.Errorf("stored template mismatch (-created +got):\n%s", diff)
-		}
+		lock.Close()
+	})
 
-		updated, err := s.UpdateActorTemplate(ctx, templateRef, func(template *ateapipb.ActorTemplate) error {
-			template.DefaultVersionOnCreate = &ateapipb.ObjectRef{Atespace: "team-a", Name: "tmpl-a-v1"}
-			return nil
-		})
-		if err != nil {
-			t.Fatalf("UpdateActorTemplate failed: %v", err)
-		}
-		if updated.GetMetadata().GetVersion() != 2 || updated.GetMetadata().GetUid() != created.GetMetadata().GetUid() {
-			t.Errorf("updated template metadata = %v, want version 2 and original uid", updated.GetMetadata())
-		}
+	t.Run("AcquireLock_Conflict", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
 
-		versionInput := newTestActorTemplateVersion("team-a", "tmpl-a-v1", "tmpl-a")
-		version, err := s.CreateActorTemplateVersion(ctx, versionInput)
+		lock, err := s.AcquireLock(ctx, "test-lock")
 		if err != nil {
-			t.Fatalf("CreateActorTemplateVersion failed: %v", err)
+			t.Fatalf("first AcquireLock failed: %v", err)
 		}
-		if versionInput.GetMetadata().GetUid() != "" || versionInput.GetMetadata().GetVersion() != 0 {
-			t.Errorf("CreateActorTemplateVersion mutated its input: %v", versionInput.GetMetadata())
-		}
-		versionRef := resources.ActorTemplateVersionRef{Atespace: "team-a", Name: "tmpl-a-v1"}
-		gotVersion, err := s.GetActorTemplateVersion(ctx, versionRef)
-		if err != nil {
-			t.Fatalf("GetActorTemplateVersion failed: %v", err)
-		}
-		if diff := cmp.Diff(version, gotVersion, protocmp.Transform()); diff != "" {
-			t.Errorf("stored version mismatch (-created +got):\n%s", diff)
-		}
+		defer lock.Close()
 
-		if _, err := s.DeleteActorTemplate(ctx, templateRef); !errors.Is(err, store.ErrFailedPrecondition) {
-			t.Errorf("DeleteActorTemplate with a child = %v, want ErrFailedPrecondition", err)
+		if _, err := s.AcquireLock(ctx, "test-lock"); !errors.Is(err, store.ErrLockConflict) {
+			t.Errorf("second AcquireLock error = %v, want ErrLockConflict", err)
 		}
-		if _, err := s.DeleteActorTemplateVersion(ctx, versionRef); !errors.Is(err, store.ErrFailedPrecondition) {
-			t.Errorf("DeleteActorTemplateVersion while default = %v, want ErrFailedPrecondition", err)
+	})
+
+	t.Run("AcquireLock_NonReentry", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+
+		lock, err := s.AcquireLock(ctx, "test-lock")
+		if err != nil {
+			t.Fatalf("first AcquireLock failed: %v", err)
 		}
-		if _, err := s.UpdateActorTemplate(ctx, templateRef, func(template *ateapipb.ActorTemplate) error {
-			template.DefaultVersionOnCreate = nil
-			return nil
+		defer lock.Close()
+
+		if _, err := s.AcquireLock(ctx, "test-lock"); !errors.Is(err, store.ErrLockConflict) {
+			t.Errorf("reentrant AcquireLock error = %v, want ErrLockConflict", err)
+		}
+	})
+
+	t.Run("Lock_Close_Releases", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+
+		lock, err := s.AcquireLock(ctx, "test-lock")
+		if err != nil {
+			t.Fatalf("AcquireLock failed: %v", err)
+		}
+		lock.Close()
+
+		newLock, err := s.AcquireLock(ctx, "test-lock")
+		if err != nil {
+			t.Fatalf("AcquireLock after Close failed: %v", err)
+		}
+		newLock.Close()
+	})
+
+	t.Run("Lock_Close_Idempotent", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+
+		lock, err := s.AcquireLock(ctx, "test-lock")
+		if err != nil {
+			t.Fatalf("AcquireLock failed: %v", err)
+		}
+		lock.Close()
+		lock.Close()
+	})
+}
+
+// runDebugContractTests covers store-wide debug operations, which span every
+// resource kind rather than belonging to any single one.
+func runDebugContractTests(t *testing.T, setup func(t *testing.T) store.Interface) {
+	t.Helper()
+
+	t.Run("DebugClearAll", func(t *testing.T) {
+		s := setup(t)
+		ctx := context.Background()
+
+		if _, err := s.CreateAtespace(ctx, newTestAtespace("team-a")); err != nil {
+			t.Fatalf("CreateAtespace failed: %v", err)
+		}
+		if _, err := s.CreateActor(ctx, &ateapipb.Actor{
+			Metadata: &ateapipb.ResourceMetadata{Name: "id1", Atespace: "team-a"},
+			Status:   ateapipb.Actor_STATUS_SUSPENDED,
 		}); err != nil {
-			t.Fatalf("clearing default version failed: %v", err)
+			t.Fatalf("CreateActor failed: %v", err)
 		}
-		if deleted, err := s.DeleteActorTemplateVersion(ctx, versionRef); err != nil {
-			t.Fatalf("DeleteActorTemplateVersion failed: %v", err)
-		} else if diff := cmp.Diff(version, deleted, protocmp.Transform()); diff != "" {
-			t.Errorf("deleted version mismatch (-created +deleted):\n%s", diff)
+		if err := s.CreateWorker(ctx, &ateapipb.Worker{WorkerNamespace: "ns", WorkerPool: "pool", WorkerPod: "pod"}); err != nil {
+			t.Fatalf("CreateWorker failed: %v", err)
 		}
-		if _, err := s.GetActorTemplateVersion(ctx, versionRef); !errors.Is(err, store.ErrNotFound) {
-			t.Errorf("GetActorTemplateVersion after delete = %v, want ErrNotFound", err)
-		}
-		if _, err := s.DeleteActorTemplate(ctx, templateRef); err != nil {
-			t.Fatalf("DeleteActorTemplate failed: %v", err)
-		}
-	})
-
-	t.Run("ListActorTemplateVersions_FilteredPagination", func(t *testing.T) {
-		s := setup(t)
-		ctx := context.Background()
-		for _, atespace := range []string{"team-a", "team-b"} {
-			mustCreateAtespace(t, s, atespace)
-		}
-		for _, item := range []struct{ atespace, name, parent string }{
-			{"team-a", "a-1", "tmpl-a"},
-			{"team-a", "a-2", "tmpl-a"},
-			{"team-a", "b-1", "tmpl-b"},
-			{"team-b", "a-1", "tmpl-a"},
-		} {
-			if _, err := s.CreateActorTemplateVersion(ctx, newTestActorTemplateVersion(item.atespace, item.name, item.parent)); err != nil {
-				t.Fatalf("CreateActorTemplateVersion(%s/%s) failed: %v", item.atespace, item.name, err)
-			}
-		}
-
-		parent := resources.ActorTemplateRef{Atespace: "team-a", Name: "tmpl-a"}
-		var got []string
-		for token := ""; ; {
-			page, err := s.ListActorTemplateVersions(ctx, "", parent, store.ListOptions{PageSize: 1, PageToken: token})
-			if err != nil {
-				t.Fatalf("ListActorTemplateVersions failed: %v", err)
-			}
-			for _, version := range page.Items {
-				got = append(got, version.GetMetadata().GetAtespace()+"/"+version.GetMetadata().GetName())
-			}
-			if page.NextPageToken == "" {
-				break
-			}
-			token = page.NextPageToken
-		}
-		if diff := cmp.Diff([]string{"team-a/a-1", "team-a/a-2"}, got); diff != "" {
-			t.Errorf("filtered pagination mismatch (-want +got):\n%s", diff)
-		}
-	})
-
-	t.Run("ActorTemplateResources_BlockAtespaceDeletion", func(t *testing.T) {
-		s := setup(t)
-		ctx := context.Background()
-		mustCreateAtespace(t, s, "team-a")
-		if _, err := s.CreateActorTemplate(ctx, newTestActorTemplate("team-a", "tmpl-a")); err != nil {
-			t.Fatalf("CreateActorTemplate failed: %v", err)
-		}
-		if _, err := s.DeleteAtespace(ctx, "team-a"); !errors.Is(err, store.ErrFailedPrecondition) {
-			t.Errorf("DeleteAtespace with template = %v, want ErrFailedPrecondition", err)
-		}
-		if _, err := s.DeleteActorTemplate(ctx, resources.ActorTemplateRef{Atespace: "team-a", Name: "tmpl-a"}); err != nil {
-			t.Fatalf("DeleteActorTemplate failed: %v", err)
-		}
-		if _, err := s.CreateActorTemplateVersion(ctx, newTestActorTemplateVersion("team-a", "orphan-v1", "gone")); err != nil {
-			t.Fatalf("CreateActorTemplateVersion failed: %v", err)
-		}
-		if _, err := s.DeleteAtespace(ctx, "team-a"); !errors.Is(err, store.ErrFailedPrecondition) {
-			t.Errorf("DeleteAtespace with version = %v, want ErrFailedPrecondition", err)
-		}
-	})
-
-	t.Run("DeleteActorTemplateVersion_DeletesGoldenSnapshot", func(t *testing.T) {
-		s := setup(t)
-		ctx := context.Background()
-		mustCreateAtespace(t, s, "team-a")
-		if _, err := s.CreateActorSnapshot(ctx, &ateapipb.ActorSnapshot{
-			Metadata:    &ateapipb.ResourceMetadata{Atespace: "ate-golden", Name: "golden-1"},
-			SnapshotUri: "gs://bucket/golden-1",
-		}); err != nil {
-			t.Fatalf("CreateActorSnapshot failed: %v", err)
-		}
-		version := newTestActorTemplateVersion("team-a", "tmpl-a-v1", "tmpl-a")
-		version.GoldenSnapshot = &ateapipb.ObjectRef{Atespace: "ate-golden", Name: "golden-1"}
-		if _, err := s.CreateActorTemplateVersion(ctx, version); err != nil {
-			t.Fatalf("CreateActorTemplateVersion failed: %v", err)
-		}
-		if _, err := s.DeleteActorTemplateVersion(ctx, resources.ActorTemplateVersionRef{Atespace: "team-a", Name: "tmpl-a-v1"}); err != nil {
-			t.Fatalf("DeleteActorTemplateVersion failed: %v", err)
-		}
-		if _, err := s.GetActorSnapshot(ctx, "ate-golden", "golden-1"); !errors.Is(err, store.ErrNotFound) {
-			t.Errorf("golden snapshot after version delete = %v, want ErrNotFound", err)
-		}
-	})
-
-	t.Run("ActorSnapshotAndTag_Lifecycle", func(t *testing.T) {
-		s := setup(t)
-		ctx := context.Background()
-		mustCreateAtespace(t, s, "team-a")
-
-		input := &ateapipb.ActorSnapshot{
-			Metadata:           &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "snapshot-1"},
-			SourceActor:        &ateapipb.ObjectRef{Atespace: "team-a", Name: "actor-1"},
-			SourceActorUid:     "actor-uid",
-			SourceActorVersion: 7,
-			ContentScope:       ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
-			SnapshotUri:        "gs://private/snapshot-1",
-		}
-		created, err := s.CreateActorSnapshot(ctx, input)
+		lock, err := s.AcquireLock(ctx, "lock-1")
 		if err != nil {
-			t.Fatalf("CreateActorSnapshot failed: %v", err)
+			t.Fatalf("AcquireLock failed: %v", err)
 		}
-		if created.GetMetadata().GetVersion() != 1 || created.GetMetadata().GetUid() == "" {
-			t.Errorf("created snapshot metadata = %v, want server-owned uid and version 1", created.GetMetadata())
-		}
-		if input.GetMetadata().GetUid() != "" || input.GetMetadata().GetVersion() != 0 {
-			t.Errorf("CreateActorSnapshot mutated its input metadata: %v", input.GetMetadata())
-		}
-		if _, err := s.CreateActorSnapshot(ctx, input); !errors.Is(err, store.ErrAlreadyExists) {
-			t.Errorf("duplicate CreateActorSnapshot = %v, want ErrAlreadyExists", err)
+		defer lock.Close()
+
+		if err := s.DebugClearAll(ctx); err != nil {
+			t.Fatalf("DebugClearAll failed: %v", err)
 		}
 
-		got, err := s.GetActorSnapshot(ctx, "team-a", "snapshot-1")
+		if _, err := s.GetAtespace(ctx, "team-a"); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("atespace survived DebugClearAll: %v", err)
+		}
+		if actors, err := s.ListActors(ctx, "", store.ListOptions{PageSize: 1000}); err != nil || len(actors.Items) != 0 {
+			t.Errorf("actors survived DebugClearAll: actors=%v err=%v", actors.Items, err)
+		}
+		if workers, err := s.ListWorkers(ctx, store.ListOptions{PageSize: 1000}); err != nil || len(workers.Items) != 0 {
+			t.Errorf("workers survived DebugClearAll: workers=%v err=%v", workers.Items, err)
+		}
+		reacquired, err := s.AcquireLock(ctx, "lock-1")
 		if err != nil {
-			t.Fatalf("GetActorSnapshot failed: %v", err)
-		}
-		if diff := cmp.Diff(created, got, protocmp.Transform()); diff != "" {
-			t.Errorf("GetActorSnapshot mismatch (-created +got):\n%s", diff)
-		}
-		if got.GetSnapshotUri() != "gs://private/snapshot-1" {
-			t.Errorf("snapshot_uri = %q, want gs://private/snapshot-1", got.GetSnapshotUri())
-		}
-		if _, err := s.GetActorSnapshot(ctx, "team-a", "missing"); !errors.Is(err, store.ErrNotFound) {
-			t.Errorf("missing GetActorSnapshot = %v, want ErrNotFound", err)
-		}
-
-		tagInput := &ateapipb.ActorSnapshotTag{
-			Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "production"},
-			Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
-		}
-		tag, err := s.CreateActorSnapshotTag(ctx, "team-a", "snapshot-1", tagInput)
-		if err != nil {
-			t.Fatalf("CreateActorSnapshotTag failed: %v", err)
-		}
-		if tag.GetSnapshot().GetAtespace() != "team-a" || tag.GetSnapshot().GetName() != "snapshot-1" {
-			t.Errorf("tag snapshot = %v, want team-a/snapshot-1", tag.GetSnapshot())
-		}
-		if tagInput.GetSnapshot() != nil || tagInput.GetMetadata().GetVersion() != 0 {
-			t.Errorf("CreateActorSnapshotTag mutated its input: %v", tagInput)
-		}
-		idempotent, err := s.CreateActorSnapshotTag(ctx, "team-a", "snapshot-1", tagInput)
-		if err != nil || !proto.Equal(idempotent, tag) {
-			t.Errorf("idempotent CreateActorSnapshotTag = (%v, %v), want existing tag", idempotent, err)
-		}
-		conflicting := proto.Clone(tagInput).(*ateapipb.ActorSnapshotTag)
-		conflicting.Scope = ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED
-		if _, err := s.CreateActorSnapshotTag(ctx, "team-a", "snapshot-1", conflicting); !errors.Is(err, store.ErrAlreadyExists) {
-			t.Errorf("conflicting CreateActorSnapshotTag = %v, want ErrAlreadyExists", err)
-		}
-		if _, err := s.CreateActorSnapshotTag(ctx, "team-a", "missing", &ateapipb.ActorSnapshotTag{Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "missing"}}); !errors.Is(err, store.ErrNotFound) {
-			t.Errorf("tagging missing snapshot = %v, want ErrNotFound", err)
-		}
-
-		resolvedTag, err := s.GetActorSnapshotTag(ctx, "team-a", "production")
-		if err != nil {
-			t.Fatalf("GetActorSnapshotTag failed: %v", err)
-		}
-		if !proto.Equal(resolvedTag, tag) {
-			t.Errorf("resolved tag = %v, want created tag", resolvedTag)
-		}
-		resolved, err := s.GetActorSnapshot(ctx, resolvedTag.GetSnapshot().GetAtespace(), resolvedTag.GetSnapshot().GetName())
-		if err != nil || !proto.Equal(resolved, created) {
-			t.Errorf("GetActorSnapshot(resolved tag target) = (%v, %v), want created snapshot", resolved, err)
-		}
-
-		updated, err := s.UpdateActorSnapshotTag(ctx, "team-a", "production", store.WithPrecondition(tag, func(toUpdate *ateapipb.ActorSnapshotTag) error {
-			toUpdate.Scope = ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED
-			return nil
-		}))
-		if err != nil {
-			t.Fatalf("UpdateActorSnapshotTag failed: %v", err)
-		}
-		if updated.GetScope() != ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_PUBLISHED || updated.GetMetadata().GetVersion() != tag.GetMetadata().GetVersion()+1 {
-			t.Errorf("updated tag = %v, want published scope and advanced version", updated)
-		}
-		if _, err := s.UpdateActorSnapshotTag(ctx, "team-a", "production", store.WithPrecondition(tag, func(toUpdate *ateapipb.ActorSnapshotTag) error {
-			toUpdate.Scope = tag.GetScope()
-			return nil
-		})); !errors.Is(err, store.ErrVersionConflict) {
-			t.Errorf("stale UpdateActorSnapshotTag = %v, want ErrVersionConflict", err)
-		}
-		if _, err := s.DeleteAtespace(ctx, "team-a"); !errors.Is(err, store.ErrFailedPrecondition) {
-			t.Errorf("DeleteAtespace with tag = %v, want ErrFailedPrecondition", err)
-		}
-
-		deleted, err := s.DeleteActorSnapshotTag(ctx, "team-a", "production")
-		if err != nil || !proto.Equal(deleted, updated) {
-			t.Errorf("DeleteActorSnapshotTag = (%v, %v), want updated tag", deleted, err)
-		}
-		if _, err := s.GetActorSnapshotTag(ctx, "team-a", "production"); !errors.Is(err, store.ErrNotFound) {
-			t.Errorf("deleted GetActorSnapshotTag = %v, want ErrNotFound", err)
-		}
-		if _, err := s.DeleteAtespace(ctx, "team-a"); err != nil {
-			t.Errorf("DeleteAtespace after tag deletion = %v, want nil", err)
-		}
-	})
-
-	t.Run("ListActorSnapshots_PaginationAndScope", func(t *testing.T) {
-		s := setup(t)
-		ctx := context.Background()
-		for _, atespace := range []string{"team-a", "team-b"} {
-			for i := 0; i < 3; i++ {
-				name := fmt.Sprintf("snapshot-%d", i)
-				if _, err := s.CreateActorSnapshot(ctx, &ateapipb.ActorSnapshot{
-					Metadata:    &ateapipb.ResourceMetadata{Atespace: atespace, Name: name},
-					SnapshotUri: "gs://private/" + atespace + "/" + name,
-				}); err != nil {
-					t.Fatalf("CreateActorSnapshot(%s/%s) failed: %v", atespace, name, err)
-				}
-			}
-		}
-
-		var scoped []*ateapipb.ActorSnapshot
-		for token := ""; ; {
-			page, err := s.ListActorSnapshots(ctx, "team-a", store.ListOptions{PageSize: 2, PageToken: token})
-			if err != nil {
-				t.Fatalf("scoped ListActorSnapshots failed: %v", err)
-			}
-			scoped = append(scoped, page.Items...)
-			if page.NextPageToken == "" {
-				break
-			}
-			token = page.NextPageToken
-		}
-		if len(scoped) != 3 {
-			t.Errorf("scoped ListActorSnapshots returned %d snapshots, want 3", len(scoped))
-		}
-
-		var global []*ateapipb.ActorSnapshot
-		for token := ""; ; {
-			page, err := s.ListActorSnapshots(ctx, "", store.ListOptions{PageSize: 2, PageToken: token})
-			if err != nil {
-				t.Fatalf("global ListActorSnapshots failed: %v", err)
-			}
-			global = append(global, page.Items...)
-			if page.NextPageToken == "" {
-				break
-			}
-			token = page.NextPageToken
-		}
-		if len(global) != 6 {
-			t.Errorf("global ListActorSnapshots returned %d snapshots, want 6", len(global))
+			t.Errorf("lock survived DebugClearAll: %v", err)
+		} else {
+			reacquired.Close()
 		}
 	})
 }
