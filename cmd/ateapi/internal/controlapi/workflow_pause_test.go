@@ -127,7 +127,7 @@ func TestEnsurePausedFinalized_RecordsContentScope(t *testing.T) {
 				WorkerPool:      "pool1",
 				WorkerPod:       "worker-pod-1",
 				NodeName:        "node1",
-				Assignment: &ateapipb.Assignment{
+				Assignment: &ateapipb.ActorAssignment{
 					Actor:    &ateapipb.ObjectRef{Atespace: actorRef.Atespace, Name: actorRef.Name},
 					ActorUid: created.GetMetadata().GetUid(),
 				},

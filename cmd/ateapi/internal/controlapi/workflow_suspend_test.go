@@ -400,9 +400,11 @@ func TestEnsureSuspendedFinalized_ReleasesOnlyOwnWorker(t *testing.T) {
 				Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "shared"},
 				Status:   ateapipb.Actor_STATUS_SUSPENDING,
 				WorkerAssignment: &ateapipb.WorkerAssignment{
+					Worker:          &ateapipb.ObjectRef{Name: testWorkerUID("pod-1")},
 					WorkerNamespace: "worker-ns",
 					WorkerPool:      "pool",
 					WorkerPod:       "pod-1",
+					WorkerPodUid:    testWorkerUID("pod-1"),
 				},
 				InProgressSnapshotName: "snapshot-1",
 			}
@@ -416,10 +418,12 @@ func TestEnsureSuspendedFinalized_ReleasesOnlyOwnWorker(t *testing.T) {
 				uid = "other-actor-uid-b"
 			}
 			worker := &ateapipb.Worker{
+				Metadata:        &ateapipb.ResourceMetadata{Name: testWorkerUID("pod-1")},
 				WorkerNamespace: "worker-ns",
 				WorkerPool:      "pool",
 				WorkerPod:       "pod-1",
-				Assignment: &ateapipb.Assignment{
+				WorkerPodUid:    testWorkerUID("pod-1"),
+				Assignment: &ateapipb.ActorAssignment{
 					Actor:    &ateapipb.ObjectRef{Atespace: tt.assignmentAtespace, Name: "shared"},
 					ActorUid: uid,
 				},
@@ -434,7 +438,7 @@ func TestEnsureSuspendedFinalized_ReleasesOnlyOwnWorker(t *testing.T) {
 				t.Fatalf("ensureSuspendedFinalized: %v", err)
 			}
 
-			stored, err := persistence.GetWorker(ctx, "worker-ns", "pool", "pod-1")
+			stored, err := persistence.GetWorker(ctx, testWorkerUID("pod-1"))
 			if err != nil {
 				t.Fatalf("GetWorker: %v", err)
 			}
@@ -458,9 +462,11 @@ func TestEnsureSuspendedFinalized_SnapshotSourceActorVersion(t *testing.T) {
 		Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "actor-1"},
 		Status:   ateapipb.Actor_STATUS_SUSPENDING,
 		WorkerAssignment: &ateapipb.WorkerAssignment{
+			Worker:          &ateapipb.ObjectRef{Name: testWorkerUID("pod-gone")},
 			WorkerNamespace: "worker-ns",
 			WorkerPool:      "pool",
 			WorkerPod:       "pod-gone",
+			WorkerPodUid:    testWorkerUID("pod-gone"),
 		},
 		InProgressSnapshotName:               snapshotName,
 		InProgressSnapshotSourceActorVersion: 42,

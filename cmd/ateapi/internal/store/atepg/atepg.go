@@ -1122,7 +1122,8 @@ func (p *Persistence) writeAndNotify(ctx context.Context, eventType store.Worker
 
 func (p *Persistence) CreateWorker(ctx context.Context, worker *ateapipb.Worker) error {
 	dbWorker := proto.Clone(worker).(*ateapipb.Worker)
-	dbWorker.Version = 1
+	// Workers are global-scoped, so the atespace is always empty.
+	dbWorker.Metadata = newCreateMetadata("", worker.GetMetadata().GetName())
 
 	protoBytes, err := proto.Marshal(dbWorker)
 	if err != nil {
@@ -1131,9 +1132,9 @@ func (p *Persistence) CreateWorker(ctx context.Context, worker *ateapipb.Worker)
 
 	err = p.writeAndNotify(ctx, store.WorkerEventCreated, dbWorker, func(ctx context.Context, tx pgx.Tx) (bool, error) {
 		_, err := tx.Exec(ctx, `
-			INSERT INTO workers (worker_namespace, worker_pool, worker_pod, version, proto)
-			VALUES ($1, $2, $3, $4, $5)`,
-			dbWorker.GetWorkerNamespace(), dbWorker.GetWorkerPool(), dbWorker.GetWorkerPod(), dbWorker.GetVersion(), protoBytes)
+			INSERT INTO workers (name, uid, version, proto)
+			VALUES ($1, $2, $3, $4)`,
+			dbWorker.GetMetadata().GetName(), dbWorker.GetMetadata().GetUid(), dbWorker.GetMetadata().GetVersion(), protoBytes)
 		if err != nil {
 			return false, err
 		}
@@ -1148,15 +1149,14 @@ func (p *Persistence) CreateWorker(ctx context.Context, worker *ateapipb.Worker)
 	return nil
 }
 
-func getWorkerRow(ctx context.Context, q querier, namespace, poolName, pod string) (*ateapipb.Worker, error) {
+func getWorkerRow(ctx context.Context, q querier, name string) (*ateapipb.Worker, error) {
 	var protoBytes []byte
-	err := q.QueryRow(ctx, `SELECT proto FROM workers WHERE worker_namespace = $1 AND worker_pool = $2 AND worker_pod = $3`,
-		namespace, poolName, pod).Scan(&protoBytes)
+	err := q.QueryRow(ctx, `SELECT proto FROM workers WHERE name = $1`, name).Scan(&protoBytes)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, store.ErrNotFound
 		}
-		return nil, fmt.Errorf("getting worker %s/%s/%s: %w", namespace, poolName, pod, err)
+		return nil, fmt.Errorf("getting worker %s: %w", name, err)
 	}
 	out := &ateapipb.Worker{}
 	if err := proto.Unmarshal(protoBytes, out); err != nil {
@@ -1165,15 +1165,16 @@ func getWorkerRow(ctx context.Context, q querier, namespace, poolName, pod strin
 	return out, nil
 }
 
-func (p *Persistence) GetWorker(ctx context.Context, namespace, poolName, pod string) (*ateapipb.Worker, error) {
-	return getWorkerRow(ctx, p.pool, namespace, poolName, pod)
+func (p *Persistence) GetWorker(ctx context.Context, name string) (*ateapipb.Worker, error) {
+	return getWorkerRow(ctx, p.pool, name)
 }
 
 func (p *Persistence) UpdateWorker(ctx context.Context, worker *ateapipb.Worker, expectedVersion int64) error {
-	namespace, poolName, pod := worker.GetWorkerNamespace(), worker.GetWorkerPool(), worker.GetWorkerPod()
+	name := worker.GetMetadata().GetName()
 
 	dbWorker := proto.Clone(worker).(*ateapipb.Worker)
-	dbWorker.Version = expectedVersion + 1
+	dbWorker.Metadata = newUpdateMetadata(worker.GetMetadata())
+	dbWorker.Metadata.Version = expectedVersion + 1
 
 	protoBytes, err := proto.Marshal(dbWorker)
 	if err != nil {
@@ -1185,43 +1186,42 @@ func (p *Persistence) UpdateWorker(ctx context.Context, worker *ateapipb.Worker,
 		err := tx.QueryRow(ctx, `
 			UPDATE workers
 			SET version = $1, proto = $2
-			WHERE worker_namespace = $3 AND worker_pool = $4 AND worker_pod = $5
-			  AND version = $6
+			WHERE name = $3 AND version = $4
 			RETURNING proto`,
-			dbWorker.GetVersion(), protoBytes, namespace, poolName, pod, expectedVersion,
+			dbWorker.GetMetadata().GetVersion(), protoBytes, name, expectedVersion,
 		).Scan(&returned)
 		if err == nil {
 			return true, nil
 		}
 		if !errors.Is(err, pgx.ErrNoRows) {
-			return false, fmt.Errorf("updating worker %s/%s/%s: %w", namespace, poolName, pod, err)
+			return false, fmt.Errorf("updating worker %s: %w", name, err)
 		}
 
-		current, getErr := getWorkerRow(ctx, tx, namespace, poolName, pod)
+		current, getErr := getWorkerRow(ctx, tx, name)
 		if getErr != nil {
 			return false, getErr
 		}
-		if current.GetVersion() != expectedVersion {
+		if current.GetMetadata().GetVersion() != expectedVersion {
 			return false, store.ErrVersionConflict
 		}
-		return false, fmt.Errorf("update worker %s/%s/%s: no row matched but current state is otherwise consistent", namespace, poolName, pod)
+		return false, fmt.Errorf("update worker %s: no row matched but current state is otherwise consistent", name)
 	})
 }
 
-func (p *Persistence) DeleteWorker(ctx context.Context, namespace, poolName, pod string) error {
-	deletedEvent := &ateapipb.Worker{WorkerNamespace: namespace, WorkerPod: pod}
+func (p *Persistence) DeleteWorker(ctx context.Context, name string) error {
+	deletedEvent := &ateapipb.Worker{Metadata: &ateapipb.ResourceMetadata{Name: name}}
 	return p.writeAndNotify(ctx, store.WorkerEventDeleted, deletedEvent, func(ctx context.Context, tx pgx.Tx) (bool, error) {
 		var protoBytes []byte
 		err := tx.QueryRow(ctx, `
 			DELETE FROM workers
-			WHERE worker_namespace = $1 AND worker_pool = $2 AND worker_pod = $3
-			RETURNING proto`, namespace, poolName, pod).Scan(&protoBytes)
+			WHERE name = $1
+			RETURNING proto`, name).Scan(&protoBytes)
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				// Idempotent: nothing existed, so nothing to notify either.
 				return false, nil
 			}
-			return false, fmt.Errorf("deleting worker %s/%s/%s: %w", namespace, poolName, pod, err)
+			return false, fmt.Errorf("deleting worker %s: %w", name, err)
 		}
 		return true, nil
 	})
@@ -1229,32 +1229,31 @@ func (p *Persistence) DeleteWorker(ctx context.Context, namespace, poolName, pod
 
 func (p *Persistence) ListWorkers(ctx context.Context, opts store.ListOptions) (store.ListResponse[*ateapipb.Worker], error) {
 	pageSize, pageTokenStr := opts.PageSize, opts.PageToken
-	token, err := decodePageToken(pageTokenStr, kindWorker, "", 3)
+	token, err := decodePageToken(pageTokenStr, kindWorker, "", 1)
 	if err != nil {
 		return store.ListResponse[*ateapipb.Worker]{}, err
 	}
-	var lastNS, lastPool, lastPod *string
-	if len(token.Last) == 3 {
-		lastNS, lastPool, lastPod = &token.Last[0], &token.Last[1], &token.Last[2]
+	var last *string
+	if len(token.Last) > 0 {
+		last = &token.Last[0]
 	}
 
 	rows, err := p.pool.Query(ctx, `
-		SELECT worker_namespace, worker_pool, worker_pod, proto FROM workers
-		WHERE $1::text IS NULL OR (worker_namespace, worker_pool, worker_pod) > ($1, $2, $3)
-		ORDER BY worker_namespace, worker_pool, worker_pod
-		LIMIT $4`, lastNS, lastPool, lastPod, int64(pageSize)+1)
+		SELECT name, proto FROM workers
+		WHERE $1::text IS NULL OR name > $1
+		ORDER BY name
+		LIMIT $2`, last, int64(pageSize)+1)
 	if err != nil {
 		return store.ListResponse[*ateapipb.Worker]{}, fmt.Errorf("listing workers: %w", err)
 	}
 	defer rows.Close()
 
-	type key struct{ namespace, pool, pod string }
-	var keys []key
+	var names []string
 	var result []*ateapipb.Worker
 	for rows.Next() {
-		var k key
+		var name string
 		var protoBytes []byte
-		if err := rows.Scan(&k.namespace, &k.pool, &k.pod, &protoBytes); err != nil {
+		if err := rows.Scan(&name, &protoBytes); err != nil {
 			return store.ListResponse[*ateapipb.Worker]{}, fmt.Errorf("scanning worker row: %w", err)
 		}
 		w := &ateapipb.Worker{}
@@ -1262,7 +1261,7 @@ func (p *Persistence) ListWorkers(ctx context.Context, opts store.ListOptions) (
 			return store.ListResponse[*ateapipb.Worker]{}, fmt.Errorf("unmarshaling worker: %w", err)
 		}
 		result = append(result, w)
-		keys = append(keys, k)
+		names = append(names, name)
 	}
 	if err := rows.Err(); err != nil {
 		return store.ListResponse[*ateapipb.Worker]{}, fmt.Errorf("listing workers: %w", err)
@@ -1271,8 +1270,7 @@ func (p *Persistence) ListWorkers(ctx context.Context, opts store.ListOptions) (
 	var nextToken string
 	if len(result) > int(pageSize) {
 		result = result[:pageSize]
-		last := keys[pageSize-1]
-		nextToken = encodePageToken(kindWorker, "", []string{last.namespace, last.pool, last.pod})
+		nextToken = encodePageToken(kindWorker, "", []string{names[pageSize-1]})
 	}
 	return store.ListResponse[*ateapipb.Worker]{Items: result, NextPageToken: nextToken}, nil
 }

@@ -41,6 +41,7 @@ import (
 	"github.com/alicebob/miniredis/v2"
 	"github.com/google/go-cmp/cmp"
 	"github.com/google/go-cmp/cmp/cmpopts"
+	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"google.golang.org/grpc"
@@ -673,13 +674,25 @@ func createTemplateWithSelector(t *testing.T, tc *testContext, ns string, name s
 	}
 }
 
-func createWorkerPod(t *testing.T, tc *testContext, ns string, name string, nodeName string, poolName string) {
+// ignoreServerMetadata skips the ResourceMetadata fields the store assigns.
+var ignoreServerMetadata = protocmp.IgnoreFields(&ateapipb.ResourceMetadata{}, "uid", "create_time", "update_time")
+
+// testWorkerUID derives a stable pod UID from a pod name, for Workers seeded
+// straight into the store. Pods created through the API server get their UID
+// from the server instead; use createWorkerPod's return value for those.
+func testWorkerUID(podName string) string {
+	return uuid.NewSHA1(uuid.NameSpaceDNS, []byte(podName)).String()
+}
+
+// createWorkerPod creates a worker pod and waits for the syncer to mirror it
+// into the store and the worker cache. It returns the name of the resulting
+// Worker, which is the key to look it up by.
+func createWorkerPod(t *testing.T, tc *testContext, ns string, name string, nodeName string, poolName string) string {
 	t.Helper()
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: ns,
-			UID:       "08675309-4a65-6e6e-7973-6e756d626572",
 			Labels: map[string]string{
 				"ate.dev/worker-pool": poolName,
 			},
@@ -691,23 +704,6 @@ func createWorkerPod(t *testing.T, tc *testContext, ns string, name string, node
 			},
 		},
 	}
-	/*
-			   pod := &corev1.Pod{
-		          ObjectMeta: metav1.ObjectMeta{
-		              Name:      podName,
-		              Namespace: ns,
-		              UID:       "08675309-4a65-6e6e-7973-6e756d626572",
-		              Labels: map[string]string{
-		                  workerPodLabel: poolName,
-		              },
-		          },
-		          Spec: corev1.PodSpec{
-		              NodeName:   "node1",
-		              Containers: []corev1.Container{{Name: "main", Image: "nginx"}},
-		          },
-		      }
-
-	*/
 	createdPod, err := tc.k8sClient.CoreV1().Pods(ns).Create(context.Background(), pod, metav1.CreateOptions{})
 	if err != nil {
 		t.Fatalf("failed to create worker pod: %v", err)
@@ -752,6 +748,7 @@ func createWorkerPod(t *testing.T, tc *testContext, ns string, name string, node
 	if err != nil {
 		t.Fatalf("failed to wait for worker to appear in worker cache: %v", err)
 	}
+	return string(createdPod.UID)
 }
 
 // createAteletPod creates an atelet pod on nodeName and marks it Running with
@@ -1707,7 +1704,7 @@ func TestListWorkers(t *testing.T) {
 	defer tc.cleanup()
 
 	createWorkerPool(t, tc, ns, "pool1", map[string]string{"foo": "bar"})
-	createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+	podUID := createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
 
 	listResp, err := tc.client.ListWorkers(context.Background(), &ateapipb.ListWorkersRequest{})
 	if err != nil {
@@ -1723,19 +1720,23 @@ func TestListWorkers(t *testing.T) {
 
 	want := []*ateapipb.Worker{
 		{
+			Metadata: &ateapipb.ResourceMetadata{
+				Name:    podUID,
+				Version: 1,
+			},
 			WorkerNamespace: ns,
 			WorkerPool:      "pool1",
 			WorkerPod:       "worker-1",
+			WorkerPodUid:    podUID,
 			NodeName:        "node1",
 			Ip:              "127.0.0.1",
-			Version:         1,
 			SandboxClass:    "gvisor",
 			Labels:          map[string]string{"foo": "bar"},
 			State:           ateapipb.Worker_STATE_ACTIVE,
 		},
 	}
 
-	if diff := cmp.Diff(want, filteredWorkers, protocmp.Transform(), protocmp.IgnoreFields(&ateapipb.Worker{}, "worker_pod_uid")); diff != "" {
+	if diff := cmp.Diff(want, filteredWorkers, protocmp.Transform(), ignoreServerMetadata); diff != "" {
 		t.Errorf("ListWorkers response mismatch (-want +got):\n%s", diff)
 	}
 }
@@ -1757,7 +1758,7 @@ func TestResumeActor(t *testing.T) {
 
 	createTemplate(t, tc, ns)
 
-	createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
+	podUID := createWorkerPod(t, tc, ns, "worker-1", "node1", "pool1")
 
 	name := "id1"
 	_, err := tc.client.CreateActor(context.Background(), &ateapipb.CreateActorRequest{Actor: &ateapipb.Actor{
@@ -1792,13 +1793,15 @@ func TestResumeActor(t *testing.T) {
 		ActorTemplateName:      "tmpl1",
 		Status:                 ateapipb.Actor_STATUS_RUNNING,
 		WorkerAssignment: &ateapipb.WorkerAssignment{
+			Worker:          &ateapipb.ObjectRef{Name: podUID},
 			WorkerNamespace: ns,
 			WorkerPool:      "pool1",
 			WorkerPod:       "worker-1",
+			WorkerPodUid:    podUID,
 			WorkerPodIp:     "127.0.0.1",
 		},
 	}
-	if diff := cmp.Diff(want, getResp, protocmp.Transform(), ignoreUID, ignoreVersion, ignoreTimestamps, protocmp.IgnoreFields(&ateapipb.WorkerAssignment{}, "worker_pod_uid")); diff != "" {
+	if diff := cmp.Diff(want, getResp, protocmp.Transform(), ignoreUID, ignoreVersion, ignoreTimestamps); diff != "" {
 		t.Errorf("GetActor response mismatch (-want +got):\n%s", diff)
 	}
 
@@ -1819,10 +1822,12 @@ func TestResumeActor(t *testing.T) {
 	}
 
 	wantWorker := &ateapipb.Worker{
+		Metadata:        &ateapipb.ResourceMetadata{Name: podUID},
 		WorkerNamespace: ns,
 		WorkerPool:      "pool1",
 		WorkerPod:       "worker-1",
-		Assignment: &ateapipb.Assignment{
+		WorkerPodUid:    podUID,
+		Assignment: &ateapipb.ActorAssignment{
 			ActorTemplate: &ateapipb.KubeNamespacedObjectRef{
 				Namespace: ns,
 				Name:      "tmpl1",
@@ -1840,7 +1845,8 @@ func TestResumeActor(t *testing.T) {
 		State:        ateapipb.Worker_STATE_ACTIVE,
 	}
 
-	if diff := cmp.Diff(wantWorker, actorWorker, protocmp.Transform(), protocmp.IgnoreFields(&ateapipb.Worker{}, "version"), protocmp.IgnoreFields(&ateapipb.Worker{}, "worker_pod_uid")); diff != "" {
+	if diff := cmp.Diff(wantWorker, actorWorker, protocmp.Transform(), ignoreServerMetadata,
+		protocmp.IgnoreFields(&ateapipb.ResourceMetadata{}, "version")); diff != "" {
 		t.Errorf("Worker state mismatch (-want +got):\n%s", diff)
 	}
 }
@@ -2366,7 +2372,6 @@ func TestPauseActor(t *testing.T) {
 		ignoreUID,
 		ignoreVersion,
 		ignoreTimestamps,
-		protocmp.IgnoreFields(&ateapipb.WorkerAssignment{}, "worker_pod_uid"),
 		protocmp.IgnoreFields(&ateapipb.LocalSnapshotInfo{}, "snapshot_name"),
 	); diff != "" {
 		t.Errorf("GetActor response mismatch (-want +got):\n%s", diff)
@@ -2773,12 +2778,12 @@ func TestResumeActor_CrashesIfAssignedWorkerIsDraining(t *testing.T) {
 		t.Fatalf("expected actor to be bound to a worker after the failed attempt")
 	}
 
-	assigned, err := tc.persistence.GetWorker(context.Background(), ns, "pool1", assignedPod)
+	assigned, err := tc.persistence.GetWorker(context.Background(), getResp.GetWorkerAssignment().GetWorker().GetName())
 	if err != nil {
 		t.Fatalf("GetWorker(%s) failed: %v", assignedPod, err)
 	}
 	assigned.State = ateapipb.Worker_STATE_DRAINING
-	if err := tc.persistence.UpdateWorker(context.Background(), assigned, assigned.GetVersion()); err != nil {
+	if err := tc.persistence.UpdateWorker(context.Background(), assigned, assigned.GetMetadata().GetVersion()); err != nil {
 		t.Fatalf("marking worker %s draining failed: %v", assignedPod, err)
 	}
 

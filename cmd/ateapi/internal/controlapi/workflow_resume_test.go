@@ -69,12 +69,14 @@ func TestAssignWorkerAttempt_SkipsWorkerAssignedInOtherAtespace(t *testing.T) {
 	// The only worker is held by a same-named actor in another atespace. It is
 	// eligible for the template, so a name-only match would adopt it.
 	worker := &ateapipb.Worker{
+		Metadata:        &ateapipb.ResourceMetadata{Name: testWorkerUID("pod-1")},
 		WorkerNamespace: "worker-ns",
 		WorkerPool:      "pool",
 		WorkerPod:       "pod-1",
+		WorkerPodUid:    testWorkerUID("pod-1"),
 		SandboxClass:    "gvisor",
 		State:           ateapipb.Worker_STATE_ACTIVE,
-		Assignment: &ateapipb.Assignment{
+		Assignment: &ateapipb.ActorAssignment{
 			Actor:    &ateapipb.ObjectRef{Atespace: "team-b", Name: "shared"},
 			ActorUid: "team-b-actor-uid",
 		},
@@ -102,7 +104,7 @@ func TestAssignWorkerAttempt_SkipsWorkerAssignedInOtherAtespace(t *testing.T) {
 		t.Fatalf("assignWorkerAttempt() error = %v, want ResourceExhausted (no free workers)", err)
 	}
 
-	stored, err := persistence.GetWorker(ctx, "worker-ns", "pool", "pod-1")
+	stored, err := persistence.GetWorker(ctx, testWorkerUID("pod-1"))
 	if err != nil {
 		t.Fatalf("GetWorker: %v", err)
 	}
@@ -133,20 +135,24 @@ func TestAssignWorkerAttempt_ReleasesIneligibleStaleWorkerInBackground(t *testin
 	// stale-pod is claimed by this actor from a failed attempt but its sandbox
 	// class no longer matches the template; free-pod is eligible and free.
 	stale := &ateapipb.Worker{
+		Metadata:        &ateapipb.ResourceMetadata{Name: testWorkerUID("stale-pod")},
 		WorkerNamespace: "worker-ns",
 		WorkerPool:      "pool-a",
 		WorkerPod:       "stale-pod",
+		WorkerPodUid:    testWorkerUID("stale-pod"),
 		SandboxClass:    "microvm",
 		State:           ateapipb.Worker_STATE_ACTIVE,
-		Assignment: &ateapipb.Assignment{
+		Assignment: &ateapipb.ActorAssignment{
 			Actor:    &ateapipb.ObjectRef{Atespace: "team-a", Name: "id1"},
 			ActorUid: actor.GetMetadata().GetUid(),
 		},
 	}
 	free := &ateapipb.Worker{
+		Metadata:        &ateapipb.ResourceMetadata{Name: testWorkerUID("free-pod")},
 		WorkerNamespace: "worker-ns",
 		WorkerPool:      "pool-b",
 		WorkerPod:       "free-pod",
+		WorkerPodUid:    testWorkerUID("free-pod"),
 		SandboxClass:    "gvisor",
 		State:           ateapipb.Worker_STATE_ACTIVE,
 	}
@@ -180,7 +186,7 @@ func TestAssignWorkerAttempt_ReleasesIneligibleStaleWorkerInBackground(t *testin
 	// assignment is cleared.
 	deadline := time.Now().Add(5 * time.Second)
 	for {
-		stored, err := persistence.GetWorker(ctx, "worker-ns", "pool-a", "stale-pod")
+		stored, err := persistence.GetWorker(ctx, testWorkerUID("stale-pod"))
 		if err != nil {
 			t.Fatalf("GetWorker: %v", err)
 		}
@@ -204,16 +210,20 @@ func TestAssignWorkerAttempt_RetryAfterConflictPicksFreshWorker(t *testing.T) {
 	persistence := newTestPersistence(t)
 
 	contested := &ateapipb.Worker{
+		Metadata:        &ateapipb.ResourceMetadata{Name: testWorkerUID("contested-pod")},
 		WorkerNamespace: "worker-ns",
 		WorkerPool:      "pool",
 		WorkerPod:       "contested-pod",
+		WorkerPodUid:    testWorkerUID("contested-pod"),
 		SandboxClass:    "gvisor",
 		State:           ateapipb.Worker_STATE_ACTIVE,
 	}
 	fallback := &ateapipb.Worker{
+		Metadata:        &ateapipb.ResourceMetadata{Name: testWorkerUID("fallback-pod")},
 		WorkerNamespace: "worker-ns",
 		WorkerPool:      "pool",
 		WorkerPod:       "fallback-pod",
+		WorkerPodUid:    testWorkerUID("fallback-pod"),
 		SandboxClass:    "gvisor",
 		State:           ateapipb.Worker_STATE_ACTIVE,
 	}
@@ -224,7 +234,7 @@ func TestAssignWorkerAttempt_RetryAfterConflictPicksFreshWorker(t *testing.T) {
 	}
 
 	// Snapshot the contested worker at the version the failed attempt saw.
-	beforeClaim, err := persistence.GetWorker(ctx, "worker-ns", "pool", "contested-pod")
+	beforeClaim, err := persistence.GetWorker(ctx, testWorkerUID("contested-pod"))
 	if err != nil {
 		t.Fatalf("GetWorker: %v", err)
 	}
@@ -232,11 +242,11 @@ func TestAssignWorkerAttempt_RetryAfterConflictPicksFreshWorker(t *testing.T) {
 	// A concurrent resume of another actor wins the contested worker, bumping
 	// its stored version past the failed attempt's snapshot.
 	claimed := proto.Clone(beforeClaim).(*ateapipb.Worker)
-	claimed.Assignment = &ateapipb.Assignment{
+	claimed.Assignment = &ateapipb.ActorAssignment{
 		Actor:    &ateapipb.ObjectRef{Atespace: "team-a", Name: "other"},
 		ActorUid: "other-actor-uid",
 	}
-	if err := persistence.UpdateWorker(ctx, claimed, claimed.GetVersion()); err != nil {
+	if err := persistence.UpdateWorker(ctx, claimed, claimed.GetMetadata().GetVersion()); err != nil {
 		t.Fatalf("UpdateWorker (concurrent claim): %v", err)
 	}
 
@@ -267,14 +277,14 @@ func TestAssignWorkerAttempt_RetryAfterConflictPicksFreshWorker(t *testing.T) {
 		t.Errorf("assigned worker = %q, want %q", got, "fallback-pod")
 	}
 
-	storedContested, err := persistence.GetWorker(ctx, "worker-ns", "pool", "contested-pod")
+	storedContested, err := persistence.GetWorker(ctx, testWorkerUID("contested-pod"))
 	if err != nil {
 		t.Fatalf("GetWorker(contested-pod): %v", err)
 	}
 	if got := storedContested.GetAssignment().GetActorUid(); got != "other-actor-uid" {
 		t.Errorf("contested worker assignment = %v, want to remain with actor %q", storedContested.GetAssignment(), "other-actor-uid")
 	}
-	storedFallback, err := persistence.GetWorker(ctx, "worker-ns", "pool", "fallback-pod")
+	storedFallback, err := persistence.GetWorker(ctx, testWorkerUID("fallback-pod"))
 	if err != nil {
 		t.Fatalf("GetWorker(fallback-pod): %v", err)
 	}
@@ -318,9 +328,11 @@ func (c *conflictInjectingStore) UpdateActorSnapshotTag(ctx context.Context, ate
 func seedAssignFixture(t *testing.T, ctx context.Context, persistence store.Interface) (*ateapipb.Actor, *workercache.Cache) {
 	t.Helper()
 	if err := persistence.CreateWorker(ctx, &ateapipb.Worker{
+		Metadata:        &ateapipb.ResourceMetadata{Name: testWorkerUID("pod-1")},
 		WorkerNamespace: "worker-ns",
 		WorkerPool:      "pool",
 		WorkerPod:       "pod-1",
+		WorkerPodUid:    testWorkerUID("pod-1"),
 		SandboxClass:    "gvisor",
 		State:           ateapipb.Worker_STATE_ACTIVE,
 	}); err != nil {
@@ -474,6 +486,7 @@ func TestResumeActorWorkflow_RejectedAndIdempotentPaths(t *testing.T) {
 
 			seedWorkflowActor(t, ctx, st, resources.ActorRef{Atespace: "team-a", Name: "id1"}, "ns", "tmpl1", tc.seedStatus, func(a *ateapipb.Actor) {
 				a.WorkerAssignment = &ateapipb.WorkerAssignment{
+					Worker:          &ateapipb.ObjectRef{Name: "uid"},
 					WorkerNamespace: "wns",
 					WorkerPool:      "pool1",
 					WorkerPod:       "wpod",
@@ -559,6 +572,7 @@ func TestResumeActor_MetricSkipsAlreadyRunningNoop(t *testing.T) {
 
 			seedWorkflowActor(t, ctx, st, resources.ActorRef{Atespace: "team-a", Name: "id1"}, "ns", "tmpl1", tt.seedStatus, func(a *ateapipb.Actor) {
 				a.WorkerAssignment = &ateapipb.WorkerAssignment{
+					Worker:          &ateapipb.ObjectRef{Name: "uid"},
 					WorkerNamespace: "wns",
 					WorkerPool:      "pool1",
 					WorkerPod:       "wpod",
@@ -618,15 +632,15 @@ func TestResumeActor_CrashesOnMissingWorkerAssignment(t *testing.T) {
 // a mismatch the actor is crashed and the worker — which is not ours — must
 // not be written.
 func TestValidateAssignedWorker_WorkerOwnership(t *testing.T) {
-	ownAssignment := &ateapipb.Assignment{
+	ownAssignment := &ateapipb.ActorAssignment{
 		Actor:    &ateapipb.ObjectRef{Atespace: "team-a", Name: "shared"},
 		ActorUid: "own-actor-uid",
 	}
-	otherAssignment := &ateapipb.Assignment{
+	otherAssignment := &ateapipb.ActorAssignment{
 		Actor:    &ateapipb.ObjectRef{Atespace: "team-b", Name: "shared"},
 		ActorUid: "other-actor-uid",
 	}
-	staleIncarnationAssignment := &ateapipb.Assignment{
+	staleIncarnationAssignment := &ateapipb.ActorAssignment{
 		Actor:    &ateapipb.ObjectRef{Atespace: "team-a", Name: "shared"},
 		ActorUid: "stale-incarnation-uid",
 	}
@@ -634,14 +648,14 @@ func TestValidateAssignedWorker_WorkerOwnership(t *testing.T) {
 	tests := []struct {
 		name         string
 		sandboxClass string
-		assignment   *ateapipb.Assignment
+		assignment   *ateapipb.ActorAssignment
 		// wantCode is codes.OK when validateAssignedWorker must return nil.
 		wantCode        codes.Code
 		wantActorStatus ateapipb.Actor_Status
 		// wantAssignment is the assignment expected on the stored worker
 		// afterwards; wantWorkerWrite false additionally asserts the worker
 		// version did not move (no write at all).
-		wantAssignment  *ateapipb.Assignment
+		wantAssignment  *ateapipb.ActorAssignment
 		wantWorkerWrite bool
 	}{
 		{
@@ -693,9 +707,11 @@ func TestValidateAssignedWorker_WorkerOwnership(t *testing.T) {
 			persistence := newTestPersistence(t)
 
 			if err := persistence.CreateWorker(ctx, &ateapipb.Worker{
+				Metadata:        &ateapipb.ResourceMetadata{Name: testWorkerUID("pod-1")},
 				WorkerNamespace: "worker-ns",
 				WorkerPool:      "pool",
 				WorkerPod:       "pod-1",
+				WorkerPodUid:    testWorkerUID("pod-1"),
 				SandboxClass:    tt.sandboxClass,
 				State:           ateapipb.Worker_STATE_ACTIVE,
 				Assignment:      tt.assignment,
@@ -704,7 +720,7 @@ func TestValidateAssignedWorker_WorkerOwnership(t *testing.T) {
 			}
 			// Fetch the stored version so the no-write assertion below can
 			// detect any optimistic update.
-			seeded, err := persistence.GetWorker(ctx, "worker-ns", "pool", "pod-1")
+			seeded, err := persistence.GetWorker(ctx, testWorkerUID("pod-1"))
 			if err != nil {
 				t.Fatalf("GetWorker: %v", err)
 			}
@@ -716,9 +732,11 @@ func TestValidateAssignedWorker_WorkerOwnership(t *testing.T) {
 				Metadata: &ateapipb.ResourceMetadata{Atespace: "team-a", Name: "shared", Uid: "own-actor-uid"},
 				Status:   ateapipb.Actor_STATUS_RESUMING,
 				WorkerAssignment: &ateapipb.WorkerAssignment{
+					Worker:          &ateapipb.ObjectRef{Name: testWorkerUID("pod-1")},
 					WorkerNamespace: "worker-ns",
 					WorkerPool:      "pool",
 					WorkerPod:       "pod-1",
+					WorkerPodUid:    testWorkerUID("pod-1"),
 				},
 			}
 			tmpl := &atev1alpha1.ActorTemplate{Spec: atev1alpha1.ActorTemplateSpec{SandboxClass: atev1alpha1.SandboxClassGvisor}}
@@ -735,15 +753,15 @@ func TestValidateAssignedWorker_WorkerOwnership(t *testing.T) {
 				t.Errorf("stored actor status = %v, want %v", actor.GetStatus(), tt.wantActorStatus)
 			}
 
-			stored, err := persistence.GetWorker(ctx, "worker-ns", "pool", "pod-1")
+			stored, err := persistence.GetWorker(ctx, testWorkerUID("pod-1"))
 			if err != nil {
 				t.Fatalf("GetWorker: %v", err)
 			}
 			if !proto.Equal(stored.GetAssignment(), tt.wantAssignment) {
 				t.Errorf("stored worker assignment = %v, want %v", stored.GetAssignment(), tt.wantAssignment)
 			}
-			if !tt.wantWorkerWrite && stored.GetVersion() != seeded.GetVersion() {
-				t.Errorf("worker version moved %d -> %d, want no write", seeded.GetVersion(), stored.GetVersion())
+			if !tt.wantWorkerWrite && stored.GetMetadata().GetVersion() != seeded.GetMetadata().GetVersion() {
+				t.Errorf("worker version moved %d -> %d, want no write", seeded.GetMetadata().GetVersion(), stored.GetMetadata().GetVersion())
 			}
 		})
 	}

@@ -40,6 +40,7 @@ func seedActor(t *testing.T, ctx context.Context, st store.Interface, actorRef r
 		Metadata: &ateapipb.ResourceMetadata{Name: actorRef.Name, Atespace: actorRef.Atespace},
 		Status:   ateapipb.Actor_STATUS_RUNNING,
 		WorkerAssignment: &ateapipb.WorkerAssignment{
+			Worker:          &ateapipb.ObjectRef{Name: "uid"},
 			WorkerNamespace: "ns",
 			WorkerPool:      "pool",
 			WorkerPod:       "pod",
@@ -57,19 +58,21 @@ func seedActor(t *testing.T, ctx context.Context, st store.Interface, actorRef r
 func seedWorker(t *testing.T, ctx context.Context, st store.Interface, actorRef resources.ActorRef) {
 	t.Helper()
 	worker := &ateapipb.Worker{
+		Metadata:        &ateapipb.ResourceMetadata{Name: "uid"},
 		WorkerNamespace: "ns",
 		WorkerPool:      "pool",
 		WorkerPod:       "pod",
+		WorkerPodUid:    "uid",
 	}
 	if actorRef != (resources.ActorRef{}) {
 		actor, err := st.GetActor(ctx, actorRef)
 		if err != nil {
-			worker.Assignment = &ateapipb.Assignment{
+			worker.Assignment = &ateapipb.ActorAssignment{
 				Actor:    &ateapipb.ObjectRef{Atespace: actorRef.Atespace, Name: actorRef.Name},
 				ActorUid: "synthetic-" + actorRef.Name,
 			}
 		} else {
-			worker.Assignment = &ateapipb.Assignment{
+			worker.Assignment = &ateapipb.ActorAssignment{
 				Actor:    &ateapipb.ObjectRef{Atespace: actor.GetMetadata().GetAtespace(), Name: actor.GetMetadata().GetName()},
 				ActorUid: actor.GetMetadata().GetUid(),
 			}
@@ -145,7 +148,7 @@ func TestCrashActor(t *testing.T) {
 					t.Fatalf("crashActor() = %v, want nil", err)
 				}
 				assertCrashed(t, ctx, st, actorRef)
-				worker, gerr := st.GetWorker(ctx, "ns", "pool", "pod")
+				worker, gerr := st.GetWorker(ctx, "uid")
 				if gerr != nil {
 					t.Fatalf("GetWorker() = %v, want nil", gerr)
 				}
@@ -165,7 +168,7 @@ func TestCrashActor(t *testing.T) {
 					t.Fatalf("crashActor() = %v, want nil", err)
 				}
 				assertCrashed(t, ctx, st, actorRef)
-				worker, gerr := st.GetWorker(ctx, "ns", "pool", "pod")
+				worker, gerr := st.GetWorker(ctx, "uid")
 				if gerr != nil {
 					t.Fatalf("GetWorker() = %v, want nil", gerr)
 				}
@@ -183,10 +186,12 @@ func TestCrashActor(t *testing.T) {
 			setup: func(t *testing.T, ctx context.Context, st store.Interface) {
 				// Create a worker assigned to the same actorRef, but with a stale UID
 				worker := &ateapipb.Worker{
+					Metadata:        &ateapipb.ResourceMetadata{Name: "uid"},
 					WorkerNamespace: "ns",
 					WorkerPool:      "pool",
 					WorkerPod:       "pod",
-					Assignment: &ateapipb.Assignment{
+					WorkerPodUid:    "uid",
+					Assignment: &ateapipb.ActorAssignment{
 						Actor:    &ateapipb.ObjectRef{Atespace: actorRef.Atespace, Name: actorRef.Name},
 						ActorUid: "stale-incarnation-uid",
 					},
@@ -200,7 +205,7 @@ func TestCrashActor(t *testing.T) {
 					t.Fatalf("crashActor() = %v, want nil", err)
 				}
 				assertCrashed(t, ctx, st, actorRef)
-				worker, gerr := st.GetWorker(ctx, "ns", "pool", "pod")
+				worker, gerr := st.GetWorker(ctx, "uid")
 				if gerr != nil {
 					t.Fatalf("GetWorker() = %v, want nil", gerr)
 				}
@@ -227,7 +232,7 @@ func TestCrashActor(t *testing.T) {
 				// Without a binding the worker cannot be looked up, so its
 				// assignment must be left untouched even though it names
 				// the crashed actor.
-				worker, gerr := st.GetWorker(ctx, "ns", "pool", "pod")
+				worker, gerr := st.GetWorker(ctx, "uid")
 				if gerr != nil {
 					t.Fatalf("GetWorker() = %v, want nil", gerr)
 				}
@@ -411,11 +416,13 @@ func TestCrashActor_Metrics(t *testing.T) {
 
 	actorRef := resources.ActorRef{Atespace: "demo-ns", Name: "counter-actor"}
 	worker := &ateapipb.Worker{
+		Metadata:        &ateapipb.ResourceMetadata{Name: "pod-uid-1"},
 		WorkerNamespace: "demo-ns",
 		WorkerPool:      "pool-1",
 		WorkerPod:       "pod-1",
+		WorkerPodUid:    "pod-uid-1",
 		SandboxClass:    "gvisor",
-		Assignment: &ateapipb.Assignment{
+		Assignment: &ateapipb.ActorAssignment{
 			Actor: &ateapipb.ObjectRef{Atespace: actorRef.Atespace, Name: actorRef.Name},
 		},
 	}
@@ -432,6 +439,7 @@ func TestCrashActor_Metrics(t *testing.T) {
 		ActorTemplateNamespace: "demo-ns",
 		ActorTemplateName:      "counter-template",
 		WorkerAssignment: &ateapipb.WorkerAssignment{
+			Worker:          &ateapipb.ObjectRef{Name: "pod-uid-1"},
 			WorkerNamespace: "demo-ns",
 			WorkerPool:      "pool-1",
 			WorkerPod:       "pod-1",
@@ -542,7 +550,7 @@ func TestCrashActorReleaseFailureLeavesWorkerReclaimable(t *testing.T) {
 
 	// The worker must still be assigned to the actor (the failed release did not
 	// persist): it is not leaked, and a retry will reclaim it.
-	worker, werr := st.GetWorker(ctx, "ns", "pool", "pod")
+	worker, werr := st.GetWorker(ctx, "uid")
 	if werr != nil {
 		t.Fatalf("GetWorker() = %v, want nil", werr)
 	}

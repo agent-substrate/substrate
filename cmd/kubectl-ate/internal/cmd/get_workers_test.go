@@ -30,7 +30,7 @@ func TestGetWorkersRunner_Filters(t *testing.T) {
 			WorkerPool:      "counter",
 			WorkerPod:       "pod-1",
 			SandboxClass:    "microvm",
-			Assignment: &ateapipb.Assignment{
+			Assignment: &ateapipb.ActorAssignment{
 				ActorTemplate: &ateapipb.KubeNamespacedObjectRef{Namespace: "ns-1", Name: "counter"},
 				Actor:         &ateapipb.ObjectRef{Atespace: "space-a", Name: "actor-a"},
 			},
@@ -48,7 +48,7 @@ func TestGetWorkersRunner_Filters(t *testing.T) {
 			WorkerPool:      "counter",
 			WorkerPod:       "pod-3",
 			SandboxClass:    "gvisor",
-			Assignment: &ateapipb.Assignment{
+			Assignment: &ateapipb.ActorAssignment{
 				ActorTemplate: &ateapipb.KubeNamespacedObjectRef{Namespace: "ns-2", Name: "counter"},
 				Actor:         &ateapipb.ObjectRef{Atespace: "space-b", Name: "actor-b"},
 			},

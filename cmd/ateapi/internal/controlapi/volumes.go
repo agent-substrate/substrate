@@ -195,7 +195,7 @@ func detachActorVolumes(ctx context.Context, st detachActorVolumesStore, registr
 		return nil
 	}
 
-	worker, err := st.GetWorker(ctx, assignment.GetWorkerNamespace(), assignment.GetWorkerPool(), assignment.GetWorkerPod())
+	worker, err := st.GetWorker(ctx, assignment.GetWorker().GetName())
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			slog.WarnContext(ctx, fmt.Sprintf("Worker not found in store during %s, skipping detach volumes", action), slog.String("actor_id", actor.GetMetadata().GetName()))
@@ -228,5 +228,5 @@ func detachActorVolumes(ctx context.Context, st detachActorVolumesStore, registr
 // detachActorVolumesStore enumerates the subset of store methods needed to
 // detach actor volumes.
 type detachActorVolumesStore interface {
-	GetWorker(ctx context.Context, namespace, pool, pod string) (*ateapipb.Worker, error)
+	GetWorker(ctx context.Context, name string) (*ateapipb.Worker, error)
 }

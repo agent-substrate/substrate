@@ -350,7 +350,7 @@ func (w *ActorWorkflow) validateAssignedWorker(ctx context.Context, actorRef res
 		return nil, status.Errorf(codes.Aborted, "actor %s crashed", actorRef)
 	}
 
-	worker, err := w.store.GetWorker(ctx, assignment.GetWorkerNamespace(), assignment.GetWorkerPool(), assignment.GetWorkerPod())
+	worker, err := w.store.GetWorker(ctx, assignment.GetWorker().GetName())
 	if err != nil {
 		// Crash the actor if it was assigned to a deleted pod.
 		if errors.Is(err, store.ErrNotFound) {
@@ -392,7 +392,7 @@ func (w *ActorWorkflow) validateAssignedWorker(ctx context.Context, actorRef res
 		// worker_selector was updated after the failed attempt), release it back
 		// to the free pool instead of leaving it claimed forever — nothing else
 		// reclaims a healthy worker whose actor moved on to a different pool.
-		if err := w.store.UpdateWorker(ctx, release, release.Version); err != nil {
+		if err := w.store.UpdateWorker(ctx, release, release.GetMetadata().GetVersion()); err != nil {
 			return nil, fmt.Errorf("while releasing stale worker assignment: %w", err)
 		}
 		if cerr := crashActor(ctx, w.store, actorRef, ateattr.OperationResume, ateattr.ReasonCorruptedAssignment); cerr != nil {
@@ -468,7 +468,7 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 		go func(release *ateapipb.Worker) {
 			bgCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
-			if err := w.store.UpdateWorker(bgCtx, release, release.Version); err != nil {
+			if err := w.store.UpdateWorker(bgCtx, release, release.GetMetadata().GetVersion()); err != nil {
 				slog.ErrorContext(bgCtx, "Failed to release stale worker assignment",
 					slog.String("worker", release.GetWorkerNamespace()+"/"+release.GetWorkerPod()),
 					slog.Any("err", err))
@@ -492,7 +492,7 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 	// Workers() returns pointers directly from the cache so we need to clone before
 	// mutating so that the cache is not corrupted if UpdateWorker fails.
 	assignedWorker = proto.Clone(assignedWorker).(*ateapipb.Worker)
-	assignedWorker.Assignment = &ateapipb.Assignment{
+	assignedWorker.Assignment = &ateapipb.ActorAssignment{
 		ActorTemplate: &ateapipb.KubeNamespacedObjectRef{
 			Namespace: actor.GetActorTemplateNamespace(),
 			Name:      actor.GetActorTemplateName(),
@@ -504,7 +504,7 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 		ActorUid: actor.GetMetadata().GetUid(),
 	}
 
-	if err := w.store.UpdateWorker(ctx, assignedWorker, assignedWorker.Version); err != nil {
+	if err := w.store.UpdateWorker(ctx, assignedWorker, assignedWorker.GetMetadata().GetVersion()); err != nil {
 		return nil, nil, err
 	}
 
@@ -540,6 +540,7 @@ func (w *ActorWorkflow) assignWorkerAttempt(ctx context.Context, actorRef resour
 
 func workerAssignmentFrom(w *ateapipb.Worker) *ateapipb.WorkerAssignment {
 	return &ateapipb.WorkerAssignment{
+		Worker:          &ateapipb.ObjectRef{Name: w.GetMetadata().GetName()},
 		WorkerNamespace: w.GetWorkerNamespace(),
 		WorkerPool:      w.GetWorkerPool(),
 		WorkerPod:       w.GetWorkerPod(),

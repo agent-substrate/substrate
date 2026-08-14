@@ -96,14 +96,14 @@ func (c *Cache) Workers() ([]*ateapipb.Worker, error) {
 	return out, nil
 }
 
-// Worker returns the worker for a Kubernetes namespace and Pod name.
-func (c *Cache) Worker(namespace, pod string) (*ateapipb.Worker, error) {
+// Worker returns the worker with the given name.
+func (c *Cache) Worker(name string) (*ateapipb.Worker, error) {
 	if !c.ready.Load() {
 		return nil, fmt.Errorf("worker cache not ready")
 	}
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	worker, ok := c.workers[namespace+":"+pod]
+	worker, ok := c.workers[name]
 	if !ok {
 		return nil, store.ErrNotFound
 	}
@@ -209,12 +209,12 @@ func (c *Cache) applyEvent(event store.WorkerEvent) {
 		delete(c.workers, key)
 	case store.WorkerEventCreated, store.WorkerEventUpdated:
 		existing, ok := c.workers[key]
-		if !ok || event.Worker.GetVersion() >= existing.GetVersion() {
+		if !ok || event.Worker.GetMetadata().GetVersion() >= existing.GetMetadata().GetVersion() {
 			c.workers[key] = event.Worker
 		}
 	}
 }
 
 func workerKey(w *ateapipb.Worker) string {
-	return w.GetWorkerNamespace() + ":" + w.GetWorkerPod()
+	return w.GetMetadata().GetName()
 }

@@ -60,7 +60,7 @@ func TestTopWorkersRunner_Success(t *testing.T) {
 			WorkerPool:      "counter",
 			WorkerPod:       "counter-worker-pool-7b9f8-x123",
 			SandboxClass:    "gvisor",
-			Assignment: &ateapipb.Assignment{
+			Assignment: &ateapipb.ActorAssignment{
 				Actor: &ateapipb.ObjectRef{
 					Atespace: "ate-demo-counter",
 					Name:     "my-counter-1",
@@ -174,7 +174,7 @@ func TestTopWorkersRunner_FilterAtespace(t *testing.T) {
 			WorkerPool:      "pool-1",
 			WorkerPod:       "pod-1",
 			SandboxClass:    "microvm",
-			Assignment: &ateapipb.Assignment{
+			Assignment: &ateapipb.ActorAssignment{
 				Actor: &ateapipb.ObjectRef{Atespace: "space-a", Name: "actor-a"},
 			},
 		},
@@ -182,7 +182,7 @@ func TestTopWorkersRunner_FilterAtespace(t *testing.T) {
 			WorkerNamespace: "ns-1",
 			WorkerPool:      "pool-1",
 			WorkerPod:       "pod-2",
-			Assignment: &ateapipb.Assignment{
+			Assignment: &ateapipb.ActorAssignment{
 				Actor: &ateapipb.ObjectRef{Atespace: "space-b", Name: "actor-b"},
 			},
 		},
