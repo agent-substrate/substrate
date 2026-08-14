@@ -57,11 +57,11 @@ func assertAttrs(t *testing.T, got map[attribute.Key]attribute.Value, want map[a
 		switch exp := wv.(type) {
 		case string:
 			if v.Type() != attribute.STRING || v.AsString() != exp {
-				t.Errorf("%s = %v (%s), want string %q", k, v.Emit(), v.Type(), exp)
+				t.Errorf("%s = %v (%s), want string %q", k, v.String(), v.Type(), exp)
 			}
 		case int64:
 			if v.Type() != attribute.INT64 || v.AsInt64() != exp {
-				t.Errorf("%s = %v (%s), want int64 %d", k, v.Emit(), v.Type(), exp)
+				t.Errorf("%s = %v (%s), want int64 %d", k, v.String(), v.Type(), exp)
 			}
 		default:
 			t.Fatalf("unsupported want type for %s: %T", k, wv)

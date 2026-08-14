@@ -36,7 +36,7 @@ import (
 func resourceAttrs(res *resource.Resource) map[string]string {
 	m := make(map[string]string)
 	for _, kv := range res.Attributes() {
-		m[string(kv.Key)] = kv.Value.Emit()
+		m[string(kv.Key)] = kv.Value.String()
 	}
 	return m
 }
