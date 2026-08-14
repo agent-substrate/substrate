@@ -411,8 +411,6 @@ func seedActor(t *testing.T, ctx context.Context, st store.Interface, f actorFix
 
 	actorRef := resources.ActorRef{Atespace: testAtespace, Name: testActorName}
 
-	storetest.MustCreateAtespace(t, ctx, st, actorRef.Atespace)
-
 	actor := &ateapipb.Actor{
 		Metadata:               &ateapipb.ResourceMetadata{Atespace: actorRef.Atespace, Name: actorRef.Name},
 		Status:                 &ateapipb.ActorStatus{State: f.state},
@@ -432,10 +430,7 @@ func seedActor(t *testing.T, ctx context.Context, st store.Interface, f actorFix
 			WorkerPodUid:    testWorkerPodUID,
 		}
 	}
-	created, err := st.CreateActor(ctx, actor)
-	if err != nil {
-		t.Fatalf("seed actor: %v", err)
-	}
+	created := storetest.MustCreateActor(t, ctx, st, actor)
 
 	if f.noWorker {
 		return

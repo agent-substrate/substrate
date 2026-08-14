@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store"
+	"github.com/agent-substrate/substrate/cmd/ateapi/internal/store/storetest"
 	"github.com/agent-substrate/substrate/internal/ateattr"
 	"github.com/agent-substrate/substrate/internal/proto/ateletpb"
 	"github.com/agent-substrate/substrate/internal/resources"
@@ -251,7 +252,7 @@ func TestCreateActor_RejectsDifferentTemplateForDataSnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get source ActorTemplate: %v", err)
 	}
-	snapshot, err := tc.persistence.CreateActorSnapshot(context.Background(), &ateapipb.ActorSnapshot{
+	snapshot := storetest.MustCreateActorSnapshot(t, context.Background(), tc.persistence, &ateapipb.ActorSnapshot{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "data-snapshot"},
 		Status: &ateapipb.ActorSnapshotStatus{
 			SourceActor:      &ateapipb.ObjectRef{Atespace: testAtespace, Name: "source"},
@@ -260,9 +261,6 @@ func TestCreateActor_RejectsDifferentTemplateForDataSnapshot(t *testing.T) {
 			SnapshotUri:      "gs://snapshots/snapshots/" + testAtespace + "/data-snapshot",
 		},
 	})
-	if err != nil {
-		t.Fatalf("CreateActorSnapshot: %v", err)
-	}
 	if _, err := tc.persistence.CreateActorSnapshotTag(context.Background(), testAtespace, snapshot.GetMetadata().GetName(), &ateapipb.ActorSnapshotTag{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "data-snapshot"},
 		Scope:    ateapipb.ActorSnapshotTagScope_ACTOR_SNAPSHOT_TAG_SCOPE_ATESPACE,
@@ -311,16 +309,13 @@ func TestCreateActor_RejectsSnapshotWithExternalVolumes(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("wait for ActorTemplate update: %v", err)
 	}
-	snapshot, err := tc.persistence.CreateActorSnapshot(context.Background(), &ateapipb.ActorSnapshot{
+	snapshot := storetest.MustCreateActorSnapshot(t, context.Background(), tc.persistence, &ateapipb.ActorSnapshot{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: testAtespace, Name: "external-volume-snapshot"},
 		Status: &ateapipb.ActorSnapshotStatus{
 			ActorTemplateUid: string(template.GetUID()),
 			SnapshotUri:      "gs://snapshots/snapshots/" + testAtespace + "/external-volume-snapshot",
 		},
 	})
-	if err != nil {
-		t.Fatalf("CreateActorSnapshot: %v", err)
-	}
 	tagRef := &ateapipb.ObjectRef{Atespace: testAtespace, Name: "external-volume-snapshot"}
 	if _, err := tc.persistence.CreateActorSnapshotTag(context.Background(), testAtespace, snapshot.GetMetadata().GetName(), &ateapipb.ActorSnapshotTag{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: tagRef.GetAtespace(), Name: tagRef.GetName()},

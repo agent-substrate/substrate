@@ -329,7 +329,7 @@ func createTemplateWithContainersAndVolumes(t *testing.T, tc *testContext, ns st
 	}
 
 	const goldenSnapshot = "golden"
-	if _, err := tc.persistence.CreateActorSnapshot(context.Background(), &ateapipb.ActorSnapshot{
+	storetest.MustCreateActorSnapshot(t, context.Background(), tc.persistence, &ateapipb.ActorSnapshot{
 		Metadata: &ateapipb.ResourceMetadata{Atespace: resources.GoldenActorAtespace, Name: goldenSnapshot},
 		Status: &ateapipb.ActorSnapshotStatus{
 			ActorTemplateNamespace: ns,
@@ -338,9 +338,7 @@ func createTemplateWithContainersAndVolumes(t *testing.T, tc *testContext, ns st
 			ContentScope:           ateapipb.SnapshotContentScope_SNAPSHOT_CONTENT_SCOPE_FULL,
 			SnapshotUri:            "gs://fake-fake-fake/snapshots/" + resources.GoldenActorAtespace + "/" + goldenSnapshot,
 		},
-	}); err != nil {
-		t.Fatalf("failed to create golden ActorSnapshot: %v", err)
-	}
+	})
 	createdTemplate.Status = atev1alpha1.ActorTemplateStatus{
 		GoldenSnapshot: goldenSnapshot,
 	}
