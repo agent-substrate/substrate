@@ -1,0 +1,366 @@
+# Copyright 2026 Google LLC
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+name: e2e-ipv6
+# Separate from pr-workflow.yaml so this can be gated independently -- and so a
+# 40-minute IPv6 run never delays that workflow's merge-gating jobs.
+#
+# TODO(246): gate this before merging. It runs on every PR today so the IPv6-only
+# results are visible without a maintainer having to act first; the intended
+# steady state is a `ci/ipv6` label, which needs the label created upstream:
+#
+#     on: {pull_request: {types: [labeled, opened, synchronize, reopened]}}
+#     if: contains(github.event.pull_request.labels.*.name, 'ci/ipv6')
+#
+# Either way this job stays out of the `e2e-test` gate, so it never blocks a PR.
+on:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  e2e-test-ipv6:
+    runs-on: ubuntu-latest
+    # Nothing else in this workflow sets a timeout, so jobs inherit GitHub's
+    # 6-hour default. A broken IPv6 cluster does not crash, it misses
+    # 10-minute ActorTemplate deadlines, so an uncapped job burns hours.
+    timeout-minutes: 40
+    env:
+      # Non-default name so these steps can be replayed locally without
+      # touching an existing cluster. install-ate-kind.sh does not derive
+      # KUBECTL_CONTEXT from the cluster name the way run-e2e-kind.sh does,
+      # so both have to be set here.
+      KIND_CLUSTER_NAME: ate-ipv6
+      KUBECTL_CONTEXT: kind-ate-ipv6
+      # 8.8.8.8 reached through the well-known NAT64 prefix. CoreDNS is a
+      # v6-only pod on a runner with no IPv6 egress of its own, so this is the
+      # only shape of upstream resolver it can reach. See "Set up NAT64".
+      IPV6_DNS_UPSTREAM: 64:ff9b::808:808
+    steps:
+    - name: Checkout
+      uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+    - name: Setup Go
+      uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+      with:
+        go-version-file: 'go.mod'
+    - name: Free disk space
+      # kind node image + control-plane images + snapshots are tight on the
+      # ~14GB runner disk even without the micro-VM assets.
+      run: |
+        sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+        df -h /
+    - name: Enable IPv6 in the Docker daemon
+      # ubuntu-latest ships dockerd with IPv6 off, so kind would create its
+      # network v4-only and create-kind-cluster.sh would reject the cluster.
+      # Merge the two keys into whatever daemon.json the runner image ships
+      # rather than replacing the file.
+      run: |
+        sudo mkdir -p /etc/docker
+        [ -s /etc/docker/daemon.json ] || echo '{}' | sudo tee /etc/docker/daemon.json >/dev/null
+        sudo cat /etc/docker/daemon.json \
+          | jq '. + {"ipv6": true, "ip6tables": true}' \
+          | sudo tee /etc/docker/daemon.json.new >/dev/null
+        sudo mv /etc/docker/daemon.json.new /etc/docker/daemon.json
+        sudo systemctl restart docker
+        docker network inspect bridge --format 'bridge EnableIPv6={{.EnableIPv6}}'
+    - name: Set up NAT64 on the runner
+      # ubuntu-latest has no IPv6 egress whatsoever -- measured, not assumed:
+      # every curl -6 fails in ~2ms. A v6-only cluster still has to reach real
+      # v4 destinations (atelet fetches the gVisor tarball from GCS,
+      # TestActorEgress fetches example.com), so the runner translates for it.
+      # Ordered after the dockerd restart, which rebuilds the iptables chains
+      # these rules live in.
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y -qq tayga dnsutils
+        # tayga answers to .1/::1; the tun holds .2/::2 so host-originated
+        # traffic is not sourced from tayga's own address, which is
+        # self-addressed rather than translatable. The pool avoids both.
+        sudo tee /etc/tayga.conf >/dev/null <<'EOF'
+        tun-device nat64
+        ipv4-addr 192.168.255.1
+        # tayga refuses the well-known prefix with an RFC1918 pool unless it
+        # also holds a v6 address of its own, outside that prefix.
+        ipv6-addr 2001:db8:64::1
+        prefix 64:ff9b::/96
+        dynamic-pool 192.168.255.128/25
+        data-dir /var/spool/tayga
+        EOF
+        sudo mkdir -p /var/spool/tayga
+        sudo tayga --mktun
+        sudo ip link set nat64 up
+        sudo ip addr add 192.168.255.2/24 dev nat64
+        sudo ip -6 addr add 2001:db8:64::2/128 dev nat64
+        sudo ip -6 route add 64:ff9b::/96 dev nat64 src 2001:db8:64::2
+        sudo sysctl -qw net.ipv4.ip_forward=1
+        sudo sysctl -qw net.ipv6.conf.all.forwarding=1
+        sudo iptables -t nat -A POSTROUTING -s 192.168.255.0/24 -j MASQUERADE
+        # Insert, not append: docker sets the FORWARD policy to DROP.
+        sudo iptables -I FORWARD 1 -i nat64 -j ACCEPT
+        sudo iptables -I FORWARD 1 -o nat64 -j ACCEPT
+        sudo ip6tables -I FORWARD 1 -i nat64 -j ACCEPT
+        sudo ip6tables -I FORWARD 1 -o nat64 -j ACCEPT
+        # -d keeps tayga in the foreground and logs every dropped packet with a
+        # reason; detaching hides exactly the failures worth diagnosing.
+        sudo sh -c 'nohup tayga -d --config /etc/tayga.conf >/tmp/tayga.log 2>&1 &'
+        sleep 3
+        pgrep -a tayga || {
+          echo "::error::tayga is not running"; sudo cat /tmp/tayga.log; exit 1;
+        }
+    - name: Verify NAT64 before building anything on it
+      # Hard gate. The cluster takes ~4 minutes and every step after it depends
+      # on translation working, so a broken translator should fail here with
+      # one clear message rather than as a rollout timeout ten minutes later.
+      run: |
+        # Map a live A record rather than hardcoding one: example.com's old
+        # 93.184.216.34 is retired and would fail for the wrong reason.
+        v4=$(getent ahostsv4 storage.googleapis.com | awk 'NR==1{print $1}')
+        # shellcheck disable=SC2086
+        set -- ${v4//./ }
+        v6=$(printf '64:ff9b::%02x%02x:%02x%02x' "$1" "$2" "$3" "$4")
+        echo "NAT64 maps ${v4} -> ${v6}"
+        dig +timeout=5 +tries=1 @"${IPV6_DNS_UPSTREAM}" storage.googleapis.com A +short
+        code=$(curl -6 -sS -m 15 -o /dev/null -w '%{http_code}' \
+          --resolve "storage.googleapis.com:443:[${v6}]" \
+          https://storage.googleapis.com/ || echo 000)
+        echo "NAT64 HTTPS probe returned ${code}"
+        case "${code}" in
+          # Any HTTP status proves the translator carried a TCP stream; GCS
+          # answers a bare / with 400. ICMP is separately blocked, so a ping
+          # test here would report a failure that does not matter.
+          2*|3*|4*) ;;
+          *) echo "::error::NAT64 is not translating; the cluster cannot egress"
+             sudo cat /tmp/tayga.log || true
+             exit 1 ;;
+        esac
+    - name: Create cluster
+      env:
+        IP_FAMILY: ipv6
+      run: hack/create-kind-cluster.sh
+    - name: Assert the cluster is single-stack IPv6
+      # This job is worthless if the cluster is not actually v6-only, and a
+      # green run leaves no evidence either way -- the diagnostics dump below
+      # only runs on failure. A kind default change or an IP_FAMILY regression
+      # would otherwise turn this into a second IPv4 run that reports success.
+      # Checked here rather than later so it fails as itself.
+      #
+      # PreferDualStack Services resolving to a single clusterIP is the
+      # positive signal: on a dual-stack cluster they would get two.
+      run: |
+        k() { kubectl --context="$KUBECTL_CONTEXT" "$@"; }
+        pod_cidrs=$(k get nodes -o jsonpath='{.items[*].spec.podCIDRs[*]}')
+        svc_ips=$(k -n default get svc kubernetes -o jsonpath='{.spec.clusterIPs[*]}')
+        node_ips=$(k get nodes -o jsonpath='{.items[*].status.addresses[?(@.type=="InternalIP")].address}')
+        for pair in "podCIDRs=${pod_cidrs}" "kubernetes.clusterIPs=${svc_ips}" "node.InternalIP=${node_ips}"; do
+          case "${pair#*=}" in
+            *.*) echo "::error::not single-stack IPv6 -- ${pair}"; exit 1 ;;
+            "")  echo "::error::empty, cannot confirm IP family -- ${pair}"; exit 1 ;;
+          esac
+          echo "  ${pair}"
+        done
+        echo "single-stack IPv6 confirmed"
+    - name: Apply DNS64 to external names only
+      # create-kind-cluster.sh already points CoreDNS at IPV6_DNS_UPSTREAM, so
+      # names resolve -- but the answers are unusable. Plain DNS64 synthesizes
+      # only for names with no AAAA, and the external names this job needs
+      # (storage.googleapis.com, example.com) do have AAAA records, pointing at
+      # real IPv6 addresses the runner cannot reach. Only translate_all forces
+      # them through the prefix.
+      #
+      # translate_all cannot go in the same server block as the cluster zones.
+      # dns64 wraps the whole plugin chain below it, and it answers a AAAA query
+      # by synthesizing from A -- so for an AAAA-only name it synthesizes from
+      # nothing and returns an empty answer. Every ClusterIP on a v6-only
+      # cluster is AAAA-only, so a single-block Corefile takes out all
+      # in-cluster service discovery: ate-api-server cannot find
+      # valkey-cluster.ate-system.svc and the install times out.
+      #
+      # So: cluster zones keep the chain kind shipped, the registry keeps the
+      # block create-kind-cluster.sh gave it, and dns64 sits in the catch-all
+      # with the forwarder.
+      run: |
+        kubectl --context="$KUBECTL_CONTEXT" -n kube-system get cm coredns \
+          -o jsonpath='{.data.Corefile}' > /tmp/Corefile
+        # Re-zone the block kind shipped and lift out its forwarder, which moves
+        # to the catch-all below; health/ready/kubernetes/cache stay as-is. The
+        # rules are gated on "first" so they stop at that block's closing brace
+        # and leave the registry's own block untouched.
+        awk '
+          NR == 1 && /^\.:53[[:space:]]*\{/ {
+            print "cluster.local:53 in-addr.arpa:53 ip6.arpa:53 {"; first = 1; next
+          }
+          first && /^    forward([[:space:]].*)?\{$/ { skip = 1; next }
+          first && skip && /^    \}$/                { skip = 0; next }
+          first && skip                              { next }
+          first && /^\}$/                            { first = 0 }
+          { print }
+        ' /tmp/Corefile > /tmp/Corefile.new
+        if ! grep -q '^cluster.local:53' /tmp/Corefile.new; then
+          echo "::error::Corefile did not start with the .:53 block kind ships"
+          cat /tmp/Corefile; exit 1
+        fi
+        # create-kind-cluster.sh owns this block. If it ever goes back to a
+        # hosts entry inside .:53, the split above silently drops the registry.
+        if ! grep -q '^kind-registry:53' /tmp/Corefile.new; then
+          echo "::error::no kind-registry server block in the Corefile"
+          cat /tmp/Corefile; exit 1
+        fi
+        if grep -q 'forward' /tmp/Corefile.new; then
+          echo "::error::the forward block survived the split"
+          cat /tmp/Corefile.new; exit 1
+        fi
+        cat >>/tmp/Corefile.new <<EOF
+        .:53 {
+            errors
+            dns64 {
+              translate_all
+            }
+            forward . ${IPV6_DNS_UPSTREAM} {
+              max_concurrent 1000
+            }
+            cache 30
+            loop
+            reload
+        }
+        EOF
+        { printf 'data:\n  Corefile: |\n'; sed 's/^/    /' /tmp/Corefile.new; } > /tmp/coredns-dns64.yaml
+        kubectl --context="$KUBECTL_CONTEXT" -n kube-system patch cm coredns \
+          --type=merge --patch-file /tmp/coredns-dns64.yaml
+        kubectl --context="$KUBECTL_CONTEXT" -n kube-system rollout restart deploy/coredns
+        kubectl --context="$KUBECTL_CONTEXT" -n kube-system rollout status deploy/coredns --timeout=120s
+        cat /tmp/Corefile.new
+    - name: Verify cluster DNS answers both internal and external names
+      # The install is the next step and it takes ten minutes to fail. A DNS
+      # regression is the failure this Corefile is most likely to cause, so
+      # assert all three cases here where the message is unambiguous.
+      run: |
+        set -o pipefail
+        kubectl --context="$KUBECTL_CONTEXT" run dnscheck --rm --attach --quiet \
+          --restart=Never --image=busybox:1.36 --command -- \
+          sh -c '
+            nslookup kubernetes.default.svc.cluster.local >/dev/null 2>&1 \
+              || { echo "FAIL: an in-cluster Service does not resolve"; exit 1; }
+            nslookup storage.googleapis.com 2>/dev/null | grep -q "64:ff9b" \
+              || { echo "FAIL: external names are not synthesized through NAT64"; exit 1; }
+            # Informational. Nothing downstream resolves this from a pod --
+            # containerd pulls images on the node, and create-kind-cluster.sh
+            # runs its own registry probe before DNS64 is applied -- so a miss
+            # here is not a reason to fail the job. Printed because a change
+            # here would still be worth seeing.
+            echo "--- kind-registry, informational"
+            nslookup kind-registry 2>&1 | tail -4
+            echo "DNS-OK"
+          ' | tee /tmp/dnscheck.log
+        grep -q DNS-OK /tmp/dnscheck.log
+    - name: Install Agent Substrate
+      run: hack/install-ate-kind.sh --deploy-ate-system
+    - name: Assert the control plane is up
+      # install-ate.sh runs under pipefail, so a failed apply does propagate.
+      # What it would not catch is a Deployment that rolls out and then
+      # crash-loops. Re-check everything deploy_ate_system waits on --
+      # atenet-egress included, since a non-dual-stack Envoy listener fails
+      # there first, by way of a readiness probe the kubelet cannot reach.
+      run: |
+        for r in deployment/ate-api-server deployment/ate-controller \
+                 deployment/atenet-router deployment/atenet-egress \
+                 statefulset/valkey-cluster daemonset/atelet; do
+          kubectl --context="$KUBECTL_CONTEXT" -n ate-system rollout status "$r" --timeout=120s
+        done
+        kubectl --context="$KUBECTL_CONTEXT" -n podcertificate-controller-system \
+          rollout status deployment/podcertificate-controller --timeout=120s
+        if kubectl --context="$KUBECTL_CONTEXT" -n ate-system get pods \
+             -o jsonpath='{.items[*].status.containerStatuses[*].state.waiting.reason}' \
+             | grep -q CrashLoopBackOff; then
+          echo "::error::a pod in ate-system is in CrashLoopBackOff"
+          exit 1
+        fi
+    - name: Deploy gVisor counter demo
+      run: hack/install-ate-kind.sh --deploy-demo-counter
+    - name: Deploy egress demo
+      run: hack/install-ate-kind.sh --deploy-demo-egress
+    - name: Assert the demo fixtures exist
+      # A failed demo deploy exits 0: install-ate.sh dispatches demos through
+      # `if "${demo}_cmdline" "$1"`, which suspends errexit, and _cmdline ends
+      # in an unconditional `return 0`. Without this the suites fail later with
+      # "ActorTemplate not found", pointing at the tests instead of the install.
+      run: |
+        for ns_tmpl in ate-demo-counter/counter ate-demo-egress/egress; do
+          ns=${ns_tmpl%/*}; tmpl=${ns_tmpl#*/}
+          kubectl --context="$KUBECTL_CONTEXT" -n "${ns}" get actortemplate "${tmpl}" \
+            || { echo "::error::${ns_tmpl} was not created -- the demo deploy failed silently"; exit 1; }
+        done
+    # One suite per step: run-e2e.sh takes exactly one target path, and this
+    # way a failure names the suite that produced it.
+    - name: Run E2E tests (demo)
+      id: e2e-demo
+      run: |
+        set -o pipefail
+        hack/run-e2e-kind.sh ./internal/e2e/suites/demo -v -args --no-color 2>&1 \
+          | tee /tmp/e2e-demo.log
+    - name: Run E2E tests (networking)
+      # Runs even when demo failed -- networking is the half most likely to
+      # expose a single-family bug -- but stays skipped when an earlier step
+      # left no cluster to test against. always() is required, not decorative:
+      # an if: without a status function is implicitly ANDed with success(),
+      # which skips this step on exactly the failure it is meant to survive.
+      if: always() && steps.e2e-demo.outcome != 'skipped'
+      run: |
+        set -o pipefail
+        hack/run-e2e-kind.sh ./internal/e2e/suites/networking -v -args --no-color 2>&1 \
+          | tee /tmp/e2e-networking.log
+    - name: Guard against a vacuously green run
+      # A suite that gates on a dual-stack Service and skips itself on v6-only
+      # exits 0, so a suite that only skipped would otherwise read as a pass.
+      # The bar is one real PASS per suite, not zero skips: demo legitimately
+      # skips the micro-VM-only Golden resume and the CSI volume tests on any
+      # family. Skips are printed so a growing list gets noticed.
+      # Skipped when the suites never ran: with no logs to count, this step
+      # would otherwise report a reassuring zero on a job that failed earlier.
+      if: always() && steps.e2e-demo.outcome != 'skipped'
+      run: |
+        for f in /tmp/e2e-demo.log /tmp/e2e-networking.log; do
+          [ -s "$f" ] || { echo "::error::${f} is missing or empty"; exit 1; }
+          passed=$(grep -c -- '--- PASS' "$f" || true)
+          echo "${f}: ${passed} passed, $(grep -c -- '--- SKIP' "$f" || true) skipped"
+          grep -h -- '--- SKIP' "$f" || true
+          if [ "${passed}" -eq 0 ]; then
+            echo "::error::${f} has no passing tests -- a suite that only skips proves nothing"
+            exit 1
+          fi
+        done
+    - name: Dump diagnostics on failure
+      if: failure()
+      run: |
+        kubectl --context="$KUBECTL_CONTEXT" get actortemplate,workerpool,pods -A -o wide || true
+        dump() {
+          echo "=== logs: $1/$2 ==="
+          kubectl --context="$KUBECTL_CONTEXT" logs -n "$1" "$2" --all-containers --tail=300 2>/dev/null || true
+        }
+        for p in $(kubectl --context="$KUBECTL_CONTEXT" get pods -n ate-system -o name 2>/dev/null); do
+          dump ate-system "$p"
+        done
+        # Every worker pod in any namespace: the demo pools plus the e2e suites'
+        # randomly-named per-test namespaces, which the suites keep on failure.
+        kubectl --context="$KUBECTL_CONTEXT" get pods -A -l ate.dev/worker-pool \
+          -o 'custom-columns=:.metadata.namespace,:.metadata.name' --no-headers 2>/dev/null \
+          | while read -r ns name; do dump "$ns" "$name"; done
+        # IPv6-specific: the rewritten Corefile, and what each Service actually
+        # got assigned, are the two things that differ from the IPv4 job.
+        kubectl --context="$KUBECTL_CONTEXT" -n kube-system logs -l k8s-app=kube-dns --tail=100 || true
+        kubectl --context="$KUBECTL_CONTEXT" -n kube-system get cm coredns -o jsonpath='{.data.Corefile}' || true
+        kubectl --context="$KUBECTL_CONTEXT" get svc -A \
+          -o custom-columns=NS:.metadata.namespace,NAME:.metadata.name,POLICY:.spec.ipFamilyPolicy,IPS:.spec.clusterIPs || true
+        # tayga logs a reason for every packet it declines to translate, which
+        # is the only view of an egress failure that is not a bare timeout.
+        echo "=== tayga ==="
+        sudo tail -100 /tmp/tayga.log || true
